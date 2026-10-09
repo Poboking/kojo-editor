@@ -1,0 +1,21 @@
+import { defineConfig } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
+
+const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+
+export default defineConfig({
+  resolve: {
+    extensions: ['.ts', '.tsx', '.mts', '.js', '.jsx', '.mjs', '.cjs', '.json'],
+    alias: {
+      '@kojo/plugin-api': r('./packages/plugin-api/src/index.ts'),
+      '@kojo/kernel': r('./packages/kernel/src/index.ts'),
+      '@kojo/plugin-erb-parser': r('./packages/plugins/erb-parser/src/index.ts'),
+      '@kojo/plugin-eratw-adapter': r('./packages/plugins/eratw-adapter/src/index.ts'),
+    },
+  },
+  test: {
+    include: ['packages/**/tests/**/*.test.ts'],
+    environment: 'node',
+    testTimeout: 20000,
+  },
+});

@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "@kojo/plugin-api": ["./packages/plugin-api/src/index.ts"],
+      "@kojo/kernel": ["./packages/kernel/src/index.ts"],
+      "@kojo/plugin-erb-parser": ["./packages/plugins/erb-parser/src/index.ts"],
+      "@kojo/plugin-eratw-adapter": ["./packages/plugins/eratw-adapter/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/plugin-api/src/**/*.ts",
+    "packages/kernel/src/**/*.ts",
+    "packages/kernel/tests/**/*.ts",
+    "packages/plugins/*/src/**/*.ts",
+    "packages/plugins/*/tests/**/*.ts",
+    "vitest.config.ts"
+  ]
+}

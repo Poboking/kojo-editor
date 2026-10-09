@@ -1,0 +1,22 @@
+{
+  "name": "kojo-editor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Structure-aware editor for eraTW-style Kojo (口上) scripts - built on a fully plugin-based, game-agnostic kernel.",
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "pnpm --filter @kojo/app dev",
+    "tauri": "pnpm --filter @kojo/app tauri"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "iconv-lite": "^0.7.3",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.7",
+    "vitest": "^4.1.11"
+  }
+}

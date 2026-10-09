@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+target/
+*.tsbuildinfo
+
+# local env / editor
+.env
+.env.local
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# local fixtures (real game data must never be committed)
+fixtures/local/
+fixtures/**/out/
+
+# tauri
+src-tauri/target/
