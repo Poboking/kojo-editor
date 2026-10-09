@@ -261,6 +261,33 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 
 **审计结论（2026-10-09）**：v0.1 初稿把"扫描 sav/ 生成模板列表"画进了 onboarding 编排序列，属于内核泄漏（内核将被迫知道 sav 概念与流程步骤）。修订后流程图不变、归属重排：内核 = 通用生命周期骨架；adapter = 全部游戏知识；消费插件 = 事件驱动的自取所需。
 
+### 5.8 约定校验器与索引所有权（v0.2 实施记录）
+
+**索引所有权收敛到解析器**（落实 §5.7 的"响应式而非中心式流水线"）：
+
+- `erb-parser` 订阅 `project.opened` → 自动 `buildIndex` → 缓存 → 发 `kojo.functionChanged`；`project.closed` 清空。
+- 服务扩展：`ErbParserService.currentIndex(): ErbIndex | null`、`ensureIndex(): Promise<ErbIndex>`（与在途构建共享；无项目时显式报错）。
+- 宿主（app）不再自己建索引，只订阅事件同步展示——消除了"每个消费者各建一次索引"的重复。
+
+**约定校验器（`convention.linter`）——三层分离**：
+
+| 层 | 归属 | 内容 |
+|---|---|---|
+| 契约 | `plugin-api/conventions.ts` | `ConventionRule{id,severity,description,source,check?}`、`ConventionIssue`、`ConventionCheckContext`、`ConventionReport`、`ConventionLinterService` |
+| 引擎 | 插件 `convention-linter` | 装配规则 → 顺序执行 → 去重/排序/汇总 → 广播；**单规则抛错进入 `failedRules`，绝不静默**；一次运行内 `readFile` 记忆化 |
+| 规则 | 引擎内置（通用）+ `adapter.conventions`（游戏） | 通用：函数重名（零游戏知识）；游戏：KX 残留 / 四件套 / FORM 三连符号 / MESSAGECHECK 结构 |
+
+- **运行上下文零游戏知识**：只暴露 `project / index / readFile / log`；游戏规则住在 adapter 包内、自带私有工具，不经上下文下发游戏常量。
+- **适配器规则按 `project.adapterId` 精确匹配**（多适配器共存天然正确，复用 ADR-0002 的槽位查询通道）。
+- **自动运行**：订阅 `kojo.functionChanged` 串行调度；面板另可手动重跑。
+
+**通用导航事件 `editor.revealLocation`**（内核事件表新增，游戏无关）：
+
+- 语义："打开某文件并定位到某行"的**意图**；由宿主（编辑器壳）消费。
+- 发起方可为任意插件（校验面板点击问题、函数树点击函数、未来引用跳转），彼此不感知——避免 UI 插件反向依赖 app 壳。
+
+**规则误报治理原则（实战教训）**：FORM 三连符号规则初版对全部 5 个符号逐行报错，实测 239 条中大量是**有意**用法（`+++` 在 43 个文件里作为 CALLNAME:MASTER 的正文占位）。按"宁可漏报不可误报"收窄为：**排除 `+++`**、**每文件每符号聚合为一条**（含出现次数 + 首次行号）→ 239 → 8 条真实事故。规则实现前必须回引擎源码核验语义（`LexicalAnalyzer.cs:1207` + `CharStream.TripleSymbol():158` + `StrForm.cs:65`）。
+
 ---
 
 ## 6. 目录结构（monorepo）
@@ -271,15 +298,17 @@ kojo-editor/
 │   ├── kernel/            # 内核：DI、总线、存储域、文件IO、槽位注册表、状态面板
 │   ├── plugin-api/        # 对外类型与接口（唯一公共 API 包，版本化 semver）
 │   ├── plugins/
-│   │   ├── erb-parser/        # 声明 requires: []
-│   │   ├── eratw-adapter/     # 声明 requires: ['erb.parser']，eraTW 全部知识在此
+│   │   ├── erb-parser/        # 声明 requires: ['kernel.io']；v0.2 起订阅 project.opened 自建索引
+│   │   ├── eratw-adapter/     # 声明 requires: ['kernel.io']，eraTW 全部知识在此（家族识别 + conventions）
+│   │   ├── convention-linter/ # 声明 requires: ['kernel.io','kernel.project','kernel.slots','erb.parser']
+│   │   ├── ui-convention-report/ # ui.panel：校验结果面板（点击 → editor.revealLocation）
 │   │   ├── sav-parser/        # sav 字节协议：读（parse_sav.cjs 移植）+ 写/注入（§5.5）
 │   │   ├── state-replay/      # requires: ['game.adapter','sav.parser']
 │   │   ├── runtime/           # v2 可选：受管引擎子进程 + CliDebug 协议（§5.6，默认不立项）
 │   │   ├── preview-renderer/
 │   │   ├── ui-function-tree/  # ui.panel：函数树导航
 │   │   ├── ui-condition-matrix/# ui.panel：条件矩阵/位图查看
-│   │   └── ui-plugin-status/  # （若内核不内置则作为首个 ui.panel 示例）
+│   │   └── ui-plugin-status/  # ui.panel：插件状态面板（首个 ui.panel 示例）
 │   └── app/               # 壳：Tauri（Rust 宿主）+ Monaco 编辑器主体；sav 二进制解析可下沉 Rust 侧
 ├── docs/                  # 本文档、ADR、接口变更记录
 └── fixtures/              # eraTW 口上样本（脱敏子集）、 sav 样本（本地，不入库）
