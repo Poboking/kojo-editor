@@ -5,3 +5,6 @@ packages:
 # pnpm 11 供应链安全：显式批准需要构建脚本的依赖
 allowBuilds:
   esbuild: true
+
+minimumReleaseAgeExclude:
+  - '@tauri-apps/api@2.12.2'
