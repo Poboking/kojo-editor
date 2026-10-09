@@ -37,7 +37,7 @@ export interface GameProject {
 
 /** 家族解析的形态类别 */
 export type FamilyParseKind =
-  | 'declare' // 家族声明函数（M_KOJO_K{n}[_{selector}]）
+  | 'declare' // 家族声明（前缀_K{编号}[_{selector}]）
   | 'ok' // 常规口上函数
   | 'placeholder' // KX 占位符残留（模板置换事故）
   | 'kn' // K{n}_ 前缀私货形态
@@ -134,9 +134,9 @@ export interface ScaffoldResult {
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
  */
 export interface GameAdapter {
-  /** 游戏标识（存储域后缀、日志用），如 'eratw' */
+  /** 游戏标识（存储域后缀、日志用），如 'mygame' */
   readonly gameId: string;
-  /** 展示名，如 'eraTW' */
+  /** 展示名（人类可读），如 'My Game' */
   readonly displayName: string;
 
   /** 工程识别（黑盒；适配器内部可自由使用 ctx.io） */

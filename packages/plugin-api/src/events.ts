@@ -29,7 +29,7 @@ export interface KernelEventMap {
   'state.snapshotLoaded': { source: string; characterId?: number };
 }
 
-/** 插件自定义事件键：必须携带 "插件id:" 前缀（例：'eratw-adapter:indexReady'） */
+/** 插件自定义事件键：必须携带 "插件id:" 前缀（例：'my-plugin:indexReady'） */
 export type CustomEventKey = `${string}:${string}`;
 
 /** 插件自定义事件（payload 由插件自行约定；内核不做类型校验） */

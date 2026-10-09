@@ -10,7 +10,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev": "pnpm --filter @kojo/app dev",
-    "tauri": "pnpm --filter @kojo/app tauri"
+    "tauri": "pnpm --filter @kojo/app tauri",
+    "audit:decoupling": "node tools/audit-decoupling.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
