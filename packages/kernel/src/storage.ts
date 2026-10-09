@@ -1,5 +1,5 @@
 import type { PlatformBridge, ScopedStorage, StorageService } from '@kojo/plugin-api';
-import { join } from './paths';
+import { join } from '@kojo/plugin-api';
 
 /**
  * 存储域实现。

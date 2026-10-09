@@ -20,7 +20,7 @@ export {
 export { FileIOServiceImpl } from './io';
 export { ProjectServiceImpl, type ProjectServiceDeps } from './project';
 
-// 无平台依赖的纯工具（宿主与插件可直接复用）
+// 纯工具 re-export（实现位于 plugin-api——公共纯工具住公共包，插件也可直接使用）
 export {
   pathStyle,
   sepOf,
@@ -33,7 +33,7 @@ export {
   isPathUnder,
   pathKey,
   type PathStyle,
-} from './paths';
+} from '@kojo/plugin-api';
 export {
   probeEncoding,
   isValidUtf8,

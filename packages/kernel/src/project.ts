@@ -10,7 +10,7 @@ import type {
   SlotRegistry,
 } from '@kojo/plugin-api';
 import { ProjectDetectionError } from '@kojo/plugin-api';
-import { pathKey } from './paths';
+import { pathKey } from '@kojo/plugin-api';
 
 /**
  * 项目服务实现（onboarding 通用骨架）。

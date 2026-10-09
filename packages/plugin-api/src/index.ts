@@ -79,3 +79,27 @@ export type {
 
 export { KernelServices, WellKnownServices } from './services';
 export type { KernelServiceKey, PluginRegistry, WellKnownServiceKey } from './services';
+
+export type {
+  ErbDim,
+  ErbFile,
+  ErbFunction,
+  ErbFunctionRef,
+  ErbIndex,
+  ErbParam,
+  ErbParserService,
+} from './erb';
+
+export {
+  pathStyle,
+  sepOf,
+  isAbsolute,
+  normalize,
+  join,
+  dirname,
+  basename,
+  extname,
+  isPathUnder,
+  pathKey,
+  type PathStyle,
+} from './paths';

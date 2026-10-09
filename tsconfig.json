@@ -25,6 +25,7 @@
   },
   "include": [
     "packages/plugin-api/src/**/*.ts",
+    "packages/plugin-api/tests/**/*.ts",
     "packages/kernel/src/**/*.ts",
     "packages/kernel/tests/**/*.ts",
     "packages/plugins/*/src/**/*.ts",

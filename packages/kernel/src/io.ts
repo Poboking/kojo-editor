@@ -11,7 +11,7 @@ import type {
 } from '@kojo/plugin-api';
 import { WriteNotAllowedError } from '@kojo/plugin-api';
 import { applyEol, detectEol, normalizeEol, probeEncoding } from './encoding';
-import { basename, isPathUnder, join, pathKey } from './paths';
+import { basename, isPathUnder, join, pathKey } from '@kojo/plugin-api';
 
 /**
  * 文件 IO 服务实现。
