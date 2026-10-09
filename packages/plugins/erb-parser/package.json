@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-erb-parser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Structure-aware ERB parser plugin: function boundaries, #DIM declarations, #FUNCTION markers, SKIPSTART blocks. No game knowledge.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}
