@@ -20,6 +20,11 @@ export const WellKnownServices = {
   GameAdapter: 'game.adapter',
   /** ERB 解析器服务 */
   ErbParser: 'erb.parser',
+  /**
+   * 约定校验器服务（v0.2）。规则来自各 game.adapter 的 `conventions` +
+   * 引擎内置通用规则；消费者为校验结果面板 / 命令面板 / 未来 CI。
+   */
+  ConventionLinter: 'convention.linter',
 } as const;
 
 export type KernelServiceKey = (typeof KernelServices)[keyof typeof KernelServices];

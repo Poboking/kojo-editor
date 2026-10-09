@@ -44,9 +44,19 @@ export type { EolStyle, FileIO, TextFile, WriteTextOptions } from './io';
 export { ProjectDetectionError } from './project';
 export type { ProjectService, RecentProject } from './project';
 
+export { CONVENTION_SEVERITY_ORDER } from './conventions';
+export type {
+  ConventionCheckContext,
+  ConventionIssue,
+  ConventionLinterService,
+  ConventionReport,
+  ConventionRule,
+  ConventionRuleFailure,
+  ConventionSeverity,
+} from './conventions';
+
 export type {
   CharaInfo,
-  ConventionRule,
   FamilyIndexRule,
   FamilyMatch,
   FamilyParseKind,

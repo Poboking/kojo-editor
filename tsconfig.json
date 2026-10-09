@@ -20,7 +20,9 @@
       "@kojo/plugin-api": ["./packages/plugin-api/src/index.ts"],
       "@kojo/kernel": ["./packages/kernel/src/index.ts"],
       "@kojo/plugin-erb-parser": ["./packages/plugins/erb-parser/src/index.ts"],
-      "@kojo/plugin-eratw-adapter": ["./packages/plugins/eratw-adapter/src/index.ts"]
+      "@kojo/plugin-eratw-adapter": ["./packages/plugins/eratw-adapter/src/index.ts"],
+      "@kojo/plugin-convention-linter": ["./packages/plugins/convention-linter/src/index.ts"],
+      "@kojo/plugin-ui-convention-report": ["./packages/plugins/ui-convention-report/src/index.ts"]
     }
   },
   "include": [

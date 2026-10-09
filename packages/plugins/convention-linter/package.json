@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-convention-linter",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Convention linter engine: collects rules (adapter-provided + built-in generic) and runs them over the kojo function index. Game-agnostic; rules carry all game knowledge.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

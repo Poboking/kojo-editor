@@ -5,6 +5,8 @@
  * 内容（eraTW / eraK / … 的全部领域知识）只在各 game.adapter 插件中。
  */
 
+import type { ConventionRule } from './conventions';
+
 /** 角色条目（由适配器从游戏数据填充；内核只透传） */
 export interface CharaInfo {
   /** CHARA NO —— 与口上函数命名 `M_KOJO_K{no}` 的编号对应 */
@@ -93,15 +95,11 @@ export interface VariableSchema {
   lookup(variableName: string, index?: number | string): VariableInfo | undefined;
 }
 
-/** 可校验的剧本约定（门禁矩阵、KOJO_VERSION 热更新等；v0.2 起消费） */
-export interface ConventionRule {
-  readonly id: string;
-  readonly description: string;
-  /** 'error' | 'warning' | 'info'（与产品文档的"宁可漏报不可误报"原则对应） */
-  readonly severity: 'error' | 'warning' | 'info';
-  /** 依据出处（源文件:行号），用于校验报告展示 */
-  readonly source?: string;
-}
+/**
+ * 可校验的剧本约定（门禁矩阵、KOJO_VERSION 热更新等；v0.2 起消费）。
+ * 形状与运行契约见 `./conventions`（校验器契约独立成篇，避免 game.ts 膨胀）。
+ */
+export type { ConventionRule } from './conventions';
 
 /** 状态模型（哪些变量影响口上分支；v1.0 快照回放消费） */
 export interface StateModel {

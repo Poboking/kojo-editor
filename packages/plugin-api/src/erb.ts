@@ -89,4 +89,12 @@ export interface ErbParserService {
   parseText(text: string, path?: string): ErbFile;
   /** 扫描若干目录（递归 .ERB/.erb）并构建全局索引 */
   buildIndex(roots: string[]): Promise<ErbIndex>;
+  /**
+   * 当前已构建的索引（未构建 / 未打开项目时为 null）。
+   * 解析器订阅 `project.opened` 自动构建并在完成后发 `kojo.functionChanged`，
+   * 消费方（函数树、校验器）订阅事件按需刷新。
+   */
+  currentIndex(): ErbIndex | null;
+  /** 取当前索引；未构建则触发构建（若已有在途构建则等待它完成） */
+  ensureIndex(): Promise<ErbIndex>;
 }

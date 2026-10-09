@@ -6,7 +6,8 @@ export type KernelEventName =
   | 'project.closed'
   | 'kojo.functionChanged'
   | 'plugin.statusChanged'
-  | 'state.snapshotLoaded';
+  | 'state.snapshotLoaded'
+  | 'editor.revealLocation';
 
 export const KERNEL_EVENT_NAMES: ReadonlySet<string> = new Set<KernelEventName>([
   'file.changed',
@@ -15,6 +16,7 @@ export const KERNEL_EVENT_NAMES: ReadonlySet<string> = new Set<KernelEventName>(
   'kojo.functionChanged',
   'plugin.statusChanged',
   'state.snapshotLoaded',
+  'editor.revealLocation',
 ]);
 
 type Handler = (payload: unknown) => void;

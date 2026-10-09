@@ -27,6 +27,12 @@ export interface KernelEventMap {
   'plugin.statusChanged': { pluginId: string; status: PluginStatus };
   /** 状态快照已加载（v1.0） */
   'state.snapshotLoaded': { source: string; characterId?: number };
+  /**
+   * 编辑器导航意图（v0.2）：打开文件并定位到行。
+   * 通用、游戏无关——由宿主（编辑器壳）消费；任意插件可发起
+   * （校验面板点击问题、函数树点击函数、未来的引用跳转）。
+   */
+  'editor.revealLocation': { filePath: string; line?: number; column?: number; source?: string };
 }
 
 /** 插件自定义事件键：必须携带 "插件id:" 前缀（例：'my-plugin:indexReady'） */
