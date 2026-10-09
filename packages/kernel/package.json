@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/kernel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "kojo-editor kernel: plugin runtime (DI), typed event bus, scoped storage, file IO, slot registry. Contains zero game knowledge.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

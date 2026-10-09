@@ -1,0 +1,144 @@
+import type {
+  EventBus,
+  FileIO,
+  Logger,
+  PlatformBridge,
+  Plugin,
+  PluginRegistry,
+  ProjectService,
+  SlotRegistry,
+  StorageService,
+} from '@kojo/plugin-api';
+import { KernelServices } from '@kojo/plugin-api';
+import { TypedEventBus } from './bus';
+import { ServiceContainer } from './container';
+import { FileIOServiceImpl } from './io';
+import { ProjectServiceImpl } from './project';
+import { PluginRuntime } from './runtime';
+import { SlotRegistryImpl } from './slots';
+import { FileStorageBackend, StorageServiceImpl } from './storage';
+
+/**
+ * 内核组装（只做四件事：DI 容器 / 事件总线 / 存储域 / 文件 IO）。
+ *
+ * 铁律：本包（packages/kernel）源码中不允许出现任何具体游戏名。
+ * 一切游戏相关知识只存在于 game.adapter 插件。
+ */
+
+export interface CreateKernelOptions {
+  /** 平台桥（Node 测试用 NodeBridge；生产用 TauriBridge） */
+  platform: PlatformBridge;
+  /** 启动时注册的插件（含内置插件与未来从目录扫描来的插件） */
+  plugins?: Plugin[];
+  /** 内核日志器（默认 console；桌面壳可接管到 UI） */
+  logger?: Logger;
+  /** 存储后端（默认基于 platform 的文件后端；测试可注入内存后端） */
+  storageBackend?: import('./storage.js').StorageBackend;
+}
+
+export interface Kernel {
+  readonly bus: EventBus;
+  readonly io: FileIO;
+  readonly storage: StorageService;
+  readonly slots: SlotRegistry;
+  readonly plugins: PluginRegistry;
+  readonly project: ProjectService;
+  /** 运行期注册插件（随后自动尝试激活） */
+  registerPlugin(plugin: Plugin): Promise<void>;
+  /** 启动：环检测 + 全量接线 */
+  start(): Promise<void>;
+  /** 停止：逆序停用全部插件 */
+  stop(): Promise<void>;
+}
+
+export function consoleLogger(prefix = '[kojo]'): Logger {
+  return {
+    debug: (m, ...a) => console.debug(prefix, m, ...a),
+    info: (m, ...a) => console.info(prefix, m, ...a),
+    warn: (m, ...a) => console.warn(prefix, m, ...a),
+    error: (m, ...a) => console.error(prefix, m, ...a),
+  };
+}
+
+export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
+  const kernelLog = opts.logger ?? consoleLogger();
+
+  const bus = new TypedEventBus((eventType, err) => {
+    kernelLog.error(`Handler for event '${eventType}' threw:`, err);
+  });
+
+  const container = new ServiceContainer();
+  const slots = new SlotRegistryImpl();
+  const storage = new StorageServiceImpl(opts.storageBackend ?? new FileStorageBackend(opts.platform));
+  const io = new FileIOServiceImpl(opts.platform, kernelLog);
+
+  // 内核服务以 'kernel' 名义注册（插件通过 requires: ['kernel.bus', ...] 消费）
+  container.provide(KernelServices.Bus, bus, 'kernel');
+  container.provide(KernelServices.IO, io, 'kernel');
+  container.provide(KernelServices.Storage, storage, 'kernel');
+  container.provide(KernelServices.Slots, slots, 'kernel');
+
+  const runtime = new PluginRuntime({
+    container,
+    bus,
+    slots,
+    storageScope: (pluginId) => storage.scope(pluginId),
+    logFactory: (pluginId) => {
+      const base = opts.logger ?? consoleLogger();
+      return {
+        debug: (m, ...a) => base.debug(`[${pluginId}] ${m}`, ...a),
+        info: (m, ...a) => base.info(`[${pluginId}] ${m}`, ...a),
+        warn: (m, ...a) => base.warn(`[${pluginId}] ${m}`, ...a),
+        error: (m, ...a) => base.error(`[${pluginId}] ${m}`, ...a),
+      };
+    },
+    kernelLog,
+  });
+
+  const project = new ProjectServiceImpl({
+    slots,
+    bus,
+    io,
+    globalStorage: storage.global(),
+    log: kernelLog,
+  });
+
+  const registry: PluginRegistry = {
+    list: () => runtime.list(),
+    get: (id) => runtime.get(id),
+    retry: (id) => runtime.retry(id),
+    register: async (plugin) => {
+      runtime.register(plugin as Plugin);
+      await runtime.tryActivateAll();
+    },
+    stop: (id) => runtime.stop(id),
+  };
+  container.provide(KernelServices.Plugins, registry, 'kernel');
+  container.provide(KernelServices.Project, project, 'kernel');
+
+  for (const plugin of opts.plugins ?? []) {
+    runtime.register(plugin);
+  }
+
+  return {
+    bus,
+    io,
+    storage,
+    slots,
+    plugins: registry,
+    project,
+    async registerPlugin(plugin: Plugin): Promise<void> {
+      runtime.register(plugin);
+      await runtime.tryActivateAll();
+    },
+    async start(): Promise<void> {
+      runtime.detectCycles();
+      await runtime.tryActivateAll();
+      const active = runtime.list().filter((r) => r.status === 'active').length;
+      kernelLog.info(`Kernel started: ${active}/${runtime.list().length} plugins active`);
+    },
+    async stop(): Promise<void> {
+      await runtime.stopAll();
+    },
+  };
+}
