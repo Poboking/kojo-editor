@@ -20,3 +20,4 @@ fixtures/**/out/
 
 # tauri
 src-tauri/target/
+packages/app/src-tauri/gen/
