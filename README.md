@@ -61,9 +61,24 @@ fixtures/                # 结构样本（真实游戏数据不入库）
 
 ```bash
 pnpm install
-pnpm test         # vitest，63+ 单元测试
-pnpm typecheck    # tsc --noEmit
+pnpm test              # vitest：128 项单元 + 集成测试
+pnpm typecheck         # root 包类型检查
+pnpm audit:decoupling  # 「一切皆插件」解耦审计（内核零游戏名 / 插件依赖纪律）
 ```
+
+真实工程集成冒烟（需要本地 eraTW 目录，不设置则自动跳过）：
+
+```bash
+KOJO_SMOKE_PROJECT="D:/path/to/eratw" pnpm test
+```
+
+## 运行桌面壳
+
+```bash
+pnpm --filter @kojo/app tauri dev     # 首次需 cargo 编译 Tauri 依赖树（约 20-30 分钟）
+```
+
+启动后：选择 eraTW 游戏目录 → 确认写权限（可拒绝，只读浏览）→ 侧栏浏览角色/口上文件 → Monaco 中编辑（Ctrl+S 保存，保编码 + 自动备份）。
 
 ## 路线
 
