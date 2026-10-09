@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/plugin-ui-status",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plugin status panel (ui.panel contribution). Makes every plugin's active/inactive/error state visible - no silent death.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0"
+  }
+}
