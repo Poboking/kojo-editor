@@ -43,12 +43,25 @@ export interface Kernel {
   readonly slots: SlotRegistry;
   readonly plugins: PluginRegistry;
   readonly project: ProjectService;
+  /**
+   * 服务查询（宿主 / UI / 测试用）。
+   * 插件请通过 PluginContext.inject / tryInject（依赖声明式接线），
+   * 这里的查询通道面向不做依赖声明的消费场景（如 UI 面板按需取服务）。
+   */
+  readonly services: ServiceQuery;
   /** 运行期注册插件（随后自动尝试激活） */
   registerPlugin(plugin: Plugin): Promise<void>;
   /** 启动：环检测 + 全量接线 */
   start(): Promise<void>;
   /** 停止：逆序停用全部插件 */
   stop(): Promise<void>;
+}
+
+/** 只读服务查询器 */
+export interface ServiceQuery {
+  tryGet<T = unknown>(key: string): T | undefined;
+  get<T = unknown>(key: string): T;
+  keys(): string[];
 }
 
 export function consoleLogger(prefix = '[kojo]'): Logger {
@@ -127,6 +140,11 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
     slots,
     plugins: registry,
     project,
+    services: {
+      tryGet: <T = unknown>(key: string): T | undefined => container.tryGet<T>(key),
+      get: <T = unknown>(key: string): T => container.get<T>(key),
+      keys: (): string[] => container.describe().map((d) => d.key),
+    },
     async registerPlugin(plugin: Plugin): Promise<void> {
       runtime.register(plugin);
       await runtime.tryActivateAll();

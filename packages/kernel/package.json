@@ -9,5 +9,9 @@
   },
   "dependencies": {
     "@kojo/plugin-api": "workspace:*"
+  },
+  "devDependencies": {
+    "@kojo/plugin-erb-parser": "workspace:*",
+    "@kojo/plugin-eratw-adapter": "workspace:*"
   }
 }
