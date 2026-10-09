@@ -43,15 +43,19 @@ eraTW 口上生态的现状：2,285 个文件、99,028 个函数的剧本库，�
 
 ```
 packages/
-├── plugin-api/          # 唯一公共契约包（类型 + 纯常量，零运行时依赖）
+├── plugin-api/          # 唯一公共契约包（类型 + 纯函数工具，零平台依赖）
 ├── kernel/              # 内核：DI / 事件 / 存储域 / 文件 IO / 槽位 / 插件运行时
 ├── plugins/
-│   ├── erb-parser/      # ERB 结构感知解析（v0.2）
-│   └── eratw-adapter/   # eraTW 全部领域知识（v0.2）
-└── app/                 # Tauri + Monaco 桌面壳（v0.1）
+│   ├── erb-parser/      # ERB 结构感知解析 + 全量函数索引
+│   ├── eratw-adapter/   # eraTW 全部领域知识（唯一允许出现游戏名之处）
+│   └── ui-plugin-status/# 插件状态面板（首个 ui.panel 贡献示例）
+└── app/                 # 桌面壳：Tauri（Rust：IO 原语）+ React + Monaco
+    └── src-tauri/       # Rust 宿主：文件字节/目录/编解码/对话框 14 条命令
 docs/                    # 架构 / 调研 / ADR
 fixtures/                # 结构样本（真实游戏数据不入库）
 ```
+
+内核运行在 WebView 前端（TS 同构、可在 Node 下全量测试），Tauri 侧只提供 PlatformBridge 原语——详见 `docs/adr/0003-shell-architecture.md`。
 
 ## 开发
 
@@ -65,12 +69,14 @@ pnpm typecheck    # tsc --noEmit
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| v0.1 | monorepo + kernel + plugin-api + 插件运行时 | ✅ 内核完成 |
-| v0.1+ | Tauri 壳 + Monaco + onboarding 选目录 | 🚧 |
-| v0.2 | erb-parser + 函数树导航 + 约定校验 | |
+| v0.1 | monorepo + kernel + plugin-api + 插件运行时 | ✅ 完成（63→107 测试） |
+| v0.1+ | Tauri 壳 + Monaco + onboarding + 插件状态面板 + 真实工程验收 | ✅ 完成 |
+| v0.2 | 函数家族导航（27 CASE 路由表）+ 约定校验器 + 条件抽取 | 🚧 下一阶段 |
 | v0.3 | 脚手架（K1 模板 AST 级置换） | |
 | v1.0 | sav 快照回放（差异化核心） | |
 | v1.1 | 状态注入器（测试槽 sav 写入） | |
+
+真实工程冒烟基线（eraTW 4.980 汉化整合版，2026-10-09 实测）：168 角色映射 / 2,285 ERB 文件 / 99,104 函数，全量索引 2.9 秒。
 
 ## 许可
 
