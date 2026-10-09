@@ -49,6 +49,7 @@ export type {
   ConventionRule,
   FamilyIndexRule,
   FamilyMatch,
+  FamilyParseKind,
   GameAdapter,
   GameProject,
   ScaffoldOptions,

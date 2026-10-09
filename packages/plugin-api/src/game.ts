@@ -35,18 +35,36 @@ export interface GameProject {
   gameVersion?: string;
 }
 
-/** 函数家族匹配结果（口上域的命名解法产物） */
+/** 家族解析的形态类别 */
+export type FamilyParseKind =
+  | 'declare' // 家族声明函数（M_KOJO_K{n}[_{selector}]）
+  | 'ok' // 常规口上函数
+  | 'placeholder' // KX 占位符残留（模板置换事故）
+  | 'kn' // K{n}_ 前缀私货形态
+  | 'beforetrain'; // K{n}_BEFORETRAIN{family}（家族名后置）
+
+/** 函数家族匹配结果（口上域命名解法产物） */
 export interface FamilyMatch {
+  /** 形态类别 */
+  kind: FamilyParseKind;
+  /** 前缀域：'M_KOJO' | 'KOJO' | 'DIARY' | 'RUN_INTO' | ''（裸家族/无前缀） */
+  prefix: string;
   /** 家族名（'' = 初始家族/无家族） */
   family: string;
   /** 角色编号（无法归属时为 null） */
   characterNo: number | null;
-  /** 剧本セレクタ编号（0 = 初始） */
+  /** 剧本セレクタ编号（仅 declare 形态有意义；0 = 初始） */
   selector: number;
-  /** 所属面（如 COUNTER / MESSAGE_COM / EVENT / FLAGSETTING…） */
+  /** 所属面（MESSAGE_COM / COUNTER / EVENT / FLAGSETTING…；无法识别为 ''） */
   face: string;
-  /** 时机号 / 子号（'30'、'ONABARE_2'、''…） */
+  /** 子号（PALAMCNG 变体 A/B…/IRAI 依頼名/MESSAGECHECK 子段） */
+  sub: string;
+  /** 是否为 MESSAGECHECK 否决钩子（位协议） */
+  isMessageCheck: boolean;
+  /** K{no} 之后的时机号/子号（已去前导下划线） */
   slot: string;
+  /** KX 占位符残留标记 */
+  isPlaceholder: boolean;
 }
 
 /** 家族识别规则：把函数名解析为结构（纯函数，规则由适配器提供） */

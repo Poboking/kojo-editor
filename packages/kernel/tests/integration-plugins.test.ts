@@ -61,10 +61,34 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       const k1 = [...index.byName.keys()].filter((n) => n.includes('M_KOJO') && n.includes('_K1'));
       expect(k1.length).toBeGreaterThan(50);
 
+      // 4. 家族识别覆盖率（FamilyIndexRule 对全量函数名）
+      const adapterRule = kernel.slots.query('game.adapter')[0]?.adapter.functionFamilyIndex;
+      expect(adapterRule).toBeTruthy();
+      let matched = 0;
+      let unmatched = 0;
+      let placeholders = 0;
+      const families = new Set<string>();
+      for (const refs of index.byName.values()) {
+        for (const ref of refs) {
+          const m = adapterRule!.match(ref.name);
+          if (m) {
+            matched++;
+            if (m.isPlaceholder) placeholders++;
+            if (m.family) families.add(m.family);
+          } else {
+            unmatched++;
+          }
+        }
+      }
+      const familyRate = matched / (matched + unmatched);
+      expect(familyRate).toBeGreaterThan(0.95);
+
       // eslint-disable-next-line no-console
       console.log(
         `[smoke] 角色 ${project.charaIndex.size} | ERB 文件 ${index.files.size} | ` +
-          `函数 ${totalFunctions}（含表达式函数 ${expressionFuncs}）| 去重名 ${index.byName.size}`,
+          `函数 ${totalFunctions}（含表达式函数 ${expressionFuncs}）| 去重名 ${index.byName.size}\n` +
+          `[smoke] 家族识别 ${matched}/${matched + unmatched} = ${(familyRate * 100).toFixed(2)}% | ` +
+          `家族数 ${families.size} | KX 占位符残留 ${placeholders}`,
       );
 
       await kernel.stop();

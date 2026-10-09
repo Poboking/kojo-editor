@@ -2,6 +2,7 @@ import type { CharaInfo, FileIO, GameAdapter, GameProject, Plugin } from '@kojo/
 import { join } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
+import { createEratwFamilyIndex } from './family-index';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -25,6 +26,7 @@ export function createEratwAdapterPlugin(): Plugin {
       const adapter: GameAdapter = {
         gameId: ERATW.gameId,
         displayName: ERATW.displayName,
+        functionFamilyIndex: createEratwFamilyIndex(),
 
         async detect(rootDir: string): Promise<boolean> {
           // 特征组合：口上・消息域目录 + Chara CSV 目录（同时存在才成局）
