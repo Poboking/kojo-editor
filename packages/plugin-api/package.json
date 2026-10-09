@@ -1,0 +1,10 @@
+{
+  "name": "@kojo/plugin-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Public plugin API contracts for kojo-editor. The only shared API surface between the kernel and plugins.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
