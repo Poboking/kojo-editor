@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-eratw-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "eraTW game adapter: project detection, CHARA CSV parsing, kojo paths. All eraTW-specific knowledge lives here; the kernel stays game-agnostic.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}
