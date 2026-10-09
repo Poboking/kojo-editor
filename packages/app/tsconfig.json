@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "@kojo/plugin-api": ["../plugin-api/src/index.ts"],
+      "@kojo/kernel": ["../kernel/src/index.ts"],
+      "@kojo/plugin-erb-parser": ["../plugins/erb-parser/src/index.ts"],
+      "@kojo/plugin-eratw-adapter": ["../plugins/eratw-adapter/src/index.ts"],
+      "@kojo/plugin-ui-status": ["../plugins/ui-plugin-status/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+}

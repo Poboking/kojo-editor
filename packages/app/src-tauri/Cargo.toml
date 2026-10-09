@@ -1,0 +1,28 @@
+[package]
+name = "kojo-editor"
+version = "0.1.0"
+description = "kojo-editor desktop shell (Tauri host)"
+authors = ["Poboking"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "kojo_editor_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+encoding_rs = "0.8"
+base64 = "0.22"
+walkdir = "2"
+rfd = "0.15"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

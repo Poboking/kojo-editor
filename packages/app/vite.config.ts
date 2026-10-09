@@ -1,0 +1,28 @@
+import { fileURLToPath } from 'node:url';
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
+
+const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      '@kojo/plugin-api': r('../plugin-api/src/index.ts'),
+      '@kojo/kernel': r('../kernel/src/index.ts'),
+      '@kojo/plugin-erb-parser': r('../plugins/erb-parser/src/index.ts'),
+      '@kojo/plugin-eratw-adapter': r('../plugins/eratw-adapter/src/index.ts'),
+      '@kojo/plugin-ui-status': r('../plugins/ui-plugin-status/src/index.ts'),
+    },
+  },
+  clearScreen: false,
+  server: {
+    port: 1420,
+    strictPort: true,
+    watch: { ignored: ['**/src-tauri/**'] },
+  },
+  build: {
+    target: 'es2022',
+    chunkSizeWarningLimit: 4096,
+  },
+});
