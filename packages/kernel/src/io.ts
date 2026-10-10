@@ -116,6 +116,13 @@ export class FileIOServiceImpl implements FileIO {
 
   /* ------------------------------ 目录 ------------------------------ */
 
+  async ensureDir(path: string): Promise<void> {
+    // 与 writeBytes 同闸：先建目录再写文件的链路里，目录创建同样不能越权
+    // （否则会先在域外造出目录，违反"游戏目录整体只读"）。
+    this.assertWritable(path);
+    await this.bridge.ensureDir(path);
+  }
+
   listDir(path: string): Promise<DirEntry[]> {
     return this.bridge.listDir(path);
   }

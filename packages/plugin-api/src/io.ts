@@ -39,6 +39,16 @@ export interface FileIO {
    */
   writeText(path: string, text: string, opts?: WriteTextOptions): Promise<void>;
   writeBytes(path: string, data: Uint8Array): Promise<void>;
+  /**
+   * 递归创建目录（已存在则幂等成功）。
+   *
+   * 与 `writeBytes` 同受第一道闸约束：路径不在可写白名单内时拒绝并抛
+   * `WriteNotAllowedError`（**先建目录再写文件**的链路里，目录创建同样不能
+   * 越过白名单——否则会先在域外造出目录，违反"游戏目录整体只读"）。
+   *
+   * @throws WriteNotAllowedError 当路径不在可写白名单内
+   */
+  ensureDir(path: string): Promise<void>;
   listDir(path: string): Promise<DirEntry[]>;
   walkDir(path: string, opts?: WalkOptions): Promise<DirEntry[]>;
   exists(path: string): Promise<boolean>;

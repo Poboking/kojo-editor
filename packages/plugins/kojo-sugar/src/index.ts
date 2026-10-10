@@ -1,18 +1,20 @@
 /**
  * @kojo/plugin-kojo-sugar
  *
- * 语法糖转译插件（服务 `sugar.transpile`；v0.3 批 S2）。
+ * 语法糖转译插件（服务 `sugar.transpile`；v0.3 批 S2 转译内核 + S3 编译落盘）。
  *
  * 分层（"一切皆插件"）：
  * - 本插件 = 三段式转译器（行式词法 → AST → codegen）——**引擎级语言知识**
  *   （中文表层关键字是跨游戏语言层，契约 `sugar.ts` 头注已定调），零游戏知识；
  * - 变量字典 / 时机分野命名模板来自 **game adapter**（经槽位查询 +
  *   `project.adapterId` 过滤后注入转译器）——本插件只消费，不解释；
- * - 写盘（双闸 + 备份 + 回读验证）是 S3 批的独立职责，**不在本插件内**
- *   （契约明确"纯函数语义，不读不写文件"）。
+ * - 编译落盘（S3 批）：`compileToFile` 走**内核 io 第一道闸**（writablePaths）
+ *   + 备份 + 回读验证（安全顺序见 `compile.ts` 头注，复刻注入器范式）；
+ *   `parse`/`transpile`/`sourceOf` 仍为纯函数。
  */
 
 import type {
+  FileIO,
   GameProject,
   Plugin,
   ProjectService,
@@ -29,10 +31,12 @@ export function createKojoSugarPlugin(): Plugin {
     id: 'kojo-sugar',
     version: '0.3.0',
     provides: [WellKnownServices.SugarTranspile],
-    requires: [KernelServices.Project, KernelServices.Slots],
+    // S3 批：编译落盘需要内核 io（第一道闸）；Project/Slots 供 adapter 字典查询
+    requires: [KernelServices.Project, KernelServices.Slots, KernelServices.IO],
     activate(ctx) {
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
+      const io = ctx.inject<FileIO>(KernelServices.IO);
 
       /**
        * 当前适配器的变量字典（按 adapterId 精确匹配；多适配器共存天然正确）。
@@ -57,6 +61,13 @@ export function createKojoSugarPlugin(): Plugin {
           createSugarTranspileService({ dictionary: dictionaryOf() }).transpile(source, options),
         sourceOf: (result, generatedLine) =>
           createSugarTranspileService().sourceOf(result, generatedLine),
+        // S3：编译落盘一体——转译（带当前 adapter 字典）+ 双闸写 + 备份 + 回读
+        compileToFile: (source, targetPath, options) =>
+          createSugarTranspileService({ dictionary: dictionaryOf(), io, log: ctx.log }).compileToFile(
+            source,
+            targetPath,
+            options,
+          ),
       };
 
       ctx.provide(WellKnownServices.SugarTranspile, service);

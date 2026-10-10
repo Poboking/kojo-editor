@@ -174,6 +174,7 @@ export {
   isValueInterpolation,
   isVariableAlias,
   isWritableAlias,
+  SugarCompileError,
 } from './sugar';
 export type {
   AliasDecl,
@@ -191,6 +192,10 @@ export type {
   RandomInline,
   RawFunctionBlock,
   RawLine,
+  SugarCompileEncoding,
+  SugarCompileOptions,
+  SugarCompileResult,
+  SugarCompilerDeps,
   SugarDiagnostic,
   SugarDiagnosticCode,
   SugarDoc,

@@ -743,3 +743,101 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - S1（§5.26）的 `describe.skip('S2 待启用…')` 占位块已删除（逐字节断言正式落到 `kojo-sugar/tests/golden.test.ts`）；`.expected.erb.todo` 文件名保持冻结口径（S2 起参与比较）。
 
 ---
+
+### 5.29 语法糖 S3 批 · 编译产物写链路（v0.3 批 S3 实施记录：`.kojo` → 合规 `.erb` 落盘）
+
+**目标**：把 S2 的纯转译内核接上磁盘——转译 + 编码组装 + 双闸写 + 备份 + 回读验证一体（`compileToFile`），并确立产物落盘的**编码口径**。
+
+#### 交付物
+
+**契约扩展**（`packages/plugin-api/src/sugar.ts`，零游戏名词）：
+
+| 新增 | 形状 | 说明 |
+|---|---|---|
+| `SugarCompileEncoding` | `{ bom, eol: 'lf'\|'crlf', trailingNewline }` | 编码口径（**字节层**，不是 `EolStyle` 文本语义） |
+| `SugarCompileOptions` | `extends SugarTranspileOptions` + `encoding?` + `writeSourceMap?` | 编译选项 |
+| `SugarCompileResult` | `{ erbPath, byteSize, backupPath, sourceMapPath?, diagnostics }` | 落盘结果（回读通过才返回） |
+| `SugarCompileError` | `Error` 子类 + `targetPath` / `backupPath` / `diagnostics` | 编译域失败（**携带上下文**，fail-closed） |
+| `SugarCompilerDeps` | `{ io, transpile, log? }` | 编译依赖（让写盘顺序可被替身精确驱动） |
+| `SugarTranspileService.compileToFile` | `(source, targetPath, options?) => Promise<SugarCompileResult>` | **唯一含 IO** 的方法 |
+
+契约头注同步改写（原"本契约不含任何 IO"→ 分层说明：纯函数面 + 唯一含 IO 入口）。
+
+**IO 契约扩展**（`packages/plugin-api/src/io.ts` + `packages/kernel/src/io.ts`）：
+
+- `FileIO.ensureDir(path)` 新增——**与 `writeBytes` 同闸**（`assertWritable` 后走 `bridge.ensureDir`）。
+  - 用户决策：原任务写"经 kernel io `ensure_dir` 创建"，但 `FileIO` 契约本无此方法（只有 `PlatformBridge` 有）；选择**补契约 + 内核实现**（而非依赖平台桥隐式 mkdir 或编译前检查），语义最清晰。
+  - 关键安全点：**目录创建同样不能越权**——否则会先在域外造出目录，违反"游戏目录整体只读"。
+
+**写链路实现**（`packages/plugins/kojo-sugar/src/compile.ts`，新文件）：
+
+```
+1. 转译 + 守卫   → error 诊断 → 抛 SugarCompileError（不产半成品、不建目录、不备份、不写盘）
+2. 编码组装      → encodeErbBytes(text, encoding)（BOM + 换行 + 末尾换行）
+3. 目录          → 父目录不存在 → io.ensureDir（域内才建）
+4. 备份          → io.backup(target)（目标已存在才做；不存在返回 null）
+5. 写盘          → io.writeBytes（第一道闸；越权 WriteNotAllowedError 原样传播）
+6. 回读验证      → io.readBytes → 字节级比对 → 不一致抛 SugarCompileError（携带备份路径）
+7. （可选）旁挂  → writeSourceMap: true 时写 .map.json（同样备份 + 回读）
+```
+
+顺序即安全语义（复刻 §5.23 注入器范式）：**守卫先于一切副作用**；越权写抛出时备份已做、原文件未覆盖；回读失败报错消息必带备份位置。
+
+`service.ts`：`compileToFile` 接 `SugarCompilerDeps`（未注入 `io` 的实例调用即显式抛错，绝不静默假装成功）。
+`index.ts`：`requires` 增 `KernelServices.IO`；服务实例注入 `io` + `ctx.log`；头注改写（写盘已属本插件）。
+
+#### 关键设计决策
+
+1. **编码口径（重大——与规范 §8 的 CRLF 断言冲突，以语料为准）**：
+   全语料实测（2026-10-11，一次性 node 探针跑完即删）：
+
+   | 范围 | 文件数 | BOM | LF-only | CRLF-only |
+   |---|---|---|---|---|
+   | `ERB/口上・メッセージ関連/**`（口上域） | 2,317 | 2,312 | **2,316** | **0** |
+   | `ERB/**`（全树） | 3,818 | 3,776 (98.90%) | **3,787** | 3 |
+
+   规范 §8 写"保存强制 UTF-8（带 BOM）**、CRLF**、文件末尾保留换行"——**CRLF 与语料不符**（游戏自带文件几乎全是 LF）。
+   实现取 **BOM + LF + 末尾换行**：产物必须与同目录既有文件**逐字节同构**，否则作者每次保存都在 git 里产生整文件 diff（这正是"一次保存毁半库"的现代变体）。
+   末尾换行：语料"有 2,564 / 无 1,254"无硬性约定，本项目统一**保留**（POSIX 惯例 + 规范 §8 明文）。
+   `CRLF` 仍作为**可选项**保留（显式传 `encoding.eol:'crlf'` 时按规范字面），默认不启用。
+   **用户已于开工前拍板采此口径**。
+
+2. **编码走 `writeBytes` 而非 `writeText`**：产物是**新建/全量重写**的生成物，不存在 kernel `writeText` 的"保编码保换行"（`preserve`）语义——保谁的？自组装字节（BOM + LF + 末尾换行）语义明确且可断言。
+
+3. **`compileToFile` 并入 `sugar.transpile` 而非另立服务键**：编译器本就是"产物流向磁盘"的单一动作；拆分只会让消费方（S4 保存 UI）承担两步编排 + 状态传递。与 §5.23 注入器"读写职责分离"不矛盾——那里分离的是**只读消费者**（回放不必依赖写权限），本处糖服务的只读面（`parse`/`transpile`/`sourceOf`）仍是纯函数，只有显式调用 `compileToFile` 才触达 IO。
+
+4. **目录与命名的职责边界**：`compileToFile(source, targetPath)` **严格按调用方给定的绝对路径写**；`.kojo` → `M_KOJO_K{No}_{分野}.ERB` 的命名/目录推导留给 S4 保存 UI（或新建向导）。依据：真实产物布局为 `個人口上/012 Rumia [ルーミア]/ルーミア/M_KOJO_K12_イベント.ERB`（角色目录下再套一层口上名子目录），该层级由 adapter 的 `charaIndex[no].kojoDir` 给出，属编辑体验而非转译语义。
+   用户决策：**由调用方给定 targetPath**。
+
+5. **回读验证 = 字节级比对**（不是"重新 parse 生成结果确认结构无损"那样更弱的形态）：与 §5.23 注入器口径一致——落盘字节必须**逐字节等于**产物字节，这是"写入确实发生且未被中间层篡改"的最强断言。
+
+#### 验证
+
+- vitest 全量 **717 passed / 6 skipped**（无 smoke）。
+  - **纯本批净增 = 714 − 679 = +35**（`git stash` 隔离工作区并行遗留后实测 714 passed；679 = §5.28 已提交基线）。
+  - 含并行遗留的合并态 = **717**（= 714 + 并行 state-replay 多区间修复 3 项 + 其 extract 用例）。
+  - `kojo-sugar/tests/compile.test.ts` 新增 **23 项**（替身层 20 + 真实磁盘端到端 3）；
+  - `kernel/tests/io.test.ts` 新增 **3 项**（ensureDir 域内/域外/空白名单）；
+  - `plugin-api/tests/sugar.test.ts` 新增 **2 项**（`SugarCompileError` 形状）。
+- typecheck **root + app 双跑 ✅**；`audit:decoupling` ✅（13 插件）。
+- 真实工程集成冒烟 ✅（**新增第 10 节**）：
+  - 回放基线**逐字不变**（K49 1356 函数 / 11685 谓词 / 命中 1549 / 未命中 6395 / 未知 **3741** / exact **836** / partial 482 / unknown 38）；
+  - §10 语法糖编译落盘：副本端到端 **360B（BOM+LF+末尾换行）** + 回读一致 + 备份已建 + 越权拒绝 1 项 + 编译拒绝零副作用 1 项；
+  - **绝不写真实游戏目录**（目标恒为 `mkdtemp` 的 appData 临时域）。
+- **golden §6.1/§6.2 逐字节断言保持通过**（kojo-sugar 现有测试零回退）。
+
+#### 关键坑与发现
+
+1. **任务要求的 CRLF 与语料实测冲突**（本批最重要的发现，详见决策 1）：**验收标准要回引擎/语料源码核验，不能凭规范文字**（§九-1 的又一次应验）。规范 §8 的"CRLF"极可能是从"Windows 平台 + 编辑器默认"想当然推导，而整合版实际文件全部 LF。
+2. **`FileIO` 无 `ensureDir`**：契约层只有 `writeBytes`/`backup` 等；目录创建此前只能靠 `PlatformBridge`（Node 侧 `writeFileBytes` 内置 `fs.mkdir(recursive)`）。本批补契约 + 内核实现（同闸），使"先建目录再写文件"的链路在**契约层**也受第一道闸约束。
+3. **TS7 的赋值窄化不可靠（复发）**：`let persisted: Uint8Array | null = null;` 后在 `try` 里赋值、`catch` 里 `throw`，TS7 仍报 `possibly null`——改为 `let persisted: Uint8Array;` 且在 `catch` 中必 `throw`（控制流保证有值）。
+4. **越权在"目录创建"点即拒**：`ensureDir` 先于 `backup` 执行，故"父目录不存在 + 越权"时**备份都不会做**（更早失败 = 更少副作用，正是安全顺序要的效果）；而"父目录已存在 + 越权"时备份已做、未写盘。两种路径各有单测固守。
+5. **测试替身的 `exists` 需覆盖目录语义**：真实内核 `exists` 对目录返回 true，但内存替身若只认文件，会把"父目录已存在"误判为不存在而多调一次 `ensureDir`——fixture 须显式给出目录项语义。
+
+#### 并行线冲突记录
+
+- 工作区存在**未提交的 state-replay 多区间修复**（`extract.test.ts` / `branches.ts` / `branches.test.ts`）：把 `CASE 1 TO 3, 5 TO 7` 多个 TO 区间的半边谓词按**成对**消费（旧实现把整段 `'and'` 并成一组 → 两个区间被 AND 成恒假）。该改动**不在 S3 边界内**、本会话未记录归属；本批的 `kojo-sugar`/`plugin-api`/`kernel` 改动与之**零文件交集**。提交时只 add 本批边界文件，**绝不 add state-replay 三文件**（留待其提交者处置）。
+- 边界未做（属后续批）：UI 保存/预览（S4）、升糖（S5）、Monarch 高亮（S6）；规范 §8 的**全角空格检测告警**亦未实现（属保存期 lint，随 S4）。
+
+---
+

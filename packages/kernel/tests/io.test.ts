@@ -69,6 +69,29 @@ describe('FileIOService · 写保护', () => {
   });
 });
 
+describe('FileIOService · ensureDir（先建目录再写文件的链路）', () => {
+  it('域内递归建目录；已存在时幂等成功', async () => {
+    const kojo = path.join(tmpDir, 'game', '個人口上');
+    io.setWritableRoots([kojo]);
+    const deep = path.join(kojo, '012 Rumia', 'ルーミア');
+    await io.ensureDir(deep);
+    expect(await io.exists(deep)).toBe(true);
+    // 幂等：重复调用不抛
+    await expect(io.ensureDir(deep)).resolves.toBeUndefined();
+  });
+
+  it('域外目录创建被拒（与 writeBytes 同闸，不先造出目录）', async () => {
+    io.setWritableRoots([path.join(tmpDir, 'game', '個人口上')]);
+    const outside = path.join(tmpDir, 'game', 'ERB', 'out');
+    await expect(io.ensureDir(outside)).rejects.toThrow(WriteNotAllowedError);
+    expect(await io.exists(outside)).toBe(false);
+  });
+
+  it('未声明任何可写根时一切目录创建被拒', async () => {
+    await expect(io.ensureDir(path.join(tmpDir, 'game', 'x'))).rejects.toThrow(WriteNotAllowedError);
+  });
+});
+
 describe('FileIOService · 编码保持与换行保持（防"一次保存毁半库"）', () => {
   it('Shift-JIS 文件读后写回：仍是 Shift-JIS 字节', async () => {
     const f = path.join(tmpDir, 'game', 'kojo.ERB');

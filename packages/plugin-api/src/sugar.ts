@@ -25,9 +25,20 @@
  * - 预览是 `state-replay` 的消费方，不自建模拟器（审阅 §1.4）。
  *
  * 稳健性原则：转译**宽容但不静默**——能继续就继续（尽量产出 full–AST），
- * 但每一处偏离都进 `SugarDiagnostic[]`；写盘由 S3 批按内核双闸承担，
- * 本契约不含任何 IO。
+ * 但每一处偏离都进 `SugarDiagnostic[]`。
+ *
+ * 分层与 IO（v0.3 批 S3 更新）：
+ * - `parse` / `transpile` / `sourceOf` 仍是**纯函数**（不读不写文件）——它们可在
+ *   WebView 与批处理里高并发调用；
+ * - `compileToFile` 是**唯一含 IO** 的入口（S3 批新增）：转译 → 编码组装 →
+ *   写盘一体。其写盘顺序沿用注入器范式（守卫 → 生成 → 备份 → 双闸写 → 回读
+ *   验证，见 `snapshot.ts` 的 `SnapshotWriteService`），**失败一律 fail-closed**。
+ *   之所以并入本服务而非另立服务键：编译器本就是"产物流向磁盘"的单一动作，
+ *   拆分只会让消费方（S4 保存 UI）承担两步编排 + 状态传递。
  */
+
+import type { Logger } from './base';
+import type { FileIO } from './io';
 
 /* ============================ 源位置（源映射地基） ============================ */
 
@@ -527,16 +538,112 @@ export interface SugarSourceMapEntry {
 
 /** 转译产物 */
 export interface SugarTranspileResult {
-  /** 生成的 ERB 全文（**未落盘**；写盘由 S3 批按内核双闸承担） */
+  /** 生成的 ERB 全文（**未落盘**；写盘走 `compileToFile`，S3 批） */
   erb: string;
   /** 行级源映射（按 generatedLine 升序） */
   sourceMap: SugarSourceMapEntry[];
   /**
    * 全量诊断（parse + transpile）。**非空不必然代表失败**：
    * `severity: 'error'` 存在时不应落盘半成品 ERB（规范 §5.3：
-   * 缩进异常/缺 `否则` 等 → 阻止编译，不生成半成品），由消费方决定。
+   * 缩进异常/缺 `否则` 等 → 阻止编译，不生成半成品），`compileToFile`
+   * 据此在**写盘前**拒编译（fail-closed）。
    */
   diagnostics: SugarDiagnostic[];
+}
+
+/* ============================== 编译落盘（S3 批） ============================== */
+
+/**
+ * 产物编码（写盘字节层；**不是**文本层的 `EolStyle` 语义）。
+ *
+ * **实证口径（2026-10-11 全语料实测，覆盖规范 §8 的 CRLF 断言）**：
+ * eraTW 4.980 整合版全树 3,818 个 ERB 中 **LF-only 3,787 / CRLF-only 3**
+ * （口上域 2,317 个文件 **LF 2,316 / CRLF 0**）——即游戏自带文件几乎全是
+ * **LF 换行 + UTF-8 BOM**（BOM 出现率 98.9%，口上域 2,312/2,317）。规范 §8
+ * 的"CRLF"与语料不符，实现以**语料为准**（产物须与同目录既有文件同构，
+ * 否则 diff 整文件重写）。末尾换行方面语料"有 2,564 / 无 1,254"无硬性约定，
+ * 本项目**统一保留末尾换行**（POSIX 惯例 + 规范 §8 明文）。
+ * 该偏离已记入 IMPLEMENTATION-LOG §5.29。
+ */
+export interface SugarCompileEncoding {
+  /** 字节序标记：`true`（默认）= 写 UTF-8 BOM（`EF BB BF`），与游戏自带文件一致 */
+  bom: boolean;
+  /** 换行风格（默认 `lf`；`crlf` 仅在显式指定时使用，规范 §8 字面口径） */
+  eol: 'lf' | 'crlf';
+  /** 末尾换行（默认 `true`；POSIX 惯例 + 规范 §8 明文） */
+  trailingNewline: boolean;
+}
+
+/** 编译选项 */
+export interface SugarCompileOptions extends SugarTranspileOptions {
+  /**
+   * 产物编码（缺省 = 语料实证口径：`{bom:true, eol:'lf', trailingNewline:true}`）。
+   * 显式传入可覆盖单项——未给的字段取默认值。
+   */
+  encoding?: Partial<SugarCompileEncoding>;
+  /**
+   * 写盘前是否**同时**写一份行级源映射旁挂文件（`{targetPath}.map.json`）。
+   * 缺省 `false`：S3 只产 ERB 本体，源映射旁挂留给 S4 编辑体验批按需开启。
+   */
+  writeSourceMap?: boolean;
+}
+
+/**
+ * 编译依赖（实现侧注入；`kojo-sugar` 装配时提供）。
+ *
+ * 之所以独立成形：编译链路需要内核 io（写盘）与转译函数（纯逻辑），
+ * 把二者显式注入让"写盘顺序"可被单测以替身精确驱动（双闸/备份/回读
+ * 各路径覆盖），而不必启动整个内核。
+ */
+export interface SugarCompilerDeps {
+  /** 内核文件 IO（第一道闸 writablePaths 的强制执行者） */
+  io: FileIO;
+  /** 转译函数（纯逻辑；通常即本服务的 `transpile`） */
+  transpile: (source: string, options?: SugarCompileOptions) => SugarTranspileResult;
+  /** 可选日志（写盘摘要） */
+  log?: Logger;
+}
+
+/** 编译落盘结果（回读验证已通过才返回；失败显式抛错并携带备份位置） */
+export interface SugarCompileResult {
+  /** 写入的产物路径（绝对路径） */
+  erbPath: string;
+  /** 写盘总字节数（含 BOM / 换行，即真正落盘的字节数） */
+  byteSize: number;
+  /** 写前备份路径（内核 io backup；目标原文件不存在时为 null） */
+  backupPath: string | null;
+  /** 源映射旁挂文件路径（仅当 `writeSourceMap: true` 时） */
+  sourceMapPath?: string;
+  /** 本次编译的全量诊断（含 info/warning；`error` 已在写盘前拒绝，不会走到这里） */
+  diagnostics: SugarDiagnostic[];
+}
+
+/**
+ * 编译失败错误（fail-closed）。
+ *
+ * 与 `WriteNotAllowedError` 的分工：路径越权**原样传播** `WriteNotAllowedError`
+ * （内核第一道闸的语义，消费方按类型判定）；本错误承载**编译域**的失败
+ * （error 诊断阻止写盘 / 回读验证不一致），并**携带上下文**（目标路径 +
+ * 备份位置），便于 UI 精确提示"原文件已备份于 X"。
+ */
+export class SugarCompileError extends Error {
+  /** 目标产物路径（可能尚未写入——如 error 诊断在写盘前拒绝） */
+  readonly targetPath: string;
+  /** 若已写入或已备份：备份路径（未备份时为 null） */
+  readonly backupPath: string | null;
+  /** 触发失败的诊断（编译拒绝时有值；回读失败时为空数组） */
+  readonly diagnostics: readonly SugarDiagnostic[];
+
+  constructor(
+    message: string,
+    info: { targetPath: string; backupPath?: string | null; diagnostics?: readonly SugarDiagnostic[] },
+  ) {
+    super(message);
+    this.name = 'SugarCompileError';
+    this.targetPath = info.targetPath;
+    this.backupPath = info.backupPath ?? null;
+    this.diagnostics = info.diagnostics ?? [];
+  }
 }
 
 /* ============================== 诊断 ============================== */
@@ -619,11 +726,13 @@ export interface SugarTranspileOptions {
 /**
  * 语法糖转译服务（服务键 `sugar.transpile`；由 `kojo-sugar` 插件提供，S2 批建）。
  *
- * **纯函数语义**：不读文件、不写文件、不触达工程状态——输入字符串 → 输出产物。
- * 这样它才能既跑在 Node（测试）、又跑在 WebView（生产），并可在批处理里
- * 高并发调用（审阅 §四-4：单文件转译目标 <50ms）。
+ * **纯函数语义**（`parse` / `transpile` / `sourceOf`）：不读文件、不写文件、
+ * 不触达工程状态——输入字符串 → 输出产物。这样它才能既跑在 Node（测试）、
+ * 又跑在 WebView（生产），并可在批处理里高并发调用（审阅 §四-4：单文件转译
+ * 目标 <50ms）。
  *
- * 写盘（双闸 + 备份 + 回读验证）是 S3 批的独立职责，**不在本服务内**。
+ * `compileToFile`（S3 批）是**唯一含 IO** 的方法：转译 + 编码组装 + 写盘一体。
+ * 实现方须依赖内核 io（`kernel.io`）走第一道闸，安全顺序见方法注。
  */
 export interface SugarTranspileService {
   /**
@@ -642,6 +751,25 @@ export interface SugarTranspileService {
    * 例如包装函数骨架这类纯生成行）。
    */
   sourceOf(result: SugarTranspileResult, generatedLine: number): SugarPosition | null;
+  /**
+   * 编译并落盘（S3 批；**唯一含 IO 的方法**）。
+   *
+   * 安全顺序（复用注入器范式，**不得简化**）：
+   * 1. **守卫（先于一切副作用）**：转译产 `error` 诊断 → 抛 `SugarCompileError`
+   *    （不产半成品、不建目录、不备份、不写盘）；
+   * 2. **组装**：产物文本 → 按 `encoding` 编码为字节（BOM + 换行 + 末尾换行）；
+   * 3. **目录**：目标父目录不存在则经内核 io `ensureDir` 创建（仍过第一道闸）；
+   * 4. **备份**：目标已存在时先经内核 io `backup` 入 `{appData}/backup/{hash}/`；
+   * 5. **写盘**：内核 io `writeBytes`（第一道闸 `writablePaths`；越权抛
+   *    `WriteNotAllowedError` **原样传播**，此时备份已做、原文件未覆盖）；
+   * 6. **回读验证**：重新读字节 → 与产物字节逐字节比对，不一致抛
+   *    `SugarCompileError`（**携带备份路径**）。
+   *
+   * @param source `.kojo` 源文本
+   * @param targetPath 产物 `.erb` 目标路径（绝对路径；须在可写域内）
+   * @throws `WriteNotAllowedError` 路径越权 / `SugarCompileError` 编译拒绝或回读失败
+   */
+  compileToFile(source: string, targetPath: string, options?: SugarCompileOptions): Promise<SugarCompileResult>;
 }
 
 /* ============================== 显式类型守卫 ============================== */

@@ -13,6 +13,10 @@
 
 import type {
   AliasDecl,
+  FileIO,
+  Logger,
+  SugarCompileOptions,
+  SugarCompileResult,
   SugarDiagnostic,
   SugarDoc,
   SugarPosition,
@@ -20,9 +24,10 @@ import type {
   SugarTranspileResult,
   SugarTranspileService,
 } from '@kojo/plugin-api';
-import { isReadonlyAlias } from '@kojo/plugin-api';
+import { isReadonlyAlias, SugarCompileError } from '@kojo/plugin-api';
 import { buildDoc, type TopNode } from './parser';
 import { codegen } from './codegen';
+import { compileToFile as runCompileToFile } from './compile';
 import type { AliasEntry, AliasTable, DiagnosticSink, DictionaryLookup } from './types';
 
 /** 诊断收集器（保持插入顺序；`sortDiagnostics` 在 parse 末尾排序） */
@@ -53,6 +58,14 @@ function buildAliasTable(aliases: readonly AliasDecl[]): AliasTable {
 export interface CreateSugarServiceOptions {
   /** 变量字典（adapter 提供；缺省 = 无字典） */
   dictionary?: DictionaryLookup;
+  /**
+   * 编译落盘所需的内核文件 IO（S3 批）。
+   * **缺省 = 本服务不支持 `compileToFile`**（调用即抛错，绝不静默假装成功）——
+   * 纯转译（`parse`/`transpile`/`sourceOf`）不需要它，故可选。
+   */
+  io?: FileIO;
+  /** 可选日志（编译摘要） */
+  log?: Logger;
 }
 
 /** 创建转译服务实例（纯函数；可安全并发调用） */
@@ -110,5 +123,21 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     return { line: entry.sourceLine, column: entry.span?.start.column ?? 1 };
   }
 
-  return { parse, transpile, sourceOf };
+  async function compileToFile(
+    source: string,
+    targetPath: string,
+    options?: SugarCompileOptions,
+  ): Promise<SugarCompileResult> {
+    const io = opts.io;
+    if (!io) {
+      // 未注入内核 io 的实例不支持落盘——显式报错，绝不静默假装成功
+      throw new SugarCompileError('本服务实例未注入内核文件 IO，无法编译落盘（compileToFile 不可用）', {
+        targetPath,
+        backupPath: null,
+      });
+    }
+    return runCompileToFile({ io, transpile, ...(opts.log ? { log: opts.log } : {}) }, source, targetPath, options);
+  }
+
+  return { parse, transpile, sourceOf, compileToFile };
 }

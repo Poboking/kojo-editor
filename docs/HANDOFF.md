@@ -18,6 +18,7 @@
 > 本会话完成 **v0.2 第十七批：桌面壳端到端冒烟——tauri dev 真实 IPC 下跑通 Rust 双闸 a–e 全清单（域内放行 / 域外 fail-closed 拒绝 / 关项目后回落 appDataDir），固化自动化探针 `tools/smoke-tauri-ipc.mjs` + 手工清单 `tools/smoke-tauri-manual.md`；沙箱 os error 231 未复现；零源码改动（IMPLEMENTATION-LOG §5.24）**。
 > 本会话完成 **v1.1 第十六批：存档注入器用户面——写链路端到端**——新服务 `snapshot.writer`（契约 `SnapshotWriteService`，读写职责分离）+ sav-parser 0.3.0（容器组装 container.ts / 回读验证 verify.ts / engine.inject：Int64 守卫先于备份 → 先备份 → 写盘 → 回读验证，失败报错携带备份路径）；新插件 `ui-snapshot-injector`（第 12 插件：选档→定位变量→编辑→diff→两步确认注入）；修复 eratw-adapter writablePaths 缺 sav 目录的真实缺口；kernel 集成第 9 节（appData 副本端到端 + 越权拒绝 + Int64 守卫，绝不写真实游戏档）；509 项全绿（IMPLEMENTATION-LOG §5.23）。
 > 本会话完成 **v0.3 批 S1：语法糖契约 + golden 固化**——新契约 `packages/plugin-api/src/sugar.ts`（SugarDoc / SugarNode 联合 15 型 / AliasValue 四右值[变量可读写、角色·数值·字符串只读] / SugarDiagnostic 23 码闭集 / 行级 SugarSourceMapEntry / SugarTranspileService；每节点带 1 基行列源位置）+ 服务键 `sugar.transpile`（实现 `kojo-sugar` 插件 S2 建）+ golden fixture（规范 §6.1/§6.2 源与期望产物，**逐字节等于规范原文**、测试按规范行号切片比对；期望产物 `.erb.todo` 暂存 + `describe.skip` 待 S2 转正式）；**不实现转译器**；555 项全绿（IMPLEMENTATION-LOG §5.26）
+> 本会话完成 **v0.3 批 S3：编译产物写链路（`.kojo` → 合规 `.erb` 落盘）**——`SugarTranspileService.compileToFile`（契约新增 `SugarCompileResult` / `SugarCompileOptions` / `SugarCompileEncoding` / `SugarCompilerDeps` / `SugarCompileError`；**唯一含 IO** 的方法）+ `FileIO.ensureDir`（契约 + 内核实现，**与 writeBytes 同闸**）+ 写链路 `kojo-sugar/src/compile.ts`（守卫 → 编码组装 → ensureDir → 备份 → 双闸写 → **回读字节比对**，复刻注入器安全顺序）+ 产物恒 **UTF-8-BOM + LF + 末尾换行**；**重大发现：任务/规范 §8 的「CRLF」与真实语料不符**（全树 3,818 个 ERB：LF-only 3,787 / CRLF-only 3；口上域 2,317 个全 LF、零 CRLF）→ 采语料口径（用户拍板）；717 passed / 6 skipped（纯本批 +35，基线 679）；kernel 集成新增**第 10 节**；回放基线逐字不变（IMPLEMENTATION-LOG §5.29）
 
 
 ---
@@ -173,8 +174,12 @@ packages/
 │   │   ├── panel-logic.ts              #   纯逻辑（调用上下文文本解析 / 未知分组 / 函数名提示；零 React 可单测）
 │   │   └── index.ts                    #   ui.panel（选档×选角色×选函数 → 三值结果 + 置信度 + 未知分组；监听 kojo.replayFunction）
 │   └── ui-plugin-status/src/           # 插件状态面板
+│   └── kojo-sugar/src/                 # ★ v0.3 S2/S3：语法糖转译 + 编译落盘（服务 sugar.transpile）
+│       ├── lexer.ts / parser.ts / codegen.ts / expression.ts  # 三段式转译（行式词法 → AST → ERB 产物）
+│       ├── service.ts                  # 服务实现（parse/transpile/sourceOf 纯函数 + compileToFile）
+│       └── compile.ts                  # ★ S3：写链路（守卫→编码组装→ensureDir→备份→双闸写→回读字节比对）
 └── app/src/
-    ├── bootstrap.ts           # 注册 10 个插件
+    ├── bootstrap.ts           # 注册插件（13 个插件）
     ├── ui/App.tsx             # 订阅 kojo.functionChanged / editor.revealLocation
     ├── ui/ProjectView.tsx     # 透传 reveal
     ├── ui/EditorPane.tsx      # revealLine/revealNonce → Monaco revealLineInCenter
@@ -186,11 +191,12 @@ packages/
 ```bash
 cd D:\DSH\kojo-editor
 pnpm install
-pnpm test               # 485 项（无游戏目录时集成冒烟+金样本自动跳过）
+pnpm test               # 714 项（无游戏目录时集成冒烟+金样本自动跳过）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
-pnpm audit:decoupling   # 必须 ✅（plugins 数 10）
+pnpm audit:decoupling   # 必须 ✅（plugins 数 13）
 node node_modules/vitest/vitest.mjs run packages/plugin-api/tests/sugar.test.ts   # v0.3 S1：语法糖契约（类型守卫 / 别名只读性 / 源映射 / golden 逐字节）
-# 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放断言）：
+node node_modules/vitest/vitest.mjs run packages/plugins/kojo-sugar/tests/compile.test.ts   # v0.3 S3：编译落盘（编码组装 / 双闸 / 备份 / 回读验证）
+# 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放/注入写链路/**语法糖编译落盘**）：
 KOJO_SMOKE_PROJECT="D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
 # 桌面壳（会弹窗 ~100s 自动关闭）：
 node tools/smoke-tauri-dom.mjs
@@ -205,7 +211,7 @@ node tools/smoke-tauri-ipc.mjs
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
 5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
 
-## 六、v0.2 批次记录（第三批～第十七批，✅ 全部完成）
+## 六、v0.2 批次记录（第三批～第十七批，✅ 全部完成）+ v0.3 糖批（S1～S3，✅）
 
 ### 6.1 第三批：条件谓词抽取 `condition-extractor`
 
@@ -427,6 +433,21 @@ node tools/smoke-tauri-ipc.mjs
 
 **边界**（未做，属后续批）：写盘（S3）、UI/预览（S4）、升糖（S5）；spec 冻结未动。
 
+### 6.20 语法糖 S3 批（✅ 已完成）：编译产物写链路（`.kojo` → 合规 `.erb` 落盘）
+
+**实施结果**（IMPLEMENTATION-LOG §5.29 为权威记录）：S2 的纯转译内核接上磁盘，并确立产物落盘的**编码口径**。
+
+- **契约扩展**（`plugin-api/src/sugar.ts`，零游戏名词）：`SugarCompileEncoding`（`{bom, eol:'lf'|'crlf', trailingNewline}`，**字节层**语义）/ `SugarCompileOptions`（+`encoding?` +`writeSourceMap?`）/ `SugarCompileResult`（`{erbPath, byteSize, backupPath, sourceMapPath?, diagnostics}`）/ `SugarCompileError`（携带 `targetPath`/`backupPath`/`diagnostics`，fail-closed）/ `SugarCompilerDeps`（`{io, transpile, log?}`）；`SugarTranspileService.compileToFile(source, targetPath, options?)` 新增（**唯一含 IO** 的方法；`parse`/`transpile`/`sourceOf` 仍纯函数）。
+- **IO 契约扩展**：`FileIO.ensureDir(path)` 新增（契约 + `FileIOServiceImpl` 实现）——**与 `writeBytes` 同闸**（`assertWritable` 后 `bridge.ensureDir`）；关键安全点：目录创建同样不能越权（否则先在域外造目录）。
+- **写链路**（`kojo-sugar/src/compile.ts`，新）：守卫（error 诊断先于一切副作用）→ 编码组装（`encodeErbBytes`）→ `ensureDir` → 备份 → `io.writeBytes`（第一道闸；越权 `WriteNotAllowedError` **原样传播**）→ **回读字节比对**（不一致抛错携带备份路径）；（可选）源映射旁挂。
+- **编码口径（重大，与规范 §8 冲突，以语料为准）**：产物恒 **UTF-8-BOM + LF + 末尾换行**。实测全树 3,818 个 ERB：**LF-only 3,787 / CRLF-only 3**（口上域 2,317 个全 LF）；BOM 98.90%。规范 §8 的"CRLF"与语料不符（用户拍板采语料口径）。`crlf` 保留为可选项。
+- **插件装配**：`kojo-sugar` 的 `requires` 增 `KernelServices.IO`；服务实例注入 `io` + `ctx.log`；契约头注改写（写盘已属本插件）。
+- **目标路径**：`compileToFile` **严格按调用方给定路径写**；`.kojo` → `M_KOJO_K{No}_{分野}.ERB` 命名/目录推导留 S4（真实布局 = `個人口上/{编号 名称}/{口上名}/M_KOJO_K{n}_{分野}.ERB`，由 adapter `charaIndex[no].kojoDir` 给出）。
+
+**验证**：714 passed / 6 skipped（**纯本批 +35**，基线 679；含工作区并行遗留合计 717）/ typecheck root+app ✅ / audit 13 插件 ✅ / 真实工程集成冒烟 ✅（**回放基线逐字不变**：K49 1356 函数 / 11685 谓词 / 未知 **3741** / exact **836**；**新增第 10 节**：副本端到端 360B（BOM+LF+末尾换行）+ 回读一致 + 备份 + 越权拒绝 + 编译拒绝零副作用）/ **golden §6.1/§6.2 逐字节断言零回退**。
+
+**边界**（未做，属后续批）：UI 保存/预览（S4）、升糖（S5）、Monarch 高亮（S6）、保存期全角空格告警（随 S4）；spec 冻结未动。
+
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
@@ -482,7 +503,7 @@ node tools/smoke-tauri-ipc.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：520 项 / ✅ / 12 插件）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：714 项 / ✅ / 13 插件；无游戏目录时集成冒烟+金样本自动跳过）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.25 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账；**协议覆盖校验规则 ✅ 已完成**，见 IMPLEMENTATION-LOG §5.27）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；**BUG-5 file.changed 事件链**（payload 契约与注入器写链路一并设计，见 §6.18）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2，**S1 的测量项已由规范 §1.1 完成**，**S1 契约 + golden 固化 ✅ 已完成**（IMPLEMENTATION-LOG §5.26），下一批 = **S2 转译内核**（`kojo-sugar` 插件：行式词法→AST→codegen，golden §6.1/§6.2 逐字节转正））
+4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账；**协议覆盖校验规则 ✅ 已完成**，见 IMPLEMENTATION-LOG §5.27）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；**BUG-5 file.changed 事件链**（payload 契约与注入器写链路一并设计，见 §6.18）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）；**下一批 = S4**（保存/预览 UI：`.kojo` → 目标路径推导（`charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB` 命名）→ 调 `compileToFile` → 保存期全角空格告警 + Monaco 预览））
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

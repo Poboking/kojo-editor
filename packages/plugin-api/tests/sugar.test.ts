@@ -27,6 +27,7 @@ import {
   isValueInterpolation,
   isVariableAlias,
   isWritableAlias,
+  SugarCompileError,
 } from '../src/sugar';
 import type {
   AliasDecl,
@@ -517,5 +518,26 @@ describe('golden fixture · 规范 §6 示例固化', () => {
     const entries = await fs.readdir(GOLDENS);
     expect(entries.filter((e) => e.endsWith('.expected.erb')).length).toBe(0);
     expect(entries.filter((e) => e.endsWith('.expected.erb.todo')).length).toBe(2);
+  });
+});
+
+describe('编译落盘契约（v0.3 批 S3）', () => {
+  it('SugarCompileError：携带目标路径 / 备份位置 / 诊断三要素', () => {
+    const err = new SugarCompileError('编译被拒绝', {
+      targetPath: '/g/x.ERB',
+      backupPath: '/backup/x.bak',
+      diagnostics: [],
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe('SugarCompileError');
+    expect(err.targetPath).toBe('/g/x.ERB');
+    expect(err.backupPath).toBe('/backup/x.bak');
+    expect(err.message).toContain('编译被拒绝');
+  });
+
+  it('SugarCompileError：缺省 backupPath 归一为 null（未备份语义显式）', () => {
+    const err = new SugarCompileError('写盘前拒绝', { targetPath: '/g/x.ERB' });
+    expect(err.backupPath).toBeNull();
+    expect(err.diagnostics).toEqual([]);
   });
 });

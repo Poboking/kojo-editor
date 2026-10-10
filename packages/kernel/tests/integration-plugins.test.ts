@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as nodeJoin } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -10,6 +10,7 @@ import type {
   SnapshotSourceService,
   SnapshotWriteService,
   StateReplayService,
+  SugarTranspileService,
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 import { createKernel } from '../src/kernel';
@@ -21,6 +22,7 @@ import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
 import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
 import { createSavParserPlugin } from '@kojo/plugin-sav-parser';
 import { createStateReplayPlugin } from '@kojo/plugin-state-replay';
+import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
 
 /**
  * 真实工程集成冒烟 —— 直接检验各阶段验收标准：
@@ -49,6 +51,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           createConditionExtractorPlugin(),
           createSavParserPlugin(),
           createStateReplayPlugin(),
+          createKojoSugarPlugin(),
         ],
         storageBackend: new MemoryStorageBackend(),
       });
@@ -62,6 +65,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(states.get('condition-extractor')?.status).toBe('active');
       expect(states.get('sav-parser')?.status).toBe('active');
       expect(states.get('state-replay')?.status).toBe('active');
+      expect(states.get('kojo-sugar')?.status).toBe('active');
 
       // 2. onboarding（内核对全部 adapter 候选轮询 detect）
       const project = await kernel.project.open(SMOKE_DIR!);
@@ -431,6 +435,73 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
         `[smoke] 注入写链路：副本标量注入 ${injected.verifiedCount} 项验证通过 ` +
           `（${injected.byteSize}B，备份 ${injected.backupPath ? '已建' : '无'}）；` +
           `越权拒绝与 Int64 守卫各 1 项 ✓`,
+      );
+
+      // 10. 语法糖编译落盘（v0.3 批 S3）：.kojo 源 → 合规 .erb 双闸写 + 备份 + 回读
+      //     写目标 = appData 临时域副本，**绝不写真实游戏目录**。
+      const sugar = kernel.services.get<SugarTranspileService>(WellKnownServices.SugarTranspile);
+      expect(sugar).toBeTruthy();
+
+      // 10.1 纯转译仍可用（契约的纯函数面未回退）：真实语料级别的糖源 → 产物含函数定义
+      const kojoSource = [
+        '; K49 集成冒烟合成源',
+        '角色: 49',
+        '',
+        '时机 指令 310：',
+        '    「呀……！」',
+        '    她缩了一下。 续',
+        '',
+      ].join('\n');
+      const tr = sugar.transpile(kojoSource, { fileName: 'M_KOJO_K49_指令.kojo' });
+      expect(tr.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+      expect(tr.erb).toContain('@M_KOJO_MESSAGE_COM_K49_310');
+
+      // 10.2 第一道闸：未批准 appData 之外 → 真实游戏目录内目标显式拒绝（不静默）
+      const realTarget = nodeJoin(SMOKE_DIR!, 'ERB', '口上・メッセージ関連', '個人口上', 'M_KOJO_K49_指令.ERB');
+      kernel.io.setWritableRoots([]);
+      await expect(sugar.compileToFile(kojoSource, realTarget)).rejects.toThrow(/not allowed/i);
+
+      // 10.3 副本端到端：appData 临时域编译落盘 → BOM/LF/末尾换行 + 回读一致 + 目录自动创建
+      kernel.io.setWritableRoots([appData]);
+      const sugarOut = nodeJoin(appData, '個人口上', '049 集成冒烟', 'M_KOJO_K49_指令.ERB');
+      const compiled = await sugar.compileToFile(kojoSource, sugarOut);
+      expect(compiled.erbPath).toBe(sugarOut);
+      expect(compiled.backupPath).toBeNull(); // 首次：目标不存在
+      const outBytes = readFileSync(sugarOut);
+      expect([outBytes[0], outBytes[1], outBytes[2]]).toEqual([0xef, 0xbb, 0xbf]); // BOM
+      expect(outBytes[outBytes.length - 1]).toBe(0x0a); // 末尾换行
+      expect(outBytes.includes(0x0d)).toBe(false); // LF（无 CR，与真实语料一致）
+      expect(outBytes.length).toBe(compiled.byteSize);
+
+      // 10.4 回读一致（经内核 io 读回并比对字节）——已验证在 compileToFile 内，
+      //      此处再从内核 io 独立读一次，证明是真实落盘而非内存假象
+      const reread = await kernel.io.readBytes(sugarOut);
+      expect(reread.length).toBe(compiled.byteSize);
+
+      // 10.5 二次编译同一目标 → 触发备份（{appData}/backup/），产物仍合规
+      const compiled2 = await sugar.compileToFile(kojoSource, sugarOut);
+      expect(compiled2.backupPath).toBeTruthy();
+      const backedUp = readFileSync(compiled2.backupPath!);
+      expect(backedUp.length).toBe(compiled.byteSize);
+
+      // 10.6 编译拒绝：error 诊断（表达式 `当` 缺 `否则`）→ 不产半成品、零副作用
+      const badSource = [
+        '角色: 49',
+        '',
+        '时机 指令 311：',
+        '    变量 = 当 TFLAG:193：',
+        '        是 1 -> 10',
+        '',
+      ].join('\n');
+      const badTarget = nodeJoin(appData, '個人口上', '049 集成冒烟', 'M_KOJO_K49_坏源.ERB');
+      await expect(sugar.compileToFile(badSource, badTarget)).rejects.toThrow(/编译被拒绝/);
+      expect(existsSync(badTarget)).toBe(false); // 半成品绝不落盘
+
+      // eslint-disable-next-line no-console
+      console.log(
+        `[smoke] 语法糖编译落盘：副本端到端 ${compiled.byteSize}B（BOM+LF+末尾换行）✓ ` +
+          `回读一致 ✓ 备份${compiled2.backupPath ? '已建' : '无'} ✓ ` +
+          `越权拒绝 1 项 ✓ 编译拒绝零副作用 1 项 ✓`,
       );
 
       await kernel.stop();
