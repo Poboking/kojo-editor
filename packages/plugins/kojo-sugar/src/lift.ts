@@ -223,13 +223,30 @@ function hasInlineCondition(text: string): boolean {
 /* ============================== round-trip 自证 ============================== */
 
 /**
+ * 旁白口径——spec §3.1 的 `旁白色:` 头部开关取值。
+ *
+ * 这是**糖表层语法已有的开关**（不是为本批新增的语法）：`默认` = 旁白走 `D` 系
+ * （忽略 `SETCOLOR`，默认色）；`作者色` = 旁白也用角色色（非 `D` 系）。
+ * 自证时必须把两种口径都试一遍——否则壳恒为 `默认`，无引号文本永远只能还原成
+ * `PRINTFORMDW/L`，而真实语料里 `PRINTFORMW/L <无引号>` 有 12.8 万行（见设计稿 §2.3）。
+ */
+type NarrationColorMode = '默认' | '作者色';
+
+/** 自证时依次尝试的旁白口径（`默认` 先——社区默认口径，命中优先） */
+const NARRATION_COLOR_MODES: readonly NarrationColorMode[] = ['默认', '作者色'];
+
+/**
  * 自证壳（`sugarSource` 转译所需的最小 `.kojo`）。
  *
  * 转译器要求完整文件（`角色:` + `时机 …：` 才会产出正文），故自证时把候选
  * 片段包进这个壳。**壳只用于验证，不进入结果**——结果里的 `sugarSource`
  * 是剥掉壳的纯片段。
+ *
+ * `narrationColor` 决定壳的 `旁白色:` 头部声明——它**不改变 `sugarSource`**，
+ * 只改变"这份糖片段是按哪种旁白口径写的"。候选成立时会把这个口径回写到
+ * `SugarLiftCandidate.narrationColor`（消费方应用时需同步写头部声明）。
  */
-function wrapForVerification(ctx: LiftContext, body: string): string {
+function wrapForVerification(ctx: LiftContext, body: string, narrationColor: NarrationColorMode): string {
   const charNo = resolveCharacterNo(ctx);
   const face = ctx.request.timingFace ?? '指令';
   const index = ctx.request.timingIndex ?? '1';
@@ -237,7 +254,10 @@ function wrapForVerification(ctx: LiftContext, body: string): string {
     .split('\n')
     .map((l) => (l.length > 0 ? `\t${l}` : l))
     .join('\n');
-  return `角色: ${charNo}\n时机 ${face} ${index}：\n${indented}\n`;
+  // `默认` 是 head 的缺省值——为了逐字节可比性，只在非默认时才写声明行，
+  // 让"默认口径的壳"与既有行为**完全一致**（避免给存量用例引入无谓差异）。
+  const head = narrationColor === '默认' ? `角色: ${charNo}` : `角色: ${charNo}\n旁白色: ${narrationColor}`;
+  return `${head}\n时机 ${face} ${index}：\n${indented}\n`;
 }
 
 /**
@@ -275,29 +295,44 @@ function resolveCharacterNo(ctx: LiftContext): string {
  * 故正文 = **`IF LOCAL` 之后、其配对的 `ENDIF` 之前**（缩进已知：基准 +1 级）。
  * 判据用**几何**（首个 `IF LOCAL` 行 → 末尾 `ENDIF` 行）而非内容匹配——
  * 与 S4 预览的"线性嵌套"假设同源。
+ *
+ * **两种旁白口径都试**（`默认` 优先）：糖层对"无引号 = 旁白"的 `D` 归属由
+ * `旁白色:` 头部开关决定，而壳原本只写默认口径 → `PRINTFORMW/L <无引号>` 会被
+ * 误判为不一致。依次尝试可让这类真实语料（12.8 万行）正常成立；命中的口径由
+ * 返回值带出，供候选记录（见 `SugarLiftCandidate.narrationColor`）。
  */
 function verifyRoundTrip(
   ctx: LiftContext,
   body: string,
   originalText: string,
-): { ok: boolean; generatedText: string; diag: SugarDiagnostic[] } {
-  let result: SugarTranspileResult;
-  try {
-    result = ctx.deps.transpile(wrapForVerification(ctx, body));
-  } catch {
-    return { ok: false, generatedText: '', diag: [] };
-  }
-  const errors = result.diagnostics.filter((d) => d.severity === 'error');
-  if (errors.length > 0) {
-    return { ok: false, generatedText: '', diag: errors };
-  }
+): { ok: boolean; generatedText: string; diag: SugarDiagnostic[]; narrationColor: NarrationColorMode } {
+  let firstGenerated = '';
+  let firstDiag: SugarDiagnostic[] = [];
+  for (const mode of NARRATION_COLOR_MODES) {
+    let result: SugarTranspileResult;
+    try {
+      result = ctx.deps.transpile(wrapForVerification(ctx, body, mode));
+    } catch {
+      continue;
+    }
+    const errors = result.diagnostics.filter((d) => d.severity === 'error');
+    if (errors.length > 0) {
+      // 记下首个出错诊断——**所有口径都失败时**用它区分 `transpile-error` 与
+      // `roundtrip-mismatch`（生成器给了非法糖 vs 形态对不上）。
+      if (firstDiag.length === 0) firstDiag = errors;
+      continue;
+    }
 
-  const generated = extractBody(result.erb);
-  if (generated === null) return { ok: false, generatedText: '', diag: [] };
-  // 比对前把两侧都"去基准缩进"：原文块可能嵌在任意深度（如 `IF LOCAL` 体内
-  // 为 1 级），而自证壳恒把片段放在 1 级——绝对缩进不可比，**相对缩进才可比**。
-  const ok = normalizeIndent(generated) === normalizeIndent(originalText);
-  return { ok, generatedText: generated, diag: [] };
+    const generated = extractBody(result.erb);
+    if (generated === null) continue;
+    if (firstGenerated.length === 0) firstGenerated = generated;
+    // 比对前把两侧都"去基准缩进"：原文块可能嵌在任意深度（如 `IF LOCAL` 体内
+    // 为 1 级），而自证壳恒把片段放在 1 级——绝对缩进不可比，**相对缩进才可比**。
+    if (normalizeIndent(generated) === normalizeIndent(originalText)) {
+      return { ok: true, generatedText: generated, diag: [], narrationColor: mode };
+    }
+  }
+  return { ok: false, generatedText: firstGenerated, diag: firstDiag, narrationColor: '默认' };
 }
 
 /**
@@ -588,6 +623,7 @@ function tryLiftIf(
     toLine,
     sugarSource: body,
     confidence: 'verified',
+    narrationColor: verdict.narrationColor,
     roundTrip: { verified: true, originalText: original, generatedText: verdict.generatedText },
     reason: `第 ${fromLine}–${toLine} 行是一个 IF 块，可改写为缩进式「如果」块（自动补 ENDIF，消灭漏配 ENDIF 的隐患）。`,
   });
@@ -761,6 +797,7 @@ function tryLiftWhen(
     toLine,
     sugarSource: body,
     confidence: 'verified',
+    narrationColor: verdict.narrationColor,
     roundTrip: { verified: true, originalText: original, generatedText: verdict.generatedText },
     reason:
       randomCount !== null
@@ -1112,6 +1149,7 @@ function liftPrintLines(
       toLine: lineNo,
       sugarSource: sugar,
       confidence: 'verified',
+      narrationColor: verdict.narrationColor,
       roundTrip: { verified: true, originalText: original, generatedText: verdict.generatedText },
       reason: `第 ${lineNo} 行可改写为糖文本行（引号 / 「续」自动决定颜色与等待，不必再挑 PRINTFORM 变体）。`,
     });

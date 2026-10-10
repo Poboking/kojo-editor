@@ -12,6 +12,7 @@ import { createUiKojoNavigatorPlugin } from '@kojo/plugin-ui-kojo-navigator';
 import { createUiStateReplayPlugin } from '@kojo/plugin-ui-state-replay';
 import { createUiArchiveBrowserPlugin } from '@kojo/plugin-ui-archive-browser';
 import { createUiSnapshotInjectorPlugin } from '@kojo/plugin-ui-snapshot-injector';
+import { createUiSugarLiftPlugin } from '@kojo/plugin-ui-sugar-lift';
 import { tauriBridge } from './bridge/tauri-bridge';
 
 /**
@@ -48,6 +49,9 @@ export async function bootstrapKernel(): Promise<Kernel> {
       createUiArchiveBrowserPlugin(),
       // 状态注入器（写链路在 sav-parser 的 snapshot.writer；面板只做呈现 + 意图）
       createUiSnapshotInjectorPlugin(),
+      // 升糖建议器（写链路在 kojo-sugar 的 sugar.liftApply；面板只做呈现 + 意图。
+      // 排在 kojo-sugar 之后：它 require sugar.lift / sugar.liftApply 两个服务槽）
+      createUiSugarLiftPlugin(),
     ],
   });
   await kernel.start();

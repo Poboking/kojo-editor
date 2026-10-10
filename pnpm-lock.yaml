@@ -77,6 +77,9 @@ importers:
       '@kojo/plugin-ui-status':
         specifier: workspace:*
         version: link:../plugins/ui-plugin-status
+      '@kojo/plugin-ui-sugar-lift':
+        specifier: workspace:*
+        version: link:../plugins/ui-sugar-lift
       '@tauri-apps/api':
         specifier: ^2.12.2
         version: 2.12.2
@@ -233,6 +236,16 @@ importers:
         version: 19.3.0
 
   packages/plugins/ui-state-replay:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+    devDependencies:
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+
+  packages/plugins/ui-sugar-lift:
     dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*

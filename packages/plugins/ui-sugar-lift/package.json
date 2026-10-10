@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/plugin-ui-sugar-lift",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Sugar-lift panel (ui.panel contribution): scan a .kojo source, list the round-trip-verified lift candidates, preview a line-level diff of the selected subset and apply it. The write chain (encoding guard, backup, kernel-io behind both gates, read-back verification, file.changed event) lives in the kojo-sugar plugin's sugar.liftApply service - this plugin is presentation + intent only.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0"
+  }
+}

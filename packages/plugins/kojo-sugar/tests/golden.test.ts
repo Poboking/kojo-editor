@@ -99,3 +99,42 @@ describe('golden §6.2 · 选项 + 心形 + 随机（摘录逐字节）', () => 
     expect(erb).toContain('\t\t\tSELECTCASE LOCAL');
   });
 });
+
+describe('golden §3.3 · 旁白口径（`旁白色:`）对 D 归属的作用（逐字节成对）', () => {
+  /**
+   * 同一份无引号文本，唯一变量是文件头是否声明 `旁白色: 作者色`：
+   * - 缺省（`默认`）→ 旁白走 `D` 系（`PRINTFORMD*`）；
+   * - `作者色` → 旁白也用角色色（`PRINTFORM*`）。
+   *
+   * 这两张 golden 成对存在，锁定 spec §5.1 的 `d = (旁白色 == 默认) 且 not speech`。
+   */
+  it('缺省口径 → 无引号文本产 D 系（PRINTFORMDW / PRINTFORMDL）', () => {
+    const { erb, diagnostics } = service().transpile(readKojo('spec-3.3-narration-default.kojo'));
+    expect(diagnostics).toEqual([]);
+    expect(erb).toBe(readRaw('spec-3.3-narration-default.expected.erb.todo'));
+    expect(erb).toContain('\tPRINTFORMDW 她点了点头。');
+    expect(erb).toContain('\tPRINTFORMDL 她叹了口气。');
+    // 台词不受旁白口径影响，恒为非 D
+    expect(erb).toContain('\tPRINTFORMW 「今天也来训练了？」');
+  });
+
+  it('`旁白色: 作者色` → 同一份无引号文本改产非 D 系（PRINTFORMW / PRINTFORML）', () => {
+    const { erb, diagnostics } = service().transpile(
+      readKojo('spec-3.3-narration-author-color.kojo'),
+    );
+    expect(diagnostics).toEqual([]);
+    expect(erb).toBe(readRaw('spec-3.3-narration-author-color.expected.erb.todo'));
+    expect(erb).toContain('\tPRINTFORMW 她点了点头。');
+    expect(erb).toContain('\tPRINTFORML 她叹了口气。');
+    expect(erb).toContain('\tPRINTFORMW 「今天也来训练了？」');
+  });
+
+  it('两张 golden 的差异**仅在** D 后缀（锁定口径是唯一变量）', () => {
+    const a = readRaw('spec-3.3-narration-default.expected.erb.todo');
+    const b = readRaw('spec-3.3-narration-author-color.expected.erb.todo');
+    expect(a).not.toBe(b);
+    // 把 D 系归一为非 D 系后应当完全一致
+    const unD = (s: string) => s.replace(/PRINTFORMD([WL])/g, 'PRINTFORM$1');
+    expect(unD(a)).toBe(unD(b));
+  });
+});

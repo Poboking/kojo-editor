@@ -86,6 +86,14 @@ export function App(): ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kernel, editorDirty]);
 
+  // 当前文件广播（v0.3 批 S5-UI）：宿主是"当前打开哪个文件"的唯一权威，
+  // 面板（如升糖建议器）需要它才知道该扫哪个文件。做成事件而非查询接口，
+  // 免得面板为"知道变了"而持有宿主引用。
+  useEffect(() => {
+    if (!kernel) return;
+    kernel.bus.emit('editor.activeFileChanged', { filePath: activeFile });
+  }, [kernel, activeFile]);
+
   const openProject = useCallback(
     async (dir: string) => {
       if (!kernel) return;

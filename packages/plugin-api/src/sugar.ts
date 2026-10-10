@@ -649,6 +649,29 @@ export class SugarCompileError extends Error {
 
 /* ============================== 诊断 ============================== */
 
+/**
+ * 升糖应用失败错误（fail-closed；S5-UI 批）。
+ *
+ * 与 `SugarCompileError` 同构（同名同形状的字段），理由：两者的失败模式
+ * 完全一致（校验拒绝 / 写盘失败 / 回读不一致），消费方（UI）应当用**同一套
+ * 提示逻辑**处理，不该因为"这次是升糖而不是编译"就分叉。
+ *
+ * 与 `WriteNotAllowedError` 的分工同 `SugarCompileError`：路径越权**原样传播**。
+ */
+export class SugarApplyError extends Error {
+  /** 目标源文件路径 */
+  readonly targetPath: string;
+  /** 若已备份：备份路径（未备份时为 null） */
+  readonly backupPath: string | null;
+
+  constructor(message: string, info: { targetPath: string; backupPath?: string | null }) {
+    super(message);
+    this.name = 'SugarApplyError';
+    this.targetPath = info.targetPath;
+    this.backupPath = info.backupPath ?? null;
+  }
+}
+
 /** 诊断严重度（与 `conventions.ts` 的 `ConventionSeverity` 同口径） */
 export type SugarSeverity = 'error' | 'warning' | 'info';
 
@@ -1151,6 +1174,18 @@ export interface SugarLiftCandidate {
   sugarSource: string;
   /** 置信度（v1 恒 `verified`） */
   confidence: SugarLiftConfidence;
+  /**
+   * 该候选成立所依赖的**旁白口径**（spec §3.1 `旁白色:` 头部开关）。
+   *
+   * **为什么候选要带这个**：糖层对"无引号文本"的 `D` 归属由头部开关决定——
+   * `默认` → `PRINTFORMDW/L`；`作者色` → `PRINTFORMW/L`。故同一段糖片段在两种
+   * 口径下产出的 ERB 不同，自证必须逐个试（见 `lift.ts`）。命中口径记在这里：
+   * `默认` 时消费方**无需**改动文件头；`作者色` 时**应用候选必须把 `旁白色: 作者色`
+   * 写入文件头**，否则产出的 ERB 会与原文不一致（自证的成立条件被破坏）。
+   *
+   * `kind === 'alias'` 的候选项不涉及文本输出，此字段可缺省。
+   */
+  narrationColor?: '默认' | '作者色';
   /** round-trip 证据（见 `SugarLiftRoundTrip`） */
   roundTrip: SugarLiftRoundTrip;
   /** 人读说明（中文；面向作者，不暴露内部术语） */
@@ -1263,3 +1298,128 @@ export function hasCandidates(result: SugarLiftResult): boolean {
   return result.candidates.length > 0;
 }
 
+
+/* ============================== 升糖应用（S5-UI 批） ============================== */
+
+/**
+ * 升糖应用 —— 「把选中的候选写回 `.kojo` 源文件」的**结果预览**。
+ *
+ * ## 为什么应用是"源文本 → 源文本"而不是"ERB → ERB"
+ *
+ * 升糖的产物是**糖源码**（`.kojo`），不是 ERB。候选只在**糖层**成立
+ * （`sugarSource` 落在 `.kojo` 里），所以"应用" = 把源 `.kojo` 里对应
+ * 的那段原生 ERB 换成糖写法。落盘走的仍是 `.kojo` 源文件，**产物 ERB 由
+ * 后续的 `compileToFile` 负责**——本服务不产 ERB。
+ *
+ * 这保证了 round-trip 不变量在应用后**仍然成立**：应用后源文件再编译一次，
+ * 产物应与应用前的 ERB 语义等价（这正是自证所断言的性质）。
+ *
+ * ## 顺序：**倒序替换**（从后往前）
+ *
+ * 候选按 `fromLine` 升序排列，但替换必须**从最大行号开始**——否则先替换的
+ * 候选会改变后一个候选的行号，导致错位。这是本服务唯一的"顺序敏感"点，
+ * 实现里有显式断言（见 `lift-apply.ts`）。
+ */
+export interface SugarLiftApplyPreview {
+  /** 应用后的 `.kojo` 全文 */
+  text: string;
+  /**
+   * 行级差量（按 `fromLine` 升序）。
+   * 供 UI 的 diff 视图消费；不产候选 / 被忽略的区间**不在**此表内。
+   */
+  hunks: SugarLiftDiffHunk[];
+  /** 实际被替换的候选数（= 请求里通过校验收到的候选数） */
+  appliedCount: number;
+  /**
+   * 本次应用是否**改动了文件头**（写入了 `旁白色: 作者色` 声明行）。
+   * 供 UI 提示"文件头已变更"——某些作者对此敏感。
+   */
+  frontMatterChanged: boolean;
+}
+
+/**
+ * 行级差量（一行替换 = 一个 hunk；v1 不做多行合并）。
+ *
+ * 之所以不引入通用 diff 库：升糖的差量**结构已知**（每条候选替换一个已知闭区间），
+ * 不需要"求最短编辑脚本"；把已知的东西再猜一遍只会引入不确定性。
+ * 通用 diff 留给未来"应用后再验证"的批次（那时才需要真比对）。
+ */
+export interface SugarLiftDiffHunk {
+  /** 源 `.kojo` 中的闭区间（1 基；替换前的位置） */
+  fromLine: number;
+  /** 源 `.kojo` 中的闭区间终点（1 基） */
+  toLine: number;
+  /** 被替换掉的原行（去行尾换行） */
+  removed: string[];
+  /** 替换进来的糖源码行（去外层基准缩进后的相对形态） */
+  added: string[];
+}
+
+/**
+ * 升糖应用请求 —— 对**一段 `.kojo` 源文本**应用若干候选。
+ *
+ * 纯数据；`source` 是内存态文本，本服务**不读盘**（写盘走 `applyToFile`）。
+ */
+export interface SugarLiftApplyRequest {
+  /** 待修改的 `.kojo` 源文本（内存态） */
+  source: string;
+  /**
+   * 要应用的候选（**必须来自同一份 `source` 的 `liftSuggest` 结果**）。
+   *
+   * 校验是**严格**的：区间越界 / 候选之间的相对顺序与前文不匹配（源自不同
+   * 版本的扫描结果）→ 抛错，不静默跳过。理由是"应用错行"的代价远高于"拒绝"。
+   */
+  candidates: readonly SugarLiftCandidate[];
+  /**
+   * 候选所在位置的**缩进基准**（tab 数）。
+   *
+   * `sugarSource` 首行不带前导空白（契约如此），后续行携带相对缩进；实际
+   * 写入时必须按候选在源文件中的**真实缩进层**平移。缺省 = 从被替换区间的
+   * **首行**推导（这是绝大多数情况下的正确值，因为候选区间不以空白开头）。
+   */
+  indentBase?: number;
+}
+
+/**
+ * 升糖应用结果（`applyToFile` 落盘后返回）。
+ *
+ * **与 `SugarCompileResult` 同构**：`backupPath` / `byteSize` 语义一致
+ * （写前备份 + 回读验证字节数），便于消费方用同一套提示。
+ */
+export interface SugarLiftApplyResult {
+  /** 写入的 `.kojo` 源文件路径（绝对路径） */
+  sourcePath: string;
+  /** 写盘总字节数（含 BOM / 换行） */
+  byteSize: number;
+  /** 写前备份路径（目标原文件不存在时为 null） */
+  backupPath: string | null;
+  /** 实际应用的候选数 */
+  appliedCount: number;
+  /** 应用预览（同 `SugarLiftApplyPreview`；供落盘后回显 diff） */
+  preview: SugarLiftApplyPreview;
+}
+
+/**
+ * 升糖应用服务（服务键 `sugar.liftApply`；S5-UI 批）。
+ *
+ * **职责边界**：
+ * - `apply(request)`：**纯函数**（内存态文本 → 内存态文本 + diff），不读不写；
+ * - `applyToFile(source, path, request)`：走**与 `compileToFile` 完全同款**的
+ *   写链路（编码组装 → 目录 → 备份 → 内核 io 写盘〔第一道闸 `writablePaths`〕
+ *   → 回读验证），**不绕过任何一闸**；成功后由实现方发 `file.changed`。
+ *
+ * 为什么把"应用"单独做一个服务键而不是塞进 `sugar.lift`：`sugar.lift` 是
+ * **只读观察面**（不读盘不写盘不发事件，契约已承诺）；写能力必须显式声明，
+ * 否则"哪些插件能写盘"就不再可审计。**能力面 = 服务键面**。
+ */
+export interface SugarLiftApplyService {
+  /** 应用候选到内存态源文本（纯函数；不同步落盘） */
+  apply(request: SugarLiftApplyRequest): SugarLiftApplyPreview;
+  /**
+   * 应用候选并落盘（同 `compileToFile` 写链路；成功发 `file.changed`）。
+   *
+   * @throws SugarApplyError 校验失败 / 编码失败 / 越权（`WriteNotAllowedError`
+   *   原样传播）/ 回读不一致 —— 错误消息必带备份位置（若已备份）。
+   */
+  applyToFile(sourcePath: string, request: SugarLiftApplyRequest): Promise<SugarLiftApplyResult>;
+}

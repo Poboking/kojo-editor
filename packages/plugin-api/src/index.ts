@@ -179,6 +179,7 @@ export {
   isVariableAlias,
   isVerifiedCandidate,
   isWritableAlias,
+  SugarApplyError,
   SugarCompileError,
 } from './sugar';
 export type {
@@ -208,6 +209,11 @@ export type {
   SugarFrontMatter,
   SugarLiftCandidate,
   SugarLiftConfidence,
+  SugarLiftApplyPreview,
+  SugarLiftApplyRequest,
+  SugarLiftApplyResult,
+  SugarLiftApplyService,
+  SugarLiftDiffHunk,
   SugarLiftKind,
   SugarLiftRequest,
   SugarLiftResult,

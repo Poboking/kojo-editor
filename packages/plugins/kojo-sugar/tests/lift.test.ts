@@ -6,12 +6,12 @@
  *    `roundTrip.verified === true`（自证证据，而不是"看起来像"）；
  * 2. **干扰反例跳过** —— 注释 / 宏 / 标签 / 糖未覆盖的控制流 / W: 文本域与
  *    L: 逻辑域混行 / 行内条件 → 落在 `skipped` 里，**不产出候选**；
- * 3. **round-trip 降级** —— 形态像但转不回去（典型：`PRINTFORMW 旁白` 该有
- *    `D` 却没有）→ 降级为 `skipped`，`reason === 'roundtrip-mismatch'`。
+ * 3. **round-trip 降级** —— 形态像但转不回去（典型：`PRINTFORMDW 「台词」`
+ *    有引号却强制 `D`）→ 降级为 `skipped`，`reason === 'roundtrip-mismatch'`。
  *
  * 另加：四类糖的 kind 覆盖、`degraded` 分支（缺 `parseCondition` 替身）、
- * 集成断言（`fixtures/mini-game` 的真实 ERB + `fixtures/sugar` 的糖源码
- * **回降再升**闭环）。
+ * 旁白口径（`旁白色:` 头部开关）的命中记录、集成断言（`fixtures/mini-game`
+ * 的真实 ERB + `fixtures/sugar` 的糖源码 **回降再升**闭环）。
  *
  * 说明：本文件是**测试**，按解耦审计规则 C 的豁免（测试属宿主层面集成）
  * 可直接 import 其它插件包；非测试源码一律不得交叉 import。
@@ -87,6 +87,7 @@ describe('S5 / print-message —— 文本消息行升糖', () => {
     expect(c.toLine).toBe(1);
     expect(c.sugarSource).toBe('她看起来很高兴。');
     expect(c.confidence).toBe('verified');
+    expect(c.narrationColor).toBe('默认');
     expect(c.roundTrip.verified).toBe(true);
     expect(isVerifiedCandidate(c)).toBe(true);
     expect(hasCandidates(r)).toBe(true);
@@ -107,28 +108,38 @@ describe('S5 / print-message —— 文本消息行升糖', () => {
     expect(r.candidates[0]!.roundTrip.verified).toBe(true);
   });
 
-  it('降级：PRINTFORML 无引号旁白（该有 D 却没有）→ round-trip 拦下', () => {
+  it('正例：PRINTFORML 无引号旁白 → 糖文本行（靠 `旁白色: 作者色` 口径自证通过）', () => {
     const r = lift('PRINTFORML 她红着脸，小声嘟囔着。');
-    expect(r.candidates).toHaveLength(0);
-    expect(r.skipped.map((s) => s.reason)).toContain('roundtrip-mismatch');
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c.kind).toBe('print-message');
+    expect(c.sugarSource).toBe('她红着脸，小声嘟囔着。 续');
+    // 无引号文本要产出非 D 系，只能靠头部 `旁白色: 作者色`——候选必须带出该口径
+    expect(c.narrationColor).toBe('作者色');
+    expect(c.roundTrip.verified).toBe(true);
   });
 
-  it('正例：PRINTFORMDL → 糖文本行 + 「 续」', () => {
+  it('正例：PRINTFORMDL → 糖文本行 + 「 续」（默认口径，无引号走 D 系）', () => {
     const r = lift('PRINTFORMDL 她什么也没说。');
     expect(r.candidates).toHaveLength(1);
     expect(r.candidates[0]!.sugarSource).toBe('她什么也没说。 续');
+    // 两种口径都试，默认口径优先命中
+    expect(r.candidates[0]!.narrationColor).toBe('默认');
     expect(r.candidates[0]!.roundTrip.verified).toBe(true);
   });
 
-  it('降级：PRINTFORMW 旁白（该有 D 却没有）→ round-trip 不一致，不产出候选', () => {
+  it('正例：PRINTFORMW 旁白 → 糖文本行（`旁白色: 作者色` 口径自证通过）', () => {
     const r = lift('PRINTFORMW 她看起来很高兴。');
-    expect(r.candidates).toHaveLength(0);
-    expect(r.skipped).toHaveLength(1);
-    expect(r.skipped[0]!.reason).toBe('roundtrip-mismatch');
-    expect(r.skipped[0]!.fromLine).toBe(1);
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c.sugarSource).toBe('她看起来很高兴。');
+    expect(c.narrationColor).toBe('作者色');
+    expect(c.roundTrip.verified).toBe(true);
   });
 
-  it('降级：PRINTFORMDW 「台词」（不该有 D 却有 D）→ 同样拦下', () => {
+  it('降级：PRINTFORMDW 「台词」（有引号却强制 D）→ round-trip 仍拦下', () => {
+    // 引号性决定台词色（非 D），而 `旁白色` 只作用于旁白；
+    // 故"有引号 + D"在糖表层**没有落点**（语料占比 0.35%，见设计稿 §2.3）
     const r = lift('PRINTFORMDW 「你好。」');
     expect(r.candidates).toHaveLength(0);
     expect(r.skipped.map((s) => s.reason)).toContain('roundtrip-mismatch');
@@ -158,6 +169,73 @@ describe('S5 / print-message —— 文本消息行升糖', () => {
     const r = lift('; 这是注释\n\nPRINTFORMDW 正文。');
     expect(r.candidates.map((c) => c.fromLine)).toEqual([3]);
     expect(r.skipped).toHaveLength(0);
+  });
+});
+
+/* ========================= 一之二、旁白口径（`旁白色:`）========================= */
+
+/**
+ * 糖层对"无引号旁白"的 `D` 归属由**文件头 `旁白色:` 开关**决定（spec §3.1 / §5.1）：
+ * - `默认`（缺省）→ 旁白走 `D` 系（`PRINTFORMDW/DL`）；
+ * - `作者色` → 旁白也用角色色（`PRINTFORMW/L`）。
+ *
+ * 因此自证必须**两种口径都试**——否则 `PRINTFORMW/L <无引号>`（语料 12.8 万行）会
+ * 被误判为不一致。命中口径回写进 `SugarLiftCandidate.narrationColor`，消费方应用
+ * `作者色` 候选时需同步写文件头。这组用例锁死该机制（改动即红）。
+ */
+describe('S5 / 旁白口径 —— `旁白色:` 头部开关决定无引号文本的 D 归属', () => {
+  it('无引号 + 非 D（PRINTFORMW）→ 作者色口径自证通过', () => {
+    const r = lift('PRINTFORMW 她看起来很高兴。');
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0]!.narrationColor).toBe('作者色');
+    expect(r.candidates[0]!.sugarSource).toBe('她看起来很高兴。');
+    expect(r.candidates[0]!.roundTrip.verified).toBe(true);
+  });
+
+  it('无引号 + D（PRINTFORMDW）→ 默认口径自证通过（口径不写进候选的语义依赖）', () => {
+    const r = lift('PRINTFORMDW 她看起来很高兴。');
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0]!.narrationColor).toBe('默认');
+    expect(r.candidates[0]!.sugarSource).toBe('她看起来很高兴。');
+  });
+
+  it('两种口径都能命中时，**默认优先**（社区缺省口径，无谓引入头部声明）', () => {
+    // `PRINTFORMW 「台词」`：旁白色 不影响台词 —— 两种口径产物相同 → 取默认
+    const r = lift('PRINTFORMW 「你好。」');
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0]!.narrationColor).toBe('默认');
+  });
+
+  it('块级候选同样带径（IF 块内的无引号非 D 文本）', () => {
+    const src = ['IF CFLAG:2 >= 50', '\tPRINTFORMW 她看起来很高兴。', 'ENDIF'].join('\n');
+    const r = lift(src);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0]!.kind).toBe('if-block');
+    expect(r.candidates[0]!.narrationColor).toBe('作者色');
+    expect(r.candidates[0]!.sugarSource).toBe('如果 CFLAG:2 >= 50：\n\t她看起来很高兴。');
+  });
+
+  it('分派块候选同样带径（SELECTCASE / 随机块）', () => {
+    const src = [
+      'LOCAL = RAND:2',
+      'SELECTCASE LOCAL',
+      '\tCASE 0',
+      '\t\tPRINTFORMW 甲。',
+      '\tCASE 1',
+      '\t\tPRINTFORMW 乙。',
+      'ENDSELECT',
+    ].join('\n');
+    const r = lift(src);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0]!.kind).toBe('selectcase');
+    expect(r.candidates[0]!.narrationColor).toBe('作者色');
+    expect(r.candidates[0]!.sugarSource).toBe('随机：\n\t甲。\n\t乙。');
+  });
+
+  it('同一段文本在默认口径下仍成立时不误报作者色（口径最小化）', () => {
+    const src = ['IF CFLAG:2 >= 50', '\tPRINTFORMDW 她看起来很高兴。', 'ENDIF'].join('\n');
+    const r = lift(src);
+    expect(r.candidates[0]!.narrationColor).toBe('默认');
   });
 });
 

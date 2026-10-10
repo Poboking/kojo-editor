@@ -34,6 +34,16 @@ export interface KernelEventMap {
    */
   'editor.revealLocation': { filePath: string; line?: number; column?: number; source?: string };
   /**
+   * 编辑器当前文件变更（v0.3 批 S5-UI）：宿主在"当前编辑的文件"发生变化时广播。
+   *
+   * 通用、游戏无关——「当前打开的是哪个文件」是**宿主状态**，不是任何插件的
+   * 私有状态。把它做成事件而非服务方法：面板只想"知道变了"，不想"查询宿主"
+   * （查询式接口会逼面板持有宿主引用，破坏"插件不得依赖宿主实现"的分层）。
+   *
+   * `filePath: null` = 当前无打开文件（项目关闭 / 回到欢迎页）。
+   */
+  'editor.activeFileChanged': { filePath: string | null };
+  /**
    * 回放意图（v0.2 第八批）：请求回放面板解释一个口上函数。
    * 通用、游戏无关——由回放面板（`state.replay` 的 UI 消费者）响应；
    * 任意插件可发起（导航面板"回放此函数"、未来的矩阵/预览联动）。

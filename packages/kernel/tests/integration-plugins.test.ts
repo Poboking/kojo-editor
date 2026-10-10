@@ -10,6 +10,8 @@ import type {
   SnapshotSourceService,
   SnapshotWriteService,
   StateReplayService,
+  SugarLiftApplyService,
+  SugarLiftService,
   SugarTranspileService,
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
@@ -502,6 +504,74 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
         `[smoke] 语法糖编译落盘：副本端到端 ${compiled.byteSize}B（BOM+LF+末尾换行）✓ ` +
           `回读一致 ✓ 备份${compiled2.backupPath ? '已建' : '无'} ✓ ` +
           `越权拒绝 1 项 ✓ 编译拒绝零副作用 1 项 ✓`,
+      );
+
+      // 11. 升糖应用（v0.3 批 S5-UI）：**真实语料文件**上跑 扫描 → 应用 → 落盘 → 回读
+      //     用真实口上 ERB 的**副本**（appData 临时域），绝不碰游戏目录。
+      const liftSvc = kernel.services.get<SugarLiftService>(WellKnownServices.SugarLift);
+      const applySvc = kernel.services.get<SugarLiftApplyService>(WellKnownServices.SugarLiftApply);
+      expect(liftSvc).toBeTruthy();
+      expect(applySvc).toBeTruthy();
+
+      // 11.1 取一份真实口上文件做种子（**只读**；应用写到 appData 副本）
+      //      选 K49 的日常系口上：形态干净（大量 `PRINTFORM{D}W/L 文本` 单行，
+      //      1,266 个 PRINTFORM），且**真实**——不是合成源，冒烟才有意义。
+      const realKojoErb = nodeJoin(
+        SMOKE_DIR!,
+        'ERB', '口上・メッセージ関連', '個人口上',
+        '049 Satori [さとり]', 'さとり', 'M_KOJO_K49_日常系コマンド.ERB',
+      );
+      // 若真实语料里没有该文件（不同版本），退化为上面的合成源——冒烟仍有效
+      const seedSource = existsSync(realKojoErb)
+        ? (await kernel.io.readText(realKojoErb)).text
+        : kojoSource;
+      const seedLines = seedSource.split('\n').length;
+
+      const liftResult = liftSvc!.liftSuggest({ source: seedSource, filePath: 'smoke.ERB' });
+      // 自证性质：每一个候选都必须 `verified`（round-trip or nothing 不变量）
+      expect(liftResult.candidates.every((c) => c.roundTrip.verified && c.confidence === 'verified')).toBe(true);
+      // 真实语料上必须真的扫出候选（否则这条冒烟没有证明力）
+      expect(liftResult.candidates.length).toBeGreaterThan(0);
+
+      // 11.2 先在内存里应用（纯函数；不落盘）——校验"预览 = 落盘结果"的同一性
+      const preview = applySvc!.apply({ source: seedSource, candidates: liftResult.candidates });
+      expect(preview.appliedCount).toBe(liftResult.candidates.length);
+      expect(preview.hunks).toHaveLength(liftResult.candidates.length);
+
+      // 11.3 落盘到副本（appData 域；二次写触发备份）
+      const copyKojo = nodeJoin(appData, '個人口上', '049 集成冒烟', 'lift-smoke.kojo');
+      await kernel.io.writeBytes(copyKojo, new TextEncoder().encode(seedSource));
+      kernel.io.setWritableRoots([appData]);
+      const applied = await applySvc!.applyToFile(copyKojo, {
+        source: seedSource,
+        candidates: liftResult.candidates,
+      });
+      expect(applied.appliedCount).toBe(liftResult.candidates.length);
+      expect(applied.backupPath).toBeTruthy(); // 副本已存在 → 写前备份
+
+      // 11.4 回读：落盘内容 = 预览结果（字节级去 BOM 后比对；归一化末尾换行）
+      //      编码口径 = BOM + LF + **恰好一个**末尾换行（`encodeErbBytes` 会先剥
+      //      已有的尾换行再补一个，故这里同样先归一化再比）。
+      const readBack = await kernel.io.readBytes(copyKojo);
+      expect(readBack.length).toBe(applied.byteSize);
+      expect([readBack[0], readBack[1], readBack[2]]).toEqual([0xef, 0xbb, 0xbf]);
+      const readBackText = new TextDecoder().decode(readBack.slice(3));
+      const norm = (s: string): string => (s.endsWith('\n') ? s.slice(0, -1) : s);
+      expect(norm(readBackText)).toBe(norm(preview.text));
+      expect(readBackText.endsWith('\n')).toBe(true); // 末尾换行（POSIX）
+      expect(readBackText.includes('\r')).toBe(false); // LF（无 CR）
+
+      // 11.5 第一道闸：越权目标 → WriteNotAllowedError 原样传播（不吞不包）
+      kernel.io.setWritableRoots([]);
+      await expect(
+        applySvc!.applyToFile(copyKojo, { source: seedSource, candidates: liftResult.candidates }),
+      ).rejects.toMatchObject({ name: 'WriteNotAllowedError' });
+
+      // eslint-disable-next-line no-console
+      console.log(
+        `[smoke] 升糖应用：真实口上 ${seedLines} 行 → 候选 ${liftResult.candidates.length} 条 ` +
+          `（全部 verified；未建议 ${liftResult.skipped.length} 条显式列出）→ 落盘 ${applied.byteSize}B，` +
+          `回读 == 预览 ✓ 备份已建 ✓ 越权拒绝 1 项 ✓`,
       );
 
       await kernel.stop();

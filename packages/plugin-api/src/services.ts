@@ -75,6 +75,19 @@ export const WellKnownServices = {
    * 契约 `plugin-api/sugar.ts`，实现插件 `kojo-sugar`（S5 批建）。
    */
   SugarLift: 'sugar.lift',
+  /**
+   * 语法糖升糖**应用**服务（v0.3 批 S5-UI）：把选中的升糖候选写回 `.kojo` 源文件。
+   *
+   * 与 `sugar.lift` 的**关键差别**：`sugar.lift` 是只读观察面（不读盘、不写盘、
+   * 不发事件）；本服务**持有写能力**——`apply` 是纯函数（内存态文本 → 文本），
+   * `applyToFile` 走与 `sugar.transpile` 的 `compileToFile` **完全同款**的写链路
+   * （编码组装 → 目录 → 备份 → 内核 io 写盘〔第一道闸〕→ 回读验证），成功后发
+   * `file.changed`。
+   *
+   * **能力面 = 服务键面**：写能力必须显式可审计，不得藏在只读服务里。
+   * 契约 `plugin-api/sugar.ts`，实现插件 `kojo-sugar`（S5-UI 批建）。
+   */
+  SugarLiftApply: 'sugar.liftApply',
 } as const;
 
 export type KernelServiceKey = (typeof KernelServices)[keyof typeof KernelServices];

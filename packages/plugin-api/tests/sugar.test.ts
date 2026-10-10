@@ -517,7 +517,8 @@ describe('golden fixture · 规范 §6 示例固化', () => {
   it('期望产物文件名保持 `.expected.erb.todo`（S1 起的冻结口径，S2 起参与逐字节比较）', async () => {
     const entries = await fs.readdir(GOLDENS);
     expect(entries.filter((e) => e.endsWith('.expected.erb')).length).toBe(0);
-    expect(entries.filter((e) => e.endsWith('.expected.erb.todo')).length).toBe(2);
+    // §6.1 / §6.2（规范原文）+ §3.3 旁白口径成对两张（默认 / 作者色）
+    expect(entries.filter((e) => e.endsWith('.expected.erb.todo')).length).toBe(4);
   });
 });
 

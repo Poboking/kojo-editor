@@ -1019,3 +1019,153 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - **`别名` 的自动建议**——受糖层透传语义限制（见 5.31.7），重开条件 = 糖层将来对原生 ERB 的别名展开介入；
 - **列级定位**——候选只报行区间（行级），列级留 S6；
 - **带信封的整函数升糖**（产出 `时机` 块建议）——留 S5-UI 批。
+
+### 5.32a 语法糖 S5 增强批 · 旁白口径 D 归属（v0.3 批扩展实施记录：不加新语法，改自证口径）
+
+> **方向**：修正 S5 期「D 后缀由引号性决定」的**结论错误**——D 归属由**两个维度**决定：
+> `d = (旁白色 == 默认) 且 (not speech)`。`旁白色:` 是**糖表层早已存在**的头部开关（spec §3.1），
+> 本批**不新增任何语法**，只把 lift 的自证壳从「单口径」扩成「依次试两种口径」。
+> 设计稿：`docs/LIFT-SUGGESTER-DESIGN.md` §2.1（修正）/ §2.3（新增）。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/plugins/kojo-sugar/src/lift.ts` | 修改 | 新增 `NarrationColorMode`（`'默认' \| '作者色'`）+ `NARRATION_COLOR_MODES`；`wrapForVerification` 增参 `narrationColor`（**仅非默认时写声明行**，保既有行为逐字节不变）；`verifyRoundTrip` 改为**依次试两种口径**并返回命中口径；三处 `candidates.push`（`if-block` / `selectcase` / `print-message`）补 `narrationColor` |
+| `packages/plugin-api/src/sugar.ts` | 修改（additive） | `SugarLiftCandidate` 新增可选字段 `narrationColor?: '默认' \| '作者色'`（含消费方语义长注释：**`作者色` 时必须把 `旁白色: 作者色` 写入文件头**，否则落盘产物与原文不一致；`kind === 'alias'` 可缺省） |
+| `packages/plugins/kojo-sugar/tests/lift.test.ts` | 修改（38 → 44 项） | 2 个原「降级」用例改「正例」（`PRINTFORML 她红着脸，小声嘟囔着。` → `作者色`；`PRINTFORMW 她看起来很高兴。` → `作者色`）；`PRINTFORMDW 「你好。」` **维持降级**；`PRINTFORMDL 她什么也没说。` → `默认`（口径最小化）；首个正例加 `narrationColor === '默认'`；**新增 `describe('S5 / 旁白口径 …')` 6 项**（两种口径各自命中 / 默认优先 / 块级带径 / 分派块带径 / 默认口径下不误报作者色） |
+| `packages/plugins/kojo-sugar/tests/goldens/spec-3.3-narration-default.kojo` + `.expected.erb.todo` | **新增** | 无 `旁白色` 声明 → `PRINTFORMDW 她点了点头。` / `PRINTFORMDL 她叹了口气。` / `PRINTFORMW 「今天也来训练了？」`（**台词行不受旁白色影响**，在同一张 golden 里就是活证据） |
+| `packages/plugins/kojo-sugar/tests/goldens/spec-3.3-narration-author-color.kojo` + `.expected.erb.todo` | **新增** | `旁白色: 作者色` → `PRINTFORMW 她点了点头。` / `PRINTFORML 她叹了口气。` / `PRINTFORMW 「今天也来训练了？」` |
+| `packages/plugins/kojo-sugar/tests/golden.test.ts` | 修改（3 → 7 项） | 新增 `describe('golden §3.3 · 旁白口径（旁白色:）对 D 归属的作用（逐字节成对）')` 3 项：默认口径断言 / 作者色口径断言 / **两张 golden 差异仅在 D 后缀**（`unD = s => s.replace(/PRINTFORMD([WL])/g,'PRINTFORM$1')` 后二者相等） |
+| `packages/plugin-api/tests/sugar.test.ts` | 修改 | golden 命名冻结断言计数 `2` → `4`（`// §6.1 / §6.2（规范原文）+ §3.3 旁白口径成对两张`） |
+| `docs/LIFT-SUGGESTER-DESIGN.md` | 修改 | §2.1 映射表**修正**（原表错写 `旁白` → `PRINTFORMW`，漏了头部开关这一维）；**新增 §2.3**（2×2 语料矩阵 + 三条推论 + 引擎语义实证 + 「本批不加任何新语法」）；§4.1 契约片段加 `narrationColor?`；§5 `roundtrip-mismatch` 行注明"两种口径依次试"；§6 已知取舍 +2 条 |
+
+#### 关键设计决策
+
+1. **不加新语法（决定性）**：解法不在"给糖表层加行级强制 D 标记"，而在**发现 `旁白色:` 头部开关本来就能产出 `PRINTFORMW 无引号`**。lift 的自证壳原本**没写该声明** → 缺省口径下 `无引号` 必然产 `PRINTFORMDW` → 与原文对不上 → 误判降级。**修自证壳，不修语法**。
+2. **口径最小化（默认优先 + 仅非默认才写声明行）**：`NARRATION_COLOR_MODES = ['默认', '作者色']` 按序试，先命中先返回。`默认` 时不写任何声明行 → **既有全部正例的壳与产物逐字节不变**（S5 的 38 项断言零改动）。这既是最小化，也是保回归的手段。
+3. **口径是候选的属性，必须回写消费方**：`narrationColor: '作者色'` 的候选，**应用落盘时必须写文件头**，否则产出 ERB 与原文不一致。故契约上把它做成**必读字段**（`print-message` / `if-block` / `selectcase` 三类恒带），而不是内部诊断。
+4. **引擎语义以 `_emuera_src` 为准（不按语料表面规律改）**：`D` = `ISPRINTDFUNC` → `EmueraConsole.Print.cs:81` 置 `UseSetColorStyle = false`，即**忽略 `SETCOLOR` 强制默认色**（保留 userStyle 的 FontStyle/Fontname）；`FunctionIdentifier.cs:581` 定义该标志。**`D` 与引号无任何引擎关联**——"引号决定 D"是语料的偶然相关，不是机制。
+5. **缺省推导方向不能反（语料实证反证）**：全局 869,572 行 `PRINTFORM*`；无引号 D = 271,843（67.88%），有引号 D = 1,889（0.41%）。**口上域（真实目标域）无引号 D 占 70.32%**。故"无引号 → D"是缺省正解，"反着改"会为修 11.4 万行而坏 27 万行。
+6. **有引号 + D 维持拒绝（`roundtrip-mismatch`）**：`PRINTFORMDW/DL 「台词」` 的唯一出路是行级强制 D，而 `旁白色` 只改旁白、改不动台词（`speech` 为真时 `d` 恒假）。量级 **1,583 行 / 有引号行的 0.35%** —— 低于"新增语法要配得上的覆盖收益"线 → 维持拒绝并在 §2.3/§6 写论证（符合用户"残余 <2% 允许维持拒绝写论证"的口径）。
+
+#### 语料实证（eraTW 4.980 全树 3,818 ERB）
+
+| 域 | 无引号 非D | 无引号 D | 有引号 非D | 有引号 D | 无引号 D 占比 |
+|---|---|---|---|---|---|
+| 全局 | 128,627 | 271,843 | 455,109 | 1,889 | 67.88% |
+| **口上域** | 113,863 | 269,814 | 452,812 | 1,583 | **70.32%** |
+
+补充：**无引号非 D 行中 79.55%（102,321 行）不在任何 `SETCOLOR` 内** → 渲染上与 D 等价但**语义上仍非 D**，恰好是本批扩出来的覆盖面；其余 26,306 行（20.4%）落在色域内，属真实语义差，可被本批正确覆盖（因为它们本来就该是 `作者色` 口径）。
+
+#### 测试
+
+- `lift.test.ts` **44 项**（38 → 44，+6）；`golden.test.ts` **7 项**（3 → 7，+4：3 项新用例 + 1 项由 golden 名单扩张带来的既有用例重跑）。
+- 关键新断言：`PRINTFORMW 「你好。」`（引号 + 非 D，**两口径都能命中**）必须返回 `默认` —— 这是"口径最小化"的直接检验。
+- golden 成对性断言：两张 golden 去掉 `D` 后**完全相等**，把"差异只在 D 后缀"变成机器可验证的不变量。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **792 passed / 6 skipped**（783 → 792，**+9**，零回归；13 插件） |
+| `pnpm typecheck`（root） | ✅ exit 0 |
+| `pnpm typecheck`（`@kojo/app`） | ✅ exit 0 |
+| `pnpm audit:decoupling` | ✅ A/B/C 全绿 |
+| 真实游戏目录冒烟（`KOJO_SMOKE_PROJECT=<eraTW>`） | ✅ 1 passed（23.2s） |
+| golden 逐字节断言 | ✅ 全部 byte-identical（含新增两对） |
+
+#### 关键坑与发现
+
+1. **S5 的历史记录不追改，只在下游更正**：§5.31 决策 4 的表格把 `旁白` 写成 `PRINTFORMW`（应为 `PRINTFORMDW`），本批**不修改 §5.31 正文**（历史记录的可追溯性优先），改在 `LIFT-SUGGESTER-DESIGN.md` §2.1 修正，并在本段留档。**这是本批的更正对象。**
+2. **`旁白色` 只作用于旁白，不作用于台词**：一度以为"加 `旁白色` 就能救有引号 + D"，实测 `speech` 为真时 `d` 恒假 → 台词行的 D 完全由写法决定。这条直接决定了决策 6。
+3. **口径最小化救回整个回归面**：如果无条件写 `旁白色: 默认` 声明行，S5 的 38 项断言会大面积失败（产物多一行）。"仅非默认才写"是"零回归"的关键。
+4. **`_emuera_src` 是唯一裁判**：语料统计只能给出**分布**，不能给出**语义**。先有引擎源码结论（D = 强制默认色、与引号无关），才敢断定 `无引号 + D` 只是"该处没设色"而非"作者想强制默认色"。
+
+#### 边界未做（属后续批）
+
+- **`alias` 类的原生落点验证（用户任务一第 2 点）**：本批**维持 `not-covered`，不出候选**。论证见 §5.31 决策 7 与设计稿 §2.2 —— 糖层的别名展开是**糖源码层预处理**，对原生 ERB 的 `%…%` / 全大写直通行**原样透传**，故任何"套声明再转译"的产物必然是"多一行声明、正文未变"，round-trip 必不成立。
+  → 重开条件 = 糖层将来对原生 ERB 的别名展开介入；届时本批的"多口径自证"框架可直接复用。
+- **`PRINTFORMDW/DL 「台词」`（有引号 + D，1,583 行）**：见决策 6，维持拒绝。
+- **升糖 UI**：见 §5.32b。
+
+### 5.32b 语法糖 S5-UI 批 · 升糖候选面板 + 应用链路（v0.3 批 S5-UI 实施记录：round-trip 自证的候选终于能落盘）
+
+> **定位**：S5 只交了**数据层**（`sugar.lift` 纯函数），本批把它接成端到端可用的闭环：
+> 扫描 → 候选列表 → diff → **应用**（写回 `.kojo` 源文件）。
+> 写链路**逐条对齐** S3 的 `compileToFile`（编码守卫 → 备份 → `writablePaths` 第一道闸
+> → 回读验证），一闸不少；落盘成功后发 `file.changed`——**这就是 BUG-5 的收尾**。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/plugins/kojo-sugar/src/lift-apply.ts` | **新增**（~330 行） | 升糖应用：`applyLift`（纯函数：倒序替换 + 缩进平移 + 文件头补声明，含三类 fail-closed 校验）+ `applyLiftToFile`（与 `compileToFile` 同款写链路）+ `createSugarLiftApplyService`（`onApplied` 事件发口由装配层注入） |
+| `packages/plugins/kojo-sugar/src/index.ts` | 修改 | `provides` 追加 `sugar.liftApply`；装配 `createSugarLiftApplyService` 并**在此处**发 `file.changed`；导出 apply API |
+| `packages/plugin-api/src/sugar.ts` | 修改（additive） | 升糖应用契约块：`SugarLiftApplyPreview` / `SugarLiftDiffHunk` / `SugarLiftApplyRequest` / `SugarLiftApplyResult` / `SugarLiftApplyService` + `SugarApplyError`（与 `SugarCompileError` 同形状） |
+| `packages/plugin-api/src/services.ts` | 修改（additive） | `WellKnownServices.SugarLiftApply = 'sugar.liftApply'`（含"能力面 = 服务键面"的设计说明） |
+| `packages/plugin-api/src/events.ts` | 修改（additive） | 新增 `editor.activeFileChanged: { filePath: string \| null }`——"当前打开哪个文件"是**宿主状态**，做成事件避免面板持有宿主引用 |
+| `packages/plugin-api/src/index.ts` | 修改 | 导出面追加上述类型与 `SugarApplyError` |
+| `packages/plugins/ui-sugar-lift/` | **新增插件** | 升糖建议面板（`ui.panel` 槽贡献；`src/panel-logic.ts` 纯逻辑 + `src/index.ts` 面板） |
+| `packages/plugins/ui-sugar-lift/package.json` | **新增** | 依赖仅 `@kojo/plugin-api`（+ react peer） |
+| `packages/app/src/ui/App.tsx` | 修改 | `activeFile` 变化时广播 `editor.activeFileChanged`（宿主是"当前文件"的唯一权威） |
+| `packages/app/src/bootstrap.ts` | 修改 | 注册 `createUiSugarLiftPlugin()`（排在 kojo-sugar 之后） |
+| `packages/plugins/kojo-sugar/tests/lift-apply.test.ts` | **新增**（23 项） | 纯函数替换/缩进/文件头 + 三类校验 + 写链路四路径（成功/备份/越权/回读失败）+ 事件发口 |
+| `packages/plugins/ui-sugar-lift/tests/panel-logic.test.ts` | **新增**（25 项） | 候选列表排序 / 三态勾选 / diff 行 / 跳过项标签闭集 / 降级文案闭集 |
+| `packages/plugins/ui-sugar-lift/tests/integration.test.ts` | **新增**（10 项） | 跨插件接线（服务槽顺序）+ 端到端扫描→应用→落盘→事件 + 事件纪律 |
+| `packages/plugins/kojo-sugar/tests/preview.test.ts` | 修改（1 项） | 装配断言 `provides` 三键 → 四键（additive） |
+| `packages/kernel/tests/integration-plugins.test.ts` | 修改（冒烟 §11 新增） | **真实口上语料**升糖应用：3,265 行 → 15 候选 → 落盘 155KB → 回读 == 预览 + 备份 + 越权拒绝 |
+| 四处登记 | 修改 | `tsconfig.json` paths / `vitest.config.ts` aliases / `packages/app/vite.config.ts` aliases + `packages/app/package.json` deps |
+
+#### 关键设计决策
+
+1. **应用是"源文本 → 源文本"，不是"ERB → ERB"**：升糖的产物是**糖源码**（`.kojo`）。候选只在糖层成立，所以"应用" = 把源 `.kojo` 里对应那段原生 ERB 换成糖写法；**产物 ERB 由后续 `compileToFile` 负责**。这保证 round-trip 不变量在应用后仍成立（应用后重编译，产物应与应用前 ERB 语义等价）。
+2. **倒序替换 + 显式重叠断言**：候选行号是**替换前**的；按升序替换会让后一个候选错位。故必须从最大行号开始。整个模块唯一的顺序敏感点 → 不靠直觉，而是**先排序再断言两两不重叠**（合法输入下不可能重叠；一旦发生就是调用方数据有问题，静默继续会写出错乱文件）。
+3. **三类 fail-closed 校验**（任一不过即抛，绝不静默跳过——"应用错行"的代价远高于"拒绝"）：① 区间越界；② 候选两两重叠；③ **候选区间原文必须与 `roundTrip.originalText` 逐行一致**（这是"候选来自本份 source"的直接证据，行号漂移会在此被抓到）。
+4. **文件头：只在需要时补，绝不删既有声明**：`narrationColor === '作者色'` 的候选，自证前提是文件头有 `旁白色: 作者色`——应用时必须补上，否则应用后再编译产物会与原文不一致。反之，本次没应用 `作者色` 候选而文件头已有该声明 → **不动它**（零侵入：那是作者的既有选择）。
+   - 插入点必须**在所有声明行之后**：`角色:` 也是声明行且通常在第一行，若只认 `旁白色:` 就会把新声明插到 `角色:` **上面**，破坏语料惯例（`DECL_LINE_RE` 通用声明识别）。
+5. **写能力 = 独立服务键**（`sugar.liftApply`，不塞进 `sugar.lift`）：`sugar.lift` 是**只读观察面**（契约明文：不读盘不写盘不发事件）。写能力必须显式声明，否则"哪些插件能写盘"就不再可审计。
+   - **事件纪律不冲突**：S4 预览"只消费 `file.changed`、绝不发射"是因为它不写盘；本服务**确实改了盘**，不发事件反而是"内核不静默"铁律的破坏（编辑器不会知道文件变了）。**谁改盘谁发事件**，职责不重叠。
+6. **事件发口在装配层**（`createSugarLiftApplyService({ onApplied })`）：实现层（`lift-apply.ts`）**零内核依赖**——"应用成功后要发 `file.changed`"是**接线决策**（谁有 bus 谁发）。这让实现层可单测，也让"直接调 `applyLiftToFile` 不发事件"变成可断言的事实（本批有专门用例）。
+7. **UI 只做呈现 + 意图**：面板**不自建任何写逻辑**——它的"应用"就是调 `sugar.liftApply`。故写盘闸门、备份、回读一个都不少（越权同一个 `WriteNotAllowedError`）。
+8. **diff 不引入通用 diff 库**：升糖的差量**结构已知**（每条候选替换一个已知闭区间），不需要"求最短编辑脚本"；把已知的东西再猜一遍只会引入不确定性。故 hunk 由**替换参数直接构造**（`removed` / `added`），逐 hunk 先 `-` 后 `+`，行数不等时**不强行对齐**（整段换整段，对齐只会制造不存在的"上下文行"）。
+9. **"预览 = 落盘结果"是同一性而非相似性**：面板的 diff 预览复用后端 `apply`（dry-run），所以预览与真正应用**必然一致**；冒烟里就有这条断言（回读 == 预览）。
+10. **忽略是持续意图**（两集合而非三值 Map）：`SelectState = { selected, ignored }`，忽略**免疫全选**——否则全选会把"我不想再看到这条"覆盖掉。忽略优先于选中。
+11. **应用后立即重扫**：行号已变，旧候选一律作废。不重扫就会出现"用旧行号对新文本"的错行应用。
+12. **当前文件走事件而非服务查询**：新增 `editor.activeFileChanged`。做成事件的理由：面板只想"知道变了"，不想"查询宿主"——查询式接口会逼面板持有宿主引用，破坏"插件不得依赖宿主实现"的分层。
+
+#### 测试
+
+- `lift-apply.test.ts` **23 项**：单条/多条（倒序）/缩进平移/多行糖片段/文件头三态（补声明、就地改写、零侵入）/头注横幅/alias 过滤/空候选；校验三路（越界、重叠、行号漂移）；写链路五路（成功字节级、备份、无原文件不备份、越权原样传播、回读不一致、写盘异常）；事件发口三路（成功发一次、失败不发、纯函数不发）。
+- `panel-logic.test.ts` **25 项**：列表排序（乱序规整、同起点短区间在前、真实 lift 结果直接建行）、三态勾选（单选/全选/忽略免疫全选/忽略优先/一键恢复/全不选不清忽略）、diff（多 hunk、行数不等不对齐、`diffToText`）、跳过项标签**闭集覆盖**（10 个 reason 全有中文标签）、降级文案闭集。
+- `integration.test.ts` **10 项**：`requires` 三键且 `provides` 为空（纯消费者）；激活后注册 `ui.panel`；**反序装配必失败**（服务槽顺序）；端到端（扫描→应用→落盘文本→事件 payload 合契约）；回读闭环（落盘后再扫描，候选为 0 = 已糖化）；越权（同闸、不发事件）；只读预览不落盘不发事件；`作者色` 自动写文件头；直接调实现层不发事件。
+- `preview.test.ts` 装配断言更新为四键（additive，既有顺序不变）。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **850 passed / 6 skipped**（792 → 850，**+58**；52 个测试文件，14 插件，零回归） |
+| `pnpm typecheck`（root） | 通过，exit 0 |
+| `pnpm typecheck`（`@kojo/app`） | 通过，exit 0 |
+| `pnpm audit:decoupling` | A/B/C 全绿（**14 插件**，新增 ui-sugar-lift 未引入交叉 import） |
+| 真实游戏目录冒烟（`KOJO_SMOKE_PROJECT=<eraTW>`） | 通过。新增 §11：真实口上 `M_KOJO_K49_日常系コマンド.ERB` **3,265 行 → 15 条候选（全部 verified）→ 未建议 93 条显式列出 → 落盘 155,449B → 回读 == 预览 → 备份已建 → 越权 `WriteNotAllowedError` 拒绝** |
+| golden / S2 内核 / `compileToFile` 行为 | 未触碰，零改动 |
+
+#### 关键坑与发现
+
+1. **文件头插入点不是"首个非空非注释行之前"**：`角色: 1` 也是声明行且在第一行——最初只认 `旁白色:`，导致新声明被插到 `角色:` **上面**。改为通用声明行识别（`键: 值`），插入点 = **最后一个声明行之后**。这条错误是单测抓出来的（"应用作者色候选"用例直接失败）。
+2. **末尾换行的归一化**：`encodeErbBytes` 会"先剥已有尾换行、再补一个"。真实语料源文件本身可能已带尾换行（`preview.text` 保留了尾空行），此时 `preview.text + '\n'` 会多一个。断言必须**归一化后比对**（`norm()`），不是简单字符串拼接。
+3. **真实语料不能随手挑文件**：第一版选了 `M_KOJO_K49_日記.ERB`（名字像口上），实为**日记系统**（`@DIARY_*`，几乎没有 `PRINTFORM`）→ 0 候选，冒烟失去证明力。改为按 `PRINTFORM` 数量挑（`日常系コマンド.ERB`，1,266 个），并在测试里**硬断言候选数 > 0**（否则冒烟形同虚设）。
+4. **测试里的类型名要核对**：`SlotContribution` / `SlotsRegistryLike` 并不存在（正确是 `UIPanelContribution`）。vitest 不报（TS 类型被擦除），**只有 `tsc` 会报**——双跑 typecheck 的价值again。
+5. **新插件必须 `pnpm install`**：四处登记只是"路径别名"，`packages/app/node_modules/@kojo/*` 的软链要 `pnpm install` 才建；否则 app 侧 `Cannot find module`。
+6. **`navigator.clipboard` 在 node lib 下不存在**：面板的"复制 diff"做了安全降级（`typeof navigator === 'undefined'` 判断 + try/catch 静默）——环境限制不是错误，不该弹提示。
+
+#### 边界未做（属后续批）
+
+- **列级定位 / 高亮**：候选与 diff 只报行区间（行级），列级留 S6。
+- **在编辑器内联显示建议**（`ui.editor.decorator` 槽）：本批只做侧栏面板，内联装饰留后续。
+- **`别名` 类候选的应用**：受糖层透传语义限制（同 §5.31 边界未做 / §5.32a），维持不出候选。
+- **带信封的整函数升糖**（产出 `时机` 块建议、产物直接替整个函数）：本批的候选仍是函数体内片段。
+- **撤销（undo）**：应用后有备份路径，但没有"一键回滚"按钮——留 v1.1（可复用 `backupPath`）。
+- **虚拟滚动**：候选列表上限 200 条、diff 上限 400 行（防 DOM 爆炸）；超大文件需要虚拟滚动才谈得上"全量可浏览"。

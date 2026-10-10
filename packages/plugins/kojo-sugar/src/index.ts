@@ -1,7 +1,8 @@
 /**
  * @kojo/plugin-kojo-sugar
  *
- * 语法糖转译插件（服务 `sugar.transpile`；v0.3 批 S2 转译内核 + S3 编译落盘）。
+ * 语法糖转译插件（服务 `sugar.transpile`；v0.3 批 S2 转译内核 + S3 编译落盘
+ * + S5-UI 升糖应用）。
  *
  * 分层（"一切皆插件"）：
  * - 本插件 = 三段式转译器（行式词法 → AST → codegen）——**引擎级语言知识**
@@ -11,6 +12,8 @@
  * - 编译落盘（S3 批）：`compileToFile` 走**内核 io 第一道闸**（writablePaths）
  *   + 备份 + 回读验证（安全顺序见 `compile.ts` 头注，复刻注入器范式）；
  *   `parse`/`transpile`/`sourceOf` 仍为纯函数。
+ * - 升糖应用（S5-UI 批）：`sugar.liftApply` 与 `compileToFile` **同款写链路**
+ *   （见 `lift-apply.ts` 头注），落盘成功后发 `file.changed`。
  */
 
 import type {
@@ -24,6 +27,7 @@ import type {
   ProjectService,
   SlotRegistry,
   StateReplayService,
+  SugarLiftApplyService,
   SugarLiftService,
   SugarPreviewService,
   SugarTranspileService,
@@ -33,6 +37,7 @@ import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { createSugarTranspileService } from './service';
 import { createSugarPreviewService } from './preview';
 import { createSugarLiftService } from './lift';
+import { createSugarLiftApplyService } from './lift-apply';
 import type { DictionaryLookup } from './types';
 
 export function createKojoSugarPlugin(): Plugin {
@@ -43,6 +48,7 @@ export function createKojoSugarPlugin(): Plugin {
       WellKnownServices.SugarTranspile,
       WellKnownServices.SugarPreview,
       WellKnownServices.SugarLift,
+      WellKnownServices.SugarLiftApply,
     ],
     // S3 批：编译落盘需要内核 io（第一道闸）；Project/Slots 供 adapter 字典查询
     requires: [KernelServices.Project, KernelServices.Slots, KernelServices.IO],
@@ -173,6 +179,31 @@ export function createKojoSugarPlugin(): Plugin {
       });
 
       ctx.provide(WellKnownServices.SugarLift, liftService);
+
+      /**
+       * 升糖**应用**服务（S5-UI 批）——把候选写回 `.kojo` 源文件。
+       *
+       * 与 `sugar.lift` 的分工：后者是**只读观察面**（契约明文：不读盘不写盘不发
+       * 事件）；写能力必须显式声明成一个独立服务键，否则"哪些插件能写盘"就不再
+       * 可审计。**能力面 = 服务键面**。
+       *
+       * 写链路与 S3 的 `compileToFile` 逐条对齐（编码组装 → 目录 → 备份 → 内核
+       * io 写盘〔第一道闸〕→ 回读验证），**不绕过任何一闸**。
+       *
+       * 事件纪律：本服务**发** `file.changed`（写盘成功路径上）。这与 S4 预览的
+       * "只消费、绝不发射"不冲突——预览不写盘，故无变更可报；本服务确实改了盘，
+       * 不发事件反而是"内核不静默"铁律的破坏（编辑器不会知道文件变了）。
+       * 发口由装配层注入（`onApplied`），实现层零内核依赖。
+       */
+      const liftApplyService: SugarLiftApplyService = createSugarLiftApplyService({
+        io,
+        log: ctx.log,
+        onApplied: (path: string) => {
+          ctx.bus.emit('file.changed', { kind: 'change', path });
+        },
+      });
+
+      ctx.provide(WellKnownServices.SugarLiftApply, liftApplyService);
     },
   };
 }
@@ -246,3 +277,9 @@ export {
 } from './preview';
 export type { AliasEntry, AliasTable, DictionaryLookup } from './types';
 export { createSugarLiftService, liftSuggest, type LiftDeps } from './lift';
+export {
+  applyLift,
+  applyLiftToFile,
+  createSugarLiftApplyService,
+  type LiftApplyDeps,
+} from './lift-apply';
