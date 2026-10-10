@@ -104,5 +104,5 @@ export function createConditionExtractorPlugin(): Plugin {
 }
 
 export { ConditionEngine, type ConditionEngineDeps } from './engine';
-export { extractFunctionConditions, extractFunctionPredicates, collectPredicates } from './extract';
+export { extractFunctionConditions, extractFunctionPredicates, collectPredicates, collectReturns, collectAssignments } from './extract';
 export { parseExpression, splitTopLevelCommas, walkExpr } from './expr';

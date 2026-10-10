@@ -33,6 +33,17 @@ describe('collectAssignments · 识别', () => {
     ]);
   });
 
+  it('ARG/ARGS 参数槽赋值（v0.2 第七批：口上参数补位惯用法）', () => {
+    // 陷落状态（K49）的真实形态：SIF !ARG / ARG = TARGET
+    const lines = toLines(['@TEST(ARG)', 'ARG = TARGET', '\tARG:1 = 0', 'ARGS = "あ"'].join('\n'));
+    const got = collectAssignments(lines, 2, 4, () => []);
+    expect(got.map((a) => [a.name, a.index, a.text])).toEqual([
+      ['ARG', 0, 'TARGET'],
+      ['ARG', 1, '0'],
+      ['ARGS', 0, '"あ"'],
+    ]);
+  });
+
   it('`==` 不误匹配；复合赋值记为 opaque 失效点', () => {
     const lines = toLines(['@TEST', 'LOCAL == 1', 'LOCAL != 1', 'LOCAL >= 1', 'LOCAL:2 += 1'].join('\n'));
     const got = collectAssignments(lines, 2, 6, () => []);

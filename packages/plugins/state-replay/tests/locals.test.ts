@@ -42,9 +42,11 @@ function makeDetail(assignments: FunctionAssignment[]): FunctionPredicates {
     normalizedName: 'TEST',
     filePath: 'a.erb',
     startLine: 1,
+    endLine: 100,
     statements: [],
     assignments,
     predicates: [],
+    returns: [],
   };
 }
 

@@ -5,8 +5,9 @@
  * 在状态视图上逐条求值 → `FunctionReplay`（置信度三档）。
  * 具名索引字典经 `getSchemaLookup` 注入（来自当前 game.adapter 的 `variableSchema`）。
  *
- * 不做缓存：视图生命周期由调用方持有（一次批量回放复用同一视图）；
- * 谓词明细的缓存在 condition-extractor 侧。
+ * v0.2 第七批：内联求值通道——`InlineManager` 对口上域 `#FUNCTION` 纯助手做
+ * 有界内联解释（先 `preanalyze` 异步预热 → 同步 `resolveCall` 注入求值上下文）。
+ * 文本缓存与内联缓存随项目生命周期（`resetCaches`，装配层在 project.closed 调用）。
  */
 
 import type {
@@ -19,7 +20,8 @@ import type {
   SnapshotArchive,
   StateReplayService,
 } from '@kojo/plugin-api';
-import { judgeCondition, type ValueReader } from './evaluate';
+import { judgeCondition, type CallResolver, type EvalContext, type ValueReader } from './evaluate';
+import { InlineManager } from './inline';
 import { createFunctionOverlay, type OverlayPosition, type OverlayReader } from './locals';
 import { createStateView, type SchemaLookup } from './state-view';
 
@@ -31,23 +33,26 @@ export interface StateReplayEngineDeps {
   functionPredicates(normalizedName: string): Promise<FunctionPredicates | null>;
   /** 具名索引字典（当前适配器的 `variableSchema`） */
   getSchemaLookup(): SchemaLookup | undefined;
+  /** 读文件原文（v0.2 第七批：内联求值需要函数体行文本；走 kernel.io） */
+  readFileText(path: string): Promise<string>;
 }
 
 /** 谓词明细 → 回放结果（纯函数；测试可直用）。
- *  `overlay`：本地量数据流 + 调用上下文叠加（v0.2 第六批；可省略 = 纯视图求值）。 */
+ *  `overlay`：本地量数据流 + 调用上下文叠加（v0.2 第六批；可省略 = 纯视图求值）。
+ *  `resolveCall`：用户函数内联通道（v0.2 第七批；缺省 = 调用一律 unknown('call')）。 */
 export function replayPredicates(
   detail: FunctionPredicates,
   read: ValueReader,
   overlay?: OverlayReader,
+  resolveCall?: CallResolver,
 ): FunctionReplay {
   const predicates: PredicateReplay[] = detail.predicates.map((p) => {
-    let outcome;
-    if (overlay) {
-      const at: OverlayPosition = { line: p.line, context: p.context ?? [] };
-      outcome = judgeCondition(p.expr, (ref) => overlay(ref, at) ?? read(ref));
-    } else {
-      outcome = judgeCondition(p.expr, read);
-    }
+    const at: OverlayPosition = { line: p.line, context: p.context ?? [] };
+    const ctx: EvalContext = {
+      read: (ref) => (overlay ? (overlay(ref, at) ?? read(ref)) : read(ref)),
+      ...(resolveCall ? { resolveCall } : {}),
+    };
+    const outcome = judgeCondition(p.expr, ctx);
     return {
       kind: p.kind,
       text: p.text,
@@ -80,7 +85,32 @@ export function replayPredicates(
 }
 
 export class StateReplayEngine implements StateReplayService {
-  constructor(private readonly deps: StateReplayEngineDeps) {}
+  /** 内联管理器（analyze 缓存；resetCaches 时清空） */
+  private readonly inline: InlineManager;
+  /** 函数体行文本缓存（path → lines；resetCaches 时清空） */
+  private readonly lineCache = new Map<string, string[]>();
+
+  constructor(private readonly deps: StateReplayEngineDeps) {
+    this.inline = new InlineManager({
+      functionPredicates: (name) => deps.functionPredicates(name),
+      readFileLines: async (path) => {
+        let lines = this.lineCache.get(path);
+        if (!lines) {
+          const text = await deps.readFileText(path);
+          lines = text.replace(/\r\n?/g, '\n').split('\n');
+          this.lineCache.set(path, lines);
+        }
+        return lines;
+      },
+      log: deps.log,
+    });
+  }
+
+  /** 项目切换 / 索引重建时清空缓存（函数体可能已变） */
+  resetCaches(): void {
+    this.inline.reset();
+    this.lineCache.clear();
+  }
 
   async createView(archivePath: string, characterNo: number): Promise<ReplayStateView> {
     let archive: SnapshotArchive;
@@ -102,7 +132,11 @@ export class StateReplayEngine implements StateReplayService {
     if (!detail) return null;
     const read: ValueReader = (ref) => view.read(ref);
     const overlay = createFunctionOverlay({ detail, callContext: options?.callContext, baseRead: read });
-    return replayPredicates(detail, read, overlay ?? undefined);
+    // 内联预热（异步阶段结束 → 执行期同步缓存命中）
+    await this.inline.preanalyze(detail);
+    const resolveCall: CallResolver = (name, args, callerCtx) =>
+      this.inline.resolveCall(name, args, callerCtx, 0);
+    return replayPredicates(detail, read, overlay ?? undefined, resolveCall);
   }
 
   async replayFunctions(

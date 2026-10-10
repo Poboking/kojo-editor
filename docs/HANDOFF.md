@@ -1,4 +1,4 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 ✅ / 第四批 ✅ / 第五批 ✅ / 第六批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 ✅ / 第四批 ✅ / 第五批 ✅ / 第六批 ✅ / 第七批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
@@ -6,7 +6,8 @@
 > 第三批：条件谓词抽取（`condition-extractor`）+ 导航条件徽章 + adapter 变量字典；
 > 第四批：存档快照源（`sav-parser`，服务 `snapshot.source`）；
 > 第五批：状态回放引擎（`state-replay`，服务 `state.replay`）；
-> 本会话完成 **v0.2 第六批：回放求值器扩展——本地量数据流 + 引擎内置纯函数 + 调用上下文注入（实测未知率 62.9% → 48.5%）**。
+> 第六批：回放求值器扩展——本地量数据流 + 引擎内置纯函数 + 调用上下文注入（未知率 62.9% → 48.5%）；
+> 本会话完成 **v0.2 第七批：有界内联求值——口上域 `#FUNCTION` 纯助手顺序解释（实测未知率 48.5% → 32.0%，call 桶消解 84%）**。
 
 ---
 
@@ -53,11 +54,18 @@
   3. **内置纯函数**（`builtins.ts`，Creator.Method.cs 逐条对齐）：GETBIT / GROUPMATCH / MAX / MIN / ABS / SIGN / LIMIT / POWER；错误路径 → unknown('builtin') 不抛错。明确不收录：数组区间族 / GETNUM（等 adapter schema 通道）/ 字符串形态族 / RAND。
   4. **调用上下文**：`ReplayCallContext{ints,strs}`（裸 ARG ≡ ARG:0，引擎 1D 裸引用语义）注入 `replayFunction(view, name, {callContext})`；未提供/未覆盖 → unknown('call-context')，**不猜测 0**（转发自路由层的值是场景输入）。adapter 口上调用协议（路由表 → 转发实参映射）留作 UI 场景选择器地基（默认流收益实测 ≈ 0）。
   5. **测试**：+29 单测（assignments 识别与上下文 / locals 叠加 / builtins 语义）；集成冒烟新增数据流与调用上下文断言 + 未知率守门（<55%）+ 未知分类打印。
+- **v0.2 第七批完成**（本会话）：**有界内联求值——口上域 `#FUNCTION` 纯助手顺序解释**（ARCHITECTURE §5.13 为权威记录）。
+  1. **先测量再动手（第四次应验）**：对 call unknown 做**被调函数形态分析**（临时 dump 跑完即删），实测推翻批六预估——call 覆盖 26 名 / 2,805 谓词中，**口上索引域内有定义仅 3 名 / 1,991 条（71%）**（`陷落状态`×1830 + `关系_310`×160 + `陥落状態`×1）；23 名（FIRSTTIME 等）定义在 kojoPaths 之外（COMMON.ERB 等），本就不可内联（FIRSTTIME 写 CSTR 副作用）。可内联函数体 100% 为 IF/ELSEIF/SIF/RETURNF + **ARG 补位赋值**（`SIF !ARG / ARG = TARGET` 惯用法）——唯一拦路的是 ARG 不在批六收集名单。
+  2. **契约**：`FunctionAssignment.name` 扩 `'ARG'|'ARGS'`（结构事实；静态叠加层不消费——ARG 读取仍走 call-context 注入优先）；`FunctionPredicates` +`endLine` / +`returns`（RETURNF 结构事实）。
+  3. **抽取**（condition-extractor）：`ASSIGN_RE` 扩 ARG/ARGS + `collectReturns`；明细路径产出 endLine/returns（聚合路径零开销）。
+  4. **求值**（state-replay）：`inline.ts` 预编译 + **PC 顺序解释器**（SIF 条件体 / IF 链 / RETURNF / 环境读 / **索引段替换** `TALENT:ARG:恋人`）；`evaluate.ts` 求值通道重构 `EvalContext{read, resolveCall}`；`InlineManager`（analyze 缓存 + `preanalyze` BFS 预热 → 执行期同步命中）；state-replay `requires` 增 `kernel.io`。
+  5. **实现最微妙的坑**：ELSEIF/ELSE op 的两种到达方式（条件假跳转 vs 分支体自然掉落）——编译期把"假跳转到 ELSE"改写为直接进体（`elseIdx+1`），运行期 `pendingEval` 标记区分"跳转到达 ELSEIF（求值）"与"自然掉落（跳 endAfter）"。首版实现 ELSE 与 ELSEIF 双双踩中此坑（集成测试 ELSE 分支错误落到链尾兜底 RETURNF）。
+  6. **真实回归**：未知 5,668→**3,741**（**48.5%→32.0%**）/ call 桶 2,297→**368**（消解 84%）/ exact 786→**836** / 全未知函数 70→**38**。+27 单测 + 集成冒烟守门 0.55→0.40 + 陷落状态内联专项断言。
 - **存档解析基线（2026-10-10 实测）**：六档全绿——168 角色/档、16,005 变量/档（save00 16,000）、`#DIM` 恒 65、MASTERNAME 7/168、RANDDATA saveLen 625（**save00 nonEmpty=0 全零剪枝实证** / save01+ 全量）、MONEY 51 亿（Int64 路径）、EM 区 2 张 DT 表、**残余 0B**。
-- **状态回放基线（2026-10-10 实测，第六批后）**：save03 × 古明地觉（K49）全量回放 **1,356 个含谓词函数 / 11,685 谓词**——命中 1,522 / 未命中 4,495 / 未知 **5,668（62.9%→48.5%）**；置信度 exact **786** / partial 500 / unknown **70**（批五：230/755/371）。第六批后未知构成：call 2,297（游戏助手函数为主）/ pseudo 1,886（RAND 等）/ call-context 858 / named-index 335 / local-no-write 196 / missing-var 80 / 其余 <100。
+- **状态回放基线（2026-10-10 实测，第七批后）**：save03 × 古明地觉（K49）全量回放 **1,356 个含谓词函数 / 11,685 谓词**——命中 1,549 / 未命中 6,395 / 未知 **3,741（32.0%）**；置信度 exact **836** / partial 482 / unknown **38**。第七批后未知构成：pseudo 1,886（RAND 等运行期值）/ call-context 858 / call 368（索引域外函数）/ named-index 337 / local-no-write 196 / missing-var 80 / 其余 <20。
 - **真实工程基线（2026-10-10 实测）**：168 角色 / 2,285 ERB / 99,104 函数 / 去重名 99,101；家族识别 98.91%（109 家族）；索引 ~2.9s；约定校验 757 项（~9s）。
 - **条件抽取基线**：95,504 函数 / **493,712 谓词（未解析 187 = 0.04%）** / 含依赖函数 31,609 / 依赖条目 164,910 / schema 标注 109,742（恋慕 17,993 / 好感度 480）/ 全量 ~6.2s（冷启动 ~13s）。
-- 测试：**362 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**9 插件**）。
+- 测试：**389 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**9 插件**）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -76,24 +84,24 @@
 packages/
 ├── plugin-api/src/
 │   ├── conventions.ts         # 约定校验器契约（规则/问题/上下文/报告/服务）
-│   ├── conditions.ts          # 条件谓词契约（ConditionExpr AST / StateDependency / ConditionIndex / 服务 + ★FunctionPredicate(s) 明细）
+│   ├── conditions.ts          # 条件谓词契约（ConditionExpr AST / StateDependency / ConditionIndex / 服务 + FunctionPredicate(s) 明细 + ★第七批：FunctionAssignment.name 扩 ARG/ARGS、FunctionPredicates +endLine/+returns、FunctionReturn）
 │   ├── snapshot.ts            # 存档快照源契约（ArchiveMeta/SnapshotArchive/变量模型/扫描/服务）
-│   ├── replay.ts              # ★ 状态回放契约（ReplayStateView / ReplayValue·ReplayOutcome / ReplayUnknown / FunctionReplay / StateReplayService）
-│   ├── services.ts            # +WellKnownServices.ConditionExtractor / SnapshotSource='snapshot.source' / ★StateReplay='state.replay'
+│   ├── replay.ts              # 状态回放契约（ReplayStateView / ReplayValue·ReplayOutcome / ReplayUnknown / FunctionReplay / StateReplayService）
+│   ├── services.ts            # +WellKnownServices.ConditionExtractor / SnapshotSource='snapshot.source' / StateReplay='state.replay'
 │   ├── events.ts              # +KernelEventMap['editor.revealLocation']
 │   ├── erb.ts                 # ErbParserService +currentIndex()/ensureIndex()/scanControlFlow()；+ControlFlowStatement
-│   └── game.ts                # VariableSchema/VariableInfo（★+resolvedIndex：具名索引→编号）
+│   └── game.ts                # VariableSchema/VariableInfo（+resolvedIndex：具名索引→编号）
 ├── kernel/src/bus.ts          # +KERNEL_EVENT_NAMES: 'editor.revealLocation'
 ├── plugins/
 │   ├── erb-parser/src/
 │   │   ├── scanner.ts         # +scanControlFlow（控制流骨架：配对/深度/条件原文/宽容）
 │   │   └── plugin.ts          # 服务暴露 scanControlFlow
 │   ├── eratw-adapter/src/
-│   │   ├── variable-schema.ts # 变量字典（CSV 驱动；33 张名称表；编号↔名称双向 + ★resolvedIndex 填充）
+│   │   ├── variable-schema.ts # 变量字典（CSV 驱动；33 张名称表；编号↔名称双向 + resolvedIndex 填充）
 │   │   ├── conventions.ts     # eraTW 4 条规则（KX/四件套/FORM/MESSAGECHECK）
 │   │   └── constants.ts       # +csvDir
 │   ├── convention-linter/src/ # 引擎（engine.ts + rules/duplicate-function.ts）
-│   ├── condition-extractor/src/ # 条件抽取（expr/extract/engine/index；★functionPredicates 明细 API + 双缓存 + ★assignments 本地量赋值收集 + 分支上下文）
+│   ├── condition-extractor/src/ # 条件抽取（expr/extract/engine/index；functionPredicates 明细 API + 双缓存 + assignments 本地量赋值收集 + 分支上下文 + ★第七批：ARG/ARGS 赋值 + collectReturns）
 │   ├── sav-parser/src/        # 存档快照源（v0.2 第四批）
 │   │   ├── binary.ts          #   ByteReader：7-bit 字节数前缀 / 整数编码 / 越界即抛
 │   │   ├── arrays.ts          #   六种数组游程解码（0xF0/F1/F2/E0/E1/D8；cells 省略/截断）
@@ -101,14 +109,15 @@ packages/
 │   │   ├── gunzip.ts          #   DecompressionStream gzip（Web 标准，不 import node:zlib）
 │   │   ├── engine.ts          #   扫描编排（浅解析列档 / 并发 4 / 代际保护 / 订阅）
 │   │   └── index.ts           #   装配（requires: kernel.io/kernel.project）
-│   ├── state-replay/src/      # ★ v0.2 第五~六批：状态回放引擎
+│   ├── state-replay/src/      # 状态回放引擎（v0.2 第五~七批）
 │   │   ├── var-model.ts       #   引擎级变量清单（角色 22+4+CSTR+CDFLAG / 全局 / 伪变量 / 局部量）
 │   │   ├── state-view.ts      #   归约（按 NO 定位角色块 / TARGET 补位 / 稀疏取值 / 越界与截断显式）
-│   │   ├── evaluate.ts        #   三值求值器（Kleene / 整数除法截断 / BigInt 位运算 / 字符串 == / ★call→内置表）
-│   │   ├── builtins.ts        #   ★ v0.2 第六批：内置纯函数（GETBIT/GROUPMATCH/MAX/MIN/ABS/SIGN/LIMIT/POWER）
-│   │   ├── locals.ts          #   ★ v0.2 第六批：函数级叠加层（本地量数据流前缀可达 + 调用上下文注入）
-│   │   ├── engine.ts          #   编排（createView / replayFunction(s) / replayPredicates 纯函数）
-│   │   └── index.ts           #   装配（requires: kernel.project/kernel.slots/snapshot.source/condition.extractor）
+│   │   ├── evaluate.ts        #   三值求值器（Kleene / 整数除法截断 / BigInt 位运算 / 字符串 == / ★第七批：EvalContext{read, resolveCall}）
+│   │   ├── builtins.ts        #   内置纯函数（GETBIT/GROUPMATCH/MAX/MIN/ABS/SIGN/LIMIT/POWER + ★isBuiltinName）
+│   │   ├── locals.ts          #   函数级叠加层（本地量数据流前缀可达 + 调用上下文注入）
+│   │   ├── inline.ts          #   ★ v0.2 第七批：有界内联解释器（analyze 预编译 + PC 顺序执行 + 环境读/索引段替换 + InlineManager 缓存/preanalyze 预热）
+│   │   ├── engine.ts          #   编排（createView / replayFunction(s) / replayPredicates 纯函数 + ★InlineManager 集成 + resetCaches）
+│   │   └── index.ts           #   装配（requires: kernel.project/kernel.slots/★kernel.io/snapshot.source/condition.extractor；project.closed/functionChanged → resetCaches）
 │   ├── ui-convention-report/src/index.ts # ui.panel 面板（订阅 linter；点击 → revealLocation）
 │   ├── ui-kojo-navigator/src/          # 函数树导航（tree.ts 纯逻辑 + index.ts 面板 + 条件徽章）
 │   └── ui-plugin-status/src/           # 插件状态面板
@@ -125,7 +134,7 @@ packages/
 ```bash
 cd D:\DSH\kojo-editor
 pnpm install
-pnpm test               # 333 项（无游戏目录时集成冒烟自动跳过）
+pnpm test               # 389 项（无游戏目录时集成冒烟自动跳过）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
 pnpm audit:decoupling   # 必须 ✅（plugins 数 9）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放断言）：
@@ -141,7 +150,7 @@ node tools/smoke-tauri-dom.mjs
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
 5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
 
-## 六、v0.2 批次记录（第三批～第六批，✅ 全部完成）
+## 六、v0.2 批次记录（第三批～第七批，✅ 全部完成）
 
 ### 6.1 第三批：条件谓词抽取 `condition-extractor`
 
@@ -193,17 +202,29 @@ node tools/smoke-tauri-dom.mjs
 - **真实回归**：未知 7,351→5,668（62.9%→48.5%）；exact 230→786；全未知函数 371→70。
 - **设计教训（先测量）**：批五"主因 = ARG"假设被实测推翻（ARG 仅 14%，LOCAL 族 60% 才是大头）——假设必须让位于测量。
 
-### 6.5 第七批候选（下一批）
+### 6.5 第七批（✅ 已完成）：有界内联求值（口上域 `#FUNCTION` 纯助手顺序解释）
 
-- **纯函数内联求值（第一优先）**：`call` 桶的最大头是游戏侧 `#FUNCTION` 纯助手（陷落状态 1,803 + FIRSTTIME 450 + 素質計算/CHK_FOCUS/关系_310 等 ≈ 2,500 谓词）。方案 = 对"体语句全为可解释形态（IF/ELSEIF/SIF/RETURNF + 本地量赋值）"的函数做**有界内联解释**（绑定实参 → 顺序求值 → RETURNF；副作用语句出现即拒绝 → unknown('call')）。地基已备好：assignments / statements / builtins / 前缀上下文。注意 FIRSTTIME 有副作用（写 CSTR）→ 副作用守卫必须先行。
-- **`ui-state-replay` 回放面板**：选档（快照扫描结果）→ 选角色 → 选函数（或从导航面板"回放此函数"）→ 逐条谓词真值 + 置信度徽章 + 未知原因分组；消费 `state.replay`；调用上下文作为场景输入（对话对象 / 时机号）。
+**实施结果**：契约 + 抽取 + 求值三层落地（ARCHITECTURE §5.13 为权威记录）。
+
+- **测量先行（§5.9 教训第四次应验）**：临时 dump 实测 call 被调函数形态——26 名 / 2,805 谓词中口上域内可解释仅 3 名 / 1,991 条（71%，`陷落状态`+`关系_310`+`陥落状態`）；23 名在索引域外（FIRSTTIME 等，本就不可内联）。可内联体 100% 为 IF/SIF/RETURNF + ARG 补位赋值。
+- **契约**：`FunctionAssignment.name` 扩 `'ARG'|'ARGS'`；`FunctionPredicates` +`endLine`/+`returns: FunctionReturn[]`。
+- **抽取**：`ASSIGN_RE` 扩 ARG/ARGS + `collectReturns`（RETURNF 收集）；明细路径产出（聚合零开销）。
+- **求值**：`inline.ts`（analyze 预编译 + PC 顺序解释器：SIF 条件体 / IF 链 nextBranch/endAfter / pendingEval 双语义标记 / 环境读 + **索引段替换** / 深度界 8）+ `evaluate.ts`（`EvalContext{read, resolveCall}` 重构）+ `InlineManager`（缓存 + `preanalyze` BFS 预热）+ state-replay `requires` 增 `kernel.io`。
+- **真实回归**：未知 5,668→3,741（**48.5%→32.0%**）；call 桶 2,297→**368**（消解 84%）；exact 786→836；全未知函数 70→38。
+- **教训（§九-19）**：ELSEIF/ELSE op 的"跳转到达 vs 自然掉落"双语义——PC 无法区分来源，须编译期改写（假跳转绕过 ELSE op）+ 运行期标记（pendingEval）。首版集成测试抓出（ELSE 分支错误落到链尾兜底 RETURNF）。
+
+### 6.6 第八批候选（下一批）
+
+- **`ui-state-replay` 回放面板（第一优先）**：选档（快照扫描结果）→ 选角色 → 选函数（或从导航面板"回放此函数"）→ 逐条谓词真值 + 置信度徽章 + 未知原因分组；消费 `state.replay`；调用上下文作为场景输入（对话对象 / 时机号）。回放引擎已三批成熟（32% 未知率），**该把成果带上 UI 了**。
+- **索引域外函数源（消解剩余 call 368）**：FIRSTTIME 等定义在 kojoPaths 之外——需要一个"游戏函数源"通道（扩 index 扫描域 / 按需 parseFile），但其中多数有副作用（写 CSTR），收益需再测量。
 - **分支链重建**：用 `FunctionPredicates.statements`（含 ELSE/ENDIF）重建 IF/ELSEIF/ELSE 链 → "会走哪个分支"（比逐条谓词更接近作者视角）。
+- **adapter 口上调用协议**：家族 → 转发实参映射（KOJO_MESSAGE.ERB 路由表）→ call-context 858 条的消解地基。
 - **归档浏览器面板**：消费 `snapshot.source` 列档（saveMes / 角色数 / 大小），点击看摘要。
 - **ui-condition-matrix（条件矩阵）**：按角色/家族聚合状态依赖；MESSAGECHECK 位可视化。
-- **导航面板增强**：收藏/最近访问；面上条件维度聚合。
 - `watchDirs` 文件监视（现为手动刷新；后续走 Rust notify）→ 增量重建索引。
 - Monaco bundle 4.3MB 拆分（manualChunks，低优先级）。
 - scanner 的 TRY 系配对精度（`TRYCALLFORM` 无 CATCH 时产生幻影开块）——影响上下文路径精度，方向"宁少勿错"，低优先级。
+- 桌面壳冒烟（`node tools/smoke-tauri-dom.mjs`）本会话因宿主环境 os error 231（管道耗尽）未跑通——app vite build 已验证通过、本批未动 app 层，下会话顺手补跑一次确认。
 
 ## 七、安全模型（写文件功能相关必读）
 
@@ -247,11 +268,15 @@ node tools/smoke-tauri-dom.mjs
 16. **块注释里写 `TRY*/PRINTDATA*` 会提前终止注释**（第六批，TS1127）：`*/` 序列在 `/** ... */` 内就是注释结束符；措辞改成"TRY 系、PRINTDATA 系"。
 17. **引擎参数槽语义（第六批核验，勿凭直觉）**：签名第 i 个**声明槽**按顺序赋值——`(ARG, ARG:1)` 即声明 ARG:0 与 ARG:1 两槽（`getEl1forArg` = 下标，ErbLoader.cs:694-741）；声明槽被调用时**必有值**（实参或默认 0/''，ConvertArg Process.CalledFunction.cs:162-239）；未声明却引用 `ARG:n` → 引擎警告 + 默认尺寸 token（fresh-load 读 0，调用间持久）；`CALL FOO`（无括号）= 全部声明槽取默认值。LOCAL/ARG 调用间持久、读档重置（SetDefaultLocalValue 仅在 load/reset 时清）——回放取"直线执行"近似。
 18. **模块循环依赖规避**：evaluate.ts 的 call 分支要调 builtins.ts、builtins 又要递归求值 → builtins 接收 `evalExpr: ExprEvaluator` 作为参数（依赖单向：evaluate → builtins），不搞双向 import。
+19. **解释器的"到达方式"双语义是隐坑**（第七批）：IF 链的 ELSEIF/ELSE op 有两种到达路径——**条件假跳转**（需进入：ELSEIF 求值 / ELSE 进体）与**分支体自然掉落**（需跳过：跳 endAfter）。PC 落点相同、无法区分来源 → 首版集成测试抓出 ELSE 分支错误落到链尾兜底 RETURNF（THEN 体掉到 ELSE op 被当"前分支完成"跳过；IF 假跳到 ELSE op 也被同样跳过）。修法两层：①编译期——假跳转目标为 ELSE 时**绕过 else op 直接进体**（`elseIdx+1`）；②运行期——`pendingEval` 标记"跳转到达 ELSEIF（求值，用后即清）"，自然掉落（false）→ 跳 endAfter。IF op 无歧义（链顶只可能顺序到达）。
+20. **preanalyze 别忘了函数自身**（第七批）：内联缓存的预热若只收集"谓词 AST 里的被调名"，顶层函数自身（体里不调用别人的）永远不会入缓存 → resolveCall 全 miss。`preanalyze` 第一步必须 `ensureAnalyzed(自身名)`。
+21. **resolveCall 同步契约 vs analyze 异步现实的矛盾**：求值热路径是同步的（Kleene 求值器纯函数），但函数体文本读取是异步 → **两阶段设计**：`replayFunction` 先 await `preanalyze(detail)`（BFS 递归 analyze 全部可达被调），执行期 resolveCall 同步查缓存必命中（miss = 竞态 → log warn 回落 unknown，不挂起）。
+22. **Bash 工具的 cwd 不如想象中可靠**（本会话实测）：`cd X && cmd` 的 cd 前缀偶发被吞、后台任务起始目录回到会话根 → **一律用 `pnpm -C <绝对路径>` / node 绝对路径脚本**，不依赖工作目录持久化。
 
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：362 项 / ✅ / 9 插件）
-3. 读 `docs/ARCHITECTURE.md` §5.8–§5.12 + 本文件 §六
-4. **开始第七批 / v1.0 收口**（见 §6.5）：首选**纯函数内联求值**（消解 `call` 桶 ≈ 2,500 谓词，地基已备）或 **ui-state-replay 回放面板**（把回放成果第一次带上 UI）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：389 项 / ✅ / 9 插件）
+3. 读 `docs/ARCHITECTURE.md` §5.8–§5.13 + 本文件 §六
+4. **开始第八批 / v1.0 收口**（见 §6.6）：首选 **`ui-state-replay` 回放面板**（回放引擎已三批成熟、未知率 32%，把成果第一次带上 UI）；顺手补跑一次桌面壳冒烟（本会话因宿主 os error 231 未跑通）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

@@ -12,7 +12,9 @@
  * - 位运算：BigInt 64 位（JS 32 位位运算会截断，必须避免）；
  * - 字符串：`== / !=` 序比较（Ordinal）；序比较（`> < >= <=`）不支持 → unknown。
  *
- * 绝不抛错：一切能力边界返回 unknown 且原因明确。
+ * v0.2 第七批：求值通道重构为 `EvalContext`（读取通道 + 函数内联通道）——
+ * 用户函数调用可经 `resolveCall` 做**有界内联解释**（inline.ts），
+ * 不可内联时维持 unknown('call')。绝不抛错：一切能力边界返回 unknown 且原因明确。
  */
 
 import type {
@@ -23,10 +25,28 @@ import type {
   ReplayValue,
   VariableRef,
 } from '@kojo/plugin-api';
-import { tryEvaluateBuiltin } from './builtins';
+import { isBuiltinName, tryEvaluateBuiltin } from './builtins';
 
 /** 变量读取器（`ReplayStateView.read` 即满足；测试可注入合成实现） */
 export type ValueReader = (ref: VariableRef) => ReplayValue;
+
+/**
+ * 用户函数内联解析器（v0.2 第七批；inline.ts 实现）。
+ * 第三参为**调用方上下文**（实参求值通道：外层 read / overlay / 递归内联）。
+ * 返回 `ReplayValue` = 内联解释成功；返回 `null` = 无法内联（回落 unknown('call')）。
+ */
+export type CallResolver = (
+  name: string,
+  args: readonly ConditionExpr[],
+  callerCtx: EvalContext,
+) => ReplayValue | null;
+
+/** 求值上下文：变量读取通道 + 用户函数内联通道 */
+export interface EvalContext {
+  read: ValueReader;
+  /** 缺省 = 不做内联（调用一律 unknown('call')） */
+  resolveCall?: CallResolver;
+}
 
 function unknown(code: ReplayUnknownCode, message: string): { kind: 'unknown'; unknown: ReplayUnknown } {
   return { kind: 'unknown', unknown: { code, message } };
@@ -43,13 +63,13 @@ function asNumber(v: number | string): number | null {
 }
 
 /** 求值表达式（值 / 未知） */
-export function evaluateExpr(expr: ConditionExpr, read: ValueReader): ReplayValue {
+export function evaluateExpr(expr: ConditionExpr, ctx: EvalContext): ReplayValue {
   switch (expr.kind) {
     case 'literal':
       return { kind: 'value', value: expr.value };
 
     case 'ref':
-      return read({ name: expr.name, indices: [...expr.indices], text: expr.text });
+      return ctx.read({ name: expr.name, indices: [...expr.indices], text: expr.text });
 
     case 'opaque':
       return unknown('opaque', `未解析表达式：${expr.text}`);
@@ -57,13 +77,22 @@ export function evaluateExpr(expr: ConditionExpr, read: ValueReader): ReplayValu
     case 'nameValue':
       return unknown('rename', `rename 词无法求值：${expr.text}`);
 
-    case 'call':
+    case 'call': {
       // v0.2 第六批：内置纯函数子集（GETBIT / GROUPMATCH / MAX / MIN / ABS /
-      // SIGN / LIMIT / POWER，语义对齐 Creator.Method.cs）；其余维持 unknown('call')
-      return tryEvaluateBuiltin(expr.name.toUpperCase(), expr.args, read, evaluateExpr) ?? unknown('call', `函数调用无法求值：${expr.name}()`);
+      // SIGN / LIMIT / POWER，语义对齐 Creator.Method.cs）；
+      // v0.2 第七批：用户函数有界内联（inline.ts；口上域纯助手顺序解释）；
+      // 两者皆不可 → unknown('call')。
+      if (isBuiltinName(expr.name)) {
+        // isBuiltinName 已确认命中 → tryEvaluateBuiltin 不会返回 null；?? 兜底满足类型
+        return tryEvaluateBuiltin(expr.name, expr.args, ctx, evaluateExpr) ?? unknown('builtin', `内置函数无法求值：${expr.name}()`);
+      }
+      const inlined = ctx.resolveCall?.(expr.name, expr.args, ctx);
+      if (inlined) return inlined;
+      return unknown('call', `函数调用无法求值：${expr.name}()`);
+    }
 
     case 'unary': {
-      const v = evaluateExpr(expr.operand, read);
+      const v = evaluateExpr(expr.operand, ctx);
       if (v.kind === 'unknown') return v;
       const n = asNumber(v.value);
       if (n === null) return unknown('non-numeric', `单目运算要求数值：${expr.op}${JSON.stringify(v.value)}`);
@@ -84,30 +113,30 @@ export function evaluateExpr(expr: ConditionExpr, read: ValueReader): ReplayValu
     }
 
     case 'binary':
-      return evaluateBinary(expr.op, expr.left, expr.right, read);
+      return evaluateBinary(expr.op, expr.left, expr.right, ctx);
 
     case 'ternary': {
-      const cond = evaluateExpr(expr.cond, read);
+      const cond = evaluateExpr(expr.cond, ctx);
       if (cond.kind === 'unknown') {
         // Kleene 扩展：两分支都确定且相等 → 该值
-        const a = evaluateExpr(expr.then, read);
-        const b = evaluateExpr(expr.else, read);
+        const a = evaluateExpr(expr.then, ctx);
+        const b = evaluateExpr(expr.else, ctx);
         if (a.kind === 'value' && b.kind === 'value' && a.value === b.value) return a;
         return cond;
       }
       const n = asNumber(cond.value);
       if (n === null) return unknown('non-numeric', `三元条件要求数值：${JSON.stringify(cond.value)}`);
-      return evaluateExpr(n !== 0 ? expr.then : expr.else, read);
+      return evaluateExpr(n !== 0 ? expr.then : expr.else, ctx);
     }
   }
 }
 
-function evaluateBinary(op: string, left: ConditionExpr, right: ConditionExpr, read: ValueReader): ReplayValue {
-  if (LOGICAL_OPS.has(op)) return evaluateLogical(op, left, right, read);
+function evaluateBinary(op: string, left: ConditionExpr, right: ConditionExpr, ctx: EvalContext): ReplayValue {
+  if (LOGICAL_OPS.has(op)) return evaluateLogical(op, left, right, ctx);
 
-  const a = evaluateExpr(left, read);
+  const a = evaluateExpr(left, ctx);
   if (a.kind === 'unknown') return a;
-  const b = evaluateExpr(right, read);
+  const b = evaluateExpr(right, ctx);
   if (b.kind === 'unknown') return b;
 
   if (ARITH_OPS.has(op)) return applyArith(op, a.value, b.value);
@@ -117,14 +146,14 @@ function evaluateBinary(op: string, left: ConditionExpr, right: ConditionExpr, r
 }
 
 /** 逻辑运算（Kleene 三值：子式未知时尽力确定） */
-function evaluateLogical(op: string, left: ConditionExpr, right: ConditionExpr, read: ValueReader): ReplayValue {
-  const a = evaluateExpr(left, read);
+function evaluateLogical(op: string, left: ConditionExpr, right: ConditionExpr, ctx: EvalContext): ReplayValue {
+  const a = evaluateExpr(left, ctx);
   const aNum = a.kind === 'value' ? asNumber(a.value) : null;
 
   if (op === '&&' && aNum !== null && aNum === 0) return { kind: 'value', value: 0 };
   if (op === '||' && aNum !== null && aNum !== 0) return { kind: 'value', value: 1 };
 
-  const b = evaluateExpr(right, read);
+  const b = evaluateExpr(right, ctx);
   const bNum = b.kind === 'value' ? asNumber(b.value) : null;
 
   // 非数值参与逻辑运算 → 无法判定
@@ -257,8 +286,8 @@ function applyCompare(op: string, a: number | string, b: number | string): Repla
  * 谓词判定（IF/ELSEIF/SIF/CASE 谓词的最终三值）。
  * 引擎语义：数值非零为真；字符串不能作条件。
  */
-export function judgeCondition(expr: ConditionExpr, read: ValueReader): ReplayOutcome {
-  const v = evaluateExpr(expr, read);
+export function judgeCondition(expr: ConditionExpr, ctx: EvalContext): ReplayOutcome {
+  const v = evaluateExpr(expr, ctx);
   if (v.kind === 'unknown') return { kind: 'unknown', unknown: v.unknown };
   const n = asNumber(v.value);
   if (n === null) {

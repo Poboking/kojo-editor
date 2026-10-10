@@ -25,7 +25,7 @@ const read = (r: VariableRef): ReplayValue => {
   return { kind: 'unknown', unknown: { code: 'missing-var', message: `no ${r.text}` } };
 };
 
-const ev = (expr: ConditionExpr): ReplayValue => evaluateExpr(expr, read);
+const ev = (expr: ConditionExpr): ReplayValue => evaluateExpr(expr, { read });
 
 describe('内置函数 · GETBIT', () => {
   it('位读取（BigInt 语义，>32 位也正确）', () => {

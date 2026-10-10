@@ -62,6 +62,7 @@ function detail(name: string, exprs: string[], kinds: FunctionPredicates['predic
     normalizedName: name,
     filePath: 'D:/fake/kojo/test.erb',
     startLine: 1,
+    endLine: 20,
     statements: [],
     assignments: [],
     predicates: exprs.map((e, i) => ({
@@ -71,6 +72,7 @@ function detail(name: string, exprs: string[], kinds: FunctionPredicates['predic
       line: i + 2,
       depth: 0,
     })),
+    returns: [],
   };
 }
 
@@ -92,6 +94,7 @@ function makeEngine() {
     parseArchive,
     functionPredicates,
     getSchemaLookup: () => fakeLookup,
+    readFileText: async () => '',
   });
   return { engine, parseArchive, functionPredicates };
 }
@@ -118,6 +121,7 @@ describe('StateReplayEngine.createView', () => {
       },
       functionPredicates: async () => null,
       getSchemaLookup: () => undefined,
+      readFileText: async () => '',
     });
     await expect(engine.createView('D:/fake/bad.sav', 49)).rejects.toThrow('bad magic');
   });

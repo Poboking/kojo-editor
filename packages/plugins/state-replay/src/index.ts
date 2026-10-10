@@ -16,6 +16,7 @@
 
 import type {
   ConditionExtractorService,
+  FileIO,
   Plugin,
   ProjectService,
   SlotRegistry,
@@ -33,12 +34,14 @@ export function createStateReplayPlugin(): Plugin {
     requires: [
       KernelServices.Project,
       KernelServices.Slots,
+      KernelServices.IO, // v0.2 第七批：内联求值需要函数体行文本
       WellKnownServices.SnapshotSource,
       WellKnownServices.ConditionExtractor,
     ],
     activate(ctx) {
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
+      const io = ctx.inject<FileIO>(KernelServices.IO);
       const snapshot = ctx.inject<SnapshotSourceService>(WellKnownServices.SnapshotSource);
       const extractor = ctx.inject<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
 
@@ -59,16 +62,22 @@ export function createStateReplayPlugin(): Plugin {
         parseArchive: (path: string) => snapshot.parse(path),
         functionPredicates: (name: string) => extractor.functionPredicates(name),
         getSchemaLookup: schemaLookup,
+        readFileText: async (path: string) => (await io.readText(path)).text,
       });
 
       ctx.provide(WellKnownServices.StateReplay, engine);
+
+      // 缓存生命周期：项目切换 / 索引重建 → 函数体与明细可能已变，清空内联与文本缓存
+      ctx.onDispose(ctx.bus.on('kojo.functionChanged', () => engine.resetCaches()));
+      ctx.onDispose(ctx.bus.on('project.closed', () => engine.resetCaches()));
     },
   };
 }
 
 export { StateReplayEngine, replayPredicates, type StateReplayEngineDeps } from './engine';
 export { createStateView, ReplayViewError, type CreateStateViewOptions, type SchemaLookup } from './state-view';
-export { judgeCondition, evaluateExpr, type ValueReader } from './evaluate';
+export { judgeCondition, evaluateExpr, type ValueReader, type EvalContext, type CallResolver } from './evaluate';
+export { InlineManager, analyzeInlineBody, MAX_INLINE_DEPTH, type AnalyzedFunction, type InlineBody } from './inline';
 export {
   builtinVarModel,
   isCalcPseudo,

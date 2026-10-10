@@ -23,6 +23,7 @@ import type {
   FunctionConditions,
   FunctionPredicate,
   FunctionPredicates,
+  FunctionReturn,
   PredicateSourceKind,
   StateDependency,
   VariableInfo,
@@ -246,8 +247,8 @@ function isContextPrefix(prefix: readonly string[], path: readonly string[]): bo
 // 本地量赋值收集（v0.2 第六批）
 // ---------------------------------------------------------------------------
 
-/** 本地量槽位（Emuera 语言级；与 var-model LANGUAGE_LOCAL 对齐，剔除循环量 COUNT 与 LOCALSS） */
-const ASSIGNABLE_LOCALS = new Set(['LOCAL', 'LOCALS', 'RESULT', 'RESULTS']);
+/** 可赋值目标（Emuera 语言级局部量 + 参数槽族；剔除循环量 COUNT 与 LOCALSS） */
+const ASSIGNABLE_LOCALS = new Set(['LOCAL', 'LOCALS', 'RESULT', 'RESULTS', 'ARG', 'ARGS']);
 
 /** 引号外截断行内注释（与 scanner sliceExpression 同逻辑；插件间禁 import，就地实现） */
 function sliceInlineComment(s: string): string {
@@ -268,10 +269,14 @@ function sliceInlineComment(s: string): string {
 }
 
 /**
- * 赋值语句识别：`LOCAL(:n)? = RHS`（`== / != / <= / >=` 不匹配）。
+ * 赋值语句识别：`LOCAL(:n)? = RHS` 与 `ARG(:n)? = RHS` 等
+ * （`== / != / <= / >=` 不匹配）。
+ * v0.2 第七批：目标扩展到 ARG/ARGS（参数槽直线赋值——口上惯用法
+ * `SIF !ARG / ARG = TARGET` 参数补位；静态叠加层不消费，
+ * 内联解释器按顺序执行语义消费）。
  * 复合赋值（`+=` 等）→ 记为 opaque 载体的"失效点"（旧值不可知 → 之后读取降级 unknown）。
  */
-const ASSIGN_RE = /^(LOCAL|LOCALS|RESULT|RESULTS)(?::(\d+))?\s*([+\-*/%]?=)(?!=)\s*(.*)$/i;
+const ASSIGN_RE = /^(LOCAL|LOCALS|RESULT|RESULTS|ARG|ARGS)(?::(\d+))?\s*([+\-*/%]?=)(?!=)\s*(.*)$/i;
 
 /** 从函数体原始行收集本地量赋值（结构事实；RHS 无法解析 → opaque，绝不抛） */
 export function collectAssignments(
@@ -328,6 +333,41 @@ export interface FunctionIdentity {
   normalizedName: string;
   filePath: string;
   startLine: number;
+}
+
+/**
+ * 收集 RETURNF 返回点（v0.2 第七批；内联解释器的返回值资料）。
+ * 结构事实：`RETURNF 表达式` 直线语句（含行内注释截断）。
+ */
+export function collectReturns(
+  lines: readonly string[],
+  startLine: number,
+  endLine: number,
+): FunctionReturn[] {
+  const out: FunctionReturn[] = [];
+  let inSkipBlock = false;
+  for (let i = startLine; i <= endLine && i <= lines.length; i++) {
+    const raw = lines[i - 1] ?? '';
+    const trimmed = raw.trim();
+    if (inSkipBlock) {
+      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      continue;
+    }
+    if (trimmed === '[SKIPSTART]') {
+      inSkipBlock = true;
+      continue;
+    }
+    if (trimmed.length === 0 || trimmed.startsWith(';') || trimmed.startsWith('#')) continue;
+    const m = /^RETURNF\b\s*(.*)$/i.exec(trimmed);
+    if (!m) continue;
+    const expr = sliceInlineComment(m[1] ?? '').trim();
+    out.push({
+      expr: expr.length > 0 ? parseExpression(expr) : { kind: 'opaque', text: 'RETURNF（无表达式）' },
+      text: expr,
+      line: i,
+    });
+  }
+  return out;
 }
 
 /**
@@ -412,11 +452,13 @@ export function extractFunctionPredicates(
     normalizedName: fn.normalizedName,
     filePath: fn.filePath,
     startLine: fn.startLine,
+    endLine: source?.endLine ?? fn.startLine,
     statements: [...stmts],
     predicates: collectPredicates(stmts, contextOf ? { contextOf } : {}),
     assignments: source
       ? collectAssignments(source.lines, fn.startLine + 1, source.endLine, contextOf!)
       : [],
+    returns: source ? collectReturns(source.lines, fn.startLine + 1, source.endLine) : [],
   };
 }
 

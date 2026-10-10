@@ -311,9 +311,9 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       }
       expect(predTotal).toBeGreaterThan(0);
       expect(hit + miss).toBeGreaterThan(0); // 至少按快照作出确定判定
-      // v0.2 第六批守门：本地量数据流 + 内置函数应显著压低未知率
-      // （第五批基线 7,351/11,685 = 62.9%；第六批预期 < 55%，实测见 console 输出）
-      expect(unknown / predTotal).toBeLessThan(0.55);
+      // v0.2 第七批守门：内联求值（口上域 #FUNCTION 纯助手顺序解释）应显著压低未知率
+      // （第五批 62.9% → 第六批 48.5% → 第七批实测 32.0%）
+      expect(unknown / predTotal).toBeLessThan(0.4);
 
       // —— 本地量数据流（第六批）：`IF LOCAL`（直线赋值 LOCAL = 1）应为确定真
       const sp2 = await replay.replayFunction(view, 'M_KOJO_ORTHODOX_SPEVENT_K49_2');
@@ -336,6 +336,30 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       });
       const argPredC = ev1c!.predicates.find((p) => p.text.includes('ARG:1 >= 36'));
       expect(argPredC?.outcome.kind).toBe('true');
+
+      // —— 内联求值（第七批）：口上域 #FUNCTION 纯助手（陷落状态等）调用应可判定。
+      //    任取含「陷落状态」调用的 K49 谓词，其 call 不再 unknown（call 桶 2,297 → 368）。
+      const calleeStats = new Map<string, { total: number; callUnknown: number }>();
+      for (const fn of k49Fns.slice(0, 400)) {
+        const d = await extractor.functionPredicates(fn);
+        if (!d) continue;
+        const r = await replay.replayFunction(view, fn);
+        if (!r) continue;
+        for (const p of r.predicates) {
+          if (p.text.includes('陷落状态') || p.text.includes('陥落状態')) {
+            const key = fn;
+            const s = calleeStats.get(key) ?? { total: 0, callUnknown: 0 };
+            s.total++;
+            if (p.outcome.kind === 'unknown' && p.outcome.unknown.code === 'call') s.callUnknown++;
+            calleeStats.set(key, s);
+          }
+        }
+      }
+      expect(calleeStats.size).toBeGreaterThan(0);
+      const callUnknownTotal = [...calleeStats.values()].reduce((s, x) => s + x.callUnknown, 0);
+      // 陷落状态在口上域内（内联可达）；残余 call unknown 只可能来自嵌套实参 unknown
+      const sampled = [...calleeStats.values()].reduce((s, x) => s + x.total, 0);
+      expect(callUnknownTotal / sampled).toBeLessThan(0.5);
 
       // eslint-disable-next-line no-console
       console.log(

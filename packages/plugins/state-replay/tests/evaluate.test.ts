@@ -26,7 +26,7 @@ function makeReader(
   };
 }
 
-const ev = (text: string, reader: ValueReader): ReplayValue => evaluateExpr(parseExpression(text), reader);
+const ev = (text: string, reader: ValueReader): ReplayValue => evaluateExpr(parseExpression(text), { read: reader });
 const val = (v: ReplayValue): number | string => {
   if (v.kind !== 'value') throw new Error(`expected value, got unknown: ${JSON.stringify(v)}`);
   return v.value;
@@ -193,22 +193,22 @@ describe('evaluateExpr：三元', () => {
 describe('judgeCondition：三值判定', () => {
   it('数值非零为真 / 零为假', () => {
     const r = makeReader({ 'CFLAG:2': 1 });
-    expect(judgeCondition(parseExpression('CFLAG:2'), r).kind).toBe('true');
-    expect(judgeCondition(parseExpression('0'), r).kind).toBe('false');
-    expect(judgeCondition(parseExpression('1 - 1'), r).kind).toBe('false');
-    expect(judgeCondition(parseExpression('-1'), r).kind).toBe('true');
+    expect(judgeCondition(parseExpression('CFLAG:2'), { read: r }).kind).toBe('true');
+    expect(judgeCondition(parseExpression('0'), { read: r }).kind).toBe('false');
+    expect(judgeCondition(parseExpression('1 - 1'), { read: r }).kind).toBe('false');
+    expect(judgeCondition(parseExpression('-1'), { read: r }).kind).toBe('true');
   });
 
   it('字符串条件 → unknown(non-numeric)', () => {
     const r = makeReader({ ARGS: 'COM' });
-    const o = judgeCondition(parseExpression('ARGS'), r);
+    const o = judgeCondition(parseExpression('ARGS'), { read: r });
     expect(o.kind).toBe('unknown');
     if (o.kind === 'unknown') expect(o.unknown.code).toBe('non-numeric');
   });
 
   it('未知引用传播', () => {
     const r = makeReader({}, { 'X:0': { code: 'missing-var', message: '未知' } });
-    const o = judgeCondition(parseExpression('X:0 == 1'), r);
+    const o = judgeCondition(parseExpression('X:0 == 1'), { read: r });
     expect(o.kind).toBe('unknown');
   });
 });

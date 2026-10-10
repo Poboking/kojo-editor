@@ -72,7 +72,10 @@ export function createFunctionOverlay(opts: CreateOverlayOptions): OverlayReader
     const key = `${a.name}:${a.index}@${a.line}`;
     const hit = memo.get(key);
     if (hit) return hit;
-    const v = evaluateExpr(a.expr, (ref) => resolve(ref, { line: a.line, context: a.context }) ?? baseRead(ref));
+    const v = evaluateExpr(
+      a.expr,
+      { read: (ref) => resolve(ref, { line: a.line, context: a.context }) ?? baseRead(ref) },
+    );
     memo.set(key, v);
     return v;
   };

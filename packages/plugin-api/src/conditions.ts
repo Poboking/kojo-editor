@@ -139,17 +139,22 @@ export interface FunctionPredicate {
 }
 
 /**
- * 本地量赋值语句（v0.2 第六批）——`LOCAL(:n) = 表达式` 等直线赋值的**结构事实**。
+ * 本地量赋值语句（v0.2 第六批；v0.2 第七批扩展 ARG/ARGS）——
+ * `LOCAL(:n) = 表达式` 等直线赋值的**结构事实**。
  *
  * 语义（回放侧解释，抽取侧只记录）：
  * - 目标槽位 = `name:index`（裸 `LOCAL` ≡ `LOCAL:0`，与索引段声明规则一致）；
  * - `context` = 分支上下文路径（与 `FunctionPredicate.context` 同构）：
  *   赋值点在使用点的祖先路径（前缀包含）上才算"可达"；
- * - RHS 无法解析 → `opaque`（回放求值时降级 unknown，绝不猜测）。
+ * - RHS 无法解析 → `opaque`（回放求值时降级 unknown，绝不猜测）；
+ * - `ARG / ARGS` = 参数槽直线赋值（v0.2 第七批）——口上惯用法
+ *   `SIF !ARG / ARG = TARGET`（参数补位）。**静态叠加层不消费**（ARG 读取
+ *   仍走调用上下文注入优先），只有**内联解释器**（顺序执行语义）消费：
+ *   参数补位赋值在 SIF 条件为真时才生效，静态数据流无法表达。
  */
 export interface FunctionAssignment {
-  /** 目标变量（Emuera 语言级局部量族：LOCAL / LOCALS / RESULT / RESULTS） */
-  name: 'LOCAL' | 'LOCALS' | 'RESULT' | 'RESULTS';
+  /** 目标变量（Emuera 语言级局部量族 + 参数槽族） */
+  name: 'LOCAL' | 'LOCALS' | 'RESULT' | 'RESULTS' | 'ARG' | 'ARGS';
   /** 下标（缺省 0） */
   index: number;
   /** RHS 表达式 AST */
@@ -163,6 +168,19 @@ export interface FunctionAssignment {
 }
 
 /**
+ * RETURNF 语句的结构事实（v0.2 第七批）——内联求值的返回点资料。
+ * 与 `FunctionAssignment` 同类：抽取层只记录，回放层（内联解释器）消费。
+ */
+export interface FunctionReturn {
+  /** 返回表达式 AST（无法解析 → opaque） */
+  expr: ConditionExpr;
+  /** 原文（展示 / 排障） */
+  text: string;
+  /** 行（1 基） */
+  line: number;
+}
+
+/**
  * 单函数谓词明细（含完整控制流骨架）。
  * 与 `FunctionConditions`（聚合视图）不同：本结构保留逐条谓词与 AST——
  * 供快照回放求值（v1.0）与未来的明细视图消费，**按需解析、不入常驻索引**。
@@ -171,16 +189,26 @@ export interface FunctionPredicates {
   normalizedName: string;
   filePath: string;
   startLine: number;
+  /**
+   * 函数体结束行（1 基，含；v0.2 第七批）——内联求值需按行区间取函数体
+   * （调用方据此读文件切片），与抽取侧的行区间语义一致 [startLine, endLine]。
+   */
+  endLine: number;
   /** 控制流骨架（完整语句序列：IF/ELSEIF/ELSE/ENDIF/SELECTCASE/CASE…） */
   statements: ControlFlowStatement[];
   /** 谓词序列（按行序；CASE 每值一条） */
   predicates: FunctionPredicate[];
   /**
    * 本地量赋值语句序列（v0.2 第六批；按行序）——回放的数据流资料。
-   * 只收录目标为 LOCAL/LOCALS/RESULT/RESULTS 的直线赋值（含 `+=` 等
+   * 只收录目标为 LOCAL/LOCALS/RESULT/RESULTS/ARG/ARGS 的直线赋值（含 `+=` 等
    * 复合赋值 → 记为 opaque 载体的"失效点"，防误报旧值）。
    */
   assignments: FunctionAssignment[];
+  /**
+   * RETURNF 返回点序列（v0.2 第七批；按行序）——内联解释器的返回值资料。
+   * 仅明细视图填充（聚合路径零开销）。
+   */
+  returns: FunctionReturn[];
 }
 
 /**

@@ -15,10 +15,10 @@
  */
 
 import type { ConditionExpr, ReplayValue } from '@kojo/plugin-api';
-import type { ValueReader } from './evaluate';
+import type { EvalContext } from './evaluate';
 
 /** 表达式求值器（由 evaluate.ts 注入，避免循环 import） */
-export type ExprEvaluator = (expr: ConditionExpr, read: ValueReader) => ReplayValue;
+export type ExprEvaluator = (expr: ConditionExpr, ctx: EvalContext) => ReplayValue;
 
 function unknownValue(message: string): ReplayValue {
   return { kind: 'unknown', unknown: { code: 'builtin', message } };
@@ -125,22 +125,26 @@ const IMPLS: Readonly<Record<string, BuiltinImpl>> = {
   POWER: power,
 };
 
+/** 判定是否内置函数名（v0.2 第七批：evaluate.ts 的 call 分流用） */
+export function isBuiltinName(nameUpper: string): boolean {
+  return BUILTINS.has(nameUpper);
+}
+
 /**
  * 尝试按内置函数求值。
- * @returns 非内置函数 → null（调用方维持 unknown('call')）；
- *          内置但无法求值 → unknown('builtin')（含参数 unknown 传播）。
+ * @returns 内置但无法求值 → unknown('builtin')（含参数 unknown 传播）。
  */
 export function tryEvaluateBuiltin(
   nameUpper: string,
   args: readonly ConditionExpr[],
-  read: ValueReader,
+  ctx: EvalContext,
   evalExpr: ExprEvaluator,
 ): ReplayValue | null {
   if (!BUILTINS.has(nameUpper)) return null;
 
   const values: (number | string)[] = [];
   for (let i = 0; i < args.length; i++) {
-    const v = evalExpr(args[i]!, read);
+    const v = evalExpr(args[i]!, ctx);
     if (v.kind === 'unknown') return v; // 保留原始未知原因（来源可追溯）
     if (typeof v.value === 'string') {
       // GROUPMATCH 支持字符串型；其余内置均为整数族

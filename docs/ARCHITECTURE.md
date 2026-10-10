@@ -27,12 +27,12 @@
 
 ### 1.3 竞品与现状（2026-10-09 调研结论）
 
-| 项目 | 思路 | 局限 |
-|------|------|------|
-| Pyera 口上制作工坊 | 可视化拼积木写口上 | 服务自有 Pera 框架，产出 `.py`，不兼容 ERB |
-| KojoDown | Markdown 风格口上语法规范 | 只有规范，无编辑器/转换器，已停更 |
-| EraElectron `.kojo` | YAML 口上格式 | 仅限 UmaERA 引擎，不兼容 Emuera/ERB |
-| VS Code + EraBasic 插件 | 社区事实标准 | 只有语法高亮，无导航/状态/预览 |
+| 项目                    | 思路                | 局限                            |
+| --------------------- | ----------------- | ----------------------------- |
+| Pyera 口上制作工坊          | 可视化拼积木写口上         | 服务自有 Pera 框架，产出 `.py`，不兼容 ERB |
+| KojoDown              | Markdown 风格口上语法规范 | 只有规范，无编辑器/转换器，已停更             |
+| EraElectron `.kojo`   | YAML 口上格式         | 仅限 UmaERA 引擎，不兼容 Emuera/ERB   |
+| VS Code + EraBasic 插件 | 社区事实标准            | 只有语法高亮，无导航/状态/预览              |
 
 **结论：Emuera/ERB 体系没有成型口上编辑器；"状态快照回放"是全社区无人覆盖的空白点，也是本项目最大的差异化价值。**
 
@@ -104,13 +104,13 @@ interface Plugin {
 
 借鉴 DSH 客户端插件槽（`conversation.session.header.actions` 等），规则：
 
-| 槽位 | 用途 | 数据形态 |
-|------|------|----------|
-| `ui.panel` | 侧栏/底部面板 | `{ title, icon, component, order }` |
-| `ui.editor.decorator` | 编辑器内嵌增强（高亮、内联提示） | `{ matcher, decorator }` |
-| `editor.command` | 命令面板/右键菜单项 | `{ id, title, when?, run(ctx) }` |
-| `game.adapter` | 游戏适配器（同槽**单激活**；detect 阶段内核轮询全部候选，见 §5.7） | `GameAdapter` 实现 |
-| `export.target` | 导出目标（ERB、独立文本、翻译对照表） | `{ id, export(project, options) }` |
+| 槽位                    | 用途                                        | 数据形态                                |
+| --------------------- | ----------------------------------------- | ----------------------------------- |
+| `ui.panel`            | 侧栏/底部面板                                   | `{ title, icon, component, order }` |
+| `ui.editor.decorator` | 编辑器内嵌增强（高亮、内联提示）                          | `{ matcher, decorator }`            |
+| `editor.command`      | 命令面板/右键菜单项                                | `{ id, title, when?, run(ctx) }`    |
+| `game.adapter`        | 游戏适配器（同槽**单激活**；detect 阶段内核轮询全部候选，见 §5.7） | `GameAdapter` 实现                    |
+| `export.target`       | 导出目标（ERB、独立文本、翻译对照表）                      | `{ id, export(project, options) }`  |
 
 与 cordis/DSH 经验的差异（刻意反着设计的地方）：
 
@@ -159,7 +159,7 @@ interface ErbParser {
 ```
 
 - 解析结果缓存：`{cacheDir}/index/{gameId}/{mtimeHash}.json`，文件变更增量重建。
--  eraTW 口上文件均为纯 ERB + 已知函数家族前缀，v0 不做完整 EraBasic 解释器，只做**结构感知的解析**（函数边界、PRINT 系行、CASE/IF 块、变量引用）。
+- eraTW 口上文件均为纯 ERB + 已知函数家族前缀，v0 不做完整 EraBasic 解释器，只做**结构感知的解析**（函数边界、PRINT 系行、CASE/IF 块、变量引用）。
 
 ### 5.3 状态快照与回放（差异化核心）
 
@@ -271,11 +271,12 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 
 **约定校验器（`convention.linter`）——三层分离**：
 
-| 层 | 归属 | 内容 |
-|---|---|---|
-| 契约 | `plugin-api/conventions.ts` | `ConventionRule{id,severity,description,source,check?}`、`ConventionIssue`、`ConventionCheckContext`、`ConventionReport`、`ConventionLinterService` |
-| 引擎 | 插件 `convention-linter` | 装配规则 → 顺序执行 → 去重/排序/汇总 → 广播；**单规则抛错进入 `failedRules`，绝不静默**；一次运行内 `readFile` 记忆化 |
-| 规则 | 引擎内置（通用）+ `adapter.conventions`（游戏） | 通用：函数重名（零游戏知识）；游戏：KX 残留 / 四件套 / FORM 三连符号 / MESSAGECHECK 结构 |
+| 层  | 归属                                  | 内容                                                                                                                                              |
+| -- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 契约 | `plugin-api/conventions.ts`         | `ConventionRule{id,severity,description,source,check?}`、`ConventionIssue`、`ConventionCheckContext`、`ConventionReport`、`ConventionLinterService` |
+| 引擎 | 插件 `convention-linter`              | 装配规则 → 顺序执行 → 去重/排序/汇总 → 广播；**单规则抛错进入 `failedRules`，绝不静默**；一次运行内 `readFile` 记忆化                                                                 |
+| 规则 | 引擎内置（通用）+ `adapter.conventions`（游戏） | 通用：函数重名（零游戏知识）；游戏：KX 残留 / 四件套 / FORM 三连符号 / MESSAGECHECK 结构                                                                                     |
+
 
 - **运行上下文零游戏知识**：只暴露 `project / index / readFile / log`；游戏规则住在 adapter 包内、自带私有工具，不经上下文下发游戏常量。
 - **适配器规则按 `project.adapterId` 精确匹配**（多适配器共存天然正确，复用 ADR-0002 的槽位查询通道）。
@@ -294,11 +295,11 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 
 **三层分离（"一切皆插件"的又一次落地）**：
 
-| 层 | 归属 | 内容 |
-|---|---|---|
+| 层    | 归属                                                       | 内容                                                                                                                                                                                    |
+| ---- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 结构骨架 | `plugin-api/erb.ts` 契约 + `erb-parser`（`scanControlFlow`） | 线性 `ControlFlowStatement[]`：kind / 条件原文 / 块深度 / 行号；配对表以引擎 `FunctionIdentifier.cs funcMatch` 为准（IF→ENDIF / REPEAT→REND / TRY系→CATCH→ENDCATCH / PRINTDATA→ENDDATA…）；宽容：孤儿闭合向栈内查最近匹配，不中断 |
-| 谓词化 | `plugin-api/conditions.ts` 契约 + `condition-extractor` 插件 | ERB 表达式子集 → AST（Pratt，优先级以 `OperatorCode.cs` 为准：`* / %`(90)…`&& \|\|`(40)）；**包容降级**：无法解析片段为 `opaque`，绝不抛错；CASE 展开（`==值` / `IS >= n` / `a TO b` / 逗号列表） |
-| 语义标注 | `eratw-adapter`（`variableSchema`） | **CSV 驱动**：扫描游戏 `CSV/*.csv` 名称表（CFLAG/Talent/ABL/Base…）建"编号↔名称"双向字典；引擎经槽位查询 `project.adapterId` 精确匹配后**透传标注**，不解释内容 |
+| 谓词化  | `plugin-api/conditions.ts` 契约 + `condition-extractor` 插件 | ERB 表达式子集 → AST（Pratt，优先级以 `OperatorCode.cs` 为准：`* / %`(90)…`&& \|\|`(40)）；**包容降级**：无法解析片段为 `opaque`，绝不抛错；CASE 展开（`==值` / `IS >= n` / `a TO b` / 逗号列表）                                |
+| 语义标注 | `eratw-adapter`（`variableSchema`）                        | **CSV 驱动**：扫描游戏 `CSV/*.csv` 名称表（CFLAG/Talent/ABL/Base…）建"编号↔名称"双向字典；引擎经槽位查询 `project.adapterId` 精确匹配后**透传标注**，不解释内容                                                                   |
 
 - **服务** `condition.extractor`：`ensureIndex()`（全量，与在途共享）/ `currentIndex()` / `functionConditions(name)` / `subscribe(cb)`；订阅 `kojo.functionChanged` 串行调度（convention-linter 同款）；项目关闭清空。
 - **聚合模型**：函数级 `StateDependency`（key / count / 阈值比较 / firstLine / schema 标签）——不存全量谓词对象（真实数据 49 万谓词，必须聚合控制内存）。
@@ -312,11 +313,11 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 
 **分层（"一切皆插件"）**：
 
-| 层 | 归属 | 内容 |
-|---|---|---|
-| 契约 | `plugin-api/snapshot.ts` | `SnapshotArchive`（元数据 + 角色区 + 变量区 + 扩展区）/ 变量模型（标量 / 稀疏数组 / Map / Xml / DataTable）/ 扫描结果 / `SnapshotSourceService`（scan / current / parse / subscribe） |
-| 引擎 | `sav-parser` 插件 | 字节原语（7-bit **字节数**前缀字符串 / 整数编码）、六种数组游程解码、顶层 / 角色块 / 变量流 / 扩展区解析、gzip 解压（`DecompressionStream`，跨 Node / WebView 一致） |
-| 来源 | game adapter（`GameProject.savDir`） | 存档目录由适配器填充；项目无该字段 → 扫描得空结果（显式呈现，不报错） |
+| 层  | 归属                                 | 内容                                                                                                                                                    |
+| -- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 契约 | `plugin-api/snapshot.ts`           | `SnapshotArchive`（元数据 + 角色区 + 变量区 + 扩展区）/ 变量模型（标量 / 稀疏数组 / Map / Xml / DataTable）/ 扫描结果 / `SnapshotSourceService`（scan / current / parse / subscribe） |
+| 引擎 | `sav-parser` 插件                    | 字节原语（7-bit **字节数**前缀字符串 / 整数编码）、六种数组游程解码、顶层 / 角色块 / 变量流 / 扩展区解析、gzip 解压（`DecompressionStream`，跨 Node / WebView 一致）                                    |
+| 来源 | game adapter（`GameProject.savDir`） | 存档目录由适配器填充；项目无该字段 → 扫描得空结果（显式呈现，不报错）                                                                                                                  |
 
 - **服务键命名决策**：早期草拟 `sav.parser`，落地为 **`snapshot.source`**——解耦审计 A 项要求"契约层零游戏 / 格式名词"（裸 `sav` 词在黑名单内），且该服务的通用语义是"快照来源"（§5.3 三来源：存档 / CliDebug / 手工），读存档只是首个实现。插件目录名 `sav-parser` 保留（插件层不受审计词汇限制）。
 - **纯读先行**：写 / 注入（§5.5 状态注入器）随 v1.1 扩展；本轮不落任何写路径，游戏目录再次全只读。
@@ -331,13 +332,13 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 
 **分层（"一切皆插件"）**：
 
-| 层 | 归属 | 内容 |
-|---|---|---|
-| 契约 | `plugin-api/replay.ts` | `ReplayStateView`（状态视图）/ `ReplayValue`、`ReplayOutcome`（三值）/ `ReplayUnknown`（原因分类）/ `FunctionReplay` / `StateReplayService`（服务键 **`state.replay`**） |
-| 引擎 | `state-replay` 插件（第 9 个插件） | Emuera **变量寻址语义**（TARGET 补位 / 稀疏数组取值 / 指针读取）+ **三值求值器**（Kleene 逻辑）+ 编排。零游戏知识 |
-| 谓词明细 | `condition.extractor` 扩展（`functionPredicates`） | 按需重解析单函数（读文件 → `scanControlFlow` → 逐条 AST），**不入全量索引**——49 万谓词常驻内存不划算；文件文本缓存与明细缓存同生命周期（索引重建即失效） |
-| 存档模型 | `snapshot.source`（sav-parser） | 视图创建时深解析档案（默认保留全部 cells——求值需要精确值） |
-| 语义字典 | game adapter `variableSchema` | 具名索引转编号（`TALENT:恋慕` → 3）。契约扩展 `VariableInfo.resolvedIndex`（引擎关键字字典语义） |
+| 层    | 归属                                             | 内容                                                                                                                                                 |
+| ---- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 契约   | `plugin-api/replay.ts`                         | `ReplayStateView`（状态视图）/ `ReplayValue`、`ReplayOutcome`（三值）/ `ReplayUnknown`（原因分类）/ `FunctionReplay` / `StateReplayService`（服务键 **`state.replay`**） |
+| 引擎   | `state-replay` 插件（第 9 个插件）                     | Emuera **变量寻址语义**（TARGET 补位 / 稀疏数组取值 / 指针读取）+ **三值求值器**（Kleene 逻辑）+ 编排。零游戏知识                                                                       |
+| 谓词明细 | `condition.extractor` 扩展（`functionPredicates`） | 按需重解析单函数（读文件 → `scanControlFlow` → 逐条 AST），**不入全量索引**——49 万谓词常驻内存不划算；文件文本缓存与明细缓存同生命周期（索引重建即失效）                                                     |
+| 存档模型 | `snapshot.source`（sav-parser）                  | 视图创建时深解析档案（默认保留全部 cells——求值需要精确值）                                                                                                                  |
+| 语义字典 | game adapter `variableSchema`                  | 具名索引转编号（`TALENT:恋慕` → 3）。契约扩展 `VariableInfo.resolvedIndex`（引擎关键字字典语义）                                                                              |
 
 - **变量寻址语义（引擎语言层，跨游戏一致；依据 `VariableParser.cs`）**：角色 1D 数组 `X:i` ≡ `X[TARGET,i]`、`X` ≡ `X[TARGET,0]`（:112-116）；全局 1D `X` ≡ `X:0`（:157-163）；TARGET = 被回放角色的注册号（块序），MASTER/ASSI/PLAYER = 快照顶层指针值；`#DIM` 用户变量**数据驱动**识别（存在性 + 维度从存档变量类型推断）。
 - **取值边界（不静默）**：稀疏 cells 缺失 = 0/''（引擎读档 reset 语义）；索引越界 / 单元截断 / 变量既不在快照也不在引擎清单 → `unknown` 且原因分类明确（`index-oob` / `truncated` / `missing-var`）。
@@ -351,22 +352,22 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 
 **目的**：把 §5.11 回放的最大未知来源逐类消解。**先测量再动手**（§5.9 教训再次应验）：对 save03 × K49 的 7,351 个未知谓词做构成分析，发现第五批"主因 = `ARG:*`"的假设**不成立**——真实构成：
 
-| 未知原因（第五批口径） | 谓词数 | 占比 | 消解手段（第六批） |
-|---|---|---|---|
-| pseudo（**LOCAL 系为主** + RAND） | 4,439 | 60% | **本地量数据流**（LOCAL 族 ≈ 2,150；RAND 属诚实边界保留） |
-| call（引擎 / 游戏函数调用） | 2,485 | 34% | **内置纯函数子集**（直接 ≈ 400）；游戏助手函数（陷落状态 / FIRSTTIME…）→ 未来"纯函数内联" |
-| ARG/ARGS（调用上下文缺失） | ≈1,005 | 14% | **调用上下文注入**（默认仍 unknown——转发值是场景输入，不猜测） |
-| named-index / missing-var / 其他 | ≈430 | 6% | 本批不动 |
+| 未知原因（第五批口径）                    | 谓词数    | 占比  | 消解手段（第六批）                                                  |
+| ------------------------------ | ------ | --- | ---------------------------------------------------------- |
+| pseudo（**LOCAL 系为主** + RAND）   | 4,439  | 60% | **本地量数据流**（LOCAL 族 ≈ 2,150；RAND 属诚实边界保留）                   |
+| call（引擎 / 游戏函数调用）              | 2,485  | 34% | **内置纯函数子集**（直接 ≈ 400）；游戏助手函数（陷落状态 / FIRSTTIME…）→ 未来"纯函数内联" |
+| ARG/ARGS（调用上下文缺失）              | ≈1,005 | 14% | **调用上下文注入**（默认仍 unknown——转发值是场景输入，不猜测）                     |
+| named-index / missing-var / 其他 | ≈430   | 6%  | 本批不动                                                       |
 
 实测教训：批五把 `ARG:*` 判定为主因是把"回放无调用上下文"当成了第一未知源，而真实语料中 **LOCAL 族（`LOCAL:1 && ARG == n` 形态）才是大头**——口上作者大量使用"直线赋值的局部开关"。假设必须让位于测量。
 
 **三层改动（"一切皆插件"）**：
 
-| 层 | 归属 | 内容 |
-|---|---|---|
+| 层  | 归属                                       | 内容                                                                                                                                                                                                                    |
+| -- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 契约 | `plugin-api/conditions.ts` + `replay.ts` | `FunctionAssignment`（本地量赋值结构事实）+ `FunctionPredicates.assignments` + `FunctionPredicate.context`（分支上下文路径）；`ReplayCallContext` / `ReplayFunctionOptions` + 三个新 unknown 码（`local-no-write` / `call-context` / `builtin`） |
-| 抽取 | `condition-extractor` 插件 | `buildContextLookup`（语句序列 → 段栈 → 行级分支上下文）+ `collectAssignments`（直线赋值收集：裸名 ≡ 0 号下标、`==` 不误匹配、`+=` 等复合赋值记为 opaque 失效点、注释 / `@#$` / SKIP 块跳过）；**仅明细路径收集**（聚合路径零开销） |
-| 求值 | `state-replay` 插件 | `locals.ts` 叠加层（数据流 + 调用上下文；视图之上、只读）+ `builtins.ts`（8 个纯函数）；`evaluate.ts` 的 call 分支先查内置表 |
+| 抽取 | `condition-extractor` 插件                 | `buildContextLookup`（语句序列 → 段栈 → 行级分支上下文）+ `collectAssignments`（直线赋值收集：裸名 ≡ 0 号下标、`==` 不误匹配、`+=` 等复合赋值记为 opaque 失效点、注释 / `@#$` / SKIP 块跳过）；**仅明细路径收集**（聚合路径零开销）                                                       |
+| 求值 | `state-replay` 插件                        | `locals.ts` 叠加层（数据流 + 调用上下文；视图之上、只读）+ `builtins.ts`（8 个纯函数）；`evaluate.ts` 的 call 分支先查内置表                                                                                                                              |
 
 **本地量数据流语义**（引擎依据：`ConvertArg` / `IntoFunction`，Process.CalledFunction.cs:162-239 + Process.State.cs:495-515）：
 
@@ -381,9 +382,45 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 
 **真实回归（2026-10-10）**：save03 × K49 全量 1,356 函数 / 11,685 谓词——命中 773→**1,522** / 未命中 3,561→**4,495** / 未知 7,351→**5,668**（**62.9%→48.5%**）；置信度 exact 230→**786** / partial 755→500 / 全未知函数 371→**70**。第六批后构成：call 2,297（游戏助手函数为主）/ pseudo 1,886（RAND 等）/ call-context 858 / named-index 335 / local-no-write 196 / 其余 <100。下一杠杆 = **纯函数内联求值**（陷落状态 1,803 + FIRSTTIME 450 ≈ 2,500 谓词，依赖本批的赋值/语句/内置函数地基）。
 
+### 5.13 有界内联求值（v0.2 第七批实施记录：用户函数顺序解释）
+
+**目的**：消解 §5.12 回放的最大未知来源 `call` 桶。**先测量再动手**（§5.9 教训第四次应验）：对 save03 × K49 的 call unknown 做**被调函数形态分析**（临时 dump 测试，跑完即删），发现与批六预估**大相径庭**——
+
+| 事实（实测 2026-10-10）                                    | 数据                                                      |
+| ---------------------------------------------------------- | --------------------------------------------------------- |
+| call 谓词覆盖的被调函数名                                  | 26 名 / 2,805 条谓词                                      |
+| **有定义且在口上索引域内**                                 | **3 名 / 1,991 条（71%）**——`陷落状态`×1830 + `关系_310`×160 + `陥落状態`×1 |
+| 定义在口上索引域外（COMMON.ERB 等 kojoPaths 之外）         | 23 名 / 814 条（29%）——FIRSTTIME（写 CSTR 副作用）/ GET_TARGETNUM / 素質計算… |
+| 可内联函数的体形态                                         | 100% 为 IF/ELSEIF/SIF/RETURNF + **ARG 补位赋值**（`SIF !ARG / ARG = TARGET`） |
+
+测量纠正了两个预判：①HANDOFF 批六预估的"陷落状态 1,803 + FIRSTTIME 450"中，**FIRSTTIME 其实不在索引域**（也不可内联——副作用）；②唯一拦住"陷落状态"的不是复杂语句，而是 **ARG 参数槽直线赋值**不在批六的收集名单（LOCAL 族）里。
+
+**三层改动（"一切皆插件"）**：
+
+| 层    | 归属                                       | 内容                                                                                                                                                                                            |
+| ----- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 契约  | `plugin-api/conditions.ts`                 | `FunctionAssignment.name` 扩展 `'ARG'\|'ARGS'`（参数槽直线赋值是结构事实；**静态叠加层不消费**——ARG 读取仍走调用上下文注入优先，只有内联解释器按顺序语义消费）；`FunctionPredicates` +`endLine` / `returns: FunctionReturn[]`（内联需要行区间与返回点 AST） |
+| 抽取  | `condition-extractor`                      | `ASSIGN_RE` 扩 ARG/ARGS；`collectReturns`（RETURNF 收集）；明细路径产出 endLine / returns（聚合路径零开销）                                                                                      |
+| 求值  | `state-replay`                             | `inline.ts`（**预编译 + PC 顺序解释器**）+ `evaluate.ts` 求值通道重构（`EvalContext{read, resolveCall}`）；`engine.ts` 集成 `InlineManager`（analyze 缓存 + preanalyze 预热）；`index.ts` 增依赖 `kernel.io` |
+
+**内联解释器语义**（引擎依据：`Process.GetValue`（Process.cs:407-437）+ `ReturnF`（Process.State.cs:540-563）+ `BuiltInFunctionCode.cs:103-104`）：
+
+- **触发**：被调函数在口上索引域内 + 明细可得 + `#FUNCTION` 头 + 体语句全为可解释形态（IF/ELSEIF/ELSE/ENDIF/SIF/RETURNF/直线赋值）。任一不满足 → reject（`log.warn` 记录原因）→ 调用回落 `unknown('call')`。
+- **顺序解释而非静态数据流**：参数补位赋值在 SIF 条件为真时才生效——静态"前缀可达 + last-write-wins"会算错（非零 ARG 也吃到 `ARG = TARGET`）。PC 逐行：`SIF cond` 真 → 执行下一 op；IF/ELSEIF 链按求值走分支；`RETURNF expr` → 返回。
+- **分支双语义消解**（实现中最微妙的坑）：ELSEIF/ELSE 的 op 有两种到达方式——**条件假跳转到达**（需进入：求值 / 进 ELSE 体）与**分支体自然掉落到达**（需跳过：`endAfter`）。PC 无法区分来源 → 编译期把"假跳转到 ELSE"改写为**直接进体**（`elseIdx+1`），运行期用 `pendingEval` 标记区分"跳转到达 ELSEIF（求值）"与"自然掉落（跳 endAfter）"。
+- **实参绑定**：调用点实参 AST 在**调用方上下文**求值（外层 overlay / 视图）→ 按声明槽序绑定（`ARG:0..n`）；多余实参 → ARG 后续槽（引擎数组语义）；未提供的声明槽 = **默认 0/''**（`ConvertArg` 语义——与顶层 callContext 的 unknown('call-context') 不冲突：内联的实参在源码里，不是场景输入）。
+- **环境读**：本地量族（LOCAL/LOCALS/RESULT/RESULTS/ARG/ARGS）→ 环境查；ARG/ARGS 未命中 = 引擎默认槽值 0/''；LOCAL 族未命中 = `unknown('local-no-write')`。**索引段替换**：`TALENT:ARG:恋人` 的 `ARG` 段 → 环境数值（这是陷落状态的主形态）。
+- **拒绝传播**：条件 unknown → 控制流未知 → 整个内联失败（保留内层原因，如 `missing-var`）；RHS unknown → 不写环境；函数尾无 RETURNF → `unknown('call')`（引擎 MethodReturnValue 残留语义，不可信）；`#FUNCTIONS` / `#DIM` / SELECTCASE / 循环 / 复合赋值 / CALL / 标签 → reject。
+- **深度界**：8（引擎 100；语料无深递归，保守小界防循环自引用）。
+- **缓存与预热**：analyze 结果按函数名缓存（纯静态）；`preanalyze(detail)` 从谓词/赋值/返回的 AST **BFS 收集 call 名递归 analyze**（visited 防环）→ 执行期 `resolveCall` 同步缓存必命中（resolveCall 契约是同步的，预热解决异步矛盾）；`resetCaches()` 在 `project.closed` / `kojo.functionChanged` 时清空（装配层订阅）。
+- **插件依赖变化**：state-replay `requires` 增 `kernel.io`（内联需要函数体行文本——此前只需存档与明细）。
+
+**真实回归（2026-10-10，save03 × K49 全量 1,356 函数 / 11,685 谓词）**：命中 1,522→**1,549** / 未命中 4,495→**6,395**（大量原 unknown 判定为假）/ 未知 5,668→**3,741**（**48.5%→32.0%**）；置信度 exact 786→**836** / 全未知函数 70→**38**。call 桶 2,297→**368**（消解 84%，超过测量预估的 71%——嵌套内联递归消解了额外部分）。剩余构成：pseudo 1,886（RAND）/ call-context 858 / call 368（索引域外）/ named-index 337 / local-no-write 196。
+
+**测试**：+26 单测（analyze 拒绝路径 9 项 / 执行语义 11 项 / manager 编排 4 项 / evaluate 集成 2 项）+ ARG 赋值收集 1 项 + 集成冒烟守门 0.55→0.40 + 陷落状态内联专项断言。
+
 ---
 
-## 6. 目录结构（monorepo）
 
 ```
 kojo-editor/
@@ -415,15 +452,15 @@ kojo-editor/
 
 ## 7. 分阶段路线
 
-| 阶段 | 交付物 | 验收标准 |
-|------|--------|----------|
-| **v0.1 骨架** | Tauri 壳 + Monaco + kernel + plugin-api；选目录 onboarding（§5.7）；插件状态面板 | 选定有效 eraTW 目录后：CHARA CSV 映射解析成功，能列出 kojoPaths 下全部文件与函数清单 |
-| **v0.2 导航** | erb-parser + ui-function-tree + 条件抽取 | 按角色/家族浏览 99k 函数；点函数跳转源码 |
-| **v0.3 脚手架** | eraTW 适配器 scaffold：按 K1 模板全文置换路线生成新角色骨架 | 生成物可直接被 Emuera 加载无语法错 |
-| **v1.0 快照回放** | ~~sav-parser（已提前：v0.2 第四批）~~ + state-replay + 手工快照 UI | 指定"好感/信赖/部位/时间"组合，列出将命中的口上分支 |
-| **v1.1 状态注入器** | sav 读写器 + 注入 UI + 测试槽管理（§5.5） | 作者用自带引擎：注入任意深状态 → 读测试档 → 十秒内抵达深条件场景；真实存档零风险；官方 v22/SKIA v15 通吃 |
-| **v1.2 受管引擎（可选）** | 仅当 §5.6 触发条件满足才立项 | 全自动回路 ≤10 秒 或 口上 CI 批量回归可用 |
-| **v2.0 多游戏验证** | eraK 适配器（外部贡献或自研） | 内核/parser/replay/preview 零改动接入，架构验收 |
+| 阶段                | 交付物                                                                | 验收标准                                                           |
+| ----------------- | ------------------------------------------------------------------ | -------------------------------------------------------------- |
+| **v0.1 骨架**       | Tauri 壳 + Monaco + kernel + plugin-api；选目录 onboarding（§5.7）；插件状态面板 | 选定有效 eraTW 目录后：CHARA CSV 映射解析成功，能列出 kojoPaths 下全部文件与函数清单       |
+| **v0.2 导航**       | erb-parser + ui-function-tree + 条件抽取                               | 按角色/家族浏览 99k 函数；点函数跳转源码                                        |
+| **v0.3 脚手架**      | eraTW 适配器 scaffold：按 K1 模板全文置换路线生成新角色骨架                            | 生成物可直接被 Emuera 加载无语法错                                          |
+| **v1.0 快照回放**     | ~~sav-parser（已提前：v0.2 第四批）~~ + state-replay + 手工快照 UI              | 指定"好感/信赖/部位/时间"组合，列出将命中的口上分支                                   |
+| **v1.1 状态注入器**    | sav 读写器 + 注入 UI + 测试槽管理（§5.5）                                      | 作者用自带引擎：注入任意深状态 → 读测试档 → 十秒内抵达深条件场景；真实存档零风险；官方 v22/SKIA v15 通吃 |
+| **v1.2 受管引擎（可选）** | 仅当 §5.6 触发条件满足才立项                                                  | 全自动回路 ≤10 秒 或 口上 CI 批量回归可用                                     |
+| **v2.0 多游戏验证**    | eraK 适配器（外部贡献或自研）                                                  | 内核/parser/replay/preview 零改动接入，架构验收                            |
 
 每阶段均要求：新增代码全部走插件形态；内核 diff 为空或仅涉及明确的 kernel issue。
 
@@ -441,25 +478,27 @@ kojo-editor/
 
 ## 9. 风险与对策
 
-| 风险 | 对策 |
-|------|------|
-| ERB 方言差异（各游戏引擎版本不同） | 解析器只承诺"结构感知"而非完整语义；方言差异由 adapter 的 `conventions` 声明 |
-| 近似回放误判口上分支 | 置信度三档标注 UI 显式呈现；深链路（CALL 链）允许一键落到 CliDebug 实测 |
-| eraTW 数据更新导致 schema 漂移 | variableSchema 版本化；加载时校验游戏版本号，不匹配则提示重建索引 |
-| 写坏用户游戏文件 | 只写显式声明的 kojo 目录 + 自动备份 + 原子写 |
-| 注入 sav 写坏/污染真实存档 | 只写独立测试槽（§5.5）；金样本"原样写回逐字节对比"回归；写前自动备份 |
-| sav 格式随引擎版本漂移 | 以作者当前 sav 为模板（格式必然合法）；版本校验不匹配即拒绝注入 |
-| 近似回放与实机输出不一致 | 作者"预期/实际"一键标记沉淀校准用例；v2 受管引擎（§5.6）触发后可自动化 |
-| 范围蔓延（做成通用 era IDE） | 1.2 非目标条款；任何"顺手支持"必须先过 game.adapter 接口评审 |
+| 风险                     | 对策                                                  |
+| ---------------------- | --------------------------------------------------- |
+| ERB 方言差异（各游戏引擎版本不同）    | 解析器只承诺"结构感知"而非完整语义；方言差异由 adapter 的 `conventions` 声明 |
+| 近似回放误判口上分支             | 置信度三档标注 UI 显式呈现；深链路（CALL 链）允许一键落到 CliDebug 实测       |
+| eraTW 数据更新导致 schema 漂移 | variableSchema 版本化；加载时校验游戏版本号，不匹配则提示重建索引            |
+| 写坏用户游戏文件               | 只写显式声明的 kojo 目录 + 自动备份 + 原子写                        |
+| 注入 sav 写坏/污染真实存档       | 只写独立测试槽（§5.5）；金样本"原样写回逐字节对比"回归；写前自动备份               |
+| sav 格式随引擎版本漂移          | 以作者当前 sav 为模板（格式必然合法）；版本校验不匹配即拒绝注入                  |
+| 近似回放与实机输出不一致           | 作者"预期/实际"一键标记沉淀校准用例；v2 受管引擎（§5.6）触发后可自动化            |
+| 范围蔓延（做成通用 era IDE）     | 1.2 非目标条款；任何"顺手支持"必须先过 game.adapter 接口评审            |
+
+
 
 ---
 
 ## 10. 技术决策记录（原待决策项，2026-10-09 定案）
 
-| 决策项 | 结论 | 理由 / 边界 |
-|--------|------|-------------|
-| 桌面壳 | **Tauri** | 体积小；Rust 侧处理 sav 字节协议/编码探测顺手；PoC 风险（WinForms 互操作等）留到 v0.1 验证 |
-| 编辑器主体 | **内嵌 Monaco** | ERB 语法/装饰由 erb-parser 经 `ui.editor.decorator` 槽注册；不做外部 VS Code 联动模式 |
-| 插件分发 | **本地目录扫描，暂不做市场/签名** | 装载接口预留来源字段，未来加签名机制不破坏现有插件 |
-| 角色数据来源 | **随游戏 CHARA CSV 动态解析**（§5.7） | 不内置静态表；解析失败显式报错，禁止静默猜测 |
-| Onboarding | **启动先选游戏目录，全编辑器唯一全局上下文**（§5.7） | 与状态注入器绑定：sav 模板列表随项目实扫生成 |
+| 决策项        | 结论                             | 理由 / 边界                                                             |
+| ---------- | ------------------------------ | ------------------------------------------------------------------- |
+| 桌面壳        | **Tauri**                      | 体积小；Rust 侧处理 sav 字节协议/编码探测顺手；PoC 风险（WinForms 互操作等）留到 v0.1 验证        |
+| 编辑器主体      | **内嵌 Monaco**                  | ERB 语法/装饰由 erb-parser 经 `ui.editor.decorator` 槽注册；不做外部 VS Code 联动模式 |
+| 插件分发       | **本地目录扫描，暂不做市场/签名**            | 装载接口预留来源字段，未来加签名机制不破坏现有插件                                           |
+| 角色数据来源     | **随游戏 CHARA CSV 动态解析**（§5.7）   | 不内置静态表；解析失败显式报错，禁止静默猜测                                              |
+| Onboarding | **启动先选游戏目录，全编辑器唯一全局上下文**（§5.7） | 与状态注入器绑定：sav 模板列表随项目实扫生成                                            |

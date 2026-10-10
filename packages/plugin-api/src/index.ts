@@ -65,6 +65,7 @@ export type {
   FunctionConditions,
   FunctionPredicate,
   FunctionPredicates,
+  FunctionReturn,
   PredicateSourceKind,
   StateDependency,
   VariableRef,
