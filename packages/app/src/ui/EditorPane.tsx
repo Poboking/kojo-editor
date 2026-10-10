@@ -36,6 +36,8 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const originalRef = useRef<string>('');
+  /** 打开/保存成功时的 model 版本号（BUG-4：脏判定 O(1)，替代每击键全量字符串比较） */
+  const originalVersionRef = useRef<number>(0);
   const savingRef = useRef(false);
   const revealRef = useRef<{ line: number; nonce: number } | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -68,6 +70,9 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
     try {
       await kernel.io.writeText(filePath, text);
       originalRef.current = text;
+      // 保存成功 → 以当前版本号为新基线（BUG-4）
+      const v = ed.getModel()?.getAlternativeVersionId();
+      if (v !== undefined) originalVersionRef.current = v;
       setDirty(false);
       setError(null);
       setStatus(`已保存 ${new Date().toLocaleTimeString()}`);
@@ -105,8 +110,12 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
       wordWrap: 'on',
     });
     editorRef.current = ed;
+    // BUG-4：脏判定改用 model 版本号比较（O(1)），不再每击键做全量字符串比较。
+    // 取舍说明：撤销回原始内容后版本号仍不同 → 显示为脏（内容相等不再视为已保存）；
+    // 这是版本号方案的标准行为（与主流编辑器一致），换取 MB 级文件零比较开销。
     ed.onDidChangeModelContent(() => {
-      setDirty(ed.getValue() !== originalRef.current);
+      const v = ed.getModel()?.getAlternativeVersionId();
+      setDirty(v !== undefined ? v !== originalVersionRef.current : ed.getValue() !== originalRef.current);
     });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void save();
@@ -133,6 +142,8 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
         const model = monaco.editor.createModel(tf.text, ERB_LANGUAGE_ID, uri);
         ed.setModel(model);
         originalRef.current = tf.text;
+        const v = model.getAlternativeVersionId();
+        if (v !== undefined) originalVersionRef.current = v;
         setDirty(false);
         setError(null);
         setStatus(`${tf.encoding} · ${tf.eol.toUpperCase()} · ${tf.text.split('\n').length} 行`);

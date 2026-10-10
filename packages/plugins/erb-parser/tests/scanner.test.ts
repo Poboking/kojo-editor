@@ -304,24 +304,26 @@ describe('scanControlFlow', () => {
     expect(stmts[1]!.expression).toBe('I, 0, 5');
   });
 
-  it('TRY 系 → CATCH → ENDCATCH；PRINTDATA → ENDDATA', () => {
+  it('TRYC 系 → CATCH → ENDCATCH；PRINTDATA → ENDDATA（BUG-2 更正：TRYCALLFORM 是单行语句不开块）', () => {
     const text = [
-      'TRYCALLFORM FOO_{N}', // 1
+      'TRYCGOTOFORM FOO_{N}, TARGET', // 1（TRYC 六成员之一，配 CATCH）
       'CATCH', // 2
       '\tPRINTL fallback', // 3
       'ENDCATCH', // 4
-      'PRINTDATA', // 5
-      'DATALIST', // 6
-      '\t1', // 7
-      'ENDLIST', // 8
-      'ENDDATA', // 9
+      'TRYCALLFORM BAR_{N}', // 5（单行语句，不开块——旧版误判为开块）
+      'PRINTDATA', // 6
+      'DATALIST', // 7
+      '\t1', // 8
+      'ENDLIST', // 9
+      'ENDDATA', // 10
     ].join('\n');
     const stmts = scanControlFlow(text);
     // 注：DATALIST 是独立开块（list），ENDLIST 配对它；PRINTDATA 的 ENDDATA 在 ENDLIST 之后配平
-    expect(stmts.map((s) => s.kind)).toEqual(['TRYCALLFORM', 'CATCH', 'ENDCATCH', 'PRINTDATA', 'DATALIST', 'ENDLIST', 'ENDDATA']);
+    expect(stmts.map((s) => s.kind)).toEqual(['TRYCGOTOFORM', 'CATCH', 'ENDCATCH', 'PRINTDATA', 'DATALIST', 'ENDLIST', 'ENDDATA']);
     const byKind = new Map(stmts.map((s) => [s.kind, s.depth]));
-    expect(byKind.get('CATCH')).toBe(0); // 与 TRYCALLFORM 同深度
+    expect(byKind.get('CATCH')).toBe(0); // 与 TRYCGOTOFORM 同深度
     expect(byKind.get('ENDCATCH')).toBe(0);
+    expect(stmts.some((s) => s.kind === 'TRYCALLFORM')).toBe(false);
   });
 
   it('孤儿 ENDIF / 错配不中断（宽容，后续深度仍可用）', () => {
@@ -344,5 +346,50 @@ describe('scanControlFlow', () => {
   it('CASE 逗号列表与 TO 区间原文保留', () => {
     const stmts = scanControlFlow(['SELECTCASE X', 'CASE 1, 2, 3', 'CASE 10 TO 20', 'ENDSELECT'].join('\n'));
     expect(stmts.filter((s) => s.kind === 'CASE').map((s) => s.expression)).toEqual(['1, 2, 3', '10 TO 20']);
+  });
+
+  it('TRYC 六个 → CATCH → ENDCATCH 配对（BUG-2 精确集合）', () => {
+    for (const opener of ['TRYCGOTO', 'TRYCJUMP', 'TRYCCALL', 'TRYCGOTOFORM', 'TRYCJUMPFORM', 'TRYCCALLFORM']) {
+      const stmts = scanControlFlow([`${opener} TARGET, FOO`, 'CATCH', 'PRINTFORMW err', 'ENDCATCH'].join('\n'));
+      expect(stmts.map((s) => [s.kind, s.depth])).toEqual([
+        [opener, 0],
+        ['CATCH', 0],
+        ['ENDCATCH', 0],
+      ]);
+    }
+  });
+
+  it('TRYCALL / TRYCALLFORM / TRYGOTO / TRYJUMP 是单行语句，不开块（BUG-2）', () => {
+    const text = [
+      'IF X',
+      'TRYCALLFORM FOO_BAR',
+      'TRYJUMP TARGET',
+      'ENDIF',
+    ].join('\n');
+    const stmts = scanControlFlow(text);
+    expect(stmts.map((s) => [s.kind, s.depth])).toEqual([
+      ['IF', 0],
+      ['ENDIF', 0],
+    ]);
+    // 单行 TRY 语句不出现在控制流骨架里（不开块、不成对）
+    expect(stmts.some((s) => s.kind.startsWith('TRY'))).toBe(false);
+  });
+
+  it('TRYCALLLIST → ENDFUNC 独立配对（funclist）', () => {
+    const text = ['TRYCALLLIST', '\tCALL FOO', 'ENDFUNC'].join('\n');
+    const stmts = scanControlFlow(text);
+    expect(stmts.map((s) => [s.kind, s.depth])).toEqual([
+      ['TRYCALLLIST', 0],
+      ['ENDFUNC', 0],
+    ]);
+  });
+
+  it('PRINTDATA 系九个精确命中；PRINTDATAX 等非成员不开块（BUG-2）', () => {
+    const members = ['PRINTDATA', 'PRINTDATAL', 'PRINTDATAW', 'PRINTDATAK', 'PRINTDATAKL', 'PRINTDATAKW', 'PRINTDATAD', 'PRINTDATADL', 'PRINTDATADW'];
+    for (const opener of members) {
+      const stmts = scanControlFlow([opener, '\t"hello"', 'ENDDATA'].join('\n'));
+      expect(stmts.map((s) => s.kind)).toEqual([opener, 'ENDDATA']);
+    }
+    expect(scanControlFlow(['PRINTDATAX', '\t"x"', 'ENDDATA'].join('\n')).map((s) => s.kind)).toEqual(['ENDDATA']);
   });
 });

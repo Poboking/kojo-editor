@@ -143,3 +143,23 @@ describe('FamilyIndexRule 包装', () => {
     expect(rule.match('NOT_A_KOJO_FUNC')).toBeNull();
   });
 });
+
+describe('家族识别 · K 锚点语义（BUG-3 显式化：取最后一个 _K{no}）', () => {
+  it('单锚点：_K{no} 后跟 _时机号', () => {
+    const r = parseKojoFamily('X_MESSAGE_COUNTER_K2_1')!;
+    expect(r).toMatchObject({ kind: 'ok', prefix: '', family: 'X', face: 'MESSAGE_COUNTER', characterNo: 2, slot: '1' });
+  });
+
+  it('名称含多个 _K 段：最靠后的编号为锚（家族名段允许再含 _K 段）', () => {
+    const r = parseKojoFamily('X_MESSAGE_COUNTER_K2_MESSAGE_COUNTER_K1')!;
+    expect(r).toMatchObject({ kind: 'ok', characterNo: 1, face: 'MESSAGE_COUNTER' });
+  });
+
+  it('数字边界：_K1B 不构成锚点 → null（regex 回溯后无锚可依）', () => {
+    expect(parseKojoFamily('X_MESSAGE_COUNTER_K1B')).toBeNull();
+  });
+
+  it('无 _K 编号段 → null（与口上命名无关）', () => {
+    expect(parseKojoFamily('X_MESSAGE_COUNTER')).toBeNull();
+  });
+});

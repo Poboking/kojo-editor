@@ -383,6 +383,20 @@ node tools/smoke-tauri-ipc.mjs
 
 ---
 
+
+
+### 6.18 第十八批（✅ 已完成）：审阅缺陷修复（BUG-REPORT-2026-10-10：M1 级联 / L5 / L6 / L7 脏判定）
+
+**实施结果**：BUG-1~4 修复 + BUG-5 判定延后（IMPLEMENTATION-LOG §5.25 为权威记录）。
+
+- **BUG-1（M1）方案 A**：runtime stop(id) 级联——dependentsClosure（requires×provides BFS，slot 消费关系不在图内已注明边界）+ 逆拓扑序逐个停用（最深依赖方先停），stopAll 行为兼容；retry docstring 陈旧说法一并更正。+3 测试。
+- **BUG-2（L5）**：按引擎 funcMatch 原文精确配对——TRYC 六个→CATCH / TRY*LIST 三个→ENDFUNC（新配对类 funclist）/ PRINTDATA 九个；TRYCALL/TRYCALLFORM 等是单行语句不开块（比报告"影响为零"更进一步：修掉了幻影开块根因）。extract.ts 上下文栈同源镜像修。旧测试更正（原断言固化了误开块）。真实冒烟基线逐字不变（3741/836）。
+- **BUG-3（L6）**：锚点语义（取最后一个 _K{no}）注释显式化 + 4 项边界单测，行为零改动。
+- **BUG-4（L7）**：EditorPane 脏判定改 getAlternativeVersionId 版本号比较（O(1)）；取舍=撤销回原文显示脏（注释写明）。
+- **BUG-5 延后**：file.changed payload 契约与 v1.1 注入器写链路一并设计（避免契约先行实现滞后），记入下一批清单。
+
+**验证**：520 passed / 4 skipped 全绿（+16）/ typecheck root+app ✅ / audit 12 插件 ✅ / 真实工程集成冒烟 ✅。
+
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
@@ -437,7 +451,7 @@ node tools/smoke-tauri-ipc.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：509 项 / ✅ / 12 插件）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.21 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：v1.0 收口余项（协议覆盖校验规则：签名槽与路由转发不一致）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；审阅遗留 M1（stop 级联）随 v0.3 排入
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：520 项 / ✅ / 12 插件）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.25 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
+4. **下一批候选**：v1.0 收口余项（协议覆盖校验规则：签名槽与路由转发不一致）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；**BUG-5 file.changed 事件链**（payload 契约与注入器写链路一并设计，见 §6.18）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

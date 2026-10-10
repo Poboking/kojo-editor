@@ -565,3 +565,36 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
   二次运行稳定；探针已加端口预检 + 180s 等待缓解。
 
 ---
+
+### 5.25 审阅缺陷修复（v0.2 第十八批实施记录：BUG-REPORT-2026-10-10 落地）
+
+> 依据：docs/BUG-REPORT-2026-10-10.md（第二轮审阅遗留，逐条代码复核属实）。边界：不碰 sav-parser / 注入器线（并行 WIP）。
+
+#### BUG-1（=审阅 M1，中）：runtime.stop() 级联停用依赖方
+
+- **修复（方案 A）**：新增 dependentsClosure(rootId)——requires × provides 服务键依赖图的 BFS 闭包（slot 消费关系不在图内，代码注释写明边界）；stop(id) 先按 BFS 发现序的**逆序**（最深依赖方先停）逐个 stopDirect，最后停自身；每步照常广播 plugin.statusChanged。stopAll 逐个调 stop，依赖方已被先停的路径自然 no-op——逆序哲学一致，行为兼容。
+- 附带修：retry() docstring 去掉「状态面板的重试按钮」陈旧说法（实测面板只读，BUG-REPORT 影响段已修正审阅原话）。
+- 测试 +3：双插件级联（依赖方先停、deactivate 均被调）/ 三级链 A→B→C 逆拓扑序 / 无关旁观插件不受影响；stopAll 既有回归不变。
+
+#### BUG-2（=审阅 L5，低→实际修正）：scanner TRY/PRINTDATA 精确配对
+
+- **复核发现比报告更严重**：报告写「实测影响为零」，但引擎 funcMatch（FunctionIdentifier.cs :460-487）明确 TRYCALL/TRYCALLFORM/TRYGOTO/TRYJUMP 是**单行语句不开块**——旧 startsWith('TRY') 把它们当开块，正是此前记录的「TRYCALLFORM 幻影开块」根因；TRY*LIST 三者也与 TRYC 家族混在同一个配对类里。
+- **修复（按引擎原文逐条对齐）**：配 CATCH 恰为 6 个（TRYCGOTO/TRYCJUMP/TRYCCALL ±FORM）；配 ENDFUNC 恰为 3 个（TRYCALLLIST/TRYGOTOLIST/TRYJUMPLIST，独立配对类 funclist）；PRINTDATA 系恰为 9 个精确枚举。extract.ts 的 buildContextLookup 同源镜像修（插件间禁 import，就地复制常量 + 同源注释）。
+- **基线实测无涟漪**：真实工程冒烟回放基线逐字不变（1356 函数 / 11685 谓词 / 未知 3741 / exact 836）——语料中这些语句的误开块恰好未改变可达性判定，与审阅 L5「实测影响为零」的结论在语料层面一致；但结构正确性修正依然值得（防御未来语料）。
+- 测试 +4 组：TRYC 六成员逐个配对 / TRYCALL 等单行不开块 / TRY*LIST 独立配对 / PRINTDATA 九成员精确命中 + 非成员不误判；**旧测试更正**——原「TRY 系 → CATCH」用例把 TRYCALLFORM 误开块固化成了断言，改为 TRYCGOTOFORM + 断言 TRYCALLFORM 不出现。
+
+#### BUG-3（=审阅 L6，低）：family-index 锚点语义显式化
+
+- 贪婪 (.*) 即「取最后一个 _K{no} 为编号锚」（最靠近槽位的 K 编号是家族编号），与引擎家族命名一致——行为正确，缺的是文档与测试。补锚点语义注释（含数字边界说明：\d+ 后必须是 _ 或串尾，K1B 不误切）+ 4 项单测（单锚 / 多 _K 段取末 / K1B null / 无锚 null）。行为零改动。
+
+#### BUG-4（=审阅 L7 杂项，低·性能）：编辑器脏判定 O(1)
+
+- EditorPane 脏判定从每击键 ed.getValue() !== originalRef.current（O(n) 全量比较+分配）改为 model.getAlternativeVersionId() 版本号比较；打开/保存成功时记录基线版本号。**取舍**：撤销回原始内容后版本号仍不同 → 显示脏（内容相等不再视为已保存）——版本号方案标准行为，注释写明。
+
+#### BUG-5：判定延后（v1.1 注入器批次一并做）
+
+- file.changed 事件链是 v1.1 实时编辑的硬前置，但 payload 契约（路径/编码/是否外部变更）应与注入器写链路（kernel io 写盘 → 事件广播 → 索引/回放缓存失效）一并设计——现在单方面 emit 只是又一次「契约先行、实现滞后」。已记入 HANDOFF 下一批清单。
+
+**验证**：vitest 全量 **520 passed / 4 skipped**（+16：runtime +3 / scanner +7 / family-index +4 / 更正旧用例 1 + 注入器线并行转绿）；typecheck root+app ✅；audit:decoupling ✅（12 插件）；真实工程集成冒烟 ✅（回放基线逐字不变）。
+
+---

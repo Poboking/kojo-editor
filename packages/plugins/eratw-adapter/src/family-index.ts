@@ -134,6 +134,10 @@ export function parseKojoFamily(rawName: string): FamilyMatch | null {
       return make({ kind: 'kn', prefix: '', family: '', no: Number(knPrefix[1]), slot: (knPrefix[2] ?? '').replace(/^_/, '') });
     }
     // 裸家族前缀（如 別人変身版_MESSAGE_COM_K1_1）：要求含已知面 + _K{digits}
+    // 锚点语义（BUG-3 显式化）：greedy (.*) = **取最后一个 _K{no} 为编号锚**——
+    // 家族名段允许再含 _K 段（如 X_K3_MESSAGE_COM_K1_1 → no=1，家族 MESSAGE_COM），
+    // 与"最靠近槽位的 K 编号才是家族编号"的引擎家族命名一致。
+    // \d+ 之后必须是 `_` 或串尾（`(_.+)?` 保证），`A_K1B` 类不会被误切（regex 回溯后无锚可依 → null）。
     const anchor = /^(.*)_K(\d+)(_.+)?$/.exec(name);
     if (anchor && PLAIN_FACES.some((f) => (anchor[1] ?? '').includes(`_${f}`))) {
       prefix = '';

@@ -248,6 +248,79 @@ describe('PluginRuntime · 停用与清理', () => {
     await runtime.stopAll();
     expect(order).toEqual(['consumer', 'provider']);
   });
+
+  it('BUG-1 方案 A：stop(提供者) 级联停用 active 依赖方，双方 deactivate 均被调用', async () => {
+    const { runtime, container } = makeRuntime();
+    const deactivated: string[] = [];
+    runtime.register({
+      id: 'provider',
+      version: '1.0.0',
+      provides: ['svc.x'],
+      activate(ctx) {
+        ctx.provide('svc.x', {});
+      },
+      deactivate() {
+        deactivated.push('provider');
+      },
+    });
+    runtime.register({
+      id: 'consumer',
+      version: '1.0.0',
+      requires: ['svc.x'],
+      activate() {},
+      deactivate() {
+        deactivated.push('consumer');
+      },
+    });
+    await runtime.tryActivateAll();
+    expect(runtime.get('consumer')?.status).toBe('active');
+
+    await runtime.stop('provider');
+    expect(runtime.get('provider')?.status).toBe('stopped');
+    // 依赖方不再保持 active（悬空服务引用消除）
+    expect(runtime.get('consumer')?.status).toBe('stopped');
+    expect(deactivated).toEqual(['consumer', 'provider']); // 依赖方先停
+    expect(container.has('svc.x')).toBe(false);
+  });
+
+  it('BUG-1：三级链 A→B→C，stop(A) 按 C、B、A 逆拓扑序停用', async () => {
+    const { runtime } = makeRuntime();
+    const order: string[] = [];
+    const mk = (id: string, requires?: string[], provides?: string[]): Plugin => ({
+      id,
+      version: '1.0.0',
+      requires,
+      provides,
+      activate(ctx) {
+        for (const key of provides ?? []) ctx.provide(key, { id });
+      },
+      deactivate() {
+        order.push(id);
+      },
+    });
+    runtime.register(mk('a', undefined, ['svc.a']));
+    runtime.register(mk('b', ['svc.a'], ['svc.b']));
+    runtime.register(mk('c', ['svc.b'], ['svc.c']));
+    await runtime.tryActivateAll();
+
+    await runtime.stop('a');
+    expect(runtime.get('a')?.status).toBe('stopped');
+    expect(runtime.get('b')?.status).toBe('stopped');
+    expect(runtime.get('c')?.status).toBe('stopped');
+    expect(order).toEqual(['c', 'b', 'a']);
+  });
+
+  it('BUG-1：无依赖关系的旁观插件不受级联影响', async () => {
+    const { runtime } = makeRuntime();
+    runtime.register({ id: 'p', version: '1.0.0', provides: ['svc.p'], activate(ctx) { ctx.provide('svc.p', {}); } });
+    runtime.register({ id: 'dep', version: '1.0.0', requires: ['svc.p'], activate() {} });
+    runtime.register({ id: 'bystander', version: '1.0.0', activate() {} });
+    await runtime.tryActivateAll();
+
+    await runtime.stop('p');
+    expect(runtime.get('dep')?.status).toBe('stopped');
+    expect(runtime.get('bystander')?.status).toBe('active');
+  });
 });
 
 describe('PluginRuntime · 状态事件与可观测性', () => {

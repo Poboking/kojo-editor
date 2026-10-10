@@ -155,7 +155,7 @@ export class PluginRuntime {
     }
   }
 
-  /** 手动重试（状态面板的"重试"按钮）；效果等价于一次全量重扫 */
+  /** 手动重试；效果等价于一次全量重扫（注意：重扫会重新激活所有满足依赖的 inactive 插件） */
   async retry(id: string): Promise<void> {
     const state = this.states.get(id);
     if (!state) throw new Error(`Unknown plugin '${id}'`);
@@ -232,7 +232,43 @@ export class PluginRuntime {
 
   /* ------------------------------ 停用 ------------------------------ */
 
-  async stop(id: string): Promise<void> {
+  /**
+   * 传递依赖闭包：所有 active 且（直接或间接）依赖 `rootId` 所提供服务的插件。
+   * 依赖图 = requires × provides（服务键依赖；slot 消费关系当前不在图内——
+   * SlotRegistry 未记录"谁消费了某 slot 项"，此边界见架构文档安全模型）。
+   * 返回按 BFS 发现序（root 的直接依赖方在前）；停用时**逆序**执行（最深依赖方先停）。
+   */
+  private dependentsClosure(rootId: string): string[] {
+    const providerOf = new Map<ServiceKey, string>();
+    for (const s of this.states.values()) {
+      for (const key of s.plugin.provides ?? []) {
+        if (!providerOf.has(key)) providerOf.set(key, s.plugin.id);
+      }
+    }
+    const discovered = [rootId];
+    const seen = new Set<string>([rootId]);
+    for (let i = 0; i < discovered.length; i++) {
+      const cur = discovered[i]!;
+      const curState = this.states.get(cur);
+      if (!curState) continue;
+      const providedKeys = new Set<ServiceKey>([
+        ...(curState.plugin.provides ?? []),
+        ...curState.provided,
+      ]);
+      for (const s of this.states.values()) {
+        if (s.record.status !== 'active' || seen.has(s.plugin.id)) continue;
+        const depends = (s.plugin.requires ?? []).some((k) => providedKeys.has(k));
+        if (depends) {
+          seen.add(s.plugin.id);
+          discovered.push(s.plugin.id);
+        }
+      }
+    }
+    return discovered.slice(1); // 不含 root 自身
+  }
+
+  /** 单插件停用原语（不做依赖联动；调用方保证顺序） */
+  private async stopDirect(id: string): Promise<void> {
     const state = this.states.get(id);
     if (!state || state.record.status !== 'active') return;
     try {
@@ -246,6 +282,22 @@ export class PluginRuntime {
     state.provided.clear();
     this.deps.slots.removeAllFor(id);
     this.setStatus(id, 'stopped');
+  }
+
+  /**
+   * 停用单个插件（审阅 M1 / BUG-1 修复）：
+   * 先按**逆拓扑序**级联停用全部 active 依赖方（最深依赖方先停），最后停自身——
+   * 避免依赖方留下悬空服务引用。每一步照常广播 plugin.statusChanged。
+   * 与 stopAll 的逆序哲学一致（stopAll 逐个调 stop，依赖方已被先停的路径自然 no-op）。
+   */
+  async stop(id: string): Promise<void> {
+    const state = this.states.get(id);
+    if (!state || state.record.status !== 'active') return;
+    const dependents = this.dependentsClosure(id);
+    for (const depId of dependents.reverse()) {
+      await this.stopDirect(depId);
+    }
+    await this.stopDirect(id);
   }
 
   async stopAll(): Promise<void> {

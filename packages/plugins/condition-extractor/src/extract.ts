@@ -165,7 +165,16 @@ export type SchemaLookup = (name: string, index?: number | string) => VariableIn
 // kind 分类与 erb-parser `scanControlFlow` 的配对表逐条一致（同源事实）。
 // ---------------------------------------------------------------------------
 
-/** 开块语句（与 scanner OPEN_KINDS 及 TRY 系、PRINTDATA 系前缀规则一致） */
+/** TRY/PRINTDATA 系精确集合（与 erb-parser scanner 同源；引擎 funcMatch :460-487，BUG-2 修复）：
+ *  配 CATCH 的 TRYC 六个 + 配 ENDFUNC 的 TRY*LIST 三个 + PRINTDATA 系九个。
+ *  TRYCALL/TRYCALLFORM/TRYGOTO/TRYJUMP 等是单行语句，不开块。 */
+const CTX_TRY_CATCH_OPEN = new Set(['TRYCGOTO', 'TRYCJUMP', 'TRYCCALL', 'TRYCGOTOFORM', 'TRYCJUMPFORM', 'TRYCCALLFORM']);
+const CTX_TRY_LIST_OPEN = new Set(['TRYCALLLIST', 'TRYGOTOLIST', 'TRYJUMPLIST']);
+const CTX_PRINTDATA_OPEN = new Set([
+  'PRINTDATA', 'PRINTDATAL', 'PRINTDATAW', 'PRINTDATAK', 'PRINTDATAKL', 'PRINTDATAKW', 'PRINTDATAD', 'PRINTDATADL', 'PRINTDATADW',
+]);
+
+/** 开块语句（与 scanner OPEN_KINDS 及 TRY 系、PRINTDATA 系精确集合一致） */
 const CTX_OPEN_KINDS = new Set(['IF', 'SELECTCASE', 'FOR', 'WHILE', 'REPEAT', 'DO', 'DATALIST', 'STRDATA', 'NOSKIP']);
 /** 分支语句（与 scanner BRANCH_KINDS 一致） */
 const CTX_BRANCH_KINDS = new Set(['ELSEIF', 'ELSE', 'CASE', 'CASEELSE', 'CATCH']);
@@ -199,7 +208,7 @@ export function buildContextLookup(stmts: readonly ControlFlowStatement[]): (lin
   let segCounter = 0;
 
   for (const s of stmts) {
-    if (CTX_OPEN_KINDS.has(s.kind) || s.kind.startsWith('TRY') || s.kind.startsWith('PRINTDATA')) {
+    if (CTX_OPEN_KINDS.has(s.kind) || CTX_TRY_CATCH_OPEN.has(s.kind) || CTX_TRY_LIST_OPEN.has(s.kind) || CTX_PRINTDATA_OPEN.has(s.kind)) {
       stack.push({ depth: s.depth, seg: `s${++segCounter}` });
     } else if (CTX_BRANCH_KINDS.has(s.kind)) {
       for (let i = stack.length - 1; i >= 0; i--) {

@@ -55,7 +55,7 @@
 
 ### 中严重性
 
-#### M1. `runtime.stop()` 不级联停用依赖方（kernel/runtime.ts）
+#### M1. `runtime.stop()` 不级联停用依赖方（kernel/runtime.ts）✅ 已修复（第十八批，方案 A 级联 + 逆拓扑序，见 IMPLEMENTATION-LOG §5.25）
 
 单独 `stop(A)` 时，依赖 A 服务键的插件 B 不会被级联停用，B 持有悬空服务引用。`stopAll` 的逆序停用缓解了正常关闭路径，但 v0.2 已提供单插件 stop 能力（插件状态面板可触发）。建议：stop(A) 前先拓扑计算依赖闭包，一并停用或直接拒绝（报告"有 N 个依赖方"）。
 
@@ -95,11 +95,11 @@ POWER 结果先做 Number 乘法再 `inInt64` 校验——超 2^53 时用**已�
 
 注释说"已知名但快照缺失 → 由调用方按 0/'' 默认值处理"，实际 `read()` 直接返回 `unknown('missing-var')`。方向保守无害，但拉高了 missing-var 率（冒烟中 missing-var=80 可能部分源于此）。建议实现注释所述语义（走 readBlockVar/readTopVar 的默认值路径）或改注释。
 
-#### L5. scanner 的 TRY 系开块规则宽泛（erb-parser/scanner.ts）
+#### L5. scanner 的 TRY 系开块规则宽泛（erb-parser/scanner.ts）✅ 已修复（第十八批，引擎 funcMatch 精确集合：TRYC 六个 / TRY*LIST 三个 / PRINTDATA 九个；extract.ts 同源镜像）
 
 `kind.startsWith('TRY')` 把所有 TRY 开头语句当开块；引擎 funcMatch 表只允许 `TRYC*→CATCH` 与 `TRY*LIST→ENDFUNC` 配对，`TRYCALL/TRYJUMP/TRYCALLFORM/TRYGOTO` 是单行指令。**实测影响为零**（3818 文件、411 万行：栈残留对比 100 文件全一致且残留源头与 TRY 无关；逐语句 depth 序列零差异；buildContextLookup 的 TRY 段残留只是公共祖先前缀，不破坏可达性）。建议按引擎表收敛规则，纯代码卫生。
 
-#### L6. family-index 编号锚点贪婪回溯的理论边缘（eratw-adapter/family-index.ts）
+#### L6. family-index 编号锚点贪婪回溯的理论边缘（eratw-adapter/family-index.ts）✅ 已收口（第十八批：锚点语义注释显式化 + 边界单测，行为不变）
 
 `/^(.*)_K(\d+)(_.+)?$/` 贪婪回溯取**最后一个** `_K\d` 作编号锚点；若家族名本身含 `_K{数字}` 段会劫持编号。eraTW 实测语料未出现（97.88% 覆盖），记录为已知限制。
 
@@ -107,7 +107,7 @@ POWER 结果先做 Number 乘法再 `inInt64` 校验——超 2^53 时用**已�
 
 - `inline.ts` 的 `parseHeadLine` 正则对引号内括号无感知（ERB 头行无字符串默认值语法，风险极低）。
 - `expr.ts` 字符串转义 `\` 后任意字符原样保留（引擎转义语义未逐条核对）；`indices` 存解码值而 `text` 用原文（仅影响展示/缓存 key，不参与语义）。
-- EditorPane 的 dirty 检查每击键全量文本比较（`getValue() !== original`，MB 级文件每击键 O(n) 分配；建议 model 版本号比较）。
+- EditorPane 的 dirty 检查每击键全量文本比较（`getValue() !== original`，MB 级文件每击键 O(n) 分配；建议 model 版本号比较）。✅ 已修复（第十八批：`getAlternativeVersionId()` 版本号比较，取舍=撤销回原文显示脏）
 
 ---
 

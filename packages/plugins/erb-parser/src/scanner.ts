@@ -224,8 +224,10 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
 // 配对表以引擎源码为准（FunctionIdentifier.cs funcMatch，见逆向文档
 // 《eratw4.980-Lang与Statements边角.md》§funcMatch 结构配对表）：
 //   IF→ENDIF / SELECTCASE→ENDSELECT / REPEAT→REND / FOR→NEXT / WHILE→WEND /
-//   DO→LOOP / TRY 系→CATCH→ENDCATCH / PRINTDATA 系→ENDDATA /
-//   DATALIST→ENDLIST / STRDATA→ENDDATA / NOSKIP→ENDNOSKIP / TRY*LIST→ENDFUNC
+//   DO→LOOP / TRYC 六个→CATCH→ENDCATCH / PRINTDATA 系 9 个→ENDDATA /
+//   DATALIST→ENDLIST / STRDATA→ENDDATA / NOSKIP→ENDNOSKIP /
+//   TRYCALLLIST/TRYGOTOLIST/TRYJUMPLIST→ENDFUNC（配对类 funclist）
+// 注意：TRYCALL/TRYCALLFORM/TRYGOTO/TRYJUMP 等是单行语句，不开块（BUG-2 修复）。
 // ---------------------------------------------------------------------------
 
 /** 开块语句：kind → 配对类别 */
@@ -262,11 +264,41 @@ const CLOSE_KINDS: Readonly<Record<string, string>> = {
   ENDLIST: 'list',
   ENDNOSKIP: 'noskip',
   ENDCATCH: 'try',
-  ENDFUNC: 'try',
+  ENDFUNC: 'funclist',
 };
 
 /** 单行语句（不配对、不开块；如 SIF = Single IF） */
 const LEAF_KINDS = new Set(['SIF']);
+
+/**
+ * TRY 系精确三档（引擎 FunctionIdentifier.cs funcMatch :460-487 逐条对齐，BUG-2 修复）：
+ * - 配 CATCH 的恰为 6 个：TRYCGOTO / TRYCJUMP / TRYCCALL（±FORM）；
+ * - 配 ENDFUNC 的恰为 3 个：TRYCALLLIST / TRYGOTOLIST / TRYJUMPLIST（独立配对类 funclist）；
+ * - 其余 TRY*（TRYCALL / TRYCALLFORM / TRYGOTO / TRYGOTOFORM / TRYJUMP / TRYJUMPFORM）
+ *   是**单行语句**，不开块——旧版 startsWith('TRY') 把它们误当开块，产生幻影深度。
+ */
+const TRY_CATCH_OPEN: ReadonlySet<string> = new Set([
+  'TRYCGOTO',
+  'TRYCJUMP',
+  'TRYCCALL',
+  'TRYCGOTOFORM',
+  'TRYCJUMPFORM',
+  'TRYCCALLFORM',
+]);
+const TRY_LIST_OPEN: ReadonlySet<string> = new Set(['TRYCALLLIST', 'TRYGOTOLIST', 'TRYJUMPLIST']);
+
+/** PRINTDATA 系精确 9 个（funcMatch :477-485；DATALIST/STRDATA 在 OPEN_KINDS 单列） */
+const PRINTDATA_OPEN: ReadonlySet<string> = new Set([
+  'PRINTDATA',
+  'PRINTDATAL',
+  'PRINTDATAW',
+  'PRINTDATAK',
+  'PRINTDATAKL',
+  'PRINTDATAKW',
+  'PRINTDATAD',
+  'PRINTDATADL',
+  'PRINTDATADW',
+]);
 
 /** 提取表达式原文的语句（其余受支持语句的 expression 为空串） */
 const EXPRESSION_KINDS = new Set(['IF', 'ELSEIF', 'SIF', 'SELECTCASE', 'CASE', 'REPEAT', 'FOR', 'WHILE']);
@@ -337,12 +369,15 @@ export function scanControlFlow(text: string): ControlFlowStatement[] {
     } else if (CLOSE_KINDS[kind] !== undefined) {
       role = 'close';
       pair = CLOSE_KINDS[kind]!;
-    } else if (kind.startsWith('PRINTDATA')) {
+    } else if (PRINTDATA_OPEN.has(kind)) {
       role = 'open';
       pair = 'data';
-    } else if (kind.startsWith('TRY')) {
+    } else if (TRY_CATCH_OPEN.has(kind)) {
       role = 'open';
       pair = 'try';
+    } else if (TRY_LIST_OPEN.has(kind)) {
+      role = 'open';
+      pair = 'funclist';
     }
     if (!role) continue;
 
