@@ -1,11 +1,11 @@
-import type { CharaInfo, FileIO, GameAdapter, GameProject, KojoCallProtocol, Plugin, VariableSchema } from '@kojo/plugin-api';
+import type { CharaInfo, FileIO, GameAdapter, GameProject, Plugin, VariableSchema } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { createEratwFamilyIndex } from './family-index';
 import { createEratwConventions } from './conventions';
 import { loadEratwVariableSchema } from './variable-schema';
-import { loadEratwCallProtocol } from './call-protocol';
+import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -29,13 +29,14 @@ export function createEratwAdapterPlugin(): Plugin {
       /** 变量字典（每次 loadProject 时按当前游戏 CSV 重建） */
       let currentSchema: VariableSchema | undefined;
       /** 口上调用协议（v0.2 第十批；loadProject 时解析路由表，失败 → undefined 优雅降级） */
-      let currentProtocol: KojoCallProtocol | undefined;
+      let currentProtocol: EratwCallProtocol | undefined;
 
       const adapter: GameAdapter = {
         gameId: ERATW.gameId,
         displayName: ERATW.displayName,
         functionFamilyIndex: createEratwFamilyIndex(),
-        conventions: createEratwConventions(),
+        // 覆盖规则消费已解析的路由协议（loadProject 时填充；缺省 → 规则降级）。
+        conventions: createEratwConventions(() => currentProtocol),
         get variableSchema() {
           return currentSchema;
         },

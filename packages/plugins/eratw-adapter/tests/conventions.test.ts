@@ -5,10 +5,13 @@ import type {
   ErbFile,
   ErbFunctionRef,
   ErbIndex,
+  FileIO,
   Logger,
 } from '@kojo/plugin-api';
 import { parseErbText } from '@kojo/plugin-erb-parser';
+import { loadEratwCallProtocol } from '../src/call-protocol';
 import {
+  createCallSlotCoverageRule,
   formTripleSymbolRule,
   kojoCompletenessRule,
   kxPlaceholderRule,
@@ -195,6 +198,63 @@ describe('eratw 约定规则', () => {
       expect(warn[0]!.message).toContain('RETURN 5');
       expect(info).toHaveLength(1);
       expect(info[0]!.message).toContain('没有 RETURN');
+    });
+  });
+
+  describe('kojo-call-slot-coverage（签名槽 vs 路由转发）', () => {
+    // SPEVENT 转发 2 数值槽；DANMAKU 转发 1 数值槽；COLOR 无转发。
+    // DANMAKU 行用 TRYCCALLFORM，兼作 TRYC 系关键字解析回归。
+    const ROUTE = [
+      '\tTRYCALLFORM M_KOJO%KOJO_NAME%_SPEVENT_K{NO:TARGET}_{ARG:1}(ARG:3,ARG:4)',
+      '\tTRYCCALLFORM M_KOJO%KOJO_NAME%_DANMAKU_K{NO:TARGET}(ARG:3)',
+      '\tTRYCALLFORM M_KOJO%KOJO_NAME%_COLOR_K{NO:TARGET}',
+    ].join('\n');
+
+    const routeIo = {
+      readText: async (p: string) => ({ path: p, text: ROUTE, encoding: 'utf-8', eol: 'lf', mtimeMs: null }),
+    } as unknown as FileIO;
+
+    async function makeProtocol() {
+      const p = await loadEratwCallProtocol({ io: routeIo, routeFile: 'KOJO_MESSAGE.ERB', log: silentLog });
+      expect(p).toBeTruthy();
+      return p!;
+    }
+
+    it('声明槽多于转发槽 → 产出 warning（含逐类计数）', async () => {
+      const proto = await makeProtocol();
+      const files = { '/p/a.ERB': '@M_KOJO_TEST_SPEVENT_K1_1(ARG, ARG:1, ARG:2)\nRETURN\n' };
+      const index = makeIndex(files);
+      const issues = (await createCallSlotCoverageRule(() => proto).check!(ctxFor(index, files))) as {
+        severity: string;
+        message: string;
+        characterNo?: number;
+      }[];
+      expect(issues).toHaveLength(1);
+      expect(issues[0]!.severity).toBe('warning');
+      expect(issues[0]!.message).toContain('数值槽 声明 3 / 转发 2');
+      expect(issues[0]!.characterNo).toBe(1);
+    });
+
+    it('声明槽不超过转发槽 → 无问题', async () => {
+      const proto = await makeProtocol();
+      const files = { '/p/a.ERB': '@M_KOJO_TEST_SPEVENT_K1_1(ARG, ARG:1)\nRETURN\n' };
+      const index = makeIndex(files);
+      expect(await createCallSlotCoverageRule(() => proto).check!(ctxFor(index, files))).toEqual([]);
+    });
+
+    it('协议不可用（getProtocol → undefined）→ 降级不产出', async () => {
+      const files = { '/p/a.ERB': '@M_KOJO_TEST_SPEVENT_K1_1(ARG, ARG:1, ARG:2)\nRETURN\n' };
+      const index = makeIndex(files);
+      expect(
+        await createCallSlotCoverageRule(() => undefined).check!(ctxFor(index, files)),
+      ).toEqual([]);
+    });
+
+    it('协议不认识该函数（非路由可达家族）→ 跳过', async () => {
+      const proto = await makeProtocol();
+      const files = { '/p/a.ERB': '@M_KOJO_TEST_MESSAGE_COM_K1_1(ARG, ARG:1, ARG:2)\nRETURN\n' };
+      const index = makeIndex(files);
+      expect(await createCallSlotCoverageRule(() => proto).check!(ctxFor(index, files))).toEqual([]);
     });
   });
 });

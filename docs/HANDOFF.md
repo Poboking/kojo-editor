@@ -106,6 +106,13 @@
   5. **边界**：只碰 plugin-api + goldens；未碰 erb-parser/condition-extractor/state-replay；规范文档只读；无新插件（S2 建 `kojo-sugar`）。
   6. **并行线**：adapter 线（TRAE）WIP 使其 `ruleCount` 断言暂红（5→6 属其维护域）；stash 归位复跑确认本批无回归（回放基线逐字不变）。
 - 测试：**485 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**11 插件**）。
+- **v1.0 收口完成**（本会话）：**协议覆盖校验规则**（IMPLEMENTATION-LOG §5.27 为权威记录）。
+  1. **校验语义**：对 `call-protocol.ts` 解析的每个家族槽位，核对家族实际函数签名槽（`ErbFunction.params`）是否被 `KOJO_MESSAGE.ERB` 路由转发覆盖；声明槽 > 转发槽 ⇒ 该槽调用时**永远**收引擎默认值（0/空串）→ 结构化 `warning`（ruleId `eratw.kojo-call-slot-coverage`）。
+  2. **覆盖语义 = 存在性**（`maxForwardedSlotsFor`，max-over-all-matching 模板）：任一匹配模板转发该槽即不算「永远」——修掉 `_CHILD_%ARGS:1%` 抢占通用模板导致的 156 条误报（193→36）。
+  3. **TRYC 修复**：`ROUTE_LINE_RE` 补 `TRYCCALLFORM`（原漏；引擎 `ERB_EXCOM.khp:175` 确证，整合版 214 处）——修复后 ONABARE 4 实参模板可见，误报 37→36。
+  4. **落位**：`eratw-adapter/conventions.ts` 第 5 条规则 + 闭包注入 `getProtocol`（ctx 刻意不暴露 adapter）；`plugin.ts` 传 `() => currentProtocol`；契约扩展 `EratwCallProtocol extends KojoCallProtocol`（不改 plugin-api）；`ui-convention-report` 零改动自然消费。
+  5. **测试**：规则单测 3 路径（覆盖/不覆盖/协议不可用降级）+ call-protocol +5（模板具体性与覆盖语义）+ 真实语料 `corpus.test.ts`（36 条，全 warning，全「数值槽 声明 1 / 转发 0」）；kernel 集成冒烟 `ruleCount` 5→6 + 新增 `=== 36` 断言。
+  6. **验证**：564 passed / 7 skipped（无 smoke）；569 / 2 skipped（带 smoke）；typecheck root+app ✅；audit ✅（13 插件）；**回放基线逐字不变**（K49 1356/11685/未知 3741/exact 836）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -309,7 +316,7 @@ node tools/smoke-tauri-ipc.mjs
 
 ### 6.11 第十三批候选（已完成 2 项，余项顺延）
 
-- **v1.0 收口**：✅ 回放面板场景预设（§6.15，第十五批）；**余项**：协议覆盖校验规则（签名槽与路由转发不一致）+ 桌面壳真实终端冒烟（沙箱 os error 231 欠账）。
+- **v1.0 收口**：✅ 回放面板场景预设（§6.15，第十五批）；✅ 协议覆盖校验规则（§5.27，签名槽与路由转发一致性）；**余项**：桌面壳真实终端冒烟（沙箱 os error 231 欠账）。
 - **index-603 索引域外函数源（消解剩余 call 368）**：FIRSTTIME 等定义在 kojoPaths 之外——"游戏函数源"通道（扩 index 扫描域 / 按需 parseFile）；多数有副作用，收益需再测量。
 - **adapter 口上调用协议**：家族 → 转发实参映射（KOJO_MESSAGE.ERB 路由表）→ call-context 858 条的自动消解；回放面板的场景选择器可从协议生成"对话对象/时机"下拉（替代手填槽位）。
 - **回放面板角色上下文增强**：MASTER/ASSI/PLAYER 指针的场景选择（当前取快照顶层值）。
@@ -463,5 +470,5 @@ node tools/smoke-tauri-ipc.mjs
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：520 项 / ✅ / 12 插件）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.25 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：v1.0 收口余项（协议覆盖校验规则：签名槽与路由转发不一致）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；**BUG-5 file.changed 事件链**（payload 契约与注入器写链路一并设计，见 §6.18）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2，**S1 的测量项已由规范 §1.1 完成**，**S1 契约 + golden 固化 ✅ 已完成**（IMPLEMENTATION-LOG §5.26），下一批 = **S2 转译内核**（`kojo-sugar` 插件：行式词法→AST→codegen，golden §6.1/§6.2 逐字节转正））
+4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账；**协议覆盖校验规则 ✅ 已完成**，见 IMPLEMENTATION-LOG §5.27）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；**BUG-5 file.changed 事件链**（payload 契约与注入器写链路一并设计，见 §6.18）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2，**S1 的测量项已由规范 §1.1 完成**，**S1 契约 + golden 固化 ✅ 已完成**（IMPLEMENTATION-LOG §5.26），下一批 = **S2 转译内核**（`kojo-sugar` 插件：行式词法→AST→codegen，golden §6.1/§6.2 逐字节转正））
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

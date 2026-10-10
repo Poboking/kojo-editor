@@ -145,7 +145,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       const linter = kernel.services.get<ConventionLinterService>(WellKnownServices.ConventionLinter);
       const report = await linter.run();
       expect(report.failedRules).toEqual([]); // 规则不得静默失败
-      expect(report.ruleCount).toBe(5); // 引擎内置 1 + adapter 4
+      expect(report.ruleCount).toBe(6); // 引擎内置 1 + adapter 5（含协议覆盖校验）
       expect(report.issues.length).toBeGreaterThan(0);
 
       const byRule = new Map<string, number>();
@@ -157,6 +157,9 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       const formHits = byRule.get('eratw.form-triple-symbol') ?? 0;
       expect(formHits).toBeGreaterThan(0);
       expect(formHits).toBeLessThan(100);
+      // 协议覆盖校验（v1.0 收口）：声明槽 vs 路由转发——真实语料基线 36 条
+      // （均为 MESSAGE_PALAMCNG_{D,F}/COLOR 等无参家族上多声明的 1 个数值槽）
+      expect(byRule.get('eratw.kojo-call-slot-coverage') ?? 0).toBe(36);
 
       // 6. 条件抽取（v0.2 第四批：控制流 → 谓词 → 状态依赖；schema 标注来自 adapter 变量字典）
       const extractor = kernel.services.get<ConditionExtractorService>(WellKnownServices.ConditionExtractor);

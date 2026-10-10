@@ -21,24 +21,29 @@
 
 import type { FileIO, KojoCallProtocol, KojoCallSlot, Logger } from '@kojo/plugin-api';
 
-/** 路由行：(?:TRY)?CALLFORM <模板>(<实参表>)；括号可省（无实参转发） */
-const ROUTE_LINE_RE = /\b(?:TRY)?CALLFORM\s+(M_KOJO[^\s(]+)\s*(?:\(([^)]*)\))?/;
+/** 路由行：CALLFORM / TRYCALLFORM / TRYCCALLFORM（TRYC 系）<模板>(<实参表>)；
+ *  括号可省（无实参转发）。**TRYCALLFORM 是 TRY+CALLFORM，TRYCCALLFORM 是
+ *  Emuera TRYC 系关键字**（实测整合版 214 处，如 `_EVENT_K…_ONABARE_…` 分支
+ *  多实参转发）——不解析会造成家族槽位误判。 */
+const ROUTE_LINE_RE = /\b(?:TRYC?)?CALLFORM\s+(M_KOJO[^\s(]+)\s*(?:\(([^)]*)\))?/;
 
 /** 单个转发实参 token：ARG:n（数值）或 ARGS:n（字符串） */
 const ARG_TOKEN_RE = /^(ARG|ARGS)(?::(\d+))?$/;
 
 /** 家族模板 → 函数名匹配正则：%…% 与 {…} 为通配段，其余字面。
  *  **尾部段类型区分**（数值/字符串时机的函数名判定）：尾部 {…}（数值表达式
- *  如 {ARG:1}）→ `\d+`；尾部 %…%（字符串时机 %ARGS:1%）→ `.+`。中段一律 `.+`。 */
-function templateToRegex(template: string): { regex: RegExp; numericTail: boolean } {
+ *  如 {ARG:1}）→ `\d+`；尾部 %…%（字符串时机 %ARGS:1%）→ `.+`。中段一律 `.+`。
+ *  同时累计**字面字符数**（literalLen）——同名多模板命中时取最具体的一张
+ *  （字面最长者），消解 `_EVENT_` 与 `_DAILY_EVENT_` / `_26_1` 等互相包含的歧义。 */
+function templateToRegex(template: string): { regex: RegExp; numericTail: boolean; literalLen: number } {
   let pattern = '^';
   let numericTail = false;
+  let literalLen = 0;
   for (let i = 0; i < template.length; i++) {
     const c = template[i]!;
     if (c === '%') {
       const close = template.indexOf('%', i + 1);
-      const isTail = close === template.length - 1;
-      pattern += isTail ? '.+' : '.+'; // 插值段（尾部 = 字符串时机：任意文本）
+      pattern += '.+'; // 插值段（尾部 = 字符串时机：任意文本）
       i = close < 0 ? template.length : close;
     } else if (c === '{') {
       const close = template.indexOf('}', i + 1);
@@ -52,9 +57,10 @@ function templateToRegex(template: string): { regex: RegExp; numericTail: boolea
       i = close < 0 ? template.length : close;
     } else {
       pattern += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      literalLen++;
     }
   }
-  return { regex: new RegExp(pattern + '$'), numericTail };
+  return { regex: new RegExp(pattern + '$'), numericTail, literalLen };
 }
 
 interface FamilyRule {
@@ -63,6 +69,8 @@ interface FamilyRule {
   slots: KojoCallSlot[];
   /** 尾部段是数值时机（{ARG:1} → \d+）——匹配优先级高于字符串时机 */
   numericTail: boolean;
+  /** 字面字符数——同类型模板命中时取最具体（字面最长）者 */
+  literalLen: number;
 }
 
 /** 解析转发实参表 → 槽位（按序绑定；ARG:n=int 槽 / ARGS:n=str 槽） */
@@ -96,10 +104,26 @@ export interface LoadCallProtocolOptions {
 }
 
 /**
+ * eraTW 口上调用协议（在通用 `KojoCallProtocol` 之上扩展覆盖判定所需能力）。
+ *
+ * `slotsFor` 返回**最具体**的一张模板（字面最长优先）——用于 UI 展示"该函数
+ * 的典型场景参数"；`maxForwardedSlotsFor` 返回**所有**匹配模板的逐类最大槽数
+ * ——用于覆盖校验（判定声明槽是否"永远收默认值"）。
+ *
+ * 两者分开的原因：一个函数名可能被多条路由模板同时接纳（`_EVENT_K…_CHILD_RAISING_…`
+ * 既命中 `_CHILD_%ARGS:1%`，也命中通用 `_EVENT_K…_%ARGS:1%`）——UI 需确定性首选，
+ * 而"是否永远拿不到转发值"必须按**存在性**（任一模板转发即不算永远）判定。
+ */
+export interface EratwCallProtocol extends KojoCallProtocol {
+  /** 所有匹配模板的**逐类最大**转发槽数；无模板匹配 → null（协议不认识该函数） */
+  maxForwardedSlotsFor(functionName: string): { int: number; str: number } | null;
+}
+
+/**
  * 加载口上调用协议（读路由文件逐行解析）。
  * 文件不存在 / 读取失败 → 返回 undefined（协议不可用，优雅降级——UI 隐藏场景参数区）。
  */
-export async function loadEratwCallProtocol(opts: LoadCallProtocolOptions): Promise<KojoCallProtocol | undefined> {
+export async function loadEratwCallProtocol(opts: LoadCallProtocolOptions): Promise<EratwCallProtocol | undefined> {
   let text: string;
   try {
     text = (await opts.io.readText(opts.routeFile)).text;
@@ -121,8 +145,8 @@ export async function loadEratwCallProtocol(opts: LoadCallProtocolOptions): Prom
     const fam = /^_([A-Z0-9_]+?)_K/.exec(afterFirstInterp)?.[1];
     if (!fam) continue; // 模板形态不符合家族约定 → 跳过
     const slots = parseArgsToSlots(m[2] ?? '');
-    const { regex, numericTail } = templateToRegex(template);
-    const rule: FamilyRule = { family: fam, regex, slots, numericTail };
+    const { regex, numericTail, literalLen } = templateToRegex(template);
+    const rule: FamilyRule = { family: fam, regex, slots, numericTail, literalLen };
     const existing = rules.find((r) => r.regex.source === rule.regex.source);
     if (existing) {
       // 同模板多行 → 取槽位更多的一张（覆盖最全场景）
@@ -140,13 +164,37 @@ export async function loadEratwCallProtocol(opts: LoadCallProtocolOptions): Prom
   return {
     slotsFor(functionName: string): readonly KojoCallSlot[] | null {
       const name = functionName.toUpperCase();
-      // 数值时机模板（尾部 \d+）优先：数值函数名不应被字符串时机模板（尾部 .+）
-      // 抢先匹配（两者都可能同配，数值版的槽位语义才是该函数的真实转发结构）。
-      const sorted = [...rules].sort((a, b) => Number(b.numericTail) - Number(a.numericTail));
+      // 匹配优先级：①**字面最长**（最具体）优先——消解 `_EVENT_K…` 与
+      // `_DAILY_EVENT_K…` / `_EVENT_K…_26_1` 等互相包含的歧义；②同字面长时
+      // **数值时机模板优先**（尾部 \d+）——数值函数名不应被字符串时机模板
+      // （尾部 .+）抢先匹配。
+      const sorted = [...rules].sort(
+        (a, b) => b.literalLen - a.literalLen || Number(b.numericTail) - Number(a.numericTail),
+      );
       for (const r of sorted) {
         if (r.regex.test(name)) return r.slots;
       }
       return null;
+    },
+
+    maxForwardedSlotsFor(functionName: string): { int: number; str: number } | null {
+      const name = functionName.toUpperCase();
+      let int = 0;
+      let str = 0;
+      let matched = false;
+      for (const r of rules) {
+        if (!r.regex.test(name)) continue;
+        matched = true;
+        let ri = 0;
+        let rs = 0;
+        for (const slot of r.slots) {
+          if (slot.kind === 'int') ri++;
+          else rs++;
+        }
+        if (ri > int) int = ri;
+        if (rs > str) str = rs;
+      }
+      return matched ? { int, str } : null;
     },
   };
 }

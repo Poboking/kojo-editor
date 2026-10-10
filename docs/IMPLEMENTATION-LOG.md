@@ -645,3 +645,54 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - **待办（S2 开工前）**：adapter 线落地后需同步 `integration-plugins.test.ts:148` 的 `ruleCount` 期望值（5 → 6）——顺手核对 `[smoke]` 输出的 `across N rule(s)`。
 
 ---
+
+### 5.27 协议覆盖校验规则（v1.0 收口实施记录：签名槽 vs 路由转发一致性）
+
+> 依据：`docs/HANDOFF.md` §6.11「v1.0 收口余项」+ §十-4；契约输入 `plugin-api/src/game.ts`（`KojoCallSlot`/`KojoCallProtocol`）。
+> 边界：仅 `packages/plugins/eratw-adapter/**`（含测试）+ kernel 集成断言 + `docs`；**未碰** `plugin-api/src/sugar.ts`、`plugins/kojo-sugar/**`（v0.3 主线 S1/S2 并行，零文件交集）；未新增插件（复用 convention-linter 既有规则注册通道）；`ui-convention-report` 未改动（面板自然消费）。
+
+#### 校验目标与语义
+
+- **目标**：对 `call-protocol.ts` 解析出的每个家族槽位，核对某家族**实际函数**（erb-parser 函数签名解析 `ErbFunction.params`）的**声明槽**是否被 `KOJO_MESSAGE.ERB` 路由表的**转发实参**覆盖。
+- **不一致定义**：声明槽 > 转发槽 ⇒ 多出的槽在调用时**永远**收引擎默认值（数值 0 / 字符串空串），声明无效——产出结构化 `warning`（`ConventionIssue`，ruleId = `eratw.kojo-call-slot-coverage`）。
+- **覆盖语义 = 存在性**（关键决策，见下）：**任一**匹配模板转发了该槽即不算「永远」——逐类取所有匹配模板的 int/str 槽数**最大值**（`maxForwardedSlotsFor`）。
+
+#### 交付物
+
+1. **`call-protocol.ts`**：
+   - `ROUTE_LINE_RE` 修复 TRYC 系关键字：`\b(?:TRYC?)?CALLFORM`（原 `(?:TRY)?CALLFORM` 漏 `TRYCCALLFORM`）。引擎确证：`ERB_EXCOM.khp` line 175 声明 `TRYCJUMP,TRYCCALL,TRYCGOTO,TRYCJUMPFORM,TRYCCALLFORM,TRYCGOTOFORM,CATCH,ENDCATCH`；实测整合版 214 处 `TRYCCALLFORM`（缺函数时兜底惯用法，配套 CATCH/ENDCATCH）。
+   - 新增导出接口 `EratwCallProtocol extends KojoCallProtocol`，方法 `maxForwardedSlotsFor(functionName): { int: number; str: number } | null`（无匹配 → null）。
+   - `loadEratwCallProtocol` 返回类型改为 `Promise<EratwCallProtocol | undefined>`；`slotsFor`（字面最长优先排序）**保留给 UI 展示**，覆盖判定不复用它。
+2. **`conventions.ts`**：新增规则 5 `createCallSlotCoverageRule(getProtocol?)`；`declaredSlotCounts(params)`（`ARGS` 前缀 → str，`ARG` → int，兼容 `ARG`/`ARG:n` 两形态）；`createEratwConventions` 由 4 条扩为 5 条。
+   - 依赖注入：`ConventionCheckContext` **刻意不暴露 adapter**（架构铁律），故以闭包注入 `getProtocol?: () => EratwCallProtocol | undefined`；协议不可用 → 规则返回 `[]`（降级，不误报）。
+3. **`plugin.ts`**：`currentProtocol` 类型换 `EratwCallProtocol`；`conventions: createEratwConventions(() => currentProtocol)`。
+
+#### 关键设计决策
+
+- **存在性覆盖语义（非字面最长优先）**：TRYC 修复后曾误用 `slotsFor`（字面最长优先）判定，导致 `_CHILD_%ARGS:1%`（0 槽、literalLen 21）抢占通用 `_EVENT_` 模板（literalLen 15）→ 156 条误报（CHILD_RAISING 声明 2int+1str 被判「转发 0」）。用户任务措辞「**永远**收引擎默认值」锁定**存在性**语义：只要有一条匹配模板转发了槽，该槽在部分调用路径上就**不是永远**默认。改用 `maxForwardedSlotsFor`（max-over-all-matching）后误报归零，issues 193→36。
+- **`slotsFor` 保留字面最长优先**：那是「UI 展示一条最可能命中」的语义（面板场景参数输入的默认来源），与覆盖判定是两个问题——一个问「实际走哪条」，一个问「是否存在任一转发」。两者不复用同一排序。
+- **不碰 plugin-api**：`KojoCallProtocol` 是跨游戏契约；`maxForwardedSlotsFor` 是 adapter 侧实现细节 → 在 eratw-adapter 内 `extends` 扩展（`EratwCallProtocol`），conventions 从同包导入扩展类型。
+- **`ui-convention-report` 零改动**：新规则经既有 `ConventionRule[]` 通道注册，面板按 ruleId 自然消费（本次只新增一条规则，未动面板）。
+
+#### 测试
+
+- **单测** `tests/conventions.test.ts`（+4）：声明槽多于转发 → warning（message 含「数值槽 声明 3 / 转发 2」）+ characterNo 归属；不超过 → 无问题；协议不可用（`() => undefined`）→ 降级 `[]`；协议不认识该函数 → 跳过。
+- **单测** `tests/call-protocol.test.ts`（+5，「模板具体性与覆盖语义」）：DAILY_EVENT 字面最长优先（7 槽 = 5int+2str）；`_26_1` 取字面（1 str）；TRYCCALLFORM 同模板多行取 4 int；`maxForwardedSlotsFor` 逐类最大（CHILD_DAILY={1,0} / CHILD_FOO={0,0} / DAILY_EVENT={5,2} / ONABARE={4,0} / `_26_1`={2,1}）；协议不认识 → null。
+- **真实语料** `tests/call-slot-coverage.corpus.test.ts`（`describe.skipIf(!KOJO_SMOKE_PROJECT)`）：真实工程 issues **36** 条，全 warning，全为「数值槽 声明 1 / 转发 0」，含官方模板 `M_KOJO_ORTHODOX_MESSAGE_PALAMCNG_F_K49`。
+  - 36 = `MESSAGE_PALAMCNG_{D,F}`（33+2）+ `COLOR`（1）家族上多声明的 1 个 ARG；路由表对这些家族**无参转发**（如 `TRYCALLFORM M_KOJO%KOJO_NAME%_MESSAGE_PALAMCNG_F_K{NO:TARGET}` 无括号）。
+- **真阳性核验**（抽样逐个查路由表）：`M_KOJO_少女之梦_MESSAGE_PALAMCNG_F_K1(ARG)` / `M_KOJO_別人変身版_COLOR_K69(ARG)` / `M_KOJO_不坠之月_MESSAGE_PALAMCNG_D_K15(ARG)` / `M_KOJO_ENG01_MESSAGE_PALAMCNG_D_K36(ARG)` 均只声明未获转发 → 按定义成立（「宁可漏报不可误报」原则下亦为确定真阳性）。
+- **集成冒烟** `kernel/tests/integration-plugins.test.ts`：`ruleCount` 期望 5 → **6**（引擎内置 1 + adapter 5）；新增 `byRule.get('eratw.kojo-call-slot-coverage') === 36`。
+
+#### 验证
+
+- vitest 全量 **564 passed / 7 skipped**（无 smoke）；带 `KOJO_SMOKE_PROJECT` 全量 **569 passed / 2 skipped**。
+- typecheck **root + app 双跑 ✅**；`audit:decoupling` ✅（13 插件）。
+- 真实工程集成冒烟 ✅：**回放基线逐字不变**（K49 1356 函数 / 11685 谓词 / 未知 **3741** / exact **836**）。
+
+#### 并行线冲突记录
+
+- 同期 v0.3 主线（S1，本文件 §5.26）已在 `plugin-api/src/sugar.ts` + `kojo-sugar/tests/goldens/**` 落地，本线**零文件交集**。
+- §5.26 遗留待办「adapter 线落地后需同步 `integration-plugins.test.ts:148` 的 `ruleCount`（5 → 6）」由本线**已完成**。
+- 本线只提交自己边界内文件（`packages/plugins/eratw-adapter/**` + kernel 集成 `ruleCount` 断言 + docs）。
+
+---

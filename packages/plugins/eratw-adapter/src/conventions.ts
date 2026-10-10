@@ -12,7 +12,13 @@
  * 原则：**宁可漏报不可误报**（RESEARCH.md §7）。语义拿不准的一律降级为 info。
  */
 
-import type { ConventionCheckContext, ConventionIssue, ConventionRule } from '@kojo/plugin-api';
+import type {
+  ConventionCheckContext,
+  ConventionIssue,
+  ConventionRule,
+  ErbParam,
+} from '@kojo/plugin-api';
+import type { EratwCallProtocol } from './call-protocol';
 import { parseKojoFamily } from './family-index';
 
 /* ------------------------------ 工具 ------------------------------ */
@@ -297,9 +303,103 @@ export const messageCheckStructureRule: ConventionRule = {
   },
 };
 
+/* ------------- 规则 5：口上函数调用槽覆盖（签名槽 vs 路由转发） ------------- */
+
+const CALL_SLOT_RULE = 'eratw.kojo-call-slot-coverage';
+
+/**
+ * 从函数形参表统计声明槽：`ARG`/`ARG:n` → 数值槽；`ARGS`/`ARGS:n` → 字符串槽。
+ * **必须先判 ARGS**（前缀包含 ARG，否则字符串槽会被误计为数值槽）。
+ * 非 ARG/ARGS 形参（如 `OVERRIDE_TARGET`）不参与——它们不属于"转发实参"模型。
+ */
+function declaredSlotCounts(params: readonly ErbParam[]): { int: number; str: number } {
+  let int = 0;
+  let str = 0;
+  for (const p of params) {
+    const name = p.name.toUpperCase();
+    if (name === 'ARGS' || /^ARGS:\d+$/.test(name)) str++;
+    else if (name === 'ARG' || /^ARG:\d+$/.test(name)) int++;
+  }
+  return { int, str };
+}
+
+/**
+ * 口上函数调用槽覆盖校验：**签名声明槽** vs **路由转发实参槽**。
+ *
+ * 路由层（KOJO_MESSAGE.ERB）按**家族模板**转发实参——如 SPEVENT 家族
+ * `TRYCALLFORM …_SPEVENT_K{…}_{ARG:1}(ARG:3,ARG:4)` 转发 2 个数值槽。
+ * 若某口上函数声明的槽数多于该家族被转发的槽数，多出的槽在任何调用路径上都
+ * 拿不到转发值，**永远是引擎默认 0 / 空串**（声明了却收不到，作者意图落空）。
+ *
+ * 覆盖判定按**存在性**：一个函数名可能被多条路由模板接纳（如
+ * `_EVENT_K…_CHILD_RAISING_…` 既命中 `_CHILD_%ARGS:1%`，也命中通用
+ * `_EVENT_K…_%ARGS:1%`）。只有当**任何**匹配模板都不转发该槽时才算"永远收默认值"
+ * （`maxForwardedSlotsFor` 的逐类最大值语义）——**宁可漏报不可误报**。
+ *
+ * 依据：`call-protocol.ts` 路由表解析（家族 → 转发槽位语义）+
+ * `erb-parser` 函数签名解析（`ErbFunction.params`）。
+ *
+ * 降级（与回放面板的协议降级同源，绝不猜测）：
+ * - `getProtocol()` 返回 undefined（路由表缺失 / 读取失败）→ 不产出问题；
+ * - 协议**不认识**该函数名（非路由可达家族）→ 跳过，不归本规则管。
+ */
+export function createCallSlotCoverageRule(getProtocol?: () => EratwCallProtocol | undefined): ConventionRule {
+  return {
+    id: CALL_SLOT_RULE,
+    description: '口上函数签名槽未被路由转发覆盖（多出的参数槽永远收引擎默认 0/空串）',
+    severity: 'warning',
+    source: 'KOJO_MESSAGE.ERB 路由表（call-protocol.ts）+ erb-parser 函数签名解析（ErbFunction.params）',
+    check(ctx: ConventionCheckContext): ConventionIssue[] {
+      const protocol = getProtocol?.();
+      if (!protocol) return [];
+      const issues: ConventionIssue[] = [];
+      for (const file of ctx.index.files.values()) {
+        for (const fn of file.functions) {
+          const m = parseKojoFamily(fn.name);
+          // 协议模板统一形如 `M_KOJO%口上名%_家族_K…`，口上名段要求**非空**
+          // （`.+`）。空口上名函数（如 `M_KOJO_EVENT_K1_x`）协议无法可靠归属
+          // （会被更短的家族模板误配）——跳过，绝不据歧义匹配产出误报。
+          if (!m || m.family === '') continue;
+          const fwd = protocol.maxForwardedSlotsFor(fn.name);
+          if (!fwd) continue; // 协议不认识 → 非路由可达家族
+          const declared = declaredSlotCounts(fn.params);
+          if (declared.int <= fwd.int && declared.str <= fwd.str) continue;
+
+          const parts: string[] = [];
+          if (declared.int > fwd.int) parts.push(`数值槽 声明 ${declared.int} / 转发 ${fwd.int}`);
+          if (declared.str > fwd.str) parts.push(`字符串槽 声明 ${declared.str} / 转发 ${fwd.str}`);
+          issues.push({
+            ruleId: CALL_SLOT_RULE,
+            severity: 'warning',
+            message:
+              `「${fn.name}」的签名槽未被路由覆盖（${parts.join('，')}）：` +
+              `多出的槽在调用时永远收到引擎默认值（数值 0 / 字符串空串），声明无效。`,
+            filePath: fn.filePath,
+            line: fn.startLine,
+            characterNo: m.characterNo ?? undefined,
+            family: m.family || undefined,
+            key: `${CALL_SLOT_RULE}|${fn.normalizedName}`,
+          });
+        }
+      }
+      return issues;
+    },
+  };
+}
+
 /* ---------------------------- 汇总 ---------------------------- */
 
-/** 构造 eraTW 约定规则集（供 `GameAdapter.conventions` 使用） */
-export function createEratwConventions(): readonly ConventionRule[] {
-  return [kxPlaceholderRule, kojoCompletenessRule, formTripleSymbolRule, messageCheckStructureRule];
+/**
+ * 构造 eraTW 约定规则集（供 `GameAdapter.conventions` 使用）。
+ * `getProtocol` 为可选的调用协议提供者（适配器在 loadProject 时解析路由表后注入）；
+ * 缺省 → 覆盖规则降级（不产出问题）。
+ */
+export function createEratwConventions(getProtocol?: () => EratwCallProtocol | undefined): readonly ConventionRule[] {
+  return [
+    kxPlaceholderRule,
+    kojoCompletenessRule,
+    formTripleSymbolRule,
+    messageCheckStructureRule,
+    createCallSlotCoverageRule(getProtocol),
+  ];
 }
