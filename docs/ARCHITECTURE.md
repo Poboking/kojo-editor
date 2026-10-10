@@ -302,11 +302,12 @@ kojo-editor/
 │   │   ├── eratw-adapter/     # 声明 requires: ['kernel.io']，eraTW 全部知识在此（家族识别 + conventions）
 │   │   ├── convention-linter/ # 声明 requires: ['kernel.io','kernel.project','kernel.slots','erb.parser']
 │   │   ├── ui-convention-report/ # ui.panel：校验结果面板（点击 → editor.revealLocation）
+│   │   ├── ui-kojo-navigator/ # ★ ui.panel：函数树导航（角色→家族→面→函数；家族规则经槽位查询，不 import adapter）
 │   │   ├── sav-parser/        # sav 字节协议：读（parse_sav.cjs 移植）+ 写/注入（§5.5）
 │   │   ├── state-replay/      # requires: ['game.adapter','sav.parser']
 │   │   ├── runtime/           # v2 可选：受管引擎子进程 + CliDebug 协议（§5.6，默认不立项）
 │   │   ├── preview-renderer/
-│   │   ├── ui-function-tree/  # ui.panel：函数树导航
+│   │   ├── condition-extractor/ # v0.2 第三批：条件谓词抽取（好感/信赖/CFLAG 位/时间窗）
 │   │   ├── ui-condition-matrix/# ui.panel：条件矩阵/位图查看
 │   │   └── ui-plugin-status/  # ui.panel：插件状态面板（首个 ui.panel 示例）
 │   └── app/               # 壳：Tauri（Rust 宿主）+ Monaco 编辑器主体；sav 二进制解析可下沉 Rust 侧

@@ -1,7 +1,8 @@
-# 交接文档（v0.1 ✅ → v0.2 第一批 ✅ / 第二批 🚧）
+# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 🚧）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
-> 上一会话完成 v0.1 全量（含桌面壳端到端）+ v0.2 家族识别地基；本会话完成 **v0.2 第一批：约定校验器（引擎/规则/面板）+ 索引响应式化**。
+> 上一会话完成 v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
+> 本会话完成 **v0.2 第二批：函数树导航（`ui-kojo-navigator`）**。
 
 ---
 
@@ -20,9 +21,15 @@
   1. **索引所有权收敛到 `erb-parser`**：订阅 `project.opened` 自动建索引并缓存，`currentIndex()/ensureIndex()` + `kojo.functionChanged` 广播；app 不再自建索引。
   2. **约定校验器**：`plugin-api/conventions.ts` 契约 + 新插件 `convention-linter`（引擎 + 内置通用规则）+ `eratw-adapter/conventions.ts`（4 条 eraTW 规则）+ 新插件 `ui-convention-report`（面板，点击问题跳转）。
   3. **通用导航事件 `editor.revealLocation`**（内核事件表新增）+ app 落地（打开文件并定位行）。
+- **v0.2 第二批完成**（本会话）：
+  1. **新插件 `ui-kojo-navigator`**（`ui.panel`）：角色 → 家族 → 面 → 函数 三维树；角色下拉 + 全量函数名搜索（含未归属）；点击 → `editor.revealLocation`。
+  2. **`tree.ts` 纯逻辑**（零 React）：面语义排序（FACE_ORDER）、slot 数值排序、`declare` 单独成面、orphan 只计数不展开（99k 函数里非口上域占大头）。
+  3. **家族规则经槽位查询获取**（按 `project.adapterId` 精确匹配），**不 import adapter 包**——多游戏共存天然正确。
+  4. 集成冒烟新增「导航地基」断言：可归属角色 / 多家族角色 / 多面角色 / 最重角色。
 - **真实工程基线（2026-10-10 实测）**：168 角色 / 2,285 ERB / 99,104 函数 / 去重名 99,101；家族识别 98.91%（109 家族）；索引 ~2.9s。
+- **导航地基基线**：可归属角色 **141** | 多家族角色 **77** | 多面（>3）角色 **135** | 最重角色 **K49（3,099 函数 / 18 家族）**。
 - **约定校验基线**：**757 项**（error 0 / warning 611 / info 146），耗时 ~5.7s。分规则：KX 占位符 603（去重函数名）/ 口上完整性 141 / FORM 三连符号 8 / MESSAGECHECK 结构 2 / 函数重名 3。
-- 测试：**147 项全绿**（含新增引擎/规则/响应式索引单测）；typecheck 通过；解耦审计 ✅。
+- 测试：**157 项全绿**；typecheck（root + app）通过；解耦审计 ✅（6 插件）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -35,28 +42,31 @@
 | `D:\DSH\reverse-engineering\eratw4.980-口上机制深挖.md` | **口上领域知识权威**（27 CASE 路由、MESSAGECHECK 位协议、家族命名、四件套） |
 | `D:\DSH\reverse-engineering\eratw4.980-存档实战解析.md` | sav 协议（v1.0 前必读） |
 
-## 四、代码地图（v0.2 第一批增补）
+## 四、代码地图（v0.2 第二批增补）
 
 ```
 packages/
 ├── plugin-api/src/
-│   ├── conventions.ts         # ★ 新增：约定校验器契约（规则/问题/上下文/报告/服务）
+│   ├── conventions.ts         # 约定校验器契约（规则/问题/上下文/报告/服务）
 │   ├── services.ts            # +WellKnownServices.ConventionLinter='convention.linter'
 │   ├── events.ts              # +KernelEventMap['editor.revealLocation']
 │   ├── erb.ts                 # ErbParserService +currentIndex()/ensureIndex()
 │   └── game.ts                # ConventionRule 迁往 conventions.ts（re-export 保持兼容）
 ├── kernel/src/bus.ts          # +KERNEL_EVENT_NAMES: 'editor.revealLocation'
 ├── plugins/
-│   ├── erb-parser/src/plugin.ts        # ★ 响应式索引所有权（订阅 project.opened/closed）
-│   ├── eratw-adapter/src/conventions.ts# ★ eraTW 4 条规则（KX/四件套/FORM/MESSAGECHECK）
-│   ├── convention-linter/src/          # ★ 引擎（engine.ts + rules/duplicate-function.ts）
-│   └── ui-convention-report/src/index.ts # ★ ui.panel 面板（订阅 linter；点击 → revealLocation）
+│   ├── erb-parser/src/plugin.ts        # 响应式索引所有权（订阅 project.opened/closed）
+│   ├── eratw-adapter/src/conventions.ts# eraTW 4 条规则（KX/四件套/FORM/MESSAGECHECK）
+│   ├── convention-linter/src/          # 引擎（engine.ts + rules/duplicate-function.ts）
+│   ├── ui-convention-report/src/index.ts # ui.panel 面板（订阅 linter；点击 → revealLocation）
+│   └── ui-kojo-navigator/src/          # ★ 新增：函数树导航
+│       ├── tree.ts                     # ★ 纯逻辑：buildNavigatorTree / searchFunctions（零 React，可单测）
+│       └── index.ts                    # ★ ui.panel：角色下拉 + 搜索 + 可折叠树 → revealLocation
 └── app/src/
-    ├── bootstrap.ts           # 注册 5 个插件
+    ├── bootstrap.ts           # 注册 6 个插件
     ├── ui/App.tsx             # 订阅 kojo.functionChanged / editor.revealLocation
     ├── ui/ProjectView.tsx     # 透传 reveal
-    ├── ui/EditorPane.tsx      # ★ revealLine/revealNonce → Monaco revealLineInCenter
-    └── styles.css             # +约定面板样式
+    ├── ui/EditorPane.tsx      # revealLine/revealNonce → Monaco revealLineInCenter
+    └── styles.css             # +约定面板样式 +导航面板样式（nav-*）
 ```
 
 ## 五、验证矩阵（怎么跑）
@@ -64,10 +74,10 @@ packages/
 ```bash
 cd D:\DSH\kojo-editor
 pnpm install
-pnpm test               # 147 项（无游戏目录时集成冒烟自动跳过）
-pnpm typecheck
-pnpm audit:decoupling   # 必须 ✅（plugins 数从 3 变 5）
-# 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/校验报告断言）：
+pnpm test               # 157 项（无游戏目录时集成冒烟自动跳过）
+pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
+pnpm audit:decoupling   # 必须 ✅（plugins 数 6）
+# 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告断言）：
 KOJO_SMOKE_PROJECT="D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
 # 桌面壳（会弹窗 ~30s 自动关闭）：
 node tools/smoke-tauri-dom.mjs
@@ -80,7 +90,9 @@ node tools/smoke-tauri-dom.mjs
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
 5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
 
-## 六、下一批：函数树导航（v0.2 第二批）
+## 六、v0.2 第二批（✅ 已完成）：函数树导航 `ui-kojo-navigator`
+
+**实施结果**：插件已落地（`packages/plugins/ui-kojo-navigator/`）。`tree.ts` 纯逻辑 10 项单测（三维聚合 / declare 成面 / slot 数值排序 / 面语义排序 / orphan 计数 / 搜索边界）；集成冒烟新增导航地基断言（可归属角色 **141** / 多家族角色 **77** / 多面角色 **135** / 最重角色 **K49 = 3,099 函数 / 18 家族**）。
 
 ### 6.1 数据已就绪
 - `erb.parser` 的 `ErbIndex`（files/byName）+ `currentIndex()/ensureIndex()`；索引自动更新并发 `kojo.functionChanged`。
@@ -96,8 +108,9 @@ node tools/smoke-tauri-dom.mjs
 - 点击函数 → `ctx.bus.emit('editor.revealLocation', { filePath, line: startLine })` —— 复用本批已落地的跳转通道（app 已消费）。
 - 保留 app 现有 FileTree（文件维度浏览）作为互补；面板负责"函数/家族维度"。
 
-### 6.4 其它已排队项
-- 条件抽取（第三批，为 v1.0 差分矩阵服务）：extend scanner（PRINT 变体 / IF-SELECTCASE 嵌套层级，`scanner.ts` 已留扩展点）。
+### 6.4 第三批（下一批）：条件抽取 + 其它排队项
+- **条件抽取**（为 v1.0 差分矩阵服务）：扩展 `erb-parser/src/scanner.ts`（PRINT 变体 / IF-SELECTCASE 嵌套层级，已留扩展点）→ 新插件 `condition-extractor` 提取每个函数的条件谓词（好感 `CFLAG:2` / 信赖 `CFLAG:4` / `MAXABL` 恋慕闸门 / MESSAGECHECK 位 / 时间窗），供导航面板徽章或独立矩阵面板消费。
+- **导航面板增强**（可选）：面上条件徽章、MESSAGECHECK 位可视化、收藏/最近访问。
 - `watchDirs` 文件监视（现为手动刷新；后续走 Rust notify）→ 增量重建索引。
 - sav-parser（v1.0）：先读 `reverse-engineering/eratw4.980-存档实战解析.md` + 复用 `sav-parse/parse_sav.cjs` 协议。
 - Monaco bundle 4.3MB 拆分（manualChunks，低优先级）。
@@ -134,5 +147,5 @@ node tools/smoke-tauri-dom.mjs
 1. `cd D:\DSH\kojo-editor && pnpm install`
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线）
 3. 读 `docs/ARCHITECTURE.md` §5.8 + 本文件 §六
-4. **开始 v0.2 第二批：`ui-kojo-navigator` 插件**（函数树三维导航，走 `editor.revealLocation` 跳转）
+4. **开始 v0.2 第三批：条件抽取**（见 §6.4：先扩展 `scanner.ts`，再建 `condition-extractor` 插件）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`
