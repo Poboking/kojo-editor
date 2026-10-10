@@ -12,6 +12,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# 修复：tauri-build → schemars 0.8.22(preserve_order) → indexmap 1.9.3 链上无人启用
+# indexmap 的 "std" feature（它不是默认 feature！），no_std 分支的
+# `IndexMap<K, V, S>` 无默认参数，schemars 的 `Map<K,V> = IndexMap<K,V>`
+# 在 rustc 1.99 下报 E0107。显式启用 std → feature"或"语义强制该编译单元带 std。
+indexmap = { version = "1.9.3", features = ["std"] }
 
 [dependencies]
 tauri = { version = "2", features = [] }

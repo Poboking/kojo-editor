@@ -1960,6 +1960,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
+ "indexmap 1.9.3",
  "rfd",
  "serde",
  "serde_json",
