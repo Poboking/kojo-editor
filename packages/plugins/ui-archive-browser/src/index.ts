@@ -1,7 +1,7 @@
 /**
  * @kojo/plugin-ui-archive-browser
  *
- * 归档浏览器面板（`ui.panel` 槽贡献；v0.2 第十三批，架构 §5.19）。
+ * 归档浏览器面板（`ui.panel` 槽贡献；v0.2 第十三批，实施记录 §5.19（docs/IMPLEMENTATION-LOG.md））。
  *
  * 消费 `snapshot.source` 的扫描结果，列出存档档位（备注摘要 / 角色数 / 文件大小 /
  * 修改时间），点击某档展开**角色区摘要**（前 N 个角色名 + 总数，不全量渲染），

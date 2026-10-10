@@ -13,7 +13,7 @@
 > 第十批：口上调用协议——adapter 解析 KOJO_MESSAGE.ERB 路由表 → 槽位语义表，回放面板结构化场景参数输入（协议不可用优雅降级）；
 > 本会话完成 **v0.2 第十一批：存档写侧预研——ByteWriter + serializePayload + 金样本回归，save00 载荷 571,185B 逐字节完全一致（编码器同构达成）；暴露 Int64 精度硬前置（RANDDATA 等），方案 B（rawBytes 保留）写入 §5.17**。
 > 本会话完成 **v0.2 第十二批：审阅修复（依据 docs/CODE-REVIEW-2026-10-10.md）——H1 CASE TO 区间 AND 语义（conjunction 契约 + 三层落地）+ M4 切文件丢内容（确认对话框）+ M5 回放联动闭包 + M2 Rust 编码 had_errors + L1/L3/L4；426 项全绿，回放基线不变**。
-> 本会话完成 **v0.2 第十三批（双线）：① sav-parser Int64 精度方案 B 落地（rawBytes passthrough）——六档金样本 passthrough 全部字节级一致（含此前被拒的 save01-05）+ 标量/单元补丁注入 + Int64 守卫；纠正第十一批结论：RANDDATA 是 u32 序列逐值安全，真雷在 RESULT/CFLAG/GIFT_GOT（架构 §5.19）；② TRAE 并行交付 ui-archive-browser 归档浏览器（第 11 插件，commit ca1a323）；456 项全绿**。
+> 本会话完成 **v0.2 第十三批（双线）：① sav-parser Int64 精度方案 B 落地（rawBytes passthrough）——六档金样本 passthrough 全部字节级一致（含此前被拒的 save01-05）+ 标量/单元补丁注入 + Int64 守卫；纠正第十一批结论：RANDDATA 是 u32 序列逐值安全，真雷在 RESULT/CFLAG/GIFT_GOT（IMPLEMENTATION-LOG §5.19）；② TRAE 并行交付 ui-archive-browser 归档浏览器（第 11 插件，commit ca1a323）；456 项全绿**。
 
 ---
 
@@ -44,7 +44,7 @@
   4. **adapter `variableSchema`**（CSV 驱动）：扫描游戏 `CSV/*.csv` 名称表（33 张）建编号↔名称双向字典；引擎经槽位查询透传标注（恋慕/好感度…）。
   5. **导航条件徽章**：`ui-kojo-navigator` 函数行显示 schema 标签徽章（悬停看阈值）。
 - **v0.2 第四批完成**（第四批会话）：**存档快照源（`sav-parser` 插件，服务 `snapshot.source`）**——v1.0 快照回放的读侧地基。
-  1. **契约 `plugin-api/snapshot.ts`**：`SnapshotArchive`（元数据 + 角色区 + 变量区 + EM 扩展区）/ 变量模型（标量 / 稀疏数组 / Map / Xml / DataTable）/ 扫描结果 / `SnapshotSourceService`（scan / current / parse / subscribe）。**服务键命名决策 `snapshot.source`**（非 `sav.parser`）：审计 A 项禁裸 `sav` 词（契约层零游戏/格式名词），且"快照来源"语义本就是三来源（sav/CliDebug/手工）的统称——架构 §5.10 有记录。
+  1. **契约 `plugin-api/snapshot.ts`**：`SnapshotArchive`（元数据 + 角色区 + 变量区 + EM 扩展区）/ 变量模型（标量 / 稀疏数组 / Map / Xml / DataTable）/ 扫描结果 / `SnapshotSourceService`（scan / current / parse / subscribe）。**服务键命名决策 `snapshot.source`**（非 `sav.parser`）：审计 A 项禁裸 `sav` 词（契约层零游戏/格式名词），且"快照来源"语义本就是三来源（sav/CliDebug/手工）的统称——IMPLEMENTATION-LOG §5.10 有记录。
   2. **新插件 `sav-parser`**（第 8 个插件）：字节原语（7-bit **字节数**前缀字符串 / 整数编码）+ 六种数组游程解码 + 顶层 / 角色块 / 变量流 / EM 区解析 + gzip（`DecompressionStream`，跨 Node/WebView，不 import node:zlib）。**纯读先行**（写 / 注入随 v1.1）。
   3. **响应式**：订阅 `project.opened` 扫 `project.savDir`（`headerOnly` 浅解析列档，6 档 27ms）；`project.closed` 清空；代际保护；无 `savDir` → 空结果（显式）。
   4. **测试**：58 项单测（合成字节 round-trip 全类型 + 错误路径 + 编排）+ 集成冒烟六档断言 + 与逆向 CJS 解析器逐字段交叉对拍（一次性，16,000 变量/档全等）。
@@ -54,31 +54,31 @@
   3. **condition-extractor 扩展**：`functionPredicates()` 按需谓词明细（读文件 → `scanControlFlow` → 逐条 AST；**不入全量索引**，文件文本 + 明细双缓存，索引重建自动失效）；契约新增 `FunctionPredicate`/`FunctionPredicates`。
   4. **adapter 契约扩展**：`VariableInfo.resolvedIndex`（具名索引 → 编号：`TALENT:恋慕` → 3，引擎关键字字典语义）。
   5. **测试**：62 项 state-replay 单测（连 Kleene/寻址全类别/错误路径/编排）+ 4 项明细 API 测试 + 集成冒烟回放断言。
-- **v0.2 第六批完成**（本会话）：**回放求值器扩展——本地量数据流 + 引擎内置纯函数 + 调用上下文注入**（ARCHITECTURE §5.12 为权威记录）。
+- **v0.2 第六批完成**（本会话）：**回放求值器扩展——本地量数据流 + 引擎内置纯函数 + 调用上下文注入**（IMPLEMENTATION-LOG §5.12 为权威记录）。
   1. **先测量再动手**：实测推翻批五"未知主因 = `ARG:*`"假设——真实构成 pseudo 4,439（**LOCAL 系为主**）/ call 2,485 / ARG 系仅 ≈1,005（14%）。口上作者大量使用"直线赋值的局部开关"（`LOCAL = 1` / `LOCAL:1 = 1`，K49 语料 97% RHS 为纯数字常量）。
   2. **本地量数据流**：`collectAssignments`（condition-extractor，仅明细路径，聚合零开销）收集 `LOCAL/LOCALS/RESULT/RESULTS` 直线赋值；`buildContextLookup` 段栈折叠出**分支上下文路径**；求值侧 `locals.ts` 叠加层按"**前缀可达 + last-write-wins**"解析（兄弟分支互不可达、闭合块外不吃块内赋值、RHS 递归 + 记忆化、`+=` 记为失效点）。引擎依据 = ConvertArg/IntoFunction（Process.CalledFunction.cs:162-239 + Process.State.cs:495-515）。
   3. **内置纯函数**（`builtins.ts`，Creator.Method.cs 逐条对齐）：GETBIT / GROUPMATCH / MAX / MIN / ABS / SIGN / LIMIT / POWER；错误路径 → unknown('builtin') 不抛错。明确不收录：数组区间族 / GETNUM（等 adapter schema 通道）/ 字符串形态族 / RAND。
   4. **调用上下文**：`ReplayCallContext{ints,strs}`（裸 ARG ≡ ARG:0，引擎 1D 裸引用语义）注入 `replayFunction(view, name, {callContext})`；未提供/未覆盖 → unknown('call-context')，**不猜测 0**（转发自路由层的值是场景输入）。adapter 口上调用协议（路由表 → 转发实参映射）留作 UI 场景选择器地基（默认流收益实测 ≈ 0）。
   5. **测试**：+29 单测（assignments 识别与上下文 / locals 叠加 / builtins 语义）；集成冒烟新增数据流与调用上下文断言 + 未知率守门（<55%）+ 未知分类打印。
-- **v0.2 第七批完成**（本会话）：**有界内联求值——口上域 `#FUNCTION` 纯助手顺序解释**（ARCHITECTURE §5.13 为权威记录）。
+- **v0.2 第七批完成**（本会话）：**有界内联求值——口上域 `#FUNCTION` 纯助手顺序解释**（IMPLEMENTATION-LOG §5.13 为权威记录）。
   1. **先测量再动手（第四次应验）**：对 call unknown 做**被调函数形态分析**（临时 dump 跑完即删），实测推翻批六预估——call 覆盖 26 名 / 2,805 谓词中，**口上索引域内有定义仅 3 名 / 1,991 条（71%）**（`陷落状态`×1830 + `关系_310`×160 + `陥落状態`×1）；23 名（FIRSTTIME 等）定义在 kojoPaths 之外（COMMON.ERB 等），本就不可内联（FIRSTTIME 写 CSTR 副作用）。可内联函数体 100% 为 IF/ELSEIF/SIF/RETURNF + **ARG 补位赋值**（`SIF !ARG / ARG = TARGET` 惯用法）——唯一拦路的是 ARG 不在批六收集名单。
   2. **契约**：`FunctionAssignment.name` 扩 `'ARG'|'ARGS'`（结构事实；静态叠加层不消费——ARG 读取仍走 call-context 注入优先）；`FunctionPredicates` +`endLine` / +`returns`（RETURNF 结构事实）。
   3. **抽取**（condition-extractor）：`ASSIGN_RE` 扩 ARG/ARGS + `collectReturns`；明细路径产出 endLine/returns（聚合路径零开销）。
   4. **求值**（state-replay）：`inline.ts` 预编译 + **PC 顺序解释器**（SIF 条件体 / IF 链 / RETURNF / 环境读 / **索引段替换** `TALENT:ARG:恋人`）；`evaluate.ts` 求值通道重构 `EvalContext{read, resolveCall}`；`InlineManager`（analyze 缓存 + `preanalyze` BFS 预热 → 执行期同步命中）；state-replay `requires` 增 `kernel.io`。
   5. **实现最微妙的坑**：ELSEIF/ELSE op 的两种到达方式（条件假跳转 vs 分支体自然掉落）——编译期把"假跳转到 ELSE"改写为直接进体（`elseIdx+1`），运行期 `pendingEval` 标记区分"跳转到达 ELSEIF（求值）"与"自然掉落（跳 endAfter）"。首版实现 ELSE 与 ELSEIF 双双踩中此坑（集成测试 ELSE 分支错误落到链尾兜底 RETURNF）。
   6. **真实回归**：未知 5,668→**3,741**（**48.5%→32.0%**）/ call 桶 2,297→**368**（消解 84%）/ exact 786→**836** / 全未知函数 70→**38**。+27 单测 + 集成冒烟守门 0.55→0.40 + 陷落状态内联专项断言。
-- **v0.2 第八批完成**（本会话）：**`ui-state-replay` 回放面板（第 10 个插件）**（ARCHITECTURE §5.14 为权威记录）。
+- **v0.2 第八批完成**（本会话）：**`ui-state-replay` 回放面板（第 10 个插件）**（IMPLEMENTATION-LOG §5.14 为权威记录）。
   1. **面板**（`ui.panel`）：选档（`snapshot.source` 扫描 + saveMes 摘要）→ 选角色（`project.charaIndex`）→ 选函数（条件索引子串提示，≥2 字符）→ 逐条谓词三值结果（kind 徽章 + 原文 + 行号点击 → `editor.revealLocation`）+ 置信度徽章（确定/部分未知/无法判定）+ **未知原因分组**（code → 中文提示 + 计数）。视图按（档 × 角色）惰性重建 + 代际保护。
   2. **调用上下文输入**：`0=36, 1="约会"` 文本 → `ReplayCallContext`（panel-logic.ts 纯函数解析；带引号 → 字符串槽；解析失败红字提示不阻塞；空 → 不注入走 call-context unknown——场景输入绝不猜测）。
   3. **联动事件 `kojo.replayFunction`**（内核事件表新增，editor.revealLocation 同款模式）：导航面板函数行/搜索行加 ⟲ 徽章（stopPropagation）→ 回放面板自动填名并回放；UI 插件间零直接依赖。
   4. **登记**：四处（package.json/tsconfig paths/vitest aliases/vite aliases+deps）+ bootstrap.ts；`rp-*` 样式；`nav-badge.replay` 样式。
   5. **测试**：+11 单测（panel-logic 全路径）；400 项全绿；audit 10 插件 ✅；真实工程冒烟无回归；app build ✅。
-- **v0.2 第九批完成**（本会话）：**分支走向**（ARCHITECTURE §5.15 为权威记录）。
+- **v0.2 第九批完成**（本会话）：**分支走向**（IMPLEMENTATION-LOG §5.15 为权威记录）。
   1. **契约**：`BranchChainOutcome`（if-chain/select-chain × taken/no-match/unknown/unreachable）+ `FunctionReplay.branches`。
   2. **引擎**（state-replay `branches.ts`）：链栈配对折叠（与 scanner 配对表同源）+ **unknown 立即阻断**（后续真不可救——链语义与 Kleene 同构）+ **可达性传播**（链头在外层未进入分支区间 → unreachable，防"不可达却显示命中"误导作者）+ 宽容（孤儿分支跳过）。
   3. **呈现**：回放面板"分支走向"区（按 depth 缩进；✓/∅/?/· 四态标记；命中链显示条件原文+跳转行号；rp-branch* 样式）。
   4. **测试**：+14 单测（三态/阻断/短路/CASE 同行任一真/CASEELSE/嵌套可达/宽容三例）；集成冒烟分支断言（真实数据 IF LOCAL 链 taken）。
-- **v0.2 第十批完成**（本会话）：**口上调用协议**（ARCHITECTURE §5.16 为权威记录）。
+- **v0.2 第十批完成**（本会话）：**口上调用协议**（IMPLEMENTATION-LOG §5.16 为权威记录）。
   1. **先测量纠正过度承诺**：dump call-context 构成（ARG 槽 ≈200 函数：ARG:0×158/ARG:1×53，形态 `LOCAL:1 && ARG == 1`）+ 路由源码核验（口上函数 (ARG,ARG:1) = 路由 ARG:3/ARG:4 透传 = **纯场景输入不可推导**）——候选清单里"858 条自动消解"是想当然；协议真实价值 = 槽位语义标注 + 默认场景（全 0 是引擎转发链未设置槽的确定事实）。
   2. **契约**：`KojoCallSlot{index,kind,label}` + `KojoCallProtocol.slotsFor(fn)` + `GameAdapter.kojoCallProtocol?`（游戏知识只住 adapter）。
   3. **adapter**（`call-protocol.ts`）：解析 KOJO_MESSAGE.ERB 路由表 → 家族模板正则（尾部 {…}=数值时机 \d+ 优先 / %…%=字符串时机 .+）+ 槽位表（ARG:n→int / ARGS:n→str 按序绑定）；loadProject 加载、缺文件降级 undefined；+5 单测。
@@ -87,7 +87,7 @@
 - **存档解析基线（2026-10-10 实测）**：六档全绿——168 角色/档、16,005 变量/档（save00 16,000）、`#DIM` 恒 65、MASTERNAME 7/168、RANDDATA saveLen 625（**save00 nonEmpty=0 全零剪枝实证** / save01+ 全量）、MONEY 51 亿（Int64 路径）、EM 区 2 张 DT 表、**残余 0B**。
 - **状态回放基线（2026-10-10 实测，第七批后）**：save03 × 古明地觉（K49）全量回放 **1,356 个含谓词函数 / 11,685 谓词**——命中 1,549 / 未命中 6,395 / 未知 **3,741（32.0%）**；置信度 exact **836** / partial 482 / unknown **38**。第七批后未知构成：pseudo 1,886（RAND 等运行期值）/ call-context 858 / call 368（索引域外函数）/ named-index 337 / local-no-write 196 / missing-var 80 / 其余 <20。
 - **真实工程基线（2026-10-10 实测）**：168 角色 / 2,285 ERB / 99,104 函数 / 去重名 99,101；家族识别 98.91%（109 家族）；索引 ~2.9s；约定校验 757 项（~9s）。
-- **v0.2 第十一批完成**（本会话）：**存档写侧预研**（ARCHITECTURE §5.17 为权威记录）。
+- **v0.2 第十一批完成**（本会话）：**存档写侧预研**（IMPLEMENTATION-LOG §5.17 为权威记录）。
   1. **实现**（sav-parser 游戏无关）：`writer.ts`（ByteWriter：m_ReadInt 逆编码 + 7-bit 前缀 UTF-16LE）+ `serialize.ts`（serializePayload 载荷层重序列化）+ 金样本回归测试（六档守门）。
   2. **关键发现——数组游程是行驱动结构**：每行末必写 0xE0、每面末必写 0xE1（含最后一行/面，cursor 证据 GMF_MAPNAME=[12,0]）；首行（dx=0）不写行标记（初版误写 F1+0 → 24 字节差异，逐 token 对比定位修正）。
   3. **金样本结果**：save00 载荷 **571,185B 字节级完全一致**（编码器同构达成：游程/整数宽度/7-bit/流控制全对）；save01+ **Int64 大数近似不可写回**（RANDDATA SFMT 625 状态 ≈2.8e16，serialize 显式抛拒绝）——**v1.1 注入器硬性前置 = Int64 精度策略**，倾向方案 B（`rawBytes?` 原样复制未修变量 + 被修变量含大数拒绝注入）。
@@ -99,7 +99,9 @@
 
 | 文档 | 内容 |
 |---|---|
-| `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）、**§5.8 v0.2 实施记录（校验器分层 + 规则误报治理）** |
+| `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录**（原 ARCH §5.8–§5.19，2026-10-10 迁入）：每批实施细节 / 金样本发现 / 踩坑 |
+| `docs/REVIEW-OPTIMIZATION-2026-10-10.md` | 方案级审阅（13 项：A1/D12 已落地，C7 排 v0.3，其余分级见其 §5） |
 | `docs/RESEARCH.md` | 技术调研 |
 | `docs/adr/0001-0004` | 工具链 / game.adapter 服务键语义 / 壳架构 / 快照来源服务键命名（snapshot.source） |
 | `docs/HANDOFF.md`（本文件） | 交接状态 + 下一批动手清单 |
@@ -194,7 +196,7 @@ node tools/smoke-tauri-dom.mjs
 - **adapter `variableSchema`**：`variable-schema.ts`（扫描 `CSV/*.csv` 名称表 33 张；编号↔名称双向 lookup）；`constants.csvDir`。7 项单测。
 - **导航条件徽章**：`ui-kojo-navigator` 函数行显示 schema 标签（恋慕/好感度…）+ `+n` 折叠；悬停看阈值；`.nav-badge.cond` 样式。
 
-#### 关键设计（详见 ARCHITECTURE §5.9）
+#### 关键设计（详见 IMPLEMENTATION-LOG §5.9）
 - 谓词**聚合**存储（函数级 `StateDependency`），不存全量谓词对象——49 万谓词的量级必须聚合控制内存。
 - `opaque` 降级**绝不抛错**；未解析计数显式呈现（不静默）；未解析率 0.04%。
 - 局部量排除名单（LOCAL/ARG/RESULT/COUNT 系）是**通用语言知识**（Emuera 内置），不违"零游戏知识"。
@@ -206,16 +208,16 @@ node tools/smoke-tauri-dom.mjs
 
 ### 6.2 第四批（✅ 已完成）：存档快照源（`sav-parser` 先行）
 
-**实施结果**：契约 + 插件 + 测试 + 集成全量落地（架构 §5.10 为权威记录）。
+**实施结果**：契约 + 插件 + 测试 + 集成全量落地（IMPLEMENTATION-LOG §5.10 为权威记录）。
 
-- **契约**：`plugin-api/snapshot.ts`（`SnapshotArchive` / 变量模型 / `SnapshotSourceService`）；服务键 **`snapshot.source`**（非 `sav.parser`，理由见架构 §5.10）。
+- **契约**：`plugin-api/snapshot.ts`（`SnapshotArchive` / 变量模型 / `SnapshotSourceService`）；服务键 **`snapshot.source`**（非 `sav.parser`，理由见IMPLEMENTATION-LOG §5.10）。
 - **插件** `sav-parser`：`binary.ts`（7-bit 字节数前缀 / 整数编码）+ `arrays.ts`（六种数组游程解码）+ `parse.ts`（文件级全流程）+ `gunzip.ts`（`DecompressionStream`）+ `engine.ts`（扫描编排）+ `index.ts`（装配）。58 项单测（合成字节）。
 - **真实回归**：与逆向 CJS 解析器逐字段对拍（六档全等，16,000 变量/档）；集成冒烟六档断言（零残余 / #DIM 65 / MASTERNAME 7 / RANDDATA 剪枝实证 / MONEY 51 亿 / EM 2 表）。
 - **写侧（v1.1）未动**：金样本"原样写回逐字节对比"与注入 UI 是后续阶段。
 
 ### 6.3 第五批（✅ 已完成）：状态回放引擎（`state-replay`）
 
-**实施结果**：契约 + 插件 + condition-extractor 明细扩展 + 测试 + 集成全量落地（架构 §5.11 为权威记录）。
+**实施结果**：契约 + 插件 + condition-extractor 明细扩展 + 测试 + 集成全量落地（IMPLEMENTATION-LOG §5.11 为权威记录）。
 
 - **契约 `plugin-api/replay.ts`**：`ReplayStateView` / `ReplayValue`·`ReplayOutcome`（三值）/ `ReplayUnknown`（16 种原因分类）/ `FunctionReplay`（置信度三档）/ `StateReplayService`。服务键 **`state.replay`**。
 - **插件 `state-replay`（第 9 个）**：`var-model.ts`（引擎级变量清单）/ `state-view.ts`（归约：按 NO 定位角色块、TARGET 补位、稀疏取值、越界与截断显式）/ `evaluate.ts`（三值求值：Kleene / 整数除法截断 / BigInt 位运算 / 字符串 `==`）/ `engine.ts`（编排）/ `index.ts`（装配）。62 项单测。
@@ -225,7 +227,7 @@ node tools/smoke-tauri-dom.mjs
 
 ### 6.4 第六批（✅ 已完成）：回放求值器扩展（数据流 + 内置函数 + 调用上下文）
 
-**实施结果**：契约 + 抽取 + 求值三层落地（ARCHITECTURE §5.12 为权威记录）。
+**实施结果**：契约 + 抽取 + 求值三层落地（IMPLEMENTATION-LOG §5.12 为权威记录）。
 
 - **契约**：`FunctionAssignment` + `FunctionPredicates.assignments` + `FunctionPredicate.context`（conditions.ts）；`ReplayCallContext` / `ReplayFunctionOptions` + 3 个新 unknown 码（`local-no-write` / `call-context` / `builtin`）（replay.ts）。
 - **抽取**（condition-extractor）：`buildContextLookup`（段栈折叠：开块入栈 / 分支换段 / 闭合弹栈，kind 分类与 scanner 配对表同源）+ `collectAssignments`（直线赋值；`==` 不误匹配；`+=` 失效点；注释/@#$ /SKIP 块跳过）；仅 `functionPredicates` 明细路径收集。
@@ -235,7 +237,7 @@ node tools/smoke-tauri-dom.mjs
 
 ### 6.5 第七批（✅ 已完成）：有界内联求值（口上域 `#FUNCTION` 纯助手顺序解释）
 
-**实施结果**：契约 + 抽取 + 求值三层落地（ARCHITECTURE §5.13 为权威记录）。
+**实施结果**：契约 + 抽取 + 求值三层落地（IMPLEMENTATION-LOG §5.13 为权威记录）。
 
 - **测量先行（§5.9 教训第四次应验）**：临时 dump 实测 call 被调函数形态——26 名 / 2,805 谓词中口上域内可解释仅 3 名 / 1,991 条（71%，`陷落状态`+`关系_310`+`陥落状態`）；23 名在索引域外（FIRSTTIME 等，本就不可内联）。可内联体 100% 为 IF/SIF/RETURNF + ARG 补位赋值。
 - **契约**：`FunctionAssignment.name` 扩 `'ARG'|'ARGS'`；`FunctionPredicates` +`endLine`/+`returns: FunctionReturn[]`。
@@ -246,7 +248,7 @@ node tools/smoke-tauri-dom.mjs
 
 ### 6.6 第八批（✅ 已完成）：状态回放面板（`ui-state-replay`）
 
-**实施结果**：呈现 + 纯逻辑 + 事件联动落地（架构 §5.14 为权威记录）。
+**实施结果**：呈现 + 纯逻辑 + 事件联动落地（IMPLEMENTATION-LOG §5.14 为权威记录）。
 
 - **面板**：选档 → 选角色 → 选函数 → 逐条谓词三值结果 + 置信度徽章 + 未知原因分组（中文提示）；谓词行点击跳源码；视图（档 × 角色）惰性重建 + 代际保护。
 - **调用上下文**：`0=36, 1="约会"` 文本解析（panel-logic.ts，+11 单测）；场景输入不猜测。
@@ -256,7 +258,7 @@ node tools/smoke-tauri-dom.mjs
 
 ### 6.7 第九批（✅ 已完成）：分支走向
 
-**实施结果**：契约 + 引擎折叠 + 面板呈现落地（架构 §5.15 为权威记录）。
+**实施结果**：契约 + 引擎折叠 + 面板呈现落地（IMPLEMENTATION-LOG §5.15 为权威记录）。
 
 - **契约**：`BranchChainOutcome`（if-chain/select-chain × taken/no-match/unknown/unreachable）+ `FunctionReplay.branches`。
 - **引擎**（`branches.ts` 纯函数）：链栈配对折叠 + unknown 立即阻断（后续真不可救）+ 可达性传播（外层未进入 → unreachable）+ 宽容。
@@ -265,7 +267,7 @@ node tools/smoke-tauri-dom.mjs
 
 ### 6.8 第十批（✅ 已完成）：口上调用协议
 
-**实施结果**：契约 + adapter 路由表解析 + 面板结构化输入落地（架构 §5.16 为权威记录）。
+**实施结果**：契约 + adapter 路由表解析 + 面板结构化输入落地（IMPLEMENTATION-LOG §5.16 为权威记录）。
 
 - **测量纠正过度承诺**：call-context 值是场景输入不可推导——协议价值 = 槽位语义标注 + 默认场景（全 0 = 引擎转发链事实），不是"858 条自动消解"。
 - **契约**：`KojoCallSlot` / `KojoCallProtocol` / `GameAdapter.kojoCallProtocol?`。
@@ -275,14 +277,14 @@ node tools/smoke-tauri-dom.mjs
 
 ### 6.9 第十一批（✅ 已完成）：存档写侧预研
 
-**实施结果**：写侧 PoC + 金样本回归落地（架构 §5.17 为权威记录）。
+**实施结果**：写侧 PoC + 金样本回归落地（IMPLEMENTATION-LOG §5.17 为权威记录）。
 
 - **save00 载荷 571,185B 字节级完全一致**——编码器同构达成（行驱动游程 / 整数宽度 / 7-bit 前缀 / 流控制）。
 - **Int64 精度硬前置暴露**：RANDDATA（SFMT 625 状态）等大数被读侧近似，写回必坏——serialize 显式抛拒绝；v1.1 注入器倾向方案 B（rawBytes 原样复制 + 被修变量含大数拒绝注入）。
 
 ### 6.10 第十二批（✅ 已完成）：审阅修复（依据 docs/CODE-REVIEW-2026-10-10.md）
 
-**实施结果**：H1 + M2/M4/M5 + L1/L3/L4 落地（架构 §5.18 为权威记录）。
+**实施结果**：H1 + M2/M4/M5 + L1/L3/L4 落地（IMPLEMENTATION-LOG §5.18 为权威记录）。
 
 - **H1（高，CASE TO AND 语义）**：契约 `conjunction?: 'and'`（FunctionPredicate + PredicateReplay 透传）→ extract.ts TO 半边打标 → branches.ts 同行"组内 AND（Kleene）/ 组间 OR"；向后兼容（无标记 = OR）。+7 单测；真实语料 3,136 处 TO 区间的分支走向不再"多命中"失真。
 - **M4**：App 层 `requestOpenFile` 守卫 + `UnsavedConfirmDialog`（保存并前往/丢弃/取消）；EditorPane `onDirtyChange`/`registerSave`。
@@ -301,7 +303,7 @@ node tools/smoke-tauri-dom.mjs
 
 ### 6.12 第十三批（✅ 已完成）：存档注入器地基（Int64 精度方案 B）+ 归档浏览器（TRAE）
 
-**实施结果**：方案 B 全量落地（架构 §5.19 为权威记录）。
+**实施结果**：方案 B 全量落地（IMPLEMENTATION-LOG §5.19 为权威记录）。
 
 - **契约**（plugin-api/snapshot.ts）：5 个变量接口 + `raw?: Uint8Array`；`keepRaw?` 解析选项；`ArchiveCellPatch` / `ArchiveOverrideValue` / `ArchiveOverrides`（vars + chars 两级 Map）——均从 index.ts 导出。
 - **读侧**：parse.ts 读毕变量后 `span()` 记 subarray 视图（零拷贝，含 token+key+值域）。
@@ -339,7 +341,7 @@ node tools/smoke-tauri-dom.mjs
 
 ## 九、本会话踩坑记录（给未来的自己）
 
-1. **规则必须先核验引擎源码再定语义**：FORM 三连符号初版按"字面出现即报"实现 → 239 条里大量是 `+++`（MASTER 名）的有意用法（43 个文件）。收窄为排除 `+++` + 每文件每符号聚合 → 8 条真实事故。见 ARCHITECTURE §5.8"规则误报治理原则"。
+1. **规则必须先核验引擎源码再定语义**：FORM 三连符号初版按"字面出现即报"实现 → 239 条里大量是 `+++`（MASTER 名）的有意用法（43 个文件）。收窄为排除 `+++` + 每文件每符号聚合 → 8 条真实事故。见 IMPLEMENTATION-LOG §5.8"规则误报治理原则"。
 2. **`ctx.onDispose` 是插件订阅/清理的必经之路**：事件订阅不 `onDispose` 会导致插件停用后残留 handler（内核 deactivate 逆序执行 disposer）。erb-parser / convention-linter 均照此。
 3. 新增插件包需四处登记：`packages/plugins/*/package.json`、root `tsconfig.json` paths、`vitest.config.ts` aliases、`app/vite.config.ts` aliases + `app/package.json` deps（kernel devDeps 亦然）。漏一处就 resolve 失败。
 4. **真实语料是解析器的验收标准（第三批）**：初版表达式解析器 dump 真实 opaque 样本（528k 条件行中 2.17%）→ 发现两大系统性缺口：`[[词]]`（引擎 rename 语法，读取期按 `_Rename.csv` 替换）与**括号索引段**（`YOGORE:(GET_CHARAHOME(TARGET))`、`TALENT:(NO:30):恋慕`）。补齐后引擎侧未解析 3,383 → **187**（0.04%）。教训：**先 dump 真实失败样本，再定语法扩展**——不要凭直觉猜"什么写法常见"。
@@ -347,7 +349,7 @@ node tools/smoke-tauri-dom.mjs
 6. **CASE 文本不能整体 parse**：`CASE 1, 2, 3` / `CASE 10 TO 20` 是 SELECTCASE 语法而非表达式——必须在抽取层展开为 `subject == 值` 再逐条 parse（dump 统计时若对 CASE 原文整体 parse 会误报 opaque）。
 7. **双 lib 类型环境（node vs DOM）对 Web API 的严格度不同**（第四批）：`new Blob([bytes])` 在 root tsconfig（@types/node）通过、在 app tsconfig（DOM lib）报 `Uint8Array<ArrayBufferLike>` 不满足 `BlobPart`（SharedArrayBuffer 不兼容性）。修法：`new Uint8Array(bytes)` 复制到独立 ArrayBuffer 支撑数组，两套定义下均兼容。**tsc 必须 root + app 双跑**。
 8. **vite build 的 `prepare-out-dir` 偶发 EPERM**（第四批）：清空 `packages/app/dist/assets` 时报 Permission denied（文件瞬时占用），手动 `fs.rmSync(dist, {recursive, force})` 后重试即过——不是代码问题。
-9. **批次编号勘误**（第四批会话）：`conditions.ts` 头注释与 ARCHITECTURE §5.9 曾写"条件抽取=第四批"，与 HANDOFF 口径（第三批）不一致；已统一为——**第三批=条件抽取、第四批=sav-parser**（判据：函数树=第二批在工作日志与 HANDOFF 双证）。
+9. **批次编号勘误**（第四批会话）：`conditions.ts` 头注释与 IMPLEMENTATION-LOG §5.9 曾写"条件抽取=第四批"，与 HANDOFF 口径（第三批）不一致；已统一为——**第三批=条件抽取、第四批=sav-parser**（判据：函数树=第二批在工作日志与 HANDOFF 双证）。
 10. **TS7 对"联合字面量属性"的判别式 narrow 不可靠**（第五批）：`ArchiveScalarVariable.type` 是 `'int' | 'str'`（联合属性），`if (v.type === 'int' || v.type === 'str') return ...` 之后 TS 仍不把该变体从后续代码排除（报"Property 'saveLen' does not exist on ArchiveScalarVariable"）。修法：**显式类型守卫**（`isArrayVar(v): v is ArchiveArrayVariable`）替代判别式 narrow。
 11. **变量寻址语义必须回引擎源码逐行核验**（第五批，§九-1 的再次应验）：`CFLAG:2` ≡ `CFLAG[TARGET,2]`、裸 `CFLAG` ≡ `CFLAG[TARGET,0]`（角色 1D）、裸 `DAY` ≡ `DAY:0`（全局 1D）——全部来自 `VariableParser.ReduceVariable`（:102-133 角色分支 / :153-170 全局分支），不是直觉推断。求值器的每个寻址分支都注了源码行号。
 12. **JS 数字语义与 C# 的两处硬差异**（第五批）：①整数除法是**截断**（`-7/2 = -3`，Math.trunc，非 floor）；②位运算符（`& | ^ << >>`）在 JS 是 **32 位**——`1 << 40` 会得到 256 而非 2^40，必须经 BigInt 中转（`Number(BigInt(a) << BigInt(b))`，并先 `Number.isInteger` 检查）。
@@ -367,6 +369,6 @@ node tools/smoke-tauri-dom.mjs
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：456 项 / ✅ / 11 插件）
-3. 读 `docs/ARCHITECTURE.md` §5.8–§5.19 + 本文件 §六
+3. 读 `docs/IMPLEMENTATION-LOG.md`（原 ARCH §5.8–§5.19 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
 4. **开始第十四批**（见 §6.12 末）：**v1.1 注入器用户面**（改槽注入 UI → 含修改金样本回归 → 写盘走 writablePaths+备份）或 **v1.0 收口**（回放面板场景预设 / 桌面壳真实终端冒烟）；审阅遗留 M1（stop 级联）/ M3（Rust 路径约束）随 v0.3 排入
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

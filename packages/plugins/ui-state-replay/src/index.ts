@@ -1,7 +1,7 @@
 /**
  * @kojo/plugin-ui-state-replay
  *
- * 状态回放面板（`ui.panel` 槽贡献；v0.2 第八批，架构 §5.14）。
+ * 状态回放面板（`ui.panel` 槽贡献；v0.2 第八批，实施记录 §5.14（docs/IMPLEMENTATION-LOG.md））。
  *
  * 把三批成熟的回放引擎（`state.replay`：三值求值 + 本地量数据流 +
  * 有界内联，实测未知率 32%）第一次带上 UI：
