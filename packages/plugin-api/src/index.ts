@@ -113,6 +113,8 @@ export type {
   FamilyParseKind,
   GameAdapter,
   GameProject,
+  KojoCallProtocol,
+  KojoCallSlot,
   ScaffoldOptions,
   ScaffoldResult,
   StateModel,

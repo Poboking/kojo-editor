@@ -134,6 +134,32 @@ export interface ScaffoldResult {
 }
 
 /**
+ * 口上调用协议（v0.2 第十批）——路由层转发实参的槽位语义表。
+ *
+ * 口上函数的参数槽 = 路由层透传缓冲（如 eraTW 的 KOJO_MESSAGE_SEND 家族
+ * 模板把 ARG:3/ARG:4 转发给口上函数的 ARG:0/ARG:1），**值是场景输入**
+ * （不可推导）；但**槽位个数与含义**可由路由表静态声明。消费者（回放
+ * 面板）据此生成场景参数输入与"默认场景"回放——全 0/'' 是引擎转发链
+ * 未设置槽的确定事实（fresh 局部量语义），非猜测。
+ */
+export interface KojoCallSlot {
+  /** 槽位号（ARG:n 的 n；字符串槽为 ARGS:n 的 n） */
+  readonly index: number;
+  /** 槽位类型（数值 ARG / 字符串 ARGS） */
+  readonly kind: 'int' | 'str';
+  /** 人类可读含义（如「事件子参数」「日期偏移」；展示用） */
+  readonly label: string;
+}
+
+export interface KojoCallProtocol {
+  /**
+   * 声明一个口上函数的调用槽位（按签名顺序；null = 协议不认识该函数）。
+   * 实现按函数名匹配路由模板（游戏知识），与本工程索引的函数名口径一致。
+   */
+  slotsFor(functionName: string): readonly KojoCallSlot[] | null;
+}
+
+/**
  * 游戏适配器（槽位 `game.adapter` 的负载）。
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
  */
@@ -156,6 +182,8 @@ export interface GameAdapter {
   readonly conventions?: readonly ConventionRule[];
   /** 状态模型（供快照/预览消费） */
   readonly stateModel?: StateModel;
+  /** 口上调用协议（v0.2 第十批；可选——路由层转发实参的槽位语义表） */
+  readonly kojoCallProtocol?: KojoCallProtocol;
 
   /** 脚手架（生成新角色口上骨架；v0.3） */
   scaffold?(characterNo: number, options?: ScaffoldOptions): Promise<ScaffoldResult>;

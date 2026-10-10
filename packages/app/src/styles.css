@@ -1040,3 +1040,33 @@ code {
 .rp-branch-taken {
   font-size: 10.5px;
 }
+
+/* 协议场景参数输入区（v0.2 第十批） */
+.rp-slots {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.rp-slots-head {
+  font-weight: 600;
+}
+.rp-slot {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.rp-slot-idx {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+}
+.rp-slot-input {
+  width: 64px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  padding: 2px 4px;
+}
+.rp-slot-hint {
+  font-size: 10.5px;
+}

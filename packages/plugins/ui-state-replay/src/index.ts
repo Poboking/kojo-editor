@@ -20,10 +20,13 @@ import type {
   BranchChainOutcome,
   ConditionExtractorService,
   FunctionReplay,
+  GameAdapter,
   GameProject,
+  KojoCallSlot,
   Plugin,
   ProjectService,
   ReplayStateView,
+  SlotRegistry,
   SnapshotSourceService,
   StateReplayService,
 } from '@kojo/plugin-api';
@@ -123,12 +126,25 @@ export function createUiStateReplayPlugin(): Plugin {
       WellKnownServices.SnapshotSource,
       WellKnownServices.ConditionExtractor,
       KernelServices.Project,
+      KernelServices.Slots,
     ],
     activate(ctx) {
       const replay = ctx.inject<StateReplayService>(WellKnownServices.StateReplay);
       const snapshots = ctx.inject<SnapshotSourceService>(WellKnownServices.SnapshotSource);
       const extractor = ctx.inject<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
       const project = ctx.inject<ProjectService>(KernelServices.Project);
+      const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
+
+      /** 当前适配器的口上调用协议（按 adapterId 精确匹配；多适配器共存天然正确） */
+      const currentProtocol = (): GameAdapter['kojoCallProtocol'] => {
+        const current: GameProject | null = project.current();
+        if (!current) return undefined;
+        for (const contribution of slots.query('game.adapter')) {
+          if (contribution.adapter.gameId !== current.adapterId) continue;
+          return contribution.adapter.kojoCallProtocol;
+        }
+        return undefined;
+      };
 
       // ---- React 外部源（面板组件订阅） ----
       interface ArchiveEntryUi {
@@ -194,11 +210,26 @@ export function createUiStateReplayPlugin(): Plugin {
         const [viewError, setViewError] = useState<string | null>(null);
         const [fnQuery, setFnQuery] = useState('');
         const [contextText, setContextText] = useState('');
+        /** 协议槽位输入（key = 槽位号；值 = 用户文本；int 缺省 '0'、str 缺省 ''） */
+        const [slotTexts, setSlotTexts] = useState<Record<number, string>>({});
         const [result, setResult] = useState<FunctionReplay | null>(null);
         const [replayBusy, setReplayBusy] = useState(false);
         const [replayError, setReplayError] = useState<string | null>(null);
         /** 视图代际（换档/换角色时使在途 createView 作废） */
         const viewGenRef = useRef(0);
+
+        // 协议槽位（函数名变化时重置输入为默认场景值：int=0 / str=''）
+        const protocol = currentProtocol();
+        const callSlots: readonly KojoCallSlot[] | null =
+          fnQuery.trim().length >= 2 ? (protocol?.slotsFor(fnQuery.trim().toUpperCase()) ?? null) : null;
+        const slotsKey = callSlots ? callSlots.map((s) => `${s.kind}${s.index}`).join('|') : '';
+        useEffect(() => {
+          if (!callSlots) return;
+          const init: Record<number, string> = {};
+          for (const s of callSlots) init[s.index] = s.kind === 'int' ? '0' : '';
+          setSlotTexts(init);
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [slotsKey]);
 
         useEffect(() => {
           const cb = (): void => force((n) => n + 1);
@@ -263,14 +294,43 @@ export function createUiStateReplayPlugin(): Plugin {
             setReplayError('请先选择存档与角色（建立回放视图）');
             return;
           }
-          const parsed = parseCallContextText(contextText);
-          if (!parsed.ok) {
-            setReplayError(`调用上下文无法解析：${parsed.detail}`);
-            return;
+          // 调用上下文组装：协议槽（结构化输入）优先；无协议 → 文本框解析
+          let callContext;
+          if (callSlots) {
+            const ints: (number | undefined)[] = [];
+            const strs: (string | undefined)[] = [];
+            for (const s of callSlots) {
+              const raw = slotTexts[s.index] ?? '';
+              if (raw.trim() === '') continue; // 空 = 未提供该槽（unknown，不猜测）
+              if (s.kind === 'int') {
+                if (!/^-?\d+$/.test(raw.trim())) {
+                  setReplayError(`场景参数 ${s.index}（${s.label}）必须是整数：「${raw}」`);
+                  return;
+                }
+                while (ints.length <= s.index) ints.push(undefined);
+                ints[s.index] = Number(raw.trim());
+              } else {
+                while (strs.length <= s.index) strs.push(undefined);
+                strs[s.index] = raw;
+              }
+            }
+            if (ints.some((v) => v !== undefined) || strs.some((v) => v !== undefined)) {
+              callContext = {
+                ...(ints.some((v) => v !== undefined) ? { ints } : {}),
+                ...(strs.some((v) => v !== undefined) ? { strs } : {}),
+              };
+            }
+          } else {
+            const parsed = parseCallContextText(contextText);
+            if (!parsed.ok) {
+              setReplayError(`调用上下文无法解析：${parsed.detail}`);
+              return;
+            }
+            callContext = toCallContext(parsed);
           }
           setReplayBusy(true);
           void replay
-            .replayFunction(view, name, { callContext: toCallContext(parsed) })
+            .replayFunction(view, name, { callContext })
             .then((r) => {
               if (r === null) {
                 setReplayError(`函数不在条件索引中（未解析到该函数的谓词）：${name}`);
@@ -351,10 +411,35 @@ export function createUiStateReplayPlugin(): Plugin {
             if (e.key === 'Enter') runReplay();
           },
         });
+        // 协议槽输入区（有协议 → 替代裸文本框；空值 = 未提供该槽）
+        const slotInputs =
+          callSlots && callSlots.length > 0
+            ? createElement(
+                'div',
+                { className: 'rp-slots' },
+                createElement('span', { className: 'dim rp-slots-head' }, '场景参数'),
+                ...callSlots.map((s) =>
+                  createElement(
+                    'label',
+                    { key: `${s.kind}${s.index}`, className: 'rp-slot', title: s.label },
+                    createElement('span', { className: 'dim rp-slot-idx' }, `${s.kind === 'str' ? 'ARGS' : 'ARG'}:${s.index}`),
+                    createElement('input', {
+                      className: 'rp-slot-input',
+                      type: 'text',
+                      value: slotTexts[s.index] ?? '',
+                      placeholder: s.kind === 'int' ? '0' : '',
+                      onChange: (e: { target: { value: string } }) =>
+                        setSlotTexts((prev) => ({ ...prev, [s.index]: e.target.value })),
+                    }),
+                  ),
+                ),
+                createElement('span', { className: 'dim rp-slot-hint' }, '空 = 未提供（按未知处理）'),
+              )
+            : null;
         const contextInput = createElement('input', {
           className: 'rp-context-input',
           type: 'text',
-          placeholder: '调用上下文（可空；如 0=36, 1=15）',
+          placeholder: callSlots ? '' : '调用上下文（可空；如 0=36, 1=15）',
           value: contextText,
           onChange: (e: { target: { value: string } }) => setContextText(e.target.value),
           title: 'ARG/ARGS 槽位赋值（场景输入）；未提供的槽位按未知处理，不猜测',
@@ -474,7 +559,8 @@ export function createUiStateReplayPlugin(): Plugin {
           { className: 'panel-state-replay' },
           createElement('div', { className: 'rp-toolbar' }, archiveSelect, charaSelect),
           viewStatus,
-          createElement('div', { className: 'rp-toolbar' }, fnInput, contextInput, replayBtn),
+          createElement('div', { className: 'rp-toolbar' }, fnInput, callSlots ? null : contextInput, replayBtn),
+          slotInputs,
           contextHintEl,
           suggestList,
           replayErrorEl,

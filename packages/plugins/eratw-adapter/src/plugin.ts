@@ -1,10 +1,11 @@
-import type { CharaInfo, FileIO, GameAdapter, GameProject, Plugin, VariableSchema } from '@kojo/plugin-api';
+import type { CharaInfo, FileIO, GameAdapter, GameProject, KojoCallProtocol, Plugin, VariableSchema } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { createEratwFamilyIndex } from './family-index';
 import { createEratwConventions } from './conventions';
 import { loadEratwVariableSchema } from './variable-schema';
+import { loadEratwCallProtocol } from './call-protocol';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -27,6 +28,8 @@ export function createEratwAdapterPlugin(): Plugin {
 
       /** 变量字典（每次 loadProject 时按当前游戏 CSV 重建） */
       let currentSchema: VariableSchema | undefined;
+      /** 口上调用协议（v0.2 第十批；loadProject 时解析路由表，失败 → undefined 优雅降级） */
+      let currentProtocol: KojoCallProtocol | undefined;
 
       const adapter: GameAdapter = {
         gameId: ERATW.gameId,
@@ -35,6 +38,9 @@ export function createEratwAdapterPlugin(): Plugin {
         conventions: createEratwConventions(),
         get variableSchema() {
           return currentSchema;
+        },
+        get kojoCallProtocol() {
+          return currentProtocol;
         },
 
         async detect(rootDir: string): Promise<boolean> {
@@ -105,6 +111,13 @@ export function createEratwAdapterPlugin(): Plugin {
           currentSchema = await loadEratwVariableSchema({
             io,
             csvDir: join(rootDir, ...ERATW.csvDir),
+            log: ctx.log,
+          });
+
+          // ---- 4. 口上调用协议（路由表 → 槽位语义表；失败降级 undefined） ----
+          currentProtocol = await loadEratwCallProtocol({
+            io,
+            routeFile: join(rootDir, ...ERATW.paths.kojoMessageRoute),
             log: ctx.log,
           });
 

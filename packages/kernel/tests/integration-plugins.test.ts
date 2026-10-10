@@ -69,6 +69,15 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(project.charaIndex.get(1)?.kojoDir).toBeTruthy();
       expect(project.savDir).toBeTruthy();
 
+      // 2.5 口上调用协议（v0.2 第十批）：路由表 → 槽位语义表（真实 KOJO_MESSAGE.ERB）
+      const adapterContribution = kernel.slots.query('game.adapter').find((c) => c.adapter.gameId === 'eratw');
+      const protocol = adapterContribution?.adapter.kojoCallProtocol;
+      expect(protocol).toBeTruthy();
+      const spSlots = protocol!.slotsFor('M_KOJO_ORTHODOX_SPEVENT_K49_2');
+      expect(spSlots).not.toBeNull();
+      expect(spSlots).toHaveLength(2); // 路由转发 (ARG:3,ARG:4) → 2 个数值槽
+      expect(protocol!.slotsFor('M_KOJO_K49_陷落状态')).toBeNull(); // 家族外函数协议不认识
+
       // 3. 口上域全量索引（解析器在 project.opened 已自动构建，此处取用）
       const parser = kernel.services.get<ErbParserService>('erb.parser');
       const index = await parser.ensureIndex();

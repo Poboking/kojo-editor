@@ -24,6 +24,8 @@ export const ERATW = {
   paths: {
     /** 個人口上：编辑器主战场 */
     personalKojo: ['ERB', '口上・メッセージ関連', '個人口上'] as const,
+    /** 口上路由总表（v0.2 第十批：口上调用协议的解析来源） */
+    kojoMessageRoute: ['ERB', '口上・メッセージ関連', 'KOJO_MESSAGE.ERB'] as const,
   },
 
   /** 存档目录（v1.0 快照回放/注入用；适配器提议、内核不感知语义） */
