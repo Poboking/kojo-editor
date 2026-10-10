@@ -13,6 +13,18 @@
  *   - 调用上下文（ARG/ARGS 槽位）是**场景输入**，由用户填写、不猜测；
  *   - 谓词行点击 → `editor.revealLocation`（宿主消费，与校验面板同款）；
  *   - 监听 `kojo.replayFunction`（任意插件可发起的回放意图，如导航面板联动）。
+ *
+ * 本文件内部分两层（v1.0 收口 A3，职责归属注记见 ARCHITECTURE §5.4）：
+ *   - **预览层**（`renderReplayPreview` + `branchRow`）：把 `FunctionReplay` 渲染为
+ *     "状态 → 分支 / 文本预览"；纯逻辑（判定 / 统计）在 `panel-logic.ts`，可复用。
+ *     语法糖预览若做，复用 `preview.renderer` 产出的 `PreviewLines[]` 渲染文本，
+ *     **不自建渲染逻辑**——本层只负责"状态 → 预览数据 → 呈现"。
+ *   - **面板壳层**（`ReplayPanel` 其余部分）：`ui.panel` 的选档 / 选角 / 选函数 /
+ *     场景参数输入 / 错误提示等交互骨架。
+ *
+ * C9（v1.0 收口，信任闭环）：协议槽位预填的 0 是**默认场景假设值**，非确定值——
+ * 未手改的槽在 UI 标注「假设」（虚线样式），依赖它的谓词结果标「基于假设」，
+ * 分支折叠区汇总"本结果含 N 个假设参数"。空值 = 未提供（unknown）语义不变。
  */
 
 import { createElement, useEffect, useRef, useState } from 'react';
@@ -31,7 +43,18 @@ import type {
   StateReplayService,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
-import { groupUnknowns, parseCallContextText, suggestFunctions, toCallContext } from './panel-logic';
+import type { AssumedSlot, SlotOrigin } from './panel-logic';
+import {
+  classifySlotValue,
+  collectAssumedSlots,
+  defaultSlotText,
+  groupUnknowns,
+  parseCallContextText,
+  slotKey,
+  suggestFunctions,
+  summarizeAssumptions,
+  toCallContext,
+} from './panel-logic';
 
 /** 函数名提示上限 */
 const SUGGEST_LIMIT = 50;
@@ -55,8 +78,11 @@ const BRANCH_MARK: Record<BranchChainOutcome['outcome'], { mark: string; classNa
   unreachable: { mark: '·', className: 'rp-branch-mark unreach', title: '外层分支未进入（不可达）' },
 };
 
-/** 单条分支链的呈现（按 depth 缩进；命中成员高亮，点击跳源码） */
-type EmitReveal = (filePath: string, line: number) => void;
+/** 跳转源码（source 缺省 = 本插件；谓词行沿用 normalizedName 作为来源标记） */
+type EmitReveal = (filePath: string, line: number, source?: string) => void;
+
+/** 假设值标记的内联样式（插件内自持，不改 app 样式表；虚线 = 与手输确定值视觉可区分） */
+const ASSUME_STYLE = { color: 'var(--amber, #d19a66)', borderColor: 'var(--amber, #d19a66)', borderStyle: 'dashed' } as const;
 
 function branchRow(chain: BranchChainOutcome, filePath: string, emit: EmitReveal, key: string): ReturnType<typeof createElement> {
   const mk = BRANCH_MARK[chain.outcome]!;
@@ -86,6 +112,133 @@ function branchRow(chain: BranchChainOutcome, filePath: string, emit: EmitReveal
       },
       createElement('span', { className: 'rp-branch-head' }, headText),
       createElement('span', { className: 'rp-branch-taken dim' }, chain.takenLine ? ` → :${chain.takenLine}` : ''),
+    ),
+  );
+}
+
+/**
+ * 预览层（v1.0 收口 A3）：把 `FunctionReplay` 渲染为"状态 → 分支 / 文本预览"。
+ *
+ * 职责分工：本层只做**状态 → 预览**（分支走向 + 谓词三值 + 未知分组 + 假设标注）；
+ * 将来的语法糖预览复用 `preview.renderer`（ARCHITECTURE §5.4）产出的
+ * `PreviewLines[]` 渲染文本，**不自建渲染逻辑**。参数显式传入（不闭包面板状态），
+ * 与 ui.panel 壳层（选档 / 选角 / 选函数 / 输入）解耦——纯逻辑复用则下沉到
+ * `panel-logic.ts`（`summarizeAssumptions` 等）。
+ */
+function renderReplayPreview(opts: {
+  result: FunctionReplay;
+  assumedSlots: readonly AssumedSlot[];
+  emitReveal: EmitReveal;
+}): ReturnType<typeof createElement> {
+  const { result, assumedSlots, emitReveal } = opts;
+  const conf = CONFIDENCE_BADGE[result.confidence];
+  const unknowns = groupUnknowns(result);
+  const impact = summarizeAssumptions(result, assumedSlots);
+
+  // 假设参数汇总（C9 附加）：分支折叠结果区一眼可见的可信度提示
+  const assumptionSummary =
+    impact.consumed.length > 0
+      ? createElement(
+          'span',
+          {
+            className: 'rp-badge assume',
+            style: ASSUME_STYLE,
+            title: '命中判定用到了默认场景的假设参数（未被手改的预填 0，未必等于引擎真实默认）——请核对场景参数',
+          },
+          `本结果含 ${impact.consumed.length} 个假设参数`,
+        )
+      : null;
+
+  // 分支折叠结果区：链走向 + 假设汇总（无链但有假设影响时也显式提示，不静默）
+  const branchSection =
+    result.branches.length > 0
+      ? createElement(
+          'div',
+          { className: 'rp-branches' },
+          createElement(
+            'div',
+            { className: 'dim rp-branches-head' },
+            `分支走向（${result.branches.length} 条链）`,
+            assumptionSummary,
+          ),
+          ...result.branches.map((b, i) => branchRow(b, result.filePath, emitReveal, `b${b.headLine}:${i}`)),
+        )
+      : assumptionSummary
+        ? createElement(
+            'div',
+            { className: 'rp-branches' },
+            createElement('div', { className: 'dim rp-branches-head' }, assumptionSummary),
+          )
+        : null;
+
+  return createElement(
+    'div',
+    { className: 'rp-result' },
+    createElement(
+      'div',
+      { className: 'rp-summary' },
+      createElement('span', { className: conf.className }, conf.label),
+      createElement('span', { className: 'rp-count hit' }, `命中 ${result.stats.hit}`),
+      createElement('span', { className: 'rp-count miss' }, `未命中 ${result.stats.miss}`),
+      createElement('span', { className: 'rp-count unk' }, `未知 ${result.stats.unknown}`),
+      createElement(
+        'span',
+        { className: 'dim rp-meta' },
+        `共 ${result.stats.total} 谓词 · ${shortPath(result.filePath)}:${result.startLine}`,
+      ),
+    ),
+    branchSection,
+    unknowns.length > 0
+      ? createElement(
+          'div',
+          { className: 'rp-unknowns' },
+          createElement('span', { className: 'dim' }, '未知原因：'),
+          ...unknowns.map((u) =>
+            createElement(
+              'span',
+              { key: u.code, className: 'rp-badge unk', title: UNKNOWN_HINT[u.code] ?? u.code },
+              `${UNKNOWN_HINT[u.code] ?? u.code} ${u.count}`,
+            ),
+          ),
+        )
+      : null,
+    createElement(
+      'ul',
+      { className: 'rp-preds' },
+      ...result.predicates.slice(0, PRED_RENDER_CAP).map((p, i) => {
+        const cls =
+          p.outcome.kind === 'true' ? 'rp-outcome hit' : p.outcome.kind === 'false' ? 'rp-outcome miss' : 'rp-outcome unk';
+        return createElement(
+          'li',
+          { key: `${p.line}:${i}` },
+          createElement(
+            'button',
+            {
+              className: 'rp-pred-btn',
+              title: `${result.filePath}:${p.line}${p.outcome.kind === 'unknown' ? ` — ${p.outcome.unknown.message}` : ''}`,
+              onClick: () => emitReveal(result.filePath, p.line, result.normalizedName),
+            },
+            createElement('span', { className: 'rp-kind' }, p.kind),
+            createElement('span', { className: cls }, OUTCOME_LABEL[p.outcome.kind] ?? '?'),
+            impact.affected[i]
+              ? createElement(
+                  'span',
+                  {
+                    className: 'rp-badge assume',
+                    style: ASSUME_STYLE,
+                    title: '该谓词读取了默认场景的假设参数（未手改的预填 0）——结论建立在假设之上',
+                  },
+                  '基于假设',
+                )
+              : null,
+            createElement('span', { className: 'rp-pred-text' }, p.text),
+            createElement('span', { className: 'rp-line dim' }, `:${p.line}`),
+          ),
+        );
+      }),
+      result.predicates.length > PRED_RENDER_CAP
+        ? createElement('li', { className: 'rp-more dim' }, `其余 ${result.predicates.length - PRED_RENDER_CAP} 条未显示`)
+        : null,
     ),
   );
 }
@@ -210,9 +363,13 @@ export function createUiStateReplayPlugin(): Plugin {
         const [viewError, setViewError] = useState<string | null>(null);
         const [fnQuery, setFnQuery] = useState('');
         const [contextText, setContextText] = useState('');
-        /** 协议槽位输入（key = 槽位号；值 = 用户文本；int 缺省 '0'、str 缺省 ''） */
-        const [slotTexts, setSlotTexts] = useState<Record<number, string>>({});
+        /** 协议槽位输入（key = slotKey(kind,index)；值 = 用户文本；int 缺省 '0'、str 缺省 ''） */
+        const [slotTexts, setSlotTexts] = useState<Record<string, string>>({});
+        /** 协议槽位是否被作者手改过（未改的预填 0 = 假设值，审阅 C9） */
+        const [slotEdited, setSlotEdited] = useState<Record<string, boolean>>({});
         const [result, setResult] = useState<FunctionReplay | null>(null);
+        /** 与该结果同批的假设值槽位（快照于回放时刻——改槽不影响已出结果的可信度标注） */
+        const [resultAssumed, setResultAssumed] = useState<AssumedSlot[]>([]);
         const [replayBusy, setReplayBusy] = useState(false);
         const [replayError, setReplayError] = useState<string | null>(null);
         /** 视图代际（换档/换角色时使在途 createView 作废） */
@@ -225,9 +382,10 @@ export function createUiStateReplayPlugin(): Plugin {
         const slotsKey = callSlots ? callSlots.map((s) => `${s.kind}${s.index}`).join('|') : '';
         useEffect(() => {
           if (!callSlots) return;
-          const init: Record<number, string> = {};
-          for (const s of callSlots) init[s.index] = s.kind === 'int' ? '0' : '';
+          const init: Record<string, string> = {};
+          for (const s of callSlots) init[slotKey(s.kind, s.index)] = defaultSlotText(s.kind);
           setSlotTexts(init);
+          setSlotEdited({}); // 换函数 → 手改标记清零（预填 0 重新回到"假设值"）
           // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [slotsKey]);
 
@@ -250,6 +408,7 @@ export function createUiStateReplayPlugin(): Plugin {
           setView(null);
           setViewError(null);
           setResult(null);
+          setResultAssumed([]);
           if (!archivePath || charaNo === null) {
             return;
           }
@@ -303,7 +462,7 @@ export function createUiStateReplayPlugin(): Plugin {
             const ints: (number | undefined)[] = [];
             const strs: (string | undefined)[] = [];
             for (const s of callSlots) {
-              const raw = slotTexts[s.index] ?? '';
+              const raw = slotTexts[slotKey(s.kind, s.index)] ?? '';
               if (raw.trim() === '') continue; // 空 = 未提供该槽（unknown，不猜测）
               if (s.kind === 'int') {
                 if (!/^-?\d+$/.test(raw.trim())) {
@@ -331,6 +490,8 @@ export function createUiStateReplayPlugin(): Plugin {
             }
             callContext = toCallContext(parsed);
           }
+          // 假设值快照（C9）：与本结果同批——未手改的预填 0 记入"基于假设"标注
+          const assumedAtRun = callSlots ? collectAssumedSlots(callSlots, slotTexts, slotEdited) : [];
           setReplayBusy(true);
           void replay
             .replayFunction(view, name, { callContext })
@@ -338,9 +499,11 @@ export function createUiStateReplayPlugin(): Plugin {
               if (r === null) {
                 setReplayError(`函数不在条件索引中（未解析到该函数的谓词）：${name}`);
                 setResult(null);
+                setResultAssumed([]);
                 return;
               }
               setResult(r);
+              setResultAssumed(assumedAtRun);
             })
             .catch((err: unknown) => {
               setReplayError(err instanceof Error ? err.message : String(err));
@@ -416,28 +579,48 @@ export function createUiStateReplayPlugin(): Plugin {
           },
         });
         // 协议槽输入区（有协议 → 替代裸文本框；空值 = 未提供该槽）
+        // 槽位来源三态（C9）：未手改的预填 0 = "假设值"——虚线 + 「假设」前缀标记，
+        // 与手输确定值在视觉上可区分（不伪装成确定命中）。
         const slotInputs =
           callSlots && callSlots.length > 0
             ? createElement(
                 'div',
                 { className: 'rp-slots' },
                 createElement('span', { className: 'dim rp-slots-head' }, '场景参数'),
-                ...callSlots.map((s) =>
-                  createElement(
+                ...callSlots.map((s) => {
+                  const k = slotKey(s.kind, s.index);
+                  const origin: SlotOrigin = classifySlotValue(s.kind, slotTexts[k] ?? '', slotEdited[k] === true);
+                  const isAssume = origin === 'assumption';
+                  return createElement(
                     'label',
-                    { key: `${s.kind}${s.index}`, className: 'rp-slot', title: s.label },
+                    { key: k, className: 'rp-slot', title: isAssume ? `${s.label}（默认场景假设值）` : s.label },
+                    isAssume
+                      ? createElement(
+                          'span',
+                          {
+                            className: 'rp-badge assume',
+                            style: ASSUME_STYLE,
+                            title: '默认场景假设值（未手改的预填 0，未必等于引擎真实默认）',
+                          },
+                          '假设',
+                        )
+                      : null,
                     createElement('span', { className: 'dim rp-slot-idx' }, `${s.kind === 'str' ? 'ARGS' : 'ARG'}:${s.index}`),
                     createElement('input', {
                       className: 'rp-slot-input',
+                      style: isAssume ? ASSUME_STYLE : undefined,
                       type: 'text',
-                      value: slotTexts[s.index] ?? '',
+                      value: slotTexts[k] ?? '',
                       placeholder: s.kind === 'int' ? '0' : '',
-                      onChange: (e: { target: { value: string } }) =>
-                        setSlotTexts((prev) => ({ ...prev, [s.index]: e.target.value })),
+                      onChange: (e: { target: { value: string } }) => {
+                        const v = e.target.value;
+                        setSlotTexts((prev) => ({ ...prev, [k]: v }));
+                        setSlotEdited((prev) => ({ ...prev, [k]: true })); // 手改 → 确定值
+                      },
                     }),
-                  ),
-                ),
-                createElement('span', { className: 'dim rp-slot-hint' }, '空 = 未提供（按未知处理）'),
+                  );
+                }),
+                createElement('span', { className: 'dim rp-slot-hint' }, '空 = 未提供（按未知处理）· 未改的预填 0 = 假设值'),
               )
             : null;
         const contextInput = createElement('input', {
@@ -472,78 +655,12 @@ export function createUiStateReplayPlugin(): Plugin {
               )
             : null;
 
-        // ---- 结果渲染 ----
+        // ---- 结果渲染（预览层：状态 → 分支 / 文本预览；实现见 renderReplayPreview） ----
         let resultBody: ReturnType<typeof createElement> | null = null;
         if (result) {
-          const conf = CONFIDENCE_BADGE[result.confidence];
-          const unknowns = groupUnknowns(result);
-          const emitReveal: EmitReveal = (filePath, line) =>
-            ctx.bus.emit('editor.revealLocation', { filePath, line, source: 'ui-state-replay' });
-          const branchSection =
-            result.branches.length > 0
-              ? createElement(
-                  'div',
-                  { className: 'rp-branches' },
-                  createElement('div', { className: 'dim rp-branches-head' }, `分支走向（${result.branches.length} 条链）`),
-                  ...result.branches.map((b, i) => branchRow(b, result.filePath, emitReveal, `b${b.headLine}:${i}`)),
-                )
-              : null;
-          resultBody = createElement(
-            'div',
-            { className: 'rp-result' },
-            createElement(
-              'div',
-              { className: 'rp-summary' },
-              createElement('span', { className: conf.className }, conf.label),
-              createElement('span', { className: 'rp-count hit' }, `命中 ${result.stats.hit}`),
-              createElement('span', { className: 'rp-count miss' }, `未命中 ${result.stats.miss}`),
-              createElement('span', { className: 'rp-count unk' }, `未知 ${result.stats.unknown}`),
-              createElement('span', { className: 'dim rp-meta' }, `共 ${result.stats.total} 谓词 · ${shortPath(result.filePath)}:${result.startLine}`),
-            ),
-            branchSection,
-            unknowns.length > 0
-              ? createElement(
-                  'div',
-                  { className: 'rp-unknowns' },
-                  createElement('span', { className: 'dim' }, '未知原因：'),
-                  ...unknowns.map((u) =>
-                    createElement(
-                      'span',
-                      { key: u.code, className: 'rp-badge unk', title: UNKNOWN_HINT[u.code] ?? u.code },
-                      `${UNKNOWN_HINT[u.code] ?? u.code} ${u.count}`,
-                    ),
-                  ),
-                )
-              : null,
-            createElement(
-              'ul',
-              { className: 'rp-preds' },
-              ...result.predicates.slice(0, PRED_RENDER_CAP).map((p, i) => {
-                const ok = p.outcome.kind === 'true';
-                const bad = p.outcome.kind === 'false';
-                const cls = p.outcome.kind === 'true' ? 'rp-outcome hit' : p.outcome.kind === 'false' ? 'rp-outcome miss' : 'rp-outcome unk';
-                return createElement(
-                  'li',
-                  { key: `${p.line}:${i}` },
-                  createElement(
-                    'button',
-                    {
-                      className: 'rp-pred-btn',
-                      title: `${result.filePath}:${p.line}${p.outcome.kind === 'unknown' ? ` — ${p.outcome.unknown.message}` : ''}`,
-                      onClick: () => ctx.bus.emit('editor.revealLocation', { filePath: result.filePath, line: p.line, source: result.normalizedName }),
-                    },
-                    createElement('span', { className: 'rp-kind' }, p.kind),
-                    createElement('span', { className: cls }, OUTCOME_LABEL[p.outcome.kind] ?? '?'),
-                    createElement('span', { className: 'rp-pred-text' }, p.text),
-                    createElement('span', { className: 'rp-line dim' }, `:${p.line}`),
-                  ),
-                );
-              }),
-              result.predicates.length > PRED_RENDER_CAP
-                ? createElement('li', { className: 'rp-more dim' }, `其余 ${result.predicates.length - PRED_RENDER_CAP} 条未显示`)
-                : null,
-            ),
-          );
+          const emitReveal: EmitReveal = (filePath, line, source) =>
+            ctx.bus.emit('editor.revealLocation', { filePath, line, source: source ?? 'ui-state-replay' });
+          resultBody = renderReplayPreview({ result, assumedSlots: resultAssumed, emitReveal });
         }
 
         const replayErrorEl =

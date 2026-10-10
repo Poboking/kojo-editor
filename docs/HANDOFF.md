@@ -317,6 +317,17 @@ node tools/smoke-tauri-dom.mjs
 - Monaco bundle 4.3MB 拆分（manualChunks，低优先级）。
 - scanner 的 TRY 系配对精度（`TRYCALLFORM` 无 CATCH 时产生幻影开块）——影响上下文路径精度，方向"宁少勿错"，低优先级。
 
+### 6.13 第十四批（v1.0 收口线一，✅ 已完成）：回放面板信任闭环（C9 + A3）
+
+**实施结果**：假设值标注 + 预览职责分层落地（IMPLEMENTATION-LOG §5.20 为权威记录）。
+
+- **C9**：协议槽预填 0 从"确定值"降格为**假设值**——来源三态 `manual` / `assumption` / `unset` 纯逻辑；UI「假设」徽章 + 虚线边框、「基于假设」谓词标注、分支区「本结果含 N 个假设参数」汇总；**空值 = unknown 语义不变**。
+- **附带修正**：槽位输入改以 `slotKey(kind,index)` 为键（修 `ARG:0` / `ARGS:0` 同号互相覆盖）。
+- **A3**：面板内分「预览层（`renderReplayPreview`）」与「壳层（选档/选角/输入）」；ARCHITECTURE §5.4 补一行职责注记（糖预览复用 `preview.renderer`，不自建渲染）。
+- **不变式**：回放引擎语义与 condition-extractor 契约零改动；真实基线不变（未知 3,741 / exact 836）。
+- **验证**：470 项全绿（+14）/ typecheck root+app ✅ / 真实工程冒烟通过。**audit:decoupling 报红 = 并行线 C7 未提交的 `lib.rs:484` 裸 `sav` 词（非本批文件）**。
+- 边界：仅 `packages/plugins/ui-state-replay/**` + 两份文档；未碰 `packages/app/src-tauri/**` 与 kernel io（C7 线）。
+
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
