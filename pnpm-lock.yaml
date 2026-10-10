@@ -50,6 +50,9 @@ importers:
       '@kojo/plugin-erb-parser':
         specifier: workspace:*
         version: link:../plugins/erb-parser
+      '@kojo/plugin-kojo-sugar':
+        specifier: workspace:*
+        version: link:../plugins/kojo-sugar
       '@kojo/plugin-sav-parser':
         specifier: workspace:*
         version: link:../plugins/sav-parser
@@ -153,6 +156,19 @@ importers:
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api
+
+  packages/plugins/kojo-sugar:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+    devDependencies:
+      '@kojo/plugin-condition-extractor':
+        specifier: workspace:*
+        version: link:../condition-extractor
+      '@kojo/plugin-erb-parser':
+        specifier: workspace:*
+        version: link:../erb-parser
 
   packages/plugins/sav-parser:
     dependencies:

@@ -15,6 +15,7 @@ export default defineConfig({
       '@kojo/plugin-condition-extractor': r('./packages/plugins/condition-extractor/src/index.ts'),
       '@kojo/plugin-sav-parser': r('./packages/plugins/sav-parser/src/index.ts'),
       '@kojo/plugin-state-replay': r('./packages/plugins/state-replay/src/index.ts'),
+      '@kojo/plugin-kojo-sugar': r('./packages/plugins/kojo-sugar/src/index.ts'),
       '@kojo/plugin-ui-convention-report': r('./packages/plugins/ui-convention-report/src/index.ts'),
       '@kojo/plugin-ui-state-replay': r('./packages/plugins/ui-state-replay/src/index.ts'),
       '@kojo/plugin-ui-kojo-navigator': r('./packages/plugins/ui-kojo-navigator/src/index.ts'),

@@ -118,3 +118,11 @@ export function createConventionLinterPlugin(): Plugin {
 
 export { ConventionEngine, type ConventionEngineDeps } from './engine';
 export { duplicateFunctionRule, DUPLICATE_FUNCTION_RULE_ID } from './rules/duplicate-function';
+export {
+  sugarStaticConventionsRule,
+  SUGAR_STATIC_CONVENTIONS_RULE_ID,
+  CONT_INSIDE_QUOTES_RULE_ID,
+  MULTIPLE_CHOICE_BLOCKS_RULE_ID,
+  EXPR_MISSING_ELSE_RULE_ID,
+  READONLY_ALIAS_ASSIGN_RULE_ID,
+} from './rules/sugar-conventions';

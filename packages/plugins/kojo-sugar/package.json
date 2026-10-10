@@ -1,0 +1,17 @@
+{
+  "name": "@kojo/plugin-kojo-sugar",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Syntax sugar transpiler (sugar.transpile service): surface DSL (.kojo) -> native ERB output + line-level source map + diagnostics. Pure function semantics (no IO). Chinese surface keywords are cross-game language knowledge (spec v1.2); timing-face naming templates and variable dictionaries come from the active game adapter - never imported directly.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "devDependencies": {
+    "@kojo/plugin-erb-parser": "workspace:*",
+    "@kojo/plugin-condition-extractor": "workspace:*"
+  }
+}

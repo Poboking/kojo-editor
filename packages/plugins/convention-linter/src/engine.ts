@@ -24,6 +24,7 @@ import type {
 } from '@kojo/plugin-api';
 import { CONVENTION_SEVERITY_ORDER } from '@kojo/plugin-api';
 import { duplicateFunctionRule } from './rules/duplicate-function';
+import { sugarStaticConventionsRule } from './rules/sugar-conventions';
 
 export interface ConventionEngineDeps {
   log: Logger;
@@ -63,7 +64,10 @@ function compareIssues(a: ConventionIssue, b: ConventionIssue): number {
 }
 
 export class ConventionEngine implements ConventionLinterService {
-  private readonly builtinRules: readonly ConventionRule[] = [duplicateFunctionRule];
+  private readonly builtinRules: readonly ConventionRule[] = [
+    duplicateFunctionRule,
+    sugarStaticConventionsRule,
+  ];
   private last: ConventionReport | null = null;
   private readonly listeners = new Set<(report: ConventionReport | null) => void>();
 

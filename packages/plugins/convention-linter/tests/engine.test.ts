@@ -107,7 +107,7 @@ describe('ConventionEngine', () => {
     expect(rep.issues).toHaveLength(2);
     expect(rep.issues[0]!.severity).toBe('error');
     expect(rep.counts).toEqual({ error: 1, warning: 0, info: 1 });
-    expect(rep.ruleCount).toBe(2); // 内置 + adapter
+    expect(rep.ruleCount).toBe(3); // 内置 ×2 + adapter
   });
 
   it('规则抛错 → 记入 failedRules，其余规则照常产出', async () => {
@@ -177,5 +177,147 @@ describe('ConventionEngine', () => {
     un();
     await engine.run();
     expect(seen).toHaveLength(2); // 退订后不再收到
+  });
+});
+
+/* ========================= 语法糖侧静态约定（规范 §8 子集） ========================= */
+
+/** 造一个只含一个 `.kojo` 文件的索引 + 文本表 */
+function kojoHarness(text: string): Harness {
+  const path = '/p/kojo/test.kojo';
+  return harness({
+    // 索引只需登记该文件（糖规则按 `index.files` 遍历，再 `readFile` 取文本）
+    index: { files: new Map([[path, parseErbText('', path)]]), byName: new Map() },
+    files: { [path]: text },
+  });
+}
+
+describe('内置规则：语法糖侧静态约定（sugar.static-conventions）', () => {
+  it('规则已注册，且只对 .kojo 生效（.ERB 不参与）', async () => {
+    const erb = harness({
+      index: makeIndex({ '/p/a.ERB': '@A\nPRINTFORMW 「……」 续\n' }),
+    });
+    const rep = await erb.engine.run();
+    expect(rep.issues.filter((i) => i.ruleId.startsWith('sugar.'))).toHaveLength(0);
+  });
+
+  it('§3.3：`续` 写在引号内 → error', async () => {
+    const { engine } = kojoHarness('角色: 12\n时机 指令 310：\n    「……续」\n');
+    const rep = await engine.run();
+    const hit = rep.issues.filter((i) => i.ruleId === 'sugar.cont-inside-quotes');
+    expect(hit).toHaveLength(1);
+    expect(hit[0]!.severity).toBe('error');
+    expect(hit[0]!.message).toContain('引号内');
+  });
+
+  it('§3.3：`续` 写在引号外（正确写法）→ 无告警', async () => {
+    const { engine } = kojoHarness('角色: 12\n时机 指令 310：\n    「……」 续\n');
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId === 'sugar.cont-inside-quotes')).toHaveLength(0);
+  });
+
+  it('§3.7：同一时机两个「选项」块 → error', async () => {
+    const src =
+      '角色: 12\n' +
+      '时机 指令 310：\n' +
+      '    选项：\n' +
+      '        「甲」：\n' +
+      '            「……」\n' +
+      '    选项：\n' +
+      '        「乙」：\n' +
+      '            「……」\n';
+    const { engine } = kojoHarness(src);
+    const rep = await engine.run();
+    const hit = rep.issues.filter((i) => i.ruleId === 'sugar.multiple-choice-blocks');
+    expect(hit).toHaveLength(1);
+    expect(hit[0]!.message).toContain('每个时机只允许一个');
+  });
+
+  it('§3.7：两个时机各一个「选项」块 → 无告警（跨时机不算）', async () => {
+    const src =
+      '角色: 12\n' +
+      '时机 指令 310：\n' +
+      '    选项：\n' +
+      '        「甲」：\n' +
+      '            「……」\n' +
+      '时机 指令 311：\n' +
+      '    选项：\n' +
+      '        「乙」：\n' +
+      '            「……」\n';
+    const { engine } = kojoHarness(src);
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId === 'sugar.multiple-choice-blocks')).toHaveLength(0);
+  });
+
+  it('§3.5：表达式 `如果` 缺「否则」→ error', async () => {
+    const src =
+      '角色: 12\n' +
+      '时机 指令 310：\n' +
+      '    她的心情 = 如果 她的好感度 >= 500：\n' +
+      '        "热情"\n';
+    const { engine } = kojoHarness(src);
+    const rep = await engine.run();
+    const hit = rep.issues.filter((i) => i.ruleId === 'sugar.expr-missing-else');
+    expect(hit).toHaveLength(1);
+    expect(hit[0]!.message).toContain('如果');
+  });
+
+  it('§3.6：表达式 `当` 缺「否则」→ error', async () => {
+    const src =
+      '角色: 12\n' +
+      '时机 指令 310：\n' +
+      '    她的心情 = 当 她的好感度：\n' +
+      '        是 0 到 99 -> 0\n';
+    const { engine } = kojoHarness(src);
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId === 'sugar.expr-missing-else')).toHaveLength(1);
+  });
+
+  it('§3.5：表达式 `如果` 带「否则」→ 无告警', async () => {
+    const src =
+      '角色: 12\n' +
+      '时机 指令 310：\n' +
+      '    她的心情 = 如果 她的好感度 >= 500：\n' +
+      '        "热情"\n' +
+      '    否则：\n' +
+      '        "冷淡"\n';
+    const { engine } = kojoHarness(src);
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId === 'sugar.expr-missing-else')).toHaveLength(0);
+  });
+
+  it('§5.0：只读别名（字面量）作赋值左值 → error', async () => {
+    const src =
+      '角色: 12\n' +
+      '别名 基准 = 500\n' +
+      '时机 指令 310：\n' +
+      '    基准 = 600\n';
+    const { engine } = kojoHarness(src);
+    const rep = await engine.run();
+    const hit = rep.issues.filter((i) => i.ruleId === 'sugar.readonly-alias-assign');
+    expect(hit).toHaveLength(1);
+    expect(hit[0]!.message).toContain('只读别名');
+  });
+
+  it('§5.0：只读别名作右值 → 无告警', async () => {
+    const src =
+      '角色: 12\n' +
+      '别名 基准 = 500\n' +
+      '时机 指令 310：\n' +
+      '    她的好感度 = 基准\n';
+    const { engine } = kojoHarness(src);
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId === 'sugar.readonly-alias-assign')).toHaveLength(0);
+  });
+
+  it('原生直通行 / @ 块内的同名文本不参与判定', async () => {
+    const src =
+      '角色: 12\n' +
+      '@M_FUNC\n' +
+      'PRINTFORMW 「……」续」\n' +
+      'GETVAR 续\n';
+    const { engine } = kojoHarness(src);
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId.startsWith('sugar.'))).toHaveLength(0);
   });
 });

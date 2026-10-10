@@ -6,6 +6,7 @@ import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
 import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
 import { createSavParserPlugin } from '@kojo/plugin-sav-parser';
 import { createStateReplayPlugin } from '@kojo/plugin-state-replay';
+import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
 import { createUiConventionReportPlugin } from '@kojo/plugin-ui-convention-report';
 import { createUiKojoNavigatorPlugin } from '@kojo/plugin-ui-kojo-navigator';
 import { createUiStateReplayPlugin } from '@kojo/plugin-ui-state-replay';
@@ -36,6 +37,9 @@ export async function bootstrapKernel(): Promise<Kernel> {
       // 状态回放（游戏无关；消费 snapshot.source + condition.extractor；
       // 具名索引字典来自当前 adapter 的 variableSchema）
       createStateReplayPlugin(),
+      // 语法糖转译（游戏无关；中文表层关键字是跨游戏语言层，住在契约；
+      // 时机分野命名模板与变量字典来自当前 adapter —— 纯函数，不触达工程状态）
+      createKojoSugarPlugin(),
       // UI：面板（内核状态 + 校验结果 + 函数树导航 + 状态回放 + 归档浏览 + 状态注入）
       createUiStatusPlugin(),
       createUiConventionReportPlugin(),

@@ -145,7 +145,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       const linter = kernel.services.get<ConventionLinterService>(WellKnownServices.ConventionLinter);
       const report = await linter.run();
       expect(report.failedRules).toEqual([]); // 规则不得静默失败
-      expect(report.ruleCount).toBe(6); // 引擎内置 1 + adapter 5（含协议覆盖校验）
+      expect(report.ruleCount).toBe(7); // 引擎内置 2（同名函数 + 糖侧静态约定）+ adapter 5（含协议覆盖校验）
       expect(report.issues.length).toBeGreaterThan(0);
 
       const byRule = new Map<string, number>();

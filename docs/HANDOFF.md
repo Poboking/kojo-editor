@@ -413,6 +413,20 @@ node tools/smoke-tauri-ipc.mjs
 
 **验证**：520 passed / 4 skipped 全绿（+16）/ typecheck root+app ✅ / audit 12 插件 ✅ / 真实工程集成冒烟 ✅。
 
+### 6.19 语法糖 S2 批（✅ 已完成）：`kojo-sugar` 转译内核（+ 糖侧 lint 规则）
+
+**实施结果**（IMPLEMENTATION-LOG §5.27 为权威记录）：S1 契约（`plugin-api/sugar.ts` + golden 固化）已就位，本批实现**转译内核**与其静态约定规则。
+
+- **新插件 `packages/plugins/kojo-sugar/`**（`sugar.transpile`）：手写三段式——行式词法（`lexer.ts`）→ `SugarNode` AST（`parser.ts`，缩进配对，块头全角冒号 + 块体缩进更深）→ codegen（`codegen.ts`）。纯函数语义（不读不写文件）；四处登记齐全（package.json / root tsconfig paths / vitest aliases / app vite aliases + app deps / bootstrap.ts）。
+- **codegen 硬约束**：产物缩进统一 **TAB**；引号台词/旁白按 §5.1 算法选 `PRINTFORM` 变体（`base + (d?"D":"") + (wait?"W":"L")`）；随机块 `LOCAL:N` 每块独占、嵌套递增（第 0 块写 bare `LOCAL`，golden 冻结口径）；表达式 `当`/`如果` 缺 `否则` → 编译错误（不产半成品）；纯条件行（整行仅 `{cond ? X : ""}`）→ `IF` 块（§5.2）；别名替换（§5.0）先于一切降糖，只读别名作左值报错；插值 `{}` 内出现 `当`/`如果` 报错；原生直通（全大写指令 / `$标签` / `@` 起整块）原样透传（§3.10）。
+- **golden 验收**：§6.1 / §6.2 期望产物**逐字节一致**（含全角空格与 `;記入チェック` 注释行）；§6.2 是摘录（`IF LOCAL`..`ENDIF`，去一级呈现缩进），已按此口径冻结比对。
+- **可回放形态验收**（新增 `replayable.test.ts`）：产物经 erb-parser 骨架扫描 + condition-extractor 表达式解析后**零 opaque**（覆盖两份 golden + 一份覆盖 §3 全部糖形态的合成样例）。为此 erb-parser 公开导出 `scanControlFlow`（与同类纯函数并列）。
+- **糖侧静态 lint 规则**（convention-linter 内置新增第 2 条 `sugar.static-conventions`）：只对 `.kojo` 生效、零游戏知识、纯文本扫描——① `续` 写在引号内；② 每时机多个「选项」块；③ 表达式 `如果`/`当` 缺「否则」；④ 只读别名作赋值左值。**注意**：内置规则数 1→2，`integration-plugins.test.ts` 的 `ruleCount` 6→7 已同步（本批边界内，非并行线）。
+
+**验证**：679 passed / 5 skipped 全绿（无 smoke；+115 相对上批 564）/ typecheck root+app ✅ / audit 13 插件 ✅ / 真实工程集成冒烟 ✅（**回放基线逐字不变**：K49 1356 函数 / 11685 谓词 / 未知 **3741** / exact **836** / partial 482 / unknown 38）/ app vite build ✅ / 产物过 condition-extractor **零 opaque** ✅。
+
+**边界**（未做，属后续批）：写盘（S3）、UI/预览（S4）、升糖（S5）；spec 冻结未动。
+
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；

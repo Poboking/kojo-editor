@@ -513,19 +513,9 @@ describe('golden fixture · 规范 §6 示例固化', () => {
     expect(fixture).toContain('LOCAL = RAND:2');
   });
 
-  it('期望产物暂以 .expected.erb.todo 存放（S2 转正式断言前不参与比较）', async () => {
+  it('期望产物文件名保持 `.expected.erb.todo`（S1 起的冻结口径，S2 起参与逐字节比较）', async () => {
     const entries = await fs.readdir(GOLDENS);
     expect(entries.filter((e) => e.endsWith('.expected.erb')).length).toBe(0);
     expect(entries.filter((e) => e.endsWith('.expected.erb.todo')).length).toBe(2);
-  });
-});
-
-/* 转译器尚未实现（S2 批）——此处留 skip 断言位，S2 转正式后移除 skip。 */
-describe.skip('S2 待启用：golden 转译逐字节一致（转译器 S2 批实现）', () => {
-  it('§6.1 转译产物 == spec-6.1-lumia-310.expected.erb.todo', () => {
-    expect.fail('S2：接入 sugar.transpile 服务后启用');
-  });
-  it('§6.2 转译产物 == spec-6.2-choice-heart-random.expected.erb.todo', () => {
-    expect.fail('S2：接入 sugar.transpile 服务后启用');
   });
 });

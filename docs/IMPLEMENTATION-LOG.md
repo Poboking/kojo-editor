@@ -696,3 +696,50 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - 本线只提交自己边界内文件（`packages/plugins/eratw-adapter/**` + kernel 集成 `ruleCount` 断言 + docs）。
 
 ---
+
+### 5.28 语法糖 S2 批 · `kojo-sugar` 转译内核（v0.3 批 S2 实施记录：三段式转译 + 糖侧 lint）
+
+> 依据：`docs/HANDOFF.md` §6.19；输入冻结：`docs/SYNTAX-SUGAR-SURFACE-SPEC.md`（v1.2）+ S1 契约 `plugin-api/src/sugar.ts`。
+> 边界：新增 `packages/plugins/kojo-sugar/**`；改动 `convention-linter`（新增 1 条内置规则）+ `erb-parser`（公开导出 `scanControlFlow`）+ kernel 集成 `ruleCount` 断言（1→2 内置）+ docs。**未碰**写盘（S3）、UI/预览（S4）、升糖（S5）；**未动 spec**。
+
+#### 交付物
+
+1. **新插件 `packages/plugins/kojo-sugar/`**（服务 `sugar.transpile`，纯函数语义，无 IO）：
+   - `keywords.ts`：中文关键字表（`Map<词, KeywordId>`）+ 保留代词 + `续` 标记 + 运算符表（按长度降序）。
+   - `lexer.ts`：行式词法。判定顺序 = 空行 → 注释 → `@` 原生块起 → 原生指令/`$标签` → 块头（全角冒号收尾）→ 单行块头（`如果 条件： 内容`）→ 行内随机（`随机 「甲」,「乙」`）→ 头部声明 → `别名 X = 目标` → 表达式头（`左值 = 如果/当 …：`）→ 赋值 → `心形` → 文本。
+   - `parser.ts`：缩进配对 → `SugarNode` 联合（TextLine / HeartLine / IfBlock / IfExpr / WhenBlock / WhenExpr / RandomBlock / RandomInline / ChoiceBlock / ColorBlock / RawLine / RawFunctionBlock / AliasDecl / TimingBlock）。块体缩进必须比块头深；`ifExpr`/`whenExpr` 校验"分支体恰为单表达式"+"必须含 `否则`"。
+   - `expression.ts`：表达式降糖（别名替换 §5.0 → 属性访问 §3.8 → 运算符中文→英文 → 字符串族判定）+ 字符串字面量切片。
+   - `codegen.ts`：产物生成（TAB 缩进统一）。
+   - `service.ts`：`transpile`（源 → `{ erb, sourceMap, diagnostics }`）+ `parse` + `sourceOf`；诊断排序。
+2. **四处登记**：`package.json`（workspace 包）+ root `tsconfig.json` paths + `vitest.config.ts` aliases + `app/vite.config.ts` aliases + `app/package.json` deps + `app/src/bootstrap.ts` 注册。devDeps 增 `erb-parser` / `condition-extractor`（**仅测试**用，解耦审计规则 C 豁免测试文件）。
+3. **糖侧静态规则** `convention-linter/src/rules/sugar-conventions.ts`：内置规则 `sugar.static-conventions`（零游戏知识、纯文本扫描、**仅对 `.kojo` 生效**），含 4 条子规则：
+   - `sugar.cont-inside-quotes`（§3.3）：`续`/`~`/`cont` 等标记紧贴右引号内侧 → error。
+   - `sugar.multiple-choice-blocks`（§3.7）：同一时机块体内 ≥2 个 `选项`/`choice` 块头 → error（嵌套同现）。
+   - `sugar.expr-missing-else`（§3.5/§3.6）：表达式 `如果`/`当` 块体内无 `否则` → error。
+   - `sugar.readonly-alias-assign`（§5.0）：同文件内声明的只读别名（数字/字符串/`角色:` 右值）作赋值左值 → error。
+4. **`erb-parser` 公开导出 `scanControlFlow`**（与既有 `parseErbText` 等同列纯函数）：可回放性验收测试需要，非新能力。
+5. **新增测试**：`kojo-sugar/tests/golden.test.ts`（§6.1/§6.2 逐字节）、`transpile.test.ts`（97 项，覆盖 §3 每条糖 + §5 算法 + 错误路径）、`replayable.test.ts`（3 项，零 opaque）；`convention-linter/tests/engine.test.ts` +11 项。
+
+#### 关键设计决策
+
+- **§5.2 纯条件行前置判定**：整行只含 `{cond ? X : ""}`（假分支空/省略）→ 编译为 `IF … / PRINTFORM… / ENDIF`，而非行内 `\@…\@`（后者假分支输出空串 + `W` 无条件换行 = 玩家看到"莫名停一下"）。
+- **`else` 分支 `condition` 归一为空串**（契约 §`IfBranch`）：`parseIfBlock` 同时服务语句级 `ifBlock`（头是 `ifHead`）与表达式 `ifExpr`（头是 `exprHead`）——两者的条件原文分别在 `condition` / `rest` 上，统一抽取，避免 `else` 分支 `undefined` 导致下游 `lowerExpression` 崩溃。
+- **表达式分支体承载形态**：行式词法把裸表达式行（`"热情"`）归为 `textLine`（正文在 `_raw`），故 `renderExprValue` 同时接受 `rawLine.text` 与 `textLine._raw`。
+- **单行块头正则用贪婪回溯**：`^([^\s:：]+)\s+(.+)[:：]\s+(\S.*)$`——条件段自身可能含冒号（`FLAG:70`/`CFLAG:2`），懒匹配会在那里截断（曾把 `FLAG:70` 切成 `FLAG` + `70`）。
+- **CJK 后 `\b` 不成立**：`/^(当|如果)\b/` 对中文失效（`\w` 默认不含 CJK），插值保护改用 `(\s|$)`。
+- **糖规则合成一条 `ConventionRule`**：四项都属"糖侧静态约定"，归为一个语义单元便于报告/UI 计数；每条 issue 仍带细分 `ruleId`，UI 可按 `ruleId` 再分组。
+- **§6.2 golden 是摘录**：从 `IF LOCAL` 起、到 `ENDIF` 止（排除尾随 `RETURN 1`），且规范呈现时整体 +1 TAB 缩进——比对时去掉一级 TAB 后切片。
+
+#### 验证
+
+- vitest 全量 **679 passed / 5 skipped**（无 smoke；相对 §5.27 的 564 增 +115）。
+- typecheck **root + app 双跑 ✅**；`audit:decoupling` ✅（13 插件）；app `vite build` ✅。
+- 真实工程集成冒烟 ✅：**回放基线逐字不变**（K49 1356 函数 / 11685 谓词 / 命中 1549 / 未命中 6395 / 未知 **3741** / exact **836** / partial 482 / unknown 38）。
+- **产物过 condition-extractor 零 opaque** ✅（两份 golden + 覆盖 §3 全形态的合成样例）。
+
+#### 并行线冲突记录
+
+- §5.27 遗留待办「adapter 线 `ruleCount` 6」由本线**延用为 7**（内置 1→2：新增糖侧静态规则）—— `integration-plugins.test.ts:148` 已同步为本批边界内的正确值。
+- S1（§5.26）的 `describe.skip('S2 待启用…')` 占位块已删除（逐字节断言正式落到 `kojo-sugar/tests/golden.test.ts`）；`.expected.erb.todo` 文件名保持冻结口径（S2 起参与比较）。
+
+---

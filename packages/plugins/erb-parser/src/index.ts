@@ -11,4 +11,5 @@ export {
   parseParams,
   parseDimDeclaration,
   splitTopLevel,
+  scanControlFlow,
 } from './scanner';
