@@ -403,3 +403,43 @@
 
 ---
 
+### 5.22 回放面板场景预设（v1.0 收口线一实施记录：调用上下文可保存复用）
+
+> 依据：`docs/REVIEW-OPTIMIZATION-2026-10-10.md` §5「v1.0 收口」第 4 项的后续阶梯 + `HANDOFF.md` §6.11 候选「回放面板协议深化（场景预设）」。承接 §5.20 的 C9 信任闭环：场景值是**作者的场景假设**，不是引擎事实——UI 文案不得写死「正确值」。本批只动 `packages/plugins/ui-state-replay/**` + docs；回放引擎（`state-replay`）与 `condition-extractor` 契约**零改动**。
+
+#### 数据模型（`panel-logic.ts`，纯逻辑零 React）
+
+- `ReplayScene{ id, name, slots }`；`slots` 键 = `slotKey(kind,index)`（`int:0` / `str:0` 同号互不冲突，沿用 §5.20 的键修正），值恒为 `{ value: string, kind: 'manual' }`——场景值一律记为 manual（作者显式提供的场景输入）。
+- 持久化走 `ctx.storage`（域 = 插件 id `ui-state-replay`，键 `replay-scenes`）：内核按 pluginId 隔离，**不复用他人域**。内置默认场景（`DEFAULT_SCENE_ID`）为虚拟项，不入存储、不可删除。
+- `sanitizeScenes`：反序列化容错（非数组 → 空；逐条丢弃缺 id/name、内置 id、重复 id、非法槽位键、非 `manual`、空值项；名字去空白 + 截断；`MAX_SCENES=50` 上限截断）——与内核存储 L1 容错同向，**绝不抛错**。
+
+#### 应用语义与合并冲突（`applyScene`，显式上报不静默）
+
+- 场景命中的槽 → 取场景值 + `edited=true`（来源 **manual**＝作者假设）；签名内未被场景覆盖的槽 → 回到默认（int `0` = 假设 / str 空 = 未提供），此前已填的记入 `reset`；场景里当前函数签名没有的槽（换家族 / 协议不同）→ 丢弃并记入 `dropped`。
+- 产出 `texts` / `edited` 直接落面板状态——**§5.20 的假设徽章语义不变**：未被场景覆盖的 int 槽仍是 `assumption`（虚线 + 「假设」徽章），只有场景显式覆盖过的槽才是 manual（无徽章）。
+- 「手工场景值也是作者假设」由文案承载（应用提示 + 建议名输入 tooltip），不引入第四种来源态。
+
+#### 面板交互（`index.ts` 壳层）
+
+1. 场景下拉（内置「默认场景（全 0，全部假设）」+ 用户自建）→ **一键应用**（默认场景 = 一键清空回全 0 假设 / 未提供）；
+2. **保存当前输入为场景**（输入名；留空取建议名）；同名保存 = 覆盖（保留原 id，槽位整体替换）；
+3. **删除场景**（内置默认场景按钮禁用 + 提示不可删）；
+4. 冲突消息行显式呈现（忽略 N 个 / 重置 N 个 / 覆盖同名）。
+
+#### 协议降级与建议名
+
+- 协议（`kojoCallProtocol`）可用 → 场景建议名由槽位 label 拼接（如「对话对象=觉/时机=SP_EVENT」，跳过空槽、label 空回退 `ARG:n`），输入框留空即用（placeholder 展示）；
+- 协议不可用（无协议或函数名未确定）→ 建议名为空串（**纯手填，不猜**）；此时场景改为作用于裸调用上下文文本框：`sceneSlotsToContextText` / `contextTextToSceneSlots` 双向转换（复用 §5.20 的 `parseCallContextText`，解析失败 → `null` + 提示，**绝不抛错**）。
+
+#### 边界与不变式
+
+- **未改**回放引擎（`state-replay`）与 `condition-extractor` 契约；未碰 kernel / plugin-api / src-tauri / ui-archive-browser。
+- 真实工程冒烟基线**逐字复现**（K49：1,356 函数 / 11,685 谓词 / 未知 3,741 / exact 836）。
+
+#### 测试
+
+- +15 单测（`panel-logic.test.ts`）：`sanitizeScenes` 反序列化容错与数量上限 / `captureSceneSlots` 空值过滤 / `applyScene` 应用 + `dropped`·`reset` 合并冲突 / 内置默认场景回默认 / int·str 同号不串味 / `sceneSuggestionName` label 拼接与降级 / 槽位↔裸文本 round-trip 与非法输入 `null` / `upsertSceneByName` 同名覆盖 / `removeScene` / `newSceneId` 碰撞重试。
+- **485 项全绿**（470 → 485）/ typecheck root+app ✅ / `audit:decoupling` ✅（11 插件）/ 真实工程集成冒烟 ✅。
+
+---
+

@@ -43,23 +43,41 @@ import type {
   StateReplayService,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
-import type { AssumedSlot, SlotOrigin } from './panel-logic';
+import type { AssumedSlot, ReplayScene, SceneSlotValue, SlotOrigin } from './panel-logic';
 import {
+  DEFAULT_SCENE_ID,
+  MAX_SCENES,
+  MAX_SCENE_NAME,
+  applyScene,
+  captureSceneSlots,
   classifySlotValue,
   collectAssumedSlots,
+  contextTextToSceneSlots,
+  defaultScene,
   defaultSlotText,
   groupUnknowns,
+  newSceneId,
   parseCallContextText,
+  removeScene,
+  sanitizeScenes,
+  sceneSlotsToContextText,
+  sceneSuggestionName,
   slotKey,
   suggestFunctions,
   summarizeAssumptions,
   toCallContext,
+  upsertSceneByName,
 } from './panel-logic';
 
 /** 函数名提示上限 */
 const SUGGEST_LIMIT = 50;
 /** 谓词渲染上限（防 DOM 爆炸；单函数谓词通常 <100） */
 const PRED_RENDER_CAP = 300;
+/**
+ * 场景预设的存储键——`ctx.storage` 的域 = 本插件 id（`ui-state-replay`），
+ * 不与其他插件共用域（内核按 pluginId 隔离）。
+ */
+const SCENES_STORAGE_KEY = 'replay-scenes';
 
 /** 置信度徽章样式 */
 const CONFIDENCE_BADGE: Record<FunctionReplay['confidence'], { label: string; className: string }> = {
@@ -367,6 +385,12 @@ export function createUiStateReplayPlugin(): Plugin {
         const [slotTexts, setSlotTexts] = useState<Record<string, string>>({});
         /** 协议槽位是否被作者手改过（未改的预填 0 = 假设值，审阅 C9） */
         const [slotEdited, setSlotEdited] = useState<Record<string, boolean>>({});
+        /** 场景预设（用户自建；内置默认场景不入存储） */
+        const [scenes, setScenes] = useState<ReplayScene[]>([]);
+        const [selectedSceneId, setSelectedSceneId] = useState<string>(DEFAULT_SCENE_ID);
+        const [sceneNameInput, setSceneNameInput] = useState('');
+        /** 场景区提示 / 冲突上报（不静默） */
+        const [sceneMsg, setSceneMsg] = useState<string | null>(null);
         const [result, setResult] = useState<FunctionReplay | null>(null);
         /** 与该结果同批的假设值槽位（快照于回放时刻——改槽不影响已出结果的可信度标注） */
         const [resultAssumed, setResultAssumed] = useState<AssumedSlot[]>([]);
@@ -388,6 +412,31 @@ export function createUiStateReplayPlugin(): Plugin {
           setSlotEdited({}); // 换函数 → 手改标记清零（预填 0 重新回到"假设值"）
           // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [slotsKey]);
+
+        // ---- 场景预设：挂载时从存储域加载（域 = 本插件 id，内核按 pluginId 隔离） ----
+        useEffect(() => {
+          let cancelled = false;
+          void ctx.storage
+            .get<unknown>(SCENES_STORAGE_KEY)
+            .then((raw) => {
+              // 函数式更新：若挂载后用户已抢先保存过场景，则不覆盖（避免慢加载回滚新数据）
+              if (!cancelled) setScenes((prev) => (prev.length > 0 ? prev : sanitizeScenes(raw)));
+            })
+            .catch((err: unknown) => {
+              if (!cancelled) ctx.log.warn(`Replay panel scene load failed: ${String(err)}`);
+            });
+          return () => {
+            cancelled = true;
+          };
+        }, []);
+
+        const persistScenes = (next: ReplayScene[]): void => {
+          setScenes(next);
+          void ctx.storage.set(SCENES_STORAGE_KEY, next).catch((err: unknown) => {
+            ctx.log.warn(`Replay panel scene persist failed: ${String(err)}`);
+            setSceneMsg('场景写入本地存储失败（本次会话仍可用）');
+          });
+        };
 
         useEffect(() => {
           const cb = (): void => force((n) => n + 1);
@@ -512,6 +561,87 @@ export function createUiStateReplayPlugin(): Plugin {
         };
         runReplayRef.current = runReplay;
 
+        /* ------------------- 场景预设（命名保存 / 一键应用 / 删除） ------------------- */
+
+        const allScenes: ReplayScene[] = [defaultScene(), ...scenes];
+        const selectedScene = allScenes.find((s) => s.id === selectedSceneId) ?? allScenes[0]!;
+        /** 建议名：协议可用时由槽位 label 拼接；协议不可用 → 空串（降级纯手填） */
+        const sceneSuggestion = callSlots && callSlots.length > 0 ? sceneSuggestionName(callSlots, slotTexts) : '';
+
+        /** 一键应用场景：协议可用 → 填结构化槽位；协议不可用 → 降级写裸上下文文本（绝不抛错） */
+        const doApplyScene = (): void => {
+          if (callSlots && callSlots.length > 0) {
+            const app = applyScene(selectedScene, callSlots, slotTexts);
+            setSlotTexts(app.texts);
+            setSlotEdited(app.edited); // 场景覆盖的槽 → manual（作者假设，非引擎事实）
+            const parts: string[] = [
+              selectedScene.id === DEFAULT_SCENE_ID
+                ? '已应用默认场景（int 全 0 = 假设 / str 空 = 未提供）'
+                : `已应用「${selectedScene.name}」（${app.applied.length} 槽；场景值按作者假设对待，非引擎事实）`,
+            ];
+            if (app.dropped.length > 0) parts.push(`${app.dropped.length} 个场景槽位不在当前函数签名内，已忽略`);
+            if (app.reset.length > 0) parts.push(`${app.reset.length} 个已填槽位被重置为默认`);
+            setSceneMsg(parts.join(' · '));
+            return;
+          }
+          setContextText(selectedScene.id === DEFAULT_SCENE_ID ? '' : sceneSlotsToContextText(selectedScene.slots));
+          setSceneMsg(
+            selectedScene.id === DEFAULT_SCENE_ID
+              ? '已清空调用上下文'
+              : `已应用「${selectedScene.name}」到调用上下文文本（作者假设，非引擎事实）`,
+          );
+        };
+
+        /** 保存当前输入为场景（同名 = 覆盖，保留原 id） */
+        const doSaveScene = (): void => {
+          let slotsToSave: Record<string, SceneSlotValue>;
+          if (callSlots && callSlots.length > 0) {
+            slotsToSave = captureSceneSlots(callSlots, slotTexts);
+          } else {
+            const converted = contextTextToSceneSlots(contextText);
+            if (converted === null) {
+              setSceneMsg('调用上下文无法解析为槽位（语法：槽位=值，如 0=36, 1="文本"），未保存');
+              return;
+            }
+            slotsToSave = converted;
+          }
+          const count = Object.keys(slotsToSave).length;
+          if (count === 0) {
+            setSceneMsg('当前没有可保存的槽位值（空 = 未提供，不入场景）');
+            return;
+          }
+          const name = (sceneNameInput.trim() || sceneSuggestion).slice(0, MAX_SCENE_NAME);
+          if (name.length === 0) {
+            setSceneMsg('请输入场景名（协议不可用时无建议名）');
+            return;
+          }
+          const sameName = scenes.some((s) => s.name === name);
+          if (!sameName && scenes.length >= MAX_SCENES) {
+            setSceneMsg(`场景数量已达上限（${MAX_SCENES}）`);
+            return;
+          }
+          const { scenes: next, scene, overwritten } = upsertSceneByName(scenes, name, slotsToSave, () =>
+            newSceneId(scenes.map((s) => s.id)),
+          );
+          persistScenes(next);
+          setSelectedSceneId(scene.id);
+          setSceneNameInput('');
+          setSceneMsg(
+            overwritten ? `已覆盖同名场景「${scene.name}」（${count} 槽）` : `已保存场景「${scene.name}」（${count} 槽）`,
+          );
+        };
+
+        /** 删除选中场景（内置默认场景不可删） */
+        const doDeleteScene = (): void => {
+          if (selectedScene.id === DEFAULT_SCENE_ID) {
+            setSceneMsg('内置默认场景不可删除');
+            return;
+          }
+          persistScenes(removeScene(scenes, selectedScene.id));
+          setSelectedSceneId(DEFAULT_SCENE_ID);
+          setSceneMsg(`已删除场景「${selectedScene.name}」`);
+        };
+
         // ---- 上下文输入即时校验（红字提示，不阻塞输入） ----
         const contextParse = parseCallContextText(contextText);
         const contextHint =
@@ -623,6 +753,63 @@ export function createUiStateReplayPlugin(): Plugin {
                 createElement('span', { className: 'dim rp-slot-hint' }, '空 = 未提供（按未知处理）· 未改的预填 0 = 假设值'),
               )
             : null;
+        // ---- 场景预设工具栏（下拉切换 + 一键应用 / 保存 / 删除） ----
+        const sceneSelect = createElement(
+          'select',
+          {
+            className: 'rp-select',
+            style: { flex: '1 1 160px' },
+            value: selectedScene.id,
+            onChange: (e: { target: { value: string } }) => {
+              setSelectedSceneId(e.target.value);
+              setSceneMsg(null);
+            },
+          },
+          ...allScenes.map((s) =>
+            createElement('option', { key: s.id, value: s.id }, s.id === DEFAULT_SCENE_ID ? s.name : `场景：${s.name}`),
+          ),
+        );
+        const applySceneBtn = createElement(
+          'button',
+          { className: 'ghost small', onClick: doApplyScene, title: '把选中场景应用到当前函数槽位（场景值按作者假设对待）' },
+          '应用',
+        );
+        const sceneNameInputEl = createElement('input', {
+          className: 'rp-context-input',
+          style: { flex: '1 1 140px' },
+          type: 'text',
+          placeholder: sceneSuggestion ? `场景名（建议：${sceneSuggestion}）` : '场景名',
+          value: sceneNameInput,
+          onChange: (e: { target: { value: string } }) => setSceneNameInput(e.target.value),
+          title: sceneSuggestion ? '留空则用建议名（由协议槽 label 拼接）' : '协议不可用时需手填场景名',
+        });
+        const saveSceneBtn = createElement(
+          'button',
+          { className: 'ghost small', onClick: doSaveScene, title: '把当前输入保存为场景（同名覆盖）' },
+          '保存场景',
+        );
+        const deleteSceneBtn = createElement(
+          'button',
+          {
+            className: 'ghost small',
+            disabled: selectedScene.id === DEFAULT_SCENE_ID,
+            onClick: doDeleteScene,
+            title: '删除选中场景',
+          },
+          '删除',
+        );
+        const sceneBar = createElement(
+          'div',
+          { className: 'rp-toolbar' },
+          createElement('span', { className: 'dim' }, '场景'),
+          sceneSelect,
+          applySceneBtn,
+          sceneNameInputEl,
+          saveSceneBtn,
+          deleteSceneBtn,
+        );
+        const sceneMsgEl = sceneMsg !== null ? createElement('div', { className: 'rp-hint dim' }, sceneMsg) : null;
+
         const contextInput = createElement('input', {
           className: 'rp-context-input',
           type: 'text',
@@ -681,6 +868,8 @@ export function createUiStateReplayPlugin(): Plugin {
           createElement('div', { className: 'rp-toolbar' }, archiveSelect, charaSelect),
           viewStatus,
           createElement('div', { className: 'rp-toolbar' }, fnInput, callSlots ? null : contextInput, replayBtn),
+          sceneBar,
+          sceneMsgEl,
           slotInputs,
           contextHintEl,
           suggestList,

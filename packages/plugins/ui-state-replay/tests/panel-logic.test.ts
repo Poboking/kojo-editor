@@ -3,22 +3,36 @@
  *
  * 覆盖：调用上下文文本解析（数值槽 / 字符串槽 / 重复 / 非法语法 / 空输入），
  * ReplayCallContext 组装（空槽位表 → undefined），未知原因分组，函数名提示，
- * 以及假设值链路（v1.0 收口 C9：槽位来源三态 / 假设计数 / AST 槽位引用扫描）。
+ * 假设值链路（v1.0 收口 C9：槽位来源三态 / 假设计数 / AST 槽位引用扫描），
+ * 以及场景预设（v1.0 收口线一：序列化容错 / 采集 / 应用与合并冲突 / 建议名 / 槽位↔文本）。
  */
 import { describe, expect, it } from 'vitest';
 import type { ConditionExpr, FunctionReplay } from '@kojo/plugin-api';
 import {
+  DEFAULT_SCENE_ID,
+  MAX_SCENES,
+  applyScene,
+  captureSceneSlots,
   classifySlotValue,
   collectAssumedSlots,
+  contextTextToSceneSlots,
+  defaultScene,
   defaultSlotText,
   exprArgSlots,
   groupUnknowns,
+  newSceneId,
   parseCallContextText,
+  removeScene,
+  sanitizeScenes,
+  sceneSlotsToContextText,
+  sceneSuggestionName,
   slotKey,
   suggestFunctions,
   summarizeAssumptions,
   toCallContext,
+  upsertSceneByName,
 } from '../src/panel-logic';
+import type { ReplayScene, SceneSlotValue } from '../src/panel-logic';
 
 describe('parseCallContextText', () => {
   it('数值槽（逗号/空格分隔；缺省槽位保持 undefined）', () => {
@@ -259,5 +273,167 @@ describe('summarizeAssumptions（基于假设标注 + 假设计数）', () => {
     const r = summarizeAssumptions(mkReplay([args1]), [{ kind: 'int', index: 1 }]);
     expect(r.affected).toEqual([false]);
     expect(r.consumed).toEqual([]);
+  });
+});
+
+/* ------------------- 场景预设（v1.0 收口线一：调用上下文可保存复用） ------------------- */
+
+const man = (value: string): SceneSlotValue => ({ value, kind: 'manual' });
+
+describe('sanitizeScenes（存储反序列化容错）', () => {
+  it('非数组 / null → 空；合法项原样保留（JSON round-trip）', () => {
+    expect(sanitizeScenes(undefined)).toEqual([]);
+    expect(sanitizeScenes(null)).toEqual([]);
+    expect(sanitizeScenes({ foo: 1 })).toEqual([]);
+    const scene: ReplayScene = { id: 'scene-a', name: '约会', slots: { 'int:0': man('36'), 'str:1': man('觉') } };
+    const raw = JSON.parse(JSON.stringify([scene])) as unknown;
+    expect(sanitizeScenes(raw)).toEqual([scene]);
+  });
+
+  it('丢弃非法项：缺 id / 缺 name / 内置 id / 重复 id / 非法槽位键 / 非 manual / 空值', () => {
+    const raw = [
+      { id: '', name: 'n', slots: {} },
+      { id: 'a', name: '   ', slots: {} },
+      { id: DEFAULT_SCENE_ID, name: '默认', slots: {} },
+      { id: 'a', name: 'A', slots: { 'int:0': man('1') } },
+      { id: 'a', name: 'A2', slots: { 'int:0': man('2') } }, // 重复 id → 丢
+      { id: 'b', name: 'B', slots: { 'int:x': man('1'), 'ARG:0': man('1'), 'int:0': { value: '1', kind: 'auto' } } },
+      { id: 'c', name: 'C', slots: { 'int:0': man('   '), 'str:0': man('ok') } },
+      'not-an-object',
+    ];
+    const out = sanitizeScenes(raw);
+    expect(out.map((s) => s.id)).toEqual(['a', 'b', 'c']);
+    expect(out[0]!.slots).toEqual({ 'int:0': man('1') }); // 首个同 id 胜出
+    expect(out[1]!.slots).toEqual({}); // 非法键 / 非 manual 全丢
+    expect(out[2]!.slots).toEqual({ 'str:0': man('ok') }); // 空白值丢
+  });
+
+  it('名字去空白 + 截断；数量上限截断', () => {
+    expect(sanitizeScenes([{ id: 'a', name: '  约会  ', slots: {} }])[0]!.name).toBe('约会');
+    const many = Array.from({ length: MAX_SCENES + 5 }, (_, i) => ({ id: `s${i}`, name: `n${i}`, slots: {} }));
+    expect(sanitizeScenes(many)).toHaveLength(MAX_SCENES);
+  });
+});
+
+describe('captureSceneSlots（采集当前输入）', () => {
+  const slots = [
+    { kind: 'int' as const, index: 0 },
+    { kind: 'int' as const, index: 1 },
+    { kind: 'str' as const, index: 0 },
+  ];
+  it('仅收非空值；来源恒 manual', () => {
+    expect(captureSceneSlots(slots, { 'int:0': '36', 'int:1': '0', 'str:0': '' })).toEqual({
+      'int:0': man('36'),
+      'int:1': man('0'),
+    });
+    expect(captureSceneSlots(slots, { 'int:0': '  ', 'str:0': '觉' })).toEqual({ 'str:0': man('觉') });
+    expect(captureSceneSlots(slots, {})).toEqual({});
+  });
+});
+
+describe('applyScene（应用与合并冲突）', () => {
+  const slots = [
+    { kind: 'int' as const, index: 0 },
+    { kind: 'int' as const, index: 1 },
+    { kind: 'str' as const, index: 0 },
+  ];
+  const scene: ReplayScene = { id: 'scene-a', name: '约会', slots: { 'int:0': man('36'), 'str:0': man('觉') } };
+
+  it('场景覆盖的槽 → manual（edited=true）；未覆盖 → 默认（assumption / unset）', () => {
+    const app = applyScene(scene, slots);
+    expect(app.texts).toEqual({ 'int:0': '36', 'int:1': '0', 'str:0': '觉' });
+    expect(app.edited).toEqual({ 'int:0': true, 'int:1': false, 'str:0': true });
+    expect(app.applied).toEqual(['int:0', 'str:0']);
+    expect(app.dropped).toEqual([]);
+    expect(app.reset).toEqual([]);
+  });
+
+  it('场景里签名没有的槽 → dropped；已填却未覆盖 → reset', () => {
+    const narrow = [{ kind: 'int' as const, index: 0 }];
+    const app = applyScene(scene, narrow, { 'int:0': '1' });
+    expect(app.dropped).toEqual(['str:0']); // 场景的 str:0 不在签名内（协议/家族不同）
+    expect(app.texts).toEqual({ 'int:0': '36' });
+    const app2 = applyScene({ id: 'x', name: 'x', slots: {} }, slots, { 'int:1': '7', 'str:0': '' });
+    expect(app2.reset).toEqual(['int:1']);
+    expect(app2.texts).toEqual({ 'int:0': '0', 'int:1': '0', 'str:0': '' });
+  });
+
+  it('内置默认场景（无槽）→ 全部回到默认', () => {
+    const app = applyScene(defaultScene(), slots, { 'int:0': '9' });
+    expect(app.texts).toEqual({ 'int:0': '0', 'int:1': '0', 'str:0': '' });
+    expect(app.edited).toEqual({ 'int:0': false, 'int:1': false, 'str:0': false });
+    expect(app.applied).toEqual([]);
+    expect(app.reset).toEqual(['int:0']);
+  });
+
+  it('int / str 同号槽不串味', () => {
+    const sameIdx = [
+      { kind: 'str' as const, index: 0 },
+      { kind: 'int' as const, index: 0 },
+    ];
+    const s: ReplayScene = { id: 'x', name: 'x', slots: { 'str:0': man('约会') } };
+    const app = applyScene(s, sameIdx);
+    expect(app.texts).toEqual({ 'str:0': '约会', 'int:0': '0' });
+    expect(app.applied).toEqual(['str:0']);
+  });
+});
+
+describe('sceneSuggestionName（协议槽 label 拼接；不可用降级）', () => {
+  const slots = [
+    { kind: 'int' as const, index: 0, label: '对话对象' },
+    { kind: 'int' as const, index: 1, label: '时机' },
+    { kind: 'str' as const, index: 0, label: '' },
+  ];
+  it('按 label=值 拼接，跳过空槽；label 空回退 ARG:n', () => {
+    expect(sceneSuggestionName(slots, { 'int:0': '觉', 'int:1': 'SP_EVENT' })).toBe('对话对象=觉/时机=SP_EVENT');
+    expect(sceneSuggestionName(slots, { 'str:0': '备注' })).toBe('ARGS:0=备注');
+  });
+  it('无槽（协议不可用）→ 空串（纯手填）', () => {
+    expect(sceneSuggestionName([], { 'int:0': '1' })).toBe('');
+  });
+});
+
+describe('场景槽位 ↔ 裸上下文文本（无协议降级）', () => {
+  it('槽位 → 文本：按槽号排序；str 带引号', () => {
+    expect(sceneSlotsToContextText({ 'str:1': man('约会'), 'int:0': man('36'), 'int:1': man('15') })).toBe(
+      '0=36, 1=15, 1="约会"',
+    );
+  });
+  it('文本 → 槽位：round-trip 一致；非法文本 → null（不抛错）', () => {
+    const text = '0=36, 1="约会"';
+    const slots = contextTextToSceneSlots(text);
+    expect(slots).toEqual({ 'int:0': man('36'), 'str:1': man('约会') });
+    expect(sceneSlotsToContextText(slots!)).toBe(text);
+    expect(contextTextToSceneSlots('abc')).toBeNull();
+    expect(contextTextToSceneSlots('  ')).toEqual({});
+  });
+});
+
+describe('upsertSceneByName / removeScene / newSceneId', () => {
+  const existing: ReplayScene[] = [{ id: 'scene-1', name: '约会', slots: { 'int:0': man('1') } }];
+
+  it('同名 → 覆盖（保留原 id）；新名 → 用 makeId 新建', () => {
+    const over = upsertSceneByName(existing, ' 约会 ', { 'int:0': man('2') }, () => 'scene-2');
+    expect(over.overwritten).toBe(true);
+    expect(over.scenes).toHaveLength(1);
+    expect(over.scene.id).toBe('scene-1');
+    expect(over.scene.slots).toEqual({ 'int:0': man('2') });
+    const added = upsertSceneByName(existing, '夜', { 'int:0': man('9') }, () => 'scene-2');
+    expect(added.overwritten).toBe(false);
+    expect(added.scenes.map((s) => s.id)).toEqual(['scene-1', 'scene-2']);
+  });
+
+  it('removeScene：内置默认场景不可删；其余按 id 移除', () => {
+    expect(removeScene(existing, DEFAULT_SCENE_ID)).toEqual(existing);
+    expect(removeScene(existing, 'scene-1')).toEqual([]);
+    expect(removeScene(existing, 'nope')).toEqual(existing);
+  });
+
+  it('newSceneId：碰撞重试直到唯一', () => {
+    const seq = ['dup', 'dup', 'u3'];
+    let i = 0;
+    const id = newSceneId(['scene-dup'], () => seq[i++]!);
+    expect(id).toBe('scene-u3');
+    expect(newSceneId([], () => 'x')).toBe('scene-x');
   });
 });

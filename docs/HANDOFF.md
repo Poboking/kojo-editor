@@ -1,4 +1,4 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批～第十三批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批～第十五批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
@@ -14,6 +14,7 @@
 > 本会话完成 **v0.2 第十一批：存档写侧预研——ByteWriter + serializePayload + 金样本回归，save00 载荷 571,185B 逐字节完全一致（编码器同构达成）；暴露 Int64 精度硬前置（RANDDATA 等），方案 B（rawBytes 保留）写入 §5.17**。
 > 本会话完成 **v0.2 第十二批：审阅修复（依据 docs/CODE-REVIEW-2026-10-10.md）——H1 CASE TO 区间 AND 语义（conjunction 契约 + 三层落地）+ M4 切文件丢内容（确认对话框）+ M5 回放联动闭包 + M2 Rust 编码 had_errors + L1/L3/L4；426 项全绿，回放基线不变**。
 > 本会话完成 **v0.2 第十三批（双线）：① sav-parser Int64 精度方案 B 落地（rawBytes passthrough）——六档金样本 passthrough 全部字节级一致（含此前被拒的 save01-05）+ 标量/单元补丁注入 + Int64 守卫；纠正第十一批结论：RANDDATA 是 u32 序列逐值安全，真雷在 RESULT/CFLAG/GIFT_GOT（IMPLEMENTATION-LOG §5.19）；② TRAE 并行交付 ui-archive-browser 归档浏览器（第 11 插件，commit ca1a323）；456 项全绿**。
+> 本会话完成 **v0.2 第十五批（v1.0 收口线一）：回放面板场景预设**——把手填的调用上下文槽位一等化为「场景」（命名保存 / 下拉切换 / 一键应用 / 删除）；`ReplayScene` 纯逻辑（+15 单测）+ `ctx.storage` 独立域（`ui-state-replay`）+ 协议降级（建议名 label 拼接 / 不可用则纯手填）；应用后槽位来源标 manual（作者假设，非引擎事实），与 §5.20 的 assumption 徽章并存；回放引擎与 condition-extractor 契约零改动；485 项全绿（IMPLEMENTATION-LOG §5.22）。
 
 ---
 
@@ -93,7 +94,7 @@
   3. **金样本结果**：save00 载荷 **571,185B 字节级完全一致**（编码器同构达成：游程/整数宽度/7-bit/流控制全对）；save01+ **Int64 大数近似不可写回**（RANDDATA SFMT 625 状态 ≈2.8e16，serialize 显式抛拒绝）——**v1.1 注入器硬性前置 = Int64 精度策略**，倾向方案 B（`rawBytes?` 原样复制未修变量 + 被修变量含大数拒绝注入）。
   4. **教训（§九-10 复发）**：联合判别式 narrow 不可靠（writeVar 的 int/str case）——显式守卫。
 - **条件抽取基线**：95,504 函数 / **493,712 谓词（未解析 187 = 0.04%）** / 含依赖函数 31,609 / 依赖条目 164,910 / schema 标注 109,742（恋慕 17,993 / 好感度 480）/ 全量 ~6.2s（冷启动 ~13s）。
-- 测试：**426 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**10 插件**）。
+- 测试：**485 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**11 插件**）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -167,7 +168,7 @@ packages/
 ```bash
 cd D:\DSH\kojo-editor
 pnpm install
-pnpm test               # 426 项（无游戏目录时集成冒烟+金样本自动跳过）
+pnpm test               # 485 项（无游戏目录时集成冒烟+金样本自动跳过）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
 pnpm audit:decoupling   # 必须 ✅（plugins 数 10）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放断言）：
@@ -183,7 +184,7 @@ node tools/smoke-tauri-dom.mjs
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
 5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
 
-## 六、v0.2 批次记录（第三批～第八批，✅ 全部完成）
+## 六、v0.2 批次记录（第三批～第十五批
 
 ### 6.1 第三批：条件谓词抽取 `condition-extractor`
 
@@ -294,7 +295,7 @@ node tools/smoke-tauri-dom.mjs
 
 ### 6.11 第十三批候选（已完成 2 项，余项顺延）
 
-- **v1.0 收口（第一优先）**：回放面板协议深化（场景预设）+ 协议覆盖校验规则（签名槽与路由转发不一致）+ 桌面壳真实终端冒烟（沙箱 os error 231 欠账）。
+- **v1.0 收口**：✅ 回放面板场景预设（§6.15，第十五批）；**余项**：协议覆盖校验规则（签名槽与路由转发不一致）+ 桌面壳真实终端冒烟（沙箱 os error 231 欠账）。
 - **index-603 索引域外函数源（消解剩余 call 368）**：FIRSTTIME 等定义在 kojoPaths 之外——"游戏函数源"通道（扩 index 扫描域 / 按需 parseFile）；多数有副作用，收益需再测量。
 - **adapter 口上调用协议**：家族 → 转发实参映射（KOJO_MESSAGE.ERB 路由表）→ call-context 858 条的自动消解；回放面板的场景选择器可从协议生成"对话对象/时机"下拉（替代手填槽位）。
 - **回放面板角色上下文增强**：MASTER/ASSI/PLAYER 指针的场景选择（当前取快照顶层值）。
@@ -338,6 +339,20 @@ node tools/smoke-tauri-dom.mjs
 - **测试**：cargo test 9/9（域内放行 / 域外拒绝 / 未注册拒绝 / `..` 穿越两种 / 符号链接逃逸 / 组件级前缀不误判 / 深层不存在文件）；kernel io 契约与行为零改动（仅注释补双闸说明）。
 - **验证**：470 项全绿 / typecheck root+app ✅ / audit 11 插件 ✅（§6.13 提到的 `lib.rs:484` 裸 sav 词已修——单测字符串 `v1.sav`→`v1.dat`）/ cargo check ✅ / 真实工程集成冒烟 ✅。桌面壳端到端手工冒烟（真实 IPC 下域外写被拒）沙箱不可跑，需正常终端 `pnpm tauri dev` 验证。
 - 边界：仅 `packages/app/src-tauri/**` + `App.tsx`（注册/清除接线）+ kernel io.ts 注释 + docs。**M3 收口，v1.1 注入器的第二道闸前置条件达成**。
+
+### 6.15 第十五批（v1.0 收口线一，✅ 已完成）：回放面板场景预设
+
+**实施结果**：调用上下文从"每次手填"升级为**一等化的场景**——命名保存 / 下拉切换 / 一键应用 / 删除；纯逻辑在 `panel-logic.ts`（零 React，+15 单测）。
+
+- **数据模型**：`ReplayScene{ id, name, slots: { slotKey(kind,index): { value, kind:'manual' } } }`；存储走 `ctx.storage`（域 = 插件 id `ui-state-replay`，键 `replay-scenes`），**不复用他人域**；内置默认场景为虚拟项不入存储。
+- **一键应用**：默认场景 = 回全 0（int 假设 / str 未提供）；用户场景覆盖的槽标 **manual**（作者假设，非引擎事实——文案不写死"正确值"）；与 §5.20 的 assumption 徽章语义并存不冲突。
+- **合并冲突显式上报**（不静默）：场景槽不在当前函数签名 → `dropped` 忽略；已填槽未被场景覆盖 → `reset` 回默认；同名保存 → 覆盖（保留原 id）。
+- **协议降级**：协议可用 → 建议名由槽位 label 拼接（「对话对象=觉/时机=SP_EVENT」）；不可用 → 空串纯手填，场景改作用于裸上下文文本框（槽位↔文本双向转换，解析失败提示不抛错）。
+- **不变式**：回放引擎（`state-replay`）与 `condition-extractor` 契约**零改动**；真实基线逐字复现（未知 3,741 / exact 836）。
+- **验证**：485 项全绿（+15）/ typecheck root+app ✅ / `audit:decoupling` ✅（11 插件）/ 真实工程集成冒烟 ✅。
+- 边界：仅 `packages/plugins/ui-state-replay/**` + docs。
+
+---
 
 ## 七、安全模型（写文件功能相关必读）
 
@@ -391,7 +406,7 @@ node tools/smoke-tauri-dom.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：470 项 / ✅ / 11 插件）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：485 项 / ✅ / 11 插件）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.21 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
 4. **下一批候选**：**v1.1 注入器用户面**（改槽注入 UI → 含修改金样本回归 → 写盘走 writablePaths+备份；Rust 第二道闸已就位）或 **v1.0 收口剩余**（回放面板场景预设 / 桌面壳真实终端冒烟——C7 的端到端手工验证也在此还账）；审阅遗留 M1（stop 级联）随 v0.3 排入
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`
