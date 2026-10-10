@@ -714,6 +714,16 @@ code {
   color: var(--amber);
   border-color: var(--amber);
 }
+/* 条件徽章（condition.extractor 标签；如 恋慕 / 好感度） */
+.nav-badge.cond {
+  color: var(--accent, #61afef);
+  border-color: var(--accent, #61afef);
+  opacity: 0.85;
+}
+.nav-badge.dim {
+  color: var(--fg-dim);
+  border-style: dashed;
+}
 .nav-more {
   font-size: 11.5px;
   padding: 2px 4px;

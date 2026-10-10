@@ -15,6 +15,7 @@
 
 import { createElement, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type {
+  ConditionExtractorService,
   ErbParserService,
   ErbIndex,
   FamilyIndexRule,
@@ -22,6 +23,7 @@ import type {
   Plugin,
   ProjectService,
   SlotRegistry,
+  StateDependency,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { buildNavigatorTree, searchFunctions, type NavigatorTree, type SearchHit } from './tree';
@@ -32,6 +34,15 @@ const FACE_RENDER_CAP = 300;
 const SEARCH_LIMIT = 200;
 /** 搜索最少输入长度 */
 const MIN_QUERY = 2;
+/** 每行最多显示的条件标签数（其余折叠为 +n） */
+const COND_BADGE_CAP = 2;
+
+/** 依赖的悬停提示（标签 + 阈值） */
+function dependencyTitle(d: StateDependency): string {
+  const label = d.schema?.description ? `${d.schema.description}（${d.key}）` : d.key;
+  const comps = d.comparisons.map((c) => `${c.op} ${c.text}`).join('、');
+  return comps.length > 0 ? `${label} ${comps}` : label;
+}
 
 function shortPath(p: string): string {
   const parts = p.split(/[\\/]/);
@@ -59,9 +70,15 @@ export function createUiKojoNavigatorPlugin(): Plugin {
   return {
     id: 'ui-kojo-navigator',
     version: '0.2.0',
-    requires: [WellKnownServices.ErbParser, KernelServices.Project, KernelServices.Slots],
+    requires: [
+      WellKnownServices.ErbParser,
+      WellKnownServices.ConditionExtractor,
+      KernelServices.Project,
+      KernelServices.Slots,
+    ],
     activate(ctx) {
       const parser = ctx.inject<ErbParserService>(WellKnownServices.ErbParser);
+      const conditionExtractor = ctx.inject<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
 
@@ -138,6 +155,43 @@ export function createUiKojoNavigatorPlugin(): Plugin {
             treeListeners.delete(cb);
           };
         }, []);
+
+        // 条件索引（后台全量抽取完成后刷新徽章）
+        useEffect(() => {
+          const off = conditionExtractor.subscribe(() => force((n) => n + 1));
+          return off;
+        }, []);
+
+        /** 函数行的条件徽章（schema 标签优先；悬停显示阈值） */
+        const condBadges = (name: string): ReactNode[] => {
+          const cond = conditionExtractor.functionConditions(name.toUpperCase());
+          if (!cond) return [];
+          const labelled = cond.dependencies.filter((d) => d.schema?.description);
+          const out: ReactNode[] = [];
+          for (const d of labelled.slice(0, COND_BADGE_CAP)) {
+            out.push(
+              createElement(
+                'span',
+                { key: `cond-${d.key}`, className: 'nav-badge cond', title: dependencyTitle(d) },
+                d.schema!.description!,
+              ),
+            );
+          }
+          if (labelled.length > COND_BADGE_CAP) {
+            out.push(
+              createElement(
+                'span',
+                {
+                  key: 'cond-more',
+                  className: 'nav-badge dim',
+                  title: labelled.map((d) => dependencyTitle(d)).join('\n'),
+                },
+                `+${labelled.length - COND_BADGE_CAP}`,
+              ),
+            );
+          }
+          return out;
+        };
 
         const treeNow = tree;
         const chara = treeNow?.charas.find((c) => c.no === selectedNo) ?? null;
@@ -231,6 +285,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                             onClick: () => open(h.node.filePath, h.node.startLine, h.node.name),
                           },
                           createElement('span', { className: 'nav-hit-name' }, h.node.name),
+                          ...condBadges(h.node.name),
                           createElement(
                             'span',
                             { className: 'nav-hit-loc dim' },
@@ -297,6 +352,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                                   if (fn.match?.isPlaceholder) badges.push(createElement('span', { key: 'kx', className: 'nav-badge warn' }, 'KX'));
                                   if (fn.match && fn.match.kind === 'declare' && fn.match.selector > 0)
                                     badges.push(createElement('span', { key: 'sel', className: 'nav-badge' }, `#${fn.match.selector}`));
+                                  badges.push(...condBadges(fn.name));
                                   return createElement(
                                     'li',
                                     { key: `${fn.filePath}:${fn.startLine}` },
