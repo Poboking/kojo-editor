@@ -50,6 +50,13 @@ export const WellKnownServices = {
    * 作为消费者与编辑器 UI（回放面板）的数据源。
    */
   StateReplay: 'state.replay',
+  /**
+   * 语法糖转译服务（v0.3 批 S1）：表层语法（`.kojo`）→ 原生 ERB 产物
+   * + 行级源映射 + 诊断。**纯函数语义**（不读不写文件）；转译产物的写盘
+   * 由消费方按内核双闸承担（S3 批）。契约 `plugin-api/sugar.ts`，
+   * 实现插件 `kojo-sugar`（S2 批建）。
+   */
+  SugarTranspile: 'sugar.transpile',
 } as const;
 
 export type KernelServiceKey = (typeof KernelServices)[keyof typeof KernelServices];

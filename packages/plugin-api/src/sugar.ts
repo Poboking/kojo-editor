@@ -1,0 +1,727 @@
+/**
+ * 语法糖契约（v0.3 批 S1）——表层语法（表层 DSL）→ 原生 ERB 的转译契约。
+ *
+ * 表层语法权威：`docs/SYNTAX-SUGAR-SURFACE-SPEC.md`（v1.2 冻结版）；
+ * 架构落位与批次路线：`docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §八。
+ *
+ * 设计分层（"一切皆插件"）：
+ * - **契约**（本文件，游戏无关）：糖文档模型（front-matter + 时机列表）、
+ *   SugarNode 联合 AST（**每个节点携源位置**，源映射地基）、转译服务接口、
+ *   诊断结构与行级源映射；
+ * - **引擎**（`kojo-sugar` 插件，S2 批建）：行式词法 → AST（缩进配对）→ codegen；
+ * - **知识来源**：变量名字典 / 时机分野模板来自 game adapter（游戏知识只进
+ *   adapter）；`别名` 是**文件级 front-matter 层**，叠加在 adapter 字典之上
+ *   且优先于它（规范 §3.8）——因此 `AliasDecl` 属契约层，不属 adapter。
+ *
+ * 中文关键字本身是**跨游戏语言层**（不是某个游戏的领域知识），故住在本契约；
+ * eraTW 特定的旗标命名/配色常量来自 adapter。命名零游戏名词（审计 A 项——
+ * `kojo` / `chara` 是钦定的跨游戏术语；裸格式名词同样在禁用清单内）。
+ *
+ * 与既有资产的关系（审阅 §八对表结论）：
+ * - 条件表达式复用 `condition-extractor` 的 ERB 表达式子集（`ConditionExpr`
+ *   同源规则镜像），糖侧只做**降糖**（代词 / 属性 / 中文运算符 → ERB 表达式）；
+ * - 转译产物必须是"**可回放形态**"（直线赋值 / IF 链 / SELECTCASE / CALL 子集），
+ *   才喂得起 `state-replay`（审阅 §1.2-2）；
+ * - 预览是 `state-replay` 的消费方，不自建模拟器（审阅 §1.4）。
+ *
+ * 稳健性原则：转译**宽容但不静默**——能继续就继续（尽量产出 full–AST），
+ * 但每一处偏离都进 `SugarDiagnostic[]`；写盘由 S3 批按内核双闸承担，
+ * 本契约不含任何 IO。
+ */
+
+/* ============================ 源位置（源映射地基） ============================ */
+
+/**
+ * 源位置（1 基行 / 1 基列，与编辑器惯例一致）。
+ *
+ * 每个 SugarNode 都携带 `loc`——这是"生成的每一行都能回溯到源位置"的地基
+ * （审阅 §1.2：源映射从第一天维护）。列以 **UTF-16 码元**计数（与 Monaco /
+ * JS 字符串索引一致；规范 §9 的验收是"定位到源文件具体列"）。
+ */
+export interface SugarPosition {
+  /** 行（1 基） */
+  line: number;
+  /** 列（1 基；UTF-16 码元） */
+  column: number;
+}
+
+/**
+ * 源区间（半开区间 `[start, end)`；`end` 指向最后一个字符之后）。
+ * 多行节点（块）的 `end` 落在**块尾**（含块体；不含后续空行）。
+ */
+export interface SugarSourceSpan {
+  start: SugarPosition;
+  end: SugarPosition;
+}
+
+/** 所有 SugarNode 共有的形状：带判别式 `kind` 与源位置 */
+interface SugarNodeBase {
+  /** 该节点在源文件中的区间（含块体） */
+  loc: SugarSourceSpan;
+}
+
+/* ============================== 插值 ============================== */
+
+/**
+ * 插值 —— 规范 §3.4 统一 `{…}` 记号。
+ *
+ * 两种形态（共用一个节点类型，靠 `kind` 判别）：
+ * - `expr`：值插值（`{她的好感度}` / `{她}`）——`text` 为 `{}` 内原文（不含花括号），
+ *   数值族/字符串族的沉降差异由转译器按变量字典决定（契约层不解释，因为
+ *   "哪个变量是字符串族"是 adapter 字典知识）；
+ * - `cond`：行内条件（`{条件 ? "A" : "B"}`，C# 风格三元）——`thenText` / `elseText`
+ *   为**分支片段原文**（不含引号；`elseText` 缺省 = 省略假分支）。
+ *
+ * 边界（规范 §3.6 硬约束）：`{}` 内**不允许**出现 `当` / `如果` 表达式——
+ * ERB 行内条件 `\@…\@` 不支持嵌套。编辑器把这种写法报为编译错误（诊断码
+ * `interpolation-block-expression`）。
+ */
+export interface Interpolation extends SugarNodeBase {
+  kind: 'interpolation';
+  /** 插值形态 */
+  form: 'expr' | 'cond';
+  /** `{}` 内原文（不含花括号；展示与回溯用） */
+  text: string;
+  /** form='cond' 时的条件原文（不含 `?`）；form='expr' 时缺省 */
+  condText?: string;
+  /** form='cond' 时的真分支片段原文；form='expr' 时缺省 */
+  thenText?: string;
+  /** form='cond' 时的假分支片段原文；**缺省 = 省略假分支**（安全写法） */
+  elseText?: string;
+}
+
+/* ============================== 文本行 ============================== */
+
+/**
+ * 文本行 —— 规范 §3.3「一行文本就是一行文本」。
+ *
+ * 一个文本行是**逻辑行**（源折行 `\` 已合并），对应一条 PRINT 指令。
+ * 两种降糖形态由转译器按规范 §5.1/§5.2 决定：
+ * - 常规 → `PRINTFORM{W|L|DW|DL}` 单条指令；
+ * - 纯条件行（整行只有一个条件插值、且假分支为空）→ `IF` 块（规范 §3.3 末段）。
+ * 契约层只描述**源事实**（是不是台词 / 要不要等 / 插值序列），不预设产物形态。
+ */
+export interface TextLine extends SugarNodeBase {
+  kind: 'textLine';
+  /**
+   * 是否台词（规范 §1.3 的 99% 相关律）：去插值后的首个非空白字符是
+   * `「` / `｢` → true。台词 = 作者色（不取 `D` 后缀）；旁白 = 默认色。
+   */
+  speech: boolean;
+  /** 是否等待（规范 §3.3）：行尾无 `续` → true（默认等待） */
+  wait: boolean;
+  /**
+   * 行内插值序列（按出现顺序）。
+   * `text` 字段未保留剥离插值后的字面片段——转译器按同一 `loc` 从源文本切片
+   * 重建，避免同一份文本在两处重复存储（契约层不复制源）。
+   */
+  interpolations: Interpolation[];
+}
+
+/* ============================== 条件语句块 ============================== */
+
+/**
+ * `如果` 语句块（规范 §3.5）——缩进即块，自动补 `ENDIF`。
+ *
+ * 编译器**统一产出块结构**（故意不用 `SIF`：`SIF` 只能管一行，是维护陷阱）。
+ */
+export interface IfBlock extends SugarNodeBase {
+  kind: 'ifBlock';
+  /** 分支链（≥1 条）：`如果` / `否则如果`* / `否则`? */
+  branches: IfBranch[];
+}
+
+/** `如果` / `否则如果` / `否则` 的单条分支 */
+export interface IfBranch {
+  /** 分支关键字类别 */
+  kind: 'if' | 'elseif' | 'else';
+  /**
+   * 条件原文（ERB 表达式，中文运算符未降糖前原样）；
+   * `else` 分支为空串。
+   */
+  condition: string;
+  /** 分支体（缩进更深的节点序列） */
+  body: SugarNode[];
+  /** 分支头所在源位置（`否则` 分支同样有） */
+  loc: SugarSourceSpan;
+}
+
+/**
+ * `如果` **表达式**（赋值位置，规范 §3.5）——把分支结果直接赋给左值。
+ *
+ * 结构 = 一个 `IfBlock` + `target` 左值；产物为"逐分支写 `左值 = 分支值`"的
+ * `IF` 块。**必须含 `否则` 分支**（规范 §3.5：否则左值存在未赋值路径）——
+ * 缺失时报诊断 `expr-missing-else`，且不产出半成品 ERB。
+ */
+export interface IfExpr {
+  kind: 'ifExpr';
+  /** 赋值目标原文（可能是 `别名`，转译器按 §5.0 先展开） */
+  target: string;
+  /** 表达式 `如果` 的块结构（`IfBranch.body` 各含**单个表达式节点**） */
+  block: IfBlock;
+  /** 整个表达式区域的位置（块头 → 块尾） */
+  loc: SugarSourceSpan;
+}
+
+/* ============================== 选择语句块 ============================== */
+
+/**
+ * `当` 语句块（规范 §3.6）——Kotlin `when` 的中文形态。
+ * 产物 = `SELECTCASE` / `CASE` / `CASEELSE` / `ENDSELECT`。
+ */
+export interface WhenBlock extends SugarNodeBase {
+  kind: 'whenBlock';
+  /** 分派表达式原文（`当 表达式：` 的表达式） */
+  subject: string;
+  /** 分支序列（`是 …` 与可选的 `否则`） */
+  branches: WhenBranch[];
+}
+
+/** `当` 的单条分支 */
+export interface WhenBranch {
+  /** 分支类别：`是` = CASE；`否则` = CASEELSE */
+  kind: 'case' | 'else';
+  /**
+   * `是` 的值区间（按源顺序；`否则` 为空数组）。
+   * 每个区间对应一个 `CASE` 值或一条 `CASE a TO b`。
+   */
+  values: WhenCaseValue[];
+  /** 分支体（`否则` 分支 = 语句块形态；`是` 分支在语句块形态下同） */
+  body: SugarNode[];
+  /** 分支头源位置 */
+  loc: SugarSourceSpan;
+}
+
+/** `是` 的单个值区间：单值 / `a 到 b` / 逗号列表中的一项 */
+export interface WhenCaseValue {
+  /** 区间起点原文（数字或字符串字面量） */
+  from: string;
+  /** `到` 上界原文（含）；单值时为 null（→ `CASE v`） */
+  to: string | null;
+  /** 值区间本身的位置 */
+  loc: SugarSourceSpan;
+}
+
+/**
+ * `当` **表达式**（赋值位置，规范 §3.6）——各分支用 `->` 给出值。
+ *
+ * **必须含 `否则` 分支**（同 `IfExpr`：保证左值在所有路径被赋值）；
+ * 缺失时报诊断 `expr-missing-else`。
+ */
+export interface WhenExpr {
+  kind: 'whenExpr';
+  /** 赋值目标原文（可能为 `别名`，按 §5.0 先展开） */
+  target: string;
+  /** 表达式 `当` 的块结构（`WhenBranch.body` 各含**单个表达式节点**） */
+  block: WhenBlock;
+  /** 整个表达式区域的位置（块头 → 块尾） */
+  loc: SugarSourceSpan;
+}
+
+/* ============================== 随机语句块 ============================== */
+
+/**
+ * `随机` 语句块（规范 §3.6 末）——等概率，修掉 `RAND:n` 连写的概率坑。
+ *
+ * 产物 = `LOCAL = RAND:n` + `SELECTCASE` / `CASE 0..n-1` / `ENDSELECT`。
+ * 槽位按规范 §5.4 冻结口径分配（每块独占一个 `LOCAL:N`，嵌套递增）——
+ * 该分配是**转译器内部决策**，契约层只描述"候选序列"，不含槽位号。
+ */
+export interface RandomBlock extends SugarNodeBase {
+  kind: 'randomBlock';
+  /** 候选（≥2；每个候选是块体节点序列，通常为单条文本行） */
+  alternatives: {
+    body: SugarNode[];
+    loc: SugarSourceSpan;
+  }[];
+}
+
+/**
+ * `随机` 行内简写（规范 §3.6：集合字面量形态，适合一句话的随机）。
+ * 例：`随机 「嗯。」,「哦？」,「……」` —— 产物与块形态同构（`RAND:3` + SELECTCASE）。
+ */
+export interface RandomInline extends SugarNodeBase {
+  kind: 'randomInline';
+  /** 候选原文序列（含引号，按源顺序） */
+  alternatives: string[];
+}
+
+/* ============================== 选项块 ============================== */
+
+/**
+ * `选项` 块（规范 §3.7）——菜单交互。
+ *
+ * 产物 = `PRINTBUTTON "文本", "n"` ×N + `INPUTS` + `SELECTCASE RESULTS`。
+ * 返回值由工具按**书写顺序**分配 `"1".."n"`（v1 不提供手写返回值——这正是
+ * 消灭参数顺序/数值陷阱的设计）。
+ *
+ * 约束（规范 §3.7）：**每个时机只允许一个 `选项` 块，且不允许嵌套**
+ * （两个 `INPUTS` 共用同一个 `RESULTS`，嵌套无解）——违者报诊断
+ * `choice-multiple` / `choice-nested`。多轮选择走原生直通 `$标签` + `GOTO`。
+ */
+export interface ChoiceBlock extends SugarNodeBase {
+  kind: 'choiceBlock';
+  /** 选项条目（按书写顺序；返回值按此顺序分配） */
+  items: ChoiceItem[];
+}
+
+/** `选项` 的单条目（`「文本」：` + 缩进块体） */
+export interface ChoiceItem {
+  /** 按钮显示文本（不含引号；源为 `「…」` / `｢…｣`） */
+  label: string;
+  /** 条目体（可含 `如果`/`当`/`随机`/`着色` 等块，**不含** `选项` 块） */
+  body: SugarNode[];
+  /** 条目头源位置 */
+  loc: SugarSourceSpan;
+}
+
+/* ============================== 着色块 ============================== */
+
+/**
+ * `着色` 块（规范 §3.9）——`SETCOLOR` / `RESETCOLOR` 自动成对。
+ */
+export interface ColorBlock extends SugarNodeBase {
+  kind: 'colorBlock';
+  /** 颜色原文（如 `0xFF8080`），原样透传为 `SETCOLOR <color>` */
+  color: string;
+  /** 块体 */
+  body: SugarNode[];
+}
+
+/** `心形`（规范 §3.9）——`CALL HPH_PRINT(@"…", "<mode>")` 中文别名糖 */
+export interface HeartLine extends SugarNodeBase {
+  kind: 'heartLine';
+  /** 是否台词（规则与 TextLine 完全相同：有引号 = 台词 = 非 `d` 模式） */
+  speech: boolean;
+  /** 是否等待（行尾无 `续` → true） */
+  wait: boolean;
+  /** 行内插值序列（同 TextLine） */
+  interpolations: Interpolation[];
+}
+
+/* ============================== 时机声明与文档 ============================== */
+
+/**
+ * 时机声明（规范 §3.2）——一个 `.kojo` 文件可含多个时机块。
+ * 函数名由工具按 §5.5 拼接公式生成，**作者不写函数名**（这是"口上全哑"
+ * 第一大原因的根治点）。
+ */
+export interface TimingBlock extends SugarNodeBase {
+  kind: 'timingBlock';
+  /**
+   * 分野关键字原文（如 `指令` / `初见` / `事件` / `绝顶` / `射精` / `标记` /
+   * `计数器` / `成功` / `追加源` / `日记` / `日常`）。**原样保留**——
+   * 分野 → 函数名模板的映射由 adapter 侧知识（完整 37 调用面）与转译器共同解析，
+   * 契约层不内嵌任何模板（否则游戏知识就会漏进契约）。
+   */
+  face: string;
+  /** 编号（`时机 指令 310：` → `310`；无编号的分野缺省） */
+  index?: string;
+  /** 命名参数（`成否:` / `类型:` 等，按出现顺序） */
+  namedParams: TimingNamedParam[];
+  /**
+   * 时机子句（`隐藏情景:` / `隐藏口上:`，规范 §3.2）——对应 MESSAGECHECK
+   * 位协议，作者不必再背 `SETBIT`。
+   */
+  messageCheck: TimingMessageCheck[];
+  /** 时机正文（缩进一级的节点序列） */
+  body: SugarNode[];
+}
+
+/** 时机块头的命名参数（`成否: 游戏判定` → name='成否', value='游戏判定'） */
+export interface TimingNamedParam {
+  name: string;
+  value: string;
+  loc: SugarSourceSpan;
+}
+
+/** 时机内的 MESSAGECHECK 子句（`隐藏情景: 如果 她睡着了`） */
+export interface TimingMessageCheck {
+  /** 跳过目标：`情景`（bit0）或 `口上`（bit1） */
+  scope: 'scene' | 'kojo';
+  /** 条件原文（ERB 表达式，未降糖） */
+  condition: string;
+  loc: SugarSourceSpan;
+}
+
+/* ============================== 原生直通 ============================== */
+
+/**
+ * 原生直通（行）——规范 §3.10：行首是全大写英文指令或 `$标签` 时整行透传。
+ * 糖不是围栏：任何原生 ERB 行都能原样嵌在时机正文里。
+ */
+export interface RawLine extends SugarNodeBase {
+  kind: 'rawLine';
+  /** 原样文本（不含行首缩进与行尾换行） */
+  text: string;
+}
+
+/**
+ * 原生直通（块）——规范 §3.10：行首 `@` 起直到下一个 `@` 行或文件末尾，
+ * **整块逐行原样透传**（块内不解析糖语法，可含 `#DIM` / `#FUNCTION` 等
+ * 预处理行与任意中文文本）。
+ *
+ * `lines` 直接装原始行 —— 不 parse、不改写（不透明节点，错误隔离）。
+ */
+export interface RawFunctionBlock extends SugarNodeBase {
+  kind: 'rawFunctionBlock';
+  /** 原始行序列（按源顺序；不含行尾换行符） */
+  lines: string[];
+  /**
+   * 若为显式围栏（```erb 围栏 / 行首 `@erb`，审阅 §1.3 第一版边界）标记来源；
+   * 注释式 `@` 函数块缺省。
+   */
+  fence?: boolean;
+}
+
+/* ============================== 别名声明 ============================== */
+
+/**
+ * `别名` 声明的**右值形态**（规范 §3.1 表）——决定读写性：
+ *
+ * | 形态 | 例 | 读写性 |
+ * |---|---|---|
+ * | `variable` | `别名 X = CFLAG:TARGET:1088` | **可读可写** |
+ * | `character` | `别名 X = 角色 15` | **只读**（→ `%CALLNAME:15%`） |
+ * | `number` | `别名 X = 0` | **只读**（表达式位置展开为字面量） |
+ * | `string` | `别名 X = "小露"` | **只读**（同上） |
+ *
+ * 只读别名出现在**赋值左值**位置 → 编译错误（否则会展开成 `0 = 1`）——
+ * 诊断码 `readonly-alias-assignment`（规范 §3.1 / §8 lint 清单）。
+ */
+export type AliasValueKind = 'variable' | 'character' | 'number' | 'string';
+
+/** 别名右值（判别式 `kind` 直接对应 `AliasValueKind`） */
+export type AliasValue =
+  | { kind: 'variable'; /** 目标变量引用原文（如 `CFLAG:TARGET:1088` / `TCVAR:TARGET:20`） */ text: string }
+  | { kind: 'character'; /** 角色 CSV 编号（原文，如 `15`） */ no: string }
+  | { kind: 'number'; /** 数值字面量原文（如 `0`） */ text: string }
+  | { kind: 'string'; /** 字符串字面量内容（不含引号，如 `小露`） */ text: string };
+
+/**
+ * `别名` 声明（规范 §3.1 / §3.8 / §5.0）。
+ *
+ * 三条约束（规范 §3.1，编辑器在扫描前即校验）：
+ * ① 只能出现在文件头（**所有 `时机` 块之前**）——违者诊断 `alias-not-in-header`；
+ * ② 不得与保留代词 `她` / `你` 同名、不得重名——诊断 `alias-name-conflict`；
+ * ③ 只在当前文件生效，不跨文件（工具不合并不同文件的别名表）。
+ *
+ * 语义：`别名` **优先于** adapter 变量字典（同名冲突时作者显式声明覆盖默认解析）。
+ */
+export interface AliasDecl extends SugarNodeBase {
+  kind: 'aliasDecl';
+  /** 别名名（作者自定义标识符） */
+  name: string;
+  /** 右值（四形态联合） */
+  value: AliasValue;
+}
+
+/* ============================== SugarNode 联合 ============================== */
+
+/**
+ * 糖 AST 节点联合。
+ *
+ * 判别式统一为 `kind`——消费方用 `switch (node.kind)` 收窄。TS7 对"联合字面量
+ * 属性"的 narrow 不可靠（IMPLEMENTATION-LOG 项目教训），因此本契约**只把
+ * 单字符/独立字段（`kind` / `form`）用作判别式**，需要组合判定时提供显式类型守卫
+ * （见文件末尾 `is*` 系列）。
+ *
+ * 语句位置节点与表达式位置节点在类型上分离：
+ * - `SugarStatement`：可出现在时机正文 / 块体里的节点；
+ * - `SugarExprNode`：只出现在表达式位置（`IfExpr` / `WhenExpr` 的分支值）。
+ * 二者并集即 `SugarNode`。
+ */
+export type SugarStatement =
+  | TextLine
+  | HeartLine
+  | IfBlock
+  | WhenBlock
+  | RandomBlock
+  | RandomInline
+  | ChoiceBlock
+  | ColorBlock
+  | RawLine
+  | RawFunctionBlock;
+
+/** 表达式位置节点（仅出现在 `IfExpr` / `WhenExpr` 的分支体里） */
+export type SugarExprNode = IfExpr | WhenExpr | RawLine;
+
+/** 全部 SugarNode（语句 ∪ 表达式；`AliasDecl` / `TimingBlock` 是文档级节点，另见 `SugarTopLevelNode`） */
+export type SugarNode = SugarStatement | SugarExprNode;
+
+/**
+ * 文档级节点（只出现在文件顶层，不进块体）：
+ * `别名` 声明与 `时机` 块。
+ */
+export type SugarTopLevelNode = AliasDecl | TimingBlock;
+
+/* ============================== 文档与头声明 ============================== */
+
+/**
+ * 文件头声明（front-matter，规范 §3.1）——由"新建向导"生成，作者几乎不用手写。
+ *
+ * 未声明的可选项，工具**不生成**对应函数（引擎侧自然回退：无色则用默认色，
+ * 无开关函数则按默认关处理）。
+ */
+export interface SugarFrontMatter {
+  /**
+   * 角色编号（`角色: 12`）——必填。用于 `K{No}` 与 `CFLAG:{No}`。
+   * **规范约束**：`口上:` 的值必须写不带下划线的人名，工具负责补前导下划线。
+   */
+  charNo?: string;
+  /** `口上:` 家族名（别人版；省略 = 标准版，登记函数 `RESULTS` 保持为空） */
+  family?: string;
+  /** `显示名:` → 登记函数 `RESULTS:1` */
+  displayName?: string;
+  /** `简介:` → 登记函数 `RESULTS:2` */
+  description?: string;
+  /** `口上色:` → `@M_KOJO…_COLOR_K{No}` 内 `SETCOLOR`（原文，如 `0xE4FC08`） */
+  color?: string;
+  /**
+   * `旁白色:`（`默认` / `作者色`）——`默认` = 旁白走 `D` 系（默认色）；
+   * `作者色` = 旁白也用角色色。**规范 §1.3 的引号×D 系 99% 相关律**的心智模型开关。
+   */
+  narrationColor?: '默认' | '作者色';
+  /** `开关:` 条目（→ `@M_KOJO…_FLAGSETTING_K{No}`），按源顺序 */
+  switches: { name: string; value: string; loc: SugarSourceSpan }[];
+  /** 头部 `别名` 声明（按源顺序；规范 §3.1 三约束） */
+  aliases: AliasDecl[];
+}
+
+/**
+ * 糖文档 —— 一个 `.kojo` 源文件的解析模型。
+ *
+ * `topLevel` 顺序敏感：`别名` 只能出现在所有 `时机` 之前（规范 §3.1），
+ * 该约束的**校验结果**进 `diagnostics`（不在这里抛错）。
+ */
+export interface SugarDoc {
+  /** 源文件绝对路径（未落盘的新文件可为空串） */
+  filePath: string;
+  /** 文件头声明 */
+  frontMatter: SugarFrontMatter;
+  /** 顶层节点（别名声明 + 时机块，按源顺序） */
+  topLevel: SugarTopLevelNode[];
+  /** 解析诊断（含"能解析但有偏离"的提示；不中断解析） */
+  diagnostics: SugarDiagnostic[];
+}
+
+/* ============================== 源映射与产物 ============================== */
+
+/**
+ * 行级源映射（审阅 §1.2：从第一天维护）。
+ *
+ * **粒度决策（请勿擅自细化/粗化）**：v1 只做**行级**映射（规范 §6 的 golden
+ * 验收是逐字节文本一致，行级足以支撑"生成的每一行回溯到源位置"）；列级留到
+ * S6 编辑体验批（规范 §9 待实测第 3 条要求"定位到源文件具体列"）。
+ * 源折行 `\` 会把多条源行合并为一条产物行 → 此时 `sourceLine` 取**首行**，
+ * 后续行计入 `span`。
+ */
+export interface SugarSourceMapEntry {
+  /** 产物行号（1 基） */
+  generatedLine: number;
+  /** 对应源行（1 基；纯生成行——如 `ENDIF` / `ENDSELECT` / 包装函数骨架——为 null） */
+  sourceLine: number | null;
+  /** 该产物行覆盖的源区间（可为多行；纯生成行缺省） */
+  span?: SugarSourceSpan;
+}
+
+/** 转译产物 */
+export interface SugarTranspileResult {
+  /** 生成的 ERB 全文（**未落盘**；写盘由 S3 批按内核双闸承担） */
+  erb: string;
+  /** 行级源映射（按 generatedLine 升序） */
+  sourceMap: SugarSourceMapEntry[];
+  /**
+   * 全量诊断（parse + transpile）。**非空不必然代表失败**：
+   * `severity: 'error'` 存在时不应落盘半成品 ERB（规范 §5.3：
+   * 缩进异常/缺 `否则` 等 → 阻止编译，不生成半成品），由消费方决定。
+   */
+  diagnostics: SugarDiagnostic[];
+}
+
+/* ============================== 诊断 ============================== */
+
+/** 诊断严重度（与 `conventions.ts` 的 `ConventionSeverity` 同口径） */
+export type SugarSeverity = 'error' | 'warning' | 'info';
+
+/**
+ * 诊断码 —— **闭集**（S2 实现时只允许新增，不得临时发明字符串）。
+ * 命名零游戏名词。
+ */
+export type SugarDiagnosticCode =
+  /* --- 结构 / 缩进（规范 §5.3） --- */
+  | 'indent-mismatch' // 缩进不齐 / 回缩异常
+  | 'block-empty' // 块头无体（`如果 …：` 后没有更深缩进的内容）
+  | 'unclosed-block' // 块未闭合（文件尾仍处于块内；糖本应消灭此类，防御性保留）
+  /* --- 表达式 `如果` / `当`（规范 §3.5 / §3.6） --- */
+  | 'expr-missing-else' // 赋值位置的 如果 / 当 缺 `否则` 分支（必须穷尽）
+  | 'expr-body-not-expression' // 表达式 当/如果 的分支体不是 `-> 单个表达式`
+  /* --- 插值（规范 §3.4 / §3.6 边界） --- */
+  | 'interpolation-block-expression' // `{}` 内出现 当 / 如果（行内条件不支持嵌套）
+  | 'interpolation-unclosed' // `{` 未收尾
+  | 'interpolation-nested' // 插值嵌套（`{}` 内再写 `{}`）
+  | 'stray-percent' // 文本中的落单半角 `%`（FORM 串里是变量记号）
+  /* --- 别名（规范 §3.1 / §3.8 / §5.0） --- */
+  | 'alias-not-in-header' // `别名` 出现在 时机 块之后
+  | 'alias-name-conflict' // 别名与保留代词 `她`/`你` 同名，或别名互相重名
+  | 'alias-duplicate' // 同一别名重复声明
+  | 'readonly-alias-assignment' // 只读别名（角色/字面量）出现在赋值左值
+  | 'alias-unknown-target' // 别名右值无法解析（非四形态）
+  /* --- 时机（规范 §3.2） --- */
+  | 'timing-face-unknown' // 分野关键字不在 L0 分野表（adapter 提供）
+  | 'timing-duplicate' // 同名编号在同一文件内重复
+  | 'timing-empty-body' // 时机无正文（占位写法；产出 `LOCAL = 0` 占位，INFO）
+  /* --- 选项（规范 §3.7） --- */
+  | 'choice-multiple' // 一个时机内出现多个 `选项` 块
+  | 'choice-nested' // `选项` 块嵌套
+  /* --- 文本行（规范 §3.3 / §4.4） --- */
+  | 'cont-inside-quotes' // `续` 标记写在了引号内
+  | 'unknown-identifier' // 未命中别名的裸标识符且不在变量字典中
+  /* --- 原生直通（规范 §3.10） --- */
+  | 'raw-block-inline' // 原生直通块出现在非顶层位置（如嵌在句子中间）
+  /* --- 兜底 --- */
+  | 'internal'; // 转译器自身异常（绝不静默；由 S2 使用）
+
+/**
+ * 单条诊断。
+ *
+ * 与 `ConventionIssue` 的一致性：两者都带 `(file, line, column)` 与 severity——
+ * 于是"点击诊断跳转"可直接复用宿主既有的 `editor.revealLocation` 通道。
+ */
+export interface SugarDiagnostic {
+  code: SugarDiagnosticCode;
+  severity: SugarSeverity;
+  /** 人读消息（中文；面向作者，不暴露内部术语） */
+  message: string;
+  /** 源位置（无位置信息时为 null——如整文件级约束） */
+  loc: SugarPosition | null;
+  /** 相关源区间（可选；高亮整段用） */
+  span?: SugarSourceSpan;
+}
+
+/* ============================== 转译服务 ============================== */
+
+/** 转译选项 */
+export interface SugarTranspileOptions {
+  /**
+   * 源文件路径（仅用于诊断与 sourceMap 元信息；不触发任何 IO）。
+   * 缺省 = 内存中的未命名文档。
+   */
+  filePath?: string;
+  /**
+   * 文件名（用于 §5.5 的文件名约定；缺省由 `filePath` 推导）。
+   * 与 `filePath` 二者至少一个可推得文件名——否则 `file-not-named` 类的
+   * 命名约束无法校验（S2 使用）。
+   */
+  fileName?: string;
+}
+
+/**
+ * 语法糖转译服务（服务键 `sugar.transpile`；由 `kojo-sugar` 插件提供，S2 批建）。
+ *
+ * **纯函数语义**：不读文件、不写文件、不触达工程状态——输入字符串 → 输出产物。
+ * 这样它才能既跑在 Node（测试）、又跑在 WebView（生产），并可在批处理里
+ * 高并发调用（审阅 §四-4：单文件转译目标 <50ms）。
+ *
+ * 写盘（双闸 + 备份 + 回读验证）是 S3 批的独立职责，**不在本服务内**。
+ */
+export interface SugarTranspileService {
+  /**
+   * 解析为文档模型（不转译）。失败（如编码/结构严重错误）→ 抛错；
+   * "能解析但有偏离"→ 保留 AST 并把问题写进 `SugarDoc.diagnostics`（宽容但不静默）。
+   */
+  parse(source: string, options?: SugarTranspileOptions): SugarDoc;
+  /**
+   * 转译：源 → ERB 产物 + 行级源映射 + 诊断。
+   * 内部等价于 `parse` → codegen；`sourceMap` 由转译过程直接产出
+   * （不靠事后 diff 反推）。
+   */
+  transpile(source: string, options?: SugarTranspileOptions): SugarTranspileResult;
+  /**
+   * 由产物行号反查源位置（源映射查询；源映射缺该行 → null，
+   * 例如包装函数骨架这类纯生成行）。
+   */
+  sourceOf(result: SugarTranspileResult, generatedLine: number): SugarPosition | null;
+}
+
+/* ============================== 显式类型守卫 ============================== */
+/*
+ * TS7 对"联合字面量属性"的判别式 narrow 不可靠（项目教训，IMPLEMENTATION-LOG §九-10）：
+ * 即便写了 `if (v.kind === 'variable' || v.kind === 'character') return;`，
+ * 后续代码也可能不把该变体排除。凡需要"组合判定"的地方一律走显式守卫——
+ * 下述函数即契约层对外的标准判定入口（S2 / UI / linter 共用同一套语义）。
+ */
+
+/** 文本行 */
+export function isTextLine(node: SugarNode): node is TextLine {
+  return node.kind === 'textLine';
+}
+
+/** 心形行 */
+export function isHeartLine(node: SugarNode): node is HeartLine {
+  return node.kind === 'heartLine';
+}
+
+/** 值插值（`{表达式}`）；不含行内条件 */
+export function isValueInterpolation(node: Interpolation): boolean {
+  return node.form === 'expr';
+}
+
+/** 行内条件插值（`{条件 ? A : B}`） */
+export function isConditionalInterpolation(node: Interpolation): node is Interpolation & { form: 'cond' } {
+  return node.form === 'cond';
+}
+
+/** 变量别名（可读可写） */
+export function isVariableAlias(value: AliasValue): value is Extract<AliasValue, { kind: 'variable' }> {
+  return value.kind === 'variable';
+}
+
+/** 角色别名（只读） */
+export function isCharacterAlias(value: AliasValue): value is Extract<AliasValue, { kind: 'character' }> {
+  return value.kind === 'character';
+}
+
+/** 数值字面量别名（只读） */
+export function isNumberAlias(value: AliasValue): value is Extract<AliasValue, { kind: 'number' }> {
+  return value.kind === 'number';
+}
+
+/** 字符串字面量别名（只读） */
+export function isStringAlias(value: AliasValue): value is Extract<AliasValue, { kind: 'string' }> {
+  return value.kind === 'string';
+}
+
+/**
+ * 只读别名判定 —— **唯一的只读性真源**（消费者不要各自写 if 链）。
+ *
+ * 只读 = 角色引用 / 数值字面量 / 字符串字面量三种（规范 §3.1 表）。
+ * 只有变量别名可作赋值左值。
+ */
+export function isReadonlyAlias(value: AliasValue): boolean {
+  return value.kind !== 'variable';
+}
+
+/**
+ * 别名可否作赋值左值。
+ * 与 `!isReadonlyAlias` 等价——保留两个方向的名字，让调用点自解释
+ * （判"能否写"比判"是否只读"在 lint 规则里更常见）。
+ */
+export function isWritableAlias(value: AliasValue): boolean {
+  return value.kind === 'variable';
+}
+
+/** 表达式位置节点（赋值位置的 如果 / 当） */
+export function isExprNode(node: SugarNode): node is SugarExprNode {
+  return node.kind === 'ifExpr' || node.kind === 'whenExpr';
+}
+
+/** 原生直通（行或块） */
+export function isRawNode(node: SugarNode): node is RawLine | RawFunctionBlock {
+  return node.kind === 'rawLine' || node.kind === 'rawFunctionBlock';
+}
+
+/** 文档级节点（别名声明 / 时机块） */
+export function isTopLevelNode(node: SugarTopLevelNode): boolean {
+  return node.kind === 'aliasDecl' || node.kind === 'timingBlock';
+}

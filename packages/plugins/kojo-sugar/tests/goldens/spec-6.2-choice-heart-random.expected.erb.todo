@@ -1,0 +1,23 @@
+	IF LOCAL
+		CALL HPH_PRINT(@"……嗯。","w")
+		PRINTBUTTON "用亲吻代替回答", "1"
+		PRINTBUTTON "摸摸头", "2"
+		PRINTBUTTON "什么也不做", "3"
+		INPUTS
+		SELECTCASE RESULTS
+			CASE "1"
+				PRINTFORMW 「……唔。」
+				PRINTFORMDL 她轻轻闭上了眼睛。
+				CALL HPH_PRINT(@"虽然，还不太明白……但是、不讨厌。","w")
+			CASE "2"
+				LOCAL = RAND:2
+				SELECTCASE LOCAL
+					CASE 0
+						PRINTFORMW 「……呼。」
+					CASE 1
+						PRINTFORMW 「再、再摸摸嘛。」
+				ENDSELECT
+			CASE "3"
+				PRINTFORMW 「……回去吧。」
+		ENDSELECT
+	ENDIF
