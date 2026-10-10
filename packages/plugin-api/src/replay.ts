@@ -72,6 +72,12 @@ export interface PredicateReplay {
   outcome: ReplayOutcome;
   /** 解析后 AST（展示 / 回溯用；与明细同源） */
   expr: ConditionExpr;
+  /**
+   * 同行合取标记（v0.2 第十二批修复 H1；自 `FunctionPredicate.conjunction`
+   * 透传）——`'and'` = CASE `TO` 区间的半边谓词，同行归约须先组内 AND。
+   * 缺省 = 同行 OR（逗号列表语义）。
+   */
+  conjunction?: 'and';
 }
 
 /** 函数级回放结果 */

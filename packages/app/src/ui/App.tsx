@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, GameProject, RecentProject } from '@kojo/plugin-api';
 import { invoke, isTauri } from '../bridge/invoke';
 import { bootstrapKernel } from '../bootstrap';
 import { ProjectView } from './ProjectView';
+import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 
@@ -14,6 +15,12 @@ export interface RevealTarget {
   line: number;
   /** 同一文件重复定位时用于触发重新滚动（nonce 变化即重新定位） */
   nonce: number;
+}
+
+/** 待确认的导航目标（当前文件有未保存修改时先弹确认，审阅 M4 修复） */
+interface PendingNav {
+  filePath: string;
+  line?: number;
 }
 
 export function App(): ReactElement {
@@ -27,6 +34,13 @@ export function App(): ReactElement {
   const [reveal, setReveal] = useState<RevealTarget | null>(null);
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [pendingApproval, setPendingApproval] = useState<GameProject | null>(null);
+  const [editorDirty, setEditorDirty] = useState(false);
+  const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
+  const saveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerSave = useCallback((fn: (() => Promise<boolean>) | null) => {
+    saveRef.current = fn;
+  }, []);
+  const onDirtyChange = useCallback((d: boolean) => setEditorDirty(d), []);
 
   useEffect(() => {
     let disposed = false;
@@ -60,16 +74,17 @@ export function App(): ReactElement {
   }, [kernel]);
 
   // 通用导航意图：任意插件提出"打开文件并定位"，宿主在此落地
+  // （当前文件有未保存修改 → 先弹确认，绝不静默丢弃，审阅 M4 修复）
   useEffect(() => {
     if (!kernel) return;
     const un = kernel.bus.on('editor.revealLocation', (ev) => {
-      setActiveFile(ev.filePath);
-      setReveal({ line: ev.line ?? 1, nonce: Date.now() });
+      requestOpenFile(ev.filePath, ev.line ?? 1);
     });
     return () => {
       un();
     };
-  }, [kernel]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kernel, editorDirty]);
 
   const openProject = useCallback(
     async (dir: string) => {
@@ -113,10 +128,43 @@ export function App(): ReactElement {
     }
   }, [openProject]);
 
-  const openFile = useCallback((path: string) => {
+  const commitOpenFile = useCallback((path: string, line?: number) => {
     setActiveFile(path);
-    setReveal(null);
+    setReveal(line ? { line, nonce: Date.now() } : null);
   }, []);
+
+  const requestOpenFile = useCallback(
+    (path: string, line?: number) => {
+      // 同文件定位不需要确认（编辑内容仍在）
+      if (editorDirty && path !== activeFile) {
+        setPendingNav({ filePath: path, line });
+        return;
+      }
+      commitOpenFile(path, line);
+    },
+    [editorDirty, activeFile, commitOpenFile],
+  );
+
+  const openFile = useCallback(
+    (path: string) => {
+      requestOpenFile(path);
+    },
+    [requestOpenFile],
+  );
+
+  const decideUnsaved = useCallback(
+    async (action: 'save-then-go' | 'discard' | 'cancel') => {
+      const nav = pendingNav;
+      setPendingNav(null);
+      if (!nav || action === 'cancel') return;
+      if (action === 'save-then-go') {
+        const ok = saveRef.current ? await saveRef.current() : false;
+        if (!ok) return; // 保存失败：停留当前文件（错误已显示在编辑器状态栏）
+      }
+      commitOpenFile(nav.filePath, nav.line);
+    },
+    [pendingNav, commitOpenFile],
+  );
 
   const closeProject = useCallback(async () => {
     if (!kernel) return;
@@ -125,6 +173,8 @@ export function App(): ReactElement {
     setIndex(null);
     setActiveFile(null);
     setReveal(null);
+    setEditorDirty(false);
+    setPendingNav(null);
     setPendingApproval(null);
     setPhase('welcome');
     setRecent(await kernel.project.recent());
@@ -154,6 +204,8 @@ export function App(): ReactElement {
         activeFile={activeFile}
         reveal={reveal}
         onOpenFile={openFile}
+        onDirtyChange={onDirtyChange}
+        registerSave={registerSave}
         onClose={closeProject}
       />
     ) : (
@@ -172,6 +224,7 @@ export function App(): ReactElement {
     <>
       {body}
       {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
+      {pendingNav ? <UnsavedConfirmDialog filePath={activeFile ?? ''} onDecide={decideUnsaved} /> : null}
     </>
   );
 }

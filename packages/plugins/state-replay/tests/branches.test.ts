@@ -192,3 +192,100 @@ describe('宽容性', () => {
     expect(got[0]!.takenLine).toBe(20);
   });
 });
+
+describe('CASE TO 区间 AND 组（v0.2 第十二批修复 H1）', () => {
+  /** 带 conjunction 标记的谓词（TO 半边） */
+  function apred(line: number, outcome: ReplayOutcome, conjunction: 'and' | undefined): PredicateReplay {
+    return { kind: 'CASE', text: '240 TO 359', line, expr: { kind: 'opaque', text: 'TO' }, outcome, ...(conjunction ? { conjunction } : {}) };
+  }
+
+  it('TO 半边 OR 误判复现：单边 <= 真不能命中区间（修复后 no-match）', () => {
+    const stmts = cf([
+      ['SELECTCASE', 'TIME', 0, 10],
+      ['CASE', '240 TO 359', 0, 20],
+      ['ENDSELECT', '', 0, 30],
+    ]);
+    // 旧实现：>=240 假 + <=359 真 → 任一真 = 误命中；修复后 AND 组 → 假
+    const got = buildBranchOutcomes(stmts, [apred(20, F, 'and'), apred(20, T, 'and')]);
+    expect(got[0]!.outcome).toBe('no-match');
+    expect(got[0]!.takenLine).toBeNull();
+  });
+
+  it('区间两端都真 → 命中', () => {
+    const stmts = cf([
+      ['SELECTCASE', 'TIME', 0, 10],
+      ['CASE', '240 TO 359', 0, 20],
+      ['ENDSELECT', '', 0, 30],
+    ]);
+    const got = buildBranchOutcomes(stmts, [apred(20, T, 'and'), apred(20, T, 'and')]);
+    expect(got[0]!.outcome).toBe('taken');
+    expect(got[0]!.takenLine).toBe(20);
+  });
+
+  it('AND 组内一边假一边 unknown → 组假（Kleene：false && unknown = false），走 CASEELSE', () => {
+    const stmts = cf([
+      ['SELECTCASE', 'TIME', 0, 10],
+      ['CASE', '240 TO 359', 0, 20],
+      ['CASEELSE', '', 0, 30],
+      ['ENDSELECT', '', 0, 40],
+    ]);
+    const got = buildBranchOutcomes(stmts, [apred(20, F, 'and'), apred(20, U, 'and')]);
+    expect(got[0]!.outcome).toBe('taken');
+    expect(got[0]!.takenLine).toBe(30);
+  });
+
+  it('AND 组内全真但缺信息 → 两真一 unknown → 组未知（阻断整链）', () => {
+    const stmts = cf([
+      ['SELECTCASE', 'TIME', 0, 10],
+      ['CASE', '240 TO 300 TO 359', 0, 20], // 三段区间（合成场景），全 'and'
+      ['CASEELSE', '', 0, 30],
+      ['ENDSELECT', '', 0, 40],
+    ]);
+    const got = buildBranchOutcomes(stmts, [apred(20, T, 'and'), apred(20, T, 'and'), apred(20, U, 'and')]);
+    expect(got[0]!.outcome).toBe('unknown');
+  });
+
+  it('混排（`CASE 1, 240 TO 359, 5`）——OR 组真仍命中，AND 组假不拦截', () => {
+    const stmts = cf([
+      ['SELECTCASE', 'X', 0, 10],
+      ['CASE', '1, 240 TO 359, 5', 0, 20],
+      ['ENDSELECT', '', 0, 30],
+    ]);
+    // ==1 假(OR) + (>=240 假, <=359 真)(AND组=假) + ==5 真(OR) → 命中
+    const got = buildBranchOutcomes(stmts, [
+      pred(20, F, 'CASE'),
+      apred(20, F, 'and'),
+      apred(20, T, 'and'),
+      pred(20, T, 'CASE'),
+    ]);
+    expect(got[0]!.outcome).toBe('taken');
+    expect(got[0]!.takenLine).toBe(20);
+  });
+
+  it('混排反向：AND 组真、OR 组全假 → 命中（组间 OR）', () => {
+    const stmts = cf([
+      ['SELECTCASE', 'X', 0, 10],
+      ['CASE', '1, 240 TO 359, 5', 0, 20],
+      ['ENDSELECT', '', 0, 30],
+    ]);
+    const got = buildBranchOutcomes(stmts, [
+      pred(20, F, 'CASE'),
+      apred(20, T, 'and'),
+      apred(20, T, 'and'),
+      pred(20, F, 'CASE'),
+    ]);
+    expect(got[0]!.outcome).toBe('taken');
+    expect(got[0]!.takenLine).toBe(20);
+  });
+
+  it('向后兼容：无标记老数据按 OR（原有行为不变）', () => {
+    const stmts = cf([
+      ['SELECTCASE', 'X', 0, 10],
+      ['CASE', '240 TO 359', 0, 20],
+      ['ENDSELECT', '', 0, 30],
+    ]);
+    const got = buildBranchOutcomes(stmts, [apred(20, F, undefined), apred(20, T, undefined)]);
+    expect(got[0]!.outcome).toBe('taken');
+    expect(got[0]!.takenLine).toBe(20);
+  });
+});

@@ -23,6 +23,7 @@ import type {
   ControlFlowStatement,
   PredicateReplay,
   ReplayOutcome,
+  ReplayUnknown,
 } from '@kojo/plugin-api';
 
 /** 链内分支区间（行号，1 基；end = 下一个成员行或闭合行） */
@@ -186,27 +187,51 @@ export function buildBranchOutcomes(
         decided = true;
         break;
       }
-      let anyTrue = false;
-      let blocked: PredicateReplay | null = null;
-      for (const p of preds) {
-        if (p.outcome.kind === 'true') {
-          anyTrue = true;
-          break;
+      // 同行谓词归约（v0.2 第十二批修复 H1）：连续 'and' 标记的谓词构成
+      // 一个 AND 组（CASE `a TO b` 的两半边），其余各成 OR 组——语义 =
+      // `CASE 1, 240 TO 359, 5` ≡ `v==1 || (240<=v && v<=359) || v==5`。
+      // AND 组 Kleene：false 主导 → 组假；否则含 unknown → 组未知；否则真。
+      const groups: { outcome: 'true' | 'false' | 'unknown'; unknown?: ReplayUnknown }[] = [];
+      {
+        let i = 0;
+        while (i < preds.length) {
+          if (preds[i]!.conjunction === 'and') {
+            let group: 'true' | 'false' | 'unknown' = 'true';
+            let unknownOf: (typeof groups)[number]['unknown'] | undefined;
+            while (i < preds.length && preds[i]!.conjunction === 'and') {
+              const o = preds[i]!.outcome;
+              if (o.kind === 'false') group = 'false';
+              else if (o.kind === 'unknown' && group !== 'false') {
+                group = 'unknown';
+                unknownOf = o.unknown;
+              }
+              i++;
+            }
+            groups.push({ outcome: group, ...(unknownOf ? { unknown: unknownOf } : {}) });
+          } else {
+            const o = preds[i]!.outcome;
+            groups.push({
+              outcome: o.kind === 'true' ? 'true' : o.kind === 'false' ? 'false' : 'unknown',
+              ...(o.kind === 'unknown' ? { unknown: o.unknown } : {}),
+            });
+            i++;
+          }
         }
-        if (p.outcome.kind === 'unknown' && blocked === null) blocked = p;
       }
+      const anyTrue = groups.some((g) => g.outcome === 'true');
       if (anyTrue) {
         takenLine = m.line;
         outcome = 'taken';
         decided = true;
         break;
       }
-      if (blocked) {
+      const blockedGroup = groups.find((g) => g.outcome === 'unknown');
+      if (blockedGroup) {
         // 本成员全非真但有未知：即使后续成员为真也不能保证走到（前序未知
         // 可能为真）→ 整链走向未知，立即阻断（链语义，与 Kleene 的
         // "后续无法救回"一致）。
         outcome = 'unknown';
-        unknown = blocked.outcome.kind === 'unknown' ? blocked.outcome.unknown : undefined;
+        unknown = blockedGroup.unknown;
         decided = true;
         break;
       }

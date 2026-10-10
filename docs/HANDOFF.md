@@ -1,4 +1,4 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批～第十一批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批～第十二批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
@@ -12,6 +12,7 @@
 > 第九批：分支走向——谓词结果按 IF 链 / SELECTCASE 链折叠，回放面板显示"该状态会走哪个分支"（含可达性传播）；
 > 第十批：口上调用协议——adapter 解析 KOJO_MESSAGE.ERB 路由表 → 槽位语义表，回放面板结构化场景参数输入（协议不可用优雅降级）；
 > 本会话完成 **v0.2 第十一批：存档写侧预研——ByteWriter + serializePayload + 金样本回归，save00 载荷 571,185B 逐字节完全一致（编码器同构达成）；暴露 Int64 精度硬前置（RANDDATA 等），方案 B（rawBytes 保留）写入 §5.17**。
+> 本会话完成 **v0.2 第十二批：审阅修复（依据 docs/CODE-REVIEW-2026-10-10.md）——H1 CASE TO 区间 AND 语义（conjunction 契约 + 三层落地）+ M4 切文件丢内容（确认对话框）+ M5 回放联动闭包 + M2 Rust 编码 had_errors + L1/L3/L4；426 项全绿，回放基线不变**。
 
 ---
 
@@ -91,7 +92,7 @@
   3. **金样本结果**：save00 载荷 **571,185B 字节级完全一致**（编码器同构达成：游程/整数宽度/7-bit/流控制全对）；save01+ **Int64 大数近似不可写回**（RANDDATA SFMT 625 状态 ≈2.8e16，serialize 显式抛拒绝）——**v1.1 注入器硬性前置 = Int64 精度策略**，倾向方案 B（`rawBytes?` 原样复制未修变量 + 被修变量含大数拒绝注入）。
   4. **教训（§九-10 复发）**：联合判别式 narrow 不可靠（writeVar 的 int/str case）——显式守卫。
 - **条件抽取基线**：95,504 函数 / **493,712 谓词（未解析 187 = 0.04%）** / 含依赖函数 31,609 / 依赖条目 164,910 / schema 标注 109,742（恋慕 17,993 / 好感度 480）/ 全量 ~6.2s（冷启动 ~13s）。
-- 测试：**419 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**10 插件**）。
+- 测试：**426 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**10 插件**）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -163,7 +164,7 @@ packages/
 ```bash
 cd D:\DSH\kojo-editor
 pnpm install
-pnpm test               # 419 项（无游戏目录时集成冒烟+金样本自动跳过）
+pnpm test               # 426 项（无游戏目录时集成冒烟+金样本自动跳过）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
 pnpm audit:decoupling   # 必须 ✅（plugins 数 10）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放断言）：
@@ -278,7 +279,17 @@ node tools/smoke-tauri-dom.mjs
 - **save00 载荷 571,185B 字节级完全一致**——编码器同构达成（行驱动游程 / 整数宽度 / 7-bit 前缀 / 流控制）。
 - **Int64 精度硬前置暴露**：RANDDATA（SFMT 625 状态）等大数被读侧近似，写回必坏——serialize 显式抛拒绝；v1.1 注入器倾向方案 B（rawBytes 原样复制 + 被修变量含大数拒绝注入）。
 
-### 6.10 第十二批候选（下一批）
+### 6.10 第十二批（✅ 已完成）：审阅修复（依据 docs/CODE-REVIEW-2026-10-10.md）
+
+**实施结果**：H1 + M2/M4/M5 + L1/L3/L4 落地（架构 §5.18 为权威记录）。
+
+- **H1（高，CASE TO AND 语义）**：契约 `conjunction?: 'and'`（FunctionPredicate + PredicateReplay 透传）→ extract.ts TO 半边打标 → branches.ts 同行"组内 AND（Kleene）/ 组间 OR"；向后兼容（无标记 = OR）。+7 单测；真实语料 3,136 处 TO 区间的分支走向不再"多命中"失真。
+- **M4**：App 层 `requestOpenFile` 守卫 + `UnsavedConfirmDialog`（保存并前往/丢弃/取消）；EditorPane `onDirtyChange`/`registerSave`。
+- **M5**：回放面板 `runReplayRef`（监听 effect 依赖清空，闭包永新）。
+- **M2**：Rust `encode_string` had_errors 拒绝写（防 HTML 实体静默损坏）；`decode_bytes` had_errors 记 stderr 不阻塞浏览。
+- **L1** storage JSON 容错 / **L3** POWER 超 2^53 先拒 / **L4** resolveModel 死代码清理（null 分支不可达）。L2 核实为误报（比较两侧已过 pathKey）；M1/M3 留 v0.3。
+
+### 6.11 第十三批候选（下一批）
 
 - **v1.0 收口（第一优先）**：回放面板协议深化（场景预设）+ 协议覆盖校验规则（签名槽与路由转发不一致）+ 桌面壳真实终端冒烟（沙箱 os error 231 欠账）。
 - **index-603 索引域外函数源（消解剩余 call 368）**：FIRSTTIME 等定义在 kojoPaths 之外——"游戏函数源"通道（扩 index 扫描域 / 按需 parseFile）；多数有副作用，收益需再测量。
@@ -341,7 +352,7 @@ node tools/smoke-tauri-dom.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：419 项 / ✅ / 10 插件）
-3. 读 `docs/ARCHITECTURE.md` §5.8–§5.17 + 本文件 §六
-4. **开始第十二批 / v1.0 收口**（见 §6.9）：v1.0 收口清单（回放面板打磨 / 协议深化场景预设）或 **v1.1 注入器**（Int64 精度方案 B 落地 → 改槽注入 → 金样本含修改回归）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：426 项 / ✅ / 10 插件）
+3. 读 `docs/ARCHITECTURE.md` §5.8–§5.18 + 本文件 §六
+4. **开始第十三批**（见 §6.11）：v1.0 收口清单（回放面板打磨 / 协议深化场景预设）或 **v1.1 注入器**（Int64 精度方案 B 落地 → 改槽注入 → 金样本含修改回归）；另审阅遗留 M1（stop 级联）/ M3（Rust 路径约束）可随 v0.3 排入
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

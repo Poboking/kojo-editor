@@ -138,9 +138,6 @@ class StateView implements ReplayStateView {
     // ---- 变量模型：内置清单优先，数据驱动兜底 ----
     const model = this.resolveModel(name);
     if (isUnknownModel(model)) return model;
-    if (model === null) {
-      return unknownValue('missing-var', `快照中未找到变量：${name}`);
-    }
 
     // ---- 参数归化 + 寻址 ----
     const segs = ref.indices;
@@ -151,7 +148,7 @@ class StateView implements ReplayStateView {
   }
 
   /** 判定变量模型（内置 → 数据兜底）；未知名字返回 ReplayValue 直接作为结果 */
-  private resolveModel(name: string): VarModel | null | ReplayValue {
+  private resolveModel(name: string): VarModel | ReplayValue {
     const builtin = builtinVarModel(name);
     if (builtin) return builtin;
 
@@ -185,11 +182,10 @@ class StateView implements ReplayStateView {
       return unknownValue('other', `变量形态不支持求值：${name}[${inTop.type}]`);
     }
 
-    // 内置清单兜底：已知引擎变量但快照里没有 → 引擎读档 reset 语义 = 0/''
-    // （如条件保存的 MASTERNAME；走到这里说明该角色块确实没写）
-    if (isKnownCharaVariable(name) || isKnownGlobalVariable(name)) {
-      return null; // 由调用方按"已知名 → 默认值"处理
-    }
+    // 未知名字 → missing-var（审阅 L4 清理：原"已知名但快照缺失 → null"
+    // 分支不可达——builtinVarModel 与 isKnown*Variable 检查同一批集合，
+    // 已知名在函数开头就返回 model；快照缺块的默认值语义由
+    // readCharaVar/readGlobalVar 的缺块路径处理）
     return unknownValue('missing-var', `快照中未找到变量：${name}`);
   }
 
@@ -399,8 +395,8 @@ class StateView implements ReplayStateView {
 }
 
 /** 判定 resolveModel 的返回值是否为"直接可用的未知结果" */
-function isUnknownModel(v: VarModel | null | ReplayValue): v is ReplayValue {
-  return v !== null && typeof v === 'object' && 'kind' in v && (v as ReplayValue).kind === 'unknown';
+function isUnknownModel(v: VarModel | ReplayValue): v is ReplayValue {
+  return typeof v === 'object' && 'kind' in v && (v as ReplayValue).kind === 'unknown';
 }
 
 /** 创建状态视图（失败抛 ReplayViewError） */

@@ -91,12 +91,15 @@ function limit(args: number[]): number | string {
   return v;
 }
 
-/** POWER(x, y)：Math.Pow → 截断为 long；NaN / 无穷 / 越界 → unknown */
+/** POWER(x, y)：Math.Pow → 截断为 long；NaN / 无穷 / 超 2^53 / 越界 → unknown */
 function power(args: number[]): number | string {
   if (args.length !== 2) return 'POWER 需要 2 个参数';
+  // 审阅 L3 修复：超 2^53 的中间结果在 Number 域已失真，用失真值判 Int64
+  // 无意义 → 先拒（unknown），不猜测。
   const pow = Math.pow(args[0]!, args[1]!);
   if (Number.isNaN(pow)) return 'POWER 结果为非数值';
   if (!Number.isFinite(pow)) return 'POWER 结果为无穷';
+  if (Math.abs(pow) > Number.MAX_SAFE_INTEGER) return `POWER 结果超出安全整数域(2^53)：${pow}`;
   const trunc = Math.trunc(pow);
   if (!inInt64(trunc)) return `POWER 结果超出 Int64：${pow}`;
   return trunc;

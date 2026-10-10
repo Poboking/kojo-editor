@@ -84,10 +84,14 @@ describe('内置函数 · ABS / SIGN / LIMIT / POWER', () => {
     expect(ev(call('POWER', lit(2), lit(10)))).toEqual({ kind: 'value', value: 1024 });
   });
 
-  it('POWER 溢出 → unknown(builtin)；截断为 long 语义', () => {
-    expect(ev(call('POWER', lit(2), lit(62)))).toEqual({ kind: 'value', value: 4_611_686_018_427_387_904 });
+  it('POWER 超 2^53 / 超 Int64 → unknown(builtin)（L3 修复：不用失真值判 Int64）', () => {
+    // 2^62 超 Number 安全整数域 → 失真值不可信，拒绝（旧实现返回失真数 4.61e18）
+    expect(ev(call('POWER', lit(2), lit(62)))).toEqual({
+      kind: 'unknown',
+      unknown: { code: 'builtin', message: expect.stringContaining('2^53') },
+    });
     const over = ev(call('POWER', lit(2), lit(64)));
-    expect(over).toEqual({ kind: 'unknown', unknown: { code: 'builtin', message: expect.stringContaining('Int64') } });
+    expect(over).toEqual({ kind: 'unknown', unknown: { code: 'builtin', message: expect.stringContaining('2^53') } });
   });
 
   it('字符串参数进整数族 → unknown(builtin)', () => {

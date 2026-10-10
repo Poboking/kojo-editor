@@ -274,14 +274,17 @@ export function createUiStateReplayPlugin(): Plugin {
         }, [archivePath, charaNo]);
 
         // ---- 回放意图（任意插件发起；如导航面板"回放此函数"） ----
+        // 经 ref 调用最新的 runReplay（M5 修复：deps 不含 view 时旧闭包
+        // 会拿到挂接时刻的 view=null，误报"请先选择存档与角色"）。
+        const runReplayRef = useRef<(nameOverride?: string) => void>(null);
         useEffect(() => {
           const un = ctx.bus.on('kojo.replayFunction', (ev) => {
             setFnQuery(ev.functionName);
-            void runReplay(ev.functionName);
+            runReplayRef.current?.(ev.functionName);
           });
           return un;
           // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [archivePath, charaNo, contextText]);
+        }, []);
 
         const runReplay = (nameOverride?: string): void => {
           const name = (nameOverride ?? fnQuery).trim().toUpperCase();
@@ -344,6 +347,7 @@ export function createUiStateReplayPlugin(): Plugin {
             })
             .finally(() => setReplayBusy(false));
         };
+        runReplayRef.current = runReplay;
 
         // ---- 上下文输入即时校验（红字提示，不阻塞输入） ----
         const contextParse = parseCallContextText(contextText);

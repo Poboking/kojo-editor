@@ -84,7 +84,14 @@ class ScopedStorageImpl implements ScopedStorage {
     assertSafeSegment('key', key);
     const raw = await this.backend.read(this.scope, key);
     if (raw === undefined) return undefined;
-    return JSON.parse(raw) as T;
+    try {
+      return JSON.parse(raw) as T;
+    } catch (e: unknown) {
+      // 损坏的存储文件不致命：记日志 + 视为缺失（审阅 L1 修复；
+      // recent 列表等非关键数据不该让整个存储域不可用）
+      console.warn(`[storage] corrupted JSON in ${this.scope}/${key}: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
   }
 
   async set<T = unknown>(key: string, value: T): Promise<void> {

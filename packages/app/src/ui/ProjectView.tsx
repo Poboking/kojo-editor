@@ -14,6 +14,10 @@ interface Props {
   activeFile: string | null;
   reveal: RevealTarget | null;
   onOpenFile: (path: string) => void;
+  /** 编辑器脏状态上抛（切换文件确认用，审阅 M4 修复） */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** 保存句柄注册（"保存并前往"流程用） */
+  registerSave?: (fn: (() => Promise<boolean>) | null) => void;
   onClose: () => void;
 }
 
@@ -25,6 +29,8 @@ export function ProjectView({
   activeFile,
   reveal,
   onOpenFile,
+  onDirtyChange,
+  registerSave,
   onClose,
 }: Props): ReactElement {
   const panels = kernel.slots.query('ui.panel');
@@ -73,7 +79,14 @@ export function ProjectView({
 
         <main className="editor-host">
           {activeFile ? (
-            <EditorPane kernel={kernel} filePath={activeFile} revealLine={reveal?.line} revealNonce={reveal?.nonce} />
+            <EditorPane
+              kernel={kernel}
+              filePath={activeFile}
+              revealLine={reveal?.line}
+              revealNonce={reveal?.nonce}
+              onDirtyChange={onDirtyChange}
+              registerSave={registerSave}
+            />
           ) : (
             <div className="empty-state">
               <p>从左侧选择一个口上文件开始编辑</p>

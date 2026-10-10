@@ -136,6 +136,14 @@ export interface FunctionPredicate {
    * 仅明细视图填充（聚合视图不保留）。
    */
   context?: string[];
+  /**
+   * 同行谓词间的合取标记（v0.2 第十二批修复 H1）。
+   * CASE 的 `a TO b` 区间展开为 `subject >= a` 与 `subject <= b` 两条
+   * 同行谓词，其真实语义是 **AND**（`a <= v && v <= b`）——缺省（undefined）
+   * 表示同行 OR（逗号列表的"任一命中"）。分支折叠按"同行内：AND 组
+   * 先归约、组间再 OR"消费；向后兼容（无标记的老数据按 OR）。
+   */
+  conjunction?: 'and';
 }
 
 /**

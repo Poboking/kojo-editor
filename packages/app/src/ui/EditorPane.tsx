@@ -19,6 +19,10 @@ interface Props {
   revealLine?: number;
   /** 定位序号：同一文件重复定位时变化以触发重新滚动 */
   revealNonce?: number;
+  /** 脏状态上抛（宿主据此在切换文件前弹确认，审阅 M4 修复） */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** 注册保存句柄（宿主"保存并前往"流程用；卸载/换文件时以 null 注销） */
+  registerSave?: (fn: (() => Promise<boolean>) | null) => void;
 }
 
 /**
@@ -28,7 +32,7 @@ interface Props {
  * - 支持外部定位（revealLine）：打开即滚动到指定行，供"点击校验问题跳转"消费。
  * - 行级装饰（`ui.editor.decorator` 槽）为后续交付物。
  */
-export function EditorPane({ kernel, filePath, revealLine, revealNonce }: Props): ReactElement {
+export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyChange, registerSave }: Props): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const originalRef = useRef<string>('');
@@ -56,9 +60,9 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce }: Props)
     applyReveal();
   }, [revealLine, revealNonce, filePath, applyReveal]);
 
-  const save = useCallback(async () => {
+  const save = useCallback(async (): Promise<boolean> => {
     const ed = editorRef.current;
-    if (!ed || savingRef.current) return;
+    if (!ed || savingRef.current) return false;
     const text = ed.getValue();
     savingRef.current = true;
     try {
@@ -67,12 +71,23 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce }: Props)
       setDirty(false);
       setError(null);
       setStatus(`已保存 ${new Date().toLocaleTimeString()}`);
+      return true;
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       savingRef.current = false;
     }
   }, [kernel, filePath]);
+
+  // 脏状态上抛 + 保存句柄注册（审阅 M4 修复）
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    registerSave?.(save);
+    return () => registerSave?.(null);
+  }, [save, registerSave]);
 
   // 编辑器实例（仅一次）
   useEffect(() => {

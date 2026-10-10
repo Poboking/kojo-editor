@@ -102,11 +102,14 @@ function splitToRange(s: string): [string, string] | null {
   return null;
 }
 
-/** 展开一条 CASE 为若干谓词 */
-function expandCase(stmt: ControlFlowStatement, subject: ConditionExpr | null): { expr: ConditionExpr; line: number }[] {
+/** 展开一条 CASE 为若干谓词（conjunction = 同行 AND 标记，见 FunctionPredicate） */
+function expandCase(
+  stmt: ControlFlowStatement,
+  subject: ConditionExpr | null,
+): { expr: ConditionExpr; line: number; conjunction?: 'and' }[] {
   const raw = stmt.expression.trim();
   if (raw.length === 0) return [];
-  const out: { expr: ConditionExpr; line: number }[] = [];
+  const out: { expr: ConditionExpr; line: number; conjunction?: 'and' }[] = [];
 
   // CASE IS >= 3 （比较形式）
   const isM = /^IS\b\s*(.*)$/is.exec(raw);
@@ -130,8 +133,10 @@ function expandCase(stmt: ControlFlowStatement, subject: ConditionExpr | null): 
     if (range && subject) {
       const lo = parseExpression(range[0]);
       const hi = parseExpression(range[1]);
-      out.push({ expr: { kind: 'binary', op: '>=', left: subject, right: lo }, line: stmt.line });
-      out.push({ expr: { kind: 'binary', op: '<=', left: subject, right: hi }, line: stmt.line });
+      // H1（审阅 2026-10-10）：TO 区间语义是 AND（a <= v && v <= b），
+      // 两条半边谓词打 'and' 标记；分支折叠层按"组内 AND、组间 OR"归约。
+      out.push({ expr: { kind: 'binary', op: '>=', left: subject, right: lo }, line: stmt.line, conjunction: 'and' });
+      out.push({ expr: { kind: 'binary', op: '<=', left: subject, right: hi }, line: stmt.line, conjunction: 'and' });
       continue;
     }
     const value = parseExpression(piece);
@@ -415,6 +420,7 @@ export function collectPredicates(
             expr: p.expr,
             line: p.line,
             depth: s.depth,
+            ...(p.conjunction ? { conjunction: p.conjunction } : {}),
             ...(opts.contextOf ? { context: opts.contextOf(s.line) } : {}),
           });
         }

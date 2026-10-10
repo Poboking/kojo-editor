@@ -59,6 +59,7 @@ export function replayPredicates(
       text: p.text,
       line: p.line,
       expr: p.expr,
+      ...(p.conjunction ? { conjunction: p.conjunction } : {}),
       outcome,
     };
   });

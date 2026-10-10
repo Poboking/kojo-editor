@@ -201,15 +201,25 @@ fn encoding_for(name: &str) -> Result<&'static encoding_rs::Encoding, String> {
 }
 
 /// 字节 → 字符串（BOM 由 encoding_rs decode 自动剥离）。
+/// 注意：Shift-JIS 等非严格解码遇无法映射字节会替换为 U+FFFD（`had_errors`
+/// 当前未上抛——只读浏览不宜硬阻塞；写回时由 `encode_string` 的
+/// had_errors 检查兜底，U+FFFD 无法再编码 → 拒绝保存，损坏不落盘）。
 #[tauri::command]
 fn decode_bytes(data: String, encoding: String) -> Result<String, String> {
     let bytes = B64.decode(data).map_err(|e| e.to_string())?;
     let enc = encoding_for(&encoding)?;
-    let (text, _actual, _had_errors) = enc.decode(&bytes);
+    let (text, _actual, had_errors) = enc.decode(&bytes);
+    if had_errors {
+        // 显式记录（stderr），不静默；文本仍返回供只读浏览
+        eprintln!("[decode_bytes] {encoding}: replacement chars present (input not fully valid)");
+    }
     Ok(text.into_owned())
 }
 
 /// 字符串 → 字节；`utf-8-bom` 显式加 BOM。
+/// 审阅 M2 修复（2026-10-10）：encoding_rs 对不可映射字符默认输出 HTML
+/// numeric entity（`&#NNNN;`），静默写入即数据损坏（引擎读为字面乱码）。
+/// 有 had_errors 一律拒绝并报错，由调用方提示"内容含该编码无法表示的字符"。
 #[tauri::command]
 fn encode_string(text: String, encoding: String) -> Result<String, String> {
     let buf: Vec<u8> = match encoding.as_str() {
@@ -221,7 +231,12 @@ fn encode_string(text: String, encoding: String) -> Result<String, String> {
         }
         other => {
             let enc = encoding_for(other)?;
-            let (encoded, _, _) = enc.encode(&text);
+            let (encoded, _, had_errors) = enc.encode(&text);
+            if had_errors {
+                return Err(format!(
+                    "内容含 {other} 无法表示的字符（如简体字/Emoji 被替换为 HTML 实体），已拒绝写入以防乱码；请先移除这些字符或将文件转为 UTF-8"
+                ));
+            }
             encoded.into_owned()
         }
     };
