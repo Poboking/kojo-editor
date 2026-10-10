@@ -453,5 +453,5 @@ node tools/smoke-tauri-ipc.mjs
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：520 项 / ✅ / 12 插件）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.25 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：v1.0 收口余项（协议覆盖校验规则：签名槽与路由转发不一致）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；**BUG-5 file.changed 事件链**（payload 契约与注入器写链路一并设计，见 §6.18）
+4. **下一批候选**：v1.0 收口余项（协议覆盖校验规则：签名槽与路由转发不一致）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；**BUG-5 file.changed 事件链**（payload 契约与注入器写链路一并设计，见 §6.18）；**v0.3 语法糖**（路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md`，首批评 = S1 指令分布 dump + sugar 契约）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`
