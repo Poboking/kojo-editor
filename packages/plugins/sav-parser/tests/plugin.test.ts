@@ -230,6 +230,10 @@ describe('SnapshotSourceEngine 扫描行为', () => {
         return out;
       },
       stat: async () => null,
+      writeBytes: async () => {
+        throw new Error('writeBytes not wired in this test');
+      },
+      backup: async () => null,
     });
   }
 
@@ -300,6 +304,10 @@ describe('SnapshotSourceEngine 扫描行为', () => {
       },
       listDir: async () => [{ name: 'save00.sav', path: '/g1/sav/save00.sav', isDirectory: false }],
       stat: async () => null,
+      writeBytes: async () => {
+        throw new Error('writeBytes not wired in this test');
+      },
+      backup: async () => null,
     });
 
     const scanPromise = engine.scan(); // 在途，卡在 readBytes

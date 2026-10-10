@@ -106,7 +106,10 @@ describe('eraTW adapter · loadProject', () => {
     expect(project.adapterId).toBe('eratw');
     expect(project.kojoPaths).toEqual(['/game/ERB/口上・メッセージ関連/個人口上']);
     expect(project.savDir).toBe('/game/sav');
-    expect(project.writablePaths).toEqual(['/game/ERB/口上・メッセージ関連/個人口上']);
+    expect(project.writablePaths).toEqual([
+      '/game/ERB/口上・メッセージ関連/個人口上',
+      '/game/sav', // v0.2 第十五批：注入器写档需要
+    ]);
 
     const reimu = project.charaIndex.get(1);
     expect(reimu?.name).toBe('博丽 灵梦');

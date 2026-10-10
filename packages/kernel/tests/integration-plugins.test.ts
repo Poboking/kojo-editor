@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as nodeJoin } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import type {
   ConventionLinterService,
   ErbParserService,
   SnapshotSourceService,
+  SnapshotWriteService,
   StateReplayService,
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
@@ -384,6 +385,49 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           `置信度 exact ${exact} / partial ${partial} / unknown ${allUnknown} | ` +
           `未知分类 ${[...unknownByCode.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(' ')} | ` +
           `DAY=${day.kind === 'value' ? day.value : '?'} 好感(CFLAG:2)=${favor.kind === 'value' ? favor.value : '?'}`,
+      );
+
+      // 9. 注入写链路（v0.2 第十五批）：双闸 + 备份 + 回读验证（写目标 = 副本，绝不碰真实档）
+      const writer = kernel.services.get<SnapshotWriteService>(WellKnownServices.SnapshotWriter);
+      expect(writer).toBeTruthy();
+
+      // 9.1 第一道闸：测试未批准任何 writablePaths → 真实档路径显式拒绝（不静默）
+      await expect(writer.inject(save03e!.path, {})).rejects.toThrow(/not allowed/i);
+
+      // 9.2 副本端到端：save00 字节复制到 appData 临时域并放行，标量注入 → 回读验证
+      kernel.io.setWritableRoots([appData]);
+      const copyPath = nodeJoin(appData, 'inject-copy.sav');
+      writeFileSync(copyPath, readFileSync(nodeJoin(SMOKE_DIR!, 'sav', 'save00.sav')));
+      const archCopy = await snapshots.parse(copyPath, { keepArrayCells: true, keepRaw: true });
+      const block0 = archCopy.chars![0]!;
+      const scalar0 = block0.vars.find((v) => v.type === 'int');
+      expect(scalar0).toBeTruthy();
+      const injectOverrides = {
+        chars: new Map([[block0.index, new Map([[scalar0!.key, 424242]])]]),
+      };
+      const injected = await writer.inject(copyPath, injectOverrides);
+      expect(injected.path).toBe(copyPath);
+      expect(injected.verifiedCount).toBe(1);
+      expect(injected.backupPath).toBeTruthy(); // 写前备份（{appData}/backup/）
+      const archAfter = await snapshots.parse(copyPath, { keepArrayCells: true });
+      const hitVar = archAfter.chars![0]!.vars.find((v) => v.key === scalar0!.key)!;
+      expect((hitVar as { value: number }).value).toBe(424242);
+
+      // 9.3 Int64 守卫：大数注入显式拒绝（副本字节零改动——守卫先于备份与写盘）
+      const sizeBefore = injected.byteSize;
+      await expect(
+        writer.inject(copyPath, { chars: new Map([[block0.index, new Map([[scalar0!.key, 2 ** 60]])]]) }),
+      ).rejects.toThrow(/安全整数/);
+      const archGuard = await snapshots.parse(copyPath, { keepArrayCells: true });
+      const guardVar = archGuard.chars![0]!.vars.find((v) => v.key === scalar0!.key)!;
+      expect((guardVar as { value: number }).value).toBe(424242); // 仍是上一次注入值
+      void sizeBefore;
+
+      // eslint-disable-next-line no-console
+      console.log(
+        `[smoke] 注入写链路：副本标量注入 ${injected.verifiedCount} 项验证通过 ` +
+          `（${injected.byteSize}B，备份 ${injected.backupPath ? '已建' : '无'}）；` +
+          `越权拒绝与 Int64 守卫各 1 项 ✓`,
       );
 
       await kernel.stop();

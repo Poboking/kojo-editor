@@ -20,6 +20,7 @@ export default defineConfig({
       '@kojo/plugin-ui-state-replay': r('../plugins/ui-state-replay/src/index.ts'),
       '@kojo/plugin-ui-kojo-navigator': r('../plugins/ui-kojo-navigator/src/index.ts'),
       '@kojo/plugin-ui-archive-browser': r('../plugins/ui-archive-browser/src/index.ts'),
+      '@kojo/plugin-ui-snapshot-injector': r('../plugins/ui-snapshot-injector/src/index.ts'),
       '@kojo/plugin-ui-status': r('../plugins/ui-plugin-status/src/index.ts'),
     },
   },

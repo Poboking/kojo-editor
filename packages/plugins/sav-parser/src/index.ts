@@ -7,7 +7,8 @@
  * - 本插件 = 引擎级通用二进制协议解析（跨游戏一致），**零游戏知识**；
  * - 项目侧语义（存档目录在哪）由 game adapter 经 `GameProject.savDir` 提供，
  *   本插件只消费、不解释（无此字段 → 扫描得空结果，显式呈现）；
- * - 纯读先行；写 / 注入（架构文档 §5.5 状态注入器）随 v1.1 扩展。
+ * - 读（snapshot.source）与写（snapshot.writer，v0.2 第十五批注入链路）职责分离，
+ *   但共用同一引擎实例——写链路含 Int64 守卫 / 双闸 / 备份 / 回读验证。
  *
  * 响应式：订阅 `project.opened` 自动扫描存档目录（浅解析列档，不阻塞事件）；
  * `project.closed` 清空。深解析由消费者按需调用 `parse(path)`。
@@ -20,8 +21,8 @@ import { SnapshotSourceEngine } from './engine';
 export function createSavParserPlugin(): Plugin {
   return {
     id: 'sav-parser',
-    version: '0.2.0',
-    provides: [WellKnownServices.SnapshotSource],
+    version: '0.3.0',
+    provides: [WellKnownServices.SnapshotSource, WellKnownServices.SnapshotWriter],
     requires: [KernelServices.IO, KernelServices.Project],
     activate(ctx) {
       const io = ctx.inject<FileIO>(KernelServices.IO);
@@ -33,9 +34,13 @@ export function createSavParserPlugin(): Plugin {
         readBytes: (p) => io.readBytes(p),
         listDir: (p) => io.listDir(p),
         stat: (p) => io.stat(p),
+        writeBytes: (p, d) => io.writeBytes(p, d),
+        backup: (p) => io.backup(p),
       });
 
+      // 读写职责分离：只读消费者依赖 snapshot.source；注入面板依赖 snapshot.writer
       ctx.provide(WellKnownServices.SnapshotSource, engine);
+      ctx.provide(WellKnownServices.SnapshotWriter, engine);
 
       const scanSafely = (): void => {
         void engine.scan().catch((err: unknown) => {
@@ -57,3 +62,5 @@ export { SnapshotSourceEngine, type SnapshotEngineDeps } from './engine';
 export { parseArchive, FORMAT_VERSION, MAGIC_GZIP, MAGIC_RAW } from './parse';
 export { ByteReader, ArchiveParseError } from './binary';
 export { gunzipBytes } from './gunzip';
+export { gzipBytes, assembleArchiveFile } from './container';
+export { verifyOverrides, type VerifyReport } from './verify';

@@ -65,6 +65,9 @@ importers:
       '@kojo/plugin-ui-kojo-navigator':
         specifier: workspace:*
         version: link:../plugins/ui-kojo-navigator
+      '@kojo/plugin-ui-snapshot-injector':
+        specifier: workspace:*
+        version: link:../plugins/ui-snapshot-injector
       '@kojo/plugin-ui-state-replay':
         specifier: workspace:*
         version: link:../plugins/ui-state-replay
@@ -194,6 +197,16 @@ importers:
         version: 19.3.0
 
   packages/plugins/ui-plugin-status:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+    devDependencies:
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+
+  packages/plugins/ui-snapshot-injector:
     dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*

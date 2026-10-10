@@ -33,10 +33,17 @@ export const WellKnownServices = {
   ConditionExtractor: 'condition.extractor',
   /**
    * 快照来源服务（v0.2 第四批）：存档二进制解析（只读）+ 存档目录扫描。
-   * 格式为引擎级通用二进制协议（跨游戏一致）；写/注入（架构文档 §5.5）随 v1.1。
-   * 消费者：state-replay（v1.0）/ 归档浏览器。
+   * 格式为引擎级通用二进制协议（跨游戏一致）。
+   * 消费者：state-replay（v1.0）/ 归档浏览器 / 注入面板。
    */
   SnapshotSource: 'snapshot.source',
+  /**
+   * 快照注入写服务（v0.2 第十五批）：改槽覆盖 → 重序列化（raw passthrough +
+   * Int64 守卫）→ 容器组装 → 写前备份 → 内核 io 写入（双闸）→ 回读验证。
+   * 读写职责分离：只读消费者只依赖 `snapshot.source`，本服务额外要求写权限。
+   * 消费者：注入面板（ui-snapshot-injector）。
+   */
+  SnapshotWriter: 'snapshot.writer',
   /**
    * 状态回放服务（v0.2 第五批）：快照状态视图 + 条件谓词近似求值
    * （置信度三档标注，架构文档 §5.3）。消费 `snapshot.source` + `condition.extractor`；

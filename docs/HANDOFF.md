@@ -1,4 +1,4 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批～第十七批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批～第十七批 ✅ / v1.1 第十六批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
@@ -16,6 +16,8 @@
 > 本会话完成 **v0.2 第十三批（双线）：① sav-parser Int64 精度方案 B 落地（rawBytes passthrough）——六档金样本 passthrough 全部字节级一致（含此前被拒的 save01-05）+ 标量/单元补丁注入 + Int64 守卫；纠正第十一批结论：RANDDATA 是 u32 序列逐值安全，真雷在 RESULT/CFLAG/GIFT_GOT（IMPLEMENTATION-LOG §5.19）；② TRAE 并行交付 ui-archive-browser 归档浏览器（第 11 插件，commit ca1a323）；456 项全绿**。
 > 本会话完成 **v0.2 第十五批（v1.0 收口线一）：回放面板场景预设**——把手填的调用上下文槽位一等化为「场景」（命名保存 / 下拉切换 / 一键应用 / 删除）；`ReplayScene` 纯逻辑（+15 单测）+ `ctx.storage` 独立域（`ui-state-replay`）+ 协议降级（建议名 label 拼接 / 不可用则纯手填）；应用后槽位来源标 manual（作者假设，非引擎事实），与 §5.20 的 assumption 徽章并存；回放引擎与 condition-extractor 契约零改动；485 项全绿（IMPLEMENTATION-LOG §5.22）。
 > 本会话完成 **v0.2 第十七批：桌面壳端到端冒烟——tauri dev 真实 IPC 下跑通 Rust 双闸 a–e 全清单（域内放行 / 域外 fail-closed 拒绝 / 关项目后回落 appDataDir），固化自动化探针 `tools/smoke-tauri-ipc.mjs` + 手工清单 `tools/smoke-tauri-manual.md`；沙箱 os error 231 未复现；零源码改动（IMPLEMENTATION-LOG §5.24）**。
+> 本会话完成 **v1.1 第十六批：存档注入器用户面——写链路端到端**——新服务 `snapshot.writer`（契约 `SnapshotWriteService`，读写职责分离）+ sav-parser 0.3.0（容器组装 container.ts / 回读验证 verify.ts / engine.inject：Int64 守卫先于备份 → 先备份 → 写盘 → 回读验证，失败报错携带备份路径）；新插件 `ui-snapshot-injector`（第 12 插件：选档→定位变量→编辑→diff→两步确认注入）；修复 eratw-adapter writablePaths 缺 sav 目录的真实缺口；kernel 集成第 9 节（appData 副本端到端 + 越权拒绝 + Int64 守卫，绝不写真实游戏档）；509 项全绿（IMPLEMENTATION-LOG §5.23）。
+
 
 ---
 
@@ -355,6 +357,20 @@ node tools/smoke-tauri-ipc.mjs
 - **验证**：485 项全绿（+15）/ typecheck root+app ✅ / `audit:decoupling` ✅（11 插件）/ 真实工程集成冒烟 ✅。
 - 边界：仅 `packages/plugins/ui-state-replay/**` + docs。
 
+### 6.16 第十六批（v1.1，✅ 已完成）：存档注入器用户面（写链路端到端）
+
+**实施结果**：「改槽注入」从引擎能力做成用户可用的写链路（IMPLEMENTATION-LOG §5.23 为权威记录）。批次编号顺延：第十五批编号已被 §6.15 场景预设占用。
+
+- **契约**：`plugin-api` 新增 `SnapshotWriteService { inject(path, overrides) }`（服务键 `snapshot.writer`）+ `SnapshotInjectionResult { path, backupPath, byteSize, verifiedCount }`；只读消费者不感知写权限。
+- **sav-parser 0.3.0**：`container.ts`（16B 头 + gzip/raw 正文，Web 标准 CompressionStream）；`verify.ts`（回读验证：标量值 / CellPatch 全维度下标）；`engine.inject` 安全顺序 = Int64 守卫（先于备份）→ serialize → 组装 → 备份 → 写盘 → 回读 parse + verify，mismatch 抛错携带备份路径。
+- **缺口修复**：eratw-adapter `writablePaths` 原缺 sav 目录 → 注入会被 kernel 第一道闸拒绝；已补提议（批准弹窗流程复用，内核/Rust 零改动）。
+- **第 12 插件 `ui-snapshot-injector`**：`panel-logic.ts` 纯逻辑（+16 单测）+ 面板（档位下拉复用 archive-browser 列档数据流 / `kojo.snapshotSelected` 预填 / 作用域+变量过滤 / diff 清单 armed 两步确认 / 成功后重解析显示落盘新值）；登记四处 + bootstrap（order 71）。
+- **回归**：kernel 集成第 9 节（appData 副本端到端注入 + 越权拒绝 + Int64 守卫）；golden-roundtrip 容器级注入用例（save00 动态标量 → gzip 组装 → 回读 verified）。
+- **验证**：509 项全绿（+39）/ typecheck root+app ✅ / audit 12 插件 ✅ / 真实冒烟 ✅（副本 56744B 注入验证 + 备份已建；回放基线不变 3741/836）/ app vite build ✅。
+- 边界：kernel/Rust 源码零改动（仅测试）；未碰 `ui-state-replay/**`。
+
+---
+
 ### 6.17 第十七批（✅ 已完成）：桌面壳端到端冒烟（Rust 双闸真实 IPC 验证）
 
 **实施结果**：还掉 C7/M3（§6.14）端到端欠账 + 固化自动化探针（IMPLEMENTATION-LOG §5.24 为权威记录）。
@@ -421,7 +437,7 @@ node tools/smoke-tauri-ipc.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：485 项 / ✅ / 11 插件）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：509 项 / ✅ / 12 插件）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.21 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：注入器用户面（并行线推进中）+ v1.0 收口余项（协议覆盖校验规则：签名槽与路由转发不一致）；审阅遗留 M1（stop 级联）随 v0.3 排入
+4. **下一批候选**：v1.0 收口余项（协议覆盖校验规则：签名槽与路由转发不一致）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；审阅遗留 M1（stop 级联）随 v0.3 排入
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

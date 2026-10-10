@@ -232,11 +232,54 @@ export interface ArchiveOverrides {
   chars?: ReadonlyMap<number, ReadonlyMap<string, ArchiveOverrideValue>>;
 }
 
+// ---------------------------------------------------------------------------
+// 注入写侧（v0.2 第十五批：改槽注入端到端写链路）
+// ---------------------------------------------------------------------------
+
+/** 注入写盘结果（回读验证已通过才返回；失败显式抛错并提示备份位置） */
+export interface SnapshotInjectionResult {
+  /** 写入的存档路径 */
+  path: string;
+  /** 写前备份路径（内核 io backup；原文件不存在时为 null） */
+  backupPath: string | null;
+  /** 写盘总字节数（含 16 字节容器头） */
+  byteSize: number;
+  /** 回读验证核对过的覆盖条目数（标量 1 条 / 单元补丁逐条计） */
+  verifiedCount: number;
+}
+
+/**
+ * 快照注入写服务（服务键 `snapshot.writer`）。
+ *
+ * 职责（实现方 = sav-parser，游戏无关）：接收覆盖集 → 深解析（keepRaw）→
+ * serializePayload（未修变量 passthrough + Int64 守卫）→ 容器组装 →
+ * 写前备份 → 内核 io 写入（双闸：writablePaths + 宿主写允许域）→
+ * 回读解析并断言每个覆盖值落盘。
+ *
+ * 安全语义：
+ * - 写入目标必须落在内核 io 的 writablePaths 内（第一道闸）与宿主写允许域内
+ *   （第二道闸），越权抛 `WriteNotAllowedError`；覆盖集含不安全整数时
+ *   serializePayload 显式抛错（损坏不落盘）；
+ * - 覆盖原文件前必先复制备份（kernel io backup 目录，保留多版）；
+ * - 回读验证失败视为致命错误（显式抛错并携带备份路径），绝不静默。
+ */
+export interface SnapshotWriteService {
+  /**
+   * 把覆盖集注入到指定存档文件（原文件覆盖写）。
+   * @param path 存档文件路径（须在可写域内）
+   * @param overrides 覆盖集（未列出的变量一律原样 passthrough）
+   * @throws `WriteNotAllowedError` 路径越权 / `ArchiveParseError` Int64 守卫
+   *         或协议错误 / 回读验证失败（消息含备份位置）
+   */
+  inject(path: string, overrides: ArchiveOverrides): Promise<SnapshotInjectionResult>;
+}
+
 /**
  * 快照来源服务（服务键 `snapshot.source`）。
  *
- * v1.0 的 state-replay 与归档浏览器消费本服务；写 / 注入（架构文档 §5.5）
- * 随 v1.1 扩展本服务的写侧能力。
+ * v1.0 的 state-replay 与归档浏览器消费本服务；写侧已拆分为独立的
+ * `snapshot.writer` 服务（v0.2 第十五批，读写职责分离——只读消费者
+ * 不必依赖写侧的内核 io 写权限）。
  */
 export interface SnapshotSourceService {
   /** 扫描当前项目的存档目录（浅解析列档；无项目 / 无目录时返回空结果） */

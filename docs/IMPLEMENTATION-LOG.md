@@ -443,6 +443,73 @@
 
 ---
 
+### 5.23 存档注入器用户面（v1.1 实施记录：写链路端到端）
+
+> 承接 §5.19（Int64 方案 B）与 §5.21（Rust 写允许域第二道闸）：把「改槽注入」从引擎能力做成
+> 用户可用的端到端写链路。批次编号顺延为第十六批（第十五批已被 §5.22 场景预设占用）。
+> 边界：未动 kernel/Rust 源码（仅测试）；未碰 `ui-state-replay/**`。
+
+#### 契约（plugin-api，读写职责分离）
+
+- `SnapshotWriteService { inject(path, overrides): Promise<SnapshotInjectionResult> }`，服务键
+  `snapshot.writer`（`WellKnownServices` 新增）。只读消费者继续只依赖 `snapshot.source`，不必感知写权限。
+- `SnapshotInjectionResult { path, backupPath, byteSize, verifiedCount }`——回读验证通过后返回，
+  `backupPath` 供失败时提示用户备份位置。
+
+#### sav-parser 写侧（0.3.0）
+
+- **`container.ts`**：`assembleArchiveFile(payload, format)` 按 16 字节明文头（magic 8B + version u32 +
+  保留 u32）+ 正文组装容器；`gzipBytes` 用 Web 标准 `CompressionStream`（不引 node:zlib）；
+  `magicFor(format)`：原档 gzip 正文沿用 GZIP 魔数、raw 正文沿用 RAW 魔数（**踩坑 1**：gunzip 后
+  的载荷再用 GZIP 魔数重打包会让 parse 二次解压报 Z_DATA_ERROR——裸载荷必须配 RAW 魔数）。
+- **`verify.ts`**：`verifyOverrides(archive, overrides)` 逐条比对——标量值相等 / 数组 CellPatch 按
+  全维度下标（`index.join(',')`）；vars 作用域按 vars→globalVars→emVars 首个命中；chars 按 block
+  index。返回 `{ checked, mismatches }`，mismatch 含变量名/下标/期望/实际。
+- **`engine.inject`** 编排顺序即安全顺序：读原档 → parse（keepRaw + 全量 cells）→
+  `serializePayload`（**Int64 守卫在备份之前抛**——损坏输入零副作用）→ 容器组装 → `deps.backup`
+  （先复制备份）→ `deps.writeBytes` → **回读验证**（重新 parse + verifyOverrides；mismatch 非空抛错
+  且错误信息携带备份路径）。越权抛错时备份已存在但未覆盖原档。
+
+#### 真实缺口修复：eratw-adapter writablePaths
+
+- 原提议只含 personalKojo，sav 目录写入会被 kernel 第一道闸拒绝。补上
+  `join(rootDir, ...ERATW.savDir)` 提议（用户批准弹窗流程已存在，内核/Rust 零改动）。
+
+#### 第 12 插件 `ui-snapshot-injector`
+
+- **`panel-logic.ts`**（零 React，+16 单测）：作用域枚举（top/em/char）、变量目录、标量/单元输入
+  解析（int 安全校验 / 维度+范围校验）、`buildOverrides`（cell 补丁按 last-write-wins 追加合并）、
+  `diffRows` / `dedupePending`（同键去重 + `supersededCount`）。
+- **面板流程**：档位下拉（复用 ui-archive-browser 已有列档数据流 `scan.entries`，不重复扫描）→
+  `kojo.snapshotSelected` 事件预填 → 深解析（keepRaw）→ 作用域/变量过滤列表（cap 200；cells 超
+  120 截断标「不可注入」）→ 编辑 → diff 清单 → armed 两步确认（不用 `window.confirm`）→
+  `writer.inject` → 成功后重新深解析显示落盘新值。
+- 登记四处 + bootstrap：package.json / root tsconfig paths / vitest aliases / vite aliases +
+  app package.json deps + `bootstrap.ts` 注册（order 71）。
+
+#### 集成与金样本回归
+
+- kernel 集成测试新增第 9 节：9.1 真实游戏档路径**越权拒绝**（不在 writable roots）；9.2 appData
+  副本端到端注入（`setWritableRoots([appData])` → 注入 424242 → backupPath 存在 → 回读验证通过）；
+  9.3 Int64 守卫拒绝且副本值不变。**绝不写真实游戏档**。
+- golden-roundtrip 新增「容器级注入链路」用例：save00 keepRaw 解析 → 动态定位标量 →
+  serialize+assemble gzip → parse 容器 → verifyOverrides `checked=1 mismatches=[]`。
+
+#### 验证
+
+- `pnpm test` **509 passed**（基线 470 + 39）/ typecheck root+app ✅ / `audit:decoupling` 12 插件 ✅。
+- 真实工程冒烟（KOJO_SMOKE_PROJECT）：注入链路副本验证通过（56744B，备份已建）；越权拒绝与
+  Int64 守卫各 1 项；回放基线不变（未知 3741 / exact 836）。app vite build ✅。
+
+#### 其他踩坑
+
+- **踩坑 2**：synth 合成档 `simpleCharBlock` 的 CFLAG cells 实际下标 `[0]=1`、`[3]=3`（非 [1]=3），
+  「缺失下标」用例需用不存在的下标。
+- **踩坑 3**：回读验证失败用例写全零字节会先命中「未知存档魔数」而非 verify mismatch——测试
+  harness 增加 `writeMode: 'stale'`（原档写回模拟回滚）才能命中真正的回读验证失败路径。
+
+---
+
 ### 5.24 桌面壳端到端冒烟（第十七批实施记录：Rust 双闸真实 IPC 验证 + 自动化探针）
 
 > 编号沿用交接口径「第十七批」。承接 §5.21（Rust 写允许域第二道闸 M3）的**端到端欠账**：此前

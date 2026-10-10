@@ -13,9 +13,11 @@ import { readFileSync } from 'node:fs';
 import { join as nodeJoin } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SnapshotArchive } from '@kojo/plugin-api';
+import { assembleArchiveFile } from '../src/container';
 import { gunzipBytes } from '../src/gunzip';
 import { parseArchive } from '../src/parse';
 import { serializePayload } from '../src/serialize';
+import { verifyOverrides } from '../src/verify';
 
 const SMOKE_DIR = process.env.KOJO_SMOKE_PROJECT;
 
@@ -189,6 +191,41 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
     expect(guarded).toBe(true);
     // eslint-disable-next-line no-console
     console.log(`[golden] 方案 B keepRaw passthrough + 注入：\n  ${report.join('\n  ')}`);
+  }, 240_000);
+
+  it('第十五批：容器级注入链路（gzip 组装 → 解压回读 → 覆盖值逐条验证）', async () => {
+    const savDir = nodeJoin(SMOKE_DIR!, 'sav');
+    const filePath = nodeJoin(savDir, 'save00.sav');
+    const raw = readFileSync(filePath);
+
+    // keepRaw 全量解析（注入链路的读侧前置）
+    const archive = await parseArchive(raw, filePath, { keepArrayCells: true, keepRaw: true });
+    expect(archive.fileType).toBe('normal');
+
+    // 选角色块 0 的首个整数标量作注入目标（动态定位，不硬编码变量名）
+    const block = archive.chars![0]!;
+    const scalar = block.vars.find((v) => v.type === 'int');
+    expect(scalar).toBeTruthy();
+    const overrides = {
+      chars: new Map([[block.index, new Map([[scalar!.key, 424242]])]]),
+    };
+
+    // 完整写链路：serialize → 容器组装（沿用 gzip）→ 直接按存档容器回读
+    const payload = serializePayload(archive, { overrides });
+    const full = await assembleArchiveFile(payload, archive.format);
+    const reparsed = await parseArchive(full, filePath, { keepArrayCells: true });
+    expect(reparsed.remaining).toBe(0);
+
+    // 回读验证：覆盖值真实落盘（与 engine.inject 的验证逻辑同函数）
+    const report = verifyOverrides(reparsed, overrides);
+    expect(report.mismatches).toEqual([]);
+    expect(report.checked).toBe(1);
+    const hit = reparsed.chars![0]!.vars.find((v) => v.key === scalar!.key)!;
+    expect((hit as { value: number }).value).toBe(424242);
+
+    // gzip 容器写回：解压后载荷可再次读出（容器对称性）
+    const body2 = await gunzipBytes(full.subarray(16));
+    expect(body2.length).toBe(payload.length);
   }, 240_000);
 });
 

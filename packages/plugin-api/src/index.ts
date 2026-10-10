@@ -105,8 +105,10 @@ export type {
   ArchiveXmlVariable,
   SnapshotArchive,
   SnapshotArchiveEntry,
+  SnapshotInjectionResult,
   SnapshotScanResult,
   SnapshotSourceService,
+  SnapshotWriteService,
 } from './snapshot';
 
 export type {

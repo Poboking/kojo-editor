@@ -132,7 +132,9 @@ export function createEratwAdapterPlugin(): Plugin {
             kojoPaths: [personalKojo],
             savDir: join(rootDir, ...ERATW.savDir),
             // 提议可写路径（用户批准后由内核 io 放行；见 ProjectService.approveWritablePaths）
-            writablePaths: [personalKojo],
+            // sav 目录随 v0.2 第十五批加入提议：注入器写档需要（kernel 第一道闸
+            // 判定域 = 批准的 writablePaths；Rust 第二道闸本就允许项目根整体）。
+            writablePaths: [personalKojo, join(rootDir, ...ERATW.savDir)],
             charaIndex,
           };
         },

@@ -9,16 +9,23 @@
 
 import type {
   ArchiveParseOptions,
+  ArchiveOverrides,
   DirEntry,
   FileStat,
   GameProject,
   Logger,
   SnapshotArchive,
   SnapshotArchiveEntry,
+  SnapshotInjectionResult,
   SnapshotScanResult,
   SnapshotSourceService,
+  SnapshotWriteService,
 } from '@kojo/plugin-api';
+import { assembleArchiveFile, assertPayloadNonEmpty } from './container';
 import { parseArchive } from './parse';
+import { serializePayload } from './serialize';
+import { ArchiveParseError } from './binary';
+import { verifyOverrides } from './verify';
 
 /** 存档文件扩展名过滤 */
 const ARCHIVE_EXT = /\.sav$/i;
@@ -36,6 +43,10 @@ export interface SnapshotEngineDeps {
   listDir(path: string): Promise<DirEntry[]>;
   /** 文件元信息（内核 io） */
   stat(path: string): Promise<FileStat | null>;
+  /** 原子写字节（内核 io；writablePaths 第一道闸 + 宿主写允许域第二道闸在此强制） */
+  writeBytes(path: string, data: Uint8Array): Promise<void>;
+  /** 写前备份（内核 io；复制到 {appData}/backup/，返回备份路径；原文件不存在时 null） */
+  backup(path: string): Promise<string | null>;
 }
 
 async function mapLimit<T, R>(
@@ -60,7 +71,7 @@ function emptyResult(dir = ''): SnapshotScanResult {
   return { dir, entries: [], scannedAt: Date.now(), durationMs: 0 };
 }
 
-export class SnapshotSourceEngine implements SnapshotSourceService {
+export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWriteService {
   private last: SnapshotScanResult | null = null;
   private inFlight: Promise<SnapshotScanResult> | null = null;
   private readonly listeners = new Set<(result: SnapshotScanResult | null) => void>();
@@ -170,5 +181,56 @@ export class SnapshotSourceEngine implements SnapshotSourceService {
   async parse(path: string, opts?: ArchiveParseOptions): Promise<SnapshotArchive> {
     const bytes = await this.deps.readBytes(path);
     return parseArchive(bytes, path, opts);
+  }
+
+  /**
+   * 改槽注入（v0.2 第十五批，SnapshotWriteService 实现）。
+   *
+   * 链路：读原档 → 深解析（keepRaw + 全量 cells）→ serializePayload
+   * （未修变量 passthrough；Int64 守卫显式抛错）→ 容器组装（沿用原档
+   * gzip/raw 格式）→ **先备份后覆盖**（内核 io backup + writeBytes，
+   * 双闸在 io 与宿主层强制）→ 回读解析逐条断言覆盖值落盘。
+   *
+   * 顺序即安全语义：
+   * - 守卫（Int64 / 协议）在备份**之前**抛——损坏输入不落盘也不产生无谓备份；
+   * - 越权写（WriteNotAllowedError）抛出时备份已存在（无副作用覆盖）；
+   * - 回读验证失败 = 致命错误，显式抛错并携带备份位置，绝不静默。
+   */
+  async inject(path: string, overrides: ArchiveOverrides): Promise<SnapshotInjectionResult> {
+    const t0 = Date.now();
+    const original = await this.deps.readBytes(path);
+    const archive = await parseArchive(original, path, { keepArrayCells: true, keepRaw: true });
+    const payload = serializePayload(archive, { overrides });
+    assertPayloadNonEmpty(payload);
+    const full = await assembleArchiveFile(payload, archive.format);
+
+    const backupPath = await this.deps.backup(path);
+    try {
+      await this.deps.writeBytes(path, full);
+    } catch (err) {
+      this.deps.log.warn(
+        `Snapshot inject: write failed for ${path}${backupPath ? ` (backup at ${backupPath})` : ''}: ${String(err)}`,
+      );
+      throw err;
+    }
+
+    // 回读验证（强制：注入的价值建立在"值确实落盘"上）
+    const reread = await this.deps.readBytes(path);
+    const reparsed = await parseArchive(reread, path, { keepArrayCells: true });
+    const report = verifyOverrides(reparsed, overrides);
+    if (report.mismatches.length > 0) {
+      throw new ArchiveParseError(
+        `注入回读验证失败（${report.mismatches.length} 项不匹配）` +
+          (backupPath ? `——原档已备份于 ${backupPath}` : '（原档无备份）') +
+          `：${report.mismatches.join('；')}`,
+        0,
+      );
+    }
+
+    this.deps.log.info(
+      `Snapshot inject: ${path} — ${report.checked} override(s) verified, ${full.length}B written` +
+        `${backupPath ? `, backup ${backupPath}` : ''} (${Date.now() - t0}ms)`,
+    );
+    return { path, backupPath, byteSize: full.length, verifiedCount: report.checked };
   }
 }
