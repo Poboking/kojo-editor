@@ -8,7 +8,8 @@ export type KernelEventName =
   | 'plugin.statusChanged'
   | 'state.snapshotLoaded'
   | 'editor.revealLocation'
-  | 'kojo.replayFunction';
+  | 'kojo.replayFunction'
+  | 'kojo.snapshotSelected';
 
 export const KERNEL_EVENT_NAMES: ReadonlySet<string> = new Set<KernelEventName>([
   'file.changed',
@@ -19,6 +20,7 @@ export const KERNEL_EVENT_NAMES: ReadonlySet<string> = new Set<KernelEventName>(
   'state.snapshotLoaded',
   'editor.revealLocation',
   'kojo.replayFunction',
+  'kojo.snapshotSelected',
 ]);
 
 type Handler = (payload: unknown) => void;

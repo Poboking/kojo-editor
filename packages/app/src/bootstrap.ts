@@ -9,6 +9,7 @@ import { createStateReplayPlugin } from '@kojo/plugin-state-replay';
 import { createUiConventionReportPlugin } from '@kojo/plugin-ui-convention-report';
 import { createUiKojoNavigatorPlugin } from '@kojo/plugin-ui-kojo-navigator';
 import { createUiStateReplayPlugin } from '@kojo/plugin-ui-state-replay';
+import { createUiArchiveBrowserPlugin } from '@kojo/plugin-ui-archive-browser';
 import { tauriBridge } from './bridge/tauri-bridge';
 
 /**
@@ -34,11 +35,12 @@ export async function bootstrapKernel(): Promise<Kernel> {
       // 状态回放（游戏无关；消费 snapshot.source + condition.extractor；
       // 具名索引字典来自当前 adapter 的 variableSchema）
       createStateReplayPlugin(),
-      // UI：面板（内核状态 + 校验结果 + 函数树导航 + 状态回放）
+      // UI：面板（内核状态 + 校验结果 + 函数树导航 + 状态回放 + 归档浏览）
       createUiStatusPlugin(),
       createUiConventionReportPlugin(),
       createUiKojoNavigatorPlugin(),
       createUiStateReplayPlugin(),
+      createUiArchiveBrowserPlugin(),
     ],
   });
   await kernel.start();

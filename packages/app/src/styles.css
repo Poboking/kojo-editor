@@ -1070,3 +1070,122 @@ code {
 .rp-slot-hint {
   font-size: 10.5px;
 }
+
+/* ========================== 归档浏览器面板（ab-*，v0.2 第十三批） ========================== */
+.panel-archive-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  font-size: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+.ab-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+.ab-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ab-empty {
+  padding: 6px 2px;
+}
+.ab-error {
+  color: var(--red, #e06c75);
+  padding: 2px 4px;
+  white-space: pre-wrap;
+}
+.ab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+.ab-row {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.ab-row.open {
+  border-color: var(--accent, #61afef);
+}
+.ab-row.failed {
+  border-color: var(--red, #e06c75);
+  opacity: 0.85;
+}
+.ab-row-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 3px 5px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.ab-row-btn:hover {
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+}
+.ab-row-head {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.ab-caret {
+  flex: 0 0 auto;
+  width: 12px;
+  color: var(--fg-dim);
+}
+.ab-file {
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.ab-count,
+.ab-size,
+.ab-mtime {
+  font-size: 10.5px;
+}
+.ab-mes {
+  font-size: 10.5px;
+  padding-left: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ab-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 6px 5px 18px;
+}
+.ab-chara-row {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+.ab-badge {
+  font-size: 10.5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.ab-more {
+  font-size: 10.5px;
+}
+.ab-failed-head {
+  font-size: 10.5px;
+  padding: 2px 2px 1px;
+}
+.ab-hint {
+  font-size: 10.5px;
+  padding: 0 2px;
+}

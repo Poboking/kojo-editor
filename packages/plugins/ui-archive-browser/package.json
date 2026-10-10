@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/plugin-ui-archive-browser",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Archive browser panel (ui.panel contribution): lists archive slots from the snapshot.source scan (saveMes summary, character count, size, mtime), expands a capped character-area summary per slot and emits the kernel event kojo.snapshotSelected. Pure presentation - parsing lives in the sav-parser plugin.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0"
+  }
+}
