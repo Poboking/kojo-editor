@@ -940,3 +940,82 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - 逐字符最终渲染串（FORM 展开 `%…%` / `{}` / `\@…\@`）——需 FORM 求值器，与规范 §9 待实测第 4 条同批；
 - 保存期全角空格告警（规范 §8）——仍待后续批次；
 - 糖源码 `角色:` 的**直接从 AST 取**（当前 preview 由产物 `_K{n}` 反推，依赖产物形态）。
+
+---
+
+### 5.31 语法糖 S5 批 · 糖提升建议器（v0.3 批 S5 实施记录：原生 ERB → 糖候选，round-trip 自证）
+
+> **方向与 S2 相反**：S2 = 糖源码 → 原生 ERB（降糖）；S5 = 原生 ERB → 糖候选（升糖）。
+> 设计稿：`docs/LIFT-SUGGESTER-DESIGN.md`。表层语法权威：`docs/SYNTAX-SUGAR-SURFACE-SPEC.md`。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/plugins/kojo-sugar/src/lift.ts` | **新增**（~1200 行） | 识别器 + round-trip 自证 + 四类糖装配 |
+| `packages/plugins/kojo-sugar/src/index.ts` | 修改 | `provides` 追加 `sugar.lift`；装配 `createSugarLiftService`；新增软取助手 `scanFlowOf()` / `parseExprOf()`；导出 lift API |
+| `packages/plugins/kojo-sugar/tests/lift.test.ts` | **新增**（38 项） | 四类糖三路验证 + 降级分支 + mini-game / fixtures/sugar 集成 |
+| `packages/plugin-api/src/sugar.ts` | 修改（additive） | S5 契约块：`SugarLiftKind/Confidence/RoundTrip/Candidate/SkipReason(11)/Skip/Request/Result/Service` + `isVerifiedCandidate` / `hasCandidates` |
+| `packages/plugin-api/src/conditions.ts` | 修改（additive） | `ConditionExtractorService` 新增 `parseExpression(text)`（无状态纯函数，不依赖索引） |
+| `packages/plugins/condition-extractor/src/engine.ts` | 修改 | `ConditionEngine` 实现 `parseExpression`（转出为**服务方法**，便于消费方经服务槽依赖） |
+| `packages/plugins/condition-extractor/src/index.ts` | 修改 | 去掉已无用的 `parseExpression` 导入（插件不再直接导出给交叉 import 用） |
+| `packages/plugins/kojo-sugar/tests/preview.test.ts` | 修改（1 项） | S4 装配断言更新为 `provides` 三项（additive，既有两键顺序不变） |
+
+#### 关键设计决策
+
+1. **自证机制（round-trip or nothing）**：候选的成立**不由形态决定，由转译决定**。对每个候选的糖片段包一个最小 `.kojo` 壳（`角色: {n}` + `时机 指令 {i}：` + tab 缩进的体）→ 调 **本插件的 S2 `transpile`** → 取 `IF LOCAL` 与配对 `ENDIF` **之间**的正文 → 双侧 `normalizeIndent` → 逐字节比对。不一致 → `roundtrip-mismatch` 降级，**不入 `candidates`**。
+   → 误报在结构上不可能发生；代价是有意为之的漏报。`SugarLiftConfidence` 闭集只留 `'verified'` 一档，**契约层面就不允许"可能对"的候选**。
+2. **缩进归一化（`normalizeIndent`）**：原文块可能嵌在任意深度（真实语料的 `IF LOCAL` 体内即 1 级），而自证壳恒把候选放在 1 级 → 绝对缩进不可比。故自证时必须双侧去**公共最小前导缩进**（空行不参与计算）；`extractBody` 取区间**原文**，不逐行剥缩进。
+3. **`IF LOCAL` 信封透传（`envelopeDepth`）**：转译器为每个 `时机` 块**自动**生成 `IF LOCAL … ENDIF`，真实语料里作者正文总被它包着。识别时探测"顶层恰为一个 `IF <裸 LOCAL>` 开块"，命中则**只在其内部识别**，绝不把信封当候选。
+   - 与 S4 `isEnvelopeChain` 同源（谓词不可判定 + 产物行无糖源归属）；
+   - 双重保险：转译器 expression 层**字典解析不到 `LOCAL`**（报 `unknown-identifier`），信封的糖片段本来就过不了自证。
+4. **PRINT 变体映射（实测更正）**：D 后缀由**引号性**（是否台词）决定，非由 `旁白` 决定：
+
+   | 糖写法 | 产物 |
+   |---|---|
+   | `「台词」` | `PRINTFORMW` |
+   | `「台词」 续` | `PRINTFORML` |
+   | `旁白` | `PRINTFORMW` |
+   | `旁白 续` | `PRINTFORML` |
+
+   → `PRINTFORMDW 旁白` / `PRINTFORMDL 旁白` **无法 round-trip**，自动被拒（正是自证的价值）。`PRINTFORM` / `PRINTFORMD` / `PRINTL` 系无糖形态 → `unsupported-print-variant`。
+5. **IF 比对区间含 `ENDIF`**：糖块产物**必然补回** `ENDIF`，故原文比对区间取 `[fromLine, toLine]`（含闭行），否则生成体多一行而误判失败。
+6. **块级跳过同时 `markConsumed`（`skipBlock`）**：块级跳过若只标 `skipped` 不标 `consumed`，其成员行会被后续单行扫描逐个"提升"，产生碎片化建议（形态像糖但整块对不上）——本批让跳过区间**同时** `consumed`。
+7. **`alias` 类定案：v1 不出候选**（只报 `not-covered`）。实测证明原生 ERB 侧**没有可验证的别名落点**：`别名` 是**糖源码层预处理**（作者写裸标识符 → 糖层展开）；糖层对原生 ERB 的 `%…%` 与全大写直通行**原样透传**，别名替换不介入 → 套上声明再转译必得"多一行声明、正文未变"的产物，round-trip 必不成立。保留类型与扫描（`ALIAS_MIN_OCCURRENCES = 3`）以备将来重开。
+8. **零交叉 import（解耦审计 C 项）**：`kojo-sugar` **不得** import `@kojo/plugin-erb-parser` / `@kojo/plugin-condition-extractor`。两者改为**软取服务槽**（`try { ctx.inject(...) } catch { return undefined }`）：`scanControlFlow` 缺席 → 退回**内置兜底扫描**（`builtinScanControlFlow`）；`parseExpression` 缺席 → 保守跳过所有带条件的块。为此在 `ConditionExtractorService` 上 **additive** 新增 `parseExpression`（无状态、不依赖索引），**既有签名零改动**。
+
+#### 测试（`packages/plugins/kojo-sugar/tests/lift.test.ts`，38 项）
+
+- **每类糖三路**：① 正例命中（断言 `kind` / 行区间 / `confidence === 'verified'` / `roundTrip.verified`）；② 干扰反例跳过（`unsupported-print-variant` / `unparsable-condition` / `label-or-goto` / `macro-or-directive` / `mixed-domain-line` / `comment-interference`）；③ **round-trip 降级**（构造"看着像糖但转回去对不上"的样例 —— 如 `PRINTFORMDL 旁白`、块内非糖控制流 —— 断言它**不在** `candidates` 里，`skipped` 带对应原因）。
+- **`IF LOCAL` 信封**：正文被信封包着时不把信封当候选，且内部块正常提升。
+- **随机块**：`LOCAL = RAND:n` + `SELECTCASE LOCAL` + `CASE 0..n-1` 全覆盖 → `随机` 块；否则退化 `当` 块。
+- **alias**：断言"只提示、不出候选"（`not-covered`）。
+- **集成**：`fixtures/mini-game` 真实形态口上 ERB 上跑，断言产出的候选集合；`fixtures/sugar/sample-310.kojo` 做**降糖 → 升糖闭环**（S2 产物喂回 S5，断言能识别回来）。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **783 passed / 6 skipped**（S5 新增 **38** 项 + preview 装配断言 1 项更新；745 → 783，**零回归**） |
+| `pnpm typecheck`（root） | ✅ exit 0 |
+| `pnpm typecheck`（`@kojo/app`） | ✅ exit 0 |
+| `pnpm audit:decoupling` | ✅ A/B/C 全绿（13 插件） |
+| 真实游戏目录冒烟（`KOJO_SMOKE_PROJECT=<eraTW>`） | ✅ 1 passed（含语法糖编译落盘回读一致 / 越权拒绝 / 编译拒绝零副作用） |
+| golden 逐字节断言 / S2 内核 / `preview` · `compileToFile` 行为 | ✅ 未触碰，零改动 |
+
+#### 关键坑与发现
+
+1. **`LOCAL` 标识符不对称**：codegen 产出 `LOCAL = 1` / `IF LOCAL` / `SELECTCASE LOCAL`，但 expression 层**字典解析不到 `LOCAL`**（`unknown-identifier`）→ 故 `IF LOCAL` 的糖片段**永不**能通过自证。这既是信封必须透传的原因，也是"自证"给出的额外护栏。
+2. **缩进不可比是隐形炸弹**：最初用"产物逐行剥一个 tab"再比对，在"原文块嵌在 1 级"时系统性失败。改为**双侧去公共最小缩进**后，深度无关。
+3. **`node -e` 探测脚本的引号地狱**：反复用临时 `_probe.test.ts` 探测转译器行为（每次用完删除），比在 `node -e` 里堆多层引号可靠得多；且模板串里绝不能写 Markdown 反引号。
+4. **契约扩展的最小面**：`parseExpression` 做成**服务方法**而不是包导出，是"插件不得交叉 import"的直接推论——**导出面的形状由审计规则决定，不由方便决定**。
+5. **S4 装配断言会因 additive 而失败**：`preview.test.ts` 用 `toEqual` 断言了 `provides` 数组的**精确内容与顺序**，S5 追加 `sugar.lift` 必然打破它。这是"故意的严格断言"——更新时同步在断言里注明 additive 语义，保持顺序不变。
+
+#### 边界未做（属后续批）
+
+- **升糖 UI**（候选列表 / 高亮 / 「应用」按钮 / diff 预览）——S5 只交数据层（`sugar.lift` 纯函数服务）；
+- **`选项` 块**（`PRINTBUTTON` + `INPUTS` + `SELECTCASE RESULTS` 三段合并）——形态明确但跨块区间合并风险高，留 v1.1；
+- **`心形` 块**（`CALL HPH_PRINT(@"…","w")`）——四类之外，留 v1.1；
+- **`别名` 的自动建议**——受糖层透传语义限制（见 5.31.7），重开条件 = 糖层将来对原生 ERB 的别名展开介入；
+- **列级定位**——候选只报行区间（行级），列级留 S6；
+- **带信封的整函数升糖**（产出 `时机` 块建议）——留 S5-UI 批。

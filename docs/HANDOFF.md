@@ -115,7 +115,7 @@
   5. **测试**：规则单测 3 路径（覆盖/不覆盖/协议不可用降级）+ call-protocol +5（模板具体性与覆盖语义）+ 真实语料 `corpus.test.ts`（36 条，全 warning，全「数值槽 声明 1 / 转发 0」）；kernel 集成冒烟 `ruleCount` 5→6 + 新增 `=== 36` 断言。
   6. **验证**：564 passed / 7 skipped（无 smoke）；569 / 2 skipped（带 smoke）；typecheck root+app ✅；audit ✅（13 插件）；**回放基线逐字不变**（K49 1356/11685/未知 3741/exact 836）。
 
-- **v0.3 语法糖批进度**：**S1 契约 + golden ✅**（§5.26）/ **S2 转译内核 ✅**（§5.28）/ **S3 写链路 ✅**（§5.29）/ **S4 糖预览数据层 ✅**（§5.30）。服务键新增 `sugar.preview`（`sugar.transpile` 未动）。基线 **745 项**。
+- **v0.3 语法糖批进度**：**S1 契约 + golden ✅**（§5.26）/ **S2 转译内核 ✅**（§5.28）/ **S3 写链路 ✅**（§5.29）/ **S4 糖预览数据层 ✅**（§5.30）/ **S5 升糖建议器数据层 ✅**（§5.31）。服务键新增 `sugar.preview`（S4）与 `sugar.lift`（S5；`sugar.transpile` 未动）；`ConditionExtractorService` additive 新增 `parseExpression`（S5）。基线 **783 项**。
 
 ## 三、文档索引（按权威性排序）
 
@@ -464,6 +464,23 @@ node tools/smoke-tauri-ipc.mjs
 **验证**：**745 passed / 6 skipped**（纯本批 **+28**，基线 717；零回归）/ typecheck root+app ✅ / audit 13 插件 ✅ / **golden §6.1/§6.2 逐字节断言零回退**（未触碰）/ 新测试含 S1 golden 走**真实 `StateReplayEngine`**（`TFLAG:193 = 1/2/9` 三档钉死分支走向 + 信封链不污染 + 具名索引不可解析如实报 unknown）。
 
 **边界**（未做，属后续批）：预览 UI（Monaco 高亮/悬浮/跳转、消息块气泡、可达性着色）、逐字符 FORM 展开渲染串、保存期全角空格告警、糖 `角色:` 直接从 AST 取（当前由产物 `_K{n}` 反推）。
+
+### 6.22 语法糖 S5 批（✅ 已完成）：糖提升建议器（原生 ERB → 糖候选，数据层）
+
+**实施结果**（IMPLEMENTATION-LOG §5.31 为权威记录；设计稿 `docs/LIFT-SUGGESTER-DESIGN.md`）：给"这段原生 ERB 能不能改写成表层语法糖"提供**数据层**答案——扫描原生 ERB → 识别糖候选 → **对每个候选跑一遍 S2 转译做 round-trip 自证** → 只有逐字节一致才保留。**方向与 S2 相反（升糖）**；**UI 留给后续批次**；**永不自动改写磁盘**。
+
+- **核心不变量（round-trip or nothing）**：候选成立**不由形态决定，由转译决定**。糖片段包最小 `.kojo` 壳 → 调本插件 S2 `transpile` → 取 `IF LOCAL` 与配对 `ENDIF` **之间**的正文 → 双侧 `normalizeIndent`（去公共最小缩进）→ 逐字节比对。不一致 → `roundtrip-mismatch` **降级不入结果**。`SugarLiftConfidence` 闭集**只有 `'verified'`** —— 契约层面不允许"可能对"的候选（误报结构上不可能，代价是有意为之的漏报）。
+- **契约扩展（additive，零游戏名词）**：`WellKnownServices.SugarLift = 'sugar.lift'`；`SugarLiftKind`（4 值）/`SugarLiftConfidence`/`SugarLiftRoundTrip`/`SugarLiftCandidate`/`SugarLiftSkipReason`（**11 值闭集**）/`SugarLiftSkip`/`SugarLiftRequest`/`SugarLiftResult`/`SugarLiftService.liftSuggest(request)`；守卫 `isVerifiedCandidate` / `hasCandidates`。`ConditionExtractorService` **additive** 新增 `parseExpression(text)`（无状态纯函数，不依赖索引）。**旧签名一律未动**。
+- **实现**（`kojo-sugar/src/lift.ts`，新文件 ~1200 行；**transpile 内核与 golden 零改动**）：`liftBlocks` / `liftPrintLines` / `liftAliases` 三类扫描 → `tryLiftIf` / `tryLiftWhen` / `detectRandomGroup` 装配糖片段 → `verifyRoundTrip` 自证 → 产出候选 / 跳过项。跳过区间**同时** `markConsumed`（`skipBlock`，否则成员行被碎片化提升）。
+- **`IF LOCAL` 信封透传（`envelopeDepth`）**：转译器为每个 `时机` 块**自动**生成 `IF LOCAL … ENDIF`，真实语料里作者正文总被它包着 → 识别时探测"顶层恰为一个 `IF <裸 LOCAL>` 开块"，只在其**内部**识别，绝不把信封当候选。与 S4 `isEnvelopeChain` 同源；且转译器 expression 层**解析不到 `LOCAL`**（`unknown-identifier`），信封糖片段本来就过不了自证（双重保险）。
+- **PRINT 变体映射（实测更正）**：D 后缀由**引号性**（是否台词）决定：`「台词」`→`PRINTFORMW`、`「台词」 续`→`PRINTFORML`、`旁白`→`PRINTFORMW`、`旁白 续`→`PRINTFORML`。故 `PRINTFORMDW 旁白` 类**无法 round-trip**，自动被拒。`PRINTFORM` / `PRINTFORMD` / `PRINTL` 系无糖形态 → `unsupported-print-variant`。
+- **`alias` 类定案：v1 不出候选**（只报 `not-covered`）。实测：`别名` 是**糖源码层预处理**，糖层对原生 ERB 的 `%…%` 与全大写直通行**原样透传** → 原生 ERB 侧**没有可验证的别名落点**。保留类型与扫描（`ALIAS_MIN_OCCURRENCES = 3`）以备将来重开。
+- **零交叉 import（解耦审计 C 项）**：`kojo-sugar` **不 import** 其它插件包；`scanControlFlow` / `parseExpression` 改为**软取服务槽**（`try inject / catch → undefined`）：前者缺席退回**内置兜底扫描**，后者缺席**保守跳过**所有带条件的块。
+
+**验证**：**783 passed / 6 skipped**（纯本批 **+38** 项 lift 测试 + preview 装配断言 1 项更新，基线 745；零回归）/ typecheck root+app ✅ / audit 13 插件 ✅ / 真实游戏目录冒烟 ✅ 1 passed / **golden 逐字节断言与 S2 内核零改动**。
+
+**边界**（未做，属后续批）：升糖 UI（候选列表/高亮/「应用」/diff 预览）、`选项` 块（三段合并）、`心形` 块、`别名` 自动建议、列级定位、带信封的整函数升糖。
+
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
@@ -523,7 +540,7 @@ node tools/smoke-tauri-ipc.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**745 项** / ✅ / 13 插件；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.30 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）；**下一批 = S5 或 S4-UI**：①**S4-UI**（Monaco 预览面板消费 `sugar.preview`：三向映射高亮/悬浮/跳转 + 可达性着色 + 保存期全角空格告警）；②**S5 升糖**（原生 ERB → 糖源码）；③**保存路径推导**（`.kojo` → `charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB`）接 `compileToFile`）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**783 项** / ✅ / 13 插件；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.31 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
+4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）、**S5 升糖建议器数据层 ✅**（§5.31）；**下一批 = S4-UI 或 S5-UI**：①**S4-UI**（Monaco 预览面板消费 `sugar.preview`：三向映射高亮/悬浮/跳转 + 可达性着色 + 保存期全角空格告警）；②**S5-UI**（升糖候选列表消费 `sugar.lift`：候选高亮/「应用」/diff 预览；S5 只交纯函数数据层）；③**保存路径推导**（`.kojo` → `charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB`）接 `compileToFile`）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

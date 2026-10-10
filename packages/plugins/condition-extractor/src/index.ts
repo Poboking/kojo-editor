@@ -65,7 +65,6 @@ export function createConditionExtractorPlugin(): Plugin {
 
       const service: ConditionExtractorService = engine;
       ctx.provide(WellKnownServices.ConditionExtractor, service);
-
       // ---- 自动运行：索引重建完成即抽取（串行化，避免叠加运行） ----
       let running = false;
       let queued = false;

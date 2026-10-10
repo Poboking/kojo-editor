@@ -162,6 +162,7 @@ export type {
 
 export {
   hasArchive,
+  hasCandidates,
   hasGenerated,
   isCharacterAlias,
   isConditionalInterpolation,
@@ -176,6 +177,7 @@ export {
   isTopLevelNode,
   isValueInterpolation,
   isVariableAlias,
+  isVerifiedCandidate,
   isWritableAlias,
   SugarCompileError,
 } from './sugar';
@@ -204,6 +206,15 @@ export type {
   SugarDoc,
   SugarExprNode,
   SugarFrontMatter,
+  SugarLiftCandidate,
+  SugarLiftConfidence,
+  SugarLiftKind,
+  SugarLiftRequest,
+  SugarLiftResult,
+  SugarLiftRoundTrip,
+  SugarLiftService,
+  SugarLiftSkip,
+  SugarLiftSkipReason,
   SugarNode,
   SugarPosition,
   SugarPreviewArchive,

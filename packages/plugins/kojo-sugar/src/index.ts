@@ -14,12 +14,17 @@
  */
 
 import type {
+  ConditionExpr,
+  ConditionExtractorService,
+  ControlFlowStatement,
+  ErbParserService,
   FileIO,
   GameProject,
   Plugin,
   ProjectService,
   SlotRegistry,
   StateReplayService,
+  SugarLiftService,
   SugarPreviewService,
   SugarTranspileService,
   VariableSchema,
@@ -27,13 +32,18 @@ import type {
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { createSugarTranspileService } from './service';
 import { createSugarPreviewService } from './preview';
+import { createSugarLiftService } from './lift';
 import type { DictionaryLookup } from './types';
 
 export function createKojoSugarPlugin(): Plugin {
   return {
     id: 'kojo-sugar',
     version: '0.3.0',
-    provides: [WellKnownServices.SugarTranspile, WellKnownServices.SugarPreview],
+    provides: [
+      WellKnownServices.SugarTranspile,
+      WellKnownServices.SugarPreview,
+      WellKnownServices.SugarLift,
+    ],
     // S3 批：编译落盘需要内核 io（第一道闸）；Project/Slots 供 adapter 字典查询
     requires: [KernelServices.Project, KernelServices.Slots, KernelServices.IO],
     activate(ctx) {
@@ -53,6 +63,34 @@ export function createKojoSugarPlugin(): Plugin {
       const replayOf = (): StateReplayService | undefined => {
         try {
           return ctx.inject<StateReplayService>(WellKnownServices.StateReplay);
+        } catch {
+          return undefined;
+        }
+      };
+
+      /**
+       * `erb.parser` 的 `scanControlFlow`（S5 批，软取）——提升建议的**结构**判据。
+       *
+       * 软取的理由同上：结构扫描缺席只该让提升建议退化为"内置最小扫描"，
+       * 不该让整个 kojo-sugar 静默 inactive。
+       */
+      const scanFlowOf = (): ((text: string) => ControlFlowStatement[]) | undefined => {
+        try {
+          const parser = ctx.inject<ErbParserService>(WellKnownServices.ErbParser);
+          return (text: string) => parser.scanControlFlow(text);
+        } catch {
+          return undefined;
+        }
+      };
+
+      /**
+       * `condition.extractor` 的 `parseExpression`（S5 批，软取）——提升建议的
+       * **条件可解析性**判据（`opaque` = 跳过信号）。
+       */
+      const parseExprOf = (): ((text: string) => ConditionExpr) | undefined => {
+        try {
+          const extractor = ctx.inject<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
+          return (text: string) => extractor.parseExpression(text);
         } catch {
           return undefined;
         }
@@ -108,6 +146,33 @@ export function createKojoSugarPlugin(): Plugin {
       });
 
       ctx.provide(WellKnownServices.SugarPreview, previewService);
+
+      /**
+       * 提升建议服务（S5 批）——**原生 ERB → 糖候选**。
+       *
+       * 依赖方向（单向，无环；**一律走服务槽**，插件不得交叉 import —— 解耦审计 C 项）：
+       * - `transpile` 复用上面同一个转译器（同 adapter 字典）——round-trip 自证
+       *   的**唯一**手段；本服务只调用它，不改动转译内核；
+       * - `scanControlFlow` 取自 `erb.parser` 服务（块配对 + "糖未覆盖的控制流"判据）；
+       * - `parseCondition` 取自 `condition.extractor` 服务的 `parseExpression`
+       *   （`opaque` = 跳过信号）。
+       *
+       * 后两者**软取**（`try/catch` → undefined）：两者缺席时提升建议仍能工作，
+       * 只是判据退化（`degraded: true`，`lift.ts` 里已有明确分支）。若写成硬
+       * 依赖，"解析器未激活"会让 kojo-sugar 整体静默 inactive——那是本末倒置
+       * （与 `state.replay` 的软取同理）。
+       *
+       * 事件纪律：提升建议是**纯函数式只读**能力（不读盘、不写盘、不发事件），
+       * 与预览一致——故此处不注册任何 `ctx.bus.on`。
+       */
+      const liftService: SugarLiftService = createSugarLiftService({
+        transpile: (source, options) =>
+          createSugarTranspileService({ dictionary: dictionaryOf() }).transpile(source, options),
+        ...(scanFlowOf() ? { scanControlFlow: scanFlowOf()! } : {}),
+        ...(parseExprOf() ? { parseCondition: parseExprOf()! } : {}),
+      });
+
+      ctx.provide(WellKnownServices.SugarLift, liftService);
     },
   };
 }
@@ -180,3 +245,4 @@ export {
   type PreviewDeps,
 } from './preview';
 export type { AliasEntry, AliasTable, DictionaryLookup } from './types';
+export { createSugarLiftService, liftSuggest, type LiftDeps } from './lift';

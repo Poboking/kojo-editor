@@ -13,6 +13,7 @@
 
 import type {
   ConditionExtractorService,
+  ConditionExpr,
   ConditionIndex,
   ControlFlowStatement,
   ErbIndex,
@@ -22,6 +23,7 @@ import type {
   Logger,
 } from '@kojo/plugin-api';
 import { extractFunctionConditions, extractFunctionPredicates, type SchemaLookup } from './extract';
+import { parseExpression } from './expr';
 
 export interface ConditionEngineDeps {
   log: Logger;
@@ -74,6 +76,18 @@ export class ConditionEngine implements ConditionExtractorService {
 
   currentIndex(): ConditionIndex | null {
     return this.last;
+  }
+
+  /**
+   * 解析单个表达式文本（无状态纯函数；失败 → `opaque`）。
+   *
+   * 契约新增于 v0.3 批 S5，唯一使用方是 `@kojo/plugin-kojo-sugar` 的
+   * `sugar.lift`（提升建议器）——它要判断 IF / SELECTCASE 的条件表达式能否被
+   * 糖层原样重写。转出为服务方法（而非包导出）是为了让消费方**经服务槽**
+   * 依赖，遵守"插件不得交叉 import"（解耦审计 C 项）。
+   */
+  parseExpression(text: string): ConditionExpr {
+    return parseExpression(text);
   }
 
   functionConditions(normalizedName: string): FunctionConditions | undefined {

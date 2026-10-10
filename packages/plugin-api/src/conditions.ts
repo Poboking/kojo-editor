@@ -237,6 +237,18 @@ export interface ConditionExtractorService {
   functionPredicates(normalizedName: string): Promise<FunctionPredicates | null>;
   /** 订阅索引更新（立即以当前值回调一次，返回退订函数） */
   subscribe(cb: (index: ConditionIndex | null) => void): () => void;
+  /**
+   * 解析单个表达式文本（失败 → `{ kind: 'opaque', text }` 整体降级）。
+   *
+   * **无状态纯函数**，不依赖索引，可随时调用。**使用方（v0.3 批 S5）**：
+   * 语法糖提升建议器（`@kojo/plugin-kojo-sugar` 的 `sugar.lift`）——它需要
+   * 判断"这个 IF / SELECTCASE 的条件表达式糖层能否原样重写"，`opaque` 即
+   * "不能，跳过不产出候选"的信号。
+   *
+   * 之所以**做成服务方法**而不是让 kojo-sugar 直接 import condition-extractor
+   * 包：插件不得交叉 import（解耦审计 C 项），只能经服务槽单向依赖。
+   */
+  parseExpression(text: string): ConditionExpr;
 }
 
 /** 规范化变量引用为依赖键（如 CFLAG:2 / TALENT:恋慕 / LOCAL） */

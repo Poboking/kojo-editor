@@ -1071,3 +1071,195 @@ export function hasArchive(result: SugarPreviewResult): result is SugarPreviewRe
   return result.archive !== null;
 }
 
+/* ============================== 提升建议（S5 批） ============================== */
+
+/**
+ * 糖提升建议（lift-suggester）—— **原生 ERB → 糖候选**，与降糖方向相反。
+ *
+ * 设计前提（`docs/LIFT-SUGGESTER-DESIGN.md` §1，源自 `SYNTAX-SUGAR-DESIGN.md` §八）：
+ * 编译是**有损**的（同一个 ERB 片段可能有多种合理糖写法），故升糖**永不自动应用**，
+ * 只出建议、逐条确认。识别的安全前提不是"看起来像"，而是**"转回去逐字节一样"**：
+ * 每个候选的 `sugarSource` 都交给 `sugar.transpile` 跑一遍，产物与原文本区间
+ * **逐字节一致**才算成立；不一致一律**降级为不建议**（宁可漏报，不可错报）。
+ *
+ * 该自证让"误报"在结构上不可能：**未通过 round-trip 的候选根本不在结果里**。
+ */
+
+/**
+ * 糖类型（v1 四类，对应规范 §3 的四组糖）。
+ *
+ * 注意与 `SugarNode.kind` 是不同维度：这里是"**候选是什么糖**"，
+ * `sugarSource` 才是那个糖的源码片段。
+ */
+export type SugarLiftKind =
+  /** PRINT 家族消息行（`PRINTFORM{W,L,DW,DL} …`）→ 糖文本行（规范 §3.3 / §5.1） */
+  | 'print-message'
+  /** `IF … ENDIF` 块 → `如果 / 否则如果 / 否则`（规范 §3.5） */
+  | 'if-block'
+  /** `SELECTCASE … ENDSELECT` 分派 → `当 / 是 / 否则`（规范 §3.6） */
+  | 'selectcase'
+  /** 重复出现的变量引用 → `别名` 声明建议（规范 §3.1 / §5.0） */
+  | 'alias';
+
+/**
+ * 候选置信度 —— **v1 闭集只有一档**（`verified` = round-trip 逐字节一致）。
+ *
+ * 之所以不设"可能对"的低档：契约层不允许出现"未经自证"的候选（设计稿 §4.1）。
+ * 未来若确需降档，必须同时改本节注释与此处的测试——**默认的"宁可漏报"不可被
+ * 悄悄放宽**。
+ */
+export type SugarLiftConfidence = 'verified';
+
+/**
+ * round-trip 证据 —— "为什么这个候选可以被信任"的**显式**凭据。
+ *
+ * 消费方（UI 的"逐条确认"流）不需要读实现就知道候选的合法性来源：
+ * 把 `sugarSource` 交给 `sugar.transpile` 再比对，即得本对象。
+ */
+export interface SugarLiftRoundTrip {
+  /** 是否逐字节一致。**v1 结果里恒为 true**（false 的候选已被丢弃）。 */
+  verified: boolean;
+  /** 原文本区间（源行去行尾换行，按 `\n` 连接） */
+  originalText: string;
+  /** 糖片段转译回来的文本（已去掉自证壳的基准缩进） */
+  generatedText: string;
+  /**
+   * 首个差异位置（1 基行 / 列）。
+   * `verified: true` 时缺省；保留此字段供未来低置信档与调试使用
+   * ——v1 的 `candidates` 里不会出现带本字段的项。
+   */
+  firstDiff?: SugarPosition;
+}
+
+/**
+ * 糖候选 —— 一段"可以写成糖"的原生 ERB 及其建议糖源码。
+ *
+ * **区间语义**：`fromLine..toLine` 是**闭区间**（1 基），指代原文中**被替换**的整段。
+ * 例外见 `alias`：其 `fromLine === toLine` 且指向**建议插入点**（首次出现行），
+ * `sugarSource` 是要加到**文件头**的声明行——消费方须按 `kind === 'alias'` 分支处理。
+ */
+export interface SugarLiftCandidate {
+  kind: SugarLiftKind;
+  /** 源 ERB 闭区间起点（1 基） */
+  fromLine: number;
+  /** 源 ERB 闭区间终点（1 基） */
+  toLine: number;
+  /**
+   * 建议的糖源码片段（**多行时以 `\n` 分隔**；不含外层缩进基准，
+   * 缩进由消费方按所在位置平移）。首行不带前导空白，后续行携带相对缩进。
+   */
+  sugarSource: string;
+  /** 置信度（v1 恒 `verified`） */
+  confidence: SugarLiftConfidence;
+  /** round-trip 证据（见 `SugarLiftRoundTrip`） */
+  roundTrip: SugarLiftRoundTrip;
+  /** 人读说明（中文；面向作者，不暴露内部术语） */
+  reason: string;
+}
+
+/**
+ * 未产出候选的原因（**闭集**；命名零游戏名词）。
+ *
+ * **不静默**是内核铁律的一部分：每一处"看到了但不建议"都必须在 `skipped` 里
+ * 可见，否则作者会以为工具漏看（而实际是我们判定它不能安全升糖）。
+ */
+export type SugarLiftSkipReason =
+  /** PRINT 变体无糖形态（`PRINTFORM` / `PRINTFORMD` 的不换行不等待、`PRINTL` / `PRINT` / `PRINTD` 等非 FORM 系） */
+  | 'unsupported-print-variant'
+  /** 条件表达式**整体不可解析**（`condition-extractor` 的 `opaque` 信号）→ 无法回写糖条件 */
+  | 'unparsable-condition'
+  /** 块内含糖未覆盖的控制流（`SIF` / `FOR` / `WHILE` / `REPEAT` / `DO` / TRY 系 / PRINTDATA 系 等） */
+  | 'unsupported-control-flow'
+  /** 含 `$标签` / `GOTO`（糖产物不生成标签，无法逐字节还原） */
+  | 'label-or-goto'
+  /** 含 `#` 预处理行 / `@` 函数边界（穿越函数或进入指令区） */
+  | 'macro-or-directive'
+  /** 同一缩进层的文本域（PRINT 系）与逻辑域（赋值/控制流）**混行**，无法构成单一糖节点 */
+  | 'mixed-domain-line'
+  /** 块内注释 / 空行打断连段（无法构成单一糖节点，且原样保留会破坏 round-trip） */
+  | 'comment-interference'
+  /** **round-trip 逐字节不一致** → 降级（设计稿 §3.2；宁可漏报） */
+  | 'roundtrip-mismatch'
+  /** 糖片段转译自身产 `error` 诊断（生成器给了非法糖）→ 丢弃 */
+  | 'transpile-error'
+  /** 形态不在 v1 四类糖之内（`PRINTBUTTON` / `SETCOLOR` / `CALL HPH_PRINT` / 随机组 等） */
+  | 'not-covered';
+
+/** 被跳过的区间（**显式**记录，不静默） */
+export interface SugarLiftSkip {
+  /** 源 ERB 闭区间起点（1 基） */
+  fromLine: number;
+  /** 源 ERB 闭区间终点（1 基） */
+  toLine: number;
+  reason: SugarLiftSkipReason;
+  /** 人读说明（中文；可含该区间的首行摘要，便于作者定位） */
+  message: string;
+}
+
+/**
+ * 提升建议请求 —— 对**一段原生 ERB 文本**做升糖分析。
+ *
+ * 纯数据、不含 UI 表达；`source` 是内存态文本，本服务**不读盘**
+ * （与服务面"纯函数"纪律一致）。`characterNo` / `timingFace` / `timingIndex`
+ * 仅用于拼装 round-trip 自证所需的**最小 `.kojo`**——它们不影响识别结果本身
+ * （自证只看形态是否一致），缺省时用占位值即可。
+ */
+export interface SugarLiftRequest {
+  /** 待分析的原生 ERB 文本（内存态；不读盘） */
+  source: string;
+  /** 源文件路径（诊断元信息；不触发 IO） */
+  filePath?: string;
+  /** 角色号（拼装自证样例用；缺省从文本内的 `_K{n}` 反推，仍不得则用占位 `0`） */
+  characterNo?: number;
+  /** 时机分野（自证样例块头用；缺省 `指令`） */
+  timingFace?: string;
+  /** 时机编号（同上；缺省 `1`） */
+  timingIndex?: string;
+}
+
+/** 提升建议结果 */
+export interface SugarLiftResult {
+  /** 候选（按 `fromLine` 升序；全部已通过 round-trip 自证） */
+  candidates: SugarLiftCandidate[];
+  /** 被跳过的区间（按 `fromLine` 升序；**显式**，不静默） */
+  skipped: SugarLiftSkip[];
+  /**
+   * 本次分析是否发生了**能力降级**——即"条件可解析性"这一判据不可用
+   * （`condition.extractor` 服务缺席 / 解析抛错）。
+   * true 时分析仍继续（结构判据不受影响），但 `unparsable-condition`
+   * 这类跳过不会被检出；消费方应据此提示"建议质量下降"。
+   */
+  degraded: boolean;
+}
+
+/**
+ * 语法糖提升建议服务（服务键 `sugar.lift`；S5 批）。
+ *
+ * **职责边界**：
+ * - 输入原生 ERB → 扫描四类糖形态 → 组装糖片段 → **复用 `sugar.transpile`** round-trip 自证；
+ * - **不写盘**（应用建议是 UI 批的职责）、**不发事件**（只读观察面）、不修改任何插件状态；
+ * - 不产候选的每一处都在 `skipped` 里可见。
+ *
+ * **同步**：与 `preview` 不同，升糖**不需要回放**——全链路是同步纯函数
+ * （转译本身同步），故本方法返回结果而非 Promise。
+ */
+export interface SugarLiftService {
+  /**
+   * 生成提升建议。
+   *
+   * 只有"输入本身不合法"（`source` 非字符串）才抛错；其余一律以
+   * `candidates` / `skipped` 表达（含转译器内部异常 → `transpile-error` 跳过）。
+   */
+  liftSuggest(request: SugarLiftRequest): SugarLiftResult;
+}
+
+/** 候选是否已通过 round-trip 自证（v1 恒 true；守卫留作未来低置信档的兼容位） */
+export function isVerifiedCandidate(candidate: SugarLiftCandidate): boolean {
+  return candidate.confidence === 'verified' && candidate.roundTrip.verified;
+}
+
+/** 结果是否有候选 */
+export function hasCandidates(result: SugarLiftResult): boolean {
+  return result.candidates.length > 0;
+}
+

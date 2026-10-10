@@ -566,10 +566,11 @@ describe('S4 装配：服务键与服务集合', () => {
     expect(WellKnownServices.SugarTranspile).toBe('sugar.transpile'); // 旧键未变
   });
 
-  it('插件声明 provides 两个服务；`state.replay` **不在** requires（软依赖）', async () => {
+  it('插件声明 provides 三个服务（含 S5 新增 sugar.lift）；`state.replay` **不在** requires（软依赖）', async () => {
     const { createKojoSugarPlugin } = await import('../src/index');
     const plugin = createKojoSugarPlugin();
-    expect(plugin.provides).toEqual(['sugar.transpile', 'sugar.preview']);
+    // S5 additive：sugar.lift 追加在末尾，既有两键顺序不变
+    expect(plugin.provides).toEqual(['sugar.transpile', 'sugar.preview', 'sugar.lift']);
     expect(plugin.requires).not.toContain('state.replay');
     expect(plugin.requires).toEqual(['kernel.project', 'kernel.slots', 'kernel.io']);
   });

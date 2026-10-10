@@ -66,6 +66,15 @@ export const WellKnownServices = {
    * 契约 `plugin-api/sugar.ts`，实现插件 `kojo-sugar`（S4 批建）。
    */
   SugarPreview: 'sugar.preview',
+  /**
+   * 语法糖提升建议服务（v0.3 批 S5）：**原生 ERB → 糖候选**（与降糖方向相反）。
+   *
+   * 每个候选都经「生成糖片段 → 复用 `sugar.transpile` → 与原文本区间逐字节比对」
+   * 自证（round-trip）；**不一致者一律不入结果**（宁可漏报不可错报）。
+   * 纯函数、不写盘、不发事件；不产候选的情形显式记入 `skipped`（不静默）。
+   * 契约 `plugin-api/sugar.ts`，实现插件 `kojo-sugar`（S5 批建）。
+   */
+  SugarLift: 'sugar.lift',
 } as const;
 
 export type KernelServiceKey = (typeof KernelServices)[keyof typeof KernelServices];
