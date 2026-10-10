@@ -1,4 +1,4 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 ✅ / 第四批 ✅ / 第五批 ✅ / 第六批 ✅ / 第七批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 ✅ / 第四批 ✅ / 第五批 ✅ / 第六批 ✅ / 第七批 ✅ / 第八批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
@@ -7,7 +7,8 @@
 > 第四批：存档快照源（`sav-parser`，服务 `snapshot.source`）；
 > 第五批：状态回放引擎（`state-replay`，服务 `state.replay`）；
 > 第六批：回放求值器扩展——本地量数据流 + 引擎内置纯函数 + 调用上下文注入（未知率 62.9% → 48.5%）；
-> 本会话完成 **v0.2 第七批：有界内联求值——口上域 `#FUNCTION` 纯助手顺序解释（实测未知率 48.5% → 32.0%，call 桶消解 84%）**。
+> 第七批：有界内联求值——口上域 `#FUNCTION` 纯助手顺序解释（未知率 48.5% → 32.0%，call 桶消解 84%）；
+> 本会话完成 **v0.2 第八批：`ui-state-replay` 回放面板（第 10 个插件）——选档 × 选角色 × 选函数 × 逐条谓词三值结果，导航面板 ⟲ 联动**。
 
 ---
 
@@ -61,11 +62,17 @@
   4. **求值**（state-replay）：`inline.ts` 预编译 + **PC 顺序解释器**（SIF 条件体 / IF 链 / RETURNF / 环境读 / **索引段替换** `TALENT:ARG:恋人`）；`evaluate.ts` 求值通道重构 `EvalContext{read, resolveCall}`；`InlineManager`（analyze 缓存 + `preanalyze` BFS 预热 → 执行期同步命中）；state-replay `requires` 增 `kernel.io`。
   5. **实现最微妙的坑**：ELSEIF/ELSE op 的两种到达方式（条件假跳转 vs 分支体自然掉落）——编译期把"假跳转到 ELSE"改写为直接进体（`elseIdx+1`），运行期 `pendingEval` 标记区分"跳转到达 ELSEIF（求值）"与"自然掉落（跳 endAfter）"。首版实现 ELSE 与 ELSEIF 双双踩中此坑（集成测试 ELSE 分支错误落到链尾兜底 RETURNF）。
   6. **真实回归**：未知 5,668→**3,741**（**48.5%→32.0%**）/ call 桶 2,297→**368**（消解 84%）/ exact 786→**836** / 全未知函数 70→**38**。+27 单测 + 集成冒烟守门 0.55→0.40 + 陷落状态内联专项断言。
+- **v0.2 第八批完成**（本会话）：**`ui-state-replay` 回放面板（第 10 个插件）**（ARCHITECTURE §5.14 为权威记录）。
+  1. **面板**（`ui.panel`）：选档（`snapshot.source` 扫描 + saveMes 摘要）→ 选角色（`project.charaIndex`）→ 选函数（条件索引子串提示，≥2 字符）→ 逐条谓词三值结果（kind 徽章 + 原文 + 行号点击 → `editor.revealLocation`）+ 置信度徽章（确定/部分未知/无法判定）+ **未知原因分组**（code → 中文提示 + 计数）。视图按（档 × 角色）惰性重建 + 代际保护。
+  2. **调用上下文输入**：`0=36, 1="约会"` 文本 → `ReplayCallContext`（panel-logic.ts 纯函数解析；带引号 → 字符串槽；解析失败红字提示不阻塞；空 → 不注入走 call-context unknown——场景输入绝不猜测）。
+  3. **联动事件 `kojo.replayFunction`**（内核事件表新增，editor.revealLocation 同款模式）：导航面板函数行/搜索行加 ⟲ 徽章（stopPropagation）→ 回放面板自动填名并回放；UI 插件间零直接依赖。
+  4. **登记**：四处（package.json/tsconfig paths/vitest aliases/vite aliases+deps）+ bootstrap.ts；`rp-*` 样式；`nav-badge.replay` 样式。
+  5. **测试**：+11 单测（panel-logic 全路径）；400 项全绿；audit 10 插件 ✅；真实工程冒烟无回归；app build ✅。
 - **存档解析基线（2026-10-10 实测）**：六档全绿——168 角色/档、16,005 变量/档（save00 16,000）、`#DIM` 恒 65、MASTERNAME 7/168、RANDDATA saveLen 625（**save00 nonEmpty=0 全零剪枝实证** / save01+ 全量）、MONEY 51 亿（Int64 路径）、EM 区 2 张 DT 表、**残余 0B**。
 - **状态回放基线（2026-10-10 实测，第七批后）**：save03 × 古明地觉（K49）全量回放 **1,356 个含谓词函数 / 11,685 谓词**——命中 1,549 / 未命中 6,395 / 未知 **3,741（32.0%）**；置信度 exact **836** / partial 482 / unknown **38**。第七批后未知构成：pseudo 1,886（RAND 等运行期值）/ call-context 858 / call 368（索引域外函数）/ named-index 337 / local-no-write 196 / missing-var 80 / 其余 <20。
 - **真实工程基线（2026-10-10 实测）**：168 角色 / 2,285 ERB / 99,104 函数 / 去重名 99,101；家族识别 98.91%（109 家族）；索引 ~2.9s；约定校验 757 项（~9s）。
 - **条件抽取基线**：95,504 函数 / **493,712 谓词（未解析 187 = 0.04%）** / 含依赖函数 31,609 / 依赖条目 164,910 / schema 标注 109,742（恋慕 17,993 / 好感度 480）/ 全量 ~6.2s（冷启动 ~13s）。
-- 测试：**389 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**9 插件**）。
+- 测试：**400 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**10 插件**）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -119,14 +126,17 @@ packages/
 │   │   ├── engine.ts          #   编排（createView / replayFunction(s) / replayPredicates 纯函数 + ★InlineManager 集成 + resetCaches）
 │   │   └── index.ts           #   装配（requires: kernel.project/kernel.slots/★kernel.io/snapshot.source/condition.extractor；project.closed/functionChanged → resetCaches）
 │   ├── ui-convention-report/src/index.ts # ui.panel 面板（订阅 linter；点击 → revealLocation）
-│   ├── ui-kojo-navigator/src/          # 函数树导航（tree.ts 纯逻辑 + index.ts 面板 + 条件徽章）
+│   ├── ui-kojo-navigator/src/          # 函数树导航（tree.ts 纯逻辑 + index.ts 面板 + 条件徽章 + ★第八批：⟲ 回放徽章 → kojo.replayFunction）
+│   ├── ui-state-replay/src/            # ★ v0.2 第八批：状态回放面板（第 10 个插件）
+│   │   ├── panel-logic.ts              #   纯逻辑（调用上下文文本解析 / 未知分组 / 函数名提示；零 React 可单测）
+│   │   └── index.ts                    #   ui.panel（选档×选角色×选函数 → 三值结果 + 置信度 + 未知分组；监听 kojo.replayFunction）
 │   └── ui-plugin-status/src/           # 插件状态面板
 └── app/src/
-    ├── bootstrap.ts           # 注册 9 个插件
+    ├── bootstrap.ts           # 注册 10 个插件
     ├── ui/App.tsx             # 订阅 kojo.functionChanged / editor.revealLocation
     ├── ui/ProjectView.tsx     # 透传 reveal
     ├── ui/EditorPane.tsx      # revealLine/revealNonce → Monaco revealLineInCenter
-    └── styles.css             # 约定面板样式 +导航面板样式（nav-*）
+    └── styles.css             # 约定面板样式 +导航面板样式（nav-*）+ ★回放面板样式（rp-*）+ nav-badge.replay
 ```
 
 ## 五、验证矩阵（怎么跑）
@@ -134,9 +144,9 @@ packages/
 ```bash
 cd D:\DSH\kojo-editor
 pnpm install
-pnpm test               # 389 项（无游戏目录时集成冒烟自动跳过）
+pnpm test               # 400 项（无游戏目录时集成冒烟自动跳过）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
-pnpm audit:decoupling   # 必须 ✅（plugins 数 9）
+pnpm audit:decoupling   # 必须 ✅（plugins 数 10）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放断言）：
 KOJO_SMOKE_PROJECT="D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
 # 桌面壳（会弹窗 ~100s 自动关闭）：
@@ -150,7 +160,7 @@ node tools/smoke-tauri-dom.mjs
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
 5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
 
-## 六、v0.2 批次记录（第三批～第七批，✅ 全部完成）
+## 六、v0.2 批次记录（第三批～第八批，✅ 全部完成）
 
 ### 6.1 第三批：条件谓词抽取 `condition-extractor`
 
@@ -213,18 +223,27 @@ node tools/smoke-tauri-dom.mjs
 - **真实回归**：未知 5,668→3,741（**48.5%→32.0%**）；call 桶 2,297→**368**（消解 84%）；exact 786→836；全未知函数 70→38。
 - **教训（§九-19）**：ELSEIF/ELSE op 的"跳转到达 vs 自然掉落"双语义——PC 无法区分来源，须编译期改写（假跳转绕过 ELSE op）+ 运行期标记（pendingEval）。首版集成测试抓出（ELSE 分支错误落到链尾兜底 RETURNF）。
 
-### 6.6 第八批候选（下一批）
+### 6.6 第八批（✅ 已完成）：状态回放面板（`ui-state-replay`）
 
-- **`ui-state-replay` 回放面板（第一优先）**：选档（快照扫描结果）→ 选角色 → 选函数（或从导航面板"回放此函数"）→ 逐条谓词真值 + 置信度徽章 + 未知原因分组；消费 `state.replay`；调用上下文作为场景输入（对话对象 / 时机号）。回放引擎已三批成熟（32% 未知率），**该把成果带上 UI 了**。
-- **索引域外函数源（消解剩余 call 368）**：FIRSTTIME 等定义在 kojoPaths 之外——需要一个"游戏函数源"通道（扩 index 扫描域 / 按需 parseFile），但其中多数有副作用（写 CSTR），收益需再测量。
-- **分支链重建**：用 `FunctionPredicates.statements`（含 ELSE/ENDIF）重建 IF/ELSEIF/ELSE 链 → "会走哪个分支"（比逐条谓词更接近作者视角）。
-- **adapter 口上调用协议**：家族 → 转发实参映射（KOJO_MESSAGE.ERB 路由表）→ call-context 858 条的消解地基。
+**实施结果**：呈现 + 纯逻辑 + 事件联动落地（架构 §5.14 为权威记录）。
+
+- **面板**：选档 → 选角色 → 选函数 → 逐条谓词三值结果 + 置信度徽章 + 未知原因分组（中文提示）；谓词行点击跳源码；视图（档 × 角色）惰性重建 + 代际保护。
+- **调用上下文**：`0=36, 1="约会"` 文本解析（panel-logic.ts，+11 单测）；场景输入不猜测。
+- **联动**：内核事件 `kojo.replayFunction`（events.ts + bus.ts）；导航面板 ⟲ 徽章发起；UI 插件零交叉依赖。
+- **验证**：400 项全绿 / audit 10 插件 / 真实冒烟无回归 / app build ✅。
+- **环境边界**：桌面壳深度冒烟在沙箱会话不可跑（tauri CLI 的 `BeforeDevCommand` 经 `cmd /S /C` 触发宿主管道耗尽 os error 231）——非项目问题，需在正常终端执行；app vite build 已验证。
+
+### 6.7 第九批候选（下一批）
+
+- **分支链重建（回放面板增强，第一优先）**：用 `FunctionPredicates.statements`（含 ELSE/ENDIF）重建 IF/ELSEIF/ELSE 链 → 面板显示"该状态会走哪个分支"（比逐条谓词更接近作者视角；内联解释器已具备分支求值能力，把 PC 路径暴露出来即可）。
+- **index-603 索引域外函数源（消解剩余 call 368）**：FIRSTTIME 等定义在 kojoPaths 之外——"游戏函数源"通道（扩 index 扫描域 / 按需 parseFile）；多数有副作用，收益需再测量。
+- **adapter 口上调用协议**：家族 → 转发实参映射（KOJO_MESSAGE.ERB 路由表）→ call-context 858 条的自动消解；回放面板的场景选择器可从协议生成"对话对象/时机"下拉（替代手填槽位）。
+- **回放面板角色上下文增强**：MASTER/ASSI/PLAYER 指针的场景选择（当前取快照顶层值）。
 - **归档浏览器面板**：消费 `snapshot.source` 列档（saveMes / 角色数 / 大小），点击看摘要。
 - **ui-condition-matrix（条件矩阵）**：按角色/家族聚合状态依赖；MESSAGECHECK 位可视化。
 - `watchDirs` 文件监视（现为手动刷新；后续走 Rust notify）→ 增量重建索引。
 - Monaco bundle 4.3MB 拆分（manualChunks，低优先级）。
 - scanner 的 TRY 系配对精度（`TRYCALLFORM` 无 CATCH 时产生幻影开块）——影响上下文路径精度，方向"宁少勿错"，低优先级。
-- 桌面壳冒烟（`node tools/smoke-tauri-dom.mjs`）本会话因宿主环境 os error 231（管道耗尽）未跑通——app vite build 已验证通过、本批未动 app 层，下会话顺手补跑一次确认。
 
 ## 七、安全模型（写文件功能相关必读）
 
@@ -276,7 +295,7 @@ node tools/smoke-tauri-dom.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：389 项 / ✅ / 9 插件）
-3. 读 `docs/ARCHITECTURE.md` §5.8–§5.13 + 本文件 §六
-4. **开始第八批 / v1.0 收口**（见 §6.6）：首选 **`ui-state-replay` 回放面板**（回放引擎已三批成熟、未知率 32%，把成果第一次带上 UI）；顺手补跑一次桌面壳冒烟（本会话因宿主 os error 231 未跑通）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：400 项 / ✅ / 10 插件）
+3. 读 `docs/ARCHITECTURE.md` §5.8–§5.14 + 本文件 §六
+4. **开始第九批 / v1.0 收口**（见 §6.7）：首选**分支链重建**（回放面板显示"会走哪个分支"）或 adapter 口上调用协议（call-context 自动消解）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

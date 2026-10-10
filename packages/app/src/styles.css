@@ -724,6 +724,17 @@ code {
   color: var(--fg-dim);
   border-style: dashed;
 }
+/* 回放徽章（点击 → kojo.replayFunction → 回放面板响应） */
+.nav-badge.replay {
+  cursor: pointer;
+  color: var(--accent, #61afef);
+  border-color: var(--accent, #61afef);
+  opacity: 0.7;
+}
+.nav-badge.replay:hover {
+  opacity: 1;
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+}
 .nav-more {
   font-size: 11.5px;
   padding: 2px 4px;
@@ -767,4 +778,201 @@ code {
   flex: 0 0 auto;
   width: 12px;
   color: var(--fg-dim);
+}
+
+/* ============================ 状态回放面板（rp-*，v0.2 第八批） ============================ */
+.panel-state-replay {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  font-size: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+.rp-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.rp-select {
+  flex: 1 1 140px;
+  min-width: 0;
+  font-size: 12px;
+  padding: 3px 4px;
+}
+.rp-fn-input {
+  flex: 2 1 200px;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  padding: 3px 5px;
+}
+.rp-context-input {
+  flex: 1 1 130px;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  padding: 3px 5px;
+}
+.rp-status {
+  padding: 1px 2px;
+}
+.rp-empty {
+  padding: 6px 2px;
+}
+.rp-error {
+  color: var(--red, #e06c75);
+  padding: 2px;
+  white-space: pre-wrap;
+}
+.rp-hint {
+  padding: 0 2px;
+  font-size: 11px;
+}
+.rp-suggests {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 140px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.rp-suggest-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.rp-suggest-btn:hover {
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+  color: var(--accent, #61afef);
+}
+.rp-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+.rp-summary {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.rp-badge {
+  display: inline-block;
+  font-size: 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.rp-badge.conf-exact {
+  color: var(--green, #98c379);
+  border-color: var(--green, #98c379);
+}
+.rp-badge.conf-partial {
+  color: var(--amber, #d19a66);
+  border-color: var(--amber, #d19a66);
+}
+.rp-badge.conf-unknown {
+  color: var(--red, #e06c75);
+  border-color: var(--red, #e06c75);
+}
+.rp-badge.unk {
+  color: var(--fg-dim);
+  border-style: dashed;
+  margin-right: 4px;
+}
+.rp-count.hit {
+  color: var(--green, #98c379);
+}
+.rp-count.miss {
+  color: var(--red, #e06c75);
+}
+.rp-count.unk {
+  color: var(--fg-dim);
+}
+.rp-meta {
+  font-size: 11px;
+}
+.rp-unknowns {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.rp-preds {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.rp-pred-btn {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--fg);
+  font-size: 11.5px;
+  padding: 2px 4px;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 3px;
+}
+.rp-pred-btn:hover {
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+}
+.rp-kind {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 3px;
+  min-width: 34px;
+  text-align: center;
+}
+.rp-outcome {
+  flex: 0 0 auto;
+  min-width: 24px;
+  text-align: center;
+  font-weight: 600;
+}
+.rp-outcome.hit {
+  color: var(--green, #98c379);
+}
+.rp-outcome.miss {
+  color: var(--red, #e06c75);
+}
+.rp-outcome.unk {
+  color: var(--fg-dim);
+}
+.rp-pred-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+.rp-line {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+}
+.rp-more {
+  font-size: 11px;
+  padding: 2px 4px;
 }

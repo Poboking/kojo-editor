@@ -33,6 +33,12 @@ export interface KernelEventMap {
    * （校验面板点击问题、函数树点击函数、未来的引用跳转）。
    */
   'editor.revealLocation': { filePath: string; line?: number; column?: number; source?: string };
+  /**
+   * 回放意图（v0.2 第八批）：请求回放面板解释一个口上函数。
+   * 通用、游戏无关——由回放面板（`state.replay` 的 UI 消费者）响应；
+   * 任意插件可发起（导航面板"回放此函数"、未来的矩阵/预览联动）。
+   */
+  'kojo.replayFunction': { functionName: string; source?: string };
 }
 
 /** 插件自定义事件键：必须携带 "插件id:" 前缀（例：'my-plugin:indexReady'） */

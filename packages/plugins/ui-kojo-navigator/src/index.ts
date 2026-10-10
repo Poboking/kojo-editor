@@ -217,6 +217,26 @@ export function createUiKojoNavigatorPlugin(): Plugin {
           ctx.bus.emit('editor.revealLocation', { filePath, line, source: name });
         };
 
+        /** 回放意图：请求回放面板解释该函数（内核事件，回放面板响应） */
+        const requestReplay = (name: string): void => {
+          ctx.bus.emit('kojo.replayFunction', { functionName: name, source: 'ui-kojo-navigator' });
+        };
+
+        /** 函数行尾的回放按钮（阻止冒泡——外层是跳转按钮） */
+        const replayBadge = (name: string): ReactNode =>
+          createElement(
+            'span',
+            {
+              className: 'nav-badge replay',
+              title: `在状态回放面板中解释 ${name}`,
+              onClick: (e: { stopPropagation: () => void }) => {
+                e.stopPropagation();
+                requestReplay(name);
+              },
+            },
+            '⟲',
+          );
+
         if (!indexReady) {
           return createElement(
             'div',
@@ -286,6 +306,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                           },
                           createElement('span', { className: 'nav-hit-name' }, h.node.name),
                           ...condBadges(h.node.name),
+                          replayBadge(h.node.name),
                           createElement(
                             'span',
                             { className: 'nav-hit-loc dim' },
@@ -353,6 +374,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                                   if (fn.match && fn.match.kind === 'declare' && fn.match.selector > 0)
                                     badges.push(createElement('span', { key: 'sel', className: 'nav-badge' }, `#${fn.match.selector}`));
                                   badges.push(...condBadges(fn.name));
+                                  badges.push(replayBadge(fn.name));
                                   return createElement(
                                     'li',
                                     { key: `${fn.filePath}:${fn.startLine}` },

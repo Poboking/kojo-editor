@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/plugin-ui-state-replay",
+  "version": "0.2.0",
+  "private": true,
+  "description": "State replay panel (ui.panel contribution): archive x character x function -> per-predicate three-valued results with confidence badges and unknown-reason grouping. Pure presentation - evaluation lives in the state.replay engine, call context is scene input (never guessed).",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0"
+  }
+}
