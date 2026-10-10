@@ -19,6 +19,7 @@ import type {
   ConditionComparison,
   ConditionExpr,
   ControlFlowStatement,
+  FunctionAssignment,
   FunctionConditions,
   FunctionPredicate,
   FunctionPredicates,
@@ -145,6 +146,179 @@ function expandCase(stmt: ControlFlowStatement, subject: ConditionExpr | null): 
 /** adapter `variableSchema` 查询函数（由引擎注入；通用层不解释结果） */
 export type SchemaLookup = (name: string, index?: number | string) => VariableInfo | undefined;
 
+// ---------------------------------------------------------------------------
+// 分支上下文（v0.2 第六批）——本地量数据流的"可达性"判定资料。
+//
+// 语义：把控制流语句序列折叠成"段栈"。每条语句属于一个**段路径**（外→内的
+// 段 id 序列）；开块语句（IF/SELECTCASE/…）入栈，分支语句（ELSEIF/ELSE/CASE…）
+// 把栈顶同深度段替换为新段（兄弟分支互异），闭合语句弹栈。
+// 查询 `contextOf(line)` = 处理完所有 `stmt.line < line` 的语句后的栈快照——
+// 即"该行执行时所处的分支路径"。赋值 A 对使用点 U 可达 ⇔
+// `A.context` 是 `U.context` 的前缀（同路径或祖先路径）。
+//
+// kind 分类与 erb-parser `scanControlFlow` 的配对表逐条一致（同源事实）。
+// ---------------------------------------------------------------------------
+
+/** 开块语句（与 scanner OPEN_KINDS 及 TRY 系、PRINTDATA 系前缀规则一致） */
+const CTX_OPEN_KINDS = new Set(['IF', 'SELECTCASE', 'FOR', 'WHILE', 'REPEAT', 'DO', 'DATALIST', 'STRDATA', 'NOSKIP']);
+/** 分支语句（与 scanner BRANCH_KINDS 一致） */
+const CTX_BRANCH_KINDS = new Set(['ELSEIF', 'ELSE', 'CASE', 'CASEELSE', 'CATCH']);
+/** 闭合语句（与 scanner CLOSE_KINDS 一致） */
+const CTX_CLOSE_KINDS = new Set([
+  'ENDIF',
+  'ENDSELECT',
+  'NEXT',
+  'WEND',
+  'REND',
+  'LOOP',
+  'ENDDATA',
+  'ENDLIST',
+  'ENDNOSKIP',
+  'ENDCATCH',
+  'ENDFUNC',
+]);
+
+interface CtxStackEntry {
+  depth: number;
+  seg: string;
+}
+
+/**
+ * 构建行 → 分支上下文路径 的查询器（基于语句序列的纯函数）。
+ * 宽容：孤儿分支/闭合向栈内找最近同深度项，找不到则不动栈（与 scanner 同策略）。
+ */
+export function buildContextLookup(stmts: readonly ControlFlowStatement[]): (line: number) => string[] {
+  const stack: CtxStackEntry[] = [];
+  const snapshots: { line: number; context: string[] }[] = [];
+  let segCounter = 0;
+
+  for (const s of stmts) {
+    if (CTX_OPEN_KINDS.has(s.kind) || s.kind.startsWith('TRY') || s.kind.startsWith('PRINTDATA')) {
+      stack.push({ depth: s.depth, seg: `s${++segCounter}` });
+    } else if (CTX_BRANCH_KINDS.has(s.kind)) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i]!.depth === s.depth) {
+          stack[i] = { depth: s.depth, seg: `s${++segCounter}` };
+          break;
+        }
+      }
+    } else if (CTX_CLOSE_KINDS.has(s.kind)) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i]!.depth === s.depth) {
+          stack.length = i;
+          break;
+        }
+      }
+    }
+    // 其余（SIF / 未知 kind）：不动栈
+    snapshots.push({ line: s.line, context: stack.map((e) => e.seg) });
+  }
+
+  // contextOf(L) = 最后一个 line < L 的快照（= 处理完 L 之前全部语句的状态）
+  return (line: number): string[] => {
+    // 二分：最后一个 snapshot.line < line
+    let lo = 0;
+    let hi = snapshots.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (snapshots[mid]!.line < line) {
+        found = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return found >= 0 ? snapshots[found]!.context : [];
+  };
+}
+
+/** 判定 `prefix` 是否为 `path` 的前缀（含相等） */
+function isContextPrefix(prefix: readonly string[], path: readonly string[]): boolean {
+  if (prefix.length > path.length) return false;
+  for (let i = 0; i < prefix.length; i++) {
+    if (prefix[i] !== path[i]) return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// 本地量赋值收集（v0.2 第六批）
+// ---------------------------------------------------------------------------
+
+/** 本地量槽位（Emuera 语言级；与 var-model LANGUAGE_LOCAL 对齐，剔除循环量 COUNT 与 LOCALSS） */
+const ASSIGNABLE_LOCALS = new Set(['LOCAL', 'LOCALS', 'RESULT', 'RESULTS']);
+
+/** 引号外截断行内注释（与 scanner sliceExpression 同逻辑；插件间禁 import，就地实现） */
+function sliceInlineComment(s: string): string {
+  let inStr = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (inStr) {
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      continue;
+    }
+    if (c === ';') return s.slice(0, i);
+  }
+  return s;
+}
+
+/**
+ * 赋值语句识别：`LOCAL(:n)? = RHS`（`== / != / <= / >=` 不匹配）。
+ * 复合赋值（`+=` 等）→ 记为 opaque 载体的"失效点"（旧值不可知 → 之后读取降级 unknown）。
+ */
+const ASSIGN_RE = /^(LOCAL|LOCALS|RESULT|RESULTS)(?::(\d+))?\s*([+\-*/%]?=)(?!=)\s*(.*)$/i;
+
+/** 从函数体原始行收集本地量赋值（结构事实；RHS 无法解析 → opaque，绝不抛） */
+export function collectAssignments(
+  lines: readonly string[],
+  startLine: number,
+  endLine: number,
+  contextOf: (line: number) => string[],
+): FunctionAssignment[] {
+  const out: FunctionAssignment[] = [];
+  let inSkipBlock = false;
+
+  for (let i = startLine; i <= endLine && i <= lines.length; i++) {
+    const raw = lines[i - 1] ?? '';
+    const trimmed = raw.trim();
+
+    if (inSkipBlock) {
+      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      continue;
+    }
+    if (trimmed === '[SKIPSTART]') {
+      inSkipBlock = true;
+      continue;
+    }
+    if (trimmed.length === 0 || trimmed.startsWith(';')) continue;
+    if (trimmed.startsWith('@') || trimmed.startsWith('#') || trimmed.startsWith('$')) continue;
+
+    const m = ASSIGN_RE.exec(trimmed);
+    if (!m) continue;
+    const name = m[1]!.toUpperCase();
+    if (!ASSIGNABLE_LOCALS.has(name)) continue;
+    const index = m[2] ? Number(m[2]) : 0;
+    const op = m[3]!;
+    const rhs = sliceInlineComment(m[4] ?? '').trim();
+    if (rhs.length === 0) continue;
+
+    out.push({
+      name: name as FunctionAssignment['name'],
+      index,
+      expr: op === '=' ? parseExpression(rhs) : { kind: 'opaque', text: `${op} ${rhs}` },
+      text: rhs,
+      line: i,
+      context: contextOf(i),
+    });
+  }
+  return out;
+}
+
 export interface ExtractFunctionOptions {
   /** 语义标注（可选）：给依赖打上人类可读标签 */
   lookup?: SchemaLookup;
@@ -159,8 +333,12 @@ export interface FunctionIdentity {
 /**
  * 从控制流骨架收集逐条谓词（含来源类别 / 原文 / 行号 / 深度）。
  * 聚合视图（`extractFunctionConditions`）与明细视图（`extractFunctionPredicates`）共用。
+ * @param opts.contextOf 提供时为每条谓词填充分支上下文路径（明细视图用）
  */
-export function collectPredicates(stmts: readonly ControlFlowStatement[]): FunctionPredicate[] {
+export function collectPredicates(
+  stmts: readonly ControlFlowStatement[],
+  opts: { contextOf?: (line: number) => string[] } = {},
+): FunctionPredicate[] {
   const preds: FunctionPredicate[] = [];
   /** SELECTCASE subject 栈（按 depth 配平；仅用于 CASE 展开） */
   const selectStack: { subject: ConditionExpr | null; depth: number }[] = [];
@@ -180,6 +358,7 @@ export function collectPredicates(stmts: readonly ControlFlowStatement[]): Funct
           expr: parseExpression(s.expression),
           line: s.line,
           depth: s.depth,
+          ...(opts.contextOf ? { context: opts.contextOf(s.line) } : {}),
         });
         break;
       case 'SELECTCASE': {
@@ -190,7 +369,14 @@ export function collectPredicates(stmts: readonly ControlFlowStatement[]): Funct
       case 'CASE': {
         const top = selectStack[selectStack.length - 1];
         for (const p of expandCase(s, top?.subject ?? null)) {
-          preds.push({ kind: 'CASE', text: s.expression, expr: p.expr, line: p.line, depth: s.depth });
+          preds.push({
+            kind: 'CASE',
+            text: s.expression,
+            expr: p.expr,
+            line: p.line,
+            depth: s.depth,
+            ...(opts.contextOf ? { context: opts.contextOf(s.line) } : {}),
+          });
         }
         break;
       }
@@ -204,19 +390,33 @@ export function collectPredicates(stmts: readonly ControlFlowStatement[]): Funct
   return preds;
 }
 
+/** 明细抽取的数据源（聚合路径不提供 → 不收集赋值 / 不填上下文） */
+export interface PredicateSourceLines {
+  /** 函数体结束行（1 基，含） */
+  endLine: number;
+  /** 文件全部行（按 `\n` 切分，与 scanControlFlow 的 EOL 规范化一致） */
+  lines: readonly string[];
+}
+
 /**
  * 抽取单函数谓词明细（含控制流骨架；**不聚合**——供快照回放逐条求值）。
+ * 提供 `source` 时同时收集本地量赋值并填充谓词分支上下文（v0.2 第六批）。
  */
 export function extractFunctionPredicates(
   fn: FunctionIdentity,
   stmts: readonly ControlFlowStatement[],
+  source?: PredicateSourceLines,
 ): FunctionPredicates {
+  const contextOf = source ? buildContextLookup(stmts) : null;
   return {
     normalizedName: fn.normalizedName,
     filePath: fn.filePath,
     startLine: fn.startLine,
     statements: [...stmts],
-    predicates: collectPredicates(stmts),
+    predicates: collectPredicates(stmts, contextOf ? { contextOf } : {}),
+    assignments: source
+      ? collectAssignments(source.lines, fn.startLine + 1, source.endLine, contextOf!)
+      : [],
   };
 }
 

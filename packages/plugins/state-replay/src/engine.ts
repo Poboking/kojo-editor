@@ -14,11 +14,13 @@ import type {
   FunctionReplay,
   Logger,
   PredicateReplay,
+  ReplayFunctionOptions,
   ReplayStateView,
   SnapshotArchive,
   StateReplayService,
 } from '@kojo/plugin-api';
 import { judgeCondition, type ValueReader } from './evaluate';
+import { createFunctionOverlay, type OverlayPosition, type OverlayReader } from './locals';
 import { createStateView, type SchemaLookup } from './state-view';
 
 export interface StateReplayEngineDeps {
@@ -31,15 +33,29 @@ export interface StateReplayEngineDeps {
   getSchemaLookup(): SchemaLookup | undefined;
 }
 
-/** 谓词明细 → 回放结果（纯函数；测试可直用） */
-export function replayPredicates(detail: FunctionPredicates, read: ValueReader): FunctionReplay {
-  const predicates: PredicateReplay[] = detail.predicates.map((p) => ({
-    kind: p.kind,
-    text: p.text,
-    line: p.line,
-    expr: p.expr,
-    outcome: judgeCondition(p.expr, read),
-  }));
+/** 谓词明细 → 回放结果（纯函数；测试可直用）。
+ *  `overlay`：本地量数据流 + 调用上下文叠加（v0.2 第六批；可省略 = 纯视图求值）。 */
+export function replayPredicates(
+  detail: FunctionPredicates,
+  read: ValueReader,
+  overlay?: OverlayReader,
+): FunctionReplay {
+  const predicates: PredicateReplay[] = detail.predicates.map((p) => {
+    let outcome;
+    if (overlay) {
+      const at: OverlayPosition = { line: p.line, context: p.context ?? [] };
+      outcome = judgeCondition(p.expr, (ref) => overlay(ref, at) ?? read(ref));
+    } else {
+      outcome = judgeCondition(p.expr, read);
+    }
+    return {
+      kind: p.kind,
+      text: p.text,
+      line: p.line,
+      expr: p.expr,
+      outcome,
+    };
+  });
 
   let hit = 0;
   let miss = 0;
@@ -77,20 +93,26 @@ export class StateReplayEngine implements StateReplayService {
     return createStateView({ archive, characterNo, lookup: this.deps.getSchemaLookup() });
   }
 
-  async replayFunction(view: ReplayStateView, functionName: string): Promise<FunctionReplay | null> {
+  async replayFunction(
+    view: ReplayStateView,
+    functionName: string,
+    options?: ReplayFunctionOptions,
+  ): Promise<FunctionReplay | null> {
     const detail = await this.deps.functionPredicates(functionName);
     if (!detail) return null;
     const read: ValueReader = (ref) => view.read(ref);
-    return replayPredicates(detail, read);
+    const overlay = createFunctionOverlay({ detail, callContext: options?.callContext, baseRead: read });
+    return replayPredicates(detail, read, overlay ?? undefined);
   }
 
   async replayFunctions(
     view: ReplayStateView,
     functionNames: readonly string[],
+    options?: ReplayFunctionOptions,
   ): Promise<(FunctionReplay | null)[]> {
     const out: (FunctionReplay | null)[] = [];
     for (const name of functionNames) {
-      out.push(await this.replayFunction(view, name));
+      out.push(await this.replayFunction(view, name, options));
     }
     return out;
   }

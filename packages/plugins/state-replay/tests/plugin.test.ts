@@ -63,6 +63,7 @@ function detail(name: string, exprs: string[], kinds: FunctionPredicates['predic
     filePath: 'D:/fake/kojo/test.erb',
     startLine: 1,
     statements: [],
+    assignments: [],
     predicates: exprs.map((e, i) => ({
       kind: kinds[i] ?? 'IF',
       text: e,

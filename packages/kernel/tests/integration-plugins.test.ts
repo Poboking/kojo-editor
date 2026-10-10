@@ -293,6 +293,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       let hit = 0;
       let miss = 0;
       let unknown = 0;
+      const unknownByCode = new Map<string, number>();
       for (const r of nonNull) {
         if (r!.confidence === 'exact') exact++;
         else if (r!.confidence === 'partial') partial++;
@@ -301,15 +302,47 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
         hit += r!.stats.hit;
         miss += r!.stats.miss;
         unknown += r!.stats.unknown;
+        for (const p of r!.predicates) {
+          if (p.outcome.kind === 'unknown') {
+            const c = p.outcome.unknown.code;
+            unknownByCode.set(c, (unknownByCode.get(c) ?? 0) + 1);
+          }
+        }
       }
       expect(predTotal).toBeGreaterThan(0);
       expect(hit + miss).toBeGreaterThan(0); // 至少按快照作出确定判定
+      // v0.2 第六批守门：本地量数据流 + 内置函数应显著压低未知率
+      // （第五批基线 7,351/11,685 = 62.9%；第六批预期 < 55%，实测见 console 输出）
+      expect(unknown / predTotal).toBeLessThan(0.55);
+
+      // —— 本地量数据流（第六批）：`IF LOCAL`（直线赋值 LOCAL = 1）应为确定真
+      const sp2 = await replay.replayFunction(view, 'M_KOJO_ORTHODOX_SPEVENT_K49_2');
+      expect(sp2).not.toBeNull();
+      const localPred = sp2!.predicates.find((p) => p.text === 'LOCAL');
+      expect(localPred?.outcome.kind).toBe('true');
+
+      // —— 调用上下文（第六批）：无上下文 → unknown('call-context')；
+      //    注入 ints=[undefined, 36]（约会对象编号）→ `ARG:1 >= 36 && ARG:1 <= 38` 确定真
+      const ev1 = await replay.replayFunction(view, 'M_KOJO_ORTHODOX_EVENT_K49_1');
+      expect(ev1).not.toBeNull();
+      const argPred = ev1!.predicates.find((p) => p.text.includes('ARG:1 >= 36'));
+      expect(argPred).toBeTruthy();
+      expect(argPred!.outcome.kind).toBe('unknown');
+      if (argPred!.outcome.kind === 'unknown') {
+        expect(argPred!.outcome.unknown.code).toBe('call-context');
+      }
+      const ev1c = await replay.replayFunction(view, 'M_KOJO_ORTHODOX_EVENT_K49_1', {
+        callContext: { ints: [undefined, 36] },
+      });
+      const argPredC = ev1c!.predicates.find((p) => p.text.includes('ARG:1 >= 36'));
+      expect(argPredC?.outcome.kind).toBe('true');
 
       // eslint-disable-next-line no-console
       console.log(
         `[smoke] 状态回放：K49 函数 ${k49Fns.length} | 谓词 ${predTotal} ` +
           `(命中 ${hit} / 未命中 ${miss} / 未知 ${unknown}) | ` +
           `置信度 exact ${exact} / partial ${partial} / unknown ${allUnknown} | ` +
+          `未知分类 ${[...unknownByCode.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(' ')} | ` +
           `DAY=${day.kind === 'value' ? day.value : '?'} 好感(CFLAG:2)=${favor.kind === 'value' ? favor.value : '?'}`,
       );
 

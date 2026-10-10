@@ -14,6 +14,9 @@
  * - **输入**：谓词明细来自 `condition.extractor`，存档模型来自 `snapshot.source`，
  *   具名索引字典来自 game adapter 的 `variableSchema`——本服务只做编排与求值。
  *
+ * v0.2 第六批扩展：本地量数据流（`FunctionPredicates.assignments` 驱动）、
+ * 引擎内置纯函数子集求值、`ReplayCallContext` 调用上下文注入（ARG/ARGS）。
+ *
  * 术语：`unknown` 是**能力边界的诚实呈现**，不是错误；`read` / 求值绝不抛错。
  */
 
@@ -23,8 +26,11 @@ import type { ConditionExpr, VariableRef } from './conditions';
 export type ReplayUnknownCode =
   | 'opaque' // 表达式未被解析（opaque 降级）
   | 'call' // 函数调用（近似回放不执行函数）
+  | 'builtin' // 内置函数存在但此调用无法求值（参数未知 / 越界 / 类型不符）
   | 'rename' // `[[词]]` rename 语法（读取期替换，编辑器保留原文）
   | 'pseudo' // 伪变量（RAND / CHARANUM 等计算值）
+  | 'local-no-write' // 本地量在函数内无可见赋值（v0.2 第六批起：本地量数据流的边界）
+  | 'call-context' // ARG/ARGS 为调用参数，未提供（或未覆盖该槽位的）调用上下文
   | 'dynamic-index' // 动态索引段（如 `YOGORE:(GET_CHARAHOME(TARGET))`）
   | 'named-index' // 具名索引无法解析（无字典 / 词不在字典）
   | 'missing-var' // 快照与引擎变量清单中均无此变量
@@ -90,6 +96,30 @@ export interface FunctionReplay {
 }
 
 /**
+ * 调用上下文（v0.2 第六批）——模拟"该函数被这样调用"时的实参注入。
+ *
+ * 语义（引擎 `ConvertArg` / `IntoFunction`，Process.CalledFunction.cs:162-239 +
+ * Process.State.cs:495-515）：签名声明的参数槽在**调用时必有值**——实参或
+ * 默认值 0/''；但**转发自路由层的值本身是场景输入**（如"约会对象编号"），
+ * 编辑器无从推断 → 注入之外一律 unknown（显式，不猜测 0）。
+ *
+ * 槽位编号：`ARG` 裸名 ≡ `ARG:0`（1D 数组裸引用 = 0 号下标，引擎
+ * VariableParser 语义），因此 `ints[0]` 对应签名的第一个参数槽。
+ */
+export interface ReplayCallContext {
+  /** ARG 槽位值（0 起；`undefined` / 缺省 = 该槽位未知） */
+  ints?: readonly (number | undefined)[];
+  /** ARGS 槽位值（0 起；同上） */
+  strs?: readonly (string | undefined)[];
+}
+
+/** 单函数回放选项 */
+export interface ReplayFunctionOptions {
+  /** 调用上下文（未提供 → ARG/ARGS 引用一律 unknown('call-context')） */
+  callContext?: ReplayCallContext;
+}
+
+/**
  * 回放状态视图：一份归档 + 一个角色 → 可查询的变量状态。
  *
  * 上下文语义（引擎级，与 VariableParser 补位规则一致）：
@@ -119,9 +149,14 @@ export interface StateReplayService {
   createView(archivePath: string, characterNo: number): Promise<ReplayStateView>;
   /**
    * 回放单函数：按需取谓词明细（`condition.extractor`）→ 逐条在视图上求值。
+   * @param options 回放选项（调用上下文注入等）
    * @returns 函数不存在 / 无索引时 null（显式）；函数无谓词 → total=0 的结果。
    */
-  replayFunction(view: ReplayStateView, functionName: string): Promise<FunctionReplay | null>;
+  replayFunction(view: ReplayStateView, functionName: string, options?: ReplayFunctionOptions): Promise<FunctionReplay | null>;
   /** 批量回放（视图复用；函数不存在时对应条目为 null） */
-  replayFunctions(view: ReplayStateView, functionNames: readonly string[]): Promise<(FunctionReplay | null)[]>;
+  replayFunctions(
+    view: ReplayStateView,
+    functionNames: readonly string[],
+    options?: ReplayFunctionOptions,
+  ): Promise<(FunctionReplay | null)[]>;
 }

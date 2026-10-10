@@ -23,6 +23,7 @@ import type {
   ReplayValue,
   VariableRef,
 } from '@kojo/plugin-api';
+import { tryEvaluateBuiltin } from './builtins';
 
 /** 变量读取器（`ReplayStateView.read` 即满足；测试可注入合成实现） */
 export type ValueReader = (ref: VariableRef) => ReplayValue;
@@ -57,7 +58,9 @@ export function evaluateExpr(expr: ConditionExpr, read: ValueReader): ReplayValu
       return unknown('rename', `rename 词无法求值：${expr.text}`);
 
     case 'call':
-      return unknown('call', `函数调用无法求值：${expr.name}()`);
+      // v0.2 第六批：内置纯函数子集（GETBIT / GROUPMATCH / MAX / MIN / ABS /
+      // SIGN / LIMIT / POWER，语义对齐 Creator.Method.cs）；其余维持 unknown('call')
+      return tryEvaluateBuiltin(expr.name.toUpperCase(), expr.args, read, evaluateExpr) ?? unknown('call', `函数调用无法求值：${expr.name}()`);
 
     case 'unary': {
       const v = evaluateExpr(expr.operand, read);

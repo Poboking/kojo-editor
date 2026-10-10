@@ -61,6 +61,7 @@ export type {
   ConditionExpr,
   ConditionExtractorService,
   ConditionIndex,
+  FunctionAssignment,
   FunctionConditions,
   FunctionPredicate,
   FunctionPredicates,
@@ -72,6 +73,8 @@ export type {
 export type {
   FunctionReplay,
   PredicateReplay,
+  ReplayCallContext,
+  ReplayFunctionOptions,
   ReplayOutcome,
   ReplayStateView,
   ReplayUnknown,

@@ -130,6 +130,36 @@ export interface FunctionPredicate {
   line: number;
   /** 块深度（scanControlFlow 语义；分支链重建用） */
   depth: number;
+  /**
+   * 分支上下文路径（外→内，段 id 序列）——v0.2 第六批：本地量数据流的
+   * 可达性判定用（`前缀包含` = 赋值语句与使用点同路径或为祖先路径）。
+   * 仅明细视图填充（聚合视图不保留）。
+   */
+  context?: string[];
+}
+
+/**
+ * 本地量赋值语句（v0.2 第六批）——`LOCAL(:n) = 表达式` 等直线赋值的**结构事实**。
+ *
+ * 语义（回放侧解释，抽取侧只记录）：
+ * - 目标槽位 = `name:index`（裸 `LOCAL` ≡ `LOCAL:0`，与索引段声明规则一致）；
+ * - `context` = 分支上下文路径（与 `FunctionPredicate.context` 同构）：
+ *   赋值点在使用点的祖先路径（前缀包含）上才算"可达"；
+ * - RHS 无法解析 → `opaque`（回放求值时降级 unknown，绝不猜测）。
+ */
+export interface FunctionAssignment {
+  /** 目标变量（Emuera 语言级局部量族：LOCAL / LOCALS / RESULT / RESULTS） */
+  name: 'LOCAL' | 'LOCALS' | 'RESULT' | 'RESULTS';
+  /** 下标（缺省 0） */
+  index: number;
+  /** RHS 表达式 AST */
+  expr: ConditionExpr;
+  /** RHS 原文（展示 / 排障） */
+  text: string;
+  /** 赋值行（1 基） */
+  line: number;
+  /** 分支上下文路径（外→内） */
+  context: string[];
 }
 
 /**
@@ -145,6 +175,12 @@ export interface FunctionPredicates {
   statements: ControlFlowStatement[];
   /** 谓词序列（按行序；CASE 每值一条） */
   predicates: FunctionPredicate[];
+  /**
+   * 本地量赋值语句序列（v0.2 第六批；按行序）——回放的数据流资料。
+   * 只收录目标为 LOCAL/LOCALS/RESULT/RESULTS 的直线赋值（含 `+=` 等
+   * 复合赋值 → 记为 opaque 载体的"失效点"，防误报旧值）。
+   */
+  assignments: FunctionAssignment[];
 }
 
 /**

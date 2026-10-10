@@ -115,9 +115,12 @@ export class ConditionEngine implements ConditionExtractorService {
 
     // 函数区间切片（骨架按行升序；与全量抽取同一边界语义 [startLine, endLine]）
     const slice = stmts.filter((s) => s.line >= ref.startLine && s.line <= ref.endLine);
+    // 明细视图同时收集本地量赋值 + 分支上下文（回放数据流资料；聚合路径不收集）
+    const sourceLines = text.replace(/\r\n?/g, '\n').split('\n');
     const detail = extractFunctionPredicates(
       { normalizedName: key, filePath: ref.filePath, startLine: ref.startLine },
       slice,
+      { endLine: ref.endLine, lines: sourceLines },
     );
     this.detailCache.set(key, detail);
     return detail;
