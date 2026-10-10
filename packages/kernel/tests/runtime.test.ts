@@ -293,10 +293,11 @@ describe('PluginRuntime · 事件命名空间纪律', () => {
 
     const scoped = scopedBus(bus, 'p1', (msg) => violations.push(msg));
     scoped.emit('p1:ok' as never, 1 as never);
-    scoped.emit('x:y' as never, 2 as never); // 违规：无 'p1:' 前缀
+    // 违规：无 'p1:' 前缀 —— 必须抛错而非静默丢弃
+    expect(() => scoped.emit('x:y' as never, 2 as never)).toThrow(/without its 'p1:' prefix/);
     scoped.emit('plugin.statusChanged' as never, { pluginId: 'p1', status: 'active' } as never);
 
-    expect(received).toEqual([1]);
+    expect(received).toEqual([1]); // 违规事件不得触发任何订阅
     expect(violations).toHaveLength(1);
     expect(violations[0]).toContain("without its 'p1:' prefix");
   });

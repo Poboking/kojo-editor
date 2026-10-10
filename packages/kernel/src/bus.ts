@@ -93,10 +93,9 @@ export function scopedBus(bus: EventBus, pluginId: string, onViolation?: (messag
       const t = type as string;
       if (!KERNEL_EVENT_NAMES.has(t) && !t.startsWith(prefix)) {
         const message = `Plugin '${pluginId}' tried to emit event '${t}' without its '${prefix}' prefix`;
-        if (onViolation) {
-          onViolation(message);
-          return;
-        }
+        // onViolation 只负责可观测性（记日志），不得吞掉事件：
+        // 违规必须显式失败，否则插件会误以为事件已发出（对应 DSH 事件命名空间约定）。
+        onViolation?.(message);
         throw new Error(message);
       }
       bus.emit(type, payload);
