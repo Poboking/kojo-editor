@@ -25,6 +25,12 @@ export const WellKnownServices = {
    * 引擎内置通用规则；消费者为校验结果面板 / 命令面板 / 未来 CI。
    */
   ConventionLinter: 'convention.linter',
+  /**
+   * 条件谓词抽取服务（v0.2 第四批）。控制流骨架 → 表达式解析 → 函数级状态依赖；
+   * 语义标签来自当前 game.adapter 的 `variableSchema`（引擎透传，不解释）。
+   * 消费者：导航面板徽章 / 条件矩阵 / 快照回放（v1.0）。
+   */
+  ConditionExtractor: 'condition.extractor',
 } as const;
 
 export type KernelServiceKey = (typeof KernelServices)[keyof typeof KernelServices];

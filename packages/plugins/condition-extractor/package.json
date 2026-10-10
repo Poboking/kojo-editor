@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-condition-extractor",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Condition predicate extractor (condition.extractor service): control-flow skeleton -> expression AST -> per-function state dependencies. Variable semantics come from the active game adapter's variableSchema via slot query - never imported directly.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

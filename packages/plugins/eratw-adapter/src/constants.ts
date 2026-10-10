@@ -17,6 +17,9 @@ export const ERATW = {
     charaCsvDir: ['CSV', 'Chara'] as const,
   },
 
+  /** 变量名称表目录（emuera 通用 CSV 目录；CFLAG.csv / Talent.csv … 变量字典来源） */
+  csvDir: ['CSV'] as const,
+
   /** 口上域 */
   paths: {
     /** 個人口上：编辑器主战场 */

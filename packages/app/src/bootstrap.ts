@@ -3,6 +3,7 @@ import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createUiStatusPlugin } from '@kojo/plugin-ui-status';
 import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
+import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
 import { createUiConventionReportPlugin } from '@kojo/plugin-ui-convention-report';
 import { createUiKojoNavigatorPlugin } from '@kojo/plugin-ui-kojo-navigator';
 import { tauriBridge } from './bridge/tauri-bridge';
@@ -23,6 +24,8 @@ export async function bootstrapKernel(): Promise<Kernel> {
       createEratwAdapterPlugin(),
       // 约定校验引擎（游戏无关）+ 结果为面板呈现
       createConventionLinterPlugin(),
+      // 条件谓词抽取（游戏无关；变量语义来自当前 adapter 的 variableSchema）
+      createConditionExtractorPlugin(),
       // UI：面板（内核状态 + 校验结果 + 函数树导航）
       createUiStatusPlugin(),
       createUiConventionReportPlugin(),

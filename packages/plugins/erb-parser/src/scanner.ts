@@ -1,4 +1,4 @@
-import type { ErbDim, ErbFile, ErbFunction, ErbParam } from '@kojo/plugin-api';
+import type { ControlFlowStatement, ErbDim, ErbFile, ErbFunction, ErbParam } from '@kojo/plugin-api';
 
 /**
  * ERB 结构扫描器（宽容解析，不做完整语法检查）。
@@ -217,4 +217,165 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
   }
 
   return { path, functions, dims, hasFunctionDirective, lineCount };
+}
+
+// ---------------------------------------------------------------------------
+// 控制流骨架扫描（v0.2 第四批）——纯结构，零语义。
+// 配对表以引擎源码为准（FunctionIdentifier.cs funcMatch，见逆向文档
+// 《eratw4.980-Lang与Statements边角.md》§funcMatch 结构配对表）：
+//   IF→ENDIF / SELECTCASE→ENDSELECT / REPEAT→REND / FOR→NEXT / WHILE→WEND /
+//   DO→LOOP / TRY 系→CATCH→ENDCATCH / PRINTDATA 系→ENDDATA /
+//   DATALIST→ENDLIST / STRDATA→ENDDATA / NOSKIP→ENDNOSKIP / TRY*LIST→ENDFUNC
+// ---------------------------------------------------------------------------
+
+/** 开块语句：kind → 配对类别 */
+const OPEN_KINDS: Readonly<Record<string, string>> = {
+  IF: 'if',
+  SELECTCASE: 'select',
+  FOR: 'for',
+  WHILE: 'while',
+  REPEAT: 'repeat',
+  DO: 'do',
+  DATALIST: 'list',
+  STRDATA: 'data',
+  NOSKIP: 'noskip',
+};
+
+/** 分支语句：与所配对的开块语句同深度 */
+const BRANCH_KINDS: Readonly<Record<string, string>> = {
+  ELSEIF: 'if',
+  ELSE: 'if',
+  CASE: 'select',
+  CASEELSE: 'select',
+  CATCH: 'try',
+};
+
+/** 闭合语句 */
+const CLOSE_KINDS: Readonly<Record<string, string>> = {
+  ENDIF: 'if',
+  ENDSELECT: 'select',
+  NEXT: 'for',
+  WEND: 'while',
+  REND: 'repeat',
+  LOOP: 'do',
+  ENDDATA: 'data',
+  ENDLIST: 'list',
+  ENDNOSKIP: 'noskip',
+  ENDCATCH: 'try',
+  ENDFUNC: 'try',
+};
+
+/** 单行语句（不配对、不开块；如 SIF = Single IF） */
+const LEAF_KINDS = new Set(['SIF']);
+
+/** 提取表达式原文的语句（其余受支持语句的 expression 为空串） */
+const EXPRESSION_KINDS = new Set(['IF', 'ELSEIF', 'SIF', 'SELECTCASE', 'CASE', 'REPEAT', 'FOR', 'WHILE']);
+
+/**
+ * 截取表达式原文：在**引号外**遇到 `;` 视为行内注释截断；
+ * 字符串内的 `;` 原样保留（如 `IF STR == "a;b"`）。
+ */
+function sliceExpression(rest: string): string {
+  let inStr = false;
+  for (let i = 0; i < rest.length; i++) {
+    const c = rest[i]!;
+    if (inStr) {
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      continue;
+    }
+    if (c === ';') return rest.slice(0, i).trim();
+  }
+  return rest.trim();
+}
+
+/**
+ * 控制流骨架扫描（纯函数，宽容解析）：
+ * - 线性输出全部控制流语句，附带块深度（见 `ControlFlowStatement` 契约）；
+ * - `[SKIPSTART]…[SKIPEND]`、注释、`@` / `#` / `$` 行不参与；
+ * - 配对不完好（孤儿闭合 / 错配嵌套）时不中断：闭合语句向栈内查找最近匹配项，
+ *   找不到则不动栈——深度尽量保持可用（真实语料配平完好，此路径为防御性）。
+ */
+export function scanControlFlow(text: string): ControlFlowStatement[] {
+  const lines = normalizeEol(text).split('\n');
+  const out: ControlFlowStatement[] = [];
+  const stack: string[] = []; // 配对类别栈
+  let inSkipBlock = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i]!.trim();
+
+    if (inSkipBlock) {
+      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      continue;
+    }
+    if (trimmed === '[SKIPSTART]') {
+      inSkipBlock = true;
+      continue;
+    }
+    if (trimmed.length === 0 || trimmed.startsWith(';')) continue;
+    if (trimmed.startsWith('@') || trimmed.startsWith('#') || trimmed.startsWith('$')) continue;
+
+    const wordMatch = /^([A-Za-z_]+)/.exec(trimmed);
+    if (!wordMatch) continue;
+    const kind = wordMatch[1]!.toUpperCase();
+    const rest = trimmed.slice(wordMatch[1]!.length);
+
+    let role: 'open' | 'branch' | 'close' | 'leaf' | null = null;
+    let pair = '';
+    if (LEAF_KINDS.has(kind)) {
+      role = 'leaf';
+    } else if (OPEN_KINDS[kind] !== undefined) {
+      role = 'open';
+      pair = OPEN_KINDS[kind]!;
+    } else if (BRANCH_KINDS[kind] !== undefined) {
+      role = 'branch';
+      pair = BRANCH_KINDS[kind]!;
+    } else if (CLOSE_KINDS[kind] !== undefined) {
+      role = 'close';
+      pair = CLOSE_KINDS[kind]!;
+    } else if (kind.startsWith('PRINTDATA')) {
+      role = 'open';
+      pair = 'data';
+    } else if (kind.startsWith('TRY')) {
+      role = 'open';
+      pair = 'try';
+    }
+    if (!role) continue;
+
+    const expression = EXPRESSION_KINDS.has(kind) ? sliceExpression(rest) : '';
+
+    if (role === 'leaf') {
+      out.push({ kind, expression, depth: stack.length, line: i + 1 });
+    } else if (role === 'open') {
+      out.push({ kind, expression, depth: stack.length, line: i + 1 });
+      stack.push(pair);
+    } else if (role === 'branch') {
+      // 与所配对的开启语句同深度（向栈内找最近匹配；找不到时退化为"栈内一层"）
+      let found = -1;
+      for (let s = stack.length - 1; s >= 0; s--) {
+        if (stack[s] === pair) {
+          found = s;
+          break;
+        }
+      }
+      out.push({ kind, expression, depth: found >= 0 ? found : Math.max(0, stack.length - 1), line: i + 1 });
+    } else {
+      // 闭合：向栈内查找最近匹配项并弹到它（含）；找不到则不动栈
+      let found = -1;
+      for (let s = stack.length - 1; s >= 0; s--) {
+        if (stack[s] === pair) {
+          found = s;
+          break;
+        }
+      }
+      if (found >= 0) stack.length = found;
+      out.push({ kind, expression, depth: stack.length, line: i + 1 });
+    }
+  }
+
+  return out;
 }

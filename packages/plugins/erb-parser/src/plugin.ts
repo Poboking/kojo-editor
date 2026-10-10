@@ -1,5 +1,5 @@
 import type { ErbFile, ErbFunctionRef, ErbIndex, ErbParserService, FileIO, GameProject, Plugin } from '@kojo/plugin-api';
-import { parseErbText } from './scanner';
+import { parseErbText, scanControlFlow } from './scanner';
 
 /**
  * erb-parser 插件。
@@ -126,6 +126,8 @@ export function createErbParserPlugin(): Plugin {
         },
 
         parseText: (text: string, path?: string) => parseErbText(text, path),
+
+        scanControlFlow: (text: string) => scanControlFlow(text),
 
         buildIndex: (rootsToScan: string[]) => build(rootsToScan, generation),
 

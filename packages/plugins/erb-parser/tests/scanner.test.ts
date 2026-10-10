@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { parseDimDeclaration, parseErbText, parseFunctionDefinition, parseParams, splitTopLevel } from '../src/scanner';
+import {
+  parseDimDeclaration,
+  parseErbText,
+  parseFunctionDefinition,
+  parseParams,
+  scanControlFlow,
+  splitTopLevel,
+} from '../src/scanner';
 
 describe('splitTopLevel', () => {
   it('顶层逗号切分，忽略括号/引号内逗号', () => {
@@ -189,5 +196,153 @@ describe('parseErbText · 边界情况', () => {
     const f = parseErbText('  @INDENTED\n\t#DIM 变量名\n');
     expect(f.functions[0]!.name).toBe('INDENTED');
     expect(f.dims[0]!.name).toBe('变量名');
+  });
+});
+
+describe('scanControlFlow', () => {
+  it('IF 链：IF/ELSEIF/ELSE/ENDIF 同深度，体内语句深度 +1', () => {
+    // 真实样本（大妖精 M_KOJO_K13_日常系コマンド.ERB 缩编）
+    const text = [
+      'IF LOCAL', // 1
+      '\tIF CFLAG:318 == 1 || TFLAG:193 == -3 ;custom code, hate mark 3', // 2
+      '\t\tPRINTFORMW 「（哽咽）…我现在…什么也不想说」', // 3
+      '\tELSEIF TCVAR:302', // 4
+      '\t\tPRINTFORMW 「啊、蝴蝶」', // 5
+      '\tENDIF', // 6
+      'ELSEIF TALENT:恋慕 && BASE:酒気 > (MAXBASE:酒気 / 10) * 8', // 7
+      '\tPRINTFORMW 「诶嘿嘿～♪」', // 8
+      'ENDIF', // 9
+    ].join('\n');
+    const stmts = scanControlFlow(text);
+    expect(stmts.map((s) => [s.kind, s.depth, s.line])).toEqual([
+      ['IF', 0, 1],
+      ['IF', 1, 2],
+      ['ELSEIF', 1, 4],
+      ['ENDIF', 1, 6],
+      ['ELSEIF', 0, 7],
+      ['ENDIF', 0, 9],
+    ]);
+    expect(stmts[1]!.expression).toBe('CFLAG:318 == 1 || TFLAG:193 == -3');
+    expect(stmts[4]!.expression).toBe('TALENT:恋慕 && BASE:酒気 > (MAXBASE:酒気 / 10) * 8');
+  });
+
+  it('SELECTCASE/CASE/CASEELSE/ENDSELECT 配对与深度', () => {
+    const text = [
+      'SELECTCASE ARGS', // 1
+      'CASE "ENCOUNTER"', // 2
+      '\tCALL FOO', // 3
+      'CASE IS >= 5', // 4
+      'CASEELSE', // 5
+      '\tPRINTL x', // 6
+      'ENDSELECT', // 7
+      'PRINTL done', // 8
+    ].join('\n');
+    const stmts = scanControlFlow(text);
+    expect(stmts.map((s) => [s.kind, s.depth, s.expression])).toEqual([
+      ['SELECTCASE', 0, 'ARGS'],
+      ['CASE', 0, '"ENCOUNTER"'],
+      ['CASE', 0, 'IS >= 5'],
+      ['CASEELSE', 0, ''],
+      ['ENDSELECT', 0, ''],
+    ]);
+  });
+
+  it('SIF 不配对：不改变后续深度', () => {
+    const text = ['SIF RESULT == 1', '\tRETURN 1', 'IF A', 'ENDIF'].join('\n');
+    const stmts = scanControlFlow(text);
+    expect(stmts.map((s) => [s.kind, s.depth])).toEqual([
+      ['SIF', 0],
+      ['IF', 0],
+      ['ENDIF', 0],
+    ]);
+    expect(stmts[0]!.expression).toBe('RESULT == 1');
+  });
+
+  it('字符串内分号不截断；引号外分号截断', () => {
+    const stmts = scanControlFlow(['IF STR == "a;b"', 'IF X == 1 ; 注释', 'IF Y ; 注释'].join('\n'));
+    expect(stmts.map((s) => s.expression)).toEqual(['STR == "a;b"', 'X == 1', 'Y']);
+  });
+
+  it('SKIPSTART 区间内不产出；注释行/空行/@#/$ 行不参与', () => {
+    const text = [
+      '; IF FAKE1',
+      '@FUNC',
+      '#DIM X',
+      '$LABEL',
+      '[SKIPSTART]',
+      'IF FAKE2',
+      '[SKIPEND]',
+      'IF REAL',
+      'ENDIF',
+    ].join('\n');
+    const stmts = scanControlFlow(text);
+    expect(stmts.map((s) => [s.kind, s.line])).toEqual([
+      ['IF', 8],
+      ['ENDIF', 9],
+    ]);
+  });
+
+  it('REPEAT/REND、FOR/NEXT、WHILE/WEND 配对', () => {
+    const text = [
+      'REPEAT 3', // 1
+      '\tFOR I, 0, 5', // 2
+      '\t\tWHILE X', // 3
+      '\t\tWEND', // 4
+      '\tNEXT', // 5
+      'REND', // 6
+    ].join('\n');
+    const stmts = scanControlFlow(text);
+    expect(stmts.map((s) => [s.kind, s.depth])).toEqual([
+      ['REPEAT', 0],
+      ['FOR', 1],
+      ['WHILE', 2],
+      ['WEND', 2],
+      ['NEXT', 1],
+      ['REND', 0],
+    ]);
+    expect(stmts[0]!.expression).toBe('3');
+    expect(stmts[1]!.expression).toBe('I, 0, 5');
+  });
+
+  it('TRY 系 → CATCH → ENDCATCH；PRINTDATA → ENDDATA', () => {
+    const text = [
+      'TRYCALLFORM FOO_{N}', // 1
+      'CATCH', // 2
+      '\tPRINTL fallback', // 3
+      'ENDCATCH', // 4
+      'PRINTDATA', // 5
+      'DATALIST', // 6
+      '\t1', // 7
+      'ENDLIST', // 8
+      'ENDDATA', // 9
+    ].join('\n');
+    const stmts = scanControlFlow(text);
+    // 注：DATALIST 是独立开块（list），ENDLIST 配对它；PRINTDATA 的 ENDDATA 在 ENDLIST 之后配平
+    expect(stmts.map((s) => s.kind)).toEqual(['TRYCALLFORM', 'CATCH', 'ENDCATCH', 'PRINTDATA', 'DATALIST', 'ENDLIST', 'ENDDATA']);
+    const byKind = new Map(stmts.map((s) => [s.kind, s.depth]));
+    expect(byKind.get('CATCH')).toBe(0); // 与 TRYCALLFORM 同深度
+    expect(byKind.get('ENDCATCH')).toBe(0);
+  });
+
+  it('孤儿 ENDIF / 错配不中断（宽容，后续深度仍可用）', () => {
+    const text = ['ENDIF', 'IF A', 'NEXT', 'PRINTL x', 'ENDIF'].join('\n');
+    const stmts = scanControlFlow(text);
+    expect(stmts.map((s) => [s.kind, s.depth])).toEqual([
+      ['ENDIF', 0],
+      ['IF', 0],
+      ['NEXT', 1], // 栈内无 for：不动栈，depth = 当前栈长
+      ['ENDIF', 0], // 向前找到 IF 并弹掉
+    ]);
+  });
+
+  it('混合大小写语句宽容识别', () => {
+    const stmts = scanControlFlow(['if A', 'EndIf'].join('\n'));
+    expect(stmts.map((s) => s.kind)).toEqual(['IF', 'ENDIF']);
+    expect(stmts[0]!.depth).toBe(0);
+  });
+
+  it('CASE 逗号列表与 TO 区间原文保留', () => {
+    const stmts = scanControlFlow(['SELECTCASE X', 'CASE 1, 2, 3', 'CASE 10 TO 20', 'ENDSELECT'].join('\n'));
+    expect(stmts.filter((s) => s.kind === 'CASE').map((s) => s.expression)).toEqual(['1, 2, 3', '10 TO 20']);
   });
 });

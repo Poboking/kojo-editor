@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as nodeJoin } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ConventionLinterService, ErbParserService } from '@kojo/plugin-api';
+import type { ConditionExtractorService, ConventionLinterService, ErbParserService } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 import { createKernel } from '../src/kernel';
 import { NodeBridge } from './helpers/node-bridge';
@@ -10,11 +10,13 @@ import { MemoryStorageBackend } from './helpers/memory-storage';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
+import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
 
 /**
  * 真实工程集成冒烟 —— 直接检验各阶段验收标准：
  * - v0.1：「选定有效 eraTW 目录后：CHARA CSV 映射解析成功，能列出 kojoPaths 下全部文件与函数清单」；
- * - v0.2：「按角色/家族浏览 99k 函数」的前提（家族识别覆盖）+ 约定校验器在真实数据上产出问题。
+ * - v0.2：「按角色/家族浏览 99k 函数」的前提（家族识别覆盖）+ 约定校验器在真实数据上产出问题；
+ * - v0.2 第四批：条件谓词抽取（控制流 → 谓词 → 状态依赖 + adapter 变量字典标注）。
  *
  * 真实游戏数据不入库：通过环境变量 `KOJO_SMOKE_PROJECT` 指定本地游戏目录；
  * 未设置时整组跳过（CI 安全）。
@@ -23,12 +25,17 @@ const SMOKE_DIR = process.env.KOJO_SMOKE_PROJECT;
 
 describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
   it(
-    'onboarding → CHARA 映射 → 口上域全量函数索引 → 约定校验',
+    'onboarding → CHARA 映射 → 口上域全量函数索引 → 约定校验 → 条件抽取',
     async () => {
       const appData = mkdtempSync(nodeJoin(tmpdir(), 'kojo-smoke-'));
       const kernel = await createKernel({
         platform: new NodeBridge(appData),
-        plugins: [createErbParserPlugin(), createEratwAdapterPlugin(), createConventionLinterPlugin()],
+        plugins: [
+          createErbParserPlugin(),
+          createEratwAdapterPlugin(),
+          createConventionLinterPlugin(),
+          createConditionExtractorPlugin(),
+        ],
         storageBackend: new MemoryStorageBackend(),
       });
       await kernel.start();
@@ -38,6 +45,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(states.get('erb-parser')?.status).toBe('active');
       expect(states.get('eratw-adapter')?.status).toBe('active');
       expect(states.get('convention-linter')?.status).toBe('active');
+      expect(states.get('condition-extractor')?.status).toBe('active');
 
       // 2. onboarding（内核对全部 adapter 候选轮询 detect）
       const project = await kernel.project.open(SMOKE_DIR!);
@@ -125,6 +133,38 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(formHits).toBeGreaterThan(0);
       expect(formHits).toBeLessThan(100);
 
+      // 6. 条件抽取（v0.2 第四批：控制流 → 谓词 → 状态依赖；schema 标注来自 adapter 变量字典）
+      const extractor = kernel.services.get<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
+      const condIndex = await extractor.ensureIndex();
+      expect(condIndex.projectRoot).toBe(project.rootDir);
+
+      // 规模断言（真实数据：20 万 IF / 4.5 万 SELECTCASE）
+      expect(condIndex.stats.functions).toBeGreaterThan(50000);
+      expect(condIndex.stats.predicates).toBeGreaterThan(100000);
+      expect(condIndex.stats.functionsWithDeps).toBeGreaterThan(1000);
+      // 解析降级率（opaque）：应远低于半数（宽容解析的目标是绝大多数可解析）
+      expect(condIndex.stats.unparsed / condIndex.stats.predicates).toBeLessThan(0.2);
+
+      // schema 标注生效：CFLAG:2（好感度）应被大量标注（变量字典来自游戏 CSV）
+      let favDeps = 0;
+      let schemaTagged = 0;
+      let talentLove = 0;
+      for (const fc of condIndex.byFunction.values()) {
+        for (const d of fc.dependencies) {
+          if (d.schema?.description) schemaTagged++;
+          if (d.key === 'CFLAG:2' && d.schema?.description === '好感度') favDeps++;
+          if (d.key === 'TALENT:恋慕') talentLove++;
+        }
+      }
+      expect(schemaTagged).toBeGreaterThan(1000);
+      expect(favDeps).toBeGreaterThan(10);
+      expect(talentLove).toBeGreaterThan(10);
+
+      // 单函数查询路径可用（取一个有依赖的函数，验证服务读路径）
+      const sample = [...condIndex.byFunction.values()].find((f) => f.dependencies.length > 0);
+      expect(sample).toBeTruthy();
+      expect(extractor.functionConditions(sample!.normalizedName)).toBe(sample);
+
       // eslint-disable-next-line no-console
       console.log(
         `[smoke] 角色 ${project.charaIndex.size} | ERB 文件 ${index.files.size} | ` +
@@ -137,7 +177,11 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           `[smoke] 约定校验 ${report.issues.length} 项 ` +
           `(error ${report.counts.error} / warning ${report.counts.warning} / info ${report.counts.info}) ` +
           `in ${report.durationMs}ms\n` +
-          `[smoke] 分规则：${[...byRule.entries()].map(([k, v]) => `${k}=${v}`).join('  ')}`,
+          `[smoke] 分规则：${[...byRule.entries()].map(([k, v]) => `${k}=${v}`).join('  ')}\n` +
+          `[smoke] 条件抽取：扫描函数 ${condIndex.stats.functions} | 谓词 ${condIndex.stats.predicates} ` +
+          `(未解析 ${condIndex.stats.unparsed}) | 含依赖函数 ${condIndex.stats.functionsWithDeps} | ` +
+          `依赖条目 ${condIndex.stats.dependencies} | schema 标注 ${schemaTagged}（好感度 ${favDeps} / 恋慕 ${talentLove}） ` +
+          `in ${condIndex.durationMs}ms`,
       );
 
       await kernel.stop();

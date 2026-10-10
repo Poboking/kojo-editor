@@ -55,6 +55,17 @@ export type {
   ConventionSeverity,
 } from './conventions';
 
+export { dependencyKey } from './conditions';
+export type {
+  ConditionComparison,
+  ConditionExpr,
+  ConditionExtractorService,
+  ConditionIndex,
+  FunctionConditions,
+  StateDependency,
+  VariableRef,
+} from './conditions';
+
 export type {
   CharaInfo,
   FamilyIndexRule,
@@ -92,6 +103,7 @@ export { KernelServices, WellKnownServices } from './services';
 export type { KernelServiceKey, PluginRegistry, WellKnownServiceKey } from './services';
 
 export type {
+  ControlFlowStatement,
   ErbDim,
   ErbFile,
   ErbFunction,

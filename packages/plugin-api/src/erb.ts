@@ -70,6 +70,32 @@ export interface ErbFunctionRef {
   endLine: number;
 }
 
+/**
+ * 控制流语句（线性记录 + 块深度）——scanControlFlow 的产物。
+ *
+ * 结构事实，零语义：只记录"这行是什么语句、条件原文是什么、嵌套多深"。
+ * 条件谓词化（表达式解析、变量语义）由消费方（如 condition-extractor）完成。
+ *
+ * depth 约定：语句所在块深度（最外层函数体 = 0）。
+ * - 开块语句（IF/SELECTCASE/FOR/…）记**开启前**深度，其体内语句 +1；
+ * - 分支语句（ELSEIF/ELSE/CASE/CASEELSE）与闭合语句（ENDIF/ENDSELECT/…）
+ *   与所配对的开块语句**同深度**。
+ */
+export interface ControlFlowStatement {
+  /**
+   * 语句关键字（大写）：IF / ELSEIF / ELSE / SIF / ENDIF / SELECTCASE / CASE /
+   * CASEELSE / ENDSELECT / FOR / NEXT / WHILE / WEND / REPEAT / REND / DO / LOOP /
+   * PRINTDATA 系 / DATALIST / STRDATA / NOSKIP / TRY 系 / CATCH / ENDCATCH / ENDFUNC 等。
+   */
+  kind: string;
+  /** 条件/表达式原文（无表达式语句为空串；行内注释已截断，字符串内分号保留） */
+  expression: string;
+  /** 块深度（0 = 函数体顶层） */
+  depth: number;
+  /** 行号（1 基） */
+  line: number;
+}
+
 /** 项目级函数索引（重名函数保留全部定义，由消费方判定） */
 export interface ErbIndex {
   /** 绝对路径 → 文件解析结果 */
@@ -89,6 +115,11 @@ export interface ErbParserService {
   parseText(text: string, path?: string): ErbFile;
   /** 扫描若干目录（递归 .ERB/.erb）并构建全局索引 */
   buildIndex(roots: string[]): Promise<ErbIndex>;
+  /**
+   * 控制流骨架扫描（纯函数）：提取全部控制流语句（含嵌套深度与条件原文）。
+   * 供条件抽取、矩阵等消费方使用；不做表达式解析（那是消费方的领域）。
+   */
+  scanControlFlow(text: string): ControlFlowStatement[];
   /**
    * 当前已构建的索引（未构建 / 未打开项目时为 null）。
    * 解析器订阅 `project.opened` 自动构建并在完成后发 `kojo.functionChanged`，

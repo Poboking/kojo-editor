@@ -1,9 +1,10 @@
-import type { CharaInfo, FileIO, GameAdapter, GameProject, Plugin } from '@kojo/plugin-api';
+import type { CharaInfo, FileIO, GameAdapter, GameProject, Plugin, VariableSchema } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { createEratwFamilyIndex } from './family-index';
 import { createEratwConventions } from './conventions';
+import { loadEratwVariableSchema } from './variable-schema';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -24,11 +25,17 @@ export function createEratwAdapterPlugin(): Plugin {
     activate(ctx) {
       const io = ctx.inject<FileIO>('kernel.io');
 
+      /** 变量字典（每次 loadProject 时按当前游戏 CSV 重建） */
+      let currentSchema: VariableSchema | undefined;
+
       const adapter: GameAdapter = {
         gameId: ERATW.gameId,
         displayName: ERATW.displayName,
         functionFamilyIndex: createEratwFamilyIndex(),
         conventions: createEratwConventions(),
+        get variableSchema() {
+          return currentSchema;
+        },
 
         async detect(rootDir: string): Promise<boolean> {
           // 特征组合：口上・消息域目录 + Chara CSV 目录（同时存在才成局）
@@ -93,6 +100,13 @@ export function createEratwAdapterPlugin(): Plugin {
             }
             bound++;
           }
+
+          // ---- 3. 变量字典（CFLAG/Talent/… 名称表；条件抽取的语义标注来源） ----
+          currentSchema = await loadEratwVariableSchema({
+            io,
+            csvDir: join(rootDir, ...ERATW.csvDir),
+            log: ctx.log,
+          });
 
           ctx.log.info(
             `eraTW 工程加载完成：${charaIndex.size} 个角色（${bound} 个有口上目录），` +

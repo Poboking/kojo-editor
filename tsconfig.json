@@ -22,6 +22,7 @@
       "@kojo/plugin-erb-parser": ["./packages/plugins/erb-parser/src/index.ts"],
       "@kojo/plugin-eratw-adapter": ["./packages/plugins/eratw-adapter/src/index.ts"],
       "@kojo/plugin-convention-linter": ["./packages/plugins/convention-linter/src/index.ts"],
+      "@kojo/plugin-condition-extractor": ["./packages/plugins/condition-extractor/src/index.ts"],
       "@kojo/plugin-ui-convention-report": ["./packages/plugins/ui-convention-report/src/index.ts"],
       "@kojo/plugin-ui-kojo-navigator": ["./packages/plugins/ui-kojo-navigator/src/index.ts"]
     }

@@ -13,6 +13,7 @@
   "devDependencies": {
     "@kojo/plugin-erb-parser": "workspace:*",
     "@kojo/plugin-eratw-adapter": "workspace:*",
+    "@kojo/plugin-condition-extractor": "workspace:*",
     "@kojo/plugin-convention-linter": "workspace:*"
   }
 }

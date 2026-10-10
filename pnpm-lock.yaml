@@ -38,6 +38,9 @@ importers:
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../plugin-api
+      '@kojo/plugin-condition-extractor':
+        specifier: workspace:*
+        version: link:../plugins/condition-extractor
       '@kojo/plugin-convention-linter':
         specifier: workspace:*
         version: link:../plugins/convention-linter
@@ -91,6 +94,9 @@ importers:
         specifier: workspace:*
         version: link:../plugin-api
     devDependencies:
+      '@kojo/plugin-condition-extractor':
+        specifier: workspace:*
+        version: link:../plugins/condition-extractor
       '@kojo/plugin-convention-linter':
         specifier: workspace:*
         version: link:../plugins/convention-linter
@@ -102,6 +108,12 @@ importers:
         version: link:../plugins/erb-parser
 
   packages/plugin-api: {}
+
+  packages/plugins/condition-extractor:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
 
   packages/plugins/convention-linter:
     dependencies:
