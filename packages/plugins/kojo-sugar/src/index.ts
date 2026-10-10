@@ -7,8 +7,9 @@
  * 分层（"一切皆插件"）：
  * - 本插件 = 三段式转译器（行式词法 → AST → codegen）——**引擎级语言知识**
  *   （中文表层关键字是跨游戏语言层，契约 `sugar.ts` 头注已定调），零游戏知识；
- * - 变量字典 / 时机分野命名模板来自 **game adapter**（经槽位查询 +
- *   `project.adapterId` 过滤后注入转译器）——本插件只消费，不解释；
+ * - 变量字典（`VariableSchema`）/ **时机分野命名模板（`KojoFaceTable`）** 来自
+ *   **game adapter**（经槽位查询 + `project.adapterId` 过滤后注入转译器）——
+ *   本插件只消费，不解释；
  * - 编译落盘（S3 批）：`compileToFile` 走**内核 io 第一道闸**（writablePaths）
  *   + 备份 + 回读验证（安全顺序见 `compile.ts` 头注，复刻注入器范式）；
  *   `parse`/`transpile`/`sourceOf` 仍为纯函数。
@@ -23,6 +24,7 @@ import type {
   ErbParserService,
   FileIO,
   GameProject,
+  KojoFaceTable,
   Plugin,
   ProjectService,
   SlotRegistry,
@@ -119,33 +121,55 @@ export function createKojoSugarPlugin(): Plugin {
         return undefined;
       };
 
+      /**
+       * 当前适配器的**时机分野模板表**（游戏知识；`KojoFaceTable`）。
+       *
+       * 与 `dictionaryOf` 同源同生命周期（按 `adapterId` 精确匹配 `game.adapter`
+       * 槽位）。缺省 = 该适配器未声明 → 转译含 `时机` 块的文档时报
+       * `timing-face-unknown`（**fail-closed**，绝不回退到内建模板——回退就是
+       * 把游戏知识搬回通用插件，正是本批要根除的）。
+       */
+      const faceTableOf = (): KojoFaceTable | undefined => {
+        const current: GameProject | null = project.current();
+        if (!current) return undefined;
+        for (const contribution of slots.query('game.adapter')) {
+          if (contribution.adapter.gameId !== current.adapterId) continue;
+          if (contribution.adapter.kojoFaceTemplates) return contribution.adapter.kojoFaceTemplates;
+        }
+        return undefined;
+      };
+
+      /** 统一的转译器构造（字典 + 分野表同源注入；保证三条路径行为一致） */
+      const makeTranspiler = (
+        deps?: Omit<Parameters<typeof createSugarTranspileService>[0], 'dictionary' | 'faceTable'>,
+      ) =>
+        createSugarTranspileService({
+          dictionary: dictionaryOf(),
+          faceTable: faceTableOf(),
+          ...(deps ?? {}),
+        });
+
       const service: SugarTranspileService = {
-        parse: (source, options) => createSugarTranspileService({ dictionary: dictionaryOf() }).parse(source, options),
-        transpile: (source, options) =>
-          createSugarTranspileService({ dictionary: dictionaryOf() }).transpile(source, options),
+        parse: (source, options) => makeTranspiler().parse(source, options),
+        transpile: (source, options) => makeTranspiler().transpile(source, options),
         sourceOf: (result, generatedLine) =>
           createSugarTranspileService().sourceOf(result, generatedLine),
-        // S3：编译落盘一体——转译（带当前 adapter 字典）+ 双闸写 + 备份 + 回读
+        // S3：编译落盘一体——转译（带当前 adapter 字典+分野表）+ 双闸写 + 备份 + 回读
         compileToFile: (source, targetPath, options) =>
-          createSugarTranspileService({ dictionary: dictionaryOf(), io, log: ctx.log }).compileToFile(
-            source,
-            targetPath,
-            options,
-          ),
+          makeTranspiler({ io, log: ctx.log }).compileToFile(source, targetPath, options),
       };
 
       ctx.provide(WellKnownServices.SugarTranspile, service);
 
       /**
        * 预览服务（S4 批）——**只读数据层**：转译复用上表同一个转译器
-       * （同 adapter 字典），回放软取 `state.replay`，产出三向映射。
+       * （同 adapter 字典 + 分野表），回放软取 `state.replay`，产出三向映射。
        *
        * 事件纪律：预览**不发射任何事件**（`file.changed` 等由内核 io 监视器
        * 产生；预览只消费）。故此处不注册任何 `ctx.bus.on`。
        */
       const previewService: SugarPreviewService = createSugarPreviewService({
-        transpile: (source, options) =>
-          createSugarTranspileService({ dictionary: dictionaryOf() }).transpile(source, options),
+        transpile: (source, options) => makeTranspiler().transpile(source, options),
         ...(replayOf() ? { replay: replayOf()! } : {}),
         io,
         log: ctx.log,
@@ -172,8 +196,7 @@ export function createKojoSugarPlugin(): Plugin {
        * 与预览一致——故此处不注册任何 `ctx.bus.on`。
        */
       const liftService: SugarLiftService = createSugarLiftService({
-        transpile: (source, options) =>
-          createSugarTranspileService({ dictionary: dictionaryOf() }).transpile(source, options),
+        transpile: (source, options) => makeTranspiler().transpile(source, options),
         ...(scanFlowOf() ? { scanControlFlow: scanFlowOf()! } : {}),
         ...(parseExprOf() ? { parseCondition: parseExprOf()! } : {}),
       });

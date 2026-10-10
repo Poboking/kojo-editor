@@ -10,7 +10,9 @@
  *   诊断结构与行级源映射；
  * - **引擎**（`kojo-sugar` 插件，S2 批建）：行式词法 → AST（缩进配对）→ codegen；
  * - **知识来源**：变量名字典 / 时机分野模板来自 game adapter（游戏知识只进
- *   adapter）；`别名` 是**文件级 front-matter 层**，叠加在 adapter 字典之上
+ *   adapter）——变量字典经 `VariableSchema`、**分野模板经 `KojoFaceTable`
+ *   （`game.adapter` 槽位上的 `kojoFaceTemplates`）**，转译器只消费不解释；
+ *   `别名` 是**文件级 front-matter 层**，叠加在 adapter 字典之上
  *   且优先于它（规范 §3.8）——因此 `AliasDecl` 属契约层，不属 adapter。
  *
  * 中文关键字本身是**跨游戏语言层**（不是某个游戏的领域知识），故住在本契约；
@@ -323,8 +325,9 @@ export interface TimingBlock extends SugarNodeBase {
   /**
    * 分野关键字原文（如 `指令` / `初见` / `事件` / `绝顶` / `射精` / `标记` /
    * `计数器` / `成功` / `追加源` / `日记` / `日常`）。**原样保留**——
-   * 分野 → 函数名模板的映射由 adapter 侧知识（完整 37 调用面）与转译器共同解析，
-   * 契约层不内嵌任何模板（否则游戏知识就会漏进契约）。
+   * 分野 → 函数名模板的映射由 adapter 侧知识（完整 37 调用面，
+   * `KojoFaceTable`）与转译器共同解析，契约层不内嵌任何模板（否则游戏知识
+   * 就会漏进契约）。
    */
   face: string;
   /** 编号（`时机 指令 310：` → `310`；无编号的分野缺省） */
@@ -699,7 +702,8 @@ export type SugarDiagnosticCode =
   | 'readonly-alias-assignment' // 只读别名（角色/字面量）出现在赋值左值
   | 'alias-unknown-target' // 别名右值无法解析（非四形态）
   /* --- 时机（规范 §3.2） --- */
-  | 'timing-face-unknown' // 分野关键字不在 L0 分野表（adapter 提供）
+  | 'timing-face-unknown' // 分野关键字不在 adapter 的分野表（KojoFaceTable.faces）
+  | 'face-table-missing' // 当前适配器未提供分野表 / 某类模板缺失（如配色/开关）
   | 'timing-duplicate' // 同名编号在同一文件内重复
   | 'timing-empty-body' // 时机无正文（占位写法；产出 `LOCAL = 0` 占位，INFO）
   /* --- 选项（规范 §3.7） --- */

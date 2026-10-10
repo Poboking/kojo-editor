@@ -14,6 +14,7 @@
 import type {
   AliasDecl,
   FileIO,
+  KojoFaceTable,
   Logger,
   SugarCompileOptions,
   SugarCompileResult,
@@ -59,6 +60,12 @@ export interface CreateSugarServiceOptions {
   /** 变量字典（adapter 提供；缺省 = 无字典） */
   dictionary?: DictionaryLookup;
   /**
+   * 时机分野模板表（adapter 提供；游戏知识）。
+   * **缺省 = 无法生成时机函数名** —— 含 `时机` 块的文档会报 `timing-face-unknown`
+   * （fail-closed；绝不回退到内建模板）。
+   */
+  faceTable?: KojoFaceTable;
+  /**
    * 编译落盘所需的内核文件 IO（S3 批）。
    * **缺省 = 本服务不支持 `compileToFile`**（调用即抛错，绝不静默假装成功）——
    * 纯转译（`parse`/`transpile`/`sourceOf`）不需要它，故可选。
@@ -71,6 +78,7 @@ export interface CreateSugarServiceOptions {
 /** 创建转译服务实例（纯函数；可安全并发调用） */
 export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}): SugarTranspileService {
   const dictionary = opts.dictionary;
+  const faceTable = opts.faceTable;
 
   function parse(source: string, options: SugarTranspileOptions = {}): SugarDoc {
     const sink = new Sink();
@@ -110,6 +118,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       frontMatter: doc.frontMatter,
       aliases,
       dictionary,
+      faceTable,
       sink,
       options,
     });

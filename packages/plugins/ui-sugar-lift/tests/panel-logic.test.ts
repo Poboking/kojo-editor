@@ -16,6 +16,9 @@
 import { describe, expect, it } from 'vitest';
 import type { SugarLiftCandidate, SugarLiftResult, SugarLiftSkip, SugarLiftSkipReason } from '@kojo/plugin-api';
 import { createSugarTranspileService, liftSuggest } from '@kojo/plugin-kojo-sugar';
+// 测试可跨包 import（审计 C 项豁免 `tests/`）——分野模板表来自 eraTW adapter，
+// 与生产装配同源（转译器不再内建任何模板）。
+import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
 import {
   DIFF_PREFIX,
   EMPTY_SELECTION,
@@ -39,7 +42,7 @@ import {
 
 /** 用真实转译器 + 真实升糖器产候选（不手搓假对象） */
 const lift = (source: string): SugarLiftResult => {
-  const service = createSugarTranspileService({});
+  const service = createSugarTranspileService({ faceTable: createEratwFaceTable() });
   return liftSuggest(
     { transpile: (s, o) => service.transpile(s, o) },
     { source },

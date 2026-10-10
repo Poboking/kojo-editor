@@ -29,6 +29,7 @@ import { liftSuggest } from '../src/lift';
 import { applyLift, applyLiftToFile, createSugarLiftApplyService } from '../src/lift-apply';
 import type { LiftDeps } from '../src/lift';
 import type { DictionaryLookup } from '../src/types';
+import { stubFaceTable } from './support';
 
 /* ============================== 装配 ============================== */
 
@@ -47,7 +48,7 @@ const stubDict: DictionaryLookup = {
 
 const deps = (): LiftDeps => ({
   transpile: (source, options): SugarTranspileResult =>
-    createSugarTranspileService({ dictionary: stubDict }).transpile(source, options),
+    createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(source, options),
 });
 
 /** 对一份 `.kojo` 源做升糖扫描，返回候选（供应用用例的输入） */

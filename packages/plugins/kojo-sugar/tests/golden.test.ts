@@ -12,25 +12,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createSugarTranspileService } from '../src/service';
-import type { DictionaryLookup } from '../src/types';
+import { stubDict, stubFaceTable } from './support';
 
-/** 测试用最小字典（覆盖 golden 用到的 胆怯 / 恋慕 / 思慕 / 好感度 / 心情 + 原生族名） */
-export const stubDict: DictionaryLookup = {
-  resolveFamily(name: string) {
-    if (name === '胆怯' || name === '恋慕' || name === '思慕') return 'TALENT';
-    if (name === '好感度' || name === '心情') return 'CFLAG';
-    return undefined;
-  },
-  resolve(ident: string) {
-    const head = ident.split(':')[0]!.toUpperCase();
-    if (
-      ['CFLAG', 'TALENT', 'ABL', 'EXP', 'MARK', 'BASE', 'PALAM', 'TEQUIP', 'TCVAR', 'FLAG', 'TFLAG'].includes(head)
-    ) {
-      return ident;
-    }
-    return undefined;
-  },
-};
+// 兼容旧引用点（其它测试文件从本文件 import `stubDict`）
+export { stubDict } from './support';
 
 const dir = new URL('./goldens/', import.meta.url);
 const readRaw = (name: string) => readFileSync(new URL(name, dir), 'utf8').replace(/\r\n/g, '\n');
@@ -42,7 +27,7 @@ export const readKojo = (name: string) =>
     .filter((l) => !l.startsWith('//'))
     .join('\n');
 
-const service = () => createSugarTranspileService({ dictionary: stubDict });
+const service = () => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
 
 describe('golden §6.1 · 露米娅 · 摸屁股 310（逐字节）', () => {
   const expected = readRaw('spec-6.1-lumia-310.expected.erb.todo');

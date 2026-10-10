@@ -8,6 +8,10 @@
  *      这是"插件可独立分发"的硬约束——对应 DSH 教训：插件目录无 node_modules 不能
  *      import 第一方常量）
  *   C. 插件之间的交叉 import（正文里出现其它插件包名）
+ *   D. **通用插件**源码中不得出现具体游戏知识字面量（游戏名 / 口上函数名前缀 /
+ *      引擎特有旗标）——游戏知识只准住 adapter。A 项只覆盖内核层，D 项补上
+ *      插件层：否则"分野模板硬编码进通用插件"这类泄漏没有任何门禁能拦住
+ *      （v0.3 S2 审阅发现，见 docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md）。
  *
  * 用法：node tools/audit-decoupling.mjs   （或 pnpm audit:decoupling）
  * 退出码：0 = 通过；1 = 违规。
@@ -56,6 +60,22 @@ const EXEMPT_FILES = new Set(['packages/app/src/bootstrap.ts']);
 
 /** 插件目录（B/C 项检查对象） */
 const PLUGIN_ROOTS = ['packages/plugins'];
+
+/**
+ * 适配器插件**豁免名单**（D 项）：这些包**就是**游戏知识的家，允许出现游戏字面量。
+ * 以目录名为准（`packages/plugins/<dir>`）。新增 adapter 时在此登记。
+ */
+const ADAPTER_PLUGIN_DIRS = new Set(['eratw-adapter']);
+
+/**
+ * D 项的游戏知识字面量黑名单（通用插件禁用）。比 A 项更严——除游戏名/口上前缀外，
+ * 还含**具体游戏约定的旗标**（eraTW 位协议 `TFLAG:192` 等）。
+ * 仅查**代码行**（注释行跳过：文档性引用规范 §3.2 的示例是设计说明的一部分）。
+ *
+ * 注意：`sav` **不在**此列——它是 emuera 引擎的通用存档容器扩展名（`sav-parser`
+ * 是跨游戏一致的引擎级插件），误列会伤及正牌的通用插件。
+ */
+const PLUGIN_GAME_WORDS = /\b(eratw|eraK|eraSQN|eraNAS)\b|M_KOJO|個人口上|DIARY\{|TFLAG:192/i;
 
 const violations = [];
 
@@ -121,6 +141,9 @@ for (const proot of PLUGIN_ROOTS) {
   for (const f of files) {
     const r = rel(f);
     const isTest = /\/tests?\//.test(r);
+    // D 项豁免：测试（夹具允许含游戏知识）+ adapter 插件（游戏知识的家）
+    const pluginDir = r.split('/')[2] ?? '';
+    const isAdapter = ADAPTER_PLUGIN_DIRS.has(pluginDir);
     const text = await fs.readFile(f, 'utf8');
     const lines = text.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
@@ -139,6 +162,12 @@ for (const proot of PLUGIN_ROOTS) {
           }
         }
       }
+      // D: 通用插件不得含游戏知识字面量（adapter 与测试豁免）
+      if (!isTest && !isAdapter && !isCommentLine(line) && !/audit-allow:/.test(line)) {
+        if (PLUGIN_GAME_WORDS.test(line)) {
+          violations.push({ rule: 'D(通用插件零游戏知识)', file: r, line: i + 1, text: line.trim().slice(0, 120) });
+        }
+      }
     }
   }
 }
@@ -150,6 +179,7 @@ if (violations.length === 0) {
   console.log('   A. 内核 / plugin-api / Rust 宿主：零游戏名词');
   console.log(`   B. 插件（${PLUGIN_NAMES.size} 个）：未依赖 @kojo/kernel`);
   console.log('   C. 插件之间：无交叉 import');
+  console.log('   D. 通用插件（adapter 除外）：零游戏知识字面量');
   process.exit(0);
 } else {
   console.log(`❌ 发现 ${violations.length} 处违规：\n`);

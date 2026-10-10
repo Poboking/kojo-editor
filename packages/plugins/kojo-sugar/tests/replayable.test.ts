@@ -18,6 +18,7 @@ import { parseErbText, scanControlFlow } from '@kojo/plugin-erb-parser';
 import { extractFunctionPredicates } from '@kojo/plugin-condition-extractor';
 import { createSugarTranspileService } from '../src/service';
 import type { DictionaryLookup } from '../src/types';
+import { stubFaceTable } from './support';
 
 const stubDict: DictionaryLookup = {
   resolveFamily(name) {
@@ -70,7 +71,7 @@ function countOpaque(erb: string): number {
 }
 
 describe('S2 验收：转译产物过 condition-extractor 零 opaque', () => {
-  const svc = () => createSugarTranspileService({ dictionary: stubDict });
+  const svc = () => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
 
   it('§6.1 golden 产物：无编译错误且零 opaque', () => {
     const src = stripBanner(fs.readFileSync(path.join(GOLDENS, 'spec-6.1-lumia-310.kojo'), 'utf8'));

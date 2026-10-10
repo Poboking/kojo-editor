@@ -36,6 +36,7 @@ import type {
 import { WellKnownServices } from '@kojo/plugin-api';
 import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
 import { createUiSugarLiftPlugin } from '../src/index';
+import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
 
 const log: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -124,8 +125,16 @@ function makeKernel(files: Record<string, Uint8Array>, writable: (p: string) => 
   const sugarCtx = {
     log,
     inject: (key: string) => {
-      if (key === 'kernel.project') return { current: () => null };
-      if (key === 'kernel.slots') return { query: () => [] };
+      if (key === 'kernel.project') return { current: () => ({ adapterId: 'eratw' }) };
+      // 分野模板表经 `game.adapter` 槽位注入（v0.3 S2 补齐）——测试用真实
+      // eraTW 表，与生产装配同源；转译器不再内建任何模板。
+      if (key === 'kernel.slots')
+        return {
+          query: (slot: string) =>
+            slot === 'game.adapter'
+              ? [{ adapter: { gameId: 'eratw', kojoFaceTemplates: createEratwFaceTable() } }]
+              : [],
+        };
       if (key === 'kernel.io') return io;
       // 软取目标（state.replay / erb.parser / condition.extractor）缺席是合法情形
       throw new Error(`未注册的服务：${key}`);
@@ -288,7 +297,8 @@ describe('S5-UI / 事件纪律', () => {
     const io = makeIO(files);
     const { applyLiftToFile } = await import('@kojo/plugin-kojo-sugar');
     const { createSugarTranspileService } = await import('@kojo/plugin-kojo-sugar');
-    const svc = createSugarTranspileService({});
+    const { createEratwFaceTable } = await import('@kojo/plugin-eratw-adapter');
+    const svc = createSugarTranspileService({ faceTable: createEratwFaceTable() });
     const lift = (await import('@kojo/plugin-kojo-sugar')).liftSuggest;
     const r = lift({ transpile: (s, o) => svc.transpile(s, o) }, { source: KOJO });
     const res = await applyLiftToFile({ io, log }, file, { source: KOJO, candidates: r.candidates });

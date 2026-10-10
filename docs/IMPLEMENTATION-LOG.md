@@ -1169,3 +1169,59 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - **带信封的整函数升糖**（产出 `时机` 块建议、产物直接替整个函数）：本批的候选仍是函数体内片段。
 - **撤销（undo）**：应用后有备份路径，但没有"一键回滚"按钮——留 v1.1（可复用 `backupPath`）。
 - **虚拟滚动**：候选列表上限 200 条、diff 上限 400 行（防 DOM 爆炸）；超大文件需要虚拟滚动才谈得上"全量可浏览"。
+
+### 5.33 解耦补齐批 · 时机分野模板归位 adapter（v0.3 S2 遗留承诺兑现：游戏知识只进 adapter）
+
+> 起因：`docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md` 审阅发现 B-1——`kojo-sugar/codegen.ts`
+> 硬编码了 eraTW 的 10 个分野模板 + `M_KOJO`/`DIARY` 字面量 + `TFLAG:192` 位协议 + `SETBIT RESULT`
+> 原语，与已批准方案（`SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.1-3「37 调用面模板表为
+> adapter 新增」）及 6 处契约/代码头注自相矛盾；且 audit A 项只覆盖内核层，插件层门禁盲区。
+> 本批兑现承诺 + 补上门禁，**不改任何产物行为**（golden 逐字节零回退）。
+
+**契约（`plugin-api/src/game.ts`，游戏无关、零游戏名词）**
+- 新增 `KojoFaceTemplate`（`template` + 可选 `success` + 可选 `segments`）与 `KojoFaceTable`
+  （`faces` 表 + 可选 `registration` 三件套 + 可选 `successFlag` 位协议 + 可选 `messageCheck`
+  位协议）；
+- `GameAdapter` 新增可选字段 `kojoFaceTemplates?: KojoFaceTable`（与 `kojoCallProtocol` 同形 seam）；
+- 诊断码闭集新增 `face-table-missing`（适配器缺表/缺某类模板时的显式降级，绝不静默）。
+
+**adapter（`eratw-adapter/src/face-templates.ts`，新文件）**
+- `createEratwFaceTable()`：按规范 §3.2 / 附录 C 全量登记（v1 有糖形态的 11 个入口 +
+  其余入口的模板），三件套 / `TFLAG:192` 四档取值 / MESSAGECHECK 位协议全部入表；
+- 上下文段设计：`${com}` 段的取值映射（`类型:` → `COM/SCOM/CUSTOM_COM/CUSTOM_SCOM`）由
+  adapter 声明候选，**命名参数名映射**（`com` ← `类型:`）留在转译器（那是语法层语义）；
+- `plugin.ts` 挂上 `kojoFaceTemplates`（纯数据无 IO，不依赖 loadProject）。
+
+**转译器（`kojo-sugar`）**
+- `codegen.resolveFace` 重写为**查表**：适配器缺表或关键字未登记 → `timing-face-unknown`
+  **fail-closed，绝不回退内建模板**（回退 = 把游戏知识搬回通用插件）；
+- `emitRegistration` / 配色 / `successFlag` / `emitMessageCheck` 全部改由 face table 提供
+  模板与位协议；缺件时报 `face-table-missing`（warning，显式降级）；
+- 装配层新增 `faceTableOf()`（与 `dictionaryOf` 同源：按 `adapterId` 匹配 `game.adapter`
+  槽位），三条 transpile 路径（parse/transpile/compileToFile + preview + lift）统一经
+  `makeTranspiler()` 注入，保证行为一致；
+- **产物零变化**：golden §6.1/§6.2 逐字节断言未动且全绿。
+
+**审计门禁（`tools/audit-decoupling.mjs` 新增 D 项）**
+- **D(通用插件零游戏知识)**：非 adapter、非 tests 的插件源码代码行出现 `M_KOJO` /
+  `DIARY{` / `TFLAG:192` / 具体游戏名 / `個人口上` → 违规（`audit-allow:` 行尾豁免保留）；
+- `sav` **不在** D 项黑名单——它是 emuera 通用存档容器（`sav-parser` 是引擎级跨游戏插件），
+  误列会伤及正牌通用插件（首跑实-warning 后修正）；
+- 顺手清理：`ui-state-replay` 输入框占位符的 `M_KOJO_ORTHODOX_EVENT_K49_1` 示例改为游戏
+  无关形态（`MESSAGE_COM_K12_310_1`）——正是 D 项设计要拦的那类泄漏；
+- **门禁自证**：临时在 codegen 插入 `M_KOJO{t}_PROBE_K{n}` → D 项报违规；还原后全绿。
+
+**测试（851 → 868，+17）**
+- `eratw-adapter/tests/face-templates.test.ts`（新，7 项）：模板逐字对附录 C / 三件套无
+  家族段 / 成否四档 / MESSAGECHECK 位号 / `类型:` 段映射 / `成功` 与 `指令` 的 success 形态；
+- `kojo-sugar/tests/support.ts`（新）：测试共享夹具（`stubDict` + `stubFaceTable()`）——
+  测试直接用 adapter 真实表（C 项对 `tests/` 豁免），贴近生产装配；
+- 8 个既有测试文件全部改经夹具注入 face table；新增「装配口径」组 4 项（11 分野函数名
+  逐字 / 别人版家族段单下划线 / 未登记分野 fail-closed / 成否+MESSAGECHECK 组合）；
+  新增「无分野表 → timing-face-unknown」fail-closed 断言；
+- `ui-sugar-lift` 集成测试的假内核槽位改为返回真实 eraTW face table（模拟生产装配）。
+
+**验收（2026-10-11 实测）**
+- `vitest`：**868 tests / 862 passed + 6 skipped**，50 文件全绿（golden 逐字节零回退）；
+- typecheck root ✅ + app ✅；`audit:decoupling` **A/B/C/D 四项全绿（14 插件）**；
+- 真实语料集成冒烟（`integration-plugins.test.ts`，KOJO_SMOKE_PROJECT）：见 HANDOFF §6.24。

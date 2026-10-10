@@ -42,6 +42,7 @@ import {
   scanProductFunctions,
 } from '../src/preview';
 import type { DictionaryLookup } from '../src/types';
+import { stubFaceTable } from './support';
 
 const stubDict: DictionaryLookup = {
   resolveFamily(name) {
@@ -70,7 +71,7 @@ const silentLog = (): Logger => ({ debug: () => {}, info: () => {}, warn: () => 
 /** 预览服务（真实转译器 + 测试字典；回放由各用例注入） */
 const previewSvc = (replay?: StateReplayService) =>
   createSugarPreviewService({
-    transpile: (source, options) => createSugarTranspileService({ dictionary: stubDict }).transpile(source, options),
+    transpile: (source, options) => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(source, options),
     ...(replay ? { replay } : {}),
     log: silentLog(),
   });
@@ -209,7 +210,7 @@ describe('S4 三向映射 · §6.1 golden（无存档：糖行 ↔ ERB 行两向
   it('降级原因 = no-archive-requested；产物与 transpile 逐字节同源（预览不落盘、不改写）', async () => {
     const res = await previewSvc().preview({ source: src });
     expect(res.archive).toBeNull();
-    const direct = createSugarTranspileService({ dictionary: stubDict }).transpile(src);
+    const direct = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(src);
     expect(res.transpile.erb).toBe(direct.erb);
     expect(res.transpile.diagnostics).toEqual([]);
   });
@@ -272,7 +273,7 @@ function makeArchive(tflag193: number): SnapshotArchive {
  * 头注"坐标契约"）。本测试用偏移量把切段行号还原成产物绝对行号。
  */
 function predProviderFrom(source: string) {
-  const res = createSugarTranspileService({ dictionary: stubDict }).transpile(source);
+  const res = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(source);
   const fns = scanProductFunctions(res.erb);
   return async (name: string): Promise<FunctionPredicates | null> => {
     const fn = fns.find((f) => f.name === name);

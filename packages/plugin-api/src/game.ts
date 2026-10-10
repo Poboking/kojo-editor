@@ -160,6 +160,97 @@ export interface KojoCallProtocol {
 }
 
 /**
+ * 时机分野模板表（v0.3 批 S2 补齐；游戏知识，只住 adapter）。
+ *
+ * 表层 DSL 的 `时机 <分野> [<编号>]：` 声明里，作者**只写分野关键字**（如
+ * `初见` / `指令 310`），**不写函数名**。分野关键字 → 目标语言函数名的映射
+ * 是**游戏知识**（同一套中文表层语法在不同 era 系游戏里目标函数名不同），
+ * 故本表由 adapter 提供、由转译器**只消费不解释**——这正是"游戏知识只进
+ * adapter"在糖链路里的落位（审阅 §8.1-3 对表结论：37 调用面模板表为 adapter
+ * 新增）。
+ *
+ * 设计取舍（对称性）：与 `KojoCallProtocol` 同形——都是"游戏知识经槽位查询
+ * 注入转译/校验层"的可替换 seam，而不把游戏常量塞进契约或通用插件。
+ */
+export interface KojoFaceTemplate {
+  /**
+   * 函数名模板。占位符（与 `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` §5.5 同口径）：
+   * - `{t}` = **家族段**（标准版空串、别人版 `_口上名`）；
+   * - `{n}` = 角色号；
+   * - `{i}` = 时机编号（**仅当本模板含 `{i}` 时**才消费 `时机` 声明的编号）；
+   * - `${…}` 形态的**非占位**片段（如按 `类型:` 分派的段）由转译器在求值时
+   *   提供上下文值，adapter 只声明模板文本。
+   */
+  readonly template: string;
+  /**
+   * 成否判定函数模板（`成否:` 非默认值时才生成；缺省 = 该分野无成否函数）。
+   * 与主模板同一套占位符；`{i}` 消费编号。
+   */
+  readonly success?: { readonly template: string };
+  /**
+   * 模板求值所需的**上下文段**表（可选）。键 = 模板里 `${段名}` 的名字，
+   * 值 = 该段的候选取值 → 段文本。缺省 = 模板不含上下文段。
+   *
+   * 例：`指令` 分野按 `类型:`（`COM` / `SCOM` / 自定指令…）在函数名中插入
+   * 不同段——adapter 声明"段名 → 取值映射"，转译器按语法层语义选择取值。
+   */
+  readonly segments?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+}
+
+/**
+ * 分野模板表（游戏知识；只住 adapter）。
+ *
+ * `faces` 的键 = 表层 DSL 的分野关键字**原文**（`初见` / `事件` / `指令`…），
+ * 值 = 该分野的模板。转译器遇到关键字不在表内 → 报 `timing-face-unknown`，
+ * **不产半成品**（规范 §5.3 精神）。
+ */
+export interface KojoFaceTable {
+  /** 分野关键字 → 模板（键为表层关键字原文，转译器不解释其含义） */
+  readonly faces: Readonly<Record<string, KojoFaceTemplate>>;
+  /**
+   * 登记 / 配色 / 开关**三件套**函数名模板（规范 §5.5：**不带家族段**，
+   * 只有角色号）。缺省 = 该游戏无此三件套概念（转译器跳过对应产物）。
+   */
+  readonly registration?: {
+    /** 登记函数（家族声明；`{n}` = 角色号） */
+    readonly declare?: string;
+    /** 配色函数 */
+    readonly color?: string;
+    /** 开关函数 */
+    readonly flagSetting?: string;
+  };
+  /**
+   * 成否判定位协议的**目标变量与原语**（规范 §5.5；游戏侧约定）。
+   * 缺省 = 该游戏无成否位协议（转译器跳过 `成否:` 产物并记 INFO）。
+   *
+   * 例（eraTW）：`target: 'TFLAG:192'`，取值为 `成否:` 声明映射后的整数。
+   */
+  readonly successFlag?: {
+    /** 目标变量原文（如 `TFLAG:192`） */
+    readonly target: string;
+    /** 取值映射：`成否:` 子句值 → 目标变量取值（缺省值由转译器兜底） */
+    readonly values?: Readonly<Record<string, number>>;
+  };
+  /**
+   * MESSAGECHECK 位协议的**目标段与原语**（规范 §3.2；游戏侧约定）。
+   * 缺省 = 该游戏无 MESSAGECHECK 概念（转译器跳过 `隐藏情景/隐藏口上` 产物）。
+   */
+  readonly messageCheck?: {
+    /**
+     * 函数名段模板。`{n}` = 角色号、`{i}` = 时机编号、`{base}` = 主体函数名、
+     * `{scope}` = 作用域段（语法层给语义名，转译器按 `scopes` 映射为段文本）。
+     */
+    readonly template: string;
+    /** 作用域语义名 → 段文本（如 `scene` → `SCENE`、`kojo` → `KOJO`） */
+    readonly scopes: Readonly<Record<string, string>>;
+    /** 置位原语模板（`{bit}` = 位号）。缺省 = `SETBIT RESULT, {bit}` */
+    readonly setBit?: string;
+    /** 作用域语义名 → 位号 */
+    readonly bits: Readonly<Record<string, number>>;
+  };
+}
+
+/**
  * 游戏适配器（槽位 `game.adapter` 的负载）。
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
  */
@@ -184,6 +275,11 @@ export interface GameAdapter {
   readonly stateModel?: StateModel;
   /** 口上调用协议（v0.2 第十批；可选——路由层转发实参的槽位语义表） */
   readonly kojoCallProtocol?: KojoCallProtocol;
+  /**
+   * 时机分野模板表（v0.3 批 S2 补齐；可选——表层 DSL 的分野关键字 → 目标
+   * 函数名映射）。游戏知识只进 adapter；转译器只消费不解释。
+   */
+  readonly kojoFaceTemplates?: KojoFaceTable;
 
   /** 脚手架（生成新角色口上骨架；v0.3） */
   scaffold?(characterNo: number, options?: ScaffoldOptions): Promise<ScaffoldResult>;

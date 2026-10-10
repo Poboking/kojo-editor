@@ -120,6 +120,8 @@ export type {
   GameProject,
   KojoCallProtocol,
   KojoCallSlot,
+  KojoFaceTable,
+  KojoFaceTemplate,
   ScaffoldOptions,
   ScaffoldResult,
   StateModel,

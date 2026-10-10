@@ -19,6 +19,7 @@ import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { compileToFile, encodeErbBytes } from '../src/compile';
 import { createSugarTranspileService } from '../src/service';
+import { stubFaceTable } from './support';
 
 /* ============================== 合成源 ============================== */
 
@@ -126,9 +127,9 @@ function makeFs(io: HarnessOptions = {}) {
   return { io: api, files, backups, written, createdDirs };
 }
 
-/** 真实转译服务（无 adapter 字典——合成源只用原生变量族） */
+/** 真实转译服务（无 adapter 字典——合成源只用原生变量族；分野表来自 eraTW adapter） */
 function makeService(io: FileIO) {
-  return createSugarTranspileService({ io });
+  return createSugarTranspileService({ io, faceTable: stubFaceTable() });
 }
 
 /* ============================== 编码组装（纯函数） ============================== */
@@ -346,7 +347,7 @@ describe('compileToFile · 真实磁盘端到端（appData 副本，绝不写游
   it('端到端：写盘 → 真实回读逐字节一致 + 目录自动创建 + 备份已建', async () => {
     const target = path.join(tmp, '個人口上', 'K12', 'M_KOJO_K12_指令.ERB');
     io.setWritableRoots([tmp]);
-    const svc = createSugarTranspileService({ io });
+    const svc = createSugarTranspileService({ io, faceTable: stubFaceTable() });
 
     const first = await svc.compileToFile(GOOD_SOURCE, target);
     expect(first.backupPath).toBeNull(); // 首次：目标不存在
@@ -365,7 +366,7 @@ describe('compileToFile · 真实磁盘端到端（appData 副本，绝不写游
   it('越权目标（tmp 外层）被内核第一道闸拒绝，且不写盘', async () => {
     const outside = path.join(os.tmpdir(), `kojo-outside-${Date.now()}`, 'x.ERB');
     io.setWritableRoots([tmp]);
-    const svc = createSugarTranspileService({ io });
+    const svc = createSugarTranspileService({ io, faceTable: stubFaceTable() });
     await expect(svc.compileToFile(GOOD_SOURCE, outside)).rejects.toThrow(WriteNotAllowedError);
     await expect(fs.stat(outside)).rejects.toThrow();
   });
@@ -373,7 +374,7 @@ describe('compileToFile · 真实磁盘端到端（appData 副本，绝不写游
   it('产物过 ERB 骨架：BOM 剥离后首行为函数定义（可被引擎加载的形态）', async () => {
     const target = path.join(tmp, 'K12', 'a.ERB');
     io.setWritableRoots([tmp]);
-    const svc = createSugarTranspileService({ io });
+    const svc = createSugarTranspileService({ io, faceTable: stubFaceTable() });
     await svc.compileToFile(GOOD_SOURCE, target);
     const text = (await io.readText(target)).text;
     expect(text.startsWith('@')).toBe(true);

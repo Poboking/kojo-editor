@@ -1,0 +1,89 @@
+/**
+ * eraTW 分野模板表（`KojoFaceTable`）——把硬编码从转译器搬进 adapter 后的
+ * 权威回归（v0.3 S2 补齐批）。
+ *
+ * 断言口径：模板**逐字**对 `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` §5.5 / 附录 C。
+ * 这是"游戏知识只进 adapter"的可执行凭证——模板若漂移，此处先红。
+ */
+
+import { describe, expect, it } from 'vitest';
+import { createEratwFaceTable } from '../src/face-templates';
+
+const table = createEratwFaceTable();
+
+describe('KojoFaceTable · 分野模板（规范 §3.2 / 附录 C）', () => {
+  it('v1 开放糖写法的 11 个入口全部登记，且模板逐字符合附录 C', () => {
+    const expectFaces: Record<string, string> = {
+      // #1 初见
+      初见: 'M_KOJO{t}_ENCOUNTER_K{n}',
+      // #4 通用事件
+      事件: 'M_KOJO{t}_EVENT_K{n}_{i}',
+      // #5 指令口上（类型: 决定 COM/SCOM 段）
+      指令: 'M_KOJO{t}_MESSAGE_${com}_K{n}_{i}',
+      // #6 计数器
+      计数器: 'M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}',
+      // #7 PALAM 子类（绝顶 B / 射精 A2）
+      绝顶: 'M_KOJO{t}_MESSAGE_PALAMCNG_B_K{n}',
+      射精: 'M_KOJO{t}_MESSAGE_PALAMCNG_A2_K{n}_{i}',
+      // #8 刻印/素质
+      标记: 'M_KOJO{t}_MESSAGE_MARKCNG_K{n}',
+      // #10 追加源
+      追加源: 'M_KOJO{t}_EXTRASOURCE_${com}_K{n}_{i}',
+      // #13 成否
+      成功: 'M_KOJO{t}_SUCCESS_${com}_K{n}_{i}',
+      // #20 每日事件
+      日常: 'M_KOJO{t}_DAILY_EVENT_K{n}_{i}',
+      // #21 日记（前缀 DIARY，非 M_KOJO）
+      日记: 'DIARY{t}_TEXT_K{n}',
+    };
+    for (const [face, template] of Object.entries(expectFaces)) {
+      expect(table.faces[face], `分野「${face}」`).toBeDefined();
+      expect(table.faces[face]!.template).toBe(template);
+    }
+  });
+
+  it('三件套模板不带家族段（规范 §5.5），只含 {n}', () => {
+    expect(table.registration?.declare).toBe('M_KOJO_K{n}');
+    expect(table.registration?.color).toBe('M_KOJO_COLOR_K{n}');
+    expect(table.registration?.flagSetting).toBe('M_KOJO_FLAGSETTING_K{n}');
+    for (const tpl of Object.values(table.registration ?? {})) {
+      expect(tpl).not.toContain('{t}'); // 三件套无家族段
+      expect(tpl).toContain('{n}');
+    }
+  });
+
+  it('成否位协议 = TFLAG:192，四档取值符合规范 §3.2', () => {
+    expect(table.successFlag?.target).toBe('TFLAG:192');
+    expect(table.successFlag?.values).toEqual({
+      游戏判定: 0,
+      一定成功: 1,
+      一定失败: -1,
+      不执行: -2,
+    });
+  });
+
+  it('MESSAGECHECK 位协议：SCENE→bit0 / KOJO→bit1，模板含家族段与编号', () => {
+    const mc = table.messageCheck!;
+    expect(mc.scopes).toEqual({ scene: 'SCENE', kojo: 'KOJO' });
+    expect(mc.bits).toEqual({ scene: 0, kojo: 1 });
+    expect(mc.setBit).toBe('SETBIT RESULT, {bit}');
+    expect(mc.template).toBe('M_KOJO{t}_MESSAGECHECK_{scope}_K{n}_{i}');
+  });
+
+  it('`类型:` 段映射：COM 默认 + SCOM + 两个自定（规范 §3.2 命名参数表）', () => {
+    expect(table.faces['指令']!.segments?.com).toEqual({
+      COM: 'COM',
+      SCOM: 'SCOM',
+      自定指令: 'CUSTOM_COM',
+      自定副指令: 'CUSTOM_SCOM',
+    });
+  });
+
+  it('`成功` 划分野自身即 SUCCESS 函数 —— success 留空（不重复生成同名函数）', () => {
+    expect(table.faces['成功']!.success).toBeUndefined();
+  });
+
+  it('`指令` 划分野写了 `成否:` 时另生成 SUCCESS 函数模板', () => {
+    expect(table.faces['指令']!.success?.template).toBe('M_KOJO{t}_SUCCESS_${com}_K{n}_{i}');
+  });
+});

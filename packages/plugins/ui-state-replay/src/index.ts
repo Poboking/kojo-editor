@@ -701,7 +701,7 @@ export function createUiStateReplayPlugin(): Plugin {
         const fnInput = createElement('input', {
           className: 'rp-fn-input',
           type: 'text',
-          placeholder: '函数名（如 M_KOJO_ORTHODOX_EVENT_K49_1）',
+          placeholder: '函数名（如 MESSAGE_COM_K12_310_1）',
           value: fnQuery,
           onChange: (e: { target: { value: string } }) => setFnQuery(e.target.value),
           onKeyDown: (e: { key: string }) => {

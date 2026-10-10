@@ -32,6 +32,7 @@ import { createSugarTranspileService } from '../src/service';
 import { createSugarLiftService, liftSuggest } from '../src/lift';
 import type { LiftDeps } from '../src/lift';
 import type { DictionaryLookup } from '../src/types';
+import { stubFaceTable } from './support';
 
 /* ============================== 装配 ============================== */
 
@@ -56,7 +57,7 @@ const stubDict: DictionaryLookup = {
 /** 生产口径的依赖（与 index.ts 装配一致：真实转译器 + 真实扫描 + 真实表达式解析） */
 const prodDeps = (): LiftDeps => ({
   transpile: (source, options) =>
-    createSugarTranspileService({ dictionary: stubDict }).transpile(source, options),
+    createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(source, options),
   scanControlFlow: (text: string): ControlFlowStatement[] => scanControlFlow(text),
   parseCondition: (text: string): ConditionExpr => parseExpression(text),
 });
@@ -570,7 +571,7 @@ describe('S5 / 集成 —— fixtures', () => {
   it('fixtures/sugar 样例：糖源码 → 降糖 → 升糖闭环（回降产物能被再识别为候选）', () => {
     const kojoPath = path.resolve(import.meta.dirname, '../../../../fixtures/sugar/sample-310.kojo');
     const kojo = fs.readFileSync(kojoPath, 'utf8');
-    const transpiled = createSugarTranspileService({ dictionary: stubDict }).transpile(kojo);
+    const transpiled = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(kojo);
     expect(transpiled.diagnostics.filter((d) => d.severity === 'error')).toHaveLength(0);
 
     const r = lift(transpiled.erb, prodDeps(), { characterNo: 101 });
@@ -585,7 +586,7 @@ describe('S5 / 集成 —— fixtures', () => {
   it('集成自洽：产物 → 候选 → 再转译 → 与原产物区间逐字节一致', () => {
     const kojoPath = path.resolve(import.meta.dirname, '../../../../fixtures/sugar/sample-310.kojo');
     const kojo = fs.readFileSync(kojoPath, 'utf8');
-    const erb = createSugarTranspileService({ dictionary: stubDict }).transpile(kojo).erb;
+    const erb = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(kojo).erb;
     const r = lift(erb, prodDeps(), { characterNo: 101 });
 
     const lines = erb.replace(/\r\n/g, '\n').split('\n');

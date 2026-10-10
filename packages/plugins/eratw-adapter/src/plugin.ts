@@ -6,6 +6,7 @@ import { createEratwFamilyIndex } from './family-index';
 import { createEratwConventions } from './conventions';
 import { loadEratwVariableSchema } from './variable-schema';
 import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
+import { createEratwFaceTable } from './face-templates';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -43,6 +44,9 @@ export function createEratwAdapterPlugin(): Plugin {
         get kojoCallProtocol() {
           return currentProtocol;
         },
+        // 时机分野模板表（v0.3 批 S2 补齐）——纯数据、无 IO：转译器转译时
+        // 经槽位取用，故恒可用（不依赖 loadProject）。
+        kojoFaceTemplates: createEratwFaceTable(),
 
         async detect(rootDir: string): Promise<boolean> {
           // 特征组合：口上・消息域目录 + Chara CSV 目录（同时存在才成局）

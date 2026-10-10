@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSugarTranspileService } from '../src/service';
 import type { DictionaryLookup } from '../src/types';
+import { stubFaceTable } from './support';
 
 /** 测试字典桩（游戏知识只允许出现在测试里） */
 const stubDict: DictionaryLookup = {
@@ -28,7 +29,7 @@ const stubDict: DictionaryLookup = {
   },
 };
 
-const svc = () => createSugarTranspileService({ dictionary: stubDict });
+const svc = () => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
 const t = (src: string) => svc().transpile(src);
 const body = (src: string) => {
   const r = t(src);
@@ -668,8 +669,19 @@ describe('§5.2 / §8 杂项诊断', () => {
   });
 
   it('无字典时属性访问 → unknown-identifier（宽容但不静默）', () => {
-    const noDict = createSugarTranspileService().transpile('角色: 12\n时机 指令 310：\n    如果 她的恋慕：\n        「呀。」\n');
+    const noDict = createSugarTranspileService({ faceTable: stubFaceTable() }).transpile(
+      '角色: 12\n时机 指令 310：\n    如果 她的恋慕：\n        「呀。」\n',
+    );
     expect(noDict.diagnostics.map((d) => d.code)).toContain('unknown-identifier');
+  });
+
+  it('无分野表时 → timing-face-unknown（fail-closed，绝不回退内建模板）', () => {
+    const noFace = createSugarTranspileService({ dictionary: stubDict }).transpile(
+      '角色: 12\n时机 指令 310：\n    「呀。」\n',
+    );
+    expect(noFace.diagnostics.map((d) => d.code)).toContain('timing-face-unknown');
+    // fail-closed：不产半成品（主体函数行不出现）
+    expect(noFace.erb).not.toContain('_1');
   });
 
   it('诊断按源位置升序排列（golden 稳定）', () => {
@@ -700,5 +712,52 @@ describe('源映射 · sourceOf', () => {
     const total = r.erb.split('\n').length - 1; // 末尾换行
     expect(r.sourceMap.length).toBe(total);
     expect(r.sourceMap.map((e) => e.generatedLine)).toEqual(Array.from({ length: total }, (_, i) => i + 1));
+  });
+});
+
+/* ============================================================================ */
+/* 生产装配口径（v0.3 S2 补齐：分野模板来自 adapter，而非转译器内建）              */
+/* ============================================================================ */
+
+describe('装配口径 · 分野模板来自 adapter（游戏知识只进 adapter）', () => {
+  it('注入 eraTW 表 → 各分野函数名逐字等于规范 §5.5 / 附录 C', () => {
+    const cases: Array<[string, string]> = [
+      ['时机 初见：\n    「初次见面。」', '@M_KOJO_ENCOUNTER_K12'],
+      ['时机 事件 100：\n    「事件。」', '@M_KOJO_EVENT_K12_100'],
+      ['时机 指令 310：\n    「指令。」', '@M_KOJO_MESSAGE_COM_K12_310'],
+      ['时机 指令 310 类型: SCOM：\n    「副指令。」', '@M_KOJO_MESSAGE_SCOM_K12_310'],
+      ['时机 计数器 20：\n    「计数。」', '@M_KOJO_MESSAGE_COUNTER_K12_20'],
+      ['时机 绝顶：\n    「绝顶。」', '@M_KOJO_MESSAGE_PALAMCNG_B_K12'],
+      ['时机 射精：\n    「射精。」', '@M_KOJO_MESSAGE_PALAMCNG_A2_K12_1'],
+      ['时机 标记：\n    「标记。」', '@M_KOJO_MESSAGE_MARKCNG_K12'],
+      ['时机 追加源：\n    「追加。」', '@M_KOJO_EXTRASOURCE_COM_K12_1'],
+      ['时机 日常 100：\n    「日常。」', '@M_KOJO_DAILY_EVENT_K12_100'],
+      ['时机 日记：\n    「日记。」', '@DIARY_TEXT_K12'],
+    ];
+    for (const [src, expected] of cases) {
+      const { erb } = t(`角色: 12\n${src}\n`);
+      expect(erb, `源：${src.split('\n')[0]}`).toContain(expected);
+    }
+  });
+
+  it('家族段 `口上: 破空自制` → 别人版函数名（M_KOJO 与分野间一个下划线）', () => {
+    const { erb } = t('角色: 12\n口上: 破空自制\n时机 指令 310：\n    「呀。」\n');
+    expect(erb).toContain('@M_KOJO_破空自制_MESSAGE_COM_K12_310');
+    expect(erb).not.toContain('@M_KOJO__MESSAGE_COM'); // 不得双下划线
+  });
+
+  it('未登记的分野关键字 → timing-face-unknown（adapter 表是权威）', () => {
+    const r = t('角色: 12\n时机 不存在：\n    「呀。」\n');
+    expect(r.diagnostics.map((d) => d.code)).toContain('timing-face-unknown');
+  });
+
+  it('成否 + MESSAGECHECK 组合：位协议目标与原语来自 adapter', () => {
+    const { erb } = t(
+      '角色: 12\n时机 指令 311 成否: 一定失败：\n    隐藏情景: 如果 TFLAG:193 == 1\n    「呀。」\n',
+    );
+    expect(erb).toContain('@M_KOJO_SUCCESS_COM_K12_311');
+    expect(erb).toContain('TFLAG:192 = -1');
+    expect(erb).toContain('@M_KOJO_MESSAGECHECK_SCENE_K12_311');
+    expect(erb).toContain('SETBIT RESULT, 0');
   });
 });

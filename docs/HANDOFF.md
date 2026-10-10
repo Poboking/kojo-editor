@@ -481,6 +481,22 @@ node tools/smoke-tauri-ipc.mjs
 
 **边界**（未做，属后续批）：升糖 UI（候选列表/高亮/「应用」/diff 预览）、`选项` 块（三段合并）、`心形` 块、`别名` 自动建议、列级定位、带信封的整函数升糖。
 
+### 6.23 语法糖 S5+ 批（✅ 已完成）：旁白口径 round-trip + lift apply 链路 + ui-sugar-lift 面板
+
+**实施结果**（IMPLEMENTATION-LOG §5.32a/§5.32b 为权威）：① lift 自证壳支持 `旁白色:` 两种口径（`默认` 优先 / `作者色`），契约 additive `SugarLiftCandidate.narrationColor`；② 新服务 `sugar.liftApply`（apply 纯函数 + applyToFile 与 compileToFile 同款写链路，成功后发 `file.changed`）；③ 新插件 `ui-sugar-lift`（第 14 插件，`ui.panel` 槽 order 72：候选列表/单选/全选/忽略 + diff + 应用）+ 新事件 `editor.activeFileChanged`。golden 冻结计数 2→4。验收 850 passed / 6 skipped；已提交推送 `0d0bc51`。
+
+### 6.24 解耦补齐批（✅ 已完成）：时机分野模板归位 adapter（S2 遗留承诺兑现）+ 审计 D 项
+
+**实施结果**（IMPLEMENTATION-LOG §5.33 为权威；审阅发现 = `docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md` B-1，用户拍板「补齐承诺」）：
+
+- **契约**：`plugin-api/game.ts` 新增 `KojoFaceTable` / `KojoFaceTemplate`（faces + registration 三件套 + successFlag 位协议 + messageCheck 位协议；占位 `{t}/{n}/{i}` + `${段}` 上下文段）；`GameAdapter.kojoFaceTemplates?` 可选字段；诊断码新增 `face-table-missing`。
+- **adapter**：`eratw-adapter/src/face-templates.ts`（新）按规范 §3.2 / 附录 C 全量登记 eraTW 分野表；`plugin.ts` 挂载（纯数据，不依赖 loadProject）。
+- **转译器**：`codegen.resolveFace` 改查表，**缺表/未登记 → timing-face-unknown fail-closed，绝不回退内建模板**；三件套 / 成否 / MESSAGECHECK 全部由表驱动；装配层 `faceTableOf()` 与 `dictionaryOf()` 同源注入，所有 transpile 路径统一 `makeTranspiler()`。**产物零变化**（golden 逐字节零回退）。
+- **审计 D 项**：`audit-decoupling.mjs` 新增 **D(通用插件零游戏知识)**——非 adapter、非 tests 的插件代码行出现 `M_KOJO` / `DIARY{` / `TFLAG:192` / 游戏名 / `個人口上` 即违规；`sav` 不在列（emuera 通用容器，sav-parser 是引擎级插件）。探针自证可拦回归。顺手把 `ui-state-replay` 占位符的 `M_KOJO_*` 示例改为游戏无关形态。
+- **测试**：851 → 868（`face-templates.test.ts` 7 项 + 装配口径 4 项 + fail-closed 断言；`tests/support.ts` 统一注入 adapter 真实表）。
+
+**验收（2026-10-11）**：868 tests / 862 passed + 6 skipped（50 文件全绿）/ typecheck root+app ✅ / **audit A/B/C/D 四项全绿** / 真实语料冒烟 1 passed / golden 逐字节零回退。**基线更新：868 项 / 14 插件 / 四项审计**。
+
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
@@ -540,7 +556,7 @@ node tools/smoke-tauri-ipc.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**783 项** / ✅ / 13 插件；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.31 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**868 项** / ✅ / 14 插件 / 审计 A/B/C/D 四项；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.33 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
 4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）、**S5 升糖建议器数据层 ✅**（§5.31）；**下一批 = S4-UI 或 S5-UI**：①**S4-UI**（Monaco 预览面板消费 `sugar.preview`：三向映射高亮/悬浮/跳转 + 可达性着色 + 保存期全角空格告警）；②**S5-UI**（升糖候选列表消费 `sugar.lift`：候选高亮/「应用」/diff 预览；S5 只交纯函数数据层）；③**保存路径推导**（`.kojo` → `charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB`）接 `compileToFile`）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

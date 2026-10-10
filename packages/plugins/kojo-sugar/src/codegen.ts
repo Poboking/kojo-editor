@@ -21,6 +21,8 @@ import type {
   IfBlock,
   IfExpr,
   Interpolation,
+  KojoFaceTable,
+  KojoFaceTemplate,
   RandomBlock,
   RandomInline,
   RawFunctionBlock,
@@ -88,6 +90,12 @@ export interface CodegenOptions {
   frontMatter: SugarFrontMatter;
   aliases: AliasTable;
   dictionary?: DictionaryLookup;
+  /**
+   * 时机分野模板表（game adapter 提供；游戏知识）。
+   * **缺省 = 无法生成时机函数名** —— 转译器对含 `时机` 块的文档报
+   * `timing-face-unknown`（fail-closed，不产半成品；见 `resolveFace`）。
+   */
+  faceTable?: KojoFaceTable;
   sink: DiagnosticSink;
   options: SugarTranspileOptions;
 }
@@ -130,7 +138,7 @@ export function codegen(
   const familySeg = familySegment(fm.family);
 
   // ---- 头部：登记函数 + 开关（规范 §5.5 三件套之登记/开关）----
-  emitRegistration(em, fm, charNo, familySeg);
+  emitRegistration(em, fm, charNo, familySeg, opts.faceTable, opts.sink);
 
   // ---- 时机块 ----
   const timings = topLevel.filter((n): n is TimingBlock => n.kind === 'timingBlock');
@@ -142,6 +150,7 @@ export function codegen(
       frontMatter: fm,
       aliases: opts.aliases,
       dictionary: opts.dictionary,
+      faceTable: opts.faceTable,
       sink: opts.sink,
     });
   }
@@ -149,8 +158,19 @@ export function codegen(
   // ---- 配色函数（规范 §5.5 三件套之配色；golden §6.1 排在全部时机之后）----
   if (charNo.length > 0 && fm.color) {
     if (em.length > 0) em.blank();
-    em.pushGenerated(0, `@M_KOJO_COLOR_K${charNo}`);
-    em.pushGenerated(0, `SETCOLOR ${fm.color}`);
+    const colorTpl = opts.faceTable?.registration?.color;
+    if (colorTpl) {
+      em.pushGenerated(0, `@${renderSkeleton(colorTpl, charNo)}`);
+      em.pushGenerated(0, `SETCOLOR ${fm.color}`);
+    } else {
+      // 该游戏无配色函数概念 → 显式告知（绝不静默丢弃）
+      opts.sink.report({
+        code: 'face-table-missing',
+        severity: 'warning',
+        message: '写了 `口上色:` 但当前适配器未声明配色函数模板——未生成配色函数。',
+        loc: null,
+      });
+    }
   }
 
   // ---- 原生函数块（顶层 `@` 块）----
@@ -168,12 +188,26 @@ export function codegen(
 /**
  * 登记 / 配色 / 开关三件套（规范 §5.5：**不带家族段**，只有 `K{角色号}`）。
  *
- * `@M_KOJO_K{No}` 恒生成（家族声明是"引擎存在判定"的前提）；
- * `@M_KOJO_COLOR_K{No}` 仅在写了 `口上色:` 时生成；
- * `@M_KOJO_FLAGSETTING_K{No}` 仅在写了 `开关:` 时生成。
+ * 函数名模板来自 **adapter 的 `KojoFaceTable.registration`**（游戏知识只进
+ * adapter）——本函数只做"有内容才生成"的存在性判断与体内容拼装。
+ *
+ * - 登记函数（`declare`）：`口上:` / `显示名:` / `简介:` 有其一即生成
+ *   （家族声明是"引擎存在判定"的前提）；
+ * - 开关函数（`flagSetting`）：写了 `开关:` 时生成；
+ * - 配色函数（`color`）：在 `codegen` 主入口统一处理（排在全部时机之后）。
  */
-function emitRegistration(em: Emitter, fm: SugarFrontMatter, charNo: string, familySeg: string): void {
+function emitRegistration(
+  em: Emitter,
+  fm: SugarFrontMatter,
+  charNo: string,
+  familySeg: string,
+  faceTable: KojoFaceTable | undefined,
+  sink: DiagnosticSink,
+): void {
   if (charNo.length === 0) return;
+
+  const declareTpl = faceTable?.registration?.declare;
+  const flagTpl = faceTable?.registration?.flagSetting;
 
   // 登记函数只在**有内容可写**时生成（规范 §3.1：未声明的可选项，工具不生成
   // 对应函数——引擎侧自然回退）。`口上:` 省略 = 标准版 = RESULTS 保持为空，
@@ -181,21 +215,47 @@ function emitRegistration(em: Emitter, fm: SugarFrontMatter, charNo: string, fam
   const hasRegistration =
     familySeg.length > 0 || Boolean(fm.displayName) || Boolean(fm.description);
   if (hasRegistration) {
-    em.pushGenerated(0, `@M_KOJO_K${charNo}`);
-    if (familySeg.length > 0) em.pushGenerated(0, `RESULTS = ${JSON.stringify(familySeg)}`);
-    if (fm.displayName) em.pushGenerated(0, `RESULTS:1 = "${fm.displayName}"`);
-    if (fm.description) em.pushGenerated(0, `RESULTS:2 = "${fm.description}"`);
+    if (declareTpl) {
+      em.pushGenerated(0, `@${renderSkeleton(declareTpl, charNo)}`);
+      if (familySeg.length > 0) em.pushGenerated(0, `RESULTS = ${JSON.stringify(familySeg)}`);
+      if (fm.displayName) em.pushGenerated(0, `RESULTS:1 = "${fm.displayName}"`);
+      if (fm.description) em.pushGenerated(0, `RESULTS:2 = "${fm.description}"`);
+    } else {
+      sink.report({
+        code: 'face-table-missing',
+        severity: 'warning',
+        message: '需要生成登记函数，但当前适配器未声明登记函数模板——已跳过（请检查适配器）。',
+        loc: null,
+      });
+    }
   }
 
   // 开关函数
   if (fm.switches.length > 0) {
     if (em.length > 0) em.blank();
-    em.pushGenerated(0, `@M_KOJO_FLAGSETTING_K${charNo}`);
-    for (const sw of fm.switches) {
-      const on = sw.value === '是' || sw.value === 'true' || sw.value === '1';
-      em.pushGenerated(0, `FLAG:${sw.name} = ${on ? 1 : 0}`);
+    if (flagTpl) {
+      em.pushGenerated(0, `@${renderSkeleton(flagTpl, charNo)}`);
+      for (const sw of fm.switches) {
+        const on = sw.value === '是' || sw.value === 'true' || sw.value === '1';
+        em.pushGenerated(0, `FLAG:${sw.name} = ${on ? 1 : 0}`);
+      }
+    } else {
+      sink.report({
+        code: 'face-table-missing',
+        severity: 'warning',
+        message: '写了 `开关:` 但当前适配器未声明开关函数模板——已跳过（请检查适配器）。',
+        loc: fm.switches[0]?.loc.start ?? null,
+      });
     }
   }
+}
+
+/**
+ * 纯骨架模板求值（登记 / 配色 / 开关三件套用）：只替换 `{n}`（角色号）。
+ * 三件套模板按规范 §5.5 不含家族段，故无需 `{t}` / `{i}`。
+ */
+function renderSkeleton(template: string, charNo: string): string {
+  return template.replace(/\{n\}/g, charNo);
 }
 
 /** 家族段（规范 §5.5）：标准版 `""`；别人版 `"_" + 口上名` */
@@ -213,6 +273,8 @@ interface TimingEmitContext {
   frontMatter: SugarFrontMatter;
   aliases: AliasTable;
   dictionary?: DictionaryLookup;
+  /** 分野模板表（adapter 提供；缺省 → 无法生成时机函数名，fail-closed） */
+  faceTable?: KojoFaceTable;
   sink: DiagnosticSink;
 }
 
@@ -222,8 +284,11 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
 
   const baseName = buildFunctionName(face.template, ctx.familySeg, ctx.charNo, timing.index, face.paramIndex);
 
-  // ---- 成否判定函数（规范 §5.5：写了 `成否:` 时生成 `SUCCESS` 函数）----
-  if (face.success) {
+  // ---- 成否判定函数（规范 §5.5：写了 `成否:` 时生成 SUCCESS 函数）----
+  // 位协议目标与原语来自 adapter（`KojoFaceTable.successFlag`）；缺省 → 跳过
+  // 并记 INFO（该游戏无成否位协议，非错误）。
+  const flagProto = ctx.faceTable?.successFlag;
+  if (face.success && flagProto) {
     const successName = buildFunctionName(
       face.success.template,
       ctx.familySeg,
@@ -232,7 +297,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
       face.success.paramIndex,
     );
     em.pushGenerated(0, `@${successName}`);
-    em.pushGenerated(0, `TFLAG:192 = ${successFlag(timing)}`);
+    em.pushGenerated(0, `${flagProto.target} = ${successFlag(timing, flagProto.values)}`);
     em.blank();
   }
 
@@ -275,15 +340,17 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
 }
 
 /**
- * 时机的分野解析（规范 §3.2 / §5.5 / 附录 C）。
+ * 时机的分野解析（规范 §3.2 / §5.5 / 附录 C）——**查 adapter 的分野表**
+ * （`KojoFaceTable.faces`；游戏知识只进 adapter，转译器只消费不解释）。
  *
  * 返回 null 时报 `timing-face-unknown` 并**不产出半成品**（规范 §5.3 精神：
- * 无法确定函数名时宁可拒绝）。
+ * 无法确定函数名时宁可拒绝）。适配器整体缺表时同样拒绝（记同一码），
+ * 绝不回退到内建模板——回退就等于把游戏知识搬回通用插件。
  */
 interface FaceResolution {
-  /** 函数名模板：含 `{n}` / `{i}` 占位（`{t}` 由 `familySeg` 提供） */
+  /** 函数名模板：含 `{t}` / `{n}` / `{i}` 占位（求值见 `buildFunctionName`） */
   template: string;
-  /** 是否把 `timing.index` 用作 `{i}`（否则编号自定义/缺省） */
+  /** 是否把 `timing.index` 用作 `{i}`（模板含 `{i}` 时为真） */
   paramIndex: boolean;
   /** 成否函数模板（写了 `成否:` 时生成） */
   success?: { template: string; paramIndex: boolean };
@@ -291,81 +358,84 @@ interface FaceResolution {
 
 function resolveFace(face: string, timing: TimingBlock, ctx: TimingEmitContext): FaceResolution | null {
   const key = face.trim();
-  // 命名参数（`成否:` / `类型:`）——本节只用于分派
-  const typeParam = timing.namedParams.find((p) => p.name === '类型');
-  const localsSeg = typeParam
-    ? typeParam.value === 'SCOM'
-      ? 'SCOM'
-      : typeParam.value === '自定副指令'
-        ? 'CUSTOM_SCOM'
-        : typeParam.value === '自定指令'
-          ? 'CUSTOM_COM'
-          : 'COM'
-    : 'COM';
 
-  const n = ctx.charNo;
-  // 主体函数名 = `M_KOJO{家族}_{分野}_K{n}[_{i}]`（规范 §5.5 / 附录 C）
-  const faceTemplates: Record<string, string> = {
-    初见: `M_KOJO{t}_ENCOUNTER_K{n}`,
-    事件: `M_KOJO{t}_EVENT_K{n}_{i}`,
-    绝顶: `M_KOJO{t}_MESSAGE_PALAMCNG_B_K{n}`,
-    射精: `M_KOJO{t}_MESSAGE_PALAMCNG_A2_K{n}_{i}`,
-    标记: `M_KOJO{t}_MESSAGE_MARKCNG_K{n}`,
-    计数器: `M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}`,
-    追加源: `M_KOJO{t}_EXTRASOURCE_${localsSeg}_K{n}_{i}`,
-    日常: `M_KOJO{t}_DAILY_EVENT_K{n}_{i}`,
-    日记: `DIARY{t}_TEXT_K{n}`,
-    成功: `M_KOJO{t}_SUCCESS_${localsSeg}_K{n}_{i}`,
-  };
-
-  // `成否:` 写了 → 另生成 SUCCESS 函数（规范 §5.5 第 1 条）
-  const successTpl = hasSuccessNamed(timing)
-    ? { template: `M_KOJO{t}_SUCCESS_${localsSeg}_K{n}_{i}`, paramIndex: true }
-    : undefined;
-
-  if (key === '指令') {
-    return {
-      template: `M_KOJO{t}_MESSAGE_${localsSeg}_K{n}_{i}`,
-      paramIndex: true,
-      success: successTpl,
-    };
-  }
-  const template = faceTemplates[key];
-  if (!template) {
+  /** 无法识别的分野 → 统一诊断（含"适配器未提供分野表"的情形） */
+  const unknown = (detail: string): null => {
     ctx.sink.report({
       code: 'timing-face-unknown',
       severity: 'error',
-      message: `无法识别的时机分野「${key}」——请使用规范 §3.2 的分野表（附录 C 列有完整入口）。`,
+      message: `无法识别的时机分野「${key}」——${detail}`,
       loc: timing.loc.start,
     });
     return null;
+  };
+
+  const table = ctx.faceTable;
+  if (!table) {
+    return unknown('当前适配器未提供分野模板表（kojoFaceTemplates）。');
   }
+  const spec: KojoFaceTemplate | undefined = table.faces[key];
+  if (!spec) {
+    return unknown('请使用规范 §3.2 的分野表（附录 C 列有完整入口）。');
+  }
+
+  // 上下文段求值：`${段名}` → 段文本（取值来自本时机的命名参数，映射表由
+  // adapter 声明）。缺省段（无 `类型:` 等命名参数）→ 用段的第一个候选值，
+  // 与规范 §3.2「`类型:` 默认 COM」一致。
+  const segments: Record<string, string> = {};
+  for (const [segName, candidates] of Object.entries(spec.segments ?? {})) {
+    const paramName = segmentParamName(segName);
+    const declared = paramName ? timing.namedParams.find((p) => p.name === paramName)?.value : undefined;
+    const keys = Object.keys(candidates);
+    // 取值优先 `类型:` 声明；未声明时用第一个候选（adapter 保证默认值在首位）
+    const chosen = declared !== undefined && candidates[declared] !== undefined ? declared : keys[0];
+    if (chosen !== undefined) segments[segName] = candidates[chosen]!;
+  }
+
+  const template = applySegments(spec.template, segments);
+  const successTpl = hasSuccessNamed(timing)
+    ? { template: applySegments(spec.success?.template ?? template, segments), paramIndex: true }
+    : undefined;
+
   return {
     template,
     paramIndex: template.includes('{i}'),
-    // `成功` 划分野自身即 SUCCESS 函数（避免重复生成同名函数）
-    success: key === '成功' ? undefined : successTpl,
+    // `成功` 划分野自身即 SUCCESS 函数（避免重复生成同名函数）——由 adapter
+    // 在表里把 `success` 留空表达（见 face-templates.ts 的 `成功` 条目）。
+    success: successTpl,
   };
+}
+
+/**
+ * 上下文段名 → 命名参数名（当前唯一映射：`com` ← `类型:`）。
+ * 新增段时在此登记；adapter 只声明段与其取值候选，不声明命名参数名
+ * （那是**语法层**语义，属跨游戏语言层，不属 adapter）。
+ */
+function segmentParamName(segName: string): string | undefined {
+  if (segName === 'com') return '类型';
+  return undefined;
+}
+
+/** 把模板里的 `${段名}` 替换为段文本（未命中的段保持原样，便于诊断） */
+function applySegments(template: string, segments: Record<string, string>): string {
+  return template.replace(/\$\{([^}]*)\}/g, (whole, name: string) =>
+    Object.prototype.hasOwnProperty.call(segments, name) ? segments[name]! : whole,
+  );
 }
 
 function hasSuccessNamed(timing: TimingBlock): boolean {
   return timing.namedParams.some((p) => p.name === '成否');
 }
 
-/** `成否:` 取值 → TFLAG:192 的值（规范 §3.2 表；默认 `游戏判定` = 0） */
-function successFlag(timing: TimingBlock): number {
+/** `成否:` 取值 → 适配器位协议目标变量的值（规范 §3.2 表；默认 `游戏判定` = 0） */
+function successFlag(timing: TimingBlock, values?: Readonly<Record<string, number>>): number {
   const p = timing.namedParams.find((x) => x.name === '成否');
-  const v = p?.value ?? '游戏判定';
-  switch (v) {
-    case '一定成功':
-      return 1;
-    case '一定失败':
-      return -1;
-    case '不执行':
-      return -2;
-    default:
-      return 0;
-  }
+  const v = p?.value;
+  // 未写 `成否:` 或写默认值 `游戏判定` → 适配器映射表的默认项（eraTW = 0，
+  // 与引擎兜底 `TFLAG:192 = 0` 等价，见规范 §3.2 命名参数表注）。
+  const map = values ?? {};
+  if (v !== undefined && map[v] !== undefined) return map[v]!;
+  return map['游戏判定'] ?? 0;
 }
 
 /**
@@ -373,7 +443,9 @@ function successFlag(timing: TimingBlock): number {
  * `函数名 = "M_KOJO" + 家族段 + "_" + 分野段 + "_K" + 角色号 + ["_" + 编号]`
  *
  * 模板里的 `{t}` = 家族段（含前导下划线或空串）；`{n}` = 角色号；`{i}` = 编号。
- * **`M_KOJO` 与 `分野段` 之间那一个下划线由公式提供**，不由家族段提供。
+ * **`M_KOJO` 与 `分野段` 之间那一个下划线由公式提供**，不由家族段提供——
+ * 模板由 adapter 声明（`KojoFaceTable.faces[*].template`），本函数只做占位符
+ * 求值，**不含任何游戏字面量**。
  */
 export function buildFunctionName(
   template: string,
@@ -393,22 +465,55 @@ export function buildFunctionName(
   return name;
 }
 
-/** MESSAGECHECK 函数（规范 §3.2：`SETBIT RESULT, 0/1`） */
+/**
+ * MESSAGECHECK 函数（规范 §3.2：`SETBIT RESULT, 0/1`）。
+ *
+ * 函数名模板 / 作用域段 / 位号 / 置位原语**全部来自 adapter**
+ * （`KojoFaceTable.messageCheck`）；缺省 → 记 INFO 并跳过（该游戏无此概念）。
+ */
 function emitMessageCheck(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): void {
-  // 位协议：bit0 = 跳过情景，bit1 = 跳过口上（KOJO_MESSAGE 的 §1.5 结论）
+  const proto = ctx.faceTable?.messageCheck;
+  if (!proto) {
+    ctx.sink.report({
+      code: 'face-table-missing',
+      severity: 'warning',
+      message: '写了 `隐藏情景:` / `隐藏口上:`，但当前适配器未声明 MESSAGECHECK 位协议——已跳过。',
+      loc: timing.messageCheck[0]?.loc.start ?? null,
+    });
+    return;
+  }
   const base = resolveFaceNameForMessageCheck(timing, ctx);
   if (!base) return;
   for (const mc of timing.messageCheck) {
-    const bit = mc.scope === 'scene' ? 0 : 1;
-    em.pushGenerated(0, `@${base}_MESSAGECHECK_${mc.scope === 'scene' ? 'SCENE' : 'KOJO'}_K${ctx.charNo}${timing.index ? `_${timing.index}` : ''}`);
+    const scopeSeg = proto.scopes[mc.scope];
+    const bit = proto.bits[mc.scope];
+    if (scopeSeg === undefined || bit === undefined) {
+      ctx.sink.report({
+        code: 'face-table-missing',
+        severity: 'warning',
+        message: `适配器的 MESSAGECHECK 协议未声明作用域「${mc.scope}」的段/位号——已跳过该条。`,
+        loc: mc.loc.start,
+      });
+      continue;
+    }
+    const fnName = buildFunctionName(
+      proto.template
+        .replace(/\{base\}/g, base)
+        .replace(/\{scope\}/g, scopeSeg),
+      ctx.familySeg,
+      ctx.charNo,
+      timing.index,
+      true, // 模板含 `{i}`：有编号时消费、无编号时由 buildFunctionName 归一去掉
+    );
     const exprCtx: ExprContext = {
       aliases: ctx.aliases,
       dictionary: ctx.dictionary,
       report: (d) => ctx.sink.report(d),
       loc: mc.loc.start,
     };
+    em.pushGenerated(0, `@${fnName}`);
     em.pushGenerated(0, `IF ${lowerExpression(mc.condition, exprCtx)}`);
-    em.pushGenerated(0, `SETBIT RESULT, ${bit}`);
+    em.pushGenerated(0, (proto.setBit ?? 'SETBIT RESULT, {bit}').replace(/\{bit\}/g, String(bit)));
     em.pushGenerated(0, `ENDIF`);
     em.blank();
   }
