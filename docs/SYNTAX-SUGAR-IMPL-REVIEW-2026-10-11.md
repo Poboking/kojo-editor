@@ -15,7 +15,7 @@
 | 提案假设 | 项目事实 |
 |---|---|
 | 需要从零建 ERB 解析能力 | `erb-parser` scanner 已有**引擎级配对表**（funcMatch 精确：TRYC 六个/TRY*LIST 三个/PRINTDATA 九个，BUG-2 修复后无幻影开块）；`condition-extractor` 已有 Pratt 表达式解析器，**493,712 谓词未解析率 0.04%**，且经真实语料两轮 dump-补缺迭代（`[[词]]`、括号索引段） |
-| Tree-sitter 服务编辑器注入 | 本项目编辑器是 **Monaco**，不原生支持 tree-sitter；接 web-tree-sitter（WASM）后还要自建 token→Monaco decoration 管线，等于在 Monaco 上重造一个高亮引擎 |
+| Tree-sitter 服务编辑器注入 | 本项目编辑器是 **Monaco**，不原生支持 tree-sitter，token 桥接层有社区库现成可用（见 §七），但 ERB grammar 仍需从零编写 |
 | 糖语法复杂，需要 LR | 糖是**行式结构**（对白行 / `当…:` 块头 / `- ` 列表项 / `{}` 插值），语法复杂度远低于 ERB 本体；`当` 块配对靠缩进，连错误恢复都比 ERB 简单 |
 
 **决定**：
@@ -117,3 +117,26 @@
 | 远期评估 | web-tree-sitter 混合高亮 / 真实引擎子进程预览 / 全自动升糖（永不） | 各自独立评估报告 |
 
 **一句话**：提案的分层框架和风险表是对的，但落地上——解析复用已有解析资产而非 Tree-sitter，预览复用 state-replay 而非新建模拟器，写盘复用注入器双闸链路；糖生成器对内要喂得起回放引擎，对外要过得了解耦审计。
+
+## 七、补充提案核验（Monaco × Tree-sitter 桥接，2026-10-11 第二轮）
+
+> 背景：另一 AI 提出补充方案，主张通过 `@plazafyi/monaco-tree-sitter`（WASM 桥接）把 Tree-sitter 接入 Monaco，作为首选路线。以下为事实核验与判定。
+
+### 7.1 事实核验
+
+| 主张 | 核验结果 |
+|---|---|
+| `@plazafyi/monaco-tree-sitter` 是"成熟的生产级库" | **库真实存在，定性夸大**：npm 0.1.0（2026-03-25 首发），单一维护者（~yocontra），无迭代历史与采用规模证据。机制可信（DocumentSemanticTokensProvider + `tree.edit()` 增量 + highlights.scm 捕获映射，与 README 一致），但是七个月大的早期验证性项目——作为编辑器核心链路的单点依赖需谨慎 |
+| "Monaco 0.55+ 已内置 LSP 客户端" | **假**。Monaco 至今不内置 LSP；能力来自 TypeFox `monaco-languageclient`（v10.7.0 对齐 monaco 0.55.1，经 monaco-vscode-api 桥接）。提案把"第三方包兼容 0.55.1"误读为"Monaco 原生带 LSP" |
+
+### 7.2 判定：桥接路径成立，但不改变 v1 选型
+
+- **桥接库解决的是高亮，而 v1 的编辑体验（胶囊/折叠卡片/波浪线/补全）本来就全部由转译 AST + decorations/linter/completion provider 交付**——手写解析器是转译层的必需品，选不选 Tree-sitter 都要写。引入 Tree-sitter 后系统内并存两棵 AST（转译 AST + tree-sitter AST），必须对糖语义保持一致，原提案"两份 grammar 严格对齐"的风险恶化为"两棵语法树对齐"。
+- **两笔未计成本**：① 社区无 eraBasic/ERB 的 tree-sitter grammar，PRINT 家族后缀、`\@…\@`、`%…%` 全部要从零建模；② 口上文件典型 <2000 行，全量重解析毫秒级，增量解析无收益场景。
+- **对本审阅 §1.1 的修正**：原表述"接 WASM 后还要自建 token→decoration 管线，成本比 grammar 还高"**收回一半**——token provider 层的桥接有现成库，B 计划启动成本比原估的低。
+
+### 7.3 修订后的 Tree-sitter 立场
+
+- **v1 不变**：手写三段式（AST 单一事实源）+ Monarch + decorations。
+- **B 计划路径具体化**：若 v2 启发式边界识别失败或混合高亮体验不达标，评估时**直接采用 `@plazafyi/monaco-tree-sitter` 做桥接**（不自建 provider 管线），届时需评估项 = 依赖成熟度（届时版本/维护状态）+ ERB grammar 从零编写的真实工作量 + 两棵 AST 一致性方案。
+- 补充提案的方案排序（桥接 > LSP > 自定义 tokenizer）在"已决定用 Tree-sitter"前提下成立；LSP 路线真实门槛 = 语言服务器进程复杂度，且应走 `monaco-languageclient` 而非"Monaco 内置"。
