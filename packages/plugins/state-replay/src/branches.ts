@@ -187,9 +187,13 @@ export function buildBranchOutcomes(
         decided = true;
         break;
       }
-      // 同行谓词归约（v0.2 第十二批修复 H1）：连续 'and' 标记的谓词构成
-      // 一个 AND 组（CASE `a TO b` 的两半边），其余各成 OR 组——语义 =
+      // 同行谓词归约（v0.2 第十二批修复 H1；v0.2 第十九批修正多区间）：
+      // 一个 CASE `a TO b` 区间 = 两条 'and' 半边谓词（`>=a`、`<=b`）构成**一个**
+      // AND 组，其余各成 OR 组——语义 =
       // `CASE 1, 240 TO 359, 5` ≡ `v==1 || (240<=v && v<=359) || v==5`。
+      // 相邻区间的半边直接相连（抽取层逐部分顺序 push：`CASE 1 TO 3, 5 TO 7`
+      // → [>=1,<=3,>=5,<=7] 全 'and'），故按**成对**消费而非把整段 'and' 并成
+      // 一组（后者会把两个区间 AND 成恒假条件，区间内反而误判为未命中）。
       // AND 组 Kleene：false 主导 → 组假；否则含 unknown → 组未知；否则真。
       const groups: { outcome: 'true' | 'false' | 'unknown'; unknown?: ReplayUnknown }[] = [];
       {
@@ -198,14 +202,14 @@ export function buildBranchOutcomes(
           if (preds[i]!.conjunction === 'and') {
             let group: 'true' | 'false' | 'unknown' = 'true';
             let unknownOf: (typeof groups)[number]['unknown'] | undefined;
-            while (i < preds.length && preds[i]!.conjunction === 'and') {
+            // 每组至多两条半边（TO 区间恒为 >=/<= 一对）；成对消费保证区间边界。
+            for (let k = 0; k < 2 && i < preds.length && preds[i]!.conjunction === 'and'; k++, i++) {
               const o = preds[i]!.outcome;
               if (o.kind === 'false') group = 'false';
               else if (o.kind === 'unknown' && group !== 'false') {
                 group = 'unknown';
                 unknownOf = o.unknown;
               }
-              i++;
             }
             groups.push({ outcome: group, ...(unknownOf ? { unknown: unknownOf } : {}) });
           } else {

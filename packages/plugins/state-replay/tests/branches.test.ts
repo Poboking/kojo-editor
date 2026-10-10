@@ -234,15 +234,50 @@ describe('CASE TO 区间 AND 组（v0.2 第十二批修复 H1）', () => {
     expect(got[0]!.takenLine).toBe(30);
   });
 
-  it('AND 组内全真但缺信息 → 两真一 unknown → 组未知（阻断整链）', () => {
+  it('AND 组内全真但缺信息 → 一真一 unknown → 组未知（阻断整链）', () => {
     const stmts = cf([
       ['SELECTCASE', 'TIME', 0, 10],
-      ['CASE', '240 TO 300 TO 359', 0, 20], // 三段区间（合成场景），全 'and'
+      ['CASE', '240 TO 359', 0, 20],
       ['CASEELSE', '', 0, 30],
       ['ENDSELECT', '', 0, 40],
     ]);
-    const got = buildBranchOutcomes(stmts, [apred(20, T, 'and'), apred(20, T, 'and'), apred(20, U, 'and')]);
+    const got = buildBranchOutcomes(stmts, [apred(20, T, 'and'), apred(20, U, 'and')]);
     expect(got[0]!.outcome).toBe('unknown');
+  });
+
+  it('同一 CASE 多个 TO 区间（`1 TO 3, 5 TO 7`）各成一组：落在第二个区间仍命中', () => {
+    const stmts = cf([
+      ['SELECTCASE', 'TIME', 0, 10],
+      ['CASE', '1 TO 3, 5 TO 7', 0, 20],
+      ['ENDSELECT', '', 0, 30],
+    ]);
+    // 抽取层逐部分 push：>=1, <=3, >=5, <=7（全 'and'）。v=6 → [T,F,T,T]
+    // 旧实现把整段 'and' 并成一组 → T&&F&&T&&T = 假 → 区间内误判未命中。
+    const got = buildBranchOutcomes(stmts, [
+      apred(20, T, 'and'),
+      apred(20, F, 'and'),
+      apred(20, T, 'and'),
+      apred(20, T, 'and'),
+    ]);
+    expect(got[0]!.outcome).toBe('taken');
+    expect(got[0]!.takenLine).toBe(20);
+  });
+
+  it('同一 CASE 多个 TO 区间：落在区间外仍落空（组间 OR 不误命中）', () => {
+    const stmts = cf([
+      ['SELECTCASE', 'TIME', 0, 10],
+      ['CASE', '1 TO 3, 5 TO 7', 0, 20],
+      ['ENDSELECT', '', 0, 30],
+    ]);
+    // v=4 → [>=1 T, <=3 F, >=5 F, <=7 T] → 两组皆假 → 落空
+    const got = buildBranchOutcomes(stmts, [
+      apred(20, T, 'and'),
+      apred(20, F, 'and'),
+      apred(20, F, 'and'),
+      apred(20, T, 'and'),
+    ]);
+    expect(got[0]!.outcome).toBe('no-match');
+    expect(got[0]!.takenLine).toBeNull();
   });
 
   it('混排（`CASE 1, 240 TO 359, 5`）——OR 组真仍命中，AND 组假不拦截', () => {

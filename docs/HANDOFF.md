@@ -115,6 +115,8 @@
   5. **测试**：规则单测 3 路径（覆盖/不覆盖/协议不可用降级）+ call-protocol +5（模板具体性与覆盖语义）+ 真实语料 `corpus.test.ts`（36 条，全 warning，全「数值槽 声明 1 / 转发 0」）；kernel 集成冒烟 `ruleCount` 5→6 + 新增 `=== 36` 断言。
   6. **验证**：564 passed / 7 skipped（无 smoke）；569 / 2 skipped（带 smoke）；typecheck root+app ✅；audit ✅（13 插件）；**回放基线逐字不变**（K49 1356/11685/未知 3741/exact 836）。
 
+- **v0.3 语法糖批进度**：**S1 契约 + golden ✅**（§5.26）/ **S2 转译内核 ✅**（§5.28）/ **S3 写链路 ✅**（§5.29）/ **S4 糖预览数据层 ✅**（§5.30）。服务键新增 `sugar.preview`（`sugar.transpile` 未动）。基线 **745 项**。
+
 ## 三、文档索引（按权威性排序）
 
 | 文档 | 内容 |
@@ -211,7 +213,7 @@ node tools/smoke-tauri-ipc.mjs
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
 5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
 
-## 六、v0.2 批次记录（第三批～第十七批，✅ 全部完成）+ v0.3 糖批（S1～S3，✅）
+## 六、v0.2 批次记录（第三批～第十七批，✅ 全部完成）+ v0.3 糖批（S1～S4，✅）
 
 ### 6.1 第三批：条件谓词抽取 `condition-extractor`
 
@@ -448,6 +450,20 @@ node tools/smoke-tauri-ipc.mjs
 
 **边界**（未做，属后续批）：UI 保存/预览（S4）、升糖（S5）、Monarch 高亮（S6）、保存期全角空格告警（随 S4）；spec 冻结未动。
 
+### 6.21 语法糖 S4 批（✅ 已完成）：糖预览三向映射（数据层）
+
+**实施结果**（IMPLEMENTATION-LOG §5.30 为权威记录）：给"这一行糖源码在这份存档状态下会走到哪、说什么"提供**数据层**答案——输入糖源码 → 转译 → **复用 `state.replay`**（不新建模拟器）→ 输出「糖源码行 ↔ 生成 ERB 行 ↔ 回放消息块」三向映射。**UI 留给后续批次**。
+
+- **契约扩展（additive，零游戏名词）**：`WellKnownServices.SugarPreview = 'sugar.preview'`；`SugarPreviewRequest` / `SugarPreviewLine` / `SugarPreviewMessageBlock` / `PreviewReachability`（三档）/ `SugarPreviewResult` / `SugarPreviewArchive` / `SugarPreviewFunctionReplay` / `SugarPreviewDegradeReason`（**5 值闭集**）/ `SugarPreviewService.preview(request)`；守卫 `isReachableBlock` / `hasGenerated` / `hasArchive`。**旧签名一律未动**。
+- **实现**（`kojo-sugar/src/preview.ts`，新文件；**transpile 内核与 golden 零改动**）：转译（复用注入的 `transpile`）→ 产物索引（`scanProductFunctions` + `foldMessageBlocks`）→ 源映射反查（`generatedLine → sourceLine`）→ 回放（逐产物函数 `replayFunctions`）→ 组装三向映射。
+- **服务装配**：`index.ts` 的 `provides` 增 `SugarPreview`；**`state.replay` 是软依赖**（`try inject`，缺席则降级）——不写进 `requires`（否则回放插件未激活会让整个 `kojo-sugar` 静默 inactive）。**不注册任何 `ctx.bus.on`**：预览只消费事件、绝不发射（S3 已落 `file.changed` payload 契约）。
+- **四项关键决策**：①**糖源行为主键**（编辑器锚点在糖源码；纯糖语法行如 `时机 …：` 无产物行对应，反查会落空）；②**纯生成行（`sourceLine: null`）不归属任何糖行**（不给糖行硬塞产物行——映射比没有更糟）；③**信封链（转译器生成的 `IF LOCAL` 包装守卫）不参与可达性折叠**（`LOCAL` 是语言局部量，回放只报 `unknown`，参与折叠会把每个块污染成 unknown；判据纯源映射：链头无糖源归属 + 走向 unknown；仍照列 `branches` 保可见性）；④**可达性折叠要求"所有覆盖链都通过"**（用"任一 taken 链通过"会因信封链 `takenLine` = 自身头行而**恒真**）。
+- **降级是分类不是布尔**：`no-archive-requested` / `no-character` / `replay-service-unavailable` / `archive-unreadable` / `replay-failed`；**转译 error 也不抛错**（诊断原样带出、骨架照给，策略留给调用方）。
+- **已知边界（写进契约头注）**：三向映射以**本次产物行号**为坐标系；`state.replay` 是**从磁盘读函数体**的（行号 = 该 `.erb` 文件行号），而预览跑的是**未落盘**的内存产物——S4 只做数据层与折叠逻辑，不替这一层做决定；未来接真实"保存后 .erb"的批次据此装配。
+
+**验证**：**745 passed / 6 skipped**（纯本批 **+28**，基线 717；零回归）/ typecheck root+app ✅ / audit 13 插件 ✅ / **golden §6.1/§6.2 逐字节断言零回退**（未触碰）/ 新测试含 S1 golden 走**真实 `StateReplayEngine`**（`TFLAG:193 = 1/2/9` 三档钉死分支走向 + 信封链不污染 + 具名索引不可解析如实报 unknown）。
+
+**边界**（未做，属后续批）：预览 UI（Monaco 高亮/悬浮/跳转、消息块气泡、可达性着色）、逐字符 FORM 展开渲染串、保存期全角空格告警、糖 `角色:` 直接从 AST 取（当前由产物 `_K{n}` 反推）。
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
@@ -500,10 +516,14 @@ node tools/smoke-tauri-ipc.mjs
 22. **Bash 工具的 cwd 不如想象中可靠**（本会话实测）：`cd X && cmd` 的 cd 前缀偶发被吞、后台任务起始目录回到会话根 → **一律用 `pnpm -C <绝对路径>` / node 绝对路径脚本**，不依赖工作目录持久化。
 23. **文档追加式编辑的"标题吞噬"**（第七、九、十批连续三次）：向 ARCHITECTURE 追加 §5.x 小节时，Edit 的 old_string 以 `## 6. 目录结构` 标题为锚、new_string 漏回该标题 → §6 标题被静默删除（前两次靠 grep 兜住，第三次依旧发生——**人工 Edit 不可靠，已改用 node 行号插入**）。根治措施：①追加小节用 node 脚本按行号 splice；②每次文档编辑后必须 `grep -n "^## \|^### "` 读回验证标题层级。
 
+24. **回放链路的行号坐标系有三处来源，改一处不算改**（S4 批，排查最久）：`FunctionReplay.branches[].headLine` 由 `buildBranchOutcomes(detail.statements, predicates)` 构造——**只平移 `predicates[].line` 时 `branches[].headLine` 纹丝不动**。沙箱里跑"内存产物 + 真实回放引擎"（预览场景）时，`statements` / `predicates` / `assignments` / `returns` **四个数组的 `line` 都要同源平移**。
+25. **"读不到就默认 0"让夹具写错变成"看起来对但走向错"**（S4 批）：`state-replay` 的 `readTopVar` 对**已知名但快照缺块**回默认值 0/`''`（不报错）。但 `TFLAG` 在 `var-model.ts` 的 `GLOBAL_INT_1D` 里 = **全局变量**，夹具放进 `chars[0].vars` 会静默读到 0 → 分支走向全错而**测试不报错**。修法：夹具放顶层 `vars`，且断言用"不同状态 → 不同走向"的**对照**（`TFLAG:193 = 1/2/9`），别只断言"有结果"。
+26. **折叠类逻辑的"任一/所有"是隐蔽分水岭**（S4 批）：可达性折叠写成"某一条 taken 链命中即可达"时，外层信封链（`takenLine` = 自身头行、体涵盖整个函数）会让判定**恒真**——内层 `SELECTCASE` 的分支归属白算。正确是"**每一条**覆盖链都须通过"。这类错误不会崩、只会悄悄全绿，必须用"命中 A / 命中 B / 走兜底"三档对照钉死。
+27. **自己生成的骨架守卫会污染语义判定**（S4 批，一般化）：`codegen` 生成的 `IF LOCAL` 里 `LOCAL` 是语言局部量，回放器只能报 `unknown` —— 若让它参与可达性折叠，**每个块都被污染成 unknown**（预览信息量归零）。解法是"识别并旁路信封"，判据必须**纯源映射**（链头产物行 `sourceLine === null`）而非游戏/引擎知识，否则会把 ADAPTER 该管的事漏进内核侧插件。
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：714 项 / ✅ / 13 插件；无游戏目录时集成冒烟+金样本自动跳过）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.25 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账；**协议覆盖校验规则 ✅ 已完成**，见 IMPLEMENTATION-LOG §5.27）；v1.1 余项（注入器桌面壳真实终端深度冒烟：确认弹窗 → writablePaths 批准 → 注入真实体验）；**BUG-5 file.changed 事件链**（payload 契约与注入器写链路一并设计，见 §6.18）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）；**下一批 = S4**（保存/预览 UI：`.kojo` → 目标路径推导（`charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB` 命名）→ 调 `compileToFile` → 保存期全角空格告警 + Monaco 预览））
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**745 项** / ✅ / 13 插件；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.30 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
+4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）；**下一批 = S5 或 S4-UI**：①**S4-UI**（Monaco 预览面板消费 `sugar.preview`：三向映射高亮/悬浮/跳转 + 可达性着色 + 保存期全角空格告警）；②**S5 升糖**（原生 ERB → 糖源码）；③**保存路径推导**（`.kojo` → `charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB`）接 `compileToFile`）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

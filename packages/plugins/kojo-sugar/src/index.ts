@@ -19,24 +19,44 @@ import type {
   Plugin,
   ProjectService,
   SlotRegistry,
+  StateReplayService,
+  SugarPreviewService,
   SugarTranspileService,
   VariableSchema,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { createSugarTranspileService } from './service';
+import { createSugarPreviewService } from './preview';
 import type { DictionaryLookup } from './types';
 
 export function createKojoSugarPlugin(): Plugin {
   return {
     id: 'kojo-sugar',
     version: '0.3.0',
-    provides: [WellKnownServices.SugarTranspile],
+    provides: [WellKnownServices.SugarTranspile, WellKnownServices.SugarPreview],
     // S3 批：编译落盘需要内核 io（第一道闸）；Project/Slots 供 adapter 字典查询
     requires: [KernelServices.Project, KernelServices.Slots, KernelServices.IO],
     activate(ctx) {
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
       const io = ctx.inject<FileIO>(KernelServices.IO);
+
+      /**
+       * 状态回放服务（`state.replay`）——**可选消费**（S4 批）。
+       *
+       * 之所以**不写进 `requires`**：预览在无存档时仍要可用（糖预览是编辑器
+       * 常态），把 `state.replay` 做成硬依赖会让"回放插件未激活"直接导致
+       * kojo-sugar 静默 inactive——那是本末倒置。故按需**软取**：
+       * `ctx.inject` 抛错则回退 undefined，预览走结构化降级
+       * （`replay-service-unavailable`，契约已定义）。
+       */
+      const replayOf = (): StateReplayService | undefined => {
+        try {
+          return ctx.inject<StateReplayService>(WellKnownServices.StateReplay);
+        } catch {
+          return undefined;
+        }
+      };
 
       /**
        * 当前适配器的变量字典（按 adapterId 精确匹配；多适配器共存天然正确）。
@@ -71,6 +91,23 @@ export function createKojoSugarPlugin(): Plugin {
       };
 
       ctx.provide(WellKnownServices.SugarTranspile, service);
+
+      /**
+       * 预览服务（S4 批）——**只读数据层**：转译复用上表同一个转译器
+       * （同 adapter 字典），回放软取 `state.replay`，产出三向映射。
+       *
+       * 事件纪律：预览**不发射任何事件**（`file.changed` 等由内核 io 监视器
+       * 产生；预览只消费）。故此处不注册任何 `ctx.bus.on`。
+       */
+      const previewService: SugarPreviewService = createSugarPreviewService({
+        transpile: (source, options) =>
+          createSugarTranspileService({ dictionary: dictionaryOf() }).transpile(source, options),
+        ...(replayOf() ? { replay: replayOf()! } : {}),
+        io,
+        log: ctx.log,
+      });
+
+      ctx.provide(WellKnownServices.SugarPreview, previewService);
     },
   };
 }
@@ -131,4 +168,15 @@ function makeLookup(schema: VariableSchema): DictionaryLookup {
 }
 
 export { createSugarTranspileService, type CreateSugarServiceOptions } from './service';
+export {
+  createSugarPreviewService,
+  foldMessageBlocks,
+  foldReachability,
+  isEnvelopeChain,
+  isStructuralLine,
+  preview,
+  scanProductFunctions,
+  sourceLinesOf,
+  type PreviewDeps,
+} from './preview';
 export type { AliasEntry, AliasTable, DictionaryLookup } from './types';

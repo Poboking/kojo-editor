@@ -841,3 +841,102 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 
 ---
 
+### 5.30 语法糖 S4 批 · 糖预览三向映射（v0.3 批 S4 实施记录：糖源码行 ↔ 生成 ERB 行 ↔ 回放消息块）
+
+**目标**：给"作者写的这一行，在这份存档状态下会走到哪、说什么"提供**数据层**答案——输入糖源码 → 转译 → **复用 `state.replay`**（不新建模拟器）→ 输出三向映射。UI 留给后续批次。
+
+**边界（用户明确划定）**：只做数据层；**禁止改动** `kojo-sugar` 的 transpile 内核（`lexer` / `parser` / `codegen` / `expression`）与 golden；契约扩展**只允许 additive**；preview **只消费不发射**事件。
+
+#### 交付物
+
+**契约扩展**（`packages/plugin-api/src/sugar.ts`，零游戏名词；`services.ts` 增服务键）：
+
+| 新增 | 形状 | 说明 |
+|---|---|---|
+| `WellKnownServices.SugarPreview` | `'sugar.preview'` | 新服务键（旧键 `sugar.transpile` 未动） |
+| `SugarPreviewRequest` | `{ source, filePath?, fileName?, archivePath?, characterNo?, callContext? }` | 预览请求（可序列化纯数据） |
+| `SugarPreviewLine` | `{ sourceLine, sourceText, generatedLines[], messageBlocks[] }` | 三向映射的一行（**糖源行为主键**） |
+| `SugarPreviewMessageBlock` | `{ fromLine, toLine, text, functionName?, branches[], reachability, unknown? }` | 消息块（产物语句块粒度） |
+| `PreviewReachability` | `'reachable' \| 'unreachable' \| 'unknown'` | 块可达性三档 |
+| `SugarPreviewResult` | `{ transpile, lines[], structuralLines[], archive \| null }` | 预览结果（含完整转译产物，**未落盘**） |
+| `SugarPreviewArchive` | `{ archivePath, characterNo, characterName, functions[] }` | 回放侧上下文 |
+| `SugarPreviewFunctionReplay` | `{ functionName, fromLine, toLine, replay \| null }` | 单函数回放摘要 |
+| `SugarPreviewDegradeReason` | 5 值闭集（见下） | 降级原因分类 |
+| `SugarPreviewService.preview` | `(request) => Promise<SugarPreviewResult>` | 唯一方法 |
+| 守卫 | `isReachableBlock` / `hasGenerated` / `hasArchive` | additive 显式类型守卫（TS7 教训 §九-10） |
+
+**新增实现**（`packages/plugins/kojo-sugar/src/preview.ts`，新文件，零内核改动）：
+
+```
+1. 转译       → 复用注入的 transpile（与本插件 sugar.transpile 逐字节同源）
+2. 产物索引   → scanProductFunctions(@名字 → 行区间) + foldMessageBlocks(非结构行连段合一)
+3. 源映射反查 → sourceMap 的 generatedLine → sourceLine 建反向表（纯生成行不归属任何糖行）
+4. 回放       → 逐产物函数 replayFunctions（state.replay）；失败一律**结构化降级**
+5. 组装       → 糖源行 × 产物行 × 消息块（分支链按行区间几何折叠出可达性）
+```
+
+`index.ts`：`provides` 增 `SugarPreview`；**`state.replay` 是软依赖**（`try inject`，缺席则降级）——不写进 `requires`，否则回放插件未激活会让整个 `kojo-sugar` 静默 inactive（本末倒置）。`preview` 不注册任何 `ctx.bus.on`。
+
+#### 关键设计决策
+
+1. **"糖源行为主键"而非产物行为主键**：编辑器的锚点在糖源码（作者看的就是它），跳转/高亮/悬浮都以糖行为主键；产物行与消息块是**附着信息**。
+   - 反面案例（明确拒绝）：以产物行为主键后，UI 每次点糖源码都要做一次反查，且纯糖语法行（`时机 …：` 块头）**没有产物行对应**——反查会返回空，无法定位。
+
+2. **纯生成行不给糖行"硬塞"产物行**（反伪造映射）：`sourceMap` 里 `sourceLine === null` 的产物行（`ENDIF` / `ENDSELECT` / 包装函数骨架 / `LOCAL = 1`）**不属于任何糖行**，`generatedLines` 为空数组。
+   这是"三向映射"可信度的地基：若把骨架行硬挂到最近的糖行上，作者点某行会看到一堆不属于它的产物，**映射比没有更糟**。
+
+3. **信封链（envelope chain）不参与可达性折叠**（本批最重要的发现）：
+   `codegen` 为每个时机生成 `IF LOCAL` 包装守卫；`LOCAL` 是**语言局部量**（快照里不存在），回放器只能报 `unknown('pseudo')`。若让它参与折叠，**每个块都被污染成 unknown**——预览信息量归零。
+   判据（**纯源映射，零游戏/引擎知识**）：链头产物行**无糖源归属**（`sourceLine === null`）且链走向 `unknown` → 信封。
+   `branches` 里**仍然照列**信封链（作者可见性优先），只是不算进 `reachability`。
+
+4. **可达性折叠必须"所有覆盖链都通过"而非"任一通过"**：
+   外层信封链的 `takenLine` 是它自己的头行，其体涵盖整个函数——用"某一条 taken 链命中即可达"会**恒真**，内层 `SELECTCASE` 的分支归属就白算了（实现中途踩到，测试用 `TFLAG:193 = 1/2/9` 三档把这条钉死）。
+   正确判据：块须落在**每一条**覆盖链的 taken 分支体内（`memberOwningLine(chain, blk.fromLine) === chain.takenLine`）。
+
+5. **链覆盖判定用"线性嵌套"几何**（无 goto 跨块）：
+   `C` 覆盖行 `L` ⟺ `C.headLine < L` 且 `(C.headLine, L)` 之间**没有同深度或更浅**的链开起（有 = C 的体已闭合）。这样不必知道块尾行（契约未给）也能算对嵌套。
+
+6. **降级是"分类"而非"布尔"**（5 值闭集）：`no-archive-requested`（正常路径：纯糖预览）/ `no-character`（糖源码无 `角色:` 且请求未给）/ `replay-service-unavailable` / `archive-unreadable` / `replay-failed`。
+   UI 需要区分"作者没给存档"（常态，不提示）与"存档坏了/回放没装"（要提示）——一个布尔会让这两种处置混在一起。**转译 error 也不抛错**：诊断原样带出、骨架照给，策略留给调用方。
+
+7. **坐标契约（写进契约头注，本批已知边界）**：三向映射以**本次产物的行号**为共同坐标系——`FunctionReplay.branches[].headLine` / `PredicateReplay.line` 必须与产物同源。
+   生产现实：`state.replay` 是**从磁盘读函数体**的（行号 = 该 `.erb` 文件行号），而预览跑的是**未落盘**的内存产物。S4 只做数据层与折叠逻辑，**不替这一层做决定**；契约与测试里显式固化该前提，未来接真实"保存后 .erb"的批次据此装配。
+
+#### 测试（`packages/plugins/kojo-sugar/tests/preview.test.ts`，28 项）
+
+| 组 | 覆盖 |
+|---|---|
+| 纯逻辑 | `scanProductFunctions` 行区间（闭区间）/ `isStructuralLine`（含 `CASEELSE` 必须在 `CASE` 前判、`CALL X_1` 骨架 vs `CALL HPH_PRINT(…)` 文本）/ `foldMessageBlocks` 连段合一 |
+| 三向映射 | 每糖源行一条目；`generatedLines` 并集 == `sourceMap` 非空归属集；**纯生成行绝不出现在任何糖行的 `generatedLines` 里**；纯糖语法行 `generatedLines: []`；结构行清单 |
+| **S1 golden 回放** | §6.1 走**真实 `StateReplayEngine`**（mock `parseArchive`/`functionPredicates`，不新建模拟器）：`TFLAG:193 = 1` → CASE 1 可达、CASE 2,3 CASEELSE 不可达；`=2` 翻转；`=9` 走兜底。§6.2 选项/心形/随机块定位 |
+| 信封链 | `isEnvelopeChain` 单测；§6.1 上 `IF LOCAL` 不污染块，而 `IF TALENT:TARGET:胆怯`（具名索引不可解析）**如实报 unknown 且带原因**（不掩盖） |
+| 降级 | 无存档 / 无回放服务 / 存档坏 / 回放抛错 / 角色号不可得 / 显式 `characterNo` 优先 —— 全部不抛错 |
+| 边界 | 转译 error 仍出骨架；非字符串输入抛 `TypeError`；并发调用互不干扰 |
+| 装配 | 服务键值；插件 `provides` 两项且 `requires` **不含** `state.replay`；无回放服务时插件仍激活且预览降级可用 |
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **745 passed / 6 skipped**（S4 新增 **28** 项；717 → 745，**零回归**） |
+| `pnpm typecheck`（root） | ✅ exit 0 |
+| `pnpm typecheck`（app / `packages/app`） | ✅ exit 0 |
+| `pnpm audit:decoupling` | ✅ A/B/C 全绿（13 插件；新增 `preview.ts` 零游戏名词、零交叉 import） |
+| golden §6.1 / §6.2 逐字节断言 | ✅ 未触碰，原样通过（`kojo-sugar` 既有测试零回退） |
+
+#### 关键坑与发现
+
+1. **`TFLAG` 是全局变量，不是角色变量**：`state-replay/src/var-model.ts` 的 `GLOBAL_INT_1D` 含 `TFLAG` —— mock 存档若把 `TFLAG` 放进 `chars[0].vars`，回放器**静默读到 0**（`readTopVar` 找不到顶层变量时，已知名回默认值 0，不报错）。测试夹具必须放顶层 `vars`。
+   → 教训：**"读不到就默认 0"这类引擎语义会让夹具写错变成"看起来对但走向错"**；测试必须用"不同状态 → 不同走向"的对照（本批用 `TFLAG:193 = 1/2/9` 三档）才能钉死。
+2. **分支链由 `statements` 构造，不由 `predicates`**：`buildBranchOutcomes(detail.statements, predicates)` —— 只平移 `predicates[].line` 时 `branches[].headLine` **纹丝不动**（排查耗时最久的一处）。测试的坐标还原必须同时平移 `statements` / `predicates` / `assignments` / `returns`。
+3. **信封链的 `outcome` 会随坐标对齐而变**：坐标错位时 `IF LOCAL` 报 `unknown('opaque')`，对齐后报 `taken`。故信封判据不能只写"`unknown`"，还须叠加"链头无糖源归属"（本批实现即如此，两侧都覆盖）。
+4. **`CASEELSE` 的前缀匹配顺序**：`startsWith('CASE ')` 不会吞 `CASEELSE`（后者无空格），但若写成 `startsWith('CASE')` 就会——结构行前缀表**有序**，注释里明确标注了这条。
+5. **§6.2 golden 无 `角色:` 头**：预览的角色号反推（产物 `_K{n}`）在该 fixture 上取不到 `K` 段以外的信息——测试用显式 `characterNo` 覆盖"无 `角色:` 也能回放"这条路径。
+
+#### 边界未做（属后续批）
+
+- 预览 UI（Monaco 高亮/悬浮/跳转、消息块气泡、可达性着色）——S4 只交数据层；
+- 逐字符最终渲染串（FORM 展开 `%…%` / `{}` / `\@…\@`）——需 FORM 求值器，与规范 §9 待实测第 4 条同批；
+- 保存期全角空格告警（规范 §8）——仍待后续批次；
+- 糖源码 `角色:` 的**直接从 AST 取**（当前 preview 由产物 `_K{n}` 反推，依赖产物形态）。

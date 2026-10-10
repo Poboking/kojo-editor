@@ -256,6 +256,22 @@ describe('extractFunctionPredicates · 谓词明细', () => {
     expect(r.predicates[2]!.text).toBe('IS >= 5');
   });
 
+  it('同一 CASE 多个 TO 区间：每条半边各带 conjunction=\'and\'（分支折叠按对成组的前提）', () => {
+    const r = extractFunctionPredicates(
+      fn,
+      cf([
+        ['SELECTCASE', 'CFLAG:2', 0, 1],
+        ['CASE', '1 TO 3, 5 TO 7', 0, 2],
+        ['ENDSELECT', '', 0, 3],
+      ]),
+    );
+    // 逐部分顺序 push：>=1, <=3, >=5, <=7——每两两一对即一个区间，
+    // 折叠层据此成对成组（旧实现把整段 'and' 并成一组会 AND 掉两个区间）。
+    expect(r.predicates).toHaveLength(4);
+    expect(r.predicates.map((p) => p.conjunction)).toEqual(['and', 'and', 'and', 'and']);
+    expect(r.predicates.map((p) => (p.expr.kind === 'binary' ? p.expr.op : p.expr.kind))).toEqual(['>=', '<=', '>=', '<=']);
+  });
+
   it('opaque 谓词保留原文（不聚合、不丢弃）', () => {
     const r = extractFunctionPredicates(fn, cf([['IF', '@@bad@@', 0, 1]]));
     expect(r.predicates).toHaveLength(1);

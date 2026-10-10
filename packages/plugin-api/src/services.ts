@@ -57,6 +57,15 @@ export const WellKnownServices = {
    * 实现插件 `kojo-sugar`（S2 批建）。
    */
   SugarTranspile: 'sugar.transpile',
+  /**
+   * 语法糖预览服务（v0.3 批 S4）：糖源码 → 转译 → **复用 `state.replay`**
+   * 的存档状态回放（不新建模拟器）→ 输出「糖源码行 ↔ 生成 ERB 行 ↔
+   * 回放消息块」三向映射。只读、纯数据层（无 UI）；归档缺失 / 回放服务
+   * 缺席时**结构化降级**（`archive: null`），不抛错、不静默。
+   * 事件纪律：只消费 `file.changed`，**绝不发射**（S3 已落其 payload 契约）。
+   * 契约 `plugin-api/sugar.ts`，实现插件 `kojo-sugar`（S4 批建）。
+   */
+  SugarPreview: 'sugar.preview',
 } as const;
 
 export type KernelServiceKey = (typeof KernelServices)[keyof typeof KernelServices];

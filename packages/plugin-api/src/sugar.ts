@@ -39,6 +39,7 @@
 
 import type { Logger } from './base';
 import type { FileIO } from './io';
+import type { BranchChainOutcome, FunctionReplay, ReplayCallContext, ReplayUnknown } from './replay';
 
 /* ============================ 源位置（源映射地基） ============================ */
 
@@ -853,3 +854,220 @@ export function isRawNode(node: SugarNode): node is RawLine | RawFunctionBlock {
 export function isTopLevelNode(node: SugarTopLevelNode): boolean {
   return node.kind === 'aliasDecl' || node.kind === 'timingBlock';
 }
+
+/* ============================== 预览（S4 批） ============================== */
+
+/**
+ * 预览请求 —— 「拿着这份糖源码，在**这份存档状态**下，会走到哪、说什么」。
+ *
+ * 数据层契约：不含任何 UI 表达（渲染留给消费方）；所有字段都是可序列化的
+ * 纯数据，便于测试与跨进程传递（WebView ↔ Rust 侧）。
+ */
+export interface SugarPreviewRequest {
+  /** `.kojo` 源文本（内存态；预览**不读盘**） */
+  source: string;
+  /** 源文件路径（诊断与源映射元信息；缺省 = 未命名文档） */
+  filePath?: string;
+  /** 文件名（§5.5 命名约定校验用；缺省由 `filePath` 推导） */
+  fileName?: string;
+  /**
+   * 存档归档路径（`sav*` / 容器）；**缺省 = 无状态预览**——
+   * 此时 `archive` 为 null、所有回放字段缺席，但三向映射的
+   * 「糖行 ↔ ERB 行」两向仍完整可用（编辑器高亮/跳转不需要存档）。
+   */
+  archivePath?: string;
+  /**
+   * 被回放角色的 CSV 编号；缺省时**从糖源码头部 `角色:` 推导**
+   * （`frontMatter.charNo`）——作者写 `角色: 12` 就不必再传一次。
+   */
+  characterNo?: number;
+  /** 函数回放的调用上下文（ARG/ARGS 注入；缺省 = 一律 unknown） */
+  callContext?: ReplayCallContext;
+}
+
+/**
+ * 消息块 —— 「一段会实际输出的文本」及其产物行区间。
+ *
+ * v1 粒度 = **产物语句块**（一条 `PRINTFORM*` / `CALL HPH_PRINT` / 一次
+ * 条件分支体）：足够支撑"点糖源码某行 → 高亮产物区间 + 显示该状态下的
+ * 可达性"。逐字符的最终渲染串（含变量展开）不在本层——那需要 FORM
+ * 求值（`%…%` / `{}` / `\@…\@` 展开），留待后续批（与规范 §9 的第 4 条
+ * 实测同批），本层只给**结构可达性 + 谓词三值结果**。
+ */
+export interface SugarPreviewMessageBlock {
+  /** 该块在产物 ERB 中的起止行（1 基，闭区间） */
+  fromLine: number;
+  toLine: number;
+  /**
+   * 块的**直接**文本内容（产物原文，未做 FORM 展开）。
+   * 纯结构行（`IF` / `ELSE` / `ENDSELECT` / `LOCAL = 1` 等）不单独成块——
+   * 它们作为 `guards` / 行区间折进所属块。
+   */
+  text: string;
+  /**
+   * 该块属于哪个产物函数（`FunctionReplay.normalizedName`，如
+   * `M_KOJO_MESSAGE_COM_K12_310_1`）；仅当回放可用且有函数覆盖该行时有值。
+   */
+  functionName?: string;
+  /**
+   * 覆盖该块的**分支链**走向（来自 `FunctionReplay.branches`，按行区间
+   * 相交匹配）。空数组 = 该块不在任何条件分支内（无条件输出）。
+   */
+  branches: BranchChainOutcome[];
+  /**
+   * 该块的可达性（由覆盖它的分支链折叠而来）：
+   * - `reachable`：无条件，或所覆盖链均 `taken` 且命中本块所在分支；
+   * - `unreachable`：存在某条覆盖链确定没走到本块所在分支；
+   * - `unknown`：存在 unknown 条件且前序未定（无法判定）。
+   */
+  reachability: PreviewReachability;
+  /** `reachability === 'unknown'` 时的原因（取首个阻断链的原因） */
+  unknown?: ReplayUnknown;
+}
+
+/** 块可达性三档（与 `FunctionReplay.confidence` 同精神：不确定就显式标） */
+export type PreviewReachability = 'reachable' | 'unreachable' | 'unknown';
+
+/**
+ * 三向映射的一行 —— 糖源码行 → 生成产物行 → 回放消息块。
+ *
+ * **为什么是"糖行索引"而不是"产物行索引"**：编辑器的锚点在糖源码
+ * （作者看的就是它），跳转/高亮/悬浮都以糖行为主键；产物行与消息块是
+ * 附着信息。故 `lines` 按糖源行升序，`generatedLines` 可空（纯糖语法行
+ * ——如 `时机 …：` 块头——在产物里对应的是函数骨架，没有逐行对应）。
+ */
+export interface SugarPreviewLine {
+  /** 糖源码行号（1 基） */
+  sourceLine: number;
+  /** 该源行的原文（去行尾换行；便于 UI 直接渲染气泡，不必回读源） */
+  sourceText: string;
+  /**
+   * 该源行生成的产物行号列表（升序；由转译源映射反查）。
+   * **空数组 = 纯糖语法行**（不给糖行硬塞产物行——那才是伪造映射）。
+   */
+  generatedLines: number[];
+  /** 该源行产出的消息块（按 fromLine 升序）；非文本行多为空数组 */
+  messageBlocks: SugarPreviewMessageBlock[];
+}
+
+/**
+ * 预览结果（结构性；`archive` 为 null 时回放字段全部缺席）。
+ */
+export interface SugarPreviewResult {
+  /**
+   * 转译产物（**未落盘**；与 `transpile` 逐字节一致）。预览永不写盘——
+   * 落盘是 `compileToFile` 的职责（S3），预览只读。
+   */
+  transpile: SugarTranspileResult;
+  /** 三向映射（按糖源行升序；行数 = 源文件行数） */
+  lines: SugarPreviewLine[];
+  /**
+   * 结构行（产物中不承载文本、但决定控制流的行）——`IF` / `ELSE` /
+   * `ELSEIF` / `ENDIF` / `SELECTCASE` / `CASE` / `CASEELSE` / `ENDSELECT` /
+   * 包装骨架 / `LOCAL = n`。单独列出，供 UI 画"折叠括号"或过滤。
+   */
+  structuralLines: number[];
+  /**
+   * 回放上下文；**null = 无状态预览**（未传 `archivePath`，或存档解析
+   * 失败、回放服务缺席——`archive.reason` 说明是哪一种）。
+   * **显式降级，不抛错**：预览是只读观察面，"没有状态"是合法输入。
+   */
+  archive: SugarPreviewArchive | null;
+}
+
+/** 预览的回放侧上下文（有存档且回放成功时） */
+export interface SugarPreviewArchive {
+  /** 存档归档路径 */
+  archivePath: string;
+  /** 被回放角色的 CSV 编号 */
+  characterNo: number;
+  /** 角色显示名（不可读时 null） */
+  characterName: string | null;
+  /**
+   * 产物函数的回放结果（按产物行升序；每项 `null` = 该函数不在
+   * 索引中——如 `M_KOJO_COLOR_*` 这类无谓词的骨架函数会被回放器
+   * 返回 total=0 的结果，不在索引里才是 null）。
+   */
+  functions: SugarPreviewFunctionReplay[];
+}
+
+/** 单函数的回放摘要（预览视角的精简投影；完整结果见 `FunctionReplay`） */
+export interface SugarPreviewFunctionReplay {
+  functionName: string;
+  /**
+   * 该函数在产物 ERB 中的行区间（1 基，闭区间）。
+   * 由产物文本扫描 `@函数名` 得出——**不复用回放器的 `startLine`**
+   * （那是磁盘文件的行号，与本预览的内存产物不同源）。
+   */
+  fromLine: number;
+  toLine: number;
+  /** 回放结果；null = 索引中无此函数 */
+  replay: FunctionReplay | null;
+}
+
+/**
+ * 无状态预览的原因（**闭集**，命名零游戏名词）。
+ *
+ * 之所以要分类而不是一个布尔：UI 需要区分"作者没给存档"（正常）与
+ * "存档坏了/回放服务没装"（要提示），二者对作者的处置完全不同。
+ */
+export type SugarPreviewDegradeReason =
+  /** 请求未提供 `archivePath`（正常路径：纯糖预览） */
+  | 'no-archive-requested'
+  /** 糖源码未声明 `角色:`，且请求未给 `characterNo`（无法定位角色） */
+  | 'no-character'
+  /** `state.replay` 服务缺席（插件未激活 / 依赖不满足） */
+  | 'replay-service-unavailable'
+  /** 存档解析失败（文件不存在 / 格式不符 / 角色不在快照） */
+  | 'archive-unreadable'
+  /** 回放过程抛错（引擎侧异常；已捕获并降级） */
+  | 'replay-failed';
+
+/**
+ * 语法糖预览服务（服务键 `sugar.preview`；S4 批）。
+ *
+ * **职责边界（本批只做数据层）**：
+ * - 输入糖源码 → `transpile`（**复用**，不重实现）→ 得产物 + 源映射；
+ * - 产物函数名 → **复用 `state.replay`** 回放（不新建模拟器）；
+ * - 折成三向映射「糖行 ↔ ERB 行 ↔ 消息块」。
+ *
+ * **事件纪律**（S3 已落 `file.changed` payload 契约）：本服务**只消费**
+ * 事件（缓存失效等），**绝不发射**——预览是观察者，不是变更源。
+ *
+ * **失败语义**：转译产 `error` 诊断时**不抛错**——`transpile.diagnostics`
+ * 原样带出，`lines` 仍按源行骨架给出（编辑器照常画诊断标记）；
+ * 回放侧一律**结构化降级**（`archive: null` + `reason`）。
+ * 只有"输入本身不合法"（如 `source` 非字符串）才抛错。
+ *
+ * **坐标契约**：`lines[].generatedLines` / `messageBlocks[].fromLine` 以及
+ * `archive.functions[].fromLine` 全部以**本次产物的行号**（1 基）为坐标系。
+ * 实现方须保证回放侧的行号与之同源（详见 `kojo-sugar/src/preview.ts` 头注）
+ * ——否则"ERB 行 ↔ 消息块"这一向会错位（本批已知边界）。
+ */
+export interface SugarPreviewService {
+  /**
+   * 生成预览：糖源码 → 转译 → （可选）状态回放 → 三向映射。
+   *
+   * 异步原因（**只有回放侧是异步**）：`state.replay` 的 `createView` /
+   * `replayFunction` 是 Promise（要读存档二进制）；转译本身是同步纯函数。
+   *
+   * 不写盘、不发射事件、不修改任何插件状态（可安全并发调用）。
+   */
+  preview(request: SugarPreviewRequest): Promise<SugarPreviewResult>;
+}
+
+/** 消息块是否可达 */
+export function isReachableBlock(block: SugarPreviewMessageBlock): boolean {
+  return block.reachability === 'reachable';
+}
+
+/** 某糖源行是否有产物（纯糖语法行 = false） */
+export function hasGenerated(line: SugarPreviewLine): boolean {
+  return line.generatedLines.length > 0;
+}
+
+/** 预览是否带状态（有存档且回放成功） */
+export function hasArchive(result: SugarPreviewResult): result is SugarPreviewResult & { archive: SugarPreviewArchive } {
+  return result.archive !== null;
+}
+
