@@ -15,22 +15,46 @@ registerErbLanguage(monaco);
 interface Props {
   kernel: Kernel;
   filePath: string;
+  /** 定位行（来自校验面板 / 函数树的 `editor.revealLocation`） */
+  revealLine?: number;
+  /** 定位序号：同一文件重复定位时变化以触发重新滚动 */
+  revealNonce?: number;
 }
 
 /**
- * Monaco 编辑面板（v0.1）：
+ * Monaco 编辑面板：
  * - 打开 = 内核 io.readText（编码探测 + 归一化）；保存 = io.writeText（保编码 + 自动备份，受写白名单约束）；
  * - Ctrl+S 保存；未保存时显示脏标记；
- * - 行级装饰（校验结果）是 v0.2 的 `ui.editor.decorator` 槽交付物。
+ * - 支持外部定位（revealLine）：打开即滚动到指定行，供"点击校验问题跳转"消费。
+ * - 行级装饰（`ui.editor.decorator` 槽）为后续交付物。
  */
-export function EditorPane({ kernel, filePath }: Props): ReactElement {
+export function EditorPane({ kernel, filePath, revealLine, revealNonce }: Props): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const originalRef = useRef<string>('');
   const savingRef = useRef(false);
+  const revealRef = useRef<{ line: number; nonce: number } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const applyReveal = useCallback(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    const model = ed.getModel();
+    const target = revealRef.current;
+    if (!model || !target) return;
+    const line = Math.min(Math.max(1, target.line), model.getLineCount());
+    ed.revealLineInCenter(line);
+    ed.setPosition({ lineNumber: line, column: 1 });
+    ed.focus();
+  }, []);
+
+  // 记录最新定位请求（同一文件重复定位靠 nonce 变化触发）
+  useEffect(() => {
+    revealRef.current = revealLine ? { line: revealLine, nonce: revealNonce ?? 0 } : null;
+    applyReveal();
+  }, [revealLine, revealNonce, filePath, applyReveal]);
 
   const save = useCallback(async () => {
     const ed = editorRef.current;
@@ -97,6 +121,7 @@ export function EditorPane({ kernel, filePath }: Props): ReactElement {
         setDirty(false);
         setError(null);
         setStatus(`${tf.encoding} · ${tf.eol.toUpperCase()} · ${tf.text.split('\n').length} 行`);
+        applyReveal();
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -104,7 +129,7 @@ export function EditorPane({ kernel, filePath }: Props): ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath]);
+  }, [kernel, filePath, applyReveal]);
 
   return (
     <div className="editor-pane">

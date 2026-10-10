@@ -2,6 +2,9 @@ import { createKernel, type Kernel } from '@kojo/kernel';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createUiStatusPlugin } from '@kojo/plugin-ui-status';
+import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
+import { createUiConventionReportPlugin } from '@kojo/plugin-ui-convention-report';
+import { createUiKojoNavigatorPlugin } from '@kojo/plugin-ui-kojo-navigator';
 import { tauriBridge } from './bridge/tauri-bridge';
 
 /**
@@ -14,12 +17,16 @@ export async function bootstrapKernel(): Promise<Kernel> {
   const kernel = await createKernel({
     platform: tauriBridge,
     plugins: [
-      // 通用解析能力
+      // 通用解析能力（索引所有权在解析器，v0.2 起响应式）
       createErbParserPlugin(),
-      // eraTW 领域知识（唯一知道游戏名的地方）
+      // eraTW 领域知识（唯一知道游戏名的地方：家族识别 + 约定规则）
       createEratwAdapterPlugin(),
-      // UI：插件状态面板（内核状态数据 + 本插件渲染）
+      // 约定校验引擎（游戏无关）+ 结果为面板呈现
+      createConventionLinterPlugin(),
+      // UI：面板（内核状态 + 校验结果 + 函数树导航）
       createUiStatusPlugin(),
+      createUiConventionReportPlugin(),
+      createUiKojoNavigatorPlugin(),
     ],
   });
   await kernel.start();

@@ -14,8 +14,11 @@
   "dependencies": {
     "@kojo/kernel": "workspace:*",
     "@kojo/plugin-api": "workspace:*",
+    "@kojo/plugin-convention-linter": "workspace:*",
     "@kojo/plugin-erb-parser": "workspace:*",
     "@kojo/plugin-eratw-adapter": "workspace:*",
+    "@kojo/plugin-ui-convention-report": "workspace:*",
+    "@kojo/plugin-ui-kojo-navigator": "workspace:*",
     "@kojo/plugin-ui-status": "workspace:*",
     "@tauri-apps/api": "^2.12.2",
     "monaco-editor": "^0.57.0",

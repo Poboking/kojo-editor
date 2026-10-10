@@ -368,6 +368,141 @@ code {
   white-space: nowrap;
 }
 
+/* --------------------------- convention report panel --------------------------- */
+
+.panel-convention-report {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conv-summary {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.conv-count {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+.conv-meta {
+  font-size: 11.5px;
+}
+.conv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.conv-failed {
+  border: 1px solid rgba(224, 108, 117, 0.5);
+  background: rgba(224, 108, 117, 0.1);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.conv-failed-head {
+  color: var(--red);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.conv-failed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}
+.conv-empty {
+  font-size: 12px;
+  padding: 4px 0;
+}
+.conv-groups {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conv-group-btn {
+  width: 100%;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 2px 0;
+  text-align: left;
+}
+.conv-group-btn:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.conv-rule-id {
+  flex: 1;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12px;
+}
+.conv-group-count {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+.conv-rule-desc {
+  font-size: 11px;
+  padding: 0 0 4px 18px;
+  line-height: 1.5;
+}
+.conv-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 18px;
+  max-height: 320px;
+  overflow: auto;
+}
+.conv-issue-btn {
+  width: 100%;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 2px 4px;
+  text-align: left;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.conv-issue-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.conv-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  align-self: center;
+}
+.conv-issue-loc {
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 11px;
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conv-issue-msg {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conv-more {
+  padding: 4px 0 2px;
+}
+.conv-legend {
+  font-size: 11px;
+}
+
 /* ------------------------------ editor ------------------------------ */
 
 .editor-pane {
@@ -450,4 +585,176 @@ code {
   justify-content: flex-end;
   gap: 12px;
   margin-top: 16px;
+}
+
+/* ------------------------------ kojo navigator ------------------------------ */
+
+.panel-kojo-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  flex: 1;
+}
+.nav-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.nav-chara-select {
+  flex: 0 0 auto;
+  max-width: 55%;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12.5px;
+}
+.nav-search {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+}
+.nav-status {
+  font-size: 11.5px;
+}
+.nav-empty {
+  padding: 12px 4px;
+  font-size: 12.5px;
+}
+.nav-tree,
+.nav-hits {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.nav-family,
+.nav-face {
+  margin-bottom: 2px;
+}
+.nav-family-btn,
+.nav-face-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 3px 4px;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 4px;
+}
+.nav-family-btn:hover,
+.nav-face-btn:hover {
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+}
+.nav-face-btn {
+  padding-left: 20px;
+  font-size: 12px;
+}
+.nav-family-name {
+  font-weight: 600;
+}
+.nav-count {
+  font-size: 11px;
+}
+.nav-funcs {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 4px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.nav-func-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 2px 4px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 4px;
+}
+.nav-func-btn:hover {
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+  color: var(--accent, #61afef);
+}
+.nav-func-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-family: var(--font-sans, sans-serif);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 3px;
+  color: var(--fg-dim);
+}
+.nav-badge.warn {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+.nav-more {
+  font-size: 11.5px;
+  padding: 2px 4px;
+}
+.nav-hit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.nav-hit-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 3px 4px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 4px;
+}
+.nav-hit-btn:hover {
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+}
+.nav-hit-name {
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-hit-loc {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+.caret {
+  flex: 0 0 auto;
+  width: 12px;
+  color: var(--fg-dim);
 }

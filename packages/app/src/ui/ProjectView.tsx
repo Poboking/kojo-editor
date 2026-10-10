@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject } from '@kojo/plugin-api';
+import type { RevealTarget } from './App';
 import { EditorPane } from './EditorPane';
 import { FileTree } from './FileTree';
 import { PanelHost } from './PanelHost';
@@ -11,11 +12,21 @@ interface Props {
   index: ErbIndex | null;
   indexing: boolean;
   activeFile: string | null;
+  reveal: RevealTarget | null;
   onOpenFile: (path: string) => void;
   onClose: () => void;
 }
 
-export function ProjectView({ kernel, project, index, indexing, activeFile, onOpenFile, onClose }: Props): ReactElement {
+export function ProjectView({
+  kernel,
+  project,
+  index,
+  indexing,
+  activeFile,
+  reveal,
+  onOpenFile,
+  onClose,
+}: Props): ReactElement {
   const panels = kernel.slots.query('ui.panel');
 
   // 统计（v0.1 验收指标：角色数 / 文件数 / 函数数）
@@ -62,7 +73,7 @@ export function ProjectView({ kernel, project, index, indexing, activeFile, onOp
 
         <main className="editor-host">
           {activeFile ? (
-            <EditorPane kernel={kernel} filePath={activeFile} />
+            <EditorPane kernel={kernel} filePath={activeFile} revealLine={reveal?.line} revealNonce={reveal?.nonce} />
           ) : (
             <div className="empty-state">
               <p>从左侧选择一个口上文件开始编辑</p>

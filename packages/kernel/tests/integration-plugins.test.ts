@@ -73,6 +73,8 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       let unmatched = 0;
       let placeholders = 0;
       const families = new Set<string>();
+      // 导航地基（v0.2 第二批）：角色 → 家族 → 面 三维在真实数据上非平凡
+      const byChara = new Map<number, { families: Set<string>; faces: Set<string>; count: number }>();
       for (const refs of index.byName.values()) {
         for (const ref of refs) {
           const m = adapterRule!.match(ref.name);
@@ -80,6 +82,16 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
             matched++;
             if (m.isPlaceholder) placeholders++;
             if (m.family) families.add(m.family);
+            if (m.characterNo !== null) {
+              let entry = byChara.get(m.characterNo);
+              if (!entry) {
+                entry = { families: new Set(), faces: new Set(), count: 0 };
+                byChara.set(m.characterNo, entry);
+              }
+              entry.count++;
+              entry.families.add(m.family);
+              if (m.face) entry.faces.add(m.face);
+            }
           } else {
             unmatched++;
           }
@@ -87,6 +99,14 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       }
       const familyRate = matched / (matched + unmatched);
       expect(familyRate).toBeGreaterThan(0.95);
+
+      // 三维导航前提：多数角色可归属；家族聚合与面聚合都非退化为单点
+      expect(byChara.size).toBeGreaterThan(100);
+      const multiFamilyCharas = [...byChara.values()].filter((e) => e.families.size > 1).length;
+      expect(multiFamilyCharas).toBeGreaterThan(0);
+      const multiFaceCharas = [...byChara.values()].filter((e) => e.faces.size > 3).length;
+      expect(multiFaceCharas).toBeGreaterThan(50);
+      const busiest = [...byChara.entries()].sort((a, b) => b[1].count - a[1].count)[0];
 
       // 5. 约定校验（v0.2 验收：真实数据上产出可操作问题清单）
       const linter = kernel.services.get<ConventionLinterService>(WellKnownServices.ConventionLinter);
@@ -111,6 +131,9 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           `函数 ${totalFunctions}（含表达式函数 ${expressionFuncs}）| 去重名 ${index.byName.size}\n` +
           `[smoke] 家族识别 ${matched}/${matched + unmatched} = ${(familyRate * 100).toFixed(2)}% | ` +
           `家族数 ${families.size} | KX 占位符残留（去重名）${placeholders}\n` +
+          `[smoke] 导航地基：可归属角色 ${byChara.size} | 多家族角色 ${multiFamilyCharas} | ` +
+          `多面（>3）角色 ${multiFaceCharas} | ` +
+          `最重角色 K${busiest?.[0]}（${busiest?.[1].count} 函数 / ${busiest?.[1].families.size} 家族）\n` +
           `[smoke] 约定校验 ${report.issues.length} 项 ` +
           `(error ${report.counts.error} / warning ${report.counts.warning} / info ${report.counts.info}) ` +
           `in ${report.durationMs}ms\n` +

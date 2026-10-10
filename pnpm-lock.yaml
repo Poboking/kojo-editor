@@ -50,6 +50,9 @@ importers:
       '@kojo/plugin-ui-convention-report':
         specifier: workspace:*
         version: link:../plugins/ui-convention-report
+      '@kojo/plugin-ui-kojo-navigator':
+        specifier: workspace:*
+        version: link:../plugins/ui-kojo-navigator
       '@kojo/plugin-ui-status':
         specifier: workspace:*
         version: link:../plugins/ui-plugin-status
@@ -119,6 +122,16 @@ importers:
         version: link:../../plugin-api
 
   packages/plugins/ui-convention-report:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+    devDependencies:
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+
+  packages/plugins/ui-kojo-navigator:
     dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*
