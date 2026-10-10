@@ -1,0 +1,50 @@
+name: CI
+
+# push / PR 触发；windows-latest（本项目目标平台 + 平台桥的 Windows 语义）
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    name: test / typecheck / audit
+    runs-on: windows-latest
+    env:
+      # CI 使用默认公共 registry。仓库根 .npmrc 固定 npmmirror（仅本机直连可达），
+      # 不能带进 CI —— 见下方 Remove local .npmrc 步骤（双保险：env 覆盖 + 删文件）。
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove local .npmrc (npmmirror registry is local-only)
+        shell: pwsh
+        run: Remove-Item -Force .npmrc
+
+      # 显式指定 pnpm 版本：不依赖 packageManager 字段（本地 pnpm 版本 ≠ CI 可用版本），
+      # 也不使用 corepack（否则会按 packageManager 拉取本地专用版本）。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      # 无游戏目录 → 真实工程集成冒烟/金样本自动跳过（describe.skipIf）
+      - name: Unit + integration tests
+        run: pnpm test
+
+      - name: Typecheck (root)
+        run: pnpm typecheck
+
+      - name: Typecheck (@kojo/app)
+        run: pnpm --filter @kojo/app typecheck
+
+      - name: Decoupling audit
+        run: pnpm audit:decoupling

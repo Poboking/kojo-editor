@@ -1,0 +1,21 @@
+; 合成 fixture：角色 001 口上骨架（合成数据，非真实角色）
+@M_KOJO_K1
+RESULTS = 
+RETURN 1
+
+@M_KOJO_REMU_MESSAGE_COM_K1_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「你好，%CALLNAME:MASTER%。」
+	IF CFLAG:2 >= 50
+		PRINTFORMDW 她看起来很高兴。
+	ENDIF
+ENDIF
+RETURN 1
+
+@M_KOJO_REMU_SUCCESS_COM_K1_1
+TFLAG:192 = 0
+RETURN 1
