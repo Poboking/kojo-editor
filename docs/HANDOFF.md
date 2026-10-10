@@ -1,9 +1,10 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 ✅ / 第四批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
 > 第二批：函数树导航（`ui-kojo-navigator`）；
-> 本会话完成 **v0.2 第三批：条件谓词抽取（`condition-extractor`）+ 导航条件徽章 + adapter 变量字典**。
+> 第三批：条件谓词抽取（`condition-extractor`）+ 导航条件徽章 + adapter 变量字典；
+> 本会话完成 **v0.2 第四批：存档快照源（`sav-parser`，服务 `snapshot.source`）——v1.0 快照回放的读侧地基**。
 
 ---
 
@@ -33,9 +34,15 @@
   3. **契约**：`plugin-api/conditions.ts`（AST/依赖/索引/服务）+ `ControlFlowStatement`（erb.ts）。
   4. **adapter `variableSchema`**（CSV 驱动）：扫描游戏 `CSV/*.csv` 名称表（33 张）建编号↔名称双向字典；引擎经槽位查询透传标注（恋慕/好感度…）。
   5. **导航条件徽章**：`ui-kojo-navigator` 函数行显示 schema 标签徽章（悬停看阈值）。
+- **v0.2 第四批完成**（本会话）：**存档快照源（`sav-parser` 插件，服务 `snapshot.source`）**——v1.0 快照回放的读侧地基。
+  1. **契约 `plugin-api/snapshot.ts`**：`SnapshotArchive`（元数据 + 角色区 + 变量区 + EM 扩展区）/ 变量模型（标量 / 稀疏数组 / Map / Xml / DataTable）/ 扫描结果 / `SnapshotSourceService`（scan / current / parse / subscribe）。**服务键命名决策 `snapshot.source`**（非 `sav.parser`）：审计 A 项禁裸 `sav` 词（契约层零游戏/格式名词），且"快照来源"语义本就是三来源（sav/CliDebug/手工）的统称——架构 §5.10 有记录。
+  2. **新插件 `sav-parser`**（第 8 个插件）：字节原语（7-bit **字节数**前缀字符串 / 整数编码）+ 六种数组游程解码 + 顶层 / 角色块 / 变量流 / EM 区解析 + gzip（`DecompressionStream`，跨 Node/WebView，不 import node:zlib）。**纯读先行**（写 / 注入随 v1.1）。
+  3. **响应式**：订阅 `project.opened` 扫 `project.savDir`（`headerOnly` 浅解析列档，6 档 27ms）；`project.closed` 清空；代际保护；无 `savDir` → 空结果（显式）。
+  4. **测试**：58 项单测（合成字节 round-trip 全类型 + 错误路径 + 编排）+ 集成冒烟六档断言 + 与逆向 CJS 解析器逐字段交叉对拍（一次性，16,000 变量/档全等）。
+- **存档解析基线（2026-10-10 实测）**：六档全绿——168 角色/档、16,005 变量/档（save00 16,000）、`#DIM` 恒 65、MASTERNAME 7/168、RANDDATA saveLen 625（**save00 nonEmpty=0 全零剪枝实证** / save01+ 全量）、MONEY 51 亿（Int64 路径）、EM 区 2 张 DT 表、**残余 0B**。
 - **真实工程基线（2026-10-10 实测）**：168 角色 / 2,285 ERB / 99,104 函数 / 去重名 99,101；家族识别 98.91%（109 家族）；索引 ~2.9s；约定校验 757 项（~9s）。
 - **条件抽取基线**：95,504 函数 / **493,712 谓词（未解析 187 = 0.04%）** / 含依赖函数 31,609 / 依赖条目 164,910 / schema 标注 109,742（恋慕 17,993 / 好感度 480）/ 全量 ~6.2s（冷启动 ~13s）。
-- 测试：**209 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（7 插件）。
+- 测试：**267 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**8 插件**）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -43,7 +50,7 @@
 |---|---|
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）、**§5.8 v0.2 实施记录（校验器分层 + 规则误报治理）** |
 | `docs/RESEARCH.md` | 技术调研 |
-| `docs/adr/0001-0003` | 工具链 / game.adapter 服务键语义 / 壳架构 |
+| `docs/adr/0001-0004` | 工具链 / game.adapter 服务键语义 / 壳架构 / 快照来源服务键命名（snapshot.source） |
 | `docs/HANDOFF.md`（本文件） | 交接状态 + 下一批动手清单 |
 | `D:\DSH\reverse-engineering\eratw4.980-口上机制深挖.md` | **口上领域知识权威**（27 CASE 路由、MESSAGECHECK 位协议、家族命名、四件套） |
 | `D:\DSH\reverse-engineering\eratw4.980-存档实战解析.md` | sav 协议（v1.0 前必读） |
@@ -54,8 +61,9 @@
 packages/
 ├── plugin-api/src/
 │   ├── conventions.ts         # 约定校验器契约（规则/问题/上下文/报告/服务）
-│   ├── conditions.ts          # ★ 条件谓词契约（ConditionExpr AST / StateDependency / ConditionIndex / 服务）
-│   ├── services.ts            # +WellKnownServices.ConditionExtractor='condition.extractor'
+│   ├── conditions.ts          # 条件谓词契约（ConditionExpr AST / StateDependency / ConditionIndex / 服务）
+│   ├── snapshot.ts            # ★ 存档快照源契约（ArchiveMeta/SnapshotArchive/变量模型/扫描/服务）
+│   ├── services.ts            # +WellKnownServices.ConditionExtractor / +SnapshotSource='snapshot.source'
 │   ├── events.ts              # +KernelEventMap['editor.revealLocation']
 │   ├── erb.ts                 # ErbParserService +currentIndex()/ensureIndex()/scanControlFlow()；+ControlFlowStatement
 │   └── game.ts                # VariableSchema/VariableInfo（第三批起被消费）
@@ -65,25 +73,26 @@ packages/
 │   │   ├── scanner.ts         # +scanControlFlow（控制流骨架：配对/深度/条件原文/宽容）
 │   │   └── plugin.ts          # 服务暴露 scanControlFlow
 │   ├── eratw-adapter/src/
-│   │   ├── variable-schema.ts # ★ 变量字典（CSV 驱动；33 张名称表；编号↔名称双向）
+│   │   ├── variable-schema.ts # 变量字典（CSV 驱动；33 张名称表；编号↔名称双向）
 │   │   ├── conventions.ts     # eraTW 4 条规则（KX/四件套/FORM/MESSAGECHECK）
 │   │   └── constants.ts       # +csvDir
 │   ├── convention-linter/src/ # 引擎（engine.ts + rules/duplicate-function.ts）
-│   ├── condition-extractor/src/ # ★ 新增：条件抽取
-│   │   ├── expr.ts            #   表达式 tokenizer + Pratt 解析（[[词]]/括号索引/全运算符；opaque 降级）
-│   │   ├── extract.ts         #   函数级抽取（CASE 展开/依赖聚合/局部量排除/schema 标注）
-│   │   ├── engine.ts          #   全量编排（并发 8、两指针切片、代际保护、订阅广播）
-│   │   └── index.ts           #   插件装配（requires: io/project/slots/erb.parser）
+│   ├── condition-extractor/src/ # 条件抽取（expr/extract/engine/index）
+│   ├── sav-parser/src/        # ★ v0.2 第四批：存档快照源
+│   │   ├── binary.ts          #   ByteReader：7-bit 字节数前缀 / 整数编码 / 越界即抛
+│   │   ├── arrays.ts          #   六种数组游程解码（0xF0/F1/F2/E0/E1/D8；cells 省略/截断）
+│   │   ├── parse.ts           #   文件级解析（魔数/版本/顶层/角色块/变量流/EM 区）
+│   │   ├── gunzip.ts          #   DecompressionStream gzip（Web 标准，不 import node:zlib）
+│   │   ├── engine.ts          #   扫描编排（浅解析列档 / 并发 4 / 代际保护 / 订阅）
+│   │   └── index.ts           #   装配（requires: kernel.io/kernel.project）
 │   ├── ui-convention-report/src/index.ts # ui.panel 面板（订阅 linter；点击 → revealLocation）
-│   └── ui-kojo-navigator/src/          # 函数树导航
-│       ├── tree.ts                     # 纯逻辑：buildNavigatorTree / searchFunctions（零 React，可单测）
-│       └── index.ts                    # ui.panel：+条件徽章（订阅 condition.extractor）
+│   └── ui-kojo-navigator/src/          # 函数树导航（tree.ts 纯逻辑 + index.ts 面板 + 条件徽章）
 └── app/src/
-    ├── bootstrap.ts           # 注册 7 个插件
+    ├── bootstrap.ts           # 注册 8 个插件
     ├── ui/App.tsx             # 订阅 kojo.functionChanged / editor.revealLocation
     ├── ui/ProjectView.tsx     # 透传 reveal
     ├── ui/EditorPane.tsx      # revealLine/revealNonce → Monaco revealLineInCenter
-    └── styles.css             # +约定面板样式 +导航面板样式（nav-*，含 .nav-badge.cond）
+    └── styles.css             # 约定面板样式 +导航面板样式（nav-*）
 ```
 
 ## 五、验证矩阵（怎么跑）
@@ -91,17 +100,17 @@ packages/
 ```bash
 cd D:\DSH\kojo-editor
 pnpm install
-pnpm test               # 209 项（无游戏目录时集成冒烟自动跳过）
+pnpm test               # 267 项（无游戏目录时集成冒烟自动跳过）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
-pnpm audit:decoupling   # 必须 ✅（plugins 数 7）
-# 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取断言）：
+pnpm audit:decoupling   # 必须 ✅（plugins 数 8）
+# 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档断言）：
 KOJO_SMOKE_PROJECT="D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
-# 桌面壳（会弹窗 ~30s 自动关闭）：
+# 桌面壳（会弹窗 ~100s 自动关闭）：
 node tools/smoke-tauri-dom.mjs
 ```
 
 **架构铁律（改动前默念）**：
-1. 内核/契约/Rust 宿主**零游戏名词**（审计 A 项，只查代码行；行尾 `// audit-allow: <理由>` 可豁免）；
+1. 内核/契约/Rust 宿主**零游戏名词**（审计 A 项，只查代码行；行尾 `// audit-allow: <理由>` 可豁免；**注意裸 `sav` 词也在黑名单**——`savDir`/`SavArchive` 这类带后缀的复合词不匹配、裸 `'sav'` 会挂）；
 2. 插件**只许依赖 `@kojo/plugin-api`**，禁 import kernel、禁插件间交叉 import（审计 B/C 项；**测试文件豁免 C 项**）；
 3. 游戏知识只能进 eratw-adapter；跨游戏共享术语（kojo/chara）放 plugin-api；
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
@@ -128,9 +137,20 @@ node tools/smoke-tauri-dom.mjs
 - KX 占位符 603 条出自"函数名去重计"；条件抽取 95,504 函数中 31,609 含状态依赖（66.9% 函数无状态条件 = 大量纯文本/工具函数）。
 - `CFLAG:2`（好感度）条件依赖合计 480 函数——比想象少（作者更常用 `TALENT:恋慕` 门禁，17,993 函数）；矩阵设计时以 TALENT 维度为主。
 
-### 6.4 第四批（下一批）：v1.0 起步（sav-parser）+ 其它排队项
-- **sav-parser（v1.0 先行）**：先读 `reverse-engineering/eratw4.980-存档实战解析.md` + 复用 `D:\DSH\reverse-engineering\...\sav-parse\parse_sav.cjs`（6 个真实 sav 零残余的协议成果）；插件形态：订阅 `project.opened` 扫描 `project.savDir`；纯读先行，写/注入随 v1.1。
-- **ui-condition-matrix（面板）**：消费 `condition.extractor` 全量索引——按角色/家族聚合"哪些函数依赖哪些状态"；MESSAGECHECK 位可视化（adapter 家族数据 + 面板）。
+### 6.4 第四批（✅ 已完成）：存档快照源（`sav-parser` 先行）
+
+**实施结果**：契约 + 插件 + 测试 + 集成全量落地（架构 §5.10 为权威记录）。
+
+- **契约**：`plugin-api/snapshot.ts`（`SnapshotArchive` / 变量模型 / `SnapshotSourceService`）；服务键 **`snapshot.source`**（非 `sav.parser`，理由见架构 §5.10）。
+- **插件** `sav-parser`：`binary.ts`（7-bit 字节数前缀 / 整数编码）+ `arrays.ts`（六种数组游程解码）+ `parse.ts`（文件级全流程）+ `gunzip.ts`（`DecompressionStream`）+ `engine.ts`（扫描编排）+ `index.ts`（装配）。58 项单测（合成字节）。
+- **真实回归**：与逆向 CJS 解析器逐字段对拍（六档全等，16,000 变量/档）；集成冒烟六档断言（零残余 / #DIM 65 / MASTERNAME 7 / RANDDATA 剪枝实证 / MONEY 51 亿 / EM 2 表）。
+- **写侧（v1.1）未动**：金样本"原样写回逐字节对比"与注入 UI 是后续阶段。
+
+### 6.5 第五批候选（下一批）
+
+- **`state-replay`（v1.0 主体）**：消费 `snapshot.source` + `condition.extractor` + adapter `stateModel`——快照 → 条件求值 → "该状态下命中哪些分支"（置信度三档标注），差异化核心的下一步。
+- **ui-condition-matrix（面板）**：消费 `condition.extractor` 全量索引——按角色/家族聚合"哪些函数依赖哪些状态"；MESSAGECHECK 位可视化。
+- **归档浏览器面板**（`ui-*` 候选）：消费 `snapshot.source` 列档（saveMes / 角色数 / 大小），点击看摘要——把第四批成果第一次带上 UI。
 - **导航面板增强**：收藏/最近访问；面上条件维度聚合。
 - `watchDirs` 文件监视（现为手动刷新；后续走 Rust notify）→ 增量重建索引。
 - Monaco bundle 4.3MB 拆分（manualChunks，低优先级）。
@@ -165,11 +185,14 @@ node tools/smoke-tauri-dom.mjs
 4. **真实语料是解析器的验收标准（第三批）**：初版表达式解析器 dump 真实 opaque 样本（528k 条件行中 2.17%）→ 发现两大系统性缺口：`[[词]]`（引擎 rename 语法，读取期按 `_Rename.csv` 替换）与**括号索引段**（`YOGORE:(GET_CHARAHOME(TARGET))`、`TALENT:(NO:30):恋慕`）。补齐后引擎侧未解析 3,383 → **187**（0.04%）。教训：**先 dump 真实失败样本，再定语法扩展**——不要凭直觉猜"什么写法常见"。
 5. **具名索引的 schema 反向查询语义**（variable-schema 单测抓出）：`lookup('TALENT','恋慕')` 时 description 应取**名称本身**；初版直接把名称→编号反向表的**编号**当描述返回（`description:'3'`）。数字索引查名、具名索引自描述——两个方向别混。
 6. **CASE 文本不能整体 parse**：`CASE 1, 2, 3` / `CASE 10 TO 20` 是 SELECTCASE 语法而非表达式——必须在抽取层展开为 `subject == 值` 再逐条 parse（dump 统计时若对 CASE 原文整体 parse 会误报 opaque）。
+7. **双 lib 类型环境（node vs DOM）对 Web API 的严格度不同**（第四批）：`new Blob([bytes])` 在 root tsconfig（@types/node）通过、在 app tsconfig（DOM lib）报 `Uint8Array<ArrayBufferLike>` 不满足 `BlobPart`（SharedArrayBuffer 不兼容性）。修法：`new Uint8Array(bytes)` 复制到独立 ArrayBuffer 支撑数组，两套定义下均兼容。**tsc 必须 root + app 双跑**。
+8. **vite build 的 `prepare-out-dir` 偶发 EPERM**（第四批）：清空 `packages/app/dist/assets` 时报 Permission denied（文件瞬时占用），手动 `fs.rmSync(dist, {recursive, force})` 后重试即过——不是代码问题。
+9. **批次编号勘误**（第四批会话）：`conditions.ts` 头注释与 ARCHITECTURE §5.9 曾写"条件抽取=第四批"，与 HANDOFF 口径（第三批）不一致；已统一为——**第三批=条件抽取、第四批=sav-parser**（判据：函数树=第二批在工作日志与 HANDOFF 双证）。
 
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：209 项 / ✅ / 7 插件）
-3. 读 `docs/ARCHITECTURE.md` §5.8+§5.9 + 本文件 §六
-4. **开始 v0.2 第四批 / v1.0 起步：sav-parser**（见 §6.4：先读 `eratw4.980-存档实战解析.md`，再建插件）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：267 项 / ✅ / 8 插件）
+3. 读 `docs/ARCHITECTURE.md` §5.8–§5.10 + 本文件 §六
+4. **开始 v0.2 第五批 / v1.0 主体**（见 §6.5）：`state-replay`（消费 `snapshot.source` + `condition.extractor`）或先做条件矩阵 / 归档浏览器面板
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

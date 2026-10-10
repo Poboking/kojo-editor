@@ -179,7 +179,7 @@ interface StateReplayer {
 
 关键设计：
 
-- **快照三来源**：真实存档（sav 协议已 100% 对上，含 7-bit 字节前缀、MASTERNAME 条件保存、SFMT 快照等结论全部沉淀在 `variableSchema`/`sav.parser` 插件中）；CliDebug 活会话（v15 SKIA 引擎，可实时读变量）；手工构造（作者自填"好感 800、深夜、浴室"这类组合）。
+- **快照三来源**：真实存档（二进制协议已 100% 对上，含 7-bit 字节前缀、MASTERNAME 条件保存、随机数快照等结论全部沉淀在 `snapshot.source` 服务的解析器中——契约 `plugin-api/snapshot.ts`，实现 `sav-parser` 插件，v0.2 第四批）；CliDebug 活会话（v15 SKIA 引擎，可实时读变量）；手工构造（作者自填"好感 800、深夜、浴室"这类组合）。
 - **回放不是跑游戏**：不做完整 EraBasic 解释器，而是把口上函数中的条件（5.2 抽取结果）在快照状态上求值，输出"该状态下会命中哪些分支"。这是近似——`CALL` 链、`PRINTDATA` 随机等按声明式规则处理并**标注置信度**（`确定命中 / 疑似 / 无法判定`）。
 - 与 Emuera CliDebug 的联动走 `_clidbg_test.cjs` 场景化驱动路线，v0 先只读，v1 再做写入注入。
 
@@ -288,7 +288,7 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 
 **规则误报治理原则（实战教训）**：FORM 三连符号规则初版对全部 5 个符号逐行报错，实测 239 条中大量是**有意**用法（`+++` 在 43 个文件里作为 CALLNAME:MASTER 的正文占位）。按"宁可漏报不可误报"收窄为：**排除 `+++`**、**每文件每符号聚合为一条**（含出现次数 + 首次行号）→ 239 → 8 条真实事故。规则实现前必须回引擎源码核验语义（`LexicalAnalyzer.cs:1207` + `CharStream.TripleSymbol():158` + `StrForm.cs:65`）。
 
-### 5.9 条件谓词抽取（v0.2 第四批实施记录）
+### 5.9 条件谓词抽取（v0.2 第三批实施记录）
 
 **目的**：把 20 万 IF / 4.5 万 SELECTCASE 背后的"状态依赖"结构化，服务导航徽章 / 条件矩阵（v1.x）/ 快照回放（v1.0）。
 
@@ -306,6 +306,25 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 - **真实工程实测（2026-10-10）**：95,504 函数 / 493,712 谓词 / 未解析 **0.04%**（补 `[[词]]`/括号索引后；此前 0.69%）/ 含依赖函数 31,609 / 依赖条目 164,910 / schema 标注 109,742（恋慕 17,993 / 好感度 480）/ 全量耗时 ~6.2s。变量字典 33 张名称表。
 - **“先测量再定语义”**（与 §5.8 同源的教训）：解析器初版 dump 真实 opaque 样本发现两大系统性缺口——`[[词]]`（引擎 rename 语法，读取期按 `_Rename.csv` 替换；编辑器保留原文）与**括号索引段**（`YOGORE:(GET_CHARAHOME(TARGET))`）——补齐后引擎侧未解析谓词 3,383 → 187（剩余为个例形态，保持 opaque 降级不猜测）。
 
+### 5.10 存档快照源（v0.2 第四批实施记录：sav-parser 先行）
+
+**目的**：v1.0 快照回放的**读侧地基**——把引擎二进制存档（"1808" 格式）解码为结构化模型，并响应式扫描项目存档目录。真实六档字节级回归零残余；与逆向阶段 CJS 解析器逐字段对拍一致（16,000 变量/档、cells 抽样 3 万+、六档全部 ✅）。
+
+**分层（"一切皆插件"）**：
+
+| 层 | 归属 | 内容 |
+|---|---|---|
+| 契约 | `plugin-api/snapshot.ts` | `SnapshotArchive`（元数据 + 角色区 + 变量区 + 扩展区）/ 变量模型（标量 / 稀疏数组 / Map / Xml / DataTable）/ 扫描结果 / `SnapshotSourceService`（scan / current / parse / subscribe） |
+| 引擎 | `sav-parser` 插件 | 字节原语（7-bit **字节数**前缀字符串 / 整数编码）、六种数组游程解码、顶层 / 角色块 / 变量流 / 扩展区解析、gzip 解压（`DecompressionStream`，跨 Node / WebView 一致） |
+| 来源 | game adapter（`GameProject.savDir`） | 存档目录由适配器填充；项目无该字段 → 扫描得空结果（显式呈现，不报错） |
+
+- **服务键命名决策**：早期草拟 `sav.parser`，落地为 **`snapshot.source`**——解耦审计 A 项要求"契约层零游戏 / 格式名词"（裸 `sav` 词在黑名单内），且该服务的通用语义是"快照来源"（§5.3 三来源：存档 / CliDebug / 手工），读存档只是首个实现。插件目录名 `sav-parser` 保留（插件层不受审计词汇限制）。
+- **纯读先行**：写 / 注入（§5.5 状态注入器）随 v1.1 扩展；本轮不落任何写路径，游戏目录再次全只读。
+- **真实六档实测（2026-10-10）**：168 角色 × 6 档 / 每档 16,005 变量（save00 为 16,000）/ `#DIM` 恒 65 / MASTERNAME 7/168 / RANDDATA（saveLen 625；save00 nonEmpty=0 全零剪枝实证，save01+ 全量）/ MONEY 51 亿（Int64 路径）/ EM 区 2 张 DT 表；扫描 6 档 27ms。
+- **稳健性**：单档失败进条目 `error`（不中断扫描）；Int64 超安全整数范围记 `warnings`（不静默）；残余字节 `remaining` 显式呈现（六档全 0）；代际保护（项目切换作废在途扫描，与 condition-extractor 同款）。
+- **内存控制**：数组变量支持 `keepArrayCells`（省略）/ `maxCellsPerArray`（截断）——49 万级 cell 的归档必须给消费者截断开关；`cursor` / `nonEmpty` 在省略时仍完整准确。
+- **测试**：58 项单测（合成字节 round-trip 覆盖全变量类型 + 错误路径 + 插件编排）；集成冒烟新增六档断言（元数据 / #DIM 分隔 / MASTERNAME / RANDDATA / MONEY / EM 表 / 零残余）；与逆向 CJS 解析器的逐字段交叉对拍为一次性验证（不引外部依赖进测试链）。
+
 ---
 
 ## 6. 目录结构（monorepo）
@@ -322,8 +341,8 @@ kojo-editor/
 │   │   ├── condition-extractor/ # ★ 条件谓词抽取（服务 condition.extractor；表达式解析 + 状态依赖聚合，语义标注来自 adapter）
 │   │   ├── ui-convention-report/ # ui.panel：校验结果面板（点击 → editor.revealLocation）
 │   │   ├── ui-kojo-navigator/ # ★ ui.panel：函数树导航（角色→家族→面→函数 + 条件徽章；家族规则经槽位查询，不 import adapter）
-│   │   ├── sav-parser/        # sav 字节协议：读（parse_sav.cjs 移植）+ 写/注入（§5.5）
-│   │   ├── state-replay/      # requires: ['game.adapter','sav.parser']
+│   │   ├── sav-parser/        # ★ 存档二进制解析（服务 snapshot.source）：读（v0.2 第四批，六档实测零残余）+ 写/注入（§5.5，v1.1）
+│   │   ├── state-replay/      # requires: ['game.adapter','snapshot.source']（v1.0）
 │   │   ├── runtime/           # v2 可选：受管引擎子进程 + CliDebug 协议（§5.6，默认不立项）
 │   │   ├── preview-renderer/
 │   │   ├── ui-condition-matrix/# v1.x 计划：条件矩阵/位图查看（消费 condition.extractor）
@@ -345,7 +364,7 @@ kojo-editor/
 | **v0.1 骨架** | Tauri 壳 + Monaco + kernel + plugin-api；选目录 onboarding（§5.7）；插件状态面板 | 选定有效 eraTW 目录后：CHARA CSV 映射解析成功，能列出 kojoPaths 下全部文件与函数清单 |
 | **v0.2 导航** | erb-parser + ui-function-tree + 条件抽取 | 按角色/家族浏览 99k 函数；点函数跳转源码 |
 | **v0.3 脚手架** | eraTW 适配器 scaffold：按 K1 模板全文置换路线生成新角色骨架 | 生成物可直接被 Emuera 加载无语法错 |
-| **v1.0 快照回放** | sav-parser + state-replay + 手工快照 UI | 指定"好感/信赖/部位/时间"组合，列出将命中的口上分支 |
+| **v1.0 快照回放** | ~~sav-parser（已提前：v0.2 第四批）~~ + state-replay + 手工快照 UI | 指定"好感/信赖/部位/时间"组合，列出将命中的口上分支 |
 | **v1.1 状态注入器** | sav 读写器 + 注入 UI + 测试槽管理（§5.5） | 作者用自带引擎：注入任意深状态 → 读测试档 → 十秒内抵达深条件场景；真实存档零风险；官方 v22/SKIA v15 通吃 |
 | **v1.2 受管引擎（可选）** | 仅当 §5.6 触发条件满足才立项 | 全自动回路 ≤10 秒 或 口上 CI 批量回归可用 |
 | **v2.0 多游戏验证** | eraK 适配器（外部贡献或自研） | 内核/parser/replay/preview 零改动接入，架构验收 |
