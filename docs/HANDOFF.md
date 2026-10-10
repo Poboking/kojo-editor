@@ -1,4 +1,4 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批～第十五批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批～第十七批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
@@ -15,6 +15,7 @@
 > 本会话完成 **v0.2 第十二批：审阅修复（依据 docs/CODE-REVIEW-2026-10-10.md）——H1 CASE TO 区间 AND 语义（conjunction 契约 + 三层落地）+ M4 切文件丢内容（确认对话框）+ M5 回放联动闭包 + M2 Rust 编码 had_errors + L1/L3/L4；426 项全绿，回放基线不变**。
 > 本会话完成 **v0.2 第十三批（双线）：① sav-parser Int64 精度方案 B 落地（rawBytes passthrough）——六档金样本 passthrough 全部字节级一致（含此前被拒的 save01-05）+ 标量/单元补丁注入 + Int64 守卫；纠正第十一批结论：RANDDATA 是 u32 序列逐值安全，真雷在 RESULT/CFLAG/GIFT_GOT（IMPLEMENTATION-LOG §5.19）；② TRAE 并行交付 ui-archive-browser 归档浏览器（第 11 插件，commit ca1a323）；456 项全绿**。
 > 本会话完成 **v0.2 第十五批（v1.0 收口线一）：回放面板场景预设**——把手填的调用上下文槽位一等化为「场景」（命名保存 / 下拉切换 / 一键应用 / 删除）；`ReplayScene` 纯逻辑（+15 单测）+ `ctx.storage` 独立域（`ui-state-replay`）+ 协议降级（建议名 label 拼接 / 不可用则纯手填）；应用后槽位来源标 manual（作者假设，非引擎事实），与 §5.20 的 assumption 徽章并存；回放引擎与 condition-extractor 契约零改动；485 项全绿（IMPLEMENTATION-LOG §5.22）。
+> 本会话完成 **v0.2 第十七批：桌面壳端到端冒烟——tauri dev 真实 IPC 下跑通 Rust 双闸 a–e 全清单（域内放行 / 域外 fail-closed 拒绝 / 关项目后回落 appDataDir），固化自动化探针 `tools/smoke-tauri-ipc.mjs` + 手工清单 `tools/smoke-tauri-manual.md`；沙箱 os error 231 未复现；零源码改动（IMPLEMENTATION-LOG §5.24）**。
 
 ---
 
@@ -175,6 +176,8 @@ pnpm audit:decoupling   # 必须 ✅（plugins 数 10）
 KOJO_SMOKE_PROJECT="D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
 # 桌面壳（会弹窗 ~100s 自动关闭）：
 node tools/smoke-tauri-dom.mjs
+# 桌面壳真实 IPC 冒烟（Rust 双闸 a–e；CDP 直调 invoke；自动还原 store/文件/备份；会弹窗 ~2min）：
+node tools/smoke-tauri-ipc.mjs
 ```
 
 **架构铁律（改动前默念）**：
@@ -184,7 +187,7 @@ node tools/smoke-tauri-dom.mjs
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
 5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
 
-## 六、v0.2 批次记录（第三批～第十五批
+## 六、v0.2 批次记录（第三批～第十七批，✅ 全部完成）
 
 ### 6.1 第三批：条件谓词抽取 `condition-extractor`
 
@@ -352,6 +355,16 @@ node tools/smoke-tauri-dom.mjs
 - **验证**：485 项全绿（+15）/ typecheck root+app ✅ / `audit:decoupling` ✅（11 插件）/ 真实工程集成冒烟 ✅。
 - 边界：仅 `packages/plugins/ui-state-replay/**` + docs。
 
+### 6.17 第十七批（✅ 已完成）：桌面壳端到端冒烟（Rust 双闸真实 IPC 验证）
+
+**实施结果**：还掉 C7/M3（§6.14）端到端欠账 + 固化自动化探针（IMPLEMENTATION-LOG §5.24 为权威记录）。
+
+- **环境结论**：本机正常终端（PowerShell）`pnpm tauri dev` **可跑**——vite 1420 ✓ / cargo 增量编译 ~21s / 宿主 `kojo-editor.exe` ✓ / CDP 9222 ✓ / DOM 渲染 ✓；**沙箱 os error 231 未复现**（§八 已录）。
+- **自动化探针 `tools/smoke-tauri-ipc.mjs`**：CDP 进 WebView 直调 `__TAURI_INTERNALS__.invoke`（与 app bridge 同一条**真实 IPC** 通道，非伪造），一条命令跑 a–e 全清单；自带 store（recent + approved-writable）/文件原字节/`.bak` 清场还原 + 端口预检。
+- **手工清单 `tools/smoke-tauri-manual.md`**：a–f 可勾选 + 每项预期结果 + 本批实测结论表 + 安全不变量（后续每批人工过一遍）。
+- **实测（全 PASS）**：a 开真实游戏目录（168 角色 / 2285 文件 / 99104 函数）；a2 首次「写权限确认」→「允许写入」；b 域内编辑保存 → 落盘含标记 + 备份目录新增 `.bak`；c 写 `C:\Windows\Temp` → 「写允许域拒绝」；d 关项目后写游戏目录 → 同拒；e appDataDir 写正常。**双闸语义实测成立**（项目根 + appDataDir 放行 / 域外 fail-closed / 关闭后回落仅 appDataDir）。
+- 边界：仅 `tools/**` + `docs/**`，**零源码改动**（未动 Rust / TS；未碰 `packages/plugins/**` 与 kernel）。
+
 ---
 
 ## 七、安全模型（写文件功能相关必读）
@@ -376,6 +389,8 @@ node tools/smoke-tauri-dom.mjs
 | 模板字符串里写 Markdown 反引号（如 \`====\`）会截断 TS 模板串 | 用「」代替反引号 |
 | cargo 输出带 ANSI 色码 | 正则匹配前先 stripAnsi（tools/smoke-*.mjs 有现成函数） |
 | crates.io 直连慢 | cargo 首次 build 已完成，之后增量秒级 |
+| **沙箱 `os error 231` 未复现**：本会话 Trae 终端（PowerShell）直接 `node tools/smoke-tauri-dom.mjs` / `pnpm tauri dev` → vite 1420 ✓ / cargo 增量 ~21s / 宿主 ✓ / CDP 9222 ✓ / DOM ✓ | 桌面壳可在正常终端跑；真实 IPC 冒烟走 `node tools/smoke-tauri-ipc.mjs`（Rust 双闸 a–e，自动还原 store/文件/备份） |
+| tauri dev 首轮冷启动 vite `Re-optimizing dependencies` 会 HMR 重载页面（项目打开后回欢迎页） | 首次 dev 的已知抖动，二次稳定；`smoke-tauri-ipc.mjs` 已加端口预检 + 180s 等待缓解 |
 
 ## 九、本会话踩坑记录（给未来的自己）
 
@@ -408,5 +423,5 @@ node tools/smoke-tauri-dom.mjs
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：485 项 / ✅ / 11 插件）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.21 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：**v1.1 注入器用户面**（改槽注入 UI → 含修改金样本回归 → 写盘走 writablePaths+备份；Rust 第二道闸已就位）或 **v1.0 收口剩余**（回放面板场景预设 / 桌面壳真实终端冒烟——C7 的端到端手工验证也在此还账）；审阅遗留 M1（stop 级联）随 v0.3 排入
+4. **下一批候选**：注入器用户面（并行线推进中）+ v1.0 收口余项（协议覆盖校验规则：签名槽与路由转发不一致）；审阅遗留 M1（stop 级联）随 v0.3 排入
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

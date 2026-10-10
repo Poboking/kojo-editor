@@ -443,3 +443,58 @@
 
 ---
 
+### 5.24 桌面壳端到端冒烟（第十七批实施记录：Rust 双闸真实 IPC 验证 + 自动化探针）
+
+> 编号沿用交接口径「第十七批」。承接 §5.21（Rust 写允许域第二道闸 M3）的**端到端欠账**：此前
+> 沙箱会话跑不了 `tauri dev`（`BeforeDevCommand` 经 windows shell 触发宿主管道耗尽 `os error 231`），
+> 真实 IPC 下的域外写拒绝从未实测。本批在正常终端闭环，并把清单固化为可重复的自动化探针。
+
+#### 关键洞察：CDP 直调 = 真实 IPC（非伪造）
+
+Tauri dev 下 WebView2 可用 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 开远程调试；
+Node 经 CDP `Runtime.evaluate` 在页面执行 `window.__TAURI_INTERNALS__.invoke(cmd, args)`——与 app 的
+bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_INTERNALS__` 通道，落到真实 Rust
+命令处理器。据此 a–e 清单可全自动化。
+
+#### 环境（§八补记）
+
+- 本会话 Trae 终端（PowerShell）直接 `node tools/smoke-tauri-dom.mjs 130` **可跑**：vite 1420 ✓ /
+  cargo 增量编译 ~21s / `target\debug\kojo-editor.exe` ✓ / CDP 9222 ✓ / DOM 渲染 ✓。
+  **`os error 231` 未复现**——原为沙箱会话特有，非项目问题。
+- Node 24.14 · pnpm 11.22 · cargo/rustc 1.99。
+
+#### 交付
+
+1. **`tools/smoke-tauri-ipc.mjs`**（自动化探针，真实 IPC）：a 开项目 → a2 批准写权限 → b 编辑+保存
+   +落盘+备份 → c 域外写拒 → e appDataDir 写 → d 关项目后写游戏目录拒。自带 store（recent +
+   approved-writable）与文件原字节还原、`.bak`/临时文件清场、端口预检。
+2. **`tools/smoke-tauri-manual.md`**：可勾选手工清单（a–f，每项步骤 + 预期结果）+ 本批实测结论表 +
+   安全不变量 + 已知抖动。
+
+#### 实测结论（全 PASS）
+
+- **a** rootDir = 游戏目录；stats `角色 168 / 文件 2285 / 函数 99104`。
+- **a2** 首次弹「写权限确认」→ 点「允许写入」→ 关闭（批准持久化；探针结束时还原 store）。
+- **b** 改 `…\個人口上\001 Reimu [霊夢]\of_new_kojo_api_TEST.ERB` → 磁盘含 marker ✓
+  + `{appData}\backup\of_new_kojo_api_TEST.ERB-dafcdd60\<ts>.bak` 新增 1 个（原字节已还原）。
+- **c** `C:\Windows\Temp\kojo-smoke-outside.txt` → 抛
+  「写允许域拒绝（write）：… 不在允许域内（允许 = 项目根目录 / appDataDir；未打开项目时仅 appDataDir）」。
+- **d** 关闭项目后写游戏目录 `_kojo_smoke_after_close.txt` → 同样「写允许域拒绝」（`project_root` 已清）。
+- **e** appDataDir `ensure_dir` + `write_file_bytes` 成功并可读回。
+- **双闸语义实测成立**：项目根 + appDataDir 放行、域外 **fail-closed**、关闭项目后回落仅 appDataDir。
+
+#### 边界与不变式
+
+- 仅 `tools/**` + `docs/**`；**零源码改动**（未动 Rust / TS；测试计数不受影响）。未碰
+  `packages/plugins/**`（并行线战场）与 kernel / plugin-api / src-tauri。
+- 安全不变量未放宽：允许域 = 项目根整体 + appDataDir，双闸以更严者为准。
+
+#### 教训（§九 补）
+
+- **CDP `returnByValue` 返回 DOM 节点会报 `Object reference chain is too long`**：等待条件必须
+  `!!document.querySelector(...)` 归一为布尔（曾致 d 步骤假超时）。
+- **tauri dev 首轮冷启动 HMR 重载**：vite `Re-optimizing dependencies because lockfile has changed`
+  会在项目打开后重载页面 → 回欢迎页（探针 `.proj-stats` 一度为空）。属首次 dev 的已知抖动，
+  二次运行稳定；探针已加端口预检 + 180s 等待缓解。
+
+---
