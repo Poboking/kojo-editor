@@ -68,9 +68,9 @@ describe('loadEratwVariableSchema', () => {
       log: silentLog,
     });
 
-    expect(schema.lookup('CFLAG', 2)).toEqual({ name: 'CFLAG', index: 2, description: '好感度' });
-    expect(schema.lookup('cflag', '2')).toEqual({ name: 'CFLAG', index: '2', description: '好感度' });
-    expect(schema.lookup('TALENT', '恋慕')).toEqual({ name: 'TALENT', index: '恋慕', description: '恋慕' });
+    expect(schema.lookup('CFLAG', 2)).toEqual({ name: 'CFLAG', index: 2, description: '好感度', resolvedIndex: 2 });
+    expect(schema.lookup('cflag', '2')).toEqual({ name: 'CFLAG', index: '2', description: '好感度', resolvedIndex: 2 });
+    expect(schema.lookup('TALENT', '恋慕')).toEqual({ name: 'TALENT', index: '恋慕', description: '恋慕', resolvedIndex: 3 });
     expect(schema.lookup('CFLAG')).toEqual({ name: 'CFLAG' });
     expect(schema.lookup('CFLAG', 999)).toEqual({ name: 'CFLAG', index: 999 });
     expect(schema.lookup('NOPE', 1)).toBeUndefined();

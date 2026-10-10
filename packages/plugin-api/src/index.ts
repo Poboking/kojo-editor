@@ -62,9 +62,23 @@ export type {
   ConditionExtractorService,
   ConditionIndex,
   FunctionConditions,
+  FunctionPredicate,
+  FunctionPredicates,
+  PredicateSourceKind,
   StateDependency,
   VariableRef,
 } from './conditions';
+
+export type {
+  FunctionReplay,
+  PredicateReplay,
+  ReplayOutcome,
+  ReplayStateView,
+  ReplayUnknown,
+  ReplayUnknownCode,
+  ReplayValue,
+  StateReplayService,
+} from './replay';
 
 export type {
   ArchiveArrayCell,

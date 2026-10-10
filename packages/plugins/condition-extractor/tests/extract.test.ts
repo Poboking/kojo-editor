@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ControlFlowStatement } from '@kojo/plugin-api';
-import { extractFunctionConditions } from '../src/extract';
+import { extractFunctionConditions, extractFunctionPredicates } from '../src/extract';
 
 const fn = { normalizedName: 'TEST_FUNC', filePath: 'a.erb', startLine: 1 };
 
@@ -214,5 +214,57 @@ describe('extractFunctionConditions · schema 标注', () => {
     const byKey = new Map(r!.dependencies.map((d) => [d.key, d]));
     expect(byKey.get('CFLAG:2')!.schema?.description).toBe('好感度');
     expect(byKey.get('CFLAG:ARG:口上セレクタ')!.schema).toBeUndefined();
+  });
+});
+
+describe('extractFunctionPredicates · 谓词明细', () => {
+  it('保留逐条谓词（kind / 原文 / 行号 / 深度）与骨架', () => {
+    const stmts = cf([
+      ['IF', 'CFLAG:2 >= 500', 0, 3],
+      ['ELSEIF', 'CFLAG:2 >= 300', 0, 5],
+      ['ELSE', '', 0, 7],
+      ['SIF', 'TALENT:恋慕', 1, 8],
+      ['ENDIF', '', 0, 9],
+      ['ENDIF', '', 0, 10],
+    ]);
+    const r = extractFunctionPredicates(fn, stmts);
+    expect(r.normalizedName).toBe('TEST_FUNC');
+    expect(r.statements).toHaveLength(6);
+    expect(r.predicates.map((p) => [p.kind, p.text, p.line, p.depth])).toEqual([
+      ['IF', 'CFLAG:2 >= 500', 3, 0],
+      ['ELSEIF', 'CFLAG:2 >= 300', 5, 0],
+      ['SIF', 'TALENT:恋慕', 8, 1],
+    ]);
+    expect(r.predicates[0]!.expr.kind).toBe('binary');
+  });
+
+  it('CASE 展开为多条谓词（共享来源行）', () => {
+    const r = extractFunctionPredicates(
+      fn,
+      cf([
+        ['SELECTCASE', 'CFLAG:2', 0, 1],
+        ['CASE', '1, 2', 0, 2],
+        ['CASE', 'IS >= 5', 0, 4],
+        ['CASEELSE', '', 0, 6],
+        ['ENDSELECT', '', 0, 7],
+      ]),
+    );
+    expect(r.predicates).toHaveLength(3);
+    expect(r.predicates.every((p) => p.kind === 'CASE')).toBe(true);
+    expect(r.predicates[0]!.text).toBe('1, 2');
+    expect(r.predicates[0]!.line).toBe(2);
+    expect(r.predicates[2]!.text).toBe('IS >= 5');
+  });
+
+  it('opaque 谓词保留原文（不聚合、不丢弃）', () => {
+    const r = extractFunctionPredicates(fn, cf([['IF', '@@bad@@', 0, 1]]));
+    expect(r.predicates).toHaveLength(1);
+    expect(r.predicates[0]!.expr.kind).toBe('opaque');
+    expect(r.predicates[0]!.text).toBe('@@bad@@');
+  });
+
+  it('无谓词 → 空数组（与聚合视图的 null 语义不同）', () => {
+    const r = extractFunctionPredicates(fn, cf([['FOR', 'LOCAL:0', 0, 1]]));
+    expect(r.predicates).toEqual([]);
   });
 });

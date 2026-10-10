@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-state-replay",
+  "version": "0.2.0",
+  "private": true,
+  "description": "State replay (state.replay service): snapshot archive -> replay state view -> three-valued condition evaluation with explicit confidence. Consumes snapshot.source + condition.extractor; named-index dictionary comes from the active game adapter's variableSchema via slot query - never imported directly.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

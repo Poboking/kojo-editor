@@ -37,6 +37,12 @@ export const WellKnownServices = {
    * 消费者：state-replay（v1.0）/ 归档浏览器。
    */
   SnapshotSource: 'snapshot.source',
+  /**
+   * 状态回放服务（v0.2 第五批）：快照状态视图 + 条件谓词近似求值
+   * （置信度三档标注，架构文档 §5.3）。消费 `snapshot.source` + `condition.extractor`；
+   * 作为消费者与编辑器 UI（回放面板）的数据源。
+   */
+  StateReplay: 'state.replay',
 } as const;
 
 export type KernelServiceKey = (typeof KernelServices)[keyof typeof KernelServices];

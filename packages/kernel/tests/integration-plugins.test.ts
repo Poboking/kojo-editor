@@ -8,6 +8,7 @@ import type {
   ConventionLinterService,
   ErbParserService,
   SnapshotSourceService,
+  StateReplayService,
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 import { createKernel } from '../src/kernel';
@@ -18,13 +19,15 @@ import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
 import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
 import { createSavParserPlugin } from '@kojo/plugin-sav-parser';
+import { createStateReplayPlugin } from '@kojo/plugin-state-replay';
 
 /**
  * 真实工程集成冒烟 —— 直接检验各阶段验收标准：
  * - v0.1：「选定有效 eraTW 目录后：CHARA CSV 映射解析成功，能列出 kojoPaths 下全部文件与函数清单」；
  * - v0.2：「按角色/家族浏览 99k 函数」的前提（家族识别覆盖）+ 约定校验器在真实数据上产出问题；
  * - v0.2 第三批：条件谓词抽取（控制流 → 谓词 → 状态依赖 + adapter 变量字典标注）；
- * - v0.2 第四批：存档解析（扫描 + 浅解析 + 深解析，真实六档字节级回归）。
+ * - v0.2 第四批：存档解析（扫描 + 浅解析 + 深解析，真实六档字节级回归）；
+ * - v0.2 第五批：状态回放（快照 → 状态视图 → 谓词三值求值，真实角色 × 真实函数）。
  *
  * 真实游戏数据不入库：通过环境变量 `KOJO_SMOKE_PROJECT` 指定本地游戏目录；
  * 未设置时整组跳过（CI 安全）。
@@ -33,7 +36,7 @@ const SMOKE_DIR = process.env.KOJO_SMOKE_PROJECT;
 
 describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
   it(
-    'onboarding → CHARA 映射 → 口上域全量函数索引 → 约定校验 → 条件抽取 → 存档解析',
+    'onboarding → CHARA 映射 → 口上域全量函数索引 → 约定校验 → 条件抽取 → 存档解析 → 状态回放',
     async () => {
       const appData = mkdtempSync(nodeJoin(tmpdir(), 'kojo-smoke-'));
       const kernel = await createKernel({
@@ -44,6 +47,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           createConventionLinterPlugin(),
           createConditionExtractorPlugin(),
           createSavParserPlugin(),
+          createStateReplayPlugin(),
         ],
         storageBackend: new MemoryStorageBackend(),
       });
@@ -56,6 +60,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(states.get('convention-linter')?.status).toBe('active');
       expect(states.get('condition-extractor')?.status).toBe('active');
       expect(states.get('sav-parser')?.status).toBe('active');
+      expect(states.get('state-replay')?.status).toBe('active');
 
       // 2. onboarding（内核对全部 adapter 候选轮询 detect）
       const project = await kernel.project.open(SMOKE_DIR!);
@@ -254,6 +259,58 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           `#DIM ${[...dimCounts][0]} | MASTERNAME ${masterNameChars} | ` +
           `RANDDATA save00=${rand00?.nonEmpty} save03=${rand03?.nonEmpty} | ` +
           `EM ${arch03.emVars?.length} 表 | 残余 ${arch03.remaining}B`,
+      );
+
+      // 8. 状态回放（v0.2 第五批：快照 → 状态视图 → 谓词三值求值）
+      const replay = kernel.services.get<StateReplayService>(WellKnownServices.StateReplay);
+      const view = await replay.createView(save03e!.path, 49); // save03 × 古明地觉（K49）
+      expect(view.characterNo).toBe(49);
+      expect(view.characterName).toContain('觉');
+
+      // 变量读取原语：TARGET 补位 / 全局 [0] 等价 / 角色标量 / 稀疏缺省
+      const read = (name: string, indices: string[] = []) => view.read({ name, indices, text: name });
+      const day = read('DAY');
+      expect(day.kind).toBe('value');
+      if (day.kind === 'value') expect(day.value).toBe(47); // save03 = 第 47 日（与 saveMes 互证）
+      const no = read('NO');
+      if (no.kind === 'value') expect(no.value).toBe(49);
+      const favor = read('CFLAG', ['2']); // 好感度（TARGET 补位 = 觉）
+      expect(favor.kind).toBe('value');
+      const master = read('CFLAG', ['MASTER', '2']); // MASTER 指针（昴 = 0 号）
+      expect(master.kind).toBe('value');
+
+      // 批量回放 K49（古明地觉）含状态依赖的函数（真实谓词明细 + 真实快照）
+      const k49Fns = [...condIndex.byFunction.keys()].filter((n) => n.includes('_K49_'));
+      expect(k49Fns.length).toBeGreaterThan(0);
+      const replays = await replay.replayFunctions(view, k49Fns);
+      const nonNull = replays.filter((r) => r !== null);
+      expect(nonNull.length).toBeGreaterThanOrEqual(k49Fns.length - 2); // 明细解析允许极少数失败
+
+      let exact = 0;
+      let partial = 0;
+      let allUnknown = 0;
+      let predTotal = 0;
+      let hit = 0;
+      let miss = 0;
+      let unknown = 0;
+      for (const r of nonNull) {
+        if (r!.confidence === 'exact') exact++;
+        else if (r!.confidence === 'partial') partial++;
+        else allUnknown++;
+        predTotal += r!.stats.total;
+        hit += r!.stats.hit;
+        miss += r!.stats.miss;
+        unknown += r!.stats.unknown;
+      }
+      expect(predTotal).toBeGreaterThan(0);
+      expect(hit + miss).toBeGreaterThan(0); // 至少按快照作出确定判定
+
+      // eslint-disable-next-line no-console
+      console.log(
+        `[smoke] 状态回放：K49 函数 ${k49Fns.length} | 谓词 ${predTotal} ` +
+          `(命中 ${hit} / 未命中 ${miss} / 未知 ${unknown}) | ` +
+          `置信度 exact ${exact} / partial ${partial} / unknown ${allUnknown} | ` +
+          `DAY=${day.kind === 'value' ? day.value : '?'} 好感(CFLAG:2)=${favor.kind === 'value' ? favor.value : '?'}`,
       );
 
       await kernel.stop();

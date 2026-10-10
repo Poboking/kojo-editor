@@ -20,6 +20,9 @@ import type {
   ConditionExpr,
   ControlFlowStatement,
   FunctionConditions,
+  FunctionPredicate,
+  FunctionPredicates,
+  PredicateSourceKind,
   StateDependency,
   VariableInfo,
 } from '@kojo/plugin-api';
@@ -154,15 +157,11 @@ export interface FunctionIdentity {
 }
 
 /**
- * 抽取单函数条件（纯函数）。
- * @returns 无条件谓词时返回 null（调用方不收录）。
+ * 从控制流骨架收集逐条谓词（含来源类别 / 原文 / 行号 / 深度）。
+ * 聚合视图（`extractFunctionConditions`）与明细视图（`extractFunctionPredicates`）共用。
  */
-export function extractFunctionConditions(
-  fn: FunctionIdentity,
-  stmts: readonly ControlFlowStatement[],
-  opts: ExtractFunctionOptions = {},
-): FunctionConditions | null {
-  const preds: { expr: ConditionExpr; line: number }[] = [];
+export function collectPredicates(stmts: readonly ControlFlowStatement[]): FunctionPredicate[] {
+  const preds: FunctionPredicate[] = [];
   /** SELECTCASE subject 栈（按 depth 配平；仅用于 CASE 展开） */
   const selectStack: { subject: ConditionExpr | null; depth: number }[] = [];
 
@@ -175,7 +174,13 @@ export function extractFunctionConditions(
       case 'IF':
       case 'ELSEIF':
       case 'SIF':
-        preds.push({ expr: parseExpression(s.expression), line: s.line });
+        preds.push({
+          kind: s.kind as PredicateSourceKind,
+          text: s.expression,
+          expr: parseExpression(s.expression),
+          line: s.line,
+          depth: s.depth,
+        });
         break;
       case 'SELECTCASE': {
         const subject = s.expression.length > 0 ? parseExpression(s.expression) : null;
@@ -184,7 +189,9 @@ export function extractFunctionConditions(
       }
       case 'CASE': {
         const top = selectStack[selectStack.length - 1];
-        for (const p of expandCase(s, top?.subject ?? null)) preds.push(p);
+        for (const p of expandCase(s, top?.subject ?? null)) {
+          preds.push({ kind: 'CASE', text: s.expression, expr: p.expr, line: p.line, depth: s.depth });
+        }
         break;
       }
       case 'ENDSELECT':
@@ -194,6 +201,35 @@ export function extractFunctionConditions(
         break; // ELSE/CASEELSE/循环语句等：不产生谓词
     }
   }
+  return preds;
+}
+
+/**
+ * 抽取单函数谓词明细（含控制流骨架；**不聚合**——供快照回放逐条求值）。
+ */
+export function extractFunctionPredicates(
+  fn: FunctionIdentity,
+  stmts: readonly ControlFlowStatement[],
+): FunctionPredicates {
+  return {
+    normalizedName: fn.normalizedName,
+    filePath: fn.filePath,
+    startLine: fn.startLine,
+    statements: [...stmts],
+    predicates: collectPredicates(stmts),
+  };
+}
+
+/**
+ * 抽取单函数条件（纯函数，聚合视图）。
+ * @returns 无条件谓词时返回 null（调用方不收录）。
+ */
+export function extractFunctionConditions(
+  fn: FunctionIdentity,
+  stmts: readonly ControlFlowStatement[],
+  opts: ExtractFunctionOptions = {},
+): FunctionConditions | null {
+  const preds = collectPredicates(stmts);
 
   if (preds.length === 0) return null;
 

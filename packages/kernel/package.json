@@ -15,6 +15,7 @@
     "@kojo/plugin-eratw-adapter": "workspace:*",
     "@kojo/plugin-condition-extractor": "workspace:*",
     "@kojo/plugin-convention-linter": "workspace:*",
-    "@kojo/plugin-sav-parser": "workspace:*"
+    "@kojo/plugin-sav-parser": "workspace:*",
+    "@kojo/plugin-state-replay": "workspace:*"
   }
 }

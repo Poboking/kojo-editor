@@ -17,10 +17,11 @@ import type {
   ControlFlowStatement,
   ErbIndex,
   FunctionConditions,
+  FunctionPredicates,
   GameProject,
   Logger,
 } from '@kojo/plugin-api';
-import { extractFunctionConditions, type SchemaLookup } from './extract';
+import { extractFunctionConditions, extractFunctionPredicates, type SchemaLookup } from './extract';
 
 export interface ConditionEngineDeps {
   log: Logger;
@@ -64,6 +65,10 @@ export class ConditionEngine implements ConditionExtractorService {
   private last: ConditionIndex | null = null;
   private inFlight: Promise<ConditionIndex> | null = null;
   private readonly listeners = new Set<(index: ConditionIndex | null) => void>();
+  /** 谓词明细缓存（按需解析产物；索引重建时失效——最多缓存被查看过的函数，规模可控） */
+  private readonly detailCache = new Map<string, FunctionPredicates>();
+  /** 明细解析的文件文本缓存（同批多个函数共享文件时避免重复读取；索引重建时失效） */
+  private readonly fileTextCache = new Map<string, string>();
 
   constructor(private readonly deps: ConditionEngineDeps) {}
 
@@ -73,6 +78,49 @@ export class ConditionEngine implements ConditionExtractorService {
 
   functionConditions(normalizedName: string): FunctionConditions | undefined {
     return this.last?.byFunction.get(normalizedName);
+  }
+
+  /**
+   * 按需解析单函数谓词明细（读文件 → 控制流扫描 → 逐条解析）。
+   * 不入全量索引（49 万谓词常驻内存不划算）；结果缓存至下一次索引重建。
+   */
+  async functionPredicates(normalizedName: string): Promise<FunctionPredicates | null> {
+    const key = normalizedName.toUpperCase();
+    const cached = this.detailCache.get(key);
+    if (cached) return cached;
+
+    const index = this.deps.getIndex();
+    if (!index) return null;
+    const refs = index.byName.get(key);
+    if (!refs || refs.length === 0) return null;
+    const ref = refs[0]!;
+
+    let text = this.fileTextCache.get(ref.filePath);
+    if (text === undefined) {
+      try {
+        text = await this.deps.readFile(ref.filePath);
+      } catch (err) {
+        this.deps.log.warn(`Predicate detail read failed: ${ref.filePath} — ${String(err)}`);
+        return null;
+      }
+      this.fileTextCache.set(ref.filePath, text);
+    }
+    let stmts: ControlFlowStatement[];
+    try {
+      stmts = this.deps.scanControlFlow(text);
+    } catch (err) {
+      this.deps.log.warn(`Predicate detail scan failed: ${ref.filePath} — ${String(err)}`);
+      return null;
+    }
+
+    // 函数区间切片（骨架按行升序；与全量抽取同一边界语义 [startLine, endLine]）
+    const slice = stmts.filter((s) => s.line >= ref.startLine && s.line <= ref.endLine);
+    const detail = extractFunctionPredicates(
+      { normalizedName: key, filePath: ref.filePath, startLine: ref.startLine },
+      slice,
+    );
+    this.detailCache.set(key, detail);
+    return detail;
   }
 
   subscribe(cb: (index: ConditionIndex | null) => void): () => void {
@@ -90,6 +138,8 @@ export class ConditionEngine implements ConditionExtractorService {
   /** 项目关闭 / 重置：清空并通知订阅者 */
   clear(): void {
     this.last = null;
+    this.detailCache.clear();
+    this.fileTextCache.clear();
     this.notify();
   }
 
@@ -173,6 +223,8 @@ export class ConditionEngine implements ConditionExtractorService {
       stats,
     };
     this.last = result;
+    this.detailCache.clear(); // 索引重建 → 行号/定义可能变化，明细缓存失效
+    this.fileTextCache.clear();
     this.notify();
     this.deps.log.info(
       `Condition index: ${stats.functions} functions scanned, ${stats.predicates} predicates ` +

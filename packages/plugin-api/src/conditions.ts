@@ -11,6 +11,7 @@
  * 绝不抛错中断（全量 99k 函数必须跑完）；未解析计数在结果中显式呈现（不静默）。
  */
 
+import type { ControlFlowStatement } from './erb';
 import type { VariableInfo } from './game';
 
 /** 变量引用（如 `CFLAG:2`、`TALENT:恋慕`、`CFLAG:ARG:口上セレクタ`、`LOCAL`） */
@@ -111,6 +112,41 @@ export interface ConditionIndex {
   };
 }
 
+/** 谓词来源语句类别（CASE 展开后的谓词标记其来源语句） */
+export type PredicateSourceKind = 'IF' | 'ELSEIF' | 'SIF' | 'CASE';
+
+/**
+ * 单条谓词明细（`functionPredicates` 按需解析产物；不入全量索引——
+ * 真实工程 49 万谓词常驻内存不划算，明细视图 / 快照回放按需重解析）。
+ */
+export interface FunctionPredicate {
+  /** 来源语句类别 */
+  kind: PredicateSourceKind;
+  /** 谓词原文（CASE 为展开前原文；展示与回溯用） */
+  text: string;
+  /** 解析后 AST（CASE 已展开为 `subject == 值` 等；无法解析 → opaque） */
+  expr: ConditionExpr;
+  /** 来源语句行（1 基；CASE 列表展开的多条谓词共享该行） */
+  line: number;
+  /** 块深度（scanControlFlow 语义；分支链重建用） */
+  depth: number;
+}
+
+/**
+ * 单函数谓词明细（含完整控制流骨架）。
+ * 与 `FunctionConditions`（聚合视图）不同：本结构保留逐条谓词与 AST——
+ * 供快照回放求值（v1.0）与未来的明细视图消费，**按需解析、不入常驻索引**。
+ */
+export interface FunctionPredicates {
+  normalizedName: string;
+  filePath: string;
+  startLine: number;
+  /** 控制流骨架（完整语句序列：IF/ELSEIF/ELSE/ENDIF/SELECTCASE/CASE…） */
+  statements: ControlFlowStatement[];
+  /** 谓词序列（按行序；CASE 每值一条） */
+  predicates: FunctionPredicate[];
+}
+
 /**
  * 条件抽取服务（服务键 `condition.extractor`）。
  * 消费者：导航面板（条件徽章）、条件矩阵面板（v1.x）、快照回放（v1.0）。
@@ -122,6 +158,11 @@ export interface ConditionExtractorService {
   ensureIndex(): Promise<ConditionIndex>;
   /** 单函数条件（索引未含该函数时 undefined） */
   functionConditions(normalizedName: string): FunctionConditions | undefined;
+  /**
+   * 按需解析单函数的谓词明细（含控制流骨架）。
+   * 函数不存在 / 无索引 / 读文件失败时返回 null（显式，不伪造空结果）。
+   */
+  functionPredicates(normalizedName: string): Promise<FunctionPredicates | null>;
   /** 订阅索引更新（立即以当前值回调一次，返回退订函数） */
   subscribe(cb: (index: ConditionIndex | null) => void): () => void;
 }

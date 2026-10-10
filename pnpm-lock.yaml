@@ -53,6 +53,9 @@ importers:
       '@kojo/plugin-sav-parser':
         specifier: workspace:*
         version: link:../plugins/sav-parser
+      '@kojo/plugin-state-replay':
+        specifier: workspace:*
+        version: link:../plugins/state-replay
       '@kojo/plugin-ui-convention-report':
         specifier: workspace:*
         version: link:../plugins/ui-convention-report
@@ -112,6 +115,9 @@ importers:
       '@kojo/plugin-sav-parser':
         specifier: workspace:*
         version: link:../plugins/sav-parser
+      '@kojo/plugin-state-replay':
+        specifier: workspace:*
+        version: link:../plugins/state-replay
 
   packages/plugin-api: {}
 
@@ -140,6 +146,12 @@ importers:
         version: link:../../plugin-api
 
   packages/plugins/sav-parser:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
+  packages/plugins/state-replay:
     dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*

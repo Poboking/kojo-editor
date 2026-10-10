@@ -19,6 +19,7 @@
     "@kojo/plugin-erb-parser": "workspace:*",
     "@kojo/plugin-eratw-adapter": "workspace:*",
     "@kojo/plugin-sav-parser": "workspace:*",
+    "@kojo/plugin-state-replay": "workspace:*",
     "@kojo/plugin-ui-convention-report": "workspace:*",
     "@kojo/plugin-ui-kojo-navigator": "workspace:*",
     "@kojo/plugin-ui-status": "workspace:*",

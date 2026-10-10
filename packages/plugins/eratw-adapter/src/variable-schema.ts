@@ -91,12 +91,18 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
       const idxStr = String(index);
       const byIdx = table.byIndex.get(idxStr);
       if (byIdx !== undefined) {
-        // 编号索引（如 CFLAG:2）→ 名称为描述
-        return { name: key, index, description: byIdx };
+        // 编号索引（如 CFLAG:2）→ 名称为描述；resolvedIndex = 自身
+        const n = Number(idxStr);
+        const info: VariableInfo = { name: key, index, description: byIdx };
+        if (!Number.isNaN(n)) info.resolvedIndex = n;
+        return info;
       }
       if (table.byName.has(idxStr)) {
-        // 具名索引（如 TALENT:恋慕）→ 名称本身即描述
-        return { name: key, index, description: idxStr };
+        // 具名索引（如 TALENT:恋慕）→ 名称本身即描述；resolvedIndex = 字典编号
+        const info: VariableInfo = { name: key, index, description: idxStr };
+        const n = Number(table.byName.get(idxStr));
+        if (!Number.isNaN(n)) info.resolvedIndex = n;
+        return info;
       }
       return { name: key, index };
     },

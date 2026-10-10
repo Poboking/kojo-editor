@@ -79,10 +79,16 @@ export interface FamilyIndexRule {
 export interface VariableInfo {
   /** 变量名（如 'CFLAG'、'TCVAR'） */
   name: string;
-  /** 编号或具名索引 */
+  /** 编号或具名索引（原样透传） */
   index?: number | string;
   /** 人类可读说明 */
   description?: string;
+  /**
+   * 具名索引解析出的数字编号（引擎关键字字典语义：`TALENT:恋慕` → 3）。
+   * 数字索引时 = 自身；名称无法解析为编号时缺省。
+   * 消费方（快照回放）用它把具名引用转入存档数据寻址。
+   */
+  resolvedIndex?: number;
   /** 位标志表（CFLAG 位图 / TCVAR:50 位表等） */
   bits?: ReadonlyArray<{ bit: number; label: string }>;
 }
