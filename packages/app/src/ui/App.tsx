@@ -100,6 +100,16 @@ export function App(): ReactElement {
         setPhase('project');
         setRecent(await kernel.project.recent());
 
+        // Rust 侧写允许域注册（M3 纵深防御第二道闸）：
+        // 允许域 = 项目根目录 + appDataDir；失败 fail-closed（仅 appDataDir 可写）并显式报错
+        if (isTauri()) {
+          try {
+            await invoke('register_write_domain', { root: dir });
+          } catch (e: unknown) {
+            setError(`写允许域注册失败（将只允许 appDataDir 写入）: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+
         // 可写路径批准（首次打开必须由用户显式确认；未批准 = 只读浏览）
         const approved = await kernel.project.approvedWritableFor(dir);
         if (!approved) setPendingApproval(p);
@@ -169,6 +179,14 @@ export function App(): ReactElement {
   const closeProject = useCallback(async () => {
     if (!kernel) return;
     await kernel.project.close();
+    // Rust 侧允许域回到「仅 appDataDir」（与 kernel 的 writablePaths 清理同相位）
+    if (isTauri()) {
+      try {
+        await invoke('clear_write_domain');
+      } catch (e: unknown) {
+        setError(`写允许域清除失败: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
     setProject(null);
     setIndex(null);
     setActiveFile(null);

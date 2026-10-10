@@ -7,9 +7,144 @@
 //! 二进制数据经 base64 字符串跨 IPC（确定性强；口上文件体量下开销可忽略）。
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::{Deserialize, Serialize};
+
+/* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
+//
+// JS 层 kernel io 的 writablePaths 白名单是第一道闸；本层是第二道闸：
+// 即便 JS 层被绕过，Rust 命令也只接受「允许域」内的写路径。
+//
+// 允许域 = 项目根目录（project.opened 时由前端注册；project.closed 后清除）
+//        + appDataDir（备份 / 配置 / 存储，常驻允许）。
+// 其余路径一律拒绝并返回明确错误（不静默、fail-closed）。
+//
+// 判定域语义与 kernel writablePaths 一致：项目根目录整体（含游戏目录）。
+// 注意 JS 层的 writablePaths 是项目根的**子集**（用户显式批准）——
+// 语义以更严者为准，双闸并存不冲突。
+
+/// Tauri 托管状态：当前注册的项目根目录（None = 仅 appDataDir 可写）。
+#[derive(Default)]
+struct WriteDomainState {
+    project_root: Mutex<Option<PathBuf>>,
+}
+
+/// 规范化路径：找到最深的已存在祖先做 canonicalize（解析 `..` 与符号链接），
+/// 再把其余组件追加回去。不存在于磁盘的目标（原子写的待建文件）同样可判定。
+fn canonicalize_deep(path: &Path) -> std::io::Result<PathBuf> {
+    let mut cur = path;
+    let mut extra: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match cur.canonicalize() {
+            Ok(canon) => {
+                let mut result = canon;
+                for seg in extra.into_iter().rev() {
+                    result.push(seg);
+                }
+                return Ok(result);
+            }
+            Err(_) => match (cur.parent(), cur.file_name()) {
+                (Some(parent), Some(name)) => {
+                    extra.push(name.to_os_string());
+                    cur = parent;
+                }
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "no existing ancestor to canonicalize",
+                    ))
+                }
+            },
+        }
+    }
+}
+
+/// 组件级前缀比较（Windows 大小写不敏感；`foo` 与 `foobar` 不会误判为包含）。
+fn is_within(canonical_path: &Path, canonical_root: &Path) -> bool {
+    let lower = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    let p = lower(canonical_path);
+    let r = lower(canonical_root);
+    p.len() >= r.len() && p.iter().zip(r.iter()).all(|(a, b)| a == b)
+}
+
+/// 纯逻辑判定（可单测，不依赖 Tauri 类型）：
+/// `project_root` = 当前注册的项目根（可为 None），`app_data_dir` 常驻允许。
+fn ensure_in_write_domain(
+    project_root: Option<&Path>,
+    app_data_dir: &Path,
+    path: &Path,
+    op: &str,
+) -> Result<(), String> {
+    let canon_target = canonicalize_deep(path)
+        .map_err(|e| format!("写允许域（{op}）：路径解析失败 {path_display}: {e}", path_display = path.display()))?;
+    let mut roots: Vec<PathBuf> = vec![app_data_dir.to_path_buf()];
+    if let Some(r) = project_root {
+        roots.push(r.to_path_buf());
+    }
+    for root in &roots {
+        let canon_root = canonicalize_deep(root).map_err(|e| {
+            format!(
+                "写允许域（{op}）：允许域根目录解析失败 {}: {e}",
+                root.display()
+            )
+        })?;
+        if is_within(&canon_target, &canon_root) {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "写允许域拒绝（{op}）：{} 不在允许域内（允许 = 项目根目录 / appDataDir；未打开项目时仅 appDataDir）",
+        path.display()
+    ))
+}
+
+/// 命令侧包装：取 appDataDir + 当前注册的项目根，执行判定。
+fn ensure_write_allowed(
+    app: &tauri::AppHandle,
+    state: &WriteDomainState,
+    path: &Path,
+    op: &str,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    let root = state
+        .project_root
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?
+        .clone();
+    ensure_in_write_domain(root.as_deref(), &app_dir, path, op)
+}
+
+/// project.opened：前端注册项目根目录（允许域 = 项目根 + appDataDir）。
+#[tauri::command]
+fn register_write_domain(state: tauri::State<'_, WriteDomainState>, root: String) -> Result<(), String> {
+    let mut guard = state
+        .project_root
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?;
+    *guard = Some(PathBuf::from(root));
+    Ok(())
+}
+
+/// project.closed：清除项目根（回到仅 appDataDir 可写）。
+#[tauri::command]
+fn clear_write_domain(state: tauri::State<'_, WriteDomainState>) -> Result<(), String> {
+    let mut guard = state
+        .project_root
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?;
+    *guard = None;
+    Ok(())
+}
 
 /* ------------------------------- DTO ------------------------------- */
 
@@ -46,8 +181,15 @@ fn read_file_bytes(path: String) -> Result<String, String> {
 }
 
 /// 原子写：同目录临时文件 + rename（Windows 上 rename 覆盖已存在文件）。
+/// 写允许域第二道闸（M3）：目标路径必须在允许域内。
 #[tauri::command]
-fn write_file_bytes(path: String, data: String) -> Result<(), String> {
+fn write_file_bytes(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    path: String,
+    data: String,
+) -> Result<(), String> {
+    ensure_write_allowed(&app, &state, Path::new(&path), "write")?;
     let bytes = B64.decode(data).map_err(|e| format!("base64 decode: {e}"))?;
     let target = PathBuf::from(&path);
     let dir = target
@@ -70,7 +212,12 @@ fn write_file_bytes(path: String, data: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn ensure_dir(path: String) -> Result<(), String> {
+fn ensure_dir(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    path: String,
+) -> Result<(), String> {
+    ensure_write_allowed(&app, &state, Path::new(&path), "ensure_dir")?;
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
@@ -148,12 +295,27 @@ fn stat_file(path: String) -> Option<FileStatDto> {
 }
 
 #[tauri::command]
-fn rename_path(from: String, to: String) -> Result<(), String> {
+fn rename_path(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    // rename 同时改动 from（移走）与 to（写入），两端都在允许域内才放行
+    ensure_write_allowed(&app, &state, Path::new(&from), "rename_src")?;
+    ensure_write_allowed(&app, &state, Path::new(&to), "rename_dst")?;
     std::fs::rename(&from, &to).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn copy_file(from: String, to: String) -> Result<(), String> {
+fn copy_file(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    // from 是读取源（读路径不受允许域限制）；to 是写入目标，必须过闸
+    ensure_write_allowed(&app, &state, Path::new(&to), "copy_dst")?;
     if let Some(parent) = Path::new(&to).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -161,7 +323,12 @@ fn copy_file(from: String, to: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn remove_file(path: String) -> Result<(), String> {
+fn remove_file(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    path: String,
+) -> Result<(), String> {
+    ensure_write_allowed(&app, &state, Path::new(&path), "remove")?;
     std::fs::remove_file(&path).map_err(|e| e.to_string())
 }
 
@@ -248,6 +415,7 @@ fn encode_string(text: String, encoding: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(WriteDomainState::default())
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
             write_file_bytes,
@@ -261,9 +429,160 @@ pub fn run() {
             remove_file,
             choose_directory,
             app_data_dir,
+            register_write_domain,
+            clear_write_domain,
             decode_bytes,
             encode_string
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/* ------------------------------- 单测（M3） ------------------------------- */
+
+#[cfg(test)]
+mod write_domain_tests {
+    use super::{canonicalize_deep, ensure_in_write_domain, is_within};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "kojo-m3-{}-{}-{tag}-{n}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn mkdir(p: &Path) -> PathBuf {
+        std::fs::create_dir_all(p).unwrap();
+        p.to_path_buf()
+    }
+
+    #[test]
+    fn inside_project_root_allowed() {
+        let root = temp_root("in");
+        let sub = mkdir(&root.join("scenario").join("ERB"));
+        // 深层不存在文件（原子写待建目标）也应在域内
+        ensure_in_write_domain(Some(&root), &temp_root("appdata"), &sub.join("new.erb"), "write")
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn app_data_dir_always_allowed() {
+        let appdata = temp_root("app");
+        let project = temp_root("proj");
+        ensure_in_write_domain(Some(&project), &appdata, &appdata.join("backup").join("v1.dat"), "write")
+            .unwrap();
+    }
+
+    #[test]
+    fn outside_domain_rejected() {
+        let project = temp_root("proj");
+        let other = temp_root("other");
+        let err = ensure_in_write_domain(
+            Some(&project),
+            &temp_root("appdata"),
+            &other.join("evil.erb"),
+            "write",
+        )
+        .unwrap_err();
+        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn no_project_root_registered_rejects_everything_but_appdata() {
+        let other = temp_root("other");
+        let appdata = temp_root("appdata");
+        // 未注册项目（None）：域外路径一律拒绝
+        let err = ensure_in_write_domain(None, &appdata, &other.join("x.erb"), "write").unwrap_err();
+        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        // appDataDir 仍可写（备份 / 配置）
+        ensure_in_write_domain(None, &appdata, &appdata.join("config.json"), "write").unwrap();
+        let _ = std::fs::remove_dir_all(&other);
+        let _ = std::fs::remove_dir_all(&appdata);
+    }
+
+    #[test]
+    fn traversal_via_dotdot_rejected() {
+        let base = temp_root("base");
+        let project = mkdir(&base.join("project"));
+        let outside = mkdir(&base.join("outside"));
+        // 字符串以项目根开头，但 .. 穿越到域外
+        let sneaky = project.join("sub").join("..").join("..").join("outside").join("x.erb");
+        let err =
+            ensure_in_write_domain(Some(&project), &temp_root("appdata"), &sneaky, "write").unwrap_err();
+        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        let _ = outside; // 保持存在
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn traversal_resolved_when_target_exists_rejected() {
+        let base = temp_root("base");
+        let project = mkdir(&base.join("project"));
+        let outside = mkdir(&base.join("outside"));
+        std::fs::write(outside.join("secret.erb"), "x").unwrap();
+        let sneaky = project.join("..").join("outside").join("secret.erb");
+        assert!(
+            ensure_in_write_domain(Some(&project), &temp_root("appdata"), &sneaky, "remove").is_err()
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn symlink_escaping_domain_rejected() {
+        let base = temp_root("base");
+        let project = mkdir(&base.join("project"));
+        let outside = mkdir(&base.join("outside"));
+        let link = project.join("link");
+        if std::os::windows::fs::symlink_dir(&outside, &link).is_err() {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        let err = ensure_in_write_domain(
+            Some(&project),
+            &temp_root("appdata"),
+            &link.join("evil.erb"),
+            "write",
+        )
+        .unwrap_err();
+        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn prefix_is_component_wise_not_string_prefix() {
+        let base = temp_root("base");
+        let project = mkdir(&base.join("project"));
+        // sibling 目录名是项目根的字符串前缀（projec vs project）
+        let sibling = mkdir(&base.join("projec"));
+        assert!(
+            ensure_in_write_domain(Some(&project), &temp_root("appdata"), &sibling.join("f.txt"), "write")
+                .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn canonicalize_deep_keeps_missing_tail() {
+        let base = temp_root("base");
+        let root = mkdir(&base.join("root"));
+        let target = root.join("a").join("b").join("new.txt");
+        let canon = canonicalize_deep(&target).unwrap();
+        assert!(is_within(&canon, &root.canonicalize().unwrap()));
+        assert!(canon.ends_with("new.txt"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

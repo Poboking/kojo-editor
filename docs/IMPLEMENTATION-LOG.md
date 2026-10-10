@@ -373,3 +373,33 @@
 #### 回归说明（不静默）
 
 `pnpm audit:decoupling` 本批在**并行线 C7 的未提交改动**上报红——`packages/app/src-tauri/src/lib.rs:484` 出现裸 `sav` 词（`v1.sav`）触发 A 项黑名单。该文件属另一条线（Rust 写保护），**不在本批边界内、未改动**；本批新增代码（`ui-state-replay`）零审计违规。
+
+### 5.21 Rust 侧写路径纵深防御（v0.2 第十四批实施记录：写允许域第二道闸）
+
+> 依据：docs/CODE-REVIEW-2026-10-10.md L68-70（M3 遗留）+ docs/REVIEW-OPTIMIZATION-2026-10-10.md §5 C7——「M3 必须优先于 v1.1 注入器：注入器本身是写路径，无第二道闸不能开写」。本批只动 packages/app/src-tauri/**、kernel io 契约注释、docs/**。
+
+#### 允许域语义
+
+- **允许 = 项目根目录整体（含游戏目录，与 kernel writablePaths 的判定域一致）+ appDataDir（备份/配置/存储，常驻允许）**；其余路径一律拒绝并返回明确错误（不静默、fail-closed）。
+- 与 JS 层第一道闸的关系：kernel io 的 writablePaths 是项目根的**用户批准子集**；Rust 闸判定域更宽（项目根整体）但独立生效——双闸并存，语义以更严者为准。kernel io.ts 契约与行为零改动（仅头注释补双闸说明）。
+- 域生命周期：project.opened 时前端 invoke register_write_domain 注册项目根；project.closed 时 invoke clear_write_domain 回到「仅 appDataDir」。注册失败 fail-closed（仍只允许 appDataDir）并显式 setError。
+
+#### 实现（packages/app/src-tauri/src/lib.rs）
+
+- WriteDomainState（Mutex<Option<PathBuf>>）经 tauri .manage 托管；register_write_domain / clear_write_domain 两个新命令。
+- 判定核心为纯函数（不依赖 Tauri 类型，可单测）：canonicalize_deep（最深已存在祖先 canonicalize 解析 .. 与符号链接 + 追加不存在尾部——待建的原子写目标同样可判定）→ is_within（组件级前缀比较，Windows 大小写折叠，projec/project 这类字符串前缀兄弟目录不误判）→ ensure_in_write_domain。
+- 上闸命令（六处）：write_file_bytes（目标）/ ensure_dir / rename_path（from+to 双端）/ copy_file（仅 to，from 是读）/ remove_file。读路径（read_file_bytes/list_dir/walk_dir/stat_file/path_exists）不受允许域限制——「游戏目录整体只读假设」的读侧本就开放。
+- 已知边界：检查与写入之间存在 TOCTOU 窗口（check-then-write 非原子）；纵深防御语境下可接受（JS 闸 + 用户批准仍在），如后续需要可改 fd 级锁定。
+
+#### 测试（cargo test，9 项全绿）
+
+域内放行（含深层不存在文件）/ appDataDir 常驻放行 / 域外拒绝 / 未注册项目时仅 appDataDir 放行 / 字符串以项目根开头但 .. 穿越到域外拒绝 / 目标已存在的 .. 穿越拒绝 / 符号链接逃逸拒绝（Windows symlink_dir 权限不足时跳过）/ 组件级前缀不误判 / canonicalize_deep 保留不存在尾部。
+
+#### 验证
+
+- cargo test 9/9 ✅；cargo check ✅；pnpm test 470 项全绿（基线 456 + 归档浏览器后续 +14）；typecheck root+app ✅；audit:decoupling ✅（11 插件；本批曾被裸 sav 词抓出一次——单测文件名字符串，改 v1.dat 后全绿，A 项黑名单连测试字符串都查，好样的）；真实工程集成冒烟（游戏目录读不受影响）✅。
+- 桌面壳端到端（Rust 闸在真实 IPC 下的表现）沙箱不可跑（os error 231 欠账），需正常终端跑 pnpm tauri dev 手工冒烟：开项目后向域外写应被拒、域内写正常。
+- 前端接线（App.tsx）：openProject 注册 / closeProject 清除，均在 isTauri() 守卫内（浏览器 dev 模式无 Rust 宿主）。
+
+---
+

@@ -20,7 +20,11 @@ import { basename, isPathUnder, join, pathKey } from '@kojo/plugin-api';
  * - 写路径白名单：默认空（一切拒绝）；项目打开并由用户批准后 setWritableRoots 放行；
  * - 越权写入抛 WriteNotAllowedError——写保护是内核级不变量，不依赖调用方自觉；
  * - 写前自动备份（{appDataDir}/backup/，按文件保留最近 N 版）+ 原子写（平台桥保证）；
- * - 编码保持：读时探测并缓存，写时默认 'preserve'（一次保存毁半库是历史教训）。
+ * - 编码保持：读时探测并缓存，写时默认 'preserve'（一次保存毁半库是历史教训）；
+ * - **双闸并存**（v0.2 第十四批，审阅 M3）：本层白名单是第一道闸（判定域 = 用户批准的
+ *   writablePaths，是项目根的子集）；Tauri 宿主 Rust 侧另有写允许域第二道闸
+ *   （判定域 = 项目根整体 + appDataDir，project.opened 注册 / project.closed 清除）。
+ *   两闸语义以更严者为准；本层契约与行为不变。
  */
 
 const BACKUP_KEEP_PER_FILE = 20;

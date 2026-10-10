@@ -328,9 +328,21 @@ node tools/smoke-tauri-dom.mjs
 - **验证**：470 项全绿（+14）/ typecheck root+app ✅ / 真实工程冒烟通过。**audit:decoupling 报红 = 并行线 C7 未提交的 `lib.rs:484` 裸 `sav` 词（非本批文件）**。
 - 边界：仅 `packages/plugins/ui-state-replay/**` + 两份文档；未碰 `packages/app/src-tauri/**` 与 kernel io（C7 线）。
 
+### 6.14 第十四批线二（✅ 已完成）：C7 Rust 侧写路径纵深防御（M3）
+
+**实施结果**：Rust 写允许域第二道闸落地（IMPLEMENTATION-LOG §5.21 为权威记录）。
+
+- **允许域语义**：允许 = 项目根目录整体（含游戏目录，与 kernel writablePaths 判定域一致）+ appDataDir（备份/配置，常驻）；其余一律拒绝并明确报错（不静默、fail-closed）。双闸并存——kernel io writablePaths（用户批准子集）语义不变，以更严者为准。
+- **生命周期**：`register_write_domain`（project.opened 时 App.tsx 注册项目根）/ `clear_write_domain`（project.closed 回到仅 appDataDir）；注册失败 fail-closed + 显式 setError。均在 `isTauri()` 守卫内。
+- **上闸命令六处**：write_file_bytes / ensure_dir / rename_path（from+to 双端）/ copy_file（仅 to）/ remove_file；读路径不受限。判定核心纯函数化（canonicalize_deep 解析 `..` 与符号链接 + is_within 组件级大小写折叠前缀比较），可脱离 Tauri 单测。
+- **测试**：cargo test 9/9（域内放行 / 域外拒绝 / 未注册拒绝 / `..` 穿越两种 / 符号链接逃逸 / 组件级前缀不误判 / 深层不存在文件）；kernel io 契约与行为零改动（仅注释补双闸说明）。
+- **验证**：470 项全绿 / typecheck root+app ✅ / audit 11 插件 ✅（§6.13 提到的 `lib.rs:484` 裸 sav 词已修——单测字符串 `v1.sav`→`v1.dat`）/ cargo check ✅ / 真实工程集成冒烟 ✅。桌面壳端到端手工冒烟（真实 IPC 下域外写被拒）沙箱不可跑，需正常终端 `pnpm tauri dev` 验证。
+- 边界：仅 `packages/app/src-tauri/**` + `App.tsx`（注册/清除接线）+ kernel io.ts 注释 + docs。**M3 收口，v1.1 注入器的第二道闸前置条件达成**。
+
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
+- **双闸并存**（v0.2 第十四批 M3）：kernel io 白名单（第一道闸）+ Rust 宿主写允许域（第二道闸：项目根整体 + appDataDir，project.opened 注册 / project.closed 清除），语义以更严者为准；
 - 写回**保编码保换行**（首读探测缓存：utf-8-bom / utf-8 / shift_jis / utf-16；eol 多数派）；
 - 原子写（临时文件+rename）+ 自动备份 `{appData}/backup/{hash}/`（保留 20 版）；
 - UI 侧「只读浏览」永远可用（未批准 = 不可写，不阻塞浏览）。
@@ -379,7 +391,7 @@ node tools/smoke-tauri-dom.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：456 项 / ✅ / 11 插件）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（原 ARCH §5.8–§5.19 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **开始第十四批**（见 §6.12 末）：**v1.1 注入器用户面**（改槽注入 UI → 含修改金样本回归 → 写盘走 writablePaths+备份）或 **v1.0 收口**（回放面板场景预设 / 桌面壳真实终端冒烟）；审阅遗留 M1（stop 级联）/ M3（Rust 路径约束）随 v0.3 排入
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：470 项 / ✅ / 11 插件）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.21 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
+4. **下一批候选**：**v1.1 注入器用户面**（改槽注入 UI → 含修改金样本回归 → 写盘走 writablePaths+备份；Rust 第二道闸已就位）或 **v1.0 收口剩余**（回放面板场景预设 / 桌面壳真实终端冒烟——C7 的端到端手工验证也在此还账）；审阅遗留 M1（stop 级联）随 v0.3 排入
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`
