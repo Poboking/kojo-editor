@@ -1,10 +1,11 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 ✅ / 第四批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 ✅ / 第四批 ✅ / 第五批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
 > 第二批：函数树导航（`ui-kojo-navigator`）；
 > 第三批：条件谓词抽取（`condition-extractor`）+ 导航条件徽章 + adapter 变量字典；
-> 本会话完成 **v0.2 第四批：存档快照源（`sav-parser`，服务 `snapshot.source`）——v1.0 快照回放的读侧地基**。
+> 第四批：存档快照源（`sav-parser`，服务 `snapshot.source`）；
+> 本会话完成 **v0.2 第五批：状态回放引擎（`state-replay`，服务 `state.replay`）——快照 → 状态视图 → 谓词三值求值 + 置信度三档，v1.0 快照回放的求值侧地基**。
 
 ---
 
@@ -34,15 +35,22 @@
   3. **契约**：`plugin-api/conditions.ts`（AST/依赖/索引/服务）+ `ControlFlowStatement`（erb.ts）。
   4. **adapter `variableSchema`**（CSV 驱动）：扫描游戏 `CSV/*.csv` 名称表（33 张）建编号↔名称双向字典；引擎经槽位查询透传标注（恋慕/好感度…）。
   5. **导航条件徽章**：`ui-kojo-navigator` 函数行显示 schema 标签徽章（悬停看阈值）。
-- **v0.2 第四批完成**（本会话）：**存档快照源（`sav-parser` 插件，服务 `snapshot.source`）**——v1.0 快照回放的读侧地基。
+- **v0.2 第四批完成**（第四批会话）：**存档快照源（`sav-parser` 插件，服务 `snapshot.source`）**——v1.0 快照回放的读侧地基。
   1. **契约 `plugin-api/snapshot.ts`**：`SnapshotArchive`（元数据 + 角色区 + 变量区 + EM 扩展区）/ 变量模型（标量 / 稀疏数组 / Map / Xml / DataTable）/ 扫描结果 / `SnapshotSourceService`（scan / current / parse / subscribe）。**服务键命名决策 `snapshot.source`**（非 `sav.parser`）：审计 A 项禁裸 `sav` 词（契约层零游戏/格式名词），且"快照来源"语义本就是三来源（sav/CliDebug/手工）的统称——架构 §5.10 有记录。
   2. **新插件 `sav-parser`**（第 8 个插件）：字节原语（7-bit **字节数**前缀字符串 / 整数编码）+ 六种数组游程解码 + 顶层 / 角色块 / 变量流 / EM 区解析 + gzip（`DecompressionStream`，跨 Node/WebView，不 import node:zlib）。**纯读先行**（写 / 注入随 v1.1）。
   3. **响应式**：订阅 `project.opened` 扫 `project.savDir`（`headerOnly` 浅解析列档，6 档 27ms）；`project.closed` 清空；代际保护；无 `savDir` → 空结果（显式）。
   4. **测试**：58 项单测（合成字节 round-trip 全类型 + 错误路径 + 编排）+ 集成冒烟六档断言 + 与逆向 CJS 解析器逐字段交叉对拍（一次性，16,000 变量/档全等）。
+- **v0.2 第五批完成**（本会话）：**状态回放引擎（`state-replay` 插件，服务 `state.replay`）**——v1.0 快照回放的**求值侧**地基。
+  1. **契约 `plugin-api/replay.ts`**：`ReplayStateView`（状态视图）/ `ReplayValue`·`ReplayOutcome`（三值）/ `ReplayUnknown`（原因分类 16 种）/ `FunctionReplay`（置信度三档）/ `StateReplayService`。
+  2. **新插件 `state-replay`**（第 9 个插件）：Emuera 变量寻址语义（TARGET 补位 `X:i`≡`X[TARGET,i]`、全局 `X`≡`X:0`、MASTER/ASSI 顶层指针、#DIM 数据驱动）+ **三值求值器**（Kleene：`false && unknown = false`）+ 编排（createView / replayFunction / replayFunctions）。
+  3. **condition-extractor 扩展**：`functionPredicates()` 按需谓词明细（读文件 → `scanControlFlow` → 逐条 AST；**不入全量索引**，文件文本 + 明细双缓存，索引重建自动失效）；契约新增 `FunctionPredicate`/`FunctionPredicates`。
+  4. **adapter 契约扩展**：`VariableInfo.resolvedIndex`（具名索引 → 编号：`TALENT:恋慕` → 3，引擎关键字字典语义）。
+  5. **测试**：62 项 state-replay 单测（连 Kleene/寻址全类别/错误路径/编排）+ 4 项明细 API 测试 + 集成冒烟回放断言。
 - **存档解析基线（2026-10-10 实测）**：六档全绿——168 角色/档、16,005 变量/档（save00 16,000）、`#DIM` 恒 65、MASTERNAME 7/168、RANDDATA saveLen 625（**save00 nonEmpty=0 全零剪枝实证** / save01+ 全量）、MONEY 51 亿（Int64 路径）、EM 区 2 张 DT 表、**残余 0B**。
+- **状态回放基线（2026-10-10 实测）**：save03 × 古明地觉（K49）全量回放 **1,356 个含谓词函数 / 11,685 谓词**——命中 773 / 未命中 3,561 / 未知 7,351；置信度 exact 230 / partial 755 / unknown 371。**未知主要来源 = `ARG:*`/`ARGS` 语言局部量**（口上路由高频形态；回放无调用上下文）——列为第六批第一优先（调用上下文模拟）。
 - **真实工程基线（2026-10-10 实测）**：168 角色 / 2,285 ERB / 99,104 函数 / 去重名 99,101；家族识别 98.91%（109 家族）；索引 ~2.9s；约定校验 757 项（~9s）。
 - **条件抽取基线**：95,504 函数 / **493,712 谓词（未解析 187 = 0.04%）** / 含依赖函数 31,609 / 依赖条目 164,910 / schema 标注 109,742（恋慕 17,993 / 好感度 480）/ 全量 ~6.2s（冷启动 ~13s）。
-- 测试：**267 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**8 插件**）。
+- 测试：**333 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**9 插件**）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -61,34 +69,42 @@
 packages/
 ├── plugin-api/src/
 │   ├── conventions.ts         # 约定校验器契约（规则/问题/上下文/报告/服务）
-│   ├── conditions.ts          # 条件谓词契约（ConditionExpr AST / StateDependency / ConditionIndex / 服务）
-│   ├── snapshot.ts            # ★ 存档快照源契约（ArchiveMeta/SnapshotArchive/变量模型/扫描/服务）
-│   ├── services.ts            # +WellKnownServices.ConditionExtractor / +SnapshotSource='snapshot.source'
+│   ├── conditions.ts          # 条件谓词契约（ConditionExpr AST / StateDependency / ConditionIndex / 服务 + ★FunctionPredicate(s) 明细）
+│   ├── snapshot.ts            # 存档快照源契约（ArchiveMeta/SnapshotArchive/变量模型/扫描/服务）
+│   ├── replay.ts              # ★ 状态回放契约（ReplayStateView / ReplayValue·ReplayOutcome / ReplayUnknown / FunctionReplay / StateReplayService）
+│   ├── services.ts            # +WellKnownServices.ConditionExtractor / SnapshotSource='snapshot.source' / ★StateReplay='state.replay'
 │   ├── events.ts              # +KernelEventMap['editor.revealLocation']
 │   ├── erb.ts                 # ErbParserService +currentIndex()/ensureIndex()/scanControlFlow()；+ControlFlowStatement
-│   └── game.ts                # VariableSchema/VariableInfo（第三批起被消费）
+│   └── game.ts                # VariableSchema/VariableInfo（★+resolvedIndex：具名索引→编号）
 ├── kernel/src/bus.ts          # +KERNEL_EVENT_NAMES: 'editor.revealLocation'
 ├── plugins/
 │   ├── erb-parser/src/
 │   │   ├── scanner.ts         # +scanControlFlow（控制流骨架：配对/深度/条件原文/宽容）
 │   │   └── plugin.ts          # 服务暴露 scanControlFlow
 │   ├── eratw-adapter/src/
-│   │   ├── variable-schema.ts # 变量字典（CSV 驱动；33 张名称表；编号↔名称双向）
+│   │   ├── variable-schema.ts # 变量字典（CSV 驱动；33 张名称表；编号↔名称双向 + ★resolvedIndex 填充）
 │   │   ├── conventions.ts     # eraTW 4 条规则（KX/四件套/FORM/MESSAGECHECK）
 │   │   └── constants.ts       # +csvDir
 │   ├── convention-linter/src/ # 引擎（engine.ts + rules/duplicate-function.ts）
-│   ├── condition-extractor/src/ # 条件抽取（expr/extract/engine/index）
-│   ├── sav-parser/src/        # ★ v0.2 第四批：存档快照源
+│   ├── condition-extractor/src/ # 条件抽取（expr/extract/engine/index；★+functionPredicates 明细 API + 双缓存）
+│   ├── sav-parser/src/        # 存档快照源（v0.2 第四批）
 │   │   ├── binary.ts          #   ByteReader：7-bit 字节数前缀 / 整数编码 / 越界即抛
 │   │   ├── arrays.ts          #   六种数组游程解码（0xF0/F1/F2/E0/E1/D8；cells 省略/截断）
 │   │   ├── parse.ts           #   文件级解析（魔数/版本/顶层/角色块/变量流/EM 区）
 │   │   ├── gunzip.ts          #   DecompressionStream gzip（Web 标准，不 import node:zlib）
 │   │   ├── engine.ts          #   扫描编排（浅解析列档 / 并发 4 / 代际保护 / 订阅）
 │   │   └── index.ts           #   装配（requires: kernel.io/kernel.project）
+│   ├── state-replay/src/      # ★ v0.2 第五批：状态回放引擎
+│   │   ├── var-model.ts       #   引擎级变量清单（角色 22+4+CSTR+CDFLAG / 全局 / 伪变量 / 局部量）
+│   │   ├── state-view.ts      #   归约（按 NO 定位角色块 / TARGET 补位 / 稀疏取值 / 越界与截断显式）
+│   │   ├── evaluate.ts        #   三值求值器（Kleene / 整数除法截断 / BigInt 位运算 / 字符串 ==）
+│   │   ├── engine.ts          #   编排（createView / replayFunction(s) / replayPredicates 纯函数）
+│   │   └── index.ts           #   装配（requires: kernel.project/kernel.slots/snapshot.source/condition.extractor）
 │   ├── ui-convention-report/src/index.ts # ui.panel 面板（订阅 linter；点击 → revealLocation）
-│   └── ui-kojo-navigator/src/          # 函数树导航（tree.ts 纯逻辑 + index.ts 面板 + 条件徽章）
+│   ├── ui-kojo-navigator/src/          # 函数树导航（tree.ts 纯逻辑 + index.ts 面板 + 条件徽章）
+│   └── ui-plugin-status/src/           # 插件状态面板
 └── app/src/
-    ├── bootstrap.ts           # 注册 8 个插件
+    ├── bootstrap.ts           # 注册 9 个插件
     ├── ui/App.tsx             # 订阅 kojo.functionChanged / editor.revealLocation
     ├── ui/ProjectView.tsx     # 透传 reveal
     ├── ui/EditorPane.tsx      # revealLine/revealNonce → Monaco revealLineInCenter
@@ -100,10 +116,10 @@ packages/
 ```bash
 cd D:\DSH\kojo-editor
 pnpm install
-pnpm test               # 267 项（无游戏目录时集成冒烟自动跳过）
+pnpm test               # 333 项（无游戏目录时集成冒烟自动跳过）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
-pnpm audit:decoupling   # 必须 ✅（plugins 数 8）
-# 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档断言）：
+pnpm audit:decoupling   # 必须 ✅（plugins 数 9）
+# 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放断言）：
 KOJO_SMOKE_PROJECT="D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
 # 桌面壳（会弹窗 ~100s 自动关闭）：
 node tools/smoke-tauri-dom.mjs
@@ -116,28 +132,30 @@ node tools/smoke-tauri-dom.mjs
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
 5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
 
-## 六、v0.2 第三批（✅ 已完成）：条件谓词抽取 `condition-extractor`
+## 六、v0.2 批次记录（第三批～第五批，✅ 全部完成）
+
+### 6.1 第三批：条件谓词抽取 `condition-extractor`
 
 **实施结果**：三层落地全部完成——结构（`scanControlFlow`）/ 谓词（`condition-extractor` 插件）/ 语义（adapter `variableSchema` CSV 驱动）。
 
-### 6.1 交付清单
+#### 交付清单
 - **`scanControlFlow`**（erb-parser `scanner.ts` + 服务）：线性控制流骨架（kind/表达式原文/块深度/行号）；配对表以引擎 `FunctionIdentifier.cs funcMatch` 为准；孤儿闭合宽容；11 项单测。
 - **`condition-extractor` 插件**（服务 `condition.extractor`）：`expr.ts`（表达式 tokenizer + Pratt 解析：全运算符 + `[[词]]` + 括号索引段 + opaque 降级）/ `extract.ts`（CASE 展开、依赖聚合、语言局部量排除、schema 标注）/ `engine.ts`（全量编排：并发 8、两指针切片、代际保护）/ `index.ts`（装配）。32 项单测。
 - **契约**：`plugin-api/conditions.ts`（`ConditionExpr`/`VariableRef`/`StateDependency`/`FunctionConditions`/`ConditionIndex`/服务）；`plugin-api/erb.ts` +`ControlFlowStatement`。
 - **adapter `variableSchema`**：`variable-schema.ts`（扫描 `CSV/*.csv` 名称表 33 张；编号↔名称双向 lookup）；`constants.csvDir`。7 项单测。
 - **导航条件徽章**：`ui-kojo-navigator` 函数行显示 schema 标签（恋慕/好感度…）+ `+n` 折叠；悬停看阈值；`.nav-badge.cond` 样式。
 
-### 6.2 关键设计（详见 ARCHITECTURE §5.9）
+#### 关键设计（详见 ARCHITECTURE §5.9）
 - 谓词**聚合**存储（函数级 `StateDependency`），不存全量谓词对象——49 万谓词的量级必须聚合控制内存。
 - `opaque` 降级**绝不抛错**；未解析计数显式呈现（不静默）；未解析率 0.04%。
 - 局部量排除名单（LOCAL/ARG/RESULT/COUNT 系）是**通用语言知识**（Emuera 内置），不违"零游戏知识"。
 - schema 标注按 `project.adapterId` 精确匹配（复用 ADR-0002 槽位查询通道）。
 
-### 6.3 真实数据口径（排障用）
+#### 真实数据口径（排障用）
 - KX 占位符 603 条出自"函数名去重计"；条件抽取 95,504 函数中 31,609 含状态依赖（66.9% 函数无状态条件 = 大量纯文本/工具函数）。
 - `CFLAG:2`（好感度）条件依赖合计 480 函数——比想象少（作者更常用 `TALENT:恋慕` 门禁，17,993 函数）；矩阵设计时以 TALENT 维度为主。
 
-### 6.4 第四批（✅ 已完成）：存档快照源（`sav-parser` 先行）
+### 6.2 第四批（✅ 已完成）：存档快照源（`sav-parser` 先行）
 
 **实施结果**：契约 + 插件 + 测试 + 集成全量落地（架构 §5.10 为权威记录）。
 
@@ -146,11 +164,23 @@ node tools/smoke-tauri-dom.mjs
 - **真实回归**：与逆向 CJS 解析器逐字段对拍（六档全等，16,000 变量/档）；集成冒烟六档断言（零残余 / #DIM 65 / MASTERNAME 7 / RANDDATA 剪枝实证 / MONEY 51 亿 / EM 2 表）。
 - **写侧（v1.1）未动**：金样本"原样写回逐字节对比"与注入 UI 是后续阶段。
 
-### 6.5 第五批候选（下一批）
+### 6.3 第五批（✅ 已完成）：状态回放引擎（`state-replay`）
 
-- **`state-replay`（v1.0 主体）**：消费 `snapshot.source` + `condition.extractor` + adapter `stateModel`——快照 → 条件求值 → "该状态下命中哪些分支"（置信度三档标注），差异化核心的下一步。
-- **ui-condition-matrix（面板）**：消费 `condition.extractor` 全量索引——按角色/家族聚合"哪些函数依赖哪些状态"；MESSAGECHECK 位可视化。
-- **归档浏览器面板**（`ui-*` 候选）：消费 `snapshot.source` 列档（saveMes / 角色数 / 大小），点击看摘要——把第四批成果第一次带上 UI。
+**实施结果**：契约 + 插件 + condition-extractor 明细扩展 + 测试 + 集成全量落地（架构 §5.11 为权威记录）。
+
+- **契约 `plugin-api/replay.ts`**：`ReplayStateView` / `ReplayValue`·`ReplayOutcome`（三值）/ `ReplayUnknown`（16 种原因分类）/ `FunctionReplay`（置信度三档）/ `StateReplayService`。服务键 **`state.replay`**。
+- **插件 `state-replay`（第 9 个）**：`var-model.ts`（引擎级变量清单）/ `state-view.ts`（归约：按 NO 定位角色块、TARGET 补位、稀疏取值、越界与截断显式）/ `evaluate.ts`（三值求值：Kleene / 整数除法截断 / BigInt 位运算 / 字符串 `==`）/ `engine.ts`（编排）/ `index.ts`（装配）。62 项单测。
+- **condition-extractor 扩展**：`functionPredicates(name)` 按需明细（读文件 → `scanControlFlow` → 逐条 AST；不入全量索引；文件文本 + 明细双缓存，索引重建失效）；`extractFunctionPredicates` / `collectPredicates` 导出；4 项新单测。
+- **adapter 契约扩展**：`VariableInfo.resolvedIndex`（具名索引 → 编号：`TALENT:恋慕` → 3；variable-schema 填充）。
+- **真实回归**：save03 × 古明地觉（K49）全量回放 1,356 函数 / 11,685 谓词（命中 773 / 未命中 3,561 / 未知 7,351；exact 230 / partial 755 / unknown 371）。
+
+### 6.4 第六批候选（下一批）
+
+- **调用上下文模拟（第一优先）**：回放未知率的主因是 `ARG:*`/`ARGS` 语言局部量（口上路由协议高频形态）。消解方案 = **adapter 提供口上调用协议**（`KOJO_MESSAGE_SEND(ARGS, ARG:1, ARG:2, …)` 的调用签名语义：ARG:2=目标、ARGS=场景串等，游戏知识住 adapter）→ state-replay 在视图上注入调用参数。预期把未知率从 ~63% 大幅下压。
+- **`ui-state-replay` 回放面板**：选档（快照扫描结果）→ 选角色 → 选函数（或从导航面板"回放此函数"）→ 逐条谓词真值 + 置信度徽章；消费 `state.replay`。
+- **分支链重建**：用 `FunctionPredicates.statements`（含 ELSE/ENDIF）重建 IF/ELSEIF/ELSE 链 → "会走哪个分支"（比逐条谓词更接近作者视角）。
+- **归档浏览器面板**：消费 `snapshot.source` 列档（saveMes / 角色数 / 大小），点击看摘要。
+- **ui-condition-matrix（条件矩阵）**：按角色/家族聚合状态依赖；MESSAGECHECK 位可视化。
 - **导航面板增强**：收藏/最近访问；面上条件维度聚合。
 - `watchDirs` 文件监视（现为手动刷新；后续走 Rust notify）→ 增量重建索引。
 - Monaco bundle 4.3MB 拆分（manualChunks，低优先级）。
@@ -188,11 +218,16 @@ node tools/smoke-tauri-dom.mjs
 7. **双 lib 类型环境（node vs DOM）对 Web API 的严格度不同**（第四批）：`new Blob([bytes])` 在 root tsconfig（@types/node）通过、在 app tsconfig（DOM lib）报 `Uint8Array<ArrayBufferLike>` 不满足 `BlobPart`（SharedArrayBuffer 不兼容性）。修法：`new Uint8Array(bytes)` 复制到独立 ArrayBuffer 支撑数组，两套定义下均兼容。**tsc 必须 root + app 双跑**。
 8. **vite build 的 `prepare-out-dir` 偶发 EPERM**（第四批）：清空 `packages/app/dist/assets` 时报 Permission denied（文件瞬时占用），手动 `fs.rmSync(dist, {recursive, force})` 后重试即过——不是代码问题。
 9. **批次编号勘误**（第四批会话）：`conditions.ts` 头注释与 ARCHITECTURE §5.9 曾写"条件抽取=第四批"，与 HANDOFF 口径（第三批）不一致；已统一为——**第三批=条件抽取、第四批=sav-parser**（判据：函数树=第二批在工作日志与 HANDOFF 双证）。
+10. **TS7 对"联合字面量属性"的判别式 narrow 不可靠**（第五批）：`ArchiveScalarVariable.type` 是 `'int' | 'str'`（联合属性），`if (v.type === 'int' || v.type === 'str') return ...` 之后 TS 仍不把该变体从后续代码排除（报"Property 'saveLen' does not exist on ArchiveScalarVariable"）。修法：**显式类型守卫**（`isArrayVar(v): v is ArchiveArrayVariable`）替代判别式 narrow。
+11. **变量寻址语义必须回引擎源码逐行核验**（第五批，§九-1 的再次应验）：`CFLAG:2` ≡ `CFLAG[TARGET,2]`、裸 `CFLAG` ≡ `CFLAG[TARGET,0]`（角色 1D）、裸 `DAY` ≡ `DAY:0`（全局 1D）——全部来自 `VariableParser.ReduceVariable`（:102-133 角色分支 / :153-170 全局分支），不是直觉推断。求值器的每个寻址分支都注了源码行号。
+12. **JS 数字语义与 C# 的两处硬差异**（第五批）：①整数除法是**截断**（`-7/2 = -3`，Math.trunc，非 floor）；②位运算符（`& | ^ << >>`）在 JS 是 **32 位**——`1 << 40` 会得到 256 而非 2^40，必须经 BigInt 中转（`Number(BigInt(a) << BigInt(b))`，并先 `Number.isInteger` 检查）。
+13. **同文件并行 Edit 必 EBUSY；且 Edit 偶发"声称成功未落盘"**（第五批复现，§八同款）：一次消息里对同一文件发多个 Edit 工具调用 → 第二个报 `EBUSY: resource busy or locked`；另有一次 Edit 报告成功但 `isArrayVar` 定义实际未写入（grep 复核时发现）。**同文件多次 Edit 必须逐条串行 + 关键修改后读回验证**。
+14. **vitest 4 没有 `--reporter=basic`**（第五批）：传了会直接 Startup Error（"Failed to load custom Reporter from basic"）；用默认 reporter 即可（console.log 默认可见）。
 
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：267 项 / ✅ / 8 插件）
-3. 读 `docs/ARCHITECTURE.md` §5.8–§5.10 + 本文件 §六
-4. **开始 v0.2 第五批 / v1.0 主体**（见 §6.5）：`state-replay`（消费 `snapshot.source` + `condition.extractor`）或先做条件矩阵 / 归档浏览器面板
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：333 项 / ✅ / 9 插件）
+3. 读 `docs/ARCHITECTURE.md` §5.8–§5.11 + 本文件 §六
+4. **开始第六批 / v1.0 收口**（见 §6.4）：首选**调用上下文模拟**（adapter 口上调用协议 → 消解 `ARG:*` 未知率）或 **ui-state-replay 回放面板**（把第五批成果第一次带上 UI）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

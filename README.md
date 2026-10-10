@@ -49,7 +49,9 @@ packages/
 │   ├── erb-parser/      # ERB 结构感知解析 + 全量函数索引 + 控制流骨架（scanControlFlow）
 │   ├── eratw-adapter/   # eraTW 全部领域知识（唯一允许出现游戏名之处：家族识别 + 约定规则 + 变量字典）
 │   ├── convention-linter/    # 约定校验引擎（零游戏知识；内置通用规则）
-│   ├── condition-extractor/  # 条件谓词抽取（表达式 AST + 函数级状态依赖聚合；语义标注来自 adapter）
+│   ├── condition-extractor/  # 条件谓词抽取（表达式 AST + 函数级状态依赖聚合 + 按需明细；语义标注来自 adapter）
+│   ├── sav-parser/           # 存档二进制解析（snapshot.source：引擎级通用协议，纯读；六档实测零残余）
+│   ├── state-replay/         # 状态回放（state.replay：快照 → 状态视图 → 谓词三值求值 + 置信度）
 │   ├── ui-convention-report/ # 校验结果面板（ui.panel 贡献；点击问题跳转）
 │   ├── ui-kojo-navigator/    # 函数树导航面板（角色→家族→面→函数 + 条件徽章；点击跳转）
 │   └── ui-plugin-status/# 插件状态面板（首个 ui.panel 贡献示例）
@@ -65,7 +67,7 @@ fixtures/                # 结构样本（真实游戏数据不入库）
 
 ```bash
 pnpm install
-pnpm test              # vitest：209 项单元 + 集成测试（未设游戏目录时集成冒烟自动跳过）
+pnpm test              # vitest：333 项单元 + 集成测试（未设游戏目录时集成冒烟自动跳过）
 pnpm typecheck         # root 包类型检查
 pnpm audit:decoupling  # 「一切皆插件」解耦审计（内核零游戏名 / 插件依赖纪律）
 ```
@@ -104,6 +106,10 @@ pnpm --filter @kojo/app tauri dev     # 首次需 cargo 编译 Tauri 依赖树�
 导航地基基线（同数据集）：可归属角色 141 / 多家族角色 77 / 多面（>3）角色 135 / 最重角色 K49（3,099 函数、18 家族）。
 
 条件抽取基线（同数据集）：95,504 函数 / 493,712 谓词（未解析 187 = 0.04%）/ 含依赖函数 31,609 / 依赖条目 164,910 / 变量字典 33 张名称表，全量约 6.2 秒（后台运行，不阻塞 UI）。
+
+存档解析基线（同数据集 6 档）：168 角色/档、16,005 变量/档、#DIM 恒 65、MASTERNAME 7/168（条件保存）、RANDDATA saveLen 625、MONEY 51 亿（Int64 路径）、EM 区 2 张 DT 表，残余 0 字节，扫描 6 档 30ms。
+
+状态回放基线（save03 × 古明地觉 K49）：1,356 个含谓词函数 / 11,685 谓词一次回放 —— 命中 773 / 未命中 3,561 / 未知 7,351（未知主要来自语言局部量 `ARG:*`——回放无调用上下文，属显式标注的诚实边界）；置信度 exact 230 / partial 755 / unknown 371。
 
 ## 许可
 
