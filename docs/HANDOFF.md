@@ -1,4 +1,4 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批 ✅ / 第二批 ✅ / 第三批 ✅ / 第四批 ✅ / 第五批 ✅ / 第六批 ✅ / 第七批 ✅ / 第八批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批～第九批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
@@ -8,7 +8,8 @@
 > 第五批：状态回放引擎（`state-replay`，服务 `state.replay`）；
 > 第六批：回放求值器扩展——本地量数据流 + 引擎内置纯函数 + 调用上下文注入（未知率 62.9% → 48.5%）；
 > 第七批：有界内联求值——口上域 `#FUNCTION` 纯助手顺序解释（未知率 48.5% → 32.0%，call 桶消解 84%）；
-> 本会话完成 **v0.2 第八批：`ui-state-replay` 回放面板（第 10 个插件）——选档 × 选角色 × 选函数 × 逐条谓词三值结果，导航面板 ⟲ 联动**。
+> 第八批：`ui-state-replay` 回放面板（第 10 个插件）——选档 × 选角色 × 选函数 × 逐条谓词三值结果，导航面板 ⟲ 联动；
+> 本会话完成 **v0.2 第九批：分支走向——谓词结果按 IF 链 / SELECTCASE 链折叠，回放面板显示"该状态会走哪个分支"（含可达性传播）**。
 
 ---
 
@@ -68,11 +69,16 @@
   3. **联动事件 `kojo.replayFunction`**（内核事件表新增，editor.revealLocation 同款模式）：导航面板函数行/搜索行加 ⟲ 徽章（stopPropagation）→ 回放面板自动填名并回放；UI 插件间零直接依赖。
   4. **登记**：四处（package.json/tsconfig paths/vitest aliases/vite aliases+deps）+ bootstrap.ts；`rp-*` 样式；`nav-badge.replay` 样式。
   5. **测试**：+11 单测（panel-logic 全路径）；400 项全绿；audit 10 插件 ✅；真实工程冒烟无回归；app build ✅。
+- **v0.2 第九批完成**（本会话）：**分支走向**（ARCHITECTURE §5.15 为权威记录）。
+  1. **契约**：`BranchChainOutcome`（if-chain/select-chain × taken/no-match/unknown/unreachable）+ `FunctionReplay.branches`。
+  2. **引擎**（state-replay `branches.ts`）：链栈配对折叠（与 scanner 配对表同源）+ **unknown 立即阻断**（后续真不可救——链语义与 Kleene 同构）+ **可达性传播**（链头在外层未进入分支区间 → unreachable，防"不可达却显示命中"误导作者）+ 宽容（孤儿分支跳过）。
+  3. **呈现**：回放面板"分支走向"区（按 depth 缩进；✓/∅/?/· 四态标记；命中链显示条件原文+跳转行号；rp-branch* 样式）。
+  4. **测试**：+14 单测（三态/阻断/短路/CASE 同行任一真/CASEELSE/嵌套可达/宽容三例）；集成冒烟分支断言（真实数据 IF LOCAL 链 taken）。
 - **存档解析基线（2026-10-10 实测）**：六档全绿——168 角色/档、16,005 变量/档（save00 16,000）、`#DIM` 恒 65、MASTERNAME 7/168、RANDDATA saveLen 625（**save00 nonEmpty=0 全零剪枝实证** / save01+ 全量）、MONEY 51 亿（Int64 路径）、EM 区 2 张 DT 表、**残余 0B**。
 - **状态回放基线（2026-10-10 实测，第七批后）**：save03 × 古明地觉（K49）全量回放 **1,356 个含谓词函数 / 11,685 谓词**——命中 1,549 / 未命中 6,395 / 未知 **3,741（32.0%）**；置信度 exact **836** / partial 482 / unknown **38**。第七批后未知构成：pseudo 1,886（RAND 等运行期值）/ call-context 858 / call 368（索引域外函数）/ named-index 337 / local-no-write 196 / missing-var 80 / 其余 <20。
 - **真实工程基线（2026-10-10 实测）**：168 角色 / 2,285 ERB / 99,104 函数 / 去重名 99,101；家族识别 98.91%（109 家族）；索引 ~2.9s；约定校验 757 项（~9s）。
 - **条件抽取基线**：95,504 函数 / **493,712 谓词（未解析 187 = 0.04%）** / 含依赖函数 31,609 / 依赖条目 164,910 / schema 标注 109,742（恋慕 17,993 / 好感度 480）/ 全量 ~6.2s（冷启动 ~13s）。
-- 测试：**400 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**10 插件**）。
+- 测试：**414 项全绿**（无游戏目录时集成冒烟 1 项自动跳过）；typecheck（root + app）通过；解耦审计 ✅（**10 插件**）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -144,7 +150,7 @@ packages/
 ```bash
 cd D:\DSH\kojo-editor
 pnpm install
-pnpm test               # 400 项（无游戏目录时集成冒烟自动跳过）
+pnpm test               # 414 项（无游戏目录时集成冒烟自动跳过）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
 pnpm audit:decoupling   # 必须 ✅（plugins 数 10）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放断言）：
@@ -233,9 +239,18 @@ node tools/smoke-tauri-dom.mjs
 - **验证**：400 项全绿 / audit 10 插件 / 真实冒烟无回归 / app build ✅。
 - **环境边界**：桌面壳深度冒烟在沙箱会话不可跑（tauri CLI 的 `BeforeDevCommand` 经 `cmd /S /C` 触发宿主管道耗尽 os error 231）——非项目问题，需在正常终端执行；app vite build 已验证。
 
-### 6.7 第九批候选（下一批）
+### 6.7 第九批（✅ 已完成）：分支走向
 
-- **分支链重建（回放面板增强，第一优先）**：用 `FunctionPredicates.statements`（含 ELSE/ENDIF）重建 IF/ELSEIF/ELSE 链 → 面板显示"该状态会走哪个分支"（比逐条谓词更接近作者视角；内联解释器已具备分支求值能力，把 PC 路径暴露出来即可）。
+**实施结果**：契约 + 引擎折叠 + 面板呈现落地（架构 §5.15 为权威记录）。
+
+- **契约**：`BranchChainOutcome`（if-chain/select-chain × taken/no-match/unknown/unreachable）+ `FunctionReplay.branches`。
+- **引擎**（`branches.ts` 纯函数）：链栈配对折叠 + unknown 立即阻断（后续真不可救）+ 可达性传播（外层未进入 → unreachable）+ 宽容。
+- **呈现**：面板"分支走向"区（缩进 + 四态标记 + 点击跳命中行）。
+- **教训（§九-23）**：向文档追加 §5.x 小节时，Edit 的 old_string 含 `## 6. 目录结构` 标题而 new_string 漏回——连续两批误删同一段落标题（已靠 grep 章节结构验证兜住）。**追加式编辑必须读回验证标题层级**。
+
+### 6.8 第十批候选（下一批）
+
+- **adapter 口上调用协议（第一优先）**：家族 → 转发实参映射（KOJO_MESSAGE.ERB 路由表）→ call-context 858 条自动消解；回放面板场景选择器从协议生成"对话对象/时机"下拉（替代手填槽位）。
 - **index-603 索引域外函数源（消解剩余 call 368）**：FIRSTTIME 等定义在 kojoPaths 之外——"游戏函数源"通道（扩 index 扫描域 / 按需 parseFile）；多数有副作用，收益需再测量。
 - **adapter 口上调用协议**：家族 → 转发实参映射（KOJO_MESSAGE.ERB 路由表）→ call-context 858 条的自动消解；回放面板的场景选择器可从协议生成"对话对象/时机"下拉（替代手填槽位）。
 - **回放面板角色上下文增强**：MASTER/ASSI/PLAYER 指针的场景选择（当前取快照顶层值）。
@@ -291,11 +306,12 @@ node tools/smoke-tauri-dom.mjs
 20. **preanalyze 别忘了函数自身**（第七批）：内联缓存的预热若只收集"谓词 AST 里的被调名"，顶层函数自身（体里不调用别人的）永远不会入缓存 → resolveCall 全 miss。`preanalyze` 第一步必须 `ensureAnalyzed(自身名)`。
 21. **resolveCall 同步契约 vs analyze 异步现实的矛盾**：求值热路径是同步的（Kleene 求值器纯函数），但函数体文本读取是异步 → **两阶段设计**：`replayFunction` 先 await `preanalyze(detail)`（BFS 递归 analyze 全部可达被调），执行期 resolveCall 同步查缓存必命中（miss = 竞态 → log warn 回落 unknown，不挂起）。
 22. **Bash 工具的 cwd 不如想象中可靠**（本会话实测）：`cd X && cmd` 的 cd 前缀偶发被吞、后台任务起始目录回到会话根 → **一律用 `pnpm -C <绝对路径>` / node 绝对路径脚本**，不依赖工作目录持久化。
+23. **文档追加式编辑的"标题吞噬"**（第七、九批连续两次）：向 ARCHITECTURE 追加 §5.x 小节时，Edit 的 old_string 以 `## 6. 目录结构` 标题为锚、new_string 漏回该标题 → §6 标题被静默删除（第一次靠第八批复查发现，第二次靠 grep 章节结构验证兜住）。**追加式编辑后必须 `grep -n "^## \|^### "` 读回验证标题层级**；锚点尽量选不跨章节边界的文本。
 
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：400 项 / ✅ / 10 插件）
-3. 读 `docs/ARCHITECTURE.md` §5.8–§5.14 + 本文件 §六
-4. **开始第九批 / v1.0 收口**（见 §6.7）：首选**分支链重建**（回放面板显示"会走哪个分支"）或 adapter 口上调用协议（call-context 自动消解）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：414 项 / ✅ / 10 插件）
+3. 读 `docs/ARCHITECTURE.md` §5.8–§5.15 + 本文件 §六
+4. **开始第十批 / v1.0 收口**（见 §6.8）：首选 **adapter 口上调用协议**（家族→转发实参映射，call-context 858 条自动消解 + 回放面板场景下拉）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

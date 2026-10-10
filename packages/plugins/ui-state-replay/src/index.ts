@@ -17,6 +17,7 @@
 
 import { createElement, useEffect, useRef, useState } from 'react';
 import type {
+  BranchChainOutcome,
   ConditionExtractorService,
   FunctionReplay,
   GameProject,
@@ -42,6 +43,49 @@ const CONFIDENCE_BADGE: Record<FunctionReplay['confidence'], { label: string; cl
 };
 
 const OUTCOME_LABEL: Record<string, string> = { true: '真', false: '假', unknown: '未知' };
+
+/** 分支走向的状态标记（v0.2 第九批） */
+const BRANCH_MARK: Record<BranchChainOutcome['outcome'], { mark: string; className: string; title: string }> = {
+  taken: { mark: '✓', className: 'rp-branch-mark taken', title: '该状态命中此分支' },
+  'no-match': { mark: '∅', className: 'rp-branch-mark nomatch', title: '全部分支条件为假且无兜底（落空）' },
+  unknown: { mark: '?', className: 'rp-branch-mark unk', title: '分支条件未知，无法判定走向' },
+  unreachable: { mark: '·', className: 'rp-branch-mark unreach', title: '外层分支未进入（不可达）' },
+};
+
+/** 单条分支链的呈现（按 depth 缩进；命中成员高亮，点击跳源码） */
+type EmitReveal = (filePath: string, line: number) => void;
+
+function branchRow(chain: BranchChainOutcome, filePath: string, emit: EmitReveal, key: string): ReturnType<typeof createElement> {
+  const mk = BRANCH_MARK[chain.outcome]!;
+  const takenText = chain.members.find((m) => m.line === chain.takenLine);
+  const headText =
+    chain.outcome === 'taken'
+      ? `${takenText?.kind ?? ''} ${takenText?.text ?? ''}`.trim()
+      : chain.members[0]?.kind === 'IF' || chain.members[0]?.kind === 'CASE'
+        ? `${chain.members[0]!.kind} ${chain.members[0]!.text}`.trim()
+        : chain.kind === 'if-chain'
+          ? 'IF …'
+          : 'SELECTCASE …';
+  return createElement(
+    'div',
+    {
+      key,
+      className: `rp-branch-row ${chain.outcome}`,
+      style: { paddingLeft: `${chain.depth * 14 + 2}px` },
+    },
+    createElement('span', { className: mk.className, title: mk.title }, mk.mark),
+    createElement(
+      'button',
+      {
+        className: 'rp-branch-btn',
+        title: `${filePath}:${chain.takenLine ?? chain.headLine} — ${mk.title}`,
+        onClick: () => emit(filePath, chain.takenLine ?? chain.headLine),
+      },
+      createElement('span', { className: 'rp-branch-head' }, headText),
+      createElement('span', { className: 'rp-branch-taken dim' }, chain.takenLine ? ` → :${chain.takenLine}` : ''),
+    ),
+  );
+}
 
 /** 未知原因的中文提示（按 code；与 replay.ts 的分类一一对应） */
 const UNKNOWN_HINT: Record<string, string> = {
@@ -344,6 +388,17 @@ export function createUiStateReplayPlugin(): Plugin {
         if (result) {
           const conf = CONFIDENCE_BADGE[result.confidence];
           const unknowns = groupUnknowns(result);
+          const emitReveal: EmitReveal = (filePath, line) =>
+            ctx.bus.emit('editor.revealLocation', { filePath, line, source: 'ui-state-replay' });
+          const branchSection =
+            result.branches.length > 0
+              ? createElement(
+                  'div',
+                  { className: 'rp-branches' },
+                  createElement('div', { className: 'dim rp-branches-head' }, `分支走向（${result.branches.length} 条链）`),
+                  ...result.branches.map((b, i) => branchRow(b, result.filePath, emitReveal, `b${b.headLine}:${i}`)),
+                )
+              : null;
           resultBody = createElement(
             'div',
             { className: 'rp-result' },
@@ -356,6 +411,7 @@ export function createUiStateReplayPlugin(): Plugin {
               createElement('span', { className: 'rp-count unk' }, `未知 ${result.stats.unknown}`),
               createElement('span', { className: 'dim rp-meta' }, `共 ${result.stats.total} 谓词 · ${shortPath(result.filePath)}:${result.startLine}`),
             ),
+            branchSection,
             unknowns.length > 0
               ? createElement(
                   'div',

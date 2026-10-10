@@ -321,6 +321,13 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       const localPred = sp2!.predicates.find((p) => p.text === 'LOCAL');
       expect(localPred?.outcome.kind).toBe('true');
 
+      // —— 分支走向（第九批）：`IF LOCAL / ELSEIF…` 链应折叠出确定走向
+      expect(sp2!.branches.length).toBeGreaterThan(0);
+      const localChain = sp2!.branches.find((b) => b.members.some((m) => m.text === 'LOCAL'));
+      expect(localChain).toBeTruthy();
+      expect(localChain!.outcome).toBe('taken');
+      expect(localChain!.takenLine).not.toBeNull();
+
       // —— 调用上下文（第六批）：无上下文 → unknown('call-context')；
       //    注入 ints=[undefined, 36]（约会对象编号）→ `ARG:1 >= 36 && ARG:1 <= 38` 确定真
       const ev1 = await replay.replayFunction(view, 'M_KOJO_ORTHODOX_EVENT_K49_1');

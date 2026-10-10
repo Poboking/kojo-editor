@@ -80,6 +80,12 @@ export interface FunctionReplay {
   filePath: string;
   startLine: number;
   predicates: PredicateReplay[];
+  /**
+   * 分支走向（v0.2 第九批）：把谓词三值结果按 IF/ELSEIF/ELSE 链与
+   * SELECTCASE/CASE 链折叠，回答"该状态会走哪个分支"（比逐条谓词
+   * 更接近作者视角）。含嵌套链（按 depth 区分）与可达性传播。
+   */
+  branches: BranchChainOutcome[];
   stats: {
     total: number;
     hit: number;
@@ -93,6 +99,47 @@ export interface FunctionReplay {
    * - `unknown`：全部 unknown（或函数无谓词时 total=0 → exact）。
    */
   confidence: 'exact' | 'partial' | 'unknown';
+}
+
+/** 分支链类别 */
+export type BranchChainKind = 'if-chain' | 'select-chain';
+
+/**
+ * 单条分支链的求值结果（v0.2 第九批）。
+ *
+ * 语义（引擎语言层，与 scanner 配对表同源）：
+ * - IF 链 = IF → (ELSEIF)* → (ELSE)? → ENDIF；求值走首个真谓词，全假 → ELSE。
+ * - SELECTCASE 链 = SELECTCASE → (CASE)* → (CASEELSE)? → ENDSELECT；
+ *   CASE 谓词（抽取层已展开为 `subject == 值` 等）同理，CASEELSE = 兜底。
+ *
+ * **可达性传播**：链头若位于某条外层链"未进入分支"的行区间内 → 该链
+ * 不可达（`unreachable`）——外层未命中时内层条件即使为真也不会执行。
+ * 已知近似（刻意不建模）：循环体内链的多次执行（回放取单遍语义）。
+ */
+export interface BranchChainOutcome {
+  kind: BranchChainKind;
+  /** 链头行（IF / SELECTCASE；1 基） */
+  headLine: number;
+  /** 块深度（缩进呈现用） */
+  depth: number;
+  /** 链成员（按行序；条件成员含谓词原文） */
+  members: {
+    line: number;
+    kind: 'IF' | 'ELSEIF' | 'ELSE' | 'CASE' | 'CASEELSE';
+    /** 谓词原文（ELSE/CASEELSE 为空串） */
+    text: string;
+  }[];
+  /** 命中分支行（outcome = 'taken' 时非空；跳转定位用） */
+  takenLine: number | null;
+  /**
+   * - `taken`：确定命中某分支；
+   * - `no-match`：全假且无 ELSE/CASEELSE（落空——口上域少见但合法）；
+   * - `unknown`：链上存在未知条件且前序全假（无法判定走向）；
+   * - `unreachable`：外层链未进入本链所在分支。
+   */
+  outcome: 'taken' | 'no-match' | 'unknown' | 'unreachable';
+  /** outcome = 'unknown' 时的原因（来自首个阻断判定的谓词） */
+  unknown?: ReplayUnknown;
 }
 
 /**

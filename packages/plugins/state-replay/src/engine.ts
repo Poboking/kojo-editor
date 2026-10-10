@@ -21,6 +21,7 @@ import type {
   StateReplayService,
 } from '@kojo/plugin-api';
 import { judgeCondition, type CallResolver, type EvalContext, type ValueReader } from './evaluate';
+import { buildBranchOutcomes } from './branches';
 import { InlineManager } from './inline';
 import { createFunctionOverlay, type OverlayPosition, type OverlayReader } from './locals';
 import { createStateView, type SchemaLookup } from './state-view';
@@ -79,6 +80,7 @@ export function replayPredicates(
     filePath: detail.filePath,
     startLine: detail.startLine,
     predicates,
+    branches: buildBranchOutcomes(detail.statements, predicates),
     stats: { total, hit, miss, unknown },
     confidence,
   };

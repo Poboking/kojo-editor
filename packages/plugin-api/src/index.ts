@@ -72,6 +72,8 @@ export type {
 } from './conditions';
 
 export type {
+  BranchChainKind,
+  BranchChainOutcome,
   FunctionReplay,
   PredicateReplay,
   ReplayCallContext,

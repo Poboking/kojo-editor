@@ -976,3 +976,67 @@ code {
   font-size: 11px;
   padding: 2px 4px;
 }
+
+/* 分支走向区（v0.2 第九批） */
+.rp-branches {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 2px;
+}
+.rp-branches-head {
+  font-size: 10.5px;
+  padding: 0 4px 2px;
+}
+.rp-branch-row {
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.rp-branch-mark {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  font-weight: 700;
+}
+.rp-branch-mark.taken {
+  color: var(--green, #98c379);
+}
+.rp-branch-mark.nomatch {
+  color: var(--amber, #d19a66);
+}
+.rp-branch-mark.unk {
+  color: var(--fg-dim);
+}
+.rp-branch-mark.unreach {
+  color: var(--fg-dim);
+  opacity: 0.5;
+}
+.rp-branch-btn {
+  background: none;
+  border: none;
+  color: var(--fg);
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+  text-align: left;
+  padding: 1px 3px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rp-branch-btn:hover {
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+  color: var(--accent, #61afef);
+}
+.rp-branch-row.unreach .rp-branch-btn,
+.rp-branch-row.unreach .rp-branch-head {
+  opacity: 0.45;
+}
+.rp-branch-taken {
+  font-size: 10.5px;
+}

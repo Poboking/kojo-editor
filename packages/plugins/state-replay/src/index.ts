@@ -78,6 +78,7 @@ export { StateReplayEngine, replayPredicates, type StateReplayEngineDeps } from 
 export { createStateView, ReplayViewError, type CreateStateViewOptions, type SchemaLookup } from './state-view';
 export { judgeCondition, evaluateExpr, type ValueReader, type EvalContext, type CallResolver } from './evaluate';
 export { InlineManager, analyzeInlineBody, MAX_INLINE_DEPTH, type AnalyzedFunction, type InlineBody } from './inline';
+export { buildBranchOutcomes } from './branches';
 export {
   builtinVarModel,
   isCalcPseudo,
