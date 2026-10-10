@@ -13,6 +13,7 @@ export default defineConfig({
       '@kojo/plugin-eratw-adapter': r('./packages/plugins/eratw-adapter/src/index.ts'),
       '@kojo/plugin-convention-linter': r('./packages/plugins/convention-linter/src/index.ts'),
       '@kojo/plugin-condition-extractor': r('./packages/plugins/condition-extractor/src/index.ts'),
+      '@kojo/plugin-sav-parser': r('./packages/plugins/sav-parser/src/index.ts'),
       '@kojo/plugin-ui-convention-report': r('./packages/plugins/ui-convention-report/src/index.ts'),
       '@kojo/plugin-ui-kojo-navigator': r('./packages/plugins/ui-kojo-navigator/src/index.ts'),
     },

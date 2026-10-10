@@ -2,7 +2,13 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as nodeJoin } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ConditionExtractorService, ConventionLinterService, ErbParserService } from '@kojo/plugin-api';
+import type {
+  ArchiveArrayVariable,
+  ConditionExtractorService,
+  ConventionLinterService,
+  ErbParserService,
+  SnapshotSourceService,
+} from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 import { createKernel } from '../src/kernel';
 import { NodeBridge } from './helpers/node-bridge';
@@ -11,12 +17,14 @@ import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
 import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
+import { createSavParserPlugin } from '@kojo/plugin-sav-parser';
 
 /**
  * 真实工程集成冒烟 —— 直接检验各阶段验收标准：
  * - v0.1：「选定有效 eraTW 目录后：CHARA CSV 映射解析成功，能列出 kojoPaths 下全部文件与函数清单」；
  * - v0.2：「按角色/家族浏览 99k 函数」的前提（家族识别覆盖）+ 约定校验器在真实数据上产出问题；
- * - v0.2 第四批：条件谓词抽取（控制流 → 谓词 → 状态依赖 + adapter 变量字典标注）。
+ * - v0.2 第三批：条件谓词抽取（控制流 → 谓词 → 状态依赖 + adapter 变量字典标注）；
+ * - v0.2 第四批：存档解析（扫描 + 浅解析 + 深解析，真实六档字节级回归）。
  *
  * 真实游戏数据不入库：通过环境变量 `KOJO_SMOKE_PROJECT` 指定本地游戏目录；
  * 未设置时整组跳过（CI 安全）。
@@ -25,7 +33,7 @@ const SMOKE_DIR = process.env.KOJO_SMOKE_PROJECT;
 
 describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
   it(
-    'onboarding → CHARA 映射 → 口上域全量函数索引 → 约定校验 → 条件抽取',
+    'onboarding → CHARA 映射 → 口上域全量函数索引 → 约定校验 → 条件抽取 → 存档解析',
     async () => {
       const appData = mkdtempSync(nodeJoin(tmpdir(), 'kojo-smoke-'));
       const kernel = await createKernel({
@@ -35,6 +43,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           createEratwAdapterPlugin(),
           createConventionLinterPlugin(),
           createConditionExtractorPlugin(),
+          createSavParserPlugin(),
         ],
         storageBackend: new MemoryStorageBackend(),
       });
@@ -46,6 +55,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(states.get('eratw-adapter')?.status).toBe('active');
       expect(states.get('convention-linter')?.status).toBe('active');
       expect(states.get('condition-extractor')?.status).toBe('active');
+      expect(states.get('sav-parser')?.status).toBe('active');
 
       // 2. onboarding（内核对全部 adapter 候选轮询 detect）
       const project = await kernel.project.open(SMOKE_DIR!);
@@ -182,6 +192,68 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           `(未解析 ${condIndex.stats.unparsed}) | 含依赖函数 ${condIndex.stats.functionsWithDeps} | ` +
           `依赖条目 ${condIndex.stats.dependencies} | schema 标注 ${schemaTagged}（好感度 ${favDeps} / 恋慕 ${talentLove}） ` +
           `in ${condIndex.durationMs}ms`,
+      );
+
+      // 7. 存档解析（v0.2 第四批：扫描 + 浅解析 + 深解析，真实六档字节级回归）
+      const snapshots = kernel.services.get<SnapshotSourceService>(WellKnownServices.SnapshotSource);
+      const scan = await snapshots.scan();
+      expect(scan.dir).toBe(project.savDir);
+      expect(scan.entries.length).toBe(6); // global + save00-03 + save1000（本机实测基线）
+      for (const e of scan.entries) expect(e.error).toBeUndefined();
+      const byName = new Map(scan.entries.map((e) => [e.fileName, e]));
+
+      // 浅解析元数据（saveMes 为引擎写入的时间戳 / 日期 / 地点串）
+      const save03e = byName.get('save03.sav');
+      expect(save03e?.meta?.fileType).toBe('normal');
+      expect(save03e?.meta?.version).toBe(1808);
+      expect(save03e?.meta?.charCount).toBe(168);
+      expect(save03e?.meta?.saveMes).toContain('第 47日');
+      const globalE = byName.get('global.sav');
+      expect(globalE?.meta?.fileType).toBe('global');
+      expect(globalE?.meta?.charCount).toBe(0);
+
+      // 深解析 save03：零残余 + 角色区 + 主变量区（实测 540 = 484+36+17+2+1）
+      const arch03 = await snapshots.parse(save03e!.path, { keepArrayCells: false });
+      expect(arch03.remaining).toBe(0);
+      expect(arch03.chars).toHaveLength(168);
+      expect(arch03.vars).toHaveLength(540);
+
+      // #DIM 分隔：内置 27/28 个 + #DIM 恒 65 个（魔改 CHARA 域全量序列化）
+      const dimCounts = new Set(arch03.chars!.map((c) => c.vars.length - (c.dimSepIndex ?? 0)));
+      expect([...dimCounts]).toEqual([65]);
+
+      // MASTERNAME 条件保存（实测 7/168：角色有主人才写）
+      const masterNameChars = arch03.chars!.filter((c) => c.vars.some((v) => v.key === 'MASTERNAME')).length;
+      expect(masterNameChars).toBe(7);
+
+      // RANDDATA = 随机数发生器快照（saveLen 625）；全零剪枝实证：save00 nonEmpty=0 / save03 全量
+      const arch00 = await snapshots.parse(byName.get('save00.sav')!.path, { keepArrayCells: false });
+      const rand00 = arch00.vars!.find((v) => v.type === 'int-array-1d' && v.key === 'RANDDATA') as
+        | ArchiveArrayVariable
+        | undefined;
+      expect(rand00?.saveLen).toEqual([625]);
+      expect(rand00?.nonEmpty).toBe(0);
+      const rand03 = arch03.vars!.find((v) => v.type === 'int-array-1d' && v.key === 'RANDDATA') as
+        | ArchiveArrayVariable
+        | undefined;
+      expect(rand03?.nonEmpty).toBe(625);
+
+      // MONEY 十亿级（0xD2 Int64 路径在真实数据上工作）
+      const arch03b = await snapshots.parse(save03e!.path, { maxCellsPerArray: 4 });
+      const money = arch03b.vars!.find((v) => v.key === 'MONEY') as ArchiveArrayVariable | undefined;
+      expect(money?.type).toBe('int-array-1d');
+      expect(Number(money!.cells[0]!.value)).toBeGreaterThan(1_000_000_000);
+
+      // EM 扩展区实测：save03 两张 DT 表
+      expect(arch03.emVars?.map((v) => v.key).sort()).toEqual(['DT_UFUFU_LOG', 'DT_UFUFU_M_LOG']);
+
+      // eslint-disable-next-line no-console
+      console.log(
+        `[smoke] 存档解析：扫描 ${scan.entries.length} 档（${scan.durationMs}ms）| ` +
+          `save03 角色 ${arch03.chars!.length} | 主变量 ${arch03.vars!.length} | ` +
+          `#DIM ${[...dimCounts][0]} | MASTERNAME ${masterNameChars} | ` +
+          `RANDDATA save00=${rand00?.nonEmpty} save03=${rand03?.nonEmpty} | ` +
+          `EM ${arch03.emVars?.length} 表 | 残余 ${arch03.remaining}B`,
       );
 
       await kernel.stop();

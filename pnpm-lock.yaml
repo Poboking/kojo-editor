@@ -50,6 +50,9 @@ importers:
       '@kojo/plugin-erb-parser':
         specifier: workspace:*
         version: link:../plugins/erb-parser
+      '@kojo/plugin-sav-parser':
+        specifier: workspace:*
+        version: link:../plugins/sav-parser
       '@kojo/plugin-ui-convention-report':
         specifier: workspace:*
         version: link:../plugins/ui-convention-report
@@ -106,6 +109,9 @@ importers:
       '@kojo/plugin-erb-parser':
         specifier: workspace:*
         version: link:../plugins/erb-parser
+      '@kojo/plugin-sav-parser':
+        specifier: workspace:*
+        version: link:../plugins/sav-parser
 
   packages/plugin-api: {}
 
@@ -128,6 +134,12 @@ importers:
         version: link:../../plugin-api
 
   packages/plugins/erb-parser:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
+  packages/plugins/sav-parser:
     dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*

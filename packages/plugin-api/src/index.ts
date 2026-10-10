@@ -67,6 +67,26 @@ export type {
 } from './conditions';
 
 export type {
+  ArchiveArrayCell,
+  ArchiveArrayType,
+  ArchiveArrayVariable,
+  ArchiveCharacterBlock,
+  ArchiveContainerFormat,
+  ArchiveDataTableVariable,
+  ArchiveFileType,
+  ArchiveMapVariable,
+  ArchiveMeta,
+  ArchiveParseOptions,
+  ArchiveScalarVariable,
+  ArchiveVariable,
+  ArchiveXmlVariable,
+  SnapshotArchive,
+  SnapshotArchiveEntry,
+  SnapshotScanResult,
+  SnapshotSourceService,
+} from './snapshot';
+
+export type {
   CharaInfo,
   FamilyIndexRule,
   FamilyMatch,

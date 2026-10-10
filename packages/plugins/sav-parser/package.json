@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-sav-parser",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Emuera binary archive parser (snapshot.source service): scan a project's archive directory and decode the engine's binary save format into structured archives. Pure read for now; write/inject lands in v1.1. Zero game knowledge - the byte format is engine-level and shared across games.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}
