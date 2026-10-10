@@ -113,4 +113,91 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
     // eslint-disable-next-line no-console
     console.log(`[golden] 载荷层原样写回：\n  ${report.join('\n  ')}`);
   }, 240_000);
+
+  it('方案 B：keepRaw passthrough —— 近似档（Int64）也字节级一致 + 注入与守卫', async () => {
+    const savDir = nodeJoin(SMOKE_DIR!, 'sav');
+    const report: string[] = [];
+    let injected = false;
+    let guarded = false;
+
+    for (const fileName of ['save00.sav', 'save01.sav', 'save02.sav', 'save03.sav', 'save04.sav', 'save05.sav']) {
+      const filePath = nodeJoin(savDir, fileName);
+      let raw: Uint8Array;
+      try {
+        raw = readFileSync(filePath);
+      } catch {
+        continue;
+      }
+      const body = await gunzipBytes(raw.subarray(16));
+      const archive = await parseArchive(raw, filePath, { keepArrayCells: true, keepRaw: true });
+
+      // ---- 无覆盖：passthrough 应字节级一致（含 Int64 近似档——第十一批在此显式拒绝）----
+      const reserialized = serializePayload(archive);
+      const diff = firstDiff(body, reserialized);
+      report.push(`${fileName}: 载荷 ${body.length}B / passthrough 差异 ${diff.count}`);
+      expect(reserialized.length).toBe(body.length);
+      expect(diff.count).toBe(0);
+
+      // ---- 注入验证（只在 save00 做一次：标量覆盖 + RANDDATA 守卫）----
+      if (!injected && archive.fileType === 'normal') {
+        // 标量：主变量区全是数组（DAY/MONEY/FLAG…），int 标量在角色块（ISASSI/NO）
+        const block = archive.chars?.[0];
+        const scalar = block?.vars.find((v) => v.type === 'int');
+        if (block && scalar) {
+          const out = serializePayload(archive, {
+            overrides: { chars: new Map([[block.index, new Map([[scalar.key, 123456789]])]]) },
+          });
+          const reparsed = await parseArchive(wrapRaw(out), filePath, {});
+          const hit = reparsed.chars?.[0]?.vars.find((v) => v.key === scalar.key);
+          expect(hit && 'value' in hit ? hit.value : undefined).toBe(123456789);
+          report.push(`${fileName}: 注入 char${block.index}.${scalar.key}=123456789 ✓ 重解析读回一致`);
+          injected = true;
+        }
+      }
+      // ---- 守卫：读侧近似的 Int64 单元（save01+ 的 RESULT/CFLAG/GIFT_GOT 等）
+      //      一旦重编码必须拒绝。RANDDATA 是 u32 快照逐值安全，真正的雷在这些变量。
+      if (!guarded && archive.fileType === 'normal') {
+        const findUnsafe = (vs: { key: string; cells?: { index: number[]; value: number }[] }[] | undefined) =>
+          (vs ?? []).map((v) => ({
+            v,
+            cell: (v.cells ?? []).find((c) => typeof c.value === 'number' && !Number.isSafeInteger(c.value)),
+          })).find((x) => x.cell);
+        const hitTop = findUnsafe(archive.vars as never);
+        const hitChar = (archive.chars ?? [])
+          .map((b) => ({ b, hit: findUnsafe(b.vars as never) }))
+          .find((x) => x.hit);
+        const hc = hitChar?.hit;
+        if (hitTop?.v && hitTop.cell) {
+          const patch = { index: [...hitTop.cell.index], value: 1 };
+          expect(() =>
+            serializePayload(archive, { overrides: { vars: new Map([[hitTop.v.key, [patch]]]) } }),
+          ).toThrow(/超出安全整数域/);
+          guarded = true;
+        } else if (hitChar?.b && hc?.v && hc.cell) {
+          const patch = { index: [...hc.cell.index], value: 1 };
+          expect(() =>
+            serializePayload(archive, {
+              overrides: { chars: new Map([[hitChar.b.index, new Map([[hc.v.key, [patch]]])]]) },
+            }),
+          ).toThrow(/超出安全整数域/);
+          guarded = true;
+        }
+        if (guarded) report.push(`${fileName}: Int64 注入守卫 ✓ 拒绝（读侧近似值不可重编码）`);
+      }
+    }
+    expect(injected).toBe(true);
+    expect(guarded).toBe(true);
+    // eslint-disable-next-line no-console
+    console.log(`[golden] 方案 B keepRaw passthrough + 注入：\n  ${report.join('\n  ')}`);
+  }, 240_000);
 });
+
+/** RAW 头重打包（parse 支持 raw 容器） */
+function wrapRaw(payload: Uint8Array): Uint8Array {
+  const out = new Uint8Array(16 + payload.length);
+  const dv = new DataView(out.buffer);
+  dv.setBigUint64(0, 0x0a1a0a0d41524589n, true);
+  dv.setUint32(8, 1808, true);
+  out.set(payload, 16);
+  return out;
+}

@@ -45,6 +45,12 @@ export interface ArchiveScalarVariable {
   value: number | string;
   /** 流内起始字节偏移（排障用） */
   offset: number;
+  /**
+   * 原始字节区间（v0.2 第十三批方案 B；仅 `keepRaw` 解析选项下记录）——
+   * 类型 token 起、值毕（不含流控制标记）。写侧 passthrough：未修改的变量
+   * 原样复制，绕开重编码（Int64 近似值不再写回 = 损坏风险归零）。
+   */
+  raw?: Uint8Array;
 }
 
 /**
@@ -65,6 +71,8 @@ export interface ArchiveArrayVariable {
   /** cells 不完整（被省略或截断——显式标记，不静默） */
   cellsTruncated?: boolean;
   offset: number;
+  /** 原始字节区间（v0.2 第十三批方案 B；语义同 ArchiveScalarVariable.raw） */
+  raw?: Uint8Array;
 }
 
 /** 键值对映射变量 */
@@ -74,6 +82,8 @@ export interface ArchiveMapVariable {
   count: number;
   pairs: ReadonlyArray<readonly [string, string]>;
   offset: number;
+  /** 原始字节区间（v0.2 第十三批方案 B；语义同 ArchiveScalarVariable.raw） */
+  raw?: Uint8Array;
 }
 
 /** XML 串变量 */
@@ -82,6 +92,8 @@ export interface ArchiveXmlVariable {
   key: string;
   value: string;
   offset: number;
+  /** 原始字节区间（v0.2 第十三批方案 B；语义同 ArchiveScalarVariable.raw） */
+  raw?: Uint8Array;
 }
 
 /** 数据表变量（schema 串 + data 串） */
@@ -91,6 +103,8 @@ export interface ArchiveDataTableVariable {
   schema: string;
   data: string;
   offset: number;
+  /** 原始字节区间（v0.2 第十三批方案 B；语义同 ArchiveScalarVariable.raw） */
+  raw?: Uint8Array;
 }
 
 export type ArchiveVariable =
@@ -184,6 +198,38 @@ export interface ArchiveParseOptions {
   maxCellsPerArray?: number;
   /** 只解析顶层头即返回（扫描场景；角色区 / 变量区全部省略） */
   headerOnly?: boolean;
+  /**
+   * 是否记录每个变量的原始字节区间 `raw`（v0.2 第十三批方案 B；默认 false）。
+   * 写侧 passthrough（未修改变量原样复制）与注入器前置——raw 是 subarray 视图
+   * （共享正文缓冲，无逐变量拷贝开销）。
+   */
+  keepRaw?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// 注入覆盖（v0.2 第十三批方案 B：改槽注入的契约层）
+// ---------------------------------------------------------------------------
+
+/** 数组单元补丁（index 全维度下标；value 必须在安全整数 / 字符串域内） */
+export interface ArchiveCellPatch {
+  index: readonly number[];
+  value: number | string;
+}
+
+/**
+ * 单变量覆盖值：
+ * - `number | string`：标量变量整体替换（int 须为安全整数）；
+ * - `ArchiveCellPatch[]`：数组变量**单元级补丁**（与既有 cells 按下标合并——
+ *   同下标替换、新下标插入，其余单元原样保留）。
+ */
+export type ArchiveOverrideValue = number | string | readonly ArchiveCellPatch[];
+
+/** 注入覆盖集（serializePayload 的改槽输入；未列出的变量一律原样 passthrough） */
+export interface ArchiveOverrides {
+  /** 顶层 / 主变量区 / 全局区 / EM 区变量（按 key；key 冲突时各区按流序首个命中） */
+  vars?: ReadonlyMap<string, ArchiveOverrideValue>;
+  /** 角色块覆盖：角色块 index（0 基，ArchiveCharacterBlock.index）→ (key → 覆盖值) */
+  chars?: ReadonlyMap<number, ReadonlyMap<string, ArchiveOverrideValue>>;
 }
 
 /**

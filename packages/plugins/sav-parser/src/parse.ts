@@ -76,37 +76,52 @@ function readVar(r: ByteReader, policy: CellPolicy): VarToken {
   if (t === 0xfe) return 'eoc';
   if (t === 0xfd) return 'separator';
   const key = r.str('变量名');
+  let v: ArchiveVariable;
   switch (t) {
     case 0x00:
-      return { type: 'int', key, value: r.varInt('整数变量值'), offset };
+      v = { type: 'int', key, value: r.varInt('整数变量值'), offset };
+      break;
     case 0x10:
-      return { type: 'str', key, value: r.str('字符串变量值'), offset };
+      v = { type: 'str', key, value: r.str('字符串变量值'), offset };
+      break;
     case 0x01:
-      return arrayVar('int-array-1d', key, offset, readIntArray1D(r, policy));
+      v = arrayVar('int-array-1d', key, offset, readIntArray1D(r, policy));
+      break;
     case 0x02:
-      return arrayVar('int-array-2d', key, offset, readIntArray2D(r, policy));
+      v = arrayVar('int-array-2d', key, offset, readIntArray2D(r, policy));
+      break;
     case 0x03:
-      return arrayVar('int-array-3d', key, offset, readIntArray3D(r, policy));
+      v = arrayVar('int-array-3d', key, offset, readIntArray3D(r, policy));
+      break;
     case 0x11:
-      return arrayVar('str-array-1d', key, offset, readStrArray1D(r, policy));
+      v = arrayVar('str-array-1d', key, offset, readStrArray1D(r, policy));
+      break;
     case 0x12:
-      return arrayVar('str-array-2d', key, offset, readStrArray2D(r, policy));
+      v = arrayVar('str-array-2d', key, offset, readStrArray2D(r, policy));
+      break;
     case 0x13:
-      return arrayVar('str-array-3d', key, offset, readStrArray3D(r, policy));
+      v = arrayVar('str-array-3d', key, offset, readStrArray3D(r, policy));
+      break;
     case 0x20: {
       const count = r.int32();
       const pairs: Array<readonly [string, string]> = [];
       for (let i = 0; i < count; i++) pairs.push([r.str('映射键'), r.str('映射值')]);
-      const v: ArchiveMapVariable = { type: 'map', key, count, pairs, offset };
-      return v;
+      v = { type: 'map', key, count, pairs, offset };
+      break;
     }
     case 0x21:
-      return { type: 'xml', key, value: r.str('XML 内容'), offset };
+      v = { type: 'xml', key, value: r.str('XML 内容'), offset };
+      break;
     case 0x22:
-      return { type: 'datatable', key, schema: r.str('表 schema'), data: r.str('表数据'), offset };
+      v = { type: 'datatable', key, schema: r.str('表 schema'), data: r.str('表数据'), offset };
+      break;
     default:
       throw new ArchiveParseError(`未知变量类型 0x${t.toString(16)}（key=${key}）`, offset);
   }
+  // 方案 B（v0.2 第十三批）：keepRaw 时记录原始字节区间（subarray 视图）——
+  // 写侧对未修改变量原样复制，Int64 近似值永不写回。
+  if (policy.keepRaw) v.raw = r.span(offset);
+  return v;
 }
 
 /** 读变量流（到 EOF / EOC 为止；区级流中的 separator 罕见，跳过） */
@@ -153,6 +168,7 @@ export async function parseArchive(
   const policy: CellPolicy = {
     keep: opts.keepArrayCells !== false,
     max: opts.maxCellsPerArray ?? KEEP_ALL_CELLS.max,
+    keepRaw: opts.keepRaw === true,
   };
 
   // ---- 16 字节明文头 ----

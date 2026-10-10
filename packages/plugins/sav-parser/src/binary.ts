@@ -102,6 +102,14 @@ export class ByteReader {
     return this.intFromByte(this.byte(), what);
   }
 
+  /**
+   * 取 [start, 当前位置) 的原始字节区间（v0.2 第十三批方案 B）——
+   * subarray 视图（共享底层缓冲，无拷贝）；变量级 `raw` 记录用。
+   */
+  span(start: number): Uint8Array {
+    return this.buf.subarray(start, this.pos);
+  }
+
   /** 7-bit 变长无符号整数（.NET BinaryWriter 长度前缀语义）。 */
   private sevenBitUInt(what: string): number {
     let value = 0;

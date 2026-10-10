@@ -18,6 +18,8 @@ import { ArchiveParseError } from './binary';
 export interface CellPolicy {
   keep: boolean;
   max: number;
+  /** v0.2 第十三批方案 B：记录变量级原始字节区间（写侧 passthrough 前置） */
+  keepRaw?: boolean;
 }
 
 /** 默认策略：完整保留 */

@@ -1,4 +1,4 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批～第十二批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批～第十三批 ✅）
 
 > 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
@@ -13,6 +13,7 @@
 > 第十批：口上调用协议——adapter 解析 KOJO_MESSAGE.ERB 路由表 → 槽位语义表，回放面板结构化场景参数输入（协议不可用优雅降级）；
 > 本会话完成 **v0.2 第十一批：存档写侧预研——ByteWriter + serializePayload + 金样本回归，save00 载荷 571,185B 逐字节完全一致（编码器同构达成）；暴露 Int64 精度硬前置（RANDDATA 等），方案 B（rawBytes 保留）写入 §5.17**。
 > 本会话完成 **v0.2 第十二批：审阅修复（依据 docs/CODE-REVIEW-2026-10-10.md）——H1 CASE TO 区间 AND 语义（conjunction 契约 + 三层落地）+ M4 切文件丢内容（确认对话框）+ M5 回放联动闭包 + M2 Rust 编码 had_errors + L1/L3/L4；426 项全绿，回放基线不变**。
+> 本会话完成 **v0.2 第十三批（双线）：① sav-parser Int64 精度方案 B 落地（rawBytes passthrough）——六档金样本 passthrough 全部字节级一致（含此前被拒的 save01-05）+ 标量/单元补丁注入 + Int64 守卫；纠正第十一批结论：RANDDATA 是 u32 序列逐值安全，真雷在 RESULT/CFLAG/GIFT_GOT（架构 §5.19）；② TRAE 并行交付 ui-archive-browser 归档浏览器（第 11 插件，commit ca1a323）；456 项全绿**。
 
 ---
 
@@ -289,13 +290,26 @@ node tools/smoke-tauri-dom.mjs
 - **M2**：Rust `encode_string` had_errors 拒绝写（防 HTML 实体静默损坏）；`decode_bytes` had_errors 记 stderr 不阻塞浏览。
 - **L1** storage JSON 容错 / **L3** POWER 超 2^53 先拒 / **L4** resolveModel 死代码清理（null 分支不可达）。L2 核实为误报（比较两侧已过 pathKey）；M1/M3 留 v0.3。
 
-### 6.11 第十三批候选（下一批）
+### 6.11 第十三批候选（已完成 2 项，余项顺延）
 
 - **v1.0 收口（第一优先）**：回放面板协议深化（场景预设）+ 协议覆盖校验规则（签名槽与路由转发不一致）+ 桌面壳真实终端冒烟（沙箱 os error 231 欠账）。
 - **index-603 索引域外函数源（消解剩余 call 368）**：FIRSTTIME 等定义在 kojoPaths 之外——"游戏函数源"通道（扩 index 扫描域 / 按需 parseFile）；多数有副作用，收益需再测量。
 - **adapter 口上调用协议**：家族 → 转发实参映射（KOJO_MESSAGE.ERB 路由表）→ call-context 858 条的自动消解；回放面板的场景选择器可从协议生成"对话对象/时机"下拉（替代手填槽位）。
 - **回放面板角色上下文增强**：MASTER/ASSI/PLAYER 指针的场景选择（当前取快照顶层值）。
-- **归档浏览器面板**：消费 `snapshot.source` 列档（saveMes / 角色数 / 大小），点击看摘要。
+- **归档浏览器面板**（✅ 第十三批由 TRAE 交付，commit ca1a323）：消费 `snapshot.source` 列档（saveMes / 角色数 / 大小），点击看摘要。
+- **存档注入器地基**（✅ 第十三批，见 §6.12）：Int64 精度方案 B 落地。
+
+### 6.12 第十三批（✅ 已完成）：存档注入器地基（Int64 精度方案 B）+ 归档浏览器（TRAE）
+
+**实施结果**：方案 B 全量落地（架构 §5.19 为权威记录）。
+
+- **契约**（plugin-api/snapshot.ts）：5 个变量接口 + `raw?: Uint8Array`；`keepRaw?` 解析选项；`ArchiveCellPatch` / `ArchiveOverrideValue` / `ArchiveOverrides`（vars + chars 两级 Map）——均从 index.ts 导出。
+- **读侧**：parse.ts 读毕变量后 `span()` 记 subarray 视图（零拷贝，含 token+key+值域）。
+- **写侧**（serialize.ts writeVar 三路）：① 无覆盖+raw → `w.bytes(raw)` passthrough（先于 token/key，Int64 近似值永不写回）；② 覆盖 → 标量替换（类型不符即抛）/ 数组 CellPatch 按下标合并（mergedCells：同下标替换、插入、排序；**Int64 守卫**——任一单元超安全域即抛）；③ 无 raw 走 legacy 重编码。
+- **金样本关键纠正**：RANDDATA（SFMT u32 ×625）逐值均在安全域，第十一批"RANDDATA ≈2.8e16"是整体规模误读；真雷 = save01+ 顶层 `RESULT` 与角色块 `CFLAG`/`GIFT_GOT`/`TCVAR`。守卫测试动态扫描不安全单元，不硬编码变量名。
+- **测试**：raw-inject.test.ts（+8 合成）+ golden-roundtrip 第二用例重写（六档 passthrough 差异 0 含 save01-05 + save00 注入 `ISASSI=123456789` 读回一致 + save01 守卫拒绝）。
+- **TRAE 并行**：`ui-archive-browser` 插件（snapshot.source 消费，第 11 插件，注册四处齐全，audit 11 插件全绿）。
+- 下一步（第十四批候选）：v1.1 注入器用户面（改槽注入 UI → 含修改金样本回归 → 写盘走 writablePaths+备份）；或 v1.0 收口（回放面板场景预设 / 桌面壳真实终端冒烟）。
 - **ui-condition-matrix（条件矩阵）**：按角色/家族聚合状态依赖；MESSAGECHECK 位可视化。
 - `watchDirs` 文件监视（现为手动刷新；后续走 Rust notify）→ 增量重建索引。
 - Monaco bundle 4.3MB 拆分（manualChunks，低优先级）。
@@ -352,7 +366,7 @@ node tools/smoke-tauri-dom.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：426 项 / ✅ / 10 插件）
-3. 读 `docs/ARCHITECTURE.md` §5.8–§5.18 + 本文件 §六
-4. **开始第十三批**（见 §6.11）：v1.0 收口清单（回放面板打磨 / 协议深化场景预设）或 **v1.1 注入器**（Int64 精度方案 B 落地 → 改槽注入 → 金样本含修改回归）；另审阅遗留 M1（stop 级联）/ M3（Rust 路径约束）可随 v0.3 排入
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：456 项 / ✅ / 11 插件）
+3. 读 `docs/ARCHITECTURE.md` §5.8–§5.19 + 本文件 §六
+4. **开始第十四批**（见 §6.12 末）：**v1.1 注入器用户面**（改槽注入 UI → 含修改金样本回归 → 写盘走 writablePaths+备份）或 **v1.0 收口**（回放面板场景预设 / 桌面壳真实终端冒烟）；审阅遗留 M1（stop 级联）/ M3（Rust 路径约束）随 v0.3 排入
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

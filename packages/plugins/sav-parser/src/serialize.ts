@@ -23,9 +23,13 @@
  */
 
 import type {
+  ArchiveArrayCell,
   ArchiveArrayVariable,
+  ArchiveCellPatch,
   ArchiveCharacterBlock,
   ArchiveFileType,
+  ArchiveOverrideValue,
+  ArchiveOverrides,
   ArchiveVariable,
   SnapshotArchive,
 } from '@kojo/plugin-api';
@@ -50,6 +54,45 @@ function requireFullCells(v: ArchiveArrayVariable): void {
   if (v.cellsTruncated) {
     throw new ArchiveParseError(`数组 ${v.key} 的 cells 被截断，无法重序列化（需全量解析档）`, v.offset);
   }
+}
+
+/** 下标元组比较（同维度；逐元素升序） */
+function compareIndex(a: readonly number[], b: readonly number[]): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    if (a[i] !== b[i]) return (a[i] ?? 0) - (b[i] ?? 0);
+  }
+  return a.length - b.length;
+}
+
+/**
+ * 被修改数组变量的重编码单元集：既有 cells 与补丁按下标合并（同下标替换、
+ * 新下标插入），**Int64 精度守卫**——任一单元值超出安全整数域即拒绝注入
+ * （该值在读侧已被双精度近似，重编码会写回错误字节损坏存档，绝不静默）。
+ */
+function mergedCells(v: ArchiveArrayVariable, patches: readonly ArchiveCellPatch[]): ArchiveArrayCell[] {
+  requireFullCells(v);
+  const all = [...v.cells, ...patches] as const;
+  for (const c of all) {
+    if (typeof c.value === 'number' && !Number.isSafeInteger(c.value)) {
+      throw new ArchiveParseError(
+        `数组 ${v.key} 的单元值 ${c.value} 超出安全整数域（读侧已近似，重编码会损坏存档）——注入被拒绝`,
+        v.offset,
+      );
+    }
+  }
+  const byIndex = new Map<string, ArchiveArrayCell>();
+  for (const c of v.cells) byIndex.set(c.index.join(','), { index: [...c.index], value: c.value });
+  for (const p of patches) {
+    if (p.index.length !== v.saveLen.length) {
+      throw new ArchiveParseError(
+        `数组 ${v.key} 补丁下标维度不符（${p.index.length} vs ${v.saveLen.length}）`,
+        v.offset,
+      );
+    }
+    byIndex.set(p.index.join(','), { index: [...p.index], value: p.value });
+  }
+  return [...byIndex.values()].sort((a, b) => compareIndex(a.index, b.index));
 }
 
 // ---------------------------------------------------------------------------
@@ -282,11 +325,62 @@ function writeStrArray3D(w: ByteWriter, v: ArchiveArrayVariable): void {
 // 变量 / 区 / 载荷
 // ---------------------------------------------------------------------------
 
-function writeVar(w: ByteWriter, v: ArchiveVariable): void {
+function writeVar(w: ByteWriter, v: ArchiveVariable, override?: ArchiveOverrideValue): void {
+  // ---- passthrough 路径（方案 B：有 raw 视图且未修改 → 整段原样复制）----
+  // raw 区间含类型 token + key + 值，必须在写 token 之前短路。
+  if (override === undefined && v.raw) {
+    w.bytes(v.raw);
+    return;
+  }
+
   const token = TYPE_TOKEN[v.type];
   if (token === undefined) throw new ArchiveParseError(`未知变量类型：${v.type}`, v.offset);
   w.byte(token);
   w.str(v.key);
+
+  // ---- 覆盖路径（被修改变量：重编码 + Int64 守卫）----
+  if (override !== undefined) {
+    if (v.type === 'int') {
+      if (typeof override !== 'number') throw new ArchiveParseError(`整数变量 ${v.key} 的覆盖值须为 number`, v.offset);
+      w.encodeInt(override);
+      return;
+    }
+    if (v.type === 'str' || v.type === 'xml') {
+      if (typeof override !== 'string') throw new ArchiveParseError(`字符串变量 ${v.key} 的覆盖值须为 string`, v.offset);
+      w.str(override);
+      return;
+    }
+    if (v.type.startsWith('int-array') || v.type.startsWith('str-array')) {
+      if (!Array.isArray(override) || override.length === 0) {
+        throw new ArchiveParseError(`数组变量 ${v.key} 的覆盖值须为非空 ArchiveCellPatch 数组`, v.offset);
+      }
+      if (!('cells' in v)) throw new ArchiveParseError(`变量 ${v.key} 不支持单元补丁（非数组变量）`, v.offset);
+      const patched: ArchiveArrayVariable = { ...v, cells: mergedCells(v, override) };
+      switch (v.type) {
+        case 'int-array-1d':
+          writeIntArray1D(w, patched);
+          return;
+        case 'int-array-2d':
+          writeIntArray2D(w, patched);
+          return;
+        case 'int-array-3d':
+          writeIntArray3D(w, patched);
+          return;
+        case 'str-array-1d':
+          writeStrArray1D(w, patched);
+          return;
+        case 'str-array-2d':
+          writeStrArray2D(w, patched);
+          return;
+        case 'str-array-3d':
+          writeStrArray3D(w, patched);
+          return;
+      }
+    }
+    throw new ArchiveParseError(`变量类型 ${v.type} 暂不支持注入覆盖（${v.key}）`, v.offset);
+  }
+
+  // ---- 传统重编码路径（无 raw：如手工构造的 archive 或 keepRaw 未开启）----
   // 判别式 narrow 在联合字面量属性上不可靠（§九-10），显式守卫
   const isIntScalar = v.type === 'int' && typeof (v as { value: unknown }).value === 'number';
   const isStrScalar = (v.type === 'str' || v.type === 'xml') && typeof (v as { value: unknown }).value === 'string';
@@ -331,16 +425,17 @@ function writeVar(w: ByteWriter, v: ArchiveVariable): void {
   }
 }
 
-function writeVarStream(w: ByteWriter, vars: readonly ArchiveVariable[]): void {
-  for (const v of vars) writeVar(w, v);
+function writeVarStream(w: ByteWriter, vars: readonly ArchiveVariable[], overrides?: ReadonlyMap<string, ArchiveOverrideValue>): void {
+  for (const v of vars) writeVar(w, v, overrides?.get(v.key));
   w.byte(0xff); // EOF
 }
 
-function writeCharBlock(w: ByteWriter, block: ArchiveCharacterBlock): void {
+function writeCharBlock(w: ByteWriter, block: ArchiveCharacterBlock, overrides?: ReadonlyMap<string, ArchiveOverrideValue>): void {
   const sep = block.dimSepIndex;
   for (let i = 0; i < block.vars.length; i++) {
     if (sep !== null && sep !== undefined && i === sep) w.byte(0xfd); // Separator（#DIM 界）
-    writeVar(w, block.vars[i]!);
+    const v = block.vars[i]!;
+    writeVar(w, v, overrides?.get(v.key));
   }
   if (sep !== null && sep !== undefined && sep >= block.vars.length) w.byte(0xfd);
   w.byte(0xfe); // EOC
@@ -355,9 +450,17 @@ const FILE_TYPE_CODE: Record<ArchiveFileType, number> = {
 
 /**
  * 载荷层重序列化（parse 的逆；不含明文头与 gzip 容器）。
- * cells 省略/截断的档不可重序列化（显式抛错，不静默产出损坏载荷）。
+ *
+ * v0.2 第十三批方案 B：
+ * - 未覆盖且有 `raw` 视图的变量**原样复制**（passthrough）——Int64 近似值
+ *   永不重编码，近似档（save01+）的写回从"显式拒绝"变为"字节级安全"；
+ * - `overrides` 列出的变量重编码（数组 = 单元级补丁合并），任一值超出安全
+ *   整数域即抛错拒绝（损坏不落盘）。
+ *
+ * cells 省略/截断的档：无覆盖时靠 raw passthrough 仍可重序列化；**被覆盖的**
+ * 数组若 cells 截断则拒绝（显式抛错，不静默产出损坏载荷）。
  */
-export function serializePayload(archive: SnapshotArchive): Uint8Array {
+export function serializePayload(archive: SnapshotArchive, opts?: { overrides?: ArchiveOverrides }): Uint8Array {
   const w = new ByteWriter();
   const ft = archive.fileType;
   w.byte(FILE_TYPE_CODE[ft]);
@@ -366,16 +469,18 @@ export function serializePayload(archive: SnapshotArchive): Uint8Array {
   w.str(archive.saveMes);
   if (ft === 'normal' || ft === 'charvar') {
     w.int64(BigInt(archive.charCount));
-    for (const block of archive.chars ?? []) writeCharBlock(w, block);
+    for (const block of archive.chars ?? []) {
+      writeCharBlock(w, block, opts?.overrides?.chars?.get(block.index));
+    }
   }
   if (ft === 'normal' || ft === 'var') {
-    writeVarStream(w, archive.vars ?? []);
+    writeVarStream(w, archive.vars ?? [], opts?.overrides?.vars);
   }
   if (ft === 'global') {
-    writeVarStream(w, archive.globalVars ?? []);
+    writeVarStream(w, archive.globalVars ?? [], opts?.overrides?.vars);
   }
   if ((ft === 'normal' || ft === 'global') && archive.emVars) {
-    writeVarStream(w, archive.emVars);
+    writeVarStream(w, archive.emVars, opts?.overrides?.vars);
   }
   return w.toBytes();
 }

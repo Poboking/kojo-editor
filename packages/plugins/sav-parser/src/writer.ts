@@ -43,6 +43,11 @@ export class ByteWriter {
     this.push(new Uint8Array([b]));
   }
 
+  /** 原样写入一段字节（v0.2 第十三批方案 B：未修改变量的 passthrough 通道） */
+  bytes(buf: Uint8Array): void {
+    this.push(buf);
+  }
+
   int16(v: number): void {
     this.view.setInt16(0, v, true);
     this.push(new Uint8Array(this.view.buffer.slice(0, 2)));
