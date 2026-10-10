@@ -288,6 +288,24 @@ interface GameProject {          // 通用形状，内核视为不透明载荷
 
 **规则误报治理原则（实战教训）**：FORM 三连符号规则初版对全部 5 个符号逐行报错，实测 239 条中大量是**有意**用法（`+++` 在 43 个文件里作为 CALLNAME:MASTER 的正文占位）。按"宁可漏报不可误报"收窄为：**排除 `+++`**、**每文件每符号聚合为一条**（含出现次数 + 首次行号）→ 239 → 8 条真实事故。规则实现前必须回引擎源码核验语义（`LexicalAnalyzer.cs:1207` + `CharStream.TripleSymbol():158` + `StrForm.cs:65`）。
 
+### 5.9 条件谓词抽取（v0.2 第四批实施记录）
+
+**目的**：把 20 万 IF / 4.5 万 SELECTCASE 背后的"状态依赖"结构化，服务导航徽章 / 条件矩阵（v1.x）/ 快照回放（v1.0）。
+
+**三层分离（"一切皆插件"的又一次落地）**：
+
+| 层 | 归属 | 内容 |
+|---|---|---|
+| 结构骨架 | `plugin-api/erb.ts` 契约 + `erb-parser`（`scanControlFlow`） | 线性 `ControlFlowStatement[]`：kind / 条件原文 / 块深度 / 行号；配对表以引擎 `FunctionIdentifier.cs funcMatch` 为准（IF→ENDIF / REPEAT→REND / TRY系→CATCH→ENDCATCH / PRINTDATA→ENDDATA…）；宽容：孤儿闭合向栈内查最近匹配，不中断 |
+| 谓词化 | `plugin-api/conditions.ts` 契约 + `condition-extractor` 插件 | ERB 表达式子集 → AST（Pratt，优先级以 `OperatorCode.cs` 为准：`* / %`(90)…`&& \|\|`(40)）；**包容降级**：无法解析片段为 `opaque`，绝不抛错；CASE 展开（`==值` / `IS >= n` / `a TO b` / 逗号列表） |
+| 语义标注 | `eratw-adapter`（`variableSchema`） | **CSV 驱动**：扫描游戏 `CSV/*.csv` 名称表（CFLAG/Talent/ABL/Base…）建"编号↔名称"双向字典；引擎经槽位查询 `project.adapterId` 精确匹配后**透传标注**，不解释内容 |
+
+- **服务** `condition.extractor`：`ensureIndex()`（全量，与在途共享）/ `currentIndex()` / `functionConditions(name)` / `subscribe(cb)`；订阅 `kojo.functionChanged` 串行调度（convention-linter 同款）；项目关闭清空。
+- **聚合模型**：函数级 `StateDependency`（key / count / 阈值比较 / firstLine / schema 标签）——不存全量谓词对象（真实数据 49 万谓词，必须聚合控制内存）。
+- **语言级局部量排除**（通用知识，非游戏知识）：`LOCAL/LOCALS/LOCALSS/ARG/ARGS/RESULT/RESULTS/COUNT` 系不构成"状态依赖"。
+- **真实工程实测（2026-10-10）**：95,504 函数 / 493,712 谓词 / 未解析 **0.04%**（补 `[[词]]`/括号索引后；此前 0.69%）/ 含依赖函数 31,609 / 依赖条目 164,910 / schema 标注 109,742（恋慕 17,993 / 好感度 480）/ 全量耗时 ~6.2s。变量字典 33 张名称表。
+- **“先测量再定语义”**（与 §5.8 同源的教训）：解析器初版 dump 真实 opaque 样本发现两大系统性缺口——`[[词]]`（引擎 rename 语法，读取期按 `_Rename.csv` 替换；编辑器保留原文）与**括号索引段**（`YOGORE:(GET_CHARAHOME(TARGET))`）——补齐后引擎侧未解析谓词 3,383 → 187（剩余为个例形态，保持 opaque 降级不猜测）。
+
 ---
 
 ## 6. 目录结构（monorepo）
@@ -298,17 +316,17 @@ kojo-editor/
 │   ├── kernel/            # 内核：DI、总线、存储域、文件IO、槽位注册表、状态面板
 │   ├── plugin-api/        # 对外类型与接口（唯一公共 API 包，版本化 semver）
 │   ├── plugins/
-│   │   ├── erb-parser/        # 声明 requires: ['kernel.io']；v0.2 起订阅 project.opened 自建索引
-│   │   ├── eratw-adapter/     # 声明 requires: ['kernel.io']，eraTW 全部知识在此（家族识别 + conventions）
+│   │   ├── erb-parser/        # 声明 requires: ['kernel.io']；v0.2 起订阅 project.opened 自建索引 + scanControlFlow
+│   │   ├── eratw-adapter/     # 声明 requires: ['kernel.io']，eraTW 全部知识在此（家族识别 + conventions + variableSchema）
 │   │   ├── convention-linter/ # 声明 requires: ['kernel.io','kernel.project','kernel.slots','erb.parser']
+│   │   ├── condition-extractor/ # ★ 条件谓词抽取（服务 condition.extractor；表达式解析 + 状态依赖聚合，语义标注来自 adapter）
 │   │   ├── ui-convention-report/ # ui.panel：校验结果面板（点击 → editor.revealLocation）
-│   │   ├── ui-kojo-navigator/ # ★ ui.panel：函数树导航（角色→家族→面→函数；家族规则经槽位查询，不 import adapter）
+│   │   ├── ui-kojo-navigator/ # ★ ui.panel：函数树导航（角色→家族→面→函数 + 条件徽章；家族规则经槽位查询，不 import adapter）
 │   │   ├── sav-parser/        # sav 字节协议：读（parse_sav.cjs 移植）+ 写/注入（§5.5）
 │   │   ├── state-replay/      # requires: ['game.adapter','sav.parser']
 │   │   ├── runtime/           # v2 可选：受管引擎子进程 + CliDebug 协议（§5.6，默认不立项）
 │   │   ├── preview-renderer/
-│   │   ├── condition-extractor/ # v0.2 第三批：条件谓词抽取（好感/信赖/CFLAG 位/时间窗）
-│   │   ├── ui-condition-matrix/# ui.panel：条件矩阵/位图查看
+│   │   ├── ui-condition-matrix/# v1.x 计划：条件矩阵/位图查看（消费 condition.extractor）
 │   │   └── ui-plugin-status/  # ui.panel：插件状态面板（首个 ui.panel 示例）
 │   └── app/               # 壳：Tauri（Rust 宿主）+ Monaco 编辑器主体；sav 二进制解析可下沉 Rust 侧
 ├── docs/                  # 本文档、ADR、接口变更记录
