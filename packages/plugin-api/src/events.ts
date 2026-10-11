@@ -44,6 +44,14 @@ export interface KernelEventMap {
    */
   'editor.activeFileChanged': { filePath: string | null };
   /**
+   * 写权限批准记录失效（2026-10-11 写权限闭环批 P0）：持久化的批准与适配器
+   * 本次提议不一致（游戏更新等）——内核**未**放行写权限，等待用户重新确认。
+   *
+   * 通用、游戏无关——由宿主消费（重弹批准对话框 + 状态栏只读徽章）。
+   * 修复点：此前仅 log.warn，宿主无从感知，旧批准记录场景会静默永久只读（F1/F2）。
+   */
+  'project.writableApprovalMismatch': { rootDir: string };
+  /**
    * 回放意图（v0.2 第八批）：请求回放面板解释一个口上函数。
    * 通用、游戏无关——由回放面板（`state.replay` 的 UI 消费者）响应；
    * 任意插件可发起（导航面板"回放此函数"、未来的矩阵/预览联动）。

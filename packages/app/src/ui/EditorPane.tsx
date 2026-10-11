@@ -7,12 +7,13 @@ import type {
   EditorSaveWarning,
   LineDecoration,
 } from '@kojo/plugin-api';
-import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
+import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from 'monaco-editor';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
+import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
@@ -63,6 +64,10 @@ interface Props {
   onDirtyChange?: (dirty: boolean) => void;
   /** 注册保存句柄（宿主"保存并前往"流程用；卸载/换文件时以 null 注销） */
   registerSave?: (fn: (() => Promise<boolean>) | null) => void;
+  /** 写权限状态（P0）：只读时保存按钮置灰 + 保存前置拦截（不等到写盘才报错） */
+  writable: boolean;
+  /** 重授权入口（通知 action「去授权」落地处） */
+  onReauth: () => void;
 }
 
 /**
@@ -77,7 +82,16 @@ interface Props {
  * - 波浪线：消费 `ui.editor.decorator` 槽的全部贡献（纯函数）→ Monaco markers，
  *   打开即算、编辑停顿去抖重算（v0.3 S6）。
  */
-export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyChange, registerSave }: Props): ReactElement {
+export function EditorPane({
+  kernel,
+  filePath,
+  revealLine,
+  revealNonce,
+  onDirtyChange,
+  registerSave,
+  writable,
+  onReauth,
+}: Props): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const originalRef = useRef<string>('');
@@ -87,6 +101,10 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
   const revealRef = useRef<{ line: number; nonce: number } | null>(null);
   /** 当前文件路径（供只注册一次的 Monaco 回调读取最新值，避免闭包过时） */
   const filePathRef = useRef<string>(filePath);
+  /** 写权限/重授权入口 ref（同上：Monaco 回调与保存句柄只注册一次，须读最新值） */
+  const writableRef = useRef<boolean>(writable);
+  const onReauthRef = useRef<() => void>(onReauth);
+  const notify = useNotify();
   /** 装饰重算定时器（编辑停顿去抖） */
   const markerTimerRef = useRef<number | null>(null);
   /** 装饰刷新函数（ref 化，供只注册一次的 onDidChangeModelContent 调用） */
@@ -141,6 +159,12 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
     filePathRef.current = filePath;
   }, [filePath]);
 
+  // 写权限/重授权 ref 同步（同上）
+  useEffect(() => {
+    writableRef.current = writable;
+    onReauthRef.current = onReauth;
+  }, [writable, onReauth]);
+
   /** 编辑停顿后重算装饰（去抖；换文件时立即算，见文件加载 effect） */
   const scheduleMarkers = useCallback(() => {
     if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
@@ -185,6 +209,16 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
       if (!ed || savingRef.current) return false;
       const path = filePathRef.current;
       if (!path) return false;
+      // P0 前置拦截：只读时不等到写盘才报错——通知 + 去授权 action（定稿 §九-1/3）
+      if (!writableRef.current) {
+        notify({
+          kind: 'error',
+          message: '保存被拒绝：项目当前为只读（写权限未批准或批准已失效）。',
+          action: { label: '去授权', run: () => onReauthRef.current() },
+        });
+        setError('只读：写权限未批准');
+        return false;
+      }
       const text = ed.getValue();
       savingRef.current = true;
       try {
@@ -216,13 +250,23 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
         setStatus(`已保存 ${new Date().toLocaleTimeString()}`);
         return true;
       } catch (e: unknown) {
+        // 竞态兜底（批准在保存途中被收回等）：WriteNotAllowedError → 中文人话 + 去授权
+        if (e instanceof WriteNotAllowedError) {
+          notify({
+            kind: 'error',
+            message: '保存被拒绝：写入路径不在已批准范围内。',
+            action: { label: '去授权', run: () => onReauthRef.current() },
+          });
+          setError('只读：写权限未批准');
+          return false;
+        }
         setError(e instanceof Error ? e.message : String(e));
         return false;
       } finally {
         savingRef.current = false;
       }
     },
-    [kernel, markSaved],
+    [kernel, markSaved, notify],
   );
 
   /**
@@ -342,7 +386,12 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
         </span>
         <span className="spacer" />
         <span className="editor-status">{error ? `⚠ ${error}` : status}</span>
-        <button className="primary small" onClick={() => void save()} disabled={!dirty}>
+        <button
+          className="primary small"
+          onClick={() => void save()}
+          disabled={!dirty || !writable}
+          title={writable ? undefined : '只读：写权限未批准（点击底部状态栏「只读」徽章授权）'}
+        >
           保存 (Ctrl+S)
         </button>
       </div>

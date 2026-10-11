@@ -1717,3 +1717,71 @@ code {
   min-width: 0;
   word-break: break-word;
 }
+
+/* --------------------- status bar（P0 简化形态） --------------------- */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 10px;
+  min-height: 24px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.sb-writable {
+  border: none;
+  background: transparent;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.sb-writable.ok {
+  color: var(--green);
+  cursor: default;
+}
+.sb-writable.ro {
+  color: var(--amber);
+  cursor: pointer;
+}
+.sb-writable.ro:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: transparent;
+}
+
+/* --------------------- notification center（P0） --------------------- */
+
+.notification-center {
+  position: fixed;
+  right: 16px;
+  bottom: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1200;
+  max-width: 380px;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+}
+.toast-error {
+  border-left-color: var(--red);
+}
+.toast-message {
+  flex: 1;
+  line-height: 1.5;
+}
+.toast-close {
+  border: none;
+  padding: 0 6px;
+}

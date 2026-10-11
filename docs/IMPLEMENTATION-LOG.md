@@ -1511,3 +1511,65 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - **产物 diff 预览**：保存前显示"本次将改动产物哪些行"（源映射已具备）留后续。
 - **新建向导**：从零新建 `.kojo` 并落位到正确口上目录（含 `M_KOJO_K{No}_{分野}` 命名校验，需 adapter 知识）留后续。
 - **多接管者链式**：当前唯一接管（取 `order` 最小）；"格式化 → 编译"这类多步管线待有真实需求再设计（避免过早抽象）。
+
+### 5.38 UI 重设计 P0 · 写权限闭环批（2026-10-11 批：静默只读修复 + 状态栏徽章 + 通知中心）
+
+> 对应需求：`docs/UI-REDESIGN-2026-10-11.md` §九（F1/F2）；任务卡：`docs/UI-REDESIGN-HANDOFF-2026-10-11.md` §五 P0。beta.1 判据 ⑥ 的第一期。
+
+#### 范围
+
+1. **静默只读修复**：kernel `applyApprovedWritable` 检测到「持久化批准 ≠ 适配器本次提议」时，除 `log.warn` 外经**新内核事件 `project.writableApprovalMismatch`**（additive 进 `KernelEventMap`）通知宿主；App 在 `open()` 期间局部订阅，命中即**重弹 `WritableApprovalDialog`** 并把写权限状态置为只读。修复前：旧批准记录场景宿主只查 `approvedWritableFor != null`，永远不重弹 → 静默永久只读（F1/F2 根因）。
+2. **状态栏写权限徽章（P0 简化形态）**：`ProjectView` 底部新增 `.statusbar`——`可写`（绿，非交互）/ `只读`（琥珀按钮，点击 → 重授权对话框）。P1 换五区骨架、P3 槽位化（`ui.statusbar`）。
+3. **通知中心**：壳层私有 `NotificationCenter`（Provider + toast 渲染；不经内核事件表）——info 6s 自动消失、error 常驻到关闭/点击 action、同屏上限 5 条；`useNotify()` 供壳层任意组件发通知。
+4. **保存前置拦截**：`writable === false` 时 `save()` 不征询保存接管者、不写盘——直接 toast「保存被拒绝：项目当前为只读」+「去授权」action（**不等到写盘才报错**）；保存按钮同步置灰 + tooltip 指路状态栏徽章。
+5. **竞态兜底**：保存途中批准被收回等场景抛出的 `WriteNotAllowedError` 被显式捕获 → 中文人话 toast +「去授权」action（裸英文堆栈只进日志，定稿 §九-3）。
+
+#### 文件变更
+
+| 文件 | 变更 | 说明 |
+|---|---|---|
+| `packages/plugin-api/src/events.ts` | 修改 | `KernelEventMap` additive 新增 `project.writableApprovalMismatch { rootDir }`（不改名不删除，兼容性承诺不破） |
+| `packages/kernel/src/project.ts` | 修改 | 不一致分支补 `bus.emit` |
+| `packages/kernel/tests/kernel.test.ts` | 修改（+1 项） | 「不一致 → 不放行 + 恰好一次事件 → 重批准恢复 → 再重开自动放行且不再发事件」全路径 |
+| `packages/app/src/ui/NotificationCenter.tsx` | **新增** | 通知中心（Provider + toast + `useNotify`；info TTL 6s / error 常驻 / 同屏上限 5） |
+| `packages/app/src/ui/App.tsx` | 修改 | `writable` 状态（null/boolean）；`openProject` 局部订阅不一致事件（消竞态）；`decideApproval` 同步徽章；`requestReauth` 双入口落地；整体包进 `NotificationCenter` |
+| `packages/app/src/ui/ProjectView.tsx` | 修改 | 底部 `.statusbar` + 写权限徽章（只读可点击）；`writable`/`onReauth` 透传 EditorPane |
+| `packages/app/src/ui/EditorPane.tsx` | 修改 | `writable`/`onReauth` props + ref 化（只注册一次的回调读最新值）；保存前置拦截 + `WriteNotAllowedError` 竞态映射；按钮置灰 + tooltip |
+| `packages/app/src/styles.css` | 修改 | `.statusbar`/`.sb-writable`/`.notification-center`/`.toast` 样式（沿用既有 token） |
+
+#### 关键设计决策
+
+1. **不一致事件只在 `open()` 期间被局部订阅**：`applyApprovedWritable` 仅由 `project.open` 调用，事件必然同步发出——`openProject` 内 `bus.on` → `open()` → `un()` 的局部订阅既拿到事件，又不引入「常驻监听 setState 与 openProject 自身 setState 交错」的竞态。
+2. **事件不进 `KERNEL_EVENT_NAMES` 白名单**：该集合的实际语义是「允许插件 emit 的内核事件」（scopedBus 据此拦截）——`project.writableApprovalMismatch` 只应由内核发出（插件伪造它等于伪造安全提示），照 `editor.activeFileChanged`（宿主专属）先例不收录；插件可 `on` 不可 `emit`。
+3. **通知中心是壳层私有，不进内核事件表**：插件侧写错误（如升糖面板）暂仍由面板自行呈现；是否开放「插件 → 通知」通道留待 P3 💡 迁移时按真实需求定（避免过早设计）。
+4. **只读拦截放保存链最前**：在征询 `ui.editor.saveHandler` 之前拦截——插件接管者（`.kojo` 保存 = 写源 + 编译产物）在只读态连「写源」都不该发生。
+
+#### 测试
+
+- `kernel.test.ts` **+1 项**：不一致 → `isWritable === false`（连旧批准内路径也不放行）+ 事件恰好一次且 payload rootDir 正确 → `approveWritablePaths` 重批准即恢复 → 第三次重开（记录已更新一致）自动放行、不再发事件。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **959 passed / 6 skipped（965）**（958 → 959，+1；56 passed / 3 skipped 文件，16 插件，零回归） |
+| `pnpm typecheck`（root） | 通过，exit 0 |
+| `pnpm typecheck`（`@kojo/app`） | 通过，exit 0 |
+| `node tools/audit-decoupling.mjs` | **A/B/C/D 四项全绿（16 插件）**（壳层仅容器/动作语义，零业务词） |
+
+#### 手工清单（真实终端 `pnpm tauri dev` 勾验；沙箱不跑 GUI）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| a | 用旧版批准过写权限的工程，人为让批准记录与提议不一致（如改动提议目录后重开） | 打开项目即**重弹**写权限确认框（修复前：静默只读） |
+| b | 首次打开工程选「只读浏览」 | 底部状态栏左侧出现琥珀「只读」徽章；保存按钮置灰（悬停见 tooltip） |
+| c | 只读态按 `Ctrl+S` | 不写盘；右下 toast「保存被拒绝：项目当前为只读…」+「去授权」按钮 |
+| d | 点 toast「去授权」/ 点状态栏「只读」徽章 | 均弹出写权限确认框；选「允许写入」后徽章变绿「可写」、保存恢复可用 |
+| e | error toast 常驻不自动消失；× 可关 | 符合 |
+| f | 关闭项目再重开（已批准） | 徽章直接为「可写」，不弹框 |
+
+#### 边界未做（属后续批）
+
+- **状态栏槽位化**：P0 徽章为壳层硬编码简化形态；P1 换五区骨架、P3 以 `ui.statusbar` 槽承载（诊断计数等入驻）。
+- **插件侧写错误的通知接入**：`ui-sugar-lift` 等插件内的写盘报错暂由面板自呈现；插件 → 通知中心的通道（是否开放、以何形态）留待 P3 💡 迁移时按真实需求定。
+- **重授权对话框文案差异化**：不一致重弹与首弹目前同文案（未区分「首次批准 / 批准失效」）；如需区分可给 dialog 加 reason 字段，留后续。

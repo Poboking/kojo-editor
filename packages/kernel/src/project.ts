@@ -158,6 +158,8 @@ export class ProjectServiceImpl implements ProjectService {
         `Stored writable approval for ${project.rootDir} no longer matches the adapter's proposal; ` +
           'waiting for re-confirmation.',
       );
+      // 通知宿主重弹批准对话框（此前仅告警 → 宿主无从感知，旧记录场景静默永久只读）
+      this.deps.bus.emit('project.writableApprovalMismatch', { rootDir: project.rootDir });
     }
   }
 

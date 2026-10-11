@@ -19,6 +19,10 @@ interface Props {
   /** 保存句柄注册（"保存并前往"流程用） */
   registerSave?: (fn: (() => Promise<boolean>) | null) => void;
   onClose: () => void;
+  /** 写权限状态（P0 状态栏徽章 + 保存置灰；宿主通用 chrome，零业务词） */
+  writable: boolean;
+  /** 重授权入口（徽章点击 / 通知 action 共用） */
+  onReauth: () => void;
 }
 
 export function ProjectView({
@@ -32,6 +36,8 @@ export function ProjectView({
   onDirtyChange,
   registerSave,
   onClose,
+  writable,
+  onReauth,
 }: Props): ReactElement {
   const panels = kernel.slots.query('ui.panel');
 
@@ -86,6 +92,8 @@ export function ProjectView({
               revealNonce={reveal?.nonce}
               onDirtyChange={onDirtyChange}
               registerSave={registerSave}
+              writable={writable}
+              onReauth={onReauth}
             />
           ) : (
             <div className="empty-state">
@@ -97,6 +105,19 @@ export function ProjectView({
           )}
         </main>
       </div>
+
+      {/* P0 简化状态栏（P1 换五区骨架、P3 槽位化）：写权限徽章常驻——安全相关信息不隐藏 */}
+      <footer className="statusbar">
+        {writable ? (
+          <span className="sb-writable ok" title="写权限已批准">
+            可写
+          </span>
+        ) : (
+          <button className="sb-writable ro" title="只读：写权限未批准，点击重新授权" onClick={onReauth}>
+            只读
+          </button>
+        )}
+      </footer>
     </div>
   );
 }

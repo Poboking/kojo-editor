@@ -4,6 +4,7 @@ import type { ErbIndex, ErbParserService, GameProject, RecentProject } from '@ko
 import { invoke, isTauri } from '../bridge/invoke';
 import { bootstrapKernel } from '../bootstrap';
 import { ProjectView } from './ProjectView';
+import { NotificationCenter } from './NotificationCenter';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
@@ -34,6 +35,8 @@ export function App(): ReactElement {
   const [reveal, setReveal] = useState<RevealTarget | null>(null);
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [pendingApproval, setPendingApproval] = useState<GameProject | null>(null);
+  /** 写权限状态（P0）：null = 无项目；驱动状态栏徽章 + 保存置灰 */
+  const [writable, setWritable] = useState<boolean | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
   const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -99,6 +102,12 @@ export function App(): ReactElement {
       if (!kernel) return;
       setPhase('opening');
       setError(null);
+      // 静默只读修复（P0）：不一致事件只在 open() 期间同步发出——局部订阅，
+      // 避免常驻监听与 openProject 状态写入之间的竞态
+      let approvalMismatch = false;
+      const unMismatch = kernel.bus.on('project.writableApprovalMismatch', () => {
+        approvalMismatch = true;
+      });
       try {
         const p = await kernel.project.open(dir);
         setProject(p);
@@ -118,9 +127,11 @@ export function App(): ReactElement {
           }
         }
 
-        // 可写路径批准（首次打开必须由用户显式确认；未批准 = 只读浏览）
+        // 可写路径批准（首次打开必须由用户显式确认；未批准 = 只读浏览）；
+        // 批准记录与新提议不一致（approvalMismatch）同样重弹确认（F1/F2 修复）
         const approved = await kernel.project.approvedWritableFor(dir);
-        if (!approved) setPendingApproval(p);
+        if (!approved || approvalMismatch) setPendingApproval(p);
+        setWritable(approved !== null && !approvalMismatch);
 
         // 口上域全量索引：解析器在 project.opened 已自动开建，这里等待其完成
         setIndexing(true);
@@ -131,6 +142,7 @@ export function App(): ReactElement {
         setError(e instanceof Error ? e.message : String(e));
         setPhase('welcome');
       } finally {
+        unMismatch();
         setIndexing(false);
       }
     },
@@ -202,6 +214,7 @@ export function App(): ReactElement {
     setEditorDirty(false);
     setPendingNav(null);
     setPendingApproval(null);
+    setWritable(null);
     setPhase('welcome');
     setRecent(await kernel.project.recent());
   }, [kernel]);
@@ -210,15 +223,25 @@ export function App(): ReactElement {
     async (allow: boolean) => {
       const p = pendingApproval;
       setPendingApproval(null);
-      if (!p || !kernel || !allow) return;
+      if (!p || !kernel) return;
+      if (!allow) {
+        setWritable(false);
+        return;
+      }
       try {
         await kernel.project.approveWritablePaths(p, p.writablePaths);
+        setWritable(true);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
     [kernel, pendingApproval],
   );
+
+  /** 重授权入口（定稿 Q9：状态栏徽章点击 + 通知 action 两者都留） */
+  const requestReauth = useCallback(() => {
+    if (project) setPendingApproval(project);
+  }, [project]);
 
   const body =
     phase === 'project' && kernel && project ? (
@@ -233,6 +256,8 @@ export function App(): ReactElement {
         onDirtyChange={onDirtyChange}
         registerSave={registerSave}
         onClose={closeProject}
+        writable={writable ?? false}
+        onReauth={requestReauth}
       />
     ) : (
       <WelcomeView
@@ -247,10 +272,10 @@ export function App(): ReactElement {
     );
 
   return (
-    <>
+    <NotificationCenter>
       {body}
       {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
       {pendingNav ? <UnsavedConfirmDialog filePath={activeFile ?? ''} onDecide={decideUnsaved} /> : null}
-    </>
+    </NotificationCenter>
   );
 }

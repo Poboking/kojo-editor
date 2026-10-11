@@ -167,6 +167,62 @@ describe('Kernel 组装级', () => {
     await kernel.stop();
   });
 
+  it('批准记录与适配器新提议不一致：不自动放行 + 广播 writableApprovalMismatch（重批准后恢复）', async () => {
+    const backend = new MemoryStorageBackend();
+
+    // 首次打开 + 批准 → 持久化到共享存储后端
+    const kernel1 = await bootKernel([makeFakeAdapterPlugin({ detect: [], load: [] })], backend);
+    const p1 = await kernel1.project.open('C:\\valid-root\\game');
+    await kernel1.project.approveWritablePaths(p1, p1.writablePaths);
+    await kernel1.stop();
+
+    // 适配器提议变化（游戏更新场景）：writablePaths 多出一项 → 旧批准不再匹配
+    const changedAdapter: Plugin = {
+      id: 'fake-adapter',
+      version: '1.0.0',
+      activate(ctx) {
+        ctx.slots.register('game.adapter', {
+          id: 'fake-game-adapter',
+          adapter: {
+            gameId: 'fake-game',
+            displayName: 'Fake Game',
+            detect: async () => true,
+            loadProject: async (rootDir: string): Promise<GameProject> => ({
+              rootDir,
+              adapterId: 'fake-game',
+              kojoPaths: [`${rootDir}\\ERB\\kojo`],
+              writablePaths: [`${rootDir}\\ERB\\kojo`, `${rootDir}\\ERB\\kojo\\added`],
+              charaIndex: new Map(),
+            }),
+          },
+        });
+      },
+    };
+
+    const kernel2 = await bootKernel([changedAdapter], backend);
+    const mismatches: string[] = [];
+    kernel2.bus.on('project.writableApprovalMismatch', (ev) => mismatches.push(ev.rootDir));
+
+    const p2 = await kernel2.project.open('C:\\valid-root\\game');
+    // 不一致 → 不自动放行（连旧批准内的路径也不放行）+ 恰好一次事件通知宿主重确认
+    expect(kernel2.io.isWritable(p2.writablePaths[0]!)).toBe(false);
+    expect(mismatches).toEqual(['C:\\valid-root\\game']);
+
+    // 用户重新批准后恢复可写
+    await kernel2.project.approveWritablePaths(p2, p2.writablePaths);
+    expect(kernel2.io.isWritable(p2.writablePaths[0]!)).toBe(true);
+    await kernel2.stop();
+
+    // 重批准后再次重开：记录与新提议一致 → 自动放行、不再发事件
+    const kernel3 = await bootKernel([changedAdapter], backend);
+    const mismatches3: string[] = [];
+    kernel3.bus.on('project.writableApprovalMismatch', (ev) => mismatches3.push(ev.rootDir));
+    const p3 = await kernel3.project.open('C:\\valid-root\\game');
+    expect(kernel3.io.isWritable(p3.writablePaths[0]!)).toBe(true);
+    expect(mismatches3).toEqual([]);
+    await kernel3.stop();
+  });
+
   it('多适配器命中：取 order 最小者并告警（不静默）', async () => {
     const calls1 = { detect: [] as string[], load: [] as string[] };
     const calls2 = { detect: [] as string[], load: [] as string[] };
