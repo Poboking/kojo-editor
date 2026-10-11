@@ -83,7 +83,7 @@ fixtures/                     # 合成样本（真实游戏数据不入库）
 
 ```bash
 pnpm install
-pnpm test              # vitest：单元 + 集成测试（未设游戏目录时集成冒烟自动跳过；实测 689 通过 / 6 跳过）
+pnpm test              # vitest：单元 + 集成测试（未设游戏目录时集成冒烟自动跳过；实测 958 通过 / 6 跳过）
 pnpm typecheck         # root 包类型检查
 pnpm audit:decoupling  # 「一切皆插件」解耦审计（内核零游戏名 / 插件依赖纪律）
 ```
@@ -115,10 +115,20 @@ pnpm --filter @kojo/app tauri dev     # 首次需 cargo 编译 Tauri 依赖树�
 | v0.2 | 十八批：约定校验 / 家族导航 / 条件抽取 / 快照源 / 状态回放 / 回放面板 / 分支走向 / 注入器地基 | ✅ 完成 |
 | v1.0 | 快照回放收口（有界内联求值 + 分支走向 + 信任闭环 + 协议覆盖校验） | ✅ 完成 |
 | v1.1 | 状态注入器（读档 → 改值 → 备份 → 回读验证 + 两步确认 UI） | ✅ 完成 |
-| v0.3 | 语法糖 `.kojo` → ERB：S1 契约+golden / S2 转译内核 / S3 写盘 | 🔄 S1–S2 ✅，S3 进行中 |
-| v0.2.5 | 收尾：CI + README + 编码往返 golden + 合成 fixtures | 🔄 本批 |
+| v0.3 | 语法糖 `.kojo` → ERB：S1 契约+golden / S2 转译内核 / S3 写盘 / S4 预览 / S5 升糖 / S6 编辑体验 / S7 保存接线 | ✅ 完成（S1–S7） |
+| v0.2.5 | 收尾：CI + README + 编码往返 golden + 合成 fixtures | ✅ 完成 |
 
 批次明细见 [HANDOFF.md](docs/HANDOFF.md) §二/§六；语法糖表层语法见 [SYNTAX-SUGAR-SURFACE-SPEC.md](docs/SYNTAX-SUGAR-SURFACE-SPEC.md)。
+
+### 下一发行版判据（`v0.4.0-beta.1`）
+
+版本纪律见 [HANDOFF.md](docs/HANDOFF.md) §十一。打 tag 需**全部**满足：
+
+1. **保存闭环**：`.kojo` 编辑 → `Ctrl+S` → 源保存 + 产物 `.ERB` 编译落盘 → 真实游戏可跑（**代码侧已闭环**，见 IMPLEMENTATION-LOG §5.36/§5.37；余真实终端手工勾验）；
+2. **文件变更事件**：`file.changed` 真实监视器接线 + 消费方去抖；
+3. **桌面壳深度冒烟**：真实终端 `pnpm tauri dev` 全流程通过；
+4. **打包产物**：NSIS/安装器可在干净目录安装启动；
+5. **用户文档**：安装、打开工程、`.kojo` 编辑编译保存、注入器安全提示。
 
 ## 基线
 

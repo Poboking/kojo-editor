@@ -1,13 +1,16 @@
 /**
  * @kojo/plugin-ui-sugar-editor
  *
- * 语法糖**编辑体验**（v0.3 批 S6）：两处贡献，都只做**呈现/翻译**，语义全在
- * `kojo-sugar` 的 `sugar.transpile`（纯函数）——
+ * 语法糖**编辑体验**（v0.3 批 S6 + 2026-10-12 保存接线批）：三处贡献，都只做
+ * **呈现/翻译/编排**，语义全在 `kojo-sugar` 的 `sugar.transpile`（纯函数）——
  *
  *   1. `ui.editor.decorator`（id `sugar-diagnostics`）：对当前 `.kojo` 源转译，
  *      把诊断翻成**行级装饰**（带列区间）→ 宿主（app 壳）消费为 Monaco markers，
  *      即规范 §8「危险波浪线」；
- *   2. `ui.panel`（id `sugar-verdict`，标题「糖判定」）：当前 `.kojo` 文件的
+ *   2. `ui.editor.saveHandler`（id `sugar-save`，2026-10-12 批）：接管 `.kojo`
+ *      保存——保存源文件 + 经 `planSave`/`compileToFile` 编译产物（逻辑见
+ *      `save-handler.ts`）；宿主零 `.kojo` 知识，缺失时退化为缺省保存；
+ *   3. `ui.panel`（id `sugar-verdict`，标题「糖判定」）：当前 `.kojo` 文件的
  *      **编译判定**——可编译 / 有警告 / 不可编译 + 逐条诊断（点击 → 定位源行）。
  *
  * 分层与解耦（对应 ARCHITECTURE.md §4 与 DSH 哲学）：
@@ -33,6 +36,7 @@ import {
   type VerdictRow,
   type VerdictSummary,
 } from './panel-logic';
+import { performSugarSave } from './save-handler';
 
 /** 诊断渲染上限（防 DOM 爆炸；超出显式计数） */
 const DIAG_CAP = 200;
@@ -66,7 +70,19 @@ export function createUiSugarEditorPlugin(): Plugin {
         },
       });
 
-      /* -------------------- 贡献 2：糖判定面板 -------------------- */
+      /* -------------------- 贡献 2：保存接管（转译 + 编译落盘） -------------------- */
+
+      // Ctrl+S（`.kojo`）由宿主就近征询本接管者：保存源文件 + 编译产物 `.ERB`
+      //（逻辑在 save-handler.ts，纯编排；转译/编译与落盘闸门全在既有链路）。
+      ctx.slots.register('ui.editor.saveHandler', {
+        id: 'sugar-save',
+        title: '语法糖保存（转译 + 编译落盘）',
+        order: 10,
+        matches: (path) => isKojoFile(path),
+        save: (request) => performSugarSave({ sugar, io }, request),
+      });
+
+      /* -------------------- 贡献 3：糖判定面板 -------------------- */
 
       function VerdictPanel(): unknown {
         const [filePath, setFilePath] = useState<string | null>(null);

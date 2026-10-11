@@ -1430,3 +1430,84 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - **保存 UI 接线**：`Ctrl+S`（`.kojo`）触发 `planSave` → `blocked` 时弹阻断原因（非 `.kojo` / 转译错误），否则 `compileToFile` 落盘；全角空格告警在保存前提示。本批只给数据层，UI 留 S7-UI。
 - **保存期全角空格"阻断/一键修复"**：当前只**告警**（决策 2）；真正的"阻断开关"与"一键替换 `U+3000` → 空格"是 UI 交互，留 S7-UI。
 - **新建向导的跨目录目标命名**：`M_KOJO_K{No}_{分野}.ERB` 的**命名校验**需 adapter 的命名知识，本通用函数不做（决策 1）。
+
+### 5.37 语法糖 S7-UI 批 · `.kojo` 保存接线（2026-10-12 批：发版判据 ① 的最后一环）
+
+> **定位**：S7 数据层（§5.36 `planSave` + `resolveSugarTarget`）与本批（UI 接线）合起来，
+> 打通**"`.kojo` 编辑 → Ctrl+S → 源保存 + 产物 `.ERB` 编译落盘 → 真实游戏可跑"**闭环——
+> 即发版判据 ① 的最后一环。本批**只接 UI**：落盘能力（`compileToFile`）与前置检查
+> （`planSave`）**一行未改**，全部复用。
+>
+> **架构关键**：保存接**不**做成宿主硬编码 `.kojo`（那会让 app 壳认得糖格式，破坏
+> "宿主零格式知识"），而是新增**通用槽 `ui.editor.saveHandler`**——宿主在保存一个文件前按
+> `matches(path)` 就近征询接管者，命中即把落盘完全交给它；`.kojo` 的"转译 + 编译落盘"
+> 逻辑住在 `ui-sugar-editor` 插件。**无新插件（插件数仍 16）**，`ui-sugar-editor` 从
+> "两处贡献"扩为"三处贡献"。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/plugin-api/src/slots.ts` | 修改 | 新增槽 `ui.editor.saveHandler`：`EditorSaveWarning`（`kind: 'fullwidth-space'` + 消息 + 行号）/ `EditorSaveChoices`（`acknowledgeFullwidthSpace?`）/ `EditorSaveRequest`（`{path,text,project,choices?}`）/ `EditorSaveOutcome`（`saved` / `needs-choice` / `error` 三态联合）/ `EditorSaveHandlerContribution`（`title` + `matches` + `save`）；`SlotMap` 登记该槽 |
+| `packages/plugin-api/src/index.ts` | 修改 | 类型导出新增 `EditorSaveChoices` / `EditorSaveHandlerContribution` / `EditorSaveOutcome` / `EditorSaveRequest` / `EditorSaveWarning` |
+| `packages/plugins/ui-sugar-editor/src/save-handler.ts` | **新增** | 保存编排**纯逻辑**（零 React、零内核，依赖入参注入可单测）：`performSugarSave(deps, request)` —— `planSave` 前置 → 全角空格未确认返 `needs-choice` → **写源**（始终）→ `blocked` 则产 `note` 不编译 → 否则 `compileToFile` 落盘；失败一律转 `error`（**不抛**） |
+| `packages/plugins/ui-sugar-editor/src/index.ts` | 修改 | 注册第三处贡献 `ui.editor.saveHandler`（id `sugar-save`，order 10，`matches: isKojoFile`，`save: performSugarSave({sugar, io}, …)`）；模块头注释更新为"三处贡献" |
+| `packages/app/src/ui/SaveWarningDialog.tsx` | **新增** | 保存告警确认框（全角空格）：三按钮「取消 / 仍然保存 / 替换为半角空格并保存」；列出行号（`LINE_CAP=12`，超出显式计数）。**复用既有 `modal-mask`/`modal`/`modal-actions` 样式，无新增 CSS** |
+| `packages/app/src/ui/EditorPane.tsx` | 修改 | 保存接线：`pickSaveHandler(kernel, path)` 征询槽（命中者 `order` 最小、`matches` 抛错隔离）→ 委托 `handler.save` → `needs-choice` 弹 `SaveWarningDialog`（**本次不落盘**）、`error` 置状态、`saved` 记基线 + 状态栏（`message` + `note`）；无命中 → 内核 io `writeText` 缺省保存；`decideSaveWarning` 三路处置（含"一键修复"用 `executeEdits` 做**可撤销**的全文替换）；**修掉 Ctrl+S 回调闭包过时**（改用 `filePathRef.current`，`save` 只依赖 `kernel`/`markSaved`，身份稳定） |
+| `packages/plugins/ui-sugar-editor/tests/save-handler.test.ts` | **新增（8 项）** | 多路径：良构落盘 / 全角空格未确认(不落盘) / 已确认放行 / 转译 error(源存产不产) / 源非 `.kojo` / 源写失败 / 编译失败 |
+| `packages/plugins/ui-sugar-editor/tests/integration.test.ts` | 修改（仍 9 项） | 假内核新增 `saveHandlers` 收集 + `ui.editor.saveHandler` 注册分支；断言新增：注册 1 个 `sugar-save`、`matches('.kojo')===true`、`matches('.ERB')===false` |
+
+#### 关键设计决策
+
+1. **保存接管做成通用槽，不做宿主硬编码**：`.kojo` 的"保存 = 转译 + 编译落盘"属糖域逻辑，宿主不该认得它。做成 `ui.editor.saveHandler` 通用槽后，**任何文件类型都能自带保存语义**（如未来的格式化 / 生成物），宿主保持零具体格式知识；能力缺席（`ui-sugar-editor` 未激活）时**自动退化为缺省保存**（内核 io `writeText`，保编码保换行）——不静默、不报错、不阻塞浏览。这正是 DSH 解耦哲学对"可选能力"的要求（对照 §5.34 决策 2 的软依赖）。
+2. **源文件始终保存；`blocked` 只拦产物**：`.kojo` 源是作者成果，**任何情况都落盘**——转译含 `error` 时只**不生成**产物 `.ERB`（fail-closed，规范 §5.3"阻止编译，不生成半成品"），并在状态栏 `note` 说明「产物未生成：转译含 N 项错误」。若"有编译错误就不让存"，作者会丢工作——与"不丢数据"背离。失败（源写 / 编译落盘）一律转 `error` 结果（**不抛**），宿主统一呈现。
+3. **全角空格 = "告警 + 决策点"，不强制阻断**（本批最重要的语义取舍）：规范 §8 明文"保存期**告警**"，§5.36 决策 2 亦有语料证据（口上语料 3,599,696 行含 `U+3000` 者 55,565 行 = 1.54%，**全部行中用途、行首 0 次**）——故**不阻断**。实现为 `needs-choice`：未确认时**尚未落盘**（避免"取消"留下副作用），宿主弹 `SaveWarningDialog` 让用户三选——**取消 / 仍然保存 / 替换为半角空格并保存**。这既保住"告警 + 阻断决策点"的防误语义，又给出一键修复，避免强制阻断对 1.54% 正常用法的作者造成困扰。
+4. **"一键修复"是可撤销编辑，不是静默改写**：`fix-and-save` 走 `ed.executeEdits('kojo-fix-fullwidth', …)` + `pushUndoStop()` 把编辑器内 `U+3000` 换成半角——作者可 Ctrl+Z 撤回；随后以修复后文本重新保存。**绝不静默改盘**。
+5. **唯一接管，不做链式级联**：同一文件多个命中贡献时宿主取 `order` 最小者（同 `order` 按注册顺序），语义同 `game.adapter` 的单激活；`matches` 抛错的贡献被隔离（该文件退化缺省保存），不影响其余。
+6. **`needs-choice` 不改动磁盘是硬约束**：`save-handler.ts` 在返 `needs-choice` 前**只**跑 `planSave`（纯函数，不读盘不写盘），**先判告警再写源**——顺序反了（先写源再问）会让"取消"变成"其实存了一半"。单测以"`writes` 为空"钉死。
+7. **宿主保存路径经 `filePathRef.current` 取，不用闭包变量**：Monaco 的 `addCommand(Ctrl+S)` 只在挂载时注册一次，原闭包捕获 `save`（旧版 deps 含 `filePath`）→ 换文件后 Ctrl+S 会**存到旧文件**（潜在缺陷，本批修复）。修法：`save` 改用 `filePathRef.current` 读最新路径，deps 收为 `[kernel, markSaved]`（二者身份稳定）→ mount 闭包即最新，隐患消除（§九-21 闭包陷阱同款）。
+
+#### 测试
+
+- `save-handler.test.ts` **8 项**（fake `sugar` + fake `io` 精确驱动）：良构源 → 写源 + 编译，`saved` 含产物基名与字节数、无 `note`；全角空格未确认 → `needs-choice` 带行号且 **`writes`/`compiles` 均为空**；已确认（`acknowledgeFullwidthSpace`）→ 照常保存；`FULLWIDTH_SPACE` 常量即 `U+3000`；转译 error（`blocked`）→ `saved`，源已落盘、**产物不编译**、`note` 含错误数；源非 `.kojo` → `note` 归因路径；源写失败 → `error` 含「保存源文件失败」且不触碰编译；编译失败 → `error` 含「源已保存」。
+- `integration.test.ts`（仍 9 项）更新：假内核收集 `ui.editor.saveHandler`；断言注册 1 个 `sugar-save`、`matches` 对 `.kojo`/`.ERB` 的真假、`save` 为函数。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **958 passed / 6 skipped（964）**（950 → 958，**+8**；56 passed / 3 skipped 文件，**16 插件**，零回归） |
+| `pnpm typecheck`（root） | 通过，exit 0 |
+| `pnpm typecheck`（`@kojo/app`） | 通过，exit 0 |
+| `node tools/audit-decoupling.mjs` | **A/B/C/D 四项全绿（16 插件）**（新槽 / 新逻辑未引入交叉 import / 未依赖 kernel / 零游戏知识） |
+| golden / S2 内核 / S3 写链路 / S4 数据层 / S5 / S6 | 未触碰，零改动 |
+
+#### 手工清单（S7-UI 交付判据："真实终端 `pnpm tauri dev` 下 `Ctrl+S` 闭环"）
+
+在含 `.kojo` 的工程里，逐项勾验（沙箱不跑 GUI，实机勾验由验收者执行）：
+
+| # | 操作 | 预期 |
+|---|---|---|
+| a | 打开一个 `.kojo`，改一行后 `Ctrl+S` | 状态栏显示「已保存并编译 → M_KOJO_K…ERB（N B）」；同目录出现/更新产物 |
+| b | 检查产物目录 | 产物 `.ERB` 与同目录既有文件同构（UTF-8 BOM + LF）；原产物若存在已进 `{appData}/backup/` |
+| c | 故意写 `「你好。续」` 后 `Ctrl+S` | **源文件已保存**（磁盘可查）；状态栏「已保存源文件 · 产物未生成：转译含 1 项错误」；产物**未生成** |
+| d | 在源里输入全角空格 `　` 后 `Ctrl+S` | 弹「保存告警」框（列出行号）；**此刻磁盘未变** |
+| e | 在告警框点「取消」 | 关闭框，无落盘，脏标记保留 |
+| f | 再 `Ctrl+S` → 点「仍然保存」 | 落盘成功（全角空格原样保留） |
+| g | 再 `Ctrl+S` → 点「替换为半角空格并保存」 | 编辑器内 `U+3000` → 半角（可 Ctrl+Z 撤回）；落盘成功 |
+| h | 打开原生 `.ERB` 改后 `Ctrl+S` | 走缺省保存（内核 io `writeText`）；不弹糖告警、不产 `.kojo` 产物 |
+| i | 把编译成功的产物 `.ERB` 放进游戏口上目录 | 真实游戏可加载运行（发版判据 ① 终验） |
+
+#### 关键坑与发现
+
+1. **`needs-choice` 之前绝不能有副作用**：初版直觉是"先存源再问全角空格"，但那样"取消"会留下已改的源——**告警就不是告警了**。修法：`planSave`（纯函数）先算，**未确认即返回、不写盘**。单测用"`writes` 长度为 0"把这条不变式钉死。
+2. **Ctrl+S 闭包过时是真实隐患，不是理论风险**：`addCommand` 只注册一次、捕获旧 `save`（旧 deps 含 `filePath`）。换文件后按 Ctrl+S 会存到**上一个文件**——静默数据错误。改用 `filePathRef.current` + 稳定 deps 修掉。教训沿用 §九-21：**只注册一次的回调一律读 ref**。
+3. **槽注册在假内核里会被静默忽略**：`integration.test.ts` 的 `slots.register` 只收集已知槽名——新增 `ui.editor.saveHandler` 后若不补分支，注册被吞、测试仍绿（**假绿**）。故同步补 `saveHandlers` 收集 + 断言。**"测试替身要随契约一起长大"**（与 §5.34 关键坑 4 同源教训）。
+4. **`executeEdits` 的"一键修复"要配 `pushUndoStop`**：否则全文替换与上一次编辑合并成一步撤销，作者按 Ctrl+Z 会一次撤掉过多。加 `pushUndoStop()` 明确切分撤销栈。
+
+#### 边界未做（属后续批）
+
+- **保存失败的结构化定位**：当前 `error` 只给消息串（含备份路径仅在 `SugarCompileError.message` 内）；"原文件已备份于 X，点击打开"的富交互留后续。
+- **产物 diff 预览**：保存前显示"本次将改动产物哪些行"（源映射已具备）留后续。
+- **新建向导**：从零新建 `.kojo` 并落位到正确口上目录（含 `M_KOJO_K{No}_{分野}` 命名校验，需 adapter 知识）留后续。
+- **多接管者链式**：当前唯一接管（取 `order` 最小）；"格式化 → 编译"这类多步管线待有真实需求再设计（避免过早抽象）。

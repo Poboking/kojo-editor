@@ -15,7 +15,7 @@
  *
  * 四件事必须同时成立：
  * 1. **插件真的能激活**（`requires` 两项由 kojo-sugar / 内核提供）；
- * 2. **两处贡献都注册**（`ui.editor.decorator` + `ui.panel`）；
+ * 2. **三处贡献都注册**（`ui.editor.decorator` + `ui.editor.saveHandler` + `ui.panel`）；
  * 3. **波浪线是"诊断 → 装饰"的翻译**——`.kojo` 坏源出行级装饰、原生 `.ERB` 返回空；
  * 4. **没有自发明的转译逻辑**——装饰与判定都源自 `sugar.transpile`。
  */
@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   DirEntry,
   EditorDecoratorContribution,
+  EditorSaveHandlerContribution,
   FileIO,
   FileStat,
   KernelEventMap,
@@ -94,6 +95,7 @@ function makeKernel(files: Record<string, Uint8Array>) {
   const provided = new Map<string, unknown>();
   const panels: UIPanelContribution[] = [];
   const decorators: EditorDecoratorContribution[] = [];
+  const saveHandlers: EditorSaveHandlerContribution[] = [];
   const events: Array<{ type: keyof KernelEventMap; payload: unknown }> = [];
   const listeners = new Map<string, Set<(p: never) => void>>();
 
@@ -143,7 +145,7 @@ function makeKernel(files: Record<string, Uint8Array>) {
     onDispose: (fn: unknown) => fn,
   };
 
-  return { io, provided, panels, decorators, events, bus, sugarCtx, files };
+  return { io, provided, panels, decorators, saveHandlers, events, bus, sugarCtx, files };
 }
 
 /** 激活 kojo-sugar，返回它提供的 sugar.transpile 服务 */
@@ -168,6 +170,8 @@ function bootEditor(k: ReturnType<typeof makeKernel>) {
         if (slot === 'ui.panel') k.panels.push(contribution as UIPanelContribution);
         else if (slot === 'ui.editor.decorator')
           k.decorators.push(contribution as EditorDecoratorContribution);
+        else if (slot === 'ui.editor.saveHandler')
+          k.saveHandlers.push(contribution as EditorSaveHandlerContribution);
       },
     },
     bus: k.bus,
@@ -186,13 +190,19 @@ describe('S6 / 插件接线（跨插件只走服务槽）', () => {
     expect(p.provides ?? []).toEqual([]);
   });
 
-  it('激活后注册 1 个 `ui.editor.decorator`（sugar-diagnostics）+ 1 个 `ui.panel`（sugar-verdict）', () => {
+  it('激活后注册 1 个 `ui.editor.decorator`（sugar-diagnostics）+ 1 个 `ui.editor.saveHandler`（sugar-save）+ 1 个 `ui.panel`（sugar-verdict）', () => {
     const k = makeKernel({ [PATH_KOJO]: enc(KOJO_OK) });
     bootSugar(k);
     bootEditor(k);
     expect(k.decorators).toHaveLength(1);
     expect(k.decorators[0]!.id).toBe('sugar-diagnostics');
     expect(typeof k.decorators[0]!.decorate).toBe('function');
+    expect(k.saveHandlers).toHaveLength(1);
+    expect(k.saveHandlers[0]!.id).toBe('sugar-save');
+    expect(typeof k.saveHandlers[0]!.save).toBe('function');
+    // `.kojo` 命中、原生 `.ERB` 不命中（接管只在糖源上生效）
+    expect(k.saveHandlers[0]!.matches(PATH_KOJO)).toBe(true);
+    expect(k.saveHandlers[0]!.matches(PATH_ERB)).toBe(false);
     expect(k.panels).toHaveLength(1);
     expect(k.panels[0]!.id).toBe('sugar-verdict');
     expect(typeof k.panels[0]!.component).toBe('function');

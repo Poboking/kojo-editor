@@ -91,6 +91,72 @@ export interface EditorDecoratorContribution extends ContributionBase {
   decorate(file: { path: string; text: string; project: GameProject | null }): LineDecoration[];
 }
 
+/* ----------------------- ui.editor.saveHandler ----------------------- */
+
+/**
+ * 保存期告警（**非阻断**）——目前只有一种：全角空格。
+ *
+ * 语义与规范 §8「全角空格检测在保存时**告警**」一致：告警不阻止保存，但提供
+ * "一键修复"的决策点（宿主拿到 `needs-choice` 后弹确认，由用户选择"仍然保存 /
+ * 替换为半角空格"。见 IMPLEMENTATION-LOG §5.37 决策）。
+ */
+export interface EditorSaveWarning {
+  readonly kind: 'fullwidth-space';
+  /** 人读消息（中文；面向作者） */
+  readonly message: string;
+  /** 触发告警的源行号（1 基，升序） */
+  readonly lines: readonly number[];
+}
+
+/** 保存意图选项（宿主就告警取得用户决策后**二次调用**时回传，避免重复弹窗） */
+export interface EditorSaveChoices {
+  /** 已确认全角空格告警、无需修复，继续保存 */
+  readonly acknowledgeFullwidthSpace?: boolean;
+}
+
+/** 保存请求（宿主把内存态文本 + 路径交给接管者；与具体文件类型无关） */
+export interface EditorSaveRequest {
+  readonly path: string;
+  /** 编辑器内存态文本（未落盘的最新内容） */
+  readonly text: string;
+  readonly project: GameProject | null;
+  readonly choices?: EditorSaveChoices;
+}
+
+/**
+ * 保存结果。
+ *
+ * - `saved`：已落盘（`message` 供状态栏；`note` 为**非阻断**补充，如"产物因编译
+ *   错误未生成"，此时源文件仍已保存）；
+ * - `needs-choice`：**尚未落盘**，需用户就告警（全角空格）决策——宿主弹确认后
+ *   带 `choices` **重新调用**同一接管者；
+ * - `error`：失败（越权 / 编译或写盘异常），未完成落盘；`message` 面向作者。
+ */
+export type EditorSaveOutcome =
+  | { readonly status: 'saved'; readonly message: string; readonly note?: string }
+  | { readonly status: 'needs-choice'; readonly warning: EditorSaveWarning }
+  | { readonly status: 'error'; readonly message: string };
+
+/**
+ * 编辑器保存接管者（槽 `ui.editor.saveHandler`）——**宿主在保存一个文件前按
+ * `matches(path)` 就近征询**，命中即把落盘完全交给它；未命中则走内核 io
+ * `writeText` 缺省路径（保编码保换行）。
+ *
+ * 之所以是槽而非宿主硬编码：`.kojo` 的"保存"要"转译 + 编译落盘"（该逻辑属
+ * `kojo-sugar` 域），宿主不该认得它。做成通用槽后，任何文件类型都能自带保存
+ * 语义（如未来的格式化/生成物），而宿主保持**零具体格式知识**；能力缺席（提供
+ * 者未激活）时自动退化为缺省保存——不静默、不报错、不阻塞浏览。
+ *
+ * 同一文件的多个贡献：宿主取 `order` 最小的命中项（唯一接管，不做链式级联）。
+ */
+export interface EditorSaveHandlerContribution extends ContributionBase {
+  readonly title: string;
+  /** 是否接管该文件的保存（纯判定；不适用返回 false） */
+  matches(path: string): boolean;
+  /** 执行保存（可含 IO；宿主不假定其实现，只消费其 `EditorSaveOutcome`） */
+  save(request: EditorSaveRequest): Promise<EditorSaveOutcome>;
+}
+
 /* --------------------------- game.adapter --------------------------- */
 
 export interface GameAdapterContribution extends ContributionBase {
@@ -120,6 +186,7 @@ export interface SlotMap {
   'ui.panel': UIPanelContribution;
   'editor.command': EditorCommandContribution;
   'ui.editor.decorator': EditorDecoratorContribution;
+  'ui.editor.saveHandler': EditorSaveHandlerContribution;
   'game.adapter': GameAdapterContribution;
   'export.target': ExportTargetContribution;
 }
