@@ -58,6 +58,13 @@ export interface KernelEventMap {
    */
   'kojo.replayFunction': { functionName: string; source?: string };
   /**
+   * 打开 overlay 意图（2026-10-11 UI 重设计批 P2）：请求宿主打开某 `ui.overlay`
+   * 贡献（新建向导 / 重授权 / 设置等模态）。
+   * 通用、游戏无关——插件发意图、宿主落地，插件间零依赖
+   * （与 `editor.revealLocation` 同款模式）。
+   */
+  'ui.overlay.open': { id: string; payload?: unknown; source?: string };
+  /**
    * 归档选中意图（v0.2 第十三批）：归档浏览器面板选中某档后广播。
    * 通用、游戏无关——任意插件可响应（未来的状态注入器 / 对比视图）；
    * 载荷只含归档路径与文件名（消费者按需自行深解析）。

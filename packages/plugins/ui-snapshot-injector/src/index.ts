@@ -443,6 +443,9 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
         title: '状态注入器',
         icon: '✎',
         order: 71,
+        // UI 重设计批 P1：低频+危险（写档）→ 副侧栏，默认不激活（定稿 §四）
+        location: 'aux',
+        defaultActive: false,
         component: InjectorPanel,
       });
     },

@@ -277,6 +277,7 @@ export function App(): ReactElement {
         activeFile={activeFile}
         reveal={reveal}
         onOpenFile={openFile}
+        editorDirty={editorDirty}
         onDirtyChange={onDirtyChange}
         registerSave={registerSave}
         onClose={closeProject}

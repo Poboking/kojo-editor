@@ -131,6 +131,8 @@ export type {
 
 export type {
   ContributionBase,
+  EditorCodeAction,
+  EditorCodeActionContribution,
   EditorCommandContext,
   EditorCommandContribution,
   EditorDecoratorContribution,
@@ -144,10 +146,14 @@ export type {
   ExportTargetContribution,
   GameAdapterContribution,
   LineDecoration,
+  OverlayContribution,
+  PanelLocation,
   SlotMap,
   SlotName,
   SlotRegistrar,
   SlotRegistry,
+  StatusbarContribution,
+  ToolbarContribution,
   UIPanelComponent,
   UIPanelContribution,
   UIPanelProps,

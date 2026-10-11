@@ -9,6 +9,19 @@
   --green: #4fc08d;
   --red: #e06c75;
   --amber: #d19a66;
+  /* UI 重设计批 P1 设计 token 扩展（定稿 §十；浅色主题预留，不做实现） */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --radius-1: 6px;
+  --radius-2: 8px;
+  --z-toolbar: 10;
+  --z-overlay: 1000;
+  --z-modal: 1100;
+  --fs-1: 12px;
+  --fs-2: 13px;
+  --fs-3: 14px;
   font-family: 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
 }
 
@@ -75,6 +88,40 @@ code {
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 12px;
+}
+
+/* ------- 全局主题化细滚动条（F6；定稿 §十：透明轨道、悬停显 thumb） ------- */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.shell .panel::-webkit-scrollbar,
+.container-body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 焦点可见性（定稿 §十）：键盘导航统一描边 */
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* ------------------------------ welcome ------------------------------ */
@@ -162,59 +209,231 @@ code {
   padding-top: 12px;
 }
 
-/* ------------------------------ project ------------------------------ */
+/* --------------------- 壳层五区布局（UI 重设计批 P1） --------------------- */
 
-.project {
+.shell {
   height: 100%;
   display: flex;
   flex-direction: column;
+  background: var(--bg);
 }
-.project-header {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 8px 14px;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
-}
-.proj-title {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  min-width: 0;
-}
-.proj-dir {
-  color: var(--fg-dim);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 40vw;
-}
-.proj-stats {
-  display: flex;
-  gap: 14px;
-  color: var(--green);
-  font-size: 13px;
-  margin-left: auto;
-}
-.project-body {
+.shell-main {
   flex: 1;
   display: flex;
   min-height: 0;
 }
-.sidebar {
-  width: 320px;
-  min-width: 240px;
+
+/* 顶部工具栏 */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-3);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  min-height: 36px;
+  z-index: var(--z-toolbar);
+}
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.tb-project {
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+  padding: 2px var(--space-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 30vw;
+}
+.toolbar-btn {
+  border-color: transparent;
+  font-size: var(--fs-1);
+}
+.toolbar-btn.on {
+  color: var(--accent);
+  background: rgba(76, 139, 245, 0.12);
+}
+.tb-icon {
+  margin-right: 4px;
+}
+
+/* 活动栏 */
+.activitybar {
+  width: 48px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-2) 0;
+  background: var(--bg-2);
   border-right: 1px solid var(--border);
+}
+.ab-item {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 17px;
+  border-radius: var(--radius-1);
+  padding: 0;
+  position: relative;
+}
+.ab-item:hover {
+  color: var(--fg);
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.06);
+}
+.ab-item.active {
+  color: var(--fg);
+  background: rgba(76, 139, 245, 0.14);
+}
+.ab-item.active::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+.ab-spacer {
+  flex: 1;
+}
+
+/* 主侧栏（宽度由 inline style 驱动，拖拽持久化） */
+.sidebar {
+  flex: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--bg-2);
 }
-.panel {
-  border-bottom: 1px solid var(--border);
-  padding: 8px 10px;
+.sidebar-views {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+}
+.sidebar-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+}
+.sidebar-section-head:hover {
+  color: var(--fg);
+  border-color: transparent;
+}
+
+/* 编辑器区 */
+.editor-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* 副侧栏 / 底部区（容器级滚动：定稿 §十，消灭面板各自的小滚动条） */
+.aux {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-2);
+  border-left: 1px solid var(--border);
+}
+.bottombar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+}
+.container-body {
+  flex: 1;
   overflow: auto;
+  min-height: 0;
+}
+.panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px var(--space-2);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.panel-tab {
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  padding: 4px var(--space-2);
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+.panel-tab:hover {
+  color: var(--fg);
+  border-color: transparent;
+}
+.panel-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+.panel-tabs .spacer {
+  flex: 1;
+}
+.panel-close {
+  border: none;
+  padding: 0 6px;
+}
+
+/* 拖拽把手 */
+.resizer {
+  flex: none;
+  z-index: 5;
+}
+.resizer-x {
+  width: 4px;
+  margin: 0 -2px;
+  cursor: col-resize;
+}
+.resizer-y {
+  height: 4px;
+  margin: -2px 0;
+  cursor: row-resize;
+}
+.resizer:hover,
+.resizer:active {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+/* 面板体：壳内嵌套时滚动收归容器级（定稿 §十） */
+.panel {
+  padding: var(--space-2) var(--space-3);
 }
 .panel h3 {
   margin: 2px 0 8px;
@@ -223,17 +442,25 @@ code {
   letter-spacing: 0.06em;
   color: var(--fg-dim);
 }
-.file-panel {
+
+/* 全禅写作模式（定稿 §八）：只留编辑器 + 迷你状态栏，编辑器居中限宽 */
+.shell.zen .zen-editor {
   flex: 1;
-  display: flex;
-  flex-direction: column;
   min-height: 0;
+  display: flex;
+  overflow: hidden;
 }
-.editor-host {
+.zen-editor-inner {
   flex: 1;
-  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  max-width: 1000px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
+}
+.statusbar.zen {
+  justify-content: space-between;
 }
 .editor-body {
   flex: 1;
@@ -1743,12 +1970,42 @@ code {
 .statusbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: 2px 10px;
   min-height: 24px;
   background: var(--bg-2);
   border-top: 1px solid var(--border);
   font-size: 12px;
+}
+.sb-left,
+.sb-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.sb-right {
+  margin-left: auto;
+}
+.sb-slot {
+  display: inline-flex;
+  align-items: center;
+}
+.sb-editor {
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.sb-dirty {
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.sb-dirty.on {
+  color: var(--amber);
+}
+.sb-zen {
+  border: none;
+  padding: 1px 8px;
 }
 .sb-writable {
   border: none;

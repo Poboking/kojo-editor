@@ -225,6 +225,9 @@ export function createUiSugarEditorPlugin(): Plugin {
         title: '糖判定',
         icon: '⊙',
         order: 76,
+        // UI 重设计批 P1：诊断性质 → 底部区 tab（定稿 §四）
+        location: 'bottom',
+        defaultActive: false,
         component: VerdictPanel,
       });
     },

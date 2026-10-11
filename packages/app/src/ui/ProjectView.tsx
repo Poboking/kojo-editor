@@ -1,10 +1,10 @@
-import type { ReactElement } from 'react';
+import { useMemo, useState, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { ErbIndex, GameProject } from '@kojo/plugin-api';
+import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane } from './EditorPane';
 import { FileTree } from './FileTree';
-import { PanelHost } from './PanelHost';
+import { ShellLayout, type EditorStatusInfo } from './ShellLayout';
 
 interface Props {
   kernel: Kernel;
@@ -16,12 +16,13 @@ interface Props {
   activeFile: string | null;
   reveal: RevealTarget | null;
   onOpenFile: (path: string) => void;
-  /** 编辑器脏状态上抛（切换文件确认用，审阅 M4 修复） */
+  /** 编辑器脏状态（切换文件确认用，审阅 M4 修复；状态栏保存态指示用） */
+  editorDirty: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   /** 保存句柄注册（"保存并前往"流程用） */
   registerSave?: (fn: (() => Promise<boolean>) | null) => void;
   onClose: () => void;
-  /** 重载项目（关闭→重开：重建索引、重走授权判定；用户自救入口） */
+  /** 重载项目（并行线新增：索引失败/状态过期时重开同目录，不切欢迎页） */
   onReload: () => void;
   /** 写权限状态（P0 状态栏徽章 + 保存置灰；宿主通用 chrome，零业务词） */
   writable: boolean;
@@ -29,6 +30,13 @@ interface Props {
   onReauth: () => void;
 }
 
+/**
+ * 项目视图（UI 重设计批 P1）：壳层 = 五区布局（ShellLayout），
+ * 编辑器区内容（只读横幅 + 编辑器/空态）作为 children 注入。
+ *
+ * 口上文件树是壳层**内建视图**，以与 `ui.panel` 槽同构的贡献形态注入
+ * （group:'explorer'，与函数树合并为单 Explorer——定稿 Q5）。
+ */
 export function ProjectView({
   kernel,
   project,
@@ -38,6 +46,7 @@ export function ProjectView({
   activeFile,
   reveal,
   onOpenFile,
+  editorDirty,
   onDirtyChange,
   registerSave,
   onClose,
@@ -45,7 +54,7 @@ export function ProjectView({
   writable,
   onReauth,
 }: Props): ReactElement {
-  const panels = kernel.slots.query('ui.panel');
+  const [editorStatus, setEditorStatus] = useState<EditorStatusInfo | null>(null);
 
   // 统计（v0.1 验收指标：角色数 / 文件数 / 函数数）
   let fileCount = 0;
@@ -57,110 +66,67 @@ export function ProjectView({
     }
   }
 
+  const builtinViews = useMemo<UIPanelContribution[]>(
+    () => [
+      {
+        id: 'kojo.files',
+        title: '口上文件',
+        icon: '🗀',
+        order: 30,
+        group: 'explorer',
+        location: 'sidebar',
+        component: () => (
+          <FileTree project={project} index={index} activeFile={activeFile} onOpenFile={onOpenFile} />
+        ),
+      },
+    ],
+    [project, index, activeFile, onOpenFile],
+  );
+
   return (
-    <div className="project">
-      <header className="project-header">
-        <div className="proj-title">
-          <strong>{project.adapterId}</strong>
-          <span className="proj-dir" title={project.rootDir}>
-            {project.rootDir}
-          </span>
-        </div>
-        <div className="proj-stats">
-          <span>角色 {project.charaIndex.size}</span>
-          <span>文件 {indexing ? '…' : fileCount}</span>
-          <span>函数 {indexing ? '…' : fnCount}</span>
-        </div>
-        <div className="proj-actions">
-          {!writable ? (
-            <button className="primary small" onClick={onReauth} title="重新选择写权限（明文展示可写目录）">
-              重新授权
-            </button>
-          ) : null}
-          <button
-            className="ghost"
-            onClick={onReload}
-            title="关闭并重新打开项目：重建口上域索引（内存缓存全部丢弃，磁盘文件不受影响）"
-          >
-            重载项目
-          </button>
-          <button className="ghost" onClick={onClose}>
-            关闭项目
+    <ShellLayout
+      kernel={kernel}
+      builtinViews={builtinViews}
+      writable={writable}
+      onReauth={onReauth}
+      editorStatus={editorStatus}
+      dirty={editorDirty}
+      stats={{ fileCount, fnCount, indexing, indexError }}
+      commandCtx={{ project, ...(activeFile ? { activeFile } : {}) }}
+      onCloseProject={onClose}
+      onReloadProject={onReload}
+    >
+      {/* 只读横幅（P0 实机反馈修复）：重授权入口常驻可见可点 */}
+      {!writable ? (
+        <div className="ro-banner">
+          <span>当前为只读：写权限未批准，保存不可用。修改仍可浏览与复制。</span>
+          <button className="small" onClick={onReauth}>
+            去授权
           </button>
         </div>
-      </header>
-
-      <div className="project-body">
-        <aside className="sidebar">
-          <section className="panel file-panel">
-            <h3>口上文件</h3>
-            <FileTree project={project} index={index} activeFile={activeFile} onOpenFile={onOpenFile} />
-          </section>
-
-          {/* 槽位渲染：本项目的全部 ui.panel 贡献（order 排序） */}
-          {panels.map((p) => (
-            <PanelHost key={p.id} contribution={p} />
-          ))}
-        </aside>
-
-        <main className="editor-host">
-          {/* 只读横幅（P0 实机反馈修复）：重授权入口不能只靠底部窄徽章——常驻可见可点 */}
-          {!writable ? (
-            <div className="ro-banner">
-              <span>当前为只读：写权限未批准，保存不可用。修改仍可浏览与复制。</span>
-              <button className="small" onClick={onReauth}>
-                去授权
-              </button>
-            </div>
-          ) : null}
-          <div className="editor-body">
-            {activeFile ? (
-              <EditorPane
-                kernel={kernel}
-                filePath={activeFile}
-                revealLine={reveal?.line}
-                revealNonce={reveal?.nonce}
-                onDirtyChange={onDirtyChange}
-                registerSave={registerSave}
-                writable={writable}
-                onReauth={onReauth}
-              />
-            ) : (
-              <div className="empty-state">
-                <p>从左侧选择一个口上文件开始编辑</p>
-                <p className="dim">
-                  项目已索引 {fileCount} 个 ERB 文件、{fnCount} 个函数定义（口上域全量）
-                </p>
-              </div>
-            )}
+      ) : null}
+      <div className="editor-body">
+        {activeFile ? (
+          <EditorPane
+            kernel={kernel}
+            filePath={activeFile}
+            revealLine={reveal?.line}
+            revealNonce={reveal?.nonce}
+            onDirtyChange={onDirtyChange}
+            registerSave={registerSave}
+            writable={writable}
+            onReauth={onReauth}
+            onStatusInfo={setEditorStatus}
+          />
+        ) : (
+          <div className="empty-state">
+            <p>从左侧选择一个口上文件开始编辑</p>
+            <p className="dim">
+              项目已索引 {fileCount} 个 ERB 文件、{fnCount} 个函数定义（口上域全量）
+            </p>
           </div>
-        </main>
+        )}
       </div>
-
-      {/* P0 简化状态栏（P1 换五区骨架、P3 槽位化）：写权限徽章常驻——安全相关信息不隐藏 */}
-      <footer className="statusbar">
-        {writable ? (
-          <span className="sb-writable ok" title="写权限已批准">
-            可写
-          </span>
-        ) : (
-          <button className="sb-writable ro" title="只读：写权限未批准，点击重新授权" onClick={onReauth}>
-            只读
-          </button>
-        )}
-        {/* 索引诊断（实机反馈：文件树/函数树同时为空时，必须能看出是「构建中」还是「失败」） */}
-        {indexError ? (
-          <span className="sb-idx err" title={indexError}>
-            索引失败：{indexError}
-          </span>
-        ) : indexing ? (
-          <span className="sb-idx">索引构建中…</span>
-        ) : (
-          <span className="sb-idx">
-            {fileCount} 文件 · {fnCount} 函数
-          </span>
-        )}
-      </footer>
-    </div>
+    </ShellLayout>
   );
 }

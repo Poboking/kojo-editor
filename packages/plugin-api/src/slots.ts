@@ -34,10 +34,75 @@ export interface UIPanelProps {
  */
 export type UIPanelComponent = (props: UIPanelProps) => unknown;
 
+/**
+ * 面板归属容器（2026-10-11 UI 重设计批 P1；additive，缺省 = 旧行为 sidebar 堆叠）：
+ * - `sidebar`：主侧栏（活动栏图标 + 视图容器）；
+ * - `aux`：副侧栏（编辑器右侧，预览/低频工具位）；
+ * - `bottom`：底部区（诊断列表位，tab 形态）。
+ */
+export type PanelLocation = 'sidebar' | 'aux' | 'bottom';
+
 export interface UIPanelContribution extends ContributionBase {
   readonly title: string;
   /** 单字符或内置图标名（渲染器解释） */
   readonly icon?: string;
+  readonly component: UIPanelComponent;
+  /** 归属容器；缺省 'sidebar'（旧行为） */
+  readonly location?: PanelLocation;
+  /** 缺省 true；低频工具设 false（容器打开时才激活，不抢占首屏） */
+  readonly defaultActive?: boolean;
+  /** 同 group 的 sidebar 面板共享一枚活动栏图标，容器内折叠堆叠；缺省 = 独占一枚图标 */
+  readonly group?: string;
+}
+
+/* ----------------------------- ui.toolbar ----------------------------- */
+
+/**
+ * 顶部工具栏贡献（UI 重设计 P2；additive 新槽）。
+ * **动作真源在 `editor.command`**——本槽只引用命令 id，不自带 run
+ * （避免两套动作定义漂移）。
+ */
+export interface ToolbarContribution extends ContributionBase {
+  readonly title: string;
+  readonly icon?: string;
+  /** 引用 `editor.command` 贡献的 id */
+  readonly command: string;
+  readonly when?: (ctx: EditorCommandContext) => boolean;
+}
+
+/* ---------------------------- ui.statusbar ---------------------------- */
+
+/** 状态栏贡献（UI 重设计 P3；additive 新槽）。小型件，复用面板组件形态。 */
+export interface StatusbarContribution extends ContributionBase {
+  /** 缺省 right */
+  readonly align?: 'left' | 'right';
+  readonly component: UIPanelComponent;
+}
+
+/* ------------------------- ui.editor.codeAction ------------------------ */
+
+/** 编辑器 CodeAction（💡 形态；宿主适配为 Monaco registerCodeActionProvider，宿主零绘制） */
+export interface EditorCodeAction {
+  readonly title: string;
+  readonly kind?: 'quickfix' | 'refactor';
+  /** 关联诊断（quickfix 形态） */
+  readonly diagnostics?: LineDecoration[];
+  run(ctx: EditorCommandContext): void | Promise<void>;
+}
+
+export interface EditorCodeActionContribution extends ContributionBase {
+  /** 对单个文件产出动作（纯函数；不适用该文件返回空数组） */
+  provideActions(file: { path: string; text: string; project: GameProject | null }): EditorCodeAction[];
+}
+
+/* ----------------------------- ui.overlay ----------------------------- */
+
+/**
+ * 模态/向导 overlay 贡献（UI 重设计 P2；additive 新槽）。
+ * 宿主提供遮罩与 Esc/关闭语义；打开经内核事件 `ui.overlay.open`（插件发意图，
+ * 宿主落地，插件间零依赖——与 `editor.revealLocation` 同款模式）。
+ */
+export interface OverlayContribution extends ContributionBase {
   readonly component: UIPanelComponent;
 }
 
@@ -54,6 +119,8 @@ export interface EditorCommandContext {
 export interface EditorCommandContribution extends ContributionBase {
   readonly title: string;
   readonly category?: string;
+  /** 快捷键（additive；如 'ctrl+n' / 'ctrl+shift+p'），宿主统一注册 */
+  readonly keybinding?: string;
   /** 返回 false 时命令在命令面板中禁用 */
   readonly when?: (ctx: EditorCommandContext) => boolean;
   run(ctx: EditorCommandContext): void | Promise<void>;
@@ -184,8 +251,12 @@ export interface ExportTargetContribution extends ContributionBase {
 
 export interface SlotMap {
   'ui.panel': UIPanelContribution;
+  'ui.toolbar': ToolbarContribution;
+  'ui.statusbar': StatusbarContribution;
+  'ui.overlay': OverlayContribution;
   'editor.command': EditorCommandContribution;
   'ui.editor.decorator': EditorDecoratorContribution;
+  'ui.editor.codeAction': EditorCodeActionContribution;
   'ui.editor.saveHandler': EditorSaveHandlerContribution;
   'game.adapter': GameAdapterContribution;
   'export.target': ExportTargetContribution;

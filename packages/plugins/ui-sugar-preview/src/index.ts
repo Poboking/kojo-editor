@@ -216,6 +216,8 @@ export function createUiSugarPreviewPlugin(): Plugin {
         title: '糖预览',
         icon: '◫',
         order: 74,
+        // UI 重设计批 P1：写糖时的对照视图 → 副侧栏（VSCode Markdown 预览位，定稿 §四）
+        location: 'aux',
         component: PreviewPanel,
       });
     },

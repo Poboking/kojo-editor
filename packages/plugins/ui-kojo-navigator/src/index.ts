@@ -449,6 +449,8 @@ export function createUiKojoNavigatorPlugin(): Plugin {
         title: '函数树',
         icon: '⑃',
         order: 40,
+        // UI 重设计批 P1：与壳层内建口上文件树合并为单 Explorer（定稿 Q5）
+        group: 'explorer',
         component: NavigatorPanel,
       });
     },

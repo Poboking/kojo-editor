@@ -217,6 +217,8 @@ export function createUiConventionReportPlugin(): Plugin {
         title: '约定校验',
         icon: '✓',
         order: 50,
+        // UI 重设计批 P1：诊断列表迁底部区（Problems 形态，定稿 §四/§6.3）
+        location: 'bottom',
         component: ConventionPanel,
       });
     },

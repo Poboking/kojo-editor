@@ -890,6 +890,9 @@ export function createUiStateReplayPlugin(): Plugin {
         title: '状态回放',
         icon: '⟲',
         order: 60,
+        // UI 重设计批 P1：按需验证工具 → 副侧栏，默认不激活（定稿 §四）
+        location: 'aux',
+        defaultActive: false,
         component: ReplayPanel,
       });
     },

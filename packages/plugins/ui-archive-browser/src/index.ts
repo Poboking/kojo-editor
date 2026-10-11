@@ -290,6 +290,9 @@ export function createUiArchiveBrowserPlugin(): Plugin {
         title: '归档浏览器',
         icon: '▤',
         order: 70,
+        // UI 重设计批 P1：低频 → 副侧栏，默认不激活（定稿 §四）
+        location: 'aux',
+        defaultActive: false,
         component: ArchiveBrowserPanel,
       });
     },

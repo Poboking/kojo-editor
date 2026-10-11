@@ -44,8 +44,14 @@ function pickSaveHandler(kernel: Kernel, path: string): EditorSaveHandlerContrib
   for (const contribution of kernel.slots.query('ui.editor.saveHandler')) {
     try {
       if (contribution.matches(path)) matches.push(contribution);
-    } catch {
-      // 忽略抛错的贡献（该文件退化为缺省保存）
+    } catch (e: unknown) {
+      // 贡献抛错不静默（与 plugin-api「绝不静默」约定一致）：
+      // 记录后仍降级为缺省保存，避免单个坏贡献阻断整条保存链路。
+      console.warn(
+        `[EditorPane] save handler '${contribution.id}' matches('${path}') 抛错：${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
     }
   }
   if (matches.length === 0) return undefined;
@@ -68,6 +74,8 @@ interface Props {
   writable: boolean;
   /** 重授权入口（通知 action「去授权」落地处） */
   onReauth: () => void;
+  /** 编辑器状态上抛（UI 重设计批 P1：状态栏右区显示编码/EOL/行数；卸载或无文件时 null） */
+  onStatusInfo?: (info: { encoding: string; eol: string; lines: number } | null) => void;
 }
 
 /**
@@ -91,6 +99,7 @@ export function EditorPane({
   registerSave,
   writable,
   onReauth,
+  onStatusInfo,
 }: Props): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -217,6 +226,9 @@ export function EditorPane({
           action: { label: '去授权', run: () => onReauthRef.current() },
         });
         setError('只读：写权限未批准');
+        // 用户已表达明确的写入意图 → 软件主动重弹授权对话框（实机反馈：让用户自己去
+        // 发现并点击「重新授权」按钮 = 把软件的责任抛给用户，是设计错误）
+        onReauthRef.current();
         return false;
       }
       const text = ed.getValue();
@@ -258,6 +270,8 @@ export function EditorPane({
             action: { label: '去授权', run: () => onReauthRef.current() },
           });
           setError('只读：写权限未批准');
+          // 与前置拦截同款：写被拒后自动重弹授权框，而不是让用户去找按钮
+          onReauthRef.current();
           return false;
         }
         setError(e instanceof Error ? e.message : String(e));
@@ -299,6 +313,8 @@ export function EditorPane({
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
+  // 卸载时清空状态栏编辑器信息
+  useEffect(() => () => onStatusInfo?.(null), [onStatusInfo]);
   useEffect(() => {
     registerSave?.(save);
     return () => registerSave?.(null);
@@ -361,6 +377,11 @@ export function EditorPane({
         setError(null);
         setPendingChoice(null); // 换文件即作废未决的保存告警（避免误对旧文件应用修复）
         setStatus(`${tf.encoding} · ${tf.eol.toUpperCase()} · ${tf.text.split('\n').length} 行`);
+        onStatusInfo?.({
+          encoding: tf.encoding,
+          eol: tf.eol.toUpperCase(),
+          lines: tf.text.split('\n').length,
+        });
         // 打开即算一次装饰（不等用户编辑）——首屏就能看到波浪线
         if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
         markerTimerRef.current = null;
@@ -373,7 +394,7 @@ export function EditorPane({
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo]);
 
   return (
     <div className="editor-pane">

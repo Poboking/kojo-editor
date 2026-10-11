@@ -89,6 +89,8 @@ export function createUiStatusPlugin(): Plugin {
         title: '插件状态',
         icon: '◈',
         order: 100,
+        // UI 重设计批 P1：开发者面板 → 活动栏底部齿轮位，默认不激活（定稿 §四）
+        defaultActive: false,
         component: StatusPanel,
       });
     },

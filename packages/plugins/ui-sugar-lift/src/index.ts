@@ -356,6 +356,9 @@ export function createUiSugarLiftPlugin(): Plugin {
         title: '升糖建议',
         icon: '⟰',
         order: 72,
+        // UI 重设计批 P1：💡 CodeAction 迁移期的 aux 兜底面板（定稿 §四，稳定后移除）
+        location: 'aux',
+        defaultActive: false,
         component: LiftPanel,
       });
     },
