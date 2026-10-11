@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-api';
+import { WellKnownCommands } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { FileTree } from './FileTree';
@@ -216,8 +217,11 @@ export function ProjectView({
               <button className="primary small" onClick={() => workbench?.openQuickOpen()}>
                 打开文件… <span className="hint">Ctrl+P</span>
               </button>
-              {workbench?.hasCommand('kojo.newKojoFile') ? (
-                <button className="ghost small" onClick={() => workbench.runCommand('kojo.newKojoFile')}>
+              {workbench?.hasCommand(WellKnownCommands.NewKojoFile) ? (
+                <button
+                  className="ghost small"
+                  onClick={() => workbench.runCommand(WellKnownCommands.NewKojoFile)}
+                >
                   新建口上文件 <span className="hint">Ctrl+N</span>
                 </button>
               ) : null}

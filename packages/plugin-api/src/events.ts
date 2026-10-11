@@ -78,6 +78,67 @@ export interface KernelEventMap {
   'kojo.snapshotSelected': { path: string; fileName: string; source?: string };
 }
 
+/* ------------------- 内核事件 emit 权限（单一真源 + 防漂移断言） ------------------- */
+
+/**
+ * **插件可经 scopedBus emit 的内核事件名**（scopedBus 命名空间纪律执法白名单
+ * `KERNEL_EVENT_NAMES` 的内容来源）。
+ *
+ * 语义（P0 写权限闭环批定案，IMPLEMENTATION-LOG §5.36）：白名单 ≠ 全部内核事件——
+ * **内核专属事件**（`KERNEL_ONLY_EVENT_NAMES`）只由内核/宿主发出，插件可 `on`
+ * 但不可 `emit`（插件伪造 `project.writableApprovalMismatch` 等于伪造安全提示）。
+ *
+ * 本表与 `KernelEventMap` 的**分类完整性由编译期断言保证**（文末 guard 常量）：
+ * 新增内核事件时必须在本表或 `KERNEL_ONLY_EVENT_NAMES` 之一登记，否则编译失败——
+ * 根治 `0bf2eb9` 式「契约加了类型、kernel 白名单漏同步」的双源漂移事故
+ * （该事故当时只在运行时暴露：插件 emit 被拦截抛错、向导命令链断裂）。
+ */
+const PLUGIN_EMITTABLE_EVENT_NAMES = [
+  'file.changed',
+  'project.opened',
+  'project.closed',
+  'kojo.functionChanged',
+  'plugin.statusChanged',
+  'state.snapshotLoaded',
+  'editor.revealLocation',
+  'kojo.replayFunction',
+  'kojo.snapshotSelected',
+  'editor.activeFileChanged',
+  'ui.overlay.open',
+  'ui.overlay.close',
+] as const satisfies readonly (keyof KernelEventMap)[];
+
+/** 内核/宿主专属事件：插件可 `on`、不可 `emit`（安全语义事件由内核垄断发出）。 */
+const KERNEL_ONLY_EVENT_NAMES = [
+  'project.writableApprovalMismatch',
+] as const satisfies readonly (keyof KernelEventMap)[];
+
+/** 内核事件名（= 插件可 emit 的集合；供 kernel `scopedBus` 执法使用） */
+export type KernelEventName = (typeof PLUGIN_EMITTABLE_EVENT_NAMES)[number];
+
+/** scopedBus emit 纪律的执法白名单（值 = 插件可 emit 的内核事件全集） */
+export const KERNEL_EVENT_NAMES: ReadonlySet<KernelEventName> = new Set(PLUGIN_EMITTABLE_EVENT_NAMES);
+
+/**
+ * 编译期分类完整性断言：`KernelEventMap` 中每一键都必须被上方两表之一收录，
+ * 且两表不得重叠。任一不满足时本常量的类型退化为 `never`，下方赋值即编译失败
+ * ——这是「防再犯」的机制本体，不是文档性注释。
+ */
+type UnclassifiedKernelEvent = Exclude<
+  keyof KernelEventMap,
+  (typeof PLUGIN_EMITTABLE_EVENT_NAMES)[number] | (typeof KERNEL_ONLY_EVENT_NAMES)[number]
+>;
+type OverlappingKernelEvent = Extract<
+  (typeof PLUGIN_EMITTABLE_EVENT_NAMES)[number],
+  (typeof KERNEL_ONLY_EVENT_NAMES)[number]
+>;
+export const KERNEL_EVENT_CLASSIFICATION_GUARD: [UnclassifiedKernelEvent, OverlappingKernelEvent] extends [
+  never,
+  never,
+]
+  ? true
+  : never = true;
+
 /** 插件自定义事件键：必须携带 "插件id:" 前缀（例：'my-plugin:indexReady'） */
 export type CustomEventKey = `${string}:${string}`;
 

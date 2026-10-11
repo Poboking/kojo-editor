@@ -2064,3 +2064,71 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 
 - 审阅第 4 条（错误消息归一化 / i18n）/ 第 5 条（撤销分割点跨平台验收）/ 第 6 条（Ctrl+S 集成测试
   与假 kernel 一致性）均为**建议**，非缺陷，未改。其中「Ctrl+S 端到端」已由 §5.37 手工清单判据覆盖。
+
+### 5.48 解耦修复批 · 审阅发现 M1–M4 全量修复（2026-10-11 批）
+
+> **触发**：`docs/DECOUPLING-REVIEW-2026-10-11.md`（人工解耦审阅：audit A–D 全绿但
+> 探针不扫宿主 UI 层，本轮人工复审发现 4 项）。用户指令「全部修复并推送」。
+
+#### M1（核心）· 内核事件 emit 权限单一真源 + 编译期防漂移断言
+
+1. **问题定性修正**：`KERNEL_EVENT_NAMES` 的语义**不是**「全部内核事件」而是
+   「**插件可经 scopedBus emit 的内核事件**」（§5.36 定案：`project.writableApprovalMismatch`
+   内核专属，插件伪造它 = 伪造安全提示）——故单一真源不能简单取 `keyof KernelEventMap`，
+   必须做**全量 emit 权限分类**。
+2. **落地**（`plugin-api/src/events.ts`，与 `KernelEventMap` 同文件）：
+   - `PLUGIN_EMITTABLE_EVENT_NAMES`（12 项）+ `KERNEL_ONLY_EVENT_NAMES`（1 项：
+     `project.writableApprovalMismatch`）两张字面量表，均 `satisfies readonly (keyof KernelEventMap)[]`；
+   - `KernelEventName` 类型与 `KERNEL_EVENT_NAMES` 集合**由表派生**（不再手工抄两份）；
+   - **`KERNEL_EVENT_CLASSIFICATION_GUARD`**：编译期断言——Map 中每一键必须被两表之一
+     收录且两表不重叠，任一不满足即编译失败。**机制化根治 `0bf2eb9`**（该事故 = 契约
+     加类型而 kernel 白名单漏同步，只在运行时暴露；当时修复未加防再犯）。
+   - **行为零变化**：白名单内容与修复前逐字一致（12 项，快照测试守门）。
+3. **kernel 侧**（`kernel/src/bus.ts`）：删除本地手工清单，改 import + re-export
+   （既有导入路径 `kernel/src/index.ts` 不变）；`scopedBus` 的 `has()` 随强类型化补
+   `as KernelEventName` 收窄。**意外收益**：白名单强类型化后，插件 emit 未收录事件名
+   在编译期即红（测试里 `has('project.writableApprovalMismatch')` 直接被类型拒绝，
+   印证防线升级）。
+4. **测试**：新增 `plugin-api/tests/events.test.ts` 4 项（守卫镜像 / 12 项快照守门 /
+   内核专属不在白名单 / 无重复）。
+
+#### M2 · 宿主功能文案去游戏化 + 审计 A 项扩覆盖
+
+1. `App.tsx` 对话框标题 / `WelcomeView` 按钮文案：「选择 eraTW 游戏目录」→「选择游戏目录」；
+   「個人口上」目录描述 →「游戏可写目录」（写权限语义来自 adapter 的 writablePaths，
+   宿主不该复述 adapter 的具体目录名）。
+2. `WelcomeView` tagline「eraTW 口上编辑器」属**产品品牌位**（产品定位本身），提为
+   `TAGLINE` 常量并以行级 `audit-allow: 品牌位文案` 豁免——功能文案继续受探针监视。
+3. **审计 A 项扩覆盖**（`tools/audit-decoupling.mjs`）：`NEUTRAL_DIRS` 收编
+   `packages/app/src/ui` + `packages/app/src/monaco`——本次审阅的盲区（宿主 UI 层
+   游戏词绑死无门禁可拦）从此成为常驻探针。
+
+#### M3 · `WellKnownCommands` 知名命令 id 单一真源
+
+- `plugin-api/src/slots.ts` 新增 `WellKnownCommands`（与 `WellKnownServices` 同款模式，
+  additive）：`NewKojoFile = 'kojo.newKojoFile'`。
+- 接线三处：注册方 `ui-sugar-editor`（`editor.command` id + `ui.toolbar` command 引用）、
+  引用方宿主 `ProjectView` 空态按钮（`hasCommand`/`runCommand`）——字符串不再两份手抄。
+- 阈值纪律（审阅 M3 原案）：硬引用 ≥3 处再扩充本表，当前 1 项够用。
+
+#### M4 · 工作区卫生
+
+- `.gitignore` 收编 `preview/`（构建产物 exe 不进库）；三份未入库 docs
+  （`CODE-REVIEW-2026-10-11.md` / `PERF-ANALYSIS-2026-10-11.md` / `PERF-REVIEW-2026-10-11.md`）
+  与本批修复随本批一并入库。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `npx vitest run` | **1016 passed / 6 skipped（1022）**（基线 1012 + 新增 4，零回归） |
+| `tsc -p tsconfig.json`（root） | exit 0 |
+| `tsc -p packages/app/tsconfig.json` | exit 0 |
+| `node tools/audit-decoupling.mjs` | A–D 全绿（A 已含宿主 UI·Monaco 层；16 插件） |
+
+#### 边界未做
+
+- 审阅 M1 附带观察「`project.opened`/`file.changed` 等也可被插件 emit（伪造项目打开）」
+  ——现状语义如此（`file.changed` 是插件写盘后的**法定**发口，见 §5.32a 事件纪律），
+  本批**只归一不收紧**；收紧属语义变更，另立批讨论。
+- 审阅「UI 插件 import react」「宿主内建视图槽同构」两项为既定取舍，重申记录、不动。

@@ -32,7 +32,7 @@ import type {
   SugarDiagnostic,
   SugarTranspileService,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownCommands, WellKnownServices } from '@kojo/plugin-api';
 import {
   buildVerdictRows,
   degradeText,
@@ -93,7 +93,6 @@ export function createUiSugarEditorPlugin(): Plugin {
       });
 
       /* -------------------- 贡献 3：糖判定面板 -------------------- */
-
       function VerdictPanel(): unknown {
         const [filePath, setFilePath] = useState<string | null>(null);
         const [degrade, setDegrade] = useState<VerdictDegrade>('no-project');
@@ -246,7 +245,7 @@ export function createUiSugarEditorPlugin(): Plugin {
       // 动作真源在命令；工具栏只引用 id（定稿 §三宿主编排规则）。
       // when：有打开项目才可用（无项目时向导也无落点）。
       ctx.slots.register('editor.command', {
-        id: 'kojo.newKojoFile',
+        id: WellKnownCommands.NewKojoFile,
         title: '新建口上文件',
         category: '文件',
         keybinding: 'ctrl+n',
@@ -261,7 +260,7 @@ export function createUiSugarEditorPlugin(): Plugin {
         title: '新建口上文件',
         icon: '＋',
         order: 10,
-        command: 'kojo.newKojoFile',
+        command: WellKnownCommands.NewKojoFile,
         when: (c) => c.project !== null,
       });
 

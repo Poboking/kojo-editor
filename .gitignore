@@ -5,6 +5,7 @@ node_modules/
 dist/
 target/
 *.tsbuildinfo
+preview/
 
 # local env / editor
 .env

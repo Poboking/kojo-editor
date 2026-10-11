@@ -1,33 +1,13 @@
-import type { AnyEventMap, EventBus, Unsubscribe } from '@kojo/plugin-api';
+import { KERNEL_EVENT_NAMES } from '@kojo/plugin-api';
+import type { AnyEventMap, EventBus, KernelEventName, Unsubscribe } from '@kojo/plugin-api';
 
-export type KernelEventName =
-  | 'file.changed'
-  | 'project.opened'
-  | 'project.closed'
-  | 'kojo.functionChanged'
-  | 'plugin.statusChanged'
-  | 'state.snapshotLoaded'
-  | 'editor.revealLocation'
-  | 'kojo.replayFunction'
-  | 'kojo.snapshotSelected'
-  | 'editor.activeFileChanged'
-  | 'ui.overlay.open'
-  | 'ui.overlay.close';
-
-export const KERNEL_EVENT_NAMES: ReadonlySet<string> = new Set<KernelEventName>([
-  'file.changed',
-  'project.opened',
-  'project.closed',
-  'kojo.functionChanged',
-  'plugin.statusChanged',
-  'state.snapshotLoaded',
-  'editor.revealLocation',
-  'kojo.replayFunction',
-  'kojo.snapshotSelected',
-  'editor.activeFileChanged',
-  'ui.overlay.open',
-  'ui.overlay.close',
-]);
+// 事件 emit 权限白名单已归一至契约层（plugin-api/src/events.ts）：与 KernelEventMap
+// 同文件维护 + 编译期分类完整性断言（KERNEL_EVENT_CLASSIFICATION_GUARD）。
+// 根治 0bf2eb9 式双源漂移——此前本文件持有一份手工同步的清单，契约加了类型而
+// 白名单漏同步，插件 emit 被拦截抛错、向导命令链断裂（只在运行时暴露）。
+// 此处 re-export 保持既有导入路径（kernel/src/index.ts → './bus'）不变。
+export { KERNEL_EVENT_NAMES } from '@kojo/plugin-api';
+export type { KernelEventName } from '@kojo/plugin-api';
 
 type Handler = (payload: unknown) => void;
 
@@ -99,7 +79,7 @@ export function scopedBus(bus: EventBus, pluginId: string, onViolation?: (messag
     once: (type, handler) => bus.once(type, handler),
     emit: (type, payload) => {
       const t = type as string;
-      if (!KERNEL_EVENT_NAMES.has(t) && !t.startsWith(prefix)) {
+      if (!KERNEL_EVENT_NAMES.has(t as KernelEventName) && !t.startsWith(prefix)) {
         const message = `Plugin '${pluginId}' tried to emit event '${t}' without its '${prefix}' prefix`;
         // onViolation 只负责可观测性（记日志），不得吞掉事件：
         // 违规必须显式失败，否则插件会误以为事件已发出（对应 DSH 事件命名空间约定）。

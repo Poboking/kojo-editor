@@ -126,6 +126,21 @@ export interface EditorCommandContribution extends ContributionBase {
   run(ctx: EditorCommandContext): void | Promise<void>;
 }
 
+/**
+ * **跨包共用的知名命令 id**（单一真源；与 `WellKnownServices` 同款模式）。
+ *
+ * 场景：宿主（如空态按钮）与插件（注册者自身 / 工具栏引用）需要引用**同一个**
+ * 命令 id 字符串。硬编码两份会漂移（改名时只改一处，另一处静默失效）——统一从
+ * 本表取。additive：新增命令在此登记；**不改名、不删除**（同事件兼容性承诺）。
+ */
+export const WellKnownCommands = {
+  /** 新建口上文件（注册者 `ui-sugar-editor`；宿主空态按钮按 id 引用，缺席即隐藏） */
+  NewKojoFile: 'kojo.newKojoFile',
+} as const;
+
+/** 知名命令 id 联合（注册/引用双方共用的字面量类型） */
+export type WellKnownCommandId = (typeof WellKnownCommands)[keyof typeof WellKnownCommands];
+
 /* ----------------------- ui.editor.decorator ----------------------- */
 
 /**

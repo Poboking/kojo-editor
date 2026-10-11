@@ -9,6 +9,7 @@
 
 export type { Disposable, Logger, Unsubscribe } from './base';
 
+export { KERNEL_EVENT_NAMES, KERNEL_EVENT_CLASSIFICATION_GUARD } from './events';
 export type {
   AnyEventMap,
   CustomEventKey,
@@ -16,6 +17,7 @@ export type {
   FileChangeKind,
   FileChangedEvent,
   KernelEventMap,
+  KernelEventName,
   PluginEventMap,
 } from './events';
 
@@ -158,6 +160,9 @@ export type {
   UIPanelContribution,
   UIPanelProps,
 } from './slots';
+
+export { WellKnownCommands } from './slots';
+export type { WellKnownCommandId } from './slots';
 
 export { KernelServices, WellKnownServices } from './services';
 export type { KernelServiceKey, PluginRegistry, WellKnownServiceKey } from './services';

@@ -177,7 +177,7 @@ export function App(): ReactElement {
 
   const chooseAndOpen = useCallback(async () => {
     try {
-      const dir = await invoke<string | null>('choose_directory', { title: '选择 eraTW 游戏目录' });
+      const dir = await invoke<string | null>('choose_directory', { title: '选择游戏目录' });
       if (dir) await openProject(dir);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));

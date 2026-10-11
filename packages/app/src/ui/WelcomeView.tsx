@@ -12,6 +12,12 @@ interface Props {
   onOpenRecent: (dir: string) => void;
 }
 
+/**
+ * 产品定位文案（品牌位，非功能耦合）：功能性文案一律游戏无关（解耦审计 A 项
+ * 覆盖 app UI 层）；此处游戏名属产品自我介绍，行级豁免（audit-allow）。
+ */
+const TAGLINE = 'eraTW 口上编辑器 · 结构感知 × 一切皆插件'; // audit-allow: 品牌位文案（产品定位，非功能耦合）
+
 export function WelcomeView({ phase, error, recent, tauri, kernelReady, onOpenDirectory, onOpenRecent }: Props): ReactElement {
   return (
     <div className="welcome">
@@ -19,7 +25,7 @@ export function WelcomeView({ phase, error, recent, tauri, kernelReady, onOpenDi
         <h1>
           kojo-editor <span className="ver">v0.1</span>
         </h1>
-        <p className="tagline">eraTW 口上编辑器 · 结构感知 × 一切皆插件</p>
+        <p className="tagline">{TAGLINE}</p>
 
         {!tauri ? (
           <div className="notice warn">
@@ -32,7 +38,7 @@ export function WelcomeView({ phase, error, recent, tauri, kernelReady, onOpenDi
         ) : (
           <>
             <button className="primary big" onClick={onOpenDirectory} disabled={phase === 'opening'}>
-              {phase === 'opening' ? '正在打开…' : '选择 eraTW 游戏目录'}
+              {phase === 'opening' ? '正在打开…' : '选择游戏目录'}
             </button>
 
             {recent.length > 0 ? (
@@ -58,7 +64,7 @@ export function WelcomeView({ phase, error, recent, tauri, kernelReady, onOpenDi
         <div className="hint">
           打开后：CHARA 映射与口上域索引自动构建；侧栏可浏览全部角色与口上文件。
           <br />
-          游戏目录默认只读——首次打开时会请求对「個人口上」目录的写权限确认。
+          游戏目录默认只读——首次保存时会请求对游戏可写目录的写权限确认。
         </div>
       </div>
     </div>

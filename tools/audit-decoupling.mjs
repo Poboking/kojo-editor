@@ -53,6 +53,8 @@ const NEUTRAL_DIRS = [
   'packages/app/src-tauri/src',
   'packages/app/src/bridge',
   'packages/app/src/bootstrap.ts', // 例外说明：bootstrap 是宿主组合根，见下方豁免
+  'packages/app/src/ui', // 2026-10-11 解耦批：宿主 UI 层收编进 A 项（此前 eraTW 文案绑死游戏无门禁可拦）
+  'packages/app/src/monaco', // 同上：Monaco 语言层（引擎级词汇可，具体游戏约定不可）
 ];
 
 /** 组合根豁免：app 的 bootstrap/UI 可以引用具体插件（那是宿主的接线职责） */
@@ -176,7 +178,7 @@ for (const proot of PLUGIN_ROOTS) {
 console.log('=== 「一切皆插件」解耦审计 ===\n');
 if (violations.length === 0) {
   console.log('✅ 全部通过：');
-  console.log('   A. 内核 / plugin-api / Rust 宿主：零游戏名词');
+  console.log('   A. 内核 / plugin-api / Rust 宿主 / 宿主 UI·Monaco 层：零游戏名词');
   console.log(`   B. 插件（${PLUGIN_NAMES.size} 个）：未依赖 @kojo/kernel`);
   console.log('   C. 插件之间：无交叉 import');
   console.log('   D. 通用插件（adapter 除外）：零游戏知识字面量');
