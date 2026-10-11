@@ -77,6 +77,9 @@ importers:
       '@kojo/plugin-ui-status':
         specifier: workspace:*
         version: link:../plugins/ui-plugin-status
+      '@kojo/plugin-ui-sugar-editor':
+        specifier: workspace:*
+        version: link:../plugins/ui-sugar-editor
       '@kojo/plugin-ui-sugar-lift':
         specifier: workspace:*
         version: link:../plugins/ui-sugar-lift
@@ -239,6 +242,16 @@ importers:
         version: 19.3.0
 
   packages/plugins/ui-state-replay:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+    devDependencies:
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+
+  packages/plugins/ui-sugar-editor:
     dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*

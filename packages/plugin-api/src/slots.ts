@@ -61,17 +61,33 @@ export interface EditorCommandContribution extends ContributionBase {
 
 /* ----------------------- ui.editor.decorator ----------------------- */
 
-/** 行级装饰（高亮/警告/内联提示）；v0.2 起由 Monter 消费 */
+/**
+ * 行级装饰（高亮 / 警告 / 内联提示）——宿主（app 壳）把它消费为 Monaco
+ * **markers**（波浪线 + 悬浮提示 + 问题列表）。
+ *
+ * v0.3 批 S6 起支持**列级区间**（`startColumn`/`endColumn`）：源里有精确
+ * 位置的诊断（如语法糖 `SugarDiagnostic.loc`/`span`）能画出下划线而不是整行标红。
+ * 两字段均可缺省——缺省即整行装饰（与 v0.2 行级形态完全兼容）。
+ */
 export interface LineDecoration {
   /** 1 基行号 */
   readonly line: number;
   readonly severity: 'info' | 'warning' | 'error';
   readonly message: string;
+  /** 1 基起始列（UTF-16 码元）；缺省 = 行首（列 1） */
+  readonly startColumn?: number;
+  /** 1 基结束列（**不含**，即半开区间端点）；缺省 = 行尾 */
+  readonly endColumn?: number;
+  /** 可选诊断码（工具提示/分组用；游戏无关的稳定标识，如 `sugar.expr-missing-else`） */
+  readonly code?: string;
 }
 
 export interface EditorDecoratorContribution extends ContributionBase {
   readonly title: string;
-  /** 对单个文件产出行级装饰（纯函数） */
+  /**
+   * 对单个文件产出行级装饰（**纯函数**：给定同输入必得同输出，不读盘不写盘）。
+   * 不适用该文件的贡献应返回空数组（`matcher` 语义内聚在实现里）。
+   */
   decorate(file: { path: string; text: string; project: GameProject | null }): LineDecoration[];
 }
 

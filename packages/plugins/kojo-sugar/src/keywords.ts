@@ -175,3 +175,71 @@ export function stripBlockColon(trimmed: string): string {
   if (trimmed.endsWith(HALF_COLON)) return trimmed.slice(0, -1);
   return trimmed;
 }
+
+/* ============================ 编辑器词表（S6 批） ============================ */
+
+/**
+ * 词表角色（高亮分组 / 补全分类；对应规范 §4.1 与附录 A 的四个语义组）。
+ * 与 `KeywordId` 的 `head.` / `block.` / `inline.` / `alias.` 前缀一一映射。
+ */
+export type SugarKeywordRole = 'head' | 'block' | 'inline' | 'value';
+
+/** 词表角色 → 面向作者的中文标签（补全 detail 用） */
+export const SUGAR_KEYWORD_ROLE_LABEL: Readonly<Record<SugarKeywordRole, string>> = {
+  head: '头部声明',
+  block: '块关键字',
+  inline: '行内关键字',
+  value: '别名右值',
+};
+
+/** 单个词表条目：词形 + 规范语义 id + 角色 + 是否中文主形 */
+export interface SugarLexiconWord {
+  readonly word: string;
+  readonly id: KeywordId;
+  readonly role: SugarKeywordRole;
+  /** true = 中文主形（补全默认展示）；false = 英文隐藏别名（输入生效但不展示，规范 §4.1） */
+  readonly primary: boolean;
+}
+
+function roleOf(id: KeywordId): SugarKeywordRole {
+  if (id.startsWith('head.')) return 'head';
+  if (id.startsWith('inline.')) return 'inline';
+  if (id.startsWith('alias.')) return 'value';
+  return 'block';
+}
+
+/** 是否含 CJK（中文主形判定；英文别名一律 ASCII 小写，规范 §4.1） */
+const CJK = /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]/;
+
+/**
+ * 编辑器词表（**单一真源**）——由转译器自身的 `KEYWORDS` 表派生，故高亮/补全
+ * 与词法**永不脱节**（规范 §4.1 的"中英双收"在此天然成立）。
+ *
+ * 消费者：app 壳的 Monaco Monarch 高亮 + 补全 provider（宿主层，不属任何插件）。
+ * 之所以从这里导出而不是各写一份：词表是跨游戏语言层，重复维护必然发散。
+ */
+export const SUGAR_LEXICON_WORDS: readonly SugarLexiconWord[] = [...KEYWORDS.entries()].map(
+  ([word, id]): SugarLexiconWord => ({ word, id, role: roleOf(id), primary: CJK.test(word) }),
+);
+
+/** 中文运算符词形（规范 §4.3；不含 `不在`——它由条件降糖单独处理） */
+export const SUGAR_LEXICON_OPERATORS: readonly string[] = OPERATORS.map(([zh]) => zh);
+
+/** 编辑器词表聚合（一次性便捷入口；纯数据，无副作用） */
+export interface SugarEditorLexicon {
+  readonly words: readonly SugarLexiconWord[];
+  readonly operators: readonly string[];
+  readonly contMarks: readonly string[];
+  readonly reservedPronouns: readonly string[];
+  readonly notin: readonly string[];
+}
+
+export function sugarEditorLexicon(): SugarEditorLexicon {
+  return {
+    words: SUGAR_LEXICON_WORDS,
+    operators: SUGAR_LEXICON_OPERATORS,
+    contMarks: CONT_MARKS,
+    reservedPronouns: RESERVED_PRONOUNS,
+    notin: NOTIN_KEYWORDS,
+  };
+}

@@ -1586,3 +1586,134 @@ code {
   color: var(--danger, #d05a5a);
   border-color: var(--danger, #d05a5a);
 }
+
+/* ========================== 糖判定面板（sv-*，v0.3 S6） ========================== */
+.panel-sugar-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  font-size: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+.panel-sugar-verdict .dim {
+  opacity: 0.7;
+}
+.sv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.sv-empty,
+.sv-hint {
+  font-size: 10.5px;
+  padding: 2px;
+}
+.sv-error {
+  color: var(--danger, #d05a5a);
+  font-size: 11px;
+  padding: 3px 2px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.sv-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.sv-verdict {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.sv-verdict.ok {
+  border-color: var(--success, #4e9a5c);
+}
+.sv-verdict.warning {
+  border-color: var(--warning, #c9a03c);
+}
+.sv-verdict.error {
+  border-color: var(--danger, #d05a5a);
+}
+.sv-verdict-badge {
+  font-weight: 600;
+}
+.sv-verdict.ok .sv-verdict-badge {
+  color: var(--success, #4e9a5c);
+}
+.sv-verdict.warning .sv-verdict-badge {
+  color: var(--warning, #c9a03c);
+}
+.sv-verdict.error .sv-verdict-badge {
+  color: var(--danger, #d05a5a);
+}
+.sv-counts {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+}
+.sv-count.err {
+  color: var(--danger, #d05a5a);
+}
+.sv-count.warn {
+  color: var(--warning, #c9a03c);
+}
+.sv-count.info {
+  color: var(--fg-dim);
+}
+.sv-meta {
+  font-size: 10.5px;
+}
+.sv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sv-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.sv-row:hover {
+  background: var(--hover, rgba(128, 128, 128, 0.12));
+}
+.sv-sev {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: 10.5px;
+}
+.sv-row.error .sv-sev {
+  color: var(--danger, #d05a5a);
+}
+.sv-row.warning .sv-sev {
+  color: var(--warning, #c9a03c);
+}
+.sv-row.info .sv-sev {
+  color: var(--fg-dim);
+}
+.sv-loc {
+  flex: 0 0 auto;
+  min-width: 48px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+}
+.sv-code {
+  flex: 0 0 auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+}
+.sv-msg {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}

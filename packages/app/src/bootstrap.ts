@@ -14,6 +14,7 @@ import { createUiArchiveBrowserPlugin } from '@kojo/plugin-ui-archive-browser';
 import { createUiSnapshotInjectorPlugin } from '@kojo/plugin-ui-snapshot-injector';
 import { createUiSugarLiftPlugin } from '@kojo/plugin-ui-sugar-lift';
 import { createUiSugarPreviewPlugin } from '@kojo/plugin-ui-sugar-preview';
+import { createUiSugarEditorPlugin } from '@kojo/plugin-ui-sugar-editor';
 import { tauriBridge } from './bridge/tauri-bridge';
 
 /**
@@ -56,6 +57,10 @@ export async function bootstrapKernel(): Promise<Kernel> {
       // 糖预览（只读观察面：转译 + 源映射 + 状态回放三向映射全在 kojo-sugar 的
       // sugar.preview；面板只做呈现。排在 kojo-sugar 之后）
       createUiSugarPreviewPlugin(),
+      // 糖编辑体验（v0.3 S6）：编辑器波浪线（ui.editor.decorator 贡献，宿主消费为
+      // Monaco markers）+ 糖判定面板。语义全在 kojo-sugar 的 sugar.transpile（纯函数）
+      // ——排在 kojo-sugar 之后（它 require sugar.transpile）
+      createUiSugarEditorPlugin(),
     ],
   });
   await kernel.start();

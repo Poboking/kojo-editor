@@ -1,0 +1,222 @@
+/**
+ * @kojo/plugin-ui-sugar-editor
+ *
+ * 语法糖**编辑体验**（v0.3 批 S6）：两处贡献，都只做**呈现/翻译**，语义全在
+ * `kojo-sugar` 的 `sugar.transpile`（纯函数）——
+ *
+ *   1. `ui.editor.decorator`（id `sugar-diagnostics`）：对当前 `.kojo` 源转译，
+ *      把诊断翻成**行级装饰**（带列区间）→ 宿主（app 壳）消费为 Monaco markers，
+ *      即规范 §8「危险波浪线」；
+ *   2. `ui.panel`（id `sugar-verdict`，标题「糖判定」）：当前 `.kojo` 文件的
+ *      **编译判定**——可编译 / 有警告 / 不可编译 + 逐条诊断（点击 → 定位源行）。
+ *
+ * 分层与解耦（对应 ARCHITECTURE.md §4 与 DSH 哲学）：
+ *   - 装饰与判定都是**纯函数**（不读盘不写盘不发事件）——`decorate()` 拿到的
+ *     就是宿主给的 `{path, text}`，转译器无 IO；面板的读盘走内核 io（只读）；
+ *   - 判定/装饰归类在 `panel-logic.ts`（零 React，可单测）；
+ *   - 当前文件来自宿主事件 `editor.activeFileChanged`（不持有宿主引用）；
+ *   - 跳转复用宿主既有通道 `editor.revealLocation`；
+ *   - 零游戏知识：本插件不认得任何游戏术语，变量字典/分野模板全在 adapter。
+ */
+
+import { createElement, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import type { FileIO, Plugin, SugarDiagnostic, SugarTranspileService } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import {
+  buildVerdictRows,
+  degradeText,
+  diagnosticDecorations,
+  isKojoFile,
+  summarize,
+  type VerdictDegrade,
+  type VerdictRow,
+  type VerdictSummary,
+} from './panel-logic';
+
+/** 诊断渲染上限（防 DOM 爆炸；超出显式计数） */
+const DIAG_CAP = 200;
+
+export function createUiSugarEditorPlugin(): Plugin {
+  return {
+    id: 'ui-sugar-editor',
+    version: '0.3.0',
+    // 硬依赖：装饰与判定的语义都是"呈现 sugar.transpile 的结果"；缺席则本插件无意义
+    requires: [WellKnownServices.SugarTranspile, KernelServices.IO],
+    activate(ctx) {
+      const sugar = ctx.inject<SugarTranspileService>(WellKnownServices.SugarTranspile);
+      const io = ctx.inject<FileIO>(KernelServices.IO);
+
+      /* -------------------- 贡献 1：编辑器波浪线（纯函数） -------------------- */
+
+      ctx.slots.register('ui.editor.decorator', {
+        id: 'sugar-diagnostics',
+        title: '语法糖诊断波浪线',
+        order: 10,
+        decorate(file): ReturnType<typeof diagnosticDecorations> {
+          if (!isKojoFile(file.path)) return [];
+          try {
+            const r = sugar.transpile(file.text, { filePath: file.path });
+            return diagnosticDecorations(r.diagnostics);
+          } catch {
+            // 转译器自身异常：绝不在编辑器里炸（宿主本就会隔离装饰器异常，这里
+            // 显式兜底，让"这一文件无波浪线"而非"整个装饰链断掉"）。
+            return [];
+          }
+        },
+      });
+
+      /* -------------------- 贡献 2：糖判定面板 -------------------- */
+
+      function VerdictPanel(): unknown {
+        const [filePath, setFilePath] = useState<string | null>(null);
+        const [degrade, setDegrade] = useState<VerdictDegrade>('no-project');
+        const [summary, setSummary] = useState<VerdictSummary | null>(null);
+        const [rows, setRows] = useState<readonly VerdictRow[]>([]);
+        const [error, setError] = useState<string | null>(null);
+        const [nonce, setNonce] = useState(0);
+
+        // 当前文件（宿主广播）——换文件即重置
+        useEffect(() => {
+          const un = ctx.bus.on('editor.activeFileChanged', (p) => {
+            setFilePath(p.filePath);
+            setSummary(null);
+            setRows([]);
+            setError(null);
+            setNonce(0);
+            setDegrade(p.filePath ? (isKojoFile(p.filePath) ? 'reading' : 'not-kojo') : 'no-project');
+          });
+          return un;
+        }, []);
+
+        // 读文件（只读）→ 转译 → 判定；换文件 / 手动刷新都走这里
+        useEffect(() => {
+          const path = filePath;
+          if (!path || !isKojoFile(path)) return;
+          let cancelled = false;
+          setDegrade('reading');
+          setError(null);
+          void io
+            .readText(path)
+            .then((tf) => {
+              if (cancelled) return;
+              const r = sugar.transpile(tf.text, { filePath: path });
+              const mapped = r.sourceMap.filter((e) => e.sourceLine !== null).length;
+              setSummary(summarize(tf.text, r.erb, mapped, r.diagnostics));
+              setRows(buildVerdictRows(r.diagnostics));
+            })
+            .catch((err: unknown) => {
+              if (cancelled) return;
+              setError(err instanceof Error ? err.message : String(err));
+              setDegrade('read-error');
+            });
+          return () => {
+            cancelled = true;
+          };
+        }, [filePath, nonce]);
+
+        /** 点击定位：请求宿主打开并滚动到该行 */
+        const reveal = (line: number): void => {
+          if (!filePath) return;
+          ctx.bus.emit('editor.revealLocation', { filePath, line });
+        };
+
+        const shell = (children: ReactNode[]): ReactNode =>
+          createElement(
+            'div',
+            { className: 'panel-sugar-verdict' },
+            createElement(
+              'div',
+              { className: 'sv-toolbar' },
+              createElement('span', { className: 'dim' }, '糖判定（转译诊断；只读）'),
+              createElement(
+                'button',
+                { className: 'ghost small', onClick: () => setNonce((n) => n + 1), disabled: !isKojoFile(filePath) },
+                '刷新',
+              ),
+            ),
+            ...children,
+          );
+
+        if (!isKojoFile(filePath)) {
+          return shell([createElement('div', { className: 'sv-empty dim' }, degradeText(degrade))]);
+        }
+        if (degrade === 'reading') {
+          return shell([createElement('div', { className: 'sv-empty dim' }, degradeText(degrade))]);
+        }
+        if (error) {
+          return shell([
+            createElement('div', { className: 'sv-error' }, `${degradeText(degrade)}：${error}`),
+            createElement(
+              'div',
+              { className: 'sv-actions' },
+              createElement('button', { className: 'ghost small', onClick: () => setNonce((n) => n + 1) }, '重试'),
+            ),
+          ]);
+        }
+        if (!summary) {
+          return shell([createElement('div', { className: 'sv-empty dim' }, degradeText('reading'))]);
+        }
+
+        const statusBox = createElement(
+          'div',
+          { className: `sv-verdict ${summary.status}` },
+          createElement('span', { className: 'sv-verdict-badge' }, summary.label),
+          createElement('span', { className: 'sv-counts' },
+            createElement('span', { className: 'sv-count err' }, `错误 ${summary.counts.error}`),
+            createElement('span', { className: 'sv-count warn' }, `警告 ${summary.counts.warning}`),
+            createElement('span', { className: 'sv-count info' }, `提示 ${summary.counts.info}`),
+          ),
+        );
+
+        const meta = createElement(
+          'div',
+          { className: 'sv-meta dim' },
+          `源行 ${summary.sourceLines} · 产物行 ${summary.generatedLines} · 已映射 ${summary.mappedLines} 行`,
+        );
+
+        const list =
+          rows.length === 0
+            ? createElement('div', { className: 'sv-empty dim' }, '无诊断 ✅')
+            : createElement(
+                'div',
+                { className: 'sv-list' },
+                ...rows.slice(0, DIAG_CAP).map((r) =>
+                  createElement(
+                    'div',
+                    {
+                      key: r.key,
+                      className: `sv-row ${r.severity}`,
+                      onClick: r.line !== null ? () => reveal(r.line as number) : undefined,
+                      title: r.line !== null ? '点击定位到源行' : '文件级诊断',
+                    },
+                    createElement('span', { className: 'sv-sev' }, sevLabel(r.severity)),
+                    createElement('span', { className: 'sv-loc dim' }, r.line === null ? '—' : `L${r.line}:${r.column ?? 1}`),
+                    createElement('span', { className: 'sv-code dim' }, r.code),
+                    createElement('span', { className: 'sv-msg' }, r.message),
+                  ),
+                ),
+                rows.length > DIAG_CAP
+                  ? createElement('div', { className: 'dim sv-hint' }, `其余 ${rows.length - DIAG_CAP} 条未显示`)
+                  : null,
+              );
+
+        return shell([statusBox, meta, list]);
+      }
+
+      ctx.slots.register('ui.panel', {
+        id: 'sugar-verdict',
+        title: '糖判定',
+        icon: '⊙',
+        order: 76,
+        component: VerdictPanel,
+      });
+    },
+  };
+}
+
+function sevLabel(s: SugarDiagnostic['severity']): string {
+  if (s === 'error') return '错误';
+  if (s === 'warning') return '警告';
+  return '提示';
+}

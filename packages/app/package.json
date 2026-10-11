@@ -28,6 +28,7 @@
     "@kojo/plugin-ui-snapshot-injector": "workspace:*",
     "@kojo/plugin-ui-sugar-lift": "workspace:*",
     "@kojo/plugin-ui-sugar-preview": "workspace:*",
+    "@kojo/plugin-ui-sugar-editor": "workspace:*",
     "@kojo/plugin-ui-status": "workspace:*",
     "@tauri-apps/api": "^2.12.2",
     "monaco-editor": "^0.57.0",

@@ -286,6 +286,17 @@ function makeLookup(schema: VariableSchema): DictionaryLookup {
   };
 }
 
+export {
+  sugarEditorLexicon,
+  SUGAR_LEXICON_WORDS,
+  SUGAR_LEXICON_OPERATORS,
+  SUGAR_KEYWORD_ROLE_LABEL,
+  RESERVED_PRONOUNS,
+  CONT_MARKS,
+  type SugarEditorLexicon,
+  type SugarKeywordRole,
+  type SugarLexiconWord,
+} from './keywords';
 export { createSugarTranspileService, type CreateSugarServiceOptions } from './service';
 export {
   createSugarPreviewService,

@@ -1,4 +1,5 @@
 import type * as Monaco from 'monaco-editor';
+import { KOJO_SUGAR_THEME_RULES } from './kojo-language';
 
 /**
  * ERB (EraBasic) 基础语法高亮 —— Monarch 词法定义（v0.1 宽口径版）。
@@ -125,6 +126,8 @@ export function registerErbLanguage(monaco: typeof Monaco): void {
       { token: 'label', foreground: '56b6c2' },
       { token: 'identifier', foreground: 'abb2bf' },
       { token: 'string.escape', foreground: 'd19a66' },
+      // 语法糖专属 token（`kojo-language.ts` 导出；单一主题，避免二次 defineTheme 覆盖）
+      ...KOJO_SUGAR_THEME_RULES,
     ],
     colors: {},
   });

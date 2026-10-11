@@ -1,16 +1,29 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import type * as Monaco from 'monaco-editor';
 import type { Kernel } from '@kojo/kernel';
+import type { LineDecoration } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from 'monaco-editor';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
+import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
   getWorker: () => new editorWorker(),
 };
 registerErbLanguage(monaco);
+registerKojoLanguage(monaco);
+
+/** marker owner（同一 owner 的 markers 每次整体替换；不同 owner 互不干扰） */
+const MARKER_OWNER = 'kojo-decorators';
+/** 编辑停顿多久后重算装饰（避免每击键跑一遍转译） */
+const MARKER_DEBOUNCE_MS = 250;
+
+/** 按扩展名选语言：`.kojo` = 语法糖表层 DSL；其余按原生 ERB（v0.1 口径） */
+function languageFor(filePath: string): string {
+  return /\.kojo$/i.test(filePath) ? KOJO_LANGUAGE_ID : ERB_LANGUAGE_ID;
+}
 
 interface Props {
   kernel: Kernel;
@@ -30,7 +43,9 @@ interface Props {
  * - 打开 = 内核 io.readText（编码探测 + 归一化）；保存 = io.writeText（保编码 + 自动备份，受写白名单约束）；
  * - Ctrl+S 保存；未保存时显示脏标记；
  * - 支持外部定位（revealLine）：打开即滚动到指定行，供"点击校验问题跳转"消费。
- * - 行级装饰（`ui.editor.decorator` 槽）为后续交付物。
+ * - 语言按扩展名选择（`.kojo` = 语法糖表层；其余 = 原生 ERB）；
+ * - 波浪线：消费 `ui.editor.decorator` 槽的全部贡献（纯函数）→ Monaco markers，
+ *   打开即算、编辑停顿去抖重算（v0.3 S6）。
  */
 export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyChange, registerSave }: Props): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -40,6 +55,12 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
   const originalVersionRef = useRef<number>(0);
   const savingRef = useRef(false);
   const revealRef = useRef<{ line: number; nonce: number } | null>(null);
+  /** 当前文件路径（供只注册一次的 Monaco 回调读取最新值，避免闭包过时） */
+  const filePathRef = useRef<string>(filePath);
+  /** 装饰重算定时器（编辑停顿去抖） */
+  const markerTimerRef = useRef<number | null>(null);
+  /** 装饰刷新函数（ref 化，供只注册一次的 onDidChangeModelContent 调用） */
+  const refreshMarkersRef = useRef<((model: Monaco.editor.ITextModel, path: string) => void) | null>(null);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +75,50 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
     ed.revealLineInCenter(line);
     ed.setPosition({ lineNumber: line, column: 1 });
     ed.focus();
+  }, []);
+
+  /**
+   * 重算并应用编辑器波浪线：把全部 `ui.editor.decorator` 贡献（纯函数）的结果
+   * 合并为 Monaco markers。装饰器**抛错不打断编辑**（能力出错要"退化可见"而非
+   * 让编辑器崩）——出错即跳过该贡献，其余照常呈现。
+   */
+  const refreshMarkers = useCallback(
+    (model: Monaco.editor.ITextModel, path: string) => {
+      const project = kernel.project.current();
+      const text = model.getValue();
+      const decorations: LineDecoration[] = [];
+      for (const contribution of kernel.slots.query('ui.editor.decorator')) {
+        try {
+          decorations.push(...contribution.decorate({ path, text, project }));
+        } catch {
+          // 单个装饰器失败不影响其余（错误写入由该插件自行上报，宿主不静默吞掉整轮）
+        }
+      }
+      monaco.editor.setModelMarkers(model, MARKER_OWNER, decorationsToMarkers(monaco, model, decorations));
+    },
+    [kernel],
+  );
+
+  // ref 化刷新函数，供只注册一次的 Monaco 回调取用最新闭包
+  useEffect(() => {
+    refreshMarkersRef.current = refreshMarkers;
+  }, [refreshMarkers]);
+
+  // 文件路径 ref 同步（只注册一次的 Monaco 回调读它）
+  useEffect(() => {
+    filePathRef.current = filePath;
+  }, [filePath]);
+
+  /** 编辑停顿后重算装饰（去抖；换文件时立即算，见文件加载 effect） */
+  const scheduleMarkers = useCallback(() => {
+    if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
+    markerTimerRef.current = window.setTimeout(() => {
+      markerTimerRef.current = null;
+      const ed = editorRef.current;
+      const model = ed?.getModel();
+      const path = filePathRef.current;
+      if (model && path && refreshMarkersRef.current) refreshMarkersRef.current(model, path);
+    }, MARKER_DEBOUNCE_MS);
   }, []);
 
   // 记录最新定位请求（同一文件重复定位靠 nonce 变化触发）
@@ -116,11 +181,14 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
     ed.onDidChangeModelContent(() => {
       const v = ed.getModel()?.getAlternativeVersionId();
       setDirty(v !== undefined ? v !== originalVersionRef.current : ed.getValue() !== originalRef.current);
+      scheduleMarkers();
     });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void save();
     });
     return () => {
+      if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
+      markerTimerRef.current = null;
       ed.dispose();
       editorRef.current = null;
     };
@@ -139,7 +207,7 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
         const uri = monaco.Uri.file(filePath);
         const old = monaco.editor.getModel(uri);
         old?.dispose();
-        const model = monaco.editor.createModel(tf.text, ERB_LANGUAGE_ID, uri);
+        const model = monaco.editor.createModel(tf.text, languageFor(filePath), uri);
         ed.setModel(model);
         originalRef.current = tf.text;
         const v = model.getAlternativeVersionId();
@@ -147,6 +215,10 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
         setDirty(false);
         setError(null);
         setStatus(`${tf.encoding} · ${tf.eol.toUpperCase()} · ${tf.text.split('\n').length} 行`);
+        // 打开即算一次装饰（不等用户编辑）——首屏就能看到波浪线
+        if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
+        markerTimerRef.current = null;
+        refreshMarkers(model, filePath);
         applyReveal();
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -155,7 +227,7 @@ export function EditorPane({ kernel, filePath, revealLine, revealNonce, onDirtyC
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal]);
+  }, [kernel, filePath, applyReveal, refreshMarkers]);
 
   return (
     <div className="editor-pane">

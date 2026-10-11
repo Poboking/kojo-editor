@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/plugin-ui-sugar-editor",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Sugar editing experience (v0.3 S6): a ui.editor.decorator contribution turning sugar transpile diagnostics into column-precise squiggles, plus a 'sugar verdict' ui.panel showing the compile verdict (compilable / warnings / errors) for the active .kojo file. Presentation/translation only - all semantics live in the kojo-sugar plugin's pure sugar.transpile service.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0"
+  }
+}
