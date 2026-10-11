@@ -1,12 +1,14 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as nodeJoin } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
   ArchiveArrayVariable,
   ConditionExtractorService,
+  ConditionIndex,
   ConventionLinterService,
   ErbParserService,
+  GameProject,
   SnapshotSourceService,
   SnapshotWriteService,
   StateReplayService,
@@ -15,7 +17,7 @@ import type {
   SugarTranspileService,
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
-import { createKernel } from '../src/kernel';
+import { createKernel, type Kernel } from '../src/kernel';
 import { NodeBridge } from './helpers/node-bridge';
 import { MemoryStorageBackend } from './helpers/memory-storage';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
@@ -39,26 +41,51 @@ import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
  */
 const SMOKE_DIR = process.env.KOJO_SMOKE_PROJECT;
 
-describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
-  it(
-    'onboarding → CHARA 映射 → 口上域全量函数索引 → 约定校验 → 条件抽取 → 存档解析 → 状态回放',
-    async () => {
-      const appData = mkdtempSync(nodeJoin(tmpdir(), 'kojo-smoke-'));
-      const kernel = await createKernel({
-        platform: new NodeBridge(appData),
-        plugins: [
-          createErbParserPlugin(),
-          createEratwAdapterPlugin(),
-          createConventionLinterPlugin(),
-          createConditionExtractorPlugin(),
-          createSavParserPlugin(),
-          createStateReplayPlugin(),
-          createKojoSugarPlugin(),
-        ],
-        storageBackend: new MemoryStorageBackend(),
-      });
-      await kernel.start();
+// 真实语料可能不含存档（`sav/` 缺失或为空）：存档解析 / 回放 / 注入三段无从验证，
+// 但索引 / 校验 / 抽取 / 语法糖落盘 / 升糖应用与存档无关，不该被一并拖死。
+// 目录名沿用本文件既有口径（§9.2 同样直接拼 `sav`）。
+const SAVE_COUNT = (() => {
+  if (!SMOKE_DIR) return 0;
+  try {
+    return readdirSync(nodeJoin(SMOKE_DIR, 'sav')).filter((n) => n.toLowerCase().endsWith('.sav')).length;
+  } catch {
+    return 0;
+  }
+})();
 
+describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
+  let appData: string;
+  let kernel: Kernel;
+  let project: GameProject;
+  let extractor: ConditionExtractorService;
+  let condIndex: ConditionIndex;
+
+  beforeAll(async () => {
+    appData = mkdtempSync(nodeJoin(tmpdir(), 'kojo-smoke-'));
+    kernel = await createKernel({
+      platform: new NodeBridge(appData),
+      plugins: [
+        createErbParserPlugin(),
+        createEratwAdapterPlugin(),
+        createConventionLinterPlugin(),
+        createConditionExtractorPlugin(),
+        createSavParserPlugin(),
+        createStateReplayPlugin(),
+        createKojoSugarPlugin(),
+      ],
+      storageBackend: new MemoryStorageBackend(),
+    });
+    await kernel.start();
+    project = await kernel.project.open(SMOKE_DIR!);
+  }, 180_000);
+
+  afterAll(async () => {
+    if (kernel) await kernel.stop();
+  }, 180_000);
+
+  it(
+    '接线 → onboarding → CHARA 映射 → 口上域全量函数索引 → 约定校验 → 条件抽取',
+    async () => {
       // 1. 插件接线
       const states = new Map(kernel.plugins.list().map((s) => [s.id, s]));
       expect(states.get('erb-parser')?.status).toBe('active');
@@ -69,8 +96,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(states.get('state-replay')?.status).toBe('active');
       expect(states.get('kojo-sugar')?.status).toBe('active');
 
-      // 2. onboarding（内核对全部 adapter 候选轮询 detect）
-      const project = await kernel.project.open(SMOKE_DIR!);
+      // 2. onboarding（内核对全部 adapter 候选轮询 detect；open 已在 beforeAll 完成）
       expect(project.adapterId).toBe('eratw');
       expect(project.charaIndex.size).toBeGreaterThan(100);
       expect(project.charaIndex.get(1)?.kojoDir).toBeTruthy();
@@ -168,8 +194,9 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(byRule.get('eratw.kojo-call-slot-coverage') ?? 0).toBe(36);
 
       // 6. 条件抽取（v0.2 第四批：控制流 → 谓词 → 状态依赖；schema 标注来自 adapter 变量字典）
-      const extractor = kernel.services.get<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
-      const condIndex = await extractor.ensureIndex();
+      //    extractor/condIndex 住 describe 作用域：存档链路（§8/§9）复用同一份索引，不重复抽取
+      extractor = kernel.services.get<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
+      condIndex = await extractor.ensureIndex();
       expect(condIndex.projectRoot).toBe(project.rootDir);
 
       // 规模断言（真实数据：20 万 IF / 4.5 万 SELECTCASE）
@@ -217,7 +244,13 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           `依赖条目 ${condIndex.stats.dependencies} | schema 标注 ${schemaTagged}（好感度 ${favDeps} / 恋慕 ${talentLove}） ` +
           `in ${condIndex.durationMs}ms`,
       );
+    },
+    180_000,
+  );
 
+  it.skipIf(SAVE_COUNT === 0)(
+    `存档解析 → 状态回放 → 注入写链路（需语料含 sav/ 存档；本机实测 ${SAVE_COUNT} 档）`,
+    async () => {
       // 7. 存档解析（v0.2 第四批：扫描 + 浅解析 + 深解析，真实六档字节级回归）
       const snapshots = kernel.services.get<SnapshotSourceService>(WellKnownServices.SnapshotSource);
       const scan = await snapshots.scan();
@@ -438,7 +471,13 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           `（${injected.byteSize}B，备份 ${injected.backupPath ? '已建' : '无'}）；` +
           `越权拒绝与 Int64 守卫各 1 项 ✓`,
       );
+    },
+    180_000,
+  );
 
+  it(
+    '语法糖编译落盘 → 升糖应用（与存档无关；无档语料同样必跑）',
+    async () => {
       // 10. 语法糖编译落盘（v0.3 批 S3）：.kojo 源 → 合规 .erb 双闸写 + 备份 + 回读
       //     写目标 = appData 临时域副本，**绝不写真实游戏目录**。
       const sugar = kernel.services.get<SugarTranspileService>(WellKnownServices.SugarTranspile);
@@ -573,8 +612,6 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
           `（全部 verified；未建议 ${liftResult.skipped.length} 条显式列出）→ 落盘 ${applied.byteSize}B，` +
           `回读 == 预览 ✓ 备份已建 ✓ 越权拒绝 1 项 ✓`,
       );
-
-      await kernel.stop();
     },
     180_000,
   );

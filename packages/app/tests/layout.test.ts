@@ -152,6 +152,7 @@ describe('持久化', () => {
     aux: { visible: true, size: 400, active: 'b' },
     bottom: { visible: false, size: 150, active: null },
     zen: true,
+    zenLimitWidth: true,
     panelLocations: { a: 'aux' },
   });
 
