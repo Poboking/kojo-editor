@@ -50,6 +50,18 @@ export interface EditorStatusInfo {
   lines: number;
 }
 
+/**
+ * 壳层工作台 API（P3：编辑器区空态动作按钮用——壳层持有 picker/命令注册表，
+ * 空态在 children 里，需反向取得触发入口）。
+ */
+export interface WorkbenchApi {
+  openQuickOpen: () => void;
+  openPalette: () => void;
+  hasCommand: (id: string) => boolean;
+  /** 执行命令（when 不满足 / 不存在 → false；抛错隔离记日志） */
+  runCommand: (id: string) => boolean;
+}
+
 interface Props {
   kernel: Kernel;
   /** 壳层内建视图（与槽同构的贡献形态；如口上文件树 → group:'explorer'） */
@@ -75,6 +87,10 @@ interface Props {
   quickOpenFiles?: readonly string[];
   /** 快速打开选中回调 */
   onOpenFile?: (path: string) => void;
+  /** 编辑器区注入的壳层命令（P3：关闭标签 / 全部保存；与内建布局命令合并进统一注册表） */
+  extraCommands?: readonly ShellCommandSpec[];
+  /** 工作台 API 注册（P3：编辑器区空态动作按钮反向取得 picker/命令入口；卸载时 null） */
+  onRegisterWorkbench?: (api: WorkbenchApi | null) => void;
 }
 
 type ContainerKey = 'sidebar' | 'aux' | 'bottom';
@@ -145,6 +161,8 @@ export function ShellLayout(props: Props): ReactElement {
     onReloadProject,
     quickOpenFiles,
     onOpenFile,
+    extraCommands,
+    onRegisterWorkbench,
   } = props;
 
   const allPanels = useMemo(
@@ -205,8 +223,10 @@ export function ShellLayout(props: Props): ReactElement {
       { id: 'layout.reset', title: '重置布局', run: () => doResetRef.current() },
       { id: 'workbench.commandPalette', title: '命令面板', keybinding: 'ctrl+shift+p', run: () => setPaletteOpen(true) },
       { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: 'ctrl+p', run: () => setQuickOpen(true) },
+      // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表
+      ...(extraCommands ?? []),
     ],
-    [],
+    [extraCommands],
   );
   const registry = useMemo(
     () => buildCommandRegistry(shellCommands, slotCommands),
@@ -217,6 +237,28 @@ export function ShellLayout(props: Props): ReactElement {
   registryRef.current = registry;
   const commandCtxRef = useRef(commandCtx);
   commandCtxRef.current = commandCtx;
+
+  // 工作台 API 注册（编辑器区空态动作按钮反向取 picker/命令入口）
+  useEffect(() => {
+    onRegisterWorkbench?.({
+      openQuickOpen: () => setQuickOpen(true),
+      openPalette: () => setPaletteOpen(true),
+      hasCommand: (id) => registryRef.current.some((c) => c.id === id),
+      runCommand: (id) => {
+        const cmd = registryRef.current.find((c) => c.id === id);
+        if (!cmd) return false;
+        try {
+          if (cmd.when && !cmd.when(commandCtxRef.current)) return false;
+          void cmd.run(commandCtxRef.current);
+          return true;
+        } catch (e: unknown) {
+          console.warn(`[ShellLayout] 命令 '${id}' 执行失败：${e instanceof Error ? e.message : String(e)}`);
+          return false;
+        }
+      },
+    });
+    return () => onRegisterWorkbench?.(null);
+  }, [onRegisterWorkbench]);
 
   // 全局快捷键（统一注册表驱动；Ctrl+K Z 和弦特例；Esc 优先级 picker > overlay > zen）
   useEffect(() => {

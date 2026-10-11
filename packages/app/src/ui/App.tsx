@@ -8,6 +8,7 @@ import { useNotify } from './NotificationCenter';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
+import type { EditorPaneActions } from './EditorPane';
 
 export type AppPhase = 'boot' | 'welcome' | 'opening' | 'project';
 
@@ -18,12 +19,6 @@ export interface RevealTarget {
   nonce: number;
 }
 
-/** 待确认的导航目标（当前文件有未保存修改时先弹确认，审阅 M4 修复） */
-interface PendingNav {
-  filePath: string;
-  line?: number;
-}
-
 export function App(): ReactElement {
   const [kernel, setKernel] = useState<Kernel | null>(null);
   const [phase, setPhase] = useState<AppPhase>('boot');
@@ -32,22 +27,36 @@ export function App(): ReactElement {
   const [index, setIndex] = useState<ErbIndex | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [activeFile, setActiveFile] = useState<string | null>(null);
+  /** 打开的标签页（P3 多标签；顺序即标签栏顺序） */
+  const [openTabs, setOpenTabs] = useState<string[]>([]);
+  /** 各标签脏态集合（EditorPane 按路径逐个上报；标签栏脏点 + 关闭确认用） */
+  const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set());
+  /** 待确认的脏标签关闭（非 null = 弹确认框） */
+  const [pendingClose, setPendingClose] = useState<string | null>(null);
   const [reveal, setReveal] = useState<RevealTarget | null>(null);
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [pendingApproval, setPendingApproval] = useState<GameProject | null>(null);
   /** 写权限状态（P0）：null = 无项目；驱动状态栏徽章 + 保存置灰 */
   const [writable, setWritable] = useState<boolean | null>(null);
-  const [editorDirty, setEditorDirty] = useState(false);
   /** 口上域索引构建失败原因（null = 成功/未构建）；驱动状态栏诊断与通知 */
   const [indexError, setIndexError] = useState<string | null>(null);
   /** 通知中心（入口层 Provider 装配，App 自身也可发通知） */
   const notify = useNotify();
-  const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
-  const saveRef = useRef<(() => Promise<boolean>) | null>(null);
-  const registerSave = useCallback((fn: (() => Promise<boolean>) | null) => {
-    saveRef.current = fn;
+  /** 编辑器动作句柄（保存/保存指定/全部保存；EditorPane 注册） */
+  const actionsRef = useRef<EditorPaneActions | null>(null);
+  const registerActions = useCallback((a: EditorPaneActions | null) => {
+    actionsRef.current = a;
   }, []);
-  const onDirtyChange = useCallback((d: boolean) => setEditorDirty(d), []);
+  const onDirtyChange = useCallback((path: string, dirty: boolean) => {
+    setDirtyPaths((prev) => {
+      const has = prev.has(path);
+      if (has === dirty) return prev;
+      const next = new Set(prev);
+      if (dirty) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -80,8 +89,8 @@ export function App(): ReactElement {
     };
   }, [kernel]);
 
-  // 通用导航意图：任意插件提出"打开文件并定位"，宿主在此落地
-  // （当前文件有未保存修改 → 先弹确认，绝不静默丢弃，审阅 M4 修复）
+  // 通用导航意图：任意插件提出"打开文件并定位"，宿主在此落地。
+  // P3 多标签后切换零丢失（model 留内存），无需未保存确认——确认只发生在关闭脏标签。
   useEffect(() => {
     if (!kernel) return;
     const un = kernel.bus.on('editor.revealLocation', (ev) => {
@@ -91,7 +100,7 @@ export function App(): ReactElement {
       un();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kernel, editorDirty]);
+  }, [kernel]);
 
   // 当前文件广播（v0.3 批 S5-UI）：宿主是"当前打开哪个文件"的唯一权威，
   // 面板（如升糖建议器）需要它才知道该扫哪个文件。做成事件而非查询接口，
@@ -176,20 +185,17 @@ export function App(): ReactElement {
   }, [openProject]);
 
   const commitOpenFile = useCallback((path: string, line?: number) => {
+    setOpenTabs((prev) => (prev.includes(path) ? prev : [...prev, path]));
     setActiveFile(path);
     setReveal(line ? { line, nonce: Date.now() } : null);
   }, []);
 
   const requestOpenFile = useCallback(
     (path: string, line?: number) => {
-      // 同文件定位不需要确认（编辑内容仍在）
-      if (editorDirty && path !== activeFile) {
-        setPendingNav({ filePath: path, line });
-        return;
-      }
+      // P3 多标签：切换标签不丢内容（model 留内存），无需未保存确认
       commitOpenFile(path, line);
     },
-    [editorDirty, activeFile, commitOpenFile],
+    [commitOpenFile],
   );
 
   const openFile = useCallback(
@@ -199,19 +205,57 @@ export function App(): ReactElement {
     [requestOpenFile],
   );
 
-  const decideUnsaved = useCallback(
-    async (action: 'save-then-go' | 'discard' | 'cancel') => {
-      const nav = pendingNav;
-      setPendingNav(null);
-      if (!nav || action === 'cancel') return;
-      if (action === 'save-then-go') {
-        const ok = saveRef.current ? await saveRef.current() : false;
-        if (!ok) return; // 保存失败：停留当前文件（错误已显示在编辑器状态栏）
+  /** 关闭标签（无确认路径；model 回收由 EditorPane 的 openPaths effect 落地） */
+  const doCloseTab = useCallback(
+    (path: string) => {
+      const i = openTabs.indexOf(path);
+      const next = openTabs.filter((p) => p !== path);
+      setOpenTabs(next);
+      setDirtyPaths((prev) => {
+        if (!prev.has(path)) return prev;
+        const n = new Set(prev);
+        n.delete(path);
+        return n;
+      });
+      if (path === activeFile) {
+        // 激活邻居标签（优先右侧，末尾则左侧）；空 → 编辑器区回空态
+        setActiveFile(next.length > 0 ? (next[Math.min(i, next.length - 1)] ?? null) : null);
+        setReveal(null);
       }
-      commitOpenFile(nav.filePath, nav.line);
     },
-    [pendingNav, commitOpenFile],
+    [openTabs, activeFile],
   );
+
+  /** 关闭标签入口：脏标签先弹确认（绝不静默丢弃，审阅 M4 精神在多标签下的延续） */
+  const requestCloseTab = useCallback(
+    (path: string) => {
+      if (dirtyPaths.has(path)) {
+        setPendingClose(path);
+        return;
+      }
+      doCloseTab(path);
+    },
+    [dirtyPaths, doCloseTab],
+  );
+
+  const decideClose = useCallback(
+    async (action: 'save-then-go' | 'discard' | 'cancel') => {
+      const path = pendingClose;
+      setPendingClose(null);
+      if (!path || action === 'cancel') return;
+      if (action === 'save-then-go') {
+        const ok = actionsRef.current ? await actionsRef.current.savePath(path) : false;
+        if (!ok) return; // 保存失败：标签保留（错误已显示在编辑器状态栏/通知）
+      }
+      doCloseTab(path);
+    },
+    [pendingClose, doCloseTab],
+  );
+
+  /** 全部保存（Ctrl+Shift+S；壳层命令经 ProjectView 注入） */
+  const saveAll = useCallback(async (): Promise<boolean> => {
+    return actionsRef.current ? actionsRef.current.saveAll() : false;
+  }, []);
 
   const closeProject = useCallback(async () => {
     if (!kernel) return;
@@ -227,9 +271,10 @@ export function App(): ReactElement {
     setProject(null);
     setIndex(null);
     setActiveFile(null);
+    setOpenTabs([]);
+    setDirtyPaths(new Set());
+    setPendingClose(null);
     setReveal(null);
-    setEditorDirty(false);
-    setPendingNav(null);
     setPendingApproval(null);
     setWritable(null);
     setIndexError(null);
@@ -275,11 +320,15 @@ export function App(): ReactElement {
         indexing={indexing}
         indexError={indexError}
         activeFile={activeFile}
+        openTabs={openTabs}
+        dirtyPaths={dirtyPaths}
         reveal={reveal}
         onOpenFile={openFile}
-        editorDirty={editorDirty}
+        onActivateTab={requestOpenFile}
+        onRequestCloseTab={requestCloseTab}
+        onSaveAll={saveAll}
         onDirtyChange={onDirtyChange}
-        registerSave={registerSave}
+        registerActions={registerActions}
         onClose={closeProject}
         onReload={() => void openProject(project.rootDir, { keepView: true })}
         writable={writable ?? false}
@@ -301,7 +350,9 @@ export function App(): ReactElement {
     <>
       {body}
       {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
-      {pendingNav ? <UnsavedConfirmDialog filePath={activeFile ?? ''} onDecide={decideUnsaved} /> : null}
+      {pendingClose ? (
+        <UnsavedConfirmDialog filePath={pendingClose} context="close" onDecide={decideClose} />
+      ) : null}
     </>
   );
 }

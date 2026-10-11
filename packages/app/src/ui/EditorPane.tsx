@@ -59,70 +59,111 @@ function pickSaveHandler(kernel: Kernel, path: string): EditorSaveHandlerContrib
   return matches[0];
 }
 
+/**
+ * 编辑器动作句柄（P3 多标签批）：宿主（App）经 `registerActions` 取得，
+ * 供「保存并关闭」「全部保存」等标签级流程调用。
+ */
+export interface EditorPaneActions {
+  /** 保存当前活动标签 */
+  save: () => Promise<boolean>;
+  /** 保存指定标签（含后台标签；model 仍在内存中，无需切换） */
+  savePath: (path: string) => Promise<boolean>;
+  /** 保存全部脏标签（逐一走保存接管链；needs-choice 的后台标签跳过并通知） */
+  saveAll: () => Promise<boolean>;
+}
+
+/** 单个打开文件的 model 记录（多标签：model 随标签存续，切换不销毁） */
+interface ModelEntry {
+  model: Monaco.editor.ITextModel;
+  listener: Monaco.IDisposable;
+  /** 打开时的编码/EOL（状态栏展示用；保存由内核 io 保编码） */
+  encoding: string;
+  eol: string;
+}
+
 interface Props {
   kernel: Kernel;
+  /** 当前活动标签路径 */
   filePath: string;
+  /** 全部打开的标签（model 生命周期以此为准：不在列表中的 model 被 dispose） */
+  openPaths: readonly string[];
   /** 定位行（来自校验面板 / 函数树的 `editor.revealLocation`） */
   revealLine?: number;
   /** 定位序号：同一文件重复定位时变化以触发重新滚动 */
   revealNonce?: number;
-  /** 脏状态上抛（宿主据此在切换文件前弹确认，审阅 M4 修复） */
-  onDirtyChange?: (dirty: boolean) => void;
-  /** 注册保存句柄（宿主"保存并前往"流程用；卸载/换文件时以 null 注销） */
-  registerSave?: (fn: (() => Promise<boolean>) | null) => void;
+  /** 脏状态上抛（P3：按路径逐个上报，宿主维护 dirtyPaths 集合） */
+  onDirtyChange?: (path: string, dirty: boolean) => void;
+  /** 注册编辑器动作句柄（宿主"保存并关闭 / 全部保存"流程用；卸载时以 null 注销） */
+  registerActions?: (actions: EditorPaneActions | null) => void;
   /** 写权限状态（P0）：只读时保存按钮置灰 + 保存前置拦截（不等到写盘才报错） */
   writable: boolean;
   /** 重授权入口（通知 action「去授权」落地处） */
   onReauth: () => void;
-  /** 编辑器状态上抛（UI 重设计批 P1：状态栏右区显示编码/EOL/行数；卸载或无文件时 null） */
+  /** 编辑器状态上抛（状态栏右区显示编码/EOL/行数；卸载或无文件时 null） */
   onStatusInfo?: (info: { encoding: string; eol: string; lines: number } | null) => void;
 }
 
 /**
- * Monaco 编辑面板：
- * - 打开 = 内核 io.readText（编码探测 + 归一化）；
+ * Monaco 编辑面板（P3 多标签化）：
+ * - 每个标签一个 model：打开 = 读盘建 model，切换 = saveViewState → setModel →
+ *   restoreViewState（编辑内容全程留内存，切换零丢失、零确认）；标签关闭即 dispose；
  * - 保存（Ctrl+S）= 先征询 `ui.editor.saveHandler` 槽（就近接管，如 `.kojo` →
  *   保存源 + 编译产物），无命中则走内核 io.writeText 缺省路径（保编码 + 自动
  *   备份，受写白名单约束）；保存期告警（全角空格）弹确认框 + 一键修复；
- * - 未保存时显示脏标记；
- * - 支持外部定位（revealLine）：打开即滚动到指定行，供"点击校验问题跳转"消费。
- * - 语言按扩展名选择（`.kojo` = 语法糖表层；其余 = 原生 ERB）；
- * - 波浪线：消费 `ui.editor.decorator` 槽的全部贡献（纯函数）→ Monaco markers，
+ * - 脏判定按 model 版本号 O(1)（BUG-4），逐 model 监听上报；
+ * - 支持外部定位（revealLine）；语言按扩展名选择；
+ * - 波浪线：消费 `ui.editor.decorator` 槽全部贡献（纯函数）→ Monaco markers，
  *   打开即算、编辑停顿去抖重算（v0.3 S6）。
  */
 export function EditorPane({
   kernel,
   filePath,
+  openPaths,
   revealLine,
   revealNonce,
   onDirtyChange,
-  registerSave,
+  registerActions,
   writable,
   onReauth,
   onStatusInfo,
 }: Props): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
-  const originalRef = useRef<string>('');
-  /** 打开/保存成功时的 model 版本号（BUG-4：脏判定 O(1)，替代每击键全量字符串比较） */
-  const originalVersionRef = useRef<number>(0);
+  /** 全部打开文件的 model（随标签存续；切换不销毁，关闭才 dispose） */
+  const entriesRef = useRef(new Map<string, ModelEntry>());
+  /** 各文件"已保存基线"版本号（BUG-4：脏判定 O(1)，替代全量字符串比较） */
+  const baseVersionRef = useRef(new Map<string, number>());
+  /** 各标签的视图状态（光标/滚动；切换时保存/恢复） */
+  const viewStatesRef = useRef(new Map<string, Monaco.editor.ICodeEditorViewState | null>());
+  /** 上一个活动路径（切换时先把它的视图状态存下） */
+  const prevPathRef = useRef<string | null>(null);
   const savingRef = useRef(false);
   const revealRef = useRef<{ line: number; nonce: number } | null>(null);
   /** 当前文件路径（供只注册一次的 Monaco 回调读取最新值，避免闭包过时） */
   const filePathRef = useRef<string>(filePath);
+  const openPathsRef = useRef<readonly string[]>(openPaths);
   /** 写权限/重授权入口 ref（同上：Monaco 回调与保存句柄只注册一次，须读最新值） */
   const writableRef = useRef<boolean>(writable);
   const onReauthRef = useRef<() => void>(onReauth);
+  const onDirtyChangeRef = useRef(onDirtyChange);
   const notify = useNotify();
   /** 装饰重算定时器（编辑停顿去抖） */
   const markerTimerRef = useRef<number | null>(null);
-  /** 装饰刷新函数（ref 化，供只注册一次的 onDidChangeModelContent 调用） */
+  /** 装饰刷新函数（ref 化，供只注册一次的 model 监听调用） */
   const refreshMarkersRef = useRef<((model: Monaco.editor.ITextModel, path: string) => void) | null>(null);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
   /** 待用户决策的保存告警（非 null = 弹确认框；宿主全角空格"一键修复"的入口） */
   const [pendingChoice, setPendingChoice] = useState<EditorSaveWarning | null>(null);
+
+  /** O(1) 脏判定：model 当前版本号 ≠ 已保存基线版本号（BUG-4） */
+  const computeDirty = useCallback((path: string): boolean => {
+    const entry = entriesRef.current.get(path);
+    const base = baseVersionRef.current.get(path);
+    if (!entry || base === undefined) return false;
+    return entry.model.getAlternativeVersionId() !== base;
+  }, []);
 
   const applyReveal = useCallback(() => {
     const ed = editorRef.current;
@@ -163,16 +204,20 @@ export function EditorPane({
     refreshMarkersRef.current = refreshMarkers;
   }, [refreshMarkers]);
 
-  // 文件路径 ref 同步（只注册一次的 Monaco 回调读它）
+  // 文件路径 / 打开列表 ref 同步（只注册一次的 Monaco 回调读它们）
   useEffect(() => {
     filePathRef.current = filePath;
   }, [filePath]);
+  useEffect(() => {
+    openPathsRef.current = openPaths;
+  }, [openPaths]);
 
-  // 写权限/重授权 ref 同步（同上）
+  // 写权限/重授权/脏上报 ref 同步（同上）
   useEffect(() => {
     writableRef.current = writable;
     onReauthRef.current = onReauth;
-  }, [writable, onReauth]);
+    onDirtyChangeRef.current = onDirtyChange;
+  }, [writable, onReauth, onDirtyChange]);
 
   /** 编辑停顿后重算装饰（去抖；换文件时立即算，见文件加载 effect） */
   const scheduleMarkers = useCallback(() => {
@@ -192,32 +237,29 @@ export function EditorPane({
     applyReveal();
   }, [revealLine, revealNonce, filePath, applyReveal]);
 
-  /** 保存成功后把"当前内容/版本号"立为新基线（BUG-4：脏判定 O(1)） */
-  const markSaved = useCallback((ed: Monaco.editor.IStandaloneCodeEditor, text: string) => {
-    originalRef.current = text;
-    const v = ed.getModel()?.getAlternativeVersionId();
-    if (v !== undefined) originalVersionRef.current = v;
-    setDirty(false);
-  }, []);
+  /** 保存成功：把该文件 model 的当前版本号立为新基线 */
+  const markSaved = useCallback(
+    (path: string, entry: ModelEntry) => {
+      baseVersionRef.current.set(path, entry.model.getAlternativeVersionId());
+      onDirtyChangeRef.current?.(path, false);
+      if (filePathRef.current === path) setDirty(false);
+    },
+    [],
+  );
 
   /**
-   * 保存当前文件。
-   *
-   * - 先就近征询**保存接管者**（槽 `ui.editor.saveHandler`，2026-10-12 批）：命中
-   *   （如 `.kojo`）则由接管者完成"保存源 + 编译产物"，宿主只消费其 `outcome`；
+   * 保存指定文件（活动标签与后台标签同一条路径）：
+   * - 先就近征询**保存接管者**（槽 `ui.editor.saveHandler`）：命中（如 `.kojo`）
+   *   则由接管者完成"保存源 + 编译产物"，宿主只消费其 `outcome`；
    * - 未命中 → 缺省路径：内核 io `writeText`（保编码保换行，受写白名单约束）；
-   * - `needs-choice`（全角空格告警）→ 弹确认框、**本次不落盘**（返回 false，脏标记
-   *   保留）；确认后由 `decideSaveWarning` 带 `choices` 重新调用本函数。
-   *
-   * 路径经 `filePathRef` 取最新值——修掉"只注册一次的 Ctrl+S 回调闭包过时"隐患
-   * （换文件后 Ctrl+S 必须存到当前文件）；`save` 因而只依赖 `kernel`，身份稳定。
+   * - `needs-choice`（全角空格告警）→ 活动标签弹确认框、**本次不落盘**；后台
+   *   标签（全部保存途中）跳过并显式通知（不静默吞）。
    */
-  const save = useCallback(
-    async (choices?: EditorSaveChoices): Promise<boolean> => {
-      const ed = editorRef.current;
-      if (!ed || savingRef.current) return false;
-      const path = filePathRef.current;
-      if (!path) return false;
+  const savePath = useCallback(
+    async (path: string, choices?: EditorSaveChoices): Promise<boolean> => {
+      const entry = entriesRef.current.get(path);
+      if (!entry || savingRef.current) return false;
+      const isActive = filePathRef.current === path;
       // P0 前置拦截：只读时不等到写盘才报错——通知 + 去授权 action（定稿 §九-1/3）
       if (!writableRef.current) {
         notify({
@@ -225,13 +267,13 @@ export function EditorPane({
           message: '保存被拒绝：项目当前为只读（写权限未批准或批准已失效）。',
           action: { label: '去授权', run: () => onReauthRef.current() },
         });
-        setError('只读：写权限未批准');
+        if (isActive) setError('只读：写权限未批准');
         // 用户已表达明确的写入意图 → 软件主动重弹授权对话框（实机反馈：让用户自己去
         // 发现并点击「重新授权」按钮 = 把软件的责任抛给用户，是设计错误）
         onReauthRef.current();
         return false;
       }
-      const text = ed.getValue();
+      const text = entry.model.getValue();
       savingRef.current = true;
       try {
         const handler = pickSaveHandler(kernel, path);
@@ -243,23 +285,35 @@ export function EditorPane({
             ...(choices ? { choices } : {}),
           });
           if (outcome.status === 'needs-choice') {
-            setPendingChoice(outcome.warning); // 尚未落盘：由确认框决定
+            if (isActive) {
+              setPendingChoice(outcome.warning); // 尚未落盘：由确认框决定
+            } else {
+              notify({
+                kind: 'info',
+                message: `「${path}」存在保存告警，全部保存时已跳过——切到该标签单独保存可处理。`,
+              });
+            }
             return false;
           }
           if (outcome.status === 'error') {
-            setError(outcome.message);
+            if (isActive) setError(outcome.message);
+            else notify({ kind: 'error', message: `保存「${path}」失败：${outcome.message}` });
             return false;
           }
-          markSaved(ed, text);
-          setError(null);
-          setStatus(outcome.note ? `${outcome.message} · ${outcome.note}` : outcome.message);
+          markSaved(path, entry);
+          if (isActive) {
+            setError(null);
+            setStatus(outcome.note ? `${outcome.message} · ${outcome.note}` : outcome.message);
+          }
           return true;
         }
         // 缺省保存（无接管者 / 提供者未激活 → 优雅降级）
         await kernel.io.writeText(path, text);
-        markSaved(ed, text);
-        setError(null);
-        setStatus(`已保存 ${new Date().toLocaleTimeString()}`);
+        markSaved(path, entry);
+        if (isActive) {
+          setError(null);
+          setStatus(`已保存 ${new Date().toLocaleTimeString()}`);
+        }
         return true;
       } catch (e: unknown) {
         // 竞态兜底（批准在保存途中被收回等）：WriteNotAllowedError → 中文人话 + 去授权
@@ -269,12 +323,14 @@ export function EditorPane({
             message: '保存被拒绝：写入路径不在已批准范围内。',
             action: { label: '去授权', run: () => onReauthRef.current() },
           });
-          setError('只读：写权限未批准');
+          if (isActive) setError('只读：写权限未批准');
           // 与前置拦截同款：写被拒后自动重弹授权框，而不是让用户去找按钮
           onReauthRef.current();
           return false;
         }
-        setError(e instanceof Error ? e.message : String(e));
+        const msg = e instanceof Error ? e.message : String(e);
+        if (isActive) setError(msg);
+        else notify({ kind: 'error', message: `保存「${path}」失败：${msg}` });
         return false;
       } finally {
         savingRef.current = false;
@@ -282,6 +338,28 @@ export function EditorPane({
     },
     [kernel, markSaved, notify],
   );
+
+  /** 保存当前活动标签（Ctrl+S / 工具栏按钮） */
+  const save = useCallback(
+    async (choices?: EditorSaveChoices): Promise<boolean> => {
+      const path = filePathRef.current;
+      if (!path) return false;
+      return savePath(path, choices);
+    },
+    [savePath],
+  );
+
+  /** 全部保存：逐一走保存接管链；任一失败整体返回 false（成功的不回滚） */
+  const saveAll = useCallback(async (): Promise<boolean> => {
+    const targets = openPathsRef.current.filter((p) => computeDirty(p));
+    let ok = true;
+    for (const p of targets) {
+      // 串行而非并行：保存接管者可能写多个产物文件，串行让状态/通知次序可预期
+      const r = await savePath(p);
+      if (!r) ok = false;
+    }
+    return ok;
+  }, [computeDirty, savePath]);
 
   /**
    * 保存告警的处置（确认框回调）：
@@ -309,18 +387,20 @@ export function EditorPane({
     [save],
   );
 
-  // 脏状态上抛 + 保存句柄注册（审阅 M4 修复）
+  // 动作句柄注册（宿主标签流程：保存并关闭 / 全部保存）
   useEffect(() => {
-    onDirtyChange?.(dirty);
-  }, [dirty, onDirtyChange]);
+    registerActions?.({ save: () => save(), savePath: (p) => savePath(p), saveAll });
+    return () => registerActions?.(null);
+  }, [save, savePath, saveAll, registerActions]);
+
   // 卸载时清空状态栏编辑器信息
   useEffect(() => () => onStatusInfo?.(null), [onStatusInfo]);
-  useEffect(() => {
-    registerSave?.(save);
-    return () => registerSave?.(null);
-  }, [save, registerSave]);
 
-  // 编辑器实例（仅一次）
+  // Ctrl+S 回调经 ref 读最新 save（编辑器只创建一次，save 闭包随 kernel 更新）
+  const saveRef = useRef(save);
+  saveRef.current = save;
+
+  // 编辑器实例（仅一次）；卸载时 dispose 全部 model
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -336,65 +416,96 @@ export function EditorPane({
       wordWrap: 'on',
     });
     editorRef.current = ed;
-    // BUG-4：脏判定改用 model 版本号比较（O(1)），不再每击键做全量字符串比较。
-    // 取舍说明：撤销回原始内容后版本号仍不同 → 显示为脏（内容相等不再视为已保存）；
-    // 这是版本号方案的标准行为（与主流编辑器一致），换取 MB 级文件零比较开销。
-    ed.onDidChangeModelContent(() => {
-      const v = ed.getModel()?.getAlternativeVersionId();
-      setDirty(v !== undefined ? v !== originalVersionRef.current : ed.getValue() !== originalRef.current);
-      scheduleMarkers();
-    });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      void save();
+      void saveRef.current();
     });
     return () => {
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
       ed.dispose();
       editorRef.current = null;
+      for (const entry of entriesRef.current.values()) {
+        entry.listener.dispose();
+        entry.model.dispose();
+      }
+      entriesRef.current.clear();
+      baseVersionRef.current.clear();
+      viewStatesRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 切换文件（每次 filePath 变化重新加载）
+  // 标签关闭 → model 回收（不在 openPaths 中的一律 dispose；绝不泄漏）
+  useEffect(() => {
+    const keep = new Set(openPaths);
+    for (const [path, entry] of [...entriesRef.current]) {
+      if (keep.has(path)) continue;
+      entry.listener.dispose();
+      entry.model.dispose();
+      entriesRef.current.delete(path);
+      baseVersionRef.current.delete(path);
+      viewStatesRef.current.delete(path);
+      onDirtyChangeRef.current?.(path, false);
+    }
+  }, [openPaths]);
+
+  // 切换活动标签（model 复用；首次打开读盘建 model）
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const ed = editorRef.current;
       if (!ed) return;
-      try {
-        const tf = await kernel.io.readText(filePath);
-        if (cancelled) return;
-        const uri = monaco.Uri.file(filePath);
-        const old = monaco.editor.getModel(uri);
-        old?.dispose();
-        const model = monaco.editor.createModel(tf.text, languageFor(filePath), uri);
-        ed.setModel(model);
-        originalRef.current = tf.text;
-        const v = model.getAlternativeVersionId();
-        if (v !== undefined) originalVersionRef.current = v;
-        setDirty(false);
-        setError(null);
-        setPendingChoice(null); // 换文件即作废未决的保存告警（避免误对旧文件应用修复）
-        setStatus(`${tf.encoding} · ${tf.eol.toUpperCase()} · ${tf.text.split('\n').length} 行`);
-        onStatusInfo?.({
-          encoding: tf.encoding,
-          eol: tf.eol.toUpperCase(),
-          lines: tf.text.split('\n').length,
-        });
-        // 打开即算一次装饰（不等用户编辑）——首屏就能看到波浪线
-        if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
-        markerTimerRef.current = null;
-        refreshMarkers(model, filePath);
-        applyReveal();
-      } catch (e: unknown) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      // 先把上一个标签的视图状态存下（光标/滚动原位恢复）
+      const prev = prevPathRef.current;
+      if (prev && prev !== filePath && entriesRef.current.has(prev)) {
+        viewStatesRef.current.set(prev, ed.saveViewState());
       }
+      let entry = entriesRef.current.get(filePath);
+      if (!entry) {
+        try {
+          const tf = await kernel.io.readText(filePath);
+          if (cancelled) return;
+          const model = monaco.editor.createModel(tf.text, languageFor(filePath), monaco.Uri.file(filePath));
+          // 逐 model 脏监听（BUG-4：版本号 O(1) 比较；后台标签的编辑同样上报）
+          const listener = model.onDidChangeContent(() => {
+            const d = computeDirty(filePath);
+            onDirtyChangeRef.current?.(filePath, d);
+            if (filePathRef.current === filePath) {
+              setDirty(d);
+              scheduleMarkers();
+            }
+          });
+          entry = { model, listener, encoding: tf.encoding, eol: tf.eol.toUpperCase() };
+          entriesRef.current.set(filePath, entry);
+          baseVersionRef.current.set(filePath, model.getAlternativeVersionId());
+        } catch (e: unknown) {
+          if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+          return;
+        }
+      }
+      prevPathRef.current = filePath;
+      ed.setModel(entry.model);
+      const vs = viewStatesRef.current.get(filePath);
+      if (vs) ed.restoreViewState(vs);
+      setDirty(computeDirty(filePath));
+      setError(null);
+      setPendingChoice(null); // 换文件即作废未决的保存告警（避免误对旧文件应用修复）
+      setStatus(`${entry.encoding} · ${entry.eol} · ${entry.model.getLineCount()} 行`);
+      onStatusInfo?.({
+        encoding: entry.encoding,
+        eol: entry.eol,
+        lines: entry.model.getLineCount(),
+      });
+      // 打开/切换即算一次装饰（不等用户编辑）——首屏就能看到波浪线
+      if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
+      markerTimerRef.current = null;
+      refreshMarkers(entry.model, filePath);
+      applyReveal();
     })();
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers]);
 
   return (
     <div className="editor-pane">
