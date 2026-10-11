@@ -1291,3 +1291,88 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - **保存期全角空格告警的"阻断"语义**：本批面板**告警显示**全角空格行数（概要 chip），但保存路径的**阻断 / 一键修复**要与"保存路径推导"批一起做（当前 `compileToFile` 严格按给定路径写，`.kojo` → 目标 `.erb` 路径推导尚未接）。
 - **虚拟滚动**：逐行映射上限 400 行、诊断上限 100 条（防 DOM 爆炸），超出部分显式计数；超大文件需虚拟滚动才谈得上"全量可浏览"。
 - **`.kojo` 角色号直接取自糖 AST**：当前由产物 `_K{n}` 反推（同 S4 数据层边界），糖 `角色:` 声明直读留后续。
+
+### 5.35 语法糖 S6 批 · 编辑体验（v0.3 批 S6 实施记录：Monarch 高亮 + 中文/别名补全 + 危险波浪线 + 糖判定面板）
+
+> **定位**：S6 把糖体验从"侧栏面板"推进到"**编辑器内**"。四件事：
+> ① `.kojo` 语法高亮（Monaco Monarch）；② 中文关键字 / 别名补全；
+> ③ 危险波浪线（转译诊断 → `ui.editor.decorator` 槽 → Monaco markers）；
+> ④ 糖判定面板（当前 `.kojo` 的编译判定 + 逐条诊断）。
+> **新插件 `ui-sugar-editor`**（第 16 插件）；**`ui.editor.decorator` 槽首次落地消费**
+> （ARCHITECTURE 早定的设计：装饰由插件注册、app 壳消费）。
+> 高亮 / 补全 / markers 翻译住 **app 宿主层**（Monaco 不属插件，对齐既有
+> `erb-language.ts` 先例）；词表**单一真源**从 `kojo-sugar` 派生，
+> 避免高亮/补全与转译器词法脱节。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/plugin-api/src/slots.ts` | 修改 | `LineDecoration` 增 `startColumn?`/`endColumn?`（1 基 UTF-16，半开区间）/`code?`——波浪线可画列级下划线；缺省即整行（v0.2 行级形态完全兼容） |
+| `packages/plugins/kojo-sugar/src/keywords.ts` | 修改 | 新增**编辑器词表单一真源**：`SugarKeywordRole` / `SUGAR_KEYWORD_ROLE_LABEL` / `SUGAR_LEXICON_WORDS`（由 `KEYWORDS` 派生）/ `SUGAR_LEXICON_OPERATORS`（由 `OPERATORS` 派生）/ `sugarEditorLexicon()` |
+| `packages/app/src/monaco/kojo-language.ts` | **新增** | `.kojo` Monarch 分词器（状态 root/rawFence/speech/speechAlt/speechIn/interp）+ 语言配置 + `KOJO_SUGAR_THEME_RULES`（糖专属 token 配色）+ 补全 provider（别名/代词/中文关键字/运算符；英文别名输入生效但不进补全——规范 §4.1）+ `decorationsToMarkers`（列级 marker，越界夹到行内） |
+| `packages/app/src/monaco/erb-language.ts` | 修改 | `kojo-dark` 主题 `rules` 末尾 `...KOJO_SUGAR_THEME_RULES`（同一处 `defineTheme`，避免二次定义覆盖 ERB token 配色） |
+| `packages/app/src/ui/EditorPane.tsx` | 修改 | 按扩展名选语言（`.kojo`→糖，其余→ERB）；消费 `ui.editor.decorator` 槽全部贡献 → `setModelMarkers`（open 即算、编辑停顿 250ms 去抖；装饰器抛错逐个隔离，不崩编辑器） |
+| `packages/plugins/ui-sugar-editor/` | **新增插件** | 糖编辑体验（第 16 插件）：`ui.editor.decorator` 贡献（id `sugar-diagnostics`，order 10）+ `ui.panel` 贡献（id `sugar-verdict`，order 76，标题「糖判定」） |
+| `.../src/panel-logic.ts` | 新增 | 纯逻辑（零 React）：文件判定 / 判定归类（error>warning>ok）/ 判定行排序（位置升序、同级保原序、文件级殿后）/ 装饰列区间翻译 / 概要 / 降级文案 |
+| `.../tests/panel-logic.test.ts` | 新增（13 项） | 六节：`isKojoFile` / 判定归类 / 判定行排序 / 装饰翻译 / 概要 / 降级文案 |
+| `.../tests/integration.test.ts` | 新增（9 项） | 跨插件接线 + 反序必失败 + `.kojo` 装饰带行列 / `.ERB` 空 + 纯函数纪律 |
+| `packages/app/src/styles.css` | 修改（additive） | 文件尾追加 `sv-*` 整节（判定徽章 / 错误警告提示计数 / 诊断行 / 定位） |
+| 五处登记 | 修改 | root `tsconfig.json` paths / `vitest.config.ts` aliases / `packages/app/vite.config.ts` aliases + `packages/app/package.json` deps / `packages/app/src/bootstrap.ts` |
+| `packages/app/src/bootstrap.ts` | 修改 | 注册 `createUiSugarEditorPlugin()`（排 kojo-sugar 之后：它 require `sugar.transpile` 服务槽） |
+
+#### 关键设计决策
+
+1. **高亮/补全住 app 宿主层，词表单一真源来自插件**：Monaco 不是插件（与 `erb-language.ts` 同款），故 Monarch 分词器、语言配置、补全 provider、markers 翻译全在 `packages/app/src/monaco/kojo-language.ts`。但**词表不手抄**——`SUGAR_LEXICON_WORDS`/`SUGAR_LEXICON_OPERATORS` 从转译器自身的 `KEYWORDS`/`OPERATORS` **派生导出**（`kojo-sugar`），app 组合根 import 它（bootstrap 本已 import 各插件，无审计违规）。**高亮/补全与词法永不脱节**。
+2. **波浪线经 `ui.editor.decorator` 槽，宿主消费为 markers**：这是 ARCHITECTURE 早定的槽（装饰由插件注册、app 壳消费），S6 首次落地。插件贡献 `decorate(file)` **纯函数** → 宿主 `setModelMarkers(owner='kojo-decorators')`。**装饰器抛错被逐个隔离**（能力出错要"退化可见"而非崩编辑器）。列级区间（`startColumn/endColumn`）让诊断画下划线而非整行标红。
+3. **危险波浪线的语义来源 = 转译器诊断**：`ui-sugar-editor` 只把 `sugar.transpile` 的 `SugarDiagnostic[]`（带 `loc`/`span`）翻译成 `LineDecoration[]`——**不自建 lint**。§8 静态清单（`续` 写进引号 / 多选项块 / 表达式缺否则 / 只读别名赋值）已在 S2 批落在 `convention-linter` 的 `sugar.static-conventions` 规则（§5.28），本批不重复实现。
+4. **判定面板 = 当前 `.kojo` 的编译判定**：可编译 / 可编译（有警告）/ 不可编译 + 错误·警告·提示计数 + 逐条诊断（点击 → `editor.revealLocation` 定位源行）。与 `ui-sugar-preview`（回放预览）、`ui-convention-report`（全项目约定校验）**语义不重叠**：本面板是**单文件转译判定**。
+5. **补全遵循规范 §4.1 中英双收但不对等展示**：中文主形进补全列表；英文隐藏别名**输入生效但不出现在补全里**（避免噪音）。排序：别名(1) > 保留代词(2) > 关键字(3) > 运算符(4)。
+6. **`.kojo` 判定/装饰只作用于糖源**：`isKojoFile` 门控——原生 `.ERB` 一律返回空装饰、面板显式给降级文案（**不是静默什么都不显示**）。判定面板四值降级闭集（`no-project`/`not-kojo`/`reading`/`read-error`）逐一给中文文案。
+7. **纯函数 + 只读纪律**：`decorate()` 只吃宿主给的 `{path,text,project}`（不读盘不写盘不发事件）；面板读盘走内核 io（**只读**）。整批只发 `editor.revealLocation`（导航意图，非状态变更）。
+
+#### 测试
+
+- `panel-logic.test.ts` **13 项**：`isKojoFile`（大小写不敏感）；判定归类（`countBySeverity` 分项 + `verdictStatus` error 压倒 warning 压倒 ok + 中文标签）；判定行排序稳定（有位置在前、位置升序、同位置保原序、文件级殿后、key 唯一）；装饰列区间翻译（同 span 画区间 / 多行 span 省 endColumn / 无 span 从 `loc.column` 起 / 文件级不产装饰 / startColumn 至少 1）；概要行数（去尾换行）；降级文案非空。
+- `integration.test.ts` **9 项**：插件声明（`requires` 两槽、`provides` 空）；注册 1 个 `ui.editor.decorator`（sugar-diagnostics）+ 1 个 `ui.panel`（sugar-verdict）；**反序装配必失败**（服务槽顺序）；`sugar.transpile` 键钉死；坏源（`「你好。续」` → `cont-inside-quotes`）装饰带行列且与 loc 非空诊断一一对应；良构源无 error 装饰；`.ERB` 返回空；纯函数（两次调用一致 + 磁盘字节不变 + 零事件）；装饰形状合法（行号 ≥1 / severity 在闭集）。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **931 passed / 6 skipped（937）**（909 → 931，**+22**；54 passed / 3 skipped 文件，**16 插件**，零回归） |
+| `pnpm typecheck`（root） | 通过，exit 0 |
+| `pnpm typecheck`（`@kojo/app`） | 通过，exit 0 |
+| `node tools/audit-decoupling.mjs` | **A/B/C/D 四项全绿（16 插件）** |
+| `pnpm -C packages/app build` | 通过（vite build，exit 0） |
+| golden / S2 内核 / S4 数据层 | 未触碰，零改动 |
+
+#### 手工清单（S6 交付判据："app build + 手工清单"）
+
+`pnpm tauri dev`（正常终端）打开含 `.kojo` 的工程，逐项勾验：
+
+| # | 操作 | 预期 |
+|---|---|---|
+| a | 打开一个 `.kojo` 文件 | 中文关键字（时机/如果/当/是/选项…）按角色着色（糖 token 配色，非 ERB 配色） |
+| b | 输入 `如`（或头部有 `别名 好感 = CFLAG:…` 时输入别名首字） | 补全列表弹出：`如果`（关键字，detail 含角色）/ 别名（排最前，detail「别名（本文件）」）/ 代词 |
+| c | 输入英文别名（如 `if`） | 高亮生效，但**补全列表不出现**（规范 §4.1 不对等展示） |
+| d | 写 `「你好。续」`（`续` 在引号内） | 该行出现**红色波浪线 + 悬浮提示**（列级下划线，非整行） |
+| e | 打开侧栏「糖判定」面板 | 显示判定徽章（可编译 / 可编译（有警告）/ 不可编译）+ 错误/警告/提示计数 + 逐条诊断 |
+| f | 点击判定面板中带位置的诊断行 | 编辑器滚动并定位到该源行 |
+| g | 打开一个原生 `.ERB` 文件 | 无糖波浪线；判定面板显示「当前文件不是 .kojo 糖源」降级文案 |
+
+（本批手工清单为"交付判据"的一部分；真实终端 `pnpm tauri dev` 下的实机勾验由验收者执行——沙箱不跑 GUI。）
+
+#### 关键坑与发现
+
+1. **主题二次 `defineTheme` 会覆盖**：若在 `kojo-language.ts` 里再调 `defineTheme('kojo-dark')`，ERB token 配色会丢失。修法：糖配色导出为 `KOJO_SUGAR_THEME_RULES`，由 `erb-language.ts` **同一处** `defineTheme` 的 `rules` 末尾 spread 合并——**一个主题只定义一次**。
+2. **只注册一次的 Monaco 回调闭包会过时**：`onDidChangeModelContent` 只在创建时注册一次；用 `filePathRef`/`refreshMarkersRef`/`markerTimerRef` ref 化取最新值（§九-21 同款闭包陷阱）。
+3. **列越界必须夹到行内**：装饰是**外部数据**（插件贡献），不能假定它算准了列——`decorationsToMarkers` 对 line/startColumn/endColumn 一律 `clamp` 到 `[1, getLineMaxColumn]`。
+4. **测试夹具的 `code` 是示意串**：`panel-logic` 单测用 `'a'`/`'L2a'` 之类占位 code，而 `SugarDiagnosticCode` 是**闭集**——helper 参数用 `Omit<Partial<SugarDiagnostic>,'code'> & { code: string }` 再在内部 `as` 收窄（纯逻辑只按 severity/loc/span 归类，code 原样透传）。**vitest 不报类型，只有 `tsc` 会报**（双跑价值再现，§九-7）。
+
+#### 边界未做（属后续批）
+
+- **编辑器内三向映射装饰**：本批波浪线只画诊断；"糖行 ↔ 产物行 ↔ 消息块"的**内联装饰 / hover** 留后续（数据层已具备）。
+- **消息块逐条气泡**：含逐字符 FORM 展开渲染串，留后续。
+- **保存路径推导 + 保存期全角空格阻断**：`.kojo` → 目标 `.erb` 路径推导尚未接（S6 之外的候选批）。
+- **虚拟滚动**：判定面板诊断上限 200 条（超出显式计数）。
