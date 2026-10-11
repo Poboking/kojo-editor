@@ -2009,3 +2009,58 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 
 - 重载采用 `model.setValue`，**撤销栈会重置**（内容已来自磁盘，属预期）；如需保留撤销历史另议。
 - `file.changed` 的 `add`/`unlink` 未在编辑器侧重载（`unlink` 的「文件已删除」提示留后续）。
+
+### 5.47 审阅回执修复 · `pickSaveHandler` 的 `matches()` 抛错不再静默（2026-10-11 批）
+
+> **触发**：外部审阅（针对 `ed68f231`，S7-UI `.kojo` 保存接线）第 2 条——宿主
+> `pickSaveHandler` 循环内 `catch {}` **空吞**贡献者的 `matches()` 异常，把有 bug 的贡献
+> **静默降级**为「未命中」，非常难诊断；且与 `plugin-api/conventions.ts`「绝不静默」约定相抵。
+> 用户拍板「修第 2 条」。
+>
+> 同批审阅的其余判定：第 1 条（`filePathRef` 未声明 → Ctrl+S 抛 ReferenceError）为**误读**——
+> 该 ref 在 `ed68f231` 即已声明并在 `useEffect([filePath])` 同步（见 HANDOFF §二 S7-UI 条目第 4 点），
+> 其「建议补丁」与现有代码逐字相同，故**不采纳**；第 3 条（sort 稳定性）**不成立**（下详）。
+
+#### 变更
+
+| 文件 | 变更 |
+|---|---|
+| `packages/app/src/ui/EditorPane.tsx` | `pickSaveHandler` 的 catch 由空吞改为 `console.warn`（含贡献 `id`、路径、错误消息） |
+
+#### 关键设计决策
+
+1. **只加可观测性，不改语义**：异常仍**不中断**选取流程，仍退化为内核缺省保存——避免单个坏贡献
+   让用户**完全无法保存**（可用性优先于严格性）。
+2. **日志落 `console.warn`**：`pickSaveHandler` 是**模块级纯函数**，拿不到组件内的 `useNotify`；
+   `console.warn` 是本包既有惯例（`bridge/tauri-bridge.ts` 同款）。
+3. **不引入 logger 抽象**：为一行日志改构造签名 / 新增依赖注入属过度设计。
+4. **不改专项排序**：`Array.prototype.sort` 自 **ES2019 起由规范保证稳定**，`matches.sort((a,b)=>…)`
+   处「同 order 保持注册顺序」的注释**准确**，无需追加注册序号（驳回审阅第 3 条）。
+
+#### 测试
+
+- **未新增测试**，属**已知测试缺口**：`packages/app` 零 JS 测试基建（vitest `include` =
+  `packages/**/tests/**/*.test.ts`，`environment: 'node'`），而 `pickSaveHandler` **模块私有**且
+  `EditorPane.tsx` 顶层 `import * as monaco`（node 环境下 import 即需 DOM/jsdom + Monaco mock）。
+  覆盖它须先**导出私有函数 + 为 app 引入 jsdom**，对「catch 内加一行日志」属基建级过重改动。
+  该改动风险面由 app typecheck 兜住。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `npx vitest run` | **1012 passed / 6 skipped（1018）**（零回归） |
+| `tsc -p tsconfig.json`（root） | exit 0 |
+| `tsc -p packages/app/tsconfig.json` | exit 0（⚠️ 根 tsconfig `include` **不含** `packages/app`，故必须单跑 app 的） |
+| `node tools/audit-decoupling.mjs` | A–D 四项全绿（16 插件） |
+
+#### 入库说明（并行线，重要）
+
+- 本改动**无独立提交**：它以未提交状态留在工作区期间，被并行 UI 线 **P1 壳层骨架批 `4ae9366`**
+  一并入库（`git log -S "matches('\${path}') 抛错"` 首次出现即 `4ae9366`；其父提交无该文本）。
+- 故**勿**在 P1 批范围内追溯其来源，**以本节为权威记录**。
+
+#### 边界未做
+
+- 审阅第 4 条（错误消息归一化 / i18n）/ 第 5 条（撤销分割点跨平台验收）/ 第 6 条（Ctrl+S 集成测试
+  与假 kernel 一致性）均为**建议**，非缺陷，未改。其中「Ctrl+S 端到端」已由 §5.37 手工清单判据覆盖。
