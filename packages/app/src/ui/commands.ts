@@ -61,7 +61,8 @@ export function formatKeybinding(binding: string): string {
   if (c.shift) mods.push('Shift');
   if (c.alt) mods.push('Alt');
   if (c.meta) mods.push('Meta');
-  const key = c.key.length === 1 ? c.key.toUpperCase() : c.key;
+  // 单字符与功能键（f1…f12）大写展示；其余（如 'arrowdown'）原样
+  const key = c.key.length === 1 || /^f\d+$/.test(c.key) ? c.key.toUpperCase() : c.key;
   return [...mods, key].join('+');
 }
 
@@ -128,6 +129,11 @@ export function filterCommands(commands: readonly CommandEntry[], query: string)
   });
 }
 
+/** 路径末段（同时认 `/` 与 `\`——索引路径来自 Windows 工程，分隔符不保证） */
+function baseNameOf(lowerPath: string): string {
+  return lowerPath.slice(Math.max(lowerPath.lastIndexOf('/'), lowerPath.lastIndexOf('\\')) + 1);
+}
+
 /** 快速打开的候选过滤（路径子串匹配；文件名命中优先于目录命中） */
 export function filterFileCandidates(paths: readonly string[], query: string, cap = 50): string[] {
   const q = query.trim().toLowerCase();
@@ -136,8 +142,7 @@ export function filterFileCandidates(paths: readonly string[], query: string, ca
   const pathHit: string[] = [];
   for (const p of paths) {
     const lower = p.toLowerCase();
-    const name = lower.slice(lower.lastIndexOf('/') + 1);
-    if (name.includes(q)) nameHit.push(p);
+    if (baseNameOf(lower).includes(q)) nameHit.push(p);
     else if (lower.includes(q)) pathHit.push(p);
   }
   return [...nameHit, ...pathHit].slice(0, cap);

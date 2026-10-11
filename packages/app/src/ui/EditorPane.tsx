@@ -156,6 +156,8 @@ export function EditorPane({
   const refreshMarkersRef = useRef<((model: Monaco.editor.ITextModel, path: string) => void) | null>(null);
   /** CodeAction 待执行动作表（Monaco command 参数须可序列化 → 以 id 反查动作本体） */
   const pendingActionsRef = useRef(new Map<string, EditorCodeAction>());
+  /** CodeAction id 序号（**单调递增不复用**：Monaco 可能持有上一轮列表，复用 id 会解析到别的动作） */
+  const actionSeqRef = useRef(0);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -450,7 +452,8 @@ export function EditorPane({
           const project = kernel.project.current();
           const text = model.getValue();
           const pending = pendingActionsRef.current;
-          pending.clear();
+          // 超阈值整体清理（长期运行不至于无限增长）；id 单调递增，绝不复用
+          if (pending.size > 500) pending.clear();
           const actions: Monaco.languages.CodeAction[] = [];
           for (const contribution of kernel.slots.query('ui.editor.codeAction')) {
             let provided: EditorCodeAction[];
@@ -466,7 +469,7 @@ export function EditorPane({
               continue;
             }
             for (const a of provided) {
-              const actionId = `${contribution.id}#${pending.size}`;
+              const actionId = `${contribution.id}#${++actionSeqRef.current}`;
               pending.set(actionId, a);
               actions.push({
                 title: a.title,

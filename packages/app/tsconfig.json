@@ -25,5 +25,5 @@
       "@kojo/plugin-ui-status": ["../plugins/ui-plugin-status/src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "vite.config.ts"]
 }
