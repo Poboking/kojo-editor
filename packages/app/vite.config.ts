@@ -23,6 +23,7 @@ export default defineConfig({
       '@kojo/plugin-ui-archive-browser': r('../plugins/ui-archive-browser/src/index.ts'),
       '@kojo/plugin-ui-snapshot-injector': r('../plugins/ui-snapshot-injector/src/index.ts'),
       '@kojo/plugin-ui-sugar-lift': r('../plugins/ui-sugar-lift/src/index.ts'),
+      '@kojo/plugin-ui-sugar-preview': r('../plugins/ui-sugar-preview/src/index.ts'),
       '@kojo/plugin-ui-status': r('../plugins/ui-plugin-status/src/index.ts'),
     },
   },

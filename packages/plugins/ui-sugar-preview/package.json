@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/plugin-ui-sugar-preview",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Sugar-preview panel (ui.panel contribution): for the current .kojo source, render the two-way mapping (sugar line -> generated ERB line), the transpile diagnostics and the full-width-space warnings; when the snapshot source is available, enrich with the message-block / reachability third direction. Read-only observer: the transpile + replay folding lives in the kojo-sugar plugin's sugar.preview service - this plugin is presentation only.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0"
+  }
+}

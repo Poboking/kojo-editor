@@ -1,0 +1,329 @@
+/**
+ * @kojo/plugin-ui-sugar-preview
+ *
+ * 糖预览面板（`ui.panel` 槽贡献；v0.3 批 S4-UI）。
+ *
+ * 把 S4 的糖预览能力第一次带上 UI：当前 `.kojo` 文件 → `sugar.preview`
+ * （转译 + 源映射 + 诊断；有存档时附状态回放）→ 面板呈现
+ * 「糖源码行 ↔ 生成产物行 ↔ 消息块可达性」。
+ *
+ * 分层（"一切皆插件"）：
+ *   - 转译 / 源映射 / 回放折叠全在 kojo-sugar（`sugar.preview`，**只读**）；
+ *     本插件只做**呈现**，绝不自建转译或模拟器；
+ *   - 逐行映射 / 诊断 / 全角空格 / 可达性计数等纯逻辑在 `panel-logic.ts`
+ *     （零 React，可单测）；
+ *   - 当前文件来自宿主事件 `editor.activeFileChanged`（不持有宿主引用）；
+ *   - 跳转复用宿主既有通道 `editor.revealLocation`（与校验面板 / 函数树同款）。
+ *
+ * 事件纪律：本插件**只消费** `editor.activeFileChanged`，**只发**导航意图
+ * `editor.revealLocation`（用户点击行 → 请宿主定位）。它**不读盘不写盘**
+ * 之外——只读（`kernel.io.readText`）当前文件，绝不改盘，故不发 `file.changed`
+ * （谁改盘谁发）。`sugar.preview` 自身亦只读、不发事件，故此处无变更源。
+ */
+
+import { createElement, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import type {
+  FileIO,
+  Plugin,
+  SnapshotSourceService,
+  SugarPreviewResult,
+  SugarPreviewService,
+} from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import {
+  archiveStatus,
+  buildArchiveOptions,
+  buildDiagnosticRows,
+  buildPreviewRows,
+  countLines,
+  degradeText,
+  isKojoFile,
+  summarize,
+  type ArchiveOption,
+  type ArchiveStatus,
+  type DiagnosticRow,
+  type PreviewDegrade,
+  type PreviewRow,
+  type PreviewSummary,
+} from './panel-logic';
+
+/** 逐行映射渲染上限（防 DOM 爆炸；超大文件下超出部分显式计数） */
+const ROW_CAP = 400;
+/** 诊断渲染上限 */
+const DIAG_CAP = 100;
+
+export function createUiSugarPreviewPlugin(): Plugin {
+  return {
+    id: 'ui-sugar-preview',
+    version: '0.3.0',
+    // 硬依赖：面板的语义就是"呈现 sugar.preview"，缺席则本插件无意义
+    requires: [WellKnownServices.SugarPreview, KernelServices.IO],
+    activate(ctx) {
+      const previewSvc = ctx.inject<SugarPreviewService>(WellKnownServices.SugarPreview);
+      const io = ctx.inject<FileIO>(KernelServices.IO);
+      // 存档扫描是**软依赖**：缺席（存档能力未装）只该让面板退化为"两向映射"，
+      // 不该让整个面板 inactive——能力缺席要"退化可见"，不能静默（DSH 解耦哲学）。
+      let snapshots: SnapshotSourceService | undefined;
+      try {
+        snapshots = ctx.inject<SnapshotSourceService>(WellKnownServices.SnapshotSource);
+      } catch {
+        snapshots = undefined;
+      }
+
+      function PreviewPanel(): unknown {
+        const [filePath, setFilePath] = useState<string | null>(null);
+        const [archivePath, setArchivePath] = useState<string>('');
+        const [source, setSource] = useState<string | null>(null);
+        const [result, setResult] = useState<SugarPreviewResult | null>(null);
+        const [degrade, setDegrade] = useState<PreviewDegrade>('no-project');
+        const [error, setError] = useState<string | null>(null);
+        const [nonce, setNonce] = useState(0);
+
+        // 当前文件（宿主广播）——换文件即重置全部状态
+        useEffect(() => {
+          const un = ctx.bus.on('editor.activeFileChanged', (p) => {
+            setFilePath(p.filePath);
+            setSource(null);
+            setResult(null);
+            setError(null);
+            setNonce(0);
+            setDegrade(p.filePath ? (isKojoFile(p.filePath) ? 'reading' : 'not-kojo') : 'no-project');
+          });
+          return un;
+        }, []);
+
+        // 归档浏览器选中档 → 预填（UI 插件间零直接依赖，走内核事件）
+        useEffect(() => {
+          const un = ctx.bus.on('kojo.snapshotSelected', (p) => setArchivePath(p.path));
+          return un;
+        }, []);
+
+        // 读文件 → 预览（只读；换文件 / 换档 / 手动刷新都走这里）
+        useEffect(() => {
+          const path = filePath;
+          if (!path || !isKojoFile(path)) return;
+          let cancelled = false;
+          setDegrade('reading');
+          setError(null);
+          void io
+            .readText(path)
+            .then((tf) => {
+              if (cancelled) return;
+              setSource(tf.text);
+              setDegrade('previewing');
+              // 角色号由 `sugar.preview` 从产物骨架反推（`.kojo` 声明 `角色:` 即可），
+              // 面板只需给出存档路径——不在 UI 层复制这条推导逻辑。
+              return previewSvc.preview({
+                source: tf.text,
+                filePath: path,
+                ...(archivePath ? { archivePath } : {}),
+              });
+            })
+            .then((r) => {
+              if (cancelled || !r) return;
+              setResult(r);
+              setDegrade('previewing');
+            })
+            .catch((err: unknown) => {
+              if (cancelled) return;
+              setError(err instanceof Error ? err.message : String(err));
+              setDegrade('read-error');
+            });
+          return () => {
+            cancelled = true;
+          };
+        }, [filePath, nonce, archivePath]);
+
+        /** 点击定位：请求宿主打开并滚动到该行（同文件时仅滚动） */
+        const reveal = (line: number): void => {
+          if (!filePath) return;
+          ctx.bus.emit('editor.revealLocation', { filePath, line });
+        };
+
+        /* ------------------------------ 头部 ------------------------------ */
+
+        const archiveOpts: ArchiveOption[] = snapshots ? buildArchiveOptions(snapshots.current()) : [];
+
+        const head = createElement(
+          'div',
+          { className: 'pv-toolbar' },
+          createElement('span', { className: 'dim' }, '糖预览（转译 + 源映射 + 诊断；只读）'),
+          createElement(
+            'select',
+            {
+              className: 'pv-select',
+              value: archivePath,
+              disabled: archiveOpts.length === 0,
+              title: archiveOpts.length === 0 ? '无可用存档（存档能力未装 / 未扫描到档）' : '选择用于回放的存档',
+              onChange: (e: { target: { value: string } }): void => setArchivePath(e.target.value),
+            },
+            createElement('option', { value: '' }, archiveOpts.length === 0 ? '无可用存档' : '（不接存档）'),
+            ...archiveOpts.map((o) => createElement('option', { key: o.path, value: o.path }, o.label)),
+          ),
+          createElement(
+            'button',
+            { className: 'ghost small', onClick: () => setNonce((n) => n + 1), disabled: !isKojoFile(filePath) },
+            '刷新',
+          ),
+        );
+
+        const shell = (children: ReactNode[]): ReactNode =>
+          createElement('div', { className: 'panel-sugar-preview' }, head, ...children);
+
+        /* ------------------------------ 降级态 ------------------------------ */
+
+        if (!isKojoFile(filePath)) {
+          return shell([createElement('div', { className: 'pv-empty dim' }, degradeText(degrade))]);
+        }
+        if (degrade === 'reading') {
+          return shell([createElement('div', { className: 'pv-empty dim' }, degradeText(degrade))]);
+        }
+        if (error) {
+          return shell([
+            createElement('div', { className: 'pv-error' }, `${degradeText(degrade)}：${error}`),
+            createElement(
+              'div',
+              { className: 'pv-actions' },
+              createElement('button', { className: 'ghost small', onClick: () => setNonce((n) => n + 1) }, '重试'),
+            ),
+          ]);
+        }
+        if (source === null || result === null) {
+          return shell([createElement('div', { className: 'pv-empty dim' }, degradeText('previewing'))]);
+        }
+
+        /* ------------------------------ 内容 ------------------------------ */
+
+        const arch: ArchiveStatus = archiveStatus(result);
+        // **未接入存档 → 不显示可达徽章**：无回放数据时数据层会把每个块折成
+        // `reachable`，那是"不可判定"而非"可达"——显式降级，不误导作者。
+        const withReach = arch.connected;
+        const summary: PreviewSummary = summarize(result, source, withReach);
+        const diagRows = buildDiagnosticRows(result.transpile.diagnostics);
+        const rows = buildPreviewRows(result, source, withReach);
+
+        return shell([
+          summaryBox(summary, arch),
+          arch.hint ? createElement('div', { className: 'dim pv-hint' }, arch.hint) : null,
+          diagBox(diagRows, reveal),
+          rowsBox(rows, reveal),
+        ]);
+      }
+
+      ctx.slots.register('ui.panel', {
+        id: 'sugar-preview',
+        title: '糖预览',
+        icon: '◫',
+        order: 74,
+        component: PreviewPanel,
+      });
+    },
+  };
+}
+
+/* ============================== 渲染分区 ============================== */
+
+/** 概要条 */
+function summaryBox(s: PreviewSummary, arch: ArchiveStatus): ReactNode {
+  return createElement(
+    'div',
+    { className: 'pv-summary' },
+    chip('存档', arch.who, arch.connected ? undefined : 'warn'),
+    chip('源行', String(s.sourceLines)),
+    chip('产物行', String(s.generatedLines)),
+    chip('已映射', `${s.mappedLines} 行`),
+    chip('结构行', String(s.structuralLines)),
+    chip('消息块', String(s.blocks)),
+    s.unreachableBlocks > 0 ? chip('不可达块', String(s.unreachableBlocks), 'bad') : null,
+    s.unknownBlocks > 0 ? chip('未知块', String(s.unknownBlocks), 'warn') : null,
+    s.errors > 0 ? chip('错误', String(s.errors), 'bad') : null,
+    s.warnings > 0 ? chip('警告', String(s.warnings), 'warn') : null,
+    s.fullwidthLines > 0 ? chip('全角空格', `${s.fullwidthLines} 行`, 'warn') : null,
+  );
+}
+
+function chip(label: string, value: string, cls?: 'bad' | 'warn'): ReactNode {
+  return createElement(
+    'span',
+    { className: `pv-chip${cls ? ` ${cls}` : ''}` },
+    createElement('span', { className: 'pv-chip-label' }, label),
+    createElement('span', { className: 'pv-chip-value' }, value),
+  );
+}
+
+/** 诊断区（error/warning/info；点击跳转源行） */
+function diagBox(diags: readonly DiagnosticRow[], reveal: (line: number) => void): ReactNode {
+  if (diags.length === 0) {
+    return createElement('div', { className: 'pv-section' },
+      createElement('div', { className: 'pv-section-head' }, '诊断'),
+      createElement('div', { className: 'dim pv-hint' }, '无诊断'),
+    );
+  }
+  const shown = diags.slice(0, DIAG_CAP);
+  return createElement(
+    'div',
+    { className: 'pv-section' },
+    createElement('div', { className: 'pv-section-head' }, `诊断（${diags.length}）`),
+    ...shown.map((d) =>
+      createElement(
+        'div',
+        {
+          key: d.key,
+          className: `pv-diag ${d.severity}`,
+          onClick: d.line !== null ? () => reveal(d.line as number) : undefined,
+          title: d.line !== null ? '点击定位到源行' : '文件级诊断',
+        },
+        createElement('span', { className: 'pv-diag-sev' }, sevLabel(d.severity)),
+        createElement('span', { className: 'pv-diag-loc dim' }, d.line === null ? '—' : `L${d.line}:${d.column ?? 1}`),
+        createElement('span', { className: 'pv-diag-msg' }, d.message),
+      ),
+    ),
+    diags.length > DIAG_CAP
+      ? createElement('div', { className: 'dim pv-hint' }, `其余 ${diags.length - DIAG_CAP} 条未显示`)
+      : null,
+  );
+}
+
+/** 逐行映射区 */
+function rowsBox(rows: readonly PreviewRow[], reveal: (line: number) => void): ReactNode {
+  const shown = rows.slice(0, ROW_CAP);
+  return createElement(
+    'div',
+    { className: 'pv-section' },
+    createElement('div', { className: 'pv-section-head' }, `逐行映射（${rows.length} 行）`),
+    createElement(
+      'div',
+      { className: 'pv-rows' },
+      ...shown.map((r) =>
+        createElement(
+          'div',
+          {
+            key: r.key,
+            className: `pv-row${r.blank ? ' blank' : ''}`,
+            onClick: () => reveal(r.sourceLine),
+            title: '点击定位到该源行',
+          },
+          createElement('span', { className: 'pv-line-no dim' }, String(r.sourceLine)),
+          createElement('span', { className: 'pv-src' }, r.sourceText.length === 0 ? ' ' : r.sourceText),
+          r.hasFullwidthSpace
+            ? createElement('span', { className: 'pv-fw', title: '含全角空格（保存时告警）' }, '␣全')
+            : null,
+          createElement('span', { className: 'pv-gen dim' }, `→ ${r.generatedLabel}`),
+          r.reachClass !== 'none'
+            ? createElement('span', { className: `pv-reach ${r.reachClass}` }, r.reachLabel)
+            : null,
+        ),
+      ),
+      rows.length > ROW_CAP
+        ? createElement('div', { className: 'dim pv-hint' }, `其余 ${rows.length - ROW_CAP} 行未显示`)
+        : null,
+    ),
+  );
+}
+
+function sevLabel(s: DiagnosticRow['severity']): string {
+  if (s === 'error') return '错误';
+  if (s === 'warning') return '警告';
+  return '提示';
+}
