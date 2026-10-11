@@ -1,0 +1,6 @@
+# 仓库所有文本文件统一 LF。
+# 依据：golden fixture 测试（packages/plugin-api/tests/sugar.test.ts）做逐字节比较，
+# 任何 checkout 都必须得到与规范原文一致的 LF 字节——windows-latest CI 默认
+# core.autocrlf=true，没有本文件时 checkout 会把 LF 转成 CRLF 导致测试失败。
+# 二进制文件（.ico 等）由 text=auto 自动识别，不做行尾转换。
+* text=auto eol=lf
