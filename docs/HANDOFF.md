@@ -12,7 +12,7 @@
 > 第九批：分支走向——谓词结果按 IF 链 / SELECTCASE 链折叠，回放面板显示"该状态会走哪个分支"（含可达性传播）；
 > 第十批：口上调用协议——adapter 解析 KOJO_MESSAGE.ERB 路由表 → 槽位语义表，回放面板结构化场景参数输入（协议不可用优雅降级）；
 > 本会话完成 **v0.2 第十一批：存档写侧预研——ByteWriter + serializePayload + 金样本回归，save00 载荷 571,185B 逐字节完全一致（编码器同构达成）；暴露 Int64 精度硬前置（RANDDATA 等），方案 B（rawBytes 保留）写入 §5.17**。
-> 本会话完成 **v0.2 第十二批：审阅修复（依据 docs/CODE-REVIEW-2026-10-10.md）——H1 CASE TO 区间 AND 语义（conjunction 契约 + 三层落地）+ M4 切文件丢内容（确认对话框）+ M5 回放联动闭包 + M2 Rust 编码 had_errors + L1/L3/L4；426 项全绿，回放基线不变**。
+> 本会话完成 **v0.2 第十二批：审阅修复（依据 docs/archive/CODE-REVIEW-2026-10-10.md）——H1 CASE TO 区间 AND 语义（conjunction 契约 + 三层落地）+ M4 切文件丢内容（确认对话框）+ M5 回放联动闭包 + M2 Rust 编码 had_errors + L1/L3/L4；426 项全绿，回放基线不变**。
 > 本会话完成 **v0.2 第十三批（双线）：① sav-parser Int64 精度方案 B 落地（rawBytes passthrough）——六档金样本 passthrough 全部字节级一致（含此前被拒的 save01-05）+ 标量/单元补丁注入 + Int64 守卫；纠正第十一批结论：RANDDATA 是 u32 序列逐值安全，真雷在 RESULT/CFLAG/GIFT_GOT（IMPLEMENTATION-LOG §5.19）；② TRAE 并行交付 ui-archive-browser 归档浏览器（第 11 插件，commit ca1a323）；456 项全绿**。
 > 本会话完成 **v0.2 第十五批（v1.0 收口线一）：回放面板场景预设**——把手填的调用上下文槽位一等化为「场景」（命名保存 / 下拉切换 / 一键应用 / 删除）；`ReplayScene` 纯逻辑（+15 单测）+ `ctx.storage` 独立域（`ui-state-replay`）+ 协议降级（建议名 label 拼接 / 不可用则纯手填）；应用后槽位来源标 manual（作者假设，非引擎事实），与 §5.20 的 assumption 徽章并存；回放引擎与 condition-extractor 契约零改动；485 项全绿（IMPLEMENTATION-LOG §5.22）。
 > 本会话完成 **v0.2 第十七批：桌面壳端到端冒烟——tauri dev 真实 IPC 下跑通 Rust 双闸 a–e 全清单（域内放行 / 域外 fail-closed 拒绝 / 关项目后回落 appDataDir），固化自动化探针 `tools/smoke-tauri-ipc.mjs` + 手工清单 `tools/smoke-tauri-manual.md`；沙箱 os error 231 未复现；零源码改动（IMPLEMENTATION-LOG §5.24）**。
@@ -21,11 +21,11 @@
 > 本会话完成 **v0.3 批 S3：编译产物写链路（`.kojo` → 合规 `.erb` 落盘）**——`SugarTranspileService.compileToFile`（契约新增 `SugarCompileResult` / `SugarCompileOptions` / `SugarCompileEncoding` / `SugarCompilerDeps` / `SugarCompileError`；**唯一含 IO** 的方法）+ `FileIO.ensureDir`（契约 + 内核实现，**与 writeBytes 同闸**）+ 写链路 `kojo-sugar/src/compile.ts`（守卫 → 编码组装 → ensureDir → 备份 → 双闸写 → **回读字节比对**，复刻注入器安全顺序）+ 产物恒 **UTF-8-BOM + LF + 末尾换行**；**重大发现：任务/规范 §8 的「CRLF」与真实语料不符**（全树 3,818 个 ERB：LF-only 3,787 / CRLF-only 3；口上域 2,317 个全 LF、零 CRLF）→ 采语料口径（用户拍板）；717 passed / 6 skipped（纯本批 +35，基线 679）；kernel 集成新增**第 10 节**；回放基线逐字不变（IMPLEMENTATION-LOG §5.29）
 > 本会话完成 **v0.3 批 S4：糖预览数据层**（§5.30，服务 `sugar.preview`）与 **S5：升糖建议器数据层**（§5.31，服务 `sugar.lift`，`SugarLiftConfidence` 闭集只有 `'verified'`）。
 > 本会话完成 **v0.3 S5+ 批：旁白口径 round-trip + lift apply 链路 + `ui-sugar-lift` 面板（第 14 插件）**——lift 自证壳支持 `旁白色:` 两种口径、新服务 `sugar.liftApply`、golden 冻结计数 2→4；850 项全绿（§5.32a/§5.32b）。已推 `0d0bc51`。
-> 本会话完成 **v0.3 解耦补齐批：时机分野模板归位 adapter（S2 遗留承诺 B-1 兑现）+ 审计 D 项**——契约新增 `KojoFaceTable`/`KojoFaceTemplate` + `GameAdapter.kojoFaceTemplates?`；`eratw-adapter/src/face-templates.ts` 按附录 C 全量登记；`codegen.resolveFace` 改查表 **fail-closed（缺表→timing-face-unknown，绝不回退内建模板）**，golden 逐字节零回退；`audit-decoupling.mjs` 新增 D 项（通用插件零游戏知识，`sav` 仅 A 项）探针自证；851→868 项全绿 / typecheck root+app / audit 四项 / 真实语料冒烟 ✅；**基线更新：868 项 / 14 插件 / 四项审计**（§5.33；审阅报告 `docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md`）。已推 `26dd4d8`。
+> 本会话完成 **v0.3 解耦补齐批：时机分野模板归位 adapter（S2 遗留承诺 B-1 兑现）+ 审计 D 项**——契约新增 `KojoFaceTable`/`KojoFaceTemplate` + `GameAdapter.kojoFaceTemplates?`；`eratw-adapter/src/face-templates.ts` 按附录 C 全量登记；`codegen.resolveFace` 改查表 **fail-closed（缺表→timing-face-unknown，绝不回退内建模板）**，golden 逐字节零回退；`audit-decoupling.mjs` 新增 D 项（通用插件零游戏知识，`sav` 仅 A 项）探针自证；851→868 项全绿 / typecheck root+app / audit 四项 / 真实语料冒烟 ✅；**基线更新：868 项 / 14 插件 / 四项审计**（§5.33；审阅报告 `docs/archive/REVIEW-SUGAR-DECOUPLING-2026-10-11.md`）。已推 `26dd4d8`。
 > 本会话完成 **v0.3 S4-UI 批：糖预览面板（第 15 插件 `ui-sugar-preview`）**——把 S4 的 `sugar.preview` 数据层接成可浏览面板：当前 `.kojo` → 转译 + 源映射 + 诊断（有存档附状态回放）→「糖源码行 ↔ 生成产物行 ↔ 消息块可达性」三向映射；**存档扫描是软依赖**（缺席退化为两向映射，不 inactive）+ **未接存档时不显示可达徽章**（不可判定 ≠ 可达，绝不误导）；跳转复用 `editor.revealLocation`、当前文件走 `editor.activeFileChanged`、存档预填走 `kojo.snapshotSelected`（UI 插件间零直接依赖）；909 项全绿 / typecheck root+app / audit 四项（**15 插件**）/ golden 零回退（§5.34）。
 > 本会话完成 **v0.3 S6 批：编辑体验（第 16 插件 `ui-sugar-editor`）**——`.kojo` Monaco Monarch 糖高亮（台词=作者色/中文关键字分角色/`续`标记/插值/```erb 围栏）+ 中文关键字·保留代词·文件内别名补全（**英文隐藏别名不进列表**，规范 §4.1）+ 危险波浪线（新槽 `ui.editor.decorator` → Monaco markers，owner `kojo-decorators`）+「糖判定」面板（可编译/警告/不可编译 + 逐条诊断跳转）；词表**单一真源**从 kojo-sugar 转译器关键字表派生（永不脱节），高亮住 app 宿主层（Monaco 不属插件）；931 项全绿 / typecheck root+app / audit 四项（**16 插件**）/ app build ✅ / golden 零回退（§5.35）。
 > 本会话完成 **v0.3 S7 批（数据层 + UI）与 UI 重设计 P0**——S7 保存路径推导 + `.kojo` 保存接线（发版判据 ① 最后一环，§5.36/§5.37，958 项）；P0 写权限闭环批 + 三轮实机反馈修复（静默只读 / 重授权入口 / 索引阶段可见化 / 函数树失败态 + 头部自救按钮，§5.38–§5.41，959 项）。
-> 本会话完成 **UI/UX 重设计 P1–P3 批（VSCode 式五区布局落地）**——**P1** 壳层骨架（五区布局 + 活动栏 + 三容器 + 10 面板迁移，`4ae9366`）/ **P2** 命令与工具栏（统一命令注册表 + 命令面板/快速打开 + overlay 宿主 + 新建口上文件向导；事件白名单补全 `0bf2eb9`；`e4663aa`）/ **P3** 编辑器深化（多标签 `63f362e` + 💡 CodeAction + 状态栏诊断计数 `9e72af0`）；契约**全部 additive**、宿主**零业务知识**（§5.42–§5.44）。随后**审阅 + 补测批**（§5.45）：3 处修复（`\` 路径文件名优先 / 功能键大写 / codeAction id 单调不复用）+ app 层补测 **+48**（`commands.test.ts` / `layout.test.ts` / `new-file-wizard.test.ts`）；并**修复审阅发现 B1**（§5.46：宿主订阅 `file.changed`，外部写盘后重载 model，杜绝「旧文本覆盖升糖结果」，+5 测试）；**基线更新：1012 passed / 6 skipped / 16 插件 / 审计 A–D 四项**（审阅报告 `docs/REVIEW-UI-P1-P3-2026-10-12.md`）。P4 待用户确认后开工。
+> 本会话完成 **UI/UX 重设计 P1–P3 批（VSCode 式五区布局落地）**——**P1** 壳层骨架（五区布局 + 活动栏 + 三容器 + 10 面板迁移，`4ae9366`）/ **P2** 命令与工具栏（统一命令注册表 + 命令面板/快速打开 + overlay 宿主 + 新建口上文件向导；事件白名单补全 `0bf2eb9`；`e4663aa`）/ **P3** 编辑器深化（多标签 `63f362e` + 💡 CodeAction + 状态栏诊断计数 `9e72af0`）；契约**全部 additive**、宿主**零业务知识**（§5.42–§5.44）。随后**审阅 + 补测批**（§5.45）：3 处修复（`\` 路径文件名优先 / 功能键大写 / codeAction id 单调不复用）+ app 层补测 **+48**（`commands.test.ts` / `layout.test.ts` / `new-file-wizard.test.ts`）；并**修复审阅发现 B1**（§5.46：宿主订阅 `file.changed`，外部写盘后重载 model，杜绝「旧文本覆盖升糖结果」，+5 测试）；**基线更新：1012 passed / 6 skipped / 16 插件 / 审计 A–D 四项**（审阅报告 `docs/archive/REVIEW-UI-P1-P3-2026-10-12.md`）。P4 待用户确认后开工。
 
 
 ---
@@ -134,18 +134,34 @@
   - 关键纪律（本线全程遵守）：契约**全部 additive**（新字段 optional，缺省即现状，任一中间态可运行）；宿主**零业务知识**（壳层只提供容器/动作语义）；布局状态住壳层私有 `localStorage`（`kojo.ui.layout.v1`），**不进内核存储域**；新增内核事件必须在 `plugin-api/src/events.ts` 登记 emit 权限分类（`PLUGIN_EMITTABLE`/`KERNEL_ONLY` 两表 + 编译期断言 `KERNEL_EVENT_CLASSIFICATION_GUARD` 强制，§5.48——`0bf2eb9` 手工同步教训已机制化）。
   - **当前基线：1016 passed / 6 skipped（1022）；16 插件；审计 A–D 四项全绿（A 项已覆盖宿主 UI·Monaco 层）；typecheck root + `@kojo/app` 双跑 exit 0。**
 
-## 三、文档索引（按权威性排序）
+## 三、文档索引（按权威性排序；2026-10-11 整理批后口径）
+
+### 活文档（`docs/` 根，9 份 + adr/）
 
 | 文档 | 内容 |
 |---|---|
+| `docs/HANDOFF.md`（本文件） | **交接状态 + 下一批动手清单（新会话从这里开始）** |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执 |
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
-| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录**（原 ARCH §5.8–§5.19，2026-10-10 迁入）：每批实施细节 / 金样本发现 / 踩坑 |
-| `docs/REVIEW-OPTIMIZATION-2026-10-10.md` | 方案级审阅（13 项：A1/D12 已落地，C7 排 v0.3，其余分级见其 §5） |
+| `docs/BASELINES.md` | 实测基线汇总（索引/回放/抽取/校验性能与正确性数字） |
+| `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` | **糖表层规范 v1.2（冻结权威）**：语法/转译/产物逐条定义，golden 逐字节锚定 |
+| `docs/UI-REDESIGN-2026-10-11.md` | **UI/UX 重设计定稿 v1.0**（用户拍板 Q1–Q11；五区布局/additive 槽位/迁移表/P0–P4；= beta.1 判据⑥；**P4 待开工**） |
+| `docs/USER-GUIDE.md` | 终端用户指南（安装 / 开项目 / .kojo 保存编译 / 注入器安全） |
+| `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` | 发版手工验收清单（实机勾验用，发版判据组成部分） |
 | `docs/RESEARCH.md` | 技术调研 |
 | `docs/adr/0001-0004` | 工具链 / game.adapter 服务键语义 / 壳架构 / 快照来源服务键命名（snapshot.source） |
-| `docs/HANDOFF.md`（本文件） | 交接状态 + 下一批动手清单 |
-| `docs/UI-REDESIGN-2026-10-11.md` | **UI/UX 重设计定稿 v1.0**（用户拍板 Q1–Q11；五区布局/additive 槽位/迁移表/P0–P4；= beta.1 判据⑥） |
-| `docs/UI-REDESIGN-HANDOFF-2026-10-11.md` | UI 重设计实施交接（任务卡/验收/纪律）+ `UI-REDESIGN-NEW-SESSION-PROMPT.md`（新会话 prompt） |
+
+### 归档区（`docs/archive/`，历史冻结，只读）
+
+| 入口 | 内容 |
+|---|---|
+| `docs/archive/README.md` | **⚠️ 全部已过时标注 + 16 份历史报告逐份状态索引**（审阅 / 缺陷报告 / 接力 prompt / 已实现设计稿） |
+| `docs/archive/PERF-REVIEW-2026-10-11.md` | ⚠️ 特例：性能优化 L0–L4 路线**尚未实施**，开工时从归档取回为活文档（其 §六为先决测量） |
+
+### 仓库外权威
+
+| 文档 | 内容 |
+|---|---|
 | `D:\DSH\reverse-engineering\eratw4.980-口上机制深挖.md` | **口上领域知识权威**（27 CASE 路由、MESSAGECHECK 位协议、家族命名、四件套） |
 | `D:\DSH\reverse-engineering\eratw4.980-存档实战解析.md` | sav 协议（v1.0 前必读） |
 
@@ -331,7 +347,7 @@ node tools/smoke-tauri-ipc.mjs
 - **save00 载荷 571,185B 字节级完全一致**——编码器同构达成（行驱动游程 / 整数宽度 / 7-bit 前缀 / 流控制）。
 - **Int64 精度硬前置暴露**：RANDDATA（SFMT 625 状态）等大数被读侧近似，写回必坏——serialize 显式抛拒绝；v1.1 注入器倾向方案 B（rawBytes 原样复制 + 被修变量含大数拒绝注入）。
 
-### 6.10 第十二批（✅ 已完成）：审阅修复（依据 docs/CODE-REVIEW-2026-10-10.md）
+### 6.10 第十二批（✅ 已完成）：审阅修复（依据 docs/archive/CODE-REVIEW-2026-10-10.md）
 
 **实施结果**：H1 + M2/M4/M5 + L1/L3/L4 落地（IMPLEMENTATION-LOG §5.18 为权威记录）。
 
@@ -486,7 +502,7 @@ node tools/smoke-tauri-ipc.mjs
 
 ### 6.22 语法糖 S5 批（✅ 已完成）：糖提升建议器（原生 ERB → 糖候选，数据层）
 
-**实施结果**（IMPLEMENTATION-LOG §5.31 为权威记录；设计稿 `docs/LIFT-SUGGESTER-DESIGN.md`）：给"这段原生 ERB 能不能改写成表层语法糖"提供**数据层**答案——扫描原生 ERB → 识别糖候选 → **对每个候选跑一遍 S2 转译做 round-trip 自证** → 只有逐字节一致才保留。**方向与 S2 相反（升糖）**；**UI 留给后续批次**；**永不自动改写磁盘**。
+**实施结果**（IMPLEMENTATION-LOG §5.31 为权威记录；设计稿 `docs/archive/LIFT-SUGGESTER-DESIGN.md`）：给"这段原生 ERB 能不能改写成表层语法糖"提供**数据层**答案——扫描原生 ERB → 识别糖候选 → **对每个候选跑一遍 S2 转译做 round-trip 自证** → 只有逐字节一致才保留。**方向与 S2 相反（升糖）**；**UI 留给后续批次**；**永不自动改写磁盘**。
 
 - **核心不变量（round-trip or nothing）**：候选成立**不由形态决定，由转译决定**。糖片段包最小 `.kojo` 壳 → 调本插件 S2 `transpile` → 取 `IF LOCAL` 与配对 `ENDIF` **之间**的正文 → 双侧 `normalizeIndent`（去公共最小缩进）→ 逐字节比对。不一致 → `roundtrip-mismatch` **降级不入结果**。`SugarLiftConfidence` 闭集**只有 `'verified'`** —— 契约层面不允许"可能对"的候选（误报结构上不可能，代价是有意为之的漏报）。
 - **契约扩展（additive，零游戏名词）**：`WellKnownServices.SugarLift = 'sugar.lift'`；`SugarLiftKind`（4 值）/`SugarLiftConfidence`/`SugarLiftRoundTrip`/`SugarLiftCandidate`/`SugarLiftSkipReason`（**11 值闭集**）/`SugarLiftSkip`/`SugarLiftRequest`/`SugarLiftResult`/`SugarLiftService.liftSuggest(request)`；守卫 `isVerifiedCandidate` / `hasCandidates`。`ConditionExtractorService` **additive** 新增 `parseExpression(text)`（无状态纯函数，不依赖索引）。**旧签名一律未动**。
@@ -506,7 +522,7 @@ node tools/smoke-tauri-ipc.mjs
 
 ### 6.24 解耦补齐批（✅ 已完成）：时机分野模板归位 adapter（S2 遗留承诺兑现）+ 审计 D 项
 
-**实施结果**（IMPLEMENTATION-LOG §5.33 为权威；审阅发现 = `docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md` B-1，用户拍板「补齐承诺」）：
+**实施结果**（IMPLEMENTATION-LOG §5.33 为权威；审阅发现 = `docs/archive/REVIEW-SUGAR-DECOUPLING-2026-10-11.md` B-1，用户拍板「补齐承诺」）：
 
 - **契约**：`plugin-api/game.ts` 新增 `KojoFaceTable` / `KojoFaceTemplate`（faces + registration 三件套 + successFlag 位协议 + messageCheck 位协议；占位 `{t}/{n}/{i}` + `${段}` 上下文段）；`GameAdapter.kojoFaceTemplates?` 可选字段；诊断码新增 `face-table-missing`。
 - **adapter**：`eratw-adapter/src/face-templates.ts`（新）按规范 §3.2 / 附录 C 全量登记 eraTW 分野表；`plugin.ts` 挂载（纯数据，不依赖 loadProject）。
@@ -640,7 +656,7 @@ node tools/smoke-tauri-ipc.mjs
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**958 项** / ✅ / 16 插件 / 审计 A/B/C/D 四项；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.37 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **当前最高优先线 = UI/UX 重设计（2026-10-11 定稿，用户拍板插入 beta.1 判据⑥）**：需求定稿 `docs/UI-REDESIGN-2026-10-11.md` + 实施交接 `docs/UI-REDESIGN-HANDOFF-2026-10-11.md`（含新会话 prompt）；顺序 P0 写权限闭环 → P1 壳层骨架 → P2 命令工具栏 → P3 编辑器深化（多标签+💡）→ P4 停靠+全禅。**原下一批候选**：①真实终端 `pnpm tauri dev` 手工勾验判据①闭环（§5.37 手工清单 a–i）；②BUG-5 真实监视器接线（判据 ②）；③v0.3 UI 余项：编辑器内三向映射装饰（悬浮/内联）、消息块逐条气泡（含逐字符 FORM 展开渲染串）、虚拟滚动、新建向导（**新建向导已并入 UI 重设计 P2**）
+4. **当前最高优先线 = UI/UX 重设计（2026-10-11 定稿，用户拍板插入 beta.1 判据⑥）**：需求定稿 `docs/UI-REDESIGN-2026-10-11.md` + 实施交接 `docs/archive/UI-REDESIGN-HANDOFF-2026-10-11.md`（含新会话 prompt）；顺序 P0 写权限闭环 → P1 壳层骨架 → P2 命令工具栏 → P3 编辑器深化（多标签+💡）→ P4 停靠+全禅。**原下一批候选**：①真实终端 `pnpm tauri dev` 手工勾验判据①闭环（§5.37 手工清单 a–i）；②BUG-5 真实监视器接线（判据 ②）；③v0.3 UI 余项：编辑器内三向映射装饰（悬浮/内联）、消息块逐条气泡（含逐字符 FORM 展开渲染串）、虚拟滚动、新建向导（**新建向导已并入 UI 重设计 P2**）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`；**新批次编号用「日期 + 简称」，不再用 vX.Y 第N批（§十一 版本纪律）**；发版时走 §十一 的 tag 流程（首个发行版 = `v0.4.0-beta.1`，判据五项）
 
 ## 十一、版本纪律（2026-10-11 定，用户拍板）

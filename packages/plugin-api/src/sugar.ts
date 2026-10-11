@@ -2,7 +2,7 @@
  * 语法糖契约（v0.3 批 S1）——表层语法（表层 DSL）→ 原生 ERB 的转译契约。
  *
  * 表层语法权威：`docs/SYNTAX-SUGAR-SURFACE-SPEC.md`（v1.2 冻结版）；
- * 架构落位与批次路线：`docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §八。
+ * 架构落位与批次路线：`docs/archive/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §八。
  *
  * 设计分层（"一切皆插件"）：
  * - **契约**（本文件，游戏无关）：糖文档模型（front-matter + 时机列表）、
@@ -1208,7 +1208,7 @@ export function hasArchive(result: SugarPreviewResult): result is SugarPreviewRe
 /**
  * 糖提升建议（lift-suggester）—— **原生 ERB → 糖候选**，与降糖方向相反。
  *
- * 设计前提（`docs/LIFT-SUGGESTER-DESIGN.md` §1，源自 `SYNTAX-SUGAR-DESIGN.md` §八）：
+ * 设计前提（`docs/archive/LIFT-SUGGESTER-DESIGN.md` §1，源自 `SYNTAX-SUGAR-DESIGN.md` §八）：
  * 编译是**有损**的（同一个 ERB 片段可能有多种合理糖写法），故升糖**永不自动应用**，
  * 只出建议、逐条确认。识别的安全前提不是"看起来像"，而是**"转回去逐字节一样"**：
  * 每个候选的 `sugarSource` 都交给 `sugar.transpile` 跑一遍，产物与原文本区间

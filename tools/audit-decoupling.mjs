@@ -11,7 +11,7 @@
  *   D. **通用插件**源码中不得出现具体游戏知识字面量（游戏名 / 口上函数名前缀 /
  *      引擎特有旗标）——游戏知识只准住 adapter。A 项只覆盖内核层，D 项补上
  *      插件层：否则"分野模板硬编码进通用插件"这类泄漏没有任何门禁能拦住
- *      （v0.3 S2 审阅发现，见 docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md）。
+ *      （v0.3 S2 审阅发现，见 docs/archive/REVIEW-SUGAR-DECOUPLING-2026-10-11.md）。
  *
  * 用法：node tools/audit-decoupling.mjs   （或 pnpm audit:decoupling）
  * 退出码：0 = 通过；1 = 违规。

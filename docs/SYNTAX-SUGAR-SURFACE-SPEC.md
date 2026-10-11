@@ -4,7 +4,7 @@
 >
 > **状态**：设计定稿（v1.2）。本文只做**语法设计**，不涉及代码实现。
 >
-> **入库说明**（2026-10-11）：本规范自 `D:\DSH\reverse-engineering\kojo-editor-语法糖设计.md` **原样并入**项目文档，作为语法糖的**表层语法权威**（v1.2 冻结版，§1 的语料统计已使实现审阅中 S1 的"指令分布 dump"提前完成）。实现侧的架构落位、与既有审阅的对表结论、待确认项见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §八。
+> **入库说明**（2026-10-11）：本规范自 `D:\DSH\reverse-engineering\kojo-editor-语法糖设计.md` **原样并入**项目文档，作为语法糖的**表层语法权威**（v1.2 冻结版，§1 的语料统计已使实现审阅中 S1 的"指令分布 dump"提前完成）。实现侧的架构落位、与既有审阅的对表结论、待确认项见 `docs/archive/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §八。
 >
 > **v1.1 变更**（相对 v1.0，采纳审阅意见）：①§5.5 函数名改为**完整拼接公式**（消除 `{分野段}` 的歧义）；②§3.3 新增**纯条件行 → IF 块**规则（消除空假分支的多余空行与等待）；③§3.7/§5.4 删除"嵌套块"误导，明确 v1 每时机仅一个 `选项` 块；④§3.10 的 `RESETCOLOR` 结论降级为**待实测**；⑤补 §3.3"不换行"能力边界、§3.8 代词专用性、§9 三条实测项、**附录 C（完整 37 种调用面）**；⑥§3.2 的 `成否` 默认值改由源码佐证。
 >
@@ -14,7 +14,7 @@
 > - 逆向文档：`eratw逆向总结/eratw4.980-口上机制深挖.md`、`eratw4.980-词法与表达式.md`、`eratw4.980-Lang与Statements边角.md`、`eratw4.980-Statements补全.md`
 > - 引擎源码：`_emuera_src/.../Instraction.Child.cs`（PRINT 家族后缀解析）、`.../EmueraConsole.Print.cs`（PRINTD 系语义）、`eratw4.980(PC)/ERB/口上・メッセージ関連/COMMON_KOJO.ERB`、`KOJO_MESSAGE.ERB`
 > - 真实口上语料：`eratw4.980(PC)/ERB/口上・メッセージ関連/個人口上`（**2,286 个 .ERB 文件、3,599,766 行** 的全量统计）
-> - 既有讨论稿：`kojo-editor/docs/SYNTAX-SUGAR-DESIGN.md`（本文承接其主张并给出可实现的规范）
+> - 既有讨论稿：`kojo-editor/docs/archive/SYNTAX-SUGAR-DESIGN.md`（本文承接其主张并给出可实现的规范）
 
 ---
 

@@ -264,7 +264,7 @@
 
 ### 5.18 审阅修复批次（v0.2 第十二批实施记录：CASE TO 语义 + 数据安全收口）
 
-> 依据：`docs/CODE-REVIEW-2026-10-10.md`（只读审阅报告）。本批 = 审阅修复清单落地。
+> 依据：`docs/archive/CODE-REVIEW-2026-10-10.md`（只读审阅报告）。本批 = 审阅修复清单落地。
 
 #### H1（高）：CASE `a TO b` 区间被 OR 展开 —— 系统性分支误判
 
@@ -336,7 +336,7 @@
 
 ### 5.20 回放面板信任闭环（v1.0 收口实施记录：C9 假设值标注 + A3 预览职责）
 
-> 依据：`docs/REVIEW-OPTIMIZATION-2026-10-10.md` §3 C9（"默认场景全 0"被当确定事实）与 A3（预览职责两处说法未对齐）、§5 "v1.0 收口（信任闭环）"第 4、5 项。本批为 **v1.0 收口 UI 线**（另一条线并行做 C7 Rust 写保护，互不越界）。
+> 依据：`docs/archive/REVIEW-OPTIMIZATION-2026-10-10.md` §3 C9（"默认场景全 0"被当确定事实）与 A3（预览职责两处说法未对齐）、§5 "v1.0 收口（信任闭环）"第 4、5 项。本批为 **v1.0 收口 UI 线**（另一条线并行做 C7 Rust 写保护，互不越界）。
 
 #### C9：把"预填 0"从确定值降格为假设值
 
@@ -376,7 +376,7 @@
 
 ### 5.21 Rust 侧写路径纵深防御（v0.2 第十四批实施记录：写允许域第二道闸）
 
-> 依据：docs/CODE-REVIEW-2026-10-10.md L68-70（M3 遗留）+ docs/REVIEW-OPTIMIZATION-2026-10-10.md §5 C7——「M3 必须优先于 v1.1 注入器：注入器本身是写路径，无第二道闸不能开写」。本批只动 packages/app/src-tauri/**、kernel io 契约注释、docs/**。
+> 依据：docs/archive/CODE-REVIEW-2026-10-10.md L68-70（M3 遗留）+ docs/archive/REVIEW-OPTIMIZATION-2026-10-10.md §5 C7——「M3 必须优先于 v1.1 注入器：注入器本身是写路径，无第二道闸不能开写」。本批只动 packages/app/src-tauri/**、kernel io 契约注释、docs/**。
 
 #### 允许域语义
 
@@ -405,7 +405,7 @@
 
 ### 5.22 回放面板场景预设（v1.0 收口线一实施记录：调用上下文可保存复用）
 
-> 依据：`docs/REVIEW-OPTIMIZATION-2026-10-10.md` §5「v1.0 收口」第 4 项的后续阶梯 + `HANDOFF.md` §6.11 候选「回放面板协议深化（场景预设）」。承接 §5.20 的 C9 信任闭环：场景值是**作者的场景假设**，不是引擎事实——UI 文案不得写死「正确值」。本批只动 `packages/plugins/ui-state-replay/**` + docs；回放引擎（`state-replay`）与 `condition-extractor` 契约**零改动**。
+> 依据：`docs/archive/REVIEW-OPTIMIZATION-2026-10-10.md` §5「v1.0 收口」第 4 项的后续阶梯 + `HANDOFF.md` §6.11 候选「回放面板协议深化（场景预设）」。承接 §5.20 的 C9 信任闭环：场景值是**作者的场景假设**，不是引擎事实——UI 文案不得写死「正确值」。本批只动 `packages/plugins/ui-state-replay/**` + docs；回放引擎（`state-replay`）与 `condition-extractor` 契约**零改动**。
 
 #### 数据模型（`panel-logic.ts`，纯逻辑零 React）
 
@@ -568,7 +568,7 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 
 ### 5.25 审阅缺陷修复（v0.2 第十八批实施记录：BUG-REPORT-2026-10-10 落地）
 
-> 依据：docs/BUG-REPORT-2026-10-10.md（第二轮审阅遗留，逐条代码复核属实）。边界：不碰 sav-parser / 注入器线（并行 WIP）。
+> 依据：docs/archive/BUG-REPORT-2026-10-10.md（第二轮审阅遗留，逐条代码复核属实）。边界：不碰 sav-parser / 注入器线（并行 WIP）。
 
 #### BUG-1（=审阅 M1，中）：runtime.stop() 级联停用依赖方
 
@@ -601,7 +601,7 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 
 ### 5.26 语法糖契约 + golden 固化（v0.3 批 S1 实施记录：先立契约与基准，不碰转译器）
 
-> 依据：`docs/SYNTAX-SUGAR-SURFACE-SPEC.md`（表层语法 v1.2 冻结版，只读输入）+ `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2（S1 = 契约 + golden 固化；S1 的测量项已由规范 §1.1 提前完成）。
+> 依据：`docs/SYNTAX-SUGAR-SURFACE-SPEC.md`（表层语法 v1.2 冻结版，只读输入）+ `docs/archive/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2（S1 = 契约 + golden 固化；S1 的测量项已由规范 §1.1 提前完成）。
 > 边界：仅 `packages/plugin-api/**` + `packages/plugins/kojo-sugar/tests/goldens/**`；未碰 erb-parser / condition-extractor / state-replay 任何现有文件；未改规范文档（冻结输入）；无新插件（`kojo-sugar` 插件 S2 建）。
 
 #### 交付物
@@ -946,7 +946,7 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 ### 5.31 语法糖 S5 批 · 糖提升建议器（v0.3 批 S5 实施记录：原生 ERB → 糖候选，round-trip 自证）
 
 > **方向与 S2 相反**：S2 = 糖源码 → 原生 ERB（降糖）；S5 = 原生 ERB → 糖候选（升糖）。
-> 设计稿：`docs/LIFT-SUGGESTER-DESIGN.md`。表层语法权威：`docs/SYNTAX-SUGAR-SURFACE-SPEC.md`。
+> 设计稿：`docs/archive/LIFT-SUGGESTER-DESIGN.md`。表层语法权威：`docs/SYNTAX-SUGAR-SURFACE-SPEC.md`。
 
 #### 交付物
 
@@ -1025,7 +1025,7 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 > **方向**：修正 S5 期「D 后缀由引号性决定」的**结论错误**——D 归属由**两个维度**决定：
 > `d = (旁白色 == 默认) 且 (not speech)`。`旁白色:` 是**糖表层早已存在**的头部开关（spec §3.1），
 > 本批**不新增任何语法**，只把 lift 的自证壳从「单口径」扩成「依次试两种口径」。
-> 设计稿：`docs/LIFT-SUGGESTER-DESIGN.md` §2.1（修正）/ §2.3（新增）。
+> 设计稿：`docs/archive/LIFT-SUGGESTER-DESIGN.md` §2.1（修正）/ §2.3（新增）。
 
 #### 交付物
 
@@ -1038,7 +1038,7 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 | `packages/plugins/kojo-sugar/tests/goldens/spec-3.3-narration-author-color.kojo` + `.expected.erb.todo` | **新增** | `旁白色: 作者色` → `PRINTFORMW 她点了点头。` / `PRINTFORML 她叹了口气。` / `PRINTFORMW 「今天也来训练了？」` |
 | `packages/plugins/kojo-sugar/tests/golden.test.ts` | 修改（3 → 7 项） | 新增 `describe('golden §3.3 · 旁白口径（旁白色:）对 D 归属的作用（逐字节成对）')` 3 项：默认口径断言 / 作者色口径断言 / **两张 golden 差异仅在 D 后缀**（`unD = s => s.replace(/PRINTFORMD([WL])/g,'PRINTFORM$1')` 后二者相等） |
 | `packages/plugin-api/tests/sugar.test.ts` | 修改 | golden 命名冻结断言计数 `2` → `4`（`// §6.1 / §6.2（规范原文）+ §3.3 旁白口径成对两张`） |
-| `docs/LIFT-SUGGESTER-DESIGN.md` | 修改 | §2.1 映射表**修正**（原表错写 `旁白` → `PRINTFORMW`，漏了头部开关这一维）；**新增 §2.3**（2×2 语料矩阵 + 三条推论 + 引擎语义实证 + 「本批不加任何新语法」）；§4.1 契约片段加 `narrationColor?`；§5 `roundtrip-mismatch` 行注明"两种口径依次试"；§6 已知取舍 +2 条 |
+| `docs/archive/LIFT-SUGGESTER-DESIGN.md` | 修改 | §2.1 映射表**修正**（原表错写 `旁白` → `PRINTFORMW`，漏了头部开关这一维）；**新增 §2.3**（2×2 语料矩阵 + 三条推论 + 引擎语义实证 + 「本批不加任何新语法」）；§4.1 契约片段加 `narrationColor?`；§5 `roundtrip-mismatch` 行注明"两种口径依次试"；§6 已知取舍 +2 条 |
 
 #### 关键设计决策
 
@@ -1172,7 +1172,7 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 
 ### 5.33 解耦补齐批 · 时机分野模板归位 adapter（v0.3 S2 遗留承诺兑现：游戏知识只进 adapter）
 
-> 起因：`docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md` 审阅发现 B-1——`kojo-sugar/codegen.ts`
+> 起因：`docs/archive/REVIEW-SUGAR-DECOUPLING-2026-10-11.md` 审阅发现 B-1——`kojo-sugar/codegen.ts`
 > 硬编码了 eraTW 的 10 个分野模板 + `M_KOJO`/`DIARY` 字面量 + `TFLAG:192` 位协议 + `SETBIT RESULT`
 > 原语，与已批准方案（`SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.1-3「37 调用面模板表为
 > adapter 新增」）及 6 处契约/代码头注自相矛盾；且 audit A 项只覆盖内核层，插件层门禁盲区。
@@ -1514,7 +1514,7 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 
 ### 5.38 UI 重设计 P0 · 写权限闭环批（2026-10-11 批：静默只读修复 + 状态栏徽章 + 通知中心）
 
-> 对应需求：`docs/UI-REDESIGN-2026-10-11.md` §九（F1/F2）；任务卡：`docs/UI-REDESIGN-HANDOFF-2026-10-11.md` §五 P0。beta.1 判据 ⑥ 的第一期。
+> 对应需求：`docs/UI-REDESIGN-2026-10-11.md` §九（F1/F2）；任务卡：`docs/archive/UI-REDESIGN-HANDOFF-2026-10-11.md` §五 P0。beta.1 判据 ⑥ 的第一期。
 
 #### 范围
 
@@ -1894,7 +1894,7 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 
 > **触发**：用户切换至审阅模型（DeepSeek）接管「审阅代码 + 测试 + 撰写文档」环节。
 > 本批为**只读审阅 + 精准修复 + 补测**，不改动 P1–P3 已交付的行为契约。
-> 审阅报告见 `docs/REVIEW-UI-P1-P3-2026-10-12.md`。
+> 审阅报告见 `docs/archive/REVIEW-UI-P1-P3-2026-10-12.md`。
 
 #### 审阅范围
 
@@ -2067,7 +2067,7 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 
 ### 5.48 解耦修复批 · 审阅发现 M1–M4 全量修复（2026-10-11 批）
 
-> **触发**：`docs/DECOUPLING-REVIEW-2026-10-11.md`（人工解耦审阅：audit A–D 全绿但
+> **触发**：`docs/archive/DECOUPLING-REVIEW-2026-10-11.md`（人工解耦审阅：audit A–D 全绿但
 > 探针不扫宿主 UI 层，本轮人工复审发现 4 项）。用户指令「全部修复并推送」。
 
 #### M1（核心）· 内核事件 emit 权限单一真源 + 编译期防漂移断言
