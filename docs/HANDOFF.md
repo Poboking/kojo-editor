@@ -19,6 +19,9 @@
 > 本会话完成 **v1.1 第十六批：存档注入器用户面——写链路端到端**——新服务 `snapshot.writer`（契约 `SnapshotWriteService`，读写职责分离）+ sav-parser 0.3.0（容器组装 container.ts / 回读验证 verify.ts / engine.inject：Int64 守卫先于备份 → 先备份 → 写盘 → 回读验证，失败报错携带备份路径）；新插件 `ui-snapshot-injector`（第 12 插件：选档→定位变量→编辑→diff→两步确认注入）；修复 eratw-adapter writablePaths 缺 sav 目录的真实缺口；kernel 集成第 9 节（appData 副本端到端 + 越权拒绝 + Int64 守卫，绝不写真实游戏档）；509 项全绿（IMPLEMENTATION-LOG §5.23）。
 > 本会话完成 **v0.3 批 S1：语法糖契约 + golden 固化**——新契约 `packages/plugin-api/src/sugar.ts`（SugarDoc / SugarNode 联合 15 型 / AliasValue 四右值[变量可读写、角色·数值·字符串只读] / SugarDiagnostic 23 码闭集 / 行级 SugarSourceMapEntry / SugarTranspileService；每节点带 1 基行列源位置）+ 服务键 `sugar.transpile`（实现 `kojo-sugar` 插件 S2 建）+ golden fixture（规范 §6.1/§6.2 源与期望产物，**逐字节等于规范原文**、测试按规范行号切片比对；期望产物 `.erb.todo` 暂存 + `describe.skip` 待 S2 转正式）；**不实现转译器**；555 项全绿（IMPLEMENTATION-LOG §5.26）
 > 本会话完成 **v0.3 批 S3：编译产物写链路（`.kojo` → 合规 `.erb` 落盘）**——`SugarTranspileService.compileToFile`（契约新增 `SugarCompileResult` / `SugarCompileOptions` / `SugarCompileEncoding` / `SugarCompilerDeps` / `SugarCompileError`；**唯一含 IO** 的方法）+ `FileIO.ensureDir`（契约 + 内核实现，**与 writeBytes 同闸**）+ 写链路 `kojo-sugar/src/compile.ts`（守卫 → 编码组装 → ensureDir → 备份 → 双闸写 → **回读字节比对**，复刻注入器安全顺序）+ 产物恒 **UTF-8-BOM + LF + 末尾换行**；**重大发现：任务/规范 §8 的「CRLF」与真实语料不符**（全树 3,818 个 ERB：LF-only 3,787 / CRLF-only 3；口上域 2,317 个全 LF、零 CRLF）→ 采语料口径（用户拍板）；717 passed / 6 skipped（纯本批 +35，基线 679）；kernel 集成新增**第 10 节**；回放基线逐字不变（IMPLEMENTATION-LOG §5.29）
+> 本会话完成 **v0.3 批 S4：糖预览数据层**（§5.30，服务 `sugar.preview`）与 **S5：升糖建议器数据层**（§5.31，服务 `sugar.lift`，`SugarLiftConfidence` 闭集只有 `'verified'`）。
+> 本会话完成 **v0.3 S5+ 批：旁白口径 round-trip + lift apply 链路 + `ui-sugar-lift` 面板（第 14 插件）**——lift 自证壳支持 `旁白色:` 两种口径、新服务 `sugar.liftApply`、golden 冻结计数 2→4；850 项全绿（§5.32a/§5.32b）。已推 `0d0bc51`。
+> 本会话完成 **v0.3 解耦补齐批：时机分野模板归位 adapter（S2 遗留承诺 B-1 兑现）+ 审计 D 项**——契约新增 `KojoFaceTable`/`KojoFaceTemplate` + `GameAdapter.kojoFaceTemplates?`；`eratw-adapter/src/face-templates.ts` 按附录 C 全量登记；`codegen.resolveFace` 改查表 **fail-closed（缺表→timing-face-unknown，绝不回退内建模板）**，golden 逐字节零回退；`audit-decoupling.mjs` 新增 D 项（通用插件零游戏知识，`sav` 仅 A 项）探针自证；851→868 项全绿 / typecheck root+app / audit 四项 / 真实语料冒烟 ✅；**基线更新：868 项 / 14 插件 / 四项审计**（§5.33；审阅报告 `docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md`）。已推 `26dd4d8`。
 
 
 ---
@@ -115,7 +118,7 @@
   5. **测试**：规则单测 3 路径（覆盖/不覆盖/协议不可用降级）+ call-protocol +5（模板具体性与覆盖语义）+ 真实语料 `corpus.test.ts`（36 条，全 warning，全「数值槽 声明 1 / 转发 0」）；kernel 集成冒烟 `ruleCount` 5→6 + 新增 `=== 36` 断言。
   6. **验证**：564 passed / 7 skipped（无 smoke）；569 / 2 skipped（带 smoke）；typecheck root+app ✅；audit ✅（13 插件）；**回放基线逐字不变**（K49 1356/11685/未知 3741/exact 836）。
 
-- **v0.3 语法糖批进度**：**S1 契约 + golden ✅**（§5.26）/ **S2 转译内核 ✅**（§5.28）/ **S3 写链路 ✅**（§5.29）/ **S4 糖预览数据层 ✅**（§5.30）/ **S5 升糖建议器数据层 ✅**（§5.31）。服务键新增 `sugar.preview`（S4）与 `sugar.lift`（S5；`sugar.transpile` 未动）；`ConditionExtractorService` additive 新增 `parseExpression`（S5）。基线 **783 项**。
+- **v0.3 语法糖批进度**：**S1 契约 + golden ✅**（§5.26）/ **S2 转译内核 ✅**（§5.28）/ **S3 写链路 ✅**（§5.29）/ **S4 糖预览数据层 ✅**（§5.30）/ **S5 升糖建议器数据层 ✅**（§5.31）/ **S5+ 旁白口径 + lift apply + ui-sugar-lift 面板 ✅**（§5.32a/b）/ **解耦补齐批（KojoFaceTable 契约 + 审计 D 项）✅**（§5.33）。服务键：`sugar.preview` / `sugar.lift` / `sugar.liftApply`（`sugar.transpile` 未动）。基线 **868 项 / 14 插件 / 审计 A–D 四项**。
 
 ## 三、文档索引（按权威性排序）
 
