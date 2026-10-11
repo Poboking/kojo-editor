@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import type * as Monaco from 'monaco-editor';
 import type { Kernel } from '@kojo/kernel';
 import type {
+  EditorCodeAction,
   EditorSaveChoices,
   EditorSaveHandlerContribution,
   EditorSaveWarning,
@@ -25,6 +26,8 @@ registerKojoLanguage(monaco);
 
 /** marker owner（同一 owner 的 markers 每次整体替换；不同 owner 互不干扰） */
 const MARKER_OWNER = 'kojo-decorators';
+/** CodeAction 执行命令 id（宿主统一注册一次；command 参数为 pendingActionsRef 的反查 key） */
+const CODE_ACTION_COMMAND = 'kojo.codeAction.run';
 /** 编辑停顿多久后重算装饰（避免每击键跑一遍转译） */
 const MARKER_DEBOUNCE_MS = 250;
 
@@ -151,6 +154,8 @@ export function EditorPane({
   const markerTimerRef = useRef<number | null>(null);
   /** 装饰刷新函数（ref 化，供只注册一次的 model 监听调用） */
   const refreshMarkersRef = useRef<((model: Monaco.editor.ITextModel, path: string) => void) | null>(null);
+  /** CodeAction 待执行动作表（Monaco command 参数须可序列化 → 以 id 反查动作本体） */
+  const pendingActionsRef = useRef(new Map<string, EditorCodeAction>());
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -419,7 +424,64 @@ export function EditorPane({
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveRef.current();
     });
+    // 💡 CodeAction 宿主适配（槽 `ui.editor.codeAction`，P3b）：宿主只做 Monaco 协议
+    // 转换（registerCodeActionProvider），动作产出全在插件（纯函数 provideActions）；
+    // 执行经 registerCommand 落地，command 参数用 id 反查 pendingActionsRef（参数须可
+    // 序列化，且避免闭包捕获过时文本）。
+    const cmdDisposer = monaco.editor.registerCommand(CODE_ACTION_COMMAND, (_accessor, actionId: string) => {
+      const action = pendingActionsRef.current.get(actionId);
+      if (!action) return;
+      const line = editorRef.current?.getPosition()?.lineNumber;
+      void action.run({
+        project: kernel.project.current(),
+        activeFile: filePathRef.current,
+        ...(line !== undefined ? { line } : {}),
+      });
+    });
+    const providerDisposer = monaco.languages.registerCodeActionProvider(
+      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID],
+      {
+        provideCodeActions: (model) => {
+          const path = filePathRef.current;
+          // 只对当前活动标签的 model 供动作（后台 model 的 provider 调用不响应）
+          if (!path || model !== editorRef.current?.getModel()) {
+            return { actions: [], dispose: () => undefined };
+          }
+          const project = kernel.project.current();
+          const text = model.getValue();
+          const pending = pendingActionsRef.current;
+          pending.clear();
+          const actions: Monaco.languages.CodeAction[] = [];
+          for (const contribution of kernel.slots.query('ui.editor.codeAction')) {
+            let provided: EditorCodeAction[];
+            try {
+              provided = contribution.provideActions({ path, text, project });
+            } catch (e: unknown) {
+              // 单个贡献抛错不影响其余（与装饰器同款隔离：能力出错退化可见，不让 💡 整体消失）
+              console.warn(
+                `[EditorPane] codeAction '${contribution.id}' provideActions 抛错：${
+                  e instanceof Error ? e.message : String(e)
+                }`,
+              );
+              continue;
+            }
+            for (const a of provided) {
+              const actionId = `${contribution.id}#${pending.size}`;
+              pending.set(actionId, a);
+              actions.push({
+                title: a.title,
+                kind: a.kind === 'refactor' ? 'refactor' : 'quickfix',
+                command: { id: CODE_ACTION_COMMAND, title: a.title, arguments: [actionId] },
+              });
+            }
+          }
+          return { actions, dispose: () => undefined };
+        },
+      },
+    );
     return () => {
+      cmdDisposer.dispose();
+      providerDisposer.dispose();
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
       ed.dispose();

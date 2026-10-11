@@ -2062,6 +2062,11 @@ code {
   display: inline-flex;
   align-items: center;
 }
+.sb-diag {
+  display: inline-flex;
+  gap: 8px;
+  white-space: nowrap;
+}
 .sb-editor {
   color: var(--fg-dim);
   white-space: nowrap;

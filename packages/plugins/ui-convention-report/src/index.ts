@@ -212,6 +212,32 @@ export function createUiConventionReportPlugin(): Plugin {
         );
       }
 
+      /* --------------------------- 状态栏诊断计数 --------------------------- */
+
+      // 状态栏聚合计数（`ui.statusbar` 槽，P3b）：数据源与底部区面板同一份 report，
+      // 颜色同 SEVERITY_COLOR。壳层暂无「打开指定容器」的通用事件，点击落地为
+      // title 提示 Ctrl+J（切换底部区）——不静默、不假装可点。
+      function StatusCounts(): unknown {
+        const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
+        useEffect(() => linter.subscribe(setReport), []);
+        if (!report) return createElement('span', { className: 'dim' }, '校验 —');
+        const c = report.counts;
+        return createElement(
+          'span',
+          { className: 'sb-diag', title: '约定校验计数（Ctrl+J 切换底部区查看明细）' },
+          createElement('span', { style: { color: SEVERITY_COLOR.error } }, `✕ ${c.error}`),
+          createElement('span', { style: { color: SEVERITY_COLOR.warning } }, `⚠ ${c.warning}`),
+          createElement('span', { style: { color: SEVERITY_COLOR.info } }, `ℹ ${c.info}`),
+        );
+      }
+
+      ctx.slots.register('ui.statusbar', {
+        id: 'convention-counts',
+        align: 'left',
+        order: 20,
+        component: StatusCounts,
+      });
+
       ctx.slots.register('ui.panel', {
         id: 'convention-report',
         title: '约定校验',

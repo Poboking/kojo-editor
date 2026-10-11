@@ -169,8 +169,8 @@ function bootPanel(k: ReturnType<typeof makeKernel>) {
       return v as never;
     },
     slots: {
-      register: (_slot: string, contribution: UIPanelContribution) => {
-        k.panels.push(contribution);
+      register: (slot: string, contribution: UIPanelContribution) => {
+        if (slot === 'ui.panel') k.panels.push(contribution);
       },
     },
     bus: k.bus,

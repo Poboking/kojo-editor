@@ -356,10 +356,49 @@ export function createUiSugarLiftPlugin(): Plugin {
         title: '升糖建议',
         icon: '⟰',
         order: 72,
-        // UI 重设计批 P1：💡 CodeAction 迁移期的 aux 兜底面板（定稿 §四，稳定后移除）
+        // UI 重设计批 P3b：💡 CodeAction 已上线，本面板作为兜底/逐条精挑入口保留
+        // （定稿 §四：aux 容器 + defaultActive:false，不抢首屏）
         location: 'aux',
         defaultActive: false,
         component: LiftPanel,
+      });
+
+      /* --------------------------- 💡 CodeAction --------------------------- */
+
+      // 💡 一键升糖（`ui.editor.codeAction` 槽，P3b）：光标停在 `.kojo` 文件时给出
+      // 「全部应用」动作。provideActions 是纯函数（Monaco 会在光标/内容变化时反复调用，
+      // 故按文本内容做一层 memo）；run 时**重读盘 + 重扫**再应用——供给与执行之间用户
+      // 可能继续编辑，执行必须以最新盘态为准（与面板"应用前重扫"同一纪律）。
+      let liftMemo: { path: string; text: string; count: number } | null = null;
+      ctx.slots.register('ui.editor.codeAction', {
+        id: 'sugar-lift.apply-all',
+        provideActions: ({ path, text }) => {
+          if (!/\.kojo$/i.test(path)) return [];
+          let count: number;
+          if (liftMemo && liftMemo.path === path && liftMemo.text === text) {
+            count = liftMemo.count;
+          } else {
+            try {
+              count = lift.liftSuggest({ source: text, filePath: path }).candidates.length;
+            } catch {
+              return []; // 扫描失败 = 无动作（错误由装饰器/面板路径上报，💡 不重复吼）
+            }
+            liftMemo = { path, text, count };
+          }
+          if (count === 0) return [];
+          return [
+            {
+              title: `升糖：转换为语法糖（${count} 处候选，全部应用）`,
+              kind: 'refactor' as const,
+              run: async () => {
+                const tf = await io.readText(path);
+                const fresh = lift.liftSuggest({ source: tf.text, filePath: path });
+                if (fresh.candidates.length === 0) return;
+                await applier.applyToFile(path, { source: tf.text, candidates: fresh.candidates });
+              },
+            },
+          ];
+        },
       });
     },
   };
