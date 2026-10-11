@@ -16,6 +16,7 @@ import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
+import { decideExternalChange } from './external-change';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -149,6 +150,8 @@ export function EditorPane({
   const writableRef = useRef<boolean>(writable);
   const onReauthRef = useRef<() => void>(onReauth);
   const onDirtyChangeRef = useRef(onDirtyChange);
+  /** 编辑器状态上抛 ref（重载时读最新，避免把不稳定 prop 拖进回调依赖） */
+  const onStatusInfoRef = useRef(onStatusInfo);
   const notify = useNotify();
   /** 装饰重算定时器（编辑停顿去抖） */
   const markerTimerRef = useRef<number | null>(null);
@@ -158,6 +161,8 @@ export function EditorPane({
   const pendingActionsRef = useRef(new Map<string, EditorCodeAction>());
   /** CodeAction id 序号（**单调递增不复用**：Monaco 可能持有上一轮列表，复用 id 会解析到别的动作） */
   const actionSeqRef = useRef(0);
+  /** 正在以磁盘内容重载 model（抑制由此触发的脏上报：重载不是用户编辑） */
+  const reloadingRef = useRef(false);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -224,7 +229,8 @@ export function EditorPane({
     writableRef.current = writable;
     onReauthRef.current = onReauth;
     onDirtyChangeRef.current = onDirtyChange;
-  }, [writable, onReauth, onDirtyChange]);
+    onStatusInfoRef.current = onStatusInfo;
+  }, [writable, onReauth, onDirtyChange, onStatusInfo]);
 
   /** 编辑停顿后重算装饰（去抖；换文件时立即算，见文件加载 effect） */
   const scheduleMarkers = useCallback(() => {
@@ -367,6 +373,84 @@ export function EditorPane({
     }
     return ok;
   }, [computeDirty, savePath]);
+
+  /**
+   * 以磁盘最新内容重载某个打开中的 model（2026-10-12 审阅补丁，修 B1）。
+   *
+   * 触发源：内核事件 `file.changed`（谁改盘谁发）——当前主要来自 💡 升糖
+   * （`sugar.liftApply`）。若宿主不重载，用户随后 `Ctrl+S` 会用**旧文本覆盖**
+   * 磁盘上的新内容（真实数据丢失）。
+   *
+   * 决策纯函数 `decideExternalChange`（noop / reload / conflict）：
+   * - `noop`（磁盘 == model，多为自身保存回声）→ 不动（不重置撤销栈/光标）；
+   * - `reload`（磁盘变了、model 干净）→ 静默替换并立为新基线，保留视图状态；
+   * - `conflict`（磁盘变了、model 脏）→ **绝不静默覆盖**：弹常驻通知说明
+   *   「保存将覆盖磁盘内容」，用户可点「重新加载（放弃我的修改）」。
+   */
+  const reloadFromDisk = useCallback(
+    async (path: string): Promise<void> => {
+      const entry = entriesRef.current.get(path);
+      if (!entry) return; // 该文件未打开 → 与编辑器无关
+      let text: string;
+      try {
+        ({ text } = await kernel.io.readText(path));
+      } catch (e: unknown) {
+        notify({
+          kind: 'error',
+          message: `重新加载「${path}」失败：${e instanceof Error ? e.message : String(e)}`,
+        });
+        return;
+      }
+      // 读盘期间 model 可能已被关闭/替换（标签关闭竞态）→ 放弃
+      if (entriesRef.current.get(path) !== entry) return;
+      const decision = decideExternalChange(entry.model.getValue(), text, computeDirty(path));
+      if (decision === 'noop') return;
+      const applyReload = (): void => {
+        const ed = editorRef.current;
+        const isActive = filePathRef.current === path;
+        const vs = isActive && ed ? ed.saveViewState() : null;
+        reloadingRef.current = true;
+        try {
+          entry.model.setValue(text);
+        } finally {
+          reloadingRef.current = false;
+        }
+        const version = entry.model.getAlternativeVersionId();
+        baseVersionRef.current.set(path, version);
+        onDirtyChangeRef.current?.(path, false);
+        if (isActive && ed && vs) ed.restoreViewState(vs);
+        if (refreshMarkersRef.current) refreshMarkersRef.current(entry.model, path);
+        if (isActive) {
+          setDirty(false);
+          setStatus('已从磁盘重新加载（文件在外部被修改）');
+          onStatusInfoRef.current?.({
+            encoding: entry.encoding,
+            eol: entry.eol,
+            lines: entry.model.getLineCount(),
+          });
+        }
+      };
+      if (decision === 'reload') {
+        applyReload();
+        return;
+      }
+      notify({
+        kind: 'error',
+        message: `「${path}」已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容。`,
+        action: { label: '重新加载（放弃我的修改）', run: applyReload },
+      });
+    },
+    [kernel, notify, computeDirty],
+  );
+
+  // 外部写盘 → 重载对应 model（B1 修复）：宿主只**消费** `file.changed`，不认识"升糖"
+  useEffect(() => {
+    const un = kernel.bus.on('file.changed', (ev) => {
+      if (ev.kind !== 'change') return; // add/unlink 不影响已打开 model 的内容
+      void reloadFromDisk(ev.path);
+    });
+    return un;
+  }, [kernel, reloadFromDisk]);
 
   /**
    * 保存告警的处置（确认框回调）：
@@ -533,6 +617,7 @@ export function EditorPane({
           const model = monaco.editor.createModel(tf.text, languageFor(filePath), monaco.Uri.file(filePath));
           // 逐 model 脏监听（BUG-4：版本号 O(1) 比较；后台标签的编辑同样上报）
           const listener = model.onDidChangeContent(() => {
+            if (reloadingRef.current) return; // 磁盘重载非用户编辑：不报脏、不排装饰
             const d = computeDirty(filePath);
             onDirtyChangeRef.current?.(filePath, d);
             if (filePathRef.current === filePath) {

@@ -1947,3 +1947,65 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 
 - B1/B2/B3 三项审阅发现**不在本批修复**（B1 优先级最高，列为后续专项）。
 - 本轮为只读审阅 + 精准修复，**不重构** P1–P3 已交付实现。
+
+### 5.46 B1 修复 · 外部写盘后重载编辑器 model（2026-10-12 批：修 §5.45 审阅发现 B1）
+
+> **触发**：§5.45 审阅发现 **B1**（高优先级）——codeAction（💡 升糖）应用后编辑器
+> model 不自动重载，脏 model 再 `Ctrl+S` 会用旧文本**覆盖**磁盘上的升糖结果（数据丢失）。
+> 用户拍板「现在就修」。
+
+#### 根因与修法
+
+- **根因**：`💡 升糖` 经 `sugar.liftApply` **写盘**并在成功路径发内核事件 `file.changed`
+  （谁改盘谁发），但**宿主从未订阅该事件**——编辑器 model 停留在旧内容，随后保存即覆盖。
+- **修法（generic，宿主零业务知识）**：宿主订阅内核 `file.changed`，据此把**打开中的对应
+  model** 与磁盘重新同步。**不改** codeAction 契约、**不**让宿主认得"升糖"——纯粹消费既有
+  通用事件（⚠️ 刻意**不**在 `action.run()` 之后无条件重读盘：那样在「model 脏但 codeAction
+  未改盘」时会因 `磁盘 ≠ model` 误报冲突，见下）。
+
+#### 关键设计决策
+
+1. **三态决策 `decideExternalChange(modelText, diskText, dirty)`**（`packages/app/src/ui/external-change.ts`，纯函数可单测）：
+   - `noop`（磁盘 == model，多为**自身保存回声**）→ 不动，避免无谓重置撤销栈/光标；
+   - `reload`（磁盘变了、model **干净**）→ 静默替换并立为新基线（保留视图状态）；
+   - `conflict`（磁盘变了、model **脏**）→ **绝不静默覆盖**：弹常驻通知「保存会覆盖磁盘
+     内容」+ 动作「重新加载（放弃我的修改）」，把两条都有损的路径交给用户选。
+2. **触发必须来自"确实发生了写盘"的事件，不能靠无条件重读**：若在 `action.run()` 后无条件
+   重读盘比对，则「model 脏 + codeAction 未改盘」场景下 `磁盘 ≠ model` 恒成立 → 会**误报冲突**。
+   `file.changed` 天然只在写盘成功时触发，语义精确。
+3. **重载不是用户编辑**：以 `reloadingRef` 抑制 `onDidChangeContent` 里的脏上报（避免
+   「重载 → 短暂标脏 → 再置干净」的抖动）；读盘期间若 model 已被关闭/替换（标签关闭竞态）
+   则放弃（比对同一 `entry` 身份）。
+4. **ViewState 保留**：活动标签重载前 `saveViewState`、`setValue` 后 `restoreViewState`，
+   光标/滚动不跳（内容已变，尽力保留视口）。
+
+#### 文件变更
+
+| 文件 | 变更 |
+|---|---|
+| `packages/app/src/ui/external-change.ts` | **新增**：`ExternalChangeDecision` + `decideExternalChange`（纯函数） |
+| `packages/app/src/ui/EditorPane.tsx` | 新增 `reloadFromDisk`（读盘 → 决策 → 重载/通知）+ 订阅 `kernel.bus.on('file.changed')`；`reloadingRef` 抑制重载期脏上报；`onStatusInfoRef`；model 监听加抑制守卫 |
+| `packages/app/tests/external-change.test.ts` | **新增（5 项）**：noop / reload / conflict 三分支 + 状态与内容无关 + 空文本边界 |
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **1012 passed / 6 skipped（1018）**（1007 → 1012，**+5**；零回归） |
+| `pnpm typecheck`（root / `@kojo/app`） | 双跑 exit 0 |
+| `node tools/audit-decoupling.mjs` | A/B/C/D 四项全绿（16 插件） |
+
+#### 手工清单（B1 实机勾验）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| 1 | model **干净**时执行 💡「升糖：全部应用」 | 编辑器内容**立即变为**升糖结果（自动重载），状态栏提示「已从磁盘重新加载」 |
+| 2 | 紧接步骤 1 按 `Ctrl+S` | 保存的是**升糖后**的内容（不再覆盖回旧文本） |
+| 3 | model **脏**时执行 💡 升糖 | 弹常驻通知「已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容」+ 按钮「重新加载（放弃我的修改）」；不静默改动编辑器 |
+| 4 | 步骤 3 点「重新加载」 | 编辑器载入磁盘（升糖后）内容，脏标记清除 |
+| 5 | 步骤 3 不点、直接 `Ctrl+S` | 保存用户当前（未保存）内容——即覆盖磁盘（**已明确告知**，非静默） |
+
+#### 边界未做
+
+- 重载采用 `model.setValue`，**撤销栈会重置**（内容已来自磁盘，属预期）；如需保留撤销历史另议。
+- `file.changed` 的 `add`/`unlink` 未在编辑器侧重载（`unlink` 的「文件已删除」提示留后续）。
