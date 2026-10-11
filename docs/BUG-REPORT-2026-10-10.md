@@ -4,6 +4,7 @@
 - 生成日期：2026-10-10
 - **2026-10-11 处置结果**：BUG-1（方案 A 级联）/ BUG-2（引擎 funcMatch 精确集合，scanner + extract 同源修）/ BUG-3（锚点语义显式化 + 边界单测，行为不变）/ BUG-4（model 版本号脏判定）已在第十八批修复（见 IMPLEMENTATION-LOG §5.25）；**BUG-5 判定延后**至 v1.1 注入器批次（payload 契约需与注入器写链路一并设计，避免契约先行实现滞后）。附带修（retry docstring 陈旧）已一并完成。
 - 状态口径：本文所有条目均已在**当前工作区代码**上逐条复核，确认**仍未修复**（处置结果行除外）
+- 外部审阅版本核对：见 §0.3（第三轮审阅基于落后 32 提交的旧版本，净新增可执行项为零）
 - 目标读者：接手修复的 Agent。请先读 §0，避免重复处理已关闭项
 
 ---
@@ -34,6 +35,21 @@
 - 类型检查：**exit 0**（`npx tsc -p tsconfig.json --noEmit`）
 - 解耦审计：**11 个插件全过**（`pnpm audit:decoupling`）
 - 工作区可能含其他 Agent 进行中的 sav 写侧改动；**不要动 sav-parser 相关代码**，只做本文列出的改动
+
+### 0.3 第三轮审阅：版本落后核对记录（2026-10-11）
+
+收到一份新的审阅意见，其自称 head 为 `61722ec`（第十三批）。**实测该版本已落后 32 个提交**（当时 HEAD 为 `5b86b7f`）。其三条"高优先级"判定如下，均已对照当前代码坐实，**未产生任何净新增可执行项**：
+
+| 审阅条目 | 判定 | 依据 |
+|---|---|---|
+| scopedBus 违规时静默丢弃 | ❌ 已修复 | 当前 `bus.ts` L96–L103：`onViolation?.(message); throw new Error(message)`；修复提交 `49997f4`。审阅"建议补丁"与现有实现语义完全相同，应用即空操作 |
+| `FileStorageBackend.list` 空目录抛错 | ⚠️ 前提不成立，**不采纳** | 见上轮结论：契约 `platform.ts` L46 保证"不存在→空数组"，Tauri（`Err(_)=>Ok(vec![])`）与 NodeBridge（try/catch→[]）均遵守，且有真文件系统回归测试实证；加 `exists()` 只会多一次 IPC 并把契约语义下移 |
+| `ScopedStorageImpl.get` 损坏 JSON 不容错 | ❌ 已修复 | 当前 `storage.ts` L87–L92：`try{JSON.parse}catch{warn; return undefined}`；修复批次 12 `9adae53`（即 L1） |
+
+另：其提到的 `detectCycles` 中 `j >= 0` 冗余条件（`runtime.ts` L109）属实但纯可读性，审阅人自评"非功能性 bug"，未纳入修复范围；sav-parser / `slots.register` 观察项分别属旧版本语境与理论边界，均无需处理。
+
+> 复核方法：`git rev-list --count 61722ec..HEAD`（非零即落后）；并核对 `git log --oneline -1 49997f4`、`git log --oneline -1 9adae53`。
+> **交接提醒**：外部审阅意见引用旧 SHA 时，先做上述版本核对再评估，避免对已修代码重复提改。
 
 ---
 

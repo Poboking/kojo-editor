@@ -139,6 +139,8 @@
 | `docs/RESEARCH.md` | 技术调研 |
 | `docs/adr/0001-0004` | 工具链 / game.adapter 服务键语义 / 壳架构 / 快照来源服务键命名（snapshot.source） |
 | `docs/HANDOFF.md`（本文件） | 交接状态 + 下一批动手清单 |
+| `docs/UI-REDESIGN-2026-10-11.md` | **UI/UX 重设计定稿 v1.0**（用户拍板 Q1–Q11；五区布局/additive 槽位/迁移表/P0–P4；= beta.1 判据⑥） |
+| `docs/UI-REDESIGN-HANDOFF-2026-10-11.md` | UI 重设计实施交接（任务卡/验收/纪律）+ `UI-REDESIGN-NEW-SESSION-PROMPT.md`（新会话 prompt） |
 | `D:\DSH\reverse-engineering\eratw4.980-口上机制深挖.md` | **口上领域知识权威**（27 CASE 路由、MESSAGECHECK 位协议、家族命名、四件套） |
 | `D:\DSH\reverse-engineering\eratw4.980-存档实战解析.md` | sav 协议（v1.0 前必读） |
 
@@ -633,7 +635,7 @@ node tools/smoke-tauri-ipc.mjs
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**958 项** / ✅ / 16 插件 / 审计 A/B/C/D 四项；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.37 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）、**S4-UI 糖预览面板 ✅**（§5.34）、**S5 升糖建议器数据层 ✅**（§5.31）、**S5-UI 升糖面板 ✅**（§5.32b）、**S6 编辑体验 ✅**（§5.35）、**S7 保存路径推导 + 前置检查数据层 ✅**（§5.36）、**S7-UI `.kojo` 保存接线 ✅**（§5.37；`ui.editor.saveHandler` 通用槽 + 源保存/产物编译 + 全角空格告警三选——**发版判据 ① 代码侧已闭环，余真实终端手工勾验**）；**下一批候选**：①真实终端 `pnpm tauri dev` 手工勾验判据①闭环（§5.37 手工清单 a–i）；②BUG-5 真实监视器接线（判据 ②）；③v0.3 UI 余项：编辑器内三向映射装饰（悬浮/内联）、消息块逐条气泡（含逐字符 FORM 展开渲染串）、虚拟滚动、新建向导）
+4. **当前最高优先线 = UI/UX 重设计（2026-10-11 定稿，用户拍板插入 beta.1 判据⑥）**：需求定稿 `docs/UI-REDESIGN-2026-10-11.md` + 实施交接 `docs/UI-REDESIGN-HANDOFF-2026-10-11.md`（含新会话 prompt）；顺序 P0 写权限闭环 → P1 壳层骨架 → P2 命令工具栏 → P3 编辑器深化（多标签+💡）→ P4 停靠+全禅。**原下一批候选**：①真实终端 `pnpm tauri dev` 手工勾验判据①闭环（§5.37 手工清单 a–i）；②BUG-5 真实监视器接线（判据 ②）；③v0.3 UI 余项：编辑器内三向映射装饰（悬浮/内联）、消息块逐条气泡（含逐字符 FORM 展开渲染串）、虚拟滚动、新建向导（**新建向导已并入 UI 重设计 P2**）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`；**新批次编号用「日期 + 简称」，不再用 vX.Y 第N批（§十一 版本纪律）**；发版时走 §十一 的 tag 流程（首个发行版 = `v0.4.0-beta.1`，判据五项）
 
 ## 十一、版本纪律（2026-10-11 定，用户拍板）
@@ -647,6 +649,7 @@ node tools/smoke-tauri-ipc.mjs
    - ② BUG-5 `file.changed` 真实监视器接线 + 去抖；
    - ③ 桌面壳真实终端深度冒烟通过（§八 os error 231 欠账，需本机正常终端）；
    - ④ tauri 打包产物（NSIS/安装器）可在干净目录安装启动；
-   - ⑤ README/用户文档最低集（安装、打开工程、`.kojo` 编辑编译保存、注入器安全提示）。
+   - ⑤ README/用户文档最低集（安装、打开工程、`.kojo` 编辑编译保存、注入器安全提示）；
+   - ⑥ **UI 新壳**（2026-10-11 用户拍板插入）：`docs/UI-REDESIGN-2026-10-11.md` 定稿的 P0–P4 全部完成 + 真实终端勾验——写权限闭环/五区布局/命令体系/多标签/💡升糖/拖拽停靠/全禅模式。
    判据未齐前 root version 保持 `0.1.0` 不动。
 4. **SemVer 规则**（自 v0.4.0-beta.1 起）：major = 破坏存档/工程兼容；minor = 新能力（新语法糖块、新面板等）；patch = 修复。beta 阶段用 `v0.4.0-beta.N` 递增 N；转正 = 去掉 `-beta.N` 后缀发布 `v0.4.0`。
