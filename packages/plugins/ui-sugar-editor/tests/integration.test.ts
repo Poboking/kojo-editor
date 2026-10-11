@@ -155,16 +155,26 @@ function bootSugar(k: ReturnType<typeof makeKernel>): SugarTranspileService {
 }
 
 /** 激活 ui-sugar-editor（只给服务槽 + 内核 io + 总线） */
-function bootEditor(k: ReturnType<typeof makeKernel>) {
-  const ctx = {
-    pluginId: 'ui-sugar-editor',
-    log,
-    inject: (key: string): never => {
-      if (key === KernelServices.IO) return k.io as never;
-      const v = k.provided.get(key);
-      if (v === undefined) throw new Error(`未注册的服务：${key}`);
-      return v as never;
-    },
+  function bootEditor(k: ReturnType<typeof makeKernel>) {
+    const ctx = {
+      pluginId: 'ui-sugar-editor',
+      log,
+      inject: (key: string): never => {
+        if (key === KernelServices.IO) return k.io as never;
+        // P2 新增硬依赖：新建向导取角色表（project）与分野模板表（slots）
+        if (key === KernelServices.Project)
+          return { current: () => ({ adapterId: 'eratw' }) } as never;
+        if (key === KernelServices.Slots)
+          return {
+            query: (slot: string) =>
+              slot === 'game.adapter'
+                ? [{ adapter: { gameId: 'eratw', kojoFaceTemplates: createEratwFaceTable() } }]
+                : [],
+          } as never;
+        const v = k.provided.get(key);
+        if (v === undefined) throw new Error(`未注册的服务：${key}`);
+        return v as never;
+      },
     slots: {
       register: (slot: string, contribution: unknown) => {
         if (slot === 'ui.panel') k.panels.push(contribution as UIPanelContribution);
@@ -183,10 +193,10 @@ function bootEditor(k: ReturnType<typeof makeKernel>) {
 /* ============================== 一、接线 ============================== */
 
 describe('S6 / 插件接线（跨插件只走服务槽）', () => {
-  it('插件声明：requires 两个槽，无 provides（纯消费者）', () => {
+  it('插件声明：requires 四个服务键，无 provides（纯消费者）', () => {
     const p: Plugin = createUiSugarEditorPlugin();
     expect(p.id).toBe('ui-sugar-editor');
-    expect(p.requires).toEqual(['sugar.transpile', 'kernel.io']);
+    expect(p.requires).toEqual(['sugar.transpile', 'kernel.io', 'kernel.project', 'kernel.slots']);
     expect(p.provides ?? []).toEqual([]);
   });
 

@@ -23,6 +23,14 @@ import {
   type OrganizedPanels,
   type ViewDef,
 } from './layout';
+import {
+  buildCommandRegistry,
+  chordFromEvent,
+  chordEquals,
+  parseKeybinding,
+  type ShellCommandSpec,
+} from './commands';
+import { CommandPalette, QuickOpen } from './Palette';
 import { PanelBody, StatusbarItem } from './PanelHost';
 
 /**
@@ -57,12 +65,16 @@ interface Props {
   dirty: boolean;
   /** 索引状态（状态栏左区） */
   stats: { fileCount: number; fnCount: number; indexing: boolean; indexError: string | null };
-  /** 命令执行上下文（ui.toolbar 消费） */
+  /** 命令执行上下文（ui.toolbar / 命令面板消费） */
   commandCtx: EditorCommandContext;
   /** 关闭项目入口（工具栏右区；欢迎页回退） */
   onCloseProject?: () => void;
   /** 重载项目入口（工具栏左区，项目标签旁） */
   onReloadProject?: () => void;
+  /** 快速打开候选文件（P2；壳层泛型路径列表，零业务知识） */
+  quickOpenFiles?: readonly string[];
+  /** 快速打开选中回调 */
+  onOpenFile?: (path: string) => void;
 }
 
 type ContainerKey = 'sidebar' | 'aux' | 'bottom';
@@ -131,6 +143,8 @@ export function ShellLayout(props: Props): ReactElement {
     commandCtx,
     onCloseProject,
     onReloadProject,
+    quickOpenFiles,
+    onOpenFile,
   } = props;
 
   const allPanels = useMemo(
@@ -139,7 +153,8 @@ export function ShellLayout(props: Props): ReactElement {
   );
   const toolbarItems = useMemo(() => kernel.slots.query('ui.toolbar'), [kernel]);
   const statusbarItems = useMemo(() => kernel.slots.query('ui.statusbar'), [kernel]);
-  const commands = useMemo(() => kernel.slots.query('editor.command'), [kernel]);
+  const slotCommands = useMemo(() => kernel.slots.query('editor.command'), [kernel]);
+  const overlayItems = useMemo(() => kernel.slots.query('ui.overlay'), [kernel]);
 
   const [layout, dispatch] = useReducer(reducer, undefined as unknown as LayoutState, () =>
     reconcileLayout(loadLayout(), organizePanels(allPanels, {})),
@@ -152,16 +167,63 @@ export function ShellLayout(props: Props): ReactElement {
   // 持久化（壳层私事，localStorage；变更即存，体量小无需去抖）
   useEffect(() => saveLayout(layout), [layout]);
 
-  // zen ref 供全局 Esc 读取最新值
+  // zen / overlay / picker 的 ref 供全局键盘读取最新值（Esc 优先级链）
   const zenRef = useRef(layout.zen);
   zenRef.current = layout.zen;
 
-  // 全局快捷键（壳层布局命令，定稿 §十一；命令面板化在 P2 并入统一注册表）
+  /* -------------------- P2：命令注册表 + picker/overlay 状态 -------------------- */
+
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [activeOverlay, setActiveOverlay] = useState<{ id: string; payload?: unknown } | null>(null);
+  const overlayRef = useRef(activeOverlay);
+  overlayRef.current = activeOverlay;
+  const pickerRef = useRef(false);
+  pickerRef.current = paletteOpen || quickOpen;
+
+  // overlay 打开/关闭意图（内核事件落地；Esc 关闭在全局键盘处理器）
+  useEffect(() => {
+    const unOpen = kernel.bus.on('ui.overlay.open', (ev) => {
+      setActiveOverlay({ id: ev.id, ...(ev.payload !== undefined ? { payload: ev.payload } : {}) });
+    });
+    const unClose = kernel.bus.on('ui.overlay.close', (ev) => {
+      setActiveOverlay((cur) => (cur && cur.id === ev.id ? null : cur));
+    });
+    return () => {
+      unOpen();
+      unClose();
+    };
+  }, [kernel]);
+
+  // 壳层布局命令（定稿 §五-3：合法容器语义）与槽命令合并为统一注册表
+  const shellCommands = useMemo<readonly ShellCommandSpec[]>(
+    () => [
+      { id: 'layout.toggleSidebar', title: '切换主侧栏', keybinding: 'ctrl+b', run: () => dispatch({ type: 'toggle', container: 'sidebar' }) },
+      { id: 'layout.toggleBottom', title: '切换底部区', keybinding: 'ctrl+j', run: () => dispatch({ type: 'toggle', container: 'bottom' }) },
+      { id: 'layout.toggleAux', title: '切换副侧栏', keybinding: 'ctrl+alt+b', run: () => dispatch({ type: 'toggle', container: 'aux' }) },
+      { id: 'layout.toggleZen', title: '切换写作模式', keybinding: 'ctrl+k z', run: () => dispatch({ type: 'toggleZen' }) },
+      { id: 'layout.reset', title: '重置布局', run: () => doResetRef.current() },
+      { id: 'workbench.commandPalette', title: '命令面板', keybinding: 'ctrl+shift+p', run: () => setPaletteOpen(true) },
+      { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: 'ctrl+p', run: () => setQuickOpen(true) },
+    ],
+    [],
+  );
+  const registry = useMemo(
+    () => buildCommandRegistry(shellCommands, slotCommands),
+    [shellCommands, slotCommands],
+  );
+  // 最新注册表 / 上下文 ref（全局键盘处理器闭包外读取）
+  const registryRef = useRef(registry);
+  registryRef.current = registry;
+  const commandCtxRef = useRef(commandCtx);
+  commandCtxRef.current = commandCtx;
+
+  // 全局快捷键（统一注册表驱动；Ctrl+K Z 和弦特例；Esc 优先级 picker > overlay > zen）
   useEffect(() => {
     let chordAt = 0;
     const onKey = (e: KeyboardEvent): void => {
       const k = e.key.toLowerCase();
-      // Ctrl+K Z 和弦：先记 Ctrl+K，1.5s 内按 Z 触发
+      // Ctrl+K Z 和弦：先记 Ctrl+K，1.5s 内按 Z 触发（两键序列，注册表单键表达不了）
       if (chordAt > 0) {
         const fresh = Date.now() - chordAt < 1500;
         chordAt = 0;
@@ -175,20 +237,32 @@ export function ShellLayout(props: Props): ReactElement {
         chordAt = Date.now();
         return;
       }
-      if (e.key === 'Escape' && zenRef.current) {
-        dispatch({ type: 'exitZen' });
+      if (e.key === 'Escape') {
+        // picker 内部已 stopPropagation；这里只需 overlay > zen
+        if (pickerRef.current) return;
+        if (overlayRef.current) {
+          setActiveOverlay(null);
+          return;
+        }
+        if (zenRef.current) dispatch({ type: 'exitZen' });
         return;
       }
-      if (!e.ctrlKey || e.metaKey) return;
-      if (!e.altKey && !e.shiftKey && k === 'b') {
+      if (e.key === 'F1') {
         e.preventDefault();
-        dispatch({ type: 'toggle', container: 'sidebar' });
-      } else if (!e.altKey && !e.shiftKey && k === 'j') {
-        e.preventDefault();
-        dispatch({ type: 'toggle', container: 'bottom' });
-      } else if (e.altKey && !e.shiftKey && k === 'b') {
-        e.preventDefault();
-        dispatch({ type: 'toggle', container: 'aux' });
+        setPaletteOpen(true);
+        return;
+      }
+      // 注册表 keybinding 匹配
+      const chord = chordFromEvent(e);
+      if (!chord) return;
+      for (const cmd of registryRef.current) {
+        if (!cmd.keybinding || cmd.keybinding.includes(' ')) continue; // 和弦走上方特例
+        const parsed = parseKeybinding(cmd.keybinding);
+        if (parsed && chordEquals(parsed, chord)) {
+          e.preventDefault();
+          void cmd.run(commandCtxRef.current);
+          return;
+        }
       }
     };
     window.addEventListener('keydown', onKey);
@@ -219,10 +293,12 @@ export function ShellLayout(props: Props): ReactElement {
     resetLayout();
     dispatch({ type: 'reset', state: defaultLayout(organizePanels(allPanels, {})) });
   }, [allPanels]);
+  const doResetRef = useRef(doReset);
+  doResetRef.current = doReset;
 
   const runToolbarCommand = useCallback(
     (commandId: string) => {
-      const cmd = commands.find((c) => c.id === commandId);
+      const cmd = registry.find((c) => c.id === commandId);
       if (!cmd) return;
       try {
         if (cmd.when && !cmd.when(commandCtx)) return;
@@ -231,7 +307,7 @@ export function ShellLayout(props: Props): ReactElement {
         console.warn(`[ShellLayout] 工具栏命令 '${commandId}' 执行失败：${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    [commands, commandCtx],
+    [registry, commandCtx],
   );
 
   /* ------------------------------ 渲染片段 ------------------------------ */
@@ -344,7 +420,7 @@ export function ShellLayout(props: Props): ReactElement {
           </button>
         ) : null}
         {toolbarItems.map((t) => {
-          const cmd = commands.find((c) => c.id === t.command);
+          const cmd = registry.find((c) => c.id === t.command);
           let enabled = false;
           if (cmd) {
             enabled = true;
@@ -466,6 +542,29 @@ export function ShellLayout(props: Props): ReactElement {
     </footer>
   );
 
+  /* ------------------------------ 浮层（picker + overlay） ------------------------------ */
+
+  const overlayContribution = activeOverlay
+    ? (overlayItems.find((o) => o.id === activeOverlay.id) ?? null)
+    : null;
+  const overlays = (
+    <>
+      {paletteOpen ? (
+        <CommandPalette commands={registry} commandCtx={commandCtx} onClose={() => setPaletteOpen(false)} />
+      ) : null}
+      {quickOpen && quickOpenFiles && onOpenFile ? (
+        <QuickOpen files={quickOpenFiles} onOpenFile={onOpenFile} onClose={() => setQuickOpen(false)} />
+      ) : null}
+      {overlayContribution ? (
+        <div className="overlay-backdrop" onMouseDown={() => setActiveOverlay(null)}>
+          <div className="overlay-host" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+            <PanelBody contribution={overlayContribution} />
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+
   /* ------------------------------ 全禅形态 ------------------------------ */
 
   if (layout.zen) {
@@ -475,6 +574,7 @@ export function ShellLayout(props: Props): ReactElement {
           <div className="zen-editor-inner">{children}</div>
         </div>
         {statusbar}
+        {overlays}
       </div>
     );
   }
@@ -534,6 +634,7 @@ export function ShellLayout(props: Props): ReactElement {
         </>
       ) : null}
       {statusbar}
+      {overlays}
     </div>
   );
 }

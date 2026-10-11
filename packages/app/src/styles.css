@@ -6,6 +6,7 @@
   --fg: #d7dce2;
   --fg-dim: #8b949e;
   --accent: #4c8bf5;
+  --accent-dim: rgba(76, 139, 245, 0.22);
   --green: #4fc08d;
   --red: #e06c75;
   --amber: #d19a66;
@@ -2032,6 +2033,175 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 60vw;
+}
+
+/* --------------------- P2：picker（命令面板 / 快速打开） --------------------- */
+
+.picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+.picker {
+  width: min(640px, 80vw);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.picker-input {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  padding: 10px 14px;
+  font-size: var(--fs-2);
+  outline: none;
+}
+.picker-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+.picker-empty {
+  padding: var(--space-3);
+  text-align: center;
+}
+.picker-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  padding: 5px 14px;
+  font-size: var(--fs-2);
+  cursor: pointer;
+  border-radius: 0;
+}
+.picker-item.active {
+  background: var(--accent-dim);
+}
+.picker-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.picker-primary {
+  flex-shrink: 0;
+}
+.picker-secondary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-1);
+}
+.picker-hint {
+  flex-shrink: 0;
+  font-size: var(--fs-1);
+}
+
+/* --------------------- P2：overlay 宿主（向导 / 设置等模态） --------------------- */
+
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.overlay-host {
+  width: min(560px, 86vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  padding: var(--space-4);
+}
+
+/* --------------------- P2：新建向导（插件组件，壳层只提供容器语义类名） --------------------- */
+
+.wizard h3 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-3);
+}
+.wizard-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+.wizard-label {
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+.wizard-field select,
+.wizard-field input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  color: var(--fg);
+  padding: 6px 10px;
+  font-size: var(--fs-2);
+  outline: none;
+}
+.wizard-field select:focus-visible,
+.wizard-field input:focus-visible {
+  border-color: var(--accent);
+}
+.wizard-preview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  word-break: break-all;
+}
+.wizard-preview code {
+  color: var(--accent);
+  margin-left: var(--space-2);
+}
+.wizard-warn {
+  color: var(--amber);
+  font-size: var(--fs-1);
+  margin-bottom: var(--space-2);
+}
+.wizard-error {
+  color: var(--red);
+  font-size: var(--fs-1);
+  margin-bottom: var(--space-2);
+  word-break: break-all;
+}
+.wizard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.wizard-actions .primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+.wizard-actions .primary:disabled {
+  opacity: 0.45;
 }
 .sb-idx.err {
   color: var(--red);

@@ -24,7 +24,14 @@
 
 import { createElement, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FileIO, Plugin, SugarDiagnostic, SugarTranspileService } from '@kojo/plugin-api';
+import type {
+  FileIO,
+  Plugin,
+  ProjectService,
+  SlotRegistry,
+  SugarDiagnostic,
+  SugarTranspileService,
+} from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
   buildVerdictRows,
@@ -36,6 +43,7 @@ import {
   type VerdictRow,
   type VerdictSummary,
 } from './panel-logic';
+import { NEW_KOJO_OVERLAY_ID, createNewKojoWizard } from './new-file-wizard';
 import { performSugarSave } from './save-handler';
 
 /** 诊断渲染上限（防 DOM 爆炸；超出显式计数） */
@@ -46,10 +54,12 @@ export function createUiSugarEditorPlugin(): Plugin {
     id: 'ui-sugar-editor',
     version: '0.3.0',
     // 硬依赖：装饰与判定的语义都是"呈现 sugar.transpile 的结果"；缺席则本插件无意义
-    requires: [WellKnownServices.SugarTranspile, KernelServices.IO],
+    requires: [WellKnownServices.SugarTranspile, KernelServices.IO, KernelServices.Project, KernelServices.Slots],
     activate(ctx) {
       const sugar = ctx.inject<SugarTranspileService>(WellKnownServices.SugarTranspile);
       const io = ctx.inject<FileIO>(KernelServices.IO);
+      const project = ctx.inject<ProjectService>(KernelServices.Project);
+      const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
 
       /* -------------------- 贡献 1：编辑器波浪线（纯函数） -------------------- */
 
@@ -229,6 +239,46 @@ export function createUiSugarEditorPlugin(): Plugin {
         location: 'bottom',
         defaultActive: false,
         component: VerdictPanel,
+      });
+
+      /* -------------- 贡献 4：新建口上文件命令（P2；定稿 §6.1） -------------- */
+
+      // 动作真源在命令；工具栏只引用 id（定稿 §三宿主编排规则）。
+      // when：有打开项目才可用（无项目时向导也无落点）。
+      ctx.slots.register('editor.command', {
+        id: 'kojo.newKojoFile',
+        title: '新建口上文件',
+        category: '文件',
+        keybinding: 'ctrl+n',
+        when: (c) => c.project !== null,
+        run: () => {
+          ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_OVERLAY_ID, source: 'ui-sugar-editor' });
+        },
+      });
+
+      ctx.slots.register('ui.toolbar', {
+        id: 'sugar-new-kojo-btn',
+        title: '新建口上文件',
+        icon: '＋',
+        order: 10,
+        command: 'kojo.newKojoFile',
+        when: (c) => c.project !== null,
+      });
+
+      /* -------------- 贡献 5：新建向导 overlay（P2） -------------- */
+
+      // 向导知识来源：角色/可写路径经 kernel.project，命名/分野经 game.adapter
+      // 槽的分野模板表（fail-closed：模板缺省则向导显式不可用，不猜命名）。
+      ctx.slots.register('ui.overlay', {
+        id: NEW_KOJO_OVERLAY_ID,
+        order: 10,
+        component: createNewKojoWizard({
+          io,
+          project,
+          slots,
+          close: () => ctx.bus.emit('ui.overlay.close', { id: NEW_KOJO_OVERLAY_ID, source: 'ui-sugar-editor' }),
+          reveal: (path) => ctx.bus.emit('editor.revealLocation', { filePath: path, source: 'ui-sugar-editor' }),
+        }),
       });
     },
   };

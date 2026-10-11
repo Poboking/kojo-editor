@@ -66,6 +66,9 @@ export function ProjectView({
     }
   }
 
+  // 快速打开候选（P2）：索引全量文件路径（壳层只消费泛型路径列表）
+  const quickOpenFiles = useMemo<string[]>(() => (index ? [...index.files.keys()].sort() : []), [index]);
+
   const builtinViews = useMemo<UIPanelContribution[]>(
     () => [
       {
@@ -95,6 +98,8 @@ export function ProjectView({
       commandCtx={{ project, ...(activeFile ? { activeFile } : {}) }}
       onCloseProject={onClose}
       onReloadProject={onReload}
+      quickOpenFiles={quickOpenFiles}
+      onOpenFile={onOpenFile}
     >
       {/* 只读横幅（P0 实机反馈修复）：重授权入口常驻可见可点 */}
       {!writable ? (

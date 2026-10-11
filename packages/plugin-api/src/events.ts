@@ -65,6 +65,12 @@ export interface KernelEventMap {
    */
   'ui.overlay.open': { id: string; payload?: unknown; source?: string };
   /**
+   * 关闭 overlay 意图（UI 重设计批 P2）：请求宿主关闭某 `ui.overlay` 贡献。
+   * 与 `ui.overlay.open` 对称——overlay 内组件（向导完成/取消）经此自行退出，
+   * 无需持有宿主引用。
+   */
+  'ui.overlay.close': { id: string; source?: string };
+  /**
    * 归档选中意图（v0.2 第十三批）：归档浏览器面板选中某档后广播。
    * 通用、游戏无关——任意插件可响应（未来的状态注入器 / 对比视图）；
    * 载荷只含归档路径与文件名（消费者按需自行深解析）。
