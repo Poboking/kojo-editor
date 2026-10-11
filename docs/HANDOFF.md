@@ -599,4 +599,19 @@ node tools/smoke-tauri-ipc.mjs
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**931 项** / ✅ / 16 插件 / 审计 A/B/C/D 四项；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.35 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
 4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）、**S4-UI 糖预览面板 ✅**（§5.34）、**S5 升糖建议器数据层 ✅**（§5.31）、**S5-UI 升糖面板 ✅**（§5.32b）、**S6 编辑体验 ✅**（§5.35；`.kojo` Monarch 高亮 + 中文关键字/保留代词/别名补全 + `ui.editor.decorator` 槽波浪线 + 糖判定面板，第 16 插件 `ui-sugar-editor`）；**下一批候选**：①**保存路径推导**（`.kojo` → `charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB`）接 `compileToFile`，随后做保存期全角空格**阻断/一键修复**；②v0.3 UI 余项：编辑器内三向映射装饰（悬浮/内联）、消息块逐条气泡（含逐字符 FORM 展开渲染串）、虚拟滚动）
-5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`
+5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`；**新批次编号用「日期 + 简称」，不再用 vX.Y 第N批（§十一 版本纪律）**；发版时走 §十一 的 tag 流程（首个发行版 = `v0.4.0-beta.1`，判据五项）
+
+## 十一、版本纪律（2026-10-11 定，用户拍板）
+
+> 背景：批次编号（`v0.2 第十三批` / `v1.1 第十六批` / `v0.3 S6`）是**开发里程碑名**，与 package.json 版本不成映射，双口径易混。本节声明分工，一次性消解。
+
+1. **版本单一真源 = root `package.json` 的 `version` + git tag**。发版动作 = 改 root version → `git tag vX.Y.Z` → push（`--tags`）。子包（plugin-api / kernel / plugins / app）版本平时不再各自漂移，发版时随 root 统一提升即可（私仓不发 npm，子包版本仅内部标识）。
+2. **历史批次编号定格为"历史里程碑名"**：文档中已写的 `v0.X 第N批` / `SN` 一律**保留不回改**（git 历史同理）；**新批次记录不再使用 `vX.Y 第N批` 编号**，改用日期 + 简称（例：「2026-10-12 保存路径推导批」）。
+3. **首个发行版 = `v0.4.0-beta.1`**（用户拍板 2026-10-11；不做 v1.0.0，等闭环稳定后再转正）。**发版判据**（全部满足才打 tag）：
+   - ① 保存路径推导接 `compileToFile` + 保存期全角空格阻断（`.kojo` 编辑→保存→真实游戏可跑的闭环成立）；
+   - ② BUG-5 `file.changed` 真实监视器接线 + 去抖；
+   - ③ 桌面壳真实终端深度冒烟通过（§八 os error 231 欠账，需本机正常终端）；
+   - ④ tauri 打包产物（NSIS/安装器）可在干净目录安装启动；
+   - ⑤ README/用户文档最低集（安装、打开工程、`.kojo` 编辑编译保存、注入器安全提示）。
+   判据未齐前 root version 保持 `0.1.0` 不动。
+4. **SemVer 规则**（自 v0.4.0-beta.1 起）：major = 破坏存档/工程兼容；minor = 新能力（新语法糖块、新面板等）；patch = 修复。beta 阶段用 `v0.4.0-beta.N` 递增 N；转正 = 去掉 `-beta.N` 后缀发布 `v0.4.0`。
