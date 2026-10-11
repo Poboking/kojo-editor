@@ -84,25 +84,36 @@ export function ProjectView({
         </aside>
 
         <main className="editor-host">
-          {activeFile ? (
-            <EditorPane
-              kernel={kernel}
-              filePath={activeFile}
-              revealLine={reveal?.line}
-              revealNonce={reveal?.nonce}
-              onDirtyChange={onDirtyChange}
-              registerSave={registerSave}
-              writable={writable}
-              onReauth={onReauth}
-            />
-          ) : (
-            <div className="empty-state">
-              <p>从左侧选择一个口上文件开始编辑</p>
-              <p className="dim">
-                项目已索引 {fileCount} 个 ERB 文件、{fnCount} 个函数定义（口上域全量）
-              </p>
+          {/* 只读横幅（P0 实机反馈修复）：重授权入口不能只靠底部窄徽章——常驻可见可点 */}
+          {!writable ? (
+            <div className="ro-banner">
+              <span>当前为只读：写权限未批准，保存不可用。修改仍可浏览与复制。</span>
+              <button className="small" onClick={onReauth}>
+                去授权
+              </button>
             </div>
-          )}
+          ) : null}
+          <div className="editor-body">
+            {activeFile ? (
+              <EditorPane
+                kernel={kernel}
+                filePath={activeFile}
+                revealLine={reveal?.line}
+                revealNonce={reveal?.nonce}
+                onDirtyChange={onDirtyChange}
+                registerSave={registerSave}
+                writable={writable}
+                onReauth={onReauth}
+              />
+            ) : (
+              <div className="empty-state">
+                <p>从左侧选择一个口上文件开始编辑</p>
+                <p className="dim">
+                  项目已索引 {fileCount} 个 ERB 文件、{fnCount} 个函数定义（口上域全量）
+                </p>
+              </div>
+            )}
+          </div>
         </main>
       </div>
 

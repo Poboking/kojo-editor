@@ -4,7 +4,7 @@ import type { ErbIndex, ErbParserService, GameProject, RecentProject } from '@ko
 import { invoke, isTauri } from '../bridge/invoke';
 import { bootstrapKernel } from '../bootstrap';
 import { ProjectView } from './ProjectView';
-import { NotificationCenter } from './NotificationCenter';
+import { useNotify } from './NotificationCenter';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
@@ -38,6 +38,8 @@ export function App(): ReactElement {
   /** 写权限状态（P0）：null = 无项目；驱动状态栏徽章 + 保存置灰 */
   const [writable, setWritable] = useState<boolean | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
+  /** 通知中心（入口层 Provider 装配，App 自身也可发通知） */
+  const notify = useNotify();
   const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
   const registerSave = useCallback((fn: (() => Promise<boolean>) | null) => {
@@ -139,14 +141,17 @@ export function App(): ReactElement {
         const idx = await parser.ensureIndex();
         setIndex(idx);
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : String(e));
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
+        // 打开失败必须显式可见：只落在 welcome 错误区容易被误读成「项目读不了」而无从下手
+        notify({ kind: 'error', message: `打开项目失败：${msg}` });
         setPhase('welcome');
       } finally {
         unMismatch();
         setIndexing(false);
       }
     },
-    [kernel],
+    [kernel, notify],
   );
 
   const chooseAndOpen = useCallback(async () => {
@@ -232,10 +237,15 @@ export function App(): ReactElement {
         await kernel.project.approveWritablePaths(p, p.writablePaths);
         setWritable(true);
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : String(e));
+        // 授权失败必须显式可见（P0 实机反馈）：否则对话框一关、徽章仍是「只读」，
+        // 用户以为点了没反应（=「无法重新选择权限」）
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
+        setWritable(false);
+        notify({ kind: 'error', message: `写权限授权失败：${msg}` });
       }
     },
-    [kernel, pendingApproval],
+    [kernel, pendingApproval, notify],
   );
 
   /** 重授权入口（定稿 Q9：状态栏徽章点击 + 通知 action 两者都留） */
@@ -272,10 +282,10 @@ export function App(): ReactElement {
     );
 
   return (
-    <NotificationCenter>
+    <>
       {body}
       {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
       {pendingNav ? <UnsavedConfirmDialog filePath={activeFile ?? ''} onDecide={decideUnsaved} /> : null}
-    </NotificationCenter>
+    </>
   );
 }

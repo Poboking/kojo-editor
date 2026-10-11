@@ -233,6 +233,26 @@ code {
   flex: 1;
   min-width: 0;
   display: flex;
+  flex-direction: column;
+}
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.ro-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: rgba(209, 154, 102, 0.14);
+  border-bottom: 1px solid var(--border);
+  color: var(--amber);
+  font-size: 12.5px;
+}
+.ro-banner span {
+  flex: 1;
+  min-width: 0;
 }
 .empty-state {
   margin: auto;

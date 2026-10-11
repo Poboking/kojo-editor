@@ -1573,3 +1573,51 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - **状态栏槽位化**：P0 徽章为壳层硬编码简化形态；P1 换五区骨架、P3 以 `ui.statusbar` 槽承载（诊断计数等入驻）。
 - **插件侧写错误的通知接入**：`ui-sugar-lift` 等插件内的写盘报错暂由面板自呈现；插件 → 通知中心的通道（是否开放、以何形态）留待 P3 💡 迁移时按真实需求定。
 - **重授权对话框文案差异化**：不一致重弹与首弹目前同文案（未区分「首次批准 / 批准失效」）；如需区分可给 dialog 加 reason 字段，留后续。
+
+### 5.39 UI 重设计 P0 实机反馈修复（2026-10-11 批：取消授权后重授权入口可见化 + 失败不再静默）
+
+> 触发：P0 实机勾验反馈——「误点『只读浏览』后无法重新选择权限」；b（琥珀只读徽章 + 保存置灰 tooltip）、f（已批准工程重开直接可写、不弹框）两项通过。
+
+#### 静态结论（先证实再修）
+
+读路径**完全没有**写权限门控，可逐条取证：
+
+- 内核 `io.readText`（`io.ts:59`）无 `isWritable` 检查；`isWritable` 只被 `writeText`/`remove`（`io.ts:153`）调用。
+- `packages/app/src` 全量 grep `writable|isWritable|setWritable`：28 处命中的全部是本次新增的保存链与徽章代码，FileTree / EditorPane 的**读取**路径零命中。
+- Rust 宿主仅 `ensure_in_write_domain`（写/删第二道闸，`lib.rs:78`），**不存在读域**。
+
+因此「取消授权 → 无法读取项目」在权限语义上不成立，只可能来自三种机制：① 遮罩遮挡（`.modal-mask` `position:fixed;inset:0`）；② `openProject` 抛错回落 welcome；③ React 树崩溃白屏。第 ② 条此前**只在 WelcomeView 显示错误**，在项目阶段不可见；第 ①/③ 条沙箱无 GUI 不可复现 → 需用户侧 console 证据定位（已列入待办）。
+
+#### 本次修复（针对可确证的两个缺陷）
+
+1. **重授权入口可见化**（直击「无法重新选择权限」）：只读时在编辑器区顶部新增常驻 `.ro-banner`——「当前为只读：写权限未批准，保存不可用」+「去授权」按钮。原入口只有底部 24px 高的窄徽章，极易被忽略；现为**第三个入口**（编辑器横幅 + 状态栏徽章 + 通知 action），与定稿 Q9 不冲突。
+2. **失败不再静默**：`decideApproval` 的 `allow=true` 分支此前先 `setPendingApproval(null)` 再 `await approveWritablePaths`，失败时只 `setError`——而 `error` **只在 WelcomeView 渲染**，项目阶段完全不可见。表现为：对话框关闭、徽章仍是「只读」、无任何提示 = 用户认知里的「点了没反应」。现在失败 → 中文错误 toast + 徽章维持只读。
+3. **打开失败可见化**：`openProject` 的 catch 补 error toast（原来只落 welcome 错误区），避免「项目读不了却不知原因」。
+4. **通知中心提升到入口层**：`main.tsx` 装配 `<NotificationCenter>`，App 自身成为消费者（此前 App 在 Provider 之外，无法发通知）。toast 渲染逻辑不变，仍为壳层私有。
+
+#### 文件变更
+
+| 文件 | 变更 |
+|---|---|
+| `packages/app/src/main.tsx` | 入口层装配 `NotificationCenter` |
+| `packages/app/src/ui/App.tsx` | `useNotify()`；打开失败 / 授权失败 → error toast；授权失败显式 `setWritable(false)`；移除内层 Provider |
+| `packages/app/src/ui/ProjectView.tsx` | 编辑器区只读横幅 +「去授权」（新增第三个入口）；`.editor-body` 包裹层 |
+| `packages/app/src/styles.css` | `.editor-host` 改列向；新增 `.editor-body` / `.ro-banner` |
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **959 passed / 6 skipped（965）**（零回归） |
+| `pnpm typecheck`（root / `@kojo/app`） | 双跑 exit 0 |
+| `node tools/audit-decoupling.mjs` | A/B/C/D 四项全绿（16 插件） |
+
+#### 待用户补齐的证据（未能静态定位的部分）
+
+「取消授权后无法读取项目」需区分三选一，才能对症修：
+
+| 需确认 | 方式 |
+|---|---|
+| 是否回落 welcome | 取消后是否看到「选择 eraTW 游戏目录」卡片（而非编辑器） |
+| 是否遮罩未关 | 取消后画面是否仍被灰罩覆盖、点任何处无反应 |
+| 是否白屏/崩溃 | DevTools（WebView2 右键「检查」）Console 有无红色报错；有则贴原文 |
