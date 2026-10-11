@@ -11,6 +11,8 @@ interface Props {
   project: GameProject;
   index: ErbIndex | null;
   indexing: boolean;
+  /** 索引构建失败原因（P0 实机反馈：两个树同时空必须能自解释，不能静默） */
+  indexError: string | null;
   activeFile: string | null;
   reveal: RevealTarget | null;
   onOpenFile: (path: string) => void;
@@ -30,6 +32,7 @@ export function ProjectView({
   project,
   index,
   indexing,
+  indexError,
   activeFile,
   reveal,
   onOpenFile,
@@ -127,6 +130,18 @@ export function ProjectView({
           <button className="sb-writable ro" title="只读：写权限未批准，点击重新授权" onClick={onReauth}>
             只读
           </button>
+        )}
+        {/* 索引诊断（实机反馈：文件树/函数树同时为空时，必须能看出是「构建中」还是「失败」） */}
+        {indexError ? (
+          <span className="sb-idx err" title={indexError}>
+            索引失败：{indexError}
+          </span>
+        ) : indexing ? (
+          <span className="sb-idx">索引构建中…</span>
+        ) : (
+          <span className="sb-idx">
+            {fileCount} 文件 · {fnCount} 函数
+          </span>
         )}
       </footer>
     </div>

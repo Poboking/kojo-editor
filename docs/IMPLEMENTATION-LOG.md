@@ -1621,3 +1621,46 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 | 是否回落 welcome | 取消后是否看到「选择 eraTW 游戏目录」卡片（而非编辑器） |
 | 是否遮罩未关 | 取消后画面是否仍被灰罩覆盖、点任何处无反应 |
 | 是否白屏/崩溃 | DevTools（WebView2 右键「检查」）Console 有无红色报错；有则贴原文 |
+
+### 5.40 UI 重设计 P0 实机反馈修复之二（2026-10-11 批：索引阶段可见化）
+
+> 触发：实机反馈第 2 轮——「取消后进入，无法点开 erb 文件框（无法加载），无法加载函数树」。
+
+#### 取证与归因（先证伪再动手）
+
+- **读路径与写权限无关**（§5.39 已证）：`io.readText` 无 `isWritable` 检查；Rust 仅 `ensure_in_write_domain`。
+- **索引构建全程不写盘**：`erb-parser/src/plugin.ts` 的 `build()` 只用 `io.walkDir` + `io.readText`，无任何 `writeText`/缓存写入。故「索引缓存在无写权限下失败」的假设**证伪**。
+- **两棵树同源**：`ProjectView` 的「口上文件」树吃壳层 `index` prop，「函数树」是 `ui-kojo-navigator` 面板、经 `ensureIndex()` 取同一个索引。两者同时为空 ⇒ `index` 为 null／为空，而非两个独立故障。
+- **取消只是时间巧合**：写权限对话框在 `setPendingApproval` 时弹出，**早于** `await parser.ensureIndex()`（约 3s 窗口），用户的取消动作落在这个窗口内；但取消本身不改动索引链路（仅 `setWritable(false)`）。
+
+结论：症状真正的原因是**索引阶段的失败/未完成被静默吞掉**，用户无从区分「还在构建」与「已失败」。
+
+#### 本次修复
+
+1. **索引失败不再回退欢迎页**：`openProject` 内 `ensureIndex()` 单独 try/catch——失败时保留项目视图（维持可浏览），置 `indexError` 并发 error toast。原先失败会走外层 catch → 回 welcome，用户只看到「项目打不开」，无法定位到索引。
+2. **状态栏索引诊断**（`ProjectView`）：新增 `indexError` prop 与状态栏中段——「索引构建中…」／「N 文件 · M 函数」／红色「索引失败：原因」。两个树同时为空时，一眼可辨是构建中还是失败。
+
+#### 文件变更
+
+| 文件 | 变更 |
+|---|---|
+| `packages/app/src/ui/App.tsx` | `indexError` 状态；索引阶段独立 try/catch（不回退欢迎页）；失败 error toast；关闭项目时清理 |
+| `packages/app/src/ui/ProjectView.tsx` | `indexError` prop + 状态栏索引诊断三元显示 |
+| `packages/app/src/styles.css` | `.sb-idx` / `.sb-idx.err` |
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **959 passed / 6 skipped（965）**（零回归） |
+| `pnpm typecheck`（root / `@kojo/app`） | 双跑 exit 0 |
+| `node tools/audit-decoupling.mjs` | A/B/C/D 四项全绿（16 插件） |
+
+#### 待用户回传的判别信息
+
+| 需确认 | 判别含义 |
+|---|---|
+| 状态栏显示「索引构建中…」一直不变 | `ensureIndex()` 未 settled（索引在途卡住） |
+| 状态栏显示「0 文件 · 0 函数」 | 索引构建成功但为空（适配器 `kojoPaths` 未解析出目录） |
+| 状态栏显示「N 文件 · M 函数」但两树仍空 | 壳层索引正常，问题在面板侧（导航器 `refresh()` 静默失败） |
+| 状态栏红色「索引失败：…」 | 已拿到根因文本，按文本直接修 |

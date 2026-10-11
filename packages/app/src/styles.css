@@ -1769,6 +1769,16 @@ code {
   background: rgba(255, 255, 255, 0.08);
   border-color: transparent;
 }
+.sb-idx {
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60vw;
+}
+.sb-idx.err {
+  color: var(--red);
+}
 
 /* --------------------- notification center（P0） --------------------- */
 

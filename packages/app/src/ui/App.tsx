@@ -38,6 +38,8 @@ export function App(): ReactElement {
   /** 写权限状态（P0）：null = 无项目；驱动状态栏徽章 + 保存置灰 */
   const [writable, setWritable] = useState<boolean | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
+  /** 口上域索引构建失败原因（null = 成功/未构建）；驱动状态栏诊断与通知 */
+  const [indexError, setIndexError] = useState<string | null>(null);
   /** 通知中心（入口层 Provider 装配，App 自身也可发通知） */
   const notify = useNotify();
   const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
@@ -135,11 +137,20 @@ export function App(): ReactElement {
         if (!approved || approvalMismatch) setPendingApproval(p);
         setWritable(approved !== null && !approvalMismatch);
 
-        // 口上域全量索引：解析器在 project.opened 已自动开建，这里等待其完成
+        // 口上域全量索引：解析器在 project.opened 已自动开建，这里等待其完成。
+        // 索引失败**不**回退欢迎页：项目仍可浏览，失败原因走状态栏 + 通知显式呈现
+        // （原先会走外层 catch → 用户只见「项目打不开」，无从判断是索引的问题）
         setIndexing(true);
+        setIndexError(null);
         const parser = kernel.services.get<ErbParserService>('erb.parser');
-        const idx = await parser.ensureIndex();
-        setIndex(idx);
+        try {
+          const idx = await parser.ensureIndex();
+          setIndex(idx);
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setIndexError(msg);
+          notify({ kind: 'error', message: `口上域索引构建失败：${msg}` });
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
@@ -220,6 +231,7 @@ export function App(): ReactElement {
     setPendingNav(null);
     setPendingApproval(null);
     setWritable(null);
+    setIndexError(null);
     setPhase('welcome');
     setRecent(await kernel.project.recent());
   }, [kernel]);
@@ -260,6 +272,7 @@ export function App(): ReactElement {
         project={project}
         index={index}
         indexing={indexing}
+        indexError={indexError}
         activeFile={activeFile}
         reveal={reveal}
         onOpenFile={openFile}
