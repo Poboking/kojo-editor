@@ -21,6 +21,8 @@ interface Props {
   /** 保存句柄注册（"保存并前往"流程用） */
   registerSave?: (fn: (() => Promise<boolean>) | null) => void;
   onClose: () => void;
+  /** 重载项目（关闭→重开：重建索引、重走授权判定；用户自救入口） */
+  onReload: () => void;
   /** 写权限状态（P0 状态栏徽章 + 保存置灰；宿主通用 chrome，零业务词） */
   writable: boolean;
   /** 重授权入口（徽章点击 / 通知 action 共用） */
@@ -39,6 +41,7 @@ export function ProjectView({
   onDirtyChange,
   registerSave,
   onClose,
+  onReload,
   writable,
   onReauth,
 }: Props): ReactElement {
@@ -68,9 +71,23 @@ export function ProjectView({
           <span>文件 {indexing ? '…' : fileCount}</span>
           <span>函数 {indexing ? '…' : fnCount}</span>
         </div>
-        <button className="ghost" onClick={onClose}>
-          关闭项目
-        </button>
+        <div className="proj-actions">
+          {!writable ? (
+            <button className="primary small" onClick={onReauth} title="重新选择写权限（明文展示可写目录）">
+              重新授权
+            </button>
+          ) : null}
+          <button
+            className="ghost"
+            onClick={onReload}
+            title="关闭并重新打开项目：重建口上域索引（内存缓存全部丢弃，磁盘文件不受影响）"
+          >
+            重载项目
+          </button>
+          <button className="ghost" onClick={onClose}>
+            关闭项目
+          </button>
+        </div>
       </header>
 
       <div className="project-body">

@@ -97,6 +97,9 @@ export function createUiKojoNavigatorPlugin(): Plugin {
       // ---- 状态（React 外部源；面板组件读取并订阅） ----
       let tree: NavigatorTree | null = null;
       let indexReady = false;
+      /** 索引/建树失败原因（2026-10-11 实机反馈）：此前只在 catch 里 log.warn，
+       *  面板永久停在「打开项目后自动构建函数索引…」占位，用户既不知失败也无从重试 */
+      let loadError: string | null = null;
       const treeListeners = new Set<() => void>();
 
       const notify = (): void => {
@@ -117,6 +120,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
           tree = buildNavigatorTree(index, currentFamilyIndex(), project.current()!.charaIndex);
           indexReady = true;
         }
+        loadError = null;
         notify();
       };
 
@@ -126,10 +130,19 @@ export function createUiKojoNavigatorPlugin(): Plugin {
           rebuild(null);
           return;
         }
+        loadError = null;
+        notify();
         void parser
           .ensureIndex()
           .then((index) => rebuild(index))
-          .catch((err) => ctx.log.warn(`Navigator ensureIndex failed: ${String(err)}`));
+          .catch((err: unknown) => {
+            // 失败必须可见（含建树抛错，此前被同一个 catch 静默吞掉）
+            const msg = err instanceof Error ? err.message : String(err);
+            loadError = msg;
+            indexReady = false;
+            ctx.log.error(`Navigator load failed: ${msg}`);
+            notify();
+          });
       };
 
       ctx.onDispose(ctx.bus.on('kojo.functionChanged', () => refresh()));
@@ -237,11 +250,25 @@ export function createUiKojoNavigatorPlugin(): Plugin {
             '⟲',
           );
 
+        // 失败态优先：显示原因 + 重试（此前静默停在占位，用户无从判断与自救）
+        if (loadError) {
+          return createElement(
+            'div',
+            { className: 'panel-kojo-nav' },
+            createElement('div', { className: 'nav-empty err', title: loadError }, `函数索引加载失败：${loadError}`),
+            createElement(
+              'button',
+              { className: 'small', onClick: () => refresh() },
+              '重试',
+            ),
+          );
+        }
+
         if (!indexReady) {
           return createElement(
             'div',
             { className: 'panel-kojo-nav' },
-            createElement('div', { className: 'nav-empty dim' }, '打开项目后自动构建函数索引…'),
+            createElement('div', { className: 'nav-empty dim' }, '正在构建函数索引…（首次打开项目需要数秒）'),
           );
         }
 

@@ -1779,6 +1779,15 @@ code {
 .sb-idx.err {
   color: var(--red);
 }
+.proj-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.nav-empty.err {
+  color: var(--red);
+  word-break: break-word;
+}
 
 /* --------------------- notification center（P0） --------------------- */
 

@@ -1664,3 +1664,48 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 | 状态栏显示「0 文件 · 0 函数」 | 索引构建成功但为空（适配器 `kojoPaths` 未解析出目录） |
 | 状态栏显示「N 文件 · M 函数」但两树仍空 | 壳层索引正常，问题在面板侧（导航器 `refresh()` 静默失败） |
 | 状态栏红色「索引失败：…」 | 已拿到根因文本，按文本直接修 |
+
+### 5.41 UI 重设计 P0 实机反馈修复之三（2026-10-11 批：函数树失败态可见 + 头部自救按钮）
+
+> 触发：实机反馈第 3 轮——「打开此前未授权的项目，函数树停在『打开项目后自动构建函数索引…』占位；没有按钮重新授权，也没有按钮清理缓存后重开项目」。
+
+#### 根因定位（第 3 轮取证）
+
+- 导航器空态条件已查明：`ui-kojo-navigator/src/index.ts` 中 `if (!indexReady)` → 占位文案。`indexReady` 仅在 `rebuild(index)` 成功路径置 true。
+- **`refresh()` 的失败路径被静默吞掉**：`parser.ensureIndex().then((index) => rebuild(index)).catch((err) => ctx.log.warn(...))`——注意 `.then` 里的 **`buildNavigatorTree(...)` 抛错也落入同一个 `.catch`**，于是 `tree` 未被赋值、`indexReady = true` 永不执行、`loadError` 不存在 → **面板永久停在占位，用户既看不到失败原因，也没有任何重试入口**。
+- 排除项（逐条证伪）：读路径无写权限门控（§5.39）；Rust `walk_dir` 用 `filter_map(|e| e.ok())`，目录不存在只返回空数组而非报错，故「路径不存在导致 build 整体失败」不成立；索引构建全程不写盘（§5.40）。
+- 巧合因素：写权限对话框弹出早于 `await parser.ensureIndex()`（约 3s 窗口），用户动作落在此窗口内，但取消只写 `setWritable(false)`，与索引链路无因果。
+
+#### 本次修复
+
+1. **导航器失败态可见 + 可重试**（插件侧，零契约变更）：新增 `loadError` 状态，`refresh()` 的 catch 记录原因（`ctx.log.error`），面板渲染优先级改为 **失败态 → 构建中态 → 正常树**；失败态显示「函数索引加载失败：<原因>」+「重试」按钮（点击重新 `refresh()`）。占位文案改为「正在构建函数索引…（首次打开项目需要数秒）」，与失败态可区分。
+2. **项目头部两个自救按钮**（用户明确诉求，放在用户视线所在的头部而非编辑器区）：
+   - 「重新授权」：仅在只读时显示（与状态栏徽章、编辑器横幅共同构成入口）；
+   - 「重载项目」：`close` → 同目录 `open`，重建口上域索引（内存索引全部丢弃重算；磁盘文件不动）。重载走 `keepView` 选项，不切回欢迎页，避免「项目被关掉」的错觉。
+
+#### 文件变更（仅本批作者改动）
+
+| 文件 | 变更 |
+|---|---|
+| `packages/plugins/ui-kojo-navigator/src/index.ts` | `loadError` 状态；catch 记录原因；失败态 + 重试按钮；占位文案区分 |
+| `packages/app/src/ui/ProjectView.tsx` | 头部 `.proj-actions`：「重新授权」（只读时）+「重载项目」+「关闭项目」 |
+| `packages/app/src/ui/App.tsx` | `openProject(dir, { keepView })`；`onReload` 接线 |
+| `packages/app/src/styles.css` | `.proj-actions` / `.nav-empty.err` |
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **959 passed / 6 skipped（965）**（零回归） |
+| `pnpm typecheck`（root） | 通过 |
+| `pnpm typecheck`（`@kojo/app`） | **未通过，但错误全部落在 `src/ui/layout.ts`（5 处 `noUncheckedIndexedAccess`，行 112/117）** —— 该文件为**未跟踪、无任何 import 引用**的并行 P1 WIP（五区布局骨架：视图分组 / aux / bottom / zen），非本批产物；本批 4 个文件自身无类型错误 |
+| `node tools/audit-decoupling.mjs` | A/B/C/D 四项全绿（16 插件） |
+
+#### 工作区中非本批作者的在途改动（未提交，勿混入本批）
+
+| 文件 | 内容 |
+|---|---|
+| `packages/plugin-api/src/slots.ts` | P1/P2 契约草案：`PanelLocation`、`ui.toolbar` / `ui.statusbar` / `ui.overlay` / `ui.editor.codeAction` 槽、`keybinding`（全部 additive） |
+| `packages/plugin-api/src/index.ts`、`events.ts` | 同上批次的类型导出与 `ui.overlay.open` 事件 |
+| `packages/app/src/ui/layout.ts` | 未跟踪的 P1 布局骨架（5 处类型错误） |
+| `packages/app/src/ui/EditorPane.tsx` | `pickSaveHandler` 单贡献抛错隔离（行为改进，非本批） |

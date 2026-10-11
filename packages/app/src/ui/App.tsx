@@ -102,9 +102,10 @@ export function App(): ReactElement {
   }, [kernel, activeFile]);
 
   const openProject = useCallback(
-    async (dir: string) => {
+    async (dir: string, opts?: { keepView?: boolean }) => {
       if (!kernel) return;
-      setPhase('opening');
+      // 重载项目（同目录重开）不切回欢迎页：避免「项目被关掉」的错觉
+      if (!opts?.keepView) setPhase('opening');
       setError(null);
       // 静默只读修复（P0）：不一致事件只在 open() 期间同步发出——局部订阅，
       // 避免常驻监听与 openProject 状态写入之间的竞态
@@ -279,6 +280,7 @@ export function App(): ReactElement {
         onDirtyChange={onDirtyChange}
         registerSave={registerSave}
         onClose={closeProject}
+        onReload={() => void openProject(project.rootDir, { keepView: true })}
         writable={writable ?? false}
         onReauth={requestReauth}
       />
