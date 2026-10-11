@@ -52,6 +52,10 @@ export const tauriBridge: PlatformBridge = {
     await invoke('remove_file', { path });
   },
 
+  async removeDir(path: string): Promise<void> {
+    await invoke('remove_dir', { path });
+  },
+
   async watchDirs(): Promise<() => void> {
     console.warn('[bridge] watchDirs is not implemented in v0.1 (planned: Rust notify)');
     return () => {};

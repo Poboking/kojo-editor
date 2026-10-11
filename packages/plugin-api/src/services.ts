@@ -10,6 +10,8 @@ export const KernelServices = {
   Slots: 'kernel.slots',
   Plugins: 'kernel.plugins',
   Project: 'kernel.project',
+  /** 作者工作区（通用 project/artifact 模型；游戏语义由消费方解释） */
+  Workspaces: 'kernel.workspaces',
 } as const;
 
 /**

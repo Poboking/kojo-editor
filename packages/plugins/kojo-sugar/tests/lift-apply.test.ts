@@ -103,6 +103,7 @@ function makeIO(opts: {
       return b ? { size: b.length, mtimeMs: 1, isDirectory: false } : null;
     },
     setWritableRoots: () => {},
+    setAppWritableRoots: () => {},
     isWritable: (p) => isWritable(p),
     backup: async (p) => {
       if (!files[p]) return null;

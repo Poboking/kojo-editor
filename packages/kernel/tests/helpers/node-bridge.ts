@@ -113,6 +113,10 @@ export class NodeBridge implements PlatformBridge {
     await fs.unlink(path);
   }
 
+  async removeDir(path: string): Promise<void> {
+    await fs.rm(path, { recursive: true, force: true });
+  }
+
   async watchDirs(paths: string[], onEvent: WatchCallback): Promise<Unsubscribe> {
     const watchers: Array<ReturnType<typeof import('node:fs').watch>> = [];
     const { watch } = await import('node:fs');

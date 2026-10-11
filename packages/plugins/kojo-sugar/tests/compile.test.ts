@@ -115,6 +115,7 @@ function makeFs(io: HarnessOptions = {}) {
     stat: async (p: string): Promise<FileStat | null> =>
       p in files ? { size: files[p]!.length, mtimeMs: 1, isDirectory: false } : null,
     setWritableRoots: () => {},
+    setAppWritableRoots: () => {},
     isWritable,
     backup: async (p: string): Promise<string | null> => {
       if (!(p in files)) return null;

@@ -25,6 +25,7 @@ function stubBridge(): PlatformBridge {
     rename: async () => {},
     copyFile: async () => {},
     removeFile: async () => {},
+    removeDir: async () => {},
     watchDirs: async () => () => {},
     chooseDirectory: async () => null,
     appDataDir: async () => 'C:\\AppData\\kojo-test',

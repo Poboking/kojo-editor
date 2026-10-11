@@ -51,6 +51,8 @@ export interface PlatformBridge {
   rename(from: string, to: string): Promise<void>;
   copyFile(from: string, to: string): Promise<void>;
   removeFile(path: string): Promise<void>;
+  /** 递归删除目录（不存在则幂等成功；写允许域同 writeFileBytes） */
+  removeDir(path: string): Promise<void>;
   /** 监视若干目录（递归）；返回取消函数 */
   watchDirs(paths: string[], onEvent: WatchCallback): Promise<Unsubscribe>;
   /** 目录选择对话框；用户取消返回 null */

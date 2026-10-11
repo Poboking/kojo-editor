@@ -46,6 +46,14 @@ export type { EolStyle, FileIO, TextFile, WriteTextOptions } from './io';
 export { ProjectDetectionError } from './project';
 export type { ProjectService, RecentProject } from './project';
 
+export { WORKSPACE_MANIFEST_FILE } from './workspace';
+export type {
+  WorkspaceArtifact,
+  WorkspaceArtifactInput,
+  WorkspaceProject,
+  WorkspaceService,
+} from './workspace';
+
 export { CONVENTION_SEVERITY_ORDER } from './conventions';
 export type {
   ConventionCheckContext,

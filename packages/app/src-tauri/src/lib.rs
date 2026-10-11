@@ -332,6 +332,21 @@ fn remove_file(
     std::fs::remove_file(&path).map_err(|e| e.to_string())
 }
 
+/// 递归删除目录（不存在则幂等成功；同写允许域第二道闸）。
+#[tauri::command]
+fn remove_dir(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    path: String,
+) -> Result<(), String> {
+    ensure_write_allowed(&app, &state, Path::new(&path), "remove_dir")?;
+    match std::fs::remove_dir_all(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /* ---------------------------- 对话框 / 环境 ---------------------------- */
 
 #[tauri::command]
@@ -427,6 +442,7 @@ pub fn run() {
             rename_path,
             copy_file,
             remove_file,
+            remove_dir,
             choose_directory,
             app_data_dir,
             register_write_domain,

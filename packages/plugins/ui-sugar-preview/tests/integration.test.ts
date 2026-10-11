@@ -73,6 +73,7 @@ function makeIO(files: Record<string, Uint8Array>) {
     stat: async (p): Promise<FileStat | null> =>
       files[p] ? { size: files[p]!.length, mtimeMs: 1, isDirectory: false } : null,
     setWritableRoots: () => {},
+    setAppWritableRoots: () => {},
     isWritable: () => false,
     backup: async () => null,
   };

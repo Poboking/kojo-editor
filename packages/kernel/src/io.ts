@@ -46,6 +46,8 @@ function timestamp(): string {
 
 export class FileIOServiceImpl implements FileIO {
   private writableRoots: string[] = [];
+  /** 应用自有常驻可写根（工作区等；不受 setWritableRoots([]) 收回影响） */
+  private appWritableRoots: string[] = [];
   private readonly encodingCache = new Map<string, FileEncoding>();
   private readonly eolCache = new Map<string, 'crlf' | 'lf'>();
 
@@ -145,13 +147,17 @@ export class FileIOServiceImpl implements FileIO {
     this.writableRoots = roots.map((r) => r);
   }
 
+  setAppWritableRoots(roots: string[]): void {
+    this.appWritableRoots = roots.map((r) => r);
+  }
+
   isWritable(path: string): boolean {
-    return this.writableRoots.some((root) => isPathUnder(root, path));
+    return [...this.writableRoots, ...this.appWritableRoots].some((root) => isPathUnder(root, path));
   }
 
   private assertWritable(path: string): void {
     if (!this.isWritable(path)) {
-      throw new WriteNotAllowedError(path, [...this.writableRoots]);
+      throw new WriteNotAllowedError(path, [...this.writableRoots, ...this.appWritableRoots]);
     }
   }
 

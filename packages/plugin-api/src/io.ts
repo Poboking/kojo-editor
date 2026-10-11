@@ -55,6 +55,12 @@ export interface FileIO {
   stat(path: string): Promise<FileStat | null>;
   /** 声明可写根（由项目打开流程调用；替换而非追加） */
   setWritableRoots(roots: string[]): void;
+  /**
+   * 声明应用自有**常驻**可写根（如工作区根；2026-10-12 工作区批新增）。
+   * 与 `setWritableRoots` 的项目授权语义独立：生命周期跟应用走，
+   * **不受** `setWritableRoots([])`（项目关闭收回授权）影响。
+   */
+  setAppWritableRoots(roots: string[]): void;
   isWritable(path: string): boolean;
   /** 手动备份文件；返回备份路径（文件不存在时返回 null） */
   backup(path: string): Promise<string | null>;

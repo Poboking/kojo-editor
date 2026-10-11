@@ -95,6 +95,12 @@ export interface KernelEventMap {
    * 载荷只含归档路径与文件名（消费者按需自行深解析）。
    */
   'kojo.snapshotSelected': { path: string; fileName: string; source?: string };
+  /**
+   * 工作区导入意图（2026-10-12 工作区批）：请求把某个外部目录导入作者工作区。
+   * 通用、游戏无关——宿主（如文件树右键菜单）只携带源目录与建议名发出；
+   * 「导入成什么形态的制品」由工作区消费方（适配器）解释。
+   */
+  'workspace.importRequested': { sourceDir: string; suggestedName?: string; source?: string };
 }
 
 /* ------------------- 内核事件 emit 权限（单一真源 + 防漂移断言） ------------------- */
@@ -127,6 +133,7 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'editor.liftPreview.hide',
   'ui.overlay.open',
   'ui.overlay.close',
+  'workspace.importRequested',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核/宿主专属事件：插件可 `on`、不可 `emit`（安全语义事件由内核垄断发出）。 */

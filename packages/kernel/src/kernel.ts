@@ -8,6 +8,7 @@ import type {
   ProjectService,
   SlotRegistry,
   StorageService,
+  WorkspaceService,
 } from '@kojo/plugin-api';
 import { KernelServices } from '@kojo/plugin-api';
 import { TypedEventBus } from './bus';
@@ -17,6 +18,7 @@ import { ProjectServiceImpl } from './project';
 import { PluginRuntime } from './runtime';
 import { SlotRegistryImpl } from './slots';
 import { FileStorageBackend, StorageServiceImpl } from './storage';
+import { WorkspaceServiceImpl } from './workspace';
 
 /**
  * 内核组装（只做四件事：DI 容器 / 事件总线 / 存储域 / 文件 IO）。
@@ -43,6 +45,8 @@ export interface Kernel {
   readonly slots: SlotRegistry;
   readonly plugins: PluginRegistry;
   readonly project: ProjectService;
+  /** 作者工作区（通用 project/artifact；根目录在应用数据区，恒可写） */
+  readonly workspaces: WorkspaceService;
   /**
    * 服务查询（宿主 / UI / 测试用）。
    * 插件请通过 PluginContext.inject / tryInject（依赖声明式接线），
@@ -116,6 +120,16 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
     log: kernelLog,
   });
 
+  // 作者工作区：初始化失败（无平台数据目录）不连累内核启动——服务降级为
+  // 「调用时抛带原因错误」，面板自解释呈现
+  const workspaces = new WorkspaceServiceImpl({ bridge: opts.platform, io, log: kernelLog });
+  try {
+    await workspaces.init();
+  } catch (err) {
+    kernelLog.warn(`Workspace service init failed (degraded): ${String(err)}`);
+  }
+  container.provide(KernelServices.Workspaces, workspaces, 'kernel');
+
   const registry: PluginRegistry = {
     list: () => runtime.list(),
     get: (id) => runtime.get(id),
@@ -140,6 +154,7 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
     slots,
     plugins: registry,
     project,
+    workspaces,
     services: {
       tryGet: <T = unknown>(key: string): T | undefined => container.tryGet<T>(key),
       get: <T = unknown>(key: string): T => container.get<T>(key),
