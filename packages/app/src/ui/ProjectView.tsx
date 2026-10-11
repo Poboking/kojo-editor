@@ -125,12 +125,21 @@ export function ProjectView({
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →
   // React 视作新组件类型 → 整树卸载重挂 → 展开状态被清空。改为身份恒定的包装
   // 组件 + ref 桥接最新 props：重渲染只更新属性，绝不重挂，展开状态常驻）。
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile };
+  const listDir = useMemo(() => kernel.io.listDir.bind(kernel.io), [kernel]);
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir };
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
       const a = fileTreeArgsRef.current;
-      return <FileTree project={a.project} index={a.index} activeFile={a.activeFile} onOpenFile={a.onOpenFile} />;
+      return (
+        <FileTree
+          project={a.project}
+          index={a.index}
+          activeFile={a.activeFile}
+          onOpenFile={a.onOpenFile}
+          listDir={a.listDir}
+        />
+      );
     };
     return StableFileTree;
   }, []);

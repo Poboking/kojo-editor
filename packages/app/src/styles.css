@@ -784,24 +784,100 @@ textarea {
   margin: 0 0 4px;
   padding: 0 0 0 18px;
 }
-/* 作者版本号子目录行（角色组内的二级归属，如实还原磁盘目录结构） */
-.tree-author {
+/* 作者包节点（角色组内二级；可折叠、默认折叠——口上树定稿向 §3） */
+.tree-package {
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 6px 1px;
-  color: var(--fg-dim);
-  font-size: 11px;
-  letter-spacing: 0.02em;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 2px 6px;
+  text-align: left;
+  border-radius: 4px;
 }
-.tree-author-name {
+.tree-package:hover {
+  background: var(--hover);
+  border-color: transparent;
+}
+.tree-package .caret {
+  width: 10px;
+}
+.tree-package-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tree-files.nested {
-  padding-left: 12px;
+  padding-left: 22px;
   margin-bottom: 2px;
+}
+/* 包内真实文件夹视图的附加条目（非 ERB / 子目录；只读展示，不进索引） */
+.tree-extra {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  cursor: default;
+}
+.tree-extra-icon {
+  flex: none;
+  font-size: 11px;
+  opacity: 0.8;
+}
+.tree-extra-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-extra.tree-note {
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* 右键菜单（壳层轻量实现） */
+.context-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+}
+.context-menu {
+  position: fixed;
+  z-index: calc(var(--z-modal) + 1);
+  min-width: 230px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  animation: pop-in var(--dur-1) var(--ease-out);
+}
+.context-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  padding: 6px 10px;
+  font-size: var(--fs-1);
+  border-radius: 4px;
+  text-align: left;
+}
+.context-menu button:hover {
+  background: var(--hover);
+  border-color: transparent;
+}
+.context-menu .check {
+  width: 14px;
+  color: var(--accent);
 }
 .tree-file {
   width: 100%;
