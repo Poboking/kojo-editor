@@ -23,6 +23,8 @@ export interface LayoutState {
   bottom: ContainerState;
   /** 全禅写作模式（定稿 §八） */
   zen: boolean;
+  /** 禅模式编辑器居中限宽（~1000px；设置 overlay 可关——定稿 §八设置项） */
+  zenLimitWidth: boolean;
   /** 面板位置 override（拖拽停靠 P4）：panelId → 目标容器 */
   panelLocations: Record<string, PanelLocation>;
 }
@@ -137,7 +139,7 @@ export function defaultActiveOf(org: OrganizedPanels): Pick<LayoutState, 'sideba
 }
 
 export function defaultLayout(org: OrganizedPanels): LayoutState {
-  return { ...defaultActiveOf(org), zen: false, panelLocations: {} };
+  return { ...defaultActiveOf(org), zen: false, zenLimitWidth: true, panelLocations: {} };
 }
 
 /**
@@ -217,6 +219,8 @@ export function reconcileLayout(persisted: Partial<LayoutState> | null, org: Org
     aux: sanitizeContainer(persisted.aux, dfltEff.aux, new Set(orgEff.aux.map((p) => p.id))),
     bottom: sanitizeContainer(persisted.bottom, dfltEff.bottom, new Set(orgEff.bottom.map((p) => p.id))),
     zen: persisted.zen === true,
+    // 缺省 true（定稿 §八默认限宽）；仅显式 false 关闭
+    zenLimitWidth: persisted.zenLimitWidth !== false,
     panelLocations: overrides,
   };
 }

@@ -5,6 +5,7 @@ import {
   useReducer,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
@@ -95,6 +96,9 @@ interface Props {
 
 type ContainerKey = 'sidebar' | 'aux' | 'bottom';
 
+/** 拖拽停靠的自定义 MIME（P4；只在壳层内部流转，防外部拖入误触发） */
+const PANEL_DRAG_MIME = 'application/x-kojo-panel-move';
+
 type LayoutAction =
   | { type: 'toggle'; container: ContainerKey }
   | { type: 'activate'; container: ContainerKey; key: string }
@@ -102,6 +106,7 @@ type LayoutAction =
   | { type: 'move'; id: string; to: PanelLocation; viewKey: string | null }
   | { type: 'toggleZen' }
   | { type: 'exitZen' }
+  | { type: 'setZenLimitWidth'; value: boolean }
   | { type: 'reset'; state: LayoutState };
 
 function clamp(container: ContainerKey, size: number): number {
@@ -136,6 +141,8 @@ function reducer(s: LayoutState, a: LayoutAction): LayoutState {
       return { ...s, zen: !s.zen };
     case 'exitZen':
       return s.zen ? { ...s, zen: false } : s;
+    case 'setZenLimitWidth':
+      return { ...s, zenLimitWidth: a.value };
     case 'reset':
       return a.state;
   }
@@ -198,6 +205,10 @@ export function ShellLayout(props: Props): ReactElement {
   overlayRef.current = activeOverlay;
   const pickerRef = useRef(false);
   pickerRef.current = paletteOpen || quickOpen;
+  // 设置 overlay（P4；壳层私有——设置项全是容器语义，不经 ui.overlay 槽）
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef(settingsOpen);
+  settingsRef.current = settingsOpen;
 
   // overlay 打开/关闭意图（内核事件落地；Esc 关闭在全局键盘处理器）
   useEffect(() => {
@@ -221,6 +232,7 @@ export function ShellLayout(props: Props): ReactElement {
       { id: 'layout.toggleAux', title: '切换副侧栏', keybinding: 'ctrl+alt+b', run: () => dispatch({ type: 'toggle', container: 'aux' }) },
       { id: 'layout.toggleZen', title: '切换写作模式', keybinding: 'ctrl+k z', run: () => dispatch({ type: 'toggleZen' }) },
       { id: 'layout.reset', title: '重置布局', run: () => doResetRef.current() },
+      { id: 'layout.openSettings', title: '打开设置', run: () => setSettingsOpen(true) },
       { id: 'workbench.commandPalette', title: '命令面板', keybinding: 'ctrl+shift+p', run: () => setPaletteOpen(true) },
       { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: 'ctrl+p', run: () => setQuickOpen(true) },
       // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表
@@ -280,10 +292,14 @@ export function ShellLayout(props: Props): ReactElement {
         return;
       }
       if (e.key === 'Escape') {
-        // picker 内部已 stopPropagation；这里只需 overlay > zen
+        // picker 内部已 stopPropagation；这里只需 overlay > settings > zen
         if (pickerRef.current) return;
         if (overlayRef.current) {
           setActiveOverlay(null);
+          return;
+        }
+        if (settingsRef.current) {
+          setSettingsOpen(false);
           return;
         }
         if (zenRef.current) dispatch({ type: 'exitZen' });
@@ -331,6 +347,53 @@ export function ShellLayout(props: Props): ReactElement {
     [layout],
   );
 
+  /* -------------------- P4：三容器拖拽停靠（定稿 §七；override 持久化在 layout.panelLocations） -------------------- */
+
+  /** 落点高亮目标（dragover 置位，drop/dragend/真正离开容器时清除） */
+  const [dropTarget, setDropTarget] = useState<ContainerKey | null>(null);
+
+  /** 拖拽载荷：面板 id 数组（活动栏图标拖拽 = 整组视图迁移） */
+  const startPanelDrag = (e: ReactDragEvent, ids: readonly string[]): void => {
+    e.dataTransfer.setData(PANEL_DRAG_MIME, JSON.stringify(ids));
+    e.dataTransfer.setData('text/plain', ids.join(','));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  /** 容器落点 props：dragover 接受 + 高亮；drop 派发 move（逐面板；sidebar 需 viewKey 激活） */
+  const dropProps = (container: ContainerKey) => ({
+    onDragOver: (e: ReactDragEvent) => {
+      if (!e.dataTransfer.types.includes(PANEL_DRAG_MIME)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      setDropTarget(container);
+    },
+    onDragLeave: (e: ReactDragEvent) => {
+      // 子元素间移动会反复触发 leave——只在真正离开容器时清除
+      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+      setDropTarget((cur) => (cur === container ? null : cur));
+    },
+    onDrop: (e: ReactDragEvent) => {
+      const raw = e.dataTransfer.getData(PANEL_DRAG_MIME);
+      setDropTarget(null);
+      if (!raw) return;
+      e.preventDefault();
+      let ids: string[] = [];
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) ids = parsed.filter((x): x is string => typeof x === 'string');
+      } catch {
+        return;
+      }
+      for (const id of ids) {
+        const panel = allPanels.find((p) => p.id === id);
+        if (!panel) continue;
+        const viewKey = panel.group ? `group:${panel.group}` : `panel:${panel.id}`;
+        dispatch({ type: 'move', id, to: container, viewKey });
+      }
+    },
+  });
+  const dragEnd = (): void => setDropTarget(null);
+
   const doReset = useCallback(() => {
     resetLayout();
     dispatch({ type: 'reset', state: defaultLayout(organizePanels(allPanels, {})) });
@@ -364,12 +427,19 @@ export function ShellLayout(props: Props): ReactElement {
     setCollapsed((prev) => ({ ...prev, [panelId]: !prev[panelId] }));
 
   const activityBar = (
-    <nav className="activitybar" aria-label="活动栏">
+    <nav
+      className={`activitybar ${dropTarget === 'sidebar' ? 'drop-target' : ''}`}
+      aria-label="活动栏"
+      {...dropProps('sidebar')}
+    >
       {org.views.filter((v) => !isLowFreqView(v)).map((v) => (
         <button
           key={v.key}
           className={`ab-item ${layout.sidebar.visible && v.key === layout.sidebar.active ? 'active' : ''}`}
-          title={v.title}
+          title={`${v.title}（可拖拽到其他容器）`}
+          draggable
+          onDragStart={(e) => startPanelDrag(e, v.panels.map((p) => p.id))}
+          onDragEnd={dragEnd}
           onClick={() =>
             dispatch(
               v.key === layout.sidebar.active
@@ -386,7 +456,10 @@ export function ShellLayout(props: Props): ReactElement {
         <button
           key={v.key}
           className={`ab-item ${layout.sidebar.visible && v.key === layout.sidebar.active ? 'active' : ''}`}
-          title={v.title}
+          title={`${v.title}（可拖拽到其他容器）`}
+          draggable
+          onDragStart={(e) => startPanelDrag(e, v.panels.map((p) => p.id))}
+          onDragEnd={dragEnd}
           onClick={() =>
             dispatch(
               v.key === layout.sidebar.active
@@ -398,6 +471,9 @@ export function ShellLayout(props: Props): ReactElement {
           {v.icon ?? v.title.slice(0, 1)}
         </button>
       ))}
+      <button className="ab-item" title="设置" onClick={() => setSettingsOpen(true)}>
+        ⚙
+      </button>
     </nav>
   );
 
@@ -412,7 +488,14 @@ export function ShellLayout(props: Props): ReactElement {
             }
             return (
               <section key={p.id} className="sidebar-section">
-                <button className="sidebar-section-head" onClick={() => toggleCollapse(p.id)}>
+                <button
+                  className="sidebar-section-head"
+                  title={`${p.title}（可拖拽到其他容器）`}
+                  draggable
+                  onDragStart={(e) => startPanelDrag(e, [p.id])}
+                  onDragEnd={dragEnd}
+                  onClick={() => toggleCollapse(p.id)}
+                >
                   <span className="caret">{isCollapsed ? '▸' : '▾'}</span>
                   <span>{p.title}</span>
                 </button>
@@ -432,6 +515,10 @@ export function ShellLayout(props: Props): ReactElement {
           role="tab"
           aria-selected={p.id === activeId}
           className={`panel-tab ${p.id === activeId ? 'active' : ''}`}
+          title={`${p.title}（可拖拽到其他容器）`}
+          draggable
+          onDragStart={(e) => startPanelDrag(e, [p.id])}
+          onDragEnd={dragEnd}
           onClick={() => dispatch({ type: 'activate', container, key: p.id })}
         >
           {p.title}
@@ -604,6 +691,37 @@ export function ShellLayout(props: Props): ReactElement {
           </div>
         </div>
       ) : null}
+      {settingsOpen ? (
+        <div className="overlay-backdrop" onMouseDown={() => setSettingsOpen(false)}>
+          <div className="overlay-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="wizard">
+              <h3>设置</h3>
+              <label className="settings-row">
+                <input
+                  type="checkbox"
+                  checked={layout.zenLimitWidth}
+                  onChange={(e) => dispatch({ type: 'setZenLimitWidth', value: e.target.checked })}
+                />
+                <span>
+                  写作模式：编辑器居中限宽（约 1000px）
+                  <span className="settings-hint">关闭后编辑器铺满全宽</span>
+                </span>
+              </label>
+              <div className="settings-actions">
+                <button className="ghost small" onClick={doReset}>
+                  重置布局
+                </button>
+                <span className="settings-hint">恢复默认面板位置 / 尺寸 / 显隐</span>
+              </div>
+              <div className="settings-actions">
+                <button className="primary small" onClick={() => setSettingsOpen(false)}>
+                  完成
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 
@@ -613,7 +731,7 @@ export function ShellLayout(props: Props): ReactElement {
     return (
       <div className="shell zen">
         <div className="zen-editor">
-          <div className="zen-editor-inner">{children}</div>
+          <div className={`zen-editor-inner ${layout.zenLimitWidth ? '' : 'no-limit'}`}>{children}</div>
         </div>
         {statusbar}
         {overlays}
@@ -630,7 +748,11 @@ export function ShellLayout(props: Props): ReactElement {
         {activityBar}
         {layout.sidebar.visible && activeView ? (
           <>
-            <aside className="sidebar" style={{ width: layout.sidebar.size }}>
+            <aside
+              className={`sidebar ${dropTarget === 'sidebar' ? 'drop-target' : ''}`}
+              style={{ width: layout.sidebar.size }}
+              {...dropProps('sidebar')}
+            >
               {sidebarView}
             </aside>
             <div
@@ -650,7 +772,11 @@ export function ShellLayout(props: Props): ReactElement {
               aria-label="调整副侧栏宽度"
               onMouseDown={(e) => startDrag(e, 'aux', true, -1)}
             />
-            <aside className="aux" style={{ width: layout.aux.size }}>
+            <aside
+              className={`aux ${dropTarget === 'aux' ? 'drop-target' : ''}`}
+              style={{ width: layout.aux.size }}
+              {...dropProps('aux')}
+            >
               {tabStrip('aux', org.aux, layout.aux.active)}
               <div className="container-body">
                 <PanelBody contribution={activeAux} />
@@ -667,7 +793,11 @@ export function ShellLayout(props: Props): ReactElement {
             aria-label="调整底部区高度"
             onMouseDown={(e) => startDrag(e, 'bottom', false, -1)}
           />
-          <section className="bottombar" style={{ height: layout.bottom.size }}>
+          <section
+            className={`bottombar ${dropTarget === 'bottom' ? 'drop-target' : ''}`}
+            style={{ height: layout.bottom.size }}
+            {...dropProps('bottom')}
+          >
             {tabStrip('bottom', org.bottom, layout.bottom.active)}
             <div className="container-body">
               <PanelBody contribution={activeBottom} />

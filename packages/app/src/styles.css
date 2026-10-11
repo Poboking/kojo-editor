@@ -460,6 +460,10 @@ code {
   display: flex;
   flex-direction: column;
 }
+/* P4 设置项：关闭居中限宽后铺满 */
+.zen-editor-inner.no-limit {
+  max-width: none;
+}
 .statusbar.zen {
   justify-content: space-between;
 }
@@ -2422,6 +2426,58 @@ code {
   color: var(--amber);
   font-size: var(--fs-1);
   margin-bottom: var(--space-2);
+}
+
+/* --------------------- P4：拖拽停靠落点高亮 + 设置 overlay --------------------- */
+
+/* 落点高亮（定稿 §七：拖拽移动面板 tab/视图，落点高亮） */
+.activitybar.drop-target,
+.sidebar.drop-target,
+.aux.drop-target,
+.bottombar.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: var(--accent-dim);
+}
+/* 拖拽源手势提示 */
+.ab-item[draggable='true'],
+.sidebar-section-head[draggable='true'],
+.panel-tab[draggable='true'] {
+  cursor: grab;
+}
+.ab-item[draggable='true']:active,
+.sidebar-section-head[draggable='true']:active,
+.panel-tab[draggable='true']:active {
+  cursor: grabbing;
+}
+
+/* 设置 overlay（壳层私有，容器语义；复用 wizard 容器壳） */
+.settings-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  font-size: var(--fs-2);
+  cursor: pointer;
+}
+.settings-row input[type='checkbox'] {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+.settings-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-hint {
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 .wizard-error {
   color: var(--red);
