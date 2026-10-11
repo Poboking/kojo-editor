@@ -385,6 +385,31 @@ textarea {
   overflow-x: hidden;
   min-height: 0;
 }
+/* 多面板弹性分栏（默认等分；section 各自滚动，把手上下拉伸） */
+.sidebar-views.split {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-views.split .sidebar-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.sidebar-views.split .sidebar-section-head {
+  flex: none;
+}
+.sidebar-views.split .sidebar-section > .panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 0;
+}
+.section-splitter {
+  flex: none;
+}
 .sidebar-section-head {
   display: flex;
   align-items: center;
@@ -599,7 +624,8 @@ textarea {
 
 /* ------------------------------ editor tabs (P3) ------------------------------ */
 
-/* 标签条底色比编辑器区亮半档，活动标签落回编辑器底色形成"接通"感 */
+/* 标签条底色比编辑器区亮半档，活动标签落回编辑器底色形成"接通"感；
+   滚动条隐藏（滚轮横滚 + 活动标签自动滚入视口替代，现代编辑器无感方案） */
 .editor-tabs {
   display: flex;
   align-items: stretch;
@@ -607,11 +633,11 @@ textarea {
   overflow-y: hidden;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
-  scrollbar-width: thin;
+  scrollbar-width: none;
   flex: none;
 }
 .editor-tabs::-webkit-scrollbar {
-  height: 3px;
+  display: none;
 }
 .editor-tab {
   display: flex;
@@ -677,6 +703,23 @@ textarea {
   background: rgba(255, 255, 255, 0.1);
   color: var(--fg);
 }
+/* 拖拽重排的落点指示（左/右缘竖条；与活动标签的顶部指示可叠加） */
+.editor-tab.drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.editor-tab.drop-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+.editor-tab.active.drop-before {
+  box-shadow:
+    inset 0 2px 0 var(--accent),
+    inset 2px 0 0 var(--accent);
+}
+.editor-tab.active.drop-after {
+  box-shadow:
+    inset 0 2px 0 var(--accent),
+    inset -2px 0 0 var(--accent);
+}
 
 /* ------------------------------ file tree ------------------------------ */
 
@@ -740,6 +783,25 @@ textarea {
   list-style: none;
   margin: 0 0 4px;
   padding: 0 0 0 18px;
+}
+/* 作者版本号子目录行（角色组内的二级归属，如实还原磁盘目录结构） */
+.tree-author {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 1px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.tree-author-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-files.nested {
+  padding-left: 12px;
+  margin-bottom: 2px;
 }
 .tree-file {
   width: 100%;
@@ -2363,10 +2425,6 @@ textarea {
 .sb-dirty.on {
   color: var(--amber);
 }
-.sb-zen {
-  border: none;
-  padding: 1px 8px;
-}
 /* 写权限徽章 pill 化：状态一眼可辨 */
 .sb-writable {
   border: 1px solid transparent;
@@ -2676,16 +2734,16 @@ textarea {
 .notification-center {
   position: fixed;
   right: 16px;
-  bottom: 40px;
+  bottom: 36px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   z-index: 1200;
-  max-width: 380px;
+  max-width: 400px;
 }
 .toast {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -2703,13 +2761,50 @@ textarea {
 .toast-error {
   border-left-color: var(--red);
 }
+/* 类型图标：圆形色块 + 白字符（info = accent / error = red） */
+.toast-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-style: normal;
+  line-height: 1;
+  color: #fff;
+  background: var(--accent);
+}
+.toast-error .toast-icon {
+  background: var(--red);
+}
 .toast-message {
   flex: 1;
-  line-height: 1.5;
+  line-height: 1.6;
+  padding-top: 1px;
+}
+/* toast 动作按钮：accent 淡底（与关闭叉拉开层级） */
+.toast-action {
+  flex: none;
+  border-color: rgba(76, 139, 245, 0.4);
+  background: rgba(76, 139, 245, 0.12);
+}
+.toast-action:hover {
+  border-color: transparent;
+  background: rgba(76, 139, 245, 0.22);
 }
 .toast-close {
+  flex: none;
   border: none;
   padding: 0 6px;
+  color: var(--fg-dim);
+  border-radius: 4px;
+}
+.toast-close:hover {
+  color: var(--fg);
+  background: var(--hover);
 }
 
 /* ------------------------------ 动效关键帧（ui-polish） ------------------------------ */

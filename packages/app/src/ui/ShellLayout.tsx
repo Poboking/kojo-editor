@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -426,6 +427,43 @@ export function ShellLayout(props: Props): ReactElement {
   const toggleCollapse = (panelId: string): void =>
     setCollapsed((prev) => ({ ...prev, [panelId]: !prev[panelId] }));
 
+  /* -------- 侧栏多面板弹性分栏（用户反馈：口上文件/函数树默认 50/50，可上下拉伸） -------- */
+
+  /** 各视图的分栏权重（会话级，与组内折叠同级不持久化；缺省 = 全 1 等分） */
+  const [splitWeights, setSplitWeights] = useState<Record<string, number[]>>({});
+  const splitRef = useRef<HTMLDivElement | null>(null);
+
+  /** 分栏把手拖拽：调整第 i / i+1 两个展开面板的权重（总和守恒，带最小权重钳制） */
+  const startSectionDrag = (e: ReactMouseEvent, view: ViewDef, i: number): void => {
+    e.preventDefault();
+    const container = splitRef.current;
+    if (!container) return;
+    const totalPx = container.clientHeight;
+    if (totalPx <= 0) return;
+    const n = view.panels.length;
+    const cur = splitWeights[view.key] ?? Array.from({ length: n }, () => 1);
+    const totalW = cur.reduce((a, b) => a + b, 0);
+    const startY = e.clientY;
+    const wA = cur[i] ?? 1;
+    const wB = cur[i + 1] ?? 1;
+    const sum = wA + wB;
+    const MIN_W = 0.4;
+    const onMove = (ev: MouseEvent): void => {
+      const d = ((ev.clientY - startY) / totalPx) * totalW;
+      const newA = Math.min(sum - MIN_W, Math.max(MIN_W, wA + d));
+      const next = [...cur];
+      next[i] = newA;
+      next[i + 1] = sum - newA;
+      setSplitWeights((prev) => ({ ...prev, [view.key]: next }));
+    };
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   const activityBar = (
     <nav
       className={`activitybar ${dropTarget === 'sidebar' ? 'drop-target' : ''}`}
@@ -477,33 +515,49 @@ export function ShellLayout(props: Props): ReactElement {
     </nav>
   );
 
-  const sidebarView = (
+  const sidebarView = activeView && activeView.panels.length > 1 ? (
+    /* 多面板视图：弹性分栏（默认等分；把手上下拉伸；折叠的头只占标题行） */
+    <div ref={splitRef} className="sidebar-views split">
+      {activeView.panels.map((p, i) => {
+        const isCollapsed = collapsed[p.id] === true;
+        const weights = splitWeights[activeView.key] ?? activeView.panels.map(() => 1);
+        const nextPanel = activeView.panels[i + 1];
+        const showSplitter =
+          !isCollapsed && nextPanel !== undefined && collapsed[nextPanel.id] !== true;
+        return (
+          <Fragment key={p.id}>
+            <section
+              className="sidebar-section"
+              style={isCollapsed ? undefined : { flexGrow: weights[i] ?? 1, flexBasis: 0 }}
+            >
+              <button
+                className="sidebar-section-head"
+                title={`${p.title}（可拖拽到其他容器）`}
+                draggable
+                onDragStart={(e) => startPanelDrag(e, [p.id])}
+                onDragEnd={dragEnd}
+                onClick={() => toggleCollapse(p.id)}
+              >
+                <span className="caret">{isCollapsed ? '▸' : '▾'}</span>
+                <span>{p.title}</span>
+              </button>
+              {isCollapsed ? null : <PanelBody contribution={p} />}
+            </section>
+            {showSplitter ? (
+              <div
+                className="resizer resizer-y section-splitter"
+                role="separator"
+                aria-label={`调整 ${p.title} 高度`}
+                onMouseDown={(e) => startSectionDrag(e, activeView, i)}
+              />
+            ) : null}
+          </Fragment>
+        );
+      })}
+    </div>
+  ) : (
     <div className="sidebar-views">
-      {activeView
-        ? activeView.panels.map((p) => {
-            const isCollapsed = collapsed[p.id] === true;
-            // 独占视图：容器即面板，不再多一层可折叠头
-            if (activeView.panels.length === 1) {
-              return <PanelBody key={p.id} contribution={p} />;
-            }
-            return (
-              <section key={p.id} className="sidebar-section">
-                <button
-                  className="sidebar-section-head"
-                  title={`${p.title}（可拖拽到其他容器）`}
-                  draggable
-                  onDragStart={(e) => startPanelDrag(e, [p.id])}
-                  onDragEnd={dragEnd}
-                  onClick={() => toggleCollapse(p.id)}
-                >
-                  <span className="caret">{isCollapsed ? '▸' : '▾'}</span>
-                  <span>{p.title}</span>
-                </button>
-                {isCollapsed ? null : <PanelBody contribution={p} />}
-              </section>
-            );
-          })
-        : null}
+      {activeView && activeView.panels[0] ? <PanelBody contribution={activeView.panels[0]} /> : null}
     </div>
   );
 
@@ -602,13 +656,6 @@ export function ShellLayout(props: Props): ReactElement {
         >
           ◨
         </button>
-        <button
-          className="ghost small toolbar-btn"
-          title="写作模式 (Ctrl+K Z)"
-          onClick={() => dispatch({ type: 'toggleZen' })}
-        >
-          ☾
-        </button>
         <button className="ghost small toolbar-btn" title="重置布局" onClick={doReset}>
           ⟲
         </button>
@@ -660,13 +707,6 @@ export function ShellLayout(props: Props): ReactElement {
         <span className={`sb-dirty ${dirty ? 'on' : ''}`} title={dirty ? '有未保存修改' : '已保存'}>
           {dirty ? '● 未保存' : '已保存'}
         </span>
-        <button
-          className="ghost small sb-zen"
-          title={layout.zen ? '退出写作模式 (Esc)' : '写作模式 (Ctrl+K Z)'}
-          onClick={() => dispatch({ type: 'toggleZen' })}
-        >
-          ☾
-        </button>
       </div>
     </footer>
   );
@@ -696,6 +736,17 @@ export function ShellLayout(props: Props): ReactElement {
           <div className="overlay-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
             <div className="wizard">
               <h3>设置</h3>
+              <label className="settings-row">
+                <input
+                  type="checkbox"
+                  checked={layout.zen}
+                  onChange={(e) => dispatch(e.target.checked ? { type: 'toggleZen' } : { type: 'exitZen' })}
+                />
+                <span>
+                  写作模式（全禅）
+                  <span className="settings-hint">快捷键 Ctrl+K Z；Esc 退出</span>
+                </span>
+              </label>
               <label className="settings-row">
                 <input
                   type="checkbox"

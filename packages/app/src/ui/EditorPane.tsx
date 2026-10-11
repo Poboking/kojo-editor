@@ -600,12 +600,19 @@ export function EditorPane({
       theme: 'kojo-dark',
       language: ERB_LANGUAGE_ID,
       automaticLayout: true,
-      minimap: { enabled: false },
+      // 缩略图：文本块模式（不逐字符渲染——口上文本为长行文，色块更干净也更省性能）
+      minimap: { enabled: true, renderCharacters: false, maxColumn: 72 },
       fontSize: 14,
       lineNumbers: 'on',
       renderWhitespace: 'none',
       scrollBeyondLastLine: false,
       wordWrap: 'on',
+      // 编辑器体感（ui-polish）：平滑滚动 / 平滑光标 / 整行高亮 / 上下留白
+      smoothScrolling: true,
+      cursorSmoothCaretAnimation: 'on',
+      renderLineHighlight: 'all',
+      padding: { top: 6, bottom: 16 },
+      scrollbar: { verticalScrollbarSize: 12, horizontalScrollbarSize: 12 },
     });
     editorRef.current = ed;
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {

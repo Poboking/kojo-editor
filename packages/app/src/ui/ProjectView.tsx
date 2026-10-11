@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-api';
 import { WellKnownCommands } from '@kojo/plugin-api';
@@ -26,6 +26,8 @@ interface Props {
   onActivateTab: (path: string) => void;
   /** 请求关闭标签（脏标签由宿主弹确认） */
   onRequestCloseTab: (path: string) => void;
+  /** 拖拽重排标签：把 path 移动到 toIndex（删除后插入语义） */
+  onReorderTab: (path: string, toIndex: number) => void;
   /** 全部保存（Ctrl+Shift+S 壳层命令落地处） */
   onSaveAll: () => Promise<boolean>;
   /** 编辑器脏状态上抛（按路径；宿主维护 dirtyPaths） */
@@ -67,6 +69,7 @@ export function ProjectView({
   onOpenFile,
   onActivateTab,
   onRequestCloseTab,
+  onReorderTab,
   onSaveAll,
   onDirtyChange,
   registerActions,
@@ -119,6 +122,19 @@ export function ProjectView({
     [onRequestCloseTab, onSaveAll],
   );
 
+  // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →
+  // React 视作新组件类型 → 整树卸载重挂 → 展开状态被清空。改为身份恒定的包装
+  // 组件 + ref 桥接最新 props：重渲染只更新属性，绝不重挂，展开状态常驻）。
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile };
+  const fileTreeComponent = useMemo(() => {
+    const StableFileTree = (): ReactElement => {
+      const a = fileTreeArgsRef.current;
+      return <FileTree project={a.project} index={a.index} activeFile={a.activeFile} onOpenFile={a.onOpenFile} />;
+    };
+    return StableFileTree;
+  }, []);
+
   const builtinViews = useMemo<UIPanelContribution[]>(
     () => [
       {
@@ -128,13 +144,52 @@ export function ProjectView({
         order: 30,
         group: 'explorer',
         location: 'sidebar',
-        component: () => (
-          <FileTree project={project} index={index} activeFile={activeFile} onOpenFile={onOpenFile} />
-        ),
+        component: fileTreeComponent,
       },
     ],
-    [project, index, activeFile, onOpenFile],
+    [fileTreeComponent],
   );
+
+  /* ---------------- 标签栏：拖拽重排 + 滚轮横滚 + 活动标签滚入视口 ---------------- */
+
+  /** 标签拖拽的自定义 MIME（只在标签条内部流转，防外部拖入误触发） */
+  const TAB_DRAG_MIME = 'application/x-kojo-tab-move';
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  const [tabDropAt, setTabDropAt] = useState<{ path: string; before: boolean } | null>(null);
+
+  // 活动标签保持可见（标签多到溢出时，点击树中文件也能定位到对应标签）
+  useEffect(() => {
+    tabsRef.current
+      ?.querySelector('.editor-tab.active')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activeFile, openTabs.length]);
+
+  const onTabDragStart = (e: ReactDragEvent, p: string): void => {
+    e.dataTransfer.setData(TAB_DRAG_MIME, p);
+    e.dataTransfer.setData('text/plain', p);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+  const onTabDragOver = (e: ReactDragEvent, p: string): void => {
+    if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const r = e.currentTarget.getBoundingClientRect();
+    setTabDropAt({ path: p, before: e.clientX < r.left + r.width / 2 });
+  };
+  const onTabDrop = (e: ReactDragEvent, p: string): void => {
+    const dragPath = e.dataTransfer.getData(TAB_DRAG_MIME);
+    setTabDropAt(null);
+    if (!dragPath || dragPath === p) return;
+    e.preventDefault();
+    const from = openTabs.indexOf(dragPath);
+    let to = openTabs.indexOf(p);
+    if (from < 0 || to < 0) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    if (e.clientX >= r.left + r.width / 2) to++;
+    if (from < to) to--;
+    if (from !== to) onReorderTab(dragPath, to);
+  };
+  const onTabDragEnd = (): void => setTabDropAt(null);
 
   return (
     <ShellLayout
@@ -153,16 +208,33 @@ export function ProjectView({
       extraCommands={extraCommands}
       onRegisterWorkbench={setWorkbench}
     >
-      {/* 标签栏（P3：中键/× 关闭；脏点 ●；溢出横向滚动） */}
+      {/* 标签栏（P3：中键/× 关闭；脏点 ●；拖拽重排；滚轮横滚；溢出隐藏滚动条） */}
       {openTabs.length > 0 ? (
-        <div className="editor-tabs" role="tablist">
+        <div
+          ref={tabsRef}
+          className="editor-tabs"
+          role="tablist"
+          onWheel={(e) => {
+            // 垂直滚轮转横向滚动（现代编辑器的无感横滚；滚动条隐藏后这是主要滚动途径）
+            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+              e.currentTarget.scrollLeft += e.deltaY;
+            }
+          }}
+        >
           {openTabs.map((p) => (
             <div
               key={p}
               role="tab"
               aria-selected={p === activeFile}
-              className={`editor-tab ${p === activeFile ? 'active' : ''}`}
+              className={`editor-tab ${p === activeFile ? 'active' : ''} ${
+                tabDropAt?.path === p ? (tabDropAt.before ? 'drop-before' : 'drop-after') : ''
+              }`}
               title={p}
+              draggable
+              onDragStart={(e) => onTabDragStart(e, p)}
+              onDragOver={(e) => onTabDragOver(e, p)}
+              onDrop={(e) => onTabDrop(e, p)}
+              onDragEnd={onTabDragEnd}
               onClick={() => onActivateTab(p)}
               onAuxClick={(e) => {
                 if (e.button === 1) {

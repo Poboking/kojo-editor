@@ -252,6 +252,18 @@ export function App(): ReactElement {
     [pendingClose, doCloseTab],
   );
 
+  /** 拖拽重排标签（删除后插入语义：toIndex 以移除 path 之后的数组为基准） */
+  const reorderTab = useCallback((path: string, toIndex: number) => {
+    setOpenTabs((prev) => {
+      const from = prev.indexOf(path);
+      if (from < 0) return prev;
+      const next = [...prev];
+      next.splice(from, 1);
+      next.splice(Math.max(0, Math.min(toIndex, next.length)), 0, path);
+      return next;
+    });
+  }, []);
+
   /** 全部保存（Ctrl+Shift+S；壳层命令经 ProjectView 注入） */
   const saveAll = useCallback(async (): Promise<boolean> => {
     return actionsRef.current ? actionsRef.current.saveAll() : false;
@@ -326,6 +338,7 @@ export function App(): ReactElement {
         onOpenFile={openFile}
         onActivateTab={requestOpenFile}
         onRequestCloseTab={requestCloseTab}
+        onReorderTab={reorderTab}
         onSaveAll={saveAll}
         onDirtyChange={onDirtyChange}
         registerActions={registerActions}

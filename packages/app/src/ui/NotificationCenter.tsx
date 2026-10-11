@@ -75,10 +75,13 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
         <div className="notification-center">
           {notices.map((n) => (
             <div key={n.id} className={`toast toast-${n.kind}`} role="alert">
+              <span className="toast-icon" aria-hidden="true">
+                {n.kind === 'error' ? '✕' : 'i'}
+              </span>
               <span className="toast-message">{n.message}</span>
               {n.action ? (
                 <button
-                  className="small"
+                  className="small toast-action"
                   onClick={() => {
                     dismiss(n.id);
                     n.action?.run();
