@@ -21,11 +21,14 @@ import type {
   SugarDiagnostic,
   SugarDoc,
   SugarPosition,
+  SugarSaveBlockReason,
+  SugarSavePlan,
+  SugarSavePlanRequest,
   SugarTranspileOptions,
   SugarTranspileResult,
   SugarTranspileService,
 } from '@kojo/plugin-api';
-import { isReadonlyAlias, SugarCompileError } from '@kojo/plugin-api';
+import { fullwidthSpaceLines, isReadonlyAlias, resolveSugarTarget, SugarCompileError } from '@kojo/plugin-api';
 import { buildDoc, type TopNode } from './parser';
 import { codegen } from './codegen';
 import { compileToFile as runCompileToFile } from './compile';
@@ -132,6 +135,34 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     return { line: entry.sourceLine, column: entry.span?.start.column ?? 1 };
   }
 
+  /**
+   * 保存前置检查（S7 批；纯函数）。
+   *
+   * 顺序：先推目标路径（无目标即 blocked，省去一次转译），再转译取诊断，
+   * 最后取全角空格告警行。`filePath` 缺省取 `sourcePath`——保证产物诊断里的
+   * 文件名与目标推导同源（否则 UI 会看到两套文件名）。
+   */
+  function planSave(request: SugarSavePlanRequest): SugarSavePlan {
+    const { source, sourcePath } = request;
+    const erbPath = resolveSugarTarget(sourcePath);
+    const options: SugarTranspileOptions = { filePath: sourcePath, ...(request.options ?? {}) };
+    const transpileResult = transpile(source, options);
+    const hasError = transpileResult.diagnostics.some((d) => d.severity === 'error');
+
+    let blockedReason: SugarSaveBlockReason | undefined;
+    if (erbPath === null) blockedReason = 'source-not-kojo';
+    else if (hasError) blockedReason = 'transpile-error';
+
+    return {
+      sourcePath,
+      erbPath,
+      transpile: transpileResult,
+      fullwidthSpaceLines: fullwidthSpaceLines(source),
+      blocked: blockedReason !== undefined,
+      ...(blockedReason ? { blockedReason } : {}),
+    };
+  }
+
   async function compileToFile(
     source: string,
     targetPath: string,
@@ -148,5 +179,5 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     return runCompileToFile({ io, transpile, ...(opts.log ? { log: opts.log } : {}) }, source, targetPath, options);
   }
 
-  return { parse, transpile, sourceOf, compileToFile };
+  return { parse, transpile, sourceOf, compileToFile, planSave };
 }

@@ -24,27 +24,19 @@ import type {
   SugarPreviewMessageBlock,
   SugarPreviewResult,
 } from '@kojo/plugin-api';
+import { FULLWIDTH_SPACE, fullwidthSpaceLines } from '@kojo/plugin-api';
 
 /* ============================== 全角空格（规范 §8） ============================== */
 
 /**
- * 全角空格 `U+3000`。
+ * 全角空格（`U+3000`）——**单一真源已上收契约层**（S7 批）。
  *
- * 刻意**本地定义**而非从 kojo-sugar 内部导入：插件之间不得交叉 import
- * （解耦审计 C 项），一个字符常量不值得为它引入依赖边。它的语义是
- * "语料里的排版陷阱"，属语言层事实，非游戏知识。
+ * 这里不再本地定义，而是从 `@kojo/plugin-api` 导入后**原样转出**：契约层的
+ * `FULLWIDTH_SPACE` / `fullwidthSpaceLines` 是保存前置检查（`planSave`）与本
+ * 预览面板**共用**的判据，两处各写一遍会让"什么算全角空格"悄悄分叉。契约层
+ * 是允许的公共面，插件之间仍不交叉 import（解耦审计 C 项不受影响）。
  */
-export const FULLWIDTH_SPACE = '\u3000';
-
-/** 含全角空格的行号（1 基；按升序） */
-export function fullwidthSpaceLines(source: string): number[] {
-  const out: number[] = [];
-  const lines = source.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i]!.includes(FULLWIDTH_SPACE)) out.push(i + 1);
-  }
-  return out;
-}
+export { FULLWIDTH_SPACE, fullwidthSpaceLines };
 
 /* ============================== 诊断行 ============================== */
 

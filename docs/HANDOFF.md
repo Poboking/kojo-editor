@@ -120,7 +120,13 @@
   5. **测试**：规则单测 3 路径（覆盖/不覆盖/协议不可用降级）+ call-protocol +5（模板具体性与覆盖语义）+ 真实语料 `corpus.test.ts`（36 条，全 warning，全「数值槽 声明 1 / 转发 0」）；kernel 集成冒烟 `ruleCount` 5→6 + 新增 `=== 36` 断言。
   6. **验证**：564 passed / 7 skipped（无 smoke）；569 / 2 skipped（带 smoke）；typecheck root+app ✅；audit ✅（13 插件）；**回放基线逐字不变**（K49 1356/11685/未知 3741/exact 836）。
 
-- **v0.3 语法糖批进度**：**S1 契约 + golden ✅**（§5.26）/ **S2 转译内核 ✅**（§5.28）/ **S3 写链路 ✅**（§5.29）/ **S4 糖预览数据层 ✅**（§5.30）/ **S5 升糖建议器数据层 ✅**（§5.31）/ **S5+ 旁白口径 + lift apply + ui-sugar-lift 面板 ✅**（§5.32a/b）/ **解耦补齐批（KojoFaceTable 契约 + 审计 D 项）✅**（§5.33）。服务键：`sugar.preview` / `sugar.lift` / `sugar.liftApply`（`sugar.transpile` 未动）。基线 **868 项 / 14 插件 / 审计 A–D 四项**。
+- **v0.3 语法糖批进度**：**S1 契约 + golden ✅**（§5.26）/ **S2 转译内核 ✅**（§5.28）/ **S3 写链路 ✅**（§5.29）/ **S4 糖预览数据层 ✅**（§5.30）/ **S5 升糖建议器数据层 ✅**（§5.31）/ **S5+ 旁白口径 + lift apply + ui-sugar-lift 面板 ✅**（§5.32a/b）/ **解耦补齐批（KojoFaceTable 契约 + 审计 D 项）✅**（§5.33）/ **S4-UI 糖预览面板 ✅**（§5.34，第 15 插件 `ui-sugar-preview`）/ **S6 编辑体验 ✅**（§5.35，第 16 插件 `ui-sugar-editor`）/ **保存路径推导 + 前置检查（路线 S7 数据层）✅**（§5.36）。服务键：`sugar.preview` / `sugar.lift` / `sugar.liftApply`（`sugar.transpile` 增 `planSave` 纯函数方法）。基线 **950 项 / 16 插件 / 审计 A–D 四项**。
+- **v0.3 批 S7 完成**（本会话）：**保存路径推导 + 前置检查（数据层）**（IMPLEMENTATION-LOG §5.36 为权威记录）。
+  1. **契约** `plugin-api/sugar.ts`：`resolveSugarTarget`（`.kojo` → 同目录同基名 `.ERB`，纯函数零游戏知识）/ `FULLWIDTH_SPACE` + `fullwidthSpaceLines`（`U+3000` 判据**上收契约层单一真源**）/ `SugarSavePlan` + `SugarSaveBlockReason`（`'source-not-kojo' | 'transpile-error'` 闭集）/ `SugarTranspileService.planSave`。
+  2. **引擎**（kojo-sugar `service.ts`）：`planSave` 一次算齐"目标推导 + 转译 + 全角空格告警"；`blocked` 优先级 `source-not-kojo` > `transpile-error`；**只读前置**（不读盘不写盘不发事件），落盘仍走 S3 `compileToFile`。
+  3. **单一真源收敛**：`ui-sugar-preview/panel-logic.ts` 删本地全角空格定义，改从契约层转出（import 面不变，测试零改动即绿）。
+  4. **决策**：目标推导用"同目录换扩展名"（源 `.kojo` 由新建向导生成、沿用产物基名 `M_KOJO_K{n}_{分野}.kojo` 惯例），**非** `charaIndex[no].kojoDir` 拼接（后者需游戏知识 + 读盘）；全角空格**只告警不阻断**（规范 §8 明文 + 语料 55,565/3,599,696 行、行首 0 次）。
+  5. **测试**：+19 单测（`save-plan.test.ts` 三节：目标推导 / 全角空格 / 前置检查）；基线 **950 passed / 6 skipped（956）**；typecheck root+app ✅；audit ✅（16 插件）。
 
 ## 三、文档索引（按权威性排序）
 
@@ -218,7 +224,7 @@ node tools/smoke-tauri-ipc.mjs
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
 5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
 
-## 六、v0.2 批次记录（第三批～第十七批，✅ 全部完成）+ v0.3 糖批（S1～S4，✅）
+## 六、v0.2 批次记录（第三批～第十七批，✅ 全部完成）+ v0.3 糖批（S1～S7，✅）
 
 ### 6.1 第三批：条件谓词抽取 `condition-extractor`
 
@@ -537,6 +543,20 @@ node tools/smoke-tauri-ipc.mjs
 
 **边界**（未做，属后续批）：保存路径推导（`.kojo` → `M_KOJO_K{No}_{分野}.ERB`）接 `compileToFile` + 保存期全角空格**阻断/一键修复**；编辑器内三向映射装饰（悬浮/内联）；消息块逐条气泡；虚拟滚动。
 
+### 6.27 语法糖 S7 批（✅ 已完成）：保存路径推导 + 前置检查（数据层，无新插件）
+
+**实施结果**（IMPLEMENTATION-LOG §5.36 为权威）：把"编辑 → 保存"闭环缺的最后一块**数据层**补上——`.kojo` 的**目标产物路径推导** + **保存前置检查** `planSave`。本批**只做数据层**，UI 接线留 S7-UI。
+
+- **目标推导 = "同目录换扩展名"（非 `charaIndex[no].kojoDir` 拼接）**：[resolveSugarTarget](file:///d:/DSH/kojo-editor/packages/plugin-api/src/sugar.ts) 只做 `.kojo` → 同目录同基名 `.ERB`（大小写不敏感，分隔符保留原样），**纯函数、零游戏知识、住契约层**。源 `.kojo` 由新建向导与产物**同目录**生成、沿用产物基名（`M_KOJO_K49_指令.kojo` 惯例），故换扩展名即正确；跨目录/改名（需 adapter 命名知识）留新建向导。
+- **全角空格单一真源上收契约层**：`FULLWIDTH_SPACE` / `fullwidthSpaceLines` 从 `ui-sugar-preview` 本地定义**上收**到 `plugin-api/sugar.ts`，预览面板改为**原样转出**（import 面不变、测试零改动即绿）——保存前置检查与预览面板共用同一判据，杜绝分叉。
+- **`planSave` 是只读前置**：一次算齐「目标推导 + 转译（产物/源映射/诊断）+ 全角空格告警行」；`blocked` 闭集两值 `'source-not-kojo' | 'transpile-error'`（优先级：无目标 > 半成品）。**落盘仍走 S3 `compileToFile`**，写盘能力不外溢（能力面 = 服务键面）。
+- **全角空格只告警不阻断**：规范 §8 明文"保存期告警"；语料证据 55,565 / 3,599,696 行（1.54%）全为行中用途、**行首 0 次**。故独立成 `fullwidthSpaceLines` 字段而非诊断码（不污染 `SugarDiagnosticCode` 语义闭集），阻断/一键修复留 UI。
+- **无新插件**：契约 + 引擎 + 单测 + 单一真源收敛，插件数仍 **16**。
+
+**验收（2026-10-11 实测）**：**950 passed / 6 skipped（956）**（931 → 950，**+19**；`save-plan.test.ts` 三节全过）/ typecheck root ✅ + app ✅ / `audit:decoupling` **A/B/C/D 四项全绿（16 插件）** / golden 逐字节零回退（未触碰）。**基线更新：950 项 / 16 插件 / 四项审计**。
+
+**边界**（未做，属 S7-UI 或后续批）：保存 UI 接线（`Ctrl+S` → `planSave` → 阻断对话框 / `compileToFile` 落盘）；保存期全角空格**阻断/一键修复**；新建向导跨目录目标命名校验。
+
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
@@ -596,9 +616,9 @@ node tools/smoke-tauri-ipc.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**931 项** / ✅ / 16 插件 / 审计 A/B/C/D 四项；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.35 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）、**S4-UI 糖预览面板 ✅**（§5.34）、**S5 升糖建议器数据层 ✅**（§5.31）、**S5-UI 升糖面板 ✅**（§5.32b）、**S6 编辑体验 ✅**（§5.35；`.kojo` Monarch 高亮 + 中文关键字/保留代词/别名补全 + `ui.editor.decorator` 槽波浪线 + 糖判定面板，第 16 插件 `ui-sugar-editor`）；**下一批候选**：①**保存路径推导**（`.kojo` → `charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB`）接 `compileToFile`，随后做保存期全角空格**阻断/一键修复**；②v0.3 UI 余项：编辑器内三向映射装饰（悬浮/内联）、消息块逐条气泡（含逐字符 FORM 展开渲染串）、虚拟滚动）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**950 项** / ✅ / 16 插件 / 审计 A/B/C/D 四项；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.36 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
+4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）、**S4-UI 糖预览面板 ✅**（§5.34）、**S5 升糖建议器数据层 ✅**（§5.31）、**S5-UI 升糖面板 ✅**（§5.32b）、**S6 编辑体验 ✅**（§5.35；`.kojo` Monarch 高亮 + 中文关键字/保留代词/别名补全 + `ui.editor.decorator` 槽波浪线 + 糖判定面板，第 16 插件 `ui-sugar-editor`）、**S7 保存路径推导 + 前置检查数据层 ✅**（§5.36；`resolveSugarTarget` + `planSave` + 全角空格单一真源上收契约层）；**下一批候选**：①**S7-UI 保存接线**——`.kojo` 的 `Ctrl+S` 走 `planSave` → `blocked` 弹阻断原因 / 否则 `compileToFile` 落盘，全角空格告警提示 + **阻断/一键修复**（数据层已具备，是 v0.4.0-beta.1 判据①的最后一环）；②v0.3 UI 余项：编辑器内三向映射装饰（悬浮/内联）、消息块逐条气泡（含逐字符 FORM 展开渲染串）、虚拟滚动）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`；**新批次编号用「日期 + 简称」，不再用 vX.Y 第N批（§十一 版本纪律）**；发版时走 §十一 的 tag 流程（首个发行版 = `v0.4.0-beta.1`，判据五项）
 
 ## 十一、版本纪律（2026-10-11 定，用户拍板）

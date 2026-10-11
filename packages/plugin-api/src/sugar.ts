@@ -650,6 +650,97 @@ export class SugarCompileError extends Error {
   }
 }
 
+/* ============================== 保存目标推导与前置检查（S7 批） ============================== */
+
+/**
+ * 全角空格（`U+3000`）——**语料里的排版陷阱**（规范 §8：保存期告警）。
+ *
+ * 属**语言层事实**（非游戏知识），故住契约层并作为**单一真源**：预览面板与
+ * 保存前置检查共用（两处各写一遍会让"什么算全角空格"的判据悄悄分叉）。
+ *
+ * 证据（eraTW 4.980 全量实测）：口上语料 3,599,696 行中含 `U+3000` 者 55,565
+ * 行（1.54%），**全部为行中用途**（注释分隔 `;【TARGET】　欲情の珠`、以及编译器
+ * 生成的台词缩进 `PRINTFORMW 　「…」`），**行首出现 0 次**。故它是"正常但极易
+ * 与半角空格混看"的字符——保存期**告警**（不阻断），由作者判断是否本意。
+ */
+export const FULLWIDTH_SPACE = '\u3000';
+
+/**
+ * 含全角空格（`U+3000`）的源行号（1 基，按升序）。
+ *
+ * 判据与既有预览面板一致：**行内任一位置**出现 `U+3000` 即计入（不做"仅行首"
+ * 收窄——上游 S4-UI 批已按整行判定冻结，收窄会与面板相矛盾）。
+ */
+export function fullwidthSpaceLines(source: string): number[] {
+  const out: number[] = [];
+  const lines = source.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.includes(FULLWIDTH_SPACE)) out.push(i + 1);
+  }
+  return out;
+}
+
+/**
+ * 由 `.kojo` 源路径推导目标 `.erb` 产物路径（**纯函数**；不触达磁盘）。
+ *
+ * 规则：**同目录、同基名，扩展名 `.kojo` → `.ERB`**（大小写不敏感，`\` / `/`
+ * 分隔符一律保留原样）。非 `.kojo`（或空路径）→ `null`。
+ *
+ * 依据（真实语料）：产物布局为 `個人口上/{编号 名称}/{口上名}/M_KOJO_K{n}_{分野}.ERB`，
+ * 源 `.kojo` 由编辑器"新建向导"与产物**同目录**生成、并沿用产物基名（`K{No}` +
+ * 分野都已在源文件名里，见 `M_KOJO_K49_指令.kojo` 惯例）——故"换扩展名"即正确
+ * 推导。**不做跨目录/改名**：那属新建向导与命名校验的职责（后者需 adapter 的
+ * `M_KOJO_K{No}` 命名知识，不在本通用函数内）。
+ */
+export function resolveSugarTarget(sourcePath: string): string | null {
+  if (!sourcePath) return null;
+  const m = /\.kojo$/i.exec(sourcePath);
+  if (!m) return null;
+  return `${sourcePath.slice(0, sourcePath.length - m[0].length)}.ERB`;
+}
+
+/** 保存被阻止的原因（**闭集**；命名零游戏名词） */
+export type SugarSaveBlockReason =
+  /** 源路径非 `.kojo` —— 无对应产物目标（如误对原生 `.ERB` 触发保存流程） */
+  | 'source-not-kojo'
+  /** 转译产 `error` 诊断 —— fail-closed，不落盘半成品（同 `compileToFile` 守卫） */
+  | 'transpile-error';
+
+/** 保存前置检查请求（纯数据；不读盘不写盘） */
+export interface SugarSavePlanRequest {
+  /** `.kojo` 源文本（内存态） */
+  source: string;
+  /** 源文件绝对路径（推导目标产物路径的依据） */
+  sourcePath: string;
+  /** 转译选项（`filePath` 缺省取 `sourcePath`；显式给出则覆盖） */
+  options?: SugarTranspileOptions;
+}
+
+/**
+ * 保存计划（`planSave` 的产物）——**保存 UI 的唯一前置入口**。
+ *
+ * 把"保存一颗 `.kojo`"所需的三件事一次算齐：① 目标产物路径推导；② 转译
+ * （产物 + 源映射 + 诊断）；③ 全角空格告警行。**纯函数**语义（`planSave`
+ * 不读盘不写盘不发事件），落盘仍由 `compileToFile` 负责（S3 写链路）。
+ *
+ * `blocked` 的语义是"**不要走落盘**"：源非 `.kojo`（无目标）或转译产 error
+ * （半成品不可落盘）。全角空格**只告警不阻断**（见 `FULLWIDTH_SPACE` 证据）。
+ */
+export interface SugarSavePlan {
+  /** 源文件绝对路径（回显） */
+  sourcePath: string;
+  /** 推导出的产物目标路径；源非 `.kojo` → `null` */
+  erbPath: string | null;
+  /** 转译结果（产物 + 行级源映射 + 全量诊断） */
+  transpile: SugarTranspileResult;
+  /** 含全角空格（`U+3000`）的源行号（升序）——保存期告警，**不阻断** */
+  fullwidthSpaceLines: number[];
+  /** 是否阻止落盘（`erbPath === null`，或转译含 error 诊断） */
+  blocked: boolean;
+  /** 阻止原因（`blocked === true` 时必有值） */
+  blockedReason?: SugarSaveBlockReason;
+}
+
 /* ============================== 诊断 ============================== */
 
 /**
@@ -798,6 +889,20 @@ export interface SugarTranspileService {
    * @throws `WriteNotAllowedError` 路径越权 / `SugarCompileError` 编译拒绝或回读失败
    */
   compileToFile(source: string, targetPath: string, options?: SugarCompileOptions): Promise<SugarCompileResult>;
+  /**
+   * 保存前置检查（S7 批；**纯函数**，不读盘不写盘不发事件）。
+   *
+   * 把"保存一颗 `.kojo`"所需的三件事一次算齐（推导目标 + 转译 + 全角空格告警），
+   * 供保存 UI 在**调用落盘前**决定"能否保存 / 存到哪 / 有无排版提醒"。落盘本身
+   * 仍走 `compileToFile`（S3 写链路）——本方法只做**只读前置**，把守卫前置，
+   * 让 UI 拿到 `blocked` 而无需先触发 IO 副作用。
+   *
+   * `filePath` 缺省取 `request.sourcePath`（保证诊断里的文件名与目标推导同源）。
+   *
+   * @param request 源文本 + 源路径（+ 可选转译选项）
+   * @returns 保存计划（`erbPath` 推导、转译结果、全角空格行号、`blocked`）
+   */
+  planSave(request: SugarSavePlanRequest): SugarSavePlan;
 }
 
 /* ============================== 显式类型守卫 ============================== */

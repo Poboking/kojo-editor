@@ -1376,3 +1376,57 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - **消息块逐条气泡**：含逐字符 FORM 展开渲染串，留后续。
 - **保存路径推导 + 保存期全角空格阻断**：`.kojo` → 目标 `.erb` 路径推导尚未接（S6 之外的候选批）。
 - **虚拟滚动**：判定面板诊断上限 200 条（超出显式计数）。
+
+### 5.36 保存路径推导 + 前置检查（2026-10-11 批；路线 S7 数据层：`.kojo` → 目标 `.ERB` 推导 + `planSave` 前置检查）
+
+> **定位**：S6 之后，"编辑 → 保存"闭环缺的最后一块**数据层**。本批**只做数据层**，
+> 交付两件纯能力：① **目标产物路径推导**（`.kojo` → 同目录同基名 `.ERB`）；
+> ② **保存前置检查** `planSave`（推导目标 + 转译 + 全角空格告警一次算齐，给 UI
+> 一个 `blocked` 判据）。落盘仍复用 S3 的 `compileToFile`（写链路零改动）；
+> UI 接线（保存触发 `planSave` → 阻断对话框 / 全角空格提示）留 S7-UI。
+>
+> **单一真源收敛**：全角空格 `U+3000` 的判据从 `ui-sugar-preview` 本地定义**上收
+> 契约层**（`plugin-api/sugar.ts`），预览面板改为转出——保存前置检查与预览面板
+> **共用同一函数**，杜绝"什么算全角空格"悄悄分叉。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/plugin-api/src/sugar.ts` | 修改 | 新增「保存目标推导与前置检查（S7 批）」节：`FULLWIDTH_SPACE`（`U+3000` 常量，含语料证据注）/ `fullwidthSpaceLines(source): number[]`（1 基行号，升序）/ `resolveSugarTarget(sourcePath): string \| null`（`.kojo` → `.ERB` 纯函数）/ `SugarSaveBlockReason`（`'source-not-kojo' \| 'transpile-error'` 闭集）/ `SugarSavePlanRequest` / `SugarSavePlan`；`SugarTranspileService` 接口新增 `planSave` 声明 |
+| `packages/plugin-api/src/index.ts` | 修改 | 值导出新增 `FULLWIDTH_SPACE` / `fullwidthSpaceLines` / `resolveSugarTarget`；类型导出新增 `SugarSaveBlockReason` / `SugarSavePlan` / `SugarSavePlanRequest` |
+| `packages/plugins/kojo-sugar/src/service.ts` | 修改 | 实现 `planSave(request)`：先推目标（无目标即 `blocked`，省一次转译）→ 转译取诊断（`filePath` 缺省取 `sourcePath`）→ 取全角空格告警行；`blockedReason` 优先级 `source-not-kojo` > `transpile-error` |
+| `packages/plugins/kojo-sugar/src/index.ts` | 修改 | 装配层 `service` 字面量补 `planSave`（复用同一 `makeTranspiler()`，与 adapter 字典 + 分野表同源） |
+| `packages/plugins/ui-sugar-preview/src/panel-logic.ts` | 修改 | 删除本地 `FULLWIDTH_SPACE` / `fullwidthSpaceLines` 定义，改从 `@kojo/plugin-api` 导入并原样转出（对外 import 面不变，测试零改动） |
+| `packages/plugins/kojo-sugar/tests/save-plan.test.ts` | **新增（19 项）** | 三节：目标推导 / 全角空格 / 前置检查 |
+
+#### 关键设计决策
+
+1. **目标推导 = "同目录换扩展名"，不是 `charaIndex[no].kojoDir` 拼接**。既有交接稿（§十-4）写的候选是 `charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB`，但那需要**游戏知识**（角色编号 → 目录的映射属 adapter 域），且要读盘。实测语料：源 `.kojo` 由"新建向导"与产物**同目录**生成、并沿用产物基名（`K{No}` + 分野都已在源文件名里，见 `M_KOJO_K49_指令.kojo` 惯例）——故 `resolveSugarTarget` 只需 `.kojo` → `.ERB` 换扩展名，**纯函数、零游戏知识、住契约层**（可被任何游戏复用）。跨目录/改名属新建向导与命名校验的职责（后者才需要 adapter 的命名知识），不在本通用函数内。
+2. **全角空格：只告警不阻断**。规范 §8 明文"保存期**告警**"；语料证据同样支持——口上语料 3,599,696 行中含 `U+3000` 者 55,565 行（1.54%），**全部为行中用途**（注释分隔 `;【TARGET】　欲情の珠`、编译器生成的台词缩进 `PRINTFORMW 　「…」`），**行首出现 0 次**。即它是"正常但极易与半角空格混看"的字符，故 `planSave` 单独给 `fullwidthSpaceLines`（告警行），**不并入 `blocked`**；阻断/一键修复留 UI 批。
+3. **`planSave` 是只读前置，落盘仍是 `compileToFile` 的职责**。契约层 `SugarTranspileService` 的"纯函数方法"（`parse`/`transpile`/`sourceOf`）与"唯一含 IO 方法"（`compileToFile`）分工不变——`planSave` 明确归入**纯函数**侧（不读盘不写盘不发事件）：把守卫前置，让 UI 拿到 `blocked` 而无需先触发 IO 副作用。**能力面 = 服务键面**，写盘能力不外溢。
+4. **`blocked` 是闭集两值 + 明确优先级**。`source-not-kojo`（源路径非 `.kojo`，无对应产物目标——如误对原生 `.ERB` 触发保存流程）> `transpile-error`（转译产 `error` 诊断，fail-closed 不落盘半成品，同 `compileToFile` 守卫）。两者同时成立时取前者：**无目标即无落盘**，比"半成品"更根本。命名零游戏名词（审计 A 项）。
+5. **不新增诊断码**。全角空格是"源文本的排版事实"而非"转译诊断"——`SugarDiagnosticCode` 是转译语义闭集，混入排版告警会污染语义。故它作为 `SugarSavePlan` 的独立字段，与既有预览面板的 `fullwidthLines` 计数**同源同义**（同一函数、同一判据）。
+
+#### 测试
+
+- `save-plan.test.ts` **19 项**，三节：
+  - **目标推导**（7 项）：基本形式（基名/目录保留、扩展名归一 `.ERB`）；扩展名大小写不敏感（`.KOJO`/`.Kojo`）；分隔符保留原样（Windows 反斜杠不改写）；相对路径可用；非 `.kojo`（原生 `.ERB` / `.kojo.bak` / 无扩展名）→ `null`；空路径 → `null`；纯函数一致性。
+  - **全角空格**（5 项）：契约常量即 `U+3000`；行内任一位置即计入（非仅行首）；一行多个只记一次；全角标点（、。！）不算；空串 → `[]`。
+  - **前置检查**（7 项）：合法文档（目标正确 / 未阻断 / 产物非空 / 无告警）；全角空格**只告警不阻断**（`blocked=false` 且告警行照出）；目标推导与源路径同源（等于 `resolveSugarTarget(sourcePath)`）；源非 `.kojo` → `source-not-kojo`；转译 error → `transpile-error`（目标仍照常推导）；两者并发时优先 `source-not-kojo`；纯函数（同源同路径两次调用一致）。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **950 passed / 6 skipped（956）**（931 → 950，**+19**；55 passed / 3 skipped 文件，**16 插件**，零回归） |
+| `pnpm typecheck`（root） | 通过，exit 0 |
+| `pnpm typecheck`（`@kojo/app`） | 通过，exit 0 |
+| `node tools/audit-decoupling.mjs` | **A/B/C/D 四项全绿（16 插件）** |
+| golden / S2 内核 / S4 数据层 / S5 / S6 | 未触碰，零回归（ui-sugar-preview 测试零改动即绿，证明转出后 import 面不变） |
+
+#### 边界未做（属 S7-UI 或后续批）
+
+- **保存 UI 接线**：`Ctrl+S`（`.kojo`）触发 `planSave` → `blocked` 时弹阻断原因（非 `.kojo` / 转译错误），否则 `compileToFile` 落盘；全角空格告警在保存前提示。本批只给数据层，UI 留 S7-UI。
+- **保存期全角空格"阻断/一键修复"**：当前只**告警**（决策 2）；真正的"阻断开关"与"一键替换 `U+3000` → 空格"是 UI 交互，留 S7-UI。
+- **新建向导的跨目录目标命名**：`M_KOJO_K{No}_{分野}.ERB` 的**命名校验**需 adapter 的命名知识，本通用函数不做（决策 1）。
