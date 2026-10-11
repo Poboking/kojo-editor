@@ -6,7 +6,7 @@ interface Props {
   index: ErbIndex | null;
   activeFile: string | null;
   onOpenFile: (path: string) => void;
-  /** 目录列举（包内「真实文件夹视图」用；宿主注入内核 io，浏览器环境可能抛错——调用侧已兜底） */
+  /** 目录列举（真实文件夹视图用；宿主注入内核 io，浏览器环境可能抛错——调用侧已兜底） */
   listDir?: (path: string) => Promise<DirEntry[]>;
 }
 
@@ -27,6 +27,9 @@ interface Group {
 }
 
 type DirState = DirEntry[] | 'loading' | 'error';
+
+/** 右键菜单作用域：单个角色 / 整棵树根 */
+type MenuScope = { kind: 'group'; group: Group } | { kind: 'root' };
 
 /** 角色目录前缀（长前缀优先，避免嵌套目录误归属） */
 function ownerOf(
@@ -49,25 +52,26 @@ function baseName(p: string): string {
 }
 
 /**
- * 口上文件树（口上树定稿向 §3）：角色 → 作者包（可折叠，默认折叠）→ 面文件。
+ * 口上文件树：角色 → 作者包（可折叠，默认折叠）→ 包内容。
  *
- * - 默认态只呈现 ERB 面文件（借阅找思路，信息不杂乱为第一约束）；
- * - 右键作者包 →「查看被隐藏的文件和文件夹」→ 展开时原地呈现包内真实文件夹
- *   视图（README / ライセンス / 附加文件 / 资源目录），看清一个包的全貌；
- * - 展开/折叠状态由组件内 state 持有——宿主（ProjectView）以稳定组件身份注入，
- *   打开文件不会因重渲染而丢掉展开状态。
+ * 两个层级动作（小巧思定稿）：
+ * - **点击作者包节点** = 原地展开该包的真实文件夹内容（子目录 / README·ライセンス
+ *   等附加文件 / 面文件——与磁盘布局一致；惰性 listDir，失败时回落为仅面文件并自解释）；
+ * - **右键「查看被隐藏的文件和文件夹」** = 按作用域批量展开：角色节点 → 该角色全部
+ *   作者包的真实文件夹；树根空白处 → 所有角色的全部真实文件夹。
+ *
+ * 展开状态由组件内 state 持有——宿主（ProjectView）以稳定组件身份注入，
+ * 打开文件不会因重渲染而丢掉展开状态。
  */
 export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Props): ReactElement {
   const [filter, setFilter] = useState('');
   const [opened, setOpened] = useState<Set<string>>(new Set());
-  /** 作者包展开态（默认折叠——定稿 §3） */
+  /** 作者包展开态（默认折叠） */
   const [pkgOpen, setPkgOpen] = useState<Set<string>>(new Set());
-  /** 右键「查看被隐藏的文件和文件夹」已开启的包 */
-  const [revealed, setRevealed] = useState<Set<string>>(new Set());
   /** 包目录列举缓存（真实文件夹视图；按包 key 惰性加载） */
   const [dirCache, setDirCache] = useState<Map<string, DirState>>(new Map());
-  /** 右键菜单（壳层私有轻量实现；包节点级备用通道） */
-  const [menu, setMenu] = useState<{ x: number; y: number; pkgKey: string } | null>(null);
+  /** 右键菜单（壳层私有轻量实现） */
+  const [menu, setMenu] = useState<{ x: number; y: number; scope: MenuScope } | null>(null);
 
   const groups = useMemo<Group[]>(() => {
     if (!index) return [];
@@ -134,13 +138,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
     return next;
   };
   const toggleGroup = (label: string): void => setOpened((prev) => toggleIn(prev)(label));
-  const togglePkg = (key: string): void => setPkgOpen((prev) => toggleIn(prev)(key));
 
   /** 包目录绝对路径（index 路径为全路径，直接拼接包目录名） */
   const pkgDirOf = (g: Group, subLabel: string): string =>
     `${g.prefix.replace(/[\\/]+$/, '')}/${subLabel}`;
 
-  /** 真实文件夹视图的惰性加载（仅 revealed 且展开时触发；错误落 'error' 态自解释） */
+  /** 真实文件夹视图的惰性加载（失败落 'error' 态自解释） */
   const ensureDir = (pkgKey: string, dir: string): void => {
     if (!listDir || dirCache.has(pkgKey)) return;
     setDirCache((m) => new Map(m).set(pkgKey, 'loading'));
@@ -149,17 +152,39 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
       .catch(() => setDirCache((m) => new Map(m).set(pkgKey, 'error')));
   };
 
-  const openMenu = (e: ReactMouseEvent, pkgKey: string): void => {
-    e.preventDefault();
-    e.stopPropagation();
-    setMenu({ x: Math.min(e.clientX, window.innerWidth - 260), y: e.clientY, pkgKey });
+  /** 点击作者包节点 = 展开/折叠该包的真实文件夹内容 */
+  const togglePkg = (pkgKey: string, dir: string): void => {
+    const willOpen = !pkgOpen.has(pkgKey);
+    setPkgOpen((prev) => toggleIn(prev)(pkgKey));
+    if (willOpen) ensureDir(pkgKey, dir);
   };
 
-  const toggleReveal = (pkgKey: string, dir: string): void => {
+  /** 收集作用域内全部作者包（根散文件无包目录，不在真实文件夹视图范围） */
+  const collectPackages = (scope: MenuScope): Array<{ key: string; dir: string; group: string }> => {
+    const gs = scope.kind === 'group' ? [scope.group] : groups;
+    const out: Array<{ key: string; dir: string; group: string }> = [];
+    for (const g of gs) {
+      for (const s of g.subs) {
+        if (s.label === null) continue;
+        out.push({ key: `${g.label}::${s.label}`, dir: pkgDirOf(g, s.label), group: g.label });
+      }
+    }
+    return out;
+  };
+
+  /** 右键「查看被隐藏的文件和文件夹」：按作用域批量展开全部包的真实文件夹 */
+  const revealAll = (scope: MenuScope): void => {
     setMenu(null);
-    const willReveal = !revealed.has(pkgKey);
-    setRevealed((prev) => toggleIn(prev)(pkgKey));
-    if (willReveal) ensureDir(pkgKey, dir);
+    const pkgs = collectPackages(scope);
+    setOpened((prev) => new Set([...prev, ...pkgs.map((p) => p.group)]));
+    setPkgOpen((prev) => new Set([...prev, ...pkgs.map((p) => p.key)]));
+    for (const p of pkgs) ensureDir(p.key, p.dir);
+  };
+
+  const openMenu = (e: ReactMouseEvent, scope: MenuScope): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: Math.min(e.clientX, window.innerWidth - 260), y: e.clientY, scope });
   };
 
   const fileRow = (f: string): ReactElement => (
@@ -174,16 +199,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
     </li>
   );
 
-  /** 包内真实文件夹视图（revealed 时）：目录 → 非 ERB 附件 → ERB 面文件 */
+  /** 包内真实文件夹内容：目录 → 非 ERB 附加文件 → ERB 面文件 */
   const packageExtras = (pkgKey: string, s: PackageGroup): ReactElement | null => {
-    if (!revealed.has(pkgKey)) return null;
     const state = dirCache.get(pkgKey);
-    if (state === undefined || state === 'loading') {
-      return <li className="tree-extra tree-note">读取目录…</li>;
-    }
-    if (state === 'error') {
-      return <li className="tree-extra tree-note">目录读取失败（需要桌面壳权限）</li>;
-    }
+    if (state === undefined) return null; // 未触发加载（如过滤强制展开）——只露面文件
+    if (state === 'loading') return <li className="tree-extra tree-note">读取目录…</li>;
+    if (state === 'error') return <li className="tree-extra tree-note">目录读取失败（需要桌面壳权限）</li>;
     const erbNames = new Set(s.files.map((f) => baseName(f).toLowerCase()));
     const dirs = state.filter((d) => d.isDirectory).sort((a, b) => a.name.localeCompare(b.name));
     const extras = state
@@ -212,7 +233,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
   }
 
   return (
-    <div className="file-tree">
+    <div className="file-tree" onContextMenu={(e) => openMenu(e, { kind: 'root' })}>
       <input
         className="tree-filter"
         placeholder={`过滤 ${groups.length} 个角色目录…`}
@@ -238,7 +259,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
           const isOpen = opened.has(g.label) || filter.length > 0;
           return (
             <li key={g.label} className="tree-group">
-              <button className="tree-group-btn" onClick={() => toggleGroup(g.label)}>
+              <button
+                className="tree-group-btn"
+                title={`${g.label}（右键查看更多）`}
+                onClick={() => toggleGroup(g.label)}
+                onContextMenu={(e) => openMenu(e, { kind: 'group', group: g })}
+              >
                 <span className="caret">{isOpen ? '▾' : '▸'}</span>
                 <span className="group-label">{g.label}</span>
                 <span className="group-count">{g.total}</span>
@@ -248,15 +274,21 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
                   {g.subs.map((s) => {
                     // 根散文件（无包目录兜底）：直接平铺在角色组下
                     if (s.label === null) return s.files.map(fileRow);
-                    const pkgKey = `${g.label}::${s.label}`;
+                    const label = s.label;
+                    const pkgKey = `${g.label}::${label}`;
+                    const pkgDir = pkgDirOf(g, label);
                     const isPkgOpen = pkgOpen.has(pkgKey) || filter.length > 0;
                     return (
-                      <li key={s.label} className="tree-package-node">
+                      <li key={label} className="tree-package-node">
                         <button
                           className="tree-package"
-                          title={`${s.label}（右键查看更多）`}
-                          onClick={() => togglePkg(pkgKey)}
-                          onContextMenu={(e) => openMenu(e, pkgKey)}
+                          title={pkgDir}
+                          onClick={() => togglePkg(pkgKey, pkgDir)}
+                          onContextMenu={(e) => {
+                            // 包节点不弹菜单（点击即展开真实内容）；阻止冒泡到树根菜单
+                            e.preventDefault();
+                            e.stopPropagation();
+                          }}
                         >
                           <span className="caret">{isPkgOpen ? '▾' : '▸'}</span>
                           <span className="tree-package-name">{s.label}</span>
@@ -281,23 +313,11 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
         <>
           <div className="context-menu-backdrop" onMouseDown={() => setMenu(null)} />
           <div className="context-menu" style={{ left: menu.x, top: menu.y }} role="menu">
-            <button
-              role="menuitemcheckbox"
-              aria-checked={revealed.has(menu.pkgKey)}
-              onClick={() => {
-                // 菜单重开时 pkgKey 的包一定在可见树内；反查目录路径
-                for (const g of groups) {
-                  const sub = g.subs.find((s) => `${g.label}::${s.label}` === menu.pkgKey);
-                  if (sub?.label) {
-                    toggleReveal(menu.pkgKey, pkgDirOf(g, sub.label));
-                    return;
-                  }
-                }
-                setMenu(null);
-              }}
-            >
-              <span className="check">{revealed.has(menu.pkgKey) ? '✓' : ''}</span>
-              查看被隐藏的文件和文件夹
+            <button role="menuitem" onClick={() => revealAll(menu.scope)}>
+              <span className="check" />
+              {menu.scope.kind === 'root'
+                ? '查看被隐藏的文件和文件夹（全部角色）'
+                : '查看被隐藏的文件和文件夹'}
             </button>
           </div>
         </>
