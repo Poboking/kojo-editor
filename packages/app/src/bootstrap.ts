@@ -51,8 +51,8 @@ export async function bootstrapKernel(): Promise<Kernel> {
       createUiArchiveBrowserPlugin(),
       // 状态注入器（写链路在 sav-parser 的 snapshot.writer；面板只做呈现 + 意图）
       createUiSnapshotInjectorPlugin(),
-      // 升糖建议器（写链路在 kojo-sugar 的 sugar.liftApply；面板只做呈现 + 意图。
-      // 排在 kojo-sugar 之后：它 require sugar.lift / sugar.liftApply 两个服务槽）
+      // 升糖预览器（识别在 kojo-sugar 的 sugar.lift；预览经 editor.liftPreview.show
+      // 交宿主就地折叠显示，**纯前端不写盘**。排在 kojo-sugar 之后：它 require sugar.lift）
       createUiSugarLiftPlugin(),
       // 糖预览（只读观察面：转译 + 源映射 + 状态回放三向映射全在 kojo-sugar 的
       // sugar.preview；面板只做呈现。排在 kojo-sugar 之后）

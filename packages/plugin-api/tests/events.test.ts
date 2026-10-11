@@ -13,7 +13,7 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     expect(KERNEL_EVENT_CLASSIFICATION_GUARD).toBe(true);
   });
 
-  it('白名单 = 插件可 emit 的 12 个内核事件（快照守门）', () => {
+  it('白名单 = 插件可 emit 的 14 个内核事件（快照守门）', () => {
     expect([...KERNEL_EVENT_NAMES].sort()).toEqual(
       [
         'file.changed',
@@ -26,6 +26,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
         'kojo.replayFunction',
         'kojo.snapshotSelected',
         'editor.activeFileChanged',
+        'editor.liftPreview.show',
+        'editor.liftPreview.hide',
         'ui.overlay.open',
         'ui.overlay.close',
       ].sort(),
@@ -39,6 +41,6 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
   });
 
   it('白名单无重复（Set 语义自证：长度 = 快照清单长度）', () => {
-    expect(KERNEL_EVENT_NAMES.size).toBe(12);
+    expect(KERNEL_EVENT_NAMES.size).toBe(14);
   });
 });

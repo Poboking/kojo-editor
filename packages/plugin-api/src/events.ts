@@ -44,6 +44,25 @@ export interface KernelEventMap {
    */
   'editor.activeFileChanged': { filePath: string | null };
   /**
+   * 升糖预览意图（2026-10-12 升糖重定位批）：请求宿主在编辑器内**就地**显示
+   * 某段原生 ERB 的语法糖写法（折叠原文区间 + 打字机透镜），**纯前端、不写盘**。
+   *
+   * 通用、游戏无关——插件发意图、宿主落地（与 `editor.revealLocation` 同款模式）。
+   * 定位修正：升糖只用于"看"，因此不再有"写回源文件"的对应事件。
+   */
+  'editor.liftPreview.show': {
+    filePath: string;
+    /** 源区间起点（1 基，含） */
+    fromLine: number;
+    /** 源区间终点（1 基，含） */
+    toLine: number;
+    /** 糖写法（多行，`\n` 分隔） */
+    sugarText: string;
+    source?: string;
+  };
+  /** 收起升糖预览（与 `show` 对称；`filePath` 缺省 = 清空全部）。 */
+  'editor.liftPreview.hide': { filePath?: string; source?: string };
+  /**
    * 写权限批准记录失效（2026-10-11 写权限闭环批 P0）：持久化的批准与适配器
    * 本次提议不一致（游戏更新等）——内核**未**放行写权限，等待用户重新确认。
    *
@@ -104,6 +123,8 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'kojo.replayFunction',
   'kojo.snapshotSelected',
   'editor.activeFileChanged',
+  'editor.liftPreview.show',
+  'editor.liftPreview.hide',
   'ui.overlay.open',
   'ui.overlay.close',
 ] as const satisfies readonly (keyof KernelEventMap)[];

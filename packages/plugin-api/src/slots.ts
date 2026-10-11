@@ -91,8 +91,54 @@ export interface EditorCodeAction {
 }
 
 export interface EditorCodeActionContribution extends ContributionBase {
-  /** 对单个文件产出动作（纯函数；不适用该文件返回空数组） */
-  provideActions(file: { path: string; text: string; project: GameProject | null }): EditorCodeAction[];
+  /**
+   * 对单个文件产出动作（纯函数；不适用该文件返回空数组）。
+   *
+   * `line`（additive，2026-10-12 升糖重定位批）：光标所在行（1 基；未提供 =
+   * 位置未知）。供"就近动作"（如光标所在片段的升糖预览）筛选；不依赖位置的
+   * 贡献可忽略本字段——**缺省行为与旧版完全一致**。
+   */
+  provideActions(file: {
+    path: string;
+    text: string;
+    project: GameProject | null;
+    line?: number;
+  }): EditorCodeAction[];
+}
+
+/* ------------------------ ui.editor.liftPreview ------------------------ */
+
+/**
+ * 升糖预览项（前端透镜；2026-10-12 升糖重定位批）——一段"可显示为语法糖"的
+ * 原生 ERB 区间。
+ *
+ * **定位**：升糖**只用于看**。宿主把它渲染成"可折叠透镜"——原 ERB 折叠、糖写法
+ * 就地打字机显示；**绝不写盘**（写盘语义见 `sugar.liftApply`，已从主路径摘除）。
+ * 契约层面刻意只承载"要显示什么"，不含任何 Monaco 概念（渲染由 app 壳落地）。
+ */
+export interface EditorLiftPreviewItem {
+  /** 源区间起点（1 基，含） */
+  readonly fromLine: number;
+  /** 源区间终点（1 基，含）；单行候选时 `fromLine === toLine` */
+  readonly toLine: number;
+  /** 糖写法（多行，`\n` 分隔；前端原样显示，不做二次加工） */
+  readonly sugarText: string;
+  /** 动作标题（💡 文案，面向作者） */
+  readonly title: string;
+  /** 可选人读说明（中文；不暴露内部术语） */
+  readonly reason?: string;
+}
+
+export interface EditorLiftPreviewContribution extends ContributionBase {
+  /**
+   * 对单个文件产出可预览的升糖项（**纯函数**：同输入必得同输出，不读盘不写盘）。
+   * 不适用该文件的贡献应返回空数组。
+   */
+  provideLiftPreview(file: {
+    path: string;
+    text: string;
+    project: GameProject | null;
+  }): EditorLiftPreviewItem[];
 }
 
 /* ----------------------------- ui.overlay ----------------------------- */
@@ -272,6 +318,7 @@ export interface SlotMap {
   'editor.command': EditorCommandContribution;
   'ui.editor.decorator': EditorDecoratorContribution;
   'ui.editor.codeAction': EditorCodeActionContribution;
+  'ui.editor.liftPreview': EditorLiftPreviewContribution;
   'ui.editor.saveHandler': EditorSaveHandlerContribution;
   'game.adapter': GameAdapterContribution;
   'export.target': ExportTargetContribution;

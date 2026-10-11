@@ -17,6 +17,7 @@ import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '..
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { decideExternalChange } from './external-change';
+import { clampRange, isErbLike, liftZonePlan } from './lift-preview';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -31,6 +32,11 @@ const MARKER_OWNER = 'kojo-decorators';
 const CODE_ACTION_COMMAND = 'kojo.codeAction.run';
 /** 编辑停顿多久后重算装饰（避免每击键跑一遍转译） */
 const MARKER_DEBOUNCE_MS = 250;
+/** 升糖预览 ViewZone 的 DOM 类名（样式在 app 样式表里） */
+const LIFT_ZONE_CLASS = 'lift-preview-zone';
+/** 打字机节奏：每 tick 追加的字符数 / tick 间隔（毫秒） */
+const TYPEWRITER_STEP = 2;
+const TYPEWRITER_INTERVAL_MS = 8;
 
 /** 按扩展名选语言：`.kojo` = 语法糖表层 DSL；其余按原生 ERB（v0.1 口径） */
 function languageFor(filePath: string): string {
@@ -161,6 +167,10 @@ export function EditorPane({
   const pendingActionsRef = useRef(new Map<string, EditorCodeAction>());
   /** CodeAction id 序号（**单调递增不复用**：Monaco 可能持有上一轮列表，复用 id 会解析到别的动作） */
   const actionSeqRef = useRef(0);
+  /** 升糖预览已插入的 ViewZone id（收起 / 换文件时统一移除） */
+  const liftZonesRef = useRef<string[]>([]);
+  /** 升糖预览的打字机定时器（收起时清掉，避免写入已移除的 DOM） */
+  const liftTimersRef = useRef<number[]>([]);
   /** 正在以磁盘内容重载 model（抑制由此触发的脏上报：重载不是用户编辑） */
   const reloadingRef = useRef(false);
   const [dirty, setDirty] = useState(false);
@@ -243,6 +253,97 @@ export function EditorPane({
       if (model && path && refreshMarkersRef.current) refreshMarkersRef.current(model, path);
     }, MARKER_DEBOUNCE_MS);
   }, []);
+
+  /* --------------------------- 升糖预览（前端透镜） --------------------------- */
+
+  /**
+   * 清空全部升糖预览（移除 ViewZone + 停掉打字机定时器）。
+   * 换文件 / 收起 / 卸载都走它，保证"预览不跨文件残留"。
+   */
+  const clearLiftPreviews = useCallback(() => {
+    for (const t of liftTimersRef.current) window.clearTimeout(t);
+    liftTimersRef.current = [];
+    const ids = liftZonesRef.current;
+    liftZonesRef.current = [];
+    const ed = editorRef.current;
+    if (ed && ids.length > 0) {
+      ed.changeViewZones((acc) => {
+        for (const id of ids) acc.removeZone(id);
+      });
+    }
+  }, []);
+
+  /**
+   * 就地显示升糖预览（`editor.liftPreview.show` 的落地）：在原文区间**上方**插入
+   * ViewZone（打字机填糖写法），并把原文区间折叠起来——折叠时只见糖、展开时糖
+   * 在上原文在下。**全程不写盘**（这是升糖定位修正的核心：只用于看）。
+   */
+  const showLiftPreview = useCallback(
+    (payload: { filePath: string; fromLine: number; toLine: number; sugarText: string }) => {
+      const ed = editorRef.current;
+      const model = ed?.getModel();
+      if (!ed || !model) return;
+      // 只对当前活动文件生效
+      if (payload.filePath !== filePathRef.current) return;
+      const { fromLine, toLine } = clampRange(payload.fromLine, payload.toLine, model.getLineCount());
+      const plan = liftZonePlan({ fromLine, sugarText: payload.sugarText });
+      clearLiftPreviews(); // 重复触发 = 刷新，不叠加
+      ed.changeViewZones((acc) => {
+        const dom = document.createElement('div');
+        dom.className = LIFT_ZONE_CLASS;
+        const head = document.createElement('div');
+        head.className = 'lift-preview-head';
+        const label = document.createElement('span');
+        label.textContent = '💡 语法糖预览（只读 · 不改动原 ERB 文件）';
+        const close = document.createElement('button');
+        close.className = 'lift-preview-close';
+        close.textContent = '收起';
+        close.onclick = () => clearLiftPreviews();
+        head.appendChild(label);
+        head.appendChild(close);
+        const pre = document.createElement('pre');
+        pre.className = 'lift-preview-sugar';
+        dom.appendChild(head);
+        dom.appendChild(pre);
+        const id = acc.addZone({
+          afterLineNumber: plan.afterLineNumber,
+          heightInLines: plan.heightInLines,
+          domNode: dom,
+          suppressMouseDown: false,
+        });
+        liftZonesRef.current.push(id);
+        // 高度先按最终行数定格（避免打字过程反复重排），再逐字填充
+        const text = payload.sugarText;
+        let i = 0;
+        const tick = (): void => {
+          i = Math.min(text.length, i + TYPEWRITER_STEP);
+          pre.textContent = text.slice(0, i);
+          if (i < text.length) {
+            liftTimersRef.current.push(window.setTimeout(tick, TYPEWRITER_INTERVAL_MS));
+          }
+        };
+        tick();
+      });
+      // 折叠原文区间（单行候选无可折叠内容）；折叠后展开即可"糖 + 原文同现"
+      if (toLine > fromLine) {
+        ed.trigger('kojo-lift', 'editor.fold', { selectionLines: [toLine] });
+      }
+      ed.revealLineInCenterIfOutsideViewport(fromLine);
+    },
+    [clearLiftPreviews],
+  );
+
+  // 升糖预览意图 → 宿主落地（插件发意图、宿主渲染；与 editor.revealLocation 同款）
+  useEffect(() => {
+    const unShow = kernel.bus.on('editor.liftPreview.show', (p) => showLiftPreview(p));
+    const unHide = kernel.bus.on('editor.liftPreview.hide', (p) => {
+      if (!p.filePath || p.filePath === filePathRef.current) clearLiftPreviews();
+    });
+    return () => {
+      unShow();
+      unHide();
+    };
+  }, [kernel, showLiftPreview, clearLiftPreviews]);
 
   // 记录最新定位请求（同一文件重复定位靠 nonce 变化触发）
   useEffect(() => {
@@ -527,7 +628,7 @@ export function EditorPane({
     const providerDisposer = monaco.languages.registerCodeActionProvider(
       [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID],
       {
-        provideCodeActions: (model) => {
+        provideCodeActions: (model, range) => {
           const path = filePathRef.current;
           // 只对当前活动标签的 model 供动作（后台 model 的 provider 调用不响应）
           if (!path || model !== editorRef.current?.getModel()) {
@@ -535,6 +636,7 @@ export function EditorPane({
           }
           const project = kernel.project.current();
           const text = model.getValue();
+          const line = range?.startLineNumber;
           const pending = pendingActionsRef.current;
           // 超阈值整体清理（长期运行不至于无限增长）；id 单调递增，绝不复用
           if (pending.size > 500) pending.clear();
@@ -542,7 +644,12 @@ export function EditorPane({
           for (const contribution of kernel.slots.query('ui.editor.codeAction')) {
             let provided: EditorCodeAction[];
             try {
-              provided = contribution.provideActions({ path, text, project });
+              provided = contribution.provideActions({
+                path,
+                text,
+                project,
+                ...(line !== undefined ? { line } : {}),
+              });
             } catch (e: unknown) {
               // 单个贡献抛错不影响其余（与装饰器同款隔离：能力出错退化可见，不让 💡 整体消失）
               console.warn(
@@ -566,9 +673,37 @@ export function EditorPane({
         },
       },
     );
+    // 升糖折叠范围供给（`ui.editor.liftPreview` 槽）：把可预览区间交给 Monaco 折叠加号，
+    // 让"折叠原文"用编辑器原生折叠交互（参考 if 折叠）。纯前端、零写盘。
+    const liftFoldDisposer = monaco.languages.registerFoldingRangeProvider(
+      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID],
+      {
+        provideFoldingRanges: (model) => {
+          const path = filePathRef.current;
+          if (!path || model !== editorRef.current?.getModel()) return [];
+          const project = kernel.project.current();
+          const text = model.getValue();
+          const out: Monaco.languages.FoldingRange[] = [];
+          for (const contribution of kernel.slots.query('ui.editor.liftPreview')) {
+            try {
+              for (const item of contribution.provideLiftPreview({ path, text, project })) {
+                if (item.toLine > item.fromLine) out.push({ start: item.fromLine, end: item.toLine });
+              }
+            } catch {
+              // 单个贡献抛错不影响其余（与 codeAction / decorator 同款隔离）
+            }
+          }
+          return out;
+        },
+      },
+    );
     return () => {
       cmdDisposer.dispose();
       providerDisposer.dispose();
+      liftFoldDisposer.dispose();
+      clearLiftPreviews();
+      for (const t of liftTimersRef.current) window.clearTimeout(t);
+      liftTimersRef.current = [];
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
       ed.dispose();
@@ -634,7 +769,10 @@ export function EditorPane({
         }
       }
       prevPathRef.current = filePath;
+      clearLiftPreviews(); // 升糖预览不跨文件残留
       ed.setModel(entry.model);
+      // ERB 默认只读（升糖重定位批 1.1：编辑器默认不写 ERB，升糖只用于预览）
+      ed.updateOptions({ readOnly: isErbLike(filePath) });
       const vs = viewStatesRef.current.get(filePath);
       if (vs) ed.restoreViewState(vs);
       setDirty(computeDirty(filePath));
@@ -655,7 +793,7 @@ export function EditorPane({
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearLiftPreviews]);
 
   return (
     <div className="editor-pane">
@@ -666,6 +804,17 @@ export function EditorPane({
         <span className={`dirty-dot ${dirty ? 'on' : ''}`} title={dirty ? '未保存' : '已保存'}>
           {dirty ? '●' : ''}
         </span>
+        {isErbLike(filePath) ? (
+          // 纯说明性标签，**不带任何操作入口**——编辑 ERB 的路径由「检测到用户要编辑
+          // → 自动分流到 .kojo」承担（需求 §1.3，本批未实现）。旧的「强制编辑 ERB」
+          // 按钮按 §1.4 作废：把系统责任抛给用户。
+          <span
+            className="erb-mode-hint"
+            title="ERB 默认只读：升糖只用于预览，不写原文件。要改 ERB 请转 .kojo 文件。"
+          >
+            🔒 只读预览 · 升糖不写原文件
+          </span>
+        ) : null}
         <span className="spacer" />
         <span className="editor-status">{error ? `⚠ ${error}` : status}</span>
         <button

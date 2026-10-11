@@ -138,6 +138,8 @@ export type {
   EditorCommandContext,
   EditorCommandContribution,
   EditorDecoratorContribution,
+  EditorLiftPreviewContribution,
+  EditorLiftPreviewItem,
   EditorSaveChoices,
   EditorSaveHandlerContribution,
   EditorSaveOutcome,

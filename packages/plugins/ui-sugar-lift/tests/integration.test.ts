@@ -1,48 +1,52 @@
 /**
- * S5-UI 批验收：面板 + 应用**端到端**（跨插件的服务槽接线）。
+ * 升糖重定位批验收：面板 + 预览**端到端**（跨插件的服务槽接线）。
  *
  * 本文件是**测试**（解耦审计规则 C 对 `tests/` 豁免），故可以直接 import
  * 两个插件包来验证接线——生产代码里它们只能通过服务槽相见。
  *
- * 验的是那条最容易坏、也最该被钉死的东西：
+ * 验的是升糖重定位后最容易坏、也最该被钉死的东西：
  *
  * ```
- * ui-sugar-lift 面板插件  --(服务槽)-->  kojo-sugar 的 sugar.lift / sugar.liftApply
- *                                              |
- *                                       内核 io（第一道闸）+ 备份 + 回读
- *                                              |
- *                                        file.changed 事件
+ * ui-sugar-lift  --(服务槽 sugar.lift)-->  kojo-sugar 的 liftSuggest（纯函数，round-trip 自证）
+ *      |
+ *      |  💡 CodeAction / 面板「预览」按钮
+ *      v
+ *   bus.emit('editor.liftPreview.show', { filePath, fromLine, toLine, sugarText })
+ *      |
+ *      v
+ *   宿主（EditorPane）就地折叠原文 + 打字机透镜（纯前端，零写盘）
  * ```
  *
  * 三件事必须同时成立：
- * 1. **面板插件真的能激活**（`requires` 的三项都由 kojo-sugar/内核提供）；
- * 2. **面板不存在自己的写逻辑**——它的"应用"就是 `sugar.liftApply`，
- *    所以写盘闸门、备份、回读一个都不少；
- * 3. **应用成功后发 `file.changed`**，且**发口在装配层**（实现层零内核依赖）。
+ * 1. **面板插件只 require 识别服务 + 只读 io**——它**不** require `sugar.liftApply`
+ *    （升糖只用于看，写回路径已从本插件摘除）；
+ * 2. **预览 = 发宿主意图事件**，payload 合契约，且**全程不写盘**（files 逐字节不变）；
+ * 3. **`ui.editor.liftPreview` / `ui.editor.codeAction` 两槽贡献都注册了**。
  */
 
 import { describe, expect, it } from 'vitest';
 import type {
   DirEntry,
+  EditorCodeAction,
+  EditorLiftPreviewContribution,
   FileIO,
   FileStat,
   KernelEventMap,
   Logger,
   Plugin,
-  SugarLiftApplyService,
   SugarLiftService,
   UIPanelContribution,
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
-import { createUiSugarLiftPlugin } from '../src/index';
 import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
+import { createUiSugarLiftPlugin } from '../src/index';
 
 const log: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 const enc = (s: string) => new TextEncoder().encode(s);
 
-/** 伪内核 io（内存 FS + 双闸替身；与 lift-apply.test.ts 同款） */
-function makeIO(files: Record<string, Uint8Array>, writable: (p: string) => boolean = () => true) {
+/** 伪内核 io（内存 FS；只读读路径 + 写盘断言用） */
+function makeIO(files: Record<string, Uint8Array>) {
   const io: FileIO = {
     readText: async (p) => {
       const b = files[p];
@@ -64,11 +68,6 @@ function makeIO(files: Record<string, Uint8Array>, writable: (p: string) => bool
     },
     writeText: async () => {},
     writeBytes: async (p, data) => {
-      if (!writable(p)) {
-        throw Object.assign(new Error(`Write not allowed outside declared writable roots: ${p}`), {
-          name: 'WriteNotAllowedError',
-        });
-      }
       files[p] = data;
     },
     ensureDir: async () => {},
@@ -77,7 +76,7 @@ function makeIO(files: Record<string, Uint8Array>, writable: (p: string) => bool
     exists: async (p) => Boolean(files[p]),
     stat: async (p): Promise<FileStat | null> => (files[p] ? { size: files[p]!.length, mtimeMs: 1, isDirectory: false } : null),
     setWritableRoots: () => {},
-    isWritable: writable,
+    isWritable: () => true,
     backup: async (p) => (files[p] ? `backup:///${p.replace(/\//g, '_')}.bak` : null),
   };
   return io;
@@ -88,13 +87,13 @@ function makeIO(files: Record<string, Uint8Array>, writable: (p: string) => bool
  *
  * 为什么不拉真内核：两者都要真 io + 真实事件总线，但**本测试的意图是"接线正确"**
  * 而不是"内核正确"——内核自有其测试。这里把服务槽/事件总线的契约**降到最小**
- * 反而让"面板依赖了哪些东西"变得无法含糊（`inject` 只给清单里那几项，
- * 多要一个就抛）。
+ * 反而让"面板依赖了哪些东西"变得无法含糊（`inject` 只给清单里那几项，多要一个就抛）。
  */
-function makeKernel(files: Record<string, Uint8Array>, writable: (p: string) => boolean = () => true) {
-  const io = makeIO(files, writable);
+function makeKernel(files: Record<string, Uint8Array>) {
+  const io = makeIO(files);
   const provided = new Map<string, unknown>();
-  const panels: UIPanelContribution[] = [];
+  /** 槽注册表（按槽名分桶；面板插件经 `slots.register` 登记） */
+  const slots = new Map<string, unknown[]>();
   const events: Array<{ type: keyof KernelEventMap; payload: unknown }> = [];
   const listeners = new Map<string, Set<(p: never) => void>>();
 
@@ -146,60 +145,76 @@ function makeKernel(files: Record<string, Uint8Array>, writable: (p: string) => 
     onDispose: (fn: unknown) => fn,
   };
 
-  return { io, provided, panels, events, bus, sugarCtx, files };
-}
-
-/** 激活 kojo-sugar，返回它提供的服务表 */
-function bootSugar(k: ReturnType<typeof makeKernel>) {
-  createKojoSugarPlugin().activate(k.sugarCtx as never);
-  return {
-    lift: k.provided.get(WellKnownServices.SugarLift) as SugarLiftService,
-    apply: k.provided.get(WellKnownServices.SugarLiftApply) as SugarLiftApplyService,
-  };
-}
-
-/** 激活 ui-sugar-lift 面板插件（只给服务槽 + 内核 io + 总线） */
-function bootPanel(k: ReturnType<typeof makeKernel>) {
   const panelCtx = {
     log,
     inject: (key: string): never => {
-      const v = k.provided.get(key);
+      const v = provided.get(key);
       if (v === undefined && key !== 'kernel.io') throw new Error(`未注册的服务：${key}`);
-      if (key === 'kernel.io') return k.io as never;
+      if (key === 'kernel.io') return io as never;
       return v as never;
     },
     slots: {
-      register: (slot: string, contribution: UIPanelContribution) => {
-        if (slot === 'ui.panel') k.panels.push(contribution);
+      register: (slot: string, contribution: unknown) => {
+        const arr = slots.get(slot) ?? [];
+        arr.push(contribution);
+        slots.set(slot, arr);
       },
     },
-    bus: k.bus,
+    bus,
     onDispose: (fn: unknown) => fn,
   };
-  createUiSugarLiftPlugin().activate(panelCtx as never);
+
+  return { io, provided, slots, events, bus, sugarCtx, panelCtx, files };
 }
 
 const KOJO = '角色: 1\n时机 指令 1：\n\tPRINTFORMDW 甲。\n\tPRINTFORMDL 乙。\n';
+const ERB = '角色: 1\n时机 指令 1：\n\tPRINTFORMDW 甲。\n\tPRINTFORMDL 乙。\n';
 const PATH = '/proj/口上/x.kojo';
+
+/** 激活 kojo-sugar（提供 sugar.lift），返回识别服务 */
+function bootSugar(k: ReturnType<typeof makeKernel>): SugarLiftService {
+  createKojoSugarPlugin().activate(k.sugarCtx as never);
+  return k.provided.get(WellKnownServices.SugarLift) as SugarLiftService;
+}
+
+/** 激活 ui-sugar-lift（只给服务槽 + 内核 io + 总线） */
+function bootPanel(k: ReturnType<typeof makeKernel>): void {
+  createUiSugarLiftPlugin().activate(k.panelCtx as never);
+}
+
+const panelsOf = (k: ReturnType<typeof makeKernel>) => (k.slots.get('ui.panel') ?? []) as UIPanelContribution[];
+const previewsOf = (k: ReturnType<typeof makeKernel>) =>
+  (k.slots.get('ui.editor.liftPreview') ?? []) as EditorLiftPreviewContribution[];
+const actionsOf = (k: ReturnType<typeof makeKernel>) =>
+  (k.slots.get('ui.editor.codeAction') ?? []) as Array<{
+    id: string;
+    provideActions: (f: { path: string; text: string; project: null; line?: number }) => EditorCodeAction[];
+  }>;
 
 /* ============================== 一、接线 ============================== */
 
-describe('S5-UI / 面板插件接线（跨插件只走服务槽）', () => {
-  it('面板插件声明：requires 三个槽，无 provides，无 io 写入自建', () => {
+describe('升糖预览 / 面板插件接线（跨插件只走服务槽）', () => {
+  it('面板插件声明：只 require 识别服务 + 只读 io，无 provides', () => {
     const p: Plugin = createUiSugarLiftPlugin();
     expect(p.id).toBe('ui-sugar-lift');
-    expect(p.requires).toEqual(['sugar.lift', 'sugar.liftApply', 'kernel.io']);
+    expect(p.requires).toEqual(['sugar.lift', 'kernel.io']);
+    // 升糖只用于看：本插件**不再** require sugar.liftApply（写回路径已摘除）
+    expect(p.requires).not.toContain('sugar.liftApply');
     // 面板不提供任何服务（它是纯消费者）
     expect(p.provides ?? []).toEqual([]);
   });
 
-  it('激活后可注册 `ui.panel` 贡献（id=sugar-lift）', () => {
+  it('激活后注册三槽：ui.panel / ui.editor.liftPreview / ui.editor.codeAction', () => {
     const k = makeKernel({ [PATH]: enc(KOJO) });
     bootSugar(k);
     bootPanel(k);
-    expect(k.panels).toHaveLength(1);
-    expect(k.panels[0]!.id).toBe('sugar-lift');
-    expect(typeof k.panels[0]!.component).toBe('function');
+    expect(panelsOf(k)).toHaveLength(1);
+    expect(panelsOf(k)[0]!.id).toBe('sugar-lift');
+    expect(typeof panelsOf(k)[0]!.component).toBe('function');
+    expect(previewsOf(k)).toHaveLength(1);
+    expect(typeof previewsOf(k)[0]!.provideLiftPreview).toBe('function');
+    expect(actionsOf(k)).toHaveLength(1);
+    expect(actionsOf(k)[0]!.id).toBe('sugar-lift.preview-action');
   });
 
   it('服务槽顺序：kojo-sugar 先装配 → 面板才能注入（反序必失败）', () => {
@@ -207,103 +222,66 @@ describe('S5-UI / 面板插件接线（跨插件只走服务槽）', () => {
     expect(() => bootPanel(k)).toThrow(/未注册的服务：sugar.lift/);
   });
 
-  it('`sugar.liftApply` 服务键已登记（WellKnownServices additive）', () => {
+  it('`sugar.liftApply` 服务键仍在（供未来「转 .kojo」用，只是本插件不再 require）', () => {
     expect(WellKnownServices.SugarLiftApply).toBe('sugar.liftApply');
-    expect(WellKnownServices.SugarLift).toBe('sugar.lift'); // 旧键未变
+    expect(WellKnownServices.SugarLift).toBe('sugar.lift');
   });
 });
 
-/* ============================== 二、端到端闭环 ============================== */
+/* ============================== 二、预览闭环（不写盘） ============================== */
 
-describe('S5-UI / 端到端：扫描 → 应用 → 落盘 → 事件', () => {
+describe('升糖预览 / 端到端：扫描 → 预览意图 → 零写盘', () => {
   const boot = () => {
     const k = makeKernel({ [PATH]: enc(KOJO) });
-    const svcs = bootSugar(k);
+    bootSugar(k);
     bootPanel(k);
-    return { k, ...svcs };
+    return k;
   };
 
-  it('扫描 → 应用 → 源文件被糖化；事件只发一次且 payload 合契约', async () => {
-    const { k, lift, apply } = boot();
-    const r = lift.liftSuggest({ source: KOJO, filePath: PATH });
-    expect(r.candidates.map((c) => c.kind)).toEqual(['print-message', 'print-message']);
-
-    const res = await apply.applyToFile(PATH, { source: KOJO, candidates: r.candidates });
-    expect(res.appliedCount).toBe(2);
-    expect(res.backupPath).not.toBeNull();
-
-    // 落盘内容（去 BOM 解码）——两条 PRINTFORM{D}W/L 都变成了糖文本行
-    const text = new TextDecoder().decode(k.files[PATH]!).replace(/^\uFEFF/, '');
-    expect(text).toBe('角色: 1\n时机 指令 1：\n\t甲。\n\t乙。 续\n');
-
-    // 事件：一次 change，path 是归一化后的目标
-    const changed = k.events.filter((e) => e.type === 'file.changed');
-    expect(changed).toHaveLength(1);
-    expect(changed[0]!.payload).toEqual({ kind: 'change', path: PATH });
+  it('`ui.editor.liftPreview` 供给：把可升糖区间交给宿主注册折叠', () => {
+    const k = boot();
+    const items = previewsOf(k)[0]!.provideLiftPreview({ path: PATH, text: KOJO, project: null });
+    // 两条 PRINTFORM{D}W/L → 两条预览项（行号 1 基）
+    expect(items.map((i) => `${i.fromLine}-${i.toLine}`)).toEqual(['3-3', '4-4']);
+    expect(items[0]!.sugarText).toBe('甲。');
+    expect(items[1]!.sugarText).toBe('乙。 续');
   });
 
-  it('回读闭环：落盘后再扫描**读到的是糖**（应用真的生效，而非只改了内存）', async () => {
-    const { k, lift, apply } = boot();
-    const r = lift.liftSuggest({ source: KOJO });
-    await apply.applyToFile(PATH, { source: KOJO, candidates: r.candidates });
-    const after = new TextDecoder().decode(k.files[PATH]!).replace(/^\uFEFF/, '');
-    const r2 = lift.liftSuggest({ source: after });
-    // 糖源码里没有 `PRINTFORM*`，故升糖候选为 0（已糖化的内容不再报"可升糖"）
-    expect(r2.candidates).toHaveLength(0);
+  it('💡 CodeAction：光标所在行命中 → `run()` 发 `editor.liftPreview.show`，payload 合契约', () => {
+    const k = boot();
+    const actions = actionsOf(k)[0]!.provideActions({ path: PATH, text: KOJO, project: null, line: 3 });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]!.kind).toBe('refactor');
+    actions[0]!.run({ project: null as never, activeFile: PATH, line: 3 } as never);
+    const shown = k.events.filter((e) => e.type === 'editor.liftPreview.show');
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.payload).toEqual({ filePath: PATH, fromLine: 3, toLine: 3, sugarText: '甲。' });
   });
 
-  it('越权：面板走同一服务 → 同一个第一道闸（原样抛 WriteNotAllowedError，不发事件）', async () => {
-    const k = makeKernel({ [PATH]: enc(KOJO) }, () => false);
-    const svcs = bootSugar(k);
-    bootPanel(k);
-    const r = svcs.lift.liftSuggest({ source: KOJO });
-    await expect(svcs.apply.applyToFile(PATH, { source: KOJO, candidates: r.candidates })).rejects.toMatchObject({
-      name: 'WriteNotAllowedError',
-    });
-    expect(k.events.filter((e) => e.type === 'file.changed')).toHaveLength(0);
+  it('光标不在任何可升糖片段上 → 无动作（💡 不乱出现）', () => {
+    const k = boot();
+    const actions = actionsOf(k)[0]!.provideActions({ path: PATH, text: KOJO, project: null, line: 1 });
+    expect(actions).toEqual([]);
   });
 
-  it('只读预览：`apply` 纯函数不落盘、不发事件（面板的 diff 预览走的就是它）', () => {
-    const { k, lift, apply } = boot();
+  it('预览**全程不写盘**：跑完供给与执行，源文件逐字节不变、无 file.changed', () => {
+    const k = boot();
     const before = new Uint8Array(k.files[PATH]!);
-    const r = lift.liftSuggest({ source: KOJO });
-    const preview = apply.apply({ source: KOJO, candidates: r.candidates });
-    expect(preview.appliedCount).toBe(2);
-    expect(preview.hunks).toHaveLength(2);
-    expect(preview.text).toContain('\t甲。');
+    const items = previewsOf(k)[0]!.provideLiftPreview({ path: PATH, text: KOJO, project: null });
+    expect(items.length).toBe(2);
+    const actions = actionsOf(k)[0]!.provideActions({ path: PATH, text: KOJO, project: null, line: 4 });
+    actions[0]!.run({ project: null as never, activeFile: PATH, line: 4 } as never);
+    // 只有"预览意图"事件，没有 file.changed（那是写盘信号）
+    expect(k.events.map((e) => e.type)).toEqual(['editor.liftPreview.show']);
     expect(k.files[PATH]).toEqual(before);
-    expect(k.events).toHaveLength(0);
   });
 
-  it('`作者色` 候选：应用时**自动写文件头**（自证前提被满足）', async () => {
-    const src = '角色: 1\n时机 指令 1：\n\tPRINTFORML 她红着脸，小声嘟囔着。\n';
-    const k = makeKernel({ [PATH]: enc(src) });
-    const svcs = bootSugar(k);
-    const r = svcs.lift.liftSuggest({ source: src });
-    expect(r.candidates[0]!.narrationColor).toBe('作者色');
-    const res = await svcs.apply.applyToFile(PATH, { source: src, candidates: r.candidates });
-    expect(res.preview.frontMatterChanged).toBe(true);
-    const text = new TextDecoder().decode(k.files[PATH]!).replace(/^\uFEFF/, '');
-    expect(text).toBe('角色: 1\n旁白色: 作者色\n时机 指令 1：\n\t她红着脸，小声嘟囔着。 续\n');
-  });
-});
-
-/* ============================== 三、事件纪律 ============================== */
-
-describe('S5-UI / 事件纪律', () => {
-  it('`file.changed` 的发口在装配层：直接调 `applyLiftToFile` 不发事件', async () => {
-    const file = '/x.kojo';
-    const files: Record<string, Uint8Array> = { [file]: enc(KOJO) };
-    const io = makeIO(files);
-    const { applyLiftToFile } = await import('@kojo/plugin-kojo-sugar');
-    const { createSugarTranspileService } = await import('@kojo/plugin-kojo-sugar');
-    const { createEratwFaceTable } = await import('@kojo/plugin-eratw-adapter');
-    const svc = createSugarTranspileService({ faceTable: createEratwFaceTable() });
-    const lift = (await import('@kojo/plugin-kojo-sugar')).liftSuggest;
-    const r = lift({ transpile: (s, o) => svc.transpile(s, o) }, { source: KOJO });
-    const res = await applyLiftToFile({ io, log }, file, { source: KOJO, candidates: r.candidates });
-    expect(res.appliedCount).toBe(2);
-    // 实现层不碰总线 → 无事件（事件是装配层 `onApplied` 的职责）
-    expect(files[file]).not.toEqual(enc(KOJO));
+  it('原生 ERB 也能预览（升糖识别对 .erb 与 .kojo 同源；宿主负责只读折叠显示）', () => {
+    const erbPath = '/proj/口上/x.erb';
+    const k = makeKernel({ [erbPath]: enc(ERB) });
+    bootSugar(k);
+    bootPanel(k);
+    const items = previewsOf(k)[0]!.provideLiftPreview({ path: erbPath, text: ERB, project: null });
+    expect(items.map((i) => i.fromLine)).toEqual([3, 4]);
   });
 });
