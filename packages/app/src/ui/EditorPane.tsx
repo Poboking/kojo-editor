@@ -8,7 +8,7 @@ import type {
   EditorSaveWarning,
   LineDecoration,
 } from '@kojo/plugin-api';
-import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
+import { FULLWIDTH_SPACE, WriteNotAllowedError, isPathUnder } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from 'monaco-editor';
@@ -105,8 +105,6 @@ interface Props {
   onDirtyChange?: (path: string, dirty: boolean) => void;
   /** 注册编辑器动作句柄（宿主"保存并关闭 / 全部保存"流程用；卸载时以 null 注销） */
   registerActions?: (actions: EditorPaneActions | null) => void;
-  /** 写权限状态（P0）：只读时保存按钮置灰 + 保存前置拦截（不等到写盘才报错） */
-  writable: boolean;
   /** 重授权入口（通知 action「去授权」落地处） */
   onReauth: () => void;
   /** 编辑器状态上抛（状态栏右区显示编码/EOL/行数；卸载或无文件时 null） */
@@ -133,7 +131,6 @@ export function EditorPane({
   revealNonce,
   onDirtyChange,
   registerActions,
-  writable,
   onReauth,
   onStatusInfo,
 }: Props): ReactElement {
@@ -152,9 +149,28 @@ export function EditorPane({
   /** 当前文件路径（供只注册一次的 Monaco 回调读取最新值，避免闭包过时） */
   const filePathRef = useRef<string>(filePath);
   const openPathsRef = useRef<readonly string[]>(openPaths);
-  /** 写权限/重授权入口 ref（同上：Monaco 回调与保存句柄只注册一次，须读最新值） */
-  const writableRef = useRef<boolean>(writable);
+  /** 重授权入口 ref（同上：Monaco 回调与保存句柄只注册一次，须读最新值） */
   const onReauthRef = useRef<() => void>(onReauth);
+  /**
+   * 工作区根（创作权威区，恒可写；服务不可用时 null）——ERB 只读规则的分野依据：
+   * 游戏目录内 ERB = 只读借阅；工作区内 ERB = 可编辑源文件（工作区批新增）。
+   */
+  const workspaceRootRef = useRef<string | null | undefined>(undefined);
+  const workspaceRoot = (): string | null => {
+    if (workspaceRootRef.current === undefined) {
+      try {
+        workspaceRootRef.current = kernel.workspaces.rootDir();
+      } catch {
+        workspaceRootRef.current = null;
+      }
+    }
+    return workspaceRootRef.current;
+  };
+  /** 是否工作区内文件（创作区；ERB 可编辑、恒可保存） */
+  const inWorkspace = (p: string): boolean => {
+    const root = workspaceRoot();
+    return root !== null && isPathUnder(root, p);
+  };
   const onDirtyChangeRef = useRef(onDirtyChange);
   /** 编辑器状态上抛 ref（重载时读最新，避免把不稳定 prop 拖进回调依赖） */
   const onStatusInfoRef = useRef(onStatusInfo);
@@ -234,13 +250,12 @@ export function EditorPane({
     openPathsRef.current = openPaths;
   }, [openPaths]);
 
-  // 写权限/重授权/脏上报 ref 同步（同上）
+  // 重授权/脏上报 ref 同步（同上；写权限判定已改为按文件 kernel.io.isWritable）
   useEffect(() => {
-    writableRef.current = writable;
     onReauthRef.current = onReauth;
     onDirtyChangeRef.current = onDirtyChange;
     onStatusInfoRef.current = onStatusInfo;
-  }, [writable, onReauth, onDirtyChange, onStatusInfo]);
+  }, [onReauth, onDirtyChange, onStatusInfo]);
 
   /** 编辑停顿后重算装饰（去抖；换文件时立即算，见文件加载 effect） */
   const scheduleMarkers = useCallback(() => {
@@ -374,8 +389,9 @@ export function EditorPane({
       const entry = entriesRef.current.get(path);
       if (!entry || savingRef.current) return false;
       const isActive = filePathRef.current === path;
-      // P0 前置拦截：只读时不等到写盘才报错——通知 + 去授权 action（定稿 §九-1/3）
-      if (!writableRef.current) {
+      // P0 前置拦截：按文件实际可写性判定（工作区恒可写，不被项目授权状态误伤——
+      // 双真相源：工作区 = 创作权威，游戏目录 = 部署目标）
+      if (!kernel.io.isWritable(path)) {
         notify({
           kind: 'error',
           message: '保存被拒绝：项目当前为只读（写权限未批准或批准已失效）。',
@@ -778,8 +794,9 @@ export function EditorPane({
       prevPathRef.current = filePath;
       clearLiftPreviews(); // 升糖预览不跨文件残留
       ed.setModel(entry.model);
-      // ERB 默认只读（升糖重定位批 1.1：编辑器默认不写 ERB，升糖只用于预览）
-      ed.updateOptions({ readOnly: isErbLike(filePath) });
+      // ERB 默认只读**仅限游戏目录**（升糖重定位批 1.1：借阅区不写 ERB）；
+      // 工作区内 ERB 是创作源文件，可编辑（工作区批：双真相源分野）
+      ed.updateOptions({ readOnly: isErbLike(filePath) && !inWorkspace(filePath) });
       const vs = viewStatesRef.current.get(filePath);
       if (vs) ed.restoreViewState(vs);
       setDirty(computeDirty(filePath));
@@ -811,7 +828,7 @@ export function EditorPane({
         <span className={`dirty-dot ${dirty ? 'on' : ''}`} title={dirty ? '未保存' : '已保存'}>
           {dirty ? '●' : ''}
         </span>
-        {isErbLike(filePath) ? (
+        {isErbLike(filePath) && !inWorkspace(filePath) ? (
           // 纯说明性标签，**不带任何操作入口**——编辑 ERB 的路径由「检测到用户要编辑
           // → 自动分流到 .kojo」承担（需求 §1.3，本批未实现）。旧的「强制编辑 ERB」
           // 按钮按 §1.4 作废：把系统责任抛给用户。
@@ -827,8 +844,12 @@ export function EditorPane({
         <button
           className="primary small"
           onClick={() => void save()}
-          disabled={!dirty || !writable}
-          title={writable ? undefined : '只读：写权限未批准（点击底部状态栏「只读」徽章授权）'}
+          disabled={!dirty || (filePath !== null && !kernel.io.isWritable(filePath))}
+          title={
+            filePath !== null && !kernel.io.isWritable(filePath)
+              ? '只读：写权限未批准（点击底部状态栏「只读」徽章授权）'
+              : undefined
+          }
         >
           保存 (Ctrl+S)
         </button>

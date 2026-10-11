@@ -287,7 +287,6 @@ export function ProjectView({
             revealNonce={reveal?.nonce}
             onDirtyChange={onDirtyChange}
             registerActions={registerActions}
-            writable={writable}
             onReauth={onReauth}
             onStatusInfo={setEditorStatus}
           />
