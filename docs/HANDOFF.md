@@ -1,6 +1,6 @@
 # 交接文档（v0.1 ✅ / v0.2 第一批～第十七批 ✅ / v1.1 第十六批 ✅）
 
-> 更新：2026-10-10。**新会话从这里开始读，读完即可开工。**
+> 更新：2026-10-11。**新会话从这里开始读，读完即可开工。**
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
 > 第二批：函数树导航（`ui-kojo-navigator`）；
 > 第三批：条件谓词抽取（`condition-extractor`）+ 导航条件徽章 + adapter 变量字典；
@@ -22,6 +22,7 @@
 > 本会话完成 **v0.3 批 S4：糖预览数据层**（§5.30，服务 `sugar.preview`）与 **S5：升糖建议器数据层**（§5.31，服务 `sugar.lift`，`SugarLiftConfidence` 闭集只有 `'verified'`）。
 > 本会话完成 **v0.3 S5+ 批：旁白口径 round-trip + lift apply 链路 + `ui-sugar-lift` 面板（第 14 插件）**——lift 自证壳支持 `旁白色:` 两种口径、新服务 `sugar.liftApply`、golden 冻结计数 2→4；850 项全绿（§5.32a/§5.32b）。已推 `0d0bc51`。
 > 本会话完成 **v0.3 解耦补齐批：时机分野模板归位 adapter（S2 遗留承诺 B-1 兑现）+ 审计 D 项**——契约新增 `KojoFaceTable`/`KojoFaceTemplate` + `GameAdapter.kojoFaceTemplates?`；`eratw-adapter/src/face-templates.ts` 按附录 C 全量登记；`codegen.resolveFace` 改查表 **fail-closed（缺表→timing-face-unknown，绝不回退内建模板）**，golden 逐字节零回退；`audit-decoupling.mjs` 新增 D 项（通用插件零游戏知识，`sav` 仅 A 项）探针自证；851→868 项全绿 / typecheck root+app / audit 四项 / 真实语料冒烟 ✅；**基线更新：868 项 / 14 插件 / 四项审计**（§5.33；审阅报告 `docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md`）。已推 `26dd4d8`。
+> 本会话完成 **v0.3 S4-UI 批：糖预览面板（第 15 插件 `ui-sugar-preview`）**——把 S4 的 `sugar.preview` 数据层接成可浏览面板：当前 `.kojo` → 转译 + 源映射 + 诊断（有存档附状态回放）→「糖源码行 ↔ 生成产物行 ↔ 消息块可达性」三向映射；**存档扫描是软依赖**（缺席退化为两向映射，不 inactive）+ **未接存档时不显示可达徽章**（不可判定 ≠ 可达，绝不误导）；跳转复用 `editor.revealLocation`、当前文件走 `editor.activeFileChanged`、存档预填走 `kojo.snapshotSelected`（UI 插件间零直接依赖）；909 项全绿 / typecheck root+app / audit 四项（**15 插件**）/ golden 零回退（§5.34）。
 
 
 ---
@@ -500,6 +501,23 @@ node tools/smoke-tauri-ipc.mjs
 
 **验收（2026-10-11）**：868 tests / 862 passed + 6 skipped（50 文件全绿）/ typecheck root+app ✅ / **audit A/B/C/D 四项全绿** / 真实语料冒烟 1 passed / golden 逐字节零回退。**基线更新：868 项 / 14 插件 / 四项审计**。
 
+### 6.25 语法糖 S4-UI 批（✅ 已完成）：糖预览面板（`ui-sugar-preview`，第 15 插件）
+
+**实施结果**（IMPLEMENTATION-LOG §5.34 为权威）：把 S4 的**数据层**（`sugar.preview`）接成可浏览面板——当前 `.kojo` 文件 → 转译 + 源映射 + 诊断（有存档时附状态回放）→「**糖源码行 ↔ 生成产物行 ↔ 消息块可达性**」三向映射。**只做呈现 + 导航意图，转译/源映射/回放折叠全部来自数据层。**
+
+- **新插件 `ui-sugar-preview`**（`ui.panel` 槽 order 74）：`requires` 只有 `sugar.preview` + `kernel.io` 两个硬槽，**`provides` 为空**（纯消费者）；`panel-logic.ts` 纯逻辑（零 React，39 项单测）+ `index.ts` 面板（`createElement` 非 JSX）。
+- **存档扫描是软依赖**：`snapshot.source` 用 `try { ctx.inject } catch { undefined }` 取——缺席时面板退化为**两向映射**（糖源码行 ↔ 产物行），而不是 inactive。**"能力缺席要退化可见，不能静默"**。
+- **未接存档 → 不显示可达徽章（本批最关键的纠正）**：数据层在无回放时 `fnBranches=[]` → 会把每个块折成 `reachable`——那是"**不可判定**"而非"可达"。UI 层用 `withReach = arch.connected` **门控**（不接存档就不调可达性折叠），并显示降级提示条。**不许把"不知道"画成"一定走到"。**
+- **UI 插件间零直接依赖**：存档下拉预填走内核事件 `kojo.snapshotSelected`；跳转走宿主既有通道 `editor.revealLocation`；当前文件走宿主广播 `editor.activeFileChanged`。面板不持有宿主引用、不 import 任何 UI 插件。
+- **角色号不在 UI 层推导**：面板只把 `archivePath` 交给 `sugar.preview`，由后者从产物骨架 `_K(\d+)` 反推——同一条推导只有一处实现。
+- **事件纪律**：面板只读当前文件、绝不改盘，故**不发 `file.changed`**（谁改盘谁发）；`sugar.preview` 自身亦只读不发事件——**整条链路无变更源**。
+
+**验收（2026-10-11 实测）**：**909 passed / 6 skipped（915）**（868 → 909，**+47**；52 passed / 3 skipped 文件，15 插件，零回归）/ typecheck root ✅ + app ✅ / `audit:decoupling` **A/B/C/D 四项全绿（15 插件）** / golden 逐字节零回退（未触碰）。**基线更新：909 项 / 15 插件 / 四项审计**。
+
+**关键坑**：① `buildPreviewRows` 对以 `\n` 结尾的源 `split('\n')` **多一条幻影空行**，与 `countLines`/数据层 `buildLines` 口径不一致 → 已修（strip 尾部空元素），靠"概要源行 vs 列表行数"对照断言钉死；② TS2769——`createElement` 面板里 helper 返回 `unknown` 不能赋给 `ReactNode`（vitest 不报、只有 tsc 报，双跑价值再现）；③ 新插件必须 `pnpm install --no-frozen-lockfile`（frozen 会 `ERR_PNPM_OUTDATED_LOCKFILE`）。
+
+**边界**（未做，属后续批）：Monaco 内联高亮/悬浮/装饰（`ui.editor.decorator`）、消息块逐条气泡、保存期全角空格告警的**阻断/一键修复**（需先接保存路径推导）、虚拟滚动、`.kojo` 角色号直读糖 AST。
+
 ## 七、安全模型（写文件功能相关必读）
 
 - 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
@@ -559,7 +577,7 @@ node tools/smoke-tauri-ipc.mjs
 ## 十、新会话动手清单
 
 1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**868 项** / ✅ / 14 插件 / 审计 A/B/C/D 四项；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.33 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）、**S5 升糖建议器数据层 ✅**（§5.31）；**下一批 = S4-UI 或 S5-UI**：①**S4-UI**（Monaco 预览面板消费 `sugar.preview`：三向映射高亮/悬浮/跳转 + 可达性着色 + 保存期全角空格告警）；②**S5-UI**（升糖候选列表消费 `sugar.lift`：候选高亮/「应用」/diff 预览；S5 只交纯函数数据层）；③**保存路径推导**（`.kojo` → `charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB`）接 `compileToFile`）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**909 项** / ✅ / 15 插件 / 审计 A/B/C/D 四项；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.34 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
+4. **下一批候选**：v1.0 收口余项（桌面壳真实终端冒烟：沙箱 os error 231 欠账）；v1.1 余项（注入器桌面壳真实终端深度冒烟）；**BUG-5 file.changed 事件链**（**payload 契约已落地**，见 §6.18 / `plugin-api/src/events.ts`；剩余 = 真实监视器接线 + 消费方去抖）；**v0.3 语法糖**（表层语法权威 = `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` v1.2 冻结版；路线 S1–S6 见 `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md` §8.2；**S1 契约 + golden ✅**（§5.26）、**S2 转译内核 ✅**（§5.28）、**S3 写链路 ✅**（§5.29）、**S4 糖预览数据层 ✅**（§5.30）、**S4-UI 糖预览面板 ✅**（§5.34）、**S5 升糖建议器数据层 ✅**（§5.31）、**S5-UI 升糖面板 ✅**（§5.32b）；**下一批 = S6 编辑体验 或 保存路径推导**：①**S6 编辑体验**（`.kojo` Monarch 高亮 + 中文关键字/别名补全 + lint 波浪线（spec §8 清单）+ 判定面板；`ui.editor.decorator` 槽 / Monaco provider）；②**保存路径推导**（`.kojo` → `charaIndex[no].kojoDir` + `M_KOJO_K{No}_{分野}.ERB`）接 `compileToFile`，随后做保存期全角空格**阻断/一键修复**；③v0.3 UI 余项：Monaco 内联三向映射装饰、消息块逐条气泡（含逐字符 FORM 展开渲染串）、虚拟滚动）
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`

@@ -1225,3 +1225,69 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 - `vitest`：**868 tests / 862 passed + 6 skipped**，50 文件全绿（golden 逐字节零回退）；
 - typecheck root ✅ + app ✅；`audit:decoupling` **A/B/C/D 四项全绿（14 插件）**；
 - 真实语料集成冒烟（`integration-plugins.test.ts`，KOJO_SMOKE_PROJECT）：见 HANDOFF §6.24。
+
+### 5.34 语法糖 S4-UI 批 · 糖预览面板（v0.3 批 S4-UI 实施记录：数据层的三向映射第一次带上 UI）
+
+> **定位**：S4 只交了**数据层**（`sugar.preview` 纯服务），本批把它接成可浏览的面板：
+> 当前 `.kojo` 文件 → `sugar.preview`（转译 + 源映射 + 诊断；有存档时附状态回放）→
+> 面板呈现「糖源码行 ↔ 生成产物行 ↔ 消息块可达性」。
+> **新插件 `ui-sugar-preview`**（第 15 插件，`ui.panel` 槽 order 74）。
+> 本批**只做呈现 + 导航意图**：转译 / 源映射 / 回放折叠一个都不自建——
+> 这就是"一切皆插件"对 UI 的要求（能力缺席要"退化可见"，不能静默）。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/plugins/ui-sugar-preview/` | **新增插件** | 糖预览面板（`ui.panel` 槽贡献） |
+| `packages/plugins/ui-sugar-preview/src/panel-logic.ts` | **新增**（~420 行） | 纯逻辑（零 React 可单测）：全角空格行检测 / 诊断行 / 可达性折叠 / 产物行区间标签 / 逐行映射 / 概要 / 降级文案 / 存档选项 / 可达性门控 |
+| `packages/plugins/ui-sugar-preview/src/index.ts` | **新增** | 面板组件（`createElement`，非 JSX）：工具栏（存档下拉 + 刷新）/ 概要条 / 诊断区 / 逐行映射区；跳转复用宿主既有通道 `editor.revealLocation` |
+| `packages/plugins/ui-sugar-preview/package.json` | **新增** | 依赖仅 `@kojo/plugin-api`（+ react peer） |
+| `packages/plugins/ui-sugar-preview/tests/panel-logic.test.ts` | **新增**（39 项） | 九节：全角空格 / 诊断行 / 可达性折叠 / 产物行区间标签 / 逐行映射 / 概要+行数 / 降级+文件判定 / 真实 sugar.preview 结果建行 / 存档选择+可达性门控 |
+| `packages/plugins/ui-sugar-preview/tests/integration.test.ts` | **新增**（8 项） | 跨插件接线（服务槽顺序）+ 端到端只读闭环 + 事件纪律 |
+| `packages/app/src/styles.css` | 修改（additive） | 文件尾追加 `pv-*` 整节（工具栏 / 概要 chip / 诊断 / 逐行映射 / 全角空格 / 产物行标签 / 可达性徽章四态） |
+| 四处登记 | 修改 | `tsconfig.json` paths / `vitest.config.ts` aliases / `packages/app/vite.config.ts` aliases + `packages/app/package.json` deps |
+| `packages/app/src/bootstrap.ts` | 修改 | 注册 `createUiSugarPreviewPlugin()`（排在 kojo-sugar 之后：它 require `sugar.preview` 服务槽） |
+
+#### 关键设计决策
+
+1. **面板只做呈现，语义一律来自数据层**：`id: 'ui-sugar-preview'` 的 `requires` 只有两个硬槽（`sugar.preview` + `kernel.io`），`provides` 为空——它是**纯消费者**。逐行映射 / 诊断 / 可达性折叠全在 `panel-logic.ts`（零 React），面板组件只负责把纯逻辑结果画成 DOM。这保证"呈现逻辑"可脱离 React 单测。
+2. **存档扫描是软依赖，不是硬依赖**：`snapshot.source` 用 `try { ctx.inject } catch { undefined }` 取——存档能力没装时，面板退化为**两向映射**（糖源码行 ↔ 产物行），而不是整个面板 inactive。**硬依赖只留给"面板存在的前提"**（没有 `sugar.preview` 就没有这个面板）；其余能力缺席一律"退化可见"。这正是 DSH 解耦哲学对软依赖的定义。
+3. **未接存档 → 不显示可达徽章（本批最重要的一条正确性决策）**：数据层在**无回放**时 `fnBranches=[]` → `foldReachability` 会把每个消息块折成 `reachable`。那是"**不可判定**"而非"可达"。若原样呈现，作者会以为"这些块一定会走到"——**这是误导**。故 UI 层用 `withReach = arch.connected` **门控**：未接存档 → 连可达性折叠都不调用（传 `ZERO_REACH`），并显示降级提示条「未接入存档回放——可达性不可判定（下方不显示可达徽章）」。**能力缺席 ≠ 全绿。**
+4. **存档选择走内核事件，UI 插件间零直接依赖**：`kojo.snapshotSelected` 由归档浏览器（或任何插件）广播，本面板订阅后**预填**下拉；下拉选项用 `snapshots.current()` 同步读扫描结果（与 `ui-snapshot-injector` 同款范式）。面板**不 import 任何 UI 插件**。
+5. **角色号不在 UI 层推导**：`.kojo` 声明 `角色: N`，但面板**不解析语义**——它只把 `archivePath` 交给 `sugar.preview`，由后者从产物骨架 `_K(\d+)` 反推角色号。**同一条推导只有一处实现**，UI 层不复制（否则两处会漂移）。
+6. **跳转复用宿主既有通道**：点击诊断行 / 映射行 → `ctx.bus.emit('editor.revealLocation', { filePath, line })`（与校验面板 / 函数树同款）。面板**不持有宿主引用**，当前文件来自宿主广播事件 `editor.activeFileChanged`。
+7. **事件纪律：只消费不发**（除导航意图）：面板**只读**当前文件（`kernel.io.readText`），**绝不改盘**，故**不发 `file.changed`**（谁改盘谁发）；`sugar.preview` 自身亦只读不发事件 —— 整条链路无变更源，闭环成立。它只发 `editor.revealLocation`（导航意图，不是状态变更）。
+8. **降级是分类不是布尔**：沿用数据侧的 `PreviewDegrade` 五值闭集（`no-project` / `not-kojo` / `reading` / `read-error` / `previewing`），面板逐值给中文文案；**转译 error 不抛错**（诊断原样带出，骨架照给）。
+9. **行数口径必须与数据层同源（本批抓出的真 bug）**：`buildPreviewRows` 起初对以 `\n` 结尾的源 `split('\n')` 得到**多一条幻影空行**，与 `countLines` 及数据层 `buildLines`（剥离尾部空行）口径不一致 → 概要"源行"与列表行数对不上。修法：`buildPreviewRows` split 后**剥离尾部空元素**（与另两处同口径）。**这是单测抓出的真实 off-by-one**（见关键坑 1）。
+
+#### 测试
+
+- `panel-logic.test.ts` **39 项**：全角空格行定位；诊断行（severity → 样式类 + 可跳转判定）；可达性折叠（可达/不可达/未知三档计数 + 门控）；产物行区间标签（单行 / 区间 / 无产物）；逐行映射（含**尾部空行剥离**对照、纯生成行 `sourceLine:null` 不归糖行、结构行标注）；概要 + 行数（**与 `countLines` 同口径**）；降级文案 + `.kojo` 文件判定闭集；**真实 `sugar.preview` 结果建行**（`createSugarTranspileService({faceTable})` + `createSugarPreviewService` 走一遍）；存档选项（`formatSize` 三档 + 过滤 error/meta-null 项）+ 可达性门控（未接存档 → 徽章不显示）。
+- `integration.test.ts` **8 项**：`requires` 两槽且 `provides` 为空（纯消费者）；激活后注册 `ui.panel id=sugar-preview`；**反序装配必失败**（服务槽顺序）；`WellKnownServices.SugarPreview === 'sugar.preview'` 契约钉死；端到端只读闭环（读源 → 预览 → 建行）；**无存档请求 → `archive === null`**；磁盘字节不变 + 零事件发出；转译 error 不抛错。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **909 passed / 6 skipped**（915）（868 → 909，**+47**，52 passed / 3 skipped 文件，15 插件，零回归） |
+| `pnpm typecheck`（root） | 通过，exit 0 |
+| `pnpm typecheck`（`@kojo/app`） | 通过，exit 0 |
+| `node tools/audit-decoupling.mjs` | **A/B/C/D 四项全绿（15 插件）**（新插件未引入交叉 import / 未依赖 kernel / 零游戏知识） |
+| golden / S2 内核 / 数据层 | 未触碰，零改动 |
+
+#### 关键坑与发现
+
+1. **off-by-one 被单测抓出（真实 bug）**：`buildPreviewRows` 对以 `\n` 结尾的源返回 5 行，而 `countLines` / 数据层 `buildLines` 返回 4 行。`split('\n')` 会在末尾多产出一个空元素——**那不是行**。修法：`buildPreviewRows` split 后剥离尾部空元素（与另两处同口径）。**"同一份数据在两处按不同口径计数"是本批唯一逻辑错误**，靠"概要源行 vs 列表行数"对照断言钉死。
+2. **TS2769：helper 返回 `unknown` 不能赋给 `ReactNode`**：面板用 `createElement`（非 JSX），初版 helper 与 `shell(children: unknown[])` 都写 `unknown` → 展开进 `createElement` 时报 JSX 类型不兼容。修法：helper 与 `shell` 全部改用 `ReactNode`（`import type { ReactNode } from 'react'`）。**vitest 不报（类型被擦除），只有 `tsc` 会报**——双跑 typecheck 的价值再现（§九-7）。
+3. **软取服务槽必须进 `try/catch` 且不留半初始化状态**：`snapshots` 声明为 `SnapshotSourceService | undefined`，catch 里显式置 `undefined`（不靠外层 `let` 的隐式 undefined）——否则 TS 严格模式下的"可能未赋值"与运行时的半态都不好排查。
+4. **存档下拉"无档"与"不接档"是两种语义**：`archiveOpts.length === 0`（能力未装 / 未扫描到档）→ 下拉 `disabled` + 文案「无可用存档」；有档但选空 → 文案「（不接存档）」。两者都走 `archivePath === ''` 的分支（不发存档参数），但**用户看到的语义不同**——不区分会让作者误以为"选了空档 = 接了空档"。
+5. **新插件必须 `pnpm install --no-frozen-lockfile`**（§八同款，再次应验）：四处登记只是路径别名，`packages/app/node_modules/@kojo/*` 的软链要 install 才建；且新增插件 package.json 会让 frozen-lockfile 校验失败（`ERR_PNPM_OUTDATED_LOCKFILE`）→ 必须 `--no-frozen-lockfile`。
+
+#### 边界未做（属后续批）
+
+- **Monaco 内联高亮 / 悬浮 / 装饰**：本批只做侧栏面板（逐行映射列表），编辑器内联装饰（`ui.editor.decorator` 槽 / Monaco hover provider）留 S6。
+- **消息块气泡逐条渲染**：本批把消息块折叠为**行区间标签 + 可达性徽章**，逐块气泡（含逐字符 FORM 展开渲染串）留后续。
+- **保存期全角空格告警的"阻断"语义**：本批面板**告警显示**全角空格行数（概要 chip），但保存路径的**阻断 / 一键修复**要与"保存路径推导"批一起做（当前 `compileToFile` 严格按给定路径写，`.kojo` → 目标 `.erb` 路径推导尚未接）。
+- **虚拟滚动**：逐行映射上限 400 行、诊断上限 100 条（防 DOM 爆炸），超出部分显式计数；超大文件需虚拟滚动才谈得上"全量可浏览"。
+- **`.kojo` 角色号直接取自糖 AST**：当前由产物 `_K{n}` 反推（同 S4 数据层边界），糖 `角色:` 声明直读留后续。
