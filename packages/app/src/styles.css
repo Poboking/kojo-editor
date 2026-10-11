@@ -816,6 +816,35 @@ textarea {
   padding-left: 22px;
   margin-bottom: 2px;
 }
+/* 作者包双态过渡（平铺口上 ↔ 真实文件夹；高度过渡收起 + 原地淡入） */
+.pkg-flat-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows var(--dur-2) var(--ease-out),
+    opacity var(--dur-1) var(--ease-out);
+}
+.pkg-flat-wrap.closed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+.pkg-flat-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.pkg-folder {
+  animation: pkg-folder-in var(--dur-2) var(--ease-out);
+}
+@keyframes pkg-folder-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 /* 包内真实文件夹视图的附加条目（非 ERB / 子目录；只读展示，不进索引） */
 .tree-extra {
   display: flex;

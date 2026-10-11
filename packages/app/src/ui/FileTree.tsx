@@ -52,13 +52,14 @@ function baseName(p: string): string {
 }
 
 /**
- * 口上文件树：角色 → 作者包（可折叠，默认折叠）→ 包内容。
+ * 口上文件树：角色 → 作者包 → 口上文件（默认平铺共存，c087db9 形态）。
  *
- * 两个层级动作（小巧思定稿）：
- * - **点击作者包节点** = 原地展开该包的真实文件夹内容（子目录 / README·ライセンス
- *   等附加文件 / 面文件——与磁盘布局一致；惰性 listDir，失败时回落为仅面文件并自解释）；
- * - **右键「查看被隐藏的文件和文件夹」** = 按作用域批量展开：角色节点 → 该角色全部
- *   作者包的真实文件夹；树根空白处 → 所有角色的全部真实文件夹。
+ * 作者包双态（小巧思定稿）：
+ * - **默认 = 平铺态**：包标题行之下直接列出该包的口上文件（借阅找思路，一眼全览）；
+ * - **点击包标题行 = 文件夹态**：平铺口上以高度过渡收起 → 原地展开真实文件夹视图
+ *   （子目录 / README·ライセンス 等附加文件 / 面文件；惰性 listDir，失败自解释回落）；
+ * - **右键「查看被隐藏的文件和文件夹」** = 按作用域批量切文件夹态：角色节点 → 该角色
+ *   全部作者包；树根空白处 → 所有角色。
  *
  * 展开状态由组件内 state 持有——宿主（ProjectView）以稳定组件身份注入，
  * 打开文件不会因重渲染而丢掉展开状态。
@@ -66,8 +67,8 @@ function baseName(p: string): string {
 export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Props): ReactElement {
   const [filter, setFilter] = useState('');
   const [opened, setOpened] = useState<Set<string>>(new Set());
-  /** 作者包展开态（默认折叠） */
-  const [pkgOpen, setPkgOpen] = useState<Set<string>>(new Set());
+  /** 作者包文件夹态（默认平铺态——包标题行与口上文件共存） */
+  const [pkgFolder, setPkgFolder] = useState<Set<string>>(new Set());
   /** 包目录列举缓存（真实文件夹视图；按包 key 惰性加载） */
   const [dirCache, setDirCache] = useState<Map<string, DirState>>(new Map());
   /** 右键菜单（壳层私有轻量实现） */
@@ -152,11 +153,11 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
       .catch(() => setDirCache((m) => new Map(m).set(pkgKey, 'error')));
   };
 
-  /** 点击作者包节点 = 展开/折叠该包的真实文件夹内容 */
-  const togglePkg = (pkgKey: string, dir: string): void => {
-    const willOpen = !pkgOpen.has(pkgKey);
-    setPkgOpen((prev) => toggleIn(prev)(pkgKey));
-    if (willOpen) ensureDir(pkgKey, dir);
+  /** 点击包标题行 = 切换 平铺态 ↔ 文件夹态；进入文件夹态时加载真实目录 */
+  const togglePkgFolder = (pkgKey: string, dir: string): void => {
+    const willEnter = !pkgFolder.has(pkgKey);
+    setPkgFolder((prev) => toggleIn(prev)(pkgKey));
+    if (willEnter) ensureDir(pkgKey, dir);
   };
 
   /** 收集作用域内全部作者包（根散文件无包目录，不在真实文件夹视图范围） */
@@ -172,12 +173,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
     return out;
   };
 
-  /** 右键「查看被隐藏的文件和文件夹」：按作用域批量展开全部包的真实文件夹 */
+  /** 右键「查看被隐藏的文件和文件夹」：按作用域批量切换到文件夹态 */
   const revealAll = (scope: MenuScope): void => {
     setMenu(null);
     const pkgs = collectPackages(scope);
     setOpened((prev) => new Set([...prev, ...pkgs.map((p) => p.group)]));
-    setPkgOpen((prev) => new Set([...prev, ...pkgs.map((p) => p.key)]));
+    setPkgFolder((prev) => new Set([...prev, ...pkgs.map((p) => p.key)]));
     for (const p of pkgs) ensureDir(p.key, p.dir);
   };
 
@@ -248,7 +249,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
           className="ghost small"
           onClick={() => {
             setOpened(new Set());
-            setPkgOpen(new Set());
+            setPkgFolder(new Set());
           }}
         >
           折叠全部
@@ -277,25 +278,32 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
                     const label = s.label;
                     const pkgKey = `${g.label}::${label}`;
                     const pkgDir = pkgDirOf(g, label);
-                    const isPkgOpen = pkgOpen.has(pkgKey) || filter.length > 0;
+                    const isFolder = pkgFolder.has(pkgKey) && filter.length === 0;
                     return (
                       <li key={label} className="tree-package-node">
                         <button
                           className="tree-package"
                           title={pkgDir}
-                          onClick={() => togglePkg(pkgKey, pkgDir)}
+                          onClick={() => togglePkgFolder(pkgKey, pkgDir)}
                           onContextMenu={(e) => {
-                            // 包节点不弹菜单（点击即展开真实内容）；阻止冒泡到树根菜单
+                            // 包节点不弹菜单（点击即切文件夹态）；阻止冒泡到树根菜单
                             e.preventDefault();
                             e.stopPropagation();
                           }}
                         >
-                          <span className="caret">{isPkgOpen ? '▾' : '▸'}</span>
+                          <span className="caret">{isFolder ? '▾' : '▸'}</span>
                           <span className="tree-package-name">{s.label}</span>
                           <span className="group-count">{s.files.length}</span>
                         </button>
-                        {isPkgOpen ? (
-                          <ul className="tree-files nested">
+                        {/* 平铺态：口上文件直接可见；切文件夹态时高度过渡收起 */}
+                        <div className={`pkg-flat-wrap ${isFolder ? 'closed' : ''}`}>
+                          <div className="pkg-flat-inner">
+                            <ul className="tree-files nested">{s.files.map(fileRow)}</ul>
+                          </div>
+                        </div>
+                        {/* 文件夹态：真实文件夹内容原地淡入 */}
+                        {isFolder ? (
+                          <ul className="tree-files nested pkg-folder">
                             {packageExtras(pkgKey, s)}
                             {s.files.map(fileRow)}
                           </ul>
