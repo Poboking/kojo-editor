@@ -1709,3 +1709,241 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 | `packages/plugin-api/src/index.ts`、`events.ts` | 同上批次的类型导出与 `ui.overlay.open` 事件 |
 | `packages/app/src/ui/layout.ts` | 未跟踪的 P1 布局骨架（5 处类型错误） |
 | `packages/app/src/ui/EditorPane.tsx` | `pickSaveHandler` 单贡献抛错隔离（行为改进，非本批） |
+
+### 5.42 UI 重设计 P1 · 壳层骨架批（2026-10-12 批：五区布局 + 活动栏 + 三容器 + 10 面板迁移）
+
+> **定位**：把壳层从「单一左侧栏堆 10 块面板」重造为 VSCode 式五区布局
+> （工具栏 / 活动栏+主侧栏 / 编辑器区 / 副侧栏 / 底部区 / 状态栏）的**骨架批**（定稿 §四）。
+> 契约**全部 additive**：所有新字段 optional，缺省行为 = 现状（任一中间态可运行）。
+> 宿主保持**零业务知识**——壳层只提供容器/动作语义，业务面板仍全部驻留插件。
+> commit `4ae9366`。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/plugin-api/src/slots.ts` | 修改 | `ui.panel` 贡献 additive 扩展：`location?: PanelLocation`（`'sidebar'|'aux'|'bottom'`，缺省回落 `sidebar`）/ `defaultActive?: boolean`（缺省 true；false = 低频）/ `group?: string`（同 group 合并为单视图）；新增槽 `ui.toolbar` / `ui.statusbar` / `ui.overlay` / `ui.editor.codeAction`；`editor.command` 贡献 `keybinding?`；`SlotMap` 登记全部新槽 |
+| `packages/plugin-api/src/index.ts` | 修改 | 导出 `PanelLocation` / `ToolbarContribution` / `StatusbarContribution` / `OverlayContribution` / `EditorCodeAction` / `EditorCodeActionContribution` 等 |
+| `packages/plugin-api/src/events.ts` | 修改 | `KernelEventMap` additive 新增 `'ui.overlay.open': { id: string; payload?: unknown; source?: string }` |
+| `packages/app/src/ui/layout.ts` | **新增（222 行）** | 布局**纯逻辑**（零 React）：`effectiveLocation` / `organizePanels` / `defaultActiveOf` / `defaultLayout` / `loadLayout` / `saveLayout` / `resetLayout` / `sanitizeContainer` / `reconcileLayout`；常量 `DEFAULT_SIDEBAR_SIZE=260` / `DEFAULT_AUX_SIZE=360` / `DEFAULT_BOTTOM_SIZE=200` / `SIZE_LIMITS` |
+| `packages/app/src/ui/ShellLayout.tsx` | **新增（539 行）** | 五区渲染 + reducer + 命令注册表桥接 + 全局键盘（Ctrl+B/J、Alt+B、Ctrl+K Z 和弦、Esc 优先级 picker>overlay>zen、F1）+ `startDrag` 尺寸拖拽 + `WorkbenchApi` 注册出口 + 全禅形态渲染分支 |
+| `packages/app/src/ui/PanelHost.tsx` | 修改 | `PanelBody`（按 location 分派容器）/ `StatusbarItem` |
+| `packages/app/src/ui/ProjectView.tsx` / `App.tsx` / `EditorPane.tsx` | 修改 | 接入五区骨架；EditorPane 顺带合入并行线的 save-handler 匹配错误可见化（`console.warn`） |
+| `packages/app/src/styles.css` | 修改（+317/−…） | 滚动条全局主题化 + 容器级滚动；token 扩展（spacing/radius/z/字号）；`:focus-visible` 描边 |
+| `packages/plugins/*/src/index.ts`（10 面板） | 修改 | 按定稿 §四迁移表归位（见下表） |
+
+**10 面板迁移参数**（定稿 §四迁移表原样落地）：
+
+| 面板（插件） | location | 其他 |
+|---|---|---|
+| 归档浏览器（`ui-archive-browser`） | aux | `defaultActive:false` |
+| 状态注入器（`ui-snapshot-injector`） | aux | `defaultActive:false` |
+| 状态回放（`ui-state-replay`） | aux | `defaultActive:false` |
+| 升糖（`ui-sugar-lift`） | aux | `defaultActive:false` |
+| 糖预览（`ui-sugar-preview`） | aux | —（默认激活） |
+| 约定校验（`ui-convention-report`） | bottom | Problems 形态；`defaultActive` 未改 |
+| 糖判定（`ui-sugar-editor`） | bottom | `defaultActive:false` |
+| 函数树（`ui-kojo-navigator`） | sidebar | `group:'explorer'`（与内建口上文件树合并） |
+| 插件状态（`ui-plugin-status`） | sidebar | `defaultActive:false`（活动栏底部齿轮位） |
+| （内建）口上文件树 | sidebar | `group:'explorer'` |
+
+#### 关键设计决策
+
+1. **契约 additive、缺省即现状**：`location`/`defaultActive`/`group` 全 optional；未声明 `location` 的面板回落 `sidebar`——10 面板之外的第三方面板**零改动仍可用**。这是定稿「任一中间态可运行」的硬要求，避免出现「必须同步改所有插件才能启动」的窗口期。
+2. **布局状态住壳层私有域**：持久化 key `kojo.ui.layout.v1` 写在 WebView `localStorage`（壳层私有），**不进内核存储域**——布局是宿主形态而非业务数据，符合「宿主容器/动作语义、业务驻留插件」的分工。
+3. **函数树与文件树合并成 Explorer 组**：`group:'explorer'` 使两个 `ui.panel` 贡献合成**单视图**（VSCode Explorer 形态），视图内切换而非占两个活动栏位；图标取 group 内最小 order 者。
+4. **低频面板 = 活动栏底部齿轮位**：`defaultActive:false` 的面板不占常规活动栏图标，收进底部「更多」入口，减少常驻视觉噪声（归档/注入/回放/升糖/糖判定/插件状态均属此类）。
+5. **抽屉尺寸可拖拽、可重置**：三容器各有默认尺寸与 `SIZE_LIMITS`；拖拽 `startDrag` 改内联尺寸并持久化；「重置布局」调 `resetLayout` 回默认。
+6. **`reconcileLayout` 兜底脏数据**：持久化布局加载时清洗——失效激活项回落（面板被移除/改名）、非法 `override` 丢弃、尺寸非法回落默认、`zen` 仅显式 `true` 才生效。避免篡改/降级后的 localStorage 卡死界面。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **959 passed / 6 skipped（965）**（零回归；本批为纯壳层/契约改动，未新增单测） |
+| `pnpm typecheck`（root / `@kojo/app`） | 双跑 exit 0 |
+| `node tools/audit-decoupling.mjs` | A/B/C/D 四项全绿（16 插件） |
+
+#### 手工清单（P1 实机勾验）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| 1 | 打开工程 | 五区布局呈现：顶部工具栏 / 左活动栏+主侧栏 / 中编辑器 / 右副侧栏 / 底部区 / 状态栏 |
+| 2 | 点活动栏图标 | 主侧栏切换到对应面板；再点收起 |
+| 3 | 打开「函数树」与「口上文件」 | 合并进同一 Explorer 组，组内切换 |
+| 4 | 底部区 | 显示「约定校验」；「糖判定」在底部区低频入口 |
+| 5 | 低频面板（归档/注入/回放/升糖/插件状态） | 收在活动栏底部齿轮位，不占常规图标 |
+| 6 | 拖拽容器边界 | 主侧栏 / 副侧栏 / 底部区尺寸可调 |
+| 7 | 关掉重开应用 | 面板归位与尺寸**保持不变**（localStorage 持久化） |
+| 8 | 点「重置布局」 | 回到默认五区布局 |
+
+#### 边界未做（属 P4）
+
+- **三容器间拖拽移动面板** + `override` 持久化（P4）
+- **全禅细化**（隐藏五区仅留编辑器 + 迷你状态栏；居中限宽设置项）（P4；P1 已具 `zen` 渲染分支与 Ctrl+K Z 入口）
+- **设置 overlay（限宽开关）** 与**可选面包屑槽**（P4）
+
+### 5.43 UI 重设计 P2 · 命令与工具栏批（2026-10-12 批：命令体系 + overlay 宿主 + 新建口上文件向导）
+
+> **定位**：定稿 §五/§六落地。把散落的快捷键收敛为**统一命令注册表**，补全
+> overlay 宿主与「新建口上文件」向导。commit `e4663aa`（主体）+ `0bf2eb9`（事件白名单补全）。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/app/src/ui/commands.ts` | **新增（144 行）** | 壳层**纯逻辑**：`parseKeybinding`/`formatKeybinding`/`chordFromEvent`/`keybindingMatches`；`buildCommandRegistry`（壳层布局命令 + `editor.command` 槽贡献合并为**单一真源**）；`commandEnabled`（`when` 判定，抛错隔离为不可用）；`filterCommands` / `filterFileCandidates`（命令面板与快速打开过滤） |
+| `packages/app/src/ui/Palette.tsx` | **新增（177 行）** | 命令面板（Ctrl+Shift+P / F1）+ 快速打开（Ctrl+P）**共用**模态选择器 `Picker`：↑↓/Enter/Esc 键盘导航、`stopPropagation` 防误穿透 |
+| `packages/app/src/ui/ShellLayout.tsx` | 修改（+139） | 全局快捷键改由注册表驱动（Ctrl+B/J、Alt+B 迁入注册表；Ctrl+K Z 和弦保留特例）；Esc 优先级 picker > overlay > zen；**`ui.overlay` 宿主**——订阅 `ui.overlay.open`（P1 事件）/ `ui.overlay.close`（本批 additive 新增），遮罩 + Esc/点击遮罩关闭语义由宿主提供 |
+| `packages/app/src/ui/ProjectView.tsx` | 修改（+5） | 快速打开候选 = 索引**全量文件路径**（泛型路径列表，壳层零业务） |
+| `packages/plugins/ui-sugar-editor/src/new-file-wizard.ts` | **新增（238 行）** | 新建口上文件向导**纯逻辑**：`previewFileName`（`{n}` 代入 / 家族段拼接 / 非法字符与空白剔除）/ `buildTemplate`（生成含 `;` 注释 + `角色:` + `口上:` + 时机块的 `.kojo` 骨架） |
+| `packages/plugins/ui-sugar-editor/src/index.ts` | 修改（+54） | 新建命令 `kojo.newKojoFile`（Ctrl+N / category「文件」/ `when: project!==null`）；`ui.toolbar` 贡献（只引用命令 id）；`ui.overlay` 贡献「新建口上文件」向导（选角色 → 家族 → 起始时机/编号 → 文件名实时预览 → 落盘 → 打开定位） |
+| `packages/plugin-api/src/events.ts` | 修改（+6） | `ui.overlay.close` additive 新增 |
+| `packages/kernel/src/bus.ts` | 修改（+7/−1） | **`KERNEL_EVENT_NAMES` 补全** `ui.overlay.open` / `ui.overlay.close` / `editor.activeFileChanged`（见决策 6） |
+| `packages/plugins/ui-sugar-editor/tests/integration.test.ts` | 修改 | 假内核新增硬依赖（`kernel.project` / `kernel.slots`）与两新槽收集 | 
+
+#### 关键设计决策
+
+1. **命令单一真源**：快捷键、命令面板、工具栏按钮**都指向同一份命令注册表**——`buildCommandRegistry` 把壳层布局命令与 `editor.command` 槽贡献合并，发射与展示同源，杜绝「按钮能用、快捷键失效」类漂移。工具栏按钮**只引用命令 id**，不携带行为。
+2. **壳层零业务**：快速打开的候选是索引的**全量路径列表**（泛型字符串），壳层不认识「口上」概念；「新建口上文件」的全部命名知识住在 `ui-sugar-editor`。
+3. **命名知识经 adapter 推导，fail-closed**：向导的「角色/家族/时机」下拉与文件名模板取自 `game.adapter` 的 `kojoFaceTemplates.registration.declare`（如 `M_KOJO_K{n}`）；**模板缺省即显式不可用**（不猜、不回退内建模板），与 §5.33 的解耦补齐同口径。
+4. **写权限首屏预检**：向导在**打开时**即调 `io.isWritable` 预判，不等到落盘才失败（定稿 §6.1）；不可写时给出提示而非「填完才炸」。
+5. **overlay 宿主只提供容器语义**：遮罩、Esc/点击关闭、层级全部由壳层提供；具体表单由插件贡献。宿主仍不知道 overlay 里是什么。
+6. **事件白名单必须随契约同步**（`0bf2eb9` 的教训）：P1/P2 新增的 `ui.overlay.open`/`ui.overlay.close`/`editor.activeFileChanged` **未同步进 `KERNEL_EVENT_NAMES`**，插件经 `scopedBus.emit` 会被命名空间纪律拦截**抛错**——向导命令链因此断裂。补白名单后恢复。**新增内核事件时，白名单是契约的一部分，必须同批更新**。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **959 passed / 6 skipped（965）**（零回归；向导纯逻辑随后在 §5.45 补测） |
+| `pnpm typecheck`（root / `@kojo/app`） | 双跑 exit 0 |
+| `node tools/audit-decoupling.mjs` | A/B/C/D 四项全绿（16 插件） |
+
+#### 手工清单（P2 实机勾验）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| 1 | `Ctrl+Shift+P` 或 `F1` | 命令面板弹出，可搜命令并执行 |
+| 2 | `Ctrl+P` | 快速打开弹出；输入文件名命中**优先于**路径命中 |
+| 3 | 工具栏「新建口上文件」按钮 | 打开向导 overlay（与 `Ctrl+N` 等价） |
+| 4 | 向导选角色/家族/起始时机与编号 | 文件名**实时预览**，含家族段与编号 |
+| 5 | 向导点「创建」 | 落盘 `.kojo` 骨架（含 `;` 注释、`角色:`、`口上:`、时机块）并打开定位 |
+| 6 | 在只读态打开向导 | 首屏即提示不可写（不等落盘才报错） |
+| 7 | 按 `Esc` | 关闭 overlay（不改动文件） |
+
+#### 边界未做
+
+- **overlay 富交互**（拖拽定位 / 多步向导回退）留后续；本批为表单式单页向导。
+- **工具栏图标体系**：按钮暂用文本/简单图标，完整图标集待设计资源。
+
+### 5.44 UI 重设计 P3 · 编辑器深化批（2026-10-12 批：多标签 + 💡 CodeAction + 状态栏诊断计数）
+
+> **定位**：定稿 §6.4（多标签）与 §五/§六（💡 升糖、诊断聚合）落地。
+> commit `63f362e`（P3a 多标签）+ `9e72af0`（P3b 💡 + 诊断计数）。
+
+#### 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `packages/app/src/ui/App.tsx` | 修改（+119） | **tabs 模型**：`openTabs` / `dirtyPaths` / `pendingClose`；`commitOpenFile` / `doCloseTab`（激活邻居：优先右侧、末尾取左侧）/ `requestCloseTab` / `decideClose` / `saveAll` |
+| `packages/app/src/ui/EditorPane.tsx` | 修改（P3a +309 / P3b +62） | **多 model 重构**：每标签一个 model，切换 `saveViewState → setModel → restoreViewState`；逐 model **版本号 O(1) 脏判定**（BUG-4 方案延伸到后台标签）；`openPaths` 差集 `dispose` 防泄漏；`save`/`savePath`/`saveAll` 动作句柄注册（保存接管链对后台标签同样生效，`needs-choice` 跳过并通知）。**P3b**：适配 `ui.editor.codeAction` 槽——`registerCodeActionProvider` 只做 Monaco 协议转换，执行经 `registerCommand` 落地（参数以 id 反查 `pendingActionsRef`，避免闭包捕获过时文本）；单贡献抛错隔离记日志 |
+| `packages/app/src/ui/ProjectView.tsx` | 修改（P3a +131） | 标签栏（中键 / × 关闭、脏点 ●、溢出横向滚动）+ 空态三动作（快速打开 / 新建口上文件 / 命令面板，经 `WorkbenchApi` 反向触发） |
+| `packages/app/src/ui/ShellLayout.tsx` | 修改（+44） | `extraCommands` 并入统一命令注册表（Ctrl+W 关闭标签、Ctrl+Shift+S 全部保存）；`WorkbenchApi`（`openQuickOpen`/`openPalette`/`hasCommand`/`runCommand`）注册出口 |
+| `packages/app/src/ui/UnsavedConfirmDialog.tsx` | 修改（+26） | `context` 扩展（`close`/`switch` 文案分野） |
+| `packages/plugins/ui-sugar-lift/src/index.ts` | 修改（+41） | 新增 `ui.editor.codeAction` 贡献「升糖：全部应用」（`kind:'refactor'`）：`provideActions` 按文本 memo（Monaco 反复调用），`run` 时**重读盘 + 重扫**再经 applier `applyToFile` 应用；aux 兜底面板保留 |
+| `packages/plugins/ui-convention-report/src/index.ts` | 修改（+26） | 新增 `ui.statusbar` 贡献：错误/警告/提示**聚合计数**（颜色同面板 `SEVERITY_COLOR`）；点击落地为 title 提示 `Ctrl+J` |
+| `packages/app/src/styles.css` | 修改（P3a +69 / P3b +5） | 标签栏 / 脏点 / 空态动作 / `.sb-diag` |
+
+#### 关键设计决策
+
+1. **切换标签零丢失**：model 常驻内存（不随切换 dispose），切换用 `saveViewState`/`restoreViewState` 保留滚动与光标；未保存确认**只发生在关闭脏标签**时，切来切去不打扰。
+2. **脏判定 O(1)**：用 Monaco `getAlternativeVersionId()` 记基线版本号，**O(1)** 判定脏态，避免每次全文本 diff（BUG-4 方案延伸到每个后台标签）。
+3. **供给与执行分离（防闭包过时）**：`codeAction` 的 `provideActions` 与 `run` 可能间隔用户编辑——`provideActions` 只产「标题 + 种类 + id」，`run` 时以 id 反查最新 pending 动作并**重读盘 + 重扫**再应用，**以最新盘态为准**（沿用 §5.37 的「执行前重读」纪律）。
+4. **P0 临时徽章保持宿主渲染**：`writable`/`onReauth` 状态在 App 层，槽位化收益不足，本批**不**迁移（明确记录，避免"似乎可槽位化"的误判）。
+5. **诊断计数不假装可点**：壳层暂无「打开指定容器」通用事件，`ui.statusbar` 贡献点击落地为 title 提示 `Ctrl+J`——**不静默、不假装可点**（可点却无反应是最差的交互）。
+6. **💡 与 aux 面板并存**：升糖从「专用面板」升格为编辑器内 💡（`refactor`），但 aux 兜底面板**保留**（`defaultActive:false`）——避免"面板迁移即功能消失"。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **959 passed / 6 skipped（965）**（零回归） |
+| `pnpm typecheck`（root / `@kojo/app`） | 双跑 exit 0 |
+| `node tools/audit-decoupling.mjs` | A/B/C/D 四项全绿（16 插件） |
+
+#### 手工清单（P3 实机勾验）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| 1 | 依次打开多个文件 | 标签栏累积标签；点击切换，滚动/光标位置保留 |
+| 2 | 改一个标签不保存 → 切走再切回 | 内容不丢（后台 model 常驻） |
+| 3 | 关闭**未修改**标签 | 直接关闭；激活邻居（优先右侧，末尾取左侧） |
+| 4 | 关闭**脏**标签 | 弹未保存确认（关闭文案分野） |
+| 5 | 中键点标签 / 点 × | 均可关闭 |
+| 6 | `Ctrl+W` / `Ctrl+Shift+S` | 关闭当前标签 / 全部保存 |
+| 7 | 在 ERB 候选函数处看 💡 | 出现「升糖：全部应用」动作，可一键应用 |
+| 8 | 应用升糖后观察 | 源文件按最新盘态变化（与 aux 面板语义一致） |
+| 9 | 状态栏诊断计数 | 显示错误/警告/提示聚合数，悬停给出 `Ctrl+J` 提示 |
+
+#### 边界未做（明确记录）
+
+- **codeAction 应用后编辑器 model 不自动重载**：与升糖面板既有语义一致；由 `file.changed` 驱动的 model 自动刷新（避免脏 model 再 Ctrl+S 用旧文本覆盖升糖结果）**留待后续专项**。
+- **诊断计数点击直达容器**：待壳层新增「打开指定 `ui.panel` 容器」通用事件后接线。
+
+### 5.45 UI 重设计审阅修复与补测批（2026-10-12 批：P1–P3 代码审阅 + 3 处修复 + app 层补测 48 项）
+
+> **触发**：用户切换至审阅模型（DeepSeek）接管「审阅代码 + 测试 + 撰写文档」环节。
+> 本批为**只读审阅 + 精准修复 + 补测**，不改动 P1–P3 已交付的行为契约。
+> 审阅报告见 `docs/REVIEW-UI-P1-P3-2026-10-12.md`。
+
+#### 审阅范围
+
+对 P0–P3 全部代码做静态审阅（重点：P1 壳层骨架 / `layout.ts` 纯逻辑、P2 命令体系与向导、
+P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦纪律与 additive 契约；
+并针对**缺乏测试覆盖的壳层纯逻辑**补测。
+
+#### 修复项（3 处）
+
+| # | 文件 | 问题 | 修复 |
+|---|---|---|---|
+| F1 | `packages/app/src/ui/commands.ts` | 快速打开「文件名优先」在 **Windows `\` 路径**上失效——`baseNameOf` 只认 `/`，`D:\...\M_KOJO_K1_日常.ERB` 取不到末段，文件名命中退化为子串命中 | 抽出 `baseNameOf(lowerPath)`（同时认 `/` 与 `\`），`filterFileCandidates` 改用它 |
+| F2 | `packages/app/src/ui/commands.ts` | `formatKeybinding` **功能键不大写**——`f1` 原样回显为 `f1`（命令面板展示不统一） | 单字符键与 `/^f\d+$/` 功能键一律 `toUpperCase()`（`f1`→`F1`） |
+| F3 | `packages/app/src/ui/EditorPane.tsx` | codeAction id 用 `#${pending.size}`——**Monaco 可能持有上一轮列表**，id 复用会解析到别的动作；且 `pending.clear()` 每次供给即清，无界增长防护缺失 | 新增 `actionSeqRef`（**单调递增不复用**）产 id；`pending.clear()` 改为阈值清理（`size > 500` 才清） |
+
+#### 补测项（新增 3 文件，共 **48 项**）
+
+| 文件 | 项数 | 覆盖 |
+|---|---|---|
+| `packages/app/tests/commands.test.ts` | 21 | keybinding 解析（修饰键顺序无关 / 别名 `control`·`cmd`·`super` / 非法→null）、`chordFromEvent`（修饰键本身不产 chord / Shift 大写归一 / 多按修饰键不等）、`formatKeybinding`（`shift+ctrl+p`→`Ctrl+Shift+P` / `f1`→`F1` / 无法解析原样回显）、`buildCommandRegistry`（壳层归「布局」类目 / 同 id 槽贡献覆盖壳层 / 覆盖后原 keybinding 不保留 / 壳层 `run` 不接 `ctx`）、`commandEnabled`（无 when 恒可用 / when 抛错→false）、`filterCommands`（空查询首项 / id 参与匹配 / 无匹配空数组）、`filterFileCandidates`（`\` 路径文件名优先 / 目录命中不丢项 / cap / 大小写不敏感） |
+| `packages/app/tests/layout.test.ts` | 17 | `effectiveLocation`、`organizePanels`（未迁移回落 sidebar / group 合并 + order 升序 + 图标取最小 order 者 / override 改变归属）、`defaultLayout`+`defaultActiveOf`（低频跳过）、持久化（round-trip / 重置 / 坏数据→null）、`reconcileLayout`（失效激活项回落 / 非法 override 丢弃 / override 后重编排 / 尺寸非法回落默认 / `zen` 仅显式 true） |
+| `packages/plugins/ui-sugar-editor/tests/new-file-wizard.test.ts` | 10 | `previewFileName`（`{n}` 代入 / 家族段 `_` 拼接 / 空白剔除 / 非法字符剔除 / 多处占位）、`buildTemplate`（无家族 `; 露米娅（12）\n角色: 12\n` / 家族同步进注释与 `口上:` / 时机块 4 空格缩进 + 编号 / 编号空白剔除 / 非法字符同步剔除） |
+
+配套改动：`packages/app/tsconfig.json` 的 `include` 增加 `"tests/**/*.ts"`（使新增 app 层测试进 `@kojo/app` typecheck）。
+
+#### 关键坑与发现
+
+1. **`filterFileCandidates` 的断言要按真实语义写**：初版断言 `'M_KOJO_K1_'` 期望 2 项，实际 1 项——`M_KOJO_K12_` **不含** `K1_` 子串，是**测试写错**而非实现错；应改断言（顺带验证大小写不敏感），**不放宽实现去迁就错测试**。
+2. **功能键展示是真实（轻微）缺陷**：`formatKeybinding('f1')` 期望 `F1` 实得 `f1`——判断为真实缺陷 → **改实现**（与 F1 同类，一次性补齐功能键大写）。
+3. **Node 22+ 可能自带实验性 `localStorage`**：`layout.test.ts` 若用 `delete globalThis.localStorage` 复位，可能因属性不可删在严格模式抛 `TypeError`。改用 `Object.defineProperty(globalThis,'localStorage',{value,configurable:true,writable:true})` 注入替身，并在 `afterEach` 装空替身。
+4. **测试替身要随契约一起长大**（§5.37 关键坑 3 的同源复发）：假内核 `slots.register` 若只收集已知槽名，新增槽会被**静默吞掉**、测试仍绿（假绿）；P3b 已按槽名过滤修过一次，本批补测沿用。
+
+#### 审阅发现（未修，记录为边界）
+
+| # | 位置 | 观察 | 处置 |
+|---|---|---|---|
+| B1 | `packages/app/src/ui/EditorPane.tsx`（codeAction 应用路径） | 应用后编辑器 model 不自动重载，脏 model 再 Ctrl+S 会用旧文本覆盖升糖结果 | 数据丢失风险；**留待后续专项**（`file.changed` 驱动 model 刷新），原 P3b 提交信息已声明 |
+| B2 | `packages/app/src/ui/layout.ts`（`sanitizeContainer`） | 持久化尺寸未按 `SIZE_LIMITS` 钳制 | 仅被**篡改**的 localStorage 触发；`reconcileLayout` 已兜底非法尺寸回落默认，低危 |
+| B3 | `packages/app/src/ui/App.tsx`（`openProject({keepView:true})`） | 重载项目不清 `openTabs`/`dirtyPaths` | 同目录重载、设计上保留标签；如需"重载即清"再议 |
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `pnpm test` | **1007 passed / 6 skipped（1013）**（959 → 1007，**+48**；零回归） |
+| `pnpm typecheck`（root / `@kojo/app`，含新增 `tests` 目录） | 双跑 exit 0 |
+| `node tools/audit-decoupling.mjs` | A/B/C/D 四项全绿（16 插件） |
+
+#### 边界未做
+
+- B1/B2/B3 三项审阅发现**不在本批修复**（B1 优先级最高，列为后续专项）。
+- 本轮为只读审阅 + 精准修复，**不重构** P1–P3 已交付实现。

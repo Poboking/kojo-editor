@@ -24,6 +24,8 @@
 > 本会话完成 **v0.3 解耦补齐批：时机分野模板归位 adapter（S2 遗留承诺 B-1 兑现）+ 审计 D 项**——契约新增 `KojoFaceTable`/`KojoFaceTemplate` + `GameAdapter.kojoFaceTemplates?`；`eratw-adapter/src/face-templates.ts` 按附录 C 全量登记；`codegen.resolveFace` 改查表 **fail-closed（缺表→timing-face-unknown，绝不回退内建模板）**，golden 逐字节零回退；`audit-decoupling.mjs` 新增 D 项（通用插件零游戏知识，`sav` 仅 A 项）探针自证；851→868 项全绿 / typecheck root+app / audit 四项 / 真实语料冒烟 ✅；**基线更新：868 项 / 14 插件 / 四项审计**（§5.33；审阅报告 `docs/REVIEW-SUGAR-DECOUPLING-2026-10-11.md`）。已推 `26dd4d8`。
 > 本会话完成 **v0.3 S4-UI 批：糖预览面板（第 15 插件 `ui-sugar-preview`）**——把 S4 的 `sugar.preview` 数据层接成可浏览面板：当前 `.kojo` → 转译 + 源映射 + 诊断（有存档附状态回放）→「糖源码行 ↔ 生成产物行 ↔ 消息块可达性」三向映射；**存档扫描是软依赖**（缺席退化为两向映射，不 inactive）+ **未接存档时不显示可达徽章**（不可判定 ≠ 可达，绝不误导）；跳转复用 `editor.revealLocation`、当前文件走 `editor.activeFileChanged`、存档预填走 `kojo.snapshotSelected`（UI 插件间零直接依赖）；909 项全绿 / typecheck root+app / audit 四项（**15 插件**）/ golden 零回退（§5.34）。
 > 本会话完成 **v0.3 S6 批：编辑体验（第 16 插件 `ui-sugar-editor`）**——`.kojo` Monaco Monarch 糖高亮（台词=作者色/中文关键字分角色/`续`标记/插值/```erb 围栏）+ 中文关键字·保留代词·文件内别名补全（**英文隐藏别名不进列表**，规范 §4.1）+ 危险波浪线（新槽 `ui.editor.decorator` → Monaco markers，owner `kojo-decorators`）+「糖判定」面板（可编译/警告/不可编译 + 逐条诊断跳转）；词表**单一真源**从 kojo-sugar 转译器关键字表派生（永不脱节），高亮住 app 宿主层（Monaco 不属插件）；931 项全绿 / typecheck root+app / audit 四项（**16 插件**）/ app build ✅ / golden 零回退（§5.35）。
+> 本会话完成 **v0.3 S7 批（数据层 + UI）与 UI 重设计 P0**——S7 保存路径推导 + `.kojo` 保存接线（发版判据 ① 最后一环，§5.36/§5.37，958 项）；P0 写权限闭环批 + 三轮实机反馈修复（静默只读 / 重授权入口 / 索引阶段可见化 / 函数树失败态 + 头部自救按钮，§5.38–§5.41，959 项）。
+> 本会话完成 **UI/UX 重设计 P1–P3 批（VSCode 式五区布局落地）**——**P1** 壳层骨架（五区布局 + 活动栏 + 三容器 + 10 面板迁移，`4ae9366`）/ **P2** 命令与工具栏（统一命令注册表 + 命令面板/快速打开 + overlay 宿主 + 新建口上文件向导；事件白名单补全 `0bf2eb9`；`e4663aa`）/ **P3** 编辑器深化（多标签 `63f362e` + 💡 CodeAction + 状态栏诊断计数 `9e72af0`）；契约**全部 additive**、宿主**零业务知识**（§5.42–§5.44）。随后**审阅 + 补测批**（§5.45）：3 处修复（`\` 路径文件名优先 / 功能键大写 / codeAction id 单调不复用）+ app 层补测 **+48**（`commands.test.ts` / `layout.test.ts` / `new-file-wizard.test.ts`）；**基线更新：1007 passed / 6 skipped / 16 插件 / 审计 A–D 四项**（审阅报告 `docs/REVIEW-UI-P1-P3-2026-10-12.md`）。P4 待用户确认后开工。
 
 
 ---
@@ -128,6 +130,9 @@
   4. **顺手修复潜在缺陷**：宿主 `Ctrl+S` 回调（`addCommand` 只注册一次）原闭包捕获旧 `save`（deps 含 `filePath`）→ 换文件后会存到旧文件。改用 `filePathRef.current` + 稳定 deps 修掉。
   5. **测试**：+8 单测（`save-handler.test.ts` 多路径）+ `integration.test.ts` 补槽收集与断言；基线 **958 passed / 6 skipped（964）**；typecheck root+app ✅；audit ✅（16 插件）。
   （S7 **数据层**记录见 §6.27 / IMPLEMENTATION-LOG §5.36：`planSave` + `resolveSugarTarget` + 全角空格单一真源上收契约层。）
+- **UI/UX 重设计线（发版判据 ⑥）进度**：需求定稿 v1.0（`docs/UI-REDESIGN-2026-10-11.md`）→ **P0 写权限闭环 ✅**（写权限徽章 / 通知中心 / 只读保存拦截 / 三入口 + 三轮实机反馈修复，§5.38–§5.41）→ **P1 壳层骨架 ✅**（五区布局 + 活动栏 + 三容器 + 10 面板迁移，§5.42，`4ae9366`）→ **P2 命令与工具栏 ✅**（统一命令注册表 + 命令面板 / 快速打开 + overlay 宿主 + 新建口上文件向导，§5.43，`e4663aa` + `0bf2eb9`）→ **P3 编辑器深化 ✅**（多标签 + 💡 CodeAction + 状态栏诊断计数，§5.44，`63f362e` + `9e72af0`）→ **审阅 + 补测 ✅**（3 处修复 + app 层 +48 测试，§5.45）→ **P4 停靠与全禅批（待用户确认后开工）**。
+  - 关键纪律（本线全程遵守）：契约**全部 additive**（新字段 optional，缺省即现状，任一中间态可运行）；宿主**零业务知识**（壳层只提供容器/动作语义）；布局状态住壳层私有 `localStorage`（`kojo.ui.layout.v1`），**不进内核存储域**；新增内核事件必须同批更新 `KERNEL_EVENT_NAMES` 白名单（`0bf2eb9` 教训）。
+  - **当前基线：1007 passed / 6 skipped（1013）；16 插件；审计 A–D 四项全绿；typecheck root + `@kojo/app` 双跑 exit 0。**
 
 ## 三、文档索引（按权威性排序）
 
