@@ -2282,3 +2282,74 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 > 跑法提醒：**不要**给全量 `pnpm test` 设 `KOJO_SMOKE_PROJECT` —— 那会放行依赖 `sav`
 > 存档的注入链路测试，而本机语料**零存档**，必红两条。正确姿势是全量跑不带变量，
 > 语料基线单独带变量跑那一个文件。
+### 5.49 内核优化批 · L0 实测 + 超长文件丝滑 + 索引快照（2026-10-12 批）
+
+> 背景：用户定调「内核优化 = 体感丝滑」（例 1：加载快、**二次打开项目不用再等**；
+> 例 2：**超长 ERB 打开/编辑不卡**）。路线权威 `docs/PERF-REVIEW-2026-10-11.md`
+> （本批按 HANDOFF §三 指示从归档取回为活文档），全部实测记录在其 §七。
+
+#### A · L0 测量（先测量再动手）
+
+1. **纯函数微基准**（Node v22.22.2，临时探针按惯例建→跑→删）：
+   `parseErbText` 0.2ms(284行)/8.7ms(22k)/12.5ms(52k)；`scanControlFlow` 0.3/18.1/38.2ms；
+   `transpile` 3.8ms(213行)/19.1ms(3k)/35ms(6k)。详表见 PERF-REVIEW §7.2。
+2. **语料扫描**：口上域 **2,317 ERB / 3,618,834 行 / 144 MB**；最大单文件 52,601 行（2.35 MB）；
+   分布 p50=893 / p90=3,619 / p99=12,441 行，≥5,000 行占 6.0%。
+3. **三条修正性发现**（PERF-REVIEW §7.3）：① 装饰器 `isKojoFile` 短路——击键路径的全文转译
+   **只作用于 `.kojo`**，2,317 个 ERB 零转译；② 最坏文件是 ERB 而非 `.kojo`；
+   ③ Monaco `occurrencesHighlight`/`wordBasedSuggestions`/`matchBrackets`/`stickyScroll` 全未设。
+4. **实机探针常驻化**：`app/src/perf.ts`（`PerfProbe`，暴露 `__kojoPerf.summary()/detail()/reset()`）
+   + EditorPane 六计时点（`input.handler` / `markers.total` / `markers.decorate:<id>` /
+   `switch.readText` / `switch.createModel` / `switch.apply`）+ bootstrap 开项目级联时间线
+   + erb-parser 索引日志补耗时。实机操作单见 PERF-REVIEW §7.5（待真实终端跑）。
+
+#### B · 超长文件丝滑（例 2）
+
+1. **真凶 = 我们自己的折叠链**（PERF-REVIEW §7.6）：Monaco 打开文件即要整篇 folding ranges
+   → 宿主 `provideFoldingRanges` → 槽 `ui.editor.liftPreview` → `sugar.lift.liftSuggest(全文)`，
+   52,601 行实测 **231 ms**（21,967 行 70 ms）；💡 可用性探测与面板自动扫描共用同一条链
+   （memo 只缓存 1 个文件）。用户"什么都没做"就被卡一次。
+2. **契约 additive**（`plugin-api/slots.ts`）：`ui.editor.liftPreview` / `ui.editor.codeAction`
+   请求新增可选 `lineCount` —— 宿主提供**中性事实**，降级策略留给贡献方；
+   缺省 = 体量未知 → **不降级**（与旧版行为一致）。
+3. **插件降级**（`ui-sugar-lift/src/large-file.ts`，纯函数，`LIFT_MAX_LINES = 5000`）：
+   自动路径超限跳过整篇扫描 + **每文件告警一次**（高频 provider 不刷屏）；
+   面板「重新扫描」保留**显式出口**；`panel-logic.ts` 新增降级态 `'too-large'`。
+4. **Monaco 按体量分级**（`app/src/ui/editor-options.ts`，纯函数）：≥5,000 行关
+   `occurrencesHighlight` / `bracketPairColorization` / `minimap`，`matchBrackets` 降 `near`、
+   `renderLineHighlight` 降 `'line'`；两档都关 `wordBasedSuggestions` 与 `stickyScroll`。
+   宿主在 `setModel` **之前** `updateOptions`（不让大文件先按默认渲染一帧）。
+
+#### C · 索引快照 + 增量复扫（例 1 之「二次打开不等」）
+
+1. **纯函数层**（`erb-parser/src/snapshot.ts`）：`snapshotKeyFor`（FNV-1a 项目根 → 安全存储键）、
+   `aggregateIndex`（**与全量重建同源同序**——两条路径共用同一份聚合代码）、
+   `diffSnapshot`（mtime 保守失效：任一侧为 null = 过期）、
+   `coerceSnapshot`（**fail-closed**：版本/结构/项目根任一不符 → 整体弃用并删除，绝不"修"）、
+   `mergeEntries`（已消失的文件收尸，快照不越攒越大）。
+2. **插件接线**（`plugin.ts`）：`project.opened` → walkDir → **并发 stat 全部文件**（与
+   `readText` 的 `mtimeMs` 同源口径）→ 快照比对 → 只重扫 stale 文件 → 按 walk 顺序聚合
+   → 广播 `kojo.functionChanged`（消费方无感）→ **异步**落盘新快照。
+   `service.buildIndex`（显式调用）**不走快照** = 强制重建语义。
+3. **体量实测**：52,601 行 ERB 的 `ErbFile` JSON 仅 43 KB（索引只存函数边界，不存正文）
+   → 全量快照估 10–20 MB，`JSON.parse` 约 100–200 ms，满足 "<500 ms" 门槛。
+4. **落点**：`{appData}/store/erb-parser/index-v1-<hash>.json`（既有存储域，零新增权限面）。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `npx vitest run` | **1043 passed / 8 skipped（1051）**（基线 1012 + 超长文件批 16 + 快照批 15，零回归） |
+| `tsc -p tsconfig.json`（root） | exit 0 |
+| `tsc -p packages/app/tsconfig.json` | exit 0 |
+| `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
+| 既有测试适配 | `erb-parser/tests/plugin.test.ts` 假 ctx 补内存存储域（新依赖 `ctx.storage`） |
+
+#### 边界未做（下批）
+
+- **开项目级联的大头还在**：条件抽取 ~6.2s / 约定校验 ~9s 既没持久化也没下池 ——
+  本批只消掉了级联里 2.9s 的索引段。候选方案：linter 结果快照（产物小、收益 9s→0）
+  与 `kernel.compute` 计算池（T1，根治主线程阻塞）。
+- `walkDir` 条目未带 mtime/size（现按 stat 逐文件补，2,317 次 IPC；后续可在 io 契约
+  additive 补齐以省掉）。
+- `kernel.compute`（T1）/ L2 共享缓存 / L4 增量转译未动。

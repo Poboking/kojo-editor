@@ -75,6 +75,23 @@ function activatePlugin(io: FileIO): {
       throw new Error(`unexpected inject: ${key}`);
     },
     provide: (key: string, value: unknown) => services.set(key, value),
+    // 内存存储域（内核优化批：索引快照的落点；每次 activate 独立实例，测试互不影响）
+    storage: (() => {
+      const map = new Map<string, string>();
+      return {
+        get: async (key: string) => {
+          const raw = map.get(key);
+          return raw === undefined ? undefined : (JSON.parse(raw) as unknown);
+        },
+        set: async (key: string, value: unknown) => {
+          map.set(key, JSON.stringify(value));
+        },
+        delete: async (key: string) => {
+          map.delete(key);
+        },
+        keys: async () => [...map.keys()],
+      };
+    })(),
     onDispose: (fn: () => void) => disposers.push(fn),
   } as unknown as PluginContext;
   createErbParserPlugin().activate(ctx);

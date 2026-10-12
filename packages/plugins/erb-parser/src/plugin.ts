@@ -1,5 +1,23 @@
-import type { ErbFile, ErbFunctionRef, ErbIndex, ErbParserService, FileIO, GameProject, Plugin } from '@kojo/plugin-api';
+import type {
+  ErbFile,
+  ErbIndex,
+  ErbParserService,
+  FileIO,
+  FileStat,
+  GameProject,
+  Plugin,
+} from '@kojo/plugin-api';
 import { parseErbText, scanControlFlow } from './scanner';
+import {
+  SNAPSHOT_VERSION,
+  aggregateIndex,
+  coerceSnapshot,
+  diffSnapshot,
+  mergeEntries,
+  snapshotKeyFor,
+  type IndexSnapshot,
+  type SnapshotEntry,
+} from './snapshot';
 
 /**
  * erb-parser 插件。
@@ -12,6 +30,10 @@ import { parseErbText, scanControlFlow } from './scanner';
  * 订阅 `project.opened` 自动构建索引并缓存，构建完成发 `kojo.functionChanged`；
  * 消费方（函数树 / 校验器 / 面板）订阅事件或调用 `currentIndex()` / `ensureIndex()`
  * 取用，无需各自重复构建。
+ *
+ * 2026-10-12「内核优化」批 —— **索引快照 + 增量复扫**（例 1：第二次开项目不用再等）：
+ * 文件没变（mtime 一致）时直接复用上次的解析结果，只重扫变过的文件。
+ * 设计与纪律见 `./snapshot.ts` 头注（fail-closed / 保守失效 / 顺序确定）。
  */
 
 const IO = 'kernel.io';
@@ -40,6 +62,8 @@ export function createErbParserPlugin(): Plugin {
     requires: [IO],
     activate(ctx) {
       const io = ctx.inject<FileIO>(IO);
+      /** 本插件命名空间的存储域：索引快照的落点（`{appData}/store/erb-parser/`） */
+      const storage = ctx.storage;
 
       /** 当前索引（未打开项目 / 未构建时为 null） */
       let index: ErbIndex | null = null;
@@ -52,13 +76,9 @@ export function createErbParserPlugin(): Plugin {
       /** 代际号：项目切换时作废过期构建的结果 */
       let generation = 0;
 
-      async function build(rootsToScan: string[], gen: number): Promise<ErbIndex> {
+      async function build(rootsToScan: string[], gen: number, useSnapshot: boolean): Promise<ErbIndex> {
         // 耗时拆分（内核优化 L0）：索引是"开项目级联"的第一段，必须在日志里可见
         const buildStartedAt = Date.now();
-        const files = new Map<string, ErbFile>();
-        const byName = new Map<string, ErbFunctionRef[]>();
-
-        // 收集全部 ERB 文件
         const allFiles: string[] = [];
         for (const root of rootsToScan) {
           const entries = await io.walkDir(root, {
@@ -71,37 +91,91 @@ export function createErbParserPlugin(): Plugin {
           }
         }
 
-        const parseStartedAt = Date.now();
-        const parsed = await mapLimit(allFiles, 12, async (path) => {
+        // 体量指纹：逐文件 stat 取 mtime（与 readText 的 mtimeMs 同源口径），
+        // 是增量复扫的判据——mtime 没变的文件，解析结果必然不变（纯函数）。
+        const statStartedAt = Date.now();
+        const stats = new Map<string, FileStat | null>();
+        await mapLimit(allFiles, 32, async (path) => {
           try {
-            const tf = await io.readText(path);
-            return parseErbText(tf.text, path);
-          } catch (err) {
-            ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
-            return null;
+            stats.set(path, await io.stat(path));
+          } catch {
+            stats.set(path, null); // stat 失败 = 判过期（保守）
           }
         });
 
-        for (const file of parsed) {
-          if (!file) continue;
-          files.set(file.path, file);
-          for (const fn of file.functions) {
-            const refs = byName.get(fn.normalizedName) ?? [];
-            refs.push({
-              name: fn.name,
-              normalizedName: fn.normalizedName,
-              filePath: fn.filePath,
-              startLine: fn.startLine,
-              endLine: fn.endLine,
-            });
-            byName.set(fn.normalizedName, refs);
+        // 快照：只在项目响应式路径启用（service.buildIndex 的显式调用 = 强制重建）
+        let snapshot: IndexSnapshot | null = null;
+        if (useSnapshot && currentRoot) {
+          const key = snapshotKeyFor(currentRoot);
+          try {
+            const raw = await storage.get<unknown>(key);
+            if (raw === undefined) {
+              snapshot = null; // 首次打开 / 无快照 → 全量（正常路径）
+            } else {
+              snapshot = coerceSnapshot(raw, currentRoot);
+              if (snapshot === null) {
+                // fail-closed：版本/结构/项目根任一不符 → 删除 + 全量重建，绝不"修"快照
+                ctx.log.warn('Index snapshot unusable (version/structure/root mismatch); rebuilding from scratch');
+                void storage.delete(key).catch(() => undefined);
+              }
+            }
+          } catch (err) {
+            ctx.log.warn(`Index snapshot read failed; rebuilding from scratch: ${String(err)}`);
+            snapshot = null;
           }
         }
 
+        const diff = snapshot ? diffSnapshot(snapshot, allFiles, stats) : { reusable: [], stale: allFiles };
+
+        const parseStartedAt = Date.now();
+        const fresh = new Map<string, SnapshotEntry>();
+        await mapLimit(diff.stale, 12, async (path) => {
+          try {
+            const tf = await io.readText(path);
+            fresh.set(path, {
+              mtimeMs: tf.mtimeMs,
+              textLength: tf.text.length,
+              file: parseErbText(tf.text, path),
+            });
+          } catch (err) {
+            ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
+          }
+        });
+
+        // 合并：按本次 walk 顺序取数（快照只换"来源"，byName 聚合顺序与全量重建逐位一致）
+        const ordered: ErbFile[] = [];
+        for (const path of allFiles) {
+          const parsed = fresh.get(path)?.file;
+          if (parsed) {
+            ordered.push(parsed);
+            continue;
+          }
+          const reused = snapshot?.entries[path]?.file;
+          if (reused) ordered.push(reused);
+        }
+        const { files, byName } = aggregateIndex(ordered);
+
         ctx.log.info(
           `Indexed ${files.size} ERB files, ${byName.size} distinct functions from ${rootsToScan.length} root(s) ` +
-            `in ${Date.now() - buildStartedAt}ms (walk+read+parse ${Date.now() - parseStartedAt}ms)`,
+            `in ${Date.now() - buildStartedAt}ms (stat ${parseStartedAt - statStartedAt}ms, ` +
+            `read+parse ${Date.now() - parseStartedAt}ms, reused ${diff.reusable.length}/${allFiles.length})`,
         );
+
+        // 落盘快照（异步，不阻塞广播；失败只告警——它只是缓存，不是数据）
+        const snapshotDirty =
+          fresh.size > 0 || (snapshot !== null && Object.keys(snapshot.entries).length !== allFiles.length);
+        if (useSnapshot && currentRoot && gen === generation && snapshotDirty) {
+          const key = snapshotKeyFor(currentRoot);
+          const entries = mergeEntries(snapshot, allFiles, fresh);
+          void storage
+            .set(key, { version: SNAPSHOT_VERSION, rootDir: currentRoot, savedAt: Date.now(), entries })
+            .then(() => {
+              ctx.log.info(`Index snapshot saved (${Object.keys(entries).length} entries, key ${key})`);
+            })
+            .catch((err: unknown) => {
+              ctx.log.warn(`Index snapshot save failed: ${String(err)}`);
+            });
+        }
 
         // 仅在仍是当前代际时提交（避免项目快速切换导致旧结果覆盖新结果）
         if (gen !== generation) return { files, byName };
@@ -116,7 +190,7 @@ export function createErbParserPlugin(): Plugin {
       }
 
       function startBuild(gen: number): Promise<ErbIndex> {
-        const p = build(roots, gen).finally(() => {
+        const p = build(roots, gen, true).finally(() => {
           if (inFlight === p) inFlight = null;
         });
         inFlight = p;
@@ -133,7 +207,7 @@ export function createErbParserPlugin(): Plugin {
 
         scanControlFlow: (text: string) => scanControlFlow(text),
 
-        buildIndex: (rootsToScan: string[]) => build(rootsToScan, generation),
+        buildIndex: (rootsToScan: string[]) => build(rootsToScan, generation, false),
 
         currentIndex: () => index,
 
