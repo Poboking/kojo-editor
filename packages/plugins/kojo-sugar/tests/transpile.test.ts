@@ -309,8 +309,26 @@ describe('§3.4 插值 · 值插值分类', () => {
     expect(body('角色: 12\n时机 指令 310：\n    「{你}，来了。」\n')).toContain('%CALLNAME:MASTER%');
   });
 
-  it('字符串族属性 → `%…%`', () => {
-    expect(body('角色: 12\n时机 指令 310：\n    「{她的名字}」\n')).toContain('%CALLNAME:TARGET:名字%');
+  it('字符串族属性：`名字` 走 CALLNAME（**以角色号为索引**，没有"名字的索引"）', () => {
+    // 旧断言锚的是 `%CALLNAME:TARGET:名字%`——那是 1D 数组的越界写法，引擎不认。
+    // 规范 §3.8 只承诺 `{她}` → `%CALLNAME:TARGET%`；`她的名字` 作为作者的自然人写法在此对齐。
+    expect(body('角色: 12\n时机 指令 310：\n    「{她的名字}」\n')).toContain('%CALLNAME:TARGET%');
+  });
+
+  it('角色引用属性 `角色12的好感度` → `CFLAG:12:好感度`（规范 §3.8，批 L）', () => {
+    expect(body('角色: 12\n时机 指令 310：\n    如果 角色13的好感度 >= 500：\n        「……」\n')).toContain(
+      'IF CFLAG:13:好感度 >= 500',
+    );
+  });
+
+  it('角色引用 `角色12的名字` → `%CALLNAME:12%`（§3.8 承诺的兑现点）', () => {
+    expect(body('角色: 12\n时机 指令 310：\n    「{角色12的名字}来了。」\n')).toContain('%CALLNAME:12%');
+  });
+
+  it('`角色X的Y` 的 X 必须是**数字**：变量作用域不认（动态角色号糖里没有承诺写法）', () => {
+    const src = '角色: 12\n时机 指令 310：\n    如果 角色X的好感度 >= 500：\n        「……」\n';
+    // `角色` 后不是数字 → 不匹配角色分支，`角色X` 当裸标识符处理 → 报 unknown-identifier
+    expect(t(src).diagnostics.some((d) => d.code === 'unknown-identifier')).toBe(true);
   });
 
   it('正文裸文本里的「她」「你」不替换', () => {

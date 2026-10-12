@@ -312,6 +312,19 @@ function lowerPronounsAndAttributes(code: string, ctx: ExprContext): string {
   let out = '';
   let i = 0;
   while (i < code.length) {
+    // 角色引用属性优先（`角色12的好感度`；规范 §3.8 的"引用其它角色"，批 L 落地）
+    const role = matchRoleAttribute(code, i);
+    if (role) {
+      const nameEnd = scanIdentifier(code, role.nameStart);
+      const name = nameEnd > 0 ? code.slice(role.nameStart, nameEnd) : '';
+      if (name.length > 0) {
+        out += resolveAttribute(role.no, name, ctx);
+        i = nameEnd;
+        continue;
+      }
+      // `角色12的` 后面没有标识符 → 原样两个字符继续走常规分支（不猜）
+    }
+
     // 属性访问优先（`她的X` 比 `她` 长）
     const attrPrefix = matchAttributePrefix(code, i);
     if (attrPrefix) {
@@ -368,9 +381,23 @@ function lowerPronounsAndAttributes(code: string, ctx: ExprContext): string {
   return out;
 }
 
+/**
+ * 匹配角色引用属性 `角色<数字>的`（规范 §3.8"引用其它角色"）。
+ *
+ * 判据：`角色` 前不粘标识符；`角色` 后**必须是纯数字**（变量号写法如 `角色X的` 一律不认——
+ * 那是动态作用域，糖里不承诺）；数字后必须是 `的`。返回属性名的起始下标。
+ */
+function matchRoleAttribute(code: string, i: number): { no: string; nameStart: number } | null {
+  if (!code.startsWith('角色', i)) return null;
+  if (i > 0 && isIdentPart(code[i - 1]!)) return null;
+  let j = i + 2;
+  while (j < code.length && /[0-9]/.test(code[j]!)) j++;
+  if (j === i + 2 || code[j] !== '的') return null;
+  return { no: code.slice(i + 2, j), nameStart: j + 1 };
+}
+
 /** 匹配属性前缀（`她的` / `你的`；返回 scope 与长度） */
-function matchAttributePrefix(code: string, i: number): { scope: string } | null {
-  for (const [prefix, scope] of ATTRIBUTE_PREFIX) {
+function matchAttributePrefix(code: string, i: number): { scope: string } | null {  for (const [prefix, scope] of ATTRIBUTE_PREFIX) {
     if (code.startsWith(prefix, i)) {
       // 前缀之后必须是标识符起始（避免 `她的` 后接运算符被误判）
       const next = code[i + prefix.length];
@@ -424,6 +451,9 @@ function isErbKeyword(ident: string): boolean {
  * 语法崩溃的 ERB，但诊断明确）。
  */
 function resolveAttribute(scope: string, name: string, ctx: ExprContext): string {
+  // `名字` 特例：`CALLNAME` **以角色号为索引**，不存在"名字的索引"。
+  // 走通用查表会得到 `CALLNAME:TARGET:名字`（引擎里是 1D 数组的越界写法）。
+  if (name === '名字') return `CALLNAME:${scope}`;
   const family = ctx.dictionary?.resolveFamily(name);
   if (!family) {
     ctx.report({

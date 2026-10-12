@@ -486,18 +486,31 @@ describe('糖投影 · 角色状态赋值行反糖（批 J）', () => {
     expect(segLines(r.segments[0]!)).toEqual(['她的好感度 = LOCAL']);
   });
 
-  it('**数字角色号作用面绝不假阳性**：`CFLAG:1:好感度` 是"角色 1 的"，糖里没这写法', () => {
-    // 正则会把 `1` 当属性编号查名 → 得到 `她的既成事実:好感度`（既成事実与这行毫无关系）
-    for (const src of ['CFLAG:1:1088 += 50', 'CFLAG:1:好感度 += 50', 'CFLAG:ARG:1088 = 1']) {
+  it('批 L 放开数字角色号，但**绝不再把角色号当属性编号查名**（假阳性回归钉）', () => {
+    // 批 J 的洞：`CFLAG:1:1088` 曾被切成 `CFLAG:1` 去查名 → `她的既成事実:好感度`。
+    // 现在段数一次吃全：数字作用域走 `角色N的X`，查不到名字就不动；ARG 仍无写法。
+    const a = withDict('CFLAG:1:1088 += 50');
+    expect(segLines(a.segments[0]!)).toEqual(['角色1的好感度 += 50']);
+    for (const src of ['CFLAG:1:好感度 += 50', 'CFLAG:ARG:1088 = 1']) {
       const r = withDict(src);
       expect(r.segments).toHaveLength(0);
       expect(r.stats.nativeByReason.find((x) => x.reason === 'other')?.count).toBe(1);
     }
   });
 
-  it('条件里同一个洞：`IF CFLAG:1:1088 >= 500` 不许出现 `她的既成事実`', () => {
+  it('条件里的数字角色号同样走新写法，且不再出现 `她的既成事実`', () => {
     const r = withDict(['IF CFLAG:1:1088 >= 500', 'PRINTFORMW 甲', 'ENDIF'].join('\n'));
-    expect(segLines(r.segments[0]!)).toEqual(['如果 CFLAG:1:1088 >= 500：', '\t甲']);
+    expect(segLines(r.segments[0]!)).toEqual(['如果 角色1的好感度 >= 500：', '\t甲']);
+  });
+
+  it('`CALLNAME:12` → `{角色12的名字}`（§3.8 承诺的兑现点，反向）', () => {
+    const r = withDict('PRINTFORMW 「%CALLNAME:12%」');
+    expect(segLines(r.segments[0]!)).toEqual(['「{角色12的名字}」']);
+  });
+
+  it('`PLAYER` 是 `MASTER` 的引擎别名 → 显示 `你的X`（不新造第三种代词）', () => {
+    const r = withDict(['CFLAG:PLAYER:1088 = 1', 'BASE:PLAYER:7 += 5'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['你的好感度 = 1', '你的勃起 += 5']);
   });
 
   it('反糖一个字都没改动的赋值 → 留原代码（半中不日的行既没信息也不是他能写的）', () => {
@@ -769,19 +782,24 @@ describe('糖投影 · 属性反糖（需变量字典的反向查询）', () => 
     expect(segLines(r.segments[0]!)[0]).toBe('如果 FLAG:70 && TFLAG:192：');
   });
 
-  it('名称查不到 / 非目标与玩家角色 / 表达式混写 → **一律不动**（绝不猜）', () => {
+  it('名称查不到 / 动态角色作用域 / 表达式混写 → **一律不动**（绝不猜）', () => {
     const r = withDict(
       [
         'PRINTFORMW 「{CFLAG:TARGET:9999}」',
-        'PRINTFORMDW 「{CFLAG:12:1088}」',
+        'PRINTFORMDW 「{CFLAG:ARG:1088}」',
         'PRINTFORMDW 「{CFLAG:TARGET:1088 + 1}」',
       ].join('\n'),
     );
     expect(segLines(r.segments[0]!)).toEqual([
       '「{CFLAG:TARGET:9999}」',
-      '「{CFLAG:12:1088}」',
+      '「{CFLAG:ARG:1088}」',
       '「{CFLAG:TARGET:1088 + 1}」',
     ]);
+  });
+
+  it('数字角色号现在有写法（批 L）：`{CFLAG:12:1088}` → `{角色12的好感度}`', () => {
+    const r = withDict('PRINTFORMW 「{CFLAG:12:1088}」');
+    expect(segLines(r.segments[0]!)).toEqual(['「{角色12的好感度}」']);
   });
 
   it('无字典（adapter 未激活）→ 退化为不做属性反糖，其余照常', () => {

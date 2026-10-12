@@ -86,6 +86,10 @@ import type { FaceNameIndex } from './faces-reverse';
  * `FLAG` 是**全局**族，写成糖的 `她的FLAG` 是错的。故只给"角色作用域"的族发糖；
  * 全局族（`FLAG`/`TFLAG`/`GLOBAL`/`DAY`/`MONEY`…）原样保留。
  *
+ * 批 L 之后这张表管的是"**能不能落到角色属性写法**"的族范围：`TARGET`/`MASTER`/`PLAYER`
+ * 作用域 → `她的X`/`你的X`，**数字角色号**作用域 → `角色12的X`（规范 §3.8 扩）。
+ * 动态角色作用域（`ARG`/`LOCAL`/作者自己的角色号变量）仍然一律不动——糖里没有承诺写法。
+ *
  * 表的来源是引擎的变量族划分（`VariableParser.ReduceVariable` 的角色分支），
  * 属**语言/引擎级**知识（与 `PRINT_VARIANTS` 同类），不是某个游戏的知识。
  */
@@ -1156,17 +1160,18 @@ function reverseAttributes(text: string, deps: LiftDeps): string {
 }
 
 /**
- * 表达式里的变量引用（`FAMILY[:SCOPE]:INDEX`；索引允许中日文名与编号）。
+ * 表达式里的变量引用：族名 + **1～2 段冒号内容**（批 L 起一次吃全，不再只吃第一段）。
  *
- * **注意本正则只吃掉第一段冒号内容**，所以 `CFLAG:1:好感度`（数字角色号作用面 =
- * "角色 1 的好感度"）会被切成 `CFLAG:1` + 剩下的 `:好感度`。这是**假阳性**的入口，
- * 由 `reverseExprAttributes` 里的守卫挡下（见该函数注释）。
+ * 为什么必须一次吃全：批 J 之前的正则只吃第一段，于是 `CFLAG:1:好感度`（**角色 1** 的
+ * 好感度）被切成 `CFLAG:1` + `:好感度`，把角色号 `1` 当属性编号去查名 → 显示成
+ * `她的既成事実:好感度`。那副"看着像糖"的假阳性骗过了全部覆盖率尺子（§5.67）。
+ * 现在段数由结构给出，判定交给 `segmentsToSugar`——**该认的认，不该认的一律不动**。
  */
 const EXPR_REF_RE =
-  /\b(CFLAG|TALENT|ABL|EXP|MARK|BASE|PALAM|TEQUIP|TCVAR):(?:(TARGET|MASTER):)?([^:\s()[\]{},%]+)/g;
+  /\b(CFLAG|TALENT|ABL|EXP|MARK|BASE|PALAM|TEQUIP|TCVAR|CALLNAME|NAME)(?::[^:\s()[\]{},%+]+){1,2}/g;
 
 /**
- * 表达式侧反糖（**词级**）：把条件里的角色属性引用逐个换成 `她的X`。
+ * 表达式侧反糖（**词级**）：把条件里的角色属性引用逐个换成糖写法。
  * 双引号字面量整段跳过（不识别的写法一律保留，不猜）。
  */
 function reverseExprAttributes(text: string, deps: LiftDeps): string {
@@ -1177,67 +1182,85 @@ function reverseExprAttributes(text: string, deps: LiftDeps): string {
     .map((seg) =>
       seg.startsWith('"')
         ? seg
-        : seg.replace(
-            EXPR_REF_RE,
-            (
-              whole,
-              family: string,
-              scope: string | undefined,
-              index: string,
-              offset: number,
-              source: string,
-            ) => {
-              // **数字角色号作用面一律不反糖**：`CFLAG:1:好感度` 是"角色 1 的好感度"，
-              // 而本正则会把 `1` 当属性编号去查名，得到 `她的既成事実:好感度`——
-              // 规范 §3.8 里 `她的X` 专指 `FAMILY:TARGET:X`，别的角色**糖里没有对应写法**
-              // （要引用其它角色是 `{角色12的名字}`，且只覆盖 CALLNAME）。
-              // 判据：没有显式 TARGET/MASTER 作用域，而匹配后面还紧跟一个 `:` → 整支不动。
-              if (scope === undefined && source[offset + whole.length] === ':') return whole;
-              return sugarForRefParts(family, scope, index, dict) ?? whole;
-            },
-          ),
+        : seg.replace(EXPR_REF_RE, (whole: string, family: string) => {
+            // 段数从匹配文本本身数出来（正则的第二捕获组只给"最后一段"，用它数会错）
+            const segs = whole.slice(family.length + 1).split(':');
+            return segmentsToSugar(family, segs, dict) ?? whole;
+          }),
     )
     .join('');
+}
+
+/** 角色号写法：`CALLNAME:12` → `角色12的名字`；`CFLAG:13:好感度` → `角色13的好感度` */
+const ROLE_NO_RE = /^\d{1,4}$/;
+/** 引擎里等价的"当前对象/玩家"作用域（`PLAYER` 是 `MASTER` 的别名，见 conventions.ts） */
+const SCOPE_ALIAS: ReadonlyMap<string, string> = new Map([
+  ['TARGET', '她的'],
+  ['MASTER', '你的'],
+  ['PLAYER', '你的'],
+]);
+/** 以**角色号**为索引的族（规范 §3.4 字符串族；没有"名字的索引"） */
+const CHAR_NUMBERED_FAMILIES: ReadonlySet<string> = new Set(['CALLNAME', 'NAME']);
+
+/**
+ * 变量引用 → 糖写法的**唯一点**（正向 `expression.ts` 的同族规则与此一一对应）。
+ *
+ * @param family 族名（大写原文）
+ * @param segs   冒号后的段（1 段 = `FAMILY:索引` 或 `CALLNAME:角色号`；2 段 = `FAMILY:作用域:索引`）
+ * @returns 糖写法（不含定界符）；`undefined` = **不动**
+ *
+ * 三条硬判据（放宽任何一条都会得到"看着像懂了其实被误导"的产物）：
+ * 1. 族必须是**角色作用域**族——全局族（`FLAG`/`TFLAG`）写成 `她的FLAG` 是错的；
+ * 2. 作用域必须是 `TARGET`/`MASTER`/`PLAYER` 或**纯数字角色号**；
+ *    `ARG`/`LOCAL`/`K69_CNUM` 这类**动态角色变量**糖里没有承诺写法（作者写不出、
+ *    读者也认不出是谁），一律不动（实测占三段式引用的 ~1.2%）；
+ * 3. 名称必须查得到——**绝不编名字**。
+ */
+function segmentsToSugar(family: string, segs: string[], dict: DictionaryLookup): string | undefined {
+  const f = family.toUpperCase();
+  if (CHAR_NUMBERED_FAMILIES.has(f)) {
+    if (segs.length !== 1) return undefined;
+    const no = segs[0]!;
+    if (ROLE_NO_RE.test(no)) return `角色${no}的名字`;
+    const possessive = SCOPE_ALIAS.get(no.toUpperCase());
+    return possessive === '她的' ? '她' : possessive === '你的' ? '你' : undefined;
+  }
+  if (!CHAR_SCOPED_FAMILIES.has(f)) return undefined;
+  // 一段：引擎语义的"当前角色 1D"，即 TARGET 作用域
+  if (segs.length === 1) return possessiveRef(f, '她的', segs[0]!, dict);
+  if (segs.length !== 2) return undefined;
+  const [scope, index] = [segs[0]!, segs[1]!];
+  const possessive = SCOPE_ALIAS.get(scope.toUpperCase());
+  if (possessive !== undefined) return possessiveRef(f, possessive, index, dict);
+  if (ROLE_NO_RE.test(scope)) {
+    const name = dict.nameAt?.(f, index);
+    return name === undefined || name.length === 0 ? undefined : `角色${scope}的${name}`;
+  }
+  return undefined;
+}
+
+/** 属性名查得到才发糖（`她的X` / `你的X`）；查不到 → `undefined`，**绝不编名字** */
+function possessiveRef(
+  family: string,
+  possessive: string,
+  index: string,
+  dict: DictionaryLookup,
+): string | undefined {
+  const name = dict.nameAt?.(family, index);
+  return name === undefined || name.length === 0 ? undefined : `${possessive}${name}`;
 }
 
 /**
  * "整支恰是一个变量引用"时的糖写法（不含定界符）；`undefined` = 不该动。
  *
- * 认两种形态：
- * - `FAMILY:TARGET:IDX` / `FAMILY:MASTER:IDX` → `她的IDX名` / `你的IDX名`
- * - `FAMILY:IDX`（省略角色 = 引擎语义的角色 1D，即 TARGET 作用域）→ `她的IDX名`
+ * 插值通道（`{…}` / `%…%`）与表达式通道**共用 `segmentsToSugar`**——两条通道各写一套
+ * 判据迟早分叉（批 J 的假阳性正是表达式通道单独切段造成的）。
  */
 function sugarForRef(inner: string, dict: DictionaryLookup): string | undefined {
-  const m = /^\s*([A-Z]+)(?::([A-Za-z0-9_]+))?(?::(.+?))?\s*$/.exec(inner);
+  const m = /^\s*([A-Za-z_][A-Za-z0-9_]*):([^\s:]+)(?::([^\s:]+))?\s*$/.exec(inner);
   if (!m) return undefined;
-  const family = m[1]!;
-  if (m[3] !== undefined) return sugarForRefParts(family, m[2]!, m[3], dict);
-  if (m[2] === undefined) return undefined; // 裸族名（`CFLAG`）：语义是"角色 1D 首格"，不发糖
-  return sugarForRefParts(family, undefined, m[2], dict);
-}
-
-/**
- * 三段逻辑的唯一点：族必须是**角色作用域**、角色必须是 TARGET/MASTER、名称必须查得到。
- *
- * 为什么这三条一条都不能放宽：
- * - 全局族（`FLAG`/`TFLAG`）写成 `她的FLAG` 是**错的**——"不写"好过"写错"；
- * - 其它角色的属性糖里没有对应写法（`{角色12的X}` 只覆盖 CALLNAME）；
- * - 名称查不到就保留原样的数字——**绝不编名字**（那是"看着像懂了其实被误导"）。
- */
-function sugarForRefParts(
-  family: string,
-  scope: string | undefined,
-  index: string,
-  dict: DictionaryLookup,
-): string | undefined {
-  if (!CHAR_SCOPED_FAMILIES.has(family)) return undefined;
-  const effective = scope ?? 'TARGET';
-  const possessive =
-    effective === 'TARGET' ? '她的' : effective === 'MASTER' ? '你的' : undefined;
-  if (possessive === undefined) return undefined;
-  const name = dict.nameAt?.(family, index);
-  if (name === undefined) return undefined;
-  return `${possessive}${name}`;
+  const segs = [m[2]!, m[3]].filter((x): x is string => x !== undefined);
+  return segmentsToSugar(m[1]!, segs, dict);
 }
 
 /**

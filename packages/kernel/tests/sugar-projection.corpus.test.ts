@@ -388,14 +388,15 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 工具/辅助函数——分野表里没有的时机就不冒充有（宁留原代码，不给错标签）。
       expect(total.headProjected / Math.max(1, total.headLines)).toBeGreaterThan(0.7);
       expect(kojo.headProjected / Math.max(1, kojo.headLines)).toBeGreaterThan(0.7);
-      // 批 J：角色状态赋值行 → 中文属性写法。实测 **26.0%**（5,344 / 20,532）。
+      // 批 J：角色状态赋值行 → 中文属性写法。批 J 单独实测 **26.0%**（5,344 / 20,532）。
       // 这个数**看着小，但它才是真的**：加假阳性守卫之前是 43.8%，多出来的 3,642 行全是
-      // `CFLAG:1:好感度` 被读成 `她的既成事実:好感度`（见 §5.66）。剩下的 74% 分两类：
-      // ①其它角色号作用面（`MARK:10:` / `PALAM:12:` / `TALENT:ARG:`）——糖里没有对应写法，
-      // 按规范 §3.8 一律不标；②名字索引（`BASE:TARGET:情緒`）——原文对读者已经可读。
-      // 下限 0.2：字典接线掉断、或守卫收紧过头（→0）都会红。
-      expect(total.assignProjected / Math.max(1, total.assignLines)).toBeGreaterThan(0.2);
-      expect(kojo.assignProjected / Math.max(1, kojo.assignLines)).toBeGreaterThan(0.2);
+      // `CFLAG:1:好感度` 被读成 `她的既成事実:好感度`（见 §5.67）。
+      // 批 L 给规范 §3.8 补上「角色N的X」写法后升到 **54.8%**（11,255）——
+      // 剩下的仍是**故意不标**：`CFLAG:ARG:` / `TCVAR:LOCAL:` 这类动态角色作用域糖里没有承诺写法，
+      // 以及 `TEQUIP:4` 这种字典查不到名字的编号（L0 数据缺口，不编名字）。
+      // 下限 0.4：撤掉批 L → 26.0% 红；撤掉批 J → 0% 红；字典接线掉断 → 红。
+      expect(total.assignProjected / Math.max(1, total.assignLines)).toBeGreaterThan(0.4);
+      expect(kojo.assignProjected / Math.max(1, kojo.assignLines)).toBeGreaterThan(0.4);
       // 批 K：`CALL HPH_PRINT,@"文本","模式"` → 「心形 文本」。实测 **98.0%**（65,903 / 67,282）。
       // 这是目前**最直白的台词通道**：这些行的正文本来就是要给读者看的话，不投影就等于
       // 把台词锁在指令参数里。剩下 2% 是裸变量实参 / 缺模式字母 / 表外模式（一律不动）。
