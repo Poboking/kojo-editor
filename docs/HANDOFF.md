@@ -183,6 +183,29 @@
   的「名称解析 memo」组，判定逻辑与用例数零改动）。
   ⚠ 跑全量**不要**设 `KOJO_SMOKE_PROJECT`（会放行依赖 sav 存档的注入测试而本机零存档必红）；
   语料基线单独带变量跑那一个文件即可。
+- **2026-10-12 回放线重测批完成**（本会话；`docs/IMPLEMENTATION-LOG.md` **§5.72** 为权威记录）：
+  差异化核心「sav → 状态回放」在 §5.64 合流 / §5.65 索引快照 v3 / §5.70 抽取按文件增量之后
+  **首次重测**（此前本机零存档，两条守门长期 skipped，§5/§6 只是文档里的历史数字）。
+  1. **用户提供了六份真实存档**，逐字节验真确认**就是 2026-10-10 那批原始档**：`save00` 载荷
+     **571,185 B 逐字节同构**（与 §5.17 记录一字不差）、`save03` saveMes = `第 47日`（正是集成
+     测试断言）、档集 `global + save00–03 + save1000` = 6（与 `toBe(6)` 同源）。
+  2. **§5 与 §6 逐字复现**：168 角色/档、16,005 变量/档（save00=16,000）、`#DIM` 恒 65、
+     MASTERNAME 7/168、RANDDATA 625（save00 全零剪枝）、MONEY 51.77 亿、EM 2 表、残余 0B；
+     K49 回放 **1,356 函数 / 11,685 谓词 / 命中 1,549 / 未命中 6,395 / 未知 3,741 = 32.0% /
+     exact 836 / partial 482 / unknown 38**，未知分类亦逐项对齐。
+     → **结论：合流与两批缓存改动没有把回放求值带偏。**
+  3. **一处口径漂移已归因**：抽取「扫描函数数」实测 99,104（= 索引全量），§4 旧记 95,504；
+     谓词四项逐字未变 ⇒ 是 `16747f4`（§5.70）"无控制流的文件也留空桶"让计数变宽，不是回归。
+  4. **封堵金样本两处假绿面**（本批唯一代码改动，三处都是**收紧**）：旧 `golden-roundtrip`
+     硬编码 `save00–save05`（另一套槽位）且对缺失档 `catch { continue }` ⇒ **标题六档、实际四档仍绿**；
+     现改为档集**身份清单**（缺档即红并指名）+ 把真实强度写死（**逐字节 2 档 / 近似档 4 档 /
+     方案 B passthrough 6 档**）；另把"有环境变量但语料无 `sav/`"从 ENOENT 失败改成**显式 skip**。
+  5. **复测配方 + 安全边界**：真实语料 `C:\Game` 全程**零写入**（无 `sav/`、顶层 29 项不变），
+     用 `robocopy` 整份复制到 `C:\tmp-kojo-sav\eratw`、六档放副本 `sav\`、`KOJO_SMOKE_PROJECT`
+     指向副本，验后删除副本。配方原文见 §5.72 末。
+  6. **未做**：六份档需要一处长期的仓库外固定位置（建议 `C:\kojo-fixtures\sav\`，**位置待用户定**，
+     微信接收目录会被清理）；SKIA v15 一侧与 CliDebug 快照来源未验（本机引擎是 LazyLoading v3.0，
+     PE 内无 socket 面）；§7 编码往返基线未在副本上顺手重跑；桌面壳实机目视仍欠。
 - **内核优化线（2026-10-12 批 P-A…P-F 同期，✅ 已收口进 master）**：L0 埋点 → 超长文件丝滑 →
   索引快照 → 计算池 `kernel.compute` → 并行运输层 → 扫描段上通道 → 审修补丁，
   权威记录 = IMPLEMENTATION-LOG **§5.51 / §5.52 / §5.53**（体感口径：加载二次不等、超长文件不卡）。
@@ -516,7 +539,7 @@ packages/
 ```bash
 cd C:\DSH\kojo-editor
 pnpm install
-pnpm test               # 1080 项（本机无 sav 存档 → 金样本/集成冒烟自动跳过，属正常）
+pnpm test               # 1432 项（本机真实语料无 sav/ → 金样本/集成冒烟里依赖存档的用例**显式 skip**，属正常；2026-10-12 §5.72 起不再是 ENOENT 失败）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）—— 两套都必须跑
 pnpm audit:decoupling   # 必须 ✅（plugins 数 16；审计 A–D 四项）
 # Rust 宿主（本机 cargo 可用、增量秒级；改 lib.rs / 新增 tauri::command 必跑）：
@@ -525,6 +548,12 @@ node node_modules/vitest/vitest.mjs run packages/plugin-api/tests/sugar.test.ts 
 node node_modules/vitest/vitest.mjs run packages/plugins/kojo-sugar/tests/compile.test.ts   # v0.3 S3：编译落盘（编码组装 / 双闸 / 备份 / 回读验证）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放/注入写链路/**语法糖编译落盘**）：
 KOJO_SMOKE_PROJECT="C:\game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
+# 回放线复测（§5 / §6，需要真实存档；**真实语料零写入**，用副本 —— 配方原文见 IMPLEMENTATION-LOG §5.72 末）：
+#   1) cmd //c "robocopy C:\Game\eratw-...-SANYOUSEI(PC) C:\tmp-kojo-sav\eratw /E /XJ /MT:24 /NFL /NDL /NJH /NJS /R:1 /W:1"   # 退出码 <8 即成功
+#   2) 把六份 .sav 放进 C:\tmp-kojo-sav\eratw\sav\（档本身不入库；身份清单与 sha256 见 BASELINES §5）
+#   3) KOJO_SMOKE_PROJECT="C:/tmp-kojo-sav/eratw" node node_modules/vitest/vitest.mjs run \
+#        packages/plugins/sav-parser/tests/golden-roundtrip.test.ts packages/kernel/tests/integration-plugins.test.ts
+#      验完删掉副本目录；跑**全量**套测时仍然不要设 KOJO_SMOKE_PROJECT
 # 桌面壳（会弹窗 ~100s 自动关闭）：
 node tools/smoke-tauri-dom.mjs
 # 桌面壳真实 IPC 冒烟（Rust 双闸 a–e；CDP 直调 invoke；自动还原 store/文件/备份；会弹窗 ~2min）：

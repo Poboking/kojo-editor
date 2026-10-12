@@ -4171,3 +4171,124 @@ ADR-0006 的动机表说未投影榜首是 `RETURN` 16.7 万 / `LOCAL` 5.4 万 /
 - 名称 memo 的**上限触发**（20 万条）在真实语料上不会碰到；如果哪天用户的库里函数名超过约 13 万
   且跨两个项目交替打开，才会走到整表清空分支。
 
+---
+
+### 5.74 回放线重测批 · 真实存档复测 + 金样本两处假绿面封堵（2026-10-12 批：§5 / §6 逐字复现）
+
+> **编号让位（同一根因第七次）**：本小节初写为 §5.72，`git push` 前发现远端已被**校验按文件增量批**占去
+> §5.72、**名称解析 memo 批**占去 §5.73 ⇒ 按本仓既定口径「先落地者保留号」，本小节顺延 **§5.74**；
+> 同批把 `HANDOFF` §二/§五、`BASELINES` §4/§5/§6 的交叉引用一起改到 §5.74。
+> 提交信息里的旧号（`ed75c05` 写的是 §5.72）**不回改**——本行即映射。
+
+> 触发：kojo-editor 对社区唯一的差异化能力是「sav 快照 → 状态回放」（`ARCHITECTURE` §1.3 / §5.3 / §5.5）。
+> 但 2026-10-12 一天之内语法糖线与性能线合计改了 `erb-parser` / `condition-extractor` /
+> `sav-parser` 缓存与求值路径，而 §5.64 合流的验收线**只守了"糖投影读数逐字相同"**——
+> **回放线一次都没有重测**。更糟的是本机语料**一份存档都没有**（`sav/` 不存在），于是
+> `sav-parser/tests/golden-roundtrip.test.ts`（六档字节级金样本）与
+> `integration-plugins.test.ts` 的「存档解析 → 状态回放 → 注入写链路」长期处于 skipped，
+> `BASELINES` §5 / §6 只是一组**没有实机证据的历史数字**。
+
+#### 阶段一：只读勘察结论（方案对比后定案，未动任何盘）
+
+| 勘察项 | 实测 | 影响 |
+|---|---|---|
+| 引擎 | `Emuera_LazyLoadingV3.0_x64/x86.exe`；FileVersion `1.824.0.0`；ProductVersion `1.824+v22+EMv18+EEv53 Lazyloadingv3.0 NAudio` → eraTW **v22 系**、**LazyLoading 分支而非 SKIA v15** | §5.5「官方 v22 与 SKIA v15 通吃」的 v22 侧得到实物确认；SKIA 侧仍未验 |
+| CliDebug 可用性 | PE 字符串扫描：`clidbg` / `127.0.0.1` / `listen` / socket **命中 0**；有 `DebugCommand`(13)、`get_DebugMode`、ERB 指令 `SAVEGAME`/`LOADGAME`、`DEBUG_MODE.bat = -debug` | **ARCHITECTURE §5.3 的"CliDebug 活会话"这一快照来源在本机这份引擎上不存在** → 取档只能靠 GUI 人工点 |
+| 存档 | 语料内无 `sav/`；`Downloads/Documents/Desktop/C:\DSH/C:\Game` 全盘无任何 `.sav`；**git 历史从未入库 `.sav`** | 本机零真实存档；§5/§6 无从重测（这正是本任务存在的原因） |
+| 体积 | 语料 588.6 MB / 16,112 文件；仅 C 盘、余 390 GB | 复制副本完全可行（真实语料零写入） |
+| 合成档（选项 c）可行性 | `raw-inject.test.ts` 已在纯内存合成 fileType=var 档并 `serialize∘parse` 回环；`container.assembleArchiveFile` 现成；`serializePayload` 只依赖语义字段（`offset` 仅用于报错）→ **技术上能造整档** | **但验证力≈0**：拿我们自己的编码器产出喂我们自己的解析器，"逐字节一致"**恒真**（循环论证），且 §5/§6 任何历史数字都不可对拍 → **否掉，只留作"无真档时的管线冒烟"** |
+
+**结论**：唯一有验证力的路线是拿到**引擎写出的真档**。用户随即提供了六份 `.sav`（选项 d），
+且逐字节验真证明它们**就是 2026-10-10 那批原始存档**——不是"另一份档"：
+
+| 证据 | 实测 | 文档记录 |
+|---|---|---|
+| `save00` 载荷字节数 | **571,185 B**，且 `serialize∘parse` **逐字节差异 0** | §5.17 / §6.9「save00 载荷 571,185B 字节级完全一致」 |
+| `save03` saveMes | `2026-09-21 22:05:03 **第 47日**(夏之月16日) 命莲寺 昴 Ver 4.980 …CH20260326` | 集成测试断言 `saveMes` 含「第 47日」+ `DAY === 47` |
+| 档集构成 | `global + save00–03 + save1000` = **6 档** | `integration-plugins.test.ts:258` 的 `toBe(6)` 与其注释同源 |
+
+> 这条证据链也**更正了阶段一我自己的判断**：我当时写"§6 的历史数字绑定当年那份 save03，
+> 本机已不存在 → 必须重定基线"。档到手后该判断作废，§5/§6 **可以逐字对拍**，无需重定基线。
+
+#### 放置：真实语料零写入
+
+`robocopy` 整份复制到 `C:\tmp-kojo-sav\eratw`（623 MB，秒级），六份 `.sav` 放进**副本**的 `sav\`，
+`KOJO_SMOKE_PROJECT` 指向副本根。选整份而不是只复制 `ERB`+`CSV` 的理由：集成与编码往返会断言
+**全工程文件数**（§7 的 4,385），最小副本会让口径漂移；也不用 junction（reparse point 会影响
+`project.savDir` / `writablePaths` 的路径比较，且删目录有误穿链接的风险）。
+复制前后对拍：`ERB` 4,511 = 4,511、`CSV` 222 = 222；真实语料始终**无 `sav/`、顶层 29 项不变**。
+临时副本用完删除（见末尾验收）。**全程未在 `C:\Game` 创建、修改或删除任何文件。**
+
+#### 复测结果：§5 与 §6 逐字复现（全链路，带 `KOJO_SMOKE_PROJECT`）
+
+- **§5 存档解析**：168 角色/档 ✓、**16,005 变量/档**（角色区 15,463 + 主区 540 + EM 2）✓、
+  `save00 = 16,000` ✓、`#DIM` 恒 65 ✓、MASTERNAME 7/168 ✓（`save00` = 2，符合"第 1 日"）、
+  RANDDATA saveLen 625 且 `save00 nonEmpty=0` / `save01+ =625` ✓、MONEY 51.77 亿（`0xD2` Int64 路径）✓、
+  EM 区 2 张 DT 表 ✓、**残余 0 字节**（六档全部）✓；扫描 6 档 12ms（历史 30ms，非口径变化）。
+- **§6 状态回放**（真实 `save03` × K49 古明地觉）：**1,356 函数 / 11,685 谓词**、
+  命中 **1,549** / 未命中 **6,395** / 未知 **3,741 = 32.0%**、
+  exact **836** / partial **482** / unknown **38** —— **逐项一字不差**；
+  未知分类亦对齐（pseudo 1,886 / call-context 858 / call 368 / named-index 337 /
+  local-no-write 196 / missing-var 80 / other 10 / dynamic-index 4 / opaque 2）。
+- **注入写链路**：只写 `%APPDATA%` 副本（56,744 B，备份已建），越权拒绝 1 项、Int64 守卫 1 项 ✓
+  —— 符合 §5.5「注入器只写独立测试槽」的既定语义，真实档零接触。
+- **结论**：**§5.64 两线合流、§5.65 索引快照 v3、§5.70 抽取按文件增量都没有把回放求值带偏。**
+  这条差异化能力重新有了实机证据，不再是文档里的历史数字。
+
+#### 一处口径漂移已归因到具体批次（不是回归）
+
+条件抽取的**扫描函数数**实测 **99,104**（= §1 索引全量函数数），而 `BASELINES` §4 记 **95,504**。
+谓词 / 未解析 / 含依赖函数 / 依赖条目**四项逐字未变** → 是计数口径变宽，不是抽取结果变化。
+归因：提交 **`16747f4`（§5.70 抽取按文件增量批）** 让"本次没有任何控制流语句的文件也留一个空桶"
+（否则每次开项目都被判"没缓存"而白读白扫），这些文件的函数从此进入 `stats.functions`。
+`mergeBuckets` 对复用桶与新算桶同等累加，故热/冷启动不影响该数——已排除"缓存复用少计"的猜测。
+
+#### 本批唯一的代码改动：封堵金样本的两处**假绿面**
+
+1. **档集清单错位 + 静默跳过**：`golden-roundtrip.test.ts` 硬编码 `save00–save05`（另一套槽位编号），
+   而本机/组内基线用的是 `global + save00–03 + save1000`；对不存在的档是 `catch { continue }` →
+   **标题写"六档"、实际只验 4 档，照样全绿**。改为 `GOLDEN_ARCHIVES` **身份清单**：
+   缺任何一档即红并指名缺哪档。
+2. **"验到什么强度"没人守**：旧文件只说"六档逐字节一致"，而真实情况是分层的。改为写死三层实测强度：
+   **逐字节同构 2 档**（`global` + `save00`）／**近似档 4 档**（`save01–03` + `save1000`，
+   16/34/43/43 条 Int64 近似警告，传统重编码显式拒绝——§5.19 的既有约束）／
+   **方案 B `keepRaw` passthrough 六档全部逐字节一致**。
+3. **无存档时报 ENOENT 而不是显式 skip**：`describe.skipIf(!SMOKE_DIR)` 只看环境变量，
+   于是"有 `KOJO_SMOKE_PROJECT` 但语料没 `sav/`"会**失败**（此前全量套测里那两个红的根因）。
+   改为 `HAS_SAV` + `it.skipIf(!HAS_SAV)`——报告里显示 skipped 并说明原因（**不静默**）。
+
+**三处都是收紧，没有一处放宽断言**；数字变了的地方（§4 计数）按"如实报数 + 归因到批次"处理。
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `golden-roundtrip`（副本，有档） | **3 passed**；逐字节 2 / 近似 4 / passthrough 6 全部命中 |
+| `golden-roundtrip`（真实语料根，无 `sav/`） | **3 skipped（显式，报告可见）**——修前是 ENOENT 失败 |
+| `golden-roundtrip`（不带环境变量） | 3 skipped |
+| `integration-plugins`（副本，全链路） | **3 passed**；§5/§6 读数见上方逐项 |
+| `vitest run`（**不带** `KOJO_SMOKE_PROJECT`，按纪律） | **1432 passed / 11 skipped** |
+| typecheck root + `@kojo/app` | 双 exit 0 |
+| `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
+| 真实语料未被写入 | `sav/` 仍不存在、顶层 29 项不变、`ERB`/`CSV` 文件数与复制前一致；临时副本已删除 |
+
+#### 复测配方（后来者照抄即可）
+
+```bash
+# 1) 复制到工作区外（真实语料只读）；robocopy 退出码 <8 即成功
+cmd //c "robocopy C:\\Game\\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC) C:\\tmp-kojo-sav\\eratw /E /XJ /MT:24 /NFL /NDL /NJH /NJS /R:1 /W:1"
+# 2) 六份 .sav 放进副本的 sav\（档本身不入库，见下"边界"）
+# 3) 单独跑这两条时才设 KOJO_SMOKE_PROJECT；跑全量套测时**不要设**
+KOJO_SMOKE_PROJECT="C:/tmp-kojo-sav/eratw" node node_modules/vitest/vitest.mjs run \
+  packages/plugins/sav-parser/tests/golden-roundtrip.test.ts packages/kernel/tests/integration-plugins.test.ts
+```
+
+#### 边界未做（明确记录）
+
+- **存档本身仍是易逝品**：这六份档来自微信接收目录（会被清理）。建议给它们一个**仓库外的固定位置**
+  （如 `C:\kojo-fixtures\sav\`，遵守"真实游戏数据不入库"），`BASELINES` §5 已记下六档 sha256 前 16 位
+  作身份锚点——档丢了能立刻发现。**具体位置待用户定，本批未擅自新建长期目录。**
+- **SKIA v15 侧未验**：本机引擎是 LazyLoading v3.0（非 SKIA），§5.5「通吃」只验到 v22 一侧；
+  §5.3 的 CliDebug 快照来源在本机这份引擎上不存在（PE 无 socket 面），要用它得另找 SKIA 构建。
+- **§7 编码往返基线**（4,385 文件 0 字节差异）本批未在副本上重跑——不在重测清单里，副本还在时可顺手补。
+- **桌面壳实机目视仍未做**（本机无 `src-tauri/target`，需 GUI 会话）。

@@ -8,8 +8,13 @@
  *    存在编码决策差异，语义恒等仍保证"改槽 → 重序列化"的注入器路线可行。
  *
  * 对比结果按档打印：字节差异数 / 首个差异偏移（失败时定位用）。
+ *
+ * **2026-10-12 用真实存档复测**（§5.64 合流与 §5.65 快照 v3 之后，回放线一次没重测过）：
+ * 逐字节同构 2 档（`global` + `save00`，save00 载荷 571,185B 与 §5.17 记录一字不差）、
+ * 近似档 4 档（`save01–03` + `save1000`，16/34/43/43 条 Int64 近似警告）、
+ * 方案 B passthrough **六档全部**逐字节一致。这两组数字被写死成断言，见下方 `GOLDEN_ARCHIVES`。
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join as nodeJoin } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SnapshotArchive } from '@kojo/plugin-api';
@@ -20,6 +25,49 @@ import { serializePayload } from '../src/serialize';
 import { verifyOverrides } from '../src/verify';
 
 const SMOKE_DIR = process.env.KOJO_SMOKE_PROJECT;
+const SAV_DIR = SMOKE_DIR ? nodeJoin(SMOKE_DIR, 'sav') : '';
+
+/**
+ * **金样本档集的身份清单**（不是"目录里有什么就验什么"）。
+ *
+ * 2026-10-12 用真实存档复测时确认：本机与 `integration-plugins.test.ts`
+ * 的 `scan.entries.length === 6` 同源的那一组是
+ * `global + save00–save03 + save1000`。本文件旧版硬编码的是 `save00–save05`
+ * （**另一套槽位编号**），且对不存在的档 `catch { continue }` 静默跳过——
+ * 结果是"标题写六档、实际只验四档"仍然全绿。这是一处**假绿面**，不是档的问题。
+ *
+ * 现在的口径：**缺任何一档就红**（并指名缺哪档）；一个 `.sav` 都没有时
+ * 显式 skip（CI 与无存档机器安全，跳过在报告里可见，不静默）。
+ */
+const GOLDEN_ARCHIVES = [
+  'global.sav',
+  'save00.sav',
+  'save01.sav',
+  'save02.sav',
+  'save03.sav',
+  'save1000.sav',
+];
+
+/** 目录里到底有没有存档（目录不存在 / 为空 都算"没有"——那是语料条件，不是代码缺陷） */
+const HAS_SAV = (() => {
+  if (!SAV_DIR) return false;
+  try {
+    return readdirSync(SAV_DIR).some((n) => n.toLowerCase().endsWith('.sav'));
+  } catch {
+    return false;
+  }
+})();
+
+/** 金样本身份清单里**实际缺失**的档名（大小写不敏感）——非空即红 */
+function missingFrom(dir: string, wanted: readonly string[]): string[] {
+  let present: string[];
+  try {
+    present = readdirSync(dir).map((n) => n.toLowerCase());
+  } catch {
+    return [...wanted];
+  }
+  return wanted.filter((f) => !present.includes(f.toLowerCase()));
+}
 
 function firstDiff(a: Uint8Array, b: Uint8Array): { count: number; first: number } {
   const n = Math.max(a.length, b.length);
@@ -35,19 +83,16 @@ function firstDiff(a: Uint8Array, b: Uint8Array): { count: number; first: number
 }
 
 describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
-  it('六档：serialize∘parse 与原始载荷逐字节一致 + 语义恒等', async () => {
-    const savDir = nodeJoin(SMOKE_DIR!, 'sav');
-    const files = ['save00.sav', 'save01.sav', 'save02.sav', 'save03.sav', 'save04.sav', 'save05.sav'];
+  it.skipIf(!HAS_SAV)('金样本六档（身份清单）：serialize∘parse 与原始载荷逐字节一致 + 语义恒等', async () => {
+    // 缺档 = 红（指名缺哪档），不再静默 continue
+    expect({ 缺档: missingFrom(SAV_DIR, GOLDEN_ARCHIVES) }).toEqual({ 缺档: [] });
     const report: string[] = [];
+    let byteVerified = 0;
+    let approximatedCount = 0;
 
-    for (const fileName of files) {
-      const filePath = nodeJoin(savDir, fileName);
-      let raw: Uint8Array;
-      try {
-        raw = readFileSync(filePath);
-      } catch {
-        continue; // 档不存在（如只有 save00-05 中的部分）
-      }
+    for (const fileName of GOLDEN_ARCHIVES) {
+      const filePath = nodeJoin(SAV_DIR, fileName);
+      const raw = readFileSync(filePath);
       const body = await gunzipBytes(raw.subarray(16));
 
       // 全量解析（cells 完整保留——写侧前置条件）
@@ -55,6 +100,7 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
       // 近似档（Int64 超安全整数被近似）不做字节级断言（近似值 ≠ 原字节），
       // 但语义级仍可验证（近似值 round-trip 自洽）。
       const approximated = (archive.warnings ?? []).length > 0;
+      if (approximated) approximatedCount++;
 
       // ---- 字节级对比（近似档跳过：Int64 近似值写回会损坏 SFMT 状态等精确数据
       // ——v1.1 注入器需要 Int64 精度契约，本 PoC 显式暴露此约束） ----
@@ -75,6 +121,7 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
       if (!approximated) {
         expect(reserialized.length).toBe(body.length);
         expect(byteDiff.count).toBe(0);
+        byteVerified++;
       }
 
       // ---- 语义级对比（parse∘serialize∘parse 恒等，含 offset）----
@@ -112,24 +159,29 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
       }
     }
 
+    // **这条断言把"到底验到了什么强度"钉死**（2026-10-12 真实六档实测）：
+    // `global` + `save00` 无 Int64 近似 → 逐字节同构；`save01–03` + `save1000` 是近似档
+    // → 按 §5.19 既有口径跳过字节级（改由下一条"方案 B passthrough"用例覆盖）。
+    // 不写死这两个数，"六档逐字节一致"的说法在只剩几档、或引擎换了编码决策时会悄悄成立。
+    expect({ 逐字节同构档数: byteVerified, 近似档数: approximatedCount }).toEqual({
+      逐字节同构档数: 2,
+      近似档数: 4,
+    });
+
     // eslint-disable-next-line no-console
     console.log(`[golden] 载荷层原样写回：\n  ${report.join('\n  ')}`);
   }, 240_000);
 
-  it('方案 B：keepRaw passthrough —— 近似档（Int64）也字节级一致 + 注入与守卫', async () => {
-    const savDir = nodeJoin(SMOKE_DIR!, 'sav');
+  it.skipIf(!HAS_SAV)('方案 B：keepRaw passthrough —— 近似档（Int64）也字节级一致 + 注入与守卫', async () => {
+    expect({ 缺档: missingFrom(SAV_DIR, GOLDEN_ARCHIVES) }).toEqual({ 缺档: [] });
     const report: string[] = [];
     let injected = false;
     let guarded = false;
+    let passthroughVerified = 0;
 
-    for (const fileName of ['save00.sav', 'save01.sav', 'save02.sav', 'save03.sav', 'save04.sav', 'save05.sav']) {
-      const filePath = nodeJoin(savDir, fileName);
-      let raw: Uint8Array;
-      try {
-        raw = readFileSync(filePath);
-      } catch {
-        continue;
-      }
+    for (const fileName of GOLDEN_ARCHIVES) {
+      const filePath = nodeJoin(SAV_DIR, fileName);
+      const raw = readFileSync(filePath);
       const body = await gunzipBytes(raw.subarray(16));
       const archive = await parseArchive(raw, filePath, { keepArrayCells: true, keepRaw: true });
 
@@ -139,6 +191,7 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
       report.push(`${fileName}: 载荷 ${body.length}B / passthrough 差异 ${diff.count}`);
       expect(reserialized.length).toBe(body.length);
       expect(diff.count).toBe(0);
+      passthroughVerified++;
 
       // ---- 注入验证（只在 save00 做一次：标量覆盖 + RANDDATA 守卫）----
       if (!injected && archive.fileType === 'normal') {
@@ -189,13 +242,14 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
     }
     expect(injected).toBe(true);
     expect(guarded).toBe(true);
+    // 方案 B 的真实强度：**六档全部** passthrough 逐字节一致（近似档靠 raw 原样复制，不重编码）
+    expect({ 'passthrough 同构档数': passthroughVerified }).toEqual({ 'passthrough 同构档数': 6 });
     // eslint-disable-next-line no-console
     console.log(`[golden] 方案 B keepRaw passthrough + 注入：\n  ${report.join('\n  ')}`);
   }, 240_000);
 
-  it('第十五批：容器级注入链路（gzip 组装 → 解压回读 → 覆盖值逐条验证）', async () => {
-    const savDir = nodeJoin(SMOKE_DIR!, 'sav');
-    const filePath = nodeJoin(savDir, 'save00.sav');
+  it.skipIf(!HAS_SAV)('第十五批：容器级注入链路（gzip 组装 → 解压回读 → 覆盖值逐条验证）', async () => {
+    const filePath = nodeJoin(SAV_DIR, 'save00.sav');
     const raw = readFileSync(filePath);
 
     // keepRaw 全量解析（注入链路的读侧前置）
