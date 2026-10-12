@@ -166,8 +166,15 @@ export class ConventionEngine implements ConventionLinterService {
     const issues: ConventionIssue[] = [];
     const failedRules: { ruleId: string; error: string }[] = [];
     const seen = new Set<string>();
+    /**
+     * 逐规则耗时（**只进日志，不进报告**：加进 `ConventionReport` 会牵动快照结构与规则摘要，
+     * 而"哪条规则贵"是增量缓存设计的输入，不是用户数据）。
+     */
+    const ruleTimings: { ruleId: string; ms: number; issues: number }[] = [];
 
     for (const rule of executed) {
+      const ruleStartedAt = Date.now();
+      const before = issues.length;
       try {
         const produced = (await rule.check!(checkCtx)) ?? [];
         for (const raw of produced) {
@@ -187,6 +194,7 @@ export class ConventionEngine implements ConventionLinterService {
         failedRules.push({ ruleId: rule.id, error: err instanceof Error ? err.message : String(err) });
         this.deps.log.warn(`Convention rule '${rule.id}' failed: ${String(err)}`);
       }
+      ruleTimings.push({ ruleId: rule.id, ms: Date.now() - ruleStartedAt, issues: issues.length - before });
     }
 
     issues.sort(compareIssues);
@@ -209,6 +217,10 @@ export class ConventionEngine implements ConventionLinterService {
         `(error ${counts.error} / warning ${counts.warning} / info ${counts.info}) ` +
         `in ${report.durationMs}ms across ${executed.length} rule(s)` +
         (failedRules.length ? `, ${failedRules.length} rule(s) failed` : ''),
+    );
+    // 规则顺序 = 执行顺序（确定性）；"哪条规则贵 + 它产出几条"是逐文件增量设计的唯一输入
+    this.deps.log.info(
+      `  lint breakdown: ${ruleTimings.map((t) => `${t.ruleId} ${t.ms}ms/${t.issues}项`).join(' · ')}`,
     );
     this.commit(report);
     if (this.deps.snapshot && expect) this.deps.snapshot.save(report, expect);
