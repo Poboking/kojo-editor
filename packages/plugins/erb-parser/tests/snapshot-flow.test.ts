@@ -193,6 +193,11 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     const idx = service.currentIndex()!;
     expect(idx.files.get(P1)!.functions.map((f) => f.normalizedName)).toEqual(['FOO_A', 'FOO_B', 'FOO_C']);
     expect(idx.files.get(P2)!.functions.map((f) => f.normalizedName)).toEqual(['BAR_A']);
+    // 两条分支都必须填 mtime：P1 取本次 readText、P2 取快照元组还原值。
+    // 下游条件抽取按文件粒度复用全靠 `fileMtimes`，这里漏填不会报错——
+    // 只会表现为「抽取段悄悄退回全库重算」，覆盖率类尺子量不到（同 §5.67 那条教训）。
+    expect(idx.fileMtimes!.get(P1)).toBe(300);
+    expect(idx.fileMtimes!.get(P2)).toBe(200);
   });
 
   it('消失的文件被收尸（快照不越攒越大）', async () => {
