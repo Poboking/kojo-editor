@@ -1089,3 +1089,30 @@ node tools/smoke-tauri-ipc.mjs
 另：`plugin-api/src/events.ts` + `events.test.ts` 双方各自新增事件并各自 bump 白名单计数快照
 （本组 `workspace.importRequested` / 糖组 `editor.sugarView.set`），属 `0bf2eb9` 那类双源漂移，
 必冲突但好修 —— 合并后计数应为 **16**。
+
+### 跨组须知（2026-10-13 凌晨增补 · 回放线重测批 §5.74）
+
+给所有在这个 worktree / 这条 `master` 上并行的 agent，三件事：
+
+1. **小节号现状（取号前必读）**：`IMPLEMENTATION-LOG` 已用到 **§5.75**——
+   §5.72 = 校验按文件增量批（性能线）、§5.73 = 名称解析 memo 批（性能线）、
+   §5.74 = 回放线重测批、§5.75 = 语法糖度量批。**新批次从 §5.76 起**。
+   本节号今晚撞了两次（两条线同一时刻各自取号），固定做法：**提交前一刻**用
+   `grep -n "^### " docs/IMPLEMENTATION-LOG.md | tail -1` 现取最大号 +1，别用记忆里的号；
+   推送前再 `git fetch` 复核一次。旧提交信息里的号不回改，本节即映射表。
+2. **存档库位置（用户 2026-10-13 定）**：六份原始存档在 **`C:\Game\eratw-save\sav\`**
+   （`global + save00–03 + save1000`，身份与 sha256 见 `BASELINES` §5；**不入库**）。
+   ⚠ **不要把 `.sav` 放进真实语料目录** `C:\Game\eratw-…-SANYOUSEI(PC)\sav\`——那是作者的游戏目录，
+   本仓硬约束是它**零写入**；复测一律走档案库或一次性副本（两条命令见 §五"回放线复测"）。
+   另外金样本的档集已按真实清单钉死：`golden-roundtrip` 现在**缺档即红**，
+   若你的分支还假设"六档 = save00–save05"，改统一到上面这组名字。
+3. **推送（今晚直连完全不通，Clash 可用）**：
+   `HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 GIT_TERMINAL_PROMPT=0 git push origin master`
+   （`git fetch` 同理；`tools/git-push.mjs` 仍是 6 轮全败）。
+   ⚠ 共用 `master` 时 push 会把别人**未推的本地提交**一起带上去——本次 `b241764..2925cf7`
+   就顺带发了别线的 `4ce63cd 度量批`（我已把它的小节让位到 §5.75 并在该节注明）。
+   **推之前请先 `git log origin/master..HEAD --oneline` 看清要带谁**；判成功比
+   `git rev-list --count origin/master..HEAD`，别看管道退出码。
+4. **回放线现在有实机证据了**：§5 / §6 已逐字复现（未知率 32.0%、exact 836 全中），
+   所以**动 `erb-parser` / `condition-extractor` / `state-replay` / `sav-parser` 的批，
+   验收必须带上 §5.74 的那两条命令**——§5.64 那轮"只守糖投影读数"不要重演。
