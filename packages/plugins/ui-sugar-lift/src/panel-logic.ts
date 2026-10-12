@@ -98,7 +98,7 @@ export function buildSkipRows(skips: readonly SugarLiftSkip[] | undefined): Skip
 
 /* ============================== 降级提示 ============================== */
 
-export type PanelDegrade = 'no-project' | 'no-file' | 'empty' | 'scan-error' | 'scanning';
+export type PanelDegrade = 'no-project' | 'no-file' | 'empty' | 'scan-error' | 'scanning' | 'too-large';
 
 const DEGRADE_TEXT: Record<PanelDegrade, string> = {
   'no-project': '打开项目后可用（升糖建议来自当前文件）',
@@ -106,6 +106,9 @@ const DEGRADE_TEXT: Record<PanelDegrade, string> = {
   scanning: '扫描中…',
   empty: '未发现可升糖的片段（全部区间已显式列在下方"未建议"里）',
   'scan-error': '升糖扫描失败',
+  // 超长文件降级（2026-10-12「内核优化」批）：自动扫描让位给流畅度，显式路径仍在
+  'too-large':
+    '当前文件过长，为保持打开/滚动流畅，已跳过整篇升糖扫描。点上方「重新扫描」可按需执行（会有一瞬卡顿）。',
 };
 
 export function degradeText(d: PanelDegrade): string {

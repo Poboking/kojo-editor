@@ -16,6 +16,7 @@ import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
+import { editorOptionsForLineCount } from './editor-options';
 import { decideExternalChange } from './external-change';
 import { clampRange, isErbLike, liftZonePlan } from './lift-preview';
 import { perf } from '../perf';
@@ -678,6 +679,8 @@ export function EditorPane({
                 path,
                 text,
                 project,
+                // 体量事实：供贡献方对超长文件降级（见 plugin-api slots.ts 头注）
+                lineCount: model.getLineCount(),
                 ...(line !== undefined ? { line } : {}),
               });
             } catch (e: unknown) {
@@ -716,7 +719,14 @@ export function EditorPane({
           const out: Monaco.languages.FoldingRange[] = [];
           for (const contribution of kernel.slots.query('ui.editor.liftPreview')) {
             try {
-              for (const item of contribution.provideLiftPreview({ path, text, project })) {
+              for (const item of contribution.provideLiftPreview({
+              path,
+              text,
+              project,
+              // 体量事实：本槽被接成 Monaco 折叠范围供给器，Monaco 打开文件时即要整篇范围
+              // → 超长文件必须让贡献方有机会降级（见 plugin-api slots.ts 头注）
+              lineCount: model.getLineCount(),
+            })) {
                 if (item.toLine > item.fromLine) out.push({ start: item.fromLine, end: item.toLine });
               }
             } catch {
@@ -815,10 +825,15 @@ export function EditorPane({
       const stopApply = perf.start('switch.apply');
       prevPathRef.current = filePath;
       clearLiftPreviews(); // 升糖预览不跨文件残留
+      // 先按文件体量落 Monaco 选项，再挂 model——避免超长文件先在"默认全文级选项"
+      // 下渲染一帧（大文件降级清单见 editor-options.ts）。
+      // readOnly 语义（工作区批）：ERB 默认只读**仅限游戏目录**（借阅区不写 ERB）；
+      // 工作区内 ERB 是创作源文件，可编辑（双真相源分野）。
+      ed.updateOptions({
+        readOnly: isErbLike(filePath) && !inWorkspace(filePath),
+        ...editorOptionsForLineCount(entry.model.getLineCount()),
+      });
       ed.setModel(entry.model);
-      // ERB 默认只读**仅限游戏目录**（升糖重定位批 1.1：借阅区不写 ERB）；
-      // 工作区内 ERB 是创作源文件，可编辑（工作区批：双真相源分野）
-      ed.updateOptions({ readOnly: isErbLike(filePath) && !inWorkspace(filePath) });
       const vs = viewStatesRef.current.get(filePath);
       if (vs) ed.restoreViewState(vs);
       setDirty(computeDirty(filePath));

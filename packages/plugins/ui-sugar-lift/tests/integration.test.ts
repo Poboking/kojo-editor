@@ -41,8 +41,21 @@ import { WellKnownServices } from '@kojo/plugin-api';
 import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
 import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
 import { createUiSugarLiftPlugin } from '../src/index';
+import { LIFT_MAX_LINES } from '../src/large-file';
+import { degradeText } from '../src/panel-logic';
 
 const log: Logger = { debug() {}, info() {}, warn() {}, error() {} };
+
+/** 捕获 warn（断言"降级不静默"用；每次相关测试前自行清空） */
+const warnings: string[] = [];
+const capturingLog: Logger = {
+  debug() {},
+  info() {},
+  warn: (m: string) => {
+    warnings.push(m);
+  },
+  error() {},
+};
 const enc = (s: string) => new TextEncoder().encode(s);
 
 /** 伪内核 io（内存 FS；只读读路径 + 写盘断言用） */
@@ -93,7 +106,7 @@ function makeIO(files: Record<string, Uint8Array>) {
  * 而不是"内核正确"——内核自有其测试。这里把服务槽/事件总线的契约**降到最小**
  * 反而让"面板依赖了哪些东西"变得无法含糊（`inject` 只给清单里那几项，多要一个就抛）。
  */
-function makeKernel(files: Record<string, Uint8Array>) {
+function makeKernel(files: Record<string, Uint8Array>, logger: Logger = log) {
   const io = makeIO(files);
   const provided = new Map<string, unknown>();
   /** 槽注册表（按槽名分桶；面板插件经 `slots.register` 登记） */
@@ -126,7 +139,7 @@ function makeKernel(files: Record<string, Uint8Array>) {
 
   /** kojo-sugar 只需要这几个槽（与它的 requires 一致） */
   const sugarCtx = {
-    log,
+    log: logger,
     inject: (key: string) => {
       if (key === 'kernel.project') return { current: () => ({ adapterId: 'eratw' }) };
       // 分野模板表经 `game.adapter` 槽位注入（v0.3 S2 补齐）——测试用真实
@@ -150,7 +163,7 @@ function makeKernel(files: Record<string, Uint8Array>) {
   };
 
   const panelCtx = {
-    log,
+    log: logger,
     inject: (key: string): never => {
       const v = provided.get(key);
       if (v === undefined && key !== 'kernel.io') throw new Error(`未注册的服务：${key}`);
@@ -192,7 +205,13 @@ const previewsOf = (k: ReturnType<typeof makeKernel>) =>
 const actionsOf = (k: ReturnType<typeof makeKernel>) =>
   (k.slots.get('ui.editor.codeAction') ?? []) as Array<{
     id: string;
-    provideActions: (f: { path: string; text: string; project: null; line?: number }) => EditorCodeAction[];
+    provideActions: (f: {
+      path: string;
+      text: string;
+      project: null;
+      line?: number;
+      lineCount?: number;
+    }) => EditorCodeAction[];
   }>;
 
 /* ============================== 一、接线 ============================== */
@@ -287,5 +306,80 @@ describe('升糖预览 / 端到端：扫描 → 预览意图 → 零写盘', () 
     bootPanel(k);
     const items = previewsOf(k)[0]!.provideLiftPreview({ path: erbPath, text: ERB, project: null });
     expect(items.map((i) => i.fromLine)).toEqual([3, 4]);
+  });
+});
+
+/* ================= 三、超长文件降级（2026-10-12 内核优化批） ================= */
+
+/**
+ * 背景（实测见 `docs/PERF-REVIEW-2026-10-11.md` §7.6）：整篇升糖扫描在 52,601 行的
+ * 真实 ERB 上耗时 **231 ms**，而折叠供给 / 💡 探测都是**框架自动触发**的 →
+ * 超长文件上"什么都没做就卡"。本组钉死降级语义：
+ * 自动路径让路、显式路径仍在、**降级可见（不静默）**、边界含等号。
+ */
+describe('超长文件降级：自动路径让路，显式路径仍在', () => {
+  const boot = (logger?: Logger) => {
+    const k = makeKernel({ [PATH]: enc(KOJO) }, logger);
+    bootSugar(k);
+    bootPanel(k);
+    return k;
+  };
+  const TOO_LONG = LIFT_MAX_LINES + 1;
+
+  it('体量未知（lineCount 缺省）→ 不降级（与旧版行为完全一致）', () => {
+    const k = boot();
+    expect(previewsOf(k)[0]!.provideLiftPreview({ path: PATH, text: KOJO, project: null })).toHaveLength(2);
+    expect(actionsOf(k)[0]!.provideActions({ path: PATH, text: KOJO, project: null, line: 3 })).toHaveLength(1);
+  });
+
+  it('恰好等于阈值 → 不降级（边界含等号）', () => {
+    const k = boot();
+    expect(
+      previewsOf(k)[0]!.provideLiftPreview({
+        path: PATH,
+        text: KOJO,
+        project: null,
+        lineCount: LIFT_MAX_LINES,
+      }),
+    ).toHaveLength(2);
+  });
+
+  it('超长文件 → 折叠供给返回空（打开大文件不再被全量扫描卡住）', () => {
+    const k = boot();
+    const items = previewsOf(k)[0]!.provideLiftPreview({
+      path: PATH,
+      text: KOJO,
+      project: null,
+      lineCount: TOO_LONG,
+    });
+    expect(items).toEqual([]);
+  });
+
+  it('超长文件 → 💡 不做可用性探测（避免光标移动即触发全量扫描）', () => {
+    const k = boot();
+    const actions = actionsOf(k)[0]!.provideActions({
+      path: PATH,
+      text: KOJO,
+      project: null,
+      line: 3,
+      lineCount: TOO_LONG,
+    });
+    expect(actions).toEqual([]);
+  });
+
+  it('降级**不静默**：控制台告警，且同一文件只告警一次（provider 是高频调用）', () => {
+    warnings.length = 0;
+    const k = boot(capturingLog);
+    const call = () =>
+      previewsOf(k)[0]!.provideLiftPreview({ path: PATH, text: KOJO, project: null, lineCount: TOO_LONG });
+    call();
+    call();
+    call();
+    expect(warnings.filter((w) => w.includes(PATH))).toHaveLength(1);
+    expect(warnings.some((w) => w.includes(String(TOO_LONG)))).toBe(true);
+  });
+
+  it('面板降级态文案存在（too-large）', () => {
+    expect(degradeText('too-large')).toContain('重新扫描');
   });
 });

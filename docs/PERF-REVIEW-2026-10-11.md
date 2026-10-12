@@ -223,3 +223,66 @@ Monarch 分词（`erb-language.ts`）、`wordWrap:'on'`、缩略图、平滑滚�
    （若为软渲染，则"滚动卡"单独立案，与本路线正交）。
 7. 判读规则见本文 §六；本轮需重点钉死 **(a) 开项目级联** 与 **(b) Monaco 大文件** 的占比，
    再最终确定 T1 / T3 / T4 / T6 的先后。
+
+### 7.6 实测之二：折叠链全量扫描 —— 「打开超长 ERB 卡顿」的真凶（2026-10-12）
+
+#### 7.6.1 文件体量分布（口上域 2,317 个 ERB 实测）
+
+| 指标 | 值 |
+|---|---|
+| 平均 / 中位数 | 1,562 行 / **893 行** |
+| p90 / p99 | 3,619 行 / **12,441 行** |
+| ≥1,000 行 | 1,005 个（43.4%） |
+| ≥3,000 行 | 308 个（13.3%） |
+| **≥5,000 行** | **138 个（6.0%）** |
+| ≥10,000 行 | 39 个（1.7%） |
+
+#### 7.6.2 整篇升糖扫描的代价（`sugar.lift.liftSuggest`）
+
+| 文件 | 行数 | `liftSuggest` | 其中 `parseErbText` | 其中 `scanControlFlow` |
+|---|---|---|---|---|
+| `AUTO_AEGI.ERB` | 284 | 4 ms | 0.2 ms | 0.3 ms |
+| `M_KOJO_K40_コマンド.ERB` | 21,967 | **70 ms** | 7.9 ms | 13.4 ms |
+| `M_KOJO_K58_1_日常系コマンド.ERB` | 52,602 | **231 ms** | 11.5 ms | 39.1 ms |
+
+#### 7.6.3 三条**自动**入口共用这同一次全量扫描
+
+```
+Monaco 打开文件 → 要一遍整篇 folding ranges
+  └→ 宿主 provideFoldingRanges（model.getValue() 全文复制）
+       └→ 槽 ui.editor.liftPreview → ui-sugar-lift.provideLiftPreview
+            └→ sugar.lift.liftSuggest(全文)          ← 231 ms @ 52k 行
+
+Monaco 💡 可用性探测（光标/选区变化即调 provider）
+  └→ 槽 ui.editor.codeAction → 同一条 liftSuggest 链（memo 只缓存 1 个文件）
+
+打开「升糖候选」面板
+  └→ 面板 effect 随 editor.activeFileChanged 自动 runScan → 同一条链
+```
+
+**用户在超长文件上"什么都没做"，就会被卡一次 231 ms（Node 口径；WebView2 只会更慢）。**
+这比 Monaco 默认选项（§7.3 F3）的量级更重，且完全在**我们自己的代码**里 ——
+故它不是"要不要优化"，而是"必须让路"。
+
+#### 7.6.4 本批修复（2026-10-12「超长文件丝滑」批）
+
+1. **契约 additive**（`plugin-api/slots.ts`）：`ui.editor.liftPreview` 与
+   `ui.editor.codeAction` 的请求新增可选 `lineCount` —— 宿主提供**中性事实**，
+   贡献方自行决定降级；缺省 = 体量未知 → **不降级**（与旧版行为一致）。
+   分层刻意如此：**"多少行算大"是贡献方的策略，不是宿主的业务知识**。
+2. **插件降级**（`ui-sugar-lift/src/large-file.ts`，纯函数可测）：`LIFT_MAX_LINES = 5000`；
+   超限时**自动路径**（折叠供给 / 💡 探测 / 面板自动扫描）跳过整篇扫描，
+   并**每文件告警一次**（高频 provider 不刷屏）；面板「重新扫描」保留**显式出口**
+   ——牺牲自动，不牺牲能力。
+3. **Monaco 选项按体量分级**（`app/src/ui/editor-options.ts`，纯函数可测）：
+   ≥5,000 行时 `occurrencesHighlight: 'off'`、`bracketPairColorization.enabled: false`、
+   `minimap.enabled: false`、`matchBrackets: 'near'`、`renderLineHighlight: 'line'`；
+   两档都关 `wordBasedSuggestions` 与 `stickyScroll`（对 ERB / 中文口上无语义价值）。
+   —— **即 T6 的一半**（原先排在本路线后段，实测后提前落地）。
+4. **可量测**：`markers.decorate:<id>` 计时点可量到折叠/装饰链的耗时（§7.5）。
+
+#### 7.6.5 仍然欠账
+
+- `liftSuggest` / `parseErbText` / `scanControlFlow` 仍在主线程 —— 大文件的
+  **显式**扫描（面板「重新扫描」）与**索引构建**依旧会卡；正解是 T1 计算池（L1）。
+- 二次开项目零等待（T4/L3）与开项目级联让路（T3）未动 —— 对应「例 1」，是下一批主体。

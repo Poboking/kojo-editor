@@ -44,6 +44,7 @@ import {
   type CandidateRow,
   type PanelDegrade,
 } from './panel-logic';
+import { countLines, liftScanBudget } from './large-file';
 
 /** 候选列表渲染上限（防 DOM 爆炸） */
 const ROW_CAP = 200;
@@ -80,6 +81,20 @@ export function createUiSugarLiftPlugin(): Plugin {
         return result;
       };
 
+      /**
+       * 超大文件降级告警（每文件一次）。
+       *
+       * 折叠供给 / 💡 探测都是**高频自动调用**（Monaco 在打开、光标移动、选区变化
+       * 时都会问），故告警必须去重；`Set` 加上限防长会话无限增长。
+       */
+      const warnedLarge = new Set<string>();
+      const warnLargeOnce = (path: string, reason: string | null): void => {
+        if (warnedLarge.has(path)) return;
+        if (warnedLarge.size > 200) warnedLarge.clear();
+        warnedLarge.add(path);
+        ctx.log.warn(`已跳过整篇升糖扫描（${path}）：${reason ?? ''}`);
+      };
+
       /** 候选 → 预览项（`alias` 无区间、不参与就地预览） */
       const toPreviewItems = (candidates: readonly SugarLiftCandidate[]): EditorLiftPreviewItem[] =>
         candidates
@@ -100,7 +115,17 @@ export function createUiSugarLiftPlugin(): Plugin {
       // 折叠范围供给：宿主把它变成 Monaco 的折叠加号（"参考 if 折叠"的交互来源）
       ctx.slots.register('ui.editor.liftPreview', {
         id: 'sugar-lift.preview',
-        provideLiftPreview: ({ path, text }) => toPreviewItems(scan(path, text).candidates),
+        provideLiftPreview: ({ path, text, lineCount }) => {
+          // 超长文件降级（2026-10-12「内核优化」批）：本槽被宿主接成 Monaco 折叠
+          // 范围供给器，Monaco 会在**打开文件时**就要一遍整篇范围——全量扫描在
+          // 52k 行文件上实测 231 ms，即"打开大文件卡一下"的主因。这里按体量让路。
+          const budget = liftScanBudget(lineCount);
+          if (budget.skip) {
+            warnLargeOnce(path, budget.reason);
+            return [];
+          }
+          return toPreviewItems(scan(path, text).candidates);
+        },
       });
 
       /* --------------------------- 💡 CodeAction --------------------------- */
@@ -109,8 +134,16 @@ export function createUiSugarLiftPlugin(): Plugin {
       // **不写盘**。供给与执行之间用户可能继续编辑，故执行时按最新文本重扫一次。
       ctx.slots.register('ui.editor.codeAction', {
         id: 'sugar-lift.preview-action',
-        provideActions: ({ path, text, line }) => {
+        provideActions: ({ path, text, line, lineCount }) => {
           if (line === undefined) return [];
+          // 超长文件降级（2026-10-12「内核优化」批）：💡 可用性探测由 Monaco 在
+          // 光标/选区变化时自动调用，超长文件上一次扫描 231 ms → 直接表现为卡顿。
+          // 降级后请走「升糖候选」面板的显式「重新扫描」。
+          const budget = liftScanBudget(lineCount);
+          if (budget.skip) {
+            warnLargeOnce(path, budget.reason);
+            return [];
+          }
           const items = toPreviewItems(scan(path, text).candidates);
           const hit = items.find((i) => line >= i.fromLine && line <= i.toLine);
           if (!hit) return [];
@@ -153,8 +186,14 @@ export function createUiSugarLiftPlugin(): Plugin {
           return un;
         }, []);
 
-        /** 扫描：读当前文件（只读）→ `sugar.lift` → 候选列表 */
-        const runScan = (): void => {
+        /**
+         * 扫描：读当前文件（只读）→ `sugar.lift` → 候选列表。
+         *
+         * `force` 区分**自动**与**显式**两条路径（2026-10-12「内核优化」批）：
+         * 自动路径（换文件即扫）在超长文件上让路给流畅度；显式路径（用户点
+         * 「重新扫描」）照常执行——代价自担，但结果必须可得。
+         */
+        const runScan = (force = false): void => {
           const path = filePath;
           if (!path) return;
           setBusy(true);
@@ -162,6 +201,13 @@ export function createUiSugarLiftPlugin(): Plugin {
           void io
             .readText(path)
             .then((tf) => {
+              const budget = liftScanBudget(countLines(tf.text));
+              if (budget.skip && !force) {
+                setResult(null);
+                setDegrade('too-large');
+                ctx.log.warn(`已跳过升糖自动扫描（${path}）：${budget.reason ?? ''}`);
+                return;
+              }
               const r = scan(path, tf.text);
               setResult(r);
               setDegrade(r.candidates.length === 0 ? 'empty' : 'scanning');
@@ -173,7 +219,7 @@ export function createUiSugarLiftPlugin(): Plugin {
             .finally(() => setBusy(false));
         };
 
-        // 文件就绪但还没扫过 → 自动扫一次（面板打开即用）
+        // 文件就绪但还没扫过 → 自动扫一次（面板打开即用）；超长文件让路（见 runScan）
         useEffect(() => {
           if (filePath && result === null && !busy && !error) runScan();
           // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,7 +246,7 @@ export function createUiSugarLiftPlugin(): Plugin {
           createElement('span', { className: 'dim' }, '升糖预览（就地折叠显示 · 不改动原文件）'),
           createElement(
             'button',
-            { className: 'ghost small', onClick: runScan, disabled: !filePath || busy },
+            { className: 'ghost small', onClick: () => runScan(true), disabled: !filePath || busy },
             busy ? '扫描中…' : '重新扫描',
           ),
         );
@@ -222,7 +268,7 @@ export function createUiSugarLiftPlugin(): Plugin {
             createElement(
               'div',
               { className: 'lift-actions' },
-              createElement('button', { className: 'ghost small', onClick: runScan }, '重试'),
+              createElement('button', { className: 'ghost small', onClick: () => runScan(true) }, '重试'),
             ),
           );
         }

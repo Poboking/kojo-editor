@@ -103,6 +103,13 @@ export interface EditorCodeActionContribution extends ContributionBase {
     text: string;
     project: GameProject | null;
     line?: number;
+    /**
+     * 文件行数（additive，2026-10-12「内核优化」批）：宿主提供的中性事实，
+     * 供贡献方**按文件体量自行决定是否降级**——超长文件上的全量分析会阻塞
+     * 主线程（实测见 `docs/PERF-REVIEW-2026-10-11.md` §7.6）。
+     * 缺省 = 体量未知，请按"不降级"处理（与旧版行为一致）。
+     */
+    lineCount?: number;
   }): EditorCodeAction[];
 }
 
@@ -138,6 +145,16 @@ export interface EditorLiftPreviewContribution extends ContributionBase {
     path: string;
     text: string;
     project: GameProject | null;
+    /**
+     * 文件行数（additive，2026-10-12「内核优化」批）：宿主提供的中性事实。
+     *
+     * **为什么需要它**：本槽在宿主侧被接成 Monaco 的**折叠范围供给器**，而
+     * Monaco 会在文件打开时就把整篇文档的折叠范围要一遍（且内容变化后重算）
+     * ——超长文件上一次全量升糖扫描实测达 231 ms（52,601 行 ERB），直接表现
+     * 为"打开大文件卡一下"。贡献方据此自行降级即可，宿主不需要知道"多少行算大"。
+     * 缺省 = 体量未知，请按"不降级"处理（与旧版行为一致）。
+     */
+    lineCount?: number;
   }): EditorLiftPreviewItem[];
 }
 
