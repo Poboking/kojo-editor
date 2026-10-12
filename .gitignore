@@ -15,6 +15,9 @@ preview/
 .vscode/*
 !.vscode/extensions.json
 
+# 工具本地数据（记忆 / 临时探针；不入库）
+.workbuddy/
+
 # local fixtures (real game data must never be committed)
 fixtures/local/
 fixtures/**/out/
