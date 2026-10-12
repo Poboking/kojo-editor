@@ -38,7 +38,10 @@ RANDDATA saveLen 625（save00 nonEmpty=0 全零剪枝 / save01+ 全量）、MONE
 EM 区 2 张 DT 表、**残余 0 字节**，扫描六档约 30ms。
 
 > **2026-10-12 用真实存档逐字复测通过**（§5.64 合流 + §5.65/§5.70 缓存改动之后首次重测）。
-> **六档身份**（`integration-plugins.test.ts` 的 `scan.entries.length === 6` 同一组）：
+> **档案库（2026-10-13 用户定）= `C:\Game\eratw-save\sav\`**——语料的**同级目录**，
+> 不在语料内部（真实语料 `C:\Game\eratw-…-SANYOUSEI(PC)` 始终零写入，也不建 `sav/`）。
+> 六份档的 sha256 已在下表登记：档案库里的档被误删/被换，比对哈希立刻发现。
+> **六档身份**（与 `integration-plugins.test.ts` 的 `scan.entries.length === 6` 同源）：
 >
 > | 档 | 大小 | sha256（前 16） | 类型 | 变量合计（角色区+主区+全局+EM） | 逐字节同构 |
 > |---|---|---|---|---|---|

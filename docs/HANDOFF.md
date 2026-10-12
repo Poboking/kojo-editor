@@ -200,9 +200,9 @@
      硬编码 `save00–save05`（另一套槽位）且对缺失档 `catch { continue }` ⇒ **标题六档、实际四档仍绿**；
      现改为档集**身份清单**（缺档即红并指名）+ 把真实强度写死（**逐字节 2 档 / 近似档 4 档 /
      方案 B passthrough 6 档**）；另把"有环境变量但语料无 `sav/`"从 ENOENT 失败改成**显式 skip**。
-  5. **复测配方 + 安全边界**：真实语料 `C:\Game` 全程**零写入**（无 `sav/`、顶层 29 项不变），
-     用 `robocopy` 整份复制到 `C:\tmp-kojo-sav\eratw`、六档放副本 `sav\`、`KOJO_SMOKE_PROJECT`
-     指向副本，验后删除副本。配方原文见 §5.74 末。
+  5. **复测配方 + 安全边界**：真实语料 `C:\Game\eratw-…(PC)` 全程**零写入**（无 `sav/`、顶层 29 项不变）；
+     六份档的长期位置 = **`C:\Game\eratw-save\sav\`**（用户 2026-10-13 定，语料的**同级目录**、不入库）。
+     金样本可**零副本直跑**该库，只有全链路复测才用一次性副本；两条命令见 §五"回放线复测"。
   6. **未做**：六份档需要一处长期的仓库外固定位置（建议 `C:\kojo-fixtures\sav\`，**位置待用户定**，
      微信接收目录会被清理）；SKIA v15 一侧与 CliDebug 快照来源未验（本机引擎是 LazyLoading v3.0，
      PE 内无 socket 面）；§7 编码往返基线未在副本上顺手重跑；桌面壳实机目视仍欠。
@@ -551,12 +551,15 @@ node node_modules/vitest/vitest.mjs run packages/plugin-api/tests/sugar.test.ts 
 node node_modules/vitest/vitest.mjs run packages/plugins/kojo-sugar/tests/compile.test.ts   # v0.3 S3：编译落盘（编码组装 / 双闸 / 备份 / 回读验证）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放/注入写链路/**语法糖编译落盘**）：
 KOJO_SMOKE_PROJECT="C:\game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
-# 回放线复测（§5 / §6，需要真实存档；**真实语料零写入**，用副本 —— 配方原文见 IMPLEMENTATION-LOG §5.74 末）：
-#   1) cmd //c "robocopy C:\Game\eratw-...-SANYOUSEI(PC) C:\tmp-kojo-sav\eratw /E /XJ /MT:24 /NFL /NDL /NJH /NJS /R:1 /W:1"   # 退出码 <8 即成功
-#   2) 把六份 .sav 放进 C:\tmp-kojo-sav\eratw\sav\（档本身不入库；身份清单与 sha256 见 BASELINES §5）
-#   3) KOJO_SMOKE_PROJECT="C:/tmp-kojo-sav/eratw" node node_modules/vitest/vitest.mjs run \
-#        packages/plugins/sav-parser/tests/golden-roundtrip.test.ts packages/kernel/tests/integration-plugins.test.ts
-#      验完删掉副本目录；跑**全量**套测时仍然不要设 KOJO_SMOKE_PROJECT
+# 回放线复测（§5 / §6）——**存档库 = `C:\Game\eratw-save\sav\`**（语料的同级目录，2026-10-13 用户定；
+# 真实语料本体始终零写入、也**不放** sav/，避免与作者自己的游戏目录混在一起）。档不入库，身份见 BASELINES §5。
+# A) 只复测金样本（serialize∘parse 同构，只需 .sav）→ **零副本直跑**：
+KOJO_SMOKE_PROJECT="C:/Game/eratw-save" node node_modules/vitest/vitest.mjs run packages/plugins/sav-parser/tests/golden-roundtrip.test.ts
+# B) 复测全链路（索引/校验/抽取/回放/注入，需要完整工程根）→ 用一次性副本，验完删：
+#   cmd //c "robocopy C:\Game\eratw-...-SANYOUSEI(PC) C:\tmp-kojo-sav\eratw /E /XJ /MT:24 /NFL /NDL /NJH /NJS /R:1 /W:1"   # 退出码 <8 即成功
+#   cmd //c "robocopy C:\Game\eratw-save\sav C:\tmp-kojo-sav\eratw\sav /E /NFL /NDL /NJH /NJS"
+KOJO_SMOKE_PROJECT="C:/tmp-kojo-sav/eratw" node node_modules/vitest/vitest.mjs run packages/kernel/tests/integration-plugins.test.ts
+#   跑**全量**套测时仍然**不要**设 KOJO_SMOKE_PROJECT（会放行依赖存档的用例并在无档机器上变红）
 # 桌面壳（会弹窗 ~100s 自动关闭）：
 node tools/smoke-tauri-dom.mjs
 # 桌面壳真实 IPC 冒烟（Rust 双闸 a–e；CDP 直调 invoke；自动还原 store/文件/备份；会弹窗 ~2min）：
