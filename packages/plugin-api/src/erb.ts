@@ -119,6 +119,14 @@ export interface ErbIndex {
   files: Map<string, ErbFile>;
   /** 归一化函数名 → 定义列表 */
   byName: Map<string, ErbFunctionRef[]>;
+  /**
+   * 项目体量指纹（`plugin-api/fingerprint` —— 全部 ERB 的 路径+mtime+size 哈希）。
+   *
+   * 索引构建时**顺手已有** stat 结果，故这个判据不额外花一次读盘。下游的整项目粒度
+   * 派生缓存（条件抽取 / 约定校验）以它为失效判据：文件没变 ⇒ 纯函数产出必变不了。
+   * `null` = 有文件取不到 stat ⇒ 派生缓存一律不命中（保守失效）。
+   */
+  readonly fingerprint?: string | null;
 }
 
 /**

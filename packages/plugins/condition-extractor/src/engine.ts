@@ -12,6 +12,7 @@
  */
 
 import type {
+  CacheExpect,
   ComputePool,
   ConditionExtractorService,
   ConditionExpr,
@@ -44,6 +45,21 @@ export interface ConditionEngineDeps {
   scanControlFlow(text: string): Promise<ControlFlowStatement[]>;
   /** 当前适配器的变量语义查询（无适配器 / 无 schema 时 undefined） */
   getSchemaLookup(): SchemaLookup | undefined;
+  /**
+   * 结果快照端口（2026-10-12「体感丝滑」批；缺省 = 不缓存）。
+   *
+   * 全量抽取在真实语料上实测 **11.3 s**，而它在开项目级联里是自动催动的。抽取是
+   * 整项目粒度的纯函数：`CacheExpect`（项目根 / 适配器 / 体量指纹）没变 ⇒ 产出必相同，
+   * 于是直接还原、一个字都不算。
+   *
+   * 引擎只负责"命中就跳过计算"；键、存储、fail-closed 判据由插件侧实现（见
+   * `./snapshot.ts`）。`save` 收到的是**本次计算实际使用的判据**，因此不存在
+   * "抽取途中索引又变了 → 把旧结果存成新判据"的污染路径。
+   */
+  snapshot?: {
+    load(expect: CacheExpect): Promise<ConditionIndex | null>;
+    save(index: ConditionIndex, expect: CacheExpect): void;
+  };
   /**
    * 计算池（内核 `kernel.compute`，2026-10-12 内核优化批）。
    *
@@ -168,6 +184,17 @@ export class ConditionEngine implements ConditionExtractorService {
     this.notify();
   }
 
+  /**
+   * 从结果快照还原（不重算）。明细缓存与文件文本缓存必须清空——
+   * 它们是"上一次计算"的进程内派生态，跨项目/跨快照复用会串味。
+   */
+  restore(index: ConditionIndex): void {
+    this.last = index;
+    this.detailCache.clear();
+    this.fileTextCache.clear();
+    this.notify();
+  }
+
   ensureIndex(): Promise<ConditionIndex> {
     if (this.inFlight) return this.inFlight;
     const p = this.run().finally(() => {
@@ -177,7 +204,7 @@ export class ConditionEngine implements ConditionExtractorService {
     return p;
   }
 
-  /** 全量抽取一次（覆盖缓存并通知订阅者） */
+  /** 全量抽取一次（覆盖缓存并通知订阅者）；判据相符时优先还原结果快照 */
   async run(): Promise<ConditionIndex> {
     const project = this.deps.getProject();
     const index = this.deps.getIndex();
@@ -186,6 +213,26 @@ export class ConditionEngine implements ConditionExtractorService {
       this.last = empty;
       this.notify();
       return empty;
+    }
+
+    /**
+     * 本次计算实际使用的判据。指纹为 null（有文件取不到 stat）⇒ 不缓存也不还原，
+     * 保守回退全量（判据不可信的缓存比没有缓存更危险）。
+     */
+    const expect: CacheExpect | null = index.fingerprint
+      ? { projectRoot: project.rootDir, adapterId: project.adapterId, fingerprint: index.fingerprint }
+      : null;
+
+    if (this.deps.snapshot && expect) {
+      const cached = await this.deps.snapshot.load(expect);
+      if (cached) {
+        this.restore(cached);
+        this.deps.log.info(
+          `Condition index restored from snapshot: ${cached.stats.functions} functions scanned, ` +
+            `${cached.stats.predicates} predicates (originally ${cached.durationMs}ms, load skipped all compute)`,
+        );
+        return cached;
+      }
     }
 
     const t0 = Date.now();
@@ -267,6 +314,7 @@ export class ConditionEngine implements ConditionExtractorService {
         `(${stats.unparsed} unparsed), ${stats.functionsWithDeps} functions with deps, ` +
         `${stats.dependencies} dependencies in ${result.durationMs}ms`,
     );
+    if (this.deps.snapshot && expect) this.deps.snapshot.save(result, expect);
     return result;
   }
 }

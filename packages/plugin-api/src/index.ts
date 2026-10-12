@@ -304,6 +304,11 @@ export type {
 } from './sugar';
 
 export {
+  projectFingerprintOf,
+  type FileStamp,
+  type CacheExpect,
+} from './fingerprint';
+export {
   pathStyle,
   sepOf,
   isAbsolute,

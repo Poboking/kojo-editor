@@ -9,7 +9,7 @@ import type {
   GameProject,
   Plugin,
 } from '@kojo/plugin-api';
-import { KernelServices } from '@kojo/plugin-api';
+import { KernelServices, projectFingerprintOf } from '@kojo/plugin-api';
 import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload, type ScanFlowPayload } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
 import {
@@ -113,6 +113,14 @@ export function createErbParserPlugin(): Plugin {
           },
         );
         const statMs = Date.now() - statStartedAt;
+        // 项目体量指纹：stat 已经逐文件做过，这里只是把它汇成一个判据给下游派生缓存
+        // （条件抽取 / 约定校验）。任一文件取不到 stat ⇒ null ⇒ 下游一律不命中。
+        const fingerprint = projectFingerprintOf(
+          allFiles.map((path) => {
+            const st = stats.get(path);
+            return { path, mtimeMs: st?.mtimeMs ?? null, size: st?.size ?? null };
+          }),
+        );
 
         // 快照：只在项目响应式路径启用（service.buildIndex 的显式调用 = 强制重建）
         let snapshot: IndexSnapshot | null = null;
@@ -213,9 +221,9 @@ export function createErbParserPlugin(): Plugin {
         }
 
         // 仅在仍是当前代际时提交（避免项目快速切换导致旧结果覆盖新结果）
-        if (gen !== generation) return { files, byName };
+        if (gen !== generation) return { files, byName, fingerprint };
 
-        const built: ErbIndex = { files, byName };
+        const built: ErbIndex = { files, byName, fingerprint };
         index = built;
         ctx.bus.emit('kojo.functionChanged', {
           projectRoot: currentRoot,

@@ -13,7 +13,9 @@
  */
 
 import type {
+  CacheExpect,
   ComputePool,
+  ConditionIndex,
   ConditionExtractorService,
   ControlFlowStatement,
   ErbParserService,
@@ -23,6 +25,7 @@ import type {
   ProjectService,
   SlotRegistry,
 } from '@kojo/plugin-api';
+import { EXTRACT_STORE_KEY, decodeConditionIndex, encodeConditionIndex } from './snapshot';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { ConditionEngine } from './engine';
 import type { SchemaLookup } from './extract';
@@ -44,6 +47,8 @@ export function createConditionExtractorPlugin(): Plugin {
       const parser = ctx.inject<ErbParserService>(WellKnownServices.ErbParser);
       // 全量抽取是背景 CPU 洪水（~6.2 s / 49.3 万谓词）——过池分片，窗口间让出主线程
       const compute = ctx.inject<ComputePool>(KernelServices.Compute);
+      /** 本插件命名空间的存储域：抽取结果快照的落点（`{appData}/store/condition-extractor/`） */
+      const storage = ctx.storage;
 
       /** 当前适配器的变量语义查询（按 adapterId 精确匹配；多适配器共存天然正确） */
       const schemaLookup = (): SchemaLookup | undefined => {
@@ -57,6 +62,40 @@ export function createConditionExtractorPlugin(): Plugin {
         return undefined;
       };
 
+      /**
+       * 结果快照端口：键固定、判据在快照本体里（见 `./snapshot.ts`）。
+       * 坏快照一律删除而不是"修"——fail-closed 与索引快照同口径。
+       */
+      const snapshotPort = {
+        async load(expect: CacheExpect): Promise<ConditionIndex | null> {
+          try {
+            const raw = await storage.get<unknown>(EXTRACT_STORE_KEY);
+            if (raw === undefined) return null; // 首次 / 刚变过文件：正常路径
+            const restored = decodeConditionIndex(raw, expect);
+            if (restored === null) {
+              void storage.delete(EXTRACT_STORE_KEY).catch(() => undefined);
+              ctx.log.warn('Condition snapshot unusable (format/root/adapter/fingerprint mismatch); extracting from scratch');
+            }
+            return restored;
+          } catch (err) {
+            ctx.log.warn(`Condition snapshot read failed; extracting from scratch: ${String(err)}`);
+            return null;
+          }
+        },
+        save(index: ConditionIndex, expect: CacheExpect): void {
+          // 零函数被扫描 = 结果可疑（多半是索引刚失效），不落盘免得下次还原出空结果
+          if (index.stats.functions === 0) return;
+          void storage
+            .set(EXTRACT_STORE_KEY, encodeConditionIndex({ index, expect }))
+            .then(() => {
+              ctx.log.info(`Condition snapshot saved (${index.byFunction.size} entries, fingerprint ${expect.fingerprint})`);
+            })
+            .catch((err: unknown) => {
+              ctx.log.warn(`Condition snapshot save failed: ${String(err)}`);
+            });
+        },
+      };
+
       const engine = new ConditionEngine({
         log: ctx.log,
         getProject: () => project.current(),
@@ -65,11 +104,13 @@ export function createConditionExtractorPlugin(): Plugin {
         // 走并行通道（无通道自动内联）：扫描是全量抽取里最贵的纯 CPU 段（真实语料约 40%）
         scanControlFlow: (text: string): Promise<ControlFlowStatement[]> => parser.scanControlFlowOffloaded(text),
         getSchemaLookup: schemaLookup,
+        snapshot: snapshotPort,
         compute,
       });
 
       const service: ConditionExtractorService = engine;
       ctx.provide(WellKnownServices.ConditionExtractor, service);
+
       // ---- 自动运行：索引重建完成即抽取（串行化，避免叠加运行） ----
       let running = false;
       let queued = false;
@@ -83,7 +124,10 @@ export function createConditionExtractorPlugin(): Plugin {
           try {
             do {
               queued = false;
-              await engine.run();
+              // 走 ensureIndex 而非 run()：前者共享在途 Promise。自动触发（functionChanged）
+              // 与面板显式 ensureIndex 若并发起两条全量抽取，真实语料上要白跑 8.8 s × 2
+              // （2026-10-12 级联实测暴露）。
+              await engine.ensureIndex();
             } while (queued);
           } catch (err) {
             ctx.log.error(`Condition extract run failed: ${String(err)}`);
