@@ -503,6 +503,9 @@ fn encoding_for(name: &str) -> Result<&'static encoding_rs::Encoding, String> {
 }
 
 /// 字节 → 字符串（BOM 由 encoding_rs decode 自动剥离）。
+/// **读路径已不再调用它**（2026-10-13 §5.90 实机复测：每读一个文件为此多跑一趟 IPC，整份字节
+/// base64 送回 Rust 只解码一次）。命令保留注册——它是"客户端 TextDecoder vs encoding_rs"
+/// 等价性验证的对照物（两者实现同一份 WHATWG Encoding 标准）。
 /// 注意：Shift-JIS 等非严格解码遇无法映射字节会替换为 U+FFFD（`had_errors`
 /// 当前未上抛——只读浏览不宜硬阻塞；写回时由 `encode_string` 的
 /// had_errors 检查兜底，U+FFFD 无法再编码 → 拒绝保存，损坏不落盘）。

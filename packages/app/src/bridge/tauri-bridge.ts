@@ -1,15 +1,32 @@
-import type { FileChangeKind, PlatformBridge, WatchCallback, WatchReportCallback } from '@kojo/plugin-api';
+import type { FileChangeKind, FileEncoding, PlatformBridge, WatchCallback, WatchReportCallback } from '@kojo/plugin-api';
 import { base64ToBytes, bytesToBase64, invoke, isTauri } from './invoke';
 
 /**
  * PlatformBridge 的 Tauri 实现。
  *
  * Rust 侧同名命令见 src-tauri/src/lib.rs。
- * 二进制数据用 base64 字符串跨 IPC（确定性强、跨 Tauri 版本稳定；口上文件体量下开销可忽略）。
+ * **写路径**的二进制仍用 base64 跨 IPC（低频、用户触发，形态确定）。
+ * **读路径不再**把整份字节送回 Rust 解码——2026-10-13 实机复测（IMPLEMENTATION-LOG §5.90）
+ * 量到每读一个文件要三趟 IPC（读字节 + 解码 + stat），真实 app 里读一个 12.5 MB 快照要 4.1 s，
+ * 而 node bridge 同一份文件 74 ms ⇒ 解码改在客户端做（见 `decode`）。
  *
  * `watchDirs`（BUG-5，2026-10-13 已接 Rust notify）：本层只做"事件名 ↔ 回调"的接线，
  * 去抖 / 判级 / 广播都在内核（`packages/kernel/src/watcher.ts`）。
  */
+
+/**
+ * `FileEncoding` → WHATWG 编码标签。`utf-8-bom` 走 `utf-8`：TextDecoder 默认剥前导 BOM，
+ * 与 Rust `encoding_rs::UTF_8.decode` 同语义——encoding_rs 实现的正是这份标准，
+ * 所以五个标签在两侧是同一套解码规则（含非法字节替换为 U+FFFD 的不严格口径）。
+ */
+export const DECODE_LABEL: Record<FileEncoding, string> = {
+  'utf-8': 'utf-8',
+  'utf-8-bom': 'utf-8',
+  shift_jis: 'shift_jis',
+  'utf-16le': 'utf-16le',
+  'utf-16be': 'utf-16be',
+};
+
 export const tauriBridge: PlatformBridge = {
   async readFileBytes(path: string): Promise<Uint8Array> {
     const b64 = await invoke<string>('read_file_bytes', { path });
@@ -128,8 +145,8 @@ export const tauriBridge: PlatformBridge = {
     return invoke<string>('app_data_dir');
   },
 
-  async decode(bytes: Uint8Array, encoding): Promise<string> {
-    return invoke<string>('decode_bytes', { data: bytesToBase64(bytes), encoding });
+  async decode(bytes: Uint8Array, encoding: FileEncoding): Promise<string> {
+    return new TextDecoder(DECODE_LABEL[encoding]).decode(bytes);
   },
 
   async encode(text: string, encoding): Promise<Uint8Array> {
