@@ -81,7 +81,8 @@ export function createErbParserPlugin(): Plugin {
       let generation = 0;
 
       async function build(rootsToScan: string[], gen: number, useSnapshot: boolean): Promise<ErbIndex> {
-        // 耗时拆分（内核优化 L0）：索引是"开项目级联"的第一段，必须在日志里可见
+        // 耗时拆分（内核优化 L0）：索引是"开项目级联"的第一段，必须在日志里可见。
+        // 每段单独计时——上一轮"热启动 stat 872ms"的疑点就是因为快照读盘被并进了 stat 区间。
         const buildStartedAt = Date.now();
         const allFiles: string[] = [];
         for (const root of rootsToScan) {
@@ -94,6 +95,7 @@ export function createErbParserPlugin(): Plugin {
             if (!e.isDirectory && ERB_EXT.test(e.name)) allFiles.push(e.path);
           }
         }
+        const walkMs = Date.now() - buildStartedAt;
 
         // 体量指纹：逐文件 stat 取 mtime（与 readText 的 mtimeMs 同源口径），
         // 是增量复扫的判据——mtime 没变的文件，解析结果必然不变（纯函数）。
@@ -110,17 +112,26 @@ export function createErbParserPlugin(): Plugin {
             }
           },
         );
+        const statMs = Date.now() - statStartedAt;
 
         // 快照：只在项目响应式路径启用（service.buildIndex 的显式调用 = 强制重建）
         let snapshot: IndexSnapshot | null = null;
+        const snapStartedAt = Date.now();
+        let snapGetMs = 0;
+        let snapCoerceMs = 0;
         if (useSnapshot && currentRoot) {
           const key = snapshotKeyFor(currentRoot);
           try {
+            // get 内含「读盘 + decode + JSON.parse」——体积过大时这一项就是热启动的主要成本
+            const getStartedAt = Date.now();
             const raw = await storage.get<unknown>(key);
+            snapGetMs = Date.now() - getStartedAt;
             if (raw === undefined) {
               snapshot = null; // 首次打开 / 无快照 → 全量（正常路径）
             } else {
+              const coerceStartedAt = Date.now();
               snapshot = coerceSnapshot(raw, currentRoot);
+              snapCoerceMs = Date.now() - coerceStartedAt;
               if (snapshot === null) {
                 // fail-closed：版本/结构/项目根任一不符 → 删除 + 全量重建，绝不"修"快照
                 ctx.log.warn('Index snapshot unusable (version/structure/root mismatch); rebuilding from scratch');
@@ -132,6 +143,7 @@ export function createErbParserPlugin(): Plugin {
             snapshot = null;
           }
         }
+        const snapMs = Date.now() - snapStartedAt;
 
         const diff = snapshot ? diffSnapshot(snapshot, allFiles, stats) : { reusable: [], stale: allFiles };
 
@@ -153,8 +165,10 @@ export function createErbParserPlugin(): Plugin {
             }
           },
         );
+        const parseMs = Date.now() - parseStartedAt;
 
         // 合并：按本次 walk 顺序取数（快照只换"来源"，byName 聚合顺序与全量重建逐位一致）
+        const aggStartedAt = Date.now();
         const ordered: ErbFile[] = [];
         for (const path of allFiles) {
           const parsed = fresh.get(path)?.file;
@@ -166,11 +180,16 @@ export function createErbParserPlugin(): Plugin {
           if (reused) ordered.push(reused);
         }
         const { files, byName } = aggregateIndex(ordered);
+        const aggMs = Date.now() - aggStartedAt;
 
         ctx.log.info(
           `Indexed ${files.size} ERB files, ${byName.size} distinct functions from ${rootsToScan.length} root(s) ` +
-            `in ${Date.now() - buildStartedAt}ms (stat ${parseStartedAt - statStartedAt}ms, ` +
-            `read+parse ${Date.now() - parseStartedAt}ms, reused ${diff.reusable.length}/${allFiles.length})`,
+            `in ${Date.now() - buildStartedAt}ms`,
+        );
+        ctx.log.info(
+          `  index breakdown: walk ${walkMs}ms · stat ${statMs}ms · snapshot ${snapMs}ms ` +
+            `(get ${snapGetMs}ms, coerce ${snapCoerceMs}ms) · read+parse ${parseMs}ms · aggregate ${aggMs}ms · ` +
+            `reused ${diff.reusable.length}/${allFiles.length}`,
         );
 
         // 落盘快照（异步，不阻塞广播；失败只告警——它只是缓存，不是数据）
@@ -179,10 +198,14 @@ export function createErbParserPlugin(): Plugin {
         if (useSnapshot && currentRoot && gen === generation && snapshotDirty) {
           const key = snapshotKeyFor(currentRoot);
           const entries = mergeEntries(snapshot, allFiles, fresh);
+          const saveStartedAt = Date.now();
           void storage
             .set(key, { version: SNAPSHOT_VERSION, rootDir: currentRoot, savedAt: Date.now(), entries })
             .then(() => {
-              ctx.log.info(`Index snapshot saved (${Object.keys(entries).length} entries, key ${key})`);
+              ctx.log.info(
+                `Index snapshot saved (${Object.keys(entries).length} entries, key ${key}, ` +
+                  `${Date.now() - saveStartedAt}ms)`,
+              );
             })
             .catch((err: unknown) => {
               ctx.log.warn(`Index snapshot save failed: ${String(err)}`);
