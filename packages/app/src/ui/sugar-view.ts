@@ -124,14 +124,51 @@ export function sugarZonePlan(segment: { fromLine: number; sugarText: string }):
 }
 
 /**
- * 工具条/状态栏的糖视图摘要（面向作者，中文；**不含内部术语**）。
+ * 读编辑器**实测**行高（px），供 `.sugar-zone` 与代码行同 rhythm。
  *
- * 口径只说"已映射多少行"，不说"未映射多少行"：未映射的行里既有真正的原生代码，
- * 也有注释与空行——把它们加总成"未映射"会让人以为漏了什么。逐因明细由
- * 「升糖」面板承担（那边有分因标签），工具条只给一个"这文件是人话"的量感。
+ * 为什么必须实测而不是在 CSS 里写死：`heightInLines` 换算成的盒子高是
+ * `行数 × Monaco 行高`，而行高是 Monaco 由 `fontSize` 派生的（本宿主 `fontSize: 14`
+ * 时约 19px）。区内 DOM 若按自己的字号排版，每行差 1px，长段就会顶穿盒子被
+ * `overflow: hidden` 裁掉尾部——写死的数字会随 `fontSize` 一改就过期。
+ *
+ * Monaco 0.57 的顶层导出面没有 `EditorOption` 枚举（取不了 `lineHeight` 选项），
+ * 于是直接问 DOM。但**问的必须是 `.view-line`（单数）而不是 `.view-lines`（容器）**：
+ * Monaco 把 `height: Npx; line-height: Npx` **内联写在每一条行元素上**，容器
+ * `.view-lines` 的 CSS 里只有 `white-space: nowrap`，读它只会拿到继承来的 `normal`。
+ * （Monaco 自己在 `viewLines.css` 的注释里就写着 "view-lines in view-zones …
+ * they don't set a line height"——Zone 恰恰是唯一拿不到行高的那一层。）
+ *
+ * 量不到（宿主未挂载 / 模型还没有任何一行 / 计算样式给 `normal`）时返回 `null`，
+ * 由 CSS 的兜底值接手，不因此放弃整块糖。
+ *
+ * 为什么留一份模块级缓存：`applySugarView` 紧跟在 `setModel` 之后跑，**首帧可能还
+ * 没有任何 `.view-line`**，于是第一次量会扑空。全应用共用同一个 `fontSize`（宿主写死
+ * 14），所以量到一次就可以一直用；不缓存的话，冷启动第一眼就是兜底值，切一次文件才正。
+ */
+let cachedLineHeightPx: number | null = null;
+
+export function editorLineHeightPx(host: HTMLElement | null): number | null {
+  const line = host?.querySelector<HTMLElement>('.view-lines .view-line');
+  if (!line) return cachedLineHeightPx;
+  const px = Number.parseFloat(window.getComputedStyle(line).lineHeight);
+  if (!Number.isFinite(px) || px <= 0) return cachedLineHeightPx;
+  cachedLineHeightPx = px;
+  return px;
+}
+
+/**
+ * 工具条的糖视图摘要（面向作者，中文；**不含内部术语**）。
+ *
+ * 术语口径：「映射」是投影器的内部说法，作者词表里没有它——他看到的是"这文件有多少
+ * 变成了人话"。所以读数只给「语法糖 N 行」（与紧邻的开关按钮呼应，不必重复动词），
+ * 完整解释交给悬停 `title`。
+ *
+ * 只报**已覆盖**的行数，不报"未覆盖多少行"：未覆盖的行里既有真正的原生代码，也有
+ * 注释与空行——把它们加总成一项会让人以为漏了什么。逐因明细**只存在于工具条的悬停
+ * `title`**（批 A 已按用户口径删除「升糖」面板，别再往面板上指）。
  */
 export function sugarSummary(projectedLines: number): string {
-  return `糖视图 · 已映射 ${projectedLines} 行`;
+  return `语法糖 ${projectedLines} 行`;
 }
 
 /**

@@ -25,7 +25,7 @@ export function UnsavedConfirmDialog({ filePath, context = 'close', onDecide }: 
   const saveLabel = context === 'close' ? '保存并关闭' : '保存并前往';
   return (
     <div className="modal-mask">
-      <div className="modal">
+      <div className="modal" role="dialog" aria-modal="true" aria-label="有未保存的修改">
         <h2>有未保存的修改</h2>
         <p>
           <code>{filePath}</code> 有未保存的修改。{verb}前，请选择处理方式：

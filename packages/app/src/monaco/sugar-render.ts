@@ -55,24 +55,13 @@ export function tokenColor(type: string): string {
 }
 
 /**
- * 渲染一个糖段为 DOM（`<pre class="sugar-zone">` + 每行一个 `<div class="sugar-line">`，
- * 行内按 token 切 `<span>` 上色）。
+ * 把糖文本填进一个已有的 `<pre class="sugar-zone">`（宿主的分帧填充用它：先建空壳
+ * 再按帧填内容，元素身份始终不变）。
  *
- * 用 `<div>` 逐行而不是一个 `<pre>` 装整块：空行需要**自己的行框**才能撑出行高
- * （`\n\n` 在 `pre` 里只算一个换行符的位置，视觉上会"吃掉"一行）。
- */
-export function renderSugarBlock(monaco: typeof Monaco, text: string): HTMLElement {
-  const pre = document.createElement('pre');
-  pre.className = 'sugar-zone';
-  fillSugarBlock(pre, monaco, text);
-  return pre;
-}
-
-/**
- * 把糖文本**填进已有的** `<pre class="sugar-zone">`（宿主的分帧填充用它）。
+ * 输出形态是 `<pre class="sugar-zone">` + 每行一个 `<div class="sugar-line">`，
+ * 行内按 token 切 `<span>` 上色。逐行用 `<div>` 而不是一个 `<pre>` 装整块：空行需要
+ * **自己的行框**才能撑出行高（`\n\n` 在 `pre` 里只算一个换行符的位置，视觉上会"吃掉"一行）。
  *
- * 与 `renderSugarBlock` 的区别只在"谁来建元素"：宿主先建空壳（成本 O(1)），
- * 再按帧把内容填进去——大文件（实测最多 9,569 段）因此不会卡住首屏。
  * 填充失败（`tokenize` 不可用等）→ 退回纯文本，**绝不留下空白**。
  */
 export function fillSugarBlock(pre: HTMLElement, monaco: typeof Monaco, text: string): void {

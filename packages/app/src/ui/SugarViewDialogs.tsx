@@ -11,6 +11,16 @@
  * 2. `ErbUnlockDialog`——用户**试图编辑只读的 ERB** 时问"要保持只读还是允许编辑"。
  *    诚实地把代价说清：解锁编辑会关闭该文件的语法糖视图（糖视图要求原文让位，
  *    而可编辑的原文必须能看见）。
+ *
+ * ## 按钮层级与文案跟全站模态对齐（2026-10-12 UI 归一批）
+ *
+ * 房规（`SaveWarningDialog` / `UnsavedConfirmDialog` / `WritableApprovalDialog` 三家一致）：
+ * **`primary` 恒等于推荐项，且排在最右**，其余走 `ghost`。本文件初版把「允许编辑」放上
+ * `primary`、把标着"推荐"的「保持只读」压成 `ghost`——视觉重量与文字推荐互相打架，
+ * 而且高风险那一侧恰好是更亮的那个。现按房规对调；"推荐"二字随视觉重量归位，故从标签里删掉。
+ *
+ * 面向作者的句子里不留实现术语：`EraBasic` 是语言名，口上作者的词表里没有它，
+ * 换成他能对上号的"这套语法"；「映射」「投影」一类说法同样不上屏（见 `sugar-view.ts`）。
  */
 
 import type { ReactElement } from 'react';
@@ -28,8 +38,8 @@ export function SugarViewIntroDialog({
         <h2>要开启「语法糖视图」吗？</h2>
         <p>
           这是一份 <b>ERB</b>（游戏原生格式）文件。开启语法糖视图后，编辑器会把它
-          <b>就地显示成中文表层写法</b>——台词像剧本、条件变成「如果 …：」，让人不熟悉
-          EraBasic 也能读懂别人的口上；读不到的行会原样保留原代码。
+          <b>就地显示成中文表层写法</b>——台词像剧本、条件变成「如果 …：」，没学过这套语法
+          也能读懂别人写的口上；暂时还不支持的行保持原样显示。
         </p>
         <p className="dim">
           只读显示，<b>不会改动文件一个字节</b>；随时可在「设置」里关闭，或用
@@ -67,15 +77,15 @@ export function ErbUnlockDialog({
           而可编辑的原文必须始终看得见。
         </p>
         <p className="dim">
-          更推荐的做法：<b>新建一份口上文件（.kojo）</b>来写自己的内容，这样能全程用语法糖
+          更稳妥的做法：<b>新建一份口上文件（.kojo）</b>来写自己的内容，这样能全程用语法糖
           （含 💡 一键把 ERB 写法改成糖写法），也能被编译成合规 ERB。
         </p>
         <div className="modal-actions">
-          <button className="ghost" onClick={() => onDecide(false)}>
-            保持只读（推荐）
+          <button className="ghost" onClick={() => onDecide(true)}>
+            仍要直接编辑
           </button>
-          <button className="primary" onClick={() => onDecide(true)}>
-            允许编辑
+          <button className="primary" onClick={() => onDecide(false)}>
+            保持只读
           </button>
         </div>
       </div>

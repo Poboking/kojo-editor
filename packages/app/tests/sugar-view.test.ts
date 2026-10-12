@@ -94,9 +94,16 @@ describe('糖视图 / ViewZone 计划', () => {
 });
 
 describe('糖视图 / 摘要文案', () => {
-  it('只说"已映射多少行"（未映射含注释空行，加总会误导）', () => {
-    expect(sugarSummary(123)).toBe('糖视图 · 已映射 123 行');
-    expect(sugarSummary(0)).toBe('糖视图 · 已映射 0 行');
+  it('只报已覆盖的行数（未覆盖含注释与空行，加总会误导）', () => {
+    expect(sugarSummary(123)).toBe('语法糖 123 行');
+    expect(sugarSummary(0)).toBe('语法糖 0 行');
+  });
+
+  it('面向作者的读数不含实现术语（用户反馈 5：别拿内部说法当文案）', () => {
+    // 「映射 / 投影 / 降级 / 覆盖」是糖投影器的词表，口上作者没有一个会说。
+    for (const jargon of ['映射', '投影', '降级', '覆盖']) {
+      expect(sugarSummary(312)).not.toContain(jargon);
+    }
   });
 });
 

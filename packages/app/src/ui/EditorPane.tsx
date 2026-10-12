@@ -24,6 +24,7 @@ import { decideExternalChange } from './external-change';
 import { clampRange, isErbLike } from './lift-preview';
 import { perf } from '../perf';
 import {
+  editorLineHeightPx,
   loadSugarViewPref,
   loadSugarViewPrompted,
   saveSugarViewPref,
@@ -484,6 +485,13 @@ export function EditorPane({
     const nearViewport: Array<{ el: HTMLElement; text: string }> = [];
     const rest: Array<{ el: HTMLElement; text: string }> = [];
     let sugarLines = 0;
+    // ViewZone 的盒子高 = `heightInLines × 编辑器行高`，而区内 DOM 由 `.sugar-zone` 自己
+    // 排版。两者不同一行数一多就对不上：CSS 原写 `12.5px × 1.6 = 20px`，比 Monaco 在
+    // fontSize 14 下的 19px 每行多出 1px，叠到 +1 行呼吸耗尽后**尾部台词被裁掉**
+    // （`overflow: hidden`）。这里把实测行高交给 CSS，糖行与相邻代码行永远同 rhythm，
+    // 也让「稿纸感」的小字号不再靠一个会过期的魔数。
+    const lineHeightPx = editorLineHeightPx(ed.getDomNode());
+
     ed.changeViewZones((acc) => {
       for (const seg of segments) {
         const plan = sugarZonePlan(seg);
@@ -494,6 +502,7 @@ export function EditorPane({
         if (plan.lineCount === 0) continue;
         const dom = document.createElement('pre');
         dom.className = 'sugar-zone';
+        if (lineHeightPx !== null) dom.style.setProperty('--sugar-lh', `${lineHeightPx}px`);
         const id = acc.addZone({
           afterLineNumber: plan.afterLineNumber,
           heightInLines: plan.heightInLines,
@@ -521,7 +530,8 @@ export function EditorPane({
     );
     setSugarStats(sugarSummary(sugarLines));
 
-    // 分帧填充（可见优先；每帧 ≤SUGAR_HYDRATE_PER_FRAME 段）
+    // 分帧填充（可见优先；每帧 ≤SUGAR_HYDRATE_PER_FRAME 段）。
+    // 必须分帧：真实语料里单文件最多 9,569 个糖段，一次性填满会直接卡死首屏。
     sugarPendingRef.current = [...nearViewport, ...rest];
     const pump = (): void => {
       sugarHydrateRafRef.current = null;
@@ -1102,19 +1112,19 @@ export function EditorPane({
                 （工作区 ERB 恒可编辑，不放只读徽章、也不开糖视图）。
                 纯说明性标签不带操作入口——旧的「强制编辑 ERB」按钮按需求 §1.4 作废。 */}
             {unlocked ? (
-              // 解锁后糖视图让位（可编辑的原文必须看得见）——徽章变成"可凭据说明"，
-              // 并保留一个回锁入口（回锁即恢复糖视图）。
+              // 解锁 = 写保护对这一份文件暂时失效，是**需要被看见**的破例态 → 琥珀警示色；
+              // 只读反而是安全默认态 → 中性色（见 styles.css `.erb-mode-hint` 配色口径）。
               <>
                 <span
                   className="erb-mode-hint unlocked"
-                  title="已解锁编辑：该文件的语法糖视图已关闭（可编辑的原文必须始终可见）。"
+                  title="已破例允许编辑这一份文件（只对本次会话有效，关闭编辑器即失效）。语法糖视图同时关闭——要动手改的原文必须看得见。"
                 >
-                  ✏ 可编辑（语法糖视图已关闭）
+                  ✏ 已解锁编辑
                 </span>
                 <button
                   className="ghost small"
                   onClick={() => setErbEditable(filePath, false)}
-                  title="恢复只读并重新开启语法糖视图。"
+                  title="收回这次破例，恢复只读并重新显示语法糖。"
                 >
                   恢复只读
                 </button>
@@ -1123,27 +1133,31 @@ export function EditorPane({
               <>
                 <span
                   className="erb-mode-hint"
-                  title="ERB 默认只读保护：直接改游戏目录里别人的口上风险高。尝试输入时会询问你是否解锁。"
+                  title="游戏目录里的原生文件，默认只读——直接改它等于改别人装好的游戏内容。开始输入时编辑器会询问你是否破例。"
                 >
-                  🔒 只读（尝试输入可解锁）
+                  🔒 只读
                 </span>
                 {/* 糖视图：整份 ERB 显示为语法糖（只读）——本功能的存在理由就是让不熟悉
-                    EraBasic 的读者也能把别人的口上当剧本读懂。默认开（偏好可记忆）。 */}
+                    原生语法的人也能把别人的口上当剧本读懂。默认开（偏好可记忆）。
+                    标签**恒为「语法糖视图」**，开关状态交给 .on 配色 + aria-pressed 表达：
+                    原先按状态在「语法糖视图 / 显示为语法糖」间换字，两者字数不同，
+                    每点一次工具条就横向抖一下（与 T3 根除的树抖动同类缺陷）。 */}
                 <button
                   className={`ghost small sugar-toggle${sugarView ? ' on' : ''}`}
+                  aria-pressed={sugarView}
                   onClick={() => setSugarView((v) => !v)}
                   title={
                     sugarView
-                      ? '当前以语法糖显示。点击切回原 ERB 代码（显示偏好会被记住）。'
-                      : '把这份 ERB 显示成语法糖——台词读起来像剧本、条件变成「如果 …：」（只读，不改动原文件）。'
+                      ? '已开启：当前显示的是语法糖写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。'
+                      : '把这份文件显示成语法糖写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。'
                   }
                 >
-                  {sugarView ? '语法糖视图' : '显示为语法糖'}
+                  语法糖视图
                 </button>
                 {sugarView && sugarStats ? (
                   <span
                     className="sugar-stats dim"
-                    title="其余行按原 ERB 显示：糖未覆盖的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释与空行。"
+                    title="其余行按原样显示：语法糖还没覆盖到的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释和空行。文件内容始终没有被改动。"
                   >
                     {sugarStats}
                   </span>

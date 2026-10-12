@@ -15,7 +15,7 @@ interface Props {
 export function WritableApprovalDialog({ project, onDecide }: Props): ReactElement {
   return (
     <div className="modal-mask">
-      <div className="modal">
+      <div className="modal" role="dialog" aria-modal="true" aria-label="写权限确认">
         <h2>写权限确认</h2>
         <p>
           <code>{project.adapterId}</code> 适配器请求对以下目录的写权限（保存口上文件时使用）：

@@ -21,7 +21,7 @@ export function SaveWarningDialog({ warning, onDecide }: Props): ReactElement {
   const lines = warning.lines.slice(0, LINE_CAP);
   return (
     <div className="modal-mask">
-      <div className="modal">
+      <div className="modal" role="dialog" aria-modal="true" aria-label="保存提醒">
         <h2>保存提醒</h2>
         <p>{warning.message}</p>
         {lines.length > 0 ? (

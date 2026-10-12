@@ -3349,6 +3349,9 @@ Monaco 大文件降级）最容易被影响到的消费者——数字一字不�
   由本地 `backup/syntax-sugar-20261012` 持有。糖线此后**直接在 master 上推进**，不再留长命分支
   ——这次"落后 24 提交"的代价就是编号让位发生两次、14 文件冲突、两轮验证。
 - 桌面壳实机目视（两组共同欠账，本机无 `src-tauri/target`，需 GUI 会话）。
+  → **本节已补上第一段**：haruki 主机 `packages/app/src-tauri/target/debug` 是**存在**的，
+  `pnpm tauri dev` 可跑，实机目视见 §5.73 验证表。
+
 
 ### 5.65 快照卫生批 · v3 元组编码 + 单文件收口 + 体感水位常驻（2026-10-12 批）
 
@@ -4345,3 +4348,118 @@ KOJO_SMOKE_PROJECT="C:/tmp-kojo-sav/eratw" node node_modules/vitest/vitest.mjs r
 
 **教训**：候选表不是承诺表。§5.71 那条纪律真正的价值不在于否证了别人的方案，
 而在于**它同样否证了我自己刚写的下一步**。
+
+### 5.73 UI 归一批 · 接管并打磨糖组并入的糖视图界面（2026-10-12 批）
+
+> **用户指派原文**：「关于🔒 只读（尝试输入可解锁），糖组的 UI 并不是他们的长处，并且 UI
+> 方面的优化也属于本组的工作，请你顺便帮他们优化 UI，确保风格统一，『专业、克制、流畅、
+> 高效、耐看』。」——所以本批是**本组对糖组界面的第一次接管**，不是互评。
+
+#### 判据先立起来：什么叫"不统一"，三条全部可判定
+
+不拿口味当依据，每条都在仓里找到**现成对照物**：
+
+| 判据 | 仓内依据（可数出来的） | 糖视图初版 |
+|---|---|---|
+| 模态 `primary` 恒 = 推荐项、且排最右 | `SaveWarningDialog` / `UnsavedConfirmDialog` / `WritableApprovalDialog` 三家一致 | **反了**：高风险的「允许编辑」是 primary，写着"推荐"的「保持只读」被压成 ghost——视觉重量与文字推荐互相打架，且危险那一侧恰好更亮 |
+| 命令面板标题 = 裸动宾短语 | 其余 **13 条命令无一带括号**（「切换写作模式」「重置布局」） | 「切换糖视图（把 ERB 显示为语法糖）」——唯一带括号，长一倍 |
+| 面向作者的句子不含实现术语 | 用户反馈 5 已为此删过「升糖不写原文件」 | 「已**映射** N 行」「EraBasic」仍在屏上（`sugarSummary` 的文档注释自称"**不含内部术语**"，下一行就是"映射"） |
+| 术语一个词到底 | 工具条按钮写「语法糖视图」 | 摘要写「糖视图」、命令面板又写「糖视图」——同一功能三个名字 |
+
+改后：`保持只读` 上 primary 并去掉标签里的"（推荐）"（推荐由视觉重量表达，不再重复）；
+命令标题 `切换语法糖视图`；摘要 `语法糖 N 行`；`EraBasic` 从对话框里消失。
+
+#### 徽章配色：按**风险**给，不按"有没有字"给
+
+初版 `只读 = --amber`（警示）、`已解锁 = --fg-dim`（隐形）——**恰好与风险相反**。
+作者打开游戏目录是一屏二十个 ERB，个个顶着琥珀徽章＝天天喊狼来了；而"写保护此刻已失效"
+这个真正需要被看见的破例态几乎看不见。现对调：只读走中性（🔒 图标本身已表意），
+`.unlocked` 走 `--warning`。
+
+#### 本批唯一的功能性缺陷：ViewZone 行高算术（顺带纠正一次自我误判）
+
+`heightInLines` 换算成的盒子高 = `行数 × Monaco 行高`，而 `.sugar-zone` 自己按
+`font-size: 12.5px; line-height: 1.6` = **20px/行** 排版；Monaco 在宿主 `fontSize: 14`
+下是 `round(14 × 1.35) = `**19px/行**（`fontInfo.js` 实证，非 Mac 分支）。每行差 1px，
+`sugarZonePlan` 的 +1 行呼吸只够垫 19 行——**超过约 19 行的长台词段，尾部会被
+`overflow: hidden` 裁掉**。
+
+修法不写死 19px：新增 `editorLineHeightPx()` 读实测行高，落进 `--sugar-zone` 的自定义
+属性 `--sugar-lh`，CSS 的 `line-height` / `min-height` 都吃它。字号 12.5px **保留**——
+那是糖组刻意的"稿纸而不是代码块"，本批只修算术，不动它的设计意图。
+
+**第一版写错了，值得记下来**：最初读的是 `.view-lines`（容器）。翻 Monaco 源码才确认
+`viewLines.css` 里 `.monaco-editor .view-lines` **只有 `white-space: nowrap`**——
+Monaco 把 `height:Npx;line-height:Npx` **内联写在每一条 `.view-line`（单数）子元素**上，
+读容器只会拿到继承来的 `normal`，`parseFloat` → NaN → 静默退回兜底值，**改了等于没改**。
+Monaco 自己在 `viewLines.css` 的注释里就写着
+*"There are view-lines in view-zones … they don't set a line height"*——Zone 恰恰是唯一
+拿不到行高的那一层。现改读 `.view-lines .view-line`，并加模块级缓存：`applySugarView`
+紧跟 `setModel`，首帧可能一行都还没有，而全应用共用同一个 `fontSize`，量到一次即可长用。
+
+#### 顺手清掉的两处
+
+- `renderSugarBlock` 全仓**零引用**（宿主走"空壳 + 分帧填充"的 `fillSugarBlock`），删除；
+  被删注释里"实测最多 9,569 段"这个数**挪到调用点**保留（那才是它该待的地方）。
+- `styles.css` 里一条 `erb-mode-hint` 的**孤儿注释**（上一批对齐徽章度量时留下的旧口径说明）。
+
+#### 无障碍：把糖组新立的约定**反向**补齐给全站
+
+`role="dialog" aria-modal="true" aria-label` 此前**只有**糖组那两个新对话框有，
+三家老模态一个都没有——不一致的方向和直觉相反。现五家齐；糖视图开关补 `aria-pressed`。
+
+#### 新增守门：全站模态一致性测试（本仓**第一条渲染型测试**）
+
+`packages/app/tests/sugar-dialogs.test.ts`，13 项。vitest 的 `include` 只收 `*.test.ts`，
+但 `resolve.extensions` 含 `.tsx`，于是从 `.ts` 里 `renderToString(createElement(...))`——
+**不新增任何依赖**，也不为此把 JSX 拆成纯函数。锁三件事：primary 排最右、dialog 语义齐、
+屏上无实现术语。（`file-tree.test.ts` 已有从 `.ts` 引 TSX 的先例。）
+
+#### 一处**没有**按"看起来像缺陷"下手的判断
+
+糖组新写的 CSS 里有 `var(--hover, rgba(128,128,128,0.12))` / `var(--font-mono, monospace)`
+这类**兜底字面量**——而本仓 P 批的设计 token 注释明写着"散落各面板的 fallback 值收编为
+唯一来源"。乍看是对方把我们的收编反向破坏了。实测：全文件 `var(--font-mono,` **20 处**、
+`var(--hover,` **6 处**，绝大多数在糖组进场之前就存在——是**我们那批只建了 token、
+没清调用点**。所以本批不动它（40 处机械重写不在"顺便优化 UI"范围内），记为 #19/#10 的账。
+同理 `font-size: 11px / 10.5px` 全文件各有 38 / 28 处，`--fs-*` 三级标尺只在新代码里被遵守，
+本批不自作主张单边对齐。
+
+#### 实机目视（补 §5.64 挂的那条共同欠账）
+
+haruki 主机 `target/debug` 已在，走 `pnpm tauri dev` + Windows 截图，真实项目
+`erawtb-sub-moddding-eratw4.980-260326-SANYOUSEI(PC)`（2,285 ERB / 99,104 函数 / 141 角色）：
+
+- 首次引导弹窗按新文案渲染，`不用`(ghost) → `开启`(primary) 层级正确；
+- 工具条 `🔒 只读` 呈**中性灰**、`语法糖视图` 呈 accent 按压态、读数 `语法糖 380 行`；
+- 糖段（`如果 / 当 / 是 / 否则如果 / 否则:` + 台词 + `续`）与相邻代码行同 rhythm，
+  边界处最后一行完整无裁切；作者包真实文件夹视图（T3）在同一次会话里一并复验通过。
+- **诚实边界**：截图分辨率（窗口 1294px → 图 1130px）下 19px 与 20px 的差落在读数噪声里，
+  所以"裁切已修"这一条**只有源码级验证**（`.view-line` 内联行高 + `round(14×1.35)`），
+  没有像素级证据。要钉死它需要一个 >19 行的连续台词段，本文件里没有。
+
+#### 一次误伤（进坑表）
+
+`pnpm tauri dev` 在 **1420 被旧 vite 占着**时：`beforeDevCommand` 直接失败退出，
+并把**已经在跑的桌面实例一起带没**——本批因此弄丢了用户先前开着的两个编辑器窗口。
+而且那个跨过一次 merge 的旧 vite，`node_modules/.vite` 预打包缓存已过期
+（merge 给 eratw-adapter 带了 `react` peerDependency），用它起的壳是**白屏**。
+正确顺序：**先确认 1420 空闲 → 必要时 `rm -rf node_modules/.vite` → 再起**。
+另：直接 `cargo run` 复用旧 vite 是**不行**的（白屏那条就是它），别把"绕过 beforeDevCommand"当捷径。
+
+#### 验证
+
+| 检查 | 结果 |
+|---|---|
+| `vitest run` | **1362 passed / 11 skipped**（基线 1348 + 本批 14：13 项模态守门 + 1 项文案术语） |
+| typecheck root + `@kojo/app` | 双 exit 0 |
+| `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
+| `pnpm --filter @kojo/app build` | ✓ 23.07s（仅 Monaco 体积老告警） |
+| 桌面壳实机目视 | ✓ 见上（本组第一次；含 T3 真实文件夹视图回归） |
+
+#### 未做
+
+- `prefers-reduced-motion`：糖视图本身无动效，不需要；但**全站模态都没有 Esc 关闭**
+  （`ShellLayout` 的 Esc 链只覆盖 picker > overlay > settings > zen，五家 `modal-mask` 都不在链上）。
+  这是**先于本批存在**的缺口，补它要给宿主加"当前有模态"的注册机制，不属"顺便"，另立账。
+- 解锁对话框的 `ErbUnlockDialog` 未实机看到（要真的在只读 ERB 里敲字才弹，本批不在游戏目录里写东西）。
