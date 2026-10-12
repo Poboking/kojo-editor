@@ -5,7 +5,13 @@
  * → 填作品信息（作品名/作者名/版本/目标角色/剧本号/可选 LICENSE）
  * → 脚手架生成中文命名包（`scaffold.ts` 纯函数）
  * → 落工作区（`kernel.workspaces`：create 项目 + createArtifact 包）
- * → 通知面板刷新 → `ui.overlay.close` 自关。
+ * → 通知面板刷新 → 广播 `workspace.projectCreated` → `ui.overlay.close` 自关。
+ *
+ * 本向导有两个入口（反馈 3，2026-10-13）：面板的「＋ 新建」，以及
+ * 「新建口上文件」在**还没有口上项目**时的引导分支。后者发语义意图
+ * `workspace.newProjectRequested` 带一个关联号来（接线见 `plugin.ts`），创建成功时
+ * 原样带进 `workspace.projectCreated`，由发起方把作者那份还没落盘的口上文件写进
+ * 新项目——**向导本身不知道也不该知道这件事**，它只管把项目建出来。
  *
  * 知识分层：角色表来自 `kernel.project` 的 GameProject（适配器填充，本向导透传）；
  * 脚手架内容（中文命名 / 8 核心面空壳 / README 模板）是 eraTW 口上组织知识，
@@ -29,10 +35,28 @@ export interface NewKojoProjectWizardDeps {
   close(): void;
   /** 创建成功后回调（面板刷新：目录缓存失效 + 项目列表重拉） */
   onCreated(): void;
+  /**
+   * 广播「项目已创建」（反馈 3）。与 `onCreated` 分开是有意的：
+   * `onCreated` 是本插件内部的缓存失效，`created` 是对外的**事实通知**——
+   * 谁引来的这次创建（关联号）由接线侧决定带不带，组件不参与。
+   */
+  created(info: { projectId: string }): void;
 }
 
 /** 剧本号取值域（1-10） */
 const SCRIPT_NOS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+
+/**
+ * 从 `workspace.newProjectRequested` 事件载荷里取关联号（反馈 3 的第一拍）。
+ *
+ * 形态不对一律归 null（= 这次开门没有请求方），**不做"尽力解析"**：
+ * 误认一个号，等于把作者没要过的文件塞进一个刚建好的新项目里。
+ */
+export function readRequestToken(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const raw = (payload as { requestToken?: unknown }).requestToken;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
 
 /** 选中协议的说明；表里查不到时返回空串（不显示，而不是显示"未知"） */
 function licenseHint(kind: LicenseKind): string {
@@ -114,6 +138,7 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           meta: { charaNo: chara.no, charaName: chara.name, scriptNo },
         });
         deps.onCreated();
+        deps.created({ projectId: wsProject.id });
         deps.close();
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : String(e));

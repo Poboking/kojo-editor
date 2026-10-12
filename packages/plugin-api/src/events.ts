@@ -131,6 +131,11 @@ export interface KernelEventMap {
    * 贡献（新建向导 / 重授权 / 设置等模态）。
    * 通用、游戏无关——插件发意图、宿主落地，插件间零依赖
    * （与 `editor.revealLocation` 同款模式）。
+   *
+   * `payload` **不会送到组件手里**：宿主只按 id 找贡献并渲染其组件，而组件无 props，
+   * 读的是拥有插件的闭包状态（`import-wizard.ts` 的 `pendingImport`、
+   * `deploy-wizard.ts` 的 `pendingDeploy` 就是这个模式）。要跨插件送东西，
+   * 走语义事件（如 `workspace.newProjectRequested`），别把 payload 当参数用。
    */
   'ui.overlay.open': { id: string; payload?: unknown; source?: string };
   /**
@@ -151,6 +156,28 @@ export interface KernelEventMap {
    * 「导入成什么形态的制品」由工作区消费方（适配器）解释。
    */
   'workspace.importRequested': { sourceDir: string; suggestedName?: string; source?: string };
+  /**
+   * 请工作区消费方打开「新建口上项目」向导（2026-10-13 反馈 3 批）：
+   * 作者手上有一份还没落盘的新文件，但没有项目可放——先发这个意图，
+   * 由拥有项目向导的一方决定怎么开门、问哪些字段。
+   *
+   * 通用、游戏无关——**刻意不叫 overlay id**：发起方不该知道对方那个模态叫什么
+   * （`eratw.newKojoProject` 这种字面量一旦进契约，插件层就长出了游戏词，
+   * 审计 A 项当场会红）。
+   *
+   * `requestToken` 是**关联号**不是凭据：兑现见 `workspace.projectCreated`。
+   */
+  'workspace.newProjectRequested': { requestToken?: string; source?: string };
+  /**
+   * 工作区项目已创建（2026-10-13 反馈 3 批）：谁建的、为什么建，本事件都不解释——
+   * 只广播「多了一个项目」这一事实。
+   *
+   * 通用、游戏无关。`requestToken` 是**关联号**而非凭据：发起方经
+   * `workspace.newProjectRequested` 把它送来，创建方在广播时原样带回，发起方据此
+   * 判断「这次创建是不是我引出来的」。带它，是为了让被取消的请求**不会**在下一次
+   * 无关的创建里凭空造出一个作者没要过的文件（关联号不匹配即作废）。
+   */
+  'workspace.projectCreated': { projectId: string; requestToken?: string; source?: string };
 }
 
 /* ------------------- 内核事件 emit 权限（单一真源 + 防漂移断言） ------------------- */
@@ -185,6 +212,8 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'ui.overlay.open',
   'ui.overlay.close',
   'workspace.importRequested',
+  'workspace.newProjectRequested',
+  'workspace.projectCreated',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核/宿主专属事件：插件可 `on`、不可 `emit`（安全语义事件由内核垄断发出）。 */

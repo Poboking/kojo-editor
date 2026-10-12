@@ -31,6 +31,7 @@ import type {
   SlotRegistry,
   SugarDiagnostic,
   SugarTranspileService,
+  WorkspaceService,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownCommands, WellKnownServices } from '@kojo/plugin-api';
 import {
@@ -44,6 +45,7 @@ import {
   type VerdictSummary,
 } from './panel-logic';
 import { NEW_KOJO_OVERLAY_ID, createNewKojoWizard } from './new-file-wizard';
+import { createNewFileFlow } from './new-file-flow';
 import { performSugarSave } from './save-handler';
 
 /** 诊断渲染上限（防 DOM 爆炸；超出显式计数） */
@@ -54,12 +56,20 @@ export function createUiSugarEditorPlugin(): Plugin {
     id: 'ui-sugar-editor',
     version: '0.3.0',
     // 硬依赖：装饰与判定的语义都是"呈现 sugar.transpile 的结果"；缺席则本插件无意义
-    requires: [WellKnownServices.SugarTranspile, KernelServices.IO, KernelServices.Project, KernelServices.Slots],
+    // （workspaces 自 2026-10-13 反馈 3 起是新建向导的落点来源——内核常驻服务，恒在）
+    requires: [
+      WellKnownServices.SugarTranspile,
+      KernelServices.IO,
+      KernelServices.Project,
+      KernelServices.Slots,
+      KernelServices.Workspaces,
+    ],
     activate(ctx) {
       const sugar = ctx.inject<SugarTranspileService>(WellKnownServices.SugarTranspile);
       const io = ctx.inject<FileIO>(KernelServices.IO);
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
+      const workspaces = ctx.inject<WorkspaceService>(KernelServices.Workspaces);
 
       /* -------------------- 贡献 1：编辑器波浪线（纯函数） -------------------- */
 
@@ -264,19 +274,47 @@ export function createUiSugarEditorPlugin(): Plugin {
         when: (c) => c.project !== null,
       });
 
-      /* -------------- 贡献 5：新建向导 overlay（P2） -------------- */
+      /* -------------- 贡献 5：新建向导 overlay（P2；反馈 3 改落点） -------------- */
 
-      // 向导知识来源：角色/可写路径经 kernel.project，命名/分野经 game.adapter
-      // 槽的分野模板表（fail-closed：模板缺省则向导显式不可用，不猜命名）。
+      // 向导知识来源：角色经 kernel.project，命名/分野经 game.adapter 槽的分野
+      // 模板表（fail-closed：模板缺省则向导显式不可用，不猜命名）。
+      // 落盘编排（工作区落点 / 另存 / 交给新建项目向导）住在 `new-file-flow.ts`。
+      const revealPath = (path: string): void =>
+        ctx.bus.emit('editor.revealLocation', { filePath: path, source: 'ui-sugar-editor' });
+
+      const flow = createNewFileFlow({
+        io,
+        workspaces,
+        log: ctx.log,
+        reveal: revealPath,
+        // 跨插件请人开门：发语义意图（不是对方的 overlay id——那个字符串一进契约层
+        // 就把游戏词写进了 plugin-api），关联号随意图走
+        openProjectWizard: (token) =>
+          ctx.bus.emit('workspace.newProjectRequested', {
+            requestToken: token,
+            source: 'ui-sugar-editor',
+          }),
+        reopenWizard: () =>
+          ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_OVERLAY_ID, source: 'ui-sugar-editor' }),
+      });
+      ctx.onDispose(() => flow.dispose());
+
+      // 新建项目向导建完项目 → 兑现那份被"跳去建项目"打断的口上文件（反馈 3 a1）
+      ctx.onDispose(
+        ctx.bus.on('workspace.projectCreated', (ev) => {
+          void flow.onProjectCreated(ev.projectId, ev.requestToken);
+        }),
+      );
+
       ctx.slots.register('ui.overlay', {
         id: NEW_KOJO_OVERLAY_ID,
         order: 10,
         component: createNewKojoWizard({
-          io,
           project,
           slots,
+          flow,
           close: () => ctx.bus.emit('ui.overlay.close', { id: NEW_KOJO_OVERLAY_ID, source: 'ui-sugar-editor' }),
-          reveal: (path) => ctx.bus.emit('editor.revealLocation', { filePath: path, source: 'ui-sugar-editor' }),
+          reveal: revealPath,
         }),
       });
     },

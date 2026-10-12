@@ -152,7 +152,7 @@ function makeKernel(files: Record<string, Uint8Array>) {
     onDispose: (fn: unknown) => fn,
   };
 
-  return { io, provided, panels, decorators, saveHandlers, events, bus, sugarCtx, files };
+  return { io, provided, panels, decorators, saveHandlers, events, bus, sugarCtx, files, listeners };
 }
 
 /** 激活 kojo-sugar，返回它提供的 sugar.transpile 服务 */
@@ -171,6 +171,15 @@ function bootSugar(k: ReturnType<typeof makeKernel>): SugarTranspileService {
         // P2 新增硬依赖：新建向导取角色表（project）与分野模板表（slots）
         if (key === KernelServices.Project)
           return { current: () => ({ adapterId: 'eratw' }) } as never;
+        // 反馈 3 批新增硬依赖：新建向导的落点来自工作区（这里只给空工作区，
+        // 落盘编排本身的新增用例在 new-file-flow.test.ts）
+        if (key === KernelServices.Workspaces)
+          return {
+            rootDir: () => '/appdata/workspaces',
+            list: async () => [],
+            get: async () => null,
+            projectDir: (id: string) => `/appdata/workspaces/${id}`,
+          } as never;
         if (key === KernelServices.Slots)
           return {
             query: (slot: string) =>
@@ -200,10 +209,17 @@ function bootSugar(k: ReturnType<typeof makeKernel>): SugarTranspileService {
 /* ============================== 一、接线 ============================== */
 
 describe('S6 / 插件接线（跨插件只走服务槽）', () => {
-  it('插件声明：requires 四个服务键，无 provides（纯消费者）', () => {
+  it('插件声明：requires 五个服务键，无 provides（纯消费者）', () => {
     const p: Plugin = createUiSugarEditorPlugin();
     expect(p.id).toBe('ui-sugar-editor');
-    expect(p.requires).toEqual(['sugar.transpile', 'kernel.io', 'kernel.project', 'kernel.slots']);
+    // 反馈 3 批：落点改工作区 → kernel.workspaces 成为硬依赖（内核常驻服务，恒在）
+    expect(p.requires).toEqual([
+      'sugar.transpile',
+      'kernel.io',
+      'kernel.project',
+      'kernel.slots',
+      'kernel.workspaces',
+    ]);
     expect(p.provides ?? []).toEqual([]);
   });
 
@@ -223,6 +239,13 @@ describe('S6 / 插件接线（跨插件只走服务槽）', () => {
     expect(k.panels).toHaveLength(1);
     expect(k.panels[0]!.id).toBe('sugar-verdict');
     expect(typeof k.panels[0]!.component).toBe('function');
+  });
+
+  it('反馈 3 接线：插件订阅 `workspace.projectCreated`（跳去建项目后自动落盘的兑现点）', () => {
+    const k = makeKernel({ [PATH_KOJO]: enc(KOJO_OK) });
+    bootSugar(k);
+    bootEditor(k);
+    expect([...k.listeners.keys()]).toContain('workspace.projectCreated');
   });
 
   it('服务槽顺序：kojo-sugar 先装配 → 编辑器插件才能注入（反序必失败）', () => {

@@ -36,6 +36,12 @@ export interface ImportKojoWizardDeps {
   /** 导入成功后回调（面板刷新：目录缓存失效 + 项目列表重拉） */
   onImported(): void;
   /**
+   * 「选新建项目」那条分支真的建出项目时广播（反馈 3：`workspace.projectCreated`
+   * 要说的是事实——凡创建必广播，不管哪个入口）。导入进**已有**项目时不调用。
+   * 导入路径从不带关联号（没有人在等它），事件里的 `requestToken` 自然为空。
+   */
+  projectCreated?(projectId: string): void;
+  /**
    * 读取源包的署名 / 授权（T2）。导入时**原样带进制品 meta**——
    * 二次创作最容易丢的就是原作者，而语料里署名写在 README 正文、不在目录名上。
    */
@@ -133,6 +139,7 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
         if (target === NEW_PROJECT) {
           const created = await deps.workspaces.create({ name: newProjectName.trim() });
           projectId = created.id;
+          deps.projectCreated?.(created.id);
         }
         await deps.workspaces.importDirectory(projectId, {
           name: pkgDirName,

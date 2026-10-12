@@ -24,7 +24,7 @@ import { readPackageAttribution, type AttributionState as AttrState } from './at
 import { createPackageActions } from './package-actions';
 import { resolveNewItemPath, type NewItemKind } from './new-item';
 import type { KojoCompiler } from './artifact';
-import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard } from './new-project-wizard';
+import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard, readRequestToken } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID, createDeployKojoWizard } from './deploy-wizard';
 import type { PendingDeploy } from './deploy';
@@ -224,6 +224,37 @@ export function createEratwAdapterPlugin(): Plugin {
       /** 待导入请求（overlay 组件无 props，payload 不经组件——读插件闭包） */
       let pendingImport: PendingImport | null = null;
 
+      /* ---- 新建项目向导的「谁叫我开的」关联号（反馈 3，2026-10-13） ---- */
+
+      /**
+       * 发起方（`ui-sugar-editor` 的落盘引导）经语义事件 `workspace.newProjectRequested`
+       * 送来关联号；创建成功时原样带进 `workspace.projectCreated`，由发起方兑现挂起意图。
+       *
+       * 为什么不是"对方直接 open 我的 overlay id"：那样游戏词会进契约层
+       * （`eratw.newKojoProject` 出现在 plugin-api 就是审计 A 项的一枚红），
+       * 而且发起方从此绑死了本插件某个模态叫什么。
+       *
+       * 两条纪律让它不会变成"凭空造文件"的引信：
+       * - 面板按钮开门不发意图 → 号保持 null（这次创建与任何请求无关）；
+       * - **向导一关就清空** → 被取消的请求不会在下一次无关的创建里兑现。
+       */
+      let projectRequestToken: string | null = null;
+
+      ctx.onDispose(
+        ctx.bus.on('workspace.newProjectRequested', (ev) => {
+          projectRequestToken = readRequestToken(ev);
+          ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' });
+        }),
+      );
+
+      /** 项目已创建 → 广播（载荷只有项目 id 与可能存在的关联号；不解释意图） */
+      const emitProjectCreated = (projectId: string, requestToken?: string): void => {
+        ctx.bus.emit('workspace.projectCreated', {
+          projectId,
+          ...(requestToken !== undefined ? { requestToken } : {}),
+          source: 'eratw-adapter',
+        });
+      };
       ctx.onDispose(
         ctx.bus.on('workspace.importRequested', (ev) => {
           pendingImport = {
@@ -418,9 +449,13 @@ export function createEratwAdapterPlugin(): Plugin {
         component: createNewKojoProjectWizard({
           workspaces,
           project,
-          close: () =>
-            ctx.bus.emit('ui.overlay.close', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' }),
+          close: () => {
+            ctx.bus.emit('ui.overlay.close', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' });
+            // 意图随窗口关闭作废（创建路径在 close 之前已把关联号带进广播）
+            projectRequestToken = null;
+          },
           onCreated: invalidateWs,
+          created: ({ projectId }) => emitProjectCreated(projectId, projectRequestToken ?? undefined),
         }),
       });
 
@@ -438,6 +473,9 @@ export function createEratwAdapterPlugin(): Plugin {
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
           onImported: invalidateWs,
+          // 导入向导的「新建项目」分支同样是在建项目——事件要说事实，与入口无关；
+          // 这条路径没有人在等，故不带关联号。
+          projectCreated: (projectId) => emitProjectCreated(projectId),
           loadAttribution: (absDir) => readPackageAttribution({ io, absDir }),
         }),
       });
