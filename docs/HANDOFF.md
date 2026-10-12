@@ -183,7 +183,7 @@
   的「名称解析 memo」组，判定逻辑与用例数零改动）。
   ⚠ 跑全量**不要**设 `KOJO_SMOKE_PROJECT`（会放行依赖 sav 存档的注入测试而本机零存档必红）；
   语料基线单独带变量跑那一个文件即可。
-- **2026-10-12 回放线重测批完成**（本会话；`docs/IMPLEMENTATION-LOG.md` **§5.72** 为权威记录）：
+- **2026-10-12 回放线重测批完成**（本会话；`docs/IMPLEMENTATION-LOG.md` **§5.74** 为权威记录）：
   差异化核心「sav → 状态回放」在 §5.64 合流 / §5.65 索引快照 v3 / §5.70 抽取按文件增量之后
   **首次重测**（此前本机零存档，两条守门长期 skipped，§5/§6 只是文档里的历史数字）。
   1. **用户提供了六份真实存档**，逐字节验真确认**就是 2026-10-10 那批原始档**：`save00` 载荷
@@ -202,7 +202,7 @@
      方案 B passthrough 6 档**）；另把"有环境变量但语料无 `sav/`"从 ENOENT 失败改成**显式 skip**。
   5. **复测配方 + 安全边界**：真实语料 `C:\Game` 全程**零写入**（无 `sav/`、顶层 29 项不变），
      用 `robocopy` 整份复制到 `C:\tmp-kojo-sav\eratw`、六档放副本 `sav\`、`KOJO_SMOKE_PROJECT`
-     指向副本，验后删除副本。配方原文见 §5.72 末。
+     指向副本，验后删除副本。配方原文见 §5.74 末。
   6. **未做**：六份档需要一处长期的仓库外固定位置（建议 `C:\kojo-fixtures\sav\`，**位置待用户定**，
      微信接收目录会被清理）；SKIA v15 一侧与 CliDebug 快照来源未验（本机引擎是 LazyLoading v3.0，
      PE 内无 socket 面）；§7 编码往返基线未在副本上顺手重跑；桌面壳实机目视仍欠。
@@ -430,8 +430,11 @@
      ① `DATAFORM` / `ENDDATA` **17,734 + 3,532 行**（`PRINTDATA` 数据表 ↔ 糖的 `随机`/`选项` 族读法）｜
      ② 未配对 `SETCOLOR` **17,713 行**（§3.9 `着色 …：` 块；但分发器收尾 `RESETCOLOR` 的覆盖性是
      规范 §9 第 5 条**待实机**项，未实测前不放宽配对判据）｜
-     ③ `CASE` **3,502 行**（`是 …：` 写法已有，缺块内正文接入）｜④ L0 数字索引缺口
-     `TEQUIP:4` 一类（15.3%，属数据包不属投影）。**每一项先探针（含排布分布）再定语义。**
+     ③ `CASE` **3,502 行**（`是 …：` 写法已有，缺块内正文接入）｜
+     ④ L0 数字索引缺口 `TEQUIP:4` 一类（15.3%，属数据包不属投影）。
+     > **同日 §5.75 已把这四条逐条量过，①③④ 不成立**（①卡在语法层缺写法→需用户拍板；
+     > ③真缺口只有 207 行；④菜单族在口上域只有 267 行 `PRINTBUTTON`）。**以 §5.75 的表为准**，
+     > 这里保留原文只为显示"候选表是怎么被实测改掉的"。**每一项照例先探针（含排布分布）再定语义。**
 
 ## 三、文档索引（按权威性排序；2026-10-11 整理批后口径）
 
@@ -440,7 +443,7 @@
 | 文档 | 内容 |
 |---|---|
 | `docs/HANDOFF.md`（本文件） | **交接状态 + 下一批动手清单（新会话从这里开始）** |
-| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.73**：§5.49/§5.50 = 口上项目批与 T2 · §5.51–§5.53 = 内核优化批 · §5.54 = UI P4 补记 · §5.55 = 分支收口核验 · §5.56/§5.57 = T3/T4 · §5.58 = 开项目级联三段全持久化（体感丝滑批）· §5.59–§5.63 = 语法糖线各批 · §5.64 = 两线合流（编号让位 + ADR-0005 落地）· §5.65 = 快照卫生批（v3 元组编码 / 单文件收口 / 体感水位常驻）· §5.66 = 语法糖批 I 函数头时机中文反糖 · §5.67 = 语法糖批 J 状态赋值行反糖（含假阳性守卫）· §5.68 = 语法糖批 K 演出行「心形」投影（段数 −13%）· §5.69 = 语法糖批 L 规范 §3.8 扩「角色N的X」 · §5.70 = 抽取按文件增量批（判据分层：改一个 ERB 的重算 7.2s → 49ms）· §5.71 = 语法糖批 M 负结果（折叠前提被实测否证）· §5.72 = 校验按文件增量批（三层判据 + 规则自声明计算粒度：改一个 ERB 5754ms → 1198ms） · **§5.73 = 名称解析 memo 批（把跨文件规则的必付成本做小：校验 1198ms → 746ms）**） |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.75**：§5.49/§5.50 = 口上项目批与 T2 · §5.51–§5.53 = 内核优化批 · §5.54 = UI P4 补记 · §5.55 = 分支收口核验 · §5.56/§5.57 = T3/T4 · §5.58 = 开项目级联三段全持久化（体感丝滑批）· §5.59–§5.63 = 语法糖线各批 · §5.64 = 两线合流（编号让位 + ADR-0005 落地）· §5.65 = 快照卫生批（v3 元组编码 / 单文件收口 / 体感水位常驻）· §5.66 = 语法糖批 I 函数头时机中文反糖 · §5.67 = 语法糖批 J 状态赋值行反糖（含假阳性守卫）· §5.68 = 语法糖批 K 演出行「心形」投影（段数 −13%）· §5.69 = 语法糖批 L 规范 §3.8 扩「角色N的X」 · §5.70 = 抽取按文件增量批（判据分层：改一个 ERB 的重算 7.2s → 49ms）· §5.71 = 语法糖批 M 负结果（折叠前提被实测否证）· §5.72 = 校验按文件增量批（三层判据 + 规则自声明计算粒度：改一个 ERB 5754ms → 1198ms） · **§5.73 = 名称解析 memo 批（把跨文件规则的必付成本做小：校验 1198ms → 746ms）**） · **§5.74 = 回放线重测批（六份真实 sav 复测：§5 与 §6 逐字复现 + 金样本两处假绿面封堵）** · **§5.75 = 语法糖度量批（四条"下一批首选"逐条量过，三条不成立）**） |
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
 | `docs/BASELINES.md` | 实测基线汇总（索引/回放/抽取/校验性能与正确性数字） |
 | `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` | **糖表层规范 v1.3**（v1.2 冻结版 + §3.8 一处增量，用户 2026-10-12 拍板）：语法/转译/产物逐条定义，golden 逐字节锚定（golden 断言按**标题+围栏**锚定，不再按行号） |
@@ -539,7 +542,7 @@ packages/
 ```bash
 cd C:\DSH\kojo-editor
 pnpm install
-pnpm test               # 1432 项（本机真实语料无 sav/ → 金样本/集成冒烟里依赖存档的用例**显式 skip**，属正常；2026-10-12 §5.72 起不再是 ENOENT 失败）
+pnpm test               # 1432 项（本机真实语料无 sav/ → 金样本/集成冒烟里依赖存档的用例**显式 skip**，属正常；2026-10-12 §5.74 起不再是 ENOENT 失败）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）—— 两套都必须跑
 pnpm audit:decoupling   # 必须 ✅（plugins 数 16；审计 A–D 四项）
 # Rust 宿主（本机 cargo 可用、增量秒级；改 lib.rs / 新增 tauri::command 必跑）：
@@ -548,7 +551,7 @@ node node_modules/vitest/vitest.mjs run packages/plugin-api/tests/sugar.test.ts 
 node node_modules/vitest/vitest.mjs run packages/plugins/kojo-sugar/tests/compile.test.ts   # v0.3 S3：编译落盘（编码组装 / 双闸 / 备份 / 回读验证）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放/注入写链路/**语法糖编译落盘**）：
 KOJO_SMOKE_PROJECT="C:\game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
-# 回放线复测（§5 / §6，需要真实存档；**真实语料零写入**，用副本 —— 配方原文见 IMPLEMENTATION-LOG §5.72 末）：
+# 回放线复测（§5 / §6，需要真实存档；**真实语料零写入**，用副本 —— 配方原文见 IMPLEMENTATION-LOG §5.74 末）：
 #   1) cmd //c "robocopy C:\Game\eratw-...-SANYOUSEI(PC) C:\tmp-kojo-sav\eratw /E /XJ /MT:24 /NFL /NDL /NJH /NJS /R:1 /W:1"   # 退出码 <8 即成功
 #   2) 把六份 .sav 放进 C:\tmp-kojo-sav\eratw\sav\（档本身不入库；身份清单与 sha256 见 BASELINES §5）
 #   3) KOJO_SMOKE_PROJECT="C:/tmp-kojo-sav/eratw" node node_modules/vitest/vitest.mjs run \
@@ -1000,7 +1003,7 @@ node tools/smoke-tauri-ipc.mjs
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1432 passed / 11 skipped（1443）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.73 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.75 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前三条主线**：
    - **体感丝滑线（本组主目标，性能）**：三段级联全部持久化（§5.58）→ 快照瘦身与卫生（§5.65）→
      抽取按文件增量（§5.70）→ 校验按文件增量（§5.72）→ **名称解析 memo（§5.73）**。
