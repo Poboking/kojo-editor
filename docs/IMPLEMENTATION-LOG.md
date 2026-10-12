@@ -6183,4 +6183,22 @@ QA-10 原判据把第五家写成"保存告警→没写出文件"，暗示它是
 - 桥能力清单里 `chooseDirectory`（打开项目用）与本批无关，未动。
 - MANUAL-CHECKLIST / ARCHITECTURE / USER-GUIDE 三份文档 grep 无"导出目录"字样，无需跟着改。
 
+### 5.98 工具批 · `git-push.mjs` 改成**直连 / 代理交替试**（2026-10-13 批）
+
+**触发**：§5.97 那次推送，工具按它的既定口径（清空代理变量直连 + 重试）**6/6 全红**
+（`Failed to connect to github.com:443 after 21s`），而我手工带本地代理
+（`http://127.0.0.1:7890`，`-c http.proxy=` + `HTTPS_PROXY=`）**一次就通**。
+
+**为什么不是"把口径改成代理优先"**：直连确实是历史上命中率最高的姿势（工具头注释记录过实测），
+代理也不是总在（7890 端口要活着）。**两条路都试、交替试**才是对"线路时通时断"这个真实分布的诚实回答；
+赌任何一种单一姿势，都会在另一半天里白花 6×21s 的重试。
+`KOJO_GIT_PROXY=""` 可退回纯直连（别机没有本地代理时的退路）。
+
+| 项 | 结果 |
+|---|---|
+| `node --check tools/git-push.mjs` | 通过 |
+| 真推送验证（本批） | try 1 direct **failed** → try 2 via proxy **✅ push OK**（`Everything up-to-date`，无副作用）——两条分支当场各跑一遍 |
+| `pnpm test` / `audit:decoupling` | 仍照 §十二-5 每批复跑：**1648 passed / 13 skipped（1661）**、审计 A–D 全绿——改动只碰 `tools/`（不在测试路径、不进包体），故数字与 §5.97 相同 |
+
+
 
