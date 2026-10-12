@@ -64,6 +64,13 @@ export interface FileIO {
   isWritable(path: string): boolean;
   /** 手动备份文件；返回备份路径（文件不存在时返回 null） */
   backup(path: string): Promise<string | null>;
+  /**
+   * 导出目录（2026-10-12 口上项目批 P-D）：平台对话框选目的地 + 整目录复制
+   * （绑定同一平台命令；用户确认才写盘）。返回导出落点完整路径；取消 → null。
+   * 源是只读列举（不受写白名单约束）；落点在域外由用户对话框显式选定。
+   * 平台无对话框能力（Node 桥）时抛错，调用侧自解释呈现。
+   */
+  exportDirectory(srcDir: string, opts?: { title?: string }): Promise<string | null>;
 }
 
 /** 越权写入错误（内核抛出、UI 捕获展示） */

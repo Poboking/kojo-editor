@@ -76,6 +76,9 @@ function makeIO(files: Record<string, Uint8Array>) {
     setAppWritableRoots: () => {},
     isWritable: () => false,
     backup: async () => null,
+    exportDirectory: async () => {
+      throw new Error('exportDirectory is not supported by this fake');
+    },
   };
   return io;
 }

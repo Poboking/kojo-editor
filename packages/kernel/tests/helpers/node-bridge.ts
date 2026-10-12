@@ -137,6 +137,11 @@ export class NodeBridge implements PlatformBridge {
     throw new Error('chooseDirectory is not supported by NodeBridge');
   }
 
+  async exportDirectory(): Promise<string | null> {
+    // 导出依赖系统目录对话框（rfd），Node 桥无对话框能力 → 显式抛错不静默
+    throw new Error('exportDirectory is not supported by NodeBridge');
+  }
+
   appDataDir(): Promise<string> {
     return Promise.resolve(this.dataDir);
   }

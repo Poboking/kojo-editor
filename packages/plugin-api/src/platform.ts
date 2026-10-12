@@ -57,6 +57,13 @@ export interface PlatformBridge {
   watchDirs(paths: string[], onEvent: WatchCallback): Promise<Unsubscribe>;
   /** 目录选择对话框；用户取消返回 null */
   chooseDirectory(opts?: { title?: string }): Promise<string | null>;
+  /**
+   * 导出目录（2026-10-12 口上项目批 P-D）：弹对话框选择导出目的地，把 `srcDir`
+   * **整个目录**复制进去（保留目录名），返回导出落点目录的完整路径；
+   * 用户取消 → null。对话框 + 复制绑定在**同一个平台命令**（用户确认才写盘）。
+   * 目标已存在同名目录时报错不覆盖。Node 桥无对话框 → 抛 unsupported。
+   */
+  exportDirectory(srcDir: string, opts?: { title?: string }): Promise<string | null>;
   /** 应用数据目录（存储域 / 备份的根） */
   appDataDir(): Promise<string>;
   /** 字节 → 字符串 */

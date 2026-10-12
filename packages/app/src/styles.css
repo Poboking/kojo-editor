@@ -3058,6 +3058,87 @@ textarea {
 .kp-note.err {
   color: var(--red);
 }
+/* 包行 = 标题按钮 + 行内动作。动作静息态隐去（悬停 / 键盘聚焦才显），
+   口上树保持清爽；focus-within 保证纯键盘操作同样能发现动作。 */
+.kp-artifact-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.kp-artifact-row .kp-artifact-btn {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+.kp-row-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-right: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+.kp-artifact-row:hover .kp-row-actions,
+.kp-artifact-row:focus-within .kp-row-actions {
+  opacity: 1;
+}
+.kp-action {
+  padding: 1px 7px;
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  border-radius: 4px;
+  background: var(--bg-3);
+}
+/* 底部状态条：包操作（导出 / 部署）反馈；无消息时不渲染，不占版面。
+   语义色只走左边框（与常驻提示条同一视觉语言），正文保持中性——久看不刺眼。 */
+.kp-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--fg-dim);
+  border-radius: var(--radius-1);
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+.kp-status.ok {
+  border-left-color: var(--success);
+}
+.kp-status.err {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+.kp-status.busy {
+  border-left-color: var(--accent);
+  color: var(--fg-dim);
+}
+.kp-status-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 长路径被截断时，完整内容在 title 里（悬停可读） */
+  cursor: help;
+}
+.kp-status-close {
+  flex: none;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: var(--fs-3);
+  line-height: 1;
+  opacity: 0.7;
+}
+.kp-status-close:hover {
+  opacity: 1;
+}
 
 /* ------------------------------ 动效关键帧（ui-polish） ------------------------------ */
 

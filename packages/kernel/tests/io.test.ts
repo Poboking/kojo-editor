@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
-import { WriteNotAllowedError } from '@kojo/plugin-api';
+import { WriteNotAllowedError, type PlatformBridge } from '@kojo/plugin-api';
 import { FileIOServiceImpl } from '../src/io';
 import { NodeBridge } from './helpers/node-bridge';
 
@@ -153,5 +153,49 @@ describe('FileIOService · 备份', () => {
     // 文件不存在时不产生备份
     const missing = await io.backup(path.join(tmpDir, 'nope.ERB'));
     expect(missing).toBeNull();
+  });
+});
+
+describe('FileIOService · 导出目录（P-D）', () => {
+  /** 以 NodeBridge 为原型覆写单个方法（类方法在原型上，展开复制会丢） */
+  function bridgeWith(overrides: Partial<PlatformBridge>): PlatformBridge {
+    const spy = Object.create(new NodeBridge(appData)) as PlatformBridge;
+    return Object.assign(spy, overrides);
+  }
+
+  it('平台无对话框能力 → 错误如实上抛（调用侧自解释呈现，不静默降级）', async () => {
+    await expect(io.exportDirectory(tmpDir)).rejects.toThrow(/not supported by NodeBridge/);
+  });
+
+  it('透传源目录与对话框标题给平台桥，返回落点完整路径', async () => {
+    const calls: Array<{ srcDir: string; title?: string }> = [];
+    const svc = new FileIOServiceImpl(
+      bridgeWith({
+        exportDirectory: async (srcDir: string, opts?: { title?: string }) => {
+          calls.push({ srcDir, ...(opts?.title !== undefined ? { title: opts.title } : {}) });
+          return path.join('D:', '发布', '某包');
+        },
+      }),
+    );
+    const target = await svc.exportDirectory(path.join(tmpDir, '某包'), { title: '导出「某包」到…' });
+    expect(target).toBe(path.join('D:', '发布', '某包'));
+    expect(calls).toEqual([
+      { srcDir: path.join(tmpDir, '某包'), title: '导出「某包」到…' },
+    ]);
+  });
+
+  it('用户取消对话框 → 原样返回 null（取消不是失败，不抛不记错）', async () => {
+    const svc = new FileIOServiceImpl(bridgeWith({ exportDirectory: async () => null }));
+    await expect(svc.exportDirectory(path.join(tmpDir, '某包'))).resolves.toBeNull();
+  });
+
+  it('导出不受写白名单约束：一个可写根都没批也能导出', async () => {
+    // 白名单管的是「改游戏目录」，不是「把副本拿出去」——落点由用户在系统对话框里
+    // 显式选定，对话框本身即授权。这条断言把该设计意图钉住，防止后续误加闸。
+    const svc = new FileIOServiceImpl(bridgeWith({ exportDirectory: async () => 'D:/发布/某包' }));
+    svc.setWritableRoots([]);
+    const src = path.join(tmpDir, 'game', '某包');
+    expect(svc.isWritable(src)).toBe(false);
+    await expect(svc.exportDirectory(src)).resolves.toBe('D:/发布/某包');
   });
 });

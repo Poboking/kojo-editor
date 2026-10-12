@@ -10,12 +10,15 @@
  *   （讨论纪要 §2 定调——不明示用户就会困惑「改了哪个才算数」）。
  *
  * 默认形态克制（口上树简洁约束）：项目行展开即见包标题行；**包默认折叠**，
- * 用户主动展开才列举文件——信息呈现以不杂乱为第一约束。
+ * 用户主动展开才列举文件——信息呈现以不杂乱为第一约束。同理，包行上的动作
+ * （导出等）静息态隐去，悬停 / 键盘聚焦才显；结果经底部状态条交代
+ * （控制器见 `package-actions.ts`，无消息时状态条不渲染）。
  */
 
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { DirEntry, WorkspaceArtifact, WorkspaceProject } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
+import type { PanelStatus } from './package-actions';
 
 /** 目录列举态（闭包缓存值）：在途 / 失败（带原因）/ 已加载 */
 export type DirListState = DirEntry[] | 'loading' | { error: string };
@@ -41,6 +44,12 @@ export interface KojoProjectsPanelDeps {
   reveal(absPath: string): void;
   /** 打开「新建口上项目」向导（P-C；缺省 → 不显示新建按钮） */
   openNewWizard?(): void;
+  /** 包操作反馈条内容（P-D；null → 状态条不渲染） */
+  status(): PanelStatus | null;
+  /** 手动关闭反馈条 */
+  dismissStatus(): void;
+  /** 导出包到用户选定的目录（P-D：平台对话框 + 整目录复制） */
+  exportArtifact(absDir: string, displayName: string): void;
 }
 
 /** 目录条目排序：目录在前，其后按名称（中文本地化比较口径） */
@@ -172,16 +181,34 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
             'div',
             { key: a.id, className: 'kp-artifact' },
             h(
-              'button',
-              {
-                className: 'kp-artifact-btn',
-                style: indent(1),
-                title: `${dir}（点击展开真实文件夹）`,
-                onClick: () => toggleDir(dir),
-              },
-              h('span', { className: 'caret' }, isOpen ? '▾' : '▸'),
-              h('span', { className: 'kp-artifact-name' }, a.name),
-              a.name !== a.dirName ? h('span', { className: 'kp-dirname dim' }, a.dirName) : null,
+              'div',
+              { className: 'kp-artifact-row' },
+              h(
+                'button',
+                {
+                  className: 'kp-artifact-btn',
+                  style: indent(1),
+                  title: `${dir}（点击展开真实文件夹）`,
+                  onClick: () => toggleDir(dir),
+                },
+                h('span', { className: 'caret' }, isOpen ? '▾' : '▸'),
+                h('span', { className: 'kp-artifact-name' }, a.name),
+                a.name !== a.dirName ? h('span', { className: 'kp-dirname dim' }, a.dirName) : null,
+              ),
+              // 行内动作：静息态隐去（悬停 / 键盘聚焦才显），保持口上树清爽
+              h(
+                'span',
+                { className: 'kp-row-actions' },
+                h(
+                  'button',
+                  {
+                    className: 'kp-action',
+                    title: `导出「${a.name}」到选定目录（复制副本，工作区原件不动）`,
+                    onClick: () => deps.exportArtifact(dir, a.name),
+                  },
+                  '导出',
+                ),
+              ),
             ),
             isOpen ? renderDir(dir, 2) : null,
           );
@@ -262,6 +289,23 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
       );
     }
 
-    return h('div', { className: 'panel-kojo-projects' }, notice, toolbar, body);
+    // 包操作反馈条（底部状态栏位；无消息则不渲染，不占版面）
+    const status = deps.status();
+    const statusBar = status
+      ? h(
+          'div',
+          { className: `kp-status ${status.kind}`, role: 'status' },
+          h('span', { className: 'kp-status-text', title: status.text }, status.text),
+          status.kind === 'busy'
+            ? null
+            : h(
+                'button',
+                { className: 'kp-status-close', title: '关闭', onClick: () => deps.dismissStatus() },
+                '×',
+              ),
+        )
+      : null;
+
+    return h('div', { className: 'panel-kojo-projects' }, notice, toolbar, body, statusBar);
   };
 }

@@ -28,6 +28,9 @@ function stubBridge(): PlatformBridge {
     removeDir: async () => {},
     watchDirs: async () => () => {},
     chooseDirectory: async () => null,
+    exportDirectory: async () => {
+      throw new Error('exportDirectory is not supported by this stub');
+    },
     appDataDir: async () => 'C:\\AppData\\kojo-test',
     decode: async () => '',
     encode: async () => new Uint8Array(),

@@ -18,6 +18,7 @@ import { loadEratwVariableSchema } from './variable-schema';
 import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
 import { createEratwFaceTable } from './face-templates';
 import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
+import { createPackageActions } from './package-actions';
 import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
 
@@ -103,6 +104,11 @@ export function createEratwAdapterPlugin(): Plugin {
         wsDirCache.clear();
         refreshWsProjects();
       };
+
+      /* ---- 包操作（P-D 导出；P-E 部署复用同一控制器与底部状态条） ---- */
+
+      const actions = createPackageActions({ io, log: ctx.log, notify: notifyWs });
+      ctx.onDispose(() => actions.dispose());
 
       /* ---- 导入请求（P-F）：壳层文件树右键发意图，本插件解释为「导入口上项目」 ---- */
 
@@ -266,6 +272,9 @@ export function createEratwAdapterPlugin(): Plugin {
             ctx.bus.emit('editor.revealLocation', { filePath: absPath, source: 'eratw-adapter' }),
           openNewWizard: () =>
             ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' }),
+          status: () => actions.status(),
+          dismissStatus: () => actions.dismiss(),
+          exportArtifact: (absDir, displayName) => actions.exportArtifact(absDir, displayName),
         }),
       });
 

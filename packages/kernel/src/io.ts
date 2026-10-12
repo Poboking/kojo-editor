@@ -192,6 +192,20 @@ export class FileIOServiceImpl implements FileIO {
     }
   }
 
+  /* ------------------------------ 导出 ------------------------------ */
+
+  /**
+   * 导出目录（口上项目批 P-D）：透传给平台桥——对话框与复制绑定在同一平台命令内，
+   * 内核不经手落点路径。落点由用户在系统对话框显式选定，**对话框即授权**，
+   * 故不受写白名单约束（导出的意义正是落到白名单外，如桌面 / 发布目录）；
+   * 源目录只读，读取本就不受白名单约束。返回落点路径；用户取消 → null。
+   */
+  async exportDirectory(srcDir: string, opts?: { title?: string }): Promise<string | null> {
+    const target = await this.bridge.exportDirectory(srcDir, opts);
+    if (target !== null) this.log?.info(`Directory exported: ${srcDir} -> ${target}`);
+    return target;
+  }
+
   /** 调试/测试辅助：当前缓存状态 */
   debugCaches(): { encoding: Map<string, FileEncoding>; eol: Map<string, 'crlf' | 'lf'> } {
     return { encoding: this.encodingCache, eol: this.eolCache };

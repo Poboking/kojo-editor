@@ -111,6 +111,9 @@ function makeIO(opts: {
       backups.push(target);
       return target;
     },
+    exportDirectory: async () => {
+      throw new Error('exportDirectory is not supported by this fake');
+    },
   };
   return { io, backups, written, files };
 }
