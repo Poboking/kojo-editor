@@ -16,6 +16,7 @@
 import { createElement as h, useMemo, useState } from 'react';
 import type { ProjectService, WorkspaceService } from '@kojo/plugin-api';
 import { CORE_FACES, scaffoldDirName, scaffoldKojoProject, sanitizeSegment } from './scaffold';
+import { LICENSE_CHOICES, licenseProducesFile, type LicenseKind } from './licenses';
 
 /** overlay 贡献 id（面板按钮发 `ui.overlay.open` 时引用） */
 export const NEW_KOJO_PROJECT_OVERLAY_ID = 'eratw.newKojoProject';
@@ -33,6 +34,11 @@ export interface NewKojoProjectWizardDeps {
 /** 剧本号取值域（1-10） */
 const SCRIPT_NOS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 
+/** 选中协议的说明；表里查不到时返回空串（不显示，而不是显示"未知"） */
+function licenseHint(kind: LicenseKind): string {
+  return LICENSE_CHOICES.find((c) => c.kind === kind)?.hint ?? '';
+}
+
 /** 向导 overlay 组件（createElement 风格；壳层 PanelBody 无 props 渲染） */
 export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () => unknown {
   return function NewKojoProjectWizard(): unknown {
@@ -43,7 +49,9 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
     const [version, setVersion] = useState('1.0');
     const [charaNo, setCharaNo] = useState<number | null>(null);
     const [scriptNo, setScriptNo] = useState<number>(1);
-    const [includeLicense, setIncludeLicense] = useState(false);
+    // 反馈 4：从"勾不勾占位模板"升级成"选哪一种协议"。缺省 `none` ——
+    // 工具不替作者选定许可，也不默认替他"开放"什么。
+    const [license, setLicense] = useState<LicenseKind>('none');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -93,7 +101,7 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           charaNo: chara.no,
           charaName: chara.name,
           scriptNo,
-          includeLicense,
+          license,
         });
         const wsProject = await deps.workspaces.create({
           name: workName.trim(),
@@ -113,7 +121,7 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       }
     };
 
-    const fileCount = 1 + (includeLicense ? 1 : 0) + CORE_FACES.length;
+    const fileCount = 1 + (licenseProducesFile(license) ? 1 : 0) + CORE_FACES.length;
 
     return h('div', { className: 'wizard' },
       h('h3', null, '新建口上项目'),
@@ -166,14 +174,16 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
         },
           SCRIPT_NOS.map((n) => h('option', { key: n, value: String(n) }, `剧本${n}`)))),
 
-      // 可选 LICENSE
-      h('label', { className: 'wizard-field wizard-check' },
-        h('input', {
-          type: 'checkbox',
-          checked: includeLicense,
-          onChange: (e: { target: { checked: boolean } }) => setIncludeLicense(e.target.checked),
-        }),
-        h('span', { className: 'wizard-label' }, '附带 LICENSE 文件（占位模板，创建后自填条款）')),
+      // 许可协议（反馈 4）：下拉选一种，选中项的一句话说明实时显示在下面。
+      // 不用一堆单选按钮：7 个选项会把向导撑长，而作者真正需要的是"选完知道别人能干什么"。
+      h('div', { className: 'wizard-field' },
+        h('span', { className: 'wizard-label' }, '许可协议'),
+        h('select', {
+          value: license,
+          onChange: (e: { target: { value: string } }) => setLicense(e.target.value as LicenseKind),
+        },
+          LICENSE_CHOICES.map((c) => h('option', { key: c.kind, value: c.kind }, c.label))),
+        h('div', { className: 'wizard-hint dim' }, licenseHint(license))),
 
       // 落点预览
       h('div', { className: 'wizard-preview' },
@@ -181,7 +191,7 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           h('code', null, dirNamePreview || '—')),
         h('div', { className: 'dim' },
           dirNamePreview
-            ? `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳（.kojo，糖与原生 ERB 都能写）${includeLicense ? ' + LICENSE' : ''}；不含四件套，也不含活函数`
+            ? `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳（.kojo，糖与原生 ERB 都能写）${licenseProducesFile(license) ? ' + LICENSE' : ''}；不含四件套，也不含活函数`
             : '作品名 / 版本 / 角色名不得为空或仅含非法字符')),
 
       error ? h('div', { className: 'wizard-error' }, error) : null,

@@ -2827,15 +2827,10 @@ textarea {
 .wizard-field input:focus-visible {
   border-color: var(--accent);
 }
-/* 复选行（横向排列；区别于常规字段的纵向堆叠） */
-.wizard-field.wizard-check {
-  flex-direction: row;
-  align-items: center;
-  gap: var(--space-2);
-  cursor: pointer;
-}
-.wizard-field.wizard-check input[type='checkbox'] {
-  accent-color: var(--accent);
+/* 选中项的说明（许可协议等）：紧贴控件下方，比 tooltip 更适合"读完再决定"的场景 */
+.wizard-hint {
+  font-size: var(--fs-1);
+  line-height: 1.45;
 }
 .wizard-preview {
   background: var(--bg);

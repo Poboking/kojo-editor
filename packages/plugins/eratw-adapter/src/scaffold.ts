@@ -23,6 +23,13 @@
 
 import type { KojoFaceTable } from '@kojo/plugin-api';
 import { createEratwFaceTable } from './face-templates';
+import {
+  buildLicenseText,
+  licenseProducesFile,
+  LICENSE_CHOICES,
+  LICENSE_FILE_NAME,
+  type LicenseKind,
+} from './licenses';
 
 /** 脚手架输入（向导字段一一对应） */
 export interface KojoScaffoldOptions {
@@ -38,8 +45,11 @@ export interface KojoScaffoldOptions {
   charaName: string;
   /** 剧本号（1-10） */
   scriptNo: number;
-  /** 是否附带 LICENSE 文件（占位模板，作者自填条款） */
-  includeLicense: boolean;
+  /**
+   * 许可条款（反馈 4：从"勾不勾占位模板"升级成"选哪一种"）。
+   * `'none'` = 不生成 LICENSE 文件。文本来源见 `licenses.ts` 头注。
+   */
+  license: LicenseKind;
 }
 
 /** 脚手架产物：包目录名 + 文件集（相对路径 → 文本内容） */
@@ -162,23 +172,36 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
   lines.push('');
   lines.push('## 许可');
   lines.push('');
-  if (opts.includeLicense) {
-    lines.push('见 `LICENSE` 文件（当前为占位模板，请填写正式条款）。');
+  if (licenseProducesFile(opts.license)) {
+    const choice = LICENSE_CHOICES.find((c) => c.kind === opts.license);
+    lines.push(`本包采用 **${choice?.label ?? opts.license}**，全文见 \`${LICENSE_FILE_NAME}\` 文件。`);
+    lines.push('');
+    if (opts.license === 'ltol') {
+      lines.push('注意 LTOL 有**时限**：自标注之日起一年，版本升级再续一年；');
+      lines.push('到期或作者失联半年后转为免费许可。发布时请留意 `LICENSE` 里记的年份。');
+    } else if (opts.license === 'cc-by-nc-4.0') {
+      lines.push('注意：`LICENSE` 里那份是**要点速览**，具有法律效力的完整条款以文件中的官方链接为准。');
+    } else if (opts.license === 'template') {
+      lines.push('（当前为占位模板，请填写正式条款后再发布。）');
+    }
   } else {
     lines.push('未指定开源协议——默认保留所有权利。');
   }
   return `${lines.join('\n')}\n`;
 }
 
-/** LICENSE 占位模板（不替作者选定协议；只落署名与待填框架） */
+/**
+ * 生成 LICENSE 文件内容（条款文本单一真源在 `licenses.ts`）。
+ *
+ * 年份取**生成时**的本地年份：许可条款里的年份就是"哪一年署的"，
+ * 不需要（也不该）可注入 —— 单测断言的是"出现年份字段"，不是某个具体年份。
+ */
 export function buildLicense(opts: KojoScaffoldOptions): string {
-  const year = new Date().getFullYear();
-  const lines: string[] = [];
-  lines.push(`Copyright (c) ${year} ${opts.authorName.trim()}`);
-  lines.push('');
-  lines.push('（占位模板：请在此填写所选开源协议的完整条款，');
-  lines.push('例如 MIT、CC BY-NC-SA 等；删除本行说明。）');
-  return `${lines.join('\n')}\n`;
+  return buildLicenseText(opts.license, {
+    author: opts.authorName.trim(),
+    year: new Date().getFullYear(),
+    workName: opts.workName.trim(),
+  });
 }
 
 /**
@@ -206,7 +229,7 @@ export function scaffoldKojoProject(
 
   const files: Record<string, string> = {};
   files['README.md'] = buildReadme(opts);
-  if (opts.includeLicense) files['LICENSE'] = buildLicense(opts);
+  if (licenseProducesFile(opts.license)) files[LICENSE_FILE_NAME] = buildLicense(opts);
   for (const spec of CORE_FACES) {
     files[`${spec.stem}${FACE_STUB_EXT}`] = buildFaceStub(spec, opts, faceTable);
   }

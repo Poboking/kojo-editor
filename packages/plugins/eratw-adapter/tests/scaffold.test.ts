@@ -18,7 +18,7 @@ const base: KojoScaffoldOptions = {
   charaNo: 1,
   charaName: '博丽 灵梦',
   scriptNo: 1,
-  includeLicense: false,
+  license: 'none',
 };
 
 describe('文件系统非法字符消毒', () => {
@@ -66,15 +66,15 @@ describe('脚手架产物', () => {
    * 这条断言同时守住另一半：**工作区里不该出现 .ERB**，否则同一份内容两个权威源。
    */
   it('核心面空壳一律 .kojo，产物里没有任何 .ERB（工作区唯一源）', () => {
-    const r = scaffoldKojoProject({ ...base, includeLicense: true });
+    const r = scaffoldKojoProject({ ...base, license: 'template' });
     const names = Object.keys(r.files);
     for (const face of CORE_FACES) expect(names).toContain(`${face.stem}.kojo`);
     expect(names.filter((n) => /\.ERB$/i.test(n))).toEqual([]);
   });
 
-  it('勾选 LICENSE → 多一个 LICENSE 文件', () => {
-    const r = scaffoldKojoProject({ ...base, includeLicense: true });
-    expect(r.files['LICENSE']).toContain('某作者');
+  it('选占位模板 → 多一个 LICENSE 文件；选 none → 不多文件', () => {
+    expect(scaffoldKojoProject({ ...base, license: 'template' }).files['LICENSE']).toContain('某作者');
+    expect(scaffoldKojoProject({ ...base, license: 'none' }).files['LICENSE']).toBeUndefined();
   });
 
   it('8 核心面清单即讨论纪要定稿（顺序与命名）', () => {
