@@ -1,6 +1,9 @@
-# 交接文档（v0.1 ✅ / v0.2 第一批～第十七批 ✅ / v1.1 第十六批 ✅）
+# 交接文档（v0.1 ✅ / v0.2 第一批～第十七批 ✅ / v1.1 第十六批 ✅ / v0.3 糖批 S1–S7 ✅ / UI 重设计 P0–P3 ✅ / 口上项目批 P-A…P-E ✅）
 
-> 更新：2026-10-11。**新会话从这里开始读，读完即可开工。**
+> 更新：**2026-10-12**（口上项目批 P-A…P-E 收口；本文件此前停留在 2026-10-11，路径与基线均已过期，本次一并纠）。**新会话从这里开始读，读完即可开工。**
+>
+> **本组（haruki 主机小组）分工**：整体项目推进 + UI 优化。**语法糖优化**与**性能优化归别组**
+> （各占独立分支，见 §十二）。接活前先分层，糖语义与解析性能默认不碰。
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
 > 第二批：函数树导航（`ui-kojo-navigator`）；
 > 第三批：条件谓词抽取（`condition-extractor`）+ 导航条件徽章 + adapter 变量字典；
@@ -35,8 +38,11 @@
 **kojo-editor** = eraTW 口上编辑器：结构感知（Monaco + ERB 语法）× 一切皆插件 × sav 快照回放（远期差异化核心）。
 技术栈：pnpm monorepo · TS（TS7/vitest4/vite7）· Tauri2（Rust 只做 IO 原语）· React 19 · Monaco。
 
-- 仓库：`D:\DSH\kojo-editor` = github.com/Poboking/kojo-editor
-- 测试游戏目录：`D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`（汉化整合版，CSV/ERB 均 UTF-8-BOM）
+- 仓库：`C:\DSH\kojo-editor` = github.com/Poboking/kojo-editor
+  （**2026-10-12 起本机为新环境主机，只有 `C:` 一个盘；本文档正文里历史批次记录中的 `D:\DSH` / `D:\Game` / `D:\Code\Nodejs` 路径全部失效，按本表换算，勿照抄执行**）
+- 测试游戏目录：`C:\game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`（汉化整合版，CSV/ERB 均 UTF-8-BOM）
+  —— 实测 ERB 全树 **3,818 个文件**，与 §5.29 记录逐字吻合，是同一份真实语料；**但整份语料无任何 `sav` 存档**，六档金样本类测试在本机自动跳过属正常。
+- 应用数据目录：`%APPDATA%\dev.kojo.editor\`（`store/_global/{recent-projects,approved-writable}.json` 跨次保留；`workspaces/` = 作者工作区根）
 
 ## 二、当前状态（30 秒版）
 
@@ -134,22 +140,42 @@
   - 关键纪律（本线全程遵守）：契约**全部 additive**（新字段 optional，缺省即现状，任一中间态可运行）；宿主**零业务知识**（壳层只提供容器/动作语义）；布局状态住壳层私有 `localStorage`（`kojo.ui.layout.v1`），**不进内核存储域**；新增内核事件必须在 `plugin-api/src/events.ts` 登记 emit 权限分类（`PLUGIN_EMITTABLE`/`KERNEL_ONLY` 两表 + 编译期断言 `KERNEL_EVENT_CLASSIFICATION_GUARD` 强制，§5.48——`0bf2eb9` 手工同步教训已机制化）。
   - **当前基线：1016 passed / 6 skipped（1022）；16 插件；审计 A–D 四项全绿（A 项已覆盖宿主 UI·Monaco 层）；typecheck root + `@kojo/app` 双跑 exit 0。**
 
+- **口上项目线（2026-10-12 批 P-A…P-E，✅ 本组主线，权威记录 = IMPLEMENTATION-LOG §5.49）**：
+  落地《口上项目/口上树讨论纪要》定调的「口上项目 ──引用──▶ 游戏项目」对偶模型，
+  **新建 → 编辑 → 导入 → 导出 → 部署** 全链路已通：
+  - `kernel.workspaces`（P-A）：通用 `project/artifact` 模型 + **常驻可写根**（工作区恒可写，
+    不受项目开闭周期清空）；manifest = `workspace.json`，注册表 = 扫目录（索引即目录，崩溃不漂移）。
+  - 编辑器写权限**按目录分野**（P-B0）：游戏目录 ERB 只读、工作区 ERB 恒可编辑。
+  - 「我的口上项目」面板（P-B）：三级树 + 双真相源常驻提示条；包默认折叠，行内动作悬停才显。
+  - 新建向导 + 中文脚手架（P-C）：`{作品名}-{角色名} v{版本}`，中文 README + 8 核心面空壳（纯 `;` 注释，不生活函数；四件套刻意不生成）。
+  - 导入（P-F）：文件树右键 → 内核意图事件 → 向导，**强制新包名**不覆盖他人署名，字节级复制。
+  - 导出（P-D）：`exportDirectory` 桥能力，**对话框即授权**——落点刻意过不了写允许域，
+    但对话框与复制绑在同一 Rust 命令内，JS 拿不到落点决定权，故无越权面。
+  - 部署（P-E）：三道前置判定**全在动盘之前**（源是目录 / 目标不存在 / 目标在写白名单内），
+    未授权时连目录都不建，不给引擎留半成品。方向唯一，永不回写工作区。
+  - **剩余欠账**（纪要 §5 清单）：署名/授权一等公民（**下一批首选**）· 导出 ZIP · 直连模式开关 ·
+    多剧本编号上树 · 中日对照。
+- **当前基线（2026-10-12 口上项目批后）：1080 passed / 8 skipped（1088）；16 插件；
+  审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；`cargo test --lib` 12 项全绿。**
+
 ## 三、文档索引（按权威性排序；2026-10-11 整理批后口径）
 
-### 活文档（`docs/` 根，9 份 + adr/）
+### 活文档（`docs/` 根，11 份 + adr/）
 
 | 文档 | 内容 |
 |---|---|
 | `docs/HANDOFF.md`（本文件） | **交接状态 + 下一批动手清单（新会话从这里开始）** |
-| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执 |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 §5.49） |
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
 | `docs/BASELINES.md` | 实测基线汇总（索引/回放/抽取/校验性能与正确性数字） |
 | `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` | **糖表层规范 v1.2（冻结权威）**：语法/转译/产物逐条定义，golden 逐字节锚定 |
 | `docs/UI-REDESIGN-2026-10-11.md` | **UI/UX 重设计定稿 v1.0**（用户拍板 Q1–Q11；五区布局/additive 槽位/迁移表/P0–P4；= beta.1 判据⑥；**P4 待开工**） |
+| `docs/KOJO_PROJECT_AND_KOJO_TREE_DISCUSSION_MINUTES.md` | **口上项目 / 口上树 讨论纪要（定调权威）**：对偶+引用模型、三条硬约束、五个决策问题、§5 全量清单（口上项目线的 backlog 源头） |
+| `docs/LIFT-REPOSITION-2026-10-12.md` | 升糖重定位决策（升糖降为预览、ERB 默认只读的由来；与 ADR-0005 同源） |
 | `docs/USER-GUIDE.md` | 终端用户指南（安装 / 开项目 / .kojo 保存编译 / 注入器安全） |
 | `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` | 发版手工验收清单（实机勾验用，发版判据组成部分） |
 | `docs/RESEARCH.md` | 技术调研 |
-| `docs/adr/0001-0004` | 工具链 / game.adapter 服务键语义 / 壳架构 / 快照来源服务键命名（snapshot.source） |
+| `docs/adr/0001-0005` | 工具链 / game.adapter 服务键语义 / 壳架构 / 快照来源服务键命名（snapshot.source）/ **ERB 写权限与糖视图口径（0005，跨组共同依据）** |
 
 ### 归档区（`docs/archive/`，历史冻结，只读）
 
@@ -160,10 +186,19 @@
 
 ### 仓库外权威
 
-| 文档 | 内容 |
+> **本机已无 `D:\DSH\reverse-engineering\` 目录**（新环境主机只有 `C:` 盘）。逆向文档改为线上托管，
+> 直链规则 `https://moments-blog-kl3wezk9yhf.qoder.zone/essays/<文件名>.md`（文件名含中文，需 percent-encode；
+> 索引页 `/essays/index.html` —— **无 index.html 会 404**）。2026-10-12 实测可取。
+
+| 文档（`eratw4.980-` 前缀） | 内容 |
 |---|---|
-| `D:\DSH\reverse-engineering\eratw4.980-口上机制深挖.md` | **口上领域知识权威**（27 CASE 路由、MESSAGECHECK 位协议、家族命名、四件套） |
-| `D:\DSH\reverse-engineering\eratw4.980-存档实战解析.md` | sav 协议（v1.0 前必读） |
+| `口上机制深挖.md` | **口上领域知识权威**（27 CASE 路由、MESSAGECHECK 位协议、家族命名、四件套） |
+| `存档实战解析.md` / `存档二进制层.md` | sav 协议（v1.0 前必读）/ 字节层 |
+| `变量系统与求值.md` / `词法与表达式.md` / `内置方法速查表.md` | state-replay 寻址与 builtins、condition-extractor Pratt 优先级依据 |
+| `Statements补全.md` / `Lang与Statements边角.md` / `主循环收官.md` | 语句与控制流（erb-parser `scanControlFlow` 配对表依据） |
+| `Counter与KOJO系统分析.md` / `引擎源码分析.md` / `整体架构与原理总览.md` / `机制分析.md` / `成长与日常系统分析.md` / `CliDebug动态验证.md` | 引擎总体与游戏系统 |
+
+> 本项目有条反复应验的铁律（§九-1 / -11 / -15）：**定语义前必须回引擎源码或上述文档核验，不许凭直觉猜**。
 
 ## 四、代码地图（v0.2 第三批增补）
 
@@ -226,19 +261,25 @@ packages/
 ## 五、验证矩阵（怎么跑）
 
 ```bash
-cd D:\DSH\kojo-editor
+cd C:\DSH\kojo-editor
 pnpm install
-pnpm test               # 714 项（无游戏目录时集成冒烟+金样本自动跳过）
-pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）
-pnpm audit:decoupling   # 必须 ✅（plugins 数 13）
+pnpm test               # 1080 项（本机无 sav 存档 → 金样本/集成冒烟自动跳过，属正常）
+pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）—— 两套都必须跑
+pnpm audit:decoupling   # 必须 ✅（plugins 数 16；审计 A–D 四项）
+# Rust 宿主（本机 cargo 可用、增量秒级；改 lib.rs / 新增 tauri::command 必跑）：
+cd packages/app/src-tauri && cargo test --lib   # 12 项（写允许域 9 + 导出复制 3）
 node node_modules/vitest/vitest.mjs run packages/plugin-api/tests/sugar.test.ts   # v0.3 S1：语法糖契约（类型守卫 / 别名只读性 / 源映射 / golden 逐字节）
 node node_modules/vitest/vitest.mjs run packages/plugins/kojo-sugar/tests/compile.test.ts   # v0.3 S3：编译落盘（编码组装 / 双闸 / 备份 / 回读验证）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放/注入写链路/**语法糖编译落盘**）：
-KOJO_SMOKE_PROJECT="D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
+KOJO_SMOKE_PROJECT="C:\game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
 # 桌面壳（会弹窗 ~100s 自动关闭）：
 node tools/smoke-tauri-dom.mjs
 # 桌面壳真实 IPC 冒烟（Rust 双闸 a–e；CDP 直调 invoke；自动还原 store/文件/备份；会弹窗 ~2min）：
 node tools/smoke-tauri-ipc.mjs
+# 口上项目线 UI 实机验证（2026-10-12 实测可行）：pnpm tauri dev 起真壳 → 从「最近打开」进项目
+# （写授权已持久化，不必重走对话框）→ 活动栏 ⌂ 进「我的口上项目」。
+# 想让面板有内容又不想点向导：直接在 %APPDATA%\dev.kojo.editor\workspaces\<id>\workspace.json 种一个。
+# WebView2 外层窗口的无障碍树是空壳，须按截图坐标点；原生对话框（rfd）有完整 UIA 树，可用 element_index 驱动。
 ```
 
 **架构铁律（改动前默念）**：
@@ -246,7 +287,8 @@ node tools/smoke-tauri-ipc.mjs
 2. 插件**只许依赖 `@kojo/plugin-api`**，禁 import kernel、禁插件间交叉 import（审计 B/C 项；**测试文件豁免 C 项**）；
 3. 游戏知识只能进 eratw-adapter；跨游戏共享术语（kojo/chara）放 plugin-api；
 4. 内核不静默：inactive 必须可见、冲突必须 error、**校验规则抛错必须进 `report.failedRules`**；
-5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）。
+5. 游戏目录整体只读，写入仅限用户批准的 `writablePaths`（白名单在内核 io 强制）+ **常驻可写根**（作者工作区根，不受项目开闭周期清空，口上项目批 P-A）；
+6. **绕开写允许域只有一条法定通道**：`exportDirectory` —— 落点由用户在系统对话框里显式选定（**对话框即授权**），且对话框与整目录复制绑在**同一个 Rust 命令**内，JS 拿不到落点决定权。新增任何"写到域外"的能力必须照此形态，**不得开放任意目标路径参数**。
 
 ## 六、v0.2 批次记录（第三批～第十七批，✅ 全部完成）+ v0.3 糖批（S1～S7，✅）
 
@@ -602,11 +644,22 @@ node tools/smoke-tauri-ipc.mjs
 - 写回**保编码保换行**（首读探测缓存：utf-8-bom / utf-8 / shift_jis / utf-16；eol 多数派）；
 - 原子写（临时文件+rename）+ 自动备份 `{appData}/backup/{hash}/`（保留 20 版）；
 - UI 侧「只读浏览」永远可用（未批准 = 不可写，不阻塞浏览）。
+- **常驻可写根**（口上项目批 P-A）：作者工作区根经 `io.setAppWritableRoots` 登记，
+  **不受 `setWritableRoots([])` 收回影响** —— 工作区恒可写独立于游戏目录授权的开闭周期。
+- **导出是唯一法定绕闸通道**（P-D）：`exportDirectory` 的落点刻意不过写允许域（导出的意义
+  就是落到域外），授权来自系统对话框的显式选择；对话框 + 复制绑在同一个 Rust 命令内，
+  JS 侧只能传源目录与标题 → **无越权面**。取消返回 `null`，属正常路径不算失败。
+- **部署的三道前置判定全部在动盘之前**（P-E）：源必须是目录 / 目标不得已存在（报错不覆盖）/
+  目标必须在写白名单内（未授权时**连目录都不建**，不给引擎留半成品）。复制走字节级，刻意不转码。
+- **ERB 编辑器的只读口径**（写权限 × 糖视图，两组的共同依据）：见
+  [`adr/0005-erb-write-permission-and-sugar-view.md`](adr/0005-erb-write-permission-and-sugar-view.md)
+  —— 目录分野定默认可写性（工作区 ERB 恒可编辑），显式解锁只管「游戏目录里这一份、这一次」。
 
 ## 八、环境坑速查（本机，2026-10 实测）
 
 | 坑 | 对策 |
 |---|---|
+| **本文档正文历史批次里满是 `D:\DSH` / `D:\Game` / `D:\Code\Nodejs` 路径**（照抄必失败） | 本机为新环境主机，只有 `C:` 盘 —— 换算表见 §一；§六 的历史记录**保留不回改**（git 历史同理，§十一-2 口径） |
 | 沙箱注入的 `HTTP(S)_PROXY=127.0.0.1:8587` 是**坏的**，git/curl 默认走它必失败 | **推送一律用 `node tools/git-push.mjs`**（内部清空全部代理环境变量直连+重试） |
 | github 直连时通时断 | git-push.mjs 已内置 6 轮×5s 重试，失败就隔几分钟再试 |
 | npm/pnpm registry=npmmirror **直连可用** | 别给镜像配代理（ECONNREFUSED）；项目 `.npmrc` 已固定 |
@@ -653,11 +706,18 @@ node tools/smoke-tauri-ipc.mjs
 27. **自己生成的骨架守卫会污染语义判定**（S4 批，一般化）：`codegen` 生成的 `IF LOCAL` 里 `LOCAL` 是语言局部量，回放器只能报 `unknown` —— 若让它参与可达性折叠，**每个块都被污染成 unknown**（预览信息量归零）。解法是"识别并旁路信封"，判据必须**纯源映射**（链头产物行 `sourceLine === null`）而非游戏/引擎知识，否则会把 ADAPTER 该管的事漏进内核侧插件。
 ## 十、新会话动手清单
 
-1. `cd D:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**958 项** / ✅ / 16 插件 / 审计 A/B/C/D 四项；无游戏目录时集成冒烟+金样本自动跳过）**注意 typecheck 要 root + `packages/app` 双跑**
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.37 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §六
-4. **当前最高优先线 = UI/UX 重设计（2026-10-11 定稿，用户拍板插入 beta.1 判据⑥）**：需求定稿 `docs/UI-REDESIGN-2026-10-11.md` + 实施交接 `docs/archive/UI-REDESIGN-HANDOFF-2026-10-11.md`（含新会话 prompt）；顺序 P0 写权限闭环 → P1 壳层骨架 → P2 命令工具栏 → P3 编辑器深化（多标签+💡）→ P4 停靠+全禅。**原下一批候选**：①真实终端 `pnpm tauri dev` 手工勾验判据①闭环（§5.37 手工清单 a–i）；②BUG-5 真实监视器接线（判据 ②）；③v0.3 UI 余项：编辑器内三向映射装饰（悬浮/内联）、消息块逐条气泡（含逐字符 FORM 展开渲染串）、虚拟滚动、新建向导（**新建向导已并入 UI 重设计 P2**）
-5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`；**新批次编号用「日期 + 简称」，不再用 vX.Y 第N批（§十一 版本纪律）**；发版时走 §十一 的 tag 流程（首个发行版 = `v0.4.0-beta.1`，判据五项）
+1. `cd C:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1080 passed / 8 skipped** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.49 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
+4. **本组当前两条主线**：
+   - **口上项目线**（纪要 §5 清单）：P-A…P-E 已通，**下一批首选 = 署名/授权一等公民**
+     （从包内 README 抽 `作者 / 最終更新 / ライセンス` → 面板包行展示 → 导入向导携带），
+     其后 = 导出 ZIP（需 Rust 加压缩依赖，独立一批）。
+   - **UI/UX 重设计线**（发版判据 ⑥）：P0–P3 ✅，**P4 = 三容器拖拽停靠 + 全禅模式 + 设置 overlay**
+     待开工（需求定稿 `docs/UI-REDESIGN-2026-10-11.md` §200）。
+   - **不属于本组**：语法糖语义（`kojo-sugar` / `ui-sugar-*` / `.kojo` 转译高亮 / 糖视图）与
+     解析索引性能 —— 归别组，见 §十二。**要动它们的测试夹具前先查 `origin/syntax-sugar`。**
+5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`；**新批次编号用「日期 + 简称」，不再用 vX.Y 第N批（§十一 版本纪律）**；发版时走 §十一 的 tag 流程（首个发行版 = `v0.4.0-beta.1`，判据六项）
 
 ## 十一、版本纪律（2026-10-11 定，用户拍板）
 
@@ -674,3 +734,39 @@ node tools/smoke-tauri-ipc.mjs
    - ⑥ **UI 新壳**（2026-10-11 用户拍板插入）：`docs/UI-REDESIGN-2026-10-11.md` 定稿的 P0–P4 全部完成 + 真实终端勾验——写权限闭环/五区布局/命令体系/多标签/💡升糖/拖拽停靠/全禅模式。
    判据未齐前 root version 保持 `0.1.0` 不动。
 4. **SemVer 规则**（自 v0.4.0-beta.1 起）：major = 破坏存档/工程兼容；minor = 新能力（新语法糖块、新面板等）；patch = 修复。beta 阶段用 `v0.4.0-beta.N` 递增 N；转正 = 去掉 `-beta.N` 后缀发布 `v0.4.0`。
+
+## 十二、小组分工与分支拓扑（2026-10-12 定，用户告知）
+
+### 分工
+
+| 线 | 归属 | 范围 |
+| :-- | :-- | :-- |
+| **整体项目推进 + UI 优化** | **本组（haruki 主机小组）** | 内核 / plugin-api 契约 / 宿主壳 / 面板与交互 / 口上项目线 / 发版 |
+| 语法糖优化 | 别组（`syntax-sugar`） | `kojo-sugar` 转译语义、`.kojo` 高亮补全、糖视图、升糖口径 |
+| 性能优化 | 别组（分支**尚未推上远端**，截至 2026-10-12） | 索引 / 解析耗时、tree-sitter 重做对照线 |
+
+> 本组要动糖组或性能组边界内的文件时（例：契约加方法导致它们的测试假件必须补齐），
+> 保持**最小机械改动**，不顺手改语义。
+
+### 分支（用前先 `git fetch` 复核——分支尖端 decay 很快）
+
+| 分支 | 归属 | 说明 |
+| :-- | :-- | :-- |
+| `master` | 本组主线 | 口上项目批 P-A…P-E 全在这条线上（`712a9f5`） |
+| `ui-polish` | 本组 UI 线 | 2026-10-12 时点 **0 领先 / 8 落后 master**（空占位）。**UI 优化今后落这条还是继续走 master，尚未定，需问用户** |
+| `syntax-sugar` | 别组 | merge-base = `b1f260e`；2 领先 / 8 落后 |
+
+### 已知的跨组冲突面（合并前必读）
+
+按 merge-base 实测，`master` 与 `syntax-sugar` 真冲突热点 7 文件，其中 6 处机械性，
+唯 **`packages/app/src/ui/EditorPane.tsx` 是语义分叉**：两组各自重做了「ERB 什么时候只读」
+（本组按目录分野 / 糖组按 `ErbUnlockDialog` 显式解锁），且**糖分支尚未引入「工作区」概念**。
+
+口径已由用户 2026-10-12 拍板并固化为 **[`adr/0005-erb-write-permission-and-sugar-view.md`](adr/0005-erb-write-permission-and-sugar-view.md)**：
+两道正交轴 —— 分野定默认可写性，解锁只管「游戏目录里这一份、这一次」；
+糖视图与可编辑态互斥（**工作区 ERB 恒可编辑 ⟹ 默认禁用糖视图**）。
+合并时按 ADR 里的代码片段对齐，不要就地即兴裁决。
+
+另：`plugin-api/src/events.ts` + `events.test.ts` 双方各自新增事件并各自 bump 白名单计数快照
+（本组 `workspace.importRequested` / 糖组 `editor.sugarView.set`），属 `0bf2eb9` 那类双源漂移，
+必冲突但好修 —— 合并后计数应为 **16**。
