@@ -30,7 +30,7 @@
  *   不改变 `byName` 的聚合顺序（消费方对顺序的任何假设都不受影响）；
  * - **零游戏知识**：本模块只认识"文件与函数边界"，不认识任何命名约定。
  */
-import type { ErbFile, ErbFunctionRef, FileStat } from '@kojo/plugin-api';
+import type { ErbDim, ErbFile, ErbFunction, ErbFunctionRef, ErbParam, FileStat } from '@kojo/plugin-api';
 
 /**
  * 快照格式版本（结构不兼容时整体弃用重建）。
@@ -39,8 +39,16 @@ import type { ErbFile, ErbFunctionRef, FileStat } from '@kojo/plugin-api';
  * 旧快照里没有这个字段，若继续复用会让函数树悬停**静默空白**且无从察觉——
  * 与其悄悄降级，不如按 `coerceSnapshot` 的 fail-closed 语义整体弃用、一次重建。
  * 代价：升级后首次开项目多等一段索引时间（此后照常走快照）。
+ *
+ * **v2 → v3**（2026-10-12「快照瘦身」）：真实语料实测 v2 = **44.40 MB / 99,104 函数**，
+ * 其中 **16.65 MB（38%）是可派生字段**——`function.filePath`(13.34) 与 `file.path`(0.30)
+ * 都等于条目键，`function.normalizedName`(3.02) 就是 `name.toUpperCase()`
+ * （scanner.ts:263 唯一定义处）；再加**函数对象的键名本身 9.75 MB**。
+ * v3 把这三样从盘上去掉（加载时回填），条目与函数改用位置元组 ⇒ 预计降到 ~18 MB，
+ * 热启动 `storage.get`（v2 实测 253 ms）应随之等比下降。
+ * 内存里的 `SnapshotEntry` 形状**不变**：压缩只发生在存储边界，插件逻辑一行不用改。
  */
-export const SNAPSHOT_VERSION = 2;
+export const SNAPSHOT_VERSION = 3;
 
 /** 单个文件的快照条目 */
 export interface SnapshotEntry {
@@ -74,6 +82,103 @@ export function snapshotKeyFor(rootDir: string): string {
     h = Math.imul(h, 0x01000193);
   }
   return `index-v${SNAPSHOT_VERSION}-${(h >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+/* ---------------------------------------------------------------------------
+ * v3 盘上形态：位置元组（只在存储边界使用，内存形状不变）
+ * ------------------------------------------------------------------------- */
+
+/** `[形参名, 是否有默认值(0|1)]` */
+type ParamTuple = [string, 0 | 1];
+/** `[原名, 起始行, 结束行, 形参, 位标, 注释块?]`；位标 bit0 = 表达式函数 */
+type FunctionTuple = [string, number, number, ParamTuple[], number, string?];
+/** `[变量名, 声明指令, 行号]` */
+type DimTuple = [string, string, number];
+/** `[mtimeMs, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量]` */
+type EntryTuple = [number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[]];
+
+const FLAG_EXPRESSION = 1;
+
+/**
+ * 把内存条目压成盘上元组：剥掉三样可派生数据（`file.path`、`function.filePath`
+ * 都等于条目键；`function.normalizedName` = `name.toUpperCase()`），并把键名换成位置。
+ *
+ * ⚠ **位置契约**：`ErbFile` / `ErbFunction` 增删字段时，这里必须同步改并
+ * **bump `SNAPSHOT_VERSION`**——元组不会自动兼容新字段。哨兵测试
+ * （`snapshot.test.ts` 的「字段清单哨兵」）会在漏改时直接失败，不靠人记。
+ */
+export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>): Record<string, EntryTuple> {
+  const out: Record<string, EntryTuple> = {};
+  for (const [path, e] of Object.entries(entries)) {
+    const fns: FunctionTuple[] = e.file.functions.map((f): FunctionTuple => {
+      const flags = f.isExpressionFunction ? FLAG_EXPRESSION : 0;
+      const params: ParamTuple[] = f.params.map((p): ParamTuple => [p.name, p.hasDefault ? 1 : 0]);
+      const fn: FunctionTuple = [f.name, f.startLine, f.endLine, params, flags];
+      if (f.docComment !== undefined) fn.push(f.docComment);
+      return fn;
+    });
+    const dims: DimTuple[] = e.file.dims.map((d): DimTuple => [d.name, d.directive, d.line]);
+    out[path] = [e.mtimeMs, e.textLength, e.file.lineCount, e.file.hasFunctionDirective ? 1 : 0, fns, dims];
+  }
+  return out;
+}
+
+function isEntryTuple(t: unknown): t is EntryTuple {
+  if (!Array.isArray(t) || t.length !== 6) return false;
+  if (t[0] !== null && typeof t[0] !== 'number') return false;
+  return typeof t[1] === 'number' && typeof t[2] === 'number' && (t[3] === 0 || t[3] === 1) &&
+    Array.isArray(t[4]) && Array.isArray(t[5]);
+}
+
+function isFunctionTuple(t: unknown): t is FunctionTuple {
+  if (!Array.isArray(t) || (t.length !== 5 && t.length !== 6)) return false;
+  if (typeof t[0] !== 'string' || typeof t[1] !== 'number' || typeof t[2] !== 'number') return false;
+  if (typeof t[4] !== 'number' || !Array.isArray(t[3])) return false;
+  if (t.length === 6 && typeof t[5] !== 'string') return false;
+  return (t[3] as unknown[]).every(
+    (p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && (p[1] === 0 || p[1] === 1),
+  );
+}
+
+/**
+ * 还原盘上元组为内存条目；结构任一不符 ⇒ null（整体弃用，全量重建）。
+ * 键即路径 ⇒ 回填 `file.path` 与 `function.filePath`；`normalizedName` 按 scanner 的
+ * 唯一定义（`name.toUpperCase()`）回填。
+ */
+export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const out: Record<string, SnapshotEntry> = {};
+  for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isEntryTuple(value)) return null;
+    const [mtimeMs, textLength, lineCount, hasDirective, fns, dims] = value;
+    if (!fns.every(isFunctionTuple)) return null;
+    if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
+      return null;
+    }
+    const functions: ErbFunction[] = fns.map(([name, startLine, endLine, params, flags, doc]) => ({
+      name,
+      normalizedName: name.toUpperCase(),
+      params: params.map(([pname, hasDefault]): ErbParam => ({ name: pname, hasDefault: hasDefault === 1 })),
+      startLine,
+      endLine,
+      filePath: path,
+      // scanner 对每个函数都显式写这个布尔（false 也在），还原必须同样显式，不能缺键
+      isExpressionFunction: (flags & FLAG_EXPRESSION) !== 0,
+      ...(doc === undefined ? {} : { docComment: doc }),
+    }));
+    out[path] = {
+      mtimeMs,
+      textLength,
+      file: {
+        path,
+        functions,
+        dims: dims.map(([name, directive, line]): ErbDim => ({ name, directive, line })),
+        hasFunctionDirective: hasDirective === 1,
+        lineCount,
+      },
+    };
+  }
+  return out;
 }
 
 /**
@@ -137,26 +242,16 @@ export function diffSnapshot(
   return { reusable, stale };
 }
 
-/** 校验未知数据是否为**本项目**的合法快照；任一不符返回 null（整体弃用） */
+/** 校验未知数据是否为**本项目**的 v3 快照；任一不符返回 null（整体弃用） */
 export function coerceSnapshot(raw: unknown, rootDir: string): IndexSnapshot | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
   if (r.version !== SNAPSHOT_VERSION) return null;
   if (r.rootDir !== rootDir) return null;
   if (typeof r.savedAt !== 'number' || !Number.isFinite(r.savedAt)) return null;
-  if (typeof r.entries !== 'object' || r.entries === null) return null;
-  const entries: Record<string, SnapshotEntry> = {};
-  for (const [p, v] of Object.entries(r.entries as Record<string, unknown>)) {
-    if (typeof v !== 'object' || v === null) return null;
-    const e = v as Record<string, unknown>;
-    if (typeof e.textLength !== 'number' || !Number.isFinite(e.textLength)) return null;
-    if (e.mtimeMs !== null && typeof e.mtimeMs !== 'number') return null;
-    const f = e.file as ErbFile | undefined;
-    if (typeof f !== 'object' || f === null) return null;
-    if (f.path !== p) return null; // 键与内容不一致 = 结构被手改过，不可信
-    if (!Array.isArray(f.functions) || typeof f.lineCount !== 'number') return null;
-    entries[p] = { mtimeMs: e.mtimeMs as number | null, textLength: e.textLength as number, file: f };
-  }
+  // 条目结构（元组长度 / 类型 / 形参与注释位）由 decodeEntries 逐条校验，不符 ⇒ 整体弃用
+  const entries = decodeEntries(r.entries);
+  if (entries === null) return null;
   return { version: SNAPSHOT_VERSION, rootDir, savedAt: r.savedAt, entries };
 }
 

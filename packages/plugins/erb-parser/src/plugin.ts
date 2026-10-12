@@ -17,6 +17,7 @@ import {
   aggregateIndex,
   coerceSnapshot,
   diffSnapshot,
+  encodeEntries,
   mergeEntries,
   snapshotKeyFor,
   type IndexSnapshot,
@@ -208,7 +209,13 @@ export function createErbParserPlugin(): Plugin {
           const entries = mergeEntries(snapshot, allFiles, fresh);
           const saveStartedAt = Date.now();
           void storage
-            .set(key, { version: SNAPSHOT_VERSION, rootDir: currentRoot, savedAt: Date.now(), entries })
+            .set(key, {
+              version: SNAPSHOT_VERSION,
+              rootDir: currentRoot,
+              savedAt: Date.now(),
+              // 盘上用 v3 紧凑元组（剥可派生字段 + 位置化），加载时由 decodeEntries 还原
+              entries: encodeEntries(entries),
+            })
             .then(() => {
               ctx.log.info(
                 `Index snapshot saved (${Object.keys(entries).length} entries, key ${key}, ` +
