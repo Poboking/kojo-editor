@@ -17,12 +17,13 @@
 import { createElement, useEffect, useState } from 'react';
 import type {
   CharaInfo,
+  ComputePool,
   GameProject,
   Plugin,
   ProjectService,
   SnapshotSourceService,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, isPathUnder } from '@kojo/plugin-api';
 import {
   buildArchiveList,
   summarizeCharacters,
@@ -59,10 +60,11 @@ export function createUiArchiveBrowserPlugin(): Plugin {
   return {
     id: 'ui-archive-browser',
     version: '0.2.0',
-    requires: [WellKnownServices.SnapshotSource, KernelServices.Project],
+    requires: [WellKnownServices.SnapshotSource, KernelServices.Project, KernelServices.Compute],
     activate(ctx) {
       const snapshots = ctx.inject<SnapshotSourceService>(WellKnownServices.SnapshotSource);
       const project = ctx.inject<ProjectService>(KernelServices.Project);
+      const compute = ctx.inject<ComputePool>(KernelServices.Compute);
 
       // ---- React 外部源（面板组件订阅） ----
       let list: ArchiveListResult = { rows: [], failed: [], degrade: 'no-project' };
@@ -79,18 +81,18 @@ export function createUiArchiveBrowserPlugin(): Plugin {
         }
       };
 
-      /** 显式刷新（重扫归档目录；项目关闭时清空全部状态） */
-      const refresh = (): void => {
+      /** 显式刷新（重扫归档目录；项目关闭时清空全部状态）。返回本次扫描，供去抖层等待 */
+      const refresh = (): Promise<void> => {
         const current: GameProject | null = project.current();
         if (!current) {
           list = buildArchiveList({ project: null, scanning: false, scan: null });
           details.clear();
           notify();
-          return;
+          return Promise.resolve();
         }
         list = buildArchiveList({ project: current, scanning: true, scan: snapshots.current() });
         notify();
-        void snapshots
+        return snapshots
           .scan()
           .then((scan) => {
             list = buildArchiveList({ project: project.current(), scanning: false, scan });
@@ -134,9 +136,25 @@ export function createUiArchiveBrowserPlugin(): Plugin {
           });
       };
 
-      ctx.onDispose(ctx.bus.on('project.opened', () => refresh()));
-      ctx.onDispose(ctx.bus.on('project.closed', () => refresh()));
-      if (project.current()) refresh();
+      ctx.onDispose(ctx.bus.on('project.opened', () => void refresh()));
+      ctx.onDispose(ctx.bus.on('project.closed', () => void refresh()));
+      if (project.current()) void refresh();
+
+      /**
+       * 存档目录被外部改动 → 自动重扫（BUG-5 监视器的消费方之一，2026-10-13）。
+       *
+       * 纪律：**首动作必须是廉价判定，零 IO**——不在本项目存档目录里的路径立刻 return，
+       * 连一次 stat 都不发（监视根是整个项目目录，游戏运行时别的写入也会投递事件）。
+       * 去抖不在这里做：内核已按路径合并过一层，这里要合的是"**多次改动 → 一次重扫**"，
+       * 用 `kernel.compute` 的 `runLatest`（单飞 + 尾缘合并，背景优先级），不另造去抖器。
+       */
+      ctx.onDispose(
+        ctx.bus.on('file.changed', (ev) => {
+          const savDir = project.current()?.savDir;
+          if (!savDir || !isPathUnder(savDir, ev.path)) return;
+          void compute.runLatest('ui-archive-browser:rescan', { priority: 'background' }, () => refresh());
+        }),
+      );
 
       /* ------------------------------ 面板组件 ------------------------------ */
 
@@ -281,7 +299,7 @@ export function createUiArchiveBrowserPlugin(): Plugin {
           createElement(
             'div',
             { className: 'ab-hint dim' },
-            '点击档位查看角色区摘要（只列前若干角色 + 总数）；目录监视未实现，用「刷新」重扫',
+            '点击档位查看角色区摘要（只列前若干角色 + 总数）；存档目录被外部改动会自动重扫，「刷新」是手动兜底',
           ),
         );
       }
