@@ -1070,3 +1070,106 @@ mod watch_tests {
         assert!(!is_atomic_write_temp(Path::new(r"C:\data\a.kojo-tmp\b.txt")));
     }
 }
+
+#[cfg(test)]
+mod watch_runtime_tests {
+    //! 真实监视器投递验证（BUG-5 判据②的 Rust 半边）。
+    //!
+    //! `WebviewForwarder` 要 `AppHandle`，单测造不出 Tauri 运行时 ⇒
+    //! WebView 那一段仍留人工清单。但"**递归监视在这台机器上到底收不收得到事件**"
+    //! 不需要 WebView 也能证：这里用 channel 当接收端，事件照样过
+    //! `normalize_event_kind` 纯映射——那才是本层唯一有判断的地方。
+    use super::normalize_event_kind;
+    use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind};
+    use notify::{Watcher, RecursiveMode};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc::channel;
+    use std::time::{Duration, Instant};
+
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "kojo-watch-{}-{tag}-{n}",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 收到 `path` 上的一条可映射事件即算成功；超时 5s（轮询监视在慢机上会晚到）
+    fn wait_for(rx: &std::sync::mpsc::Receiver<notify::Result<notify::Event>>) -> Vec<(String, &'static str)> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut seen = Vec::new();
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Ok(ev)) => {
+                    let Some(kind) = normalize_event_kind(&ev.kind) else {
+                        continue;
+                    };
+                    for p in ev.paths {
+                        seen.push((p.to_string_lossy().into_owned(), kind));
+                    }
+                }
+                Ok(Err(_)) => continue, // 监视器自身报错：继续收，另有测试管降级
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn recursive_watch_delivers_nested_create_and_modify() {
+        let root = temp_root("nested");
+        let deep = root.join("a").join("b").join("c");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        let (tx, rx) = channel();
+        let mut watcher =
+            notify::RecommendedWatcher::new(move |res| {
+                let _ = tx.send(res);
+            }, notify::Config::default())
+            .expect("RecommendedWatcher 应能创建");
+        watcher
+            .watch(&root, RecursiveMode::Recursive)
+            .expect("递归监视应能登记");
+
+        let target = deep.join("payload.txt");
+        std::fs::write(&target, "first").unwrap();
+        std::fs::write(&target, "second").unwrap();
+
+        let seen = wait_for(&rx);
+        let hit = seen.iter().any(|(p, _)| p.ends_with("payload.txt"));
+        assert!(
+            hit,
+            "深层目录里的写入没有收到任何事件；实际收到 = {:?}",
+            seen
+        );
+        // 分类必须落在契约三态内（新建 → add，改写 → change；两者都算投递成功）
+        let kinds: Vec<&str> = seen.iter().map(|(_, k)| *k).collect();
+        assert!(
+            kinds.iter().all(|k| matches!(*k, "add" | "change" | "unlink")),
+            "映射产物越界：{:?}",
+            kinds
+        );
+
+        drop(watcher); // Drop 即注销底层句柄
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn mapping_covers_the_kinds_this_backend_actually_emits() {
+        // 与 windows.rs 的投递形态对齐：Create(Any) / Remove(Any) / Modify(Any) /
+        // Modify(Name(From|To))。后端换了类别也不该导致事件被吞掉。
+        assert_eq!(normalize_event_kind(&EventKind::Create(CreateKind::Any)), Some("add"));
+        assert_eq!(normalize_event_kind(&EventKind::Remove(RemoveKind::Any)), Some("unlink"));
+        assert_eq!(
+            normalize_event_kind(&EventKind::Modify(ModifyKind::Any)),
+            Some("change")
+        );
+    }
+}

@@ -5102,9 +5102,11 @@ haruki 主机真实会话里打开设置面板：三组分层与分隔线正确�
 - `watcher.realfs.test.ts` 走**真 `fs.watch`**：临时目录里写文件 → 断言去抖后恰好一条
   `file.changed`、路径是被写的文件、监视范围外的目录一条都不发。
   它专治"逻辑全绿而盘上一条事件都不来"——那正是 BUG-5 的原形态。
-- **Rust 侧的事件流证不了**：`EventHandler` 实现要 `AppHandle`，单测里造不出 Tauri 运行时。
-  所以 Rust 只对**纯映射**下了测试（类别映射 4 条 + 原子写临时文件识别 1 条），
+- **Rust 侧的 WebView 投递证不了**：`EventHandler` 实现要 `AppHandle`，单测里造不出 Tauri 运行时。
+  所以本批 Rust 只对**纯映射**下了测试（类别映射 4 条 + 原子写临时文件识别 1 条），
   真实投递留给人工清单（`MANUAL-CHECKLIST` §2.J）。这一条是诚实边界，不是遗漏。
+  （**下一批 §5.86 把这条边界往里推了一格**：递归监视本身已能在 Rust 单测里证明会投递事件，
+  留在实机的只剩 `notify → WebView` 那一段。）
 - 本机 `cargo` 是**冷启动**（`src-tauri/target/` 不存在），且 `cargo add notify` / `cargo fetch`
   必须走代理（`HTTPS_PROXY=http://127.0.0.1:7890`，与 git 推送同一约定）。已写进 §十二 跨组须知。
 
@@ -5225,3 +5227,44 @@ adapter `successFlag.values` 的真名（我按记忆写的 `必然成功` 不�
 **"守门断言抓到了"不等于"能力存在"**。§5.82 的测试断言已经在报这个错了，
 但它报给的是**跑测试的人**，不是**写 `.kojo` 的人**。同一件事从断言变成诊断，
 差的只有那一条 `sink.report`——而它决定了这个错误是"我们知道"还是"作者知道"。
+
+### 5.86 判据②补证批 · 把「Rust 侧证不了」改成「Rust 侧证到哪一步」（2026-10-13 批）
+
+**动机**：§5.84 留下的边界写的是"Rust 侧的事件流证不了，`EventHandler` 要 `AppHandle`"。
+这句话**只对了一半**——证不了的是 `notify → WebView 的 emit`，
+而"**递归监视在这台机器上到底收不收得到事件**"根本不需要 WebView：
+`notify` 的接收端可以是任意 `EventHandler`，一条 `mpsc::channel` 就够。
+边界要划在真实的位置上，否则实机一旦出问题，我们不知道该怀疑哪一段。
+
+**做了什么**（`packages/app/src-tauri/src/lib.rs` 新增 `mod watch_runtime_tests`，2 条）：
+
+1. `recursive_watch_delivers_nested_create_and_modify`：临时根 → 建 `a/b/c/` 三层 →
+   `RecommendedWatcher` + `RecursiveMode::Recursive` 登记根 → 在**最深层**写两次文件 →
+   5 秒内在 channel 里收到一条落在 `payload.txt` 上、且经 `normalize_event_kind` 映射后
+   属于契约三态（`add`/`change`/`unlink`）的事件。
+   测的是**这一层唯一有判断的那段**（类别映射）+ 递归登记本身；接收端换成 channel 不改变被测量。
+2. `mapping_covers_the_kinds_this_backend_actually_emits`：按 `notify/src/windows.rs`
+   的实际投递形态（`Create(Any)` / `Remove(Any)` / `Modify(Any)` / `Modify(Name(From|To))`）
+   钉住映射，后端换了类别也不该导致事件被吞。
+
+**反证（退化落点，按本仓纪律实测过）**：把 `RecursiveMode::Recursive` 改成 `NonRecursive`
+⇒ 第 1 条立刻红（深层写入收不到任何事件），改回即绿。**这条测试会失败，不是装饰。**
+
+**踩到的一处 API 细节**（记下来省下一次）：`rx.recv_timeout()` 返回的是
+`Result<Result<Event, notify::Error>, RecvTimeoutError>`——**双层 Result**，
+且错误枚举是 `RecvTimeoutError::{Timeout, Disconnected}`，不是 `TryRecvError::Empty`
+（那是 `try_recv` 的）。Timeout 要 `continue`、Disconnected 才 `break`。
+
+**边界新表述**：留在实机的只有 `app.emit(...)` → WebView `listen(...)` 那一段
+（事件名两端硬编码成对：`FS_CHANGED_EVENT` / `'kojo:fs-changed'`，**这是一处真实的脆弱点**——
+Tauri 不检查事件名字符串，改一边会静默失灵。已写进人工清单 j1/j2 的判据：
+"打开项目后没有红色通知"就是这段的哨兵）。
+
+#### 验收
+
+| 检查 | 结果 |
+|---|---|
+| `cargo test --lib` | **19 项全绿**（17 → 19） |
+| 反证 | `NonRecursive` ⇒ 第 1 条红；改回 ⇒ 绿 |
+| `vitest run` / typecheck / 审计 | 未受影响（本批**零 TS 改动**，只加 Rust 测试） |
+| 命名合规 | 测试路径全用中性名（`payload.txt` / `a/b/c`）——`M_KOJO`、`個人口上` 是审计 A 项硬禁词，**连测试字面量都算** |

@@ -82,8 +82,9 @@
 ### 2.J 文件监视实机勾验（**发版判据②终验**，§5.84）
 
 > 判据② = 「BUG-5 `file.changed` 真实监视器接线 + 去抖」。
-> 代码侧已有 `watcher.realfs.test.ts`（真 `fs.watch` 端到端）与 21 条假时钟用例，
-> 但 **Rust notify → WebView** 这一段只能在桌面壳里证（`EventHandler` 要 `AppHandle`，
+> 代码侧已有 `watcher.realfs.test.ts`（真 `fs.watch` 端到端）+ 21 条假时钟用例
+> + Rust 侧 `watch_runtime_tests`（递归监视真的收得到事件，§5.86），
+> 但 **Rust notify → WebView** 那一段只能在桌面壳里证（`EventHandler` 要 `AppHandle`，
 > 单测造不出 Tauri 运行时）。跑 `pnpm tauri dev`，打开真实项目后逐条勾：
 
 - [ ] **j1 监视起来了**：打开项目后**没有**红色通知（有则说明 `partial`/`unavailable`，
