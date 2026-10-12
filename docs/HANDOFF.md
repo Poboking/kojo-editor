@@ -153,10 +153,17 @@
     但对话框与复制绑在同一 Rust 命令内，JS 拿不到落点决定权，故无越权面。
   - 部署（P-E）：三道前置判定**全在动盘之前**（源是目录 / 目标不存在 / 目标在写白名单内），
     未授权时连目录都不建，不给引擎留半成品。方向唯一，永不回写工作区。
-  - **剩余欠账**（纪要 §5 清单）：署名/授权一等公民（**下一批首选**）· 导出 ZIP · 直连模式开关 ·
+  - **剩余欠账**（纪要 §5 清单）：导出 ZIP（**下一批首选**）· 直连模式开关 ·
     多剧本编号上树 · 中日对照。
-- **当前基线（2026-10-12 口上项目批后）：1080 passed / 8 skipped（1088）；16 插件；
+  - **✅ T2 署名 / 授权一等公民已完成**（§5.50）：`attribution.ts` 纯函数抽取
+    （先 dump 真实语料定形态，三次推翻直觉）+ 面板展开态一行摘要（给证据不给结论，
+    悬停看原文出处）+ 导入向导随 meta 携带原作者。**口径 = 高精度宁缺勿滥**：
+    实测 214 包只抽到 26 个署名，这是设计结果——假阳性会让人把别人的作品当无主作品改。
+    语料基线常驻 `attribution.corpus.test.ts`（`KOJO_SMOKE_PROJECT` 守门）。
+- **当前基线（2026-10-12 T2 批后）：1109 passed / 9 skipped（1118）；16 插件；
   审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；`cargo test --lib` 12 项全绿。**
+  ⚠ 跑全量**不要**设 `KOJO_SMOKE_PROJECT`（会放行依赖 sav 存档的注入测试而本机零存档必红）；
+  语料基线单独带变量跑那一个文件即可。
 
 ## 三、文档索引（按权威性排序；2026-10-11 整理批后口径）
 
@@ -707,12 +714,12 @@ node tools/smoke-tauri-ipc.mjs
 ## 十、新会话动手清单
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1080 passed / 8 skipped** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.49 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1109 passed / 9 skipped** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.50 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前两条主线**：
-   - **口上项目线**（纪要 §5 清单）：P-A…P-E 已通，**下一批首选 = 署名/授权一等公民**
-     （从包内 README 抽 `作者 / 最終更新 / ライセンス` → 面板包行展示 → 导入向导携带），
-     其后 = 导出 ZIP（需 Rust 加压缩依赖，独立一批）。
+   - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 已通，**下一批首选 = 导出 ZIP**
+     （需 Rust 加压缩依赖 + `export_zip` 命令，照 `exportDirectory` 的「对话框即授权」形态），
+     其后 = 直连模式开关 · 多剧本编号上树 · 中日对照。
    - **UI/UX 重设计线**（发版判据 ⑥）：P0–P3 ✅，**P4 = 三容器拖拽停靠 + 全禅模式 + 设置 overlay**
      待开工（需求定稿 `docs/UI-REDESIGN-2026-10-11.md` §200）。
    - **不属于本组**：语法糖语义（`kojo-sugar` / `ui-sugar-*` / `.kojo` 转译高亮 / 糖视图）与

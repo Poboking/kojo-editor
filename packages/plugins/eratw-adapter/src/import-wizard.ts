@@ -15,6 +15,7 @@ import { createElement as h, useEffect, useMemo, useState } from 'react';
 import type { WorkspaceProject, WorkspaceService } from '@kojo/plugin-api';
 import { basename } from '@kojo/plugin-api';
 import { sanitizeSegment } from './scaffold';
+import { attributionMeta, attributionSummary, type PackageAttribution } from './attribution';
 
 /** overlay 贡献 id（插件监听 importRequested 后发 `ui.overlay.open` 引用） */
 export const IMPORT_KOJO_OVERLAY_ID = 'eratw.importKojoProject';
@@ -34,6 +35,11 @@ export interface ImportKojoWizardDeps {
   close(): void;
   /** 导入成功后回调（面板刷新：目录缓存失效 + 项目列表重拉） */
   onImported(): void;
+  /**
+   * 读取源包的署名 / 授权（T2）。导入时**原样带进制品 meta**——
+   * 二次创作最容易丢的就是原作者，而语料里署名写在 README 正文、不在目录名上。
+   */
+  loadAttribution(absDir: string): Promise<PackageAttribution>;
 }
 
 /** 目标项目选择的「新建」哨兵值 */
@@ -50,6 +56,29 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
     const [packageName, setPackageName] = useState('');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    /** 源包署名（T2；null = 尚未读到，不阻断导入） */
+    const [sourceAttr, setSourceAttr] = useState<PackageAttribution | null>(null);
+
+    // 源包署名读取：失败不阻断导入（署名是"别丢了原作者"的提醒，不是导入前置条件）
+    useEffect(() => {
+      const src = pending?.sourceDir;
+      if (!src) {
+        setSourceAttr(null);
+        return;
+      }
+      let cancelled = false;
+      deps
+        .loadAttribution(src)
+        .then((a) => {
+          if (!cancelled) setSourceAttr(a);
+        })
+        .catch(() => {
+          if (!cancelled) setSourceAttr(null);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [deps, pending?.sourceDir]);
 
     // 已有项目列表（目标项目下拉）
     useEffect(() => {
@@ -109,7 +138,9 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
           name: pkgDirName,
           dirName: pkgDirName,
           sourceDir: pending.sourceDir,
-          meta: { importedFrom: pending.sourceDir },
+          // T2：把抽到的原作者原样带进制品 meta——二次创作最容易丢的就是这个，
+          // 而语料里署名写在 README 正文、不在目录名上，丢了就再也找不回来。
+          meta: { importedFrom: pending.sourceDir, ...attributionMeta(sourceAttr) },
         });
         deps.onImported();
         deps.clearPending();
@@ -133,6 +164,15 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
         h('div', null, h('span', { className: 'wizard-label' }, '源目录'),
           h('code', null, pending.sourceDir)),
         h('div', { className: 'dim' }, '导入 = 字节级复制到工作区；源目录保持原样，游戏目录只读不破。')),
+
+      // 源包署名（T2）：导入前先把"这是谁的东西"摆在脸上，并随制品 meta 带走
+      sourceAttr
+        ? h('div', { className: 'wizard-preview' },
+            h('div', null, h('span', { className: 'wizard-label' }, '源包署名'),
+              h('span', null, attributionSummary(sourceAttr))),
+            h('div', { className: 'dim' },
+              '导入后请以自己的署名命名；原作者信息随包保留，不要删。'))
+        : null,
 
       // 目标项目（已有 / 新建）
       h('label', { className: 'wizard-field' },

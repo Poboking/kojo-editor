@@ -18,6 +18,7 @@
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { DirEntry, WorkspaceArtifact, WorkspaceProject } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
+import { attributionSummary, type AttributionState } from './attribution';
 import type { PanelStatus } from './package-actions';
 
 /** 目录列举态（闭包缓存值）：在途 / 失败（带原因）/ 已加载 */
@@ -52,6 +53,10 @@ export interface KojoProjectsPanelDeps {
   exportArtifact(absDir: string, displayName: string): void;
   /** 发起「部署到游戏目录」（P-E：打开向导，落点与写权限在向导里确认） */
   deployArtifact(artifact: WorkspaceArtifact, absDir: string): void;
+  /** 署名 / 授权读取态（T2；未触发加载 → undefined） */
+  attribution(absDir: string): AttributionState | undefined;
+  /** 请求加载某包的署名（已加载 / 在途 → no-op） */
+  ensureAttribution(absDir: string): void;
 }
 
 /** 目录条目排序：目录在前，其后按名称（中文本地化比较口径） */
@@ -167,6 +172,35 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
       );
     };
 
+    /* ------------------------------ 署名 / 授权行（T2） ------------------------------ */
+
+    /**
+     * 包展开时的一行署名摘要。
+     *
+     * 只在**展开态**出现（口上树默认简洁的既定约束），且**给证据不给结论**：
+     * 悬停可看到抽自哪个文件哪一行 —— 授权条款一律不替作者下判断（见 attribution.ts 头注）。
+     */
+    const renderAttribution = (dir: string): ReactNode => {
+      const st = deps.attribution(dir);
+      const at = indent(1);
+      if (st === undefined) return null;
+      if (st === 'loading') {
+        return h('div', { className: 'kp-attribution dim', style: at }, '读取署名与授权…');
+      }
+      if (st === null) {
+        return h('div', { className: 'kp-attribution dim', style: at }, '署名信息读取失败（不影响编辑与部署）');
+      }
+      const tips: string[] = [];
+      if (st.author) tips.push(`作者原文：${st.author.file} 第 ${st.author.line} 行`);
+      if (st.updated) tips.push(`更新原文：${st.updated.file} 第 ${st.updated.line} 行`);
+      if (st.readmeFiles.length > 0) tips.push(`可查文件：${st.readmeFiles.join('、')}`);
+      return h(
+        'div',
+        { className: 'kp-attribution', style: at, title: tips.join('\n') },
+        attributionSummary(st),
+      );
+    };
+
     /* ------------------------------ 项目 → 包 ------------------------------ */
 
     const renderArtifacts = (p: WorkspaceProject): ReactNode => {
@@ -191,7 +225,10 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                   className: 'kp-artifact-btn',
                   style: indent(1),
                   title: `${dir}（点击展开真实文件夹）`,
-                  onClick: () => toggleDir(dir),
+                  onClick: () => {
+                    deps.ensureAttribution(dir);
+                    toggleDir(dir);
+                  },
                 },
                 h('span', { className: 'caret' }, isOpen ? '▾' : '▸'),
                 h('span', { className: 'kp-artifact-name' }, a.name),
@@ -221,6 +258,7 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                 ),
               ),
             ),
+            isOpen ? renderAttribution(dir) : null,
             isOpen ? renderDir(dir, 2) : null,
           );
         }),

@@ -19,6 +19,7 @@ import { loadEratwVariableSchema } from './variable-schema';
 import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
 import { createEratwFaceTable } from './face-templates';
 import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
+import { readPackageAttribution, type AttributionState as AttrState } from './attribution';
 import { createPackageActions } from './package-actions';
 import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
@@ -59,6 +60,8 @@ export function createEratwAdapterPlugin(): Plugin {
       const wsListeners = new Set<() => void>();
       /** 目录列举缓存（按绝对路径惰性加载；变更动作后整体失效，避免陈旧视图） */
       const wsDirCache = new Map<string, DirListState>();
+      /** 署名 / 授权缓存（T2；同按绝对路径，null = 读失败已降级为「未标注」） */
+      const wsAttrCache = new Map<string, AttrState>();
 
       const notifyWs = (): void => {
         for (const cb of [...wsListeners]) {
@@ -108,7 +111,27 @@ export function createEratwAdapterPlugin(): Plugin {
       /** 目录缓存整体失效 + 项目列表重拉（新建/导入/部署等变更动作后调用） */
       const invalidateWs = (): void => {
         wsDirCache.clear();
+        wsAttrCache.clear();
         refreshWsProjects();
+      };
+
+      /* ---- 署名 / 授权（T2）：按包目录惰性读取并缓存（README 可能 Shift-JIS，走 io 探测） ---- */
+
+      const ensureWsAttribution = (absDir: string): void => {
+        if (wsAttrCache.has(absDir)) return;
+        wsAttrCache.set(absDir, 'loading');
+        void readPackageAttribution({ io, absDir })
+          .then((a) => {
+            wsAttrCache.set(absDir, a);
+            notifyWs();
+          })
+          .catch((err: unknown) => {
+            // 署名读不到不打扰用户（不是操作失败）：静默降级为「未标注」，但日志留痕
+            const reason = err instanceof Error ? err.message : String(err);
+            ctx.log.debug(`署名抽取失败（${absDir}）：${reason}`);
+            wsAttrCache.set(absDir, null);
+            notifyWs();
+          });
       };
 
       /* ---- 包操作（P-D 导出；P-E 部署复用同一控制器与底部状态条） ---- */
@@ -299,6 +322,8 @@ export function createEratwAdapterPlugin(): Plugin {
           dismissStatus: () => actions.dismiss(),
           exportArtifact: (absDir, displayName) => actions.exportArtifact(absDir, displayName),
           deployArtifact: (artifact, absDir) => requestDeploy(artifact, absDir),
+          attribution: (absDir) => wsAttrCache.get(absDir),
+          ensureAttribution: ensureWsAttribution,
         }),
       });
 
@@ -330,6 +355,7 @@ export function createEratwAdapterPlugin(): Plugin {
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
           onImported: invalidateWs,
+          loadAttribution: (absDir) => readPackageAttribution({ io, absDir }),
         }),
       });
 
