@@ -3326,17 +3326,19 @@ stat 的计时窗口把「快照读盘 + JSON.parse + coerce」整段包进去�
 （自动应用 / 首次询问 / 工具条入口）共用同一判据不分叉；**工作区 ERB 不再弹首次询问、不再投影**；
 `setErbEditable` 的 `readOnly` 补上轴一（工作区文件不存在"解锁 / 回锁"这回事）。
 
-#### 验证
+#### 验证（每轮 rebase 后各跑一次；下表为第二轮最终态）
 
-| 检查 | rebase 完成时 | 合流批（`ebb40bc`）后 |
-|---|---|---|
-| `vitest run` | 1287 passed / 11 skipped | **1296 passed / 11 skipped** |
-| typecheck root + `@kojo/app` | 双 exit 0 | 双 exit 0 |
-| `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） | A–D 全绿 |
-| 语料守门（全量 2,285 文件） | 台词 99.2%｜输出 99.2%｜SIF 93.3%｜行 56.8%｜不变量 0 | **逐字相同** |
-| 全仓冲突标记扫描 | 0 | 0 |
+| 检查 | 结果 |
+|---|---|
+| `vitest run` | **1348 passed / 11 skipped**（首轮 rebase 后 1287/11 → 合流适配批 1296/11 → 远端再推进 5 提交后 1348/11） |
+| typecheck root + `@kojo/app` | 双 exit 0 |
+| `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
+| `pnpm --filter @kojo/app build` | ✓ 23.7 s（仅 Monaco 体积告警，非本次引入） |
+| 语料守门（全量 2,285 文件） | 台词 99.2%｜输出 99.2%｜SIF 93.3%｜行 56.8%｜不变量 0 —— **与 rebase 前逐字相同** |
+| 教学 golden + 他们的 `attribution.corpus` 语料守门 | 通过 |
+| 全仓冲突标记扫描 | 0 |
 
-**"读数逐字相同"就是这次合并的验收线**：糖投影是被他们性能线（计算池 / 并行运输 / 折叠链 /
+**两轮读数一字不动就是这次合并的验收线**：糖投影是被他们性能线（计算池 / 并行运输 / 折叠链 /
 Monaco 大文件降级）最容易被影响到的消费者——数字一字不动，才叫"并进来没伤到"。
 
 #### 未做
