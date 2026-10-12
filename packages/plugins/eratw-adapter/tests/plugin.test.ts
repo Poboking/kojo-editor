@@ -45,13 +45,22 @@ function activate(io: FileIO): { adapter: GameAdapter; registrations: GameAdapte
       warn: (m: string) => warns.push(m),
       error: (m: string) => warns.push(m),
     },
+    bus: { emit: () => {}, on: () => () => {} },
     inject: <T,>(key: string): T => {
       if (key === 'kernel.io') return io as unknown as T;
+      // 口上项目面板依赖（P-B）：本测试只关心 adapter，给最小伪实现
+      if (key === 'kernel.workspaces') {
+        return {
+          list: async () => [],
+          projectDir: (id: string) => `/ws/${id}`,
+        } as unknown as T;
+      }
       throw new Error(`unexpected inject: ${key}`);
     },
     slots: {
-      register: (_slot: string, item: GameAdapterContribution) => {
-        registrations.push(item);
+      register: (slot: string, item: GameAdapterContribution) => {
+        // P-B 起另有 ui.panel 贡献；本测试只收集 adapter 槽
+        if (slot === 'game.adapter') registrations.push(item);
         return () => {};
       },
     },

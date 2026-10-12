@@ -1,5 +1,14 @@
-import type { CharaInfo, FileIO, GameAdapter, GameProject, Plugin, VariableSchema } from '@kojo/plugin-api';
-import { join } from '@kojo/plugin-api';
+import type {
+  CharaInfo,
+  FileIO,
+  GameAdapter,
+  GameProject,
+  Plugin,
+  VariableSchema,
+  WorkspaceProject,
+  WorkspaceService,
+} from '@kojo/plugin-api';
+import { KernelServices, join } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { createEratwFamilyIndex } from './family-index';
@@ -7,6 +16,7 @@ import { createEratwConventions } from './conventions';
 import { loadEratwVariableSchema } from './variable-schema';
 import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
 import { createEratwFaceTable } from './face-templates';
+import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -18,14 +28,73 @@ import { createEratwFaceTable } from './face-templates';
  *
  * 槽位与服务：注册 `game.adapter` 槽位（onboarding 轮询）；
  * 按 ADR-0002 **不** provide 全局 `game.adapter` 服务键（多适配器共存需要）。
+ * 口上项目批 P-B 起另贡献 `ui.panel`「我的口上项目」：消费内核通用
+ * `kernel.workspaces`（project/artifact 模型），游戏解释只住本包。
  */
 export function createEratwAdapterPlugin(): Plugin {
   return {
     id: 'eratw-adapter',
     version: '0.2.0',
-    requires: ['kernel.io'],
+    requires: ['kernel.io', KernelServices.Workspaces],
     activate(ctx) {
       const io = ctx.inject<FileIO>('kernel.io');
+      const workspaces = ctx.inject<WorkspaceService>(KernelServices.Workspaces);
+
+      /* ---- 「我的口上项目」面板闭包状态（P-B；后续新建/导入/部署共用同一通知源） ---- */
+
+      let wsProjects: readonly WorkspaceProject[] = [];
+      let wsLoading = false;
+      let wsError: string | null = null;
+      const wsListeners = new Set<() => void>();
+      /** 目录列举缓存（按绝对路径惰性加载；变更动作后整体失效，避免陈旧视图） */
+      const wsDirCache = new Map<string, DirListState>();
+
+      const notifyWs = (): void => {
+        for (const cb of [...wsListeners]) {
+          try {
+            cb();
+          } catch (err) {
+            ctx.log.warn(`口上项目面板监听器抛错：${String(err)}`);
+          }
+        }
+      };
+
+      const refreshWsProjects = (): void => {
+        wsLoading = true;
+        wsError = null;
+        notifyWs();
+        workspaces
+          .list()
+          .then((list) => {
+            wsProjects = list;
+            wsLoading = false;
+            notifyWs();
+          })
+          .catch((err: unknown) => {
+            wsError = err instanceof Error ? err.message : String(err);
+            wsLoading = false;
+            ctx.log.warn(`工作区项目列表加载失败：${wsError}`);
+            notifyWs();
+          });
+      };
+
+      const ensureWsDir = (absDir: string): void => {
+        if (wsDirCache.has(absDir)) return;
+        wsDirCache.set(absDir, 'loading');
+        notifyWs();
+        void io
+          .listDir(absDir)
+          .then((entries) => {
+            wsDirCache.set(absDir, entries);
+            notifyWs();
+          })
+          .catch((err: unknown) => {
+            wsDirCache.set(absDir, { error: err instanceof Error ? err.message : String(err) });
+            notifyWs();
+          });
+      };
+
+      refreshWsProjects();
 
       /** 变量字典（每次 loadProject 时按当前游戏 CSV 重建） */
       let currentSchema: VariableSchema | undefined;
@@ -146,6 +215,32 @@ export function createEratwAdapterPlugin(): Plugin {
       };
 
       ctx.slots.register('game.adapter', { id: `${ERATW.gameId}-adapter`, adapter });
+
+      /* ---- 「我的口上项目」面板（P-B）：独立活动栏图标（不声明 group） ---- */
+
+      ctx.slots.register('ui.panel', {
+        id: 'kojo-projects',
+        title: '我的口上项目',
+        icon: '⌂',
+        // explorer 组（口上文件 30 / 函数树 40）之后，独占一枚活动栏图标
+        order: 35,
+        location: 'sidebar',
+        component: createKojoProjectsPanel({
+          subscribe: (cb) => {
+            wsListeners.add(cb);
+            return () => wsListeners.delete(cb);
+          },
+          projects: () => wsProjects,
+          loading: () => wsLoading,
+          error: () => wsError,
+          refresh: refreshWsProjects,
+          projectDir: (projectId) => workspaces.projectDir(projectId),
+          dirState: (absDir) => wsDirCache.get(absDir),
+          ensureDir: ensureWsDir,
+          reveal: (absPath) =>
+            ctx.bus.emit('editor.revealLocation', { filePath: absPath, source: 'eratw-adapter' }),
+        }),
+      });
     },
   };
 }

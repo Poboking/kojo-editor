@@ -2912,6 +2912,138 @@ textarea {
   background: var(--hover);
 }
 
+/* --------------------- 我的口上项目面板（口上项目批 P-B；插件组件，壳层只提供容器语义类名） --------------------- */
+
+.panel-kojo-projects {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  gap: var(--space-2);
+}
+/* 双真相源提示条（常驻）：写保护铁律的 UI 明示面 */
+.kp-notice {
+  flex: none;
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  color: var(--fg-dim);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-1);
+  padding: var(--space-2) var(--space-3);
+  cursor: help;
+}
+.kp-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.kp-toolbar-label {
+  font-size: var(--fs-1);
+}
+.kp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+.kp-empty {
+  padding: var(--space-3) var(--space-1);
+  font-size: var(--fs-2);
+  word-break: break-word;
+}
+.kp-empty.err {
+  color: var(--red);
+}
+.kp-actions {
+  padding: 0 var(--space-1);
+}
+/* 行按钮（项目 / 包 / 目录 / 文件共用骨架：整行可点、悬停淡底、圆角克制） */
+.kp-project-btn,
+.kp-artifact-btn,
+.kp-dir-btn,
+.kp-file-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 3px 6px;
+  font-size: var(--fs-2);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 4px;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.kp-project-btn:hover,
+.kp-artifact-btn:hover,
+.kp-dir-btn:hover,
+.kp-file-btn:hover {
+  background: var(--hover);
+}
+.kp-project-btn:focus-visible,
+.kp-artifact-btn:focus-visible,
+.kp-dir-btn:focus-visible,
+.kp-file-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.kp-project-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kp-artifact-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kp-dirname {
+  flex: none;
+  font-size: var(--fs-1);
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kp-count {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-1);
+}
+.kp-dir-name,
+.kp-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kp-file-btn {
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-1);
+}
+.kp-file-btn:hover {
+  color: var(--accent);
+}
+.kp-note {
+  padding: 2px 6px;
+  font-size: var(--fs-1);
+}
+.kp-note.err {
+  color: var(--red);
+}
+
 /* ------------------------------ 动效关键帧（ui-polish） ------------------------------ */
 
 @keyframes fade-in {

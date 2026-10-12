@@ -159,6 +159,10 @@ importers:
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api
+    devDependencies:
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
 
   packages/plugins/erb-parser:
     dependencies:
