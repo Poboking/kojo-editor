@@ -1122,7 +1122,7 @@ node tools/smoke-tauri-ipc.mjs
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1432 passed / 11 skipped（1443）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1530 passed / 11 skipped（1541）**、88 文件 / 6 跳 / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.81 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前三条主线**：
    - **体感丝滑线（本组主目标，性能）**：三段级联全部持久化（§5.58）→ 快照瘦身与卫生（§5.65）→
