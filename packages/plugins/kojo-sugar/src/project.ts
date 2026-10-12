@@ -446,6 +446,24 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
       }
     }
 
+    // 状态变化行：`CFLAG:TARGET:1088 = "热情"` → `她的心情 = "热情"`（批 J）。
+    // 反糖**一个字都没改动**就留原代码——半中不日的行既不给读者信息，也不是他能写的。
+    const assign = stateAssignment(content);
+    if (assign !== undefined) {
+      const sugar = reverseExprAttributes(content, deps);
+      if (sugar !== content) {
+        recs.push({
+          line: ln,
+          kind: 'speech',
+          text: sugar,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: null,
+        });
+        continue;
+      }
+    }
+
     // 其余（赋值 / 调用 / `@` / `#` / `$` / 其他指令）→ 原样保留
     recs.push(native(ln, 'other'));
   }
@@ -1123,7 +1141,13 @@ function reverseAttributes(text: string, deps: LiftDeps): string {
     });
 }
 
-/** 表达式里的变量引用（`FAMILY[:SCOPE]:INDEX`；索引允许中日文名与编号） */
+/**
+ * 表达式里的变量引用（`FAMILY[:SCOPE]:INDEX`；索引允许中日文名与编号）。
+ *
+ * **注意本正则只吃掉第一段冒号内容**，所以 `CFLAG:1:好感度`（数字角色号作用面 =
+ * "角色 1 的好感度"）会被切成 `CFLAG:1` + 剩下的 `:好感度`。这是**假阳性**的入口，
+ * 由 `reverseExprAttributes` 里的守卫挡下（见该函数注释）。
+ */
 const EXPR_REF_RE =
   /\b(CFLAG|TALENT|ABL|EXP|MARK|BASE|PALAM|TEQUIP|TCVAR):(?:(TARGET|MASTER):)?([^:\s()[\]{},%]+)/g;
 
@@ -1139,8 +1163,24 @@ function reverseExprAttributes(text: string, deps: LiftDeps): string {
     .map((seg) =>
       seg.startsWith('"')
         ? seg
-        : seg.replace(EXPR_REF_RE, (whole, family: string, scope: string | undefined, index: string) =>
-            sugarForRefParts(family, scope, index, dict) ?? whole,
+        : seg.replace(
+            EXPR_REF_RE,
+            (
+              whole,
+              family: string,
+              scope: string | undefined,
+              index: string,
+              offset: number,
+              source: string,
+            ) => {
+              // **数字角色号作用面一律不反糖**：`CFLAG:1:好感度` 是"角色 1 的好感度"，
+              // 而本正则会把 `1` 当属性编号去查名，得到 `她的既成事実:好感度`——
+              // 规范 §3.8 里 `她的X` 专指 `FAMILY:TARGET:X`，别的角色**糖里没有对应写法**
+              // （要引用其它角色是 `{角色12的名字}`，且只覆盖 CALLNAME）。
+              // 判据：没有显式 TARGET/MASTER 作用域，而匹配后面还紧跟一个 `:` → 整支不动。
+              if (scope === undefined && source[offset + whole.length] === ':') return whole;
+              return sugarForRefParts(family, scope, index, dict) ?? whole;
+            },
           ),
     )
     .join('');
@@ -1184,6 +1224,29 @@ function sugarForRefParts(
   const name = dict.nameAt?.(family, index);
   if (name === undefined) return undefined;
   return `${possessive}${name}`;
+}
+
+/**
+ * 行首是一个**状态赋值**吗（批 J）？`TFLAG:192 =0` / `EXP:自慰経験 += 1`。
+ *
+ * 判据只有两条，且都以"不猜"为轴：
+ * - 左值必须是**无空格的引用串**（`族[:段[:段]]`），操作符紧跟其后——比较运算
+ *   （`=` 后面还跟着 `=`/`<`/`>` 的形态如 `A =<> B`、`A = = B`）一律不算赋值；
+ *   控制流与指令行到不了这里（前面已按结构信息分流）。
+ * - 族必须属于 `CHAR_SCOPED_FAMILIES`：其余族（`FLAG`/`TFLAG`/`RESULT`/`LOCAL`…）
+ *   的反糖本就发不出中文（见 `sugarForRefParts` 三条硬判据），走这条路只会白跑一遍，
+ *   而且把 `LOCAL` 之类"读者不需要懂的临时量"排除在判据外更清楚。
+ *
+ * **为什么值不值**：语料实测口上域 122,065 条赋值里 `LOCAL` 占 87,853（72%），
+ * 真正的角色状态行约 2.5 万（`CFLAG` 8,165｜`TFLAG` 5,081｜`BASE` 2,801｜`TCVAR` 2,773｜
+ * `EXP` 2,435｜`TALENT` 1,435…）。这 2.5 万行是"剧情造成了什么后果"，读口的的人要的正是它。
+ */
+const STATE_ASSIGN_RE = /^([A-Za-z][A-Za-z0-9_]*)(?::[^:\s]+)*[ \t]*(\+=|-=|\*=|\/=|=)(?![=>])[ \t]*(.*)$/;
+
+function stateAssignment(content: string): string | undefined {
+  const m = STATE_ASSIGN_RE.exec(content);
+  if (!m) return undefined;
+  return CHAR_SCOPED_FAMILIES.has(m[1]!.toUpperCase()) ? content : undefined;
 }
 
 /** 结构扫描的防御性包装：扫描器抛错 → 退化为"无结构信息"（不中断投影） */

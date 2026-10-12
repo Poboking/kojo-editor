@@ -442,6 +442,89 @@ describe('糖投影 · 函数头反解成分野时机（批 I）', () => {
   });
 });
 
+/* ==================== 批 J：状态赋值行 → 中文属性写法 ==================== */
+
+describe('糖投影 · 角色状态赋值行反糖（批 J）', () => {
+  /** 桩字典：`CFLAG:1088` = 好感度、`BASE:7` = 勃起、`CFLAG:1` = 既成事実（用来钓假阳性） */
+  const dict = {
+    resolveFamily: () => undefined,
+    resolve: () => undefined,
+    nameAt: (family: string, index: string): string | undefined => {
+      if (family === 'CFLAG' && index === '1088') return '好感度';
+      if (family === 'CFLAG' && index === '1') return '既成事実';
+      if (family === 'BASE' && index === '7') return '勃起';
+      return undefined;
+    },
+  };
+  const withDict = (source: string) =>
+    liftProject(
+      {
+        transpile: () => {
+          throw new Error('x');
+        },
+        scanControlFlow,
+        dictionary: () => dict,
+      },
+      { source },
+    );
+
+  it('三段式 TARGET 作用域的赋值 → `她的好感度 += 50`（读者要的正是"剧情造成了什么"）', () => {
+    const r = withDict('CFLAG:TARGET:1088 += 50');
+    expect(segLines(r.segments[0]!)).toEqual(['她的好感度 += 50']);
+  });
+
+  it('两段式（省略角色 = TARGET 语义）与 MASTER 作用域同样反糖', () => {
+    const r = withDict(['CFLAG:1088 = 1', 'BASE:MASTER:7 += 500'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['她的好感度 = 1', '你的勃起 += 500']);
+  });
+
+  it('口径边界：**只有左值是角色状态**才算状态变化行（右值单独可读不_project_）', () => {
+    // `LOCAL = CFLAG:TARGET:1088` 是取数不是改状态，读者不卡在它上面；守门尺子的分母
+    // 同样只数角色作用域族——**判据与尺子必须同源**，否则读数会骗人。
+    expect(withDict('LOCAL = CFLAG:TARGET:1088').segments).toHaveLength(0);
+    const r = withDict('CFLAG:TARGET:1088 = LOCAL');
+    expect(segLines(r.segments[0]!)).toEqual(['她的好感度 = LOCAL']);
+  });
+
+  it('**数字角色号作用面绝不假阳性**：`CFLAG:1:好感度` 是"角色 1 的"，糖里没这写法', () => {
+    // 正则会把 `1` 当属性编号查名 → 得到 `她的既成事実:好感度`（既成事実与这行毫无关系）
+    for (const src of ['CFLAG:1:1088 += 50', 'CFLAG:1:好感度 += 50', 'CFLAG:ARG:1088 = 1']) {
+      const r = withDict(src);
+      expect(r.segments).toHaveLength(0);
+      expect(r.stats.nativeByReason.find((x) => x.reason === 'other')?.count).toBe(1);
+    }
+  });
+
+  it('条件里同一个洞：`IF CFLAG:1:1088 >= 500` 不许出现 `她的既成事実`', () => {
+    const r = withDict(['IF CFLAG:1:1088 >= 500', 'PRINTFORMW 甲', 'ENDIF'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['如果 CFLAG:1:1088 >= 500：', '\t甲']);
+  });
+
+  it('反糖一个字都没改动的赋值 → 留原代码（半中不日的行既没信息也不是他能写的）', () => {
+    const r = withDict(['LOCAL = 1', 'TFLAG:192 = 0', 'RESULT = 3'].join('\n'));
+    expect(r.segments).toHaveLength(0);
+  });
+
+  it('比较运算不当成赋值（`A =<> B` / `A = = B` 一类形态不动）', () => {
+    expect(withDict('IF CFLAG:TARGET:1088 = 1').segments.map((s) => s.fromLine)).toEqual([1]);
+    const r = withDict('CFLAG:TARGET:1088 = 1');
+    expect(segLines(r.segments[0]!)).toEqual(['她的好感度 = 1']);
+  });
+
+  it('非角色族（`FLAG`/`GLOBAL`）不进这条路', () => {
+    const r = withDict(['FLAG:12 = 1', 'GLOBAL:好感度 = 3'].join('\n'));
+    expect(r.segments).toHaveLength(0);
+  });
+
+  it('不变量：投影掉的赋值计入 projected，未动的计入 native', () => {
+    const { stats } = withDict(['CFLAG:TARGET:1088 += 50', 'LOCAL = 1', 'RETURN 1'].join('\n'));
+    expect(stats.totalLines).toBe(3);
+    expect(stats.projectedLines + stats.passthroughLines + stats.nativeLines).toBe(3);
+    expect(stats.projectedLines).toBe(1);
+    expect(stats.nativeLines).toBe(2);
+  });
+});
+
 describe('糖投影 · 控制流', () => {
   it('IF / ELSEIF / ELSE / ENDIF 与缩进', () => {
     const src = ['IF A', 'PRINTFORMW 甲', 'ELSEIF B', 'PRINTFORMW 乙', 'ELSE', 'PRINTFORMW 丙', 'ENDIF'].join('\n');

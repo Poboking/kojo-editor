@@ -71,6 +71,16 @@ const SIF_LINE_RE = /^\s*SIF\b/i;
  * 同 SIF 的道理：全语料头行只占 2.8%，混进"行覆盖"里整条能力退化都不会红，必须单列。
  */
 const HEAD_LINE_RE = /^\s*@[A-Za-z_$]/;
+/**
+ * 批 J 的尺子：**角色状态赋值行**（`CFLAG`/`TALENT`/`ABL`/`EXP`/`MARK`/`BASE`/`PALAM`/
+ * `TEQUIP`/`TCVAR` 开头，后面紧跟 `=`/`+=`/`-=`/`*=`/`/=`）。
+ *
+ * 分母刻意**只含角色作用域族**：语料实测口上域 122,065 条赋值里 `LOCAL` 占 72%
+ * （87,853 条），那是读者的噪声底，不该混进"读者要读的行"——把它算进分母会让这把尺子
+ * 看起来永远不达标，也永远不红。
+ */
+const STATE_ASSIGN_RE =
+  /^\s*(CFLAG|TALENT|ABL|EXP|MARK|BASE|PALAM|TEQUIP|TCVAR)(?::[^:\s]+)*[ \t]*(\+=|-=|\*=|\/=|=)(?![=>])/;
 
 interface Totals {
   files: number;
@@ -95,6 +105,9 @@ interface Totals {
   /** 函数头行数（批 I 的尺子）与其中显示为「时机 …：」/被骨架吸收的行数 */
   headLines: number;
   headProjected: number;
+  /** 角色状态赋值行数（批 J 的尺子）与其中显示成中文属性写法的行数 */
+  assignLines: number;
+  assignProjected: number;
 }
 
 const zero = (): Totals => ({
@@ -114,6 +127,8 @@ const zero = (): Totals => ({
   sifProjected: 0,
   headLines: 0,
   headProjected: 0,
+  assignLines: 0,
+  assignProjected: 0,
 });
 
 const pct = (a: number, b: number): string => (b === 0 ? '—' : `${((a / b) * 100).toFixed(1)}%`);
@@ -126,6 +141,7 @@ function line(t: Totals, label: string): string {
     `｜**输出行覆盖 ${pct(t.outputProjected, t.outputLines)}**（${t.outputProjected}/${t.outputLines}）` +
     `｜**SIF 覆盖 ${pct(t.sifProjected, t.sifLines)}**（${t.sifProjected}/${t.sifLines}）` +
     `｜**函数头可标率 ${pct(t.headProjected, t.headLines)}**（${t.headProjected}/${t.headLines}）` +
+    `｜**状态赋值可读率 ${pct(t.assignProjected, t.assignLines)}**（${t.assignProjected}/${t.assignLines}）` +
     `｜段 ${t.segments}（最多 ${t.maxSegments}/文件）`
   );
 }
@@ -232,8 +248,15 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
         let sifCovered = 0;
         let head = 0;
         let headCovered = 0;
+        let assign = 0;
+        let assignCovered = 0;
         for (let ln = 1; ln <= srcLines.length; ln++) {
           const text = srcLines[ln - 1] ?? '';
+          if (STATE_ASSIGN_RE.test(text)) {
+            assign++;
+            if (covered.has(ln)) assignCovered++;
+            continue;
+          }
           if (HEAD_LINE_RE.test(text)) {
             head++;
             if (covered.has(ln)) headCovered++;
@@ -272,6 +295,8 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           t.sifProjected += sifCovered;
           t.headLines += head;
           t.headProjected += headCovered;
+          t.assignLines += assign;
+          t.assignProjected += assignCovered;
         }
         segBuckets[bucketOf(r.segments.length)]!++;
       }
@@ -343,6 +368,14 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 工具/辅助函数——分野表里没有的时机就不冒充有（宁留原代码，不给错标签）。
       expect(total.headProjected / Math.max(1, total.headLines)).toBeGreaterThan(0.7);
       expect(kojo.headProjected / Math.max(1, kojo.headLines)).toBeGreaterThan(0.7);
+      // 批 J：角色状态赋值行 → 中文属性写法。实测 **26.0%**（5,344 / 20,532）。
+      // 这个数**看着小，但它才是真的**：加假阳性守卫之前是 43.8%，多出来的 3,642 行全是
+      // `CFLAG:1:好感度` 被读成 `她的既成事実:好感度`（见 §5.66）。剩下的 74% 分两类：
+      // ①其它角色号作用面（`MARK:10:` / `PALAM:12:` / `TALENT:ARG:`）——糖里没有对应写法，
+      // 按规范 §3.8 一律不标；②名字索引（`BASE:TARGET:情緒`）——原文对读者已经可读。
+      // 下限 0.2：字典接线掉断、或守卫收紧过头（→0）都会红。
+      expect(total.assignProjected / Math.max(1, total.assignLines)).toBeGreaterThan(0.2);
+      expect(kojo.assignProjected / Math.max(1, kojo.assignLines)).toBeGreaterThan(0.2);
 
       await kernel.stop();
     },
