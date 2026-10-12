@@ -6,6 +6,16 @@
   --fg: #d7dce2;
   --fg-dim: #8b949e;
   --accent: #4c8bf5;
+  /* 实机对比度量出来的分工（§5.102）：`--accent` (#4c8bf5) 上压白字只有 3.32:1，
+     正文级不达 WCAG AA（4.5:1）——而白字蓝底正是**每一个主按钮**（保存 / 创建并打开 / 完成）。
+     故填色底另给一档更深的 `--accent-strong`（白字 4.87:1），`--accent` 继续留给描边与高亮。
+     注意：`--accent` 当**文字**压在深底上同样不够（code 4.04:1 / 链接式幽灵按钮 4.41:1），
+     那一档（`--accent-text`）涉及 15 处规则，本批刻意没一起动，已登记成看板后续条目。 */
+  --accent-strong: #2e6fd1;
+  /* 反过来：`--accent` 当**文字**压在深底上也不达标（实机：糖视图开关 4.41:1、
+     向导里的 `code` 4.04:1，正文级需 4.5:1）。文字档给亮一点的 `--accent-text`
+     （5.54:1）；描边仍用 `--accent`（非文字元素按 3:1，实测 4.15:1 已过）。 */
+  --accent-text: #6ea8ff;
   --accent-dim: rgba(76, 139, 245, 0.22);
   --green: #4fc08d;
   --red: #e06c75;
@@ -78,8 +88,8 @@ button:disabled {
   cursor: default;
 }
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
   color: #fff;
 }
 button.primary:hover {
@@ -95,6 +105,9 @@ button.big {
 button.small {
   padding: 3px 10px;
   font-size: 12px;
+  /* 全站小按钮实测高 23px，差 1px 就够不到 WCAG 2.5.8 的 24×24 最小目标；
+     补 min-height 而不是改 padding——视觉密度几乎不变，可点区补齐。 */
+  min-height: 24px;
 }
 button.link {
   background: none;
@@ -686,7 +699,14 @@ textarea {
   cursor: pointer;
   font-size: 13px;
   line-height: 1;
-  padding: 2px 4px;
+  padding: 0 2px;
+  /* 实测 17×17，够不到 24×24 最小可点区（关闭是会丢东西的动作，不该靠瞄准）。
+     字形仍 13px，只是把可点区补齐；× 平时靠 opacity 隐藏，占位不变故不抖动。 */
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 4px;
   opacity: 0;
   transition:
@@ -1212,7 +1232,7 @@ textarea {
   white-space: nowrap;
 }
 .sugar-toggle.on {
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: var(--accent);
 }
 /* ERB 已解锁编辑：写保护此刻对这一份文件失效 → 警示色（口径见上方基类注释） */
@@ -2778,6 +2798,11 @@ textarea {
   background: var(--accent-dim);
   box-shadow: inset 2px 0 0 var(--accent);
 }
+/* 选中行是半透明蓝底，`--fg-dim` 压上去实测 3.48:1（副行是"哪一个包"，不是装饰文字）
+   ⇒ 选中时副行回到正文色，未选中行仍保持次要层级。 */
+.picker-item.active .picker-secondary {
+  color: var(--fg);
+}
 .picker-item:disabled {
   opacity: 0.45;
   cursor: default;
@@ -2890,7 +2915,7 @@ textarea {
   word-break: break-all;
 }
 .wizard-preview code {
-  color: var(--accent);
+  color: var(--accent-text);
   margin-left: var(--space-2);
 }
 .wizard-warn {
@@ -3017,9 +3042,16 @@ textarea {
   gap: var(--space-2);
 }
 .wizard-actions .primary {
-  background: var(--accent);
+  background: var(--accent-strong);
   border-color: transparent;
   color: #fff;
+}
+/* 主按钮里的快捷键芯片：`.hint` 的默认色是给深底用的灰，压到蓝底上只剩 1.03:1
+   （实机量得，等于看不见）。在按钮内改用白字 + 压暗底，量得 7.07:1。 */
+button.primary .hint {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(0, 0, 0, 0.22);
 }
 .wizard-actions .primary:disabled {
   opacity: 0.45;
