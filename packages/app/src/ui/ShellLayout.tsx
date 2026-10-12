@@ -755,48 +755,73 @@ export function ShellLayout(props: Props): ReactElement {
           <div className="overlay-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
             <div className="wizard">
               <h3>设置</h3>
-              <label className="settings-row">
-                <input
-                  type="checkbox"
-                  checked={layout.zen}
-                  onChange={(e) => dispatch(e.target.checked ? { type: 'toggleZen' } : { type: 'exitZen' })}
-                />
-                <span>
-                  写作模式（全禅）
-                  <span className="settings-hint">快捷键 Ctrl+K Z；Esc 退出</span>
-                </span>
-              </label>
-              <label className="settings-row">
-                <input
-                  type="checkbox"
-                  checked={layout.zenLimitWidth}
-                  onChange={(e) => dispatch({ type: 'setZenLimitWidth', value: e.target.checked })}
-                />
-                <span>
-                  写作模式：编辑器居中限宽（约 1000px）
-                  <span className="settings-hint">关闭后编辑器铺满全宽</span>
-                </span>
-              </label>
-              <label className="settings-row">
-                <input
-                  type="checkbox"
-                  checked={sugarViewOn}
-                  onChange={(e) => applySugarViewPref(e.target.checked)}
-                />
-                <span>
-                  语法糖视图（把 ERB 显示成中文表层写法）
-                  <span className="settings-hint">
-                    只读显示、不改动原文件；快捷键 Ctrl+Alt+T。仅对 .erb 生效（.kojo 本身就是糖）
+
+              <div className="settings-group">
+                <div className="settings-group-title">视图</div>
+                <label className="settings-row">
+                  <input
+                    type="checkbox"
+                    checked={layout.zen}
+                    onChange={(e) => dispatch(e.target.checked ? { type: 'toggleZen' } : { type: 'exitZen' })}
+                  />
+                  <span>
+                    写作模式
+                    <span className="settings-hint">收起所有面板，只留编辑器。快捷键 Ctrl+K Z，Esc 退出</span>
                   </span>
-                </span>
-              </label>
-              <div className="settings-actions">
-                <button className="ghost small" onClick={doReset}>
-                  重置布局
-                </button>
-                <span className="settings-hint">恢复默认面板位置 / 尺寸 / 显隐</span>
+                </label>
+                {/* 居中限宽只在写作模式下有意义——非写作模式时它**什么都控制不了**，
+                    所以不是"灰着好看"，而是不给一个点了没反应的控件。 */}
+                <label className={`settings-row nested${layout.zen ? '' : ' off'}`}>
+                  <input
+                    type="checkbox"
+                    checked={layout.zenLimitWidth}
+                    disabled={!layout.zen}
+                    onChange={(e) => dispatch({ type: 'setZenLimitWidth', value: e.target.checked })}
+                  />
+                  <span>
+                    编辑器居中限宽
+                    <span className="settings-hint">
+                      {layout.zen
+                        ? '按一行正文的舒适宽度收拢；关闭则铺满整个窗口'
+                        : '需要先开启写作模式'}
+                    </span>
+                  </span>
+                </label>
               </div>
-              <div className="settings-actions">
+
+              <div className="settings-group">
+                <div className="settings-group-title">编辑器</div>
+                <label className="settings-row">
+                  <input
+                    type="checkbox"
+                    checked={sugarViewOn}
+                    onChange={(e) => applySugarViewPref(e.target.checked)}
+                  />
+                  <span>
+                    语法糖视图
+                    <span className="settings-hint">
+                      把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
+                      只改显示、不改动文件。快捷键 Ctrl+Alt+T
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <div className="settings-group">
+                <div className="settings-group-title">布局</div>
+                <div className="settings-row static">
+                  <button className="ghost small" onClick={doReset}>
+                    重置布局
+                  </button>
+                  <span>
+                    恢复默认的面板位置、尺寸与显隐
+                    <span className="settings-hint">不影响任何文件内容</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* 单一页脚行，且沿用全站模态房规：primary 恒等于推荐项、排在最右 */}
+              <div className="settings-footer">
                 <button className="primary small" onClick={() => setSettingsOpen(false)}>
                   完成
                 </button>

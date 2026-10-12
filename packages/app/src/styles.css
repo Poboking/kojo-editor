@@ -2910,11 +2910,54 @@ textarea {
   color: var(--fg-dim);
   font-size: var(--fs-1);
 }
-.settings-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+/* 设置分组标题：靠"缩进 + 更小的字号 + 一条分隔"分层，不靠加粗大字号抢视线 */
+.settings-group + .settings-group {
   margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.settings-group-title {
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-1);
+}
+/* 从属项：缩进一级，视觉上明确"它属于上面那一项" */
+.settings-row.nested {
+  margin-left: var(--space-4);
+}
+/* 控件当前不起作用（居中限宽要先开写作模式）——整行降透明度，
+   且输入框本身 disabled，点了不会有反馈，与"能点但没效果"区别开 */
+.settings-row.off {
+  opacity: 0.5;
+  cursor: default;
+}
+.settings-row.off:hover {
+  background: none;
+}
+.settings-row.off input[type='checkbox'] {
+  cursor: not-allowed;
+}
+/* 非开关型条目（重置布局）：与开关行同栅格，但首列放按钮而非复选框 */
+.settings-row.static {
+  align-items: flex-start;
+  cursor: default;
+}
+.settings-row.static:hover {
+  background: none;
+}
+.settings-row.static > button {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+/* 页脚：单一一行、primary 靠右（全站模态房规） */
+.settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
 }
 .wizard-error {
   color: var(--red);
