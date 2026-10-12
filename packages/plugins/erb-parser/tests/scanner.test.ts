@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cleanDocBlock,
+  DOC_MAX_CHARS,
   parseDimDeclaration,
   parseErbText,
   parseFunctionDefinition,
@@ -391,5 +393,89 @@ describe('scanControlFlow', () => {
       expect(stmts.map((s) => s.kind)).toEqual([opener, 'ENDDATA']);
     }
     expect(scanControlFlow(['PRINTDATAX', '\t"x"', 'ENDDATA'].join('\n')).map((s) => s.kind)).toEqual(['ENDDATA']);
+  });
+});
+
+/* ---------------------- 函数上方注释块（用户反馈 9） ---------------------- */
+
+describe('cleanDocBlock · 注释块清洗', () => {
+  it('丢掉画框装饰线、去 ; 前缀，保留信息行', () => {
+    const out = cleanDocBlock([
+      ';==================================================',
+      ';660,読書',
+      ';TFLAG:193(選択肢文学(1=忍殺 2=失敗 3=文学))',
+      ';==================================================',
+    ]);
+    expect(out).toBe('660,読書\nTFLAG:193(選択肢文学(1=忍殺 2=失敗 3=文学))');
+  });
+
+  it('全是装饰线 / 只有分号 → undefined（缺省而非空串）', () => {
+    expect(cleanDocBlock([';====', ';-----', ';', ';   *  '])).toBeUndefined();
+    expect(cleanDocBlock([])).toBeUndefined();
+  });
+
+  it('超上限截断并加省略号（离群长文档不吃掉整份快照）', () => {
+    const long = `;${'あ'.repeat(DOC_MAX_CHARS + 200)}`;
+    const out = cleanDocBlock([long])!;
+    expect(out.length).toBeLessThanOrEqual(DOC_MAX_CHARS);
+    expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('保留 ; 后正文里的分号与缩进内容', () => {
+    expect(cleanDocBlock([';作者: 某;人 备注'])).toBe('作者: 某;人 备注');
+  });
+});
+
+describe('parseErbText · docComment 归属', () => {
+  it('紧邻 @ 行的注释块挂到该函数，并保留真实形态', () => {
+    const f = parseErbText(
+      [
+        ';==================================================',
+        ';660,読書',
+        ';TFLAG:193(選択肢文学)',
+        ';==================================================',
+        '@M_KOJO_MESSAGE_COM_K1_660',
+        '\tPRINTL ok',
+        '@M_KOJO_MESSAGE_COM_K1_661',
+      ].join('\n'),
+      'a.ERB',
+    );
+    expect(f.functions[0]!.docComment).toBe('660,読書\nTFLAG:193(選択肢文学)');
+    // 第二个函数上方没有注释 → 缺省，不是空串
+    expect(f.functions[1]!.docComment).toBeUndefined();
+  });
+
+  it('注释与 @ 行之间允许一个空行，但连续多空行视为断开（防文件头注释跨半张纸粘上来）', () => {
+    const withOne = parseErbText([';読書', '', '@M_KOJO_K1_A'].join('\n'), 'a.ERB');
+    expect(withOne.functions[0]!.docComment).toBe('読書');
+    const withMany = parseErbText([';読書', '', '', '', '', '@M_KOJO_K1_A'].join('\n'), 'a.ERB');
+    expect(withMany.functions[0]!.docComment).toBeUndefined();
+  });
+
+  it('张冠李戴防线：注释后若隔了语句行，不得再挂到后面的函数上', () => {
+    const f = parseErbText(
+      [';这是给下面 DIM 的说明', '#DIM LOCAL, 5', '@M_KOJO_K1_A'].join('\n'),
+      'a.ERB',
+    );
+    expect(f.functions[0]!.docComment).toBeUndefined();
+  });
+
+  it('归属规则是「紧邻」：函数体尾部的注释归到下一个函数（确定规则，不猜作者意图）', () => {
+    const f = parseErbText(
+      ['@M_KOJO_K1_A', '\tPRINTL 1', '; 收尾随手注释', '@M_KOJO_K1_B'].join('\n'),
+      'a.ERB',
+    );
+    // A 自己上方没注释 → 缺省；那行注释紧邻 B → 归 B。
+    // 作者意图本就模糊，这里取一条**可预测的确定规则**（紧邻其下的声明），不做二次猜测。
+    expect(f.functions[0]!.docComment).toBeUndefined();
+    expect(f.functions[1]!.docComment).toBe('收尾随手注释');
+  });
+
+  it('[SKIPSTART] 块内的注释不参与收集', () => {
+    const f = parseErbText(
+      ['[SKIPSTART]', ';被跳过的注释', '[SKIPEND]', '@M_KOJO_K1_A'].join('\n'),
+      'a.ERB',
+    );
+    expect(f.functions[0]!.docComment).toBeUndefined();
   });
 });

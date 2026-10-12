@@ -134,6 +134,41 @@ export function parseDimDeclaration(trimmed: string): { directive: string; name:
 }
 
 /** 解析 ERB 文本（纯函数，测试友好） */
+/**
+ * 函数上方注释块的**保留字符上限**。
+ *
+ * 实测真实语料平均 76 字符，但存在 2,120 字符的英文长文档离群值。
+ * 索引会被快照持久化（见 snapshot.ts），离群长文不截断会让单函数吃掉整份快照的预算，
+ * 所以截断并留省略号——**截断是显式降级，不是丢数据**（原文仍在文件里，悬停看到前缀即可以定位）。
+ */
+export const DOC_MAX_CHARS = 600;
+
+/** 纯装饰线：`;` 加一串 `=` `-` `*` `＊` 或空白（eraTW 作者用它画框）。 */
+const DOC_DECORATION_ONLY = /^;[\s=\-*＊─━]*$/;
+
+/**
+ * 把 `@` 行上方收集到的原始注释行清洗成展示文本；无可展示内容 → undefined。
+ *
+ * 纯函数、可单测。规则：
+ * 1. 丢掉纯装饰线（`;====` 这类画框用的横线）——它们对读代码的人零信息量；
+ * 2. 去掉 `;` 前缀与紧随的一个空格；
+ * 3. 逐行右trim，整体再trim；全空 → undefined（**缺省而非空串**，避免索引堆无用字段）。
+ */
+export function cleanDocBlock(rawLines: readonly string[]): string | undefined {
+  const kept: string[] = [];
+  for (const line of rawLines) {
+    if (DOC_DECORATION_ONLY.test(line)) continue;
+    const body = line.replace(/^;\s?/, '').trimEnd();
+    if (body.length > 0) kept.push(body);
+  }
+  if (kept.length === 0) return undefined;
+  let text = kept.join('\n');
+  if (text.length > DOC_MAX_CHARS) {
+    text = `${text.slice(0, DOC_MAX_CHARS - 1).trimEnd()}…`;
+  }
+  return text;
+}
+
 export function parseErbText(text: string, path = '<memory>'): ErbFile {
   const lines = normalizeEol(text).split('\n');
   const lineCount = lines.length;
@@ -145,6 +180,20 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
 
   /** #FUNCTION 标记：正常写在 @ 行之后（标记"上一个遇到的函数"）；写在其前则标记"下一个函数" */
   let pendingMarkerBeforeNext = false;
+
+  /**
+   * `@` 行上方紧邻的 `;` 注释块缓冲（用户反馈 9：函数名全大写 + 长前缀难辨识，
+   * 悬停要给注释原文）。遇到任何**语句行**即清空——注释是跟着它下面那个声明的，
+   * 隔了一条语句再挂到后面的函数上就是张冠李戴。
+   */
+  let docBuf: string[] = [];
+  let blankRun = 0;
+  const clearDoc = (): void => {
+    docBuf = [];
+    blankRun = 0;
+  };
+  /** 连续空行超过这个数就断开——防止文件头的注释块跨越大段空白粘到后面的函数上 */
+  const DOC_MAX_BLANK_GAP = 2;
 
   const markExpression = (): void => {
     const last = functions[functions.length - 1];
@@ -167,7 +216,16 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
       inSkipBlock = true;
       continue;
     }
-    if (trimmed.length === 0 || trimmed.startsWith(';')) continue;
+    if (trimmed.length === 0) {
+      // 空行不断块（作者常在注释与 @ 行之间留一行），但连续过多空行视为断开
+      if (++blankRun > DOC_MAX_BLANK_GAP) clearDoc();
+      continue;
+    }
+    if (trimmed.startsWith(';')) {
+      docBuf.push(trimmed);
+      blankRun = 0;
+      continue;
+    }
 
     if (trimmed.startsWith('#')) {
       const upper = trimmed.toUpperCase();
@@ -184,15 +242,22 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
         continue;
       }
       const dim = parseDimDeclaration(trimmed);
-      if (dim) dims.push({ name: dim.name, directive: dim.directive, line: i + 1 });
+      if (dim) {
+        dims.push({ name: dim.name, directive: dim.directive, line: i + 1 });
+        clearDoc(); // #DIM 上方的注释是说明这个变量声明的，不能挂到后面的函数上
+      }
       continue;
     }
 
-    if (trimmed.startsWith('$')) continue; // 跳转标签，不是函数
+    if (trimmed.startsWith('$')) {
+      clearDoc(); // 跳转标签同理：注释属于标签，不属于后面第一个函数
+      continue;
+    }
 
     if (trimmed.startsWith('@')) {
       const def = parseFunctionDefinition(trimmed);
       if (def) {
+        const doc = cleanDocBlock(docBuf);
         functions.push({
           name: def.name,
           normalizedName: def.name.toUpperCase(),
@@ -201,13 +266,16 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
           endLine: lineCount, // 稍后收紧
           filePath: path,
           isExpressionFunction: pendingMarkerBeforeNext,
+          ...(doc !== undefined ? { docComment: doc } : {}),
         });
         pendingMarkerBeforeNext = false;
         currentFuncStart = i + 1;
       }
+      clearDoc();
       continue;
     }
     // 其余行为函数体/顶层语句：不影响结构扫描（v0.1）
+    clearDoc();
   }
 
   // 收紧 endLine：下一个函数定义前一行

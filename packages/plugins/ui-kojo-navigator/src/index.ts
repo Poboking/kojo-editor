@@ -28,6 +28,7 @@ import type {
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
   buildNavigatorTree,
+  functionTooltip,
   searchFunctions,
   shouldRebuildIndex,
   type NavigatorTree,
@@ -341,7 +342,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                           'button',
                           {
                             className: 'nav-hit-btn',
-                            title: `${shortPath(h.node.filePath)}:${h.node.startLine}`,
+                            title: functionTooltip(h.node, shortPath),
                             onClick: () => open(h.node.filePath, h.node.startLine, h.node.name),
                           },
                           createElement('span', { className: 'nav-hit-name' }, h.node.name),
@@ -422,7 +423,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                                       'button',
                                       {
                                         className: 'nav-func-btn',
-                                        title: `${shortPath(fn.filePath)}:${fn.startLine}-${fn.endLine}`,
+                                        title: functionTooltip(fn, shortPath),
                                         onClick: () => open(fn.filePath, fn.startLine, fn.name),
                                       },
                                       createElement('span', { className: 'nav-func-name' }, fn.name),

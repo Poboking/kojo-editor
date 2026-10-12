@@ -32,8 +32,15 @@
  */
 import type { ErbFile, ErbFunctionRef, FileStat } from '@kojo/plugin-api';
 
-/** 快照格式版本（结构不兼容时整体弃用重建） */
-export const SNAPSHOT_VERSION = 1;
+/**
+ * 快照格式版本（结构不兼容时整体弃用重建）。
+ *
+ * **v1 → v2**（用户反馈 9）：`ErbFunction` 新增 `docComment`（函数上方紧邻注释块）。
+ * 旧快照里没有这个字段，若继续复用会让函数树悬停**静默空白**且无从察觉——
+ * 与其悄悄降级，不如按 `coerceSnapshot` 的 fail-closed 语义整体弃用、一次重建。
+ * 代价：升级后首次开项目多等一段索引时间（此后照常走快照）。
+ */
+export const SNAPSHOT_VERSION = 2;
 
 /** 单个文件的快照条目 */
 export interface SnapshotEntry {
@@ -91,6 +98,7 @@ export function aggregateIndex(files: Iterable<ErbFile>): {
         filePath: fn.filePath,
         startLine: fn.startLine,
         endLine: fn.endLine,
+        ...(fn.docComment !== undefined ? { docComment: fn.docComment } : {}),
       });
       byName.set(fn.normalizedName, refs);
     }

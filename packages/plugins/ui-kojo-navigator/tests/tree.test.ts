@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { CharaInfo, ErbIndex, ErbFile, ErbFunction, FamilyIndexRule, FamilyMatch, FamilyParseKind } from '@kojo/plugin-api';
-import { buildNavigatorTree, searchFunctions, shouldRebuildIndex } from '../src/tree';
+import { buildNavigatorTree, functionTooltip, searchFunctions, shouldRebuildIndex } from '../src/tree';
 
 /* ------------------------------ 测试基建 ------------------------------ */
 
@@ -207,5 +207,28 @@ describe('shouldRebuildIndex（project.opened 与 kojo.functionChanged 双触发
     expect(shouldRebuildIndex(null, idx)).toBe(true);
     expect(shouldRebuildIndex(idx, null)).toBe(true);
     expect(shouldRebuildIndex(null, null)).toBe(false);
+  });
+});
+
+describe('functionTooltip · 悬停给注释不给行号（用户反馈 9）', () => {
+  const shortPath = (p: string): string => p.replace(/^\/p\//, '');
+  const base = { filePath: '/p/ERB/個人口上/001/a.ERB', startLine: 12, endLine: 40 };
+
+  it('有注释时注释在最前——全大写长前缀的函数名，作者说明才是人要读的', () => {
+    const t = functionTooltip(
+      { ...base, docComment: '660,読書\nTFLAG:193(選択肢文学)' },
+      shortPath,
+    );
+    expect(t).toBe('660,読書\nTFLAG:193(選択肢文学)\n\nERB/個人口上/001/a.ERB:12-40');
+    expect(t.startsWith('660')).toBe(true);
+  });
+
+  it('无注释时退回原形态（路径:起-止），不硬凑空行', () => {
+    expect(functionTooltip(base, shortPath)).toBe('ERB/個人口上/001/a.ERB:12-40');
+  });
+
+  it('定位信息始终保留在末尾——注释不能取代"这函数在哪个文件哪几行"', () => {
+    const t = functionTooltip({ ...base, docComment: 'X' }, shortPath);
+    expect(t).toContain('a.ERB:12-40');
   });
 });

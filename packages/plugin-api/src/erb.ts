@@ -36,6 +36,21 @@ export interface ErbFunction {
    * 宽容解析同样接受写在 `@` 行之前的形式。
    */
   isExpressionFunction?: boolean;
+  /**
+   * 函数声明**上方紧邻**的 `;` 注释块（已去装饰线、去 `;` 前缀、按行拼接）。
+   * 无注释块 = 缺省（不写空串，避免索引里堆一堆无意义字段）。
+   *
+   * 为什么值得为它付索引体积（用户反馈 9「函数名几乎都是大写 + 长前缀，初看难解其意」）：
+   * 实测真实语料 100,532 个口上函数里 **51.5% 带这样的注释块**，平均 76 字符，
+   * 总计约 3.7 MB——一半函数因此能在函数树上直接读出人类可读的名字与说明。
+   * 典型形态（eraTW 作者手写惯例）：
+   *   ;==================================================
+   *   ;660,読書
+   *   ;TFLAG:193(選択肢文学(1=忍殺(文学？) 2=失敗 3=文学),…)
+   *   ;==================================================
+   * 长度上限见 scanner 的 `DOC_MAX_CHARS`（离群长文截断，防单函数吃掉整份快照）。
+   */
+  docComment?: string;
 }
 
 /** #DIM / #DIMS / #DIMSTR / #DIMCHAR 等声明的变量 */
@@ -68,6 +83,8 @@ export interface ErbFunctionRef {
   filePath: string;
   startLine: number;
   endLine: number;
+  /** 见 {@link ErbFunction.docComment}（导航树悬停提示消费） */
+  docComment?: string;
 }
 
 /**

@@ -29,6 +29,8 @@ export interface FunctionNode {
   readonly endLine: number;
   /** 家族解析结果（null = 未匹配口上命名） */
   readonly match: FamilyMatch | null;
+  /** 函数上方紧邻的作者注释块（悬停提示用；见 ErbFunction.docComment） */
+  readonly docComment?: string;
 }
 
 /** 面：调用语义分组（同一面内按 slot 排序） */
@@ -236,7 +238,14 @@ export function buildNavigatorTree(
 }
 
 function makeNode(
-  fn: { name: string; normalizedName: string; filePath: string; startLine: number; endLine: number },
+  fn: {
+    name: string;
+    normalizedName: string;
+    filePath: string;
+    startLine: number;
+    endLine: number;
+    docComment?: string;
+  },
   match: FamilyMatch,
 ): FunctionNode {
   return {
@@ -246,7 +255,27 @@ function makeNode(
     startLine: fn.startLine,
     endLine: fn.endLine,
     match,
+    ...(fn.docComment !== undefined ? { docComment: fn.docComment } : {}),
   };
+}
+
+/**
+ * 函数行的悬停提示文本（纯函数，可单测）。
+ *
+ * 用户反馈 9：函数名几乎都是**全大写 + 长前缀**（`M_KOJO_MESSAGE_COM_K1_30`），
+ * 初看完全读不出这函数干什么。而作者习惯在函数上方留一行说明
+ * （`;660,読書` / `;TFLAG:193(選択肢文学…)`）——实测覆盖 51.5% 的函数。
+ * 所以注释放**最前**（那才是人要看的东西），路径与行号垫在后面兜定位用途。
+ * 无注释时退回原形态，不硬凑。
+ */
+export function functionTooltip(fn: {
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  docComment?: string;
+}, shortPath: (p: string) => string): string {
+  const loc = `${shortPath(fn.filePath)}:${fn.startLine}-${fn.endLine}`;
+  return fn.docComment ? `${fn.docComment}\n\n${loc}` : loc;
 }
 
 /* ------------------------------ 搜索 ------------------------------ */
