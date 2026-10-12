@@ -1485,9 +1485,17 @@ export function hasCandidates(result: SugarLiftResult): boolean {
  * 本枚举是"行级"的透出口径（投影口径）。
  */
 export type SugarProjectNativeReason =
-  /** PRINT 变体无糖形态（非 FORM 系 / 无 `W`·`L` 后缀 / `PRINTBUTTON` 等） */
+  /**
+   * PRINT 家族里**不是"读者要读的文本"**的行：按钮 / 排版类变体
+   * （`PRINTBUTTON` `PRINTLC` `PRINTS` `PRINTPLAIN*` `PRINTV` `PRINTFORMK*`…）、
+   * 无换行变体的空体（`PRINT` / `PRINTFORM` 空体既不输出也不换行）、
+   * 以及指令后直接跟 `;` 注释的写法。
+   * （`PRINTL` / `PRINTW` / `PRINTDL` / `PRINTDW` / `PRINT` / `PRINTD` / `PRINTFORM*`
+   * 的文本体**已投影为文本行**——批 F；`PRINTDATA` 系是块开词，归 `unsupported-control-flow`。）
+   */
   | 'unsupported-print-variant'
-  /** 含行内条件 `\@…\@`（本版不做这类投影） */
+  /** **FORM 行**（`PRINTFORM*`）含行内条件 `\@…\@`——本版不做这类投影
+   *（非 FORM 行里的 `\@` 是被打印的字面字符，不受本因影响） */
   | 'inline-condition'
   /** 糖未覆盖的控制流（`SIF` / 循环 / TRY 系 / PRINTDATA 系 / `$标签` / `GOTO` 等） */
   | 'unsupported-control-flow'

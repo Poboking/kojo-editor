@@ -41,8 +41,19 @@ const LIMIT = Number(process.env.PROBE_FILE_LIMIT ?? 0);
 /** 口上语料目录名（用于"口上文件 vs 系统脚本"分组读数） */
 const KOJO_DIR_MARK = '口上';
 
-/** 有糖形态的 PRINT 行（台词/旁白）——读者真正要读的东西 */
-const LIFTABLE_PRINT_RE = /^\s*(PRINTFORMD?[WL])\b/;
+/**
+ * 两类"读者要读的行"的尺子（**两把都要**，各挡一类回归）：
+ *
+ * - `FORM_PRINT_RE`：四个有糖形态的 `PRINTFORM*W/L/DW/DL` 变体。这是 B 层落地时的
+ *   原始主指标（§5.49 起沿用），口径窄——只含"糖能一比一写出来"的行。
+ * - `OUTPUT_PRINT_RE`：**全部会被打印出文本的输出行**（含裸 `PRINTFORM` / `PRINTFORMD`
+ *   拼句片段，与非 FORM 的 `PRINTL` / `PRINTW` / `PRINTDL` / `PRINTDW` / `PRINT` / `PRINTD`）。
+ *   批 F 把这一族接进投影，若仍只用窄尺子，新能力在守门读数里**完全看不见**。
+ *
+ * 两者都**不含** `PRINTDATA` 系（块开词）与按钮/排版类变体（表外，刻意不投影）。
+ */
+const FORM_PRINT_RE = /^\s*(PRINTFORM(?:DW|DL|W|L))\b/;
+const OUTPUT_PRINT_RE = /^\s*(PRINTFORM(?:DW|DL|W|L|D)?|PRINT(?:DW|DL|W|L|D)?)\b/;
 
 interface Totals {
   files: number;
@@ -53,10 +64,14 @@ interface Totals {
   native: number;
   segments: number;
   maxSegments: number;
-  /** 台词/旁白行总数（有糖形态的 PRINT 行） */
+  /** 台词/旁白行总数（有糖形态的 `PRINTFORM*` 行） */
   speechLines: number;
   /** 其中**落在糖段内**（已显示为糖）的行数 */
   speechProjected: number;
+  /** 输出行总数（批 F：含裸 FORM 与非 FORM 系——全部"会被打印出文本"的行） */
+  outputLines: number;
+  /** 其中已显示为糖的行数 */
+  outputProjected: number;
 }
 
 const zero = (): Totals => ({
@@ -70,6 +85,8 @@ const zero = (): Totals => ({
   maxSegments: 0,
   speechLines: 0,
   speechProjected: 0,
+  outputLines: 0,
+  outputProjected: 0,
 });
 
 const pct = (a: number, b: number): string => (b === 0 ? '—' : `${((a / b) * 100).toFixed(1)}%`);
@@ -79,6 +96,7 @@ function line(t: Totals, label: string): string {
     `  ${label}：文件 ${t.files}｜有可映射段 ${t.filesWithSegments}（${pct(t.filesWithSegments, t.files)}）` +
     `｜行覆盖 ${pct(t.projected, t.totalLines)}（${t.projected}/${t.totalLines}）` +
     `｜**台词行覆盖 ${pct(t.speechProjected, t.speechLines)}**（${t.speechProjected}/${t.speechLines}）` +
+    `｜**输出行覆盖 ${pct(t.outputProjected, t.outputLines)}**（${t.outputProjected}/${t.outputLines}）` +
     `｜段 ${t.segments}（最多 ${t.maxSegments}/文件）`
   );
 }
@@ -176,13 +194,23 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           nativeTokens.set(token, rec);
         }
 
-        // ---- 台词行覆盖：读者真正要读的那类行有多少显示成了糖 ----
+        // ---- 读者要读的行有多少显示成了糖（两把尺子，见文件头注释）----
         let speech = 0;
         let speechCovered = 0;
+        let output = 0;
+        let outputCovered = 0;
         for (let ln = 1; ln <= srcLines.length; ln++) {
-          if (!LIFTABLE_PRINT_RE.test(srcLines[ln - 1] ?? '')) continue;
-          speech++;
-          if (covered.has(ln)) speechCovered++;
+          const text = srcLines[ln - 1] ?? '';
+          const isOutput = OUTPUT_PRINT_RE.test(text);
+          if (!isOutput && !FORM_PRINT_RE.test(text)) continue;
+          if (isOutput) {
+            output++;
+            if (covered.has(ln)) outputCovered++;
+          }
+          if (FORM_PRINT_RE.test(text)) {
+            speech++;
+            if (covered.has(ln)) speechCovered++;
+          }
         }
         for (const t of [total, ...(isKojo ? [kojo] : [])]) {
           t.files++;
@@ -195,6 +223,8 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           t.maxSegments = Math.max(t.maxSegments, r.segments.length);
           t.speechLines += speech;
           t.speechProjected += speechCovered;
+          t.outputLines += output;
+          t.outputProjected += outputCovered;
         }
         segBuckets[bucketOf(r.segments.length)]!++;
       }
@@ -241,10 +271,14 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 因此它天然低于台词行覆盖——两者不可互相替代（`docs/LIFT-REMEASURE` §三 那种
       // "6.5% 行覆盖"与这里的台词行覆盖是两把尺子）。
       expect(total.speechProjected / Math.max(1, total.speechLines)).toBeGreaterThan(0.95);
+      // 批 F：**全部输出行**（含非 FORM 系与裸 FORM 拼句片段）——新能力的守门读数。
+      // 用它替代"只数四个 FORM 变体"的窄尺子，否则投影少认一类 `PRINTL` 也不会红。
+      expect(total.outputProjected / Math.max(1, total.outputLines)).toBeGreaterThan(0.95);
       expect(total.filesWithSegments / Math.max(1, total.files)).toBeGreaterThan(0.9);
       expect(total.projected / Math.max(1, total.totalLines)).toBeGreaterThan(0.5);
       // 口上目录是主战场，台词行要求更严
       expect(kojo.speechProjected / Math.max(1, kojo.speechLines)).toBeGreaterThan(0.95);
+      expect(kojo.outputProjected / Math.max(1, kojo.outputLines)).toBeGreaterThan(0.95);
 
       await kernel.stop();
     },

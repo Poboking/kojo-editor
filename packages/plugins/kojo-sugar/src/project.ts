@@ -14,13 +14,15 @@
  * | 原生 ERB | 糖显示 |
  * |---|---|
  * | `PRINTFORMW 「台词」` / `PRINTFORMDL 旁白` | 文本行（`L` 后缀 → 行尾 ` 续`） |
+ * | `PRINTL 文本` / `PRINTDW 文本` / `PRINTFORM 片段`（其余输出指令） | **文本行**（非 FORM 系**逐字符原样**，见下） |
+ * | 裸指令打空行（`PRINTFORMW` / `PRINTL` / `PRINTDW␠`…） | **一行空行**（读者看到的是剧本节奏） |
  * | `IF X` / `ELSEIF X` / `ELSE` | `如果 X：` / `否则如果 X：` / `否则：` |
  * | `ENDIF` | 缩进收束（**不显示**） |
  * | `SELECTCASE X` / `CASE v` / `CASEELSE` | `当 X：` / `是 v：` / `否则：` |
  * | `ENDSELECT` | 缩进收束（不显示） |
  * | `;注释` / 空行 | **原样透传**（`;` 注释在糖里语法完全一样） |
  * | `%CALLNAME:TARGET%` / `%CALLNAME:MASTER%` | `{她}` / `{你}`（**可读化**，见下） |
- * | 其余（`SIF` / 循环 / TRY / PRINTDATA / 非 FORM PRINT / 行内条件 …） | **原样保留为 ERB** |
+ * | 其余（`SIF` / 循环 / TRY / PRINTDATA / 按钮 / 行内条件 …） | **原样保留为 ERB** |
  *
  * ## 可读化（本模块与 `lift.ts` 最大的取向差异）
  *
@@ -28,15 +30,20 @@
  * `%CALLNAME:MASTER%` 这种记号正是"读不懂"的元凶，故在**文本体**内反糖为糖的
  * 标准代词写法 `{你}` / `{她}`（规范 §3.4）。
  *
- * 三条纪律：
+ * 四条纪律：
  *
- * 1. **只反糖代词**。反向表由 `expression.ts` 的 `PRONOUN_MAP` **派生**
- *    （`PRONOUN_REVERSE`），正反对称是构造事实。属性反糖（`TALENT:TARGET:恋慕`
- *    → `她的恋慕`）**不做**——它需要"这个索引是真名而非编号"的反向字典，
- *    猜错会把 `TALENT:TARGET:3` 显示成 `她的3`，属于"看着像懂了其实被误导"。
- * 2. **只改文本体，不碰控制流表达式**。`%…%` 是 FORM 串形态，在条件位置本就非法，
+ * 1. **只反糖认得的记号**。代词反向表由 `expression.ts` 的 `PRONOUN_MAP` **派生**
+ *    （`PRONOUN_REVERSE`），正反对称是构造事实。属性反糖（`{CFLAG:TARGET:1088}` →
+ *    `{她的好感度}`）靠字典的**反向**查询（`DictionaryLookup.nameAt`），
+ *    **查不到名称一律不动**——猜错会把 `TALENT:TARGET:3` 显示成 `她的3`，
+ *    属于"看着像懂了其实被误导"。
+ * 2. **只在 FORM 系行反糖**（`PRINTFORM*` 才展开 `%…%` / `{…}` / `\@…\@`）。
+ *    非 FORM 输出行（`PRINTL` / `PRINTDW` / `PRINTDL`…）里的这些记号是**被打印的字面字符**，
+ *    动它就等于篡改读者看到的文本。真实语料实证：非 FORM 行含 `%…%` 仅 5/62,651 行，
+ *    而 `PRINTDL` 含 `\@` 的 518 行**全是 ASCII 图形文字**。
+ * 3. **只改文本体，不碰控制流表达式**。`%…%` 是 FORM 串形态，在条件位置本就非法，
  *    不去动它也就不可能把条件改坏。
- * 3. 反糖是**显示**，不改判据：即使文本里出现糖里不认识的写法，也照常显示
+ * 4. 反糖是**显示**，不改判据：即使文本里出现糖里不认识的写法，也照常显示
  *    （投影不承诺可编译——那是 `lift.ts` 的自证口径）。
  *
  * ## 关键性质
@@ -90,12 +97,44 @@ const CHAR_SCOPED_FAMILIES: ReadonlySet<string> = new Set([
   'TCVAR',
 ]);
 
-/** 有糖形态的 PRINT 变体（`L` = 不等待 → 糖行尾加 ` 续`；`D` = 旁白色，糖自动判定，不标注） */
-const PRINT_VARIANTS: ReadonlyMap<string, { wait: boolean }> = new Map([
-  ['PRINTFORMW', { wait: true }],
-  ['PRINTFORML', { wait: false }],
-  ['PRINTFORMDW', { wait: true }],
-  ['PRINTFORMDL', { wait: false }],
+/**
+ * PRINT 家族的**显示口径表**（批 F，2026-10-12）。
+ *
+ * 三个判据都由**指令名本身**决定，一条都不猜：
+ *
+ * - `form`：是否展开 FORM 记号（只有 `PRINTFORM*` 展开）。**非 FORM 行不做可读化**
+ *   ——`%…%` / `{…}` / `\@…\@` 在它们里面是被打印的字面字符。
+ * - `newline`：是否产生一行（`L` / `W` 后缀）。只有 `newline` 的行，空体才是"打空行"。
+ *   `PRINT` / `PRINTD` / `PRINTFORM` / `PRINTFORMD` 无后缀 = **不换行**（拼句片段），
+ *   空体时什么都不输出 → 不投影为空行。
+ * - `wait`：`W` 等待玩家 → 糖不加标记；`L` 不等待 → 行尾 `续`（规范 §3.3）。
+ *   后缀 `续` 的判据 = `newline && !wait`（无换行的片段不能谎称"续行"）。
+ *
+ * `D` 后缀（默认色 / 旁白）不单独标注：糖按引号自动判定作者色（规范 §1.3、§3.3）。
+ *
+ * **表外的 PRINT 变体不投影**（`PRINTBUTTON` / `PRINTLC` / `PRINTS` / `PRINTPLAIN*` /
+ * `PRINTV` / `PRINTFORMK*`…）：按钮与排版类指令的输出不是"读者要读的文本"，
+ * 投影成台词会误导；真实语料合计 <400 行，收益远低于风险。
+ * （`PRINTDATA` 系是**块开词**，由控制流分支先截获，走 `unsupported-control-flow`。）
+ */
+interface PrintVariant {
+  readonly newline: boolean;
+  readonly wait: boolean;
+  readonly form: boolean;
+}
+const PRINT_VARIANTS: ReadonlyMap<string, PrintVariant> = new Map<string, PrintVariant>([
+  ['PRINTFORMW', { newline: true, wait: true, form: true }],
+  ['PRINTFORML', { newline: true, wait: false, form: true }],
+  ['PRINTFORMDW', { newline: true, wait: true, form: true }],
+  ['PRINTFORMDL', { newline: true, wait: false, form: true }],
+  ['PRINTFORM', { newline: false, wait: false, form: true }],
+  ['PRINTFORMD', { newline: false, wait: false, form: true }],
+  ['PRINTL', { newline: true, wait: false, form: false }],
+  ['PRINTW', { newline: true, wait: true, form: false }],
+  ['PRINTDL', { newline: true, wait: false, form: false }],
+  ['PRINTDW', { newline: true, wait: true, form: false }],
+  ['PRINT', { newline: false, wait: false, form: false }],
+  ['PRINTD', { newline: false, wait: false, form: false }],
 ]);
 
 /** 匹配 PRINT 家族行：`(关键字) (文本体)` */
@@ -296,21 +335,35 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         continue;
       }
       const body = pm[2]!.replace(/[ \t\u3000]+$/, '');
+      // 指令后紧跟 `;` → 这里是**注释**而不是要打印的字（Emuera 的 `;` 在任意位置起效）。
+      // 一行给不出"空行 + 注释"两行显示 → 原样保留（语料 1 行，判据为不误导而设）。
+      if (body.startsWith(';')) {
+        recs.push(native(ln, 'unsupported-print-variant'));
+        continue;
+      }
       if (body.length === 0) {
         // ---- 「输出一行空行」----
         //
-        // 作者用**裸指令**打空行（`PRINTFORMW` / `PRINTFORMDL␠` / `PRINTFORML\t`）。
-        // 真实语料里这不是零星写法：400 个口上文件实测 **35,425 行**（占全部行 5.3%），
-        // 且**形态 100% 是"指令后为空"**（`tools/` 的一次性调查已核实，非实现缺陷）。
+        // 作者用**裸指令**打空行（`PRINTFORMW` / `PRINTFORMDL␠` / `PRINTL` / `PRINTDW␠`）。
+        // 真实语料里这不是零星写法：全量 2,285 文件中 `L`/`W` 变体的空体约 **16 万行**
+        // （FORM 系）+ **4.6 万行**（非 FORM 系：`PRINTL` 48%、`PRINTW` 97.4%、
+        // `PRINTDW` 99.1%、`PRINTDL` 57.1% 为空体），且**形态 100% 是"指令后为空"**。
         //
         // 糖表面没有"输出空行"的写法（§3.10 的空行是分隔符、不产出），所以这是一处
         // **刻意的显示口径**而非等价改写：投影按"读者在游戏里看到的节奏"处理——
         // 一行空行。收益有两层：
-        //   ① 读者看到的是剧本节奏，而不是一片 `PRINTFORMDL␠` 噪声；
-        //   ② 它不再**切断**糖段——实测中它是段数暴涨的头号原因（187 段/文件）。
+        //   ① 读者看到的是剧本节奏，而不是一片 `PRINTFORMDL␠` / `PRINTW` 噪声；
+        //   ② 它不再**切断**糖段——实测中它是段数暴涨的头号原因。
+        //
+        // 判据边界：**只有 `newline` 的变体**才算打空行。无后缀的 `PRINT` / `PRINTFORM`
+        // 空体既不输出也不换行（是拼句片段的空段）——没有可显示的东西，原样保留。
         //
         // 代价（记录在案）：`W`（等待）与 `L`（不等待）的空行在投影里不再可分辨。
         // 若将来要保留，可在行尾加 `续` 区分（届时仍需改这条口径）。
+        if (!variant.newline) {
+          recs.push(native(ln, 'unsupported-print-variant'));
+          continue;
+        }
         recs.push({
           line: ln,
           kind: 'speech',
@@ -321,14 +374,18 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         });
         continue;
       }
-      if (hasInlineCondition(body)) {
+      // 行内条件只对 **FORM 行**成立：非 FORM 行里的 `\@` 是被打印的字面字符
+      // （真实语料实证：`PRINTDL` 含 `\@` 的 518 行全是 ASCII 图形文字）。
+      if (variant.form && hasInlineCondition(body)) {
         recs.push(native(ln, 'inline-condition'));
         continue;
       }
+      // **可读化只对 FORM 行做**（文件头纪律 2）；非 FORM 行逐字符原样
+      const text = variant.form ? readableText(body, deps) : body;
       recs.push({
         line: ln,
         kind: 'speech',
-        text: variant.wait ? readableText(body, deps) : `${readableText(body, deps)} 续`,
+        text: variant.newline && !variant.wait ? `${text} 续` : text,
         indent: ctx.indentAt(ln, raw),
         visible: true,
         reason: null,

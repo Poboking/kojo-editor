@@ -81,15 +81,127 @@ describe('糖投影 · 台词行', () => {
     expect(r.stats.nativeLines).toBe(0);
   });
 
-  it('非 FORM 变体 / 行内条件 → 原样保留（不静默）', () => {
+  it('表外变体 / FORM 行内条件 → 原样保留（不静默）', () => {
+    // 批 F 后 `PRINTL` 已有显示口径（见「输出家族全覆盖」组），表外的按钮类仍原样
     const r = project(
       ['PRINTL 非 FORM 系', 'PRINTBUTTON "x", 1', 'PRINTFORML \\@ X ? A # B \\@'].join('\n'),
     );
-    expect(r.segments).toHaveLength(0);
-    expect(r.stats.nativeLines).toBe(3);
+    expect(r.segments).toHaveLength(1);
+    expect(segLines(r.segments[0]!)).toEqual(['非 FORM 系 续']);
+    expect(r.stats.nativeLines).toBe(2);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
-    expect(reasons['unsupported-print-variant']).toBe(2);
+    expect(reasons['unsupported-print-variant']).toBe(1);
     expect(reasons['inline-condition']).toBe(1);
+  });
+});
+
+/* ==================== 批 F：PRINT 输出家族全覆盖 ==================== */
+
+describe('糖投影 · 输出家族全覆盖（批 F）', () => {
+  /** 桩字典：CFLAG 1088=好感度；用于证明"非 FORM 行不走属性反糖" */
+  const dict = {
+    resolveFamily: () => undefined,
+    resolve: () => undefined,
+    nameAt: (family: string, index: string): string | undefined =>
+      family === 'CFLAG' && index === '1088' ? '好感度' : undefined,
+  };
+  const withDict = (source: string) =>
+    liftProject(
+      { transpile: () => { throw new Error('x'); }, scanControlFlow, dictionary: () => dict },
+      { source },
+    );
+  const reasonsOf = (r: { stats: { nativeByReason: { reason: string; count: number }[] } }) =>
+    Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
+
+  it('非 FORM 文本行**逐字符原样**（代词 / `{…}` 一律不反糖）', () => {
+    // 引擎语义：只有 PRINTFORM* 展开 FORM 记号；非 FORM 行里的 `%…%` `{…}` 是被打印的字面字符。
+    // 真实语料实证：非 FORM 行含 `%…%` 仅 5/62,651 行；`PRINTDL` 含 `\@` 的 518 行全是 ASCII 图形文字。
+    const r = project(
+      ['PRINTDL %CALLNAME:TARGET%', 'PRINTW 耐久度 {PAGECOUNT}', 'PRINTL {你}不是反糖'].join('\n'),
+    );
+    expect(segLines(r.segments[0]!)).toEqual([
+      '%CALLNAME:TARGET% 续',
+      '耐久度 {PAGECOUNT}',
+      '{你}不是反糖 续',
+    ]);
+    // 同一支记号在 FORM 行里照旧反糖（对照，钉死"只对 FORM 做"不是全局关掉）
+    const f = project(['PRINTFORMDL %CALLNAME:TARGET%', 'PRINTFORMW {你}'].join('\n'));
+    expect(segLines(f.segments[0]!)).toEqual(['{她} 续', '{你}']);
+  });
+
+  it('非 FORM 行不走属性反糖（即使字典查得到）', () => {
+    const plain = withDict('PRINTL {CFLAG:TARGET:1088}');
+    expect(segLines(plain.segments[0]!)).toEqual(['{CFLAG:TARGET:1088} 续']);
+    const form = withDict('PRINTFORMW {CFLAG:TARGET:1088}');
+    expect(segLines(form.segments[0]!)).toEqual(['{她的好感度}']);
+  });
+
+  it('L/W 变体的空体 → 一行空行，且不再切断糖段', () => {
+    const r = project(['PRINTFORMW 甲', 'PRINTL', 'PRINTW', 'PRINTDW ', 'PRINTDL\t', 'PRINTFORML 乙'].join('\n'));
+    expect(r.segments).toHaveLength(1);
+    expect(segLines(r.segments[0]!)).toEqual(['甲', '', '', '', '', '乙 续']);
+    expect(r.stats.nativeLines).toBe(0);
+    expect(r.stats.projectedLines).toBe(6);
+  });
+
+  it('无换行变体的空体 → 原样保留（既不输出也不换行，没有可显示的东西）', () => {
+    const r = project(['PRINT', 'PRINTD', 'PRINTFORM', 'PRINTFORMD '].join('\n'));
+    expect(r.segments).toHaveLength(0);
+    expect(reasonsOf(r)['unsupported-print-variant']).toBe(4);
+  });
+
+  it('裸 FORM 片段（PRINTFORM / PRINTFORMD）→ 文本行 + 可读化，但**不加**「续」', () => {
+    // `续` 在糖里 = `L`（换行不等待）；无后缀是"不换行"，糖没有等价标记（规范 §3.3 能力边界），
+    // 故投影成独立文本行、不谎称续行。
+    const r = project(['PRINTFORM %CALLNAME:MASTER%', 'PRINTFORMD 带着温柔的笑容'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['{你}', '带着温柔的笑容']);
+  });
+
+  it('指令后紧跟 `;` → 原样保留（那是注释，不是要打印的字）', () => {
+    const r = project('PRINTFORMW ;这是注释');
+    expect(r.segments).toHaveLength(0);
+    expect(reasonsOf(r)['unsupported-print-variant']).toBe(1);
+  });
+
+  it('表外变体（按钮 / 排版 / 罕见）不投影 —— 宁缺勿误导', () => {
+    const r = project(
+      ['PRINTBUTTON "[回去]", "0"', 'PRINTLC 甲', 'PRINTS @"%a%"', 'PRINTPLAIN 乙', 'PRINTV X', 'PRINTFORMKW 丙'].join(
+        '\n',
+      ),
+    );
+    expect(r.segments).toHaveLength(0);
+    expect(reasonsOf(r)['unsupported-print-variant']).toBe(6);
+  });
+
+  it('非 FORM 行里的 `\\@` 不触发 inline-condition（ASCII 图形文字样本）', () => {
+    // 语料原型（K 系作者画的字符画）：`\@` 在这里只是画面的一部分，不是行内条件。
+    const body = '"@@O` [O\\.  =@@@`,\\^ \\@O]  ./@O@@@OO@@/ \\@ .[[[.."';
+    const r = project(`PRINTDL ${body}`);
+    expect(segLines(r.segments[0]!)).toEqual([`${body} 续`]);
+    expect(r.stats.nativeLines).toBe(0);
+  });
+
+  it('结构判据仍优先：PRINTDATA 数据表体内的 `PRINTL` 不投影', () => {
+    const r = project(['PRINTDATAL', 'PRINTL 这是数据不是显示语句', 'ENDDATA'].join('\n'));
+    expect(r.segments).toHaveLength(0);
+    expect(reasonsOf(r)['data-or-skip']).toBe(1);
+    expect(reasonsOf(r)['unsupported-control-flow']).toBe(2);
+  });
+
+  it('不变量：三类计数之和恒等于总行数（批 F 新行也入账）', () => {
+    const src = [
+      'PRINTL 甲',
+      'PRINTW',
+      'PRINTFORM 乙',
+      'PRINTBUTTON "x", 1',
+      '',
+      '; 注释',
+      '@FUNC',
+    ].join('\n');
+    const { stats } = project(src);
+    expect(stats.projectedLines + stats.passthroughLines + stats.nativeLines).toBe(stats.totalLines);
+    expect(stats.totalLines).toBe(7);
+    expect(stats.projectedLines).toBe(3);
   });
 });
 
