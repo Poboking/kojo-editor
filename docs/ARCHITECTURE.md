@@ -1,8 +1,11 @@
 # 口上编辑器（Kojo Editor）架构设计文档
 
 - **版本**：v0.2（技术选型定案；v0.1 初始设计）
-- **日期**：2026-10-09
-- **状态**：待评审，作为 v0 施工图
+- **日期**：2026-10-09（选型定案）· 2026-10-13 校正（结构现状与代码对齐）
+- **状态**：**设计决策已落地并生效**，本文只存「为什么这样设计」。
+  ⚠ **现状描述（有哪些插件、跑多快、下一步做什么）不在本文维护**——
+  看 `docs/HANDOFF.md`（交接状态）与 `docs/IMPLEMENTATION-LOG.md`（逐批实施记录，当前至 §5.83）。
+  本文若与那两份冲突，**以那两份为准**。
 - **代号**：暂定 `kojo-editor`
 
 ---
@@ -14,7 +17,7 @@
 1. 做一款**首先服务 eraTW** 的口上编辑器，显著降低口上的编写、导航、验证成本。
 2. 架构采用**一切皆插件**的解耦设计（借鉴 DSH/cordis），使后续能以"新增适配器插件"的方式扩展到 eraK、eraSQN、eraNAS 等其他 era 游戏，**内核零改动**。
 3. 覆盖口上作者的三大痛点：
-   - **导航与脚手架**：99,028 个函数、2,285 个文件的体量下，快速定位函数家族、按模板生成新角色口上骨架；
+   - **导航与脚手架**：99,104 个函数、2,285 个文件的体量下，快速定位函数家族、按模板生成新角色口上骨架；
    - **结构性摩擦**：把条件矩阵、CFLAG 位图、`M_KOJO_K{n}_` 约定等隐性知识显式化；
    - **验证回路**：状态快照回放，不用真的把角色玩到指定状态就能预览台词。
 
@@ -42,17 +45,18 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  插件层（一切皆插件）                                  │
+│  插件层（一切皆插件）                               │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────┐ │
 │  │eraTW 适配│ │ERB 解析器│ │状态快照  │ │预览渲染 │ │
 │  │器        │ │          │ │回放      │ │         │ │
 │  └──────────┘ └──────────┘ └──────────┘ └─────────┘ │
-│  …ui.panel / editor.command / export.target 插件…    │
+│  …ui.panel / editor.command / export.target 插件…   │
 ├─────────────────────────────────────────────────────┤
-│  槽位注册表（UI 与扩展点，同槽允许多注册）              │
+│  槽位注册表（UI 与扩展点，同槽允许多注册）          │
 ├─────────────────────────────────────────────────────┤
-│  内核（只做四件事）                                   │
-│  DI 容器 │ 事件总线 │ 存储域 │ 文件 IO                │
+│  内核（通用设施，零游戏知识）                       │
+│  DI│事件总线│存储域│文件 IO│项目│槽位│插件          │
+│  工作区（workspaces）│ 计算池（compute）            │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -60,7 +64,15 @@
 
 ---
 
-## 3. 内核设计（四件套）
+## 3. 内核设计（通用设施）
+
+> 初稿写的是「四件套」（DI / 总线 / 存储域 / 文件 IO）。落地过程中内核长到 **8 个服务**
+> （服务键清单见 `plugin-api/src/services.ts` 的 `KernelServices`，实注册见
+> `kernel/src/kernel.ts`）：另加 `kernel.project`、`kernel.slots`、`kernel.plugins`、
+> `kernel.workspaces`（作者工作区，设计意图见
+> `KOJO_PROJECT_AND_KOJO_TREE_DISCUSSION_MINUTES.md`，实施见 IMPLEMENTATION-LOG §5.49）、
+> `kernel.compute`（时间片计算池）。
+> 设计意图未变——**这些全是与游戏无关的通用设施**，铁律照旧。
 
 ### 3.1 DI 容器
 
@@ -85,7 +97,24 @@ interface Plugin {
 ### 3.2 事件总线
 
 - 类型化事件：`EventMap` 集中定义，`bus.emit('kojo.functionChanged', payload)` 编译期校验。
-- 核心事件（内核预定义）：`file.changed` / `project.opened` / `kojo.functionChanged` / `plugin.statusChanged` / `state.snapshotLoaded`。
+- 事件全集在 `plugin-api/src/events.ts` 的 `KernelEventMap` 一处定义，**当前 20 个**。
+  按 **emit 权限**分两表（不是按功能分类）：
+  - **插件可 emit（18 个，`PLUGIN_EMITTABLE_EVENT_NAMES`）**：`file.changed` /
+    `project.opened` / `project.closed` / `kojo.functionChanged` / `plugin.statusChanged` /
+    `state.snapshotLoaded` / `editor.revealLocation` / `kojo.replayFunction` /
+    `kojo.snapshotSelected` / `editor.activeFileChanged` / `editor.liftPreview.show` /
+    `editor.liftPreview.hide` / `editor.sugarView.set` / `ui.overlay.open` / `ui.overlay.close` /
+    `workspace.importRequested` / `workspace.newProjectRequested` / `workspace.projectCreated`；
+  - **内核/宿主专属（2 个，`KERNEL_ONLY_EVENT_NAMES`）**：`project.writableApprovalMismatch` /
+    `file.watchState`——插件可 `on` 不可 `emit`（插件伪造这两条等于伪造安全提示与
+    「自动重载是否可信」的保证）。
+- ⚠ **两个数别混**：`KernelEventMap` 是**全部事件 20 个**；`KERNEL_EVENT_NAMES` 是
+  **插件可 emit 的白名单 18 个**（scopedBus 执法用的就是后者）。数量的是不同集合，
+  都不是笔误——改动时别把其中一个「纠正」成另一个。
+- **分类完整性由编译期断言保证**（`KERNEL_EVENT_CLASSIFICATION_GUARD`）：新增内核事件
+  必须在两表之一登记，否则类型退化为 `never`、编译即失败。这是机制不是口号——
+  起源于 `0bf2eb9` 那次「契约加了类型、kernel 白名单漏同步」只在运行时暴露的事故。
+- 新增事件还要同步 `plugin-api/tests/events.test.ts` 的**计数快照**（现 18），否则测试即红。
 - 插件自定义事件必须带插件 id 前缀（`eratw-adapter:xxx`），与 DSH "存储域名用下划线、事件带命名空间"的约定同源。
 
 ### 3.3 存储域
@@ -96,7 +125,16 @@ interface Plugin {
 ### 3.4 文件 IO
 
 - 统一入口，内置：编码探测（ERB 老文件常见 Shift-JIS / UTF-8-BOM 混杂）、换行归一化、文件监视（**Rust notify 原始事件 → 内核去抖**；原计划的 chokidar 已被 ADR-0003 取代——WebView 里没有 fs，监视只能做平台原语）、原子写（写临时文件后 rename）。
-- **游戏目录整体只读假设**：唯一可写路径由用户在设置中显式声明（eraTW 的 `ERB/口上・メッセージ関連/個人口上/`），写前自动备份到 `{userData}/backup/`（保留最近 N 版）。
+- **写权限是两道正交轴**（定案见 `docs/adr/0005-erb-write-permission-and-sugar-view.md`）：
+  1. **目录分野**决定默认可写性——**作者工作区**（`{userData}/workspaces/`）恒可写，
+     不需要授权；**游戏目录**默认只读，可写路径由适配器提议、用户显式批准
+     （eraTW 是 `ERB/口上・メッセージ関連/個人口上/` 与 `sav/`）。
+  2. **显式解锁**只管「游戏目录里这一份、这一次」——按文件、按会话，**刻意不落盘**；
+     「上次解锁过就一直可写」会让写保护形同虚设。
+- 写前自动备份到 `{userData}/backup/`（保留最近 N 版）。
+- **两条合法的「写到白名单之外」通道**：`FileIO.exportDirectory` 与 `FileIO.exportFile`
+  （导出发布包）。授权来自用户在系统保存对话框里的**显式选择**，且对话框与写盘绑定在
+  同一个平台命令内（JS 拿不到落点决定权），故内核侧不经 `assertWritable`。
 
 ---
 
@@ -106,11 +144,21 @@ interface Plugin {
 
 | 槽位                    | 用途                                        | 数据形态                                |
 | --------------------- | ----------------------------------------- | ----------------------------------- |
-| `ui.panel`            | 侧栏/底部面板                                   | `{ title, icon, component, order }` |
-| `ui.editor.decorator` | 编辑器内嵌增强（高亮、内联提示）                          | `{ matcher, decorator }`            |
-| `editor.command`      | 命令面板/右键菜单项                                | `{ id, title, when?, run(ctx) }`    |
-| `game.adapter`        | 游戏适配器（同槽**单激活**；detect 阶段内核轮询全部候选，见 §5.7） | `GameAdapter` 实现                    |
-| `export.target`       | 导出目标（ERB、独立文本、翻译对照表）                      | `{ id, export(project, options) }`  |
+| `ui.panel`              | 侧栏 / 底部面板（`location` 决定归哪一容器，`group` 可合并成同一视图） | `UIPanelContribution`  |
+| `ui.toolbar`            | 顶部工具栏按钮                                        | `ToolbarContribution`    |
+| `ui.statusbar`          | 底部状态栏片段                                        | `StatusbarContribution`  |
+| `ui.overlay`            | **模态向导 / 对话框**（经 `ui.overlay.open` 事件唤起；⚠ payload 不传进组件，组件读插件闭包） | `OverlayContribution`    |
+| `editor.command`        | 命令面板 / 快捷键命令                                   | `EditorCommandContribution` |
+| `ui.editor.decorator`   | 编辑器内嵌增强（高亮、装饰）                                | `EditorDecoratorContribution` |
+| `ui.editor.codeAction`  | Monaco **💡 代码操作**（`.kojo` 里把原生写法改成糖写法）        | `EditorCodeActionContribution` |
+| `ui.editor.liftPreview` | 语法糖**投影供给**（整份 ERB 显示为糖；也供折叠范围）              | `EditorLiftPreviewContribution` |
+| `ui.editor.saveHandler` | **保存链路接管**（`.kojo` → 编译产物 `.ERB`）             | `EditorSaveHandlerContribution` |
+| `game.adapter`          | 游戏适配器（同槽**单激活**；detect 阶段内核轮询全部候选，见 §5.7）   | `GameAdapter` 实现       |
+| `export.target`         | 导出目标（ERB、独立文本、翻译对照表）                        | `ExportTargetContribution` |
+
+> 初稿只列了 5 个槽。UI 重设计 P1–P3（§5.42–§5.44）把壳层的可扩展点补齐成上表
+> **11 个**（`ui.toolbar` / `ui.statusbar` / `ui.overlay` / 三个 `ui.editor.*`）。
+> 权威清单永远是 `plugin-api/src/slots.ts` 的 `SlotMap`。
 
 与 cordis/DSH 经验的差异（刻意反着设计的地方）：
 
@@ -288,12 +336,22 @@ kojo-editor/
 │   │   ├── ui-convention-report/ # ui.panel：校验结果面板（点击 → editor.revealLocation）
 │   │   ├── ui-kojo-navigator/ # ★ ui.panel：函数树导航（角色→家族→面→函数 + 条件徽章；家族规则经槽位查询，不 import adapter）
 │   │   ├── sav-parser/        # ★ 存档二进制解析（服务 snapshot.source）：读（v0.2 第四批，六档实测零残余）+ 写/注入（§5.5，v1.1）
-│   │   ├── state-replay/      # requires: ['kernel.project','kernel.slots','kernel.io','snapshot.source','condition-extractor']（适配器经 slots.query('game.adapter', adapterId) 获取，见 ADR-0002；实施记录 §5.11/§5.12（IMPLEMENTATION-LOG））
-│   │   ├── runtime/           # v2 可选：受管引擎子进程 + CliDebug 协议（§5.6，默认不立项）
-│   │   ├── preview-renderer/
-│   │   ├── ui-condition-matrix/# v1.x 计划：条件矩阵/位图查看（消费 condition.extractor）
-│   │   └── ui-plugin-status/  # ui.panel：插件状态面板（首个 ui.panel 示例）
-│   └── app/               # 壳：Tauri（Rust 宿主）+ Monaco 编辑器主体；sav 二进制解析可下沉 Rust 侧
+│   │   ├── state-replay/      # requires: ['kernel.project','kernel.slots','kernel.io','snapshot.source','condition-extractor']（适配器经 `slots.query('game.adapter')` 再按 `adapter.gameId === project.adapterId` 过滤获取——`query` 只有单参，见 ADR-0002；实施记录 §5.11/§5.12（IMPLEMENTATION-LOG））
+│   │   ├── kojo-sugar/          # ★ 语法糖：词法/文法/转译/升糖/编译落盘（服务 sugar.transpile 等）
+│   │   ├── ui-sugar-editor/     # ui.panel + 新建口上文件向导 + 保存链路接管
+│   │   ├── ui-sugar-lift/       # 语法糖投影供给 + 💡 代码操作（原「升糖」面板已按用户口径删除）
+│   │   ├── ui-sugar-preview/    # 糖预览（右侧）+ 糖判定（底部）
+│   │   ├── ui-state-replay/     # ui.panel：状态回放
+│   │   ├── ui-snapshot-injector/# ui.panel：状态注入器
+│   │   ├── ui-archive-browser/  # ui.panel：归档浏览器
+│   │   └── ui-plugin-status/    # ui.panel：插件状态面板（首个 ui.panel 示例）
+
+> 上表是**实际 16 个插件**（`ls packages/plugins` 可核）。初稿规划的 `runtime/`（受管引擎子进程，
+> §5.6）与 `ui-condition-matrix/`（条件矩阵）**未立项**，`preview-renderer/` 的职责由
+> `ui-sugar-preview` 承担 —— 在此说明是为了免得有人回来找这三个目录。
+│   └── app/               # 壳：Tauri（Rust 宿主）+ Monaco 编辑器主体
+│                        #   ⚠ Rust 侧**只做 IO 原语、零业务逻辑、零游戏知识**（ADR-0003）；
+│                        #   sav 字节协议住在 TS 的 sav-parser 插件，**不下沉 Rust**
 ├── docs/                  # 本文档、ADR、接口变更记录
 └── fixtures/              # eraTW 口上样本（脱敏子集）、 sav 样本（本地，不入库）
 ```
@@ -350,7 +408,7 @@ kojo-editor/
 
 | 决策项        | 结论                             | 理由 / 边界                                                             |
 | ---------- | ------------------------------ | ------------------------------------------------------------------- |
-| 桌面壳        | **Tauri**                      | 体积小；Rust 侧处理 sav 字节协议/编码探测顺手；PoC 风险（WinForms 互操作等）留到 v0.1 验证        |
+| 桌面壳        | **Tauri**                      | 体积小；Rust 侧只做 IO 原语（文件字节、编码探测、对话框）顺手；**sav 字节协议不下沉 Rust**（ADR-0003 定案：宿主零游戏知识）        |
 | 编辑器主体      | **内嵌 Monaco**                  | ERB 语法/装饰由 erb-parser 经 `ui.editor.decorator` 槽注册；不做外部 VS Code 联动模式 |
 | 插件分发       | **本地目录扫描，暂不做市场/签名**            | 装载接口预留来源字段，未来加签名机制不破坏现有插件                                           |
 | 角色数据来源     | **随游戏 CHARA CSV 动态解析**（§5.7）   | 不内置静态表；解析失败显式报错，禁止静默猜测                                              |

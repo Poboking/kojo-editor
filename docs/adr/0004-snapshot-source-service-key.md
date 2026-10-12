@@ -24,6 +24,7 @@
 
 ## 后果
 
-- 审计 A 项持续全绿；契约层术语统一为 snapshot / archive；
+- 审计持续全绿（**口径已从"仅 A 项"扩为 A–D 四项**，见 `tools/audit-decoupling.mjs`）；
+  契约层术语统一为 snapshot / archive；
 - 文档中历史提到的 `sav.parser` 均指本服务的早期草拟名，实际接口以 `snapshot.source` 为准；
 - 未来接入新来源（CliDebug / 手工）时按同一服务键扩展或新增配套服务，不改名（兼容性承诺）。

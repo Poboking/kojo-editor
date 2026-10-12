@@ -7,6 +7,14 @@
 
 v0.1 搭建时环境为：Node 22.22（managed）、pnpm 11.22、TypeScript 7.0.2（最新）、Vitest 5.0.3（最新）、Vite 8.3.4（rolldown 版）。
 
+> **2026-10-13 校正**：上段记的是**当时**的环境，不是当前约束。现在开发机跑的是 **Node 24**
+> （实测 v24.19.0），而 `@types/node` 仍锁 `^22` —— 二者不一致**是已知状态，不是笔误**，
+> 升级到 Node 24 的类型定义需要单独一批验证。本 ADR 锁的是 **TS 7.0.2 / Vitest 4.1.11 / Vite 7.3.7**
+> 这三项（见 `package.json` 与 lockfile），与 Node 小版本无关。
+>
+> **Rust 不在本 ADR 范围内**：仓库没有 `rust-toolchain.toml`，唯一的版本约束是
+> `packages/app/src-tauri/Cargo.toml` 的 `rust-version = "1.77"`（开发机实测 rustc 1.99）。
+
 首次运行测试时全部测试文件报 `Cannot find module '<相对路径>.ts'`。排查过程：
 
 1. 排除 vitest 5 独有回归：降到 vitest 4.1.11 现象相同；

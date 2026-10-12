@@ -26,8 +26,14 @@ v0.1 写内核测试"多适配器同时注册"时暴露矛盾：
 ## 修订（2026-10-10，v0.2 第十三批后）
 
 **v0.2 的桥接形态已定为约定专属键**：消费者通过
-`slots.query('game.adapter', project.adapterId)` 获取当前激活适配器的强类型引用
-（family-index、state-replay 均为此模式）。
+`slots.query('game.adapter')` 取回全部适配器贡献，再按
+`contribution.adapter.gameId === project.adapterId` **过滤出当前激活的那一个**，
+拿到它的强类型引用（family-index、state-replay、condition-extractor、
+convention-linter 均为此模式）。
+
+> ⚠ **本节早期草稿写的是 `slots.query('game.adapter', project.adapterId)`——那是错的**：
+> `SlotRegistrar.query` **只有单参**（见 `kernel/src/slots.ts`），没有按 id 过滤的第二参。
+> `ARCHITECTURE.md` §6 曾照抄这个错误写法，2026-10-13 两处一并改正。
 
 - 服务键 `game.adapter` 依然**不由任何插件提供**（`requires` 不含它）——
   提供即与多适配器 detect 轮询冲突（本 ADR v0.1 决策 2 不变）。
