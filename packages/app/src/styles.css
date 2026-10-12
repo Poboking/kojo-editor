@@ -3090,10 +3090,10 @@ textarea {
   border-radius: 4px;
   background: var(--bg-3);
 }
-/* 署名 / 授权行（T2）：只在包展开态出现，一行摘要。
+/* 包事实行（T2 署名 + 目标角色/剧本号）：只在包展开态出现，一行摘要。
    中性色 + 左边细线，与提示条同族但更轻——它是补充信息，不该抢树的主体。
    悬停看原文出处（哪个文件哪一行），授权条款不替作者下判断。 */
-.kp-attribution {
+.kp-facts {
   margin: 2px 0 3px;
   padding: 2px 6px 2px 8px;
   border-left: 2px solid var(--border);

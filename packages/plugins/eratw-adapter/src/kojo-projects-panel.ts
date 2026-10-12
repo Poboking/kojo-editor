@@ -18,7 +18,7 @@
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { DirEntry, WorkspaceArtifact, WorkspaceProject } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
-import { attributionSummary, type AttributionState } from './attribution';
+import { attributionSummary, type AttributionState, type PackageAttribution } from './attribution';
 import type { PanelStatus } from './package-actions';
 
 /** 目录列举态（闭包缓存值）：在途 / 失败（带原因）/ 已加载 */
@@ -70,6 +70,38 @@ export function sortDirEntries(entries: readonly DirEntry[]): DirEntry[] {
 /** 包目录绝对路径（项目目录 + 包目录名；制品文件全部住在这里） */
 export function artifactDir(projectDir: string, artifact: Pick<WorkspaceArtifact, 'dirName'>): string {
   return join(projectDir, artifact.dirName);
+}
+
+/** 包事实行的输入（三项都可能缺） */
+export interface FactsInput {
+  /** 制品 meta 里的目标角色名（P-C 新建时写入；导入的包没有） */
+  charaName: string | null;
+  /** 目标剧本号（1-10；缺省 = 未记录） */
+  scriptNo: number | null;
+  /** 署名抽取结果（null = 未抽到任何字段，仍显示角色/剧本） */
+  attribution: PackageAttribution | null;
+}
+
+/**
+ * 组合「包事实行」片段（纯函数）。
+ *
+ * 缺项**如实不显示**，不补「未知」占位——满屏「未知」比空着更吵，也更像在指控数据缺失。
+ * 这一行同时收掉纪要 §5 的两条：署名一等公民（T2）与「多剧本编号在 UI 中显式表达」。
+ */
+export function packageFacts(inp: FactsInput): string[] {
+  const facts: string[] = [];
+  if (inp.charaName) facts.push(`目标 ${inp.charaName}`);
+  if (inp.scriptNo !== null) facts.push(`剧本${inp.scriptNo}`);
+  if (inp.attribution) facts.push(attributionSummary(inp.attribution));
+  return facts;
+}
+
+/** 从制品 meta 取事实行输入（meta 是 `Record<string, unknown>`，逐项收窄，不猜） */
+export function factsFromMeta(meta: Record<string, unknown>): { charaName: string | null; scriptNo: number | null } {
+  return {
+    charaName: typeof meta.charaName === 'string' && meta.charaName.length > 0 ? meta.charaName : null,
+    scriptNo: typeof meta.scriptNo === 'number' && Number.isInteger(meta.scriptNo) ? meta.scriptNo : null,
+  };
 }
 
 /** 行缩进（层级 → padding-left；树深度不定，内联最直观） */
@@ -172,33 +204,42 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
       );
     };
 
-    /* ------------------------------ 署名 / 授权行（T2） ------------------------------ */
+    /* ------------------------------ 包事实行（T2 署名 + 纪要「多剧本编号上树」） ------------------------------ */
 
     /**
-     * 包展开时的一行署名摘要。
+     * 包展开时的一行事实摘要：目标角色 · 剧本号 · 原作者 · 更新 · 授权形态。
      *
      * 只在**展开态**出现（口上树默认简洁的既定约束），且**给证据不给结论**：
-     * 悬停可看到抽自哪个文件哪一行 —— 授权条款一律不替作者下判断（见 attribution.ts 头注）。
+     * 悬停可看到署名抽自哪个文件哪一行 —— 授权条款一律不替作者下判断（见 attribution.ts 头注）。
+     * 角色与剧本取自制品 meta（P-C 新建时写入）；导入的包没有这两项，如实不显示。
      */
-    const renderAttribution = (dir: string): ReactNode => {
+    const renderFacts = (artifact: WorkspaceArtifact, dir: string): ReactNode => {
       const st = deps.attribution(dir);
       const at = indent(1);
-      if (st === undefined) return null;
+      const meta = factsFromMeta(artifact.meta);
+      /** 角色/剧本来自本地 meta，署名要读盘——异步那段先摆已知的，不因等待而整行空着 */
+      const line = (attr: PackageAttribution | null, suffix?: string): string =>
+        [...packageFacts({ ...meta, attribution: attr }), ...(suffix ? [suffix] : [])].join(' · ');
+
+      if (st === undefined) {
+        const s = line(null);
+        return s.length > 0 ? h('div', { className: 'kp-facts', style: at }, s) : null;
+      }
       if (st === 'loading') {
-        return h('div', { className: 'kp-attribution dim', style: at }, '读取署名与授权…');
+        return h('div', { className: 'kp-facts dim', style: at }, line(null, '读取署名…'));
       }
       if (st === null) {
-        return h('div', { className: 'kp-attribution dim', style: at }, '署名信息读取失败（不影响编辑与部署）');
+        return h(
+          'div',
+          { className: 'kp-facts dim', style: at },
+          line(null, '署名读取失败（不影响编辑与部署）'),
+        );
       }
       const tips: string[] = [];
       if (st.author) tips.push(`作者原文：${st.author.file} 第 ${st.author.line} 行`);
       if (st.updated) tips.push(`更新原文：${st.updated.file} 第 ${st.updated.line} 行`);
       if (st.readmeFiles.length > 0) tips.push(`可查文件：${st.readmeFiles.join('、')}`);
-      return h(
-        'div',
-        { className: 'kp-attribution', style: at, title: tips.join('\n') },
-        attributionSummary(st),
-      );
+      return h('div', { className: 'kp-facts', style: at, title: tips.join('\n') }, line(st));
     };
 
     /* ------------------------------ 项目 → 包 ------------------------------ */
@@ -258,7 +299,7 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                 ),
               ),
             ),
-            isOpen ? renderAttribution(dir) : null,
+            isOpen ? renderFacts(a, dir) : null,
             isOpen ? renderDir(dir, 2) : null,
           );
         }),

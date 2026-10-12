@@ -9,7 +9,13 @@ import type {
   WorkspaceService,
 } from '@kojo/plugin-api';
 import { createEratwAdapterPlugin } from '../src/plugin';
-import { artifactDir, sortDirEntries } from '../src/kojo-projects-panel';
+import {
+  artifactDir,
+  factsFromMeta,
+  packageFacts,
+  sortDirEntries,
+} from '../src/kojo-projects-panel';
+import type { PackageAttribution } from '../src/attribution';
 import { NEW_KOJO_PROJECT_OVERLAY_ID } from '../src/new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID } from '../src/import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID } from '../src/deploy-wizard';
@@ -41,6 +47,38 @@ describe('包目录路径', () => {
     expect(artifactDir('/appdata/workspaces/p1', { dirName: '东方口上-灵梦 v1.0' })).toBe(
       '/appdata/workspaces/p1/东方口上-灵梦 v1.0',
     );
+  });
+});
+
+/* ------------------------------ 包事实行（T2 + 剧本号上树） ------------------------------ */
+
+describe('packageFacts · 一行事实摘要', () => {
+  const attr = (over: Partial<PackageAttribution> = {}): PackageAttribution => ({
+    author: { value: 'holy', file: 'readme.txt', line: 2 },
+    updated: null,
+    license: { kind: 'none' },
+    readmeFiles: ['readme.txt'],
+    ...over,
+  });
+
+  it('三项齐全：目标 · 剧本 · 署名摘要按序拼接', () => {
+    expect(
+      packageFacts({ charaName: '霊夢', scriptNo: 3, attribution: attr() }).join(' · '),
+    ).toBe('目标 霊夢 · 剧本3 · 原作者 holy · 未见授权相关文件');
+  });
+
+  it('缺项如实不显示，不补「未知」占位（满屏未知比空着更吵）', () => {
+    expect(packageFacts({ charaName: null, scriptNo: null, attribution: null })).toEqual([]);
+    // 剧本 1 也要显示——它是「指向哪个剧本」的确定事实，不是默认值噪声
+    expect(packageFacts({ charaName: null, scriptNo: 1, attribution: null })).toEqual(['剧本1']);
+  });
+
+  it('meta 收窄：类型不对或缺失一律归 null，不猜', () => {
+    expect(factsFromMeta({ charaName: '霊夢', scriptNo: 2 })).toEqual({ charaName: '霊夢', scriptNo: 2 });
+    expect(factsFromMeta({ charaName: '', scriptNo: 0 })).toEqual({ charaName: null, scriptNo: 0 });
+    expect(factsFromMeta({ charaName: 123, scriptNo: '3' })).toEqual({ charaName: null, scriptNo: null });
+    expect(factsFromMeta({ scriptNo: 1.5 })).toEqual({ charaName: null, scriptNo: null });
+    expect(factsFromMeta({})).toEqual({ charaName: null, scriptNo: null });
   });
 });
 
