@@ -26,7 +26,13 @@ import type {
   StateDependency,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
-import { buildNavigatorTree, searchFunctions, type NavigatorTree, type SearchHit } from './tree';
+import {
+  buildNavigatorTree,
+  searchFunctions,
+  shouldRebuildIndex,
+  type NavigatorTree,
+  type SearchHit,
+} from './tree';
 
 /** 单面最多渲染函数数（防 DOM 爆炸） */
 const FACE_RENDER_CAP = 300;
@@ -97,6 +103,8 @@ export function createUiKojoNavigatorPlugin(): Plugin {
       // ---- 状态（React 外部源；面板组件读取并订阅） ----
       let tree: NavigatorTree | null = null;
       let indexReady = false;
+      /** 上一次建树所用的索引实例（去重判据：同一实例不重复建树，见 `shouldRebuildIndex`） */
+      let lastBuiltIndex: ErbIndex | null = null;
       /** 索引/建树失败原因（2026-10-11 实机反馈）：此前只在 catch 里 log.warn，
        *  面板永久停在「打开项目后自动构建函数索引…」占位，用户既不知失败也无从重试 */
       let loadError: string | null = null;
@@ -113,6 +121,11 @@ export function createUiKojoNavigatorPlugin(): Plugin {
       };
 
       const rebuild = (index: ErbIndex | null): void => {
+        // 去重（2026-10-12 内核优化批）：`project.opened` 与 `kojo.functionChanged` 会
+        // 双双触发 refresh，两者拿到的是同一个索引实例——同一实例不重复建树
+        // （`buildNavigatorTree` 在 95k 函数上是近秒级开销，白跑第二遍纯属浪费）。
+        if (!shouldRebuildIndex(lastBuiltIndex, index)) return;
+        lastBuiltIndex = index;
         if (!index || !project.current()) {
           tree = null;
           indexReady = index !== null;

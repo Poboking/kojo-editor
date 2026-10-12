@@ -20,6 +20,8 @@ export {
 export { FileIOServiceImpl } from './io';
 export { ProjectServiceImpl, type ProjectServiceDeps } from './project';
 export { WorkspaceServiceImpl, type WorkspaceServiceDeps } from './workspace';
+// 计算池（内核设施 `kernel.compute`）：时间片调度 + 优先级 + 单飞尾缘合并
+export { createComputePool, DEFAULT_SLICE_MS } from './compute';
 
 // 纯工具 re-export（实现位于 plugin-api——公共纯工具住公共包，插件也可直接使用）
 export {

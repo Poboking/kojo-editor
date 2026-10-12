@@ -177,6 +177,13 @@ export type { WellKnownCommandId } from './slots';
 
 export { KernelServices, WellKnownServices } from './services';
 export type { KernelServiceKey, PluginRegistry, WellKnownServiceKey } from './services';
+export type {
+  ComputePool,
+  ComputePoolStats,
+  ComputePriority,
+  ComputeRunOptions,
+  ComputeTaskStat,
+} from './compute';
 
 export type {
   ControlFlowStatement,

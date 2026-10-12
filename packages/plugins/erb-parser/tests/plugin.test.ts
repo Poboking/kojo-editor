@@ -1,14 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import type { ErbParserService, EventBus, FileIO, GameProject, PluginContext, Unsubscribe } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
+import { makeComputeStub } from './support';
 
-/** 伪 FileIO：只用得到 readText 与 walkDir */
+/** 伪 FileIO：只用得到 readText / walkDir / stat */
 function fakeIO(files: Record<string, string>): FileIO {
   return {
     async readText(path: string) {
       const text = files[path];
       if (text === undefined) throw new Error(`not found: ${path}`);
       return { path, text, encoding: 'utf-8', eol: 'lf', mtimeMs: null };
+    },
+    async stat(path: string) {
+      const text = files[path];
+      if (text === undefined) return null;
+      // mtimeMs 恒 null = 平台未提供 → 快照逻辑按"保守过期"处理（与 readText 口径一致）
+      return { size: text.length, mtimeMs: null, isDirectory: false };
     },
     async walkDir(root: string) {
       return Object.keys(files)
@@ -61,6 +68,7 @@ function activatePlugin(io: FileIO): {
   const logs: string[] = [];
   const { bus, emit } = makeBus();
   const disposers: Array<() => void> = [];
+  const compute = makeComputeStub();
   const ctx = {
     pluginId: 'erb-parser',
     log: {
@@ -72,6 +80,7 @@ function activatePlugin(io: FileIO): {
     bus,
     inject: <T,>(key: string): T => {
       if (key === 'kernel.io') return io as unknown as T;
+      if (key === 'kernel.compute') return compute as unknown as T;
       throw new Error(`unexpected inject: ${key}`);
     },
     provide: (key: string, value: unknown) => services.set(key, value),

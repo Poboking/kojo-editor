@@ -1,4 +1,5 @@
 import type {
+  ComputePool,
   ErbFile,
   ErbIndex,
   ErbParserService,
@@ -7,6 +8,7 @@ import type {
   GameProject,
   Plugin,
 } from '@kojo/plugin-api';
+import { KernelServices } from '@kojo/plugin-api';
 import { parseErbText, scanControlFlow } from './scanner';
 import {
   SNAPSHOT_VERSION,
@@ -39,29 +41,26 @@ import {
 const IO = 'kernel.io';
 const ERB_EXT = /\.er[bm]$/i;
 
-/** 并发受限的批量任务（避免一次性打开数千文件） */
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length) as R[];
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) {
-      const i = cursor++;
-      if (i >= items.length) return;
-      results[i] = await fn(items[i]!, i);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
+/** 索引三段（walk 之外）的窗口并发度：stat 轻、parse 重 */
+const STAT_CONCURRENCY = 32;
+const PARSE_CONCURRENCY = 12;
+/** 片预算：半个 60fps 帧（与计算池默认一致） */
+const SLICE_MS = 8;
 
 export function createErbParserPlugin(): Plugin {
   return {
     id: 'erb-parser',
     version: '0.2.0',
     provides: ['erb.parser'],
-    requires: [IO],
+    requires: [IO, KernelServices.Compute],
     activate(ctx) {
       const io = ctx.inject<FileIO>(IO);
+      /**
+       * 计算池（内核优化批）：索引是"开项目级联"的第一段，2,317 个文件 / 362 万行
+       * 的 walk+stat+parse 必须**分片让路**，否则用户开项目后几秒内打字必卡。
+       * 用 `concurrency` 保住 IPC 并行度，窗口之间让出主线程。
+       */
+      const compute = ctx.inject<ComputePool>(KernelServices.Compute);
       /** 本插件命名空间的存储域：索引快照的落点（`{appData}/store/erb-parser/`） */
       const storage = ctx.storage;
 
@@ -95,13 +94,17 @@ export function createErbParserPlugin(): Plugin {
         // 是增量复扫的判据——mtime 没变的文件，解析结果必然不变（纯函数）。
         const statStartedAt = Date.now();
         const stats = new Map<string, FileStat | null>();
-        await mapLimit(allFiles, 32, async (path) => {
-          try {
-            stats.set(path, await io.stat(path));
-          } catch {
-            stats.set(path, null); // stat 失败 = 判过期（保守）
-          }
-        });
+        await compute.runSliced(
+          allFiles,
+          { concurrency: STAT_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.stat' },
+          async (path) => {
+            try {
+              stats.set(path, await io.stat(path));
+            } catch {
+              stats.set(path, null); // stat 失败 = 判过期（保守）
+            }
+          },
+        );
 
         // 快照：只在项目响应式路径启用（service.buildIndex 的显式调用 = 强制重建）
         let snapshot: IndexSnapshot | null = null;
@@ -129,18 +132,22 @@ export function createErbParserPlugin(): Plugin {
 
         const parseStartedAt = Date.now();
         const fresh = new Map<string, SnapshotEntry>();
-        await mapLimit(diff.stale, 12, async (path) => {
-          try {
-            const tf = await io.readText(path);
-            fresh.set(path, {
-              mtimeMs: tf.mtimeMs,
-              textLength: tf.text.length,
-              file: parseErbText(tf.text, path),
-            });
-          } catch (err) {
-            ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
-          }
-        });
+        await compute.runSliced(
+          diff.stale,
+          { concurrency: PARSE_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.parse' },
+          async (path) => {
+            try {
+              const tf = await io.readText(path);
+              fresh.set(path, {
+                mtimeMs: tf.mtimeMs,
+                textLength: tf.text.length,
+                file: parseErbText(tf.text, path),
+              });
+            } catch (err) {
+              ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
+            }
+          },
+        );
 
         // 合并：按本次 walk 顺序取数（快照只换"来源"，byName 聚合顺序与全量重建逐位一致）
         const ordered: ErbFile[] = [];

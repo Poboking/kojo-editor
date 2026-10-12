@@ -12,6 +12,15 @@ export const KernelServices = {
   Project: 'kernel.project',
   /** 作者工作区（通用 project/artifact 模型；游戏语义由消费方解释） */
   Workspaces: 'kernel.workspaces',
+  /**
+   * 计算池（2026-10-12「内核优化」批）：把 CPU 密集的批量工作切成时间片、
+   * 片间让出主线程，使级联扫描不再表现为连续卡顿。
+   *
+   * 契约 `ComputePool`（`kernel/src/compute.ts` 定义实现与其语义；本键是内核设施，
+   * 零游戏词汇零插件概念）。优先级 `interactive` > `background`；无 Worker 环境
+   * 自动内联（同一套调度代码，只是运输层不同）。
+   */
+  Compute: 'kernel.compute',
 } as const;
 
 /**

@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { CharaInfo, ErbIndex, ErbFile, ErbFunction, FamilyIndexRule, FamilyMatch, FamilyParseKind } from '@kojo/plugin-api';
-import { buildNavigatorTree, searchFunctions } from '../src/tree';
+import { buildNavigatorTree, searchFunctions, shouldRebuildIndex } from '../src/tree';
 
 /* ------------------------------ 测试基建 ------------------------------ */
 
@@ -185,5 +185,27 @@ describe('searchFunctions', () => {
       '/p/a.ERB': Array.from({ length: 50 }, (_, i) => `M_KOJO_MESSAGE_COM_K1_${i + 1}`),
     });
     expect(searchFunctions(big, 'message_com', fakeFamilyIndex, 10)).toHaveLength(10);
+  });
+});
+
+/* ==================== 建树去重（2026-10-12 内核优化批） ==================== */
+
+describe('shouldRebuildIndex（project.opened 与 kojo.functionChanged 双触发的去重）', () => {
+  it('同一索引实例 → 不重建（消掉开项目时白跑的第二遍建树）', () => {
+    const idx = makeIndex({ '/p/a.ERB': ['M_KOJO_MESSAGE_COM_K1_1'] });
+    expect(shouldRebuildIndex(idx, idx)).toBe(false);
+  });
+
+  it('新索引实例 → 重建（索引真正变化后树必须刷新）', () => {
+    const a = makeIndex({ '/p/a.ERB': ['M_KOJO_MESSAGE_COM_K1_1'] });
+    const b = makeIndex({ '/p/a.ERB': ['M_KOJO_MESSAGE_COM_K1_1'] });
+    expect(shouldRebuildIndex(a, b)).toBe(true);
+  });
+
+  it('与 null 的相互迁移：实例↔null 必重建；null↔null 不重建', () => {
+    const idx = makeIndex({ '/p/a.ERB': ['M_KOJO_MESSAGE_COM_K1_1'] });
+    expect(shouldRebuildIndex(null, idx)).toBe(true);
+    expect(shouldRebuildIndex(idx, null)).toBe(true);
+    expect(shouldRebuildIndex(null, null)).toBe(false);
   });
 });

@@ -12,6 +12,7 @@
  */
 
 import type {
+  ComputePool,
   ConditionExtractorService,
   ConditionExpr,
   ConditionIndex,
@@ -37,20 +38,21 @@ export interface ConditionEngineDeps {
   scanControlFlow(text: string): ControlFlowStatement[];
   /** 当前适配器的变量语义查询（无适配器 / 无 schema 时 undefined） */
   getSchemaLookup(): SchemaLookup | undefined;
+  /**
+   * 计算池（内核 `kernel.compute`，2026-10-12 内核优化批）。
+   *
+   * 全量抽取在真实语料上是 ~6.2 s / 49.3 万谓词的**背景 CPU 洪水**——必须分窗并发
+   * 并**窗口间让出主线程**，否则"开项目后十几秒内打字卡"。
+   */
+  compute: ComputePool;
 }
 
-/** 并发受限的批量任务（控制内存峰值：文本读一批、处理一批、释放一批） */
-async function mapLimit<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) {
-      const i = cursor++;
-      if (i >= items.length) return;
-      await fn(items[i]!);
-    }
-  });
-  await Promise.all(workers);
-}
+/**
+ * 抽取的窗口并发度与片预算：控制内存峰值（读一批、处理一批、释放一批），
+ * 并保证窗口之间让出主线程（背景档 → 交互优先）。
+ */
+const EXTRACT_CONCURRENCY = 8;
+const EXTRACT_SLICE_MS = 8;
 
 function emptyIndex(projectRoot = ''): ConditionIndex {
   const now = Date.now();
@@ -188,7 +190,17 @@ export class ConditionEngine implements ConditionExtractorService {
     const stats = { functions: 0, functionsWithDeps: 0, predicates: 0, unparsed: 0, dependencies: 0 };
 
     const entries = [...index.files.entries()];
-    await mapLimit(entries, 8, async ([path, file]) => {
+    // 分窗并发 + 窗口间让路（内核计算池，background 档）：抽取是"开项目级联"的第二段，
+    // 6.2 s 的 CPU 洪水不能连续占住主线程（内核优化批）
+    await this.deps.compute.runSliced(
+      entries,
+      {
+        concurrency: EXTRACT_CONCURRENCY,
+        sliceMs: EXTRACT_SLICE_MS,
+        priority: 'background',
+        label: 'condition.extract',
+      },
+      async ([path, file]) => {
       let text: string;
       try {
         text = await this.deps.readFile(path);
@@ -223,7 +235,8 @@ export class ConditionEngine implements ConditionExtractorService {
           if (cond.dependencies.length > 0) stats.functionsWithDeps++;
         }
       }
-    });
+      },
+    );
 
     // 运行结束时项目已切换 → 不提交（避免过期结果覆盖）
     const projectAtEnd = this.deps.getProject();

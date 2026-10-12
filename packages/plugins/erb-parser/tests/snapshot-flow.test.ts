@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { DirEntry, ErbParserService, FileIO, FileStat, GameProject, ScopedStorage } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
 import { snapshotKeyFor } from '../src/snapshot';
+import { makeComputeStub } from './support';
 
 const ROOT = 'D:/proj/eratw';
 const KOJO = `${ROOT}/ERB`;
@@ -96,6 +97,7 @@ function activate(io: FileIO, storage: ScopedStorage) {
     storage,
     inject: (key: string) => {
       if (key === 'kernel.io') return io;
+      if (key === 'kernel.compute') return makeComputeStub();
       throw new Error(`unexpected inject: ${key}`);
     },
     slots: { register: () => () => undefined },

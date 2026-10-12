@@ -1,4 +1,5 @@
 import type {
+  ComputePool,
   EventBus,
   FileIO,
   Logger,
@@ -12,6 +13,7 @@ import type {
 } from '@kojo/plugin-api';
 import { KernelServices } from '@kojo/plugin-api';
 import { TypedEventBus } from './bus';
+import { createComputePool } from './compute';
 import { ServiceContainer } from './container';
 import { FileIOServiceImpl } from './io';
 import { ProjectServiceImpl } from './project';
@@ -47,6 +49,11 @@ export interface Kernel {
   readonly project: ProjectService;
   /** 作者工作区（通用 project/artifact；根目录在应用数据区，恒可写） */
   readonly workspaces: WorkspaceService;
+  /**
+   * 计算池（2026-10-12 内核优化批）：批量 CPU 工作切成时间片、片间让出主线程。
+   * 同时也是服务键 `kernel.compute`（插件经 `inject` 取用）。
+   */
+  readonly compute: ComputePool;
   /**
    * 服务查询（宿主 / UI / 测试用）。
    * 插件请通过 PluginContext.inject / tryInject（依赖声明式接线），
@@ -88,12 +95,14 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
   const slots = new SlotRegistryImpl();
   const storage = new StorageServiceImpl(opts.storageBackend ?? new FileStorageBackend(opts.platform));
   const io = new FileIOServiceImpl(opts.platform, kernelLog);
+  const compute = createComputePool();
 
   // 内核服务以 'kernel' 名义注册（插件通过 requires: ['kernel.bus', ...] 消费）
   container.provide(KernelServices.Bus, bus, 'kernel');
   container.provide(KernelServices.IO, io, 'kernel');
   container.provide(KernelServices.Storage, storage, 'kernel');
   container.provide(KernelServices.Slots, slots, 'kernel');
+  container.provide(KernelServices.Compute, compute, 'kernel');
 
   const runtime = new PluginRuntime({
     container,
@@ -155,6 +164,7 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
     plugins: registry,
     project,
     workspaces,
+    compute,
     services: {
       tryGet: <T = unknown>(key: string): T | undefined => container.tryGet<T>(key),
       get: <T = unknown>(key: string): T => container.get<T>(key),

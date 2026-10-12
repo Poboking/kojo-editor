@@ -151,6 +151,17 @@ function compareFunctions(a: FunctionNode, b: FunctionNode): number {
 
 /* ------------------------------ 主构建 ------------------------------ */
 
+/**
+ * 是否需要重建导航树（2026-10-12 内核优化批）。
+ *
+ * `project.opened` 与 `kojo.functionChanged` 会**双双触发**面板刷新，而两条路径最终
+ * 拿到的是**同一个 `ErbIndex` 实例**（erb-parser 构建完成后只替换一次引用）。
+ * 按引用比较即可去重——避免在 95k 函数上把 `buildNavigatorTree`（单次近秒级）白跑第二遍。
+ */
+export function shouldRebuildIndex(prev: ErbIndex | null, next: ErbIndex | null): boolean {
+  return prev !== next;
+}
+
 /** 角色显示名：charaIndex 命中 → `K{no} {name}`，否则 `K{no}` */
 function charaLabel(no: number, charaIndex: ReadonlyMap<number, CharaInfo>): { label: string; name?: string } {
   const info = charaIndex.get(no);
@@ -160,7 +171,8 @@ function charaLabel(no: number, charaIndex: ReadonlyMap<number, CharaInfo>): { l
 
 /**
  * 从索引构建导航树。
- * 单次全量遍历（99k 函数实测 < 1s），每次 `kojo.functionChanged` 重建一次。
+ * 单次全量遍历（99k 函数实测 < 1s），每次 `kojo.functionChanged` 重建一次
+ * （同一索引实例重复调用由 `shouldRebuildIndex` 在调用方去重）。
  */
 export function buildNavigatorTree(
   index: ErbIndex,

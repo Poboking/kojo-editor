@@ -13,6 +13,7 @@
  */
 
 import type {
+  ComputePool,
   ConditionExtractorService,
   ControlFlowStatement,
   ErbParserService,
@@ -22,7 +23,7 @@ import type {
   ProjectService,
   SlotRegistry,
 } from '@kojo/plugin-api';
-import { WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { ConditionEngine } from './engine';
 import type { SchemaLookup } from './extract';
 
@@ -35,12 +36,14 @@ export function createConditionExtractorPlugin(): Plugin {
     id: 'condition-extractor',
     version: '0.2.0',
     provides: [WellKnownServices.ConditionExtractor],
-    requires: [IO, PROJECT, SLOTS, WellKnownServices.ErbParser],
+    requires: [IO, PROJECT, SLOTS, KernelServices.Compute, WellKnownServices.ErbParser],
     activate(ctx) {
       const io = ctx.inject<FileIO>(IO);
       const project = ctx.inject<ProjectService>(PROJECT);
       const slots = ctx.inject<SlotRegistry>(SLOTS);
       const parser = ctx.inject<ErbParserService>(WellKnownServices.ErbParser);
+      // 全量抽取是背景 CPU 洪水（~6.2 s / 49.3 万谓词）——过池分片，窗口间让出主线程
+      const compute = ctx.inject<ComputePool>(KernelServices.Compute);
 
       /** 当前适配器的变量语义查询（按 adapterId 精确匹配；多适配器共存天然正确） */
       const schemaLookup = (): SchemaLookup | undefined => {
@@ -61,6 +64,7 @@ export function createConditionExtractorPlugin(): Plugin {
         readFile: async (path: string) => (await io.readText(path)).text,
         scanControlFlow: (text: string): ControlFlowStatement[] => parser.scanControlFlow(text),
         getSchemaLookup: schemaLookup,
+        compute,
       });
 
       const service: ConditionExtractorService = engine;
