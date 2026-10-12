@@ -3343,6 +3343,9 @@ Monaco 大文件降级）最容易被影响到的消费者——数字一字不�
 
 #### 未做
 
-- `origin/syntax-sugar` 需要 force-push（rebase 改写了已推送的 13 条），**待用户确认后执行**；
-  旧 tip `fa9a18a` 由本地分支 `backup/syntax-sugar-20261012` 持有（照 §5.55 的做法留锚）。
+- **`origin/syntax-sugar` 已删除**（用户 2026-10-12 拍板，照 §5.55 先例）：删除前用
+  `git log --cherry-pick --right-only` + `git diff --diff-filter=A` 双重核验该分支**没有任何 master 里不存在的**
+  文件或提交内容**（列出的 5 条"补丁不等价"提交就是 rebase 前后同源的那批）；旧 tip `fa9a18a`
+  由本地 `backup/syntax-sugar-20261012` 持有。糖线此后**直接在 master 上推进**，不再留长命分支
+  ——这次"落后 24 提交"的代价就是编号让位发生两次、14 文件冲突、两轮验证。
 - 桌面壳实机目视（两组共同欠账，本机无 `src-tauri/target`，需 GUI 会话）。

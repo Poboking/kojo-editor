@@ -871,7 +871,7 @@ node tools/smoke-tauri-ipc.mjs
 | :-- | :-- | :-- |
 | `master` | 本组主线 | 口上项目批 P-A…P-E 全在这条线上（`712a9f5`） |
 | `ui-polish` | 本组 UI 线 | 2026-10-12 时点 **0 领先 / 8 落后 master**（空占位）。**UI 优化今后落这条还是继续走 master，尚未定，需问用户** |
-| `syntax-sugar` | 别组 | **2026-10-12 已 rebase 进 master**（15 提交，处置与编号让位见 §5.64）。旧尖端 `fa9a18a`（merge-base `b1f260e`，2 领先 / 24 落后）由本地 `backup/syntax-sugar-20261012` 持有；远端分支待 force-push 或被删除 |
+| `syntax-sugar` | 别组（语法糖线） | **已 rebase 进 master 并删除远端分支**（2026-10-12，处置见 §5.64）。旧尖端 `fa9a18a` 由本地 `backup/syntax-sugar-20261012` 持有；**糖线今后直接在 master 上推进**，不再留长命分支 |
 
 ### 已知的跨组冲突面（**2026-10-12 已合流关闭**，留档供后来者判读）
 
