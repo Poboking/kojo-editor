@@ -57,6 +57,58 @@ export const SIZE_LIMITS = {
   bottom: { min: 120, max: 480 },
 } as const;
 
+export type ContainerKey = 'sidebar' | 'aux' | 'bottom';
+
+
+export type LayoutAction =
+  | { type: 'toggle'; container: ContainerKey }
+  | { type: 'activate'; container: ContainerKey; key: string }
+  | { type: 'resize'; container: ContainerKey; size: number }
+  | { type: 'move'; id: string; to: PanelLocation; viewKey: string | null }
+  | { type: 'toggleZen' }
+  | { type: 'exitZen' }
+  | { type: 'setZenLimitWidth'; value: boolean }
+  | { type: 'reset'; state: LayoutState };
+
+export function clamp(container: ContainerKey, size: number): number {
+  const lim = SIZE_LIMITS[container];
+  return Math.min(lim.max, Math.max(lim.min, size));
+}
+
+export function reducer(s: LayoutState, a: LayoutAction): LayoutState {
+  switch (a.type) {
+    case 'toggle': {
+      const c = s[a.container];
+      return { ...s, [a.container]: { ...c, visible: !c.visible } };
+    }
+    case 'activate': {
+      const c = s[a.container];
+      return { ...s, [a.container]: { ...c, active: a.key, visible: true } };
+    }
+    case 'resize': {
+      const c = s[a.container];
+      return { ...s, [a.container]: { ...c, size: clamp(a.container, a.size) } };
+    }
+    case 'move': {
+      const panelLocations = { ...s.panelLocations, [a.id]: a.to };
+      // 移动到目标容器并激活它；sidebar 的激活单位是视图 key
+      if (a.to === 'sidebar') {
+        return { ...s, panelLocations, sidebar: { ...s.sidebar, visible: true, active: a.viewKey } };
+      }
+      const c = s[a.to];
+      return { ...s, panelLocations, [a.to]: { ...c, visible: true, active: a.id } };
+    }
+    case 'toggleZen':
+      return { ...s, zen: !s.zen };
+    case 'exitZen':
+      return s.zen ? { ...s, zen: false } : s;
+    case 'setZenLimitWidth':
+      return { ...s, zenLimitWidth: a.value };
+    case 'reset':
+      return a.state;
+  }
+}
+
 const LAYOUT_KEY = 'kojo.ui.layout.v1';
 
 function orderOf(p: UIPanelContribution): number {

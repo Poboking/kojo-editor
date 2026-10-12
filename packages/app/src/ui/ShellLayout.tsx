@@ -18,9 +18,12 @@ import {
   defaultLayout,
   loadLayout,
   organizePanels,
+  reducer,
   reconcileLayout,
   resetLayout,
   saveLayout,
+  type ContainerKey,
+  type LayoutAction,
   type LayoutState,
   type OrganizedPanels,
   type ViewDef,
@@ -96,59 +99,8 @@ interface Props {
   onRegisterWorkbench?: (api: WorkbenchApi | null) => void;
 }
 
-type ContainerKey = 'sidebar' | 'aux' | 'bottom';
-
 /** 拖拽停靠的自定义 MIME（P4；只在壳层内部流转，防外部拖入误触发） */
 const PANEL_DRAG_MIME = 'application/x-kojo-panel-move';
-
-type LayoutAction =
-  | { type: 'toggle'; container: ContainerKey }
-  | { type: 'activate'; container: ContainerKey; key: string }
-  | { type: 'resize'; container: ContainerKey; size: number }
-  | { type: 'move'; id: string; to: PanelLocation; viewKey: string | null }
-  | { type: 'toggleZen' }
-  | { type: 'exitZen' }
-  | { type: 'setZenLimitWidth'; value: boolean }
-  | { type: 'reset'; state: LayoutState };
-
-function clamp(container: ContainerKey, size: number): number {
-  const lim = SIZE_LIMITS[container];
-  return Math.min(lim.max, Math.max(lim.min, size));
-}
-
-function reducer(s: LayoutState, a: LayoutAction): LayoutState {
-  switch (a.type) {
-    case 'toggle': {
-      const c = s[a.container];
-      return { ...s, [a.container]: { ...c, visible: !c.visible } };
-    }
-    case 'activate': {
-      const c = s[a.container];
-      return { ...s, [a.container]: { ...c, active: a.key, visible: true } };
-    }
-    case 'resize': {
-      const c = s[a.container];
-      return { ...s, [a.container]: { ...c, size: clamp(a.container, a.size) } };
-    }
-    case 'move': {
-      const panelLocations = { ...s.panelLocations, [a.id]: a.to };
-      // 移动到目标容器并激活它；sidebar 的激活单位是视图 key
-      if (a.to === 'sidebar') {
-        return { ...s, panelLocations, sidebar: { ...s.sidebar, visible: true, active: a.viewKey } };
-      }
-      const c = s[a.to];
-      return { ...s, panelLocations, [a.to]: { ...c, visible: true, active: a.id } };
-    }
-    case 'toggleZen':
-      return { ...s, zen: !s.zen };
-    case 'exitZen':
-      return s.zen ? { ...s, zen: false } : s;
-    case 'setZenLimitWidth':
-      return { ...s, zenLimitWidth: a.value };
-    case 'reset':
-      return a.state;
-  }
-}
 
 /** 视图在活动栏的位置：组成员全为低频（defaultActive:false）→ 底部区（定稿 §四插件状态齿轮位） */
 function isLowFreqView(v: ViewDef): boolean {

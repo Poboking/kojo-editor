@@ -9,8 +9,10 @@ import {
   loadLayout,
   organizePanels,
   reconcileLayout,
+  reducer,
   resetLayout,
   saveLayout,
+  SIZE_LIMITS,
   type LayoutState,
 } from '../src/ui/layout';
 
@@ -253,5 +255,66 @@ describe('持久化状态与当前贡献的清洗', () => {
     expect(reconcileLayout({ zen: true }, org).zen).toBe(true);
     expect(reconcileLayout({}, org).zen).toBe(false);
     expect(reconcileLayout({ zen: 'yes' as never }, org).zen).toBe(false);
+  });
+});
+/**
+ * 设置页三个开关背后的 reducer（2026-10-13 设置页归一批搬来并可测）。
+ *
+ * 之前 `reducer` 内联在 `ShellLayout.tsx` 里，设置页改的就是这几个动作，
+ * 却**没有任何一条测试**——审阅补测批覆盖了编排/清洗，唯独漏了动作本体。
+ * 现在它住在 `layout.ts`（依赖的 `SIZE_LIMITS` / `LayoutState` 本来就在这儿），
+ * 于是"设置项按下去到底改变了什么"变得可断言。
+ */
+describe('reducer · 设置页开关', () => {
+  const base = (over: Partial<LayoutState> = {}): LayoutState => ({
+    ...defaultLayout(organizePanels([panel('p1')], {})),
+    ...over,
+  });
+
+  it('写作模式是**翻转**，不是置真（同一快捷键连按两次要能进出）', () => {
+    const on = reducer(base({ zen: false }), { type: 'toggleZen' });
+    expect(on.zen).toBe(true);
+    expect(reducer(on, { type: 'toggleZen' }).zen).toBe(false);
+  });
+
+  it('exitZen 幂等：不在写作模式时返回**同一个对象引用**（不制造无谓的重渲染）', () => {
+    const s = base({ zen: false });
+    expect(reducer(s, { type: 'exitZen' })).toBe(s);
+    expect(reducer(base({ zen: true }), { type: 'exitZen' }).zen).toBe(false);
+  });
+
+  it('居中限宽独立于写作模式存储（开回来时上次偏好还在）', () => {
+    let s = base();
+    s = reducer(s, { type: 'setZenLimitWidth', value: false });
+    expect(s.zenLimitWidth).toBe(false);
+    s = reducer(s, { type: 'toggleZen' });
+    expect(s.zen).toBe(true);
+    expect(s.zenLimitWidth).toBe(false);
+    s = reducer(s, { type: 'exitZen' });
+    expect(s.zenLimitWidth).toBe(false);
+  });
+
+  it('写作模式与居中限宽是**两个字段**，所以设置页的从属关系只是呈现，不是数据耦合', () => {
+    const s = reducer(base({ zen: false, zenLimitWidth: true }), { type: 'toggleZen' });
+    expect(s.zen).toBe(true);
+    expect(s.zenLimitWidth).toBe(true);
+  });
+
+  it('resize 越界被夹住（设置页外的拖拽路径，顺带守住 SIZE_LIMITS）', () => {
+    expect(reducer(base(), { type: 'resize', container: 'sidebar', size: 99999 }).sidebar.size).toBe(
+      SIZE_LIMITS.sidebar.max,
+    );
+    expect(reducer(base(), { type: 'resize', container: 'sidebar', size: 1 }).sidebar.size).toBe(
+      SIZE_LIMITS.sidebar.min,
+    );
+    expect(reducer(base(), { type: 'resize', container: 'bottom', size: 1 }).bottom.size).toBe(
+      SIZE_LIMITS.bottom.min,
+    );
+  });
+
+  it('reset 整份替换为传入状态（重置布局按钮的语义）', () => {
+    const fresh = base({ zen: true });
+    const out = reducer(base({ zen: false }), { type: 'reset', state: fresh });
+    expect(out).toBe(fresh);
   });
 });
