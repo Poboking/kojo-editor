@@ -236,6 +236,43 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     expect(service.currentIndex()!.files.size).toBe(2);
   });
 
+  it('磁盘卫生：落盘后收口成单文件，旧版本孤儿被清、别人的键不碰', async () => {
+    const files = new Map<string, FakeFile>([[P1, { text: SRC1, mtimeMs: 100 }]]);
+    const { io } = makeIO(files);
+    const { storage, map, deleted } = makeStorage();
+    const { bus, waitIndexed } = activate(io, storage);
+
+    // 磁盘上躺着：别的项目的快照 + 格式升级遗留的 v2 孤儿 + 一个与快照无关的键
+    map.set(snapshotKeyFor('D:/other/game'), JSON.stringify({ version: 3, rootDir: 'D:/other/game', savedAt: 1, entries: {} }));
+    map.set('index-v2-aabbccdd', JSON.stringify({ version: 2, rootDir: ROOT, savedAt: 1, entries: {} }));
+    map.set('user-notes', 'not-a-snapshot');
+
+    openProject(bus);
+    await waitIndexed();
+    for (let i = 0; i < 50 && deleted.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
+
+    expect(deleted.sort()).toEqual(['index-v2-aabbccdd', snapshotKeyFor('D:/other/game')].sort());
+    expect(map.has('user-notes')).toBe(true); // 非快照形态的键不越权删
+    expect(map.has(snapshotKeyFor(ROOT))).toBe(true); // 当前项目这份留着
+  });
+
+  it('未变更（全命中快照）时也照样收口', async () => {
+    const files = new Map<string, FakeFile>([[P1, { text: SRC1, mtimeMs: 100 }]]);
+    const { io } = makeIO(files);
+    const { storage, map, deleted } = makeStorage();
+    const { bus, waitIndexed } = activate(io, storage);
+
+    openProject(bus);
+    await waitIndexed();
+    map.set('index-v1-deadbeef', JSON.stringify({ version: 1, rootDir: ROOT, savedAt: 1, entries: {} }));
+
+    openProject(bus); // mtime 没变 ⇒ snapshotDirty = false
+    await waitIndexed();
+    for (let i = 0; i < 50 && !deleted.includes('index-v1-deadbeef'); i++) await new Promise((r) => setTimeout(r, 5));
+
+    expect(deleted).toContain('index-v1-deadbeef');
+  });
+
   it('service.buildIndex（显式调用）不走快照：语义 = 强制重建', async () => {
     const files = new Map<string, FakeFile>([
       [P1, { text: SRC1, mtimeMs: 100 }],

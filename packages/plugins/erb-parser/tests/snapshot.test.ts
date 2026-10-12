@@ -9,6 +9,7 @@ import {
   diffSnapshot,
   encodeEntries,
   mergeEntries,
+  pruneSnapshotKeys,
   snapshotKeyFor,
   type IndexSnapshot,
   type SnapshotEntry,
@@ -209,7 +210,7 @@ describe('coerceSnapshot（fail-closed）', () => {
   });
 
   it('版本 / 项目根 / savedAt / 条目结构任一不符 → null（整体弃用）', () => {
-    const snap = snapshot({ '/a.ERB': entry('/a.ERB', 100, ['FOO']) }) as Record<string, unknown>;
+    const snap = snapshot({ '/a.ERB': entry('/a.ERB', 100, ['FOO']) }) as unknown as Record<string, unknown>;
     expect(coerceSnapshot({ ...snap, version: SNAPSHOT_VERSION + 1 }, ROOT)).toBeNull();
     expect(coerceSnapshot(snap, 'D:/other')).toBeNull();
     expect(coerceSnapshot({ ...snap, savedAt: 'x' }, ROOT)).toBeNull();
@@ -217,6 +218,35 @@ describe('coerceSnapshot（fail-closed）', () => {
     expect(coerceSnapshot({ ...snap, entries: null }, ROOT)).toBeNull();
     expect(coerceSnapshot('garbage', ROOT)).toBeNull();
     expect(coerceSnapshot(null, ROOT)).toBeNull();
+  });
+});
+
+describe('pruneSnapshotKeys（索引快照统一单文件语义）', () => {
+  const KEEP = snapshotKeyFor(ROOT);
+
+  it('只留当前项目的键，删掉其它项目的快照', () => {
+    const keys = [KEEP, snapshotKeyFor('D:/other'), snapshotKeyFor('D:/third')];
+    expect(pruneSnapshotKeys(keys, KEEP).sort()).toEqual([snapshotKeyFor('D:/other'), snapshotKeyFor('D:/third')].sort());
+  });
+
+  it('格式升级遗留的旧版本键也清掉（v1/v2 孤儿不再永远躺着）', () => {
+    expect(pruneSnapshotKeys(['index-v1-aabbccdd', 'index-v2-11223344', KEEP], KEEP)).toEqual([
+      'index-v1-aabbccdd',
+      'index-v2-11223344',
+    ]);
+  });
+
+  it('非快照形态的键一律不碰（不越权删别人的东西）', () => {
+    const others = ['registry', 'notes.json', 'index-vX-zzzz', 'index-v3-abc'];
+    expect(pruneSnapshotKeys([...others, KEEP], KEEP)).toEqual([]);
+  });
+
+  it('keepKey 不在列表里也照常清理（当前项目还没落盘的场景）', () => {
+    expect(pruneSnapshotKeys(['index-v2-aabbccdd'], KEEP)).toEqual(['index-v2-aabbccdd']);
+  });
+
+  it('空列表 ⇒ 空操作', () => {
+    expect(pruneSnapshotKeys([], KEEP)).toEqual([]);
   });
 });
 

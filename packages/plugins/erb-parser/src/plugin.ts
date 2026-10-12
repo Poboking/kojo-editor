@@ -19,6 +19,7 @@ import {
   diffSnapshot,
   encodeEntries,
   mergeEntries,
+  pruneSnapshotKeys,
   snapshotKeyFor,
   type IndexSnapshot,
   type SnapshotEntry,
@@ -80,6 +81,23 @@ export function createErbParserPlugin(): Plugin {
       let currentRoot = '';
       /** 代际号：项目切换时作废过期构建的结果 */
       let generation = 0;
+
+      /**
+       * 磁盘卫生：索引快照统一成**单文件语义**，只留当前项目这一份。
+       * 与抽取 / 校验两段的覆盖式行为对齐，顺带清掉格式升级留下的 `index-v1-*` / `v2-*` 孤儿。
+       * 纯清理动作，失败只记一行——缓存回收不该影响索引正确性。
+       */
+      function pruneStaleSnapshots(keepKey: string): void {
+        void (async () => {
+          try {
+            const doomed = pruneSnapshotKeys(await storage.keys(), keepKey);
+            for (const k of doomed) await storage.delete(k);
+            if (doomed.length > 0) ctx.log.info(`Index snapshot store pruned (${doomed.length} stale key(s))`);
+          } catch (err) {
+            ctx.log.warn(`Index snapshot prune failed (cache hygiene only): ${String(err)}`);
+          }
+        })();
+      }
 
       async function build(rootsToScan: string[], gen: number, useSnapshot: boolean): Promise<ErbIndex> {
         // 耗时拆分（内核优化 L0）：索引是"开项目级联"的第一段，必须在日志里可见。
@@ -204,27 +222,33 @@ export function createErbParserPlugin(): Plugin {
         // 落盘快照（异步，不阻塞广播；失败只告警——它只是缓存，不是数据）
         const snapshotDirty =
           fresh.size > 0 || (snapshot !== null && Object.keys(snapshot.entries).length !== allFiles.length);
-        if (useSnapshot && currentRoot && gen === generation && snapshotDirty) {
+        if (useSnapshot && currentRoot && gen === generation) {
           const key = snapshotKeyFor(currentRoot);
-          const entries = mergeEntries(snapshot, allFiles, fresh);
-          const saveStartedAt = Date.now();
-          void storage
-            .set(key, {
-              version: SNAPSHOT_VERSION,
-              rootDir: currentRoot,
-              savedAt: Date.now(),
-              // 盘上用 v3 紧凑元组（剥可派生字段 + 位置化），加载时由 decodeEntries 还原
-              entries: encodeEntries(entries),
-            })
-            .then(() => {
-              ctx.log.info(
-                `Index snapshot saved (${Object.keys(entries).length} entries, key ${key}, ` +
-                  `${Date.now() - saveStartedAt}ms)`,
-              );
-            })
-            .catch((err: unknown) => {
-              ctx.log.warn(`Index snapshot save failed: ${String(err)}`);
-            });
+          if (snapshotDirty) {
+            const entries = mergeEntries(snapshot, allFiles, fresh);
+            const saveStartedAt = Date.now();
+            void storage
+              .set(key, {
+                version: SNAPSHOT_VERSION,
+                rootDir: currentRoot,
+                savedAt: Date.now(),
+                // 盘上用 v3 紧凑元组（剥可派生字段 + 位置化），加载时由 decodeEntries 还原
+                entries: encodeEntries(entries),
+              })
+              .then(() => {
+                ctx.log.info(
+                  `Index snapshot saved (${Object.keys(entries).length} entries, key ${key}, ` +
+                    `${Date.now() - saveStartedAt}ms)`,
+                );
+                pruneStaleSnapshots(key);
+              })
+              .catch((err: unknown) => {
+                ctx.log.warn(`Index snapshot save failed: ${String(err)}`);
+              });
+          } else {
+            // 没变更也要收口：磁盘上可能躺着别的项目的快照或旧版本孤儿
+            pruneStaleSnapshots(key);
+          }
         }
 
         // 仅在仍是当前代际时提交（避免项目快速切换导致旧结果覆盖新结果）

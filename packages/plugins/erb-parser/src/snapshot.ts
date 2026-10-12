@@ -211,6 +211,27 @@ export function aggregateIndex(files: Iterable<ErbFile>): {
   return { files: fileMap, byName };
 }
 
+/**
+ * 索引快照的存储键形态（`snapshotKeyFor` 的产出）：`index-v<版本>-<8 位十六进制>`。
+ * 清理时用它识别"确实是索引快照"，绝不误删同域里的其它文件。
+ */
+const SNAPSHOT_KEY_RE = /^index-v\d+-[0-9a-f]{8}$/;
+
+/**
+ * 该删掉的旧快照键（**纯函数**，可单测）。
+ *
+ * 索引快照此前按项目根哈希留文件 ⇒ 开过 N 个项目就攒 N 份（v3 每份约 12 MB、v2 是 44 MB），
+ * 永不回收。而抽取 / 校验两段一直是**单文件覆盖式**（判据在快照本体里，换项目即失效重算）
+ * ——三段语义不一致，还留着无上限的磁盘口子。这里把索引也统一成单文件：只保留当前项目的
+ * 键，删掉同域其它快照键（含格式升级遗留的 `index-v1-*` / `index-v2-*`）。
+ *
+ * 代价说清楚：**交替打开两个游戏目录时，每次切换付一次冷索引**（约 2.3 s）——这与抽取/
+ * 校验本来的行为一致，不是新增的痛。真要支持多项目常驻，得三段一起上登记表，而不是让索引段特殊。
+ */
+export function pruneSnapshotKeys(keys: readonly string[], keepKey: string): string[] {
+  return keys.filter((k) => SNAPSHOT_KEY_RE.test(k) && k !== keepKey);
+}
+
 /** 快照比对结果 */
 export interface SnapshotDiff {
   /** mtime 一致、可直接复用解析结果的文件 */
