@@ -12,6 +12,7 @@
  */
 
 import type {
+  CacheExpect,
   ConventionCheckContext,
   ConventionIssue,
   ConventionLinterService,
@@ -36,6 +37,18 @@ export interface ConventionEngineDeps {
   readFile(path: string): Promise<string>;
   /** 当前激活适配器提供的规则（按 project.adapterId 过滤后的结果） */
   getAdapterRules(): readonly ConventionRule[];
+  /**
+   * 结果快照端口（2026-10-12「体感丝滑」批；缺省 = 不缓存）。
+   *
+   * 全量校验真实语料实测 3.1 s，而产出只有 307 KB——级联三段里性价比最高的缓存目标。
+   * 与抽取同款分层：**判据由插件组装**（引擎不懂 adapter 吃了哪些非 ERB 输入），
+   * 引擎只管"判据齐且命中就跳过重算"。见 `./snapshot.ts`。
+   */
+  snapshot?: {
+    expectFor(args: { project: GameProject; index: ErbIndex; rules: readonly ConventionRule[] }): CacheExpect | null;
+    load(expect: CacheExpect): Promise<ConventionReport | null>;
+    save(report: ConventionReport, expect: CacheExpect): void;
+  };
 }
 
 /** 空报告（未打开项目 / 索引未就绪时返回，保证 UI 有稳定数据形状） */
@@ -69,6 +82,8 @@ export class ConventionEngine implements ConventionLinterService {
     sugarStaticConventionsRule,
   ];
   private last: ConventionReport | null = null;
+  /** 在途运行（自动触发与面板手动重跑叠跑 = 白跑两遍 3.1 s，故共享同一次） */
+  private inFlight: Promise<ConventionReport> | null = null;
   private readonly listeners = new Set<(report: ConventionReport | null) => void>();
 
   constructor(private readonly deps: ConventionEngineDeps) {}
@@ -89,7 +104,22 @@ export class ConventionEngine implements ConventionLinterService {
     };
   }
 
-  async run(): Promise<ConventionReport> {
+  /**
+   * 执行全部规则并返回报告（覆盖缓存并通知订阅者）。
+   *
+   * `force` = **一定真重算**：面板「重新校验」按钮是用户的显式意图，
+   * 不该被结果缓存糊住（命中与否都由本次运行落盘最新快照）。
+   */
+  run(opts?: { force?: boolean }): Promise<ConventionReport> {
+    if (this.inFlight) return this.inFlight;
+    const p = this.runOnce(opts).finally(() => {
+      if (this.inFlight === p) this.inFlight = null;
+    });
+    this.inFlight = p;
+    return p;
+  }
+
+  private async runOnce(opts?: { force?: boolean }): Promise<ConventionReport> {
     const project = this.deps.getProject();
     const index = this.deps.getIndex();
     if (!project || !index) {
@@ -101,6 +131,21 @@ export class ConventionEngine implements ConventionLinterService {
     const startedAt = Date.now();
     const rules = this.rules();
     const executed = rules.filter((r) => typeof r.check === 'function');
+
+    // 判据由插件组装（ERB 指纹 / adapter 输入摘要 / 语义版本 / 规则清单四路）
+    const expect = this.deps.snapshot ? this.deps.snapshot.expectFor({ project, index, rules }) : null;
+    if (this.deps.snapshot && expect && !opts?.force) {
+      const cached = await this.deps.snapshot.load(expect);
+      if (cached) {
+        this.deps.log.info(
+          `Convention lint restored from snapshot: ${cached.issues.length} issue(s) ` +
+            `(error ${cached.counts.error} / warning ${cached.counts.warning} / info ${cached.counts.info}) ` +
+            `across ${cached.ruleCount} rule(s), originally ${cached.durationMs}ms — compute skipped`,
+        );
+        this.commit(cached);
+        return cached;
+      }
+    }
 
     // 一次运行内的文件读取记忆化：多条规则共享同一份文本（避免重复读 2k+ 文件）
     const textCache = new Map<string, Promise<string>>();
@@ -166,6 +211,7 @@ export class ConventionEngine implements ConventionLinterService {
         (failedRules.length ? `, ${failedRules.length} rule(s) failed` : ''),
     );
     this.commit(report);
+    if (this.deps.snapshot && expect) this.deps.snapshot.save(report, expect);
     return report;
   }
 

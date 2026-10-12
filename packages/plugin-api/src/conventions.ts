@@ -94,8 +94,13 @@ export interface ConventionReport {
  * 消费者：校验结果面板（订阅）、命令面板（手动重跑）、未来 CI。
  */
 export interface ConventionLinterService {
-  /** 执行全部规则并返回报告（覆盖缓存并通知订阅者） */
-  run(): Promise<ConventionReport>;
+  /**
+   * 执行全部规则并返回报告（覆盖缓存并通知订阅者）。
+   *
+   * `force: true` = 无视结果缓存真重算（面板「重新校验」按钮的语义）；
+   * 缺省允许命中快照——开项目级联里校验实测 3.1 s，而产出仅 307 KB。
+   */
+  run(opts?: { force?: boolean }): Promise<ConventionReport>;
   /** 最近一次报告（尚未运行时 null） */
   report(): ConventionReport | null;
   /** 订阅报告更新（立即以当前值回调一次，返回退订函数） */

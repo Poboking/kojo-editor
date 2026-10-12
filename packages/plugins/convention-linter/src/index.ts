@@ -12,8 +12,11 @@
  */
 
 import type {
+  CacheExpect,
   ConventionLinterService,
+  ConventionReport,
   ConventionRule,
+  ErbIndex,
   ErbParserService,
   FileIO,
   GameProject,
@@ -23,6 +26,7 @@ import type {
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 import { ConventionEngine } from './engine';
+import { LINT_STORE_KEY, decodeReport, encodeReport, lintExpect } from './snapshot';
 
 const IO = 'kernel.io';
 const PROJECT = 'kernel.project';
@@ -39,6 +43,8 @@ export function createConventionLinterPlugin(): Plugin {
       const project = ctx.inject<ProjectService>(PROJECT);
       const slots = ctx.inject<SlotRegistry>(SLOTS);
       const parser = ctx.inject<ErbParserService>(WellKnownServices.ErbParser);
+      /** 本插件命名空间的存储域：校验结果快照的落点（`{appData}/store/convention-linter/`） */
+      const storage = ctx.storage;
 
       const adapterRules = (): readonly ConventionRule[] => {
         const current: GameProject | null = project.current();
@@ -52,16 +58,52 @@ export function createConventionLinterPlugin(): Plugin {
         return out;
       };
 
+      /**
+       * 结果快照端口（键固定、判据在快照本体里；坏快照删除而非"修"）。
+       * 校验实测 3.1 s / 产出 307 KB——级联三段里性价比最高的缓存目标。
+       */
+      const snapshotPort = {
+        expectFor({ project: p, index, rules }: { project: GameProject; index: ErbIndex; rules: readonly ConventionRule[] }) {
+          return lintExpect({ index, project: p, rules });
+        },
+        async load(expect: CacheExpect): Promise<ConventionReport | null> {
+          try {
+            const raw = await storage.get<unknown>(LINT_STORE_KEY);
+            if (raw === undefined) return null; // 首次 / 判据刚变：正常路径
+            const restored = decodeReport(raw, expect);
+            if (restored === null) {
+              void storage.delete(LINT_STORE_KEY).catch(() => undefined);
+              ctx.log.warn('Convention snapshot unusable (format/root/adapter/fingerprint/structure); linting from scratch');
+            }
+            return restored;
+          } catch (err) {
+            ctx.log.warn(`Convention snapshot read failed; linting from scratch: ${String(err)}`);
+            return null;
+          }
+        },
+        save(report: ConventionReport, expect: CacheExpect): void {
+          void storage
+            .set(LINT_STORE_KEY, encodeReport({ report, expect }))
+            .then(() => {
+              ctx.log.info(`Convention snapshot saved (${report.issues.length} issue(s), fingerprint ${expect.fingerprint})`);
+            })
+            .catch((err: unknown) => {
+              ctx.log.warn(`Convention snapshot save failed: ${String(err)}`);
+            });
+        },
+      };
+
       const engine = new ConventionEngine({
         log: ctx.log,
         getProject: () => project.current(),
         getIndex: () => parser.currentIndex(),
         readFile: async (path: string) => (await io.readText(path)).text,
         getAdapterRules: adapterRules,
+        snapshot: snapshotPort,
       });
 
       const service: ConventionLinterService = {
-        async run() {
+        async run(opts?: { force?: boolean }) {
           if (project.current()) {
             // 索引可能仍在构建（项目刚打开）——等待在途构建，避免"看不到问题"的假象
             try {
@@ -70,7 +112,8 @@ export function createConventionLinterPlugin(): Plugin {
               ctx.log.warn(`ensureIndex before lint failed: ${String(err)}`);
             }
           }
-          return engine.run();
+          // opts.force（面板「重新校验」）一路传到引擎：显式意图不该被缓存糊住
+          return engine.run(opts);
         },
         report: () => engine.report(),
         subscribe: (cb) => engine.subscribe(cb),

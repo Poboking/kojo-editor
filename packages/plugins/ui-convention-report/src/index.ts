@@ -55,7 +55,8 @@ export function createUiConventionReportPlugin(): Plugin {
 
         const rerun = (): void => {
           setRunning(true);
-          void linter.run().finally(() => setRunning(false));
+          // 手动重跑 = 强制真算（结果快照只服务于开项目级联的自动那一路）
+          void linter.run({ force: true }).finally(() => setRunning(false));
         };
 
         const toggle = (setter: typeof setExpanded, id: string): void => {

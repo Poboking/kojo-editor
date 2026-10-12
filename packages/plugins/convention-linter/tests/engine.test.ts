@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  CacheExpect,
   ConventionRule,
   ErbFile,
   ErbFunctionRef,
@@ -48,11 +49,15 @@ interface Harness {
   rules: ConventionRule[];
 }
 
+type SnapshotPort = NonNullable<ConstructorParameters<typeof ConventionEngine>[0]['snapshot']>;
+
 function harness(opts: {
   index: ErbIndex | null;
   project?: GameProject | null;
   adapterRules?: ConventionRule[];
   files?: Record<string, string>;
+  /** 结果快照端口替身（缺省 = 不启用快照，与改造前行为一致） */
+  snapshot?: Partial<Pick<SnapshotPort, 'load' | 'save'>> & { expectFor?: () => CacheExpect | null };
 }): Harness {
   const readCalls: string[] = [];
   const rules: ConventionRule[] = opts.adapterRules ?? [];
@@ -68,6 +73,13 @@ function harness(opts: {
       return text;
     },
     getAdapterRules: () => rules,
+    snapshot: opts.snapshot
+      ? {
+          expectFor: opts.snapshot.expectFor ?? (() => ({ projectRoot: '/p', adapterId: 'test', fingerprint: 'fp' })),
+          load: opts.snapshot.load ?? (async () => null),
+          save: opts.snapshot.save ?? (() => undefined),
+        }
+      : undefined,
   });
   return { engine, readCalls, rules };
 }
@@ -319,5 +331,127 @@ describe('内置规则：语法糖侧静态约定（sugar.static-conventions）'
     const { engine } = kojoHarness(src);
     const rep = await engine.run();
     expect(rep.issues.filter((i) => i.ruleId.startsWith('sugar.'))).toHaveLength(0);
+  });
+});
+
+describe('ConventionEngine 的结果快照（2026-10-12 体感丝滑批）', () => {
+  const FILE = '/p/kojo/a.ERB';
+  const files = { [FILE]: '@M_KOJO_K1_A\nA\nEND\n' };
+  const idx = () => makeIndex(files);
+
+  /** 会真读盘并产出问题的规则：用来证明"命中快照 = 一次 IO 都不发生" */
+  const readingRule = (id: string): ConventionRule => ({
+    id,
+    description: 'reads a file',
+    severity: 'warning',
+    check: async (ctx) => {
+      const text = await ctx.readFile(FILE);
+      return [{ ruleId: id, severity: 'warning' as const, message: `len=${text.length}`, filePath: FILE }];
+    },
+  });
+
+  it('命中快照 ⇒ 零读盘、报告即快照、不回存', async () => {
+    const { engine: probe, readCalls } = harness({ index: idx(), adapterRules: [readingRule('g.a')], files });
+    const produced = await probe.run();
+    expect(readCalls).toHaveLength(1);
+
+    const saves: string[] = [];
+    const { engine, readCalls: reads2 } = harness({
+      index: idx(),
+      adapterRules: [readingRule('g.a')],
+      files,
+      snapshot: {
+        async load() {
+          return produced;
+        },
+        save(_r, expect) {
+          saves.push(expect.fingerprint);
+        },
+      },
+    });
+    const out = await engine.run();
+    expect(out).toBe(produced);
+    expect(reads2).toHaveLength(0);
+    expect(saves).toHaveLength(0);
+    expect(engine.report()).toBe(produced);
+  });
+
+  it('未命中 ⇒ 计算后按**本次实际判据**落盘', async () => {
+    const saved: { fingerprint: string; issues: number }[] = [];
+    const { engine, readCalls } = harness({
+      index: idx(),
+      adapterRules: [readingRule('g.a')],
+      files,
+      snapshot: {
+        async load() {
+          return null;
+        },
+        save(report, expect) {
+          saved.push({ fingerprint: expect.fingerprint, issues: report.issues.length });
+        },
+      },
+    });
+    const out = await engine.run();
+    expect(readCalls).toHaveLength(1);
+    expect(saved).toEqual([{ fingerprint: 'fp', issues: out.issues.length }]);
+  });
+
+  it('force ⇒ 压根不问缓存（「重新校验」不许被缓存糊住），但仍刷新缓存', async () => {
+    let loads = 0;
+    let saves = 0;
+    const { engine } = harness({
+      index: idx(),
+      adapterRules: [readingRule('g.a')],
+      files,
+      snapshot: {
+        async load() {
+          loads++;
+          return null;
+        },
+        save() {
+          saves++;
+        },
+      },
+    });
+    await engine.run({ force: true });
+    expect(loads).toBe(0);
+    expect(saves).toBe(1);
+  });
+
+  it('判据不全（expectFor 返回 null）⇒ 不 load 不 save，但仍真算', async () => {
+    let touched = 0;
+    const { engine, readCalls } = harness({
+      index: idx(),
+      adapterRules: [readingRule('g.a')],
+      files,
+      snapshot: {
+        expectFor: () => null,
+        async load() {
+          touched++;
+          return null;
+        },
+        save() {
+          touched++;
+        },
+      },
+    });
+    const out = await engine.run();
+    expect(touched).toBe(0);
+    expect(readCalls).toHaveLength(1);
+    expect(out.issues.length).toBe(1);
+  });
+
+  it('并发 run 只算一次（自动触发与手动重跑叠跑 = 白等两遍 3.1 s）', async () => {
+    const { engine, readCalls } = harness({ index: idx(), adapterRules: [readingRule('g.a')], files });
+    const [a, b] = await Promise.all([engine.run(), engine.run({ force: true })]);
+    expect(readCalls).toHaveLength(1);
+    expect(a).toBe(b);
+  });
+
+  it('无 snapshot 端口时与改造前一致（可选依赖，零副作用）', async () => {
+    const { engine, readCalls } = harness({ index: idx(), adapterRules: [readingRule('g.a')], files });
+    const out = await engine.run();
+    expect(out.issues.length).toBe(1);
+    expect(readCalls).toHaveLength(1);
   });
 });
