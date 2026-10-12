@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { UIPanelContribution } from '@kojo/plugin-api';
 import {
@@ -316,5 +318,125 @@ describe('reducer · 设置页开关', () => {
     const fresh = base({ zen: true });
     const out = reducer(base({ zen: false }), { type: 'reset', state: fresh });
     expect(out).toBe(fresh);
+  });
+});
+
+
+/**
+ * 写作模式限宽（P4 §八设置项）。
+ *
+ * 口径是**缺省即限宽**：`zenLimitWidth !== false` ⇒ 只有显式 false 才关掉。
+ * 这条判据两头都会咬人——脏值当 false 处理会让多数用户的限宽无故消失，
+ * 而把显式 false 洗成 true 会让设置项「关不掉」。两头都要有尺子。
+ *
+ * 本 describe 自带夹具，不去动上方既有 describe 的作用域。
+ */
+const zenPanels = [
+  panel('files', { group: 'explorer', order: 10 }),
+  panel('fnTree', { group: 'explorer', order: 20 }),
+  panel('lift', { location: 'aux', defaultActive: false }),
+  panel('conv', { location: 'bottom' }),
+];
+
+describe('写作模式限宽 zenLimitWidth', () => {
+  const org = () => organizePanels(zenPanels, {});
+
+  it('默认布局带限宽（首启不需要用户在设置页做任何事就是可读宽度）', () => {
+    expect(defaultLayout(org()).zenLimitWidth).toBe(true);
+  });
+
+  it('无持久化 → 限宽为 true（缺省口径）', () => {
+    expect(reconcileLayout(null, org()).zenLimitWidth).toBe(true);
+    expect(reconcileLayout({}, org()).zenLimitWidth).toBe(true);
+  });
+
+  it('显式 false 必须生效（设置项「关掉」是用户意图，不能被缺省吞掉）', () => {
+    expect(reconcileLayout({ zenLimitWidth: false }, org()).zenLimitWidth).toBe(false);
+  });
+
+  it('脏值（字符串 / null / undefined）回落 true，与 zen 的严格口径刻意不同', () => {
+    expect(reconcileLayout({ zenLimitWidth: 'no' as never }, org()).zenLimitWidth).toBe(true);
+    expect(reconcileLayout({ zenLimitWidth: null as never }, org()).zenLimitWidth).toBe(true);
+    expect(reconcileLayout({ zenLimitWidth: undefined }, org()).zenLimitWidth).toBe(true);
+  });
+
+  it('存 → 读 → 清洗全链路保住 false；重置布局后回到 true', () => {
+    installStorage(fakeStorage());
+    saveLayout({ ...defaultLayout(org()), zenLimitWidth: false });
+    expect(loadLayout()?.zenLimitWidth).toBe(false);
+    expect(reconcileLayout(loadLayout(), org()).zenLimitWidth).toBe(false);
+    resetLayout();
+    expect(reconcileLayout(loadLayout(), org()).zenLimitWidth).toBe(true);
+  });
+});
+
+/**
+ * 「布局是壳层私事」这条红线的静态守门（UI 重设计定稿 §七：持久化走 WebView localStorage，
+ * **不进内核存储域**）。
+ *
+ * 规则本身没有运行期可观测面——插件一旦哪天改成 `ctx.storage`，功能照样正常，只有源码里看得见。
+ * 所以这里直接读自身源码做字面判据：少一把尺子，这条纪律就会在下一批悄悄漂走。
+ */
+describe('持久化归属红线（不得进内核存储域）', () => {
+  const layoutSource = readFileSync(fileURLToPath(new URL('../src/ui/layout.ts', import.meta.url)), 'utf8');
+
+  it('layout.ts 不 import 内核（只依赖 plugin-api 的类型）', () => {
+    expect(layoutSource).not.toContain('@kojo/kernel');
+  });
+
+  it('layout.ts 不碰内核存储域 API', () => {
+    expect(layoutSource).not.toMatch(/ctx\.storage|StorageService/);
+  });
+
+  it('持久化键就是壳层那一份 localStorage（改名等于换偏好，须显式改这里）', () => {
+    expect(layoutSource).toContain("'kojo.ui.layout.v1'");
+    expect(layoutSource).toContain('globalThis.localStorage');
+  });
+});
+
+/** 清洗分支里此前没被任何断言走到的形状（坏数据必须回落，绝不阻塞启动） */
+describe('持久化清洗的漏网分支', () => {
+  it('panelLocations 不是对象（数组 / 字符串 / null）→ 全部丢弃，回落默认归属', () => {
+    const org = organizePanels(zenPanels, {});
+    expect(reconcileLayout({ panelLocations: ['a', 'b'] as never }, org).panelLocations).toEqual({});
+    expect(reconcileLayout({ panelLocations: 'aux' as never }, org).panelLocations).toEqual({});
+    expect(reconcileLayout({ panelLocations: null as never }, org).panelLocations).toEqual({});
+  });
+
+  it('整份持久化是数组 → 各字段皆缺，逐容器回落默认而不抛', () => {
+    const org = organizePanels(zenPanels, {});
+    expect(reconcileLayout([] as never, org)).toEqual(defaultLayout(org));
+  });
+
+  it('visible 脏值（字符串 / 数字）回落默认显隐，不让容器变成三态', () => {
+    const st = reconcileLayout(
+      {
+        sidebar: { visible: 'yes' as never, size: 300, active: 'group:explorer' },
+        aux: { visible: 1 as never, size: 300, active: 'lift' },
+      },
+      organizePanels(zenPanels, {}),
+    );
+    expect(st.sidebar.visible).toBe(true); // 默认侧栏可见
+    expect(st.aux.visible).toBe(false); // 默认副侧栏隐藏
+  });
+
+  it('尺寸为负 → 回落默认（0 / NaN 已由上方用例覆盖，负值走同一判据的另一侧）', () => {
+    const st = reconcileLayout(
+      {
+        sidebar: { visible: true, size: -240, active: 'group:explorer' },
+        bottom: { visible: true, size: -1, active: 'conv' },
+      },
+      organizePanels(zenPanels, {}),
+    );
+    expect(st.sidebar.size).toBe(DEFAULT_SIDEBAR_SIZE);
+    expect(st.bottom.size).toBe(DEFAULT_BOTTOM_SIZE);
+  });
+
+  it('override 指向已注销面板时整条丢弃，同批有效条目仍保留（排骨架只认当前贡献）', () => {
+    const st = reconcileLayout({ panelLocations: { 幽灵: 'aux', conv: 'sidebar' } }, organizePanels(zenPanels, {}));
+    expect(st.panelLocations).toEqual({ conv: 'sidebar' });
+    const orgEff = organizePanels(zenPanels, st.panelLocations);
+    expect(orgEff.bottom).toHaveLength(0);
+    expect(orgEff.views.map((v) => v.key)).toContain('panel:conv');
   });
 });

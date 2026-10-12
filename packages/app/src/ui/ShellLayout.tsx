@@ -12,9 +12,8 @@ import {
   type ReactNode,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { EditorCommandContext, PanelLocation, UIPanelContribution } from '@kojo/plugin-api';
+import type { EditorCommandContext, UIPanelContribution } from '@kojo/plugin-api';
 import {
-  SIZE_LIMITS,
   defaultLayout,
   loadLayout,
   organizePanels,
@@ -28,8 +27,16 @@ import {
   type OrganizedPanels,
   type ViewDef,
 } from './layout';
-import { closeTopModal } from './modal-stack';
+import {
+  PANEL_DRAG_MIME,
+  acceptsPanelDrop,
+  decodeDroppedPanelIds,
+  nextDropTarget,
+  planPanelMoves,
+} from './panel-drop';
 import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
+import { modalDepth, closeTopModal } from './modal-stack';
+import { resolveEscLayer, isComposingEvent } from './shell-keys';
 import {
   buildCommandRegistry,
   chordFromEvent,
@@ -99,9 +106,6 @@ interface Props {
   /** 工作台 API 注册（P3：编辑器区空态动作按钮反向取得 picker/命令入口；卸载时 null） */
   onRegisterWorkbench?: (api: WorkbenchApi | null) => void;
 }
-
-/** 拖拽停靠的自定义 MIME（P4；只在壳层内部流转，防外部拖入误触发） */
-const PANEL_DRAG_MIME = 'application/x-kojo-panel-move';
 
 /** 视图在活动栏的位置：组成员全为低频（defaultActive:false）→ 底部区（定稿 §四插件状态齿轮位） */
 function isLowFreqView(v: ViewDef): boolean {
@@ -245,10 +249,32 @@ export function ShellLayout(props: Props): ReactElement {
     return () => onRegisterWorkbench?.(null);
   }, [onRegisterWorkbench]);
 
+  /**
+   * 输入法合成会话标志（2026-10-12 实机缺陷修复）。
+   *
+   * 事件自带的 `isComposing` / `keyCode 229` 已覆盖主路径，这一层兜的是第三方输入法
+   * 「keydown 上不带合成态」的情形——写作模式的主场景就是大量中文输入，漏一次等于把
+   * 用户的界面状态拆掉（且布局会持久化，重启仍在）。
+   */
+  const composingRef = useRef(false);
+
   // 全局快捷键（统一注册表驱动；Ctrl+K Z 和弦特例；Esc 优先级 picker > overlay > zen）
   useEffect(() => {
     let chordAt = 0;
+    // 合成期一律不消费：撤销拼音候选的那次 Esc 属于输入法，不属于编辑器（判据在 shell-keys）
+    const onCompositionStart = (): void => {
+      composingRef.current = true;
+    };
+    const onCompositionEnd = (): void => {
+      composingRef.current = false;
+    };
+    // 失焦时合成会话未必会补一个 compositionend（候选窗还开着就 alt-tab 走）——不清掉标志
+    // 会把「合成期不消费快捷键」变成「永久不消费快捷键」，那比原缺陷更坏。
+    const onWindowBlur = (): void => {
+      composingRef.current = false;
+    };
     const onKey = (e: KeyboardEvent): void => {
+      if (isComposingEvent(e, composingRef.current)) return;
       const k = e.key.toLowerCase();
       // Ctrl+K Z 和弦：先记 Ctrl+K，1.5s 内按 Z 触发（两键序列，注册表单键表达不了）
       if (chordAt > 0) {
@@ -265,21 +291,20 @@ export function ShellLayout(props: Props): ReactElement {
         return;
       }
       if (e.key === 'Escape') {
-        // picker 内部已 stopPropagation；这里只需 modal > overlay > settings > zen
-        if (pickerRef.current) return;
-        // HK-2：五家宿主模态此前**都没有 Esc**（全站模态都关不掉）。模态排最前，
-        // 因为它正在问一个当下就要答案的问题；它与向导在实践中互斥（见 modal-stack 注释），
-        // 所以这个次序不依赖两家的 DOM 先后。
-        if (closeTopModal()) return;
-        if (overlayRef.current) {
-          setActiveOverlay(null);
-          return;
-        }
-        if (settingsRef.current) {
-          setSettingsOpen(false);
-          return;
-        }
-        if (zenRef.current) dispatch({ type: 'exitZen' });
+        // 命中哪一层由 shell-keys 单源判定；picker 内部已 stopPropagation，全局侧原样让位。
+        // 模态（HK-2 的宿主模态栈）排在 overlay 之前：它正在问一个当下就要答案的问题，
+        // 而 Esc 恒落在不写盘那一侧（见 modal-stack 注释）。
+        const hit = resolveEscLayer({
+          picker: pickerRef.current,
+          modal: modalDepth() > 0,
+          overlay: overlayRef.current !== null,
+          settings: settingsRef.current,
+          zen: zenRef.current,
+        });
+        if (hit === 'modal') closeTopModal();
+        else if (hit === 'overlay') setActiveOverlay(null);
+        else if (hit === 'settings') setSettingsOpen(false);
+        else if (hit === 'zen') dispatch({ type: 'exitZen' });
         return;
       }
       if (e.key === 'F1') {
@@ -301,7 +326,16 @@ export function ShellLayout(props: Props): ReactElement {
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // 捕获阶段收合成事件：组件（含 Monaco）可能自行 stopPropagation，会话标志不能因此漏记
+    window.addEventListener('compositionstart', onCompositionStart, true);
+    window.addEventListener('compositionend', onCompositionEnd, true);
+    window.addEventListener('blur', onWindowBlur);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('compositionstart', onCompositionStart, true);
+      window.removeEventListener('compositionend', onCompositionEnd, true);
+      window.removeEventListener('blur', onWindowBlur);
+    };
   }, []);
 
   /** 尺寸拖拽：mousedown 记录起点与初值，mousemove 换算，mouseup 解绑 */
@@ -339,37 +373,27 @@ export function ShellLayout(props: Props): ReactElement {
   /** 容器落点 props：dragover 接受 + 高亮；drop 派发 move（逐面板；sidebar 需 viewKey 激活） */
   const dropProps = (container: ContainerKey) => ({
     onDragOver: (e: ReactDragEvent) => {
-      if (!e.dataTransfer.types.includes(PANEL_DRAG_MIME)) return;
+      if (!acceptsPanelDrop(e.dataTransfer.types)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      setDropTarget(container);
+      setDropTarget((cur) => nextDropTarget(cur, { type: 'dragover', container }));
     },
     onDragLeave: (e: ReactDragEvent) => {
-      // 子元素间移动会反复触发 leave——只在真正离开容器时清除
-      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-      setDropTarget((cur) => (cur === container ? null : cur));
+      // 子元素间移动会反复触发 leave——「真正离开」的判据住在 panel-drop（relatedTarget 仍在容器内即不动）
+      const stillInside = e.currentTarget.contains(e.relatedTarget as Node | null);
+      setDropTarget((cur) => nextDropTarget(cur, { type: 'dragleave', container, stillInside }));
     },
     onDrop: (e: ReactDragEvent) => {
       const raw = e.dataTransfer.getData(PANEL_DRAG_MIME);
-      setDropTarget(null);
+      setDropTarget((cur) => nextDropTarget(cur, { type: 'dropped' }));
       if (!raw) return;
       e.preventDefault();
-      let ids: string[] = [];
-      try {
-        const parsed: unknown = JSON.parse(raw);
-        if (Array.isArray(parsed)) ids = parsed.filter((x): x is string => typeof x === 'string');
-      } catch {
-        return;
-      }
-      for (const id of ids) {
-        const panel = allPanels.find((p) => p.id === id);
-        if (!panel) continue;
-        const viewKey = panel.group ? `group:${panel.group}` : `panel:${panel.id}`;
-        dispatch({ type: 'move', id, to: container, viewKey });
+      for (const intent of planPanelMoves(decodeDroppedPanelIds(raw), allPanels, container)) {
+        dispatch({ type: 'move', id: intent.id, to: intent.to, viewKey: intent.viewKey });
       }
     },
   });
-  const dragEnd = (): void => setDropTarget(null);
+  const dragEnd = (): void => setDropTarget((cur) => nextDropTarget(cur, { type: 'dragend' }));
 
   const doReset = useCallback(() => {
     resetLayout();

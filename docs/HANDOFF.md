@@ -46,6 +46,18 @@
 > ⑥ 验证：真线程测试 15 项（含多槽轮转）+ `@kojo/app build` 通过 + **构建产物端到端**（vm 加载 worker 产物，52,601 行真实 ERB 解出 124 函数）；
 > **基线更新：1083 passed / 8 skipped（1091）/ 16 插件 / 审计 A–D / app build ✅**。
 > **下批欠账**：条件抽取与约定校验的 CPU 仍整段在主线程（下一步搬上并行通道）；markers 未走 interactive 档（当前收益有限）；L2/L4 未动。
+> 本会话续完成 **2026-10-13 P4 补测批（壳层判据抽纯 + 中文合成期 Esc 缺陷修复）**（实施记录 §5.71）——
+> ① 判据⑥ 的真实欠账（P4 零新增测试）**已清**：`layout-reducer.ts` / `panel-drop.ts` / `shell-keys.ts` 三个零 React
+> 纯模块 + **65 项新断言**（Esc 链 16 种组合穷举、拖拽落点判据、`zenLimitWidth` 两头、清洗漏网分支、
+> 「布局不进内核存储域」静态守门）；组件语义零改动，靠真实壳同一套 DOM 断言反证。
+> ② 顺手修掉一条**实机缺陷**：中文输入法按 Esc 撤销拼音候选会被全局快捷键吞掉（关掉设置页 / 退出全禅）。
+> 根因是整仓零合成期判据，且设置 overlay 只防了鼠标没防键盘。判据单源
+> `app/src/ui/shell-keys.isComposingEvent`（`isComposing` / `keyCode 229` / `compositionstart` 会话标志），
+> 并同批堵掉新失效模式（失焦清标志，否则快捷键全废）。
+> ③ **真实桌面壳端到端实测**：一次性 CDP 探针同口径两遍，改后 **19 项全绿** / 改前 **5 项红**（含真 DragEvent
+> 落点改到 `panelLocations`；拖拽 4 项两边都绿 ⇒ 抽纯重构零回归）；
+> 改前游离 worktree 对照 6 项红。合成事件只证接线，**真人 IME 目视仍欠**（`MANUAL-CHECKLIST` 5.D）。
+> **基线更新：1497 passed / 11 skipped（1508）/ 16 插件 / 审计 A–D / 双 typecheck / app build ✅**。
 
 
 ---
@@ -1426,6 +1438,10 @@ node tools/smoke-tauri-ipc.mjs
 | tauri dev 首轮冷启动 vite `Re-optimizing dependencies` 会 HMR 重载页面（项目打开后回欢迎页） | 首次 dev 的已知抖动，二次稳定；`smoke-tauri-ipc.mjs` 已加端口预检 + 180s 等待缓解 |
 | **同工作区并行线 WIP 会让集成冒烟断言误红**（如 adapter 新增规则使 `ruleCount` 5→6） | 先 `node tools/audit-decoupling.mjs` 粗判；再 `git stash push -- <并行线文件>` 复跑确认本批无回归，`git stash pop` 还原；**只提交自己边界内的文件**，并在 IMPLEMENTATION-LOG 记待办 |
 | **rebase 解冲突时，git 判为「自动合并」的文件可能内嵌冲突标记；`git add -A` 会把它直接提交进历史**（2026-10-12 实录：计算池批提交 `0a97f91`（两轮 rebase 后现链为 `151367a`，演进表见 §5.55）把 `<<<<<<< / ======= / >>>>>>>` 连同正文提交，靠 typecheck **TS1185** 才逮到；tip 补干净 ≠ 历史干净，中间 4 个提交仍带标记） | 解冲突批**逐文件 add** + `git diff --cached` 过目，不用 `git add -A` 兜底；提交后立刻跑 **root + app 双 typecheck** 并全仓扫描冲突标记；推送前用 `git patch-id --stable` 逐对核对 rebase 前后提交，只对不相同的两对做逐行归属核验；已公开的历史不要乱改，**未推送时**用 `git rebase --onto` 把善后折叠回引入点（`git diff` 新旧 tip 为空即证内容零变化，详见 IMPLEMENTATION-LOG §5.55） |
+| **`packages/app/tsconfig.json` 的 `types` 只有 `vite/client`**（`@types/node` 的全局不进这份配置） | 测试里 `import { readFileSync } from 'node:fs'` **可用**（显式模块导入仍能解析到 `@types/node`；§5.71 的「布局不进内核存储域」静态守门就这么写，root + app 双 typecheck 实测 exit 0）。若哪天报 TS2307，改测试写法，**别**往 app 配置里塞 node 全局——那会把 DOM/node 混成第三套类型环境（§九-7 的老坑） |
+| **中文输入法合成期的按键会穿透到 `window` 全局快捷键**（2026-10-13 实机报障；真实壳实测：改前树 5 项红 —— 合成期 Esc 关掉设置页 / 退出全禅、合成期 `z` 误触 `Ctrl+K Z`） | 判据单源 `packages/app/src/ui/shell-keys.ts` 的 `isComposingEvent`（`isComposing` / `keyCode === 229` / `compositionstart` 会话标志三条叠用），`ShellLayout` 在全局 keydown **第一行**就退出；**失焦必须清会话标志**（漏 `compositionend` 会让快捷键全废，比原缺陷更坏）。新增全局快捷键一律走这道闸，别在组件里各自判 `e.key`；设置类浮层要防键盘，不能只防 `onMouseDown` |
+| **真实壳 DOM 探针的两类假失败**（2026-10-13 各踩一次） | ① 按钮 `title` 带快捷键后缀（「切换底部区 (Ctrl+J)」），精确匹配取不到 ⇒ 先怀疑仪器再怀疑被测物；② 固定 `sleep` 等不到 vite 冷启的首屏 ⇒ 轮询目标元素。**派事件前必须先自检仪器**（合成事件能否真的带上 `isComposing` / `keyCode`），否则读数不可信 |
+| 测「改前」行为时**别动另一份在用的工作副本**（多 agent 共享主机，抢 vite 1420 / CDP 9222，还可能撞上对方未提交的树） | 用 `git worktree add <临时目录> HEAD --detach` 起游离树（本批未提交改动天然不在里面，正是干净基线）；`CARGO_TARGET_DIR` 指到已有 target 免冷编译 |
 
 ## 九、本会话踩坑记录（给未来的自己）
 
@@ -1511,8 +1527,9 @@ node tools/smoke-tauri-ipc.mjs
      （经服务键 `WellKnownServices.SugarTranspile`，合法先例见 `ui-sugar-editor/src/index.ts`）。
      其后 = 项目区右键新建 · LICENSE 多协议 · 直连模式开关 · 中日对照。
    - **UI/UX 重设计线**（发版判据 ⑥）：P0–P4 **已全部入库**（P4 = 三容器拖拽停靠 + 全禅模式 +
-     设置 overlay，`d871878`，记录见 §5.54）；**唯余真实终端勾验**（需求定稿 `docs/UI-REDESIGN-2026-10-11.md` §200）。
-     ⚠ P4 落地时**零新增测试**，所以判据 ⑥ 的真实欠账是「补测试 + 勾验」，不是再做一遍 P4。
+     设置 overlay，`d871878`，记录见 §5.54）；P4 的**测试侧欠账已清**（§5.71：判据抽纯 + 65 项断言 +
+     真实壳 19 项端到端读数）。判据 ⑥ 现余：**真实终端手工勾验**（需求定稿 `docs/UI-REDESIGN-2026-10-11.md` §200
+     + `MANUAL-CHECKLIST` 五节 A–C 与新增 5.D），其中**中文输入法合成期的目视只能人做**（探针派的是合成事件）。
    - **不属于本组**：语法糖语义（`kojo-sugar` / `ui-sugar-*` / `.kojo` 转译高亮 / 糖视图）与
      解析索引性能 —— 归别组，见 §十二。**糖线 2026-10-12 起直接在 `master` 上推进**
      （`origin/syntax-sugar` 已删除、旧 tip 由本地 `backup/syntax-sugar-20261012` 持有，§5.64/§5.66/§5.67）；
