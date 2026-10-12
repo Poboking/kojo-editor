@@ -176,10 +176,11 @@
     悬停看原文出处）+ 导入向导随 meta 携带原作者。**口径 = 高精度宁缺勿滥**：
     实测 214 包只抽到 26 个署名，这是设计结果——假阳性会让人把别人的作品当无主作品改。
     语料基线常驻 `attribution.corpus.test.ts`（`KOJO_SMOKE_PROJECT` 守门）。
-- **当前基线（2026-10-12 快照卫生批合流后实测）：1366 passed / 11 skipped（1377），
-  82 文件过 / 6 跳；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；
+- **当前基线（2026-10-12 抽取按文件增量批，rebase 到 §5.69 之后实测）：1432 passed / 11 skipped（1443），
+  83 文件过 / 6 跳；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；
   `pnpm --filter @kojo/app build` ✓；`cargo test --lib` 12 项全绿。**
-  数字闭合：体感丝滑批后 1252 + 语法糖线（含两线合流）96 = 1348 + 快照卫生批 18 = 1366。
+  数字闭合：语法糖批 L 之后 1426 + 本批净增 6 = 1432（抽取侧 22 → 28 项：`snapshot.test.ts` 15→17、
+  `engine-snapshot.test.ts` 7→11，旧的两套整包编解码用例被桶形态用例替换）。
   ⚠ 跑全量**不要**设 `KOJO_SMOKE_PROJECT`（会放行依赖 sav 存档的注入测试而本机零存档必红）；
   语料基线单独带变量跑那一个文件即可。
 - **内核优化线（2026-10-12 批 P-A…P-F 同期，✅ 已收口进 master）**：L0 埋点 → 超长文件丝滑 →
@@ -195,12 +196,19 @@
   行为）；③ **fail-closed**：判据或结构不符 ⇒ 删除快照并全量重算，绝不"修"；④ 带 `failedRules`
   的报告拒绝命中；⑤ 面板「重新校验」走 `run({ force: true })`，显式意图不许被缓存糊住；
   ⑥ 量"二次启动"必须**换新 kernel 共用同一 appData**（同进程 close/open 会被异步落盘污染，
-  本批就据此得出过"缓存反而更慢"的假结论）。
+  本批就据此得出过"缓存反而更慢"的假结论）；⑦ **判据要分层**——整项目指纹会把"作者改一个
+  文件"放大成"重算全库"，逐文件层（桶 mtime vs `ErbIndex.fileMtimes`）与全局层
+  （项目根 / `adapterId` / `inputDigest` / 格式版本）分工明确，全局层只留**真的全局**的输入；
+  ⑧ 缓存等价性不能只看 `stats`——**语义标签丢了统计看不出来**，要按全量内容指纹比。
   **卫生批（§5.65）已收**：索引快照 v3 元组编码 **44.4 MB → 11.9 MB**（剥可派生字段 + 键名
   位置化；热读盘 250ms → 74ms，索引可用 623ms → 541ms）；三段统一成**单文件语义**
   （多项目残留与 `index-v1-*`/`v2-*` 孤儿自动清理，磁盘封顶 ~58 MB）；三个体感水位常驻进
   `__kojoPerf`（`cascade.projectOpened→index可用/条件可用/校验有结果`）。
-  仍欠：**抽取快照 45.9 MB 未瘦身**（现在是磁盘大头）；`extractFunctionConditions` 仍未上并行通道。
+  **抽取按文件增量批（§5.70）已收**：抽取快照 v3 改**按文件分桶**（`EXTRACT_SNAPSHOT_FORMAT` 2→3），
+  真实语料改 1 个 ERB 后重开：**抽取段 7200ms → 49ms**（复用 2284 / 重算 1），全量与增量
+  逐字段同值同序（内容指纹 `0c357d324fd294`、schema 标注 109,742 四轮一致），磁盘 12.47 → 12.31 MB。
+  仍欠：**校验段仍是整项目判据 ⇒ 改一个文件重付 ~6s，现在它才是级联大头**；
+  `extractFunctionConditions` 仍未上并行通道。
 - **分支收口（IMPLEMENTATION-LOG §5.55）**：`feat/kernel-optimization` 因 `origin/master` 连续推进
   经历了**两轮 rebase**（第一轮撞在 `EditorPane.tsx` 与 `kernel/plugin-api` 的导出上，均取并集；
   第二轮纯文档消冲，代码零冲突面）。rebase 漏网的冲突标记曾在 4 个中间提交树里，**推送前已折叠回
@@ -366,7 +374,7 @@
 | 文档 | 内容 |
 |---|---|
 | `docs/HANDOFF.md`（本文件） | **交接状态 + 下一批动手清单（新会话从这里开始）** |
-| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.69**：§5.49/§5.50 = 口上项目批与 T2 · §5.51–§5.53 = 内核优化批 · §5.54 = UI P4 补记 · §5.55 = 分支收口核验 · §5.56/§5.57 = T3/T4 · §5.58 = 开项目级联三段全持久化（体感丝滑批）· §5.59–§5.63 = 语法糖线各批 · §5.64 = 两线合流（编号让位 + ADR-0005 落地）· §5.65 = 快照卫生批（v3 元组编码 / 单文件收口 / 体感水位常驻）· §5.66 = 语法糖批 I 函数头时机中文反糖 · §5.67 = 语法糖批 J 状态赋值行反糖（含假阳性守卫）· §5.68 = 语法糖批 K 演出行「心形」投影（段数 −13%）· **§5.69 = 语法糖批 L 规范 §3.8 扩「角色N的X」**） |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.70**：§5.49/§5.50 = 口上项目批与 T2 · §5.51–§5.53 = 内核优化批 · §5.54 = UI P4 补记 · §5.55 = 分支收口核验 · §5.56/§5.57 = T3/T4 · §5.58 = 开项目级联三段全持久化（体感丝滑批）· §5.59–§5.63 = 语法糖线各批 · §5.64 = 两线合流（编号让位 + ADR-0005 落地）· §5.65 = 快照卫生批（v3 元组编码 / 单文件收口 / 体感水位常驻）· §5.66 = 语法糖批 I 函数头时机中文反糖 · §5.67 = 语法糖批 J 状态赋值行反糖（含假阳性守卫）· §5.68 = 语法糖批 K 演出行「心形」投影（段数 −13%）· §5.69 = 语法糖批 L 规范 §3.8 扩「角色N的X」 · **§5.70 = 抽取按文件增量批（判据分层：改一个 ERB 的重算 7.2s → 49ms）**） |
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
 | `docs/BASELINES.md` | 实测基线汇总（索引/回放/抽取/校验性能与正确性数字） |
 | `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` | **糖表层规范 v1.3**（v1.2 冻结版 + §3.8 一处增量，用户 2026-10-12 拍板）：语法/转译/产物逐条定义，golden 逐字节锚定（golden 断言按**标题+围栏**锚定，不再按行号） |
@@ -869,6 +877,8 @@ node tools/smoke-tauri-ipc.mjs
 | **`npx vitest` 会吞掉命令行环境变量**（Git-Bash 的 npx shim 不透传），带 `KOJO_SMOKE_PROJECT` 跑真实语料时整组静默 skip，看起来像"通过" | 带环境变量一律用 `node node_modules/vitest/vitest.mjs run <file>`（实测 `npx` 传不进、直调 node 传得进） |
 | **`cat >> 文件` 在本机 shell 可能把内容插到文件开头**（2026-10-12 实测把 describe 块灌到了第 2 行，TS 直接语法崩） | 追加/修改文件一律用 Edit/Write 工具；改完必须 `grep -n` 读回结构（§九-23 的老教训换个形式重现） |
 | **多线程期间 `IMPLEMENTATION-LOG` 小节号凭记忆取 ⇒ 必撞**（2026-10-12 一天内撞三次：§5.49、§5.50、§5.59） | 写日志小节前先 `git fetch`，用 `grep -E "^### 5\." docs/IMPLEMENTATION-LOG.md \| tail -1` 取当前最大号 +1；rebase 撞号时**后落地的一方让位**（已公开编号不动），并在自己的小节头注里记下让位事实 |
+| **临时探针（vitest）进程退出会截断 fire-and-forget 的快照落盘**：12 MB 只留下 `.tmp` 孤儿、正式文件从未 rename 出来 ⇒ 下一轮"什么都没读到"，直接量出"缓存没收益"的**假结论**（2026-10-12 §5.70 踩到） | 原子写以 rename 收尾 ⇒ 轮询**「目标文件 mtime 比进入本轮时新」**才算落盘完成（只看 `size>0` 不行，正式文件可能还在；全命中那轮反过来断言 mtime **未变** = 没回写） |
+| **`ConditionIndex.durationMs` 不含快照读盘**（引擎 `t0` 在 `load` 之后），而级联由 `project.opened` 自动催动、显式 `ensureIndex()` 只是汇合在途 Promise ⇒ 围 `ensureIndex()` 计时量到的是"汇合耗时"，12 MB 的还原成本整段漏掉（差点报出"抽取 15ms"） | 量级联某段 = **从 `project.open()` 起算的水位差**（前一水位减后一水位），别用自计 `durationMs` 当体感 |
 | bash coreutils 时常 127；`node -e` 多层引号/Markdown 反引号必翻车 | 一切用 node 临时 `.mjs` 文件或 Read/Write/Edit 工具；PowerShell 工具 stdout 不回显 |
 | **bash 严重残缺时 pnpm/vitest/tsc shim 全挂**（`sed`/`dirname`/`uname` 缺失） | 直调 node：`node "D:/Code/Nodejs/node_global/node_modules/pnpm/bin/pnpm.mjs" install`；vitest → `node "node_modules/.pnpm/vitest@4.1.11_@types+node@2_1db5548ac037c87131628c83c4241b81/node_modules/vitest/vitest.mjs" run`；tsc → `node "node_modules/.pnpm/typescript@7.0.2/node_modules/typescript/lib/tsc.js" --noEmit -p tsconfig.json` |
 | **Edit 工具偶发"声称成功未落盘"，且同文件并行 Edit 会 EBUSY** | 关键修改后读回验证；**同一文件的多次 Edit 必须串行** |
@@ -914,9 +924,16 @@ node tools/smoke-tauri-ipc.mjs
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1426 passed / 11 skipped（1437）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.69 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
-4. **本组当前两条主线**：
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1432 passed / 11 skipped（1443）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.70 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
+4. **本组当前三条主线**：
+   - **体感丝滑线（本组主目标，性能）**：三段级联全部持久化（§5.58）→ 快照瘦身与卫生（§5.65）→
+     **抽取按文件增量（§5.70）**。真实语料当前水位：冷 索引 2.2s / 抽取 7.2s / 校验 +5.6s；
+     热（未改动）三段 ≈ 1.1s；**改一个 ERB** ⇒ 索引 0.4s + 抽取 **0.05s** + 校验 **6.0s**。
+     **下一批首选 = 校验段按文件增量**——它是现在级联唯一还在整项目判据的段，改一个文件重付
+     ~6s；要么把规则切成逐文件可算，要么让规则显式声明自己看得到哪些输入（跨文件的家族完整性
+     规则只能保留整项目粒度，但要能与逐文件部分共存）。次要：`extractFunctionConditions`
+     上并行通道（前置 = `VariableSchema` 导出原始表，路线文档 §三 L1）。
    - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 + T2.1 + T3 + T4 已通。
      **下一批首选 = 导出 ZIP（TS 层，用户 2026-10-12 拍板）**：
      ZIP 容器（local/central header + CRC32）在 TS 层做，压缩用平台

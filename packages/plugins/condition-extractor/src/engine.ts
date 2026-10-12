@@ -12,7 +12,6 @@
  */
 
 import type {
-  CacheExpect,
   ComputePool,
   ConditionExtractorService,
   ConditionExpr,
@@ -26,6 +25,7 @@ import type {
 } from '@kojo/plugin-api';
 import { extractFunctionConditions, extractFunctionPredicates, type SchemaLookup } from './extract';
 import { parseExpression } from './expr';
+import { mergeBuckets, planReuse, type ExtractExpect, type FileBucket, type FileStats } from './snapshot';
 
 export interface ConditionEngineDeps {
   log: Logger;
@@ -46,26 +46,24 @@ export interface ConditionEngineDeps {
   /** 当前适配器的变量语义查询（无适配器 / 无 schema 时 undefined） */
   getSchemaLookup(): SchemaLookup | undefined;
   /**
-   * 结果快照端口（2026-10-12「体感丝滑」批；缺省 = 不缓存）。
+   * 结果快照端口（2026-10-12「体感丝滑」批 →「按文件增量」批；缺省 = 不缓存）。
    *
-   * 全量抽取在真实语料上实测 **11.3 s**，而它在开项目级联里是自动催动的。抽取是
-   * 整项目粒度的纯函数：`CacheExpect`（项目根 / 适配器 / 体量指纹）没变 ⇒ 产出必相同，
-   * 于是直接还原、一个字都不算。
+   * 全量抽取在真实语料上实测 11.3 s（瘦身编码后仍需 4 s），而它在开项目级联里是自动催动的。
+   * 抽取是**逐文件**的纯函数 ⇒ 快照按文件分桶，判据分两层：全局层（项目根 / 适配器 /
+   * `inputDigest` / 格式版本）与逐文件层（桶里的 mtime vs 索引的 `fileMtimes`）。
+   * 作者改一个文件 ⇒ 只重算那一个，不再重算全库。
    *
-   * 引擎只负责"命中就跳过计算"；键、存储、fail-closed 判据由插件侧实现（见
-   * `./snapshot.ts`）。`save` 收到的是**本次计算实际使用的判据**，因此不存在
+   * 引擎只负责"判据齐就复用能复用的桶"；键、存储、fail-closed 由插件侧实现（见 `./snapshot.ts`）。
+   * `save` 收到的是**本次实际得到的桶集合**（含复用的），判据同源，不存在
    * "抽取途中索引又变了 → 把旧结果存成新判据"的污染路径。
    */
   snapshot?: {
-    /**
-     * 组装**本次计算的命中判据**；返回 null = 判据不全 ⇒ 既不还原也不落盘。
-     *
-     * 判据归插件所有（它才知道 adapter 吃了哪些非 ERB 输入），引擎保持游戏无关：
-     * 引擎只负责"有判据且命中就跳过计算"。
-     */
-    expectFor(args: { project: GameProject; index: ErbIndex }): CacheExpect | null;
-    load(expect: CacheExpect): Promise<ConditionIndex | null>;
-    save(index: ConditionIndex, expect: CacheExpect): void;
+    /** 组装全局判据；返回 null = 判据不全 ⇒ 既不还原也不落盘 */
+    expectFor(args: { project: GameProject; index: ErbIndex }): ExtractExpect | null;
+    /** 取回过了全局判据的按文件桶（全局判据或结构不符 ⇒ null） */
+    load(expect: ExtractExpect): Promise<Record<string, FileBucket> | null>;
+    /** 落盘本次的全部桶（复用 + 新算），迭代顺序 = 本次 walk 顺序 */
+    save(buckets: ReadonlyMap<string, FileBucket>, expect: ExtractExpect): void;
   };
   /**
    * 计算池（内核 `kernel.compute`，2026-10-12 内核优化批）。
@@ -191,17 +189,6 @@ export class ConditionEngine implements ConditionExtractorService {
     this.notify();
   }
 
-  /**
-   * 从结果快照还原（不重算）。明细缓存与文件文本缓存必须清空——
-   * 它们是"上一次计算"的进程内派生态，跨项目/跨快照复用会串味。
-   */
-  restore(index: ConditionIndex): void {
-    this.last = index;
-    this.detailCache.clear();
-    this.fileTextCache.clear();
-    this.notify();
-  }
-
   ensureIndex(): Promise<ConditionIndex> {
     if (this.inFlight) return this.inFlight;
     const p = this.run().finally(() => {
@@ -223,36 +210,32 @@ export class ConditionEngine implements ConditionExtractorService {
     }
 
     /**
-     * 本次计算实际使用的判据（由插件组装：ERB 体量指纹 + adapter 读过的非 ERB 输入）。
-     * 返回 null = 判据不全 ⇒ 不还原也不落盘，保守回退全量
-     * （判据不可信的缓存比没有缓存更危险）。
+     * 全局判据（插件组装：项目根 / 适配器 / `inputDigest`）。
+     * null = 判据不全 ⇒ 不读也不写快照，保守回退全量（判据不可信的缓存比没有缓存更危险）。
      */
     const expect = this.deps.snapshot ? this.deps.snapshot.expectFor({ project, index }) : null;
 
-    if (this.deps.snapshot && expect) {
-      const cached = await this.deps.snapshot.load(expect);
-      if (cached) {
-        this.restore(cached);
-        this.deps.log.info(
-          `Condition index restored from snapshot: ${cached.stats.functions} functions scanned, ` +
-            `${cached.stats.predicates} predicates (originally ${cached.durationMs}ms, load skipped all compute)`,
-        );
-        return cached;
-      }
-    }
+    /**
+     * 本次文件清单 + 逐文件 mtime（顺序 = 本次 walk 顺序 = 结果顺序）。
+     * 索引没给 mtime 或该文件取不到 stat ⇒ null ⇒ 该文件判过期，保守重算。
+     */
+    const files = [...index.files.entries()];
+    const stamps = files.map(([path]) => ({ path, mtimeMs: index.fileMtimes?.get(path) ?? null }));
+    const stored = this.deps.snapshot && expect ? await this.deps.snapshot.load(expect) : null;
+    const plan = planReuse(stored, stamps);
 
     const t0 = Date.now();
     const lookup = this.deps.getSchemaLookup();
     const extractOpts = lookup ? { lookup } : {};
+    const mtimeOf = new Map(stamps.map((s) => [s.path, s.mtimeMs]));
+    const computed = new Map<string, FileBucket>();
+    /** 只算没命中的文件（作者改 3 个文件 ⇒ 只重抽这 3 个，不是 2,285 个） */
+    const pending = files.filter(([path]) => !plan.reusable.has(path));
 
-    const byFunction = new Map<string, FunctionConditions>();
-    const stats = { functions: 0, functionsWithDeps: 0, predicates: 0, unparsed: 0, dependencies: 0 };
-
-    const entries = [...index.files.entries()];
     // 分窗并发 + 窗口间让路（内核计算池，background 档）：抽取是"开项目级联"的第二段，
-    // 6.2 s 的 CPU 洪水不能连续占住主线程（内核优化批）
+    // 4~11 s 的 CPU 洪水不能连续占住主线程（内核优化批）
     await this.deps.compute.runSliced(
-      entries,
+      pending,
       {
         concurrency: EXTRACT_CONCURRENCY,
         sliceMs: EXTRACT_SLICE_MS,
@@ -260,40 +243,44 @@ export class ConditionEngine implements ConditionExtractorService {
         label: 'condition.extract',
       },
       async ([path, file]) => {
-      let text: string;
-      try {
-        text = await this.deps.readFile(path);
-      } catch (err) {
-        this.deps.log.warn(`Condition extract skipped (read failed): ${path} — ${String(err)}`);
-        return;
-      }
-      let stmts: ControlFlowStatement[];
-      try {
-        stmts = await this.deps.scanControlFlow(text);
-      } catch (err) {
-        this.deps.log.warn(`Condition extract skipped (scan failed): ${path} — ${String(err)}`);
-        return;
-      }
-      if (stmts.length === 0) return;
+        let text: string;
+        try {
+          text = await this.deps.readFile(path);
+        } catch (err) {
+          // 读失败**不留桶**：下次开项目必须重试，否则坏一次就永久缓存坏结果
+          this.deps.log.warn(`Condition extract skipped (read failed): ${path} — ${String(err)}`);
+          return;
+        }
+        let stmts: ControlFlowStatement[];
+        try {
+          stmts = await this.deps.scanControlFlow(text);
+        } catch (err) {
+          this.deps.log.warn(`Condition extract skipped (scan failed): ${path} — ${String(err)}`);
+          return;
+        }
 
-      // 两指针切片：stmts 与 functions 均按行号升序
-      let cursor = 0;
-      for (const fn of file.functions) {
-        while (cursor < stmts.length && stmts[cursor]!.line < fn.startLine) cursor++;
-        const slice: ControlFlowStatement[] = [];
-        for (let j = cursor; j < stmts.length && stmts[j]!.line <= fn.endLine; j++) {
-          slice.push(stmts[j]!);
+        const st: FileStats = { functions: 0, functionsWithDeps: 0, predicates: 0, unparsed: 0, dependencies: 0 };
+        const conds: FunctionConditions[] = [];
+        // 两指针切片：stmts 与 functions 均按行号升序；stmts 为空时循环自然不执行，
+        // 但仍要留一个空桶 —— 否则这个文件每次开项目都被判"没缓存"而白读白扫一遍
+        let cursor = 0;
+        for (const fn of file.functions) {
+          while (cursor < stmts.length && stmts[cursor]!.line < fn.startLine) cursor++;
+          const slice: ControlFlowStatement[] = [];
+          for (let j = cursor; j < stmts.length && stmts[j]!.line <= fn.endLine; j++) {
+            slice.push(stmts[j]!);
+          }
+          st.functions++;
+          const cond = extractFunctionConditions(fn, slice, extractOpts);
+          if (cond) {
+            conds.push(cond);
+            st.predicates += cond.predicateCount;
+            st.unparsed += cond.unparsedCount;
+            st.dependencies += cond.dependencies.length;
+            if (cond.dependencies.length > 0) st.functionsWithDeps++;
+          }
         }
-        stats.functions++;
-        const cond = extractFunctionConditions(fn, slice, extractOpts);
-        if (cond) {
-          byFunction.set(cond.normalizedName, cond);
-          stats.predicates += cond.predicateCount;
-          stats.unparsed += cond.unparsedCount;
-          stats.dependencies += cond.dependencies.length;
-          if (cond.dependencies.length > 0) stats.functionsWithDeps++;
-        }
-      }
+        computed.set(path, { mtimeMs: mtimeOf.get(path) ?? null, stats: st, conds });
       },
     );
 
@@ -304,23 +291,37 @@ export class ConditionEngine implements ConditionExtractorService {
       return emptyIndex(project.rootDir);
     }
 
+    // 合并：按本次 walk 顺序拼「复用的桶」与「新算的桶」——与全量重建同一份合并代码
+    const order = stamps.map((s) => s.path);
+    const merged = mergeBuckets(order, plan.reusable, computed);
     const result: ConditionIndex = {
       projectRoot: project.rootDir,
       finishedAt: Date.now(),
       durationMs: Date.now() - t0,
-      byFunction,
-      stats,
+      byFunction: merged.byFunction,
+      stats: merged.stats,
     };
     this.last = result;
     this.detailCache.clear(); // 索引重建 → 行号/定义可能变化，明细缓存失效
     this.fileTextCache.clear();
     this.notify();
     this.deps.log.info(
-      `Condition index: ${stats.functions} functions scanned, ${stats.predicates} predicates ` +
-        `(${stats.unparsed} unparsed), ${stats.functionsWithDeps} functions with deps, ` +
-        `${stats.dependencies} dependencies in ${result.durationMs}ms`,
+      `Condition index: ${result.stats.functions} functions scanned, ${result.stats.predicates} predicates ` +
+        `(${result.stats.unparsed} unparsed), ${result.stats.functionsWithDeps} functions with deps, ` +
+        `${result.stats.dependencies} dependencies in ${result.durationMs}ms` +
+        `（复用 ${plan.reusable.size} / 重算 ${computed.size} 文件）`,
     );
-    if (this.deps.snapshot && expect) this.deps.snapshot.save(result, expect);
+    // 只在真重算过东西时回写：全命中再写一遍 12 MB 是纯浪费（序列化 + 磁盘）
+    if (computed.size > 0 && this.deps.snapshot && expect) {
+      // 保存"本次实际得到"的桶（复用 + 新算），顺序同上：
+      // 途中索引换过的文件其 mtime 也是本次这份索引的 ⇒ 不会把旧结果存成新判据
+      const toSave = new Map<string, FileBucket>();
+      for (const path of order) {
+        const b = computed.get(path) ?? plan.reusable.get(path);
+        if (b) toSave.set(path, b);
+      }
+      this.deps.snapshot.save(toSave, expect);
+    }
     return result;
   }
 }

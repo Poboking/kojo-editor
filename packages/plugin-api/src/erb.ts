@@ -127,6 +127,14 @@ export interface ErbIndex {
    * `null` = 有文件取不到 stat ⇒ 派生缓存一律不命中（保守失效）。
    */
   readonly fingerprint?: string | null;
+  /**
+   * 逐文件 mtime（与 `SnapshotEntry.mtimeMs` 同源：重扫文件取 `readText` 的、复用文件取快照的）。
+   *
+   * 为什么单独暴露：整项目指纹是"任一文件变 ⇒ 全部作废"，而**作者天天只改几个文件**——
+   * 按文件粒度复用才对症。下游（条件抽取）拿它逐文件比对快照桶，只重算变过的那些。
+   * 某文件取不到 stat ⇒ 该路径值为 `null` ⇒ 下游对**该文件**永不复用（保守，不影响别的文件）。
+   */
+  readonly fileMtimes?: ReadonlyMap<string, number | null>;
 }
 
 /**

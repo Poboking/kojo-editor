@@ -197,14 +197,21 @@ export function createErbParserPlugin(): Plugin {
         // 合并：按本次 walk 顺序取数（快照只换"来源"，byName 聚合顺序与全量重建逐位一致）
         const aggStartedAt = Date.now();
         const ordered: ErbFile[] = [];
+        // 逐文件 mtime 顺手记下来（同源：重扫文件用 readText 的、复用文件用快照的）——
+        // 下游条件抽取按文件粒度复用结果时，只有整项目指纹会出现"改一个文件重算全库"
+        const fileMtimes = new Map<string, number | null>();
         for (const path of allFiles) {
-          const parsed = fresh.get(path)?.file;
-          if (parsed) {
-            ordered.push(parsed);
+          const parsed = fresh.get(path);
+          if (parsed?.file) {
+            ordered.push(parsed.file);
+            fileMtimes.set(path, parsed.mtimeMs);
             continue;
           }
-          const reused = snapshot?.entries[path]?.file;
-          if (reused) ordered.push(reused);
+          const old = snapshot?.entries[path];
+          if (old?.file) {
+            ordered.push(old.file);
+            fileMtimes.set(path, old.mtimeMs);
+          }
         }
         const { files, byName } = aggregateIndex(ordered);
         const aggMs = Date.now() - aggStartedAt;
@@ -252,9 +259,9 @@ export function createErbParserPlugin(): Plugin {
         }
 
         // 仅在仍是当前代际时提交（避免项目快速切换导致旧结果覆盖新结果）
-        if (gen !== generation) return { files, byName, fingerprint };
+        if (gen !== generation) return { files, byName, fingerprint, fileMtimes };
 
-        const built: ErbIndex = { files, byName, fingerprint };
+        const built: ErbIndex = { files, byName, fingerprint, fileMtimes };
         index = built;
         ctx.bus.emit('kojo.functionChanged', {
           projectRoot: currentRoot,

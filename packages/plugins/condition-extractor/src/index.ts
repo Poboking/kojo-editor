@@ -26,7 +26,8 @@ import type {
   ProjectService,
   SlotRegistry,
 } from '@kojo/plugin-api';
-import { EXTRACT_STORE_KEY, decodeConditionIndex, encodeConditionIndex, extractExpect } from './snapshot';
+import { EXTRACT_STORE_KEY, decodeBuckets, encodeBuckets, extractExpect } from './snapshot';
+import type { ExtractExpect, FileBucket } from './snapshot';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { ConditionEngine } from './engine';
 import type { SchemaLookup } from './extract';
@@ -64,35 +65,41 @@ export function createConditionExtractorPlugin(): Plugin {
       };
 
       /**
-       * 结果快照端口：键固定、判据在快照本体里（见 `./snapshot.ts`）。
+       * 结果快照端口（按文件分桶）：键固定、全局判据在快照本体里（见 `./snapshot.ts`）。
        * 坏快照一律删除而不是"修"——fail-closed 与索引快照同口径。
        */
       const snapshotPort = {
-        expectFor({ index, project }: { index: ErbIndex; project: GameProject }): CacheExpect | null {
-          return extractExpect({ index, project });
+        expectFor({ project }: { index: ErbIndex; project: GameProject }): ExtractExpect | null {
+          return extractExpect({ project });
         },
-        async load(expect: CacheExpect): Promise<ConditionIndex | null> {
+        async load(expect: ExtractExpect): Promise<Record<string, FileBucket> | null> {
           try {
             const raw = await storage.get<unknown>(EXTRACT_STORE_KEY);
-            if (raw === undefined) return null; // 首次 / 刚变过文件：正常路径
-            const restored = decodeConditionIndex(raw, expect);
+            if (raw === undefined) return null; // 首次 / 从没抽过：正常路径
+            const restored = decodeBuckets(raw, expect);
             if (restored === null) {
               void storage.delete(EXTRACT_STORE_KEY).catch(() => undefined);
-              ctx.log.warn('Condition snapshot unusable (format/root/adapter/fingerprint mismatch); extracting from scratch');
+              ctx.log.warn('Condition snapshot unusable (format/root/adapter/inputDigest/structure); extracting from scratch');
+              return null;
             }
-            return restored;
+            return restored.buckets;
           } catch (err) {
             ctx.log.warn(`Condition snapshot read failed; extracting from scratch: ${String(err)}`);
             return null;
           }
         },
-        save(index: ConditionIndex, expect: CacheExpect): void {
-          // 零函数被扫描 = 结果可疑（多半是索引刚失效），不落盘免得下次还原出空结果
-          if (index.stats.functions === 0) return;
+        save(buckets: ReadonlyMap<string, FileBucket>, expect: ExtractExpect): void {
+          // 一个桶都没有 ⇒ 没什么可缓存（空项目或全部读扫失败），不落盘免得下次白绕一圈
+          if (buckets.size === 0) return;
           void storage
-            .set(EXTRACT_STORE_KEY, encodeConditionIndex({ index, expect }))
+            .set(EXTRACT_STORE_KEY, encodeBuckets({ buckets, expect }))
             .then(() => {
-              ctx.log.info(`Condition snapshot saved (${index.byFunction.size} entries, fingerprint ${expect.fingerprint})`);
+              let conds = 0;
+              for (const b of buckets.values()) conds += b.conds.length;
+              ctx.log.info(
+                `Condition snapshot saved (${buckets.size} file buckets, ${conds} functions with predicates, ` +
+                  `inputDigest ${expect.inputDigest})`,
+              );
             })
             .catch((err: unknown) => {
               ctx.log.warn(`Condition snapshot save failed: ${String(err)}`);
