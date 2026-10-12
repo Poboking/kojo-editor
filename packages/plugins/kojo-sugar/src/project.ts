@@ -23,7 +23,8 @@
  * | `;注释` / 空行 | **原样透传**（`;` 注释在糖里语法完全一样） |
  * | `%CALLNAME:TARGET%` / `%CALLNAME:MASTER%` | `{她}` / `{你}`（**可读化**，见下） |
  * | `\@条件?A#B\@`（FORM 行内的三元输出） | `{条件 ? "A" : "B"}`（糖三元，规范 §3.4） |
- * | 其余（`SIF` / 循环 / TRY / PRINTDATA / 按钮 …） | **原样保留为 ERB** |
+ * | `SIF 条件` + 紧随的那一条语句 | `如果 条件：` + 正文 **+1 层缩进**（规范 §3.5；语料 100% 是这种两行形态） |
+ * | 其余（循环 / TRY / PRINTDATA / 按钮 …） | **原样保留为 ERB** |
  *
  * ## 可读化（本模块与 `lift.ts` 最大的取向差异）
  *
@@ -201,6 +202,13 @@ const CLOSE_KINDS: ReadonlySet<string> = new Set([
   'ENDFUNC',
 ]);
 
+/**
+ * 不能当 `SIF` 正文的行（批 H 判据 3）：连写的另一条 `SIF`，以及**分支续行**
+ * （`ELSE` / `CASE` 属于它上面那条链，不是"被条件管的一条语句"）。
+ * 开块与闭合行另有判据（`pairOf` / `CLOSE_KINDS`）。
+ */
+const NON_BODY_LINE_KINDS: ReadonlySet<string> = new Set(['SIF', 'ELSE', 'ELSEIF', 'CASE', 'CASEELSE']);
+
 /* ============================== 入口 ============================== */
 
 /** 生成整文件糖投影（同步纯函数；不读盘、不写盘、不发事件） */
@@ -220,6 +228,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   const color = planColorBlocks(lines, ctx);
   // 函数骨架（包装三联 + 記入チェック信封）——判据全部"可证明"，配不上就不动。
   const skeleton = planSkeleton(lines, ctx);
+  // `SIF 条件` + 下一行单语句 → 「如果 …：」块头 + 正文 +1 层缩进（批 H）
+  const sif = planSif(lines, ctx);
 
   const recs: LineRec[] = [];
   const nativeByReason = new Map<SugarProjectNativeReason, number>();
@@ -297,6 +307,18 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
 
     const st = ctx.stmtAt(ln);
     if (st) {
+      // `SIF 条件` → 块头「如果 …：」（批 H；它管辖的那一正文行在缩进补正里 +1 层）
+      if (st.kind === 'SIF' && sif.headAt.has(ln)) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: `如果 ${reverseExprAttributes(st.expression.trim(), deps)}：`,
+          indent: st.depth,
+          visible: true,
+          reason: null,
+        });
+        continue;
+      }
       const mk = SUGAR_CONTROL.get(st.kind);
       if (mk !== undefined) {
         const expr = st.expression.trim();
@@ -316,7 +338,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         });
         continue;
       }
-      // 其余控制流（SIF / 循环 / TRY / PRINTDATA / 标签等）→ 原样保留
+      // 其余控制流（循环 / TRY / PRINTDATA / 标签等，以及**判据不满足的 SIF**）→ 原样保留
       recs.push(native(ln, 'unsupported-control-flow'));
       continue;
     }
@@ -404,12 +426,12 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
     recs.push(native(ln, 'other'));
   }
 
-  // ---- 缩进补正：着色块**体内** +1；記入チェック信封**体内** -1（信封被拆，缩进必须跟着拆）----
+  // ---- 缩进补正：着色块**体内** +1；`SIF` 管辖的那一行 +1；記入チェック信封**体内** -1（信封被拆，缩进必须跟着拆）----
   //
   // 放在最后统一做（而不是在每个 push 点手动加）：一处口径，漏改不了。
   // 块头自身不吃 +1（`starts` 从 open+1 起算），被吸收的 RESETCOLOR 不可见故无影响。
   for (const r of recs) {
-    const bump = color.bumpAt(r.line) - skeleton.dedentAt(r.line);
+    const bump = color.bumpAt(r.line) + sif.bumpAt(r.line) - skeleton.dedentAt(r.line);
     if (bump !== 0) r.indent = Math.max(0, r.indent + bump);
   }
 
@@ -646,6 +668,109 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
     absorbed,
     dedentAt: (line) => (line >= 1 && line <= total ? (dedent[line] ?? 0) : 0),
   };
+}
+
+/* ============================== SIF → 单语句「如果」 ============================== */
+
+/** SIF 投影计划（形状见 `planSif`） */
+interface SifPlan {
+  /** 可投影为「如果 …：」块头的 SIF 行号 */
+  headAt: Set<number>;
+  /** 该行因"正被某条 SIF 单语句管辖"而应**加**的缩进层数 */
+  bumpAt: (line: number) => number;
+}
+
+/**
+ * `SIF`（Single IF）→ 糖的「如果 …：」+ **恰好一行**缩进正文（批 H，规范 §3.5 单行/块形式）。
+ *
+ * ## 真实语料实测（2,885 个口上 ERB / 18,130 行 SIF）
+ *
+ * - **`SIF 条件:命令` 冒号形态 0 例**——全部是"条件独占一行，被管的语句在下一行"；
+ * - 下一行形态：简单语句 13,137｜输出行 4,987｜连写 `SIF` 6｜**开块或闭合行 0**。
+ *
+ * 冒号形态为什么"有也不做"：ERB 条件里 `:` 是**变量索引**（`SIF TALENT:LOCAL:恋人`），
+ * 与"冒号 + 命令"的分界在没有完整表达式解析的前提下**不可证**。语料既然 0 例，
+ * 就用一条保守判据把它挡在门外（`hasCommandColon`），而不是去猜边界。
+ *
+ * ## 判据（一条不满足就整行不动，原样留原代码）
+ *
+ * 1. 结构扫描把这一行认成 `SIF`，且**表达式非空**；
+ * 2. 表达式里**没有**"冒号 + 指令关键字"形态（见上）；
+ * 3. 向下第一个非空非注释行**存在**，且是**单条语句**：
+ *    不是开块语句（`IF`/`SELECTCASE`/`PRINTDATA` 系/`TRY…LIST`…）、不是闭合或分支行
+ *    （`ENDIF`/`ELSE`/`CASE`…——`ELSE` 属于它上面那条链，不是"被条件管的一条语句"）、
+ *    不是另一条 `SIF`（连写 = 作用域叠加，一行说不清）、
+ *    不是 `@` / `#` / `$` / `[` 开头的结构性行；
+ * 4. 不在 `[SKIPSTART]` 停用区内，也不在 `PRINTDATA` 数据表体内（结构判据先于内容判据，
+ *    与台词行同口径——表体里的行是"数据"不是语句）。
+ *
+ * 满足后：SIF 行投影成块头 `如果 <条件反糖>：`，**正文那一行 +1 层缩进**——
+ * 块的范围正好等于糖块的自然读法（缩进即块），而 SIF 的语义也正是"管一条语句"。
+ */
+function planSif(lines: string[], ctx: ProjContext): SifPlan {
+  const headAt = new Set<number>();
+  const bump = new Array<number>(lines.length + 1).fill(0);
+  const total = lines.length;
+  let inSkip = false;
+
+  const contentAt = (ln: number): string => contentOf(lines[ln - 1] ?? '');
+
+  for (let ln = 1; ln <= total; ln++) {
+    const content = contentAt(ln);
+    if (content === '[SKIPSTART]') {
+      inSkip = true;
+      continue;
+    }
+    if (content === '[SKIPEND]') {
+      inSkip = false;
+      continue;
+    }
+    if (inSkip) continue;
+
+    const st = ctx.stmtAt(ln);
+    if (!st || st.kind !== 'SIF') continue;
+    // 结构判据先于内容判据（与台词行同口径）：PRINTDATA 数据表体里的行是"数据"不是语句
+    if (ctx.enclosingAt(ln).includes('data')) continue;
+    const expr = st.expression.trim();
+    if (expr.length === 0 || hasCommandColon(expr)) continue;
+
+    // 向下第一个非空非注释行 = 被 SIF 管辖的那一条语句
+    let body = ln + 1;
+    while (body <= total) {
+      const c = contentAt(body);
+      if (c.length === 0 || c.startsWith(';')) {
+        body++;
+        continue;
+      }
+      break;
+    }
+    const bodyContent = contentAt(body);
+    if (body > total || bodyContent.length === 0) continue;
+    if (/^[@#$[]/.test(bodyContent)) continue;
+    const bst = ctx.stmtAt(body);
+    if (bst && (NON_BODY_LINE_KINDS.has(bst.kind) || pairOf(bst.kind) !== null || CLOSE_KINDS.has(bst.kind))) {
+      continue;
+    }
+
+    headAt.add(ln);
+    bump[body] = (bump[body] ?? 0) + 1;
+  }
+
+  return {
+    headAt,
+    bumpAt: (line) => (line >= 1 && line <= total ? (bump[line] ?? 0) : 0),
+  };
+}
+
+/**
+ * 表达式里出现"冒号 + 指令关键字" = 这是 `SIF 条件:命令` 的冒号形态（语料 0 例）。
+ * 与变量索引冒号（`TALENT:LOCAL:恋人`）的区别只在右侧是不是指令——判据取"是就整行不动"，
+ * 因为这里没有第三条路可走（要分清就得完整解析表达式）。
+ */
+function hasCommandColon(expr: string): boolean {
+  return /[:：] *(PRINT|CALL|RETURN|GOTO|GOSUB|SETCOLOR|RESETCOLOR|CLEARLINE|FORCEWAIT|WAIT|INPUT|TRY|HIDE|SHOW|REDRAW|BREAK|RESTART|CATCH|IF|ELSE|SELECTCASE|CASE|END|NEXT|WEND|REND|LOOP|DO|WHILE|FOR)\b/.test(
+    expr,
+  );
 }
 
 /* ============================== 着色块配对 ============================== */

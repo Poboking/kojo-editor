@@ -54,6 +54,12 @@ const KOJO_DIR_MARK = '口上';
  */
 const FORM_PRINT_RE = /^\s*(PRINTFORM(?:DW|DL|W|L))\b/;
 const OUTPUT_PRINT_RE = /^\s*(PRINTFORM(?:DW|DL|W|L|D)?|PRINT(?:DW|DL|W|L|D)?)\b/;
+/**
+ * 批 H 的尺子：`SIF 条件`（单行条件）。语料实测 100% 写成"条件独占一行 + 下一行单语句"，
+ * 投影判据是两行的**配对**，所以必须按行统计"有多少 SIF 行被糖覆盖"——只看总行覆盖的话，
+ * 9,516 行只占 0.26%，整条能力悄悄退化都不会红。
+ */
+const SIF_LINE_RE = /^\s*SIF\b/i;
 
 interface Totals {
   files: number;
@@ -72,6 +78,9 @@ interface Totals {
   outputLines: number;
   /** 其中已显示为糖的行数 */
   outputProjected: number;
+  /** `SIF` 行数（批 H 的尺子）与其中显示为「如果 …：」的行数 */
+  sifLines: number;
+  sifProjected: number;
 }
 
 const zero = (): Totals => ({
@@ -87,6 +96,8 @@ const zero = (): Totals => ({
   speechProjected: 0,
   outputLines: 0,
   outputProjected: 0,
+  sifLines: 0,
+  sifProjected: 0,
 });
 
 const pct = (a: number, b: number): string => (b === 0 ? '—' : `${((a / b) * 100).toFixed(1)}%`);
@@ -97,6 +108,7 @@ function line(t: Totals, label: string): string {
     `｜行覆盖 ${pct(t.projected, t.totalLines)}（${t.projected}/${t.totalLines}）` +
     `｜**台词行覆盖 ${pct(t.speechProjected, t.speechLines)}**（${t.speechProjected}/${t.speechLines}）` +
     `｜**输出行覆盖 ${pct(t.outputProjected, t.outputLines)}**（${t.outputProjected}/${t.outputLines}）` +
+    `｜**SIF 覆盖 ${pct(t.sifProjected, t.sifLines)}**（${t.sifProjected}/${t.sifLines}）` +
     `｜段 ${t.segments}（最多 ${t.maxSegments}/文件）`
   );
 }
@@ -194,13 +206,20 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           nativeTokens.set(token, rec);
         }
 
-        // ---- 读者要读的行有多少显示成了糖（两把尺子，见文件头注释）----
+        // ---- 读者要读的行有多少显示成了糖（三把尺子，见文件头注释）----
         let speech = 0;
         let speechCovered = 0;
         let output = 0;
         let outputCovered = 0;
+        let sif = 0;
+        let sifCovered = 0;
         for (let ln = 1; ln <= srcLines.length; ln++) {
           const text = srcLines[ln - 1] ?? '';
+          if (SIF_LINE_RE.test(text)) {
+            sif++;
+            if (covered.has(ln)) sifCovered++;
+            continue;
+          }
           const isOutput = OUTPUT_PRINT_RE.test(text);
           if (!isOutput && !FORM_PRINT_RE.test(text)) continue;
           if (isOutput) {
@@ -225,6 +244,8 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           t.speechProjected += speechCovered;
           t.outputLines += output;
           t.outputProjected += outputCovered;
+          t.sifLines += sif;
+          t.sifProjected += sifCovered;
         }
         segBuckets[bucketOf(r.segments.length)]!++;
       }
@@ -282,6 +303,11 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 口上目录是主战场，台词行要求更严
       expect(kojo.speechProjected / Math.max(1, kojo.speechLines)).toBeGreaterThan(0.99);
       expect(kojo.outputProjected / Math.max(1, kojo.outputLines)).toBeGreaterThan(0.99);
+      // 批 H：`SIF 条件` + 下一行单语句 → 「如果 …：」。实测读数见上方打印（约 93%）；
+      // 剩下的成就是判据**故意**挡下的：正文是开块语句 / 连写 SIF / 停用区 / 文件结束无正文。
+      // 这条能力只占全语料 0.26% 的行，混在"行覆盖"里退化不掉红——所以单独一把尺子。
+      expect(total.sifProjected / Math.max(1, total.sifLines)).toBeGreaterThan(0.9);
+      expect(kojo.sifProjected / Math.max(1, kojo.sifLines)).toBeGreaterThan(0.9);
 
       await kernel.stop();
     },

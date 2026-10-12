@@ -275,6 +275,99 @@ describe('糖投影 · 行内条件 `\\@cond?A#B\\@` → `{cond ? "A" : "B"}`（
   });
 });
 
+/* ==================== 批 H：SIF → 单语句「如果」 ==================== */
+
+describe('糖投影 · `SIF 条件` + 下一行 → 「如果 …：」+ 正文缩进（批 H）', () => {
+  const dict = {
+    resolveFamily: () => undefined,
+    resolve: () => undefined,
+    nameAt: (family: string, index: string): string | undefined =>
+      family === 'CFLAG' && index === '1088' ? '好感度' : undefined,
+  };
+  const withDict = (source: string) =>
+    liftProject(
+      { transpile: () => { throw new Error('x'); }, scanControlFlow, dictionary: () => dict },
+      { source },
+    );
+
+  it('语料形态（100% 的两行写法）：块头 + 正文 +1 层，合成一段', () => {
+    const r = project(['SIF !CFLAG:ARG:诶嘿嘿', 'PRINTFORMDW 她笑了。'].join('\n'));
+    expect(r.segments).toHaveLength(1);
+    expect(segLines(r.segments[0]!)).toEqual(['如果 !CFLAG:ARG:诶嘿嘿：', '\t她笑了。']);
+  });
+
+  it('条件走表达式反糖（与 IF 同一把尺子）', () => {
+    const r = withDict(['SIF CFLAG:TARGET:1088 >= 500', 'PRINTFORML 「近一点也没关系哦」'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['如果 她的好感度 >= 500：', '\t「近一点也没关系哦」 续']);
+  });
+
+  it('正文是机器码（RETURN）时：块头照样成段，正文留原代码', () => {
+    const r = project(['SIF A == 1', 'RETURN 1', 'PRINTFORMW 乙'].join('\n'));
+    expect(r.segments.map((s) => [s.fromLine, s.toLine])).toEqual([
+      [1, 1],
+      [3, 3],
+    ]);
+    expect(segLines(r.segments[0]!)).toEqual(['如果 A == 1：']);
+  });
+
+  it('判据 2：`SIF 条件:命令` 冒号形态整行不动（与变量索引冒号不可分，语料 0 例也不猜）', () => {
+    const r = project('SIF !RAND:2: PRINTFORMW 甲');
+    expect(r.segments).toHaveLength(0);
+    expect(r.stats.nativeByReason.find((x) => x.reason === 'unsupported-control-flow')?.count).toBe(1);
+    // 对照：索引冒号不是命令 → 照投影
+    const ok = project(['SIF TALENT:LOCAL:恋人', 'PRINTFORMW 乙'].join('\n'));
+    expect(segLines(ok.segments[0]!)).toEqual(['如果 TALENT:LOCAL:恋人：', '\t乙']);
+  });
+
+  it('判据 3：正文是开块语句 / 闭合行 / 函数头 / 又一条 SIF → 该行不动', () => {
+    const opener = project(['SIF A', 'IF B', 'PRINTFORMW 甲', 'ENDIF'].join('\n'));
+    // 第 1 行的正文是开块语句 → 整行不动；段从第 2 行（真正的 `IF`）开始
+    expect(opener.segments[0]!.fromLine).toBe(2);
+    expect(segLines(opener.segments[0]!)).toEqual(['如果 B：', '\t甲']);
+
+    const chained = project(['SIF A', 'SIF B', 'PRINTFORMW 甲'].join('\n'));
+    // 第一条 SIF 的正文是 SIF → 不动；第二条的正文是输出行 → 照投影
+    expect(chained.segments.map((s) => s.fromLine)).toEqual([2]);
+    expect(segLines(chained.segments[0]!)).toEqual(['如果 B：', '\t甲']);
+
+    // `ENDIF` 自身会被投影成"只藏不显"的空段（批 D 契约），所以判据要问"SIF 行有没有被糖覆盖"
+    const closer = project(['SIF A', 'ENDIF'].join('\n'));
+    expect(closer.segments.every((s) => s.fromLine > 1)).toBe(true);
+
+    const branch = project(['IF A', 'PRINTFORMW 甲', 'SIF B', 'ELSE', 'PRINTFORMW 乙', 'ENDIF'].join('\n'));
+    // `SIF B` 的正文是 `ELSE`（属于上面的 IF 链，不是被条件管的语句）→ 整行不动
+    expect(branch.segments.map((s) => s.fromLine)).toEqual([1, 4]);
+    expect(segLines(branch.segments[1]!)).toEqual(['否则：', '\t乙']);
+
+    const head = project(['SIF A', '@FUNC'].join('\n'));
+    expect(head.segments).toHaveLength(0);
+  });
+
+  it('判据 4：停用区与数据表体内的 SIF 不动', () => {
+    const skip = project(['[SKIPSTART]', 'SIF A', 'PRINTFORMW 甲', '[SKIPEND]'].join('\n'));
+    expect(skip.segments.every((s) => s.fromLine > 2)).toBe(true);
+
+    const data = project(['PRINTDATAL', 'SIF A', 'DATAFORM 甲', 'ENDDATA'].join('\n'));
+    // SIF 在表体里也不发糖（表体行是"数据"不是语句），段只能来自表外的后续行
+    const later = project(['PRINTDATAL', 'SIF A', 'DATAFORM 甲', 'ENDDATA', 'PRINTFORMW 乙'].join('\n'));
+    expect(data.segments.every((s) => s.fromLine !== 2)).toBe(true);
+    expect(later.segments.map((s) => s.fromLine)).toEqual([5]);
+  });
+
+  it('块头在块内时按结构深度呈现（与 IF 一致）', () => {
+    const r = project(['IF A', '\tSIF B', '\tPRINTFORMW 甲', 'ENDIF'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['如果 A：', '\t如果 B：', '\t\t甲']);
+  });
+
+  it('不变量：SIF 两行都入账（块头 = projected，正文照旧按自己的类别）', () => {
+    const { stats } = project(['SIF A', 'PRINTFORMW 甲', 'SIF B', 'RETURN 1'].join('\n'));
+    expect(stats.projectedLines + stats.passthroughLines + stats.nativeLines).toBe(stats.totalLines);
+    expect(stats.totalLines).toBe(4);
+    expect(stats.projectedLines).toBe(3); // 两个块头 + 一行台词
+    expect(stats.nativeLines).toBe(1); // RETURN
+  });
+});
+
 describe('糖投影 · 控制流', () => {
   it('IF / ELSEIF / ELSE / ENDIF 与缩进', () => {
     const src = ['IF A', 'PRINTFORMW 甲', 'ELSEIF B', 'PRINTFORMW 乙', 'ELSE', 'PRINTFORMW 丙', 'ENDIF'].join('\n');
@@ -341,6 +434,7 @@ describe('糖投影 · 注释与分段', () => {
 
 describe('糖投影 · 原生直通（fail-visible）', () => {
   it('SIF / 循环 / TRY / PRINTDATA 等控制流原样保留', () => {
+    // 这里的 `SIF A` 之后紧跟**开块语句**（FOR）→ 批 H 的判据 3 不满足，整行不动（正文不是单条语句就不猜）
     const src = ['SIF A', 'FOR LOCAL, 1, 3', 'PRINTFORMW 循环内', 'NEXT', 'PRINTDATAL', 'ENDDATA'].join('\n');
     const r = project(src);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));

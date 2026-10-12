@@ -1498,7 +1498,8 @@ export type SugarProjectNativeReason =
    *（批 G 起默认投影为糖三元 `{cond ? "A" : "B"}`；不配对 / 缺 `?` 或 `#` / 空条件 → 整行不猜）。
    * 非 FORM 行里的 `\@` 是被打印的字面字符，不受本因影响 */
   | 'inline-condition'
-  /** 糖未覆盖的控制流（`SIF` / 循环 / TRY 系 / PRINTDATA 系 / `$标签` / `GOTO` 等） */
+  /** 糖未覆盖的控制流（循环 / TRY 系 / PRINTDATA 系 / `$标签` / `GOTO` 等，
+   * 以及**批 H 判据不满足的 `SIF`**——正文不是"恰好一条语句"时整行不动） */
   | 'unsupported-control-flow'
   /** 落在数据表体（PRINTDATA 系）或 `[SKIPSTART]…[SKIPEND]` 区内——不是可显示的语句 */
   | 'data-or-skip'
