@@ -305,6 +305,9 @@ export type {
 
 export {
   projectFingerprintOf,
+  combineDigests,
+  foldDigest,
+  stableHash,
   type FileStamp,
   type CacheExpect,
 } from './fingerprint';

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { CacheExpect, ConditionIndex, FunctionConditions } from '@kojo/plugin-api';
-import { EXTRACT_SNAPSHOT_FORMAT, EXTRACT_STORE_KEY, decodeConditionIndex, encodeConditionIndex } from '../src/snapshot';
+import {
+  EXTRACT_SNAPSHOT_FORMAT,
+  EXTRACT_STORE_KEY,
+  decodeConditionIndex,
+  encodeConditionIndex,
+  extractExpect,
+} from '../src/snapshot';
 
 const cond = (name: string): FunctionConditions => ({
   normalizedName: name,
@@ -82,5 +88,48 @@ describe('条件抽取结果快照编解码', () => {
   it('存储键是安全段，且随格式版本演进', () => {
     expect(EXTRACT_STORE_KEY).toMatch(/^[A-Za-z0-9_][A-Za-z0-9._-]{0,119}$/);
     expect(EXTRACT_STORE_KEY).toContain(String(EXTRACT_SNAPSHOT_FORMAT));
+  });
+});
+
+describe('extractExpect：判据必须同时覆盖 ERB 正文与 adapter 的非 ERB 输入', () => {
+  const projectOf = (inputDigest?: string) =>
+    inputDigest === undefined
+      ? { rootDir: 'D:/game', adapterId: 'eratw' }
+      : { rootDir: 'D:/game', adapterId: 'eratw', inputDigest };
+
+  it('两路齐 ⇒ 出判据', () => {
+    const e = extractExpect({ index: { fingerprint: 'erb-fp' }, project: projectOf('csv-fp') });
+    expect(e).not.toBeNull();
+    expect(e!.projectRoot).toBe('D:/game');
+    expect(e!.adapterId).toBe('eratw');
+  });
+
+  it('ERB 指纹缺失 ⇒ null（不缓存）', () => {
+    for (const fp of [null, undefined, ''] as const) {
+      expect(extractExpect({ index: { fingerprint: fp }, project: projectOf('csv-fp') })).toBeNull();
+    }
+  });
+
+  /**
+   * 回归钉：eraTW 的变量字典由 CSV 驱动，抽取结果里的 schema 标签来自它。
+   * 若判据只看 ERB 指纹，改一行 `CFLAG.csv` 会让快照继续吐旧标签。
+   */
+  it('adapter 未声明 inputDigest ⇒ null（判据不全就不缓存）', () => {
+    expect(extractExpect({ index: { fingerprint: 'erb-fp' }, project: projectOf() })).toBeNull();
+  });
+
+  it('CSV 内容摘要变 ⇒ 判据变（改一行描述不再误命中）', () => {
+    const a = extractExpect({ index: { fingerprint: 'erb-fp' }, project: projectOf('csv-v1') })!;
+    const b = extractExpect({ index: { fingerprint: 'erb-fp' }, project: projectOf('csv-v2') })!;
+    expect(a.fingerprint).not.toBe(b.fingerprint);
+  });
+
+  it('ERB 变与 CSV 变是两个独立失效源，任一变化都换判据', () => {
+    const base = extractExpect({ index: { fingerprint: 'erb-1' }, project: projectOf('csv-1') })!;
+    const erbChanged = extractExpect({ index: { fingerprint: 'erb-2' }, project: projectOf('csv-1') })!;
+    const csvChanged = extractExpect({ index: { fingerprint: 'erb-1' }, project: projectOf('csv-2') })!;
+    expect(erbChanged.fingerprint).not.toBe(base.fingerprint);
+    expect(csvChanged.fingerprint).not.toBe(base.fingerprint);
+    expect(erbChanged.fingerprint).not.toBe(csvChanged.fingerprint);
   });
 });

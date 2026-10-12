@@ -10,7 +10,7 @@ import type {
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { KernelServices, join } from '@kojo/plugin-api';
+import { KernelServices, combineDigests, foldDigest, join } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { createEratwFamilyIndex } from './family-index';
@@ -207,6 +207,12 @@ export function createEratwAdapterPlugin(): Plugin {
           const personalKojo = join(rootDir, ...ERATW.paths.personalKojo);
 
           const charaIndex = new Map<number, CharaInfo>();
+          /**
+           * 非 ERB 输入的摘要素材（CHARA 表正文 + 角色目录名 + 变量名称表摘要）。
+           * 下游派生缓存（条件抽取 / 约定校验）的产出依赖它们，而 ERB 体量指纹
+           * 覆盖不到 ⇒ 必须折进判据（见 `GameProject.inputDigest`）。
+           */
+          const inputParts: string[] = [];
 
           // ---- 1. CHARA CSV → 编号 / 名前 / 呼び名 ----
           const csvEntries = await io.listDir(charaDir);
@@ -220,7 +226,9 @@ export function createEratwAdapterPlugin(): Plugin {
             try {
               const tf = await io.readText(entry.path);
               parsed = parseCharaCsv(tf.text);
+              inputParts.push(`chara\u0000${entry.path}\u0000${tf.text}`);
             } catch (err) {
+              inputParts.push(`chara\u0000${entry.path}\u0000!unreadable`);
               ctx.log.warn(`CHARA CSV 读取失败（跳过该文件）：${entry.path} — ${String(err)}`);
             }
             const no = parsed.no ?? noFromName;
@@ -243,6 +251,7 @@ export function createEratwAdapterPlugin(): Plugin {
           let bound = 0;
           for (const e of kojoEntries) {
             if (!e.isDirectory) continue;
+            inputParts.push(`kojoDir\u0000${e.name}`);
             const parsed = parseKojoDirName(e.name);
             if (!parsed) {
               ctx.log.warn(`個人口上目录名不符合「{三位编号} {名称}」约定（跳过）：${e.name}`);
@@ -287,6 +296,9 @@ export function createEratwAdapterPlugin(): Plugin {
             // 判定域 = 批准的 writablePaths；Rust 第二道闸本就允许项目根整体）。
             writablePaths: [personalKojo, join(rootDir, ...ERATW.savDir)],
             charaIndex,
+            // 派生缓存判据的一部分：本次加载实际吃进的非 ERB 输入（CHARA 表正文、
+            // 角色目录名、变量名称表）。ERB 体量指纹覆盖不到这些。
+            inputDigest: combineDigests([foldDigest(inputParts), currentSchema.inputDigest]) ?? undefined,
           };
         },
       };

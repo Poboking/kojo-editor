@@ -15,6 +15,7 @@
  * 引擎侧「不静默」由调用方日志保证）。
  */
 
+import { foldDigest, stableHash } from '@kojo/plugin-api';
 import type { FileIO, Logger, VariableInfo, VariableSchema } from '@kojo/plugin-api';
 
 interface VariableTable {
@@ -57,6 +58,8 @@ export interface LoadVariableSchemaOptions {
 export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): Promise<VariableSchema> {
   const { io, csvDir, log } = opts;
   const tables = new Map<string, VariableTable>();
+  /** 输入摘要素材：实际读到的每个 CSV 的「路径 + 正文」哈希（排序后折叠 ⇒ 与目录顺序无关） */
+  const digestParts: string[] = [];
 
   let entries: Awaited<ReturnType<FileIO['listDir']>>;
   try {
@@ -74,6 +77,7 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
     try {
       const tf = await io.readText(e.path);
       tables.set(variableName, parseVariableCsv(tf.text));
+      digestParts.push(stableHash(`${e.path}\u0000${tf.text}`));
     } catch (err) {
       log.warn(`变量表读取失败（跳过）：${e.path} — ${String(err)}`);
     }
@@ -81,8 +85,13 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
 
   log.info(`变量字典：${tables.size} 张名称表（${[...tables.keys()].join(', ')}）`);
 
+  // 输入摘要：字典由游戏 CSV 驱动，玩家改一行描述就该让下游派生缓存失效。
+  // 一张都没读到也是**确定值**（区别于 undefined = "没有判据"）。
+  const inputDigest = foldDigest(digestParts);
+
   return {
     version: '1',
+    inputDigest,
     lookup(variableName: string, index?: number | string): VariableInfo | undefined {
       const key = variableName.toUpperCase();
       const table = tables.get(key);

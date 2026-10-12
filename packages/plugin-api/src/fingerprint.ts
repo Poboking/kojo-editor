@@ -45,9 +45,9 @@ export interface CacheExpect {
 
 /**
  * cyrb53：53 位字符串哈希（JS 位运算只有 32 位，故用两个 32 位通道拼出 53 位）。
- * 非加密用途，只为"输入变没变"判据。
+ * 非加密用途，只为"输入变没变"判据。导出为 `stableHash` 供各插件自组合判据。
  */
-function cyrb53(input: string): string {
+export function stableHash(input: string): string {
   let h1 = 0xdeadbeef;
   let h2 = 0x41c6ce57;
   for (let i = 0; i < input.length; i++) {
@@ -58,6 +58,39 @@ function cyrb53(input: string): string {
   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
+}
+
+/**
+ * 合并多路输入判据为单一指纹（派生缓存往往不止依赖 ERB 正文）。
+ *
+ * 典型场景：条件抽取的产出里带 `variableSchema` 的语义标签，而 eraTW 的变量字典
+ * **由游戏 CSV 驱动**——只盯 ERB 指纹的话，改一个 `CFLAG.csv` 会让缓存继续吐旧标签。
+ *
+ * **任一路缺失 ⇒ 返回 null**（= 不缓存）。判据不全的缓存比没有缓存危险。
+ */
+export function combineDigests(parts: readonly (string | null | undefined)[]): string | null {
+  let acc = '';
+  for (const p of parts) {
+    if (!p) return null;
+    acc = stableHash(`${acc}\u0000${p}`);
+  }
+  return acc === '' ? null : acc;
+}
+
+/** 「什么都没读到」的确定摘要（区别于 undefined = 没有判据这回事） */
+const EMPTY_DIGEST = stableHash('\u0000empty-digest');
+
+/**
+ * 把一组素材折叠成**与顺序无关**的摘要：先排序，再逐条串接哈希。
+ *
+ * 用于"我实际读了这些文件/条目"这类判据（目录遍历顺序不该影响缓存键）。
+ * 空集合返回确定值 `EMPTY_DIGEST`——它表达"确实一无所读"，与"没有判据"是两回事。
+ */
+export function foldDigest(parts: Iterable<string>): string {
+  const sorted = [...parts].sort();
+  let acc = EMPTY_DIGEST;
+  for (const p of sorted) acc = stableHash(`${acc}\u0001${p}`);
+  return acc;
 }
 
 /**
@@ -74,5 +107,5 @@ export function projectFingerprintOf(stamps: Iterable<FileStamp>): string | null
     rows.push(`${s.path}\u0000${s.mtimeMs}\u0000${s.size}`);
   }
   rows.sort();
-  return cyrb53(rows.join('\u0001'));
+  return stableHash(rows.join('\u0001'));
 }

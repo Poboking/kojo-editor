@@ -57,6 +57,13 @@ export interface ConditionEngineDeps {
    * "抽取途中索引又变了 → 把旧结果存成新判据"的污染路径。
    */
   snapshot?: {
+    /**
+     * 组装**本次计算的命中判据**；返回 null = 判据不全 ⇒ 既不还原也不落盘。
+     *
+     * 判据归插件所有（它才知道 adapter 吃了哪些非 ERB 输入），引擎保持游戏无关：
+     * 引擎只负责"有判据且命中就跳过计算"。
+     */
+    expectFor(args: { project: GameProject; index: ErbIndex }): CacheExpect | null;
     load(expect: CacheExpect): Promise<ConditionIndex | null>;
     save(index: ConditionIndex, expect: CacheExpect): void;
   };
@@ -216,12 +223,11 @@ export class ConditionEngine implements ConditionExtractorService {
     }
 
     /**
-     * 本次计算实际使用的判据。指纹为 null（有文件取不到 stat）⇒ 不缓存也不还原，
-     * 保守回退全量（判据不可信的缓存比没有缓存更危险）。
+     * 本次计算实际使用的判据（由插件组装：ERB 体量指纹 + adapter 读过的非 ERB 输入）。
+     * 返回 null = 判据不全 ⇒ 不还原也不落盘，保守回退全量
+     * （判据不可信的缓存比没有缓存更危险）。
      */
-    const expect: CacheExpect | null = index.fingerprint
-      ? { projectRoot: project.rootDir, adapterId: project.adapterId, fingerprint: index.fingerprint }
-      : null;
+    const expect = this.deps.snapshot ? this.deps.snapshot.expectFor({ project, index }) : null;
 
     if (this.deps.snapshot && expect) {
       const cached = await this.deps.snapshot.load(expect);

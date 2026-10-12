@@ -18,6 +18,7 @@ import type {
   ConditionIndex,
   ConditionExtractorService,
   ControlFlowStatement,
+  ErbIndex,
   ErbParserService,
   FileIO,
   GameProject,
@@ -25,7 +26,7 @@ import type {
   ProjectService,
   SlotRegistry,
 } from '@kojo/plugin-api';
-import { EXTRACT_STORE_KEY, decodeConditionIndex, encodeConditionIndex } from './snapshot';
+import { EXTRACT_STORE_KEY, decodeConditionIndex, encodeConditionIndex, extractExpect } from './snapshot';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { ConditionEngine } from './engine';
 import type { SchemaLookup } from './extract';
@@ -67,6 +68,9 @@ export function createConditionExtractorPlugin(): Plugin {
        * 坏快照一律删除而不是"修"——fail-closed 与索引快照同口径。
        */
       const snapshotPort = {
+        expectFor({ index, project }: { index: ErbIndex; project: GameProject }): CacheExpect | null {
+          return extractExpect({ index, project });
+        },
         async load(expect: CacheExpect): Promise<ConditionIndex | null> {
           try {
             const raw = await storage.get<unknown>(EXTRACT_STORE_KEY);

@@ -58,8 +58,7 @@ describe('loadEratwVariableSchema', () => {
     } as unknown as FileIO;
   }
 
-  it('扫描目录、按文件名大写建表、lookup 双向可用', async () => {
-    const schema = await loadEratwVariableSchema({
+  it('扫描目录、按文件名大写建表、lookup 双向可用', async () => {    const schema = await loadEratwVariableSchema({
       io: fakeIo({
         'CFLAG.csv': '2,好感度\n4,信頼度\n',
         'Talent.csv': '3,恋慕\n',
@@ -85,5 +84,27 @@ describe('loadEratwVariableSchema', () => {
     } as unknown as FileIO;
     const schema = await loadEratwVariableSchema({ io: badIo, csvDir: '/game/CSV', log: silentLog });
     expect(schema.lookup('CFLAG', 2)).toBeUndefined();
+  });
+
+  it('inputDigest：同输入稳定、改描述即变、与目录顺序无关', async () => {
+    // 抽取结果里存着 schema 给的语义标签；变量字典由 CSV 驱动 ⇒ 判据必须含它，
+    // 否则改了 `CFLAG.csv` 一行描述，派生缓存还会吐旧标签。
+    const load = (files: Record<string, string>) =>
+      loadEratwVariableSchema({ io: fakeIo(files), csvDir: '/game/CSV', log: silentLog });
+    const set = { 'CFLAG.csv': '2,好感度\n', 'Talent.csv': '3,恋慕\n' };
+
+    const a = await load(set);
+    const b = await load({ 'Talent.csv': set['Talent.csv']!, 'CFLAG.csv': set['CFLAG.csv']! });
+    const changed = await load({ 'CFLAG.csv': '2,心情\n', 'Talent.csv': '3,恋慕\n' });
+    const extra = await load({ 'CFLAG.csv': set['CFLAG.csv']!, 'Talent.csv': '3,恋慕\n', 'Abl.csv': '1,身体\n' });
+
+    expect(typeof a.inputDigest).toBe('string');
+    expect(a.inputDigest).toBe(b.inputDigest);
+    expect(changed.inputDigest).not.toBe(a.inputDigest);
+    expect(extra.inputDigest).not.toBe(a.inputDigest);
+    // 一张都读不到时也是确定值（区别于 undefined = "没有判据"）
+    const none = await load({});
+    expect(typeof none.inputDigest).toBe('string');
+    expect(none.inputDigest).not.toBe(a.inputDigest);
   });
 });

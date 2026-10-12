@@ -35,6 +35,15 @@ export interface GameProject {
   /** 角色号 → 角色信息 */
   charaIndex: Map<number, CharaInfo>;
   gameVersion?: string;
+  /**
+   * 适配器在 `loadProject` 里**实际读过的非 ERB 输入**的内容摘要
+   * （CHARA 表、变量名称表……即 `charaIndex` / `variableSchema` 的来源数据）。
+   *
+   * 用途：ERB 正文的体量指纹覆盖不到这些文件，而派生缓存（条件抽取 / 约定校验）
+   * 的产出依赖它们。内核不解释内容，只把它当作"判据的一部分"透传。
+   * 缺省 ⇒ 下游派生缓存一律不命中（判据不全就不缓存）。
+   */
+  readonly inputDigest?: string;
 }
 
 /** 家族解析的形态类别 */
@@ -98,6 +107,14 @@ export interface VariableSchema {
   readonly version: string;
   /** 游戏中该 schema 对应的版本标记（如 '4.980'） */
   readonly gameVersion?: string;
+  /**
+   * 字典**实际读过的输入**（如游戏 CSV 名称表）的内容摘要。
+   *
+   * 变量字典可以由游戏数据驱动（eraTW 读 `CSV/*.csv`），此时 `version` 是静态的、
+   * 检不出"玩家改了 CSV 描述"。派生缓存（条件抽取的结果里带 schema 语义标签）
+   * 必须把它折进失效判据，否则改了 CSV 还会复用旧标签。缺省 ⇒ 下游一律不缓存。
+   */
+  readonly inputDigest?: string;
   lookup(variableName: string, index?: number | string): VariableInfo | undefined;
 }
 

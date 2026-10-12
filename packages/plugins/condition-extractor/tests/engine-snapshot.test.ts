@@ -19,7 +19,11 @@ import { ConditionEngine } from '../src/engine';
  */
 function makeComputeStub(): ComputePool {
   return {
-    async runSliced<T, R>(items: readonly T[], _opts: unknown, fn: (item: T, i: number) => R | Promise<R>): Promise<R[]> {
+    async runSliced<T, R>(
+      items: readonly T[],
+      _opts: unknown,
+      fn: (item: T, i: number) => R | Promise<R>,
+    ): Promise<R[]> {
       const out: R[] = [];
       for (let i = 0; i < items.length; i++) out.push(await fn(items[i]!, i));
       return out;
@@ -27,7 +31,12 @@ function makeComputeStub(): ComputePool {
   } as unknown as ComputePool;
 }
 
-const silentLog: Logger = { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
+const silentLog: Logger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
 
 const project: GameProject = {
   id: 'p1',
@@ -59,11 +68,11 @@ const file: ErbFile = {
   lineCount: 12,
 };
 
-const erbIndex = (fingerprint: string | null | undefined): ErbIndex =>
+const erbIndex = (): ErbIndex =>
   ({
     files: new Map([['D:/game/a.ERB', file]]),
     byName: new Map([[file.functions[0]!.normalizedName, [file.functions[0]!]]]),
-    fingerprint,
+    fingerprint: 'fp-erb',
   }) as ErbIndex;
 
 const cachedIndex = (): ConditionIndex => ({
@@ -86,16 +95,27 @@ const cachedIndex = (): ConditionIndex => ({
   stats: { functions: 1, functionsWithDeps: 0, predicates: 1, unparsed: 0, dependencies: 0 },
 });
 
+/** 判据由**插件**组装（引擎不懂指纹从哪来），测试里也照这个边界给替身 */
+const EXPECT: CacheExpect = { projectRoot: 'D:/game', adapterId: 'eratw', fingerprint: 'combined-fp' };
+
+type Port = NonNullable<ConstructorParameters<typeof ConditionEngine>[0]['snapshot']>;
+
 function makeEngine(args: {
-  fingerprint?: string | null;
-  snapshot?: { load(expect: CacheExpect): Promise<ConditionIndex | null>; save(index: ConditionIndex, expect: CacheExpect): void };
+  port?: Partial<Pick<Port, 'load' | 'save'>> & { expectFor?: () => CacheExpect | null };
   counters?: { reads: number; scans: number };
 }) {
   const counters = args.counters ?? { reads: 0, scans: 0 };
+  const port: Port | undefined = args.port
+    ? {
+        expectFor: args.port.expectFor ?? (() => EXPECT),
+        load: args.port.load ?? (async () => null),
+        save: args.port.save ?? (() => undefined),
+      }
+    : undefined;
   const engine = new ConditionEngine({
     log: silentLog,
     getProject: () => project,
-    getIndex: () => erbIndex(args.fingerprint === undefined ? 'fp1' : args.fingerprint),
+    getIndex: erbIndex,
     readFile: async () => {
       counters.reads++;
       return ';comment\nIF CFLAG:2>=500\nENDIF\n';
@@ -108,7 +128,7 @@ function makeEngine(args: {
       ];
     },
     getSchemaLookup: () => undefined,
-    snapshot: args.snapshot,
+    snapshot: port,
     compute: makeComputeStub(),
   });
   return { engine, counters };
@@ -122,7 +142,7 @@ describe('ConditionEngine 的快照短路', () => {
     const saves: CacheExpect[] = [];
     const { engine } = makeEngine({
       counters,
-      snapshot: {
+      port: {
         async load(expect) {
           loads.push(expect);
           return cached;
@@ -138,13 +158,13 @@ describe('ConditionEngine 的快照短路', () => {
     expect(counters.reads).toBe(0);
     expect(counters.scans).toBe(0);
     expect(saves).toHaveLength(0);
-    expect(loads).toEqual([{ projectRoot: 'D:/game', adapterId: 'eratw', fingerprint: 'fp1' }]);
+    expect(loads).toEqual([EXPECT]);
   });
 
-  it('未命中 ⇒ 全量计算，并把**本次实际使用的判据**交给 save（避免途中换索引造成污染）', async () => {
+  it('未命中 ⇒ 全量计算，并把**本次实际使用的判据**交给 save（途中换索引也不污染）', async () => {
     const saved: { index: ConditionIndex; expect: CacheExpect }[] = [];
     const { engine, counters } = makeEngine({
-      snapshot: {
+      port: {
         async load() {
           return null;
         },
@@ -158,29 +178,48 @@ describe('ConditionEngine 的快照短路', () => {
     expect(counters.reads).toBe(1);
     expect(out.byFunction.has('M_KOJO_K1_A')).toBe(true);
     expect(saved).toHaveLength(1);
-    expect(saved[0]!.expect).toEqual({ projectRoot: 'D:/game', adapterId: 'eratw', fingerprint: 'fp1' });
+    expect(saved[0]!.expect).toEqual(EXPECT);
     expect(saved[0]!.index.stats.functions).toBe(1);
   });
 
-  it('指纹不可得（null / 空串）⇒ 既不还原也不落盘（保守回退全量）', async () => {
-    for (const fp of [null, ''] as const) {
-      let called = 0;
-      const { engine, counters } = makeEngine({
-        fingerprint: fp,
-        snapshot: {
-          async load() {
-            called++;
-            return null;
-          },
-          save() {
-            called++;
-          },
+  it('判据不全（expectFor 返回 null）⇒ 既不还原也不落盘，但仍真算', async () => {
+    let touched = 0;
+    const { engine, counters } = makeEngine({
+      port: {
+        expectFor: () => null,
+        async load() {
+          touched++;
+          return null;
         },
-      });
-      await engine.run();
-      expect(called).toBe(0);
-      expect(counters.reads).toBe(1); // 仍然真算，结果正确性不受影响
-    }
+        save() {
+          touched++;
+        },
+      },
+    });
+    const out = await engine.run();
+    expect(touched).toBe(0);
+    expect(counters.reads).toBe(1);
+    expect(out.byFunction.size).toBe(1);
+  });
+
+  it('判据每次运行现取（改文件后 expectFor 变 ⇒ 老快照不会误命中）', async () => {
+    const seen: string[] = [];
+    let n = 0;
+    const { engine } = makeEngine({
+      port: {
+        expectFor: () => ({ ...EXPECT, fingerprint: `fp-${n++}` }),
+        async load(expect) {
+          seen.push(expect.fingerprint);
+          return null;
+        },
+        save() {
+          /* 不落盘即可 */
+        },
+      },
+    });
+    await engine.ensureIndex();
+    await engine.run();
+    expect(seen).toEqual(['fp-0', 'fp-1']);
   });
 
   it('无 snapshot 端口时行为与改造前一致（可选依赖，零副作用）', async () => {
@@ -189,22 +228,12 @@ describe('ConditionEngine 的快照短路', () => {
     expect(out.byFunction.size).toBe(1);
   });
 
-  it('restore 立即对订阅者可见，且明细缓存被旁路（不会拿旧项目的谓词）', () => {
-    const { engine } = makeEngine({});
-    const seen: (ConditionIndex | null)[] = [];
-    engine.subscribe((i) => seen.push(i));
-    engine.restore(cachedIndex());
-    expect(seen).toHaveLength(2); // subscribe 立即回调一次（null）+ restore 一次
-    expect(seen[1]!.byFunction.size).toBe(1);
-    expect(engine.functionConditions('M_KOJO_K1_A')?.predicateCount).toBe(1);
-  });
-
   it('并发 ensureIndex 只算一次（自动触发与面板显式调用共享在途 Promise）', async () => {
-    // 真实语料上一次全量抽取 ≈ 8.8 s；两条并发的全量抽取就是白等两个 8.8 s。
-    // 级联实测（2026-10-12）曾因自动路径调 run()、显式路径调 ensureIndex() 而跑了两遍。
+    // 真实语料上一次全量抽取 ≈ 8.8 s；并发两条全量抽取就是白等两个 8.8 s。
+    // 级联实测（2026-10-12）曾因自动路径调 run()、显式路径调 ensureIndex() 跑了两遍。
     let saves = 0;
     const { engine, counters } = makeEngine({
-      snapshot: {
+      port: {
         async load() {
           return null;
         },
@@ -218,5 +247,15 @@ describe('ConditionEngine 的快照短路', () => {
     expect(saves).toBe(1);
     expect(a).toBe(b);
     expect(b).toBe(c);
+  });
+
+  it('restore 立即对订阅者可见，且明细缓存被旁路（不会拿旧项目的谓词）', () => {
+    const { engine } = makeEngine({});
+    const seen: (ConditionIndex | null)[] = [];
+    engine.subscribe((i) => seen.push(i));
+    engine.restore(cachedIndex());
+    expect(seen).toHaveLength(2); // subscribe 立即回调一次（null）+ restore 一次
+    expect(seen[1]!.byFunction.size).toBe(1);
+    expect(engine.functionConditions('M_KOJO_K1_A')?.predicateCount).toBe(1);
   });
 });

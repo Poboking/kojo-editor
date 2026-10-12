@@ -17,13 +17,41 @@
  * 调用方全量重算（并顺手删除坏快照），绝不"修"快照。抽取结果直接喂给条件矩阵与
  * 回放徽章——错一次的代价远大于多等十秒。
  */
-import type { CacheExpect, ConditionIndex, FunctionConditions } from '@kojo/plugin-api';
+import { combineDigests } from '@kojo/plugin-api';
+import type {
+  CacheExpect,
+  ConditionIndex,
+  ErbIndex,
+  FunctionConditions,
+  GameProject,
+} from '@kojo/plugin-api';
 
 /** 快照格式版本；改 `FunctionConditions`/`StateDependency` 语义或抽取口径时 +1 */
 export const EXTRACT_SNAPSHOT_FORMAT = 1;
 
 /** 存储键（固定：判据在快照本体里，变化即覆盖，不留历史垃圾） */
 export const EXTRACT_STORE_KEY = 'extract-snapshot-v1';
+
+/**
+ * 组装本次抽取的命中判据。
+ *
+ * **两路输入都齐才允许缓存**：
+ * - `index.fingerprint` —— ERB 正文的体量指纹（抽取吃的是正文与控制流骨架）；
+ * - `project.inputDigest` —— adapter 在 `loadProject` 里吃进的**非 ERB 输入**。
+ *   eraTW 的变量字典由 `CSV/*.csv` 驱动，抽取结果里的 `StateDependency.schema`
+ *   标签正是它给的：只看 ERB 指纹时，改一行 `CFLAG.csv` 描述会让快照继续吐旧标签
+ *   （2026-10-12 自查发现，见 IMPLEMENTATION-LOG 本批记录）。
+ *
+ * 缺任一路 ⇒ null ⇒ 全量重算。少缓存一次只是慢，错缓存一次是拿错的语义标注喂 UI。
+ */
+export function extractExpect(args: {
+  index: Pick<ErbIndex, 'fingerprint'>;
+  project: Pick<GameProject, 'rootDir' | 'adapterId' | 'inputDigest'>;
+}): CacheExpect | null {
+  const fingerprint = combineDigests([args.index.fingerprint, args.project.inputDigest]);
+  if (!fingerprint) return null;
+  return { projectRoot: args.project.rootDir, adapterId: args.project.adapterId, fingerprint };
+}
 
 /** 落盘形态（JSON 安全；Map 以条目数组保存，保留计算序） */
 export interface StoredConditionIndex {

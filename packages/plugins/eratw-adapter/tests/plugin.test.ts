@@ -135,6 +135,23 @@ describe('eraTW adapter · loadProject', () => {
     expect(project.charaIndex.get(99)?.name).toBe('Ghost [幽霊]');
   });
 
+  it('inputDigest 覆盖非 ERB 输入：同树稳定，改 CSV / 改角色目录名都变', async () => {
+    // 派生缓存（条件抽取 / 约定校验）的判据只看 ERB 体量指纹是不够的：
+    // 变量字典与 charaIndex 都来自 CSV，改一行描述必须让缓存失效。
+    const load = (tree: Tree) => activate(fakeIO(tree)).adapter.loadProject(ROOT);
+    const a = await load(standardTree());
+    const b = await load(standardTree());
+    const csvChanged = standardTree();
+    csvChanged[`${ROOT}/CSV/CFLAG.csv`] = '2,心情\n4,信頼度\n';
+    const dirChanged = standardTree();
+    dirChanged[`${ROOT}/ERB/口上・メッセージ関連/個人口上/001 Reimu X`] = 'DIR';
+
+    expect(typeof a.inputDigest).toBe('string');
+    expect(a.inputDigest).toBe(b.inputDigest);
+    expect(await load(csvChanged).then((p) => p.inputDigest)).not.toBe(a.inputDigest);
+    expect(await load(dirChanged).then((p) => p.inputDigest)).not.toBe(a.inputDigest);
+  });
+
   it('口上目录名不合约定 → 警告且跳过', async () => {
     const tree = standardTree();
     tree[`${ROOT}/ERB/口上・メッセージ関連/個人口上/weird_name`] = 'DIR';
