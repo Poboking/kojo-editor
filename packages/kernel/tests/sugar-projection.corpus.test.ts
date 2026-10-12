@@ -270,15 +270,18 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 口径说明：行覆盖的分母是**全部行**（含函数骨架、赋值、调用、注释、空行），
       // 因此它天然低于台词行覆盖——两者不可互相替代（`docs/LIFT-REMEASURE` §三 那种
       // "6.5% 行覆盖"与这里的台词行覆盖是两把尺子）。
-      expect(total.speechProjected / Math.max(1, total.speechLines)).toBeGreaterThan(0.95);
-      // 批 F：**全部输出行**（含非 FORM 系与裸 FORM 拼句片段）——新能力的守门读数。
-      // 用它替代"只数四个 FORM 变体"的窄尺子，否则投影少认一类 `PRINTL` 也不会红。
-      expect(total.outputProjected / Math.max(1, total.outputLines)).toBeGreaterThan(0.95);
+      expect(total.speechProjected / Math.max(1, total.speechLines)).toBeGreaterThan(0.99);
+      // 批 F/G 后的实测读数（全量 2,285 文件）：台词行 **99.2%**（990,914/999,114）、
+      // 输出行 **99.2%**（1,060,647/1,069,516）、行覆盖 56.5%。
+      // 下限取 0.99 的依据（两个"退化后落点"都算过）：
+      // - 退回"非 FORM 系 / 裸 FORM 不投影"（批 F 前）→ 输出行 ≈ 86%，红；
+      // - 退回"行内条件一律留原代码"（批 G 前）→ 台词行 98.6%，红。
+      expect(total.outputProjected / Math.max(1, total.outputLines)).toBeGreaterThan(0.99);
       expect(total.filesWithSegments / Math.max(1, total.files)).toBeGreaterThan(0.9);
       expect(total.projected / Math.max(1, total.totalLines)).toBeGreaterThan(0.5);
       // 口上目录是主战场，台词行要求更严
-      expect(kojo.speechProjected / Math.max(1, kojo.speechLines)).toBeGreaterThan(0.95);
-      expect(kojo.outputProjected / Math.max(1, kojo.outputLines)).toBeGreaterThan(0.95);
+      expect(kojo.speechProjected / Math.max(1, kojo.speechLines)).toBeGreaterThan(0.99);
+      expect(kojo.outputProjected / Math.max(1, kojo.outputLines)).toBeGreaterThan(0.99);
 
       await kernel.stop();
     },

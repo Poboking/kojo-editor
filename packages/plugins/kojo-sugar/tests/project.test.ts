@@ -81,17 +81,15 @@ describe('糖投影 · 台词行', () => {
     expect(r.stats.nativeLines).toBe(0);
   });
 
-  it('表外变体 / FORM 行内条件 → 原样保留（不静默）', () => {
-    // 批 F 后 `PRINTL` 已有显示口径（见「输出家族全覆盖」组），表外的按钮类仍原样
-    const r = project(
-      ['PRINTL 非 FORM 系', 'PRINTBUTTON "x", 1', 'PRINTFORML \\@ X ? A # B \\@'].join('\n'),
-    );
+  it('表外变体 → 原样保留（不静默）', () => {
+    // 批 F 后 `PRINTL` 已有显示口径（见「输出家族全覆盖」组），表外的按钮类仍原样；
+    // 行内条件的降级见「批 G」组。
+    const r = project(['PRINTL 非 FORM 系', 'PRINTBUTTON "x", 1'].join('\n'));
     expect(r.segments).toHaveLength(1);
     expect(segLines(r.segments[0]!)).toEqual(['非 FORM 系 续']);
-    expect(r.stats.nativeLines).toBe(2);
+    expect(r.stats.nativeLines).toBe(1);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['unsupported-print-variant']).toBe(1);
-    expect(reasons['inline-condition']).toBe(1);
   });
 });
 
@@ -150,6 +148,11 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
     expect(reasonsOf(r)['unsupported-print-variant']).toBe(4);
   });
 
+  it('块内的空行**不带缩进**（否则编辑器里是一条无内容的彩色横条）', () => {
+    const r = project(['IF A', '\tPRINTFORMW 甲', '\tPRINTFORML', '\tPRINTFORMW 乙', 'ENDIF'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['如果 A：', '\t甲', '', '\t乙']);
+  });
+
   it('裸 FORM 片段（PRINTFORM / PRINTFORMD）→ 文本行 + 可读化，但**不加**「续」', () => {
     // `续` 在糖里 = `L`（换行不等待）；无后缀是"不换行"，糖没有等价标记（规范 §3.3 能力边界），
     // 故投影成独立文本行、不谎称续行。
@@ -202,6 +205,73 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
     expect(stats.projectedLines + stats.passthroughLines + stats.nativeLines).toBe(stats.totalLines);
     expect(stats.totalLines).toBe(7);
     expect(stats.projectedLines).toBe(3);
+  });
+});
+
+/* ==================== 批 G：行内条件 → 糖三元 ==================== */
+
+describe('糖投影 · 行内条件 `\\@cond?A#B\\@` → `{cond ? "A" : "B"}`（批 G）', () => {
+  const dict = {
+    resolveFamily: () => undefined,
+    resolve: () => undefined,
+    nameAt: (family: string, index: string): string | undefined =>
+      family === 'CFLAG' && index === '1088' ? '好感度' : undefined,
+  };
+  const withDict = (source: string) =>
+    liftProject(
+      { transpile: () => { throw new Error('x'); }, scanControlFlow, dictionary: () => dict },
+      { source },
+    );
+
+  it('语料原型：条件原样 + 字面分支加引号 + 体外照旧投影', () => {
+    const r = project('PRINTFORML 「你看、\\@ TALENT:MASTER:性別 == 2 ? 非常帅气的 # 非常可爱 \\@的样子哦」');
+    expect(segLines(r.segments[0]!)).toEqual([
+      '「你看、{TALENT:MASTER:性別 == 2 ? "非常帅气的" : "非常可爱"}的样子哦」 续',
+    ]);
+  });
+
+  it('空分支 → `""`（不省写，读者看得见"这一支没有字"）', () => {
+    const r = project('PRINTFORMDW 「%CALLNAME:MASTER%, what \\@ARG?are you doing#brings you to\\@ my room?」');
+    expect(segLines(r.segments[0]!)).toEqual([
+      '「{你}, what {ARG ? "are you doing" : "brings you to"} my room?」',
+    ]);
+  });
+
+  it('分支是变量引用 → 原样照抄（糖 §3.4 禁嵌套插值，不造读者写不出来的假语法）', () => {
+    const r = project('PRINTFORML 走向\\@ GROUPMATCH(ARG,35,40) ? %LOCALS:1% # %LOCALS:0% \\@');
+    expect(segLines(r.segments[0]!)).toEqual(['走向{GROUPMATCH(ARG,35,40) ? %LOCALS:1% : %LOCALS:0%} 续']);
+  });
+
+  it('一行两支：全部降为三元，体外文本仍走可读化', () => {
+    const r = project(
+      'PRINTFORMW %CALLNAME:MASTER%为\\@ A == 5 ? 正在休憩的 #  \\@%CALLNAME:TARGET%\\@ GET_TARGETNUM() > 1 ? 们 # \\@沏了壶茶',
+    );
+    expect(segLines(r.segments[0]!)).toEqual([
+      '{你}为{A == 5 ? "正在休憩的" : ""}{她}{GET_TARGETNUM() > 1 ? "们" : ""}沏了壶茶',
+    ]);
+  });
+
+  it('条件走表达式反糖（与控制流同一把尺子）', () => {
+    const r = withDict('PRINTFORMW 她\\@ CFLAG:TARGET:1088 >= 500 ? 靠近 # 退开 \\@过来');
+    expect(segLines(r.segments[0]!)).toEqual(['她{她的好感度 >= 500 ? "靠近" : "退开"}过来']);
+  });
+
+  it('判据不满足 → **整行**原样保留（不配对 / 缺 `#` / 空条件），一行都不猜', () => {
+    const r = project(
+      [
+        'PRINTFORML 前半 \\@ A ? x # y \\@ 后半 \\@', // `\@` 个数不成对
+        'PRINTFORML \\@ A ? x \\@', // 省略假分支（语料无此形态）
+        'PRINTFORML \\@ ? x # y \\@', // 空条件
+        'PRINTFORML 正常一行',
+      ].join('\n'),
+    );
+    expect(r.segments.map((s) => s.fromLine)).toEqual([4]);
+    expect(r.stats.nativeByReason.find((x) => x.reason === 'inline-condition')?.count).toBe(3);
+  });
+
+  it('行内条件在 IF 条件里不生效（控制流表达式不走文本体通道）', () => {
+    const r = project('IF X == \\@ A ? b # c \\@\nPRINTFORMW 甲\nENDIF');
+    expect(segLines(r.segments[0]!)).toEqual(['如果 X == \\@ A ? b # c \\@：', '\t甲']);
   });
 });
 

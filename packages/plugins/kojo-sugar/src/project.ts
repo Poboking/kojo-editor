@@ -22,7 +22,8 @@
  * | `ENDSELECT` | 缩进收束（不显示） |
  * | `;注释` / 空行 | **原样透传**（`;` 注释在糖里语法完全一样） |
  * | `%CALLNAME:TARGET%` / `%CALLNAME:MASTER%` | `{她}` / `{你}`（**可读化**，见下） |
- * | 其余（`SIF` / 循环 / TRY / PRINTDATA / 按钮 / 行内条件 …） | **原样保留为 ERB** |
+ * | `\@条件?A#B\@`（FORM 行内的三元输出） | `{条件 ? "A" : "B"}`（糖三元，规范 §3.4） |
+ * | 其余（`SIF` / 循环 / TRY / PRINTDATA / 按钮 …） | **原样保留为 ERB** |
  *
  * ## 可读化（本模块与 `lift.ts` 最大的取向差异）
  *
@@ -374,14 +375,20 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         });
         continue;
       }
-      // 行内条件只对 **FORM 行**成立：非 FORM 行里的 `\@` 是被打印的字面字符
-      // （真实语料实证：`PRINTDL` 含 `\@` 的 518 行全是 ASCII 图形文字）。
-      if (variant.form && hasInlineCondition(body)) {
+      // **可读化只对 FORM 行做**（文件头纪律 2）；非 FORM 行逐字符原样。
+      // FORM 行的行内条件 `\@cond?A#B\@` 先降为糖三元（批 G）；解析不了 → 整行原样（不猜）。
+      let text: string | undefined;
+      if (!variant.form) {
+        text = body;
+      } else {
+        text = hasInlineCondition(body)
+          ? inlineConditionsToSugar(body, deps)
+          : readableText(body, deps);
+      }
+      if (text === undefined) {
         recs.push(native(ln, 'inline-condition'));
         continue;
       }
-      // **可读化只对 FORM 行做**（文件头纪律 2）；非 FORM 行逐字符原样
-      const text = variant.form ? readableText(body, deps) : body;
       recs.push({
         line: ln,
         kind: 'speech',
@@ -489,7 +496,8 @@ function toSegment(run: LineRec[]): SugarProjectSegment {
   const base = visible.reduce((m, r) => Math.min(m, r.indent), Number.POSITIVE_INFINITY);
   const baseIndent = Number.isFinite(base) ? base : 0;
   const text = visible
-    .map((r) => '\t'.repeat(Math.max(0, r.indent - baseIndent)) + r.text)
+    // 空行（"打空行"的输出）不带缩进：行首制表符在编辑器里是一条无内容的彩色横条
+    .map((r) => (r.text.length === 0 ? '' : '\t'.repeat(Math.max(0, r.indent - baseIndent)) + r.text))
     .join('\n');
   return {
     fromLine: run[0]!.line,
@@ -828,9 +836,65 @@ function indentLevelOf(line: string): number {
   return tabs + (spaces > 0 ? Math.ceil(spaces / 4) : 0);
 }
 
-/** 行内条件 `\@…\@` 检测（本版不投影） */
+/** 行内条件 `\@…\@` 检测（只对 FORM 行有语义：非 FORM 行里的 `\@` 是字面字符） */
 function hasInlineCondition(text: string): boolean {
   return text.includes('\\@') || text.includes('@\\');
+}
+
+/**
+ * 行内条件 `\@cond?A#B\@` → 糖三元 `{cond ? "A" : "B"}`（批 G，规范 §3.4）。
+ *
+ * 真实语料实测（2,285 文件、`\@` 出现行 8,582）：**7,997 行恰有两个 `\@`**（一支 span），
+ * 且首个 span 几乎全部**同时含 `?` 与 `#`**（三元形态）。判据因此取最紧的形态，
+ * 任一条不满足就**整行放弃**（返回 `undefined` → 保留原生）——把条件猜错显示成"读者以为
+ * 看懂了"，比留一行原代码危险得多：
+ *
+ * 1. `\@` 个数为**偶数**（成对；语料里 `\@×3` / `\@×5` 共 18 行是断串，不猜）；
+ * 2. span 内**同时**有 `?` 与 `#`（省略假分支的 `{cond ? "A"}` 形态语料里没有）；
+ * 3. 条件段非空。
+ *
+ * 三段各自的处置（都不造读者写不出来的假语法）：
+ * - **条件**走表达式反糖（与控制流同一个 `reverseExprAttributes`：词级替换、双引号内不碰）；
+ * - **纯字面分支**加双引号（糖的分支字面量写法）；空分支 → `""`；
+ * - 分支含 `%` / `"` / `{` / `}` 时**原样照抄**——规范 §3.4 明确"嵌套插值不出现"，
+ *   给变量引用套引号是把它当字面量，给它反糖又会产生嵌套 `{…}`，两头都错；
+ * - **体外文本**照旧走 `readableText`（代词 / 属性反糖）。
+ */
+function inlineConditionsToSugar(body: string, deps: LiftDeps): string | undefined {
+  const parts = body.split('\\@');
+  if ((parts.length - 1) % 2 !== 0) return undefined;
+  let out = '';
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      out += readableText(parts[i]!, deps);
+      continue;
+    }
+    const sugar = inlineSpanToSugar(parts[i]!, deps);
+    if (sugar === undefined) return undefined;
+    out += sugar;
+  }
+  return out;
+}
+
+/** 单支 `\@…\@` 之间的内容 → `{cond ? "A" : "B"}`；判据不满足返回 `undefined` */
+function inlineSpanToSugar(span: string, deps: LiftDeps): string | undefined {
+  const q = span.indexOf('?');
+  if (q < 0) return undefined;
+  const after = span.slice(q + 1);
+  const h = after.indexOf('#');
+  if (h < 0) return undefined;
+  const cond = span.slice(0, q).trim();
+  if (cond.length === 0) return undefined;
+  const a = branchText(after.slice(0, h));
+  const b = branchText(after.slice(h + 1));
+  return `{${reverseExprAttributes(cond, deps)} ? ${a} : ${b}}`;
+}
+
+/** 分支呈现：空 → `""`；含 FORM 记号或引号 → 原样；纯字面 → 加引号 */
+function branchText(raw: string): string {
+  const t = raw.trim();
+  if (t.length === 0) return '""';
+  return /[%"{}]/.test(t) ? t : `"${t}"`;
 }
 
 /**

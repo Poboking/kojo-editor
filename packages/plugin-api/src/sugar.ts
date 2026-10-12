@@ -1494,8 +1494,9 @@ export type SugarProjectNativeReason =
    * 的文本体**已投影为文本行**——批 F；`PRINTDATA` 系是块开词，归 `unsupported-control-flow`。）
    */
   | 'unsupported-print-variant'
-  /** **FORM 行**（`PRINTFORM*`）含行内条件 `\@…\@`——本版不做这类投影
-   *（非 FORM 行里的 `\@` 是被打印的字面字符，不受本因影响） */
+  /** **FORM 行**（`PRINTFORM*`）的行内条件 `\@cond?A#B\@` **解析不了**时才保留原生
+   *（批 G 起默认投影为糖三元 `{cond ? "A" : "B"}`；不配对 / 缺 `?` 或 `#` / 空条件 → 整行不猜）。
+   * 非 FORM 行里的 `\@` 是被打印的字面字符，不受本因影响 */
   | 'inline-condition'
   /** 糖未覆盖的控制流（`SIF` / 循环 / TRY 系 / PRINTDATA 系 / `$标签` / `GOTO` 等） */
   | 'unsupported-control-flow'
