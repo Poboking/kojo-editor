@@ -13,7 +13,7 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     expect(KERNEL_EVENT_CLASSIFICATION_GUARD).toBe(true);
   });
 
-  it('白名单 = 插件可 emit 的 14 个内核事件（快照守门）', () => {
+  it('白名单 = 插件可 emit 的 15 个内核事件（快照守门）', () => {
     expect([...KERNEL_EVENT_NAMES].sort()).toEqual(
       [
         'file.changed',
@@ -30,6 +30,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
         'editor.liftPreview.hide',
         'ui.overlay.open',
         'ui.overlay.close',
+        // 2026-10-12 工作区批：导入意图（宿主文件树右键 → 工作区消费方）
+        'workspace.importRequested',
       ].sort(),
     );
   });
@@ -41,6 +43,6 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
   });
 
   it('白名单无重复（Set 语义自证：长度 = 快照清单长度）', () => {
-    expect(KERNEL_EVENT_NAMES.size).toBe(14);
+    expect(KERNEL_EVENT_NAMES.size).toBe(15);
   });
 });
