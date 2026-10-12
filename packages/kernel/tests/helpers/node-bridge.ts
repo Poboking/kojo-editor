@@ -142,6 +142,11 @@ export class NodeBridge implements PlatformBridge {
     throw new Error('exportDirectory is not supported by NodeBridge');
   }
 
+  async exportFile(): Promise<string | null> {
+    // 同上：单文件导出依赖系统保存对话框
+    throw new Error('exportFile is not supported by NodeBridge');
+  }
+
   appDataDir(): Promise<string> {
     return Promise.resolve(this.dataDir);
   }

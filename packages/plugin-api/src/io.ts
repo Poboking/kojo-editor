@@ -71,6 +71,15 @@ export interface FileIO {
    * 平台无对话框能力（Node 桥）时抛错，调用侧自解释呈现。
    */
   exportDirectory(srcDir: string, opts?: { title?: string }): Promise<string | null>;
+  /**
+   * 导出**单个文件**（2026-10-12 导出批）：平台保存对话框选落点 + 写字节，
+   * 绑定在同一平台命令内。返回落点完整路径；取消 → null。
+   *
+   * 这是**唯一**一条合法的"写到白名单之外"通道（除 `exportDirectory` 外），
+   * 授权来自用户在系统对话框里的显式选择，故内核侧刻意不调 `assertWritable`。
+   * 平台无对话框能力（Node 桥）时抛错，调用侧自解释呈现。
+   */
+  exportFile(fileName: string, bytes: Uint8Array, opts?: { title?: string }): Promise<string | null>;
 }
 
 /** 越权写入错误（内核抛出、UI 捕获展示） */

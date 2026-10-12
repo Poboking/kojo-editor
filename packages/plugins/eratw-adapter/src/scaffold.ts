@@ -8,6 +8,16 @@
  *   内容纯 `;` 注释，**绝不生成活函数**（活函数由作者写，工具不替作者做决定）；
  * - **不生成四件套文件**（登记/配色/开关等是函数级产物，属作者后续创作）。
  *
+ * ## 为什么核心面空壳是 `.kojo` 而不是 `.ERB`（用户反馈 1，2026-10-12）
+ *
+ * `.kojo` 是**超集**：语法糖与原始 ERB 写法可以在同一个文件里混排（原生语句按规范
+ * 逐行透传），而 `.ERB` 只能写原生。新建项目时作者还没决定要用哪种，所以脚手架
+ * 一律给 `.kojo`——**先不要替作者收窄表达**。导出/部署时再统一转译成游戏认得的
+ * `.ERB`（见 `#17`），工作区里始终只有 `.kojo` 这一份源。
+ *
+ * 空壳内容全是 `;` 注释，而 `;` 注释在糖里语法完全一样 ⇒ 同一份内容在两种扩展名下
+ * 都合法，改的只是"作者接下来能在这个文件里写什么"。
+ *
  * 面模板示例取自本包 `face-templates.ts`（游戏知识单一真源；只代入不解释）。
  */
 
@@ -38,7 +48,10 @@ export interface KojoScaffoldResult {
   files: Record<string, string>;
 }
 
-/** 核心面空壳规格（中文命名；文件名 = stem + '.ERB'） */
+/** 核心面空壳的文件扩展名（README 清单与实际产物必须同源于此） */
+export const FACE_STUB_EXT = '.kojo';
+
+/** 核心面空壳规格（中文命名；文件名 = stem + '.kojo'） */
 export interface CoreFaceSpec {
   /** 文件名干（不含扩展名） */
   stem: string;
@@ -124,21 +137,28 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
   lines.push('');
   lines.push('## 内容');
   lines.push('');
-  lines.push('本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）：');
+  lines.push(
+    '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
+      '扩展名是 `.kojo`：语法糖与原始 ERB 写法可以写在同一个文件里，' +
+      '导出或部署时会自动转译成游戏认得的 `.ERB`，工作区里始终只有 `.kojo` 这一份源。',
+  );
   lines.push('');
   for (const spec of CORE_FACES) {
-    lines.push(`- \`${spec.stem}.ERB\` — ${spec.blurb}`);
+    lines.push(`- \`${spec.stem}${FACE_STUB_EXT}\` — ${spec.blurb}`);
   }
   lines.push('');
   lines.push('## 部署');
   lines.push('');
-  lines.push('把本包整个文件夹放入游戏目录：');
+  lines.push('编辑器的「部署到游戏目录」会把本包转译后放进游戏目录：');
   lines.push('');
   lines.push('```');
   lines.push(`ERB/口上・メッセージ関連/個人口上/<角色口上目录>/${scaffoldDirName(opts)}/`);
   lines.push('```');
   lines.push('');
-  lines.push('编辑器的「部署到游戏目录」可自动完成（游戏目录默认只读，需先批准写权限）。');
+  lines.push('（游戏目录默认只读，需先批准写权限；目标已存在时不会覆盖。）');
+  lines.push('');
+  lines.push('手工放置也可以：先把 `.kojo` 全部转译成同名 `.ERB`，再把 `.ERB` 连同辅助文件复制过去。');
+  lines.push('**直接把 `.kojo` 放进游戏目录是不生效的**——引擎只读 `.ERB`。');
   lines.push('');
   lines.push('## 许可');
   lines.push('');
@@ -188,7 +208,7 @@ export function scaffoldKojoProject(
   files['README.md'] = buildReadme(opts);
   if (opts.includeLicense) files['LICENSE'] = buildLicense(opts);
   for (const spec of CORE_FACES) {
-    files[`${spec.stem}.ERB`] = buildFaceStub(spec, opts, faceTable);
+    files[`${spec.stem}${FACE_STUB_EXT}`] = buildFaceStub(spec, opts, faceTable);
   }
 
   return { dirName: scaffoldDirName(opts), files };

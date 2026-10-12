@@ -5,12 +5,13 @@ import type {
   GameProject,
   Plugin,
   ProjectService,
+  SugarTranspileService,
   VariableSchema,
   WorkspaceArtifact,
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { KernelServices, combineDigests, foldDigest, join } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, combineDigests, foldDigest, join } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { clearKojoFamilyMemo, createEratwFamilyIndex } from './family-index';
@@ -21,6 +22,7 @@ import { createEratwFaceTable } from './face-templates';
 import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
 import { readPackageAttribution, type AttributionState as AttrState } from './attribution';
 import { createPackageActions } from './package-actions';
+import type { KojoCompiler } from './artifact';
 import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID, createDeployKojoWizard } from './deploy-wizard';
@@ -136,7 +138,24 @@ export function createEratwAdapterPlugin(): Plugin {
 
       /* ---- 包操作（P-D 导出；P-E 部署复用同一控制器与底部状态条） ---- */
 
-      const actions = createPackageActions({ io, log: ctx.log, notify: notifyWs });
+      /**
+       * `.kojo` → 产物字节。**故意延迟到点击时才 `tryInject`**：
+       * ① 语法糖插件被停用时，游戏识别/浏览/导出无 `.kojo` 的包都应照常工作——
+       *    写成 `requires` 硬依赖会把整个 adapter 一起拖下线；
+       * ② adapter 通常早于糖插件激活，activate 当场取会取到 undefined，
+       *    放到调用时取，激活顺序就与功能无关了。
+       * 取不到时抛中文错误，由 `planArtifacts` 包装成「某个 .kojo 转译失败，未生成制品」——
+       * 宁可拒绝，也不把 `.kojo` 原样塞进游戏目录（那是"装了不生效"）。
+       */
+      const compileKojo: KojoCompiler = (source, label) => {
+        const sugar = ctx.tryInject<SugarTranspileService>(WellKnownServices.SugarTranspile);
+        if (!sugar) {
+          throw new Error(`「${label}」需要语法糖服务（kojo-sugar 插件未启用），无法转成 .ERB`);
+        }
+        return sugar.compileToBytes(source, undefined, label);
+      };
+
+      const actions = createPackageActions({ io, log: ctx.log, notify: notifyWs, compileKojo });
       ctx.onDispose(() => actions.dispose());
 
       /* ---- 部署请求（P-E）：面板包行「部署」→ 向导确认落点与写权限 ---- */

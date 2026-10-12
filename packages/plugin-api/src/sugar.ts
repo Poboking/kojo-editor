@@ -645,6 +645,14 @@ export interface SugarCompileResult {
   diagnostics: SugarDiagnostic[];
 }
 
+/** 内存编译产物（`compileToBytes` 的结果；零 IO，供导出 ZIP 直接吃） */
+export interface SugarCompiledBytes {
+  /** 落盘字节（BOM + 换行 + 末尾换行已按语料口径组装） */
+  bytes: Uint8Array;
+  /** 转译结果（产物文本 + 源映射 + 诊断） */
+  transpile: SugarTranspileResult;
+}
+
 /**
  * 编译失败错误（fail-closed）。
  *
@@ -912,6 +920,20 @@ export interface SugarTranspileService {
    * @throws `WriteNotAllowedError` 路径越权 / `SugarCompileError` 编译拒绝或回读失败
    */
   compileToFile(source: string, targetPath: string, options?: SugarCompileOptions): Promise<SugarCompileResult>;
+  /**
+   * 编译到**内存字节**（导出 ZIP 用；纯函数，零 IO）。
+   *
+   * 与 `compileToFile` 的 1+2 步（转译 → 守卫 → 按语料口径组装 BOM/换行/末尾换行）
+   * **同一条代码路径**：产物字节只有一处定义，导出与保存不会各自拼一遍而漂移。
+   *
+   * 用途：把作者工作区里的 `.kojo` 源变成游戏认得的 `.ERB` 字节，**不落任何临时文件**。
+   * 守卫同口径——转译抛错或产 `error` 诊断即抛 `SugarCompileError`，绝不返回半成品。
+   *
+   * @param source `.kojo` 源文本
+   * @param options 转译 + 编码选项（与 `compileToFile` 同形）
+   * @param targetLabel 出错时用来指认文件的人读标签（如 `包名/事件.ERB`）；缺省 `(内存)`
+   */
+  compileToBytes(source: string, options?: SugarCompileOptions, targetLabel?: string): SugarCompiledBytes;
   /**
    * 保存前置检查（S7 批；**纯函数**，不读盘不写盘不发事件）。
    *

@@ -8,6 +8,9 @@
  *
  * 复制是**字节级**（walkDir + readBytes/writeBytes）：口上库的既有编码经一次
  * 转码就可能毁半库，这里刻意不做任何解码 / 重编码。
+ * **例外**（2026-10-12 导出批）：`.kojo` 源必须先转译成 `.ERB` 才能进游戏目录 ——
+ * 引擎不认 `.kojo`，原样复制的结果是"装了但不生效"。转译只在内存里发生，
+ * 工作区的源文件永不改写。规则与冲突判定见 `artifact.ts`。
  *
  * 写保护不破：写入仍经内核 io（`writeBytes` / `ensureDir` 都过写白名单第一道闸，
  * Rust 侧另有第二道闸）。游戏目录默认只读，故调用前先用 `io.isWritable` 判一次——
@@ -17,6 +20,7 @@
 
 import type { FileIO, GameProject } from '@kojo/plugin-api';
 import { dirname, join } from '@kojo/plugin-api';
+import { planArtifacts, readPackageSources, type KojoCompiler } from './artifact';
 
 /** 待部署请求（插件闭包持有；overlay 组件无 props，经 deps 读取） */
 export interface PendingDeploy {
@@ -68,16 +72,23 @@ export function resolveDeployTarget(
 }
 
 /**
- * 把包目录整份复制到落点（字节级）。返回写入的文件数。
+ * 把包部署到落点。返回写入的文件数。
  *
  * 三道前置判定都在动盘之前：源必须是目录、目标不得已存在、目标必须在写白名单内。
+ *
+ * **不是原样复制**（2026-10-12 导出批）：工作区里的 `.kojo` 源要先经制品计划转成
+ * `.ERB` 再写，因为引擎只读 `.ERB`——原样复制会把"装了但不生效"留给作者。
+ * 非 `.kojo` 文件仍由 `planArtifacts` 保证字节级原样。
+ * 转译只发生在**内存**里：工作区的 `.kojo` 一个字节都不会被改写（权威源只有一份）。
  */
 export async function deployPackage(opts: {
   io: FileIO;
   srcDir: string;
   targetDir: string;
+  /** `.kojo` → 产物字节（来自 `SugarTranspileService.compileToBytes`） */
+  compile: KojoCompiler;
 }): Promise<number> {
-  const { io, srcDir, targetDir } = opts;
+  const { io, srcDir, targetDir, compile } = opts;
 
   const srcStat = await io.stat(srcDir);
   if (!srcStat || !srcStat.isDirectory) {
@@ -90,20 +101,13 @@ export async function deployPackage(opts: {
     throw new Error(`目标不在写白名单内，请先批准游戏目录的写权限：${targetDir}`);
   }
 
-  const entries = await io.walkDir(srcDir, { includeFiles: true });
+  const plan = planArtifacts(await readPackageSources(io, srcDir), compile);
+
   await io.ensureDir(targetDir);
-  let written = 0;
-  for (const e of entries) {
-    if (e.isDirectory) continue;
-    const rel = e.path.slice(srcDir.length).replace(/^[\\/]+/, '');
-    // 纵深防御：不信任 walkDir 的输出形态，逃逸段一律拒
-    if (rel.split(/[\\/]/).includes('..')) {
-      throw new Error(`路径逃逸源目录：${rel}`);
-    }
-    const to = join(targetDir, rel);
+  for (const entry of plan.entries) {
+    const to = join(targetDir, entry.relPath);
     await io.ensureDir(dirname(to));
-    await io.writeBytes(to, await io.readBytes(e.path));
-    written += 1;
+    await io.writeBytes(to, entry.bytes);
   }
-  return written;
+  return plan.entries.length;
 }

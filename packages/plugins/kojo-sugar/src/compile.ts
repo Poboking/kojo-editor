@@ -25,6 +25,7 @@
 import type {
   FileIO,
   Logger,
+  SugarCompiledBytes,
   SugarCompilerDeps,
   SugarCompileOptions,
   SugarCompileResult,
@@ -95,6 +96,45 @@ function summarizeErrors(list: readonly SugarDiagnostic[]): string {
   return head.join('；') + more;
 }
 
+/**
+ * 编译到**内存字节**（`compileToFile` 的 1+2 步，零 IO）。
+ *
+ * 为什么单独存在：导出 ZIP 要在内存里把 `.kojo` 变成 `.ERB` 字节，绝不能"先写临时
+ * 文件再读回来"——那会在工作区或临时目录留下半成品，还要再走一遍写闸。
+ *
+ * 关键是**编码口径只有一份**：`compileToFile` 现在就是调本函数拿字节，再走它的
+ * 3-6 步（建目录 / 备份 / 写盘 / 回读比对）。否则"导出产物"与"保存产物"会各自
+ * 组装 BOM 与换行，迟早对不上（本仓 `0bf2eb9` 记过的双源漂移类型）。
+ *
+ * 守卫与落盘路径同口径：转译抛错或产 `error` 诊断 → 抛 `SugarCompileError`，
+ * **绝不返回半成品字节**。
+ */
+export function compileToBytes(
+  transpile: SugarCompilerDeps['transpile'],
+  source: string,
+  options?: SugarCompileOptions,
+  targetLabel = '(内存)',
+): SugarCompiledBytes {
+  let result: SugarTranspileResult;
+  try {
+    result = transpile(source, options);
+  } catch (err) {
+    throw new SugarCompileError(`转译失败：${err instanceof Error ? err.message : String(err)}`, {
+      targetPath: targetLabel,
+      backupPath: null,
+    });
+  }
+  const errors = errorDiagnostics(result.diagnostics);
+  if (errors.length > 0) {
+    throw new SugarCompileError(`编译被拒绝（${errors.length} 项错误）：${summarizeErrors(errors)}`, {
+      targetPath: targetLabel,
+      backupPath: null,
+      diagnostics: errors,
+    });
+  }
+  return { bytes: encodeErbBytes(result.erb, resolveEncoding(options)), transpile: result };
+}
+
 /** 编译落盘（依赖注入：转译函数 + 内核 io + 可选日志） */
 export async function compileToFile(
   deps: SugarCompilerDeps,
@@ -102,32 +142,11 @@ export async function compileToFile(
   targetPath: string,
   options?: SugarCompileOptions,
 ): Promise<SugarCompileResult> {
-  const { transpile, io, log } = deps;
+  const { io, log } = deps;
   const absoluteTarget = normalize(targetPath);
 
-  // ---- 1. 转译 + 守卫（先于一切副作用）----
-  let result: SugarTranspileResult;
-  try {
-    result = transpile(source, options);
-  } catch (err) {
-    // 转译器自身异常：包装为编译错误（仍属编译域失败），不触达磁盘
-    throw new SugarCompileError(`转译失败：${err instanceof Error ? err.message : String(err)}`, {
-      targetPath: absoluteTarget,
-      backupPath: null,
-    });
-  }
-  const errors = errorDiagnostics(result.diagnostics);
-  if (errors.length > 0) {
-    throw new SugarCompileError(`编译被拒绝（${errors.length} 项错误，未写盘）：${summarizeErrors(errors)}`, {
-      targetPath: absoluteTarget,
-      backupPath: null,
-      diagnostics: errors,
-    });
-  }
-
-  // ---- 2. 编码组装 ----
-  const encoding = resolveEncoding(options);
-  const bytes = encodeErbBytes(result.erb, encoding);
+  // ---- 1+2. 转译 + 守卫 + 编码组装（与内存编译同一条路径，见 compileToBytes）----
+  const { bytes, transpile: result } = compileToBytes(deps.transpile, source, options, absoluteTarget);
 
   // ---- 3. 目录（域内才建；越权在此即抛，仍无备份副作用）----
   const parent = dirname(absoluteTarget);

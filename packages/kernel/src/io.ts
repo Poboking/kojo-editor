@@ -206,6 +206,21 @@ export class FileIOServiceImpl implements FileIO {
     return target;
   }
 
+  /**
+   * 导出单个文件（导出批，ZIP 发布包）：同 `exportDirectory` 的授权模型——
+   * 对话框与写盘都在平台命令内，内核不经手落点，**对话框即授权**，
+   * 故刻意不调 `assertWritable`。字节由调用方（插件）备好，内核只搬运。
+   */
+  async exportFile(
+    fileName: string,
+    bytes: Uint8Array,
+    opts?: { title?: string },
+  ): Promise<string | null> {
+    const target = await this.bridge.exportFile(fileName, bytes, opts);
+    if (target !== null) this.log?.info(`File exported: ${fileName} -> ${target}`);
+    return target;
+  }
+
   /** 调试/测试辅助：当前缓存状态 */
   debugCaches(): { encoding: Map<string, FileEncoding>; eol: Map<string, 'crlf' | 'lf'> } {
     return { encoding: this.encodingCache, eol: this.eolCache };

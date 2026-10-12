@@ -6,13 +6,23 @@
  * 插件只接线，逻辑无需渲染面板即可单测。
  *
  * 导出的落点在写白名单**之外**是设计意图（导出即落到桌面 / 发布目录）：授权来自
- * 用户在系统对话框里的显式选择，对话框与复制绑定在同一平台命令内（JS 拿不到落点
+ * 用户在系统对话框里的显式选择，对话框与写盘绑定在同一平台命令内（JS 拿不到落点
  * 决定权）；工作区原件只读不动。
+ *
+ * 2026-10-12 导出批：导出从「整目录复制」改成「**制品 ZIP**」——工作区里的 `.kojo`
+ * 先转译成 `.ERB` 再打包（引擎不认 `.kojo`），规则见 `artifact.ts`。转译在内存里做，
+ * 且**先于**弹对话框完成：不会让用户选完落点才吃到一个错误。
  *
  * 部署正相反——落点在游戏目录内，**写白名单这道闸必须过**（详见 `deploy.ts`）。
  */
 
-import type { FileIO, Logger } from '@kojo/plugin-api';
+import { basename, buildZip, type FileIO, type Logger, type ZipEntry } from '@kojo/plugin-api';
+import {
+  planArtifacts,
+  readPackageSources,
+  type ArtifactPlan,
+  type KojoCompiler,
+} from './artifact';
 import { deployPackage, type DeployTargetOk, type PendingDeploy } from './deploy';
 
 /** 包操作反馈种类 */
@@ -32,6 +42,37 @@ export interface PackageActionsDeps {
   log: Logger;
   /** 状态变化后通知面板重渲染 */
   notify(): void;
+  /**
+   * `.kojo` → 产物字节（来自 `SugarTranspileService.compileToBytes`）。
+   * 语法糖服务缺席时它抛错 → 含 `.kojo` 的包被整体拒绝，绝不静默少转文件。
+   */
+  compileKojo: KojoCompiler;
+}
+
+/**
+ * 组好一个发布 ZIP（**不碰目的地**：落点由后续的平台对话框决定）。
+ *
+ * 包内根 = 源目录名，于是作者解压出来就是一个文件夹，与 README 里
+ * 「把本包整个文件夹放入游戏目录」的说法对得上。
+ */
+export async function buildPackageZip(
+  io: FileIO,
+  absDir: string,
+  compile: KojoCompiler,
+): Promise<{ fileName: string; bytes: Uint8Array; plan: ArtifactPlan }> {
+  const sources = await readPackageSources(io, absDir);
+  const plan = planArtifacts(sources, compile);
+  const root = basename(absDir.replace(/[\\/]+$/, ''));
+  // 根路径（`/` 或 `C:\`）会得出 '' 或 '.' —— 与其打一个没有根目录的空包，
+  // 让作者解压出一堆散落文件，不如直接报错
+  if (root.length === 0 || root === '.' || root === '..') {
+    throw new Error(`无法从源路径取到包目录名：${absDir}`);
+  }
+  const entries: ZipEntry[] = plan.entries.map((e) => ({
+    name: `${root}/${e.relPath}`,
+    data: e.bytes,
+  }));
+  return { fileName: `${root}.zip`, bytes: await buildZip(entries), plan };
 }
 
 export interface PackageActions {
@@ -81,12 +122,28 @@ export function createPackageActions(deps: PackageActionsDeps): PackageActions {
 
     exportArtifact(absDir: string, displayName: string): void {
       set({ kind: 'busy', text: `正在导出「${displayName}」…` });
-      void deps.io
-        .exportDirectory(absDir, { title: `导出「${displayName}」到…` })
-        .then((target) => {
+      // 打包（转译 + 组装 ZIP）与"选落点"是两件事：先全量在内存里做好，
+      // 再弹对话框。这样**转译失败根本不会打扰用户**（不弹一个注定失败的框），
+      // 而对话框一旦弹出就必然成功写盘——用户不会选完目录才吃到一个错误。
+      void buildPackageZip(deps.io, absDir, deps.compileKojo)
+        .then(({ fileName, bytes, plan }) => {
+          if (bytes.length === 0) throw new Error('包是空的，没有可导出的文件');
+          return deps.io
+            .exportFile(fileName, bytes, { title: `导出「${displayName}」为…` })
+            .then((target) => ({ target, plan }));
+        })
+        .then(({ target, plan }) => {
           // 对话框里取消：既非结果也非错误，收起忙碌态即可（不打扰）
           if (target === null) set(null);
-          else set({ kind: 'ok', text: `已导出「${displayName}」到 ${target}` }, STATUS_OK_DISMISS_MS);
+          else
+            set(
+              {
+                kind: 'ok',
+                text: `已导出「${displayName}」${plan.transpiled} 个 .kojo 转译为 .ERB、` +
+                  `${plan.passthrough} 个文件原样打包 → ${target}`,
+              },
+              STATUS_OK_DISMISS_MS,
+            );
         })
         .catch((err: unknown) => {
           const reason = err instanceof Error ? err.message : String(err);
@@ -98,7 +155,12 @@ export function createPackageActions(deps: PackageActionsDeps): PackageActions {
     async deployArtifact(pkg: PendingDeploy, target: DeployTargetOk): Promise<boolean> {
       set({ kind: 'busy', text: `正在部署「${pkg.displayName}」…` });
       try {
-        const written = await deployPackage({ io: deps.io, srcDir: pkg.absDir, targetDir: target.targetDir });
+        const written = await deployPackage({
+          io: deps.io,
+          srcDir: pkg.absDir,
+          targetDir: target.targetDir,
+          compile: deps.compileKojo,
+        });
         set(
           {
             kind: 'ok',

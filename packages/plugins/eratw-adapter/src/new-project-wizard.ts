@@ -181,7 +181,7 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           h('code', null, dirNamePreview || '—')),
         h('div', { className: 'dim' },
           dirNamePreview
-            ? `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳${includeLicense ? ' + LICENSE' : ''}（不含四件套）`
+            ? `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳（.kojo，糖与原生 ERB 都能写）${includeLicense ? ' + LICENSE' : ''}；不含四件套，也不含活函数`
             : '作品名 / 版本 / 角色名不得为空或仅含非法字符')),
 
       error ? h('div', { className: 'wizard-error' }, error) : null,

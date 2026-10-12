@@ -18,6 +18,7 @@ import type {
   Logger,
   SugarCompileOptions,
   SugarCompileResult,
+  SugarCompiledBytes,
   SugarDiagnostic,
   SugarDoc,
   SugarPosition,
@@ -31,7 +32,7 @@ import type {
 import { fullwidthSpaceLines, isReadonlyAlias, resolveSugarTarget, SugarCompileError } from '@kojo/plugin-api';
 import { buildDoc, type TopNode } from './parser';
 import { codegen } from './codegen';
-import { compileToFile as runCompileToFile } from './compile';
+import { compileToBytes as runCompileToBytes, compileToFile as runCompileToFile } from './compile';
 import type { AliasEntry, AliasTable, DiagnosticSink, DictionaryLookup } from './types';
 
 /** 诊断收集器（保持插入顺序；`sortDiagnostics` 在 parse 末尾排序） */
@@ -179,5 +180,15 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     return runCompileToFile({ io, transpile, ...(opts.log ? { log: opts.log } : {}) }, source, targetPath, options);
   }
 
-  return { parse, transpile, sourceOf, compileToFile, planSave };
+  // 内存编译（导出 ZIP 用）：**不需要 io**，所以任何实例都可调用——包括未注入 io 的
+  // 纯逻辑实例（单测、worker 侧）。守卫与编码组装与 compileToFile 走同一函数。
+  function compileToBytes(
+    source: string,
+    options?: SugarCompileOptions,
+    targetLabel?: string,
+  ): SugarCompiledBytes {
+    return runCompileToBytes(transpile, source, options, targetLabel);
+  }
+
+  return { parse, transpile, sourceOf, compileToFile, compileToBytes, planSave };
 }

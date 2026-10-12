@@ -70,6 +70,16 @@ export const tauriBridge: PlatformBridge = {
     return invoke<string | null>('export_directory', { srcDir, title: opts?.title ?? null });
   },
 
+  async exportFile(fileName: string, bytes: Uint8Array, opts): Promise<string | null> {
+    // 同 exportDirectory：保存对话框 + 写盘绑定在 Rust 侧同一命令内，JS 拿不到落点决定权。
+    // 字节走 base64，与 writeFileBytes 同口径。
+    return invoke<string | null>('export_file', {
+      fileName,
+      data: bytesToBase64(bytes),
+      title: opts?.title ?? null,
+    });
+  },
+
   async appDataDir(): Promise<string> {
     return invoke<string>('app_data_dir');
   },

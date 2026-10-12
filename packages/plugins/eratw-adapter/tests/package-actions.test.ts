@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DirEntry, FileIO, FileStat, Logger } from '@kojo/plugin-api';
-import { STATUS_OK_DISMISS_MS, createPackageActions } from '../src/package-actions';
+import type { DirEntry, FileIO, FileStat, Logger, SugarCompiledBytes } from '@kojo/plugin-api';
+import { STATUS_OK_DISMISS_MS, buildPackageZip, createPackageActions } from '../src/package-actions';
+import type { KojoCompiler } from '../src/artifact';
 import type { DeployTargetOk, PendingDeploy } from '../src/deploy';
+import type { PanelStatus } from '../src/package-actions';
 
 /**
  * 包操作控制器（P-D 导出 / P-E 部署）单测。
@@ -22,7 +24,7 @@ function fakeLogger(): Logger & { warnings: string[] } {
   };
 }
 
-function setup(io: Partial<FileIO>) {
+function setup(io: Partial<FileIO>, compileKojo: KojoCompiler = throwingCompile) {
   const log = fakeLogger();
   let notifies = 0;
   const actions = createPackageActions({
@@ -31,12 +33,46 @@ function setup(io: Partial<FileIO>) {
     notify: () => {
       notifies += 1;
     },
+    compileKojo,
   });
   return { actions, log, notifyCount: () => notifies };
 }
 
-/** 只实现导出用到的那一面（多要即抛，依赖面不含糊） */
-const exportSetup = (exportDirectory: FileIO['exportDirectory']) => setup({ exportDirectory });
+/** 默认编译器：被调用即说明用例忘了提供 .kojo 的替身，宁可响也不静默 */
+function throwingCompile(_source: string, label: string): SugarCompiledBytes {
+  throw new Error(`本用例未提供编译器，却被要求转译：${label}`);
+}
+
+/** 把 .kojo 源变成"加一行的 .ERB"，好断言转译真的发生了 */
+const fakeCompile: KojoCompiler = (source, label) => ({
+  bytes: new TextEncoder().encode(`; from ${label}\n${source}`),
+  transpile: { erb: '', sourceMap: [], diagnostics: [] },
+});
+
+/**
+ * 导出链路的最小 io 替身：包内一个 `.kojo` + 一个 `.txt`，落点由 `exportFile` 决定。
+ * （导出已从"整目录复制"改成"制品 ZIP"，见 package-actions.ts 头注。）
+ */
+function exportSetup(
+  exportFile: FileIO['exportFile'],
+  overrides: Partial<FileIO> = {},
+) {
+  const enc = new TextEncoder();
+  const files: Record<string, Uint8Array> = {
+    [`${SRC}/事件.kojo`]: enc.encode('如果 A：\n'),
+    [`${SRC}/说明.txt`]: enc.encode('原样'),
+  };
+  return setup(
+    {
+      walkDir: async () =>
+        Object.keys(files).map((p) => ({ name: p.slice(SRC.length + 1), path: p, isDirectory: false })),
+      readBytes: async (p: string) => files[p] ?? (() => { throw new Error(`没有这个文件：${p}`); })(),
+      exportFile,
+      ...overrides,
+    },
+    fakeCompile,
+  );
+}
 
 const SRC = '/appdata/workspaces/p1/东方口上-灵梦 v1.0';
 const NAME = '东方口上-灵梦 v1.0';
@@ -64,44 +100,62 @@ const TARGET: DeployTargetOk = {
   targetDir: 'C:/game/kojo/001 灵梦/东方口上-灵梦 v1.0',
 };
 
-/** 真实定时器下把微任务队列冲干净（导出是 fire-and-forget） */
-const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
-
-/** 假定时器下的等效冲刷（推进 1ms 顺带把 promise 回调跑完） */
-const flushFake = async (): Promise<void> => {
-  await vi.advanceTimersByTimeAsync(1);
-};
+/**
+ * 等导出链落定（导出是 fire-and-forget，面板状态是唯一可见的终点）。
+ *
+ * 为什么不是"冲 N 拍"：链尾是 `CompressionStream`，**首次调用要冷启动约 56 ms**
+ * （实测），固定拍数的 `setTimeout(0)` 冲刷会在第一个用例上稳定失败——
+ * 那种测试只在"前面有别的用例先热过身"时才绿，是假的确定性。
+ * `vi.waitFor` 在 fake timers 下会自动推进，两种模式共用一个 helper。
+ */
+const settle = (actions: { status(): PanelStatus | null }): Promise<void> =>
+  vi.waitFor(
+    () => {
+      if (actions.status()?.kind === 'busy') throw new Error('仍在忙碌');
+    },
+    { timeout: 3000, interval: 5 },
+  );
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('导出到目录（P-D）', () => {
-  it('调用桥时带上源目录与中文对话框标题', async () => {
-    const calls: Array<{ srcDir: string; title?: string }> = [];
-    const { actions } = exportSetup(async (srcDir, opts) => {
-      calls.push({ srcDir, ...(opts?.title !== undefined ? { title: opts.title } : {}) });
+describe('导出制品 ZIP（P-D + 2026-10-12 导出批）', () => {
+  it('调用平台时带上 .zip 建议名与中文对话框标题', async () => {
+    const calls: Array<{ fileName: string; title?: string; bytes: number }> = [];
+    const { actions } = exportSetup(async (fileName, bytes, opts) => {
+      calls.push({
+        fileName,
+        ...(opts?.title !== undefined ? { title: opts.title } : {}),
+        bytes: bytes.length,
+      });
       return null;
     });
     actions.exportArtifact(SRC, NAME);
-    await flush();
-    expect(calls).toEqual([{ srcDir: SRC, title: `导出「${NAME}」到…` }]);
+    await settle(actions);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.fileName).toBe(`${NAME}.zip`);
+    expect(calls[0]!.title).toBe(`导出「${NAME}」为…`);
+    expect(calls[0]!.bytes).toBeGreaterThan(0);
   });
 
-  it('进行中为忙碌态，成功后报出落点完整路径', async () => {
-    const { actions } = exportSetup(async () => `D:/发布/${NAME}`);
+  it('进行中为忙碌态，成功后报出落点完整路径与转译计数', async () => {
+    const { actions } = exportSetup(async () => `D:/发布/${NAME}.zip`);
     actions.exportArtifact(SRC, NAME);
     // 尚未落定：忙碌态已经在面上（用户不会以为按钮没响应）
     expect(actions.status()).toEqual({ kind: 'busy', text: `正在导出「${NAME}」…` });
-    await flush();
-    expect(actions.status()).toEqual({ kind: 'ok', text: `已导出「${NAME}」到 D:/发布/${NAME}` });
+    await settle(actions);
+    expect(actions.status()?.kind).toBe('ok');
+    expect(actions.status()!.text).toContain(`D:/发布/${NAME}.zip`);
+    expect(actions.status()!.text).toContain('1 个 .kojo 转译为 .ERB');
+    expect(actions.status()!.text).toContain('1 个文件原样打包');
   });
 
   it('成功态到点自动收起（保持面板清爽）', async () => {
     vi.useFakeTimers();
-    const { actions } = exportSetup(async () => 'D:/发布/out');
+    const { actions } = exportSetup(async () => 'D:/发布/out.zip');
     actions.exportArtifact(SRC, NAME);
-    await flushFake();
+    await settle(actions);
     expect(actions.status()?.kind).toBe('ok');
     await vi.advanceTimersByTimeAsync(STATUS_OK_DISMISS_MS);
     expect(actions.status()).toBeNull();
@@ -110,7 +164,7 @@ describe('导出到目录（P-D）', () => {
   it('用户在对话框里取消 → 不留消息（取消是正常路径，不是错误）', async () => {
     const { actions, log } = exportSetup(async () => null);
     actions.exportArtifact(SRC, NAME);
-    await flush();
+    await settle(actions);
     expect(actions.status()).toBeNull();
     expect(log.warnings).toEqual([]);
   });
@@ -118,13 +172,13 @@ describe('导出到目录（P-D）', () => {
   it('平台无对话框能力（Node 桥抛错）→ 失败态常驻并自解释呈现', async () => {
     vi.useFakeTimers();
     const { actions, log } = exportSetup(async () => {
-      throw new Error('exportDirectory is not supported by NodeBridge');
+      throw new Error('exportFile is not supported by NodeBridge');
     });
     actions.exportArtifact(SRC, NAME);
-    await flushFake();
+    await settle(actions);
     expect(actions.status()).toEqual({
       kind: 'err',
-      text: '导出失败：exportDirectory is not supported by NodeBridge',
+      text: '导出失败：exportFile is not supported by NodeBridge',
     });
     // 失败原因要留给用户读完：远超成功态的收起延时也不自动消失
     await vi.advanceTimersByTimeAsync(STATUS_OK_DISMISS_MS * 10);
@@ -132,19 +186,49 @@ describe('导出到目录（P-D）', () => {
     expect(log.warnings).toHaveLength(1);
   });
 
+  /**
+   * 时序契约（本批新增）：**转译失败必须发生在弹框之前**。
+   * 用户选完落点才吃到"转译失败"，比不弹框恶劣得多——他已经做完了决定。
+   */
+  it('转译失败 → 根本不弹对话框，失败态常驻', async () => {
+    vi.useFakeTimers();
+    let dialogOpened = false;
+    const { actions } = setup(
+      {
+        walkDir: async () => [
+          { name: '坏.kojo', path: `${SRC}/坏.kojo`, isDirectory: false } satisfies DirEntry,
+        ],
+        readBytes: async () => new TextEncoder().encode('x'),
+        exportFile: async () => {
+          dialogOpened = true;
+          return 'D:/不该被调用.zip';
+        },
+      },
+      (_s, label) => {
+        throw new Error(`第 3 行：缺少 否则（${label}）`);
+      },
+    );
+    actions.exportArtifact(SRC, NAME);
+    await settle(actions);
+    expect(dialogOpened).toBe(false);
+    expect(actions.status()?.kind).toBe('err');
+    expect(actions.status()!.text).toContain('转译失败');
+    expect(actions.status()!.text).toContain('未生成制品');
+  });
+
   it('非 Error 抛出也收敛成可读文案（不吐 [object Object]）', async () => {
     const { actions } = exportSetup(async () => {
       throw '对话框崩了';
     });
     actions.exportArtifact(SRC, NAME);
-    await flush();
+    await settle(actions);
     expect(actions.status()).toEqual({ kind: 'err', text: '导出失败：对话框崩了' });
   });
 
   it('手动关闭反馈条', async () => {
-    const { actions } = exportSetup(async () => 'D:/发布/out');
+    const { actions } = exportSetup(async () => 'D:/发布/out.zip');
     actions.exportArtifact(SRC, NAME);
-    await flush();
+    await settle(actions);
     actions.dismiss();
     expect(actions.status()).toBeNull();
   });
@@ -158,30 +242,63 @@ describe('导出到目录（P-D）', () => {
     let n = 0;
     const { actions } = exportSetup(async () => {
       n += 1;
-      return n === 1 ? first : 'D:/第二次';
+      return n === 1 ? first : 'D:/第二次.zip';
     });
 
     actions.exportArtifact(SRC, NAME);
-    resolveFirst('D:/第一次');
-    await flushFake();
+    resolveFirst('D:/第一次.zip');
+    await settle(actions);
     // 第二次导出紧接着发起：第一次排定的自动收起必须被取消
     actions.exportArtifact(SRC, NAME);
-    await flushFake();
-    expect(actions.status()).toEqual({ kind: 'ok', text: `已导出「${NAME}」到 D:/第二次` });
+    await settle(actions);
+    expect(actions.status()!.text).toContain('D:/第二次.zip');
     // 只剩第二次的定时器到期 → 此时才收起
     await vi.advanceTimersByTimeAsync(STATUS_OK_DISMISS_MS);
     expect(actions.status()).toBeNull();
   });
+});
 
-  it('dispose 后待触发的自动收起不再打扰面板', async () => {
-    vi.useFakeTimers();
-    const { actions, notifyCount } = exportSetup(async () => 'D:/发布/out');
-    actions.exportArtifact(SRC, NAME);
-    await flushFake();
-    const before = notifyCount();
-    actions.dispose();
-    await vi.advanceTimersByTimeAsync(STATUS_OK_DISMISS_MS);
-    expect(notifyCount()).toBe(before);
+describe('buildPackageZip（ZIP 组装本身）', () => {
+  const enc = new TextEncoder();
+
+  /** 解出我们自己的包：只验"名字集合对不对"，字节保真由 zip.test.ts 钉 */
+  const namesIn = (zip: Uint8Array): string[] => {
+    const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    const out: string[] = [];
+    for (let i = 0; i + 4 <= zip.length; i++) {
+      if (view.getUint32(i, true) !== 0x04034b50) continue;
+      const nameLen = view.getUint16(i + 26, true);
+      out.push(new TextDecoder().decode(zip.subarray(i + 30, i + 30 + nameLen)));
+    }
+    return out;
+  };
+
+  it('包内根 = 源目录名，.kojo 已换成 .ERB，非 .kojo 原样', async () => {
+    const io = {
+      walkDir: async () =>
+        [
+          { name: '事件.kojo', path: `${SRC}/事件.kojo`, isDirectory: false },
+          { name: '说明.txt', path: `${SRC}/说明.txt`, isDirectory: false },
+        ] as DirEntry[],
+      readBytes: async (p: string) => (p.endsWith('.kojo') ? enc.encode('如果 A：\n') : enc.encode('原样')),
+    } as unknown as FileIO;
+
+    const { fileName, bytes, plan } = await buildPackageZip(io, SRC, fakeCompile);
+    expect(fileName).toBe(`${NAME}.zip`);
+    expect(namesIn(bytes).sort()).toEqual([`${NAME}/事件.ERB`, `${NAME}/说明.txt`]);
+    expect(plan.transpiled).toBe(1);
+    expect(plan.passthrough).toBe(1);
+  });
+
+  it('路径以分隔符结尾也能取到包目录名（walkDir 各家形态不一）', async () => {
+    const io = { walkDir: async () => [] as DirEntry[], readBytes: async () => new Uint8Array(0) } as unknown as FileIO;
+    const { fileName } = await buildPackageZip(io, `${SRC}/`, fakeCompile);
+    expect(fileName).toBe(`${NAME}.zip`);
+  });
+
+  it('根路径取不到目录名 → 明确报错，不打出无根的空包', async () => {
+    const io = { walkDir: async () => [] as DirEntry[], readBytes: async () => new Uint8Array(0) } as unknown as FileIO;
+    await expect(buildPackageZip(io, '/', fakeCompile)).rejects.toThrow(/无法从源路径取到包目录名/);
   });
 });
 
@@ -231,9 +348,9 @@ describe('部署到游戏目录（P-E）', () => {
   });
 
   it('导出与部署共用同一条状态条：后落定的顶掉前一个', async () => {
-    const { actions } = setup({ ...deployIo(), exportDirectory: async () => 'D:/发布/out' });
+    const { actions } = setup({ ...deployIo(), exportFile: async () => 'D:/发布/out.zip' });
     actions.exportArtifact(SRC, NAME);
-    await flush();
+    await settle(actions);
     expect(actions.status()?.kind).toBe('ok');
     await actions.deployArtifact(PKG, TARGET);
     expect(actions.status()?.text).toContain('已部署');

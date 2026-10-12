@@ -439,6 +439,45 @@ async fn export_directory(src_dir: String, title: Option<String>) -> Result<Opti
     Ok(Some(target.to_string_lossy().to_string()))
 }
 
+/// 导出**单个文件**到用户选定的位置（ZIP 发布包用；base64 过 IPC，与 `write_file_bytes` 同口径）。
+///
+/// 落点在写域之外是设计意图，与 `export_directory` 同理：授权来自用户在系统保存对话框里的
+/// 显式选择，且**对话框与写盘绑在同一个命令内**（JS 拿不到落点决定权，也就无法把写操作
+/// 引导到任意路径）。因此这里刻意不过 `ensure_write_allowed`。
+///
+/// `file_name` 只是对话框的**预填建议**，不是落点：仍剥掉路径分隔符，避免一个坏名字
+/// 把对话框初始目录带偏。
+#[tauri::command]
+async fn export_file(
+    file_name: String,
+    data: String,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
+    let bytes = B64.decode(&data).map_err(|e| format!("base64 decode: {e}"))?;
+    let suggestion = file_name.replace(['/', '\\'], "_");
+
+    let mut dialog = rfd::AsyncFileDialog::new()
+        .set_file_name(&suggestion)
+        .add_filter("ZIP 压缩包", &["zip"]);
+    if let Some(t) = title.as_deref() {
+        dialog = dialog.set_title(t);
+    }
+    let picked = match dialog.save_file().await {
+        Some(handle) => handle.path().to_path_buf(),
+        None => return Ok(None),
+    };
+    if let Some(parent) = picked.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建导出目录失败：{e}"))?;
+    }
+    std::fs::write(&picked, &bytes).map_err(|e| format!("导出写入失败：{e}"))?;
+    eprintln!(
+        "[export_file] {} 字节 → {}",
+        bytes.len(),
+        picked.display()
+    );
+    Ok(Some(picked.to_string_lossy().to_string()))
+}
+
 #[tauri::command]
 fn app_data_dir(app: tauri::AppHandle) -> Result<String, String> {
     use tauri::Manager;
@@ -523,6 +562,7 @@ pub fn run() {
             remove_dir,
             choose_directory,
             export_directory,
+            export_file,
             app_data_dir,
             register_write_domain,
             clear_write_domain,

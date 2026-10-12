@@ -283,7 +283,7 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                   'button',
                   {
                     className: 'kp-action',
-                    title: `导出「${a.name}」到选定目录（复制副本，工作区原件不动）`,
+                    title: `把「${a.name}」打包成 ZIP（.kojo 自动转译为 .ERB）到选定位置，工作区原件不动`,
                     onClick: () => deps.exportArtifact(dir, a.name),
                   },
                   '导出',
@@ -292,7 +292,7 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                   'button',
                   {
                     className: 'kp-action',
-                    title: `把「${a.name}」部署到游戏目录的角色口上目录下（目标已存在不覆盖）`,
+                    title: `把「${a.name}」转译后部署到游戏目录的角色口上目录下（.kojo → .ERB；目标已存在不覆盖）`,
                     onClick: () => deps.deployArtifact(a, dir),
                   },
                   '部署',

@@ -157,6 +157,9 @@ export function createKojoSugarPlugin(): Plugin {
         // S3：编译落盘一体——转译（带当前 adapter 字典+分野表）+ 双闸写 + 备份 + 回读
         compileToFile: (source, targetPath, options) =>
           makeTranspiler({ io, log: ctx.log }).compileToFile(source, targetPath, options),
+        // 导出批：内存编译（零 IO，故不注入 io）——与 compileToFile 共用守卫与编码组装
+        compileToBytes: (source, options, targetLabel) =>
+          makeTranspiler().compileToBytes(source, options, targetLabel),
         // S7：保存前置检查（纯函数）——推导目标 + 转译 + 全角空格告警，同一转译器
         planSave: (request) => makeTranspiler().planSave(request),
       };

@@ -253,6 +253,7 @@ export type {
   SugarCompileEncoding,
   SugarCompileOptions,
   SugarCompileResult,
+  SugarCompiledBytes,
   SugarCompilerDeps,
   SugarDiagnostic,
   SugarDiagnosticCode,
@@ -332,3 +333,12 @@ export {
   pathKey,
   type PathStyle,
 } from './paths';
+export {
+  buildZip,
+  crc32,
+  deflateRaw,
+  dosDateTime,
+  normalizeEntryName,
+  type ZipEntry,
+  type ZipOptions,
+} from './zip';

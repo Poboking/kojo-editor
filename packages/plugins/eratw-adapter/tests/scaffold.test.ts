@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CORE_FACES,
+  FACE_STUB_EXT,
   buildFaceStub,
   buildReadme,
   scaffoldDirName,
@@ -55,8 +56,20 @@ describe('脚手架产物', () => {
     const r = scaffoldKojoProject(base);
     expect(r.dirName).toBe('东方口上合集-博丽 灵梦 v1.0');
     expect(Object.keys(r.files).sort()).toEqual(
-      ['README.md', ...CORE_FACES.map((f) => `${f.stem}.ERB`)].sort(),
+      ['README.md', ...CORE_FACES.map((f) => `${f.stem}${FACE_STUB_EXT}`)].sort(),
     );
+  });
+
+  /**
+   * 用户反馈 1：「新建项目后的文件默认都是 .kojo，这样既能写语法糖也能写原始 ERB」。
+   * `.kojo` 是超集，`.ERB` 只能写原生——脚手架不该替作者先收窄表达。
+   * 这条断言同时守住另一半：**工作区里不该出现 .ERB**，否则同一份内容两个权威源。
+   */
+  it('核心面空壳一律 .kojo，产物里没有任何 .ERB（工作区唯一源）', () => {
+    const r = scaffoldKojoProject({ ...base, includeLicense: true });
+    const names = Object.keys(r.files);
+    for (const face of CORE_FACES) expect(names).toContain(`${face.stem}.kojo`);
+    expect(names.filter((n) => /\.ERB$/i.test(n))).toEqual([]);
   });
 
   it('勾选 LICENSE → 多一个 LICENSE 文件', () => {
@@ -80,11 +93,11 @@ describe('脚手架产物', () => {
   it('空壳内容纯注释：无活函数（@ 开头行）、无空行以外的非注释行', () => {
     const r = scaffoldKojoProject(base);
     for (const face of CORE_FACES) {
-      const text = r.files[`${face.stem}.ERB`]!;
+      const text = r.files[`${face.stem}${FACE_STUB_EXT}`]!;
       const lines = text.split('\n');
       for (const line of lines) {
         if (line.trim() === '') continue;
-        expect(line.startsWith(';'), `${face.stem}.ERB 出现非注释行：${line}`).toBe(true);
+        expect(line.startsWith(';'), `${face.stem}${FACE_STUB_EXT} 出现非注释行：${line}`).toBe(true);
       }
       expect(text).not.toContain('\n@');
     }
@@ -92,10 +105,10 @@ describe('脚手架产物', () => {
 
   it('空壳注释引用分野表函数形态（角色号代入；游戏知识来自 face-templates）', () => {
     const r = scaffoldKojoProject(base);
-    expect(r.files['事件.ERB']).toContain('M_KOJO_EVENT_K1_{i}');
-    expect(r.files['绝顶.ERB']).toContain('M_KOJO_MESSAGE_PALAMCNG_B_K1');
-    expect(r.files['刻印取得.ERB']).toContain('M_KOJO_MESSAGE_MARKCNG_K1');
-    expect(r.files['性交指令.ERB']).toContain('M_KOJO_MESSAGE_${com}_K1_{i}');
+    expect(r.files['事件.kojo']).toContain('M_KOJO_EVENT_K1_{i}');
+    expect(r.files['绝顶.kojo']).toContain('M_KOJO_MESSAGE_PALAMCNG_B_K1');
+    expect(r.files['刻印取得.kojo']).toContain('M_KOJO_MESSAGE_MARKCNG_K1');
+    expect(r.files['性交指令.kojo']).toContain('M_KOJO_MESSAGE_${com}_K1_{i}');
   });
 
   it('README 含作品信息、面清单与部署说明', () => {
@@ -105,7 +118,7 @@ describe('脚手架产物', () => {
     expect(readme).toContain('博丽 灵梦（编号 1）');
     expect(readme).toContain('剧本1');
     expect(readme).toContain('個人口上');
-    for (const face of CORE_FACES) expect(readme).toContain(`${face.stem}.ERB`);
+    for (const face of CORE_FACES) expect(readme).toContain(`${face.stem}${FACE_STUB_EXT}`);
   });
 
   it('不生成四件套文件（登记/配色/开关是函数级产物）', () => {

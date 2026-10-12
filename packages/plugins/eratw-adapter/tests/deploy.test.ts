@@ -10,6 +10,7 @@ import type { CharaInfo, GameProject } from '@kojo/plugin-api';
 import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { deployPackage, resolveDeployTarget, type DeployTarget } from '../src/deploy';
+import type { KojoCompiler } from '../src/artifact';
 
 /**
  * 部署（P-E）测试。
@@ -17,7 +18,14 @@ import { deployPackage, resolveDeployTarget, type DeployTarget } from '../src/de
  * 两条铁律各有一项钉死的断言：**字节保真**（口上库经一次转码就可能毁半库）与
  * **目标已存在不覆盖 / 未授权不动盘**（游戏目录里可能是别人的东西，半成品目录
  * 会被引擎读进去）。
+ *
+ * 本组用例的包体全是 `.ERB`（要验的正是"不许转码"），所以编译器一旦被告知
+ * `.kojo` 就是用例写错了——直接抛，让它在断言里响，而不是悄悄原样复制过去。
+ * `.kojo → .ERB` 这条路径本身由 `artifact.test.ts` 覆盖。
  */
+const compile: KojoCompiler = (_source, label) => {
+  throw new Error(`本用例不该出现 .kojo 源：${label}`);
+};
 
 const PKG = '东方口上-灵梦 v1.0';
 
@@ -109,7 +117,7 @@ beforeEach(async () => {
 describe('deployPackage · 部署落盘', () => {
   it('嵌套结构整份复制，Shift-JIS 字节逐字节保真（不做任何转码）', async () => {
     io.setWritableRoots([gameKojoDir]);
-    const n = await deployPackage({ io, srcDir: pkgDir, targetDir });
+    const n = await deployPackage({ io, srcDir: pkgDir, targetDir, compile });
     expect(n).toBe(2);
 
     const srcFile = path.join(pkgDir, '01 事件.ERB');
@@ -132,7 +140,7 @@ describe('deployPackage · 部署落盘', () => {
     const mine = path.join(targetDir, '别人已部署.ERB');
     await fs.writeFile(mine, '原样');
 
-    await expect(deployPackage({ io, srcDir: pkgDir, targetDir })).rejects.toThrow(/目标已存在，未覆盖/);
+    await expect(deployPackage({ io, srcDir: pkgDir, targetDir, compile })).rejects.toThrow(/目标已存在，未覆盖/);
 
     expect(await fs.readFile(mine, 'utf8')).toBe('原样');
     expect(await fs.readdir(targetDir)).toEqual(['别人已部署.ERB']);
@@ -140,7 +148,7 @@ describe('deployPackage · 部署落盘', () => {
 
   it('游戏目录未批准写权限 → 抛错且**不落任何目录**（不给引擎留半成品）', async () => {
     io.setWritableRoots([]);
-    await expect(deployPackage({ io, srcDir: pkgDir, targetDir })).rejects.toThrow(/写白名单/);
+    await expect(deployPackage({ io, srcDir: pkgDir, targetDir, compile })).rejects.toThrow(/写白名单/);
     expect(await io.exists(targetDir)).toBe(false);
   });
 
@@ -149,14 +157,14 @@ describe('deployPackage · 部署落盘', () => {
     const empty = path.join(appData, 'empty-pkg');
     await fs.mkdir(empty, { recursive: true });
 
-    expect(await deployPackage({ io, srcDir: empty, targetDir })).toBe(0);
+    expect(await deployPackage({ io, srcDir: empty, targetDir, compile })).toBe(0);
     expect((await io.stat(targetDir))?.isDirectory).toBe(true);
   });
 
   it('源不存在或不是目录 → 先报错，不碰游戏目录', async () => {
     io.setWritableRoots([gameKojoDir]);
     await expect(
-      deployPackage({ io, srcDir: path.join(appData, '没有这个包'), targetDir }),
+      deployPackage({ io, srcDir: path.join(appData, '没有这个包'), targetDir, compile }),
     ).rejects.toThrow(/源目录不存在或不是目录/);
     expect(await io.exists(targetDir)).toBe(false);
   });
@@ -166,7 +174,7 @@ describe('deployPackage · 部署落盘', () => {
     await fs.writeFile(path.join(pkgDir, '同名.ERB'), '根级');
     await fs.writeFile(path.join(pkgDir, '子目录', '同名.ERB'), '子级');
 
-    await deployPackage({ io, srcDir: pkgDir, targetDir });
+    await deployPackage({ io, srcDir: pkgDir, targetDir, compile });
 
     expect(await fs.readFile(path.join(targetDir, '同名.ERB'), 'utf8')).toBe('根级');
     expect(await fs.readFile(path.join(targetDir, '子目录', '同名.ERB'), 'utf8')).toBe('子级');
