@@ -1129,12 +1129,35 @@ textarea {
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
 }
+/* 编辑器工具条的文件身份（UI P4，§5.99）：**身份不许裁，前缀可以让**。
+   旧版把整条绝对路径交给 CSS 尾部省略，实测 1280 窗口里 969px 的内容塞进 550px，
+   裁掉的正好是文件名。三段由各 `pathLabelParts()` 给出：
+   head（可缩）→ tail（作者包名，不缩）→ base（文件名，不缩、加粗）。 */
 .file-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
   font-size: 12.5px;
+  max-width: 46vw;
+}
+.file-dir {
+  color: var(--fg-dim);
+  min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 46vw;
+}
+.file-pkg {
+  color: var(--fg-dim);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.file-base {
+  flex: 0 0 auto;
+  font-weight: 600;
+  white-space: nowrap;
 }
 .dirty-dot {
   color: var(--amber);
@@ -1149,6 +1172,15 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 30vw;
+  /* 同为实测修正：编码 · 换行 · 行数本来只有 140px，却被挤到 68px（clipX 52），
+     半句话都读不到。让位的次序是"目录 → 状态"，不是"状态 → 目录"。 */
+  flex: 0 0 auto;
+}
+/* 工具条按钮不许折行（实机截图看到「保存 / (Ctrl+S)」排成两行，把整条工具条撑到 50px 高，
+   编辑器白白少一行多行的高度）。让位的仍然是左侧那段可缩的目录前缀。 */
+.editor-toolbar button {
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 .editor-body {
   flex: 1;

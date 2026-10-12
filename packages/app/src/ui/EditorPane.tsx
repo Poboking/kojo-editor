@@ -22,6 +22,7 @@ import { editorOptionsForLineCount } from './editor-options';
 import { ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
 import { clampRange, isErbLike } from './lift-preview';
+import { pathLabelParts, splitPath } from './path-label';
 import { perf } from '../perf';
 import {
   editorLineHeightPx,
@@ -154,10 +155,10 @@ function applyTextEdits(
 
 /**
  * 路径末段（弹窗里给文件名而不是整条路径：用户认文件，不认目录树）。
+ * 拆分口径与工具条共用 `path-label.splitPath`，一处规矩。
  */
 function baseNameOf(path: string): string {
-  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-  return i >= 0 ? path.slice(i + 1) : path;
+  return splitPath(path).base;
 }
 
 /**
@@ -1116,11 +1117,18 @@ export function EditorPane({
     [unlockAsk, setErbEditable, notify],
   );
 
+  const labelParts = pathLabelParts(filePath);
+
   return (
     <div className="editor-pane">
       <div className="editor-toolbar">
+        {/* 身份优先（UI P4）：文件名 + 最深一层目录恒显，只有长前缀可缩。
+            旧版整条路径交给 CSS 尾部省略，1280 窗口下 969px 塞进 550px ⇒ 裁掉的
+            正好是文件名，作者盯着工具条读到的是游戏目录前缀。完整路径留在 title 里。 */}
         <span className="file-label" title={filePath}>
-          {filePath}
+          {labelParts.head !== '' ? <span className="file-dir">{labelParts.head}</span> : null}
+          {labelParts.tail !== '' ? <span className="file-pkg">{labelParts.tail}</span> : null}
+          <span className="file-base">{labelParts.base}</span>
         </span>
         <span className={`dirty-dot ${dirty ? 'on' : ''}`} title={dirty ? '未保存' : '已保存'}>
           {dirty ? '●' : ''}
