@@ -430,6 +430,20 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
       continue;
     }
 
+    // 演出行：`CALL HPH_PRINT,@"…","L"` → `心形 …… 续`（批 K，规范 §3.9）。
+    const heart = heartProjection(content, deps);
+    if (heart !== undefined) {
+      recs.push({
+        line: ln,
+        kind: 'speech',
+        text: heart,
+        indent: ctx.indentAt(ln, raw),
+        visible: true,
+        reason: null,
+      });
+      continue;
+    }
+
     // 函数头：反解成糖的「时机 …：」块头（批 I）。解不出 / 歧义 → 原样留原代码
     if (content.startsWith('@') && headIndex !== undefined) {
       const label = headIndex.label(stripParams(content.slice(1).trim()));
@@ -1224,6 +1238,58 @@ function sugarForRefParts(
   const name = dict.nameAt?.(family, index);
   if (name === undefined) return undefined;
   return `${possessive}${name}`;
+}
+
+/**
+ * 演出行投影（批 J 之后的批 K，规范 §3.9）：`CALL HPH_PRINT(@"文本","模式")` → `心形 文本[ 续]`。
+ *
+ * ## 为什么这是最大的一根剩余杠杆
+ *
+ * 口上域实测：`CALL` 行 135,720 条里 **HPH_PRINT 占 67,808（50%）**——演出文本被埋在指令参数里，
+ * 读者看见的是一行机器码而不是台词。形态也集中（同域实测）：
+ * **96.8% 是 `CALL HPH_PRINT,@"字面量","模式字母"`**（逗号调用式），1.4% 是括号式，
+ * 其余 1.8% 参数是变量或没有模式字母。
+ *
+ * ## 判据（一条不满足就整行不动）
+ *
+ * - 参数必须是 **`@"…"` 格式串字面量**：`@"…" ` 在引擎里就是"展开 `%…%` 的字符串"，
+ *   所以文本走与 `PRINTFORM*` 同一把 `readableText`（语料实证：参数里就是
+ *   `%CALLNAME:PLAYER%` 这类记号）。裸变量（`CALL HPH_PRINT,LOCALS,"L"`）**不投影**。
+ * - 模式字母必须是 §3.9 表里的四个之一：`w`/`l`/`dw`/`dl`。别的字母（引擎另有扩展）
+ *   或缺第二段（走引擎默认）**不投影**——"续/等待"直接影响读者看到的节奏，猜不得。
+ * - 字面量里不含 `"`（正则用 `[^"]*` 强制）：嵌套引号的拆分超出"逐行局部映射"的能力。
+ *
+ * ## 为什么文本里的「」原样保留
+ *
+ * 正向 codegen 对**台词**会剥掉引号（`心形 「嗯」` → `@"嗯","w"`），而语料里
+ * `@"「…」","L"` 的引号**写在字面量内**（引擎就把它打印出来）。投影是显示口径，
+ * 第一职责是"读者看见的等于游戏打印出来的"，所以**不加引号也不减引号**——
+ * 减了就是在篡改演出文本，加了就是在造游戏里不存在的一对括号。
+ */
+const HEART_HEAD_RE = /^CALL\s+HPH_PRINT\b[ \t]*([,(])[ \t]*/i;
+const HEART_ARGS_RE = /^@"([^"]*)"[ \t]*,[ \t]*"([A-Za-z]+)"$/;
+const HEART_MODES: ReadonlyMap<string, { readonly cont: boolean }> = new Map([
+  ['w', { cont: false }],
+  ['l', { cont: true }],
+  ['dw', { cont: false }],
+  ['dl', { cont: true }],
+]);
+
+function heartProjection(content: string, deps: LiftDeps): string | undefined {
+  const head = HEART_HEAD_RE.exec(content);
+  if (!head) return undefined;
+  let args = content.slice(head[0].length);
+  if (head[1] === '(') {
+    if (!args.trimEnd().endsWith(')')) return undefined; // 括号式必须闭合整齐
+    args = args.trimEnd().slice(0, -1);
+  } else if (args.trimEnd().endsWith(')')) {
+    return undefined; // 逗号式不带闭括号——形态对不上就不猜
+  }
+  const m = HEART_ARGS_RE.exec(args.trim());
+  if (!m) return undefined;
+  const mode = HEART_MODES.get(m[2]!.toLowerCase());
+  if (mode === undefined) return undefined;
+  return `心形 ${readableText(m[1]!, deps)}${mode.cont ? ' 续' : ''}`;
 }
 
 /**

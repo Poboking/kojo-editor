@@ -525,6 +525,79 @@ describe('糖投影 · 角色状态赋值行反糖（批 J）', () => {
   });
 });
 
+/* ==================== 批 K：演出行 HPH_PRINT → 「心形 …」 ==================== */
+
+describe('糖投影 · 演出行 `CALL HPH_PRINT` → 心形（批 K，规范 §3.9）', () => {
+  const dict = {
+    resolveFamily: () => undefined,
+    resolve: () => undefined,
+    nameAt: (family: string, index: string): string | undefined =>
+      family === 'CFLAG' && index === '1088' ? '好感度' : undefined,
+  };
+  const withDict = (source: string) =>
+    liftProject(
+      {
+        transpile: () => {
+          throw new Error('x');
+        },
+        scanControlFlow,
+        dictionary: () => dict,
+      },
+      { source },
+    );
+
+  it('语料主形态（96.8% 的逗号调用式）：模式 `W` = 台词+等待 → 不补「续」', () => {
+    const r = project('CALL HPH_PRINT,@"「得给勤奋努力的%CALLNAME:TARGET%一些奖励呢…」","W"');
+    expect(segLines(r.segments[0]!)).toEqual(['心形 「得给勤奋努力的{她}一些奖励呢…」']);
+  });
+
+  it('模式 `L` → 行尾补「续」（与文本行同一套节奏标记）', () => {
+    const r = project('CALL HPH_PRINT,@"她低下了头。","L"');
+    expect(segLines(r.segments[0]!)).toEqual(['心形 她低下了头。 续']);
+  });
+
+  it('括号调用式与 `DL`/`DW` 旁白模式同样成立', () => {
+    const r = withDict(['CALL HPH_PRINT(@"……嗯嗯。","dl")', 'CALL HPH_PRINT(@"「可以了哦」","DW")'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['心形 ……嗯嗯。 续', '心形 「可以了哦」']);
+  });
+
+  it('「」原样保留：正向 codegen 剥引号，但显示口径不减读者看得见的那对括号', () => {
+    const r = project('CALL HPH_PRINT(@"「…还想做…舒服ー的事…HPH」","L")');
+    expect(segLines(r.segments[0]!)).toEqual(['心形 「…还想做…舒服ー的事…HPH」 续']);
+  });
+
+  it('参数是变量 / 缺模式字母 / 模式表外 → **整行不动**（续与等待猜不得）', () => {
+    const r = project(
+      ['CALL HPH_PRINT,LOCALS,"L"', 'CALL HPH_PRINT,@"HPH　"', 'CALL HPH_PRINT,@"文本","T"', 'CALL HPH_PRINT,@"文本","ww"'].join(
+        '\n',
+      ),
+    );
+    expect(r.segments).toHaveLength(0);
+    expect(r.stats.nativeLines).toBe(4);
+  });
+
+  it('不是 `@"…"` 格式串（裸字符串 / 引号套引号）→ 不动：展开规则不同，不猜', () => {
+    const r = project(['CALL HPH_PRINT,"文本","L"', 'CALL HPH_PRINT,@"说"引号"吧","W"'].join('\n'));
+    expect(r.segments).toHaveLength(0);
+  });
+
+  it('块体内的演出行按结构深度缩进（与台词同一通道）', () => {
+    const r = project('IF CFLAG:1088 >= 500\nCALL HPH_PRINT,@"「近一点也没关系哦」","W"\nENDIF');
+    expect(segLines(r.segments[0]!)).toEqual(['如果 CFLAG:1088 >= 500：', '\t心形 「近一点也没关系哦」']);
+  });
+
+  it('派生调用式（`CALLFORM` 等）不在表内 → 不动（只认语料实证过的两种形态）', () => {
+    expect(project('CALLFORM HPH_PRINT,@"文本","W"').segments).toHaveLength(0);
+  });
+
+  it('不变量：投影掉的演出行计入 projected，未动的计入 native', () => {
+    const { stats } = project('CALL HPH_PRINT,@"甲","W"\nCALL HPH_PRINT,LOCALS,"L"');
+    expect(stats.totalLines).toBe(2);
+    expect(stats.projectedLines).toBe(1);
+    expect(stats.nativeLines).toBe(1);
+  });
+});
+
 describe('糖投影 · 控制流', () => {
   it('IF / ELSEIF / ELSE / ENDIF 与缩进', () => {
     const src = ['IF A', 'PRINTFORMW 甲', 'ELSEIF B', 'PRINTFORMW 乙', 'ELSE', 'PRINTFORMW 丙', 'ENDIF'].join('\n');

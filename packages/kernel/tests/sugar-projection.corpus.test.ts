@@ -81,6 +81,11 @@ const HEAD_LINE_RE = /^\s*@[A-Za-z_$]/;
  */
 const STATE_ASSIGN_RE =
   /^\s*(CFLAG|TALENT|ABL|EXP|MARK|BASE|PALAM|TEQUIP|TCVAR)(?::[^:\s]+)*[ \t]*(\+=|-=|\*=|\/=|=)(?![=>])/;
+/**
+ * 批 K 的尺子：`CALL HPH_PRINT`（演出文本）。口上域实测 `CALL` 行里**一半是它**
+ * （135,720 中 67,808），而这些行的正文就是要给读者看的台词——不投影就等于把台词锁在参数里。
+ */
+const HEART_LINE_RE = /^\s*CALL\s+HPH_PRINT\b/i;
 
 interface Totals {
   files: number;
@@ -108,6 +113,9 @@ interface Totals {
   /** 角色状态赋值行数（批 J 的尺子）与其中显示成中文属性写法的行数 */
   assignLines: number;
   assignProjected: number;
+  /** `CALL HPH_PRINT` 行数（批 K 的尺子）与其中显示成「心形 …」的行数 */
+  heartLines: number;
+  heartProjected: number;
 }
 
 const zero = (): Totals => ({
@@ -129,6 +137,8 @@ const zero = (): Totals => ({
   headProjected: 0,
   assignLines: 0,
   assignProjected: 0,
+  heartLines: 0,
+  heartProjected: 0,
 });
 
 const pct = (a: number, b: number): string => (b === 0 ? '—' : `${((a / b) * 100).toFixed(1)}%`);
@@ -142,6 +152,7 @@ function line(t: Totals, label: string): string {
     `｜**SIF 覆盖 ${pct(t.sifProjected, t.sifLines)}**（${t.sifProjected}/${t.sifLines}）` +
     `｜**函数头可标率 ${pct(t.headProjected, t.headLines)}**（${t.headProjected}/${t.headLines}）` +
     `｜**状态赋值可读率 ${pct(t.assignProjected, t.assignLines)}**（${t.assignProjected}/${t.assignLines}）` +
+    `｜**演出行可投影率 ${pct(t.heartProjected, t.heartLines)}**（${t.heartProjected}/${t.heartLines}）` +
     `｜段 ${t.segments}（最多 ${t.maxSegments}/文件）`
   );
 }
@@ -250,8 +261,15 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
         let headCovered = 0;
         let assign = 0;
         let assignCovered = 0;
+        let heart = 0;
+        let heartCovered = 0;
         for (let ln = 1; ln <= srcLines.length; ln++) {
           const text = srcLines[ln - 1] ?? '';
+          if (HEART_LINE_RE.test(text)) {
+            heart++;
+            if (covered.has(ln)) heartCovered++;
+            continue;
+          }
           if (STATE_ASSIGN_RE.test(text)) {
             assign++;
             if (covered.has(ln)) assignCovered++;
@@ -297,6 +315,8 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           t.headProjected += headCovered;
           t.assignLines += assign;
           t.assignProjected += assignCovered;
+          t.heartLines += heart;
+          t.heartProjected += heartCovered;
         }
         segBuckets[bucketOf(r.segments.length)]!++;
       }
@@ -376,6 +396,12 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 下限 0.2：字典接线掉断、或守卫收紧过头（→0）都会红。
       expect(total.assignProjected / Math.max(1, total.assignLines)).toBeGreaterThan(0.2);
       expect(kojo.assignProjected / Math.max(1, kojo.assignLines)).toBeGreaterThan(0.2);
+      // 批 K：`CALL HPH_PRINT,@"文本","模式"` → 「心形 文本」。实测 **98.0%**（65,903 / 67,282）。
+      // 这是目前**最直白的台词通道**：这些行的正文本来就是要给读者看的话，不投影就等于
+      // 把台词锁在指令参数里。剩下 2% 是裸变量实参 / 缺模式字母 / 表外模式（一律不动）。
+      // 撤掉批 K → 0%，且段数会**涨回** 4.3 万（演出行原先都在切断糖段）。
+      expect(total.heartProjected / Math.max(1, total.heartLines)).toBeGreaterThan(0.9);
+      expect(kojo.heartProjected / Math.max(1, kojo.heartLines)).toBeGreaterThan(0.9);
 
       await kernel.stop();
     },
