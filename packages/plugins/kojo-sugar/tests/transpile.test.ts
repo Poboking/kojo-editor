@@ -913,3 +913,105 @@ describe('回归（教学样例批）：字符串字面量别名在插值内展�
     expect(erb).not.toContain('{"小露"}');
   });
 });
+
+/* ============================================================================ */
+/* 产物层撞名（任务 20：`成否:` 与独立 `时机 成功` 渲染出同一个函数而零诊断）      */
+/* ============================================================================ */
+
+describe('产物层撞名 · function-name-duplicate（跨分野也算）', () => {
+  const collide =
+    '角色: 12\n' +
+    '时机 指令 310 成否: 游戏判定：\n' +
+    '    「呀。」\n' +
+    '时机 成功 310：\n' +
+    '    「成功了。」\n';
+
+  it('`成否:` 与独立 `时机 成功 310：` 同文件 → error 诊断（此前零诊断，引擎侧撞「重复定义」）', () => {
+    const r = t(collide);
+    const d = r.diagnostics.find((x) => x.code === 'function-name-duplicate');
+    expect(d).toBeDefined();
+    expect(d!.severity).toBe('error');
+    expect(d!.message).toContain('@M_KOJO_SUCCESS_COM_K12_310');
+    expect(d!.message).toContain('产物第');
+  });
+
+  it('诊断位置指向**后写**的那个时机（作者要点的是"我刚写了什么"）', () => {
+    const d = t(collide).diagnostics.find((x) => x.code === 'function-name-duplicate')!;
+    expect(d.loc?.line).toBe(4); // 第 4 行就是后写的那个 `时机 成功 310：`
+  });
+
+  it('撞名成因文案认得出 SUCCESS 家族（`成否:` ↔ 独立 `时机 成功`）', () => {
+    const d = t(collide).diagnostics.find((x) => x.code === 'function-name-duplicate')!;
+    expect(d.message).toContain('成否:');
+    expect(d.message).toContain('时机 成功');
+  });
+
+  it('error 诊断即阻断保存（不给半成品 .ERB）', () => {
+    const plan = svc().planSave({ source: collide, sourcePath: 'C:/x/a.kojo' });
+    expect(plan.blocked).toBe(true);
+    expect(plan.blockedReason).toBe('transpile-error');
+  });
+
+  /* ---- 假阳性守门：合法的三种写法一个都不能报 ---- */
+
+  it('只写 `成否:` → 不报', () => {
+    expect(codes('角色: 12\n时机 指令 310 成否: 游戏判定：\n    「呀。」\n')).not.toContain(
+      'function-name-duplicate',
+    );
+  });
+
+  it('只写独立 `时机 成功 310：` → 不报', () => {
+    expect(codes('角色: 12\n时机 成功 310：\n    「成功了。」\n')).not.toContain('function-name-duplicate');
+  });
+
+  it('不同编号（310 成否 + 成功 311）→ 不报', () => {
+    expect(
+      codes(
+        '角色: 12\n时机 指令 310 成否: 游戏判定：\n    「呀。」\n时机 成功 311：\n    「另一条。」\n',
+      ),
+    ).not.toContain('function-name-duplicate');
+  });
+
+  it('同编号但 `类型:` 换了通信段（COM vs SCOM）→ 名字不同，不报', () => {
+    expect(
+      codes(
+        '角色: 12\n时机 指令 310 成否: 游戏判定：\n    「呀。」\n时机 指令 310 类型: SCOM：\n    「另一段。」\n',
+      ),
+    ).not.toContain('function-name-duplicate');
+  });
+
+  it('包装函数与 `_1` 正文是两个名字，不该自撞（每个时机都产两行函数头）', () => {
+    // 这是最容易误报的形状：`@X` 紧跟 `@X_1`，若把 `_1` 也当同一个名字就全库皆红
+    const { diagnostics } = t('角色: 12\n时机 指令 310：\n    「呀。」\n时机 指令 311：\n    「嗯。」\n');
+    expect(diagnostics.map((d) => d.code)).not.toContain('function-name-duplicate');
+  });
+
+  /* ---- 覆盖面：撞名的三种真实来源 ---- */
+
+  it('同一分野同一编号写两次 → 也报（此前 `timing-duplicate` 只是声明、没人发）', () => {
+    expect(
+      codes('角色: 12\n时机 指令 310：\n    「第一遍。」\n时机 指令 310：\n    「第二遍。」\n'),
+    ).toContain('function-name-duplicate');
+  });
+
+  it('原生直通块写了与生成结果同名的函数头 → 报（糖不是围栏，撞名照样撞）', () => {
+    expect(
+      codes(
+        '角色: 12\n时机 指令 310：\n    「呀。」\n@M_KOJO_MESSAGE_COM_K12_310\n#FUNCTION\nRETURN 1\n\n',
+      ),
+    ).toContain('function-name-duplicate');
+  });
+
+  it('一次文件里撞两组 → 两条诊断（逐条报，不合并）', () => {
+    const d = t(
+      '角色: 12\n' +
+        '时机 指令 310 成否: 游戏判定：\n    「呀。」\n时机 成功 310：\n    「成功了。」\n' +
+        '时机 指令 311 成否: 一定成功：\n    「唔。」\n时机 成功 311：\n    「又成功了。」\n',
+    ).diagnostics.filter((x) => x.code === 'function-name-duplicate');
+    expect(d).toHaveLength(2);
+    expect(d.map((x) => x.message)).toEqual([
+      expect.stringContaining('@M_KOJO_SUCCESS_COM_K12_310'),
+      expect.stringContaining('@M_KOJO_SUCCESS_COM_K12_311'),
+    ]);
+  });
+});

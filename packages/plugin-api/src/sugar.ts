@@ -827,6 +827,13 @@ export type SugarDiagnosticCode =
   | 'timing-face-unknown' // 分野关键字不在 adapter 的分野表（KojoFaceTable.faces）
   | 'face-table-missing' // 当前适配器未提供分野表 / 某类模板缺失（如配色/开关）
   | 'timing-duplicate' // 同名编号在同一文件内重复
+  /**
+   * **生成的函数名**在同一文件里撞车（跨分野也算）。
+   * 与 `timing-duplicate` 的分工：后者只看"同一分野 + 同一编号"这种写法层面的重复；
+   * 本码看**产物**——两条不同的写法（如 `指令 310 成否: …` 与独立的 `时机 成功 310：`）
+   * 渲染出同一个函数头时，引擎会撞「重复定义」，而这在写法表面上完全看不出冲突。
+   */
+  | 'function-name-duplicate'
   | 'timing-empty-body' // 时机无正文（占位写法；产出 `LOCAL = 0` 占位，INFO）
   /* --- 选项（规范 §3.7） --- */
   | 'choice-multiple' // 一个时机内出现多个 `选项` 块

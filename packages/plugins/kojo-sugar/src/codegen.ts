@@ -45,15 +45,46 @@ import type { AliasTable, DiagnosticSink, DictionaryLookup } from './types';
 
 /* ============================== 输出缓冲 ============================== */
 
+/** 函数头记号：产物第 1 列的 `@NAME`（带缩进的不是函数头） */
+const FUNCTION_HEADER_RE = /^@([A-Za-z0-9_一-龥]+)$/;
+
+/** 一次函数定义（按产物行记账） */
+interface FunctionDefinition {
+  /** 产物行（1 基） */
+  line: number;
+  /** 对应源行（时机头 / 原生直通块可得；纯生成骨架为 null） */
+  owner: number | null;
+}
+
+/** 撞名记录：同一文件里第二次出现的同名函数头 */
+interface DuplicateDefinition {
+  name: string;
+  first: FunctionDefinition;
+  again: FunctionDefinition;
+}
+
 /** 逐行产物缓冲（同时维护行级源映射） */
 class Emitter {
   private readonly lines: string[] = [];
   private readonly map: SugarSourceMapEntry[] = [];
+  private readonly definitions = new Map<string, FunctionDefinition>();
+  private readonly duplicates: DuplicateDefinition[] = [];
+  /**
+   * 当前发射单元的源行（时机 / 原生块 / 三件套各设一次）。
+   * 函数头本身是纯生成行、没有源行，撞名诊断要给作者一个**点对得开**的位置——
+   * 由发射单元提供，而不是让每个 push 点多带一个参数。
+   */
+  private owner: number | null = null;
+
+  setOwner(sourceLine: number | null): void {
+    this.owner = sourceLine;
+  }
 
   /** 追加一行（`sourceLine` = null → 纯生成行，如 `ENDIF` / 骨架） */
   push(indent: number, text: string, sourceLine: number | null = null): void {
     this.lines.push('\t'.repeat(indent) + text);
     this.map.push({ generatedLine: this.lines.length, sourceLine });
+    if (indent === 0) this.noteDefinition(text, sourceLine ?? this.owner);
   }
 
   /** 追加一行但**不**记源映射（用于纯骨架行；等价于 sourceLine=null） */
@@ -71,6 +102,29 @@ class Emitter {
   pushRaw(text: string, sourceLine: number | null): void {
     this.lines.push(text);
     this.map.push({ generatedLine: this.lines.length, sourceLine });
+    if (/^@/.test(text)) this.noteDefinition(text, sourceLine ?? this.owner);
+  }
+
+  /**
+   * 函数头记账：同名第二次出现即记一条撞名（**跨分野也算**——
+   * `指令 310 成否: …` 与独立的 `时机 成功 310：` 在写法面上看不出冲突，
+   * 渲染出的却是同一个 `@…_SUCCESS_COM_K12_310`，引擎侧是「重复定义」）。
+   */
+  private noteDefinition(headerLine: string, owner: number | null): void {
+    const m = FUNCTION_HEADER_RE.exec(headerLine);
+    if (!m) return;
+    const name = m[1]!;
+    const here: FunctionDefinition = { line: this.lines.length, owner };
+    const first = this.definitions.get(name);
+    if (!first) {
+      this.definitions.set(name, here);
+      return;
+    }
+    this.duplicates.push({ name, first, again: here });
+  }
+
+  duplicateDefinitions(): readonly DuplicateDefinition[] {
+    return this.duplicates;
   }
 
   get length(): number {
@@ -152,6 +206,7 @@ export function codegen(
   const timings = topLevel.filter((n): n is TimingBlock => n.kind === 'timingBlock');
   for (const timing of timings) {
     if (em.length > 0) em.blank();
+    em.setOwner(timing.loc.start.line); // 函数头是生成行，撞名诊断要能点回这个时机
     emitTiming(em, timing, {
       charNo,
       familySeg,
@@ -166,6 +221,7 @@ export function codegen(
   // ---- 配色函数（规范 §5.5 三件套之配色；golden §6.1 排在全部时机之后）----
   if (charNo.length > 0 && fm.color) {
     if (em.length > 0) em.blank();
+    em.setOwner(null); // 三件套派生自头部声明，不挂在任何一个时机上
     const colorTpl = opts.faceTable?.registration?.color;
     if (colorTpl) {
       em.pushGenerated(0, `@${renderSkeleton(colorTpl, charNo)}`);
@@ -185,7 +241,25 @@ export function codegen(
   const raws = topLevel.filter((n): n is RawFunctionBlock => n.kind === 'rawFunctionBlock');
   for (const raw of raws) {
     if (em.length > 0) em.blank();
+    em.setOwner(raw.loc.start.line);
     for (const line of raw.lines) em.pushRaw(line, raw.loc.start.line);
+  }
+
+  // ---- 产物层撞名（写法面上看不出冲突、引擎侧却是「重复定义」）----
+  for (const dup of em.duplicateDefinitions()) {
+    const at = dup.again.owner ?? dup.first.owner ?? null;
+    const cause =
+      dup.name.includes('_SUCCESS_') || dup.name.includes('_FAILURE_')
+        ? '常见成因：同一编号既写了 `成否:`，又写了独立的 `时机 成功/失败 …：`——两者渲染成同一个函数。'
+        : '常见成因：同一编号的分野写了两次，或两种写法（中文子句与英文别名）落进了同一个模板。';
+    opts.sink.report({
+      code: 'function-name-duplicate',
+      severity: 'error',
+      message:
+        `生成的函数 \`@${dup.name}\` 在本文件里定义了两次` +
+        `（产物第 ${dup.first.line} 与第 ${dup.again.line} 行）——引擎会撞「重复定义」。${cause}`,
+      loc: at !== null ? { line: at, column: 1 } : null,
+    });
   }
 
   return em.result();

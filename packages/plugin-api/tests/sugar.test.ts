@@ -302,6 +302,8 @@ describe('SugarDiagnostic · 结构', () => {
       'alias-unknown-target',
       'timing-face-unknown',
       'timing-duplicate',
+      // 产物层撞名（跨分野也算，如 `成否:` 与独立 `时机 成功` 渲染出同一个函数头）
+      'function-name-duplicate',
       'timing-empty-body',
       'choice-multiple',
       'choice-nested',
