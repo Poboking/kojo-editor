@@ -175,15 +175,28 @@
     悬停看原文出处）+ 导入向导随 meta 携带原作者。**口径 = 高精度宁缺勿滥**：
     实测 214 包只抽到 26 个署名，这是设计结果——假阳性会让人把别人的作品当无主作品改。
     语料基线常驻 `attribution.corpus.test.ts`（`KOJO_SMOKE_PROJECT` 守门）。
-- **当前基线（2026-10-12 口上项目批 T2.1 + 内核优化批合流后实测）：1183 passed / 9 skipped（1192），
-  74 文件过 / 4 跳；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；
+- **当前基线（2026-10-12 体感丝滑批后实测）：1252 passed / 9 skipped（1261），
+  79 文件过 / 4 跳；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；
   `pnpm --filter @kojo/app build` ✓；`cargo test --lib` 12 项全绿。**
-  数字闭合：`b1f260e` 基线 1012 + 内核优化批 71 + 口上项目批 68 + T2 29 + T2.1 3 = 1183。
+  数字闭合：T3/T4 后 1200 + 体感丝滑批 52 = 1252。
   ⚠ 跑全量**不要**设 `KOJO_SMOKE_PROJECT`（会放行依赖 sav 存档的注入测试而本机零存档必红）；
   语料基线单独带变量跑那一个文件即可。
 - **内核优化线（2026-10-12 批 P-A…P-F 同期，✅ 已收口进 master）**：L0 埋点 → 超长文件丝滑 →
   索引快照 → 计算池 `kernel.compute` → 并行运输层 → 扫描段上通道 → 审修补丁，
   权威记录 = IMPLEMENTATION-LOG **§5.51 / §5.52 / §5.53**（体感口径：加载二次不等、超长文件不卡）。
+- **体感丝滑线（2026-10-12 批，✅ 已收口进本分支）**：开项目级联三段**现在全部有持久化**——
+  索引（逐文件 mtime 增量）/ 条件抽取（摘要快照）/ 约定校验（报告快照）。真实语料二次开项目
+  水位：函数树 2068→**623ms**、条件徽章 9890→**1175ms**、校验面板 9900→**1178ms**。
+  **派生缓存纪律**（详见 §5.58）：① 判据必须覆盖**全部实际输入**——ERB 正文之外，adapter
+  在 `loadProject` 吃进的东西（CHARA 表 / 变量名称表 / 角色目录名）要经 `GameProject.inputDigest`
+  声明，**缺一即不缓存**（`VariableSchema` 是 CSV 驱动的，只盯 ERB 会吐旧语义标签）；② 改规则或
+  抽取口径**必须 bump** `LINT_SNAPSHOT_FORMAT` / `EXTRACT_SNAPSHOT_FORMAT`（规则是闭包，哈希不出
+  行为）；③ **fail-closed**：判据或结构不符 ⇒ 删除快照并全量重算，绝不"修"；④ 带 `failedRules`
+  的报告拒绝命中；⑤ 面板「重新校验」走 `run({ force: true })`，显式意图不许被缓存糊住；
+  ⑥ 量"二次启动"必须**换新 kernel 共用同一 appData**（同进程 close/open 会被异步落盘污染，
+  本批就据此得出过"缓存反而更慢"的假结论）。
+  **欠账**：索引快照按项目根留文件、**无淘汰**（N 个项目 = N 份 37–45 MB）；三段快照合计
+  ~84 MB/项目待瘦身；`extractFunctionConditions` 仍未上并行通道。
 - **分支收口（IMPLEMENTATION-LOG §5.55）**：`feat/kernel-optimization` 因 `origin/master` 连续推进
   经历了**两轮 rebase**（第一轮撞在 `EditorPane.tsx` 与 `kernel/plugin-api` 的导出上，均取并集；
   第二轮纯文档消冲，代码零冲突面）。rebase 漏网的冲突标记曾在 4 个中间提交树里，**推送前已折叠回
@@ -199,7 +212,7 @@
 | 文档 | 内容 |
 |---|---|
 | `docs/HANDOFF.md`（本文件） | **交接状态 + 下一批动手清单（新会话从这里开始）** |
-| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.55**：§5.49/§5.50 = 口上项目批与 T2 权威记录 · §5.51–§5.53 = 内核优化批 · §5.54 = UI P4 补记与两组文档合流 · §5.55 = 分支收口核验） |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.58**：§5.49/§5.50 = 口上项目批与 T2 · §5.51–§5.53 = 内核优化批 · §5.54 = UI P4 补记 · §5.55 = 分支收口核验 · §5.56/§5.57 = T3/T4 · **§5.58 = 开项目级联三段全持久化（体感丝滑批）**） |
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
 | `docs/BASELINES.md` | 实测基线汇总（索引/回放/抽取/校验性能与正确性数字） |
 | `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` | **糖表层规范 v1.2（冻结权威）**：语法/转译/产物逐条定义，golden 逐字节锚定 |
@@ -699,6 +712,8 @@ node tools/smoke-tauri-ipc.mjs
 | github 直连时通时断 | git-push.mjs 已内置 6 轮×5s 重试，失败就隔几分钟再试 |
 | npm/pnpm registry=npmmirror **直连可用** | 别给镜像配代理（ECONNREFUSED）；项目 `.npmrc` 已固定 |
 | pnpm 11 供应链策略拦构建脚本 | pnpm-workspace.yaml `allowBuilds` 显式批准（esbuild 已批） |
+| **`npx vitest` 会吞掉命令行环境变量**（Git-Bash 的 npx shim 不透传），带 `KOJO_SMOKE_PROJECT` 跑真实语料时整组静默 skip，看起来像"通过" | 带环境变量一律用 `node node_modules/vitest/vitest.mjs run <file>`（实测 `npx` 传不进、直调 node 传得进） |
+| **`cat >> 文件` 在本机 shell 可能把内容插到文件开头**（2026-10-12 实测把 describe 块灌到了第 2 行，TS 直接语法崩） | 追加/修改文件一律用 Edit/Write 工具；改完必须 `grep -n` 读回结构（§九-23 的老教训换个形式重现） |
 | bash coreutils 时常 127；`node -e` 多层引号/Markdown 反引号必翻车 | 一切用 node 临时 `.mjs` 文件或 Read/Write/Edit 工具；PowerShell 工具 stdout 不回显 |
 | **bash 严重残缺时 pnpm/vitest/tsc shim 全挂**（`sed`/`dirname`/`uname` 缺失） | 直调 node：`node "D:/Code/Nodejs/node_global/node_modules/pnpm/bin/pnpm.mjs" install`；vitest → `node "node_modules/.pnpm/vitest@4.1.11_@types+node@2_1db5548ac037c87131628c83c4241b81/node_modules/vitest/vitest.mjs" run`；tsc → `node "node_modules/.pnpm/typescript@7.0.2/node_modules/typescript/lib/tsc.js" --noEmit -p tsconfig.json` |
 | **Edit 工具偶发"声称成功未落盘"，且同文件并行 Edit 会 EBUSY** | 关键修改后读回验证；**同一文件的多次 Edit 必须串行** |
@@ -744,8 +759,8 @@ node tools/smoke-tauri-ipc.mjs
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1200 passed / 9 skipped（1209）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.57 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1252 passed / 9 skipped（1261）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.58 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前两条主线**：
    - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 + T2.1 + T3 + T4 已通。
      **下一批首选 = 导出 ZIP（TS 层，用户 2026-10-12 拍板）**：
