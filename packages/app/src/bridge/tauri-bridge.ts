@@ -1,5 +1,5 @@
-import type { PlatformBridge } from '@kojo/plugin-api';
-import { base64ToBytes, bytesToBase64, invoke } from './invoke';
+import type { FileChangeKind, PlatformBridge, WatchCallback, WatchReportCallback } from '@kojo/plugin-api';
+import { base64ToBytes, bytesToBase64, invoke, isTauri } from './invoke';
 
 /**
  * PlatformBridge 的 Tauri 实现。
@@ -7,8 +7,8 @@ import { base64ToBytes, bytesToBase64, invoke } from './invoke';
  * Rust 侧同名命令见 src-tauri/src/lib.rs。
  * 二进制数据用 base64 字符串跨 IPC（确定性强、跨 Tauri 版本稳定；口上文件体量下开销可忽略）。
  *
- * v0.1 未实现：watchDirs（文件监视走 Rust notify，后续版本接入）——
- * 返回空取消函数而非抛错，调用方无需特判；UI 用显式刷新按钮替代。
+ * `watchDirs`（BUG-5，2026-10-13 已接 Rust notify）：本层只做"事件名 ↔ 回调"的接线，
+ * 去抖 / 判级 / 广播都在内核（`packages/kernel/src/watcher.ts`）。
  */
 export const tauriBridge: PlatformBridge = {
   async readFileBytes(path: string): Promise<Uint8Array> {
@@ -56,9 +56,53 @@ export const tauriBridge: PlatformBridge = {
     await invoke('remove_dir', { path });
   },
 
-  async watchDirs(): Promise<() => void> {
-    console.warn('[bridge] watchDirs is not implemented in v0.1 (planned: Rust notify)');
-    return () => {};
+  async watchDirs(
+    paths: string[],
+    onEvent: WatchCallback,
+    onReport?: WatchReportCallback,
+  ): Promise<() => void> {
+    // Rust 侧（start_watch）只做"原始事件转发"，去抖与判级在内核（BUG-5 分层口径）。
+    // 事件名常量与 src-tauri/src/lib.rs 的 FS_CHANGED_EVENT / FS_WATCH_ERROR_EVENT 成对。
+    if (!isTauri()) {
+      // 先自证再抛：让降级消息是"浏览器壳没有监视能力"，而不是 WebView 的一句 undefined
+      onReport?.({ type: 'started', watched: [], failures: paths.map((p) => ({ root: p, reason: '浏览器开发壳无文件监视能力（仅 Tauri 桌面壳有）' })) });
+      throw new Error('浏览器开发壳无文件监视能力（仅 Tauri 桌面壳有）');
+    }
+    const { listen } = await import('@tauri-apps/api/event');
+    type FsChangedPayload = { kind: FileChangeKind; path: string };
+    type WatchReply = { watched: string[]; failed: Array<{ path: string; error: string }> };
+
+    const unChanged = await listen<FsChangedPayload>('kojo:fs-changed', (e) => {
+      onEvent(e.payload.kind, e.payload.path);
+    });
+    const unError = await listen<{ error: string }>('kojo:fs-watch-error', (e) => {
+      onReport?.({ type: 'error', reason: e.payload.error });
+    });
+
+    try {
+      const reply = await invoke<WatchReply>('start_watch', { paths });
+      onReport?.({
+        type: 'started',
+        watched: reply.watched,
+        failures: reply.failed.map((f) => ({ root: f.path, reason: f.error })),
+      });
+    } catch (err) {
+      // 监视器建不起来（平台层直接失败）：先报告再抛——内核据此显式降级
+      const reason = err instanceof Error ? err.message : String(err);
+      onReport?.({ type: 'started', watched: [], failures: paths.map((p) => ({ root: p, reason })) });
+      unChanged();
+      unError();
+      throw err;
+    }
+
+    return () => {
+      unChanged();
+      unError();
+      // 停监视是即发即忘：句柄由 Rust 侧 Drop 注销，这里不阻塞卸载
+      void invoke('stop_watch').catch((err: unknown) => {
+        console.warn('[bridge] stop_watch failed:', err);
+      });
+    };
   },
 
   async chooseDirectory(opts): Promise<string | null> {

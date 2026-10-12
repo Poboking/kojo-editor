@@ -16,6 +16,8 @@ export type {
   EventBus,
   FileChangeKind,
   FileChangedEvent,
+  FileWatchStateEvent,
+  FileWatchStatus,
   KernelEventMap,
   KernelEventName,
   PluginEventMap,
@@ -36,6 +38,9 @@ export type {
   PlatformBridge,
   WalkOptions,
   WatchCallback,
+  WatchFailure,
+  WatchReport,
+  WatchReportCallback,
 } from './platform';
 
 export type { ScopedStorage, StorageService } from './storage';

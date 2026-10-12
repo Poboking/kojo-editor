@@ -11,12 +11,42 @@ export interface FileChangedEvent {
   path: string;
 }
 
+/** 文件监视的判级结果（`file.watchState` 载荷；由内核监视器产生） */
+export type FileWatchStatus = 'watching' | 'partial' | 'unavailable' | 'stopped';
+
+export interface FileWatchStateEvent {
+  /**
+   * - `watching`：全部请求根都监视上了；
+   * - `partial`：部分根监视失败（`failures` 逐条给原因）——**必须可见**，
+   *   否则用户以为"外部改动会自动重载"，而某个目录其实没在监视；
+   * - `unavailable`：一个根都没监视上 / 平台没有监视能力（如浏览器开发壳）/
+   *   **监视器运行期自身失效**（目录被卸载、底层句柄没了）——三种都意味着
+   *   "从现在起不会再有自动重载"，所以同一判级、同一呈现；
+   * - `stopped`：显式停止（project.closed / 应用退出），不是故障。
+   */
+  status: FileWatchStatus;
+  /** 实际监视中的根目录（绝对路径） */
+  roots: string[];
+  /** 逐条失败的根与原因；`watching` / `stopped` 时为空 */
+  failures: Array<{ root: string; reason: string }>;
+}
+
 /**
  * 内核预定义事件（兼容性承诺：不改名、不删除，新增走次要版本）。
  */
 export interface KernelEventMap {
   /** 文件系统变更（由内核 io 监视器产生） */
   'file.changed': FileChangedEvent;
+  /**
+   * 文件监视器自身的状态（BUG-5，2026-10-13）：监视了哪些根、哪些根没监视上、
+   * 监视停摆了。与 `file.changed` 的分工：后者说"某个文件变了"，
+   * 前者说"这套自动重载机制此刻是否可信"。
+   *
+   * 通用、游戏无关。**内核专属**：安全提示类事件由内核垄断发出
+   * （插件伪造 `watching` = 伪造"外部改动会自动重载"的保证，
+   * 与 `project.writableApprovalMismatch` 同类，见下方分类表）。
+   */
+  'file.watchState': FileWatchStateEvent;
   /** 项目已打开（onboarding 骨架完成 loadProject 后） */
   'project.opened': { project: GameProject };
   /** 项目已关闭 */
@@ -160,6 +190,8 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
 /** 内核/宿主专属事件：插件可 `on`、不可 `emit`（安全语义事件由内核垄断发出）。 */
 const KERNEL_ONLY_EVENT_NAMES = [
   'project.writableApprovalMismatch',
+  // 监视状态 = "自动重载机制是否可信"的保证，与写权限同意度同类（BUG-5）
+  'file.watchState',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核事件名（= 插件可 emit 的集合；供 kernel `scopedBus` 执法使用） */

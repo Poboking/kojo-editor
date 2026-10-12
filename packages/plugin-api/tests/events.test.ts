@@ -41,11 +41,15 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     // 白名单已强类型化（ReadonlySet<KernelEventName>），编译层本身就拒绝该键
     // （防线一）；此处展开为数组做运行时镜像断言（防线二），免于强行 cast。
     expect([...KERNEL_EVENT_NAMES]).not.toContain('project.writableApprovalMismatch');
+    // BUG-5：监视状态同属"安全保证"类事件——插件不得伪造"外部改动会自动重载"
+    expect([...KERNEL_EVENT_NAMES]).not.toContain('file.watchState');
   });
 
   it('白名单无重复（Set 语义自证：长度 = 快照清单长度）', () => {
     // 2026-10-12 两线合流：工作区批 +workspace.importRequested（15）
     // ∪ 语法糖视图批 +editor.sugarView.set（16）——快照清单与计数必须同批动。
+    // 2026-10-13 BUG-5 新增 file.watchState 走 **KERNEL_ONLY** 表 ⇒ 可 emit 白名单仍 16，
+    // 计数不动是设计结果，不是漏项（漏项的话编译期 guard 会红）。
     expect(KERNEL_EVENT_NAMES.size).toBe(16);
   });
 });

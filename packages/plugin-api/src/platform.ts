@@ -29,6 +29,27 @@ export interface WalkOptions {
 /** 文件监视回调（内核会在平台事件之上做去抖与归一化） */
 export type WatchCallback = (kind: FileChangeKind, path: string) => void;
 
+/** 某个根目录没能监视上（路径不存在 / 权限 / 句柄耗尽） */
+export interface WatchFailure {
+  root: string;
+  reason: string;
+}
+
+/**
+ * 监视器的**自述**（BUG-5，2026-10-13）：平台层只报告事实，判级与呈现归内核/宿主。
+ *
+ * - `started`：起监视的即时结果。`watched` 空 = 一个根都没监视上；
+ *   `failures` 非空但 `watched` 非空 = 部分监视（宿主须显式说明少了哪些）；
+ * - `error`：监视**运行期间**自身出错（目录被卸载 / 底层句柄失效）。
+ *   此前这类错误无处可报——`WatchCallback` 只承载文件事件，
+ *   监视器静默失灵就等于"看起来在监视、其实早已停摆"。
+ */
+export type WatchReport =
+  | { readonly type: 'started'; readonly watched: string[]; readonly failures: WatchFailure[] }
+  | { readonly type: 'error'; readonly reason: string };
+
+export type WatchReportCallback = (report: WatchReport) => void;
+
 /**
  * 平台桥：内核与宿主环境（Node / Tauri）之间的全部 IO 原语。
  *
@@ -53,8 +74,17 @@ export interface PlatformBridge {
   removeFile(path: string): Promise<void>;
   /** 递归删除目录（不存在则幂等成功；写允许域同 writeFileBytes） */
   removeDir(path: string): Promise<void>;
-  /** 监视若干目录（递归）；返回取消函数 */
-  watchDirs(paths: string[], onEvent: WatchCallback): Promise<Unsubscribe>;
+  /**
+   * 监视若干目录（递归）；返回取消函数。
+   *
+   * `onReport`（BUG-5 新增，可选）收监视器**自述**：起监视的逐根结果 +
+   * 运行期自身出错。缺省调用方（测试）可只关心文件事件。
+   */
+  watchDirs(
+    paths: string[],
+    onEvent: WatchCallback,
+    onReport?: WatchReportCallback,
+  ): Promise<Unsubscribe>;
   /** 目录选择对话框；用户取消返回 null */
   chooseDirectory(opts?: { title?: string }): Promise<string | null>;
   /**

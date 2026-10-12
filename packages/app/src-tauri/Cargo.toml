@@ -26,6 +26,7 @@ encoding_rs = "0.8"
 base64 = "0.22"
 walkdir = "2"
 rfd = "0.15"
+notify = "8.2.0"
 
 [profile.release]
 lto = true

@@ -1,7 +1,8 @@
 //! kojo-editor Tauri 宿主。
 //!
 //! 本层的全部职责 = 为 WebView 内的内核提供 **PlatformBridge 原语**：
-//! 文件字节读写（原子写）、目录遍历、编解码（encoding_rs）、目录对话框、应用数据目录。
+//! 文件字节读写（原子写）、目录遍历、编解码（encoding_rs）、目录对话框、应用数据目录、
+//! 文件监视（notify 原始事件转发；去抖与判定在内核 TS）。
 //! **零游戏知识、零业务逻辑**——一切领域逻辑都在前端的内核与插件中。
 //!
 //! 二进制数据经 base64 字符串跨 IPC（确定性强；口上文件体量下开销可忽略）。
@@ -10,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use notify::event::{EventKind, ModifyKind, RenameMode};
+use notify::Event;
 use serde::{Deserialize, Serialize};
 
 /* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
@@ -542,12 +545,180 @@ fn encode_string(text: String, encoding: String) -> Result<String, String> {
     Ok(B64.encode(buf))
 }
 
+/* ---------------------------- 文件监视（BUG-5） ---------------------------- */
+//
+// 本层只做两件事：起 notify 递归监视、把**原始**事件逐条转发给 WebView。
+// 去抖 / 合并 / 「是不是我自己写的」判定全在内核 TS（口径见
+// `packages/plugin-api/src/platform.ts` 的 `WatchCallback` 注释：
+// 「内核会在平台事件之上做去抖与归一化」）。
+//
+// 唯一的例外是下面 `is_atomic_write_temp`：那是**本文件自己的原子写产物**
+// （`write_file_bytes` 造 `.{name}.{pid}.kojo-tmp` 再 rename），属于 IO 机械噪声，
+// 留在 IO 层滤掉，不算业务策略。
+
+/// WebView 事件名：原始文件变更。payload = `{ kind, path }`。
+const FS_CHANGED_EVENT: &str = "kojo:fs-changed";
+/// WebView 事件名：监视器自身出错（目录被卸载 / 句柄失效等）。payload = `{ error }`。
+/// 单独一条通道而不是塞进 FS_CHANGED_EVENT，是为了让前端**显式降级**而不是静默失灵。
+const FS_WATCH_ERROR_EVENT: &str = "kojo:fs-watch-error";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FsChangedPayload {
+    /// 与 `plugin-api` 的 `FileChangeKind` 一一对应
+    kind: &'static str,
+    path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WatchErrorPayload {
+    error: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FailedRoot {
+    path: String,
+    error: String,
+}
+
+/// `start_watch` 回执：哪些根真的监视上了、哪些没有以及为什么。
+/// 全空不算错误（返回 Ok），由前端据此进入「监视不可用」的显式降级态。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WatchReport {
+    watched: Vec<String>,
+    failed: Vec<FailedRoot>,
+}
+
+/// 原子写的临时文件不算内容变更：rename 之后目标路径会自己出一条事件，
+/// 临时文件那两条（create / remove）纯属重复噪声，还会让消费方读到半成品。
+fn is_atomic_write_temp(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .map(|name| name.starts_with('.') && name.ends_with(".kojo-tmp"))
+        .unwrap_or(false)
+}
+
+/// notify 事件类别 → 契约三态（纯函数，可单测）。`None` = 本层丢弃。
+fn normalize_event_kind(kind: &EventKind) -> Option<&'static str> {
+    match kind {
+        EventKind::Create(_) => Some("add"),
+        EventKind::Remove(_) => Some("unlink"),
+        // 改名前的旧名 = 那个路径的东西没了
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => Some("unlink"),
+        // RenameTo / RenameBoth 归 change：消费方按「盘上内容可能变了」重读，
+        // 比按「新文件」处理更保守（Both 场景下两个路径谁是谁都分不清）。
+        EventKind::Modify(_) => Some("change"),
+        // 分不出类别的变更宁可多报，由消费方的内容比对收敛（绝不静默丢事件）
+        EventKind::Any | EventKind::Other => Some("change"),
+        // 纯读取：索引构建本来就在成千次读盘，转发会变成事件风暴
+        EventKind::Access(_) => None,
+    }
+}
+
+/// 托管状态：当前唯一的监视会话。
+/// 内核是 `watchDirs` 的唯一调用方 ⇒ 不做多会话引用计数；重复 start = 换一批根目录
+/// （旧 watcher 在这里被赋值 Drop，notify 的 Drop 会注销底层句柄）。
+#[derive(Default)]
+struct WatchState {
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+}
+
+/// notify 回调 → WebView 事件。零判断，逐条透传。
+struct WebviewForwarder {
+    app: tauri::AppHandle,
+}
+
+impl notify::EventHandler for WebviewForwarder {
+    fn handle_event(&mut self, event: notify::Result<Event>) {
+        use tauri::Emitter;
+        match event {
+            Ok(ev) => {
+                let Some(kind) = normalize_event_kind(&ev.kind) else {
+                    return;
+                };
+                for path in ev.paths {
+                    if is_atomic_write_temp(&path) {
+                        continue;
+                    }
+                    let Some(path) = path.to_str() else {
+                        continue; // 非 UTF-8 路径：IPC 走 JSON，无法承载；不静默——见前端 roots 计数
+                    };
+                    let _ = self.app.emit(
+                        FS_CHANGED_EVENT,
+                        FsChangedPayload {
+                            kind,
+                            path: path.to_string(),
+                        },
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = self.app.emit(
+                    FS_WATCH_ERROR_EVENT,
+                    WatchErrorPayload {
+                        error: err.to_string(),
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// 起（或换）监视会话：递归监视 `paths`，原始事件转发到 WebView。
+#[tauri::command]
+fn start_watch(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WatchState>,
+    paths: Vec<String>,
+) -> Result<WatchReport, String> {
+    use notify::Watcher;
+    let mut watcher = notify::RecommendedWatcher::new(
+        WebviewForwarder { app },
+        notify::Config::default(),
+    )
+    .map_err(|e| format!("创建文件监视器失败: {e}"))?;
+
+    let mut watched = Vec::new();
+    let mut failed = Vec::new();
+    for p in paths {
+        match watcher.watch(Path::new(&p), notify::RecursiveMode::Recursive) {
+            Ok(()) => watched.push(p),
+            Err(e) => failed.push(FailedRoot {
+                path: p,
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    let mut guard = state
+        .watcher
+        .lock()
+        .map_err(|_| "watch state poisoned".to_string())?;
+    *guard = Some(watcher);
+    Ok(WatchReport { watched, failed })
+}
+
+/// 停监视（project.closed / 桥卸载）。丢弃 watcher 即注销句柄。
+#[tauri::command]
+fn stop_watch(state: tauri::State<'_, WatchState>) -> Result<(), String> {
+    let mut guard = state
+        .watcher
+        .lock()
+        .map_err(|_| "watch state poisoned".to_string())?;
+    *guard = None;
+    Ok(())
+}
+
 /* ------------------------------- 入口 ------------------------------- */
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(WriteDomainState::default())
+        .manage(WatchState::default())
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
             write_file_bytes,
@@ -567,7 +738,9 @@ pub fn run() {
             register_write_domain,
             clear_write_domain,
             decode_bytes,
-            encode_string
+            encode_string,
+            start_watch,
+            stop_watch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -800,5 +973,100 @@ mod export_copy_tests {
         assert_eq!(n, 0);
         assert!(dst.is_dir());
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::{is_atomic_write_temp, normalize_event_kind};
+    use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
+    use std::path::Path;
+
+    #[test]
+    fn create_is_add_and_remove_is_unlink() {
+        assert_eq!(normalize_event_kind(&EventKind::Create(CreateKind::Any)), Some("add"));
+        assert_eq!(
+            normalize_event_kind(&EventKind::Create(CreateKind::Folder)),
+            Some("add")
+        );
+        assert_eq!(normalize_event_kind(&EventKind::Remove(RemoveKind::Any)), Some("unlink"));
+        assert_eq!(
+            normalize_event_kind(&EventKind::Remove(RemoveKind::File)),
+            Some("unlink")
+        );
+    }
+
+    #[test]
+    fn rename_from_is_unlink_and_rename_to_is_change() {
+        assert_eq!(
+            normalize_event_kind(&EventKind::Modify(ModifyKind::Name(RenameMode::From))),
+            Some("unlink")
+        );
+        assert_eq!(
+            normalize_event_kind(&EventKind::Modify(ModifyKind::Name(RenameMode::To))),
+            Some("change")
+        );
+        // Both：一个事件两条路径、谁是谁分不清 ⇒ 一律 change，让消费方按内容比对收敛
+        assert_eq!(
+            normalize_event_kind(&EventKind::Modify(ModifyKind::Name(RenameMode::Both))),
+            Some("change")
+        );
+        assert_eq!(
+            normalize_event_kind(&EventKind::Modify(ModifyKind::Name(RenameMode::Any))),
+            Some("change")
+        );
+    }
+
+    #[test]
+    fn unclassifiable_kinds_are_reported_not_dropped() {
+        // 绝不静默：分不出类别的变更也要报出去
+        assert_eq!(normalize_event_kind(&EventKind::Any), Some("change"));
+        assert_eq!(normalize_event_kind(&EventKind::Other), Some("change"));
+        assert_eq!(
+            normalize_event_kind(&EventKind::Modify(ModifyKind::Any)),
+            Some("change")
+        );
+        assert_eq!(
+            normalize_event_kind(&EventKind::Modify(ModifyKind::Metadata(
+                notify::event::MetadataKind::Any
+            ))),
+            Some("change")
+        );
+    }
+
+    #[test]
+    fn pure_reads_are_dropped() {
+        // 索引构建本身就在成千次读盘：Access 事件转发出去就是事件风暴
+        assert_eq!(
+            normalize_event_kind(&EventKind::Access(AccessKind::Read)),
+            None
+        );
+        assert_eq!(
+            normalize_event_kind(&EventKind::Access(AccessKind::Any)),
+            None
+        );
+        assert_eq!(
+            normalize_event_kind(&EventKind::Access(AccessKind::Open(AccessMode::Execute))),
+            None
+        );
+    }
+
+    #[test]
+    fn atomic_write_temp_is_filtered_and_real_files_are_not() {
+        // write_file_bytes 的产物：.{name}.{pid}.kojo-tmp
+        assert!(is_atomic_write_temp(Path::new(
+            r"C:\data\dir\.payload.txt.4242.kojo-tmp"
+        )));
+        // 真实文件与相邻命名都不该被误滤
+        assert!(!is_atomic_write_temp(Path::new(
+            r"C:\data\dir\payload.txt"
+        )));
+        assert!(!is_atomic_write_temp(Path::new(
+            r"C:\data\dir\.payload.txt.4242.other-tmp"
+        )));
+        assert!(!is_atomic_write_temp(Path::new(r"C:\data\dir\notes.kojo-tmp")));
+        assert!(!is_atomic_write_temp(Path::new(r"C:\data\dir\.hidden")));
+        // 目录名恰好带点也不能升级成"临时文件"
+        assert!(!is_atomic_write_temp(Path::new(r"C:\data\a.kojo-tmp\b.txt")));
     }
 }

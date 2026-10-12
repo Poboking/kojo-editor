@@ -89,6 +89,26 @@ export function App(): ReactElement {
     };
   }, [kernel]);
 
+  // BUG-5：监视器自述必须可见。`partial` / `unavailable` 意味着"某些目录的外部改动
+  // 不会自动重载"——这正是过去静默失灵的形状（用户以为会自动重载，其实句柄早没了）。
+  // `watching` 不提示：它是常态，不是需要用户处置的事。
+  useEffect(() => {
+    if (!kernel) return;
+    const un = kernel.bus.on('file.watchState', (st) => {
+      if (st.status === 'watching' || st.status === 'stopped') return;
+      const detail = st.failures.map((f) => `${f.root} — ${f.reason}`).join('；');
+      notify({
+        kind: 'error',
+        message:
+          (st.status === 'partial'
+            ? '文件监视只启用了一部分，下列目录的外部改动不会自动重载：'
+            : '文件监视不可用，外部改动不会自动重载：') +
+          `${detail || '(未给出原因)'}。可点各面板的「刷新」按钮手动重扫。`,
+      });
+    });
+    return un;
+  }, [kernel, notify]);
+
   // 通用导航意图：任意插件提出"打开文件并定位"，宿主在此落地。
   // P3 多标签后切换零丢失（model 留内存），无需未保存确认——确认只发生在关闭脏标签。
   useEffect(() => {
@@ -140,6 +160,15 @@ export function App(): ReactElement {
             setError(`写允许域注册失败（将只允许 appDataDir 写入）: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
+
+        // BUG-5：起文件监视（Rust notify → 内核去抖 → `file.changed`）。
+        // 根 = 项目根 ∪ 适配器其余根：存档目录可能在项目根外（本机就有独立的 sav 库），
+        // 嵌套根由内核折叠。监视状态经 `file.watchState` 呈现，不在此处吞掉。
+        await kernel.fileWatch.start([
+          p.rootDir,
+          ...p.kojoPaths,
+          ...(p.savDir ? [p.savDir] : []),
+        ]);
 
         // 可写路径批准（首次打开必须由用户显式确认；未批准 = 只读浏览）；
         // 批准记录与新提议不一致（approvalMismatch）同样重弹确认（F1/F2 修复）
@@ -272,6 +301,7 @@ export function App(): ReactElement {
   const closeProject = useCallback(async () => {
     if (!kernel) return;
     await kernel.project.close();
+    kernel.fileWatch.stop(); // BUG-5：监视随项目生命周期收（与写允许域同相位）
     // Rust 侧允许域回到「仅 appDataDir」（与 kernel 的 writablePaths 清理同相位）
     if (isTauri()) {
       try {

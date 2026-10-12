@@ -10,7 +10,8 @@
  * 分层（"一切皆插件"）：
  *   - 解析在 sav-parser（`snapshot.source`），本插件只做**呈现 + 意图**；
  *   - 纯逻辑（格式化 / 列表规约 / 角色摘要）在 `panel-logic.ts`（零 React 可单测）；
- *   - 刷新为**显式按钮**（目录监视 `watchDirs` 未实现，见 HANDOFF §6.11 候选清单）。
+ *   - 刷新为**显式按钮**（BUG-5 之后目录监视已接 Rust notify，外部增删归档会经
+ *     `file.changed` 自动重扫；按钮保留作 `partial` / `unavailable` 降级态的兜底）。
  */
 
 import { createElement, useEffect, useState } from 'react';

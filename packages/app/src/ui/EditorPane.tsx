@@ -761,13 +761,26 @@ export function EditorPane({
   );
 
   // 外部写盘 → 重载对应 model（B1 修复）：宿主只**消费** `file.changed`，不认识"升糖"
+  //
+  // BUG-5 补全（§5.46 记录的已知缺口"add/unlink 不处理"）：
+  // - `add` 同样触发重载——外部工具用「删除 + 重建」的方式保存时，去抖窗末态就是 add，
+  //   只认 change 会让已打开的 model 停在旧内容上（读者以为"自动重载坏了"）；
+  // - `unlink` 不动 model（关标签/清内容都是替用户做决定），但**必须说**：
+  //   盘上没了而编辑器还在，是"保存会凭空造回这个文件"的口径问题，不能静默。
   useEffect(() => {
     const un = kernel.bus.on('file.changed', (ev) => {
-      if (ev.kind !== 'change') return; // add/unlink 不影响已打开 model 的内容
+      if (ev.kind === 'unlink') {
+        if (!entriesRef.current.has(ev.path)) return; // 没打开 → 与编辑器无关
+        notify({
+          kind: 'error',
+          message: `「${ev.path}」已在磁盘上被删除。编辑器里的内容现在是唯一副本——保存会重新创建该文件。`,
+        });
+        return;
+      }
       void reloadFromDisk(ev.path);
     });
     return un;
-  }, [kernel, reloadFromDisk]);
+  }, [kernel, reloadFromDisk, notify]);
 
   /**
    * 保存告警的处置（确认框回调）：

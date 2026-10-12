@@ -21,6 +21,7 @@ import { PluginRuntime } from './runtime';
 import { SlotRegistryImpl } from './slots';
 import { FileStorageBackend, StorageServiceImpl } from './storage';
 import { WorkspaceServiceImpl } from './workspace';
+import { FileWatcherServiceImpl, type FileWatchController } from './watcher';
 
 /**
  * 内核组装（只做四件事：DI 容器 / 事件总线 / 存储域 / 文件 IO）。
@@ -54,6 +55,13 @@ export interface Kernel {
    * 同时也是服务键 `kernel.compute`（插件经 `inject` 取用）。
    */
   readonly compute: ComputePool;
+  /**
+   * 文件监视控制器（BUG-5，2026-10-13）：宿主在 project.opened 起、project.closed 停。
+   *
+   * 内核负责去抖 + 归一化 + `file.changed` / `file.watchState` 广播，
+   * **不自动起**——内核测试会开一堆临时项目目录，自动起监视会留下活句柄并制造无关事件。
+   */
+  readonly fileWatch: FileWatchController;
   /**
    * 服务查询（宿主 / UI / 测试用）。
    * 插件请通过 PluginContext.inject / tryInject（依赖声明式接线），
@@ -96,6 +104,7 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
   const storage = new StorageServiceImpl(opts.storageBackend ?? new FileStorageBackend(opts.platform));
   const io = new FileIOServiceImpl(opts.platform, kernelLog);
   const compute = createComputePool({ log: kernelLog });
+  const fileWatch = new FileWatcherServiceImpl({ platform: opts.platform, bus, log: kernelLog });
 
   // 内核服务以 'kernel' 名义注册（插件通过 requires: ['kernel.bus', ...] 消费）
   container.provide(KernelServices.Bus, bus, 'kernel');
@@ -165,6 +174,7 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
     project,
     workspaces,
     compute,
+    fileWatch,
     services: {
       tryGet: <T = unknown>(key: string): T | undefined => container.tryGet<T>(key),
       get: <T = unknown>(key: string): T => container.get<T>(key),
@@ -181,6 +191,7 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
       kernelLog.info(`Kernel started: ${active}/${runtime.list().length} plugins active`);
     },
     async stop(): Promise<void> {
+      fileWatch.stop();
       await runtime.stopAll();
     },
   };

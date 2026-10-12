@@ -10,12 +10,20 @@ import type {
   Unsubscribe,
   WalkOptions,
   WatchCallback,
+  WatchFailure,
+  WatchReportCallback,
 } from '@kojo/plugin-api';
 
 /**
  * Node 平台桥（测试与 CLI 用）。
  * 生产环境由 Tauri 壳的 Rust 侧提供同接口实现（encoding_rs + notify + rfd）。
  */
+
+/** 本桥原子写的临时文件名（`.{name}.{pid}.{ms}.tmp`）——与 Rust 侧同口径过滤掉 */
+function isAtomicWriteTemp(relativePath: string): boolean {
+  const name = relativePath.split(/[\\/]/).pop() ?? '';
+  return name.startsWith('.') && name.endsWith('.tmp');
+}
 
 const DECODE_LABEL: Record<FileEncoding, string> = {
   'utf-8': 'utf-8',
@@ -117,17 +125,32 @@ export class NodeBridge implements PlatformBridge {
     await fs.rm(path, { recursive: true, force: true });
   }
 
-  async watchDirs(paths: string[], onEvent: WatchCallback): Promise<Unsubscribe> {
+  async watchDirs(
+    paths: string[],
+    onEvent: WatchCallback,
+    onReport?: WatchReportCallback,
+  ): Promise<Unsubscribe> {
     const watchers: Array<ReturnType<typeof import('node:fs').watch>> = [];
+    const failures: WatchFailure[] = [];
+    const watched: string[] = [];
     const { watch } = await import('node:fs');
     for (const p of paths) {
-      const w = watch(p, { recursive: true }, (eventType, filename) => {
-        if (!filename) return;
-        const kind: FileChangeKind = eventType === 'rename' ? 'change' : 'change';
-        onEvent(kind, nodePath.join(p, filename.toString()));
-      });
-      watchers.push(w);
+      try {
+        const w = watch(p, { recursive: true }, (eventType, filename) => {
+          if (!filename) return;
+          // 与 Rust 侧 is_atomic_write_temp 同口径：本桥自己的原子写产物不算内容变更
+          if (isAtomicWriteTemp(filename.toString())) return;
+          const kind: FileChangeKind = eventType === 'rename' ? 'change' : 'change';
+          onEvent(kind, nodePath.join(p, filename.toString()));
+        });
+        w.on('error', (err) => onReport?.({ type: 'error', reason: String(err) }));
+        watchers.push(w);
+        watched.push(p);
+      } catch (err) {
+        failures.push({ root: p, reason: err instanceof Error ? err.message : String(err) });
+      }
     }
+    onReport?.({ type: 'started', watched, failures });
     return () => {
       for (const w of watchers) w.close();
     };

@@ -18,6 +18,12 @@ export {
   type StorageBackend,
 } from './storage';
 export { FileIOServiceImpl } from './io';
+export {
+  FileWatcherServiceImpl,
+  WATCH_DEBOUNCE_MS,
+  type FileWatchController,
+  type FileWatcherDeps,
+} from './watcher';
 export { ProjectServiceImpl, type ProjectServiceDeps } from './project';
 export { WorkspaceServiceImpl, type WorkspaceServiceDeps } from './workspace';
 // 计算池（内核设施 `kernel.compute`）：时间片调度 + 优先级 + 单飞尾缘合并
