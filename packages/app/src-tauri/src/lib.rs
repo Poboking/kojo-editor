@@ -183,6 +183,16 @@ fn read_file_bytes(path: String) -> Result<String, String> {
     Ok(B64.encode(bytes))
 }
 
+/// 同一件事，但**响应以二进制过界**：Tauri 把 `ipc::Response` 的 body 原样送到前端，
+/// 前端拿到 `ArrayBuffer`。省掉 base64 的 1.34× 膨胀和 JS 侧逐字节还原——
+/// 开项目热路径每轮要读两份 10 MB 级快照（IMPLEMENTATION-LOG §5.91 实机读数）。
+/// `read_file_bytes` 保留：它仍是 smoke 脚本与"两条通道逐字节对照"探针的参照物。
+#[tauri::command]
+fn read_file_bytes_raw(path: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// 原子写：同目录临时文件 + rename（Windows 上 rename 覆盖已存在文件）。
 /// 写允许域第二道闸（M3）：目标路径必须在允许域内。
 #[tauri::command]
@@ -724,6 +734,7 @@ pub fn run() {
         .manage(WatchState::default())
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
+            read_file_bytes_raw,
             write_file_bytes,
             ensure_dir,
             list_dir,

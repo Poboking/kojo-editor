@@ -29,8 +29,9 @@ export const DECODE_LABEL: Record<FileEncoding, string> = {
 
 export const tauriBridge: PlatformBridge = {
   async readFileBytes(path: string): Promise<Uint8Array> {
-    const b64 = await invoke<string>('read_file_bytes', { path });
-    return base64ToBytes(b64);
+    // 二进制响应：字节以 ArrayBuffer 过界，不再 base64 膨胀 1.34× + 逐字节还原（§5.91）
+    const buf = await invoke<ArrayBuffer>('read_file_bytes_raw', { path });
+    return new Uint8Array(buf);
   },
 
   async writeFileBytes(path: string, data: Uint8Array): Promise<void> {
