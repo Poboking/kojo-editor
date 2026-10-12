@@ -22,6 +22,7 @@ import { createEratwFaceTable } from './face-templates';
 import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
 import { readPackageAttribution, type AttributionState as AttrState } from './attribution';
 import { createPackageActions } from './package-actions';
+import { resolveNewItemPath, type NewItemKind } from './new-item';
 import type { KojoCompiler } from './artifact';
 import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
@@ -115,6 +116,49 @@ export function createEratwAdapterPlugin(): Plugin {
         wsDirCache.clear();
         wsAttrCache.clear();
         refreshWsProjects();
+      };
+
+      /** 只重拉一个目录（新建文件后不必把整棵树清掉——那会让面板闪一下） */
+      const refreshDir = (absDir: string): void => {
+        wsDirCache.delete(absDir);
+        ensureWsDir(absDir);
+      };
+
+      /* ---- 新建文件 / 文件夹（反馈 1b）：目标恒在工作区内（常驻可写根） ---- */
+
+      /**
+       * 建一个条目并返回它的绝对路径（面板据此刷新 + 打开）。
+       * 失败返回中文原因，**不抛**——原因要原样出现在面板上，不是进控制台。
+       */
+      const createItem = async (
+        absDir: string,
+        rawName: string,
+        kind: NewItemKind,
+      ): Promise<{ ok: true; path: string; displayName: string } | { ok: false; reason: string }> => {
+        const resolved = resolveNewItemPath(absDir, rawName, kind);
+        if (!resolved.ok) return resolved;
+        if (!io.isWritable(resolved.absPath)) {
+          // 工作区根是常驻可写的，走到这里说明路径根本不在工作区里——那是程序 bug，
+          // 但也可能是用户把项目目录挪到了游戏目录下面。两种都不能默默写下去。
+          return { ok: false, reason: `目标不在可写范围内：${resolved.absPath}` };
+        }
+        if (await io.exists(resolved.absPath)) {
+          return { ok: false, reason: `已存在同名条目，未覆盖：${resolved.displayName}` };
+        }
+        try {
+          if (kind === 'folder') {
+            await io.ensureDir(resolved.absPath);
+          } else {
+            // 建**空文件**：内容留给作者写。工具不替他塞模板正文（与脚手架"不生成活函数"同一口径）。
+            await io.writeText(resolved.absPath, '');
+          }
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          ctx.log.warn(`新建失败（${resolved.absPath}）：${reason}`);
+          return { ok: false, reason };
+        }
+        refreshDir(absDir);
+        return { ok: true, path: resolved.absPath, displayName: resolved.displayName };
       };
 
       /* ---- 署名 / 授权（T2）：按包目录惰性读取并缓存（README 可能 Shift-JIS，走 io 探测） ---- */
@@ -362,6 +406,7 @@ export function createEratwAdapterPlugin(): Plugin {
           deployArtifact: (artifact, absDir) => requestDeploy(artifact, absDir),
           attribution: (absDir) => wsAttrCache.get(absDir),
           ensureAttribution: ensureWsAttribution,
+          createItem,
         }),
       });
 

@@ -20,6 +20,7 @@ import type { DirEntry, WorkspaceArtifact, WorkspaceProject } from '@kojo/plugin
 import { join } from '@kojo/plugin-api';
 import { attributionSummary, type AttributionState, type PackageAttribution } from './attribution';
 import type { PanelStatus } from './package-actions';
+import { NEW_ITEM_MENU, newItemPreviewName, type NewItemKind } from './new-item';
 
 /** 目录列举态（闭包缓存值）：在途 / 失败（带原因）/ 已加载 */
 export type DirListState = DirEntry[] | 'loading' | { error: string };
@@ -57,6 +58,15 @@ export interface KojoProjectsPanelDeps {
   attribution(absDir: string): AttributionState | undefined;
   /** 请求加载某包的署名（已加载 / 在途 → no-op） */
   ensureAttribution(absDir: string): void;
+  /**
+   * 在工作区某目录下新建文件 / 文件夹（反馈 1b）。
+   * 成功返回绝对路径（面板据此打开它）；失败返回中文原因，**原样呈现**给作者。
+   */
+  createItem(
+    absDir: string,
+    rawName: string,
+    kind: NewItemKind,
+  ): Promise<{ ok: true; path: string; displayName: string } | { ok: false; reason: string }>;
 }
 
 /** 目录条目排序：目录在前，其后按名称（中文本地化比较口径） */
@@ -148,60 +158,169 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
       setOpenDirs((prev) => toggleIn(prev, dir));
     };
 
-    /* ------------------------------ 目录内容（递归） ------------------------------ */
+    /* ---------------------- 右键新建（反馈 1b） ---------------------- */
 
-    const renderDir = (dir: string, depth: number): ReactNode => {
-      const state = deps.dirState(dir);
-      if (state === undefined || state === 'loading') {
-        return h('div', { key: `${dir}::note`, className: 'kp-note dim', style: indent(depth) }, '读取目录…');
+    /** 右键菜单（固定定位；dir = 要往哪儿建） */
+    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; dir: string } | null>(null);
+    /** 行内命名输入（VSCode 式：不用 window.prompt——WebView2 里它可能直接返回 null） */
+    const [draft, setDraft] = useState<{ dir: string; kind: NewItemKind } | null>(null);
+    const [draftValue, setDraftValue] = useState('');
+    const [draftError, setDraftError] = useState<string | null>(null);
+    const [creating, setCreating] = useState(false);
+    // 出现行内输入框就抢焦点（作者点完菜单的手已经在那儿了，不该再点一次）。
+    // `focus` 走结构化声明而不是 HTMLInputElement：本仓插件的 tsconfig **刻意不含 DOM lib**
+    // （全仓插件正文零 `document`/`window`，见 tsconfig `lib: ["ES2022"]`），
+    // 事件与元素一律按"用到的那几个字段"声明，与 new-project-wizard 的 onChange 同源。
+    const draftInputRef = useRef<{ focus(): void } | null>(null);
+    useEffect(() => {
+      draftInputRef.current?.focus();
+    }, [draft]);
+
+    /** 右键事件的最小形状（React 合成事件满足它） */
+    type PointerEvent = {
+      clientX: number;
+      clientY: number;
+      preventDefault(): void;
+      stopPropagation(): void;
+      /** React 合成事件的 view 就是 Window——用它拿视口宽，不必引 `window` */
+      view?: { innerWidth: number };
+    };
+
+    /** 菜单宽与壳层 `.context-menu` 的 min-width 对齐；靠右边时往左挪，别溢出视口 */
+    const MENU_WIDTH = 250;
+
+    const openCtxMenu = (e: PointerEvent, dir: string): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      const vw = e.view?.innerWidth ?? Number.MAX_SAFE_INTEGER;
+      setCtxMenu({ x: Math.min(e.clientX, vw - MENU_WIDTH), y: e.clientY, dir });
+    };
+
+    /** 从菜单选中某类型 → 收起菜单、展开目标目录、落下一个待命名的行内输入 */
+    const startDraft = (dir: string, kind: NewItemKind): void => {
+      setCtxMenu(null);
+      if (!openDirs.has(dir)) deps.ensureDir(dir);
+      setOpenDirs((prev) => (prev.has(dir) ? prev : new Set(prev).add(dir)));
+      setDraft({ dir, kind });
+      setDraftValue('');
+      setDraftError(null);
+    };
+
+    const commitDraft = async (): Promise<void> => {
+      if (!draft || creating) return;
+      setCreating(true);
+      setDraftError(null);
+      const r = await deps.createItem(draft.dir, draftValue, draft.kind);
+      setCreating(false);
+      if (!r.ok) {
+        // 名字留着让他改，不清空——清掉等于让他重打一遍
+        setDraftError(r.reason);
+        return;
       }
-      if (!Array.isArray(state)) {
-        return h(
-          'div',
-          { key: `${dir}::note`, className: 'kp-note err', style: indent(depth), title: state.error },
-          '目录读取失败（悬停查看原因）',
-        );
-      }
-      const entries = sortDirEntries(state);
-      if (entries.length === 0) {
-        return h('div', { key: `${dir}::note`, className: 'kp-note dim', style: indent(depth) }, '（空目录）');
-      }
+      const wasFile = draft.kind !== 'folder';
+      setDraft(null);
+      setDraftValue('');
+      // 新建的是文件就直接打开：作者的下一步十有八九是写内容
+      if (wasFile) deps.reveal(r.path);
+    };
+
+    /** 目标目录下的行内输入框（渲染在该目录内容的最前面） */
+    const draftRow = (dir: string, depth: number): ReactNode => {
+      if (!draft || draft.dir !== dir) return null;
+      const preview = newItemPreviewName(draftValue, draft.kind);
       return h(
         'div',
-        { key: dir, className: 'kp-dir' },
-        ...entries.map((e) => {
-          if (e.isDirectory) {
-            const dOpen = openDirs.has(e.path);
-            return h(
-              'div',
-              { key: e.path },
-              h(
-                'button',
-                {
-                  className: 'kp-dir-btn',
-                  style: indent(depth),
-                  title: e.path,
-                  onClick: () => toggleDir(e.path),
-                },
-                h('span', { className: 'caret' }, dOpen ? '▾' : '▸'),
-                h('span', { className: 'kp-dir-name' }, e.name),
-              ),
-              dOpen ? renderDir(e.path, depth + 1) : null,
-            );
-          }
-          return h(
-            'button',
-            {
-              key: e.path,
-              className: 'kp-file-btn',
-              style: indent(depth),
-              title: e.path,
-              onClick: () => deps.reveal(e.path),
-            },
-            h('span', { className: 'kp-file-name' }, e.name),
-          );
+        { key: `${dir}::draft`, className: 'kp-draft', style: indent(depth) },
+        h('input', {
+          ref: draftInputRef,
+          className: 'kp-draft-input',
+          value: draftValue,
+          placeholder: draft.kind === 'folder' ? '文件夹名' : '文件名',
+          disabled: creating,
+          onChange: (e: { target: { value: string } }) => {
+            setDraftValue(e.target.value);
+            setDraftError(null);
+          },
+          onKeyDown: (e: { key: string }) => {
+            if (e.key === 'Enter') void commitDraft();
+            else if (e.key === 'Escape') {
+              setDraft(null);
+              setDraftValue('');
+              setDraftError(null);
+            }
+          },
         }),
+        preview ? h('span', { className: 'kp-draft-preview dim' }, `→ ${preview}`) : null,
+        draftError
+          ? h('span', { className: 'kp-draft-err', title: draftError }, draftError)
+          : h('span', { className: 'kp-draft-hint dim' }, 'Enter 创建 · Esc 取消'),
       );
+    };
+
+    /* ------------------------------ 目录内容（递归） ------------------------------ */
+
+    /**
+     * 目录内容（递归）。
+     *
+     * 行内新建框**永远排在最前，且不受目录状态影响**：空目录 / 正在读 / 读失败的目录
+     * 同样要能建东西——"在空包里建第一个文件"恰恰是最常见的起手式，
+     * 若把它绑在"有内容才渲染"上，这条路就断了。
+     */
+    const renderDir = (dir: string, depth: number): ReactNode => {
+      const state = deps.dirState(dir);
+      // 有待命名的目录若还没开始列举（例如右键了折叠的包行），顺手发起列举
+      if (draft && draft.dir === dir && state === undefined) deps.ensureDir(dir);
+
+      const note = (cls: string, text: string, title?: string): ReactNode =>
+        h('div', { key: `${dir}::note`, className: `kp-note ${cls}`, style: indent(depth), title }, text);
+
+      let body: ReactNode;
+      if (state === undefined || state === 'loading') {
+        body = note('dim', '读取目录…');
+      } else if (!Array.isArray(state)) {
+        body = note('err', '目录读取失败（悬停查看原因）', state.error);
+      } else if (state.length === 0) {
+        body = note('dim', '（空目录）');
+      } else {
+        body = h(
+          'div',
+          { key: `${dir}::files`, className: 'kp-dir' },
+          ...sortDirEntries(state).map((e) => {
+            if (e.isDirectory) {
+              const dOpen = openDirs.has(e.path);
+              return h(
+                'div',
+                { key: e.path },
+                h(
+                  'button',
+                  {
+                    className: 'kp-dir-btn',
+                    style: indent(depth),
+                    title: e.path,
+                    onClick: () => toggleDir(e.path),
+                    onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, e.path),
+                  },
+                  h('span', { className: 'caret' }, dOpen ? '▾' : '▸'),
+                  h('span', { className: 'kp-dir-name' }, e.name),
+                ),
+                dOpen ? renderDir(e.path, depth + 1) : null,
+              );
+            }
+            return h(
+              'button',
+              {
+                key: e.path,
+                className: 'kp-file-btn',
+                style: indent(depth),
+                title: e.path,
+                onClick: () => deps.reveal(e.path),
+              },
+              h('span', { className: 'kp-file-name' }, e.name),
+            );
+          }),
+        );
+      }
+      return h('div', { key: `${dir}::wrap` }, draftRow(dir, depth), body);
     };
 
     /* ------------------------------ 包事实行（T2 署名 + 纪要「多剧本编号上树」） ------------------------------ */
@@ -259,7 +378,12 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
             { key: a.id, className: 'kp-artifact' },
             h(
               'div',
-              { className: 'kp-artifact-row' },
+              {
+                className: 'kp-artifact-row',
+                // 右键整行 = 往这个包的目录里建（作者说"右键根节点"，对他而言"根"就是
+                // 他这个包；项目行同样给菜单，用于在包与包之间加平级文件夹）
+                onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, dir),
+              },
               h(
                 'button',
                 {
@@ -368,7 +492,12 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
             { key: p.id, className: 'kp-project' },
             h(
               'button',
-              { className: 'kp-project-btn', title: `项目：${p.name}`, onClick: () => toggleProject(p.id) },
+              {
+                className: 'kp-project-btn',
+                title: `项目：${p.name}`,
+                onClick: () => toggleProject(p.id),
+                onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, deps.projectDir(p.id)),
+              },
               h('span', { className: 'caret' }, pOpen ? '▾' : '▸'),
               h('span', { className: 'kp-project-name' }, p.name),
               h('span', { className: 'kp-count dim' }, `${p.artifacts.length} 包`),
@@ -396,6 +525,37 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
         )
       : null;
 
-    return h('div', { className: 'panel-kojo-projects' }, notice, toolbar, body, statusBar);
+    // 右键菜单：复用壳层同款 `.context-menu`（fixed + token + pop-in），
+    // 不在插件里另立一套菜单样式——同一个应用里两套上下文菜单是最典型的"看着像两个系统"。
+    const menu = ctxMenu
+      ? h(
+          'div',
+          {},
+          h('div', {
+            className: 'context-menu-backdrop',
+            onMouseDown: () => setCtxMenu(null),
+            onContextMenu: (ev: PointerEvent) => ev.preventDefault(),
+          }),
+          h(
+            'div',
+            { className: 'context-menu', style: { left: ctxMenu.x, top: ctxMenu.y }, role: 'menu' },
+            ...NEW_ITEM_MENU.map((m) =>
+              h(
+                'button',
+                {
+                  key: m.kind,
+                  role: 'menuitem',
+                  title: m.hint,
+                  onClick: () => startDraft(ctxMenu!.dir, m.kind),
+                },
+                h('span', { className: 'check' }, draft && draft.dir === ctxMenu.dir && draft.kind === m.kind ? '●' : ''),
+                m.label,
+              ),
+            ),
+          ),
+        )
+      : null;
+
+    return h('div', { className: 'panel-kojo-projects' }, notice, toolbar, body, statusBar, menu);
   };
 }

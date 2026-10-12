@@ -3269,6 +3269,48 @@ textarea {
   opacity: 1;
 }
 
+/* --------- 行内新建（反馈 1b）：命名框就长在树里，不弹窗 --------- */
+/* 度量与 .kp-file-btn 同族（同 padding / 同 fs-1 / 同圆角），
+   否则一行输入框会把树的行节奏打断。 */
+.kp-draft {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  flex-wrap: wrap;
+}
+.kp-draft-input {
+  flex: 1 1 8rem;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-1);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.kp-draft-input:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.kp-draft-preview {
+  font-family: var(--font-mono);
+  font-size: var(--fs-1);
+  white-space: nowrap;
+}
+.kp-draft-hint {
+  font-size: var(--fs-1);
+  white-space: nowrap;
+}
+/* 失败原因用整行：树很窄，塞在输入框后面会被挤成看不见的碎片 */
+.kp-draft-err {
+  flex: 1 1 100%;
+  font-size: var(--fs-1);
+  color: var(--danger);
+  line-height: 1.4;
+}
+
 /* ------------------------------ 动效关键帧（ui-polish） ------------------------------ */
 
 @keyframes fade-in {
