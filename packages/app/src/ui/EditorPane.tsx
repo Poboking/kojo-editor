@@ -20,7 +20,7 @@ import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { editorOptionsForLineCount } from './editor-options';
 import { ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
-import { decideExternalChange } from './external-change';
+import { decideExternalChange, matchOpenedPath } from './external-change';
 import { clampRange, isErbLike } from './lift-preview';
 import { perf } from '../perf';
 import {
@@ -767,17 +767,23 @@ export function EditorPane({
   //   只认 change 会让已打开的 model 停在旧内容上（读者以为"自动重载坏了"）；
   // - `unlink` 不动 model（关标签/清内容都是替用户做决定），但**必须说**：
   //   盘上没了而编辑器还在，是"保存会凭空造回这个文件"的口径问题，不能静默。
+  //
+  // HK-7（2026-10-13）：事件里的路径是**平台原样**，而 entriesRef 的键是宿主自己的
+  // `filePath` —— 裸字符串判等一旦对不上，这条防数据丢失的链路就**静默失效**（没有任何
+  // 症状，作者随后 Ctrl+S 覆盖掉外部改动而已）。所以先按 `pathKey()` 找回宿主用的那个键，
+  // 之后一律用找回的键：消息里报的也是作者标签上看到的那条路径。
   useEffect(() => {
     const un = kernel.bus.on('file.changed', (ev) => {
+      const opened = matchOpenedPath(entriesRef.current.keys(), ev.path);
+      if (opened === null) return; // 没打开 → 与编辑器无关
       if (ev.kind === 'unlink') {
-        if (!entriesRef.current.has(ev.path)) return; // 没打开 → 与编辑器无关
         notify({
           kind: 'error',
-          message: `「${ev.path}」已在磁盘上被删除。编辑器里的内容现在是唯一副本——保存会重新创建该文件。`,
+          message: `「${opened}」已在磁盘上被删除。编辑器里的内容现在是唯一副本——保存会重新创建该文件。`,
         });
         return;
       }
-      void reloadFromDisk(ev.path);
+      void reloadFromDisk(opened);
     });
     return un;
   }, [kernel, reloadFromDisk, notify]);

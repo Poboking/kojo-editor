@@ -15,7 +15,7 @@
  *
  * 抽成纯函数以便单测（React 组件内的分支不便在无 DOM 环境覆盖）。
  */
-import { isPathUnder } from '@kojo/plugin-api';
+import { isPathUnder, pathKey } from '@kojo/plugin-api';
 
 export type ExternalChangeDecision = 'noop' | 'reload' | 'conflict';
 
@@ -74,4 +74,23 @@ export function createEventCoalescer(fire: () => void, windowMs: number): EventC
       }
     },
   };
+}
+
+/**
+ * 在"宿主自己打开的文件键"里找出与事件路径同指一个文件的那个（HK-7，2026-10-13）。
+ *
+ * 为什么需要：`file.changed` 里的路径是**平台原样透传**（见 `FileChangedEvent.path`
+ * 的契约注释），而 `EditorPane` 的 entriesRef 键来自宿主自己的 `filePath`。
+ * 两者在 Windows 上分隔符与大小写都不保证一致，裸字符串 `has()` 一旦判不上，
+ * **外部改动跟随就静默失效**——那正是 §5.36 B1 要防的数据丢失（旧 model 随后一次
+ * Ctrl+S 就覆盖掉盘上的新内容），而且**没有任何可见症状**。
+ *
+ * 找不到返回 null，语义就是"这个文件没在编辑器里打开，与编辑器无关"。
+ */
+export function matchOpenedPath<K extends string>(keys: Iterable<K>, eventPath: string): K | null {
+  const want = pathKey(eventPath);
+  for (const k of keys) {
+    if (pathKey(k) === want) return k;
+  }
+  return null;
 }

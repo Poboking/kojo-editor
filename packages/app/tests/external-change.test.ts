@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { affectsKojoTree, createEventCoalescer, decideExternalChange } from '../src/ui/external-change';
+import { affectsKojoTree, createEventCoalescer, decideExternalChange, matchOpenedPath } from '../src/ui/external-change';
 
 /**
  * 外部写盘后的 model 重载决策单测（2026-10-12 审阅补丁，修 B1）。
@@ -120,5 +120,35 @@ describe('createEventCoalescer —— 外部改动合批（HK-5）', () => {
     c.dispose();
     vi.advanceTimersByTime(1000);
     expect(fired).toEqual([]);
+  });
+});
+
+describe('matchOpenedPath —— 外部改动该不该认成"这个文件正打开着"（HK-7）', () => {
+  it('形态一致自然认得；宿主用的那个键原样带回（消息里要显示作者认识的那条路径）', () => {
+    const keys = ['C:/game/ERB/口上/001 灵梦/M_KOJO_K1.ERB'];
+    expect(matchOpenedPath(keys, keys[0]!)).toBe(keys[0]);
+  });
+
+  it('Windows 实况：事件里是反斜杠、宿主键是正斜杠（或反之）仍认得同一个文件', () => {
+    const hostKey = 'C:/game/ERB/口上/001 灵梦/M_KOJO_K1.ERB';
+    const eventPath = 'C:\\game\\ERB\\口上\\001 灵梦\\M_KOJO_K1.ERB';
+    expect(matchOpenedPath([hostKey], eventPath)).toBe(hostKey);
+    expect(matchOpenedPath([eventPath], hostKey)).toBe(eventPath);
+  });
+
+  it('大小写不同也认得（盘上同一路径的两种写法）', () => {
+    expect(matchOpenedPath(['C:/Game/ERB/口上/A.ERB'], 'c:/game/erb/口上/a.ERB')).toBe('C:/Game/ERB/口上/A.ERB');
+  });
+
+  it('没打开过的文件 → null（与编辑器无关，不该弹任何东西）', () => {
+    expect(matchOpenedPath(['C:/game/a.ERB'], 'C:/game/b.ERB')).toBeNull();
+    expect(matchOpenedPath([] as string[], 'C:/game/a.ERB')).toBeNull();
+  });
+
+  it('名字像但不是同一个文件 → null（判等是整段路径相等，不是前缀）', () => {
+    const keys = ['C:/game/口上A.ERB', 'C:/game/口上/子/深.ERB'];
+    expect(matchOpenedPath(keys, 'C:/game/口上A.ERB.bak')).toBeNull();
+    expect(matchOpenedPath(keys, 'C:/game/口上')).toBeNull();
+    expect(matchOpenedPath(keys, 'C:/game/口上/子.ERB')).toBeNull();
   });
 });
