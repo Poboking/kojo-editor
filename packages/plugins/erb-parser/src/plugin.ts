@@ -53,6 +53,8 @@ export function createErbParserPlugin(): Plugin {
       let generation = 0;
 
       async function build(rootsToScan: string[], gen: number): Promise<ErbIndex> {
+        // 耗时拆分（内核优化 L0）：索引是"开项目级联"的第一段，必须在日志里可见
+        const buildStartedAt = Date.now();
         const files = new Map<string, ErbFile>();
         const byName = new Map<string, ErbFunctionRef[]>();
 
@@ -69,6 +71,7 @@ export function createErbParserPlugin(): Plugin {
           }
         }
 
+        const parseStartedAt = Date.now();
         const parsed = await mapLimit(allFiles, 12, async (path) => {
           try {
             const tf = await io.readText(path);
@@ -96,7 +99,8 @@ export function createErbParserPlugin(): Plugin {
         }
 
         ctx.log.info(
-          `Indexed ${files.size} ERB files, ${byName.size} distinct functions from ${rootsToScan.length} root(s)`,
+          `Indexed ${files.size} ERB files, ${byName.size} distinct functions from ${rootsToScan.length} root(s) ` +
+            `in ${Date.now() - buildStartedAt}ms (walk+read+parse ${Date.now() - parseStartedAt}ms)`,
         );
 
         // 仅在仍是当前代际时提交（避免项目快速切换导致旧结果覆盖新结果）

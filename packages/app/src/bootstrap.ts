@@ -16,6 +16,7 @@ import { createUiSugarLiftPlugin } from '@kojo/plugin-ui-sugar-lift';
 import { createUiSugarPreviewPlugin } from '@kojo/plugin-ui-sugar-preview';
 import { createUiSugarEditorPlugin } from '@kojo/plugin-ui-sugar-editor';
 import { tauriBridge } from './bridge/tauri-bridge';
+import { perf } from './perf';
 
 /**
  * 应用引导：装配内核 + 插件清单。
@@ -64,5 +65,26 @@ export async function bootstrapKernel(): Promise<Kernel> {
     ],
   });
   await kernel.start();
+  installPerfProbe(kernel);
   return kernel;
+}
+
+/**
+ * 性能探针接线（2026-10-12「内核优化 L0 批」）：
+ * - 把探针挂到 `globalThis.__kojoPerf`（DevTools 里按需汇总，见 `perf.ts`）；
+ * - 记录**开项目级联**的时间线：`project.opened` → `kojo.functionChanged`
+ *   （后者由 erb-parser 索引构建完成后广播，故该差值 = 索引构建耗时）。
+ *   条件抽取 / 约定校验的耗时由各自插件日志给出（均含 `in Nms`）。
+ */
+function installPerfProbe(kernel: Kernel): void {
+  perf.install();
+  let openedAt: number | null = null;
+  kernel.bus.on('project.opened', () => {
+    openedAt = performance.now();
+  });
+  kernel.bus.on('kojo.functionChanged', () => {
+    if (openedAt === null) return;
+    perf.record('cascade.projectOpened→index', performance.now() - openedAt);
+    openedAt = null;
+  });
 }

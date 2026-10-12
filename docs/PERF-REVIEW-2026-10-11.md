@@ -187,3 +187,39 @@ Monarch 分词（`erb-language.ts`）、`wordWrap:'on'`、缩略图、平滑滚�
   但 T3 把索引/抽取/校验搬下主线程必须依赖它）。
 - **未尽事项**：实机五计时点（markers / 切文件 / 开项目后 30s 输入延迟分布 / handler 返回 / WebView2 渲染态）
   仍需真实终端跑一次，用于钉死 (a)(b) 的占比——本节的纯函数数字只给出**下界**。
+
+### 7.5 实机测量操作单（待跑，约 10 分钟）
+
+**探针已常驻**（2026-10-12 落地，随本批代码入库）：`packages/app/src/perf.ts`，
+启动后 DevTools Console 会打印 `[perf] 性能探针就绪…`。计时点：
+
+| 计时点 | 含义 | 预期 |
+|---|---|---|
+| `switch.readText` | 切文件读盘 | 取决于文件大小（大 ERB 数十 ms 属正常 IO） |
+| `switch.createModel` | Monaco 建 model | 与行数强相关 |
+| `switch.apply` | setModel + 选项 + 视图恢复 + 装饰刷新（**同步段**） | 大 ERB 上是重点观察项 |
+| `markers.total` / `markers.decorate:<id>` | 一次装饰刷新总耗时 / 单个装饰器耗时 | `.kojo` 上看 `sugar-diagnostics` |
+| `input.handler` | `onDidChangeContent` 到 handler 返回 | **应恒 <1ms**；否则 React 层有未知同步开销 |
+| `cascade.projectOpened→index` | `project.opened` → `kojo.functionChanged` | = 索引构建耗时 |
+
+操作：
+
+1. 真实终端（非沙箱）跑 `pnpm --filter @kojo/app tauri dev`（首轮 cargo 冷编译 20–30 分钟，之后增量秒级）。
+2. 打开真实项目 `D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`，
+   **抄下控制台三行耗时**（三者相加 = 开项目级联总时长）：
+   - `[erb-parser] … Indexed <N> ERB files … in <X>ms (walk+read+parse <Y>ms)`
+   - `[condition-extractor] Condition index: … in <X>ms`
+   - `[convention-linter] Convention lint: … in <X>ms`
+   > 判据：**>10s ⇒ T3 + L3 无条件下立项**。
+3. 打开最大文件 `個人口上/058 Meiling [美鈴]/…/M_KOJO_K58_1_日常系コマンド.ERB`（52,601 行），
+   手动敲 20 个字符后停顿，执行 `__kojoPerf.summary()`：
+   - 看 `input.handler`（应 <1ms）、`markers.total`（ERB 上应很小）；
+   - 同时用 DevTools **Performance 面板录一段**，看有没有 >100ms 长任务（Monaco 分词 /
+     `occurrencesHighlight` 会出现在这里，而**不会**出现在我们的探针里——这正是要区分两层的意义）。
+4. 造一个 ~1,000 行 `.kojo`（`fixtures/sugar/sample-310.kojo` 复制放大）放进项目并打开，重复步骤 3
+   → 此时 `markers.decorate:sugar-diagnostics` 应进入 10ms 量级。
+5. 大 ERB ↔ `.kojo` 来回切 5 次 → 看 `switch.*` 三项。
+6. WebView2 渲染态：任务管理器 → 详细信息 → 找到 WebView2 进程，看 GPU 列
+   （若为软渲染，则"滚动卡"单独立案，与本路线正交）。
+7. 判读规则见本文 §六；本轮需重点钉死 **(a) 开项目级联** 与 **(b) Monaco 大文件** 的占比，
+   再最终确定 T1 / T3 / T4 / T6 的先后。

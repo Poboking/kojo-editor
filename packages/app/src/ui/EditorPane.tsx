@@ -18,6 +18,7 @@ import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { decideExternalChange } from './external-change';
 import { clampRange, isErbLike, liftZonePlan } from './lift-preview';
+import { perf } from '../perf';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -222,17 +223,23 @@ export function EditorPane({
    */
   const refreshMarkers = useCallback(
     (model: Monaco.editor.ITextModel, path: string) => {
+      // 探针（内核优化 L0）：`markers.total` = 一次装饰刷新的主线程总耗时；
+      // 逐装饰器再记一条，用于区分"是 sugar 转译贵"还是"别的装饰器贵"。
+      const t0 = performance.now();
       const project = kernel.project.current();
       const text = model.getValue();
       const decorations: LineDecoration[] = [];
       for (const contribution of kernel.slots.query('ui.editor.decorator')) {
+        const d0 = performance.now();
         try {
           decorations.push(...contribution.decorate({ path, text, project }));
         } catch {
           // 单个装饰器失败不影响其余（错误写入由该插件自行上报，宿主不静默吞掉整轮）
         }
+        perf.record(`markers.decorate:${contribution.id}`, performance.now() - d0);
       }
       monaco.editor.setModelMarkers(model, MARKER_OWNER, decorationsToMarkers(monaco, model, decorations));
+      perf.record('markers.total', performance.now() - t0, `${model.getLineCount()} 行 / ${text.length} 字符`);
     },
     [kernel],
   );
@@ -769,28 +776,43 @@ export function EditorPane({
       }
       let entry = entriesRef.current.get(filePath);
       if (!entry) {
+        // 探针：切文件一次性成本 = 读盘 + 建 model（+ 下方 apply 段）
+        const stopRead = perf.start('switch.readText');
         try {
           const tf = await kernel.io.readText(filePath);
+          stopRead();
           if (cancelled) return;
+          const tModel = performance.now();
           const model = monaco.editor.createModel(tf.text, languageFor(filePath), monaco.Uri.file(filePath));
+          perf.record('switch.createModel', performance.now() - tModel, `${tf.text.length} 字符`);
           // 逐 model 脏监听（BUG-4：版本号 O(1) 比较；后台标签的编辑同样上报）
           const listener = model.onDidChangeContent(() => {
-            if (reloadingRef.current) return; // 磁盘重载非用户编辑：不报脏、不排装饰
-            const d = computeDirty(filePath);
-            onDirtyChangeRef.current?.(filePath, d);
-            if (filePathRef.current === filePath) {
-              setDirty(d);
-              scheduleMarkers();
+            // 探针（内核优化 L0）：击键路径应**恒 <1ms**（dirty 是 O(1)、装饰已去抖）；
+            // 若 p95 超 1ms，说明 React 层或别处有未知同步开销。
+            const t0 = performance.now();
+            try {
+              if (reloadingRef.current) return; // 磁盘重载非用户编辑：不报脏、不排装饰
+              const d = computeDirty(filePath);
+              onDirtyChangeRef.current?.(filePath, d);
+              if (filePathRef.current === filePath) {
+                setDirty(d);
+                scheduleMarkers();
+              }
+            } finally {
+              perf.record('input.handler', performance.now() - t0);
             }
           });
           entry = { model, listener, encoding: tf.encoding, eol: tf.eol.toUpperCase() };
           entriesRef.current.set(filePath, entry);
           baseVersionRef.current.set(filePath, model.getAlternativeVersionId());
         } catch (e: unknown) {
+          stopRead(); // 幂等：读盘失败时补记一次采样（正常路径已记过则跳过）
           if (!cancelled) setError(e instanceof Error ? e.message : String(e));
           return;
         }
       }
+      // 探针：apply 段 = setModel + 选项更新 + 视图恢复 + 装饰刷新（同步可测）
+      const stopApply = perf.start('switch.apply');
       prevPathRef.current = filePath;
       clearLiftPreviews(); // 升糖预览不跨文件残留
       ed.setModel(entry.model);
@@ -813,6 +835,7 @@ export function EditorPane({
       markerTimerRef.current = null;
       refreshMarkers(entry.model, filePath);
       applyReveal();
+      stopApply();
     })();
     return () => {
       cancelled = true;
