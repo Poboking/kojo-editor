@@ -83,8 +83,8 @@ export function ErbUnlockDialog({
           而可编辑的原文必须始终看得见。
         </p>
         <p className="dim">
-          更稳妥的做法：<b>新建一份口上文件（.kojo）</b>来写自己的内容，这样能全程用语法糖
-          （含 💡 一键把 ERB 写法改成糖写法），也能被编译成合规 ERB。
+          更稳妥的做法：<b>新建一份口上文件（.kojo）</b>来写自己的内容——它可全程用语法糖书写，
+          并能编译为合规 ERB。
         </p>
         <div className="modal-actions">
           <button className="ghost" onClick={() => onDecide(true)}>

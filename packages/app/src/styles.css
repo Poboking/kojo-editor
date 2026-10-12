@@ -763,6 +763,11 @@ textarea {
   gap: 8px;
   margin-bottom: 6px;
 }
+/* 批量展开/收起的一句可读数（UI 反馈 6）。类名不叫 .tree-note——上游已把它用作「空目录」行。 */
+.tree-reveal-note {
+  margin: 0 0 6px;
+  font-size: 11px;
+}
 .tree-groups {
   list-style: none;
   margin: 0;
@@ -1238,6 +1243,29 @@ textarea {
 /* ERB 已解锁编辑：写保护此刻对这一份文件失效 → 警示色（口径见上方基类注释） */
 .erb-mode-hint.unlocked {
   color: var(--warning);
+}
+
+/* 2026-10-13 UI 反馈 1/3：编辑器工具条的只读指示改用**底栏同一套胶囊**（黄色＝只读），
+   去掉 🔒 与冗长括注；它只是状态说明，不可点（授权入口在底栏，避免两处入口互相抢）。 */
+span.sb-writable.ro {
+  cursor: default;
+}
+span.sb-writable.ro:hover {
+  background: rgba(209, 154, 102, 0.12);
+  border-color: rgba(209, 154, 102, 0.35);
+}
+
+/* 「可编辑」徽章自身就是回锁入口（原来的「恢复只读」按钮作废，能力没丢）：
+   观感与只读胶囊同族，用 hover 表达可点，不额外加颜色。 */
+button.erb-mode-hint.unlocked {
+  background: transparent;
+  border-radius: 999px;
+  padding: 0 10px;
+  line-height: 18px;
+}
+button.erb-mode-hint.unlocked:hover {
+  background: var(--hover);
+  border-color: var(--border);
 }
 /* 糖视图摘要：给一个"这份文件读到了多少"的量感，不抢视线 */
 .sugar-stats {
@@ -2609,6 +2637,32 @@ textarea {
   color: var(--fg);
   border-color: var(--accent);
 }
+/* 糖段容器：糖文本 + 一行**折叠柄**（2026-10-13 UI 反馈 5）。
+   原文被收起来时必须留一个可读、可点的痕迹（ADR-0006「收起 ≠ 删除」）。 */
+.sugar-zone-wrap {
+  display: block;
+}
+.sugar-fold {
+  display: inline-block;
+  margin: 1px 0 0;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-family: inherit;
+  color: var(--fg-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.sugar-fold:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+/* 骨架段（没有糖文本可看）的占位柄视觉重量再低一档：它多出现几十次也不该抢稿纸 */
+.sugar-fold.skeleton {
+  opacity: 0.8;
+}
+
 /* 糖写法（打字机逐字填充）；等宽、保留缩进 */
 .lift-preview-sugar {
   margin: 2px 0 0;

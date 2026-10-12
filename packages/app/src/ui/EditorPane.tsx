@@ -34,6 +34,15 @@ import {
   sugarViewAllowed,
   sugarZonePlan,
 } from './sugar-view';
+import {
+  foldKey,
+  foldLabel,
+  hiddenLineCount,
+  hiddenRanges,
+  skeletonLabel,
+  toggleFolded,
+  type FoldableSegment,
+} from './sugar-fold';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -278,6 +287,11 @@ export function EditorPane({
   /** 糖视图（整文件显示为糖）：已插入的 ViewZone id */
   const sugarZonesRef = useRef<string[]>([]);
   /**
+   * 已展开原文的糖段键集合（视图状态：不进文档、不进撤销栈、不落盘）。
+   * 键是段行号 `fromLine:toLine`，所以换文件必须清空——跨文件复用会张冠李戴。
+   */
+  const sugarExpandedRef = useRef<Set<string>>(new Set());
+  /**
    * 已解锁编辑的 ERB 路径（**会话内有效**，不落盘）。
    *
    * 为什么不持久化：ERB 默认只读是**安全姿态**（游戏目录里别人的口上，误改即事故）。
@@ -492,22 +506,62 @@ export function EditorPane({
     // （`overflow: hidden`）。这里把实测行高交给 CSS，糖行与相邻代码行永远同 rhythm，
     // 也让「稿纸感」的小字号不再靠一个会过期的魔数。
     const lineHeightPx = editorLineHeightPx(ed.getDomNode());
+    const expanded = sugarExpandedRef.current;
+    const foldables: FoldableSegment[] = [];
+    /** 一行折叠柄：展开前说清"这里收了几行"，展开后给反向动作（ADR-0006「收起 ≠ 删除」） */
+    const makeHandle = (seg: FoldableSegment, skeleton: boolean): HTMLButtonElement => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `sugar-fold${skeleton ? ' skeleton' : ''}`;
+      btn.textContent = skeleton
+        ? skeletonLabel(seg, expanded.has(seg.key))
+        : foldLabel(seg, expanded.has(seg.key));
+      btn.title = skeleton
+        ? '这段没有可显示的糖写法（全是骨架行）。点击展开原代码。'
+        : '展开 / 收起这段糖写法对应的原 ERB 代码。';
+      btn.addEventListener('click', () => {
+        sugarExpandedRef.current = toggleFolded(sugarExpandedRef.current, seg.key);
+        applySugarView();
+      });
+      return btn;
+    };
 
     ed.changeViewZones((acc) => {
       for (const seg of segments) {
         const plan = sugarZonePlan(seg);
         sugarLines += plan.lineCount;
-        // `lineCount === 0` = **只藏不显**的段（内容全是被吸收的骨架行：包装三联 / 記入
-        // チェック信封）。这类段不进 ViewZone（否则会留一条空的彩色横条），但**仍参与隐藏**
-        // ——把骨架收起来正是它的目的。
-        if (plan.lineCount === 0) continue;
+        const foldable: FoldableSegment = {
+          key: foldKey(seg.fromLine, seg.toLine),
+          fromLine: seg.fromLine,
+          toLine: seg.toLine,
+          lineCount: plan.lineCount,
+        };
+        foldables.push(foldable);
+        const wrap = document.createElement('div');
+        wrap.className = 'sugar-zone-wrap';
+        // `lineCount === 0` = **只藏不显**的骨架段（包装三联 / 記入チェック信封）。
+        // 旧实现直接 `continue`——原文被收走却连一处痕迹都没有，等于对读者静默删码。
+        // 现在给它一行占位柄：收起时它是唯一痕迹，点开即见原文（不铺彩色横条）。
+        if (plan.lineCount === 0) {
+          wrap.appendChild(makeHandle(foldable, true));
+          const skeletonId = acc.addZone({
+            afterLineNumber: Math.max(0, seg.fromLine - 1),
+            heightInLines: 1,
+            domNode: wrap,
+            showInHiddenAreas: true,
+          });
+          sugarZonesRef.current.push(skeletonId);
+          continue;
+        }
         const dom = document.createElement('pre');
         dom.className = 'sugar-zone';
         if (lineHeightPx !== null) dom.style.setProperty('--sugar-lh', `${lineHeightPx}px`);
+        wrap.appendChild(dom);
+        wrap.appendChild(makeHandle(foldable, false));
         const id = acc.addZone({
           afterLineNumber: plan.afterLineNumber,
-          heightInLines: plan.heightInLines,
-          domNode: dom,
+          heightInLines: plan.heightInLines + 1, // +1 行给折叠柄
+          domNode: wrap,
           suppressMouseDown: false,
           // 锚点行可能落在被隐藏区间内（段首行的上一行就是隐藏区间的末行）——
           // 不声明这一点，糖会跟着原文一起消失。
@@ -521,15 +575,15 @@ export function EditorPane({
       }
     });
 
-    // 隐藏原文区间（一次调用；拿不到能力则只插糖不隐藏——降级可见，不白屏）
+    // 隐藏原文区间（一次调用；拿不到能力则只插糖不隐藏——降级可见，不白屏）。
+    // 展开的段**整段**退出隐藏，绝不半隐藏——半隐藏等于给读者看断头代码。
     hideSourceAreas(
       ed,
-      segments.map(
-        (s) =>
-          new monaco.Range(s.fromLine, 1, s.toLine, model.getLineMaxColumn(s.toLine)),
+      hiddenRanges(foldables, expanded).map(
+        (r) => new monaco.Range(r.fromLine, 1, r.toLine, model.getLineMaxColumn(r.toLine)),
       ),
     );
-    setSugarStats(sugarSummary(sugarLines));
+    setSugarStats(sugarSummary(sugarLines, hiddenLineCount(foldables, expanded)));
 
     // 分帧填充（可见优先；每帧 ≤SUGAR_HYDRATE_PER_FRAME 段）。
     // 必须分帧：真实语料里单文件最多 9,569 个糖段，一次性填满会直接卡死首屏。
@@ -927,7 +981,8 @@ export function EditorPane({
     return () => {
       cmdDisposer.dispose();
       providerDisposer.dispose();
-      clearSugarView(); // 糖视图：移除 ViewZone + 还原隐藏区间（卸载不留残影）
+      clearSugarView();
+      sugarExpandedRef.current = new Set(); // 糖视图：移除 ViewZone + 还原隐藏区间（卸载不留残影）
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
       ed.dispose();
@@ -1141,28 +1196,20 @@ export function EditorPane({
             {unlocked ? (
               // 解锁 = 写保护对这一份文件暂时失效，是**需要被看见**的破例态 → 琥珀警示色；
               // 只读反而是安全默认态 → 中性色（见 styles.css `.erb-mode-hint` 配色口径）。
-              <>
-                <span
-                  className="erb-mode-hint unlocked"
-                  title="已破例允许编辑这一份文件（只对本次会话有效，关闭编辑器即失效）。语法糖视图同时关闭——要动手改的原文必须看得见。"
-                >
-                  ✏ 已解锁编辑
-                </span>
-                <button
-                  className="ghost small"
-                  onClick={() => setErbEditable(filePath, false)}
-                  title="收回这次破例，恢复只读并重新显示语法糖。"
-                >
-                  恢复只读
-                </button>
-              </>
+              <button
+                className="erb-mode-hint unlocked"
+                onClick={() => setErbEditable(filePath, false)}
+                title="已破例允许编辑这一份文件（只对本次会话有效，关闭编辑器即失效），语法糖视图同时关闭——要动手改的原文必须看得见。点击收回这次破例。"
+              >
+                ✏ 已解锁编辑
+              </button>
             ) : (
               <>
                 <span
-                  className="erb-mode-hint"
-                  title="游戏目录里的原生文件，默认只读——直接改它等于改别人装好的游戏内容。开始输入时编辑器会询问你是否破例。"
+                  className="sb-writable ro"
+                  title="游戏目录里的原生文件，默认只读——直接改它等于改别人装好的游戏内容。开始输入时编辑器会询问你是否破例；写权限授权入口在底部状态栏。"
                 >
-                  🔒 只读
+                  只读
                 </span>
                 {/* 糖视图：整份 ERB 显示为语法糖（只读）——本功能的存在理由就是让不熟悉
                     原生语法的人也能把别人的口上当剧本读懂。默认开（偏好可记忆）。

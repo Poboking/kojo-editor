@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { UIPanelContribution } from '@kojo/plugin-api';
-import { defaultLayout, organizePanels } from '../src/ui/layout';
-import { layoutReducer } from '../src/ui/layout-reducer';
+import { defaultLayout, organizePanels, reducer as layoutReducer } from '../src/ui/layout';
 import {
   PANEL_DRAG_MIME,
   acceptsPanelDrop,

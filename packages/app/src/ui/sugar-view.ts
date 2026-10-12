@@ -167,8 +167,10 @@ export function editorLineHeightPx(host: HTMLElement | null): number | null {
  * 注释与空行——把它们加总成一项会让人以为漏了什么。逐因明细**只存在于工具条的悬停
  * `title`**（批 A 已按用户口径删除「升糖」面板，别再往面板上指）。
  */
-export function sugarSummary(projectedLines: number): string {
-  return `语法糖 ${projectedLines} 行`;
+export function sugarSummary(projectedLines: number, hiddenLines = 0): string {
+  // 反馈 5 / ADR-0006 §4「不静默」：收起了多少行必须同屏可见；0 时不提后半句（那是假承诺）
+  const base = `语法糖 ${projectedLines} 行`;
+  return hiddenLines > 0 ? `${base}｜已收起 ${hiddenLines} 行（可展开）` : base;
 }
 
 /**

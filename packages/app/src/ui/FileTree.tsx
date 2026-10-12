@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import type { DirEntry, ErbIndex, GameProject } from '@kojo/plugin-api';
+import {
+  collapseAll,
+  expandAll,
+  packageKey,
+  revealMenuLabel,
+  toggleReveal,
+  type RevealGroup,
+  type RevealResult,
+} from './file-tree-reveal';
 
 interface Props {
   project: GameProject;
@@ -143,6 +152,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
   const [dirCache, setDirCache] = useState<Map<string, DirState>>(new Map());
   /** 右键菜单（壳层私有轻量实现） */
   const [menu, setMenu] = useState<{ x: number; y: number; scope: MenuScope } | null>(null);
+  /** 批量展开/收起后的一句可读数（反馈 6：没有反馈的批量动作＝用户读成"点了没反应"） */
+  const [revealNote, setRevealNote] = useState<string | null>(null);
 
   const groups = useMemo<Group[]>(() => {
     if (!index) return [];
@@ -285,6 +296,37 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
     for (const p of pkgs) ensureDir(p.dir);
   };
 
+  /** 作用域内可展开的组与包（根散文件无包层，不参与"展开"这件事） */
+  const revealTargets = (gs: readonly Group[]): RevealGroup[] =>
+    gs.map((g) => ({
+      label: g.label,
+      packages: g.subs.map((s) => s.label).filter((x): x is string => x !== null),
+    }));
+
+  const revealStateOf = () => ({ openedGroups: opened, openedPackages: pkgFolder });
+
+  /**
+   * 落一次批量结果：状态 + 惰性取目录 + 一句反馈，三件事一起做。
+   *
+   * 上游的「展开全部」原先只管角色组、不管组里的作者包——用户于是看见"点了没反应"。
+   * 这里两层一起动，并让根节点的入口变成**可逆开关**（全展开时它反向成收起）。
+   */
+  const applyReveal = (list: readonly Group[], r: RevealResult): void => {
+    if (r.mode === 'expand') {
+      for (const g of list) {
+        for (const s of g.subs) {
+          if (s.label === null) continue;
+          if (!pkgFolder.has(packageKey(g.label, s.label))) ensureDir(pkgDirOf(g, s.label));
+        }
+      }
+    } else {
+      setSubOpen(new Set());
+    }
+    setOpened(r.openedGroups);
+    setPkgFolder(r.openedPackages);
+    setRevealNote(r.feedback);
+  };
+
   /**
    * 外部改动 → 目录缓存失效（HK-5；实机线 §5.87 留下的欠账，本组接）。
    *
@@ -405,17 +447,13 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
         onChange={(e) => setFilter(e.target.value)}
       />
       <div className="tree-actions">
-        <button className="ghost small" onClick={() => setOpened(new Set(visible.map((g) => g.label)))}>
-          展开全部
-        </button>
         <button
           className="ghost small"
-          onClick={() => {
-            setOpened(new Set());
-            setPkgFolder(new Set());
-            setSubOpen(new Set());
-          }}
+          onClick={() => applyReveal(visible, expandAll(revealTargets(visible), revealStateOf()))}
         >
+          展开全部
+        </button>
+        <button className="ghost small" onClick={() => applyReveal(visible, collapseAll())}>
           折叠全部
         </button>
         <button
@@ -426,6 +464,11 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
           重新读取
         </button>
       </div>
+      {revealNote ? (
+        <p className="tree-reveal-note dim" role="status">
+          {revealNote}
+        </p>
+      ) : null}
       <ul className="tree-groups">
         {visible.map((g) => {
           const isOpen = opened.has(g.label) || filter.length > 0;
@@ -498,10 +541,20 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
                 导入为我的口上项目
               </button>
             ) : (
-              <button role="menuitem" onClick={() => revealAll(menu.scope)}>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  if (menu.scope.kind === 'root') {
+                    setMenu(null);
+                    applyReveal(visible, toggleReveal(revealTargets(visible), revealStateOf()));
+                  } else {
+                    revealAll(menu.scope);
+                  }
+                }}
+              >
                 <span className="check" />
                 {menu.scope.kind === 'root'
-                  ? '显示所有文件和文件夹（全部角色）'
+                  ? revealMenuLabel(revealTargets(visible), revealStateOf())
                   : '显示所有文件和文件夹'}
               </button>
             )}
