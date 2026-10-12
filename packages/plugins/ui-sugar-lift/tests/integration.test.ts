@@ -40,22 +40,10 @@ import type {
 import { WellKnownServices } from '@kojo/plugin-api';
 import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
 import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
+import { scanControlFlow } from '@kojo/plugin-erb-parser';
 import { createUiSugarLiftPlugin } from '../src/index';
-import { LIFT_MAX_LINES } from '../src/large-file';
-import { degradeText } from '../src/panel-logic';
 
 const log: Logger = { debug() {}, info() {}, warn() {}, error() {} };
-
-/** 捕获 warn（断言"降级不静默"用；每次相关测试前自行清空） */
-const warnings: string[] = [];
-const capturingLog: Logger = {
-  debug() {},
-  info() {},
-  warn: (m: string) => {
-    warnings.push(m);
-  },
-  error() {},
-};
 const enc = (s: string) => new TextEncoder().encode(s);
 
 /** 伪内核 io（内存 FS；只读读路径 + 写盘断言用） */
@@ -106,7 +94,7 @@ function makeIO(files: Record<string, Uint8Array>) {
  * 而不是"内核正确"——内核自有其测试。这里把服务槽/事件总线的契约**降到最小**
  * 反而让"面板依赖了哪些东西"变得无法含糊（`inject` 只给清单里那几项，多要一个就抛）。
  */
-function makeKernel(files: Record<string, Uint8Array>, logger: Logger = log) {
+function makeKernel(files: Record<string, Uint8Array>) {
   const io = makeIO(files);
   const provided = new Map<string, unknown>();
   /** 槽注册表（按槽名分桶；面板插件经 `slots.register` 登记） */
@@ -139,7 +127,7 @@ function makeKernel(files: Record<string, Uint8Array>, logger: Logger = log) {
 
   /** kojo-sugar 只需要这几个槽（与它的 requires 一致） */
   const sugarCtx = {
-    log: logger,
+    log,
     inject: (key: string) => {
       if (key === 'kernel.project') return { current: () => ({ adapterId: 'eratw' }) };
       // 分野模板表经 `game.adapter` 槽位注入（v0.3 S2 补齐）——测试用真实
@@ -152,7 +140,11 @@ function makeKernel(files: Record<string, Uint8Array>, logger: Logger = log) {
               : [],
         };
       if (key === 'kernel.io') return io;
-      // 软取目标（state.replay / erb.parser / condition.extractor）缺席是合法情形
+      // **结构扫描**（`erb.parser`）：整文件投影的**地基**——它决定控制流能否被
+      // 识别成 `如果 …：`。缺席时投影会降级（控制流一律原样保留、段被切碎），
+      // 故本测试提供真实扫描器（与生产装配同源），把"地基必需"这件事钉住。
+      if (key === 'erb.parser') return { scanControlFlow: (t: string) => scanControlFlow(t) };
+      // 软取目标（state.replay / condition.extractor）缺席是合法情形
       throw new Error(`未注册的服务：${key}`);
     },
     provide: (key: string, value: unknown) => {
@@ -163,7 +155,7 @@ function makeKernel(files: Record<string, Uint8Array>, logger: Logger = log) {
   };
 
   const panelCtx = {
-    log: logger,
+    log,
     inject: (key: string): never => {
       const v = provided.get(key);
       if (v === undefined && key !== 'kernel.io') throw new Error(`未注册的服务：${key}`);
@@ -205,13 +197,7 @@ const previewsOf = (k: ReturnType<typeof makeKernel>) =>
 const actionsOf = (k: ReturnType<typeof makeKernel>) =>
   (k.slots.get('ui.editor.codeAction') ?? []) as Array<{
     id: string;
-    provideActions: (f: {
-      path: string;
-      text: string;
-      project: null;
-      line?: number;
-      lineCount?: number;
-    }) => EditorCodeAction[];
+    provideActions: (f: { path: string; text: string; project: null; line?: number }) => EditorCodeAction[];
   }>;
 
 /* ============================== 一、接线 ============================== */
@@ -236,6 +222,8 @@ describe('升糖预览 / 面板插件接线（跨插件只走服务槽）', () =
     expect(typeof panelsOf(k)[0]!.component).toBe('function');
     expect(previewsOf(k)).toHaveLength(1);
     expect(typeof previewsOf(k)[0]!.provideLiftPreview).toBe('function');
+    // 整文件投影供给与逐条候选**同一个贡献**的两个方法（口径不同、用途不同）
+    expect(typeof previewsOf(k)[0]!.provideLiftProject).toBe('function');
     expect(actionsOf(k)).toHaveLength(1);
     expect(actionsOf(k)[0]!.id).toBe('sugar-lift.preview-action');
   });
@@ -309,77 +297,80 @@ describe('升糖预览 / 端到端：扫描 → 预览意图 → 零写盘', () 
   });
 });
 
-/* ================= 三、超长文件降级（2026-10-12 内核优化批） ================= */
+/* ============================== 三、整文件糖投影供给 ============================== */
 
 /**
- * 背景（实测见 `docs/PERF-REVIEW-2026-10-11.md` §7.6）：整篇升糖扫描在 52,601 行的
- * 真实 ERB 上耗时 **231 ms**，而折叠供给 / 💡 探测都是**框架自动触发**的 →
- * 超长文件上"什么都没做就卡"。本组钉死降级语义：
- * 自动路径让路、显式路径仍在、**降级可见（不静默）**、边界含等号。
+ * B 层口径的端到端：**打开别人写的 ERB → 一键显示为糖**。
+ *
+ * 这一组断言服务的是本功能的**唯一目的**——不熟悉 EraBasic 的读者也能把口上
+ * 当剧本读懂——所以断言的正是"读起来是什么样"：
+ *
+ * 1. 台词/旁白去掉 `PRINTFORM*` 前缀，`L` 后缀变行尾 ` 续`；
+ * 2. 控制流变 `如果 …：` / `否则：`，缩进即块（`ENDIF` 不再显示）；
+ * 3. 注释原样透传（作者的 `;分节线` 是阅读线索，不能丢）；
+ * 4. 原生代词记号反糖（`%CALLNAME:MASTER%` → `{你}`）；
+ * 5. 糖覆盖不到的行（`@` / `#DIM` / 赋值）原样留原代码，并**切断段**。
  */
-describe('超长文件降级：自动路径让路，显式路径仍在', () => {
-  const boot = (logger?: Logger) => {
-    const k = makeKernel({ [PATH]: enc(KOJO) }, logger);
+describe('整文件糖投影 / 端到端：别人的 ERB → 读起来像剧本（零写盘）', () => {
+  const ERB_FULL = [
+    '; 分节标记',
+    'IF TALENT:TARGET:恋慕',
+    '\tPRINTFORMW 「%CALLNAME:MASTER%，今天也来训练了？」',
+    '\tPRINTFORMDW %CALLNAME:TARGET%点了点头。',
+    'ELSE',
+    '\tPRINTFORMDL 她别开了脸。',
+    'ENDIF',
+    '@FUNC',
+    '#DIM X',
+    'X = 1',
+  ].join('\n');
+  const ERB_PATH = '/proj/口上/y.erb';
+
+  const bootErb = () => {
+    const k = makeKernel({ [ERB_PATH]: enc(ERB_FULL) });
     bootSugar(k);
     bootPanel(k);
     return k;
   };
-  const TOO_LONG = LIFT_MAX_LINES + 1;
 
-  it('体量未知（lineCount 缺省）→ 不降级（与旧版行为完全一致）', () => {
-    const k = boot();
-    expect(previewsOf(k)[0]!.provideLiftPreview({ path: PATH, text: KOJO, project: null })).toHaveLength(2);
-    expect(actionsOf(k)[0]!.provideActions({ path: PATH, text: KOJO, project: null, line: 3 })).toHaveLength(1);
+  it('一个连续段：控制流 + 台词 + 注释透传 + 反糖，`@`/`#DIM`/赋值切断', () => {
+    const k = bootErb();
+    const items = previewsOf(k)[0]!.provideLiftProject!({
+      path: ERB_PATH,
+      text: ERB_FULL,
+      project: null,
+    });
+    expect(items).toHaveLength(1);
+    expect(`${items[0]!.fromLine}-${items[0]!.toLine}`).toBe('1-7');
+    expect(items[0]!.sugarText.split('\n')).toEqual([
+      '; 分节标记',
+      '如果 TALENT:TARGET:恋慕：',
+      '\t「{你}，今天也来训练了？」',
+      '\t{她}点了点头。',
+      '否则：',
+      '\t她别开了脸。 续',
+    ]);
   });
 
-  it('恰好等于阈值 → 不降级（边界含等号）', () => {
-    const k = boot();
+  it('`.kojo` 不供给投影——它本身就是糖（契约：不适用该文件的贡献返回空）', () => {
+    const k = makeKernel({ [PATH]: enc(KOJO) });
+    bootSugar(k);
+    bootPanel(k);
     expect(
-      previewsOf(k)[0]!.provideLiftPreview({
-        path: PATH,
-        text: KOJO,
-        project: null,
-        lineCount: LIFT_MAX_LINES,
-      }),
-    ).toHaveLength(2);
+      previewsOf(k)[0]!.provideLiftProject!({ path: PATH, text: KOJO, project: null }),
+    ).toEqual([]);
   });
 
-  it('超长文件 → 折叠供给返回空（打开大文件不再被全量扫描卡住）', () => {
-    const k = boot();
-    const items = previewsOf(k)[0]!.provideLiftPreview({
-      path: PATH,
-      text: KOJO,
+  it('投影**零写盘**：跑完源文件逐字节不变、不发 file.changed', () => {
+    const k = bootErb();
+    const before = new Uint8Array(k.files[ERB_PATH]!);
+    const items = previewsOf(k)[0]!.provideLiftProject!({
+      path: ERB_PATH,
+      text: ERB_FULL,
       project: null,
-      lineCount: TOO_LONG,
     });
-    expect(items).toEqual([]);
-  });
-
-  it('超长文件 → 💡 不做可用性探测（避免光标移动即触发全量扫描）', () => {
-    const k = boot();
-    const actions = actionsOf(k)[0]!.provideActions({
-      path: PATH,
-      text: KOJO,
-      project: null,
-      line: 3,
-      lineCount: TOO_LONG,
-    });
-    expect(actions).toEqual([]);
-  });
-
-  it('降级**不静默**：控制台告警，且同一文件只告警一次（provider 是高频调用）', () => {
-    warnings.length = 0;
-    const k = boot(capturingLog);
-    const call = () =>
-      previewsOf(k)[0]!.provideLiftPreview({ path: PATH, text: KOJO, project: null, lineCount: TOO_LONG });
-    call();
-    call();
-    call();
-    expect(warnings.filter((w) => w.includes(PATH))).toHaveLength(1);
-    expect(warnings.some((w) => w.includes(String(TOO_LONG)))).toBe(true);
-  });
-
-  it('面板降级态文案存在（too-large）', () => {
-    expect(degradeText('too-large')).toContain('重新扫描');
+    expect(items.length).toBeGreaterThan(0);
+    expect(k.events).toEqual([]);
+    expect(k.files[ERB_PATH]).toEqual(before);
   });
 });

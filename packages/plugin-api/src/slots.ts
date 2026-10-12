@@ -156,6 +156,22 @@ export interface EditorLiftPreviewContribution extends ContributionBase {
      */
     lineCount?: number;
   }): EditorLiftPreviewItem[];
+
+  /**
+   * 整文件**糖投影**（B 层；2026-10-12 语法糖批）——把整个 ERB 文件投影成糖显示，
+   * 返回可映射的**连续段**（每段形如 `EditorLiftPreviewItem`：区间 + 糖文本）。
+   *
+   * 与 `provideLiftPreview` 的分工：后者是"逐条候选"（强自证口径，命中面窄）；
+   * 本方法服务于宿主的**整文件「显示为糖」开关**——命中面宽、逐行降级。
+   * **可选**：不提供该方法的贡献只会让整文件开关少一份供给，不影响逐条预览。
+   *
+   * 同为纯函数：同输入必得同输出，不读盘不写盘。不适用该文件的贡献返回空数组。
+   */
+  provideLiftProject?(file: {
+    path: string;
+    text: string;
+    project: GameProject | null;
+  }): EditorLiftPreviewItem[];
 }
 
 /* ----------------------------- ui.overlay ----------------------------- */

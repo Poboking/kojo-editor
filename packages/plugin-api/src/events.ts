@@ -63,6 +63,26 @@ export interface KernelEventMap {
   /** 收起升糖预览（与 `show` 对称；`filePath` 缺省 = 清空全部）。 */
   'editor.liftPreview.hide': { filePath?: string; source?: string };
   /**
+   * 整文件**糖视图**开关意图（2026-10-12 语法糖批）：把当前（或指定）ERB 文件
+   * **整份**显示为语法糖，或切回原代码。
+   *
+   * 与 `editor.liftPreview.show` 的分工：后者是"这一段"（点击某处、逐条候选、
+   * 强自证口径，命中面窄）；本事件是"这一份文件"（逐行局部映射、单行降级，
+   * 命中面宽）——服务"打开别人写的 ERB，像看剧本一样读懂它"。
+   *
+   * 通用、游戏无关；**只影响显示**（零写盘）。插件发意图、宿主落地。
+   */
+  'editor.sugarView.set': {
+    /**
+     * `true` = 显示为糖；`false` = 显示原代码；**省略 = 反转当前状态**
+     * （状态所有者是宿主：请求方不必知道当前是开是关——命令面板的"切换"就是这种）。
+     */
+    on?: boolean;
+    /** 目标文件；缺省 = 当前活动文件 */
+    filePath?: string;
+    source?: string;
+  };
+  /**
    * 写权限批准记录失效（2026-10-11 写权限闭环批 P0）：持久化的批准与适配器
    * 本次提议不一致（游戏更新等）——内核**未**放行写权限，等待用户重新确认。
    *
@@ -131,6 +151,7 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'editor.activeFileChanged',
   'editor.liftPreview.show',
   'editor.liftPreview.hide',
+  'editor.sugarView.set',
   'ui.overlay.open',
   'ui.overlay.close',
   'workspace.importRequested',

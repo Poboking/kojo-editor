@@ -118,8 +118,18 @@ export function ProjectView({
           void onSaveAll();
         },
       },
+      {
+        // 糖视图：整份 ERB 显示为语法糖（只读）。命令面板与快捷键都从这里进——
+        // 与工具条按钮同一条意图事件，宿主（EditorPane）是唯一的状态所有者。
+        id: 'workbench.toggleSugarView',
+        title: '切换糖视图（把 ERB 显示为语法糖）',
+        keybinding: 'ctrl+alt+t',
+        run: () => {
+          kernel.bus.emit('editor.sugarView.set', {});
+        },
+      },
     ],
-    [onRequestCloseTab, onSaveAll],
+    [onRequestCloseTab, onSaveAll, kernel],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →

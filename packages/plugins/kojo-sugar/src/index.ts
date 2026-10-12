@@ -313,6 +313,7 @@ export {
 } from './preview';
 export type { AliasEntry, AliasTable, DictionaryLookup } from './types';
 export { createSugarLiftService, liftSuggest, type LiftDeps } from './lift';
+export { liftProject } from './project';
 export {
   applyLift,
   applyLiftToFile,

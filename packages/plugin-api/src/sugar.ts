@@ -1395,6 +1395,17 @@ export interface SugarLiftService {
    * `candidates` / `skipped` 表达（含转译器内部异常 → `transpile-error` 跳过）。
    */
   liftSuggest(request: SugarLiftRequest): SugarLiftResult;
+
+  /**
+   * 生成**整文件糖投影**（B 层；见本文件末「升糖投影」节）。
+   *
+   * 与 `liftSuggest` 的分工：后者是"哪些片段能安全写回 `.kojo`"（强自证，宁可漏报）；
+   * 本方法是"整份 ERB 显示成糖以后长什么样"（逐行局部映射，一行失败只影响那一行）。
+   * 两者**并存**，`liftSuggest` 的行为不受本方法影响。
+   *
+   * 只有"输入本身不合法"（`source` 非字符串）才抛错。
+   */
+  liftProject(request: SugarProjectRequest): SugarProjectResult;
 }
 
 /** 候选是否已通过 round-trip 自证（v1 恒 true；守卫留作未来低置信档的兼容位） */
@@ -1405,6 +1416,128 @@ export function isVerifiedCandidate(candidate: SugarLiftCandidate): boolean {
 /** 结果是否有候选 */
 export function hasCandidates(result: SugarLiftResult): boolean {
   return result.candidates.length > 0;
+}
+
+
+/* ============================== 升糖投影（B 层） ============================== */
+
+/**
+ * 升糖**投影** —— 原生 ERB → 糖显示（**只用于看**，零写盘）。
+ *
+ * ## 与「提升建议」（`liftSuggest`）的分工
+ *
+ * `liftSuggest` 问的是"这段 ERB 能不能被**安全地**改写成糖、写回 `.kojo`"——
+ * 它的自证是"转译回去逐字节一致"，为写盘安全设计，宁可漏报。
+ *
+ * 本投影问的是另一件事："这份 ERB **显示成糖**以后长什么样"。显示对不上没有代价
+ * （展开仍能看到原文），所以判据从"整段自证"换成**逐行局部映射**：
+ *
+ * - 映射规则表**封闭且逐条可审计**（`IF X` → `如果 X：` 是 1:1 语法映射，不需要"证明"）；
+ * - **一行失败只影响那一行**——该行原样保留为 ERB（fail-visible），不向上传播；
+ * - 映射不上的行**显式**计入 `stats.nativeByReason`（不静默）。
+ *
+ * 依据：`docs/LIFT-REMEASURE-2026-10-12.md` §7.1。
+ *
+ * ## 语义边界
+ *
+ * - 输出是**投影**不是等价改写：不承诺能写回、不承诺 round-trip；
+ * - 不读盘 / 不写盘 / 不发事件（与 `preview` / `liftSuggest` 同款只读纪律）；
+ * - 契约层零游戏知识、零 Monaco 概念（渲染由 app 壳落地）。
+ */
+
+/**
+ * 投影中的一行有四种落点（**内部口径**，不单独建模为类型——UI 只消费整份 `text` 与
+ * `stats`）：
+ *
+ * - `speech`：台词/旁白文本行（`PRINTFORM{W,L,DW,DL} …` → 糖文本行，`L` 后缀补 ` 续`）；
+ * - `control`：糖覆盖的控制流行（`IF X` → `如果 X：` 等；`ENDIF`/`ENDSELECT` 收束不显示）；
+ * - `passthrough`：注释 / 空行——糖表层语法与 ERB 完全一致，原样透传；
+ * - `native`：不在糖覆盖范围内的行——**原样保留为 ERB**（fail-visible）。
+ */
+
+/**
+ * "这一行为什么保留原生写法"（**闭集**；命名零游戏名词）。
+ *
+ * 与 `SugarLiftSkipReason` 不同：那是"候选级"的拒绝原因（强自证口径），
+ * 本枚举是"行级"的透出口径（投影口径）。
+ */
+export type SugarProjectNativeReason =
+  /** PRINT 变体无糖形态（非 FORM 系 / 无 `W`·`L` 后缀 / `PRINTBUTTON` 等） */
+  | 'unsupported-print-variant'
+  /** 含行内条件 `\@…\@`（本版不做这类投影） */
+  | 'inline-condition'
+  /** 糖未覆盖的控制流（`SIF` / 循环 / TRY 系 / PRINTDATA 系 / `$标签` / `GOTO` 等） */
+  | 'unsupported-control-flow'
+  /** 落在数据表体（PRINTDATA 系）或 `[SKIPSTART]…[SKIPEND]` 区内——不是可显示的语句 */
+  | 'data-or-skip'
+  /** 其余（赋值、调用、`#` / `@` 指令行等） */
+  | 'other';
+
+/** 投影统计（UI 用来回答"这个文件里哪些行没被升糖、为什么"——不静默） */
+export interface SugarProjectStats {
+  /** 源文件总行数 */
+  totalLines: number;
+  /**
+   * **被糖投影覆盖**的源行数：台词/旁白行 + 糖覆盖的控制流行。
+   *
+   * 含 `ENDIF` / `ENDSELECT` 这类**不产出可见行**的收束行——它们被缩进语义吸收，
+   * 仍属于"被糖覆盖"。这条口径的收益是一条可断言的不变量：
+   * `projectedLines + passthroughLines + nativeLines === totalLines`
+   * （每一行都必须落在三类之一，**没有行会凭空消失**）。
+   */
+  projectedLines: number;
+  /** 原样透传的注释 / 空行数 */
+  passthroughLines: number;
+  /** 保留原生写法的行数 */
+  nativeLines: number;
+  /** 保留原生写法的**分因**计数（按 count 降序；空因不列出） */
+  nativeByReason: { reason: SugarProjectNativeReason; count: number }[];
+}
+
+/** 糖投影请求（纯数据；`source` 是内存态文本，本服务不读盘） */
+export interface SugarProjectRequest {
+  /** 待投影的原生 ERB 文本（内存态；不读盘） */
+  source: string;
+  /** 源文件路径（诊断元信息；不触发 IO） */
+  filePath?: string;
+}
+
+/**
+ * 投影出的**连续可映射段**（消费方把它落成编辑器里的一个就地视图）。
+ *
+ * ## 为什么是"段"而不是整份 `text`
+ *
+ * 宿主（Monaco）插入就地视图用的是 ViewZone——它要的正是**区间 + 该区间的替换文本**
+ * 这两样东西：区间用来折叠原文，文本用来显示糖。整份 `text` 答不出"哪几行被替换了"，
+ * 宿主拿到它还得自己再切一遍（重复实现同一套分段规则）。
+ *
+ * 段数组是区间与文本的**唯一真源**：把段按 `fromLine` 排好，段与段之间的行即
+ * "原样保留"的行——不需要第二份全文。
+ *
+ * 不变量：段**按 `fromLine` 升序**且**互不重叠**（相邻段之间至少隔一行原生行）。
+ */
+export interface SugarProjectSegment {
+  /** 源区间起点（1 基，含） */
+  fromLine: number;
+  /** 源区间终点（1 基，含）——含收束行（`ENDIF` 不产出可见行，但占区间） */
+  toLine: number;
+  /**
+   * 该段的糖写法（多行，`\n` 分隔；缩进已归一为 TAB）。
+   *
+   * 缩进以**段内可见行的最小层为基准 0**：段是就地插入的独立视图，不继承源文件
+   * 的外层缩进（否则插到原文区间上方会莫名其妙地右移）。
+   */
+  sugarText: string;
+  /** 糖写法的可见行数（= `sugarText` 的行数；宿主算 ViewZone 高度用） */
+  lineCount: number;
+}
+
+/** 糖投影结果 */
+export interface SugarProjectResult {
+  /** 连续可映射段（升序、互不重叠；见 `SugarProjectSegment`） */
+  segments: SugarProjectSegment[];
+  /** 统计（回答"这个文件里哪些行没被升糖、为什么"——不静默） */
+  stats: SugarProjectStats;
 }
 
 

@@ -49,8 +49,11 @@ import type {
   SugarLiftResult,
   SugarLiftSkip,
   SugarLiftSkipReason,
+  SugarProjectRequest,
+  SugarProjectResult,
   SugarTranspileResult,
 } from '@kojo/plugin-api';
+import { liftProject } from './project';
 
 /* ============================== 依赖 ============================== */
 
@@ -106,6 +109,7 @@ export function liftSuggest(deps: LiftDeps, request: SugarLiftRequest): SugarLif
 export function createSugarLiftService(deps: LiftDeps) {
   return {
     liftSuggest: (request: SugarLiftRequest): SugarLiftResult => liftSuggest(deps, request),
+    liftProject: (request: SugarProjectRequest): SugarProjectResult => liftProject(deps, request),
   };
 }
 

@@ -14,12 +14,14 @@ import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from 'monaco-editor';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
+import { fillSugarBlock } from '../monaco/sugar-render';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { editorOptionsForLineCount } from './editor-options';
 import { decideExternalChange } from './external-change';
 import { clampRange, isErbLike, liftZonePlan } from './lift-preview';
 import { perf } from '../perf';
+import { loadSugarViewPref, saveSugarViewPref, sugarSummary, sugarZonePlan } from './sugar-view';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -39,6 +41,15 @@ const LIFT_ZONE_CLASS = 'lift-preview-zone';
 /** 打字机节奏：每 tick 追加的字符数 / tick 间隔（毫秒） */
 const TYPEWRITER_STEP = 2;
 const TYPEWRITER_INTERVAL_MS = 8;
+/**
+ * 糖视图每帧填充的段数上限。
+ *
+ * 为什么需要分帧：真实语料里 79% 的文件 ≤200 段，但**最大的文件有 9,569 段**
+ * （见 `packages/kernel/tests/sugar-projection.corpus.test.ts` 的守门读数）。
+ * 一次性为 9.5k 段做着色渲染会卡住首屏，故：先建**空壳**（成本 O(1)），
+ * 再按帧把内容填进去——每帧 ≤120 段，一屏之内几乎瞬间完成，且**不截断任何段**。
+ */
+const SUGAR_HYDRATE_PER_FRAME = 120;
 
 /** 按扩展名选语言：`.kojo` = 语法糖表层 DSL；其余按原生 ERB（v0.1 口径） */
 function languageFor(filePath: string): string {
@@ -69,6 +80,38 @@ function pickSaveHandler(kernel: Kernel, path: string): EditorSaveHandlerContrib
   if (matches.length === 0) return undefined;
   matches.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)); // 稳定排序：同 order 保持注册顺序
   return matches[0];
+}
+
+/**
+ * 隐藏 / 还原源区间（糖视图用：原文给糖文本让位）。
+ *
+ * ## 为什么不用 `editor.fold` 命令
+ *
+ * 折叠是**命令**——一次一条、语义与折叠模型和选区耦合，而且"折了几层"由折叠供给
+ * 决定。糖视图要的是另一种语义：**整文件、确定性、可一次整体撤销**的隐藏。
+ * `setHiddenAreas(ranges)` 正是它：一次给出全部区间，`setHiddenAreas([])` 一次还原。
+ *
+ * ## 为什么需要能力探测
+ *
+ * 该方法在 Monaco 0.57 的**运行时**存在于 `CodeEditorWidget`（编辑器实例的基类），
+ * 但未进 `monaco.d.ts` 的 `ICodeEditor`。故此处显式探测并**降级可见**：拿不到能力
+ * 就只插糖、不隐藏原文（读者仍能读到糖，只是原文没让位——绝不白屏、绝不静默）。
+ *
+ * 返回是否真的隐藏成功。
+ */
+function hideSourceAreas(
+  ed: Monaco.editor.IStandaloneCodeEditor,
+  ranges: readonly Monaco.IRange[],
+): boolean {
+  const fn = (ed as unknown as { setHiddenAreas?: (r: readonly Monaco.IRange[]) => void })
+    .setHiddenAreas;
+  if (typeof fn !== 'function') return false;
+  try {
+    fn.call(ed, ranges);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -189,6 +232,23 @@ export function EditorPane({
   const liftZonesRef = useRef<string[]>([]);
   /** 升糖预览的打字机定时器（收起时清掉，避免写入已移除的 DOM） */
   const liftTimersRef = useRef<number[]>([]);
+  /** 糖视图（整文件显示为糖）：已插入的 ViewZone id */
+  const sugarZonesRef = useRef<string[]>([]);
+  /**
+   * 等待填充内容的糖段（"可见优先"分两批）。
+   *
+   * 空壳先插、内容后填：`changeViewZones` 只建 `<pre>`（O(1)/段），着色与文本在
+   * 后续帧里按批填。可见窗口内的段排在最前——读者第一眼看到的一定是完整的。
+   */
+  const sugarPendingRef = useRef<Array<{ el: HTMLElement; text: string }>>([]);
+  /** 分帧填充的 rAF 句柄（换文件/关视图时取消，避免写进已移除的 DOM） */
+  const sugarHydrateRafRef = useRef<number | null>(null);
+  /** 糖视图开关（偏好持久化；默认开——见 `sugar-view.ts` 头注） */
+  const [sugarView, setSugarView] = useState<boolean>(() => loadSugarViewPref());
+  /** 同一份"最新开关"给只注册一次的 Monaco 回调读（避免闭包过时） */
+  const sugarViewRef = useRef<boolean>(sugarView);
+  /** 糖视图摘要（null = 未启用 / 无文件）；工具条展示 */
+  const [sugarStats, setSugarStats] = useState<string | null>(null);
   /** 正在以磁盘内容重载 model（抑制由此触发的脏上报：重载不是用户编辑） */
   const reloadingRef = useRef(false);
   const [dirty, setDirty] = useState(false);
@@ -367,6 +427,150 @@ export function EditorPane({
       unHide();
     };
   }, [kernel, showLiftPreview, clearLiftPreviews]);
+
+  /* ------------------------ 糖视图（整文件显示为糖） ------------------------ */
+
+  /**
+   * 停掉分帧填充（换文件 / 关视图 / 卸载都走它；不取消会写进已移除的 DOM）。
+   */
+  const stopSugarHydration = useCallback(() => {
+    if (sugarHydrateRafRef.current !== null) {
+      window.cancelAnimationFrame(sugarHydrateRafRef.current);
+      sugarHydrateRafRef.current = null;
+    }
+    sugarPendingRef.current = [];
+  }, []);
+
+  /**
+   * 清空糖视图：移除全部糖 ViewZone + **还原被隐藏的原文**。
+   * 换文件 / 关开关 / 卸载都走它（"原文让位"必须是可逆的）。
+   */
+  const clearSugarView = useCallback(() => {
+    const ed = editorRef.current;
+    const ids = sugarZonesRef.current;
+    sugarZonesRef.current = [];
+    stopSugarHydration();
+    if (ed && ids.length > 0) {
+      ed.changeViewZones((acc) => {
+        for (const id of ids) acc.removeZone(id);
+      });
+    }
+    if (ed) hideSourceAreas(ed, []);
+    setSugarStats(null);
+  }, [stopSugarHydration]);
+
+  /**
+   * 生成糖视图：整份 ERB 投影成糖 → 每段**上方**插 ViewZone（糖文本）、
+   * **隐藏**该段原文区间（位置不变，内容变成人话）。
+   *
+   * 整文件模式刻意**不打字机**：打字机是"逐条预览"的仪式感（一次一段），整文件有
+   * 几十上百段，逐字动画会变成等待。这里的体感目标只有一个字：快。
+   */
+  const applySugarView = useCallback(() => {
+    const ed = editorRef.current;
+    const model = ed?.getModel();
+    if (!ed || !model) return;
+    clearSugarView();
+    const path = filePathRef.current;
+    // 只对原生 ERB 生效：`.kojo` 本身就是糖，再投影一遍没有意义
+    if (!sugarViewRef.current || !isErbLike(path)) return;
+
+    const text = model.getValue();
+    const project = kernel.project.current();
+    const maxLine = model.getLineCount();
+
+    // 段清点：单个贡献抛错不影响其余（与装饰器 / codeAction 同款隔离）
+    const segments: Array<{ fromLine: number; toLine: number; sugarText: string }> = [];
+    for (const contribution of kernel.slots.query('ui.editor.liftPreview')) {
+      const provide = contribution.provideLiftProject;
+      if (typeof provide !== 'function') continue;
+      try {
+        for (const item of provide.call(contribution, { path, text, project })) {
+          const { fromLine, toLine } = clampRange(item.fromLine, item.toLine, maxLine);
+          segments.push({ fromLine, toLine, sugarText: item.sugarText });
+        }
+      } catch (e: unknown) {
+        // 能力出错要"退化可见"：记录后继续，糖视图少一段好过整份消失
+        console.warn(
+          `[EditorPane] liftPreview '${contribution.id}' provideLiftProject 抛错：${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
+    }
+    if (segments.length === 0) return;
+
+    // 插 ViewZone（**一次** changeViewZones：整份文件一个批次，避免逐段重排）
+    //
+    // 先建**空壳**（`<pre class="sugar-zone">` 无内容）→ 立刻可见"这段是糖"的底色与
+    // 竖线，且创建成本与段内文本量无关；内容交给分帧填充，可见窗口优先。
+    const visible = ed.getVisibleRanges();
+    const visibleFrom = visible.length > 0 ? visible[0]!.startLineNumber : 1;
+    const visibleTo = visible.length > 0 ? visible[visible.length - 1]!.endLineNumber : 1;
+    const nearViewport: Array<{ el: HTMLElement; text: string }> = [];
+    const rest: Array<{ el: HTMLElement; text: string }> = [];
+    let sugarLines = 0;
+    ed.changeViewZones((acc) => {
+      for (const seg of segments) {
+        const plan = sugarZonePlan(seg);
+        sugarLines += plan.lineCount;
+        const dom = document.createElement('pre');
+        dom.className = 'sugar-zone';
+        const id = acc.addZone({
+          afterLineNumber: plan.afterLineNumber,
+          heightInLines: plan.heightInLines,
+          domNode: dom,
+          suppressMouseDown: false,
+          // 锚点行可能落在被隐藏区间内（段首行的上一行就是隐藏区间的末行）——
+          // 不声明这一点，糖会跟着原文一起消失。
+          showInHiddenAreas: true,
+        });
+        sugarZonesRef.current.push(id);
+        const item = { el: dom, text: seg.sugarText };
+        // 可见窗口内的段排最前；再各自按行号升序（读者从上往下读）
+        if (seg.toLine >= visibleFrom && seg.fromLine <= visibleTo) nearViewport.push(item);
+        else rest.push(item);
+      }
+    });
+
+    // 隐藏原文区间（一次调用；拿不到能力则只插糖不隐藏——降级可见，不白屏）
+    hideSourceAreas(
+      ed,
+      segments.map(
+        (s) =>
+          new monaco.Range(s.fromLine, 1, s.toLine, model.getLineMaxColumn(s.toLine)),
+      ),
+    );
+    setSugarStats(sugarSummary(sugarLines));
+
+    // 分帧填充（可见优先；每帧 ≤SUGAR_HYDRATE_PER_FRAME 段）
+    sugarPendingRef.current = [...nearViewport, ...rest];
+    const pump = (): void => {
+      sugarHydrateRafRef.current = null;
+      const batch = sugarPendingRef.current.splice(0, SUGAR_HYDRATE_PER_FRAME);
+      for (const item of batch) fillSugarBlock(item.el, monaco, item.text);
+      if (sugarPendingRef.current.length > 0) {
+        sugarHydrateRafRef.current = window.requestAnimationFrame(pump);
+      }
+    };
+    sugarHydrateRafRef.current = window.requestAnimationFrame(pump);
+  }, [kernel, clearSugarView]);
+
+  // 开关变化：记住偏好（下次启动仍是你的选择）+ 就地重算视图
+  useEffect(() => {
+    sugarViewRef.current = sugarView;
+    saveSugarViewPref(sugarView);
+    applySugarView();
+  }, [sugarView, applySugarView]);
+
+  // 糖视图开关意图 → 宿主落地（插件发意图、宿主渲染；与 editor.liftPreview.show 同款）
+  useEffect(() => {
+    return kernel.bus.on('editor.sugarView.set', (p) => {
+      if (p.filePath && p.filePath !== filePathRef.current) return;
+      // 省略 `on` = 反转：状态所有者是宿主，请求方不必先问"现在是开还是关"
+      setSugarView((v) => p.on ?? !v);
+    });
+  }, [kernel]);
 
   // 记录最新定位请求（同一文件重复定位靠 nonce 变化触发）
   useEffect(() => {
@@ -714,6 +918,10 @@ export function EditorPane({
         provideFoldingRanges: (model) => {
           const path = filePathRef.current;
           if (!path || model !== editorRef.current?.getModel()) return [];
+          // 糖视图开着时，"折叠语义"已由**隐藏原文区间**承担（整段一起隐藏，比折叠
+          // 更彻底）。此时再叠一层折叠供给，折叠加号会与隐藏区间打架（同一批行两种
+          // 收束方式），故明确让位——关掉糖视图后逐条候选的折叠加号照旧。
+          if (sugarViewRef.current && isErbLike(path)) return [];
           const project = kernel.project.current();
           const text = model.getValue();
           const out: Monaco.languages.FoldingRange[] = [];
@@ -742,6 +950,7 @@ export function EditorPane({
       providerDisposer.dispose();
       liftFoldDisposer.dispose();
       clearLiftPreviews();
+      clearSugarView(); // 糖视图：移除 ViewZone + 还原隐藏区间（卸载不留残影）
       for (const t of liftTimersRef.current) window.clearTimeout(t);
       liftTimersRef.current = [];
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
@@ -825,6 +1034,10 @@ export function EditorPane({
       const stopApply = perf.start('switch.apply');
       prevPathRef.current = filePath;
       clearLiftPreviews(); // 升糖预览不跨文件残留
+      // 糖视图的"隐藏原文"挂在**各 model 自己的 viewModel** 上，换文件必须先把上一个
+      // 模型的隐藏还原——否则关掉开关后再切回该文件，原文仍被藏着（不可逆的错觉）。
+      // 必须在 `setModel` **之前**调用：早于切换，它作用的对象才是上一个模型。
+      clearSugarView();
       // 先按文件体量落 Monaco 选项，再挂 model——避免超长文件先在"默认全文级选项"
       // 下渲染一帧（大文件降级清单见 editor-options.ts）。
       // readOnly 语义（工作区批）：ERB 默认只读**仅限游戏目录**（借阅区不写 ERB）；
@@ -849,13 +1062,14 @@ export function EditorPane({
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
       refreshMarkers(entry.model, filePath);
+      applySugarView(); // 糖视图：整份 ERB 显示为糖（默认开；`.kojo` 自动跳过）
       applyReveal();
       stopApply();
     })();
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearLiftPreviews]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearLiftPreviews, clearSugarView, applySugarView]);
 
   return (
     <div className="editor-pane">
@@ -867,17 +1081,41 @@ export function EditorPane({
           {dirty ? '●' : ''}
         </span>
         {isErbLike(filePath) && !inWorkspace(filePath) ? (
-          // 纯说明性标签，**不带任何操作入口**——编辑 ERB 的路径由「检测到用户要编辑
-          // → 自动分流到 .kojo」承担（需求 §1.3，本批未实现）。旧的「强制编辑 ERB」
-          // 按钮按 §1.4 作废：把系统责任抛给用户。
-          // 文案只留「只读预览」：细节（为什么不写原文件、要怎么才能改）是悬停信息，
-          // 而「升糖」这类行话不该出现在常驻标签上——口上作者不一定看得懂。
-          <span
-            className="erb-mode-hint"
-            title="游戏目录里的 ERB 默认只读，编辑请转 .kojo 文件（工作区内的文件不受此限）。"
-          >
-            🔒 只读预览
-          </span>
+          <>
+            {/* 纯说明性标签，**不带任何操作入口**——编辑 ERB 的路径由「检测到用户要编辑
+                → 自动分流到 .kojo」承担（需求 §1.3，本批未实现）。旧的「强制编辑 ERB」
+                按钮按 §1.4 作废：把系统责任抛给用户。 */}
+            {/* 文案只留「只读预览」：细节（为什么不写原文件、要怎么才能改）是悬停信息，
+                而「升糖」这类行话不该出现在常驻标签上——口上作者不一定看得懂。 */}
+            <span
+              className="erb-mode-hint"
+              title="游戏目录里的 ERB 默认只读，编辑请转 .kojo 文件（工作区内的文件不受此限）。"
+            >
+              🔒 只读预览
+            </span>
+            {/* 糖视图：整份 ERB 显示为语法糖（只读）——本功能的存在理由就是让不熟悉
+                EraBasic 的读者也能把别人的口上当剧本读懂。默认开（偏好可记忆）。
+                可用门 = 不可编辑（ADR-0005 轴一：工作区 ERB 恒可编辑 ⟹ 不放糖视图）。 */}
+            <button
+              className={`ghost small sugar-toggle${sugarView ? ' on' : ''}`}
+              onClick={() => setSugarView((v) => !v)}
+              title={
+                sugarView
+                  ? '当前以语法糖显示。点击切回原 ERB 代码（显示偏好会被记住）。'
+                  : '把这份 ERB 显示成语法糖——台词读起来像剧本、条件变成「如果 …：」（只读，不改动原文件）。'
+              }
+            >
+              {sugarView ? '语法糖视图' : '显示为语法糖'}
+            </button>
+            {sugarView && sugarStats ? (
+              <span
+                className="sugar-stats dim"
+                title="其余行按原 ERB 显示：糖未覆盖的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释与空行。"
+              >
+                {sugarStats}
+              </span>
+            ) : null}
+          </>
         ) : null}
         <span className="spacer" />
         <span className="editor-status">{error ? `⚠ ${error}` : status}</span>

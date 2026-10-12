@@ -1,114 +1,118 @@
 /**
- * 升糖面板纯逻辑（零 React，可单测）。
+ * 升糖**视图**面板纯逻辑（零 React，可单测）。
  *
- * 定位（2026-10-12 升糖重定位批）：升糖**只用于看**——面板把 `sugar.lift` 的结果
- * 规约成"可点击预览"的列表行，点击即在编辑器里就地折叠显示糖写法（纯前端，
- * **不写盘**）。因此本模块只保留**排序 / 标签 / 跳过项 / 降级文案**，不再有
- * 勾选三态与 diff（写回路径已从本插件摘除）。
+ * ## 定位（2026-10-12 语法糖批换了一个问题）
  *
- * **本模块不含任何游戏知识**：候选语义全由 `@kojo/plugin-api` 的类型承载。
+ * 面板以前回答的是"**哪些片段能安全写回 `.kojo`**"——那是 `liftSuggest` 的强自证
+ * 口径（逐字节 round-trip），真实语料上行覆盖只有 **6.5%**，于是作者打开面板看到的
+ * 是九万条"未建议区间"。那个数字对读者是噪声，不是信息。
+ *
+ * 现在回答的是读者真正会问的两句话：
+ *
+ * 1. **"这份文件我读懂了多少？"** → `coverageText`（已显示为语法糖的行数与占比）；
+ * 2. **"剩下的为什么没读懂？"** → `breakdownText` + 分因明细（闭集中文标签）。
+ *
+ * 数字全部来自 `SugarProjectStats`，本模块**不另算口径**（算两遍必然漂移）。
+ *
+ * **零游戏知识**：本模块只消费 `@kojo/plugin-api` 里的结构类型。
  */
 
-import type { SugarLiftCandidate, SugarLiftResult, SugarLiftSkip } from '@kojo/plugin-api';
+import type { SugarProjectNativeReason, SugarProjectResult } from '@kojo/plugin-api';
 
-/* ============================== 候选列表 ============================== */
-
-/** 候选列表行（渲染数据源；按 `fromLine` 升序） */
-export interface CandidateRow {
-  /** 稳定键（React key 用） */
-  key: string;
-  kind: SugarLiftCandidate['kind'];
-  fromLine: number;
-  toLine: number;
-  /** 区间标签（`L12` 或 `L12–L18`） */
-  rangeLabel: string;
-  /** 糖类型显示名（中文，面向作者） */
-  kindLabel: string;
-  /** 建议的糖写法（多行原样） */
-  sugarSource: string;
-  /** 是否依赖 `旁白色: 作者色` 口径（预览时提示作者） */
-  needsAuthorColor: boolean;
-  /** 人读说明（来自候选自身） */
-  reason: string;
-}
-
-/** 糖类型的显示名（**零游戏知识**——都是语言层术语） */
-const KIND_LABELS: Record<SugarLiftCandidate['kind'], string> = {
-  'print-message': '文本行',
-  'if-block': '条件块',
-  selectcase: '分派块',
-  alias: '别名声明',
-};
+/* ============================== 保留原生：分因 ============================== */
 
 /**
- * 候选 → 列表行（**按行区间升序**；同起点时短区间在前，保证父块先于子块）。
- *
- * 为什么在这里再排一次：`sugar.lift` 契约已承诺升序，但消费方不该**依赖**
- * 上游排序来保证 UI 正确（自律优于假设）；重复排序的成本可忽略。
+ * "这一行为什么留着原代码"的显示名（**闭集**——`SugarProjectNativeReason` 的每个键
+ * 都要有；面向读者，一律说人话，不暴露内部术语）。
  */
-export function buildRows(result: SugarLiftResult | null): CandidateRow[] {
-  if (!result) return [];
-  return [...result.candidates]
-    .sort((a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine)
-    .map((c) => ({
-      key: `${c.kind}|${c.fromLine}|${c.toLine}`,
-      kind: c.kind,
-      fromLine: c.fromLine,
-      toLine: c.toLine,
-      rangeLabel: c.fromLine === c.toLine ? `L${c.fromLine}` : `L${c.fromLine}–L${c.toLine}`,
-      kindLabel: KIND_LABELS[c.kind] ?? c.kind,
-      sugarSource: c.sugarSource,
-      needsAuthorColor: c.narrationColor === '作者色',
-      reason: c.reason,
-    }));
-}
-
-/* ============================== 跳过项 ============================== */
-
-/** 跳过原因显示名（中文；**闭集**——`SugarLiftSkipReason` 的每个键都要有） */
-const SKIP_LABELS: Record<SugarLiftSkip['reason'], string> = {
-  'unsupported-print-variant': 'PRINT 变体无糖形态',
-  'unparsable-condition': '条件不可解析',
-  'unsupported-control-flow': '含糖未覆盖的控制流',
-  'label-or-goto': '含标签 / GOTO',
-  'macro-or-directive': '含宏或函数边界',
-  'mixed-domain-line': '文本域与逻辑域混行',
-  'comment-interference': '注释打断连段',
-  'roundtrip-mismatch': '转回去对不上（已降级）',
-  'transpile-error': '糖片段本身非法',
-  'not-covered': '不在 v1 四类糖之内',
+const NATIVE_REASON_LABELS: Record<SugarProjectNativeReason, string> = {
+  'unsupported-print-variant': '其它输出指令（非台词/旁白写法）',
+  'inline-condition': '含行内条件（\\@ 写法）',
+  'unsupported-control-flow': '糖未覆盖的控制流（SIF / 循环 / TRY / 数据表）',
+  'data-or-skip': '数据表内容 / 已停用区（[SKIPSTART]）',
+  other: '赋值、函数调用、函数声明等',
 };
 
-export interface SkipRow {
-  key: string;
-  rangeLabel: string;
-  reasonLabel: string;
-  message: string;
+/** 分因明细行 */
+export interface NativeReasonRow {
+  key: SugarProjectNativeReason;
+  /** 中文显示名 */
+  label: string;
+  count: number;
 }
 
-/** 跳过项 → 列表行（**显式呈现，不静默**——内核铁律） */
-export function buildSkipRows(skips: readonly SugarLiftSkip[] | undefined): SkipRow[] {
-  return (skips ?? []).map((s) => ({
-    key: `${s.reason}|${s.fromLine}|${s.toLine}`,
-    rangeLabel: s.fromLine === s.toLine ? `L${s.fromLine}` : `L${s.fromLine}–L${s.toLine}`,
-    reasonLabel: SKIP_LABELS[s.reason] ?? s.reason,
-    message: s.message,
-  }));
+/* ============================== 投影摘要 ============================== */
+
+/** 投影摘要（面板的全部渲染数据源） */
+export interface ProjectionSummary {
+  /** 源文件总行数 */
+  total: number;
+  /** 连续可映射段数 */
+  segments: number;
+  /** 被糖覆盖的源行数 */
+  projected: number;
+  /** 原样保留的原生行数 */
+  native: number;
+  /** 原样透传的注释 / 空行数 */
+  passthrough: number;
+  /** 已显示为语法糖的比例（0–100，四舍五入到整数） */
+  coverage: number;
+  /** 保留原生的分因明细（按计数降序） */
+  reasons: NativeReasonRow[];
+}
+
+/** 千分位（不依赖 ICU：不同 Node/WebView 的 `toLocaleString` 输出不一致） */
+function formatCount(n: number): string {
+  const s = String(Math.trunc(Math.abs(n)));
+  return `${n < 0 ? '-' : ''}${s.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+}
+
+/**
+ * 投影结果 → 摘要。
+ *
+ * `null`（尚未扫描 / 文件不可读）→ `null`：面板显示降级文案，不假装"已读懂 0%"。
+ * 无段但行数非零（系统脚本、纯数据表）→ **仍然返回摘要**（"已映射 0 行"是真实的
+ * 读数，比"空"更有信息量）。
+ */
+export function summarizeProjection(result: SugarProjectResult | null): ProjectionSummary | null {
+  if (!result) return null;
+  const { stats } = result;
+  const coverage =
+    stats.totalLines > 0 ? Math.round((stats.projectedLines / stats.totalLines) * 100) : 0;
+  return {
+    total: stats.totalLines,
+    segments: result.segments.length,
+    projected: stats.projectedLines,
+    native: stats.nativeLines,
+    passthrough: stats.passthroughLines,
+    coverage,
+    reasons: [...stats.nativeByReason]
+      .map((r) => ({ key: r.reason, label: NATIVE_REASON_LABELS[r.reason] ?? r.reason, count: r.count }))
+      .sort((a, b) => b.count - a.count),
+  };
+}
+
+/** 首行摘要：这份文件读懂了百分之多少 */
+export function coverageText(s: ProjectionSummary): string {
+  return `共 ${formatCount(s.total)} 行 · 已显示为语法糖 ${formatCount(s.projected)} 行（${s.coverage}%）`;
+}
+
+/** 次行摘要：另一半去哪了（原代码 / 注释空行分开说，读者不会以为漏了） */
+export function breakdownText(s: ProjectionSummary): string {
+  return `原样保留原代码 ${formatCount(s.native)} 行 · 注释与空行 ${formatCount(s.passthrough)} 行`;
 }
 
 /* ============================== 降级提示 ============================== */
 
-export type PanelDegrade = 'no-project' | 'no-file' | 'empty' | 'scan-error' | 'scanning' | 'too-large';
+export type PanelDegrade = 'no-project' | 'no-file' | 'empty' | 'scan-error' | 'scanning' | 'not-erb';
 
 const DEGRADE_TEXT: Record<PanelDegrade, string> = {
-  'no-project': '打开项目后可用（升糖建议来自当前文件）',
+  'no-project': '打开项目后可用（糖视图针对当前打开的文件）',
   'no-file': '打开一个口上文件后可用',
-  scanning: '扫描中…',
-  empty: '未发现可升糖的片段（全部区间已显式列在下方"未建议"里）',
-  'scan-error': '升糖扫描失败',
-  // 超长文件降级（2026-10-12「内核优化」批）：自动扫描让位给流畅度，显式路径仍在
-  'too-large':
-    '当前文件过长，为保持打开/滚动流畅，已跳过整篇升糖扫描。点上方「重新扫描」可按需执行（会有一瞬卡顿）。',
+  'not-erb': '当前文件不是原生 ERB（`.kojo` 本身即是语法糖，无需转换）',
+  scanning: '正在生成糖视图…',
+  empty: '这份文件没有可显示为语法糖的内容（可能是纯数据表或系统脚本）',
+  'scan-error': '糖视图生成失败',
 };
 
 export function degradeText(d: PanelDegrade): string {

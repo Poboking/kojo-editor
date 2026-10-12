@@ -168,6 +168,18 @@ const PRONOUN_MAP: ReadonlyMap<string, string> = new Map([
   ['你', '%CALLNAME:MASTER%'],
 ]);
 
+/**
+ * **反向**代词表（原生记号 → 糖代词；`%CALLNAME:TARGET%` → `她`）——升糖**投影**用
+ * （`project.ts`：把别人写的 ERB 显示成糖，让不懂 EraBasic 的人也能读懂台词）。
+ *
+ * 从 `PRONOUN_MAP` **派生**，而不是手写第二份：正反两向分开维护必然漂移
+ * （改了正向忘改反向 = 投影显示出糖里根本不存在的写法）。派生让"正反对称"
+ * 成为**构造事实**，不靠纪律。
+ */
+export const PRONOUN_REVERSE: ReadonlyMap<string, string> = new Map(
+  [...PRONOUN_MAP].map(([pronoun, form]) => [form, pronoun] as const),
+);
+
 /** 属性访问：`她的X` / `你的X` → 变量族查询（规范 §3.8） */
 const ATTRIBUTE_PREFIX: ReadonlyMap<string, string> = new Map([
   ['她的', 'TARGET'],
