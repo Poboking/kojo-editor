@@ -744,14 +744,20 @@ node tools/smoke-tauri-ipc.mjs
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1183 passed / 9 skipped（1192）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.55 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1200 passed / 9 skipped（1209）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.57 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前两条主线**：
-   - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 已通，**下一批首选 = 导出 ZIP**
-     （需 Rust 加压缩依赖 + `export_zip` 命令，照 `exportDirectory` 的「对话框即授权」形态），
-     其后 = 直连模式开关 · 多剧本编号上树 · 中日对照。
+   - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 + T2.1 + T3 + T4 已通。
+     **下一批首选 = 导出 ZIP（TS 层，用户 2026-10-12 拍板）**：
+     ZIP 容器（local/central header + CRC32）在 TS 层做，压缩用平台
+     `CompressionStream('deflate-raw')`；**不给 Rust 加 `zip` crate** ——
+     Rust 定位是「只做 IO 原语、零业务逻辑」，ZIP 组装属业务逻辑。
+     同批要接上：导出/部署时把 `.kojo` 自动转译为 `.erb`
+     （经服务键 `WellKnownServices.SugarTranspile`，合法先例见 `ui-sugar-editor/src/index.ts`）。
+     其后 = 项目区右键新建 · LICENSE 多协议 · 直连模式开关 · 中日对照。
    - **UI/UX 重设计线**（发版判据 ⑥）：P0–P4 **已全部入库**（P4 = 三容器拖拽停靠 + 全禅模式 +
      设置 overlay，`d871878`，记录见 §5.54）；**唯余真实终端勾验**（需求定稿 `docs/UI-REDESIGN-2026-10-11.md` §200）。
+     ⚠ P4 落地时**零新增测试**，所以判据 ⑥ 的真实欠账是「补测试 + 勾验」，不是再做一遍 P4。
    - **不属于本组**：语法糖语义（`kojo-sugar` / `ui-sugar-*` / `.kojo` 转译高亮 / 糖视图）与
      解析索引性能 —— 归别组，见 §十二。**要动它们的测试夹具前先查 `origin/syntax-sugar`。**
 5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`；**新批次编号用「日期 + 简称」，不再用 vX.Y 第N批（§十一 版本纪律）**；发版时走 §十一 的 tag 流程（首个发行版 = `v0.4.0-beta.1`，判据六项）。
