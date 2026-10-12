@@ -150,11 +150,15 @@ export function createWorkerTransport(
       });
     },
     dispose(): void {
+      // 在途请求必须**显式 reject**（而不是只清空）：否则调用方的 await 会永久挂起。
+      // 池侧会把这次失败记为 fellBack 并回退本地实现，语义安全。
+      const err = new Error('compute worker transport disposed');
+      for (const p of pending.values()) p.reject(err);
+      pending.clear();
       for (const s of slots) {
         s.worker?.terminate?.();
         s.worker = null;
       }
-      pending.clear();
     },
   };
 }

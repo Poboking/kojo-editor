@@ -166,6 +166,14 @@ describe('createWorkerTransport（真线程往返）', () => {
       t.dispose();
     }
   });
+
+  it('dispose 会 reject 在途请求（不挂起调用方）——审修补丁回归', async () => {
+    const t = createWorkerTransport(spawn);
+    const p = t.invoke('slow', 60); // 60ms 才完成的慢任务
+    await new Promise((r) => setTimeout(r, 5)); // 确保请求已到达 worker
+    t.dispose();
+    await expect(p).rejects.toThrow(/disposed/);
+  });
 });
 
 describe('ComputePool.offload（分发 + 回退）', () => {
@@ -233,5 +241,19 @@ describe('ComputePool.offload（分发 + 回退）', () => {
     } finally {
       transport.dispose();
     }
+  });
+
+  it('换通道时在途任务 reject 并回退本地实现（attachTransport 安全）——审修补丁回归', async () => {
+    const pool = createComputePool();
+    pool.registerTask('slow', ((ms: number) => `local-after-${ms}`) as never);
+    const first = createWorkerTransport(spawn);
+    pool.attachTransport(first);
+    const p = pool.offload<string>('slow', 80); // 已派往 first 的慢任务
+    await new Promise((r) => setTimeout(r, 5));
+    const second = createWorkerTransport(spawn);
+    pool.attachTransport(second); // 换通道 → dispose first → 在途任务被 reject
+    await expect(p).resolves.toBe('local-after-80'); // 池回退本地实现，调用方拿到结果
+    expect(pool.stats().offload.fellBack).toBe(1);
+    second.dispose();
   });
 });

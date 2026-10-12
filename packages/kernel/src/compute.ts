@@ -171,7 +171,7 @@ export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
     return runSliced([0], { ...opts, label: opts.label ?? key }, () => fn()).then((r) => r[0]!);
   }
 
-  async function drain(slot: LatestSlot, key: string, opts: ComputeRunOptions): Promise<void> {
+  async function drain(slot: LatestSlot, key: string): Promise<void> {
     slot.running = true;
     try {
       while (slot.next) {
@@ -191,7 +191,6 @@ export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
       // 窗口期内若又来了请求（同步入队），下一个调用者会重新启动 drain
       if (!slot.next && slot.waiters.length === 0) latestSlots.delete(key);
     }
-    void opts;
   }
 
   function runLatest<R>(key: string, opts: ComputeRunOptions, fn: () => R | Promise<R>): Promise<R> {
@@ -204,7 +203,7 @@ export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
     return new Promise<R>((resolve, reject) => {
       current.waiters.push({ resolve: resolve as (v: unknown) => void, reject });
       current.next = () => runOne(key, opts, fn) as Promise<unknown>;
-      if (!current.running) void drain(current, key, opts);
+      if (!current.running) void drain(current, key);
     });
   }
 

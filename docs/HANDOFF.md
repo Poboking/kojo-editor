@@ -36,6 +36,15 @@
 > ④ **索引快照 + 增量复扫**：erb-parser 把 `{path→(mtimeMs,textLength,ErbFile)}` 落存储域（实测 52,601 行仅 43 KB JSON，全量约 10–20 MB），二次打开 mtime 未变者零读盘零解析、只重扫变更文件（`service.buildIndex` 显式调用仍 = 强制重建）；实机探针常驻（`__kojoPerf`）；
 > **基线更新：1043 passed / 8 skipped（1051）/ 16 插件 / 审计 A–D 四项全绿；typecheck root + `@kojo/app` 双跑 exit 0**。
 > **下批欠账**：条件抽取 ~6.2s / 约定校验 ~9s 既没持久化也没下池（级联大头仍在）；`kernel.compute`（T1）/ L2 共享缓存未动。
+> 本会话续完成 **2026-10-12 计算池批（即点即现）**（`01635b7` + 本批；实施记录 §5.50）——
+> ① 先测量两处：`buildNavigatorTree` **258ms**（不值得切片，改为去重）；索引构建串行 **4,290ms**（纯 CPU 主导 → 必须多线程）；
+> ② 修「开项目建两遍树」（`project.opened` 与 `kojo.functionChanged` 双触发同一索引实例 → 新增纯函数 `shouldRebuildIndex` 去重）；
+> ③ 新内核设施 **`kernel.compute`**（契约 `plugin-api/src/compute.ts`）：`yieldToMain`（MessageChannel 宏任务让路）+ `runSliced`（时间片 + 窗口并发）+ 优先级 interactive>background + `runLatest` 单飞尾缘合并 + `offload`（可搬运任务，失败回退本地）；
+> ④ 级联过池三处：erb-parser 的 stat/parse（32/12 并发）、condition-extractor 的抽取循环（8）；**IO 留主线程，只把纯解析搬上并行通道**；
+> ⑤ **并行运输层**：`createWorkerTransport(factory,{size})` 多槽轮转（单槽不减少总 CPU，故按 `hardwareConcurrency-1` 封顶 4）+ `handleComputeRequest` 协议；任务表单一真源（插件导出 → 宿主 `registerTask` 与 worker 入口共用）；
+> ⑥ 验证：真线程测试 15 项（含多槽轮转）+ `@kojo/app build` 通过 + **构建产物端到端**（vm 加载 worker 产物，52,601 行真实 ERB 解出 124 函数）；
+> **基线更新：1083 passed / 8 skipped（1091）/ 16 插件 / 审计 A–D / app build ✅**。
+> **下批欠账**：条件抽取与约定校验的 CPU 仍整段在主线程（下一步搬上并行通道）；markers 未走 interactive 档（当前收益有限）；L2/L4 未动。
 
 
 ---

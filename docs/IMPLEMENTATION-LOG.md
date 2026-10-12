@@ -2450,3 +2450,49 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 - `markers` 走 interactive 档未接（当前价值有限：preemption 不可能，收益只是"最多等窗口"，
   已由 8 ms 窗口自动满足）。
 - L2 转译共享缓存 / L4 增量转译未动。
+
+### 5.51 本批自审与验收记录（2026-10-12，审阅后推送前）
+
+> 范围：§5.49 / §5.50 两批（7 个提交）+ 审修补丁。审阅标准：①「一切皆插件」解耦哲学；
+> ②真 bug。结论：**哲学合规；发现 1 个真 bug（已修）+ 1 处死代码（已清）**。
+
+#### 一、解耦哲学核对（逐项）
+
+| 检查点 | 结论 |
+|---|---|
+| 计算池**契约**住 `plugin-api/compute.ts`、**实现**住 `kernel/src/compute.ts` | ✅ 与 `FileIO` / `StorageService` / `SlotRegistry` 同款"类型在公共包、实现在内核"（插件不可 import kernel 的硬约束） |
+| 内核零插件/零游戏知识：`kernel/src/compute.ts` 只接受"项数组 + 纯函数 + kind 字符串" | ✅ 审计 A 项脚本验证通过 |
+| 运输层 `compute-worker.ts` 零平台依赖（`WorkerLike` 是结构化类型） | ✅ 因此才能用 `node:worker_threads` 做真线程测试 |
+| **"CPU 函数的所有者负责搬运"**：erb-parser 导出任务表 + activate 注册本地实现；消费方（condition-extractor）只调 `scanControlFlowOffloaded`，不认识 kind/worker/回退 | ✅ 分层正确 |
+| app 是组合根：`compute-tasks.ts` 合并插件任务表、worker 入口、bootstrap 接线 | ✅ 与 bootstrap 装配 16 插件的既有模式一致 |
+| 槽位请求新增 `lineCount`：宿主只传**中性事实**，"多少行算大"的降级策略留在贡献方 | ✅ 宿主无业务知识 |
+| 审计 A–D 四项 | ✅ 全绿（16 插件） |
+
+#### 二、发现的 bug 与处置
+
+1. **`createWorkerTransport.dispose()` 清空在途表但不 reject** → 在途 `invoke` 的 Promise
+   **永久挂起**（调用方 `await` 永不返回）。修复：dispose 时显式 reject 全部 pending
+   （池侧记 `fellBack` 并回退本地实现，语义安全）。**回归测试 2 条**：transport 级
+   （慢任务在途时 dispose → reject）+ 池级（`attachTransport` 换通道时在途任务回退本地）。
+2. `kernel/src/compute.ts` 的 `drain` 带有未使用参数 + `void opts` 死代码 → 已清理。
+
+#### 三、重点核查过但确认无问题的点（留档防回归）
+
+- `runLatest` 的 drain 窗口竞态：`finally` 的删除判定与入队之间**无 await**（同步区间），
+  不可能交错；槽位删除条件（`next===null && waiters 空`）与循环退出条件自洽。
+- `runSliced` 窗口内单项超预算不切分：by design（契约已注明），单文件最坏一个窗口的时长。
+- 快照保存的代际守卫：`gen !== generation` 时不落盘，项目快速切换不会写脏快照。
+- 抽取器 `stats` 累加在并发回调中：所有 `++` 位于每个回调的**同步段**（两次 await 之后），
+  JS 单线程下无竞态。
+- 多槽轮转的死槽跳过 + `cursor` 推进：逻辑正确（测试 `[0,1,0,1]` 钉死）。
+- `dispose` 后槽位**复活语义**（下次 invoke 懒重建 worker）：测试钉死，权衡后保留。
+- `perf.ts` 的 `console.log`：是 `__kojoPerf.detail()` 的**刻意用户输出**，非调试残留。
+
+#### 四、终验（推送前）
+
+| 检查 | 结果 |
+|---|---|
+| `npx vitest run` | **1083 passed / 8 skipped（1091）**（+2 条审修回归） |
+| `tsc`（root + `packages/app` 双跑） | exit 0 |
+| `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
+| `pnpm --filter @kojo/app build` | ✅（`dfd3a65` 批已验；审修只动 transport dispose，不涉及打包路径） |
