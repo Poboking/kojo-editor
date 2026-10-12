@@ -12,6 +12,7 @@ import { createEratwAdapterPlugin } from '../src/plugin';
 import { artifactDir, sortDirEntries } from '../src/kojo-projects-panel';
 import { NEW_KOJO_PROJECT_OVERLAY_ID } from '../src/new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID } from '../src/import-wizard';
+import { DEPLOY_KOJO_OVERLAY_ID } from '../src/deploy-wizard';
 
 /* ------------------------------ 纯函数 ------------------------------ */
 
@@ -147,12 +148,14 @@ describe('「我的口上项目」面板注册（P-B）', () => {
   });
 });
 
-describe('口上项目向导注册（P-C 新建 / P-F 导入）', () => {
-  it('注册两个 ui.overlay：新建 + 导入，id 与各引用常量一致', () => {
+describe('口上项目向导注册（P-C 新建 / P-F 导入 / P-E 部署）', () => {
+  it('注册三个 ui.overlay：新建 + 导入 + 部署，id 与各引用常量一致', () => {
     const { overlays } = activateWithPanel();
     const ids = overlays.map((o) => o.id);
     expect(ids).toContain(NEW_KOJO_PROJECT_OVERLAY_ID);
     expect(ids).toContain(IMPORT_KOJO_OVERLAY_ID);
+    expect(ids).toContain(DEPLOY_KOJO_OVERLAY_ID);
+    expect(overlays).toHaveLength(3);
     for (const o of overlays) expect(typeof o.component).toBe('function');
   });
 

@@ -6,6 +6,7 @@ import type {
   Plugin,
   ProjectService,
   VariableSchema,
+  WorkspaceArtifact,
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
@@ -21,6 +22,8 @@ import { createKojoProjectsPanel, type DirListState } from './kojo-projects-pane
 import { createPackageActions } from './package-actions';
 import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
+import { DEPLOY_KOJO_OVERLAY_ID, createDeployKojoWizard } from './deploy-wizard';
+import type { PendingDeploy } from './deploy';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -34,6 +37,9 @@ import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } fr
  * 按 ADR-0002 **不** provide 全局 `game.adapter` 服务键（多适配器共存需要）。
  * 口上项目批 P-B 起另贡献 `ui.panel`「我的口上项目」：消费内核通用
  * `kernel.workspaces`（project/artifact 模型），游戏解释只住本包。
+ * 该面板是「口上项目」这条工作流的家：新建（P-C 向导）→ 编辑（工作区恒可写）→
+ * 导入（P-F，文件树右键经内核意图事件进来）→ 导出（P-D，平台对话框即授权）→
+ * 部署（P-E，写进角色口上目录，仍过内核写白名单）。
  */
 export function createEratwAdapterPlugin(): Plugin {
   return {
@@ -109,6 +115,23 @@ export function createEratwAdapterPlugin(): Plugin {
 
       const actions = createPackageActions({ io, log: ctx.log, notify: notifyWs });
       ctx.onDispose(() => actions.dispose());
+
+      /* ---- 部署请求（P-E）：面板包行「部署」→ 向导确认落点与写权限 ---- */
+
+      /** 待部署请求（overlay 组件无 props，payload 不经组件——读插件闭包） */
+      let pendingDeploy: PendingDeploy | null = null;
+
+      const requestDeploy = (artifact: WorkspaceArtifact, absDir: string): void => {
+        const metaCharaNo = artifact.meta.charaNo;
+        pendingDeploy = {
+          absDir,
+          dirName: artifact.dirName,
+          displayName: artifact.name,
+          // 新建向导（P-C）写在制品 meta 里的角色号 → 自动预选；导入的包没有，留给用户挑
+          ...(typeof metaCharaNo === 'number' ? { charaNo: metaCharaNo } : {}),
+        };
+        ctx.bus.emit('ui.overlay.open', { id: DEPLOY_KOJO_OVERLAY_ID, source: 'eratw-adapter' });
+      };
 
       /* ---- 导入请求（P-F）：壳层文件树右键发意图，本插件解释为「导入口上项目」 ---- */
 
@@ -275,6 +298,7 @@ export function createEratwAdapterPlugin(): Plugin {
           status: () => actions.status(),
           dismissStatus: () => actions.dismiss(),
           exportArtifact: (absDir, displayName) => actions.exportArtifact(absDir, displayName),
+          deployArtifact: (artifact, absDir) => requestDeploy(artifact, absDir),
         }),
       });
 
@@ -306,6 +330,25 @@ export function createEratwAdapterPlugin(): Plugin {
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
           onImported: invalidateWs,
+        }),
+      });
+
+      /* ---- 部署向导（P-E）：工作区包 → 角色口上目录（目标已存在不覆盖） ---- */
+
+      ctx.slots.register('ui.overlay', {
+        id: DEPLOY_KOJO_OVERLAY_ID,
+        order: 22,
+        component: createDeployKojoWizard({
+          gameProject: () => project.current(),
+          writable: (targetDir) => io.isWritable(targetDir),
+          checkTargetExists: (targetDir) => io.exists(targetDir),
+          pending: () => pendingDeploy,
+          clearPending: () => {
+            pendingDeploy = null;
+          },
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: DEPLOY_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
+          deploy: (pkg, target) => actions.deployArtifact(pkg, target),
         }),
       });
     },

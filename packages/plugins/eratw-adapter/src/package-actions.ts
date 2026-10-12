@@ -8,9 +8,12 @@
  * 导出的落点在写白名单**之外**是设计意图（导出即落到桌面 / 发布目录）：授权来自
  * 用户在系统对话框里的显式选择，对话框与复制绑定在同一平台命令内（JS 拿不到落点
  * 决定权）；工作区原件只读不动。
+ *
+ * 部署正相反——落点在游戏目录内，**写白名单这道闸必须过**（详见 `deploy.ts`）。
  */
 
 import type { FileIO, Logger } from '@kojo/plugin-api';
+import { deployPackage, type DeployTargetOk, type PendingDeploy } from './deploy';
 
 /** 包操作反馈种类 */
 export type PanelStatusKind = 'busy' | 'ok' | 'err';
@@ -40,6 +43,11 @@ export interface PackageActions {
   dispose(): void;
   /** 导出包到用户选定的目录（平台对话框 + 整目录复制） */
   exportArtifact(absDir: string, displayName: string): void;
+  /**
+   * 部署包到游戏目录（P-E）。返回是否成功——向导据此决定自身是否关闭，
+   * 失败时留着窗口让用户读状态条里的原因。
+   */
+  deployArtifact(pkg: PendingDeploy, target: DeployTargetOk): Promise<boolean>;
 }
 
 export function createPackageActions(deps: PackageActionsDeps): PackageActions {
@@ -85,6 +93,26 @@ export function createPackageActions(deps: PackageActionsDeps): PackageActions {
           deps.log.warn(`导出失败：${absDir} — ${reason}`);
           set({ kind: 'err', text: `导出失败：${reason}` });
         });
+    },
+
+    async deployArtifact(pkg: PendingDeploy, target: DeployTargetOk): Promise<boolean> {
+      set({ kind: 'busy', text: `正在部署「${pkg.displayName}」…` });
+      try {
+        const written = await deployPackage({ io: deps.io, srcDir: pkg.absDir, targetDir: target.targetDir });
+        set(
+          {
+            kind: 'ok',
+            text: `已部署「${pkg.displayName}」${written} 个文件 → ${target.targetDir}`,
+          },
+          STATUS_OK_DISMISS_MS,
+        );
+        return true;
+      } catch (err: unknown) {
+        const reason = err instanceof Error ? err.message : String(err);
+        deps.log.warn(`部署失败：${pkg.absDir} → ${target.targetDir} — ${reason}`);
+        set({ kind: 'err', text: `部署失败：${reason}` });
+        return false;
+      }
     },
   };
 }

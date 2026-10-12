@@ -50,6 +50,8 @@ export interface KojoProjectsPanelDeps {
   dismissStatus(): void;
   /** 导出包到用户选定的目录（P-D：平台对话框 + 整目录复制） */
   exportArtifact(absDir: string, displayName: string): void;
+  /** 发起「部署到游戏目录」（P-E：打开向导，落点与写权限在向导里确认） */
+  deployArtifact(artifact: WorkspaceArtifact, absDir: string): void;
 }
 
 /** 目录条目排序：目录在前，其后按名称（中文本地化比较口径） */
@@ -207,6 +209,15 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                     onClick: () => deps.exportArtifact(dir, a.name),
                   },
                   '导出',
+                ),
+                h(
+                  'button',
+                  {
+                    className: 'kp-action',
+                    title: `把「${a.name}」部署到游戏目录的角色口上目录下（目标已存在不覆盖）`,
+                    onClick: () => deps.deployArtifact(a, dir),
+                  },
+                  '部署',
                 ),
               ),
             ),
