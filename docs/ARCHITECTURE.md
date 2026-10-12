@@ -95,7 +95,7 @@ interface Plugin {
 
 ### 3.4 文件 IO
 
-- 统一入口，内置：编码探测（ERB 老文件常见 Shift-JIS / UTF-8-BOM 混杂）、换行归一化、文件监视（chokidar）、原子写（写临时文件后 rename）。
+- 统一入口，内置：编码探测（ERB 老文件常见 Shift-JIS / UTF-8-BOM 混杂）、换行归一化、文件监视（**Rust notify 原始事件 → 内核去抖**；原计划的 chokidar 已被 ADR-0003 取代——WebView 里没有 fs，监视只能做平台原语）、原子写（写临时文件后 rename）。
 - **游戏目录整体只读假设**：唯一可写路径由用户在设置中显式声明（eraTW 的 `ERB/口上・メッセージ関連/個人口上/`），写前自动备份到 `{userData}/backup/`（保留最近 N 版）。
 
 ---

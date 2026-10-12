@@ -41,7 +41,7 @@ export interface FileWatcherDeps {
 export interface FileWatchController {
   /** 起（或换）监视：`roots` 为绝对路径目录。重复调用 = 用新的一组根替换旧的。 */
   start(roots: string[]): Promise<void>;
-  /** 停监视并丢弃未flush 的事件（project.closed / 应用退出）。 */
+  /** 停监视并丢弃尚未 flush 的事件（project.closed / 应用退出）。 */
   stop(): void;
   state(): FileWatchStateEvent;
 }

@@ -176,11 +176,11 @@
     悬停看原文出处）+ 导入向导随 meta 携带原作者。**口径 = 高精度宁缺勿滥**：
     实测 214 包只抽到 26 个署名，这是设计结果——假阳性会让人把别人的作品当无主作品改。
     语料基线常驻 `attribution.corpus.test.ts`（`KOJO_SMOKE_PROJECT` 守门）。
-- **当前基线（2026-10-13 判据①发版样例批 rebase 到 §5.81 之后、本机实测）：1530 passed / 13 skipped（1543），
-  88 文件过 / 7 跳；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；
-  `pnpm --filter @kojo/app build` ✓；`cargo test --lib` 12 项全绿。**
-  数字闭合：§5.80 自记 1530 + §5.81 等价改写净增 0 + §5.82 新守门 2 项在无 `KOJO_SMOKE_PROJECT` 时
-  整组跳过（贡献 0 passed / +2 skipped / +1 文件）⇒ **1530 passed / 13 skipped（1543）、88 过 / 7 跳**。
+- **当前基线（2026-10-13 BUG-5 文件监视批 rebase 到 §5.83 之后、本机实测）：1560 passed / 13 skipped（1573），
+  90 文件过 / 7 跳（97）；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；
+  `pnpm --filter @kojo/app build` ✓ 26.19s；`cargo test --lib` **17 项全绿**（12 → 17，新增 watch 五例）。**
+  数字闭合：§5.83 自记 1536 + 本批 24 条新用例（假时钟 21 + 真 `fs.watch` 3）= **1560**；
+  skipped 13 = §5.82 无语料跳过的 2 项 + 其余 11 项（存档在位的宿主上会变成 passed，**跨主机不必相等，对基线按 §十二-31 各批自记的数**）。
   ⚠ 跑全量**不要**设 `KOJO_SMOKE_PROJECT`（会放行依赖 sav 存档的注入测试而本机零存档必红）；
   语料基线单独带变量跑那一个文件即可。
 - **2026-10-12 回放线重测批完成**（本会话；`docs/IMPLEMENTATION-LOG.md` **§5.74** 为权威记录）：
@@ -592,6 +592,26 @@
   7. 推送纪律第二次执行：代码先 rebase → 验证 → **立刻推**（`a07f7eb..52c9bdd`）→ 才写文档，
      全程 rebase 零冲突。别线两次占过 §5.76 均**自行让号**到 §5.81 / §5.82，本组五节不再返工。
 
+- **2026-10-13 · BUG-5 文件监视批（发版判据②；详见 §5.84）**：`file.changed` 从此真的有监视器在生产路径上产生。
+  1. **原缺陷的形状**：`PlatformBridge.watchDirs` 的 Tauri 实现是 `console.warn` + 空取消函数的**占位**，
+     全仓无生产调用方；而测试桥 `NodeBridge` 早就实现了 `fs.watch` ⇒ **契约齐、测试桥齐、
+     生产实现空，所有测试全绿**。这是"量测试桥不等于量生产桥"的一整类漏口。
+  2. **分层**：Rust 加 `start_watch`/`stop_watch`（notify 8.2 递归监视，原始事件逐条转发，
+     零策略）+ 桥 `listen('kojo:fs-changed')` ↔ 回调 + **内核** `FileWatcherServiceImpl`
+     （200ms 尾缘去抖、末态类别合并、根目录折叠、会话号竞态）+ 宿主只做生命周期与呈现。
+  3. **契约演进（additive）**：`watchDirs` 增可选 `onReport`（监视器自述：逐根结果 + 运行期失效）；
+     新事件 `file.watchState` 走 **`KERNEL_ONLY`** 表 ⇒ 可 emit 白名单仍 16，计数不动是设计结果。
+     判级四态 `watching` / `partial` / `unavailable` / `stopped`，后两种由宿主弹常驻 error toast。
+  4. **三条退化落点实测过**：撤会话号 → 2 条竞态用例红；平台不过滤原子写临时文件 → 真 fs 用例
+     **当场先红后修**；撤去抖 → 合并用例红。窗口从**首条**事件起算且不重置（重置版在持续写入上饿死）。
+  5. **真实链路怎么证的**：`watcher.realfs.test.ts` 走真 `fs.watch`（写文件 → 恰好一条事件 /
+     范围外零事件）；Rust 侧事件流**证不了**（`EventHandler` 要 `AppHandle`），只对纯映射下测试，
+     真实投递留人工清单 §2.J。本机 `cargo` 冷启动且 `cargo add`/`fetch` **必须走代理**（已进 §十二）。
+  6. **消费方边界（刻意不做，下一批）**：外部改 ERB 后**函数树不会自动重建**（`erb-parser` 只订
+     `project.opened`）、文件树 `dirCache` 不失效、归档列表不自动重扫——接成"整库重建"要先量
+     快照复用与增量粒度，塞进 bug 批会得到"能自动刷但每次刷 2 秒"。
+  7. **基线：1560 passed / 13 skipped（1573）**；双 typecheck / 审计 A–D / app build / `cargo test --lib` 17 全绿。
+
 ## 三、文档索引（按权威性排序；2026-10-11 整理批后口径）
 
 ### 活文档（`docs/` 根，11 份 + adr/）
@@ -599,7 +619,7 @@
 | 文档 | 内容 |
 |---|---|
 | `docs/HANDOFF.md`（本文件） | **交接状态 + 下一批动手清单（新会话从这里开始）** |
-| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.83**：§5.49 = 口上项目批 P-A…P-E · §5.50 = 口上项目批 T2 · §5.51 = 内核优化批 · §5.52 = 计算池批 · §5.53 = 本批自审与验收记录 · §5.54 = UI 重设计 P4 补记 · §5.55 = 分支收口批 · §5.56 = 口上项目批 T3 · §5.57 = 口上项目批 T4 · §5.58 = 体感丝滑批 · §5.59 = 语法糖视图批 · §5.60 = 语法糖批 A/C/D/E · §5.61 = 语法糖教学样例批 · §5.62 = 语法糖批 F/G · §5.63 = 语法糖批 H · §5.64 = 两线合流批 · §5.65 = 快照卫生批 · §5.66 = 语法糖批 I · §5.67 = 语法糖批 J · §5.68 = 语法糖批 K · §5.69 = 语法糖批 L · §5.70 = 抽取按文件增量批 · §5.71 = 语法糖批 M · §5.72 = 校验按文件增量批 · §5.73 = 名称解析 memo 批 · §5.76 = UI 归一批 · §5.77 = 导出批 · §5.78 = 工作区新建条目批 · §5.79 = 许可协议可选批 · §5.80 = 三线合流批 · §5.81 = 规则成本归位批 · §5.74 = 回放线重测批 · §5.75 = 语法糖度量批 · §5.82 = 判据①发版样例批 · **§5.83 = 设置页归一批**） |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.84**：§5.49 = 口上项目批 P-A…P-E · §5.50 = 口上项目批 T2 · §5.51 = 内核优化批 · §5.52 = 计算池批 · §5.53 = 本批自审与验收记录 · §5.54 = UI 重设计 P4 补记 · §5.55 = 分支收口批 · §5.56 = 口上项目批 T3 · §5.57 = 口上项目批 T4 · §5.58 = 体感丝滑批 · §5.59 = 语法糖视图批 · §5.60 = 语法糖批 A/C/D/E · §5.61 = 语法糖教学样例批 · §5.62 = 语法糖批 F/G · §5.63 = 语法糖批 H · §5.64 = 两线合流批 · §5.65 = 快照卫生批 · §5.66 = 语法糖批 I · §5.67 = 语法糖批 J · §5.68 = 语法糖批 K · §5.69 = 语法糖批 L · §5.70 = 抽取按文件增量批 · §5.71 = 语法糖批 M · §5.72 = 校验按文件增量批 · §5.73 = 名称解析 memo 批 · §5.76 = UI 归一批 · §5.77 = 导出批 · §5.78 = 工作区新建条目批 · §5.79 = 许可协议可选批 · §5.80 = 三线合流批 · §5.81 = 规则成本归位批 · §5.74 = 回放线重测批 · §5.75 = 语法糖度量批 · §5.82 = 判据①发版样例批 · §5.83 = 设置页归一批 · **§5.84 = BUG-5 文件监视批（判据②）**） |
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
 | `docs/BASELINES.md` | 实测基线汇总（索引/回放/抽取/校验性能与正确性数字） |
 | `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` | **糖表层规范 v1.3**（v1.2 冻结版 + §3.8 一处增量，用户 2026-10-12 拍板）：语法/转译/产物逐条定义，golden 逐字节锚定（golden 断言按**标题+围栏**锚定，不再按行号） |
@@ -864,7 +884,8 @@ node tools/smoke-tauri-ipc.mjs
 - **TRAE 并行**：`ui-archive-browser` 插件（snapshot.source 消费，第 11 插件，注册四处齐全，audit 11 插件全绿）。
 - 下一步（第十四批候选）：v1.1 注入器用户面（改槽注入 UI → 含修改金样本回归 → 写盘走 writablePaths+备份）；或 v1.0 收口（回放面板场景预设 / 桌面壳真实终端冒烟）。
 - **ui-condition-matrix（条件矩阵）**：按角色/家族聚合状态依赖；MESSAGECHECK 位可视化。
-- `watchDirs` 文件监视（现为手动刷新；后续走 Rust notify）→ 增量重建索引。
+- `watchDirs` 文件监视——**已接真实监视器**（§5.84：Rust notify + 内核去抖）；**剩下的欠账在消费方**：
+  外部改 ERB 后增量重建索引（现只有编辑器 model 重载，函数树/文件树不自动跟随）。
 - Monaco bundle 4.3MB 拆分（manualChunks，低优先级）。
 - scanner 的 TRY 系配对精度（`TRYCALLFORM` 无 CATCH 时产生幻影开块）——影响上下文路径精度，方向"宁少勿错"，低优先级。
 
@@ -1168,8 +1189,8 @@ node tools/smoke-tauri-ipc.mjs
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1530 passed / 13 skipped（1543）**、88 文件过 / 7 跳 / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.82 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1560 passed / 13 skipped（1573）**、90 文件过 / 7 跳 / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`；**本工作树没有 `target/`，首次是冷编译数分钟**；新增 crate 需 `HTTPS_PROXY=http://127.0.0.1:7890`，与推送同一代理）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.84 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前三条主线**：
    - **体感丝滑线（本组主目标，性能）**：三段级联全部持久化（§5.58）→ 快照瘦身与卫生（§5.65）→
      抽取按文件增量（§5.70）→ 校验按文件增量（§5.72）→ **名称解析 memo（§5.73）**。
@@ -1210,7 +1231,7 @@ node tools/smoke-tauri-ipc.mjs
 2. **历史批次编号定格为"历史里程碑名"**：文档中已写的 `v0.X 第N批` / `SN` 一律**保留不回改**（git 历史同理）；**新批次记录不再使用 `vX.Y 第N批` 编号**，改用日期 + 简称（例：「2026-10-12 保存路径推导批」）。
 3. **首个发行版 = `v0.4.0-beta.1`**（用户拍板 2026-10-11；不做 v1.0.0，等闭环稳定后再转正）。**发版判据**（全部满足才打 tag）：
    - ① 保存路径推导接 `compileToFile` + 保存期全角空格阻断（`.kojo` 编辑→保存→真实游戏可跑的闭环成立）——**代码侧已闭环**（S7 数据层 §5.36 + S7-UI 接线 §5.37；`ui.editor.saveHandler` 槽 + 源保存/产物编译 + 全角空格告警三选），**实机输入已升级为全语法面发版样例**（§5.82：`fixtures/sugar/release-check.kojo` 353 行 → 产物 778 行 / 73 函数，覆盖率与结构平衡由 `sugar-releasecheck.transpile.test.ts` 机器守门），**余真实终端 `pnpm tauri dev` 手工勾验**（清单 §二 a–h + **i0–i3**）；
-   - ② BUG-5 `file.changed` 真实监视器接线 + 去抖；
+   - ② BUG-5 `file.changed` 真实监视器接线 + 去抖——**代码侧已闭环**（§5.84：Rust notify `start_watch`/`stop_watch` 原语 + 内核 `FileWatcherServiceImpl` 200ms 尾缘去抖 + 监视状态判级新事件 `file.watchState`；真实 `fs.watch` 端到端有 `watcher.realfs.test.ts`，`cargo test --lib` 12→17），**余真实终端勾验**（清单 §2.J：外部编辑器改一行 → 编辑器跟随、脏文件不覆盖、partial/unavailable 降级提示）；
    - ③ 桌面壳真实终端深度冒烟通过（§八 os error 231 欠账，需本机正常终端）；
    - ④ tauri 打包产物（NSIS/安装器）可在干净目录安装启动；
    - ⑤ README/用户文档最低集（安装、打开工程、`.kojo` 编辑编译保存、注入器安全提示）；
@@ -1257,11 +1278,12 @@ node tools/smoke-tauri-ipc.mjs
 
 ### 跨组须知（2026-10-13 凌晨增补 · 回放线重测批 §5.74）
 
-给所有在这个 worktree / 这条 `master` 上并行的 agent，三件事：
+给所有在这个 worktree / 这条 `master` 上并行的 agent，五件事：
 
-1. **小节号现状（取号前必读）**：`IMPLEMENTATION-LOG` 已用到 **§5.82**——
+1. **小节号现状（取号前必读）**：`IMPLEMENTATION-LOG` 已用到 **§5.84**——
    §5.76 = UI 归一批、§5.77 = 导出批、§5.78 = 工作区新建条目批、§5.79 = 许可协议可选批、
-   §5.80 = 三线合流批、§5.81 = 规则成本归位批（性能线）、**§5.82 = 判据①发版样例批（糖线）**。**新批次从 §5.83 起**。
+   §5.80 = 三线合流批、§5.81 = 规则成本归位批（性能线）、§5.82 = 判据①发版样例批（糖线）、
+   §5.83 = 设置页归一批（UI 线）、**§5.84 = BUG-5 文件监视批（判据②）**。**新批次从 §5.85 起**。
    本节号今晚撞了两次（两条线同一时刻各自取号），固定做法：**提交前一刻**用
    `grep -n "^### " docs/IMPLEMENTATION-LOG.md | tail -1` 现取最大号 +1，别用记忆里的号；
    推送前再 `git fetch` 复核一次。旧提交信息里的号不回改，本节即映射表。
@@ -1281,3 +1303,7 @@ node tools/smoke-tauri-ipc.mjs
 4. **回放线现在有实机证据了**：§5 / §6 已逐字复现（未知率 32.0%、exact 836 全中），
    所以**动 `erb-parser` / `condition-extractor` / `state-replay` / `sav-parser` 的批，
    验收必须带上 §5.74 的那两条命令**——§5.64 那轮"只守糖投影读数"不要重演。
+5. **Rust 侧改动的两条本机实况**（§5.84）：① `packages/app/src-tauri/target/` **不在工作树里**，
+   `cargo test --lib` 首次是**冷编译（数分钟）**，别按"秒级"规划收尾；② `cargo add` / `cargo fetch`
+   与 git 走**同一个代理**（`HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890`），
+   crates.io 直连同样不通。新增 crate 会进 `Cargo.lock` ⇒ **必须一并提交**，否则别线拉下来构建不出来。

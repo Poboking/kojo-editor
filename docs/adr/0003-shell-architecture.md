@@ -30,5 +30,6 @@ Tauri 应用天然分两层：Rust 宿主 + WebView 前端。kernel 与插件（
 
 **代价**：
 - 重计算会占用 WebView 主线程——v0.1 实测 2,285 文件索引 2.9 秒可接受；若 v0.2 出现卡顿，将解析移入 Web Worker（kernel 无平台依赖，天然可搬）。
-- 文件监视（watchDirs）在 WebView 无法原生实现，v0.1 以"显式刷新"替代，后续接 Rust notify。
+- 文件监视（watchDirs）在 WebView 无法原生实现，v0.1 以"显式刷新"替代，后续接 Rust notify
+  （**2026-10-13 已落地**：`start_watch`/`stop_watch` 原语 + 内核去抖，实施记录 IMPLEMENTATION-LOG §5.84）。
 - base64 有 33% 传输膨胀，对 sav 二进制（~MB 级）在 v1.0 评估切换到 `tauri::ipc::Response` 原始字节通道。

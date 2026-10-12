@@ -125,7 +125,7 @@ pnpm --filter @kojo/app tauri dev     # 首次需 cargo 编译 Tauri 依赖树�
 版本纪律见 [HANDOFF.md](docs/HANDOFF.md) §十一。打 tag 需**全部**满足：
 
 1. **保存闭环**：`.kojo` 编辑 → `Ctrl+S` → 源保存 + 产物 `.ERB` 编译落盘 → 真实游戏可跑（**代码侧已闭环**，见 IMPLEMENTATION-LOG §5.36/§5.37；余真实终端手工勾验）；
-2. **文件变更事件**：`file.changed` 真实监视器接线 + 消费方去抖；
+2. **文件变更事件**：`file.changed` 真实监视器接线 + 消费方去抖（**代码侧已闭环**，见 IMPLEMENTATION-LOG §5.84：Rust notify 监视原语 + 内核 200ms 尾缘去抖 + `file.watchState` 判级；余真实终端手工勾验，清单 §2.J）；
 3. **桌面壳深度冒烟**：真实终端 `pnpm tauri dev` 全流程通过；
 4. **打包产物**：NSIS/安装器可在干净目录安装启动；
 5. **用户文档**：安装、打开工程、`.kojo` 编辑编译保存、注入器安全提示。
