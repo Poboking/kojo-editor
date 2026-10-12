@@ -1,5 +1,6 @@
 import { createKernel, type Kernel } from '@kojo/kernel';
-import { createWorkerTransport } from '@kojo/plugin-api';
+import { createWorkerTransport, WellKnownServices } from '@kojo/plugin-api';
+import type { ConditionExtractorService, ConventionLinterService } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createUiStatusPlugin } from '@kojo/plugin-ui-status';
@@ -17,6 +18,7 @@ import { createUiSugarLiftPlugin } from '@kojo/plugin-ui-sugar-lift';
 import { createUiSugarPreviewPlugin } from '@kojo/plugin-ui-sugar-preview';
 import { createUiSugarEditorPlugin } from '@kojo/plugin-ui-sugar-editor';
 import { tauriBridge } from './bridge/tauri-bridge';
+import { createCascadeWatermarks } from './cascade-watermarks';
 import { perf } from './perf';
 // vite ?worker：并行计算线程入口（纯 CPU 任务搬出主线程）
 import ComputeWorker from './compute-worker?worker';
@@ -88,21 +90,39 @@ function installComputeTransport(kernel: Kernel): void {
 }
 
 /**
- * 性能探针接线（2026-10-12「内核优化 L0 批」）：
+ * 性能探针接线（2026-10-12「内核优化 L0 批」+「体感丝滑批」扩展）。
+ *
  * - 把探针挂到 `globalThis.__kojoPerf`（DevTools 里按需汇总，见 `perf.ts`）；
- * - 记录**开项目级联**的时间线：`project.opened` → `kojo.functionChanged`
- *   （后者由 erb-parser 索引构建完成后广播，故该差值 = 索引构建耗时）。
- *   条件抽取 / 约定校验的耗时由各自插件日志给出（均含 `in Nms`）。
+ * - 记录**开项目级联的三个用户水位**，全部相对 `project.opened` 起点：
+ *   `cascade.projectOpened→index可用`（函数树的数据就绪）
+ *   `→条件可用`（抽取摘要就绪，函数树徽章/条件矩阵依赖）
+ *   `→校验有结果`（约定报告就绪，校验面板依赖）
+ *   此前只量第一段，而真实语料里大头在抽取与校验——用户体感的"等十秒"是**三个水位
+ *   里最晚那一个**，只报索引等于没报。
+ * - 每个水位每次开项目只记首次达成（后续 functionChanged / subscribe 回调不重复计入），
+ *   `project.opened` 重置资格 ⇒ 交替开项目也能逐次对比冷热。
+ *   是否走了快照，看插件自己的日志（`restored from snapshot` / `reused N/N`）。
  */
 function installPerfProbe(kernel: Kernel): void {
   perf.install();
-  let openedAt: number | null = null;
-  kernel.bus.on('project.opened', () => {
-    openedAt = performance.now();
-  });
-  kernel.bus.on('kojo.functionChanged', () => {
-    if (openedAt === null) return;
-    perf.record('cascade.projectOpened→index', performance.now() - openedAt);
-    openedAt = null;
-  });
+  const water = createCascadeWatermarks(
+    (name, ms) => perf.record(name, ms),
+    () => performance.now(),
+  );
+
+  kernel.bus.on('project.opened', () => water.projectOpened());
+  kernel.bus.on('kojo.functionChanged', () => water.mark('index', 'cascade.projectOpened→index可用'));
+
+  // 抽取与校验不广播专用事件，但两者都提供 subscribe（注册即以当前值回调一次）：
+  // 首个非空值 = 该段对用户可用
+  kernel.services
+    .tryGet<ConditionExtractorService>(WellKnownServices.ConditionExtractor)
+    ?.subscribe((index) => {
+      if (index) water.mark('conditions', 'cascade.projectOpened→条件可用');
+    });
+  kernel.services
+    .tryGet<ConventionLinterService>(WellKnownServices.ConventionLinter)
+    ?.subscribe((report) => {
+      if (report) water.mark('lint', 'cascade.projectOpened→校验有结果');
+    });
 }

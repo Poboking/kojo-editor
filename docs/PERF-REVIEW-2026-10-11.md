@@ -200,17 +200,27 @@ Monarch 分词（`erb-language.ts`）、`wordWrap:'on'`、缩略图、平滑滚�
 | `switch.apply` | setModel + 选项 + 视图恢复 + 装饰刷新（**同步段**） | 大 ERB 上是重点观察项 |
 | `markers.total` / `markers.decorate:<id>` | 一次装饰刷新总耗时 / 单个装饰器耗时 | `.kojo` 上看 `sugar-diagnostics` |
 | `input.handler` | `onDidChangeContent` 到 handler 返回 | **应恒 <1ms**；否则 React 层有未知同步开销 |
-| `cascade.projectOpened→index` | `project.opened` → `kojo.functionChanged` | = 索引构建耗时 |
+| `cascade.projectOpened→index可用` | `project.opened` → 首次 `kojo.functionChanged` | 函数树的数据就绪（冷约 2.1s / 走快照约 0.6s） |
+| `cascade.projectOpened→条件可用` | 同上 → 抽取摘要首次非空 | 条件徽章 / 条件矩阵可用（冷约 9.9s / 快照约 1.2s） |
+| `cascade.projectOpened→校验有结果` | 同上 → 约定报告首次非空 | **用户体感的等待长度 = 三者最晚那个** |
+
+> 三个水位每轮开项目各记一次（`project.opened` 重置资格），所以交替开关项目就能
+> 在同一份 `summary()` 里看到 count/avg/max 的冷热差。走没走快照看插件日志
+> （`restored from snapshot` / `reused N/N`），探针只量用户等待。
 
 操作：
 
 1. 真实终端（非沙箱）跑 `pnpm --filter @kojo/app tauri dev`（首轮 cargo 冷编译 20–30 分钟，之后增量秒级）。
 2. 打开真实项目 `D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`，
    **抄下控制台三行耗时**（三者相加 = 开项目级联总时长）：
-   - `[erb-parser] … Indexed <N> ERB files … in <X>ms (walk+read+parse <Y>ms)`
-   - `[condition-extractor] Condition index: … in <X>ms`
-   - `[convention-linter] Convention lint: … in <X>ms`
+   - `[erb-parser] … Indexed <N> ERB files … in <X>ms`（同批第二行 `index breakdown:` 给了
+     walk / stat / snapshot(get, coerce) / read+parse / aggregate 的逐段拆分与 `reused N/N`）
+   - `[condition-extractor] Condition index: … in <X>ms`（或 `restored from snapshot`）
+   - `[convention-linter] Convention lint: … in <X>ms`（或 `restored from snapshot`）
    > 判据：**>10s ⇒ T3 + L3 无条件下立项**。
+   > 三段结果自 2026-10-12 起**全部有持久化**（§5.58 / §5.59），所以这一趟要跑两次：
+   > 关项目再开一次，抄**热**的数字——`__kojoPerf.summary()` 里三个 `cascade.*` 水位的
+   > `max` 与 `last` 就该差出一个量级（本机实测冷 9.9s → 热 1.18s）。**热态仍 >2s 才算立项**。
 3. 打开最大文件 `個人口上/058 Meiling [美鈴]/…/M_KOJO_K58_1_日常系コマンド.ERB`（52,601 行），
    手动敲 20 个字符后停顿，执行 `__kojoPerf.summary()`：
    - 看 `input.handler`（应 <1ms）、`markers.total`（ERB 上应很小）；
