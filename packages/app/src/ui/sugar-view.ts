@@ -17,6 +17,14 @@
 
 /** 偏好键（壳层私事，localStorage；与布局同款——不进内核存储域） */
 const PREF_KEY = 'kojo.ui.sugarView.v1';
+/**
+ * "已问过用户"标记键（与偏好分开存）。
+ *
+ * 为什么不让"偏好有值"兼任"已问过"：本轮引入了**首次打开 ERB 时的询问**，
+ * 而偏好的缺省是"开"——若用偏好兼任，用户一继承默认值就等于"已问过"，
+ * 询问永远不会出现。两个语义必须分开存。
+ */
+const PROMPTED_KEY = 'kojo.ui.sugarView.prompted.v1';
 
 /**
  * 默认**开启**。
@@ -56,6 +64,33 @@ export function saveSugarViewPref(on: boolean): void {
     s.setItem(PREF_KEY, on ? '1' : '0');
   } catch {
     /* 隐私模式 / 配额满：静默降级为"本次会话有效" */
+  }
+}
+
+/**
+ * 是否已经**问过**用户"要不要用语法糖视图"（首次打开 ERB 时问一次）。
+ *
+ * 无 `window`（测试 / 非浏览器）→ `true`（视作已问过，绝不弹窗——弹窗在无 UI 环境里
+ * 没有意义，而且会让测试路径意外走到模态分支）。
+ */
+export function loadSugarViewPrompted(): boolean {
+  const s = storage();
+  if (!s) return true;
+  try {
+    return s.getItem(PROMPTED_KEY) === '1';
+  } catch {
+    return true;
+  }
+}
+
+/** 记下"问过了"（无论用户选了开还是不开，都只问一次） */
+export function saveSugarViewPrompted(): void {
+  const s = storage();
+  if (!s) return;
+  try {
+    s.setItem(PROMPTED_KEY, '1');
+  } catch {
+    /* 同上：存不下只是下次还会问，不影响本次 */
   }
 }
 

@@ -6,6 +6,7 @@ import type {
   EditorSaveChoices,
   EditorSaveHandlerContribution,
   EditorSaveWarning,
+  EditorTextEdit,
   LineDecoration,
 } from '@kojo/plugin-api';
 import { FULLWIDTH_SPACE, WriteNotAllowedError, isPathUnder } from '@kojo/plugin-api';
@@ -18,10 +19,18 @@ import { fillSugarBlock } from '../monaco/sugar-render';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { editorOptionsForLineCount } from './editor-options';
+import { ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange } from './external-change';
-import { clampRange, isErbLike, liftZonePlan } from './lift-preview';
+import { clampRange, isErbLike } from './lift-preview';
 import { perf } from '../perf';
-import { loadSugarViewPref, saveSugarViewPref, sugarSummary, sugarZonePlan } from './sugar-view';
+import {
+  loadSugarViewPref,
+  loadSugarViewPrompted,
+  saveSugarViewPref,
+  saveSugarViewPrompted,
+  sugarSummary,
+  sugarZonePlan,
+} from './sugar-view';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -36,11 +45,6 @@ const MARKER_OWNER = 'kojo-decorators';
 const CODE_ACTION_COMMAND = 'kojo.codeAction.run';
 /** 编辑停顿多久后重算装饰（避免每击键跑一遍转译） */
 const MARKER_DEBOUNCE_MS = 250;
-/** 升糖预览 ViewZone 的 DOM 类名（样式在 app 样式表里） */
-const LIFT_ZONE_CLASS = 'lift-preview-zone';
-/** 打字机节奏：每 tick 追加的字符数 / tick 间隔（毫秒） */
-const TYPEWRITER_STEP = 2;
-const TYPEWRITER_INTERVAL_MS = 8;
 /**
  * 糖视图每帧填充的段数上限。
  *
@@ -112,6 +116,46 @@ function hideSourceAreas(
   } catch {
     return false;
   }
+}
+
+/**
+ * 把 💡 动作给出的**行级改写**落成一次 Monaco 编辑（**一次撤销步**，`Ctrl+Z` 可撤回）。
+ *
+ * 三条纪律：
+ * - **降序应用**：从最大行号开始替换，前面的行号才不会因替换而位移（与
+ *   `lift-apply.ts` 的倒序替换同源理由）；
+ * - **坐标夹取**：贡献方给出的行号可能因"供给与执行之间用户又编辑了"而过期，
+ *   夹取而非报错（陈旧行号不该让编辑器崩）；
+ * - **单次 `executeEdits`**：多段改写合并成一个撤销步——用户按一次 Ctrl+Z 应当
+ *   撤销"这次改写"，而不是被要求按 N 次。
+ *
+ * 返回是否真的落了一次编辑。
+ */
+function applyTextEdits(
+  ed: Monaco.editor.IStandaloneCodeEditor,
+  edits: readonly EditorTextEdit[],
+): boolean {
+  const model = ed.getModel();
+  if (!model || edits.length === 0) return false;
+  const maxLine = model.getLineCount();
+  const ops = edits
+    .map((e) => {
+      const from = Math.min(Math.max(1, Math.trunc(e.fromLine) || 1), maxLine);
+      const to = Math.min(Math.max(from, Math.trunc(e.toLine) || from), maxLine);
+      return { range: new monaco.Range(from, 1, to, model.getLineMaxColumn(to)), text: e.newText };
+    })
+    .sort((a, b) => b.range.startLineNumber - a.range.startLineNumber);
+  ed.executeEdits('kojo.codeAction', ops);
+  ed.pushUndoStop();
+  return true;
+}
+
+/**
+ * 路径末段（弹窗里给文件名而不是整条路径：用户认文件，不认目录树）。
+ */
+function baseNameOf(path: string): string {
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return i >= 0 ? path.slice(i + 1) : path;
 }
 
 /**
@@ -228,12 +272,22 @@ export function EditorPane({
   const pendingActionsRef = useRef(new Map<string, EditorCodeAction>());
   /** CodeAction id 序号（**单调递增不复用**：Monaco 可能持有上一轮列表，复用 id 会解析到别的动作） */
   const actionSeqRef = useRef(0);
-  /** 升糖预览已插入的 ViewZone id（收起 / 换文件时统一移除） */
-  const liftZonesRef = useRef<string[]>([]);
-  /** 升糖预览的打字机定时器（收起时清掉，避免写入已移除的 DOM） */
-  const liftTimersRef = useRef<number[]>([]);
   /** 糖视图（整文件显示为糖）：已插入的 ViewZone id */
   const sugarZonesRef = useRef<string[]>([]);
+  /**
+   * 已解锁编辑的 ERB 路径（**会话内有效**，不落盘）。
+   *
+   * 为什么不持久化：ERB 默认只读是**安全姿态**（游戏目录里别人的口上，误改即事故）。
+   * 解锁是用户对"这一份文件、这一次会话"的显式决定；重启后回到默认只读，成本极低
+   * （再点一次弹窗即可），而"上次解锁过就一直可写"会让保护形同虚设。
+   */
+  const unlockedPathsRef = useRef(new Set<string>());
+  /** 当前活动文件是否已解锁编辑（驱动 readOnly 与工具条文案） */
+  const [unlocked, setUnlocked] = useState(false);
+  /** 待用户决策的"ERB 编辑解锁"询问（非 null = 弹确认框） */
+  const [unlockAsk, setUnlockAsk] = useState<string | null>(null);
+  /** 是否弹"首次引导：要不要用语法糖视图"（只在首次打开 ERB 时一次） */
+  const [introAsk, setIntroAsk] = useState(false);
   /**
    * 等待填充内容的糖段（"可见优先"分两批）。
    *
@@ -337,97 +391,6 @@ export function EditorPane({
     }, MARKER_DEBOUNCE_MS);
   }, []);
 
-  /* --------------------------- 升糖预览（前端透镜） --------------------------- */
-
-  /**
-   * 清空全部升糖预览（移除 ViewZone + 停掉打字机定时器）。
-   * 换文件 / 收起 / 卸载都走它，保证"预览不跨文件残留"。
-   */
-  const clearLiftPreviews = useCallback(() => {
-    for (const t of liftTimersRef.current) window.clearTimeout(t);
-    liftTimersRef.current = [];
-    const ids = liftZonesRef.current;
-    liftZonesRef.current = [];
-    const ed = editorRef.current;
-    if (ed && ids.length > 0) {
-      ed.changeViewZones((acc) => {
-        for (const id of ids) acc.removeZone(id);
-      });
-    }
-  }, []);
-
-  /**
-   * 就地显示升糖预览（`editor.liftPreview.show` 的落地）：在原文区间**上方**插入
-   * ViewZone（打字机填糖写法），并把原文区间折叠起来——折叠时只见糖、展开时糖
-   * 在上原文在下。**全程不写盘**（这是升糖定位修正的核心：只用于看）。
-   */
-  const showLiftPreview = useCallback(
-    (payload: { filePath: string; fromLine: number; toLine: number; sugarText: string }) => {
-      const ed = editorRef.current;
-      const model = ed?.getModel();
-      if (!ed || !model) return;
-      // 只对当前活动文件生效
-      if (payload.filePath !== filePathRef.current) return;
-      const { fromLine, toLine } = clampRange(payload.fromLine, payload.toLine, model.getLineCount());
-      const plan = liftZonePlan({ fromLine, sugarText: payload.sugarText });
-      clearLiftPreviews(); // 重复触发 = 刷新，不叠加
-      ed.changeViewZones((acc) => {
-        const dom = document.createElement('div');
-        dom.className = LIFT_ZONE_CLASS;
-        const head = document.createElement('div');
-        head.className = 'lift-preview-head';
-        const label = document.createElement('span');
-        label.textContent = '💡 语法糖预览（只读 · 不改动原 ERB 文件）';
-        const close = document.createElement('button');
-        close.className = 'lift-preview-close';
-        close.textContent = '收起';
-        close.onclick = () => clearLiftPreviews();
-        head.appendChild(label);
-        head.appendChild(close);
-        const pre = document.createElement('pre');
-        pre.className = 'lift-preview-sugar';
-        dom.appendChild(head);
-        dom.appendChild(pre);
-        const id = acc.addZone({
-          afterLineNumber: plan.afterLineNumber,
-          heightInLines: plan.heightInLines,
-          domNode: dom,
-          suppressMouseDown: false,
-        });
-        liftZonesRef.current.push(id);
-        // 高度先按最终行数定格（避免打字过程反复重排），再逐字填充
-        const text = payload.sugarText;
-        let i = 0;
-        const tick = (): void => {
-          i = Math.min(text.length, i + TYPEWRITER_STEP);
-          pre.textContent = text.slice(0, i);
-          if (i < text.length) {
-            liftTimersRef.current.push(window.setTimeout(tick, TYPEWRITER_INTERVAL_MS));
-          }
-        };
-        tick();
-      });
-      // 折叠原文区间（单行候选无可折叠内容）；折叠后展开即可"糖 + 原文同现"
-      if (toLine > fromLine) {
-        ed.trigger('kojo-lift', 'editor.fold', { selectionLines: [toLine] });
-      }
-      ed.revealLineInCenterIfOutsideViewport(fromLine);
-    },
-    [clearLiftPreviews],
-  );
-
-  // 升糖预览意图 → 宿主落地（插件发意图、宿主渲染；与 editor.revealLocation 同款）
-  useEffect(() => {
-    const unShow = kernel.bus.on('editor.liftPreview.show', (p) => showLiftPreview(p));
-    const unHide = kernel.bus.on('editor.liftPreview.hide', (p) => {
-      if (!p.filePath || p.filePath === filePathRef.current) clearLiftPreviews();
-    });
-    return () => {
-      unShow();
-      unHide();
-    };
-  }, [kernel, showLiftPreview, clearLiftPreviews]);
-
   /* ------------------------ 糖视图（整文件显示为糖） ------------------------ */
 
   /**
@@ -474,6 +437,9 @@ export function EditorPane({
     const path = filePathRef.current;
     // 只对原生 ERB 生效：`.kojo` 本身就是糖，再投影一遍没有意义
     if (!sugarViewRef.current || !isErbLike(path)) return;
+    // 已解锁编辑 → 糖视图必须让位：糖视图靠"原文让位"工作，而可编辑的原文必须看得见
+    // （用户 2026-10-12：解锁 ERB 编辑则禁用该功能）。
+    if (unlockedPathsRef.current.has(path)) return;
 
     const text = model.getValue();
     const project = kernel.project.current();
@@ -853,7 +819,13 @@ export function EditorPane({
     const cmdDisposer = monaco.editor.registerCommand(CODE_ACTION_COMMAND, (_accessor, actionId: string) => {
       const action = pendingActionsRef.current.get(actionId);
       if (!action) return;
-      const line = editorRef.current?.getPosition()?.lineNumber;
+      const ed = editorRef.current;
+      // 有 `edits` 的动作 = **改文本本身**（可撤销）：宿主直接落地，不再走 `run`
+      //（两者语义不同，见 `EditorTextEdit` 契约；💡「改为语法糖写法」走这条）。
+      if (action.edits && action.edits.length > 0 && ed && ed.getModel()) {
+        if (applyTextEdits(ed, action.edits)) return;
+      }
+      const line = ed?.getPosition()?.lineNumber;
       void action.run({
         project: kernel.project.current(),
         activeFile: filePathRef.current,
@@ -910,49 +882,10 @@ export function EditorPane({
         },
       },
     );
-    // 升糖折叠范围供给（`ui.editor.liftPreview` 槽）：把可预览区间交给 Monaco 折叠加号，
-    // 让"折叠原文"用编辑器原生折叠交互（参考 if 折叠）。纯前端、零写盘。
-    const liftFoldDisposer = monaco.languages.registerFoldingRangeProvider(
-      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID],
-      {
-        provideFoldingRanges: (model) => {
-          const path = filePathRef.current;
-          if (!path || model !== editorRef.current?.getModel()) return [];
-          // 糖视图开着时，"折叠语义"已由**隐藏原文区间**承担（整段一起隐藏，比折叠
-          // 更彻底）。此时再叠一层折叠供给，折叠加号会与隐藏区间打架（同一批行两种
-          // 收束方式），故明确让位——关掉糖视图后逐条候选的折叠加号照旧。
-          if (sugarViewRef.current && isErbLike(path)) return [];
-          const project = kernel.project.current();
-          const text = model.getValue();
-          const out: Monaco.languages.FoldingRange[] = [];
-          for (const contribution of kernel.slots.query('ui.editor.liftPreview')) {
-            try {
-              for (const item of contribution.provideLiftPreview({
-              path,
-              text,
-              project,
-              // 体量事实：本槽被接成 Monaco 折叠范围供给器，Monaco 打开文件时即要整篇范围
-              // → 超长文件必须让贡献方有机会降级（见 plugin-api slots.ts 头注）
-              lineCount: model.getLineCount(),
-            })) {
-                if (item.toLine > item.fromLine) out.push({ start: item.fromLine, end: item.toLine });
-              }
-            } catch {
-              // 单个贡献抛错不影响其余（与 codeAction / decorator 同款隔离）
-            }
-          }
-          return out;
-        },
-      },
-    );
     return () => {
       cmdDisposer.dispose();
       providerDisposer.dispose();
-      liftFoldDisposer.dispose();
-      clearLiftPreviews();
       clearSugarView(); // 糖视图：移除 ViewZone + 还原隐藏区间（卸载不留残影）
-      for (const t of liftTimersRef.current) window.clearTimeout(t);
-      liftTimersRef.current = [];
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
       ed.dispose();
@@ -1033,17 +966,20 @@ export function EditorPane({
       // 探针：apply 段 = setModel + 选项更新 + 视图恢复 + 装饰刷新（同步可测）
       const stopApply = perf.start('switch.apply');
       prevPathRef.current = filePath;
-      clearLiftPreviews(); // 升糖预览不跨文件残留
       // 糖视图的"隐藏原文"挂在**各 model 自己的 viewModel** 上，换文件必须先把上一个
       // 模型的隐藏还原——否则关掉开关后再切回该文件，原文仍被藏着（不可逆的错觉）。
       // 必须在 `setModel` **之前**调用：早于切换，它作用的对象才是上一个模型。
       clearSugarView();
+      // 两道**正交轴**（ADR-0005，两组共同依据）：
+      //   轴一 · 目录分野 = 默认可写性：工作区 ERB 是创作源文件恒可编辑；游戏目录 ERB 默认只读。
+      //   轴二 · 显式解锁 = 游戏目录里"这一份、这一次"的破例（`unlockedPathsRef`，
+      //          按文件按会话、**不落盘**——"上次解锁过就一直可写"会让写保护形同虚设）。
       // 先按文件体量落 Monaco 选项，再挂 model——避免超长文件先在"默认全文级选项"
       // 下渲染一帧（大文件降级清单见 editor-options.ts）。
-      // readOnly 语义（工作区批）：ERB 默认只读**仅限游戏目录**（借阅区不写 ERB）；
-      // 工作区内 ERB 是创作源文件，可编辑（双真相源分野）。
+      const allowEdit = unlockedPathsRef.current.has(filePath);
+      setUnlocked(allowEdit);
       ed.updateOptions({
-        readOnly: isErbLike(filePath) && !inWorkspace(filePath),
+        readOnly: isErbLike(filePath) && !inWorkspace(filePath) && !allowEdit,
         ...editorOptionsForLineCount(entry.model.getLineCount()),
       });
       ed.setModel(entry.model);
@@ -1069,7 +1005,66 @@ export function EditorPane({
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearLiftPreviews, clearSugarView, applySugarView]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearSugarView, applySugarView]);
+
+  /* ------------------- 只读锁：编辑意图 → 询问 → 解锁 ------------------- */
+
+  /** 解锁 / 回锁当前 ERB（解锁即关闭该文件的糖视图——两者互斥） */
+  const setErbEditable = useCallback(
+    (path: string, allowEdit: boolean) => {
+      const ed = editorRef.current;
+      if (allowEdit) unlockedPathsRef.current.add(path);
+      else unlockedPathsRef.current.delete(path);
+      if (filePathRef.current !== path || !ed) return;
+      setUnlocked(allowEdit);
+      ed.updateOptions({ readOnly: !allowEdit });
+      // 解锁 → 糖视图必须让位（原文要看得见）；回锁 → 重新生成糖视图
+      applySugarView();
+    },
+    [applySugarView],
+  );
+
+  // 首次打开 ERB：问一次"要不要用语法糖视图"（问过就再不问）。
+  // 已解锁编辑的文件不弹（那时糖视图本就不生效，问了没有意义）。
+  useEffect(() => {
+    if (!isErbLike(filePath)) return;
+    if (unlockedPathsRef.current.has(filePath)) return;
+    if (loadSugarViewPrompted()) return;
+    setIntroAsk(true);
+  }, [filePath]);
+
+  const decideIntro = useCallback((on: boolean) => {
+    saveSugarViewPrompted();
+    setIntroAsk(false);
+    setSugarView(on); // 走既有的偏好持久化 + 重算链路
+  }, []);
+
+  // 只读态下用户尝试输入 → 询问"保持只读 / 允许编辑"（Monaco 的只读编辑意图事件）
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    const disposable = ed.onDidAttemptReadOnlyEdit(() => {
+      const path = filePathRef.current;
+      if (!isErbLike(path) || unlockedPathsRef.current.has(path)) return;
+      // 已弹着就不再重复弹（连按键盘会产生一串事件）
+      setUnlockAsk((cur) => cur ?? path);
+    });
+    return () => disposable.dispose();
+  }, []);
+
+  const decideUnlock = useCallback(
+    (allow: boolean) => {
+      const path = unlockAsk;
+      setUnlockAsk(null);
+      if (!path || !allow) return;
+      setErbEditable(path, true);
+      notify({
+        kind: 'info',
+        message: '已允许编辑此 ERB · 语法糖视图已关闭（建议改在自己的 .kojo 口上文件里写内容）',
+      });
+    },
+    [unlockAsk, setErbEditable, notify],
+  );
 
   return (
     <div className="editor-pane">
@@ -1082,39 +1077,58 @@ export function EditorPane({
         </span>
         {isErbLike(filePath) && !inWorkspace(filePath) ? (
           <>
-            {/* 纯说明性标签，**不带任何操作入口**——编辑 ERB 的路径由「检测到用户要编辑
-                → 自动分流到 .kojo」承担（需求 §1.3，本批未实现）。旧的「强制编辑 ERB」
-                按钮按 §1.4 作废：把系统责任抛给用户。 */}
-            {/* 文案只留「只读预览」：细节（为什么不写原文件、要怎么才能改）是悬停信息，
-                而「升糖」这类行话不该出现在常驻标签上——口上作者不一定看得懂。 */}
-            <span
-              className="erb-mode-hint"
-              title="游戏目录里的 ERB 默认只读，编辑请转 .kojo 文件（工作区内的文件不受此限）。"
-            >
-              🔒 只读预览
-            </span>
-            {/* 糖视图：整份 ERB 显示为语法糖（只读）——本功能的存在理由就是让不熟悉
-                EraBasic 的读者也能把别人的口上当剧本读懂。默认开（偏好可记忆）。
-                可用门 = 不可编辑（ADR-0005 轴一：工作区 ERB 恒可编辑 ⟹ 不放糖视图）。 */}
-            <button
-              className={`ghost small sugar-toggle${sugarView ? ' on' : ''}`}
-              onClick={() => setSugarView((v) => !v)}
-              title={
-                sugarView
-                  ? '当前以语法糖显示。点击切回原 ERB 代码（显示偏好会被记住）。'
-                  : '把这份 ERB 显示成语法糖——台词读起来像剧本、条件变成「如果 …：」（只读，不改动原文件）。'
-              }
-            >
-              {sugarView ? '语法糖视图' : '显示为语法糖'}
-            </button>
-            {sugarView && sugarStats ? (
-              <span
-                className="sugar-stats dim"
-                title="其余行按原 ERB 显示：糖未覆盖的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释与空行。"
-              >
-                {sugarStats}
-              </span>
-            ) : null}
+            {/* 两道正交轴的呈现（ADR-0005）：能走到这里说明这是**游戏目录里的 ERB**
+                （工作区 ERB 恒可编辑，不放只读徽章、也不开糖视图）。
+                纯说明性标签不带操作入口——旧的「强制编辑 ERB」按钮按需求 §1.4 作废。 */}
+            {unlocked ? (
+              // 解锁后糖视图让位（可编辑的原文必须看得见）——徽章变成"可凭据说明"，
+              // 并保留一个回锁入口（回锁即恢复糖视图）。
+              <>
+                <span
+                  className="erb-mode-hint unlocked"
+                  title="已解锁编辑：该文件的语法糖视图已关闭（可编辑的原文必须始终可见）。"
+                >
+                  ✏ 可编辑（语法糖视图已关闭）
+                </span>
+                <button
+                  className="ghost small"
+                  onClick={() => setErbEditable(filePath, false)}
+                  title="恢复只读并重新开启语法糖视图。"
+                >
+                  恢复只读
+                </button>
+              </>
+            ) : (
+              <>
+                <span
+                  className="erb-mode-hint"
+                  title="ERB 默认只读保护：直接改游戏目录里别人的口上风险高。尝试输入时会询问你是否解锁。"
+                >
+                  🔒 只读（尝试输入可解锁）
+                </span>
+                {/* 糖视图：整份 ERB 显示为语法糖（只读）——本功能的存在理由就是让不熟悉
+                    EraBasic 的读者也能把别人的口上当剧本读懂。默认开（偏好可记忆）。 */}
+                <button
+                  className={`ghost small sugar-toggle${sugarView ? ' on' : ''}`}
+                  onClick={() => setSugarView((v) => !v)}
+                  title={
+                    sugarView
+                      ? '当前以语法糖显示。点击切回原 ERB 代码（显示偏好会被记住）。'
+                      : '把这份 ERB 显示成语法糖——台词读起来像剧本、条件变成「如果 …：」（只读，不改动原文件）。'
+                  }
+                >
+                  {sugarView ? '语法糖视图' : '显示为语法糖'}
+                </button>
+                {sugarView && sugarStats ? (
+                  <span
+                    className="sugar-stats dim"
+                    title="其余行按原 ERB 显示：糖未覆盖的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释与空行。"
+                  >
+                    {sugarStats}
+                  </span>
+                ) : null}
+              </>
+            )}
           </>
         ) : null}
         <span className="spacer" />
@@ -1134,6 +1148,10 @@ export function EditorPane({
       </div>
       <div className="editor-body" ref={hostRef} />
       {pendingChoice ? <SaveWarningDialog warning={pendingChoice} onDecide={decideSaveWarning} /> : null}
+      {introAsk ? <SugarViewIntroDialog onDecide={decideIntro} /> : null}
+      {unlockAsk ? (
+        <ErbUnlockDialog fileName={baseNameOf(unlockAsk)} onDecide={decideUnlock} />
+      ) : null}
     </div>
   );
 }

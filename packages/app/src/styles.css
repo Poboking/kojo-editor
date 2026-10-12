@@ -1182,6 +1182,10 @@ textarea {
   color: var(--accent);
   border-color: var(--accent);
 }
+/* ERB 已解锁编辑：提示语气从"保护中"变为"注意糖视图已关闭" */
+.erb-mode-hint.unlocked {
+  color: var(--fg-dim);
+}
 /* 糖视图摘要：给一个"这份文件读到了多少"的量感，不抢视线 */
 .sugar-stats {
   font-size: 11px;

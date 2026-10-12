@@ -25,6 +25,7 @@ import {
   type OrganizedPanels,
   type ViewDef,
 } from './layout';
+import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
 import {
   buildCommandRegistry,
   chordFromEvent,
@@ -210,6 +211,24 @@ export function ShellLayout(props: Props): ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef(settingsOpen);
   settingsRef.current = settingsOpen;
+  /**
+   * 语法糖视图开关（设置页里的那一项）。
+   *
+   * 状态所有者是**编辑器**（`EditorPane` 持有 + 落 localStorage）；这里只做
+   * "开面板时读一次当前值 + 改动时写偏好并发意图事件"——避免同一个开关有两个真源。
+   */
+  const [sugarViewOn, setSugarViewOn] = useState(() => loadSugarViewPref());
+  useEffect(() => {
+    if (settingsOpen) setSugarViewOn(loadSugarViewPref());
+  }, [settingsOpen]);
+  const applySugarViewPref = useCallback(
+    (on: boolean) => {
+      saveSugarViewPref(on);
+      setSugarViewOn(on);
+      kernel.bus.emit('editor.sugarView.set', { on });
+    },
+    [kernel],
+  );
 
   // overlay 打开/关闭意图（内核事件落地；Esc 关闭在全局键盘处理器）
   useEffect(() => {
@@ -756,6 +775,19 @@ export function ShellLayout(props: Props): ReactElement {
                 <span>
                   写作模式：编辑器居中限宽（约 1000px）
                   <span className="settings-hint">关闭后编辑器铺满全宽</span>
+                </span>
+              </label>
+              <label className="settings-row">
+                <input
+                  type="checkbox"
+                  checked={sugarViewOn}
+                  onChange={(e) => applySugarViewPref(e.target.checked)}
+                />
+                <span>
+                  语法糖视图（把 ERB 显示成中文表层写法）
+                  <span className="settings-hint">
+                    只读显示、不改动原文件；快捷键 Ctrl+Alt+T。仅对 .erb 生效（.kojo 本身就是糖）
+                  </span>
                 </span>
               </label>
               <div className="settings-actions">

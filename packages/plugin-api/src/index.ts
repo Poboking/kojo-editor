@@ -154,6 +154,7 @@ export type {
   EditorSaveOutcome,
   EditorSaveRequest,
   EditorSaveWarning,
+  EditorTextEdit,
   ExportOptions,
   ExportResult,
   ExportTargetContribution,

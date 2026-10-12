@@ -81,12 +81,44 @@ export interface StatusbarContribution extends ContributionBase {
 
 /* ------------------------- ui.editor.codeAction ------------------------ */
 
+/**
+ * 就地改写（additive，2026-10-12 语法糖视图批）：把动作落成一次**可撤销**的模型编辑。
+ *
+ * ## 与 `run` 的分工
+ *
+ * 两者语义不同，别混：
+ * - `run` = **发意图**（宿主可能只做显示或导航，如 `editor.revealLocation`）；
+ * - `edits` = **改文本本身**（宿主用 Monaco `executeEdits` 落地，用户 `Ctrl+Z` 可撤回）。
+ *
+ * 典型场景：`.kojo` 里光标停在原生 ERB 直通行上 → 💡「改为语法糖写法」——
+ * 这是**改源文件**，不是预览，所以走 `edits` 而不是 `run`。
+ *
+ * ## 坐标与缩进
+ *
+ * 行区间为**模型坐标**（1 基、闭区间）；宿主负责夹取越界值（陈旧行号不崩）。
+ * `newText` 自带完整行内缩进（含首行），宿主**不做任何加工**——贡献方最清楚
+ * 替进来的糖写法在原缩进层里该长什么样。
+ *
+ * 多处改写由宿主**合并为一次编辑**（一个撤销步），并按行号降序应用（避免位移）。
+ */
+export interface EditorTextEdit {
+  readonly fromLine: number;
+  readonly toLine: number;
+  /** 替换进来的文本（多行，`\n` 分隔） */
+  readonly newText: string;
+}
+
 /** 编辑器 CodeAction（💡 形态；宿主适配为 Monaco registerCodeActionProvider，宿主零绘制） */
 export interface EditorCodeAction {
   readonly title: string;
   readonly kind?: 'quickfix' | 'refactor';
   /** 关联诊断（quickfix 形态） */
   readonly diagnostics?: LineDecoration[];
+  /**
+   * 就地改写（可选）。给出时宿主**优先**执行改写（可撤销），不再调用 `run`；
+   * 省略则退回旧语义（`run` 发意图）。
+   */
+  readonly edits?: readonly EditorTextEdit[];
   run(ctx: EditorCommandContext): void | Promise<void>;
 }
 
@@ -138,10 +170,14 @@ export interface EditorLiftPreviewItem {
 
 export interface EditorLiftPreviewContribution extends ContributionBase {
   /**
-   * 对单个文件产出可预览的升糖项（**纯函数**：同输入必得同输出，不读盘不写盘）。
-   * 不适用该文件的贡献应返回空数组。
+   * 逐条候选的**就地预览**项（**已停用**，2026-10-12 语法糖视图批）。
+   *
+   * 为什么保留类型而不删：契约的兼容承诺（不改名不删成员）。**没有任何生产消费方**
+   * 会调用它——单片段"折叠原文 + 打字机显示"的做法已被**整文件糖视图**取代
+   * （用户 2026-10-12 明确：糖视图是编辑器内的前端改动，不是逐条点开的面板）。
+   * 新贡献不要再实现它。
    */
-  provideLiftPreview(file: {
+  provideLiftPreview?(file: {
     path: string;
     text: string;
     project: GameProject | null;
@@ -158,14 +194,16 @@ export interface EditorLiftPreviewContribution extends ContributionBase {
   }): EditorLiftPreviewItem[];
 
   /**
-   * 整文件**糖投影**（B 层；2026-10-12 语法糖批）——把整个 ERB 文件投影成糖显示，
-   * 返回可映射的**连续段**（每段形如 `EditorLiftPreviewItem`：区间 + 糖文本）。
+   * 整文件**糖投影**（B 层）——把整个 ERB 文件投影成糖显示，返回可映射的**连续段**
+   * （每段形如 `EditorLiftPreviewItem`：区间 + 糖文本）。
    *
-   * 与 `provideLiftPreview` 的分工：后者是"逐条候选"（强自证口径，命中面窄）；
-   * 本方法服务于宿主的**整文件「显示为糖」开关**——命中面宽、逐行降级。
-   * **可选**：不提供该方法的贡献只会让整文件开关少一份供给，不影响逐条预览。
+   * 这是本槽的**主方法**：宿主据此在编辑器里就地做前端改动（隐藏原文区间 + 在其上方
+   * 显示糖写法），**读者不需要点开任何面板**。
    *
-   * 同为纯函数：同输入必得同输出，不读盘不写盘。不适用该文件的贡献返回空数组。
+   * **可选**：不提供该方法的贡献只是不参与整文件糖视图（宿主零段、不显示开关效果），
+   * 不影响其它槽。
+   *
+   * 纯函数：同输入必得同输出，不读盘不写盘。不适用该文件的贡献返回空数组。
    */
   provideLiftProject?(file: {
     path: string;

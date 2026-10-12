@@ -25,3 +25,6 @@ fixtures/**/out/
 # tauri
 src-tauri/target/
 packages/app/src-tauri/gen/
+
+# agent working memory (not project data — must never be committed)
+.workbuddy/

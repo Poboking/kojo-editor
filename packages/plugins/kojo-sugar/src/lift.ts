@@ -350,6 +350,23 @@ function verifyRoundTrip(
  * ```
  * 这样"深度 1 的原文块"与"壳里深度 1 的生成块"可比。
  */
+/**
+ * 缩进归一（**先算层级、再按层级重排**）。
+ *
+ * ## 为什么不能"按字符剥"
+ *
+ * 原文缩进可能是 4 空格 / 8 空格 / TAB / 全角空格，而自证壳恒用 TAB。旧实现拿
+ * `indentOf`（数的是**层级**：空格 ÷4、全角 ÷2、TAB =1）算出 `min`，却在剥离循环里
+ * 按**字符**扣数（空格 1、全角 2、TAB 1）——两把尺子。于是 4 空格缩进的源只剥掉
+ * 1 个空格，剩下 3 个空格，与壳产物（已剥干净）判成"不一致"→ 候选被误拒。
+ * 实测后果：**凡空格缩进的 `.kojo` 源，💡 升糖候选全部消失**（规范 §6 示例与新建
+ * 向导骨架都是 4 空格，等于对大多数糖文件失效）。
+ *
+ * ## 现在的口径
+ *
+ * 相对缩进**保留**（嵌套块仍能被区分），绝对缩进与空白字符种类被抹平——这正是
+ * "绝对缩进不可比、相对缩进才可比"的本意。尾随空白**不动**（保持比对严格）。
+ */
 function normalizeIndent(text: string): string {
   const lines = text.split('\n');
   let min = Infinity;
@@ -357,21 +374,12 @@ function normalizeIndent(text: string): string {
     if (l.trim().length === 0) continue;
     min = Math.min(min, indentOf(l));
   }
-  if (!Number.isFinite(min) || min === 0) return text;
+  if (!Number.isFinite(min)) return text; // 全文空白：原样（无需归一）
   return lines
     .map((l) => {
       if (l.trim().length === 0) return '';
-      let n = 0;
-      let i = 0;
-      while (i < l.length && n < min) {
-        const ch = l[i]!;
-        if (ch === '\t') n++;
-        else if (ch === '\u3000') n += 2;
-        else if (ch === ' ') n += 1;
-        else break;
-        i++;
-      }
-      return l.slice(i).replace(/^\u3000/, '');
+      const level = Math.max(0, indentOf(l) - min);
+      return '\t'.repeat(level) + l.replace(/^[ \t\u3000]*/, '');
     })
     .join('\n');
 }

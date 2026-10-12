@@ -597,3 +597,31 @@ describe('S5 / 集成 —— fixtures', () => {
     }
   });
 });
+
+describe('缩进口径（回归：按层级归一，不按字符）', () => {
+  /**
+   * 回归自 2026-10-12 语法糖视图批：旧 `normalizeIndent` 用 `indentOf`（数**层级**）
+   * 算出 `min`，却在剥离循环里按**字符**扣（空格 1 / 全角 2 / TAB 1）——两把尺子。
+   * 后果：空格缩进的源只剥掉 1 个空格，与壳产物（TAB，剥干净）判成不一致 →
+   * **所有 4 空格缩进的 `.kojo`（规范示例与新建向导骨架的写法）识别不到任何升糖候选**。
+   *
+   * 三种缩进风格都必须能识别，且识别出的糖写法是**相对形态**（不带绝对缩进）。
+   */
+  const variants: Record<string, string[]> = {
+    '1 个 TAB': ['角色: 1', '时机 指令 310：', '\tPRINTFORMDW 甲。'],
+    '4 空格': ['角色: 1', '时机 指令 310：', '    PRINTFORMDW 甲。'],
+    '8 空格（嵌套一层）': ['角色: 1', '时机 指令 310：', '    如果 FLAG:1：', '        PRINTFORMDW 甲。'],
+    '2 个 TAB（嵌套一层）': ['角色: 1', '时机 指令 310：', '\t如果 FLAG:1：', '\t\tPRINTFORMDW 甲。'],
+  };
+
+  for (const [name, lines] of Object.entries(variants)) {
+    it(`${name}：能识别出文本行候选，且糖写法为相对形态`, () => {
+      const src = `${lines.join('\n')}\n`;
+      const r = lift(src, prodDeps(), { characterNo: 101 });
+      const pm = r.candidates.filter((c) => c.kind === 'print-message');
+      expect(pm.length).toBe(1);
+      expect(pm[0]!.sugarSource).toBe('甲。');
+      expect(pm[0]!.roundTrip.verified).toBe(true);
+    });
+  }
+});
