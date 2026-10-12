@@ -286,7 +286,7 @@
      （+7,565 = 正文全为骨架的头自成一段，**用 ViewZone 数买读感，明码记账**）｜不变量违例 0。
   6. **守门第四把尺子**「函数头可标率」（断言 > 0.7；退化落点实测 **8.1%**）；行覆盖下限随能力
      上移 0.5→**0.55**（撤掉批 I 不误红，那条回归由函数头尺子负责——每把尺子只管一件事）。
-  7. **基线更新：1380 passed / 11 skipped（1391）**；typecheck root + app 双 exit 0；审计 A–D 全绿
+  7. **基线更新：1398 passed / 11 skipped（1409）**；typecheck root + app 双 exit 0；审计 A–D 全绿
      （16 插件）；教学/归因/调用面/编码往返语料守门 5 文件 11 测试全绿；`vite build`（app）✓ 31.2 s。
   8. **未做**：18.8% 的头**故意不标**（`MESSAGECHECK` 四件套、`KOJO_*_CUSTOM_BUTTON_*`、工具函数）；
      反糖**写回**口径（`liftSuggest` 侧生成时机声明与三件套）不在本批；着色层字面记号误着色
@@ -847,7 +847,7 @@ node tools/smoke-tauri-ipc.mjs
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1380 passed / 11 skipped（1391）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1398 passed / 11 skipped（1409）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.66 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前两条主线**：
    - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 + T2.1 + T3 + T4 已通。

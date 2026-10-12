@@ -3513,7 +3513,7 @@ import，没法直接单测），5 项测试钉住"起点前不记账 / 只记�
 
 | 检查 | 结果 |
 |---|---|
-| `vitest run`（不带语料） | **1380 passed / 11 skipped**（合流基线 1348 → +32） |
+| `vitest run`（不带语料） | **1398 passed / 11 skipped**（合流基线 1348 → 本批 +32 → rebase 到快照卫生批后再 +18，**读数与合并前逐字相同**） |
 | typecheck root + `@kojo/app` | 双 exit 0 |
 | `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件；新模块零游戏名词） |
 | 语料投影守门（全量 2,285 文件） | 上表读数，**不变量违例 0** |
