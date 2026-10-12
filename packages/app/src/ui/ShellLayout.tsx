@@ -28,6 +28,7 @@ import {
   type OrganizedPanels,
   type ViewDef,
 } from './layout';
+import { closeTopModal } from './modal-stack';
 import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
 import {
   buildCommandRegistry,
@@ -264,8 +265,12 @@ export function ShellLayout(props: Props): ReactElement {
         return;
       }
       if (e.key === 'Escape') {
-        // picker 内部已 stopPropagation；这里只需 overlay > settings > zen
+        // picker 内部已 stopPropagation；这里只需 modal > overlay > settings > zen
         if (pickerRef.current) return;
+        // HK-2：五家宿主模态此前**都没有 Esc**（全站模态都关不掉）。模态排最前，
+        // 因为它正在问一个当下就要答案的问题；它与向导在实践中互斥（见 modal-stack 注释），
+        // 所以这个次序不依赖两家的 DOM 先后。
+        if (closeTopModal()) return;
         if (overlayRef.current) {
           setActiveOverlay(null);
           return;

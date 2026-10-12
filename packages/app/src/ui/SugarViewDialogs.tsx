@@ -24,6 +24,7 @@
  */
 
 import type { ReactElement } from 'react';
+import { useModalEscape } from './modal-stack';
 
 /** 首次引导：是否开启语法糖视图 */
 export function SugarViewIntroDialog({
@@ -32,6 +33,8 @@ export function SugarViewIntroDialog({
   /** true = 开启；false = 不用（写进偏好，之后可在设置里改回来） */
   onDecide: (on: boolean) => void;
 }): ReactElement {
+  // Esc = 不用（HK-2）：开启会写偏好，且作者可能只是想看清这段说明
+  useModalEscape(() => onDecide(false));
   return (
     <div className="modal-mask">
       <div className="modal" role="dialog" aria-modal="true" aria-label="语法糖视图">
@@ -67,6 +70,9 @@ export function ErbUnlockDialog({
   /** true = 允许编辑（该文件语法糖视图将关闭）；false = 继续保持只读 */
   onDecide: (allow: boolean) => void;
 }): ReactElement {
+  // Esc = 保持只读（HK-2）：解锁会关掉这份文件的糖视图并允许直写游戏目录，
+  // 是这五家里唯一"两个方向都有代价"的一个——按 ADR-0005，代价小的那一侧是不写盘。
+  useModalEscape(() => onDecide(false));
   return (
     <div className="modal-mask">
       <div className="modal" role="dialog" aria-modal="true" aria-label="ERB 只读保护">

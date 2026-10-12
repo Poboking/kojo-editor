@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import type { GameProject } from '@kojo/plugin-api';
+import { useModalEscape } from './modal-stack';
 
 interface Props {
   project: GameProject;
@@ -11,8 +12,12 @@ interface Props {
  *
  * 安全模型（架构文档 §5.7）：适配器**提议**可写路径，用户**显式批准**后才生效；
  * 内核 io 对白名单之外的写入一律拒绝。未批准时项目只读可用（浏览完全不受伤）。
+ *
+ * Esc = 只读浏览（HK-2）：授权是"给出去就收不回来"的动作，键盘不该替作者按下它。
+ * 之后想给，状态栏那枚「只读」徽章就是重授权入口（§5.39）。
  */
 export function WritableApprovalDialog({ project, onDecide }: Props): ReactElement {
+  useModalEscape(() => onDecide(false));
   return (
     <div className="modal-mask">
       <div className="modal" role="dialog" aria-modal="true" aria-label="写权限确认">

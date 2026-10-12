@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import type { EditorSaveWarning } from '@kojo/plugin-api';
+import { useModalEscape } from './modal-stack';
 
 interface Props {
   warning: EditorSaveWarning;
@@ -16,8 +17,12 @@ const LINE_CAP = 12;
  * 规范 §8「保存时告警」）。**默认不阻断**——"仍然保存"一键放行；另提供
  * **一键修复**（宿主把 `U+3000` 替换为半角空格后重存），尊重作者本意而不
  * 强改内容。
+ *
+ * Esc = 取消这次保存（HK-2）：告警的两种"继续"都要作者点头（仍然保存 / 一键修复后保存），
+ * 键盘不该替他选一个写盘动作。
  */
 export function SaveWarningDialog({ warning, onDecide }: Props): ReactElement {
+  useModalEscape(() => onDecide('cancel'));
   const lines = warning.lines.slice(0, LINE_CAP);
   return (
     <div className="modal-mask">

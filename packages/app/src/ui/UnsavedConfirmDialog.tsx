@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import { useModalEscape } from './modal-stack';
 
 interface Props {
   filePath: string;
@@ -19,8 +20,12 @@ interface Props {
  * - 保存并关闭/前往：先保存（失败则停留并显示错误），成功后继续；
  * - 丢弃修改：直接继续（当前修改不可恢复）；
  * - 取消：留在当前状态。
+ *
+ * Esc = 取消（HK-2）：这里的三个选项有两个是有损的（丢弃 = 改没了；保存并关闭 = 覆盖盘上），
+ * 键盘只该落在"什么都没发生"那一格。
  */
 export function UnsavedConfirmDialog({ filePath, context = 'close', onDecide }: Props): ReactElement {
+  useModalEscape(() => onDecide('cancel'));
   const verb = context === 'close' ? '关闭标签页' : '切换文件';
   const saveLabel = context === 'close' ? '保存并关闭' : '保存并前往';
   return (
