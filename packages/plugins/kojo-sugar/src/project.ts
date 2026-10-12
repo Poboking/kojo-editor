@@ -178,6 +178,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   // 配不上的一律原样保留（真实语料 SETCOLOR 22,487 对 RESETCOLOR 6,312——多数没有配对的
   // 收尾，猜边界会把别人的代码藏起来）。
   const color = planColorBlocks(lines, ctx);
+  // 函数骨架（包装三联 + 記入チェック信封）——判据全部"可证明"，配不上就不动。
+  const skeleton = planSkeleton(lines, ctx);
 
   const recs: LineRec[] = [];
   const nativeByReason = new Map<SugarProjectNativeReason, number>();
@@ -210,6 +212,19 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         text: content,
         indent: ctx.indentAt(ln, raw),
         visible: true,
+        reason: null,
+      });
+      continue;
+    }
+
+    // 函数骨架：被合并吸收的行不产出可见行（读者不必看见 `CALL x_1` / `IF LOCAL` 包裹）
+    if (skeleton.absorbed.has(ln)) {
+      recs.push({
+        line: ln,
+        kind: 'control',
+        text: '',
+        indent: 0,
+        visible: false,
         reason: null,
       });
       continue;
@@ -325,13 +340,13 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
     recs.push(native(ln, 'other'));
   }
 
-  // ---- 缩进补正：着色块**体内**的行整体 +1 层 ----
+  // ---- 缩进补正：着色块**体内** +1；記入チェック信封**体内** -1（信封被拆，缩进必须跟着拆）----
   //
   // 放在最后统一做（而不是在每个 push 点手动加）：一处口径，漏改不了。
   // 块头自身不吃 +1（`starts` 从 open+1 起算），被吸收的 RESETCOLOR 不可见故无影响。
   for (const r of recs) {
-    const bump = color.bumpAt(r.line);
-    if (bump > 0) r.indent += bump;
+    const bump = color.bumpAt(r.line) - skeleton.dedentAt(r.line);
+    if (bump !== 0) r.indent = Math.max(0, r.indent + bump);
   }
 
   // ---- 统计 ----
@@ -424,6 +439,147 @@ function toSegment(run: LineRec[]): SugarProjectSegment {
     toLine: run[run.length - 1]!.line,
     sugarText: text,
     lineCount: visible.length,
+  };
+}
+
+/* ============================== 函数骨架合并 ============================== */
+
+/** 骨架合并结果（形状见 `planSkeleton`） */
+interface SkeletonPlan {
+  /** 被合并吸收的行（不产出可见行，但占区间） */
+  absorbed: Set<number>;
+  /** 该行因"信封被拆掉"而应**减掉**的缩进层数 */
+  dedentAt: (line: number) => number;
+}
+
+/**
+ * 口上**函数骨架**合并（用户第 2 条）——把"机器码"收起来，只留读者要看的东西。
+ *
+ * ## 合并哪两样（都要求**可证明**，一条不满足就整段不动）
+ *
+ * **① 包装三联**（1,612 处/400 文件实测）：
+ * ```
+ * @A                  ← 保留（读者靠它知道"这是哪个时机"）
+ * CALL A_1            ┐
+ * RETURN …            ├ 吸收（`CALL A_1` 证明了它只是转发，读者不需要知道两段拆法）
+ * @A_1                ┘
+ * ```
+ * 判据：四行**连续**、`CALL` 目标恰是 `@A` + `_1`、`@A_1` 与之一致。
+ *
+ * **② 記入チェック信封**（3,824 处/400 文件实测，**全部可闭合**，99.9% 在函数体最外层）：
+ * ```
+ * LOCAL = 1           ┐
+ * IF LOCAL            │ 吸收（这就是糖表面根本不写的那层包裹——`时机` 块本身即含此义）
+ *     …正文…           │ 正文整体**减 1 层缩进**（信封拆了，缩进必须跟着拆）
+ * ENDIF               │
+ * RETURN 1            ┘（紧随 ENDIF 的退出语句，一并有）
+ * ```
+ * 判据（全中才合并）：`LOCAL = 0/1` **字面形态**；向下（跳过注释/空行）紧邻 `IF LOCAL`；
+ * `IF LOCAL` 在**缩进 0**；能配对到**同缩进** `ENDIF`；且**向上能找到函数头 `@…`**
+ * （跳过注释/空行/`#` 指令）——证明这是函数级信封，而不是作者正文里的同名守卫。
+ *
+ * ## 为什么"宁可漏"是这里的硬底线
+ *
+ * 骨架与正文长得像（都是 `LOCAL = 1` / `IF` / `RETURN`）。判据放宽一点，就会把**作者的
+ * 真实逻辑**藏进被吸收的行里——读者看不见却以为看全了，比"少合并"危险得多。所以每条
+ * 判据都取"最紧的形态"，并且：**配不上就不动**（原样留原代码）。
+ */
+function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
+  const absorbed = new Set<number>();
+  /** 逐行 dedent（信封内 -1；嵌套信封会叠加） */
+  const dedent = new Array<number>(lines.length + 1).fill(0);
+  const total = lines.length;
+  let inSkip = false;
+
+  const contentAt = (ln: number): string => contentOf(lines[ln - 1] ?? '');
+  const indentAt = (ln: number): number => indentLevelOf(lines[ln - 1] ?? '');
+
+  /** 向上找最近的函数头 `@…`（跳过注释 / 空行 / `#` 指令）；找到返回行号 */
+  const funcHeadAbove = (from: number): string | undefined => {
+    for (let ln = from - 1; ln >= 1; ln--) {
+      const c = contentAt(ln);
+      if (c.length === 0 || c.startsWith(';') || c.startsWith('#')) continue;
+      return c.startsWith('@') ? c : undefined;
+    }
+    return undefined;
+  };
+
+  for (let ln = 1; ln <= total; ln++) {
+    const content = contentAt(ln);
+    if (content === '[SKIPSTART]') {
+      inSkip = true;
+      continue;
+    }
+    if (content === '[SKIPEND]') {
+      inSkip = false;
+      continue;
+    }
+    if (inSkip) continue;
+
+    /* ---- ① 包装三联 ---- */
+    if (content.startsWith('@')) {
+      const name = content.slice(1).trim();
+      const call = contentAt(ln + 1);
+      if (name.length > 0 && call === `CALL ${name}_1`) {
+        const ret = contentAt(ln + 2);
+        const head = contentAt(ln + 3);
+        if (/^RETURN(\s.*)?$/.test(ret) && head === `@${name}_1`) {
+          absorbed.add(ln + 1);
+          absorbed.add(ln + 2);
+          absorbed.add(ln + 3);
+          continue;
+        }
+      }
+      continue;
+    }
+
+    /* ---- ② 記入チェック信封 ---- */
+    if (content !== 'LOCAL = 1' && content !== 'LOCAL = 0') continue;
+    if (indentAt(ln) !== 0) continue;
+    // 向下跳过注释 / 空行，必须紧邻 `IF LOCAL`
+    let ifLn = ln + 1;
+    while (ifLn <= total) {
+      const c = contentAt(ifLn);
+      if (c.length === 0 || c.startsWith(';')) {
+        ifLn++;
+        continue;
+      }
+      break;
+    }
+    if (contentAt(ifLn) !== 'IF LOCAL' || indentAt(ifLn) !== 0) continue;
+    // 必须能找到函数头（证明这是函数级信封，而不是正文里的同名守卫）
+    if (funcHeadAbove(ln) === undefined) continue;
+    // 配对同缩进 ENDIF（自己数嵌套，不依赖扫描器的配对假设）
+    let depth = 0;
+    let endLn = -1;
+    for (let k = ifLn + 1; k <= total; k++) {
+      const c = contentAt(k);
+      if (indentAt(k) !== 0) continue;
+      if (c === 'IF LOCAL' || /^IF\s/.test(c)) depth++;
+      else if (c === 'ENDIF') {
+        if (depth === 0) {
+          endLn = k;
+          break;
+        }
+        depth--;
+      }
+    }
+    if (endLn < 0) continue;
+
+    // 全中 → 吸收信封三行（+ 紧随的退出语句）
+    absorbed.add(ln);
+    absorbed.add(ifLn);
+    absorbed.add(endLn);
+    const after = contentAt(endLn + 1);
+    if (/^RETURN(\s.*)?$/.test(after)) absorbed.add(endLn + 1);
+    // 正文整体减 1 层
+    for (let k = ifLn + 1; k < endLn; k++) dedent[k] = (dedent[k] ?? 0) + 1;
+    continue;
+  }
+
+  return {
+    absorbed,
+    dedentAt: (line) => (line >= 1 && line <= total ? (dedent[line] ?? 0) : 0),
   };
 }
 

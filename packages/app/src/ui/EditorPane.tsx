@@ -480,6 +480,10 @@ export function EditorPane({
       for (const seg of segments) {
         const plan = sugarZonePlan(seg);
         sugarLines += plan.lineCount;
+        // `lineCount === 0` = **只藏不显**的段（内容全是被吸收的骨架行：包装三联 / 記入
+        // チェック信封）。这类段不进 ViewZone（否则会留一条空的彩色横条），但**仍参与隐藏**
+        // ——把骨架收起来正是它的目的。
+        if (plan.lineCount === 0) continue;
         const dom = document.createElement('pre');
         dom.className = 'sugar-zone';
         const id = acc.addZone({

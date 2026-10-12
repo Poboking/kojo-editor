@@ -377,3 +377,108 @@ describe('糖投影 · 着色块不跨函数边界 / 不跨停用区', () => {
     for (const s of r.segments) expect(s.sugarText).not.toContain('着色');
   });
 });
+
+/* ==================== 函数骨架合并（用户第 2 条） ==================== */
+
+describe('糖投影 · 函数骨架合并（包装三联 + 記入チェック信封）', () => {
+  /** 真实 K49 形态的骨架（与语料实测一致） */
+  const SKELETON = [
+    '@M_KOJO_MESSAGE_COM_K1_310',
+    'CALL M_KOJO_MESSAGE_COM_K1_310_1',
+    'RETURN 1',
+    '@M_KOJO_MESSAGE_COM_K1_310_1',
+    ';-------------------------------------------------',
+    ';記入チェック（=0, 非表示、1, 表示）',
+    'LOCAL = 1',
+    ';-------------------------------------------------',
+    'IF LOCAL',
+    '\tPRINTFORMW 「呀……！」',
+    '\tPRINTFORMDW 她别开了脸。',
+    'ENDIF',
+    'RETURN 1',
+  ].join('\n');
+
+  it('包装三联吸收、`@A` 保留；信封拆掉后正文**减一层缩进**', () => {
+    const r = project(SKELETON);
+    // 段从第 2 行起（第 1 行 @A 是原生行，切断段），一直消化到第 13 行
+    expect(r.segments).toHaveLength(1);
+    expect(`${r.segments[0]!.fromLine}-${r.segments[0]!.toLine}`).toBe('2-13');
+    expect(segLines(r.segments[0]!)).toEqual([
+      ';-------------------------------------------------',
+      ';記入チェック（=0, 非表示、1, 表示）',
+      ';-------------------------------------------------',
+      '「呀……！」',
+      '她别开了脸。',
+    ]);
+  });
+
+  it('骨架被吸收的行计入 `projectedLines`（不静默：读者看不到，但账要平）', () => {
+    const { stats } = project(SKELETON);
+    expect(stats.projectedLines + stats.passthroughLines + stats.nativeLines).toBe(stats.totalLines);
+    expect(stats.totalLines).toBe(13);
+    // 只有 `@A` 一行是「保留原生」
+    expect(stats.nativeLines).toBe(1);
+  });
+
+  it('嵌套块在信封内 → 也整体减一层（相对缩进保持）', () => {
+    const src = [
+      '@F_1',
+      'LOCAL = 1',
+      'IF LOCAL',
+      '\tIF FLAG:1',
+      '\t\tPRINTFORMDW 甲。',
+      '\tENDIF',
+      'ENDIF',
+      'RETURN 1',
+    ].join('\n');
+    const r = project(src);
+    expect(segLines(r.segments[0]!)).toEqual(['如果 FLAG:1：', '\t甲。']);
+  });
+
+  it('**配不上就不动**：`LOCAL = 1` 之后不是 `IF LOCAL`', () => {
+    const src = ['@F_1', 'LOCAL = 1', 'LOCAL:1 = 1', 'IF LOCAL', 'PRINTFORMDW 甲。', 'ENDIF'].join('\n');
+    const r = project(src);
+    // LOCAL = 1 与 LOCAL:1 = 1 原样保留（后者挡住"紧邻"判据）
+    expect(segLines(r.segments[0]!)).toEqual(['如果 LOCAL：', '\t甲。']);
+    const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
+    // 三行原生：`@F_1` / `LOCAL = 1` / `LOCAL:1 = 1`（后者挡住"紧邻"判据）
+    expect(reasons['other']).toBe(3);
+  });
+
+  it('**无函数头就不合并**（正文里的同名守卫不该被当信封拆掉）', () => {
+    const src = ['PRINTFORMDW 前面', 'LOCAL = 1', 'IF LOCAL', 'PRINTFORMDW 甲。', 'ENDIF'].join('\n');
+    const r = project(src);
+    // 信封未被识别 → `IF LOCAL` 照常投影、正文保持一层缩进（`LOCAL = 1` 仍是原生行，把段切开）
+    expect(r.segments).toHaveLength(2);
+    expect(segLines(r.segments[0]!)).toEqual(['前面']);
+    expect(segLines(r.segments[1]!)).toEqual(['如果 LOCAL：', '\t甲。']);
+  });
+
+  it('`IF LOCAL` 带缩进（不在函数体最外层）→ 不合并', () => {
+    const src = ['@F_1', 'LOCAL = 1', '    IF LOCAL', 'PRINTFORMDW 甲。', '    ENDIF'].join('\n');
+    const r = project(src);
+    const all = r.segments.map((s) => s.sugarText).join('\n');
+    // 不合并的证据：`如果 LOCAL：` 仍在，且正文仍缩一层（合并了的话这两行都会消失）
+    expect(all).toBe('如果 LOCAL：\n\t甲。');
+  });
+
+  it('包装三联**四行必须连续**：中间插一行就不合并', () => {
+    const src = ['@A', 'CALL A_1', ';注释打断', 'RETURN 1', '@A_1', 'PRINTFORMDW 甲。'].join('\n');
+    const r = project(src);
+    const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
+    expect(reasons['other']).toBe(4); // @A / CALL / @A_1 / ... 都原样
+  });
+});
+
+describe('糖投影 · 只藏不显的段（契约：`lineCount === 0` 时宿主不插空 ViewZone）', () => {
+  it('纯骨架吸收段：`sugarText` 为空、`lineCount` 为 0，但区间仍被覆盖（骨架该藏起来）', () => {
+    // 只有包装三联、没有任何正文 → 该段没有可显示的糖，只承担"把骨架收起来"
+    const src = ['@A', 'CALL A_1', 'RETURN 1', '@A_1', '@B'].join('\n');
+    const r = project(src);
+    const empty = r.segments.filter((s) => s.lineCount === 0);
+    expect(empty).toHaveLength(1);
+    expect(empty[0]!.sugarText).toBe('');
+    // 区间覆盖被吸收的三行
+    expect(`${empty[0]!.fromLine}-${empty[0]!.toLine}`).toBe('2-4');
+  });
+});
