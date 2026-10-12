@@ -7,7 +7,18 @@ export type FileChangeKind = 'add' | 'change' | 'unlink';
 
 export interface FileChangedEvent {
   kind: FileChangeKind;
-  /** 归一化后的绝对路径 */
+  /**
+   * 改动条目路径 —— **平台原样透传**，内核刻意不做归一化。
+   *
+   * （此前这行注释写的是"归一化后的绝对路径"，与 `kernel/src/watcher.ts` 的
+   * `flush()` 相反：那里明写"路径原样透传：消费方用同一个字符串做键"。）
+   * 为什么原样是对的：消费方拿它去查自己的表（`EditorPane` 的 entriesRef、
+   * 文件树的 dirCache、面板的目录缓存），而那些表的键来自 io/平台同一条路径；
+   * 内核中途改分隔符会让"这个文件正打开着"判空 ⇒ **事件静默失效**，比形态不统一更糟。
+   *
+   * ⇒ 消费方若要用它查表，**判等一律走 `pathKey()`**（折叠大小写与分隔符），
+   * 别拿字符串直接 `has()`。
+   */
   path: string;
 }
 

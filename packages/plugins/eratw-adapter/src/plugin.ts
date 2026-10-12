@@ -11,7 +11,7 @@ import type {
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices, combineDigests, foldDigest, join } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { clearKojoFamilyMemo, createEratwFamilyIndex } from './family-index';
@@ -23,6 +23,7 @@ import { createKojoProjectsPanel, type DirListState } from './kojo-projects-pane
 import { readPackageAttribution, type AttributionState as AttrState } from './attribution';
 import { createPackageActions } from './package-actions';
 import { resolveNewItemPath, type NewItemKind } from './new-item';
+import { workspaceChangeOf } from './watch-scope';
 import type { KojoCompiler } from './artifact';
 import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard, readRequestToken } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
@@ -123,6 +124,75 @@ export function createEratwAdapterPlugin(): Plugin {
         wsDirCache.delete(absDir);
         ensureWsDir(absDir);
       };
+
+      /* ---- 外部改动 → 面板重列（2026-10-13 看板 HK-6；监视根含工作区根，见 §5.91） ---- */
+
+      /**
+       * 每个目录"最新一次重列请求"的序号：旧请求后到时**不覆盖**新结果。
+       * 与宿主文件树那条失效通道（`FileTree.dirReq`）同一个理由——只是两包之间
+       * 不许交叉 import（审计 C 项），所以各留一份，不硬凑一个公共件。
+       */
+      const relistSeq = new Map<string, number>();
+
+      /**
+       * 重列一个已缓存目录，但**旧内容原地留着**等新结果。
+       *
+       * 不复用 `refreshDir`：它先 delete 再 ensure，中间那一帧 `dirState` 是 undefined，
+       * 面板就渲染成「读取目录…」——作者只是用别的程序往包里存了个文件，
+       * 不该看见整块内容闪一下空白（宿主文件树那边同一批踩过，见 §5.91）。
+       * 读失败时同样保留旧内容、只记日志：把一份正确的目录换成错误态是更坏的失败，
+       * 而面板顶部本就有 ⟳ 可手动重拉。
+       */
+      const relistDir = (absDir: string): void => {
+        const seq = (relistSeq.get(absDir) ?? 0) + 1;
+        relistSeq.set(absDir, seq);
+        void io
+          .listDir(absDir)
+          .then((entries) => {
+            if (relistSeq.get(absDir) !== seq) return;
+            wsDirCache.set(absDir, entries);
+            notifyWs();
+          })
+          .catch((err: unknown) => {
+            if (relistSeq.get(absDir) !== seq) return;
+            ctx.log.warn(`工作区目录重列失败（${absDir}），面板显示的是上一次的内容：${String(err)}`);
+          });
+      };
+
+      /** 工作区根（拿不到 = 无平台数据目录的环境，如浏览器开发壳 → 不响应外部改动） */
+      let wsRoot: string | null | undefined;
+      const workspaceRootDir = (): string | null => {
+        if (wsRoot === undefined) {
+          try {
+            wsRoot = workspaces.rootDir();
+          } catch {
+            wsRoot = null;
+          }
+        }
+        return wsRoot;
+      };
+
+      ctx.onDispose(
+        ctx.bus.on('file.changed', (ev) => {
+          const target = workspaceChangeOf(ev.path, workspaceRootDir());
+          if (target.projectListChanged) {
+            refreshWsProjects();
+            return;
+          }
+          if (target.dirToRefresh === null) return;
+          // **按统一形态找缓存键**，不直接 `has(dirToRefresh)`：事件里的路径是平台原样
+          // （Rust notify 给什么就是什么），而缓存键是 `join()` 出来的形态——两者在
+          // Windows 上分隔符与大小写都不保证一致，直接 has 会"看着对、永远不命中"。
+          const want = pathKey(target.dirToRefresh);
+          for (const cached of wsDirCache.keys()) {
+            // 只重列**已经在缓存里**的目录 = 作者看过的那些；没缓存的等展开时惰性取到新数据
+            if (pathKey(cached) === want) {
+              relistDir(cached);
+              break;
+            }
+          }
+        }),
+      );
 
       /* ---- 新建文件 / 文件夹（反馈 1b）：目标恒在工作区内（常驻可写根） ---- */
 

@@ -208,4 +208,26 @@ describe('口上项目向导注册（P-C 新建 / P-F 导入 / P-E 部署）', (
     expect(open).toBeTruthy();
     expect((open!.payload as { id: string }).id).toBe(IMPORT_KOJO_OVERLAY_ID);
   });
+
+  it('监听 workspace.newProjectRequested → 打开新建项目 overlay（反馈 3 a1 的第一拍）', () => {
+    const { fire, emits } = activateWithPanel();
+    fire('workspace.newProjectRequested', { requestToken: 'kojo-m1-1', source: 'ui-sugar-editor' });
+    const open = emits.find((e) => e.type === 'ui.overlay.open');
+    expect(open).toBeTruthy();
+    expect((open!.payload as { id: string }).id).toBe(NEW_KOJO_PROJECT_OVERLAY_ID);
+  });
+
+  it('监听 file.changed（HK-6）：工作区内的外部改动不抛错，也不对外发任何事件（只刷自家缓存）', () => {
+    const { fire, emits } = activateWithPanel();
+    const before = emits.length;
+    // 目录还没被展开过（缓存空）⇒ 按"只重列看过的目录"这条规则，这里应当什么都不做，
+    // 但**不能抛**：抛了就等于监视器一响、面板整块挂掉。
+    expect(() =>
+      fire('file.changed', { path: '/appdata/workspaces/w1-abc/某包/事件.kojo', kind: 'change' }),
+    ).not.toThrow();
+    expect(emits.length).toBe(before);
+    // 工作区之外（游戏目录那半边）同样安静
+    expect(() => fire('file.changed', { path: '/game/ERB/口上/x.ERB', kind: 'add' })).not.toThrow();
+    expect(emits.length).toBe(before);
+  });
 });
