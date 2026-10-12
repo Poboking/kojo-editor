@@ -189,6 +189,8 @@
   第二轮纯文档消冲，代码零冲突面）。rebase 漏网的冲突标记曾在 4 个中间提交树里，**推送前已折叠回
   引入点**并逐提交复扫为 0；`git diff` 折叠前后 tip 为空 = 内容零变化。远端编号（§5.49/§5.50）不动，
   本链三批顺延为 §5.51–§5.53；两组同题的双写补记已删一份。
+  **`origin/feat/kernel-optimization` 已删除**（旧链 8 提交已全部进 master，留之只会诱使后来者基于
+  rebase 前的旧链开工），旧 tip 由本地 `backup/remote-feat-kernel-74603c5` 持有。
 
 ## 三、文档索引（按权威性排序；2026-10-11 整理批后口径）
 
@@ -740,7 +742,8 @@ node tools/smoke-tauri-ipc.mjs
 27. **自己生成的骨架守卫会污染语义判定**（S4 批，一般化）：`codegen` 生成的 `IF LOCAL` 里 `LOCAL` 是语言局部量，回放器只能报 `unknown` —— 若让它参与可达性折叠，**每个块都被污染成 unknown**（预览信息量归零）。解法是"识别并旁路信封"，判据必须**纯源映射**（链头产物行 `sourceLine === null`）而非游戏/引擎知识，否则会把 ADAPTER 该管的事漏进内核侧插件。
 ## 十、新会话动手清单
 
-1. `cd C:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
+1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
+   本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1183 passed / 9 skipped（1192）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.55 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前两条主线**：

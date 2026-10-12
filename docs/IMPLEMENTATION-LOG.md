@@ -1722,7 +1722,7 @@ bridge（`packages/app/src/bridge/tauri-bridge.ts`）走**同一条** `__TAURI_I
 
 | 文件 | 状态 | 说明 |
 |---|---|---|
-| `packages/plugin-api/src/slots.ts` | 修改 | `ui.panel` 贡献 additive 扩展：`location?: PanelLocation`（`'sidebar'|'aux'|'bottom'`，缺省回落 `sidebar`）/ `defaultActive?: boolean`（缺省 true；false = 低频）/ `group?: string`（同 group 合并为单视图）；新增槽 `ui.toolbar` / `ui.statusbar` / `ui.overlay` / `ui.editor.codeAction`；`editor.command` 贡献 `keybinding?`；`SlotMap` 登记全部新槽 |
+| `packages/plugin-api/src/slots.ts` | 修改 | `ui.panel` 贡献 additive 扩展：`location?: PanelLocation`（`'sidebar'\|'aux'\|'bottom'`，缺省回落 `sidebar`）/ `defaultActive?: boolean`（缺省 true；false = 低频）/ `group?: string`（同 group 合并为单视图）；新增槽 `ui.toolbar` / `ui.statusbar` / `ui.overlay` / `ui.editor.codeAction`；`editor.command` 贡献 `keybinding?`；`SlotMap` 登记全部新槽 |
 | `packages/plugin-api/src/index.ts` | 修改 | 导出 `PanelLocation` / `ToolbarContribution` / `StatusbarContribution` / `OverlayContribution` / `EditorCodeAction` / `EditorCodeActionContribution` 等 |
 | `packages/plugin-api/src/events.ts` | 修改 | `KernelEventMap` additive 新增 `'ui.overlay.open': { id: string; payload?: unknown; source?: string }` |
 | `packages/app/src/ui/layout.ts` | **新增（222 行）** | 布局**纯逻辑**（零 React）：`effectiveLocation` / `organizePanels` / `defaultActiveOf` / `defaultLayout` / `loadLayout` / `saveLayout` / `resetLayout` / `sanitizeContainer` / `reconcileLayout`；常量 `DEFAULT_SIDEBAR_SIZE=260` / `DEFAULT_AUX_SIZE=360` / `DEFAULT_BOTTOM_SIZE=200` / `SIZE_LIMITS` |
@@ -2551,8 +2551,10 @@ Esc 优先级链 picker > overlay > settings > zen）。改动 3 文件 +200/−
 
 折叠前的旧 SHA 演进：`0a97f91` → `686687d` → `151367a`；`5fb6d19` → `b06a4da` → `d7f0359`；
 `cb0938a` → `eb12c81` → `bbeb730`；`49aac9a` → `41de425` → `c5bebb8`；`fix(merge)`（`e560fe2`）已消失。
-退路三条：本地 `backup/pre-surgery-20261012`、本地 `backup/pre-rebase2-20261012`、
-远端 `origin/feat/kernel-optimization`（`74603c5`，rebase 前旧链，**暂不删除**）。
+退路（用户拍板后收口）：本地 `backup/pre-surgery-20261012`（折叠前链 + 首个文档批）、
+本地 `backup/pre-rebase2-20261012`（第二轮 rebase 前）、本地 `backup/remote-feat-kernel-74603c5`
+（= 原 `origin/feat/kernel-optimization` tip）。**远端那条分支已于本批删除**——它的 8 个提交已
+全部进 master，留着只会诱使后来者基于 rebase 前的旧链开工（本轮乱局的起因正是两条线并行）。
 
 #### 三、第二轮的文档消冲（本轮真正的工作量）
 
@@ -2562,7 +2564,7 @@ Esc 优先级链 picker > overlay > settings > zen）。改动 3 文件 +200/−
 | `IMPLEMENTATION-LOG` 编号撞车 | 远端已用 **§5.49 / §5.50** 记口上项目批与 T2；本链的 §5.49/§5.50/§5.51（内核优化三批）**顺延为 §5.51 / §5.52 / §5.53**，内部交叉引用同步改写。**远端编号不动**——已公开的历史不重写 |
 | 双写补记 | 本批原有一份「口上项目批 P-A…P-F 补记」与远端 §5.49/§5.50 同题 → **整块删除**，只留 §5.54 的 UI P4 与合流声明 |
 | `HANDOFF` §一 / §六 / §十 | 三处**均取远端版**（对方已把 §十 重写为「两条主线 + cargo 提醒 + §十二 索引」，§六 新增口上项目线小节），本批只把仍属本组的差异重新贴上：基线数字、阅读范围、rebase 纪律、分支现状 |
-| 远端把仓库路径写成 `C:\DSH\kojo-editor`（§二 / §十 两处，base 是 `D:`） | **未改回**——可能是另一台机器的真实路径，此处登记，待工作区组确认 |
+| 远端把仓库路径写成 `C:\DSH\kojo-editor`（§二 / §十 两处，本机 base 是 `D:`） | **已确认：那是口上项目组 agent 所在主机的目录，不是笔误**。两机并存 ⇒ 文档里的绝对路径**按主机而属正常**；本批在 HANDOFF §十-1 加括注说明，避免照抄错盘符 |
 
 #### 四、收口核验（两轮各自实测）
 
@@ -2576,6 +2578,9 @@ Esc 优先级链 picker > overlay > settings > zen）。改动 3 文件 +200/−
 | 合流后三绿 + 打包 | `pnpm test` / 双 typecheck / 审计 / `pnpm --filter @kojo/app build` | **1183 passed / 9 skipped（1192）**，74 文件过 / 4 跳；root 与 `@kojo/app` 双跑 exit 0；审计 A–D 全绿（16 插件）；构建 ✓ |
 
 **数字闭合**：`b1f260e` 基线 1012 + 内核优化批 71 + 口上项目批 68 + T2 29 + T2.1 3 = **1183**。
+**读历史时的两个坑**：① 8 个提交信息里写的「§5.49 / §5.50 / §5.51」是**改号前**的编号（现 = §5.51 /
+§5.52 / §5.53），已推送的提交信息**不回改**，映射以本节为准——所以引用一律**用批次名不用编号**；
+② SHA 每轮 rebase 都在变，本节「二」的表只是时点快照。
 **结论：不需要回滚**——两轮收口都没有丢任何一侧的功能，代码层面零冲突面，文档层面已消冲去重。
 
 #### 五、两处解冲突的裁定（都是取并集，不是二选一）
