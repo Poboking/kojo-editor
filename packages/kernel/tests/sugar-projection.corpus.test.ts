@@ -273,9 +273,9 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       expect(total.speechProjected / Math.max(1, total.speechLines)).toBeGreaterThan(0.99);
       // 批 F/G 后的实测读数（全量 2,285 文件）：台词行 **99.2%**（990,914/999,114）、
       // 输出行 **99.2%**（1,060,647/1,069,516）、行覆盖 56.5%。
-      // 下限取 0.99 的依据（两个"退化后落点"都算过）：
-      // - 退回"非 FORM 系 / 裸 FORM 不投影"（批 F 前）→ 输出行 ≈ 86%，红；
-      // - 退回"行内条件一律留原代码"（批 G 前）→ 台词行 98.6%，红。
+      // 下限取 0.99 的依据（三个"退化后落点"都算过）：
+      // - 退回"非 FORM 系 / 裸 FORM 不投影"（批 F 前）→ 输出行 92.1%（985,559/1,069,516），红；
+      // - 退回"行内条件一律留原代码"（批 G 前）→ 输出行 98.7%、台词行 98.6%，两者都红。
       expect(total.outputProjected / Math.max(1, total.outputLines)).toBeGreaterThan(0.99);
       expect(total.filesWithSegments / Math.max(1, total.files)).toBeGreaterThan(0.9);
       expect(total.projected / Math.max(1, total.totalLines)).toBeGreaterThan(0.5);
