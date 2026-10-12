@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pathLabelParts, splitPath } from '../src/ui/path-label';
+import { dirLabelParts, pathLabelParts, splitPath } from '../src/ui/path-label';
 
 /**
  * 编辑器工具条路径呈现（UI P4，§5.99）的两条纯函数。
@@ -67,5 +67,25 @@ describe('pathLabelParts · 三段（head 可缩 / tail+base 恒显）', () => {
     expect(p.head.length).toBeLessThanOrEqual(17);
     expect(p.tail).toBe('灵梦-少女之梦');
     expect(p.base).toBe('M_KOJO_K1_2_セクハラコマンド.ERB');
+  });
+});
+
+describe('dirLabelParts · 快速打开副行（目录两段）', () => {
+  const DIR = REAL.slice(0, REAL.lastIndexOf('\\'));
+
+  it('最深一层目录（包名）整段保住 —— 副行唯一要回答的就是"哪一个包"', () => {
+    const d = dirLabelParts(DIR);
+    expect(d.tail).toBe('灵梦-少女之梦');
+    expect(d.head.length).toBeLessThanOrEqual(27);
+    expect(d.head.startsWith('C:\\game\\')).toBe(true);
+  });
+
+  it('只有一层目录 → 盘符留在 head、目录名进 tail（不编造分隔符）', () => {
+    expect(dirLabelParts('D:\\发布')).toEqual({ head: 'D:', tail: '发布' });
+  });
+
+  it('空串与无分隔符都安全（调用侧传什么是它的自由）', () => {
+    expect(dirLabelParts('')).toEqual({ head: '', tail: '' });
+    expect(dirLabelParts('发布包')).toEqual({ head: '', tail: '发布包' });
   });
 });

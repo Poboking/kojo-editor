@@ -2785,13 +2785,27 @@ textarea {
 .picker-primary {
   flex-shrink: 0;
 }
+/* 快速打开的副行（目录）：两段结构，**前缀可缩、最深一层恒显**。
+   实测整条目录交给尾部省略会裁掉 337–389px，被裁的正是包名/角色目录——
+   同名 ERB 之间唯一的区分点（同编辑器工具条 §5.99 的规矩）。 */
 .picker-secondary {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  font-size: var(--fs-1);
+}
+.picker-secondary .ps-head {
+  min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-1);
+}
+.picker-secondary .ps-tail {
+  flex: 0 0 auto;
 }
 /* 键位提示做成 kbd 芯片 */
 .picker-hint {

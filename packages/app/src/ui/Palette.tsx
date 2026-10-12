@@ -7,6 +7,7 @@ import {
   formatKeybinding,
   type CommandEntry,
 } from './commands';
+import { dirLabelParts, splitPath } from './path-label';
 
 /**
  * 命令面板 / 快速打开（2026-10-11 UI 重设计批 P2；定稿 §五/§十一）。
@@ -24,7 +25,18 @@ interface PickerProps {
   emptyText: string;
   query: string;
   onQuery(q: string): void;
-  items: { key: string; primary: string; secondary?: string; hint?: string; disabled?: boolean }[];
+  items: {
+    key: string;
+    primary: string;
+    /**
+     * 副行 = 这个文件住在哪个目录，**分两段渲染**（前缀可缩、最深一层恒显）。
+     * 整条目录交给 CSS 尾部省略时，被裁掉的恰好是包名 / 角色目录——实测 337–389px，
+     * 而那是一堆同名 ERB 之间唯一的区分点（同编辑器工具条的规矩，见 `path-label.ts`）。
+     */
+    secondaryDir?: string;
+    hint?: string;
+    disabled?: boolean;
+  }[];
   onPick(key: string): void;
   onClose(): void;
 }
@@ -97,7 +109,14 @@ function Picker({ placeholder, emptyText, query, onQuery, items, onPick, onClose
                 onClick={() => pick(i)}
               >
                 <span className="picker-primary">{it.primary}</span>
-                {it.secondary ? <span className="picker-secondary dim">{it.secondary}</span> : null}
+                {it.secondaryDir !== undefined ? (
+                  <span className="picker-secondary dim" title={it.secondaryDir}>
+                    {dirLabelParts(it.secondaryDir).head !== '' ? (
+                      <span className="ps-head">{dirLabelParts(it.secondaryDir).head}</span>
+                    ) : null}
+                    <span className="ps-tail">{dirLabelParts(it.secondaryDir).tail}</span>
+                  </span>
+                ) : null}
                 {it.hint ? <span className="picker-hint dim">{it.hint}</span> : null}
               </button>
             ))
@@ -160,12 +179,8 @@ export function QuickOpen({ files, onOpenFile, onClose }: QuickOpenProps): React
       query={query}
       onQuery={setQuery}
       items={filtered.map((p) => {
-        const slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
-        return {
-          key: p,
-          primary: slash >= 0 ? p.slice(slash + 1) : p,
-          secondary: slash >= 0 ? p.slice(0, slash) : '',
-        };
+        const { dir, base } = splitPath(p);
+        return { key: p, primary: base, ...(dir !== '' ? { secondaryDir: dir } : {}) };
       })}
       onPick={(path) => {
         onClose();

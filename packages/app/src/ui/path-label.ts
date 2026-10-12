@@ -31,8 +31,6 @@ export interface PathLabelParts {
 /**
  * 拆成工具条要显示的三段。
  *
- * `headMaxChars` 只用于**中段省略**（按字符数，像素交给 CSS 兜底）：留头留尾，
- * 因为前缀里最有信息量的仍是靠近尾部的部分（角色目录 `001 Reimu [霊夢]`）。
  * 默认 26 是量出来的：1280 窗口里 head 实际只分到 ~180px，34 字符的中文前缀仍会被
  * CSS 再裁掉 49px（等于把这里的中段省略又裁成尾部省略）。头一短，CSS 就基本接手不到
  * 活干；而 head 本就是"可以让"的那一段——**窗口再窄也不该轮到包名和文件名让位**。
@@ -40,11 +38,29 @@ export interface PathLabelParts {
  */
 export function pathLabelParts(p: string, headMaxChars = 26): PathLabelParts {
   const { dir, base } = splitPath(p);
+  const { head, tail } = dirLabelParts(dir, headMaxChars);
+  return { head, tail, base };
+}
+
+/** 目录两段：`head` 可缩的前缀 + `tail` 最深一层目录（恒显） */
+export interface DirLabelParts {
+  readonly head: string;
+  readonly tail: string;
+}
+
+/**
+ * 一个**目录**字符串拆成"可缩前缀 + 最深一层"。
+ *
+ * 快速打开（Ctrl+P）的副行就是它：整条目录交给 CSS 尾部省略时，被裁掉的恰好是
+ * 包名/角色目录——而那正是"这一堆同名 ERB 里我要哪一个"的唯一区分点。
+ * 预算只用于中段省略（按字符数），像素交给 CSS 兜底；**保住尾段靠结构不靠预算**。
+ */
+export function dirLabelParts(dir: string, headMaxChars = 26): DirLabelParts {
   const { dir: grand, base: tail } = splitPath(dir);
   let head = grand;
-  if (head.length > headMaxChars) {
+  if (headMaxChars > 0 && head.length > headMaxChars) {
     const keep = Math.max(1, headMaxChars - 12 - 1);
     head = `${head.slice(0, keep)}…${head.slice(-12)}`;
   }
-  return { head, tail, base };
+  return { head, tail };
 }

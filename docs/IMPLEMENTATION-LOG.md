@@ -6269,6 +6269,74 @@ QA-10 原判据把第五家写成"保存告警→没写出文件"，暗示它是
   仍留在 UI P4：它波及 4 个插件，属"看不见收益的视觉改动"，需要单独一批配视觉复核。
 - 字符预算（`headMaxChars = 26`）是量出来的经验值，不是不变量；真正的保证来自三段结构。
 
+### 5.100 看板 HK-4 批 · 快速打开的副行也照同一条规矩 + 一次全站裁剪扫描（2026-10-13 批，UI P4）
+
+**触发**：§5.99 那条"身份不许裁"是量出来的，同一把尺子接着量别的界面。
+新写一个一次性扫描器（CDP）：遍历 `body *`（跳过 Monaco 内部），凡 `overflow-x/y` 为
+`hidden|clip` 且 `scrollWidth-clientWidth > 2` 的都报出来，并在
+**1280 / 900 / 1120 三档视口**（`Emulation.setDeviceMetricsOverride`）下各跑一遍，
+状态覆盖：欢迎页 / 项目+ERB / 设置浮层 / 快速打开 / 命令面板 / 写作模式。
+
+#### 扫出来一条真缺陷（比工具条那条更疼）
+
+```
+X +389px of 379px  div.picker-list < button.picker-item < span.picker-secondary.dim
+X +377px of 418px  …  «C:\game\eratw-sub-modding-…\ERB\口上・メッセージ»
+（同屏 14 行全在 +337 ~ +389px）
+```
+
+快速打开（Ctrl+P）的副行是**整条目录**，CSS 尾部省略把**最深那一层**（作者包名 /
+角色目录 `灵梦-少女之梦`）整个裁掉——而在一堆同名 `M_KOJO_K1_2_*.ERB` 之间，
+**那个目录就是唯一的区分点**。工具条至少还有标签页兜着，这里没有：主行只有文件名，
+副行只剩游戏根。三档视口全都如此（可分宽度根本没变，是结构问题）。
+
+#### 修法：同一条规矩，第二段复用
+
+`path-label.ts` 抽出 **`dirLabelParts(dir) → { head 可缩, tail 恒显 }`**，
+`pathLabelParts` 改为在它上面组合（三段 = head / tail / base，一处规矩）。
+`Palette.tsx` 的候选项把 `secondary: string` 换成 **`secondaryDir`**，渲染成
+`.ps-head` + `.ps-tail` 两个 span；CSS 里 `.picker-secondary` 变成 flex 容器。
+
+顺带**删掉一个此刻变成死的字段**：改完之后全仓再没有任何调用方设置 `secondary`
+（命令面板的候选只用 `primary` + `hint`），所以把它连同它的渲染分支一起删——
+不留"以防万一"。这也顺手去掉了中途一度用的 `:has()` 选择器写法（少一个运行时支持问题）。
+
+| 项 | 前 | 后（实测同一状态、同一档视口） |
+|---|---|---|
+| `.picker-secondary` 裁剪 | 14 行各 +337 ~ +389px（最深一层目录不可见） | **`secClip = 0`**，副行显示 `C:\game\eratw…1 Reimu [霊夢] · 灵梦-少女之梦` |
+| 命令面板 | 无副行（只用 `hint` 显示键位） | 不变（回归确认过） |
+| 三档视口 1280 / 900 / 1120 | 三档全裁 | 三档全 `clip 0` |
+
+#### 扫描的负结果同样登记（这些地方量过了，没动）
+
+- **欢迎页 / 设置浮层 / 写作模式**：三档视口下**零裁剪元素**（含 900px 窄窗口）。
+- **口上文件树的行**（`.tree-file`）：187px 里裁掉 6 ~ 61px。**刻意不改**——
+  ① 树里截断是行业常态，且行上有 `title=完整路径`；② 侧栏本就可拖宽（壳层容器拖拽）；
+  ③ 真要"保住中段"就得认识 `M_KOJO_K1_2_` 这种前缀模式，那是口上命名知识，
+  **不该进宿主 UI**（硬约束：宿主零游戏知识）。这条留给"树行悬停预览"一类需求，不靠截断技巧解决。
+
+#### 一条驱动通道上的坑（写下来给两边用）
+
+**window 级合成 `Escape` 关不掉 picker**：ShellLayout 的 Esc 链第一句就是
+`if (pickerRef.current) return;`——picker 自己监听 Esc（`stopPropagation`），
+而它监听的是**自己输入框里冒泡上来的事件**。我最初从 `window` 派发 Escape，
+它收不到 ⇒ 面板一直挂着，扫描里"命令面板"与"快速打开"两组数字一模一样，
+差点被当成"两种 picker 都渲染同一份列表"的怪现象报出去。
+正确姿势：`document.querySelector('.picker input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`。
+⇒ 口径与 §九-35 同源：**驱动通道自己失败 ≠ 产品失败**；先确认事件真的到了那个处理器。
+
+#### 验收
+
+| 项 | 结果 |
+|---|---|
+| `pnpm test` | **1661 passed / 13 skipped（1674）**，97 文件 / 7 跳 |
+| 数字闭合 | §5.99 自记 1658 + 本批 3（`dirLabelParts` 三条）= **1661** |
+| typecheck root / app | exit 0 / exit 0 |
+| `audit:decoupling` | A–D 全绿 |
+| `pnpm --filter @kojo/app build` | **✓ 1m30s**（本批动 `Palette.tsx` / `styles.css` / `path-label.ts`） |
+| 实机 | 本组 CDP 自验（三档视口 + 两种 picker 前后对比），探针脚本与截图同批删除 |
+
+
 
 
 
