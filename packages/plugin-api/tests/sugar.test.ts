@@ -474,10 +474,25 @@ const SPEC = path.resolve(import.meta.dirname, '../../../docs/SYNTAX-SUGAR-SURFA
 
 const read = (p: string) => fs.readFile(p, 'utf8');
 
-/** 从规范文档按 1 基闭区间抽行（末尾补换行，对齐文件形态） */
-async function specSlice(start: number, end: number): Promise<string> {
+/**
+ * 从规范文档抽代码块：**按小节标题 + 其后的第 N 个围栏**锚定。
+ *
+ * 以前这里写的是 `specSlice(735, 753)` 这样的**行号区间**——规范任何一处增删行都会让
+ * 四个 golden 断言整片红（本仓已经因"按行号/第一次匹配的锚点"删错过 2,935 行文档，
+ * 见 IMPLEMENTATION-LOG §5.64 的教训记录）。golden 是**内容**契约，不是**行号**契约，
+ * 所以锚点必须是标题与围栏这两个语义标记。
+ */
+async function specCodeBlock(heading: RegExp, blockIndex: number): Promise<string> {
   const lines = (await read(SPEC)).split(/\r?\n/);
-  return `${lines.slice(start - 1, end).join('\n')}\n`;
+  const at = lines.findIndex((l) => heading.test(l));
+  if (at < 0) throw new Error(`规范里找不到小节标题 ${heading}`);
+  const fences: number[] = [];
+  for (let i = at + 1; i < lines.length; i++) if (/^```/.test(lines[i]!)) fences.push(i);
+  const open = fences[blockIndex * 2];
+  const close = fences[blockIndex * 2 + 1];
+  if (open === undefined || close === undefined)
+    throw new Error(`规范「${heading}」之后找不到第 ${blockIndex + 1} 个围栏代码块`);
+  return `${lines.slice(open + 1, close).join('\n')}\n`;
 }
 
 describe('golden fixture · 规范 §6 示例固化', () => {
@@ -490,18 +505,18 @@ describe('golden fixture · 规范 §6 示例固化', () => {
     const fixture = await read(path.join(GOLDENS, 'spec-6.1-lumia-310.kojo'));
     // fixture 前两行为本仓注释头（// 起），不计入比对
     const body = fixture.split('\n').filter((l) => !l.startsWith('//')).join('\n');
-    expect(body).toBe(await specSlice(735, 753));
+    expect(body).toBe(await specCodeBlock(/^### 6\.1 /, 0));
   });
 
   it('§6.2 源文件与规范原文逐字节一致', async () => {
     const fixture = await read(path.join(GOLDENS, 'spec-6.2-choice-heart-random.kojo'));
     const body = fixture.split('\n').filter((l) => !l.startsWith('//')).join('\n');
-    expect(body).toBe(await specSlice(804, 816));
+    expect(body).toBe(await specCodeBlock(/^### 6\.2 /, 0));
   });
 
   it('§6.1 期望产物与规范原文逐字节一致（含 TAB 缩进与 `記入チェック` 注释行）', async () => {
     const fixture = await read(path.join(GOLDENS, 'spec-6.1-lumia-310.expected.erb.todo'));
-    expect(fixture).toBe(await specSlice(759, 794)); // 头部注释保留后 +2 行
+    expect(fixture).toBe(await specCodeBlock(/^### 6\.1 /, 1));
     expect(fixture).toContain('\tPRINTFORMW 「呀……！」');
     expect(fixture).toContain(';記入チェック（=0, 非表示、1, 表示）');
     expect(fixture).toContain('@M_KOJO_MESSAGE_COM_K12_310_1');
@@ -509,7 +524,7 @@ describe('golden fixture · 规范 §6 示例固化', () => {
 
   it('§6.2 期望产物与规范原文逐字节一致（含 HPH_PRINT 与 RAND 块）', async () => {
     const fixture = await read(path.join(GOLDENS, 'spec-6.2-choice-heart-random.expected.erb.todo'));
-    expect(fixture).toBe(await specSlice(822, 844));
+    expect(fixture).toBe(await specCodeBlock(/^### 6\.2 /, 1));
     expect(fixture).toContain('CALL HPH_PRINT(@"……嗯。","w")');
     expect(fixture).toContain('LOCAL = RAND:2');
   });
