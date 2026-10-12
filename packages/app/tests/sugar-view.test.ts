@@ -10,7 +10,14 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { SUGAR_VIEW_DEFAULT, loadSugarViewPref, saveSugarViewPref, sugarSummary, sugarZonePlan } from '../src/ui/sugar-view';
+import {
+  SUGAR_VIEW_DEFAULT,
+  loadSugarViewPref,
+  saveSugarViewPref,
+  sugarSummary,
+  sugarViewAllowed,
+  sugarZonePlan,
+} from '../src/ui/sugar-view';
 import { SUGAR_DEFAULT_COLOR, tokenColor } from '../src/monaco/sugar-render';
 
 /** 假 localStorage：只是键值袋，够测"记忆"这一件事 */
@@ -110,5 +117,33 @@ describe('糖视图 / 配色回退', () => {
     expect(tokenColor('')).toBe(SUGAR_DEFAULT_COLOR);
     expect(tokenColor('identifier')).toBe(SUGAR_DEFAULT_COLOR);
     expect(tokenColor('nonsense.dotted.type')).toBe(SUGAR_DEFAULT_COLOR);
+  });
+});
+
+/**
+ * 糖视图可用门（ADR-0005：目录分野 × 显式解锁）。
+ *
+ * 这条门是两组**合流点**：口上项目组把"游戏目录 ERB 只读 / 工作区 ERB 恒可编辑"
+ * 落成了轴一，本线把"解锁弹窗"落成轴二，ADR 定的是"糖视图与可编辑态互斥"。
+ * 钉死它，是为了防止后来者把糖视图重新做成"任何 ERB 都能开"——那会让用户
+ * 在**看不见原文**的情况下编辑自己的工作区文件。
+ */
+describe('sugarViewAllowed（糖视图可用门 = 不可编辑态的派生）', () => {
+  it('游戏目录 ERB、未解锁 → 唯一放行的组合', () => {
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: false })).toBe(true);
+  });
+
+  it('.kojo 不放糖视图（本身就是糖，再投影一遍没有意义）', () => {
+    expect(sugarViewAllowed({ isErbLike: false, inWorkspace: false, unlocked: false })).toBe(false);
+  });
+
+  it('工作区 ERB 不放糖视图（轴一：恒可编辑 ⟹ 原文必须看得见）', () => {
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: false })).toBe(false);
+    // 解锁态不影响结论（工作区根本走不到解锁这条路）
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: true })).toBe(false);
+  });
+
+  it('游戏目录 ERB 一旦解锁 → 该份糖视图禁用（轴二与互斥规则一致）', () => {
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: true })).toBe(false);
   });
 });

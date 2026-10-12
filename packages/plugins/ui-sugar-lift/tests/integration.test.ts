@@ -26,8 +26,17 @@ import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
 import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
 import { scanControlFlow } from '@kojo/plugin-erb-parser';
 import { createUiSugarLiftPlugin } from '../src/index';
+import { LIFT_MAX_LINES } from '../src/large-file';
 
 const log: Logger = { debug() {}, info() {}, warn() {}, error() {} };
+/** 捕获 warn（断言"降级不静默"用；相关测试自行清空） */
+const warnings: string[] = [];
+const capturingLog: Logger = {
+  ...log,
+  warn: (m: string) => {
+    warnings.push(m);
+  },
+};
 const enc = (s: string) => new TextEncoder().encode(s);
 
 /** 伪内核 io（内存 FS；只读读路径 + 写盘断言用） */
@@ -78,7 +87,7 @@ function makeIO(files: Record<string, Uint8Array>) {
  * 为什么不拉真内核：本测试的意图是"接线正确"而不是"内核正确"。这里把服务槽/事件总线的
  * 契约**降到最小**，反而让"插件依赖了哪些东西"变得无法含糊（`inject` 只给清单里那几项）。
  */
-function makeKernel(files: Record<string, Uint8Array>) {
+function makeKernel(files: Record<string, Uint8Array>, logger: Logger = log) {
   const io = makeIO(files);
   const provided = new Map<string, unknown>();
   const slots = new Map<string, unknown[]>();
@@ -94,7 +103,7 @@ function makeKernel(files: Record<string, Uint8Array>) {
 
   /** kojo-sugar 只需要这几个槽（与它的 requires 一致） */
   const sugarCtx = {
-    log,
+    log: logger,
     inject: (key: string) => {
       if (key === 'kernel.project') return { current: () => ({ adapterId: 'eratw' }) };
       if (key === 'kernel.slots')
@@ -118,7 +127,7 @@ function makeKernel(files: Record<string, Uint8Array>) {
   };
 
   const panelCtx = {
-    log,
+    log: logger,
     inject: (key: string): never => {
       const v = provided.get(key);
       if (v === undefined && key !== 'kernel.io') throw new Error(`未注册的服务：${key}`);
@@ -163,6 +172,7 @@ const actionsOf = (k: ReturnType<typeof makeKernel>) =>
       text: string;
       project: null;
       line?: number;
+      lineCount?: number;
     }) => EditorCodeAction[];
   }>;
 
@@ -289,5 +299,65 @@ describe('`.erb` / 整文件糖视图供给（只用于看，零写盘）', () =
     expect(k.events).toEqual([]);
     expect(k.files[ERB_PATH]).toEqual(beforeErb);
     expect(k.files[KOJO_PATH]).toEqual(beforeKojo);
+  });
+});
+
+/* ================= 三、超长文件降级（合流批：守卫接回存活路径） ================= */
+
+/**
+ * 两线合流的处理（口上项目/内核优化批的 `large-file.ts` 判据，语法糖批 A 删面板后无宿主消费）：
+ * **判据原样保留，接到本线唯一剩下的自动触发路径上** —— `.kojo` 的 💡 可用性探测
+ * 由 Monaco 在光标 / 选区变化时反复调用，而其判据是整篇 round-trip 自证
+ * （实测 52,601 行的真实文件 **231 ms**）→ 降级 + **告警可见**，不静默。
+ *
+ * 注意糖视图那条路径**不套这个阈值**：`liftProject` 是逐行局部映射（实测整篇 2,285 文件
+ * 约 9 s，即千行级 ~4 ms），而 5,000 行以上的文件恰恰是读者最想要"像剧本一样读懂"的那些。
+ */
+describe('超长文件降级：`.kojo` 💡 自动路径让路，显式信息缺失时自己数', () => {
+  const huge = (lines: number): string =>
+    Array.from({ length: lines }, (_, i) => (i === 2 ? 'PRINTFORMDW 甲。' : ';占位注释')).join('\n');
+
+  const act = (text: string, lineCount?: number): EditorCodeAction[] => {
+    warnings.length = 0;
+    const k = makeKernel({ [KOJO_PATH]: enc(text) }, capturingLog);
+    bootSugar(k);
+    bootPanel(k);
+    return actionsOf(k)[0]!.provideActions({
+      path: KOJO_PATH,
+      text,
+      project: null,
+      line: 3,
+      ...(lineCount === undefined ? {} : { lineCount }),
+    });
+  };
+
+  it('未超限的小文件 → 照常给动作（守卫不误伤日常编辑）', () => {
+    expect(act(KOJO, KOJO.split('\n').length)).toHaveLength(1);
+    expect(warnings).toEqual([]);
+  });
+
+  it('超过 `LIFT_MAX_LINES` → 不给动作，且**告警可见**（内核铁律：不许静默降级）', () => {
+    expect(act(huge(LIFT_MAX_LINES + 1), LIFT_MAX_LINES + 1)).toHaveLength(0);
+    expect(warnings.join('\n')).toContain('已跳过整篇升糖扫描');
+  });
+
+  it('宿主没给 `lineCount` → 自己数行数，同样让路（不因信息缺失而白扫一遍）', () => {
+    expect(act(huge(LIFT_MAX_LINES + 2))).toHaveLength(0);
+    expect(warnings.join('\n')).toContain('已跳过整篇升糖扫描');
+  });
+
+  it('边界含等号：恰好到上限不降级（与 `large-file.ts` 的纯函数口径一致）', () => {
+    expect(act(huge(LIFT_MAX_LINES), LIFT_MAX_LINES)).toHaveLength(1);
+  });
+
+  it('同一文件只告警一次（探测是高频调用，日志不能被刷屏）', () => {
+    const text = huge(LIFT_MAX_LINES + 1);
+    const k = makeKernel({ [KOJO_PATH]: enc(text) }, capturingLog);
+    bootSugar(k);
+    bootPanel(k);
+    const provide = actionsOf(k)[0]!.provideActions;
+    warnings.length = 0;
+    for (let i = 0; i < 5; i++) provide({ path: KOJO_PATH, text, project: null, line: 3, lineCount: LIFT_MAX_LINES + 1 });
+    expect(warnings).toHaveLength(1);
   });
 });

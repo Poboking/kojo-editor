@@ -133,3 +133,30 @@ export function sugarZonePlan(segment: { fromLine: number; sugarText: string }):
 export function sugarSummary(projectedLines: number): string {
   return `糖视图 · 已映射 ${projectedLines} 行`;
 }
+
+/**
+ * **糖视图可用门**（ADR-0005：目录分野 × 显式解锁 两道正交轴的派生判定）。
+ *
+ * 铁律只有一条：**同一份文件不能一边被改、一边被投影**——糖视图靠"原文让位"工作
+ * （ViewZone + 隐藏区间），可编辑的原文必须始终看得见，否则用户改到自己看不见的行。
+ * 于是可用门由"可编辑态"派生，而不是另立一套开关：
+ *
+ * | 文件 | 可编辑性（轴一 / 轴二） | 糖视图 |
+ * |---|---|---|
+ * | `.kojo` | 恒可编辑（糖源码） | **否**——本身就是糖，再投影一遍没有意义 |
+ * | 工作区内 `.ERB` | **恒可编辑**（作者的创作源文件） | **否**——自己正在写的东西看投影没有意义，要写糖请直接写 `.kojo` |
+ * | 游戏目录 `.ERB` | 默认只读（写保护铁律） | **是**——本功能的主场景：读懂别人的口上 |
+ * | 游戏目录 `.ERB` 已解锁 | 这一次可写（轴二的破例） | **否**——回到互斥规则 |
+ *
+ * 纯函数：宿主用它同时门控"自动应用"、"首次询问"与工具条入口，三处口径不会分叉。
+ */
+export function sugarViewAllowed(input: {
+  isErbLike: boolean;
+  inWorkspace: boolean;
+  unlocked: boolean;
+}): boolean {
+  if (!input.isErbLike) return false;
+  if (input.inWorkspace) return false;
+  if (input.unlocked) return false;
+  return true;
+}

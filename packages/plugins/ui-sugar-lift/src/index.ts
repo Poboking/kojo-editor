@@ -34,6 +34,7 @@ import type {
   SugarProjectStats,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { countLines, liftScanBudget } from './large-file';
 import { actionTitle, pickCandidate, toSugarEdit } from './lift-action';
 
 /** 投影降级时的空统计（扫描抛错 → 无段无统计，**不静默**：宿主会收到零段） */
@@ -62,6 +63,23 @@ export function createUiSugarLiftPlugin(): Plugin {
       // 一遍最贵的 round-trip 自证）。
       let memo: { path: string; text: string; result: SugarLiftResult } | null = null;
       let projMemo: { path: string; text: string; result: SugarProjectResult } | null = null;
+
+      /**
+       * 超长文件降级告警（每文件一次）。
+       *
+       * 💡 可用性探测由 Monaco 在**光标 / 选区变化时自动调用**，而本槽的判据是整篇
+       * round-trip 自证（`liftSuggest`）——实测 52,601 行的真实 ERB 上耗时 **231 ms**，
+       * 直接表现为"什么都没做就卡"。降级语义沿用内核优化批的判据（`large-file.ts`），
+       * 只是接回本线**存活的那条自动路径**（面板已按用户口径删除）。
+       * 告警必须去重且**不静默**（内核铁律）。
+       */
+      const warnedLarge = new Set<string>();
+      const warnLargeOnce = (path: string, reason: string | null): void => {
+        if (warnedLarge.has(path)) return;
+        if (warnedLarge.size > 200) warnedLarge.clear();
+        warnedLarge.add(path);
+        ctx.log.warn(`已跳过整篇升糖扫描（${path}）：${reason ?? ''}`);
+      };
 
       const scan = (path: string, text: string): SugarLiftResult => {
         if (memo && memo.path === path && memo.text === text) return memo.result;
@@ -120,8 +138,15 @@ export function createUiSugarLiftPlugin(): Plugin {
       // （或解锁后糖视图关闭），改它没有意义。
       ctx.slots.register('ui.editor.codeAction', {
         id: 'sugar-lift.rewrite-action',
-        provideActions: ({ path, text, line }) => {
+        provideActions: ({ path, text, line, lineCount }) => {
           if (!isKojoFile(path) || line === undefined) return [];
+          // 体量事实：宿主没给 `lineCount` 时自己数（O(n) 数字符，不 split）——
+          // 绝不因"拿不到信息"而悄悄少给结果，但也不让自动路径去扛整篇自证。
+          const budget = liftScanBudget(lineCount ?? countLines(text));
+          if (budget.skip) {
+            warnLargeOnce(path, budget.reason);
+            return [];
+          }
           const hit = pickCandidate(scan(path, text).candidates, line);
           if (!hit) return [];
           const sourceLines = text.split('\n');

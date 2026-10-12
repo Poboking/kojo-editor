@@ -29,6 +29,7 @@ import {
   saveSugarViewPref,
   saveSugarViewPrompted,
   sugarSummary,
+  sugarViewAllowed,
   sugarZonePlan,
 } from './sugar-view';
 
@@ -435,11 +436,18 @@ export function EditorPane({
     if (!ed || !model) return;
     clearSugarView();
     const path = filePathRef.current;
-    // 只对原生 ERB 生效：`.kojo` 本身就是糖，再投影一遍没有意义
-    if (!sugarViewRef.current || !isErbLike(path)) return;
-    // 已解锁编辑 → 糖视图必须让位：糖视图靠"原文让位"工作，而可编辑的原文必须看得见
-    // （用户 2026-10-12：解锁 ERB 编辑则禁用该功能）。
-    if (unlockedPathsRef.current.has(path)) return;
+    // 可用门（ADR-0005）：只对**游戏目录里、本次未解锁**的 ERB 生效。
+    // `.kojo` 与**工作区内 ERB**（作者自己的创作源文件，恒可编辑）都不放糖视图——
+    // 糖视图靠"原文让位"工作，可编辑的原文必须始终看得见。
+    if (
+      !sugarViewRef.current ||
+      !sugarViewAllowed({
+        isErbLike: isErbLike(path),
+        inWorkspace: inWorkspace(path),
+        unlocked: unlockedPathsRef.current.has(path),
+      })
+    )
+      return;
 
     const text = model.getValue();
     const project = kernel.project.current();
@@ -1021,7 +1029,9 @@ export function EditorPane({
       else unlockedPathsRef.current.delete(path);
       if (filePathRef.current !== path || !ed) return;
       setUnlocked(allowEdit);
-      ed.updateOptions({ readOnly: !allowEdit });
+      // 轴二只管游戏目录那一份：工作区文件本就可写，不存在"解锁/回锁"这回事
+      // （ADR-0005 给糖组的适配项——别把写保护铁律的代价转嫁到正常操作上）。
+      ed.updateOptions({ readOnly: isErbLike(path) && !inWorkspace(path) && !allowEdit });
       // 解锁 → 糖视图必须让位（原文要看得见）；回锁 → 重新生成糖视图
       applySugarView();
     },
@@ -1029,10 +1039,17 @@ export function EditorPane({
   );
 
   // 首次打开 ERB：问一次"要不要用语法糖视图"（问过就再不问）。
-  // 已解锁编辑的文件不弹（那时糖视图本就不生效，问了没有意义）。
+  // **工作区 ERB 不弹**（恒可编辑，糖视图本就不生效，问了没有意义——ADR-0005 轴一）；
+  // 已解锁编辑的文件同样不弹（轴二的破例态下糖视图也让位）。
   useEffect(() => {
-    if (!isErbLike(filePath)) return;
-    if (unlockedPathsRef.current.has(filePath)) return;
+    if (
+      !sugarViewAllowed({
+        isErbLike: isErbLike(filePath),
+        inWorkspace: filePath !== null && inWorkspace(filePath),
+        unlocked: filePath !== null && unlockedPathsRef.current.has(filePath),
+      })
+    )
+      return;
     if (loadSugarViewPrompted()) return;
     setIntroAsk(true);
   }, [filePath]);
