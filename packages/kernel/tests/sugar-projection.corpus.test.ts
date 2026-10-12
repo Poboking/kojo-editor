@@ -51,6 +51,9 @@ const KOJO_DIR_MARK = '口上';
  *   批 F 把这一族接进投影，若仍只用窄尺子，新能力在守门读数里**完全看不见**。
  *
  * 两者都**不含** `PRINTDATA` 系（块开词）与按钮/排版类变体（表外，刻意不投影）。
+ *
+ * 批 H（`SIF`）与批 I（函数头）各自另加一把尺子，见下面 `SIF_LINE_RE` / `HEAD_LINE_RE`：
+ * 一条能力若在守门读数里没有自己的分母，它悄悄退化时测试不会红。
  */
 const FORM_PRINT_RE = /^\s*(PRINTFORM(?:DW|DL|W|L))\b/;
 const OUTPUT_PRINT_RE = /^\s*(PRINTFORM(?:DW|DL|W|L|D)?|PRINT(?:DW|DL|W|L|D)?)\b/;
@@ -60,6 +63,14 @@ const OUTPUT_PRINT_RE = /^\s*(PRINTFORM(?:DW|DL|W|L|D)?|PRINT(?:DW|DL|W|L|D)?)\b
  * 9,516 行只占 0.26%，整条能力悄悄退化都不会红。
  */
 const SIF_LINE_RE = /^\s*SIF\b/i;
+/**
+ * 批 I 的尺子：函数定义头行（`@名字`）。头是**读者定位"这一段在讲什么"的锚点**——
+ * 语料 96% 的台词行都挂在某个头下面，但头本身留原代码时读者只知道"这里开始一段"、
+ * 不知道是哪一段（`M_KOJO_MESSAGE_COM_K1_310` 对不熟悉 EraBasic 的人等于噪声）。
+ *
+ * 同 SIF 的道理：全语料头行只占 2.8%，混进"行覆盖"里整条能力退化都不会红，必须单列。
+ */
+const HEAD_LINE_RE = /^\s*@[A-Za-z_$]/;
 
 interface Totals {
   files: number;
@@ -81,6 +92,9 @@ interface Totals {
   /** `SIF` 行数（批 H 的尺子）与其中显示为「如果 …：」的行数 */
   sifLines: number;
   sifProjected: number;
+  /** 函数头行数（批 I 的尺子）与其中显示为「时机 …：」/被骨架吸收的行数 */
+  headLines: number;
+  headProjected: number;
 }
 
 const zero = (): Totals => ({
@@ -98,6 +112,8 @@ const zero = (): Totals => ({
   outputProjected: 0,
   sifLines: 0,
   sifProjected: 0,
+  headLines: 0,
+  headProjected: 0,
 });
 
 const pct = (a: number, b: number): string => (b === 0 ? '—' : `${((a / b) * 100).toFixed(1)}%`);
@@ -109,6 +125,7 @@ function line(t: Totals, label: string): string {
     `｜**台词行覆盖 ${pct(t.speechProjected, t.speechLines)}**（${t.speechProjected}/${t.speechLines}）` +
     `｜**输出行覆盖 ${pct(t.outputProjected, t.outputLines)}**（${t.outputProjected}/${t.outputLines}）` +
     `｜**SIF 覆盖 ${pct(t.sifProjected, t.sifLines)}**（${t.sifProjected}/${t.sifLines}）` +
+    `｜**函数头可标率 ${pct(t.headProjected, t.headLines)}**（${t.headProjected}/${t.headLines}）` +
     `｜段 ${t.segments}（最多 ${t.maxSegments}/文件）`
   );
 }
@@ -206,15 +223,22 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           nativeTokens.set(token, rec);
         }
 
-        // ---- 读者要读的行有多少显示成了糖（三把尺子，见文件头注释）----
+        // ---- 读者要读的行有多少显示成了糖（四把尺子，见文件头与各尺子定义处注释）----
         let speech = 0;
         let speechCovered = 0;
         let output = 0;
         let outputCovered = 0;
         let sif = 0;
         let sifCovered = 0;
+        let head = 0;
+        let headCovered = 0;
         for (let ln = 1; ln <= srcLines.length; ln++) {
           const text = srcLines[ln - 1] ?? '';
+          if (HEAD_LINE_RE.test(text)) {
+            head++;
+            if (covered.has(ln)) headCovered++;
+            continue;
+          }
           if (SIF_LINE_RE.test(text)) {
             sif++;
             if (covered.has(ln)) sifCovered++;
@@ -246,6 +270,8 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           t.outputProjected += outputCovered;
           t.sifLines += sif;
           t.sifProjected += sifCovered;
+          t.headLines += head;
+          t.headProjected += headCovered;
         }
         segBuckets[bucketOf(r.segments.length)]!++;
       }
@@ -292,14 +318,16 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 因此它天然低于台词行覆盖——两者不可互相替代（`docs/LIFT-REMEASURE` §三 那种
       // "6.5% 行覆盖"与这里的台词行覆盖是两把尺子）。
       expect(total.speechProjected / Math.max(1, total.speechLines)).toBeGreaterThan(0.99);
-      // 批 F/G 后的实测读数（全量 2,285 文件）：台词行 **99.2%**（990,914/999,114）、
-      // 输出行 **99.2%**（1,060,647/1,069,516）、行覆盖 56.5%。
+      // 实测读数（全量 2,285 文件，批 I 后）：台词行 **99.2%**（990,914/999,114）、
+      // 输出行 **99.2%**（1,060,647/1,069,516）、行覆盖 **58.8%**。
       // 下限取 0.99 的依据（三个"退化后落点"都算过）：
       // - 退回"非 FORM 系 / 裸 FORM 不投影"（批 F 前）→ 输出行 92.1%（985,559/1,069,516），红；
       // - 退回"行内条件一律留原代码"（批 G 前）→ 输出行 98.7%、台词行 98.6%，两者都红。
       expect(total.outputProjected / Math.max(1, total.outputLines)).toBeGreaterThan(0.99);
       expect(total.filesWithSegments / Math.max(1, total.files)).toBeGreaterThan(0.9);
-      expect(total.projected / Math.max(1, total.totalLines)).toBeGreaterThan(0.5);
+      // 行覆盖下限随能力上移：批 I 前实测 56.8%，批 I 后 **58.8%**（头成为锚点后正文并入糖段）。
+      // 取 0.55——既能挡"规则被过度收紧"，撤掉批 I 也不会误红（那条回归由函数头尺子负责）。
+      expect(total.projected / Math.max(1, total.totalLines)).toBeGreaterThan(0.55);
       // 口上目录是主战场，台词行要求更严
       expect(kojo.speechProjected / Math.max(1, kojo.speechLines)).toBeGreaterThan(0.99);
       expect(kojo.outputProjected / Math.max(1, kojo.outputLines)).toBeGreaterThan(0.99);
@@ -308,6 +336,13 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 这条能力只占全语料 0.26% 的行，混在"行覆盖"里退化不掉红——所以单独一把尺子。
       expect(total.sifProjected / Math.max(1, total.sifLines)).toBeGreaterThan(0.9);
       expect(kojo.sifProjected / Math.max(1, kojo.sifLines)).toBeGreaterThan(0.9);
+      // 批 I：`@M_KOJO_MESSAGE_COM_K1_310` → 「时机 指令 COM 310：」，正文缩进一级。
+      // 实测（全量 2,285 文件 / 100,532 个头）：**81.2%**（81,656）。
+      // 退化落点算过：撤掉批 I → **8.1%**（8,182，全是包装三联被骨架吸收的头），红。
+      // 剩下 18.8% 是**故意不硬凑**的：`MESSAGECHECK` 四件套、`KOJO_*_CUSTOM_BUTTON_*`、
+      // 工具/辅助函数——分野表里没有的时机就不冒充有（宁留原代码，不给错标签）。
+      expect(total.headProjected / Math.max(1, total.headLines)).toBeGreaterThan(0.7);
+      expect(kojo.headProjected / Math.max(1, kojo.headLines)).toBeGreaterThan(0.7);
 
       await kernel.stop();
     },

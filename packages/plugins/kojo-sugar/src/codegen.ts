@@ -418,8 +418,11 @@ function resolveFace(face: string, timing: TimingBlock, ctx: TimingEmitContext):
  * 上下文段名 → 命名参数名（当前唯一映射：`com` ← `类型:`）。
  * 新增段时在此登记；adapter 只声明段与其取值候选，不声明命名参数名
  * （那是**语法层**语义，属跨游戏语言层，不属 adapter）。
+ *
+ * 导出给**反糖**（`faces-reverse.ts`）共用：正向写糖与反向读糖必须认同一个命名参数名，
+ * 否则投影出来的标签作者读不出、也写不回。
  */
-function segmentParamName(segName: string): string | undefined {
+export function segmentParamName(segName: string): string | undefined {
   if (segName === 'com') return '类型';
   return undefined;
 }

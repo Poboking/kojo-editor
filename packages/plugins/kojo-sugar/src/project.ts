@@ -74,6 +74,8 @@ import type {
 import type { LiftDeps } from './lift';
 import type { DictionaryLookup } from './types';
 import { PRONOUN_REVERSE } from './expression';
+import { buildFaceNameIndex, stripParams } from './faces-reverse';
+import type { FaceNameIndex } from './faces-reverse';
 
 /* ============================== 规则表（封闭） ============================== */
 
@@ -230,6 +232,12 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   const skeleton = planSkeleton(lines, ctx);
   // `SIF 条件` + 下一行单语句 → 「如果 …：」块头 + 正文 +1 层缩进（批 H）
   const sif = planSif(lines, ctx);
+  // 函数头 → 「时机 …：」（批 I）。**分野表缺席 = 一个头都不标**（不猜），与
+  // `codegen.resolveFace` 的 `timing-face-unknown` fail-closed 同一条纪律。
+  const faceTable = deps.faceTable?.();
+  const headIndex = faceTable === undefined ? undefined : buildFaceNameIndex(faceTable);
+  // 标了标签的那个头，其函数体 +1 层（规范 §3.2「正文缩进一级」）
+  const fnBump = planFunctionBumps(lines, headIndex);
 
   const recs: LineRec[] = [];
   const nativeByReason = new Map<SugarProjectNativeReason, number>();
@@ -422,16 +430,34 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
       continue;
     }
 
+    // 函数头：反解成糖的「时机 …：」块头（批 I）。解不出 / 歧义 → 原样留原代码
+    if (content.startsWith('@') && headIndex !== undefined) {
+      const label = headIndex.label(stripParams(content.slice(1).trim()));
+      if (label !== undefined) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: label,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: null,
+        });
+        continue;
+      }
+    }
+
     // 其余（赋值 / 调用 / `@` / `#` / `$` / 其他指令）→ 原样保留
     recs.push(native(ln, 'other'));
   }
 
-  // ---- 缩进补正：着色块**体内** +1；`SIF` 管辖的那一行 +1；記入チェック信封**体内** -1（信封被拆，缩进必须跟着拆）----
+  // ---- 缩进补正（一处口径，漏改不了）：着色块**体内** +1；`SIF` 管辖的那一行 +1；
+  //      标了「时机 …：」的函数头其**函数体** +1（规范 §3.2 正文缩进一级）；
+  //      記入チェック信封**体内** -1（信封被拆，缩进必须跟着拆）----
   //
   // 放在最后统一做（而不是在每个 push 点手动加）：一处口径，漏改不了。
   // 块头自身不吃 +1（`starts` 从 open+1 起算），被吸收的 RESETCOLOR 不可见故无影响。
   for (const r of recs) {
-    const bump = color.bumpAt(r.line) + sif.bumpAt(r.line) - skeleton.dedentAt(r.line);
+    const bump = color.bumpAt(r.line) + sif.bumpAt(r.line) + fnBump(r.line) - skeleton.dedentAt(r.line);
     if (bump !== 0) r.indent = Math.max(0, r.indent + bump);
   }
 
@@ -771,6 +797,37 @@ function hasCommandColon(expr: string): boolean {
   return /[:：] *(PRINT|CALL|RETURN|GOTO|GOSUB|SETCOLOR|RESETCOLOR|CLEARLINE|FORCEWAIT|WAIT|INPUT|TRY|HIDE|SHOW|REDRAW|BREAK|RESTART|CATCH|IF|ELSE|SELECTCASE|CASE|END|NEXT|WEND|REND|LOOP|DO|WHILE|FOR)\b/.test(
     expr,
   );
+}
+
+/* ============================== 函数体缩进（批 I） ============================== */
+
+/**
+ * 函数体缩进计划：被标成「时机 …：」的那个头，其**函数体 +1 层**。
+ *
+ * 规范 §3.2 明文「`时机 <分野> [编号] [命名参数]：` 是块头；**正文缩进一级**」。
+ * 投影原本只看控制流深度（`@` 头不开块），于是头与正文平级——读者分不清哪几行属于
+ * 这个时机。这里补上这一层。
+ *
+ * **只给标了标签的头加缩进**：没标签的头（辅助函数 / 表里没有的调用面）自己留原代码，
+ * 若把它的正文抬高一层，读者会看到"莫名多出来的缩进"而无从解释。
+ *
+ * ERB 的函数没有显式结束标记（到下一个 `@` 或文件尾），所以"当前在哪个函数里"
+ * 只需记最后一次出现的头。
+ */
+function planFunctionBumps(lines: string[], headIndex: FaceNameIndex | undefined): (line: number) => number {
+  const total = lines.length;
+  const bump = new Array<number>(total + 2).fill(0);
+  if (headIndex === undefined) return (line) => (line >= 1 && line <= total ? (bump[line] ?? 0) : 0);
+  let insideLabeled = false;
+  for (let ln = 1; ln <= total; ln++) {
+    const content = contentOf(lines[ln - 1] ?? '');
+    if (content.startsWith('@')) {
+      insideLabeled = headIndex.label(stripParams(content.slice(1).trim())) !== undefined;
+      continue; // 头自身不 +1（下面记的是"头之后每一行"的增量）
+    }
+    if (insideLabeled) bump[ln] = 1;
+  }
+  return (line) => (line >= 1 && line <= total ? (bump[line] ?? 0) : 0);
 }
 
 /* ============================== 着色块配对 ============================== */

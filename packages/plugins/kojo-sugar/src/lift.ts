@@ -42,6 +42,7 @@
 import type {
   ControlFlowStatement,
   ConditionExpr,
+  KojoFaceTable,
   SugarDiagnostic,
   SugarLiftCandidate,
   SugarLiftKind,
@@ -81,6 +82,14 @@ export interface LiftDeps {
    * 缺省 = 不做属性反糖（投影照常工作，只是数字保持数字——**不猜**）。
    */
   dictionary?: () => DictionaryLookup | undefined;
+  /**
+   * 时机分野模板表（**软取**，适配器 `kojoFaceTemplates`；批 I 的函数头反解用）。
+   *
+   * 与 `dictionary` 同样做成函数：适配器随项目切换重建。缺省 = 不标函数头
+   * （`@M_KOJO_…` 原样留原代码——**表不在就不猜**，与 `codegen.resolveFace` 的
+   * `timing-face-unknown` fail-closed 同一条纪律）。
+   */
+  faceTable?: () => KojoFaceTable | undefined;
 }
 
 /* ============================== 主入口 ============================== */

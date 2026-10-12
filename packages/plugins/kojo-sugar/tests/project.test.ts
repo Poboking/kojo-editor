@@ -17,6 +17,7 @@ import type { ControlFlowStatement, SugarProjectSegment } from '@kojo/plugin-api
 import { scanControlFlow } from '@kojo/plugin-erb-parser';
 import { liftProject } from '../src/project';
 import type { LiftDeps } from '../src/lift';
+import { stubFaceTable } from './support';
 
 /** 投影只依赖结构扫描；`transpile` 不参与（用抛错替身证明"确实没被调用"） */
 const deps = (): LiftDeps => ({
@@ -365,6 +366,79 @@ describe('糖投影 · `SIF 条件` + 下一行 → 「如果 …：」+ 正文�
     expect(stats.totalLines).toBe(4);
     expect(stats.projectedLines).toBe(3); // 两个块头 + 一行台词
     expect(stats.nativeLines).toBe(1); // RETURN
+  });
+});
+
+/* ==================== 批 I：函数头 → 「时机 …：」 ==================== */
+
+describe('糖投影 · 函数头反解成分野时机（批 I）', () => {
+  const withFaces = (source: string) =>
+    liftProject(
+      {
+        transpile: () => {
+          throw new Error('x');
+        },
+        scanControlFlow,
+        faceTable: () => stubFaceTable(),
+      },
+      { source },
+    );
+
+  it('时机头 → 块头标签，正文缩进一级；连续头共用一段（段是连续可见区间，不是按头切）', () => {
+    const r = withFaces(
+      ['@M_KOJO_MESSAGE_COM_K1_310', 'PRINTFORMW 「来了啊」', 'PRINTFORMDW 她抬起头。', '@M_KOJO_MESSAGE_COM_K1_311', 'PRINTFORMW 「还有事？」'].join(
+        '\n',
+      ),
+    );
+    expect(segLines(r.segments[0]!)).toEqual([
+      '时机 指令 310：',
+      '\t「来了啊」',
+      '\t她抬起头。',
+      '时机 指令 311：',
+      '\t「还有事？」',
+    ]);
+    expect(r.segments.length).toBe(1);
+  });
+
+  it('别人版家族名进标签（署名是本项目的一等公民，不能让读者以为在看标准版）', () => {
+    const r = withFaces('@M_KOJO_少女之梦_EVENT_K1_2\nPRINTFORMW 甲');
+    expect(segLines(r.segments[0]!)).toEqual(['时机 事件 2（少女之梦版）：', '\t甲']);
+  });
+
+  it('分野表缺席 → 一个头都不标，且**计入成因不静默**', () => {
+    const r = project(['@M_KOJO_MESSAGE_COM_K1_310', 'PRINTFORMW 甲'].join('\n'));
+    expect(r.segments.map((s) => s.fromLine)).toEqual([2]); // 只有正文成段
+    const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
+    expect(reasons['other']).toBe(1);
+  });
+
+  it('表里没有的名字（辅助函数 / 工具函数）留原代码，不硬凑标签', () => {
+    const r = withFaces(['@AUTO_AEGI', 'PRINTFORMW 甲', '@KOJO_ACTIVE_INFO', 'PRINTFORMW 乙'].join('\n'));
+    expect(r.segments.map((s) => s.fromLine)).toEqual([2, 4]);
+    expect(r.stats.nativeByReason.find((x) => x.reason === 'other')?.count).toBe(2);
+  });
+
+  it('MESSAGECHECK 四件套**不冒充指令**（段取值不匹配 → 整头不动）', () => {
+    const r = withFaces('@M_KOJO_MESSAGE_MESSAGECHECK_COM_K1_310\nPRINTFORMW 甲');
+    expect(r.segments.map((s) => s.fromLine)).toEqual([2]);
+  });
+
+  it('包装三联的 `@A_1` 已被骨架吸收 → 不会多出一条"时机"', () => {
+    const r = withFaces(
+      ['@M_KOJO_MESSAGE_COM_K1_310', 'CALL M_KOJO_MESSAGE_COM_K1_310_1', 'RETURN RESULT', '@M_KOJO_MESSAGE_COM_K1_310_1', 'PRINTFORMW 甲'].join(
+        '\n',
+      ),
+    );
+    expect(segLines(r.segments[0]!)).toEqual(['时机 指令 310：', '\t甲']);
+    expect(r.segments[0]!.toLine).toBe(5); // `_1` 那一个头被吸收进区间
+  });
+
+  it('不变量：标了的头计入 projected，未标的计入 native', () => {
+    const { stats } = withFaces('@M_KOJO_MESSAGE_COM_K1_310\nPRINTFORMW 甲\n@AUTO_AEGI\nRETURN 1');
+    expect(stats.totalLines).toBe(4);
+    expect(stats.projectedLines + stats.passthroughLines + stats.nativeLines).toBe(4);
+    expect(stats.projectedLines).toBe(2); // 头 + 台词
+    expect(stats.nativeLines).toBe(2); // @AUTO_AEGI + RETURN
   });
 });
 

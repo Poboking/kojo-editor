@@ -204,6 +204,8 @@ export function createKojoSugarPlugin(): Plugin {
         // 变量字典（软取：adapter 未激活时投影退化为"不做属性反糖"，其余照常）
         // `dictionaryOf` 是**每次调用时才查**的函数（适配器可能随项目切换重建 schema）。
         dictionary: () => dictionaryOf(),
+        // 时机分野模板表（软取，批 I 的函数头反解用；缺席 = 一个头都不标）
+        faceTable: () => faceTableOf(),
       });
 
       ctx.provide(WellKnownServices.SugarLift, liftService);
