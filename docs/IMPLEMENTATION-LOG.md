@@ -3606,7 +3606,7 @@ CFLAG:1:好感度 += 50   →   她的既成事実:好感度 += 50
 
 | 检查 | 结果 |
 |---|---|
-| `vitest run`（不带语料） | **1407 passed / 11 skipped**（批 J +9 单测：三段式 / 两段式 / MASTER / 角色号假阳性 / 条件同洞 / 一字未改不动 / 比较不当赋值 / 非角色族 / 不变量） |
+| `vitest run`（不带语料） | **1411 passed / 11 skipped**（批 J +9 单测：三段式 / 两段式 / MASTER / 角色号假阳性 / 条件同洞 / 一字未改不动 / 比较不当赋值 / 非角色族 / 不变量） |
 | typecheck root + `@kojo/app` | 双 exit 0 |
 | `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
 | 语料投影守门（全量 2,285 文件） | 上表读数，**不变量违例 0** |

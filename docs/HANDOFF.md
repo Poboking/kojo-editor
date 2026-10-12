@@ -310,7 +310,7 @@
   5. **剩下 74% 的成因三分**（口上域 20,562 条候选行）：其它角色号作用面 **57.4%（故意不标）**｜
      名字索引原文已可读 **27.3%**｜数字索引**字典查不到** `TEQUIP:4` 之类 **15.3%（L0 数据缺口）**
      ⇒ 这把尺子的**天花板 ≈ 41%**；要再高得先给 §3.8 加「角色 N 的属性」写法 = **语法层决策，待用户拍板**。
-  6. **守门第五把尺子**「状态赋值可读率」（下限 0.2）；**基线更新：1407 passed / 11 skipped（1418）**；
+  6. **守门第五把尺子**「状态赋值可读率」（下限 0.2）；**基线更新：1411 passed / 11 skipped（1422）**；
      typecheck root + app 双 exit 0；审计 A–D 全绿；语料守门 6 文件全绿；`vite build` ✓ 24.3 s；
      三个探针同批删除。
 
@@ -869,7 +869,7 @@ node tools/smoke-tauri-ipc.mjs
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1407 passed / 11 skipped（1418）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1411 passed / 11 skipped（1422）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.67 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前两条主线**：
    - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 + T2.1 + T3 + T4 已通。
