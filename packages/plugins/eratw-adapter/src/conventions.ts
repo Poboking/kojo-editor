@@ -57,12 +57,22 @@ export const kxPlaceholderRule: ConventionRule = {
   check(ctx): ConventionIssue[] {
     const issues: ConventionIssue[] = [];
     for (const refs of ctx.index.byName.values()) {
-      const hit = refs.find((r) => parseKojoFamily(r.name)?.isPlaceholder);
+      /**
+       * **前置过滤 `includes('_KX')`**：`isPlaceholder` 为 true 只有 `family-index.ts` 里
+       * 那一个分支，而它的入口条件就是 `/_KX(?:_|$)/.test(name)` ⇒ 名字不含 `_KX` 子串时
+       * **必然**不是占位符。真实语料 99,101 个去重名里占位符只有 603 个，
+       * 不加这道过滤就等于让这条规则替全场跑完整个解析链（实测它占校验段一半以上）。
+       * 一遍收集，不再 `find` + `filter` 跑两遍。
+       */
+      const hits: typeof refs = [];
+      for (const r of refs) {
+        if (!r.name.includes('_KX')) continue;
+        if (parseKojoFamily(r.name)?.isPlaceholder) hits.push(r);
+      }
+      const hit = hits[0];
       if (!hit) continue;
       const m = parseKojoFamily(hit.name);
-      const where = refs
-        .filter((r) => parseKojoFamily(r.name)?.isPlaceholder)
-        .map((r) => `${r.filePath}:${r.startLine}`);
+      const where = hits.map((r) => `${r.filePath}:${r.startLine}`);
       issues.push({
         ruleId: KX_RULE,
         severity: 'warning',

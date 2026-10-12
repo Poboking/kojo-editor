@@ -161,6 +161,27 @@ export async function loadEratwCallProtocol(opts: LoadCallProtocolOptions): Prom
     return undefined;
   }
 
+  /**
+   * 以下两样都是**每次调用重算的常量**：`slotsFor` 以前每调一次就 `[...rules].sort(...)`
+   * （回放面板一次要对上千个函数名各调一次），`maxForwardedSlotsFor` 每次重数一遍每条模板的槽。
+   * 协议对象随 `loadProject` 重建 ⇒ 预计算天然随项目失效。
+   *
+   * 曾在此再加一层"名字 → 结果"的 memo，**实测没有收益**就退了：校验规则一轮里每个名字只访问一次，
+   * memo 只在"同进程重复跑校验"时才有用，而那条路径的成本在别处（见 IMPLEMENTATION-LOG §5.74）。
+   */
+  const sortedBySpecificity: readonly FamilyRule[] = [...rules].sort(
+    (a, b) => b.literalLen - a.literalLen || Number(b.numericTail) - Number(a.numericTail),
+  );
+  const ruleSlots = rules.map((r) => {
+    let int = 0;
+    let str = 0;
+    for (const slot of r.slots) {
+      if (slot.kind === 'int') int++;
+      else str++;
+    }
+    return { rule: r, int, str };
+  });
+
   return {
     slotsFor(functionName: string): readonly KojoCallSlot[] | null {
       const name = functionName.toUpperCase();
@@ -168,10 +189,7 @@ export async function loadEratwCallProtocol(opts: LoadCallProtocolOptions): Prom
       // `_DAILY_EVENT_K…` / `_EVENT_K…_26_1` 等互相包含的歧义；②同字面长时
       // **数值时机模板优先**（尾部 \d+）——数值函数名不应被字符串时机模板
       // （尾部 .+）抢先匹配。
-      const sorted = [...rules].sort(
-        (a, b) => b.literalLen - a.literalLen || Number(b.numericTail) - Number(a.numericTail),
-      );
-      for (const r of sorted) {
+      for (const r of sortedBySpecificity) {
         if (r.regex.test(name)) return r.slots;
       }
       return null;
@@ -182,15 +200,9 @@ export async function loadEratwCallProtocol(opts: LoadCallProtocolOptions): Prom
       let int = 0;
       let str = 0;
       let matched = false;
-      for (const r of rules) {
-        if (!r.regex.test(name)) continue;
+      for (const { rule, int: ri, str: rs } of ruleSlots) {
+        if (!rule.regex.test(name)) continue;
         matched = true;
-        let ri = 0;
-        let rs = 0;
-        for (const slot of r.slots) {
-          if (slot.kind === 'int') ri++;
-          else rs++;
-        }
         if (ri > int) int = ri;
         if (rs > str) str = rs;
       }
