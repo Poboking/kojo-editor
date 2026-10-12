@@ -74,9 +74,6 @@ function makeIO(files: Record<string, Uint8Array>) {
     setAppWritableRoots: () => {},
     isWritable: () => true,
     backup: async (p) => (files[p] ? `backup:///${p.replace(/\//g, '_')}.bak` : null),
-    exportDirectory: async () => {
-      throw new Error('exportDirectory is not supported by this fake');
-    },
     exportFile: async () => {
       throw new Error('exportFile is not supported by this fake');
     },

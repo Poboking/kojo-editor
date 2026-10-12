@@ -88,18 +88,11 @@ export interface PlatformBridge {
   /** 目录选择对话框；用户取消返回 null */
   chooseDirectory(opts?: { title?: string }): Promise<string | null>;
   /**
-   * 导出目录（2026-10-12 口上项目批 P-D）：弹对话框选择导出目的地，把 `srcDir`
-   * **整个目录**复制进去（保留目录名），返回导出落点目录的完整路径；
-   * 用户取消 → null。对话框 + 复制绑定在**同一个平台命令**（用户确认才写盘）。
-   * 目标已存在同名目录时报错不覆盖。Node 桥无对话框 → 抛 unsupported。
-   */
-  exportDirectory(srcDir: string, opts?: { title?: string }): Promise<string | null>;
-  /**
    * 导出**单个文件**（2026-10-12 导出批，ZIP 发布包用）：弹系统保存对话框，把 `bytes`
    * 写到用户选定的位置，返回落点完整路径；用户取消 → null。
    *
-   * 与 `exportDirectory` 同一条授权模型：**对话框与写盘绑定在同一个平台命令**，
-   * JS 拿不到落点决定权，所以落点在写白名单之外是设计意图而非漏洞。
+   * 授权模型 = **对话框与写盘绑定在同一个平台命令**，JS 拿不到落点决定权，
+   * 所以落点在写白名单之外是设计意图而非漏洞。
    * `fileName` 只是对话框预填建议（平台侧会剥掉路径分隔符）。
    * Node 桥无对话框 → 抛 unsupported。
    */

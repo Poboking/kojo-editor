@@ -65,19 +65,17 @@ export interface FileIO {
   /** 手动备份文件；返回备份路径（文件不存在时返回 null） */
   backup(path: string): Promise<string | null>;
   /**
-   * 导出目录（2026-10-12 口上项目批 P-D）：平台对话框选目的地 + 整目录复制
-   * （绑定同一平台命令；用户确认才写盘）。返回导出落点完整路径；取消 → null。
-   * 源是只读列举（不受写白名单约束）；落点在域外由用户对话框显式选定。
-   * 平台无对话框能力（Node 桥）时抛错，调用侧自解释呈现。
-   */
-  exportDirectory(srcDir: string, opts?: { title?: string }): Promise<string | null>;
-  /**
    * 导出**单个文件**（2026-10-12 导出批）：平台保存对话框选落点 + 写字节，
    * 绑定在同一平台命令内。返回落点完整路径；取消 → null。
    *
-   * 这是**唯一**一条合法的"写到白名单之外"通道（除 `exportDirectory` 外），
-   * 授权来自用户在系统对话框里的显式选择，故内核侧刻意不调 `assertWritable`。
+   * 这是**唯一**一条合法的"写到白名单之外"通道：授权来自用户在系统对话框里的显式选择，
+   * 故内核侧刻意不调 `assertWritable`。新增任何"写到域外"的能力必须照此形态
+   * （对话框与写盘绑在同一个平台命令，JS 拿不到落点决定权），不得开放任意目标路径参数。
    * 平台无对话框能力（Node 桥）时抛错，调用侧自解释呈现。
+   *
+   * （2026-10-13 契约收缩：同形态的 `exportDirectory`（整目录复制）已删——导出改走 ZIP
+   * 之后它在全仓没有任何生产调用方，而"只有一条法定绕闸通道"这句话不该同时挂着
+   * 一条没人用的能力。要恢复请照 `exportFile` 的形态重新加，别留"以防万一"。）
    */
   exportFile(fileName: string, bytes: Uint8Array, opts?: { title?: string }): Promise<string | null>;
 }

@@ -28,9 +28,6 @@ function stubBridge(): PlatformBridge {
     removeDir: async () => {},
     watchDirs: async () => () => {},
     chooseDirectory: async () => null,
-    exportDirectory: async () => {
-      throw new Error('exportDirectory is not supported by this stub');
-    },
     exportFile: async () => {
       throw new Error('exportFile is not supported by this stub');
     },

@@ -111,9 +111,6 @@ function makeIO(opts: {
       backups.push(target);
       return target;
     },
-    exportDirectory: async () => {
-      throw new Error('exportDirectory is not supported by this fake');
-    },
     exportFile: async () => {
       throw new Error('exportFile is not supported by this fake');
     },

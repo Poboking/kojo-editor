@@ -360,42 +360,6 @@ fn remove_dir(
     }
 }
 
-/// 递归复制目录内容：把 `src` 的**内容**复制进 `dst`（`dst` 不存在则创建）。
-/// 返回复制的文件数。纯文件系统操作、不依赖 Tauri 类型 → 可单测。
-///
-/// 符号链接不解引用为链接、按 `std::fs::copy` 语义复制其**内容**
-/// （导出的目的是得到一份可独立分发的副本，留下悬空链接没有意义）。
-fn copy_dir_contents(src: &Path, dst: &Path) -> Result<u64, String> {
-    std::fs::create_dir_all(dst).map_err(|e| format!("创建目录 {}: {e}", dst.display()))?;
-    let mut files = 0u64;
-    for entry in walkdir::WalkDir::new(src).min_depth(1) {
-        let entry = entry.map_err(|e| format!("遍历 {}: {e}", src.display()))?;
-        let rel = entry
-            .path()
-            .strip_prefix(src)
-            .map_err(|e| format!("计算相对路径 {}: {e}", entry.path().display()))?;
-        let target = dst.join(rel);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target)
-                .map_err(|e| format!("创建目录 {}: {e}", target.display()))?;
-            continue;
-        }
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("创建目录 {}: {e}", parent.display()))?;
-        }
-        std::fs::copy(entry.path(), &target).map_err(|e| {
-            format!(
-                "复制 {} → {}: {e}",
-                entry.path().display(),
-                target.display()
-            )
-        })?;
-        files += 1;
-    }
-    Ok(files)
-}
-
 /* ---------------------------- 对话框 / 环境 ---------------------------- */
 
 #[tauri::command]
@@ -410,53 +374,14 @@ async fn choose_directory(title: Option<String>) -> Result<Option<String>, Strin
         .map(|h| h.path().to_string_lossy().to_string()))
 }
 
-/// 导出目录：系统对话框选目的地 + 整目录复制，**两步绑定在本命令内**。
-///
-/// 授权模型（与写允许域第二道闸的关系）：落点由用户在系统对话框里显式选定，
-/// **对话框本身即授权**，故落点刻意**不过** `ensure_write_allowed`——导出的意义
-/// 正是落到允许域之外（桌面 / 发布目录）。越权面为零：JS 侧只能传源目录与标题，
-/// 拿不到落点决定权，无法借本命令往任意路径写。
-///
-/// 目标已存在同名目录 → 报错不覆盖（不静默吃掉用户既有文件）。
-/// 用户取消对话框 → `Ok(None)`（取消是正常路径，不是错误）。
-///
-/// 复制是阻塞 IO，跑在 Tauri 的 async 命令线程上；口上包体量（百来个小文件）
-/// 下耗时可忽略，无需再切线程。
-#[tauri::command]
-async fn export_directory(src_dir: String, title: Option<String>) -> Result<Option<String>, String> {
-    let src = PathBuf::from(&src_dir);
-    if !src.is_dir() {
-        return Err(format!("导出源不是目录：{src_dir}"));
-    }
-    let dir_name = src
-        .file_name()
-        .map(|s| s.to_os_string())
-        .ok_or_else(|| format!("导出源无目录名：{src_dir}"))?;
-
-    let mut dialog = rfd::AsyncFileDialog::new();
-    if let Some(t) = title.as_deref() {
-        dialog = dialog.set_title(t);
-    }
-    let picked = match dialog.pick_folder().await {
-        Some(handle) => handle.path().to_path_buf(),
-        None => return Ok(None),
-    };
-
-    let target = picked.join(&dir_name);
-    // 已存在即拒绝：同时挡掉「目的地选到源目录自身父级」这类自我复制
-    if target.exists() {
-        return Err(format!("目标已存在，未覆盖：{}", target.display()));
-    }
-    let files = copy_dir_contents(&src, &target)?;
-    eprintln!("[export_directory] {files} 个文件 → {}", target.display());
-    Ok(Some(target.to_string_lossy().to_string()))
-}
-
 /// 导出**单个文件**到用户选定的位置（ZIP 发布包用；base64 过 IPC，与 `write_file_bytes` 同口径）。
 ///
-/// 落点在写域之外是设计意图，与 `export_directory` 同理：授权来自用户在系统保存对话框里的
-/// 显式选择，且**对话框与写盘绑在同一个命令内**（JS 拿不到落点决定权，也就无法把写操作
+/// 落点在写域之外是设计意图：**授权来自用户在系统保存对话框里的
+/// 显式选择，且对话框与写盘绑在同一个命令内**（JS 拿不到落点决定权，也就无法把写操作
 /// 引导到任意路径）。因此这里刻意不过 `ensure_write_allowed`。
+///
+/// 这是全仓唯一一条"写到允许域之外"的法定通道（曾有的同形态命令 `export_directory`
+/// 因无调用方已删，见 IMPLEMENTATION-LOG §5.97）。新增绕闸能力必须照本命令的形态。
 ///
 /// `file_name` 只是对话框的**预填建议**，不是落点：仍剥掉路径分隔符，避免一个坏名字
 /// 把对话框初始目录带偏。
@@ -746,7 +671,6 @@ pub fn run() {
             remove_file,
             remove_dir,
             choose_directory,
-            export_directory,
             export_file,
             app_data_dir,
             register_write_domain,
@@ -905,87 +829,6 @@ mod write_domain_tests {
         let canon = canonicalize_deep(&target).unwrap();
         assert!(is_within(&canon, &root.canonicalize().unwrap()));
         assert!(canon.ends_with("new.txt"));
-        let _ = std::fs::remove_dir_all(&base);
-    }
-}
-
-/* ------------------------- 单测（P-D 导出复制） ------------------------- */
-
-#[cfg(test)]
-mod export_copy_tests {
-    use super::copy_dir_contents;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static SEQ: AtomicUsize = AtomicUsize::new(0);
-
-    fn temp_root(tag: &str) -> PathBuf {
-        let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "kojo-pd-{}-{}-{tag}-{n}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write(p: &Path, bytes: &[u8]) {
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, bytes).unwrap();
-    }
-
-    /// 嵌套结构 + 空子目录一并复制，文件数只数文件（目录不计）
-    #[test]
-    fn copies_nested_tree_and_empty_dirs() {
-        let base = temp_root("nested");
-        let src = base.join("src");
-        write(&src.join("README.txt"), b"readme");
-        write(&src.join("ERB").join("a.erb"), b"a");
-        write(&src.join("ERB").join("deep").join("b.erb"), b"b");
-        std::fs::create_dir_all(src.join("empty")).unwrap();
-
-        let dst = base.join("out");
-        let n = copy_dir_contents(&src, &dst).unwrap();
-
-        assert_eq!(n, 3, "应复制 3 个文件");
-        assert_eq!(std::fs::read(dst.join("README.txt")).unwrap(), b"readme");
-        assert_eq!(std::fs::read(dst.join("ERB/deep/b.erb")).unwrap(), b"b");
-        assert!(dst.join("empty").is_dir(), "空子目录应保留（包结构不能塌）");
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// 字节保真：非 UTF-8（Shift-JIS）字节逐字节原样落地，不经任何转码
-    #[test]
-    fn preserves_non_utf8_bytes() {
-        let base = temp_root("bytes");
-        let src = base.join("src");
-        // 「主人」的 Shift-JIS 字节序列（非合法 UTF-8）
-        let sjis: [u8; 4] = [0x8E, 0xE8, 0x90, 0x6C];
-        write(&src.join("kojo.erb"), &sjis);
-
-        let dst = base.join("out");
-        copy_dir_contents(&src, &dst).unwrap();
-
-        assert_eq!(std::fs::read(dst.join("kojo.erb")).unwrap(), sjis);
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// 空源目录：只建目标目录，0 文件，不报错
-    #[test]
-    fn empty_source_yields_empty_target() {
-        let base = temp_root("empty-src");
-        let src = base.join("src");
-        std::fs::create_dir_all(&src).unwrap();
-
-        let dst = base.join("out");
-        let n = copy_dir_contents(&src, &dst).unwrap();
-
-        assert_eq!(n, 0);
-        assert!(dst.is_dir());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

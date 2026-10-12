@@ -127,13 +127,8 @@ export const tauriBridge: PlatformBridge = {
     return invoke<string | null>('choose_directory', { title: opts?.title ?? null });
   },
 
-  async exportDirectory(srcDir: string, opts): Promise<string | null> {
-    // 对话框 + 整目录复制在 Rust 侧同一命令内完成（JS 无法指定落点）
-    return invoke<string | null>('export_directory', { srcDir, title: opts?.title ?? null });
-  },
-
   async exportFile(fileName: string, bytes: Uint8Array, opts): Promise<string | null> {
-    // 同 exportDirectory：保存对话框 + 写盘绑定在 Rust 侧同一命令内，JS 拿不到落点决定权。
+    // 保存对话框 + 写盘绑定在 Rust 侧同一个命令内，JS 拿不到落点决定权（对话框即授权）。
     // 字节走 base64，与 writeFileBytes 同口径。
     return invoke<string | null>('export_file', {
       fileName,

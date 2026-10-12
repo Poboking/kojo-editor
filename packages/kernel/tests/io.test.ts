@@ -156,7 +156,7 @@ describe('FileIOService · 备份', () => {
   });
 });
 
-describe('FileIOService · 导出目录（P-D）', () => {
+describe('FileIOService · 导出（唯一法定绕闸通道，§5.97）', () => {
   /** 以 NodeBridge 为原型覆写单个方法（类方法在原型上，展开复制会丢） */
   function bridgeWith(overrides: Partial<PlatformBridge>): PlatformBridge {
     const spy = Object.create(new NodeBridge(appData)) as PlatformBridge;
@@ -164,38 +164,45 @@ describe('FileIOService · 导出目录（P-D）', () => {
   }
 
   it('平台无对话框能力 → 错误如实上抛（调用侧自解释呈现，不静默降级）', async () => {
-    await expect(io.exportDirectory(tmpDir)).rejects.toThrow(/not supported by NodeBridge/);
+    await expect(io.exportFile('某包.zip', new Uint8Array([1, 2]))).rejects.toThrow(/not supported by NodeBridge/);
   });
 
-  it('透传源目录与对话框标题给平台桥，返回落点完整路径', async () => {
-    const calls: Array<{ srcDir: string; title?: string }> = [];
+  it('透传文件名 / 字节 / 对话框标题给平台桥，返回落点完整路径', async () => {
+    const calls: Array<{ fileName: string; data: Uint8Array; title?: string }> = [];
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, 0x3b]);
     const svc = new FileIOServiceImpl(
       bridgeWith({
-        exportDirectory: async (srcDir: string, opts?: { title?: string }) => {
-          calls.push({ srcDir, ...(opts?.title !== undefined ? { title: opts.title } : {}) });
-          return path.join('D:', '发布', '某包');
+        exportFile: async (fileName: string, data: Uint8Array, opts?: { title?: string }) => {
+          calls.push({
+            fileName,
+            data,
+            ...(opts?.title !== undefined ? { title: opts.title } : {}),
+          });
+          return path.join('D:', '发布', '某包.zip');
         },
       }),
     );
-    const target = await svc.exportDirectory(path.join(tmpDir, '某包'), { title: '导出「某包」到…' });
-    expect(target).toBe(path.join('D:', '发布', '某包'));
-    expect(calls).toEqual([
-      { srcDir: path.join(tmpDir, '某包'), title: '导出「某包」到…' },
-    ]);
+    const target = await svc.exportFile('某包.zip', bytes, { title: '导出「某包」到…' });
+    expect(target).toBe(path.join('D:', '发布', '某包.zip'));
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.fileName).toBe('某包.zip');
+    // 字节必须**原样**递过桥：内核只搬运，转码就是"一次转码毁半库"的那类错
+    expect([...(calls[0]?.data ?? [])]).toEqual([0xef, 0xbb, 0xbf, 0x3b]);
+    expect(calls[0]?.title).toBe('导出「某包」到…');
   });
 
   it('用户取消对话框 → 原样返回 null（取消不是失败，不抛不记错）', async () => {
-    const svc = new FileIOServiceImpl(bridgeWith({ exportDirectory: async () => null }));
-    await expect(svc.exportDirectory(path.join(tmpDir, '某包'))).resolves.toBeNull();
+    const svc = new FileIOServiceImpl(bridgeWith({ exportFile: async () => null }));
+    await expect(svc.exportFile('某包.zip', new Uint8Array([1]))).resolves.toBeNull();
   });
 
   it('导出不受写白名单约束：一个可写根都没批也能导出', async () => {
     // 白名单管的是「改游戏目录」，不是「把副本拿出去」——落点由用户在系统对话框里
     // 显式选定，对话框本身即授权。这条断言把该设计意图钉住，防止后续误加闸。
-    const svc = new FileIOServiceImpl(bridgeWith({ exportDirectory: async () => 'D:/发布/某包' }));
+    const svc = new FileIOServiceImpl(bridgeWith({ exportFile: async () => 'D:/发布/某包.zip' }));
     svc.setWritableRoots([]);
     const src = path.join(tmpDir, 'game', '某包');
     expect(svc.isWritable(src)).toBe(false);
-    await expect(svc.exportDirectory(src)).resolves.toBe('D:/发布/某包');
+    await expect(svc.exportFile('某包.zip', new Uint8Array([1]))).resolves.toBe('D:/发布/某包.zip');
   });
 });
