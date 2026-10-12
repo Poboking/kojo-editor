@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import type { DirEntry, ErbIndex, GameProject } from '@kojo/plugin-api';
 
 interface Props {
@@ -10,6 +10,12 @@ interface Props {
   listDir?: (path: string) => Promise<DirEntry[]>;
   /** 导入作者包为工作区项目（口上项目批 P-F；缺省 → 不显示导入菜单项） */
   onImportPackage?: (pkg: { dir: string; label: string }) => void;
+  /**
+   * 目录缓存失效信号（HK-5，2026-10-13）：宿主在口上域发生外部改动时递增。
+   * 值本身没有意义，**变化**才是事件——用 nonce 而不是布尔，是因为连续两次改动
+   * 都必须各刷新一次（布尔会在第二次被 React 合并掉）。
+   */
+  refreshNonce?: number;
 }
 
 /** 作者包子目录（角色目录下的一层子文件夹 = 作者版本号包目录） */
@@ -61,6 +67,23 @@ export function visibleEntries(
   return depth === 0 ? entries.filter((d) => !skip.has(pkey(d.path))) : [...entries];
 }
 
+/**
+ * 失效时该重列哪些目录（纯函数，可单测；HK-5）。
+ *
+ * = **正在显示的**：展开着的子目录 ∪ 已点开「真实文件夹视图」的包目录。
+ * 折叠着的不重列——等下次展开惰性取，为看不见的东西打一圈 `listDir` 是纯浪费；
+ * 展开态本身一概不动（那是作者的现场，不是缓存的一部分）。
+ */
+export function dirsToRelist(
+  subOpen: ReadonlySet<string>,
+  openPkgKeys: ReadonlySet<string>,
+  packages: readonly { key: string; dir: string }[],
+): string[] {
+  const out = new Set<string>(subOpen);
+  for (const p of packages) if (openPkgKeys.has(p.key)) out.add(p.dir);
+  return [...out];
+}
+
 /** 右键菜单作用域：单个角色 / 整棵树根 / 单个作者包（导入口径，P-F） */
 type MenuScope =
   | { kind: 'group'; group: Group }
@@ -103,8 +126,13 @@ function baseName(p: string): string {
  *
  * 展开状态由组件内 state 持有——宿主（ProjectView）以稳定组件身份注入，
  * 打开文件不会因重渲染而丢掉展开状态。
+ *
+ * **目录缓存有一条外部失效通道**（HK-5，2026-10-13）：宿主在口上域发生外部改动时
+ * 递增 `refreshNonce`，树重列**正在显示**的那些目录，展开态一律不动、旧列表原地留着
+ * （不闪空白）。此前 `dirCache` 没有任何失效通道 ⇒ 外面丢进一个文件，树里不出现，
+ * 除非重开项目——实机线在 §5.87 里把这条明记为"留给能做 GUI 的那一批"。
  */
-export function FileTree({ project, index, activeFile, onOpenFile, listDir, onImportPackage }: Props): ReactElement {
+export function FileTree({ project, index, activeFile, onOpenFile, listDir, onImportPackage, refreshNonce }: Props): ReactElement {
   const [filter, setFilter] = useState('');
   const [opened, setOpened] = useState<Set<string>>(new Set());
   /** 展开了「真实文件夹内容」的作者包（默认关——只露 ERB 列表） */
@@ -186,13 +214,39 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
   const pkgDirOf = (g: Group, subLabel: string): string =>
     `${g.prefix.replace(/[\\/]+$/, '')}/${subLabel}`;
 
-  /** 真实文件夹视图的惰性加载（按绝对路径；失败落 'error' 态自解释） */
+  /**
+   * 每个目录"最新一次列举请求"的序号。响应回来时只认自己那一次：
+   * 外部改动会紧接着再发一次列举，若旧请求后到，屏幕上就会**倒灌回改动前那份目录**
+   * ——而且没有下一次失效来纠正它（作者看到的就是"文件没出现"这个老 bug 的又一形态）。
+   */
+  const dirReq = useRef<Map<string, number>>(new Map());
+
+  /** 发起一次列举（不看缓存，总是重新取；结果按请求序号认领先后） */
+  const fetchDir = (dir: string): void => {
+    if (!listDir) return;
+    const seq = (dirReq.current.get(dir) ?? 0) + 1;
+    dirReq.current.set(dir, seq);
+    setDirCache((m) =>
+      // **首次展开**才显示「读取目录…」；失效重列时旧内容原地留着、新结果到了再换。
+      // 否则作者每按一次 Ctrl+S（保存也是外部改动的一种），整棵树的展开层就闪一下空白——
+      // 这是本批自己引入的风险：以前根本没有第二次列举，现在有了，就不能让它打扰人。
+      m.has(dir) ? m : new Map(m).set(dir, 'loading'),
+    );
+    void listDir(dir)
+      .then((entries) => {
+        if (dirReq.current.get(dir) !== seq) return;
+        setDirCache((m) => new Map(m).set(dir, entries));
+      })
+      .catch(() => {
+        if (dirReq.current.get(dir) !== seq) return;
+        setDirCache((m) => new Map(m).set(dir, 'error'));
+      });
+  };
+
+  /** 真实文件夹视图的惰性加载（按绝对路径；已缓存则零请求） */
   const ensureDir = (dir: string): void => {
     if (!listDir || dirCache.has(dir)) return;
-    setDirCache((m) => new Map(m).set(dir, 'loading'));
-    void listDir(dir)
-      .then((entries) => setDirCache((m) => new Map(m).set(dir, entries)))
-      .catch(() => setDirCache((m) => new Map(m).set(dir, 'error')));
+    fetchDir(dir);
   };
 
   /** 点击包标题行 = 追加 / 收起真实文件夹内容（ERB 列表始终原地不动） */
@@ -230,6 +284,34 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
     setPkgFolder((prev) => new Set([...prev, ...pkgs.map((p) => p.key)]));
     for (const p of pkgs) ensureDir(p.dir);
   };
+
+  /**
+   * 外部改动 → 目录缓存失效（HK-5；实机线 §5.87 留下的欠账，本组接）。
+   *
+   * 三条刻意的克制：
+   * - **只重列正在显示的目录**：折叠着的等下次展开惰性取，不为看不见的东西打一圈 IO；
+   * - **展开态一律不动**：`opened` / `pkgFolder` / `subOpen` 是作者的现场，不是缓存的一部分
+   *   （当年"打开文件就丢展开态"那个 bug 就败在把现场当缓存一起重挂）；
+   * - **依赖只有 nonce**：展开/折叠自身变化绝不能触发重列，否则点一下树就是一次目录请求风暴。
+   */
+  /**
+   * 重列当前显示的目录。**失效信号与手动「重新读取」共用这一条**（HK-5）。
+   *
+   * 手动那枚按钮不是多余的装饰：`file.watchState` 会如实报 `partial` / `unavailable`
+   * （§5.84）——某些根没监视上、或平台根本没有监视能力（浏览器开发壳）。那时
+   * 自动失效一条都不会到，作者手里必须还有一条不用重开项目的路。
+   */
+  const relistShown = (): void => {
+    for (const dir of dirsToRelist(subOpen, pkgFolder, collectPackages({ kind: 'root' }))) fetchDir(dir);
+  };
+
+  const lastNonce = useRef(refreshNonce);
+  useEffect(() => {
+    if (refreshNonce === undefined || refreshNonce === lastNonce.current) return;
+    lastNonce.current = refreshNonce;
+    relistShown();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshNonce]);
 
   const openMenu = (e: ReactMouseEvent, scope: MenuScope): void => {
     e.preventDefault();
@@ -335,6 +417,13 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
           }}
         >
           折叠全部
+        </button>
+        <button
+          className="ghost small"
+          title="重新读取已展开的目录（外部新增/删除的文件没自动出现时用；监视不可用时这是唯一入口）"
+          onClick={relistShown}
+        >
+          重新读取
         </button>
       </div>
       <ul className="tree-groups">

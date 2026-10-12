@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DirEntry } from '@kojo/plugin-api';
-import { visibleEntries } from '../src/ui/FileTree';
+import { dirsToRelist, visibleEntries } from '../src/ui/FileTree';
 
 /**
  * 真实文件夹视图的条目筛选（反馈 6/7）。
@@ -52,5 +52,35 @@ describe('visibleEntries · 真实文件夹条目筛选', () => {
     const out = visibleEntries(input, 0, new Set());
     expect(out).not.toBe(input);
     expect(input).toEqual(ROOT_ERBS);
+  });
+});
+
+describe('dirsToRelist · 外部改动后该重列哪些目录（HK-5）', () => {
+  const PKGS = [
+    { key: '#1 灵梦::少女之梦', dir: 'C:/game/kojo/001/少女之梦' },
+    { key: '#1 灵梦::没写的', dir: 'C:/game/kojo/001/没写的' },
+    { key: '#4 觉::深掘り', dir: 'C:/game/kojo/004/深掘り' },
+  ];
+
+  it('已点开真实文件夹视图的包 + 展开着的子目录，两者都重列', () => {
+    const out = dirsToRelist(new Set(['C:/game/kojo/001/少女之梦/裏']), new Set(['#1 灵梦::少女之梦']), PKGS);
+    expect(new Set(out)).toEqual(
+      new Set(['C:/game/kojo/001/少女之梦', 'C:/game/kojo/001/少女之梦/裏']),
+    );
+  });
+
+  it('折叠着的包**不**重列（看不见的东西不打 IO），但展开的子目录要（包可能整个折叠而子层还开着）', () => {
+    expect(dirsToRelist(new Set(), new Set(), PKGS)).toEqual([]);
+    expect(dirsToRelist(new Set(['C:/x/子']), new Set(), PKGS)).toEqual(['C:/x/子']);
+    expect(dirsToRelist(new Set(), new Set(['#4 觉::深掘り']), PKGS)).toEqual(['C:/game/kojo/004/深掘り']);
+  });
+
+  it('同一个目录只出现一次（子目录恰好与包同名路径时不去重＝重复请求）', () => {
+    const out = dirsToRelist(new Set(['C:/game/kojo/001/少女之梦']), new Set(['#1 灵梦::少女之梦']), PKGS);
+    expect(out).toEqual(['C:/game/kojo/001/少女之梦']);
+  });
+
+  it('菜单项按 key 认，不认目录名（改包名不会把失效指错地方）', () => {
+    expect(dirsToRelist(new Set(), new Set(['#1 灵梦::不存在的包']), PKGS)).toEqual([]);
   });
 });

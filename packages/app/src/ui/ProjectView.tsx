@@ -4,6 +4,7 @@ import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-ap
 import { WellKnownCommands } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
+import { affectsKojoTree, createEventCoalescer } from './external-change';
 import { FileTree } from './FileTree';
 import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
 import type { ShellCommandSpec } from './commands';
@@ -48,6 +49,13 @@ function tabName(path: string): string {
   const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return i >= 0 ? path.slice(i + 1) : path;
 }
+
+/**
+ * 文件树重列的合批窗口（HK-5）。比内核去抖（200ms，§5.84）略宽：
+ * 树重列一次要打好几个 `listDir`，比"重载一个 model"贵；
+ * 而对作者来说"外部丢的文件在不到一秒后自己出现"已经足够即时，再小没有体感收益。
+ */
+const TREE_REFRESH_WINDOW_MS = 400;
 
 /**
  * 项目视图（UI 重设计批 P1；P3 多标签）：壳层 = 五区布局（ShellLayout），
@@ -150,8 +158,28 @@ export function ProjectView({
     },
     [kernel],
   );
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, importPackage });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, importPackage };
+  /* ---------------- 外部改动 → 文件树目录重列（HK-5；接 §5.87 留下的欠账） ---------------- */
+
+  /** 递增即失效信号（FileTree 只认"变化"；用布尔会把连续两次外部改动合并掉） */
+  const [treeNonce, setTreeNonce] = useState(0);
+
+  useEffect(() => {
+    // 合批窗口：一次外部写入常炸出多条事件（原子写临时文件 + rename、连写几份档）。
+    // 内核去抖已经按文件合过一轮（§5.84），这里合的是"整棵树的目录重列"这一层。
+    const coalescer = createEventCoalescer(() => setTreeNonce((n) => n + 1), TREE_REFRESH_WINDOW_MS);
+    const un = kernel.bus.on('file.changed', (ev) => {
+      // 首动作零 IO：监视根是整个项目目录，游戏写存档、写图片缓存同样投递事件，
+      // 而树只列举口上域——分野判错就是每次外部写入都白重列一遍（§5.87 立的纪律）。
+      if (affectsKojoTree(ev.path, project.kojoPaths)) coalescer.push();
+    });
+    return () => {
+      un();
+      coalescer.dispose();
+    };
+  }, [kernel, project]);
+
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, importPackage, treeNonce });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, importPackage, treeNonce };
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
       const a = fileTreeArgsRef.current;
@@ -163,6 +191,7 @@ export function ProjectView({
           onOpenFile={a.onOpenFile}
           listDir={a.listDir}
           onImportPackage={a.importPackage}
+          refreshNonce={a.treeNonce}
         />
       );
     };
