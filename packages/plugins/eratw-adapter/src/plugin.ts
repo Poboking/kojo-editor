@@ -13,7 +13,7 @@ import type {
 import { KernelServices, combineDigests, foldDigest, join } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
-import { createEratwFamilyIndex } from './family-index';
+import { clearKojoFamilyMemo, createEratwFamilyIndex } from './family-index';
 import { createEratwConventions } from './conventions';
 import { loadEratwVariableSchema } from './variable-schema';
 import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
@@ -170,6 +170,13 @@ export function createEratwAdapterPlugin(): Plugin {
           ctx.bus.emit('ui.overlay.open', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eratw-adapter' });
         }),
       );
+
+      /**
+       * 名称解析 memo 随项目关闭清空（§5.73）。
+       * 只在 `closed` 挂就够覆盖切项目：内核 `open()` 会先 `close()` 旧项目并广播该事件，
+       * 而首次开项目时表本来就是空的。纯函数缓存，清空不改变任何判定。
+       */
+      ctx.onDispose(ctx.bus.on('project.closed', () => clearKojoFamilyMemo()));
 
       refreshWsProjects();
 

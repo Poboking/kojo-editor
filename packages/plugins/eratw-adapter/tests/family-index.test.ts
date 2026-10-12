@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createEratwFamilyIndex, parseKojoFamily } from '../src/family-index';
+import {
+  clearKojoFamilyMemo,
+  createEratwFamilyIndex,
+  createKojoFamilyMemo,
+  parseKojoFamily,
+} from '../src/family-index';
 
 /**
  * 用例全部取自 eraTW 4.980 汉化整合版**真实函数名**
@@ -161,5 +166,88 @@ describe('家族识别 · K 锚点语义（BUG-3 显式化：取最后一个 _K{
 
   it('无 _K 编号段 → null（与口上命名无关）', () => {
     expect(parseKojoFamily('X_MESSAGE_COUNTER')).toBeNull();
+  });
+});
+
+describe('名称解析 memo（§5.73：共享实例的前提条件必须可证）', () => {
+  /** 覆盖各形态的代表名（声明 / 初始家族 / 具名家族 / MESSAGECHECK / KX 占位 / 无关名） */
+  const GOLDEN: readonly string[] = [
+    'M_KOJO_K1',
+    'M_KOJO_K1_2',
+    'M_KOJO_MESSAGE_COM_K1_30',
+    'M_KOJO_少女之梦_COLOR_K1',
+    'M_KOJO_X_MESSAGECHECK_1_K1_1',
+    'M_KOJO_MESSAGE_COM_KX_1',
+    'K1_BEFORETRAIN少女之梦',
+    'X_MESSAGE_COUNTER_K2_1',
+    'X_MESSAGE_COUNTER',
+    'GETVAR',
+  ];
+
+  it('金名表跑两遍逐字段一致（memo 不改变任何判定）', () => {
+    const first = GOLDEN.map((n) => parseKojoFamily(n));
+    const second = GOLDEN.map((n) => parseKojoFamily(n));
+    expect(second).toEqual(first);
+  });
+
+  it('同一名字二次调用返回**同一实例**（这就是 memo 在生效的读数）', () => {
+    const a = parseKojoFamily('M_KOJO_MESSAGE_COM_K1_30');
+    const b = parseKojoFamily('M_KOJO_MESSAGE_COM_K1_30');
+    expect(a).not.toBeNull();
+    expect(b).toBe(a);
+  });
+
+  it('不同名字各自占一个条目（memo 不会把两个名字并成一个）', () => {
+    const memo = createKojoFamilyMemo();
+    const declare = memo.parse('M_KOJO_K1');
+    const face = memo.parse('M_KOJO_K1_2');
+    expect(memo.size()).toBe(2);
+    expect(declare).toMatchObject({ kind: 'declare', selector: 0 });
+    expect(face).toMatchObject({ kind: 'declare', selector: 2 });
+  });
+
+  it('结果被冻结：改写尝试直接抛错——共享实例的安全前提，不是优化', () => {
+    const m = parseKojoFamily('M_KOJO_少女之梦_COLOR_K1')!;
+    expect(Object.isFrozen(m)).toBe(true);
+    expect(() => {
+      (m as unknown as { family: string }).family = '被改写了';
+    }).toThrow();
+    // 抛错后缓存里的值没被带跑
+    expect(parseKojoFamily('M_KOJO_少女之梦_COLOR_K1')!.family).toBe('少女之梦');
+  });
+
+  it('null 结果同样进 memo（非口生命名占了大量调用，每次重跑 regex 链就是本批要消掉的成本）', () => {
+    const memo = createKojoFamilyMemo();
+    expect(memo.size()).toBe(0);
+    memo.parse('GETVAR');
+    memo.parse('GETVAR');
+    expect(memo.size()).toBe(1);
+    expect(memo.parse('GETVAR')).toBeNull();
+  });
+
+  it('到上限**整表清空**而不是无限增长；清空后判定不变', () => {
+    const memo = createKojoFamilyMemo(3);
+    memo.parse('M_KOJO_K1');
+    memo.parse('M_KOJO_K1_2');
+    memo.parse('X_MESSAGE_COUNTER_K2_1');
+    expect(memo.size()).toBe(3);
+    memo.parse('M_KOJO_K1'); // 命中已有条目 ⇒ 不涨
+    expect(memo.size()).toBe(3);
+    memo.parse('M_KOJO_少女之梦_COLOR_K1'); // 第 4 个新名字 ⇒ 超限 ⇒ 清表后只留它
+    expect(memo.size()).toBe(1);
+    expect(memo.parse('M_KOJO_K1')).toMatchObject({ kind: 'declare', characterNo: 1 });
+  });
+
+  it('clearKojoFamilyMemo() 之后仍是同一判定（切项目只丢缓存，不丢正确性）', () => {
+    const before = parseKojoFamily('M_KOJO_EVENT_K1_ONABARE_2');
+    clearKojoFamilyMemo();
+    const after = parseKojoFamily('M_KOJO_EVENT_K1_ONABARE_2');
+    expect(after).toEqual(before);
+    expect(after).not.toBe(before); // 清过表 ⇒ 是新解析出来的实例
+  });
+
+  it('规则对象（functionFamilyIndex）走的是同一个 memo 入口', () => {
+    const rule = createEratwFamilyIndex();
+    expect(rule.match('M_KOJO_MESSAGE_COM_K1_30')).toBe(parseKojoFamily('M_KOJO_MESSAGE_COM_K1_30'));
   });
 });

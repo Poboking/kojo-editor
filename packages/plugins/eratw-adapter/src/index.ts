@@ -7,7 +7,13 @@
 export { createEratwAdapterPlugin } from './plugin';
 export { ERATW } from './constants';
 export { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
-export { createEratwFamilyIndex, parseKojoFamily } from './family-index';
+export {
+  clearKojoFamilyMemo,
+  createEratwFamilyIndex,
+  createKojoFamilyMemo,
+  kojoFamilyMemoStats,
+  parseKojoFamily,
+} from './family-index';
 export { createEratwConventions } from './conventions';
 export { createEratwFaceTable } from './face-templates';
 export { loadEratwCallProtocol } from './call-protocol';

@@ -176,12 +176,11 @@
     悬停看原文出处）+ 导入向导随 meta 携带原作者。**口径 = 高精度宁缺勿滥**：
     实测 214 包只抽到 26 个署名，这是设计结果——假阳性会让人把别人的作品当无主作品改。
     语料基线常驻 `attribution.corpus.test.ts`（`KOJO_SMOKE_PROJECT` 守门）。
-- **当前基线（2026-10-12 校验按文件增量批实测）：1440 passed / 11 skipped（1451），
+- **当前基线（2026-10-12 名称解析 memo 批实测）：1448 passed / 11 skipped（1459），
   83 文件过 / 6 跳；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；
   `pnpm --filter @kojo/app build` ✓；`cargo test --lib` 12 项全绿。**
-  数字闭合：抽取按文件增量批 1432 + 本批净增 8 = 1440（全部落在 `convention-linter/tests/engine.test.ts`
-  24→32；`snapshot.test.ts` 整组重写但等量 12→12，adapter `conventions.test.ts` 14→14 只是调用点换到
-  `runFileRule` 聚合）。
+  数字闭合：校验按文件增量批 1440 + 本批净增 8 = 1448（全部在 `family-index.test.ts`
+  的「名称解析 memo」组，判定逻辑与用例数零改动）。
   ⚠ 跑全量**不要**设 `KOJO_SMOKE_PROJECT`（会放行依赖 sav 存档的注入测试而本机零存档必红）；
   语料基线单独带变量跑那一个文件即可。
 - **内核优化线（2026-10-12 批 P-A…P-F 同期，✅ 已收口进 master）**：L0 埋点 → 超长文件丝滑 →
@@ -206,7 +205,12 @@
   ⑨ 可增量复用的粒度由**被缓存的那件事自己声明**（校验规则 = `ConventionRule.scope:'file'` +
   `checkFile`），引擎不猜——猜错的代价不是变慢而是**悄悄吐出过期结论**。跨文件聚合的规则
   （按名 / 按角色）必须留在 `scope:'project'`；改判 `scope` 要同时改 `rulesDigest` 的输入，
-  并配"全量 vs 增量同值同序"的等价性测试。
+  并配"全量 vs 增量同值同序"的等价性测试；
+  ⑩ **共享实例的 memo 有三道前提**，缺一就不能加：被 memo 的函数必须是**纯函数**（只读入参与
+  模块常量表）、返回值一律 `Object.freeze`（ESM 严格模式下改写直接抛错——"不可变"从注释变成硬约束）、
+  要有**生命周期清空**通道（adapter 挂 `project.closed`；内核 `open()` 会先 `close()` 旧项目并广播它，
+  所以只挂 closed 就覆盖切项目）。上限策略：**满了整表清空而不是 LRU**——"全库一遍"的键集逐条淘汰
+  只会让下一遍重新解析。见 §5.73。
   **卫生批（§5.65）已收**：索引快照 v3 元组编码 **44.4 MB → 11.9 MB**（剥可派生字段 + 键名
   位置化；热读盘 250ms → 74ms，索引可用 623ms → 541ms）；三段统一成**单文件语义**
   （多项目残留与 `index-v1-*`/`v2-*` 孤儿自动清理，磁盘封顶 ~58 MB）；三个体感水位常驻进
@@ -219,7 +223,13 @@
   真实语料改 1 个 ERB：**校验自计 5754ms → 1198ms**（逐文件部分只剩 8ms，其余是跨文件规则必付），
   端到端校验水位 6508ms → **2564ms**；四轮 793 项分规则条数逐项一致。
   代价：全命中从 1ms 整块还原变 60ms 装配，磁盘 440KB → 1371KB。
-  仍欠：**跨文件规则那 1.1s**（按角色分组判据 / `parseKojoFamily` memo 两个方向）；
+  **名称解析 memo 批（§5.73）已收**：`parseKojoFamily` 套一层「函数名 → 结果」memo。
+  分布表（量出来的）：一次全量校验 **397,622 次**解析请求 / 去重 **99,101** 个名字 ⇒ **75% 是重复劳动**。
+  真实语料 touch 阶段**校验自计 1198ms → 746ms**，端到端"改一个文件后重开"2564ms → **2056ms**；
+  代价 15.6MB（gc 后，随 `project.closed` 清空）。前提不变量：纯函数 + `Object.freeze` 返回值 +
+  只读调用点已逐个审过。
+  仍欠：**`kojo-call-slot-coverage` 剩 231ms**（成本已从"解析名字"转移到 `maxForwardedSlotsFor(name)`，
+  同样是每名字纯函数，可挂在协议实例上）；按角色分组判据（要先量分布表）；
   `extractFunctionConditions` 仍未上并行通道。
 - **分支收口（IMPLEMENTATION-LOG §5.55）**：`feat/kernel-optimization` 因 `origin/master` 连续推进
   经历了**两轮 rebase**（第一轮撞在 `EditorPane.tsx` 与 `kernel/plugin-api` 的导出上，均取并集；
@@ -407,7 +417,7 @@
 | 文档 | 内容 |
 |---|---|
 | `docs/HANDOFF.md`（本文件） | **交接状态 + 下一批动手清单（新会话从这里开始）** |
-| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.72**：§5.49/§5.50 = 口上项目批与 T2 · §5.51–§5.53 = 内核优化批 · §5.54 = UI P4 补记 · §5.55 = 分支收口核验 · §5.56/§5.57 = T3/T4 · §5.58 = 开项目级联三段全持久化（体感丝滑批）· §5.59–§5.63 = 语法糖线各批 · §5.64 = 两线合流（编号让位 + ADR-0005 落地）· §5.65 = 快照卫生批（v3 元组编码 / 单文件收口 / 体感水位常驻）· §5.66 = 语法糖批 I 函数头时机中文反糖 · §5.67 = 语法糖批 J 状态赋值行反糖（含假阳性守卫）· §5.68 = 语法糖批 K 演出行「心形」投影（段数 −13%）· §5.69 = 语法糖批 L 规范 §3.8 扩「角色N的X」 · §5.70 = 抽取按文件增量批（判据分层：改一个 ERB 的重算 7.2s → 49ms）· §5.71 = 语法糖批 M 负结果（折叠前提被实测否证）· **§5.72 = 校验按文件增量批（三层判据 + 规则自声明计算粒度：改一个 ERB 5754ms → 1198ms）**） |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.73**：§5.49/§5.50 = 口上项目批与 T2 · §5.51–§5.53 = 内核优化批 · §5.54 = UI P4 补记 · §5.55 = 分支收口核验 · §5.56/§5.57 = T3/T4 · §5.58 = 开项目级联三段全持久化（体感丝滑批）· §5.59–§5.63 = 语法糖线各批 · §5.64 = 两线合流（编号让位 + ADR-0005 落地）· §5.65 = 快照卫生批（v3 元组编码 / 单文件收口 / 体感水位常驻）· §5.66 = 语法糖批 I 函数头时机中文反糖 · §5.67 = 语法糖批 J 状态赋值行反糖（含假阳性守卫）· §5.68 = 语法糖批 K 演出行「心形」投影（段数 −13%）· §5.69 = 语法糖批 L 规范 §3.8 扩「角色N的X」 · §5.70 = 抽取按文件增量批（判据分层：改一个 ERB 的重算 7.2s → 49ms）· §5.71 = 语法糖批 M 负结果（折叠前提被实测否证）· §5.72 = 校验按文件增量批（三层判据 + 规则自声明计算粒度：改一个 ERB 5754ms → 1198ms） · **§5.73 = 名称解析 memo 批（把跨文件规则的必付成本做小：校验 1198ms → 746ms）**） |
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
 | `docs/BASELINES.md` | 实测基线汇总（索引/回放/抽取/校验性能与正确性数字） |
 | `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` | **糖表层规范 v1.3**（v1.2 冻结版 + §3.8 一处增量，用户 2026-10-12 拍板）：语法/转译/产物逐条定义，golden 逐字节锚定（golden 断言按**标题+围栏**锚定，不再按行号） |
@@ -914,6 +924,7 @@ node tools/smoke-tauri-ipc.mjs
 | **`ConditionIndex.durationMs` 不含快照读盘**（引擎 `t0` 在 `load` 之后），而级联由 `project.opened` 自动催动、显式 `ensureIndex()` 只是汇合在途 Promise ⇒ 围 `ensureIndex()` 计时量到的是"汇合耗时"，12 MB 的还原成本整段漏掉（差点报出"抽取 15ms"） | 量级联某段 = **从 `project.open()` 起算的水位差**（前一水位减后一水位），别用自计 `durationMs` 当体感 |
 | bash coreutils 时常 127；`node -e` 多层引号/Markdown 反引号必翻车 | 一切用 node 临时 `.mjs` 文件或 Read/Write/Edit 工具；PowerShell 工具 stdout 不回显 |
 | **`node -e` / bash 里的多层引号与 `grep -E "...\(..."`**：Git-Bash 的 grep 常把 `-E` 当普通正则用（`Unmatched (`），带引号的 node 内联脚本必翻车 | 一律落成临时 `.mjs` 文件再 `node` 跑；数出现次数用 `node -e` 里的 `str.match(/.../gm).length` 而不是 grep |
+| **从代码路径"推"调用次数会推错**（本批实测：按 `find` + 命中后再一次 + `filter` 推 `kx-placeholder` 是 3×/名字 ⇒ 算出 594,621 次；真实读数是 397,622——`find` 在无命中时短路，而绝大多数名字无命中） | **给被优化的纯函数加计数读数**（`memo.stats()` 之类）再下结论；分布表必须是量出来的，不是推出来的（§5.73） |
 | **vitest 会把 `console.log` 的第一行并进 `stdout | <文件> > <套件> > <用例>` 那行头**（多行日志只丢首行，看起来像"没打印"）⇒ 用 `grep '^\[probe'` 过滤会把水位行整个漏掉，误判成"探针没测到" | 探针输出**重定向到文件**再 grep（`> .local/probe-x.txt 2>&1`），或把关键数字放在非首行 |
 | **bash 严重残缺时 pnpm/vitest/tsc shim 全挂**（`sed`/`dirname`/`uname` 缺失） | 直调 node：`node "D:/Code/Nodejs/node_global/node_modules/pnpm/bin/pnpm.mjs" install`；vitest → `node "node_modules/.pnpm/vitest@4.1.11_@types+node@2_1db5548ac037c87131628c83c4241b81/node_modules/vitest/vitest.mjs" run`；tsc → `node "node_modules/.pnpm/typescript@7.0.2/node_modules/typescript/lib/tsc.js" --noEmit -p tsconfig.json` |
 | **Edit 工具偶发"声称成功未落盘"，且同文件并行 Edit 会 EBUSY** | 关键修改后读回验证；**同一文件的多次 Edit 必须串行** |
@@ -960,18 +971,16 @@ node tools/smoke-tauri-ipc.mjs
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
 2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1432 passed / 11 skipped（1443）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.72 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.73 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前三条主线**：
    - **体感丝滑线（本组主目标，性能）**：三段级联全部持久化（§5.58）→ 快照瘦身与卫生（§5.65）→
-     抽取按文件增量（§5.70）→ **校验按文件增量（§5.72）**。真实语料当前水位（从 `project.open` 起算）：
-     冷 索引 2.3s / 条件 10.0s / 校验 10.1s；**热（未改动）三段 ≈ 1.0s**；
-     **改一个 ERB 后重开 ≈ 2.6s**（曾经光校验段就要 6.0s）。
-     **下一批首选 = 跨文件规则那 1.1s**（touch 阶段校验自计 1198ms 里 1050ms 是三条 `scope:'project'`
-     规则的重算）。两个方向，**先探针拿分布再立项**（§5.71 的负结果教训）：
-     ① **按角色分组判据**——`kx-placeholder` / `kojo-completeness` / `kojo-call-slot-coverage`
-     都可按角色号切桶，判据 = 该角色文件集合的 mtime 折叠；要引入"分组"这层新概念；
-     ② **`parseKojoFamily` 加 memo**——同一函数名一次运行内被解析 3–6 次（`kx` 里就调三次），
-     这是那 1.1s 的构成主体；属"把必付成本做小"，与缓存无关，可独立立项。
+     抽取按文件增量（§5.70）→ 校验按文件增量（§5.72）→ **名称解析 memo（§5.73）**。
+     真实语料当前水位（从 `project.open` 起算）：冷 索引 2.4s / 条件 9.8s / 校验 9.9s；
+     **热（未改动）三段 ≈ 1.0s**；**改一个 ERB 后重开 ≈ 2.1s**（这一项曾 6.5s → 2.6s → 2.1s）。
+     **下一批首选 = `kojo-call-slot-coverage` 剩的 231 ms**：成本已从"解析名字"转移到
+     `maxForwardedSlotsFor(name)`——它同样是**每个名字一个纯函数**，可挂在协议实例上的 Map 里
+     （协议重建即天然失效，不需要新的缓存语义）。次选 = 按角色分组判据（`kx` / `completeness` 按角色号
+     切桶），但**先要一张分布表**（每个角色的函数数、一次改动波及几个角色）——§5.71 那条负结果的教训。
      次要：`extractFunctionConditions` 上并行通道（前置 = `VariableSchema` 导出原始表，路线文档 §三 L1）。
    - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 + T2.1 + T3 + T4 已通。
      **下一批首选 = 导出 ZIP（TS 层，用户 2026-10-12 拍板）**：

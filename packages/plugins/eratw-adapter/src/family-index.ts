@@ -93,10 +93,16 @@ const MESSAGECHECK_MARKER = '_MESSAGECHECK';
 /* ------------------------------- 主解析 ------------------------------- */
 
 /**
- * 解析单个函数名。
+ * 解析单个函数名（**纯函数**：只读入参与模块常量表）。
  * @returns FamilyMatch；与口上命名无关的函数返回 null（绝不猜测）。
+ *
+ * 外部一律走这个入口 ⇒ 自动享有 §5.73 的名称 memo；`createKojoFamilyMemo()` 用于测试与独立作用域。
  */
 export function parseKojoFamily(rawName: string): FamilyMatch | null {
+  return sharedFamilyMemo.parse(rawName);
+}
+
+function parseKojoFamilyRaw(rawName: string): FamilyMatch | null {
   const name = rawName.replace(/[,;\s]+$/, ''); // 容忍尾部逗号/空白（真实语料存在）
 
   // 1) 家族声明：M_KOJO_K{n} / M_KOJO_K{n}_{selector}
@@ -197,7 +203,9 @@ function make(
     isMessageCheck?: boolean;
   },
 ): FamilyMatch {
-  return {
+  // 冻结是 memo 的前提（见下方 createKojoFamilyMemo）：缓存的是**共享实例**，
+  // 允许改写就会把一次判定漏进别的调用方。实测冻结 +4ms/99k、内存零增量。
+  return Object.freeze({
     kind: p.kind,
     prefix: p.prefix ?? '',
     family: p.family,
@@ -208,7 +216,7 @@ function make(
     isMessageCheck: p.isMessageCheck ?? false,
     slot: p.slot ?? '',
     isPlaceholder: p.isPlaceholder ?? false,
-  };
+  });
 }
 
 /** head 分解：剥 MESSAGECHECK（中缀）→ 特殊结构 → 普通面 */
@@ -268,6 +276,83 @@ function decomposeHead(headIn: string, base: PartialMatch): FamilyMatch | null {
 function stripFamilyMarker(head: string): string {
   if (!head) return '';
   return head.startsWith('_') ? head.slice(1) : head;
+}
+
+/* ---------------------------- 名称解析 memo ---------------------------- */
+
+/**
+ * 「函数名 → 解析结果」的 memo（2026-10-12 §5.73）。
+ *
+ * **为什么值得**（真实语料 2,285 ERB / 99,101 个去重名，读数由 `kojoFamilyMemoStats()` 量得）：
+ * 一次全量校验产生 **397,622 次**名称解析请求（命中 298,521 / 未命中 99,101）——四条规则各自扫一遍
+ * 全库（`kx-placeholder` 与 `kojo-completeness` 扫 `byName` 的每个 ref，`messagecheck-structure`
+ * 与 `kojo-call-slot-coverage` 扫每个函数），平均**每个名字被解析 4 次**，其中 **75% 是重复劳动**。
+ * 实测解析一遍 265 ms、四遍约 1,060 ms；memo 把那 298,521 次重复变成 `Map.get`
+ * （同样一遍遍历实测 8 ms）。
+ *
+ * （这里翻过一次车：按"`find` + 命中后再一次 + `filter`"推算 `kx` 是 3×/名字，得出 594,621 次——
+ * **推错了**，`find` 在无命中时短路，而绝大多数名字无命中。**调用次数要量，不要从代码路径推**。）
+ *
+ * **内存实测**：99,101 条目 ≈ 15.6 MB（用同形状对象在 Map 里存 99,101 条量得，gc 后）；
+ * `Object.freeze` 不加内存，CPU +4 ms/99k。所以配了 `clearKojoFamilyMemo()`，由 adapter 挂在
+ * `project.closed` 上清表（内核 `open()` 会先 `close()` 旧项目 ⇒ 覆盖切项目路径）⇒ 不随之累积。
+ * 上限是兜底：**满了整表清空而不是 LRU**——名字集是"全库一遍"的形态，逐条淘汰只会让下一遍
+ * 重新解析，白留半成品。
+ *
+ * **共享实例为什么安全**：`parseKojoFamilyRaw` 是纯函数，`make()` 的返回值一律
+ * `Object.freeze` ⇒ 任何改写尝试在 ESM 严格模式下直接抛错。这条不变量是 memo 的**前提**，
+ * 不是优化——一旦被缓存的结果能被调用方改，memo 就会把 A 文件的判定漏进 B 文件。
+ */
+const FAMILY_MEMO_LIMIT = 200_000;
+
+export interface KojoFamilyMemo {
+  parse(rawName: string): FamilyMatch | null;
+  /** 当前条目数（内存上限的读数；测试用来验淘汰行为） */
+  size(): number;
+  /** 命中 / 未命中次数——"memo 到底有没有在生效"的读数，不靠推断 */
+  stats(): { hits: number; misses: number };
+  clear(): void;
+}
+
+export function createKojoFamilyMemo(limit = FAMILY_MEMO_LIMIT): KojoFamilyMemo {
+  const memo = new Map<string, FamilyMatch | null>();
+  let hits = 0;
+  let misses = 0;
+  return {
+    parse(rawName: string): FamilyMatch | null {
+      const hit = memo.get(rawName);
+      // 命中 null **也算命中**：非口生命名的函数（引擎助手、AA 工具等）同样占大量调用，
+      // 每次重跑那条 regex 链就是本批要消掉的成本
+      if (hit !== undefined) {
+        hits++;
+        return hit;
+      }
+      misses++;
+      const result = parseKojoFamilyRaw(rawName);
+      if (memo.size >= limit) memo.clear();
+      memo.set(rawName, result);
+      return result;
+    },
+    size: () => memo.size,
+    stats: () => ({ hits, misses }),
+    clear: () => memo.clear(),
+  };
+}
+
+const sharedFamilyMemo = createKojoFamilyMemo();
+
+/**
+ * 清掉共享 memo（切项目时调用）。
+ * 纯函数缓存，清空不改变任何判定，只是下一遍重新解析——留着的意义小于它的内存占用。
+ */
+export function clearKojoFamilyMemo(): void {
+  sharedFamilyMemo.clear();
+}
+
+/** 共享 memo 的读数（诊断用：条目数 + 命中/未命中） */
+export function kojoFamilyMemoStats(): { entries: number; hits: number; misses: number } {
+  const { hits, misses } = sharedFamilyMemo.stats();
+  return { entries: sharedFamilyMemo.size(), hits, misses };
 }
 
 /* ---------------------------- 规则对象 ---------------------------- */
