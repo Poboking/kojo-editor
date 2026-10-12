@@ -816,58 +816,64 @@ textarea {
   padding-left: 22px;
   margin-bottom: 2px;
 }
-/* 作者包双态过渡（平铺口上 ↔ 真实文件夹；高度过渡收起 + 原地淡入） */
-.pkg-flat-wrap {
-  display: grid;
-  grid-template-rows: 1fr;
-  transition:
-    grid-template-rows var(--dur-2) var(--ease-out),
-    opacity var(--dur-1) var(--ease-out);
+/* 作者包真实文件夹视图（2026-10-12 反馈 6/7 重做）。
+   旧实现是「平铺态 ↔ 文件夹态」二选一 + 高度过渡 + 入场动画，且两棵 ul 重复 key
+   → 整体卸载重挂，来回点击时整棵树抖动。现改为**追加式**：ERB 列表原地不动，
+   真实目录内容插在它上面，无动画、不卸载，故这里不再需要任何过渡规则。 */
+.pkg-real {
+  margin-bottom: 0;
 }
-.pkg-flat-wrap.closed {
-  grid-template-rows: 0fr;
-  opacity: 0;
+/* 可展开的子目录行（真实文件夹视图；与作者包行同族，缩进由内联 padding-left 给） */
+.tree-dir {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 1px 8px;
+  font-size: var(--fs-2);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
 }
-.pkg-flat-inner {
+.tree-dir:hover {
+  background: var(--hover);
+  border-color: transparent;
+}
+.tree-dir-name {
   overflow: hidden;
-  min-height: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.pkg-folder {
-  animation: pkg-folder-in var(--dur-2) var(--ease-out);
+/* 目录读取中 / 失败提示行 */
+.tree-note {
+  padding: 1px 8px;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  font-style: normal;
 }
-@keyframes pkg-folder-in {
-  from {
-    opacity: 0;
-    transform: translateY(-3px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-/* 包内真实文件夹视图的附加条目（非 ERB / 子目录；只读展示，不进索引） */
+/* 包内真实文件夹视图的附加条目（非 ERB 的压缩包/资源等；只展示不打开） */
 .tree-extra {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 1px 8px;
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--fs-1);
   cursor: default;
-}
-.tree-extra-icon {
-  flex: none;
-  font-size: 11px;
-  opacity: 0.8;
 }
 .tree-extra-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tree-extra.tree-note {
-  font-style: italic;
-  opacity: 0.7;
+/* 可打开的附加文件（txt / md / erh / 无扩展名等）——与 ERB 行同族，只是不在索引内 */
+.tree-extra-file {
+  font-family: var(--font-mono);
+  font-size: var(--fs-1);
 }
 
 /* 右键菜单（壳层轻量实现） */
@@ -1149,15 +1155,22 @@ textarea {
   min-height: 0;
 }
 /* ERB 只读预览徽章（升糖重定位批：编辑器默认不写 ERB，升糖只用于预览） */
+/* ERB 只读状态徽章（2026-10-12 反馈 5 归一）。
+   原先自造一套度量（11px / radius-1 / 1px 6px），与全站徽章族（.nav-badge 等
+   10px / radius 3px / 0 3px）不一致，看着像另一个系统的控件。现对齐徽章族度量，
+   语义色仍走 amber 变量而非字面量。
+   ⚠ 全站现有 4 套徽章样式（nav-badge / rp-badge / ab-badge / sv-verdict-badge）本就重复，
+   合并成单一 .badge 基类属 UI P4 打磨范围，不在本条顺手改（会波及 4 个插件）。 */
 .erb-mode-hint {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-size: var(--fs-1);
   color: var(--amber);
   border: 1px solid var(--border);
-  border-radius: var(--radius-1);
-  padding: 1px 6px;
+  border-radius: 3px;
+  padding: 0 4px;
   white-space: nowrap;
 }
 

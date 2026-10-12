@@ -30,6 +30,37 @@ interface Group {
 
 type DirState = DirEntry[] | 'loading' | 'error';
 
+/** 压缩包 / 图片等二进制附件：只展示不可打开（打开只会给 Monaco 喂一堆乱码） */
+const BINARY_EXT = /\.(7z|zip|rar|png|jpe?g|gif|bmp|ico|webp|mp3|ogg|wav|ttf|otf|dll|exe)$/i;
+
+/** 路径归一键（Windows 大小写不敏感；同一文件在两处只出现一次） */
+function pkey(p: string): string {
+  return p.replace(/[\\/]+/g, '/').toLowerCase();
+}
+
+/** ERB 系扩展名（与 erb-parser 的 `ERB_EXT = /\.er[bm]$/i` 同口径）：
+ *  嵌套目录里的 ERB 走普通文件行样式，非 ERB 才标「不在索引内」 */
+function erbExt(name: string): boolean {
+  return /\.er[bm]$/i.test(name);
+}
+
+/**
+ * 真实文件夹视图某一层该显示哪些条目（纯函数，可单测）。
+ *
+ * `skip`（包层已平铺的 ERB 路径）**只在 depth === 0 生效**：那里与平铺列表同级，
+ * 不去重就是同一层级出现两遍同一个文件。嵌套目录必须原样返回——它们住在另一层，
+ * 不是重复；若一并去重，装了 10 个面文件的子目录会被渲染成空目录，
+ * **等于对文件系统撒谎**（本函数就是为锁死这条不变量而存在：
+ * 实现在 `灵梦-少女之梦/没写的` 上踩过一次）。
+ */
+export function visibleEntries(
+  entries: readonly DirEntry[],
+  depth: number,
+  skip: ReadonlySet<string>,
+): DirEntry[] {
+  return depth === 0 ? entries.filter((d) => !skip.has(pkey(d.path))) : [...entries];
+}
+
 /** 右键菜单作用域：单个角色 / 整棵树根 / 单个作者包（导入口径，P-F） */
 type MenuScope =
   | { kind: 'group'; group: Group }
@@ -59,12 +90,16 @@ function baseName(p: string): string {
 /**
  * 口上文件树：角色 → 作者包 → 口上文件（默认平铺共存，c087db9 形态）。
  *
- * 作者包双态（小巧思定稿）：
- * - **默认 = 平铺态**：包标题行之下直接列出该包的口上文件（借阅找思路，一眼全览）；
- * - **点击包标题行 = 文件夹态**：平铺口上以高度过渡收起 → 原地展开真实文件夹视图
- *   （子目录 / README·ライセンス 等附加文件 / 面文件；惰性 listDir，失败自解释回落）；
- * - **右键「查看被隐藏的文件和文件夹」** = 按作用域批量切文件夹态：角色节点 → 该角色
- *   全部作者包；树根空白处 → 所有角色。
+ * 作者包**单态 + 追加式展开**（2026-10-12 用户反馈 6/7 重做）：
+ * - **默认**：包标题行之下列出该包的口上 ERB 文件（借阅找思路，一眼全览）；
+ * - **点击包标题行**：在 ERB 列表**上方追加**该包的**真实文件夹内容**——子目录（可继续
+ *   递归展开）、README·ライセンス 等附加文件。ERB 列表**原地不动、不消失、无过渡动画**；
+ * - 附件按惰性 `listDir` 逐层取（展开哪层取哪层），失败自解释回落。
+ *
+ * **为什么不再用「平铺态 ↔ 文件夹态」二选一**：旧实现把 ERB 列表用高度过渡压成 0 高、
+ * 另挂一棵 `.pkg-folder` 子树替代——两棵 `<ul>` 里 `key={f}` 重复，React 整体卸载重挂，
+ * 叠加高度/透明度/入场三处动画，来回点击即整棵树抖动（用户反馈 7 的 bug 根因）。
+ * 追加式没有那个问题：同一批 DOM 节点、同一套 key、零动画。
  *
  * 展开状态由组件内 state 持有——宿主（ProjectView）以稳定组件身份注入，
  * 打开文件不会因重渲染而丢掉展开状态。
@@ -72,9 +107,11 @@ function baseName(p: string): string {
 export function FileTree({ project, index, activeFile, onOpenFile, listDir, onImportPackage }: Props): ReactElement {
   const [filter, setFilter] = useState('');
   const [opened, setOpened] = useState<Set<string>>(new Set());
-  /** 作者包文件夹态（默认平铺态——包标题行与口上文件共存） */
+  /** 展开了「真实文件夹内容」的作者包（默认关——只露 ERB 列表） */
   const [pkgFolder, setPkgFolder] = useState<Set<string>>(new Set());
-  /** 包目录列举缓存（真实文件夹视图；按包 key 惰性加载） */
+  /** 递归展开的子目录（按绝对路径） */
+  const [subOpen, setSubOpen] = useState<Set<string>>(new Set());
+  /** 目录列举缓存（**按绝对路径**键控——子目录也要能展开） */
   const [dirCache, setDirCache] = useState<Map<string, DirState>>(new Map());
   /** 右键菜单（壳层私有轻量实现） */
   const [menu, setMenu] = useState<{ x: number; y: number; scope: MenuScope } | null>(null);
@@ -149,20 +186,27 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
   const pkgDirOf = (g: Group, subLabel: string): string =>
     `${g.prefix.replace(/[\\/]+$/, '')}/${subLabel}`;
 
-  /** 真实文件夹视图的惰性加载（失败落 'error' 态自解释） */
-  const ensureDir = (pkgKey: string, dir: string): void => {
-    if (!listDir || dirCache.has(pkgKey)) return;
-    setDirCache((m) => new Map(m).set(pkgKey, 'loading'));
+  /** 真实文件夹视图的惰性加载（按绝对路径；失败落 'error' 态自解释） */
+  const ensureDir = (dir: string): void => {
+    if (!listDir || dirCache.has(dir)) return;
+    setDirCache((m) => new Map(m).set(dir, 'loading'));
     void listDir(dir)
-      .then((entries) => setDirCache((m) => new Map(m).set(pkgKey, entries)))
-      .catch(() => setDirCache((m) => new Map(m).set(pkgKey, 'error')));
+      .then((entries) => setDirCache((m) => new Map(m).set(dir, entries)))
+      .catch(() => setDirCache((m) => new Map(m).set(dir, 'error')));
   };
 
-  /** 点击包标题行 = 切换 平铺态 ↔ 文件夹态；进入文件夹态时加载真实目录 */
+  /** 点击包标题行 = 追加 / 收起真实文件夹内容（ERB 列表始终原地不动） */
   const togglePkgFolder = (pkgKey: string, dir: string): void => {
     const willEnter = !pkgFolder.has(pkgKey);
     setPkgFolder((prev) => toggleIn(prev)(pkgKey));
-    if (willEnter) ensureDir(pkgKey, dir);
+    if (willEnter) ensureDir(dir);
+  };
+
+  /** 子目录展开/折叠（递归；首次展开才取该层） */
+  const toggleSub = (dir: string): void => {
+    const willOpen = !subOpen.has(dir);
+    setSubOpen((prev) => toggleIn(prev)(dir));
+    if (willOpen) ensureDir(dir);
   };
 
   /** 收集作用域内全部作者包（根散文件无包目录，不在真实文件夹视图范围） */
@@ -178,13 +222,13 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
     return out;
   };
 
-  /** 右键「查看被隐藏的文件和文件夹」：按作用域批量切换到文件夹态 */
+  /** 右键「显示所有文件和文件夹」：按作用域批量展开真实文件夹内容 */
   const revealAll = (scope: MenuScope): void => {
     setMenu(null);
     const pkgs = collectPackages(scope);
     setOpened((prev) => new Set([...prev, ...pkgs.map((p) => p.group)]));
     setPkgFolder((prev) => new Set([...prev, ...pkgs.map((p) => p.key)]));
-    for (const p of pkgs) ensureDir(p.key, p.dir);
+    for (const p of pkgs) ensureDir(p.dir);
   };
 
   const openMenu = (e: ReactMouseEvent, scope: MenuScope): void => {
@@ -205,34 +249,66 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
     </li>
   );
 
-  /** 包内真实文件夹内容：目录 → 非 ERB 附加文件 → ERB 面文件 */
-  const packageExtras = (pkgKey: string, s: PackageGroup): ReactElement | null => {
-    const state = dirCache.get(pkgKey);
-    if (state === undefined) return null; // 未触发加载（如过滤强制展开）——只露面文件
-    if (state === 'loading') return <li className="tree-extra tree-note">读取目录…</li>;
-    if (state === 'error') return <li className="tree-extra tree-note">目录读取失败（需要桌面壳权限）</li>;
-    const erbNames = new Set(s.files.map((f) => baseName(f).toLowerCase()));
-    const dirs = state.filter((d) => d.isDirectory).sort((a, b) => a.name.localeCompare(b.name));
-    const extras = state
-      .filter((d) => !d.isDirectory && !erbNames.has(d.name.toLowerCase()))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    return (
-      <>
-        {dirs.map((d) => (
-          <li key={d.path} className="tree-extra" title={`${d.path}（子目录）`}>
-            <span className="tree-extra-icon">📁</span>
+  /**
+   * 一个目录的真实内容行（递归）。目录可再展开；文件按类型给不同处置。
+   *
+   * `skip` 只在**包根那一层**生效：那里的 ERB 与包层平铺列表同级重复（同一个东西在
+   * 同一个视觉层级出现两遍），所以略过。**嵌套目录必须如实显示自己的 ERB**——
+   * 它们住在另一层，不是重复；若一并略过，装了 10 个面文件的子目录会被渲染成空目录，
+   * 等于谎报文件系统（实测语料 `灵梦-少女之梦/没写的` 就有 10 个 ERB）。
+   */
+  const dirRows = (dir: string, depth: number, skip: Set<string>): ReactElement[] => {
+    const state = dirCache.get(dir);
+    if (state === undefined) return [];
+    if (state === 'loading' || state === 'error') {
+      return [
+        <li key={`${dir}::note`} className="tree-note">
+          {state === 'loading' ? '读取目录…' : '目录读取失败（需要桌面壳权限）'}
+        </li>,
+      ];
+    }
+    const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name);
+    const visible = visibleEntries(state, depth, skip);
+    if (visible.length === 0) {
+      return [<li key={`${dir}::empty`} className="tree-note">（空目录）</li>];
+    }
+    const dirs = visible.filter((d) => d.isDirectory).sort(byName);
+    const files = visible.filter((d) => !d.isDirectory).sort(byName);
+    const pad = { paddingLeft: `${depth * 14}px` };
+    return [
+      ...dirs.map((d) => (
+        <li key={d.path}>
+          <button className="tree-dir" style={pad} title={d.path} onClick={() => toggleSub(d.path)}>
+            <span className="caret">{subOpen.has(d.path) ? '▾' : '▸'}</span>
+            <span className="tree-dir-name">{d.name}</span>
+          </button>
+          {subOpen.has(d.path) ? (
+            <ul className="tree-files nested">{dirRows(d.path, depth + 1, skip)}</ul>
+          ) : null}
+        </li>
+      )),
+      ...files.map((d) =>
+        BINARY_EXT.test(d.name) ? (
+          <li key={d.path} className="tree-extra" style={pad} title={`${d.path}（压缩包/资源，不在编辑器内打开）`}>
             <span className="tree-extra-name">{d.name}</span>
           </li>
-        ))}
-        {extras.map((d) => (
-          <li key={d.path} className="tree-extra" title={`${d.path}（附加文件，不在口上索引内）`}>
-            <span className="tree-extra-icon">📄</span>
-            <span className="tree-extra-name">{d.name}</span>
+        ) : (
+          <li key={d.path} style={pad}>
+            <button
+              className={`tree-file ${d.path === activeFile ? 'active' : ''} ${erbExt(d.name) ? '' : 'tree-extra-file'}`}
+              title={erbExt(d.name) ? d.path : `${d.path}（附加文件，不在口上索引内）`}
+              onClick={() => onOpenFile(d.path)}
+            >
+              {d.name}
+            </button>
           </li>
-        ))}
-      </>
-    );
+        ),
+      ),
+    ];
   };
+
+  /** 包层已平铺的 ERB 路径集（子目录渲染时去重用） */
+  const erbKeysOf = (s: PackageGroup): Set<string> => new Set(s.files.map(pkey));
 
   if (!index) {
     return <div className="tree-loading">索引中…</div>;
@@ -255,6 +331,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
           onClick={() => {
             setOpened(new Set());
             setPkgFolder(new Set());
+            setSubOpen(new Set());
           }}
         >
           折叠全部
@@ -301,19 +378,11 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
                           <span className="tree-package-name">{s.label}</span>
                           <span className="group-count">{s.files.length}</span>
                         </button>
-                        {/* 平铺态：口上文件直接可见；切文件夹态时高度过渡收起 */}
-                        <div className={`pkg-flat-wrap ${isFolder ? 'closed' : ''}`}>
-                          <div className="pkg-flat-inner">
-                            <ul className="tree-files nested">{s.files.map(fileRow)}</ul>
-                          </div>
-                        </div>
-                        {/* 文件夹态：真实文件夹内容原地淡入 */}
+                        {/* 追加式：真实文件夹内容在上、ERB 列表原地不动（无动画、不卸载） */}
                         {isFolder ? (
-                          <ul className="tree-files nested pkg-folder">
-                            {packageExtras(pkgKey, s)}
-                            {s.files.map(fileRow)}
-                          </ul>
+                          <ul className="tree-files nested pkg-real">{dirRows(pkgDir, 0, erbKeysOf(s))}</ul>
                         ) : null}
+                        <ul className="tree-files nested">{s.files.map(fileRow)}</ul>
                       </li>
                     );
                   })}
@@ -343,8 +412,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
               <button role="menuitem" onClick={() => revealAll(menu.scope)}>
                 <span className="check" />
                 {menu.scope.kind === 'root'
-                  ? '查看被隐藏的文件和文件夹（全部角色）'
-                  : '查看被隐藏的文件和文件夹'}
+                  ? '显示所有文件和文件夹（全部角色）'
+                  : '显示所有文件和文件夹'}
               </button>
             )}
           </div>
