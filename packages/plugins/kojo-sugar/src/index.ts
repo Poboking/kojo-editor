@@ -201,6 +201,9 @@ export function createKojoSugarPlugin(): Plugin {
         transpile: (source, options) => makeTranspiler().transpile(source, options),
         ...(scanFlowOf() ? { scanControlFlow: scanFlowOf()! } : {}),
         ...(parseExprOf() ? { parseCondition: parseExprOf()! } : {}),
+        // 变量字典（软取：adapter 未激活时投影退化为"不做属性反糖"，其余照常）
+        // `dictionaryOf` 是**每次调用时才查**的函数（适配器可能随项目切换重建 schema）。
+        dictionary: () => dictionaryOf(),
       });
 
       ctx.provide(WellKnownServices.SugarLift, liftService);
@@ -284,6 +287,14 @@ function makeLookup(schema: VariableSchema): DictionaryLookup {
       const head = ident.split(':')[0]!.toUpperCase();
       if (ENGINE_VARIABLE_FAMILIES.includes(head)) return ident;
       return undefined;
+    },
+    nameAt(family: string, index: string): string | undefined {
+      // 反向查询（升糖投影的属性反糖用）：`lookup(族, 索引).description` 即名称源。
+      // 依据 adapter `variable-schema.ts`：编号索引 → `description = byIndex.get(编号)`；
+      // 具名索引 → `description = 名称本身`；**未收录 → 无 description**（不猜）。
+      const info = schema.lookup(family, index);
+      const name = info?.description;
+      return name !== undefined && name.length > 0 ? name : undefined;
     },
   };
 }

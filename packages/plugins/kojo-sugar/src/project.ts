@@ -63,9 +63,32 @@ import type {
   SugarProjectStats,
 } from '@kojo/plugin-api';
 import type { LiftDeps } from './lift';
+import type { DictionaryLookup } from './types';
 import { PRONOUN_REVERSE } from './expression';
 
 /* ============================== 规则表（封闭） ============================== */
+
+/**
+ * **角色作用域**的数值变量族（属性反糖只认这些）。
+ *
+ * 为什么必须有这张表：ERB 里 `FLAG:70` 与 `CFLAG:TARGET:70` 长得一样但语义天差地别——
+ * `FLAG` 是**全局**族，写成糖的 `她的FLAG` 是错的。故只给"角色作用域"的族发糖；
+ * 全局族（`FLAG`/`TFLAG`/`GLOBAL`/`DAY`/`MONEY`…）原样保留。
+ *
+ * 表的来源是引擎的变量族划分（`VariableParser.ReduceVariable` 的角色分支），
+ * 属**语言/引擎级**知识（与 `PRINT_VARIANTS` 同类），不是某个游戏的知识。
+ */
+const CHAR_SCOPED_FAMILIES: ReadonlySet<string> = new Set([
+  'CFLAG',
+  'TALENT',
+  'ABL',
+  'EXP',
+  'MARK',
+  'BASE',
+  'PALAM',
+  'TEQUIP',
+  'TCVAR',
+]);
 
 /** 有糖形态的 PRINT 变体（`L` = 不等待 → 糖行尾加 ` 续`；`D` = 旁白色，糖自动判定，不标注） */
 const PRINT_VARIANTS: ReadonlyMap<string, { wait: boolean }> = new Map([
@@ -151,6 +174,10 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   const total = lines.length;
   const statements = deps.scanControlFlow ? safeScan(deps.scanControlFlow, source) : [];
   const ctx = buildContext(lines, statements);
+  // 演出：`SETCOLOR …` / `RESETCOLOR` **配对**成「着色 …：」块（规范 §3.9）。
+  // 配不上的一律原样保留（真实语料 SETCOLOR 22,487 对 RESETCOLOR 6,312——多数没有配对的
+  // 收尾，猜边界会把别人的代码藏起来）。
+  const color = planColorBlocks(lines, ctx);
 
   const recs: LineRec[] = [];
   const nativeByReason = new Map<SugarProjectNativeReason, number>();
@@ -188,6 +215,31 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
       continue;
     }
 
+    // 着色块：配对成功的那行 SETCOLOR → 块头；配对的 RESETCOLOR → 被吸收（不产出可见行）
+    const colorOpen = color.openAt.get(ln);
+    if (colorOpen !== undefined) {
+      recs.push({
+        line: ln,
+        kind: 'control',
+        text: `着色 ${colorOpen}：`,
+        indent: ctx.indentAt(ln, raw),
+        visible: true,
+        reason: null,
+      });
+      continue;
+    }
+    if (color.absorbed.has(ln)) {
+      recs.push({
+        line: ln,
+        kind: 'control',
+        text: '',
+        indent: ctx.indentAt(ln, raw),
+        visible: false,
+        reason: null,
+      });
+      continue;
+    }
+
     const st = ctx.stmtAt(ln);
     if (st) {
       const mk = SUGAR_CONTROL.get(st.kind);
@@ -198,7 +250,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
           recs.push(native(ln, 'other'));
           continue;
         }
-        const text = mk(expr);
+        const text = mk(reverseExprAttributes(expr, deps));
         recs.push({
           line: ln,
           kind: 'control',
@@ -261,7 +313,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
       recs.push({
         line: ln,
         kind: 'speech',
-        text: variant.wait ? readableText(body) : `${readableText(body)} 续`,
+        text: variant.wait ? readableText(body, deps) : `${readableText(body, deps)} 续`,
         indent: ctx.indentAt(ln, raw),
         visible: true,
         reason: null,
@@ -271,6 +323,15 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
 
     // 其余（赋值 / 调用 / `@` / `#` / `$` / 其他指令）→ 原样保留
     recs.push(native(ln, 'other'));
+  }
+
+  // ---- 缩进补正：着色块**体内**的行整体 +1 层 ----
+  //
+  // 放在最后统一做（而不是在每个 push 点手动加）：一处口径，漏改不了。
+  // 块头自身不吃 +1（`starts` 从 open+1 起算），被吸收的 RESETCOLOR 不可见故无影响。
+  for (const r of recs) {
+    const bump = color.bumpAt(r.line);
+    if (bump > 0) r.indent += bump;
   }
 
   // ---- 统计 ----
@@ -363,6 +424,102 @@ function toSegment(run: LineRec[]): SugarProjectSegment {
     toLine: run[run.length - 1]!.line,
     sugarText: text,
     lineCount: visible.length,
+  };
+}
+
+/* ============================== 着色块配对 ============================== */
+
+/** 着色块配对结果（形状见 `planColorBlocks`） */
+interface ColorPlan {
+  /** `SETCOLOR` 行号 → 颜色表达式（呈现为「着色 X：」块头） */
+  openAt: Map<number, string>;
+  /** 被吸收的 `RESETCOLOR` 行号（不产出可见行，但占区间） */
+  absorbed: Set<number>;
+  /** 该行处于几个着色块**体内**（缩进补正用） */
+  bumpAt: (line: number) => number;
+}
+
+/**
+ * 把 `SETCOLOR …` 与**同嵌套深度**的 `RESETCOLOR` 配成「着色 …：」块。
+ *
+ * ## 为什么要"配对"而不是"见到 SETCOLOR 就发糖"
+ *
+ * 糖的 `着色` 是**块**（§3.9：`SETCOLOR` + 块体 + 自动 `RESETCOLOR`），而 `SETCOLOR`
+ * 本身没有结尾语义——真实语料里 `SETCOLOR` 22,487 处、`RESETCOLOR` 只有 6,312 处，
+ * **绝大多数 SETCOLOR 没有配对的收尾**（颜色靠分发器在函数返回路径上统一复位，见规范
+ * §1.5）。若"见到就发糖"，等于替作者猜一个块边界——猜错就是**把别人的代码藏进糖块里**。
+ * 故只认**能配对的**：配不上的一律原样保留（fail-visible）。
+ *
+ * ## 配对判据
+ *
+ * 同深度 + 最近未配对（栈），且**不跨函数边界 / 不跨停用区**：
+ *
+ * - **跨函数不配对**：`@` 行起是一个新的函数体。真实语料里"本函数只 SETCOLOR 不收尾"
+ *   很常见（颜色交给分发器统一复位），若让它与**下一个函数**里的 `RESETCOLOR` 配上，
+ *   整个下一个函数会被缩进进 `着色` 块——那是纯粹的视觉事故。
+ * - **跨停用区不配对**：`[SKIPSTART]` 里的内容不是活代码，不该参与块边界推断。
+ * - 同深度才配：跨块的收尾往往来自另一层作者的写法，强行配对会把块边界画错。嵌套着色
+ *   （块内再来一组）天然支持（栈）。
+ */
+function planColorBlocks(lines: string[], ctx: ProjContext): ColorPlan {
+  const stack: Array<{ line: number; expr: string; depth: number }> = [];
+  const openAt = new Map<number, string>();
+  const absorbed = new Set<number>();
+  /** 块体起点（open+1）→ 计数；块终点（close）→ 出栈计数 */
+  const enterAt = new Map<number, number>();
+  const leaveAt = new Map<number, number>();
+  const total = lines.length;
+  let inSkip = false;
+
+  for (let ln = 1; ln <= total; ln++) {
+    const content = contentOf(lines[ln - 1] ?? '');
+    if (content === '[SKIPSTART]') {
+      inSkip = true;
+      stack.length = 0; // 停用区打断推断：区前未收尾的 SETCOLOR 不再参与配对
+      continue;
+    }
+    if (content === '[SKIPEND]') {
+      inSkip = false;
+      continue;
+    }
+    if (inSkip) continue;
+    if (content.startsWith('@')) {
+      // 新函数体：上一函数未收尾的 SETCOLOR 就此作废（否则会把下个函数整段缩进进去）
+      stack.length = 0;
+      continue;
+    }
+    const open = /^SETCOLOR\s+(.+)$/.exec(content);
+    if (open) {
+      stack.push({ line: ln, expr: open[1]!.trim(), depth: ctx.enclosingAt(ln).length });
+      continue;
+    }
+    if (content !== 'RESETCOLOR') continue;
+    const depth = ctx.enclosingAt(ln).length;
+    // 找最近的**同深度**未配对 SETCOLOR
+    for (let k = stack.length - 1; k >= 0; k--) {
+      if (stack[k]!.depth !== depth) continue;
+      const head = stack.splice(k, 1)[0]!;
+      openAt.set(head.line, head.expr);
+      absorbed.add(ln);
+      enterAt.set(head.line + 1, (enterAt.get(head.line + 1) ?? 0) + 1);
+      leaveAt.set(ln, (leaveAt.get(ln) ?? 0) + 1);
+      break;
+    }
+  }
+
+  // 逐行累积"处于几个块体内"（O(n)；嵌套着色会正确叠加）
+  const bump = new Array<number>(total + 1).fill(0);
+  let active = 0;
+  for (let ln = 1; ln <= total; ln++) {
+    active += enterAt.get(ln) ?? 0;
+    bump[ln] = active;
+    active -= leaveAt.get(ln) ?? 0;
+  }
+
+  return {
+    openAt,
+    absorbed,
+    bumpAt: (line) => (line >= 1 && line <= total ? (bump[line] ?? 0) : 0),
   };
 }
 
@@ -464,18 +621,110 @@ function hasInlineCondition(text: string): boolean {
 }
 
 /**
- * 文本体**可读化**：把原生代词记号反糖成糖的主形（`%CALLNAME:TARGET%` → `{她}`）。
+ * 文本体**可读化**：把原生记号反糖成糖的主形。
  *
- * - 反向表派生自 `expression.ts` 的 `PRONOUN_MAP`（正反对称是构造事实）；
- * - `%…%` 是**有界记号**（自带首尾 `%`），故纯文本替换不会切到相邻变量引用；
- * - 只在文本体调用（控制流表达式不走这里，见模块头注纪律 2）。
+ * 两步（都是**显示**口径，判据封闭、失败即原样保留）：
+ *
+ * 1. **代词**：`%CALLNAME:TARGET%` → `{她}`、`%CALLNAME:MASTER%` → `{你}`
+ *    （反向表派生自 `expression.ts` 的 `PRONOUN_MAP`，正反对称是构造事实）；
+ * 2. **属性**（2026-10-12 用户第 7 条）：`{CFLAG:TARGET:1088}` → `{她的好感度}`、
+ *    `%TALENT:TARGET:恋慕%` → `{她的恋慕}`——需要变量字典的**反向**查询
+ *    （`DictionaryLookup.nameAt`）；查不到名称**一律不动**（宁可留数字，不编名字）。
+ *
+ * `%…%` 是**有界记号**（自带首尾 `%`），故纯文本替换不会切到相邻变量引用。
  */
-function readableText(text: string): string {
+function readableText(text: string, deps: LiftDeps): string {
   let out = text;
   for (const [form, pronoun] of PRONOUN_REVERSE) {
     if (out.includes(form)) out = out.split(form).join(`{${pronoun}}`);
   }
-  return out;
+  return reverseAttributes(out, deps);
+}
+
+/**
+ * 属性反糖：把变量引用换成糖的"代词 + 属性"写法。**两种作用面，判据不同**：
+ *
+ * - **插值**（`{…}` / `%…%`）：只在"整支恰是一个变量引用"时替换——`{CFLAG:TARGET:1088}`
+ *   → `{她的好感度}`，而 `{CFLAG:TARGET:1088 + 1}` **不碰**（硬拆表达式只会给出读不出来的糖）。
+ *   替换时**定界符原样保留**（把 `{…}` 变成裸文本会直接改坏台词）。
+ * - **表达式**（控制流条件 / 赋值右值）：引用夹在运算符之间（`CFLAG:TARGET:1088 >= 500`），
+ *   故做**词级**替换；双引号字符串字面量内不碰（那里可能恰好写着同样的字样）。
+ */
+function reverseAttributes(text: string, deps: LiftDeps): string {
+  const dict = deps.dictionary?.();
+  if (!dict?.nameAt) return text;
+  return text
+    .replace(/\{([^{}]+)\}/g, (whole, inner: string) => {
+      const sugar = sugarForRef(inner, dict);
+      return sugar === undefined ? whole : `{${sugar}}`;
+    })
+    .replace(/%([^%]+)%/g, (whole, inner: string) => {
+      const sugar = sugarForRef(inner, dict);
+      return sugar === undefined ? whole : `{${sugar}}`;
+    });
+}
+
+/** 表达式里的变量引用（`FAMILY[:SCOPE]:INDEX`；索引允许中日文名与编号） */
+const EXPR_REF_RE =
+  /\b(CFLAG|TALENT|ABL|EXP|MARK|BASE|PALAM|TEQUIP|TCVAR):(?:(TARGET|MASTER):)?([^:\s()[\]{},%]+)/g;
+
+/**
+ * 表达式侧反糖（**词级**）：把条件里的角色属性引用逐个换成 `她的X`。
+ * 双引号字面量整段跳过（不识别的写法一律保留，不猜）。
+ */
+function reverseExprAttributes(text: string, deps: LiftDeps): string {
+  const dict = deps.dictionary?.();
+  if (!dict?.nameAt) return text;
+  return text
+    .split(/("(?:[^"]*)")/g)
+    .map((seg) =>
+      seg.startsWith('"')
+        ? seg
+        : seg.replace(EXPR_REF_RE, (whole, family: string, scope: string | undefined, index: string) =>
+            sugarForRefParts(family, scope, index, dict) ?? whole,
+          ),
+    )
+    .join('');
+}
+
+/**
+ * "整支恰是一个变量引用"时的糖写法（不含定界符）；`undefined` = 不该动。
+ *
+ * 认两种形态：
+ * - `FAMILY:TARGET:IDX` / `FAMILY:MASTER:IDX` → `她的IDX名` / `你的IDX名`
+ * - `FAMILY:IDX`（省略角色 = 引擎语义的角色 1D，即 TARGET 作用域）→ `她的IDX名`
+ */
+function sugarForRef(inner: string, dict: DictionaryLookup): string | undefined {
+  const m = /^\s*([A-Z]+)(?::([A-Za-z0-9_]+))?(?::(.+?))?\s*$/.exec(inner);
+  if (!m) return undefined;
+  const family = m[1]!;
+  if (m[3] !== undefined) return sugarForRefParts(family, m[2]!, m[3], dict);
+  if (m[2] === undefined) return undefined; // 裸族名（`CFLAG`）：语义是"角色 1D 首格"，不发糖
+  return sugarForRefParts(family, undefined, m[2], dict);
+}
+
+/**
+ * 三段逻辑的唯一点：族必须是**角色作用域**、角色必须是 TARGET/MASTER、名称必须查得到。
+ *
+ * 为什么这三条一条都不能放宽：
+ * - 全局族（`FLAG`/`TFLAG`）写成 `她的FLAG` 是**错的**——"不写"好过"写错"；
+ * - 其它角色的属性糖里没有对应写法（`{角色12的X}` 只覆盖 CALLNAME）；
+ * - 名称查不到就保留原样的数字——**绝不编名字**（那是"看着像懂了其实被误导"）。
+ */
+function sugarForRefParts(
+  family: string,
+  scope: string | undefined,
+  index: string,
+  dict: DictionaryLookup,
+): string | undefined {
+  if (!CHAR_SCOPED_FAMILIES.has(family)) return undefined;
+  const effective = scope ?? 'TARGET';
+  const possessive =
+    effective === 'TARGET' ? '她的' : effective === 'MASTER' ? '你的' : undefined;
+  if (possessive === undefined) return undefined;
+  const name = dict.nameAt?.(family, index);
+  if (name === undefined) return undefined;
+  return `${possessive}${name}`;
 }
 
 /** 结构扫描的防御性包装：扫描器抛错 → 退化为"无结构信息"（不中断投影） */

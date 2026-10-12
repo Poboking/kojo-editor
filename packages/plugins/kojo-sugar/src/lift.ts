@@ -54,6 +54,7 @@ import type {
   SugarTranspileResult,
 } from '@kojo/plugin-api';
 import { liftProject } from './project';
+import type { DictionaryLookup } from './types';
 
 /* ============================== 依赖 ============================== */
 
@@ -72,6 +73,14 @@ export interface LiftDeps {
    * **缺省 = 不做可解析性判据**（`degraded: true`）；`opaque` 结果即跳过信号。
    */
   parseCondition?: (text: string) => ConditionExpr;
+  /**
+   * 变量字典（**软取**，供升糖**投影**的属性反糖：《`{CFLAG:TARGET:1088}` →
+   * `{她的好感度}`》）。做成**函数**而非值：适配器可能随项目切换重建 schema，
+   * 服务保持无状态（与 `makeLookup` 的装配纪律一致）。
+   *
+   * 缺省 = 不做属性反糖（投影照常工作，只是数字保持数字——**不猜**）。
+   */
+  dictionary?: () => DictionaryLookup | undefined;
 }
 
 /* ============================== 主入口 ============================== */

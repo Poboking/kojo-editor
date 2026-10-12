@@ -29,6 +29,16 @@ export type AliasTable = ReadonlyMap<string, AliasEntry>;
 export interface DictionaryLookup {
   resolveFamily(name: string): string | undefined;
   resolve(ident: string): string | undefined;
+  /**
+   * **反向**查询（**可选能力**）：给定变量族与索引（编号或具名），返回该索引的**名称**。
+   *
+   * 用途：升糖**投影**的"属性反糖"——把 `{CFLAG:TARGET:1088}` 显示成 `{她的好感度}`，
+   * 让不熟悉 EraBasic 的读者能读懂那串数字是什么。
+   *
+   * 缺省（字典不支持反向）= 该文件不做属性反糖（投影照常工作，数字保持数字——**不猜**）。
+   * 未收录 / 该族无名称表 → undefined，同样原样保留。
+   */
+  nameAt?(family: string, index: string): string | undefined;
 }
 
 /** 诊断收集器（parse 与 codegen 共用；保证 `internal` 绝不静默） */

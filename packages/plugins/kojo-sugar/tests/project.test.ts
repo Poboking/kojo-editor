@@ -219,3 +219,161 @@ describe('糖投影 · 降级与边界', () => {
     expect(r.stats.totalLines).toBe(0);
   });
 });
+/* ==================== 属性反糖（用户第 7 条） ==================== */
+
+describe('糖投影 · 属性反糖（需变量字典的反向查询）', () => {
+  /** 桩字典：只有 CFLAG 1088=好感度、TALENT 3=恋慕；其余查不到（模拟名称表未收录） */
+  const dict = {
+    resolveFamily: () => undefined,
+    resolve: () => undefined,
+    nameAt: (family: string, index: string): string | undefined => {
+      if (family === 'CFLAG' && index === '1088') return '好感度';
+      if (family === 'TALENT' && (index === '3' || index === '恋慕')) return '恋慕';
+      return undefined;
+    },
+  };
+  const withDict = (source: string) =>
+    liftProject(
+      { transpile: () => { throw new Error('x'); }, scanControlFlow, dictionary: () => dict },
+      { source },
+    );
+
+  it('三段式（FAMILY:TARGET:编号）→ 她的 + 名称', () => {
+    const r = withDict('PRINTFORMW 「好感度是{CFLAG:TARGET:1088}。」');
+    expect(segLines(r.segments[0]!)).toEqual(['「好感度是{她的好感度}。」']);
+  });
+
+  it('两段式（FAMILY:编号，角色省略 = TARGET）→ 同样反糖', () => {
+    const r = withDict('PRINTFORMW 「{CFLAG:1088}」');
+    expect(segLines(r.segments[0]!)).toEqual(['「{她的好感度}」']);
+  });
+
+  it('玩家作用域 → 你的；具名索引 → 原名照用', () => {
+    const r = withDict(['PRINTFORMW 「{TALENT:TARGET:恋慕}」', 'PRINTFORMDW {TALENT:MASTER:3}'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['「{她的恋慕}」', '{你的恋慕}']);
+  });
+
+  it('控制流表达式也反糖（条件里的数字同样是"读不懂"的来源）', () => {
+    const r = withDict('IF CFLAG:TARGET:1088 >= 500\nPRINTFORMDW 甲\nENDIF');
+    expect(segLines(r.segments[0]!)[0]).toBe('如果 她的好感度 >= 500：');
+  });
+
+  it('**全局族不反糖**（`FLAG:70` 不是"她的"，写错比不写更糟）', () => {
+    const r = withDict('IF FLAG:70 && TFLAG:192\nPRINTFORMDW 甲\nENDIF');
+    expect(segLines(r.segments[0]!)[0]).toBe('如果 FLAG:70 && TFLAG:192：');
+  });
+
+  it('名称查不到 / 非目标与玩家角色 / 表达式混写 → **一律不动**（绝不猜）', () => {
+    const r = withDict(
+      [
+        'PRINTFORMW 「{CFLAG:TARGET:9999}」',
+        'PRINTFORMDW 「{CFLAG:12:1088}」',
+        'PRINTFORMDW 「{CFLAG:TARGET:1088 + 1}」',
+      ].join('\n'),
+    );
+    expect(segLines(r.segments[0]!)).toEqual([
+      '「{CFLAG:TARGET:9999}」',
+      '「{CFLAG:12:1088}」',
+      '「{CFLAG:TARGET:1088 + 1}」',
+    ]);
+  });
+
+  it('无字典（adapter 未激活）→ 退化为不做属性反糖，其余照常', () => {
+    const r = project('PRINTFORMW 「{CFLAG:TARGET:1088}」');
+    expect(segLines(r.segments[0]!)).toEqual(['「{CFLAG:TARGET:1088}」']);
+  });
+});
+
+/* ==================== 着色块（用户第 8 条） ==================== */
+
+describe('糖投影 · `SETCOLOR`/`RESETCOLOR` → 「着色 …：」块', () => {
+  it('配对成功 → 块头 + 体内缩进 +1 + `RESETCOLOR` 被吸收（不显示）', () => {
+    const src = [
+      'SETCOLOR 0xFF8080',
+      'IF A',
+      '\tPRINTFORMDW 甲。',
+      'ENDIF',
+      'RESETCOLOR',
+      'PRINTFORMDW 乙。',
+    ].join('\n');
+    const r = project(src);
+    expect(r.segments).toHaveLength(1);
+    expect(segLines(r.segments[0]!)).toEqual([
+      '着色 0xFF8080：',
+      '\t如果 A：',
+      '\t\t甲。',
+      '乙。',
+    ]);
+  });
+
+  it('**配不上就不发糖**（真实语料 SETCOLOR 远多于 RESETCOLOR——猜边界会把代码藏起来）', () => {
+    const r = project('SETCOLOR 0xFF8080\nPRINTFORMDW 甲。');
+    expect(r.segments).toHaveLength(1); // 只有台词行成段
+    expect(segLines(r.segments[0]!)).toEqual(['甲。']);
+    const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
+    expect(reasons['other']).toBe(1); // SETCOLOR 原样保留
+  });
+
+  it('跨深度不配对（另一层作者的收尾不该画进本块）', () => {
+    const src = [
+      'SETCOLOR 0xFF8080',
+      'IF A',
+      '\tPRINTFORMDW 甲。',
+      '\tRESETCOLOR',
+      'ENDIF',
+    ].join('\n');
+    const r = project(src);
+    // SETCOLOR 在深度 0、RESETCOLOR 在深度 1 → 不配对 → SETCOLOR 原样保留
+    const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
+    expect(reasons['other']).toBe(2); // SETCOLOR + RESETCOLOR 都原样
+    expect(segLines(r.segments[0]!)).toEqual(['如果 A：', '\t甲。']);
+  });
+
+  it('嵌套着色：体内 +1 层逐级叠加', () => {
+    const src = [
+      'SETCOLOR 0x111111',
+      'SETCOLOR 0x222222',
+      'PRINTFORMDW 甲。',
+      'RESETCOLOR',
+      'RESETCOLOR',
+    ].join('\n');
+    const r = project(src);
+    expect(segLines(r.segments[0]!)).toEqual([
+      '着色 0x111111：',
+      '\t着色 0x222222：',
+      '\t\t甲。',
+    ]);
+  });
+});
+
+describe('糖投影 · 着色块不跨函数边界 / 不跨停用区', () => {
+  it('**不跨函数**：上一函数未收尾的 SETCOLOR 不与下一函数的 RESETCOLOR 配对', () => {
+    const src = [
+      '@FUNC_A',
+      'SETCOLOR 0xFF8080',
+      'PRINTFORMDW 甲。',
+      '@FUNC_B',
+      'RESETCOLOR',
+      'PRINTFORMDW 乙。',
+    ].join('\n');
+    const r = project(src);
+    // SETCOLOR / RESETCOLOR 都原样保留（不配对），两句台词各自成段
+    const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
+    expect(reasons['other']).toBe(4); // @FUNC_A / SETCOLOR / @FUNC_B / RESETCOLOR
+    expect(r.segments.map((s) => s.fromLine)).toEqual([3, 6]);
+    // 关键：没有出现「着色 …：」块头
+    for (const s of r.segments) expect(s.sugarText).not.toContain('着色');
+  });
+
+  it('**不跨停用区**：`[SKIPSTART]` 打断配对推断', () => {
+    const src = [
+      'SETCOLOR 0xFF8080',
+      '[SKIPSTART]',
+      'PRINTFORMDW 停用',
+      '[SKIPEND]',
+      'RESETCOLOR',
+    ].join('\n');
+    const r = project(src);
+    for (const s of r.segments) expect(s.sugarText).not.toContain('着色');
+  });
+});
