@@ -6,13 +6,17 @@
  * 而插件在 `kojo.functionChanged` 上**自动催动**——每次开项目都重跑一遍。抽取是逐文件的
  * 纯函数：某个文件的正文没变 ⇒ 该文件的产出必相同。
  *
- * ## 三版演进（每一版都是量出来的，不是猜的）
+ * ## 四版演进（每一版都是量出来的，不是猜的）
  * - **v1** 整项目 JSON：45.86 MB，判据 = 全库 ERB 指纹。
  * - **v2** 字典 + 元组：schema 标签全库只有 1,832 种却重复写 164,910 次、`filePath` 只对应
  *   2,285 个文件、`normalizedName` 就是 map 键 ⇒ 剥掉后 12.47 MB。
  * - **v3 按文件分桶**：v1/v2 的判据是"任一文件变 ⇒ 全库作废"，而**作者天天只改几个文件**，
  *   真实工作流里每次开项目都要重付 4 s。现在按文件存桶 + 逐文件 mtime 比对，
  *   只重算变过的那几个；磁盘与结构开销同 v2 一个量级。
+ * - **v4 删派生字段**：`key` 是 `dependencyKey(name, indices)` 的**纯派生值**（164,910 条依赖
+ *   逐条验 0 例外）却占盘上 18%，`name` 全库只有 1,176 种也被逐条写一遍 ⇒ 删前者、后者进字典。
+ *   体积 **12.31 MB → 9.01 MB（实测 −26.8%）**，但**热路径没有变快**（366ms，v3 为 349–363ms）：
+ *   时间花在 `JSON.parse`（138ms）和还原成对象（126ms）上，不在字节数上。见下方"v4 的读数"。
  *
  * ## 两层失效判据（分工明确）
  * - **全局层**（判不符 ⇒ 整包弃用）：项目根 / `adapterId` / `inputDigest` / 格式版本。
@@ -23,6 +27,23 @@
  *   任一侧为 `null`（取不到 stat）⇒ 该文件永不复用。
  *   磁盘上消失的文件不在本次 walk 顺序里 ⇒ 天然收尸，快照不会越攒越大。
  *
+ * ## v4 的读数：体积真降了 27%，水位一点没动（如实记录）
+ * 逐字段量过字节构成（探针，真实语料 164,910 条依赖）：依赖固定槽 **57.4%**、
+ * 函数头固定槽 15.0%、比较式 15.1%、schemas 字典 0.9%。删除派生 `key` + `name` 进字典后
+ * 实测 **12.31 MB → 9.01 MB**，且**内容指纹与 v3 逐字相同**（`keysDigest` / `contentDigest` /
+ * `tagged` 三项一致）⇒ 编码是等价的，砍掉的确实全是冗余字节。
+ *
+ * 但热路径抽取段 **366ms**（v3 三次读数 349–363ms）——落在噪声之上一点，不是提速。
+ * 分段成本把这解释清楚了：读盘 36ms / `JSON.parse` **138ms** / 还原成 `FunctionConditions`
+ * 对象 **126ms**。也就是说 366ms 里约 **72% 是"解析 + 造对象"**，字节数只买得到读盘那 36ms。
+ * **压体积不等于提速**——下一刀要砍的是每轮开项目的重复反序列化（桶级懒还原），
+ * 而不是继续找字典。
+ *
+ * 两个被实测**否掉**的想法（记下来免得有人再试）：
+ * - 把 `indices` 拼成 `a:b` 字符串省括号：语料里**有 361 个索引本身就含 `:`**，拼回来自带歧义，
+ *   为 2.7pp 体积换一条"索引不许含冒号"的隐式约束不值；
+ * - 比较式原文进字典：原文平均 4.3 B，换成下标几乎不省（3.2pp），不值多一层字典与一处越界判据。
+ *
  * ## 纪律
  * **fail-closed**：全局判据或结构任一不符 ⇒ 整包 null；元组是**位置契约**，
  * `FunctionConditions`/`StateDependency` 增删字段必须同步改编解码并 bump
@@ -30,6 +51,7 @@
  * 存储键是**固定槽位名**（版本在 payload 里）：换格式后旧文件被读出→判不符→删除→覆盖，
  * 不留永远读不到的孤儿。
  */
+import { dependencyKey } from '@kojo/plugin-api';
 import type {
   ConditionComparison,
   ConditionIndex,
@@ -41,7 +63,7 @@ import type {
 } from '@kojo/plugin-api';
 
 /** 快照格式版本；改 `FunctionConditions`/`StateDependency` 语义或抽取口径时 +1 */
-export const EXTRACT_SNAPSHOT_FORMAT = 3;
+export const EXTRACT_SNAPSHOT_FORMAT = 4;
 
 /** 存储键 = 固定槽位名（版本在 payload 里，换格式时旧文件读出即判死并被覆盖） */
 export const EXTRACT_STORE_KEY = 'extract-snapshot-v1';
@@ -63,8 +85,12 @@ export interface ExtractExpect {
   readonly inputDigest: string;
 }
 
-/** `[key, name, indices, count, firstLine, comparisons, schemaIdx]`；`schemaIdx = -1` 表示无 */
-type DependencyTuple = [string, string, string[], number, number, ComparisonTuple[], number];
+/**
+ * `[nameIdx, indices, count, firstLine, comparisons, schemaIdx]`；`schemaIdx = -1` 表示无。
+ * **v4 不再存 `key`**：它是 `dependencyKey(name, indices)` 的纯派生值（真实语料 164,910 条依赖
+ * 逐条验过 0 例外），存下来等于每条依赖多写 13.4 字节 ⇒ 占快照 18%。还原时现算即可。
+ */
+type DependencyTuple = [number, string[], number, number, ComparisonTuple[], number];
 /** `[op, value, 原文]` */
 type ComparisonTuple = [string, number | string, string];
 /** `[归一化名, startLine, predicateCount, unparsedCount, deps]`；`filePath` 由桶键给出 */
@@ -72,7 +98,7 @@ type CondTuple = [string, number, number, number, DependencyTuple[]];
 /** `[mtimeMs, 该文件统计, 函数桶]` */
 type BucketTuple = [number | null, [number, number, number, number, number], CondTuple[]];
 
-/** 落盘形态（v3） */
+/** 落盘形态（v4） */
 export interface StoredConditionIndex {
   readonly format: number;
   readonly projectRoot: string;
@@ -80,6 +106,8 @@ export interface StoredConditionIndex {
   readonly inputDigest: string;
   readonly savedAt: number;
   readonly schemas: readonly (VariableInfo | null)[];
+  /** 变量名去重表（真实语料 1,176 种名字被写 164,910 次）；依赖元组的第 0 位是它的下标 */
+  readonly names: readonly string[];
   readonly buckets: Readonly<Record<string, BucketTuple>>;
 }
 
@@ -108,6 +136,10 @@ function emptyStats(): FileStats {
  * 入口是**桶**而不是 `ConditionIndex`：桶自带逐文件统计——`stats.functions` 数的是"扫过的函数"
  * （含没有谓词的），而 `byFunction` 只收有谓词的，事后从索引反推不回来。
  * 顺序 = 传入的迭代顺序（引擎按本次 walk 顺序构造）⇒ 与全量重建同序。
+ *
+ * @throws 若某条依赖的 `key` 不再等于 `dependencyKey(name, indices)`——派生前提破了就**宁可不缓存**
+ *   （调用方是 fire-and-forget 的 `save`，异常会变成一条 warn 日志），也绝不留下一个
+ *   "还原出的 key 与算出来的不一样"的快照。真实语料实测 164,910 条依赖 0 例外。
  */
 export function encodeBuckets(args: {
   buckets: ReadonlyMap<string, FileBucket>;
@@ -116,6 +148,8 @@ export function encodeBuckets(args: {
 }): StoredConditionIndex {
   const schemas: (VariableInfo | null)[] = [];
   const schemaIdx = new Map<string, number>();
+  const names: string[] = [];
+  const nameSlot = new Map<string, number>();
 
   const indexOfSchema = (s: VariableInfo): number => {
     const id = JSON.stringify([s.name, s.index ?? null, s.resolvedIndex ?? null, s.description ?? null]);
@@ -127,6 +161,15 @@ export function encodeBuckets(args: {
     }
     return i;
   };
+  const indexOfName = (n: string): number => {
+    let i = nameSlot.get(n);
+    if (i === undefined) {
+      i = names.length;
+      names.push(n);
+      nameSlot.set(n, i);
+    }
+    return i;
+  };
 
   const out: Record<string, BucketTuple> = {};
   for (const [path, b] of args.buckets) {
@@ -135,15 +178,22 @@ export function encodeBuckets(args: {
       c.startLine,
       c.predicateCount,
       c.unparsedCount,
-      c.dependencies.map((d): DependencyTuple => [
-        d.key,
-        d.name,
-        d.indices,
-        d.count,
-        d.firstLine,
-        d.comparisons.map((cmp): ComparisonTuple => [cmp.op, cmp.value, cmp.text]),
-        d.schema === undefined ? -1 : indexOfSchema(d.schema),
-      ]),
+      c.dependencies.map((d): DependencyTuple => {
+        if (d.key !== dependencyKey({ name: d.name, indices: d.indices })) {
+          throw new Error(
+            `StateDependency.key 不再是 dependencyKey(name, indices) 的派生值：` +
+              `${path} / ${c.normalizedName} key=${d.key} name=${d.name} ⇒ 停止缓存抽取快照`,
+          );
+        }
+        return [
+          indexOfName(d.name),
+          d.indices,
+          d.count,
+          d.firstLine,
+          d.comparisons.map((cmp): ComparisonTuple => [cmp.op, cmp.value, cmp.text]),
+          d.schema === undefined ? -1 : indexOfSchema(d.schema),
+        ];
+      }),
     ]);
     const s = b.stats;
     out[path] = [b.mtimeMs, [s.functions, s.functionsWithDeps, s.predicates, s.unparsed, s.dependencies], conds];
@@ -156,6 +206,7 @@ export function encodeBuckets(args: {
     inputDigest: args.expect.inputDigest,
     savedAt: args.savedAt ?? Date.now(),
     schemas,
+    names,
     buckets: out,
   };
 }
@@ -170,10 +221,10 @@ function isComparisonTuple(t: unknown): t is ComparisonTuple {
   );
 }
 
-function isDependencyTuple(t: unknown, schemaCount: number): t is DependencyTuple {
-  if (!Array.isArray(t) || t.length !== 7) return false;
-  const [key, name, indices, count, firstLine, comparisons, sIdx] = t as unknown[];
-  if (typeof key !== 'string' || typeof name !== 'string') return false;
+function isDependencyTuple(t: unknown, schemaCount: number, nameCount: number): t is DependencyTuple {
+  if (!Array.isArray(t) || t.length !== 6) return false;
+  const [nameIx, indices, count, firstLine, comparisons, sIdx] = t as unknown[];
+  if (typeof nameIx !== 'number' || !Number.isInteger(nameIx) || nameIx < 0 || nameIx >= nameCount) return false;
   if (!Array.isArray(indices) || !indices.every((i) => typeof i === 'string')) return false;
   if (typeof count !== 'number' || typeof firstLine !== 'number' || typeof sIdx !== 'number') return false;
   if (!Array.isArray(comparisons) || !comparisons.every(isComparisonTuple)) return false;
@@ -216,12 +267,16 @@ export function decodeBuckets(
   if (s.inputDigest !== expect.inputDigest) return null;
   if (typeof s.buckets !== 'object' || s.buckets === null) return null;
   if (!Array.isArray(s.schemas) || !s.schemas.every((v) => v === null || typeof v === 'object')) return null;
+  if (!Array.isArray(s.names) || !s.names.every((v) => typeof v === 'string')) return null;
+  const names = s.names as readonly string[];
 
   const out: Record<string, FileBucket> = {};
   for (const [path, tuple] of Object.entries(s.buckets as Record<string, unknown>)) {
     if (!isBucketTuple(tuple)) return null;
     const [mtimeMs, st, conds] = tuple;
-    const depsOk = conds.every((c) => c[4].every((d) => isDependencyTuple(d, s.schemas!.length)));
+    const depsOk = conds.every((c) =>
+      c[4].every((d) => isDependencyTuple(d, s.schemas!.length, names.length)),
+    );
     if (!depsOk) return null;
     out[path] = {
       mtimeMs,
@@ -235,9 +290,12 @@ export function decodeBuckets(
       conds: conds.map((c): FunctionConditions => {
         const [normalizedName, startLine, predicateCount, unparsedCount, deps] = c;
         const dependencies: StateDependency[] = deps.map((d): StateDependency => {
-          const [key, name, indices, count, firstLine, comparisons, sIdx] = d;
+          const [nameIx, indices, count, firstLine, comparisons, sIdx] = d;
+          const name = names[nameIx]!;
+          // `key` 不落盘，在这里按**同一个** `dependencyKey` 现算——它必须与 `extract.ts`
+          // 产出的键逐字节相同，否则徽章/依赖分组会在"冷算 vs 还原"两条路上分叉。
           const dep: StateDependency = {
-            key,
+            key: dependencyKey({ name, indices }),
             name,
             indices,
             count,

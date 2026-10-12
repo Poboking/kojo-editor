@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { dependencyKey } from '@kojo/plugin-api';
 import type { ConditionIndex, FunctionConditions, StateDependency } from '@kojo/plugin-api';
 import {
   EXTRACT_SNAPSHOT_FORMAT,
@@ -147,7 +148,73 @@ describe('v3 按文件桶编解码', () => {
       'schema',
     ]);
     expect(Object.keys(c.dependencies[0]!.schema!).sort()).toEqual(['description', 'index', 'name']);
-    expect(EXTRACT_SNAPSHOT_FORMAT).toBe(3);
+    expect(EXTRACT_SNAPSHOT_FORMAT).toBe(4);
+  });
+
+  /** v4 的全部收益都建立在这一条不变式上：`key` 不落盘 = 它一定是 name/indices 的派生值 */
+  it('盘上没有 key 槽；还原出的 key 恒等于 dependencyKey(name, indices)', () => {
+    const { payload, back } = roundTrip(buckets());
+    const tuple = (payload.buckets as Record<string, [number | null, number[], unknown[][]]>)['D:/game/k1.ERB']!;
+    const cond = tuple[2][0] as [string, number, number, number, unknown[]];
+    const dep = cond[4][0] as [number, string[], number, number, unknown[], number];
+    expect(dep.length).toBe(6); // [nameIdx, indices, count, firstLine, comparisons, schemaIdx]
+    expect(typeof dep[0]).toBe('number'); // name 字典的下标，而不是 key 字符串
+    let checked = 0;
+    for (const b of Object.values(back!.buckets)) {
+      for (const c of b.conds) {
+        for (const d of c.dependencies) {
+          expect(d.key).toBe(dependencyKey({ name: d.name, indices: d.indices }));
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('name / indices 里含冒号也安全：v4 刻意不把 indices 拼成字符串（实测语料有 361 个索引自带冒号）', () => {
+    const src = new Map<string, FileBucket>([
+      [
+        '/x.ERB',
+        bucket(5, [
+          {
+            normalizedName: 'X',
+            filePath: '/x.ERB',
+            startLine: 1,
+            predicateCount: 1,
+            unparsedCount: 0,
+            dependencies: [
+              { key: 'A:B:C:2', name: 'A:B', indices: ['C:2'], count: 1, comparisons: [], firstLine: 1 },
+            ],
+          },
+        ]),
+      ],
+    ]);
+    const { back } = roundTrip(src);
+    const d = back!.buckets['/x.ERB']!.conds[0]!.dependencies[0]!;
+    expect(d.name).toBe('A:B');
+    expect(d.indices).toEqual(['C:2']);
+    expect(d.key).toBe('A:B:C:2');
+  });
+
+  it('key 不再是派生值 ⇒ 整包拒绝编码（宁可不缓存，也不留一个还原后会变键的快照）', () => {
+    const bad = new Map<string, FileBucket>([
+      [
+        '/y.ERB',
+        bucket(1, [
+          {
+            normalizedName: 'Y',
+            filePath: '/y.ERB',
+            startLine: 1,
+            predicateCount: 1,
+            unparsedCount: 0,
+            dependencies: [
+              { key: 'WRONG', name: 'CFLAG', indices: ['2'], count: 1, comparisons: [], firstLine: 1 },
+            ],
+          },
+        ]),
+      ],
+    ]);
+    expect(() => encodeBuckets({ buckets: bad, expect: EXPECT })).toThrow(/dependencyKey/);
   });
 });
 
@@ -171,13 +238,15 @@ describe('全局判据 fail-closed', () => {
       ...(base() as Record<string, unknown>),
       buckets: { ...(base().buckets as Record<string, unknown>), [path]: tuple },
     });
-    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0]]), EXPECT)).toBeNull(); // 元数
+    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0]]), EXPECT)).toBeNull(); // 桶元数
     expect(decodeBuckets(bad('/x.ERB', ['no', [0, 0, 0, 0, 0], []]), EXPECT)).toBeNull(); // mtime 类型
     expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0], []]), EXPECT)).toBeNull(); // stats 长度
-    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [['k', 'k', [], 1, 1, []]]]]]), EXPECT)).toBeNull(); // 依赖元数
-    expect(
-      decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [['k', 'k', [], 1, 1, [], 99]]]]]), EXPECT),
-    ).toBeNull(); // schemaIdx 越界
+    // 依赖元组 v4 = [nameIdx, indices, count, firstLine, comparisons, schemaIdx]
+    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [[0, [], 1, 1, []]]]]]), EXPECT)).toBeNull(); // 依赖元数
+    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [[0, [], 1, 1, [], 99]]]]]), EXPECT)).toBeNull(); // schemaIdx 越界
+    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [[9999, [], 1, 1, [], -1]]]]]), EXPECT)).toBeNull(); // nameIdx 越界
+    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [['CFLAG', [], 1, 1, [], -1]]]]]), EXPECT)).toBeNull(); // v3 的 key 形态混进来 ⇒ 拒
+    expect(decodeBuckets({ ...base(), names: undefined }, EXPECT)).toBeNull(); // 缺 name 字典
   });
 
   it('存储键是安全段（固定槽位名；版本在 payload 里，换格式不留孤儿）', () => {
