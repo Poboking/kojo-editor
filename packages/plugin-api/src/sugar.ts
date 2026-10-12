@@ -372,6 +372,28 @@ export interface RawLine extends SugarNodeBase {
 }
 
 /**
+ * 注释行（2026-10-12 用户第 3 条：**注释不能丢**）。
+ *
+ * ## 为什么注释要进 AST
+ *
+ * 作者用 `;` 写分节线（`;------`）与意图说明（`;这里是告白分支`）。这些注释在**产物
+ * `.ERB` 里丢掉** = 永久信息损失：产物是分发单位，也是日后「糖视图」重新读出的对象——
+ * 注释没了，后来的人（包括作者自己）就只能面对一堆裸代码。实测语料 23.5% 的行是注释，
+ * 且它们承载着作者的分节线索，不是可有可无的装饰。
+ *
+ * ## 边界（明确记录）
+ *
+ * - **空行不保留**（规范 §3.10：空行只用于分隔，不影响产物）——只在**注释**上做保留；
+ * - **`随机` 块候选之间**的注释**不保留**：那里的每一行都被当作一个随机候选，
+ *   塞进注释会改变候选序号（`LOCAL = RAND:n` 的 n）——宁可不保留，也不改语义。
+ */
+export interface CommentLine extends SugarNodeBase {
+  kind: 'comment';
+  /** 原样的注释文本（含行首 `;`，不含行首缩进） */
+  text: string;
+}
+
+/**
  * 原生直通（块）——规范 §3.10：行首 `@` 起直到下一个 `@` 行或文件末尾，
  * **整块逐行原样透传**（块内不解析糖语法，可含 `#DIM` / `#FUNCTION` 等
  * 预处理行与任意中文文本）。
@@ -456,7 +478,8 @@ export type SugarStatement =
   | ChoiceBlock
   | ColorBlock
   | RawLine
-  | RawFunctionBlock;
+  | RawFunctionBlock
+  | CommentLine;
 
 /** 表达式位置节点（仅出现在 `IfExpr` / `WhenExpr` 的分支体里） */
 export type SugarExprNode = IfExpr | WhenExpr | RawLine;
@@ -468,7 +491,7 @@ export type SugarNode = SugarStatement | SugarExprNode;
  * 文档级节点（只出现在文件顶层，不进块体）：
  * `别名` 声明与 `时机` 块。
  */
-export type SugarTopLevelNode = AliasDecl | TimingBlock;
+export type SugarTopLevelNode = AliasDecl | TimingBlock | CommentLine;
 
 /* ============================== 文档与头声明 ============================== */
 

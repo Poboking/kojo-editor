@@ -381,7 +381,9 @@ describe('compileToFile · 真实磁盘端到端（appData 副本，绝不写游
     const svc = createSugarTranspileService({ io, faceTable: stubFaceTable() });
     await svc.compileToFile(GOOD_SOURCE, target);
     const text = (await io.readText(target)).text;
-    expect(text.startsWith('@')).toBe(true);
+    // 头部注释会保留在最前（第 3 条），故断言`首个非注释行`是函数定义
+    const firstCode = text.split('\n').find((l) => l.trim().length > 0 && !l.trimStart().startsWith(';'));
+    expect(firstCode?.startsWith('@')).toBe(true);
     expect(text).toContain('@M_KOJO_MESSAGE_COM_K12_310');
   });
 });

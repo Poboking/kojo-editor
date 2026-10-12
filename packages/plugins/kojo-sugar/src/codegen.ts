@@ -137,6 +137,14 @@ export function codegen(
   const charNo = fm.charNo ?? '';
   const familySeg = familySegment(fm.family);
 
+  // ---- 文件头注释（第 3 条：注释不能丢）----
+  // 放在最前面：它们按源顺序出现在文件头（`角色:` 之前），常是整份口上的标题/出处，
+  // 生成的三件套函数是**从头部声明派生**的，注释自然该在派生结果之前。
+  for (const node of topLevel) {
+    if (node.kind !== 'comment') continue;
+    em.push(0, node.text, node.loc.start.line);
+  }
+
   // ---- 头部：登记函数 + 开关（规范 §5.5 三件套之登记/开关）----
   emitRegistration(em, fm, charNo, familySeg, opts.faceTable, opts.sink);
 
@@ -564,6 +572,11 @@ function emitStatement(em: Emitter, node: SugarNode, ctx: BodyContext, indent: n
       break;
     case 'rawLine':
       emitRawLine(em, node, ctx, indent);
+      break;
+    case 'comment':
+      // 注释原样落进产物（第 3 条：注释不能丢）。缩进跟着所在层级走——产物里的
+      // 注释在 ERB 里是惰性的，缩进只影响可读性，但"和代码同层"才看得出它属于谁。
+      em.push(indent, node.text, node.loc.start.line);
       break;
     case 'rawFunctionBlock':
       for (const line of node.lines) em.pushRaw(line, node.loc.start.line);

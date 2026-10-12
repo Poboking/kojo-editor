@@ -594,10 +594,13 @@ describe('§3.9 着色块', () => {
 /* ============================================================================ */
 
 describe('§3.10 注释 · 折行 · 原生直通', () => {
-  it('`;` 注释行不产出指令；行内注释被剥除', () => {
+  it('`;` 注释行**原样进产物**（第 3 条：注释不能丢），且不产生输出指令', () => {
     const out = body('角色: 12\n时机 指令 310：\n    ; 这是注释\n    「呀。」\n');
     expect(out).toContain('PRINTFORMW 「呀。」');
-    expect(out).not.toContain('这是注释');
+    // 注释保留（作者的分节线与意图说明要跟着进产物）
+    expect(out).toContain('; 这是注释');
+    // 但注释本身不产出任何指令
+    expect(out).not.toContain('PRINTFORMW ; 这是注释');
   });
 
   it('行尾 `\\` 折行合并为一条 PRINT', () => {
@@ -759,5 +762,55 @@ describe('装配口径 · 分野模板来自 adapter（游戏知识只进 adapte
     expect(erb).toContain('TFLAG:192 = -1');
     expect(erb).toContain('@M_KOJO_MESSAGECHECK_SCENE_K12_311');
     expect(erb).toContain('SETBIT RESULT, 0');
+  });
+});
+
+describe('注释保留（2026-10-12 用户第 3 条：注释不能丢）', () => {
+  it('文件头注释 → 产物最前（整份口上的标题/出处该跟着走）', () => {
+    // 注意：这条要用**整份产物**（`body()` 只截 `IF LOCAL` 段，看不到头部注释）
+    const { erb } = t('; 露米娅 · 摸屁股（310）\n角色: 12\n\n时机 指令 310：\n    「呀。」\n');
+    const lines = erb.split('\n').filter((l) => l.trim().length > 0);
+    expect(lines[0]).toBe('; 露米娅 · 摸屁股（310）');
+    expect(lines[1]!.startsWith('@')).toBe(true);
+  });
+
+  it('时机体内注释 → 落在产物正文里，且缩进与所在层级一致', () => {
+    const out = body(
+      ['角色: 12', '时机 指令 310：', '    ; 分节线', '    「呀。」', '', ''].join('\n'),
+    );
+    // 正文在 `IF LOCAL` 内（1 级），注释应同层
+    expect(out).toContain('\t; 分节线');
+    expect(out).toContain('\tPRINTFORMW 「呀。」');
+    // 顺序保持：注释在台词之前
+    expect(out.indexOf('; 分节线')).toBeLessThan(out.indexOf('PRINTFORMW 「呀。」'));
+  });
+
+  it('块体内注释（`如果` 块里）→ 随块缩进更深一级', () => {
+    const out = body(
+      [
+        '角色: 12',
+        '时机 指令 310：',
+        '    如果 FLAG:1：',
+        '        ; 分支说明',
+        '        「甲。」',
+        '    否则：',
+        '        「乙。」',
+        '',
+      ].join('\n'),
+    );
+    expect(out).toContain('\t\t; 分支说明');
+  });
+
+  it('注释不产生任何指令（惰性：`;` 之后整行都不参与执行）', () => {
+    const out = body('角色: 12\n时机 指令 310：\n    ; PRINTFORMW 不该被执行\n    「呀。」\n');
+    expect(out).toContain('; PRINTFORMW 不该被执行');
+    // 该行没有被当成指令：产物里只有一条真正的 PRINTFORMW（来自台词行）
+    expect(out.split('\n').filter((l) => l.trimStart().startsWith('PRINTFORMW')).length).toBe(1);
+  });
+
+  it('空行仍不保留（§3.10：空行只用于分隔，不影响产物）', () => {
+    const out = body('角色: 12\n\n\n时机 指令 310：\n    「呀。」\n\n\n');
+    // 正文里不出现"连续两个空行"这种源文件的排版痕迹
+    expect(out).not.toContain('\n\n\n');
   });
 });

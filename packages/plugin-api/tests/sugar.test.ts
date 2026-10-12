@@ -490,18 +490,18 @@ describe('golden fixture · 规范 §6 示例固化', () => {
     const fixture = await read(path.join(GOLDENS, 'spec-6.1-lumia-310.kojo'));
     // fixture 前两行为本仓注释头（// 起），不计入比对
     const body = fixture.split('\n').filter((l) => !l.startsWith('//')).join('\n');
-    expect(body).toBe(await specSlice(734, 752));
+    expect(body).toBe(await specSlice(735, 753));
   });
 
   it('§6.2 源文件与规范原文逐字节一致', async () => {
     const fixture = await read(path.join(GOLDENS, 'spec-6.2-choice-heart-random.kojo'));
     const body = fixture.split('\n').filter((l) => !l.startsWith('//')).join('\n');
-    expect(body).toBe(await specSlice(801, 813));
+    expect(body).toBe(await specSlice(804, 816));
   });
 
   it('§6.1 期望产物与规范原文逐字节一致（含 TAB 缩进与 `記入チェック` 注释行）', async () => {
     const fixture = await read(path.join(GOLDENS, 'spec-6.1-lumia-310.expected.erb.todo'));
-    expect(fixture).toBe(await specSlice(758, 791));
+    expect(fixture).toBe(await specSlice(759, 794)); // 头部注释保留后 +2 行
     expect(fixture).toContain('\tPRINTFORMW 「呀……！」');
     expect(fixture).toContain(';記入チェック（=0, 非表示、1, 表示）');
     expect(fixture).toContain('@M_KOJO_MESSAGE_COM_K12_310_1');
@@ -509,7 +509,7 @@ describe('golden fixture · 规范 §6 示例固化', () => {
 
   it('§6.2 期望产物与规范原文逐字节一致（含 HPH_PRINT 与 RAND 块）', async () => {
     const fixture = await read(path.join(GOLDENS, 'spec-6.2-choice-heart-random.expected.erb.todo'));
-    expect(fixture).toBe(await specSlice(819, 841));
+    expect(fixture).toBe(await specSlice(822, 844));
     expect(fixture).toContain('CALL HPH_PRINT(@"……嗯。","w")');
     expect(fixture).toContain('LOCAL = RAND:2');
   });

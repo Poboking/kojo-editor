@@ -294,6 +294,7 @@ export type {
   SugarSeverity,
   SugarSourceMapEntry,
   SugarSourceSpan,
+  CommentLine,
   SugarStatement,
   SugarTopLevelNode,
   SugarTranspileOptions,

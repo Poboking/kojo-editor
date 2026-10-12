@@ -121,8 +121,14 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
   while (!cursor.done) {
     const line = cursor.peek()!;
     const content = contentOf(line);
-    if (content.length === 0 || content.startsWith(';')) {
+    if (content.length === 0) {
       cursor.next();
+      continue;
+    }
+    // 文件头注释**保留**（第 3 条）：它常是整份口上的标题/出处说明，产物里该有
+    if (content.startsWith(';')) {
+      cursor.next();
+      topLevel.push({ kind: 'comment', text: content, loc: spanOf(line) });
       continue;
     }
 
@@ -394,7 +400,9 @@ class BlockParser {
 
       const cls = classifyLine(line);
       if (cls.kind === 'comment') {
+        // 注释保留（第 3 条）——作者的分节线与意图说明要跟着进产物
         this.cursor.next();
+        body.push({ kind: 'comment', text: contentOf(line), loc: spanOf(line) });
         continue;
       }
       if (cls.kind === 'messageCheck') {
@@ -501,8 +509,10 @@ class BlockParser {
         return this.buildHeartNode(line, cls.raw);
       }
       case 'comment':
+        // 注释**保留**（用户 2026-10-12 第 3 条：注释不能丢）——推进游标后作为
+        // `comment` 节点收进当前块体（空行仍按 §3.10 丢弃：只用于分隔）。
         this.cursor.next();
-        return null;
+        return { kind: 'comment', text: contentOf(line), loc: spanOf(line) };
       case 'blank':
         this.cursor.next();
         return null;
@@ -1031,7 +1041,11 @@ class BlockParser {
       }
       const cls = classifyLine(line);
       if (cls.kind === 'comment' || cls.kind === 'blank') {
+        // 块体里的注释保留（第 3 条）；空行仍丢弃（§3.10）
         this.cursor.next();
+        if (cls.kind === 'comment') {
+          out.push({ kind: 'comment', text: contentOf(line), loc: spanOf(line) });
+        }
         continue;
       }
       if (cls.kind === 'choiceHead') {
