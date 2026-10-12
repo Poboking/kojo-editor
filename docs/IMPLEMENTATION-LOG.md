@@ -2282,7 +2282,7 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 > 跑法提醒：**不要**给全量 `pnpm test` 设 `KOJO_SMOKE_PROJECT` —— 那会放行依赖 `sav`
 > 存档的注入链路测试，而本机语料**零存档**，必红两条。正确姿势是全量跑不带变量，
 > 语料基线单独带变量跑那一个文件。
-### 5.49 内核优化批 · L0 实测 + 超长文件丝滑 + 索引快照（2026-10-12 批）
+### 5.51 内核优化批 · L0 实测 + 超长文件丝滑 + 索引快照（2026-10-12 批）
 
 > 背景：用户定调「内核优化 = 体感丝滑」（例 1：加载快、**二次打开项目不用再等**；
 > 例 2：**超长 ERB 打开/编辑不卡**）。路线权威 `docs/PERF-REVIEW-2026-10-11.md`
@@ -2354,7 +2354,7 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
   additive 补齐以省掉）。
 - `kernel.compute`（T1）/ L2 共享缓存 / L4 增量转译未动。
 
-### 5.50 计算池批 · kernel.compute 时间片调度 + 级联过池 + 并行运输层（2026-10-12 批）
+### 5.52 计算池批 · kernel.compute 时间片调度 + 级联过池 + 并行运输层（2026-10-12 批）
 
 > 用户定调：**「即点即现」，让用户感受不出明显停顿**。本批 = 路线文档 §三 L1 的落地，
 > 分两段：**调度**（时间片/优先级/单飞尾缘）与**运输**（多线程真并行）。
@@ -2451,9 +2451,9 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
   已由 8 ms 窗口自动满足）。
 - L2 转译共享缓存 / L4 增量转译未动。
 
-### 5.51 本批自审与验收记录（2026-10-12，审阅后推送前）
+### 5.53 本批自审与验收记录（2026-10-12，审阅后推送前）
 
-> 范围：§5.49 / §5.50 两批（7 个提交）+ 审修补丁。审阅标准：①「一切皆插件」解耦哲学；
+> 范围：§5.51 / §5.52 两批（7 个提交）+ 审修补丁。审阅标准：①「一切皆插件」解耦哲学；
 > ②真 bug。结论：**哲学合规；发现 1 个真 bug（已修）+ 1 处死代码（已清）**。
 
 #### 一、解耦哲学核对（逐项）
@@ -2496,3 +2496,105 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 | `tsc`（root + `packages/app` 双跑） | exit 0 |
 | `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
 | `pnpm --filter @kojo/app build` | ✅（`dfd3a65` 批已验；审修只动 transport dispose，不涉及打包路径） |
+
+### 5.54 UI 重设计 P4 补记（`d871878`）与两组文档的合流
+
+> **性质**：入库后回填（P4 落地时没有日志条目）。
+>
+> **合流声明（重要）**：本节原本还包含一整块「口上项目批 P-A…P-F 补记」，与 §5.49 / §5.50
+> 是同一批事实的两份记录。合流时**整块删除**，权威记录只留工作区组自己写的
+> **§5.49（P-A…P-E + P-F，含提交清单、三条硬约束、cargo 12 项、ADR-0005 冲突面预告）**
+> 与 **§5.50（T2 署名/授权）**——它们含本组没有的实测细节。本组对这条线的贡献仅剩
+> §5.55 的 git 收口核验。**同一事实不写两份**，这是本仓库双真相源纪律在文档侧的延伸。
+
+#### UI 重设计 P4（`d871878`，2026-10-11 入库，本组此前无记录）
+
+三容器面板**拖拽停靠**（自定义 MIME，活动栏 / section 头 / tab 均可作拖拽源，落点高亮）+
+全禅**限宽设置项**（`zenLimitWidth`，默认 true）+ **设置 overlay**（活动栏底部齿轮 + 命令「打开设置」，
+Esc 优先级链 picker > overlay > settings > zen）。改动 3 文件 +200/−10
+（`ShellLayout.tsx` / `layout.ts` / `styles.css`），**无新增测试**——发版判据 ⑥ 的「真实终端勾验」
+仍是欠账；`docs/UI-REDESIGN-2026-10-11.md` 与 HANDOFF 曾长期标注「P4 待开工」，一并更正。
+
+
+### 5.55 分支收口批 · `feat/kernel-optimization` 两轮 rebase 进 master 的冲突处置与核验（2026-10-12）
+
+> 背景：§5.51–§5.53 的 8 个提交建立在 `b1f260e` 上，并已 push 到 `origin/feat/kernel-optimization`；
+> 期间 `origin/master` 推进了**两轮**（先是口上项目批 P-A…P-F = `712a9f5`，再是 T2 / T2.1 + 文档收口 = `11e5ac3`）。
+> 收口方式 = **分支 rebase 到 origin/master，再回 master 做 fast-forward**——本仓库历史里 **0 个 merge 提交**，
+> 不用反向合并。**同一条链因此经历了两轮 rebase，SHA 每轮都在变**：引用本节时**优先用批次名**，SHA 只作时点快照。
+
+#### 一、过程（reflog 还原）
+
+| 事件 | 结果 |
+|---|---|
+| 分支 8 提交（`3d17e2b`…`74603c5`）push 到 origin | 远端分支 = rebase 前旧链 |
+| 第一轮 `rebase origin/master`（→ `712a9f5`） | `rebase (continue)` ×2 = 两次**手工解冲突**（`perf(ui)`、`perf(sched)`） |
+| 漏网 | `perf(sched)` 的 `kernel/src/index.ts` 被 git 判「自动合并」，3 行冲突标记内嵌在正文里，`git add -A` 连它一起提交 → 靠 typecheck **TS1185** 才逮到，补一个 `fix(merge)` 善后 |
+| master FF ×2（到 `712a9f5`，再 FF 分支） | master tip = `fix(merge)` |
+| **推送前历史折叠** | 在 `perf(sched)` 上就地删标记 `--amend` → `git rebase --onto` 重放其后 3 提交 → `fix(merge)` 独立提交消失；**`git diff` 折叠前后 tip 为空 = 内容零变化** |
+| 首次推送被拒 | `! [rejected] master -> master (fetch first)` —— 远端这时有 3 个新提交（`2dc414f` 文档收口 + `1114c35` T2 + `11e5ac3` T2.1） |
+| 第二轮 `git rebase --onto origin/master 712a9f5 master` | 9 个提交重放；**代码零冲突面**（两侧非 docs 文件求交为空），冲突全落在 `IMPLEMENTATION-LOG.md` / `HANDOFF.md` |
+
+#### 二、当前链（第二轮后；`origin/master..master` = 9 提交）
+
+| 提交 | 批次 | 备注 |
+|---|---|---|
+| `0b80cbb` | docs(perf) 路线取回 | 折叠点之前，两轮均纯重放 |
+| `a09da12` | 内核优化 L0 埋点批 | 同上 |
+| `6b55e43` | 超长文件丝滑批 | **手工解冲突点 1**（EditorPane 只读分野 × 大文件降级） |
+| `3648d92` | 索引快照批 | 本轮文档冲突取远端版 |
+| `151367a` | 计算池批 | **手工解冲突点 2 + 冲突标记折叠点** |
+| `d7f0359` | 并行运输层批 | |
+| `bbeb730` | 扫描段上通道批 | |
+| `c5bebb8` | 审修补丁 | 代码链 tip |
+| 本批（文档批） | 文档欠账补齐 + 编号消冲 | §5.54 / §5.55 所属 |
+
+折叠前的旧 SHA 演进：`0a97f91` → `686687d` → `151367a`；`5fb6d19` → `b06a4da` → `d7f0359`；
+`cb0938a` → `eb12c81` → `bbeb730`；`49aac9a` → `41de425` → `c5bebb8`；`fix(merge)`（`e560fe2`）已消失。
+退路三条：本地 `backup/pre-surgery-20261012`、本地 `backup/pre-rebase2-20261012`、
+远端 `origin/feat/kernel-optimization`（`74603c5`，rebase 前旧链，**暂不删除**）。
+
+#### 三、第二轮的文档消冲（本轮真正的工作量）
+
+| 冲突面 | 处置 |
+|---|---|
+| 代码文件 | **零交集**（两侧非 docs 改动求交为空）→ 全部自动应用，无一次代码冲突 |
+| `IMPLEMENTATION-LOG` 编号撞车 | 远端已用 **§5.49 / §5.50** 记口上项目批与 T2；本链的 §5.49/§5.50/§5.51（内核优化三批）**顺延为 §5.51 / §5.52 / §5.53**，内部交叉引用同步改写。**远端编号不动**——已公开的历史不重写 |
+| 双写补记 | 本批原有一份「口上项目批 P-A…P-F 补记」与远端 §5.49/§5.50 同题 → **整块删除**，只留 §5.54 的 UI P4 与合流声明 |
+| `HANDOFF` §一 / §六 / §十 | 三处**均取远端版**（对方已把 §十 重写为「两条主线 + cargo 提醒 + §十二 索引」，§六 新增口上项目线小节），本批只把仍属本组的差异重新贴上：基线数字、阅读范围、rebase 纪律、分支现状 |
+| 远端把仓库路径写成 `C:\DSH\kojo-editor`（§二 / §十 两处，base 是 `D:`） | **未改回**——可能是另一台机器的真实路径，此处登记，待工作区组确认 |
+
+#### 四、收口核验（两轮各自实测）
+
+| 检查 | 方法 | 结果 |
+|---|---|---|
+| 逐提交冲突标记 | 对 `origin/master..master` 的 9 个提交逐个扫行首标记（代码扩展名） | **0 个提交带标记**——折叠在第二轮重放后依然成立 |
+| 第一轮改写程度 | 逐对 `git patch-id --stable` | **6 对逐字节相同**，只有两次手工解冲突不同 → 无第三个暗改点 |
+| 双方内容丢行 | 6 个双改文件（`EditorPane.tsx`、`kernel/{index,kernel}.ts`、`plugin-api/{index,services}.ts`、`ui-sugar-lift/tests/integration.test.ts`）各自新增行归一化后与 tip 求差集 | 全部存活；唯一「消失」的是被**有意合并**的 5 行（见五） |
+| 是否回退过 origin/master | `git diff --name-status` 第一轮 base→tip | 17 A / 23 M / 2 R，**0 个 D**；`kernel/src/workspace.ts` 未被内核优化批改动 |
+| 折叠等价性 | `git diff` 折叠前后 tip | **输出为空** |
+| 合流后三绿 + 打包 | `pnpm test` / 双 typecheck / 审计 / `pnpm --filter @kojo/app build` | **1183 passed / 9 skipped（1192）**，74 文件过 / 4 跳；root 与 `@kojo/app` 双跑 exit 0；审计 A–D 全绿（16 插件）；构建 ✓ |
+
+**数字闭合**：`b1f260e` 基线 1012 + 内核优化批 71 + 口上项目批 68 + T2 29 + T2.1 3 = **1183**。
+**结论：不需要回滚**——两轮收口都没有丢任何一侧的功能，代码层面零冲突面，文档层面已消冲去重。
+
+#### 五、两处解冲突的裁定（都是取并集，不是二选一）
+
+1. **`EditorPane.tsx` 换文件时的 `updateOptions`**：origin 侧把「ERB 默认只读」改成**按工作区分野**
+   （`isErbLike && !inWorkspace`），分支侧在同一位置插入**按行数分级降级**。合并结果两义并存——
+   `readOnly: isErbLike(filePath) && !inWorkspace(filePath)` 与 `...editorOptionsForLineCount(...)`
+   同一次 `updateOptions` 给出，且仍在 `setModel` **之前**落选项（大文件不先按默认渲染一帧）。
+2. **`kernel/src/index.ts` + `kernel.ts` + `plugin-api/{index,services}.ts`**：`workspaces`
+   （`WorkspaceServiceImpl` / `WellKnownServices.Workspaces`）与 `compute`
+   （`createComputePool` / `kernel.compute`）两套导出、服务键、`Kernel` 字段**双份保留**。
+
+#### 六、纪律（同步写入 HANDOFF §八 与 §十）
+
+1. **rebase / 解冲突之后，必须在同一批内跑 root + app 双 typecheck + 全仓冲突标记扫描**：
+   TS1185 是这次唯一逮住问题的关口，而 `git add -A` 恰恰会在 typecheck 之前把标记提交进历史。
+   解冲突批**逐文件 add**，add 后 `git diff --cached` 亲眼过一遍。
+2. **tip 干净 ≠ 历史干净**：推送前对 `origin/master..master` 逐提交扫标记，才是可 bisect 性的保证。
+3. **未推送的历史可以修，已推送的不改**：本轮编号消冲以远端为准，就是这条的延伸。
+4. **动手前先 `git fetch`**：本轮第一次 push 被 `(fetch first)` 拒，才发现远端已推进三个提交——
+   在旧认知上做长手术，代价就是两轮消冲。
+5. **同一事实不写两份文档**：两组各自补记同一批 = 第二真相源；合流时删较粗的一份并留指针。

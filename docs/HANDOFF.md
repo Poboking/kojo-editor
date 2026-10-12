@@ -36,7 +36,7 @@
 > ④ **索引快照 + 增量复扫**：erb-parser 把 `{path→(mtimeMs,textLength,ErbFile)}` 落存储域（实测 52,601 行仅 43 KB JSON，全量约 10–20 MB），二次打开 mtime 未变者零读盘零解析、只重扫变更文件（`service.buildIndex` 显式调用仍 = 强制重建）；实机探针常驻（`__kojoPerf`）；
 > **基线更新：1043 passed / 8 skipped（1051）/ 16 插件 / 审计 A–D 四项全绿；typecheck root + `@kojo/app` 双跑 exit 0**。
 > **下批欠账**：条件抽取 ~6.2s / 约定校验 ~9s 既没持久化也没下池（级联大头仍在）；`kernel.compute`（T1）/ L2 共享缓存未动。
-> 本会话续完成 **2026-10-12 计算池批（即点即现）**（`01635b7` + 本批；实施记录 §5.50）——
+> 本会话续完成 **2026-10-12 计算池批（即点即现）**（`01635b7` + 本批；实施记录 §5.52）——
 > ① 先测量两处：`buildNavigatorTree` **258ms**（不值得切片，改为去重）；索引构建串行 **4,290ms**（纯 CPU 主导 → 必须多线程）；
 > ② 修「开项目建两遍树」（`project.opened` 与 `kojo.functionChanged` 双触发同一索引实例 → 新增纯函数 `shouldRebuildIndex` 去重）；
 > ③ 新内核设施 **`kernel.compute`**（契约 `plugin-api/src/compute.ts`）：`yieldToMain`（MessageChannel 宏任务让路）+ `runSliced`（时间片 + 窗口并发）+ 优先级 interactive>background + `runLatest` 单飞尾缘合并 + `offload`（可搬运任务，失败回退本地）；
@@ -152,9 +152,8 @@
   4. **顺手修复潜在缺陷**：宿主 `Ctrl+S` 回调（`addCommand` 只注册一次）原闭包捕获旧 `save`（deps 含 `filePath`）→ 换文件后会存到旧文件。改用 `filePathRef.current` + 稳定 deps 修掉。
   5. **测试**：+8 单测（`save-handler.test.ts` 多路径）+ `integration.test.ts` 补槽收集与断言；基线 **958 passed / 6 skipped（964）**；typecheck root+app ✅；audit ✅（16 插件）。
   （S7 **数据层**记录见 §6.27 / IMPLEMENTATION-LOG §5.36：`planSave` + `resolveSugarTarget` + 全角空格单一真源上收契约层。）
-- **UI/UX 重设计线（发版判据 ⑥）进度**：需求定稿 v1.0（`docs/UI-REDESIGN-2026-10-11.md`）→ **P0 写权限闭环 ✅**（写权限徽章 / 通知中心 / 只读保存拦截 / 三入口 + 三轮实机反馈修复，§5.38–§5.41）→ **P1 壳层骨架 ✅**（五区布局 + 活动栏 + 三容器 + 10 面板迁移，§5.42，`4ae9366`）→ **P2 命令与工具栏 ✅**（统一命令注册表 + 命令面板 / 快速打开 + overlay 宿主 + 新建口上文件向导，§5.43，`e4663aa` + `0bf2eb9`）→ **P3 编辑器深化 ✅**（多标签 + 💡 CodeAction + 状态栏诊断计数，§5.44，`63f362e` + `9e72af0`）→ **审阅 + 补测 ✅**（3 处修复 + app 层 +48 测试，§5.45）→ **B1 修复 ✅**（宿主订阅 `file.changed`，外部写盘后重载 model，杜绝旧文本覆盖升糖结果，§5.46）→ **审阅回执修复 ✅**（`pickSaveHandler` 的 `matches()` 抛错不再静默，改 `console.warn`；针对 `ed68f231` 审阅第 2 条，第 1 条 `filePathRef` 系误读、第 3 条 sort 稳定不成立；无独立提交，随 P1 批 `4ae9366` 入库，§5.47）→ **解耦修复批 ✅**（审阅 `DECOUPLING-REVIEW-2026-10-11.md` M1–M4 全量：事件 emit 权限单一真源 + 编译期防漂移断言〔机制化根治 `0bf2eb9`〕/ 宿主文案去游戏化 + 审计 A 项收编宿主 UI·Monaco 层 / `WellKnownCommands` / gitignore+docs 入库，§5.48）→ **P4 停靠与全禅批（待用户确认后开工）**。
+- **UI/UX 重设计线（发版判据 ⑥）进度**：需求定稿 v1.0（`docs/UI-REDESIGN-2026-10-11.md`）→ **P0 写权限闭环 ✅**（写权限徽章 / 通知中心 / 只读保存拦截 / 三入口 + 三轮实机反馈修复，§5.38–§5.41）→ **P1 壳层骨架 ✅**（五区布局 + 活动栏 + 三容器 + 10 面板迁移，§5.42，`4ae9366`）→ **P2 命令与工具栏 ✅**（统一命令注册表 + 命令面板 / 快速打开 + overlay 宿主 + 新建口上文件向导，§5.43，`e4663aa` + `0bf2eb9`）→ **P3 编辑器深化 ✅**（多标签 + 💡 CodeAction + 状态栏诊断计数，§5.44，`63f362e` + `9e72af0`）→ **审阅 + 补测 ✅**（3 处修复 + app 层 +48 测试，§5.45）→ **B1 修复 ✅**（宿主订阅 `file.changed`，外部写盘后重载 model，杜绝旧文本覆盖升糖结果，§5.46）→ **审阅回执修复 ✅**（`pickSaveHandler` 的 `matches()` 抛错不再静默，改 `console.warn`；针对 `ed68f231` 审阅第 2 条，第 1 条 `filePathRef` 系误读、第 3 条 sort 稳定不成立；无独立提交，随 P1 批 `4ae9366` 入库，§5.47）→ **解耦修复批 ✅**（审阅 `DECOUPLING-REVIEW-2026-10-11.md` M1–M4 全量：事件 emit 权限单一真源 + 编译期防漂移断言〔机制化根治 `0bf2eb9`〕/ 宿主文案去游戏化 + 审计 A 项收编宿主 UI·Monaco 层 / `WellKnownCommands` / gitignore+docs 入库，§5.48）→ **P4 停靠与全禅 ✅**（三容器拖拽停靠 + 全禅限宽设置 + 设置 overlay，`d871878`；日志系 §5.54 **入库后补记**，**判据⑥的实机勾验仍是欠账**）。
   - 关键纪律（本线全程遵守）：契约**全部 additive**（新字段 optional，缺省即现状，任一中间态可运行）；宿主**零业务知识**（壳层只提供容器/动作语义）；布局状态住壳层私有 `localStorage`（`kojo.ui.layout.v1`），**不进内核存储域**；新增内核事件必须在 `plugin-api/src/events.ts` 登记 emit 权限分类（`PLUGIN_EMITTABLE`/`KERNEL_ONLY` 两表 + 编译期断言 `KERNEL_EVENT_CLASSIFICATION_GUARD` 强制，§5.48——`0bf2eb9` 手工同步教训已机制化）。
-  - **当前基线：1043 passed / 8 skipped（1051）；16 插件；审计 A–D 四项全绿（A 项已覆盖宿主 UI·Monaco 层）；typecheck root + `@kojo/app` 双跑 exit 0。**（分支 `feat/kernel-optimization`，内核优化批详见 §5.49）
 
 - **口上项目线（2026-10-12 批 P-A…P-E，✅ 本组主线，权威记录 = IMPLEMENTATION-LOG §5.49）**：
   落地《口上项目/口上树讨论纪要》定调的「口上项目 ──引用──▶ 游戏项目」对偶模型，
@@ -176,10 +175,20 @@
     悬停看原文出处）+ 导入向导随 meta 携带原作者。**口径 = 高精度宁缺勿滥**：
     实测 214 包只抽到 26 个署名，这是设计结果——假阳性会让人把别人的作品当无主作品改。
     语料基线常驻 `attribution.corpus.test.ts`（`KOJO_SMOKE_PROJECT` 守门）。
-- **当前基线（2026-10-12 T2 批后）：1109 passed / 9 skipped（1118）；16 插件；
-  审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；`cargo test --lib` 12 项全绿。**
+- **当前基线（2026-10-12 口上项目批 T2.1 + 内核优化批合流后实测）：1183 passed / 9 skipped（1192），
+  74 文件过 / 4 跳；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；
+  `pnpm --filter @kojo/app build` ✓；`cargo test --lib` 12 项全绿。**
+  数字闭合：`b1f260e` 基线 1012 + 内核优化批 71 + 口上项目批 68 + T2 29 + T2.1 3 = 1183。
   ⚠ 跑全量**不要**设 `KOJO_SMOKE_PROJECT`（会放行依赖 sav 存档的注入测试而本机零存档必红）；
   语料基线单独带变量跑那一个文件即可。
+- **内核优化线（2026-10-12 批 P-A…P-F 同期，✅ 已收口进 master）**：L0 埋点 → 超长文件丝滑 →
+  索引快照 → 计算池 `kernel.compute` → 并行运输层 → 扫描段上通道 → 审修补丁，
+  权威记录 = IMPLEMENTATION-LOG **§5.51 / §5.52 / §5.53**（体感口径：加载二次不等、超长文件不卡）。
+- **分支收口（IMPLEMENTATION-LOG §5.55）**：`feat/kernel-optimization` 因 `origin/master` 连续推进
+  经历了**两轮 rebase**（第一轮撞在 `EditorPane.tsx` 与 `kernel/plugin-api` 的导出上，均取并集；
+  第二轮纯文档消冲，代码零冲突面）。rebase 漏网的冲突标记曾在 4 个中间提交树里，**推送前已折叠回
+  引入点**并逐提交复扫为 0；`git diff` 折叠前后 tip 为空 = 内容零变化。远端编号（§5.49/§5.50）不动，
+  本链三批顺延为 §5.51–§5.53；两组同题的双写补记已删一份。
 
 ## 三、文档索引（按权威性排序；2026-10-11 整理批后口径）
 
@@ -188,11 +197,11 @@
 | 文档 | 内容 |
 |---|---|
 | `docs/HANDOFF.md`（本文件） | **交接状态 + 下一批动手清单（新会话从这里开始）** |
-| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 §5.49） |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.55**：§5.49/§5.50 = 口上项目批与 T2 权威记录 · §5.51–§5.53 = 内核优化批 · §5.54 = UI P4 补记与两组文档合流 · §5.55 = 分支收口核验） |
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
 | `docs/BASELINES.md` | 实测基线汇总（索引/回放/抽取/校验性能与正确性数字） |
 | `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` | **糖表层规范 v1.2（冻结权威）**：语法/转译/产物逐条定义，golden 逐字节锚定 |
-| `docs/UI-REDESIGN-2026-10-11.md` | **UI/UX 重设计定稿 v1.0**（用户拍板 Q1–Q11；五区布局/additive 槽位/迁移表/P0–P4；= beta.1 判据⑥；**P4 待开工**） |
+| `docs/UI-REDESIGN-2026-10-11.md` | **UI/UX 重设计定稿 v1.0**（用户拍板 Q1–Q11；五区布局/additive 槽位/迁移表/P0–P4；= beta.1 判据⑥；**P0–P4 已全部入库**（P4 = `d871878`），余真实终端勾验） |
 | `docs/KOJO_PROJECT_AND_KOJO_TREE_DISCUSSION_MINUTES.md` | **口上项目 / 口上树 讨论纪要（定调权威）**：对偶+引用模型、三条硬约束、五个决策问题、§5 全量清单（口上项目线的 backlog 源头） |
 | `docs/LIFT-REPOSITION-2026-10-12.md` | 升糖重定位决策（升糖降为预览、ERB 默认只读的由来；与 ADR-0005 同源） |
 | `docs/USER-GUIDE.md` | 终端用户指南（安装 / 开项目 / .kojo 保存编译 / 注入器安全） |
@@ -697,6 +706,7 @@ node tools/smoke-tauri-ipc.mjs
 | **沙箱 `os error 231` 未复现**：本会话 Trae 终端（PowerShell）直接 `node tools/smoke-tauri-dom.mjs` / `pnpm tauri dev` → vite 1420 ✓ / cargo 增量 ~21s / 宿主 ✓ / CDP 9222 ✓ / DOM ✓ | 桌面壳可在正常终端跑；真实 IPC 冒烟走 `node tools/smoke-tauri-ipc.mjs`（Rust 双闸 a–e，自动还原 store/文件/备份） |
 | tauri dev 首轮冷启动 vite `Re-optimizing dependencies` 会 HMR 重载页面（项目打开后回欢迎页） | 首次 dev 的已知抖动，二次稳定；`smoke-tauri-ipc.mjs` 已加端口预检 + 180s 等待缓解 |
 | **同工作区并行线 WIP 会让集成冒烟断言误红**（如 adapter 新增规则使 `ruleCount` 5→6） | 先 `node tools/audit-decoupling.mjs` 粗判；再 `git stash push -- <并行线文件>` 复跑确认本批无回归，`git stash pop` 还原；**只提交自己边界内的文件**，并在 IMPLEMENTATION-LOG 记待办 |
+| **rebase 解冲突时，git 判为「自动合并」的文件可能内嵌冲突标记；`git add -A` 会把它直接提交进历史**（2026-10-12 实录：计算池批提交 `0a97f91`（两轮 rebase 后现链为 `151367a`，演进表见 §5.55）把 `<<<<<<< / ======= / >>>>>>>` 连同正文提交，靠 typecheck **TS1185** 才逮到；tip 补干净 ≠ 历史干净，中间 4 个提交仍带标记） | 解冲突批**逐文件 add** + `git diff --cached` 过目，不用 `git add -A` 兜底；提交后立刻跑 **root + app 双 typecheck** 并全仓扫描冲突标记；推送前用 `git patch-id --stable` 逐对核对 rebase 前后提交，只对不相同的两对做逐行归属核验；已公开的历史不要乱改，**未推送时**用 `git rebase --onto` 把善后折叠回引入点（`git diff` 新旧 tip 为空即证内容零变化，详见 IMPLEMENTATION-LOG §5.55） |
 
 ## 九、本会话踩坑记录（给未来的自己）
 
@@ -731,17 +741,20 @@ node tools/smoke-tauri-ipc.mjs
 ## 十、新会话动手清单
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1109 passed / 9 skipped** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.50 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1183 passed / 9 skipped（1192）** / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，本机 cargo 可用，秒级）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.55 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前两条主线**：
    - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 已通，**下一批首选 = 导出 ZIP**
      （需 Rust 加压缩依赖 + `export_zip` 命令，照 `exportDirectory` 的「对话框即授权」形态），
      其后 = 直连模式开关 · 多剧本编号上树 · 中日对照。
-   - **UI/UX 重设计线**（发版判据 ⑥）：P0–P3 ✅，**P4 = 三容器拖拽停靠 + 全禅模式 + 设置 overlay**
-     待开工（需求定稿 `docs/UI-REDESIGN-2026-10-11.md` §200）。
+   - **UI/UX 重设计线**（发版判据 ⑥）：P0–P4 **已全部入库**（P4 = 三容器拖拽停靠 + 全禅模式 +
+     设置 overlay，`d871878`，记录见 §5.54）；**唯余真实终端勾验**（需求定稿 `docs/UI-REDESIGN-2026-10-11.md` §200）。
    - **不属于本组**：语法糖语义（`kojo-sugar` / `ui-sugar-*` / `.kojo` 转译高亮 / 糖视图）与
      解析索引性能 —— 归别组，见 §十二。**要动它们的测试夹具前先查 `origin/syntax-sugar`。**
-5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`；**新批次编号用「日期 + 简称」，不再用 vX.Y 第N批（§十一 版本纪律）**；发版时走 §十一 的 tag 流程（首个发行版 = `v0.4.0-beta.1`，判据六项）
+5. 每完成一批：`pnpm test` 全绿 → Conventional Commits 提交 → `node tools/git-push.mjs`；**新批次编号用「日期 + 简称」，不再用 vX.Y 第N批（§十一 版本纪律）**；发版时走 §十一 的 tag 流程（首个发行版 = `v0.4.0-beta.1`，判据六项）。
+   **解过 rebase/merge 冲突的批次，推送前必须 root + app 双 typecheck + 全仓冲突标记扫描**
+   （§八 末行 / §5.55）；`tip 干净 ≠ 历史干净`——推送前对 `origin/master..master` 逐提交扫标记。
+   **动手前先 `git fetch`**：本轮第一次 push 就是被 `(fetch first)` 拒了才发现远端已推进三条。
 
 ## 十一、版本纪律（2026-10-11 定，用户拍板）
 
