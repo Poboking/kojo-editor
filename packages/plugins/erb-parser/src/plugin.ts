@@ -9,6 +9,7 @@ import type {
   Plugin,
 } from '@kojo/plugin-api';
 import { KernelServices } from '@kojo/plugin-api';
+import { PARSE_FILE_TASK, erbParserTasks, type ParseFilePayload } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
 import {
   SNAPSHOT_VERSION,
@@ -61,6 +62,9 @@ export function createErbParserPlugin(): Plugin {
        * 用 `concurrency` 保住 IPC 并行度，窗口之间让出主线程。
        */
       const compute = ctx.inject<ComputePool>(KernelServices.Compute);
+      // 注册可搬运任务：本地实现 = 无并行通道（或通道失败）时的回退路径；
+      // worker 侧由装配层用**同一份表**（`erbParserTasks`）注册，避免映射漂移。
+      for (const [kind, impl] of Object.entries(erbParserTasks)) compute.registerTask(kind, impl as never);
       /** 本插件命名空间的存储域：索引快照的落点（`{appData}/store/erb-parser/`） */
       const storage = ctx.storage;
 
@@ -137,12 +141,12 @@ export function createErbParserPlugin(): Plugin {
           { concurrency: PARSE_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.parse' },
           async (path) => {
             try {
+              // IO 留主线程（worker 内 IPC 未验证），**只把纯解析**搬上并行通道：
+              // 有 worker 时是真并行（多槽轮转），无 worker / 通道失败时自动内联回退。
               const tf = await io.readText(path);
-              fresh.set(path, {
-                mtimeMs: tf.mtimeMs,
-                textLength: tf.text.length,
-                file: parseErbText(tf.text, path),
-              });
+              const payload: ParseFilePayload = { text: tf.text, path };
+              const file = await compute.offload<ErbFile>(PARSE_FILE_TASK, payload);
+              fresh.set(path, { mtimeMs: tf.mtimeMs, textLength: tf.text.length, file });
             } catch (err) {
               ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
             }

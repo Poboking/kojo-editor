@@ -95,7 +95,7 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
   const slots = new SlotRegistryImpl();
   const storage = new StorageServiceImpl(opts.storageBackend ?? new FileStorageBackend(opts.platform));
   const io = new FileIOServiceImpl(opts.platform, kernelLog);
-  const compute = createComputePool();
+  const compute = createComputePool({ log: kernelLog });
 
   // 内核服务以 'kernel' 名义注册（插件通过 requires: ['kernel.bus', ...] 消费）
   container.provide(KernelServices.Bus, bus, 'kernel');

@@ -178,12 +178,23 @@ export type { WellKnownCommandId } from './slots';
 export { KernelServices, WellKnownServices } from './services';
 export type { KernelServiceKey, PluginRegistry, WellKnownServiceKey } from './services';
 export type {
+  ComputePayload,
   ComputePool,
   ComputePoolStats,
   ComputePriority,
   ComputeRunOptions,
   ComputeTaskStat,
+  ComputeTransport,
 } from './compute';
+// 并行运输层（协议 + 两侧实现；零平台依赖，供宿主与 worker 入口共用）
+export {
+  createWorkerTransport,
+  handleComputeRequest,
+  type ComputeRequest,
+  type ComputeResponse,
+  type ComputeTaskTable,
+  type ComputeWorkerLike,
+} from './compute-worker';
 
 export type {
   ControlFlowStatement,

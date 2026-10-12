@@ -9,9 +9,17 @@
  * （真池会让异常整体 reject，本插件两处调用都在 fn 内 try/catch，故等价）。
  * 真池自身的时间片 / 优先级 / 单飞尾缘语义由 `kernel/tests/compute.test.ts` 覆盖。
  */
-import type { ComputePool } from '@kojo/plugin-api';
+import type { ComputePool, ComputePoolStats } from '@kojo/plugin-api';
 
 export function makeComputeStub(): ComputePool {
+  /** 可搬运任务的本地实现表（等价于"无并行通道"的真池行为） */
+  const tasks = new Map<string, (payload: never) => unknown>();
+  const noChannel = (): ComputePoolStats['offload'] => ({
+    parallel: false,
+    dispatched: 0,
+    fellBack: 0,
+    inline: 0,
+  });
   return {
     async yieldToMain(): Promise<void> {},
     async runSliced<T, R>(
@@ -30,7 +38,18 @@ export function makeComputeStub(): ComputePool {
     },
     runLatest: <R,>(_key: string, _opts: unknown, fn: () => R | Promise<R>): Promise<R> => Promise.resolve(fn()),
     busyInteractive: () => false,
-    stats: () => ({ tasks: [], yields: 0, interactiveActive: false }),
+    registerTask: (kind: string, impl: (payload: never) => unknown) => {
+      tasks.set(kind, impl);
+    },
+    // 测试环境没有 worker：恒"无并行通道"，offload 走本地实现（真池的等价回退路径）
+    parallel: () => false,
+    attachTransport: () => undefined,
+    async offload<R = unknown>(kind: string, payload: unknown): Promise<R> {
+      const impl = tasks.get(kind);
+      if (!impl) throw new Error(`No local implementation registered for compute task '${kind}'`);
+      return (await impl(payload as never)) as R;
+    },
+    stats: () => ({ tasks: [], yields: 0, interactiveActive: false, offload: noChannel() }),
     resetStats: () => undefined,
   };
 }

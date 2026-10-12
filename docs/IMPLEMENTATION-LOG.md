@@ -2353,3 +2353,88 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 - `walkDir` 条目未带 mtime/size（现按 stat 逐文件补，2,317 次 IPC；后续可在 io 契约
   additive 补齐以省掉）。
 - `kernel.compute`（T1）/ L2 共享缓存 / L4 增量转译未动。
+
+### 5.50 计算池批 · kernel.compute 时间片调度 + 级联过池 + 并行运输层（2026-10-12 批）
+
+> 用户定调：**「即点即现」，让用户感受不出明显停顿**。本批 = 路线文档 §三 L1 的落地，
+> 分两段：**调度**（时间片/优先级/单飞尾缘）与**运输**（多线程真并行）。
+
+#### A · 先测量（两处，均建→跑→删）
+
+1. **导航树建树成本**：`buildNavigatorTree` 在 99,397 函数上 **258 ms**（连续三次 258/267/259，
+   稳定）；产出 141 角色 / 349 家族 / 3,017 面 / orphans 1,976。
+   → 结论：**不值得为它做累积/装配两阶段切片**（收益 < 300 ms，重构风险不划算）；
+   改为**去重**（见 B）。
+2. **索引构建成本**：真实语料 2,317 文件，`readFileSync`（串行）+ `parseErbText` 合计 **4,290 ms**。
+   → 结论：索引墙钟时间由**纯 CPU 解析**主导，**切片让路改变不了"要等多久"**——
+   要真提速必须多线程。这是本批 C 段的立项依据。
+
+#### B · 消除"开项目建两遍树"
+
+`ui-kojo-navigator` 的 `refresh()` 被 `project.opened` 与 `kojo.functionChanged`
+**双双触发**，两者最终拿到**同一个 `ErbIndex` 实例** → `buildNavigatorTree` 白跑第二遍
+（258 ms × 2）。新增纯函数 `shouldRebuildIndex(prev, next)`（引用比较，可单测）在 `rebuild`
+入口去重；索引真正替换（新实例）时照常重建。
+
+#### C · 计算池（服务键 `kernel.compute`）
+
+契约住 `plugin-api/src/compute.ts`（插件不能 import kernel，故类型必须在公共包），
+实现住 `kernel/src/compute.ts`；`createKernel` 以 `'kernel'` 名义注册，并在 `Kernel` 上
+暴露 `compute` 字段。
+
+| 能力 | 语义 |
+|---|---|
+| `yieldToMain()` | `MessageChannel` 宏任务让路（Node/WebView 通吃；**避开 `setTimeout` 的 4 ms 嵌套钳制**）。`addEventListener` 而非 `onmessage`：node/DOM 两套 lib 对 `MessagePort` 声明不同（老坑再现） |
+| `runSliced(items, opts, fn)` | 时间片预算（默认 8 ms ≈ 半帧）；`concurrency` 支持**窗口内并发**（IO/CPU 混合循环的正确形态：保住 IPC 并行度，只在**窗口之间**让路） |
+| 优先级 | `interactive` > `background`：背景档在片间发现交互档在跑**主动让路**（合作式，不抢占同步片） |
+| `runLatest(key, ...)` | 单飞 + **尾缘合并**（中间版本跳过，等待者共用最新结果）——高频 provider 的背压 |
+| `offload(kind, payload)` | 可搬运任务：有通道 → 分发；无通道/通道失败 → **回退本地实现**（连续失败 3 次停发） |
+| `stats()` | 片数 / 让路 / 耗时 / 分发 / 回退计数（供性能探针与状态面板） |
+
+**运输层（`plugin-api/src/compute-worker.ts`）**：协议 `{id,kind,payload}` ↔ `{id,result|error}`；
+`createWorkerTransport(factory, {size})` + `handleComputeRequest(tasks, data)`。
+关键决策：**单槽不减少总 CPU**（只是换个线程跑），故支持**多槽轮转**，
+装配层按 `hardwareConcurrency - 1`（封顶 4）取值。
+
+#### D · 级联过池（三处）
+
+| 位置 | 标签 | 并发 | 说明 |
+|---|---|---|---|
+| `erb-parser` stat | `index.stat` | 32 | 与 `readText` 的 mtime 同源 |
+| `erb-parser` parse | `index.parse` | 12 | **IO 留主线程**（Tauri IPC 不搬进 worker），只把纯解析 `offload('erb.parseFile')` |
+| `condition-extractor` | `condition.extract` | 8 | 原 `mapLimit(8)` 换成池（窗口间让路） |
+
+**可搬运任务表单一真源**：`erb-parser/src/offload.ts` 导出 `erbParserTasks`，
+宿主侧 `registerTask`（回退路径）与 worker 入口（`app/src/compute-tasks.ts` → `computeTasks`）
+**引用同一份**——kind 不会两侧漂移。
+
+#### E · 并行运输层的验证（不启动应用）
+
+1. `kernel/tests/compute-transport.test.ts`（15 项）：用 `node:worker_threads`（eval 模式）
+   造**真线程**，验证协议往返 / id 不错配 / 任务抛错传播 / 未知 kind / **多槽轮转 size=2 → [0,1,0,1]** /
+   池侧分发与**连续失败回退**（`fellBack` + 停发）。
+2. `pnpm --filter @kojo/app build` **通过**（41.87 s）→ `?worker` 打包链成立，
+   产物 `dist/assets/compute-worker-*.js` 独立成块（3.2 KB）。
+3. **构建产物端到端**：用 `vm` 加载该产物 + 假 `self`，发一条真实请求
+   → 夹具 ERB 得 3 函数 / 22 行；52,601 行真实 ERB 得 124 函数 / 52,602 行。**协议与任务表都活。**
+
+#### 验收结果
+
+| 检查 | 结果 |
+|---|---|
+| `npx vitest run` | **1080 passed / 8 skipped（1088）**（基线 1043 + compute 19 + transport 15 + 建树去重 3） |
+| `tsc`（root + `packages/app` 双跑） | exit 0 |
+| `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
+| `pnpm --filter @kojo/app build` | ✅（含 worker 打包） |
+| 构建产物协议验证 | ✅（真实 ERB 端到端） |
+
+#### 边界未做（下批候选）
+
+- **条件抽取 / 约定校验仍无持久化**：抽取 49.3 万谓词不适合 JSON 快照；
+  校验规则是整项目粒度、无法按文件缓存。二者的下一步是**把 CPU 整段搬上并行通道**
+  （抽取的 `scanControlFlow` + 表达式解析、校验的规则扫描），本批只搬了 `parseErbText`。
+- **Monaco 大文件 createModel 成本未测**（52k 行切文件时 `switch.createModel`/`switch.apply`
+  由实机探针给出）。
+- `markers` 走 interactive 档未接（当前价值有限：preemption 不可能，收益只是"最多等窗口"，
+  已由 8 ms 窗口自动满足）。
+- L2 转译共享缓存 / L4 增量转译未动。

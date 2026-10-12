@@ -49,6 +49,36 @@ export interface ComputePoolStats {
   yields: number;
   /** 当前是否有交互档任务在运行 */
   interactiveActive: boolean;
+  /** 可搬运任务的执行统计 */
+  offload: {
+    /** 是否有并行通道 */
+    parallel: boolean;
+    /** 经通道执行成功次数 */
+    dispatched: number;
+    /** 通道失败后回退本地实现的次数 */
+    fellBack: number;
+    /** 本地（内联）执行次数 */
+    inline: number;
+  };
+}
+
+/**
+ * 可搬运任务的载荷：必须是**可结构化克隆**的纯数据（不带函数/闭包/类实例）。
+ */
+export type ComputePayload = unknown;
+
+/**
+ * 并行通道（运输层）：把"kind + 纯数据载荷"送到别处执行。
+ *
+ * **为什么是 kind 字符串而不是函数**：函数跨不过结构化克隆。故约定
+ * "**传数据不传函数**"——kind 标识由装配层在两侧各自映射到同一份实现
+ * （宿主侧 `registerTask`、worker 侧由装配层合并各插件导出的映射表）。
+ * 内核只认识字符串，插件不认识 Worker。
+ */
+export interface ComputeTransport {
+  readonly available: boolean;
+  invoke(kind: string, payload: ComputePayload): Promise<unknown>;
+  dispose?(): void;
 }
 
 export interface ComputePool {
@@ -75,6 +105,28 @@ export interface ComputePool {
 
   /** 是否已有交互档任务在运行（背景任务据此让路） */
   busyInteractive(): boolean;
+
+  /**
+   * 注册可搬运任务的**本地实现**（内联与"通道失败回退"都用它）。
+   *
+   * 由**任务的所有者**（通常是插件）在 activate 时注册；worker 侧不重复注册——
+   * 装配层把同一份映射交给 worker（见 `ComputeTransport` 头注）。
+   */
+  registerTask(kind: string, impl: (payload: never) => unknown): void;
+
+  /** 是否已接上可用的并行通道 */
+  parallel(): boolean;
+
+  /** 接上并行通道（无 Worker 环境不调用；重复调用以最后一次为准） */
+  attachTransport(transport: ComputeTransport): void;
+
+  /**
+   * 执行一个可搬运任务：有并行通道 → **分发到通道**（真并行）；否则本地实现。
+   *
+   * 通道异常（worker 崩溃 / 任务抛错）→ **回退本地实现**并记一次 `fellBack`
+   * （宁可慢，不可错；回退不静默，走 `log`）。
+   */
+  offload<R = unknown>(kind: string, payload: ComputePayload): Promise<R>;
 
   stats(): ComputePoolStats;
   resetStats(): void;

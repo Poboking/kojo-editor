@@ -30,14 +30,20 @@
  */
 
 import type {
+  ComputePayload,
   ComputePool,
   ComputePriority,
   ComputeRunOptions,
   ComputeTaskStat,
+  ComputeTransport,
+  Logger,
 } from '@kojo/plugin-api';
 
 /** 默认片预算：半个 60fps 帧——保证交互最多等半帧 */
 export const DEFAULT_SLICE_MS = 8;
+
+/** 通道连续失败到这个次数就停发（避免每次任务都白等一次超时） */
+const TRANSPORT_FAILURE_LIMIT = 3;
 
 const ANON = 'anonymous';
 
@@ -88,12 +94,19 @@ interface LatestSlot {
   next: (() => Promise<unknown>) | null;
 }
 
-export function createComputePool(): ComputePool {
+export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
+  const log = opts.log;
   const yieldToMain = createYielder();
   const statsByLabel = new Map<string, ComputeTaskStat>();
   let totalYields = 0;
   let interactiveDepth = 0;
   const latestSlots = new Map<string, LatestSlot>();
+
+  /* ------------------------- 运输层（可搬运任务） ------------------------- */
+  const taskImpls = new Map<string, (payload: never) => unknown>();
+  let transport: ComputeTransport | null = null;
+  let transportFailures = 0;
+  const offloadStat = { dispatched: 0, fellBack: 0, inline: 0 };
 
   function statFor(label: string, priority: ComputePriority): ComputeTaskStat {
     let s = statsByLabel.get(label);
@@ -195,19 +208,64 @@ export function createComputePool(): ComputePool {
     });
   }
 
+  /** 通道当前是否可用（连续失败到上限后停用） */
+  const transportUsable = (): boolean =>
+    transport !== null && transport.available && transportFailures < TRANSPORT_FAILURE_LIMIT;
+
+  async function offload<R>(kind: string, payload: ComputePayload): Promise<R> {
+    if (transportUsable()) {
+      try {
+        const value = await transport!.invoke(kind, payload);
+        transportFailures = 0;
+        offloadStat.dispatched++;
+        return value as R;
+      } catch (err) {
+        transportFailures++;
+        if (transportFailures >= TRANSPORT_FAILURE_LIMIT) {
+          log?.warn(
+            `Compute transport disabled after ${transportFailures} consecutive failures; ` +
+              `all offload tasks now run inline (last error: ${String(err)})`,
+          );
+        }
+        offloadStat.fellBack++;
+      }
+    }
+    const local = taskImpls.get(kind);
+    if (!local) {
+      throw new Error(`No local implementation registered for compute task '${kind}'`);
+    }
+    offloadStat.inline++;
+    return (await local(payload as never)) as R;
+  }
+
   return {
     yieldToMain,
     runSliced,
     runLatest,
     busyInteractive: () => interactiveDepth > 0,
+    registerTask: (kind, impl) => {
+      taskImpls.set(kind, impl as (payload: never) => unknown);
+    },
+    parallel: transportUsable,
+    attachTransport: (t) => {
+      transport?.dispose?.();
+      transport = t;
+      transportFailures = 0;
+      log?.info(`Compute transport attached (parallel=${t.available})`);
+    },
+    offload,
     stats: () => ({
       tasks: [...statsByLabel.values()].map((s) => ({ ...s })),
       yields: totalYields,
       interactiveActive: interactiveDepth > 0,
+      offload: { parallel: transportUsable(), ...offloadStat },
     }),
     resetStats: () => {
       statsByLabel.clear();
       totalYields = 0;
+      offloadStat.dispatched = 0;
+      offloadStat.fellBack = 0;
+      offloadStat.inline = 0;
     },
   };
 }
