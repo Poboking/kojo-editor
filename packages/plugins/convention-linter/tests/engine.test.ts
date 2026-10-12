@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
   CacheExpect,
+  ConventionIssue,
   ConventionRule,
   ErbFile,
   ErbFunctionRef,
@@ -10,6 +11,7 @@ import type {
 } from '@kojo/plugin-api';
 import { parseErbText } from '@kojo/plugin-erb-parser';
 import { ConventionEngine } from '../src/engine';
+import type { LintCache } from '../src/snapshot';
 
 const silentLog: Logger = {
   debug: () => {},
@@ -334,79 +336,374 @@ describe('内置规则：语法糖侧静态约定（sugar.static-conventions）'
   });
 });
 
-describe('ConventionEngine 的结果快照（2026-10-12 体感丝滑批）', () => {
-  const FILE = '/p/kojo/a.ERB';
-  const files = { [FILE]: '@M_KOJO_K1_A\nA\nEND\n' };
-  const idx = () => makeIndex(files);
+describe('ConventionEngine 的分层复用（2026-10-12 按文件增量批）', () => {
+  const A = '/p/kojo/a.ERB';
+  const B = '/p/kojo/b.ERB';
+  const files: Record<string, string> = { [A]: '@M_KOJO_K1_A\nA\nEND\n', [B]: '@M_KOJO_K1_B\nB\nEND\n' };
+  /** 逐文件规则对某文件的结论（测试里造"上次留下的桶"必须与规则真算的**逐字一致**） */
+  const fileIssue = (path: string) => ({
+    ruleId: 'g.file',
+    severity: 'warning' as const,
+    message: `${path} len=${files[path]!.length}`,
+    filePath: path,
+    key: `g.file|${path}`,
+  });
+  /** 本次索引：带整项目指纹 + 逐文件 mtime（生产里由 erb-parser 顺手给出） */
+  const idx = (over: Partial<ErbIndex> = {}): ErbIndex => ({
+    ...makeIndex(files),
+    fingerprint: 'erbfp-1',
+    fileMtimes: new Map([
+      [A, 100],
+      [B, 200],
+    ]),
+    ...over,
+  });
 
-  /** 会真读盘并产出问题的规则：用来证明"命中快照 = 一次 IO 都不发生" */
-  const readingRule = (id: string): ConventionRule => ({
+  /** 逐文件规则：记录被调用过哪些文件，用来证明"改一个只算那一个" */
+  const fileRule = (id: string, calls: string[]): ConventionRule => ({
     id,
-    description: 'reads a file',
+    description: 'per-file rule',
     severity: 'warning',
-    check: async (ctx) => {
-      const text = await ctx.readFile(FILE);
-      return [{ ruleId: id, severity: 'warning' as const, message: `len=${text.length}`, filePath: FILE }];
+    scope: 'file',
+    async checkFile(ctx, file) {
+      calls.push(`${id}|${file.path}`);
+      const text = await ctx.readFile(file.path);
+      return [
+        {
+          ruleId: id,
+          severity: 'warning' as const,
+          message: `${file.path} len=${text.length}`,
+          filePath: file.path,
+          key: `${id}|${file.path}`,
+        },
+      ];
     },
   });
 
-  it('命中快照 ⇒ 零读盘、报告即快照、不回存', async () => {
-    const { engine: probe, readCalls } = harness({ index: idx(), adapterRules: [readingRule('g.a')], files });
-    const produced = await probe.run();
-    expect(readCalls).toHaveLength(1);
+  /** 跨文件规则：记录运行次数 */
+  const projectRule = (id: string, runs: number[]): ConventionRule => ({
+    id,
+    description: 'whole-project rule',
+    severity: 'info',
+    check() {
+      runs.push(1);
+      return [{ ruleId: id, severity: 'info' as const, message: 'cross-file', key: id }];
+    },
+  });
 
-    const saves: string[] = [];
-    const { engine, readCalls: reads2 } = harness({
+  /** 造"上次留下的缓存"（默认覆盖**全部**跨文件规则，否则缺项的规则本次仍要重算） */
+  const cacheOf = (
+    args: {
+      erbFingerprint?: string;
+      mtimes?: Record<string, number | null>;
+      /** 跨文件规则的结论（ruleId → issues）；缺省 = 空表 ⇒ 所有跨文件规则本次重算 */
+      projectResults?: Record<string, ConventionIssue[]>;
+    } = {},
+  ): LintCache => {
+    const mt = args.mtimes ?? { [A]: 100, [B]: 200 };
+    const byPath: Record<string, { mtimeMs: number | null; issues: ReturnType<typeof fileIssue>[] }> = {};
+    for (const [path, mtimeMs] of Object.entries(mt)) byPath[path] = { mtimeMs, issues: [fileIssue(path)] };
+    return {
+      erbFingerprint: args.erbFingerprint ?? 'erbfp-1',
+      projectResults: args.projectResults ?? {},
+      buckets: { 'g.file': byPath },
+    };
+  };
+
+  it('三层全命中 ⇒ 零读盘、零规则调用、**不回存**', async () => {
+    const calls: string[] = [];
+    const runs: number[] = [];
+    // 上次留下的缓存必须覆盖**全部**跨文件规则（含引擎内置那两条），否则缺项的规则本次仍要重算
+    const probe = harness({
       index: idx(),
-      adapterRules: [readingRule('g.a')],
+      adapterRules: [fileRule('g.file', calls), projectRule('g.proj', runs)],
+      files,
+    });
+    const projectResults: Record<string, ConventionIssue[]> = {};
+    for (const r of probe.engine.rules()) {
+      if (r.scope === 'file') continue;
+      projectResults[r.id] = r.id === 'g.proj' ? [{ ruleId: 'g.proj', severity: 'info', message: 'cross-file', key: 'g.proj' }] : [];
+    }
+    const cache: LintCache = { ...cacheOf(), projectResults };
+
+    let saves = 0;
+    const { engine, readCalls } = harness({
+      index: idx(),
+      adapterRules: [fileRule('g.file', calls), projectRule('g.proj', runs)],
       files,
       snapshot: {
         async load() {
-          return produced;
+          return cache;
         },
-        save(_r, expect) {
-          saves.push(expect.fingerprint);
+        save() {
+          saves++;
         },
       },
     });
     const out = await engine.run();
-    expect(out).toBe(produced);
-    expect(reads2).toHaveLength(0);
-    expect(saves).toHaveLength(0);
-    expect(engine.report()).toBe(produced);
+    expect(readCalls).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(runs).toEqual([]);
+    expect(saves).toBe(0);
+    expect(out.issues.map((i) => i.key).sort()).toEqual([`g.file|${A}`, `g.file|${B}`, 'g.proj']);
   });
 
-  it('未命中 ⇒ 计算后按**本次实际判据**落盘', async () => {
-    const saved: { fingerprint: string; issues: number }[] = [];
+  it('改一个文件的 mtime ⇒ 逐文件规则只算那一个，另一个照用（本批靶心）', async () => {
+    const calls: string[] = [];
+    const runs: number[] = [];
+    const saved: LintCache[] = [];
     const { engine, readCalls } = harness({
+      index: idx({
+        fingerprint: 'erbfp-2', // B 变了 ⇒ 整项目指纹跟着变
+        fileMtimes: new Map([
+          [A, 100],
+          [B, 201],
+        ]),
+      }),
+      adapterRules: [fileRule('g.file', calls), projectRule('g.proj', runs)],
+      files,
+      snapshot: {
+        async load() {
+          return cacheOf();
+        },
+        save(cache) {
+          saved.push(cache);
+        },
+      },
+    });
+    const out = await engine.run();
+    expect(calls).toEqual(['g.file|' + B]); // 只有变过的文件被调用
+    expect(readCalls).toEqual([B]);
+    expect(runs).toHaveLength(1); // 跨文件规则整项目重算（它看得到所有文件）
+    expect(out.issues).toHaveLength(3);
+    // 落盘的桶含**两个**文件（复用的 A + 新算的 B），且 B 带新 mtime 与新指纹
+    expect(Object.keys(saved[0]!.buckets['g.file']!).sort()).toEqual([A, B].sort());
+    expect(saved[0]!.buckets['g.file']![B]!.mtimeMs).toBe(201);
+    expect(saved[0]!.erbFingerprint).toBe('erbfp-2');
+  });
+
+  it('两层判据**互不牵连**：整项目指纹变了但文件 mtime 没变 ⇒ 桶仍命中，只重算跨文件规则', async () => {
+    const calls: string[] = [];
+    const runs: number[] = [];
+    const { engine, readCalls } = harness({
+      index: idx({ fingerprint: 'erbfp-CHANGED' }), // 例如增删了别的文件，而这两个文件本身没动
+      adapterRules: [fileRule('g.file', calls), projectRule('g.proj', runs)],
+      files,
+      snapshot: {
+        async load() {
+          return cacheOf({ erbFingerprint: 'erbfp-OLD' });
+        },
+      },
+    });
+    await engine.run();
+    expect(calls).toEqual([]); // 逐文件层命中
+    expect(readCalls).toEqual([]);
+    expect(runs).toHaveLength(1); // 整项目层重算
+  });
+
+  it('索引不带 fingerprint ⇒ 整项目层永不复用（保守），逐文件层照旧命中', async () => {
+    const calls: string[] = [];
+    const runs: number[] = [];
+    const { engine } = harness({
+      index: idx({ fingerprint: undefined }),
+      adapterRules: [fileRule('g.file', calls), projectRule('g.proj', runs)],
+      files,
+      snapshot: {
+        async load() {
+          return cacheOf();
+        },
+      },
+    });
+    await engine.run();
+    expect(runs).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
+  it('索引不带 fileMtimes ⇒ 每个文件都重算（判据不可得就不复用）', async () => {
+    const calls: string[] = [];
+    const { engine } = harness({
+      index: idx({ fileMtimes: undefined }),
+      adapterRules: [fileRule('g.file', calls)],
+      files,
+      snapshot: {
+        async load() {
+          return cacheOf();
+        },
+      },
+    });
+    await engine.run();
+    expect(calls.sort()).toEqual(['g.file|' + A, 'g.file|' + B]);
+  });
+
+  it('桶里的 mtime 为 null ⇒ 该文件判过期（不能拿 null==null 当命中）', async () => {
+    const calls: string[] = [];
+    const { engine } = harness({
       index: idx(),
-      adapterRules: [readingRule('g.a')],
+      adapterRules: [fileRule('g.file', calls)],
+      files,
+      snapshot: {
+        async load() {
+          return cacheOf({ mtimes: { [A]: null, [B]: 200 } });
+        },
+      },
+    });
+    await engine.run();
+    expect(calls).toEqual(['g.file|' + A]);
+  });
+
+  it('磁盘上消失的文件不在本次索引里 ⇒ 不进桶（快照不会越攒越大）', async () => {
+    const saved: LintCache[] = [];
+    const calls: string[] = [];
+    const onlyA: Record<string, string> = { [A]: files[A]! };
+    const { engine } = harness({
+      index: {
+        ...makeIndex(onlyA),
+        fingerprint: 'erbfp-3',
+        fileMtimes: new Map([[A, 100]]),
+      },
+      adapterRules: [fileRule('g.file', calls)],
+      files: onlyA,
+      snapshot: {
+        async load() {
+          return cacheOf();
+        },
+        save(cache) {
+          saved.push(cache);
+        },
+      },
+    });
+    const out = await engine.run();
+    expect(calls).toEqual([]); // A 命中，B 已消失
+    expect(out.issues.map((i) => i.key)).toEqual([`g.file|${A}`]);
+    expect(Object.keys(saved[0]!.buckets['g.file']!)).toEqual([A]);
+  });
+
+  it('checkFile 抛错的文件**不进桶**，其余照常；规则失败显式入 failedRules', async () => {
+    const saved: LintCache[] = [];
+    const broken: ConventionRule = {
+      id: 'g.broken',
+      description: 'fails on A',
+      severity: 'warning',
+      scope: 'file',
+      async checkFile(_ctx, file) {
+        if (file.path === A) throw new Error('disk offline');
+        return [
+          {
+            ruleId: 'g.broken',
+            severity: 'warning',
+            message: 'ok',
+            filePath: file.path,
+            key: `g.broken|${file.path}`,
+          },
+        ];
+      },
+    };
+    const { engine } = harness({
+      index: idx(),
+      adapterRules: [broken],
       files,
       snapshot: {
         async load() {
           return null;
         },
-        save(report, expect) {
-          saved.push({ fingerprint: expect.fingerprint, issues: report.issues.length });
+        save(cache) {
+          saved.push(cache);
         },
       },
     });
     const out = await engine.run();
-    expect(readCalls).toHaveLength(1);
-    expect(saved).toEqual([{ fingerprint: 'fp', issues: out.issues.length }]);
+    expect(out.failedRules.map((f) => f.ruleId)).toContain('g.broken');
+    expect(out.issues.some((i) => i.key === `g.broken|${B}`)).toBe(true);
+    expect(out.issues.some((i) => i.key === `g.broken|${A}`)).toBe(false);
+    expect(saved[0]!.buckets['g.broken']![A]).toBeUndefined(); // 坏结果不缓存
+    expect(saved[0]!.buckets['g.broken']![B]).toBeDefined();
   });
 
-  it('force ⇒ 压根不问缓存（「重新校验」不许被缓存糊住），但仍刷新缓存', async () => {
-    let loads = 0;
-    let saves = 0;
+  it('抛错的跨文件规则不写 projectResults ⇒ 下次必然重算它', async () => {
+    const saved: LintCache[] = [];
+    const boom: ConventionRule = {
+      id: 'g.boom',
+      description: 'throws',
+      severity: 'error',
+      check() {
+        throw new Error('rule crashed');
+      },
+    };
     const { engine } = harness({
       index: idx(),
-      adapterRules: [readingRule('g.a')],
+      adapterRules: [boom],
+      files,
+      snapshot: {
+        async load() {
+          return null;
+        },
+        save(cache) {
+          saved.push(cache);
+        },
+      },
+    });
+    const out = await engine.run();
+    expect(out.failedRules.map((f) => f.ruleId)).toEqual(['g.boom']);
+    expect(saved[0]!.projectResults['g.boom']).toBeUndefined();
+  });
+
+  it('声明 scope:file 却没实现 checkFile ⇒ 显式记失败，不是静默产出 0 条', async () => {
+    const halfWritten: ConventionRule = {
+      id: 'g.half',
+      description: 'scope declared but no checkFile',
+      severity: 'warning',
+      scope: 'file',
+    };
+    const { engine } = harness({ index: idx(), adapterRules: [halfWritten], files });
+    const out = await engine.run();
+    expect(out.issues).toHaveLength(0);
+    expect(out.failedRules).toHaveLength(1);
+    expect(out.failedRules[0]!.error).toMatch(/checkFile/);
+  });
+
+  it('增量装配与全量重算**同值同序**（等价性守门）', async () => {
+    const calls: string[] = [];
+    const full = harness({
+      index: idx(),
+      adapterRules: [fileRule('g.file', calls), projectRule('g.proj', [])],
+      files,
+    });
+    const fullOut = await full.engine.run();
+
+    // 同一份语料，但 A 上次没算成（桶里只有 B） ⇒ 走"复用 B + 重算 A"的增量路径
+    const cache: LintCache = {
+      erbFingerprint: 'erbfp-1',
+      projectResults: {},
+      buckets: { 'g.file': { [B]: { mtimeMs: 200, issues: [fileIssue(B)] } } },
+    };
+    const inc = harness({
+      index: idx(),
+      adapterRules: [fileRule('g.file', calls), projectRule('g.proj', [])],
+      files,
+      snapshot: {
+        async load() {
+          return cache;
+        },
+      },
+    });
+    const incOut = await inc.engine.run();
+    expect(incOut.issues.map((i) => i.key)).toEqual(fullOut.issues.map((i) => i.key));
+    expect(incOut.issues.map((i) => i.message)).toEqual(fullOut.issues.map((i) => i.message));
+    expect(incOut.counts).toEqual(fullOut.counts);
+  });
+
+  it('force ⇒ 压根不问缓存（「重新校验」不许被缓存糊住），但仍回存', async () => {
+    let loads = 0;
+    let saves = 0;
+    const calls: string[] = [];
+    const { engine } = harness({
+      index: idx(),
+      adapterRules: [fileRule('g.file', calls)],
       files,
       snapshot: {
         async load() {
           loads++;
-          return null;
+          return cacheOf();
         },
         save() {
           saves++;
@@ -415,14 +712,16 @@ describe('ConventionEngine 的结果快照（2026-10-12 体感丝滑批）', () 
     });
     await engine.run({ force: true });
     expect(loads).toBe(0);
+    expect(calls.sort()).toEqual(['g.file|' + A, 'g.file|' + B]); // 全部真算
     expect(saves).toBe(1);
   });
 
-  it('判据不全（expectFor 返回 null）⇒ 不 load 不 save，但仍真算', async () => {
+  it('判据不全（expectFor null）⇒ 不 load 不 save，但仍真算', async () => {
     let touched = 0;
+    const calls: string[] = [];
     const { engine, readCalls } = harness({
       index: idx(),
-      adapterRules: [readingRule('g.a')],
+      adapterRules: [fileRule('g.file', calls)],
       files,
       snapshot: {
         expectFor: () => null,
@@ -437,21 +736,15 @@ describe('ConventionEngine 的结果快照（2026-10-12 体感丝滑批）', () 
     });
     const out = await engine.run();
     expect(touched).toBe(0);
-    expect(readCalls).toHaveLength(1);
-    expect(out.issues.length).toBe(1);
+    expect(readCalls).toHaveLength(2);
+    expect(out.issues).toHaveLength(2);
   });
 
-  it('并发 run 只算一次（自动触发与手动重跑叠跑 = 白等两遍 3.1 s）', async () => {
-    const { engine, readCalls } = harness({ index: idx(), adapterRules: [readingRule('g.a')], files });
-    const [a, b] = await Promise.all([engine.run(), engine.run({ force: true })]);
-    expect(readCalls).toHaveLength(1);
-    expect(a).toBe(b);
-  });
-
-  it('无 snapshot 端口时与改造前一致（可选依赖，零副作用）', async () => {
-    const { engine, readCalls } = harness({ index: idx(), adapterRules: [readingRule('g.a')], files });
-    const out = await engine.run();
-    expect(out.issues.length).toBe(1);
-    expect(readCalls).toHaveLength(1);
+  it('inFlight 去重：自动触发与面板显式调用共享同一次运行', async () => {
+    const calls: string[] = [];
+    const { engine } = harness({ index: idx(), adapterRules: [fileRule('g.file', calls)], files });
+    const [x, y] = await Promise.all([engine.run(), engine.run()]);
+    expect(x).toBe(y);
+    expect(calls).toHaveLength(2); // 一轮，两个文件各一次
   });
 });

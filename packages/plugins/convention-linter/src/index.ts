@@ -14,9 +14,7 @@
 import type {
   CacheExpect,
   ConventionLinterService,
-  ConventionReport,
   ConventionRule,
-  ErbIndex,
   ErbParserService,
   FileIO,
   GameProject,
@@ -26,7 +24,7 @@ import type {
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 import { ConventionEngine } from './engine';
-import { LINT_STORE_KEY, decodeReport, encodeReport, lintExpect } from './snapshot';
+import { LINT_STORE_KEY, decodeCache, encodeCache, lintExpect, type LintCache } from './snapshot';
 
 const IO = 'kernel.io';
 const PROJECT = 'kernel.project';
@@ -59,21 +57,22 @@ export function createConventionLinterPlugin(): Plugin {
       };
 
       /**
-       * 结果快照端口（键固定、判据在快照本体里；坏快照删除而非"修"）。
-       * 校验实测 3.1 s / 产出 307 KB——级联三段里性价比最高的缓存目标。
+       * 结果快照端口（键固定、**三层判据**在快照本体里；坏快照删除而不是"修"）。
+       * 校验实测 3.6 s / 产出 0.4 MB，而其中 55% 的成本在一条只看单文件的规则上
+       * ⇒ 逐文件桶 + 整项目结论分开存，改一个文件只重算那一个文件。
        */
       const snapshotPort = {
-        expectFor({ project: p, index, rules }: { project: GameProject; index: ErbIndex; rules: readonly ConventionRule[] }) {
-          return lintExpect({ index, project: p, rules });
+        expectFor({ project: p, rules }: { project: GameProject; rules: readonly ConventionRule[] }) {
+          return lintExpect({ project: p, rules });
         },
-        async load(expect: CacheExpect): Promise<ConventionReport | null> {
+        async load(expect: CacheExpect): Promise<LintCache | null> {
           try {
             const raw = await storage.get<unknown>(LINT_STORE_KEY);
-            if (raw === undefined) return null; // 首次 / 判据刚变：正常路径
-            const restored = decodeReport(raw, expect);
+            if (raw === undefined) return null; // 首次 / 全局判据刚变：正常路径
+            const restored = decodeCache(raw, expect);
             if (restored === null) {
               void storage.delete(LINT_STORE_KEY).catch(() => undefined);
-              ctx.log.warn('Convention snapshot unusable (format/root/adapter/fingerprint/structure); linting from scratch');
+              ctx.log.warn('Convention snapshot unusable (format/root/adapter/inputDigest/rules/structure); linting from scratch');
             }
             return restored;
           } catch (err) {
@@ -81,11 +80,16 @@ export function createConventionLinterPlugin(): Plugin {
             return null;
           }
         },
-        save(report: ConventionReport, expect: CacheExpect): void {
+        save(cache: LintCache, expect: CacheExpect): void {
           void storage
-            .set(LINT_STORE_KEY, encodeReport({ report, expect }))
+            .set(LINT_STORE_KEY, encodeCache({ cache, expect }))
             .then(() => {
-              ctx.log.info(`Convention snapshot saved (${report.issues.length} issue(s), fingerprint ${expect.fingerprint})`);
+              const bucketFiles = Object.values(cache.buckets).reduce((n, byPath) => n + Object.keys(byPath).length, 0);
+              ctx.log.info(
+                `Convention snapshot saved (${bucketFiles} file buckets across ` +
+                  `${Object.keys(cache.buckets).length} file rule(s), ${Object.keys(cache.projectResults).length} ` +
+                  `project rule(s), erbFingerprint ${cache.erbFingerprint})`,
+              );
             })
             .catch((err: unknown) => {
               ctx.log.warn(`Convention snapshot save failed: ${String(err)}`);

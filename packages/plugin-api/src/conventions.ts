@@ -14,7 +14,7 @@
  */
 
 import type { Logger } from './base';
-import type { ErbIndex } from './erb';
+import type { ErbFile, ErbIndex } from './erb';
 import type { GameProject } from './game';
 
 /** 问题严重度。产品原则：宁可漏报不可误报（见 RESEARCH.md §7）。 */
@@ -56,6 +56,19 @@ export interface ConventionCheckContext {
   readonly log: Logger;
 }
 
+/**
+ * 规则的计算粒度（决定它能不能被逐文件增量复用）。
+ *
+ * - `'project'`（**缺省**）：判定依赖跨文件事实（某名函数在别处出现过吗、这个角色的面集齐了吗）。
+ *   任一 ERB 变化都可能改变结论 ⇒ 只能整项目重算。
+ * - `'file'`：判定**只看这个文件自身**（它的正文 + 它在索引里的函数表）。
+ *   于是"作者改了一个 ERB"只需要重算那一个文件，其余文件的结论照用。
+ *
+ * 为什么要**声明**而不是让引擎猜：这是语义承诺，静态检查证明不了。
+ * 判错方向的代价不是变慢，而是**悄悄吐出过期结论**。
+ */
+export type ConventionRuleScope = 'project' | 'file';
+
 /** 可校验的剧本约定。`check` 缺省 = 仅登记元数据（未实现校验）。 */
 export interface ConventionRule {
   readonly id: string;
@@ -63,7 +76,15 @@ export interface ConventionRule {
   readonly severity: ConventionSeverity;
   /** 依据出处（源文件:行号 / 逆向文档章节），用于校验报告展示 */
   readonly source?: string;
+  /** 计算粒度；缺省 `'project'`（跨文件语义，只能整项目重算） */
+  readonly scope?: ConventionRuleScope;
   check?(ctx: ConventionCheckContext): ConventionIssue[] | Promise<ConventionIssue[]>;
+  /**
+   * 逐文件判定（`scope: 'file'` 的规则**必须**实现它，此时 `check` 不需要）。
+   * 引擎按本次索引顺序、限并发调用，并**只把它自己产出的 issue 归到这个文件**；
+   * 因此这里的 issue `key` 不得跨文件聚合（否则作者改 A 文件会让 B 文件的结论过期）。
+   */
+  checkFile?(ctx: ConventionCheckContext, file: ErbFile): ConventionIssue[] | Promise<ConventionIssue[]>;
 }
 
 /** 某条规则本次未能产出结果（执行抛错）——绝不静默 */

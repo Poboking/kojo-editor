@@ -23,19 +23,6 @@ import { parseKojoFamily } from './family-index';
 
 /* ------------------------------ 工具 ------------------------------ */
 
-/** 并发受限批量（插件内自带，不依赖其它插件——解耦铁律） */
-async function mapLimit<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) {
-      const i = cursor++;
-      if (i >= items.length) return;
-      await fn(items[i]!);
-    }
-  });
-  await Promise.all(workers);
-}
-
 const EOL_SPLIT = /\n/;
 
 /** 取文件行数组；读取失败返回 null（调用方跳过，不伪造结果） */
@@ -207,42 +194,43 @@ export const formTripleSymbolRule: ConventionRule = {
   description: 'PRINTFORM 串出现三连符号（引擎会替换为角色名；用作分隔线/AA 画会串味或报错）',
   severity: 'warning',
   source: 'eratw4.980-词法与表达式.md §FORM 三连符号 + 引擎 LexicalAnalyzer.cs:1207 / StrForm.cs:65',
-  async check(ctx): Promise<ConventionIssue[]> {
+  // 只看该文件正文 ⇒ 可由引擎按文件复用结论（实测这条占校验段 55%，是最值得增量化的规则）
+  scope: 'file',
+  async checkFile(ctx, file): Promise<ConventionIssue[]> {
+    const lines = await readLines(ctx, file.path);
+    // 读失败**抛错**而不是返回空数组：空数组会被引擎当"这个文件判过了、没问题"存进桶，
+    // 于是偶发的 IO 故障会被固化成"直到下次编辑都报不出问题"。抛错 ⇒ 引擎不留桶 ⇒ 下次重算。
+    if (!lines) throw new Error(`读取失败：${file.path}`);
     const issues: ConventionIssue[] = [];
-    const files = [...ctx.index.files.values()];
-    await mapLimit(files, 12, async (file) => {
-      const lines = await readLines(ctx, file.path);
-      if (!lines) return;
-      /** sym → { count, firstLine } */
-      const found = new Map<string, { count: number; firstLine: number }>();
-      for (let i = 1; i <= lines.length; i++) {
-        const trimmed = (lines[i - 1] ?? '').trim();
-        if (isCommentOrBlank(trimmed) || !PRINTFORM_HEAD.test(trimmed)) continue;
-        for (const { sym } of FORM_TRIPLE) {
-          let idx = trimmed.indexOf(sym);
-          while (idx >= 0) {
-            const entry = found.get(sym);
-            if (entry) entry.count++;
-            else found.set(sym, { count: 1, firstLine: i });
-            idx = trimmed.indexOf(sym, idx + sym.length);
-          }
+    /** sym → { count, firstLine } */
+    const found = new Map<string, { count: number; firstLine: number }>();
+    for (let i = 1; i <= lines.length; i++) {
+      const trimmed = (lines[i - 1] ?? '').trim();
+      if (isCommentOrBlank(trimmed) || !PRINTFORM_HEAD.test(trimmed)) continue;
+      for (const { sym } of FORM_TRIPLE) {
+        let idx = trimmed.indexOf(sym);
+        while (idx >= 0) {
+          const entry = found.get(sym);
+          if (entry) entry.count++;
+          else found.set(sym, { count: 1, firstLine: i });
+          idx = trimmed.indexOf(sym, idx + sym.length);
         }
       }
-      for (const { sym, note } of FORM_TRIPLE) {
-        const hit = found.get(sym);
-        if (!hit) continue;
-        issues.push({
-          ruleId: FORM_RULE,
-          severity: 'warning',
-          message:
-            `PRINTFORM 串出现 ${hit.count} 处「${sym}」：引擎会把它替换为 ${note}` +
-            `（连续 3 个同符号即触发，「====」这类更长串也会命中），用作分隔线/AA 画会串味或报错。`,
-          filePath: file.path,
-          line: hit.firstLine,
-          key: `${FORM_RULE}|${file.path}|${sym}`,
-        });
-      }
-    });
+    }
+    for (const { sym, note } of FORM_TRIPLE) {
+      const hit = found.get(sym);
+      if (!hit) continue;
+      issues.push({
+        ruleId: FORM_RULE,
+        severity: 'warning',
+        message:
+          `PRINTFORM 串出现 ${hit.count} 处「${sym}」：引擎会把它替换为 ${note}` +
+          `（连续 3 个同符号即触发，「====」这类更长串也会命中），用作分隔线/AA 画会串味或报错。`,
+        filePath: file.path,
+        line: hit.firstLine,
+        key: `${FORM_RULE}|${file.path}|${sym}`,
+      });
+    }
     return issues;
   },
 };
@@ -257,48 +245,47 @@ export const messageCheckStructureRule: ConventionRule = {
   description: 'MESSAGECHECK 钩子结构：应有 RETURN，且位掩码落在 0..3（bit0 跳情景 / bit1 跳口上）',
   severity: 'info',
   source: 'eratw4.980-口上机制深挖.md §1.3（MESSAGECHECK 位协议）',
-  async check(ctx): Promise<ConventionIssue[]> {
+  // 只看该文件的函数表 + 正文 ⇒ 逐文件可复用
+  scope: 'file',
+  async checkFile(ctx, file): Promise<ConventionIssue[]> {
+    const targets = file.functions.filter((f) => parseKojoFamily(f.name)?.isMessageCheck);
+    if (targets.length === 0) return []; // 没有 MESSAGECHECK 函数：判过了，结论就是"无问题"（可以留桶）
+    const lines = await readLines(ctx, file.path);
+    if (!lines) throw new Error(`读取失败：${file.path}`); // 同上：IO 故障不能编造成"干净"
     const issues: ConventionIssue[] = [];
-    const files = [...ctx.index.files.values()];
-    await mapLimit(files, 12, async (file) => {
-      const targets = file.functions.filter((f) => parseKojoFamily(f.name)?.isMessageCheck);
-      if (targets.length === 0) return;
-      const lines = await readLines(ctx, file.path);
-      if (!lines) return;
-      for (const fn of targets) {
-        let sawReturn = false;
-        for (let i = fn.startLine; i <= fn.endLine && i <= lines.length; i++) {
-          const trimmed = (lines[i - 1] ?? '').trim();
-          if (isCommentOrBlank(trimmed) || trimmed.startsWith('#')) continue;
-          const m = RETURN_LINE.exec(trimmed);
-          if (!m) continue;
-          sawReturn = true;
-          const expr = (m[1] ?? '').trim();
-          if (!/^\d+$/.test(expr)) continue; // 表达式返回值交由运行时判定
-          const mask = Number(expr);
-          if (mask < 0 || mask > 3) {
-            issues.push({
-              ruleId: MESSAGECHECK_RULE,
-              severity: 'warning',
-              message: `MESSAGECHECK「${fn.name}」RETURN ${mask}：位掩码应为 0..3（bit0 跳情景 / bit1 跳口上），超出范围。`,
-              filePath: file.path,
-              line: i,
-              key: `${MESSAGECHECK_RULE}|${fn.name}|${file.path}|${i}`,
-            });
-          }
-        }
-        if (!sawReturn) {
+    for (const fn of targets) {
+      let sawReturn = false;
+      for (let i = fn.startLine; i <= fn.endLine && i <= lines.length; i++) {
+        const trimmed = (lines[i - 1] ?? '').trim();
+        if (isCommentOrBlank(trimmed) || trimmed.startsWith('#')) continue;
+        const m = RETURN_LINE.exec(trimmed);
+        if (!m) continue;
+        sawReturn = true;
+        const expr = (m[1] ?? '').trim();
+        if (!/^\d+$/.test(expr)) continue; // 表达式返回值交由运行时判定
+        const mask = Number(expr);
+        if (mask < 0 || mask > 3) {
           issues.push({
             ruleId: MESSAGECHECK_RULE,
-            severity: 'info',
-            message: `MESSAGECHECK「${fn.name}」没有 RETURN 语句：被调用时返回值不可预期（默认视为 0 虽无害，但通常意味着漏写）。`,
+            severity: 'warning',
+            message: `MESSAGECHECK「${fn.name}」RETURN ${mask}：位掩码应为 0..3（bit0 跳情景 / bit1 跳口上），超出范围。`,
             filePath: file.path,
-            line: fn.startLine,
-            key: `${MESSAGECHECK_RULE}|noreturn|${fn.name}|${file.path}`,
+            line: i,
+            key: `${MESSAGECHECK_RULE}|${fn.name}|${file.path}|${i}`,
           });
         }
       }
-    });
+      if (!sawReturn) {
+        issues.push({
+          ruleId: MESSAGECHECK_RULE,
+          severity: 'info',
+          message: `MESSAGECHECK「${fn.name}」没有 RETURN 语句：被调用时返回值不可预期（默认视为 0 虽无害，但通常意味着漏写）。`,
+          filePath: file.path,
+          line: fn.startLine,
+          key: `${MESSAGECHECK_RULE}|noreturn|${fn.name}|${file.path}`,
+        });
+      }
+    }
     return issues;
   },
 };

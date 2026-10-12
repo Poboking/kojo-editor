@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type {
   CharaInfo,
   ConventionCheckContext,
+  ConventionIssue,
+  ConventionRule,
   ErbFile,
   ErbFunctionRef,
   ErbIndex,
@@ -65,6 +67,17 @@ function ctxFor(
     },
     log: silentLog,
   };
+}
+
+/**
+ * 逐文件规则跑遍整个索引（与引擎的装配同构）。
+ * `scope:'file'` 的规则没有 `check`，用它保持原有断言口径——这也顺带证明了
+ * "按文件切"与"整项目扫"产出**同一批问题**（改判 scope 的等价性守门）。
+ */
+async function runFileRule(rule: ConventionRule, ctx: ConventionCheckContext): Promise<ConventionIssue[]> {
+  const out: ConventionIssue[] = [];
+  for (const file of ctx.index.files.values()) out.push(...((await rule.checkFile!(ctx, file)) ?? []));
+  return out;
 }
 
 describe('eratw 约定规则', () => {
@@ -140,7 +153,7 @@ describe('eratw 约定规则', () => {
         'PRINTL "/// 无 FORM 处理 ///"\n';
       const files = { '/p/a.ERB': text };
       const index = makeIndex(files);
-      const issues = (await formTripleSymbolRule.check!(ctxFor(index, files))) as {
+      const issues = (await runFileRule(formTripleSymbolRule, ctxFor(index, files))) as {
         line: number;
         message: string;
         severity: string;
@@ -159,7 +172,7 @@ describe('eratw 约定规则', () => {
         'PRINTFORMDL "c///d///e"\n';
       const files = { '/p/a.ERB': text };
       const index = makeIndex(files);
-      const issues = (await formTripleSymbolRule.check!(ctxFor(index, files))) as {
+      const issues = (await runFileRule(formTripleSymbolRule, ctxFor(index, files))) as {
         line: number;
         message: string;
       }[];
@@ -171,7 +184,7 @@ describe('eratw 约定规则', () => {
     it('`+++`（有意的主人名占位）不报', async () => {
       const files = { '/p/a.ERB': '@M_KOJO_MESSAGE_COM_K1_1\nPRINTFORMDW +++轻轻吻了她\n' };
       const index = makeIndex(files);
-      expect(await formTripleSymbolRule.check!(ctxFor(index, files))).toEqual([]);
+      expect(await runFileRule(formTripleSymbolRule, ctxFor(index, files))).toEqual([]);
     });
   });
 
@@ -187,7 +200,7 @@ describe('eratw 约定规则', () => {
         'PRINTL x\n';
       const files = { '/p/a.ERB': text };
       const index = makeIndex(files);
-      const issues = (await messageCheckStructureRule.check!(ctxFor(index, files))) as {
+      const issues = (await runFileRule(messageCheckStructureRule, ctxFor(index, files))) as {
         severity: string;
         line: number;
         message: string;

@@ -3901,6 +3901,127 @@ erb-parser **顺手**产出（复用文件取快照里的 mtime、重扫文件�
 - `.tmp` 孤儿只在"进程被截断"时产生，一次一个，现有清理只认快照形态的键（不越权删别人的东西），
   暂不专门扫点文件；若实测积累再收口。
 
+### 5.72 校验按文件增量批 · 规则自己声明计算粒度（2026-10-12 批）
+
+> **触发**：§5.70 把抽取段压到 49 ms 之后，级联里**唯一**还在"改一个文件重算全库"的就是校验段——
+> 同一次 touch 实测 6043 ms。而校验的产出只有 793 条 / 0.4 MB，是全库正文扫描换的。
+>
+> 分支 `feat/lint-per-file-2026-10-12`，两个提交：逐规则计时（先测量）→ 三层判据 + 逐文件桶。
+> **编号让位（本组第四次）**：本批写作 §5.71，提交前 `git fetch` 见语法糖线批 M 已占 ⇒ 让位到 **§5.72**。
+
+#### 一、先测量：逐规则计时把切法直接读出来
+
+真实语料（2,285 ERB / 793 项）单跑校验段，逐规则耗时（`engine.ts` 的 `lint breakdown` 行，常驻）：
+
+| 规则 | 耗时 | 产出 | 判定依据 |
+|---|---|---|---|
+| `eratw.form-triple-symbol` | **2008 ms** | 8 项 | **只看该文件正文** |
+| `eratw.kojo-call-slot-coverage` | 579 ms | 36 项 | 该文件函数签名 + **路由表**（来自 KOJO_MESSAGE.ERB） |
+| `eratw.messagecheck-structure` | 395 ms | 2 项 | **只看该文件**函数表 + 正文 |
+| `eratw.kx-placeholder` | 330 ms | 603 项 | 按**归一化函数名**跨文件聚合「共 N 处」 |
+| `eratw.kojo-completeness` | 294 ms | 141 项 | 按**角色**跨文件聚合面集合 |
+| `erb.duplicate-function` | 3 ms | 3 项 | 跨文件同名 |
+| `sugar.static-conventions` | 1 ms | 0 项 | 跨文件 |
+
+两条结论把设计定了：
+
+1. **一条纯逐文件规则占 55% 的成本，却只产出 8 项**——"改一个文件重扫全库正文"就是白付；
+2. **冷跑与热跑几乎同速**（3629 vs 3471 ms）⇒ 成本是**正则扫正文的 CPU，不是 IO**。
+   所以缓存文件正文没有用，必须缓存**逐文件的判定结果**。
+
+#### 二、契约加"计算粒度"：规则自己声明，引擎不猜
+
+`ConventionRule` 新增 additive 两项：`scope?: 'project' | 'file'`（缺省 `'project'`，
+即改造前的行为）与 `checkFile(ctx, file)`。
+
+**为什么做成声明而不是让引擎推断**：这是语义承诺，静态检查证明不了。判错方向的代价不是变慢，
+而是**悄悄吐出过期结论**——所以契约注释里写死了违约后果，并要求改判 `scope` 必须配等价性测试
+（本批的等价性测试在 `engine.test.ts`「增量装配与全量重算同值同序」+ `conventions.test.ts`
+的 `runFileRule` 聚合，语料级证据见下面第四节）。
+
+| 规则 | 本批判定 | 理由 |
+|---|---|---|
+| `form-triple-symbol`、`messagecheck-structure` | **改判 `file`** | 只看该文件正文 + 该文件函数表，issue key 不含别处信息 |
+| `kojo-call-slot-coverage` | **留在 `project`** | 结论同时取决于**路由表**（解析自 KOJO_MESSAGE.ERB）。按文件复用桶 ⇒ "只改路由表"会让其它文件吐过期结论。这是真实的判据缺口，解法见第五节 |
+| `kx-placeholder`、`kojo-completeness`、内置两条 | 留在 `project` | 天然跨文件聚合（按名 / 按角色） |
+
+顺带把并发从规则内部**上收到引擎**（`LINT_FILE_CONCURRENCY = 12`，沿用原口径）：
+桶归引擎持有，规则只描述"一个文件怎么判"，adapter 侧的 `mapLimit` 随之删除。
+
+#### 三、三层判据：两个指纹必须分开存
+
+| 层 | 判据（盘上字段） | 不符的代价 |
+|---|---|---|
+| 全局 | 项目根 / `adapterId` / `expectFingerprint`（= `inputDigest` + `LINT_SNAPSHOT_FORMAT` + 规则清单摘要） | 整包弃用 |
+| 整项目 | `erbFingerprint`（= `ErbIndex.fingerprint`） | **只重算 `scope:'project'` 的规则** |
+| 逐文件 | 桶 `mtimeMs` vs `ErbIndex.fileMtimes`（任一侧 `null` ⇒ 该文件不复用） | **只重算那一个文件** |
+
+- **v1 把这三层合成一个 `fingerprint`**，正是"改一个文件 → 整包作废"的根因；
+  v2 里 `expectFingerprint` 与 `erbFingerprint` 是**两个字段**，各判各的层
+  （§5.70 的同一课，这次落在校验段）。
+- `rulesDigest` 现在把 **`scope` 也折进去**：一条规则从 `project` 改判成 `file` 改变的是
+  缓存语义，摘要不变却继续复用旧桶就会把跨文件结论当逐文件结论用。
+- **空桶要存**：这个文件判过了、没问题 ⇒ `[mtime]`（省略 issues 槽）；不存就等于每次开项目
+  白读白扫一遍。
+- **坏一次不永久缓存**：抛错的规则不写 `projectResults`，抛错的文件不留桶
+  （取代 v1"整报告带 `failedRules` 就拒绝命中"——粒度到桶，不必整包连坐）。
+- **读失败从"静默跳过"改成"抛错"**：v1 里 IO 失败 = 这个文件这次没结论，且会被缓存成"干净"；
+  现在显式进 `failedRules` 并下次重算。
+- **消失文件天然收尸**、**全命中不回写**：与 §5.70 同口径。
+- `LINT_SNAPSHOT_FORMAT` 1 → 2，存储键仍是固定槽位 `lint-report-v1`（旧快照读出即判死并被覆盖）。
+
+#### 四、实测（真实语料，四个独立 kernel 共用同一 appData）
+
+| 阶段 | 索引可用 | 条件可用 | 校验可用 | 校验自计 | 逐文件重算 | 快照回写 |
+|---|---|---|---|---|---|---|
+| cold 首次 | 2271 ms | 9988 ms | 10053 ms | 5754 ms | 4570 个文件 | +0 ms / 1371 KB |
+| hot 未改动 | 599 ms | 957 ms | 975 ms | **67 ms** | 0 | **不回写** |
+| **touch 改 1 个文件** | 713 ms | 2505 ms | **2564 ms** | **1198 ms** | 2 个文件（1 文件 × 2 规则） | +0 ms / 1371 KB |
+| after 再开一次 | 631 ms | 977 ms | 996 ms | 59 ms | 0 | **不回写** |
+
+- **靶心**：改一个 ERB 的校验计算 **5754 ms → 1198 ms**（其中逐文件部分只剩 **8 ms**，
+  其余 1.1 s 是三条跨文件规则的**必付成本**）；端到端「改一个文件后重开」的校验水位
+  **6508 ms → 2564 ms**（§5.70 那批的同一读数）。
+- touch 的 breakdown：`form-triple-symbol 5ms/8项 · messagecheck 3ms/2项`（复用 2,283 个文件的桶）
+  对比 `kx 266ms · completeness 248ms · call-slot 508ms`（整项目重算）——**切对了就是这两行**。
+- `after` 复现全命中 ⇒ touch 的新桶确实持久化了。
+- **等价性**：四轮 793 项、分规则条数逐项一致（603 / 141 / 36 / 8 / 3 / 2）、`failedRules` 恒 0；
+  快照还原的 issue 对象（severity / message / key）与全量计算逐字相同。
+- **代价讲明白**：全命中从 v1 的"整块还原 ~1 ms"变成"读 1.37 MB + 装配 ≈ 60 ms"，
+  换来的是改一个文件不再重付 4.5 s；磁盘 440 KB → 1371 KB（每个文件每条逐文件规则要留一行 mtime 记录）。
+
+#### 五、测试（净增 8 项，全部落在引擎侧）
+
+- `convention-linter/tests/snapshot.test.ts`（12 项，整组重写）：三层编解码往返（含空桶与 `null` mtime）、
+  **空结论桶编成 `[mtime]` 单元素元组**、`erbFingerprint` **不是**全局判据（它变了 decode 仍成功——
+  两层独立这条设计的直接断言）、全局判据四项 fail-closed、结构损坏六种形态、
+  `rulesDigest` 含 `scope`（同 id/级别/描述但改判 scope ⇒ 摘要变）、`lintExpect` 缺 `inputDigest`/空规则集 ⇒ null。
+- `convention-linter/tests/engine.test.ts` 的「分层复用」组（6 → 14 项，本批全部净增都在这里）：三层全命中 ⇒ 零读盘零调用
+  **且不回写**、改一个 mtime ⇒ 只算那一个文件、**两层判据互不牵连**（ERB 指纹变了但 mtime 没变 ⇒
+  桶仍命中、只重算跨文件规则）、缺 `fingerprint` ⇒ 整项目层不复用而逐文件层照用、缺 `fileMtimes` ⇒ 全重算、
+  `null` mtime 不当命中、消失文件收尸、抛错文件不留桶、抛错规则不写 `projectResults`、
+  `scope:'file'` 缺 `checkFile` ⇒ 显式 `failedRules`（不是静默 0 条）、
+  **增量装配与全量重算同值同序**、`force` 绕开缓存但仍回存、`inFlight` 去重。
+- adapter 侧 `conventions.test.ts`（14 项，数量不变）：两条改判 `file` 的规则通过 `runFileRule`
+  （遍历 `index.files` 调 `checkFile` 再拼接，**与引擎装配同构**）保持原断言口径——
+  这就是"改判 scope 必须配等价性测试"的落点。
+- 三绿：vitest 全量 **1440 passed / 11 skipped**；root + app typecheck 干净；解耦审计 A–D 通过。
+
+#### 六、边界未做（下批候选，按收益排序）
+
+- **跨文件规则那 1.1 s 是本批下限**。两个方向：
+  ① **按角色分组判据**（`kx` / `completeness` / `call-slot` 都可按角色号切桶，判据 = 该角色
+  文件集合的 mtime 折叠）——但要引入"分组"这层新概念，先探针量清分布再动（§5.71 的教训：
+  没有分布表就立项，容易把逐行交错的问题当成分块可 cut 的问题）；
+  ② **`parseKojoFamily` 加 memo**：同一个函数名一次运行内被解析 3–6 次（`kx` 里就调三次），
+  这是那 1.1 s 的构成主体。属"把必付成本做小"，与缓存无关，可独立立项。
+- **`call-slot-coverage` 的判据缺口**：它需要一条"规则级额外判据"通道
+  （形如 `inputsDigest?(ctx)`，与桶一起存、变了就整条规则弃桶）。本批的处理是**保守留在
+  `project`**——宁可慢，不拿不确定的判据换命中（纪律①）。
+- 逐文件规则的**读失败**现在会让 `failedRules` 非空并显示在面板上（以前静默跳过）。
+  若真实环境里偶发 IO 抖动，面板会出现"某规则部分文件未判"的显式提示——这是有意的口径变化。
+
+
 
 ### 5.71 语法糖批 M · 骨架折叠**前提被实测否证**，不做（2026-10-12 批：一条负结果记录）
 

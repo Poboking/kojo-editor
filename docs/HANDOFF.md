@@ -176,11 +176,12 @@
     悬停看原文出处）+ 导入向导随 meta 携带原作者。**口径 = 高精度宁缺勿滥**：
     实测 214 包只抽到 26 个署名，这是设计结果——假阳性会让人把别人的作品当无主作品改。
     语料基线常驻 `attribution.corpus.test.ts`（`KOJO_SMOKE_PROJECT` 守门）。
-- **当前基线（2026-10-12 抽取按文件增量批，rebase 到 §5.69 之后实测）：1432 passed / 11 skipped（1443），
+- **当前基线（2026-10-12 校验按文件增量批实测）：1440 passed / 11 skipped（1451），
   83 文件过 / 6 跳；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；
   `pnpm --filter @kojo/app build` ✓；`cargo test --lib` 12 项全绿。**
-  数字闭合：语法糖批 L 之后 1426 + 本批净增 6 = 1432（抽取侧 22 → 28 项：`snapshot.test.ts` 15→17、
-  `engine-snapshot.test.ts` 7→11，旧的两套整包编解码用例被桶形态用例替换）。
+  数字闭合：抽取按文件增量批 1432 + 本批净增 8 = 1440（全部落在 `convention-linter/tests/engine.test.ts`
+  24→32；`snapshot.test.ts` 整组重写但等量 12→12，adapter `conventions.test.ts` 14→14 只是调用点换到
+  `runFileRule` 聚合）。
   ⚠ 跑全量**不要**设 `KOJO_SMOKE_PROJECT`（会放行依赖 sav 存档的注入测试而本机零存档必红）；
   语料基线单独带变量跑那一个文件即可。
 - **内核优化线（2026-10-12 批 P-A…P-F 同期，✅ 已收口进 master）**：L0 埋点 → 超长文件丝滑 →
@@ -193,13 +194,19 @@
   在 `loadProject` 吃进的东西（CHARA 表 / 变量名称表 / 角色目录名）要经 `GameProject.inputDigest`
   声明，**缺一即不缓存**（`VariableSchema` 是 CSV 驱动的，只盯 ERB 会吐旧语义标签）；② 改规则或
   抽取口径**必须 bump** `LINT_SNAPSHOT_FORMAT` / `EXTRACT_SNAPSHOT_FORMAT`（规则是闭包，哈希不出
-  行为）；③ **fail-closed**：判据或结构不符 ⇒ 删除快照并全量重算，绝不"修"；④ 带 `failedRules`
-  的报告拒绝命中；⑤ 面板「重新校验」走 `run({ force: true })`，显式意图不许被缓存糊住；
+  行为）；③ **fail-closed**：判据或结构不符 ⇒ 删除快照并全量重算，绝不"修"；④ 失败的工作
+  **不进缓存**——v1 是"整报告带 `failedRules` 就拒绝命中"，校验 v2（§5.72）起细化成**坏哪块不存哪块**
+  （抛错的规则不写 `projectResults`、抛错的文件不留桶），坏一次不能永久缓存坏结果；⑤ 面板「重新校验」走 `run({ force: true })`，显式意图不许被缓存糊住；
   ⑥ 量"二次启动"必须**换新 kernel 共用同一 appData**（同进程 close/open 会被异步落盘污染，
-  本批就据此得出过"缓存反而更慢"的假结论）；⑦ **判据要分层**——整项目指纹会把"作者改一个
-  文件"放大成"重算全库"，逐文件层（桶 mtime vs `ErbIndex.fileMtimes`）与全局层
-  （项目根 / `adapterId` / `inputDigest` / 格式版本）分工明确，全局层只留**真的全局**的输入；
-  ⑧ 缓存等价性不能只看 `stats`——**语义标签丢了统计看不出来**，要按全量内容指纹比。
+  本批就据此得出过"缓存反而更慢"的假结论）；⑦ **判据要分层，且每层各占各的字段**——整项目指纹会把
+  "作者改一个文件"放大成"重算全库"，所以分三层：全局层（项目根 / `adapterId` / `inputDigest` /
+  语义版本 / 规则清单摘要）、整项目层（ERB 指纹）、逐文件层（桶 mtime vs `ErbIndex.fileMtimes`）。
+  **把两层合成一个 `fingerprint` 字段就是那个根因**，§5.70 抽取与 §5.72 校验各栽过一次；
+  ⑧ 缓存等价性不能只看 `stats`——**语义标签丢了统计看不出来**，要按全量内容指纹比；
+  ⑨ 可增量复用的粒度由**被缓存的那件事自己声明**（校验规则 = `ConventionRule.scope:'file'` +
+  `checkFile`），引擎不猜——猜错的代价不是变慢而是**悄悄吐出过期结论**。跨文件聚合的规则
+  （按名 / 按角色）必须留在 `scope:'project'`；改判 `scope` 要同时改 `rulesDigest` 的输入，
+  并配"全量 vs 增量同值同序"的等价性测试。
   **卫生批（§5.65）已收**：索引快照 v3 元组编码 **44.4 MB → 11.9 MB**（剥可派生字段 + 键名
   位置化；热读盘 250ms → 74ms，索引可用 623ms → 541ms）；三段统一成**单文件语义**
   （多项目残留与 `index-v1-*`/`v2-*` 孤儿自动清理，磁盘封顶 ~58 MB）；三个体感水位常驻进
@@ -207,7 +214,12 @@
   **抽取按文件增量批（§5.70）已收**：抽取快照 v3 改**按文件分桶**（`EXTRACT_SNAPSHOT_FORMAT` 2→3），
   真实语料改 1 个 ERB 后重开：**抽取段 7200ms → 49ms**（复用 2284 / 重算 1），全量与增量
   逐字段同值同序（内容指纹 `0c357d324fd294`、schema 标注 109,742 四轮一致），磁盘 12.47 → 12.31 MB。
-  仍欠：**校验段仍是整项目判据 ⇒ 改一个文件重付 ~6s，现在它才是级联大头**；
+  **校验按文件增量批（§5.72）已收**：规则自己声明计算粒度（`ConventionRule.scope` + `checkFile`），
+  快照换成**三层判据 + 逐文件桶**（`LINT_SNAPSHOT_FORMAT` 1→2，两个指纹分成两个字段）。
+  真实语料改 1 个 ERB：**校验自计 5754ms → 1198ms**（逐文件部分只剩 8ms，其余是跨文件规则必付），
+  端到端校验水位 6508ms → **2564ms**；四轮 793 项分规则条数逐项一致。
+  代价：全命中从 1ms 整块还原变 60ms 装配，磁盘 440KB → 1371KB。
+  仍欠：**跨文件规则那 1.1s**（按角色分组判据 / `parseKojoFamily` memo 两个方向）；
   `extractFunctionConditions` 仍未上并行通道。
 - **分支收口（IMPLEMENTATION-LOG §5.55）**：`feat/kernel-optimization` 因 `origin/master` 连续推进
   经历了**两轮 rebase**（第一轮撞在 `EditorPane.tsx` 与 `kernel/plugin-api` 的导出上，均取并集；
@@ -901,6 +913,8 @@ node tools/smoke-tauri-ipc.mjs
 | **临时探针（vitest）进程退出会截断 fire-and-forget 的快照落盘**：12 MB 只留下 `.tmp` 孤儿、正式文件从未 rename 出来 ⇒ 下一轮"什么都没读到"，直接量出"缓存没收益"的**假结论**（2026-10-12 §5.70 踩到） | 原子写以 rename 收尾 ⇒ 轮询**「目标文件 mtime 比进入本轮时新」**才算落盘完成（只看 `size>0` 不行，正式文件可能还在；全命中那轮反过来断言 mtime **未变** = 没回写） |
 | **`ConditionIndex.durationMs` 不含快照读盘**（引擎 `t0` 在 `load` 之后），而级联由 `project.opened` 自动催动、显式 `ensureIndex()` 只是汇合在途 Promise ⇒ 围 `ensureIndex()` 计时量到的是"汇合耗时"，12 MB 的还原成本整段漏掉（差点报出"抽取 15ms"） | 量级联某段 = **从 `project.open()` 起算的水位差**（前一水位减后一水位），别用自计 `durationMs` 当体感 |
 | bash coreutils 时常 127；`node -e` 多层引号/Markdown 反引号必翻车 | 一切用 node 临时 `.mjs` 文件或 Read/Write/Edit 工具；PowerShell 工具 stdout 不回显 |
+| **`node -e` / bash 里的多层引号与 `grep -E "...\(..."`**：Git-Bash 的 grep 常把 `-E` 当普通正则用（`Unmatched (`），带引号的 node 内联脚本必翻车 | 一律落成临时 `.mjs` 文件再 `node` 跑；数出现次数用 `node -e` 里的 `str.match(/.../gm).length` 而不是 grep |
+| **vitest 会把 `console.log` 的第一行并进 `stdout | <文件> > <套件> > <用例>` 那行头**（多行日志只丢首行，看起来像"没打印"）⇒ 用 `grep '^\[probe'` 过滤会把水位行整个漏掉，误判成"探针没测到" | 探针输出**重定向到文件**再 grep（`> .local/probe-x.txt 2>&1`），或把关键数字放在非首行 |
 | **bash 严重残缺时 pnpm/vitest/tsc shim 全挂**（`sed`/`dirname`/`uname` 缺失） | 直调 node：`node "D:/Code/Nodejs/node_global/node_modules/pnpm/bin/pnpm.mjs" install`；vitest → `node "node_modules/.pnpm/vitest@4.1.11_@types+node@2_1db5548ac037c87131628c83c4241b81/node_modules/vitest/vitest.mjs" run`；tsc → `node "node_modules/.pnpm/typescript@7.0.2/node_modules/typescript/lib/tsc.js" --noEmit -p tsconfig.json` |
 | **Edit 工具偶发"声称成功未落盘"，且同文件并行 Edit 会 EBUSY** | 关键修改后读回验证；**同一文件的多次 Edit 必须串行** |
 | 模板字符串里写 Markdown 反引号（如 \`====\`）会截断 TS 模板串 | 用「」代替反引号 |
@@ -949,12 +963,16 @@ node tools/smoke-tauri-ipc.mjs
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.71 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二
 4. **本组当前三条主线**：
    - **体感丝滑线（本组主目标，性能）**：三段级联全部持久化（§5.58）→ 快照瘦身与卫生（§5.65）→
-     **抽取按文件增量（§5.70）**。真实语料当前水位：冷 索引 2.2s / 抽取 7.2s / 校验 +5.6s；
-     热（未改动）三段 ≈ 1.1s；**改一个 ERB** ⇒ 索引 0.4s + 抽取 **0.05s** + 校验 **6.0s**。
-     **下一批首选 = 校验段按文件增量**——它是现在级联唯一还在整项目判据的段，改一个文件重付
-     ~6s；要么把规则切成逐文件可算，要么让规则显式声明自己看得到哪些输入（跨文件的家族完整性
-     规则只能保留整项目粒度，但要能与逐文件部分共存）。次要：`extractFunctionConditions`
-     上并行通道（前置 = `VariableSchema` 导出原始表，路线文档 §三 L1）。
+     抽取按文件增量（§5.70）→ **校验按文件增量（§5.72）**。真实语料当前水位（从 `project.open` 起算）：
+     冷 索引 2.3s / 条件 10.0s / 校验 10.1s；**热（未改动）三段 ≈ 1.0s**；
+     **改一个 ERB 后重开 ≈ 2.6s**（曾经光校验段就要 6.0s）。
+     **下一批首选 = 跨文件规则那 1.1s**（touch 阶段校验自计 1198ms 里 1050ms 是三条 `scope:'project'`
+     规则的重算）。两个方向，**先探针拿分布再立项**（§5.71 的负结果教训）：
+     ① **按角色分组判据**——`kx-placeholder` / `kojo-completeness` / `kojo-call-slot-coverage`
+     都可按角色号切桶，判据 = 该角色文件集合的 mtime 折叠；要引入"分组"这层新概念；
+     ② **`parseKojoFamily` 加 memo**——同一函数名一次运行内被解析 3–6 次（`kx` 里就调三次），
+     这是那 1.1s 的构成主体；属"把必付成本做小"，与缓存无关，可独立立项。
+     次要：`extractFunctionConditions` 上并行通道（前置 = `VariableSchema` 导出原始表，路线文档 §三 L1）。
    - **口上项目线**（纪要 §5 清单）：P-A…P-E + T2 + T2.1 + T3 + T4 已通。
      **下一批首选 = 导出 ZIP（TS 层，用户 2026-10-12 拍板）**：
      ZIP 容器（local/central header + CRC32）在 TS 层做，压缩用平台

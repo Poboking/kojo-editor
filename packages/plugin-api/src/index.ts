@@ -63,6 +63,7 @@ export type {
   ConventionReport,
   ConventionRule,
   ConventionRuleFailure,
+  ConventionRuleScope,
   ConventionSeverity,
 } from './conventions';
 

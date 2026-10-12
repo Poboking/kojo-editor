@@ -1,13 +1,21 @@
 /**
  * 约定校验引擎（游戏无关）。
  *
- * 职责：装配规则 → 逐条运行 → 归一化/去重/排序 → 汇总报告 → 通知订阅者。
+ * 职责：装配规则 → **按 `scope` 分流**运行 → 归一化/去重/排序 → 汇总报告 → 通知订阅者。
  * 规则来源：
  *   - 内置通用规则（本插件自带，零游戏知识）；
  *   - 当前适配器的 `conventions`（游戏知识，注入回调提供）。
  *
+ * 两档粒度（2026-10-12「按文件增量」批）：
+ *   - `scope:'project'`（缺省）：判定依赖跨文件事实 → 每次整项目重算；
+ *   - `scope:'file'`：判定只看单文件 → 引擎按 `ErbIndex.fileMtimes` **逐文件复用上次结论**，
+ *     作者改一个 ERB 只重算那一个文件。
+ *   逐规则计时实测（真实语料）显示 55% 的成本在一条**纯逐文件**规则上，这就是切分的依据。
+ *
  * 稳健性原则（对应内核「不静默」铁律）：
  *   - 单条规则抛错不中断全局 → 记入 `failedRules`，报告中显式呈现；
+ *   - 抛错的规则/文件**不进快照**：坏一次不能永久缓存坏结果；
+ *   - 声明 `scope:'file'` 却没实现 `checkFile` ⇒ 显式记失败，不静默跳过；
  *   - 文件读取失败 → 记入日志并跳过该规则本次对该文件的判定（不伪造结果）。
  */
 
@@ -26,6 +34,27 @@ import type {
 import { CONVENTION_SEVERITY_ORDER } from '@kojo/plugin-api';
 import { duplicateFunctionRule } from './rules/duplicate-function';
 import { sugarStaticConventionsRule } from './rules/sugar-conventions';
+import type { LintCache, LintFileBucket } from './snapshot';
+
+/**
+ * 逐文件规则的并发上限（沿用规则内部原来的 `mapLimit(…, 12, …)` 口径）。
+ * 现在由**引擎**驱动这个循环：桶归引擎持有，规则只描述"一个文件怎么判"。
+ */
+const LINT_FILE_CONCURRENCY = 12;
+
+/** 限并发执行（结果写进调用方的 Map；装配仍按 walk 顺序取 ⇒ 输出与完成顺序无关） */
+async function mapLimit<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  if (items.length === 0) return;
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+}
 
 export interface ConventionEngineDeps {
   log: Logger;
@@ -38,16 +67,16 @@ export interface ConventionEngineDeps {
   /** 当前激活适配器提供的规则（按 project.adapterId 过滤后的结果） */
   getAdapterRules(): readonly ConventionRule[];
   /**
-   * 结果快照端口（2026-10-12「体感丝滑」批；缺省 = 不缓存）。
+   * 结果快照端口（2026-10-12「体感丝滑」批 →「按文件增量」批；缺省 = 不缓存）。
    *
-   * 全量校验真实语料实测 3.1 s，而产出只有 307 KB——级联三段里性价比最高的缓存目标。
-   * 与抽取同款分层：**判据由插件组装**（引擎不懂 adapter 吃了哪些非 ERB 输入），
-   * 引擎只管"判据齐且命中就跳过重算"。见 `./snapshot.ts`。
+   * 三层判据各管各的粒度（详见 `./snapshot.ts`）：全局层由插件组装（引擎不懂 adapter 吃了
+   * 哪些非 ERB 输入），整项目层比 `ErbIndex.fingerprint`，逐文件层比 `ErbIndex.fileMtimes`。
+   * `save` 收到的是**本次实际拿到的结果**（复用 + 新算），且**不含**任何抛错规则/文件的结论。
    */
   snapshot?: {
-    expectFor(args: { project: GameProject; index: ErbIndex; rules: readonly ConventionRule[] }): CacheExpect | null;
-    load(expect: CacheExpect): Promise<ConventionReport | null>;
-    save(report: ConventionReport, expect: CacheExpect): void;
+    expectFor(args: { project: GameProject; rules: readonly ConventionRule[] }): CacheExpect | null;
+    load(expect: CacheExpect): Promise<LintCache | null>;
+    save(cache: LintCache, expect: CacheExpect): void;
   };
 }
 
@@ -130,22 +159,22 @@ export class ConventionEngine implements ConventionLinterService {
 
     const startedAt = Date.now();
     const rules = this.rules();
-    const executed = rules.filter((r) => typeof r.check === 'function');
+    const force = opts?.force === true;
 
-    // 判据由插件组装（ERB 指纹 / adapter 输入摘要 / 语义版本 / 规则清单四路）
-    const expect = this.deps.snapshot ? this.deps.snapshot.expectFor({ project, index, rules }) : null;
-    if (this.deps.snapshot && expect && !opts?.force) {
-      const cached = await this.deps.snapshot.load(expect);
-      if (cached) {
-        this.deps.log.info(
-          `Convention lint restored from snapshot: ${cached.issues.length} issue(s) ` +
-            `(error ${cached.counts.error} / warning ${cached.counts.warning} / info ${cached.counts.info}) ` +
-            `across ${cached.ruleCount} rule(s), originally ${cached.durationMs}ms — compute skipped`,
-        );
-        this.commit(cached);
-        return cached;
-      }
-    }
+    /**
+     * 按声明粒度分流。`scope` 缺省 = `'project'`（跨文件语义，只能整项目重算）。
+     * 声明 `'file'` 却没实现 `checkFile` 的规则**显式记失败**，不静默跳过——
+     * 否则"加了 scope 忘了改实现"会表现成"这条规则什么都没报"，正是本项目的铁律禁止的形态。
+     */
+    const projectRules = rules.filter((r) => r.scope !== 'file' && typeof r.check === 'function');
+    const fileRules = rules.filter((r) => r.scope === 'file');
+    const runnableFileRules = fileRules.filter((r) => typeof r.checkFile === 'function');
+    const failedRules: { ruleId: string; error: string }[] = rules
+      .filter((r) => (r.scope === 'file' ? typeof r.checkFile !== 'function' : typeof r.check !== 'function'))
+      .map((r) => ({
+        ruleId: r.id,
+        error: `scope='${r.scope ?? 'project'}' 但缺 ${r.scope === 'file' ? 'checkFile' : 'check'} 实现（已跳过）`,
+      }));
 
     // 一次运行内的文件读取记忆化：多条规则共享同一份文本（避免重复读 2k+ 文件）
     const textCache = new Map<string, Promise<string>>();
@@ -163,38 +192,107 @@ export class ConventionEngine implements ConventionLinterService {
       log: this.deps.log,
     };
 
-    const issues: ConventionIssue[] = [];
-    const failedRules: { ruleId: string; error: string }[] = [];
-    const seen = new Set<string>();
-    /**
-     * 逐规则耗时（**只进日志，不进报告**：加进 `ConventionReport` 会牵动快照结构与规则摘要，
-     * 而"哪条规则贵"是增量缓存设计的输入，不是用户数据）。
-     */
-    const ruleTimings: { ruleId: string; ms: number; issues: number }[] = [];
+    /** 全局判据（不含 ERB 指纹）；null ⇒ 既不还原也不落盘 */
+    const expect = this.deps.snapshot ? this.deps.snapshot.expectFor({ project, rules }) : null;
+    const stored = this.deps.snapshot && expect && !force ? await this.deps.snapshot.load(expect) : null;
 
-    for (const rule of executed) {
-      const ruleStartedAt = Date.now();
-      const before = issues.length;
+    /**
+     * 整项目层能否复用：**必须**本次索引带 `fingerprint` 且与缓存里那条相等。
+     * 逐文件层不看它，只看桶里的 mtime（见下）——把两件事合成一个判据就是
+     * "改一个文件重算全库"的由来（§5.70 同一课）。
+     */
+    const canReuseProject = !force && !!stored && !!index.fingerprint && stored.erbFingerprint === index.fingerprint;
+
+    const ruleTimings: { ruleId: string; ms: number; issues: number; reused: boolean }[] = [];
+    const projectResults: Record<string, ConventionIssue[]> = {};
+
+    for (const rule of projectRules) {
+      const t0 = Date.now();
+      const cached = canReuseProject ? stored!.projectResults[rule.id] : undefined;
+      if (cached) {
+        projectResults[rule.id] = cached;
+        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: cached.length, reused: true });
+        continue;
+      }
       try {
         const produced = (await rule.check!(checkCtx)) ?? [];
-        for (const raw of produced) {
-          const normalized: ConventionIssue = {
-            ...raw,
-            ruleId: raw.ruleId || rule.id,
-            severity: raw.severity ?? rule.severity,
-          };
-          const key =
-            normalized.key ??
-            `${normalized.ruleId}|${normalized.filePath ?? ''}|${normalized.line ?? 0}|${normalized.message}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          issues.push({ ...normalized, key });
-        }
+        projectResults[rule.id] = produced;
+        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: produced.length, reused: false });
       } catch (err) {
+        // 抛错的规则**不写 projectResults** ⇒ 下次必然重算它（坏一次不能永久缓存坏结果）
         failedRules.push({ ruleId: rule.id, error: err instanceof Error ? err.message : String(err) });
         this.deps.log.warn(`Convention rule '${rule.id}' failed: ${String(err)}`);
+        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: 0, reused: false });
       }
-      ruleTimings.push({ ruleId: rule.id, ms: Date.now() - ruleStartedAt, issues: issues.length - before });
+    }
+
+    /**
+     * 逐文件层：按本次索引顺序（= walk 顺序）决定"复用桶"还是"只算这个文件"。
+     * 任一侧 mtime 取不到 ⇒ 该文件判过期（保守重算），别的路径不受影响。
+     */
+    const files = [...index.files.values()];
+    const buckets: Record<string, Record<string, LintFileBucket>> = {};
+    let recomputedFiles = 0;
+    for (const rule of runnableFileRules) {
+      const t0 = Date.now();
+      const prev = stored?.buckets[rule.id] ?? {};
+      const fresh = new Map<string, LintFileBucket>();
+      const stale = files.filter((f) => {
+        const mtime = index.fileMtimes?.get(f.path) ?? null;
+        const b = prev[f.path];
+        return !(b && b.mtimeMs !== null && mtime !== null && b.mtimeMs === mtime);
+      });
+      let ruleFailed = false;
+      await mapLimit(stale, LINT_FILE_CONCURRENCY, async (file) => {
+        try {
+          const produced = (await rule.checkFile!(checkCtx, file)) ?? [];
+          fresh.set(file.path, { mtimeMs: index.fileMtimes?.get(file.path) ?? null, issues: produced });
+        } catch (err) {
+          // 抛错的文件**不留桶**：下次重算它，而不是把"这次没结论"当成永久结论
+          ruleFailed = true;
+          this.deps.log.warn(`Convention rule '${rule.id}' failed on ${file.path}: ${String(err)}`);
+        }
+      });
+      if (ruleFailed) {
+        failedRules.push({ ruleId: rule.id, error: `逐文件判定失败 ${stale.length - fresh.size} 个文件（详见日志）` });
+      }
+      recomputedFiles += fresh.size;
+      // 装配按 walk 顺序 ⇒ 增量与全量同序（与索引/抽取段同一份纪律）
+      const out: Record<string, LintFileBucket> = {};
+      let count = 0;
+      for (const file of files) {
+        const b = fresh.get(file.path) ?? prev[file.path];
+        if (!b) continue; // 这次没结论（读失败 / 索引换了） ⇒ 不伪造
+        out[file.path] = b;
+        count += b.issues.length;
+      }
+      buckets[rule.id] = out;
+      ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: count, reused: stale.length === 0 });
+    }
+
+    // 汇总：整项目结论在前、逐文件结论按 (规则, walk 顺序) 在后，再统一去重 + 排序
+    const issues: ConventionIssue[] = [];
+    const seen = new Set<string>();
+    const push = (raw: ConventionIssue, fallbackRuleId: string, severity: ConventionSeverity): void => {
+      const normalized: ConventionIssue = {
+        ...raw,
+        ruleId: raw.ruleId || fallbackRuleId,
+        severity: raw.severity ?? severity,
+      };
+      const key =
+        normalized.key ??
+        `${normalized.ruleId}|${normalized.filePath ?? ''}|${normalized.line ?? 0}|${normalized.message}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      issues.push({ ...normalized, key });
+    };
+    for (const rule of projectRules) {
+      for (const raw of projectResults[rule.id] ?? []) push(raw, rule.id, rule.severity);
+    }
+    for (const rule of runnableFileRules) {
+      for (const path of Object.keys(buckets[rule.id] ?? {})) {
+        for (const raw of buckets[rule.id]![path]!.issues) push(raw, rule.id, rule.severity);
+      }
     }
 
     issues.sort(compareIssues);
@@ -202,6 +300,7 @@ export class ConventionEngine implements ConventionLinterService {
     for (const i of issues) counts[i.severity]++;
 
     const finishedAt = Date.now();
+    const executed = projectRules.length + runnableFileRules.length;
     const report: ConventionReport = {
       adapterId: project.adapterId,
       startedAt,
@@ -209,21 +308,33 @@ export class ConventionEngine implements ConventionLinterService {
       durationMs: finishedAt - startedAt,
       issues,
       counts,
-      ruleCount: executed.length,
+      ruleCount: executed,
       failedRules,
     };
     this.deps.log.info(
       `Convention lint: ${issues.length} issue(s) ` +
         `(error ${counts.error} / warning ${counts.warning} / info ${counts.info}) ` +
-        `in ${report.durationMs}ms across ${executed.length} rule(s)` +
+        `in ${report.durationMs}ms across ${executed} rule(s)` +
         (failedRules.length ? `, ${failedRules.length} rule(s) failed` : ''),
     );
-    // 规则顺序 = 执行顺序（确定性）；"哪条规则贵 + 它产出几条"是逐文件增量设计的唯一输入
+    // 规则顺序 = 执行顺序（确定性）；`复用` 标记是"增量到底命中没有"的读数
     this.deps.log.info(
-      `  lint breakdown: ${ruleTimings.map((t) => `${t.ruleId} ${t.ms}ms/${t.issues}项`).join(' · ')}`,
+      `  lint breakdown: ${ruleTimings
+        .map((t) => `${t.ruleId} ${t.ms}ms/${t.issues}项${t.reused ? '(复用)' : ''}`)
+        .join(' · ')}` + ` ｜ 逐文件重算 ${recomputedFiles} 个文件`,
     );
     this.commit(report);
-    if (this.deps.snapshot && expect) this.deps.snapshot.save(report, expect);
+
+    /**
+     * 落盘：只在真算过东西时写（全命中再刷一遍是纯浪费）。
+     * `index.fingerprint` 缺失时存空串——下次 `canReuseProject` 仍判假，保守不命中。
+     */
+    if (this.deps.snapshot && expect && (recomputedFiles > 0 || ruleTimings.some((t) => !t.reused))) {
+      this.deps.snapshot.save(
+        { erbFingerprint: index.fingerprint ?? '', projectResults, buckets },
+        expect,
+      );
+    }
     return report;
   }
 
