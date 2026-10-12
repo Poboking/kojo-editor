@@ -8,6 +8,8 @@ interface Props {
   onOpenFile: (path: string) => void;
   /** 目录列举（真实文件夹视图用；宿主注入内核 io，浏览器环境可能抛错——调用侧已兜底） */
   listDir?: (path: string) => Promise<DirEntry[]>;
+  /** 导入作者包为工作区项目（口上项目批 P-F；缺省 → 不显示导入菜单项） */
+  onImportPackage?: (pkg: { dir: string; label: string }) => void;
 }
 
 /** 作者包子目录（角色目录下的一层子文件夹 = 作者版本号包目录） */
@@ -28,8 +30,11 @@ interface Group {
 
 type DirState = DirEntry[] | 'loading' | 'error';
 
-/** 右键菜单作用域：单个角色 / 整棵树根 */
-type MenuScope = { kind: 'group'; group: Group } | { kind: 'root' };
+/** 右键菜单作用域：单个角色 / 整棵树根 / 单个作者包（导入口径，P-F） */
+type MenuScope =
+  | { kind: 'group'; group: Group }
+  | { kind: 'root' }
+  | { kind: 'package'; dir: string; label: string };
 
 /** 角色目录前缀（长前缀优先，避免嵌套目录误归属） */
 function ownerOf(
@@ -64,7 +69,7 @@ function baseName(p: string): string {
  * 展开状态由组件内 state 持有——宿主（ProjectView）以稳定组件身份注入，
  * 打开文件不会因重渲染而丢掉展开状态。
  */
-export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Props): ReactElement {
+export function FileTree({ project, index, activeFile, onOpenFile, listDir, onImportPackage }: Props): ReactElement {
   const [filter, setFilter] = useState('');
   const [opened, setOpened] = useState<Set<string>>(new Set());
   /** 作者包文件夹态（默认平铺态——包标题行与口上文件共存） */
@@ -286,9 +291,10 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
                           title={pkgDir}
                           onClick={() => togglePkgFolder(pkgKey, pkgDir)}
                           onContextMenu={(e) => {
-                            // 包节点不弹菜单（点击即切文件夹态）；阻止冒泡到树根菜单
+                            // 包节点右键 = 导入口径（P-F）；无导入能力时仅阻止冒泡
                             e.preventDefault();
                             e.stopPropagation();
+                            if (onImportPackage) openMenu(e, { kind: 'package', dir: pkgDir, label });
                           }}
                         >
                           <span className="caret">{isFolder ? '▾' : '▸'}</span>
@@ -321,12 +327,26 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir }: Pr
         <>
           <div className="context-menu-backdrop" onMouseDown={() => setMenu(null)} />
           <div className="context-menu" style={{ left: menu.x, top: menu.y }} role="menu">
-            <button role="menuitem" onClick={() => revealAll(menu.scope)}>
-              <span className="check" />
-              {menu.scope.kind === 'root'
-                ? '查看被隐藏的文件和文件夹（全部角色）'
-                : '查看被隐藏的文件和文件夹'}
-            </button>
+            {menu.scope.kind === 'package' ? (
+              <button
+                role="menuitem"
+                onClick={() => {
+                  const scope = menu.scope;
+                  setMenu(null);
+                  if (scope.kind === 'package') onImportPackage?.({ dir: scope.dir, label: scope.label });
+                }}
+              >
+                <span className="check" />
+                导入为我的口上项目
+              </button>
+            ) : (
+              <button role="menuitem" onClick={() => revealAll(menu.scope)}>
+                <span className="check" />
+                {menu.scope.kind === 'root'
+                  ? '查看被隐藏的文件和文件夹（全部角色）'
+                  : '查看被隐藏的文件和文件夹'}
+              </button>
+            )}
           </div>
         </>
       ) : null}

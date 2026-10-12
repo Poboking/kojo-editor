@@ -46,6 +46,7 @@ function activate(io: FileIO): { adapter: GameAdapter; registrations: GameAdapte
       error: (m: string) => warns.push(m),
     },
     bus: { emit: () => {}, on: () => () => {} },
+    onDispose: () => {},
     inject: <T,>(key: string): T => {
       if (key === 'kernel.io') return io as unknown as T;
       // 口上项目面板依赖（P-B）：本测试只关心 adapter，给最小伪实现

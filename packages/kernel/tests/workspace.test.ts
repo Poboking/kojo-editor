@@ -145,3 +145,72 @@ describe('WorkspaceService · 制品与文件', () => {
     expect((await ws.get(p.id))!.artifacts).toHaveLength(0);
   });
 });
+
+describe('WorkspaceService · 导入外部目录（P-F）', () => {
+  /** 造一个源目录：两层结构 + 非 UTF-8 字节（验证字节级保编码复制） */
+  async function makeSourceDir(): Promise<string> {
+    const src = path.join(tmpDir, 'source-package');
+    await fs.mkdir(path.join(src, '子目录'), { recursive: true });
+    await fs.writeFile(path.join(src, 'README.md'), '# 源包说明\n', 'utf8');
+    await fs.writeFile(path.join(src, '事件.ERB'), 'PRINTL 你好\n', 'utf8');
+    await fs.writeFile(path.join(src, '子目录', '深文件.ERB'), 'PRINTL 深层\n', 'utf8');
+    // 任意字节（模拟 Shift_JIS 等非 UTF-8 内容；字节级复制必须原样）
+    await fs.writeFile(path.join(src, '二进制.bin'), Buffer.from([0x82, 0xb1, 0x82, 0xf1]));
+    return src;
+  }
+
+  it('递归导入：逐文件字节复制 + 登记 manifest（含来源元数据）', async () => {
+    const src = await makeSourceDir();
+    const p = await ws.create({ name: '作品' });
+    const art = await ws.importDirectory(p.id, {
+      name: '导入包',
+      dirName: '导入包-K1 v1.0',
+      sourceDir: src,
+      meta: { importedFrom: src },
+    });
+
+    const proj = (await ws.get(p.id))!;
+    expect(proj.artifacts).toHaveLength(1);
+    expect(proj.artifacts[0]!.meta.importedFrom).toBe(src);
+
+    // 文件逐一落盘（含子目录）
+    const pkgDir = path.join(ws.projectDir(p.id), art.dirName);
+    expect(await fs.readFile(path.join(pkgDir, 'README.md'), 'utf8')).toBe('# 源包说明\n');
+    expect(await fs.readFile(path.join(pkgDir, '事件.ERB'), 'utf8')).toBe('PRINTL 你好\n');
+    expect(await fs.readFile(path.join(pkgDir, '子目录', '深文件.ERB'), 'utf8')).toBe('PRINTL 深层\n');
+    // 字节级保真（非 UTF-8 内容不转码）
+    const bin = await fs.readFile(path.join(pkgDir, '二进制.bin'));
+    expect([...bin]).toEqual([0x82, 0xb1, 0x82, 0xf1]);
+
+    // 源目录不被改动（只读语义）
+    expect(await fs.readFile(path.join(src, 'README.md'), 'utf8')).toBe('# 源包说明\n');
+    expect(art.name).toBe('导入包');
+  });
+
+  it('目标 dirName 冲突拒绝（不覆盖既有包）', async () => {
+    const src = await makeSourceDir();
+    const p = await ws.create({ name: '作品' });
+    await ws.createArtifact(p.id, { name: '既有', dirName: '已有包', files: {} });
+    await expect(
+      ws.importDirectory(p.id, { name: '导入', dirName: '已有包', sourceDir: src }),
+    ).rejects.toThrow(/already exists/);
+  });
+
+  it('源目录不存在拒绝', async () => {
+    const p = await ws.create({ name: '作品' });
+    await expect(
+      ws.importDirectory(p.id, { name: '导入', dirName: 'pkg', sourceDir: path.join(tmpDir, '不存在') }),
+    ).rejects.toThrow(/does not exist/);
+  });
+
+  it('dirName 非法（含分隔符 / 点段）拒绝', async () => {
+    const src = await makeSourceDir();
+    const p = await ws.create({ name: '作品' });
+    await expect(
+      ws.importDirectory(p.id, { name: '导入', dirName: 'a/b', sourceDir: src }),
+    ).rejects.toThrow();
+    await expect(
+      ws.importDirectory(p.id, { name: '导入', dirName: '..', sourceDir: src }),
+    ).rejects.toThrow();
+  });
+});

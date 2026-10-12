@@ -6,10 +6,11 @@ import type {
   TextFile,
   WorkspaceArtifact,
   WorkspaceArtifactInput,
+  WorkspaceImportInput,
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { WORKSPACE_MANIFEST_FILE, isAbsolute, isPathUnder, join } from '@kojo/plugin-api';
+import { WORKSPACE_MANIFEST_FILE, dirname, isAbsolute, isPathUnder, join } from '@kojo/plugin-api';
 
 /**
  * 作者工作区服务实现（内核 `kernel.workspaces`）。
@@ -230,6 +231,59 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     project.updatedAt = Date.now();
     await this.writeManifest(project);
     this.deps.log.info(`Artifact created: ${name} in project ${projectId}`);
+    return artifact;
+  }
+
+  async importDirectory(projectId: string, input: WorkspaceImportInput): Promise<WorkspaceArtifact> {
+    const project = await this.readManifest(projectId);
+    if (!project) throw new Error(`Workspace project not found: ${projectId}`);
+    const name = input.name.trim();
+    if (name.length === 0) throw new Error('Artifact name must not be empty');
+    assertSegment(input.dirName, 'artifact directory name');
+
+    // 冲突判定以 manifest 登记为准（与 createArtifact 同口径；不覆盖既有包）
+    if (
+      project.artifacts.some((a) => a.dirName === input.dirName) ||
+      (await this.deps.io.exists(join(this.projectDir(projectId), input.dirName)))
+    ) {
+      throw new Error(`Artifact directory already exists: ${input.dirName}`);
+    }
+
+    const sourceStat = await this.deps.io.stat(input.sourceDir);
+    if (!sourceStat || !sourceStat.isDirectory) {
+      throw new Error(`Source directory does not exist: ${input.sourceDir}`);
+    }
+
+    // 枚举源目录文件（只读，不改动源）；**字节级**复制保持原编码（一次转码毁半库）
+    const entries = await this.deps.io.walkDir(input.sourceDir, { includeFiles: true });
+    const targets: Array<{ from: string; to: string }> = [];
+    for (const e of entries) {
+      if (e.isDirectory) continue;
+      const rel = e.path.slice(input.sourceDir.length).replace(/^[\\/]+/, '');
+      // 纵深防御：拒绝一切逃逸段（walkDir 输出结构安全，但不信任输入侧）
+      if (rel.split(/[\\/]/).includes('..')) {
+        throw new Error(`Path escapes the source directory: ${rel}`);
+      }
+      targets.push({ from: e.path, to: this.resolveIn(projectId, join(input.dirName, rel)) });
+    }
+
+    for (const t of targets) {
+      await this.deps.io.ensureDir(dirname(t.to));
+      const bytes = await this.deps.io.readBytes(t.from);
+      await this.deps.io.writeBytes(t.to, bytes);
+    }
+
+    const artifact: WorkspaceArtifact = {
+      id: newId('a'),
+      name,
+      dirName: input.dirName,
+      meta: input.meta ?? {},
+      createdAt: Date.now(),
+    };
+    project.artifacts.push(artifact);
+    project.updatedAt = Date.now();
+    await this.writeManifest(project);
+    this.deps.log.info(`Artifact imported: ${name} (${targets.length} files) from ${input.sourceDir}`);
     return artifact;
   }
 

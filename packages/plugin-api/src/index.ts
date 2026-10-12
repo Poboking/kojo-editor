@@ -50,6 +50,7 @@ export { WORKSPACE_MANIFEST_FILE } from './workspace';
 export type {
   WorkspaceArtifact,
   WorkspaceArtifactInput,
+  WorkspaceImportInput,
   WorkspaceProject,
   WorkspaceService,
 } from './workspace';

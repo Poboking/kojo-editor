@@ -11,6 +11,7 @@ import type {
 import { createEratwAdapterPlugin } from '../src/plugin';
 import { artifactDir, sortDirEntries } from '../src/kojo-projects-panel';
 import { NEW_KOJO_PROJECT_OVERLAY_ID } from '../src/new-project-wizard';
+import { IMPORT_KOJO_OVERLAY_ID } from '../src/import-wizard';
 
 /* ------------------------------ 纯函数 ------------------------------ */
 
@@ -49,6 +50,8 @@ interface FakeCtx {
   panels: UIPanelContribution[];
   overlays: OverlayContribution[];
   emits: Array<{ type: string; payload: unknown }>;
+  /** 触发某内核事件的插件监听器（如 workspace.importRequested） */
+  fire(type: string, payload: unknown): void;
 }
 
 function fakeWorkspaces(): WorkspaceService {
@@ -68,6 +71,9 @@ function fakeWorkspaces(): WorkspaceService {
     createArtifact: async () => {
       throw new Error('not used');
     },
+    importDirectory: async () => {
+      throw new Error('not used');
+    },
     removeArtifact: async () => {},
     listDir: async () => [],
     readText: async () => {
@@ -81,15 +87,20 @@ function activateWithPanel(): FakeCtx {
   const panels: UIPanelContribution[] = [];
   const overlays: OverlayContribution[] = [];
   const emits: Array<{ type: string; payload: unknown }> = [];
+  const handlers = new Map<string, (payload: unknown) => void>();
   const io = {
     listDir: async () => [],
   } as unknown as FileIO;
   const ctx = {
     pluginId: 'eratw-adapter',
     log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+    onDispose: () => {},
     bus: {
       emit: (type: string, payload: unknown) => emits.push({ type, payload }),
-      on: () => () => {},
+      on: (type: string, handler: (payload: unknown) => void) => {
+        handlers.set(type, handler);
+        return () => {};
+      },
     },
     inject: <T,>(key: string): T => {
       if (key === 'kernel.io') return io as unknown as T;
@@ -107,7 +118,13 @@ function activateWithPanel(): FakeCtx {
     },
   } as unknown as PluginContext;
   createEratwAdapterPlugin().activate(ctx);
-  return { ctx, panels, overlays, emits };
+  return {
+    ctx,
+    panels,
+    overlays,
+    emits,
+    fire: (type, payload) => handlers.get(type)?.(payload),
+  };
 }
 
 describe('「我的口上项目」面板注册（P-B）', () => {
@@ -130,11 +147,24 @@ describe('「我的口上项目」面板注册（P-B）', () => {
   });
 });
 
-describe('新建口上项目向导注册（P-C）', () => {
-  it('注册 ui.overlay：id 与面板按钮引用的常量一致', () => {
+describe('口上项目向导注册（P-C 新建 / P-F 导入）', () => {
+  it('注册两个 ui.overlay：新建 + 导入，id 与各引用常量一致', () => {
     const { overlays } = activateWithPanel();
-    expect(overlays).toHaveLength(1);
-    expect(overlays[0]!.id).toBe(NEW_KOJO_PROJECT_OVERLAY_ID);
-    expect(typeof overlays[0]!.component).toBe('function');
+    const ids = overlays.map((o) => o.id);
+    expect(ids).toContain(NEW_KOJO_PROJECT_OVERLAY_ID);
+    expect(ids).toContain(IMPORT_KOJO_OVERLAY_ID);
+    for (const o of overlays) expect(typeof o.component).toBe('function');
+  });
+
+  it('监听 workspace.importRequested → 打开导入 overlay（意图 → 宿主落地）', () => {
+    const { fire, emits } = activateWithPanel();
+    fire('workspace.importRequested', {
+      sourceDir: '/game/个人口上/001 灵梦/某包',
+      suggestedName: '某包',
+      source: 'file-tree',
+    });
+    const open = emits.find((e) => e.type === 'ui.overlay.open');
+    expect(open).toBeTruthy();
+    expect((open!.payload as { id: string }).id).toBe(IMPORT_KOJO_OVERLAY_ID);
   });
 });

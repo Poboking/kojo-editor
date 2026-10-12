@@ -126,8 +126,20 @@ export function ProjectView({
   // React 视作新组件类型 → 整树卸载重挂 → 展开状态被清空。改为身份恒定的包装
   // 组件 + ref 桥接最新 props：重渲染只更新属性，绝不重挂，展开状态常驻）。
   const listDir = useMemo(() => kernel.io.listDir.bind(kernel.io), [kernel]);
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir };
+  // 导入作者包为工作区项目（口上项目批 P-F）：壳层只发意图事件，
+  // 「导入成什么形态」由工作区消费方（适配器）解释——跨层零游戏知识
+  const importPackage = useCallback(
+    (pkg: { dir: string; label: string }) => {
+      kernel.bus.emit('workspace.importRequested', {
+        sourceDir: pkg.dir,
+        suggestedName: pkg.label,
+        source: 'file-tree',
+      });
+    },
+    [kernel],
+  );
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, importPackage });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, importPackage };
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
       const a = fileTreeArgsRef.current;
@@ -138,6 +150,7 @@ export function ProjectView({
           activeFile={a.activeFile}
           onOpenFile={a.onOpenFile}
           listDir={a.listDir}
+          onImportPackage={a.importPackage}
         />
       );
     };

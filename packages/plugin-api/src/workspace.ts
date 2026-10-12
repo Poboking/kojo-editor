@@ -53,6 +53,16 @@ export interface WorkspaceArtifactInput {
   meta?: Record<string, unknown>;
 }
 
+/** 导入外部目录为制品的输入（字节级逐文件复制；源只读、落点在项目内） */
+export interface WorkspaceImportInput {
+  name: string;
+  /** 制品目录名（单层、不得含分隔符；冲突时抛错） */
+  dirName: string;
+  /** 源目录绝对路径（不存在时抛错） */
+  sourceDir: string;
+  meta?: Record<string, unknown>;
+}
+
 export interface WorkspaceService {
   /** 工作区根目录（绝对路径）；服务不可用（无平台数据目录）时抛错 */
   rootDir(): string;
@@ -72,6 +82,12 @@ export interface WorkspaceService {
   projectDir(projectId: string): string;
   /** 在项目中创建制品：写入文件集并登记 manifest */
   createArtifact(projectId: string, input: WorkspaceArtifactInput): Promise<WorkspaceArtifact>;
+  /**
+   * 导入外部目录为制品（2026-10-12 口上项目批 P-F）：walkDir 枚举 +
+   * readBytes/writeBytes **字节级**逐文件复制（保编码——一次转码毁半库）。
+   * 源目录只读不改动；目标已存在同名目录时抛错不覆盖。
+   */
+  importDirectory(projectId: string, input: WorkspaceImportInput): Promise<WorkspaceArtifact>;
   /** 删除制品（目录 + manifest 登记） */
   removeArtifact(projectId: string, artifactId: string): Promise<void>;
   /** 列项目内某相对目录（缺省 = 项目根） */

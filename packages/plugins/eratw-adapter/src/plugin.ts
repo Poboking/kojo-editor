@@ -19,6 +19,7 @@ import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
 import { createEratwFaceTable } from './face-templates';
 import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
 import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard } from './new-project-wizard';
+import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -102,6 +103,21 @@ export function createEratwAdapterPlugin(): Plugin {
         wsDirCache.clear();
         refreshWsProjects();
       };
+
+      /* ---- 导入请求（P-F）：壳层文件树右键发意图，本插件解释为「导入口上项目」 ---- */
+
+      /** 待导入请求（overlay 组件无 props，payload 不经组件——读插件闭包） */
+      let pendingImport: PendingImport | null = null;
+
+      ctx.onDispose(
+        ctx.bus.on('workspace.importRequested', (ev) => {
+          pendingImport = {
+            sourceDir: ev.sourceDir,
+            ...(ev.suggestedName !== undefined ? { suggestedName: ev.suggestedName } : {}),
+          };
+          ctx.bus.emit('ui.overlay.open', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eratw-adapter' });
+        }),
+      );
 
       refreshWsProjects();
 
@@ -264,6 +280,23 @@ export function createEratwAdapterPlugin(): Plugin {
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' }),
           onCreated: invalidateWs,
+        }),
+      });
+
+      /* ---- 导入口上项目向导（P-F）：强制新包名，不覆盖他人署名 ---- */
+
+      ctx.slots.register('ui.overlay', {
+        id: IMPORT_KOJO_OVERLAY_ID,
+        order: 21,
+        component: createImportKojoWizard({
+          workspaces,
+          pending: () => pendingImport,
+          clearPending: () => {
+            pendingImport = null;
+          },
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
+          onImported: invalidateWs,
         }),
       });
     },
