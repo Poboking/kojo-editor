@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   DirEntry,
   FileIO,
+  OverlayContribution,
   PluginContext,
   UIPanelContribution,
   WorkspaceProject,
@@ -9,6 +10,7 @@ import type {
 } from '@kojo/plugin-api';
 import { createEratwAdapterPlugin } from '../src/plugin';
 import { artifactDir, sortDirEntries } from '../src/kojo-projects-panel';
+import { NEW_KOJO_PROJECT_OVERLAY_ID } from '../src/new-project-wizard';
 
 /* ------------------------------ 纯函数 ------------------------------ */
 
@@ -45,6 +47,7 @@ describe('包目录路径', () => {
 interface FakeCtx {
   ctx: PluginContext;
   panels: UIPanelContribution[];
+  overlays: OverlayContribution[];
   emits: Array<{ type: string; payload: unknown }>;
 }
 
@@ -76,6 +79,7 @@ function fakeWorkspaces(): WorkspaceService {
 
 function activateWithPanel(): FakeCtx {
   const panels: UIPanelContribution[] = [];
+  const overlays: OverlayContribution[] = [];
   const emits: Array<{ type: string; payload: unknown }> = [];
   const io = {
     listDir: async () => [],
@@ -90,17 +94,20 @@ function activateWithPanel(): FakeCtx {
     inject: <T,>(key: string): T => {
       if (key === 'kernel.io') return io as unknown as T;
       if (key === 'kernel.workspaces') return fakeWorkspaces() as unknown as T;
+      // 新建向导依赖（P-C）：角色表来自当前游戏项目
+      if (key === 'kernel.project') return { current: () => null } as unknown as T;
       throw new Error(`unexpected inject: ${key}`);
     },
     slots: {
       register: (slot: string, item: UIPanelContribution) => {
         if (slot === 'ui.panel') panels.push(item);
+        else if (slot === 'ui.overlay') overlays.push(item as unknown as OverlayContribution);
         return () => {};
       },
     },
   } as unknown as PluginContext;
   createEratwAdapterPlugin().activate(ctx);
-  return { ctx, panels, emits };
+  return { ctx, panels, overlays, emits };
 }
 
 describe('「我的口上项目」面板注册（P-B）', () => {
@@ -116,8 +123,18 @@ describe('「我的口上项目」面板注册（P-B）', () => {
     expect(typeof panel.component).toBe('function');
   });
 
-  it('插件硬依赖包含 kernel.workspaces（缺席时可见地 inactive，不静默）', () => {
+  it('插件硬依赖包含 kernel.workspaces / kernel.project（缺席时可见地 inactive，不静默）', () => {
     const plugin = createEratwAdapterPlugin();
     expect(plugin.requires).toContain('kernel.workspaces');
+    expect(plugin.requires).toContain('kernel.project');
+  });
+});
+
+describe('新建口上项目向导注册（P-C）', () => {
+  it('注册 ui.overlay：id 与面板按钮引用的常量一致', () => {
+    const { overlays } = activateWithPanel();
+    expect(overlays).toHaveLength(1);
+    expect(overlays[0]!.id).toBe(NEW_KOJO_PROJECT_OVERLAY_ID);
+    expect(typeof overlays[0]!.component).toBe('function');
   });
 });

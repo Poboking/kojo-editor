@@ -2718,6 +2718,16 @@ textarea {
 .wizard-field input:focus-visible {
   border-color: var(--accent);
 }
+/* 复选行（横向排列；区别于常规字段的纵向堆叠） */
+.wizard-field.wizard-check {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+.wizard-field.wizard-check input[type='checkbox'] {
+  accent-color: var(--accent);
+}
 .wizard-preview {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -2943,6 +2953,11 @@ textarea {
 }
 .kp-toolbar-label {
   font-size: var(--fs-1);
+}
+.kp-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 .kp-body {
   flex: 1;

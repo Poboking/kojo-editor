@@ -4,6 +4,7 @@ import type {
   GameAdapter,
   GameProject,
   Plugin,
+  ProjectService,
   VariableSchema,
   WorkspaceProject,
   WorkspaceService,
@@ -17,6 +18,7 @@ import { loadEratwVariableSchema } from './variable-schema';
 import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
 import { createEratwFaceTable } from './face-templates';
 import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
+import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard } from './new-project-wizard';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -35,10 +37,11 @@ export function createEratwAdapterPlugin(): Plugin {
   return {
     id: 'eratw-adapter',
     version: '0.2.0',
-    requires: ['kernel.io', KernelServices.Workspaces],
+    requires: ['kernel.io', KernelServices.Workspaces, KernelServices.Project],
     activate(ctx) {
       const io = ctx.inject<FileIO>('kernel.io');
       const workspaces = ctx.inject<WorkspaceService>(KernelServices.Workspaces);
+      const project = ctx.inject<ProjectService>(KernelServices.Project);
 
       /* ---- 「我的口上项目」面板闭包状态（P-B；后续新建/导入/部署共用同一通知源） ---- */
 
@@ -92,6 +95,12 @@ export function createEratwAdapterPlugin(): Plugin {
             wsDirCache.set(absDir, { error: err instanceof Error ? err.message : String(err) });
             notifyWs();
           });
+      };
+
+      /** 目录缓存整体失效 + 项目列表重拉（新建/导入/部署等变更动作后调用） */
+      const invalidateWs = (): void => {
+        wsDirCache.clear();
+        refreshWsProjects();
       };
 
       refreshWsProjects();
@@ -239,6 +248,22 @@ export function createEratwAdapterPlugin(): Plugin {
           ensureDir: ensureWsDir,
           reveal: (absPath) =>
             ctx.bus.emit('editor.revealLocation', { filePath: absPath, source: 'eratw-adapter' }),
+          openNewWizard: () =>
+            ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' }),
+        }),
+      });
+
+      /* ---- 新建口上项目向导（P-C）：脚手架中文命名 + 8 核心面空壳 ---- */
+
+      ctx.slots.register('ui.overlay', {
+        id: NEW_KOJO_PROJECT_OVERLAY_ID,
+        order: 20,
+        component: createNewKojoProjectWizard({
+          workspaces,
+          project,
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' }),
+          onCreated: invalidateWs,
         }),
       });
     },

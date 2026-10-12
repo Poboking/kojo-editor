@@ -39,6 +39,8 @@ export interface KojoProjectsPanelDeps {
   ensureDir(absDir: string): void;
   /** 打开文件并定位（经内核事件，宿主消费） */
   reveal(absPath: string): void;
+  /** 打开「新建口上项目」向导（P-C；缺省 → 不显示新建按钮） */
+  openNewWizard?(): void;
 }
 
 /** 目录条目排序：目录在前，其后按名称（中文本地化比较口径） */
@@ -207,7 +209,18 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
       'div',
       { className: 'kp-toolbar' },
       h('span', { className: 'dim kp-toolbar-label' }, loading ? '读取中…' : `${projects.length} 个项目`),
-      h('button', { className: 'ghost small', title: '刷新项目列表', onClick: () => deps.refresh() }, '⟳'),
+      h(
+        'span',
+        { className: 'kp-toolbar-actions' },
+        deps.openNewWizard
+          ? h(
+              'button',
+              { className: 'ghost small', title: '新建口上项目', onClick: () => deps.openNewWizard!() },
+              '＋ 新建',
+            )
+          : null,
+        h('button', { className: 'ghost small', title: '刷新项目列表', onClick: () => deps.refresh() }, '⟳'),
+      ),
     );
 
     let body: ReactNode;

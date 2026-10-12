@@ -55,6 +55,7 @@ function activate(io: FileIO): { adapter: GameAdapter; registrations: GameAdapte
           projectDir: (id: string) => `/ws/${id}`,
         } as unknown as T;
       }
+      if (key === 'kernel.project') return { current: () => null } as unknown as T;
       throw new Error(`unexpected inject: ${key}`);
     },
     slots: {
