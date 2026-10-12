@@ -119,6 +119,21 @@ export function contentOf(line: LogicalLine): string {
   return line.text.slice(line.rawIndent.length).replace(/\s+$/, '');
 }
 
+/**
+ * 结构化行的 `;` 行内注释剥离：截到行内第一个**引号外**的 `;`（含）为止。
+ * 引号内的 `;` 属于字符串值（如字符串别名），不剥。文本行不经此函数——
+ * 台词里的 `;` 是作者要打印的字符（见 `classifyLine` 的分派注释）。
+ */
+export function stripInlineComment(content: string): string {
+  let inStr = false;
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i]!;
+    if (ch === '"') inStr = !inStr;
+    else if (ch === ';' && !inStr) return content.slice(0, i).replace(/\s+$/, '');
+  }
+  return content;
+}
+
 /* ============================== 行分类（词法决策） ============================== */
 
 /** 行类别 */
@@ -169,26 +184,35 @@ export function classifyLine(line: LogicalLine): LineClass {
     return { kind: 'rawLine', text: content };
   }
 
+  // ---- 结构化行的 `;` 行内注释剥离（引号内的 `;` 不剥）----
+  // 头部声明 / 别名 / 赋值 / 子句 / 块头的值会进入函数名、别名表或表达式降糖——
+  // 注释残留是**静默破坏**：规范 §3.1 的示例全带行内注释（`角色: 12 ; 必填…`），
+  // 不剥则函数名里嵌进注释文本、别名值吞掉整段注释，产物看似能跑、引擎调不到、
+  // 插值引用别名时逐词报 `unknown-identifier`（2026-10-12 教学样例批实证）。
+  // 文本行与原生直通**不剥**：台词里的 `;` 是作者要打印的字符；ERB 直通行的
+  // `;` 注释原样保留（那边本来就是合法注释）。
+  const code = stripInlineComment(content);
+
   // ---- 块头优先（规范 §5.3：块头一律以冒号结尾）----
   // 注意：块头（`如果 …：` / `时机 …：` / `当 …：` …）也可能含冒号
   // （如 `时机 指令 310 成否: 游戏判定：`）。判据是"行尾是块头终止符"。
-  if (endsWithBlockColon(content)) {
-    const block = parseBlockHead(content);
+  if (endsWithBlockColon(code)) {
+    const block = parseBlockHead(code);
     if (block) return block;
   }
 
   // ---- 单行块头 `如果 条件： 内容`（规范 §3.5）----
   // 块头关键字后跟 `：` 与行内体；编译为 `IF … / 体 / ENDIF` 三行。
-  const inlineBlock = tryInlineBlockHead(content);
+  const inlineBlock = tryInlineBlockHead(code);
   if (inlineBlock) return inlineBlock;
 
   // ---- 无冒号的块关键字：行内随机简写 `随机 「甲」,「乙」`（§3.6 末）----
   // `随机` / `random` 后跟候选列表（以 `,` 分隔）时是行内简写形态。
-  const inlineRandom = tryInlineRandom(content);
+  const inlineRandom = tryInlineRandom(code);
   if (inlineRandom) return inlineRandom;
 
   // ---- 头部声明 `词: 值`（词与冒号之间无空白；`角色: 12` / `口上: 破空`）----
-  const headMatch = /^([^:：\s]+)\s*[:：]\s*(.*)$/.exec(content);
+  const headMatch = /^([^:：\s]+)\s*[:：]\s*(.*)$/.exec(code);
   if (headMatch) {
     const key = headMatch[1]!;
     const value = headMatch[2]!;
@@ -209,7 +233,7 @@ export function classifyLine(line: LogicalLine): LineClass {
   }
 
   // ---- `别名 X = 目标`（规范 §3.1；**名与冒号间有空白**，故不进 headMatch）----
-  const aliasMatch = /^(别名|alias)\s+(.+)$/.exec(content);
+  const aliasMatch = /^(别名|alias)\s+(.+)$/.exec(code);
   if (aliasMatch) {
     return parseAliasDecl(aliasMatch[2]!);
   }
@@ -217,18 +241,18 @@ export function classifyLine(line: LogicalLine): LineClass {
   // ---- 表达式 如果 / 当（赋值位置；规范 §3.5 / §3.6 识别规则）----
   // 行首是"目标变量 + `=`"、右侧以 `如果`/`当` 开头、行尾是块头冒号。
   // **不依赖 headMatch**——目标变量名可能含空白（如 `她的心情 = 当 …：`）。
-  if (endsWithBlockColon(content)) {
-    const exprHead = parseExprHead(stripBlockColon(content));
+  if (endsWithBlockColon(code)) {
+    const exprHead = parseExprHead(stripBlockColon(code));
     if (exprHead) return exprHead;
   }
 
   // ---- 赋值（`X = 表达式`）——`=` 不在引号内、不是比较运算符 ----
-  const assign = parseAssignment(content);
+  const assign = parseAssignment(code);
   if (assign) return assign;
 
   // ---- `心形 「…」`（规范 §3.9：行首心形标记 = HPH_PRINT 糖）----
   // 判定：行首为空白的 `心形` / `heart`，其后必须跟空白与内容。
-  const heartMatch = /^(心形|heart)\s+(.*)$/.exec(content);
+  const heartMatch = /^(心形|heart)\s+(.*)$/.exec(code);
   if (heartMatch) {
     return { kind: 'heartText', raw: heartMatch[2]! };
   }

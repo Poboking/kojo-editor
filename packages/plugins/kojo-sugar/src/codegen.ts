@@ -718,6 +718,12 @@ function renderInterpolation(it: Interpolation, ctx: BodyContext): string {
   // expr 形态：字符串族 → `%…%`；数值族 → `{…}`
   const text = it.text;
   const lowered = lowerExpression(text, exprCtx(ctx, it.loc.start));
+  // 字符串**字面量别名**展开（`别名 昵称 = "小露"` → `{昵称}`）：lowered 是带引号的
+  // 字符串字面量，它要**原样嵌进 FORM 文本**（不包 `{}`——`{"小露"}` 不是合法 FORM，
+  // 包成 `{小露}` 更错：FORM 会把小露当变量名求值）。只认"整支恰是一个带引号字面量"，
+  // 与 project.ts 属性反糖的整支判据同款口径。
+  const lit = /^"([^"\\]*)"$/.exec(lowered.trim());
+  if (lit) return lit[1]!;
   return classifyInterpolation(text, lowered, ctx);
 }
 
@@ -749,8 +755,14 @@ const STRING_FAMILIES = new Set(['CALLNAME', 'NAME', 'CALLNAME_MASTER', 'STR', '
 
 /** 行内条件的分支片段：字面量原样、插值再降糖（规范 §5.2 a） */
 function expandFragment(fragment: string, ctx: BodyContext, loc: { line: number; column: number }): string {
-  // 片段内可能含 `%…%`（原生写法）与裸中文（作者误写）——只做运算符/代词降糖
-  return lowerExpression(fragment, exprCtx(ctx, loc));
+  // 分支是 **FORM 字面量片段**（规范 §3.4："字面量原样"）——整段当代码降糖会把
+  // 中文散文逐词报成 `unknown-identifier`（真实语料：分支里就是人话），也会把碰巧
+  // 与变量同名的汉字静默改写。故只降糖 `%…%` 内的原生表达式（真实语料
+  // `\@…?%CALLNAME:MASTER%#…\@` 的写法），其余一律原样。
+  return fragment.replace(
+    /%([^%]+)%/g,
+    (whole, inner: string) => `%${lowerExpression(inner, exprCtx(ctx, loc))}%`,
+  );
 }
 
 /** 落单 `%` 检测（规范 §3.3 / §5.2：FORM 串里 `%…%` 是变量记号） */

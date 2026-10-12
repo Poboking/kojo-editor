@@ -814,3 +814,84 @@ describe('注释保留（2026-10-12 用户第 3 条：注释不能丢）', () =>
     expect(out).not.toContain('\n\n\n');
   });
 });
+
+/* ============================================================================ */
+/* 回归 · 2026-10-12 教学样例批实证的三处转译器缺陷                                */
+/* ============================================================================ */
+
+describe('回归（教学样例批）：结构化行的行内注释剥离', () => {
+  // 根因：classifyLine 对头部声明/别名直接用整行内容——规范 §3.1 的示例全部带
+  // 行内注释（`角色: 12 ; 必填…`），注释残留是**静默破坏**：函数名里嵌进注释文本
+  // （产物看似能跑、引擎调不到），别名值吞掉整段注释（引用别名时逐词报
+  // unknown-identifier）。
+
+  it('头部声明的行内注释不进函数名', () => {
+    const { erb, diagnostics } = t('角色: 12                    ; 必填：角色编号\n时机 指令 310：\n    「呀。」\n');
+    expect(erb).toContain('@M_KOJO_MESSAGE_COM_K12_310');
+    expect(erb).not.toContain('; 必填');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
+  it('别名的行内注释不进别名值——字符串别名被 `{…}` 引用时展开干净', () => {
+    const { erb, diagnostics } = t(
+      '角色: 12\n别名 昵称 = "小露"                     ; 字面量别名（只读）：字符串常量\n时机 指令 310：\n    「呀……！{昵称}」\n',
+    );
+    expect(erb).toContain('PRINTFORMW 「呀……！小露」');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
+  it('别名的行内注释不进别名值——变量别名读写都干净', () => {
+    const { erb, diagnostics } = t(
+      '角色: 12\n别名 今天已触发 = CFLAG:TARGET:1088   ; 变量别名：读写都解析到它\n时机 指令 310：\n    今天已触发 = 1\n    如果 今天已触发：\n        「呀。」\n',
+    );
+    expect(erb).toContain('CFLAG:TARGET:1088 = 1');
+    expect(erb).toContain('IF CFLAG:TARGET:1088');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
+  it('字符串值里的半角分号不剥（引号内的 `;` 属于值本身）', () => {
+    const { erb, diagnostics } = t(
+      '角色: 12\n别名 台词 = "甲;乙" ; 注释\n时机 指令 310：\n    「{台词}」\n',
+    );
+    expect(erb).toContain('「甲;乙」');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+});
+
+describe('回归（教学样例批）：行内条件分支按字面量处理', () => {
+  // 根因：expandFragment 曾把分支整段当代码降糖——中文散文逐词报
+  // unknown-identifier，且碰巧与变量同名的汉字会被静默改写。规范 §3.4：
+  // "分支是 FORM 片段：字面量原样"。
+
+  it('分支含全角逗号/省略号的散文 → 原样进 `\@…#…\@`，零诊断', () => {
+    const { erb, diagnostics } = t(
+      '角色: 12\n时机 指令 310：\n    「{她的恋慕 ? "只有你，我不讨厌。" : "别靠太近。"}」\n',
+    );
+    expect(erb).toContain('\\@TALENT:TARGET:恋慕?只有你，我不讨厌。#别靠太近。\\@');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
+  it('分支里与变量同名的汉字**不被改写**（字面量优先）', () => {
+    const { erb } = t('角色: 12\n时机 指令 310：\n    「{她的恋慕 ? "思慕也好恋慕也好" : ""}」\n');
+    expect(erb).toContain('?思慕也好恋慕也好\\@');
+    expect(erb).not.toContain('?TALENT:TARGET:思慕也好');
+  });
+
+  it('分支内的原生 `%…%` 引用仍按规则降糖（与真实语料写法一致）', () => {
+    const { erb } = t(
+      '角色: 12\n时机 指令 310：\n    「{她的恋慕 ? "只有%CALLNAME:MASTER%" : "别靠太近"}」\n',
+    );
+    expect(erb).toContain('?只有%CALLNAME:MASTER%#别靠太近\\@');
+  });
+});
+
+describe('回归（教学样例批）：字符串字面量别名在插值内展开为裸文本', () => {
+  // 根因：`别名 昵称 = "小露"` 的 `{昵称}` 曾被分类成数值族 → 产物 `{"小露"}`——
+  // 既不是合法 FORM（引号在 `{}` 内无意义），更不是作者想要的字面文本。
+
+  it('{昵称} → 裸文本（无引号、无括号）', () => {
+    const { erb } = t('角色: 12\n别名 昵称 = "小露"\n时机 指令 310：\n    「呀……！{昵称}」\n');
+    expect(erb).toContain('PRINTFORMW 「呀……！小露」');
+    expect(erb).not.toContain('{"小露"}');
+  });
+});
