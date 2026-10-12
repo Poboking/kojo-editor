@@ -20,18 +20,25 @@
  * （`handleComputeRequest`）共用同一份**——避免两侧映射漂移（kind 写错会静默退化为
  * "unknown compute task kind"）。
  */
-import type { ComputeTaskTable } from '@kojo/plugin-api';
-import { parseErbText } from './scanner';
+import type { ComputeTaskTable, ControlFlowStatement } from '@kojo/plugin-api';
+import { parseErbText, scanControlFlow } from './scanner';
 
 /** 任务 kind：纯解析一个 ERB 文件 */
 export const PARSE_FILE_TASK = 'erb.parseFile';
+/** 任务 kind：控制流骨架扫描（条件抽取的 CPU 主段） */
+export const SCAN_FLOW_TASK = 'erb.scanControlFlow';
 
 export interface ParseFilePayload {
   text: string;
   path: string;
 }
 
+export interface ScanFlowPayload {
+  text: string;
+}
+
 /** 本插件导出的可搬运任务表（宿主与 worker 侧共用） */
 export const erbParserTasks: ComputeTaskTable = {
   [PARSE_FILE_TASK]: ((payload: ParseFilePayload) => parseErbText(payload.text, payload.path)) as never,
+  [SCAN_FLOW_TASK]: ((payload: ScanFlowPayload): ControlFlowStatement[] => scanControlFlow(payload.text)) as never,
 };

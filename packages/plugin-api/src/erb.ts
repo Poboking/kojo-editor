@@ -121,6 +121,17 @@ export interface ErbParserService {
    */
   scanControlFlow(text: string): ControlFlowStatement[];
   /**
+   * 同上，但**走计算池的并行通道**（2026-10-12「内核优化」批，additive）。
+   *
+   * 语义与 `scanControlFlow` 完全一致，只是执行位置可能不在主线程。
+   * 给"整批文件扫描"这类消费方用（如条件抽取 ~2,317 文件 / 6.2 s）——
+   * **扫描是纯文本变换、无外部依赖，天生的可搬运任务**；单文件场景直接调同步版即可。
+   *
+   * 分层：可搬运任务由本服务的所有者（erb-parser）注册与分发，消费方**不需要**
+   * 知道 kind / worker / 回退的存在（无并行通道时自动内联，行为与同步版一致）。
+   */
+  scanControlFlowOffloaded(text: string): Promise<ControlFlowStatement[]>;
+  /**
    * 当前已构建的索引（未构建 / 未打开项目时为 null）。
    * 解析器订阅 `project.opened` 自动构建并在完成后发 `kojo.functionChanged`，
    * 消费方（函数树、校验器）订阅事件按需刷新。

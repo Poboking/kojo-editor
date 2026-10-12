@@ -222,3 +222,16 @@ describe('erb-parser 插件', () => {
     });
   });
 });
+
+/* ============ 可搬运任务（并行运输层的本地实现/回退路径） ============ */
+
+describe('可搬运任务', () => {
+  it('scanControlFlowOffloaded 与同步版结果一致（无通道时走本地实现）', async () => {
+    const src = '@F\n\tIF TFLAG:1\n\t\tPRINTFORMDW 甲。\n\tENDIF\n\tRETURN 1\n';
+    const { services } = activatePlugin(fakeIO({ '/proj/kojo/f.ERB': src }));
+    const parser = services.get('erb.parser') as ErbParserService;
+    const offloaded = await parser.scanControlFlowOffloaded(src);
+    expect(offloaded).toEqual(parser.scanControlFlow(src));
+    expect(offloaded.length).toBeGreaterThan(0);
+  });
+});

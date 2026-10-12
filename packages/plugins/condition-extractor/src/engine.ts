@@ -34,8 +34,14 @@ export interface ConditionEngineDeps {
   getIndex(): ErbIndex | null;
   /** 读文件纯文本（内核 io，自动编码探测） */
   readFile(path: string): Promise<string>;
-  /** 控制流骨架扫描（erb.parser 服务） */
-  scanControlFlow(text: string): ControlFlowStatement[];
+  /**
+   * 控制流骨架扫描（erb.parser 服务）。
+   *
+   * **异步**：调用方传 `scanControlFlowOffloaded`（走并行通道）——扫描是纯文本变换、
+   * 无外部依赖，是全量抽取里最贵的一段 CPU（真实语料约 40% 的 6.2 s），
+   * 必须搬出主线程（2026-10-12「内核优化」批）。无通道时它自动内联。
+   */
+  scanControlFlow(text: string): Promise<ControlFlowStatement[]>;
   /** 当前适配器的变量语义查询（无适配器 / 无 schema 时 undefined） */
   getSchemaLookup(): SchemaLookup | undefined;
   /**
@@ -123,7 +129,7 @@ export class ConditionEngine implements ConditionExtractorService {
     }
     let stmts: ControlFlowStatement[];
     try {
-      stmts = this.deps.scanControlFlow(text);
+      stmts = await this.deps.scanControlFlow(text);
     } catch (err) {
       this.deps.log.warn(`Predicate detail scan failed: ${ref.filePath} — ${String(err)}`);
       return null;
@@ -210,7 +216,7 @@ export class ConditionEngine implements ConditionExtractorService {
       }
       let stmts: ControlFlowStatement[];
       try {
-        stmts = this.deps.scanControlFlow(text);
+        stmts = await this.deps.scanControlFlow(text);
       } catch (err) {
         this.deps.log.warn(`Condition extract skipped (scan failed): ${path} — ${String(err)}`);
         return;

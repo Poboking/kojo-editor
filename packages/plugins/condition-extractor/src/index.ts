@@ -62,7 +62,8 @@ export function createConditionExtractorPlugin(): Plugin {
         getProject: () => project.current(),
         getIndex: () => parser.currentIndex(),
         readFile: async (path: string) => (await io.readText(path)).text,
-        scanControlFlow: (text: string): ControlFlowStatement[] => parser.scanControlFlow(text),
+        // 走并行通道（无通道自动内联）：扫描是全量抽取里最贵的纯 CPU 段（真实语料约 40%）
+        scanControlFlow: (text: string): Promise<ControlFlowStatement[]> => parser.scanControlFlowOffloaded(text),
         getSchemaLookup: schemaLookup,
         compute,
       });

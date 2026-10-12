@@ -1,5 +1,6 @@
 import type {
   ComputePool,
+  ControlFlowStatement,
   ErbFile,
   ErbIndex,
   ErbParserService,
@@ -9,7 +10,7 @@ import type {
   Plugin,
 } from '@kojo/plugin-api';
 import { KernelServices } from '@kojo/plugin-api';
-import { PARSE_FILE_TASK, erbParserTasks, type ParseFilePayload } from './offload';
+import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload, type ScanFlowPayload } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
 import {
   SNAPSHOT_VERSION,
@@ -217,6 +218,10 @@ export function createErbParserPlugin(): Plugin {
         parseText: (text: string, path?: string) => parseErbText(text, path),
 
         scanControlFlow: (text: string) => scanControlFlow(text),
+
+        // 走计算池的并行通道（无通道/失败自动内联）；消费方不需要知道 kind 与 worker
+        scanControlFlowOffloaded: (text: string) =>
+          compute.offload<ControlFlowStatement[]>(SCAN_FLOW_TASK, { text } satisfies ScanFlowPayload),
 
         buildIndex: (rootsToScan: string[]) => build(rootsToScan, generation, false),
 

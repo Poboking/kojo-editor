@@ -2403,6 +2403,17 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
 | `erb-parser` stat | `index.stat` | 32 | 与 `readText` 的 mtime 同源 |
 | `erb-parser` parse | `index.parse` | 12 | **IO 留主线程**（Tauri IPC 不搬进 worker），只把纯解析 `offload('erb.parseFile')` |
 | `condition-extractor` | `condition.extract` | 8 | 原 `mapLimit(8)` 换成池（窗口间让路） |
+| `condition-extractor` 的扫描段 | `erb.scanControlFlow` | — | 见下：**扫描是纯文本变换、无外部依赖**，故由服务所有者搬上空 |
+
+**`scanControlFlow` 也搬上并行通道**（分层：CPU 函数的所有者负责搬运）：
+`ErbParserService` 新增 additive 方法 `scanControlFlowOffloaded(text): Promise<...>`
+（语义与同步版一致；无通道自动内联），erb-parser 内部用 `offload('erb.scanControlFlow')` 实现，
+抽取器把它当 `deps.scanControlFlow` 传进引擎（引擎侧该依赖改为异步 + `await`）。
+收益依据：真实语料 `scanControlFlow` 约 1.1 ms/千行 → 全量约 **2.5 s**，
+占抽取总时长（6.2 s）约 **40%**。
+（**未做**：`extractFunctionConditions` 仍留主线程——它的入参含 adapter 的 `SchemaLookup`
+**闭包**，跨不过结构化克隆；正解是 `VariableSchema` 导出原始表、worker 侧重建成闭包
+〔路线文档 §三 L1 已有设计〕，属独立一批。）
 
 **可搬运任务表单一真源**：`erb-parser/src/offload.ts` 导出 `erbParserTasks`，
 宿主侧 `registerTask`（回退路径）与 worker 入口（`app/src/compute-tasks.ts` → `computeTasks`）
@@ -2415,14 +2426,15 @@ P3 多标签与 codeAction 适配），逐点核对「一切皆插件」解耦�
    池侧分发与**连续失败回退**（`fellBack` + 停发）。
 2. `pnpm --filter @kojo/app build` **通过**（41.87 s）→ `?worker` 打包链成立，
    产物 `dist/assets/compute-worker-*.js` 独立成块（3.2 KB）。
-3. **构建产物端到端**：用 `vm` 加载该产物 + 假 `self`，发一条真实请求
-   → 夹具 ERB 得 3 函数 / 22 行；52,601 行真实 ERB 得 124 函数 / 52,602 行。**协议与任务表都活。**
+3. **构建产物端到端**：用 `vm` 加载该产物 + 假 `self`，发真实请求
+   → 夹具 ERB 得 3 函数 / 22 行；52,601 行真实 ERB 得 124 函数 / 52,602 行；
+   `erb.scanControlFlow` 在同一文件上得 **4,662** 条控制流语句。**协议与任务表都活。**
 
 #### 验收结果
 
 | 检查 | 结果 |
 |---|---|
-| `npx vitest run` | **1080 passed / 8 skipped（1088）**（基线 1043 + compute 19 + transport 15 + 建树去重 3） |
+| `npx vitest run` | **1081 passed / 8 skipped（1089）**（基线 1043 + compute 19 + transport 15 + 建树去重 3 + 可搬运任务 1） |
 | `tsc`（root + `packages/app` 双跑） | exit 0 |
 | `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
 | `pnpm --filter @kojo/app build` | ✅（含 worker 打包） |
