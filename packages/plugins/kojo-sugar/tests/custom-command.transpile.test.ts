@@ -159,6 +159,113 @@ describe('HK-12 自定指令 · 缺钩子模板', () => {
 });
 
 /* ============================================================================ */
+/* HK-12 五钩子：`可否使用:`（CAN_COM）/ `计数器不发:`（COM_Counter不发）——块头可选子句  */
+/* ============================================================================ */
+
+describe('HK-12 自定指令 · 可选钩子（附录 C #34 五钩子）', () => {
+  it('`可否使用:` → 生成 `@KOJO_CAN_COM_K12_270` 门函数（条件降糖 + RETURN 1/0）', () => {
+    const { erb, diagnostics } = t(
+      '角色: 12\n自定指令 赛钱 可否使用: 她的好感度 至少 50：\n    「a」\n',
+    );
+    expect(erb).toContain('@KOJO_CAN_COM_K12_270');
+    expect(erb).toContain('IF CFLAG:TARGET:好感度 >= 50');
+    const at = erb.indexOf('@KOJO_CAN_COM_K12_270');
+    const seg = erb.slice(at, at + 80);
+    expect(seg).toContain('RETURN 1');
+    expect(seg).toContain('RETURN 0');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
+  it('`计数器不发:` → 生成 `@KOJO_COM_Counter不发_K12_270`（模板自带 {n}/{i}，不追加后缀）', () => {
+    const { erb, diagnostics } = t(
+      '角色: 12\n自定指令 赛钱 计数器不发: 她的好感度 至少 90：\n    「a」\n',
+    );
+    expect(erb).toContain('@KOJO_COM_Counter不发_K12_270');
+    expect(erb).toContain('IF CFLAG:TARGET:好感度 >= 90');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
+  it('两钩子可同时写（互不为前缀吞并）：各取自己的条件原文', () => {
+    const { erb, diagnostics } = t(
+      '角色: 12\n自定指令 赛钱 可否使用: 她的好感度 至少 30 计数器不发: 她的好感度 至少 90：\n    「a」\n',
+    );
+    expect(erb).toContain('@KOJO_CAN_COM_K12_270');
+    expect(erb).toContain('@KOJO_COM_Counter不发_K12_270');
+    expect(erb).toContain('IF CFLAG:TARGET:好感度 >= 30');
+    expect(erb).toContain('IF CFLAG:TARGET:好感度 >= 90');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
+  it('缺省不生成（与 `success?` 同口径）：只写 `自定指令 赛钱：` → 无任何钩子函数', () => {
+    const { erb } = t('角色: 12\n自定指令 赛钱：\n    「a」\n');
+    expect(erb).not.toContain('CAN_COM');
+    expect(erb).not.toContain('Counter不发');
+  });
+
+  it('别人版：家族段进入两钩子函数名', () => {
+    const { erb } = t(
+      '角色: 1\n口上: 少女之梦\n自定指令 赛钱 可否使用: 她的好感度 至少 30 计数器不发: 她的好感度 至少 90：\n    「a」\n',
+    );
+    expect(erb).toContain('@KOJO_少女之梦_CAN_COM_K1_270');
+    expect(erb).toContain('@KOJO_少女之梦_COM_Counter不发_K1_270');
+  });
+
+  it('编号与三函数同号：显式 `编号: 275` 时两钩子也落 275', () => {
+    const { erb } = t(
+      '角色: 12\n自定指令 赛钱 编号: 275 可否使用: 她的好感度 至少 30：\n    「a」\n',
+    );
+    expect(erb).toContain('@KOJO_CAN_COM_K12_275');
+    expect(erb).not.toContain('@KOJO_CAN_COM_K12_270');
+  });
+
+  it('写了子句但适配器未声明对应钩子模板 → `face-table-missing` warning 且跳过该钩子（fail-closed）', () => {
+    const base = stubFaceTable();
+    const faceTable: KojoFaceTable = {
+      ...base,
+      customHooks: { ...base.customHooks, canCom: undefined },
+    };
+    const res = svc(faceTable).transpile(
+      '角色: 12\n自定指令 赛钱 可否使用: 她的好感度 至少 30：\n    「a」\n',
+    );
+    expect(res.diagnostics.some((d) => d.code === 'face-table-missing' && d.severity === 'warning')).toBe(
+      true,
+    );
+    // 三个必备函数照常产出，仅缺模板的钩子被跳过
+    expect(res.erb).toContain('@KOJO_COM_NAME_K12_270');
+    expect(res.erb).not.toContain('CAN_COM');
+  });
+});
+
+/* ============================================================================ */
+/* HK-12 ②③④（次）：自定事件 / CUSTOM_TALENT / SHOP 按钮 —— 规范未覆盖表层语法，fail-closed */
+/* ============================================================================ */
+
+describe('HK-12 · 自定事件 / CUSTOM_TALENT / SHOP 按钮（故意不做）', () => {
+  /**
+   * **依据小节号**：附录 C 中
+   * - #3 `CUSTOM_EVENT`（自定事件）、#30 `CUSTOM_TALENT`、#31 `SHOP_BUTTON_CONDITION`、
+   *   #32 `SHOP_BUTTON` 的「v1 糖写法」列**均为「—」**；
+   * - §5.5 使用约定明示：标记 `—` 的入口，作者用**原生直通**手写（行首 `@` 整块透传）。
+   *
+   * 故不为这四族新增块头糖（文档未覆盖处 fail-closed、不猜）；其中 `CUSTOM_EVENT`
+   * 另已由 `时机 自定义事件 {i}：`（adapter `faces.自定义事件`）覆盖（附录 C #3）。
+   */
+  it('写 `自定素质 宴：` 这类未登记块头 → 报 error、且不产任何 CUSTOM_TALENT/BUTTON/EVENT 函数', () => {
+    const res = t('角色: 12\n自定素质 宴：\n    「a」\n');
+    expect(res.diagnostics.some((d) => d.severity === 'error')).toBe(true);
+    expect(res.erb).not.toContain('@KOJO_CUSTOM_TALENT_SET');
+    expect(res.erb).not.toContain('@KOJO_CUSTOM_BUTTON');
+    expect(res.erb).not.toContain('CUSTOM_EVENT');
+  });
+
+  it('自定事件本已由 `时机 自定义事件 {i}：` 覆盖（appendx C #3，不新增块头）', () => {
+    const { erb, diagnostics } = t('角色: 12\n时机 自定义事件 5：\n    「a」\n');
+    expect(erb).toContain('@M_KOJO_CUSTOM_EVENT_K12_5');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+});
+
+/* ============================================================================ */
 /* 中文指令名路径（HK-11②）——用假 CSV/Train.csv 驱动 indexName                    */
 /* ============================================================================ */
 

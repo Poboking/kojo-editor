@@ -378,6 +378,18 @@ export interface CustomCommandBlock extends SugarNodeBase {
   readonly name: string;
   /** 作者显式声明的编号（`编号: N`）；缺省 = 由 codegen 自动分配 */
   readonly index?: number;
+  /**
+   * `可否使用: <条件>` 可选子句（HK-12 五钩子之 `CAN_COM`）。
+   * 值为**条件原文**（ERB 表达式，未降糖）；缺省 = 不生成该钩子函数（引擎自然回退）。
+   * 产物走 `KojoFaceTable.customHooks.canCom` 模板（游戏知识只住 adapter）。
+   */
+  readonly canCom?: string;
+  /**
+   * `计数器不发: <条件>` 可选子句（HK-12 五钩子之 `COM_Counter不发`）。
+   * 值为**条件原文**（未降糖）；缺省 = 不生成该钩子函数。
+   * 产物走 `KojoFaceTable.customHooks.comCounter` 模板。
+   */
+  readonly comCounter?: string;
   /** 正文节点（与 TimingBlock 正文同口径） */
   readonly body: readonly SugarNode[];
 }

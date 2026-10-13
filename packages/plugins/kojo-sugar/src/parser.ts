@@ -358,11 +358,13 @@ function readTimingBlock(
 /* ------------------------------ 自定指令块（HK-12） ------------------------------ */
 
 /**
- * 读取 `自定指令 <名> [编号: N]：` 块 → `CustomCommandBlock`（契约冻结形态）。
+ * 读取 `自定指令 <名> [编号: N] [可否使用: <条件>] [计数器不发: <条件>]：` 块
+ * → `CustomCommandBlock`（契约冻结形态）。
  *
- * 正文与 `TimingBlock` 同口径（`BlockParser.parseBody`），不额外解析子句——
- * 五钩子里的"可选钩子"本批无对应语法（见 codegen 的说明），只产 NAME/ABLE/本体。
- * 空体合法（codegen 会落 `LOCAL = 0`，与时机块一致）。
+ * 正文与 `TimingBlock` 同口径（`BlockParser.parseBody`）；可选钩子子句
+ * （`可否使用:` / `计数器不发:`，HK-12 五钩子）在块头解析、原样透传到 AST，
+ * 由 codegen 按 `customHooks` 模板产出（缺省不生成）。空体合法
+ * （codegen 会落 `LOCAL = 0`，与时机块一致）。
  */
 function readCustomCommandBlock(
   cursor: Cursor,
@@ -375,6 +377,8 @@ function readCustomCommandBlock(
     kind: 'custom-command',
     name: cls.name,
     ...(cls.index !== undefined ? { index: cls.index } : {}),
+    ...(cls.canCom !== undefined ? { canCom: cls.canCom } : {}),
+    ...(cls.comCounter !== undefined ? { comCounter: cls.comCounter } : {}),
     body,
     loc: {
       start: posOf(head),

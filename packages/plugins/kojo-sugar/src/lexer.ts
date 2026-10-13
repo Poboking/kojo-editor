@@ -146,7 +146,7 @@ export type LineClass =
   | { kind: 'aliasDecl'; name: string; value: AliasValue }
   | { kind: 'switchItem'; name: string; value: string }
   | { kind: 'timingHead'; face: string; index?: string; indexName?: string; namedParams: TimingNamedParam[] }
-  | { kind: 'customCommandHead'; name: string; index?: number }
+  | { kind: 'customCommandHead'; name: string; index?: number; canCom?: string; comCounter?: string }
   | { kind: 'ifHead'; variant: 'if' | 'elseif' | 'else'; condition: string; inline?: string }
   | { kind: 'whenHead'; subject: string }
   | { kind: 'caseHead'; values: WhenCaseValue[] }
@@ -408,26 +408,58 @@ function parseTimingHead(value: string): LineClass | null {
 }
 
 /**
- * `自定指令 <中文名> [编号: N]`（HK-12）。
+ * `自定指令 <中文名> [编号: N] [可否使用: <条件>] [计数器不发: <条件>]`（HK-12）。
  *
  * 与 `类型: 自定指令`（时机命名参数右值）**同名不同上下文**：这里只出现在
  * **行首块头**（由 `parseBlockHead` 经关键字表分派），右值路径不查关键字表。
- * `编号:` 是可选的显式子句（缺省 = 由 codegen 在 adapter 的 `customComRange`
- * 内自动分配）。
+ *
+ * 可选子句（块头，顺序任意、可缺省）：
+ * - `编号: N`（数字）：显式编号；缺省 = 由 codegen 在 adapter 的 `customComRange`
+ *   内自动分配；
+ * - `可否使用: <条件>`（HK-12 五钩子之 `CAN_COM`）：值为条件原文；
+ * - `计数器不发: <条件>`（HK-12 五钩子之 `COM_Counter不发`）：值为条件原文。
+ *
+ * 子句键只在**后跟冒号**时才是子句（`编号\s*[:：]`）——名字里恰好含这些词
+ * 不会误判（除非名字后紧跟冒号，那本身就不是合法名字）。
  */
 function parseCustomCommandHead(rest: string): LineClass | null {
   const inner = rest.trim();
   if (inner.length === 0) return null;
-  // 可选子句 `编号: N`（全/半角冒号；只认行尾，避免吞掉名称里的数字）
-  const idxMatch = /(?:^|\s)编号\s*[:：]\s*(\d+)\s*$/.exec(inner);
-  let name = inner;
-  let index: number | undefined;
-  if (idxMatch) {
-    index = Number(idxMatch[1]);
-    name = inner.slice(0, idxMatch.index).trim();
+
+  // 子句键扫描（键必须在词边界、且后跟全/半角冒号）
+  const clauseRe = /(?:^|\s)(编号|可否使用|计数器不发)\s*[:：]/g;
+  const marks: { key: string; start: number; valueStart: number }[] = [];
+  for (let m = clauseRe.exec(inner); m !== null; m = clauseRe.exec(inner)) {
+    marks.push({ key: m[1]!, start: m.index, valueStart: m.index + m[0].length });
   }
+  if (marks.length === 0) {
+    return { kind: 'customCommandHead', name: inner };
+  }
+
+  const name = inner.slice(0, marks[0]!.start).trim();
   if (name.length === 0) return null;
-  return { kind: 'customCommandHead', name, ...(index !== undefined ? { index } : {}) };
+
+  let index: number | undefined;
+  let canCom: string | undefined;
+  let comCounter: string | undefined;
+  for (let i = 0; i < marks.length; i++) {
+    const mark = marks[i]!;
+    const end = i + 1 < marks.length ? marks[i + 1]!.start : inner.length;
+    const value = inner.slice(mark.valueStart, end).trim();
+    if (mark.key === '编号') {
+      if (/^\d+$/.test(value)) index = Number(value);
+    } else if (value.length > 0) {
+      if (mark.key === '可否使用') canCom = value;
+      else comCounter = value;
+    }
+  }
+  return {
+    kind: 'customCommandHead',
+    name,
+    ...(index !== undefined ? { index } : {}),
+    ...(canCom !== undefined ? { canCom } : {}),
+    ...(comCounter !== undefined ? { comCounter } : {}),
+  };
 }
 
 /* ------------------------------ 表达式头 / 赋值 ------------------------------ */

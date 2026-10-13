@@ -782,8 +782,9 @@ function renderCustomHook(template: string, familySeg: string, charNo: string, n
  * - **本体**：与时机块同款"記入チェック"骨架（`LOCAL = 0/1` + `IF LOCAL … ENDIF` + `RETURN 1`）；
  * - **fail-closed**：缺可用段 / 段耗尽 / 缺钩子模板 → 报诊断、**不产半成品**。
  *
- * 关于"可选钩子按需"：`canCom` / `comCounter` 等可选钩子本批**无对应语法**
- * （`CustomCommandBlock` 只有 name/index/body），故不生成——需用时写原生直通块。
+ * 关于"可选钩子按需"：`可否使用:`（canCom）/ `计数器不发:`（comCounter）为本批新增的
+ * **块头可选子句**（HK-12 五钩子，附录 C #34）。值为**条件**，产物走 adapter 的
+ * `customHooks` 模板块；**缺省不生成**（与既有 `success?` 同口径）。
  */
 function emitCustomCommand(em: Emitter, node: CustomCommandBlock, ctx: CustomEmitContext): void {
   // ---- 编号：显式优先，否则自动分配 ----
@@ -844,6 +845,13 @@ function emitCustomCommand(em: Emitter, node: CustomCommandBlock, ctx: CustomEmi
   em.pushGenerated(0, `RETURN 1`);
   em.blank();
 
+  // ---- 可选钩子（HK-12 五钩子之 CAN_COM / COM_Counter不发）：**缺省不生成** ----
+  // 与既有 `success?` 同口径：写了子句才产对应函数（引擎侧无该函数 → 自然回退）。
+  // 值为**条件**，产物 = 「条件成立则 RETURN 1，否则 RETURN 0」的门（对齐语料
+  // `KOJO_COM_Counter不发_K75_0` 的 `RETURN 1` 抑制语义 / `CAN_COM` 的 RESULT==0 拦截）。
+  emitCustomHook(em, node.name, node.canCom, 'canCom', hooks.canCom, ctx, no);
+  emitCustomHook(em, node.name, node.comCounter, 'comCounter', hooks.comCounter, ctx, no);
+
   // ---- 本体：与时机块同款骨架（空体 → `LOCAL = 0` 且不产 IF 块）----
   em.pushGenerated(0, `@${com}`);
   em.pushGenerated(0, `;-------------------------------------------------`);
@@ -866,6 +874,48 @@ function emitCustomCommand(em: Emitter, node: CustomCommandBlock, ctx: CustomEmi
     em.pushGenerated(0, `ENDIF`);
   }
   em.pushGenerated(0, `RETURN 1`);
+}
+
+/**
+ * 自定指令可选钩子（HK-12 五钩子；附录 C #34 `_CAN_COM` / `_COM_Counter不发`）。
+ *
+ * - `condition` 缺省（未写子句）→ **不生成**（缺省不生成，引擎自然回退）；
+ * - 写了子句但 adapter 未声明对应模板 → `face-table-missing` warning 并跳过（fail-closed）；
+ * - 产物 = 「条件成立则 `RETURN 1`，否则 `RETURN 0`」的门；条件经表达式降糖（与正文同口径）。
+ */
+function emitCustomHook(
+  em: Emitter,
+  commandName: string,
+  condition: string | undefined,
+  clause: string,
+  template: string | undefined,
+  ctx: CustomEmitContext,
+  no: number,
+): void {
+  if (condition === undefined) return;
+  if (!template) {
+    ctx.sink.report({
+      code: 'face-table-missing',
+      severity: 'warning',
+      message:
+        `写了「自定指令 ${commandName}：」的 \`${clause}:\` 子句，但当前适配器未声明对应钩子模板——已跳过该钩子。`,
+      loc: null,
+    });
+    return;
+  }
+  const hookName = renderCustomHook(template, ctx.familySeg, ctx.charNo, no);
+  const cond = lowerExpression(condition, {
+    aliases: ctx.aliases,
+    dictionary: ctx.dictionary,
+    report: (d) => ctx.sink.report(d),
+    loc: null,
+  });
+  em.pushGenerated(0, `@${hookName}`);
+  em.pushGenerated(0, `IF ${cond}`);
+  em.pushGenerated(0, `RETURN 1`);
+  em.pushGenerated(0, `ENDIF`);
+  em.pushGenerated(0, `RETURN 0`);
+  em.blank();
 }
 
 /* ============================== 语句 → 产物 ============================== */
