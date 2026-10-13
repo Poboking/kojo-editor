@@ -9,6 +9,7 @@ import { FileTree } from './FileTree';
 import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
 import { Icon } from './icons';
 import type { ShellCommandSpec } from './commands';
+import { useSealed } from './sealed';
 
 interface Props {
   kernel: Kernel;
@@ -93,6 +94,8 @@ export function ProjectView({
   /** Ctrl+W 命令读最新活动标签（壳层命令注册一次，闭包外取值） */
   const activeFileRef = useRef(activeFile);
   activeFileRef.current = activeFile;
+  /** 封存总闸（`sealed.ts`）：封存态下糖视图命令（含快捷键）整条不注册 */
+  const sealed = useSealed();
 
   // 统计（v0.1 验收指标：角色数 / 文件数 / 函数数）
   let fileCount = 0;
@@ -127,20 +130,26 @@ export function ProjectView({
           void onSaveAll();
         },
       },
-      {
-        // 糖视图：整份 ERB 显示为语法糖（只读）。命令面板与快捷键都从这里进——
-        // 与工具条按钮同一条意图事件，宿主（EditorPane）是唯一的状态所有者。
-        // 标题跟其余命令同形（裸动宾、无括号，见「切换写作模式」），术语跟工具条同词
-        // （「语法糖视图」，不叫"糖视图"——命令面板是作者找到这功能的入口，名字必须一致）。
-        id: 'workbench.toggleSugarView',
-        title: '切换语法糖视图',
-        keybinding: 'ctrl+alt+t',
-        run: () => {
-          kernel.bus.emit('editor.sugarView.set', {});
-        },
-      },
+      // 封存总闸（sealed.ts）封存时这条命令（含 Ctrl+Alt+T）整条不进注册表——入口齐撤；
+      // 设置页勾选恢复后，命令面板与快捷键随之回来。
+      ...(sealed
+        ? []
+        : [
+            {
+              // 糖视图：整份 ERB 显示为语法糖（只读）。命令面板与快捷键都从这里进——
+              // 与工具条按钮同一条意图事件，宿主（EditorPane）是唯一的状态所有者。
+              // 标题跟其余命令同形（裸动宾、无括号，见「切换写作模式」），术语跟工具条同词
+              // （「语法糖视图」，不叫"糖视图"——命令面板是作者找到这功能的入口，名字必须一致）。
+              id: 'workbench.toggleSugarView',
+              title: '切换语法糖视图',
+              keybinding: 'ctrl+alt+t',
+              run: () => {
+                kernel.bus.emit('editor.sugarView.set', {});
+              },
+            },
+          ]),
     ],
-    [onRequestCloseTab, onSaveAll, kernel],
+    [onRequestCloseTab, onSaveAll, kernel, sealed],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →

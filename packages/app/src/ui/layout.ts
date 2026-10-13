@@ -68,6 +68,8 @@ export type LayoutAction =
   | { type: 'toggleZen' }
   | { type: 'exitZen' }
   | { type: 'setZenLimitWidth'; value: boolean }
+  /** 封存总闸切换后面板集合增删时的再清洗（org = 新集合的编排结果） */
+  | { type: 'reconcile'; org: OrganizedPanels }
   | { type: 'reset'; state: LayoutState };
 
 export function clamp(container: ContainerKey, size: number): number {
@@ -104,6 +106,9 @@ export function reducer(s: LayoutState, a: LayoutAction): LayoutState {
       return s.zen ? { ...s, zen: false } : s;
     case 'setZenLimitWidth':
       return { ...s, zenLimitWidth: a.value };
+    case 'reconcile':
+      // 封存总闸切换后面板集合增删，失效 active / 位置 override 须按新集合清洗
+      return reconcileLayout(s, a.org);
     case 'reset':
       return a.state;
   }

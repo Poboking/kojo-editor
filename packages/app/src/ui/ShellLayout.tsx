@@ -35,6 +35,7 @@ import {
   planPanelMoves,
 } from './panel-drop';
 import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
+import { SEALED_PANEL_IDS, setSealed, useSealed } from './sealed';
 import { modalDepth, closeTopModal } from './modal-stack';
 import { resolveEscLayer, isComposingEvent } from './shell-keys';
 import {
@@ -132,10 +133,12 @@ export function ShellLayout(props: Props): ReactElement {
     onRegisterWorkbench,
   } = props;
 
-  const allPanels = useMemo(
-    () => [...builtinViews, ...kernel.slots.query('ui.panel')],
-    [kernel, builtinViews],
-  );
+  /** 封存总闸（`sealed.ts`；默认封存）：封存态下被点名的插件面板整只不进编排 */
+  const sealed = useSealed();
+  const allPanels = useMemo(() => {
+    const all = [...builtinViews, ...kernel.slots.query('ui.panel')];
+    return sealed ? all.filter((p) => !SEALED_PANEL_IDS.has(p.id)) : all;
+  }, [kernel, builtinViews, sealed]);
   const toolbarItems = useMemo(() => kernel.slots.query('ui.toolbar'), [kernel]);
   const statusbarItems = useMemo(() => kernel.slots.query('ui.statusbar'), [kernel]);
   const slotCommands = useMemo(() => kernel.slots.query('editor.command'), [kernel]);
@@ -148,6 +151,18 @@ export function ShellLayout(props: Props): ReactElement {
     () => organizePanels(allPanels, layout.panelLocations),
     [allPanels, layout.panelLocations],
   );
+
+  const orgRef = useRef(org);
+  orgRef.current = org;
+  // 总闸切换后面板集合增删，active/override 可能失效——重跑一次清洗器（首跑跳过，挂载时已清洗过）
+  const sealSkipFirstRef = useRef(true);
+  useEffect(() => {
+    if (sealSkipFirstRef.current) {
+      sealSkipFirstRef.current = false;
+      return;
+    }
+    dispatch({ type: 'reconcile', org: orgRef.current });
+  }, [sealed]);
 
   // 持久化（壳层私事，localStorage；变更即存，体量小无需去抖）
   useEffect(() => saveLayout(layout), [layout]);
@@ -779,23 +794,41 @@ export function ShellLayout(props: Props): ReactElement {
                 </label>
               </div>
 
+              {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：三件暂不投入的功能整体封存，
+                  设置页只留这一个总开关；勾选 = 临时恢复（代码未删，随时可以再关）。 */}
               <div className="settings-group">
-                <div className="settings-group-title">编辑器</div>
+                <div className="settings-group-title">封存功能</div>
                 <label className="settings-row">
-                  <input
-                    type="checkbox"
-                    checked={sugarViewOn}
-                    onChange={(e) => applySugarViewPref(e.target.checked)}
-                  />
+                  <input type="checkbox" checked={!sealed} onChange={(e) => setSealed(!e.target.checked)} />
                   <span>
-                    语法糖视图
+                    显示已封存功能
                     <span className="settings-hint">
-                      把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
-                      只改显示、不改动文件。快捷键 Ctrl+Alt+T
+                      语法糖视图（现效果）· 糖预览 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。
                     </span>
                   </span>
                 </label>
               </div>
+
+              {/* 封存态设置页只有一个总开关：「语法糖视图」这一组随总闸收起（勾选总开关即回来） */}
+              {!sealed ? (
+                <div className="settings-group">
+                  <div className="settings-group-title">编辑器</div>
+                  <label className="settings-row">
+                    <input
+                      type="checkbox"
+                      checked={sugarViewOn}
+                      onChange={(e) => applySugarViewPref(e.target.checked)}
+                    />
+                    <span>
+                      语法糖视图
+                      <span className="settings-hint">
+                        把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
+                        只改显示、不改动文件。快捷键 Ctrl+Alt+T
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              ) : null}
 
               <div className="settings-group">
                 <div className="settings-group-title">布局</div>

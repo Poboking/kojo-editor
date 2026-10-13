@@ -135,24 +135,30 @@ describe('糖视图 / 配色回退', () => {
  * 落成了轴一，本线把"解锁弹窗"落成轴二，ADR 定的是"糖视图与可编辑态互斥"。
  * 钉死它，是为了防止后来者把糖视图重新做成"任何 ERB 都能开"——那会让用户
  * 在**看不见原文**的情况下编辑自己的工作区文件。
+ *
+ * 2026-10-13 试用反馈批给这条门加了**最高优先级否决轴**：封存总闸（`sealed.ts`）。
  */
 describe('sugarViewAllowed（糖视图可用门 = 不可编辑态的派生）', () => {
   it('游戏目录 ERB、未解锁 → 唯一放行的组合', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: false })).toBe(true);
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: false, sealed: false })).toBe(true);
   });
 
   it('.kojo 不放糖视图（本身就是糖，再投影一遍没有意义）', () => {
-    expect(sugarViewAllowed({ isErbLike: false, inWorkspace: false, unlocked: false })).toBe(false);
+    expect(sugarViewAllowed({ isErbLike: false, inWorkspace: false, unlocked: false, sealed: false })).toBe(false);
   });
 
   it('工作区 ERB 不放糖视图（轴一：恒可编辑 ⟹ 原文必须看得见）', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: false })).toBe(false);
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: false, sealed: false })).toBe(false);
     // 解锁态不影响结论（工作区根本走不到解锁这条路）
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: true })).toBe(false);
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: true, sealed: false })).toBe(false);
   });
 
   it('游戏目录 ERB 一旦解锁 → 该份糖视图禁用（轴二与互斥规则一致）', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: true })).toBe(false);
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: true, sealed: false })).toBe(false);
+  });
+
+  it('封存总闸开启 → 封存优先于一切（本来放行的组合也返回 false）', () => {
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: false, sealed: true })).toBe(false);
   });
 });
 

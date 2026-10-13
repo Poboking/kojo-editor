@@ -194,7 +194,8 @@ export function sugarSummary(projectedLines: number, hiddenLines = 0): string {
 }
 
 /**
- * **糖视图可用门**（ADR-0005：目录分野 × 显式解锁 两道正交轴的派生判定）。
+ * **糖视图可用门**（ADR-0005：目录分野 × 显式解锁 两道正交轴的派生判定
+ * ＋封存总闸一条最高优先级否决轴）。
  *
  * 铁律只有一条：**同一份文件不能一边被改、一边被投影**——糖视图靠"原文让位"工作
  * （ViewZone + 隐藏区间），可编辑的原文必须始终看得见，否则用户改到自己看不见的行。
@@ -207,13 +208,20 @@ export function sugarSummary(projectedLines: number, hiddenLines = 0): string {
  * | 游戏目录 `.ERB` | 默认只读（写保护铁律） | **是**——本功能的主场景：读懂别人的口上 |
  * | 游戏目录 `.ERB` 已解锁 | 这一次可写（轴二的破例） | **否**——回到互斥规则 |
  *
+ * 封存总闸（`sealed.ts`）是**最高优先级**的一条轴：封存优先于一切（用户
+ * 2026-10-13 试用反馈批——糖视图现效果整件封存，默认隐藏）——封存态下无论文件
+ * 落在上表哪一格都不可用；解封后按上表原口径恢复。
+ *
  * 纯函数：宿主用它同时门控"自动应用"、"首次询问"与工具条入口，三处口径不会分叉。
  */
 export function sugarViewAllowed(input: {
   isErbLike: boolean;
   inWorkspace: boolean;
   unlocked: boolean;
+  /** 封存总闸（sealed.ts）：true = 已封存（最高优先级，直接否决） */
+  sealed: boolean;
 }): boolean {
+  if (input.sealed) return false;
   if (!input.isErbLike) return false;
   if (input.inWorkspace) return false;
   if (input.unlocked) return false;

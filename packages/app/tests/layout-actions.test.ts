@@ -136,3 +136,35 @@ describe('全禅（P4 §八）', () => {
     expect(reducer(baseState(), { type: 'reset', state: target })).toBe(target);
   });
 });
+
+/**
+ * reconcile：封存总闸切换后面板集合增删的再清洗（2026-10-13 试用反馈批）。
+ *
+ * 封存 = 面板集合少两个（解封 = 加回来），持久化的 active / 位置 override 可能
+ * 指向已不在集合里的面板——`reconcile` 动作把既有清洗器（`reconcileLayout`）接进
+ * reducer 表，这里钉住"按新集合清洗"这一件事。
+ */
+describe('reconcile：封存总闸切换后面板集合增删的再清洗', () => {
+  const beforeSeal = [
+    panel('inspect', { location: 'aux', order: 1 }),
+    panel('peek', { location: 'aux', order: 2 }),
+    panel('report', { location: 'bottom', order: 1 }),
+  ];
+
+  it('aux.active 指向被拿掉的面板 → 回落新集合首个；指向它的 override 被清掉', () => {
+    const persisted: LayoutState = {
+      ...defaultLayout(organizePanels(beforeSeal, {})),
+      aux: { visible: true, size: 300, active: 'inspect' },
+      panelLocations: { inspect: 'aux' },
+    };
+    // 封存后 'inspect' 从面板集合中消失，org 按新集合重建
+    const orgAfterSeal = organizePanels(
+      beforeSeal.filter((p) => p.id !== 'inspect'),
+      {},
+    );
+    const s = reducer(persisted, { type: 'reconcile', org: orgAfterSeal });
+    expect(s.aux.active).toBe('peek');
+    expect(s.panelLocations).toEqual({});
+    expect(s.aux.visible).toBe(true); // 容器显隐是用户姿态，不因清洗被静默翻掉
+  });
+});

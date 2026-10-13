@@ -45,6 +45,7 @@ import {
   toggleFolded,
   type FoldableSegment,
 } from './sugar-fold';
+import { isSealed, subscribeSealed, useSealed } from './sealed';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -318,6 +319,11 @@ export function EditorPane({
   const sugarHydrateRafRef = useRef<number | null>(null);
   /** 糖视图开关（偏好持久化；默认开——见 `sugar-view.ts` 头注） */
   const [sugarView, setSugarView] = useState<boolean>(() => loadSugarViewPref());
+  /**
+   * 封存总闸（`sealed.ts`；默认封存）。封存态下糖视图现效果整件不可用，
+   * 但**不碰偏好**——`sugarView` 维持用户原值，解封即按原偏好恢复。
+   */
+  const sealed = useSealed();
   /** 同一份"最新开关"给只注册一次的 Monaco 回调读（避免闭包过时） */
   const sugarViewRef = useRef<boolean>(sugarView);
   /** 糖视图摘要（null = 未启用 / 无文件）；工具条展示 */
@@ -457,9 +463,11 @@ export function EditorPane({
     // 可用门（ADR-0005）：只对**游戏目录里、本次未解锁**的 ERB 生效。
     // `.kojo` 与**工作区内 ERB**（作者自己的创作源文件，恒可编辑）都不放糖视图——
     // 糖视图靠"原文让位"工作，可编辑的原文必须始终看得见。
+    // 封存总闸（sealed.ts）优先于一切：封存态直接不放（用户 2026-10-13 反馈批）。
     if (
       !sugarViewRef.current ||
       !sugarViewAllowed({
+        sealed: isSealed(),
         isErbLike: isErbLike(path),
         inWorkspace: inWorkspace(path),
         unlocked: unlockedPathsRef.current.has(path),
@@ -620,9 +628,19 @@ export function EditorPane({
     applySugarView();
   }, [sugarView, applySugarView]);
 
+  // 封存总闸切换：封存 → 现场撤下糖视图；解封 → 按用户偏好重新铺上
+  useEffect(() => {
+    return subscribeSealed(() => {
+      setIntroAsk(false);
+      applySugarView();
+    });
+  }, [applySugarView]);
+
   // 糖视图开关意图 → 宿主落地（插件发意图、宿主渲染；与 editor.liftPreview.show 同款）
   useEffect(() => {
     return kernel.bus.on('editor.sugarView.set', (p) => {
+      // 封存态不接受开关意图——不偷偷改用户偏好（解封后按原偏好恢复，见 sealed.ts）
+      if (isSealed()) return;
       if (p.filePath && p.filePath !== filePathRef.current) return;
       // 省略 `on` = 反转：状态所有者是宿主，请求方不必先问"现在是开还是关"
       setSugarView((v) => p.on ?? !v);
@@ -1139,10 +1157,12 @@ export function EditorPane({
 
   // 首次打开 ERB：问一次"要不要用语法糖视图"（问过就再不问）。
   // **工作区 ERB 不弹**（恒可编辑，糖视图本就不生效，问了没有意义——ADR-0005 轴一）；
-  // 已解锁编辑的文件同样不弹（轴二的破例态下糖视图也让位）。
+  // 已解锁编辑的文件同样不弹（轴二的破例态下糖视图也让位）；
+  // 封存总闸封存时不弹（三件封存功能默认隐藏，问了也没有入口可用）。
   useEffect(() => {
     if (
       !sugarViewAllowed({
+        sealed: isSealed(),
         isErbLike: isErbLike(filePath),
         inWorkspace: filePath !== null && inWorkspace(filePath),
         unlocked: filePath !== null && unlockedPathsRef.current.has(filePath),
@@ -1229,19 +1249,22 @@ export function EditorPane({
                     原生语法的人也能把别人的口上当剧本读懂。默认开（偏好可记忆）。
                     标签**恒为「语法糖视图」**，开关状态交给 .on 配色 + aria-pressed 表达：
                     原先按状态在「语法糖视图 / 显示为语法糖」间换字，两者字数不同，
-                    每点一次工具条就横向抖一下（与 T3 根除的树抖动同类缺陷）。 */}
-                <button
-                  className={`ghost small sugar-toggle${sugarView ? ' on' : ''}`}
-                  aria-pressed={sugarView}
-                  onClick={() => setSugarView((v) => !v)}
-                  title={
-                    sugarView
-                      ? '已开启：当前显示的是语法糖写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。'
-                      : '把这份文件显示成语法糖写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。'
-                  }
-                >
-                  语法糖视图
-                </button>
+                    每点一次工具条就横向抖一下（与 T3 根除的树抖动同类缺陷）。
+                    封存总闸（sealed.ts）封存时整只不渲染——入口齐撤，设置页勾选可临时恢复。 */}
+                {!sealed ? (
+                  <button
+                    className={`ghost small sugar-toggle${sugarView ? ' on' : ''}`}
+                    aria-pressed={sugarView}
+                    onClick={() => setSugarView((v) => !v)}
+                    title={
+                      sugarView
+                        ? '已开启：当前显示的是语法糖写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。'
+                        : '把这份文件显示成语法糖写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。'
+                    }
+                  >
+                    语法糖视图
+                  </button>
+                ) : null}
                 {sugarView && sugarStats ? (
                   <span
                     className="sugar-stats dim"
