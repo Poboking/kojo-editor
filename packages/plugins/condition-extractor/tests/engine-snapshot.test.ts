@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
   ComputePool,
+  ComputePoolStats,
   ConditionIndex,
   ControlFlowStatement,
   ErbFile,
@@ -14,10 +15,12 @@ import type { ExtractExpect, FileBucket } from '../src/snapshot';
 /**
  * 引擎侧的按文件增量测试。
  *
- * 计算池只用得到 `runSliced`，而解耦审计 B 项禁止插件测试 import `@kojo/kernel`
- * 取真池（erb-parser/tests/support.ts 有同款说明），故只实现被 exercised 的方法。
+ * 计算池只用得到 `runSliced` 与 `stats`（后者被引擎用来报"扫描段走了几条 worker"），
+ * 而解耦审计 B 项禁止插件测试 import `@kojo/kernel` 取真池（erb-parser/tests/support.ts
+ * 有同款说明），故只实现被 exercised 的方法。
  */
-function makeComputeStub(): ComputePool {
+function makeComputeStub(opts: { offload?: ComputePoolStats['offload'] } = {}): ComputePool {
+  const offload = opts.offload ?? { parallel: false, dispatched: 0, fellBack: 0, inline: 0 };
   return {
     async runSliced<T, R>(
       items: readonly T[],
@@ -28,9 +31,11 @@ function makeComputeStub(): ComputePool {
       for (let i = 0; i < items.length; i++) out.push(await fn(items[i]!, i));
       return out;
     },
+    // 与真池同构：stats() 每次返回**快照副本**（真池 `offload: {...offloadStat}`）。
+    // 直接回原对象的话，"本次前后之差"永远读成 0 —— 替身和实现分叉，断言就白加了。
+    stats: () => ({ tasks: [], yields: 0, interactiveActive: false, offload: { ...offload } }),
   } as unknown as ComputePool;
 }
-
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
 const project = { rootDir: 'D:/game', adapterId: 'eratw', inputDigest: 'csv-1' } as unknown as GameProject;
@@ -101,12 +106,21 @@ function makeEngine(opts: {
   /** 缺省 = A(100)/B(200)；`null` = 索引不提供 fileMtimes */
   mtimes?: Map<string, number | null> | null;
   port?: Partial<Pick<Port, 'load' | 'save'>> & { expectFor?: () => ExtractExpect | null };
+  /** 计算池的 offload 计数（引擎的分段日志要说"扫描段走了几条 worker"） */
+  offload?: ComputePoolStats['offload'];
+  /** 收集 info 级日志（分段剖面那条形迹） */
+  logs?: string[];
 } = {}) {
   const mtimes = opts.mtimes === undefined ? new Map<string, number | null>([[A, 100], [B, 200]]) : opts.mtimes;
   const reads: string[] = [];
   const scans: string[] = [];
+  /** 桩里的 offload 计数是**可变对象**：scanControlFlow 每走一次就 +1，等价于真实通道 dispatched */
+  const offload = opts.offload ?? { parallel: true, dispatched: 0, fellBack: 0, inline: 0 };
+  const log: Logger = opts.logs
+    ? { ...silentLog, info: (m: string) => opts.logs!.push(m) }
+    : silentLog;
   const engine = new ConditionEngine({
-    log: silentLog,
+    log,
     getProject: () => project,
     getIndex: () => erbIndex(mtimes),
     readFile: async (path: string) => {
@@ -115,6 +129,7 @@ function makeEngine(opts: {
     },
     scanControlFlow: async (): Promise<ControlFlowStatement[]> => {
       scans.push('x');
+      offload.dispatched++;
       return [
         { kind: 'IF', expression: 'CFLAG:2>=500', depth: 0, line: 2 },
         { kind: 'ENDIF', expression: '', depth: 0, line: 3 },
@@ -128,7 +143,7 @@ function makeEngine(opts: {
           save: opts.port.save ?? (() => undefined),
         }
       : undefined,
-    compute: makeComputeStub(),
+    compute: makeComputeStub({ offload }),
   });
   return { engine, reads, scans };
 }
@@ -313,6 +328,36 @@ describe('ConditionEngine 按文件增量', () => {
     const out = await engine.run();
     expect(out.byFunction.size).toBe(2);
     expect(reads).toHaveLength(2);
+  });
+
+  it('分段剖面日志：处理数 / 复用数 / 通道归属都在条里（下一批挑活用的就是这条）', async () => {
+    const logs: string[] = [];
+    const stored = new Map<string, FileBucket>([[A, bucketFor(A, 100)]]);
+    const { engine } = makeEngine({
+      logs,
+      port: { load: async () => Object.fromEntries(stored) },
+    });
+    await engine.run();
+    const line = logs.find((m) => m.includes('extract breakdown'));
+    expect(line).toBeDefined();
+    // 复用 1（A 命中）/ 处理 1（只有 B 重算）——三段墙钟可以是 0ms（同步桩太快），
+    // 但**次数不能错**：次数才是"下一批该动谁"的依据
+    expect(line).toContain('处理 1 文件（复用 1）');
+    // 通道归属是**本次运行前后的差**，不是池级累计值：本轮只重算 1 个文件 ⇒ worker 恰好 1。
+    // 若直接读累计值，第二次开项目会把上一条项目留下的数报出来，挑活就挑错了。
+    expect(line).toContain('worker 1 · 内联 0 · 回退 0');
+    expect(line).toMatch(/读盘 \d+ms · 扫描 \d+ms/);
+    expect(line).toMatch(/抽取循环 \d+ms/);
+  });
+
+  it('全命中（零重算）也照发分段日志，且三段都是 0 次工作', async () => {
+    const logs: string[] = [];
+    const stored = new Map<string, FileBucket>([[A, bucketFor(A, 100)], [B, bucketFor(B, 200)]]);
+    const { engine, reads, scans } = makeEngine({ logs, port: { load: async () => Object.fromEntries(stored) } });
+    await engine.run();
+    expect(reads).toHaveLength(0);
+    expect(scans).toHaveLength(0);
+    expect(logs.find((m) => m.includes('extract breakdown'))).toContain('处理 0 文件（复用 2）');
   });
 
   it('索引重建后明细缓存失效（跨项目/跨桶不串味）', () => {

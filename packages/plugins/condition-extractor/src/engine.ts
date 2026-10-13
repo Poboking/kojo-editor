@@ -81,6 +81,13 @@ export interface ConditionEngineDeps {
 const EXTRACT_CONCURRENCY = 8;
 const EXTRACT_SLICE_MS = 8;
 
+/**
+ * 毫秒表针：`performance.now()` 有亚毫秒分辨率（`Date.now()` 在逐文件计时上会全读成 0），
+ * 老环境/无 performance 的宿主退回 `Date.now()`。
+ */
+const nowMs = (): number =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+
 function emptyIndex(projectRoot = ''): ConditionIndex {
   const now = Date.now();
   return {
@@ -232,6 +239,17 @@ export class ConditionEngine implements ConditionExtractorService {
     /** 只算没命中的文件（作者改 3 个文件 ⇒ 只重抽这 3 个，不是 2,285 个） */
     const pending = files.filter(([path]) => !plan.reusable.has(path));
 
+    /**
+     * 分段墙钟。⚠ **三段之和会大于本轮总时长**：窗口里 8 个文件同时在读，
+     * 读盘/扫描/循环三段是叠着计时的。所以这条读数用来**看形状**（哪一段是秒级、哪一段是百毫秒级），
+     * 不能当占比读。
+     */
+    let readMs = 0;
+    let scanMs = 0;
+    let extractMs = 0;
+    const runT0 = nowMs();
+    const offBefore = this.deps.compute.stats().offload;
+
     // 分窗并发 + 窗口间让路（内核计算池，background 档）：抽取是"开项目级联"的第二段，
     // 4~11 s 的 CPU 洪水不能连续占住主线程（内核优化批）
     await this.deps.compute.runSliced(
@@ -244,21 +262,28 @@ export class ConditionEngine implements ConditionExtractorService {
       },
       async ([path, file]) => {
         let text: string;
+        const r0 = nowMs();
         try {
           text = await this.deps.readFile(path);
         } catch (err) {
           // 读失败**不留桶**：下次开项目必须重试，否则坏一次就永久缓存坏结果
           this.deps.log.warn(`Condition extract skipped (read failed): ${path} — ${String(err)}`);
           return;
+        } finally {
+          readMs += nowMs() - r0;
         }
         let stmts: ControlFlowStatement[];
+        const s0 = nowMs();
         try {
           stmts = await this.deps.scanControlFlow(text);
         } catch (err) {
           this.deps.log.warn(`Condition extract skipped (scan failed): ${path} — ${String(err)}`);
           return;
+        } finally {
+          scanMs += nowMs() - s0;
         }
 
+        const e0 = nowMs();
         const st: FileStats = { functions: 0, functionsWithDeps: 0, predicates: 0, unparsed: 0, dependencies: 0 };
         const conds: FunctionConditions[] = [];
         // 两指针切片：stmts 与 functions 均按行号升序；stmts 为空时循环自然不执行，
@@ -281,7 +306,24 @@ export class ConditionEngine implements ConditionExtractorService {
           }
         }
         computed.set(path, { mtimeMs: mtimeOf.get(path) ?? null, stats: st, conds });
+        extractMs += nowMs() - e0;
       },
+    );
+
+    /**
+     * 扫描段的**通道归属**（并行 vs 内联）：光看 `scan` 墙钟分不清"扫描本身慢"还是"根本没走 worker"，
+     * 而这两条要动的东西完全不同（运输层在 §5.52 落地，回退路径至今没人实测过占比）。
+     * 计数是池级累计值，取本次运行前后的**差**；同一时间窗里若别的消费方（校验段）也在 offload，
+     * 差值会把它们算进来——所以这条读数是"量级尺"，不是精确归属。
+     */
+    const offAfter = this.deps.compute.stats().offload;
+    const dispatched = offAfter.dispatched - offBefore.dispatched;
+    const inline = offAfter.inline - offBefore.inline;
+    const fellBack = offAfter.fellBack - offBefore.fellBack;
+    this.deps.log.info(
+      `  extract breakdown: 读盘 ${readMs.toFixed(0)}ms · 扫描 ${scanMs.toFixed(0)}ms` +
+        `（worker ${dispatched} · 内联 ${inline} · 回退 ${fellBack}）· 抽取循环 ${extractMs.toFixed(0)}ms` +
+        ` ｜ 处理 ${computed.size} 文件（复用 ${plan.reusable.size}）· 本轮 ${(nowMs() - runT0).toFixed(0)}ms`,
     );
 
     // 运行结束时项目已切换 → 不提交（避免过期结果覆盖）
