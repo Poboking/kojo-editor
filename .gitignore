@@ -3,6 +3,7 @@ node_modules/
 
 # build outputs
 dist/
+build/
 target/
 *.tsbuildinfo
 preview/
@@ -14,6 +15,17 @@ preview/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# logs
+*.log
+
+# python
+__pycache__/
+*.pyc
+
+# framework / coverage
+.next/
+coverage/
 
 # 工具本地数据（记忆 / 临时探针；不入库）
 .workbuddy/
