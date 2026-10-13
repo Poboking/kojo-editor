@@ -2,11 +2,11 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-14，E9 教程打磨批之后本机实测）
+## 一、基线（2026-10-14，E10 教程文本批之后本机实测）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **1878 passed / 14 skipped（1892）**；108 文件过 / 8 跳（116） |
+| 全量测试 | **1883 passed / 14 skipped（1897）**；108 文件过 / 8 跳（116） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（16 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **18 项全绿**（改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
