@@ -168,3 +168,36 @@ describe('reconcile：封存总闸切换后面板集合增删的再清洗', () =
     expect(s.aux.visible).toBe(true); // 容器显隐是用户姿态，不因清洗被静默翻掉
   });
 });
+
+describe('float / dock / moveFloating / resizeFloating（2026-10-14 UI 浮动批）', () => {
+  const geo = { x: 100, y: 80, w: 640, h: 480 };
+
+  it('float 记账几何；重复 float 幂等（不覆盖既有几何）', () => {
+    const s = reducer(baseState(), { type: 'float', id: 'inspect', geometry: geo });
+    expect(s.floating.inspect).toEqual(geo);
+    const again = reducer(s, { type: 'float', id: 'inspect', geometry: { x: 0, y: 0, w: 1, h: 1 } });
+    expect(again.floating.inspect).toEqual(geo);
+  });
+
+  it('dock 移除记账；对未浮动面板是空操作（同一对象引用）', () => {
+    const s = reducer(baseState(), { type: 'float', id: 'inspect', geometry: geo });
+    expect('inspect' in reducer(s, { type: 'dock', id: 'inspect' }).floating).toBe(false);
+    const base = baseState();
+    expect(reducer(base, { type: 'dock', id: 'nope' })).toBe(base);
+  });
+
+  it('moveFloating 只改位置；resizeFloating 钳制最小尺寸', () => {
+    const s = reducer(baseState(), { type: 'float', id: 'inspect', geometry: geo });
+    const moved = reducer(s, { type: 'moveFloating', id: 'inspect', x: 300, y: 200 });
+    expect(moved.floating.inspect).toEqual({ x: 300, y: 200, w: 640, h: 480 });
+    const resized = reducer(moved, { type: 'resizeFloating', id: 'inspect', w: 10, h: 10 });
+    expect(resized.floating.inspect).toMatchObject({ w: 320, h: 220 });
+    expect(reducer(moved, { type: 'resizeFloating', id: 'inspect', w: 800, h: 600 }).floating.inspect).toMatchObject({ w: 800, h: 600 });
+  });
+
+  it('reconcile 清洗：浮动指向已消失的面板 → 记账被清掉', () => {
+    const withFloat = reducer(baseState(), { type: 'float', id: 'inspect', geometry: geo });
+    const orgAfterSeal = organizePanels(PANELS.filter((p) => p.id !== 'inspect'), {});
+    expect(reducer(withFloat, { type: 'reconcile', org: orgAfterSeal }).floating).toEqual({});
+  });
+});

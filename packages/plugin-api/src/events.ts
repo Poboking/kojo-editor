@@ -150,6 +150,12 @@ export interface KernelEventMap {
    */
   'ui.overlay.open': { id: string; payload?: unknown; source?: string };
   /**
+   * 浮动面板意图（2026-10-14 UI 浮动批）：请求宿主把某个 `ui.panel` 贡献弹出为
+   * 可移动浮窗（非模态，不遮挡编辑器）。通用、游戏无关——插件发意图、宿主落地
+   * （与 `ui.overlay.open` 同款模式）；停靠由宿主浮窗自带的按钮完成。
+   */
+  'ui.panel.float': { id: string; source?: string };
+  /**
    * 关闭 overlay 意图（UI 重设计批 P2）：请求宿主关闭某 `ui.overlay` 贡献。
    * 与 `ui.overlay.open` 对称——overlay 内组件（向导完成/取消）经此自行退出，
    * 无需持有宿主引用。
@@ -222,6 +228,7 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'editor.sugarView.set',
   'ui.overlay.open',
   'ui.overlay.close',
+  'ui.panel.float',
   'workspace.importRequested',
   'workspace.newProjectRequested',
   'workspace.projectCreated',

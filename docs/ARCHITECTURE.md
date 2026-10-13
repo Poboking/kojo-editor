@@ -97,24 +97,25 @@ interface Plugin {
 ### 3.2 事件总线
 
 - 类型化事件：`EventMap` 集中定义，`bus.emit('kojo.functionChanged', payload)` 编译期校验。
-- 事件全集在 `plugin-api/src/events.ts` 的 `KernelEventMap` 一处定义，**当前 20 个**。
+- 事件全集在 `plugin-api/src/events.ts` 的 `KernelEventMap` 一处定义，**当前 21 个**。
   按 **emit 权限**分两表（不是按功能分类）：
-  - **插件可 emit（18 个，`PLUGIN_EMITTABLE_EVENT_NAMES`）**：`file.changed` /
+  - **插件可 emit（19 个，`PLUGIN_EMITTABLE_EVENT_NAMES`）**：`file.changed` /
     `project.opened` / `project.closed` / `kojo.functionChanged` / `plugin.statusChanged` /
     `state.snapshotLoaded` / `editor.revealLocation` / `kojo.replayFunction` /
     `kojo.snapshotSelected` / `editor.activeFileChanged` / `editor.liftPreview.show` /
     `editor.liftPreview.hide` / `editor.sugarView.set` / `ui.overlay.open` / `ui.overlay.close` /
-    `workspace.importRequested` / `workspace.newProjectRequested` / `workspace.projectCreated`；
+    `ui.panel.float` / `workspace.importRequested` / `workspace.newProjectRequested` /
+    `workspace.projectCreated`；
   - **内核/宿主专属（2 个，`KERNEL_ONLY_EVENT_NAMES`）**：`project.writableApprovalMismatch` /
     `file.watchState`——插件可 `on` 不可 `emit`（插件伪造这两条等于伪造安全提示与
     「自动重载是否可信」的保证）。
-- ⚠ **两个数别混**：`KernelEventMap` 是**全部事件 20 个**；`KERNEL_EVENT_NAMES` 是
-  **插件可 emit 的白名单 18 个**（scopedBus 执法用的就是后者）。数量的是不同集合，
+- ⚠ **两个数别混**：`KernelEventMap` 是**全部事件 21 个**；`KERNEL_EVENT_NAMES` 是
+  **插件可 emit 的白名单 19 个**（scopedBus 执法用的就是后者）。数量的是不同集合，
   都不是笔误——改动时别把其中一个「纠正」成另一个。
 - **分类完整性由编译期断言保证**（`KERNEL_EVENT_CLASSIFICATION_GUARD`）：新增内核事件
   必须在两表之一登记，否则类型退化为 `never`、编译即失败。这是机制不是口号——
   起源于 `0bf2eb9` 那次「契约加了类型、kernel 白名单漏同步」只在运行时暴露的事故。
-- 新增事件还要同步 `plugin-api/tests/events.test.ts` 的**计数快照**（现 18），否则测试即红。
+- 新增事件还要同步 `plugin-api/tests/events.test.ts` 的**计数快照**（现 19），否则测试即红。
 - 插件自定义事件必须带插件 id 前缀（`eratw-adapter:xxx`），与 DSH "存储域名用下划线、事件带命名空间"的约定同源。
 
 ### 3.3 存储域

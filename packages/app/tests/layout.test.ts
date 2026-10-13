@@ -158,6 +158,7 @@ describe('持久化', () => {
     zen: true,
     zenLimitWidth: true,
     panelLocations: { a: 'aux' },
+    floating: {},
   });
 
   it('存 → 读 round-trip；localStorage 不可用时静默降级为 null', () => {

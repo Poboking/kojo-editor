@@ -182,7 +182,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
 
       /* ------------------------------ 面板组件 ------------------------------ */
 
-      function ConditionMatrixPanel(_props: UIPanelProps): unknown {
+      function ConditionMatrixPanel(props: UIPanelProps): unknown {
         const [, force] = useState(0);
         const [selectedNo, setSelectedNo] = useState<number | null>(null);
         const [filter, setFilter] = useState('');
@@ -266,7 +266,16 @@ export function createUiConditionMatrixPlugin(): Plugin {
           onChange: (e: { target: { value: string } }) => setFilter(e.target.value),
         });
 
-        const toolbar = createElement('div', { className: 'cm-toolbar' }, charaSelect, filterInput);
+        const floatBtn = createElement(
+          'button',
+          {
+            className: 'cm-float',
+            title: '浮动到大窗口查看',
+            onClick: () => ctx.bus.emit('ui.panel.float', { id: 'condition-matrix' }),
+          },
+          (props.renderIcon?.('popout', 14) as ReactNode) ?? '浮动',
+        );
+        const toolbar = createElement('div', { className: 'cm-toolbar' }, charaSelect, filterInput, floatBtn);
 
         const status = createElement(
           'div',

@@ -17,6 +17,16 @@ export interface ContainerState {
   active: string | null;
 }
 
+/** 浮动面板几何（视口坐标 px；宿主算初值，拖拽/缩放更新） */
+export interface FloatingState {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+/** 浮窗最小尺寸（缩放钳制下界） */
+export const MIN_FLOAT = { w: 320, h: 220 } as const;
+
 export interface LayoutState {
   sidebar: ContainerState;
   aux: ContainerState;
@@ -27,6 +37,8 @@ export interface LayoutState {
   zenLimitWidth: boolean;
   /** 面板位置 override（拖拽停靠 P4）：panelId → 目标容器 */
   panelLocations: Record<string, PanelLocation>;
+  /** 浮动面板 id → 几何；非模态可移动浮窗，独立于三容器 */
+  floating: Record<string, FloatingState>;
 }
 
 /** 侧栏视图容器：group 合并（多面板折叠堆叠）或独占（单面板） */
@@ -68,6 +80,10 @@ export type LayoutAction =
   | { type: 'toggleZen' }
   | { type: 'exitZen' }
   | { type: 'setZenLimitWidth'; value: boolean }
+  | { type: 'float'; id: string; geometry: FloatingState }
+  | { type: 'dock'; id: string }
+  | { type: 'moveFloating'; id: string; x: number; y: number }
+  | { type: 'resizeFloating'; id: string; w: number; h: number }
   /** 封存总闸切换后面板集合增删时的再清洗（org = 新集合的编排结果） */
   | { type: 'reconcile'; org: OrganizedPanels }
   | { type: 'reset'; state: LayoutState };
@@ -106,6 +122,33 @@ export function reducer(s: LayoutState, a: LayoutAction): LayoutState {
       return s.zen ? { ...s, zen: false } : s;
     case 'setZenLimitWidth':
       return { ...s, zenLimitWidth: a.value };
+    case 'float': {
+      // 已浮动 → 幂等（不覆盖既有几何）
+      if (s.floating[a.id]) return s;
+      return { ...s, floating: { ...s.floating, [a.id]: a.geometry } };
+    }
+    case 'dock': {
+      if (!s.floating[a.id]) return s;
+      const floating = { ...s.floating };
+      delete floating[a.id];
+      return { ...s, floating };
+    }
+    case 'moveFloating': {
+      const f = s.floating[a.id];
+      if (!f) return s;
+      return { ...s, floating: { ...s.floating, [a.id]: { ...f, x: a.x, y: a.y } } };
+    }
+    case 'resizeFloating': {
+      const f = s.floating[a.id];
+      if (!f) return s;
+      return {
+        ...s,
+        floating: {
+          ...s.floating,
+          [a.id]: { ...f, w: Math.max(MIN_FLOAT.w, a.w), h: Math.max(MIN_FLOAT.h, a.h) },
+        },
+      };
+    }
     case 'reconcile':
       // 封存总闸切换后面板集合增删，失效 active / 位置 override 须按新集合清洗
       return reconcileLayout(s, a.org);
@@ -196,7 +239,7 @@ export function defaultActiveOf(org: OrganizedPanels): Pick<LayoutState, 'sideba
 }
 
 export function defaultLayout(org: OrganizedPanels): LayoutState {
-  return { ...defaultActiveOf(org), zen: false, zenLimitWidth: true, panelLocations: {} };
+  return { ...defaultActiveOf(org), zen: false, zenLimitWidth: true, panelLocations: {}, floating: {} };
 }
 
 /**
@@ -247,6 +290,17 @@ function sanitizeContainer(
   };
 }
 
+/** 浮动几何规范化：数值非法回落缺省；w/h 各自不小于 MIN_FLOAT */
+function sanitizeFloating(f: Partial<FloatingState>): FloatingState {
+  const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+  return {
+    x: num(f.x, 0),
+    y: num(f.y, 0),
+    w: Math.max(MIN_FLOAT.w, num(f.w, 640)),
+    h: Math.max(MIN_FLOAT.h, num(f.h, 480)),
+  };
+}
+
 /**
  * 合并持久化状态与当前面板集合：持久化的激活项可能已失效（插件卸载），
  * 位置 override 可能指向已注销面板——以当前贡献为准清洗。
@@ -258,6 +312,13 @@ export function reconcileLayout(persisted: Partial<LayoutState> | null, org: Org
   const auxIds = new Set(org.aux.map((p) => p.id));
   const bottomIds = new Set(org.bottom.map((p) => p.id));
   const allIds = new Set([...auxIds, ...bottomIds, ...org.views.flatMap((v) => v.panels.map((p) => p.id))]);
+
+  const floating: Record<string, FloatingState> = {};
+  if (persisted.floating && typeof persisted.floating === 'object') {
+    for (const [id, f] of Object.entries(persisted.floating)) {
+      if (allIds.has(id) && f && typeof f === 'object') floating[id] = sanitizeFloating(f);
+    }
+  }
 
   const overrides: Record<string, PanelLocation> = {};
   if (persisted.panelLocations && typeof persisted.panelLocations === 'object') {
@@ -279,5 +340,6 @@ export function reconcileLayout(persisted: Partial<LayoutState> | null, org: Org
     // 缺省 true（定稿 §八默认限宽）；仅显式 false 关闭
     zenLimitWidth: persisted.zenLimitWidth !== false,
     panelLocations: overrides,
+    floating,
   };
 }

@@ -3878,3 +3878,92 @@ button.primary .hint {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.cm-float {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --------------------- 浮动面板（2026-10-14 UI 浮动批：非模态可移动浮窗） --------------------- */
+
+.floating-panel {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+  /* 置顶但低于模态：模态打开时浮窗让位 */
+  z-index: calc(var(--z-modal) - 10);
+  min-width: 320px;
+  min-height: 220px;
+  overflow: hidden;
+}
+.floating-panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+}
+.floating-panel-head:active {
+  cursor: grabbing;
+}
+.floating-panel-title {
+  font-size: var(--fs-1);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.floating-panel-head .spacer {
+  flex: 1;
+}
+.floating-panel-action {
+  flex: none;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+}
+/* 浮窗体：让 PanelBody 外壳铺满并滚动（样式口径与侧栏分栏 section 内 .panel 一致） */
+.floating-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.floating-panel-body > .panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding-top: 0;
+}
+.floating-panel-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+}
+.floating-panel-resize::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--border);
+  border-bottom: 2px solid var(--border);
+  opacity: 0.8;
+}

@@ -13,7 +13,7 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     expect(KERNEL_EVENT_CLASSIFICATION_GUARD).toBe(true);
   });
 
-  it('白名单 = 插件可 emit 的 18 个内核事件（快照守门）', () => {
+  it('白名单 = 插件可 emit 的 19 个内核事件（快照守门）', () => {
     expect([...KERNEL_EVENT_NAMES].sort()).toEqual(
       [
         'file.changed',
@@ -31,6 +31,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
         'editor.sugarView.set',
         'ui.overlay.open',
         'ui.overlay.close',
+        // 2026-10-14 UI 浮动批：请求宿主把某面板弹出为可移动浮窗
+        'ui.panel.float',
         // 2026-10-12 工作区批：导入意图（宿主文件树右键 → 工作区消费方）
         'workspace.importRequested',
         // 2026-10-13 反馈 3 批：请开新建项目向导（意图）+ 项目已创建（兑现）
@@ -54,7 +56,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     // 2026-10-13 BUG-5 新增 file.watchState 走 **KERNEL_ONLY** 表 ⇒ 可 emit 白名单不动；
     // 2026-10-13 反馈 3 批新增 workspace.newProjectRequested + workspace.projectCreated
     // 两个语义事件（意图 / 兑现各一）⇒ 16 → 18。
+    // 2026-10-14 UI 浮动批新增 ui.panel.float（面板浮动意图）⇒ 18 → 19。
     // 计数以本行结论为准（漏项的话编译期 guard 会红）。
-    expect(KERNEL_EVENT_NAMES.size).toBe(18);
+    expect(KERNEL_EVENT_NAMES.size).toBe(19);
   });
 });

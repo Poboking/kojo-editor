@@ -147,13 +147,23 @@ export function ShellLayout(props: Props): ReactElement {
   const [layout, dispatch] = useReducer(reducer, undefined as unknown as LayoutState, () =>
     reconcileLayout(loadLayout(), organizePanels(allPanels, {})),
   );
+  // 渲染用的编排排除已浮动的面板（它们不在三容器里重复显示）
+  const dockedPanels = useMemo(
+    () => allPanels.filter((p) => layout.floating[p.id] === undefined),
+    [allPanels, layout.floating],
+  );
   const org: OrganizedPanels = useMemo(
+    () => organizePanels(dockedPanels, layout.panelLocations),
+    [dockedPanels, layout.panelLocations],
+  );
+
+  // 清洗总闸的再清洗必须基于全体面板（含浮动的），否则浮动 id 会被误清洗掉
+  const fullOrg = useMemo(
     () => organizePanels(allPanels, layout.panelLocations),
     [allPanels, layout.panelLocations],
   );
-
-  const orgRef = useRef(org);
-  orgRef.current = org;
+  const fullOrgRef = useRef(fullOrg);
+  fullOrgRef.current = fullOrg;
   // 总闸切换后面板集合增删，active/override 可能失效——重跑一次清洗器（首跑跳过，挂载时已清洗过）
   const sealSkipFirstRef = useRef(true);
   useEffect(() => {
@@ -161,7 +171,7 @@ export function ShellLayout(props: Props): ReactElement {
       sealSkipFirstRef.current = false;
       return;
     }
-    dispatch({ type: 'reconcile', org: orgRef.current });
+    dispatch({ type: 'reconcile', org: fullOrgRef.current });
   }, [sealed]);
 
   // 持久化（壳层私事，localStorage；变更即存，体量小无需去抖）
@@ -374,6 +384,73 @@ export function ShellLayout(props: Props): ReactElement {
     [layout],
   );
 
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
+  const floatingPanels = useMemo(
+    () => allPanels.filter((p) => layout.floating[p.id] !== undefined),
+    [allPanels, layout.floating],
+  );
+
+  /** 浮动一个面板：按视口算初值，多窗层叠错位避免完全重叠 */
+  const floatPanel = useCallback((id: string) => {
+    const n = Object.keys(layoutRef.current.floating).length;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const w = Math.min(960, Math.max(460, Math.round(vw * 0.52)));
+    const h = Math.min(680, Math.max(320, Math.round(vh * 0.62)));
+    const x = Math.max(16, Math.round((vw - w) / 2) + n * 26);
+    const y = Math.max(16, 64 + n * 26);
+    dispatch({ type: 'float', id, geometry: { x, y, w, h } });
+  }, []);
+
+  /** 浮窗拖拽（标题栏 mousedown → 全局 mousemove） */
+  const startFloatDrag = useCallback((e: ReactMouseEvent, id: string) => {
+    e.preventDefault();
+    const f = layoutRef.current.floating[id];
+    if (!f) return;
+    const dx = e.clientX - f.x;
+    const dy = e.clientY - f.y;
+    const onMove = (ev: MouseEvent): void => {
+      const x = Math.min(window.innerWidth - 80, Math.max(80 - f.w, ev.clientX - dx));
+      const y = Math.min(window.innerHeight - 32, Math.max(0, ev.clientY - dy));
+      dispatch({ type: 'moveFloating', id, x, y });
+    };
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
+  /** 浮窗右下角缩放 */
+  const startFloatResize = useCallback((e: ReactMouseEvent, id: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const f = layoutRef.current.floating[id];
+    if (!f) return;
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const sw = f.w;
+    const sh = f.h;
+    const onMove = (ev: MouseEvent): void => {
+      dispatch({ type: 'resizeFloating', id, w: sw + (ev.clientX - sx), h: sh + (ev.clientY - sy) });
+    };
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
+  // 浮动面板意图（内核事件落地；停靠由浮窗自带的按钮完成）
+  useEffect(() => {
+    const un = kernel.bus.on('ui.panel.float', (ev) => floatPanel(ev.id));
+    return un;
+  }, [kernel, floatPanel]);
+
   /* -------------------- P4：三容器拖拽停靠（定稿 §七；override 持久化在 layout.panelLocations） -------------------- */
 
   /** 落点高亮目标（dragover 置位，drop/dragend/真正离开容器时清除） */
@@ -434,9 +511,9 @@ export function ShellLayout(props: Props): ReactElement {
 
   /* ------------------------------ 渲染片段 ------------------------------ */
 
-  const activeView = org.views.find((v) => v.key === layout.sidebar.active) ?? null;
-  const activeAux = org.aux.find((p) => p.id === layout.aux.active) ?? null;
-  const activeBottom = org.bottom.find((p) => p.id === layout.bottom.active) ?? null;
+  const activeView = org.views.find((v) => v.key === layout.sidebar.active) ?? org.views[0] ?? null;
+  const activeAux = org.aux.find((p) => p.id === layout.aux.active) ?? org.aux[0] ?? null;
+  const activeBottom = org.bottom.find((p) => p.id === layout.bottom.active) ?? org.bottom[0] ?? null;
 
   /** 侧栏组内折叠状态（会话级，不持久化——定稿 §七持久化清单不含组内折叠） */
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -597,6 +674,14 @@ export function ShellLayout(props: Props): ReactElement {
         </button>
       ))}
       <span className="spacer" />
+      <button
+        className="ghost small panel-float"
+        title="浮动到大窗口"
+        disabled={!activeId}
+        onClick={() => { if (activeId) floatPanel(activeId); }}
+      >
+        <Icon name="popout" size={14} />
+      </button>
       <button
         className="ghost small panel-close"
         title="关闭面板"
@@ -942,6 +1027,40 @@ export function ShellLayout(props: Props): ReactElement {
         </>
       ) : null}
       {statusbar}
+      {floatingPanels.map((p) => {
+        const f = layout.floating[p.id];
+        if (!f) return null;
+        return (
+          <section
+            key={p.id}
+            className="floating-panel"
+            style={{ left: f.x, top: f.y, width: f.w, height: f.h }}
+            aria-label={p.title}
+          >
+            <header className="floating-panel-head" onMouseDown={(e) => startFloatDrag(e, p.id)}>
+              <Icon name={p.icon ?? 'preview'} size={14} />
+              <span className="floating-panel-title">{p.title}</span>
+              <span className="spacer" />
+              <button
+                className="ghost small floating-panel-action"
+                title="停靠回侧栏"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => dispatch({ type: 'dock', id: p.id })}
+              >
+                <Icon name="dock" size={14} />
+              </button>
+            </header>
+            <div className="floating-panel-body">
+              <PanelBody contribution={p} />
+            </div>
+            <div
+              className="floating-panel-resize"
+              title="拖拽调整大小"
+              onMouseDown={(e) => startFloatResize(e, p.id)}
+            />
+          </section>
+        );
+      })}
       {overlays}
     </div>
   );
