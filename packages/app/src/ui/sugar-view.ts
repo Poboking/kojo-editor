@@ -105,6 +105,26 @@ export interface SugarZonePlan {
 }
 
 /**
+ * 去掉糖段**首尾**的空行，段内的空行原样保留。
+ *
+ * 为什么：投影器按原文行逐行映射，段首常带着一两行空行（原文的分隔空行）。落在
+ * ViewZone 里就是"高亮块开头一大块空白"——读者读到的是"这段糖没内容"，
+ * 而它离上一段代码之间本来就还有真实行距。段内空行是**分节**，不能动
+ * （`fillSugarBlock` 特意给每行一个行框，就是为了空行也撑得住）。
+ *
+ * 全空的一段原样返回：那是"这段确实只有空行"的事实，交给骨架段那条路径处理，
+ * 不在这里把内容删成零行（零行会让 ViewZone 高度与折叠柄算错）。
+ */
+export function trimSegmentBlanks(sugarText: string): string {
+  const lines = sugarText.split('\n');
+  let from = 0;
+  let to = lines.length;
+  while (from < to && lines[from]!.trim() === '') from++;
+  while (to > from && lines[to - 1]!.trim() === '') to--;
+  return from >= to ? sugarText : lines.slice(from, to).join('\n');
+}
+
+/**
  * 糖段 → ViewZone 计划。
  *
  * 锚点取 `fromLine - 1`：糖显示在**原文区间上方**，于是原文被隐藏后，糖正好落在

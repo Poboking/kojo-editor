@@ -1232,6 +1232,20 @@ textarea {
   white-space: nowrap;
   flex: 0 0 auto;
 }
+/* 工具条溢出时的**让位次序**（2026-10-13 目视体检 + 量测：1180 视口下整条只有只读胶囊可缩，
+   于是它被压成 36×38 的"只/读"竖排圆牌——上一轮 §5.99 只给 `button` 立了"不许裁"的规矩，
+   而胶囊是 `<span>`，漏网）。规矩补齐，并把"谁该让位"写成显式次序：
+   ① 身份与状态（文件名、只读/解锁胶囊、糖开关、保存）一律不许缩；
+   ② 先让位的是糖摘要（悬停有全文）；③ 再让位的是编码·换行·行数（底部状态栏另有一份）。
+   溢出量因此落在"次要信息截断"上，而不是落在"状态控件变形"上。 */
+.editor-toolbar > .sb-writable,
+.editor-toolbar > .erb-mode-hint {
+  flex: 0 0 auto;
+}
+.editor-toolbar > .editor-status {
+  flex: 0 1 auto;
+  min-width: 0;
+}
 .editor-body {
   flex: 1;
   min-height: 0;
@@ -1295,10 +1309,16 @@ button.erb-mode-hint.unlocked:hover {
   background: var(--hover);
   border-color: var(--border);
 }
-/* 糖视图摘要：给一个"这份文件读到了多少"的量感，不抢视线 */
+/* 糖视图摘要：给一个"这份文件读到了多少"的量感，不抢视线。
+   工具条里它是**第一个让位**的（`min-width: 0` + 省略号）：全文在 `title` 悬停里读得到，
+   而它若不许缩，被挤的就轮到只读胶囊（§九 那条"让位次序要显式写出来"的同类）。 */
 .sugar-stats {
   font-size: var(--fs-0);
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
 }
 
 /* ------------------------------ modal ------------------------------ */
@@ -2781,6 +2801,8 @@ button.erb-mode-hint.unlocked:hover {
   border-radius: var(--radius-pill);
   font-size: var(--fs-0);
   line-height: 18px;
+  /* 不许换行：CJK 逐字可断，一旦进 flex 收缩，"只读"会竖排成 36×38 的圆牌（实测见工具条那组规则） */
+  white-space: nowrap;
 }
 .sb-writable.ok {
   color: var(--green);

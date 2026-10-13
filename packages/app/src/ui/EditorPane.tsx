@@ -33,6 +33,7 @@ import {
   sugarSummary,
   sugarViewAllowed,
   sugarZonePlan,
+  trimSegmentBlanks,
 } from './sugar-view';
 import {
   foldKey,
@@ -311,7 +312,7 @@ export function EditorPane({
    * 空壳先插、内容后填：`changeViewZones` 只建 `<pre>`（O(1)/段），着色与文本在
    * 后续帧里按批填。可见窗口内的段排在最前——读者第一眼看到的一定是完整的。
    */
-  const sugarPendingRef = useRef<Array<{ el: HTMLElement; text: string }>>([]);
+  const sugarPendingRef = useRef<Array<{ el: HTMLElement; wrap: HTMLElement; text: string }>>([]);
   /** 分帧填充的 rAF 句柄（换文件/关视图时取消，避免写进已移除的 DOM） */
   const sugarHydrateRafRef = useRef<number | null>(null);
   /** 糖视图开关（偏好持久化；默认开——见 `sugar-view.ts` 头注） */
@@ -477,7 +478,8 @@ export function EditorPane({
       try {
         for (const item of provide.call(contribution, { path, text, project })) {
           const { fromLine, toLine } = clampRange(item.fromLine, item.toLine, maxLine);
-          segments.push({ fromLine, toLine, sugarText: item.sugarText });
+          // 段首尾的空行不进 ViewZone（否则高亮块开头是一大块空白，见 `trimSegmentBlanks`）
+          segments.push({ fromLine, toLine, sugarText: trimSegmentBlanks(item.sugarText) });
         }
       } catch (e: unknown) {
         // 能力出错要"退化可见"：记录后继续，糖视图少一段好过整份消失
@@ -497,8 +499,8 @@ export function EditorPane({
     const visible = ed.getVisibleRanges();
     const visibleFrom = visible.length > 0 ? visible[0]!.startLineNumber : 1;
     const visibleTo = visible.length > 0 ? visible[visible.length - 1]!.endLineNumber : 1;
-    const nearViewport: Array<{ el: HTMLElement; text: string }> = [];
-    const rest: Array<{ el: HTMLElement; text: string }> = [];
+    const nearViewport: Array<{ el: HTMLElement; wrap: HTMLElement; text: string }> = [];
+    const rest: Array<{ el: HTMLElement; wrap: HTMLElement; text: string }> = [];
     let sugarLines = 0;
     // ViewZone 的盒子高 = `heightInLines × 编辑器行高`，而区内 DOM 由 `.sugar-zone` 自己
     // 排版。两者不同一行数一多就对不上：CSS 原写 `12.5px × 1.6 = 20px`，比 Monaco 在
@@ -555,7 +557,10 @@ export function EditorPane({
         }
         const dom = document.createElement('pre');
         dom.className = 'sugar-zone';
-        if (lineHeightPx !== null) dom.style.setProperty('--sugar-lh', `${lineHeightPx}px`);
+        // 行高变量落在**wrap**上：区内每一行与那一行折叠柄共用同一节奏（写在 `pre` 上时，
+        // 柄按默认行高排，盒子高就会比内容高少一点）。首帧量不到就先留空走 CSS 兜底，
+        // 由下面的 pump 自愈补写。
+        if (lineHeightPx !== null) wrap.style.setProperty('--sugar-lh', `${lineHeightPx}px`);
         wrap.appendChild(dom);
         wrap.appendChild(makeHandle(foldable, false));
         const id = acc.addZone({
@@ -568,7 +573,7 @@ export function EditorPane({
           showInHiddenAreas: true,
         });
         sugarZonesRef.current.push(id);
-        const item = { el: dom, text: seg.sugarText };
+        const item = { el: dom, wrap, text: seg.sugarText };
         // 可见窗口内的段排最前；再各自按行号升序（读者从上往下读）
         if (seg.toLine >= visibleFrom && seg.fromLine <= visibleTo) nearViewport.push(item);
         else rest.push(item);
@@ -591,7 +596,15 @@ export function EditorPane({
     const pump = (): void => {
       sugarHydrateRafRef.current = null;
       const batch = sugarPendingRef.current.splice(0, SUGAR_HYDRATE_PER_FRAME);
-      for (const item of batch) fillSugarBlock(item.el, monaco, item.text);
+      /* 自愈：`applySugarView` 紧跟 `setModel`，首帧常常还没有 `.view-line` ⇒ 那次量不到
+         行高，CSS 兜底的 `1.6`（12.5px × 1.6 = 20px）就让每行比编辑器行高多 1px。
+         43 行的段溢出盒子 ~11px、281 行的段直接裁掉近 10 行**看不见**——而读者没有任何
+         线索知道少了什么。填充发生在帧里，那时行元素已经在 DOM 上，重问一次即可。 */
+      const lh = editorLineHeightPx(ed.getDomNode());
+      for (const item of batch) {
+        if (lh !== null) item.wrap.style.setProperty('--sugar-lh', `${lh}px`);
+        fillSugarBlock(item.el, monaco, item.text);
+      }
       if (sugarPendingRef.current.length > 0) {
         sugarHydrateRafRef.current = window.requestAnimationFrame(pump);
       }

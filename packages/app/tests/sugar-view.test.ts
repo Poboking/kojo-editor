@@ -17,6 +17,7 @@ import {
   sugarSummary,
   sugarViewAllowed,
   sugarZonePlan,
+  trimSegmentBlanks,
 } from '../src/ui/sugar-view';
 import { SUGAR_DEFAULT_COLOR, tokenColor } from '../src/monaco/sugar-render';
 
@@ -152,5 +153,40 @@ describe('sugarViewAllowed（糖视图可用门 = 不可编辑态的派生）', 
 
   it('游戏目录 ERB 一旦解锁 → 该份糖视图禁用（轴二与互斥规则一致）', () => {
     expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: true })).toBe(false);
+  });
+});
+
+/* ============ 糖段首尾空行（2026-10-13 目视体检：高亮块开头一大块空白） ============ */
+
+/**
+ * 投影按原文行逐行映射，段首常带空行；落在 ViewZone 里就是"这块糖没内容"的错觉。
+ * 这里钉的是**只剪首尾、段内空行一根不动**——段内空行是分节，删了等于把剧本排成一行。
+ */
+describe('trimSegmentBlanks · 只剪段首尾，段内分节不许动', () => {
+  it('段首两个空行剪掉，正文与段内空行原样保留', () => {
+    const out = trimSegmentBlanks(['', '', '她说「甲」', '', '她说「乙」'].join('\n'));
+    expect(out.split('\n')).toEqual(['她说「甲」', '', '她说「乙」']);
+  });
+
+  it('段尾空行（含只有空格的行）也剪', () => {
+    expect(trimSegmentBlanks('PRINT A\n\n   \n').split('\n')).toEqual(['PRINT A']);
+  });
+
+  it('没有空行的段逐字不变（不制造第二次差异）', () => {
+    const t = '如果 恋慕：\n  她说「甲」';
+    expect(trimSegmentBlanks(t)).toBe(t);
+  });
+
+  it('整段皆空 ⇒ 原样返回（剪成零行会让 ViewZone 高度与折叠柄算错）', () => {
+    const t = '\n  \n';
+    expect(trimSegmentBlanks(t)).toBe(t);
+  });
+
+  it('剪完之后 ViewZone 计划按剩余行数给高（呼吸位仍是 +1）', () => {
+    const raw = '\n\n她说「甲」\n她说「乙」\n';
+    const plan = sugarZonePlan({ fromLine: 5, sugarText: trimSegmentBlanks(raw) });
+    expect(plan.lineCount).toBe(2);
+    expect(plan.heightInLines).toBe(3);
+    expect(plan.afterLineNumber).toBe(4);
   });
 });
