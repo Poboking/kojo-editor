@@ -20,6 +20,12 @@ export const ERATW = {
   /** 变量名称表目录（emuera 通用 CSV 目录；CFLAG.csv / Talent.csv … 变量字典来源） */
   csvDir: ['CSV'] as const,
 
+  /**
+   * 变量名汉化词典（游戏自带 JP→CN 名词典；引擎 `SYSTEM.ERB` 经 `MAP_FROMXML`
+   * 装为 `CSV_MAP`，游戏 UI 的名称汉化就靠它）。相对工程根。
+   */
+  chsNameMap: ['plugins', 'tw_csv_chs.xml'] as const,
+
   /** 口上域 */
   paths: {
     /** 個人口上：编辑器主战场 */

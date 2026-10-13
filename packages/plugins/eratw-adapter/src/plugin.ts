@@ -456,6 +456,7 @@ export function createEratwAdapterPlugin(): Plugin {
           currentSchema = await loadEratwVariableSchema({
             io,
             csvDir: join(rootDir, ...ERATW.csvDir),
+            chsMapPath: join(rootDir, ...ERATW.chsNameMap),
             log: ctx.log,
           });
 

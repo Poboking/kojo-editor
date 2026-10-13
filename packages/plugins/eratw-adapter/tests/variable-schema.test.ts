@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileIO, Logger } from '@kojo/plugin-api';
-import { loadEratwVariableSchema, parseVariableCsv } from '../src/variable-schema';
+import { loadEratwVariableSchema, parseChsMap, parseVariableCsv } from '../src/variable-schema';
 
 describe('parseVariableCsv', () => {
   it('基础解析：编号,名称', () => {
@@ -34,6 +34,22 @@ describe('parseVariableCsv', () => {
   });
 });
 
+describe('parseChsMap', () => {
+  it('解析 <p><k><v> 词典；空键跳过、同名取首条、容忍 BOM', () => {
+    const m = parseChsMap(
+      '\uFEFF<map><p><k>好感度</k><v>好感度</v></p><p><k></k><v>x</v></p>' +
+        '<p><k>信頼度</k><v>信赖度</v></p><p><k>信頼度</k><v>重复</v></p></map>',
+    );
+    expect(m.get('信頼度')).toBe('信赖度');
+    expect(m.get('好感度')).toBe('好感度');
+    expect(m.size).toBe(2);
+  });
+
+  it('无 <p><k><v> 形态 → 空 Map（不抛）', () => {
+    expect(parseChsMap('<map></map>').size).toBe(0);
+  });
+});
+
 describe('loadEratwVariableSchema', () => {
   const silentLog: Logger = {
     debug: () => {},
@@ -46,15 +62,20 @@ describe('loadEratwVariableSchema', () => {
     return {
       listDir: async (dir: string) => {
         void dir;
-        const entries = Object.keys(files).map((name) => ({
-          name,
-          path: `/game/CSV/${name}`,
-          isDirectory: false,
-        }));
+        const entries = Object.keys(files)
+          .filter((name) => !name.includes('/'))
+          .map((name) => ({
+            name,
+            path: `/game/CSV/${name}`,
+            isDirectory: false,
+          }));
         entries.push({ name: 'Chara', path: '/game/CSV/Chara', isDirectory: true });
         return entries;
       },
-      readText: async (path: string) => ({ text: files[path.replace('/game/CSV/', '')] ?? '', path }),
+      readText: async (path: string) => ({
+        text: files[path] ?? files[path.replace('/game/CSV/', '')] ?? '',
+        path,
+      }),
     } as unknown as FileIO;
   }
 
@@ -70,9 +91,27 @@ describe('loadEratwVariableSchema', () => {
     expect(schema.lookup('CFLAG', 2)).toEqual({ name: 'CFLAG', index: 2, description: '好感度', resolvedIndex: 2 });
     expect(schema.lookup('cflag', '2')).toEqual({ name: 'CFLAG', index: '2', description: '好感度', resolvedIndex: 2 });
     expect(schema.lookup('TALENT', '恋慕')).toEqual({ name: 'TALENT', index: '恋慕', description: '恋慕', resolvedIndex: 3 });
-    expect(schema.lookup('CFLAG')).toEqual({ name: 'CFLAG' });
+    // 家族级（无索引）：游戏无机读族名表 → 取适配器内置策展常量
+    expect(schema.lookup('CFLAG')).toEqual({ name: 'CFLAG', description: '角色标志' });
     expect(schema.lookup('CFLAG', 999)).toEqual({ name: 'CFLAG', index: 999 });
     expect(schema.lookup('NOPE', 1)).toBeUndefined();
+  });
+
+  it('汉化词典叠加：索引级名称 JP→CN（查不到回落原文）', async () => {
+    const schema = await loadEratwVariableSchema({
+      io: fakeIo({
+        'CFLAG.csv': '2,好感度\n4,信頼度\n',
+        '/game/plugins/tw_csv_chs.xml':
+          '<map><p><k>信頼度</k><v>信赖度</v></p><p><k>恋慕</k><v>恋慕</v></p></map>',
+      }),
+      csvDir: '/game/CSV',
+      chsMapPath: '/game/plugins/tw_csv_chs.xml',
+      log: silentLog,
+    });
+    // 词典命中 → 中文
+    expect(schema.lookup('CFLAG', 4)).toEqual({ name: 'CFLAG', index: 4, description: '信赖度', resolvedIndex: 4 });
+    // 词典未收录 → 回落名称表原文
+    expect(schema.lookup('CFLAG', 2)?.description).toBe('好感度');
   });
 
   it('目录不可读时返回空字典（不抛错）', async () => {
