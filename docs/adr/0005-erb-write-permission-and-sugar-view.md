@@ -33,9 +33,9 @@
 - 写白名单 = **常驻可写根**（工作区根，不受项目开闭周期清空）**∪ 用户批准的项目 `writablePaths`**，
   由 `kernel.io.isWritable(具体文件)` 判定。
 - ⚠ **但"编辑器当前这份文件能不能打字"不走 `isWritable`**：落地时它是内联的三条件式
-  `readOnly = isErbLike(path) && !inWorkspace(path) && !allowEdit`
-  （`EditorPane.tsx:1004` 切文件时、`:1044` 解锁/回锁时，**各写了一遍**）。
-  `isWritable` 只管**落盘那一侧**（`:594` 保存、`:1174` 保存按钮禁用）。
+  `readOnly = isErbLike(path) && !inWorkspace(path) && !allowEdit`，
+  在 `EditorPane.tsx` 里**各写了一遍**（切文件时的 `updateOptions` 与 `setErbEditable` 解锁/回锁各一处）。
+  `isWritable` 只管**落盘那一侧**（保存路径上的拒绝 + 保存按钮的 `disabled`）。
   两者语义一致但实现分离 —— 原稿"判定唯一真源"的说法过强，已按实现校正。
   **后续如要合并成单一真源，注意别把轴二（会话内解锁）漏掉**：`isWritable` 不知道解锁态。
 
@@ -69,7 +69,7 @@ const sugarViewAvailable = !editable;
 
 > **落地形态（2026-10-13 校正）**：糖视图可用门没有按上面这个布尔式实现，而是做成了
 > **入参更细的纯函数** `sugarViewAllowed({ isErbLike, inWorkspace, unlocked })`
-> （`packages/app/src/ui/sugar-view.ts:190`），宿主三处（自动应用 / 首次询问 / 工具条入口）
+> （`packages/app/src/ui/sugar-view.ts` 的 `sugarViewAllowed`），宿主三处（自动应用 / 首次询问 / 工具条入口）
 > 共用同一判据，避免三处分叉。它比上式多管一件事：**`.kojo` 本身不投影**
 > （`isErbLike === false` 直接返回不可用——它就是糖源码，再投影一遍没有意义）。
 > 口径与本 ADR 一致，只是把"哪些文件算数"显式进了参数而非依赖 `editable` 反推。

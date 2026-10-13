@@ -16,11 +16,12 @@ Tauri 应用天然分两层：Rust 宿主 + WebView 前端。kernel 与插件（
 采用路线 3：
 
 - **内核与插件是纯 TS 库**，不 import 任何平台的 fs/path/进程 API，只依赖 `PlatformBridge` 接口；
-- **Tauri Rust 侧只实现 PlatformBridge 的原语命令**（读/写字节、目录遍历、编解码、对话框、应用数据目录、导出目录/导出单文件、写允许域注册）——「零游戏知识、零业务逻辑」在 Rust 侧同样是硬约束；
-  条数随契约增长（初稿 14 条，2026-10-13 实测 **18 个方法**，见 `plugin-api/src/platform.ts`），
+- **Tauri Rust 侧只实现 PlatformBridge 的原语命令**（读/写字节、目录遍历、编解码、对话框、应用数据目录、导出单文件、写允许域注册、目录监视）——「零游戏知识、零业务逻辑」在 Rust 侧同样是硬约束；
+  条数随契约**双向**变动（初稿 14 条；2026-10-13 一度 18 条，同日 `exportDirectory` 契约收缩后 **17 条**，见 `plugin-api/src/platform.ts`），
   **权威清单以该文件为准，不在本 ADR 里钉死数字**；
 - 编解码（编码探测后的字节转换）在两端各有一实现：Node（测试/CLI，WHATWG TextDecoder + iconv-lite）与 Rust（生产，encoding_rs）——接口同一份契约，行为以测试对齐；
-- 二进制数据跨 IPC 用 base64（确定性优先；口上文件体量下开销可忽略）；
+- 二进制跨 IPC 的运输层**按方向分开**：**读**已改成原始字节过界（`read_file_bytes_raw`，§5.91：12.5MB 快照读 4,147ms → 234ms），**写**仍是 base64（确定性优先，口上单文件体量下 33% 膨胀可忽略）。
+  原稿一刀切写"用 base64"，读路径上已被实测否证。
 - 原子写下沉到 bridge 层（临时文件 + rename），Node 与 Rust 各自实现。
 
 ## 后果
@@ -37,4 +38,5 @@ Tauri 应用天然分两层：Rust 宿主 + WebView 前端。kernel 与插件（
   运输层目前是内联实现，Worker 化仍是可选项而非欠账。
 - 文件监视（watchDirs）在 WebView 无法原生实现，v0.1 以"显式刷新"替代，后续接 Rust notify
   （**2026-10-13 已落地**：`start_watch`/`stop_watch` 原语 + 内核去抖，实施记录 IMPLEMENTATION-LOG §5.84）。
-- base64 有 33% 传输膨胀，对 sav 二进制（~MB 级）在 v1.0 评估切换到 `tauri::ipc::Response` 原始字节通道。
+- base64 有 33% 传输膨胀。**读方向已经做掉**（§5.91 切到 `tauri::ipc::Response` 原始字节，12.5MB 快照读
+  4,147ms → 234ms）；**写方向仍 base64**——存档注入写的字节量小，收益不抵改动风险，留作可选项而非欠账。
