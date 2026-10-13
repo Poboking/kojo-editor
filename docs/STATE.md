@@ -2,14 +2,14 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-14，E12 教程文本批 + 条件矩阵批 + E8 语法诊断批 合流后本机实测）
+## 一、基线（2026-10-14 清晨，E7 新建项目批（自选位置 + 脚手架案例）合流后本机实测）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2008 passed / 14 skipped（2022）**；114 文件过 / 8 跳（122） |
+| 全量测试 | **2053 passed / 14 skipped（2067）**；116 文件过 / 8 跳（124） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
-| Rust | `cargo test --lib` **18 项全绿**（改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
+| Rust | `cargo test --lib` **22 项全绿**（E7 写允许域批 +18→22；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
 | app build | ✓ 38.71s（§5.112 读数，此后未改构建面） |
 
 ⚠ skipped 跨主机不必相等：存档 / 语料在位与否会让 corpus 用例在 passed / skipped 间移动。
