@@ -20,7 +20,7 @@
  */
 
 import { createElement as h, useMemo, useState } from 'react';
-import type { ProjectService, WorkspaceService } from '@kojo/plugin-api';
+import type { CharaInfo, ProjectService, WorkspaceService } from '@kojo/plugin-api';
 import { CORE_FACES, scaffoldDirName, scaffoldKojoProject, sanitizeSegment } from './scaffold';
 import { LICENSE_CHOICES, licenseProducesFile, type LicenseKind } from './licenses';
 
@@ -45,6 +45,26 @@ export interface NewKojoProjectWizardDeps {
 
 /** 剧本号取值域（1-10） */
 const SCRIPT_NOS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+
+/**
+ * 「目标角色」下拉项文案（看板 HK-9）。
+ *
+ * eraTW 的 CHARA 表里 `Chara0.csv` 是 MASTER（名前=你），它**没有**个人口上目录，
+ * 于是"选了它 → 建得出包 → 部署时被拒"这条链会在最后一步才炸。
+ * 处置是**把代价说在选择的那一刻**，而不是把选项删掉：
+ * 没有口上目录的角色照样能写、能导出（手工放置是合法路径），
+ * 而且"某角色还没有目录"在新整合包里是常态（语料 168 张 CHARA 表 vs 155 个口上目录）。
+ */
+export function charaOptionLabel(c: CharaInfo): string {
+  return `#${c.no} ${c.name}${c.kojoDir ? '' : ' · 游戏里无个人口上目录'}`;
+}
+
+/** 选了无口上目录的角色时的后果说明；有目录或还没选角色 → null（不制造噪音） */
+export function noKojoDirWarning(c: CharaInfo | null): string | null {
+  if (!c || c.kojoDir) return null;
+  return `注意：#${c.no} ${c.name} 在游戏目录里没有个人口上目录。这个包照常书写、照常导出，`
+    + '但「部署到游戏目录」会被拒绝——部署需要该角色有自己的口上目录。';
+}
 
 /**
  * 从 `workspace.newProjectRequested` 事件载荷里取关联号（反馈 3 的第一拍）。
@@ -104,6 +124,7 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
     const dirNamePreview = chara && segmentsOk
       ? scaffoldDirName({ workName, charaName: chara.name, version })
       : '';
+    const kojoDirWarning = noKojoDirWarning(chara);
 
     const canCreate =
       !busy &&
@@ -187,8 +208,7 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
             setCharaNo(e.target.value === '' ? null : Number(e.target.value)),
         },
           h('option', { value: '' }, charas.length > 0 ? '选择角色…' : '（游戏项目无角色表）'),
-          charas.map((c) =>
-            h('option', { key: c.no, value: String(c.no) }, `#${c.no} ${c.name}`)))),
+          charas.map((c) => h('option', { key: c.no, value: String(c.no) }, charaOptionLabel(c)))),
 
       // 剧本号（1-10）
       h('label', { className: 'wizard-field' },
@@ -218,6 +238,8 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           dirNamePreview
             ? `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳（.kojo，糖与原生 ERB 都能写）${licenseProducesFile(license) ? ' + LICENSE' : ''}；不含四件套，也不含活函数`
             : '作品名 / 版本 / 角色名不得为空或仅含非法字符')),
+        // 后果提前说到选它的那一刻，而不是等作者点「部署」才吃一个拒绝（看板 HK-9）
+        kojoDirWarning ? h('div', { className: 'wizard-hint dim' }, kojoDirWarning) : null),
 
       error ? h('div', { className: 'wizard-error' }, error) : null,
 
