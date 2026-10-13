@@ -30,9 +30,20 @@
   --z-toolbar: 10;
   --z-overlay: 1000;
   --z-modal: 1100;
-  --fs-1: 12px;
-  --fs-2: 13px;
-  --fs-3: 14px;
+  /* 字号尺度（UI P4 · §5.121）：**实机渲染出 10 档字号、其中 4 档是半像素**
+     （10 / 11 / 11.5 / 12 / 12.5 / 13 / 14 / 16 / 17 / 26，12.5px 一项就摊到 193 个元素）。
+     半像素不是"更精细"，是各子系统各自微调出来的产物：`.rp-*`/`.ab-*`/`.inj-*` 整族 10.5px，
+     壳层自己的标签页 / 工具条却是 12.5px。CJK 字形在 10.5/11.5 上会被推到子像素网格，
+     看着发糊、行与行轻重不一——这正是"不耐看"的根因。
+     规矩：**只用这 6 档整数**，档位按角色命名不按组件；要新档先说清为什么现有 6 档不够。
+     （对齐现代编辑器：VSCode 的 UI 正文 13px、元信息 11px，同样只有少数几档。） */
+  --fs-0: 11px; /* 元信息：计数、徽章、副行路径、提示 */
+  --fs-1: 12px; /* 密集控件：树行、菜单、输入、工具条 */
+  --fs-2: 13px; /* 正文级 UI：标签页、面板标题、toast */
+  --fs-3: 14px; /* 强调正文：向导标题、picker 输入、#root 基准 */
+  --fs-4: 16px; /* 空态主句 / 大按钮 */
+  --fs-5: 18px; /* 模态标题 */
+  --fs-display: 26px; /* 欢迎页标题（唯一一处 display） */
   /* 动效 token（ui-polish）：统一节奏，改一处全局生效 */
   --dur-1: 120ms;
   --dur-2: 200ms;
@@ -58,7 +69,7 @@ body,
   height: 100%;
   background: var(--bg);
   color: var(--fg);
-  font-size: 14px;
+  font-size: var(--fs-3);
 }
 
 button {
@@ -99,12 +110,12 @@ button.ghost {
   background: transparent;
 }
 button.big {
-  font-size: 16px;
+  font-size: var(--fs-4);
   padding: 10px 28px;
 }
 button.small {
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   /* 全站小按钮实测高 23px，差 1px 就够不到 WCAG 2.5.8 的 24×24 最小目标；
      补 min-height 而不是改 padding——视觉密度几乎不变，可点区补齐。 */
   min-height: 24px;
@@ -112,7 +123,9 @@ button.small {
 button.link {
   background: none;
   border: none;
-  color: var(--accent);
+  /* 实机：`--accent` 当文字压在深底上只有 4.41:1（欢迎页「最近打开」那条路径就是它），
+     正文级需 4.5 ⇒ 链接式按钮走文字档 `--accent-text`（5.54:1）。 */
+  color: var(--accent-text);
   padding: 2px 0;
   text-align: left;
 }
@@ -121,7 +134,7 @@ code {
   background: rgba(255, 255, 255, 0.06);
   padding: 1px 5px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: var(--fs-1);
 }
 
 /* 全局弱化文本（各面板散用 .dim，此前无定义——补上唯一来源） */
@@ -203,11 +216,11 @@ textarea {
 }
 .welcome-card h1 {
   margin: 0;
-  font-size: 26px;
+  font-size: var(--fs-display);
 }
 .welcome-card h1 .ver {
   color: var(--fg-dim);
-  font-size: 14px;
+  font-size: var(--fs-3);
   font-weight: normal;
 }
 .tagline {
@@ -231,7 +244,7 @@ textarea {
 }
 .recent h3 {
   margin: 6px 0;
-  font-size: 13px;
+  font-size: var(--fs-2);
   color: var(--fg-dim);
 }
 .recent ul {
@@ -258,11 +271,11 @@ textarea {
 }
 .recent-adapter {
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--fs-1);
 }
 .hint {
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--fs-1);
   line-height: 1.7;
   border-top: 1px solid var(--border);
   padding-top: 12px;
@@ -325,7 +338,8 @@ textarea {
   background: var(--hover);
 }
 .toolbar-btn.on {
-  color: var(--accent);
+  /* 图标也是"文字"：`--accent` 压在深底上实测 3.74:1（◧/⬓ 这类布局切换键） */
+  color: var(--accent-text);
   background: rgba(76, 139, 245, 0.12);
 }
 .tb-icon {
@@ -350,7 +364,7 @@ textarea {
   border: none;
   background: transparent;
   color: var(--fg-dim);
-  font-size: 17px;
+  font-size: var(--fs-4);
   border-radius: var(--radius-1);
   padding: 0;
   position: relative;
@@ -551,7 +565,7 @@ textarea {
 }
 .panel h3 {
   margin: 2px 0 8px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--fg-dim);
@@ -593,7 +607,7 @@ textarea {
   background: rgba(209, 154, 102, 0.14);
   border-bottom: 1px solid var(--border);
   color: var(--amber);
-  font-size: 12.5px;
+  font-size: var(--fs-2);
 }
 .ro-banner span {
   flex: 1;
@@ -608,11 +622,11 @@ textarea {
 }
 .empty-state > p:first-child {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--fs-4);
   color: var(--fg);
 }
 .empty-state .dim {
-  font-size: 12px;
+  font-size: var(--fs-1);
   line-height: 1.8;
   margin: 4px 0 0;
 }
@@ -625,7 +639,7 @@ textarea {
 /* 快捷键提示做成 kbd 芯片 */
 .empty-actions .hint {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-0);
   margin-left: 6px;
   padding: 1px 5px;
   border: 1px solid var(--border);
@@ -658,7 +672,7 @@ textarea {
   gap: 6px;
   padding: 0 8px 0 12px;
   height: 34px;
-  font-size: 12.5px;
+  font-size: var(--fs-2);
   color: var(--fg-dim);
   border-right: 1px solid var(--border);
   cursor: pointer;
@@ -689,7 +703,7 @@ textarea {
 }
 .editor-tab .tab-dirty {
   color: var(--amber);
-  font-size: 10px;
+  font-size: var(--fs-0);
 }
 /* 关闭按钮平时隐去（活动标签除外），悬停浮出——标签条更安静 */
 .editor-tab .tab-close {
@@ -697,7 +711,7 @@ textarea {
   background: transparent;
   color: var(--fg-dim);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-2);
   line-height: 1;
   padding: 0 2px;
   /* 实测 17×17，够不到 24×24 最小可点区（关闭是会丢东西的动作，不该靠瞄准）。
@@ -766,7 +780,7 @@ textarea {
 /* 批量展开/收起的一句可读数（UI 反馈 6）。类名不叫 .tree-note——上游已把它用作「空目录」行。 */
 .tree-reveal-note {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .tree-groups {
   list-style: none;
@@ -802,7 +816,7 @@ textarea {
 }
 .group-count {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .tree-files {
   list-style: none;
@@ -818,7 +832,7 @@ textarea {
   border: none;
   background: transparent;
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--fs-1);
   padding: 2px 6px;
   text-align: left;
   border-radius: 4px;
@@ -950,7 +964,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--fs-2);
 }
 .tree-file:hover {
   background: var(--hover);
@@ -978,7 +992,7 @@ textarea {
   display: flex;
   gap: 8px;
   align-items: center;
-  font-size: 12.5px;
+  font-size: var(--fs-2);
   flex-wrap: wrap;
 }
 .plugin-dot {
@@ -997,7 +1011,7 @@ textarea {
 .plugin-error {
   flex-basis: 100%;
   color: var(--red);
-  font-size: 11.5px;
+  font-size: var(--fs-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1018,10 +1032,10 @@ textarea {
 }
 .conv-count {
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: var(--fs-2);
 }
 .conv-meta {
-  font-size: 11.5px;
+  font-size: var(--fs-1);
 }
 .conv-toolbar {
   display: flex;
@@ -1036,18 +1050,18 @@ textarea {
 }
 .conv-failed-head {
   color: var(--red);
-  font-size: 12px;
+  font-size: var(--fs-1);
   margin-bottom: 4px;
 }
 .conv-failed-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 11.5px;
+  font-size: var(--fs-1);
   color: var(--fg-dim);
 }
 .conv-empty {
-  font-size: 12px;
+  font-size: var(--fs-1);
   padding: 4px 0;
 }
 .conv-groups {
@@ -1075,14 +1089,14 @@ textarea {
 .conv-rule-id {
   flex: 1;
   font-family: Consolas, 'Cascadia Mono', monospace;
-  font-size: 12px;
+  font-size: var(--fs-1);
 }
 .conv-group-count {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .conv-rule-desc {
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 0 0 4px 18px;
   line-height: 1.5;
 }
@@ -1104,7 +1118,7 @@ textarea {
   padding: 2px 4px;
   text-align: left;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: var(--fs-1);
 }
 .conv-issue-btn:hover {
   background: rgba(255, 255, 255, 0.06);
@@ -1118,7 +1132,7 @@ textarea {
 }
 .conv-issue-loc {
   font-family: Consolas, 'Cascadia Mono', monospace;
-  font-size: 11px;
+  font-size: var(--fs-0);
   flex: none;
   max-width: 40%;
   overflow: hidden;
@@ -1135,7 +1149,7 @@ textarea {
   padding: 4px 0 2px;
 }
 .conv-legend {
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 
 /* ------------------------------ editor ------------------------------ */
@@ -1163,7 +1177,7 @@ textarea {
   align-items: baseline;
   gap: 6px;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-2);
   max-width: 46vw;
 }
 .file-dir {
@@ -1192,7 +1206,7 @@ textarea {
 }
 .editor-status {
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--fs-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1271,7 +1285,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 /* 糖视图摘要：给一个"这份文件读到了多少"的量感，不抢视线 */
 .sugar-stats {
-  font-size: 11px;
+  font-size: var(--fs-0);
   white-space: nowrap;
 }
 
@@ -1298,7 +1312,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .modal h2 {
   margin: 0 0 10px;
-  font-size: 18px;
+  font-size: var(--fs-5);
 }
 .modal .paths {
   margin: 8px 0;
@@ -1310,7 +1324,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .modal .dim {
   color: var(--fg-dim);
-  font-size: 12.5px;
+  font-size: var(--fs-2);
   line-height: 1.7;
 }
 .modal-actions {
@@ -1342,7 +1356,7 @@ button.erb-mode-hint.unlocked:hover {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-2);
 }
 .nav-search {
   flex: 1;
@@ -1352,14 +1366,14 @@ button.erb-mode-hint.unlocked:hover {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 8px;
-  font-size: 12.5px;
+  font-size: var(--fs-2);
 }
 .nav-status {
-  font-size: 11.5px;
+  font-size: var(--fs-1);
 }
 .nav-empty {
   padding: 12px 4px;
-  font-size: 12.5px;
+  font-size: var(--fs-2);
 }
 .nav-tree,
 .nav-hits {
@@ -1383,7 +1397,7 @@ button.erb-mode-hint.unlocked:hover {
   border: none;
   color: var(--fg);
   padding: 3px 4px;
-  font-size: 12.5px;
+  font-size: var(--fs-2);
   cursor: pointer;
   text-align: left;
   border-radius: 4px;
@@ -1394,13 +1408,13 @@ button.erb-mode-hint.unlocked:hover {
 }
 .nav-face-btn {
   padding-left: 20px;
-  font-size: 12px;
+  font-size: var(--fs-1);
 }
 .nav-family-name {
   font-weight: 600;
 }
 .nav-count {
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .nav-funcs {
   list-style: none;
@@ -1419,7 +1433,7 @@ button.erb-mode-hint.unlocked:hover {
   border: none;
   color: var(--fg);
   padding: 2px 4px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   font-family: var(--font-mono, monospace);
   cursor: pointer;
   text-align: left;
@@ -1436,7 +1450,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .nav-badge {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--fs-0);
   font-family: var(--font-sans, sans-serif);
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -1469,7 +1483,7 @@ button.erb-mode-hint.unlocked:hover {
   background: var(--bg-3, rgba(127, 127, 127, 0.12));
 }
 .nav-more {
-  font-size: 11.5px;
+  font-size: var(--fs-1);
   padding: 2px 4px;
 }
 .nav-hit-list {
@@ -1489,7 +1503,7 @@ button.erb-mode-hint.unlocked:hover {
   border: none;
   color: var(--fg);
   padding: 3px 4px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   cursor: pointer;
   text-align: left;
   border-radius: 4px;
@@ -1505,7 +1519,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .nav-hit-loc {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 
 /* ============================ 状态回放面板（rp-*，v0.2 第八批） ============================ */
@@ -1514,7 +1528,7 @@ button.erb-mode-hint.unlocked:hover {
   flex-direction: column;
   gap: 6px;
   padding: 8px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
 }
@@ -1527,21 +1541,21 @@ button.erb-mode-hint.unlocked:hover {
 .rp-select {
   flex: 1 1 140px;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--fs-1);
   padding: 3px 4px;
 }
 .rp-fn-input {
   flex: 2 1 200px;
   min-width: 0;
   font-family: var(--font-mono, monospace);
-  font-size: 11.5px;
+  font-size: var(--fs-1);
   padding: 3px 5px;
 }
 .rp-context-input {
   flex: 1 1 130px;
   min-width: 0;
   font-family: var(--font-mono, monospace);
-  font-size: 11.5px;
+  font-size: var(--fs-1);
   padding: 3px 5px;
 }
 .rp-status {
@@ -1557,7 +1571,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .rp-hint {
   padding: 0 2px;
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .rp-suggests {
   list-style: none;
@@ -1576,7 +1590,7 @@ button.erb-mode-hint.unlocked:hover {
   border: none;
   color: var(--fg);
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 2px 6px;
   cursor: pointer;
 }
@@ -1598,7 +1612,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .rp-badge {
   display: inline-block;
-  font-size: 10px;
+  font-size: var(--fs-0);
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 0 4px;
@@ -1630,14 +1644,14 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--fg-dim);
 }
 .rp-meta {
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .rp-unknowns {
   display: flex;
   gap: 4px;
   align-items: center;
   flex-wrap: wrap;
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .rp-preds {
   list-style: none;
@@ -1655,7 +1669,7 @@ button.erb-mode-hint.unlocked:hover {
   background: none;
   border: none;
   color: var(--fg);
-  font-size: 11.5px;
+  font-size: var(--fs-1);
   padding: 2px 4px;
   cursor: pointer;
   text-align: left;
@@ -1666,7 +1680,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .rp-kind {
   flex: 0 0 auto;
-  font-size: 9.5px;
+  font-size: var(--fs-0);
   color: var(--fg-dim);
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -1694,14 +1708,14 @@ button.erb-mode-hint.unlocked:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .rp-line {
   flex: 0 0 auto;
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .rp-more {
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 2px 4px;
 }
 
@@ -1715,14 +1729,14 @@ button.erb-mode-hint.unlocked:hover {
   padding: 4px 2px;
 }
 .rp-branches-head {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   padding: 0 4px 2px;
 }
 .rp-branch-row {
   display: flex;
   gap: 5px;
   align-items: baseline;
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .rp-branch-mark {
   flex: 0 0 auto;
@@ -1747,7 +1761,7 @@ button.erb-mode-hint.unlocked:hover {
   background: none;
   border: none;
   color: var(--fg);
-  font-size: 11px;
+  font-size: var(--fs-0);
   font-family: var(--font-mono, monospace);
   cursor: pointer;
   text-align: left;
@@ -1766,7 +1780,7 @@ button.erb-mode-hint.unlocked:hover {
   opacity: 0.45;
 }
 .rp-branch-taken {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 
 /* 协议场景参数输入区（v0.2 第十批） */
@@ -1775,7 +1789,7 @@ button.erb-mode-hint.unlocked:hover {
   gap: 6px;
   align-items: center;
   flex-wrap: wrap;
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .rp-slots-head {
   font-weight: 600;
@@ -1787,16 +1801,16 @@ button.erb-mode-hint.unlocked:hover {
 }
 .rp-slot-idx {
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .rp-slot-input {
   width: 64px;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 2px 4px;
 }
 .rp-slot-hint {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 
 /* ========================== 归档浏览器面板（ab-*，v0.2 第十三批） ========================== */
@@ -1805,7 +1819,7 @@ button.erb-mode-hint.unlocked:hover {
   flex-direction: column;
   gap: 6px;
   padding: 8px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
 }
@@ -1853,7 +1867,7 @@ button.erb-mode-hint.unlocked:hover {
   background: none;
   border: none;
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--fs-1);
   padding: 3px 5px;
   cursor: pointer;
   border-radius: 3px;
@@ -1874,16 +1888,16 @@ button.erb-mode-hint.unlocked:hover {
 }
 .ab-file {
   font-family: var(--font-mono, monospace);
-  font-size: 11.5px;
+  font-size: var(--fs-1);
   font-weight: 600;
 }
 .ab-count,
 .ab-size,
 .ab-mtime {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .ab-mes {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   padding-left: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1901,20 +1915,20 @@ button.erb-mode-hint.unlocked:hover {
   flex-wrap: wrap;
 }
 .ab-badge {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 0 4px;
 }
 .ab-more {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .ab-failed-head {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   padding: 2px 2px 1px;
 }
 .ab-hint {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   padding: 0 2px;
 }
 
@@ -1938,19 +1952,19 @@ button.erb-mode-hint.unlocked:hover {
 .inj-empty,
 .inj-hint,
 .inj-more {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   padding: 2px;
 }
 .inj-error {
   color: var(--danger, #d05a5a);
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 3px 2px;
   white-space: pre-wrap;
   word-break: break-all;
 }
 .inj-warn {
   color: var(--warning, #c9a03c);
-  font-size: 10px;
+  font-size: var(--fs-0);
 }
 .inj-body {
   display: flex;
@@ -1988,7 +2002,7 @@ button.erb-mode-hint.unlocked:hover {
   color: inherit;
   text-align: left;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--fs-0);
   border-radius: 3px;
 }
 .inj-var-row:hover {
@@ -2006,14 +2020,14 @@ button.erb-mode-hint.unlocked:hover {
   font-weight: 600;
 }
 .inj-var-label {
-  font-size: 10px;
+  font-size: var(--fs-0);
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 0 3px;
   opacity: 0.85;
 }
 .inj-var-preview {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2031,7 +2045,7 @@ button.erb-mode-hint.unlocked:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-1);
 }
 .inj-editor-row {
   display: flex;
@@ -2053,7 +2067,7 @@ button.erb-mode-hint.unlocked:hover {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .inj-cell-index {
   font-family: var(--font-mono, monospace);
@@ -2090,14 +2104,14 @@ button.erb-mode-hint.unlocked:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 11.5px;
+  font-size: var(--fs-1);
   font-weight: 600;
 }
 .inj-diff-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 1px 0;
 }
 .inj-diff-where {
@@ -2132,7 +2146,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .inj-result {
   color: var(--success, #4e9a5c);
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 3px 2px;
   word-break: break-all;
 }
@@ -2143,7 +2157,7 @@ button.erb-mode-hint.unlocked:hover {
   flex-direction: column;
   gap: 8px;
   padding: 8px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
 }
@@ -2161,12 +2175,12 @@ button.erb-mode-hint.unlocked:hover {
 }
 .pv-empty,
 .pv-hint {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   padding: 2px;
 }
 .pv-error {
   color: var(--danger, #d05a5a);
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 3px 2px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -2188,7 +2202,7 @@ button.erb-mode-hint.unlocked:hover {
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 0 4px;
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .pv-chip.bad {
   border-color: var(--danger, #d05a5a);
@@ -2210,7 +2224,7 @@ button.erb-mode-hint.unlocked:hover {
   gap: 2px;
 }
 .pv-section-head {
-  font-size: 11px;
+  font-size: var(--fs-0);
   font-weight: 600;
   padding: 2px 0;
   border-bottom: 1px solid var(--border);
@@ -2219,7 +2233,7 @@ button.erb-mode-hint.unlocked:hover {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 2px 4px;
   border-radius: 3px;
   cursor: pointer;
@@ -2240,7 +2254,7 @@ button.erb-mode-hint.unlocked:hover {
 .pv-diag-loc {
   flex: 0 0 auto;
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .pv-diag-msg {
   flex: 1;
@@ -2271,13 +2285,13 @@ button.erb-mode-hint.unlocked:hover {
   min-width: 28px;
   text-align: right;
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .pv-src {
   flex: 1;
   min-width: 0;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-0);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: pre;
@@ -2285,7 +2299,7 @@ button.erb-mode-hint.unlocked:hover {
 .pv-fw {
   flex: 0 0 auto;
   color: var(--warning, #c9a03c);
-  font-size: 10px;
+  font-size: var(--fs-0);
   border: 1px solid var(--warning, #c9a03c);
   border-radius: 3px;
   padding: 0 3px;
@@ -2293,11 +2307,11 @@ button.erb-mode-hint.unlocked:hover {
 .pv-gen {
   flex: 0 0 auto;
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .pv-reach {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--fs-0);
   border-radius: 3px;
   padding: 0 3px;
   border: 1px solid var(--border);
@@ -2321,7 +2335,7 @@ button.erb-mode-hint.unlocked:hover {
   flex-direction: column;
   gap: 8px;
   padding: 8px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
 }
@@ -2337,12 +2351,12 @@ button.erb-mode-hint.unlocked:hover {
 }
 .sv-empty,
 .sv-hint {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   padding: 2px;
 }
 .sv-error {
   color: var(--danger, #d05a5a);
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 3px 2px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -2385,7 +2399,7 @@ button.erb-mode-hint.unlocked:hover {
 .sv-counts {
   display: flex;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .sv-count.err {
   color: var(--danger, #d05a5a);
@@ -2397,7 +2411,7 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--fg-dim);
 }
 .sv-meta {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .sv-list {
   display: flex;
@@ -2418,7 +2432,7 @@ button.erb-mode-hint.unlocked:hover {
 .sv-sev {
   flex: 0 0 auto;
   font-weight: 600;
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .sv-row.error .sv-sev {
   color: var(--danger, #d05a5a);
@@ -2433,12 +2447,12 @@ button.erb-mode-hint.unlocked:hover {
   flex: 0 0 auto;
   min-width: 48px;
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .sv-code {
   flex: 0 0 auto;
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .sv-msg {
   flex: 1;
@@ -2452,7 +2466,7 @@ button.erb-mode-hint.unlocked:hover {
   flex-direction: column;
   gap: 8px;
   padding: 8px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
 }
@@ -2482,18 +2496,18 @@ button.erb-mode-hint.unlocked:hover {
   flex: 0 0 auto;
   min-width: 52px;
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .lift-kind {
   flex: 0 0 auto;
   font-weight: 600;
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .lift-sugar {
   flex: 1;
   min-width: 0;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-0);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2501,7 +2515,7 @@ button.erb-mode-hint.unlocked:hover {
 .lift-warn {
   flex: 0 0 auto;
   color: var(--amber);
-  font-size: 10px;
+  font-size: var(--fs-0);
   border: 1px solid var(--amber);
   border-radius: 3px;
   padding: 0 3px;
@@ -2509,12 +2523,12 @@ button.erb-mode-hint.unlocked:hover {
 .lift-empty,
 .lift-more,
 .lift-hint {
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   padding: 2px;
 }
 .lift-error {
   color: var(--red);
-  font-size: 11px;
+  font-size: var(--fs-0);
   padding: 3px 2px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -2537,12 +2551,12 @@ button.erb-mode-hint.unlocked:hover {
   gap: 6px;
 }
 .lift-coverage {
-  font-size: 13px;
+  font-size: var(--fs-2);
   font-weight: 600;
   color: var(--fg);
 }
 .lift-breakdown {
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .lift-reasons {
   display: flex;
@@ -2551,7 +2565,7 @@ button.erb-mode-hint.unlocked:hover {
   margin-top: 2px;
 }
 .lift-reasons-head {
-  font-size: 11px;
+  font-size: var(--fs-0);
   font-weight: 600;
   border-bottom: 1px solid var(--border);
   padding-bottom: 2px;
@@ -2577,7 +2591,7 @@ button.erb-mode-hint.unlocked:hover {
 .lift-reason-count {
   flex: 0 0 auto;
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: var(--fs-0);
 }
 .lift-skips {
   display: flex;
@@ -2585,7 +2599,7 @@ button.erb-mode-hint.unlocked:hover {
   gap: 1px;
 }
 .lift-skips-head {
-  font-size: 11px;
+  font-size: var(--fs-0);
   font-weight: 600;
   border-bottom: 1px solid var(--border);
   padding: 2px 0;
@@ -2595,7 +2609,7 @@ button.erb-mode-hint.unlocked:hover {
   align-items: baseline;
   gap: 6px;
   padding: 1px 4px;
-  font-size: 11px;
+  font-size: var(--fs-0);
 }
 .lift-skip-reason {
   flex: 0 0 auto;
@@ -2612,7 +2626,7 @@ button.erb-mode-hint.unlocked:hover {
   background: var(--bg-3);
   border-left: 3px solid var(--accent);
   padding: 2px 8px 2px 10px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   color: var(--fg);
   overflow: hidden;
 }
@@ -2622,7 +2636,7 @@ button.erb-mode-hint.unlocked:hover {
   justify-content: space-between;
   gap: 8px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--fs-0);
   line-height: 1.5;
 }
 .lift-preview-close {
@@ -2631,7 +2645,7 @@ button.erb-mode-hint.unlocked:hover {
   border: 1px solid var(--border);
   border-radius: 3px;
   color: var(--fg-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   padding: 0 6px;
   cursor: pointer;
 }
@@ -2648,7 +2662,7 @@ button.erb-mode-hint.unlocked:hover {
   display: inline-block;
   margin: 1px 0 0;
   padding: 0 6px;
-  font-size: 10.5px;
+  font-size: var(--fs-0);
   font-family: inherit;
   color: var(--fg-dim);
   background: transparent;
@@ -2669,7 +2683,7 @@ button.erb-mode-hint.unlocked:hover {
 .lift-preview-sugar {
   margin: 2px 0 0;
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--fs-1);
   line-height: 1.5;
   white-space: pre;
   color: var(--green);
@@ -2688,7 +2702,7 @@ button.erb-mode-hint.unlocked:hover {
   background: var(--bg-3);
   border-left: 3px solid var(--accent);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-2);
   /* 行高由宿主按编辑器实测值落进 `--sugar-lh`（见 EditorPane 的 ViewZone 创建）：
      ViewZone 盒子高 = heightInLines × 编辑器行高，区内每行必须同高，否则长段尾部被裁。
      兜底的 `1.6` 只在量不到时使用。 */
@@ -2713,7 +2727,7 @@ button.erb-mode-hint.unlocked:hover {
   min-height: 24px;
   background: var(--bg-2);
   border-top: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--fs-1);
 }
 .sb-left,
 .sb-right {
@@ -2753,7 +2767,7 @@ button.erb-mode-hint.unlocked:hover {
   background: transparent;
   padding: 0 10px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--fs-0);
   line-height: 18px;
 }
 .sb-writable.ok {
@@ -2892,7 +2906,7 @@ button.erb-mode-hint.unlocked:hover {
 .picker-hint {
   flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-0);
   padding: 1px 5px;
   border: 1px solid var(--border);
   border-bottom-width: 2px;
@@ -3147,7 +3161,7 @@ button.primary .hint {
   border-radius: 8px;
   padding: 10px 12px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-  font-size: 13px;
+  font-size: var(--fs-2);
   animation: toast-in var(--dur-2) var(--ease-out);
   transition: box-shadow var(--dur-1) var(--ease-out);
 }
@@ -3166,7 +3180,7 @@ button.primary .hint {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-size: 11px;
+  font-size: var(--fs-0);
   font-weight: 700;
   font-style: normal;
   line-height: 1;
@@ -3370,6 +3384,9 @@ button.primary .hint {
   line-height: 1.6;
   border-radius: 4px;
   background: var(--bg-3);
+  /* 实测量到 39×22：包行上的「导出 / 部署」比 24×24 最小可点区矮 2px。
+     补齐 min-height，不改字号（字号刚归一到 --fs-1）。 */
+  min-height: 24px;
 }
 /* 包事实行（T2 署名 + 目标角色/剧本号）：只在包展开态出现，一行摘要。
    中性色 + 左边细线，与提示条同族但更轻——它是补充信息，不该抢树的主体。
