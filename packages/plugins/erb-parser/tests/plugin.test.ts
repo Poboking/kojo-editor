@@ -4,8 +4,10 @@ import { createErbParserPlugin } from '../src/plugin';
 import { makeComputeStub } from './support';
 
 /** 伪 FileIO：只用得到 readText / walkDir / stat */
-function fakeIO(files: Record<string, string>): FileIO {
+function fakeIO(files: Record<string, string>, isWritable?: (path: string) => boolean): FileIO {
   return {
+    // 缺省 = 一律可写（本包绝大多数用例不关心写权限；💡 修复那条用例显式传 false）
+    ...(isWritable ? { isWritable } : {}),
     async readText(path: string) {
       const text = files[path];
       if (text === undefined) throw new Error(`not found: ${path}`);
@@ -61,9 +63,16 @@ interface RegisteredSlot {
   kind: string;
   contribution: {
     id: string;
-    title: string;
+    title?: string;
     order?: number;
     decorate?: (f: { path: string; text: string; project: GameProject | null }) => unknown[];
+    provideActions?: (f: {
+      path: string;
+      text: string;
+      project: GameProject | null;
+      lineCount?: number;
+      line?: number;
+    }) => Array<{ title: string; kind?: string; edits?: Array<{ fromLine: number; toLine: number; newText: string }> }>;
   };
 }
 
@@ -72,7 +81,7 @@ function activatePlugin(io: FileIO): {
   services: Map<string, unknown>;
   logs: string[];
   bus: EventBus;
-  /** 捕获到的槽位贡献（本包目前只有 ui.editor.decorator 一个） */
+  /** 捕获到的槽位贡献（本包有两个：ui.editor.decorator 与 ui.editor.codeAction） */
   slots: RegisteredSlot[];
   emit: (type: string, payload: unknown) => void;
   dispose: () => void;
@@ -311,5 +320,59 @@ describe('erb-parser 插件 · ui.editor.decorator（ERB 结构波浪线）', ()
     const svc = services.get('erb.parser') as ErbParserService;
     expect(typeof svc.checkStructure).toBe('function');
     expect(svc.checkStructure!(broken).map((i) => i.kind)).toEqual(['unclosed-open']);
+  });
+});
+
+/* ============ 💡 一键补齐缺失的闭合语句（2026-10-13 反馈 7 第二步） ============ */
+
+/**
+ * 这里钉的是**接线与门槛**：注册进哪个槽、可写性怎么挡、光标行怎么筛。
+ * "补上去对不对"由 `structure-fix.test.ts` 的闭环用例负责（补完复检为零）。
+ */
+describe('erb-parser 插件 · ui.editor.codeAction（结构修复动作）', () => {
+  const broken = ['@AEGI', 'IF LOCAL', '\tPRINTL 甲'].join('\n');
+  const erb = 'C:/ws/包/事件.ERB';
+
+  function actions(writable: boolean, path = erb, text = broken, line?: number): unknown[] {
+    const { slots } = activatePlugin(fakeIO({}, () => writable));
+    const found = slots.find((s) => s.kind === 'ui.editor.codeAction')?.contribution;
+    if (!found?.provideActions) return [];
+    return found.provideActions({ path, text, project: null, lineCount: 3, ...(line === undefined ? {} : { line }) });
+  }
+
+  it('注册进 ui.editor.codeAction，id 与波浪线那条同族', () => {
+    const { slots } = activatePlugin(fakeIO({}));
+    const found = slots.find((s) => s.kind === 'ui.editor.codeAction')?.contribution;
+    expect(found?.id).toBe('erb-structure-fix');
+    expect(found!.provideActions).toBeTypeOf('function');
+  });
+
+  it('可写路径 + 光标在开块行 ⇒ 给一个 quickfix，edits 落在末行', () => {
+    const out = actions(true, erb, broken, 2) as Array<{ title: string; kind?: string; edits?: unknown[] }>;
+    expect(out).toHaveLength(1);
+    expect(out[0]!.kind).toBe('quickfix');
+    expect(out[0]!.title).toContain('ENDIF');
+    expect(out[0]!.edits).toEqual([{ fromLine: 3, toLine: 3, newText: '\tPRINTL 甲\nENDIF' }]);
+  });
+
+  it('不可写（游戏目录里未授权的 ERB）一律不给动作：只读文件不该被 💡 改脏', () => {
+    expect(actions(false, erb, broken, 2)).toEqual([]);
+  });
+
+  it('`.kojo` 与空文本不参与（糖线的 💡 另有其人，两处各报一边会打架）', () => {
+    expect(actions(true, 'C:/ws/包/事件.kojo', broken, 2)).toEqual([]);
+    expect(actions(true, erb, '', 1)).toEqual([]);
+  });
+
+  it('光标不在波浪线那一行 ⇒ 不给（💡 要出现在作者正看着的地方）', () => {
+    expect(actions(true, erb, broken, 3)).toEqual([]);
+  });
+
+  it('没有 `line`（位置未知的旧宿主）⇒ 不猜，一律不给动作', () => {
+    expect(actions(true, erb, broken)).toEqual([]);
+  });
+
+  it('配平文本零动作（好的文件不该看见💡 里冒出"补 ENDIF"）', () => {
+    expect(actions(true, erb, ['@A', 'IF X', 'PRINT Y', 'ENDIF'].join('\n'), 2)).toEqual([]);
   });
 });

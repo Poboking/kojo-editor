@@ -134,6 +134,21 @@ export interface ErbStructureIssue {
   readonly statement: string;
   /** 给作者看的中文一句话（说清缺谁、在哪儿，不复述引擎术语） */
   readonly message: string;
+  /**
+   * 缺失的闭合语句原词（`ENDIF` / `ENDSELECT` …）。**只有 `unclosed-open` 才给**，
+   * 且配对表说不出闭合词时也不给（`''` 的情形一律省略）。additive：缺省 = 现状。
+   */
+  readonly closer?: string;
+  /**
+   * 建议插入点：**在这一行之前**插入 `closer`（1 基）。大于文件行数 = 追加到文件末尾。
+   *
+   * 为什么只有未闭合类有插入点，而孤儿闭合/无主分支没有：**修法不对称**。
+   * 少写一个 `ENDIF` 是"这一层在本函数内一定没关"，补在函数边界之前语义确定；
+   * 而多写一条 `ENDIF` 也可能是**我们把函数边界漏判了**（漏判是安全方向，见
+   * `erb-parser/structure.ts` 的 `isFunctionBoundary`），据同一条证据去删用户的行
+   * 就是拿不确定的推断改文件——所以那两类只报位置，不给动作。
+   */
+  readonly fixBeforeLine?: number;
 }
 
 /** 项目级函数索引（重名函数保留全部定义，由消费方判定） */

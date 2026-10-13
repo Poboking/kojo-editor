@@ -14,6 +14,7 @@ import { KernelServices, projectFingerprintOf } from '@kojo/plugin-api';
 import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload, type ScanFlowPayload } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
+import { buildStructureFixes } from './structure-fix';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
@@ -359,6 +360,39 @@ export function createErbParserPlugin(): Plugin {
             severity: 'error' as const,
             message: issue.message,
             code: `erb.${issue.kind}`,
+          }));
+        },
+      });
+
+      /* ---------------- 💡 一键补齐缺失的闭合语句（2026-10-13 反馈 7 的第二步） ----------------
+
+       波浪线说"少一个 ENDIF"，但**补在哪一行**对新手是更难的一半：补在 `IF` 紧后面与补在
+       函数末尾都编译得过，语义却完全不同。本动作给出体检器判定的那个保守位置（这一层确定
+       没关的地方），落地走宿主既有的 `EditorTextEdit` 通道 = 一次可撤销的 model 编辑，
+       **不碰磁盘**（保存仍由用户 Ctrl+S 决定）。
+
+       门槛两条，都是"不确定就不给动作"：
+       - 只对**能写**的路径供（`io.isWritable`）：游戏目录里的 ERB 默认只读，Monaco 的
+         `executeEdits` 却照样能改缓冲区 ⇒ 不挡就会造出一个"只读文件被改脏"的怪状态。
+         轴二解锁那一份也拿不到动作（插件看不见宿主的会话解锁态），这是刻意的保守。
+       - 只对 `unclosed-open` 供：孤儿闭合 / 无主分支也可能是"我们把函数边界漏判了"，
+         据一条不确定的推断去删用户写好的行不做（见 `structure-fix.ts` 头注）。
+       */
+      ctx.slots.register('ui.editor.codeAction', {
+        id: 'erb-structure-fix',
+        order: 30,
+        provideActions: ({ path, text, line }) => {
+          if (!ERB_EXT.test(path) || text.length === 0) return [];
+          // 位置未知就不猜：本包的动作**天生按行**（波浪线在哪行，💡 就在哪行给），
+          // 少了这个约束会把几十条动作灌进同一个菜单。
+          if (line === undefined) return [];
+          if (!io.isWritable(path)) return [];
+          return buildStructureFixes(text, line).map((fix) => ({
+            title: fix.title,
+            kind: 'quickfix' as const,
+            edits: fix.edits,
+            // 有 `edits` 时宿主不调 `run`；仍给以满足契约（并在无改写通道的宿主下无害退化）
+            run: () => undefined,
           }));
         },
       });

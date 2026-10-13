@@ -213,3 +213,30 @@ describe('checkControlFlowStructure · 边界与上限', () => {
     }
   });
 });
+
+describe('checkControlFlowStructure · 修复入口只给得起证据的那一类', () => {
+  it('未闭合：带得上闭合词与建议插入行（💡 一键补齐的输入）', () => {
+    const issues = checkControlFlowStructure(L('@AEGI', 'IF LOCAL', 'PRINT A'));
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ kind: 'unclosed-open', line: 2, closer: 'ENDIF', fixBeforeLine: 4 });
+  });
+
+  it('走到下一个函数才收口：插入点就是那条函数边界，不是文件末尾', () => {
+    const issues = checkControlFlowStructure(L('@A', 'IF X', 'PRINT Y', '@B', 'PRINT Z'));
+    expect(issues.map((i) => [i.line, i.closer, i.fixBeforeLine])).toEqual([[2, 'ENDIF', 4]]);
+  });
+
+  it('被外层闭合吞掉：插入点是那条吞它的语句，不是文件末尾', () => {
+    const issues = checkControlFlowStructure(L('@A', 'IF X', 'REPEAT Y', 'ENDIF', 'PRINT Z'));
+    expect(issues.map((i) => [i.line, i.closer, i.fixBeforeLine])).toEqual([[3, 'REND', 4]]);
+  });
+
+  it('孤儿闭合与无主分支**不带**修复字段（删行是不确定的推断，不给动作）', () => {
+    for (const text of [L('@A', 'PRINT X', 'ENDIF'), L('@A', 'PRINT X', 'ELSE')]) {
+      const issues = checkControlFlowStructure(text);
+      expect(issues).toHaveLength(1);
+      expect(issues[0]!.closer).toBeUndefined();
+      expect(issues[0]!.fixBeforeLine).toBeUndefined();
+    }
+  });
+});

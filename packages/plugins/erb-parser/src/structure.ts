@@ -87,9 +87,15 @@ function findPair(stack: readonly OpenBlock[], pair: string): number {
 export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
   const issues: ErbStructureIssue[] = [];
   let stack: OpenBlock[] = [];
+  /** 行尾多空行也算一行：追加点要指着"最后一行之后"，与 walker 用同一种归一 */
+  const lastLine = text.replace(/\r\n?/g, '\n').split('\n').length;
 
-  /** 栈里剩下的开块 = 到这里还没闭合；`swallowedBy` 给出"是被谁提前收尾的"上下文 */
-  const flushOpen = (blocks: readonly OpenBlock[], swallowedBy?: string): void => {
+  /**
+   * 栈里剩下的开块 = 到这里还没闭合。
+   * `swallowedBy` 给出"是被谁提前收尾的"上下文；`fixBefore` 是建议插入闭合词的位置
+   * （函数边界那一行 / 吞掉它的那条闭合语句之前 / 文件末尾之后）。
+   */
+  const flushOpen = (blocks: readonly OpenBlock[], fixBefore: number, swallowedBy?: string): void => {
     for (const b of blocks) {
       if (issues.length >= MAX_STRUCTURE_ISSUES) return;
       const closer = closerNameForPair(b.pair);
@@ -99,7 +105,13 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
           : swallowedBy === undefined
             ? `${b.kind}（第 ${b.line} 行）到这里还没有闭合，缺 ${closer}。`
             : `${b.kind}（第 ${b.line} 行）还没闭合，就先被 ${swallowedBy} 收尾了——少一个 ${closer}。`;
-      issues.push({ kind: 'unclosed-open', line: b.line, statement: b.kind, message });
+      issues.push({
+        kind: 'unclosed-open',
+        line: b.line,
+        statement: b.kind,
+        message,
+        ...(closer === '' ? {} : { closer, fixBeforeLine: fixBefore }),
+      });
     }
   };
 
@@ -107,7 +119,7 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
     if (boundary) {
       // 只有 `@` 是新函数的开始：上一个函数体若还开着块，那是确凿的未闭合
       if (isFunctionBoundary(raw)) {
-        flushOpen(stack);
+        flushOpen(stack, line);
         stack = [];
       }
       return;
@@ -153,10 +165,10 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
       return;
     }
     // 找到配对：中间那些更深的层没被闭合就被吞掉了（IF → REPEAT → ENDIF 那种形状）
-    flushOpen(stack.slice(found + 1), statement.kind);
+    flushOpen(stack.slice(found + 1), line, statement.kind);
     stack = stack.slice(0, found);
   });
 
-  flushOpen(stack);
+  flushOpen(stack, lastLine + 1);
   return issues;
 }

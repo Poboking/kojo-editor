@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { MAX_STRUCTURE_ISSUES, checkControlFlowStructure } from '../src/structure';
+import { applyStructureFix, buildStructureFixes } from '../src/structure-fix';
 
 const SMOKE = process.env.KOJO_SMOKE_PROJECT;
 
@@ -94,5 +95,23 @@ describe.skipIf(!SMOKE)('ERB 结构体检 · 真实语料基线', () => {
     // 上限守门：整文件崩坏时不得刷出无封顶的报告
     const storm = checkControlFlowStructure(Array.from({ length: 400 }, () => 'IF A').join('\n'));
     expect(storm).toHaveLength(MAX_STRUCTURE_ISSUES);
-  }, 120000);
+
+    // 💡 修复的**真实代码闭环**（2026-10-13 反馈 7 第二步）：在刚被删掉一条 ENDIF 的真文件上
+    // 取修复动作、落下、复检 ⇒ 必须回到零报告。判据在合成样本上"补得对"不算数
+    // （structure-fix.test.ts 已钉），这里要的是**真实缩进 / CRLF / 嵌套深度**下也补得对。
+    const fix = buildStructureFixes(broken, after[0]!.line)[0]!;
+    expect(fix.edits.length, '修复应恰好一条编辑').toBe(1);
+    expect(fix.title).toContain('ENDIF');
+    const repaired = applyStructureFix(broken, fix);
+    expect(checkControlFlowStructure(repaired), '补完之后复检应为空').toEqual([]);
+    // 补完应**回到原文的形状**：行数与独立成行的 ENDIF 计数都和删之前一致
+    // （缩进可能不同——修复跟着**开块那一行**的缩进，见下面那条断言，所以不比全文逐字节）
+    const closerLines = (t: readonly string[]) => t.filter((l) => /^\s*ENDIF\s*$/.test(l)).length;
+    const repairedLines = repaired.split('\n');
+    expect(repairedLines.length).toBe(ls.length);
+    expect(closerLines(repairedLines)).toBe(closerLines(ls));
+    // 补进去的那一行与它要关的那个 IF 同缩进（作者读层次靠缩进，不靠语法）
+    const ifIndent = /^[ \t]*/.exec(ls[after[0]!.line - 1]!)?.[0] ?? '';
+    expect(repairedLines.some((l) => l === ifIndent + 'ENDIF'), 'ENDIF 应带开块那一行的缩进').toBe(true);
+  }, 180000);
 });
