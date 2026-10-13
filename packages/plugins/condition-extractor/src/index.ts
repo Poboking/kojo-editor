@@ -22,6 +22,7 @@ import type {
   ErbParserService,
   FileIO,
   GameProject,
+  LineDecoration,
   Plugin,
   ProjectService,
   SlotRegistry,
@@ -30,6 +31,8 @@ import { EXTRACT_STORE_KEY, decodeBuckets, encodeBuckets, extractExpect } from '
 import type { ExtractExpect, FileBucket } from './snapshot';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { ConditionEngine } from './engine';
+import { collectExprSyntaxDecorations } from './decorator';
+import { diagnoseExpression } from './expr';
 import type { SchemaLookup } from './extract';
 
 const IO = 'kernel.io';
@@ -158,6 +161,31 @@ export function createConditionExtractorPlugin(): Plugin {
 
       // 激活时若已有现成索引（插件晚于项目打开被加载），立即跑一次
       if (parser.currentIndex()) scheduleRun();
+
+      /* ---------------- 编辑器波浪线：条件表达式语法诊断（E8） ----------------
+
+       与 erb-parser 自己的 `erb-structure`（结构错误，order 20）分层：
+       那一层只报"配不上对"的骨架错误（闭合缺失 / 无主分支），这一层报**条件表达式
+       本身的词法 / 语法问题**（如 `IF A &&` 这种残句）。
+
+       复用 `requires` 里已声明的 `erb.parser` 服务（`parser`）——骨架扫描不重复实现，
+       表达式诊断走 `./expr.ts`。管线是纯函数（文本进、行级装饰出），与槽契约一致。
+       `decorate` 的匹配口径只认原生 ERB/ERM（`.kojo` 的语法诊断另有其人，糖线）。
+       */
+      ctx.slots.register('ui.editor.decorator', {
+        id: 'erb-expr-syntax',
+        title: 'ERB 条件表达式波浪线',
+        order: 21,
+        decorate(file): LineDecoration[] {
+          if (!/\.(erb|erm)$/i.test(file.path) || file.text.length === 0) return [];
+          return collectExprSyntaxDecorations(file.text, (t) => parser.scanControlFlow(t)).map((d) => ({
+            line: d.line,
+            severity: 'warning' as const,
+            message: d.message,
+            code: d.code,
+          }));
+        },
+      });
     },
   };
 }
@@ -165,3 +193,6 @@ export function createConditionExtractorPlugin(): Plugin {
 export { ConditionEngine, type ConditionEngineDeps } from './engine';
 export { extractFunctionConditions, extractFunctionPredicates, collectPredicates, collectReturns, collectAssignments } from './extract';
 export { parseExpression, splitTopLevelCommas, walkExpr } from './expr';
+export { diagnoseExpression } from './expr';
+export type { ExprDiagnostic } from './expr';
+export { collectExprSyntaxDecorations, type ExprSyntaxDecoration } from './decorator';

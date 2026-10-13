@@ -2,11 +2,11 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-14，E12 教程文本批 + 条件矩阵批 合流后本机实测）
+## 一、基线（2026-10-14，E12 教程文本批 + 条件矩阵批 + E8 语法诊断批 合流后本机实测）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **1980 passed / 14 skipped（1994）**；112 文件过 / 8 跳（120） |
+| 全量测试 | **2004 passed / 14 skipped（2018）**；114 文件过 / 8 跳（122） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **18 项全绿**（改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
@@ -34,7 +34,7 @@
 ## 四、剩余欠账（数字/方向性的；认领的活在 BOARD.md）
 
 - 纪要 §5 清单余项：**直连模式开关 · 多剧本编号上树 · 中日对照**。
-- ERB 波浪线只做**结构类**（三类可证明错误）；词法 / 表达式级校验留给 condition-extractor 的表达式解析器复用，另一批。
+- ERB 波浪线两层：**结构类**（三类可证明错误，erb-parser，error）；**表达式级**已落地（E8，condition-extractor 复用自研表达式解析器，IF/ELSEIF/SIF/WHILE/SELECTCASE 条件表达式的词法/语法错，warning，code `erb.expr-*`；保守排除 CASE/PRINTDATA）。
 - 糖视图：**不走虚拟文档（原三问废止）**；现效果已封存（设置页「显示已封存功能」总开关可临时恢复）；新方向＝升糖语法写进编辑器原生显示（不写盘），未立项。
 
 ## 五、版图速览（代码地图）
