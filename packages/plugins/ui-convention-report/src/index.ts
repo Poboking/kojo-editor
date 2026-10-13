@@ -1,4 +1,4 @@
-import { createElement, useEffect, useState } from 'react';
+import { createElement, useEffect, useState, type ReactNode } from 'react';
 import type { ConventionIssue, ConventionLinterService, ConventionReport, Plugin } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 
@@ -215,20 +215,35 @@ export function createUiConventionReportPlugin(): Plugin {
 
       /* --------------------------- 状态栏诊断计数 --------------------------- */
 
-      // 状态栏聚合计数（`ui.statusbar` 槽，P3b）：数据源与底部区面板同一份 report，
-      // 颜色同 SEVERITY_COLOR。壳层暂无「打开指定容器」的通用事件，点击落地为
-      // title 提示 Ctrl+J（切换底部区）——不静默、不假装可点。
+      // 状态栏聚合计数（`ui.statusbar` 槽，P3b）：数据源与底部区面板同一份 report。
+      // 壳层暂无「打开指定容器」的通用事件，点击落地为 title 提示 Ctrl+J（切换底部区）
+      // ——不静默、不假装可点。
+      //
+      // **配色只留给 error**（2026-10-13 目视体检 §5.122 §五-2）：全量铺严重度色时，
+      // 状态栏是这个项目最吵的一处——真实语料的 `⚠ 647` 用琥珀色大写数字，视觉重量压过
+      // 同排的「可写」胶囊，而它是**项目级常态计数**，不是用户此刻要对的东西。
+      // 严重度的语义在底部面板里逐条呈现；状态栏只该在"有 error"时唤醒读者
+      // （error 一律是全项目 0 条，因为约定校验的 error 是真事故）。数字用等宽数位防抖。
       function StatusCounts(): unknown {
         const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
         useEffect(() => linter.subscribe(setReport), []);
         if (!report) return createElement('span', { className: 'dim' }, '校验 —');
         const c = report.counts;
+        const item = (mark: string, n: number, critical: boolean): ReactNode =>
+          createElement(
+            'span',
+            {
+              className: 'sb-diag-item',
+              ...(critical && n > 0 ? { style: { color: SEVERITY_COLOR.error } } : {}),
+            },
+            `${mark} ${n}`,
+          );
         return createElement(
           'span',
           { className: 'sb-diag', title: '约定校验计数（Ctrl+J 切换底部区查看明细）' },
-          createElement('span', { style: { color: SEVERITY_COLOR.error } }, `✕ ${c.error}`),
-          createElement('span', { style: { color: SEVERITY_COLOR.warning } }, `⚠ ${c.warning}`),
-          createElement('span', { style: { color: SEVERITY_COLOR.info } }, `ℹ ${c.info}`),
+          item('✕', c.error, true),
+          item('⚠', c.warning, false),
+          item('ℹ', c.info, false),
         );
       }
 

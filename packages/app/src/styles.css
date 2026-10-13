@@ -2775,10 +2775,15 @@ button.erb-mode-hint.unlocked:hover {
   display: inline-flex;
   align-items: center;
 }
+/* 诊断计数簇（约定校验）：**常态 quiet**——整簇走 dim，只有 error > 0 的那一项由插件给色。
+   配色口径见 `ui-convention-report` 的 StatusCounts 注释（状态栏不该全量铺严重度色）；
+   等宽数位是为了计数变化时宽度不抖。 */
 .sb-diag {
   display: inline-flex;
   gap: 8px;
   white-space: nowrap;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
 }
 .sb-editor {
   color: var(--fg-dim);
