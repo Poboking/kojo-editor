@@ -32,15 +32,18 @@ import type {
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
   buildOverrides,
+  cellLabel,
   dedupePending,
   diffRows,
   listScopes,
   listVars,
+  panelPhase,
   parseCellIndex,
   parseCellInput,
   parseScalarInput,
   scopeLabel,
   supersededCount,
+  varLabel,
   type PendingEdit,
   type ScopeKind,
   type VarRow,
@@ -144,9 +147,6 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
           ? rowsInScope.filter((r) => r.key.toLowerCase().includes(varFilter.trim().toLowerCase()))
           : rowsInScope;
         const selected: VarRow | null = selectedKey ? filtered.find((r) => r.key === selectedKey) ?? null : null;
-
-        const labelFor = (key: string): string | null =>
-          varSchema?.lookup(key)?.description ?? null;
 
         const addPending = (e: PendingEdit): void => {
           setEditError(null);
@@ -260,22 +260,34 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
         );
 
         const head = createElement('div', { className: 'inj-toolbar' },
-          createElement('span', { className: 'dim' }, '注入器（写盘：双闸 + 备份 + 回读验证）'),
+          createElement('span', { className: 'dim' }, '改写存档变量（写前自动备份 · 写后校验）'),
           sel,
         );
 
-        if (!project.current() || rows.length === 0) {
-          return createElement('div', { className: 'panel-snapshot-injector' }, head,
-            createElement('div', { className: 'inj-empty dim' }, '打开项目并扫描到档位后可用（档位来自归档浏览器的扫描结果）'));
+        switch (panelPhase({
+          hasSlots: project.current() != null && rows.length > 0,
+          path,
+          loading,
+          loadError,
+          hasArchive: archive !== null,
+        })) {
+          case 'no-slots':
+            return createElement('div', { className: 'panel-snapshot-injector' }, head,
+              createElement('div', { className: 'inj-empty dim' }, '打开项目并扫描到存档后可用（存档列表来自「归档浏览器」面板）'));
+          case 'no-selection':
+            return createElement('div', { className: 'panel-snapshot-injector' }, head,
+              createElement('div', { className: 'inj-empty dim' }, '请从上方选择要改写的存档'));
+          case 'loading':
+            return createElement('div', { className: 'panel-snapshot-injector' }, head,
+              createElement('div', { className: 'inj-empty dim' }, '正在读取存档…'));
+          case 'error':
+            return createElement('div', { className: 'panel-snapshot-injector' }, head,
+              createElement('div', { className: 'inj-error' }, `读取存档失败：${loadError ?? '未知原因'}`));
+          case 'ready':
+            break;
         }
-        if (loading) {
-          return createElement('div', { className: 'panel-snapshot-injector' }, head,
-            createElement('div', { className: 'inj-empty dim' }, '深解析中…（全量单元 + 原始字节视图）'));
-        }
-        if (loadError || !archive) {
-          return createElement('div', { className: 'panel-snapshot-injector' }, head,
-            createElement('div', { className: 'inj-error' }, `解析失败：${loadError ?? '未选择档位'}`));
-        }
+        // panelPhase 判为 ready 即必有解析结果；此处收窄供下方直接引用
+        if (!archive) return null;
 
         // 作用域下拉
         const scopeSel = createElement('select', {
@@ -298,12 +310,12 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
         // 变量目录
         const varList = createElement('div', { className: 'inj-vars' },
           ...filtered.slice(0, 200).map((r) => {
-            const label = labelFor(r.key);
+            const label = varLabel(varSchema, r.key);
             return createElement('button', {
               key: r.key,
               className: `inj-var-row${selectedKey === r.key ? ' active' : ''}${r.kind === 'other' ? ' disabled' : ''}`,
               disabled: r.kind === 'other',
-              title: r.cellsTruncated ? '该数组 cells 不完整（解析策略截断），不可注入' : r.preview,
+              title: r.cellsTruncated ? '该数组未能完整读取，无法改写' : r.preview,
               onClick: () => {
                 setSelectedKey(r.key);
                 setEditError(null);
@@ -314,7 +326,7 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
               createElement('span', { className: 'inj-var-key' }, r.key),
               label ? createElement('span', { className: 'inj-var-label' }, label) : null,
               createElement('span', { className: 'inj-var-preview dim' }, r.preview),
-              r.cellsTruncated ? createElement('span', { className: 'inj-warn' }, 'cells 截断') : null,
+              r.cellsTruncated ? createElement('span', { className: 'inj-warn' }, '未完整读取') : null,
             );
           }),
           filtered.length > 200 ? createElement('div', { className: 'dim inj-more' }, `其余 ${filtered.length - 200} 个变量未显示（可用过滤）`) : null,
@@ -325,9 +337,11 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
         let editor: ReturnType<typeof createElement> | null = null;
         if (selected && selected.kind === 'scalar') {
           const intLike = selected.type === 'int';
+          const scalarLabel = varLabel(varSchema, selected.key);
           editor = createElement('div', { className: 'inj-editor' },
             createElement('div', { className: 'inj-editor-head' },
               createElement('span', { className: 'inj-var-key' }, selected.key),
+              scalarLabel ? createElement('span', { className: 'inj-var-label' }, scalarLabel) : null,
               createElement('span', { className: 'dim' }, ` 当前：${String(selected.scalarValue ?? '')}`)),
             createElement('div', { className: 'inj-editor-row' },
               createElement('input', {
@@ -338,7 +352,7 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
               }),
               createElement('button', { className: 'ghost small', onClick: () => submitScalar() }, '加入清单')),
             createElement('div', { className: 'dim inj-hint' },
-              intLike ? '整数须在安全整数域内（Int64 守卫）' : '字符串按存档编码写回'),
+              intLike ? '只能填整数；数值过大会被拒绝' : '字符串按存档原编码写回'),
           );
         } else if (selected && selected.kind === 'array' && selected.cells) {
           const isInt = selected.type.startsWith('int-array');
@@ -346,8 +360,10 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
             const ik = c.index.join(',');
             const draft = cellDrafts[ik] ?? '';
             const changed = draft.trim() !== '' && draft !== String(c.value);
+            const cellLbl = cellLabel(varSchema, selected.key, c.index);
             return createElement('div', { key: ik, className: 'inj-cell-row' },
               createElement('span', { className: 'inj-cell-index' }, `[${ik}]`),
+              cellLbl ? createElement('span', { className: 'inj-var-label' }, cellLbl) : null,
               createElement('span', { className: 'inj-cell-old' }, String(c.value)),
               createElement('input', {
                 className: 'inj-input inj-cell-input',
@@ -367,9 +383,11 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
               }, changed ? '加入清单' : '—'),
             );
           });
+          const arrLabel = varLabel(varSchema, selected.key);
           editor = createElement('div', { className: 'inj-editor' },
             createElement('div', { className: 'inj-editor-head' },
               createElement('span', { className: 'inj-var-key' }, selected.key),
+              arrLabel ? createElement('span', { className: 'inj-var-label' }, arrLabel) : null,
               createElement('span', { className: 'dim' },
                 ` ${selected.cells.length} 个非空单元${selected.cells.length > CELL_ROWS_CAP ? `（显示前 ${CELL_ROWS_CAP}）` : ''}`)),
             createElement('div', { className: 'inj-cells' }, ...cellRows),
@@ -388,7 +406,7 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
               }),
               createElement('button', { className: 'ghost small', onClick: () => submitNewCell() }, '加入清单')),
             createElement('div', { className: 'dim inj-hint' },
-              isInt ? '整数须在安全整数域内（Int64 守卫）' : '字符串单元按 0xD8 形态写回'),
+              isInt ? '只能填整数；数值过大会被拒绝' : '字符串按存档原编码写回'),
           );
         }
 
@@ -396,13 +414,17 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
         const diffs = diffRows(dedupePending(pending));
         const pendingBox = createElement('div', { className: 'inj-pending' },
           createElement('div', { className: 'inj-pending-head' },
-            createElement('span', null, `待注入（${diffs.length}）`),
+            createElement('span', null, `待写入（${diffs.length}）`),
             diffs.length > 0
               ? createElement('button', { className: 'ghost small', onClick: () => setPending([]) }, '清空')
               : null),
-          ...diffs.map((d, i) =>
-            createElement('div', { key: `${d.where}|${d.key}|${d.cell ?? ''}|${i}`, className: 'inj-diff-row' },
+          ...diffs.map((d, i) => {
+            const diffLbl = d.cell
+              ? cellLabel(varSchema, d.key, d.cell.split(',').map(Number))
+              : varLabel(varSchema, d.key);
+            return createElement('div', { key: `${d.where}|${d.key}|${d.cell ?? ''}|${i}`, className: 'inj-diff-row' },
               createElement('span', { className: 'inj-diff-where' }, `${d.where}.${d.key}${d.cell ? `[${d.cell}]` : ''}`),
+              diffLbl ? createElement('span', { className: 'inj-var-label' }, diffLbl) : null,
               createElement('span', { className: 'inj-diff-before dim' }, d.isNew ? '（新增）' : d.before),
               createElement('span', { className: 'inj-diff-arrow' }, '→'),
               createElement('span', { className: 'inj-diff-after' }, d.after),
@@ -410,22 +432,23 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
                 className: 'ghost small',
                 title: '移除此条',
                 onClick: () => setPending(dedupePending(pending).filter((_, j) => j !== i)),
-              }, '×'))),
-          diffs.length === 0 ? createElement('div', { className: 'dim inj-hint' }, '从上方选择变量并编辑，改动先进入本清单（不立即写盘）') : null,
+              }, '×'));
+          }),
+          diffs.length === 0 ? createElement('div', { className: 'dim inj-hint' }, '在左侧选择变量并编辑；改动先进入清单，确认后才写盘') : null,
           createElement('div', { className: 'inj-inject-row' },
             createElement('button', {
               className: 'primary',
               disabled: diffs.length === 0 || injecting,
               onClick: runInject,
-            }, injecting ? '注入中…' : armed ? '确认注入并写盘？' : `注入并写盘（${diffs.length} 条）`),
+            }, injecting ? '写入中…' : armed ? '确认写入存档？' : `写入存档（${diffs.length} 条）`),
             armed ? createElement('button', { className: 'ghost small', onClick: () => setArmed(false) }, '取消') : null),
           result
             ? createElement('div', { className: 'inj-result' },
-                `✓ 注入完成：${result.verifiedCount} 项覆盖已验证落盘（${result.byteSize}B）` +
-                (result.backupPath ? ` · 原档备份：${result.backupPath}` : ''))
+                `✓ 写入完成：已校验 ${result.verifiedCount} 项（${result.byteSize}B）` +
+                (result.backupPath ? ` · 原档已备份至：${result.backupPath}` : ''))
             : null,
           injectError
-            ? createElement('div', { className: 'inj-error' }, `注入失败：${injectError}`)
+            ? createElement('div', { className: 'inj-error' }, `写入失败：${injectError}`)
             : null,
         );
 

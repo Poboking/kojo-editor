@@ -3,20 +3,23 @@
  * 变量目录 / 作用域 / 覆盖集构建 / diff / 输入解析 / 清单去重。
  */
 import { describe, expect, it } from 'vitest';
-import type { ArchiveCharacterBlock, ArchiveVariable, SnapshotArchive } from '@kojo/plugin-api';
+import type { ArchiveCharacterBlock, ArchiveVariable, SnapshotArchive, VariableSchema } from '@kojo/plugin-api';
 import {
   buildOverrides,
+  cellLabel,
   charaLabel,
   dedupePending,
   diffRows,
   editKey,
   listScopes,
   listVars,
+  panelPhase,
   parseCellIndex,
   parseCellInput,
   parseScalarInput,
   scopeLabel,
   supersededCount,
+  varLabel,
   type PendingEdit,
 } from '../src/panel-logic';
 
@@ -187,5 +190,89 @@ describe('buildOverrides / diffRows / dedupePending', () => {
       before: '（新增）',
       isNew: true,
     });
+  });
+});
+
+/* ---------------- 面板阶段 ---------------- */
+
+describe('panelPhase', () => {
+  it('未选档位是中性等待态，绝不是 error（回归：旧面板误报「解析失败：未选择档位」）', () => {
+    expect(
+      panelPhase({ hasSlots: true, path: null, loading: false, loadError: null, hasArchive: false }),
+    ).toBe('no-selection');
+  });
+
+  it('五个分支按优先级全覆盖', () => {
+    expect(panelPhase({ hasSlots: false, path: null, loading: false, loadError: null, hasArchive: false })).toBe(
+      'no-slots',
+    );
+    expect(panelPhase({ hasSlots: true, path: 'a', loading: true, loadError: null, hasArchive: false })).toBe('loading');
+    expect(panelPhase({ hasSlots: true, path: 'a', loading: false, loadError: 'x', hasArchive: false })).toBe('error');
+    expect(panelPhase({ hasSlots: true, path: 'a', loading: false, loadError: null, hasArchive: true })).toBe('ready');
+  });
+
+  it('已选路径但无解析结果 → error（无 loadError 也判为失败态）', () => {
+    expect(
+      panelPhase({ hasSlots: true, path: 'a', loading: false, loadError: null, hasArchive: false }),
+    ).toBe('error');
+  });
+
+  it('优先级：loading 先于缺解析结果（加载中不误判 error）', () => {
+    expect(panelPhase({ hasSlots: true, path: 'a', loading: true, loadError: 'x', hasArchive: false })).toBe('loading');
+  });
+});
+
+/* ---------------- 变量 / 单元语义标签 ---------------- */
+
+/** 桩 VariableSchema：记录 lookup 实参，命中按表返回；无 index 时仅回 name（无 description） */
+function makeStubSchema(): {
+  schema: VariableSchema;
+  calls: Array<{ name: string; index: number | string | undefined }>;
+} {
+  const calls: Array<{ name: string; index: number | string | undefined }> = [];
+  const known = new Set(['EXP', 'CFLAG']);
+  const descs: Record<string, string> = { 'EXP:0': '体力', 'EXP:1,2': '多维命中', 'CFLAG:0': '' };
+  const schema: VariableSchema = {
+    version: 'stub',
+    lookup(variableName, index) {
+      calls.push({ name: variableName, index });
+      if (!known.has(variableName)) return undefined; // 未知 key
+      if (index === undefined) return { name: variableName }; // 家族级命中：无 description
+      const d = descs[`${variableName}:${index}`];
+      return { name: variableName, index, ...(d !== undefined ? { description: d } : {}) };
+    },
+  };
+  return { schema, calls };
+}
+
+describe('varLabel / cellLabel', () => {
+  it('varLabel：家族级命中无 description → null；未知 key 与缺 schema → null', () => {
+    const { schema } = makeStubSchema();
+    expect(varLabel(schema, 'EXP')).toBeNull();
+    expect(varLabel(schema, 'UNKNOWN')).toBeNull();
+    expect(varLabel(undefined, 'EXP')).toBeNull();
+  });
+
+  it('cellLabel：一维下标按数字查、命中回 description', () => {
+    const { schema, calls } = makeStubSchema();
+    expect(cellLabel(schema, 'EXP', [0])).toBe('体力');
+    expect(calls.at(-1)).toEqual({ name: 'EXP', index: 0 });
+    expect(typeof calls.at(-1)!.index).toBe('number');
+  });
+
+  it('cellLabel：多维下标 join(",") 成字符串键', () => {
+    const { schema, calls } = makeStubSchema();
+    expect(cellLabel(schema, 'EXP', [1, 2])).toBe('多维命中');
+    expect(calls.at(-1)).toEqual({ name: 'EXP', index: '1,2' });
+    expect(typeof calls.at(-1)!.index).toBe('string');
+  });
+
+  it('cellLabel：schema / index 缺失或空、未知 key、空 description 一律 null', () => {
+    const { schema } = makeStubSchema();
+    expect(cellLabel(undefined, 'EXP', [0])).toBeNull();
+    expect(cellLabel(schema, 'EXP', undefined)).toBeNull();
+    expect(cellLabel(schema, 'EXP', [])).toBeNull();
+    expect(cellLabel(schema, 'UNKNOWN', [0])).toBeNull();
+    expect(cellLabel(schema, 'CFLAG', [0])).toBeNull(); // description 为空串
   });
 });

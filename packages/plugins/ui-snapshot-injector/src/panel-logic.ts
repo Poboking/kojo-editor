@@ -15,7 +15,58 @@ import type {
   ArchiveOverrides,
   ArchiveVariable,
   SnapshotArchive,
+  VariableSchema,
 } from '@kojo/plugin-api';
+
+// ---------------------------------------------------------------------------
+// 面板阶段与语义标签
+// ---------------------------------------------------------------------------
+
+/** 注入面板主区显示的阶段（顺序即优先级） */
+export type PanelPhase = 'no-slots' | 'no-selection' | 'loading' | 'error' | 'ready';
+
+export interface PanelPhaseInput {
+  /** 有项目且扫描到至少一个可解析档位 */
+  hasSlots: boolean;
+  /** 当前选中的档位路径；未选 = null */
+  path: string | null;
+  loading: boolean;
+  loadError: string | null;
+  /** 是否已有解析结果 */
+  hasArchive: boolean;
+}
+
+/**
+ * 由面板状态判定应渲染的阶段。
+ * 「未选档位」是中性等待态而非错误——必须落在 'no-selection'，永远不能因缺解析结果误判为 'error'。
+ */
+export function panelPhase(s: PanelPhaseInput): PanelPhase {
+  if (!s.hasSlots) return 'no-slots';
+  if (s.path === null) return 'no-selection';
+  if (s.loading) return 'loading';
+  if (s.loadError !== null || !s.hasArchive) return 'error';
+  return 'ready';
+}
+
+/** 变量语义标签（家族/标量级）；无 schema 或无描述 → null */
+export function varLabel(schema: VariableSchema | undefined, key: string): string | null {
+  const d = schema?.lookup(key)?.description;
+  return typeof d === 'string' && d.length > 0 ? d : null;
+}
+
+/**
+ * 数组单元语义标签；一维下标按数字查（与 VariableSchema.lookup 签名一致），
+ * 多维下标 join(',') 成键。index 缺省或为空 → null。
+ */
+export function cellLabel(
+  schema: VariableSchema | undefined,
+  key: string,
+  index: readonly number[] | undefined,
+): string | null {
+  if (!schema || !index || index.length === 0) return null;
+  const d = schema.lookup(key, index.length === 1 ? index[0] : index.join(','))?.description;
+  return typeof d === 'string' && d.length > 0 ? d : null;
+}
 
 // ---------------------------------------------------------------------------
 // 作用域与变量目录
