@@ -82,6 +82,10 @@ function makeIO(files: Record<string, Uint8Array>): FileIO {
       files[p] ? { size: files[p]!.length, mtimeMs: 1, isDirectory: false } : null,
     setWritableRoots: () => {},
     setAppWritableRoots: () => {},
+    addAppWritableRoot: () => {},
+    chooseWorkspaceRoot: async () => {
+      throw new Error('chooseWorkspaceRoot is not supported by this fake');
+    },
     isWritable: () => false,
     backup: async () => null,
     exportFile: async () => {

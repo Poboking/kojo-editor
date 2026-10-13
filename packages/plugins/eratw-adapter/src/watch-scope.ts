@@ -30,13 +30,28 @@ export interface WorkspaceChange {
 
 /**
  * @param path 改动条目路径（内核已归一化）
- * @param rootDir 工作区根；服务不可用（无平台数据目录）时传 null ⇒ 一律不响应
+ * @param roots 工作区**全部**落点根（默认根 + 作者自选并常驻授权的项目位置根）；
+ *              空数组（服务不可用 = 无平台数据目录的环境）⇒ 一律不响应
+ *
+ * 命中多个根时取**最长前缀**（最深）那个做相对定位：两个根互为前缀时
+ * （`D:\作品` 与 `D:\作品\子库`）只有按更深的那个算，`dirname` 出来的目录才对得上
+ * 真实住着的包，否则刷新的目录会指错一层。
  */
-export function workspaceChangeOf(path: string, rootDir: string | null): WorkspaceChange {
-  if (rootDir === null) return { dirToRefresh: null, projectListChanged: false };
-  if (!isPathUnder(rootDir, path)) return { dirToRefresh: null, projectListChanged: false };
+export function workspaceChangeOf(path: string, roots: readonly string[]): WorkspaceChange {
+  if (roots.length === 0) return noChange();
+  let hit: string | null = null;
+  for (const root of roots) {
+    if (!isPathUnder(root, path)) continue;
+    // 更深（被前一个包含）的根赢；相等（同一目录两种写法）保留先出现的
+    if (hit === null || isPathUnder(hit, root)) hit = root;
+  }
+  if (hit === null) return noChange();
   const parent = dirname(path);
   // 根自己那一层（path 直接住在根下）→ 父目录就是根：项目列表变了
-  const atRoot = pathKey(parent) === pathKey(rootDir);
+  const atRoot = pathKey(parent) === pathKey(hit);
   return { dirToRefresh: parent, projectListChanged: atRoot };
+}
+
+function noChange(): WorkspaceChange {
+  return { dirToRefresh: null, projectListChanged: false };
 }

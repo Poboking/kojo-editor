@@ -9,7 +9,7 @@ import type {
   EditorTextEdit,
   LineDecoration,
 } from '@kojo/plugin-api';
-import { FULLWIDTH_SPACE, WriteNotAllowedError, isPathUnder } from '@kojo/plugin-api';
+import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from 'monaco-editor';
@@ -46,6 +46,7 @@ import {
   type FoldableSegment,
 } from './sugar-fold';
 import { isSealed, subscribeSealed, useSealed } from './sealed';
+import { isUnderAnyRoot, workspaceRootsOf } from './workspace-roots';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -256,25 +257,14 @@ export function EditorPane({
   /** 重授权入口 ref（同上：Monaco 回调与保存句柄只注册一次，须读最新值） */
   const onReauthRef = useRef<() => void>(onReauth);
   /**
-   * 工作区根（创作权威区，恒可写；服务不可用时 null）——ERB 只读规则的分野依据：
-   * 游戏目录内 ERB = 只读借阅；工作区内 ERB = 可编辑源文件（工作区批新增）。
+   * 工作区根（创作权威区，恒可写）——ERB 只读规则的分野依据：
+   * 游戏目录内 ERB = 只读借阅；**全部工作区根**（默认根 + 作者自选的项目位置）内的 ERB
+   * = 可编辑源文件（工作区批新增，自选位置批扩成多根）。
+   *
+   * 每次判定现取，不缓存：`roots()` 是同步读内存数组、零 IO，缓存没有收益，
+   * 反而会把"本会话刚自选的那个新根"永远排除在外（一次取值定死 ⇒ 之后一路判成借阅件锁只读）。
    */
-  const workspaceRootRef = useRef<string | null | undefined>(undefined);
-  const workspaceRoot = (): string | null => {
-    if (workspaceRootRef.current === undefined) {
-      try {
-        workspaceRootRef.current = kernel.workspaces.rootDir();
-      } catch {
-        workspaceRootRef.current = null;
-      }
-    }
-    return workspaceRootRef.current;
-  };
-  /** 是否工作区内文件（创作区；ERB 可编辑、恒可保存） */
-  const inWorkspace = (p: string): boolean => {
-    const root = workspaceRoot();
-    return root !== null && isPathUnder(root, p);
-  };
+  const inWorkspace = (p: string): boolean => isUnderAnyRoot(workspaceRootsOf(kernel), p);
   const onDirtyChangeRef = useRef(onDirtyChange);
   /** 编辑器状态上抛 ref（重载时读最新，避免把不稳定 prop 拖进回调依赖） */
   const onStatusInfoRef = useRef(onStatusInfo);

@@ -6,6 +6,9 @@
  * - 中文 README 模板（作品信息 + 面清单 + 部署说明）；
  * - 8 核心面**空壳**（事件/日常指令/性交指令/奉仕指令/爱抚指令/绝顶/刻印取得/性骚扰指令）——
  *   内容纯 `;` 注释，**绝不生成活函数**（活函数由作者写，工具不替作者做决定）；
+ *   部分面注释里带一份**从真实口上库现成案例转写的语法糖示例**（`FACE_CASES`，
+ *   单一真源 `fixtures/scaffold/`；台词按类目简化，不许自编示例；
+ *   只有"投影即可写、正文 ≤10 行"的案例才允许入选，宁缺勿编）；
  * - **不生成四件套文件**（登记/配色/开关等是函数级产物，属作者后续创作）。
  *
  * ## 为什么核心面空壳是 `.kojo` 而不是 `.ERB`（用户反馈 1，2026-10-12）
@@ -84,6 +87,101 @@ export const CORE_FACES: readonly CoreFaceSpec[] = [
 ];
 
 /**
+ * 库内现成案例（2026-10-14 案例批；用户反馈：空壳注释里要有**从真实口上库抄来的
+ * 现成案例**，不许自编示例）。
+ *
+ * - `source` / `fn` = 取材出处（口上库内相对路径 + 函数名，逐字真实，可回去抽查）；
+ * - `lines` = 该函数**原 ERB 片段**（存于 `fixtures/scaffold/<stem>.erb`）经本仓
+ *   升糖投影 `liftProject`（`kojo-sugar/src/project.ts`）转成的语法糖逐行文本，
+ *   台词按类目简化为 `category` 占位（亲密面「涩涩的话」／日常与事件面「日常的对话」）；
+ *   转不了糖的行保留原生 ERB 原样（`.kojo` 允许原生逐行直通）。
+ *
+ * **只覆盖 事件／日常指令／刻印取得／性骚扰指令 4 面**（宁缺勿编，2026-10-14 案例批）：
+ * 性交指令／奉仕指令／爱抚指令／绝顶 4 面的候选来源函数（真实语料实测）投影后
+ * 要么出现作者写不出的形态（`IF LOCAL && …` 信封截半 ⇒ `如果` 落 0 列、转译报
+ * indent-mismatch；`LOCAL && NOWEX:` 缩进则报 unknown-identifier；家族注记头），
+ * 要么正文超 10 行、要么首闭合分支无台词——试满候选仍无可写形态，案例已撤。
+ * 撤掉的面 `buildFaceStub` 整块不输出【库内现成案例】（不留空头）。
+ *
+ * **单一真源是 `fixtures/scaffold/<stem>.kojo`**；脚手架是纯函数（无 IO），故文本
+ * 由本常量承载。`tests/scaffold-cases.test.ts` 钉死三者一致：
+ * ① fixture 逐行 == 本常量；② 本常量派生自 fixture `.erb`（现场重跑升糖+简化）；
+ * ③ 空壳注释里的案例逐行出自本常量（反向：改一个字即被抓出）；
+ * ④ 案例必须拼成**可转译（零 error）**的最小文档——示例是给人照抄的。
+ */
+export interface FaceCase {
+  /** 口上库内相对路径（相对剧本根，逐字照抄） */
+  source: string;
+  /** 来源函数名（含 @） */
+  fn: string;
+  /** 台词类目占位（亲密面 =「涩涩的话」，日常/事件面 =「日常的对话」） */
+  category: string;
+  /** 转糖后的案例正文（逐行，未加 `; ` 前缀；≤10 行） */
+  lines: readonly string[];
+}
+
+/** 按 stem 索引的案例表（键 = `CORE_FACES[].stem`） */
+export const FACE_CASES: Readonly<Record<string, FaceCase>> = {
+  事件: {
+    source: 'ERB/口上・メッセージ関連/個人口上/063 Kagerou [影狼]/影狼/M_KOJO_K63_イベント.ERB',
+    fn: '@M_KOJO_EVENT_K63_22',
+    category: '「日常的对话」',
+    lines: [
+      '时机 事件 22：',
+      '\t;口上主はARG',
+      '\t;--------------------------------------------------',
+      '\t;記入チェック（=0, 非表示、1, 表示）',
+      '\t;-------------',
+      '\t如果 !TALENT:恋慕：',
+      '\t\t「日常的对话」',
+      '\t\t「日常的对话」',
+    ],
+  },
+  日常指令: {
+    source: 'ERB/口上・メッセージ関連/個人口上/111 Clownpiece [クラウンピース]/クラウンピース/M_KOJO_K111_イベント.ERB',
+    fn: '@M_KOJO_DAILY_EVENT_K111_4',
+    category: '「日常的对话」',
+    lines: [
+      '时机 日常 4：',
+      '\t;地の文を変えたければコメントアウト',
+      '\t;--------------------------------------------------',
+      '\t;記入チェック（=0, 非表示、1, 表示）',
+      '\t;-------------',
+      '\t「日常的对话」',
+    ],
+  },
+  刻印取得: {
+    source: 'ERB/口上・メッセージ関連/個人口上/101 Tokiko [朱鷺子]/朱鷺子/M_KOJO_K101_刻印取得.ERB',
+    fn: '@M_KOJO_MESSAGE_MARKCNG_K101',
+    category: '「日常的对话」',
+    lines: [
+      '时机 标记：',
+      '\t;このままだと地の文が表示されません',
+      '\t;地の文を表示したい方は、下記のコメントアウトを削除して下さい',
+      '\t;苦痛刻印',
+      '\t如果 TFLAG:22 == 1：',
+      '\t\t「日常的对话」',
+      '\t否则如果 TFLAG:22 == 2：',
+      '\t\t「日常的对话」',
+      '\t否则如果 TFLAG:22 == 3：',
+      '\t\t「日常的对话」',
+    ],
+  },
+  性骚扰指令: {
+    source: 'ERB/口上・メッセージ関連/個人口上/022 Lunasa [ルナサ]/ルナサ/M_KOJO_K22_セクハラコマンド.ERB',
+    fn: '@M_KOJO_MESSAGE_COM_K22_317_1',
+    category: '「涩涩的话」',
+    lines: [
+      '时机 指令 317_1：',
+      '\t;-------------------------------------------------',
+      '\t;記入チェック（=0, 非表示、1, 表示）',
+      '\t;-------------------------------------------------',
+      '\t「涩涩的话」',
+    ],
+  },
+};
+
+/**
  * 文件系统非法字符消毒（单层目录段）：
  * 剔除 `\/:*?"<>|` 与控制字符，压缩连续空白，去首尾空白与尾随点号
  * （Windows 目录名不得以点/空格结尾）。合法字符一律保留（含中日文、空格）。
@@ -123,6 +221,14 @@ export function buildFaceStub(spec: CoreFaceSpec, opts: KojoScaffoldOptions, fac
     if (example.includes('${com}')) lines.push(';   ${com} = 指令类型段（COM / SCOM / CUSTOM_COM / CUSTOM_SCOM）。');
     lines.push(';   有家族段（别人版口上）时，家族段插在 M_KOJO 之后的下划线处。');
   }
+  const faceCase = FACE_CASES[spec.stem];
+  if (faceCase) {
+    lines.push(';');
+    lines.push(`; 【库内现成案例】照抄 ${faceCase.source}`);
+    lines.push(`; 的 ${faceCase.fn}，已用本工具转成语法糖写法，台词简化为类目占位。`);
+    for (const caseLine of faceCase.lines) lines.push(caseLine.length > 0 ? `; ${caseLine}` : ';');
+    lines.push('; 上面的编号与角色号来自那份现成口上，照你自己要写的场合改；写法详见「语法糖教程」。');
+  }
   lines.push(';');
   lines.push('; —— 脚手架生成的空壳文件：只有注释，没有活函数 ——');
   lines.push('; 请在下方开始创作（ERB 函数定义以 @ 开头）。');
@@ -152,6 +258,7 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
       '扩展名是 `.kojo`：语法糖与原始 ERB 写法可以写在同一个文件里，' +
       '导出或部署时会自动转译成游戏认得的 `.ERB`，工作区里始终只有 `.kojo` 这一份源。',
   );
+  lines.push('部分面文件顶部带一份从口上库现成案例转写的注释示例（语法糖写法，台词简化为类目占位）。');
   lines.push('');
   for (const spec of CORE_FACES) {
     lines.push(`- \`${spec.stem}${FACE_STUB_EXT}\` — ${spec.blurb}`);

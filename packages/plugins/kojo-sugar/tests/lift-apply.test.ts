@@ -104,6 +104,10 @@ function makeIO(opts: {
     },
     setWritableRoots: () => {},
     setAppWritableRoots: () => {},
+    addAppWritableRoot: () => {},
+    chooseWorkspaceRoot: async () => {
+      throw new Error('chooseWorkspaceRoot is not supported by this fake');
+    },
     isWritable: (p) => isWritable(p),
     backup: async (p) => {
       if (!files[p]) return null;

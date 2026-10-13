@@ -167,22 +167,23 @@ export function createEratwAdapterPlugin(): Plugin {
           });
       };
 
-      /** 工作区根（拿不到 = 无平台数据目录的环境，如浏览器开发壳 → 不响应外部改动） */
-      let wsRoot: string | null | undefined;
-      const workspaceRootDir = (): string | null => {
-        if (wsRoot === undefined) {
-          try {
-            wsRoot = workspaces.rootDir();
-          } catch {
-            wsRoot = null;
-          }
+      /**
+       * 工作区**全部**根（默认根 + 作者自选并常驻授权的项目位置；拿不到 = 无平台数据目录的
+       * 环境，如浏览器开发壳 → 空列表 ⇒ 不响应外部改动）。
+       * 每次现取不缓存：`roots()` 是同步读内存数组、零 IO，而缓存会把"本会话刚自选的新根"
+       * 永远排除在外——那正是作品真正住着的地方。
+       */
+      const workspaceRoots = (): string[] => {
+        try {
+          return workspaces.roots();
+        } catch {
+          return [];
         }
-        return wsRoot;
       };
 
       ctx.onDispose(
         ctx.bus.on('file.changed', (ev) => {
-          const target = workspaceChangeOf(ev.path, workspaceRootDir());
+          const target = workspaceChangeOf(ev.path, workspaceRoots());
           if (target.projectListChanged) {
             refreshWsProjects();
             return;
@@ -546,6 +547,9 @@ export function createEratwAdapterPlugin(): Plugin {
         order: 20,
         component: createNewKojoProjectWizard({
           workspaces,
+          // 「项目位置」的自选通道（2026-10-14）：插件只经 kernel.io 的对话框通道，
+          // 不碰路径授权本身（授权在平台命令内完成，铁律 6）
+          io,
           project,
           close: () => {
             ctx.bus.emit('ui.overlay.close', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' });

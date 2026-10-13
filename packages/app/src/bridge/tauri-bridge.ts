@@ -137,6 +137,17 @@ export const tauriBridge: PlatformBridge = {
     });
   },
 
+  async chooseWorkspaceRoot(opts): Promise<string | null> {
+    // 与 exportFile 同一形态的「对话框即授权」：目录对话框 + 把选定路径登记为常驻授权根
+    // 并落盘，全在 Rust 的 choose_workspace_root 一个命令内。
+    // 这里没有路径入参，也没有任何"给个路径就放行写权限"的通道（铁律 6）。
+    return invoke<string | null>('choose_workspace_root', { title: opts?.title ?? null });
+  },
+
+  async listWorkspaceRoots(): Promise<string[]> {
+    return invoke<string[]>('workspace_roots');
+  },
+
   async appDataDir(): Promise<string> {
     return invoke<string>('app_data_dir');
   },

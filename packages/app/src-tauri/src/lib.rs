@@ -28,10 +28,16 @@ use serde::{Deserialize, Serialize};
 // 注意 JS 层的 writablePaths 是项目根的**子集**（用户显式批准）——
 // 语义以更严者为准，双闸并存不冲突。
 
-/// Tauri 托管状态：当前注册的项目根目录（None = 仅 appDataDir 可写）。
+/// Tauri 托管状态：当前注册的项目根目录（None = 仅 appDataDir 可写）
+/// + **常驻授权的项目位置根**（`extra_roots`，2026-10-14 新建项目自选位置批）。
+///
+/// `extra_roots` 的唯一来源是 `choose_workspace_root` 里**用户在系统目录对话框中选定**
+/// 的目录（对话框即授权）与磁盘清单 `<appDataDir>/workspace_roots.txt` 的读回。
+/// **没有任何命令接受路径参数来授予写权限**——JS 侧不存在"给个路径就放行"的入口。
 #[derive(Default)]
 struct WriteDomainState {
     project_root: Mutex<Option<PathBuf>>,
+    extra_roots: Mutex<Vec<PathBuf>>,
 }
 
 /// 规范化路径：找到最深的已存在祖先做 canonicalize（解析 `..` 与符号链接），
@@ -64,23 +70,96 @@ fn canonicalize_deep(path: &Path) -> std::io::Result<PathBuf> {
     }
 }
 
+/// 路径 → 小写组件序列（Windows 大小写不敏感；同义写法折叠成同一个键）。
+fn lowered_components(p: &Path) -> Vec<String> {
+    p.components()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+        .collect()
+}
+
 /// 组件级前缀比较（Windows 大小写不敏感；`foo` 与 `foobar` 不会误判为包含）。
 fn is_within(canonical_path: &Path, canonical_root: &Path) -> bool {
-    let lower = |p: &Path| -> Vec<String> {
-        p.components()
-            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
-            .collect()
-    };
-    let p = lower(canonical_path);
-    let r = lower(canonical_root);
+    let p = lowered_components(canonical_path);
+    let r = lowered_components(canonical_root);
     p.len() >= r.len() && p.iter().zip(r.iter()).all(|(a, b)| a == b)
 }
 
+/// 同一个目录的两种写法（大小写 / 尾分隔符）算一个根：整串组件相等才算。
+fn is_same_path(a: &Path, b: &Path) -> bool {
+    lowered_components(a) == lowered_components(b)
+}
+
+/// 追加常驻授权根（按规范化路径去重）；返回是否真的新增。
+/// 去重要经 `canonicalize_deep`——对话框回来的路径常带 `\\?\` 前缀或大小写差异，
+/// 纯字符串比较会把同一个目录认成两次授权。
+fn push_extra_root(list: &mut Vec<PathBuf>, root: &Path) -> bool {
+    let same = |p: &Path| -> bool {
+        match (canonicalize_deep(p), canonicalize_deep(root)) {
+            (Ok(a), Ok(b)) => is_same_path(&a, &b),
+            _ => is_same_path(p, root),
+        }
+    };
+    if list.iter().any(|p| same(p)) {
+        return false;
+    }
+    list.push(root.to_path_buf());
+    true
+}
+
+/// 常驻授权根清单文件（appDataDir 下，一行一路径，UTF-8）。
+const WORKSPACE_ROOTS_FILE: &str = "workspace_roots.txt";
+
+fn workspace_roots_file(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(WORKSPACE_ROOTS_FILE)
+}
+
+/// 从磁盘读回常驻授权根：文件不存在 = 空列表（首次运行的正常态）；
+/// 读失败**出声**（stderr）后按空处理——不静默，也不连累启动。
+fn read_workspace_roots(app_data_dir: &Path) -> Vec<PathBuf> {
+    let file = workspace_roots_file(app_data_dir);
+    match std::fs::read_to_string(&file) {
+        Ok(text) => text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            eprintln!(
+                "[workspace_roots] 读取授权根清单失败（按空处理）{}: {e}",
+                file.display()
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// 落盘常驻授权根清单（整表重写 ⇒ 天然去重、无追加竞态）。
+fn write_workspace_roots(app_data_dir: &Path, roots: &[PathBuf]) -> Result<(), String> {
+    let file = workspace_roots_file(app_data_dir);
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建授权根清单目录失败 {}: {e}", parent.display()))?;
+    }
+    let mut body = roots
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !body.is_empty() {
+        body.push('\n');
+    }
+    std::fs::write(&file, body).map_err(|e| format!("写授权根清单失败 {}: {e}", file.display()))
+}
+
 /// 纯逻辑判定（可单测，不依赖 Tauri 类型）：
-/// `project_root` = 当前注册的项目根（可为 None），`app_data_dir` 常驻允许。
+/// `project_root` = 当前注册的项目根（可为 None），`app_data_dir` 常驻允许，
+/// `extra_roots` = 用户经对话框自选并常驻授权的项目位置根。
 fn ensure_in_write_domain(
     project_root: Option<&Path>,
     app_data_dir: &Path,
+    extra_roots: &[PathBuf],
     path: &Path,
     op: &str,
 ) -> Result<(), String> {
@@ -90,6 +169,7 @@ fn ensure_in_write_domain(
     if let Some(r) = project_root {
         roots.push(r.to_path_buf());
     }
+    roots.extend(extra_roots.iter().cloned());
     for root in &roots {
         let canon_root = canonicalize_deep(root).map_err(|e| {
             format!(
@@ -102,12 +182,12 @@ fn ensure_in_write_domain(
         }
     }
     Err(format!(
-        "写允许域拒绝（{op}）：{} 不在允许域内（允许 = 项目根目录 / appDataDir；未打开项目时仅 appDataDir）",
+        "写允许域拒绝（{op}）：{} 不在允许域内（允许 = 项目根目录 / appDataDir / 自选项目位置；未打开项目时仅 appDataDir + 自选项目位置）",
         path.display()
     ))
 }
 
-/// 命令侧包装：取 appDataDir + 当前注册的项目根，执行判定。
+/// 命令侧包装：取 appDataDir + 当前注册的项目根 + 常驻授权根，执行判定。
 fn ensure_write_allowed(
     app: &tauri::AppHandle,
     state: &WriteDomainState,
@@ -124,7 +204,12 @@ fn ensure_write_allowed(
         .lock()
         .map_err(|_| "write domain state poisoned".to_string())?
         .clone();
-    ensure_in_write_domain(root.as_deref(), &app_dir, path, op)
+    let extras = state
+        .extra_roots
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?
+        .clone();
+    ensure_in_write_domain(root.as_deref(), &app_dir, &extras, path, op)
 }
 
 /// project.opened：前端注册项目根目录（允许域 = 项目根 + appDataDir）。
@@ -396,6 +481,90 @@ async fn choose_directory(title: Option<String>) -> Result<Option<String>, Strin
         .pick_folder()
         .await
         .map(|h| h.path().to_string_lossy().to_string()))
+}
+
+/// 自选**项目位置**（2026-10-14 新建口上项目自选位置批）。
+///
+/// **对话框即授权，且授权与对话框绑在这一个命令内**：用户在系统目录对话框里选定后，
+/// 本命令立刻把它追加进常驻授权根（`WriteDomainState::extra_roots`）、落盘
+/// `<appDataDir>/workspace_roots.txt`，再把路径返回给 JS。
+/// 用户取消 → 返回 `None`，内存与磁盘状态都不动。
+///
+/// 铁律 6 的落点：**没有任何命令接受路径参数来"授予"写权限**。
+/// 写允许域只能经这条"弹对话框 → 用户选定"的路径变宽；
+/// JS 侧不存在"给我一个路径我就放行"的入口（对照 `export_file` 的同一形态）。
+#[tauri::command]
+async fn choose_workspace_root(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
+    use tauri::Manager;
+    let mut dialog = rfd::AsyncFileDialog::new();
+    if let Some(t) = title.as_deref() {
+        dialog = dialog.set_title(t);
+    }
+    let picked = match dialog.pick_folder().await {
+        Some(handle) => handle.path().to_path_buf(),
+        None => return Ok(None), // 取消 = 不改任何授权状态
+    };
+    // 快照在锁内取、落盘在块外做：不持着锁去做磁盘 IO
+    let snapshot = {
+        let mut guard = state
+            .extra_roots
+            .lock()
+            .map_err(|_| "write domain state poisoned".to_string())?;
+        push_extra_root(&mut guard, &picked);
+        guard.clone()
+    };
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    write_workspace_roots(&app_dir, &snapshot)?;
+    eprintln!(
+        "[choose_workspace_root] 项目位置已授权并登记：{}（常驻根共 {} 个）",
+        picked.display(),
+        snapshot.len()
+    );
+    Ok(Some(picked.to_string_lossy().to_string()))
+}
+
+/// 只读：当前常驻授权的**自选**项目位置根（不含默认工作区根——那由内核自己拼）。
+///
+/// 取值 = 内存 ∪ 磁盘清单（去重、保授权顺序），并剔掉磁盘上已不存在的目录
+/// （作者删了那个文件夹 / 换了机器），剔的时候出声。
+/// `setup` 已经把清单读进内存，这里再合并一次是为了：setup 读失败也不能让前端永远看不见已授权根。
+#[tauri::command]
+fn workspace_roots(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+) -> Result<Vec<String>, String> {
+    use tauri::Manager;
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    let memory = state
+        .extra_roots
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?
+        .clone();
+    let mut merged: Vec<PathBuf> = Vec::new();
+    for p in memory.into_iter().chain(read_workspace_roots(&app_dir)) {
+        if !merged.iter().any(|q| is_same_path(q, &p)) {
+            merged.push(p);
+        }
+    }
+    let mut out = Vec::new();
+    for p in merged {
+        if !p.is_dir() {
+            eprintln!("[workspace_roots] 授权根不存在，跳过：{}", p.display());
+            continue;
+        }
+        out.push(p.to_string_lossy().to_string());
+    }
+    Ok(out)
 }
 
 /// 导出**单个文件**到用户选定的位置（ZIP 发布包用；base64 过 IPC，与 `write_file_bytes` 同口径）。
@@ -681,6 +850,30 @@ pub fn run() {
     tauri::Builder::default()
         .manage(WriteDomainState::default())
         .manage(WatchState::default())
+        .setup(|app| {
+            use tauri::Manager;
+            // 常驻授权根读回（自选项目位置的持久化半边）。
+            // 文件不存在 = 首次运行，正常态；读失败已在 `read_workspace_roots` 里出声。
+            let handle = app.handle().clone();
+            let Ok(app_dir) = handle.path().app_data_dir() else {
+                eprintln!("[setup] 无 app_data_dir，常驻授权根保持为空");
+                return Ok(());
+            };
+            let persisted = read_workspace_roots(&app_dir);
+            if persisted.is_empty() {
+                return Ok(());
+            }
+            let state = handle.state::<WriteDomainState>();
+            let mut guard = state
+                .extra_roots
+                .lock()
+                .map_err(|_| "write domain state poisoned".to_string())?;
+            for root in persisted {
+                push_extra_root(&mut guard, &root);
+            }
+            eprintln!("[setup] 常驻授权根读回 {} 个", guard.len());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
             read_file_bytes_raw,
@@ -695,6 +888,8 @@ pub fn run() {
             remove_file,
             remove_dir,
             choose_directory,
+            choose_workspace_root,
+            workspace_roots,
             export_file,
             app_data_dir,
             register_write_domain,
@@ -712,7 +907,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod write_domain_tests {
-    use super::{canonicalize_deep, ensure_in_write_domain, is_within};
+    use super::{
+        canonicalize_deep, ensure_in_write_domain, is_same_path, is_within, push_extra_root,
+        read_workspace_roots, write_workspace_roots,
+    };
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -742,8 +940,14 @@ mod write_domain_tests {
         let root = temp_root("in");
         let sub = mkdir(&root.join("scenario").join("ERB"));
         // 深层不存在文件（原子写待建目标）也应在域内
-        ensure_in_write_domain(Some(&root), &temp_root("appdata"), &sub.join("new.erb"), "write")
-            .unwrap();
+        ensure_in_write_domain(
+            Some(&root),
+            &temp_root("appdata"),
+            &[],
+            &sub.join("new.erb"),
+            "write",
+        )
+        .unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -751,8 +955,14 @@ mod write_domain_tests {
     fn app_data_dir_always_allowed() {
         let appdata = temp_root("app");
         let project = temp_root("proj");
-        ensure_in_write_domain(Some(&project), &appdata, &appdata.join("backup").join("v1.dat"), "write")
-            .unwrap();
+        ensure_in_write_domain(
+            Some(&project),
+            &appdata,
+            &[],
+            &appdata.join("backup").join("v1.dat"),
+            "write",
+        )
+        .unwrap();
     }
 
     #[test]
@@ -762,6 +972,7 @@ mod write_domain_tests {
         let err = ensure_in_write_domain(
             Some(&project),
             &temp_root("appdata"),
+            &[],
             &other.join("evil.erb"),
             "write",
         )
@@ -776,10 +987,11 @@ mod write_domain_tests {
         let other = temp_root("other");
         let appdata = temp_root("appdata");
         // 未注册项目（None）：域外路径一律拒绝
-        let err = ensure_in_write_domain(None, &appdata, &other.join("x.erb"), "write").unwrap_err();
+        let err =
+            ensure_in_write_domain(None, &appdata, &[], &other.join("x.erb"), "write").unwrap_err();
         assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
         // appDataDir 仍可写（备份 / 配置）
-        ensure_in_write_domain(None, &appdata, &appdata.join("config.json"), "write").unwrap();
+        ensure_in_write_domain(None, &appdata, &[], &appdata.join("config.json"), "write").unwrap();
         let _ = std::fs::remove_dir_all(&other);
         let _ = std::fs::remove_dir_all(&appdata);
     }
@@ -791,8 +1003,14 @@ mod write_domain_tests {
         let outside = mkdir(&base.join("outside"));
         // 字符串以项目根开头，但 .. 穿越到域外
         let sneaky = project.join("sub").join("..").join("..").join("outside").join("x.erb");
-        let err =
-            ensure_in_write_domain(Some(&project), &temp_root("appdata"), &sneaky, "write").unwrap_err();
+        let err = ensure_in_write_domain(
+            Some(&project),
+            &temp_root("appdata"),
+            &[],
+            &sneaky,
+            "write",
+        )
+        .unwrap_err();
         assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
         let _ = outside; // 保持存在
         let _ = std::fs::remove_dir_all(&base);
@@ -805,9 +1023,14 @@ mod write_domain_tests {
         let outside = mkdir(&base.join("outside"));
         std::fs::write(outside.join("secret.erb"), "x").unwrap();
         let sneaky = project.join("..").join("outside").join("secret.erb");
-        assert!(
-            ensure_in_write_domain(Some(&project), &temp_root("appdata"), &sneaky, "remove").is_err()
-        );
+        assert!(ensure_in_write_domain(
+            Some(&project),
+            &temp_root("appdata"),
+            &[],
+            &sneaky,
+            "remove"
+        )
+        .is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -824,6 +1047,7 @@ mod write_domain_tests {
         let err = ensure_in_write_domain(
             Some(&project),
             &temp_root("appdata"),
+            &[],
             &link.join("evil.erb"),
             "write",
         )
@@ -838,10 +1062,14 @@ mod write_domain_tests {
         let project = mkdir(&base.join("project"));
         // sibling 目录名是项目根的字符串前缀（projec vs project）
         let sibling = mkdir(&base.join("projec"));
-        assert!(
-            ensure_in_write_domain(Some(&project), &temp_root("appdata"), &sibling.join("f.txt"), "write")
-                .is_err()
-        );
+        assert!(ensure_in_write_domain(
+            Some(&project),
+            &temp_root("appdata"),
+            &[],
+            &sibling.join("f.txt"),
+            "write"
+        )
+        .is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -854,6 +1082,68 @@ mod write_domain_tests {
         assert!(is_within(&canon, &root.canonicalize().unwrap()));
         assert!(canon.ends_with("new.txt"));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /* -------- 常驻授权根（自选项目位置，2026-10-14 批） -------- */
+
+    /// 正向：未打开任何项目，但落点在用户经对话框自选并授权的根之下 ⇒ 放行
+    #[test]
+    fn extra_root_authorized_when_no_project_registered() {
+        let appdata = temp_root("appdata");
+        let chosen = mkdir(&temp_root("chosen"));
+        let target = chosen.join("我的作品").join("包").join("事件.ERB");
+        ensure_in_write_domain(None, &appdata, &[chosen], &target, "write").unwrap();
+    }
+
+    /// 负向：授权根之外的兄弟目录仍被拒——**判定域只宽不松**，
+    /// 一次授权绝不变成"整个磁盘可写"
+    #[test]
+    fn outside_extra_root_still_rejected() {
+        let appdata = temp_root("appdata");
+        let base = temp_root("base");
+        let chosen = mkdir(&base.join("chosen"));
+        let sibling = mkdir(&base.join("sibling"));
+        let err = ensure_in_write_domain(
+            None,
+            &appdata,
+            &[chosen],
+            &sibling.join("evil.erb"),
+            "write",
+        )
+        .unwrap_err();
+        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 授权根去重：同一个目录的两种写法（大小写 / 规范化前后）只登记一次
+    #[test]
+    fn push_extra_root_dedups_same_directory() {
+        let chosen = mkdir(&temp_root("chosen"));
+        let mut list: Vec<PathBuf> = Vec::new();
+        assert!(push_extra_root(&mut list, &chosen));
+        assert!(!push_extra_root(&mut list, &chosen.join(".")));
+        assert_eq!(list.len(), 1);
+        assert!(is_same_path(&chosen, &chosen.join(".")));
+        let other = mkdir(&temp_root("other"));
+        assert!(push_extra_root(&mut list, &other));
+        assert_eq!(list.len(), 2);
+    }
+
+    /// 授权根持久化：写下去读得回（一行一路径），文件不存在 = 空列表不报错
+    #[test]
+    fn workspace_roots_file_roundtrip() {
+        let appdata = temp_root("appdata");
+        assert!(read_workspace_roots(&appdata).is_empty());
+        let a = mkdir(&temp_root("a"));
+        let b = mkdir(&temp_root("b"));
+        write_workspace_roots(&appdata, &[a.clone(), b.clone()]).unwrap();
+        let back = read_workspace_roots(&appdata);
+        assert_eq!(back.len(), 2);
+        assert!(is_same_path(&back[0], &a));
+        assert!(is_same_path(&back[1], &b));
+        // 整表重写 ⇒ 重复项不会越写越多
+        write_workspace_roots(&appdata, &[a.clone()]).unwrap();
+        assert_eq!(read_workspace_roots(&appdata).len(), 1);
     }
 }
 

@@ -20,7 +20,7 @@
  */
 
 import { createElement as h, useMemo, useState } from 'react';
-import type { CharaInfo, ProjectService, WorkspaceService } from '@kojo/plugin-api';
+import type { CharaInfo, FileIO, ProjectService, WorkspaceService } from '@kojo/plugin-api';
 import { CORE_FACES, scaffoldDirName, scaffoldKojoProject, sanitizeSegment } from './scaffold';
 import { LICENSE_CHOICES, licenseProducesFile, type LicenseKind } from './licenses';
 
@@ -29,6 +29,8 @@ export const NEW_KOJO_PROJECT_OVERLAY_ID = 'eratw.newKojoProject';
 
 export interface NewKojoProjectWizardDeps {
   workspaces: WorkspaceService;
+  /** 内核 IO：只用它的「自选项目位置」对话框通道（授权发生在平台命令内，见 `location-help` 注释） */
+  io: FileIO;
   /** 游戏项目（角色表来源；无打开项目时向导显式不可用） */
   project: ProjectService;
   /** 关闭自身（经内核事件，向导不持有宿主引用） */
@@ -83,6 +85,64 @@ function licenseHint(kind: LicenseKind): string {
   return LICENSE_CHOICES.find((c) => c.kind === kind)?.hint ?? '';
 }
 
+/* ---------------- 项目位置（2026-10-14 自选位置批：纯函数半边，可单测） ---------------- */
+
+/** `workspaces.create` 的入参形状（比契约窄一档：这里只管向导真的会传的那三个字段） */
+export interface KojoProjectCreateInput {
+  name: string;
+  meta: Record<string, unknown>;
+  rootDir?: string;
+}
+
+/**
+ * 「项目位置」行给作者看的文案：没自选过就明说是默认位置，自选过就直接给绝对路径
+ * （作者要的是"我那份作品到底落在哪"，不是内部术语）。
+ */
+export function locationLabel(chosen: string | null, defaultRoot: string | null): string {
+  if (chosen !== null) return chosen;
+  return defaultRoot === null ? '（默认）位置暂不可用' : `（默认）${defaultRoot}`;
+}
+
+/**
+ * 默认工作区根的取值：`rootDir()` 在没有平台数据目录的环境（浏览器开发壳）会抛，
+ * 这里吞成 `null` 只用于展示——真正的问题由「创建」那条路径如实报出来。
+ */
+export function defaultWorkspaceRoot(workspaces: WorkspaceService): string | null {
+  try {
+    return workspaces.rootDir();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 组装 `workspaces.create` 的入参。
+ *
+ * **未自选位置 ⇒ 连 `rootDir` 这个键都不出现**（而不是传 `undefined`）：
+ * 默认落点是历史行为，逐字不变才能让老作者升级后感觉不到差别。
+ * 自选过 ⇒ 原样带上那条路径，由内核核对它是否在已授权根名单内
+ * （授权来自目录对话框，不是来自这个字段本身）。
+ */
+export function buildCreateInput(
+  form: { workName: string; authorName: string; version: string },
+  chosenRoot: string | null,
+): KojoProjectCreateInput {
+  const input: KojoProjectCreateInput = {
+    name: form.workName.trim(),
+    meta: { author: form.authorName.trim(), version: form.version.trim() },
+  };
+  if (chosenRoot !== null) input.rootDir = chosenRoot;
+  return input;
+}
+
+/** 「项目位置」的 tooltip：零基础作者也要能一眼看懂这行是干什么的 */
+const LOCATION_HELP =
+  '新建的作品文件夹放在哪里。默认放在软件自己的数据目录里；' +
+  '也可以选一个你自己认得的文件夹（例如你的作品库），选好后软件会把那里当作可写的作品目录。';
+
+/** 「自选…」按钮的对话框标题 */
+const LOCATION_DIALOG_TITLE = '选择新建作品的位置…';
+
 /** 向导 overlay 组件（createElement 风格；壳层 PanelBody 无 props 渲染） */
 export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () => unknown {
   return function NewKojoProjectWizard(): unknown {
@@ -96,6 +156,8 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
     // 反馈 4：从"勾不勾占位模板"升级成"选哪一种协议"。缺省 `none` ——
     // 工具不替作者选定许可，也不默认替他"开放"什么。
     const [license, setLicense] = useState<LicenseKind>('none');
+    // 项目位置：null = 没自选过（走默认工作区根）；字符串 = 刚经系统对话框选定的目录
+    const [chosenRoot, setChosenRoot] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -148,10 +210,9 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           scriptNo,
           license,
         });
-        const wsProject = await deps.workspaces.create({
-          name: workName.trim(),
-          meta: { author: authorName.trim(), version: version.trim() },
-        });
+        const wsProject = await deps.workspaces.create(
+          buildCreateInput({ workName, authorName, version }, chosenRoot),
+        );
         await deps.workspaces.createArtifact(wsProject.id, {
           name: result.dirName,
           dirName: result.dirName,
@@ -167,7 +228,25 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       }
     };
 
+    /**
+     * 自选项目位置：走内核 IO 的对话框通道（`io.chooseWorkspaceRoot`）。
+     *
+     * 这里**不拼路径、不校验目录、不申请权限**——选定即授权发生在平台命令内部
+     * （系统目录对话框 + 登记常驻授权根绑成一个原子动作，铁律 6 的法定形态，
+     * 与导出用的 `io.exportFile` 同族）。取消返回 null，状态原样不动。
+     */
+    const pickLocation = async (): Promise<void> => {
+      setError(null);
+      try {
+        const picked = await deps.io.chooseWorkspaceRoot({ title: LOCATION_DIALOG_TITLE });
+        if (picked !== null) setChosenRoot(picked);
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    };
+
     const fileCount = 1 + (licenseProducesFile(license) ? 1 : 0) + CORE_FACES.length;
+    const defaultRoot = defaultWorkspaceRoot(deps.workspaces);
 
     return h('div', { className: 'wizard' },
       h('h3', null, '新建口上项目'),
@@ -229,6 +308,21 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
         },
           LICENSE_CHOICES.map((c) => h('option', { key: c.kind, value: c.kind }, c.label))),
         h('div', { className: 'wizard-hint dim' }, licenseHint(license))),
+
+      // 项目位置（2026-10-14 自选位置批）：默认落点仍是软件自己的数据目录，
+      // 作者可以改成"一个自己认得的文件夹"。文案与样式全部复用既有 wizard-* 类，
+      // 不新增 CSS 体系；说明既做 tooltip 也常驻显示（零基础作者不必悬停才发现这行能点）。
+      h('div', { className: 'wizard-field' },
+        h('span', { className: 'wizard-label' }, '项目位置'),
+        h('div', { className: 'dim' }, locationLabel(chosenRoot, defaultRoot)),
+        h('div', null,
+          h('button', {
+            className: 'ghost small',
+            onClick: () => void pickLocation(),
+            disabled: busy,
+            title: LOCATION_HELP,
+          }, chosenRoot === null ? '自选…' : '改选别的文件夹…')),
+        h('div', { className: 'wizard-hint dim' }, LOCATION_HELP)),
 
       // 落点预览
       h('div', { className: 'wizard-preview' },

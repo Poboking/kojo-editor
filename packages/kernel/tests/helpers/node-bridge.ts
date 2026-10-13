@@ -34,7 +34,15 @@ const DECODE_LABEL: Record<FileEncoding, string> = {
 };
 
 export class NodeBridge implements PlatformBridge {
-  constructor(private readonly dataDir: string) {}
+  /**
+   * @param dataDir 应用数据目录（等价 Rust 的 appDataDir）
+   * @param authorizedRoots 假装"平台已常驻授权的项目位置根"（2026-10-14 自选位置批的测试面）：
+   *   Node 侧弹不出目录对话框，多根链路靠这里喂名单。默认空 = 只有默认工作区根。
+   */
+  constructor(
+    private readonly dataDir: string,
+    private readonly authorizedRoots: string[] = [],
+  ) {}
 
   async readFileBytes(path: string): Promise<Uint8Array> {
     const buf = await fs.readFile(path);
@@ -174,6 +182,16 @@ export class NodeBridge implements PlatformBridge {
   async exportFile(): Promise<string | null> {
     // 同上：单文件导出依赖系统保存对话框
     throw new Error('exportFile is not supported by NodeBridge');
+  }
+
+  async chooseWorkspaceRoot(): Promise<string | null> {
+    // 同上：自选项目位置依赖系统目录对话框（且授权登记发生在平台命令内）
+    throw new Error('chooseWorkspaceRoot is not supported by NodeBridge');
+  }
+
+  async listWorkspaceRoots(): Promise<string[]> {
+    // 生产侧由 Rust 从 `<appDataDir>/workspace_roots.txt` 读回；本桥用构造参数喂同一份名单
+    return [...this.authorizedRoots];
   }
 
   appDataDir(): Promise<string> {

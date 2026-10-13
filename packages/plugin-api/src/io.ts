@@ -61,6 +61,22 @@ export interface FileIO {
    * **不受** `setWritableRoots([])`（项目关闭收回授权）影响。
    */
   setAppWritableRoots(roots: string[]): void;
+  /**
+   * **追加**一个常驻可写根（2026-10-14 新建项目自选位置批）。
+   * 与 `setAppWritableRoots` 的整替语义并存：本方法只追加、已存在的根去重后跳过，
+   * 用于"会话中途新增一个授权根"而不收回既有授权（同一目录的不同写法算同一个根）。
+   */
+  addAppWritableRoot(root: string): void;
+  /**
+   * 自选「项目位置」根（2026-10-14 新建项目自选位置批）：系统目录对话框选一个文件夹，
+   * 选定即由平台侧（对话框与授权绑在同一个平台命令内）登记为常驻授权根，
+   * 本层同步把它追加进常驻可写根；返回选定路径，取消 → null。
+   *
+   * 与 `exportFile` 同族、同一暴露方式：这是插件侧唯一能"让写允许域变宽"的通道，
+   * 而它**不接受路径入参**——授权只能来自用户在对话框里的显式选择（铁律 6）。
+   * 平台无对话框能力（Node 桥）时抛错，调用侧自解释呈现。
+   */
+  chooseWorkspaceRoot(opts?: { title?: string }): Promise<string | null>;
   isWritable(path: string): boolean;
   /** 手动备份文件；返回备份路径（文件不存在时返回 null） */
   backup(path: string): Promise<string | null>;

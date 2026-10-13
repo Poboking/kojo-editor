@@ -67,6 +67,49 @@ describe('FileIOService · 写保护', () => {
     io.setWritableRoots([]);
     expect(io.isWritable(path.join(kojo, 'x.ERB'))).toBe(false);
   });
+
+  it('addAppWritableRoot：追加去重，且不收回既有授权（与 setAppWritableRoots 的整替语义并存）', () => {
+    const a = path.join(tmpDir, 'works', 'A');
+    const b = path.join(tmpDir, 'works', 'B');
+    io.setAppWritableRoots([a]);
+    expect(io.isWritable(path.join(a, '包', '事件.ERB'))).toBe(true);
+    expect(io.isWritable(path.join(b, 'x.txt'))).toBe(false);
+
+    io.addAppWritableRoot(b);
+    expect(io.isWritable(path.join(b, '子', 'x.txt'))).toBe(true);
+    expect(io.isWritable(path.join(a, 'x.txt'))).toBe(true); // 旧授权没被收回
+
+    // 同一个目录的另一种写法（尾分隔符）不重复登记：整替一次即可回到干净状态
+    io.addAppWritableRoot(`${b}${path.sep}`);
+    io.setWritableRoots([]);
+    expect(io.isWritable(path.join(b, 'x.txt'))).toBe(true);
+  });
+
+  it('chooseWorkspaceRoot：选定即同步登记进常驻可写根；取消（null）时授权一点不动', async () => {
+    const chosen = path.join(tmpDir, 'works', '自选位置');
+    /** 以 NodeBridge 为原型覆写对话框通道（类方法在原型上，展开复制会丢） */
+    const withPicked = (root: string | null): PlatformBridge =>
+      Object.assign(Object.create(new NodeBridge(appData)) as PlatformBridge, {
+        chooseWorkspaceRoot: async () => root,
+      });
+
+    expect(io.isWritable(path.join(chosen, 'x.txt'))).toBe(false);
+
+    const cancelled = new FileIOServiceImpl(withPicked(null));
+    await expect(cancelled.chooseWorkspaceRoot({ title: '选吧' })).resolves.toBeNull();
+    expect(cancelled.isWritable(path.join(chosen, 'x.txt'))).toBe(false);
+
+    const picked = new FileIOServiceImpl(withPicked(chosen));
+    await expect(picked.chooseWorkspaceRoot({ title: '选吧' })).resolves.toBe(chosen);
+    // 授权立刻生效（不等重启）：本会话里紧接着 create 项目就该写得进去
+    expect(picked.isWritable(path.join(chosen, '包', '事件.ERB'))).toBe(true);
+  });
+
+  it('chooseWorkspaceRoot：平台无对话框能力时错误如实上抛（不静默降级回默认位置）', async () => {
+    await expect(io.chooseWorkspaceRoot({ title: '选吧' })).rejects.toThrow(
+      /chooseWorkspaceRoot is not supported by NodeBridge/,
+    );
+  });
 });
 
 describe('FileIOService · ensureDir（先建目录再写文件的链路）', () => {

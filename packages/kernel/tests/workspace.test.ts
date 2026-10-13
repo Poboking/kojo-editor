@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { WORKSPACE_MANIFEST_FILE, WriteNotAllowedError } from '@kojo/plugin-api';
+import { WORKSPACE_MANIFEST_FILE, WriteNotAllowedError, type PlatformBridge } from '@kojo/plugin-api';
 import { FileIOServiceImpl } from '../src/io';
 import { WorkspaceServiceImpl } from '../src/workspace';
 import { NodeBridge } from './helpers/node-bridge';
@@ -212,5 +212,194 @@ describe('WorkspaceService · 导入外部目录（P-F）', () => {
     await expect(
       ws.importDirectory(p.id, { name: '导入', dirName: '..', sourceDir: src }),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * 多根落点（2026-10-14 新建项目自选位置批）。
+ *
+ * 口径：`rootDir` **不是自由参数**——授权来自平台目录对话框（这里由
+ * `NodeBridge(appData, [roots])` 扮演"对话框已选定并登记"的那半边），
+ * 内核只核对名单；名单外的路径一律拒绝，且拒绝必须发生在任何写盘之前。
+ */
+describe('WorkspaceService · 多根落点（自选项目位置）', () => {
+  let extraRoot: string;
+  let io2: FileIOServiceImpl;
+  let ws2: WorkspaceServiceImpl;
+
+  beforeEach(async () => {
+    extraRoot = path.join(tmpDir, '自选作品库');
+    await fs.mkdir(extraRoot, { recursive: true });
+    io2 = new FileIOServiceImpl(new NodeBridge(appData, [extraRoot]));
+    ws2 = new WorkspaceServiceImpl({
+      bridge: new NodeBridge(appData, [extraRoot]),
+      io: io2,
+      log: noopLog,
+    });
+    await ws2.init();
+  });
+
+  it('roots() 默认根恒在首位；授权根 init 起就登记进 io 常驻可写根', () => {
+    const roots = ws2.roots();
+    expect(roots[0]).toBe(ws2.rootDir());
+    expect(roots).toContain(extraRoot);
+    expect(io2.isWritable(path.join(extraRoot, '包', '事件.ERB'))).toBe(true);
+  });
+
+  it('create 进授权根：落点在外部根，list 跨根看得见，projectDir 解析到外部根', async () => {
+    const p = await ws2.create({ name: '外部作品', rootDir: extraRoot });
+    expect(await fs.readFile(path.join(extraRoot, p.id, WORKSPACE_MANIFEST_FILE), 'utf8')).toContain(
+      '外部作品',
+    );
+    // 同一实例：create 把 id→目录 记进缓存，不必再扫盘
+    expect(ws2.projectDir(p.id)).toBe(path.join(extraRoot, p.id));
+    // 默认根下不该多出这个目录
+    expect(await io2.exists(path.join(ws2.rootDir(), p.id))).toBe(false);
+
+    // 新实例（模拟重启后）：init 见到授权根就扫一次 ⇒ 外部根里的项目开箱即可解析
+    const freshIo = new FileIOServiceImpl(new NodeBridge(appData, [extraRoot]));
+    const fresh = new WorkspaceServiceImpl({
+      bridge: new NodeBridge(appData, [extraRoot]),
+      io: freshIo,
+      log: noopLog,
+    });
+    await fresh.init();
+    expect(fresh.projectDir(p.id)).toBe(path.join(extraRoot, p.id));
+    const list = await fresh.list();
+    expect(list.map((x) => x.name)).toContain('外部作品');
+    // 制品动作按 projectDir 定位 ⇒ 外部根里的包读写的是外部根里的那份
+    await fresh.createArtifact(p.id, { name: '包', dirName: 'pkg', files: { 'a.txt': '1' } });
+    expect(await freshIo.exists(path.join(extraRoot, p.id, 'pkg', 'a.txt'))).toBe(true);
+    const tf = await fresh.readText(p.id, 'pkg/a.txt');
+    expect(tf.text).toBe('1');
+  });
+
+  it('create 传未授权根：拒绝（中文可读）且一个目录都不落', async () => {
+    const rogue = path.join(tmpDir, '没授权过的文件夹');
+    await fs.mkdir(rogue, { recursive: true });
+    await expect(ws2.create({ name: '越权', rootDir: rogue })).rejects.toThrow(/未获得授权/);
+    expect(await fs.readdir(rogue)).toEqual([]);
+    expect((await ws2.list()).map((p) => p.name)).not.toContain('越权');
+  });
+
+  it('会话中途新增的授权根立刻可用（create 前重读名单，不必重启）', async () => {
+    let authorized: string[] = [];
+    // 以 NodeBridge 为原型覆写名单通道（类方法在原型上，展开复制会丢）
+    const bridge = Object.assign(Object.create(new NodeBridge(appData)) as PlatformBridge, {
+      listWorkspaceRoots: async () => [...authorized],
+    });
+    const lateIo = new FileIOServiceImpl(bridge);
+    const lateWs = new WorkspaceServiceImpl({ bridge, io: lateIo, log: noopLog });
+    await lateWs.init();
+    expect(lateWs.roots()).toEqual([lateWs.rootDir()]); // 起步只有默认根
+
+    const newly = path.join(tmpDir, '刚在对话框里选中的文件夹');
+    await fs.mkdir(newly, { recursive: true });
+    authorized = [newly]; // = 用户刚点完「自选…」，平台侧已登记授权
+
+    const p = await lateWs.create({ name: '中途授权', rootDir: newly });
+    expect(await fs.readFile(path.join(newly, p.id, WORKSPACE_MANIFEST_FILE), 'utf8')).toContain(
+      '中途授权',
+    );
+  });
+
+  it('跨根同 id：保留默认根那一份并 warn（不静默出双份）', async () => {
+    const warns: string[] = [];
+    const spyLog = { ...noopLog, warn: (m: string) => warns.push(m) };
+    const ioSpy = new FileIOServiceImpl(new NodeBridge(appData, [extraRoot]));
+    const wsSpy = new WorkspaceServiceImpl({
+      bridge: new NodeBridge(appData, [extraRoot]),
+      io: ioSpy,
+      log: spyLog,
+    });
+    await wsSpy.init();
+    const p = await wsSpy.create({ name: '唯一', meta: { mark: 'default' } });
+    // 把整个项目目录复制到授权根下（同 id 两处并存 = 手工挪动 / 同步盘的产物）
+    await fs.cp(path.join(wsSpy.rootDir(), p.id), path.join(extraRoot, p.id), { recursive: true });
+
+    const list = await wsSpy.list();
+    const hits = list.filter((x) => x.id === p.id);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.meta.mark).toBe('default'); // 默认根那份赢（roots() 首位）
+    expect(wsSpy.projectDir(p.id)).toBe(path.join(wsSpy.rootDir(), p.id));
+    expect(warns.some((w) => w.includes('both'))).toBe(true);
+  });
+
+  it('外部根里的项目：remove 仍能删对目录（"回落默认根 + 删不存在的目录 = 幂等成功"这条静默失败被堵住）', async () => {
+    const p = await ws2.create({ name: '将删的外部作品', rootDir: extraRoot });
+    // 造一个"没扫过盘"的服务：init 时名单还是空（= 没有外部根、缓存空），
+    // 之后名单里才出现那个根 ⇒ projectDir 只能回落默认根，remove 必须自己去定位
+    let reveal: string[] = [];
+    const bridge = Object.assign(Object.create(new NodeBridge(appData)) as PlatformBridge, {
+      listWorkspaceRoots: async () => [...reveal],
+    });
+    const freshIo = new FileIOServiceImpl(bridge);
+    const fresh = new WorkspaceServiceImpl({ bridge, io: freshIo, log: noopLog });
+    await fresh.init();
+    reveal = [extraRoot];
+
+    expect(fresh.projectDir(p.id)).toBe(path.join(fresh.rootDir(), p.id)); // 契约里写明的回落
+    await fresh.remove(p.id);
+    expect(await freshIo.exists(path.join(extraRoot, p.id))).toBe(false);
+    expect(await freshIo.exists(path.join(fresh.rootDir(), p.id))).toBe(false);
+  });
+
+  it('授权根不存在（作者删了那个文件夹）：跳过并出声，不连累启动', async () => {
+    const gone = path.join(tmpDir, '已经不存在的作品库');
+    const ioGone = new FileIOServiceImpl(new NodeBridge(appData, [gone]));
+    const warns: string[] = [];
+    const wsGone = new WorkspaceServiceImpl({
+      bridge: new NodeBridge(appData, [gone]),
+      io: ioGone,
+      log: { ...noopLog, warn: (m: string) => warns.push(m) },
+    });
+    await wsGone.init();
+    expect(wsGone.roots()).toEqual([wsGone.rootDir()]);
+    expect(warns.some((w) => w.includes(gone))).toBe(true);
+    // 默认根照常可用
+    const p = await wsGone.create({ name: '照旧' });
+    expect(await ioGone.exists(path.join(wsGone.rootDir(), p.id))).toBe(true);
+  });
+
+  it('读名单本身失败：只用默认根 + 出声（不静默、不炸启动）', async () => {
+    const bridge = Object.assign(Object.create(new NodeBridge(appData)) as PlatformBridge, {
+      listWorkspaceRoots: async () => {
+        throw new Error('no such file');
+      },
+    });
+    const warns: string[] = [];
+    const wsFallback = new WorkspaceServiceImpl({
+      bridge,
+      io: new FileIOServiceImpl(bridge),
+      log: { ...noopLog, warn: (m: string) => warns.push(m) },
+    });
+    await wsFallback.init();
+    expect(wsFallback.roots()).toEqual([wsFallback.rootDir()]);
+    expect(warns.length).toBeGreaterThan(0);
+    expect(await wsFallback.list()).toEqual([]);
+  });
+
+  it('落点根都不在写闸之外：默认根外的任意路径仍被 io 第一道闸拒绝', async () => {
+    const p = await ws2.create({ name: '外部', rootDir: extraRoot });
+    await expect(
+      ws2.writeText(p.id, path.join('..', '..', 'evil.txt').replace(/\\/g, '/'), 'x'),
+    ).rejects.toThrow(/escapes/);
+    await expect(io2.writeText(path.join(tmpDir, 'somewhere-else', 'x.txt'), 'no')).rejects.toThrow(
+      WriteNotAllowedError,
+    );
+  });
+
+  it('服务不可用时 roots() 与 rootDir() 同口径抛错（不静默返回空名单）', () => {
+    const dead = new WorkspaceServiceImpl({
+      bridge: {
+        appDataDir: async () => {
+          throw new Error('no platform data dir');
+        },
+      } as unknown as PlatformBridge,
+      io: new FileIOServiceImpl(new NodeBridge(appData)),
+      log: noopLog,
+    });
+    expect(() => dead.roots()).toThrow(/unavailable/);
+    expect(() => dead.rootDir()).toThrow(/unavailable/);
   });
 });

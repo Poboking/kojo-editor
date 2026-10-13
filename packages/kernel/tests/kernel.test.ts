@@ -31,6 +31,10 @@ function stubBridge(): PlatformBridge {
     exportFile: async () => {
       throw new Error('exportFile is not supported by this stub');
     },
+    chooseWorkspaceRoot: async () => {
+      throw new Error('chooseWorkspaceRoot is not supported by this stub');
+    },
+    listWorkspaceRoots: async () => [],
     appDataDir: async () => 'C:\\AppData\\kojo-test',
     decode: async () => '',
     encode: async () => new Uint8Array(),

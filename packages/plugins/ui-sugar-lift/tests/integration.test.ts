@@ -72,6 +72,10 @@ function makeIO(files: Record<string, Uint8Array>) {
       files[p] ? { size: files[p]!.length, mtimeMs: 1, isDirectory: false } : null,
     setWritableRoots: () => {},
     setAppWritableRoots: () => {},
+    addAppWritableRoot: () => {},
+    chooseWorkspaceRoot: async () => {
+      throw new Error('chooseWorkspaceRoot is not supported by this fake');
+    },
     isWritable: () => true,
     backup: async (p) => (files[p] ? `backup:///${p.replace(/\//g, '_')}.bak` : null),
     exportFile: async () => {

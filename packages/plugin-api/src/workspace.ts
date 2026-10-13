@@ -13,8 +13,9 @@ import type { DirEntry } from './platform';
  * 「制品是什么」（角色包 / 皮肤 / 任何文件组）由消费方（适配器插件）解释，
  * 内核不感知。
  *
- * 写安全：工作区根目录在服务初始化时登记为**常驻可写根**（`io.setAppWritableRoots`，
- * 独立于项目写授权的开闭周期）；一切写盘仍走内核 io 双闸。
+ * 写安全：工作区根目录（默认根 + 用户经对话框自选并常驻授权的项目位置根）在服务初始化时
+ * 登记为**常驻可写根**（`io.setAppWritableRoots`，独立于项目写授权的开闭周期）；
+ * 一切写盘仍走内核 io 双闸。授权根的名单只从平台读回，契约侧没有"给路径就放行"的入口。
  */
 
 /** 项目清单文件名（位于项目目录根部） */
@@ -64,13 +65,30 @@ export interface WorkspaceImportInput {
 }
 
 export interface WorkspaceService {
-  /** 工作区根目录（绝对路径）；服务不可用（无平台数据目录）时抛错 */
+  /** 工作区**默认**根目录（绝对路径）；服务不可用（无平台数据目录）时抛错 */
   rootDir(): string;
-  /** 列出全部项目（扫描根目录读 manifest；损坏项跳过并记日志，不静默） */
+  /**
+   * 全部可用落点根：默认根（**恒在首位**）∪ 用户经目录对话框自选并常驻授权的项目位置根
+   * （2026-10-14 新建项目自选位置批）。服务不可用时抛错，口径同 `rootDir()`。
+   *
+   * 授权根的唯一来源是平台侧「对话框即授权」通道（`io.chooseWorkspaceRoot`）；
+   * 本契约**没有**任何"接受一个路径就扩大写允许域"的方法。
+   */
+  roots(): string[];
+  /** 列出全部项目（扫描**所有**根目录读 manifest；损坏项跳过并记日志，不静默。
+   * 同一 id 出现在两处 → 保留默认根那份并记 warn） */
   list(): Promise<WorkspaceProject[]>;
   get(projectId: string): Promise<WorkspaceProject | null>;
-  /** 新建项目（创建目录 + manifest） */
-  create(input: { name: string; meta?: Record<string, unknown> }): Promise<WorkspaceProject>;
+  /**
+   * 新建项目（创建目录 + manifest）。
+   * `rootDir` 缺省 = 默认根（行为与历史逐字一致）；给了它则**必须命中 `roots()` 里的某一条**
+   * （默认根或已授权的自选位置），否则抛错——落点不是自由参数，授权来自目录对话框。
+   */
+  create(input: {
+    name: string;
+    meta?: Record<string, unknown>;
+    rootDir?: string;
+  }): Promise<WorkspaceProject>;
   /** 更新名称 / 元数据（updatedAt 自动刷新） */
   update(
     projectId: string,
@@ -78,7 +96,14 @@ export interface WorkspaceService {
   ): Promise<WorkspaceProject>;
   /** 删除项目（连同目录全部内容） */
   remove(projectId: string): Promise<void>;
-  /** 项目目录绝对路径 */
+  /**
+   * 项目目录绝对路径（同步）。
+   *
+   * **限制（必须知道再调用）**：默认根下的项目恒可解析（`<默认根>/<id>`）；
+   * 落在**自选授权根**里的项目要靠 `id → 目录` 缓存，而缓存只由 `list()`
+   * （以及服务初始化时存在授权根的那次扫描）填充。
+   * 因此：**外部根里的项目要经一次 `list()` 才能解析**，未命中时本方法回落默认根。
+   */
   projectDir(projectId: string): string;
   /** 在项目中创建制品：写入文件集并登记 manifest */
   createArtifact(projectId: string, input: WorkspaceArtifactInput): Promise<WorkspaceArtifact>;

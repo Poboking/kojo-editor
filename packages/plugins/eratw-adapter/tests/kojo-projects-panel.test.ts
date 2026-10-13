@@ -179,6 +179,7 @@ function fakeWorkspaces(): WorkspaceService {
   const projects: WorkspaceProject[] = [];
   return {
     rootDir: () => '/appdata/workspaces',
+    roots: () => ['/appdata/workspaces'],
     list: async () => projects,
     get: async () => null,
     create: async () => {

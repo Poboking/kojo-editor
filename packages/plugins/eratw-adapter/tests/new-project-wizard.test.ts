@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { CharaInfo } from '@kojo/plugin-api';
-import { charaOptionLabel, noKojoDirWarning, readRequestToken } from '../src/new-project-wizard';
+import type { CharaInfo, WorkspaceService } from '@kojo/plugin-api';
+import {
+  buildCreateInput,
+  charaOptionLabel,
+  defaultWorkspaceRoot,
+  locationLabel,
+  noKojoDirWarning,
+  readRequestToken,
+} from '../src/new-project-wizard';
 
 /**
  * 「目标角色」文案单测（看板 HK-9，2026-10-13）。
@@ -86,5 +93,79 @@ describe('readRequestToken（新建项目向导的开门 payload）', () => {
     expect(readRequestToken({ requestToken: 7 })).toBeNull();
     expect(readRequestToken({ token: 'kojo-1' })).toBeNull();
     expect(readRequestToken({ requestToken: null })).toBeNull();
+  });
+});
+
+/**
+ * 项目位置（2026-10-14 自选位置批）。
+ *
+ * 判据的关键在**默认路径零变化**：没自选过连 `rootDir` 这个键都不该出现，
+ * 于是内核走的就是历史上那条 `join(默认根, id)` 的老路，逐字不变。
+ * 自选过才把路径递过去，而"这条路径能不能写"由内核按已授权名单核对——
+ * 授权来自系统目录对话框（平台命令内完成），不是来自这个字段本身。
+ */
+const FORM = { workName: '  东方口上合集  ', authorName: '  张三  ', version: ' 1.0 ' };
+
+describe('buildCreateInput（新建项目的落点入参）', () => {
+  it('未自选位置：只有 name / meta，rootDir 键整个不出现', () => {
+    const input = buildCreateInput(FORM, null);
+    expect(input).toEqual({ name: '东方口上合集', meta: { author: '张三', version: '1.0' } });
+    expect('rootDir' in input).toBe(false);
+  });
+
+  it('自选后：对话框回来的路径原样进 rootDir（消毒前后一致，不拼不裁）', () => {
+    const input = buildCreateInput(FORM, 'D:\\我的作品库');
+    expect(input.rootDir).toBe('D:\\我的作品库');
+    expect(input.name).toBe('东方口上合集');
+  });
+
+  it('create 实收：假工作区收到的入参与 buildCreateInput 的产物一致（自选 / 未自选两条）', async () => {
+    const seen: Array<{ name: string; meta: Record<string, unknown>; rootDir?: string }> = [];
+    const workspaces = {
+      rootDir: () => '/appdata/workspaces',
+      roots: () => ['/appdata/workspaces', 'D:\\我的作品库'],
+      create: async (input: {
+        name: string;
+        meta: Record<string, unknown>;
+        rootDir?: string;
+      }) => {
+        seen.push(input);
+        return { id: 'p1', name: input.name, createdAt: 1, updatedAt: 1, artifacts: [], meta: {} };
+      },
+    } as unknown as WorkspaceService;
+
+    await workspaces.create(buildCreateInput(FORM, null));
+    await workspaces.create(buildCreateInput(FORM, 'D:\\我的作品库'));
+
+    expect(seen).toHaveLength(2);
+    expect('rootDir' in seen[0]!).toBe(false);
+    expect(seen[1]!.rootDir).toBe('D:\\我的作品库');
+    // 名称/署名两条一路相同：自选位置不该改动作品本身
+    expect(seen[1]!.name).toBe(seen[0]!.name);
+    expect(seen[1]!.meta).toEqual(seen[0]!.meta);
+  });
+});
+
+describe('locationLabel / defaultWorkspaceRoot（「项目位置」那行的文案）', () => {
+  it('没自选过 → 明说"（默认）+ 默认根"，作者看得见自己东西落在哪', () => {
+    expect(locationLabel(null, '/appdata/workspaces')).toBe('（默认）/appdata/workspaces');
+  });
+
+  it('自选过 → 直接给那条绝对路径（不再挂"默认"字样）', () => {
+    expect(locationLabel('D:\\我的作品库', '/appdata/workspaces')).toBe('D:\\我的作品库');
+  });
+
+  it('默认根取不到（浏览器开发壳）→ 降级文案，不抛给作者', () => {
+    expect(locationLabel(null, null)).toContain('位置暂不可用');
+    const broken = {
+      rootDir: () => {
+        throw new Error('Workspace service is unavailable (no platform data directory)');
+      },
+    } as unknown as WorkspaceService;
+    expect(defaultWorkspaceRoot(broken)).toBeNull();
+    const working = {
+      rootDir: () => '/appdata/workspaces',
+    } as unknown as WorkspaceService;
+    expect(defaultWorkspaceRoot(working)).toBe('/appdata/workspaces');
   });
 });

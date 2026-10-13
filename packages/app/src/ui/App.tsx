@@ -8,6 +8,7 @@ import { useNotify } from './NotificationCenter';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
+import { workspaceRootsOf } from './workspace-roots';
 import type { EditorPaneActions } from './EditorPane';
 
 export type AppPhase = 'boot' | 'welcome' | 'opening' | 'project';
@@ -162,28 +163,24 @@ export function App(): ReactElement {
         }
 
         // BUG-5：起文件监视（Rust notify → 内核去抖 → `file.changed`）。
-        // 根 = 项目根 ∪ 适配器其余根 ∪ **作者工作区根**：存档目录可能在项目根外
+        // 根 = 项目根 ∪ 适配器其余根 ∪ **作者工作区全部根**：存档目录可能在项目根外
         // （本机就有独立的 sav 库），而工作区在 `%APPDATA%` 下、与项目根毫无包含关系。
         // 嵌套根由内核折叠。监视状态经 `file.watchState` 呈现，不在此处吞掉。
         //
-        // 工作区根必须一起监视（HK-5 批补上，理由不是"整齐"而是**防数据丢失**）：
+        // 工作区**全部根**必须一起监视（HK-5 批补上，理由不是"整齐"而是**防数据丢失**）：
         // 作者工作区是可写的权威区，`.kojo` 就住在这里。若不监视，作者在记事本里改了
         // 一个正被编辑器打开的工作区文件，回到编辑器按 Ctrl+S 就会**静默覆盖**那份外部
         // 改动——正是 §5.36/§5.84 那条「谁改盘谁发事件、宿主据此重载」要根治的形状，
         // 而这条链路此前只覆盖游戏目录那半边。
-        // rootDir() 在没有平台数据目录的环境（浏览器开发壳）会抛，这里吞成 null：
+        // 之所以是"全部根"而不是默认根：作品可以落在作者自选的项目位置（目录对话框授权）
+        // 里，那些目录与 `%APPDATA%` 下的默认根毫无包含关系，漏掉就等于没监视。
+        // 服务在没有平台数据目录的环境（浏览器开发壳）会抛，`workspaceRootsOf` 吞成空列表：
         // 那种环境本来也没有真实文件系统可监视，不能因为它把整个开项目流程带崩。
-        let workspaceRoot: string | null = null;
-        try {
-          workspaceRoot = kernel.workspaces.rootDir();
-        } catch {
-          workspaceRoot = null;
-        }
         await kernel.fileWatch.start([
           p.rootDir,
           ...p.kojoPaths,
           ...(p.savDir ? [p.savDir] : []),
-          ...(workspaceRoot ? [workspaceRoot] : []),
+          ...workspaceRootsOf(kernel),
         ]);
 
         // 可写路径批准（首次打开必须由用户显式确认；未批准 = 只读浏览）；

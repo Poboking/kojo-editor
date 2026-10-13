@@ -116,6 +116,10 @@ function makeFs(io: HarnessOptions = {}) {
       p in files ? { size: files[p]!.length, mtimeMs: 1, isDirectory: false } : null,
     setWritableRoots: () => {},
     setAppWritableRoots: () => {},
+    addAppWritableRoot: () => {},
+    chooseWorkspaceRoot: async () => {
+      throw new Error('chooseWorkspaceRoot is not supported by this fake');
+    },
     isWritable,
     backup: async (p: string): Promise<string | null> => {
       if (!(p in files)) return null;

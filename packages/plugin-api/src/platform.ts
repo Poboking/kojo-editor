@@ -111,6 +111,22 @@ export interface PlatformBridge {
    * Node 桥无对话框 → 抛 unsupported。
    */
   exportFile(fileName: string, bytes: Uint8Array, opts?: { title?: string }): Promise<string | null>;
+  /**
+   * 自选「项目位置」根（2026-10-14 新建项目自选位置批）：弹系统目录对话框，
+   * 用户选定后由**平台侧在同一个命令内**把该目录登记为常驻授权根并持久化，返回其路径；
+   * 取消 → null（授权状态一个字节都不动）。
+   *
+   * 授权模型与 `exportFile` 同族 = **对话框即授权**：
+   * 平台不存在"接受一个路径参数就放行写权限"的命令，JS 拿不到写允许域的扩大入口。
+   * Node 桥无对话框 → 抛 unsupported。
+   */
+  chooseWorkspaceRoot(opts?: { title?: string }): Promise<string | null>;
+  /**
+   * 已获常驻授权的**自选**项目位置根（绝对路径列表；不含默认工作区根，
+   * 那由内核自己按 appDataDir 拼）。不存在的目录平台侧会剔除并出声。
+   * 无此能力的平台（Node 桥）返回空列表。
+   */
+  listWorkspaceRoots(): Promise<string[]>;
   /** 应用数据目录（存储域 / 备份的根） */
   appDataDir(): Promise<string>;
   /** 字节 → 字符串 */

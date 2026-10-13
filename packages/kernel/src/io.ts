@@ -158,6 +158,26 @@ export class FileIOServiceImpl implements FileIO {
     this.appWritableRoots = roots.map((r) => r);
   }
 
+  addAppWritableRoot(root: string): void {
+    // 追加去重（整替语义留给 setAppWritableRoots，两者各有调用方，不混用）
+    const key = pathKey(root);
+    if (this.appWritableRoots.some((r) => pathKey(r) === key)) return;
+    this.appWritableRoots.push(root);
+  }
+
+  /**
+   * 自选「项目位置」根（2026-10-14 批）：**对话框即授权**——授权发生在平台命令内
+   * （目录对话框与写进常驻根清单绑成一个原子动作），本层只负责把结果同步进第一道闸。
+   * 与 `exportFile` 同族：刻意不接受路径入参，JS 侧没有"给个路径就放行"的入口。
+   */
+  async chooseWorkspaceRoot(opts?: { title?: string }): Promise<string | null> {
+    const root = await this.bridge.chooseWorkspaceRoot(opts);
+    if (root === null) return null; // 取消 = 什么都不改
+    this.addAppWritableRoot(root);
+    this.log?.info(`Project location authorized: ${root}`);
+    return root;
+  }
+
   isWritable(path: string): boolean {
     return [...this.writableRoots, ...this.appWritableRoots].some((root) => isPathUnder(root, path));
   }
