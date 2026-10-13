@@ -181,6 +181,10 @@ describe.skipIf(!SMOKE_DIR)('发版验证样例 · release-check.kojo', () => {
       '@M_KOJO_发版检查_MESSAGE_CUSTOM_COM_K145_313', // 类型: 自定指令
       '@M_KOJO_发版检查_MESSAGE_CUSTOM_SCOM_K145_314', // 类型: 自定副指令
       '@M_KOJO_发版检查_SUCCESS_COM_K145_310', // 成功 分野
+      '@KOJO_发版检查_COM_NAME_K145_270', // 自定指令 NAME 函数（HK-12；编号自动分配 270）
+      '@KOJO_发版检查_COM_K145_270', // 自定指令 本体函数（HK-12）
+      '@KOJO_发版检查_CAN_COM_K145_270', // 自定指令 可选钩子 `可否使用:`（HK-12 五钩子之 CAN_COM）
+      '@KOJO_发版检查_COM_Counter不发_K145_270', // 自定指令 可选钩子 `计数器不发:`（HK-12 五钩子）
       '@M_KOJO_发版检查_CHECK_K145', // 查询面（附录 C #36）      'IF TALENT:TARGET:恋慕', // 如果 她的恋慕
       'ELSEIF', // 否则如果
       'SELECTCASE TFLAG:193', // 当

@@ -30,6 +30,7 @@ export type KeywordId =
   | 'block.random'
   | 'block.choice'
   | 'block.color'
+  | 'block.customCommand'
   /* 行内 / 时机子句 */
   | 'inline.cont'
   | 'inline.heart'
@@ -80,6 +81,10 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['选项', 'block.choice'],
   ['choice', 'block.choice'],
   ['着色', 'block.color'],
+  // 自定指令块（HK-12）：**块头**上下文（行首 `自定指令 名称：`）。
+  // 注意与既有 `类型: 自定指令` 的**命名参数右值**撞词——后者按纯字符串取用、
+  // 不查本表（见 `lexer.parseTimingHead`），两上下文互不干扰（测试已钉住）。
+  ['自定指令', 'block.customCommand'],
   // 行内
   ['续', 'inline.cont'],  ['cont', 'inline.cont'],
   ['continue', 'inline.cont'],

@@ -3,6 +3,7 @@ import type {
   FileIO,
   GameAdapter,
   GameProject,
+  KojoInstructionTable,
   Plugin,
   ProjectService,
   SugarTranspileService,
@@ -13,6 +14,7 @@ import type {
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
 import { ERATW } from './constants';
+import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
 import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { clearKojoFamilyMemo, createEratwFamilyIndex } from './family-index';
 import { createEratwConventions } from './conventions';
@@ -354,6 +356,8 @@ export function createEratwAdapterPlugin(): Plugin {
       let currentSchema: VariableSchema | undefined;
       /** 口上调用协议（v0.2 第十批；loadProject 时解析路由表，失败 → undefined 优雅降级） */
       let currentProtocol: EratwCallProtocol | undefined;
+      /** 指令名表（HK-11；loadProject 时读 `CSV/Train.csv`，缺表 = 空表实例） */
+      let currentInstructionTable: KojoInstructionTable | undefined;
 
       const adapter: GameAdapter = {
         gameId: ERATW.gameId,
@@ -366,6 +370,10 @@ export function createEratwAdapterPlugin(): Plugin {
         },
         get kojoCallProtocol() {
           return currentProtocol;
+        },
+        // 指令名表（HK-11）——读当前项目表；未加载 = 空表实例（糖层查表恒有其一枚）。
+        get kojoInstructionTable(): KojoInstructionTable {
+          return currentInstructionTable ?? EMPTY_INSTRUCTION_TABLE;
         },
         // 时机分野模板表（v0.3 批 S2 补齐）——纯数据、无 IO：转译器转译时
         // 经槽位取用，故恒可用（不依赖 loadProject）。
@@ -455,6 +463,13 @@ export function createEratwAdapterPlugin(): Plugin {
           currentProtocol = await loadEratwCallProtocol({
             io,
             routeFile: join(rootDir, ...ERATW.paths.kojoMessageRoute),
+            log: ctx.log,
+          });
+
+          // ---- 5. 指令名表（CSV/Train.csv → 中文名 ↔ 编号；缺表/读失败 = 空表，不抛） ----
+          currentInstructionTable = await loadEratwInstructionTable({
+            io,
+            csvDir: join(rootDir, ...ERATW.csvDir),
             log: ctx.log,
           });
 

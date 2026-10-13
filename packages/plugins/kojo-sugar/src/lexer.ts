@@ -145,7 +145,8 @@ export type LineClass =
   | { kind: 'headDecl'; key: KeywordId; value: string }
   | { kind: 'aliasDecl'; name: string; value: AliasValue }
   | { kind: 'switchItem'; name: string; value: string }
-  | { kind: 'timingHead'; face: string; index?: string; namedParams: TimingNamedParam[] }
+  | { kind: 'timingHead'; face: string; index?: string; indexName?: string; namedParams: TimingNamedParam[] }
+  | { kind: 'customCommandHead'; name: string; index?: number; canCom?: string; comCounter?: string }
   | { kind: 'ifHead'; variant: 'if' | 'elseif' | 'else'; condition: string; inline?: string }
   | { kind: 'whenHead'; subject: string }
   | { kind: 'caseHead'; values: WhenCaseValue[] }
@@ -182,6 +183,9 @@ function matchBlankLine(code: string): { kind: 'blankLine'; wait: boolean } | nu
 
 /** 全大写原生指令判定（规范 §3.10）：`SETCOLOR` / `IF` / `CALL` / `RAND` / `TFLAG:193 = 0` */
 const RAW_INSTR_RE = /^[A-Z][A-Z0-9_]*(?:[:.][^\s]*)?(?:\s|=|$)/;
+
+/** 含 CJK（平假名 / 片假名 / 汉字 / 半角片假名）——中文指令名判定（HK-11②） */
+const CJK = /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]/;
 
 /**
  * 行分类（纯函数；不做配对）。
@@ -368,6 +372,7 @@ function parseTimingHead(value: string): LineClass | null {
   const face = parts[0]!;
   if (face.length === 0) return null;
   let index: string | undefined;
+  let indexName: string | undefined;
   const namedParams: TimingNamedParam[] = [];
   for (let i = 1; i < parts.length; i++) {
     const token = parts[i]!;
@@ -379,12 +384,82 @@ function parseTimingHead(value: string): LineClass | null {
       i++;
       continue;
     }
-    if (index === undefined && /^[0-9A-Za-z_]+$/.test(token)) {
-      index = token;
-      continue;
+    // HK-11②：编号可以是**中文指令名**（`时机 指令 摸屁股：`）——不能只认 ASCII，
+    // 否则中文名会被静默丢弃（返工高危点）。数字仍进 `index`（旧写法逐字节不破），
+    // 中文名进 `indexName`，由 codegen 经 adapter 指令表解析成编号（fail-closed）。
+    if (index === undefined && indexName === undefined) {
+      if (/^[0-9A-Za-z_]+$/.test(token)) {
+        index = token;
+        continue;
+      }
+      if (CJK.test(token)) {
+        indexName = token;
+        continue;
+      }
     }
   }
-  return { kind: 'timingHead', face, index, namedParams };
+  return {
+    kind: 'timingHead',
+    face,
+    ...(index !== undefined ? { index } : {}),
+    ...(indexName !== undefined ? { indexName } : {}),
+    namedParams,
+  };
+}
+
+/**
+ * `自定指令 <中文名> [编号: N] [可否使用: <条件>] [计数器不发: <条件>]`（HK-12）。
+ *
+ * 与 `类型: 自定指令`（时机命名参数右值）**同名不同上下文**：这里只出现在
+ * **行首块头**（由 `parseBlockHead` 经关键字表分派），右值路径不查关键字表。
+ *
+ * 可选子句（块头，顺序任意、可缺省）：
+ * - `编号: N`（数字）：显式编号；缺省 = 由 codegen 在 adapter 的 `customComRange`
+ *   内自动分配；
+ * - `可否使用: <条件>`（HK-12 五钩子之 `CAN_COM`）：值为条件原文；
+ * - `计数器不发: <条件>`（HK-12 五钩子之 `COM_Counter不发`）：值为条件原文。
+ *
+ * 子句键只在**后跟冒号**时才是子句（`编号\s*[:：]`）——名字里恰好含这些词
+ * 不会误判（除非名字后紧跟冒号，那本身就不是合法名字）。
+ */
+function parseCustomCommandHead(rest: string): LineClass | null {
+  const inner = rest.trim();
+  if (inner.length === 0) return null;
+
+  // 子句键扫描（键必须在词边界、且后跟全/半角冒号）
+  const clauseRe = /(?:^|\s)(编号|可否使用|计数器不发)\s*[:：]/g;
+  const marks: { key: string; start: number; valueStart: number }[] = [];
+  for (let m = clauseRe.exec(inner); m !== null; m = clauseRe.exec(inner)) {
+    marks.push({ key: m[1]!, start: m.index, valueStart: m.index + m[0].length });
+  }
+  if (marks.length === 0) {
+    return { kind: 'customCommandHead', name: inner };
+  }
+
+  const name = inner.slice(0, marks[0]!.start).trim();
+  if (name.length === 0) return null;
+
+  let index: number | undefined;
+  let canCom: string | undefined;
+  let comCounter: string | undefined;
+  for (let i = 0; i < marks.length; i++) {
+    const mark = marks[i]!;
+    const end = i + 1 < marks.length ? marks[i + 1]!.start : inner.length;
+    const value = inner.slice(mark.valueStart, end).trim();
+    if (mark.key === '编号') {
+      if (/^\d+$/.test(value)) index = Number(value);
+    } else if (value.length > 0) {
+      if (mark.key === '可否使用') canCom = value;
+      else comCounter = value;
+    }
+  }
+  return {
+    kind: 'customCommandHead',
+    name,
+    ...(index !== undefined ? { index } : {}),
+    ...(canCom !== undefined ? { canCom } : {}),
+    ...(comCounter !== undefined ? { comCounter } : {}),
+  };
 }
 
 /* ------------------------------ 表达式头 / 赋值 ------------------------------ */
@@ -454,6 +529,8 @@ function parseBlockHead(content: string): LineClass | null {
       return { kind: 'choiceHead' };
     case 'block.color':
       return { kind: 'colorHead', color: rest };
+    case 'block.customCommand':
+      return parseCustomCommandHead(rest);
     case 'inline.hideScene':
       return { kind: 'messageCheck', scope: 'scene', condition: stripConditionPrefix(rest) };
     case 'inline.hideKojo':

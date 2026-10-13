@@ -14,6 +14,7 @@
 
 import type {
   AliasDecl,
+  CustomCommandBlock,
   HeartLine,
   IfBlock,
   IfBranch,
@@ -180,6 +181,14 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
       continue;
     }
 
+    // ---- 自定指令块（HK-12；文档级，与时机同级，故同样受"别名须在头"约束）----
+    if (cls.kind === 'customCommandHead') {
+      sawTiming = true;
+      const block = readCustomCommandBlock(cursor, cls);
+      topLevel.push(block);
+      continue;
+    }
+
     // ---- 顶层其它（原生行 / 意外内容）----
     if (cls.kind === 'rawLine') {
       cursor.next();
@@ -335,8 +344,41 @@ function readTimingBlock(
     kind: 'timingBlock',
     face: cls.face,
     index: cls.index,
+    indexName: cls.indexName,
     namedParams: mergeNamedParams(cls.namedParams, namedParams),
     messageCheck,
+    body,
+    loc: {
+      start: posOf(head),
+      end: { line: cursor.lines[Math.max(0, cursor.index - 1)]?.endLine ?? head.endLine, column: 1 },
+    },
+  };
+}
+
+/* ------------------------------ 自定指令块（HK-12） ------------------------------ */
+
+/**
+ * 读取 `自定指令 <名> [编号: N] [可否使用: <条件>] [计数器不发: <条件>]：` 块
+ * → `CustomCommandBlock`（契约冻结形态）。
+ *
+ * 正文与 `TimingBlock` 同口径（`BlockParser.parseBody`）；可选钩子子句
+ * （`可否使用:` / `计数器不发:`，HK-12 五钩子）在块头解析、原样透传到 AST，
+ * 由 codegen 按 `customHooks` 模板产出（缺省不生成）。空体合法
+ * （codegen 会落 `LOCAL = 0`，与时机块一致）。
+ */
+function readCustomCommandBlock(
+  cursor: Cursor,
+  cls: LineClass & { kind: 'customCommandHead' },
+): CustomCommandBlock {
+  const head = cursor.next()!;
+  const baseIndent = head.indent;
+  const body = new BlockParser(cursor, baseIndent + 1, cursor.sink).parseBody();
+  return {
+    kind: 'custom-command',
+    name: cls.name,
+    ...(cls.index !== undefined ? { index: cls.index } : {}),
+    ...(cls.canCom !== undefined ? { canCom: cls.canCom } : {}),
+    ...(cls.comCounter !== undefined ? { comCounter: cls.comCounter } : {}),
     body,
     loc: {
       start: posOf(head),

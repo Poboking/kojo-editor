@@ -6,7 +6,8 @@
  * 走注入的字典查询（`DictionaryLookup`，由 adapter 提供）。
  *
  * 两条纪律：
- * 1. **先别名后一切**（规范 §5.0 第 0 步）：别名替换发生在降糖之前；
+ * 1. **系统函数名先，别名次之**（HK-11① + 规范 §5.0 第 0 步）：先把中文系统函数名
+ *    降为 ERB 函数名（`获取标记(` → `GETBIT(`），再做别名替换；
  * 2. **宽容但不静默**：不认识的标识符不原样输出，而是报诊断
  *    （`unknown-identifier` / `alias-unknown-target`）——口上里拼写错误
  *    几乎一律表现为"口上静默失效"，必须显式暴露。
@@ -14,6 +15,7 @@
 
 import type { AliasValue, SugarDiagnostic, SugarPosition } from '@kojo/plugin-api';
 import { operatorTable, NOTIN_KEYWORDS, RESERVED_PRONOUNS } from './keywords';
+import { lowerSystemFunctions } from './system-functions';
 import type { AliasTable, DictionaryLookup } from './types';
 
 /** 降糖上下文 */
@@ -189,13 +191,17 @@ const ATTRIBUTE_PREFIX: ReadonlyMap<string, string> = new Map([
 /**
  * 表达式降糖主入口。
  *
- * 顺序（不可调换）：别名替换 → 代词 → 属性 → 中文运算符 → `不在`。
- * 原因：别名替换是**文本级**的（规范 §5.0 明确"先于所有其它降糖"），
- * 代词/属性/运算符是**结构级**的。
+ * 顺序（不可调换）：系统函数名 → 别名替换 → 代词 → 属性 → 中文运算符 → `不在`。
+ * 原因：系统函数名（HK-11①）是**词形级**的、别名替换是**文本级**的（规范 §5.0
+ * 明确"先于所有其它降糖"）、代词/属性/运算符是**结构级**的；系统函数名先做，
+ * 使 `获取标记(…)` 在后续各步眼里是原生 `GETBIT(…)`。
  */
 export function lowerExpression(raw: string, ctx: ExprContext): string {
-  // ---- 0. 别名替换（先于一切降糖） ----
-  const substituted = substituteAliases(raw, ctx).text;
+  // ---- 0. 系统函数名中文化（HK-11①；先于一切，见模块头注顺序说明） ----
+  const named = lowerSystemFunctions(raw);
+
+  // ---- 0b. 别名替换（先于一切降糖） ----
+  const substituted = substituteAliases(named, ctx).text;
 
   // ---- 1. 中文运算符（在字符串字面量外） ----
   let expr = replaceInCodeOutsideStrings(substituted, (code) => lowerOperators(code));

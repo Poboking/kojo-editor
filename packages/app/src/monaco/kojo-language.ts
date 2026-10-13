@@ -1,6 +1,6 @@
 import type * as Monaco from 'monaco-editor';
 import type { LineDecoration } from '@kojo/plugin-api';
-import { RESERVED_PRONOUNS, SUGAR_LEXICON_OPERATORS, SUGAR_LEXICON_WORDS, SUGAR_KEYWORD_ROLE_LABEL } from '@kojo/plugin-kojo-sugar';
+import { RESERVED_PRONOUNS, SUGAR_LEXICON_OPERATORS, SUGAR_LEXICON_WORDS, SUGAR_KEYWORD_ROLE_LABEL, SYSTEM_FUNCTION_ALIASES } from '@kojo/plugin-kojo-sugar';
 
 /**
  * 语法糖（`.kojo` 表层 DSL）编辑器支持 —— Monarch 词法 + 语言配置 + 补全 provider。
@@ -9,7 +9,8 @@ import { RESERVED_PRONOUNS, SUGAR_LEXICON_OPERATORS, SUGAR_LEXICON_WORDS, SUGAR_
  * （app 壳），因为 Monaco 不属任何插件（插件契约刻意不依赖 Monaco）。
  *
  * 词表**单一真源**：中文主形 / 英文别名 / 运算符一律取自 `kojo-sugar` 转译器自身的
- * 关键字表（`SUGAR_LEXICON_*`），故高亮/补全与词法**永不脱节**——本文件不复制任何
+ * 关键字表（`SUGAR_LEXICON_*`），系统函数中文名（HK-11①）取自 `SYSTEM_FUNCTION_ALIASES`，
+ * 故高亮/补全与词法**永不脱节**——本文件不复制任何
  * 词形清单（与 `erb-language.ts` 硬编码 DIRECTIVES 的取舍不同：糖词表是活表）。
  *
  * 高亮是**最佳努力**（Monarch 非 LR 解析器，规范 §7 已定调 v1 走 Monarch；
@@ -43,11 +44,18 @@ const ERB_DIRECTIVES = [
   'CFLAG', 'TFLAG', 'TCVAR', 'TALENT', 'ABL', 'EXP', 'MARK', 'BASE', 'PALAM',
 ];
 
+/**
+ * 中文系统函数名（HK-11①）——从 `kojo-sugar` 的 `SYSTEM_FUNCTION_ALIASES`
+ * **派生**（单一真源，本文件不复制词形）。
+ */
+const SYSTEM_FUNCTION_WORDS: string[] = [...SYSTEM_FUNCTION_ALIASES.keys()];
+
 /** `kojo-dark` 主题里糖专属 token 的着色规则（由 `erb-language.ts` 合并进主题定义） */
 export const KOJO_SUGAR_THEME_RULES: Monaco.editor.ITokenThemeRule[] = [
   { token: 'sugar.keyword', foreground: 'c678dd' },
   { token: 'sugar.keyword.alias', foreground: '8b7bb8' },
   { token: 'sugar.keyword.value', foreground: '56b6c2' },
+  { token: 'sugar.system-function', foreground: '61afce' },
   { token: 'sugar.operator', foreground: '56b6c2' },
   { token: 'sugar.cont', foreground: 'e5c07b', fontStyle: 'bold' },
   { token: 'sugar.pronoun', foreground: 'e06c75' },
@@ -78,6 +86,7 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
     pronouns: [...RESERVED_PRONOUNS],
     englishAliases: ALIAS_WORDS,
     erbDirectives: ERB_DIRECTIVES,
+    systemFunctions: SYSTEM_FUNCTION_WORDS,
     tokenizer: {
       root: [
         // 空行 / 注释（表层同时接受 `;` 与 `//`，规范 §3.10）
@@ -109,6 +118,7 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
               '@operators': 'sugar.operator',
               '@pronouns': 'sugar.pronoun',
               '@primaryWords': 'sugar.keyword',
+              '@systemFunctions': 'sugar.system-function',
               '@default': 'identifier',
             },
           },
@@ -255,6 +265,18 @@ function registerCompletion(monaco: typeof Monaco): void {
           detail: '运算符',
           range,
           sortText: `4_${op}`,
+        });
+      }
+      // 5. 中文系统函数名（HK-11①；从 `SYSTEM_FUNCTION_ALIASES` 派生）
+      //    补全即调用形态——插入 `名字(`，作者接着写实参加 `)`
+      for (const name of SYSTEM_FUNCTION_WORDS) {
+        suggestions.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Function,
+          insertText: `${name}(`,
+          detail: '系统函数',
+          range,
+          sortText: `5_${name}`,
         });
       }
 

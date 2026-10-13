@@ -136,5 +136,22 @@ export function createEratwFaceTable(): KojoFaceTable {
       setBit: 'SETBIT RESULT, {bit}',
       bits: { scene: 0, kojo: 1 },
     },
+
+    // 自定指令编号可用段（HK-12；eraTW 4.980：kojo_com 自定义段 = 270–299）
+    customComRange: { min: 270, max: 299 },
+
+    // 自定函数钩子模板（附录 C 原文；`{i}` = 编号/参数，占位符同主模板口径）：
+    // #34 自定指令五钩子 + #3 自定事件 + #30 `CUSTOM_TALENT` + #31/#32 SHOP 按钮。
+    customHooks: {
+      comName: 'KOJO{t}_COM_NAME',
+      comAble: 'KOJO{t}_COM_ABLE',
+      com: 'KOJO{t}_COM',
+      canCom: 'KOJO{t}_CAN_COM',
+      comCounter: 'KOJO{t}_COM_Counter不发_K{n}_{i}',
+      customEvent: 'M_KOJO{t}_CUSTOM_EVENT_K{n}_{i}',
+      customTalent: 'KOJO{t}_CUSTOM_TALENT_SET_K{n}',
+      shopButtonCondition: 'KOJO{t}_CUSTOM_BUTTON_CONDITION_K{n}_{i}',
+      shopButton: 'KOJO{t}_CUSTOM_BUTTON_K{n}_{i}',
+    },
   };
 }

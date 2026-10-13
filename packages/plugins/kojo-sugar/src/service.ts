@@ -15,6 +15,7 @@ import type {
   AliasDecl,
   FileIO,
   KojoFaceTable,
+  KojoInstructionTable,
   Logger,
   SugarCompileOptions,
   SugarCompileResult,
@@ -70,6 +71,12 @@ export interface CreateSugarServiceOptions {
    */
   faceTable?: KojoFaceTable;
   /**
+   * 指令名表（adapter 提供；游戏知识；HK-11②）。
+   * **缺省 = 无法解析中文指令名** —— `时机 指令 <中文名>：` 会报
+   * `timing-instruction-unknown`（fail-closed；数字编号路径不受影响）。
+   */
+  instructionTable?: KojoInstructionTable;
+  /**
    * 编译落盘所需的内核文件 IO（S3 批）。
    * **缺省 = 本服务不支持 `compileToFile`**（调用即抛错，绝不静默假装成功）——
    * 纯转译（`parse`/`transpile`/`sourceOf`）不需要它，故可选。
@@ -83,6 +90,7 @@ export interface CreateSugarServiceOptions {
 export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}): SugarTranspileService {
   const dictionary = opts.dictionary;
   const faceTable = opts.faceTable;
+  const instructionTable = opts.instructionTable;
 
   function parse(source: string, options: SugarTranspileOptions = {}): SugarDoc {
     const sink = new Sink();
@@ -123,6 +131,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       aliases,
       dictionary,
       faceTable,
+      instructionTable,
       sink,
       options,
     });

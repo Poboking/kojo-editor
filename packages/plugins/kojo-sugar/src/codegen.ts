@@ -17,12 +17,14 @@ import type {
   AliasDecl,
   ChoiceBlock,
   ColorBlock,
+  CustomCommandBlock,
   HeartLine,
   IfBlock,
   IfExpr,
   Interpolation,
   KojoFaceTable,
   KojoFaceTemplate,
+  KojoInstructionTable,
   RandomBlock,
   RandomInline,
   RawFunctionBlock,
@@ -150,6 +152,13 @@ export interface CodegenOptions {
    * `timing-face-unknown`（fail-closed，不产半成品；见 `resolveFace`）。
    */
   faceTable?: KojoFaceTable;
+  /**
+   * 指令名表（adapter 提供；游戏知识）。
+   * **HK-11②**：`时机 指令 <中文名>：` 里的中文名经本表查编号；查不到则报
+   * `timing-instruction-unknown`（fail-closed，不产半成品）。数字路径不查表、
+   * 逐字节保持旧行为。
+   */
+  instructionTable?: KojoInstructionTable;
   sink: DiagnosticSink;
   options: SugarTranspileOptions;
 }
@@ -214,8 +223,34 @@ export function codegen(
       aliases: opts.aliases,
       dictionary: opts.dictionary,
       faceTable: opts.faceTable,
+      instructionTable: opts.instructionTable,
       sink: opts.sink,
     });
+  }
+
+  // ---- 自定指令块（HK-12：NAME / ABLE / 本体 函数组）----
+  // 编号分配需先扫全文档占号（原生 `@` 直通块 + 本文件已声明的显式编号），
+  // 故在写盘前一次性收集，再逐个分配——保证同项目内不撞车（与真实语料命名对齐）。
+  const customs = topLevel.filter((n): n is CustomCommandBlock => n.kind === 'custom-command');
+  if (customs.length > 0) {
+    const occupied = collectOccupiedCustomIndices(topLevel, charNo);
+    const allocated = new Set<number>();
+    for (const cc of customs) {
+      if (em.length > 0) em.blank();
+      em.setOwner(cc.loc.start.line);
+      emitCustomCommand(em, cc, {
+        charNo,
+        familySeg,
+        frontMatter: fm,
+        aliases: opts.aliases,
+        dictionary: opts.dictionary,
+        sink: opts.sink,
+        hooks: opts.faceTable?.customHooks,
+        range: opts.faceTable?.customComRange,
+        occupied,
+        allocated,
+      });
+    }
   }
 
   // ---- 配色函数（规范 §5.5 三件套之配色；golden §6.1 排在全部时机之后）----
@@ -357,6 +392,8 @@ interface TimingEmitContext {
   dictionary?: DictionaryLookup;
   /** 分野模板表（adapter 提供；缺省 → 无法生成时机函数名，fail-closed） */
   faceTable?: KojoFaceTable;
+  /** 指令名表（adapter 提供；HK-11② 中文指令名 → 编号，缺省/查不到 → fail-closed） */
+  instructionTable?: KojoInstructionTable;
   sink: DiagnosticSink;
 }
 
@@ -364,7 +401,13 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   const face = resolveFace(timing.face, timing, ctx);
   if (!face) return;
 
-  const baseName = buildFunctionName(face.template, ctx.familySeg, ctx.charNo, timing.index, face.paramIndex);
+  // HK-11②：编号解析（中文名 → 编号；查不到 fail-closed）——**在 resolveFace 之后**，
+  // 三者（本体 / 成否 / MESSAGECHECK）共用同一个已验证的编号。
+  const resolved = resolveTimingIndex(timing, ctx);
+  if (!resolved.ok) return;
+  const index = resolved.index;
+
+  const baseName = buildFunctionName(face.template, ctx.familySeg, ctx.charNo, index, face.paramIndex);
 
   // ---- 成否判定函数（规范 §5.5：写了 `成否:` 时生成 SUCCESS 函数）----
   // 位协议目标与原语来自 adapter（`KojoFaceTable.successFlag`）；缺省 → 跳过
@@ -375,7 +418,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
       face.success.template,
       ctx.familySeg,
       ctx.charNo,
-      timing.index,
+      index,
       face.success.paramIndex,
     );
     em.pushGenerated(0, `@${successName}`);
@@ -385,7 +428,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
 
   // ---- MESSAGECHECK 函数（写了 隐藏情景/隐藏口上 时）----
   if (timing.messageCheck.length > 0) {
-    emitMessageCheck(em, timing, ctx);
+    emitMessageCheck(em, timing, ctx, index);
   }
 
   // ---- 主体两函数（规范 §5.5：包装 + `_1` 正文）----
@@ -556,7 +599,12 @@ export function buildFunctionName(
  * 函数名模板 / 作用域段 / 位号 / 置位原语**全部来自 adapter**
  * （`KojoFaceTable.messageCheck`）；缺省 → 记 INFO 并跳过（该游戏无此概念）。
  */
-function emitMessageCheck(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): void {
+function emitMessageCheck(
+  em: Emitter,
+  timing: TimingBlock,
+  ctx: TimingEmitContext,
+  index: string | undefined,
+): void {
   const proto = ctx.faceTable?.messageCheck;
   if (!proto) {
     ctx.sink.report({
@@ -567,7 +615,7 @@ function emitMessageCheck(em: Emitter, timing: TimingBlock, ctx: TimingEmitConte
     });
     return;
   }
-  const base = resolveFaceNameForMessageCheck(timing, ctx);
+  const base = resolveFaceNameForMessageCheck(timing, ctx, index);
   if (!base) return;
   for (const mc of timing.messageCheck) {
     const scopeSeg = proto.scopes[mc.scope];
@@ -587,7 +635,7 @@ function emitMessageCheck(em: Emitter, timing: TimingBlock, ctx: TimingEmitConte
         .replace(/\{scope\}/g, scopeSeg),
       ctx.familySeg,
       ctx.charNo,
-      timing.index,
+      index,
       true, // 模板含 `{i}`：有编号时消费、无编号时由 buildFunctionName 归一去掉
     );
     const exprCtx: ExprContext = {
@@ -604,10 +652,270 @@ function emitMessageCheck(em: Emitter, timing: TimingBlock, ctx: TimingEmitConte
   }
 }
 
-function resolveFaceNameForMessageCheck(timing: TimingBlock, ctx: TimingEmitContext): string | null {
+function resolveFaceNameForMessageCheck(
+  timing: TimingBlock,
+  ctx: TimingEmitContext,
+  index: string | undefined,
+): string | null {
   const face = resolveFace(timing.face, timing, ctx);
   if (!face) return null;
-  return buildFunctionName(face.template, ctx.familySeg, ctx.charNo, timing.index, face.paramIndex);
+  return buildFunctionName(face.template, ctx.familySeg, ctx.charNo, index, face.paramIndex);
+}
+
+/* ============================== HK-11②：指令编号解析 ============================== */
+
+interface IndexResolution {
+  ok: boolean;
+  /** 已解析的编号字符串（数字原文，或中文名经表查得的编号） */
+  index?: string;
+}
+
+/**
+ * 时机编号解析（HK-11②）——**数字路径不查表**（旧写法 `时机 指令 310：` 逐字节不破，
+ * 也不新增诊断）；**中文名路径**经 adapter 指令表查编号，**查不到 fail-closed**
+ * （报 `timing-instruction-unknown`，措辞含「未命名指令（编号 N）」，绝不猜、
+ * 不产半成品——规范 §5.3 精神）。
+ */
+function resolveTimingIndex(timing: TimingBlock, ctx: TimingEmitContext): IndexResolution {
+  const name = timing.indexName;
+  if (name === undefined) return { ok: true, index: timing.index };
+
+  const no = ctx.instructionTable?.lookupByName(name);
+  if (no === undefined) {
+    const shown = timing.index ?? name;
+    ctx.sink.report({
+      code: 'timing-instruction-unknown',
+      severity: 'error',
+      message:
+        `未命名指令（编号 ${shown}）：「${name}」不在当前工程的指令表里（CSV/Train.csv）。` +
+        '为避免拼出指向错误函数的产物，已停止编译本时机——请改用数字编号（`时机 指令 310：`），' +
+        '或让该指令名出现在当前项目的 Train.csv 里（换汉化/魔改包即换表）。',
+      loc: timing.loc.start,
+    });
+    return { ok: false };
+  }
+  return { ok: true, index: String(no) };
+}
+
+/* ============================== HK-12：自定指令块 → 函数组 ============================== */
+
+interface CustomEmitContext {
+  charNo: string;
+  familySeg: string;
+  frontMatter: SugarFrontMatter;
+  aliases: AliasTable;
+  dictionary?: DictionaryLookup;
+  sink: DiagnosticSink;
+  /** 自定钩子模板（adapter；缺 comName/comAble/com 任一 → 跳过并告警） */
+  hooks?: KojoFaceTable['customHooks'];
+  /** 编号自动分配可用段（adapter；缺省且未显式写 `编号:` → fail-closed） */
+  range?: { min: number; max: number };
+  /** 全文档占号集合（原生 `@` 直通块 + 显式 `编号:`），分配时排除 */
+  occupied: Set<number>;
+  /** 本次 codegen 已自动分配的编号（防同批自撞车） */
+  allocated: Set<number>;
+}
+
+/**
+ * 收集"已被占用"的自定指令编号：
+ * - 原生直通块（`@` 块）里手写的自定指令函数头（`KOJO…_COM…_K{角色}_{编号}`）；
+ * - 本文件里显式写了 `编号: N` 的自定指令块。
+ *
+ * 判据刻意收窄：只认**自定指令族**（`KOJO…` 且含 `_COM`），**排除**
+ * `M_KOJO_MESSAGE_COM_K…`（那是消息函数，不是自定钩子）——否则把语言时机
+ * 的编号也算进来会让分配凭空跳号。跨**项目**（别的 `.ERB` 文件）的占号不在本
+ * 转译器可见范围（转译是纯函数、只看单文件），由函数树视图侧统一汇总。
+ */
+function collectOccupiedCustomIndices(topLevel: readonly TopNode[], charNo: string): Set<number> {
+  const occupied = new Set<number>();
+  const headerRe = /^@(.+)_K(\d+)_(\d+)$/;
+  for (const node of topLevel) {
+    if (node.kind === 'rawFunctionBlock') {
+      for (const line of node.lines) {
+        const m = headerRe.exec(line.trim());
+        if (!m) continue;
+        if (m[2] !== charNo) continue;
+        const base = m[1]!;
+        if (!/^KOJO/.test(base) || !/_COM/.test(base)) continue;
+        occupied.add(Number(m[3]));
+      }
+    } else if (node.kind === 'custom-command' && node.index !== undefined) {
+      occupied.add(node.index);
+    }
+  }
+  return occupied;
+}
+
+/** 在 `[min, max]` 内取**最小未用**编号（排除 occupied ∪ allocated）；无空位 → undefined */
+function allocateCustomIndex(
+  range: { min: number; max: number },
+  occupied: Set<number>,
+  allocated: Set<number>,
+): number | undefined {
+  for (let no = range.min; no <= range.max; no++) {
+    if (!occupied.has(no) && !allocated.has(no)) return no;
+  }
+  return undefined;
+}
+
+/**
+ * 自定钩子函数名求值：`{t}`=家族段、`{n}`=角色号、`{i}`=编号。
+ *
+ * 附录 C 的 NAME/ABLE/本体三模板是裸写（`KOJO{t}_COM_NAME`），**不含** `_K{n}_{编号}`
+ * 后缀；而真实语料函数名带该后缀（`KOJO_少女之梦_COM_NAME_K1_0`）⇒ 缺 `{n}` 时补齐
+ * `_K{角色号}_{编号}`（标准版 → `KOJO_COM_NAME_K{角色号}_{编号}`）。模板自带 `{n}`
+ * 的（如 `comCounter`）不追加。
+ */
+function renderCustomHook(template: string, familySeg: string, charNo: string, no: number): string {
+  let name = template.replace(/\{t\}/g, familySeg).replace(/\{n\}/g, charNo).replace(/\{i\}/g, String(no));
+  if (!template.includes('{n}')) name += `_K${charNo}_${no}`;
+  return name;
+}
+
+/**
+ * 自定指令块（HK-12）→ 「NAME / ABLE / 本体」函数组。
+ *
+ * - **编号**：显式 `编号: N` 优先；缺省在 `customComRange` 内取最小未用（防撞车）。
+ *   分配只依赖「占号集合」，故**改名不改号**（同一占号下重跑仍是同一编号）;
+ * - **NAME**：`RESULTS = <中文名>`（不带引号——对齐真实语料 `RESULTS = 赛钱`）；
+ * - **ABLE**：契约无 ABLE 子句 ⇒ 缺省放行 `RETURN 1`（对齐语料 `_COM_ABLE` 缺省形态）；
+ * - **本体**：与时机块同款"記入チェック"骨架（`LOCAL = 0/1` + `IF LOCAL … ENDIF` + `RETURN 1`）；
+ * - **fail-closed**：缺可用段 / 段耗尽 / 缺钩子模板 → 报诊断、**不产半成品**。
+ *
+ * 关于"可选钩子按需"：`可否使用:`（canCom）/ `计数器不发:`（comCounter）为本批新增的
+ * **块头可选子句**（HK-12 五钩子，附录 C #34）。值为**条件**，产物走 adapter 的
+ * `customHooks` 模板块；**缺省不生成**（与既有 `success?` 同口径）。
+ */
+function emitCustomCommand(em: Emitter, node: CustomCommandBlock, ctx: CustomEmitContext): void {
+  // ---- 编号：显式优先，否则自动分配 ----
+  let no: number;
+  if (node.index !== undefined) {
+    no = node.index;
+  } else {
+    if (ctx.range === undefined) {
+      ctx.sink.report({
+        code: 'custom-command-no-range',
+        severity: 'error',
+        message:
+          `「自定指令 ${node.name}：」未写 \`编号:\`，且当前适配器未声明编号可用段（customComRange）——` +
+          '无法自动分配编号，已停止编译本块（不产半成品）。请显式写 `编号: N`，或让适配器声明可用段。',
+        loc: node.loc.start,
+      });
+      return;
+    }
+    const picked = allocateCustomIndex(ctx.range, ctx.occupied, ctx.allocated);
+    if (picked === undefined) {
+      ctx.sink.report({
+        code: 'custom-command-range-exhausted',
+        severity: 'error',
+        message:
+          `「自定指令 ${node.name}：」自动分配编号失败——可用段 ${ctx.range.min}–${ctx.range.max} 已被占满。` +
+          '请显式写 `编号: N` 改到别的编号，或先删掉不再用的自定指令。',
+        loc: node.loc.start,
+      });
+      return;
+    }
+    no = picked;
+  }
+
+  const hooks = ctx.hooks;
+  if (!hooks || !hooks.comName || !hooks.comAble || !hooks.com) {
+    ctx.sink.report({
+      code: 'face-table-missing',
+      severity: 'warning',
+      message:
+        `写了「自定指令 ${node.name}：」但当前适配器未声明自定指令钩子模板（comName / comAble / com）——已跳过。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  ctx.allocated.add(no);
+
+  const comName = renderCustomHook(hooks.comName, ctx.familySeg, ctx.charNo, no);
+  const comAble = renderCustomHook(hooks.comAble, ctx.familySeg, ctx.charNo, no);
+  const com = renderCustomHook(hooks.com, ctx.familySeg, ctx.charNo, no);
+
+  // ---- NAME：显示名（`RESULTS = <中文名>`，不带引号）----
+  em.pushGenerated(0, `@${comName}`);
+  em.pushGenerated(0, `RESULTS = ${node.name}`);
+  em.blank();
+
+  // ---- ABLE：可否使用（契约无 ABLE 子句 ⇒ 缺省放行）----
+  em.pushGenerated(0, `@${comAble}`);
+  em.pushGenerated(0, `RETURN 1`);
+  em.blank();
+
+  // ---- 可选钩子（HK-12 五钩子之 CAN_COM / COM_Counter不发）：**缺省不生成** ----
+  // 与既有 `success?` 同口径：写了子句才产对应函数（引擎侧无该函数 → 自然回退）。
+  // 值为**条件**，产物 = 「条件成立则 RETURN 1，否则 RETURN 0」的门（对齐语料
+  // `KOJO_COM_Counter不发_K75_0` 的 `RETURN 1` 抑制语义 / `CAN_COM` 的 RESULT==0 拦截）。
+  emitCustomHook(em, node.name, node.canCom, 'canCom', hooks.canCom, ctx, no);
+  emitCustomHook(em, node.name, node.comCounter, 'comCounter', hooks.comCounter, ctx, no);
+
+  // ---- 本体：与时机块同款骨架（空体 → `LOCAL = 0` 且不产 IF 块）----
+  em.pushGenerated(0, `@${com}`);
+  em.pushGenerated(0, `;-------------------------------------------------`);
+  em.pushGenerated(0, `;記入チェック（=0, 非表示、1, 表示）`);
+  const empty = node.body.length === 0;
+  em.pushGenerated(0, `LOCAL = ${empty ? 0 : 1}`);
+  em.pushGenerated(0, `;-------------------------------------------------`);
+  if (!empty) {
+    em.pushGenerated(0, `IF LOCAL`);
+    const bodyIndent = 1;
+    const bodyCtx: BodyContext = {
+      aliases: ctx.aliases,
+      dictionary: ctx.dictionary,
+      sink: ctx.sink,
+      frontMatter: ctx.frontMatter,
+      allocator: new SlotAllocator(),
+      baseIndent: bodyIndent,
+    };
+    for (const child of node.body) emitStatement(em, child, bodyCtx, bodyIndent);
+    em.pushGenerated(0, `ENDIF`);
+  }
+  em.pushGenerated(0, `RETURN 1`);
+}
+
+/**
+ * 自定指令可选钩子（HK-12 五钩子；附录 C #34 `_CAN_COM` / `_COM_Counter不发`）。
+ *
+ * - `condition` 缺省（未写子句）→ **不生成**（缺省不生成，引擎自然回退）；
+ * - 写了子句但 adapter 未声明对应模板 → `face-table-missing` warning 并跳过（fail-closed）；
+ * - 产物 = 「条件成立则 `RETURN 1`，否则 `RETURN 0`」的门；条件经表达式降糖（与正文同口径）。
+ */
+function emitCustomHook(
+  em: Emitter,
+  commandName: string,
+  condition: string | undefined,
+  clause: string,
+  template: string | undefined,
+  ctx: CustomEmitContext,
+  no: number,
+): void {
+  if (condition === undefined) return;
+  if (!template) {
+    ctx.sink.report({
+      code: 'face-table-missing',
+      severity: 'warning',
+      message:
+        `写了「自定指令 ${commandName}：」的 \`${clause}:\` 子句，但当前适配器未声明对应钩子模板——已跳过该钩子。`,
+      loc: null,
+    });
+    return;
+  }
+  const hookName = renderCustomHook(template, ctx.familySeg, ctx.charNo, no);
+  const cond = lowerExpression(condition, {
+    aliases: ctx.aliases,
+    dictionary: ctx.dictionary,
+    report: (d) => ctx.sink.report(d),
+    loc: null,
+  });
+  em.pushGenerated(0, `@${hookName}`);
+  em.pushGenerated(0, `IF ${cond}`);
+  em.pushGenerated(0, `RETURN 1`);
+  em.pushGenerated(0, `ENDIF`);
+  em.pushGenerated(0, `RETURN 0`);
+  em.blank();
 }
 
 /* ============================== 语句 → 产物 ============================== */

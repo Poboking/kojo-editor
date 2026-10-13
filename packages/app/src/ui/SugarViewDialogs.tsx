@@ -1,8 +1,5 @@
 /**
- * 糖视图相关的两个模态对话框（2026-10-12 批；宿主 UI，零业务知识）。
- *
- * 两个都是**一次性的选择**，形态与 `SaveWarningDialog` 同款（遮罩 + 卡片 + 按钮组），
- * 但语义截然不同，故分开写、各自单测文案：
+ * 只读 ERB 相关模态（宿主 UI，零业务知识）。三个模态，两套口径：
  *
  * 1. `SugarViewIntroDialog`——**首次打开 ERB** 时问"要不要用语法糖视图"。
  *    为什么要问：糖视图默认开（本功能的存在理由就是"打开就能读懂"），但一个会改变
@@ -11,6 +8,10 @@
  * 2. `ErbUnlockDialog`——用户**试图编辑只读的 ERB** 时问"要保持只读还是允许编辑"。
  *    诚实地把代价说清：解锁编辑会关闭该文件的语法糖视图（糖视图要求原文让位，
  *    而可编辑的原文必须能看见）。
+ * 3. `ErbReadonlyAskDialog`——同一触发点的**简易版**。语法糖视图整体封存后（sealed.ts，
+ *    默认封存），文案里"编辑会让糖视图失效"就是在向作者描述一个他不存在的功能，
+ *    故封存态（默认）弹这一版：只讲"这份文件是只读的、直接改有风险"，全程无功能术语。
+ *    解封态（设置页勾「显示已封存功能」）仍弹 2 的糖版。
  *
  * ## 按钮层级与文案跟全站模态对齐（2026-10-12 UI 归一批）
  *
@@ -85,6 +86,41 @@ export function ErbUnlockDialog({
         <p className="dim">
           更稳妥的做法：<b>新建一份口上文件（.kojo）</b>来写自己的内容——它可全程用语法糖书写，
           并能编译为合规 ERB。
+        </p>
+        <div className="modal-actions">
+          <button className="ghost" onClick={() => onDecide(true)}>
+            仍要直接编辑
+          </button>
+          <button className="primary" onClick={() => onDecide(false)}>
+            保持只读
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** ERB 只读确认（简易版）：封存态默认弹这一版，只讲"这份文件是只读的" */
+export function ErbReadonlyAskDialog({
+  fileName,
+  onDecide,
+}: {
+  fileName: string;
+  /** true = 仍要直接编辑；false = 保持只读 */
+  onDecide: (allow: boolean) => void;
+}): ReactElement {
+  // Esc = 保持只读：与糖版同侧（代价小的那一侧是不写盘）
+  useModalEscape(() => onDecide(false));
+  return (
+    <div className="modal-mask">
+      <div className="modal" role="dialog" aria-modal="true" aria-label="文件只读保护">
+        <h2>这份文件是只读的</h2>
+        <p>
+          <code>{fileName}</code> 在<b>游戏目录</b>里，是游戏正在读取的内容。
+          <b>直接改它会影响游戏正常运行</b>，改错了也不容易恢复。
+        </p>
+        <p className="dim">
+          更稳妥的做法：<b>新建自己的口上文件（.kojo）</b>来写内容，改完再部署到游戏目录。
         </p>
         <div className="modal-actions">
           <button className="ghost" onClick={() => onDecide(true)}>

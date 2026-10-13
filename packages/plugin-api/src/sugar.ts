@@ -332,6 +332,8 @@ export interface TimingBlock extends SugarNodeBase {
   face: string;
   /** 编号（`时机 指令 310：` → `310`；无编号的分野缺省） */
   index?: string;
+  /** 作者写的中文指令名原文（`时机 指令 摸屁股：` → `摸屁股`；与数字 `index` 并存，缺省 = 未写中文名） */
+  readonly indexName?: string;
   /** 命名参数（`成否:` / `类型:` 等，按出现顺序） */
   namedParams: TimingNamedParam[];
   /**
@@ -357,6 +359,39 @@ export interface TimingMessageCheck {
   /** 条件原文（ERB 表达式，未降糖） */
   condition: string;
   loc: SugarSourceSpan;
+}
+
+/* ============================== 自定指令块 ============================== */
+
+/**
+ * 自定指令块（HK-12）——作者写中文指令名（如 `自定指令 赛钱：`），工具生成
+ * 「NAME / ABLE / 本体」函数组（附录 C #34 五钩子）。
+ *
+ * 与 `TimingBlock` 同为**文档级块节点**。游戏知识只住 adapter：中文名 → 编号
+ * 由指令表（`KojoInstructionTable`，来自 `CSV/Train.csv`）解析；编号缺省时由
+ * codegen 在 `KojoFaceTable.customComRange`（eraTW：270–299）内自动分配、防撞车。
+ * 契约层不内嵌任何游戏常量（否则游戏知识就会漏进契约）。
+ */
+export interface CustomCommandBlock extends SugarNodeBase {
+  kind: 'custom-command';
+  /** 作者写的中文指令名（如「赛钱」） */
+  readonly name: string;
+  /** 作者显式声明的编号（`编号: N`）；缺省 = 由 codegen 自动分配 */
+  readonly index?: number;
+  /**
+   * `可否使用: <条件>` 可选子句（HK-12 五钩子之 `CAN_COM`）。
+   * 值为**条件原文**（ERB 表达式，未降糖）；缺省 = 不生成该钩子函数（引擎自然回退）。
+   * 产物走 `KojoFaceTable.customHooks.canCom` 模板（游戏知识只住 adapter）。
+   */
+  readonly canCom?: string;
+  /**
+   * `计数器不发: <条件>` 可选子句（HK-12 五钩子之 `COM_Counter不发`）。
+   * 值为**条件原文**（未降糖）；缺省 = 不生成该钩子函数。
+   * 产物走 `KojoFaceTable.customHooks.comCounter` 模板。
+   */
+  readonly comCounter?: string;
+  /** 正文节点（与 TimingBlock 正文同口径） */
+  readonly body: readonly SugarNode[];
 }
 
 /* ============================== 原生直通 ============================== */
@@ -477,6 +512,7 @@ export type SugarStatement =
   | RandomInline
   | ChoiceBlock
   | ColorBlock
+  | CustomCommandBlock
   | RawLine
   | RawFunctionBlock
   | CommentLine;
@@ -489,9 +525,9 @@ export type SugarNode = SugarStatement | SugarExprNode;
 
 /**
  * 文档级节点（只出现在文件顶层，不进块体）：
- * `别名` 声明与 `时机` 块。
+ * `别名` 声明 / 时机块 / 自定指令块。
  */
-export type SugarTopLevelNode = AliasDecl | TimingBlock | CommentLine;
+export type SugarTopLevelNode = AliasDecl | TimingBlock | CustomCommandBlock | CommentLine;
 
 /* ============================== 文档与头声明 ============================== */
 
@@ -835,6 +871,16 @@ export type SugarDiagnosticCode =
    */
   | 'function-name-duplicate'
   | 'timing-empty-body' // 时机无正文（占位写法；产出 `LOCAL = 0` 占位，INFO）
+  /**
+   * HK-11②：`时机 指令 <中文名>：` 的中文名不在 adapter 的指令表
+   * （`KojoInstructionTable`；数据源 = 工程 `CSV/Train.csv`）。**fail-closed**：
+   * 绝不猜编号、不产半成品——报错措辞含「未命名指令（编号 N）」（数字编号路径不受影响）。
+   */
+  | 'timing-instruction-unknown'
+  /** HK-12：自定指令块缺 `编号:` 且 adapter 未声明编号可用段（`customComRange`）；fail-closed 不产半成品。 */
+  | 'custom-command-no-range'
+  /** HK-12：自定指令编号自动分配失败（`customComRange` 段已被占满）；需显式写 `编号:` 或腾出空位。 */
+  | 'custom-command-range-exhausted'
   /* --- 选项（规范 §3.7） --- */
   | 'choice-multiple' // 一个时机内出现多个 `选项` 块
   | 'choice-nested' // `选项` 块嵌套
@@ -1034,9 +1080,9 @@ export function isRawNode(node: SugarNode): node is RawLine | RawFunctionBlock {
   return node.kind === 'rawLine' || node.kind === 'rawFunctionBlock';
 }
 
-/** 文档级节点（别名声明 / 时机块） */
+/** 文档级节点（别名声明 / 时机块 / 自定指令块） */
 export function isTopLevelNode(node: SugarTopLevelNode): boolean {
-  return node.kind === 'aliasDecl' || node.kind === 'timingBlock';
+  return node.kind === 'aliasDecl' || node.kind === 'timingBlock' || node.kind === 'custom-command';
 }
 
 /* ============================== 预览（S4 批） ============================== */
