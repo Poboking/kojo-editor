@@ -12,6 +12,7 @@ import { createEratwAdapterPlugin } from '../src/plugin';
 import {
   artifactDir,
   factsFromMeta,
+  looseProjectDirs,
   packageFacts,
   sortDirEntries,
 } from '../src/kojo-projects-panel';
@@ -47,6 +48,60 @@ describe('包目录路径', () => {
     expect(artifactDir('/appdata/workspaces/p1', { dirName: '东方口上-灵梦 v1.0' })).toBe(
       '/appdata/workspaces/p1/东方口上-灵梦 v1.0',
     );
+  });
+});
+
+/**
+ * 项目根上「包之外的目录」（UI 反馈 6）。
+ *
+ * 这条判据盯的是"建完了看不见"：项目行只渲染 workspace.json 登记的包，作者右键项目根
+ * 建的平级文件夹因此从来不上树——盘上有、面上无，读起来仍像"点了没生效"。
+ * 渲染侧的接线（项目行下面那一块）在真实壳里量（见 IMPLEMENTATION-LOG 本批实机轮），
+ * 这里只钉挑法本身，别让"排除谁"变成读代码才知道的口头约定。
+ */
+describe('项目根的包外目录挑选（反馈 6）', () => {
+  const dir = (name: string): DirEntry => ({ name, path: `/ws/${name}`, isDirectory: true });
+  const file = (name: string): DirEntry => ({ name, path: `/ws/${name}`, isDirectory: false });
+
+  it('排除与包同名的目录（包本体由包行呈现，列两次会让人以为有两个包）', () => {
+    const got = looseProjectDirs([dir('春告げの庭-露米娅 v0.3'), dir('素材')], ['春告げの庭-露米娅 v0.3']);
+    expect(got.map((e) => e.name)).toEqual(['素材']);
+  });
+
+  it('没有包时全列（新建第一个包之前的起手式同样要能看见自己建的目录）', () => {
+    const got = looseProjectDirs([dir('备份'), dir('草稿')], []);
+    expect(got.map((e) => e.name)).toEqual(['备份', '草稿']);
+  });
+
+  it('只挑目录：根上的散装文件不列（工作区清单 workspace.json 因此天然不进这棵树）', () => {
+    const got = looseProjectDirs([file('workspace.json'), file('readme.txt'), dir('素材')], []);
+    expect(got.map((e) => e.name)).toEqual(['素材']);
+  });
+
+  it('未触发列举 / 在途 / 读失败三种状态都返回空数组（不把"还没读到"当成"没有"）', () => {
+    expect(looseProjectDirs(undefined, ['包'])).toEqual([]);
+    expect(looseProjectDirs('loading', ['包'])).toEqual([]);
+    expect(looseProjectDirs({ error: '拒绝访问' }, ['包'])).toEqual([]);
+  });
+
+  it('排序沿用同一条目录序（不自己另排一套，也不退化成磁盘顺序）', () => {
+    const input = [dir('乙目录'), dir('甲目录'), dir('a-dir')];
+    const got = looseProjectDirs(input, []);
+    // 与 sortDirEntries 逐字同序：这条判据不依赖本机 ICU 的拼音实现，只钉"用的是同一把尺子"
+    expect(got.map((e) => e.name)).toEqual(sortDirEntries(input).map((e) => e.name));
+    expect(got.map((e) => e.name)).not.toEqual(input.map((e) => e.name));
+  });
+
+  it('不修改入参（返回新数组）', () => {
+    const input = [dir('素材'), file('workspace.json')];
+    const got = looseProjectDirs(input, []);
+    expect(got).not.toBe(input);
+    expect(input).toHaveLength(2);
+  });
+
+  it('包名重复出现也不影响判定（Set 语义，不用 includes 逐个比）', () => {
+    const got = looseProjectDirs([dir('素材'), dir('包A')], ['包A', '包A']);
+    expect(got.map((e) => e.name)).toEqual(['素材']);
   });
 });
 

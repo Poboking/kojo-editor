@@ -82,6 +82,27 @@ export function artifactDir(projectDir: string, artifact: Pick<WorkspaceArtifact
   return join(projectDir, artifact.dirName);
 }
 
+/**
+ * 项目根下「不属于任何包」的子目录（2026-10-13 UI 反馈 6）。
+ *
+ * 项目行原本只列 `workspace.json` 里登记的包，于是作者用右键「新建文件夹」建的平级目录
+ * **从来不上树**——盘上真有、界面上没有，读起来仍然像"点了没生效"。这里把这类目录挑出来，
+ * 由项目行下面单独列一行区。
+ *
+ * 三条口径：① 未触发列举 / 在途 / 读失败 ⇒ 空（不猜，也不留半张列表）；
+ * ② **只挑目录**——根上的散装文件（`workspace.json`、作者手放的备忘）不进这棵树，
+ *    新建文件本身会走 `reveal` 在编辑器里打开，那里才是看得见它的地方；
+ * ③ 与任一包目录同名的目录**不列**：那是包本体，重复列会出现两行指向同一个目录。
+ */
+export function looseProjectDirs(
+  state: DirListState | undefined,
+  artifactDirNames: readonly string[],
+): DirEntry[] {
+  if (!Array.isArray(state)) return [];
+  const owned = new Set(artifactDirNames);
+  return sortDirEntries(state.filter((e) => e.isDirectory && !owned.has(e.name)));
+}
+
 /** 包事实行的输入（三项都可能缺） */
 export interface FactsInput {
   /** 制品 meta 里的目标角色名（P-C 新建时写入；导入的包没有） */
@@ -142,6 +163,17 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
         }),
       [deps],
     );
+
+    /**
+     * 展开的项目要把**项目根本身**也列一次（2026-10-13 UI 反馈 6）。
+     * 不列就拿不到"包之外的目录"这张清单，作者新建的平级文件夹因此没有落脚点。
+     * `ensureDir` 命中缓存即 no-op，所以这里重复调用不会刮出目录请求风暴。
+     */
+    useEffect(() => {
+      for (const p of deps.projects()) {
+        if (!closedProjects.has(p.id)) deps.ensureDir(deps.projectDir(p.id));
+      }
+    }, [deps, closedProjects]);
 
     const toggleIn = <T,>(set: Set<T>, key: T): Set<T> => {
       const next = new Set(set);
@@ -285,43 +317,49 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
         body = h(
           'div',
           { key: `${dir}::files`, className: 'kp-dir' },
-          ...sortDirEntries(state).map((e) => {
-            if (e.isDirectory) {
-              const dOpen = openDirs.has(e.path);
-              return h(
-                'div',
-                { key: e.path },
-                h(
-                  'button',
-                  {
-                    className: 'kp-dir-btn',
-                    style: indent(depth),
-                    title: e.path,
-                    onClick: () => toggleDir(e.path),
-                    onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, e.path),
-                  },
-                  h('span', { className: 'caret' }, dOpen ? '▾' : '▸'),
-                  h('span', { className: 'kp-dir-name' }, e.name),
-                ),
-                dOpen ? renderDir(e.path, depth + 1) : null,
-              );
-            }
-            return h(
-              'button',
-              {
-                key: e.path,
-                className: 'kp-file-btn',
-                style: indent(depth),
-                title: e.path,
-                onClick: () => deps.reveal(e.path),
-              },
-              h('span', { className: 'kp-file-name' }, e.name),
-            );
-          }),
+          ...sortDirEntries(state).map((e) => renderEntry(e, depth)),
         );
       }
       return h('div', { key: `${dir}::wrap` }, draftRow(dir, depth), body);
     };
+
+    /**
+     * 一条真实目录 / 文件行。包的展开态与项目根「包之外的目录」共用这一个渲染源，
+     * 免得两处各自演化出不同的可点性（目录可展开 + 可右键继续往里建；文件点开=进编辑器）。
+     */
+    function renderEntry(e: DirEntry, depth: number): ReactNode {
+      if (e.isDirectory) {
+        const dOpen = openDirs.has(e.path);
+        return h(
+          'div',
+          { key: e.path },
+          h(
+            'button',
+            {
+              className: 'kp-dir-btn',
+              style: indent(depth),
+              title: e.path,
+              onClick: () => toggleDir(e.path),
+              onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, e.path),
+            },
+            h('span', { className: 'caret' }, dOpen ? '▾' : '▸'),
+            h('span', { className: 'kp-dir-name' }, e.name),
+          ),
+          dOpen ? renderDir(e.path, depth + 1) : null,
+        );
+      }
+      return h(
+        'button',
+        {
+          key: e.path,
+          className: 'kp-file-btn',
+          style: indent(depth),
+          title: e.path,
+          onClick: () => deps.reveal(e.path),
+        },
+        h('span', { className: 'kp-file-name' }, e.name),
+      );
+    }
 
     /* ------------------------------ 包事实行（T2 署名 + 纪要「多剧本编号上树」） ------------------------------ */
 
@@ -430,6 +468,35 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
       );
     };
 
+    /**
+     * 项目行下面列「包之外的目录」（2026-10-13 UI 反馈 6 的后半条）。
+     *
+     * 前半条是行内命名框没有槽位（点了菜单界面无变化）；后半条是**即使建成功了也看不见**：
+     * 包行只渲染 `workspace.json` 里登记的包，作者建在包与包之间的平级目录因此从来不上树，
+     * 盘上有、面上无，读起来仍然像"点了没生效"。
+     *
+     * 只在没有东西可列时整块不渲染（口上树的简洁约束）；有一行就给它一句说明，
+     * 免得作者把 `素材` 这类目录误读成"冒出了第二个包"。
+     */
+    const renderLooseDirs = (p: WorkspaceProject, pDir: string): ReactNode => {
+      const loose = looseProjectDirs(deps.dirState(pDir), p.artifacts.map((a) => a.dirName));
+      if (loose.length === 0) return null;
+      return h(
+        'div',
+        { key: `${pDir}::loose`, className: 'kp-loose' },
+        h(
+          'div',
+          {
+            className: 'kp-note dim',
+            style: indent(1),
+            title: '这些目录不属于任何作者包（右键项目行新建的平级文件夹住在这里）',
+          },
+          `包之外的目录 ${loose.length} 个`,
+        ),
+        ...loose.map((e) => renderEntry(e, 1)),
+      );
+    };
+
     /* ------------------------------ 骨架 ------------------------------ */
 
     // 双真相源提示条（常驻；讨论纪要 §2——写保护铁律的 UI 明示面）
@@ -487,6 +554,7 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
         { className: 'kp-body' },
         ...projects.map((p) => {
           const pOpen = !closedProjects.has(p.id);
+          const pDir = deps.projectDir(p.id);
           return h(
             'div',
             { key: p.id, className: 'kp-project' },
@@ -496,13 +564,21 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                 className: 'kp-project-btn',
                 title: `项目：${p.name}`,
                 onClick: () => toggleProject(p.id),
-                onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, deps.projectDir(p.id)),
+                onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, pDir),
               },
               h('span', { className: 'caret' }, pOpen ? '▾' : '▸'),
               h('span', { className: 'kp-project-name' }, p.name),
               h('span', { className: 'kp-count dim' }, `${p.artifacts.length} 包`),
             ),
+            /* 项目根自己的行内新建框（UI 反馈 6 的缺陷点）：菜单把草稿指向 projectDir，
+               但 draftRow 原先只在 renderDir 里产出，而 renderDir 只跑「包目录」与「包内子目录」
+               ——项目根从来没有槽位，于是"新建文件夹"点下去只是把 draft 写进 state，界面上什么都没有。
+               放在项目行正下方、且**不受 pOpen 影响**：收起的项目同样要能建东西（与 renderDir 同口径）。 */
+            draftRow(pDir, 1),
             pOpen ? renderArtifacts(p) : null,
+            /* 包与包之间的平级目录（反馈 6 的后半条）：建成功了必须在界面上看得见，
+               否则"点了没生效"只解决了一半——盘上有了，面上没有。没有这类目录时整块不渲染。 */
+            pOpen ? renderLooseDirs(p, pDir) : null,
           );
         }),
       );
