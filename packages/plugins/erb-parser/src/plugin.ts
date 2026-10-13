@@ -107,24 +107,42 @@ export function createErbParserPlugin(): Plugin {
         // 每段单独计时——上一轮"热启动 stat 872ms"的疑点就是因为快照读盘被并进了 stat 区间。
         const buildStartedAt = Date.now();
         const allFiles: string[] = [];
+        /**
+         * `walkDir({withMetadata})` 顺带带回的元数据（IMPLEMENTATION-LOG §5.117）：
+         * 热开段实测 `stat` 独占 2,038ms / index 2,657ms，全部是 2,285 次逐文件 IPC 往返；
+         * 遍历目录时元数据本就在手边，一次带回就把那一整段折进 walk。
+         */
+        const metaByPath = new Map<string, { mtimeMs: number; size: number }>();
         for (const root of rootsToScan) {
           const entries = await io.walkDir(root, {
             includeFiles: true,
             includeDirs: false,
+            withMetadata: true,
             filter: (e) => e.isDirectory || ERB_EXT.test(e.name),
           });
           for (const e of entries) {
-            if (!e.isDirectory && ERB_EXT.test(e.name)) allFiles.push(e.path);
+            if (e.isDirectory || !ERB_EXT.test(e.name)) continue;
+            allFiles.push(e.path);
+            if (typeof e.mtimeMs === 'number' && typeof e.size === 'number') {
+              metaByPath.set(e.path, { mtimeMs: e.mtimeMs, size: e.size });
+            }
           }
         }
         const walkMs = Date.now() - buildStartedAt;
 
-        // 体量指纹：逐文件 stat 取 mtime（与 readText 的 mtimeMs 同源口径），
-        // 是增量复扫的判据——mtime 没变的文件，解析结果必然不变（纯函数）。
+        // 体量指纹：mtime 是增量复扫的判据——mtime 没变的文件，解析结果必然不变（纯函数）。
+        // 首选 walk 带回的值；**缺项才逐文件 stat 兜底**（桥没实现 withMetadata / 个别取不到），
+        // 兜底也不许伪造：拿不到 stat ⇒ null ⇒ 该文件一律判过期（保守）。
         const statStartedAt = Date.now();
         const stats = new Map<string, FileStat | null>();
+        const needStat: string[] = [];
+        for (const path of allFiles) {
+          const meta = metaByPath.get(path);
+          if (meta) stats.set(path, { size: meta.size, mtimeMs: meta.mtimeMs, isDirectory: false });
+          else needStat.push(path);
+        }
         await compute.runSliced(
-          allFiles,
+          needStat,
           { concurrency: STAT_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.stat' },
           async (path) => {
             try {
@@ -226,6 +244,7 @@ export function createErbParserPlugin(): Plugin {
         ctx.log.info(
           `  index breakdown: walk ${walkMs}ms · stat ${statMs}ms · snapshot ${snapMs}ms ` +
             `(get ${snapGetMs}ms, coerce ${snapCoerceMs}ms) · read+parse ${parseMs}ms · aggregate ${aggMs}ms · ` +
+            `mtime 来源 walk顺带 ${metaByPath.size} / 兜底逐文件 ${needStat.length} · ` +
             `reused ${diff.reusable.length}/${allFiles.length}`,
         );
 

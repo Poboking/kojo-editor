@@ -72,6 +72,7 @@ export class NodeBridge implements PlatformBridge {
     const maxDepth = opts?.maxDepth ?? Number.POSITIVE_INFINITY;
     const includeFiles = opts?.includeFiles ?? true;
     const includeDirs = opts?.includeDirs ?? false;
+    const withMetadata = opts?.withMetadata ?? false;
 
     const walk = async (dir: string, depth: number): Promise<void> => {
       if (depth > maxDepth) return;
@@ -82,7 +83,17 @@ export class NodeBridge implements PlatformBridge {
           if (includeDirs) out.push(entry);
           await walk(entry.path, depth + 1);
         } else if (includeFiles) {
-          out.push(entry);
+          let filled = entry;
+          if (withMetadata) {
+            // 与 stat() 同源取值：mtimeMs/size 必须与逐文件 stat 一致，否则索引的体量指纹会漂
+            try {
+              const s = await fs.stat(entry.path);
+              filled = { ...entry, mtimeMs: s.mtimeMs, size: s.size };
+            } catch {
+              filled = entry; // 取不到就留空 ⇒ 调用方退化回 stat，绝不伪造 0
+            }
+          }
+          out.push(filled);
         }
       }
     };

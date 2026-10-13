@@ -27,9 +27,14 @@ interface FakeFile {
   mtimeMs: number;
 }
 
-/** 假 io：内存 FS + readText 调用计数（增量复扫的核心断言依据） */
-function makeIO(files: Map<string, FakeFile>) {
+/**
+ * 假 io：内存 FS + readText 调用计数（增量复扫的核心断言依据）。
+ * `withMetadata` ⇒ walkDir 顺带带回 mtimeMs/size（`walkDir({withMetadata})` 契约），
+ * 用于钉死"walk 带回的值"与"逐文件 stat 的值"**结果完全一致**、且此时**一次 stat 都不发**。
+ */
+function makeIO(files: Map<string, FakeFile>, opts?: { withMetadata?: boolean }) {
   let reads = 0;
+  let stats = 0;
   const io = {
     readText: async (path: string) => {
       const f = files.get(path);
@@ -38,13 +43,18 @@ function makeIO(files: Map<string, FakeFile>) {
       return { path, text: f.text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: f.mtimeMs };
     },
     walkDir: async (): Promise<DirEntry[]> =>
-      [...files.keys()].map((p) => ({ name: p.split('/').pop()!, path: p, isDirectory: false })),
+      [...files.keys()].map((p) => {
+        const f = files.get(p)!;
+        const base: DirEntry = { name: p.split('/').pop()!, path: p, isDirectory: false };
+        return opts?.withMetadata ? { ...base, mtimeMs: f.mtimeMs, size: f.text.length } : base;
+      }),
     stat: async (path: string): Promise<FileStat | null> => {
+      stats++;
       const f = files.get(path);
       return f ? { size: f.text.length, mtimeMs: f.mtimeMs, isDirectory: false } : null;
     },
   };
-  return { io: io as unknown as FileIO, readsOf: () => reads };
+  return { io: io as unknown as FileIO, readsOf: () => reads, statsOf: () => stats };
 }
 
 /** 假存储域：与 FileStorageBackend 一样走 JSON 往返（能抓住"存了不可序列化的东西"） */
@@ -292,5 +302,48 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
 
     await service.buildIndex([KOJO]);
     expect(readsOf()).toBe(4); // 显式调用无视快照，全量重读
+  });
+
+  /**
+   * §5.117：热开 `index可用` 2,657ms 里 `stat` 独占 2,038ms，全是 2,285 次逐文件 IPC 往返。
+   * 改成 `walkDir({withMetadata})` 顺带带回 mtime 后，**判据的取值来源换了**，
+   * 所以两件事必须同时成立：① 结果逐位不变（索引 + fileMtimes + 落盘快照同值，
+   * 否则老项目的缓存会被这次改动无谓地全量作废）；② 一次 `stat` 都不发——
+   * 不然"省掉那一整段"就是空话。
+   */
+  it('walk 带回元数据 ⇒ 与逐文件 stat 版逐位一致，且一次 stat 都不发', async () => {
+    const seed = () =>
+      new Map<string, FakeFile>([
+        [P1, { text: SRC1, mtimeMs: 100 }],
+        [P2, { text: SRC2, mtimeMs: 200 }],
+      ]);
+    const dump = (idx: NonNullable<ReturnType<ErbParserService['currentIndex']>>) =>
+      JSON.stringify({ fp: indexFingerprint(idx), mtimes: [...idx.fileMtimes!.entries()].sort() });
+
+    // 对照组：桥不带元数据 ⇒ 走逐文件 stat 兜底
+    const plain = makeIO(seed());
+    const ps = makeStorage();
+    const pw = activate(plain.io, ps.storage);
+    openProject(pw.bus);
+    await pw.waitIndexed();
+    const viaStat = dump(pw.service.currentIndex()!);
+    expect(plain.statsOf()).toBe(2); // 兜底路径确实逐文件 stat 过
+
+    // 实验组：桥顺带带回 mtime/size
+    const meta = makeIO(seed(), { withMetadata: true });
+    const ms = makeStorage();
+    const mw = activate(meta.io, ms.storage);
+    openProject(mw.bus);
+    await mw.waitIndexed();
+    const viaWalk = dump(mw.service.currentIndex()!);
+
+    expect(viaWalk).toBe(viaStat); // 索引与 mtime 判据逐位一致
+    expect(meta.statsOf()).toBe(0); // 且一次 stat 都没发
+    // 落盘快照也要同值：判据来源变了不该把老项目的缓存整体作废。
+    // 只比内容——`savedAt` 是落盘墙钟，两次跑必然差 1ms（第一版断言把它一起比了，当场红）。
+    const stripSavedAt = (v: string) => v.replace(/"savedAt":\d+/, '"savedAt":0');
+    const keyOf = (m: Map<string, string>) => [...m.keys()].sort().join(',');
+    expect(keyOf(ms.map)).toBe(keyOf(ps.map));
+    expect([...ms.map.values()].sort().map(stripSavedAt)).toEqual([...ps.map.values()].sort().map(stripSavedAt));
   });
 });

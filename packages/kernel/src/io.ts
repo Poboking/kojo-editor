@@ -59,14 +59,21 @@ export class FileIOServiceImpl implements FileIO {
   /* ------------------------------ 读 ------------------------------ */
 
   async readText(path: string): Promise<TextFile> {
-    const bytes = await this.bridge.readFileBytes(path);
+    // 读字节与 stat **互不依赖**：一起发出，别再串行等一个 RTT（§5.117）。
+    // 冷开一次要读 6,855 个文件（抽取 2,285 + 逐文件校验 4,570），每次都白等一趟。
+    const bytesCall = this.bridge.readFileBytes(path);
+    const statCall = this.bridge.stat(path);
+    // 给 stat 分支一个"已处理"的落点，免得它在读路先失败时变成 unhandled rejection；
+    // 真正的异常仍由下面 await 抛出，语义与串行版一致（不吞错）。
+    statCall.catch(() => {});
+    const bytes = await bytesCall;
     const encoding = probeEncoding(bytes);
     const raw = await this.bridge.decode(bytes, encoding);
     const eol = detectEol(raw);
     const text = normalizeEol(raw);
     this.encodingCache.set(pathKey(path), encoding);
     this.eolCache.set(pathKey(path), eol);
-    const st = await this.bridge.stat(path);
+    const st = await statCall;
     return { path, text, encoding, eol, mtimeMs: st?.mtimeMs ?? null };
   }
 

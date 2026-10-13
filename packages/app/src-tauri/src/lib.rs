@@ -157,6 +157,12 @@ struct DirEntryDto {
     name: String,
     path: String,
     is_directory: bool,
+    /// `walkDir({withMetadata:true})` 时填充；其余情况**整个键不出现**（前端拿到 undefined，
+    /// 而不是被当成 0）。取值走 `mtime_ms_of`，与 `stat_file` 逐位同值 ⇒ 才有资格省掉那次 stat。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mtime_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -173,6 +179,17 @@ struct WalkOptionsDto {
     max_depth: Option<usize>,
     include_files: Option<bool>,
     include_dirs: Option<bool>,
+    /// true ⇒ 每个文件条目顺带带回 mtime/size（省掉调用方的逐文件 `stat_file` 往返）。
+    /// 默认 false：既有调用的开销形态不变。
+    with_metadata: Option<bool>,
+}
+
+/// mtime → epoch 毫秒。`stat_file` 与 `walk_dir(withMetadata)` **共用这一份实现**：
+/// 只有逐位同值，索引的体量指纹与逐文件复用判据才不会因为换了取数路径而变化。
+fn mtime_ms_of(t: Option<std::time::SystemTime>) -> f64 {
+    t.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(0.0)
 }
 
 /* ---------------------------- 文件原语 ---------------------------- */
@@ -247,6 +264,9 @@ fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
             name: entry.file_name().to_string_lossy().to_string(),
             path: entry.path().to_string_lossy().to_string(),
             is_directory: md.map(|m| m.is_dir()).unwrap_or(false),
+            // listDir 没有 withMetadata 选项：输出形态与改造前逐字一致（键直接不出现）
+            mtime_ms: None,
+            size: None,
         });
     }
     Ok(out)
@@ -254,14 +274,11 @@ fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
 
 #[tauri::command]
 fn walk_dir(path: String, opts: Option<WalkOptionsDto>) -> Result<Vec<DirEntryDto>, String> {
-    let o = opts.unwrap_or(WalkOptionsDto {
-        max_depth: None,
-        include_files: Some(true),
-        include_dirs: Some(false),
-    });
+    let o = opts.unwrap_or_default();
     let include_files = o.include_files.unwrap_or(true);
     let include_dirs = o.include_dirs.unwrap_or(false);
     let max_depth = o.max_depth.unwrap_or(usize::MAX);
+    let with_metadata = o.with_metadata.unwrap_or(false);
 
     let mut out = Vec::new();
     let walker = walkdir::WalkDir::new(&path)
@@ -277,10 +294,22 @@ fn walk_dir(path: String, opts: Option<WalkOptionsDto>) -> Result<Vec<DirEntryDt
             continue;
         }
         let p = entry.path();
+        // 顺路取元数据：Windows 上 `DirEntry::metadata()` 用的是枚举时已经拿到的信息，
+        // 不再额外系统调用——**这正是"一次遍历替掉 N 次 stat"成立的前提**。
+        // 取不到就留空（前端退化回 stat_file），绝不伪造 0。
+        let (mtime_ms, size) = match (with_metadata, is_dir) {
+            (true, false) => match entry.metadata() {
+                Ok(md) => (Some(mtime_ms_of(md.modified().ok())), Some(md.len())),
+                Err(_) => (None, None),
+            },
+            _ => (None, None),
+        };
         out.push(DirEntryDto {
             name: entry.file_name().to_string_lossy().to_string(),
             path: p.to_string_lossy().to_string(),
             is_directory: is_dir,
+            mtime_ms,
+            size,
         });
     }
     Ok(out)
@@ -294,12 +323,7 @@ fn path_exists(path: String) -> bool {
 #[tauri::command]
 fn stat_file(path: String) -> Option<FileStatDto> {
     let md = std::fs::metadata(&path).ok()?;
-    let mtime_ms = md
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as f64)
-        .unwrap_or(0.0);
+    let mtime_ms = mtime_ms_of(md.modified().ok());
     Some(FileStatDto {
         size: md.len(),
         mtime_ms,
@@ -1028,5 +1052,69 @@ mod watch_runtime_tests {
             normalize_event_kind(&EventKind::Modify(ModifyKind::Any)),
             Some("change")
         );
+    }
+}
+
+#[cfg(test)]
+mod io_primitives_tests {
+    use crate::{stat_file, walk_dir, WalkOptionsDto};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("kojo-io-{}-{tag}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// `walk_dir(withMetadata)` 带回的 mtime/size 必须与 `stat_file` **逐位同值**——
+    /// 索引的体量指纹、逐文件复用判据、以及已经躺在盘上的快照全都以此为前提。
+    /// 值一漂，等价于把老项目的缓存整批无谓作废（所以这条测在 Rust，而不是只测假 io）。
+    #[test]
+    fn walk_with_metadata_matches_stat_file_exactly() {
+        let dir = temp_dir("walkmeta");
+        std::fs::write(dir.join("a.ERB"), "hello").unwrap();
+        std::fs::write(dir.join("b.ERB"), "longer content here").unwrap();
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+
+        let opts = WalkOptionsDto {
+            max_depth: None,
+            include_files: Some(true),
+            include_dirs: Some(true),
+            with_metadata: Some(true),
+        };
+        let entries = walk_dir(dir.to_string_lossy().to_string(), Some(opts)).unwrap();
+        assert!(entries.iter().any(|e| e.is_directory), "目录条目应仍在");
+
+        let mut files = 0;
+        for e in &entries {
+            if e.is_directory {
+                assert!(e.mtime_ms.is_none(), "目录条目不带元数据 ⇒ 调用方退化回 stat");
+                continue;
+            }
+            let st = stat_file(e.path.clone()).expect("stat_file 应成功");
+            assert_eq!(e.mtime_ms, Some(st.mtime_ms), "mtime 必须逐位同值：{}", e.path);
+            assert_eq!(e.size, Some(st.size), "size 必须逐位同值：{}", e.path);
+            files += 1;
+        }
+        assert_eq!(files, 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 不带 `withMetadata` 时输出形态必须与改造前**逐字一致**：两个键整个不出现，
+    /// 而不是出现成 `null`——前端靠 `typeof === 'number'` 判可用，`null` 会被读成"取到了值"。
+    #[test]
+    fn walk_without_metadata_omits_the_keys_entirely() {
+        let dir = temp_dir("nometa");
+        std::fs::write(dir.join("a.ERB"), "x").unwrap();
+        let entries = walk_dir(dir.to_string_lossy().to_string(), None).unwrap();
+        let json = serde_json::to_string(&entries).unwrap();
+        assert!(!json.contains("mtimeMs"), "不该出现该键：{json}");
+        assert!(!json.contains("\"size\""), "不该出现该键：{json}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

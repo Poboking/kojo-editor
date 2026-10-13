@@ -9,6 +9,15 @@ export interface DirEntry {
   /** 绝对路径 */
   path: string;
   isDirectory: boolean;
+  /**
+   * 仅当 `walkDir(path, { withMetadata: true })` 时填充：文件 mtime（epoch ms），
+   * **与 `stat()` 同源同值**。用途是把"逐文件 stat 的 N 次 IPC"折进一次遍历
+   * （IMPLEMENTATION-LOG §5.92 / §5.117：热开 2.66s 里 `stat` 独占 2.04s）。
+   * 目录条目、或桥未实现该选项 ⇒ `undefined`；调用方必须能退化回 `stat()`，**不许拿 0 兜底**。
+   */
+  mtimeMs?: number;
+  /** 同 `mtimeMs`：文件字节数 */
+  size?: number;
 }
 
 export interface FileStat {
@@ -24,6 +33,11 @@ export interface WalkOptions {
   includeDirs?: boolean;
   /** 返回 false 时跳过该条目（目录被跳过则整棵子树跳过） */
   filter?: (entry: DirEntry) => boolean;
+  /**
+   * true ⇒ 每个**文件**条目顺带填 `mtimeMs` / `size`（见 `DirEntry`）。
+   * 默认 false：不改变既有调用的开销形态（列目录仍是列目录）。
+   */
+  withMetadata?: boolean;
 }
 
 /** 文件监视回调（内核会在平台事件之上做去抖与归一化） */
