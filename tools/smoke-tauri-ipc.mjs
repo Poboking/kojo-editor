@@ -25,8 +25,16 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
+// 语料路径**按主机而定**（haruki 机只有 C:，QA 机用 D:）——默认值猜不中就别猜，
+// 让它一开头就明确失败，比跑到 a 步"点了最近打开却没进项目"再猜原因省一整轮。
 const GAME_DIR =
-  process.argv[2] ?? 'D:\\Game\\eratw\\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)';
+  process.argv[2] ??
+  process.env.KOJO_SMOKE_PROJECT ??
+  'D:\\Game\\eratw\\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)';
+if (!fs.existsSync(GAME_DIR)) {
+  console.error(`❌ 游戏目录不存在：${GAME_DIR}\n   用法：node tools/smoke-tauri-ipc.mjs "<本机真实 eraTW 根目录>"`);
+  process.exit(2);
+}
 const OUTSIDE_PATH = 'C:\\Windows\\Temp\\kojo-smoke-outside.txt';
 const CDP_PORT = 9222;
 
@@ -301,10 +309,12 @@ async function main() {
       return 'clicked';
     })()`);
     if (clicked !== 'clicked') throw new Error(`recent button click failed: ${clicked}`);
-    // 等项目头出现（openProject 期间会弹写权限确认）
-    await waitFor(cdp, `!!document.querySelector('.project-header')`, 120000);
-    const projDir = await cdp.evalJs(`document.querySelector('.proj-dir')?.textContent ?? ''`);
-    if (projDir === GAME_DIR) P('a', '打开真实游戏目录', `项目头 rootDir=${projDir}`);
+    // 等项目标识出现（openProject 期间会弹写权限确认）。
+    // ⚠ 选择器口径（2026-10-13 修）：UI 重设计后**没有** `.project-header` / `.proj-dir` 了，
+    //   项目根在工具栏左侧 `.tb-project` 的 **title** 上（可见文字是项目名，不是路径）。
+    await waitFor(cdp, `!!document.querySelector('.tb-project')`, 120000);
+    const projDir = await cdp.evalJs(`document.querySelector('.tb-project')?.title ?? ''`);
+    if (projDir === GAME_DIR) P('a', '打开真实游戏目录', `工具栏项目标签 rootDir=${projDir}`);
     else F('a', '打开真实游戏目录', `期望 ${GAME_DIR}，实际 ${projDir}`);
 
     /* -------- 批准写权限（若弹窗） -------- */
@@ -324,24 +334,24 @@ async function main() {
       S('a2', '批准写权限对话框', '未弹出（该目录已有批准记录）');
     }
 
-    // 等索引完成（stats 不再含 …）
+    // 等索引完成（状态栏 `.sb-idx` 不再含省略号：索引中显示「索引构建中…」）
     try {
       await waitFor(
         cdp,
-        `(document.querySelector('.proj-stats') && !document.querySelector('.proj-stats').innerText.includes('…')) || false`,
+        `(document.querySelector('.sb-idx') && !document.querySelector('.sb-idx').innerText.includes('…')) || false`,
         180000,
       );
     } catch (e) {
       const dump = await cdp.evalJs(`(() => ({
         href: location.href,
-        header: !!document.querySelector('.project-header'),
-        stats: document.querySelector('.proj-stats')?.innerText ?? null,
+        header: !!document.querySelector('.tb-project'),
+        stats: document.querySelector('.sb-idx')?.innerText ?? null,
         welcome: !!document.querySelector('.welcome'),
         bodyText: (document.body?.innerText ?? '').slice(0, 400),
       }))()`);
       throw new Error(`stats never settled: ${JSON.stringify(dump)}`);
     }
-    const stats = await cdp.evalJs(`document.querySelector('.proj-stats').innerText.replace(/\\n/g,' ')`);
+    const stats = await cdp.evalJs(`document.querySelector('.sb-idx').innerText.replace(/\\n/g,' ')`);
     console.log('[smoke] project stats:', stats);
 
     /* -------- b) 域内写：编辑 + 保存 + 落盘 + 备份 -------- */
@@ -359,7 +369,7 @@ async function main() {
       );
     } catch (e) {
       const dump = await cdp.evalJs(`(() => ({
-        stats: document.querySelector('.proj-stats')?.innerText ?? null,
+        stats: document.querySelector('.sb-idx')?.innerText ?? null,
         sidebarText: (document.querySelector('.sidebar')?.innerText ?? '').slice(0, 400),
         groupBtns: document.querySelectorAll('.tree-group-btn').length,
         groups: document.querySelectorAll('.tree-groups').length,
@@ -395,6 +405,52 @@ async function main() {
     if (!box) throw new Error('editor box not found');
     await cdp.click(box.x, box.y);
     await sleep(400);
+
+    // 2026-10-13：游戏目录里的 ERB **默认只读**（ADR-0005 轴一）。此时 insertText 会被 Monaco
+    // 整个吞掉——那是产品正确行为，不是探针该绕过去的坑；探针因此**显式走一遍轴二解锁**，
+    // 顺便把屏上文案钉成断言（清单 7.17 / 7.20 的机器半边）。
+    // ⚠ 两颗胶囊的 class 不同源（§5.106 只把只读那颗归了状态栏口径）：
+    //   只读 = `.sb-writable.ro`（文案「只读」），已解锁 = `.erb-mode-hint.unlocked`（文案「✏ 已解锁编辑」）。
+    const readPill = () =>
+      cdp.evalJs(`(() => {
+        const ro = document.querySelector('.sb-writable.ro');
+        if (ro) return ['locked', (ro.textContent ?? '').trim()];
+        const un = document.querySelector('.erb-mode-hint.unlocked');
+        if (un) return ['unlocked', (un.textContent ?? '').trim()];
+        return ['editable', ''];
+      })()`);
+    // 首次打开游戏目录 ERB 会问一次「要开启语法糖视图吗」——那也是一朵 `.modal`。
+    // 探针要的是**原文可编辑**，所以先答「不用」把局面清干净，免得后面等解锁弹窗时等错一朵。
+    await cdp.evalJs(`(() => {
+      const m = document.querySelector('.modal[aria-label="语法糖视图"]');
+      if (!m) return 'no-intro';
+      const b = [...m.querySelectorAll('.modal-actions button')].find(e => e.textContent.trim() === '不用');
+      if (b) b.click();
+      return 'intro-dismissed';
+    })()`);
+    await sleep(600);
+
+    const [mode0, pill0] = await readPill();
+    if (mode0 === 'locked') {
+      if (pill0 !== '只读') F('b0', '只读胶囊文案', `期望「只读」，实际「${pill0}」`);
+      else P('b0', '只读胶囊文案', '屏上原样＝「只读」（无 🔒 字符）');
+      // 真实按键触发 Monaco 的"只读态下尝试编辑"事件（insertText 在只读下不产生该事件）
+      await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', text: 'x', key: 'x', windowsVirtualKeyCode: 88, code: 'KeyX' });
+      await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'x', windowsVirtualKeyCode: 88, code: 'KeyX' });
+      await waitFor(cdp, `!!document.querySelector('.modal')`, 15000);
+      const unlockClick = await cdp.evalJs(`(() => {
+        const b = [...document.querySelectorAll('.modal-actions button')].find(e => e.textContent.includes('仍要直接编辑'));
+        if (!b) return 'no-unlock-button';
+        b.click();
+        return 'unlocked-click';
+      })()`);
+      if (unlockClick !== 'unlocked-click') throw new Error(`erb unlock failed: ${unlockClick}`);
+      await waitFor(cdp, `!!document.querySelector('.erb-mode-hint.unlocked')`, 15000);
+      P('b1', '轴二解锁（游戏目录 ERB）', '打字 → 弹解锁询问 → 「仍要直接编辑」→ 胶囊转「✏ 已解锁编辑」');
+    } else if (mode0 === 'unlocked') {
+      S('b0', '只读胶囊文案', `开局已是解锁态（${pill0}）`);
+    }
+
     await cdp.insertText(`\n${marker}\n`);
     await sleep(800);
     const dirty = await cdp.evalJs(`!!document.querySelector('.dirty-dot.on')`);
@@ -459,11 +515,14 @@ async function main() {
     else F('e', 'appDataDir 写正常', `invoke=${JSON.stringify(eResult)} onDisk=${eOnDisk}`);
 
     /* -------- d) 关闭项目后再写游戏目录 → 被拒 -------- */
-    await cdp.evalJs(`(() => {
-      const b = [...document.querySelectorAll('.project-header button')].find(e=>e.textContent.includes('关闭项目'));
+    // ⚠ 「关闭项目」在 UI 重设计后从项目头搬到**工具栏右区**（`.toolbar`），
+    //   且这里必须**断言点到了**：静默 no-op 会让本项在没有关闭动作的情况下"通过"。
+    const closeClick = await cdp.evalJs(`(() => {
+      const b = [...document.querySelectorAll('.toolbar button')].find(e=>e.textContent.includes('关闭项目'));
       if (b) { b.click(); return 'closed-click'; }
       return 'no-close-button';
     })()`);
+    if (closeClick !== 'closed-click') throw new Error(`close-project click failed: ${closeClick}`);
     await waitFor(cdp, `!!document.querySelector('.welcome')`, 30000);
     const dPath = path.join(GAME_DIR, '_kojo_smoke_after_close.txt');
     const dResult = await cdp.evalJs(`(async () => {

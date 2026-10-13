@@ -5,9 +5,17 @@
 > `tools/smoke-tauri-ipc.mjs`（CDP 进 WebView 直调真实 `invoke`，非伪造）。
 >
 > 命令原文（本机 2026-10 实测）：
-> - 自动探针：`node tools/smoke-tauri-ipc.mjs [游戏目录]`（默认 `D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`）
+> - 自动探针：`node tools/smoke-tauri-ipc.mjs "<本机真实 eraTW 根目录>"`
+>   —— **语料路径按主机而定**（haruki 机 `C:\game\eratw-sub-…`，QA 机 `D:\Game\eratw\eratw-sub-…`）；
+>   不给参数或给了不存在的目录，探针现在**一开头就退出码 2 报错**，不会跑到一半才莫名失败。
 > - 进程/DOM 冒烟：`node tools/smoke-tauri-dom.mjs 130`
 > - 手工：`pnpm --filter @kojo/app tauri dev`（或 `pnpm tauri dev`）
+>
+> **DOM 口径（2026-10-13 随 UI 重设计更正）**：已经没有 `.project-header` / `.proj-dir` / `.proj-stats`。
+> 项目根读**工具栏左侧 `.tb-project` 的 `title`**（可见文字是项目名，不是路径）；
+> 索引水位读**状态栏 `.sb-idx`**（索引中显示「索引构建中…」，完成是「N 文件 · M 函数」）；
+> 「关闭项目」在**工具栏右区 `.toolbar`**。探针曾因为拿旧选择器断言而整轮红——
+> 那是**探针过期**，不是产品回归，别再照着它找 bug。
 
 ## 0. 前置
 
