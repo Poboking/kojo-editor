@@ -28,6 +28,12 @@ import type { KojoCompiler } from './artifact';
 import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard, readRequestToken } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID, createDeployKojoWizard } from './deploy-wizard';
+import {
+  KOJO_TUTORIAL_OVERLAY_ID,
+  SUGAR_TUTORIAL_OVERLAY_ID,
+  createTutorialOverlay,
+} from './tutorial-overlay';
+import { TUTORIALS } from './tutorial-content';
 import type { PendingDeploy } from './deploy';
 
 /**
@@ -501,6 +507,12 @@ export function createEratwAdapterPlugin(): Plugin {
             ctx.bus.emit('editor.revealLocation', { filePath: absPath, source: 'eratw-adapter' }),
           openNewWizard: () =>
             ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' }),
+          // 教程入口（E6）：两个 overlay 常驻注册（见下方），这里只发打开意图
+          openTutorial: (which) =>
+            ctx.bus.emit('ui.overlay.open', {
+              id: which === 'sugar' ? SUGAR_TUTORIAL_OVERLAY_ID : KOJO_TUTORIAL_OVERLAY_ID,
+              source: 'eratw-adapter',
+            }),
           status: () => actions.status(),
           dismissStatus: () => actions.dismiss(),
           exportArtifact: (absDir, displayName) => actions.exportArtifact(absDir, displayName),
@@ -566,6 +578,28 @@ export function createEratwAdapterPlugin(): Plugin {
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: DEPLOY_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
           deploy: (pkg, target) => actions.deployArtifact(pkg, target),
+        }),
+      });
+
+      /* ---- 内置教程（E6）：语法糖 + 口上；入口在「我的口上项目」面板底部 ---- */
+
+      ctx.slots.register('ui.overlay', {
+        id: SUGAR_TUTORIAL_OVERLAY_ID,
+        order: 30,
+        component: createTutorialOverlay({
+          tutorial: TUTORIALS.sugar,
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: SUGAR_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' }),
+        }),
+      });
+
+      ctx.slots.register('ui.overlay', {
+        id: KOJO_TUTORIAL_OVERLAY_ID,
+        order: 31,
+        component: createTutorialOverlay({
+          tutorial: TUTORIALS.kojo,
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: KOJO_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' }),
         }),
       });
     },

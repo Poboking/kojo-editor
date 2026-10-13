@@ -20,6 +20,7 @@ import type { PackageAttribution } from '../src/attribution';
 import { NEW_KOJO_PROJECT_OVERLAY_ID } from '../src/new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID } from '../src/import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID } from '../src/deploy-wizard';
+import { KOJO_TUTORIAL_OVERLAY_ID, SUGAR_TUTORIAL_OVERLAY_ID } from '../src/tutorial-overlay';
 
 /* ------------------------------ 纯函数 ------------------------------ */
 
@@ -242,13 +243,15 @@ describe('「我的口上项目」面板注册（P-B）', () => {
 });
 
 describe('口上项目向导注册（P-C 新建 / P-F 导入 / P-E 部署）', () => {
-  it('注册三个 ui.overlay：新建 + 导入 + 部署，id 与各引用常量一致', () => {
+  it('注册五个 ui.overlay：新建 + 导入 + 部署 + 两个教程，id 与各引用常量一致', () => {
     const { overlays } = activateWithPanel();
     const ids = overlays.map((o) => o.id);
     expect(ids).toContain(NEW_KOJO_PROJECT_OVERLAY_ID);
     expect(ids).toContain(IMPORT_KOJO_OVERLAY_ID);
     expect(ids).toContain(DEPLOY_KOJO_OVERLAY_ID);
-    expect(overlays).toHaveLength(3);
+    expect(ids).toContain(SUGAR_TUTORIAL_OVERLAY_ID);
+    expect(ids).toContain(KOJO_TUTORIAL_OVERLAY_ID);
+    expect(overlays).toHaveLength(5);
     for (const o of overlays) expect(typeof o.component).toBe('function');
   });
 

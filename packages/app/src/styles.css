@@ -3195,6 +3195,65 @@ button.primary .hint {
 .wizard-actions .primary:disabled {
   opacity: 0.45;
 }
+
+/* --------------------- 内置教程浮层（E6；复用向导容器语义） --------------------- */
+
+/* 长文阅读：标题与「关闭」固定，只有正文滚——整宿主滚动会把标题和按钮卷出视野，
+   而教程恰恰是"读到一半还得能关"。max-height 与 .overlay-host 的 80vh 对齐
+   （扣掉宿主 padding、面板 padding 与边框，让内层先于宿主到限，避免双滚动条）。 */
+.wizard.tutorial {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(80vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
+}
+.tutorial-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+}
+.tutorial-body h4 {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--fs-2);
+}
+.tutorial-body h4:first-child {
+  margin-top: 0;
+}
+.tutorial-body p {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-2);
+  line-height: 1.6;
+}
+.tutorial-caption {
+  font-size: var(--fs-1);
+  line-height: 1.5;
+}
+.tutorial-sample {
+  margin: var(--space-2) 0;
+}
+/* 样例代码块：与「文件树里的路径」同一套等宽语言；横向溢出自己滚，不撑破浮层 */
+.tutorial-code {
+  margin: var(--space-1) 0 0;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+  font-size: var(--fs-1);
+  line-height: 1.55;
+}
+.tutorial-code code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  white-space: pre;
+}
+.wizard.tutorial .wizard-actions {
+  flex: none;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
 .sb-idx.err {
   color: var(--red);
 }
@@ -3341,11 +3400,12 @@ button.primary .hint {
 .kp-actions {
   padding: 0 var(--space-1);
 }
-/* 行按钮（项目 / 包 / 目录 / 文件共用骨架：整行可点、悬停淡底、圆角克制） */
+/* 行按钮（项目 / 包 / 目录 / 文件 / 教程入口共用骨架：整行可点、悬停淡底、圆角克制） */
 .kp-project-btn,
 .kp-artifact-btn,
 .kp-dir-btn,
-.kp-file-btn {
+.kp-file-btn,
+.kp-tutorial-btn {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3363,13 +3423,15 @@ button.primary .hint {
 .kp-project-btn:hover,
 .kp-artifact-btn:hover,
 .kp-dir-btn:hover,
-.kp-file-btn:hover {
+.kp-file-btn:hover,
+.kp-tutorial-btn:hover {
   background: var(--hover);
 }
 .kp-project-btn:focus-visible,
 .kp-artifact-btn:focus-visible,
 .kp-dir-btn:focus-visible,
-.kp-file-btn:focus-visible {
+.kp-file-btn:focus-visible,
+.kp-tutorial-btn:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
@@ -3398,7 +3460,8 @@ button.primary .hint {
   font-size: var(--fs-1);
 }
 .kp-dir-name,
-.kp-file-name {
+.kp-file-name,
+.kp-tutorial-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3521,6 +3584,19 @@ button.primary .hint {
 }
 .kp-status-close:hover {
   opacity: 1;
+}
+
+/* 教程入口（E6）：常驻面板底部，不进树的滚动区——写不动时抬头就能找到。
+   行按钮度量与树行同族（见上文 .kp-*-btn 组），这里只补小节的分隔与标题。 */
+.kp-tutorials {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+.kp-tutorials-title {
+  font-size: var(--fs-0);
+  letter-spacing: 0.04em;
+  padding: 0 6px 2px;
 }
 
 /* --------- 行内新建（反馈 1b）：命名框就长在树里，不弹窗 --------- */

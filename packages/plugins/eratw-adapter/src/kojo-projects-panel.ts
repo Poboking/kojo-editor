@@ -16,11 +16,12 @@
  */
 
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { DirEntry, WorkspaceArtifact, WorkspaceProject } from '@kojo/plugin-api';
+import type { DirEntry, UIPanelProps, WorkspaceArtifact, WorkspaceProject } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
 import { attributionSummary, type AttributionState, type PackageAttribution } from './attribution';
 import type { PanelStatus } from './package-actions';
 import { NEW_ITEM_MENU, newItemPreviewName, type NewItemKind } from './new-item';
+import type { TutorialId } from './tutorial-content';
 
 /** 目录列举态（闭包缓存值）：在途 / 失败（带原因）/ 已加载 */
 export type DirListState = DirEntry[] | 'loading' | { error: string };
@@ -46,6 +47,8 @@ export interface KojoProjectsPanelDeps {
   reveal(absPath: string): void;
   /** 打开「新建口上项目」向导（P-C；缺省 → 不显示新建按钮） */
   openNewWizard?(): void;
+  /** 打开内置教程（E6；浮层内容见 `tutorial-content.ts`） */
+  openTutorial(which: TutorialId): void;
   /** 包操作反馈条内容（P-D；null → 状态条不渲染） */
   status(): PanelStatus | null;
   /** 手动关闭反馈条 */
@@ -143,9 +146,12 @@ function indent(depth: number): { paddingLeft: string } {
 /**
  * 面板组件工厂（createElement 风格，与本插件既有面板一致；不引 JSX）。
  * 数据与缓存全在 deps（插件闭包），组件只持有**呈现态**（展开/折叠集合）。
+ * 组件收到宿主注入的 `UIPanelProps`（图标桥经此进来，见 `ic`）。
  */
-export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unknown {
-  return function KojoProjectsPanel(): unknown {
+export function createKojoProjectsPanel(
+  deps: KojoProjectsPanelDeps,
+): (props: UIPanelProps) => unknown {
+  return function KojoProjectsPanel(props: UIPanelProps): unknown {
     const [, force] = useState(0);
     /** 折叠的项目（缺省全展开——项目行下包标题行可见即「简洁平铺」形态） */
     const [closedProjects, setClosedProjects] = useState<Set<string>>(new Set());
@@ -153,6 +159,13 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
     const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
     const openDirsRef = useRef(openDirs);
     openDirsRef.current = openDirs;
+
+    /**
+     * 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入图标注册表；缺省（旧宿主 /
+     * 单测里的直接调用）一律回退纯文本字形——图标是锦上添花，缺省时绝不能画成空白。
+     */
+    const ic = (name: string, size: number, fallback: string): ReactNode =>
+      (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
 
     useEffect(
       () =>
@@ -342,7 +355,7 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
               onClick: () => toggleDir(e.path),
               onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, e.path),
             },
-            h('span', { className: 'caret' }, dOpen ? '▾' : '▸'),
+            h('span', { className: 'caret' }, dOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
             h('span', { className: 'kp-dir-name' }, e.name),
           ),
           dOpen ? renderDir(e.path, depth + 1) : null,
@@ -433,7 +446,7 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                     toggleDir(dir);
                   },
                 },
-                h('span', { className: 'caret' }, isOpen ? '▾' : '▸'),
+                h('span', { className: 'caret' }, isOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
                 h('span', { className: 'kp-artifact-name' }, a.name),
                 a.name !== a.dirName ? h('span', { className: 'kp-dirname dim' }, a.dirName) : null,
               ),
@@ -524,10 +537,11 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
           ? h(
               'button',
               { className: 'ghost small', title: '新建口上项目', onClick: () => deps.openNewWizard!() },
-              '＋ 新建',
+              ic('add', 12, '＋'),
+              ' 新建',
             )
           : null,
-        h('button', { className: 'ghost small', title: '刷新项目列表', onClick: () => deps.refresh() }, '⟳'),
+        h('button', { className: 'ghost small', title: '刷新项目列表', onClick: () => deps.refresh() }, ic('refresh', 13, '⟳')),
       ),
     );
 
@@ -566,7 +580,7 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                 onClick: () => toggleProject(p.id),
                 onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, pDir),
               },
-              h('span', { className: 'caret' }, pOpen ? '▾' : '▸'),
+              h('span', { className: 'caret' }, pOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
               h('span', { className: 'kp-project-name' }, p.name),
               h('span', { className: 'kp-count dim' }, `${p.artifacts.length} 包`),
             ),
@@ -596,7 +610,7 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
             : h(
                 'button',
                 { className: 'kp-status-close', title: '关闭', onClick: () => deps.dismissStatus() },
-                '×',
+                ic('close', 12, '×'),
               ),
         )
       : null;
@@ -624,7 +638,11 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
                   title: m.hint,
                   onClick: () => startDraft(ctxMenu!.dir, m.kind),
                 },
-                h('span', { className: 'check' }, draft && draft.dir === ctxMenu.dir && draft.kind === m.kind ? '●' : ''),
+                h(
+                  'span',
+                  { className: 'check' },
+                  draft && draft.dir === ctxMenu.dir && draft.kind === m.kind ? ic('check', 12, '●') : '',
+                ),
                 m.label,
               ),
             ),
@@ -632,6 +650,37 @@ export function createKojoProjectsPanel(deps: KojoProjectsPanelDeps): () => unkn
         )
       : null;
 
-    return h('div', { className: 'panel-kojo-projects' }, notice, toolbar, body, statusBar, menu);
+    /**
+     * 教程入口（E6）：常驻面板底部（body 之后、状态条之前），不随树滚动——
+     * 写不下去时抬头就能找到，不藏在菜单里。行按钮与树行同族（度量 / hover /
+     * focus-visible 复用 styles.css 的行按钮组）。
+     */
+    const tutorials = h(
+      'div',
+      { className: 'kp-tutorials' },
+      h('div', { className: 'kp-tutorials-title dim' }, '教程'),
+      h(
+        'button',
+        {
+          className: 'kp-tutorial-btn',
+          title: '语法糖的每一种写法，以及它们编译成的 ERB（写法 + 对照，十节）',
+          onClick: () => deps.openTutorial('sugar'),
+        },
+        ic('wand', 14, '✦'),
+        h('span', { className: 'kp-tutorial-name' }, '语法糖教程'),
+      ),
+      h(
+        'button',
+        {
+          className: 'kp-tutorial-btn',
+          title: '口上从新建项目到导出、部署的全流程（两真相源 + 常见坑）',
+          onClick: () => deps.openTutorial('kojo'),
+        },
+        ic('book', 14, '▤'),
+        h('span', { className: 'kp-tutorial-name' }, '口上教程'),
+      ),
+    );
+
+    return h('div', { className: 'panel-kojo-projects' }, notice, toolbar, body, tutorials, statusBar, menu);
   };
 }

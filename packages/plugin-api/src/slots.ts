@@ -26,6 +26,14 @@ export interface ContributionBase {
 export interface UIPanelProps {
   /** 渲染器提供的刷新信号（面板可选择忽略并通过事件自行驱动） */
   readonly refreshTick?: number;
+  /**
+   * 宿主注入的图标注册表桥（additive，2026-10-13 教程批）：传「图标名 + 像素尺寸」，
+   * 返回可直接嵌入为子节点的内容（宿主通常返回一枚 SVG）。
+   *
+   * **可选**：旧宿主 / 无渲染环境（纯函数单测等）下缺省——贡献方须按「缺省即回退
+   * 纯文本字形」编写；图标是锦上添花，绝不能在缺省时渲染成空白。
+   */
+  readonly renderIcon?: (name: string, size?: number) => unknown;
 }
 
 /**
