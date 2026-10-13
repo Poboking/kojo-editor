@@ -19,7 +19,7 @@ import { fillSugarBlock } from '../monaco/sugar-render';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { editorOptionsForLineCount } from './editor-options';
-import { ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
+import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
 import { clampRange, isErbLike } from './lift-preview';
 import { pathLabelParts, splitPath } from './path-label';
@@ -1200,7 +1200,9 @@ export function EditorPane({
       setErbEditable(path, true);
       notify({
         kind: 'info',
-        message: '已允许编辑此 ERB · 语法糖视图已关闭（建议改在自己的 .kojo 口上文件里写内容）',
+        message: isSealed()
+          ? '已允许编辑这份文件 · 你改的是游戏目录里的原生文件，请当心'
+          : '已允许编辑此 ERB · 语法糖视图已关闭（建议改在自己的 .kojo 口上文件里写内容）',
       });
     },
     [unlockAsk, setErbEditable, notify],
@@ -1233,7 +1235,11 @@ export function EditorPane({
               <button
                 className="erb-mode-hint unlocked"
                 onClick={() => setErbEditable(filePath, false)}
-                title="已破例允许编辑这一份文件（只对本次会话有效，关闭编辑器即失效），语法糖视图同时关闭——要动手改的原文必须看得见。点击收回这次破例。"
+                title={
+                  sealed
+                    ? '已破例允许编辑这一份文件（只对本次会话有效，关闭编辑器即失效）。改的是游戏目录里的原生文件，请当心。'
+                    : '已破例允许编辑这一份文件（只对本次会话有效，关闭编辑器即失效），语法糖视图同时关闭——要动手改的原文必须看得见。点击收回这次破例。'
+                }
               >
                 <Icon name="edit" size={13} /> 已解锁编辑
               </button>
@@ -1304,7 +1310,11 @@ export function EditorPane({
       {pendingChoice ? <SaveWarningDialog warning={pendingChoice} onDecide={decideSaveWarning} /> : null}
       {introAsk ? <SugarViewIntroDialog onDecide={decideIntro} /> : null}
       {unlockAsk ? (
-        <ErbUnlockDialog fileName={baseNameOf(unlockAsk)} onDecide={decideUnlock} />
+        sealed ? (
+          <ErbReadonlyAskDialog fileName={baseNameOf(unlockAsk)} onDecide={decideUnlock} />
+        ) : (
+          <ErbUnlockDialog fileName={baseNameOf(unlockAsk)} onDecide={decideUnlock} />
+        )
       ) : null}
     </div>
   );

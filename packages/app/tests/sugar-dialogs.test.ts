@@ -16,7 +16,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
-import { ErbUnlockDialog, SugarViewIntroDialog } from '../src/ui/SugarViewDialogs';
+import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from '../src/ui/SugarViewDialogs';
 import { SaveWarningDialog } from '../src/ui/SaveWarningDialog';
 import { UnsavedConfirmDialog } from '../src/ui/UnsavedConfirmDialog';
 import { WritableApprovalDialog } from '../src/ui/WritableApprovalDialog';
@@ -40,6 +40,12 @@ const cases: { name: string; html: string }[] = [
     name: 'ERB 解锁确认',
     html: renderToString(
       createElement(ErbUnlockDialog, { fileName: 'A_一般.erb', onDecide: noop }),
+    ),
+  },
+  {
+    name: 'ERB 只读确认（简易版）',
+    html: renderToString(
+      createElement(ErbReadonlyAskDialog, { fileName: 'A_一般.erb', onDecide: noop }),
     ),
   },
   {
@@ -110,5 +116,32 @@ describe('全站模态对话框', () => {
       createElement(ErbUnlockDialog, { fileName: 'A_一般.erb', onDecide: vi.fn() }),
     );
     expect(html).toContain('<code>A_一般.erb</code>');
+  });
+
+  it('ERB 只读确认（简易版）：推荐项（保持只读）才是 primary', () => {
+    // 与糖版同口径：默认态的作者第一眼看到的框也必须让"不写盘"是视觉推荐项。
+    const bs = buttons(
+      renderToString(createElement(ErbReadonlyAskDialog, { fileName: 'A_一般.erb', onDecide: noop })),
+    );
+    expect(bs.find((b) => b.kind === 'primary')!.label).toBe('保持只读');
+    expect(bs.find((b) => b.kind === 'ghost')!.label).toBe('仍要直接编辑');
+  });
+
+  it('ERB 只读确认（简易版）把文件名原样放进 code（作者靠它对号）', () => {
+    // 同名文件可能散落在多个目录，作者必须能核对是哪一份。
+    const html = renderToString(
+      createElement(ErbReadonlyAskDialog, { fileName: 'A_一般.erb', onDecide: vi.fn() }),
+    );
+    expect(html).toContain('<code>A_一般.erb</code>');
+  });
+
+  it('ERB 只读确认（简易版）不提封存件（语法糖视图相关词一个不许出现）', () => {
+    // 默认态（封存）的作者没见过糖视图——提到它就是在描述一个不存在的功能。
+    const html = renderToString(
+      createElement(ErbReadonlyAskDialog, { fileName: 'A_一般.erb', onDecide: noop }),
+    );
+    for (const term of ['语法糖', '糖视图', '投影', '映射']) {
+      expect(html).not.toContain(term);
+    }
   });
 });
