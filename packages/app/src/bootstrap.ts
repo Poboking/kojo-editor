@@ -9,6 +9,7 @@ import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor
 import { createSavParserPlugin } from '@kojo/plugin-sav-parser';
 import { createStateReplayPlugin } from '@kojo/plugin-state-replay';
 import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
+import { createUiConditionMatrixPlugin } from '@kojo/plugin-ui-condition-matrix';
 import { createUiConventionReportPlugin } from '@kojo/plugin-ui-convention-report';
 import { createUiKojoNavigatorPlugin } from '@kojo/plugin-ui-kojo-navigator';
 import { createUiStateReplayPlugin } from '@kojo/plugin-ui-state-replay';
@@ -52,6 +53,7 @@ export async function bootstrapKernel(): Promise<Kernel> {
       createUiStatusPlugin(),
       createUiConventionReportPlugin(),
       createUiKojoNavigatorPlugin(),
+      createUiConditionMatrixPlugin(),
       createUiStateReplayPlugin(),
       createUiArchiveBrowserPlugin(),
       // 状态注入器（写链路在 sav-parser 的 snapshot.writer；面板只做呈现 + 意图）

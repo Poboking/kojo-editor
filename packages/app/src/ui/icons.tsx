@@ -83,6 +83,13 @@ const ICONS = {
       {stroke('M8 4.6V8l2.6 1.8')}
     </>
   ),
+  matrix: (
+    <>
+      {stroke('M2.4 2.4h11.2v11.2H2.4z')}
+      {stroke('M6.2 2.4v11.2M9.8 2.4v11.2')}
+      {stroke('M2.4 6.2h11.2M2.4 9.8h11.2')}
+    </>
+  ),
 
   /* --- 动作 --- */
   add: stroke('M8 3v10M3 8h10'),

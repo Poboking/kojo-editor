@@ -2,13 +2,13 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-14 凌晨，E12 教程文本批 rebase 进 origin/master 后本机实测）
+## 一、基线（2026-10-14，E12 教程文本批 + 条件矩阵批 合流后本机实测）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **1966 passed / 14 skipped（1980）**；111 文件过 / 8 跳（119） |
+| 全量测试 | **1980 passed / 14 skipped（1994）**；112 文件过 / 8 跳（120） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
-| 审计 | `pnpm audit:decoupling` ✅（16 插件；A–D 四项全绿） |
+| 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **18 项全绿**（改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
 | app build | ✓ 38.71s（§5.112 读数，此后未改构建面） |
 
@@ -39,5 +39,5 @@
 
 ## 五、版图速览（代码地图）
 
-插件 16：`erb-parser` / `eratw-adapter` / `convention-linter` / `condition-extractor` / `sav-parser` / `state-replay` / `kojo-sugar` / `ui-convention-report` / `ui-kojo-navigator` / `ui-state-replay` / `ui-archive-browser` / `ui-snapshot-injector` / `ui-plugin-status` / `ui-sugar-preview` / `ui-sugar-editor` / `ui-sugar-lift`。
+插件 17：`erb-parser` / `eratw-adapter` / `convention-linter` / `condition-extractor` / `sav-parser` / `state-replay` / `kojo-sugar` / `ui-convention-report` / `ui-kojo-navigator` / `ui-condition-matrix` / `ui-state-replay` / `ui-archive-browser` / `ui-snapshot-injector` / `ui-plugin-status` / `ui-sugar-preview` / `ui-sugar-editor` / `ui-sugar-lift`。
 目录结构与关键文件注释见 `docs/ARCHITECTURE.md`；批次明细在 `docs/log/`。

@@ -3751,3 +3751,130 @@ button.primary .hint {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================ 条件矩阵面板（cm-*，条件矩阵批） ============================ */
+.panel-condition-matrix {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  flex: 1;
+  min-height: 0;
+  font-size: var(--fs-1);
+}
+.cm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: none;
+}
+.cm-chara-select {
+  flex: 0 0 auto;
+  max-width: 55%;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 4px 6px;
+  font-size: var(--fs-2);
+}
+.cm-filter {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 4px 8px;
+  font-size: var(--fs-2);
+}
+.cm-status {
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+}
+.cm-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.cm-table {
+  border-collapse: collapse;
+  font-size: var(--fs-0);
+}
+/* 表头 / 角格 / 行头贴边：底色必须不透明，否则滚动时下层内容透出 */
+.cm-th,
+.cm-corner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cm-corner {
+  left: 0;
+  z-index: 3;
+}
+.cm-rowhead {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: left;
+}
+/* 单元格：紧凑方钮。.on 实心强调色、.off 近乎空白，一眼分辨填充/留空 */
+.cm-cell {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  border-radius: 0;
+  cursor: pointer;
+}
+.cm-cell.on {
+  background: var(--accent);
+  border-color: var(--accent-strong);
+}
+.cm-cell.off {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.04);
+  opacity: 0.22;
+}
+.cm-cell:hover {
+  border-color: var(--accent-text);
+}
+/* 详情：逐行列表（行间紧凑，列出当前格的信息） */
+.cm-detail {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: var(--fs-0);
+}
+.cm-empty {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  padding: 8px 2px;
+}
+.cm-error {
+  color: var(--danger, #d05a5a);
+  font-size: var(--fs-0);
+  padding: 3px 2px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
