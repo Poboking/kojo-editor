@@ -8,6 +8,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
+import { pushNotice } from './notice-queue';
 
 /** 通知动作按钮（如「去授权」）——点击后先关 toast 再执行 */
 export interface NoticeAction {
@@ -30,8 +31,7 @@ export type Notify = (notice: NoticeInput) => void;
 
 export const NotifyContext = createContext<Notify>(() => {});
 
-/** toast 同屏上限：超出时丢弃最旧（防刷屏堆叠） */
-const MAX_NOTICES = 5;
+/** toast 同屏上限与淘汰规则住在 `notice-queue.ts`（纯函数可单测，HK-8 裁决批） */
 /** info 自动消失时长；error 常驻到用户处理（与 VSCode 一致：错误不自动消失） */
 const INFO_TTL_MS = 6000;
 
@@ -53,7 +53,7 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
   const notify = useCallback<Notify>(
     (input) => {
       const id = ++seqRef.current;
-      setNotices((list) => [...list.slice(-(MAX_NOTICES - 1)), { ...input, id }]);
+      setNotices((list) => pushNotice(list, { ...input, id }));
       if (input.kind === 'info') {
         timersRef.current.push(window.setTimeout(() => dismiss(id), INFO_TTL_MS));
       }
