@@ -35,6 +35,49 @@ describe('SYSTEM_FUNCTION_ALIASES · 中文名 → ERB 函数名', () => {
       expect(erb).toMatch(/^[A-Z][A-Z0-9_]*$/);
     }
   });
+
+  it('扩容覆盖 CHK_* 家族全集（语料实证 9 个）', () => {
+    expect(SYSTEM_FUNCTION_ALIASES.get('检查约会中')).toBe('CHK_DATENOW');
+    expect(SYSTEM_FUNCTION_ALIASES.get('检查焦点')).toBe('CHK_FOCUS');
+    expect(SYSTEM_FUNCTION_ALIASES.get('检查入口')).toBe('CHK_ENTRANCE');
+    expect(SYSTEM_FUNCTION_ALIASES.get('检查有孩子')).toBe('CHK_HAVE_CHILD');
+    expect(SYSTEM_FUNCTION_ALIASES.get('检查子名重复')).toBe('CHK_CHILDNAME_DUPLICATION');
+    expect(SYSTEM_FUNCTION_ALIASES.get('检查避妊恋爱')).toBe('CHK_HININ_LOVE');
+    expect(SYSTEM_FUNCTION_ALIASES.get('检查避妊恋爱二')).toBe('CHK_HININ_LOVE_2');
+    expect(SYSTEM_FUNCTION_ALIASES.get('检查避妊理由')).toBe('CHK_HININ_REASON');
+    expect(SYSTEM_FUNCTION_ALIASES.get('检查避妊理由二')).toBe('CHK_HININ_REASON_2');
+  });
+
+  it('扩容覆盖常见引擎内建（字符串 / 数组 / CSV / 时间）', () => {
+    expect(SYSTEM_FUNCTION_ALIASES.get('字符串长度')).toBe('STRLENS');
+    expect(SYSTEM_FUNCTION_ALIASES.get('出现次数')).toBe('STRCOUNT');
+    expect(SYSTEM_FUNCTION_ALIASES.get('查找位置')).toBe('STRFIND');
+    expect(SYSTEM_FUNCTION_ALIASES.get('取子串')).toBe('SUBSTRING');
+    expect(SYSTEM_FUNCTION_ALIASES.get('取码点')).toBe('UNICODE');
+    expect(SYSTEM_FUNCTION_ALIASES.get('编码取字')).toBe('ENCODETOUNI');
+    expect(SYSTEM_FUNCTION_ALIASES.get('转字符串')).toBe('TOSTR');
+    expect(SYSTEM_FUNCTION_ALIASES.get('转数值')).toBe('TOINT');
+    expect(SYSTEM_FUNCTION_ALIASES.get('取常量')).toBe('GETNUM');
+    expect(SYSTEM_FUNCTION_ALIASES.get('数组求和')).toBe('SUMARRAY');
+    expect(SYSTEM_FUNCTION_ALIASES.get('数组计数')).toBe('MATCH');
+    expect(SYSTEM_FUNCTION_ALIASES.get('数组查找')).toBe('FINDELEMENT');
+    expect(SYSTEM_FUNCTION_ALIASES.get('区间判定')).toBe('INRANGE');
+    expect(SYSTEM_FUNCTION_ALIASES.get('区间计数')).toBe('INRANGEARRAY');
+    expect(SYSTEM_FUNCTION_ALIASES.get('平方根')).toBe('SQRT');
+    expect(SYSTEM_FUNCTION_ALIASES.get('当前时间')).toBe('GETTIME');
+    expect(SYSTEM_FUNCTION_ALIASES.get('毫秒')).toBe('GETMILLISECOND');
+  });
+
+  it('中文名键唯一（值可复用于别名同源）', () => {
+    const names = [...SYSTEM_FUNCTION_ALIASES.keys()];
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('前缀关系由最长优先消解：`检查避妊恋爱二` 先于 `检查避妊恋爱` 匹配', () => {
+    // `检查避妊恋爱` 是 `检查避妊恋爱二` 的前缀（表内确有此关系，靠长度降序消解）
+    expect(lowerSystemFunctions('检查避妊恋爱二(1)')).toBe('CHK_HININ_LOVE_2(1)');
+    expect(lowerSystemFunctions('检查避妊恋爱(1)')).toBe('CHK_HININ_LOVE(1)');
+  });
 });
 
 /* ==================== B. 调用形态替换 / 边界 ==================== */
@@ -64,6 +107,23 @@ describe('lowerSystemFunctions · 只对 `名字(` 调用生效', () => {
   it('最长优先：`随机化` 不被 `随机` 前缀吞并', () => {
     expect(lowerSystemFunctions('随机化()')).toBe('RANDOMIZE()');
     expect(lowerSystemFunctions('随机(3)')).toBe('RAND(3)');
+  });
+
+  it('CHK_* 扩容：调用形态降糖，长中文串 / 前导中文不乱截取', () => {
+    expect(lowerSystemFunctions('检查入口(MAPID)')).toBe('CHK_ENTRANCE(MAPID)');
+    expect(lowerSystemFunctions('检查避妊恋爱(她)')).toBe('CHK_HININ_LOVE(她)');
+    // 长中文串（别名只是前缀）→ 原样保留
+    expect(lowerSystemFunctions('检查入口处(1)')).toBe('检查入口处(1)');
+    // 前缀命中但不能接 `(`（末尾多一个字）→ 不误伤
+    expect(lowerSystemFunctions('检查避妊恋爱三(1)')).toBe('检查避妊恋爱三(1)');
+    // 前导为中文字符（词边界内）→ 不视为调用
+    expect(lowerSystemFunctions('她的检查入口(1)')).toBe('她的检查入口(1)');
+  });
+
+  it('引擎内建扩容：字符串 / 数组 / 常量族调用降糖', () => {
+    expect(lowerSystemFunctions('取常量("某常量", 5)')).toBe('GETNUM("某常量", 5)');
+    expect(lowerSystemFunctions('字符串长度(她的名字)')).toBe('STRLENS(她的名字)');
+    expect(lowerSystemFunctions('区间判定(结果, 0, 99)')).toBe('INRANGE(结果, 0, 99)');
   });
 
   it('字符串字面量内部不改写', () => {

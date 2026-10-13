@@ -12,6 +12,18 @@
  * 3. **fail-visible**：未收录的中文名**原样保留**（不静默改写）。
  */
 
+/**
+ * 入库判据（HK-11① 扩容批）：
+ * - **引擎内建**：Emuera 引擎自带、在游戏侧无 `@` 定义（语料实证：STRLENS/STRCOUNT/
+ *   STRFIND/SUBSTRING/UNICODE/ENCODETOUNI/TOSTR/TOINT/CHKFONT/REPLACE/GETNUM/SUMARRAY/
+ *   MATCH/FINDELEMENT/INRANGE/INRANGEARRAY/TOHALF/TOFULL/GETCHARA/SQRT…）；
+ * - **eraTW 系统检查族 `CHK_*`**（HANDOFF §13.4 HK-11 点名）：定义在游戏基础库
+ *   （如 `COMMON2.ERB` / `OGAMITAOSHI.ERB` / `BIRTH.ERB`），与项目内自定义 `@函数` 有别。
+ * **不在本表**：依任务口径与规范 §7.2 排除的"游戏助手长尾 / 项目内自定义 `@函数`"
+ * （`TEXTR` / `COLORMESSAGE` / `MAKE_INT` / `MAKE_STR` / `HE_SHE_CN` / `HPH_PRINT`
+ * 等基础库助手与 K* 私有函数）。
+ */
+
 /** 中文名 → 原生 ERB 函数名（单一真源） */
 export const SYSTEM_FUNCTION_ALIASES: ReadonlyMap<string, string> = new Map<string, string>([
   // 位运算族（引擎内置）
@@ -27,16 +39,46 @@ export const SYSTEM_FUNCTION_ALIASES: ReadonlyMap<string, string> = new Map<stri
   ['符号', 'SIGN'],
   ['限幅', 'LIMIT'],
   ['乘方', 'POWER'],
+  ['平方根', 'SQRT'],
   // 随机族
   ['随机', 'RAND'],
   ['随机化', 'RANDOMIZE'],
   // 时间族
   ['当前时间', 'GETTIME'],
   ['毫秒', 'GETMILLISECOND'],
+  // 字符串族（引擎内置）
+  ['字符串长度', 'STRLENS'],
+  ['出现次数', 'STRCOUNT'],
+  ['查找位置', 'STRFIND'],
+  ['取子串', 'SUBSTRING'],
+  ['替换', 'REPLACE'],
+  ['取码点', 'UNICODE'],
+  ['编码取字', 'ENCODETOUNI'],
+  ['转字符串', 'TOSTR'],
+  ['转数值', 'TOINT'],
+  ['转半角', 'TOHALF'],
+  ['转全角', 'TOFULL'],
+  ['检查字体', 'CHKFONT'],
+  // 数组 / CSV 常量族（引擎内置）
+  ['取常量', 'GETNUM'],
+  ['数组求和', 'SUMARRAY'],
+  ['数组计数', 'MATCH'],
+  ['数组查找', 'FINDELEMENT'],
+  ['区间判定', 'INRANGE'],
+  ['区间计数', 'INRANGEARRAY'],
+  ['取角色号', 'GETCHARA'],
   // 系统 / 游戏助手（HANDOFF §13.4 HK-11 点名）
   ['首次', 'FIRSTTIME'],
+  // eraTW 系统检查族 `CHK_*`
   ['检查约会中', 'CHK_DATENOW'],
   ['检查焦点', 'CHK_FOCUS'],
+  ['检查入口', 'CHK_ENTRANCE'],
+  ['检查有孩子', 'CHK_HAVE_CHILD'],
+  ['检查子名重复', 'CHK_CHILDNAME_DUPLICATION'],
+  ['检查避妊恋爱', 'CHK_HININ_LOVE'],
+  ['检查避妊恋爱二', 'CHK_HININ_LOVE_2'],
+  ['检查避妊理由', 'CHK_HININ_REASON'],
+  ['检查避妊理由二', 'CHK_HININ_REASON_2'],
 ]);
 
 /** 按中文名长度降序（最长优先：`随机化` 先于 `随机`，避免前缀吞并） */
