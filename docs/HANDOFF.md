@@ -205,7 +205,7 @@
     实测 214 包只抽到 26 个署名，这是设计结果——假阳性会让人把别人的作品当无主作品改。
     语料基线常驻 `attribution.corpus.test.ts`（`KOJO_SMOKE_PROJECT` 守门）。
 - **当前基线（2026-10-13 §5.107 实机复验轮后、qa 主机实测，工作树 = `D:\DSH\master-kojo-editor`）：1761 passed / 13 skipped（1774），
-  102 文件过 / 7 跳（109）；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；`pnpm --filter @kojo/app build` ✓ 36.39s（面板修复后重跑）。
+  102 文件过 / 7 跳（109）；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；`pnpm --filter @kojo/app build` ✓ 36.18s（rebase 到 §5.108 之后重跑）。
   数字闭合（逐批可追）：上游 §5.104 自记 1661 passed / 13 skipped（**1674**）+ P4 补测批 **68**
   （`shell-keys` 22 / `panel-drop` 19 / `layout-actions` 14 / `layout.test.ts` +13）+ UI 反馈第一批 **25**
   （`sugar-fold` 14 / `file-tree-reveal` 11）= 1767 + 实机复验轮 **7**（`looseProjectDirs` 的挑法）= **1774**，与 vitest 运行数一致。

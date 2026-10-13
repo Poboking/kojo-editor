@@ -6899,7 +6899,7 @@ UI 重设计 P4（三容器拖拽停靠 / 全禅写作模式 / 设置 overlay）
 | `pnpm typecheck`（root） | exit 0 |
 | `pnpm --filter @kojo/app typecheck` | exit 0 |
 | `pnpm audit:decoupling` | A–D 全绿（16 插件） |
-| `pnpm --filter @kojo/app build` | ✓ 36.39s（面板修复后重跑）（chunk 体积告警是既有议题，不在本批） |
+| `pnpm --filter @kojo/app build` | ✓ 36.18s（rebase 到 §5.108 之后重跑）（chunk 体积告警是既有议题，不在本批） |
 | 冲突残留全仓扫 | `^(<<<<<<<\|=======\|>>>>>>>)( \|$)` 口径，0 命中 |
 
 #### 六、机器状态（探针跑完的收尾，全部可复核）
