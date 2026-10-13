@@ -11,10 +11,12 @@ import type {
 import { createEratwAdapterPlugin } from '../src/plugin';
 import {
   artifactDir,
+  clampTutorialHeight,
   factsFromMeta,
   looseProjectDirs,
   packageFacts,
   sortDirEntries,
+  TUTORIALS_MIN_H,
 } from '../src/kojo-projects-panel';
 import type { PackageAttribution } from '../src/attribution';
 import { NEW_KOJO_PROJECT_OVERLAY_ID } from '../src/new-project-wizard';
@@ -49,6 +51,30 @@ describe('包目录路径', () => {
     expect(artifactDir('/appdata/workspaces/p1', { dirName: '东方口上-灵梦 v1.0' })).toBe(
       '/appdata/workspaces/p1/东方口上-灵梦 v1.0',
     );
+  });
+});
+
+/* ------------------------------ 教程区高度钳制（E9 分割线） ------------------------------ */
+
+describe('教程区高度钳制（分割线拖拽）', () => {
+  it('区间内原样返回（不偷偷吸附）', () => {
+    expect(clampTutorialHeight(200, 800)).toBe(200);
+    expect(clampTutorialHeight(TUTORIALS_MIN_H, 800)).toBe(TUTORIALS_MIN_H);
+  });
+
+  it('下限兜住内容：拖过头也保留「题头 + 两个入口」的高度', () => {
+    expect(clampTutorialHeight(10, 800)).toBe(TUTORIALS_MIN_H);
+    expect(clampTutorialHeight(-50, 800)).toBe(TUTORIALS_MIN_H);
+  });
+
+  it('上限给树体留可视高度：面板 800 → 上限 600；面板 1000 → 上限 800', () => {
+    expect(clampTutorialHeight(999, 800)).toBe(600);
+    expect(clampTutorialHeight(999, 1000)).toBe(800);
+  });
+
+  it('面板高度未知（≤0）钳到下限——宁可不拖，也不把两区挤没', () => {
+    expect(clampTutorialHeight(300, 0)).toBe(TUTORIALS_MIN_H);
+    expect(clampTutorialHeight(300, 100)).toBe(TUTORIALS_MIN_H);
   });
 });
 
@@ -253,6 +279,14 @@ describe('口上项目向导注册（P-C 新建 / P-F 导入 / P-E 部署）', (
     expect(ids).toContain(KOJO_TUTORIAL_OVERLAY_ID);
     expect(overlays).toHaveLength(5);
     for (const o of overlays) expect(typeof o.component).toBe('function');
+  });
+
+  it('教程浮层标 size: wide（E9 宽版）；向导浮层维持缺省宽度档（旧行为不变）', () => {
+    const { overlays } = activateWithPanel();
+    for (const o of overlays) {
+      const isTutorial = o.id === SUGAR_TUTORIAL_OVERLAY_ID || o.id === KOJO_TUTORIAL_OVERLAY_ID;
+      expect(o.size).toBe(isTutorial ? 'wide' : undefined);
+    }
   });
 
   it('监听 workspace.importRequested → 打开导入 overlay（意图 → 宿主落地）', () => {

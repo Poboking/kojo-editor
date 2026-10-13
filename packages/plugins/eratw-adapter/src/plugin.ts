@@ -586,6 +586,7 @@ export function createEratwAdapterPlugin(): Plugin {
       ctx.slots.register('ui.overlay', {
         id: SUGAR_TUTORIAL_OVERLAY_ID,
         order: 30,
+        size: 'wide',
         component: createTutorialOverlay({
           tutorial: TUTORIALS.sugar,
           close: () =>
@@ -596,6 +597,7 @@ export function createEratwAdapterPlugin(): Plugin {
       ctx.slots.register('ui.overlay', {
         id: KOJO_TUTORIAL_OVERLAY_ID,
         order: 31,
+        size: 'wide',
         component: createTutorialOverlay({
           tutorial: TUTORIALS.kojo,
           close: () =>

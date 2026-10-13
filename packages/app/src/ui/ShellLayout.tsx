@@ -750,7 +750,12 @@ export function ShellLayout(props: Props): ReactElement {
       ) : null}
       {overlayContribution ? (
         <div className="overlay-backdrop" onMouseDown={() => setActiveOverlay(null)}>
-          <div className="overlay-host" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+          <div
+            className={`overlay-host${overlayContribution.size === 'wide' ? ' overlay-host-wide' : ''}`}
+            role="dialog"
+            aria-modal="true"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <PanelBody contribution={overlayContribution} />
           </div>
         </div>

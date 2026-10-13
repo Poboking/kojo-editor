@@ -8,6 +8,10 @@
  * 长文滚动策略：标题与脚部固定，只有 `.tutorial-body` 滚（样式见 styles.css
  * 的 `.wizard.tutorial`）——教程是"读"的界面，读到一半把「关闭」和标题卷出
  * 视野之外是最典型的浮层失败。
+ *
+ * E9 起浮层为宽版 + 文档式排版（宿主按 `OverlayContribution.size:'wide'` 加宽到
+ * 920px 级；正文列 `.tutorial-doc` 再限宽居中 ≈680px——宽容器里保持可读行长，
+ * 整篇读起来才像一篇文档而不是一块铺满屏幕的文本）。
  */
 
 import { createElement as h } from 'react';
@@ -31,25 +35,29 @@ export function createTutorialOverlay(deps: TutorialOverlayDeps): () => unknown 
       'div',
       { className: 'wizard tutorial' },
       h('h3', null, tutorial.title),
-      h('p', { className: 'dim' }, tutorial.lead),
+      h('p', { className: 'tutorial-lead' }, tutorial.lead),
       h(
         'div',
         { className: 'tutorial-body' },
-        ...tutorial.sections.map((s, i) =>
-          h(
-            'div',
-            { key: i, className: 'tutorial-section' },
-            h('h4', null, s.heading),
-            ...s.paragraphs.map((p, j) => h('p', { key: j }, p)),
-            ...(s.samples ?? []).map((sample, j) =>
-              h(
-                'div',
-                { key: j, className: 'tutorial-sample' },
-                sample.caption ? h('div', { className: 'tutorial-caption dim' }, sample.caption) : null,
-                h('pre', { className: 'tutorial-code' }, h('code', null, sample.kojo)),
-                // ERB 对照可选：有才渲染，且固定标「→ 编译为」，读者不用猜哪块是本产物
-                sample.erb ? h('div', { className: 'tutorial-caption dim' }, '→ 编译为') : null,
-                sample.erb ? h('pre', { className: 'tutorial-code' }, h('code', null, sample.erb)) : null,
+        h(
+          'div',
+          { className: 'tutorial-doc' },
+          ...tutorial.sections.map((s, i) =>
+            h(
+              'div',
+              { key: i, className: 'tutorial-section' },
+              h('h4', null, s.heading),
+              ...s.paragraphs.map((p, j) => h('p', { key: j }, p)),
+              ...(s.samples ?? []).map((sample, j) =>
+                h(
+                  'div',
+                  { key: j, className: 'tutorial-sample' },
+                  sample.caption ? h('div', { className: 'tutorial-caption dim' }, sample.caption) : null,
+                  h('pre', { className: 'tutorial-code' }, h('code', null, sample.kojo)),
+                  // ERB 对照可选：有才渲染，且固定标「→ 编译为」，读者不用猜哪块是本产物
+                  sample.erb ? h('div', { className: 'tutorial-caption dim' }, '→ 编译为') : null,
+                  sample.erb ? h('pre', { className: 'tutorial-code' }, h('code', null, sample.erb)) : null,
+                ),
               ),
             ),
           ),

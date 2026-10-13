@@ -13,6 +13,8 @@
  * 用户主动展开才列举文件——信息呈现以不杂乱为第一约束。同理，包行上的动作
  * （导出等）静息态隐去，悬停 / 键盘聚焦才显；结果经底部状态条交代
  * （控制器见 `package-actions.ts`，无消息时状态条不渲染）。
+ *
+ * E9 起：教程区与树体之间是可拖拽分割线（`.kp-splitter`），拖拽调整教程区高度。
  */
 
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -136,6 +138,20 @@ export function factsFromMeta(meta: Record<string, unknown>): { charaName: strin
     charaName: typeof meta.charaName === 'string' && meta.charaName.length > 0 ? meta.charaName : null,
     scriptNo: typeof meta.scriptNo === 'number' && Number.isInteger(meta.scriptNo) ? meta.scriptNo : null,
   };
+}
+
+/** 教程区高度下限：兜住内容（「教程」题头 + 两个入口按钮），拖到再近也看得全 */
+export const TUTORIALS_MIN_H = 80;
+/** 分割线上限给树体留的可视高度（提示条 / 工具条 / 状态条等固定件都算在里面） */
+const TREE_VIEW_RESERVE = 200;
+
+/**
+ * 教程区高度钳制（纯函数，单测钉住）：下限兜住内容，上限 = 面板可视高度 - 树体保留。
+ * panelHeight 未知（≤0，如无 DOM 环境）时钳到下限——宁可不拖，也不把两区都挤没。
+ */
+export function clampTutorialHeight(height: number, panelHeight: number): number {
+  const max = Math.max(TUTORIALS_MIN_H, panelHeight - TREE_VIEW_RESERVE);
+  return Math.min(max, Math.max(TUTORIALS_MIN_H, height));
 }
 
 /** 行缩进（层级 → padding-left；树深度不定，内联最直观） */
@@ -650,6 +666,66 @@ export function createKojoProjectsPanel(
         )
       : null;
 
+    /* ------------------------------ 教程区高度（E9 分割线拖拽） ------------------------------ */
+
+    /** 教程区高度（px；null = 内容自然高度）。会话级，与壳层分栏权重同口径不持久化 */
+    const [tutH, setTutH] = useState<number | null>(null);
+    /** 分割线拖拽中（仅用于高亮） */
+    const [splitDragging, setSplitDragging] = useState(false);
+    const rootRef = useRef<{ clientHeight: number } | null>(null);
+    const tutRef = useRef<{ clientHeight: number } | null>(null);
+    const dragSeed = useRef<{ pointerId: number; startY: number; startH: number } | null>(null);
+
+    /** 分割线指针事件的最小形状（React 合成事件满足它；插件 tsconfig 无 DOM lib） */
+    type SplitterPointer = {
+      pointerId: number;
+      clientY: number;
+      preventDefault(): void;
+      currentTarget: { setPointerCapture(pointerId: number): void };
+    };
+
+    const onSplitDown = (e: SplitterPointer): void => {
+      e.preventDefault();
+      dragSeed.current = {
+        pointerId: e.pointerId,
+        startY: e.clientY,
+        // 首次拖拽从"当前真实高度"起步（未拖过时 = 内容自然高度），不跳变
+        startH: tutH ?? tutRef.current?.clientHeight ?? TUTORIALS_MIN_H,
+      };
+      setSplitDragging(true);
+      // 指针捕获：拖快了指头滑出 10px 命中区也不丢事件
+      e.currentTarget.setPointerCapture(e.pointerId);
+    };
+
+    const onSplitMove = (e: SplitterPointer): void => {
+      const seed = dragSeed.current;
+      if (!seed || seed.pointerId !== e.pointerId) return;
+      const dy = seed.startY - e.clientY; // 向上拖 = 教程区变高
+      setTutH(clampTutorialHeight(seed.startH + dy, rootRef.current?.clientHeight ?? 0));
+    };
+
+    const onSplitEnd = (e: { pointerId: number }): void => {
+      if (dragSeed.current?.pointerId !== e.pointerId) return;
+      dragSeed.current = null;
+      setSplitDragging(false);
+    };
+
+    /**
+     * 树体 ←→ 教程区的分割线（E9）：拖拽调整教程区高度。静息一条细线，悬停 / 拖拽中亮起
+     * （视觉语言与壳层 .resizer 同族）；键盘不接——与壳层分栏把手同口径。
+     */
+    const splitter = h('div', {
+      className: `kp-splitter${splitDragging ? ' dragging' : ''}`,
+      role: 'separator',
+      'aria-orientation': 'horizontal',
+      'aria-label': '拖动调整教程区高度',
+      title: '拖动调整教程区高度',
+      onPointerDown: onSplitDown,
+      onPointerMove: onSplitMove,
+      onPointerUp: onSplitEnd,
+      onPointerCancel: onSplitEnd,
+    });
+
     /**
      * 教程入口（E6）：常驻面板底部（body 之后、状态条之前），不随树滚动——
      * 写不下去时抬头就能找到，不藏在菜单里。行按钮与树行同族（度量 / hover /
@@ -657,7 +733,11 @@ export function createKojoProjectsPanel(
      */
     const tutorials = h(
       'div',
-      { className: 'kp-tutorials' },
+      {
+        className: 'kp-tutorials',
+        ref: tutRef,
+        style: tutH === null ? undefined : { height: tutH },
+      },
       h('div', { className: 'kp-tutorials-title dim' }, '教程'),
       h(
         'button',
@@ -681,6 +761,6 @@ export function createKojoProjectsPanel(
       ),
     );
 
-    return h('div', { className: 'panel-kojo-projects' }, notice, toolbar, body, tutorials, statusBar, menu);
+    return h('div', { className: 'panel-kojo-projects', ref: rootRef }, notice, toolbar, body, splitter, tutorials, statusBar, menu);
   };
 }

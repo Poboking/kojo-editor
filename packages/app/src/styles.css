@@ -3006,6 +3006,10 @@ button.erb-mode-hint.unlocked:hover {
   padding: var(--space-4);
   animation: overlay-in var(--dur-2) var(--ease-out);
 }
+/* 宽版浮层宿主（E9）：长文阅读类（教程）放宽到文档宽度——560px 的行长连一段样例都放不下 */
+.overlay-host-wide {
+  width: min(920px, 94vw);
+}
 
 /* --------------------- P2：新建向导（插件组件，壳层只提供容器语义类名） --------------------- */
 
@@ -3196,7 +3200,7 @@ button.primary .hint {
   opacity: 0.45;
 }
 
-/* --------------------- 内置教程浮层（E6；复用向导容器语义） --------------------- */
+/* --------------------- 内置教程浮层（E6·E9：宽版居中 + 文档式排版） --------------------- */
 
 /* 长文阅读：标题与「关闭」固定，只有正文滚——整宿主滚动会把标题和按钮卷出视野，
    而教程恰恰是"读到一半还得能关"。max-height 与 .overlay-host 的 80vh 对齐
@@ -3206,41 +3210,63 @@ button.primary .hint {
   flex-direction: column;
   max-height: calc(80vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
 }
+/* 文档头：标题 + 导语；导语下一条分隔线把抬头与正文分开（滚动时抬头不丢） */
+.wizard.tutorial h3 {
+  font-size: var(--fs-5);
+  margin-bottom: var(--space-1);
+}
+.tutorial-lead {
+  margin: 0 0 var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: var(--fs-2);
+  line-height: 1.6;
+}
 .tutorial-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+}
+/* 正文列：限宽居中——宽版浮层里保持可读行长，读起来像一篇文档 */
+.tutorial-doc {
+  max-width: 680px;
+  margin: 0 auto;
   padding-right: var(--space-1);
 }
-.tutorial-body h4 {
-  margin: var(--space-3) 0 var(--space-1);
-  font-size: var(--fs-2);
+/* 节标题（①…⑩）：层级靠字号 + 上间距拉开；首节标题不空一截。
+   注意别用 `h4:first-child`——每节的 h4 都是所在节的第一个孩子，那样会把所有节的
+   上间距都清掉（旧样式的隐性缺陷，本次顺手修正）。 */
+.tutorial-section h4 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--fs-3);
 }
-.tutorial-body h4:first-child {
+.tutorial-section:first-child h4 {
   margin-top: 0;
 }
 .tutorial-body p {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-2);
-  line-height: 1.6;
+  line-height: 1.7;
 }
 .tutorial-caption {
   font-size: var(--fs-1);
   line-height: 1.5;
 }
 .tutorial-sample {
-  margin: var(--space-2) 0;
+  margin: var(--space-3) 0;
 }
-/* 样例代码块：与「文件树里的路径」同一套等宽语言；横向溢出自己滚，不撑破浮层 */
+/* 样例代码块：md 式围栏代码的观感——井底色（--bg，与向导预览同源）、细边、等宽字；
+   横向溢出自己滚，不撑破浮层 */
 .tutorial-code {
   margin: var(--space-1) 0 0;
-  background: var(--bg-2);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
   overflow-x: auto;
   font-size: var(--fs-1);
-  line-height: 1.55;
+  line-height: 1.6;
 }
 .tutorial-code code {
   background: none;
@@ -3349,6 +3375,13 @@ button.primary .hint {
   min-height: 0;
   flex: 1;
   gap: var(--space-2);
+}
+/* 单视图（非分栏）时把面板钉进侧栏可视高度（E9）：树体自滚、教程区与状态条钉底——
+   分割线拖拽才有意义（拉伸时上方树体让位，而不是把整块面板撑高、把分割线推出视野）。
+   只匹配 PanelBody 外壳（.sidebar-views 的直接子元素）；分栏 / 其它容器形态不变。 */
+.sidebar-views:not(.split) > .panel-kojo-projects {
+  height: 100%;
+  overflow: hidden;
 }
 /* 双真相源提示条（常驻）：写保护铁律的 UI 明示面 */
 .kp-notice {
@@ -3587,11 +3620,35 @@ button.primary .hint {
 }
 
 /* 教程入口（E6）：常驻面板底部，不进树的滚动区——写不动时抬头就能找到。
-   行按钮度量与树行同族（见上文 .kp-*-btn 组），这里只补小节的分隔与标题。 */
+   高度可用上方分割线（.kp-splitter）上下拉伸（E9）；min-height 兜住内容，
+   拖到极限也不裁掉两个入口。 */
 .kp-tutorials {
   flex: none;
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-2);
+  overflow-y: auto;
+  min-height: max-content;
+}
+/* 树体 ←→ 教程区的拖拽分割线（E9）：静息一条细线，悬停 / 拖拽中亮起（与壳层 .resizer 同族）。
+   命中区上下各吃一半布局间隙（负 margin），视觉上仍是贴着树底的一条线。 */
+.kp-splitter {
+  flex: none;
+  height: 10px;
+  margin: calc(-1 * var(--space-1)) 0;
+  display: flex;
+  align-items: center;
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
+}
+.kp-splitter::after {
+  content: '';
+  width: 100%;
+  height: 1px;
+  background: var(--border);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.kp-splitter:hover::after,
+.kp-splitter.dragging::after {
+  background: var(--accent);
 }
 .kp-tutorials-title {
   font-size: var(--fs-0);

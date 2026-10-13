@@ -229,6 +229,12 @@ export interface EditorLiftPreviewContribution extends ContributionBase {
  */
 export interface OverlayContribution extends ContributionBase {
   readonly component: UIPanelComponent;
+  /**
+   * 承载宽度档（additive，2026-10-14 教程打磨批 E9）：缺省 = 'default'（560px 向导尺度，
+   * 旧行为不变）；'wide' 给长文阅读类浮层（教程），宿主放宽到文档宽度（920px 级）。
+   * 宿主不认识浮层内容，只按本字段选容器度量。
+   */
+  readonly size?: 'default' | 'wide';
 }
 
 /* --------------------------- editor.command --------------------------- */
