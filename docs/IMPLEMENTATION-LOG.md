@@ -7903,10 +7903,10 @@ CDP 9222 通、欢迎页 **DOM 实际渲染**（`rootChildren=1`，文案含「�
 
 | 项 | 结果 |
 |---|---|
-| `pnpm test` | **1826 passed / 14 skipped（1840）**，104 文件 / 8 跳（112）——与合流后的 master 基线同数（纯 CSS，无新可测行为） |
-| `pnpm --filter @kojo/app build` | **✓ 22.71s** |
+| `pnpm test` | **1832 passed / 14 skipped（1846）**，104 文件 / 8 跳（112）——rebase 后 master 基线同数（含别组 HK-9 并入的 +6 项；本批纯 CSS + 新工具，无新可测行为） |
+| `pnpm --filter @kojo/app build` | **✓ 24.55s** |
 | typecheck root | exit 0 |
 | `audit:decoupling` | A–D 全绿 |
 | 实机 | 本组 CDP harness 前后各跑一遍（十个状态），四个指标见上表；一次性探针与截图同批删除 |
 | 工具转正 | harness 落为 `tools/ui-measure.mjs`（本次提交一并入库）；它**不进 `pnpm test`**（要活壳 + 语料），后续 UI 批手动复跑 |
-| 看板 | HK-4 追加"UI 系统化六项"进度；基线数从 1661 更新到 **1826**（合流后本组第一次复跑） |
+| 看板 | HK-4 追加"UI 系统化六项"进度；基线数从 1661 更新到 **1832**（rebase 到别组 HK-9 之后的复跑） |
