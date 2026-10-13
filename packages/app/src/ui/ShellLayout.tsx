@@ -258,7 +258,7 @@ export function ShellLayout(props: Props): ReactElement {
    */
   const composingRef = useRef(false);
 
-  // 全局快捷键（统一注册表驱动；Ctrl+K Z 和弦特例；Esc 优先级 picker > overlay > zen）
+  // 全局快捷键（统一注册表驱动；Ctrl+K Z 和弦特例；Esc 优先级见 shell-keys 的 ESC_PRIORITY）
   useEffect(() => {
     let chordAt = 0;
     // 合成期一律不消费：撤销拼音候选的那次 Esc 属于输入法，不属于编辑器（判据在 shell-keys）

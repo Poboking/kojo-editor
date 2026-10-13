@@ -1224,7 +1224,9 @@ textarea {
   font-size: var(--fs-1);
   /* 配色按**风险**给，不按"有没有字"给：只读是游戏目录的安全默认态，作者一开就是
      二十个文件——给它琥珀警示色等于天天喊狼来了，真正该被看见的破例态反被淹掉。
-     故默认中性（🔒 图标已足够表意），`.unlocked` 才用 --warning。 */
+     故默认中性，`.unlocked` 才用 --warning。
+     ⚠ 2026-10-13 UI 反馈 1 之后，工具条的**只读**态已改用底栏同款 `.sb-writable.ro` 胶囊，
+     `.erb-mode-hint` 只剩「已解锁编辑」一家——别再把 🔒 加回来。 */
   color: var(--fg-dim);
   border: 1px solid var(--border);
   border-radius: 3px;
