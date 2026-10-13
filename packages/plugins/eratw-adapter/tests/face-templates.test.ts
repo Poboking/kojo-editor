@@ -86,4 +86,28 @@ describe('KojoFaceTable · 分野模板（规范 §3.2 / 附录 C）', () => {
   it('`指令` 划分野写了 `成否:` 时另生成 SUCCESS 函数模板', () => {
     expect(table.faces['指令']!.success?.template).toBe('M_KOJO{t}_SUCCESS_${com}_K{n}_{i}');
   });
+
+  it('自定指令编号可用段 = 270–299（HK-12；kojo_com 自定义段）', () => {
+    expect(table.customComRange).toEqual({ min: 270, max: 299 });
+  });
+
+  it('自定函数钩子模板全部登记，且逐字符合附录 C（#34 五钩子 + #3/#30/#31/#32）', () => {
+    // 附录 C 记 `{i}` = 编号/参数占位（与主模板同口径），故 `{ARG:3}` / `{n|ARGS:1}`
+    // 在契约里写成 `{i}`（既有 `自定义事件` / `查询` 分野即此口径）。
+    expect(table.customHooks).toEqual({
+      comName: 'KOJO{t}_COM_NAME',
+      comAble: 'KOJO{t}_COM_ABLE',
+      com: 'KOJO{t}_COM',
+      canCom: 'KOJO{t}_CAN_COM',
+      comCounter: 'KOJO{t}_COM_Counter不发_K{n}_{i}',
+      customEvent: 'M_KOJO{t}_CUSTOM_EVENT_K{n}_{i}',
+      customTalent: 'KOJO{t}_CUSTOM_TALENT_SET_K{n}',
+      shopButtonCondition: 'KOJO{t}_CUSTOM_BUTTON_CONDITION_K{n}_{i}',
+      shopButton: 'KOJO{t}_CUSTOM_BUTTON_K{n}_{i}',
+    });
+  });
+
+  it('自定事件钩子与 `自定义事件` 分野模板一致（不产两套函数名）', () => {
+    expect(table.customHooks!.customEvent).toBe(table.faces['自定义事件']!.template);
+  });
 });

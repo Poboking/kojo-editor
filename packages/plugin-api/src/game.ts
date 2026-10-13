@@ -265,6 +265,44 @@ export interface KojoFaceTable {
     /** 作用域语义名 → 位号 */
     readonly bits: Readonly<Record<string, number>>;
   };
+  /**
+   * 自定指令编号可用段（HK-12；eraTW：270–299）。
+   * 缺省 = 该游戏无「作者自定指令」概念（codegen 不做自动编号分配）。
+   */
+  readonly customComRange?: { readonly min: number; readonly max: number };
+  /**
+   * 自定函数钩子的函数名模板（附录 C 原文；{t}{n}{i} 占位符同主模板口径）。
+   * 缺省 = 该游戏无对应钩子。eraTW 的九条见附录 C #34（自定指令五钩子）
+   * 与 #3 自定事件 / #30 `CUSTOM_TALENT` / #31 `SHOP_BUTTON_CONDITION` / #32 `SHOP_BUTTON`。
+   */
+  readonly customHooks?: {
+    readonly comName?: string;
+    readonly comAble?: string;
+    readonly com?: string;
+    readonly canCom?: string;
+    readonly comCounter?: string;
+    readonly customEvent?: string;
+    readonly customTalent?: string;
+    readonly shopButtonCondition?: string;
+    readonly shopButton?: string;
+  };
+}
+
+/**
+ * 指令表（游戏知识，只住 adapter；糖层只查表不解释）。
+ *
+ * 数据源 = 当前打开工程的 `CSV/Train.csv`（引擎读取惯例 `TRAINNAME:编号`；
+ * 270–299 = kojo_com 段）。各版本 / 汉化 / 魔改随文件自动跟随、**不内置打包**，
+ * 故本表按 `loadProject` 生命周期持有。查不到的名字 / 编号一律 `undefined`，
+ * **绝不猜**（规范 §5.3 精神：不产半成品）。
+ */
+export interface KojoInstructionTable {
+  /** 无表 / 空表 = false */
+  readonly hasTable: boolean;
+  /** 中文名 → 编号（无则 `undefined`） */
+  lookupByName(name: string): number | undefined;
+  /** 编号 → 中文名（无则 `undefined`） */
+  lookupByNo(no: number): string | undefined;
 }
 
 /**
@@ -297,6 +335,11 @@ export interface GameAdapter {
    * 函数名映射）。游戏知识只进 adapter；转译器只消费不解释。
    */
   readonly kojoFaceTemplates?: KojoFaceTable;
+  /**
+   * 指令表（HK-11；可选——面向「指令口上」的中文名 ↔ 编号查询）。
+   * 由 adapter 从当前工程数据填充；糖层只查表不解释。
+   */
+  readonly kojoInstructionTable?: KojoInstructionTable;
 
   /** 脚手架（生成新角色口上骨架；v0.3） */
   scaffold?(characterNo: number, options?: ScaffoldOptions): Promise<ScaffoldResult>;

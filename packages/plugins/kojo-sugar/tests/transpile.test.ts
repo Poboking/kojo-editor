@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type { KojoInstructionTable, KojoFaceTable } from '@kojo/plugin-api';
 import { createSugarTranspileService } from '../src/service';
 import type { DictionaryLookup } from '../src/types';
 import { stubFaceTable } from './support';
@@ -31,6 +32,22 @@ const stubDict: DictionaryLookup = {
 
 const svc = () => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
 const t = (src: string) => svc().transpile(src);
+
+/** 转译服务 + 指定指令表（HK-11② 用；游戏知识只出现在测试里） */
+const svcWithTable = (instructionTable: KojoInstructionTable, faceTable: KojoFaceTable = stubFaceTable()) =>
+  createSugarTranspileService({ dictionary: stubDict, faceTable, instructionTable });
+
+/** 由 `名 → 编号` 记录造一张指令表桩（`hasTable` 按非空判定） */
+const instructionTable = (entries: Record<string, number>): KojoInstructionTable => {
+  const byName = new Map(Object.entries(entries));
+  const byNo = new Map<number, string>();
+  for (const [name, no] of byName) if (!byNo.has(no)) byNo.set(no, name);
+  return {
+    hasTable: byName.size > 0,
+    lookupByName: (n) => byName.get(n),
+    lookupByNo: (no) => byNo.get(no),
+  };
+};
 const body = (src: string) => {
   const r = t(src);
   const start = r.erb.indexOf('IF LOCAL');
@@ -1054,5 +1071,63 @@ describe('产物层撞名 · function-name-duplicate（跨分野也算）', () =
       expect.stringContaining('@M_KOJO_SUCCESS_COM_K12_310'),
       expect.stringContaining('@M_KOJO_SUCCESS_COM_K12_311'),
     ]);
+  });
+});
+
+/* ============================================================================ */
+/* §13.4 HK-11②/③ · 指令表中文化（`时机 指令 <中文名>：`）                       */
+/* ============================================================================ */
+
+describe('§13.4 HK-11② 中文指令名（名 → 编号，经 adapter 指令表）', () => {
+  const TABLE = instructionTable({ 摸屁股: 310, 会话: 300 });
+
+  it('中文名经表解析为编号：产物与等价数字写法**逐字节一致**', () => {
+    const named = svcWithTable(TABLE).transpile('角色: 12\n时机 指令 摸屁股：\n    「呀。」\n');
+    const numeric = t('角色: 12\n时机 指令 310：\n    「呀。」\n');
+    expect(named.erb).toBe(numeric.erb);
+    expect(named.erb).toContain('@M_KOJO_MESSAGE_COM_K12_310');
+    expect(named.diagnostics).toEqual([]);
+  });
+
+  it('中文名 + 命名参数（`成否:`）一起用：SUCCESS 编号也走解析值', () => {
+    const { erb } = svcWithTable(TABLE).transpile(
+      '角色: 12\n时机 指令 摸屁股 成否: 一定成功：\n    「呀。」\n',
+    );
+    expect(erb).toContain('@M_KOJO_SUCCESS_COM_K12_310');
+    expect(erb).toContain('TFLAG:192 = 1');
+  });
+
+  it('旧写法 `时机 指令 310：` 逐字节不破、零诊断（**注入了指令表也一样**）', () => {
+    // ③ 数字脱敏的裁决在此钉死：数字路径**不查表、不改写、不新增诊断**——
+    // 它是"无表项时作者可写的回退"，与中文名路径并存。
+    const src = '角色: 12\n时机 指令 310：\n    「呀。」\n';
+    const withTable = svcWithTable(TABLE).transpile(src);
+    const withoutTable = t(src);
+    expect(withTable.erb).toBe(withoutTable.erb);
+    expect(withTable.diagnostics).toEqual([]);
+    expect(withTable.erb).toContain('@M_KOJO_MESSAGE_COM_K12_310');
+  });
+
+  it('查不到的中文名 → `timing-instruction-unknown`（含「未命名指令（编号…）」）且**不产半成品**', () => {
+    const src = '角色: 12\n时机 指令 魔改新指令：\n    「呀。」\n';
+    const res = svcWithTable(TABLE).transpile(src);
+    const diag = res.diagnostics.find((d) => d.code === 'timing-instruction-unknown');
+    expect(diag?.severity).toBe('error');
+    expect(diag?.message).toContain('未命名指令（编号 魔改新指令）');
+    // fail-closed：绝不猜一个编号去拼函数名
+    expect(res.erb).not.toContain('@M_KOJO_MESSAGE_COM_K12');
+    expect(res.erb).not.toContain('@M_KOJO_MESSAGE_COM');
+  });
+
+  it('缺指令表时中文名同样 fail-closed（缺省 = 不猜）', () => {
+    expect(codes('角色: 12\n时机 指令 摸屁股：\n    「呀。」\n')).toContain('timing-instruction-unknown');
+  });
+
+  it('歧义边界：块头 `自定指令` 入关键字表后，`类型: 自定指令` 的右值路径不受影响', () => {
+    // 同一个词在两种上下文出现：① 行首块头 `自定指令 名：`（新关键字）；
+    // ② 时机命名参数右值 `类型: 自定指令`（纯字符串，**不查关键字表**）。
+    const { erb, diagnostics } = t('角色: 12\n时机 指令 313 类型: 自定指令：\n    「自定义指令面。」\n');
+    expect(erb).toContain('@M_KOJO_MESSAGE_CUSTOM_COM_K12_313');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
   });
 });

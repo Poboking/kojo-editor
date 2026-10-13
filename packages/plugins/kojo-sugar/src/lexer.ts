@@ -145,7 +145,8 @@ export type LineClass =
   | { kind: 'headDecl'; key: KeywordId; value: string }
   | { kind: 'aliasDecl'; name: string; value: AliasValue }
   | { kind: 'switchItem'; name: string; value: string }
-  | { kind: 'timingHead'; face: string; index?: string; namedParams: TimingNamedParam[] }
+  | { kind: 'timingHead'; face: string; index?: string; indexName?: string; namedParams: TimingNamedParam[] }
+  | { kind: 'customCommandHead'; name: string; index?: number }
   | { kind: 'ifHead'; variant: 'if' | 'elseif' | 'else'; condition: string; inline?: string }
   | { kind: 'whenHead'; subject: string }
   | { kind: 'caseHead'; values: WhenCaseValue[] }
@@ -182,6 +183,9 @@ function matchBlankLine(code: string): { kind: 'blankLine'; wait: boolean } | nu
 
 /** 全大写原生指令判定（规范 §3.10）：`SETCOLOR` / `IF` / `CALL` / `RAND` / `TFLAG:193 = 0` */
 const RAW_INSTR_RE = /^[A-Z][A-Z0-9_]*(?:[:.][^\s]*)?(?:\s|=|$)/;
+
+/** 含 CJK（平假名 / 片假名 / 汉字 / 半角片假名）——中文指令名判定（HK-11②） */
+const CJK = /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]/;
 
 /**
  * 行分类（纯函数；不做配对）。
@@ -368,6 +372,7 @@ function parseTimingHead(value: string): LineClass | null {
   const face = parts[0]!;
   if (face.length === 0) return null;
   let index: string | undefined;
+  let indexName: string | undefined;
   const namedParams: TimingNamedParam[] = [];
   for (let i = 1; i < parts.length; i++) {
     const token = parts[i]!;
@@ -379,12 +384,50 @@ function parseTimingHead(value: string): LineClass | null {
       i++;
       continue;
     }
-    if (index === undefined && /^[0-9A-Za-z_]+$/.test(token)) {
-      index = token;
-      continue;
+    // HK-11②：编号可以是**中文指令名**（`时机 指令 摸屁股：`）——不能只认 ASCII，
+    // 否则中文名会被静默丢弃（返工高危点）。数字仍进 `index`（旧写法逐字节不破），
+    // 中文名进 `indexName`，由 codegen 经 adapter 指令表解析成编号（fail-closed）。
+    if (index === undefined && indexName === undefined) {
+      if (/^[0-9A-Za-z_]+$/.test(token)) {
+        index = token;
+        continue;
+      }
+      if (CJK.test(token)) {
+        indexName = token;
+        continue;
+      }
     }
   }
-  return { kind: 'timingHead', face, index, namedParams };
+  return {
+    kind: 'timingHead',
+    face,
+    ...(index !== undefined ? { index } : {}),
+    ...(indexName !== undefined ? { indexName } : {}),
+    namedParams,
+  };
+}
+
+/**
+ * `自定指令 <中文名> [编号: N]`（HK-12）。
+ *
+ * 与 `类型: 自定指令`（时机命名参数右值）**同名不同上下文**：这里只出现在
+ * **行首块头**（由 `parseBlockHead` 经关键字表分派），右值路径不查关键字表。
+ * `编号:` 是可选的显式子句（缺省 = 由 codegen 在 adapter 的 `customComRange`
+ * 内自动分配）。
+ */
+function parseCustomCommandHead(rest: string): LineClass | null {
+  const inner = rest.trim();
+  if (inner.length === 0) return null;
+  // 可选子句 `编号: N`（全/半角冒号；只认行尾，避免吞掉名称里的数字）
+  const idxMatch = /(?:^|\s)编号\s*[:：]\s*(\d+)\s*$/.exec(inner);
+  let name = inner;
+  let index: number | undefined;
+  if (idxMatch) {
+    index = Number(idxMatch[1]);
+    name = inner.slice(0, idxMatch.index).trim();
+  }
+  if (name.length === 0) return null;
+  return { kind: 'customCommandHead', name, ...(index !== undefined ? { index } : {}) };
 }
 
 /* ------------------------------ 表达式头 / 赋值 ------------------------------ */
@@ -454,6 +497,8 @@ function parseBlockHead(content: string): LineClass | null {
       return { kind: 'choiceHead' };
     case 'block.color':
       return { kind: 'colorHead', color: rest };
+    case 'block.customCommand':
+      return parseCustomCommandHead(rest);
     case 'inline.hideScene':
       return { kind: 'messageCheck', scope: 'scene', condition: stripConditionPrefix(rest) };
     case 'inline.hideKojo':

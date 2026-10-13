@@ -25,6 +25,7 @@ import type {
   FileIO,
   GameProject,
   KojoFaceTable,
+  KojoInstructionTable,
   Plugin,
   ProjectService,
   SlotRegistry,
@@ -139,13 +140,35 @@ export function createKojoSugarPlugin(): Plugin {
         return undefined;
       };
 
-      /** 统一的转译器构造（字典 + 分野表同源注入；保证三条路径行为一致） */
+      /**
+       * 当前适配器的**指令名表**（游戏知识；`KojoInstructionTable`；HK-11②）。
+       *
+       * 与 `faceTableOf` 同源同生命周期（按 `adapterId` 精确匹配 `game.adapter`
+       * 槽位；表内容随项目的 `CSV/Train.csv` 变化）。缺省 = 该适配器未声明 →
+       * `时机 指令 <中文名>：` 报 `timing-instruction-unknown`（**fail-closed**，
+       * 绝不猜——数字编号路径不受影响，逐字节保持旧行为）。
+       */
+      const instructionTableOf = (): KojoInstructionTable | undefined => {
+        const current: GameProject | null = project.current();
+        if (!current) return undefined;
+        for (const contribution of slots.query('game.adapter')) {
+          if (contribution.adapter.gameId !== current.adapterId) continue;
+          if (contribution.adapter.kojoInstructionTable) return contribution.adapter.kojoInstructionTable;
+        }
+        return undefined;
+      };
+
+      /** 统一的转译器构造（字典 + 分野表 + 指令表同源注入；保证各路径行为一致） */
       const makeTranspiler = (
-        deps?: Omit<Parameters<typeof createSugarTranspileService>[0], 'dictionary' | 'faceTable'>,
+        deps?: Omit<
+          Parameters<typeof createSugarTranspileService>[0],
+          'dictionary' | 'faceTable' | 'instructionTable'
+        >,
       ) =>
         createSugarTranspileService({
           dictionary: dictionaryOf(),
           faceTable: faceTableOf(),
+          instructionTable: instructionTableOf(),
           ...(deps ?? {}),
         });
 
@@ -316,6 +339,8 @@ export {
   type SugarLexiconWord,
 } from './keywords';
 export { createSugarTranspileService, type CreateSugarServiceOptions } from './service';
+// HK-11①：系统函数中文别名（单一真源）——宿主 Monaco 层从本包派生高亮/补全
+export { SYSTEM_FUNCTION_ALIASES, lowerSystemFunctions } from './system-functions';
 export {
   createSugarPreviewService,
   foldMessageBlocks,

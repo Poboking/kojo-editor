@@ -34,3 +34,11 @@ export const ERATW = {
   /** CHARA CSV 文件名形态：`Chara{no} {name}.csv` */
   charaCsvPattern: /^Chara(\d+)/i,
 } as const;
+
+/**
+ * 指令名表文件名（eraTW：`<项目根>/CSV/Train.csv`）。
+ *
+ * 「指令口上」中文名 ↔ 编号的来源（HK-11 / HK-12）。数据源随打开的工程 / 汉化包
+ * 变化、**不内置打包**——各版本 / 魔改自动跟随。
+ */
+export const TRAIN_CSV = 'Train.csv';
