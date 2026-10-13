@@ -50,3 +50,9 @@
 
 - `docs/log/` 空目录不建占位（本文件即首条）；
 - 本批不含任何语义改动；历史冻结区（archive）此后**只读**。
+
+## 七、落库记录（2026-10-13 晚）
+
+- rebase 到 `origin/master 000ecff`（两组落地批 §5.127–§5.130 之上）：HANDOFF / IMPLEMENTATION-LOG 的正文改动与冻结冲突按「**archive 取新版全文、旧路径留 stub**」解——§5.127–§5.130 随冻结进 archive，旧文件到此完整（此后不再追加）。
+- 整合：BOARD 收 HK-8（裁决＝不改保存行为、`notice-queue` 溢出先丢 info，+6 项测试）、HK-4 登记 UI-3 图标在制（`kojo-fb3` 树）；STATE 校准 **1852/14（1866）· 105 文件/8 跳（113）**；#21「抽取上并行通道」判死 ⇒ 新靶 #36 批量读盘原语。
+- 门槛（rebase 后全量复跑）：`pnpm test` 1852/14 · 双 typecheck 0 · `audit:decoupling` A–D 绿。

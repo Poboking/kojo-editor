@@ -27,7 +27,7 @@
 | `window.__TAURI_INTERNALS__.invoke` 是 non-writable ⇒ monkey-patch 数不上 IPC | 数次数用 app 自己日志；测成本用受控实验；**任何计数探针必须带自检** |
 | 探针 fatal 路径不收子进程 ⇒ 1420 被占死；`taskkill /PID` 经 MSYS 会被改写成 `D:/Code/Git/PID` | spawn 后立刻 `process.on('exit')` 里 taskkill（node 参数数组、不经 shell）；事后 `netstat` 确认端口空 |
 | **同一工作树只能一个桌面实例**：另一发 `tauri dev` 占着二进制（os error 5）与 WebView2 数据目录 | 复测前 `tasklist` 看 `kojo-editor.exe` 是谁的会话——**先问用户、经授权才杀** |
-| 临时探针进程退出截断 fire-and-forget 落盘（12MB 只留 `.tmp` 孤儿）⇒ 量出"缓存没收益"的假结论 | 原子写以 rename 收尾 ⇒ 轮询「目标文件 mtime 比进本轮时新」才算完成（全命中那轮断言 mtime 未变） |
+| 临时探针进程退出截断 fire-and-forget 落盘（12MB 只留 `.tmp` 孤儿）⇒ 量出"缓存没收益"的假结论（`tauri dev` 探针同款，§5.130 差点再犯） | 原子写以 rename 收尾 ⇒ 轮询「目标文件 mtime 比进本轮时新」才算完成（全命中那轮断言 mtime 未变）；收进程前**等完成日志**（`Condition snapshot saved`）再杀 |
 | `ConditionIndex.durationMs` 不含快照读盘 ⇒ 量到的是"汇合耗时" | 量级联某段 = 从 `project.open()` 起算的**水位差** |
 | bash coreutils 时常 127；`node -e` 多层引号/反引号必翻车（反引号会被 shell 当命令替换吃掉、不报错） | 一律落成临时 `.mjs`/`.cjs` 文件再 `node` 跑；**改 docs 尤其** |
 | Edit 偶发"声称成功未落盘"；同文件并行 Edit 必 EBUSY | 关键修改后读回验证；**同一文件多次 Edit 必须串行** |
@@ -44,7 +44,7 @@
 | `packages/app/tsconfig.json` 的 types 只有 `vite/client` | 测试里显式 `import 'node:fs'` 可用；报 TS2307 时改测试写法，**别**往 app 配置塞 node 全局 |
 | vite build `prepare-out-dir` 偶发 EPERM（文件瞬时占用） | 手动 `rmSync(dist)` 后重试，不是代码问题 |
 
-## 三、会话坑（一行制；原 §九 53 条去重后 50 条 + 1 条协议注记，细节在 `docs/archive/HANDOFF.md` §九）
+## 三、会话坑（一行制；1–50 = 原 §九去重名单，51 起为重构后新增，细节在 `docs/archive/HANDOFF.md` §九）
 
 1. 规则先核验引擎源码再定语义——FORM 三连符号初版 239 条误报，收窄为排除 `+++` + 每文件每符号聚合后 8 条真实事故。
 2. 插件订阅/清理必经 `ctx.onDispose`，否则停用后残留 handler。
@@ -97,3 +97,5 @@
 49. UI harness（`tools/ui-measure.mjs`）必须每次从同一处起步（开头 `location.reload()` 回欢迎页），否则两次 run 覆盖元素集不同 = 聚合数假绿 ⇒ 任何"前后对比"探针先自证"同一输入跑两次同一输出"。
 50. **判据"比同一个元素"就是空判据**（`scrollHeight - clientHeight` 对内容撑开的元素恒 0 = 一路绿灯）⇒ 真对象是**内容高 vs 盒子高（两个不同元素）**；同类：量"盒子高是行高整数倍"也证明不了内容不溢出。
 51. 临时探针是**一次性工具放 `%TEMP%` / `.local/`、不入库**；但探针的**断言清单与读数必须随批写进 `docs/log/`**（同族：探针跨进程留的锁/端口/残留偏好——9222 旧进程、1420 占用、localStorage 标记——是下一轮"产品缺陷"假红的来源，开跑前统一清场）。
+52. 测试替身与实现必须**形状同构**：`stats()` 替身第一版回同一个对象 ⇒ "前后之差"恒 0 = 空断言还全绿；真池返回的是拷贝（`{ ...offloadStat }`），替身必须同款（§5.130；同族第 50 条）。
+53. 共享树的残留 stash 实体（`feedback3-wip-2026-10-13`）：代码主体**已被 §5.88 以另一形态取代，别按旧方案原样复用**；独有可用件＝图标 PNG 生成器 + `app-icon.png`（取法见 `docs/archive/HANDOFF.md` §十二-7 ④）。
