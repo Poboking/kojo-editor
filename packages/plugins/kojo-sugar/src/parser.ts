@@ -432,6 +432,8 @@ class BlockParser {
     switch (cls.kind) {
       case 'heartText':
         return this.buildHeartNode(synthetic, cls.raw);
+      case 'blankLine':
+        return this.buildBlankNode(synthetic, cls.wait);
       case 'rawLine':
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
       case 'assign':
@@ -504,6 +506,10 @@ class BlockParser {
         this.cursor.next();
         return this.buildTextNode(line, 'textLine');
       }
+      case 'blankLine': {
+        this.cursor.next();
+        return this.buildBlankNode(line, cls.wait);
+      }
       case 'heartText': {
         this.cursor.next();
         return this.buildHeartNode(line, cls.raw);
@@ -556,6 +562,24 @@ class BlockParser {
       // 这里直接携带**剥掉 `续` 标记后**的行原文（与插值列号同坐标系）。
       _raw: parsed.body,
     } as TextLine | HeartLine;
+  }
+
+  /**
+   * `空行` → 一条**文本为空的文本行**（规范 §3.3；批 P）。
+   *
+   * 不新增 AST 节点：它本来就是"一行文本，只是文本为空"，产物规则与旁白同源
+   * （`wait` 由 `空行` / `空行 续` 决定）。这样做的代价是零扩散——所有遍历 AST 的
+   * 地方（转译 / 预览 / 校验 / 高亮）不必为一个词多开一条分支。
+   */
+  private buildBlankNode(line: LogicalLine, wait: boolean): TextLine {
+    return {
+      kind: 'textLine',
+      speech: false,
+      wait,
+      interpolations: [],
+      loc: spanOf(line),
+      _raw: '',
+    } as TextLine;
   }
 
   /** 构建 `心形` 行（规范 §3.9）——判定规则与 TextLine 完全相同，仅标记不同 */
@@ -881,6 +905,8 @@ class BlockParser {
     switch (cls.kind) {
       case 'text':
         return this.buildTextNode(line, 'textLine');
+      case 'blankLine':
+        return this.buildBlankNode(line, cls.wait);
       case 'heartText':
         return this.buildHeartNode(line, cls.raw);
       case 'rawLine':

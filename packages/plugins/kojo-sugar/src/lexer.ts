@@ -159,8 +159,26 @@ export type LineClass =
   | { kind: 'arrowCase'; values: WhenCaseValue[]; value: string }
   | { kind: 'arrowElse'; value: string }
   | { kind: 'assign'; target: string; expr: string }
+  | { kind: 'blankLine'; wait: boolean }
   | { kind: 'heartText'; raw: string }
   | { kind: 'text'; raw: string };
+
+/**
+ * `空行` / `blank`（可带一个行尾 `续` 类标记）→ 一条"输出一行空行"的语句（规范 §3.3，批 P）。
+ *
+ * 判据是**整行恰好是这个词**：台词里出现"空行"两个字的写法（`空行是什么`、`「空行」`）
+ * 绝不能被当成指令——那会把作者要打印的字变成控制语句。标记只认 `CONT_MARKS` 那一组，
+ * `空行 不等待` 一类自造说法不认（宁可作者写 `空行 续`）。
+ */
+const BLANK_LINE_RE = /^(空行|blank)(?:[ \t]+(\S+))?$/i;
+
+function matchBlankLine(code: string): { kind: 'blankLine'; wait: boolean } | null {
+  const m = BLANK_LINE_RE.exec(code);
+  if (!m) return null;
+  const mark = m[2];
+  if (mark === undefined) return { kind: 'blankLine', wait: true };
+  return CONT_MARKS.includes(mark) ? { kind: 'blankLine', wait: false } : null;
+}
 
 /** 全大写原生指令判定（规范 §3.10）：`SETCOLOR` / `IF` / `CALL` / `RAND` / `TFLAG:193 = 0` */
 const RAW_INSTR_RE = /^[A-Z][A-Z0-9_]*(?:[:.][^\s]*)?(?:\s|=|$)/;
@@ -249,6 +267,12 @@ export function classifyLine(line: LogicalLine): LineClass {
   // ---- 赋值（`X = 表达式`）——`=` 不在引号内、不是比较运算符 ----
   const assign = parseAssignment(code);
   if (assign) return assign;
+
+  // ---- `空行`（规范 §3.3；批 P）----
+  // 判据是**整行恰为该词**（可带行尾 `续` 类标记）：台词里出现"空行"两个字的写法
+  // （`空行是什么` / `「空行」`）绝不能被当成指令——那是把作者要打印的字变成控制语句。
+  const blank = matchBlankLine(code);
+  if (blank) return blank;
 
   // ---- `心形 「…」`（规范 §3.9：行首心形标记 = HPH_PRINT 糖）----
   // 判定：行首为空白的 `心形` / `heart`，其后必须跟空白与内容。

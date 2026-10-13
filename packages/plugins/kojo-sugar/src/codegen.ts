@@ -873,7 +873,9 @@ function printLine(text: string, speech: boolean, wait: boolean, ctx: BodyContex
   const narrationDefault = (ctx.frontMatter.narrationColor ?? '默认') === '默认';
   const d = narrationDefault && !speech;
   const suffix = (d ? 'D' : '') + (wait ? 'W' : 'L');
-  return `PRINTFORM${suffix} ${text}`;
+  // **空文本体**（`空行`，规范 §3.3 / 批 P）不留尾随空格：语料里打空行的写法就是裸指令
+  // （`PRINTFORMW` / `PRINTL`），多一个空格是平白给 diff 与逐字节自证添噪。
+  return text.length === 0 ? `PRINTFORM${suffix}` : `PRINTFORM${suffix} ${text}`;
 }
 
 /**

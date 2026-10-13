@@ -76,13 +76,15 @@ describe('糖投影 · 台词行', () => {
     expect(segLines(r.segments[0]!)[0]).toBe('如果 %CALLNAME:MASTER% == "灵梦"：');
   });
 
-  it('空文本体 → 「输出一行空行」（显示口径：读者看到的是剧本节奏，不是裸指令）', () => {
+  it('空文本体 → W 系一行空行、L 系带「续」（批 P 补掉不可分辨的代价）', () => {
     // 真实语料里 400 个口上文件有 35,425 行是这个形态（作者用裸指令打空行），
     // 且它是"糖段被切碎"的头号原因——故投影为一行空行、并**不再切断段**。
-    const r = project(['PRINTFORMW 甲', 'PRINTFORMDL ', 'PRINTFORML', 'PRINTFORMW 乙'].join('\n'));
+    const r = project(
+      ['PRINTFORMW 甲', 'PRINTFORMW', 'PRINTFORMDL ', 'PRINTFORML', 'PRINTFORMW 乙'].join('\n'),
+    );
     expect(r.segments).toHaveLength(1);
-    expect(segLines(r.segments[0]!)).toEqual(['甲', '', '', '乙']);
-    expect(r.stats.projectedLines).toBe(4);
+    expect(segLines(r.segments[0]!)).toEqual(['甲', '', '续', '续', '乙']);
+    expect(r.stats.projectedLines).toBe(5);
     expect(r.stats.nativeLines).toBe(0);
   });
 
@@ -139,10 +141,10 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
     expect(segLines(form.segments[0]!)).toEqual(['{她的好感度}']);
   });
 
-  it('L/W 变体的空体 → 一行空行，且不再切断糖段', () => {
+  it('L/W 变体的空体 → 空行（等待）或 `续`（不等待），且不再切断糖段', () => {
     const r = project(['PRINTFORMW 甲', 'PRINTL', 'PRINTW', 'PRINTDW ', 'PRINTDL\t', 'PRINTFORML 乙'].join('\n'));
     expect(r.segments).toHaveLength(1);
-    expect(segLines(r.segments[0]!)).toEqual(['甲', '', '', '', '', '乙 续']);
+    expect(segLines(r.segments[0]!)).toEqual(['甲', '续', '', '', '续', '乙 续']);
     expect(r.stats.nativeLines).toBe(0);
     expect(r.stats.projectedLines).toBe(6);
   });
@@ -153,9 +155,11 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
     expect(reasonsOf(r)['unsupported-print-variant']).toBe(4);
   });
 
-  it('块内的空行**不带缩进**（否则编辑器里是一条无内容的彩色横条）', () => {
-    const r = project(['IF A', '\tPRINTFORMW 甲', '\tPRINTFORML', '\tPRINTFORMW 乙', 'ENDIF'].join('\n'));
-    expect(segLines(r.segments[0]!)).toEqual(['如果 A：', '\t甲', '', '\t乙']);
+  it('块内的空行**不带缩进**；带 `续` 的才跟着走一层缩进', () => {
+    const w = project(['IF A', '\tPRINTFORMW 甲', '\tPRINTFORMW', '\tPRINTFORMW 乙', 'ENDIF'].join('\n'));
+    expect(segLines(w.segments[0]!)).toEqual(['如果 A：', '\t甲', '', '\t乙']);
+    const l = project(['IF A', '\tPRINTFORMW 甲', '\tPRINTFORML', 'ENDIF'].join('\n'));
+    expect(segLines(l.segments[0]!)).toEqual(['如果 A：', '\t甲', '\t续']);
   });
 
   it('裸 FORM 片段（PRINTFORM / PRINTFORMD）→ 文本行 + 可读化，但**不加**「续」', () => {

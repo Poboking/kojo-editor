@@ -445,8 +445,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         // 判据边界：**只有 `newline` 的变体**才算打空行。无后缀的 `PRINT` / `PRINTFORM`
         // 空体既不输出也不换行（是拼句片段的空段）——没有可显示的东西，原样保留。
         //
-        // 代价（记录在案）：`W`（等待）与 `L`（不等待）的空行在投影里不再可分辨。
-        // 若将来要保留，可在行尾加 `续` 区分（届时仍需改这条口径）。
+        // 批 P 之前这里记着一笔代价（`W` 与 `L` 的空行不可分辨），已随糖补上`空行`写法一并修掉：
+        // `L` 系显示成带 `续` 的空行、`W` 系保持纯空行。
         if (!variant.newline) {
           recs.push(native(ln, 'unsupported-print-variant'));
           continue;
@@ -454,7 +454,10 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         recs.push({
           line: ln,
           kind: 'speech',
-          text: '',
+          // 批 P 补掉这里记在案的代价：`W`（等待）与 `L`（不等待）的空行不再混成一个样子——
+          // `L` 系在空行上补 `续` 标记，与文本行的 `「……」 续` 同一套记号，
+          // 也正是糖里能写出来的那一行（`空行 续`）。`W` 系仍是纯空行（读者要的节奏）。
+          text: variant.wait ? '' : '续',
           indent: ctx.indentAt(ln, raw),
           visible: true,
           reason: null,

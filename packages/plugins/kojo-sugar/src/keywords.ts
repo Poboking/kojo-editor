@@ -33,6 +33,7 @@ export type KeywordId =
   /* 行内 / 时机子句 */
   | 'inline.cont'
   | 'inline.heart'
+  | 'inline.blank'
   | 'inline.to'
   | 'inline.hideScene'
   | 'inline.hideKojo'
@@ -80,11 +81,14 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['choice', 'block.choice'],
   ['着色', 'block.color'],
   // 行内
-  ['续', 'inline.cont'],
-  ['cont', 'inline.cont'],
+  ['续', 'inline.cont'],  ['cont', 'inline.cont'],
   ['continue', 'inline.cont'],
   ['心形', 'inline.heart'],
   ['heart', 'inline.heart'],
+  // `空行` 是**整行语句**（规范 §3.3；批 P），但它没有独立的语法分组，
+  // 归到"行内关键字"一并高亮/补全（与 `心形` 同一处理方式）
+  ['空行', 'inline.blank'],
+  ['blank', 'inline.blank'],
   ['到', 'inline.to'],
   ['to', 'inline.to'],
   ['隐藏情景', 'inline.hideScene'],

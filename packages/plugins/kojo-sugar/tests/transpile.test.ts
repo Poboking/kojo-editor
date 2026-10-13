@@ -263,6 +263,47 @@ describe('§3.3 文本行 · §5.1 PRINTFORM 变体', () => {
   });
 });
 
+/* §3.3 `空行`（批 P）                                                           */
+/* ============================================================================ */
+
+describe('§3.3 空行 · 输出空行的显式写法（批 P）', () => {
+  const line3 = (src: string) =>
+    t(`角色: 12\n时机 指令 310：\n${src}`).erb
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('PRINT'));
+
+  it('`空行` → PRINTFORMDW（旁白系，**不带尾随空格**）', () => {
+    expect(line3('    空行\n')).toEqual(['PRINTFORMDW']);
+  });
+
+  it('`空行 续` → PRINTFORMDL（不等待）', () => {
+    expect(line3('    空行 续\n')).toEqual(['PRINTFORMDL']);
+  });
+
+  it('英文别名 `blank` 与 `空行` 同产物', () => {
+    expect(line3('    blank\n')).toEqual(['PRINTFORMDW']);
+    expect(line3('    blank cont\n')).toEqual(['PRINTFORMDL']);
+  });
+
+  it('`空行` 只在**整行恰为该词**时成立：台词写法不受影响', () => {
+    // 「空行」是台词，要打印那两个字；`空行是什么` 是旁白，同样照原文打印。
+    expect(line3('    「空行」\n')).toEqual(['PRINTFORMW 「空行」']);
+    expect(line3('    空行是什么。\n')).toEqual(['PRINTFORMDW 空行是什么。']);
+  });
+
+  it('块内与行内注释都照常工作（`空行 ; 分节` 仍是空行）', () => {
+    expect(line3('    空行 ; 分节用\n')).toEqual(['PRINTFORMDW']);
+    expect(
+      t('角色: 12\n时机 指令 310：\n    如果 她的恋慕：\n        空行\n    否则：\n        「不。」\n').erb,
+    ).toContain('\t\tPRINTFORMDW');
+  });
+
+  it('`空行 不等待`（自造说法）不当成指令——照旁白原样打印，不猜', () => {
+    expect(line3('    空行 不等待\n')).toEqual(['PRINTFORMDW 空行 不等待']);
+  });
+});
+
 /* ============================================================================ */
 /* §3.3 / §5.2 纯条件行                                                          */
 /* ============================================================================ */
