@@ -7,11 +7,13 @@ import type {
   FileIO,
   FileStat,
   GameProject,
+  LineDecoration,
   Plugin,
 } from '@kojo/plugin-api';
 import { KernelServices, projectFingerprintOf } from '@kojo/plugin-api';
 import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload, type ScanFlowPayload } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
+import { checkControlFlowStructure } from './structure';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
@@ -288,6 +290,10 @@ export function createErbParserPlugin(): Plugin {
 
         scanControlFlow: (text: string) => scanControlFlow(text),
 
+        // 结构体检（2026-10-13 UI 反馈 7）：与骨架扫描共用 scanner 的配对表与行过滤规则，
+        // 纯文本入、纯数据出——编辑器去抖后经 ui.editor.decorator 调它，不读盘也不碰索引。
+        checkStructure: (text: string) => checkControlFlowStructure(text),
+
         // 走计算池的并行通道（无通道/失败自动内联）；消费方不需要知道 kind 与 worker
         scanControlFlowOffloaded: (text: string) =>
           compute.offload<ControlFlowStatement[]>(SCAN_FLOW_TASK, { text } satisfies ScanFlowPayload),
@@ -330,6 +336,32 @@ export function createErbParserPlugin(): Plugin {
       );
 
       ctx.provide('erb.parser', service);
+
+      /* ---------------- 编辑器波浪线（2026-10-13 UI 反馈 7） ----------------
+
+       为什么装饰器由**解析器插件自己**注册，而不是放进某个 UI 插件：
+       判据与配对表同源才能不漂移（表在 `scanner.ts`），而 `ui.editor.decorator` 的契约是
+       **纯函数**（文本进、行级装饰出，无 React、无 IO）——放这里既不引入新的跨插件依赖，
+       也不把"哪些行算控制流语句"这件事外化成第二份知识。
+
+       只管原生 ERB/ERM（`ERB_EXT` 同一条口径）；`.kojo` 的语法诊断另有其人（糖线）。
+       超大文件不降级、不跳过：判据是单遍线性扫描，实测读数见 IMPLEMENTATION-LOG 本批记录，
+       真要限流也应该由宿主那侧的去抖/上限来做，不在这里悄悄少报。
+       */
+      ctx.slots.register('ui.editor.decorator', {
+        id: 'erb-structure',
+        title: 'ERB 结构错误波浪线',
+        order: 20,
+        decorate(file): LineDecoration[] {
+          if (!ERB_EXT.test(file.path) || file.text.length === 0) return [];
+          return checkControlFlowStructure(file.text).map((issue) => ({
+            line: issue.line,
+            severity: 'error' as const,
+            message: issue.message,
+            code: `erb.${issue.kind}`,
+          }));
+        },
+      });
     },
   };
 }

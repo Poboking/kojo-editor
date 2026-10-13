@@ -212,6 +212,7 @@ export type {
   ErbIndex,
   ErbParam,
   ErbParserService,
+  ErbStructureIssue,
 } from './erb';
 
 export {

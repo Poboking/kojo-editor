@@ -56,16 +56,30 @@ function makeBus(): { bus: EventBus; emit: (type: string, payload: unknown) => v
   return { bus: { on, once, emit } as unknown as EventBus, emit };
 }
 
+/** 测试侧记录的槽位贡献形状（只声明本包会用到的那几个字段） */
+interface RegisteredSlot {
+  kind: string;
+  contribution: {
+    id: string;
+    title: string;
+    order?: number;
+    decorate?: (f: { path: string; text: string; project: GameProject | null }) => unknown[];
+  };
+}
+
 /** 最小上下文体：只验证插件行为，不拉整个 kernel */
 function activatePlugin(io: FileIO): {
   services: Map<string, unknown>;
   logs: string[];
   bus: EventBus;
+  /** 捕获到的槽位贡献（本包目前只有 ui.editor.decorator 一个） */
+  slots: RegisteredSlot[];
   emit: (type: string, payload: unknown) => void;
   dispose: () => void;
 } {
   const services = new Map<string, unknown>();
   const logs: string[] = [];
+  const slots: RegisteredSlot[] = [];
   const { bus, emit } = makeBus();
   const disposers: Array<() => void> = [];
   const compute = makeComputeStub();
@@ -101,6 +115,13 @@ function activatePlugin(io: FileIO): {
         keys: async () => [...map.keys()],
       };
     })(),
+    slots: {
+      register: (kind: string, contribution: RegisteredSlot['contribution']) => {
+        slots.push({ kind, contribution });
+        return () => undefined;
+      },
+      query: () => [],
+    },
     onDispose: (fn: () => void) => disposers.push(fn),
   } as unknown as PluginContext;
   createErbParserPlugin().activate(ctx);
@@ -108,6 +129,7 @@ function activatePlugin(io: FileIO): {
     services,
     logs,
     bus,
+    slots,
     emit,
     dispose: () => {
       for (const d of disposers.reverse()) d();
@@ -233,5 +255,61 @@ describe('可搬运任务', () => {
     const offloaded = await parser.scanControlFlowOffloaded(src);
     expect(offloaded).toEqual(parser.scanControlFlow(src));
     expect(offloaded.length).toBeGreaterThan(0);
+  });
+});
+
+/* ============ ERB 结构波浪线（2026-10-13 UI 反馈 7） ============ */
+
+/**
+ * 这里钉的是**接线**：注册进哪个槽、什么文件才出提示、报告怎么落到行号与 code 上。
+ * 判据本身的对错在 `structure.test.ts`（形态）与 `structure.corpus.test.ts`（语料零误报）——
+ * 三份各管一段，别拿这份当"判据正确"的证据。
+ */
+describe('erb-parser 插件 · ui.editor.decorator（ERB 结构波浪线）', () => {
+  const broken = ['@AEGI', 'IF LOCAL', '\tPRINTL 甲'].join('\n');
+
+  function decorator(): RegisteredSlot['contribution'] | undefined {
+    const { slots } = activatePlugin(fakeIO({}));
+    return slots.find((s) => s.kind === 'ui.editor.decorator')?.contribution;
+  }
+
+  it('注册进 ui.editor.decorator，标题说得出人话', () => {
+    const found = decorator();
+    expect(found?.id).toBe('erb-structure');
+    expect(found?.title ?? '').toContain('ERB');
+  });
+
+  it('.ERB 少一个 ENDIF ⇒ 一条 error 装饰，行号指着开块那一行，code 带得上类型', () => {
+    const decorations = decorator()!.decorate!({
+      path: 'C:/game/ERB/M_KOJO_SAMPLE.ERB',
+      text: broken,
+      project: null,
+    }) as Array<{ line: number; severity: string; message: string; code?: string }>;
+    expect(decorations).toHaveLength(1);
+    expect(decorations[0]).toMatchObject({ line: 2, severity: 'error', code: 'erb.unclosed-open' });
+    expect(decorations[0]!.message).toContain('ENDIF');
+  });
+
+  it('.ERM 同口径（引擎的另一种扩展名，不该漏）', () => {
+    expect(decorator()!.decorate!({ path: 'C:/game/X.ERM', text: broken, project: null })).toHaveLength(1);
+  });
+
+  it('.kojo 一律不出提示（糖语法诊断另有其人，两处各报一遍会重复）', () => {
+    expect(decorator()!.decorate!({ path: 'C:/ws/事件.kojo', text: broken, project: null })).toEqual([]);
+  });
+
+  it('空文本与配平文本都零装饰（新开的文件不该先看到红线）', () => {
+    const decorate = decorator()!.decorate!;
+    expect(decorate({ path: 'C:/game/A.ERB', text: '', project: null })).toEqual([]);
+    expect(
+      decorate({ path: 'C:/game/A.ERB', text: ['IF A', '\tPRINTL 甲', 'ENDIF'].join('\n'), project: null }),
+    ).toEqual([]);
+  });
+
+  it('服务面上 checkStructure 可用（契约那条 additive 方法的落地端）', () => {
+    const { services } = activatePlugin(fakeIO({}));
+    const svc = services.get('erb.parser') as ErbParserService;
+    expect(typeof svc.checkStructure).toBe('function');
+    expect(svc.checkStructure!(broken).map((i) => i.kind)).toEqual(['unclosed-open']);
   });
 });

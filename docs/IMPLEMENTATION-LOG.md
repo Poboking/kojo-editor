@@ -6986,3 +6986,123 @@ UI 重设计 P4（三容器拖拽停靠 / 全禅写作模式 / 设置 overlay）
 QA-13 的 §六 33 项本批**只多拿到 7.17 / 7.20 两条机器判据**；7.1–7.7（新建口上项目向导 → 落盘形态）
 需要驱动 overlay 向导，属下一批。看板行不撤、状态照旧 `待认领`，回执里记这两条已由探针代跑。
 
+---
+
+### 5.109 ERB 结构波浪线批 · 反馈 7 落地：把"只有编译器会告诉你的事"提前到打字那一秒（2026-10-13 批，qa 主机）
+
+> 取号：开工时日志最大号是上游的 §5.108 ⇒ 本节取 **§5.109**。
+> 规格来自本组上一批写的协作件 `docs/UI-FEEDBACK-2026-10-13.md` §四（那批只定规格不做实现）。
+
+#### 一、用户要的是什么，以及为什么"少报"是对的策略
+
+用户原话：**"编辑 `.ERB` 时没有任何语法错误检查/提示，这是不可接受的"**（老口上作者手写 ERB）。
+现状也确实如此：全仓唯一的 marker 通道是 `ui.editor.decorator`，而唯一的贡献者 `sugar-diagnostics`
+第一行就是 `if (!isKojoFile(path)) return []` ⇒ `.ERB` 一条波浪线都没有。
+
+策略沿用本项目一贯口径：**错标比不标危险**。所以只报三类"拿配对表就能证明"的错误
+（孤儿闭合 / 走到函数边界或文件尾仍未闭合 / 无主的分支语句），
+未知变量名、未知函数名、`CALLFORM` 悬空引用、表达式写法一概**不报**——
+那些要么需要全项目语义，要么引擎本身宽容，报出来就是误报农场。
+
+#### 二、结构：判据单源在 scanner，报错只是它的一次重新折叠
+
+| 落点 | 内容 |
+|---|---|
+| `erb-parser/src/scanner.ts` | 配对表封成 `classifyControlFlow` / `controlFlowToken`，行过滤封成 `forEachControlFlowLine`（含 `@`/`#`/`$` 与 `[SKIPSTART]…[SKIPEND]` 区间），并新增 `closerNameForPair`（**从 `CLOSE_KINDS` 反查**，不抄第二份表）。`scanControlFlow` 改成消费同一道门，**行为逐字不变**（`scanner.test.ts` 原样全绿） |
+| `erb-parser/src/structure.ts`（新） | `checkControlFlowStructure(text)` 纯函数 + `MAX_STRUCTURE_ISSUES = 50` 封顶 |
+| `plugin-api/src/erb.ts` | `ErbStructureIssue` 类型 + `ErbParserService.checkStructure?`（**additive 可选**：缺省 = 现状，老实现与测试替身都不必改，不制造"改 10 个包才能编译"的窗口期） |
+| `erb-parser/src/plugin.ts` | 服务实现 `checkStructure`；并注册 `ui.editor.decorator`（id `erb-structure`，order 20） |
+| 宿主 | **零改动**——`refreshMarkers` 本来就合并全部贡献者，去抖仍是既有的 `MARKER_DEBOUNCE_MS = 250` |
+
+**为什么装饰器由解析器插件自己注册**（而不是塞进某个 UI 插件）：判据与配对表同源才不漂移，
+而 `ui.editor.decorator` 的契约是**纯函数**（文本进、行级装饰出，无 React、无 IO）——
+放这里既不新增跨插件依赖，也不把"哪些行算控制流语句"外化成第二份知识。
+
+#### 三、真实语料把第一版判据打脸了（这条是本批最值钱的部分）
+
+第一版把"以 `@` 开头的行"当作函数边界。语料普查（3,818 文件 / 4,115,009 行）当场报出
+**5 个文件 23 条**。逐条看清：语料里大量**跨行 `CALL` 的续行以 `@"…"` 开头**，例如
+`K60_2 Update.ERB:39` 的 `@"%CALLNAME:60%开始绘出桥的图案…", -1,`——
+它不是函数定义，但按前缀判就成了"新函数开始"，于是上一个还没闭合的 `IF` 被判未闭合、
+后面真正的 `ENDIF` 又成了孤儿：**一次误报连环两条**。
+
+改法（只写能证明的那一条）：边界判据 = `parseFunctionDefinition` 解析得出名字**且**名字首字符是
+字母/下划线。为什么不用第一个想法"排除 `@\"`"：`parseFunctionDefinition` 用空格断名，
+那条续行照样能切出一个"名字"——**"能不能解析出名字"不等于"是不是函数名"**。
+⚠ 顺带记一条事实（不越界去改）：`parseFunctionDefinition` 对 `@"串"` 也会返回一个名字，
+所以函数索引里存在这类假函数；改它会影响函数树/索引口径，归解析线处置，本批只在体检这一侧不自挖坑。
+
+⇒ 最终语料读数：**3,818 文件 / 4,115,009 行，零报告**。
+
+#### 四、性能（实测，不是估计）
+
+| 量 | 读数 |
+|---|---|
+| 全语料一遍体检 | 5,813ms / 3,818 文件（**含读盘**，平均 1.5ms/文件）；复跑 6,076ms 同量级 |
+| 最大单文件 `M_KOJO_K58_1_日常系コマンド.ERB`（52,602 行 / 2.35MB） | 纯函数 **23.4ms / 28.5ms**（同机两次独立跑的读数，各取三遍最好值）；同文件 `scanControlFlow` 26.7ms ⇒ 体检与既有骨架扫描同量级，**没有多出一趟成本** |
+| 次大三个（30,499 / 24,179 / 24,188 行） | 13.9 / 10.4 / 10.9ms |
+
+去抖仍是宿主的 250ms ⇒ 最大文件上"输入停顿 → 出提示"约 280–300ms，打字过程不付费。
+**刻意不做降级**：判据是单遍线性扫描，23ms 不值得为它引入"大文件悄悄不报"的第二种真相；
+真要限流也应该在宿主侧做，而不是在插件里少报。封顶 50 条是另一回事（结构崩坏的文件能刷上千条，
+问题列表会被淹掉、Monaco 要跟着画上千个 marker），封顶值写进 `MAX_STRUCTURE_ISSUES` 并由测试钉住。
+
+#### 五、测试 +30 项（全仓 **1790 passed / 14 skipped（1804）**，103 文件过 / 8 跳（111））
+
+- `erb-parser/tests/structure.test.ts` **23 项**：配平时**一条都不报**（IF 链 / SELECTCASE / PRINTDATA 系 /
+  DATALIST+STRDATA / TRYC 系 / TRYCALLLIST+CATCH+ENDFUNC / NOSKIP / REPEAT / FOR / WHILE / DO /
+  叶子语句 SIF 与 TRYCALL / 注释与 `[SKIP]` 区间 / `#` 指令行不算边界 / 大小写混写）+ 三类错误各自成条 +
+  **上限**与 **CRLF**。每个 `it` 都成对写："该报的报了"与"不该报的一条都没有"。
+- `erb-parser/tests/structure.corpus.test.ts` **1 项（语料闸门，`KOJO_SMOKE_PROJECT` 守门）**：
+  全量零报告 **+ 反证**（把最大文件里的一条 `ENDIF` 删掉 ⇒ 必须恰好报 1 条 `unclosed-open/IF`）
+  **+ 封顶反证**（400 行 `IF A` ⇒ 恰好 50 条）。没有反证的"零报告"可能只是判据没在工作。
+- `erb-parser/tests/plugin.test.ts` **+6 项**：注册进哪个槽、`.ERB` 出装饰且 `code = erb.unclosed-open`、
+  `.ERM` 同口径、`.kojo` 一律不报（避免与糖诊断重复）、空文本/配平文本零装饰、服务面上 `checkStructure` 可用。
+
+**CATCH 那条刻意放宽**：`TRYCALLLIST / TRYGOTOLIST / TRYJUMPLIST`（配对类 `funclist`）里的 `CATCH` 不判无主——
+我们没有引擎侧证据说它非法，而真实语料 3,818 个文件里 `TRYCALLLIST` **一次都没出现**，无从实测。
+没有证据就不报：这是精度纪律，不是偷懒。
+
+#### 六、真实壳实测（一次性 CDP 探针 `kojo-erb-squiggle-probe.mjs`，跑完即删；**9 项全绿**）
+
+在**工作区**里放一份缺 `ENDIF` 的 `.ERB`（工作区恒可写、且不套只读锁），绝不碰真实游戏目录：
+
+- 屏上出现红色波浪线 **1 处**，且落在开块的 `IF LOCAL` 那一行（不是文件尾、不是随便一行）；
+- 悬停原文（DOM 实测，不是我复述）：`IF（第 3 行）到这里还没有闭合，缺 ENDIF。`，
+  悬停框的 class 里带着 code `erb.unclosed-open`；
+- 在磁盘上补回 `ENDIF` ⇒ 波浪线**消失**（顺带证明"外部改动自动重载"那条路也会重算装饰）；
+- 在编辑器里**现场敲**一个新 `IF A` ⇒ 波浪线立刻 +1（编辑期实时算，不是只在打开时算一次）。
+  前置断言先证明字真落进了缓冲区（`@PROBE_DEMO / #FUNCTION / IF LOCAL / PRINTL AAA / ENDIF / IF A`），
+  否则驱动通道的失败会冒充产品缺陷；
+- 全程 console 零异常；跑完删探针文件并核对（`还在=false`），
+  `%APPDATA%` / `%LOCALAPPDATA%` 的 `dev.kojo.editor` 下 `grep -rl "__probe"` **零命中**（不给用户留会话残留）。
+
+**四条仪器教训**（本轮 5 项红全是自己造成的，其中三条与上一批同源）：
+1. **波浪线画在独立 overlay 层**，`closest('.view-line')` 取不到 ⇒ 位置判据要用**矩形纵向对齐**反查行；
+2. **Monaco 用 U+00A0 呈现前导空白** ⇒ 拿 `view-line` 的 DOM 文本当判据前先归一（否则 `includes('PRINTL AAA')` 假失败）；
+3. **壳会恢复上次会话的标签页**（含上一轮被探针敲脏的那份）⇒ 探针文件名必须每轮唯一，
+   并**先断言"屏上就是盘上那份"**，再谈产品行为；
+4. **CDP 打字：`keyDown` 带 `text` 再补一个 `char` = 每个字符插两遍**（实测 `IF A` → `IIFF  AA`）。
+   正确序列是 `rawKeyDown` + `char(text)` + `keyUp`；`Enter` 反过来要 `keyDown` 带 `text='\r'`
+   （`rawKeyDown` 不带 text 时 Monaco 不插换行）。同族坑见 §九-35。
+
+#### 七、验证矩阵
+
+| 项 | 结果 |
+|---|---|
+| `pnpm test` | **1790 passed / 14 skipped（1804）**，103 文件过 / 8 跳（111）；本批 +30（23 判据 + 6 接线 + 1 语料闸门） |
+| 语料闸门（带 `KOJO_SMOKE_PROJECT` 单跑那一个文件） | 零误报 + 两条反证全过 |
+| `pnpm typecheck` + `pnpm --filter @kojo/app typecheck` | 双 exit 0 |
+| `pnpm audit:decoupling` | A–D 全绿（16 插件；`structure.ts` 里全是引擎语法词，不是游戏知识） |
+| `pnpm --filter @kojo/app build` | ✓（读数随下一批复跑时一并记，不引用上一轮的数） |
+| 真实壳 | 9 项全绿（§六） |
+| 冲突残留全仓扫 | `^(<<<<<<<\|=======\|>>>>>>>)( \|$)`，0 命中 |
+
+#### 八、还没做（记清楚，不装完）
+
+1. **不进项目级面板**：波浪线只在编辑器里；「约定校验」面板要列结构错误还需项目级异步跑一遍，
+   且与 `convention.linter` 的报告合并时要防止同一错误两处各报一遍（规格 §四 已写，本批不顺手做）。
+2. **表达式/词法级**（等号两侧、括号索引段）留给 `condition-extractor` 的表达式解析器，另一批。
+3. **`parseFunctionDefinition` 会把 `@"串"` 认成函数名**（本批实测发现，§三）——影响的是函数索引/函数树，
+   归解析线；本批只在体检侧不依赖"能不能解析出名字"当边界判据。
+4. **保存期不拦**（与 ADR-0005 的写保护分工一致）：结构错误仍是"提示"，不阻断保存。

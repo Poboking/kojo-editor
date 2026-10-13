@@ -368,8 +368,70 @@ const PRINTDATA_OPEN: ReadonlySet<string> = new Set([
   'PRINTDATADW',
 ]);
 
+/**
+ * 控制流角色（配对表的唯一出口）。
+ *
+ * 为什么要把这张表封成函数而不是直接 export 那几个 Record：结构体检（`structure.ts`）与骨架扫描
+ * （本文件 `scanControlFlow`）**必须用同一份配对表**——两处各自持有一份表就必然漂移，
+ * 而漂移的表现为"波浪线指错了行"，比没有波浪线更糟（本项目口径：错标比不标危险）。
+ */
+export type ControlFlowRole = 'open' | 'branch' | 'close' | 'leaf';
+
+/** 一行原文 → 控制流语句的形状（不是控制流语句则 null） */
+export interface ControlFlowToken {
+  /** 引擎里的语句原词（大写归一后的形态，如 `ENDIF`） */
+  readonly kind: string;
+  readonly role: ControlFlowRole;
+  /** 配对类别（`if` / `select` / `try` / `funclist` …；leaf 为空串） */
+  readonly pair: string;
+  /** 语句后面的原文（截行内注释之前；只有需要表达式的语句非空） */
+  readonly expression: string;
+}
+
 /** 提取表达式原文的语句（其余受支持语句的 expression 为空串） */
 const EXPRESSION_KINDS = new Set(['IF', 'ELSEIF', 'SIF', 'SELECTCASE', 'CASE', 'REPEAT', 'FOR', 'WHILE']);
+
+/**
+ * 配对分类（表在文件头，逐条对齐引擎 `FunctionIdentifier.cs` 的 funcMatch）。
+ * 骨架扫描与结构体检都走这道门——**这是配对表的单一真源**。
+ */
+export function classifyControlFlow(kind: string): { role: ControlFlowRole; pair: string } | null {
+  if (LEAF_KINDS.has(kind)) return { role: 'leaf', pair: '' };
+  if (OPEN_KINDS[kind] !== undefined) return { role: 'open', pair: OPEN_KINDS[kind]! };
+  if (BRANCH_KINDS[kind] !== undefined) return { role: 'branch', pair: BRANCH_KINDS[kind]! };
+  if (CLOSE_KINDS[kind] !== undefined) return { role: 'close', pair: CLOSE_KINDS[kind]! };
+  if (PRINTDATA_OPEN.has(kind)) return { role: 'open', pair: 'data' };
+  if (TRY_CATCH_OPEN.has(kind)) return { role: 'open', pair: 'try' };
+  if (TRY_LIST_OPEN.has(kind)) return { role: 'open', pair: 'funclist' };
+  return null;
+}
+
+/** 行首 `;` 注释、`@` / `#` / `$` 指令行不参与控制流（`#` 同时是结构体检的区域边界，见 structure.ts） */
+export function isIgnorableFlowLine(trimmed: string): boolean {
+  return (
+    trimmed.length === 0 ||
+    trimmed.startsWith(';') ||
+    trimmed.startsWith('@') ||
+    trimmed.startsWith('#') ||
+    trimmed.startsWith('$')
+  );
+}
+
+/** 一行取控制流形状；不是控制流语句 → null */
+export function controlFlowToken(trimmed: string): ControlFlowToken | null {
+  const wordMatch = /^([A-Za-z_]+)/.exec(trimmed);
+  if (!wordMatch) return null;
+  const kind = wordMatch[1]!.toUpperCase();
+  const classified = classifyControlFlow(kind);
+  if (!classified) return null;
+  const rest = trimmed.slice(wordMatch[1]!.length);
+  return {
+    kind,
+    role: classified.role,
+    pair: classified.pair,
+    expression: EXPRESSION_KINDS.has(kind) ? sliceExpression(rest) : '',
+  };
+}
 
 /**
  * 截取表达式原文：在**引号外**遇到 `;` 视为行内注释截断；
@@ -393,21 +455,34 @@ function sliceExpression(rest: string): string {
 }
 
 /**
- * 控制流骨架扫描（纯函数，宽容解析）：
- * - 线性输出全部控制流语句，附带块深度（见 `ControlFlowStatement` 契约）；
- * - `[SKIPSTART]…[SKIPEND]`、注释、`@` / `#` / `$` 行不参与；
- * - 配对不完好（孤儿闭合 / 错配嵌套）时不中断：闭合语句向栈内查找最近匹配项，
- *   找不到则不动栈——深度尽量保持可用（真实语料配平完好，此路径为防御性）。
+ * 控制流视野下的逐行形状（`scanControlFlow` 与结构体检共用，见 `forEachControlFlowLine`）。
+ *
+ * - `statement` = null 时 `boundary` 才可能为 true（`@` / `#` / `$` 指令行）；
+ * - `[SKIPSTART]…[SKIPEND]` 区间内的行两者都为 false（整段屏蔽）。
  */
-export function scanControlFlow(text: string): ControlFlowStatement[] {
-  const lines = normalizeEol(text).split('\n');
-  const out: ControlFlowStatement[] = [];
-  const stack: string[] = []; // 配对类别栈
-  let inSkipBlock = false;
+export interface ControlFlowLine {
+  /** 1 基行号 */
+  readonly line: number;
+  /** 该行原文（trim 后） */
+  readonly text: string;
+  /** 函数/区域边界行（`@` 或 `#` 开头；`$` 标签不算边界） */
+  readonly boundary: boolean;
+  /** 控制流语句形状；不是控制流语句则 null */
+  readonly statement: ControlFlowToken | null;
+}
 
+/**
+ * 逐行喂给控制流的**唯一**遍历（2026-10-13 反馈 7）。
+ *
+ * 为什么要有这一道门：骨架扫描（索引/条件抽取的热路径）与结构体检（编辑器波浪线）必须看到
+ * **同一批行**。两份各自的"哪些行算数"规则一旦分叉，表现就是"波浪线指的行骨架里根本没有"——
+ * 排查成本极高。屏蔽规则（注释、`@`/`#`/`$`、`[SKIPSTART]…[SKIPEND]`）从此只写在这里。
+ */
+export function forEachControlFlowLine(text: string, visit: (l: ControlFlowLine) => void): void {
+  const lines = normalizeEol(text).split('\n');
+  let inSkipBlock = false;
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i]!.trim();
-
     if (inSkipBlock) {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
       continue;
@@ -416,45 +491,48 @@ export function scanControlFlow(text: string): ControlFlowStatement[] {
       inSkipBlock = true;
       continue;
     }
-    if (trimmed.length === 0 || trimmed.startsWith(';')) continue;
-    if (trimmed.startsWith('@') || trimmed.startsWith('#') || trimmed.startsWith('$')) continue;
-
-    const wordMatch = /^([A-Za-z_]+)/.exec(trimmed);
-    if (!wordMatch) continue;
-    const kind = wordMatch[1]!.toUpperCase();
-    const rest = trimmed.slice(wordMatch[1]!.length);
-
-    let role: 'open' | 'branch' | 'close' | 'leaf' | null = null;
-    let pair = '';
-    if (LEAF_KINDS.has(kind)) {
-      role = 'leaf';
-    } else if (OPEN_KINDS[kind] !== undefined) {
-      role = 'open';
-      pair = OPEN_KINDS[kind]!;
-    } else if (BRANCH_KINDS[kind] !== undefined) {
-      role = 'branch';
-      pair = BRANCH_KINDS[kind]!;
-    } else if (CLOSE_KINDS[kind] !== undefined) {
-      role = 'close';
-      pair = CLOSE_KINDS[kind]!;
-    } else if (PRINTDATA_OPEN.has(kind)) {
-      role = 'open';
-      pair = 'data';
-    } else if (TRY_CATCH_OPEN.has(kind)) {
-      role = 'open';
-      pair = 'try';
-    } else if (TRY_LIST_OPEN.has(kind)) {
-      role = 'open';
-      pair = 'funclist';
+    if (trimmed.length === 0 || trimmed.startsWith(';') || trimmed.startsWith('$')) continue;
+    if (trimmed.startsWith('@') || trimmed.startsWith('#')) {
+      visit({ line: i + 1, text: trimmed, boundary: true, statement: null });
+      continue;
     }
-    if (!role) continue;
+    visit({ line: i + 1, text: trimmed, boundary: false, statement: controlFlowToken(trimmed) });
+  }
+}
 
-    const expression = EXPRESSION_KINDS.has(kind) ? sliceExpression(rest) : '';
+/**
+ * 配对类别 → 该类别的闭合语句原词（结构体检的话术要用）。
+ * 从 `CLOSE_KINDS` **反查**得到——不再抄第二份表；每个类别在这里都只有一个闭合词，
+ * 所以返回值是单值而不是数组。查不到返回空串（调用方要能容忍"说不出闭合词"）。
+ */
+export function closerNameForPair(pair: string): string {
+  for (const [closer, p] of Object.entries(CLOSE_KINDS)) {
+    if (p === pair) return closer;
+  }
+  return '';
+}
+
+/**
+ * 控制流骨架扫描（纯函数，宽容解析）：
+ * - 线性输出全部控制流语句，附带块深度（见 `ControlFlowStatement` 契约）；
+ * - `[SKIPSTART]…[SKIPEND]`、注释、`@` / `#` / `$` 行不参与；
+ * - 配对不完好（孤儿闭合 / 错配嵌套）时不中断：闭合语句向栈内查找最近匹配项，
+ *   找不到则不动栈——深度尽量保持可用（真实语料配平完好，此路径为防御性）。
+ *
+ * 报错是另一个人的活：结构体检在 `structure.ts`，与这里共用 `forEachControlFlowLine` 的视野。
+ */
+export function scanControlFlow(text: string): ControlFlowStatement[] {
+  const out: ControlFlowStatement[] = [];
+  const stack: string[] = []; // 配对类别栈
+
+  forEachControlFlowLine(text, ({ line, statement }) => {
+    if (!statement) return;
+    const { kind, expression, role, pair } = statement;
 
     if (role === 'leaf') {
-      out.push({ kind, expression, depth: stack.length, line: i + 1 });
+      out.push({ kind, expression, depth: stack.length, line });
     } else if (role === 'open') {
-      out.push({ kind, expression, depth: stack.length, line: i + 1 });
+      out.push({ kind, expression, depth: stack.length, line });
       stack.push(pair);
     } else if (role === 'branch') {
       // 与所配对的开启语句同深度（向栈内找最近匹配；找不到时退化为"栈内一层"）
@@ -465,7 +543,7 @@ export function scanControlFlow(text: string): ControlFlowStatement[] {
           break;
         }
       }
-      out.push({ kind, expression, depth: found >= 0 ? found : Math.max(0, stack.length - 1), line: i + 1 });
+      out.push({ kind, expression, depth: found >= 0 ? found : Math.max(0, stack.length - 1), line });
     } else {
       // 闭合：向栈内查找最近匹配项并弹到它（含）；找不到则不动栈
       let found = -1;
@@ -476,9 +554,9 @@ export function scanControlFlow(text: string): ControlFlowStatement[] {
         }
       }
       if (found >= 0) stack.length = found;
-      out.push({ kind, expression, depth: stack.length, line: i + 1 });
+      out.push({ kind, expression, depth: stack.length, line });
     }
-  }
+  });
 
   return out;
 }

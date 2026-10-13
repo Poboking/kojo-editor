@@ -113,6 +113,29 @@ export interface ControlFlowStatement {
   line: number;
 }
 
+/**
+ * 结构体检的一条发现（2026-10-13 UI 反馈 7：`.ERB` 编辑器波浪线）。
+ *
+ * 与 `ControlFlowStatement` 的分工：那张表是**骨架**（消费方拿去算深度、抽条件），
+ * 这一张是**配对失败的证据**。两者共用 `erb-parser/scanner.ts` 里的同一份配对表——
+ * 各抄一份表就必然漂移，漂移的表现是"波浪线指的行骨架里根本没有"。
+ *
+ * 闭集三类，且**只报可证明的**（口径：错标比不标危险）：
+ * - `orphan-close`：闭合语句找不到对应开块（多写了 `ENDIF`）；
+ * - `unclosed-open`：走到函数边界（`@` 行）或文件结尾仍有开块没闭合；
+ * - `orphan-branch`：`ELSE` / `CASE` / `CATCH` 这类分支语句前面没有它要归属的开块。
+ * 未知变量名、未知函数名、表达式语法**不在这一层**（要全项目语义或表达式解析器）。
+ */
+export interface ErbStructureIssue {
+  readonly kind: 'orphan-close' | 'unclosed-open' | 'orphan-branch';
+  /** 1 基行号（与 `ControlFlowStatement.line` 同一坐标系） */
+  readonly line: number;
+  /** 出问题的语句原词（`ENDIF` / `IF` / `ELSE`…）；未闭合类给的是那个**开块**的原词 */
+  readonly statement: string;
+  /** 给作者看的中文一句话（说清缺谁、在哪儿，不复述引擎术语） */
+  readonly message: string;
+}
+
 /** 项目级函数索引（重名函数保留全部定义，由消费方判定） */
 export interface ErbIndex {
   /** 绝对路径 → 文件解析结果 */
@@ -164,6 +187,18 @@ export interface ErbParserService {
    * 知道 kind / worker / 回退的存在（无并行通道时自动内联，行为与同步版一致）。
    */
   scanControlFlowOffloaded(text: string): Promise<ControlFlowStatement[]>;
+  /**
+   * 结构体检（2026-10-13 UI 反馈 7，**additive 可选**）：配对失败的三类可证明错误。
+   *
+   * 与 `scanControlFlow` 的分工：那张表是骨架（算深度、抽条件），这一份是"配不上对"的证据。
+   * 两者共用 `erb-parser/scanner.ts` 的同一份配对表与同一套行过滤规则，所以不会出现
+   * "波浪线指的行骨架里没有"。纯文本入、纯数据出（编辑器每 250ms 去抖后调一次，不能读盘）。
+   *
+   * **为什么是可选**：波浪线是新增能力，缺了它编辑器只是不出提示（= 现状），
+   * 不该逼着所有实现者同批改完——契约演进的 additive 纪律（HANDOFF §十一）。
+   * 消费方（`ui.editor.decorator` 贡献者）必须在方法缺席时返回空装饰。
+   */
+  checkStructure?(text: string): ErbStructureIssue[];
   /**
    * 当前已构建的索引（未构建 / 未打开项目时为 null）。
    * 解析器订阅 `project.opened` 自动构建并在完成后发 `kojo.functionChanged`，
