@@ -56,14 +56,14 @@ const SCRIPT_NOS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
  * 而且"某角色还没有目录"在新整合包里是常态（语料 168 张 CHARA 表 vs 155 个口上目录）。
  */
 export function charaOptionLabel(c: CharaInfo): string {
-  return `#${c.no} ${c.name}${c.kojoDir ? '' : ' · 游戏里无个人口上目录'}`;
+  return `#${c.no} ${c.name}${c.kojoDir ? '' : ' · 无个人口上目录'}`;
 }
 
 /** 选了无口上目录的角色时的后果说明；有目录或还没选角色 → null（不制造噪音） */
 export function noKojoDirWarning(c: CharaInfo | null): string | null {
   if (!c || c.kojoDir) return null;
-  return `注意：#${c.no} ${c.name} 在游戏目录里没有个人口上目录。这个包照常书写、照常导出，`
-    + '但「部署到游戏目录」会被拒绝——部署需要该角色有自己的口上目录。';
+  // 用词对齐 `deploy.ts:resolveDeployTarget` 的拒绝原因（同一个概念只有一种说法）
+  return `注意：#${c.no} ${c.name} 在游戏目录中没有个人口上目录——这个包照常书写、照常导出，但无法部署。`;
 }
 
 /**
@@ -238,8 +238,10 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           dirNamePreview
             ? `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳（.kojo，糖与原生 ERB 都能写）${licenseProducesFile(license) ? ' + LICENSE' : ''}；不含四件套，也不含活函数`
             : '作品名 / 版本 / 角色名不得为空或仅含非法字符')),
-        // 后果提前说到选它的那一刻，而不是等作者点「部署」才吃一个拒绝（看板 HK-9）
-        kojoDirWarning ? h('div', { className: 'wizard-hint dim' }, kojoDirWarning) : null),
+        // 后果提前说到选它的那一刻，而不是等作者点「部署」才吃一个拒绝（看板 HK-9）。
+        // class 用既有的 `.wizard-warn`（amber）——部署/导入/新建文件三家向导同一口径，
+        // 自己新加一处灰字提示就是风格分裂的开始。
+        kojoDirWarning ? h('div', { className: 'wizard-warn' }, kojoDirWarning) : null),
 
       error ? h('div', { className: 'wizard-error' }, error) : null,
 

@@ -21,7 +21,7 @@ describe('charaOptionLabel（目标角色下拉文案）', () => {
 
   it('没有口上目录的角色：标出来，但**不删选项**（K0「你」就是这一类）', () => {
     const label = charaOptionLabel(chara(0, '你'));
-    expect(label).toBe('#0 你 · 游戏里无个人口上目录');
+    expect(label).toBe('#0 你 · 无个人口上目录');
     expect(label).toContain('#0');
     expect(label).toContain('你');
   });
@@ -47,7 +47,9 @@ describe('noKojoDirWarning（选了无目录角色时的后果说明）', () => 
     expect(text).toContain('#0 你');
     expect(text).toContain('照常书写');
     expect(text).toContain('照常导出');
-    expect(text).toContain('部署');
+    expect(text).toContain('无法部署');
+    // 同一个概念只允许一种说法：这句必须与 deploy.ts 拒绝原因用同一个名词短语
+    expect(text).toContain('在游戏目录中没有个人口上目录');
     // 反向断言：不能把"能写"这条路一起否掉
     expect(text).not.toMatch(/无法创建|不能创建|没有意义/);
   });
