@@ -43,6 +43,7 @@
 | `tauri dev` 首轮冷启 vite `Re-optimizing` 会 HMR 回欢迎页 | 已知抖动，二次稳定；`smoke-tauri-ipc.mjs` 已加预检 + 180s 等待 |
 | `packages/app/tsconfig.json` 的 types 只有 `vite/client` | 测试里显式 `import 'node:fs'` 可用；报 TS2307 时改测试写法，**别**往 app 配置塞 node 全局 |
 | vite build `prepare-out-dir` 偶发 EPERM（文件瞬时占用） | 手动 `rmSync(dist)` 后重试，不是代码问题 |
+| 语料 `sav\`（与 `C:\game\eratw-save\sav\` 六档逐字节同容）**全带只读属性** ⇒ 注入写盘必失败（原子写 rename 收尾，覆盖只读目标 = EPERM；Rust 未做去 R） | 注入测试先造可写副本：`cmd copy save03.sav save90.sav`（cmd copy **不**继承 R；node `fs.copyFileSync` **会**继承 ⇒ 补 `attrib -R` 兜底），只对副本注入 |
 
 ## 三、会话坑（一行制；1–50 = 原 §九去重名单，51 起为重构后新增，细节在 `docs/archive/HANDOFF.md` §九）
 

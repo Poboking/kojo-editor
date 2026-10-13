@@ -26,8 +26,8 @@
 ## 三、环境与路径（本机 = haruki 主机）
 
 - 工作目录：`C:\DSH\kojo-editor-project`（本 clone）；同机另有 `C:\DSH\kojo-editor` / `C:\DSH\master-kojo-editor` 等其他工作树（共享主机，**动别人的树前先问**）。
-- 真实语料：`C:\game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`（**整体只读，零写入是硬约束**）。
-- 存档库：`C:\Game\eratw-save\sav\`（语料同级目录；**语料本体不放 sav**）。
+- 真实语料：`C:\game\eratw-sub-modding-eratw4.980`（2026-10-13 晚盘上实测名——旧 `…-260326-SANYOUSEI(PC)` 后缀名已不在盘上；**整体只读，零写入是硬约束**）。
+- 存档库：`C:\game\eratw-save\sav\`（语料同级）与语料内 `sav\` **六档逐字节同容**（两处均只读；**面板读语料内 `sav\`**——adapter 固定 `<游戏目录>\sav`；注入前须去 R，见 PITFALLS §二）。
 - 代理：github 直连时通时断 ⇒ 本 clone 已配 repo 本地代理 `http.proxy=127.0.0.1:7890`（新 clone 配一次；**永不改全局配置**）。
 - 桌面壳：`pnpm --filter @kojo/app tauri dev`；CDP 9222；**同一工作树只能一个桌面实例**。
 
