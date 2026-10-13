@@ -441,7 +441,7 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
       ctx.slots.register('ui.panel', {
         id: 'snapshot-injector',
         title: '状态注入器',
-        icon: '✎',
+        icon: 'snapshot',
         order: 71,
         // UI 重设计批 P1：低频+危险（写档）→ 副侧栏，默认不激活（定稿 §四）
         location: 'aux',

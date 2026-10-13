@@ -7,6 +7,7 @@ import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
 import { FileTree } from './FileTree';
 import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
+import { Icon } from './icons';
 import type { ShellCommandSpec } from './commands';
 
 interface Props {
@@ -19,7 +20,7 @@ interface Props {
   activeFile: string | null;
   /** 打开的标签页（P3 多标签；顺序即标签栏顺序） */
   openTabs: readonly string[];
-  /** 各标签脏态（标签栏脏点 ●） */
+  /** 各标签脏态（标签栏脏点，见 `.tab-dirty`） */
   dirtyPaths: ReadonlySet<string>;
   reveal: RevealTarget | null;
   onOpenFile: (path: string) => void;
@@ -203,7 +204,7 @@ export function ProjectView({
       {
         id: 'kojo.files',
         title: '口上文件',
-        icon: '🗀',
+        icon: 'files',
         order: 30,
         group: 'explorer',
         location: 'sidebar',
@@ -271,7 +272,7 @@ export function ProjectView({
       extraCommands={extraCommands}
       onRegisterWorkbench={setWorkbench}
     >
-      {/* 标签栏（P3：中键/× 关闭；脏点 ●；拖拽重排；滚轮横滚；溢出隐藏滚动条） */}
+      {/* 标签栏（P3：中键/关闭钮；脏点；拖拽重排；滚轮横滚；溢出隐藏滚动条） */}
       {openTabs.length > 0 ? (
         <div
           ref={tabsRef}
@@ -307,7 +308,11 @@ export function ProjectView({
               }}
             >
               <span className="tab-label">{tabName(p)}</span>
-              {dirtyPaths.has(p) ? <span className="tab-dirty" title="未保存">●</span> : null}
+              {dirtyPaths.has(p) ? (
+                <span className="tab-dirty" title="未保存">
+                  <Icon name="circle-filled" size={9} />
+                </span>
+              ) : null}
               <button
                 className="tab-close"
                 title="关闭标签 (Ctrl+W)"
@@ -316,7 +321,7 @@ export function ProjectView({
                   onRequestCloseTab(p);
                 }}
               >
-                ×
+                <Icon name="close" size={13} />
               </button>
             </div>
           ))}

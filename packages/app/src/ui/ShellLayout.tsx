@@ -46,6 +46,7 @@ import {
 } from './commands';
 import { CommandPalette, QuickOpen } from './Palette';
 import { PanelBody, StatusbarItem } from './PanelHost';
+import { Icon } from './icons';
 
 /**
  * 壳层五区布局（2026-10-11 UI 重设计批 P1；定稿 §二）。
@@ -486,7 +487,7 @@ export function ShellLayout(props: Props): ReactElement {
             )
           }
         >
-          {v.icon ?? v.title.slice(0, 1)}
+          <Icon name={v.icon ?? v.title.slice(0, 1)} size={22} />
         </button>
       ))}
       <span className="ab-spacer" />
@@ -506,11 +507,11 @@ export function ShellLayout(props: Props): ReactElement {
             )
           }
         >
-          {v.icon ?? v.title.slice(0, 1)}
+          <Icon name={v.icon ?? v.title.slice(0, 1)} size={22} />
         </button>
       ))}
       <button className="ab-item" title="设置" onClick={() => setSettingsOpen(true)}>
-        ⚙
+        <Icon name="settings" size={22} />
       </button>
     </nav>
   );
@@ -538,7 +539,9 @@ export function ShellLayout(props: Props): ReactElement {
                 onDragEnd={dragEnd}
                 onClick={() => toggleCollapse(p.id)}
               >
-                <span className="caret">{isCollapsed ? '▸' : '▾'}</span>
+                <span className="caret">
+                  <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={12} />
+                </span>
                 <span>{p.title}</span>
               </button>
               {isCollapsed ? null : <PanelBody contribution={p} />}
@@ -584,7 +587,7 @@ export function ShellLayout(props: Props): ReactElement {
         title="关闭面板"
         onClick={() => dispatch({ type: 'toggle', container })}
       >
-        ×
+        <Icon name="close" size={14} />
       </button>
     </div>
   );
@@ -599,7 +602,7 @@ export function ShellLayout(props: Props): ReactElement {
         ) : null}
         {onReloadProject ? (
           <button className="ghost small toolbar-btn" title="重载项目" onClick={onReloadProject}>
-            ⟳
+            <Icon name="refresh" size={15} />
           </button>
         ) : null}
         {toolbarItems.map((t) => {
@@ -623,7 +626,7 @@ export function ShellLayout(props: Props): ReactElement {
               disabled={!enabled}
               onClick={() => runToolbarCommand(t.command)}
             >
-              {t.icon ? <span className="tb-icon">{t.icon}</span> : null}
+              {t.icon ? <Icon name={t.icon} size={14} /> : null}
               {t.title}
             </button>
           );
@@ -632,7 +635,7 @@ export function ShellLayout(props: Props): ReactElement {
       <div className="toolbar-right">
         {onCloseProject ? (
           <button className="ghost small toolbar-btn" title="关闭项目" onClick={onCloseProject}>
-            ✕ 关闭项目
+            <Icon name="close" size={14} /> 关闭项目
           </button>
         ) : null}
         <button
@@ -640,24 +643,24 @@ export function ShellLayout(props: Props): ReactElement {
           title="切换主侧栏 (Ctrl+B)"
           onClick={() => dispatch({ type: 'toggle', container: 'sidebar' })}
         >
-          ◧
+          <Icon name="layout-sidebar-left" size={15} />
         </button>
         <button
           className={`ghost small toolbar-btn ${layout.bottom.visible ? 'on' : ''}`}
           title="切换底部区 (Ctrl+J)"
           onClick={() => dispatch({ type: 'toggle', container: 'bottom' })}
         >
-          ⬓
+          <Icon name="layout-panel-bottom" size={15} />
         </button>
         <button
           className={`ghost small toolbar-btn ${layout.aux.visible ? 'on' : ''}`}
           title="切换副侧栏 (Ctrl+Alt+B)"
           onClick={() => dispatch({ type: 'toggle', container: 'aux' })}
         >
-          ◨
+          <Icon name="layout-sidebar-right" size={15} />
         </button>
         <button className="ghost small toolbar-btn" title="重置布局" onClick={doReset}>
-          ⟲
+          <Icon name="reset" size={15} />
         </button>
       </div>
     </header>
@@ -705,7 +708,13 @@ export function ShellLayout(props: Props): ReactElement {
           </span>
         ) : null}
         <span className={`sb-dirty ${dirty ? 'on' : ''}`} title={dirty ? '有未保存修改' : '已保存'}>
-          {dirty ? '● 未保存' : '已保存'}
+          {dirty ? (
+            <>
+              <Icon name="circle-filled" size={9} /> 未保存
+            </>
+          ) : (
+            '已保存'
+          )}
         </span>
       </div>
     </footer>

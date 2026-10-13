@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { pushNotice } from './notice-queue';
+import { Icon } from './icons';
 
 /** 通知动作按钮（如「去授权」）——点击后先关 toast 再执行 */
 export interface NoticeAction {
@@ -76,7 +77,7 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
           {notices.map((n) => (
             <div key={n.id} className={`toast toast-${n.kind}`} role="alert">
               <span className="toast-icon" aria-hidden="true">
-                {n.kind === 'error' ? '✕' : 'i'}
+                <Icon name={n.kind === 'error' ? 'error' : 'info'} size={16} />
               </span>
               <span className="toast-message">{n.message}</span>
               {n.action ? (
@@ -91,7 +92,7 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
                 </button>
               ) : null}
               <button className="ghost small toast-close" title="关闭" onClick={() => dismiss(n.id)}>
-                ×
+                <Icon name="close" size={13} />
               </button>
             </div>
           ))}

@@ -481,7 +481,7 @@ export function createEratwAdapterPlugin(): Plugin {
       ctx.slots.register('ui.panel', {
         id: 'kojo-projects',
         title: '我的口上项目',
-        icon: '⌂',
+        icon: 'home',
         // explorer 组（口上文件 30 / 函数树 40）之后，独占一枚活动栏图标
         order: 35,
         location: 'sidebar',

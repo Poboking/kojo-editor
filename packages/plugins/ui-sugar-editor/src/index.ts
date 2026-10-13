@@ -242,7 +242,7 @@ export function createUiSugarEditorPlugin(): Plugin {
       ctx.slots.register('ui.panel', {
         id: 'sugar-verdict',
         title: '糖判定',
-        icon: '⊙',
+        icon: 'target',
         order: 76,
         // UI 重设计批 P1：诊断性质 → 底部区 tab（定稿 §四）
         location: 'bottom',
@@ -268,7 +268,7 @@ export function createUiSugarEditorPlugin(): Plugin {
       ctx.slots.register('ui.toolbar', {
         id: 'sugar-new-kojo-btn',
         title: '新建口上文件',
-        icon: '＋',
+        icon: 'add',
         order: 10,
         command: WellKnownCommands.NewKojoFile,
         when: (c) => c.project !== null,

@@ -87,7 +87,7 @@ export function createUiStatusPlugin(): Plugin {
       ctx.slots.register('ui.panel', {
         id: 'plugin-status',
         title: '插件状态',
-        icon: '◈',
+        icon: 'module',
         order: 100,
         // UI 重设计批 P1：开发者面板 → 活动栏底部齿轮位，默认不激活（定稿 §四）
         defaultActive: false,

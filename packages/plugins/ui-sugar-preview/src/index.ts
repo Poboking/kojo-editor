@@ -214,7 +214,7 @@ export function createUiSugarPreviewPlugin(): Plugin {
       ctx.slots.register('ui.panel', {
         id: 'sugar-preview',
         title: '糖预览',
-        icon: '◫',
+        icon: 'preview',
         order: 74,
         // UI 重设计批 P1：写糖时的对照视图 → 副侧栏（VSCode Markdown 预览位，定稿 §四）
         location: 'aux',

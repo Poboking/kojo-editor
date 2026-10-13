@@ -888,7 +888,7 @@ export function createUiStateReplayPlugin(): Plugin {
       ctx.slots.register('ui.panel', {
         id: 'state-replay',
         title: '状态回放',
-        icon: '⟲',
+        icon: 'history',
         order: 60,
         // UI 重设计批 P1：按需验证工具 → 副侧栏，默认不激活（定稿 §四）
         location: 'aux',

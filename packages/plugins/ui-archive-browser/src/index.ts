@@ -307,7 +307,7 @@ export function createUiArchiveBrowserPlugin(): Plugin {
       ctx.slots.register('ui.panel', {
         id: 'archive-browser',
         title: '归档浏览器',
-        icon: '▤',
+        icon: 'archive',
         order: 70,
         // UI 重设计批 P1：低频 → 副侧栏，默认不激活（定稿 §四）
         location: 'aux',

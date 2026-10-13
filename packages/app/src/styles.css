@@ -162,6 +162,20 @@ textarea,
 [contenteditable='true'] {
   caret-color: var(--accent);
 }
+
+/* 图标基类（UI P4 · §5.123）：16×16 网格、单色、`currentColor`。
+   颜色一律继承文字色——悬停变亮 / 禁用变暗 / `.on` 变 accent 都不必为图标另写规则，
+   这也是把 emoji 换成 SVG 的主要收益（emoji 不吃 `color`，永远是一群固定色）。
+   `vertical-align` 让裸图标与同行文字对齐；尺寸由调用处的 `size` 属性给，不靠 font-size。 */
+.icon {
+  display: inline-block;
+  flex: none;
+  vertical-align: -0.16em;
+}
+/* 未登记在图标表里的贡献（第三方插件的单字符 icon）按字形回落渲染 */
+.icon-glyph {
+  line-height: 1;
+}
 input:not([type='checkbox']),
 select,
 textarea {
@@ -342,6 +356,10 @@ textarea {
   border-color: transparent;
   font-size: var(--fs-1);
   border-radius: var(--radius-md);
+  /* 图标 + 文案（如「关闭项目」）同行：flex 对齐 + 固定间距，图标按钮则自然居中 */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 /* 图标按钮 hover 走淡底而非描边——避免边框闪现 */
 .toolbar-btn:hover:not(:disabled) {
@@ -349,12 +367,9 @@ textarea {
   background: var(--hover);
 }
 .toolbar-btn.on {
-  /* 图标也是"文字"：`--accent` 压在深底上实测 3.74:1（◧/⬓ 这类布局切换键） */
+  /* 图标也是"文字"：`--accent` 压在深底上实测 3.74:1（布局切换键这类图标钮） */
   color: var(--accent-text);
   background: rgba(76, 139, 245, 0.12);
-}
-.tb-icon {
-  margin-right: 4px;
 }
 
 /* 活动栏 */
@@ -375,10 +390,14 @@ textarea {
   border: none;
   background: transparent;
   color: var(--fg-dim);
+  /* 命中内置图标名 → 22px SVG；回落成单字符字形时仍按此字号渲染 */
   font-size: var(--fs-4);
   border-radius: var(--radius-md);
   padding: 0;
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .ab-item:hover {
   color: var(--fg);
@@ -546,6 +565,8 @@ textarea {
 .panel-close {
   border: none;
   padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* 拖拽把手 */
@@ -715,6 +736,8 @@ textarea {
 .editor-tab .tab-dirty {
   color: var(--amber);
   font-size: var(--fs-0);
+  display: inline-flex;
+  align-items: center;
 }
 /* 关闭按钮平时隐去（活动标签除外），悬停浮出——标签条更安静 */
 .editor-tab .tab-close {
@@ -726,7 +749,7 @@ textarea {
   line-height: 1;
   padding: 0 2px;
   /* 实测 17×17，够不到 24×24 最小可点区（关闭是会丢东西的动作，不该靠瞄准）。
-     字形仍 13px，只是把可点区补齐；× 平时靠 opacity 隐藏，占位不变故不抖动。 */
+     图标仍 13px，只是把可点区补齐；关闭钮平时靠 opacity 隐藏，占位不变故不抖动。 */
   min-width: 24px;
   min-height: 24px;
   display: inline-flex;
@@ -818,6 +841,8 @@ textarea {
   flex: 0 0 auto;
   width: 12px;
   color: var(--fg-dim);
+  display: inline-flex;
+  align-items: center;
 }
 .group-label {
   flex: 1;
@@ -1211,6 +1236,8 @@ textarea {
 }
 .dirty-dot {
   color: var(--amber);
+  display: inline-flex;
+  align-items: center;
 }
 .spacer {
   flex: 1;
@@ -2793,6 +2820,9 @@ button.erb-mode-hint.unlocked:hover {
 .sb-dirty {
   color: var(--fg-dim);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: color var(--dur-1) var(--ease-out);
 }
 .sb-dirty.on {
@@ -3210,24 +3240,18 @@ button.primary .hint {
 .toast-error {
   border-left-color: var(--red);
 }
-/* 类型图标：圆形色块 + 白字符（info = accent / error = red） */
+/* 类型图标：单色描边图标，颜色按类型给（info = accent / error = red）。
+   旧版是「色块 + 白字符」的实心圆：字符换成 SVG 后不必再垫底色——实心圆斑在
+   深底 toast 上比图标本身抢眼，而现代编辑器的通知一律只给一枚着色图标。 */
 .toast-icon {
   flex: none;
-  width: 18px;
-  height: 18px;
-  margin-top: 1px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: var(--fs-0);
-  font-weight: 700;
-  font-style: normal;
-  line-height: 1;
-  color: #fff;
-  background: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  margin-top: 2px;
+  color: var(--accent-text);
 }
 .toast-error .toast-icon {
-  background: var(--red);
+  color: var(--red);
 }
 .toast-message {
   flex: 1;
@@ -3250,6 +3274,8 @@ button.primary .hint {
   padding: 0 6px;
   color: var(--fg-dim);
   border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
 }
 .toast-close:hover {
   color: var(--fg);

@@ -9,6 +9,7 @@ import {
   type RevealGroup,
   type RevealResult,
 } from './file-tree-reveal';
+import { Icon } from './icons';
 
 interface Props {
   project: GameProject;
@@ -403,7 +404,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
       ...dirs.map((d) => (
         <li key={d.path}>
           <button className="tree-dir" style={pad} title={d.path} onClick={() => toggleSub(d.path)}>
-            <span className="caret">{subOpen.has(d.path) ? '▾' : '▸'}</span>
+            <span className="caret">
+              <Icon name={subOpen.has(d.path) ? 'chevron-down' : 'chevron-right'} size={12} />
+            </span>
             <span className="tree-dir-name">{d.name}</span>
           </button>
           {subOpen.has(d.path) ? (
@@ -480,7 +483,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
                 onClick={() => toggleGroup(g.label)}
                 onContextMenu={(e) => openMenu(e, { kind: 'group', group: g })}
               >
-                <span className="caret">{isOpen ? '▾' : '▸'}</span>
+                <span className="caret">
+                  <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+                </span>
                 <span className="group-label">{g.label}</span>
                 <span className="group-count">{g.total}</span>
               </button>
@@ -506,7 +511,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
                             if (onImportPackage) openMenu(e, { kind: 'package', dir: pkgDir, label });
                           }}
                         >
-                          <span className="caret">{isFolder ? '▾' : '▸'}</span>
+                          <span className="caret">
+                            <Icon name={isFolder ? 'chevron-down' : 'chevron-right'} size={12} />
+                          </span>
                           <span className="tree-package-name">{s.label}</span>
                           <span className="group-count">{s.files.length}</span>
                         </button>

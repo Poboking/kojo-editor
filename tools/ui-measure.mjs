@@ -1,20 +1,22 @@
 #!/usr/bin/env node
 /**
- * UI 量测 harness（HK-4「UI 系统化」六项的回归门禁，见 IMPLEMENTATION-LOG §5.121 / §5.122）。
+ * UI 量测 harness（HK-4「UI 系统化」各轮的回归门禁，见 docs/archive/IMPLEMENTATION-LOG.md §5.121–§5.124 与 docs/log/2026-10-13-ui-icons.md）。
  *
- * 它不判断"好不好看"，只把**能数的六件事**变成数字，前后各跑一次即可 diff：
+ * 它不判断"好不好看"，只把**能数的七件事**变成数字，前后各跑一次即可 diff：
  *   1. `fontSizes` / `distinctFontSizes` —— 屏幕上**实际渲染**出几档字号（半像素档 = 各子系统自造尺度的信号）
  *   2. `contrastFails` —— WCAG 对比度不达标（正文 4.5:1、大字号 3:1；半透明背景按层合成后算）
  *   3. `clipFails` —— `overflow: hidden|clip` 下被裁掉多少像素（内容截断类缺陷）
  *   4. `smallTargets` —— 小于 24×24 的交互元素（WCAG 2.5.8 最小目标）
  *   5. `radii` / `distinctRadii` —— 屏上渲染出几档圆角（半像素之外的另一种"各面板自造尺度"）
  *   6. `shadows` / `distinctShadows` —— 屏上渲染出几档阴影（浮动层级是否收敛成少数几档）
+ *   7. `glyphTexts` / `svgIcons` —— 界面上还剩几个"当图标用的符号字符"，以及渲染出多少个 SVG 图标
+ *      （emoji/几何符号当图标 = 字号、色、粗细都不受 CSS 管；这个数应当随 UI-3 单调降到 0）
  *
  * 前置：桌面壳要带着 CDP 端口起来（浏览器 `pnpm dev` 量不到桌面壳的真实渲染）：
  *   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 pnpm --filter @kojo/app tauri dev
  * 用法：node tools/ui-measure.mjs out.json      （它会自己点遍欢迎页 / 四个活动栏视图 /
  *        打开一个 ERB / 快速打开 / 设置浮层 / 新建向导，共十个状态；结果写 out.json 并打印摘要）
- * 退出码：0 = 跑完（**不代表通过**，通过与否看摘要里的四个数）。
+ * 退出码：0 = 跑完（**不代表通过**，通过与否看摘要里的那几个数）。
  *
  * 已知边界：跳过 `.monaco-editor` 内部（编辑器语法高亮另有口径）；
  * `input 13×13` 那类原生复选框会进 `smallTargets`，判读时按"表单控件"处理。
@@ -51,7 +53,8 @@ const MEASURE = `(() => {
   const lum = (c) => { const f = (v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
   const ratio = (a, b) => { const l1 = lum(a), l2 = lum(b); return Math.round(((Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)) * 100) / 100; };
   const cls = (el) => (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\\s+/).slice(0, 2).join('.') : el.tagName.toLowerCase());
-  const sizes = {}, clip = [], contrast = new Map(), small = new Map(), radii = {}, shadows = {};
+  const sizes = {}, clip = [], contrast = new Map(), small = new Map(), radii = {}, shadows = {}, glyph = {};
+  const GLYPH = /[\\u{1F000}-\\u{1FAFF}\\u{2190}-\\u{2BFF}\\u{2460}-\\u{24FF}\\u{FE0F}]/u;
   for (const el of document.querySelectorAll('body *')) {
     if (el.closest('.monaco-editor')) continue;
     const cs = getComputedStyle(el);
@@ -60,6 +63,8 @@ const MEASURE = `(() => {
     if (r.width < 2 || r.height < 2) continue;
     const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== '');
     if (own) {
+      const txt = el.textContent.trim();
+      if (txt.length <= 2 && GLYPH.test(txt)) glyph[txt] = (glyph[txt] ?? 0) + 1;
       const px = Math.round(parseFloat(cs.fontSize) * 100) / 100;
       sizes[px] = (sizes[px] ?? 0) + 1;
       const fg = parse(cs.color);
@@ -97,6 +102,9 @@ const MEASURE = `(() => {
     distinctRadii: Object.keys(radii).length,
     shadows,
     distinctShadows: Object.keys(shadows).length,
+    glyphTexts: glyph,
+    distinctGlyphTexts: Object.keys(glyph).length,
+    svgIcons: document.querySelectorAll('svg.icon').length,
     clipFails: clip.sort((a, b) => b.clip - a.clip).slice(0, 12),
     contrastFails: [...contrast.entries()].map(([k, v]) => ({ k, ratio: v.got, need: v.need, n: v.n, sample: v.sample })).sort((a, b) => a.ratio - b.ratio).slice(0, 12),
     smallTargets: [...small.values()].sort((a, b) => b.n - a.n).slice(0, 14),

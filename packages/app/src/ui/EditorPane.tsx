@@ -23,6 +23,7 @@ import { ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
 import { clampRange, isErbLike } from './lift-preview';
 import { pathLabelParts, splitPath } from './path-label';
+import { Icon } from './icons';
 import { perf } from '../perf';
 import {
   editorLineHeightPx,
@@ -1199,7 +1200,7 @@ export function EditorPane({
           <span className="file-base">{labelParts.base}</span>
         </span>
         <span className={`dirty-dot ${dirty ? 'on' : ''}`} title={dirty ? '未保存' : '已保存'}>
-          {dirty ? '●' : ''}
+          {dirty ? <Icon name="circle-filled" size={9} /> : null}
         </span>
         {isErbLike(filePath) && !inWorkspace(filePath) ? (
           <>
@@ -1214,7 +1215,7 @@ export function EditorPane({
                 onClick={() => setErbEditable(filePath, false)}
                 title="已破例允许编辑这一份文件（只对本次会话有效，关闭编辑器即失效），语法糖视图同时关闭——要动手改的原文必须看得见。点击收回这次破例。"
               >
-                ✏ 已解锁编辑
+                <Icon name="edit" size={13} /> 已解锁编辑
               </button>
             ) : (
               <>
@@ -1254,7 +1255,15 @@ export function EditorPane({
           </>
         ) : null}
         <span className="spacer" />
-        <span className="editor-status">{error ? `⚠ ${error}` : status}</span>
+        <span className="editor-status">
+          {error ? (
+            <>
+              <Icon name="warning" size={13} /> {error}
+            </>
+          ) : (
+            status
+          )}
+        </span>
         <button
           className="primary small"
           onClick={() => void save()}

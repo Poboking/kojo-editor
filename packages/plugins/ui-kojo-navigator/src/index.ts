@@ -461,7 +461,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
       ctx.slots.register('ui.panel', {
         id: 'kojo-navigator',
         title: '函数树',
-        icon: '⑃',
+        icon: 'structure',
         order: 40,
         // UI 重设计批 P1：与壳层内建口上文件树合并为单 Explorer（定稿 Q5）
         group: 'explorer',
