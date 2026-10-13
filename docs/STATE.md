@@ -1,0 +1,45 @@
+# STATE.md — 项目现状（数字的唯一真源；有变动顺手改这里）
+
+> 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
+
+## 一、基线（2026-10-13，§5.128 批之后本机实测）
+
+| 项 | 读数 |
+|---|---|
+| 全量测试 | **1844 passed / 14 skipped（1858）**；104 文件过 / 8 跳（112） |
+| typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
+| 审计 | `pnpm audit:decoupling` ✅（16 插件；A–D 四项全绿） |
+| Rust | `cargo test --lib` **18 项全绿**（改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
+| app build | ✓ 38.71s（§5.112 读数，此后未改构建面） |
+
+⚠ skipped 跨主机不必相等：存档 / 语料在位与否会让 corpus 用例在 passed / skipped 间移动。
+
+## 二、语料读数（真实工程）
+
+- 索引：**99,104 函数 / 2,285 文件**，全量索引 2.9s（历史口径）；家族覆盖率 **98.91%**。
+- 性能（§5.128）：**热开三段 0.63 / 1.57 / 1.60s**（原 2.66 / 3.43 / 3.45s，逐文件 stat 已折进目录遍历）；冷开 16.5s。
+- 条件抽取：95,504 函数中 31,609 含状态依赖；未解析 0.04%。
+- 状态回放（save03 × K49）：未知率 **32.0%**（3,741 谓词；exact 836 函数），基线不变式钉在测试里。
+- 结构闸门（§5.109）：3,818 文件 / 4,115,009 行**零误报**，最慢单文件体检 30.0ms；"删 `ENDIF` → 💡 补回 → 复检为零"闭环过。
+- 编码：utf-8-bom / utf-8 / shift_jis / utf-16 读写往返；golden 六档存档 roundtrip 全等。
+
+## 三、环境与路径（本机 = haruki 主机）
+
+- 工作目录：`C:\DSH\kojo-editor-project`（本 clone）；同机另有 `C:\DSH\kojo-editor` / `C:\DSH\master-kojo-editor` 等其他工作树（共享主机，**动别人的树前先问**）。
+- 真实语料：`C:\game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`（**整体只读，零写入是硬约束**）。
+- 存档库：`C:\Game\eratw-save\sav\`（语料同级目录；**语料本体不放 sav**）。
+- 代理：github 直连时通时断 ⇒ 本 clone 已配 repo 本地代理 `http.proxy=127.0.0.1:7890`（新 clone 配一次；**永不改全局配置**）。
+- 桌面壳：`pnpm --filter @kojo/app tauri dev`；CDP 9222；**同一工作树只能一个桌面实例**。
+
+## 四、剩余欠账（数字/方向性的；认领的活在 BOARD.md）
+
+- 纪要 §5 清单余项：**直连模式开关 · 多剧本编号上树 · 中日对照**。
+- 性能线下一步：热开 1.60s 里剩"两次快照读 + 装配"；冷开 16.5s 里剩 6,855 次读与解码 ⇒ 候选 #21 抽取上并行通道 / #20 保存后级联（§5.128 结论：`stat_many` 与再加并发度已证明不必要）。
+- ERB 波浪线只做**结构类**（三类可证明错误）；词法 / 表达式级校验留给 condition-extractor 的表达式解析器复用，另一批。
+- 糖视图改虚拟文档：等用户拍板（三问在 BOARD §D）。
+- 桌面壳真实终端深度冒烟：本机可行（`os error 231` 已不复现），逐项读 MANUAL-CHECKLIST。
+
+## 五、版图速览（代码地图）
+
+插件 16：`erb-parser` / `eratw-adapter` / `convention-linter` / `condition-extractor` / `sav-parser` / `state-replay` / `kojo-sugar` / `ui-convention-report` / `ui-kojo-navigator` / `ui-state-replay` / `ui-archive-browser` / `ui-snapshot-injector` / `ui-plugin-status` / `ui-sugar-preview` / `ui-sugar-editor` / `ui-sugar-lift`。
+目录结构与关键文件注释见 `docs/ARCHITECTURE.md`；批次明细在 `docs/log/`。

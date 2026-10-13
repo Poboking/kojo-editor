@@ -138,7 +138,7 @@ export interface EditorCodeActionContribution extends ContributionBase {
     /**
      * 文件行数（additive，2026-10-12「内核优化」批）：宿主提供的中性事实，
      * 供贡献方**按文件体量自行决定是否降级**——超长文件上的全量分析会阻塞
-     * 主线程（实测见 `docs/PERF-REVIEW-2026-10-11.md` §7.6）。
+     * 主线程（实测见 `docs/archive/PERF-REVIEW-2026-10-11.md` §7.6）。
      * 缺省 = 体量未知，请按"不降级"处理（与旧版行为一致）。
      */
     lineCount?: number;

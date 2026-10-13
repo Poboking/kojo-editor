@@ -1488,7 +1488,7 @@ export function hasCandidates(result: SugarLiftResult): boolean {
  * - **一行失败只影响那一行**——该行原样保留为 ERB（fail-visible），不向上传播；
  * - 映射不上的行**显式**计入 `stats.nativeByReason`（不静默）。
  *
- * 依据：`docs/LIFT-REMEASURE-2026-10-12.md` §7.1。
+ * 依据：`docs/archive/LIFT-REMEASURE-2026-10-12.md` §7.1。
  *
  * ## 语义边界
  *

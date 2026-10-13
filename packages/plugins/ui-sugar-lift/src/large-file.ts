@@ -6,7 +6,7 @@
  * 本插件的贡献都是**整篇文档量级**的分析：`sugar.lift.liftSuggest` 要先做控制流
  * 扫描（`scanControlFlow`）+ 逐条条件表达式解析（`parseExpression`），再对候选做
  * round-trip 转译自证。实测（Node v22.22.2，真实语料，见
- * `docs/PERF-REVIEW-2026-10-11.md` §7.6）：
+ * `docs/archive/PERF-REVIEW-2026-10-11.md` §7.6）：
  *
  * | 文件 | 行数 | `liftSuggest` |
  * |---|---|---|

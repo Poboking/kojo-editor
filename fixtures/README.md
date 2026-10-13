@@ -2,7 +2,7 @@
 
 本目录由 [`tools/gen-fixtures.mjs`](../tools/gen-fixtures.mjs) 生成，全部为**合成数据**，
 目的是让**没有真实 eraTW 目录**的贡献者也能跑通集成冒烟（"迷你模式"）。
-真实游戏语料不入库（见 `docs/HANDOFF.md` §五）。
+真实游戏语料不入库（验证矩阵见 `AGENTS.md` §三）。
 
 ## 目录
 

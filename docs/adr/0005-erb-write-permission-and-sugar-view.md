@@ -2,8 +2,8 @@
 
 - **日期**：2026-10-12
 - **状态**：已接受（用户拍板）
-- **相关**：`docs/KOJO_PROJECT_AND_KOJO_TREE_DISCUSSION_MINUTES.md` §2 写保护铁律 / §7 双真相源；
-  IMPLEMENTATION-LOG §5.49；提交 `7012dd9`（本组）与 `3d1f8d0`（语法糖组）
+- **相关**：`docs/archive/KOJO_PROJECT_AND_KOJO_TREE_DISCUSSION_MINUTES.md` §2 写保护铁律 / §7 双真相源；
+  `docs/archive/IMPLEMENTATION-LOG.md` §5.49；提交 `7012dd9`（本组）与 `3d1f8d0`（语法糖组）
 
 ## 背景
 
@@ -86,4 +86,4 @@ const sugarViewAvailable = !editable;
 - 双真相源提示（面板常驻条 + 部署向导文案）与本 ADR 同源：口径是
   **「工作区为权威 · 游戏目录仅部署目标」**，写侧的体现就是本 ADR 的两道正交轴。
 - 本 ADR 只定口径，不含实现。**糖视图与解锁 UI 的代码归语法糖组**（分工见
-  HANDOFF），本组不代做；本组负责的是轴一（已在 `7012dd9` 落地）与工作区概念的可用性。
+  `docs/archive/HANDOFF.md`），本组不代做；本组负责的是轴一（已在 `7012dd9` 落地）与工作区概念的可用性。

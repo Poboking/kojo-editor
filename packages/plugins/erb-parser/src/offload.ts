@@ -11,7 +11,7 @@
  * ## 分工（铁律：IO 不搬）
  *
  * - 主线程：`walkDir` + `stat` + `readText`（Tauri IPC 留主线程——worker 内 invoke
- *   的可用性未经本仓库验证，不值得赌；见 `docs/PERF-REVIEW-2026-10-11.md` §四）；
+ *   的可用性未经本仓库验证，不值得赌；见 `docs/archive/PERF-REVIEW-2026-10-11.md` §四）；
  * - 并行通道：**只搬纯解析**（`text` → `ErbFile`，纯数据进、纯数据出）。
  *
  * ## 单一真源
