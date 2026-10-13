@@ -236,6 +236,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   const skeleton = planSkeleton(lines, ctx);
   // `SIF 条件` + 下一行单语句 → 「如果 …：」块头 + 正文 +1 层缩进（批 H）
   const sif = planSif(lines, ctx);
+  // 数据表（PRINTDATA 系）→ 块头标注 + 条目可读化（批 N；判据不满足的块整块不动）
+  const data = planDataBlocks(lines, ctx);
   // 函数头 → 「时机 …：」（批 I）。**分野表缺席 = 一个头都不标**（不猜），与
   // `codegen.resolveFace` 的 `timing-face-unknown` fail-closed 同一条纪律。
   const faceTable = deps.faceTable?.();
@@ -312,6 +314,56 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         text: '',
         indent: ctx.indentAt(ln, raw),
         visible: false,
+        reason: null,
+      });
+      continue;
+    }
+
+    // 数据表（PRINTDATA 系，批 N）：块头一条结构标注，条目行降成缩进的候选清单。
+    // **不借用任何糖关键字**（糖表层没有数据表写法；写成 `随机：` 会"看着像糖、写回语义不同"）。
+    const dataLabel = data.labelAt.get(ln);
+    if (dataLabel !== undefined) {
+      recs.push({
+        line: ln,
+        kind: 'control',
+        text: dataLabel,
+        indent: ctx.indentAt(ln, raw),
+        visible: true,
+        reason: null,
+      });
+      continue;
+    }
+    if (data.absorbed.has(ln)) {
+      recs.push({
+        line: ln,
+        kind: 'control',
+        text: '',
+        indent: ctx.indentAt(ln, raw),
+        visible: false,
+        reason: null,
+      });
+      continue;
+    }
+    const dataEntry = data.entryAt.get(ln);
+    if (dataEntry !== undefined) {
+      const body = dataEntry.replace(/[ \t　]+$/, '');
+      if (body.length === 0) {
+        recs.push(native(ln, 'data-or-skip')); // 空条目：没有可显示的东西
+        continue;
+      }
+      const text = hasInlineCondition(body)
+        ? inlineConditionsToSugar(body, deps)
+        : readableText(body, deps);
+      if (text === undefined) {
+        recs.push(native(ln, 'inline-condition'));
+        continue;
+      }
+      recs.push({
+        line: ln,
+        kind: 'speech',
+        text,
+        indent: data.entryIndentAt.get(ln) ?? ctx.indentAt(ln, raw),
+        visible: true,
         reason: null,
       });
       continue;
@@ -493,7 +545,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   // 放在最后统一做（而不是在每个 push 点手动加）：一处口径，漏改不了。
   // 块头自身不吃 +1（`starts` 从 open+1 起算），被吸收的 RESETCOLOR 不可见故无影响。
   for (const r of recs) {
-    const bump = color.bumpAt(r.line) + sif.bumpAt(r.line) + fnBump(r.line) - skeleton.dedentAt(r.line);
+    const bump =
+      color.bumpAt(r.line) + sif.bumpAt(r.line) + fnBump(r.line) - skeleton.dedentAt(r.line);
     if (bump !== 0) r.indent = Math.max(0, r.indent + bump);
   }
 
@@ -960,6 +1013,103 @@ function planColorBlocks(lines: string[], ctx: ProjContext): ColorPlan {
     absorbed,
     bumpAt: (line) => (line >= 1 && line <= total ? (bump[line] ?? 0) : 0),
   };
+}
+
+/* ============================== 数据表（PRINTDATA 系） ============================== */
+
+/**
+ * 数据表条目指令。真实语料实测（2026-10-13，全 2,285 文件）：
+ * 3,685 个 `PRINTDATA*` 块里，条目指令**只有这两种**——
+ * `DATAFORM` 19,0xx 行｜`DATA` 42x 行；块外出现的 `DATAFORM/DATA` = **0 行**（不存在游离用法）。
+ */
+const DATA_ENTRY_RE = /^(DATAFORM|DATA)\b[ \t　]*(.*)$/;
+
+interface DataPlan {
+  /** 开词行 → 块头标签（可见 control 行） */
+  labelAt: Map<number, string>;
+  /** 条目行 → 条目正文（原文；可读化交给既有的 FORM 管线，失败即单行降级） */
+  entryAt: Map<number, string>;
+  /** 条目行的显示缩进 = 块头深度 + 1（不取源文本缩进：源里写几层空格是作者的习惯，不是结构） */
+  entryIndentAt: Map<number, number>;
+  /** 被吸收的 `ENDDATA`（其信息已在块头标签里，不必再占一行） */
+  absorbed: Set<number>;
+}
+
+/**
+ * 数据表 → 「块头标签 + 缩进的候选清单」（批 N，糖视图 B 层）。
+ *
+ * **为什么这不是"升糖"**：糖表层没有数据表写法（规范 v1.3 §3.6 的 `随机：` 编译成
+ * `LOCAL=RAND` + `SELECTCASE`，产物机制与引擎的 data-print 不同，且表达不了"轮流"那一半）。
+ * 所以这里**不借用任何糖关键字**，只给一条**结构标注**——与"裸指令打空行"那处
+ * 同属"刻意显示口径"（见本文件空行批注的先例），读者据此知道下面几行是**择一**关系。
+ *
+ * **标签只陈述核对得上事实**：「择一输出」是这一族从源码形状就能确认的行为（块内是
+ * 若干条互斥的同一动作描述）；而 `…L`=轮流、`…W`/`…K`/`…D` 各是什么，**没有引擎侧
+ * 权威出处**，所以不替读者下结论——变体词原样回显在标签括号里，需要的人一眼能看到。
+ *
+ * **判据（全部可证明，配不上就整块不动）**：
+ * - 块内只允许 条目行 / 空行 / 注释行 ⇒ 出现任何其它语句（`DATALIST`/`ENDLIST`、
+ *   `IF`、嵌套数据表…）整块放弃。实测 3,685 块中 **2,812 块纯条目**，
+ *   873 块含 `DATALIST` 分组（2,380 对）——分组的语义未核实 ⇒ 那 873 块原样保留，
+ *   它们的条目也**不**投影（否则块头与条目会一处一处地各说各话）。
+ * - 必须找到配对的 `ENDDATA`（深度计数，跨嵌套 `IF` 也能对上；找不到 = 结构异常，不动）。
+ */
+function planDataBlocks(lines: string[], ctx: ProjContext): DataPlan {
+  const total = lines.length;
+  const labelAt = new Map<number, string>();
+  const entryAt = new Map<number, string>();
+  const entryIndentAt = new Map<number, number>();
+  const absorbed = new Set<number>();
+
+  for (let ln = 1; ln <= total; ln++) {
+    const st = ctx.stmtAt(ln);
+    if (!st || !PRINTDATA_OPEN.has(st.kind)) continue;
+
+    const entries: number[] = [];
+    let depth = 1;
+    let ok = true;
+    let endLine = -1;
+    for (let j = ln + 1; j <= total; j++) {
+      const s = ctx.stmtAt(j);
+      const c = contentOf(lines[j - 1]!);
+      if (s && s.kind === 'ENDDATA') {
+        depth--;
+        if (depth === 0) {
+          endLine = j;
+          break;
+        }
+        continue;
+      }
+      if (s) continue; // 任何别的语句（含嵌套开词）都算"不纯"，由下面的 ok 判定处理
+      const m = DATA_ENTRY_RE.exec(c);
+      if (m) entries.push(j);
+      else if (c.length > 0 && !c.startsWith(';')) ok = false;
+    }
+    if (endLine < 0) continue;
+    if (entries.length === 0) continue;
+
+    // 纯度判定：块内出现过任何语句行（IF / DATALIST / 嵌套数据表…）就整块放弃
+    for (let j = ln + 1; j < endLine; j++) {
+      const s = ctx.stmtAt(j);
+      if (s && s.kind !== 'ENDDATA') {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+
+    const echo = st.kind === 'PRINTDATA' ? '' : `，${st.kind}`;
+    labelAt.set(ln, `数据表 · 择一输出（以下 ${entries.length} 条${echo}）：`);
+    absorbed.add(endLine);
+    for (const j of entries) {
+      const m = DATA_ENTRY_RE.exec(contentOf(lines[j - 1]!));
+      if (!m) continue;
+      entryAt.set(j, m[2]!);
+      entryIndentAt.set(j, st.depth + 1);
+    }
+  }
+
+  return { labelAt, entryAt, entryIndentAt, absorbed };
 }
 
 /* ============================== 结构上下文 ============================== */

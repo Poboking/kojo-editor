@@ -29,6 +29,10 @@ const deps = (): LiftDeps => ({
 
 const project = (source: string) => liftProject(deps(), { source });
 
+/** 便捷：某成因保留原生的行数 */
+const nativeCount = (r: { stats: { nativeByReason: Array<{ reason: string; count: number }> } }, reason: string): number =>
+  r.stats.nativeByReason.find((x) => x.reason === reason)?.count ?? 0;
+
 /** 便捷：段文本按行展开（去空尾） */
 const segLines = (s: SugarProjectSegment): string[] => s.sugarText.split('\n');
 
@@ -1004,5 +1008,100 @@ describe('糖投影 · 只藏不显的段（契约：`lineCount === 0` 时宿主
     expect(empty[0]!.sugarText).toBe('');
     // 区间覆盖被吸收的三行
     expect(`${empty[0]!.fromLine}-${empty[0]!.toLine}`).toBe('2-4');
+  });
+});
+
+/* ==================== 批 N：数据表（PRINTDATA 系）→ 结构标注 + 候选清单 ==================== */
+
+describe('糖投影 · 数据表块（批 N；不借用糖关键字，只给结构标注）', () => {
+  const plain = [
+    'PRINTDATA',
+    '\tDATAFORM 露出了不满意的表情…',
+    '\tDATAFORM 随意应付了几句…',
+    'ENDDATA',
+  ].join('\n');
+
+  it('纯条目块 → 一段：块头标注 + 每条候选缩进一级；`ENDDATA` 被吸收不占行', () => {
+    const r = project(plain);
+    expect(r.segments).toHaveLength(1);
+    expect([r.segments[0]!.fromLine, r.segments[0]!.toLine]).toEqual([1, 4]);
+    expect(segLines(r.segments[0]!)).toEqual([
+      '数据表 · 择一输出（以下 2 条）：',
+      '\t露出了不满意的表情…',
+      '\t随意应付了几句…',
+    ]);
+  });
+
+  it('变体词**原样回显**，但绝不替读者断言随机 / 轮流（无引擎侧出处）', () => {
+    const r = project(
+      ['PRINTDATAL', '\tDATAFORM 一条', '\tDATAFORM 二条', '\tDATAFORM 三条', 'ENDDATA'].join('\n'),
+    );
+    const head = segLines(r.segments[0]!)[0]!;
+    expect(head).toContain('PRINTDATAL');
+    expect(head).toContain('以下 3 条');
+    expect(head).not.toMatch(/随机|轮流/);
+  });
+
+  it('块内含 `DATALIST` 分组 → 整块不动（分组语义未核实，宁可不投影）', () => {
+    const r = project(
+      ['PRINTDATA', '\tDATALIST', '\t\tDATAFORM 甲组', '\tENDLIST', '\tDATAFORM 乙组', 'ENDDATA'].join('\n'),
+    );
+    expect(r.segments).toHaveLength(0);
+  });
+
+  it('块内混入别的语句（`PRINTL`）→ 块头与候选一起保留原代码，不出现"半投影"的块', () => {
+    const r = project(['PRINTDATA', '\tDATAFORM 一条', '\tPRINTL 混进来的', 'ENDDATA'].join('\n'));
+    expect(r.segments.every((s) => !s.sugarText.includes('数据表'))).toBe(true);
+    expect(r.segments.every((s) => !s.sugarText.includes('一条'))).toBe(true);
+  });
+
+  it('没有配对 `ENDDATA` → 不动（结构异常不猜）', () => {
+    const r = project(['PRINTDATA', '\tDATAFORM 一条', '\tDATAFORM 二条'].join('\n'));
+    expect(r.segments).toHaveLength(0);
+  });
+
+  it('`DATA` 也是条目指令（真实语料实测存在）→ 同样进候选清单', () => {
+    const r = project(['PRINTDATAW', '\tDATA 甲', '\tDATA 乙', 'ENDDATA'].join('\n'));
+    expect(segLines(r.segments[0]!)).toEqual(['数据表 · 择一输出（以下 2 条，PRINTDATAW）：', '\t甲', '\t乙']);
+  });
+
+  it('数据表嵌在 `IF` 里：候选行比块头深一级（区间内缩进归一后仍成立）', () => {
+    const r = project(
+      ['IF CFLAG:2 >= 500', '\tPRINTDATA', '\t\tDATAFORM 常客呢', '\t\tDATAFORM 生面孔', '\tENDDATA', 'ENDIF'].join(
+        '\n',
+      ),
+    );
+    const lines = segLines(r.segments[0]!);
+    const headIdx = lines.findIndex((l) => l.includes('数据表'));
+    expect(headIdx).toBeGreaterThanOrEqual(0);
+    const base = /^\t*/.exec(lines[headIdx]!)![0]; // 候选行恒比块头深一级（不管外层有几层 IF）
+    expect(lines[headIdx + 1]).toBe(base + '\t常客呢');
+    expect(lines[headIdx + 2]).toBe(base + '\t生面孔');
+  });
+
+  it('空条目（`DATAFORM` 裸写）→ 只降级那一行，块头与其余候选照常投影', () => {
+    const r = project(['PRINTDATA', '\tDATAFORM', '\tDATAFORM 有内容', 'ENDDATA'].join('\n'));
+    expect(r.segments.some((s) => s.sugarText.includes('数据表 · 择一输出（以下 2 条）：'))).toBe(true);
+    expect(r.segments.some((s) => s.sugarText.split('\n').includes('有内容'))).toBe(true);
+    expect(nativeCount(r, 'data-or-skip')).toBe(1);
+  });
+
+  it('条目里出现解析不了的行内条件 → 只降级那一行', () => {
+    const r = project(
+      ['PRINTDATA', '\tDATAFORM 前半 \\@ A ? x # y \\@ 后半 \\@', '\tDATAFORM 正常一条', 'ENDDATA'].join('\n'),
+    );
+    expect(nativeCount(r, 'inline-condition')).toBe(1);
+    expect(r.segments.some((s) => s.sugarText.includes('正常一条'))).toBe(true);
+  });
+
+  it('块外的 `DATAFORM` 不动——本批判据来自**结构**（在块内），不是行首正则', () => {
+    const r = project(['DATAFORM 游离的', 'PRINTL 一句'].join('\n'));
+    expect(r.segments.every((s) => !s.sugarText.includes('游离的'))).toBe(true);
+  });
+
+  it('口径不静默：数据表块的四行都必须落进三类计数之一', () => {
+    const r = project(plain);
+    expect(r.stats.projectedLines + r.stats.passthroughLines + r.stats.nativeLines).toBe(r.stats.totalLines);
+    expect(r.stats.projectedLines).toBe(4);
   });
 });

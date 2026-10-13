@@ -86,6 +86,15 @@ const STATE_ASSIGN_RE =
  * （135,720 中 67,808），而这些行的正文就是要给读者看的台词——不投影就等于把台词锁在参数里。
  */
 const HEART_LINE_RE = /^\s*CALL\s+HPH_PRINT\b/i;
+/**
+ * 批 N 的尺子：数据表条目行（`DATAFORM` / `DATA`）。实测全语料 **19,441 + 722 行**，
+ * 且**全部**在某个数据表块内（块外游离用法 = 0 行）——这些行的正文就是要给读者看的
+ * 候选文案，不投影就等于把 1.9 万行台词锁在 `DATAFORM` 前缀后面。
+ *
+ * 判据上限（不是缺陷，是刻意的保守）：含 `DATALIST/ENDLIST` 分组的 873 / 3,685 块
+ * **整块不投影**（分组语义无引擎侧出处，不替读者下结论），所以本尺子天花板 ≈ 76%。
+ */
+const DATA_ENTRY_RE = /^\s*(DATAFORM|DATA)\b/;
 
 interface Totals {
   files: number;
@@ -116,6 +125,9 @@ interface Totals {
   /** `CALL HPH_PRINT` 行数（批 K 的尺子）与其中显示成「心形 …」的行数 */
   heartLines: number;
   heartProjected: number;
+  /** 数据表条目行数（批 N 的尺子）与其中显示成候选清单的行数 */
+  dataLines: number;
+  dataProjected: number;
 }
 
 const zero = (): Totals => ({
@@ -139,6 +151,8 @@ const zero = (): Totals => ({
   assignProjected: 0,
   heartLines: 0,
   heartProjected: 0,
+  dataLines: 0,
+  dataProjected: 0,
 });
 
 const pct = (a: number, b: number): string => (b === 0 ? '—' : `${((a / b) * 100).toFixed(1)}%`);
@@ -153,6 +167,7 @@ function line(t: Totals, label: string): string {
     `｜**函数头可标率 ${pct(t.headProjected, t.headLines)}**（${t.headProjected}/${t.headLines}）` +
     `｜**状态赋值可读率 ${pct(t.assignProjected, t.assignLines)}**（${t.assignProjected}/${t.assignLines}）` +
     `｜**演出行可投影率 ${pct(t.heartProjected, t.heartLines)}**（${t.heartProjected}/${t.heartLines}）` +
+    `｜**数据表条目可读率 ${pct(t.dataProjected, t.dataLines)}**（${t.dataProjected}/${t.dataLines}）` +
     `｜段 ${t.segments}（最多 ${t.maxSegments}/文件）`
   );
 }
@@ -263,8 +278,15 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
         let assignCovered = 0;
         let heart = 0;
         let heartCovered = 0;
+        let dataRows = 0;
+        let dataCovered = 0;
         for (let ln = 1; ln <= srcLines.length; ln++) {
           const text = srcLines[ln - 1] ?? '';
+          if (DATA_ENTRY_RE.test(text)) {
+            dataRows++;
+            if (covered.has(ln)) dataCovered++;
+            continue;
+          }
           if (HEART_LINE_RE.test(text)) {
             heart++;
             if (covered.has(ln)) heartCovered++;
@@ -317,6 +339,8 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           t.assignProjected += assignCovered;
           t.heartLines += heart;
           t.heartProjected += heartCovered;
+          t.dataLines += dataRows;
+          t.dataProjected += dataCovered;
         }
         segBuckets[bucketOf(r.segments.length)]!++;
       }
@@ -403,6 +427,19 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 撤掉批 K → 0%，且段数会**涨回** 4.3 万（演出行原先都在切断糖段）。
       expect(total.heartProjected / Math.max(1, total.heartLines)).toBeGreaterThan(0.9);
       expect(kojo.heartProjected / Math.max(1, kojo.heartLines)).toBeGreaterThan(0.9);
+      // 批 N：数据表条目（`DATAFORM` / `DATA`）→ 块头结构标注 + 缩进候选清单。
+      // 实测 **57.4%**（10,421 / 18,154）。这个数的上限是**刻意保守**换来的：
+      // 全语料 3,685 个 `PRINTDATA*` 块里只有 2,812 块是纯条目，其余 873 块含
+      // `DATALIST/ENDLIST` 分组（2,380 对）——分组语义没有引擎侧权威出处，
+      // 于是那 873 块的条目也**不**投影（块头与条目必须同进同退，半投影最坏）。
+      // 同样刻意不声称的：`…L` / `…W` / `…K` / `…D` 变体的差别（变体词只**原样回显**在括号里，
+      // 不写成"随机 / 轮流"——糖表层没有数据表写法，冒充有就是 §5.66 否证过的那类错误）。
+      // 退化落点**当场实测**：摘掉批 N ⇒ 读数 **0.0%（0/18,154）**、行覆盖回落 61.0%、
+      // 段数涨回 287,805（+2,259）——所以这条尺子真的会红，不是装饰。
+      // 注意方向：放宽纯度判据（放过 `DATALIST` 块）只会让读数**升**，
+      // 因此本尺子守的是"接线断掉"，语义保守那条由批 N 的判据单测守。
+      expect(total.dataProjected / Math.max(1, total.dataLines)).toBeGreaterThan(0.5);
+      expect(kojo.dataProjected / Math.max(1, kojo.dataLines)).toBeGreaterThan(0.5);
 
       await kernel.stop();
     },
