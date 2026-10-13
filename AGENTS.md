@@ -52,12 +52,13 @@ node tools/smoke-tauri-ipc.mjs "C:\game\eratw-sub-modding-eratw4.980"   # 真实
 - rebase 解冲突逐文件 add + `git diff --cached` 过目（`add -A` 会把冲突标记提交进历史）；提交后全仓扫 `^(<<<<<<<|=======|>>>>>>>)( |$)`。
 - 提交信息：Conventional Commits **中文标题**。
 
-## 五、文档纪律（2026-10-13 重构后，取代旧的共享追加 + 取号制）
+## 五、文档纪律（2026-10-13 二改：**文档只做认领与交付**）
 
-- **活文件**：`AGENTS.md` / `docs/STATE.md` / `docs/BOARD.md` / `docs/PITFALLS.md` / `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md`；规格类 `ARCHITECTURE` / `BASELINES` / `SYNTAX-SUGAR-SURFACE-SPEC` / `USER-GUIDE` / `RESEARCH` / `adr/`。
-- **每批一条记录**：`docs/log/YYYY-MM-DD-<slug>.md`，**≤60 行**，无全局编号（撞号仪式消失）。数字有变动顺手对齐 `STATE.md`。
-- **零代码 + 零新事实的批次不写 log**（提交信息足矣）。**不再往 archive / 旧大文件追加任何东西**。
-- `BOARD.md` 只活在办行：认领时写行、完成时**删行**（历史由 git 保留）。人工勾验清单在 MANUAL-CHECKLIST。
+- **只写两件事**：①**认领**——`docs/BOARD.md` 写一行「认领：<主机> <日期>」；②**交付**——删行 + 回执（读数 + 取舍）**写进提交信息**。
+- **此外不写任何文档**：不写批次 log、不写总结 / 分析 / 报告、不举行取号仪式。历史由 git 保留，`docs/archive/` 冻结不再追加。
+- 仅两个豁免：硬坑（会造成返工的实际陷阱）一行一条进 `docs/PITFALLS.md`；基线数字（测试数等）真变时顺手改 `docs/STATE.md` 对应行。
+- 规格类文档（`ARCHITECTURE` / `BASELINES` / `SYNTAX-SUGAR-SURFACE-SPEC` / `USER-GUIDE` / `adr/`）只在实现与文档冲突且实现是对的时改一行算一行，不做重写。
+- 旧制残留：`docs/log/` 各文件为历史存档，不再新增；`docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` 供发版判据引用，不再是看板索引。
 
 ## 六、分工边界与冲突纪律
 
