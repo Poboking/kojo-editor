@@ -275,7 +275,14 @@ export function createUiConditionMatrixPlugin(): Plugin {
           },
           (props.renderIcon?.('popout', 14) as ReactNode) ?? '浮动',
         );
-        const toolbar = createElement('div', { className: 'cm-toolbar' }, charaSelect, filterInput, floatBtn);
+        // 已在浮窗里时不再渲染「浮动」入口（浮窗框自带拖动 / 缩放 / 停靠）
+        const toolbar = createElement(
+          'div',
+          { className: 'cm-toolbar' },
+          charaSelect,
+          filterInput,
+          props.floating ? null : floatBtn,
+        );
 
         const status = createElement(
           'div',

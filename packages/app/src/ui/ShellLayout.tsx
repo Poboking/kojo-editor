@@ -1051,7 +1051,7 @@ export function ShellLayout(props: Props): ReactElement {
               </button>
             </header>
             <div className="floating-panel-body">
-              <PanelBody contribution={p} />
+              <PanelBody contribution={p} floating />
             </div>
             <div
               className="floating-panel-resize"

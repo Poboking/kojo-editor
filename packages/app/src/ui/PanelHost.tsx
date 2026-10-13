@@ -22,13 +22,16 @@ const renderIcon = (name: string, size?: number): ReactElement => <Icon name={na
 
 export function PanelBody({
   contribution,
+  floating,
 }: {
   contribution: Pick<UIPanelContribution, 'id' | 'component'>;
+  /** 浮窗态（2026-10-14 UI 浮动批）：面板正渲染在可移动浮窗里时转发给贡献方，供其调整自身 chrome */
+  floating?: boolean;
 }): ReactElement {
   const Comp = contribution.component as ComponentType<UIPanelProps>;
   return (
     <div className={`panel panel-${contribution.id}`}>
-      <Comp renderIcon={renderIcon} />
+      <Comp renderIcon={renderIcon} {...(floating ? { floating: true } : {})} />
     </div>
   );
 }

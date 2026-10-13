@@ -34,6 +34,13 @@ export interface UIPanelProps {
    * 纯文本字形」编写；图标是锦上添花，绝不能在缺省时渲染成空白。
    */
   readonly renderIcon?: (name: string, size?: number) => unknown;
+  /**
+   * 宿主注入的浮窗态（additive，2026-10-14 UI 浮动批）：本面板正渲染在可移动浮窗里时为 true。
+   *
+   * **可选**：旧宿主 / 无渲染环境缺省（视作非浮动）——贡献方可据此隐藏面板自身的「浮动」
+   * 入口等冗余 chrome，但必须容忍缺省。浮窗本体的拖动/缩放/停靠由宿主的窗口框提供。
+   */
+  readonly floating?: boolean;
 }
 
 /**
