@@ -90,7 +90,7 @@ fixtures/                     # 合成样本（真实游戏数据不入库）
 
 ```bash
 pnpm install
-pnpm test              # vitest：单元 + 集成测试（未设游戏目录时集成冒烟自动跳过；实测 958 通过 / 6 跳过）
+pnpm test              # vitest：单元 + 集成测试（未设游戏目录时集成冒烟自动跳过；实测 1843 通过 / 14 跳过）
 pnpm typecheck         # root 包类型检查
 pnpm audit:decoupling  # 「一切皆插件」解耦审计（内核零游戏名 / 插件依赖纪律）
 ```

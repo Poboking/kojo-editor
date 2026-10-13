@@ -8279,7 +8279,7 @@ harness 从"app 当前状态"起步，第一次跑时 app 在欢迎页，第二�
 
 | 检查 | 结果 |
 |---|---|
-| `vitest run`（不带语料） | **1838 passed / 14 skipped（1852）**（rebase 到 HK-9 向导文案批之后，+6 来自该批） |
+| `vitest run`（不带语料） | **1843 passed / 14 skipped（1857）**（合流 §5.123–§5.126 线后实测 = 上游 1837/14（1851）+ 本批 +6） |
 | typecheck root + `@kojo/app` | 双 exit 0 |
 | `node tools/audit-decoupling.mjs` | A–D 全绿（16 插件） |
 | 语料守门 + 教学样例 + 归因 / 调用面 / 编码往返 | 全绿；**golden 逐字节零回退** |

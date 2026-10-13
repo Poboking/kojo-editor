@@ -204,7 +204,7 @@
     悬停看原文出处）+ 导入向导随 meta 携带原作者。**口径 = 高精度宁缺勿滥**：
     实测 214 包只抽到 26 个署名，这是设计结果——假阳性会让人把别人的作品当无主作品改。
     语料基线常驻 `attribution.corpus.test.ts`（`KOJO_SMOKE_PROJECT` 守门）。
-- **当前基线（2026-10-13 §5.124 状态栏收声批后、qa 主机实测，工作树 = `D:\DSH\kojo-ui-wt2` 隔离工作树）：1837 passed / 14 skipped（1851），
+- **当前基线（2026-10-13 §5.127 批 P 合流 §5.123–§5.126 线之后、本机实测）：1843 passed / 14 skipped（1857），
   104 文件过 / 8 跳（112）；16 插件；审计 A–D 四项全绿；typecheck root + app 双跑 exit 0；`pnpm --filter @kojo/app build` ✓ 38.71s（§5.112 那次的读数，本批未改构建面）；
   带语料单跑的**结构闸门**（3,818 文件 / 4,115,009 行）零误报，最慢单文件体检 30.0ms，**修复闭环**（删一条 ENDIF → 💡 补回 → 复检为零）在最大那份真文件上过。
   §5.115（实机复验第七轮）**零代码改动**：合流到上游 §5.114 之后本组复跑，读数与上游自记**逐字相同**（1826/14/1840、104/8/112），
@@ -1075,7 +1075,7 @@
      再生并人工看过 diff（只多 4 行），结构冒烟加断言 `'\n\tPRINTFORMW\n'`。
   4. **我自己的错被测试抓住**：第一版断言写的是 `空行 不等待` → `PRINTFORMDW 不等待`，
      实际产物 `PRINTFORMDW 空行 不等待`（整句照打才是对的）——**改了断言，没改实现**。
-  5. **基线更新：1838 passed / 14 skipped（1852）**；typecheck root + app 双 exit 0；审计 A–D 全绿；
+  5. **基线更新：1843 passed / 14 skipped（1857）**（合流 §5.123–§5.126 线后实测 = 上游 1837/14（1851）+ 本批 +6）；typecheck root + app 双 exit 0；审计 A–D 全绿；
      语料七把尺子读数不动（本批不动覆盖率，动的是写侧能力与文本内容）：
      台词 99.2｜输出 99.2｜SIF 93.3｜函数头 81.2｜状态赋值 54.8｜演出 98.0｜数据表条目 57.4%，
      行覆盖 61.4%｜段 285,546｜不变量违例 0。
@@ -1753,8 +1753,8 @@ node tools/smoke-tauri-ipc.mjs
 
 1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
    本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1837 passed / 14 skipped（1851）**、104 文件过 / 8 跳 / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，**现 19 项全绿**；本工作树没有 `target/`，首次是冷编译数分钟；新增 crate 需 `HTTPS_PROXY=http://127.0.0.1:7890`，与推送同一代理）
-3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.126 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二；
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1843 passed / 14 skipped（1857）**、104 文件过 / 8 跳 / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，**现 19 项全绿**；本工作树没有 `target/`，首次是冷编译数分钟；新增 crate 需 `HTTPS_PROXY=http://127.0.0.1:7890`，与推送同一代理）
+3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.127 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二；
    **并先扫一遍 §十三 跨主机协作看板**——`待认领` 的行是该动手的活，`已认领:<别线>` 的不要抢；
    §13.6 是"谁不动哪个文件"的边界表，有异议直接改那一行（改行即生效）
 4. **本组当前三条主线**：
