@@ -743,7 +743,7 @@ export function createKojoProjectsPanel(
         'button',
         {
           className: 'kp-tutorial-btn',
-          title: '语法糖的每一种写法，以及它编译成的 ERB（逐行讲解 + 对照，零基础可读）',
+          title: '语法糖的每一种写法，以及它编译成的 ERB（每种写法都有一条对照样例）',
           onClick: () => deps.openTutorial('sugar'),
         },
         ic('wand', 14, '✦'),
@@ -753,7 +753,7 @@ export function createKojoProjectsPanel(
         'button',
         {
           className: 'kp-tutorial-btn',
-          title: '口上从新建项目到导出、部署的全流程（工作区与游戏目录、逐步骤讲解）',
+          title: '口上从选游戏目录到部署进游戏的全流程（含导出、许可与常见故障查法）',
           onClick: () => deps.openTutorial('kojo'),
         },
         ic('book', 14, '▤'),
