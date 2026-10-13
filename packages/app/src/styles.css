@@ -25,8 +25,19 @@
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
-  --radius-1: 6px;
-  --radius-2: 8px;
+  /* 圆角尺度（UI P4 · §5.122）：此前散落 12 种字面量（1/3/4/5/6/8/12/14px），
+     而 token 只定义了 2 档、仅 10 处用它。收成 5 档，档位按"件的大小"命名。
+     余两个语义值不进尺度：`50%`（圆点，几何）与 `0`（显式直角）。 */
+  --radius-xs: 2px; /* 细指示条（标签下的高亮条）/ 滚动条 */
+  --radius-sm: 4px; /* 密集控件：树行、菜单项、chip、小按钮 */
+  --radius-md: 6px; /* 中件：工具条按钮、输入框、面板块、状态条 */
+  --radius-lg: 10px; /* 浮层与卡片：picker、overlay、toast、notice、modal、欢迎卡 */
+  --radius-pill: 999px; /* 胶囊徽章 */
+  /* 阴影（UI P4 · §5.122）：6 种浮层阴影收成 3 档抬升（轻浮层 → 浮层 → 模态）。
+     边条式 inset 阴影（`.editor-tab.active` 等的 accent 指示条）语义不同，不并入。 */
+  --shadow-1: 0 6px 20px rgba(0, 0, 0, 0.45); /* 轻浮层：右键菜单、toast */
+  --shadow-2: 0 12px 36px rgba(0, 0, 0, 0.5); /* 浮层：picker、overlay 宿主 */
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.55); /* 模态与欢迎卡 */
   --z-toolbar: 10;
   --z-overlay: 1000;
   --z-modal: 1100;
@@ -78,7 +89,7 @@ button {
   border: 1px solid var(--border);
   background: var(--bg-3);
   color: var(--fg);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 6px 14px;
   cursor: pointer;
   transition:
@@ -133,7 +144,7 @@ code {
   font-family: var(--font-mono);
   background: rgba(255, 255, 255, 0.06);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-1);
 }
 
@@ -175,7 +186,7 @@ textarea {
 }
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.12);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   border: 2px solid transparent;
   background-clip: content-box;
 }
@@ -206,12 +217,12 @@ textarea {
   max-width: 92vw;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 40px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-3);
   animation: overlay-in var(--dur-2) var(--ease-out);
 }
 .welcome-card h1 {
@@ -230,7 +241,7 @@ textarea {
 .notice {
   background: rgba(76, 139, 245, 0.1);
   border: 1px solid rgba(76, 139, 245, 0.4);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 10px 14px;
 }
 .notice.warn {
@@ -330,7 +341,7 @@ textarea {
 .toolbar-btn {
   border-color: transparent;
   font-size: var(--fs-1);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-md);
 }
 /* 图标按钮 hover 走淡底而非描边——避免边框闪现 */
 .toolbar-btn:hover:not(:disabled) {
@@ -365,7 +376,7 @@ textarea {
   background: transparent;
   color: var(--fg-dim);
   font-size: var(--fs-4);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-md);
   padding: 0;
   position: relative;
 }
@@ -387,7 +398,7 @@ textarea {
   bottom: 8px;
   width: 2px;
   background: var(--accent);
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
   transform: scaleY(0);
   transition: transform var(--dur-2) var(--ease-out);
 }
@@ -521,7 +532,7 @@ textarea {
   bottom: -1px;
   height: 2px;
   background: var(--accent);
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
   transform: scaleX(0);
   transform-origin: center;
   transition: transform var(--dur-2) var(--ease-out);
@@ -644,7 +655,7 @@ textarea {
   padding: 1px 5px;
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.04);
   color: var(--fg-dim);
 }
@@ -721,7 +732,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   opacity: 0;
   transition:
     opacity var(--dur-1) var(--ease-out),
@@ -766,7 +777,7 @@ textarea {
 .tree-filter {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--fg);
   padding: 5px 8px;
   width: 100%;
@@ -835,7 +846,7 @@ textarea {
   font-size: var(--fs-1);
   padding: 2px 6px;
   text-align: left;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .tree-package:hover {
   background: var(--hover);
@@ -876,7 +887,7 @@ textarea {
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .tree-dir:hover {
   background: var(--hover);
@@ -927,8 +938,8 @@ textarea {
   min-width: 230px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-1);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
   padding: 4px;
   animation: pop-in var(--dur-1) var(--ease-out);
 }
@@ -942,7 +953,7 @@ textarea {
   color: var(--fg);
   padding: 6px 10px;
   font-size: var(--fs-1);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   text-align: left;
 }
 .context-menu button:hover {
@@ -960,7 +971,7 @@ textarea {
   color: var(--fg);
   padding: 2px 6px;
   text-align: left;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1045,7 +1056,7 @@ textarea {
 .conv-failed {
   border: 1px solid rgba(224, 108, 117, 0.5);
   background: rgba(224, 108, 117, 0.1);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 6px 8px;
 }
 .conv-failed-head {
@@ -1117,7 +1128,7 @@ textarea {
   color: var(--fg);
   padding: 2px 4px;
   text-align: left;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-1);
 }
 .conv-issue-btn:hover {
@@ -1226,8 +1237,9 @@ textarea {
   min-height: 0;
 }
 /* ERB 只读状态徽章（2026-10-12 反馈 5 归一）。
-   原先自造一套度量（11px / radius-1 / 1px 6px），与全站徽章族（.nav-badge 等
-   10px / radius 3px / 0 3px）不一致，看着像另一个系统的控件。现对齐徽章族度量。
+   原先自造一套度量（11px / 半径 6px / padding 1px 6px），与全站徽章族（.nav-badge 等
+   11px / 半径 4px / padding 0 3px）不一致，看着像另一个系统的控件。现对齐徽章族度量。
+   （尺度已收进 token：字号 `--fs-0`、圆角 `--radius-sm`，见 §5.121 / §5.122。）
    ⚠ 全站现有 4 套徽章样式（nav-badge / rp-badge / ab-badge / sv-verdict-badge）本就重复，
    合并成单一 .badge 基类属 UI P4 打磨范围，不在本条顺手改（会波及 4 个插件）。 */
 .erb-mode-hint {
@@ -1243,7 +1255,7 @@ textarea {
      `.erb-mode-hint` 只剩「已解锁编辑」一家——别再把 🔒 加回来。 */
   color: var(--fg-dim);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
   white-space: nowrap;
 }
@@ -1275,7 +1287,7 @@ span.sb-writable.ro:hover {
    观感与只读胶囊同族，用 hover 表达可点，不额外加颜色。 */
 button.erb-mode-hint.unlocked {
   background: transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 10px;
   line-height: 18px;
 }
@@ -1305,9 +1317,9 @@ button.erb-mode-hint.unlocked:hover {
   max-width: 92vw;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 24px 28px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-3);
   animation: overlay-in var(--dur-2) var(--ease-out);
 }
 .modal h2 {
@@ -1354,7 +1366,7 @@ button.erb-mode-hint.unlocked:hover {
   background: var(--bg-2);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 4px 6px;
   font-size: var(--fs-2);
 }
@@ -1364,7 +1376,7 @@ button.erb-mode-hint.unlocked:hover {
   background: var(--bg-2);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 4px 8px;
   font-size: var(--fs-2);
 }
@@ -1400,7 +1412,7 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-2);
   cursor: pointer;
   text-align: left;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .nav-family-btn:hover,
 .nav-face-btn:hover {
@@ -1437,7 +1449,7 @@ button.erb-mode-hint.unlocked:hover {
   font-family: var(--font-mono, monospace);
   cursor: pointer;
   text-align: left;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .nav-func-btn:hover {
   background: var(--bg-3, rgba(127, 127, 127, 0.12));
@@ -1453,7 +1465,7 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-0);
   font-family: var(--font-sans, sans-serif);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 3px;
   color: var(--fg-dim);
 }
@@ -1506,7 +1518,7 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-1);
   cursor: pointer;
   text-align: left;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .nav-hit-btn:hover {
   background: var(--bg-3, rgba(127, 127, 127, 0.12));
@@ -1580,7 +1592,7 @@ button.erb-mode-hint.unlocked:hover {
   max-height: 140px;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .rp-suggest-btn {
   display: block;
@@ -1614,7 +1626,7 @@ button.erb-mode-hint.unlocked:hover {
   display: inline-block;
   font-size: var(--fs-0);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
 }
 .rp-badge.conf-exact {
@@ -1673,7 +1685,7 @@ button.erb-mode-hint.unlocked:hover {
   padding: 2px 4px;
   cursor: pointer;
   text-align: left;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .rp-pred-btn:hover {
   background: var(--bg-3, rgba(127, 127, 127, 0.12));
@@ -1683,7 +1695,7 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-0);
   color: var(--fg-dim);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 3px;
   min-width: 34px;
   text-align: center;
@@ -1725,7 +1737,7 @@ button.erb-mode-hint.unlocked:hover {
   flex-direction: column;
   gap: 1px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 4px 2px;
 }
 .rp-branches-head {
@@ -1766,7 +1778,7 @@ button.erb-mode-hint.unlocked:hover {
   cursor: pointer;
   text-align: left;
   padding: 1px 3px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1851,7 +1863,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .ab-row {
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .ab-row.open {
   border-color: var(--accent, #61afef);
@@ -1870,7 +1882,7 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-1);
   padding: 3px 5px;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .ab-row-btn:hover {
   background: var(--bg-3, rgba(127, 127, 127, 0.12));
@@ -1917,7 +1929,7 @@ button.erb-mode-hint.unlocked:hover {
 .ab-badge {
   font-size: var(--fs-0);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
 }
 .ab-more {
@@ -2003,7 +2015,7 @@ button.erb-mode-hint.unlocked:hover {
   text-align: left;
   cursor: pointer;
   font-size: var(--fs-0);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .inj-var-row:hover {
   background: var(--hover, rgba(128, 128, 128, 0.12));
@@ -2022,7 +2034,7 @@ button.erb-mode-hint.unlocked:hover {
 .inj-var-label {
   font-size: var(--fs-0);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 3px;
   opacity: 0.85;
 }
@@ -2038,7 +2050,7 @@ button.erb-mode-hint.unlocked:hover {
   flex-direction: column;
   gap: 6px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
 }
 .inj-editor-head {
@@ -2097,7 +2109,7 @@ button.erb-mode-hint.unlocked:hover {
   flex-direction: column;
   gap: 3px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
 }
 .inj-pending-head {
@@ -2200,7 +2212,7 @@ button.erb-mode-hint.unlocked:hover {
   align-items: baseline;
   gap: 3px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
   font-size: var(--fs-0);
 }
@@ -2235,7 +2247,7 @@ button.erb-mode-hint.unlocked:hover {
   gap: 6px;
   font-size: var(--fs-0);
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .pv-diag:hover {
@@ -2271,7 +2283,7 @@ button.erb-mode-hint.unlocked:hover {
   align-items: baseline;
   gap: 6px;
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .pv-row:hover {
@@ -2301,7 +2313,7 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--warning, #c9a03c);
   font-size: var(--fs-0);
   border: 1px solid var(--warning, #c9a03c);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 3px;
 }
 .pv-gen {
@@ -2312,7 +2324,7 @@ button.erb-mode-hint.unlocked:hover {
 .pv-reach {
   flex: 0 0 auto;
   font-size: var(--fs-0);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 3px;
   border: 1px solid var(--border);
 }
@@ -2372,7 +2384,7 @@ button.erb-mode-hint.unlocked:hover {
   gap: 10px;
   flex-wrap: wrap;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 4px 8px;
 }
 .sv-verdict.ok {
@@ -2423,7 +2435,7 @@ button.erb-mode-hint.unlocked:hover {
   align-items: baseline;
   gap: 6px;
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .sv-row:hover {
@@ -2487,7 +2499,7 @@ button.erb-mode-hint.unlocked:hover {
   align-items: baseline;
   gap: 6px;
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .lift-row:hover {
   background: var(--hover, rgba(128, 128, 128, 0.12));
@@ -2517,7 +2529,7 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--amber);
   font-size: var(--fs-0);
   border: 1px solid var(--amber);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 3px;
 }
 .lift-empty,
@@ -2577,7 +2589,7 @@ button.erb-mode-hint.unlocked:hover {
   justify-content: space-between;
   gap: 8px;
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .lift-reason-row:hover {
   background: var(--hover, rgba(128, 128, 128, 0.12));
@@ -2643,7 +2655,7 @@ button.erb-mode-hint.unlocked:hover {
   flex: 0 0 auto;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   color: var(--fg-dim);
   font-size: var(--fs-0);
   padding: 0 6px;
@@ -2667,7 +2679,7 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--fg-dim);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
 }
 .sugar-fold:hover {
@@ -2766,7 +2778,7 @@ button.erb-mode-hint.unlocked:hover {
   border: 1px solid transparent;
   background: transparent;
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: var(--fs-0);
   line-height: 18px;
 }
@@ -2821,8 +2833,8 @@ button.erb-mode-hint.unlocked:hover {
   width: min(640px, 80vw);
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2910,7 +2922,7 @@ button.erb-mode-hint.unlocked:hover {
   padding: 1px 5px;
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.04);
 }
 
@@ -2932,8 +2944,8 @@ button.erb-mode-hint.unlocked:hover {
   overflow-y: auto;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
   padding: var(--space-4);
   animation: overlay-in var(--dur-2) var(--ease-out);
 }
@@ -2958,7 +2970,7 @@ button.erb-mode-hint.unlocked:hover {
 .wizard-field input {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-md);
   color: var(--fg);
   padding: 6px 10px;
   font-size: var(--fs-2);
@@ -2976,7 +2988,7 @@ button.erb-mode-hint.unlocked:hover {
 .wizard-preview {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
   margin-bottom: var(--space-3);
   display: flex;
@@ -3030,7 +3042,7 @@ button.erb-mode-hint.unlocked:hover {
   gap: var(--space-2);
   margin-bottom: var(--space-2);
   padding: var(--space-2);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-md);
   font-size: var(--fs-2);
   cursor: pointer;
   transition: background-color var(--dur-1) var(--ease-out);
@@ -3158,15 +3170,15 @@ button.primary .hint {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 10px 12px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
   font-size: var(--fs-2);
   animation: toast-in var(--dur-2) var(--ease-out);
   transition: box-shadow var(--dur-1) var(--ease-out);
 }
 .toast:hover {
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-2);
 }
 .toast-error {
   border-left-color: var(--red);
@@ -3210,7 +3222,7 @@ button.primary .hint {
   border: none;
   padding: 0 6px;
   color: var(--fg-dim);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .toast-close:hover {
   color: var(--fg);
@@ -3235,7 +3247,7 @@ button.primary .hint {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
   cursor: help;
 }
@@ -3292,7 +3304,7 @@ button.primary .hint {
   font-size: var(--fs-2);
   cursor: pointer;
   text-align: left;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: background-color var(--dur-1) var(--ease-out);
 }
 .kp-project-btn:hover,
@@ -3382,7 +3394,7 @@ button.primary .hint {
   padding: 1px 7px;
   font-size: var(--fs-1);
   line-height: 1.6;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-3);
   /* 实测量到 39×22：包行上的「导出 / 部署」比 24×24 最小可点区矮 2px。
      补齐 min-height，不改字号（字号刚归一到 --fs-1）。 */
@@ -3421,7 +3433,7 @@ button.primary .hint {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-left: 3px solid var(--fg-dim);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-md);
   animation: fade-in var(--dur-2) var(--ease-out);
 }
 .kp-status.ok {
@@ -3476,7 +3488,7 @@ button.primary .hint {
   color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--accent);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px 6px;
 }
 .kp-draft-input:focus-visible {

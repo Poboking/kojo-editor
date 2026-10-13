@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
- * UI 量测 harness（HK-4「UI 系统化」六项的回归门禁，见 IMPLEMENTATION-LOG §5.121）。
+ * UI 量测 harness（HK-4「UI 系统化」六项的回归门禁，见 IMPLEMENTATION-LOG §5.121 / §5.122）。
  *
- * 它不判断"好不好看"，只把**能数的四件事**变成数字，前后各跑一次即可 diff：
+ * 它不判断"好不好看"，只把**能数的六件事**变成数字，前后各跑一次即可 diff：
  *   1. `fontSizes` / `distinctFontSizes` —— 屏幕上**实际渲染**出几档字号（半像素档 = 各子系统自造尺度的信号）
  *   2. `contrastFails` —— WCAG 对比度不达标（正文 4.5:1、大字号 3:1；半透明背景按层合成后算）
  *   3. `clipFails` —— `overflow: hidden|clip` 下被裁掉多少像素（内容截断类缺陷）
  *   4. `smallTargets` —— 小于 24×24 的交互元素（WCAG 2.5.8 最小目标）
+ *   5. `radii` / `distinctRadii` —— 屏上渲染出几档圆角（半像素之外的另一种"各面板自造尺度"）
+ *   6. `shadows` / `distinctShadows` —— 屏上渲染出几档阴影（浮动层级是否收敛成少数几档）
  *
  * 前置：桌面壳要带着 CDP 端口起来（浏览器 `pnpm dev` 量不到桌面壳的真实渲染）：
  *   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 pnpm --filter @kojo/app tauri dev
@@ -49,7 +51,7 @@ const MEASURE = `(() => {
   const lum = (c) => { const f = (v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
   const ratio = (a, b) => { const l1 = lum(a), l2 = lum(b); return Math.round(((Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)) * 100) / 100; };
   const cls = (el) => (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\\s+/).slice(0, 2).join('.') : el.tagName.toLowerCase());
-  const sizes = {}, clip = [], contrast = new Map(), small = new Map();
+  const sizes = {}, clip = [], contrast = new Map(), small = new Map(), radii = {}, shadows = {};
   for (const el of document.querySelectorAll('body *')) {
     if (el.closest('.monaco-editor')) continue;
     const cs = getComputedStyle(el);
@@ -83,11 +85,18 @@ const MEASURE = `(() => {
       if (!small.has(k)) small.set(k, { k, n: 0, t: (el.textContent || el.getAttribute('aria-label') || el.title || '').trim().slice(0, 20) });
       small.get(k).n++;
     }
+    const br = cs.borderTopLeftRadius;
+    if (br && br !== '0px') radii[br] = (radii[br] ?? 0) + 1;
+    if (cs.boxShadow && cs.boxShadow !== 'none') shadows[cs.boxShadow] = (shadows[cs.boxShadow] ?? 0) + 1;
   }
   return {
     viewport: [innerWidth, innerHeight],
     fontSizes: sizes,
     distinctFontSizes: Object.keys(sizes).length,
+    radii,
+    distinctRadii: Object.keys(radii).length,
+    shadows,
+    distinctShadows: Object.keys(shadows).length,
     clipFails: clip.sort((a, b) => b.clip - a.clip).slice(0, 12),
     contrastFails: [...contrast.entries()].map(([k, v]) => ({ k, ratio: v.got, need: v.need, n: v.n, sample: v.sample })).sort((a, b) => a.ratio - b.ratio).slice(0, 12),
     smallTargets: [...small.values()].sort((a, b) => b.n - a.n).slice(0, 14),
@@ -103,7 +112,13 @@ const click = (sel, want) => ev(`(() => {
 const waitFor = async (expr, ms = 30000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await ev(expr)) return Math.round(Date.now() - t0); await sleep(400); } return 'TIMEOUT'; };
 
 const results = {};
-const snap = async (label) => { results[label] = await ev(MEASURE); console.log(label, '→ 字号档数', results[label].distinctFontSizes, '裁剪', results[label].clipFails.length, '对比度', results[label].contrastFails.length, '小目标', results[label].smallTargets.length); };
+const snap = async (label) => { results[label] = await ev(MEASURE); const r = results[label]; console.log(label, '→ 字号', r.distinctFontSizes, '圆角', r.distinctRadii, '阴影', r.distinctShadows, '裁剪', r.clipFails.length, '对比度', r.contrastFails.length, '小目标', r.smallTargets.length); };
+
+/* 每次从同一处起步（跨次可比）：先重载回欢迎页，否则第二次跑会从"上次留下的项目视图"
+   起步，两个 run 的聚合数根本不是一个东西——这是本工具自己的一个假绿陷阱。 */
+await ev(`location.reload()`);
+await sleep(2500);
+console.log('reload → welcome =', await waitFor(`!!document.querySelector('.recent, .welcome')`, 15000));
 
 await snap('01-欢迎页');
 console.log('open recent =', await click('.recent button.link', null));
@@ -152,10 +167,15 @@ await snap('07-新建口上文件向导');
 await ev(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
 
 fs.writeFileSync(OUT, JSON.stringify(results, null, 1));
-const all = new Map();
-for (const st of Object.values(results)) for (const [k, n] of Object.entries(st.fontSizes)) all.set(k, (all.get(k) ?? 0) + n);
-console.log('\n=== 全站渲染出来的字号档（px → 元素数）===');
-console.log([...all.entries()].sort((a, b) => parseFloat(a[0]) - parseFloat(b[0])).map(([k, n]) => k + '×' + n).join('  '));
-console.log('档数 =', all.size);
-console.log('written', OUT);
+const agg = (field) => { const m = new Map(); for (const st of Object.values(results)) for (const [k, n] of Object.entries(st[field] ?? {})) m.set(k, (m.get(k) ?? 0) + n); return m; };
+const dump = (title, field, sort) => {
+  const m = agg(field);
+  console.log(`\n=== ${title}（值 → 元素数）===`);
+  console.log([...m.entries()].sort(sort).map(([k, n]) => k + '×' + n).join('  '));
+  console.log('档数 =', m.size);
+};
+dump('全站渲染出来的字号档', 'fontSizes', (a, b) => parseFloat(a[0]) - parseFloat(b[0]));
+dump('全站渲染出来的圆角档', 'radii', (a, b) => b[1] - a[1]);
+dump('全站渲染出来的阴影档', 'shadows', (a, b) => b[1] - a[1]);
+console.log('\nwritten', OUT);
 ws.close();
