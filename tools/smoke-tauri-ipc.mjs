@@ -26,7 +26,7 @@ import * as os from 'node:os';
 import { resolveCorpusDir, discoverCorpora, corpusHint } from './corpus.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-// 语料路径**按主机而定**（haruki 机只有 C:，QA 机用 D:），且目录名会被反复重排 ⇒ 不写死默认名：
+// 语料路径**按主机而定**（本机只有 C:，QA 机用 D:），且目录名会被反复重排 ⇒ 不写死默认名：
 //   优先级 位置参数 > KOJO_SMOKE_PROJECT > KOJO_CORPUS_DIR > 扫 C:/game/* 认内容发现（tools/corpus.mjs）。
 //   一条都没有仍**一开头明确失败**（列盘上候选），比跑到 a 步"点了最近打开却没进项目"再猜原因省一整轮。
 const explicitGameDir = process.argv[2] ?? process.env.KOJO_SMOKE_PROJECT;

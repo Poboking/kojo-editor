@@ -166,7 +166,7 @@
 
 ### 3.0 现状可写性实测（提案前提的校准，验收批补）
 
-装配＝产品同款：`createSugarTranspileService({ dictionary: loadEratwVariableSchema(语料 CSV 目录), faceTable: createEratwFaceTable() })`；字典用**真语料** `C:\game\eratw-sub-modding-eratw4.980\CSV`。探针是临时文件，已删（不入库）。判定行的产物＝该文档转译出的 ERB 关键行。
+装配＝产品同款：`createSugarTranspileService({ dictionary: loadEratwVariableSchema(语料 CSV 目录), faceTable: createEratwFaceTable() })`；字典用**真语料** `C:\game\<基线语料>\CSV`。探针是临时文件，已删（不入库）。判定行的产物＝该文档转译出的 ERB 关键行。
 
 | # | 糖写法（都在 `时机 绝顶：`/`时机 指令 N：` 体内） | 实测 | 产物关键行 |
 | --- | --- | --- | --- |

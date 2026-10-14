@@ -1,8 +1,8 @@
 # 演出行投影（批 K `heartProjection`）外部审阅回执
 
 - 日期：2026-10-12
-- 语料：`D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`（3,818 个 ERB，只读探针，跑完即删）
-- 引擎依据：`D:\DSH\reverse-engineering\_emuera_src`（官方版）与 `_skia_src`（SKIA 版）两树结论一致
+- 语料：`<本机目录>\eratw\eratw-4.980基线语料`（3,818 个 ERB，只读探针，跑完即删）
+- 引擎依据：`<本机目录>\reverse-engineering\_emuera_src`（官方版）与 `_skia_src`（SKIA 版）两树结论一致
 - 被审对象：`packages/plugins/kojo-sugar/src/project.ts:1292-1316`（`HEART_HEAD_RE` / `HEART_ARGS_RE` / `HEART_MODES` / `heartProjection`）
 - 处置：**只记读数，不改判据**（用户 2026-10-12 拍板）。审阅的六条建议逐条核验后，无一达到"值得动判据"的收益，
   其中两条按引擎词法是**有害建议**（会让编辑器投影出引擎解析不了的行）。

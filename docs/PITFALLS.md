@@ -19,13 +19,13 @@
 
 | 坑 | 对策 |
 |---|---|
-| 沙箱注入 `HTTP(S)_PROXY=127.0.0.1:8587` 是**坏的** | git/curl 别用它；用 repo 本地代理 7890（见 `STATE.md` §三） |
+| 沙箱注入 `HTTP(S)_PROXY=127.0.0.1:8587` 是**坏的** | git/curl 别用它；用 repo 本地代理（见 `STATE.md` §三） |
 | **`(git fetch \| tail) \|\| 兜底` 是假兜底**：管道只交回 `tail` 的退出码 0 | fetch/push 单独成句，看 `rc=$?` 或 `${PIPESTATUS[0]}`；在过期 `origin/master` 视图上开工 = 撞号/覆盖的总根源 |
 | **`npx vitest` 吞环境变量** ⇒ `KOJO_SMOKE_PROJECT` 整组静默 skip、看起来像"通过" | 带变量一律 `node node_modules/vitest/vitest.mjs run <file>` |
 | **`cat >> 文件` 会把内容插到文件开头**（本机 shell；已两次酿成大文件首部被覆盖） | 追加用 Edit/Write 或 `node -e fs.appendFileSync`；改大文件前先 `cp`，复原前与 HEAD 逐字节核对 |
 | Git-Bash `TMP=/tmp` 让 MSVC `link.exe` 报 `LNK1104` ⇒ cargo 直接跑必挂 | cargo 经 node 起（node 继承真 Windows TMP）：`node -e "execSync('cargo test --lib',{cwd:'…/src-tauri'})"` |
 | `window.__TAURI_INTERNALS__.invoke` 是 non-writable ⇒ monkey-patch 数不上 IPC | 数次数用 app 自己日志；测成本用受控实验；**任何计数探针必须带自检** |
-| 探针 fatal 路径不收子进程 ⇒ 1420 被占死；`taskkill /PID` 经 MSYS 会被改写成 `D:/Code/Git/PID` | spawn 后立刻 `process.on('exit')` 里 taskkill（node 参数数组、不经 shell）；事后 `netstat` 确认端口空 |
+| 探针 fatal 路径不收子进程 ⇒ 1420 被占死；`taskkill /PID` 经 MSYS 会被改写成 `<Git 安装目录>/PID` | spawn 后立刻 `process.on('exit')` 里 taskkill（node 参数数组、不经 shell）；事后 `netstat` 确认端口空 |
 | **同一工作树只能一个桌面实例**：另一发 `tauri dev` 占着二进制（os error 5）与 WebView2 数据目录 | 复测前 `tasklist` 看 `kojo-editor.exe` 是谁的会话——**先问用户、经授权才杀** |
 | 临时探针进程退出截断 fire-and-forget 落盘（12MB 只留 `.tmp` 孤儿）⇒ 量出"缓存没收益"的假结论（`tauri dev` 探针同款，§5.130 差点再犯） | 原子写以 rename 收尾 ⇒ 轮询「目标文件 mtime 比进本轮时新」才算完成（全命中那轮断言 mtime 未变）；收进程前**等完成日志**（`Condition snapshot saved`）再杀 |
 | `ConditionIndex.durationMs` 不含快照读盘 ⇒ 量到的是"汇合耗时" | 量级联某段 = 从 `project.open()` 起算的**水位差** |
@@ -102,7 +102,7 @@
 53. 共享树的残留 stash 实体（`feedback3-wip-2026-10-13`）：代码主体**已被 §5.88 以另一形态取代，别按旧方案原样复用**；独有可用件＝图标 PNG 生成器 + `app-icon.png`（取法见 `docs/archive/HANDOFF.md` §十二-7 ④）。
 54. **pnpm 脚本里的内联 POSIX env 写法（`FOO=1 vitest …`）在 win32 必挂**（cmd 把 `FOO=1` 当命令：`'FOO=1' 不是内部或外部命令`，实测 `test:erbcheck` 原写法 exit 1）⇒ 脚本要么写成 `node 文件`（env 由 JS spawn 注入，见 `tools/verify.mjs` erbcheck 条目），要么调用方 shell 预设；`pnpm verify` 系列已统一走后者。
 55. **糖「某个写法今天能不能写」不许靠读码推断，必须跑真转译**：`resolve`（`kojo-sugar/src/index.ts:313-318`）只看**族头** ⇒ `NOWEX:噴乳`、`NOWEX:噴乳乳瞎写`（拼错名）**一律零 error 放行**；反而 `SELECTCOM`（无族头的引擎全局）与 `NOWEX:Ｃ絶頂`（全角拉丁字母被 `isIdentPart` 切断，`expression.ts:43`/`system-functions.ts:90` 两处副本）报 `unknown-identifier` 而**产物仍正确**——只报不纠最坑。E15 方案原稿四条"现状糖"判断全因此写反（校准见 `docs/SUGAR-INTIMATE-EXPANSION-PROPOSAL.md` §3.0 探针矩阵）。判法＝`createSugarTranspileService({ dictionary: loadEratwVariableSchema(真语料 CSV 目录), faceTable: createEratwFaceTable() })`，装配照 `eratw-adapter/tests/scaffold-cases.test.ts` 的可写性守卫（其 `DictionaryLookup` 是产品 `makeLookup` 的逐字镜像，可直接拿来用）。
-56. **win32 上 `path.dirname('profile')` 返回 `'.'` 而不是 `''`** ⇒ 用 `!path.dirname(rel)` 判"根级文件"**恒假**：`tools/engine-loadtest.mjs` 的"根级强制真副本"名单因此形同虚设，镜像里**所有**根级文件都是硬链接，引擎退出时的就地重写直接溅射到真实语料盘（实测已把 `C:\game\eratw-sub-modding-eratw4.980\profile` 改写一次、无备份可还原——**语料只读是硬约束，这条是已发生的事故不是理论风险**）。判"根级"只能用 `rel` 里不含 `/`；凡"引擎会就地改写的文件"一律真副本，且**建完镜像必须比 inode 自检**（`mustRealCopy` / `assertRealCopies` 已钉进 `engine-loadtest.mjs`，跑前跑后还要对拍语料根级文件 `ino/nlink/size/mtime`）。同族坑：`profile` 在语料里是**文件**不是目录，任何按目录前缀（`'profile/'`）或具体文件名的猜法都会漏。
+56. **win32 上 `path.dirname('profile')` 返回 `'.'` 而不是 `''`** ⇒ 用 `!path.dirname(rel)` 判"根级文件"**恒假**：`tools/engine-loadtest.mjs` 的"根级强制真副本"名单因此形同虚设，镜像里**所有**根级文件都是硬链接，引擎退出时的就地重写直接溅射到真实语料盘（实测已把 `C:\game\<基线语料>\profile` 改写一次、无备份可还原——**语料只读是硬约束，这条是已发生的事故不是理论风险**）。判"根级"只能用 `rel` 里不含 `/`；凡"引擎会就地改写的文件"一律真副本，且**建完镜像必须比 inode 自检**（`mustRealCopy` / `assertRealCopies` 已钉进 `engine-loadtest.mjs`，跑前跑后还要对拍语料根级文件 `ino/nlink/size/mtime`）。同族坑：`profile` 在语料里是**文件**不是目录，任何按目录前缀（`'profile/'`）或具体文件名的猜法都会漏。
 57. **`Read` 可能返回陈旧快照、`Edit` 会对个别文件静默不落地（报成功、盘上没变）**：本轮改 `docs/STATE.md` 实测中招（Edit 预览已是新内容，`git status` 却无改动，重试仍不落）。⇒ 凡改**基线数字 / 判据类**文件，改完必须用 Shell 读回取证（`Get-Content` 跳行读或 `git diff <file>`），别只信 Edit 回显。
 58. **`io.walkDir(path, { filter })` 的 filter 返回 `false` 会**连目录一起剪掉***：写成 `filter: (e) => !e.isDirectory && /方言扩展名/.test(e.name)` 只拿到根层 3 份（应 153 份）⇒ **静默少收 98%**，不报错、日志也看不出。正确写法 `e => e.isDirectory || 判定(e.name)`（扩展名筛只作用于文件侧），且凡"递归找某类文件"的用法**必须拿独立枚举对拍份数**（FT-1 的 `variable-schema.erh.corpus.test.ts` 用 `readdirSync` 自己数一遍正是为此）。同族：`tools/corpus.mjs` 的语料发现也走"内容条件 + 份数"两条对拍。
 59. **上屏文案有第二消费者：CDP 探针的选择器与 fixture 生成器**——`tools/smoke-tauri-ipc.mjs` 用 `.modal[aria-label="语法糖视图"]` 找弹窗、`tools/gen-fixtures.mjs` 里存着 `fixtures/sugar/sample-310.kojo` 头注释的**副本**；只改 src 字符串 ⇒ 探针**静默不匹配**（返回 `no-intro` 继续跑，不报错）＋ 样例与教程两处措辞分叉。⇒ 改名/改文案必须连带扫 `tools/*.[cm]js` 与 `fixtures/**`，并留一条守卫（`packages/app/tests/no-sugar-jargon.test.ts`：状态机先抹注释与正则、再取字符串字面量 + JSX 文本，实测一跑就抓到上述两处）。

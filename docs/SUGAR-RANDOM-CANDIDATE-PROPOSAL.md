@@ -53,7 +53,7 @@ K12 整包装译 golden（`kojo-sugar/tests/goldens/corpus-k12-lumia-daily.kojo`
 样例行必须逐字来自 fixtures。步骤：
 
 1. `fixtures/sugar/teaching-full.kojo`（:80-85 之后）加 `当 RAND:2：` 两档示例（档 0 两句、档 1 一句）；
-2. `KOJO_SMOKE_PROJECT="C:\game\eratw-sub-modding-eratw4.980" TEACHING_GOLDEN_WRITE=1 node node_modules/vitest/vitest.mjs run packages/kernel/tests/sugar-teaching.transpile.test.ts`
+2. `KOJO_SMOKE_PROJECT="C:\game\<基线语料>" TEACHING_GOLDEN_WRITE=1 node node_modules/vitest/vitest.mjs run packages/kernel/tests/sugar-teaching.transpile.test.ts`
    —— **真实链路重生成** `teaching-full.expected.erb`（人工过目后提交；不许手写 golden）；
 3. 去掉 `TEACHING_GOLDEN_WRITE` 重跑该测试：零 error、逐字节一致；
 4. 教程⑬引用新行（kojo/erb 两半都在 fixture 里）。

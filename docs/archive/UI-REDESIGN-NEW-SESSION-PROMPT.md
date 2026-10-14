@@ -4,7 +4,7 @@
 
 —— PROMPT 起点 ——
 
-任务：实施 kojo-editor 的 UI/UX 重设计（VSCode 式五区布局），仓库 `D:\DSH\kojo-editor`（私仓 github.com/Poboking/kojo-editor）。
+任务：实施 kojo-editor 的 UI/UX 重设计（VSCode 式五区布局），仓库 `<工作树>`（私仓 github.com/Poboking/kojo-editor）。
 
 【必读（按序，读完再动手）】
 

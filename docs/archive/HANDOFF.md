@@ -3,7 +3,7 @@
 > 更新：**2026-10-12**（语法糖线 13 个提交已 rebase 进 master —— 冲突处置与编号让位见
 > IMPLEMENTATION-LOG **§5.64**；此前口上项目批 P-A…P-E 收口）。**新会话从这里开始读，读完即可开工。**
 >
-> **本组（haruki 主机小组）分工**：整体项目推进 + UI 优化。**语法糖优化**与**性能优化归别组**
+> **本组（本机小组）分工**：整体项目推进 + UI 优化。**语法糖优化**与**性能优化归别组**
 > （各占独立分支，见 §十二）。接活前先分层，糖语义与解析性能默认不碰。
 > v0.1 全量（含桌面壳端到端）+ v0.2 第一批（约定校验器 + 索引响应式化）；
 > 第二批：函数树导航（`ui-kojo-navigator`）；
@@ -77,7 +77,7 @@
 > **2026-10-13 傍晚 · 中断批盘点（用户指派移交）**：上个会话中断，留下三处在制品（均未推送 / 未提交）——
 > ① main 树 **HK-8 裁决批**（`notice-queue.ts` + 6 项测试；号已让位 **§5.120 → §5.127 → §5.129**，盘点复跑 vitest 1838/14、双 typecheck、审计 A–D 与声称一致）；
 > ② 同树 **向导文案再对齐小改**（未入册；清单 §六 7.2 引文待同步）；
-> ③ `kojo-fb3` worktree **HK-4 第三轮图标系统**（`ui/icons.tsx` + 17 文件，未提交未入册）。
+> ③ `临时工作树` worktree **HK-4 第三轮图标系统**（`ui/icons.tsx` + 17 文件，未提交未入册）。
 > 三件的落库步骤、注意项与 stash 摘要全在 **§十二-7**——**①② 已于 2026-10-13 晚落库（§5.129，`ddc06f4..29505d8`）**；③ 仍在制品。
 
 
@@ -88,9 +88,9 @@
 **kojo-editor** = eraTW 口上编辑器：结构感知（Monaco + ERB 语法）× 一切皆插件 × sav 快照回放（远期差异化核心）。
 技术栈：pnpm monorepo · TS（TS7/vitest4/vite7）· Tauri2（Rust 只做 IO 原语）· React 19 · Monaco。
 
-- 仓库：`C:\DSH\kojo-editor` = github.com/Poboking/kojo-editor
-  （**2026-10-12 起本机为新环境主机，只有 `C:` 一个盘；本文档正文里历史批次记录中的 `D:\DSH` / `D:\Game` / `D:\Code\Nodejs` 路径全部失效，按本表换算，勿照抄执行**）
-- 测试游戏目录：`C:\game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`（汉化整合版，CSV/ERB 均 UTF-8-BOM）
+- 仓库：`<工作树>` = github.com/Poboking/kojo-editor
+  （**2026-10-12 起本机为新环境主机，只有 `C:` 一个盘；本文档正文里历史批次记录中的 `<本机目录>` / `<本机目录>` / `<node 安装目录>` 路径全部失效，按本表换算，勿照抄执行**）
+- 测试游戏目录：`C:\game\eratw-4.980基线语料`（汉化整合版，CSV/ERB 均 UTF-8-BOM）
   —— 实测 ERB 全树 **3,818 个文件**，与 §5.29 记录逐字吻合，是同一份真实语料；**但整份语料无任何 `sav` 存档**，六档金样本类测试在本机自动跳过属正常。
 - 应用数据目录：`%APPDATA%\dev.kojo.editor\`（`store/_global/{recent-projects,approved-writable}.json` 跨次保留；`workspaces/` = 作者工作区根）
 
@@ -215,17 +215,17 @@
   带语料单跑的**结构闸门**（3,818 文件 / 4,115,009 行）零误报，最慢单文件体检 30.0ms，**修复闭环**（删一条 ENDIF → 💡 补回 → 复检为零）在最大那份真文件上过。
   §5.115（实机复验第七轮）**零代码改动**：合流到上游 §5.114 之后本组复跑，读数与上游自记**逐字相同**（1826/14/1840、104/8/112），
   typecheck root + app 与审计 A–D 也复跑为绿 ⇒ 基线不另起数。
-  > **糖线 §5.114 之后（本机 `C:DSHmaster-kojo-editor` 实测）：1826 passed / 14 skipped（1840）、104 文件过 / 8 跳（112）**
+  > **糖线 §5.114 之后（本机 `C:先前项目master-kojo-editor` 实测）：1826 passed / 14 skipped（1840）、104 文件过 / 8 跳（112）**
   > 批 N 投影单测 11 条 + 第七把尺子「数据表条目可读率 **57.4%**（10,421/18,154）」；
   > 语料三 gate 全绿、不变量违例 0，段数 287,805 → **285,546**（摘掉批 N 涨回 287,805，当场量过）。
-  > **§5.128 索引 stat 折叠批（本机 `D:\DSH\kojo-editor` 实测，rebase 到 §5.127 之后复测；这是本批第六次 rebase）**：**1844 passed / 14 skipped（1858）**、
+  > **§5.128 索引 stat 折叠批（本机 `<工作树>` 实测，rebase 到 §5.127 之后复测；这是本批第六次 rebase）**：**1844 passed / 14 skipped（1858）**、
   > 104 文件 / 8 跳（112）、typecheck root + app 双 0、审计 A–D ✅；上游把六处读数取齐到 1843，本批 +1 条
   > walk/stat 等价断言 = **1844**（代码提交当时读的 1827 是 rebase 前同一棵树的值；六轮 rebase 五次重测
   > 1827→1833→1833→1838→1838→1844，每轮都按 §十二-31 重跑，不沿用上一轮）。`cargo test --lib` **18 项全绿** ——
   > ⚠ 本表此前写「19 项全绿」是**失真的**：`eac536e`（§5.97 看板 HK-3，收回 `exportDirectory` 绕闸通道）
   > 连同删掉 3 条 `export_directory` 用例，此后实际一直是 **16**（删测试合法，能力撤了；是汇总行没跟着改），
   > §5.128 +2 ⇒ 18。`pnpm --filter @kojo/app build` 本批未重跑（不动打包面）。
-  > **§5.130 抽取段分段剖面批（本机 `D:\DSH\kojo-editor` 实测，rebase 到 §5.129 之后复测）**：**1852 passed / 14 skipped（1866）**、
+  > **§5.130 抽取段分段剖面批（本机 `<工作树>` 实测，rebase 到 §5.129 之后复测）**：**1852 passed / 14 skipped（1866）**、
   > 105 文件 / 8 跳（113）、typecheck root + app 双 0、审计 A–D ✅；本批零产品行为改动（只加抽取段分段日志 +
   > 2 条断言）。实机三轮：全冷 7.5/26.3/21.0s、抽取冷 0.55/10.0/1.0s、全热 0.60/1.35/1.37s；
   > 抽取段分段条见 §5.130 表（冷开读盘 45.1s 墙钟累加 ÷ 并发 8 ≈ 5.6s，扫描 2,285 次全走 worker，主线程循环 1.0s）。
@@ -824,7 +824,7 @@
   9. **工作树纪律（§十二-6 新条）**：本机共用工作树内存在**并发写者**（不走 git）；本组一次
      bare `git stash` 卷走过它未提交的 docs（已落成
      `.git/concurrent-docs-wip-2026-10-13.patch`，551 行可取回）。本批此后全程在独立
-     worktree `C:\DSH\kojo-fb3` 完成（`pnpm install` 走本地 store 实测 8s，不是负担）。
+     worktree `<临时工作树>` 完成（`pnpm install` 走本地 store 实测 8s，不是负担）。
 
 - **2026-10-13 · 看板 HK-5 批（详见 §5.91）**：文件树的目录缓存第一次有了失效通道。
   1. **来源不是本组排的队**：实机线在 §5.87 明记「刻意留在下一批……本机跑不了 GUI，不能亲验的 UI 改动
@@ -918,7 +918,7 @@
      （`#[test]` 19→16，减的正是被删命令的复制助手单测），`cargo check --lib --tests` 零 warning；
      双 typecheck / 审计 A–D 全绿。
 - **2026-10-13 · 工具批（详见 §5.98）**：`node tools/git-push.mjs` 从"只赌直连"改成**直连/代理交替试**
-  （奇数趟清代理直连、偶数趟 `-c http.proxy=127.0.0.1:7890`；`KOJO_GIT_PROXY=""` 退回纯直连）。
+  （奇数趟清代理直连、偶数趟 `-c http.proxy=<本机代理>`；`KOJO_GIT_PROXY=""` 退回纯直连）。
   起因是 §5.97 那次推送**旧工具 6/6 全灭、手工带代理一次就通**；当场验证 try1 direct 红 → try2 proxy 绿。
   只动 `tools/`，不进包体、不在测试路径；套件仍照 §十二-5 复跑：**1648 passed / 13 skipped**（同数）、审计全绿。
 - **2026-10-13 · 看板 HK-4 批（详见 §5.99，UI P4）**：编辑器工具条**身份不许裁**——第一次用 CDP 量测挑活。
@@ -1063,7 +1063,7 @@
   "追加式、ERB 平铺列表原地不动"，收起时只该消失 `.pkg-real` 那批行（31 → 20 → 31 才是对的）。§九-50 已按实测改写，
   另一半根因是**旧节点引用**（不是 §5.115 猜的"树筛选框残留"，本轮实测筛选框为空、渲染条件一直满足）。
   这一轮净成本三次壳跑，换来的是"最容易假绿的那两条判据"有了真读数。
-- **2026-10-13 · 看板 HK-4 批 · UI 系统化第一轮（详见 §5.121，haruki 主机）**：用户重指派重心为**打磨 UI**
+- **2026-10-13 · 看板 HK-4 批 · UI 系统化第一轮（详见 §5.121，本机）**：用户重指派重心为**打磨 UI**
   （目标「专业 · 克制 · 流畅 · 高效 · 耐看」，以 VSCode 为基准，定夺时优先用现代编辑器现成方案）。
   本组自拟**六项**任务清单并按序推进：字号尺度 → 圆角/边框/阴影 → 图标系统 → 焦点与键盘可达 → 动效可关 → 底部问题面板。
   1. **第一项做完了**：CDP harness 量出全站**渲染出 10 档字号、其中 4 档是半像素**
@@ -1077,7 +1077,7 @@
   3. **harness 从此是回归门禁**：字号档数 / 对比度 / 裁剪 / 目标尺寸四个数字，后续每一批 UI 改动都复跑。
   4. **基线提醒**：本批 rebase 到 master（含别组 HK-9 的 +6 项）后复跑 = **1832 passed / 14 skipped（1846）**，104 文件 / 8 跳；
      本组 §5.104 自记的 1661 已被别组新增测试覆盖掉，**对基线请按 1832 起算**。
-- **2026-10-13 · 看板 HK-4 批 · UI 系统化第二轮（详见 §5.122，haruki 主机）**：六项里的**第二项**——圆角与阴影 token 归一。
+- **2026-10-13 · 看板 HK-4 批 · UI 系统化第二轮（详见 §5.122，本机）**：六项里的**第二项**——圆角与阴影 token 归一。
   1. **静态**：`border-radius` 有 **12 种字面量**（1/3/4/5/6/8/12/14px + 999 + 50%），token 只 2 档、73 处声明里仅 10 处用它。
      **屏上**（harness 新加第 5/6 项指标 `distinctRadii`/`distinctShadows`）：十状态渲染出 **6 档圆角**（`8px`/`14px` 是异类）、**4 档阴影**。
   2. **收成**：圆角 5 档（xs 2 / sm 4 / md 6 / lg 10 / pill 999，语义值 `50%`、`0` 不进尺度）；
@@ -1150,7 +1150,7 @@
 | 文档 | 内容 |
 |---|---|
 | `docs/HANDOFF.md`（本文件） | **交接状态 + 下一批动手清单（新会话从这里开始）** |
-| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.130**：§5.49 = 口上项目批 P-A…P-E · §5.50 = 口上项目批 T2 · §5.51 = 内核优化批 · §5.52 = 计算池批 · §5.53 = 本批自审与验收记录 · §5.54 = UI 重设计 P4 补记 · §5.55 = 分支收口批 · §5.56 = 口上项目批 T3 · §5.57 = 口上项目批 T4 · §5.58 = 体感丝滑批 · §5.59 = 语法糖视图批 · §5.60 = 语法糖批 A/C/D/E · §5.61 = 语法糖教学样例批 · §5.62 = 语法糖批 F/G · §5.63 = 语法糖批 H · §5.64 = 两线合流批 · §5.65 = 快照卫生批 · §5.66 = 语法糖批 I · §5.67 = 语法糖批 J · §5.68 = 语法糖批 K · §5.69 = 语法糖批 L · §5.70 = 抽取按文件增量批 · §5.71 = 语法糖批 M · §5.72 = 校验按文件增量批 · §5.73 = 名称解析 memo 批 · §5.74 = 回放线重测批 · §5.75 = 语法糖度量批 · §5.76 = UI 归一批 · §5.77 = 导出批 · §5.78 = 工作区新建条目批 · §5.79 = 许可协议可选批 · §5.80 = 三线合流批 · §5.81 = 规则成本归位批 · §5.82 = 判据①发版样例批 · §5.83 = 设置页归一批 · §5.84 = BUG-5 文件监视批（判据②） · §5.85 = 撞名诊断批（任务 20 收口） · §5.86 = 判据②补证批 · §5.87 = 监视消费方批（上） · §5.88 = 落盘引导批（反馈 3） · §5.89 = 抽取快照 v4 批（负结果只在探针通道成立） · §5.90 = 实机复测批（真实 app 三段水位是探针的 2–3 个量级，头号靶子改成 IPC 读盘通道） · §5.91 = 看板 HK-5 批（文件树目录缓存的失效通道 + 工作区根进监视） · §5.92 = IPC 读盘通道批（真实 app 热开 10.5s→3.2s；下一靶子 = 批量 stat） · §5.93 = 看板 HK-6 批（面板消费工作区外部改动 + `FileChangedEvent.path` 契约更正） · §5.94 = 看板 HK-7 批（外部改动重载改按 pathKey 判等） · **§5.95 = 看板 HK-2 批（全站宿主模态接上 Esc）** · **§5.96 = 实机复验批（CDP DOM 驱动收掉 QA-1②/QA-9/QA-10，零代码改动）** · **§5.97 = 看板 HK-3 批（`exportDirectory` 契约收缩，绕闸通道收回一条）** · **§5.98 = 工具批（推送通道直连/代理交替试）** · **§5.99 = 看板 HK-4 批（编辑器工具条身份不许裁，CDP 量测挑活）** · **§5.100 = 看板 HK-4 第二轮（快速打开副行 + 全站裁剪扫描）** · **§5.101 = 实机复验批（QA-2 糖视图行高收口）** · **§5.102 = 看板 HK-4 第三轮（全站可访问性量测）** · **§5.103 = 实机复验批第三轮（fixture 游戏目录收 QA-9/QA-10）** · **§5.104 = 实机复验批第四轮（§2.J 清单：勾四格 + 修一条过期判据）** · **§5.105 = P4 补测批（壳层判据抽纯 + 合成期 Esc 门）** · **§5.106 = UI 反馈第一批（只读胶囊 / 折叠柄 / 展开反馈）** · **§5.107 = 实机复验轮（反馈 6 真凶＝项目根没有行内框槽位；四条探针 68 项全绿）** · **§5.108 = 探针选择器归一批（判据③ 自动化半边，工具与文档，零新测试）** · **§5.109 = ERB 结构波浪线批（反馈 7 落地；语料把第一版判据打脸过一次）** · **§5.110 = 合流后 IO 通道摸底批（haruki，零产品代码）** · **§5.111 = 实机复验第五轮（清单 §六 7.1–7.7）** · **§5.112 = ERB 💡 一键补齐批（反馈 7 第二步）** · **§5.113 = 实机复验第六轮（清单 §六 7.D，50 项全绿）** · **§5.114 = 批 N 数据表投影（糖线，第七把尺子）** · **§5.115 = 实机复验第七轮（§六 7.15/7.16/7.23/7.28/7.29 收到证据；7.13/7.14 当时没收）** · **§5.116 = 实机复验第八轮（7.13/7.14 补收 + 判据本身被修正）** · **§5.117 = 实机复验第九轮（HK-10：💡 补齐的真实点击链）** · **§5.118 = 向导角色文案批（HK-9）** · **§5.119 = 仪器修正批（桌面壳冒烟三处假红）** · **§5.120 = 演出配色探针批（SETCOLOR 投影被量否）** · **§5.121 = 看板 HK-4 · UI 系统化第一轮（字号尺度归一）** · **§5.122 = 看板 HK-4 · UI 系统化第二轮（圆角与阴影 token 归一）** · **§5.123 = 目视体检批（糖视图行高自愈 / 段首空行 / 工具条让位次序）** · **§5.124 = UI 打磨批 · 状态栏诊断计数收声（严重度色只留给 error；harness 六数字不回退）** · **§5.125 = 实机复验第十轮（清单 §5.E 机器半边 E1/E2/E3/E5/E6/E7 全收）** · **§5.126 = 实机复验第十一轮（清单 7.30–7.33 部署半边，fixture 假游戏目录 15 项全绿）** · **§5.127 = 语法糖批 P（`空行` 写法，规范 v1.4）** · **§5.128 = 索引 stat 折叠批（`stat` 2,038ms→0；热开三段 2.66/3.43/3.45s → 0.63/1.57/1.60s）** · **§5.129 = 看板 HK-8 裁决批（常驻通知溢出先丢 info）** · **§5.130 = 抽取段分段剖面批（冷开读盘 45.1s 墙钟累加 ÷ 并发 8；扫描 2,285 次全走 worker；主线程抽取循环只 1.0s ⇒ #21 结案）**） |
+| `docs/IMPLEMENTATION-LOG.md` | **批次实施记录权威**：每批实施细节 / 金样本发现 / 踩坑 / 审阅回执（当前至 **§5.130**：§5.49 = 口上项目批 P-A…P-E · §5.50 = 口上项目批 T2 · §5.51 = 内核优化批 · §5.52 = 计算池批 · §5.53 = 本批自审与验收记录 · §5.54 = UI 重设计 P4 补记 · §5.55 = 分支收口批 · §5.56 = 口上项目批 T3 · §5.57 = 口上项目批 T4 · §5.58 = 体感丝滑批 · §5.59 = 语法糖视图批 · §5.60 = 语法糖批 A/C/D/E · §5.61 = 语法糖教学样例批 · §5.62 = 语法糖批 F/G · §5.63 = 语法糖批 H · §5.64 = 两线合流批 · §5.65 = 快照卫生批 · §5.66 = 语法糖批 I · §5.67 = 语法糖批 J · §5.68 = 语法糖批 K · §5.69 = 语法糖批 L · §5.70 = 抽取按文件增量批 · §5.71 = 语法糖批 M · §5.72 = 校验按文件增量批 · §5.73 = 名称解析 memo 批 · §5.74 = 回放线重测批 · §5.75 = 语法糖度量批 · §5.76 = UI 归一批 · §5.77 = 导出批 · §5.78 = 工作区新建条目批 · §5.79 = 许可协议可选批 · §5.80 = 三线合流批 · §5.81 = 规则成本归位批 · §5.82 = 判据①发版样例批 · §5.83 = 设置页归一批 · §5.84 = BUG-5 文件监视批（判据②） · §5.85 = 撞名诊断批（任务 20 收口） · §5.86 = 判据②补证批 · §5.87 = 监视消费方批（上） · §5.88 = 落盘引导批（反馈 3） · §5.89 = 抽取快照 v4 批（负结果只在探针通道成立） · §5.90 = 实机复测批（真实 app 三段水位是探针的 2–3 个量级，头号靶子改成 IPC 读盘通道） · §5.91 = 看板 HK-5 批（文件树目录缓存的失效通道 + 工作区根进监视） · §5.92 = IPC 读盘通道批（真实 app 热开 10.5s→3.2s；下一靶子 = 批量 stat） · §5.93 = 看板 HK-6 批（面板消费工作区外部改动 + `FileChangedEvent.path` 契约更正） · §5.94 = 看板 HK-7 批（外部改动重载改按 pathKey 判等） · **§5.95 = 看板 HK-2 批（全站宿主模态接上 Esc）** · **§5.96 = 实机复验批（CDP DOM 驱动收掉 QA-1②/QA-9/QA-10，零代码改动）** · **§5.97 = 看板 HK-3 批（`exportDirectory` 契约收缩，绕闸通道收回一条）** · **§5.98 = 工具批（推送通道直连/代理交替试）** · **§5.99 = 看板 HK-4 批（编辑器工具条身份不许裁，CDP 量测挑活）** · **§5.100 = 看板 HK-4 第二轮（快速打开副行 + 全站裁剪扫描）** · **§5.101 = 实机复验批（QA-2 糖视图行高收口）** · **§5.102 = 看板 HK-4 第三轮（全站可访问性量测）** · **§5.103 = 实机复验批第三轮（fixture 游戏目录收 QA-9/QA-10）** · **§5.104 = 实机复验批第四轮（§2.J 清单：勾四格 + 修一条过期判据）** · **§5.105 = P4 补测批（壳层判据抽纯 + 合成期 Esc 门）** · **§5.106 = UI 反馈第一批（只读胶囊 / 折叠柄 / 展开反馈）** · **§5.107 = 实机复验轮（反馈 6 真凶＝项目根没有行内框槽位；四条探针 68 项全绿）** · **§5.108 = 探针选择器归一批（判据③ 自动化半边，工具与文档，零新测试）** · **§5.109 = ERB 结构波浪线批（反馈 7 落地；语料把第一版判据打脸过一次）** · **§5.110 = 合流后 IO 通道摸底批（本机，零产品代码）** · **§5.111 = 实机复验第五轮（清单 §六 7.1–7.7）** · **§5.112 = ERB 💡 一键补齐批（反馈 7 第二步）** · **§5.113 = 实机复验第六轮（清单 §六 7.D，50 项全绿）** · **§5.114 = 批 N 数据表投影（糖线，第七把尺子）** · **§5.115 = 实机复验第七轮（§六 7.15/7.16/7.23/7.28/7.29 收到证据；7.13/7.14 当时没收）** · **§5.116 = 实机复验第八轮（7.13/7.14 补收 + 判据本身被修正）** · **§5.117 = 实机复验第九轮（HK-10：💡 补齐的真实点击链）** · **§5.118 = 向导角色文案批（HK-9）** · **§5.119 = 仪器修正批（桌面壳冒烟三处假红）** · **§5.120 = 演出配色探针批（SETCOLOR 投影被量否）** · **§5.121 = 看板 HK-4 · UI 系统化第一轮（字号尺度归一）** · **§5.122 = 看板 HK-4 · UI 系统化第二轮（圆角与阴影 token 归一）** · **§5.123 = 目视体检批（糖视图行高自愈 / 段首空行 / 工具条让位次序）** · **§5.124 = UI 打磨批 · 状态栏诊断计数收声（严重度色只留给 error；harness 六数字不回退）** · **§5.125 = 实机复验第十轮（清单 §5.E 机器半边 E1/E2/E3/E5/E6/E7 全收）** · **§5.126 = 实机复验第十一轮（清单 7.30–7.33 部署半边，fixture 假游戏目录 15 项全绿）** · **§5.127 = 语法糖批 P（`空行` 写法，规范 v1.4）** · **§5.128 = 索引 stat 折叠批（`stat` 2,038ms→0；热开三段 2.66/3.43/3.45s → 0.63/1.57/1.60s）** · **§5.129 = 看板 HK-8 裁决批（常驻通知溢出先丢 info）** · **§5.130 = 抽取段分段剖面批（冷开读盘 45.1s 墙钟累加 ÷ 并发 8；扫描 2,285 次全走 worker；主线程抽取循环只 1.0s ⇒ #21 结案）**） |
 | `docs/ARCHITECTURE.md` | **架构权威**：铁律、内核边界、GameProject 形状（§5）；实施记录已迁出（§5.8+ 留指针） |
 | `docs/BASELINES.md` | 实测基线汇总（索引/回放/抽取/校验性能与正确性数字） |
 | `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` | **糖表层规范 v1.4**（v1.2 冻结版 + §3.8 一处增量〔v1.3，2026-10-12〕+ §3.3 `空行` 一处增量〔v1.4，2026-10-13〕，均由用户拍板）：语法/转译/产物逐条定义，golden 逐字节锚定（golden 断言按**标题+围栏**锚定，不再按行号） |
@@ -1172,7 +1172,7 @@
 
 ### 仓库外权威
 
-> **本机已无 `D:\DSH\reverse-engineering\` 目录**（新环境主机只有 `C:` 盘）。逆向文档改为线上托管，
+> **本机已无 `<本机目录>\reverse-engineering\` 目录**（新环境主机只有 `C:` 盘）。逆向文档改为线上托管，
 > 直链规则 `https://moments-blog-kl3wezk9yhf.qoder.zone/essays/<文件名>.md`（文件名含中文，需 percent-encode；
 > 索引页 `/essays/index.html` —— **无 index.html 会 404**）。2026-10-12 实测可取。
 
@@ -1247,7 +1247,7 @@ packages/
 ## 五、验证矩阵（怎么跑）
 
 ```bash
-cd C:\DSH\kojo-editor
+cd <工作树>
 pnpm install
 pnpm test               # 1432 项（本机真实语料无 sav/ → 金样本/集成冒烟里依赖存档的用例**显式 skip**，属正常；2026-10-12 §5.74 起不再是 ENOENT 失败）
 pnpm typecheck          # root + app（app: pnpm --filter @kojo/app typecheck）—— 两套都必须跑
@@ -1257,13 +1257,13 @@ cd packages/app/src-tauri && cargo test --lib   # 12 项（写允许域 9 + 导�
 node node_modules/vitest/vitest.mjs run packages/plugin-api/tests/sugar.test.ts   # v0.3 S1：语法糖契约（类型守卫 / 别名只读性 / 源映射 / golden 逐字节）
 node node_modules/vitest/vitest.mjs run packages/plugins/kojo-sugar/tests/compile.test.ts   # v0.3 S3：编译落盘（编码组装 / 双闸 / 备份 / 回读验证）
 # 真实工程集成冒烟（168 角色/2285 文件/99k 函数/家族覆盖率/导航地基/校验报告/条件抽取/存档六档/状态回放/注入写链路/**语法糖编译落盘**）：
-KOJO_SMOKE_PROJECT="C:\game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
+KOJO_SMOKE_PROJECT="C:\game\eratw-4.980基线语料" pnpm vitest run packages/kernel/tests/integration-plugins.test.ts
 # 回放线复测（§5 / §6）——**存档库 = `C:\Game\eratw-save\sav\`**（语料的同级目录，2026-10-13 用户定；
 # 真实语料本体始终零写入、也**不放** sav/，避免与作者自己的游戏目录混在一起）。档不入库，身份见 BASELINES §5。
 # A) 只复测金样本（serialize∘parse 同构，只需 .sav）→ **零副本直跑**：
 KOJO_SMOKE_PROJECT="C:/Game/eratw-save" node node_modules/vitest/vitest.mjs run packages/plugins/sav-parser/tests/golden-roundtrip.test.ts
 # B) 复测全链路（索引/校验/抽取/回放/注入，需要完整工程根）→ 用一次性副本，验完删：
-#   cmd //c "robocopy C:\Game\eratw-...-SANYOUSEI(PC) C:\tmp-kojo-sav\eratw /E /XJ /MT:24 /NFL /NDL /NJH /NJS /R:1 /W:1"   # 退出码 <8 即成功
+#   cmd //c "robocopy C:\Game\<基线语料> C:\tmp-kojo-sav\eratw /E /XJ /MT:24 /NFL /NDL /NJH /NJS /R:1 /W:1"   # 退出码 <8 即成功
 #   cmd //c "robocopy C:\Game\eratw-save\sav C:\tmp-kojo-sav\eratw\sav /E /NFL /NDL /NJH /NJS"
 KOJO_SMOKE_PROJECT="C:/tmp-kojo-sav/eratw" node node_modules/vitest/vitest.mjs run packages/kernel/tests/integration-plugins.test.ts
 #   跑**全量**套测时仍然**不要**设 KOJO_SMOKE_PROJECT（会放行依赖存档的用例并在无档机器上变红）
@@ -1591,11 +1591,11 @@ node tools/smoke-tauri-ipc.mjs
 
 **实施结果**（IMPLEMENTATION-LOG §5.35 为权威）：把语法糖从"能编译"推进到"**写起来有支撑**"——四处交付：Monarch 高亮、补全、危险波浪线、判定面板。**§8 静态 lint 清单已在 S2 批落在 `convention-linter` 的 `sugar.static-conventions`（commit a6a7681），本批不重复实现。**
 
-- **高亮住 app 宿主层，不住插件**：[kojo-language.ts](file:///d:/DSH/kojo-editor/packages/app/src/monaco/kojo-language.ts) 的 Monarch tokenizer + 语言配置 + 补全 provider 全在 `packages/app/src/monaco/`——**Monaco 不属任何插件**（插件契约刻意不依赖 Monaco），对齐 `erb-language.ts` 先例。糖专属 token 配色导出 `KOJO_SUGAR_THEME_RULES`，由 `erb-language.ts` **合并进同一处 `defineTheme('kojo-dark')`**（避免二次定义覆盖）。
+- **高亮住 app 宿主层，不住插件**：[kojo-language.ts](file:///<工作树>/packages/app/src/monaco/kojo-language.ts) 的 Monarch tokenizer + 语言配置 + 补全 provider 全在 `packages/app/src/monaco/`——**Monaco 不属任何插件**（插件契约刻意不依赖 Monaco），对齐 `erb-language.ts` 先例。糖专属 token 配色导出 `KOJO_SUGAR_THEME_RULES`，由 `erb-language.ts` **合并进同一处 `defineTheme('kojo-dark')`**（避免二次定义覆盖）。
 - **词表单一真源（本批最关键的解耦决策）**：中文关键字 / 英文别名 / 运算符一律从 `kojo-sugar` 转译器自身的 `KEYWORDS`/`OPERATORS` **派生导出**（`SUGAR_LEXICON_WORDS`/`SUGAR_LEXICON_OPERATORS`/`sugarEditorLexicon()`），app 组合根 import——**高亮/补全与词法永不脱节**，本文件不复制任何词形清单。app → 插件的数据导入不违反审计（app 组合根本就 import 插件）。
 - **规范 §4.1「中英双收但不对等展示」**：中文主形进补全列表，**英文隐藏别名输入即生效但不进列表**（避免污染候选）；保留代词 `她`/`你` 单列；文件内 `别名 X = …` 名字排最前（扫描 `ALIAS_DECL`，不重复转译器）。
 - **波浪线走新槽 `ui.editor.decorator`（本批首次消费）**：契约 `LineDecoration` 增列级 `startColumn?`/`endColumn?`/`code?`；插件注册**纯函数** `decorate({path,text,project})` → app 壳 `refreshMarkers()` 逐个 try/catch 消费为 Monaco markers（`monaco.editor.setModelMarkers`，owner=`kojo-decorators`，250ms 去抖）。**契约刻意不提 Monaco**——宿主负责翻译，插件只吐行/列/严重级。
-- **「糖判定」面板**（[ui-sugar-editor](file:///d:/DSH/kojo-editor/packages/plugins/ui-sugar-editor/src/index.ts)，`ui.panel` order 76）：当前 `.kojo` 的转译判定（**可编译 / 有警告 / 不可编译** + 逐条诊断，点击 `editor.revealLocation` 跳转）；`requires` 只有 `sugar.transpile` + `kernel.io`，`provides` 为空（纯消费者）。与 `ui-sugar-preview`（回放预览）、`ui-convention-report`（全项目校验）**职责不重叠**。
+- **「糖判定」面板**（[ui-sugar-editor](file:///<工作树>/packages/plugins/ui-sugar-editor/src/index.ts)，`ui.panel` order 76）：当前 `.kojo` 的转译判定（**可编译 / 有警告 / 不可编译** + 逐条诊断，点击 `editor.revealLocation` 跳转）；`requires` 只有 `sugar.transpile` + `kernel.io`，`provides` 为空（纯消费者）。与 `ui-sugar-preview`（回放预览）、`ui-convention-report`（全项目校验）**职责不重叠**。
 - **事件纪律**：装饰函数与判定面板**都是纯读取**（不改盘、不发 `file.changed`）；当前文件走宿主广播 `editor.activeFileChanged`；UI 插件间零直接依赖。
 - **`SugarDiagnosticCode` 是闭集**：测试里造占位诊断不能随便填串（tsc TS2322）→ helper 用 `Omit<Partial<SugarDiagnostic>,'code'> & {code: string}` 再内部断言为闭集成员。
 
@@ -1609,7 +1609,7 @@ node tools/smoke-tauri-ipc.mjs
 
 **实施结果**（IMPLEMENTATION-LOG §5.36 为权威）：把"编辑 → 保存"闭环缺的最后一块**数据层**补上——`.kojo` 的**目标产物路径推导** + **保存前置检查** `planSave`。本批**只做数据层**，UI 接线留 S7-UI。
 
-- **目标推导 = "同目录换扩展名"（非 `charaIndex[no].kojoDir` 拼接）**：[resolveSugarTarget](file:///d:/DSH/kojo-editor/packages/plugin-api/src/sugar.ts) 只做 `.kojo` → 同目录同基名 `.ERB`（大小写不敏感，分隔符保留原样），**纯函数、零游戏知识、住契约层**。源 `.kojo` 由新建向导与产物**同目录**生成、沿用产物基名（`M_KOJO_K49_指令.kojo` 惯例），故换扩展名即正确；跨目录/改名（需 adapter 命名知识）留新建向导。
+- **目标推导 = "同目录换扩展名"（非 `charaIndex[no].kojoDir` 拼接）**：[resolveSugarTarget](file:///<工作树>/packages/plugin-api/src/sugar.ts) 只做 `.kojo` → 同目录同基名 `.ERB`（大小写不敏感，分隔符保留原样），**纯函数、零游戏知识、住契约层**。源 `.kojo` 由新建向导与产物**同目录**生成、沿用产物基名（`M_KOJO_K49_指令.kojo` 惯例），故换扩展名即正确；跨目录/改名（需 adapter 命名知识）留新建向导。
 - **全角空格单一真源上收契约层**：`FULLWIDTH_SPACE` / `fullwidthSpaceLines` 从 `ui-sugar-preview` 本地定义**上收**到 `plugin-api/sugar.ts`，预览面板改为**原样转出**（import 面不变、测试零改动即绿）——保存前置检查与预览面板共用同一判据，杜绝分叉。
 - **`planSave` 是只读前置**：一次算齐「目标推导 + 转译（产物/源映射/诊断）+ 全角空格告警行」；`blocked` 闭集两值 `'source-not-kojo' | 'transpile-error'`（优先级：无目标 > 半成品）。**落盘仍走 S3 `compileToFile`**，写盘能力不外溢（能力面 = 服务键面）。
 - **全角空格只告警不阻断**：规范 §8 明文"保存期告警"；语料证据 55,565 / 3,599,696 行（1.54%）全为行中用途、**行首 0 次**。故独立成 `fullwidthSpaceLines` 字段而非诊断码（不污染 `SugarDiagnosticCode` 语义闭集），阻断/一键修复留 UI。
@@ -1623,9 +1623,9 @@ node tools/smoke-tauri-ipc.mjs
 
 **实施结果**（IMPLEMENTATION-LOG §5.37 为权威）：把 §5.36 数据层接成 **UI 闭环**——`.kojo` 编辑 → `Ctrl+S` → 源保存 + 产物 `.ERB` 编译落盘。落盘能力（`compileToFile`）与前置检查（`planSave`）**一行未改**，全部复用。
 
-- **新通用槽 `ui.editor.saveHandler`（宿主零格式知识的关键）**：[slots.ts](file:///d:/DSH/kojo-editor/packages/plugin-api/src/slots.ts) 新增 `EditorSaveHandlerContribution`（`matches(path)` + `save(request)`）+ `EditorSaveOutcome` 三态（`saved` / `needs-choice` / `error`）+ `EditorSaveWarning` / `EditorSaveChoices`。宿主保存前按 `matches` 就近征询接管者（取 `order` 最小命中，唯一接管不级联），命中即委托；**无命中 → 内核 io `writeText` 缺省保存**（能力缺席自动退化，不静默不阻塞）。
-- **`.kojo` 保存逻辑住插件**（[save-handler.ts](file:///d:/DSH/kojo-editor/packages/plugins/ui-sugar-editor/src/save-handler.ts)，纯编排可单测）：`planSave` 前置 → **源文件始终保存**（作者成果不可因编译失败而丢）→ `blocked` 只拦产物（`note`「产物未生成：转译含 N 项错误」）→ 否则 `compileToFile` 落盘。失败一律转 `error` 结果（**不抛**）。
-- **全角空格 = 告警 + 决策点（不强制阻断）**：未确认返 `needs-choice` 且**尚未落盘**（避免"取消"留副作用）；宿主弹 [SaveWarningDialog.tsx](file:///d:/DSH/kojo-editor/packages/app/src/ui/SaveWarningDialog.tsx) 三选——**取消 / 仍然保存 / 替换为半角空格并保存**（后者走 `executeEdits` + `pushUndoStop`，**可撤销**修复）。语义依据：规范 §8 + §5.36 决策 2（语料 1.54% 全为行中用途、行首 0 次）。
+- **新通用槽 `ui.editor.saveHandler`（宿主零格式知识的关键）**：[slots.ts](file:///<工作树>/packages/plugin-api/src/slots.ts) 新增 `EditorSaveHandlerContribution`（`matches(path)` + `save(request)`）+ `EditorSaveOutcome` 三态（`saved` / `needs-choice` / `error`）+ `EditorSaveWarning` / `EditorSaveChoices`。宿主保存前按 `matches` 就近征询接管者（取 `order` 最小命中，唯一接管不级联），命中即委托；**无命中 → 内核 io `writeText` 缺省保存**（能力缺席自动退化，不静默不阻塞）。
+- **`.kojo` 保存逻辑住插件**（[save-handler.ts](file:///<工作树>/packages/plugins/ui-sugar-editor/src/save-handler.ts)，纯编排可单测）：`planSave` 前置 → **源文件始终保存**（作者成果不可因编译失败而丢）→ `blocked` 只拦产物（`note`「产物未生成：转译含 N 项错误」）→ 否则 `compileToFile` 落盘。失败一律转 `error` 结果（**不抛**）。
+- **全角空格 = 告警 + 决策点（不强制阻断）**：未确认返 `needs-choice` 且**尚未落盘**（避免"取消"留副作用）；宿主弹 [SaveWarningDialog.tsx](file:///<工作树>/packages/app/src/ui/SaveWarningDialog.tsx) 三选——**取消 / 仍然保存 / 替换为半角空格并保存**（后者走 `executeEdits` + `pushUndoStop`，**可撤销**修复）。语义依据：规范 §8 + §5.36 决策 2（语料 1.54% 全为行中用途、行首 0 次）。
 - **顺手修复潜在缺陷**：宿主 `Ctrl+S` 回调（`addCommand` 只注册一次）原闭包捕获旧 `save`（旧 deps 含 `filePath`）→ 换文件后会**存到旧文件**。改用 `filePathRef.current` + 稳定 deps（`[kernel, markSaved]`）修掉。
 - **无新插件**：契约增槽 + 插件增第三处贡献 + 宿主接线 + 单测，插件数仍 **16**。
 
@@ -1657,28 +1657,28 @@ node tools/smoke-tauri-ipc.mjs
 
 | 坑 | 对策 |
 |---|---|
-| **本文档正文历史批次里满是 `D:\DSH` / `D:\Game` / `D:\Code\Nodejs` 路径**（照抄必失败） | 本机为新环境主机，只有 `C:` 盘 —— 换算表见 §一；§六 的历史记录**保留不回改**（git 历史同理，§十一-2 口径） |
+| **本文档正文历史批次里满是 `<本机目录>` / `<本机目录>` / `<node 安装目录>` 路径**（照抄必失败） | 本机为新环境主机，只有 `C:` 盘 —— 换算表见 §一；§六 的历史记录**保留不回改**（git 历史同理，§十一-2 口径） |
 | 沙箱注入的 `HTTP(S)_PROXY=127.0.0.1:8587` 是**坏的**，git/curl 默认走它必失败 | **推送一律用 `node tools/git-push.mjs`**（§5.98 起：奇数趟清代理直连、偶数趟走本机 Clash 代理，交替试；`KOJO_GIT_PROXY=""` 可退回纯直连） |
-| github 直连时通时断（2026-10-13 实测：直连会 `Recv failure: Connection was reset`；**同晚 §5.97 推送时旧工具 6/6 全灭而代理一次就通**） | 直接跑 `node tools/git-push.mjs` 就行（它两条路都试）。手工兜底：`git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 push`（实测 `HTTP/1.1 200 Connection established`；**别改全局 git config**）。`git fetch` 同理要带代理 |
+| github 直连时通时断（2026-10-13 实测：直连会 `Recv failure: Connection was reset`；**同晚 §5.97 推送时旧工具 6/6 全灭而代理一次就通**） | 直接跑 `node tools/git-push.mjs` 就行（它两条路都试）。手工兜底：`git -c http.proxy=<本机代理> -c https.proxy=<本机代理> push`（实测 `HTTP/1.1 200 Connection established`；**别改全局 git config**）。`git fetch` 同理要带代理 |
 | npm/pnpm registry=npmmirror **直连可用** | 别给镜像配代理（ECONNREFUSED）；项目 `.npmrc` 已固定 |
 | pnpm 11 供应链策略拦构建脚本 | pnpm-workspace.yaml `allowBuilds` 显式批准（esbuild 已批） |
 | **`npx vitest` 会吞掉命令行环境变量**（Git-Bash 的 npx shim 不透传），带 `KOJO_SMOKE_PROJECT` 跑真实语料时整组静默 skip，看起来像"通过" | 带环境变量一律用 `node node_modules/vitest/vitest.mjs run <file>`（实测 `npx` 传不进、直调 node 传得进） |
 | **`cat >> 文件` 在本机 shell 会把内容插到文件开头**（2026-10-12 实测把 describe 块灌到第 2 行；**2026-10-13 §5.89 同一条坑重现**：一次 heredoc 追加把 5,227 行的 `IMPLEMENTATION-LOG.md` 首部覆盖掉，靠事先 `.local` 备份 + `git show HEAD:<file> \| cmp -` 逐字节核对才复原） | **追加一律用 Edit/Write 工具**或 `node -e "fs.appendFileSync(...)"`；**改大文件前先 `cp` 一份**，复原前先核对备份与 HEAD 逐字节相同；改完必须 `grep -n` 读回首行与目标小节 |
 | **在 vitest + node bridge 探针里量出来的"水位"不是用户等的时间**（§5.90：同一段真实 app 慢 2–3 个量级，因为每次读盘要过两趟 IPC） | 机制类结论（复用率 / 指纹等价 / 判据生死）可以用探针；**体感类结论一律 CDP 驱动真实 `tauri dev` 读 `__kojoPerf` 三个水位**；探针脚本只读语料、不点「允许写入」、`recent-projects.json` 播种后还原 |
 | **多线程期间 `IMPLEMENTATION-LOG` 小节号凭记忆取 ⇒ 必撞**（2026-10-12 一天内撞三次：§5.49、§5.50、§5.59） | 写日志小节前先 `git fetch`，用 `grep -E "^### 5\." docs/IMPLEMENTATION-LOG.md \| tail -1` 取当前最大号 +1；rebase 撞号时**后落地的一方让位**（已公开编号不动），并在自己的小节头注里记下让位事实 |
-| **Git-Bash 里 `TMP=/tmp` 让 MSVC `link.exe` 报 `LNK1104: 无法打开文件 C:\WINDOWS\lnk{GUID}.tmp`**（`cargo check` / `cargo test` 直接跑必挂，`TMP='D:\\...' ` 前缀也救不了） | **cargo 一律经 node 起**（`node -e "cp.execSync('cargo test --lib',{cwd:'…/src-tauri'})"`）——node 继承的是真 Windows 环境 `TMP=C:\Users\123\AppData\Local\Temp`，实测立刻通过 |
+| **Git-Bash 里 `TMP=/tmp` 让 MSVC `link.exe` 报 `LNK1104: 无法打开文件 C:\WINDOWS\lnk{GUID}.tmp`**（`cargo check` / `cargo test` 直接跑必挂，`TMP='D:\\...' ` 前缀也救不了） | **cargo 一律经 node 起**（`node -e "cp.execSync('cargo test --lib',{cwd:'…/src-tauri'})"`）——node 继承的是真 Windows 环境 `TMP=%LOCALAPPDATA%\Temp`，实测立刻通过 |
 | **`window.__TAURI_INTERNALS__.invoke` 包不上**：它是 **non-writable 数据属性**，直接赋值和 `defineProperty` 都抓不到真实调用（§5.110 实测：注入后自检返回 `NOT-COUNTED(0)`） | 别指望 monkey-patch 数 IPC。两条正路：**次数**用 app 自己的日志计数（`reused 2285/2285`、`重算 2285 文件`、`逐文件重算 4570 个文件`）；**成本**在页面里直接跑受控实验（同一条路径集，串行 vs 并发各测一次）。任何计数探针**必须带自检**（调一次已知命令看有没有 +1），否则假数会一路进结论 |
-| **探针 fatal 路径不收子进程 ⇒ 1420 被占死**，下一发 `tauri dev` 直接起不来（§九-29 那条连坐坑换了形式重现）；而 Git-Bash 里 `taskkill /PID x /T /F` 会被 MSYS 改写成 `D:/Code/Git/PID`，报"无效参数" | `spawn` 之后**立刻** `process.on('exit', () => spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {windowsHide:true}))`；taskkill 一律走 node 的参数数组（不要经 shell），事后用 `netstat | grep 1420` 确认端口已空 |
+| **探针 fatal 路径不收子进程 ⇒ 1420 被占死**，下一发 `tauri dev` 直接起不来（§九-29 那条连坐坑换了形式重现）；而 Git-Bash 里 `taskkill /PID x /T /F` 会被 MSYS 改写成 `<Git 安装目录>/PID`，报"无效参数" | `spawn` 之后**立刻** `process.on('exit', () => spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {windowsHide:true}))`；taskkill 一律走 node 的参数数组（不要经 shell），事后用 `netstat | grep 1420` 确认端口已空 |
 | **应用侧探针也会把 fire-and-forget 的快照落盘截断**（§5.130 实测，v1 探针）：一到水位就 `taskkill` ⇒ 12 MB 抽取快照的写入被截在进程退出时，`store/condition-extractor/` 空目录 ⇒ **下一轮开项目仍是冷开，差点被读成"缓存没命中"的产品缺陷** | 探针收进程前**等插件自己那条落盘完成日志**（`Condition snapshot saved`）；量"某段耗时"的探针别在同一轮里顺手量"缓存有没有命中" |
-| **同一个工作树只能跑一个桌面实例**（§5.128 实测）：另一发 `tauri dev` 跑的正是本树编译出的 `target\debug\kojo-editor.exe`，占着二进制（cargo 报 `拒绝访问 (os error 5)`）与 WebView2 用户数据目录 ⇒ 第二个实例**既编译不动也起不来**（WebView2 `0x8007139F`）；**换端口没用**（`tauri dev --config` 能覆盖 devUrl，锁还在） | 复测前先 `tasklist` 看有没有 `kojo-editor.exe`，确认是谁的会话再动——本组口径：**先问用户、经授权才 taskkill**。两条连带小坑：`spawn(…, {shell:true})` 传内联 JSON 会被吞引号 ⇒ 写成临时 json 文件再传路径；taskkill 必须走 node 的参数数组（MSYS 会把 `/PID` 改写成 `D:/Code/Git/PID`） |
-| **`(git fetch | tail) || 代理兜底` 是假兜底**：管道只把 `tail` 的退出码 0 交回来，直连失败被静默吞掉 ⇒ 在**过期的 `origin/master` 视图**上差点完成推送（§5.128 第五次撞号就是这么漏出来的） | fetch / push 单独成句，跑完看 `rc=$?` 或 `${PIPESTATUS[0]}`；兜底要显式判失败并改走 `git -c http.proxy=http://127.0.0.1:7890`（**只给单次调用带代理，不动全局配置**） |
+| **同一个工作树只能跑一个桌面实例**（§5.128 实测）：另一发 `tauri dev` 跑的正是本树编译出的 `target\debug\kojo-editor.exe`，占着二进制（cargo 报 `拒绝访问 (os error 5)`）与 WebView2 用户数据目录 ⇒ 第二个实例**既编译不动也起不来**（WebView2 `0x8007139F`）；**换端口没用**（`tauri dev --config` 能覆盖 devUrl，锁还在） | 复测前先 `tasklist` 看有没有 `kojo-editor.exe`，确认是谁的会话再动——本组口径：**先问用户、经授权才 taskkill**。两条连带小坑：`spawn(…, {shell:true})` 传内联 JSON 会被吞引号 ⇒ 写成临时 json 文件再传路径；taskkill 必须走 node 的参数数组（MSYS 会把 `/PID` 改写成 `<Git 安装目录>/PID`） |
+| **`(git fetch | tail) || 代理兜底` 是假兜底**：管道只把 `tail` 的退出码 0 交回来，直连失败被静默吞掉 ⇒ 在**过期的 `origin/master` 视图**上差点完成推送（§5.128 第五次撞号就是这么漏出来的） | fetch / push 单独成句，跑完看 `rc=$?` 或 `${PIPESTATUS[0]}`；兜底要显式判失败并改走 `git -c http.proxy=<本机代理>`（**只给单次调用带代理，不动全局配置**） |
 | **临时探针（vitest）进程退出会截断 fire-and-forget 的快照落盘**：12 MB 只留下 `.tmp` 孤儿、正式文件从未 rename 出来 ⇒ 下一轮"什么都没读到"，直接量出"缓存没收益"的**假结论**（2026-10-12 §5.70 踩到） | 原子写以 rename 收尾 ⇒ 轮询**「目标文件 mtime 比进入本轮时新」**才算落盘完成（只看 `size>0` 不行，正式文件可能还在；全命中那轮反过来断言 mtime **未变** = 没回写） |
 | **`ConditionIndex.durationMs` 不含快照读盘**（引擎 `t0` 在 `load` 之后），而级联由 `project.opened` 自动催动、显式 `ensureIndex()` 只是汇合在途 Promise ⇒ 围 `ensureIndex()` 计时量到的是"汇合耗时"，12 MB 的还原成本整段漏掉（差点报出"抽取 15ms"） | 量级联某段 = **从 `project.open()` 起算的水位差**（前一水位减后一水位），别用自计 `durationMs` 当体感 |
 | bash coreutils 时常 127；`node -e` 多层引号/Markdown 反引号必翻车 | 一切用 node 临时 `.mjs` 文件或 Read/Write/Edit 工具；PowerShell 工具 stdout 不回显 |
 | **`node -e` / bash 里的多层引号与 `grep -E "...\(..."`**：Git-Bash 的 grep 常把 `-E` 当普通正则用（`Unmatched (`），带引号的 node 内联脚本必翻车 | 一律落成临时 `.mjs` 文件再 `node` 跑；数出现次数用 `node -e` 里的 `str.match(/.../gm).length` 而不是 grep |
 | **从代码路径"推"调用次数会推错**（本批实测：按 `find` + 命中后再一次 + `filter` 推 `kx-placeholder` 是 3×/名字 ⇒ 算出 594,621 次；真实读数是 397,622——`find` 在无命中时短路，而绝大多数名字无命中） | **给被优化的纯函数加计数读数**（`memo.stats()` 之类）再下结论；分布表必须是量出来的，不是推出来的（§5.73） |
 | **vitest 会把 `console.log` 的第一行并进 `stdout | <文件> > <套件> > <用例>` 那行头**（多行日志只丢首行，看起来像"没打印"）⇒ 用 `grep '^\[probe'` 过滤会把水位行整个漏掉，误判成"探针没测到" | 探针输出**重定向到文件**再 grep（`> .local/probe-x.txt 2>&1`），或把关键数字放在非首行 |
-| **bash 严重残缺时 pnpm/vitest/tsc shim 全挂**（`sed`/`dirname`/`uname` 缺失） | 直调 node：`node "D:/Code/Nodejs/node_global/node_modules/pnpm/bin/pnpm.mjs" install`；vitest → `node "node_modules/.pnpm/vitest@4.1.11_@types+node@2_1db5548ac037c87131628c83c4241b81/node_modules/vitest/vitest.mjs" run`；tsc → `node "node_modules/.pnpm/typescript@7.0.2/node_modules/typescript/lib/tsc.js" --noEmit -p tsconfig.json` |
+| **bash 严重残缺时 pnpm/vitest/tsc shim 全挂**（`sed`/`dirname`/`uname` 缺失） | 直调 node：`node "<pnpm 的 pnpm.mjs>" install`；vitest → `node "node_modules/.pnpm/vitest@4.1.11_@types+node@2_1db5548ac037c87131628c83c4241b81/node_modules/vitest/vitest.mjs" run`；tsc → `node "node_modules/.pnpm/typescript@7.0.2/node_modules/typescript/lib/tsc.js" --noEmit -p tsconfig.json` |
 | **Edit 工具偶发"声称成功未落盘"，且同文件并行 Edit 会 EBUSY** | 关键修改后读回验证；**同一文件的多次 Edit 必须串行** |
 | 模板字符串里写 Markdown 反引号（如 \`====\`）会截断 TS 模板串 | 用「」代替反引号 |
 | cargo 输出带 ANSI 色码 | 正则匹配前先 stripAnsi（tools/smoke-*.mjs 有现成函数） |
@@ -1779,9 +1779,9 @@ node tools/smoke-tauri-ipc.mjs
    规矩：写判据前先问"**这条判据在什么情况下会红**"；答不上来就换一条能证伪的（本仓 §5.116 也栽在同一类上）。
 ## 十、新会话动手清单
 
-1. `cd C:\DSH\kojo-editor && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `C:\DSH\kojo-editor`，
-   本机 = `D:\DSH\kojo-editor`；bash 残缺时用 §八 的直调 node 方式）
-2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1852 passed / 14 skipped（1866）**、105 文件过 / 8 跳 / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，**现 18 项全绿**（本表此前长期写 19：`eac536e`（§5.97）撤 `exportDirectory` 通道时连删 3 条用例，此后实为 16；§5.128 加 2 条 ⇒ 18。汇总行当时没跟着改）；本工作树没有 `target/`，首次是冷编译数分钟；新增 crate 需 `HTTPS_PROXY=http://127.0.0.1:7890`，与推送同一代理）
+1. `cd <工作树> && pnpm install`（**绝对路径按主机而**：口上项目组主机 = `<工作树>`，
+   本机 = `<工作树>`；bash 残缺时用 §八 的直调 node 方式）
+2. `pnpm test && pnpm typecheck && pnpm audit:decoupling` —— **确认三项全绿**（基线：**1852 passed / 14 skipped（1866）**、105 文件过 / 8 跳 / 16 插件 / 审计 A/B/C/D 四项）**注意 typecheck 要 root + `packages/app` 双跑**；改了 Rust 再加 `cargo test --lib`（cwd = `packages/app/src-tauri`，**现 18 项全绿**（本表此前长期写 19：`eac536e`（§5.97）撤 `exportDirectory` 通道时连删 3 条用例，此后实为 16；§5.128 加 2 条 ⇒ 18。汇总行当时没跟着改）；本工作树没有 `target/`，首次是冷编译数分钟；新增 crate 需 `HTTPS_PROXY=<本机代理>`，与推送同一代理）
 3. 读 `docs/IMPLEMENTATION-LOG.md`（§5.8–§5.130 全量批次记录）+ `docs/ARCHITECTURE.md` §1–§7 + 本文件 §二 / §六 / §十二；
    **并先扫一遍 §十三 跨主机协作看板**——`待认领` 的行是该动手的活，`已认领:<别线>` 的不要抢；
    §13.6 是"谁不动哪个文件"的边界表，有异议直接改那一行（改行即生效）
@@ -1855,7 +1855,7 @@ node tools/smoke-tauri-ipc.mjs
 
 | 线 | 归属 | 范围 |
 | :-- | :-- | :-- |
-| **整体项目推进 + UI 优化** | **本组（haruki 主机小组）** | 内核 / plugin-api 契约 / 宿主壳 / 面板与交互 / 口上项目线 / 发版 |
+| **整体项目推进 + UI 优化** | **本组（本机小组）** | 内核 / plugin-api 契约 / 宿主壳 / 面板与交互 / 口上项目线 / 发版 |
 | 语法糖优化 | 别组（`syntax-sugar`） | `kojo-sugar` 转译语义、`.kojo` 高亮补全、糖视图、升糖口径 |
 | 性能优化 | 别组（分支**尚未推上远端**，截至 2026-10-12） | 索引 / 解析耗时、tree-sitter 重做对照线 |
 
@@ -1903,7 +1903,7 @@ node tools/smoke-tauri-ipc.mjs
    §5.92 = IPC 读盘通道批（真实 app 热开 10.5s→3.2s）、§5.109 = ERB 波浪线批、§5.110 = 合流后 IO 通道摸底批、**§5.111 = 实机复验第五轮（清单 §六 7.1–7.7，零代码改动）**、**§5.114 = 批 N 数据表投影（糖线，第七把尺子）**。
    ⚠ 本表历史上只逐条列到 §5.96，**§5.97–§5.108 不再逐条登记**——取号一律以
    `grep -E "^### 5\." docs/IMPLEMENTATION-LOG.md | tail -1` 的现读值 +1 为准（本文件 §十二-1 的固定做法）；
-   **（下面这段是历史行文，取号以本小节开头那条为准：新批次从 §5.131 起）**。**§5.97 = 看板 HK-3 批（`exportDirectory` 契约收缩）**、**§5.98 = 工具批（`git-push.mjs` 直连/代理交替试）**、**§5.99 = 看板 HK-4 批（编辑器工具条身份不许裁，CDP 量测挑活）**、**§5.100 = 看板 HK-4 第二轮（快速打开副行 + 全站裁剪扫描）**、**§5.101 = 实机复验批（QA-2 糖视图行高收口，零代码改动）**、**§5.102 = 看板 HK-4 第三轮（全站可访问性量测）**、**§5.103 = 实机复验批第三轮（fixture 游戏目录：QA-9 两半 + QA-10 五家收口）**、**§5.104 = 实机复验批第四轮（§2.J 判据②清单勾四格 + 修一条过期判据）**、**§5.105 = P4 补测批（壳层判据抽纯 + 合成期 Esc 门）**、**§5.106 = UI 反馈第一批（只读胶囊 / 折叠柄 / 展开反馈）**、**§5.107 = 实机复验轮（反馈 6 复验 + 口上项目面板新建链修复）**、**§5.108 = 探针选择器归一批（判据③ 自动化半边在 §5.106 之后整轮红，haruki 主机）**、**§5.109 = ERB 结构波浪线批（反馈 7 落地，qa 主机）**。**§5.112 = ERB 💡 一键补齐批**、**§5.113 = 实机复验第六轮**、**§5.114 = 批 N 数据表投影（糖线，第七把尺子）**、**§5.115 = 实机复验第七轮（qa 主机，零代码改动）**、**§5.116 = 实机复验第八轮（7.13/7.14 补收 + 判据修正）**、**§5.117 = HK-10 收口**、**§5.118 = HK-9 向导角色文案批**、**§5.119 = 仪器修正批（桌面壳冒烟三处假红；本组主机能跑实机半边）**、**§5.120 = 演出配色探针批（第二杠杆被否证 + §9-5 理由待更正）**、**§5.121 = 看板 HK-4 批（UI 系统化第一轮 · 字号尺度归一）**、**§5.122 = 看板 HK-4 批（UI 系统化第二轮 · 圆角与阴影 token 归一）**、**§5.123 = 目视体检批（qa 主机，+5 项）**、**§5.124 = UI 打磨批（状态栏计数收声，qa 主机）**、**§5.125 = 实机复验第十轮（清单 §5.E 机器半边）**、**§5.126 = 实机复验第十一轮（清单 7.30–7.33 部署半边）**、**§5.127 = 语法糖批 P（`空行` 写法，规范 v1.4）**、**§5.128 = 索引 stat 折叠批（性能线：热开 3.43s→1.60s）**、**§5.129 = 看板 HK-8 裁决批（常驻通知先丢 info；中断批盘点落库，见 §十二-7）**、**§5.130 = 抽取段分段剖面批（冷开读盘是大头、扫描已全走 worker ⇒ #21 结案）**。**新批次从 §5.131 起**。
+   **（下面这段是历史行文，取号以本小节开头那条为准：新批次从 §5.131 起）**。**§5.97 = 看板 HK-3 批（`exportDirectory` 契约收缩）**、**§5.98 = 工具批（`git-push.mjs` 直连/代理交替试）**、**§5.99 = 看板 HK-4 批（编辑器工具条身份不许裁，CDP 量测挑活）**、**§5.100 = 看板 HK-4 第二轮（快速打开副行 + 全站裁剪扫描）**、**§5.101 = 实机复验批（QA-2 糖视图行高收口，零代码改动）**、**§5.102 = 看板 HK-4 第三轮（全站可访问性量测）**、**§5.103 = 实机复验批第三轮（fixture 游戏目录：QA-9 两半 + QA-10 五家收口）**、**§5.104 = 实机复验批第四轮（§2.J 判据②清单勾四格 + 修一条过期判据）**、**§5.105 = P4 补测批（壳层判据抽纯 + 合成期 Esc 门）**、**§5.106 = UI 反馈第一批（只读胶囊 / 折叠柄 / 展开反馈）**、**§5.107 = 实机复验轮（反馈 6 复验 + 口上项目面板新建链修复）**、**§5.108 = 探针选择器归一批（判据③ 自动化半边在 §5.106 之后整轮红，本机）**、**§5.109 = ERB 结构波浪线批（反馈 7 落地，qa 主机）**。**§5.112 = ERB 💡 一键补齐批**、**§5.113 = 实机复验第六轮**、**§5.114 = 批 N 数据表投影（糖线，第七把尺子）**、**§5.115 = 实机复验第七轮（qa 主机，零代码改动）**、**§5.116 = 实机复验第八轮（7.13/7.14 补收 + 判据修正）**、**§5.117 = HK-10 收口**、**§5.118 = HK-9 向导角色文案批**、**§5.119 = 仪器修正批（桌面壳冒烟三处假红；本组主机能跑实机半边）**、**§5.120 = 演出配色探针批（第二杠杆被否证 + §9-5 理由待更正）**、**§5.121 = 看板 HK-4 批（UI 系统化第一轮 · 字号尺度归一）**、**§5.122 = 看板 HK-4 批（UI 系统化第二轮 · 圆角与阴影 token 归一）**、**§5.123 = 目视体检批（qa 主机，+5 项）**、**§5.124 = UI 打磨批（状态栏计数收声，qa 主机）**、**§5.125 = 实机复验第十轮（清单 §5.E 机器半边）**、**§5.126 = 实机复验第十一轮（清单 7.30–7.33 部署半边）**、**§5.127 = 语法糖批 P（`空行` 写法，规范 v1.4）**、**§5.128 = 索引 stat 折叠批（性能线：热开 3.43s→1.60s）**、**§5.129 = 看板 HK-8 裁决批（常驻通知先丢 info；中断批盘点落库，见 §十二-7）**、**§5.130 = 抽取段分段剖面批（冷开读盘是大头、扫描已全走 worker ⇒ #21 结案）**。**新批次从 §5.131 起**。
    小节**物理顺序现已单调**（§5.73 → §5.74 → §5.75 → §5.76 … §5.130）：§5.74/§5.75 曾因让位改号被
    重排脚本挤到文末，§5.89 同批改回，并核对移动前后**行多重集只差空行**。
    **纪律一：改号只改标题行，不要搬整节**——要搬就用脚本，搬完必须比对行多重集。
@@ -1921,12 +1921,12 @@ node tools/smoke-tauri-ipc.mjs
    ③ 解完冲突用 `^(<<<<<<<|=======|>>>>>>>)( |$)` 扫全仓（**带后缀的标记也要抓到**，见 §九-42）。
 2. **存档库位置（用户 2026-10-13 定）**：六份原始存档在 **`C:\Game\eratw-save\sav\`**
    （`global + save00–03 + save1000`，身份与 sha256 见 `BASELINES` §5；**不入库**）。
-   ⚠ **不要把 `.sav` 放进真实语料目录** `C:\Game\eratw-…-SANYOUSEI(PC)\sav\`——那是作者的游戏目录，
+   ⚠ **不要把 `.sav` 放进真实语料目录** `C:\Game\<基线语料>\sav\`——那是作者的游戏目录，
    本仓硬约束是它**零写入**；复测一律走档案库或一次性副本（两条命令见 §五"回放线复测"）。
    另外金样本的档集已按真实清单钉死：`golden-roundtrip` 现在**缺档即红**，
    若你的分支还假设"六档 = save00–save05"，改统一到上面这组名字。
 3. **推送（今晚直连完全不通，Clash 可用）**：
-   `HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 GIT_TERMINAL_PROMPT=0 git push origin master`
+   `HTTPS_PROXY=<本机代理> HTTP_PROXY=<本机代理> GIT_TERMINAL_PROMPT=0 git push origin master`
    （`git fetch` 同理；`tools/git-push.mjs` 仍是 6 轮全败）。
    ⚠ 共用 `master` 时 push 会把别人**未推的本地提交**一起带上去——本次 `b241764..2925cf7`
    就顺带发了别线的 `4ce63cd 度量批`（我已把它的小节让位到 §5.75 并在该节注明）。
@@ -1937,23 +1937,23 @@ node tools/smoke-tauri-ipc.mjs
    验收必须带上 §5.74 的那两条命令**——§5.64 那轮"只守糖投影读数"不要重演。
 5. **Rust 侧改动的两条本机实况**（§5.84）：① `packages/app/src-tauri/target/` **不在工作树里**，
    `cargo test --lib` 首次是**冷编译（数分钟）**，别按"秒级"规划收尾；② `cargo add` / `cargo fetch`
-   与 git 走**同一个代理**（`HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890`），
+   与 git 走**同一个代理**（`HTTPS_PROXY=<本机代理> HTTP_PROXY=<本机代理>`），
    crates.io 直连同样不通。新增 crate 会进 `Cargo.lock` ⇒ **必须一并提交**，否则别线拉下来构建不出来。
-6. **同一台主机上也可能有第二个写者**（2026-10-13 凌晨实测事故，涉及 `C:\DSH\kojo-editor`）：
+6. **同一台主机上也可能有第二个写者**（2026-10-13 凌晨实测事故，涉及 `<工作树>`）：
    本组一次 `git stash push -u`（为了给 `master` 让出快进空间）卷走了当时正被并行编辑的
    `docs/ARCHITECTURE.md` / `docs/USER-GUIDE.md`，几秒后那两个文件又被写回**另一版**内容
    ——即同一工作树里存在并发写者，且它不走 git。处置：
    被卷走的那版已落成补丁 **`.git/concurrent-docs-wip-2026-10-13.patch`**（551 行，只含 docs），
    stash 条目 `stash@{0}（On master: feedback3-wip-2026-10-13）` 原地未动，谁需要都能取回。
    **今后纪律**：① 并行 agent 一律各开一个 `git worktree`（本组反馈 3 批起在
-   `C:\DSH\kojo-fb3`，`pnpm install` 走本地 store 实测 **8 秒**，不是负担）；
+   `<临时工作树>`，`pnpm install` 走本地 store 实测 **8 秒**，不是负担）；
    ② **共用工作树里禁止 bare `git stash` / `stash pop`**——它会连带回滚别人的未提交改动；
    ③ 提交只 `git add` 自己动过的路径，从不 `git add -A`。
 
-7. **中断批盘点（2026-10-13 傍晚，用户指派移交 · haruki 主机新会话）**：上一个会话被中断，在两条工作树上留下未推送 / 未提交的在制品。
+7. **中断批盘点（2026-10-13 傍晚，用户指派移交 · 本机新会话）**：上一个会话被中断，在两条工作树上留下未推送 / 未提交的在制品。
    清点、复跑与落库步骤全在这里——**谁先接手谁落库**，落完按 §13.3 在对应行回执。
 
-   **① HK-8 裁决批（通知队列淘汰规则）—— 已落库（2026-10-13 晚推送，`ddc06f4..29505d8`）**（`C:\DSH\kojo-editor` 工作树）：
+   **① HK-8 裁决批（通知队列淘汰规则）—— 已落库（2026-10-13 晚推送，`ddc06f4..29505d8`）**（`<工作树>` 工作树）：
    - 本批：`ui/notice-queue.ts`（新，纯函数）、`tests/notice-queue.test.ts`（+6 项）、`NotificationCenter.tsx`（换一行调用）、
      HANDOFF HK-8 行、LOG 节（已让位 **§5.120 → §5.127 → §5.129**，取号记位链写在节首）。
    - 盘点复跑（本机 2026-10-13 18:21–18:3x）：`vitest run` **1838 passed / 14 skipped**、根 + `@kojo/app` 双 typecheck `exit 0`、
@@ -1966,7 +1966,7 @@ node tools/smoke-tauri-ipc.mjs
    **② 同树小改：向导文案再对齐**（`new-project-wizard.ts` + 测试 2 文件）：下拉文案缩短、警告语与 `deploy.ts` 拒绝原因同词、
    提示换 `.wizard-warn`。**已随批提交并推送（2026-10-13 晚）：取「带」路，`MANUAL-CHECKLIST` §六 7.2 引文已同步**——落库记录见 LOG **§5.129 §五**。
 
-   **③ HK-4 第三轮图标系统（在制品）—— `kojo-fb3` worktree（分支 `fb3-landing`）未提交**：
+   **③ HK-4 第三轮图标系统（在制品）—— `临时工作树` worktree（分支 `fb3-landing`）未提交**：
    新增 `packages/app/src/ui/icons.tsx`（16×16 单色 `currentColor` 注册表，未命中按字形回落 ⇒ 兼容第三方贡献的单字符 icon）+
    16 个文件迁移（壳层 + 9 个插件文件、23 处 `<Icon>`；`⚙ ◧ ⬓ ⟳ ▸ ▾ ✕` 这些"当图标用的符号字符"在 `app/src/ui` 已归零）+
    `styles.css`（`.icon` / `.icon-glyph` 基类）+ `tools/ui-measure.mjs` 新增第 7 项量测（`glyphTexts` / `svgIcons`，目标随迁移单调降到 0）。
@@ -1995,10 +1995,10 @@ node tools/smoke-tauri-ipc.mjs
 
 | 线 | 主机 / 路径 | 观测到的能力（**按主机而定，不符请直接改这张表**） | 归它做 |
 | :-- | :-- | :-- | :-- |
-| **本组（haruki 主机）** | `C:\DSH\kojo-editor`（批间切换 worktree，见 §十二-6） | 代码 / 单测 / typecheck / 审计 A–D / `vite build` / `cargo test --lib`（`target/` 已预热，增量秒级）/ **桌面壳可起可目视**（§5.79 起做过三次），**且 2026-10-13 起接上 CDP DOM 驱动**（`--remote-debugging-port=9222` + `Runtime.evaluate`，配方四条见 §5.96 首节；坐标驱动作废） | 功能实现、契约演进、UI 打磨、消化实机反馈、维护看板 |
-| **实机线（QA 主机）** | `D:\DSH\kojo-editor` | **2026-10-13 已由本主机自证**：桌面壳可起（`pnpm --filter @kojo/app tauri dev`，复用 `D:\DSH\kojo-editor` 的 `CARGO_TARGET_DIR` 增量秒级），且 **CDP 9222 + `Runtime.evaluate` DOM 驱动可用**（§5.105 / §5.106 两批的 19 项与 22 项断言都在这里跑的，含 Monaco 输入、拖拽、右键菜单）；工作树 = **`D:\DSH\master-kojo-editor`**（`D:\DSH\kojo-editor` 是同源旧副本，只借 cargo target，不在里面改文件）；cargo 冷编译仍要数分钟（本树无 `target/`）
+| **本组（本机）** | `<工作树>`（批间切换 worktree，见 §十二-6） | 代码 / 单测 / typecheck / 审计 A–D / `vite build` / `cargo test --lib`（`target/` 已预热，增量秒级）/ **桌面壳可起可目视**（§5.79 起做过三次），**且 2026-10-13 起接上 CDP DOM 驱动**（`--remote-debugging-port=9222` + `Runtime.evaluate`，配方四条见 §5.96 首节；坐标驱动作废） | 功能实现、契约演进、UI 打磨、消化实机反馈、维护看板 |
+| **实机线（QA 主机）** | `<工作树>` | **2026-10-13 已由本主机自证**：桌面壳可起（`pnpm --filter @kojo/app tauri dev`，复用 `<工作树>` 的 `CARGO_TARGET_DIR` 增量秒级），且 **CDP 9222 + `Runtime.evaluate` DOM 驱动可用**（§5.105 / §5.106 两批的 19 项与 22 项断言都在这里跑的，含 Monaco 输入、拖拽、右键菜单）；工作树 = **`<本机目录>\master-kojo-editor`**（`<工作树>` 是同源旧副本，只借 cargo target，不在里面改文件）；cargo 冷编译仍要数分钟（本树无 `target/`）
 
-**第三条工作树实况（2026-10-13，§5.119 自证）**：`C:\DSH\master-kojo-editor`（主线副本）
+**第三条工作树实况（2026-10-13，§5.119 自证）**：`<本机目录>\master-kojo-editor`（主线副本）
 **也能起真壳并跑 CDP**——cargo 增量 20.23s、CDP 9222 通、欢迎页 `rootChildren=1` 实测渲染。
 ⇒ QA-4 / QA-5 / QA-8 / QA-14 以及判据③/①的实机半边**不是"只能等别机"**，谁先跑谁署名。
 ⚠ 同一棵树里存在**第二个并发写者**（本次撞上：`lexer.ts / parser.ts / keywords.ts / codegen.ts /
@@ -2014,7 +2014,7 @@ project.ts` 有未提交改动）。在那儿干活的纪律：只 `git add` 自
 
 1. **看板只此一处**（§13.4）。别在 commit message、日志或聊天里派活——那些不进未来会话的上下文。
 2. **一行一任务**，字段固定：`ID | 任务 | 判据（怎么算过）| 执行人 | 状态 | 回执`。
-   - `执行人` ∈ `haruki`（本组）/ `qa`（实机线）/ `待认领`；
+   - `执行人` ∈ `本机`（本组）/ `qa`（实机线）/ `待认领`；
    - `状态` 流转：`待认领` → `已认领:<线> <YYYY-MM-DD>` → `完成` / `阻塞:<一句话>`；
    - **认领 = 编辑该行 → 立刻提交推送**（先到先得；后推的人 rebase，**别改别人的行**）。
 3. **任务必须自带判据**：写清"验什么、屏上看到什么算过"；能复制命令就把命令写全
@@ -2033,19 +2033,19 @@ project.ts` 有未提交改动）。在那儿干活的纪律：只 `git add` 自
 
 | ID | 任务 | 判据（怎么算过） | 执行人 | 状态 | 回执 |
 | :-- | :-- | :-- | :-- | :-- | :-- |
-| QA-1 | **反馈 3 新建口上文件向导**（§5.88）三条落盘路径 | ① 无口上项目时按 Ctrl+N：屏上出现「还没有口上项目…」引导，按钮从左到右 = `取消` / `选择文件夹另存…` / **`新建口上项目并创建`(primary)**；② 点主选 → 填项目 → 创建后**新项目包里自动出现** `M_KOJO_K{n}_家族.kojo` 并在编辑器里打开；③ 走 ② 之前**取消**项目向导，之后从面板「＋ 新建」正常建项目 ⇒ 新包里**不得**冒出刚才那份文件；④ 已有项目时落点行显示工作区路径（不再需要游戏目录写权限） | haruki | **完成（四条全过）** | ①③④ + a1 第一拍 + 落盘字节口径 = §5.91（坐标驱动，真壳目视）；**② 由 §5.96 用 CDP DOM 驱动验成**：空工作区 → Ctrl+N → 主选 → 填向导 → `创建项目` ⇒ 新包里自动出现 `M_KOJO_K0.kojo`（BOM+LF，与脚手架 8 空壳并列）、成为活动标签、建开即干净、无失败重开提示。**坐标驱动本不可信**（§5.91 那条 ⚠ 是误关遮罩，已撤销）——以后这类流程请直接用 CDP（配方在 §5.96 首节） |
-| QA-2 | **糖视图行高对齐像素复核**（§5.76 遗留：只有源码级证据） | 开语法糖视图（Ctrl+Alt+T）对照原 ERB 行：糖投影每行与原文件同 `lineHeight`，无累积漂移；`--sugar-lh` 实测值 = 19px（fontSize 14 × 1.35） | haruki | **完成（§5.101）** | 这条是**可数的**，不是观感 ⇒ 不必排队等别机。CDP 实测（真实语料 463 行 → 糖 349 行）：两种模式 `.view-line` computed `lineHeight` 均 **19px**；糖模式 24 个 ViewZone 高度 = {285, 57, 380, 0} = **15/3/20×19 与 0**，偏离"行高整数倍"最大值 **0px** ⇒ 无累积漂移。**判据本身要修两处**：① 糖正文住在 ViewZone 里，拿"相邻行 top 差恒定"当判据会因 zone 占位报出假缺陷，正确形式是"zone 高度为行高整数倍"；② `--sugar-lh` 不在 `:root` 也不在 `.editor-body`，而是宿主落在 **zone 元素自己**上（`EditorPane.tsx:506`）——去读 `:root` 会得到空串并误判"变量没生效"。另记一条观察：有一个 0 高度 zone，不影响对齐，无第二条证据，不当缺陷报 |
+| QA-1 | **反馈 3 新建口上文件向导**（§5.88）三条落盘路径 | ① 无口上项目时按 Ctrl+N：屏上出现「还没有口上项目…」引导，按钮从左到右 = `取消` / `选择文件夹另存…` / **`新建口上项目并创建`(primary)**；② 点主选 → 填项目 → 创建后**新项目包里自动出现** `M_KOJO_K{n}_家族.kojo` 并在编辑器里打开；③ 走 ② 之前**取消**项目向导，之后从面板「＋ 新建」正常建项目 ⇒ 新包里**不得**冒出刚才那份文件；④ 已有项目时落点行显示工作区路径（不再需要游戏目录写权限） | 本机 | **完成（四条全过）** | ①③④ + a1 第一拍 + 落盘字节口径 = §5.91（坐标驱动，真壳目视）；**② 由 §5.96 用 CDP DOM 驱动验成**：空工作区 → Ctrl+N → 主选 → 填向导 → `创建项目` ⇒ 新包里自动出现 `M_KOJO_K0.kojo`（BOM+LF，与脚手架 8 空壳并列）、成为活动标签、建开即干净、无失败重开提示。**坐标驱动本不可信**（§5.91 那条 ⚠ 是误关遮罩，已撤销）——以后这类流程请直接用 CDP（配方在 §5.96 首节） |
+| QA-2 | **糖视图行高对齐像素复核**（§5.76 遗留：只有源码级证据） | 开语法糖视图（Ctrl+Alt+T）对照原 ERB 行：糖投影每行与原文件同 `lineHeight`，无累积漂移；`--sugar-lh` 实测值 = 19px（fontSize 14 × 1.35） | 本机 | **完成（§5.101）** | 这条是**可数的**，不是观感 ⇒ 不必排队等别机。CDP 实测（真实语料 463 行 → 糖 349 行）：两种模式 `.view-line` computed `lineHeight` 均 **19px**；糖模式 24 个 ViewZone 高度 = {285, 57, 380, 0} = **15/3/20×19 与 0**，偏离"行高整数倍"最大值 **0px** ⇒ 无累积漂移。**判据本身要修两处**：① 糖正文住在 ViewZone 里，拿"相邻行 top 差恒定"当判据会因 zone 占位报出假缺陷，正确形式是"zone 高度为行高整数倍"；② `--sugar-lh` 不在 `:root` 也不在 `.editor-body`，而是宿主落在 **zone 元素自己**上（`EditorPane.tsx:506`）——去读 `:root` 会得到空串并误判"变量没生效"。另记一条观察：有一个 0 高度 zone，不影响对齐，无第二条证据，不当缺陷报 |
 | QA-3 | **部署 `.kojo → .ERB` 真实落盘 + 引擎读得到**（§5.77 只有单元级证据） | 工作区一个含 `.kojo` 的包 → 「部署」到游戏目录角色口上目录 → 落盘是 `.ERB`（**无 `.kojo` 残留**）、编码 Shift-JIS/CRLF 合规、游戏里实际读出台词；同包重复部署 → 报「目标已存在，未覆盖」且不写半个字节 | qa | **拆成两半**（§5.103） | **前一半本组能自验**：§5.103 的 fixture 配方（`%TEMP%` 下一个 6KB 假游戏目录，`detect` 只需 `ERB/口上・メッセージ関連` + `CSV/Chara/Chara<N>*.csv`）可以随便部署进去，验"落盘是 .ERB / 无 .kojo 残留 / 重复部署不覆盖且不写半字节"；**"Emuera 真读出台词"那一半仍需真引擎真目录，留别机**。别机跑时可直接照 §5.103 造 fixture，不必动自己的真实语料 |
 | QA-4 | **ZIP 导出在 Windows 资源管理器里可解压**（§5.77 用 .NET 交叉验过，缺真人双击） | 「导出」选目录 → 得到 `.zip` → 资源管理器双击能开、中文名文件不乱码（若显示乱码请附 `unzip -l` 与本机的差别，两者判据不同） | qa | 待认领 | — |
 | QA-5 | **新建项目向导许可下拉的观感复核**（§5.79 明记"未做实机视觉复核"） | 7 个协议选项在向导里不撑破卡片、选中项说明紧贴下方可读 | qa | 待认领 | — |
-| QA-6 | **全站模态都没有 Esc 关闭**（已知缺陷，先取证再修） | 逐个试 5 家模态（设置 / 糖视图须知 / 写权限批准 / 保存冲突 / 未保存确认）按 Esc：记录哪些能关哪些不能；本组据此做宿主模态注册表（HK-2） | qa | **作废（不必取证）** | haruki：答案没有悬念（§5.80 已记"五家全都没有 Esc"），HK-2 直接做完了 ⇒ 取证改由 **QA-10** 承接（验"真按 Esc 退一层"的体感） |
-| QA-10 | **Esc 退一层**（HK-2 / §5.95 的实机半边） | ① 逐家试：写权限批准 / 未保存确认 / **保存提醒（全角空格决策，§5.37——它不是磁盘冲突守卫，`EditorSaveWarning.kind` 只有 `fullwidth-space`）** / 糖视图须知 / ERB 解锁，按 Esc 都应关闭且**落在不写盘那一格**（写权限→保持只读徽章、未保存→标签还在且脏点仍在、保存提醒→一个字节都不写、糖视图→没开启、ERB→仍只读）；② 叠两层时一次 Esc 只退一层，第二次 Esc 才退到下一层；③ 没有模态时 Esc 仍照旧关向导 / 设置 / 退出写作模式，**不得变成没反应** | haruki | **完成（5/5 家 + 层叠全过）** | haruki 主机 §5.96（CDP DOM 驱动，键盘走 `Input.dispatchKeyEvent`，模态靠真脏缓冲区弹出）：**层叠**——写作模式为底层，分别叠 overlay 与模态，第一次 Esc 只关顶层、底层原样在（模态那层还断言到"标签没被关掉"），第二次 Esc 才退底层；**五家里的两家**——未保存确认、保存提醒（往工作区 `.kojo` 打进 U+3000 → 保存 → 弹「保存提醒」→ Esc：模态关、标签仍脏、盘上还是保存前内容）。**余三家请别机用人键补**：须知是一次性提示（本机偏好已记录，`loadSugarViewPrompted()` 短路）、ERB 解锁需要只读态上的真实编辑意图（注入没触发 `onDidAttemptReadOnlyEdit`）、写权限批准要往未批准路径保存（违反零写入，本组不做）。**后续（§5.103）余下三家全部补完 ⇒ 5/5**：用 fixture 游戏目录（可随便写的假 `個人口上`）——① 打开项目即弹「写权限确认」，Esc → 横幅 + 徽章落 **只读**；② 只读 ERB 上用可信点击 + `char` 键产生真实编辑意图 → 弹「ERB 只读保护」，Esc → 标签不脏、**盘上逐字节未变**；③ 须知是一次性的（`localStorage['kojo.ui.sugarView.prompted.v1']`），清掉标记重开 ERB 即弹「语法糖视图」，Esc → 屏上是**原文**、标记写回 `'1'`（= 真的落在"不用"那一格，不是只关窗）。三家都在本机、真键盘语义（CDP `Input.dispatchKeyEvent`）下过 |
-| QA-7 | BUG-5 文件监视人工清单 **§2.J j1–j9** | 见 `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` §2.J 逐条（判据②实机半边，§5.84 自留） | qa（余 j3 动作按钮 / j7 / j8 / j9） | **部分完成（haruki，§5.104）** | haruki 主机 2026-10-13 用 fixture 工程（§5.103 配方）自验并勾掉 **j1 · j2 · j4 · j5**（j2 状态栏原文就是「已从磁盘重新加载（文件在外部被修改）」，外部改动 306ms 跟上；j4 自身保存零回声）。**⚠ j6 的判据本身过期**——HK-5/HK-6 落地后文件树**会**自动出现新文件（实测 825ms 上树 / 824ms 消失），清单原文"不会自动出现"已按新口径改写：文件树自动 = 通过、函数树与包计数不跟 = 已知边界（HK-1 余量），两边都别再把工作正常的行为报成缺陷。**留给别机**：j3 通知上的动作按钮「重新加载（放弃我的修改）」（本组没能把缓冲区弄脏，不猜它能不能用）、j2 的光标/撤销栈保留（一格 Ctrl+Z）、j7（要改源码塞个不存在的监视根，与 §九-34 冲突，得单独一批停壳来做）、j8/j9（零存档 + 无拔盘条件）。 |
+| QA-6 | **全站模态都没有 Esc 关闭**（已知缺陷，先取证再修） | 逐个试 5 家模态（设置 / 糖视图须知 / 写权限批准 / 保存冲突 / 未保存确认）按 Esc：记录哪些能关哪些不能；本组据此做宿主模态注册表（HK-2） | qa | **作废（不必取证）** | 本机：答案没有悬念（§5.80 已记"五家全都没有 Esc"），HK-2 直接做完了 ⇒ 取证改由 **QA-10** 承接（验"真按 Esc 退一层"的体感） |
+| QA-10 | **Esc 退一层**（HK-2 / §5.95 的实机半边） | ① 逐家试：写权限批准 / 未保存确认 / **保存提醒（全角空格决策，§5.37——它不是磁盘冲突守卫，`EditorSaveWarning.kind` 只有 `fullwidth-space`）** / 糖视图须知 / ERB 解锁，按 Esc 都应关闭且**落在不写盘那一格**（写权限→保持只读徽章、未保存→标签还在且脏点仍在、保存提醒→一个字节都不写、糖视图→没开启、ERB→仍只读）；② 叠两层时一次 Esc 只退一层，第二次 Esc 才退到下一层；③ 没有模态时 Esc 仍照旧关向导 / 设置 / 退出写作模式，**不得变成没反应** | 本机 | **完成（5/5 家 + 层叠全过）** | 本机 §5.96（CDP DOM 驱动，键盘走 `Input.dispatchKeyEvent`，模态靠真脏缓冲区弹出）：**层叠**——写作模式为底层，分别叠 overlay 与模态，第一次 Esc 只关顶层、底层原样在（模态那层还断言到"标签没被关掉"），第二次 Esc 才退底层；**五家里的两家**——未保存确认、保存提醒（往工作区 `.kojo` 打进 U+3000 → 保存 → 弹「保存提醒」→ Esc：模态关、标签仍脏、盘上还是保存前内容）。**余三家请别机用人键补**：须知是一次性提示（本机偏好已记录，`loadSugarViewPrompted()` 短路）、ERB 解锁需要只读态上的真实编辑意图（注入没触发 `onDidAttemptReadOnlyEdit`）、写权限批准要往未批准路径保存（违反零写入，本组不做）。**后续（§5.103）余下三家全部补完 ⇒ 5/5**：用 fixture 游戏目录（可随便写的假 `個人口上`）——① 打开项目即弹「写权限确认」，Esc → 横幅 + 徽章落 **只读**；② 只读 ERB 上用可信点击 + `char` 键产生真实编辑意图 → 弹「ERB 只读保护」，Esc → 标签不脏、**盘上逐字节未变**；③ 须知是一次性的（`localStorage['kojo.ui.sugarView.prompted.v1']`），清掉标记重开 ERB 即弹「语法糖视图」，Esc → 屏上是**原文**、标记写回 `'1'`（= 真的落在"不用"那一格，不是只关窗）。三家都在本机、真键盘语义（CDP `Input.dispatchKeyEvent`）下过 |
+| QA-7 | BUG-5 文件监视人工清单 **§2.J j1–j9** | 见 `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` §2.J 逐条（判据②实机半边，§5.84 自留） | qa（余 j3 动作按钮 / j7 / j8 / j9） | **部分完成（本机，§5.104）** | 本机 2026-10-13 用 fixture 工程（§5.103 配方）自验并勾掉 **j1 · j2 · j4 · j5**（j2 状态栏原文就是「已从磁盘重新加载（文件在外部被修改）」，外部改动 306ms 跟上；j4 自身保存零回声）。**⚠ j6 的判据本身过期**——HK-5/HK-6 落地后文件树**会**自动出现新文件（实测 825ms 上树 / 824ms 消失），清单原文"不会自动出现"已按新口径改写：文件树自动 = 通过、函数树与包计数不跟 = 已知边界（HK-1 余量），两边都别再把工作正常的行为报成缺陷。**留给别机**：j3 通知上的动作按钮「重新加载（放弃我的修改）」（本组没能把缓冲区弄脏，不猜它能不能用）、j2 的光标/撤销栈保留（一格 Ctrl+Z）、j7（要改源码塞个不存在的监视根，与 §九-34 冲突，得单独一批停壳来做）、j8/j9（零存档 + 无拔盘条件）。 |
 | QA-8 | 判据①发版样例人工清单 **§2.I（a–i3）** | 见同一份清单（§5.82 立的判据①半边） | qa | 待认领 | — |
-| QA-9 | **文件树新文件自动出现**（HK-5 的实机半边；本组 `dirCache` 失效通道已落地）+ **口上项目面板同样自动重列**（HK-6，§5.93） | 在系统资源管理器里往项目目录丢一个 `.ERB` / 新建一个子目录 → 口上文件树**不重开项目**就该在数秒内出现它；已展开的节点折叠状态不得被打乱（这是"失效缓存但别丢展开态"的判据）；**并且**：展开一个包后在编辑器里 Ctrl+S，树**不得闪一下空白**（§5.91 专门修的那条）；同一次改动若落在工作区包里，「我的口上项目」面板展开的那个包也应自己更新（HK-6） | haruki | **完成（两半都收）** | haruki 主机 §5.96 验掉工作区这半：**外部**进程 `writeFileSync` 丢一个 `.kojo` 进已展开的包 → **零点击零刷新**、≤0.5s 上树；`unlinkSync` 删 → ≤0.5s 消失。顺带两条同链路实机证据：打开着的文件被外部删除 → toast 原文「…已在磁盘上被删除。编辑器里的内容现在是唯一副本——保存会重新创建该文件。」（§5.46 的"unlink 必须说"）；缓冲区脏 + 外部改动 → toast「…已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容。」且标签保持脏、屏上仍是用户内容（conflict 分支不走 reload）。**剩下的游戏目录那半边仍要 fixture 工程**（真实语料零写入是硬约束，本组不会往 `C:\Game\…` 写一个字节）：按原建议造 `ERB/口上・メッセージ関連/个人口上/<角色>/<包>` + `csv/Chara*.csv` 的最小工程，随便写、验完删；折叠态被打乱这条本组没专门构造压力形状。**后续（§5.103）游戏目录半边也收了**：造 6KB fixture 游戏目录（真语料字节级复制 2 个 Chara CSV + 自造一个包），包展开状态下外部 `writeFileSync` 一个 `.ERB` → **825ms** 上树、`unlinkSync` → **824ms** 消失，期间角色组与包的展开态都保住 ⇒ **QA-9 两半完成**，真实语料仍 0 写入 |
+| QA-9 | **文件树新文件自动出现**（HK-5 的实机半边；本组 `dirCache` 失效通道已落地）+ **口上项目面板同样自动重列**（HK-6，§5.93） | 在系统资源管理器里往项目目录丢一个 `.ERB` / 新建一个子目录 → 口上文件树**不重开项目**就该在数秒内出现它；已展开的节点折叠状态不得被打乱（这是"失效缓存但别丢展开态"的判据）；**并且**：展开一个包后在编辑器里 Ctrl+S，树**不得闪一下空白**（§5.91 专门修的那条）；同一次改动若落在工作区包里，「我的口上项目」面板展开的那个包也应自己更新（HK-6） | 本机 | **完成（两半都收）** | 本机 §5.96 验掉工作区这半：**外部**进程 `writeFileSync` 丢一个 `.kojo` 进已展开的包 → **零点击零刷新**、≤0.5s 上树；`unlinkSync` 删 → ≤0.5s 消失。顺带两条同链路实机证据：打开着的文件被外部删除 → toast 原文「…已在磁盘上被删除。编辑器里的内容现在是唯一副本——保存会重新创建该文件。」（§5.46 的"unlink 必须说"）；缓冲区脏 + 外部改动 → toast「…已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容。」且标签保持脏、屏上仍是用户内容（conflict 分支不走 reload）。**剩下的游戏目录那半边仍要 fixture 工程**（真实语料零写入是硬约束，本组不会往 `C:\Game\…` 写一个字节）：按原建议造 `ERB/口上・メッセージ関連/个人口上/<角色>/<包>` + `csv/Chara*.csv` 的最小工程，随便写、验完删；折叠态被打乱这条本组没专门构造压力形状。**后续（§5.103）游戏目录半边也收了**：造 6KB fixture 游戏目录（真语料字节级复制 2 个 Chara CSV + 自造一个包），包展开状态下外部 `writeFileSync` 一个 `.ERB` → **825ms** 上树、`unlinkSync` → **824ms** 消失，期间角色组与包的展开态都保住 ⇒ **QA-9 两半完成**，真实语料仍 0 写入 |
 | QA-11 | **UI 反馈 1/3/5/6 在第二次 rebase 后的真实壳复验**（§5.106 的实机半边） | 同口径断言重跑要**全绿**：只读胶囊文案＝「只读」且 `border-radius:999px`；工具条无「恢复只读」按钮； 糖段每段有折叠柄、点一下摘要里「已收起 N 行」真的减、再点回到原值（**可逆**）；文件树「展开全部 / 折叠全部」与根节点右键项双向可逆且有可读数；console 零异常 | qa | **完成（§5.107）** | 新基线上 **22 项全绿**（首轮 5 红全是仪器自己的：糖开关判据读文案而文案恒定 ⇒ 改读 `aria-pressed`；`.tree-note` 已被上游用作空目录行 ⇒ 本批读 `.tree-reveal-note`）。 关键读数：糖区 8 + 折叠柄 8、「语法糖 11 行｜已收起 14 行（可展开）」、点柄 14→13→14 可逆； 文件行 0→2733→0、反馈「已展开 135 个角色目录、193 个作者包」；胶囊 `radius=999px` / `color=rgb(209, 154, 102)`；工具条按钮只剩 `语法糖视图 | 保存 (Ctrl+S)`。 同轮另跑**合成期 Esc + 拖拽 20 项**与**合成期 Esc × 宿主模态 11 项**（= 清单 5.D-D9 的自动半边）全绿 |
 | QA-12 | **反馈 6 的另一半边：口上项目面板的「右键 → 新建文件夹 → 行内命名框 → Enter」**（上游 §5.67 实现，用户报"点了没生效"） | 真实壳里走完这条链并**看到磁盘上真多出目录**：① 右键项目根 → 菜单含「新建文件夹」；② 点它 → 行内命名框出现（不是 window.prompt）； ③ 输入 + Enter → 树里出现该目录 **且** 盘上存在；④ 非法名拒绝并给中文原因、**不静默改名**；⑤ Esc 可取消草稿 | qa | **完成（§5.107）** | **复现成两条真缺陷并都修掉**：① 项目根从来没有行内框槽位（`draftRow` 只在 `renderDir` 里产出，`renderDir` 只跑包目录）⇒ 点菜单只写进 state，界面零变化； ② 建成功后也不可见（项目行只渲染 `workspace.json` 登记的包）⇒ 盘上有、面上无。 修 = `draftRow(pDir,1)` 槽位 + `looseProjectDirs` + 「包之外的目录 N 个」那一块，`renderEntry` 抽成共用渲染源；**+7 项单测钉挑法，16 项真实壳钉接线**（含磁盘侧独立核对与清场；语料 `find -newermt` 0 命中）。 非法名 `a/b` 实测原文「名称不能含这些字符：\ / : * ? " < > | 以及控制字符（Windows 文件系统限制）。」且名字留着不清空 |
-| QA-13 | **口上项目 · 导出 · 部署人工清单 §六整节的实机半边**（本组 2026-10-13 活文档校准批新增，**两线都能跑**：haruki 侧壳可起可目视，见 §13.2 ⇒ 谁先跑谁在行尾署主机名，不是"派给对方就完事"） | 逐条勾 `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` §六 **7.1–7.33**；其中新建向导的三条落盘路径与 QA-1 同源，跑过 QA-1 的直接写「同 QA-1」不重复跑。⚠ 7.30–7.33 会往**真实语料的角色口上目录**新建包目录：跑前确认没有别的批在用同一份语料，验完删掉自己建的那个目录（守卫本就拒绝覆盖，同级作者包不得动）。红项按 §13.3 第 4 条报：现象 + 复现步骤 + 期望 vs 实际 + **屏上原样文案**——这批清单项是新写的，文案对不上时以屏上为准 | 待认领 | 部分完成:haruki 2026-10-13 | **7.1–7.7 已收**（真壳 CDP 探针 + 磁盘侧独立核对，读数记 §5.111；顺手抓出"空壳带 BOM 会把 7.7 判成红"的仪器陷阱）；**7.8–7.12** 见 §5.107；**7.17 / 7.20** 见 §5.108；**7.D 整组（7.17–7.22）已由 §5.113 的 50 项 CDP 探针二次覆盖**（键盘走真实 `Input.dispatchKeyEvent`，含"只读态打字→解锁→丢弃修改→盘上字节未变"，7.21 ★★ 轴一首次拿到完整证据）。**§5.125（第十轮）已把 5.E 的机器半边收掉**：E1/E2/E3 的落点与悬停原文、E5 的"有红线照存且真落盘"、
+| QA-13 | **口上项目 · 导出 · 部署人工清单 §六整节的实机半边**（本组 2026-10-13 活文档校准批新增，**两线都能跑**：本机 侧壳可起可目视，见 §13.2 ⇒ 谁先跑谁在行尾署主机名，不是"派给对方就完事"） | 逐条勾 `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` §六 **7.1–7.33**；其中新建向导的三条落盘路径与 QA-1 同源，跑过 QA-1 的直接写「同 QA-1」不重复跑。⚠ 7.30–7.33 会往**真实语料的角色口上目录**新建包目录：跑前确认没有别的批在用同一份语料，验完删掉自己建的那个目录（守卫本就拒绝覆盖，同级作者包不得动）。红项按 §13.3 第 4 条报：现象 + 复现步骤 + 期望 vs 实际 + **屏上原样文案**——这批清单项是新写的，文案对不上时以屏上为准 | 待认领 | 部分完成:本机 2026-10-13 | **7.1–7.7 已收**（真壳 CDP 探针 + 磁盘侧独立核对，读数记 §5.111；顺手抓出"空壳带 BOM 会把 7.7 判成红"的仪器陷阱）；**7.8–7.12** 见 §5.107；**7.17 / 7.20** 见 §5.108；**7.D 整组（7.17–7.22）已由 §5.113 的 50 项 CDP 探针二次覆盖**（键盘走真实 `Input.dispatchKeyEvent`，含"只读态打字→解锁→丢弃修改→盘上字节未变"，7.21 ★★ 轴一首次拿到完整证据）。**§5.125（第十轮）已把 5.E 的机器半边收掉**：E1/E2/E3 的落点与悬停原文、E5 的"有红线照存且真落盘"、
   E6 的 52k 行按键回声 46/44/46ms 与新敲 `IF` 342ms 出红线、E7 的 `@"` 续行零误报（19 项全绿）；
   **E4 仍留真人**（"你自己天天改的那份打开该零红线"）。
   **7.15 / 7.16 / 7.23 / 7.28 / 7.29 由 §5.115 收到屏上证据**（7.28 含"转译在弹框之前"的时序与失败态原文；7.29 的产物名冲突原文已录；
@@ -2064,24 +2064,24 @@ project.ts` 有未提交改动）。在那儿干活的纪律：只 `git add` 自
   拿一份**自己天天改的真实口上 ERB** 打开，屏上应当**一条红线都没有**；出现任何一条就把**屏上原文 + 那一段代码**贴回来（判据口径：错标比不标危险，误报优先处理）；
   E5 有红线照样能保存（波浪线不阻断写入）；E6 5 万行级文件输入不卡键（体检实测 23–29ms / 去抖 250ms） | 待认领 | 待认领 | — |
 
-#### B. 本组认领（haruki）——含从文档里接下来活
+#### B. 本组认领（本机）——含从文档里接下来活
 
 | ID | 任务 | 判据（怎么算过） | 执行人 | 状态 | 回执 |
 | :-- | :-- | :-- | :-- | :-- | :-- |
-| HK-1 | **BUG-5 消费方接线**：外部改动自动跟随（§5.84 立的任务 21） | 归档列表自动重扫 = **§5.87 已收**；函数树/索引自动重建**归性能线**（§5.87 算过：全项目重建 ≈ 2.1s，不先做增量粒度就是"能自动刷但每次刷 2 秒"） | haruki | 部分完成 → 移交性能线 | §5.87（上） · 余量见 §5.87「没收的那条」 |
-| HK-5 | **FileTree `dirCache` 没有失效通道**（§5.87 明记"刻意留在下一批"，理由是本机跑不了 GUI ⇒ **正是本组的活**）：新建/外部新增的文件在树里不出现，除非重挂组件 | `dirCache` 加一条**外部可驱动的失效**（prop 或事件均可，但要穿到 `ProjectView → StableFileTree` 那层且不丢展开态）；实机半边挂 QA-9 | haruki | **代码已推（§5.91）**·实机**已收（§5.96）** | 失效通道 = `refreshNonce`；另把**工作区根**加进了监视根（见 HK-6）。本组真壳自验跑的是反馈 3 那条链；**HK-5 自己的体感半边已由 §5.96 用 CDP 补上**（外部新增 ≤0.5s 上树、外部删除 ≤0.5s 消失、期间零点击零刷新）；"保存不闪白"本批覆盖到工作区面板那侧，游戏目录那半边随 QA-9 余量走 fixture 工程 |
-| HK-6 | **工作区目录缓存的失效**（本批把工作区根纳入监视后新出现的期望）：`eratw-adapter` 面板的 `wsDirCache` 仍只被本插件自己的动作失效，外部改动（作者用别的编辑器改工作区、或从资源管理器拖文件进包）**不会**刷面板 | 面板订阅 `file.changed`，按 `isPathUnder(workspaces.rootDir(), ev.path)` 分野后**只失效受影响的目录**（照 §5.87 的首动作零 IO 口径）；实机半边同 QA-9 附一条 | haruki | **完成（§5.93）**·实机已收（§5.96：外部新增/删除 ≤0.5s 自反映，零点击） | 判据 = "父目录要重列"；只重列已缓存的目录；重列不闪白、读失败保留旧内容只记日志 |
-| HK-7 | **`EditorPane` 的外部改动重载用裸字符串判等**：`entriesRef.has(ev.path)`（:773）拿平台原样路径去查 io 路径建的表 | 判等改走 `pathKey()`（§5.93 已把这条义务写进 `FileChangedEvent.path` 的契约注释）；改完判据现成 = §2.J **j1**（外部改动跟随） | haruki | **完成（§5.94）**·实机判据沿用 §2.J j1 | 新增 `matchOpenedPath()` 按 pathKey 找回宿主用的那个键；**不当 bug 报**（现网大概率恰好一致），但这条是防数据丢失的 B1 链路、静默失效没有症状。由 §5.93 的契约更正带出 |
-| HK-2 | **宿主模态注册表 + Esc 关闭**（QA-6 取证后动手；`§5.80` 留的"全站模态没有 Esc"） | 五家模态 Esc 均可关，且与既有 Esc 优先级链（picker > overlay > zen）不冲突；新增第 6 家只需注册一行 | haruki | **完成（§5.95）**·实机 = QA-10（**§5.96 已验 3/5 家 + 层叠全过**） | `ui/modal-stack.ts` 一个极小的栈；每家在接入处显式写出自己那一格（全是不写盘那一侧）；新增第 6 家 = 一行 `useModalEscape(...)` |
-| HK-3 | **`exportDirectory` 已无 UI 调用方**（§5.77 被 ZIP 导出顶掉）：确认是否还有别线要用，再决定留契约还是删 | 全仓 `grep` 无生产调用方且别组无异议 → 契约收缩（删）；否则写明消费方 | haruki | **完成（§5.97）** | 复核三条都指向"删"：master 零生产调用方、`origin/feat/ipc-read-channel` 命中数与 master 逐文件相同（= 只有定义链，没新增调用）、`origin/ui-polish` 一条都不含；纪要/backlog 无"导出成文件夹"的将来需求。**契约收回一条通道**（Rust 命令 + 助手 + 6 处替身 + 两层接口），并把那四条"对话框即授权"断言**移植**到活着的 `exportFile`（它此前在内核层零行为测试）。要恢复请照 `exportFile` 形态重新加，别恢复原码——这条不视为"别组需要它"的证据。 |
-| HK-4 | **UI P4 继续打磨**（用户常任指派：专业 / 克制 / 流畅 / 高效 / 耐看） | 每批挑 1–2 处真实摩擦点，带截图级文案复核；风格与糖组并入部分统一 | haruki | 进行中 | 反馈 3 批（§5.88）已含向导落点区；**§5.99 / §5.100 / §5.102 起改用 CDP 量测挑活**（不再靠主观）：① 编辑器工具条三处（文件名被尾部省略整个裁光 clipX 419px / 编码·换行·行数被挤到 clipX 52px / 「保存 (Ctrl+S)」折行把工具条撑到 50px）② 快速打开副行（14 行各裁 337–389px，最深一层目录不可见）③ **全站可访问性**（白字压 `--accent` **3.32:1**、主按钮里的快捷键芯片 **1.03:1 等于看不见**、`.small` 按钮族全 23px 高、`.tab-close` 17×17、dim 压选中行 3.48:1）——三批修完，**五状态扫描现在对比度 / 目标尺寸 / 可访问名全部为 0**；欢迎页 / 设置浮层 / 命令面板 / 写作模式三档视口零裁剪（负结果也留档）。**仍欠**：徽章族四套样式合并（波及 4 个插件，需单独一批配视觉复核）、工具条与状态栏编码信息重复（刻意不删）、树行中段截断（要保中段就得把口上命名知识带进宿主 UI，不做）、`×` 悬停才现（目标尺寸已补齐，"看不见就可点"要连触屏口径一起定）。**2026-10-13 早间用户重指派重心：打磨 UI，目标「专业 · 克制 · 流畅 · 高效 · 耐看」，以 VSCode 为基准，需定夺时优先采用现代编辑器现成方案。本组据此自拟六项并按序推进（每项都带一个可复跑的量化判据）：UI-1 字号尺度 ✅ §5.121 → UI-2 圆角/边框/阴影 ✅ §5.122 → UI-3 图标（emoji → 单色 SVG）→ UI-4 焦点环与键盘可达 → UI-5 动效可关 → UI-6 底部问题面板（状态栏 ✕//ℹ 现在无处展开，是最大功能缺口）**。**UI-3（图标系统）在制品**：`kojo-fb3` worktree 未提交（`ui/icons.tsx` + 17 文件；欠量测 / 入册 / 提交）——盘点与落库步骤见 §十二-7 |
-| HK-8 | **口径讨论（不是缺陷）**：脏缓冲区 + 外部改动 → 现在只在**发现时**发一条 toast（「…保存会覆盖磁盘内容。」），作者随后按保存 = 直接覆盖磁盘（§5.96 实机看到的行为）。要不要在**按下保存那一刻**再确认一次？ | 裁决产出 = 一条写进 `IMPLEMENTATION-LOG` 的口径（改或不改都要写理由）。两条反对改的现成理由：①"工具不替作者做决定"，警告已经说过；② 每次覆盖前弹窗会把"我用别的工具改完再回这里存"变成三次点击。一条支持改的理由：警告与保存之间可能隔着几十分钟，作者早忘了。**本组倾向：不改行为，但把 toast 的可见性做硬**（它现在会自己消失——真正的静默风险在这里）。请别机从作者视角评一句 | haruki（裁决）+ 请 QA 侧意见 | **完成（裁决：不改保存行为）** | §5.129（中断批盘点落库：**已推送，`ddc06f4..29505d8`（2026-10-13 晚）**）。⚠ 本行原假设「toast 会自己消失」**被代码否证**：`error` 根本没有 TTL，消失来自同屏上限 `MAX_NOTICES` 不分 kind 丢最旧 ⇒ 已改成先丢 info（`notice-queue.ts` 纯函数 +6 项测试，那条常驻警告现在扛得住 10 条 info 刷屏）。QA 侧意见照旧欢迎，但按 §13.3 请**追加行**，别再改这一行。 |
-| HK-9 | **向导的「目标角色」把 K0（master「你」）当成普通可选项**：§5.111 跑新建口上项目时，探针按「取下拉第一项」拿到 `#0 你`，包名就成了「探针作品甲-你 v1.0」。是真该允许（确有游戏把 K0 当真实角色用），还是该排除、或至少给出后果提示，**本批没有证据下判断 ⇒ 先登记、不当场改** | 作者选到 K0 时要么**明确说后果**（例如「K0 通常没有个人口上目录，部署会失败」），要么按 `charaIndex` 的真实可用性过滤——两条都行，但**不许默默删选项**；无论走哪条都要有测试 | haruki | 完成 | §5.118（裁定=提示不过滤；证据：`CSV/Chara/Chara0.csv` 真存在且無 000 口上目录，168 表 vs 155 目录；+6 项测试含两条反向断言） |
-| HK-10 | **💡 一键补齐（§5.112）的真实点击链没有在壳上验过**：纯函数闭环 + 槽接线两层都钉住了，但「光标落在波浪线行 → 按 💡 → 选中动作 → 补进一行 → 波浪线消失」这一段依赖 Monaco 的 action 菜单 DOM，本组从未成功驱动过它（§九-33 坐标驱动作废在前，不敢拿旧路数冒充证据） | 真实壳里：工作区 `.ERB` 故意少写 `ENDIF` ⇒ `.squiggly-error` 在场 → 打开 💡 菜单（Monaco 的 `.monaco-action-bar` / ghost 菜单节点，先 dump 再选，别猜类名）→ 点中「补上缺失的 ENDIF（放在第 N 行之前）」→ 断言 ① 缓冲区只多了那一行且缩进等于开块行 ② 波浪线数 -1 ③ 一次 `Ctrl+Z` 全部撤销 ④ **盘上字节未变**（未保存前不许落盘）；跑完丢弃修改、探针文件删除 | haruki | **完成（四条全过）** | §5.117。真壳 CDP 全链（本组 worktree `kojo-hk10` 隔离，未碰别 agent 在制品）：工作区探针 `.ERB`（7 行，`@`-边界前少一条 `ENDIF` ⇒ `.squiggly-error`=1）→ 点行造光标变化 → **真鼠标点 `.lightBulbWidget`（💡）** → 菜单（`.context-view`，header `Quick Fix`）唯一可点行「补上缺失的 ENDIF（放在第 5 行之前）」→ 点中 ⇒ ① **只多一行 `  ENDIF`、缩进 = 开块行（2 空格）** ② 波浪线 **1→0** ③ 一次 `Ctrl+Z` 全复原 ④ **盘上 sha256 逐字节未变**（`d385f277…`；`dirty` 全程 false ⇒ 未保存前不落盘）。跑完丢弃修改、探针文件与夹具工作区已删、语料零写入。另记 §九-51（`offsetParent` 判可见会滤掉真行）+ §九-47 升级（Monaco 把整行每个空格都渲染成 nbsp）——**两条都是仪器坑、非产品缺陷** |
-| HK-11 | **语法糖全中文化：系统函数名 + 指令表 + 数字脱敏**（用户 2026-10-13 指派；拖拽视图搁置后的第一优先）。① 系统函数名中文化——作者在条件/正文里可能写到的全大写英文（`GETBIT`/`FIRSTTIME`/`CHK_*`/`RAND`/系统 `CALL` 目标…）全部给中文糖形；② 指令表中文化——`时机 指令 310：` 升级为可用中文名（`时机 指令 摸屁股：`）；数据源 = **当前打开项目**的 `CSV/Train.csv`（引擎读取惯例 `TRAINNAME:编号`；270–299 = kojo_com 段；各版本/汉化/魔改自动跟随，**不内置打包**）；③ 能由工具查表/分配的数字不让作者手写（指令编号、事件编号等） | ① 纯中文重写：真实场景（`时机 指令 <中文名>：` + 条件 + 系统函数）写出 → 编译产物语义与 golden 一致，**作者全程零英文、零裸数字**；② 指令名补全/解析来自打开项目的 `Train.csv`（换项目即换表）；表里查不到的名字（魔改新指令）报「未命名指令（编号 N）」不猜；③ 旧写法（`指令 310`）兼容不破。现状盘点：关键字 17 个已中文（`kojo-sugar/src/keywords.ts`）+ 变量已中文（§3.8 她/你/角色12的好感度），缺口正是本条 ①②③ | haruki | 待认领（② 的**数据源解析口径已实测**，见右） | 用户 2026-10-13 指派；语料实证 300=会話、310=摸屁股（`TRAINNAME` 用法见 `USERCOM.ERB`）。<br>**§5.120 追加实测（本机 `C:Game…-SANYOUSEI(PC)`）**：`CSV/Train.csv` = UTF-8 **带 BOM**、**225 条条目 + 95 条 `;` 注释行**、无重号。<br>⚠ **解析铁律：编号取第一列，不是行号**——注释行穿插其间（数组下标 299/300/310 处实际是 `;706 胸愛撫(慰)` / `;707 玩弄乳頭(慰)` / `;745 肛用振動棒(慰)`，按行号取会整套错位），且 `;` 行本身带编号，**必须整行跳过**。<br>⚠ 本包里 **270–299 段为空**（kojo_com 自定义段靠 `USERCOM.ERB` 定义，不在 Train.csv 里）⇒ HK-12 的编号分配不能假设该段已有表项可读。<br>⇒ 换项目/换汉化包时表内容随文件变（符合"不内置打包"）；实现放 adapter（游戏知识），糖层只查表。 |
-| HK-12 | **系统自定义函数糖化：作者可扩展钩子**（用户 2026-10-13 指派）。把系统给作者的"工具钩子"做成中文糖：① **自定义指令**五钩子（`KOJO{t}_COM_NAME/COM_ABLE/COM/CAN_COM/Counter不発_K{n}_{编号}`，270–299 段 + 内部编号）；② **自定义事件**（`CUSTOM_EVENT_K{n}_{i}`）；③ 自定义素质（`CUSTOM_TALENT`）；④ SHOP 按钮（`SHOP_BUTTON[_CONDITION]`）。**数字传参全由编辑器分配/管理**（编号自动递增、防撞车、可查表、改名不改号） | 「自定指令 赛钱：」→ 生成 NAME（`RESULTS = 赛钱`）/ABLE/本体 函数组，可选钩子按需；编号自动分配且与既有函数不撞；改名只动 RESULTS 值、编号不变；真实语料打开后自定指令出现在函数树/条件矩阵列 | haruki | 待认领 | 用户 2026-10-13 指派；语料实证 ≥10 角色在用自定指令（灵梦 `COM_NAME_K1_1 = 求婚`、`= 除灵仪式`）；附录 C 的 25 个未覆盖入口里本条先做这四族 |
-| HK-13 | **英文关键字语法糖封存（决策）**（用户 2026-10-13 拍板）。① 英文别名路径（§4.1 的 `timing`/`if`/`char`…、`CONT_MARKS` 的 `cont/continue`）冻结——不再新增、不再作为设计/测试/推广重点，**存量输入兼容不删**；② **"ERB→糖反解保真"不再是新糖设计的约束**（用户原话「现在又不需要 erb 文件转 kojo 文件」）：新糖按中文优先、编译单向设计 | 后续糖 PR 不再被"能反解回原写法/英文保真"堵住；§4.1 英文列不再增长；现有英文别名输入照旧生效（回归测试保留）；**防误读两处**：封存 ≠ 删代码；语法糖视图（ViewZone 投影）与升糖预览是**现行已发布功能，不属本条范围**——§8 表中"升糖=纯预览、不改写原文件"的既成结论不动 | haruki | 决策已定（2026-10-13） | 用户 2026-10-13 拍板，为 HK-11/HK-12 解除设计约束 |
-| HK-14 | **条件矩阵面板（独立面板）**（用户 2026-10-13 指派，替代被搁置的拖拽可视化视图）。给口上作者"参考填表"用的**状态 × 时机网格**：行 = 状态键（CFLAG/TALENT/TCVAR/MARK… 含作者私有状态，带中文标签如「CFLAG:318 生气中」），列 = 该角色的时机（系统时机 + **作者自定义时机**，即 HK-12 的自定指令/自定事件）；空白格 = 「这个时机还没对这条状态写过反应」，作者可据此补写 | 打开真实工程 → 面板出网格且**点格子跳对应源码行**；空白格视觉可辨；自定指令/自定事件出现在列里；布局与 `ui-snapshot-injector` 同构（**对象选择 → 定位 → 详情/编辑**三段式）；数据走已有 condition-extractor（`StateDependency`）不新造抽取；误报口径沿用"错标比不标危险" | haruki | 待认领 | 用户 2026-10-13 指派；既有登记：`plugin-api/src/conditions.ts:56/224`（"条件矩阵主数据"）、HANDOFF §6.11（按角色/家族聚合 + MESSAGECHECK 位）、ARCHITECTURE:353（未立项）；数据已抽好（20 万 IF / 4.5 万 SELECTCASE 已结构化）。**同批决策**：拖拽式可视化创作视图**搁置，不做** |
+| HK-1 | **BUG-5 消费方接线**：外部改动自动跟随（§5.84 立的任务 21） | 归档列表自动重扫 = **§5.87 已收**；函数树/索引自动重建**归性能线**（§5.87 算过：全项目重建 ≈ 2.1s，不先做增量粒度就是"能自动刷但每次刷 2 秒"） | 本机 | 部分完成 → 移交性能线 | §5.87（上） · 余量见 §5.87「没收的那条」 |
+| HK-5 | **FileTree `dirCache` 没有失效通道**（§5.87 明记"刻意留在下一批"，理由是本机跑不了 GUI ⇒ **正是本组的活**）：新建/外部新增的文件在树里不出现，除非重挂组件 | `dirCache` 加一条**外部可驱动的失效**（prop 或事件均可，但要穿到 `ProjectView → StableFileTree` 那层且不丢展开态）；实机半边挂 QA-9 | 本机 | **代码已推（§5.91）**·实机**已收（§5.96）** | 失效通道 = `refreshNonce`；另把**工作区根**加进了监视根（见 HK-6）。本组真壳自验跑的是反馈 3 那条链；**HK-5 自己的体感半边已由 §5.96 用 CDP 补上**（外部新增 ≤0.5s 上树、外部删除 ≤0.5s 消失、期间零点击零刷新）；"保存不闪白"本批覆盖到工作区面板那侧，游戏目录那半边随 QA-9 余量走 fixture 工程 |
+| HK-6 | **工作区目录缓存的失效**（本批把工作区根纳入监视后新出现的期望）：`eratw-adapter` 面板的 `wsDirCache` 仍只被本插件自己的动作失效，外部改动（作者用别的编辑器改工作区、或从资源管理器拖文件进包）**不会**刷面板 | 面板订阅 `file.changed`，按 `isPathUnder(workspaces.rootDir(), ev.path)` 分野后**只失效受影响的目录**（照 §5.87 的首动作零 IO 口径）；实机半边同 QA-9 附一条 | 本机 | **完成（§5.93）**·实机已收（§5.96：外部新增/删除 ≤0.5s 自反映，零点击） | 判据 = "父目录要重列"；只重列已缓存的目录；重列不闪白、读失败保留旧内容只记日志 |
+| HK-7 | **`EditorPane` 的外部改动重载用裸字符串判等**：`entriesRef.has(ev.path)`（:773）拿平台原样路径去查 io 路径建的表 | 判等改走 `pathKey()`（§5.93 已把这条义务写进 `FileChangedEvent.path` 的契约注释）；改完判据现成 = §2.J **j1**（外部改动跟随） | 本机 | **完成（§5.94）**·实机判据沿用 §2.J j1 | 新增 `matchOpenedPath()` 按 pathKey 找回宿主用的那个键；**不当 bug 报**（现网大概率恰好一致），但这条是防数据丢失的 B1 链路、静默失效没有症状。由 §5.93 的契约更正带出 |
+| HK-2 | **宿主模态注册表 + Esc 关闭**（QA-6 取证后动手；`§5.80` 留的"全站模态没有 Esc"） | 五家模态 Esc 均可关，且与既有 Esc 优先级链（picker > overlay > zen）不冲突；新增第 6 家只需注册一行 | 本机 | **完成（§5.95）**·实机 = QA-10（**§5.96 已验 3/5 家 + 层叠全过**） | `ui/modal-stack.ts` 一个极小的栈；每家在接入处显式写出自己那一格（全是不写盘那一侧）；新增第 6 家 = 一行 `useModalEscape(...)` |
+| HK-3 | **`exportDirectory` 已无 UI 调用方**（§5.77 被 ZIP 导出顶掉）：确认是否还有别线要用，再决定留契约还是删 | 全仓 `grep` 无生产调用方且别组无异议 → 契约收缩（删）；否则写明消费方 | 本机 | **完成（§5.97）** | 复核三条都指向"删"：master 零生产调用方、`origin/feat/ipc-read-channel` 命中数与 master 逐文件相同（= 只有定义链，没新增调用）、`origin/ui-polish` 一条都不含；纪要/backlog 无"导出成文件夹"的将来需求。**契约收回一条通道**（Rust 命令 + 助手 + 6 处替身 + 两层接口），并把那四条"对话框即授权"断言**移植**到活着的 `exportFile`（它此前在内核层零行为测试）。要恢复请照 `exportFile` 形态重新加，别恢复原码——这条不视为"别组需要它"的证据。 |
+| HK-4 | **UI P4 继续打磨**（用户常任指派：专业 / 克制 / 流畅 / 高效 / 耐看） | 每批挑 1–2 处真实摩擦点，带截图级文案复核；风格与糖组并入部分统一 | 本机 | 进行中 | 反馈 3 批（§5.88）已含向导落点区；**§5.99 / §5.100 / §5.102 起改用 CDP 量测挑活**（不再靠主观）：① 编辑器工具条三处（文件名被尾部省略整个裁光 clipX 419px / 编码·换行·行数被挤到 clipX 52px / 「保存 (Ctrl+S)」折行把工具条撑到 50px）② 快速打开副行（14 行各裁 337–389px，最深一层目录不可见）③ **全站可访问性**（白字压 `--accent` **3.32:1**、主按钮里的快捷键芯片 **1.03:1 等于看不见**、`.small` 按钮族全 23px 高、`.tab-close` 17×17、dim 压选中行 3.48:1）——三批修完，**五状态扫描现在对比度 / 目标尺寸 / 可访问名全部为 0**；欢迎页 / 设置浮层 / 命令面板 / 写作模式三档视口零裁剪（负结果也留档）。**仍欠**：徽章族四套样式合并（波及 4 个插件，需单独一批配视觉复核）、工具条与状态栏编码信息重复（刻意不删）、树行中段截断（要保中段就得把口上命名知识带进宿主 UI，不做）、`×` 悬停才现（目标尺寸已补齐，"看不见就可点"要连触屏口径一起定）。**2026-10-13 早间用户重指派重心：打磨 UI，目标「专业 · 克制 · 流畅 · 高效 · 耐看」，以 VSCode 为基准，需定夺时优先采用现代编辑器现成方案。本组据此自拟六项并按序推进（每项都带一个可复跑的量化判据）：UI-1 字号尺度 ✅ §5.121 → UI-2 圆角/边框/阴影 ✅ §5.122 → UI-3 图标（emoji → 单色 SVG）→ UI-4 焦点环与键盘可达 → UI-5 动效可关 → UI-6 底部问题面板（状态栏 ✕//ℹ 现在无处展开，是最大功能缺口）**。**UI-3（图标系统）在制品**：`临时工作树` worktree 未提交（`ui/icons.tsx` + 17 文件；欠量测 / 入册 / 提交）——盘点与落库步骤见 §十二-7 |
+| HK-8 | **口径讨论（不是缺陷）**：脏缓冲区 + 外部改动 → 现在只在**发现时**发一条 toast（「…保存会覆盖磁盘内容。」），作者随后按保存 = 直接覆盖磁盘（§5.96 实机看到的行为）。要不要在**按下保存那一刻**再确认一次？ | 裁决产出 = 一条写进 `IMPLEMENTATION-LOG` 的口径（改或不改都要写理由）。两条反对改的现成理由：①"工具不替作者做决定"，警告已经说过；② 每次覆盖前弹窗会把"我用别的工具改完再回这里存"变成三次点击。一条支持改的理由：警告与保存之间可能隔着几十分钟，作者早忘了。**本组倾向：不改行为，但把 toast 的可见性做硬**（它现在会自己消失——真正的静默风险在这里）。请别机从作者视角评一句 | 本机（裁决）+ 请 QA 侧意见 | **完成（裁决：不改保存行为）** | §5.129（中断批盘点落库：**已推送，`ddc06f4..29505d8`（2026-10-13 晚）**）。⚠ 本行原假设「toast 会自己消失」**被代码否证**：`error` 根本没有 TTL，消失来自同屏上限 `MAX_NOTICES` 不分 kind 丢最旧 ⇒ 已改成先丢 info（`notice-queue.ts` 纯函数 +6 项测试，那条常驻警告现在扛得住 10 条 info 刷屏）。QA 侧意见照旧欢迎，但按 §13.3 请**追加行**，别再改这一行。 |
+| HK-9 | **向导的「目标角色」把 K0（master「你」）当成普通可选项**：§5.111 跑新建口上项目时，探针按「取下拉第一项」拿到 `#0 你`，包名就成了「探针作品甲-你 v1.0」。是真该允许（确有游戏把 K0 当真实角色用），还是该排除、或至少给出后果提示，**本批没有证据下判断 ⇒ 先登记、不当场改** | 作者选到 K0 时要么**明确说后果**（例如「K0 通常没有个人口上目录，部署会失败」），要么按 `charaIndex` 的真实可用性过滤——两条都行，但**不许默默删选项**；无论走哪条都要有测试 | 本机 | 完成 | §5.118（裁定=提示不过滤；证据：`CSV/Chara/Chara0.csv` 真存在且無 000 口上目录，168 表 vs 155 目录；+6 项测试含两条反向断言） |
+| HK-10 | **💡 一键补齐（§5.112）的真实点击链没有在壳上验过**：纯函数闭环 + 槽接线两层都钉住了，但「光标落在波浪线行 → 按 💡 → 选中动作 → 补进一行 → 波浪线消失」这一段依赖 Monaco 的 action 菜单 DOM，本组从未成功驱动过它（§九-33 坐标驱动作废在前，不敢拿旧路数冒充证据） | 真实壳里：工作区 `.ERB` 故意少写 `ENDIF` ⇒ `.squiggly-error` 在场 → 打开 💡 菜单（Monaco 的 `.monaco-action-bar` / ghost 菜单节点，先 dump 再选，别猜类名）→ 点中「补上缺失的 ENDIF（放在第 N 行之前）」→ 断言 ① 缓冲区只多了那一行且缩进等于开块行 ② 波浪线数 -1 ③ 一次 `Ctrl+Z` 全部撤销 ④ **盘上字节未变**（未保存前不许落盘）；跑完丢弃修改、探针文件删除 | 本机 | **完成（四条全过）** | §5.117。真壳 CDP 全链（本组 worktree `kojo-hk10` 隔离，未碰别 agent 在制品）：工作区探针 `.ERB`（7 行，`@`-边界前少一条 `ENDIF` ⇒ `.squiggly-error`=1）→ 点行造光标变化 → **真鼠标点 `.lightBulbWidget`（💡）** → 菜单（`.context-view`，header `Quick Fix`）唯一可点行「补上缺失的 ENDIF（放在第 5 行之前）」→ 点中 ⇒ ① **只多一行 `  ENDIF`、缩进 = 开块行（2 空格）** ② 波浪线 **1→0** ③ 一次 `Ctrl+Z` 全复原 ④ **盘上 sha256 逐字节未变**（`d385f277…`；`dirty` 全程 false ⇒ 未保存前不落盘）。跑完丢弃修改、探针文件与夹具工作区已删、语料零写入。另记 §九-51（`offsetParent` 判可见会滤掉真行）+ §九-47 升级（Monaco 把整行每个空格都渲染成 nbsp）——**两条都是仪器坑、非产品缺陷** |
+| HK-11 | **语法糖全中文化：系统函数名 + 指令表 + 数字脱敏**（用户 2026-10-13 指派；拖拽视图搁置后的第一优先）。① 系统函数名中文化——作者在条件/正文里可能写到的全大写英文（`GETBIT`/`FIRSTTIME`/`CHK_*`/`RAND`/系统 `CALL` 目标…）全部给中文糖形；② 指令表中文化——`时机 指令 310：` 升级为可用中文名（`时机 指令 摸屁股：`）；数据源 = **当前打开项目**的 `CSV/Train.csv`（引擎读取惯例 `TRAINNAME:编号`；270–299 = kojo_com 段；各版本/汉化/魔改自动跟随，**不内置打包**）；③ 能由工具查表/分配的数字不让作者手写（指令编号、事件编号等） | ① 纯中文重写：真实场景（`时机 指令 <中文名>：` + 条件 + 系统函数）写出 → 编译产物语义与 golden 一致，**作者全程零英文、零裸数字**；② 指令名补全/解析来自打开项目的 `Train.csv`（换项目即换表）；表里查不到的名字（魔改新指令）报「未命名指令（编号 N）」不猜；③ 旧写法（`指令 310`）兼容不破。现状盘点：关键字 17 个已中文（`kojo-sugar/src/keywords.ts`）+ 变量已中文（§3.8 她/你/角色12的好感度），缺口正是本条 ①②③ | 本机 | 待认领（② 的**数据源解析口径已实测**，见右） | 用户 2026-10-13 指派；语料实证 300=会話、310=摸屁股（`TRAINNAME` 用法见 `USERCOM.ERB`）。<br>**§5.120 追加实测（本机 `C:Game…<基线语料>`）**：`CSV/Train.csv` = UTF-8 **带 BOM**、**225 条条目 + 95 条 `;` 注释行**、无重号。<br>⚠ **解析铁律：编号取第一列，不是行号**——注释行穿插其间（数组下标 299/300/310 处实际是 `;706 胸愛撫(慰)` / `;707 玩弄乳頭(慰)` / `;745 肛用振動棒(慰)`，按行号取会整套错位），且 `;` 行本身带编号，**必须整行跳过**。<br>⚠ 本包里 **270–299 段为空**（kojo_com 自定义段靠 `USERCOM.ERB` 定义，不在 Train.csv 里）⇒ HK-12 的编号分配不能假设该段已有表项可读。<br>⇒ 换项目/换汉化包时表内容随文件变（符合"不内置打包"）；实现放 adapter（游戏知识），糖层只查表。 |
+| HK-12 | **系统自定义函数糖化：作者可扩展钩子**（用户 2026-10-13 指派）。把系统给作者的"工具钩子"做成中文糖：① **自定义指令**五钩子（`KOJO{t}_COM_NAME/COM_ABLE/COM/CAN_COM/Counter不発_K{n}_{编号}`，270–299 段 + 内部编号）；② **自定义事件**（`CUSTOM_EVENT_K{n}_{i}`）；③ 自定义素质（`CUSTOM_TALENT`）；④ SHOP 按钮（`SHOP_BUTTON[_CONDITION]`）。**数字传参全由编辑器分配/管理**（编号自动递增、防撞车、可查表、改名不改号） | 「自定指令 赛钱：」→ 生成 NAME（`RESULTS = 赛钱`）/ABLE/本体 函数组，可选钩子按需；编号自动分配且与既有函数不撞；改名只动 RESULTS 值、编号不变；真实语料打开后自定指令出现在函数树/条件矩阵列 | 本机 | 待认领 | 用户 2026-10-13 指派；语料实证 ≥10 角色在用自定指令（灵梦 `COM_NAME_K1_1 = 求婚`、`= 除灵仪式`）；附录 C 的 25 个未覆盖入口里本条先做这四族 |
+| HK-13 | **英文关键字语法糖封存（决策）**（用户 2026-10-13 拍板）。① 英文别名路径（§4.1 的 `timing`/`if`/`char`…、`CONT_MARKS` 的 `cont/continue`）冻结——不再新增、不再作为设计/测试/推广重点，**存量输入兼容不删**；② **"ERB→糖反解保真"不再是新糖设计的约束**（用户原话「现在又不需要 erb 文件转 kojo 文件」）：新糖按中文优先、编译单向设计 | 后续糖 PR 不再被"能反解回原写法/英文保真"堵住；§4.1 英文列不再增长；现有英文别名输入照旧生效（回归测试保留）；**防误读两处**：封存 ≠ 删代码；语法糖视图（ViewZone 投影）与升糖预览是**现行已发布功能，不属本条范围**——§8 表中"升糖=纯预览、不改写原文件"的既成结论不动 | 本机 | 决策已定（2026-10-13） | 用户 2026-10-13 拍板，为 HK-11/HK-12 解除设计约束 |
+| HK-14 | **条件矩阵面板（独立面板）**（用户 2026-10-13 指派，替代被搁置的拖拽可视化视图）。给口上作者"参考填表"用的**状态 × 时机网格**：行 = 状态键（CFLAG/TALENT/TCVAR/MARK… 含作者私有状态，带中文标签如「CFLAG:318 生气中」），列 = 该角色的时机（系统时机 + **作者自定义时机**，即 HK-12 的自定指令/自定事件）；空白格 = 「这个时机还没对这条状态写过反应」，作者可据此补写 | 打开真实工程 → 面板出网格且**点格子跳对应源码行**；空白格视觉可辨；自定指令/自定事件出现在列里；布局与 `ui-snapshot-injector` 同构（**对象选择 → 定位 → 详情/编辑**三段式）；数据走已有 condition-extractor（`StateDependency`）不新造抽取；误报口径沿用"错标比不标危险" | 本机 | 待认领 | 用户 2026-10-13 指派；既有登记：`plugin-api/src/conditions.ts:56/224`（"条件矩阵主数据"）、HANDOFF §6.11（按角色/家族聚合 + MESSAGECHECK 位）、ARCHITECTURE:353（未立项）；数据已抽好（20 万 IF / 4.5 万 SELECTCASE 已结构化）。**同批决策**：拖拽式可视化创作视图**搁置，不做** |
 
 ### 13.5 反馈通道（QA 主机 → 本组）
 

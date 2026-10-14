@@ -211,7 +211,7 @@ Monarch 分词（`erb-language.ts`）、`wordWrap:'on'`、缩略图、平滑滚�
 操作：
 
 1. 真实终端（非沙箱）跑 `pnpm --filter @kojo/app tauri dev`（首轮 cargo 冷编译 20–30 分钟，之后增量秒级）。
-2. 打开真实项目 `D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`，
+2. 打开真实项目 `<本机目录>\eratw\eratw-4.980基线语料`，
    **抄下控制台三行耗时**（三者相加 = 开项目级联总时长）：
    - `[erb-parser] … Indexed <N> ERB files … in <X>ms`（同批第二行 `index breakdown:` 给了
      walk / stat / snapshot(get, coerce) / read+parse / aggregate 的逐段拆分与 `reused N/N`）

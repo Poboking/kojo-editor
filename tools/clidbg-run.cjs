@@ -1,6 +1,6 @@
 // kojo → ERB → 真引擎验收一键工具（SKIA 自编译版，--CliDebug JSON Lines）。
 // 用法: node tools/clidbg-run.cjs <xxx.kojo|xxx.erb> [函数名...]
-//   引擎沙盒目录: 环境变量 KOJO_CLIDBG_DIR（默认 C:/DSH/vendor/clidbg-probe，需含 --CliDebug 版 exe + CSV/GAMEBASE.CSV）
+//   引擎沙盒目录: 环境变量 KOJO_CLIDBG_DIR（必填，需含 --CliDebug 版 exe + CSV/GAMEBASE.CSV）
 //   exe 名覆盖:   KOJO_CLIDBG_EXE
 //   转译产物落点: C:/tmp/kojo-generated-erb（仓库外；KOJO_GENERATED_DIR 可覆盖）——
 //     旧版写在「输入文件旁边」= 把 .kojo.generated.ERB 落进仓库（污染 tests/goldens 抽样、破工作树干净前提），
@@ -13,8 +13,8 @@ const readline = require('node:readline');
 const gen = require('./generated-output.cjs');
 
 const REPO = path.resolve(__dirname, '..');
-const PROBE_DIR = process.env.KOJO_CLIDBG_DIR || 'C:/DSH/vendor/clidbg-probe';
-const EXE = process.env.KOJO_CLIDBG_EXE || path.join(PROBE_DIR, 'Emuera_skiaV16_x64.exe');
+const PROBE_DIR = process.env.KOJO_CLIDBG_DIR || '';
+const EXE = process.env.KOJO_CLIDBG_EXE || (PROBE_DIR ? path.join(PROBE_DIR, 'Emuera_skiaV16_x64.exe') : '');
 
 function die(msg) { console.error('[FAIL] ' + msg); process.exit(1); }
 
@@ -34,7 +34,7 @@ if (argv.length < 1 || argv[0] === '-h') {
 }
 const input = path.resolve(argv[0]);
 fs.existsSync(input) || die('找不到输入: ' + input);
-fs.existsSync(EXE) || die('找不到引擎 exe: ' + EXE + '（KOJO_CLIDBG_EXE / KOJO_CLIDBG_DIR 可覆盖）');
+fs.existsSync(EXE) || die('找不到引擎 exe: ' + EXE + '（请设 KOJO_CLIDBG_DIR 指向 --CliDebug 沙盒，或用 KOJO_CLIDBG_EXE 直接指定）');
 const isKojo = /\.kojo$/i.test(input);
 
 // ── 1. 转译（.kojo 才需要）：经 vitest 跑一段内联测试，复用仓库 TS 服务 ──

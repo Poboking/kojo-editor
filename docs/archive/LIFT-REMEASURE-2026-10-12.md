@@ -40,13 +40,13 @@
 ### 1.1 语料位置（注意：docs 里的 D: 路径已全部失效）
 
 这台机器上只有 C: 盘。`HANDOFF.md` §一/§五、`MANUAL-CHECKLIST` 头部、`USER-GUIDE.md` §3
-写的 `D:\Game\eratw\...` 和 `D:\DSH\kojo-editor` 都已不存在。实际位置：
+写的 `<本机目录>\eratw\...` 和 `<工作树>` 都已不存在。实际位置：
 
 | 文档里的写法 | 实际 |
 |---|---|
-| 仓库 `D:\DSH\kojo-editor` | `C:\DSH\master-kojo-editor`（= origin/master，本次测量所在）<br>`C:\DSH\kojo-editor`（开发副本，`ui-polish` 分支，领先 3 个未推送提交） |
-| 语料 `D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)` | `C:\Game\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)` |
-| `D:\DSH\reverse-engineering\*.md`（口上机制深挖 / 存档实战解析） | **不存在**，两份仓库外权威文档已丢失 |
+| 仓库 `<工作树>` | `<本机目录>\master-kojo-editor`（= origin/master，本次测量所在）<br>`<工作树>`（开发副本，`ui-polish` 分支，领先 3 个未推送提交） |
+| 语料 `<本机目录>\eratw\eratw-4.980基线语料` | `C:\Game\eratw-4.980基线语料` |
+| `<本机目录>\reverse-engineering\*.md`（口上机制深挖 / 存档实战解析） | **不存在**，两份仓库外权威文档已丢失 |
 
 另外这份语料**没有 `sav/` 目录**，所以 `integration-plugins.test.ts:225` 的
 `expect(scan.entries.length).toBe(6)` 必然失败，状态回放基线（K49 未知率 32.0%）本机无法验证。
@@ -64,8 +64,8 @@
 运行：
 
 ```bash
-cd C:/DSH/master-kojo-editor
-KOJO_SMOKE_PROJECT="C:/Game/eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)" \
+cd <本机目录>/master-kojo-editor
+KOJO_SMOKE_PROJECT="C:/Game/eratw-4.980基线语料" \
   pnpm vitest run packages/kernel/tests/lift-corpus.probe.test.ts
 ```
 

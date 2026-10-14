@@ -6,7 +6,7 @@
 >
 > 命令原文（本机 2026-10 实测）：
 > - 自动探针：`node tools/smoke-tauri-ipc.mjs "<本机真实 eraTW 根目录>"`
->   —— **语料路径按主机而定**（haruki 机 `C:\game\eratw-sub-…`，QA 机 `D:\Game\eratw\eratw-sub-…`）；
+>   —— **语料路径按主机而定**（本机 `C:\game\eratw-…`，QA 机 `<本机目录>\eratw\eratw-…`）；
 >   不给参数或给了不存在的目录，探针现在**一开头就退出码 2 报错**，不会跑到一半才莫名失败。
 > - 进程/DOM 冒烟：`node tools/smoke-tauri-dom.mjs 130`
 > - 手工：`pnpm --filter @kojo/app tauri dev`（或 `pnpm tauri dev`）
@@ -19,7 +19,7 @@
 
 ## 0. 前置
 
-- [ ] 游戏目录存在：`D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)`
+- [ ] 游戏目录存在：`<本机目录>\eratw\eratw-4.980基线语料`
 - [ ] `%APPDATA%\dev.kojo.editor\store\_global\` 下无该游戏目录的批准记录（否则 a2 不弹窗）
 - [ ] 端口 1420 / 9222 空闲（上一轮 tauri dev 已退出）
 - [ ] 已 `pnpm install`；`cargo` 增量可编译（首次 build 已完成）
@@ -84,7 +84,7 @@ node tools/smoke-tauri-ipc.mjs
 
 | 项 | 结论 | 现象记录 |
 |---|---|---|
-| a 打开真实游戏目录 | **PASS** | rootDir = `D:\Game\eratw\…SANYOUSEI(PC)`；stats `角色 168 / 文件 2285 / 函数 99104` |
+| a 打开真实游戏目录 | **PASS** | rootDir = `<本机目录>\eratw\…<基线语料>`；stats `角色 168 / 文件 2285 / 函数 99104` |
 | a2 写权限确认弹窗 | **PASS** | 首次弹窗 → 点「允许写入」→ 关闭，批准持久化（下次自动放行；探针结束时还原 store） |
 | b 域内写正常 | **PASS** | 改 `…\個人口上\001 Reimu [霊夢]\of_new_kojo_api_TEST.ERB` → 落盘含 marker ✓；备份新增 1 个 `.bak`（`{appData}\backup\of_new_kojo_api_TEST.ERB-dafcdd60\…bak`）；原字节已还原 |
 | c 域外写被拒 | **PASS** | `C:\Windows\Temp\kojo-smoke-outside.txt` → 抛「写允许域拒绝（write）：… 不在允许域内」 |

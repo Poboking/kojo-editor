@@ -6,11 +6,11 @@
  * 单次 push 经常 21s 超时失败。旧口径是「清空代理环境变量直连 + 5s 间隔重试」
  * （见 ~/.workbuddy/skills/windows-net-troubleshoot），但**它不是always成立**：
  * 2026-10-13 凌晨一次推送里，直连 **6/6 全部失败**（`Failed to connect to github.com:443`），
- * 而带本地代理（默认 `http://127.0.0.1:7890`）**一次就通**。
+ * 而带本地代理（地址经 `KOJO_GIT_PROXY` 提供）**一次就通**。
  * ⇒ 现在**交替试**：奇数趟直连、偶数趟走代理，两边都可能赢，不赌单一姿势。
  *
  * 用法：node tools/git-push.mjs [remote] [branch]   （默认 origin master）
- *      代理地址可用 `KOJO_GIT_PROXY` 覆盖（设为空串 = 只试直连，保持旧行为）。
+ *      代理地址经环境变量 `KOJO_GIT_PROXY` 提供（未设置 = 只试直连）。
  * 退出码：0 = 推送成功；1 = 全部重试失败。
  */
 import { spawnSync } from 'node:child_process';
@@ -21,8 +21,8 @@ const remote = process.argv[2] ?? 'origin';
 const branch = process.argv[3] ?? 'master';
 const MAX_TRIES = 6;
 const DELAY_MS = 5000;
-/** 本地代理；`KOJO_GIT_PROXY=""` 表示"这台机没有可用代理"，退回纯直连 */
-const PROXY = process.env.KOJO_GIT_PROXY ?? 'http://127.0.0.1:7890';
+/** 本地代理；`KOJO_GIT_PROXY=""` 或未设置 = 纯直连（不试代理趟） */
+const PROXY = process.env.KOJO_GIT_PROXY ?? '';
 
 const cleanEnv = () => {
   const env = { ...process.env };

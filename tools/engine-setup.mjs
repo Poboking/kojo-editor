@@ -1,10 +1,10 @@
 // CliDebug -capable SKIA 引擎一键重建安装（看板 V4）：dotnet 检查 → clone/更新 → publish → 安装 → 冒烟。
 // 用法: node tools/engine-setup.mjs [--dest DIR] [--fresh] [--exe-only]
-//   --dest DIR     沙盒目录，默认 KOJO_CLIDBG_DIR || C:/DSH/vendor/clidbg-probe。
+//   --dest DIR     沙盒目录，默认 KOJO_CLIDBG_DIR（必填其一）。
 //                  只往里写 Emuera_skiaV16_x64.exe / ERB/ / CSV/，**绝不删除沙盒本体**。
 //   --fresh        源码 clone 目录删除重克隆（只作用于源码目录，不碰沙盒）。
 //   --exe-only     仍 clone+publish+装 exe，但跳过 CSV 布置（假定沙盒 CSV 已就绪）。
-//   源码目录: KOJO_EMUERA_SRC || C:/DSH/vendor/emuera-skia；脏/分支不符时自动退化到 %TEMP% 全新克隆。
+//   源码目录: KOJO_EMUERA_SRC || %TEMP%/emuera-skia（缺省走临时目录全新克隆）；脏/分支不符时同样退化到 %TEMP% 全新克隆。
 // 冒烟: 安装完后 spawn dest 内 exe --CliDebug，等 hello+ready 后 quit；hello 里的 version 打出来。
 // 退出码: 0=成功 1=冒烟/其他失败 2=缺 dotnet SDK / 参数错。
 // 铁律: **绝不自动安装 SDK**——缺 dotnet 只打印 `winget install Microsoft.DotNet.SDK.8` 提示后停。
@@ -19,12 +19,12 @@ import { resolveCorpusDir, corpusHint } from './corpus.mjs';
 
 const SRC_URL = 'https://gitgud.io/minus010001/emuera_lazyloading_selfmodified_version';
 const BRANCH = 'develop-skiasharp';
-const PROXY = 'http://127.0.0.1:7890';
+const PROXY = process.env.KOJO_GIT_PROXY || '';
 const EXE_NAME = 'Emuera_skiaV16_x64.exe';
 
 // ── CLI 解析 ──
 const argv = process.argv.slice(2);
-let dest = process.env.KOJO_CLIDBG_DIR || 'C:/DSH/vendor/clidbg-probe';
+let dest = process.env.KOJO_CLIDBG_DIR || '';
 let fresh = false;
 let exeOnly = false;
 for (let i = 0; i < argv.length; i++) {
@@ -35,7 +35,8 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '-h' || a === '--help') { console.log('用法: node tools/engine-setup.mjs [--dest DIR] [--fresh] [--exe-only]'); process.exit(0); }
   else die2(`未知参数: ${a}`);
 }
-const SRC_DIR = process.env.KOJO_EMUERA_SRC || 'C:/DSH/vendor/emuera-skia';
+dest || die2('沙盒目录未指定：设环境变量 KOJO_CLIDBG_DIR 或传 --dest DIR');
+const SRC_DIR = process.env.KOJO_EMUERA_SRC || path.join(os.tmpdir(), 'emuera-skia');
 const PUBLISH_OUT = path.join(os.tmpdir(), 'emuera-build');
 // 语料 CSV 来源：只有沙盒缺 CSV 时才需要，故**惰性**解析（认内容不认名，见 tools/corpus.mjs）。
 const T0 = Date.now();
@@ -75,10 +76,11 @@ function run(cmd, args, opts = {}) {
     p.on('error', () => resolve({ code: 1, out }));
   });
 }
-// git 网络操作：直连优先，失败退化到本地代理重试一次。
+// git 网络操作：直连优先，失败且配置了 KOJO_GIT_PROXY 时经代理重试一次。
 async function gitNet(args, opts = {}) {
   const r = await run('git', args, opts);
   if (r.code === 0) return r;
+  if (!PROXY) return r;
   console.log('  直连失败，经代理重试: git -c http.proxy=' + PROXY);
   return run('git', ['-c', `http.proxy=${PROXY}`, ...args], opts);
 }

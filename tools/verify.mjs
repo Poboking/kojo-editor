@@ -2,7 +2,7 @@
 // 用法: node tools/verify.mjs <检查名> [透传参数...]   |   --list（或无参数）看注册表
 //   检查名: unit / typecheck / audit / erbcheck / engine / corpus / dom / ipc / measure / all
 //   全局开关: --json  （每检查一行 JSON：{name,status,durationMs,note}，不打人话摘要行）
-// 前置依赖: engine 需 KOJO_CLIDBG_DIR（默认 C:/DSH/vendor/clidbg-probe）内含引擎 exe 或 KOJO_CLIDBG_EXE 指到实体；
+// 前置依赖: engine 需 KOJO_CLIDBG_DIR（--CliDebug 引擎沙盒）内含引擎 exe 或 KOJO_CLIDBG_EXE 指到实体；
 //   corpus 需 KOJO_SMOKE_PROJECT 指向真实语料目录（该闸仍显式 opt-in，见下）；ipc/dom 需桌面环境；缺依赖一律 SKIP 不算 FAIL。
 //   loadtest 的语料目录**认内容不认名**（tools/corpus.mjs：--corpus > KOJO_CORPUS_DIR > 扫 C:/game/* 筛 ERB/+CSV/）；
 //   KOJO_CORPUS_DIR 设了但不成立 = 硬失败（列盘上候选、非零退出），不静默换版本。
@@ -42,8 +42,8 @@ function sh(cmd, args) {
 
 function engineExePath() {
   if (process.env.KOJO_CLIDBG_EXE) return process.env.KOJO_CLIDBG_EXE;
-  const dir = process.env.KOJO_CLIDBG_DIR || 'C:/DSH/vendor/clidbg-probe';
-  return path.join(dir, 'Emuera_skiaV16_x64.exe');
+  if (!process.env.KOJO_CLIDBG_DIR) return '';
+  return path.join(process.env.KOJO_CLIDBG_DIR, 'Emuera_skiaV16_x64.exe');
 }
 const exitToResult = (code) => (code === 0 ? { status: 'PASS' } : { status: 'FAIL', exit: code });
 
@@ -98,7 +98,7 @@ const CHECKS = [
     describe: 'kojo→ERB→真引擎全链路（clidbg-run.cjs，参数透传）',
     precheck: () => {
       const exe = engineExePath();
-      return fs.existsSync(exe) ? null : `引擎沙盒缺失: ${exe}（可用 KOJO_CLIDBG_DIR / KOJO_CLIDBG_EXE 覆盖）`;
+      return fs.existsSync(exe) ? null : '引擎沙盒缺失: 设 KOJO_CLIDBG_DIR（--CliDebug 沙盒目录）或 KOJO_CLIDBG_EXE';
     },
     run: async (argv) => {
       if (argv.length === 0) return { status: 'SKIP', note: '用法: pnpm verify engine <文件.kojo> [函数名...]' };
@@ -121,7 +121,7 @@ const CHECKS = [
     describe: '整包加载实测（engine-loadtest.mjs，硬链接镜像 + 双跑增量警告对拍；分钟级，不进 all）',
     precheck: () => {
       const exe = engineExePath();
-      if (!fs.existsSync(exe)) return `引擎 exe 缺失: ${exe}（可用 KOJO_CLIDBG_DIR / KOJO_CLIDBG_EXE 覆盖）`;
+      if (!fs.existsSync(exe)) return '引擎 exe 缺失: 设 KOJO_CLIDBG_DIR（--CliDebug 沙盒目录）或 KOJO_CLIDBG_EXE';
       return corpusPrecheck(true) ?? null;
     },
     run: async (argv) => exitToResult(await shNode(['tools/engine-loadtest.mjs', ...argv])),
@@ -131,7 +131,7 @@ const CHECKS = [
     describe: '场景级台词断言（scene-run.cjs <场景.json…>，状态注入+正则断言+sourceMap 回映；不传参=跑 tools/scenes/ 全套）',
     precheck: () => {
       const exe = engineExePath();
-      return fs.existsSync(exe) ? null : `引擎 exe 缺失: ${exe}（可用 KOJO_CLIDBG_DIR / KOJO_CLIDBG_EXE 覆盖）`;
+      return fs.existsSync(exe) ? null : '引擎 exe 缺失: 设 KOJO_CLIDBG_DIR（--CliDebug 沙盒目录）或 KOJO_CLIDBG_EXE';
     },
     run: async (argv) => exitToResult(await shNode(['tools/scene-run.cjs', ...argv])),
   },

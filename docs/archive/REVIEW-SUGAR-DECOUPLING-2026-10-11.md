@@ -7,7 +7,7 @@
 > - `docs/SYNTAX-SUGAR-DESIGN.md`、`docs/SYNTAX-SUGAR-SURFACE-SPEC.md`（v1.2 冻结版）、
 >   `docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md`（已批准的实现方案）、
 >   `docs/LIFT-SUGGESTER-DESIGN.md`
-> - `docs/ARCHITECTURE.md`（铁律源头）、`reverse-engineering/dsh-架构设计哲学.md`
+> - `docs/ARCHITECTURE.md`（铁律源头）、`<私有设计笔记>`
 > - 可执行门禁 `tools/audit-decoupling.mjs`
 > 审阅方式：文档对表 + 源码逐条核查 + 门禁实跑（本报告全部结论均由实跑/实证支撑）。
 > **本报告只做审阅与定性，不改动任何代码。**
@@ -60,11 +60,11 @@ $ node tools/audit-decoupling.mjs
   这既符合 cordis `inject` 语义，也守住了"内核不静默"铁律的反面：能力缺席应**退化可见**而非消失。
 - **"能力面 = 服务键面"**：`sugar.lift`（只读）与 `sugar.liftApply`（可写）拆成**两个服务键**
   （`index.ts:181-215`），注释明写"写能力必须显式声明成一个独立服务键，否则'哪些插件能写盘'就不再可审计"。
-  这是 `dsh-架构设计哲学.md` §九"把不变式接到可执行门禁"思路的自发实践。
+  这是 `<私有设计笔记>` §九"把不变式接到可执行门禁"思路的自发实践。
 - **谁改盘谁发事件**：`liftApply` 的发口由装配层注入 `onApplied: (path) => ctx.bus.emit('file.changed', ...)`，
   实现层（`lift-apply.ts`）**零内核依赖**；`ui-sugar-lift` 面板只消费不发（其头注明确"写盘在 `sugar.liftApply` 里，事件也由那边发，职责不重叠"）。
 - **UI 插件不持宿主引用**：`ui-sugar-lift` 通过宿主事件 `editor.activeFileChanged` 取当前文件，
-  而非直接读宿主状态——符合 DSH "模型可见 ⟺ 已记录" 与事件域分发的思路。
+  而非直接读宿主状态——符合 先前项目 "模型可见 ⟺ 已记录" 与事件域分发的思路。
 - **`convention-linter` 糖规则零游戏知识**：`rules/sugar-conventions.ts` 头注「**零游戏知识**——只做 `.kojo` 表层文本的结构扫描」，
   5 条规则（`cont-inside-quotes` / `multiple-choice-blocks` / `expr-missing-else` / `readonly-alias-assign` / `static-conventions`）
   全部纯文本扫描，**不依赖 adapter 字典、不 import kojo-sugar**（避免 C 项违规），符合"引擎+规则"模式。

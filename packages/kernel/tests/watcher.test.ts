@@ -352,12 +352,12 @@ describe('FileWatcherServiceImpl · 根目录折叠', () => {
     // 本机真实形状：项目根是游戏目录，存档库在同级的另一目录里（不被项目根包含），
     // 而 kojo / kojo/sub 都在项目根内 → 折叠后各留一个外层根
     await watcher.start([
-      'C:/Game/eratw-SANYOUSEI',
-      'C:/Game/eratw-SANYOUSEI/kojo',
-      'C:/Game/eratw-SANYOUSEI/kojo/sub',
+      'C:/Game/eratw-corpus',
+      'C:/Game/eratw-corpus/kojo',
+      'C:/Game/eratw-corpus/kojo/sub',
       'C:/Game/eratw-save/sav',
     ]);
-    expect(bridge.calls[0]).toEqual(['C:/Game/eratw-SANYOUSEI', 'C:/Game/eratw-save/sav']);
+    expect(bridge.calls[0]).toEqual(['C:/Game/eratw-corpus', 'C:/Game/eratw-save/sav']);
   });
 
   it('同一目录的两种写法只保留一个', async () => {

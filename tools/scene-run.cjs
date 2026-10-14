@@ -6,20 +6,25 @@
 //         --no-alias-check       关闭每场景自带的别名回环自证（默认开，防最小 CSV 桩把分支静默吞掉）
 //         --keep-sandbox         兼容占位（当前实现本来就保留沙盒取证；下次运行整根重建）
 // 成本模型：一场景一次引擎启动（~1-2s 加载 + CALL 批量执行），场景内多 call 共享同一次启动。
-// 环境变量: KOJO_CLIDBG_DIR(骨架源,默认 C:/DSH/vendor/clidbg-probe) KOJO_CLIDBG_EXE KOJO_SCENE_SANDBOX(默认 C:/DSH/vendor/clidbg-probe-scene)
+// 环境变量: KOJO_CLIDBG_DIR(骨架源,必填) KOJO_CLIDBG_EXE KOJO_SCENE_SANDBOX(默认 %TEMP%/kojo-clidbg-scene)
 // 退出码: 普通模式 = 失败 call 数（cap 255）；--selftest = 0 证明红/绿符合预期, 1 反证失败。
 // 纪律: 语料目录严格只读；沙盒骨架从 clidbg-probe 取副本（exe 硬链接 / CSV 实复制），绝不写回 clidbg-probe。
 'use strict';
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 
 const REPO = path.resolve(__dirname, '..');
 const SCENES_DIR = path.join(REPO, 'tools', 'scenes');
-const MASTER = process.env.KOJO_CLIDBG_DIR || 'C:/DSH/vendor/clidbg-probe';
-const EXE = process.env.KOJO_CLIDBG_EXE || path.join(MASTER, 'Emuera_skiaV16_x64.exe');
-const SANDBOX_ROOT = process.env.KOJO_SCENE_SANDBOX || 'C:/DSH/vendor/clidbg-probe-scene';
+const MASTER = process.env.KOJO_CLIDBG_DIR || '';
+const EXE = process.env.KOJO_CLIDBG_EXE || (MASTER ? path.join(MASTER, 'Emuera_skiaV16_x64.exe') : '');
+const SANDBOX_ROOT = process.env.KOJO_SCENE_SANDBOX || path.join(os.tmpdir(), 'kojo-clidbg-scene');
+if (!EXE) {
+  console.error('[FAIL] 需要环境变量 KOJO_CLIDBG_DIR（--CliDebug 引擎沙盒目录），或用 KOJO_CLIDBG_EXE 直接指定引擎');
+  process.exit(1);
+}
 // 别名回环自证（反假绿前置闸）：向 12 号角色写哨兵值再读回。
 // 这三个名字 2026-10-14 已核实存在于沙盒 CSV（与语料 CSV 同版）；若桩退化致名字静默归 0，回环先红，全场景判 FAIL。
 const ALIAS = {

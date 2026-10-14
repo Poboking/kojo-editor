@@ -51,7 +51,7 @@
 
 三条硬约束：
 
-1. **`export.target`** **槽已存在**（[slots.ts](file:///c:/DSH/kojo-editor/packages/plugin-api/src/slots.ts#L294-L324)），ZIP 导出直接落位，不发明新槽。
+1. **`export.target`** **槽已存在**（[slots.ts](file:///c:/先前项目/kojo-editor/packages/plugin-api/src/slots.ts#L294-L324)），ZIP 导出直接落位，不发明新槽。
 2. **新概念不进** **`eratw-adapter`**：adapter 只说"这个游戏的口上长什么样"；"作者怎么组织自己的包"是通用能力 → 新服务/新插件。
 3. **内核零游戏知识**：项目模型只有 `workspace / project / artifact`，禁 `口上 / kojo / M_KOJO`；包结构模板由适配器/专用插件提供。
 
@@ -60,7 +60,7 @@
 - **项目权威，游戏目录 = 部署目标**（你认可）。
 - 写保护铁律不破：游戏目录默认只读，作者工作区独立。
 - **左侧保留两个根节点**（`我的口上项目` / `游戏语料`）共存，而非替换——避免老用户迷失。
-- 界面现状：左侧 = [ProjectView.tsx](file:///c:/DSH/kojo-editor/packages/app/src/ui/ProjectView.tsx#L142) 内建「口上文件」树 + 函数树，`group:'explorer'` 合并、上下弹性分栏；[FileTree.tsx](file:///c:/DSH/kojo-editor/packages/app/src/ui/FileTree.tsx#L42) **已有**「角色 → 作者包 → 文件」三级雏形。
+- 界面现状：左侧 = [ProjectView.tsx](file:///c:/先前项目/kojo-editor/packages/app/src/ui/ProjectView.tsx#L142) 内建「口上文件」树 + 函数树，`group:'explorer'` 合并、上下弹性分栏；[FileTree.tsx](file:///c:/先前项目/kojo-editor/packages/app/src/ui/FileTree.tsx#L42) **已有**「角色 → 作者包 → 文件」三级雏形。
 
 ## 3. 左侧口上树设计（你本轮的方案，已采纳为定稿方向）
 

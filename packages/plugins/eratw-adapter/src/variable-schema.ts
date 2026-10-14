@@ -357,7 +357,7 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
   /**
    * 作者自定名表（整棵 ERB 子树内的 `*.ERH` 具名常量声明，FT-1）——**全局一张，不按角色分桶**。
    *
-   * 取证结论（Emuera 源码克隆 `C:\DSH\vendor\emuera-skia`，分支 develop-skiasharp）：
+   * 取证结论（Emuera 源码克隆，分支 develop-skiasharp）：
    * `.ERH` 由 `Process.cs:221` 一次性从**整个 ERB 根**装载（递归与否取
    * `Config.SearchSubdirectory`，eraTW `emuera.config:39 SEARCH SUBFOLDERS:YES` ⇒ 全树），
    * 每行的 `#DIM` 进**同一条**队列（`ErhLoader.cs:126`，isPrivate 恒为 false），

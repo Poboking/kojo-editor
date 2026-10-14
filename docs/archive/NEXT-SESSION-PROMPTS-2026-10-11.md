@@ -8,7 +8,7 @@
 
 ## 线 A（主线·第一批）：S1 语法糖契约 + golden 固化
 
-你是 kojo-editor（D:\DSH\kojo-editor）的批次执行者。先读 docs/HANDOFF.md、docs/SYNTAX-SUGAR-SURFACE-SPEC.md（§3/§5/§6）、docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md §八，然后完成 **S1 批：语法糖契约 + golden fixture 固化**。
+你是 kojo-editor（<工作树>）的批次执行者。先读 docs/HANDOFF.md、docs/SYNTAX-SUGAR-SURFACE-SPEC.md（§3/§5/§6）、docs/SYNTAX-SUGAR-IMPL-REVIEW-2026-10-11.md §八，然后完成 **S1 批：语法糖契约 + golden fixture 固化**。
 
 任务：
 1. 新契约 `packages/plugin-api/src/sugar.ts`：`SugarDoc`（front-matter + 时机列表）/ SugarNode 联合类型（TextLine{speech,wait,interpolations} / Interpolation{kind:'expr'|'cond'} / IfBlock / WhenBlock / RandomBlock / ChoiceBlock / ColorBlock / HeartLine / TimingBlock / RawLine / RawFunctionBlock / AliasDecl 四种右值）+ `SugarTranspileService`（transpile(source) → {erb, sourceMap, diagnostics}，sourcemap 行级）+ `SugarDiagnostic`。命名零游戏名词（审计 A 项；kojo/chara 允许）。
@@ -38,11 +38,11 @@
 
 ## 线 B（并行·TRAE）：v1.0 收口——协议覆盖校验规则
 
-你是 kojo-editor（D:\DSH\kojo-editor）的批次执行者。先读 docs/HANDOFF.md §6.10（口上调用协议）与 §十 第 4 条，完成 **v1.0 收口余项：协议覆盖校验规则**。
+你是 kojo-editor（<工作树>）的批次执行者。先读 docs/HANDOFF.md §6.10（口上调用协议）与 §十 第 4 条，完成 **v1.0 收口余项：协议覆盖校验规则**。
 
 任务：校验「口上函数签名槽」与「KOJO_MESSAGE.ERB 路由表转发实参」的一致性——对 adapter `call-protocol.ts` 解析出的每个家族槽位（KojoCallSlot），核对该家族实际函数的声明槽（复用 erb-parser 现有函数签名解析/condition-extractor 的 FunctionAssignment 通道）是否被路由转发覆盖；不一致（声明槽多于转发槽 = 调用永远收默认值）产出结构化问题。落位：convention-linter 新增一条 eraTW 规则（adapter 侧实现，注册进 eratw-adapter/conventions.ts 模式）+ ui-convention-report 自然呈现（现有面板消费，不改动）。
 
-边界（与主线零交集）：只碰 `packages/plugins/eratw-adapter/**` 与其测试、docs（IMPLEMENTATION-LOG 新小节用 node 行号 splice 追加、HANDOFF 对应行）；**禁碰** packages/plugin-api/src/sugar.ts、packages/plugins/kojo-sugar/**（主线正在用）。验证同通用判据 + 真实工程冒烟（KOJO_SMOKE_PROJECT 环境变量，游戏目录 D:\Game\eratw\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)）。
+边界（与主线零交集）：只碰 `packages/plugins/eratw-adapter/**` 与其测试、docs（IMPLEMENTATION-LOG 新小节用 node 行号 splice 追加、HANDOFF 对应行）；**禁碰** packages/plugin-api/src/sugar.ts、packages/plugins/kojo-sugar/**（主线正在用）。验证同通用判据 + 真实工程冒烟（KOJO_SMOKE_PROJECT 环境变量，游戏目录 <本机目录>\eratw\eratw-4.980基线语料）。
 
 ---
 

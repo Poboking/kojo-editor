@@ -9,8 +9,7 @@
 //                                     （防 已经被定义过 类撞名新增警告；剥除动作逐文件打印）。
 //   --corpus DIR                     默认按内容自动发现语料（认内容不认名，见 tools/corpus.mjs）；
 //                                     优先级 --corpus > KOJO_CORPUS_DIR > 扫 C:/game/* 筛 ERB/+CSV/（全程只读）。
-//   --engine EXE                     默认 KOJO_CLIDBG_EXE || KOJO_CLIDBG_DIR/Emuera_skiaV16_x64.exe
-//                                     || C:/DSH/vendor/clidbg-probe/Emuera_skiaV16_x64.exe。
+//   --engine EXE                     默认 KOJO_CLIDBG_EXE || KOJO_CLIDBG_DIR/Emuera_skiaV16_x64.exe（两者都缺 = 用法错误）。
 //   --workdir DIR                    默认 %TEMP%/kojo-loadtest-mirror；跑完删除（--keep 保留）。
 //   --timeout SEC                    单跑 watchdog，默认 240。
 //   --keep                           保留镜像目录。
@@ -48,7 +47,7 @@ const EXE_NAME = 'Emuera_skiaV16_x64.exe';
 const LOAD_DONE_RE = /ファイル読み込みが完了しました。経過時間：([\d.]+)秒/;
 // 语料目录不设默认名（认内容不认名）：见 tools/corpus.mjs 与下面的 resolveCorpusDir 调用。
 const DEFAULT_ENGINE = process.env.KOJO_CLIDBG_EXE
-  || path.join(process.env.KOJO_CLIDBG_DIR || 'C:/DSH/vendor/clidbg-probe', EXE_NAME);
+  || (process.env.KOJO_CLIDBG_DIR ? path.join(process.env.KOJO_CLIDBG_DIR, EXE_NAME) : undefined);
 const DEFAULT_WORKDIR = path.join(os.tmpdir(), 'kojo-loadtest-mirror');
 // 引擎在 cwd 就地改写的对象。根级一级文件不设名单、全量真副本（profile 是「文件」而非目录，
 // 任何按目录前缀 / 具体文件名的猜法都漏过它——上一会话就这样把语料盘上的 profile 就地改写了）。
@@ -88,6 +87,7 @@ try {
 }
 if (!opts.corpus) usageErr(`未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；${corpusHint()}`);
 opts.corpus = path.resolve(opts.corpus);
+if (!opts.engine) usageErr('引擎 exe 未指定：--engine 或环境变量 KOJO_CLIDBG_EXE / KOJO_CLIDBG_DIR');
 opts.engine = path.resolve(opts.engine);
 opts.workdir = path.resolve(opts.workdir);
 const maps = opts.maps.map((m) => {

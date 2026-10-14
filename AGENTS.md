@@ -47,7 +47,7 @@ node tools/smoke-tauri-ipc.mjs   # 真实 IPC 双闸 a–e（不传参即按内�
 - 中途备份：`git push -u origin <branch>`（自己的分支 rebase 后可 `--force-with-lease` 只 force 它）。
 - **落地 = 过 master 窄门**：`git fetch origin` → `git rebase origin/master` → 门槛全绿（见 §三；纯文档批豁免测试面）→ `git push origin HEAD:master`。
   非快进被拒**就是并发协议本身**——重跑 fetch + rebase 再推；**永不** force 到 master。落地后删远端批次分支。
-- `git fetch` 单独成句，看 `rc=$?`（`git fetch | tail` 是假兜底：管道吞失败码）。github 直连时通时断 ⇒ 本 clone 已配 repo 本地代理（`git config http.proxy http://127.0.0.1:7890`；新 clone 配一次，**永不改全局配置**）；推送反复失败时兜底 `node tools/git-push.mjs`（交替直连/代理重试）。
+- `git fetch` 单独成句，看 `rc=$?`（`git fetch | tail` 是假兜底：管道吞失败码）。github 直连时通时断 ⇒ 本 clone 已配 repo 本地代理（`git config http.proxy <本机代理>`；新 clone 配一次，**永不改全局配置**）；推送反复失败时兜底 `node tools/git-push.mjs`（交替直连/代理重试）。
 - 禁用：`git add -A`（逐文件 add）、共享树里 `stash`、改写已公开历史、对 master force。
 - rebase 解冲突逐文件 add + `git diff --cached` 过目（`add -A` 会把冲突标记提交进历史）；提交后全仓扫 `^(<<<<<<<|=======|>>>>>>>)( |$)`。
 - 提交信息：Conventional Commits **中文标题**。

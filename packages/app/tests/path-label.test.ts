@@ -10,7 +10,7 @@ import { dirLabelParts, pathLabelParts, splitPath } from '../src/ui/path-label';
  */
 
 const REAL =
-  'C:\\game\\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)\\ERB\\口上・メッセージ関連\\個人口上\\001 Reimu [霊夢]\\灵梦-少女之梦\\M_KOJO_K1_2_セクハラコマンド.ERB';
+  'C:\\game\\eratw-4.980\\ERB\\口上・メッセージ関連\\個人口上\\001 Reimu [霊夢]\\灵梦-少女之梦\\M_KOJO_K1_2_セクハラコマンド.ERB';
 
 describe('splitPath · 目录与文件名拆分', () => {
   it('Windows 分隔符：最后一段是文件名，其余是目录', () => {
@@ -55,8 +55,8 @@ describe('pathLabelParts · 三段（head 可缩 / tail+base 恒显）', () => {
   });
 
   it('短路径原样通过：不硬造省略号', () => {
-    expect(pathLabelParts('D:\\DSH\\kojo-editor\\docs\\HANDOFF.md')).toEqual({
-      head: 'D:\\DSH\\kojo-editor',
+    expect(pathLabelParts('D:\\Work\\kojo-editor\\docs\\HANDOFF.md')).toEqual({
+      head: 'D:\\Work\\kojo-editor',
       tail: 'docs',
       base: 'HANDOFF.md',
     });
