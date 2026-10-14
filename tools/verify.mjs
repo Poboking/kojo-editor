@@ -92,6 +92,27 @@ const CHECKS = [
     },
   },
   {
+    name: 'loadtest',
+    describe: '整包加载实测（engine-loadtest.mjs，硬链接镜像 + 双跑增量警告对拍；分钟级，不进 all）',
+    precheck: () => {
+      const exe = engineExePath();
+      if (!fs.existsSync(exe)) return `引擎 exe 缺失: ${exe}（可用 KOJO_CLIDBG_DIR / KOJO_CLIDBG_EXE 覆盖）`;
+      const corpus = process.env.KOJO_CORPUS_DIR || 'C:/game/eratw-sub-modding-eratw4.980';
+      if (!fs.existsSync(corpus)) return `语料目录缺失: ${corpus}（KOJO_CORPUS_DIR 可覆盖）`;
+      return null;
+    },
+    run: async (argv) => exitToResult(await shNode(['tools/engine-loadtest.mjs', ...argv])),
+  },
+  {
+    name: 'scene',
+    describe: '场景级台词断言（scene-run.cjs <场景.json…>，状态注入+正则断言+sourceMap 回映；不传参=跑 tools/scenes/ 全套）',
+    precheck: () => {
+      const exe = engineExePath();
+      return fs.existsSync(exe) ? null : `引擎 exe 缺失: ${exe}（可用 KOJO_CLIDBG_DIR / KOJO_CLIDBG_EXE 覆盖）`;
+    },
+    run: async (argv) => exitToResult(await shNode(['tools/scene-run.cjs', ...argv])),
+  },
+  {
     name: 'corpus',
     describe: '真实语料集成冒烟（integration-plugins.test.ts）',
     precheck: () => {

@@ -30,6 +30,8 @@ let erbPath = input;
 if (isKojo) {
   const tmpTest = path.join(REPO, 'packages/plugins/kojo-sugar/tests/__tmp.clidbg-transpile.test.ts');
   const outFile = input + '.generated.ERB';
+  // 附带落盘 sourceMap（generatedLine→sourceLine 数组，同 compile.ts 惯例），供 scene-run 等回映工具消费（V2，additive）
+  const mapFile = input + '.generated.map.json';
   fs.writeFileSync(tmpTest, [
     "import { readFileSync, writeFileSync } from 'node:fs';",
     "import { expect, it } from 'vitest';",
@@ -42,6 +44,7 @@ if (isKojo) {
     "  const errs = r.diagnostics.filter(d => d.severity === 'error');",
     "  expect(errs, JSON.stringify(errs)).toEqual([]);",
     `  writeFileSync(${JSON.stringify(outFile)}, '\\uFEFF' + r.erb.replace(/\\n/g, '\\r\\n'), 'utf8');`,
+    `  writeFileSync(${JSON.stringify(mapFile)}, JSON.stringify(r.sourceMap, null, 2) + '\\n', 'utf8');`,
     '});',
     '',
   ].join('\n'));

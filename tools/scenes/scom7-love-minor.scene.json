@@ -1,0 +1,20 @@
+{
+  "name": "scom7-love-minor",
+  "artifact": "packages/plugins/kojo-sugar/tests/goldens/corpus-k12-lumia-hasei.translated.ERB",
+  "setup": ["TCVAR:102 = 0", "TALENT:恋慕 = 1", "EXP:子宮口開発経験 = 10"],
+  "calls": [
+    {
+      "fn": "M_KOJO_MESSAGE_SCOM_K12_7",
+      "expect": [
+        "承受住了|稍微有点紧|真是大呢|肚子才鼓鼓|最深处还在疼",
+        "膣肉紧紧地缠住了突刺"
+      ],
+      "expect_absent": [
+        "好喜欢那里被搅来搅去|里面的嘴巴|子宮张开了|尽情往里挤|小穴全部都被变成",
+        "小腹、好难受|到此为止不要再往里进|那里好疼|被进到最里面|小宝宝的房间",
+        "今天明明一直在射个不停|用肉棒把子宫给堵住了"
+      ],
+      "note": "恋慕但未開発（EXP<50）：ELSE 子分支 RAND:5 PRINTFORML 五连 + 必然一条旁白；零 HPH 依赖，作为 love-dev 的降级对照组，同时证明 EXP 阈值真的在分流（本场景与 love-dev 期望互斥）"
+    }
+  ]
+}

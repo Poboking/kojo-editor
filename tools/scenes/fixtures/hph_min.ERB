@@ -1,0 +1,109 @@
+; 最小 HPH 助手三件套：@HEARTMARK / @SHYMARK / @HPH_PRINT。
+; 逐字摘自语料（严格只读）C:/Game/eratw-sub-modding-eratw4.980/ERB/魔改内容/PRINT系/Print_&_Input.ERB
+;   （HEARTMARK=L71 / SHYMARK=L101 / HPH_PRINT=L282），唯一改动：
+;   SETCOLOR C_H_PINK → SETCOLOR 0xFF69B4（C_H_PINK 的值，语料 ERB/DIM.ERH L603），
+;   以免整搬 DIM.ERH 宏表。只保留被 M_KOJO_*_SCOM7 恋慕分支引用到的三个函数。
+@HEARTMARK(L_COUNT = 1, L_MODE = "")
+#LOCALSIZE 1
+#LOCALSSIZE 1
+#DIM DYNAMIC L_COUNT
+#DIMS DYNAMIC L_MODE
+
+LOCAL = GETCOLOR()
+LOCALS '= GETFONT()
+
+SIF L_MODE != "PLAIN"
+	SETCOLOR 0xFF69B4
+
+SETFONT "Times New Roman"
+PRINTFORM %"❤" * L_COUNT%
+
+SETFONT LOCALS
+SETCOLOR LOCAL
+
+;-------------------------------------------------
+; 函数名：SHYMARK
+; 概  述：以特定颜色和字体输出三连斜杠
+;-------------------------------------------------
+@SHYMARK(L_COUNT = 1, L_MODE = "")
+#LOCALSIZE 1
+#LOCALSSIZE 1
+#DIM DYNAMIC L_COUNT
+#DIMS DYNAMIC L_MODE
+
+LOCAL = GETCOLOR()
+LOCALS '= GETFONT()
+
+SIF L_MODE != "PLAIN"
+	SETCOLOR 0xFF69B4
+
+SETFONT "MS Gothic"
+PRINTFORM %"///" * L_COUNT%
+
+SETFONT LOCALS
+SETCOLOR LOCAL
+
+;-------------------------------------------------
+; 函数名：HPH_PRINT
+; 概  述：解析字符串中的特殊标记（HPH / BPB），
+;         将其替换为对应的粉色爱心或斜杠特效，并按模式输出文本。
+;-------------------------------------------------
+@HPH_PRINT(L_STR, L_MODE = "")
+#LOCALSIZE 1
+#LOCALSSIZE 1
+#DIMS DYNAMIC L_STR
+#DIMS DYNAMIC L_MODE
+#DIM DYNAMIC L_IDX_HPH
+#DIM DYNAMIC L_IDX_BPB
+#DIM DYNAMIC L_IDX_NEXT
+#DIMS DYNAMIC L_PRINT_PART
+
+DO
+	L_IDX_HPH = STRFIND(L_STR, "HPH")
+	L_IDX_BPB = STRFIND(L_STR, "BPB")
+	
+	IF L_IDX_HPH >= 0 && L_IDX_BPB < 0
+		L_IDX_NEXT = L_IDX_HPH
+	ELSEIF L_IDX_HPH < 0 && L_IDX_BPB >= 0
+		L_IDX_NEXT = L_IDX_BPB
+	ELSE
+		L_IDX_NEXT = MIN(L_IDX_HPH, L_IDX_BPB)
+	ENDIF
+
+	; 如果前面有普通文字
+	IF L_IDX_NEXT >= 1
+		L_PRINT_PART = %SUBSTRING(L_STR, 0, L_IDX_NEXT)%
+		IF GROUPMATCH(TOLOWER(L_MODE), "dw", "dl")
+			PRINTSD @"%L_PRINT_PART%"
+		ELSE
+			PRINTS @"%L_PRINT_PART%"
+		ENDIF
+		L_STR = %SUBSTRING(L_STR, L_IDX_NEXT, -1)%
+		
+	; 如果开头就是 HPH
+	ELSEIF L_IDX_HPH == 0
+		CALL HEARTMARK
+		L_STR = %SUBSTRING(L_STR, 3, -1)%
+		
+	; 如果开头就是 BPB
+	ELSEIF L_IDX_BPB == 0
+		CALL SHYMARK
+		L_STR = %SUBSTRING(L_STR, 3, -1)%
+		
+	; 没有特殊标记了，打印剩余部分并根据 L_MODE 换行/等待
+	ELSE
+		SELECTCASE TOLOWER(L_MODE)
+			CASE "dw"
+				PRINTSDW @"%L_STR%"
+			CASE "dl"
+				PRINTSDL @"%L_STR%"
+			CASE "w"
+				PRINTSW @"%L_STR%"
+			CASE "l"
+				PRINTSL @"%L_STR%"
+			CASEELSE
+				PRINTS @"%L_STR%"
+		ENDSELECT
+		BREAK
+	ENDIF
+LOOP 1

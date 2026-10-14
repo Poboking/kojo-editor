@@ -40,3 +40,6 @@ packages/app/src-tauri/gen/
 
 # agent working memory (not project data — must never be committed)
 .workbuddy/
+
+# V2: clidbg-run 转译副产物（sourceMap，回映工具即时消费，不入库）
+*.generated.map.json

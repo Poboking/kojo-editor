@@ -1,0 +1,5 @@
+; V2 场景断言 runner 自带 fixture：证明 ARG 形参管道零回归。
+; 引擎实锤（2026-10-14）：函数头不声明 (ARG,ARG:1) 时实参被静默丢弃 → A=0 B=0 → 本场景立刻变红。
+@SCENE_ARG_PROBE(ARG,ARG:1)
+PRINTFORML [ARGP] A={ARG} B={ARG:1}
+RETURN 1

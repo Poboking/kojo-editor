@@ -1,0 +1,14 @@
+{
+  "name": "arg-plumbing",
+  "artifact": "tools/scenes/fixtures/argprobe.ERB",
+  "setup": [],
+  "calls": [
+    {
+      "fn": "SCENE_ARG_PROBE",
+      "args": [7, 8],
+      "expect": ["\\[ARGP\\] A=7 B=8"],
+      "expect_absent": ["A=0 B=0"],
+      "note": "ARG 形参管道冒烟：函数头声明 (ARG,ARG:1) 后实参必须原样到达；若静默丢弃回归则打印 A=0 B=0，本场景立刻红"
+    }
+  ]
+}

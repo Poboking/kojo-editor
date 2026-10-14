@@ -1,0 +1,15 @@
+{
+  "name": "selftest-wrong",
+  "artifact": "tools/scenes/fixtures/argprobe.ERB",
+  "alias_check": false,
+  "setup": [],
+  "calls": [
+    {
+      "fn": "SCENE_ARG_PROBE",
+      "args": [7, 8],
+      "expect": ["ZZZ_IMPOSSIBLE_9876_不可能出现的台词"],
+      "expect_absent": [],
+      "note": "故意错的期望（真实打印的是 [ARGP] A=7 B=8）——--selftest 用它证明 runner 会报红，反假绿"
+    }
+  ]
+}

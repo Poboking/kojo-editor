@@ -1,0 +1,22 @@
+{
+  "name": "scom7-love-dev",
+  "artifact": "packages/plugins/kojo-sugar/tests/goldens/corpus-k12-lumia-hasei.translated.ERB",
+  "imports": ["tools/scenes/fixtures/hph_min.ERB"],
+  "setup": ["TCVAR:102 = 0", "TALENT:恋慕 = 1", "EXP:子宮口開発経験 = 60"],
+  "calls": [
+    {
+      "fn": "M_KOJO_MESSAGE_SCOM_K12_7",
+      "expect": [
+        "好喜欢那里被搅来搅去|里面的嘴巴|子宮张开了|尽情往里挤|小穴全部都被变成",
+        "承受着|蹂躏|穴肉就会温和|欢迎阴茎"
+      ],
+      "expect_absent": [
+        "用肉棒把子宫给堵住了|现在不能往里顶|真是美味啊|被挤进小腹深处",
+        "今天明明一直在射个不停|溢出来了呢|咕啾咕啾|一鼓作气|还没有射够",
+        "小腹、好难受|到此为止不要再往里进|那里好疼|被进到最里面|小宝宝的房间",
+        "承受住了|稍微有点紧|真是大呢|肚子才鼓鼓|最深处还在疼|膣肉紧紧地缠住了突刺"
+      ],
+      "note": "恋慕+子宮口開発>=50：HPH 五连（CALL HPH_PRINT，助手函数逐字摘自语料 Print_&_Input.ERB 三函数，见 fixtures/hph_min.ERB 头注）+ 必然一条 RAND:4 旁白。HPH 输出会按爱心标记切分成多条 PRINTS 片段，expect 正则取片段内子串"
+    }
+  ]
+}
