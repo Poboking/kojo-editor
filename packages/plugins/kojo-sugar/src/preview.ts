@@ -142,7 +142,10 @@ export function isStructuralLine(text: string): boolean {
   // `CALL <单 token>`（既有函数的转发调用，如包装函数的 `CALL X_1`）是骨架；
   // 带实参的 `CALL HPH_PRINT(@"…","w")` 是文本块。判据：令牌后无 `(` 与 `,`
   // （实参一定含其一二；转发的函数名不含）。
-  if (/^CALL\s+[^\s(,]+$/.test(t)) return true;
+  // 例外（规范 §3.2 `参数:` 声明，v1.5）：包装函数**逐字转发自己的形参**
+  // （`CALL X_1(ARG,ARG:1)`）——实参全是 `ARG` 令牌、不含任何文本，仍是骨架；
+  // 一旦实参里出现引号/表达式/其它变量就不匹配，仍按文本块走。
+  if (/^CALL\s+[^\s(,]+(\(\s*ARG(?::\d+)?\s*(?:,\s*ARG(?::\d+)?\s*)*\))?$/.test(t)) return true;
   return false;
 }
 

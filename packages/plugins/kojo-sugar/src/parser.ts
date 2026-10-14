@@ -39,6 +39,7 @@ import type {
   WhenExpr,
 } from '@kojo/plugin-api';
 import {
+  checkTimingArgsDeclaration,
   classifyLine,
   contentOf,
   detectSpeechOf,
@@ -50,6 +51,7 @@ import {
   type LineClass,
   type LogicalLine,
 } from './lexer';
+import { TIMING_ARGS_PARAM } from './keywords';
 import type { DiagnosticSink } from './types';
 
 /** 位置工具：由逻辑行构造源区间 */
@@ -340,12 +342,20 @@ function readTimingBlock(
   const bodyParser = new BlockParser(cursor, baseIndent + 1, cursor.sink);
   const { body, messageCheck, namedParams } = bodyParser.parseTimingBody();
 
+  // 命名参数挂在**块头行**上：词法层的 `zeroSpan()` 在这里回填真实源区间
+  // （`参数:` 这类子句写错时，诊断必须能点到块头那一行）。
+  const headParams = mergeNamedParams(cls.namedParams, namedParams).map((p) => ({
+    ...p,
+    loc: p.loc.start.line === 0 ? spanOf(head) : p.loc,
+  }));
+  checkTimingArgsParams(headParams, head, cls.namedParams.length, cursor.sink);
+
   return {
     kind: 'timingBlock',
     face: cls.face,
     index: cls.index,
     indexName: cls.indexName,
-    namedParams: mergeNamedParams(cls.namedParams, namedParams),
+    namedParams: headParams,
     messageCheck,
     body,
     loc: {
@@ -385,6 +395,38 @@ function readCustomCommandBlock(
       end: { line: cursor.lines[Math.max(0, cursor.index - 1)]?.endLine ?? head.endLine, column: 1 },
     },
   };
+}
+
+/**
+ * 校验块头的 `参数:` 声明（规范 §3.2，v1.5）。
+ *
+ * 复用既有诊断码 `timing-face-unknown`（契约 `SugarDiagnosticCode` 是**闭集**，
+ * `plugin-api/tests/sugar.test.ts` 明写"不得临时发明字符串"）：两者的语义同为
+ * "时机块头写了一个转译器无法落地的子句"，且同为 **error = 阻止出码**（规范 §5.3
+ * 不生成半成品）。消息只谈 `参数:`，不复谈分野，作者读到的是准确的原因。
+ *
+ * `headParamCount` = 块头（词法层）解析出的命名参数条数——`参数:` 只可能写在块头，
+ * 体内的条目（当前恒为空）不参与校验，避免把子句位置的锅算到块头上。
+ */
+function checkTimingArgsParams(
+  params: TimingNamedParam[],
+  head: LogicalLine,
+  headParamCount: number,
+  sink: DiagnosticSink,
+): void {
+  for (let i = 0; i < headParamCount; i++) {
+    const p = params[i]!;
+    if (p.name !== TIMING_ARGS_PARAM) continue;
+    const checked = checkTimingArgsDeclaration(p.value);
+    if (checked.ok) continue;
+    sink.report({
+      code: 'timing-face-unknown',
+      severity: 'error',
+      message: checked.reason,
+      loc: posOf(head),
+      span: spanOf(head),
+    });
+  }
 }
 
 function mergeNamedParams(a: TimingNamedParam[], b: TimingNamedParam[]): TimingNamedParam[] {

@@ -40,12 +40,14 @@ import type {
   WhenExpr,
 } from '@kojo/plugin-api';
 import {
+  canonicalTimingParamName,
   CONT_MARKS,
   HEAD_DECL_KEYS,
   FULLWIDTH_SPACE,
   endsWithBlockColon,
   lookupKeyword,
   stripBlockColon,
+  TIMING_ARGS_PARAM,
   type KeywordId,
 } from './keywords';
 import type { DiagnosticSink } from './types';
@@ -378,10 +380,24 @@ function parseTimingHead(value: string): LineClass | null {
     const token = parts[i]!;
     // 命名参数形态：`成否: 游戏判定` 已被 `:` 切走，故在此只可能是 `X:` + 值
     if (token.endsWith('：') || token.endsWith(':')) {
-      const name = stripBlockColon(token);
-      const val = parts[i + 1] ?? '';
-      namedParams.push({ name, value: val, loc: zeroSpan() });
+      const name = canonicalTimingParamName(stripBlockColon(token));
+      let val = parts[i + 1] ?? '';
       i++;
+      // 值以逗号收尾 = 作者把令牌列表写成了 `ARG, ARG:1`（逗号后带空白）——
+      // 续接到下一个令牌，令"逗号分隔列表"与"整串无空白"两种写法等价。
+      // 只在**上一段以逗号结尾**时续接，故 `成否: 游戏判定 310` 这类既有写法不受影响。
+      while (/[，,]$/.test(val) && i + 1 < parts.length) {
+        val += parts[++i]!;
+      }
+      namedParams.push({ name, value: val, loc: zeroSpan() });
+      continue;
+    }
+    // 只写了关键字、没写值：`时机 事件 1 参数:` 的那枚冒号**同时**是块头终止符，
+    // 被 `stripBlockColon` 吃掉后只剩裸词 `参数`（英文别名 `args` 同理，且它在
+    // "全是 ASCII"这一点上与编号同形，故必须**先于**编号判定）。绝不能当成"没写"
+    // 静默放行——记一条空值命名参数，由 parser 报 error（想声明却没写完）。
+    if (canonicalTimingParamName(token) === TIMING_ARGS_PARAM) {
+      namedParams.push({ name: TIMING_ARGS_PARAM, value: '', loc: zeroSpan() });
       continue;
     }
     // HK-11②：编号可以是**中文指令名**（`时机 指令 摸屁股：`）——不能只认 ASCII，
@@ -460,6 +476,40 @@ function parseCustomCommandHead(rest: string): LineClass | null {
     ...(canCom !== undefined ? { canCom } : {}),
     ...(comCounter !== undefined ? { comCounter } : {}),
   };
+}
+
+/* ------------------------------ `参数:` 声明校验 ------------------------------ */
+
+/** 合法的形参令牌：`ARG` 或 `ARG:<数字>`（规范 §3.2；引擎侧实参位置记号） */
+const TIMING_ARG_TOKEN_RE = /^ARG(?::\d+)?$/;
+
+/** `参数:` 校验结果（`decl` = 规范化声明串，逗号分隔、无空白；codegen 逐字转发用） */
+export type TimingArgsCheck =
+  | { ok: true; decl: string; tokens: readonly string[] }
+  | { ok: false; reason: string };
+
+/**
+ * 校验时机块头 `参数:` 的取值（规范 §3.2，v1.5）。
+ *
+ * 口径：**逗号分隔**（半角 `,` 与全角 `，` 均可）的令牌序列，每支恰为 `ARG` 或
+ * `ARG:<数字>`；除此之外一律不认（`FOO` / `ARGS:2` / 空串 / 空令牌皆错）。
+ * 纯函数——诊断由调用方（parser）落，词法层不碰 sink。
+ */
+export function checkTimingArgsDeclaration(value: string): TimingArgsCheck {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return { ok: false, reason: '「参数:」后面是空的——要声明形参就写令牌（如 `参数: ARG,ARG:1`），不需要形参就整个子句别写。' };
+  const tokens = trimmed.split(/[,，]/).map((t) => t.trim());
+  const bad = tokens.find((t) => !TIMING_ARG_TOKEN_RE.test(t));
+  if (bad !== undefined) {
+    return {
+      ok: false,
+      reason:
+        '`参数:` 只接受逗号分隔的实参令牌 `ARG` 或 `ARG:<数字>`（如 `参数: ARG,ARG:1`），收到「' +
+        (bad.length === 0 ? '（空令牌）' : bad) +
+        '」。',
+    };
+  }
+  return { ok: true, decl: tokens.join(','), tokens };
 }
 
 /* ------------------------------ 表达式头 / 赋值 ------------------------------ */

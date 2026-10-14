@@ -134,6 +134,34 @@ export function isAliasCharKeyword(word: string): boolean {
   return word === '角色' || word === 'char';
 }
 
+/* ---------------------- 时机块头的命名参数（规范 §3.2） ---------------------- */
+
+/**
+ * `参数:` 命名参数的**规范名**（中文主形）。
+ *
+ * 语义：声明该时机生成的函数**接收哪些实参令牌**（`ARG` / `ARG:<数字>`）。
+ * 动机是引擎实测：**未声明形参的函数被带实参调用时，实参被引擎静默丢弃**
+ * （沙盒 `CALL INNER(7,8)` → `INNER` 内 `ARG` 读到 0），所以带 ARG 分派的
+ * 调用面必须在函数头声明——见规范 §3.2 / §9。
+ */
+export const TIMING_ARGS_PARAM = '参数';
+
+/**
+ * 时机命名参数的**英文别名 → 中文规范名**。
+ *
+ * 与块关键字同口径（规范 §4.1「中文主形 + 英文别名」双收，别名只影响**输入**）。
+ * 命名参数是**语法层**语义（跨游戏语言层），故别名表住在转译器、不住 adapter。
+ * 小写 ASCII 键（与 `KEYWORDS` 的英文别名同一约定）；中文主形不进本表（精确匹配）。
+ */
+const TIMING_PARAM_ALIASES: ReadonlyMap<string, string> = new Map([
+  ['args', TIMING_ARGS_PARAM],
+]);
+
+/** 命名参数名归一（英文别名 → 中文规范名；未登记的原样返回，如 `成否` / `类型`） */
+export function canonicalTimingParamName(name: string): string {
+  return TIMING_PARAM_ALIASES.get(name.toLowerCase()) ?? name;
+}
+
 /* --------------------------- 运算符降糖（规范 §4.3） --------------------------- */
 
 /**

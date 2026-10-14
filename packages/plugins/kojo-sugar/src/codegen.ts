@@ -42,6 +42,8 @@ import type {
   WhenExpr,
 } from '@kojo/plugin-api';
 import { lowerExpression, expandTarget, type ExprContext } from './expression';
+import { checkTimingArgsDeclaration } from './lexer';
+import { TIMING_ARGS_PARAM } from './keywords';
 import type { TopNode } from './parser';
 import type { AliasTable, DiagnosticSink, DictionaryLookup } from './types';
 
@@ -49,6 +51,13 @@ import type { AliasTable, DiagnosticSink, DictionaryLookup } from './types';
 
 /** 函数头记号：产物第 1 列的 `@NAME`（带缩进的不是函数头） */
 const FUNCTION_HEADER_RE = /^@([A-Za-z0-9_一-龥]+)$/;
+
+/**
+ * **生成**头的函数名（`@NAME` 或 `@NAME(ARG,ARG:1)`；规范 §3.2 `参数:` 声明）。
+ * 撞名比对按**纯函数名**——声明了形参的时机若绕过比对，就等于把「重复定义」
+ * 的检测口子按写法关掉了。原生直通块走 `FUNCTION_HEADER_RE`（块的写法归作者）。
+ */
+const GENERATED_HEADER_RE = /^@([A-Za-z0-9_一-龥]+)(?:\([^\s)]*\))?$/;
 
 /** 一次函数定义（按产物行记账） */
 interface FunctionDefinition {
@@ -86,7 +95,12 @@ class Emitter {
   push(indent: number, text: string, sourceLine: number | null = null): void {
     this.lines.push('\t'.repeat(indent) + text);
     this.map.push({ generatedLine: this.lines.length, sourceLine });
-    if (indent === 0) this.noteDefinition(text, sourceLine ?? this.owner);
+    // 生成头允许带 `参数:` 声明（`@NAME(ARG,ARG:1)`）——比对时剥掉声明，
+    // 否则带形参的时机头**逃过**「重复定义」检测（旧正则只认裸 `@NAME`）。
+    if (indent === 0) {
+      const name = GENERATED_HEADER_RE.exec(text)?.[1];
+      if (name) this.noteDefinition(name, sourceLine ?? this.owner);
+    }
   }
 
   /** 追加一行但**不**记源映射（用于纯骨架行；等价于 sourceLine=null） */
@@ -104,18 +118,21 @@ class Emitter {
   pushRaw(text: string, sourceLine: number | null): void {
     this.lines.push(text);
     this.map.push({ generatedLine: this.lines.length, sourceLine });
-    if (/^@/.test(text)) this.noteDefinition(text, sourceLine ?? this.owner);
+    if (/^@/.test(text)) {
+      const m = FUNCTION_HEADER_RE.exec(text);
+      if (m) this.noteDefinition(m[1]!, sourceLine ?? this.owner);
+    }
   }
 
   /**
    * 函数头记账：同名第二次出现即记一条撞名（**跨分野也算**——
    * `指令 310 成否: …` 与独立的 `时机 成功 310：` 在写法面上看不出冲突，
    * 渲染出的却是同一个 `@…_SUCCESS_COM_K12_310`，引擎侧是「重复定义」）。
+   *
+   * `name` 是**纯函数名**（不含 `参数:` 声明段），由调用方按各自口径剥好：
+   * 生成行走 `GENERATED_HEADER_RE`、原生块走 `FUNCTION_HEADER_RE`。
    */
-  private noteDefinition(headerLine: string, owner: number | null): void {
-    const m = FUNCTION_HEADER_RE.exec(headerLine);
-    if (!m) return;
-    const name = m[1]!;
+  private noteDefinition(name: string, owner: number | null): void {
     const here: FunctionDefinition = { line: this.lines.length, owner };
     const first = this.definitions.get(name);
     if (!first) {
@@ -412,6 +429,9 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   // ---- 成否判定函数（规范 §5.5：写了 `成否:` 时生成 SUCCESS 函数）----
   // 位协议目标与原语来自 adapter（`KojoFaceTable.successFlag`）；缺省 → 跳过
   // 并记 INFO（该游戏无成否位协议，非错误）。
+  // ⚠ **不转发 `参数:`**：SUCCESS 是另一条调用面（分发器以 `TRYCCALLFORM` 无实参
+  // 调用，见规范附录 C #13），真实语料的 `@…_SUCCESS_…` 头一律不带形参。
+  // 保守口径：`参数:` 只作用于**本时机自己的主体两函数**，不外溢到伴生函数。
   const flagProto = ctx.faceTable?.successFlag;
   if (face.success && flagProto) {
     const successName = buildFunctionName(
@@ -427,17 +447,24 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   }
 
   // ---- MESSAGECHECK 函数（写了 隐藏情景/隐藏口上 时）----
+  // 同样**不带 `参数:` 声明**：MESSAGECHECK 由分发器以 `TRYCALLFORM …(RESULT)` 之类
+  // 的自有协议调用，与本体形参无关（保守口径同上）。
   if (timing.messageCheck.length > 0) {
     emitMessageCheck(em, timing, ctx, index);
   }
 
   // ---- 主体两函数（规范 §5.5：包装 + `_1` 正文）----
-  em.pushGenerated(0, `@${baseName}`);
-  em.pushGenerated(0, `CALL ${baseName}_1`);
+  // `参数:` 声明（规范 §3.2，v1.5）→ **三个发射点**同带一份声明：包装头、
+  // 包装体里转发给 `_1` 的 `CALL`、`_1` 头。少任何一处，引擎侧就出现
+  // "调用面带实参、被调面未声明" 的形态——实测里这种实参被**静默丢弃**（ARG 读到 0）。
+  const argsDecl = timingArgsDeclaration(timing);
+  const declClause = argsDecl === null ? '' : `(${argsDecl})`;
+  em.pushGenerated(0, `@${baseName}${declClause}`);
+  em.pushGenerated(0, `CALL ${baseName}_1${declClause}`);
   em.pushGenerated(0, `RETURN RESULT`);
   em.blank();
 
-  em.pushGenerated(0, `@${baseName}_1`);
+  em.pushGenerated(0, `@${baseName}_1${declClause}`);
   em.pushGenerated(0, `;-------------------------------------------------`);
   em.pushGenerated(0, `;記入チェック（=0, 非表示、1, 表示）`);
   const empty = timing.body.length === 0;
@@ -462,6 +489,20 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   }
 
   em.pushGenerated(0, `RETURN 1`);
+}
+
+/**
+ * 时机块头 `参数:` 的取值（规范 §3.2，v1.5）→ 形参声明串（`ARG,ARG:1`）；
+ * 未声明 → `null`（产物与历史口径**逐字节一致**）。
+ *
+ * 取值非法（`参数: FOO` 一类）时 AST 段已报 error 并阻止落盘，这里**不重复诊断**，
+ * 只按"未声明"处理——保证错误路径下也不会拼出半个非法函数头。
+ */
+function timingArgsDeclaration(timing: TimingBlock): string | null {
+  const declared = timing.namedParams.find((p) => p.name === TIMING_ARGS_PARAM);
+  if (!declared) return null;
+  const checked = checkTimingArgsDeclaration(declared.value);
+  return checked.ok ? checked.decl : null;
 }
 
 /**

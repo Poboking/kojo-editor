@@ -658,6 +658,16 @@ interface SkeletonPlan {
 }
 
 /**
+ * 函数头拆成 `纯名 + 形参声明段`（`@A(ARG,ARG:1)` → `{name:'A', decl:'(ARG,ARG:1)'}`）。
+ * 声明段内不得有空白（糖的 `参数:` 产物口径，见 codegen），否则返回 null 走旧口径。
+ */
+function splitWrapperHead(content: string): { name: string; decl: string } | null {
+  const m = /^@(.+?)(\([^\s)]*\))?$/.exec(content);
+  if (!m || !m[1]) return null;
+  return { name: m[1].trim(), decl: m[2] ?? '' };
+}
+
+/**
  * 口上**函数骨架**合并（用户第 2 条）——把"机器码"收起来，只留读者要看的东西。
  *
  * ## 合并哪两样（都要求**可证明**，一条不满足就整段不动）
@@ -723,12 +733,17 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
 
     /* ---- ① 包装三联 ---- */
     if (content.startsWith('@')) {
-      const name = content.slice(1).trim();
+      // 头可带 `参数:` 声明段（`@A(ARG,ARG:1)`，规范 §3.2 v1.5）。声明段必须**三行一致**
+      // 才允许合并——`CALL` 少转发一份声明就是真实的功能差异（实参被引擎丢弃），
+      // 不是可以直接藏起来的排版噪声。
+      const wrapper = splitWrapperHead(content);
+      const name = wrapper?.name ?? content.slice(1).trim();
+      const clause = wrapper?.decl ?? '';
       const call = contentAt(ln + 1);
-      if (name.length > 0 && call === `CALL ${name}_1`) {
+      if (name.length > 0 && !/[()]/.test(name) && call === `CALL ${name}_1${clause}`) {
         const ret = contentAt(ln + 2);
         const head = contentAt(ln + 3);
-        if (/^RETURN(\s.*)?$/.test(ret) && head === `@${name}_1`) {
+        if (/^RETURN(\s.*)?$/.test(ret) && head === `@${name}_1${clause}`) {
           absorbed.add(ln + 1);
           absorbed.add(ln + 2);
           absorbed.add(ln + 3);
