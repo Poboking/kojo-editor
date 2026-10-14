@@ -3525,6 +3525,15 @@ button.primary .hint {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 多剧本编号徽章（行上，折叠态也可见；与 .nav-badge 同族尺度） */
+.kp-script-badge {
+  flex: 0 0 auto;
+  font-size: var(--fs-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 3px;
+  color: var(--fg-dim);
+}
 .kp-dirname {
   flex: none;
   font-size: var(--fs-1);

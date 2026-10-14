@@ -440,6 +440,10 @@ export function createKojoProjectsPanel(
         ...p.artifacts.map((a) => {
           const dir = artifactDir(deps.projectDir(p.id), a);
           const isOpen = openDirs.has(dir);
+          // 多剧本编号上树（纪要 §5「多剧本（≤10）编号在 UI 中显式表达」）：
+          // 编号住在制品 meta，**行上**就给一枚徽章——口上树默认折叠，
+          // 只写在展开事实行里等于默认看不见，多剧本作品（同名不同剧本）分不开。
+          const scriptNo = factsFromMeta(a.meta).scriptNo;
           return h(
             'div',
             { key: a.id, className: 'kp-artifact' },
@@ -464,6 +468,13 @@ export function createKojoProjectsPanel(
                 },
                 h('span', { className: 'caret' }, isOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
                 h('span', { className: 'kp-artifact-name' }, a.name),
+                scriptNo !== null
+                  ? h(
+                      'span',
+                      { className: 'kp-script-badge', title: `目标剧本 ${scriptNo}（多剧本作品按剧本号分开；来自制品 meta）` },
+                      `剧本${scriptNo}`,
+                    )
+                  : null,
                 a.name !== a.dirName ? h('span', { className: 'kp-dirname dim' }, a.dirName) : null,
               ),
               // 行内动作：静息态隐去（悬停 / 键盘聚焦才显），保持口上树清爽
