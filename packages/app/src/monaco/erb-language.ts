@@ -35,8 +35,7 @@ export const ERB_LANGUAGE_ID = 'kojo-erb';
 /**
  * `comment` token 的主题规则（默认注释色）。
  *
- * 提到这里是为了**单一真源**：`kojo-dark` 主题与糖视图着色渲染（`sugar-render.ts`）
- * 都要用它，避免两处各抄一份色值。
+ * 提到这里是为了**单一真源**：`kojo-dark` 主题要用它，避免各处各抄一份色值。
  */
 export const ERB_COMMENT_THEME_RULE: Monaco.editor.ITokenThemeRule = {
   token: 'comment',

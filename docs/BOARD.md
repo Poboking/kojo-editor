@@ -10,7 +10,6 @@
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
 | HK-4 | UI 打磨（常任；目标「专业 · 克制 · 流畅 · 高效 · 耐看」，VSCode 为基准） | 自拟六项按序推进：UI-1 字号尺度 ✅§5.121 / UI-2 圆角·边框·阴影 ✅§5.122 / **UI-3 图标 emoji→单色 SVG ✅**（`docs/log/2026-10-13-ui-icons.md`；宿主层渲染面归零；插件自绘面板符号＝跨包图标通道**已交付 ✅** `renderIcon` 桥，3299bd7） → **UI-4 焦点环与键盘可达 ✅**（roving tabindex 漫游 + `:focus-visible` 焦点环） → **UI-5 动效可关 ✅**（设置项 + `<html data-motion>`） → **UI-6 底部问题面板 ✅**（ERB 结构/表达式两层波浪线汇总、点击跳源行；状态栏 ✕/⚠/ℹ 计数经 `kojo.problems` 展开，Ctrl+Shift+M）；每项带可复跑量化判据 | 进行中 · 认领：hk4ui 2026-10-14 |
-| SV-1 | **糖视图 · 原生显示**（新方向：升糖语法**就地**写进编辑器原生显示、替代原 ERB 代码块；只读、不落盘、不改原文件、不上虚拟 model、不加 `lineMap`） | **病根（反馈 #4 已定性）**：现效果＝ViewZone `<pre>` 贴覆，字号 `12.5px`／行高 `1.6`／`padding-left:12px` **硬编码**，而编辑器本体 `fontSize:14`＋`wordWrap:'on'`＋行号槽 ⇒ **必然不对齐**。**方向**：糖行按**编辑器实测**字体／字号／行高／内容左边距（对齐行号槽后文本列）渲染，与相邻代码行严格同 rhythm；糖覆盖的行**就地替代**其原 ERB（`setHiddenAreas`），展开即还原。**不动**：`sugarViewAllowed` 门与 `sealed.ts` 封存默认语义、`kojo-sugar`/`eratw-adapter` 投影语义。**判据**：全量不回退 + 双 typecheck + `audit:decoupling` ✅；真机半边待用户目视（对齐／换行／长段不裁） | 进行中 · 认领：haruki 2026-10-14 |
 | HK-20 | **回放未知率 · `call-context`**（858 = 22.9%） | 入口回放未注入 `ReplayCallContext`（契约 `plugin-api/src/replay.ts:162-173` 已支持 `ints`/`strs`）。**名编码实参**：口上函数名内嵌指令号（`…_K49_88_1` ⇒ ARG 槽 0 = 88，E13 已踩）——**游戏知识 ⇒ 必须落 eratw-adapter**，对内核只出 **additive** 呼叫上下文提示契约（§六 分工纪律）。可复用既有「签名槽 vs 路由转发」实测（`call-slot-coverage.corpus.test.ts`，25,398 函数名）。真·场景输入（约会对象编号）推断不了 ⇒ UI 手输 ARG（计数不降、体验等价）。判据：`call-context` 计数下降 ＋ 全量不回退 ＋ 双 typecheck | 待认领 |
 | HK-21 | **回放未知率 · `call` 内联扩面**（368 = 9.8%） | 对主流「`LOCAL` 信封 ＋ 委托 `_1`」**纯转发形态**做**浅内联**（现有有界内联为 v0.2 第七批，`evaluate.ts:80-92`；残余 368 = 索引域外/不可内联）。与 E13/P-1 同族知识 ⇒ **跨线沟通后动**。判据：`call` 计数下降 | 待认领 |
 | HK-22 | **回放未知率 · `local-no-write` / `missing-var` 补面**（196 ＋ 80） | `local-no-write`＝`assignments` 未覆盖的赋值形态（分支内赋值 / `ARG`→`LOCAL` 转发 / 循环内赋值）⇒ 扩抽取面；`missing-var` 补 `variableSchema` / 引擎变量清单（注意 `JVEL`/`Juel` 笔误线索，**别在 ALS 批顺手改**）。判据：两项计数下降 ＋ 全量不回退 | 待认领 |
@@ -20,7 +19,7 @@
 > **关联**（勿重复认领）：`named-index` 337（未知的 9.0%）已由 **ALS** 行承载（v34hand 2026-10-14 认领）——回放线不再单独立项。
 ## D. 已拍板（用户 2026-10-13 反馈批）
 
-- **糖视图**：**不走虚拟文档**（原三问废止）；封存现效果（设置页「显示已封存功能」总开关可临时恢复）；新方向＝「升糖语法直接写进编辑器原生显示、替代原 ERB 代码块」（不保存 / 不改原文件）——**已立项＝§B SV-1**。
+- **糖视图**：**已交付（2026-10-14）**。落法＝**把升糖文本写进编辑器的只读内存 model**（inmemory://sugar/…，语言 kojo-sugar），d.setModel() 换成它、由 Monaco **原生渲染**（字号 / 行高 / 折行 / 行号槽 / 搜索 / 复制全原生），磁盘文件零改动。**原 ViewZone 自绘（.sugar-zone / --sugar-* / 折叠柄 sugar-fold）整套删除**；「虚拟文档三问」按此落法得解（a 原文行随糖文本一并进 model、b 无需 lineMap、c 状态栏即显示糖文本行号）。
 - **文件类型保留面（用户 2026-10-14 拍板 · 依据 §G FT-3 调研，全盘 16,121 文件 / 41 种扩展名实测）**：Monaco 语言面按四档定稿——**A 保留**内置轻量 definition `markdown` / `ini`（`.config` 是 `KEY:VALUE` ini 风格）/ `xml`（每门 `register.js` ≈1 KB、**不带 worker**）；**B 四门重型 feature 全砍**（`json` 400 KB / `html` 704 KB / `css` 1.1 MB / `typescript` **6.8 MB** worker；语料实际命中 `.json` 1 · `.html` 2 · `.css` 0），`.json` 高亮改**自写微型 Monarch**，随保留面实现一起做，**不引 worker**；**C 其余 ~79 门内置语言砍**（语料 0 命中）；**D 档 `.xlsx` / `.xls` / `.docx`**（ZIP/OLE 复合二进制，Monaco 原理上显示不了）**＝未来新功能，仅立项不排期＝§G FT-4**。ERB 方言族 `.erb` / `.erh` / `.erd` + `.kojo` 由**自备一套 tokenizer** 覆盖（与 FT-1 / FT-2 同线，非 Monaco 内置语言问题）。
 
 ## E. 用户反馈批（2026-10-13 试用反馈，决议性入册）

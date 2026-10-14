@@ -1,26 +1,23 @@
 /**
- * 糖视图宿主侧纯逻辑单测（2026-10-12 语法糖批）。
+ * 糖视图宿主侧纯逻辑单测（2026-10-12 语法糖批；2026-10-14 改为「整份糖文本写进内存 model」）。
  *
- * 钉死的是"读者视角"的四件事：
+ * 钉死的是"读者视角"的几件事：
  * - **默认开**：不熟悉 EraBasic 的人打开别人的 ERB 就该直接看到人话（本功能的存在理由）；
  * - **偏好记住**：关了它就不会每次重开又冒出来（否则默认开就变成骚扰）；
- * - **锚点在原文上方**：糖落在原区间的位置上，隐藏原文后读者看到的位置不变；
- * - **着色回退**：Monarch 给出更细的 token（`sugar.speech.delimiter`）时逐级回退，
- *   主题没覆盖的 token 交回正文色（旁白 = 正文色是刻意的，不是漏配）。
+ * - **整份拼装口径**：`composeSugarDoc` 把糖段拼进原文——被覆盖的行换成糖文本、未覆盖的行
+ *   原样留，这是"糖文本写进编辑器本身"的核心算术。
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   SUGAR_VIEW_DEFAULT,
+  composeSugarDoc,
   loadSugarViewPref,
-  needsZoneRelayout,
   saveSugarViewPref,
   sugarSummary,
   sugarViewAllowed,
-  sugarZonePlan,
   trimSegmentBlanks,
 } from '../src/ui/sugar-view';
-import { SUGAR_DEFAULT_COLOR, tokenColor } from '../src/monaco/sugar-render';
 
 /** 假 localStorage：只是键值袋，够测"记忆"这一件事 */
 function fakeWindow(seed: Record<string, string> = {}) {
@@ -79,22 +76,6 @@ describe('糖视图 / 偏好', () => {
   });
 });
 
-describe('糖视图 / ViewZone 计划', () => {
-  it('锚点在原区间**上方一行**（隐藏原文后读者看到的位置不变）', () => {
-    expect(sugarZonePlan({ fromLine: 12, sugarText: '甲\n乙' }).afterLineNumber).toBe(11);
-  });
-
-  it('首行段锚点落在 0（文件顶部；Monaco 接受，绝不落到负行号）', () => {
-    expect(sugarZonePlan({ fromLine: 1, sugarText: '甲' }).afterLineNumber).toBe(0);
-  });
-
-  it('高度 = 糖行数 + 1 行呼吸', () => {
-    const p = sugarZonePlan({ fromLine: 3, sugarText: '甲\n乙\n丙' });
-    expect(p.lineCount).toBe(3);
-    expect(p.heightInLines).toBe(4);
-  });
-});
-
 describe('糖视图 / 摘要文案', () => {
   it('只报已覆盖的行数（未覆盖含注释与空行，加总会误导）', () => {
     expect(sugarSummary(123)).toBe('语法糖 123 行');
@@ -106,32 +87,6 @@ describe('糖视图 / 摘要文案', () => {
     for (const jargon of ['映射', '投影', '降级', '覆盖']) {
       expect(sugarSummary(312)).not.toContain(jargon);
     }
-  });
-});
-
-describe('糖视图 / 配色回退', () => {
-  it('精确命中主题规则', () => {
-    expect(tokenColor('sugar.keyword')).toBe('#c678dd');
-    expect(tokenColor('sugar.speech.delimiter')).toBe('#7f9cc0');
-  });
-
-  it('更细的 token 未单独配色 → 逐级回退到父级', () => {
-    // `sugar.speech.xxx` 主题里没有 → 回退到 `sugar.speech`
-    expect(tokenColor('sugar.speech.quoted')).toBe(tokenColor('sugar.speech'));
-    // `sugar.keyword.unknown` → `sugar.keyword`
-    expect(tokenColor('sugar.keyword.unknown')).toBe('#c678dd');
-  });
-
-  it('注释 token → 默认注释色（不继承正文亮白）', () => {
-    // 糖文本注释行由 `.kojo` 词法判为 `comment`；必须着默认注释色，
-    // 否则 span 无颜色会继承 `.sugar-zone` 的正文色（亮白），注释反比正文显眼。
-    expect(tokenColor('comment')).toBe('#6a737d');
-  });
-
-  it('主题未覆盖的 token → 正文色（旁白 = 正文色，是刻意口径）', () => {
-    expect(tokenColor('')).toBe(SUGAR_DEFAULT_COLOR);
-    expect(tokenColor('identifier')).toBe(SUGAR_DEFAULT_COLOR);
-    expect(tokenColor('nonsense.dotted.type')).toBe(SUGAR_DEFAULT_COLOR);
   });
 });
 
@@ -169,10 +124,10 @@ describe('sugarViewAllowed（糖视图可用门 = 不可编辑态的派生）', 
   });
 });
 
-/* ============ 糖段首尾空行（2026-10-13 目视体检：高亮块开头一大块空白） ============ */
+/* ============ 糖段首尾空行（2026-10-13 目视体检：糖块开头一大块空白） ============ */
 
 /**
- * 投影按原文行逐行映射，段首常带空行；落在 ViewZone 里就是"这块糖没内容"的错觉。
+ * 投影按原文行逐行映射，段首常带空行；拼进整份糖文本就是"这块糖没内容"的错觉。
  * 这里钉的是**只剪首尾、段内空行一根不动**——段内空行是分节，删了等于把剧本排成一行。
  */
 describe('trimSegmentBlanks · 只剪段首尾，段内分节不许动', () => {
@@ -190,49 +145,95 @@ describe('trimSegmentBlanks · 只剪段首尾，段内分节不许动', () => {
     expect(trimSegmentBlanks(t)).toBe(t);
   });
 
-  it('整段皆空 ⇒ 原样返回（剪成零行会让 ViewZone 高度与折叠柄算错）', () => {
+  it('整段皆空 ⇒ 原样返回（剪成零行会让糖段错位、与原文对不上）', () => {
     const t = '\n  \n';
     expect(trimSegmentBlanks(t)).toBe(t);
   });
-
-  it('剪完之后 ViewZone 计划按剩余行数给高（呼吸位仍是 +1）', () => {
-    const raw = '\n\n她说「甲」\n她说「乙」\n';
-    const plan = sugarZonePlan({ fromLine: 5, sugarText: trimSegmentBlanks(raw) });
-    expect(plan.lineCount).toBe(2);
-    expect(plan.heightInLines).toBe(3);
-    expect(plan.afterLineNumber).toBe(4);
-  });
 });
 
-/* ============ 盒高自洽（折行后内容变高 → 把 ViewZone 估算高换成实测高） ============ */
+/* ============ 整份糖文本拼装（composeSugarDoc） ============ */
 
 /**
- * 真机反馈的病根：ViewZone 的盒子高按"糖逻辑行数 × 编辑器行高"估，一旦糖文本按 `wordWrap`
- * 折行，实测渲染高度就超出估算——原来靠 `overflow: hidden` 兜，结果尾部台词被裁。
- * 这里钉的是**只放大、不缩小**的判定：折行导致超高才重设，呼吸位 / 柄行的刻意留白不许被压掉。
+ * 「糖文本写进编辑器本身」的核心算术：逐行 1..N 走，落在某糖段区间内的行换成该段的糖文本
+ * （按 `\n` 拆多行一并输出），其余行原样留。这里钉的是 segment 作为**外部数据**的健壮性：
+ * 乱序 / 越界 / 反向 / 重叠都不能让拼装崩，也不能重复铺内容。
  */
-describe('needsZoneRelayout · 折行超高才重设（只放大不缩小）', () => {
-  const LH = 19; // 编辑器 fontSize 14 → 行高约 19px
-
-  it('折行后内容明显超出估算 → 需要重设', () => {
-    // 估算 5 行（95px），实测折行后 8 行（152px）——必须重设，否则尾部被裁
-    expect(needsZoneRelayout(5 * LH, 8 * LH, LH)).toBe(true);
+describe('composeSugarDoc · 把糖段拼进整份原文', () => {
+  it('空 segments ⇒ 原文逐行原样拼接（无糖可铺）', () => {
+    expect(composeSugarDoc(['a', 'b', 'c'], [])).toBe('a\nb\nc');
   });
 
-  it('内容与估算相当（差不足半行）→ 不动，省掉亚像素抖动引发的反复重排', () => {
-    expect(needsZoneRelayout(5 * LH, 5 * LH, LH)).toBe(false);
-    expect(needsZoneRelayout(5 * LH, 5 * LH + LH / 2 - 1, LH)).toBe(false);
+  it('空原文（N=0）⇒ 空串；越界糖段被丢弃（不凭空产出）', () => {
+    expect(composeSugarDoc([], [])).toBe('');
+    expect(composeSugarDoc([], [{ fromLine: 1, toLine: 1, sugarText: 'X' }])).toBe('');
   });
 
-  it('内容比估算矮（没折行）→ 绝不缩小：呼吸位与折叠柄行必须留住', () => {
-    expect(needsZoneRelayout(5 * LH, 4 * LH, LH)).toBe(false);
-    expect(needsZoneRelayout(5 * LH, LH, LH)).toBe(false);
+  it('全被覆盖（单段覆盖整份）⇒ 只输出糖文本', () => {
+    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 1, toLine: 2, sugarText: '糖' }])).toBe('糖');
   });
 
-  it('量不到 / 非法值 → 不重设（宁可保留估算，也不拿脏数据乱动盒高）', () => {
-    expect(needsZoneRelayout(5 * LH, 0, LH)).toBe(false);
-    expect(needsZoneRelayout(5 * LH, Number.NaN, LH)).toBe(false);
-    expect(needsZoneRelayout(5 * LH, 8 * LH, 0)).toBe(false);
-    expect(needsZoneRelayout(5 * LH, 8 * LH, Number.NaN)).toBe(false);
+  it('部分覆盖 + 前后留原文：被覆盖区间换成糖，其余行原位保留', () => {
+    const lines = ['a', 'b', 'c', 'd', 'e'];
+    expect(composeSugarDoc(lines, [{ fromLine: 2, toLine: 3, sugarText: 'X\nY' }])).toBe('a\nX\nY\nd\ne');
+  });
+
+  it('段行数 ≠ 原文行数：单行原文可换成多行糖（整段透传，不按行对齐）', () => {
+    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 2, toLine: 2, sugarText: 'X\nY\nZ' }])).toBe('a\nX\nY\nZ');
+  });
+
+  it('首段（fromLine=1）正确落位', () => {
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 1, toLine: 1, sugarText: 'S' }])).toBe('S\nb\nc');
+  });
+
+  it('尾段（toLine=N）正确落位', () => {
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 3, toLine: 3, sugarText: 'S' }])).toBe('a\nb\nS');
+  });
+
+  it('多段混合（不相邻）各自独立落位', () => {
+    const lines = ['1', '2', '3', '4', '5', '6'];
+    const segs = [
+      { fromLine: 1, toLine: 1, sugarText: 'A' },
+      { fromLine: 4, toLine: 4, sugarText: 'D' },
+    ];
+    expect(composeSugarDoc(lines, segs)).toBe('A\n2\n3\nD\n5\n6');
+  });
+
+  it('乱序段先按 fromLine 升序再落位（输入顺序不影响结果）', () => {
+    const lines = ['1', '2', '3', '4', '5'];
+    const segs = [
+      { fromLine: 4, toLine: 4, sugarText: 'D' },
+      { fromLine: 1, toLine: 1, sugarText: 'A' },
+    ];
+    expect(composeSugarDoc(lines, segs)).toBe('A\n2\n3\nD\n5');
+  });
+
+  it('重叠段先到者优先：被前段覆盖到的后到段整段丢弃（不重复铺）', () => {
+    const lines = ['1', '2', '3', '4', '5'];
+    const segs = [
+      { fromLine: 1, toLine: 3, sugarText: 'X' },
+      { fromLine: 2, toLine: 4, sugarText: 'Y' },
+    ];
+    expect(composeSugarDoc(lines, segs)).toBe('X\n4\n5');
+  });
+
+  it('fromLine > toLine（反向区间）⇒ 丢弃，不动原文', () => {
+    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 2, toLine: 1, sugarText: 'X' }])).toBe('a\nb');
+  });
+
+  it('完全越界（整段落在 [1,N] 外）⇒ 丢弃，不动原文', () => {
+    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 5, toLine: 6, sugarText: 'X' }])).toBe('a\nb');
+  });
+
+  it('部分越界 ⇒ 夹取到 [1,N]（fromLine 0 → 1；toLine 超 N → N）', () => {
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 0, toLine: 2, sugarText: 'X' }])).toBe('X\nc');
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 2, toLine: 99, sugarText: 'Y' }])).toBe('a\nY');
+  });
+
+  it('单行原文（N=1）覆盖正常', () => {
+    expect(composeSugarDoc(['only'], [{ fromLine: 1, toLine: 1, sugarText: 'S' }])).toBe('S');
+  });
+
+  it('糖段内空行原样输出（本函数不做首尾修剪，那是 trimSegmentBlanks 的职责）', () => {
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 2, toLine: 2, sugarText: '\nX\n' }])).toBe('a\n\nX\n\nc');
   });
 });

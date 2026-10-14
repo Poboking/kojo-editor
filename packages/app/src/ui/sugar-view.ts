@@ -11,8 +11,8 @@
  * ## 纪律
  *
  * - **纯前端显示**：不改原文件一个字节（ERB 恒只读，见升糖重定位批 §1.1）；
- * - **本地算术**：区间归一 / ViewZone 计划 / 偏好读写都在这里，Monaco 交互留在
- *   `EditorPane`（与 `lift-preview.ts` 同款分层，便于单测钉死"不会插到第 0 行之前"）。
+ * - **本地算术**：区间归一 / 整份糖文本拼装（`composeSugarDoc`）/ 偏好读写都在这里，
+ *   Monaco 交互留在 `EditorPane`（与 `lift-preview.ts` 同款分层，便于单测钉死拼装口径）。
  */
 
 /** 偏好键（壳层私事，localStorage；与布局同款——不进内核存储域） */
@@ -94,26 +94,14 @@ export function saveSugarViewPrompted(): void {
   }
 }
 
-/** ViewZone 计划（插入点 + 高度；纯函数） */
-export interface SugarZonePlan {
-  /** 插入锚点行（ViewZone 显示在该行**之后**；0 = 文件顶部） */
-  afterLineNumber: number;
-  /** 占位高度（行数）：糖文本行数 + 1 行呼吸 */
-  heightInLines: number;
-  /** 糖文本行数 */
-  lineCount: number;
-}
-
 /**
  * 去掉糖段**首尾**的空行，段内的空行原样保留。
  *
- * 为什么：投影器按原文行逐行映射，段首常带着一两行空行（原文的分隔空行）。落在
- * ViewZone 里就是"高亮块开头一大块空白"——读者读到的是"这段糖没内容"，
- * 而它离上一段代码之间本来就还有真实行距。段内空行是**分节**，不能动
- * （`fillSugarBlock` 特意给每行一个行框，就是为了空行也撑得住）。
+ * 为什么：投影器按原文行逐行映射，段首常带着一两行空行（原文的分隔空行）。拼进整份
+ * 糖文本后就是"段首一大块空白"——读者读到的是"这段糖没内容"，而它离上一段代码之间
+ * 本来就还有真实行距。段内空行是**分节**，不能动。
  *
- * 全空的一段原样返回：那是"这段确实只有空行"的事实，交给骨架段那条路径处理，
- * 不在这里把内容删成零行（零行会让 ViewZone 高度与折叠柄算错）。
+ * 全空的一段原样返回：那是"这段确实只有空行"的事实，不在这里把内容删成零行。
  */
 export function trimSegmentBlanks(sugarText: string): string {
   const lines = sugarText.split('\n');
@@ -125,117 +113,53 @@ export function trimSegmentBlanks(sugarText: string): string {
 }
 
 /**
- * 糖段 → ViewZone 计划。
+ * 把投影出的糖段**拼进整份文档**：逐行 1..N 走，第 i 行落在某糖段区间内 → 输出该段的
+ * `sugarText`（整段文本按 `\n` 拆成多行一并输出），并跳到 `toLine + 1`；否则输出第 i 行原文。
  *
- * 锚点取 `fromLine - 1`：糖显示在**原文区间上方**，于是原文被隐藏后，糖正好落在
- * 它原来的位置（读者看到的位置不变，只是内容变成了人话）。`fromLine === 1` 时
- * 锚点落到 0（文件顶部），Monaco 接受。
+ * 这是「糖文本写进编辑器本身」的核心：换 `ed.setModel(...)` 的那份只读内存 model 的内容
+ * 即由此而来（Monaco 用原生行渲染，字号 / 行高 / 折行 / 缩进 / 行号槽全部原生）。
+ * 纯函数、零 Monaco 依赖，便于单测钉死拼接口径。
  *
- * 高度比糖行数多 1 行是**呼吸位**：整文件模式下列与列之间若严丝合缝，长文件会
- * 糊成一片（对照 `lift-preview` 的逐条预览——那边有标题行，故多 2 行）。
+ * ## 健壮性（segment 是外部数据，不能假定它算准了）
+ * - **排序**：先按 `fromLine` 升序（乱序段也能正确落位）；
+ * - **丢弃**：`fromLine > toLine`（反向区间）或**完全落在 [1,N] 之外**的段丢弃；
+ * - **夹取**：部分越界的段夹到 `[1, N]`（如 `fromLine 0` → 1），不报错；
+ * - **重叠**：以**先到者优先**——已被前一段覆盖到的后到段整段丢弃（投影正常不产生重叠，
+ *   这条只是防"下游意外重叠"时既不崩、也不重复铺内容）；
+ * - 本函数**不做首尾空行修剪**（那是 `trimSegmentBlanks` 的职责，留在调用点做）。
  */
-export function sugarZonePlan(segment: { fromLine: number; sugarText: string }): SugarZonePlan {
-  const lineCount = segment.sugarText.split('\n').length;
-  return {
-    afterLineNumber: Math.max(0, segment.fromLine - 1),
-    heightInLines: lineCount + 1,
-    lineCount,
-  };
-}
-
-/**
- * 编辑器**原生排版度量**（字体族 / 字号 / 行高 / 内容左边距），供糖视图把糖段渲染成
- * 与代码行**同貌同 rhythm**——这是「糖读起来就是文件本身」的前提（用户 2026-10-13 反馈：
- * 现效果「鸡肋、不对齐」）。
- *
- * 为什么必须实测而不是在 CSS 里写死：编辑器字号（本宿主 `fontSize: 14`）、行高（Monaco
- * 由字号派生，约 19px）、字体族、以及 gutter 之后的内容左边距都随配置 / 主题变化，
- * 写死的数字一改就过期：糖行与代码行字号不同、行高不同、文本列对不齐，长段还会顶穿
- * ViewZone 盒子被裁掉尾部。
- *
- * Monaco 0.57 的顶层导出面没有 `EditorOption` 枚举（取不了 `lineHeight` / `contentLeft`
- * 选项），于是直接问 DOM。但**问的必须是 `.view-line`（单数）而不是 `.view-lines`（容器）**：
- * Monaco 把 `height: Npx; line-height: Npx` **内联写在每一条行元素上**，容器 `.view-lines`
- * 的 CSS 里只有 `white-space: nowrap`，读它只会拿到继承来的 `normal`。（Monaco 自己在
- * `viewLines.css` 的注释里就写着 "view-lines in view-zones … they don't set a line height"
- * ——Zone 恰恰是唯一拿不到行高的那一层。）字号 / 字体族则相反：Monaco 对 `.view-lines` 整体
- * `applyFontInfo`，行元素继承之。
- *
- * 内容左边距（`contentLeftPx`）在**挂载后的 DOM** 上量：取某个 `.view-line` 文本左缘相对
- * ViewZone 容器（`.view-zones`，与 `.view-lines` 同属 `.lines-content` 的同一坐标系）左缘的
- * 差值。糖段 `wrap` 正是 `.view-zones` 的子节点、左缘与之对齐，把它作为 `.sugar-zone` 的
- * `padding-left`，糖文本左缘即与代码文本左缘重合——**不假设任何固定值**。
- *
- * 量不到（宿主未挂载 / 模型还没有任何一行 / 计算样式给 `normal`）时返回 `null` 字段，由 CSS
- * 兜底接手，不因此放弃整块糖。
- *
- * 为什么每项都留一份模块级缓存：`applySugarView` 紧跟在 `setModel` 之后跑，**首帧可能还没有
- * 任何 `.view-line`**，于是第一次量会扑空。全应用共用同一套字体设置（宿主写死 `fontSize: 14`），
- * 所以量到一次就可以一直用；不缓存的话，冷启动第一眼就是兜底值，切一次文件才正。
- */
-export interface EditorNativeMetrics {
-  /** 行高（px）；量不到 = null */
-  lineHeightPx: number | null;
-  /** 字号（px）；量不到 = null */
-  fontSizePx: number | null;
-  /** 字体族（computed `font-family`）；量不到 = null */
-  fontFamily: string | null;
-  /** 内容左边距（px）：代码文本左缘相对 ViewZone 坐标的偏移；量不到 = null */
-  contentLeftPx: number | null;
-}
-
-let cachedLineHeightPx: number | null = null;
-let cachedFontSizePx: number | null = null;
-let cachedFontFamily: string | null = null;
-let cachedContentLeftPx: number | null = null;
-
-export function editorNativeMetrics(host: HTMLElement | null): EditorNativeMetrics {
-  const line = host?.querySelector<HTMLElement>('.view-lines .view-line');
-  if (line && typeof window !== 'undefined') {
-    const cs = window.getComputedStyle(line);
-    const lh = Number.parseFloat(cs.lineHeight);
-    if (Number.isFinite(lh) && lh > 0) cachedLineHeightPx = lh;
-    const fs = Number.parseFloat(cs.fontSize);
-    if (Number.isFinite(fs) && fs > 0) cachedFontSizePx = fs;
-    if (cs.fontFamily) cachedFontFamily = cs.fontFamily;
+export function composeSugarDoc(
+  originalLines: string[],
+  segments: { fromLine: number; toLine: number; sugarText: string }[],
+): string {
+  const n = originalLines.length;
+  // 归一：排序 → 丢弃反向/完全越界 → 夹取到 [1, N] → 丢弃与前段重叠者（先到者优先）
+  const applied: { fromLine: number; toLine: number; sugarText: string }[] = [];
+  let coveredTo = 0; // 已被糖覆盖到的最大原文行（0 = 尚未覆盖）
+  for (const seg of [...segments].sort((a, b) => a.fromLine - b.fromLine)) {
+    if (!Number.isFinite(seg.fromLine) || !Number.isFinite(seg.toLine)) continue;
+    if (seg.fromLine > seg.toLine) continue; // 反向区间：丢弃
+    const from = Math.max(1, Math.trunc(seg.fromLine));
+    const to = Math.min(n, Math.trunc(seg.toLine));
+    if (from > to) continue; // 完全落在 [1, N] 之外：丢弃
+    if (from <= coveredTo) continue; // 重叠：先到者优先，后到者整段丢弃
+    applied.push({ fromLine: from, toLine: to, sugarText: seg.sugarText });
+    coveredTo = to;
   }
-  if (line) {
-    const lineRect = line.getBoundingClientRect();
-    const ref =
-      host?.querySelector<HTMLElement>('.view-zones') ??
-      host?.querySelector<HTMLElement>('.view-lines');
-    // `lineRect.height > 0` = 这一行**真的渲染出来了**（未布局时 rect 全零，差值为 0 会污染缓存）
-    if (ref && lineRect.height > 0) {
-      const delta = lineRect.left - ref.getBoundingClientRect().left;
-      if (Number.isFinite(delta) && delta >= 0) cachedContentLeftPx = delta;
+  // 逐行拼装：落在某个已应用段内 → 输出整段糖文本并跳过被覆盖的原文行
+  const out: string[] = [];
+  let ai = 0;
+  for (let i = 1; i <= n; i++) {
+    const seg = ai < applied.length ? applied[ai] : undefined;
+    if (seg && seg.fromLine <= i && i <= seg.toLine) {
+      for (const l of seg.sugarText.split('\n')) out.push(l);
+      i = seg.toLine; // 跳过整段覆盖的原文行（循环末尾 i++ → toLine + 1）
+      ai++;
+    } else {
+      out.push(originalLines[i - 1] ?? '');
     }
   }
-  return {
-    lineHeightPx: cachedLineHeightPx,
-    fontSizePx: cachedFontSizePx,
-    fontFamily: cachedFontFamily,
-    contentLeftPx: cachedContentLeftPx,
-  };
-}
-
-/**
- * 是否需要把糖段盒高从 `heightInLines` **估算**改成**实测**（`heightInPx`）。
- *
- * 口径：**只放大、不缩小**——`heightInLines` 里含的呼吸位与折叠柄行是刻意留白，不能被
- * 实测内容压掉（那会让段与段贴到一起）；只有当折行后的内容比估算高（差 ≥ 半行高）时才
- * 重设，阈值取半行高是为了避免亚像素抖动引发的反复重排。
- *
- * 纯函数（单测钉死）：宿主在分帧填充后用 `wrap.scrollHeight` 实测内容高，与
- * `heightInLines × 行高` 比，命中即 `removeZone` + `addZone({ heightInPx })` 重新落高。
- */
-export function needsZoneRelayout(
-  allocatedPx: number,
-  measuredPx: number,
-  lineHeightPx: number,
-): boolean {
-  if (!Number.isFinite(measuredPx) || measuredPx <= 0) return false;
-  if (!Number.isFinite(lineHeightPx) || lineHeightPx <= 0) return false;
-  return measuredPx - allocatedPx >= lineHeightPx / 2;
+  return out.join('\n');
 }
 
 /**
@@ -259,8 +183,8 @@ export function sugarSummary(projectedLines: number, hiddenLines = 0): string {
  * **糖视图可用门**（ADR-0005：目录分野 × 显式解锁 两道正交轴的派生判定
  * ＋封存总闸一条最高优先级否决轴）。
  *
- * 铁律只有一条：**同一份文件不能一边被改、一边被投影**——糖视图靠"原文让位"工作
- * （ViewZone + 隐藏区间），可编辑的原文必须始终看得见，否则用户改到自己看不见的行。
+ * 铁律只有一条：**同一份文件不能一边被改、一边被投影**——糖视图靠"整份文件换成只读
+ * 内存 model"工作，可编辑的原文必须始终看得见，否则用户改到自己看不见的行。
  * 于是可用门由"可编辑态"派生，而不是另立一套开关：
  *
  * | 文件 | 可编辑性（轴一 / 轴二） | 糖视图 |

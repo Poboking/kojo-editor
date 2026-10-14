@@ -6,8 +6,8 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2344 passed / 22 skipped（2366）**；129 文件过 / 9 跳（138） |
-| 全量测试（挂语料 `KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"`） | **2365 passed / 1 skipped（2366）**；138 文件全过（138）——语料面零红 |
+| 全量测试 | **2333 passed / 22 skipped（2355）**；128 文件过 / 9 跳（137） |
+| 全量测试（挂语料 `KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"`） | **2354 passed / 1 skipped（2355）**；137 文件全过（137）——语料面零红 |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **24 项全绿**（E7 写允许域批 +18→22；E14 拖放事件映射 +2；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
