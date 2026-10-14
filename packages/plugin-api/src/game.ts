@@ -308,6 +308,9 @@ export interface KojoFaceTable {
  * 270–299 = kojo_com 段）。各版本 / 汉化 / 魔改随文件自动跟随、**不内置打包**，
  * 故本表按 `loadProject` 生命周期持有。查不到的名字 / 编号一律 `undefined`，
  * **绝不猜**（规范 §5.3 精神：不产半成品）。
+ *
+ * 消费点：`时机 指令 <中文名>：` 的编号解析（HK-11②）与 `当 …： 是 <中文名>：`
+ * 的 `CASE` 值解析（P-5）——同一张表、同一 fail-closed 口径。
  */
 export interface KojoInstructionTable {
   /** 无表 / 空表 = false */

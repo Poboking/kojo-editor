@@ -7,8 +7,8 @@
  * 又符合解耦审计 C 项对 `tests/` 的豁免（测试可跨包 import）。
  */
 
-import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
-import type { KojoFaceTable } from '@kojo/plugin-api';
+import { createEratwFaceTable, createEratwInstructionTable, parseTrainCsv } from '@kojo/plugin-eratw-adapter';
+import type { KojoFaceTable, KojoInstructionTable } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '../src/types';
 
 /** 测试用最小字典（覆盖 golden 用到的 胆怯 / 恋慕 / 思慕 / 好感度 / 心情 + 原生族名） */
@@ -37,4 +37,50 @@ export function stubFaceTable(): KojoFaceTable {
   return createEratwFaceTable();
 }
 
-export { createEratwFaceTable };
+/**
+ * 真语料 `CSV/Train.csv` 的**逐字快照**（前 26 行，eraTW 4.980 汉化包，含 BOM、
+ * `;` 注释诱饵行与空行——正是解析铁律要防的三类坑）。P-5 判据要求"查表成功"
+ * 的断言来自真表数据：编号由 adapter 的**真解析器**从这些真实行算出，不是硬编码。
+ */
+export const REAL_TRAIN_CSV_SNAPSHOT =
+  '\uFEFF' +
+  [
+    ';0番台,０．愛撫系指令',
+    '0,愛撫',
+    '1,舐陰',
+    '2,给对方口交',
+    '3,手指挿入',
+    '4,舐肛',
+    '5,肛門愛撫',
+    '6,胸愛撫',
+    '7,玩弄乳頭',
+    '8,張開陰唇',
+    '9,自慰',
+    ';10,吸乳头',
+    '11,吸乳头',
+    '12,揉胸',
+    '13,張開肛門',
+    ';14,尻愛撫',
+    '15,陰蒂愛撫',
+    '',
+    '19,接吻（継続）',
+    ';20番台,１．コミュニケーション系指令',
+    '20,接吻',
+    '21,什麼也不做',
+    '22,誘惑',
+    '23,枕邊話',
+    '24,攻守交替',
+    '25,二穴愛撫',
+  ].join('\n') +
+  '\n';
+
+/**
+ * 测试用指令名表 = **真解析器**（adapter `parseTrainCsv` + `createEratwInstructionTable`）
+ * 作用于上面的真 CSV 快照。与生产装配形状同构（同一张 `KojoInstructionTable` 实例化路径），
+ * 杜绝"替身与实现形状不同构 ⇒ 前后之差恒 0 的空断言"（PITFALLS 实测坑）。
+ */
+export function stubInstructionTable(): KojoInstructionTable {
+  return createEratwInstructionTable(parseTrainCsv(REAL_TRAIN_CSV_SNAPSHOT));
+}
+
+export { createEratwFaceTable, createEratwInstructionTable, parseTrainCsv };

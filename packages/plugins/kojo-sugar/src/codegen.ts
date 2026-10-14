@@ -42,8 +42,9 @@ import type {
   WhenExpr,
 } from '@kojo/plugin-api';
 import { lowerExpression, expandTarget, type ExprContext } from './expression';
-import { checkTimingArgsDeclaration } from './lexer';
-import { TIMING_ARGS_PARAM } from './keywords';
+import { checkTimingArgsDeclaration, CJK } from './lexer';
+import { RESERVED_PRONOUNS, TIMING_ARGS_PARAM } from './keywords';
+import { isIdentPart, isIdentStart } from './identifier-chars';
 import type { TopNode } from './parser';
 import type { AliasTable, DiagnosticSink, DictionaryLookup } from './types';
 
@@ -174,6 +175,8 @@ export interface CodegenOptions {
    * **HK-11②**：`时机 指令 <中文名>：` 里的中文名经本表查编号；查不到则报
    * `timing-instruction-unknown`（fail-closed，不产半成品）。数字路径不查表、
    * 逐字节保持旧行为。
+   * **P-5**：`当 …： 是 <中文名>：` 的 `CASE` 值同表同码——裸中文词查表得编号，
+   * 查不到报 `timing-instruction-unknown` 并**保留原文**（不猜、不换成编号）。
    */
   instructionTable?: KojoInstructionTable;
   sink: DiagnosticSink;
@@ -264,6 +267,7 @@ export function codegen(
         sink: opts.sink,
         hooks: opts.faceTable?.customHooks,
         range: opts.faceTable?.customComRange,
+        instructionTable: opts.instructionTable,
         occupied,
         allocated,
       });
@@ -477,6 +481,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
     const bodyCtx: BodyContext = {
       aliases: ctx.aliases,
       dictionary: ctx.dictionary,
+      instructionTable: ctx.instructionTable,
       sink: ctx.sink,
       frontMatter: ctx.frontMatter,
       allocator: new SlotAllocator(),
@@ -751,6 +756,8 @@ interface CustomEmitContext {
   hooks?: KojoFaceTable['customHooks'];
   /** 编号自动分配可用段（adapter；缺省且未显式写 `编号:` → fail-closed） */
   range?: { min: number; max: number };
+  /** 指令名表（adapter；P-5：体内 `当/是` 的中文 CASE 值查此表，同时机头口径） */
+  instructionTable?: KojoInstructionTable;
   /** 全文档占号集合（原生 `@` 直通块 + 显式 `编号:`），分配时排除 */
   occupied: Set<number>;
   /** 本次 codegen 已自动分配的编号（防同批自撞车） */
@@ -906,6 +913,7 @@ function emitCustomCommand(em: Emitter, node: CustomCommandBlock, ctx: CustomEmi
     const bodyCtx: BodyContext = {
       aliases: ctx.aliases,
       dictionary: ctx.dictionary,
+      instructionTable: ctx.instructionTable,
       sink: ctx.sink,
       frontMatter: ctx.frontMatter,
       allocator: new SlotAllocator(),
@@ -964,6 +972,8 @@ function emitCustomHook(
 interface BodyContext {
   aliases: AliasTable;
   dictionary?: DictionaryLookup;
+  /** 指令名表（adapter；P-5：`当/是` 的中文 CASE 值查此表得编号） */
+  instructionTable?: KojoInstructionTable;
   sink: DiagnosticSink;
   frontMatter: SugarFrontMatter;
   allocator: SlotAllocator;
@@ -1313,7 +1323,69 @@ function renderCaseValue(raw: string, ctx: BodyContext, loc: { line: number; col
     if (v.kind === 'character') return `%CALLNAME:${v.no}%`;
   }
   if (/^".*"$/.test(trimmed)) return trimmed;
+  // P-5：`是 <中文指令名>：` 的裸中文词经 adapter 指令表查编号（与 `时机 指令 <中文名>：`
+  // 同表同码；查不到保留原文并报 `timing-instruction-unknown`，绝不猜）。
+  const named = resolveCaseValueInstructionName(trimmed, ctx, loc);
+  if (named !== undefined) return named;
   return lowerExpression(trimmed, exprCtx(ctx, loc));
+}
+
+/**
+ * 是否为**裸单词指令名形态**：整串是一个标识符（字符集走 `identifier-chars` 单一真源）、
+ * 至少含一个 CJK、且不是保留代词（`她`/`你`——它们降糖成 `%CALLNAME:…%`，不属指令名申说）。
+ * 带冒号索引（`TCVAR:20`）、带空白/括号（`首次(SELECTCOM)`、`5 到 8`）、纯 ASCII（`20`、
+ * `SELECTCOM`）一律**不算**——既有路径逐字节不动。
+ */
+function isBareCjkIdentifier(s: string): boolean {
+  if (!CJK.test(s)) return false;
+  if (RESERVED_PRONOUNS.includes(s)) return false;
+  if (s.length === 0 || !isIdentStart(s[0]!)) return false;
+  for (const ch of s) if (!isIdentPart(ch)) return false;
+  return true;
+}
+
+/**
+ * P-5：`CASE` 值位置的指令名查表（复用 `时机 指令 <中文名>` 的同一条通道——
+ * adapter 的 `KojoInstructionTable.lookupByName`，糖侧不内建任何游戏知识）。
+ *
+ * - 命中 → 编号字符串（`接吻` → `20`）；
+ * - 查不到 → **不立刻报错**：`她的恋慕` 这类属性糖同样是裸中文词，常规降糖能解析
+ *   （探针跑一次 `lowerExpression`，零 error 即放行原样，前后产物逐字节一致）；
+ * - 查不到**且**常规降糖也失败（裸中文词既不在指令表也不是可解析变量）→ 报
+ *   `timing-instruction-unknown`（复用 HK-11② 的码，不新增），产物**保留原文**——
+ *   绝不把名字换成猜来的编号（fail-closed，规范 §5.3 精神）。
+ */
+function resolveCaseValueInstructionName(
+  trimmed: string,
+  ctx: BodyContext,
+  loc: { line: number; column: number },
+): string | undefined {
+  if (!isBareCjkIdentifier(trimmed)) return undefined;
+  const no = ctx.instructionTable?.lookupByName(trimmed);
+  if (no !== undefined) return String(no);
+
+  const probeErrors: SugarDiagnostic[] = [];
+  const lowered = lowerExpression(trimmed, {
+    aliases: ctx.aliases,
+    dictionary: ctx.dictionary,
+    report: (d) => {
+      if (d.severity === 'warning') ctx.sink.report(d);
+      else probeErrors.push(d);
+    },
+    loc,
+  });
+  if (probeErrors.length === 0) return lowered;
+
+  ctx.sink.report({
+    code: 'timing-instruction-unknown',
+    severity: 'error',
+    message:
+      `「当」块的「是」值「${trimmed}」不在当前工程的指令表里（CSV/Train.csv），也不是可解析的变量写法。` +
+      '为避免产出无效 ERB，本值已保留原文、未换成编号——请改用数字（`是 20：`），' +
+      '或确认该指令名出现在当前项目的 Train.csv 里（换汉化/魔改包即换表）。',
+    loc,
+  });
+  return trimmed;
 }
 
 /* ------------------------------ 随机块（§3.6 末 / §5.4） ------------------------------ */

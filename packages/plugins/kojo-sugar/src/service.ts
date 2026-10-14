@@ -74,6 +74,8 @@ export interface CreateSugarServiceOptions {
    * 指令名表（adapter 提供；游戏知识；HK-11②）。
    * **缺省 = 无法解析中文指令名** —— `时机 指令 <中文名>：` 会报
    * `timing-instruction-unknown`（fail-closed；数字编号路径不受影响）。
+   * **P-5**：`当 …： 是 <中文名>：` 的 `CASE` 值同表同码——命中查编号，
+   * 查不到保留原文并报 `timing-instruction-unknown`。
    */
   instructionTable?: KojoInstructionTable;
   /**

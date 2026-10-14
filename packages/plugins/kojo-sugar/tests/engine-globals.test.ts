@@ -13,7 +13,7 @@ import type { SugarDiagnostic } from '@kojo/plugin-api';
 import { createSugarTranspileService } from '../src/service';
 import { ENGINE_GLOBAL_IDENTIFIERS, resolveEngineGlobal } from '../src/engine-globals';
 import { lowerSystemFunctions } from '../src/system-functions';
-import { stubDict, stubFaceTable } from './support';
+import { stubDict, stubFaceTable, stubInstructionTable } from './support';
 
 /* ================================ 装配夹具 ================================ */
 
@@ -189,15 +189,68 @@ describe('E16-B 负自证 · 白名单没有把别的墙一起抹平', () => {
     }
   });
 
-  it('P-5 **本批没做**：`当 SELECTCOM： 是 接吻：` 的 `是` 值仍不查指令名表（唯一新增可解析的是主语）', () => {
+  it('P-5 正断言：`当 SELECTCOM： 是 接吻：` 查指令名表 → `SELECTCASE SELECTCOM` + `CASE 20`，零 error', () => {
+    const TABLE = stubInstructionTable();
+    const svcP5 = createSugarTranspileService({
+      dictionary: stubDict,
+      faceTable: stubFaceTable(),
+      instructionTable: TABLE,
+    });
+    // 断言的编号来自**真 CSV 快照经真解析器**建的表，不是硬编码 20 蒙过去
+    expect(TABLE.lookupByName('接吻')).toBe(20);
+    const { erb, diagnostics } = svcP5.transpile(
+      doc('    当 SELECTCOM：\n        是 接吻：\n            「涩涩的话」\n'),
+    );
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(erbLine(erb, 'SELECTCASE')).toBe('SELECTCASE SELECTCOM');
+    expect(erbLine(erb, 'CASE')).toBe(`CASE ${TABLE.lookupByName('接吻')}`);
+    expect(erbLine(erb, 'CASE')).toBe('CASE 20');
+  });
+
+  it('P-5 正断言（第二组目标写法）：`当 TCVAR:20： 是 给对方口交：` → `SELECTCASE TCVAR:20` + `CASE 2`，零 error', () => {
+    const TABLE = stubInstructionTable();
+    const svcP5 = createSugarTranspileService({
+      dictionary: stubDict,
+      faceTable: stubFaceTable(),
+      instructionTable: TABLE,
+    });
+    expect(TABLE.lookupByName('给对方口交')).toBe(2);
+    const { erb, diagnostics } = svcP5.transpile(
+      doc('    当 TCVAR:20：\n        是 给对方口交：\n            「涩涩的话」\n'),
+    );
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(erbLine(erb, 'SELECTCASE')).toBe('SELECTCASE TCVAR:20');
+    expect(erbLine(erb, 'CASE')).toBe('CASE 2');
+  });
+
+  it('P-5 负自证：表外名 `是 接吻不存在：` 必须报错，产物**不被**换成编号（复用 timing-instruction-unknown，不新增码）', () => {
+    const TABLE = stubInstructionTable();
+    expect(TABLE.lookupByName('接吻不存在')).toBeUndefined();
+    const svcP5 = createSugarTranspileService({
+      dictionary: stubDict,
+      faceTable: stubFaceTable(),
+      instructionTable: TABLE,
+    });
+    const { erb, diagnostics } = svcP5.transpile(
+      doc('    当 SELECTCOM：\n        是 接吻不存在：\n            「涩涩的话」\n'),
+    );
+    const errs = diagnostics.filter((d) => d.severity === 'error');
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.code).toBe('timing-instruction-unknown');
+    expect(errs[0]!.message).toContain('接吻不存在');
+    expect(erbLine(erb, 'SELECTCASE')).toBe('SELECTCASE SELECTCOM');
+    expect(erbLine(erb, 'CASE')).toBe('CASE 接吻不存在'); // 原文保留，绝不猜编号
+  });
+
+  it('P-5 无表装配（未打开项目）：`是 接吻：` 仍必须报错、产物原样——fail-closed 不依赖有没有表', () => {
     const { erb, diagnostics } = svc().transpile(
       doc('    当 SELECTCOM：\n        是 接吻：\n            「涩涩的话」\n'),
     );
     const errs = diagnostics.filter((d) => d.severity === 'error');
-    expect(errs.map((d) => d.message).join(' ')).toContain('接吻');
-    expect(errs).toHaveLength(1); // 只报「接吻」——主语 SELECTCOM 已通
+    expect(errs).toHaveLength(1); // 主语 SELECTCOM 已通，只报值侧一条
+    expect(errs.map((d) => d.code)).toContain('timing-instruction-unknown');
     expect(erbLine(erb, 'SELECTCASE')).toBe('SELECTCASE SELECTCOM');
-    expect(erbLine(erb, 'CASE')).toBe('CASE 接吻'); // 未被换成编号（查表未实现）
+    expect(erbLine(erb, 'CASE')).toBe('CASE 接吻'); // 未被换成编号（无表 = 查不到）
   });
 
   it('无字典装配下属性路径照旧报错——白名单没把字典缺口一起放行', () => {

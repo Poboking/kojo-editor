@@ -18,3 +18,11 @@ export { createEratwConventions } from './conventions';
 export { createEratwFaceTable } from './face-templates';
 export { ERATW_NAME_GLOSSARY, glossName } from './name-glossary';
 export { loadEratwCallProtocol } from './call-protocol';
+// P-5 批：指令表**解析层**对外暴露（additive；测试侧以真解析器 + 真 CSV 行建表，
+// 不再各自镜像抄写解析铁律——镜像副本正是 PITFALLS 点名的"形状不同构=空断言"隐患）。
+export {
+  EMPTY_INSTRUCTION_TABLE,
+  createEratwInstructionTable,
+  loadEratwInstructionTable,
+  parseTrainCsv,
+} from './instruction-table';

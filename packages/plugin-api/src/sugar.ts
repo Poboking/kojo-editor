@@ -875,6 +875,8 @@ export type SugarDiagnosticCode =
    * HK-11②：`时机 指令 <中文名>：` 的中文名不在 adapter 的指令表
    * （`KojoInstructionTable`；数据源 = 工程 `CSV/Train.csv`）。**fail-closed**：
    * 绝不猜编号、不产半成品——报错措辞含「未命名指令（编号 N）」（数字编号路径不受影响）。
+   * P-5 起**同一码**也覆盖 `当 …： 是 <中文名>：` 的 `CASE` 值查不到：
+   * 该值保留原文（不被换成猜来的编号）并报本码——不新增码、不另开口径。
    */
   | 'timing-instruction-unknown'
   /** HK-12：自定指令块缺 `编号:` 且 adapter 未声明编号可用段（`customComRange`）；fail-closed 不产半成品。 */

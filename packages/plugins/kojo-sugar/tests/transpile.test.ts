@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import type { KojoInstructionTable, KojoFaceTable } from '@kojo/plugin-api';
 import { createSugarTranspileService } from '../src/service';
 import type { DictionaryLookup } from '../src/types';
-import { stubFaceTable } from './support';
+import { stubFaceTable, stubInstructionTable } from './support';
 
 /** 测试字典桩（游戏知识只允许出现在测试里） */
 const stubDict: DictionaryLookup = {
@@ -1175,5 +1175,105 @@ describe('§13.4 HK-11② 中文指令名（名 → 编号，经 adapter 指令�
     const { erb, diagnostics } = t('角色: 12\n时机 指令 313 类型: 自定指令：\n    「自定义指令面。」\n');
     expect(erb).toContain('@M_KOJO_MESSAGE_CUSTOM_COM_K12_313');
     expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+});
+
+/* ============================================================================ */
+/* §13.5 P-5 · 指令名 CASE 值（`当 …： 是 <中文名>：` → `CASE <编号>`）           */
+/* ============================================================================ */
+
+describe('§13.5 P-5 `是 <中文指令名>：` 经同一张指令表查编号', () => {
+  // 真 CSV 快照（eraTW 4.980 `CSV/Train.csv` 前 26 行）经 adapter **真解析器**建表；
+  // 断言中的编号（20/2/0…）全部由表算出，非硬编码（判据：反假绿）。
+  const TABLE = stubInstructionTable();
+
+  /** 产物里第一条以 `prefix` 开头的行（剥缩进；无则空串） */
+  const line = (erb: string, prefix: string): string =>
+    erb
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.startsWith(prefix)) ?? '';
+
+  /** 时机信封（`时机 指令 310：`），`当` 块落在体内 */
+  const doc = (body: string): string => `角色: 12\n时机 指令 310：\n${body}\n`;
+
+  it('具名路径数值全部来自真表：接吻=20、给对方口交=2、愛撫=0', () => {
+    expect(TABLE.lookupByName('接吻')).toBe(20);
+    expect(TABLE.lookupByName('给对方口交')).toBe(2);
+    expect(TABLE.lookupByName('愛撫')).toBe(0);
+  });
+
+  it('命名写法与等价数字写法产物**逐字节一致**（`是 接吻：` ≡ `是 20：`）', () => {
+    const named = svcWithTable(TABLE).transpile(doc('    当 SELECTCOM：\n        是 接吻：\n            「呀。」\n'));
+    const numeric = t(doc('    当 SELECTCOM：\n        是 20：\n            「呀。」\n'));
+    expect(named.erb).toBe(numeric.erb);
+    expect(named.diagnostics).toEqual([]);
+    expect(line(named.erb, 'CASE')).toBe(`CASE ${TABLE.lookupByName('接吻')}`);
+  });
+
+  it('多值列举 `是 接吻, 给对方口交：` → `CASE 20, 2`（逗号表逐项查表）', () => {
+    const { erb, diagnostics } = svcWithTable(TABLE).transpile(
+      doc('    当 SELECTCOM：\n        是 接吻, 给对方口交：\n            「呀。」\n'),
+    );
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(line(erb, 'CASE')).toBe(`CASE ${TABLE.lookupByName('接吻')}, ${TABLE.lookupByName('给对方口交')}`);
+  });
+
+  it('范围 `是 愛撫 到 给对方口交：` → `CASE 0 TO 2`；混合端点 `是 接吻 到 21：` → `CASE 20 TO 21`', () => {
+    const r1 = svcWithTable(TABLE).transpile(doc('    当 SELECTCOM：\n        是 愛撫 到 给对方口交：\n            「呀。」\n'));
+    expect(r1.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(line(r1.erb, 'CASE')).toBe('CASE 0 TO 2');
+    const r2 = svcWithTable(TABLE).transpile(doc('    当 SELECTCOM：\n        是 接吻 到 21：\n            「呀。」\n'));
+    expect(r2.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(line(r2.erb, 'CASE')).toBe('CASE 20 TO 21');
+  });
+
+  it('行内箭头形态（`X = 当 …： 是 接吻 -> 1`）同样查表', () => {
+    const { erb, diagnostics } = svcWithTable(TABLE).transpile(
+      doc('    她的心情 = 当 TCVAR:20：\n        是 接吻 -> 1\n        否则 -> 0\n'),
+    );
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(line(erb, 'CASE')).toBe('CASE 20');
+  });
+
+  it('非指令名值**零波及**：代词 / 属性糖 / 数字 / 字符串在带表与无表装配下产物逐字节一致', () => {
+    // 反空断言的正方：形状同构的表**在场**也不得改变这些值的既有降糖（探针放行）。
+    for (const src of [
+      doc('    当 她的心情：\n        是 她的心情：\n            「呀。」\n'),
+      doc('    当 TCVAR:20：\n        是 20, 21：\n            「呀。」\n'),
+      doc('    当 TFLAG:193：\n        是 "A"：\n            「呀。」\n'),
+    ]) {
+      const withTable = svcWithTable(TABLE).transpile(src);
+      const without = t(src);
+      expect(withTable.erb).toBe(without.erb);
+      expect(without.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    }
+  });
+
+  it('别名优先于指令表（`别名 接吻 = 5` 时 `是 接吻：` 走别名，不查表）', () => {
+    const { erb, diagnostics } = svcWithTable(TABLE).transpile(
+      `角色: 12\n别名 接吻 = 5\n时机 指令 310：\n    当 SELECTCOM：\n        是 接吻：\n            「呀。」\n`,
+    );
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(line(erb, 'CASE')).toBe('CASE 5');
+  });
+
+  it('表外裸中文词 → 一条 `timing-instruction-unknown`、值保留原文（不猜编号、不重复报 unknown-identifier）', () => {
+    const { erb, diagnostics } = svcWithTable(TABLE).transpile(
+      doc('    当 SELECTCOM：\n        是 魔改新指令名：\n            「呀。」\n'),
+    );
+    const errs = diagnostics.filter((d) => d.severity === 'error');
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.code).toBe('timing-instruction-unknown');
+    expect(line(erb, 'CASE')).toBe('CASE 魔改新指令名');
+  });
+
+  it('库里收益形态：`当 TCVAR:20： 是 接吻：`（M_KOJO_K86 `IF TCVAR:20 == 73` 一类的人话名写法）零 error', () => {
+    const { erb, diagnostics } = svcWithTable(TABLE).transpile(
+      doc('    当 TCVAR:20：\n        是 给对方口交：\n            「呀。」\n'),
+    );
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(line(erb, 'SELECTCASE')).toBe('SELECTCASE TCVAR:20');
+    expect(line(erb, 'CASE')).toBe(`CASE ${TABLE.lookupByName('给对方口交')}`);
   });
 });

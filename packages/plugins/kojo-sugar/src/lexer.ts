@@ -186,8 +186,12 @@ function matchBlankLine(code: string): { kind: 'blankLine'; wait: boolean } | nu
 /** 全大写原生指令判定（规范 §3.10）：`SETCOLOR` / `IF` / `CALL` / `RAND` / `TFLAG:193 = 0` */
 const RAW_INSTR_RE = /^[A-Z][A-Z0-9_]*(?:[:.][^\s]*)?(?:\s|=|$)/;
 
-/** 含 CJK（平假名 / 片假名 / 汉字 / 半角片假名）——中文指令名判定（HK-11②） */
-const CJK = /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]/;
+/**
+ * 含 CJK（平假名 / 片假名 / 汉字 / 半角片假名）——中文指令名判定（HK-11②）。
+ * **单一真源**：`codegen.ts` 的 `当/是` CASE 值判定（P-5）复用本串，别再抄第二份
+ * （E16 刚为两份 `isIdentPart` 副本付过返工代价）。
+ */
+export const CJK = /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]/;
 
 /**
  * 行分类（纯函数；不做配对）。
