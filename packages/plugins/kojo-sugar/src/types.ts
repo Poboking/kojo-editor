@@ -60,6 +60,18 @@ export interface DictionaryLookup {
   unlistedFamilyName?(ident: string): { family: string; name: string } | undefined;
 }
 
+/**
+ * 随机块的**产物模式**（P-4）。
+ *
+ * - `default`（缺省）：`LOCAL = RAND:n` + `SELECTCASE LOCAL`（库内旧主流，golden 冻结口径）；
+ * - `direct`：文件头写 `随机形: 直出` 时启用，产物直出 `SELECTCASE RAND:n`（与库内
+ *   近年主流逐字同构，且不占 `LOCAL` 槽）。
+ *
+ * 模式挂在随机节点上（parser 附 `_randomShape`，codegen 读），不走契约字段——
+ * 契约 `RandomBlock` 只描述候选序列、不含槽位决策，本项同理是**转译器内部决策**。
+ */
+export type RandomShape = 'default' | 'direct';
+
 /** 诊断收集器（parse 与 codegen 共用；保证 `internal` 绝不静默） */
 export interface DiagnosticSink {
   report(diag: SugarDiagnostic): void;

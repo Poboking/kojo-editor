@@ -48,7 +48,7 @@
 ### 2.★ 判据①终验：用**全语法面长跑样例**，不是一行台词
 
 前八步（a–h）验的是"保存链路"，用的样例只有四行——**不能**当作"编译产物真实可跑"的证据。
-判据①的实机输入固定为 **`fixtures/sugar/release-check.kojo`**（353 行 → 产物 778 行 / 73 个函数、
+判据①的实机输入固定为 **`fixtures/sugar/release-check.kojo`**（2026-10-14 重数：**395 行 → 产物 892 行 / 90 个函数**、
 覆盖全部时机分野与全部关键字/运算符/别名形态/演出/原生直通；机器侧守门见
 `packages/kernel/tests/sugar-releasecheck.transpile.test.ts`：转译零诊断 + 产物 golden 逐字节 +
 **词表覆盖率断言** + **产物函数名不得重复** + IF/SELECTCASE/FOR/FUNCTION/PRINTDATA 配对平衡）。

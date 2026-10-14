@@ -42,6 +42,21 @@ describe('KojoFaceTable · 分野模板（规范 §3.2 / 附录 C）', () => {
     }
   });
 
+  it('P-6 绝顶子面补糖三条无参面全部登记，模板逐字符合语料', () => {
+    const expectSubFaces: Record<string, string> = {
+      // 恶作剧子面（`KOJO_MESSAGE.ERB:328-332` 的 `CFLAG:恶作剧` 分支）→ B2
+      绝顶恶作剧: 'M_KOJO{t}_MESSAGE_PALAMCNG_B2_K{n}',
+      // 调教后（`KOJO_MESSAGE.ERB:366`）→ C
+      调教后: 'M_KOJO{t}_MESSAGE_PALAMCNG_C_K{n}',
+      // 寸止（焦らし；`KOJO_MESSAGE.ERB:468`）→ F
+      寸止: 'M_KOJO{t}_MESSAGE_PALAMCNG_F_K{n}',
+    };
+    for (const [face, template] of Object.entries(expectSubFaces)) {
+      expect(table.faces[face], `分野「${face}」`).toBeDefined();
+      expect(table.faces[face]!.template).toBe(template);
+    }
+  });
+
   it('三件套模板不带家族段（规范 §5.5），只含 {n}', () => {
     expect(table.registration?.declare).toBe('M_KOJO_K{n}');
     expect(table.registration?.color).toBe('M_KOJO_COLOR_K{n}');

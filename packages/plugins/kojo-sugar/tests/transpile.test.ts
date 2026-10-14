@@ -626,6 +626,44 @@ describe('§3.6 随机块 · §5.4 LOCAL 槽位', () => {
 });
 
 /* ============================================================================ */
+/* P-4 · 随机块产物模式（文件头 `随机形: 直出`）                                   */
+/* ============================================================================ */
+
+describe('P-4 随机块产物模式 · `随机形: 直出`', () => {
+  // 直出形与库内主流逐字同构：`SELECTCASE RAND:n` 直接分派；缺省形仍是 `LOCAL = RAND:n`。
+  const tail = '\n    随机：\n        「甲。」\n        「乙。」\n';
+
+  it('文件头 `随机形: 直出` ⇒ `SELECTCASE RAND:2` + `CASE i`（不占 LOCAL 槽）', () => {
+    const { erb, diagnostics } = t(`角色: 12\n随机形: 直出\n时机 指令 310：${tail}`);
+    expect(diagnostics).toEqual([]);
+    expect(erb).toContain('SELECTCASE RAND:2');
+    expect(erb).toContain('CASE 0');
+    expect(erb).toContain('CASE 1');
+    expect(erb).toContain('PRINTFORMW 「甲。」');
+    expect(erb).toContain('PRINTFORMW 「乙。」');
+    expect(erb).toContain('ENDSELECT');
+    // 直出形不产旧形的 `LOCAL = RAND:n` / `SELECTCASE LOCAL`（旧口径未被顺手改坏）
+    expect(erb).not.toContain('LOCAL = RAND:2');
+    expect(erb).not.toContain('SELECTCASE LOCAL');
+  });
+
+  it('缺省（无 `随机形:`）仍产 `LOCAL = RAND:n` 形（既有 golden 逐字不变）', () => {
+    const { erb, diagnostics } = t(`角色: 12\n时机 指令 310：${tail}`);
+    expect(diagnostics).toEqual([]);
+    expect(erb).toContain('LOCAL = RAND:2');
+    expect(erb).toContain('SELECTCASE LOCAL');
+    expect(erb).not.toContain('SELECTCASE RAND:2');
+  });
+
+  it('负自证：`随机形: 不是直出` 不启用直出形（按缺省形处理，与 `旁白色:` 未知值同口径）', () => {
+    const { erb, diagnostics } = t(`角色: 12\n随机形: 不是直出\n时机 指令 310：${tail}`);
+    expect(diagnostics).toEqual([]);
+    expect(erb).toContain('LOCAL = RAND:2');
+    expect(erb).not.toContain('SELECTCASE RAND:2');
+  });
+});
+
+/* ============================================================================ */
 /* E17 · `当 RAND:n：` 缺档诊断（rand-case-incomplete）                            */
 /* ============================================================================ */
 

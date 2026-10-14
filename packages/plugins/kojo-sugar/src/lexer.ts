@@ -154,6 +154,8 @@ export type LineClass =
   | { kind: 'caseHead'; values: WhenCaseValue[] }
   | { kind: 'randomHead' }
   | { kind: 'randomInline'; alternatives: string[] }
+  /** 文件头选项 `随机形: <值>`（P-4；`直出` = 随机块直出形，别的值按缺省形处理） */
+  | { kind: 'randomShapeDecl'; value: string }
   | { kind: 'groupHead' }
   | { kind: 'sectionHead'; condition: string; disabled: boolean }
   | { kind: 'choiceHead' }
@@ -246,6 +248,11 @@ export function classifyLine(line: LogicalLine): LineClass {
   if (headMatch) {
     const key = headMatch[1]!;
     const value = headMatch[2]!;
+
+    // P-4 文件头选项 `随机形: 直出`——**不进 `KEYWORDS`**（不是糖块关键字），
+    // 通路与 `口上:` 等头部声明同形（`词: 值`），由 parser 收进文档级开关。
+    if (key === '随机形') return { kind: 'randomShapeDecl', value: value.trim() };
+
     const kw = lookupKeyword(key);
 
     // 头部声明（`角色:` / `口上:` …）——注意 `开关:` 后跟缩进块
@@ -504,6 +511,28 @@ function parseSectionHead(rest: string): LineClass | null {
   if (condition.length === 0) return null;
   return { kind: 'sectionHead', condition, disabled };
 }
+
+/**
+ * **保留段名表**（P-3 初回段）——段头若**恰为**这些词，产物按**整串硬编译**发。
+ *
+ * 为什么不能走 `lowerExpression`：`首次` 只是 `system-functions.ts` 的**函数别名**
+ * （`首次(` → `FIRSTTIME(`），而 `SELECTCOM` 在糖表达式的裸标识符路径上不是可解析
+ * 标识符 ⇒ `段 首次：` 若走常规段管线会报 `unknown-identifier`。故本段把
+ * `FIRSTTIME(SELECTCOM)` **整串硬编译**（对齐 `M_KOJO_K35_奉仕系コマンド.ERB:20-32`）。
+ *
+ * 信封口径与普通段不同：普通段写 bare `LOCAL = n` + `IF LOCAL && <条件>`，
+ * 本表段写 `LOCAL:1 = n` + `IF LOCAL:1 && FIRSTTIME(SELECTCOM)`（M6 子信封）——
+ * 两套口径各自保留，互不覆盖。
+ */
+export interface SectionPreset {
+  /** 信封槽位编号（产物写 `LOCAL:<local>`） */
+  readonly local: number;
+  /** 硬编译的 ERB 条件串（不走表达式降糖） */
+  readonly condition: string;
+}
+export const RESERVED_SECTION_NAMES: ReadonlyMap<string, SectionPreset> = new Map([
+  ['首次', { local: 1, condition: 'FIRSTTIME(SELECTCOM)' }],
+]);
 
 /* ------------------------------ `参数:` 声明校验 ------------------------------ */
 

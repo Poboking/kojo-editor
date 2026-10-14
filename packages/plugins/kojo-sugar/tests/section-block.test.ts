@@ -138,6 +138,48 @@ describe('E13-A 写侧 · 骨架冲突一律 fail-closed（不拼半成品）', 
 });
 
 /* ============================================================================ */
+/* A2. P-3 初回段（保留段名 `首次`）——整串硬编译                                     */
+/* ============================================================================ */
+
+describe('P-3 初回段 · 保留段名 `首次` 整串硬编译', () => {
+  const src = doc('\t段 首次：\n\t\t「涩涩的话」\n');
+
+  it('产物 = `LOCAL:1 = 1` + `IF LOCAL:1 && FIRSTTIME(SELECTCOM)`（不经 lowerExpression）', () => {
+    // `首次` 裸词不是可解析标识符、`SELECTCOM` 在糖表达式里也接不住 ⇒ 若走常规段管线会报
+    // `unknown-identifier`；此处硬编译 ⇒ 零 error。
+    expect(errsOf(src)).toEqual([]);
+    expect(bodyOf(productOf(src))).toEqual([
+      '@M_KOJO_MESSAGE_PALAMCNG_B_K12_1',
+      'LOCAL:1 = 1',
+      'IF LOCAL:1 && FIRSTTIME(SELECTCOM)',
+      '\tPRINTFORMW 「涩涩的话」',
+      'ENDIF',
+      'RETURN 1',
+    ]);
+  });
+
+  it('`关` 版本 ⇒ `LOCAL:1 = 0`（`IF` 条件照写；信封槽仍是 `LOCAL:1`）', () => {
+    const off = doc('\t段 首次 关：\n\t\t「涩涩的话」\n');
+    expect(errsOf(off)).toEqual([]);
+    const lines = bodyOf(productOf(off));
+    expect(lines).toContain('LOCAL:1 = 0');
+    expect(lines).toContain('IF LOCAL:1 && FIRSTTIME(SELECTCOM)');
+    // 保留段名分支**不产** `LOCAL = 0` 的普通段信封（两套口径不串）
+    expect(lines).not.toContain('LOCAL = 0');
+  });
+
+  it('负自证：普通段 `LOCAL = 1` 形没被改坏（保留段名分支不吞普通段）', () => {
+    const plain = doc('\t段 NOWEX:噴乳：\n\t\t「甲」\n');
+    expect(errsOf(plain)).toEqual([]);
+    const lines = bodyOf(productOf(plain));
+    expect(lines).toContain('LOCAL = 1');
+    expect(lines).toContain('IF LOCAL && NOWEX:噴乳');
+    // 普通段不许冒出 `LOCAL:` 子信封口径
+    expect(lines.some((l) => l.startsWith('LOCAL:'))).toBe(false);
+  });
+});
+
+/* ============================================================================ */
 /* B. 投影侧：段级吸收（E13-2 的真正病灶）                                          */
 /* ============================================================================ */
 

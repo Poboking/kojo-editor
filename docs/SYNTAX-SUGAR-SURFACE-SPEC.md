@@ -239,6 +239,9 @@ ENDIF
 | `时机 事件 100：` | `M_KOJO{_家族}_EVENT_K{No}_100` | 事件 100（`:183/185`） |
 | `时机 绝顶：` | `M_KOJO{_家族}_MESSAGE_PALAMCNG_B_K{No}` | 绝顶（`:314`） |
 | `时机 射精：` | `M_KOJO{_家族}_MESSAGE_PALAMCNG_A2_K{No}_{部位}` | 射精（按部位循环） |
+| `时机 绝顶恶作剧：` | `M_KOJO{_家族}_MESSAGE_PALAMCNG_B2_K{No}` | 绝顶 B2 子面（`:328-332`）。键**单令牌**——`时机 绝顶 恶作剧：` 里第 2 词会被当**中文指令名**消费，写不出 B2 |
+| `时机 调教后：` | `M_KOJO{_家族}_MESSAGE_PALAMCNG_C_K{No}` | 绝顶 C 子面（`:366`） |
+| `时机 寸止：` | `M_KOJO{_家族}_MESSAGE_PALAMCNG_F_K{No}` | 绝顶 F 子面（`:468`） |
 | `时机 标记：` | `M_KOJO{_家族}_MESSAGE_MARKCNG_K{No}` | 刻印/素质变化 |
 | `时机 计数器 20：` | `M_KOJO{_家族}_MESSAGE_COUNTER_K{No}_20` | TCVAR:20 计数（`:1166`） |
 | `时机 成功：` | `M_KOJO{_家族}_SUCCESS_COM_K{No}_{编号}` | 成否判定（`:640`，兜底 `_GENERAL`） |
@@ -409,6 +412,8 @@ ENDIF
   → `LOCAL = CFLAG:TARGET:好感度` + `IF !(LOCAL >= 0 && LOCAL <= 99)`。糖不做自动转写（避免擅自引入临时变量），仅在 `X` 含 `+`/`-`/函数调用时由 lint 给出提示（诊断码 `notin-complex-operand`，warning；转译产物不变）。
 - 与之配对的 `直到`（排他上界）**本期不加**——`CASE a TO b-1` 在 `b` 是变量/表达式时需要额外括号处理（否则可能被解析为 `(a TO b) - 1`，语义完全不同），脆弱；理由与转译规则记于 §7.2。
 
+> **`段 首次：`（初回段预设，P-3）。** 段头恰为保留段名 `首次` 时**整串硬编译**为 `LOCAL:1 = 1` + `IF LOCAL:1 && FIRSTTIME(SELECTCOM)` + 体 + `ENDIF`（写 `关` 则 `LOCAL:1 = 0`，`IF` 条件照写）；普通段（`段 NOWEX:噴乳：` 等）仍产 bare `LOCAL = n` 信封，两套口径并存。
+
 ### 3.6 选择：`当 / 是 / 到 / 否则`（Kotlin `when` 的中文形态）
 
 ```
@@ -482,6 +487,8 @@ ENDSELECT
 ```
 
 随机块嵌套或同文件多次使用时，编译器为每块分配独立的 `LOCAL:N` 槽位，互不覆盖。
+
+> **`随机形: 直出`（文件头选项，P-4）。** 文件头写 `随机形: 直出` 时，`随机：` 块改产**直出形** `SELECTCASE RAND:n` + `CASE i`（不占 `LOCAL` 槽）；缺省仍产上面的 `LOCAL = RAND:n` 形（golden 冻结口径不变）。
 
 候选可以是一个单行内容，一个 `组：` 候选组（一档多行，见下），或一个语句块（`如果` / `当` / `随机` / `着色`）；`选项` 不可作候选（报 `choice-nested`）。
 

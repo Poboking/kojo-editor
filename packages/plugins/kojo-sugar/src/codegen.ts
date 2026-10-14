@@ -43,11 +43,11 @@ import type {
   WhenExpr,
 } from '@kojo/plugin-api';
 import { lowerExpression, expandTarget, type ExprContext } from './expression';
-import { checkTimingArgsDeclaration, CJK } from './lexer';
+import { checkTimingArgsDeclaration, CJK, type SectionPreset } from './lexer';
 import { RESERVED_PRONOUNS, TIMING_ARGS_PARAM } from './keywords';
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import type { TopNode } from './parser';
-import type { AliasTable, DiagnosticSink, DictionaryLookup } from './types';
+import type { AliasTable, DiagnosticSink, DictionaryLookup, RandomShape } from './types';
 
 /* ============================== 输出缓冲 ============================== */
 
@@ -556,6 +556,17 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
  */
 function emitSectionBlock(em: Emitter, node: SectionBlock, ctx: BodyContext, indent: number): void {
   const check = node.disabled ? 0 : 1;
+  // P-3 保留段名（`首次`）：**整串硬编译**——`LOCAL:1 = n` + `IF LOCAL:1 && FIRSTTIME(SELECTCOM)`
+  // （M6 子信封口径，与普通段的 bare `LOCAL` 不同）。段名不走 `lowerExpression`
+  // （`SELECTCOM` 在糖表达式里不可解析）。产物无 `;---` 分节线（对齐库内全形）。
+  const preset = (node as { _preset?: SectionPreset })._preset;
+  if (preset) {
+    em.push(indent, `LOCAL:${preset.local} = ${check}`, node.loc.start.line);
+    em.push(indent, `IF LOCAL:${preset.local} && ${preset.condition}`, null);
+    for (const child of node.body) emitStatement(em, child, ctx, indent + 1);
+    em.push(indent, `ENDIF`, null);
+    return;
+  }
   const condition = lowerExpression(node.condition, exprCtx(ctx, node.loc.start));
   em.pushGenerated(indent, `;-------------------------------------------------`);
   em.pushGenerated(indent, `;${node.condition}（記入チェック＝${check}）`);
@@ -1485,6 +1496,16 @@ function resolveCaseValueInstructionName(
  */
 function emitRandomBlock(em: Emitter, node: RandomBlock, ctx: BodyContext, indent: number): void {
   const count = node.alternatives.length;
+  // P-4 直出形（文件头 `随机形: 直出`）：`SELECTCASE RAND:n` 直出，不占 `LOCAL` 槽。
+  if (randomShapeOf(node) === 'direct') {
+    em.push(indent, `SELECTCASE RAND:${count}`, node.loc.start.line);
+    node.alternatives.forEach((alt, i) => {
+      em.push(indent + 1, `CASE ${i}`, alt.loc.start.line);
+      for (const child of alt.body) emitStatement(em, child, ctx, indent + 2);
+    });
+    em.push(indent, `ENDSELECT`, null);
+    return;
+  }
   const slot = slotName(ctx.allocator.allocate());
   em.push(indent, `${slot} = RAND:${count}`, node.loc.start.line);
   em.push(indent, `SELECTCASE ${slot}`, null);
@@ -1500,6 +1521,18 @@ function emitRandomBlock(em: Emitter, node: RandomBlock, ctx: BodyContext, inden
 /** 随机行内简写（§3.6）：与块形态同构（`RAND:n` + SELECTCASE） */
 function emitRandomInline(em: Emitter, node: RandomInline, ctx: BodyContext, indent: number): void {
   const count = node.alternatives.length;
+  // P-4 直出形同块形态（`随机形: 直出`）。
+  if (randomShapeOf(node) === 'direct') {
+    em.push(indent, `SELECTCASE RAND:${count}`, node.loc.start.line);
+    node.alternatives.forEach((raw, i) => {
+      em.push(indent + 1, `CASE ${i}`, node.loc.start.line);
+      const text = stripOuterQuotes(raw);
+      const speech = detectSpeechText(text);
+      em.push(indent + 2, printLine(text, speech, true, ctx), node.loc.start.line);
+    });
+    em.push(indent, `ENDSELECT`, null);
+    return;
+  }
   const slot = slotName(ctx.allocator.allocate());
   em.push(indent, `${slot} = RAND:${count}`, node.loc.start.line);
   em.push(indent, `SELECTCASE ${slot}`, null);
@@ -1512,6 +1545,11 @@ function emitRandomInline(em: Emitter, node: RandomInline, ctx: BodyContext, ind
   });
   ctx.allocator.exit();
   em.push(indent, `ENDSELECT`, null);
+}
+
+/** 读取随机节点上的产物模式标记（parser 附 `_randomShape`；缺省 = 旧形） */
+function randomShapeOf(node: RandomBlock | RandomInline): RandomShape {
+  return (node as { _randomShape?: RandomShape })._randomShape === 'direct' ? 'direct' : 'default';
 }
 
 /**

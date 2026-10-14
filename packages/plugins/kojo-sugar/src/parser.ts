@@ -46,6 +46,7 @@ import {
   detectSpeechOf,
   parseAliasValue,
   parseTextLine,
+  RESERVED_SECTION_NAMES,
   scanInterpolations,
   splitLogicalLines,
   stripCont,
@@ -53,7 +54,7 @@ import {
   type LogicalLine,
 } from './lexer';
 import { TIMING_ARGS_PARAM } from './keywords';
-import type { DiagnosticSink } from './types';
+import type { DiagnosticSink, RandomShape } from './types';
 
 /** 位置工具：由逻辑行构造源区间 */
 function spanOf(line: LogicalLine, endLine?: number): SugarSourceSpan {
@@ -116,6 +117,9 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
   const cursor = new Cursor(lines, sink);
   const aliasNames = new Set<string>();
   let sawTiming = false;
+  // P-4 文档级随机产物模式：文件头 `随机形: 直出` ⇒ `direct`（缺省 `default`）。
+  // 头部选项先于时机块出现（照抄 `口上:` 一侧的写法约定），故在此按源顺序生效。
+  let randomShape: RandomShape = 'default';
 
   // 供 `parseAliasLine` 使用：把解析出的别名同时登记进 frontMatter.aliases
   const registerAlias = (decl: AliasDecl) => {
@@ -156,6 +160,14 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
       continue;
     }
 
+    // ---- P-4 文件头选项 `随机形: 直出`（文档级开关，先于时机块生效）----
+    // 非 `直出` 的取值按缺省形处理（与 `旁白色:` 对未知值的归一同一口径，不另造诊断码）。
+    if (cls.kind === 'randomShapeDecl') {
+      cursor.next();
+      randomShape = cls.value === '直出' ? 'direct' : 'default';
+      continue;
+    }
+
     // ---- 别名声明 ----
     if (cls.kind === 'aliasDecl') {
       cursor.next();
@@ -179,7 +191,7 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
     // ---- 时机块 ----
     if (cls.kind === 'timingHead') {
       sawTiming = true;
-      const block = readTimingBlock(cursor, cls);
+      const block = readTimingBlock(cursor, cls, randomShape);
       topLevel.push(block);
       continue;
     }
@@ -187,7 +199,7 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
     // ---- 自定指令块（HK-12；文档级，与时机同级，故同样受"别名须在头"约束）----
     if (cls.kind === 'customCommandHead') {
       sawTiming = true;
-      const block = readCustomCommandBlock(cursor, cls);
+      const block = readCustomCommandBlock(cursor, cls, randomShape);
       topLevel.push(block);
       continue;
     }
@@ -337,10 +349,11 @@ function readRawFunctionBlock(cursor: Cursor): RawFunctionBlock {
 function readTimingBlock(
   cursor: Cursor,
   cls: LineClass & { kind: 'timingHead' },
+  randomShape: RandomShape,
 ): TimingBlock {
   const head = cursor.next()!;
   const baseIndent = head.indent;
-  const bodyParser = new BlockParser(cursor, baseIndent + 1, cursor.sink);
+  const bodyParser = new BlockParser(cursor, baseIndent + 1, cursor.sink, randomShape);
   const { body, messageCheck, namedParams } = bodyParser.parseTimingBody();
 
   // 命名参数挂在**块头行**上：词法层的 `zeroSpan()` 在这里回填真实源区间
@@ -380,10 +393,11 @@ function readTimingBlock(
 function readCustomCommandBlock(
   cursor: Cursor,
   cls: LineClass & { kind: 'customCommandHead' },
+  randomShape: RandomShape,
 ): CustomCommandBlock {
   const head = cursor.next()!;
   const baseIndent = head.indent;
-  const body = new BlockParser(cursor, baseIndent + 1, cursor.sink).parseBody();
+  const body = new BlockParser(cursor, baseIndent + 1, cursor.sink, randomShape).parseBody();
   return {
     kind: 'custom-command',
     name: cls.name,
@@ -448,6 +462,8 @@ class BlockParser {
     private readonly cursor: Cursor,
     private readonly minIndent: number,
     private readonly sink: DiagnosticSink,
+    /** P-4 文档级随机产物模式——随嵌套块体一路下传（`随机` 可能是块体的任意深度） */
+    private readonly randomShape: RandomShape = 'default',
   ) {}
 
   /**
@@ -556,7 +572,12 @@ class BlockParser {
       }
       case 'randomInline': {
         this.cursor.next();
-        return { kind: 'randomInline', alternatives: cls.alternatives, loc: spanOf(line) } as RandomInline;
+        return {
+          kind: 'randomInline',
+          alternatives: cls.alternatives,
+          loc: spanOf(line),
+          _randomShape: this.randomShape,
+        } as RandomInline;
       }
       case 'choiceHead': {
         this.cursor.next();
@@ -747,7 +768,7 @@ class BlockParser {
         break; // 同级非分支行 → 本块结束
       }
       // 更深：进当前分支体
-      const sub = new BlockParser(this.cursor, bodyIndent, this.sink);
+      const sub = new BlockParser(this.cursor, bodyIndent, this.sink, this.randomShape);
       const nodes = sub.parseBody();
       current.body.push(...nodes);
     }
@@ -840,7 +861,7 @@ class BlockParser {
       const cls = classifyLine(line);
       if (cls.kind === 'caseHead' && line.indent === bodyIndent) {
         this.cursor.next();
-        const sub = new BlockParser(this.cursor, bodyIndent + 1, this.sink);
+        const sub = new BlockParser(this.cursor, bodyIndent + 1, this.sink, this.randomShape);
         const body = sub.parseBody();
         if (body.length === 0) {
           this.sink.report({
@@ -855,7 +876,7 @@ class BlockParser {
       }
       if (cls.kind === 'ifHead' && cls.variant === 'else' && line.indent === bodyIndent) {
         this.cursor.next();
-        const sub = new BlockParser(this.cursor, bodyIndent + 1, this.sink);
+        const sub = new BlockParser(this.cursor, bodyIndent + 1, this.sink, this.randomShape);
         const body = sub.parseBody();
         branches.push({ kind: 'else', values: [], body, loc: spanOf(line) });
         continue;
@@ -1041,7 +1062,7 @@ class BlockParser {
       const node = this.buildStandaloneNode(cls, line);
       // 若候选行是块头，继续吃缩进更深的行
       if (node && isBlockNode(node)) {
-        const sub = new BlockParser(this.cursor, bodyIndent + 1, this.sink);
+        const sub = new BlockParser(this.cursor, bodyIndent + 1, this.sink, this.randomShape);
         const extra = sub.parseBody();
         mergeBlockBody(node, extra);
       }
@@ -1059,7 +1080,13 @@ class BlockParser {
         loc: posOf(headLine),
       });
     }
-    return { kind: 'randomBlock', alternatives, loc: mergeSpan2(headLine, alternatives) };
+    return {
+      kind: 'randomBlock',
+      alternatives,
+      loc: mergeSpan2(headLine, alternatives),
+      // P-4 产物模式（转译器内部决策，契约 `RandomBlock` 不含此字段）
+      _randomShape: this.randomShape,
+    } as RandomBlockT;
   }
 
   /** 把一行内容作为独立节点构建（随机候选 / 选项体内联用） */
@@ -1082,7 +1109,12 @@ class BlockParser {
       case 'sectionHead':
         return this.parseSectionBody(line, cls);
       case 'randomInline':
-        return { kind: 'randomInline', alternatives: cls.alternatives, loc: spanOf(line) } as RandomInline;
+        return {
+          kind: 'randomInline',
+          alternatives: cls.alternatives,
+          loc: spanOf(line),
+          _randomShape: this.randomShape,
+        } as RandomInline;
       case 'colorHead':
         return this.parseColorBody(line, cls.color);
       case 'groupHead':
@@ -1126,7 +1158,7 @@ class BlockParser {
         }
         break;
       }
-      const sub = new BlockParser(this.cursor, bodyIndent, this.sink);
+      const sub = new BlockParser(this.cursor, bodyIndent, this.sink, this.randomShape);
       current.body.push(...sub.parseBody());
     }
     return { kind: 'ifBlock', branches, loc: mergeSpan(branches) };
@@ -1186,12 +1218,16 @@ class BlockParser {
         loc: posOf(headLine),
       });
     }
+    // P-3 保留段名（`首次`）：段头**恰为**表内词 ⇒ 挂 `_preset`，codegen 走整串硬编译
+    // 分支（不把段名交给 `lowerExpression`，否则会吐 `unknown-identifier`）。
+    const preset = RESERVED_SECTION_NAMES.get(cls.condition);
     return {
       kind: 'sectionBlock',
       condition: cls.condition,
       disabled: cls.disabled,
       body,
       loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
+      ...(preset ? { _preset: preset } : {}),
     } as SugarNode;
   }
 
@@ -1230,7 +1266,7 @@ class BlockParser {
       }
       this.cursor.next();
       const label = stripQuotes(stripTrailingColon(content));
-      const sub = new BlockParser(this.cursor, itemIndent + 1, this.sink);
+      const sub = new BlockParser(this.cursor, itemIndent + 1, this.sink, this.randomShape);
       const body = sub.parseChoiceItemBody();
       items.push({ label, body, loc: spanOf(line) });
     }
@@ -1253,7 +1289,7 @@ class BlockParser {
 
   private parseColorBody(headLine: LogicalLine, color: string): SugarNode {
     const bodyIndent = headLine.indent + 1;
-    const sub = new BlockParser(this.cursor, bodyIndent, this.sink);
+    const sub = new BlockParser(this.cursor, bodyIndent, this.sink, this.randomShape);
     const body = sub.parseBody();
     if (body.length === 0) {
       this.sink.report({
@@ -1282,7 +1318,7 @@ class BlockParser {
    */
   private parseGroupBody(headLine: LogicalLine): GroupBlock {
     const bodyIndent = headLine.indent + 1;
-    const sub = new BlockParser(this.cursor, bodyIndent, this.sink);
+    const sub = new BlockParser(this.cursor, bodyIndent, this.sink, this.randomShape);
     const body = sub.parseBody();
     if (body.length === 0) {
       this.sink.report({

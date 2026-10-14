@@ -66,6 +66,14 @@ export function createEratwFaceTable(): KojoFaceTable {
       绝顶: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_B_K{n}' },
       射精: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_A2_K{n}_{i}' },
 
+      // P-6 绝顶子面补糖（三条无参面，权威：`KOJO_MESSAGE.ERB:328-332/:366/:468`）。
+      // 键**不含空格**：`时机 绝顶 恶作剧：` 里的 `恶作剧` 会被词法器当作中文指令名
+      // （`indexName`）消费掉、分野 key 只剩 `绝顶`；故恶作剧子面写成单令牌
+      // `绝顶恶作剧`（`时机 绝顶恶作剧：`）方能落表。`调教后` / `寸止` 本就是单令牌。
+      绝顶恶作剧: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_B2_K{n}' },
+      调教后: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_C_K{n}' },
+      寸止: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_F_K{n}' },
+
       // 附录 C #8：刻印/素质变化 `M_KOJO{t}_MESSAGE_MARKCNG_K{n}`
       标记: { template: 'M_KOJO{t}_MESSAGE_MARKCNG_K{n}' },
 
