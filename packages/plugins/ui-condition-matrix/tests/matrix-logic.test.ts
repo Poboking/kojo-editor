@@ -24,9 +24,12 @@ import {
   GRID_MIN_RESERVE,
   MATRIX_OVERSCAN,
   MATRIX_ROW_H,
+  ROWHEAD_MAX_W,
+  ROWHEAD_MIN_W,
   buildCharacterIndex,
   buildMatrix,
   clampDetailHeight,
+  clampRowheadWidth,
   computeViewportWindow,
   createMatrixMemo,
   faceLabel,
@@ -430,6 +433,23 @@ describe('clampDetailHeight', () => {
     const panel = 120; // < DETAIL_MIN_H + GRID_MIN_RESERVE
     expect(clampDetailHeight(200, panel)).toBe(DETAIL_MIN_H);
     expect(clampDetailHeight(0, panel)).toBe(DETAIL_MIN_H);
+  });
+});
+
+/* ------------------------------ clampRowheadWidth（首列列宽钳制） ------------------------------ */
+
+describe('clampRowheadWidth', () => {
+  it('非有限值（度量失败）→ 一律回落下限', () => {
+    expect(clampRowheadWidth(Number.NaN)).toBe(ROWHEAD_MIN_W);
+    expect(clampRowheadWidth(Number.POSITIVE_INFINITY)).toBe(ROWHEAD_MIN_W);
+    expect(clampRowheadWidth(Number.NEGATIVE_INFINITY)).toBe(ROWHEAD_MIN_W);
+  });
+
+  it('落在 [下限, 上限] 内取整；越界钳到边界', () => {
+    expect(clampRowheadWidth(200)).toBe(200);
+    expect(clampRowheadWidth(200.6)).toBe(201);
+    expect(clampRowheadWidth(10)).toBe(ROWHEAD_MIN_W); // 拖太小 → 兜底
+    expect(clampRowheadWidth(9999)).toBe(ROWHEAD_MAX_W); // 拖太大 → 上限
   });
 });
 

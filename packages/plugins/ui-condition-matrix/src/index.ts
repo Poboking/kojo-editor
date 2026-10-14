@@ -48,6 +48,7 @@ import {
   buildCharacterIndex,
   buildMatrix,
   clampDetailHeight,
+  clampRowheadWidth,
   computeViewportWindow,
   createMatrixMemo,
   DETAIL_MIN_H,
@@ -55,6 +56,7 @@ import {
   instructionNoOfSlot,
   MATRIX_OVERSCAN,
   MATRIX_ROW_H,
+  ROWHEAD_MIN_W,
   type CharacterIndex,
   type ColumnDesc,
   type FaceFunction,
@@ -96,6 +98,14 @@ interface RevealTarget {
 type SplitterPointer = {
   pointerId: number;
   clientY: number;
+  preventDefault(): void;
+  currentTarget: { setPointerCapture(pointerId: number): void };
+};
+
+/** 首列列宽拖拽指针事件的最小形状（水平方向，读 clientX） */
+type ColResizePointer = {
+  pointerId: number;
+  clientX: number;
   preventDefault(): void;
   currentTarget: { setPointerCapture(pointerId: number): void };
 };
@@ -361,10 +371,16 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const [detailH, setDetailH] = useState<number | null>(null);
         /** 分隔线拖拽中（仅用于高亮） */
         const [splitDragging, setSplitDragging] = useState(false);
+        /** 首列（「状态 \ 时机」）拖拽宽度（px；null = 未拖过，走自然宽度）——会话级，与详情高度同口径 */
+        const [rowheadW, setRowheadW] = useState<number | null>(null);
+        /** 首列列宽拖拽中（仅用于高亮） */
+        const [colDragging, setColDragging] = useState(false);
         const rootRef = useRef<{ clientHeight: number } | null>(null);
         const detailRef = useRef<{ clientHeight: number } | null>(null);
+        const cornerRef = useRef<{ offsetWidth: number } | null>(null);
         const scrollRef = useRef<ScrollBox | null>(null);
         const dragSeed = useRef<{ pointerId: number; startY: number; startH: number } | null>(null);
+        const colDragSeed = useRef<{ pointerId: number; startX: number; startW: number } | null>(null);
         /** 过滤输入走 deferred：输入即时响应，重表延后重渲（大矩阵逐键打字不卡） */
         const deferredFilter = useDeferredValue(filter);
 
@@ -455,6 +471,33 @@ export function createUiConditionMatrixPlugin(): Plugin {
           if (dragSeed.current?.pointerId !== e.pointerId) return;
           dragSeed.current = null;
           setSplitDragging(false);
+        };
+
+        // 首列（「状态 \ 时机」）列宽拖拽（HK-25）：与详情分隔线同范式（pointer 捕获 + 钳制）。
+        // 角格 sticky 定位 ⇒ 把手随表头常驻可见；拖出的宽度经 `--cm-rowhead-w` 落到角格与全部行头。
+        const onColDown = (e: ColResizePointer): void => {
+          e.preventDefault();
+          colDragSeed.current = {
+            pointerId: e.pointerId,
+            startX: e.clientX,
+            // 首次拖拽从「当前真实列宽」起步（未拖过时 = 角格自然宽度），不跳变
+            startW: rowheadW ?? cornerRef.current?.offsetWidth ?? ROWHEAD_MIN_W,
+          };
+          setColDragging(true);
+          // 指针捕获：拖快了指头滑出命中区也不丢事件
+          e.currentTarget.setPointerCapture(e.pointerId);
+        };
+
+        const onColMove = (e: ColResizePointer): void => {
+          const seed = colDragSeed.current;
+          if (!seed || seed.pointerId !== e.pointerId) return;
+          setRowheadW(clampRowheadWidth(seed.startW + (e.clientX - seed.startX)));
+        };
+
+        const onColEnd = (e: { pointerId: number }): void => {
+          if (colDragSeed.current?.pointerId !== e.pointerId) return;
+          colDragSeed.current = null;
+          setColDragging(false);
         };
 
         /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
@@ -648,7 +691,24 @@ export function createUiConditionMatrixPlugin(): Plugin {
             createElement(
               'tr',
               null,
-              createElement('th', { className: 'cm-corner', rowSpan: 2 }, '状态 \\ 时机'),
+              createElement(
+                'th',
+                { className: 'cm-corner', rowSpan: 2, ref: cornerRef },
+                '状态 \\ 时机',
+                // 首列列宽拖拽把手（HK-25）：右缘一枚竖条，静息隐形、悬停 / 拖拽中亮起；
+                // 角格 sticky ⇒ 纵向滚动时随表头常驻，横向滚动时首列钉在 left:0 不漂移。
+                createElement('div', {
+                  className: 'cm-corner-resize' + (colDragging ? ' dragging' : ''),
+                  role: 'separator',
+                  'aria-orientation': 'vertical',
+                  'aria-label': '拖动调整状态列宽',
+                  title: '拖动调整状态列宽',
+                  onPointerDown: onColDown,
+                  onPointerMove: onColMove,
+                  onPointerUp: onColEnd,
+                  onPointerCancel: onColEnd,
+                }),
+              ),
               ...matrix.groups.map((group) => {
                 const folded = foldedFaces.has(group.face);
                 return createElement(
@@ -743,6 +803,11 @@ export function createUiConditionMatrixPlugin(): Plugin {
             }
           }
 
+          // 网格区 CSS 变量：行高常量唯一真源（视口化路径用）+ 首列拖拽宽度（HK-25，拖过才设）
+          const gridStyle: Record<string, string> = {};
+          if (virtualize) gridStyle['--cm-row-h'] = `${MATRIX_ROW_H}px`;
+          if (rowheadW !== null) gridStyle['--cm-rowhead-w'] = `${rowheadW}px`;
+
           grid = createElement(
             'div',
             {
@@ -750,8 +815,8 @@ export function createUiConditionMatrixPlugin(): Plugin {
               ref: scrollRef,
               onKeyDown: onGridKeyDown,
               onScroll: virtualize ? onScroll : undefined,
-              // 行高常量唯一真源落成 CSS 变量，供 .cm-virt 规则取用（CSS 不再自写数字）
-              style: virtualize ? ({ '--cm-row-h': `${MATRIX_ROW_H}px` } as CSSProperties) : undefined,
+              // 未拖过时变量未设 ⇒ CSS 回退 auto（自然宽度，逐字不变）
+              style: Object.keys(gridStyle).length > 0 ? (gridStyle as CSSProperties) : undefined,
             },
             createElement('table', { className: 'cm-table' }, head, body),
             moreNotice,

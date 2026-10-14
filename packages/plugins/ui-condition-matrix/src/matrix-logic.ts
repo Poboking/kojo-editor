@@ -468,6 +468,22 @@ export function clampDetailHeight(height: number, panelHeight: number): number {
   return Math.min(max, Math.max(DETAIL_MIN_H, height));
 }
 
+/* ------------------------------ 行头列宽钳制 ------------------------------ */
+
+/** 首列（「状态 \ 时机」行头）最小宽度：拖到极限也留住标签首段 */
+export const ROWHEAD_MIN_W = 72;
+/** 首列最大宽度：占屏过半即无意义（与 `.cm-subth` 的 110px 上限同族，取保守常量） */
+export const ROWHEAD_MAX_W = 360;
+
+/**
+ * 首列列宽拖拽的钳制（纯函数，单测钉住）：落在 [下限, 上限] 内，非有限值
+ * （无 DOM 环境 / 度量失败）→ 回落下限——宁可不拖，也不把首列挤没。
+ */
+export function clampRowheadWidth(width: number): number {
+  if (!Number.isFinite(width)) return ROWHEAD_MIN_W;
+  return Math.min(ROWHEAD_MAX_W, Math.max(ROWHEAD_MIN_W, Math.round(width)));
+}
+
 /* ------------------------------ 视口化窗口数学 ------------------------------ */
 
 /**

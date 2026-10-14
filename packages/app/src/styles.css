@@ -3923,6 +3923,40 @@ button.primary .hint {
   white-space: nowrap;
   text-align: left;
 }
+/* 首列列宽拖拽（HK-25）：拖过之后由 --cm-rowhead-w 钉住首列（角格 + 全部行头同宽）；
+   未拖过 = var 未设 ⇒ 回退 auto（自然宽度，逐字不变）。 */
+.cm-corner,
+.cm-rowhead {
+  width: var(--cm-rowhead-w, auto);
+  min-width: var(--cm-rowhead-w, auto);
+  max-width: var(--cm-rowhead-w, auto);
+}
+/* 首列右缘的列宽拖拽把手：静息隐形（仅一枚命中条），悬停 / 拖拽中亮起
+   （与 .cm-split 同族；键盘不接）。角格是 sticky 定位 ⇒ 绝对定位的把手随表头常驻。 */
+.cm-corner-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+.cm-corner-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 1px;
+  background: transparent;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.cm-corner-resize:hover::after,
+.cm-corner-resize.dragging::after {
+  background: var(--accent);
+}
 /* 单元格：紧凑方钮。.on 实心强调色、.off 近乎空白，一眼分辨填充/留空 */
 .cm-cell {
   width: 20px;
