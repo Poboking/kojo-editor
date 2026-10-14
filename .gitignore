@@ -42,4 +42,7 @@ packages/app/src-tauri/gen/
 .workbuddy/
 
 # V2: clidbg-run 转译副产物（sourceMap，回映工具即时消费，不入库）
+# ALS-R3：产物落点已搬出仓库（tools/generated-output.cjs 默认 C:/tmp/kojo-generated-erb），
+# 这一行是兜底——万一还有旧脚本/别的入口往仓库里写同名产物，也不给误吞的机会
 *.generated.map.json
+*.generated.ERB
