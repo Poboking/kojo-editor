@@ -162,12 +162,14 @@ const MESSAGECHECK_MARKER = '_MESSAGECHECK';
 
 /**
  * 解析单个函数名（**纯函数**：只读入参与模块常量表）。
+ * @param filePath 可选文件来源：占位符形态可据文件 basename 的编号还原角色号
+ *   （`…/阿燐/M_KOJO_K36_コマンド.ERB` → 36）。**不传 ⇒ 判定与旧版逐字一致**。
  * @returns FamilyMatch；与口上命名无关的函数返回 null（绝不猜测）。
  *
  * 外部一律走这个入口 ⇒ 自动享有 §5.73 的名称 memo；`createKojoFamilyMemo()` 用于测试与独立作用域。
  */
-export function parseKojoFamily(rawName: string): FamilyMatch | null {
-  return sharedFamilyMemo.parse(rawName);
+export function parseKojoFamily(rawName: string, filePath?: string): FamilyMatch | null {
+  return sharedFamilyMemo.parse(rawName, filePath);
 }
 
 function parseKojoFamilyRaw(rawName: string): FamilyMatch | null {
@@ -346,6 +348,43 @@ function stripFamilyMarker(head: string): string {
   return head.startsWith('_') ? head.slice(1) : head;
 }
 
+/* ------------------------ 占位符 → 文件编号还原 ------------------------ */
+
+/**
+ * 从文件 basename 还原角色号：eraTW 变体（如 `eratw原生官方版4.842`）里大量个人口上
+ * 把编号写成占位符，真编号**确定性地落在文件名的 `^M_KOJO_K{no}`** 上
+ * （如 `…/個人口上/阿燐/M_KOJO_K36_コマンド.ERB` → 36，与 4.980 的编号口径一致）。
+ * 取不到 → null（不改判定，绝不猜测）。
+ */
+function characterNoFromPath(filePath: string): number | null {
+  const base = filePath.split(/[\\/]/).pop() ?? '';
+  const m = /^M_KOJO_K(\d+)/.exec(base);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * 占位符形态对齐文件编号（additive，仅当传了 filePath 且解析结果是占位符时生效）：
+ * 返回 `characterNo = 编号` 的同构 FamilyMatch（`isPlaceholder` 等其余字段逐字保留）。
+ * 非占位符、无路径、或取不到编号 → 原样返回（行为与改动前逐字一致）。
+ */
+function alignPlaceholderToPath(match: FamilyMatch | null, filePath: string | undefined): FamilyMatch | null {
+  if (!match || !match.isPlaceholder || filePath === undefined) return match;
+  const no = characterNoFromPath(filePath);
+  if (no === null) return match;
+  return make({
+    kind: match.kind,
+    prefix: match.prefix,
+    family: match.family,
+    face: match.face,
+    sub: match.sub,
+    isMessageCheck: match.isMessageCheck,
+    slot: match.slot,
+    selector: match.selector,
+    no,
+    isPlaceholder: match.isPlaceholder,
+  });
+}
+
 /* ---------------------------- 名称解析 memo ---------------------------- */
 
 /**
@@ -374,7 +413,12 @@ function stripFamilyMarker(head: string): string {
 const FAMILY_MEMO_LIMIT = 200_000;
 
 export interface KojoFamilyMemo {
-  parse(rawName: string): FamilyMatch | null;
+  /**
+   * 解析函数名 → 家族结构。`filePath` 可选：占位符形态据文件编号还原角色号
+   * （见 `alignPlaceholderToPath`）。**键包含 filePath**——同名不同文件各占一条，
+   * 否则占位符的对齐结果会跨文件串味。
+   */
+  parse(rawName: string, filePath?: string): FamilyMatch | null;
   /** 当前条目数（内存上限的读数；测试用来验淘汰行为） */
   size(): number;
   /** 命中 / 未命中次数——"memo 到底有没有在生效"的读数，不靠推断 */
@@ -387,8 +431,11 @@ export function createKojoFamilyMemo(limit = FAMILY_MEMO_LIMIT): KojoFamilyMemo 
   let hits = 0;
   let misses = 0;
   return {
-    parse(rawName: string): FamilyMatch | null {
-      const hit = memo.get(rawName);
+    parse(rawName: string, filePath?: string): FamilyMatch | null {
+      // 键含 filePath（NUL 分隔，函数名/路径均不含 NUL）：占位符对齐结果依赖文件来源，
+      // 只按 rawName 作键会让同名不同文件互相覆盖、返回陈旧判定。
+      const key = filePath === undefined ? rawName : `${rawName}\u0000${filePath}`;
+      const hit = memo.get(key);
       // 命中 null **也算命中**：非口生命名的函数（引擎助手、AA 工具等）同样占大量调用，
       // 每次重跑那条 regex 链就是本批要消掉的成本
       if (hit !== undefined) {
@@ -396,9 +443,9 @@ export function createKojoFamilyMemo(limit = FAMILY_MEMO_LIMIT): KojoFamilyMemo 
         return hit;
       }
       misses++;
-      const result = parseKojoFamilyRaw(rawName);
+      const result = alignPlaceholderToPath(parseKojoFamilyRaw(rawName), filePath);
       if (memo.size >= limit) memo.clear();
-      memo.set(rawName, result);
+      memo.set(key, result);
       return result;
     },
     size: () => memo.size,
@@ -429,8 +476,8 @@ export function kojoFamilyMemoStats(): { entries: number; hits: number; misses: 
 export function createEratwFamilyIndex(): FamilyIndexRule {
   return {
     name: 'eratw-family-index',
-    match(fnName: string): FamilyMatch | null {
-      return parseKojoFamily(fnName);
+    match(fnName: string, filePath?: string): FamilyMatch | null {
+      return parseKojoFamily(fnName, filePath);
     },
     faceLabels: ERATW_FACE_LABELS,
     instructionFaces: [

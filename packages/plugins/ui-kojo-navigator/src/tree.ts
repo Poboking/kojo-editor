@@ -189,8 +189,9 @@ export function buildNavigatorTree(
   for (const file of index.files.values()) {
     for (const fn of file.functions) {
       totalFunctions++;
-      // 用归一化名解析（Emuera 语义大小写不敏感；正则按大写设计）
-      const match = familyIndex ? familyIndex.match(fn.normalizedName) : null;
+      // 用归一化名解析（Emuera 语义大小写不敏感；正则按大写设计）；附文件路径供
+      // 适配器把占位符形态对齐到文件编号（additive：无家族规则的适配器忽略该参）
+      const match = familyIndex ? familyIndex.match(fn.normalizedName, fn.filePath) : null;
       if (!match || match.characterNo === null) {
         orphanCount++;
         continue;
@@ -303,7 +304,7 @@ export function searchFunctions(
   for (const file of index.files.values()) {
     for (const fn of file.functions) {
       if (!fn.normalizedName.includes(q)) continue;
-      const match = familyIndex ? familyIndex.match(fn.normalizedName) : null;
+      const match = familyIndex ? familyIndex.match(fn.normalizedName, fn.filePath) : null;
       hits.push({ node: makeNode(fn, match ?? emptyMatch()), charaNo: match?.characterNo ?? null });
       if (hits.length >= limit * 3) break; // 超采后截断排序（保持结果大致确定性）
     }

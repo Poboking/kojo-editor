@@ -81,7 +81,14 @@ export interface FamilyMatch {
 /** 家族识别规则：把函数名解析为结构（纯函数，规则由适配器提供） */
 export interface FamilyIndexRule {
   readonly name: string;
-  match(fnName: string): FamilyMatch | null;
+  /**
+   * 解析函数名 → 家族结构。
+   *
+   * `filePath` 为 **additive 可选**第二参：**不传 ⇒ 判定与旧版逐字一致**（占位符形态仍
+   * `characterNo = null`）。传了路径的实现可据文件来源补全占位符归属（例如按文件名编号
+   * 还原角色号），是否消费由规则实现自定；旧调用方零改动。
+   */
+  match(fnName: string, filePath?: string): FamilyMatch | null;
   /**
    * 面（`FamilyMatch.face`）→ 人类可读标签（可选；**游戏知识，只住 adapter**）。
    * 消费方（函数树导航 / 条件矩阵列头）据此本地化展示；未收录的面原样显示 token

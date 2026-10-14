@@ -126,7 +126,8 @@ export function buildCharacterIndex(index: ErbIndex, familyIndex: FamilyIndexRul
       totalFunctions++;
       let match: FamilyMatch | null = null;
       try {
-        match = familyIndex ? familyIndex.match(fn.normalizedName) : null;
+        // 附文件路径供适配器把占位符形态对齐到文件编号（additive；无家族规则时仍 null）
+        match = familyIndex ? familyIndex.match(fn.normalizedName, fn.filePath) : null;
       } catch {
         match = null;
       }

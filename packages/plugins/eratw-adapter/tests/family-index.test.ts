@@ -281,3 +281,52 @@ describe('名称解析 memo（§5.73：共享实例的前提条件必须可证�
     expect(rule.match('M_KOJO_MESSAGE_COM_K1_30')).toBe(parseKojoFamily('M_KOJO_MESSAGE_COM_K1_30'));
   });
 });
+
+describe('KX 占位符按文件路径编号还原（additive：第二参 filePath 可选）', () => {
+  const rule = createEratwFamilyIndex();
+
+  it('KX 名 + 文件路径（…/阿燐/M_KOJO_K36_コマンド.ERB）→ characterNo 36', () => {
+    // 文件名 basename 的 ^M_KOJO_K36 = 真编号；函数名里的 KX 是模板残留
+    const m = rule.match(
+      'M_KOJO_MESSAGE_COM_KX_90',
+      'C:\\game\\個人口上\\阿燐\\M_KOJO_K36_コマンド.ERB',
+    )!;
+    expect(m).toMatchObject({
+      kind: 'placeholder',
+      face: 'MESSAGE_COM',
+      characterNo: 36,
+      isPlaceholder: true,
+      slot: '90',
+    });
+  });
+
+  it('KX 名 + **不传路径** → 与旧行为逐字一致（characterNo null，仍占位符）', () => {
+    const m = rule.match('M_KOJO_MESSAGE_COM_KX_90')!;
+    expect(m).toMatchObject({ kind: 'placeholder', isPlaceholder: true, characterNo: null });
+  });
+
+  it('KX 名 + 路径 basename 非 M_KOJO_K{digits} → 不改判定（characterNo null）', () => {
+    const m = rule.match('M_KOJO_MESSAGE_COM_KX_90', '/kojo/some/OTHER_FILE.ERB')!;
+    expect(m).toMatchObject({ isPlaceholder: true, characterNo: null });
+  });
+
+  it('编号名不受路径影响（非占位符不参与对齐）', () => {
+    expect(rule.match('M_KOJO_MESSAGE_COM_K1_30')?.characterNo).toBe(1);
+    expect(rule.match('M_KOJO_MESSAGE_COM_K1_30', '/x/M_KOJO_K36_コマンド.ERB')?.characterNo).toBe(1);
+  });
+
+  it('memo 键包含 filePath：同名不同文件各自对齐、不串味', () => {
+    const memo = createKojoFamilyMemo();
+    const name = 'M_KOJO_MESSAGE_COM_KX_90';
+    const a = memo.parse(name, '/kojo/阿燐/M_KOJO_K36_コマンド.ERB');
+    const b = memo.parse(name, '/kojo/魔理沙/M_KOJO_K8_コマンド.ERB');
+    expect(a?.characterNo).toBe(36);
+    expect(b?.characterNo).toBe(8);
+    expect(memo.size()).toBe(2); // 两条独立条目
+    // 同键二次 ⇒ 命中同一实例（memo 在生效）
+    expect(memo.parse(name, '/kojo/阿燐/M_KOJO_K36_コマンド.ERB')).toBe(a);
+    // 不带路径 ⇒ 又一条独立条目，且回到占位符原样（characterNo null）
+    expect(memo.parse(name)?.characterNo).toBeNull();
+    expect(memo.size()).toBe(3);
+  });
+});
