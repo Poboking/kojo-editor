@@ -6,7 +6,7 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2090 passed / 15 skipped（2105）**；119 文件过 / 8 跳（127） |
+| 全量测试 | **2093 passed / 15 skipped（2108）**；119 文件过 / 8 跳（127） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **22 项全绿**（E7 写允许域批 +18→22；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
