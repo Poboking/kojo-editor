@@ -14,7 +14,7 @@
  *     `file.changed` 自动重扫；按钮保留作 `partial` / `unavailable` 降级态的兜底）。
  */
 
-import { createElement, useEffect, useState } from 'react';
+import { createElement, useEffect, useState, type ReactNode } from 'react';
 import type {
   CharaInfo,
   ComputePool,
@@ -22,6 +22,7 @@ import type {
   Plugin,
   ProjectService,
   SnapshotSourceService,
+  UIPanelProps,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices, isPathUnder } from '@kojo/plugin-api';
 import {
@@ -158,9 +159,13 @@ export function createUiArchiveBrowserPlugin(): Plugin {
 
       /* ------------------------------ 面板组件 ------------------------------ */
 
-      function ArchiveBrowserPanel(): unknown {
+      function ArchiveBrowserPanel(props: UIPanelProps): unknown {
         const [, force] = useState(0);
         const [expanded, setExpanded] = useState<string | null>(null);
+
+        /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
+        const ic = (name: string, size: number, fallback: string): ReactNode =>
+          (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
 
         useEffect(() => {
           const cb = (): void => force((n) => n + 1);
@@ -194,7 +199,7 @@ export function createUiArchiveBrowserPlugin(): Plugin {
           const head = createElement(
             'div',
             { className: 'ab-row-head' },
-            createElement('span', { className: 'ab-caret' }, isOpen ? '▾' : '▸'),
+            createElement('span', { className: 'ab-caret' }, ic(isOpen ? 'chevron-down' : 'chevron-right', 12, isOpen ? '▾' : '▸')),
             createElement('span', { className: 'ab-file' }, row.fileName),
             createElement('span', { className: 'ab-count dim' }, `${row.charCount} 角色`),
             createElement('span', { className: 'ab-size dim' }, row.sizeText),

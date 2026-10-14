@@ -457,6 +457,10 @@ export function createUiConditionMatrixPlugin(): Plugin {
           setSplitDragging(false);
         };
 
+        /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
+        const ic = (name: string, size: number, fallback: string): ReactNode =>
+          (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
+
         const toggleFace = (face: string): void => {
           setFoldedFaces((prev) => {
             const next = new Set(prev);
@@ -656,7 +660,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                     title: group.face,
                     onClick: () => toggleFace(group.face),
                   },
-                  createElement('span', { className: 'cm-fold', 'aria-hidden': 'true' }, folded ? '▸' : '▾'),
+                  createElement('span', { className: 'cm-fold', 'aria-hidden': 'true' }, ic(folded ? 'chevron-right' : 'chevron-down', 12, folded ? '▸' : '▾')),
                   group.label,
                 );
               }),

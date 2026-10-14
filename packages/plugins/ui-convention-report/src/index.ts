@@ -1,5 +1,5 @@
 import { createElement, useEffect, useState, type ReactNode } from 'react';
-import type { ConventionIssue, ConventionLinterService, ConventionReport, Plugin } from '@kojo/plugin-api';
+import type { ConventionIssue, ConventionLinterService, ConventionReport, Plugin, UIPanelProps } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 
 /**
@@ -38,11 +38,15 @@ export function createUiConventionReportPlugin(): Plugin {
     activate(ctx) {
       const linter = ctx.inject<ConventionLinterService>(WellKnownServices.ConventionLinter);
 
-      function ConventionPanel(): unknown {
+      function ConventionPanel(props: UIPanelProps): unknown {
         const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
         const [running, setRunning] = useState(false);
         const [expanded, setExpanded] = useState<Set<string>>(new Set());
         const [showAll, setShowAll] = useState<Set<string>>(new Set());
+
+        /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
+        const ic = (name: string, size: number, fallback: string): ReactNode =>
+          (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
 
         useEffect(() => {
           const un = linter.subscribe(setReport);
@@ -120,7 +124,12 @@ export function createUiConventionReportPlugin(): Plugin {
             ? createElement(
                 'div',
                 { className: 'conv-failed' },
-                createElement('div', { className: 'conv-failed-head' }, `⚠ ${report.failedRules.length} 条规则执行失败`),
+                createElement(
+                  'div',
+                  { className: 'conv-failed-head' },
+                  ic('warning', 12, '⚠'),
+                  ` ${report.failedRules.length} 条规则执行失败`,
+                ),
                 createElement(
                   'ul',
                   { className: 'conv-failed-list' },
@@ -148,7 +157,7 @@ export function createUiConventionReportPlugin(): Plugin {
                     createElement(
                       'button',
                       { className: 'conv-group-btn', onClick: () => toggle(setExpanded, ruleId) },
-                      createElement('span', { className: 'caret' }, isOpen ? '▾' : '▸'),
+                      createElement('span', { className: 'caret' }, ic(isOpen ? 'chevron-down' : 'chevron-right', 12, isOpen ? '▾' : '▸')),
                       createElement('span', { className: 'conv-rule-id' }, ruleId),
                       createElement('span', { className: 'conv-group-count' }, String(issues.length)),
                     ),
@@ -224,26 +233,31 @@ export function createUiConventionReportPlugin(): Plugin {
       // 同排的「可写」胶囊，而它是**项目级常态计数**，不是用户此刻要对的东西。
       // 严重度的语义在底部面板里逐条呈现；状态栏只该在"有 error"时唤醒读者
       // （error 一律是全项目 0 条，因为约定校验的 error 是真事故）。数字用等宽数位防抖。
-      function StatusCounts(): unknown {
+      function StatusCounts(props: UIPanelProps): unknown {
         const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
         useEffect(() => linter.subscribe(setReport), []);
+
+        /** 图标桥：同 ConventionPanel（状态栏小件亦经 props.renderIcon 注入，缺省回退字形） */
+        const ic = (name: string, size: number, fallback: string): ReactNode =>
+          (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
         if (!report) return createElement('span', { className: 'dim' }, '校验 —');
         const c = report.counts;
-        const item = (mark: string, n: number, critical: boolean): ReactNode =>
+        const item = (icon: string, glyph: string, n: number, critical: boolean): ReactNode =>
           createElement(
             'span',
             {
               className: 'sb-diag-item',
               ...(critical && n > 0 ? { style: { color: SEVERITY_COLOR.error } } : {}),
             },
-            `${mark} ${n}`,
+            ic(icon, 12, glyph),
+            ` ${n}`,
           );
         return createElement(
           'span',
           { className: 'sb-diag', title: '约定校验计数（Ctrl+J 切换底部区查看明细）' },
-          item('✕', c.error, true),
-          item('⚠', c.warning, false),
-          item('ℹ', c.info, false),
+          item('close', '✕', c.error, true),
+          item('warning', '⚠', c.warning, false),
+          item('info', 'ℹ', c.info, false),
         );
       }
 

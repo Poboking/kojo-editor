@@ -27,7 +27,7 @@
  * 分支折叠区汇总"本结果含 N 个假设参数"。空值 = 未提供（unknown）语义不变。
  */
 
-import { createElement, useEffect, useRef, useState } from 'react';
+import { createElement, useEffect, useRef, useState, type ReactNode } from 'react';
 import type {
   BranchChainOutcome,
   ConditionExtractorService,
@@ -41,6 +41,7 @@ import type {
   SlotRegistry,
   SnapshotSourceService,
   StateReplayService,
+  UIPanelProps,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import type { AssumedSlot, ReplayScene, SceneSlotValue, SlotOrigin } from './panel-logic';
@@ -102,8 +103,17 @@ type EmitReveal = (filePath: string, line: number, source?: string) => void;
 /** 假设值标记的内联样式（插件内自持，不改 app 样式表；虚线 = 与手输确定值视觉可区分） */
 const ASSUME_STYLE = { color: 'var(--amber, #d19a66)', borderColor: 'var(--amber, #d19a66)', borderStyle: 'dashed' } as const;
 
-function branchRow(chain: BranchChainOutcome, filePath: string, emit: EmitReveal, key: string): ReturnType<typeof createElement> {
+function branchRow(
+  chain: BranchChainOutcome,
+  filePath: string,
+  emit: EmitReveal,
+  key: string,
+  renderIcon?: (name: string, size?: number) => unknown,
+): ReturnType<typeof createElement> {
   const mk = BRANCH_MARK[chain.outcome]!;
+  /** 命中分支的 ✓ 走宿主图标注册表；缺省回退原字形（BRANCH_MARK 数据模型不改） */
+  const mark: ReactNode =
+    chain.outcome === 'taken' ? ((renderIcon?.('check', 12) as ReactNode | undefined) ?? mk.mark) : mk.mark;
   const takenText = chain.members.find((m) => m.line === chain.takenLine);
   const headText =
     chain.outcome === 'taken'
@@ -120,7 +130,7 @@ function branchRow(chain: BranchChainOutcome, filePath: string, emit: EmitReveal
       className: `rp-branch-row ${chain.outcome}`,
       style: { paddingLeft: `${chain.depth * 14 + 2}px` },
     },
-    createElement('span', { className: mk.className, title: mk.title }, mk.mark),
+    createElement('span', { className: mk.className, title: mk.title }, mark),
     createElement(
       'button',
       {
@@ -147,8 +157,9 @@ function renderReplayPreview(opts: {
   result: FunctionReplay;
   assumedSlots: readonly AssumedSlot[];
   emitReveal: EmitReveal;
+  renderIcon?: (name: string, size?: number) => unknown;
 }): ReturnType<typeof createElement> {
-  const { result, assumedSlots, emitReveal } = opts;
+  const { result, assumedSlots, emitReveal, renderIcon } = opts;
   const conf = CONFIDENCE_BADGE[result.confidence];
   const unknowns = groupUnknowns(result);
   const impact = summarizeAssumptions(result, assumedSlots);
@@ -179,7 +190,7 @@ function renderReplayPreview(opts: {
             `分支走向（${result.branches.length} 条链）`,
             assumptionSummary,
           ),
-          ...result.branches.map((b, i) => branchRow(b, result.filePath, emitReveal, `b${b.headLine}:${i}`)),
+          ...result.branches.map((b, i) => branchRow(b, result.filePath, emitReveal, `b${b.headLine}:${i}`, renderIcon)),
         )
       : assumptionSummary
         ? createElement(
@@ -372,7 +383,7 @@ export function createUiStateReplayPlugin(): Plugin {
 
       /* ------------------------------ 面板组件 ------------------------------ */
 
-      function ReplayPanel(): unknown {
+      function ReplayPanel(props: UIPanelProps): unknown {
         const [, force] = useState(0);
         const [archivePath, setArchivePath] = useState<string>('');
         const [charaNo, setCharaNo] = useState<number | null>(null);
@@ -847,7 +858,7 @@ export function createUiStateReplayPlugin(): Plugin {
         if (result) {
           const emitReveal: EmitReveal = (filePath, line, source) =>
             ctx.bus.emit('editor.revealLocation', { filePath, line, source: source ?? 'ui-state-replay' });
-          resultBody = renderReplayPreview({ result, assumedSlots: resultAssumed, emitReveal });
+          resultBody = renderReplayPreview({ result, assumedSlots: resultAssumed, emitReveal, renderIcon: props.renderIcon });
         }
 
         const replayErrorEl =

@@ -10,7 +10,6 @@
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
 | HK-4 | UI 打磨（常任；目标「专业 · 克制 · 流畅 · 高效 · 耐看」，VSCode 为基准） | 自拟六项按序推进：UI-1 字号尺度 ✅§5.121 / UI-2 圆角·边框·阴影 ✅§5.122 / **UI-3 图标 emoji→单色 SVG ✅**（`docs/log/2026-10-13-ui-icons.md`；宿主层渲染面归零；插件自绘面板符号＝跨包图标通道是契约问题，留欠账） → **UI-4 焦点环与键盘可达 ✅**（roving tabindex 漫游 + `:focus-visible` 焦点环） → **UI-5 动效可关 ✅**（设置项 + `<html data-motion>`） → **UI-6 底部问题面板 ✅**（ERB 结构/表达式两层波浪线汇总、点击跳源行；状态栏 ✕/⚠/ℹ 计数经 `kojo.problems` 展开，Ctrl+Shift+M）；每项带可复跑量化判据 | 进行中 · 认领：hk4ui 2026-10-14 |
-| HK-4a | **UI-3 图标通道欠账：插件自绘面板符号改走内置图标注册表**（跨包契约；宿主渲染面已归零，只剩插件自绘面板硬编码字形） | 通道已存在（`UIPanelProps.renderIcon` 桥，additive；`eratw-adapter/kojo-projects-panel` 与 `ui-condition-matrix` 已用）⇒ 欠账＝**清点各插件自绘面板 src 里硬编码的字形并改走 `renderIcon(名, 尺寸)` + 字形兜底**（缺省宿主/单测不得画空）。字形→注册表名：`▸/▾`→`chevron-right/chevron-down`、`✓`→`check`、`⚠`→`warning`、`✕`→`close`、`ℹ`→`info`、`⟳`→`refresh`。已知落点：`ui-convention-report`（123/151/244-246）、`ui-kojo-navigator`（388/410）、`ui-archive-browser`（197）、`ui-condition-matrix`（369）、`ui-state-replay`（93）、`ui-snapshot-injector`（447）。判据：面板里不再有硬编码图标字形；缺省 `renderIcon` 时回退纯文本；全量不回退 + 双 typecheck + audit | 认领：haruki 2026-10-14 |
 
 ## D. 已拍板（用户 2026-10-13 反馈批）
 

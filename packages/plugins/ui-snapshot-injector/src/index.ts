@@ -18,7 +18,7 @@
  *   - 变量语义标签（可选）来自当前 game adapter 的 variableSchema（槽位查询透传）。
  */
 
-import { createElement, useEffect, useState } from 'react';
+import { createElement, useEffect, useState, type ReactNode } from 'react';
 import type {
   Plugin,
   ProjectService,
@@ -27,6 +27,7 @@ import type {
   SnapshotSourceService,
   SnapshotWriteService,
   SlotRegistry,
+  UIPanelProps,
   VariableSchema,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
@@ -81,7 +82,7 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
 
       /* ------------------------------ 面板组件 ------------------------------ */
 
-      function InjectorPanel(): unknown {
+      function InjectorPanel(props: UIPanelProps): unknown {
         const scan = snapshots.current();
         const rows = (scan?.entries ?? []).filter((e) => e.meta !== null && !e.error);
         const [path, setPath] = useState<string | null>(null);
@@ -101,6 +102,10 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
         const [injectError, setInjectError] = useState<string | null>(null);
         const [result, setResult] = useState<SnapshotInjectionResult | null>(null);
         const [armed, setArmed] = useState(false);
+
+        /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
+        const ic = (name: string, size: number, fallback: string): ReactNode =>
+          (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
 
         // 归档浏览器选中档 → 预填（UI 插件间零直接依赖，走内核事件）
         useEffect(() => {
@@ -444,7 +449,8 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
             armed ? createElement('button', { className: 'ghost small', onClick: () => setArmed(false) }, '取消') : null),
           result
             ? createElement('div', { className: 'inj-result' },
-                `✓ 写入完成：已校验 ${result.verifiedCount} 项（${result.byteSize}B）` +
+                ic('check', 12, '✓'),
+                ` 写入完成：已校验 ${result.verifiedCount} 项（${result.byteSize}B）` +
                 (result.backupPath ? ` · 原档已备份至：${result.backupPath}` : ''))
             : null,
           injectError

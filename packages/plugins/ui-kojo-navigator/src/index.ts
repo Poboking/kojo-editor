@@ -24,6 +24,7 @@ import type {
   ProjectService,
   SlotRegistry,
   StateDependency,
+  UIPanelProps,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
@@ -175,12 +176,16 @@ export function createUiKojoNavigatorPlugin(): Plugin {
 
       /* ------------------------------ 面板组件 ------------------------------ */
 
-      function NavigatorPanel(): unknown {
+      function NavigatorPanel(props: UIPanelProps): unknown {
         const [, force] = useState(0);
         const [selectedNo, setSelectedNo] = useState<number | null>(null);
         const [query, setQuery] = useState('');
         const [openFamilies, setOpenFamilies] = useState<Set<string>>(new Set());
         const [openFaces, setOpenFaces] = useState<Set<string>>(new Set());
+
+        /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
+        const ic = (name: string, size: number, fallback: string): ReactNode =>
+          (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
 
         useEffect(() => {
           const cb = (): void => force((n) => n + 1);
@@ -268,7 +273,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                 requestReplay(name);
               },
             },
-            '⟲',
+            ic('history', 12, '⟲'),
           );
 
         // 失败态优先：显示原因 + 重试（此前静默停在占位，用户无从判断与自救）
@@ -385,7 +390,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                 createElement(
                   'button',
                   { className: 'nav-family-btn', onClick: () => toggle(setOpenFamilies, fKey) },
-                  createElement('span', { className: 'caret' }, fOpen ? '▾' : '▸'),
+                  createElement('span', { className: 'caret' }, ic(fOpen ? 'chevron-down' : 'chevron-right', 12, fOpen ? '▾' : '▸')),
                   createElement('span', { className: 'nav-family-name' }, familyLabel(family.family)),
                   createElement(
                     'span',
@@ -407,7 +412,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                           createElement(
                             'button',
                             { className: 'nav-face-btn', onClick: () => toggle(setOpenFaces, fcKey) },
-                            createElement('span', { className: 'caret' }, fcOpen ? '▾' : '▸'),
+                            createElement('span', { className: 'caret' }, ic(fcOpen ? 'chevron-down' : 'chevron-right', 12, fcOpen ? '▾' : '▸')),
                             createElement('span', { className: 'nav-face-name' }, faceLabel(face.face, currentFaceLabels())),
                             createElement('span', { className: 'nav-count dim' }, String(face.functions.length)),
                           ),
