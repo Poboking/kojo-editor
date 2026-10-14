@@ -126,7 +126,17 @@ const GLOBAL_STR_1D = new Set(['SAVESTR', 'TSTR']);
  * 其余（运行期随机 / 版本 / 行数 / 窗口系 / 行号系）不在快照中 → unknown。
  * 行号系（`__FILE__` / `__FUNCTION__` / `__LINE__`）依赖当前谓词上下文，
  * 逐谓词注入点在 `engine.replayPredicates()`。
- * RAND 由 Config.CompatiRAND 决定实现。
+ *
+ * RAND（HK-26 实测证伪 → 保持 unknown）：引擎 RNG 是 SFMT（MT19937 参数；
+ * `_Library/SFMT.cs`），状态 = 624×u32 + 索引，与快照 RANDDATA（saveLen 625）
+ * 同构，`RAND:X = (Int64)(NextUInt64() % X)`（NextUInt64 消费两次 u32 ⇒ 每抽
+ * 推进 2 步；X ≤ 0 引擎抛 `CodeEE`）。但 RANDDATA **不是求值点的活状态**——仅
+ * `DUMPRAND` 指令经 `VariableEvaluator.DumpRanddata` 写入（`GetRand`/`SetRand`
+ * 全树无其他调用方 ⇒ 存档无自动落盘；全盘仅 6 份 ERB 用 `DUMPRAND`/`INITRAND`，
+ * 且 save00 实测 RANDDATA 全零、save03 满 625）；求值时的抽取序号亦不在快照。
+ * ⇒ RAND 实际取值不可从快照复现；且范围 [0,X-1] 对语料全部 RAND 形态（均为真
+ * 随机比较/布尔）零可判定收益。保持 unknown('pseudo')（§5.3 不猜）。
+ * 本语料 `Config.CompatiRAND = false`（emuera.config `IMITATE BEHAVIOR FOR RAND:NO`）。
  */
 const CALC_PSEUDO = new Set([
   'RAND',
