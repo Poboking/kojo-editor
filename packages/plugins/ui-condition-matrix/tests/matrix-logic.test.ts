@@ -22,9 +22,12 @@ import {
   DETAIL_MIN_H,
   FACE_ORDER,
   GRID_MIN_RESERVE,
+  MATRIX_OVERSCAN,
+  MATRIX_ROW_H,
   buildCharacterIndex,
   buildMatrix,
   clampDetailHeight,
+  computeViewportWindow,
   createMatrixMemo,
   faceLabel,
   instructionNoOfSlot,
@@ -427,5 +430,110 @@ describe('clampDetailHeight', () => {
     const panel = 120; // < DETAIL_MIN_H + GRID_MIN_RESERVE
     expect(clampDetailHeight(200, panel)).toBe(DETAIL_MIN_H);
     expect(clampDetailHeight(0, panel)).toBe(DETAIL_MIN_H);
+  });
+});
+
+/* ------------------------------ computeViewportWindow（视口窗口数学） ------------------------------ */
+
+describe('computeViewportWindow', () => {
+  const RH = 20; // 便于手算：行高 20、可视 100 = 5 行
+
+  it('滚到顶：start 归零、topPad 0、视口恰好罩住头部若干行', () => {
+    const w = computeViewportWindow(0, 100, RH, 1000, 2);
+    expect(w.start).toBe(0); // overscan 不把 start 拉到负数
+    expect(w.end).toBe(7); // 5 可视 + 2 overscan
+    expect(w.topPad).toBe(0);
+    expect(w.bottomPad).toBe((1000 - 7) * RH); // 19860
+  });
+
+  it('滚动中途：窗口随 scrollTop 平移、上下占位高之和 = 未渲染行 × 行高', () => {
+    const w = computeViewportWindow(200, 100, RH, 1000, 2);
+    expect(w.start).toBe(8); // floor(200/20)=10 → -2
+    expect(w.end).toBe(17); // 10 + 5 + 2
+    expect(w.topPad).toBe(8 * RH);
+    expect(w.bottomPad).toBe((1000 - 17) * RH);
+    // 占位 + 渲染行 = 全量高度
+    expect(w.topPad + (w.end - w.start) * RH + w.bottomPad).toBe(1000 * RH);
+  });
+
+  it('滚到底：end 钳到总行数、bottomPad 0（不渲染出界）', () => {
+    const scroll = (1000 - 5) * RH; // 恰好让最后 5 行进视口
+    const w = computeViewportWindow(scroll, 100, RH, 1000, 2);
+    expect(w.end).toBe(1000);
+    expect(w.bottomPad).toBe(0);
+    expect(w.start).toBe(993);
+    expect(w.start + (w.end - w.start)).toBe(w.end);
+  });
+
+  it('滚过头（scrollTop 远大于内容高）：两端都钳在 totalRows，不越界也不炸', () => {
+    const w = computeViewportWindow(9_999_999, 100, RH, 1000, 2);
+    expect(w.start).toBe(1000);
+    expect(w.end).toBe(1000);
+    expect(w.topPad).toBe(1000 * RH);
+    expect(w.bottomPad).toBe(0);
+  });
+
+  it('totalRows = 0：空窗口、全 0（不炸）', () => {
+    expect(computeViewportWindow(0, 100, RH, 0, 2)).toEqual({ start: 0, end: 0, topPad: 0, bottomPad: 0 });
+  });
+
+  it('行高非法（≤0 / NaN）→ 空窗口（防除零）', () => {
+    expect(computeViewportWindow(0, 100, 0, 100, 2)).toEqual({ start: 0, end: 0, topPad: 0, bottomPad: 0 });
+    expect(computeViewportWindow(0, 100, Number.NaN, 100, 2)).toEqual({
+      start: 0,
+      end: 0,
+      topPad: 0,
+      bottomPad: 0,
+    });
+  });
+
+  it('overscan 大于总数：不重复、end 钳到总数、占位清空', () => {
+    const w = computeViewportWindow(0, 100, RH, 3, 10);
+    expect(w.start).toBe(0);
+    expect(w.end).toBe(3);
+    expect(w.topPad).toBe(0);
+    expect(w.bottomPad).toBe(0);
+    // 中途同样：start 被拉回 0，end 钳到 3
+    const w2 = computeViewportWindow(40, 100, RH, 3, 10);
+    expect(w2.start).toBe(0);
+    expect(w2.end).toBe(3);
+  });
+
+  it('scrollTop 为负 → 视作 0（start 不越界）', () => {
+    const w = computeViewportWindow(-50, 100, RH, 100, 2);
+    expect(w.start).toBe(0);
+    expect(w.topPad).toBe(0);
+  });
+
+  it('可视高未知（0）→ 仍有 overscan 行可聚焦（窗口非空）', () => {
+    const w = computeViewportWindow(200, 0, RH, 1000, 8);
+    // floor(200/20)=10、可视 0 → [2, 18]
+    expect(w.start).toBe(2);
+    expect(w.end).toBe(18);
+  });
+
+  it('不变式：任意输入下 0 ≤ start ≤ end ≤ totalRows、占位非负、总高守恒', () => {
+    const scrolls = [-10, 0, 137, 199, 4400, 99000];
+    const views = [0, 1, 100, 517];
+    const totals = [0, 1, 7, 1000];
+    const overs = [0, 1, 2, 8, 500];
+    for (const s of scrolls)
+      for (const v of views)
+        for (const t of totals)
+          for (const o of overs) {
+            const w = computeViewportWindow(s, v, RH, t, o);
+            expect(w.start).toBeGreaterThanOrEqual(0);
+            expect(w.end).toBeGreaterThanOrEqual(w.start);
+            expect(w.end).toBeLessThanOrEqual(t);
+            expect(w.topPad).toBeGreaterThanOrEqual(0);
+            expect(w.bottomPad).toBeGreaterThanOrEqual(0);
+            expect(w.topPad + (w.end - w.start) * RH + w.bottomPad).toBe(t * RH);
+          }
+  });
+
+  it('常量自洽：overscan 落在 6~10 行内（缓冲够兜住表头位移），行高为正', () => {
+    expect(MATRIX_OVERSCAN).toBeGreaterThanOrEqual(6);
+    expect(MATRIX_OVERSCAN).toBeLessThanOrEqual(10);
+    expect(MATRIX_ROW_H).toBeGreaterThan(0);
   });
 });

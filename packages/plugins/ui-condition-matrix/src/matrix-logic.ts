@@ -467,6 +467,73 @@ export function clampDetailHeight(height: number, panelHeight: number): number {
   return Math.min(max, Math.max(DETAIL_MIN_H, height));
 }
 
+/* ------------------------------ 视口化窗口数学 ------------------------------ */
+
+/**
+ * 视口化路径的**固定行高**（px）。唯一真源：面板把它落到 `--cm-row-h` 给 CSS，
+ * 窗口数学也用它——**绝不在 CSS 里再写一个数字**（那是这类改动的头号 bug 源）。
+ *
+ * 22 = 单元格（20px 方钮）+ 行单元格上下各 1px 内边距；视口化路径把行头压成单行
+ * 并钉死行高，内容无法把行撑高。
+ */
+export const MATRIX_ROW_H = 22;
+
+/** 窗口上下各预留的缓冲行数（滚出即撤、滚入即建；过量只多画几行，不重复计数） */
+export const MATRIX_OVERSCAN = 8;
+
+/** 视口化窗口：要渲染的行区间 + 上下占位块高度（撑出完整滚动高度） */
+export interface ViewportWindow {
+  /** 起始行索引（含） */
+  readonly start: number;
+  /** 结束行索引（不含） */
+  readonly end: number;
+  /** 顶部占位块高度（px）= `start * rowHeight` */
+  readonly topPad: number;
+  /** 底部占位块高度（px）= `(totalRows - end) * rowHeight` */
+  readonly bottomPad: number;
+}
+
+/**
+ * 由滚动位置算出视口窗口（纯函数，单测钉住）。
+ *
+ * 两端**钳制**：`start` 不越出 `[0, totalRows]`、`end` 不越出 `[0, totalRows]` 且
+ * `end >= start`；滚到顶 `topPad === 0`、滚到底 `bottomPad === 0`；`totalRows <= 0`
+ * 或行高非法 → 空窗口（全 0，不炸）；`overscan` 大于总数也不会重复计数
+ * （`end` 被钳到 `totalRows`）。占位高按行高等比还原，故滚动条长度与「全部行都渲染」
+ * 时一致。
+ */
+export function computeViewportWindow(
+  scrollTop: number,
+  viewportHeight: number,
+  rowHeight: number,
+  totalRows: number,
+  overscan: number,
+): ViewportWindow {
+  if (!(totalRows > 0) || !(rowHeight > 0)) {
+    return { start: 0, end: 0, topPad: 0, bottomPad: 0 };
+  }
+  const scroll = Number.isFinite(scrollTop) && scrollTop > 0 ? scrollTop : 0;
+  const view = Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : 0;
+  const over = Number.isFinite(overscan) && overscan > 0 ? Math.floor(overscan) : 0;
+
+  const firstVisible = Math.floor(scroll / rowHeight);
+  const visibleCount = Math.ceil(view / rowHeight);
+
+  let start = firstVisible - over;
+  let end = firstVisible + visibleCount + over;
+  if (start < 0) start = 0;
+  if (start > totalRows) start = totalRows;
+  if (end > totalRows) end = totalRows;
+  if (end < start) end = start;
+
+  return {
+    start,
+    end,
+    topPad: start * rowHeight,
+    bottomPad: (totalRows - end) * rowHeight,
+  };
+}
+
 /* ------------------------------ 标签 ------------------------------ */
 
 /**
