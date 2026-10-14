@@ -161,6 +161,8 @@ export type LineClass =
   | { kind: 'choiceHead' }
   | { kind: 'choiceItem'; label: string }
   | { kind: 'colorHead'; color: string }
+  /** `心形：` / `heart：` 连续块头（P-7；块体是文本行，逐行产 HPH_PRINT） */
+  | { kind: 'heartHead' }
   | { kind: 'exprHead'; variant: 'if' | 'when'; target: string; rest: string }
   | { kind: 'messageCheck'; scope: 'scene' | 'kojo'; condition: string }
   | { kind: 'arrowCase'; values: WhenCaseValue[]; value: string }
@@ -642,6 +644,11 @@ function parseBlockHead(content: string): LineClass | null {
       return { kind: 'colorHead', color: rest };
     case 'block.customCommand':
       return parseCustomCommandHead(rest);
+    case 'inline.heart':
+      // `心形：` / `heart：` 连续块头（P-7）：块体是文本行（逐行产 HPH_PRINT）。
+      // 只收**裸块头**（`rest` 为空）——单行形 `心形 「…」` 不带块头冒号，走
+      // `classifyLine` 末尾的 `heartText` 分支，两条路径互不干扰。
+      return rest.length === 0 ? { kind: 'heartHead' } : null;
     case 'inline.hideScene':
       return { kind: 'messageCheck', scope: 'scene', condition: stripConditionPrefix(rest) };
     case 'inline.hideKojo':

@@ -215,6 +215,103 @@ const CLOSE_KINDS: ReadonlySet<string> = new Set([
  */
 const NON_BODY_LINE_KINDS: ReadonlySet<string> = new Set(['SIF', 'ELSE', 'ELSEIF', 'CASE', 'CASEELSE']);
 
+/* ============== P-8：MESSAGECHECK 数字返回协议投影（纯显示） ============== */
+
+/**
+ * P-8：MESSAGECHECK 数字返回协议投影（**不做新糖**，只用于看）。
+ *
+ * 语法层 `隐藏情景:` / `隐藏口上:` 的现行产物是 `SETBIT RESULT, {bit}`
+ * （adapter `messageCheck.bits`：`scene`→位 0、`kojo`→位 1）。旧/遗留文件用的是
+ * **数字返回**（`M_KOJO_K30_愛撫系コマンド.ERB:816-823` 的 `RETURN 0/1/2/3`），
+ * 引擎侧 `KOJO_MESSAGE.ERB:227-229` 以 `GETBIT(RESULT, 0/1)` 读位——两者语义同构
+ * （数字即**位掩码**）：
+ *
+ * - `RETURN 0` → 不置位：情景、口上**都显示**（无对应糖子句）；
+ * - `RETURN 1` → 置位 0：**隐藏情景**（description 隐藏）；
+ * - `RETURN 2` → 置位 1：**隐藏口上**（KOJO 隐藏）；
+ * - `RETURN 3` → 置位 0+1：两者都隐藏。
+ *
+ * **数字返回给不出条件**（条件在包着它的 `IF` 上，见 K30 的 `IF TFLAG:193`），
+ * 故注记是**标记**而非糖块：`隐藏情景（数字返回 1）：`——如实标出来历，绝不伪造条件。
+ * 写回仍以 SETBIT 形为准。
+ */
+
+/** 正则元字符转义 */
+const reEscape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** 作用域语义名 → 糖子句（语法层口径，与 lexer 的 `隐藏情景/隐藏口上` 同源） */
+const MESSAGE_CHECK_CLAUSE: Readonly<Record<string, string>> = {
+  scene: '隐藏情景',
+  kojo: '隐藏口上',
+};
+
+/**
+ * 从 adapter 的 MESSAGECHECK 模板抽出**判别字面片段**（占位符以外的定长串）。
+ * 只保留长度 ≥ 3 的片段：`_` / `_K` 这类太泛，当判别串会误伤同前缀的普通函数头。
+ */
+function messageCheckLiteralFragments(template: string): string[] {
+  return template
+    .split(/\{[^}]*\}/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 3);
+}
+
+/** 把 adapter 的置位原语模板（`{bit}` 占位）编成行匹配正则（空白宽松、忽略大小写） */
+function buildBitLineRegex(template: string): RegExp {
+  const [pre = '', post = ''] = template.split('{bit}');
+  const norm = (s: string): string =>
+    s
+      .trim()
+      .split(/\s+/)
+      .map(reEscape)
+      .join('[ \\t]+');
+  const before = norm(pre);
+  const after = post.trim().length === 0 ? '' : `[ \\t]*${norm(post)}`;
+  return new RegExp(`^[ \\t]*${before}[ \\t]*(\\d+)[ \\t]*${after}[ \\t]*$`, 'i');
+}
+
+/**
+ * P-8：MECHECK 体内一行的注记（`undefined` = 不是协议行 / 还原不出糖子句 → 保持原生）。
+ *
+ * 只认两种形态（都由 adapter 声明派生，零硬编码游戏名词）：
+ * 1. `RETURN n`：n 是**位掩码**（引擎读位），逐位映射到糖子句；
+ * 2. adapter `setBit` 模板（缺省 `SETBIT RESULT, {bit}`）：n 是**位号**（与糖产物同形）。
+ */
+function messageCheckNote(
+  content: string,
+  bits: Readonly<Record<string, number>>,
+  setBitRe: RegExp,
+): string | undefined {
+  // 位号 → 糖子句（adapter `bits.scene/kojo` 反查；未声明的位一律不标）
+  const clauseOf = (bit: number): string | undefined => {
+    for (const [scope, declared] of Object.entries(bits)) {
+      if (declared === bit) return MESSAGE_CHECK_CLAUSE[scope];
+    }
+    return undefined;
+  };
+
+  const ret = /^RETURN\s+(\d+)\s*$/i.exec(content);
+  if (ret) {
+    const value = Number(ret[1]);
+    const names: string[] = [];
+    for (const bit of [...new Set(Object.values(bits))].sort((a, b) => a - b)) {
+      if ((value & (1 << bit)) !== 0) {
+        const clause = clauseOf(bit);
+        if (clause !== undefined) names.push(clause);
+      }
+    }
+    // 不置任何已声明位（如 `RETURN 0` = 两者都显示）→ 无对应糖子句 → 不伪造，保持原生
+    return names.length === 0 ? undefined : `${names.join(' · ')}（数字返回 ${value}）：`;
+  }
+
+  const sb = setBitRe.exec(content);
+  if (sb) {
+    const clause = clauseOf(Number(sb[1]));
+    return clause === undefined ? undefined : `${clause}：`;
+  }
+  return undefined;
+}
+
 /* ============================== 入口 ============================== */
 
 /** 生成整文件糖投影（同步纯函数；不读盘、不写盘、不发事件） */
@@ -244,10 +341,17 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   const headIndex = faceTable === undefined ? undefined : buildFaceNameIndex(faceTable);
   // 标了标签的那个头，其函数体 +1 层（规范 §3.2「正文缩进一级」）
   const fnBump = planFunctionBumps(lines, headIndex);
+  // P-8：MESSAGECHECK 数字返回协议（纯显示）。协议来自 adapter——缺席 = 一条都不标。
+  const mcProto = faceTable?.messageCheck;
+  const mcFragments = mcProto === undefined ? null : messageCheckLiteralFragments(mcProto.template);
+  const mcBits = mcProto?.bits;
+  const mcSetBitRe = mcProto === undefined ? null : buildBitLineRegex(mcProto.setBit ?? 'SETBIT RESULT, {bit}');
 
   const recs: LineRec[] = [];
   const nativeByReason = new Map<SugarProjectNativeReason, number>();
   let inSkip = false;
+  // P-8：当前行是否落在 MESSAGECHECK 函数体内（函数头切换；体内 `RETURN`/`SETBIT` 才有位协议语义）
+  let inMessageCheck = false;
   // E13-1②：家族 fork 改发文件头 `口上: <家族名>`——只发一次；源里已有 `口上:`
   // 声明（作者自己写过）时不重复发。
   let familyHeaderEmitted = false;
@@ -283,6 +387,12 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         reason: null,
       });
       continue;
+    }
+
+    // P-8：函数头切换 MESSAGECHECK 作用域——体内 `RETURN n` / `SETBIT RESULT, n` 才有位协议语义。
+    if (content.startsWith('@')) {
+      inMessageCheck =
+        mcFragments !== null && mcFragments.length > 0 && mcFragments.every((f) => content.includes(f));
     }
 
     // 函数骨架：被合并吸收的行不产出可见行（读者不必看见 `CALL x_1` / `IF LOCAL` 包裹）
@@ -387,6 +497,23 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         reason: null,
       });
       continue;
+    }
+
+    // P-8：MESSAGECHECK 数字返回协议（纯显示）——只在 MECHECK 函数体内生效。
+    // 判据：`RETURN n`（位掩码）或 adapter 置位原语（位号）；解不出糖子句 → 保持原生。
+    if (inMessageCheck && mcBits !== undefined && mcSetBitRe !== null) {
+      const note = messageCheckNote(content, mcBits, mcSetBitRe);
+      if (note !== undefined) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: note,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: null,
+        });
+        continue;
+      }
     }
 
     const st = ctx.stmtAt(ln);

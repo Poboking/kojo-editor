@@ -452,6 +452,78 @@ describe('糖投影 · 函数头反解成分野时机（批 I）', () => {
   });
 });
 
+/* ==================== P-8：MESSAGECHECK 数字返回协议投影 ==================== */
+
+describe('糖投影 · MESSAGECHECK 数字返回协议（P-8，纯显示）', () => {
+  const withFaces = (source: string) =>
+    liftProject(
+      {
+        transpile: () => {
+          throw new Error('x');
+        },
+        scanControlFlow,
+        faceTable: () => stubFaceTable(),
+      },
+      { source },
+    );
+  const reasonsOf = (r: { stats: { nativeByReason: { reason: string; count: number }[] } }) =>
+    Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
+
+  it('数字返回按位掩码映射：1 → 隐藏情景、2 → 隐藏口上、3 → 两者（K30 语义）', () => {
+    // 语义来源：`M_KOJO_K30_愛撫系コマンド.ERB:816-823`（`RETURN 0/1/2/3`）+ 引擎读位
+    // `KOJO_MESSAGE.ERB:227-229`（`SKIP_MESSAGE=GETBIT(RESULT,0)`、`SKIP_KOJO=GETBIT(RESULT,1)`）。
+    const r = withFaces(
+      ['@M_KOJO_MESSAGE_MESSAGECHECK_COM_K1_310', 'RETURN 1', 'RETURN 2', 'RETURN 3'].join('\n'),
+    );
+    expect(segLines(r.segments[0]!)).toEqual([
+      '隐藏情景（数字返回 1）：',
+      '隐藏口上（数字返回 2）：',
+      '隐藏情景 · 隐藏口上（数字返回 3）：',
+    ]);
+  });
+
+  it('现行 SETBIT 产物 → 对应糖子句（写侧口径，位号来自 adapter）', () => {
+    const r = withFaces(
+      ['@M_KOJO_MESSAGECHECK_SCENE_K1_310', 'SETBIT RESULT, 0', 'SETBIT RESULT, 1'].join('\n'),
+    );
+    expect(segLines(r.segments[0]!)).toEqual(['隐藏情景：', '隐藏口上：']);
+  });
+
+  it('真实 K30 形（IF/ELSE 包着数字返回）：注记随缩进，条件仍在 IF 上（不伪造）', () => {
+    const r = withFaces(
+      [
+        '@M_KOJO_MESSAGE_MESSAGECHECK_COM_K30_8',
+        'IF TFLAG:193',
+        '\tRETURN 1',
+        'ELSE',
+        '\tRETURN 0',
+        'ENDIF',
+      ].join('\n'),
+    );
+    const seg = r.segments.find((s) => s.fromLine === 2)!;
+    expect(segLines(seg)).toEqual(['如果 TFLAG:193：', '\t隐藏情景（数字返回 1）：', '否则：']);
+    // `RETURN 0`（不置位 = 两者都显示）无对应糖子句 → 保持原生；函数头也未标 → 原生
+    expect(reasonsOf(r)['other']).toBe(2);
+  });
+
+  it('负自证：非协议行一律保持不动（值不置位 / 位号未声明 / 非协议目标 / 无数值 / 体外）', () => {
+    const r = withFaces(
+      [
+        '@M_KOJO_MESSAGE_MESSAGECHECK_COM_K1_310', // 体内
+        'RETURN 0', // 值不置任何已声明位
+        'SETBIT RESULT, 5', // 位号未声明
+        'SETBIT LOCAL, 0', // 非 MESSAGECHECK 目标
+        'RETURN RESULT', // 非数字返回
+        '@M_KOJO_MESSAGE_COM_K1_310', // 切出 MESSAGECHECK 作用域（此头可标）
+        'RETURN 1', // 非 MECHECK 体内
+      ].join('\n'),
+    );
+    // 只有可标的普通函数头投影；五条 RETURN/SETBIT 全部保留原生
+    expect(segLines(r.segments[0]!)).toEqual(['时机 指令 310：']);
+    expect(reasonsOf(r)['other']).toBe(6); // 头 + 5 条
+  });
+});
+
 /* ==================== 批 J：状态赋值行 → 中文属性写法 ==================== */
 
 describe('糖投影 · 角色状态赋值行反糖（批 J）', () => {

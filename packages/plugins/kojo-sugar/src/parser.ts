@@ -54,7 +54,7 @@ import {
   type LogicalLine,
 } from './lexer';
 import { TIMING_ARGS_PARAM } from './keywords';
-import type { DiagnosticSink, RandomShape } from './types';
+import type { DiagnosticSink, HeartBlock, RandomShape } from './types';
 
 /** 位置工具：由逻辑行构造源区间 */
 function spanOf(line: LogicalLine, endLine?: number): SugarSourceSpan {
@@ -595,6 +595,10 @@ class BlockParser {
         this.cursor.next();
         return this.parseColorBody(line, cls.color);
       }
+      case 'heartHead': {
+        this.cursor.next();
+        return this.parseHeartBody(line);
+      }
       case 'groupHead': {
         this.cursor.next();
         return this.parseGroupBody(line);
@@ -1117,6 +1121,8 @@ class BlockParser {
         } as RandomInline;
       case 'colorHead':
         return this.parseColorBody(line, cls.color);
+      case 'heartHead':
+        return this.parseHeartBody(line);
       case 'groupHead':
         return this.parseGroupBody(line);
       case 'choiceHead':
@@ -1305,6 +1311,93 @@ class BlockParser {
       body,
       loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
     };
+  }
+
+  /* ------------------------------ 心形连续块（P-7） ------------------------------ */
+
+  /**
+   * `心形：` / `heart：` 连续块体（P-7）——块体**只许文本行**（宁缺勿编）。
+   *
+   * 逐行按"文本行"规则解析（带「」引号 = 台词，不带 = 旁白，行尾可带 `续`），
+   * 存成 `heartLine` 节点；产物端逐行复用单行形的心形管线（`emitTextLine` + `heartCall`），
+   * 故模式字母规则与单行形**完全一致**。
+   *
+   * **fail-closed**：块体混入任何非文本行（控制流 / 赋值 / 别的块 / 缩进异常）⇒
+   * 报 error（复用 `indent-mismatch`——与 `着色`/`随机`/`当` 对"块内非法内容"同一码），
+   * 并给节点挂 `_invalid` ⇒ codegen 对该块**一条字节都不产**（不生成半成品）。
+   */
+  private parseHeartBody(headLine: LogicalLine): SugarNode {
+    const bodyIndent = headLine.indent + 1;
+    const body: SugarNode[] = [];
+    let invalid = false;
+    while (!this.cursor.done) {
+      const line = this.cursor.peek()!;
+      const content = contentOf(line);
+      if (content.length === 0) {
+        this.cursor.next();
+        continue;
+      }
+      if (line.indent < bodyIndent) break;
+      if (line.indent > bodyIndent) {
+        // 更深但前面没有块头承接 → 缩进异常（与 `段`/`随机` 同款错误恢复）
+        this.sink.report({
+          code: 'indent-mismatch',
+          severity: 'error',
+          message: '「心形：」块里只允许文本行（台词 / 旁白，行尾可带 `续`）——这里缩进更深，前面却没有块头。',
+          loc: posOf(line),
+        });
+        invalid = true;
+        this.skipOverIndented(line.indent);
+        continue;
+      }
+      const cls = classifyLine(line);
+      switch (cls.kind) {
+        case 'text':
+        case 'heartText': {
+          // `text` 用整行原文；`heartText` 是行内 `心形 「…」` 的体（已剥掉前缀）——
+          // 两者都走"文本行规则"（`buildHeartNode`），与单行形完全同源。
+          this.cursor.next();
+          body.push(this.buildHeartNode(line, cls.kind === 'text' ? content : cls.raw));
+          break;
+        }
+        case 'comment': {
+          // 注释保留（"注释不能丢"）——它不是语句，不参与"只许文本行"判据
+          this.cursor.next();
+          body.push({ kind: 'comment', text: contentOf(line), loc: spanOf(line) });
+          break;
+        }
+        case 'blank': {
+          this.cursor.next();
+          break;
+        }
+        default: {
+          // 控制流 / 赋值 / 别的块 / 头部声明 …… 一律非法（宁缺勿编）
+          this.cursor.next();
+          this.sink.report({
+            code: 'indent-mismatch',
+            severity: 'error',
+            message: '「心形：」块里只允许文本行（台词 / 旁白，行尾可带 `续`）——控制流 / 赋值 / 别的块不能写进来。',
+            loc: posOf(line),
+          });
+          invalid = true;
+          break;
+        }
+      }
+    }
+    if (!invalid && body.length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: '「心形：」块没有正文（缩进更深的内容）。',
+        loc: posOf(headLine),
+      });
+    }
+    return {
+      kind: 'heartBlock',
+      body,
+      _invalid: invalid,
+      loc: mergeSpan2(headLine, body),
+    } as unknown as SugarNode;
   }
 
   /* ------------------------------ 候选组（E18） ------------------------------ */

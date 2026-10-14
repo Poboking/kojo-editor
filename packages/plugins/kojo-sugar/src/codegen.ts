@@ -47,7 +47,7 @@ import { checkTimingArgsDeclaration, CJK, type SectionPreset } from './lexer';
 import { RESERVED_PRONOUNS, TIMING_ARGS_PARAM } from './keywords';
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import type { TopNode } from './parser';
-import type { AliasTable, DiagnosticSink, DictionaryLookup, RandomShape } from './types';
+import type { AliasTable, DiagnosticSink, DictionaryLookup, HeartBlock, RandomShape } from './types';
 
 /* ============================== 输出缓冲 ============================== */
 
@@ -1061,7 +1061,7 @@ interface BodyContext {
   baseIndent: number;
 }
 
-function emitStatement(em: Emitter, node: SugarNode, ctx: BodyContext, indent: number): void {
+function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyContext, indent: number): void {
   switch (node.kind) {
     case 'textLine':
       emitTextLine(em, node, ctx, indent, false);
@@ -1096,6 +1096,9 @@ function emitStatement(em: Emitter, node: SugarNode, ctx: BodyContext, indent: n
       break;
     case 'colorBlock':
       emitColorBlock(em, node, ctx, indent);
+      break;
+    case 'heartBlock':
+      emitHeartBlock(em, node, ctx, indent);
       break;
     case 'rawLine':
       emitRawLine(em, node, ctx, indent);
@@ -1603,6 +1606,30 @@ function emitColorBlock(em: Emitter, node: ColorBlock, ctx: BodyContext, indent:
   em.push(indent, `SETCOLOR ${node.color}`, node.loc.start.line);
   for (const child of node.body) emitStatement(em, child, ctx, indent);
   em.push(indent, `RESETCOLOR`, null);
+}
+
+/* ------------------------------ 心形连续块（P-7） ------------------------------ */
+
+/**
+ * `心形：` 连续块（P-7）——块体**逐行**产 `CALL HPH_PRINT(@"…","<mode>")`。
+ *
+ * 复用单行形的发射管线（`emitTextLine(..., heart=true)` → `heartCall`），故模式字母
+ * 规则与 `心形 「…」` 逐字一致；`{条件 ? A}` 这类**纯条件行**也照常折成 `IF` 块
+ * （与文本行同源）。块体逐行**顺序展开**——无包装行。
+ *
+ * **宁缺勿编**：`_invalid` 为真（块体混入了非文本行）时**一条字节都不产**——
+ * 半成品比没有更坏（§5.3 口径）。
+ */
+function emitHeartBlock(em: Emitter, node: HeartBlock, ctx: BodyContext, indent: number): void {
+  if (node._invalid) return;
+  for (const child of node.body) {
+    if (child.kind === 'comment') {
+      em.push(indent, child.text, child.loc.start.line);
+      continue;
+    }
+    // 块体在 parser 段已保证只有「文本行（`heartLine`）/ 注释」两类（`_invalid` 拦下其余）
+    emitTextLine(em, child as TextLine | HeartLine, ctx, indent, true);
+  }
 }
 
 /* ------------------------------ 表达式 如果 / 当（§3.5 / §3.6） ------------------------------ */

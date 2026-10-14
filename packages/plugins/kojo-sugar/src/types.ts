@@ -2,7 +2,7 @@
  * 转译器内部类型（非契约；消费者只用 `plugin-api/sugar.ts`）。
  */
 
-import type { AliasValue, SugarDiagnostic } from '@kojo/plugin-api';
+import type { AliasValue, SugarDiagnostic, SugarNode, SugarSourceSpan } from '@kojo/plugin-api';
 
 /** 别名表条目（含只读性——`isReadonlyAlias` 的镜像，避免每次重新判定） */
 export interface AliasEntry {
@@ -71,6 +71,28 @@ export interface DictionaryLookup {
  * 契约 `RandomBlock` 只描述候选序列、不含槽位决策，本项同理是**转译器内部决策**。
  */
 export type RandomShape = 'default' | 'direct';
+
+/**
+ * `心形：` 连续块（P-7）——转译器**内部** AST 节点（非契约）。
+ *
+ * 块体是文本行序列，**逐行**产 `CALL HPH_PRINT(@"…","<mode>")`（模式字母规则与
+ * 单行形 `心形 「…」` 完全一致，复用 codegen 的 `heartCall`）。故块体每行在 AST 里
+ * 就是一枚 `heartLine`（引号内 = 台词 = 非 `d` 模式；不带引号 = 旁白 = `d` 模式）。
+ *
+ * 契约的 `SugarNode` 联合是闭集，本节点不进契约——与 `_randomShape` 一样是
+ * **转译器内部决策**（消费方按 `kind` 判别时遇未知 kind 应原样忽略）。
+ */
+export interface HeartBlock {
+  kind: 'heartBlock';
+  /** 块体：文本行节点（`heartLine`）；注释原样保留（"注释不能丢"） */
+  body: SugarNode[];
+  /**
+   * **宁缺勿编**：块体混入任何非文本行（控制流 / 赋值 / 别的块 / 缩进异常）⇒ true。
+   * codegen 据此**一条字节都不产**（照 §5.3「不生成半成品」的 fail-closed 口径）。
+   */
+  readonly _invalid: boolean;
+  loc: SugarSourceSpan;
+}
 
 /** 诊断收集器（parse 与 codegen 共用；保证 `internal` 绝不静默） */
 export interface DiagnosticSink {
