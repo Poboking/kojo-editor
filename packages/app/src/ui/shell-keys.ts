@@ -67,3 +67,35 @@ export const IME_PROCESS_KEY_CODE = 229;
 export function isComposingEvent(event: ComposingEvidence, sessionComposing: boolean): boolean {
   return event.isComposing === true || event.keyCode === IME_PROCESS_KEY_CODE || sessionComposing;
 }
+
+/**
+ * 方向键漫游（roving tabindex）的下一个落点（2026-10-14 HK-4 UI 批：焦点环与键盘可达）。
+ *
+ * 语义（调用方原样消费返回值）：
+ * - `ArrowRight` / `ArrowDown` 前进一格，`ArrowLeft` / `ArrowUp` 后退一格；
+ * - `Home` → `0`，`End` → `count - 1`；
+ * - **边界一律回绕**（wrap-around）：末尾再前进落到 `0`，`0` 再后退落到 `count - 1`。
+ *   选回绕而非停在末尾，与 ARIA APG 的 tablist 范例一致——一组控件是一圈，不是一条死胡同。
+ * - 非漫游键 → `null`（调用方**原样让位**给原生行为：Enter/Space 激活、Tab 跳走都不该被吞）。
+ *
+ * 边界：`count <= 0` 返回 `null`（空集合无可漫游）；`current` 先夹取到 `[0, count-1]`
+ * 再算（`Array#indexOf` 的 `-1` 就是靠这一步归位到 0）。
+ */
+export function nextRovingIndex(current: number, count: number, key: string): number | null {
+  if (count <= 0) return null;
+  const cur = Math.min(count - 1, Math.max(0, current));
+  switch (key) {
+    case 'ArrowRight':
+    case 'ArrowDown':
+      return (cur + 1) % count;
+    case 'ArrowLeft':
+    case 'ArrowUp':
+      return (cur - 1 + count) % count;
+    case 'Home':
+      return 0;
+    case 'End':
+      return count - 1;
+    default:
+      return null;
+  }
+}

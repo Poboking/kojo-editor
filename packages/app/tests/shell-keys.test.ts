@@ -3,6 +3,7 @@ import {
   ESC_PRIORITY,
   IME_PROCESS_KEY_CODE,
   isComposingEvent,
+  nextRovingIndex,
   resolveEscLayer,
   type EscLayers,
 } from '../src/ui/shell-keys';
@@ -168,5 +169,75 @@ describe('合成期门：三条证据的真值表', () => {
   it('证据缺字段（旧内核不实现 isComposing）时不抛错，按未知处理为放行', () => {
     expect(isComposingEvent({}, true)).toBe(true);
     expect(isComposingEvent({}, false)).toBe(false);
+  });
+});
+
+/**
+ * 方向键漫游落点单测（2026-10-14 HK-4 UI 批）。
+ *
+ * 这条规则是「标签条 / 活动栏一组控件怎么用方向键走位」的唯一裁决点。断言刻意覆盖
+ * **回绕边界**与**让位契约**：非漫游键必须返回 null（否则 Enter/Space 激活、Tab 跳走
+ * 会被壳层吞掉）；空集合必须返回 null（否则调用方会拿到一个不存在的索引去 focus）。
+ */
+describe('方向键漫游：前进/后退/回绕/Home/End', () => {
+  it('ArrowRight / ArrowDown 各前进一格', () => {
+    expect(nextRovingIndex(0, 3, 'ArrowRight')).toBe(1);
+    expect(nextRovingIndex(1, 3, 'ArrowDown')).toBe(2);
+  });
+
+  it('ArrowLeft / ArrowUp 各后退一格', () => {
+    expect(nextRovingIndex(2, 3, 'ArrowLeft')).toBe(1);
+    expect(nextRovingIndex(1, 3, 'ArrowUp')).toBe(0);
+  });
+
+  it('两端回绕：末尾前进 → 0，首位后退 → count-1', () => {
+    expect(nextRovingIndex(2, 3, 'ArrowRight')).toBe(0);
+    expect(nextRovingIndex(2, 3, 'ArrowDown')).toBe(0);
+    expect(nextRovingIndex(0, 3, 'ArrowLeft')).toBe(2);
+    expect(nextRovingIndex(0, 3, 'ArrowUp')).toBe(2);
+  });
+
+  it('Home 到 0，End 到 count-1（与当前落点无关）', () => {
+    expect(nextRovingIndex(2, 5, 'Home')).toBe(0);
+    expect(nextRovingIndex(1, 5, 'End')).toBe(4);
+  });
+
+  it('单项集合恒落在 0（前进后退都回绕到自身）', () => {
+    expect(nextRovingIndex(0, 1, 'ArrowRight')).toBe(0);
+    expect(nextRovingIndex(0, 1, 'ArrowLeft')).toBe(0);
+    expect(nextRovingIndex(0, 1, 'Home')).toBe(0);
+    expect(nextRovingIndex(0, 1, 'End')).toBe(0);
+  });
+
+  it('非漫游键返回 null ⇒ 调用方原样让位（Enter/Space/Tab/Escape 都不该被吞）', () => {
+    for (const key of ['Enter', ' ', 'Tab', 'Escape', 'a', 'PageDown']) {
+      expect(nextRovingIndex(1, 3, key), key).toBeNull();
+    }
+  });
+
+  it('空集合（count <= 0）返回 null——没有可漫游的元素', () => {
+    expect(nextRovingIndex(0, 0, 'ArrowRight')).toBeNull();
+    expect(nextRovingIndex(0, -3, 'ArrowRight')).toBeNull();
+    expect(nextRovingIndex(0, 0, 'Home')).toBeNull();
+  });
+
+  it('current 越界先夹取再算：-1（indexOf 未命中）当 0，超上界当 count-1', () => {
+    expect(nextRovingIndex(-1, 3, 'ArrowRight')).toBe(1); // -1 夹到 0 → 前进 = 1
+    expect(nextRovingIndex(-1, 3, 'Home')).toBe(0);
+    expect(nextRovingIndex(99, 3, 'ArrowLeft')).toBe(1); // 99 夹到 2 → 后退 = 1
+    expect(nextRovingIndex(99, 3, 'End')).toBe(2);
+  });
+
+  it('穷举：任意 current × 六个漫游键，落点恒在 [0, count) 内', () => {
+    for (const count of [1, 2, 3, 5]) {
+      for (let current = -2; current <= count + 2; current++) {
+        for (const key of ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End']) {
+          const next = nextRovingIndex(current, count, key);
+          expect(next, `${current}/${count}/${key}`).not.toBeNull();
+          expect(next!, `${current}/${count}/${key}`).toBeGreaterThanOrEqual(0);
+          expect(next!, `${current}/${count}/${key}`).toBeLessThan(count);
+        }
+      }
+    }
   });
 });
