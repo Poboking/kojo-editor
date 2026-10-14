@@ -88,8 +88,9 @@ local-no-write 196 / missing-var 80 / 其余 <20。
 > 未知率**同分母**，历史水位 62.9→48.5→32.0 可直接比；其补数即"剔除真随机后的未知率"）＋
 > **能力覆盖率 80.6%**（= 已判定/(谓词总数 − 不可约真随机) = 7,953/9,865）。口径落点
 > `packages/plugin-api/src/replay.ts` 的 `replayUnknownReducibility` / `readReplayDeterminability`
-> （HK-23 纯契约 additive）。**注**：HK-26「RAND 经 RANDDATA 复现」落地后不可约项归零、
-> 两读向头条水位收拢，届时按主机口径统一 reconcile。
+> （HK-23 纯契约 additive）。**注**：HK-26 已实测 RAND **不可**从快照复现——RANDDATA 非求值点
+> 活状态（仅 `DUMPRAND` 写入、多数档全零/陈旧），抽取序号不可得 ⇒ **不可约项维持 1,820**，
+> 两读不回落到头条水位。
 
 ## 7. 编码往返基线（v0.2.5）
 
