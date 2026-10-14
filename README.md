@@ -11,7 +11,7 @@
 > 几千份口上文件、几万个函数，不用再「记事本 + 全文搜索」——  
 > 浏览、校验、试写、回放，一站完成。
 
-![kojo-editor 主界面：左侧口上文件树与函数树，右侧 .kojo 语言编辑视图](docs/assets/sugar-view.png)
+![kojo-editor 主界面：左侧口上文件树与函数树（角色 → 面包 → 函数，条件徽章），右侧 .kojo 预览编辑视图](docs/assets/app-screenshot.png)
 
 </div>
 

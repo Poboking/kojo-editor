@@ -12,7 +12,7 @@
 > browse, validate, write, and replay, all in one place.  
 > No more "Notepad + full-text search".
 
-![kojo-editor main window: kojo file tree and function tree on the left, .kojo language editing view on the right](docs/assets/sugar-view.png)
+![kojo-editor main window: kojo file tree and function tree on the left (characters → packages → functions with condition badges), .kojo preview editing view on the right](docs/assets/app-screenshot.png)
 
 </div>
 
