@@ -169,6 +169,33 @@ export function ProjectView({
     },
     [kernel],
   );
+  /**
+   * 名称显示对照（中日对照：日文名 → 中文名）。
+   *
+   * 词典是**游戏/语言知识**，只住 game.adapter 插件；本壳层只经槽位读字段、绝不
+   * import 任何适配器实现。取当前项目匹配的适配器贡献（`adapter.gameId === project.adapterId`）
+   * 的 `nameGlossary`；无词典 → `undefined`（FileTree 原样显示，即旧行为）。
+   * 命中规则与 eratw 侧同口径：按键长降序、`includes` 命中、名字已含对应中文则不重复。
+   */
+  const nameGloss = useMemo<((name: string) => string) | undefined>(() => {
+    const contribution = kernel.slots
+      .query('game.adapter')
+      .find((c) => c.adapter.gameId === project.adapterId);
+    const dict = contribution?.adapter.nameGlossary;
+    if (!dict) return undefined;
+    const keys = Object.keys(dict).sort((a, b) => b.length - a.length);
+    return (name: string): string => {
+      if (!name) return name;
+      for (const key of keys) {
+        if (name.includes(key)) {
+          const zh = dict[key]!;
+          if (name.includes(zh)) return name;
+          return `${name}（${zh}）`;
+        }
+      }
+      return name;
+    };
+  }, [kernel, project.adapterId]);
   /* ---------------- 外部改动 → 文件树目录重列（HK-5；接 §5.87 留下的欠账） ---------------- */
 
   /** 递增即失效信号（FileTree 只认"变化"；用布尔会把连续两次外部改动合并掉） */
@@ -189,8 +216,8 @@ export function ProjectView({
     };
   }, [kernel, project]);
 
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, importPackage, treeNonce });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, importPackage, treeNonce };
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, importPackage, treeNonce, gloss: nameGloss });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, importPackage, treeNonce, gloss: nameGloss };
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
       const a = fileTreeArgsRef.current;
@@ -203,6 +230,7 @@ export function ProjectView({
           listDir={a.listDir}
           onImportPackage={a.importPackage}
           refreshNonce={a.treeNonce}
+          gloss={a.gloss}
         />
       );
     };

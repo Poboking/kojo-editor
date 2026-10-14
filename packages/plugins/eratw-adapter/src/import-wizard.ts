@@ -15,6 +15,7 @@ import { createElement as h, useEffect, useMemo, useState } from 'react';
 import type { WorkspaceProject, WorkspaceService } from '@kojo/plugin-api';
 import { basename } from '@kojo/plugin-api';
 import { sanitizeSegment } from './scaffold';
+import { glossName } from './name-glossary';
 import { attributionMeta, attributionSummary, type PackageAttribution } from './attribution';
 
 /** overlay 贡献 id（插件监听 importRequested 后发 `ui.overlay.open` 引用） */
@@ -170,6 +171,9 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
       h('div', { className: 'wizard-preview' },
         h('div', null, h('span', { className: 'wizard-label' }, '源目录'),
           h('code', null, pending.sourceDir)),
+        // 源包名对照（日文名 → 中文名；**只加显示备注**，不改实际目录名，导入保持原样）
+        h('div', null, h('span', { className: 'wizard-label' }, '源包名'),
+          h('code', null, glossName(sourceDirName))),
         h('div', { className: 'dim' }, '导入 = 字节级复制到工作区；源目录保持原样，游戏目录只读不破。')),
 
       // 源包署名（T2）：导入前先把"这是谁的东西"摆在脸上，并随制品 meta 带走

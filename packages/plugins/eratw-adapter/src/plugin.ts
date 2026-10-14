@@ -21,6 +21,7 @@ import { createEratwConventions } from './conventions';
 import { loadEratwVariableSchema } from './variable-schema';
 import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
 import { createEratwFaceTable } from './face-templates';
+import { ERATW_NAME_GLOSSARY } from './name-glossary';
 import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
 import { readPackageAttribution, type AttributionState as AttrState } from './attribution';
 import { createPackageActions } from './package-actions';
@@ -379,6 +380,8 @@ export function createEratwAdapterPlugin(): Plugin {
         // 时机分野模板表（v0.3 批 S2 补齐）——纯数据、无 IO：转译器转译时
         // 经槽位取用，故恒可用（不依赖 loadProject）。
         kojoFaceTemplates: createEratwFaceTable(),
+        // 日文名 → 中文名对照词典（只加显示备注，不改任何实际目录/文件名）
+        nameGlossary: ERATW_NAME_GLOSSARY,
 
         async detect(rootDir: string): Promise<boolean> {
           // 特征组合：口上・消息域目录 + Chara CSV 目录（同时存在才成局）

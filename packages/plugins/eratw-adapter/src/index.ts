@@ -16,4 +16,5 @@ export {
 } from './family-index';
 export { createEratwConventions } from './conventions';
 export { createEratwFaceTable } from './face-templates';
+export { ERATW_NAME_GLOSSARY, glossName } from './name-glossary';
 export { loadEratwCallProtocol } from './call-protocol';

@@ -26,6 +26,11 @@ interface Props {
    * 都必须各刷新一次（布尔会在第二次被 React 合并掉）。
    */
   refreshNonce?: number;
+  /**
+   * 名称显示对照（缺省 = 原样）：消费方据日文→中文词典把作者包目录名 / 目录名 / 文件名
+   * 渲染为「日文（中文）」。**只改显示文本**——title / path / key 一律用原名。
+   */
+  gloss?: (name: string) => string;
 }
 
 /** 作者包子目录（角色目录下的一层子文件夹 = 作者版本号包目录） */
@@ -142,7 +147,9 @@ function baseName(p: string): string {
  * （不闪空白）。此前 `dirCache` 没有任何失效通道 ⇒ 外面丢进一个文件，树里不出现，
  * 除非重开项目——实机线在 §5.87 里把这条明记为"留给能做 GUI 的那一批"。
  */
-export function FileTree({ project, index, activeFile, onOpenFile, listDir, onImportPackage, refreshNonce }: Props): ReactElement {
+export function FileTree({ project, index, activeFile, onOpenFile, listDir, onImportPackage, refreshNonce, gloss }: Props): ReactElement {
+  /** 名称显示对照（缺省 = 恒等，保持旧行为） */
+  const glossOf = gloss ?? ((n: string): string => n);
   const [filter, setFilter] = useState('');
   const [opened, setOpened] = useState<Set<string>>(new Set());
   /** 展开了「真实文件夹内容」的作者包（默认关——只露 ERB 列表） */
@@ -407,7 +414,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
             <span className="caret">
               <Icon name={subOpen.has(d.path) ? 'chevron-down' : 'chevron-right'} size={12} />
             </span>
-            <span className="tree-dir-name">{d.name}</span>
+            <span className="tree-dir-name">{glossOf(d.name)}</span>
           </button>
           {subOpen.has(d.path) ? (
             <ul className="tree-files nested">{dirRows(d.path, depth + 1, skip)}</ul>
@@ -417,7 +424,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
       ...files.map((d) =>
         BINARY_EXT.test(d.name) ? (
           <li key={d.path} className="tree-extra" style={pad} title={`${d.path}（压缩包/资源，不在编辑器内打开）`}>
-            <span className="tree-extra-name">{d.name}</span>
+            <span className="tree-extra-name">{glossOf(d.name)}</span>
           </li>
         ) : (
           <li key={d.path} style={pad}>
@@ -426,7 +433,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
               title={erbExt(d.name) ? d.path : `${d.path}（附加文件，不在口上索引内）`}
               onClick={() => onOpenFile(d.path)}
             >
-              {d.name}
+              {glossOf(d.name)}
             </button>
           </li>
         ),
@@ -514,7 +521,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
                           <span className="caret">
                             <Icon name={isFolder ? 'chevron-down' : 'chevron-right'} size={12} />
                           </span>
-                          <span className="tree-package-name">{s.label}</span>
+                          <span className="tree-package-name">{glossOf(s.label)}</span>
                           <span className="group-count">{s.files.length}</span>
                         </button>
                         {/* 追加式：真实文件夹内容在上、ERB 列表原地不动（无动画、不卸载） */}

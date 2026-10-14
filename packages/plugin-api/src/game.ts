@@ -353,6 +353,11 @@ export interface GameAdapter {
    * 由 adapter 从当前工程数据填充；糖层只查表不解释。
    */
   readonly kojoInstructionTable?: KojoInstructionTable;
+  /**
+   * 口上包「日文名 → 中文名」对照词典（展示用；游戏/语言知识，只住 adapter）。
+   * 消费方（导入向导 / 文件树）据此把日文名展示为「日文（中文）」。缺省 = 不做对照。
+   */
+  readonly nameGlossary?: Readonly<Record<string, string>>;
 
   /** 脚手架（生成新角色口上骨架；v0.3） */
   scaffold?(characterNo: number, options?: ScaffoldOptions): Promise<ScaffoldResult>;
