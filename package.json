@@ -8,12 +8,13 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:erbcheck": "KOJO_ERB_CHECK=1 vitest run packages/plugins/kojo-sugar/tests/erbcheck.smoke.test.ts",
+    "test:erbcheck": "node tools/verify.mjs erbcheck",
     "verify:engine": "node tools/clidbg-run.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev": "pnpm --filter @kojo/app dev",
     "tauri": "pnpm --filter @kojo/app tauri",
-    "audit:decoupling": "node tools/audit-decoupling.mjs"
+    "audit:decoupling": "node tools/audit-decoupling.mjs",
+    "verify": "node tools/verify.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

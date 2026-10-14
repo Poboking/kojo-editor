@@ -100,3 +100,4 @@
 51. 临时探针是**一次性工具放 `%TEMP%` / `.local/`、不入库**；但探针的**断言清单与读数必须随批写进 `docs/log/`**（同族：探针跨进程留的锁/端口/残留偏好——9222 旧进程、1420 占用、localStorage 标记——是下一轮"产品缺陷"假红的来源，开跑前统一清场）。
 52. 测试替身与实现必须**形状同构**：`stats()` 替身第一版回同一个对象 ⇒ "前后之差"恒 0 = 空断言还全绿；真池返回的是拷贝（`{ ...offloadStat }`），替身必须同款（§5.130；同族第 50 条）。
 53. 共享树的残留 stash 实体（`feedback3-wip-2026-10-13`）：代码主体**已被 §5.88 以另一形态取代，别按旧方案原样复用**；独有可用件＝图标 PNG 生成器 + `app-icon.png`（取法见 `docs/archive/HANDOFF.md` §十二-7 ④）。
+54. **pnpm 脚本里的内联 POSIX env 写法（`FOO=1 vitest …`）在 win32 必挂**（cmd 把 `FOO=1` 当命令：`'FOO=1' 不是内部或外部命令`，实测 `test:erbcheck` 原写法 exit 1）⇒ 脚本要么写成 `node 文件`（env 由 JS spawn 注入，见 `tools/verify.mjs` erbcheck 条目），要么调用方 shell 预设；`pnpm verify` 系列已统一走后者。
