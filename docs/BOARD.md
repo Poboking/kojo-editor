@@ -31,5 +31,5 @@
 
 | ID | 任务 | 关键判据 / 形态（已定死，勿再议形） | 认领 |
 |---|---|---|---|
-| V3 | **title fatal 定位（timebox 30 分钟）** | 关兼容开关「解釈不可能な行があっても実行する」跑 V1 镜像抓 file:line；仍无行号→给自建 SKIA fork 打 error-事件带行号补丁（引擎自己编，永远有兜底）。结论二选一：可绕→title 流程并入 V2 场景面；不可绕→板上钉"加载实测=SKIA 天花板"止损 | 认领：k12cli 会话 2026-10-14 |
-| V4 | `verify engine-setup`（引擎资产入库） | clone gitgud `develop-skiasharp`（直连/代理交替）→ `dotnet publish` → 落 `KOJO_CLIDBG_DIR`；缺 SDK=FAIL+winget 提示，**不自动装** | 认领：k12cli 会话 2026-10-14 |
+| V3 | **title fatal 定位（timebox 30 分钟）** | 关兼容开关「解釈不可能な行があっても実行する」跑 V1 镜像抓 file:line；仍无行号→给自建 SKIA fork 打 error-事件带行号补丁（引擎自己编，永远有兜底）。结论二选一：可绕→title 流程并入 V2 场景面；不可绕→板上钉"加载实测=SKIA 天花板"止损 | 认领：v34hand 2026-10-14（接手 k12cli 会话） |
+| V4 | `verify engine-setup`（引擎资产入库） | clone gitgud `develop-skiasharp`（直连/代理交替）→ `dotnet publish` → 落 `KOJO_CLIDBG_DIR`；缺 SDK=FAIL+winget 提示，**不自动装** | 认领：v34hand 2026-10-14（接手 k12cli 会话） |
