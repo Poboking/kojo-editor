@@ -1188,6 +1188,33 @@ textarea {
   font-size: var(--fs-0);
 }
 
+/* --------------------------- problems panel (HK-4 · UI-6) --------------------------- */
+
+/* 底部「问题」面板：复用约定面板视觉语言（.conv-summary/.conv-count/.conv-dot/
+   .conv-issue-btn/.conv-issue-loc/.conv-issue-msg），只补列表容器与诊断码标签。 */
+.panel-problems {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.prob-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow: auto;
+}
+.prob-item {
+  margin: 0;
+}
+.prob-code {
+  flex: none;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: var(--fs-0);
+}
+
 /* ------------------------------ editor ------------------------------ */
 
 .editor-pane {
@@ -2862,6 +2889,25 @@ button.erb-mode-hint.unlocked:hover {
   text-overflow: ellipsis;
   max-width: 60vw;
   font-variant-numeric: tabular-nums;
+}
+/* 问题计数小件（HK-4 · UI-6）：状态栏行内按钮，reset 掉全局 button 外观。
+   配色口径见 ProblemPanel.ProblemsStatusItem：常态 dim，只给 error 上色；
+   `:focus-visible` 沿用全局 1px accent 描边。 */
+.sb-problems {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  padding: 0 4px;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+}
+.sb-problems:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg);
 }
 /* 禅模式：状态栏退为背景，悬停才回到前台 */
 .shell.zen .statusbar {

@@ -47,6 +47,8 @@ import {
 } from './sugar-fold';
 import { isSealed, subscribeSealed, useSealed } from './sealed';
 import { isUnderAnyRoot, workspaceRootsOf } from './workspace-roots';
+// 问题汇总：refreshMarkers 逐文件整份发布两层波浪线（erb-parser / condition-extractor）到 problem-store
+import { clearAllProblems, clearProblems, setProblems } from './problem-store';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -369,6 +371,17 @@ export function EditorPane({
         perf.record(`markers.decorate:${contribution.id}`, performance.now() - d0);
       }
       monaco.editor.setModelMarkers(model, MARKER_OWNER, decorationsToMarkers(monaco, model, decorations));
+      // 同一份 decorations 发布到问题面板：两层波浪线（结构 error / 表达式 warning）在此汇总成可展开列表
+      setProblems(
+        path,
+        decorations.map((d) => ({
+          path,
+          line: d.line,
+          severity: d.severity,
+          message: d.message,
+          ...(d.code ? { code: d.code } : {}),
+        })),
+      );
       perf.record('markers.total', performance.now() - t0, `${model.getLineCount()} 行 / ${text.length} 字符`);
     },
     [kernel],
@@ -1007,6 +1020,7 @@ export function EditorPane({
       sugarExpandedRef.current = new Set(); // 糖视图：移除 ViewZone + 还原隐藏区间（卸载不留残影）
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
+      clearAllProblems(); // 编辑器整体卸载：清掉全部文件的问题，防幽灵诊断残留
       ed.dispose();
       editorRef.current = null;
       for (const entry of entriesRef.current.values()) {
@@ -1027,6 +1041,7 @@ export function EditorPane({
       if (keep.has(path)) continue;
       entry.listener.dispose();
       entry.model.dispose();
+      clearProblems(path); // 标签关闭：同步清掉该文件在问题面板里的条目
       entriesRef.current.delete(path);
       baseVersionRef.current.delete(path);
       viewStatesRef.current.delete(path);
