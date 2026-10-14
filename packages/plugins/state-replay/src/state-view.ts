@@ -27,9 +27,11 @@ import type {
 import {
   builtinVarModel,
   isCalcPseudo,
+  isCharaCountPseudo,
   isKnownCharaVariable,
   isKnownGlobalVariable,
   isLanguageLocal,
+  resolveEngineConstant,
   varShapeFromArchiveType,
   type VarModel,
 } from './var-model';
@@ -127,6 +129,19 @@ class StateView implements ReplayStateView {
 
   read(ref: VariableRef): ReplayValue {
     const name = ref.name;
+
+    // CALC 家族中回放可求值的子集（引擎常量 / 快照可得）——先于 unknown 判定。
+    // 行号系（__LINE__ 等）依赖当前谓词上下文，由 engine.replayPredicates 逐谓词注入。
+    const constant = resolveEngineConstant(name);
+    if (constant !== null) {
+      if (ref.indices.length > 0) return unknownValue('too-many-args', `引擎常量不接受索引：${name}`);
+      return { kind: 'value', value: constant };
+    }
+    if (isCharaCountPseudo(name)) {
+      // CHARANUM = varData.CharacterList.Count（VariableToken.cs）→ 快照角色块数
+      if (ref.indices.length > 0) return unknownValue('too-many-args', 'CHARANUM 为标量，不接受索引');
+      return { kind: 'value', value: this.archive.chars?.length ?? 0 };
+    }
 
     if (isLanguageLocal(name)) {
       return unknownValue('pseudo', `语言局部量不在快照中：${name}`);

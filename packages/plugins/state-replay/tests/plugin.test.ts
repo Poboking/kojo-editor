@@ -195,4 +195,22 @@ describe('replayPredicates（纯函数）', () => {
     expect(r.predicates[0]!.outcome.kind).toBe('false');
     expect(r.confidence).toBe('exact');
   });
+
+  it('__LINE__ → 谓词来源行（1 基；引擎逐谓词注入）', () => {
+    // detail() 的谓词行号 = 下标 + 2 ⇒ __LINE__ 分别为 2 / 3 / 4
+    const d = detail('L', ['__LINE__ == 2', '__LINE__ == 9', '__LINE__ == 4 && __LINE__ >= 4']);
+    const r = replayPredicates(d, () => ({ kind: 'unknown', unknown: { code: 'call', message: 'x' } }));
+    expect(r.predicates[0]!.outcome.kind).toBe('true'); // 第 2 行 == 2
+    expect(r.predicates[1]!.outcome.kind).toBe('false'); // 第 3 行 == 9 恒假
+    expect(r.predicates[2]!.outcome.kind).toBe('true'); // 第 4 行：4==4 && 4>=4
+  });
+
+  it('__LINE__ 带索引 → unknown(too-many-args)（负自证：标量不吃索引）', () => {
+    const d = detail('L2', ['__LINE__:0 == 2']);
+    const r = replayPredicates(d, () => ({ kind: 'unknown', unknown: { code: 'call', message: 'x' } }));
+    expect(r.predicates[0]!.outcome.kind).toBe('unknown');
+    if (r.predicates[0]!.outcome.kind === 'unknown') {
+      expect(r.predicates[0]!.outcome.unknown.code).toBe('too-many-args');
+    }
+  });
 });

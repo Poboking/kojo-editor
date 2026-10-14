@@ -210,9 +210,27 @@ describe('read：全局变量与指针', () => {
 });
 
 describe('read：能力边界与显式降级', () => {
-  it('伪变量 → unknown(pseudo)', () => {
-    expect(unknownCode(view().read(ref('RAND', ['2'])))).toBe('pseudo');
-    expect(unknownCode(view().read(ref('CHARANUM')))).toBe('pseudo');
+  it('CALC 伪变量 · 引擎常量（回放可求值）', () => {
+    const v = view();
+    // Emuera Int64.MaxValue / MinValue（double：Max 落为 2^63）
+    expect(value(v.read(ref('__INT_MAX__')))).toBe(2 ** 63);
+    expect(value(v.read(ref('__INT_MIN__')))).toBe(-(2 ** 63));
+    // 负自证：标量不吃索引
+    expect(unknownCode(v.read(ref('__INT_MAX__', ['0'])))).toBe('too-many-args');
+  });
+
+  it('CALC 伪变量 · CHARANUM = 快照角色块数', () => {
+    const v = view();
+    expect(value(v.read(ref('CHARANUM')))).toBe(2); // makeArchive 2 个角色块
+    expect(unknownCode(v.read(ref('CHARANUM', ['0'])))).toBe('too-many-args'); // 负自证
+  });
+
+  it('运行期量 / 行号系伪变量 → unknown(pseudo)（视图层无谓词上下文）', () => {
+    const v = view();
+    expect(unknownCode(v.read(ref('RAND', ['2'])))).toBe('pseudo');
+    expect(unknownCode(v.read(ref('__LINE__')))).toBe('pseudo'); // 逐谓词上下文在 engine 注入
+    expect(unknownCode(v.read(ref('__FILE__')))).toBe('pseudo'); // Emuera 相对路径不可复现 → 保持 unknown
+    expect(unknownCode(v.read(ref('__FUNCTION__')))).toBe('pseudo'); // Emuera 原始大小写函数名不可得 → 保持 unknown
   });
 
   it('语言局部量 → unknown(pseudo)', () => {

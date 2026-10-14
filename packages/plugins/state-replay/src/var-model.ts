@@ -121,9 +121,12 @@ const GLOBAL_STR_SCALAR = new Set(['SAVEDATA_TEXT']);
 const GLOBAL_STR_1D = new Set(['SAVESTR', 'TSTR']);
 
 /**
- * CALC 伪变量（运行期计算值；近似回放不执行引擎计算 → unknown）。
- * RAND 由 Config.CompatiRAND 决定实现；CHARANUM / EMUERA_VERSION / 行号系
- * 与窗口系（可写伪变量）同属 CALC 家族。
+ * CALC 伪变量（`VariableCode.cs` 的 `__CALC__` 家族）。其中**回放可求值子集**
+ * （`__INT_MAX__` / `__INT_MIN__` / `CHARANUM`）由 `state-view.read()` 前置拦截；
+ * 其余（运行期随机 / 版本 / 行数 / 窗口系 / 行号系）不在快照中 → unknown。
+ * 行号系（`__FILE__` / `__FUNCTION__` / `__LINE__`）依赖当前谓词上下文，
+ * 逐谓词注入点在 `engine.replayPredicates()`。
+ * RAND 由 Config.CompatiRAND 决定实现。
  */
 const CALC_PSEUDO = new Set([
   'RAND',
@@ -184,6 +187,29 @@ export function isCalcPseudo(name: string): boolean {
 
 export function isLanguageLocal(name: string): boolean {
   return LANGUAGE_LOCAL.has(name);
+}
+
+/**
+ * 引擎常量伪变量（Int64 边界）——`VariableToken.cs` 的
+ * `__INT_MAX__Token.GetIntValue()` 返回 `Int64.MaxValue` /
+ * `__INT_MIN__Token` 返回 `Int64.MinValue`（`VariableCode.cs` 标 `__CALC__ | __UNCHANGEABLE__`）。
+ * ⚠ 本层数值域为 double：`Int64.MaxValue`（2^63-1）落为 **2^63**（最近可表示值）；
+ * 快照标量经 sav-parser 安全整数守卫 ⇒ 与边界比较不受该舍入影响，等值比较只对
+ * 恰好等于 Int64.MaxValue 的值失真（快照内不会出现）。
+ */
+export const INT64_MAX = Number('9223372036854775807'); // Int64.MaxValue → double 落为 2^63
+export const INT64_MIN = -Number('9223372036854775808'); // Int64.MinValue = -2^63（double 精确）
+
+/** 引擎常量求值：`__INT_MAX__` / `__INT_MIN__` → 数值；否则 null（非本类） */
+export function resolveEngineConstant(name: string): number | null {
+  if (name === '__INT_MAX__') return INT64_MAX;
+  if (name === '__INT_MIN__') return INT64_MIN;
+  return null;
+}
+
+/** 快照可得伪变量：`CHARANUM` = 角色登记数（`varData.CharacterList.Count`）= 快照角色块数 */
+export function isCharaCountPseudo(name: string): boolean {
+  return name === 'CHARANUM';
 }
 
 /**

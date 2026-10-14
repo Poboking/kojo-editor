@@ -363,9 +363,9 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       }
       expect(predTotal).toBeGreaterThan(0);
       expect(hit + miss).toBeGreaterThan(0); // 至少按快照作出确定判定
-      // v0.2 第七批守门：内联求值（口上域 #FUNCTION 纯助手顺序解释）应显著压低未知率
-      // （第五批 62.9% → 第六批 48.5% → 第七批实测 32.0%）
-      expect(unknown / predTotal).toBeLessThan(0.4);
+      // 守门：内联求值（口上域 #FUNCTION 纯助手顺序解释）与回放可求值伪变量应压低未知率
+      // （第五批 62.9% → 第六批 48.5% → 第七批 32.0% → HK-19 实测 31.9%）
+      expect(unknown / predTotal).toBeLessThan(0.34);
 
       // —— 本地量数据流（第六批）：`IF LOCAL`（直线赋值 LOCAL = 1）应为确定真
       const sp2 = await replay.replayFunction(view, 'M_KOJO_ORTHODOX_SPEVENT_K49_2');

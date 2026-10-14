@@ -49,8 +49,16 @@ export function replayPredicates(
 ): FunctionReplay {
   const predicates: PredicateReplay[] = detail.predicates.map((p) => {
     const at: OverlayPosition = { line: p.line, context: p.context ?? [] };
+    const base: ValueReader = (ref) => (overlay ? (overlay(ref, at) ?? read(ref)) : read(ref));
     const ctx: EvalContext = {
-      read: (ref) => (overlay ? (overlay(ref, at) ?? read(ref)) : read(ref)),
+      // 谓词来源上下文伪变量：__LINE__ = 1 基来源行（引擎 Debug__LINE__Token 语义）。
+      // 已知近似：内联函数体内的 __LINE__ 取调用点行（本解释器不逐帧建模来源行）。
+      read: (ref) =>
+        ref.name === '__LINE__'
+          ? ref.indices.length > 0
+            ? { kind: 'unknown', unknown: { code: 'too-many-args', message: '__LINE__ 为标量，不接受索引' } }
+            : { kind: 'value', value: p.line }
+          : base(ref),
       ...(resolveCall ? { resolveCall } : {}),
     };
     const outcome = judgeCondition(p.expr, ctx);
