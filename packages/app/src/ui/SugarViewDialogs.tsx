@@ -38,10 +38,10 @@ export function SugarViewIntroDialog({
   useModalEscape(() => onDecide(false));
   return (
     <div className="modal-mask">
-      <div className="modal" role="dialog" aria-modal="true" aria-label="语法糖视图">
-        <h2>要开启「语法糖视图」吗？</h2>
+      <div className="modal" role="dialog" aria-modal="true" aria-label=".kojo 预览">
+        <h2>要开启「.kojo 预览」吗？</h2>
         <p>
-          这是一份 <b>ERB</b>（游戏原生格式）文件。开启语法糖视图后，编辑器会把它
+          这是一份 <b>ERB</b>（游戏原生格式）文件。开启 .kojo 预览后，编辑器会把它
           <b>就地显示成中文表层写法</b>——台词像剧本、条件变成「如果 …：」，没学过这套语法
           也能读懂别人写的口上；暂时还不支持的行保持原样显示。
         </p>
@@ -80,11 +80,11 @@ export function ErbUnlockDialog({
         <h2>这份 ERB 默认是只读的</h2>
         <p>
           <code>{fileName}</code> 是游戏目录里的原生 ERB。
-          <b>直接编辑它会让语法糖视图失效</b>——糖视图靠"把原文换成中文表层写法"来读懂，
+          <b>直接编辑它会让 .kojo 预览失效</b>——预览靠"把原文换成 .kojo 写法"来读懂，
           而可编辑的原文必须始终看得见。
         </p>
         <p className="dim">
-          更稳妥的做法：<b>新建一份口上文件（.kojo）</b>来写自己的内容——它可全程用语法糖书写，
+          更稳妥的做法：<b>新建一份口上文件（.kojo）</b>来写自己的内容——它可全程用 .kojo 语法书写，
           并能编译为合规 ERB。
         </p>
         <div className="modal-actions">

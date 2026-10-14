@@ -218,13 +218,13 @@ describe('语法糖就地动作插件 / 接线', () => {
 
 /* ============================== 二、`.kojo` 💡 改写 ============================== */
 
-describe('`.kojo` / 💡 改为语法糖写法（改源文件、可撤销）', () => {
+describe('`.kojo` / 💡 转成 .kojo 写法（改源文件、可撤销）', () => {
   it('光标落在原生 ERB 直通行 → 给出**带 edits** 的动作（宿主 executeEdits 落地）', () => {
     const k = boot({ [KOJO_PATH]: enc(KOJO) });
     const actions = actionsOf(k)[0]!.provideActions({ path: KOJO_PATH, text: KOJO, project: null, line: 3 });
     expect(actions).toHaveLength(1);
     expect(actions[0]!.kind).toBe('refactor');
-    expect(actions[0]!.title).toContain('改为语法糖写法');
+    expect(actions[0]!.title).toContain('转成 .kojo 写法');
     expect(actions[0]!.edits).toBeDefined();
     expect(actions[0]!.edits![0]).toEqual({ fromLine: 3, toLine: 3, newText: '\t甲。' });
   });
@@ -342,12 +342,12 @@ describe('超长文件降级：`.kojo` 💡 自动路径让路，显式信息缺
 
   it('超过 `LIFT_MAX_LINES` → 不给动作，且**告警可见**（内核铁律：不许静默降级）', () => {
     expect(act(huge(LIFT_MAX_LINES + 1), LIFT_MAX_LINES + 1)).toHaveLength(0);
-    expect(warnings.join('\n')).toContain('已跳过整篇升糖扫描');
+    expect(warnings.join('\n')).toContain('已跳过整篇 .kojo 候选扫描');
   });
 
   it('宿主没给 `lineCount` → 自己数行数，同样让路（不因信息缺失而白扫一遍）', () => {
     expect(act(huge(LIFT_MAX_LINES + 2))).toHaveLength(0);
-    expect(warnings.join('\n')).toContain('已跳过整篇升糖扫描');
+    expect(warnings.join('\n')).toContain('已跳过整篇 .kojo 候选扫描');
   });
 
   it('边界含等号：恰好到上限不降级（与 `large-file.ts` 的纯函数口径一致）', () => {

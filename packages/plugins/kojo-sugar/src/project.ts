@@ -318,7 +318,7 @@ function messageCheckNote(
 export function liftProject(deps: LiftDeps, request: SugarProjectRequest): SugarProjectResult {
   const { source } = request;
   if (typeof source !== 'string') {
-    throw new TypeError('糖投影的输入必须是字符串（原生 ERB 文本）');
+    throw new TypeError('.kojo 投影的输入必须是字符串（原生 ERB 文本）');
   }
 
   const lines = splitSourceLines(source);

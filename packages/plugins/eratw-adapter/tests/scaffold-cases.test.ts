@@ -121,7 +121,7 @@ function projectView(snippet: string[]): string[] {
 /* ============================== 空壳解析 ============================== */
 
 const CASE_HEAD_RE = /^; 【库内现成案例】照抄 /;
-const CASE_TAIL_TEXT = '; 上面的编号与角色号来自那份现成口上，照你自己要写的场合改；写法详见「语法糖教程」。';
+const CASE_TAIL_TEXT = '; 上面的编号与角色号来自那份现成口上，照你自己要写的场合改；写法详见「.kojo 语言教程」。';
 
 const stubOptions: KojoScaffoldOptions = {
   workName: '东方口上合集',

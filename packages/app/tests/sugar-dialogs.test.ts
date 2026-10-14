@@ -33,7 +33,7 @@ const noop = () => {};
 
 const cases: { name: string; html: string }[] = [
   {
-    name: '语法糖视图首次引导',
+    name: '.kojo 预览首次引导',
     html: renderToString(createElement(SugarViewIntroDialog, { onDecide: noop })),
   },
   {
@@ -135,12 +135,12 @@ describe('全站模态对话框', () => {
     expect(html).toContain('<code>A_一般.erb</code>');
   });
 
-  it('ERB 只读确认（简易版）不提封存件（语法糖视图相关词一个不许出现）', () => {
-    // 默认态（封存）的作者没见过糖视图——提到它就是在描述一个不存在的功能。
+  it('ERB 只读确认（简易版）不提封存件（预览相关词一个不许出现）', () => {
+    // 默认态（封存）的作者没见过 .kojo 预览——提到它就是在描述一个不存在的功能。
     const html = renderToString(
       createElement(ErbReadonlyAskDialog, { fileName: 'A_一般.erb', onDecide: noop }),
     );
-    for (const term of ['语法糖', '糖视图', '投影', '映射']) {
+    for (const term of ['语法糖', '.kojo 预览', '.kojo 转译检查', '糖视图', '糖预览', '投影', '映射']) {
       expect(html).not.toContain(term);
     }
   });

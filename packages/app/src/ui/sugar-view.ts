@@ -175,7 +175,7 @@ export function composeSugarDoc(
  */
 export function sugarSummary(projectedLines: number, hiddenLines = 0): string {
   // 反馈 5 / ADR-0006 §4「不静默」：收起了多少行必须同屏可见；0 时不提后半句（那是假承诺）
-  const base = `语法糖 ${projectedLines} 行`;
+  const base = `.kojo 显示 ${projectedLines} 行`;
   return hiddenLines > 0 ? `${base}｜已收起 ${hiddenLines} 行（可展开）` : base;
 }
 

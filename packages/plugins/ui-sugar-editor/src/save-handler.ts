@@ -44,7 +44,7 @@ function blockNote(plan: SugarSavePlan): string {
   }
   if (plan.blockedReason === 'transpile-error') {
     const n = plan.transpile.diagnostics.filter((d) => d.severity === 'error').length;
-    return `产物未生成：转译含 ${n} 项错误（见「糖判定」）`;
+    return `产物未生成：转译含 ${n} 项错误（见「.kojo 校验」）`;
   }
   return plan.erbPath ? '' : '产物未生成：无可推导的产物目标';
 }

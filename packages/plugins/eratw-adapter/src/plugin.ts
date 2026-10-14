@@ -274,7 +274,7 @@ export function createEratwAdapterPlugin(): Plugin {
       const compileKojo: KojoCompiler = (source, label) => {
         const sugar = ctx.tryInject<SugarTranspileService>(WellKnownServices.SugarTranspile);
         if (!sugar) {
-          throw new Error(`「${label}」需要语法糖服务（kojo-sugar 插件未启用），无法转成 .ERB`);
+          throw new Error(`「${label}」需要 .kojo 转译服务（kojo-sugar 插件未启用），无法转成 .ERB`);
         }
         return sugar.compileToBytes(source, undefined, label);
       };

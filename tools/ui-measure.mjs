@@ -154,7 +154,7 @@ await sleep(700);
 await click('.tree-file', '.ERB');
 await waitFor(`document.querySelectorAll('.view-line').length > 0`);
 await sleep(1500);
-await snap('04-打开ERB糖视图');
+await snap('04-打开ERB的.kojo预览');
 
 await ev(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'p',ctrlKey:true,bubbles:true}))`);
 await sleep(900);

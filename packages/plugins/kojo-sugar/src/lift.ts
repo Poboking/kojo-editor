@@ -515,7 +515,7 @@ function structuralSkip(
     if (UNSUPPORTED_FLOW.has(s.kind)) {
       return {
         reason: 'unsupported-control-flow',
-        message: `第 ${s.line} 行的 ${s.kind} 不在糖的覆盖范围内（糖 v1 不做循环与 TRY 系），整块保留为原生写法。`,
+        message: `第 ${s.line} 行的 ${s.kind} 不在 .kojo 的覆盖范围内（.kojo v1 不做循环与 TRY 系），整块保留为原生写法。`,
       };
     }
   }
@@ -524,13 +524,13 @@ function structuralSkip(
     if (leadingWord(c) === 'GOTO' || c.startsWith('$')) {
       return {
         reason: 'label-or-goto',
-        message: `第 ${i} 行含标签 / GOTO——糖的产物不生成标签，无法逐字节还原。`,
+        message: `第 ${i} 行含标签 / GOTO——.kojo 的产物不生成标签，无法逐字节还原。`,
       };
     }
     if (c.startsWith('#') || c.startsWith('@')) {
       return {
         reason: 'macro-or-directive',
-        message: `第 ${i} 行是预处理 / 函数声明，不属于可升糖的语句区。`,
+        message: `第 ${i} 行是预处理 / 函数声明，不属于可转成 .kojo 的语句区。`,
       };
     }
   }
@@ -624,7 +624,7 @@ function tryLiftIf(
       fromLine,
       toLine,
       'mixed-domain-line',
-      `第 ${fromLine}–${toLine} 行的块体无法构成一致的糖节点（文本域与逻辑域混行）。`,
+      `第 ${fromLine}–${toLine} 行的块体无法构成一致的 .kojo 写法（文本域与逻辑域混行）。`,
     );
     return;
   }
@@ -641,7 +641,7 @@ function tryLiftIf(
       toLine,
       verdict.diag.length > 0 ? 'transpile-error' : 'roundtrip-mismatch',
       verdict.diag.length > 0
-        ? `第 ${fromLine}–${toLine} 行生成的糖片段未通过转译（${verdict.diag[0]!.message}）。`
+        ? `第 ${fromLine}–${toLine} 行生成的 .kojo 文本未通过转译（${verdict.diag[0]!.message}）。`
         : `第 ${fromLine}–${toLine} 行看起来像「如果」块，但转译回来的文本与原文本不一致（差一字即不算，宁可漏报）。`,
     );
     return;
@@ -780,7 +780,7 @@ function tryLiftWhen(
       fromLine,
       toLine,
       'unparsable-condition',
-      `第 ${fromLine} 行的分派表达式无法解析，无法回写成糖的「当」表达式。`,
+      `第 ${fromLine} 行的分派表达式无法解析，无法回写成 .kojo 的「当」表达式。`,
     );
     return;
   }
@@ -798,7 +798,7 @@ function tryLiftWhen(
       fromLine,
       toLine,
       'mixed-domain-line',
-      `第 ${fromLine}–${toLine} 行的分派块体无法构成一致的糖节点（文本域与逻辑域混行）。`,
+      `第 ${fromLine}–${toLine} 行的分派块体无法构成一致的 .kojo 写法（文本域与逻辑域混行）。`,
     );
     return;
   }
@@ -815,7 +815,7 @@ function tryLiftWhen(
       toLine,
       verdict.diag.length > 0 ? 'transpile-error' : 'roundtrip-mismatch',
       verdict.diag.length > 0
-        ? `第 ${actualFrom}–${toLine} 行生成的糖片段未通过转译（${verdict.diag[0]!.message}）。`
+        ? `第 ${actualFrom}–${toLine} 行生成的 .kojo 文本未通过转译（${verdict.diag[0]!.message}）。`
         : `第 ${actualFrom}–${toLine} 行看起来像分派块，但转译回来的文本与原文本不一致（差一字即不算，宁可漏报）。`,
     );
     return;
@@ -1129,7 +1129,7 @@ function liftPrintLines(
           fromLine: lineNo,
           toLine: lineNo,
           reason: 'unsupported-print-variant',
-          message: `第 ${lineNo} 行的 ${leadingWord(content)} 没有糖形态（糖恒产出 PRINTFORM{W/L/DW/DL}）。`,
+          message: `第 ${lineNo} 行的 ${leadingWord(content)} 没有对应的 .kojo 写法（.kojo 恒产出 PRINTFORM{W/L/DW/DL}）。`,
         });
       }
       continue;
@@ -1142,7 +1142,7 @@ function liftPrintLines(
         fromLine: lineNo,
         toLine: lineNo,
         reason: 'unsupported-print-variant',
-        message: `第 ${lineNo} 行的 ${word} 没有糖形态（不换行 / 非 FORM 系不在糖的覆盖范围内）。`,
+        message: `第 ${lineNo} 行的 ${word} 没有对应的 .kojo 写法（不换行 / 非 FORM 系不在 .kojo 的覆盖范围内）。`,
       });
       continue;
     }
@@ -1153,7 +1153,7 @@ function liftPrintLines(
         fromLine: lineNo,
         toLine: lineNo,
         reason: 'not-covered',
-        message: `第 ${lineNo} 行含行内条件 \\@…\\@，本版不做这类升糖。`,
+        message: `第 ${lineNo} 行含行内条件 \\@…\\@，本版不做这类转换。`,
       });
       continue;
     }
@@ -1167,7 +1167,7 @@ function liftPrintLines(
         reason: verdict.diag.length > 0 ? 'transpile-error' : 'roundtrip-mismatch',
         message:
           verdict.diag.length > 0
-            ? `第 ${lineNo} 行生成的糖片段未通过转译（${verdict.diag[0]!.message}）。`
+            ? `第 ${lineNo} 行生成的 .kojo 文本未通过转译（${verdict.diag[0]!.message}）。`
             : `第 ${lineNo} 行看起来像文本行，但转译回来的文本与原文本不一致（差一字即不算，宁可漏报）。`,
       });
       continue;
@@ -1181,7 +1181,7 @@ function liftPrintLines(
       confidence: 'verified',
       narrationColor: verdict.narrationColor,
       roundTrip: { verified: true, originalText: original, generatedText: verdict.generatedText },
-      reason: `第 ${lineNo} 行可改写为糖文本行（引号 / 「续」自动决定颜色与等待，不必再挑 PRINTFORM 变体）。`,
+      reason: `第 ${lineNo} 行可改写为 .kojo 文本行（引号 / 「续」自动决定颜色与等待，不必再挑 PRINTFORM 变体）。`,
     });
     consumed.add(lineNo);
   }
@@ -1257,9 +1257,9 @@ function liftAliases(
       toLine: occurrences[occurrences.length - 1]!,
       reason: 'not-covered',
       message:
-        `变量 ${ref} 在本文件中出现 ${occurrences.length} 次，写糖时值得起个别名；` +
+        `变量 ${ref} 在本文件中出现 ${occurrences.length} 次，写 .kojo 时值得起个别名；` +
         `但它在本文件里全是**原生 ERB 形态**（\`%…%\` 插值 / 全大写直通行），` +
-        `糖层的别名替换不介入这些位置，无法自证「改了别名产物一字不变」——` +
+        `.kojo 的别名替换不介入这些位置，无法自证「改了别名产物一字不变」——` +
         `按「宁可漏报」不做候选。`,
     });
   }

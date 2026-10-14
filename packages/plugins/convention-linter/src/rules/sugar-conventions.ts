@@ -384,7 +384,7 @@ export const SUGAR_STATIC_CONVENTIONS_RULE_ID = 'sugar.static-conventions';
 export const sugarStaticConventionsRule: ConventionRule = {
   id: SUGAR_STATIC_CONVENTIONS_RULE_ID,
   description:
-    '语法糖侧静态约定（规范 §8 子集）：`续` 标记写在引号内、每时机多个「选项」块、表达式 `如果`/`当` 缺「否则」、只读别名作赋值左值',
+    '.kojo 侧静态约定（规范 §8 子集）：`续` 标记写在引号内、每时机多个「选项」块、表达式 `如果`/`当` 缺「否则」、只读别名作赋值左值',
   severity: 'error',
   source: 'docs/SYNTAX-SUGAR-SURFACE-SPEC.md §3.3 / §3.7 / §3.5 / §3.6 / §5.0 / §8',
   async check(ctx): Promise<ConventionIssue[]> {

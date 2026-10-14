@@ -38,7 +38,7 @@ describe('教程内容（E6）', () => {
     expect(TUTORIALS.kojo).toBe(KOJO_TUTORIAL);
     expect(SUGAR_TUTORIAL.id).toBe('sugar');
     expect(KOJO_TUTORIAL.id).toBe('kojo');
-    expect(SUGAR_TUTORIAL.title).toBe('语法糖教程');
+    expect(SUGAR_TUTORIAL.title).toBe('.kojo 语言教程');
     expect(KOJO_TUTORIAL.title).toBe('口上教程');
     expect(SUGAR_TUTORIAL.lead.length).toBeGreaterThan(0);
     expect(KOJO_TUTORIAL.lead.length).toBeGreaterThan(0);
@@ -66,7 +66,7 @@ describe('教程内容（E6）', () => {
     }
   });
 
-  it('语法糖教程：样例 ≥ 24（每种写法都要有对照实例；E12 覆盖面重校后的底线）', () => {
+  it('.kojo 语言教程：样例 ≥ 24（每种写法都要有对照实例；E12 覆盖面重校后的底线）', () => {
     const samples = SUGAR_TUTORIAL.sections.flatMap((s) => s.samples ?? []);
     expect(samples.length).toBeGreaterThanOrEqual(24);
     for (const sample of samples) expect(sample.kojo.trim().length).toBeGreaterThan(0);
@@ -76,7 +76,7 @@ describe('教程内容（E6）', () => {
    * 覆盖面底线（E12）：教程声称"每种写法都摊开"，那这几样现行实现里的写法就必须在场。
    * 钉**出现**而不是钉表述——表述归文风纪律管，漏了某项能力才是这里要抓的。
    */
-  it('语法糖教程覆盖现行实现的全部写法面（含 HK-11 查表与 HK-12 五钩子）', () => {
+  it('.kojo 语言教程覆盖现行实现的全部写法面（含 HK-11 查表与 HK-12 五钩子）', () => {
     const text = tutorialText(SUGAR_TUTORIAL);
     for (const surface of [
       '选项', // §3.7 选项块
@@ -88,7 +88,7 @@ describe('教程内容（E6）', () => {
       '别名', // §3.1 / §3.8
       '空行', // §3.3 v1.4
     ]) {
-      expect(text, `语法糖教程漏了写法面：${surface}`).toContain(surface);
+      expect(text, `.kojo 语言教程漏了写法面：${surface}`).toContain(surface);
     }
   });
 
@@ -96,9 +96,9 @@ describe('教程内容（E6）', () => {
    * 已封存的三件不许出现在教程里（用户 2026-10-13 令：只留设置页一个总开关）。
    * 教程是给零基础作者的第一个信息源，提一件"其实看不见"的功能等于埋一个坑。
    */
-  it('两个教程都不提已封存的三件（糖视图 / 糖预览 / 归档浏览器）', () => {
+  it('两个教程都不提已封存的三件（.kojo 预览 / .kojo 转译检查 / 归档浏览器）', () => {
     const all = tutorialText(SUGAR_TUTORIAL) + tutorialText(KOJO_TUTORIAL);
-    for (const sealed of ['糖视图', '语法糖视图', '糖预览', '归档浏览器']) {
+    for (const sealed of ['.kojo 预览', '.kojo 转译检查', '归档浏览器', '糖视图', '语法糖视图', '糖预览']) {
       expect(all, `教程里出现了已封存功能：${sealed}`).not.toContain(sealed);
     }
   });

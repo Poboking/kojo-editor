@@ -163,9 +163,9 @@ export type VerdictDegrade = 'no-project' | 'not-kojo' | 'reading' | 'read-error
 export function degradeText(d: VerdictDegrade): string {
   switch (d) {
     case 'no-project':
-      return '未打开 .kojo 文件（从左侧选择糖源开始编辑）';
+      return '未打开 .kojo 文件（从左侧选一份开始编辑）';
     case 'not-kojo':
-      return '当前文件不是 .kojo 糖源（判定只作用于语法糖表层文件）';
+      return '当前文件不是 .kojo（校验只对 .kojo 文件生效）';
     case 'reading':
       return '读取中…';
     case 'read-error':

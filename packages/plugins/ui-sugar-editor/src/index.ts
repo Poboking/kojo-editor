@@ -75,7 +75,7 @@ export function createUiSugarEditorPlugin(): Plugin {
 
       ctx.slots.register('ui.editor.decorator', {
         id: 'sugar-diagnostics',
-        title: '语法糖诊断波浪线',
+        title: '.kojo 诊断波浪线',
         order: 10,
         decorate(file): ReturnType<typeof diagnosticDecorations> {
           if (!isKojoFile(file.path)) return [];
@@ -96,7 +96,7 @@ export function createUiSugarEditorPlugin(): Plugin {
       //（逻辑在 save-handler.ts，纯编排；转译/编译与落盘闸门全在既有链路）。
       ctx.slots.register('ui.editor.saveHandler', {
         id: 'sugar-save',
-        title: '语法糖保存（转译 + 编译落盘）',
+        title: '.kojo 保存（转译 + 编译落盘）',
         order: 10,
         matches: (path) => isKojoFile(path),
         save: (request) => performSugarSave({ sugar, io }, request),
@@ -163,7 +163,7 @@ export function createUiSugarEditorPlugin(): Plugin {
             createElement(
               'div',
               { className: 'sv-toolbar' },
-              createElement('span', { className: 'dim' }, '糖判定（转译诊断；只读）'),
+              createElement('span', { className: 'dim' }, '.kojo 校验（转译诊断；只读）'),
               createElement(
                 'button',
                 { className: 'ghost small', onClick: () => setNonce((n) => n + 1), disabled: !isKojoFile(filePath) },
@@ -241,7 +241,7 @@ export function createUiSugarEditorPlugin(): Plugin {
 
       ctx.slots.register('ui.panel', {
         id: 'sugar-verdict',
-        title: '糖判定',
+        title: '.kojo 校验',
         icon: 'target',
         order: 76,
         // UI 重设计批 P1：诊断性质 → 底部区 tab（定稿 §四）

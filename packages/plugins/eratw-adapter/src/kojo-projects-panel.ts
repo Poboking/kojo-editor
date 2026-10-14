@@ -754,11 +754,11 @@ export function createKojoProjectsPanel(
         'button',
         {
           className: 'kp-tutorial-btn',
-          title: '语法糖的每一种写法，以及它编译成的 ERB（每种写法都有一条对照样例）',
+          title: '.kojo 语言的每一种写法，以及它编译成的 ERB（每种写法都有一条对照样例）',
           onClick: () => deps.openTutorial('sugar'),
         },
         ic('wand', 14, '✦'),
-        h('span', { className: 'kp-tutorial-name' }, '语法糖教程'),
+        h('span', { className: 'kp-tutorial-name' }, '.kojo 语言教程'),
       ),
       h(
         'button',

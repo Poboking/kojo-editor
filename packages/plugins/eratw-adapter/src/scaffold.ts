@@ -225,9 +225,9 @@ export function buildFaceStub(spec: CoreFaceSpec, opts: KojoScaffoldOptions, fac
   if (faceCase) {
     lines.push(';');
     lines.push(`; 【库内现成案例】照抄 ${faceCase.source}`);
-    lines.push(`; 的 ${faceCase.fn}，已用本工具转成语法糖写法，台词简化为类目占位。`);
+    lines.push(`; 的 ${faceCase.fn}，已用本工具转成 .kojo 写法，台词简化为类目占位。`);
     for (const caseLine of faceCase.lines) lines.push(caseLine.length > 0 ? `; ${caseLine}` : ';');
-    lines.push('; 上面的编号与角色号来自那份现成口上，照你自己要写的场合改；写法详见「语法糖教程」。');
+    lines.push('; 上面的编号与角色号来自那份现成口上，照你自己要写的场合改；写法详见「.kojo 语言教程」。');
   }
   lines.push(';');
   lines.push('; —— 脚手架生成的空壳文件：只有注释，没有活函数 ——');
@@ -255,10 +255,10 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
   lines.push('');
   lines.push(
     '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
-      '扩展名是 `.kojo`：语法糖与原始 ERB 写法可以写在同一个文件里，' +
+      '扩展名是 `.kojo`：.kojo 写法与原始 ERB 写法可以写在同一个文件里，' +
       '导出或部署时会自动转译成游戏认得的 `.ERB`，工作区里始终只有 `.kojo` 这一份源。',
   );
-  lines.push('部分面文件顶部带一份从口上库现成案例转写的注释示例（语法糖写法，台词简化为类目占位）。');
+  lines.push('部分面文件顶部带一份从口上库现成案例转写的注释示例（.kojo 写法，台词简化为类目占位）。');
   lines.push('');
   for (const spec of CORE_FACES) {
     lines.push(`- \`${spec.stem}${FACE_STUB_EXT}\` — ${spec.blurb}`);

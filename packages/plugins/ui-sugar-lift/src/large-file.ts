@@ -55,7 +55,7 @@ export function liftScanBudget(lineCount: number | undefined, maxLines: number =
   if (lineCount === undefined || lineCount <= maxLines) return { skip: false, reason: null };
   return {
     skip: true,
-    reason: `该文件 ${lineCount} 行，超过 ${maxLines} 行上限——已跳过整篇升糖扫描以保证打开与滚动流畅。要看候选请点「重新扫描」（按需执行，会有一瞬卡顿）。`,
+    reason: `该文件 ${lineCount} 行，超过 ${maxLines} 行上限——已跳过整篇 .kojo 候选扫描以保证打开与滚动流畅。要看候选请点「重新扫描」（按需执行，会有一瞬卡顿）。`,
   };
 }
 

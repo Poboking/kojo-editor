@@ -70,5 +70,5 @@ export function actionTitle(candidate: SugarLiftCandidate): string {
         : candidate.kind === 'selectcase'
           ? '分派块'
           : '片段';
-  return `改为语法糖写法（${what}·可 Ctrl+Z 撤回）`;
+  return `转成 .kojo 写法（${what}·可 Ctrl+Z 撤回）`;
 }

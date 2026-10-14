@@ -1107,7 +1107,7 @@ export function ShellLayout(props: Props): ReactElement {
                   <span>
                     显示已封存功能
                     <span className="settings-hint">
-                      语法糖视图（现效果）· 糖预览 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。
+                      .kojo 预览（现效果）· .kojo 转译检查 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。
                     </span>
                   </span>
                 </label>
@@ -1124,7 +1124,7 @@ export function ShellLayout(props: Props): ReactElement {
                       onChange={(e) => applySugarViewPref(e.target.checked)}
                     />
                     <span>
-                      语法糖视图
+                      .kojo 预览
                       <span className="settings-hint">
                         把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
                         只改显示、不改动文件。快捷键 Ctrl+Alt+T

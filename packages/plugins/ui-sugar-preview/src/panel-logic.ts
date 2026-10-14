@@ -338,7 +338,7 @@ export type PreviewDegrade =
 const DEGRADE_TEXT: Record<PreviewDegrade, string> = {
   'no-project': '打开项目并选择一个 .kojo 文件后可用',
   'no-file': '打开一个 .kojo 文件后可用',
-  'not-kojo': '当前文件不是 .kojo（糖预览只对表层语法源码有意义）',
+  'not-kojo': '当前文件不是 .kojo（转译检查只对 .kojo 文件有意义）',
   reading: '读取源文件中…',
   previewing: '生成预览中…',
   'read-error': '读取源文件失败',

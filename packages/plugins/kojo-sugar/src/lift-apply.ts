@@ -147,7 +147,7 @@ function isReplaceableRange(c: SugarLiftCandidate, lineCount: number): boolean {
 export function applyLift(request: SugarLiftApplyRequest): SugarLiftApplyPreview {
   const { source } = request;
   if (typeof source !== 'string') {
-    throw new SugarApplyError('升糖应用的输入必须是字符串（.kojo 源文本）', { targetPath: '' });
+    throw new SugarApplyError('转成 .kojo 的输入必须是字符串（.kojo 源文本）', { targetPath: '' });
   }
   const candidates = (request.candidates ?? []).filter((c) => c.kind !== 'alias');
   const lines = splitLines(source);
@@ -255,7 +255,7 @@ export async function applyLiftToFile(
     if (err instanceof SugarApplyError) {
       throw new SugarApplyError(err.message, { targetPath: sourcePath, backupPath: null });
     }
-    throw new SugarApplyError(`升糖应用失败：${err instanceof Error ? err.message : String(err)}`, {
+    throw new SugarApplyError(`转成 .kojo 失败：${err instanceof Error ? err.message : String(err)}`, {
       targetPath: sourcePath,
       backupPath: null,
     });

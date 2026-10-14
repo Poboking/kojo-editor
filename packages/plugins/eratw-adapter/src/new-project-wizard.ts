@@ -330,7 +330,7 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           h('code', null, dirNamePreview || '—')),
         h('div', { className: 'dim' },
           dirNamePreview
-            ? `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳（.kojo，糖与原生 ERB 都能写）${licenseProducesFile(license) ? ' + LICENSE' : ''}；不含四件套，也不含活函数`
+            ? `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳（.kojo，可写 .kojo 也可写原生 ERB）${licenseProducesFile(license) ? ' + LICENSE' : ''}；不含四件套，也不含活函数`
             : '作品名 / 版本 / 角色名不得为空或仅含非法字符')),
         // 后果提前说到选它的那一刻，而不是等作者点「部署」才吃一个拒绝（看板 HK-9）。
         // class 用既有的 `.wizard-warn`（amber）——部署/导入/新建文件三家向导同一口径，

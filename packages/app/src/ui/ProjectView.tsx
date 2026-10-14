@@ -142,7 +142,7 @@ export function ProjectView({
               // 标题跟其余命令同形（裸动宾、无括号，见「切换写作模式」），术语跟工具条同词
               // （「语法糖视图」，不叫"糖视图"——命令面板是作者找到这功能的入口，名字必须一致）。
               id: 'workbench.toggleSugarView',
-              title: '切换语法糖视图',
+              title: '切换 .kojo 预览',
               keybinding: 'ctrl+alt+t',
               run: () => {
                 kernel.bus.emit('editor.sugarView.set', {});

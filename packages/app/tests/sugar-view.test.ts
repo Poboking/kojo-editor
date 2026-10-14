@@ -76,10 +76,10 @@ describe('糖视图 / 偏好', () => {
   });
 });
 
-describe('糖视图 / 摘要文案', () => {
+describe('.kojo 预览 / 摘要文案', () => {
   it('只报已覆盖的行数（未覆盖含注释与空行，加总会误导）', () => {
-    expect(sugarSummary(123)).toBe('语法糖 123 行');
-    expect(sugarSummary(0)).toBe('语法糖 0 行');
+    expect(sugarSummary(123)).toBe('.kojo 显示 123 行');
+    expect(sugarSummary(0)).toBe('.kojo 显示 0 行');
   });
 
   it('面向作者的读数不含实现术语（用户反馈 5：别拿内部说法当文案）', () => {
@@ -100,22 +100,22 @@ describe('糖视图 / 摘要文案', () => {
  *
  * 2026-10-13 试用反馈批给这条门加了**最高优先级否决轴**：封存总闸（`sealed.ts`）。
  */
-describe('sugarViewAllowed（糖视图可用门 = 不可编辑态的派生）', () => {
+describe('sugarViewAllowed（.kojo 预览可用门 = 不可编辑态的派生）', () => {
   it('游戏目录 ERB、未解锁 → 唯一放行的组合', () => {
     expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: false, sealed: false })).toBe(true);
   });
 
-  it('.kojo 不放糖视图（本身就是糖，再投影一遍没有意义）', () => {
+  it('.kojo 不开预览（本身就是 .kojo，再投影一遍没有意义）', () => {
     expect(sugarViewAllowed({ isErbLike: false, inWorkspace: false, unlocked: false, sealed: false })).toBe(false);
   });
 
-  it('工作区 ERB 不放糖视图（轴一：恒可编辑 ⟹ 原文必须看得见）', () => {
+  it('工作区 ERB 不开 .kojo 预览（轴一：恒可编辑 ⟹ 原文必须看得见）', () => {
     expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: false, sealed: false })).toBe(false);
     // 解锁态不影响结论（工作区根本走不到解锁这条路）
     expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: true, sealed: false })).toBe(false);
   });
 
-  it('游戏目录 ERB 一旦解锁 → 该份糖视图禁用（轴二与互斥规则一致）', () => {
+  it('游戏目录 ERB 一旦解锁 → 该份 .kojo 预览禁用（轴二与互斥规则一致）', () => {
     expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: true, sealed: false })).toBe(false);
   });
 

@@ -432,10 +432,10 @@ async function main() {
         if (un) return ['unlocked', (un.textContent ?? '').trim()];
         return ['editable', ''];
       })()`);
-    // 首次打开游戏目录 ERB 会问一次「要开启语法糖视图吗」——那也是一朵 `.modal`。
+    // 首次打开游戏目录 ERB 会问一次「要开启 .kojo 预览吗」——那也是一朵 `.modal`。
     // 探针要的是**原文可编辑**，所以先答「不用」把局面清干净，免得后面等解锁弹窗时等错一朵。
     await cdp.evalJs(`(() => {
-      const m = document.querySelector('.modal[aria-label="语法糖视图"]');
+      const m = document.querySelector('.modal[aria-label=".kojo 预览"]');
       if (!m) return 'no-intro';
       const b = [...m.querySelectorAll('.modal-actions button')].find(e => e.textContent.trim() === '不用');
       if (b) b.click();

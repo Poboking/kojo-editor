@@ -148,7 +148,7 @@ export function createUiSugarPreviewPlugin(): Plugin {
         const head = createElement(
           'div',
           { className: 'pv-toolbar' },
-          createElement('span', { className: 'dim' }, '糖预览（转译 + 源映射 + 诊断；只读）'),
+          createElement('span', { className: 'dim' }, '.kojo 转译检查（转译 + 源映射 + 诊断；只读）'),
           createElement(
             'select',
             {
@@ -213,7 +213,7 @@ export function createUiSugarPreviewPlugin(): Plugin {
 
       ctx.slots.register('ui.panel', {
         id: 'sugar-preview',
-        title: '糖预览',
+        title: '.kojo 转译检查',
         icon: 'preview',
         order: 74,
         // UI 重设计批 P1：写糖时的对照视图 → 副侧栏（VSCode Markdown 预览位，定稿 §四）

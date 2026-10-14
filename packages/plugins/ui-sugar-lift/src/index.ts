@@ -78,7 +78,7 @@ export function createUiSugarLiftPlugin(): Plugin {
         if (warnedLarge.has(path)) return;
         if (warnedLarge.size > 200) warnedLarge.clear();
         warnedLarge.add(path);
-        ctx.log.warn(`已跳过整篇升糖扫描（${path}）：${reason ?? ''}`);
+        ctx.log.warn(`已跳过整篇 .kojo 候选扫描（${path}）：${reason ?? ''}`);
       };
 
       const scan = (path: string, text: string): SugarLiftResult => {
@@ -87,7 +87,7 @@ export function createUiSugarLiftPlugin(): Plugin {
         try {
           result = lift.liftSuggest({ source: text, filePath: path });
         } catch (err: unknown) {
-          ctx.log.warn(`升糖扫描失败（${path}）：${err instanceof Error ? err.message : String(err)}`);
+          ctx.log.warn(`.kojo 候选扫描失败（${path}）：${err instanceof Error ? err.message : String(err)}`);
           result = { candidates: [], skipped: [], degraded: false };
         }
         memo = { path, text, result };
@@ -100,7 +100,7 @@ export function createUiSugarLiftPlugin(): Plugin {
         try {
           result = lift.liftProject({ source: text, filePath: path });
         } catch (err: unknown) {
-          ctx.log.warn(`糖投影失败（${path}）：${err instanceof Error ? err.message : String(err)}`);
+          ctx.log.warn(`.kojo 投影失败（${path}）：${err instanceof Error ? err.message : String(err)}`);
           result = { segments: [], stats: EMPTY_PROJECT_STATS };
         }
         projMemo = { path, text, result };
@@ -120,7 +120,7 @@ export function createUiSugarLiftPlugin(): Plugin {
           toLine: s.toLine,
           sugarText: s.sugarText,
           title: s.fromLine === s.toLine ? `第 ${s.fromLine} 行` : `第 ${s.fromLine}–${s.toLine} 行`,
-          reason: '语法糖投影：只读显示，不改动原文件',
+          reason: '.kojo 投影：只读显示，不改动原文件',
         }));
       };
 

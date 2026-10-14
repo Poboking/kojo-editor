@@ -92,7 +92,7 @@ describe.skipIf(!SMOKE_DIR)('教学样例 · 真实链路转译（teaching-full.
       'CALL HPH_PRINT', // 心形
       '\n\tPRINTFORMW\n', // 空行（v1.4）：裸指令、**不带尾随空格**
       'CASEELSE', // 当/随机的兜底
-      '; 语法糖教学样例', // 头部注释保留到产物最前（用户第 3 条）
+      '; .kojo 教学样例', // 头部注释保留到产物最前（用户第 3 条）
       '@MY_TOOL_FUNCTION', // 原生直通块
       '%CALLNAME:15%', // 角色别名展开
       '小露、小露', // 字符串字面量别名展开（裸文本，不带引号/括号）

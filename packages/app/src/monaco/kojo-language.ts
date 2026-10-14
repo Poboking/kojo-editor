@@ -74,7 +74,7 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
   monaco.languages.register({
     id: KOJO_LANGUAGE_ID,
     extensions: ['.kojo'],
-    aliases: ['kojo', '糖'],
+    aliases: ['kojo'],
   });
 
   monaco.languages.setMonarchTokensProvider(KOJO_LANGUAGE_ID, {
