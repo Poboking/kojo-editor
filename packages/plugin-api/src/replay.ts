@@ -49,6 +49,31 @@ export interface ReplayUnknown {
   message: string;
 }
 
+/**
+ * 未知的**可约性**划分（v1.0 HK-23；additive）——把「未知」按能否补上能力拆两类：
+ * - `irreducible`：真随机（引擎 `RAND` 伪变量，依赖运行期 RNG 状态，静态快照
+ *   无从还原）——**不可约**，不是能力缺陷；
+ * - `gap`：能力缺口（抽取 / 求值能力尚未覆盖，可随能力建设补齐）。
+ *
+ * 口径只认引擎级伪变量名（`RAND`），零游戏知识。
+ */
+export type ReplayUnknownReducibility = 'irreducible' | 'gap';
+
+/**
+ * 真随机伪变量名匹配：`RAND` 作为独立词出现在 message 中（形如
+ * `伪变量（运行期计算值）：RAND`）。词界护栏避免误伤 `RANDDATA` 等复合名。
+ */
+const IRREDUCIBLE_PSEUDO = /(^|[^0-9A-Za-z_])RAND([^0-9A-Za-z_]|$)/;
+
+/**
+ * 单条未知 → 可约性（纯函数）。仅 `pseudo` 码且 message 指向 `RAND` 伪变量者
+ * 判为不可约真随机；其余（含 `pseudo` 中的语言局部量 / 其它计算值）一律能力缺口。
+ */
+export function replayUnknownReducibility(unknown: ReplayUnknown): ReplayUnknownReducibility {
+  if (unknown.code === 'pseudo' && IRREDUCIBLE_PSEUDO.test(unknown.message)) return 'irreducible';
+  return 'gap';
+}
+
 /** 变量 / 表达式求值结果 */
 export type ReplayValue =
   | { kind: 'value'; value: number | string }
@@ -105,6 +130,67 @@ export interface FunctionReplay {
    * - `unknown`：全部 unknown（或函数无谓词时 total=0 → exact）。
    */
   confidence: 'exact' | 'partial' | 'unknown';
+}
+
+/**
+ * 回放可判定性的**两读**汇总（v1.0 HK-23；additive，不改 `FunctionReplay.stats`）。
+ *
+ * 口径（架构 §5.3「unknown 是能力边界的诚实呈现」的自然延伸）：把未知
+ * `unknown` 拆成「不可约真随机」`irreducible`（`RAND` 类，见
+ * `replayUnknownReducibility`）与「能力缺口」`gap`（可补），由此得两读——
+ * - **可判定率** = 1 − gap/predicates：剔除真随机后仍「非能力缺口」的比例，
+ *   与头条未知率**同分母**，历史水位（62.9→48.5→32.0）可直接比（其补数即
+ *   「剔除真随机后的未知率」）；
+ * - **能力覆盖率** = (predicates − unknown)/(predicates − irreducible)：
+ *   在「非真随机」的可判定空间里，现有求值能力实际覆盖的比例。
+ *
+ * 无谓词（`predicates = 0`）或无非真随机（`predicates = irreducible`）时返回 1
+ * （空集空洞地满足，与 `total = 0 → exact` 的既有约定一致）。
+ */
+export interface ReplayDeterminabilityReading {
+  /** 谓词总数（分母基线） */
+  predicates: number;
+  /** 未知谓词数 */
+  unknown: number;
+  /** 未知中「不可约真随机」（`RAND` 类）数 */
+  irreducible: number;
+  /** 未知中「能力缺口」（可补）数 = unknown − irreducible */
+  gap: number;
+  /** 可判定率 = 1 − gap/predicates */
+  determinableRate: number;
+  /** 能力覆盖率 = (predicates − unknown)/(predicates − irreducible) */
+  capabilityCoverage: number;
+}
+
+/**
+ * 聚合一组函数回放 → 两读汇总（纯函数）。`null` 条目跳过（与回放契约同形）。
+ * `unknown` / `irreducible` 逐谓词现算（不依赖 `stats` 自洽性，分母取 `stats.total`）。
+ */
+export function readReplayDeterminability(
+  replays: readonly (FunctionReplay | null)[],
+): ReplayDeterminabilityReading {
+  let predicates = 0;
+  let unknown = 0;
+  let irreducible = 0;
+  for (const r of replays) {
+    if (!r) continue;
+    predicates += r.stats.total;
+    for (const p of r.predicates) {
+      if (p.outcome.kind !== 'unknown') continue;
+      unknown++;
+      if (replayUnknownReducibility(p.outcome.unknown) === 'irreducible') irreducible++;
+    }
+  }
+  const gap = unknown - irreducible;
+  return {
+    predicates,
+    unknown,
+    irreducible,
+    gap,
+    determinableRate: predicates > 0 ? 1 - gap / predicates : 1,
+    capabilityCoverage:
+      predicates - irreducible > 0 ? (predicates - unknown) / (predicates - irreducible) : 1,
+  };
 }
 
 /** 分支链类别 */

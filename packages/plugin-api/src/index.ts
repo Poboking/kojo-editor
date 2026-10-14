@@ -88,6 +88,10 @@ export type {
   VariableRef,
 } from './conditions';
 
+export {
+  readReplayDeterminability,
+  replayUnknownReducibility,
+} from './replay';
 export type {
   BranchChainKind,
   BranchChainOutcome,
@@ -95,11 +99,13 @@ export type {
   PredicateReplay,
   ReplayCallContext,
   ReplayCallContextResolver,
+  ReplayDeterminabilityReading,
   ReplayFunctionOptions,
   ReplayOutcome,
   ReplayStateView,
   ReplayUnknown,
   ReplayUnknownCode,
+  ReplayUnknownReducibility,
   ReplayValue,
   StateReplayService,
 } from './replay';

@@ -16,7 +16,7 @@ import type {
   SugarLiftService,
   SugarTranspileService,
 } from '@kojo/plugin-api';
-import { WellKnownServices } from '@kojo/plugin-api';
+import { WellKnownServices, readReplayDeterminability } from '@kojo/plugin-api';
 import { createKernel, type Kernel } from '../src/kernel';
 import { NodeBridge } from './helpers/node-bridge';
 import { MemoryStorageBackend } from './helpers/memory-storage';
@@ -363,6 +363,10 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       }
       expect(predTotal).toBeGreaterThan(0);
       expect(hit + miss).toBeGreaterThan(0); // 至少按快照作出确定判定
+      // 两读口径（HK-23）：把未知拆成「不可约真随机」（pseudo 且 message 指向 RAND）
+      // 与「能力缺口」（可补）——可判定率 = 1 − 缺口/谓词（同分母、可比历史水位），
+      // 能力覆盖率 = 已判定/(谓词 − 真随机)。口径落点 `plugin-api/src/replay.ts`。
+      const reading = readReplayDeterminability(nonNull);
       // 守门：内联求值（口上域 #FUNCTION 纯助手顺序解释）与回放可求值伪变量应压低未知率
       // （第五批 62.9% → 第六批 48.5% → 第七批 32.0% → HK-19 实测 31.9%）
       expect(unknown / predTotal).toBeLessThan(0.34);
@@ -425,6 +429,9 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
         `[smoke] 状态回放：K49 函数 ${k49Fns.length} | 谓词 ${predTotal} ` +
           `(命中 ${hit} / 未命中 ${miss} / 未知 ${unknown}) | ` +
           `置信度 exact ${exact} / partial ${partial} / unknown ${allUnknown} | ` +
+          `未知拆分：不可约真随机（RAND）${reading.irreducible} / 能力缺口 ${reading.gap} | ` +
+          `可判定率 ${(reading.determinableRate * 100).toFixed(1)}% / ` +
+          `能力覆盖率 ${(reading.capabilityCoverage * 100).toFixed(1)}% | ` +
           `未知分类 ${[...unknownByCode.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(' ')} | ` +
           `DAY=${day.kind === 'value' ? day.value : '?'} 好感(CFLAG:2)=${favor.kind === 'value' ? favor.value : '?'}`,
       );
