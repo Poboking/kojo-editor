@@ -3997,6 +3997,110 @@ button.primary .hint {
   border: 1px solid rgba(255, 255, 255, 0.03);
   background: transparent;
 }
+/* 网格区 ←→ 详情区的拖拽分隔线（HK-14）：静息一条细线，悬停 / 拖拽中亮起
+   （与壳层 .resizer / .kp-splitter 同族；键盘不接——与壳层分栏把手同口径）。 */
+.cm-split {
+  flex: none;
+  height: 8px;
+  display: flex;
+  align-items: center;
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
+}
+.cm-split::after {
+  content: '';
+  width: 100%;
+  height: 1px;
+  background: var(--border);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.cm-split:hover::after,
+.cm-split.dragging::after {
+  background: var(--accent);
+}
+/* 行头两行：状态标签（主）+ 变量键（弱化等宽）——标签优先、键退居其后 */
+.cm-row-name {
+  display: block;
+}
+.cm-row-key {
+  display: block;
+  font-family: var(--font-mono);
+}
+/* 选中格：内侧描白环，与「有响应」的实心强调色区分，且不与全局焦点环（accent 外描边）打架 */
+.cm-cell.sel {
+  box-shadow: inset 0 0 0 1px var(--fg);
+}
+/* 焦点环：与壳层全局口径一致（1px accent、offset 1px）；同时把 .off 的淡出恢复，
+   使空白格被键盘导航聚焦时也看得清 */
+.cm-cell:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  opacity: 1;
+}
+/* 超出渲染上限的提示行：贴左，弱化 */
+.cm-more {
+  padding: 4px 2px;
+  font-size: var(--fs-0);
+}
+/* 详情：头行 + 命中函数列表（层级：状态键 > 时机/计数 > 函数名 > 比较 > 路径） */
+.cm-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.cm-detail-key {
+  font-weight: 600;
+  color: var(--fg);
+}
+.cm-detail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cm-detail-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: var(--fs-0);
+}
+.cm-detail-btn:hover {
+  background: var(--hover);
+  border-color: var(--border);
+}
+.cm-detail-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--fg);
+}
+.cm-detail-comps {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+}
+/* 路径/行号：右对齐、超长截断（完整值在按钮 title 里） */
+.cm-detail-loc {
+  flex: 0 0 auto;
+  margin-left: auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
 
 /* --------------------- 浮动面板（2026-10-14 UI 浮动批：非模态可移动浮窗） --------------------- */
 

@@ -18,8 +18,18 @@ import type {
   FamilyParseKind,
   StateDependency,
 } from '@kojo/plugin-api';
-import { FACE_ORDER, buildCharacterIndex, buildMatrix, faceLabel, instructionNoOfSlot } from '../src/matrix-logic';
-import type { CharacterEntry, ColumnDesc, FaceFunction } from '../src/matrix-logic';
+import {
+  DETAIL_MIN_H,
+  FACE_ORDER,
+  GRID_MIN_RESERVE,
+  buildCharacterIndex,
+  buildMatrix,
+  clampDetailHeight,
+  createMatrixMemo,
+  faceLabel,
+  instructionNoOfSlot,
+} from '../src/matrix-logic';
+import type { CharacterEntry, ColumnDesc, ConditionMatrix, FaceFunction } from '../src/matrix-logic';
 
 /* ------------------------------ 测试基建 ------------------------------ */
 
@@ -319,5 +329,103 @@ describe('buildMatrix · columnOf 细分指令列', () => {
     expect(row.cells['EVENT']).toBeUndefined();
     expect(row.totalCount).toBe(2);
     expect(m.depsFunctions).toBe(2);
+  });
+
+  it('columnOf 每个函数只解析一次（第一轮缓存列键、第二轮取用，不重复解析）', () => {
+    let calls = 0;
+    const counting = (f: FaceFunction): ColumnDesc => {
+      calls++;
+      return columnOf(f);
+    };
+    buildMatrix(entry, depsOf, () => null, undefined, counting);
+    expect(calls).toBe(entry.functions.length);
+  });
+});
+
+/* ------------------------------ createMatrixMemo ------------------------------ */
+
+describe('createMatrixMemo', () => {
+  const blank = (): ConditionMatrix => ({
+    charaNo: 1,
+    columns: [],
+    groups: [],
+    rows: [],
+    totalFunctions: 0,
+    depsFunctions: 0,
+  });
+
+  it('同 key 命中缓存：build 只跑一次，返回同一实例', () => {
+    const memo = createMatrixMemo();
+    let calls = 0;
+    const build = (): ConditionMatrix => {
+      calls++;
+      return blank();
+    };
+    const a = memo.resolve('K1|0|ad', build);
+    const b = memo.resolve('K1|0|ad', build);
+    expect(calls).toBe(1);
+    expect(a).toBe(b);
+  });
+
+  it('换 key（依赖版本变化）→ 重建；clear 后再用也重建', () => {
+    const memo = createMatrixMemo();
+    let calls = 0;
+    const build = (): ConditionMatrix => {
+      calls++;
+      return blank();
+    };
+    memo.resolve('K1|0|ad', build);
+    expect(calls).toBe(1);
+    const second = memo.resolve('K1|1|ad', build); // epoch 变 → 新 key
+    expect(calls).toBe(2);
+    memo.resolve('K1|1|ad', build); // 再命中
+    expect(calls).toBe(2);
+    expect(memo.resolve('K1|1|ad', build)).toBe(second);
+    memo.clear();
+    memo.resolve('K1|1|ad', build);
+    expect(calls).toBe(3);
+  });
+
+  it('容量上限：超限淘汰最旧条目（重访最旧 key 会重建）', () => {
+    const memo = createMatrixMemo(2);
+    let calls = 0;
+    const build = (): ConditionMatrix => {
+      calls++;
+      return blank();
+    };
+    memo.resolve('A', build);
+    memo.resolve('B', build);
+    memo.resolve('C', build); // 淘汰 A
+    expect(calls).toBe(3);
+    memo.resolve('B', build); // B、C 仍在
+    memo.resolve('C', build);
+    expect(calls).toBe(3);
+    memo.resolve('A', build); // A 已被淘汰 → 重建
+    expect(calls).toBe(4);
+  });
+});
+
+/* ------------------------------ clampDetailHeight（分隔线钳制） ------------------------------ */
+
+describe('clampDetailHeight', () => {
+  it('面板高度未知（≤0 / NaN）→ 钳到下限', () => {
+    expect(clampDetailHeight(300, 0)).toBe(DETAIL_MIN_H);
+    expect(clampDetailHeight(300, -10)).toBe(DETAIL_MIN_H);
+    expect(clampDetailHeight(300, Number.NaN)).toBe(DETAIL_MIN_H);
+    expect(clampDetailHeight(0, 0)).toBe(DETAIL_MIN_H);
+  });
+
+  it('常规面板：落在 [下限, 面板高 - 网格保留] 内', () => {
+    const panel = 680; // 悬浮大窗
+    const max = panel - GRID_MIN_RESERVE;
+    expect(clampDetailHeight(300, panel)).toBe(300);
+    expect(clampDetailHeight(10, panel)).toBe(DETAIL_MIN_H); // 拖太小 → 兜底
+    expect(clampDetailHeight(9999, panel)).toBe(max); // 拖太大 → 上限
+  });
+
+  it('面板过矮（上限被下限兜住）→ 两区都不被拖没，一律回落下限', () => {
+    const panel = 120; // < DETAIL_MIN_H + GRID_MIN_RESERVE
+    expect(clampDetailHeight(200, panel)).toBe(DETAIL_MIN_H);
+    expect(clampDetailHeight(0, panel)).toBe(DETAIL_MIN_H);
   });
 });

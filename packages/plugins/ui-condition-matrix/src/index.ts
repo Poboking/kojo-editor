@@ -18,7 +18,7 @@
  * 呈现层只做「浏览 + 跳转意图」：点击函数 → `editor.revealLocation`（宿主消费）。
  */
 
-import { createElement, useEffect, useState, type ReactNode } from 'react';
+import { createElement, memo, useCallback, useDeferredValue, useEffect, useRef, useState, type ReactNode } from 'react';
 import type {
   ConditionExtractorService,
   ErbIndex,
@@ -37,6 +37,9 @@ import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
   buildCharacterIndex,
   buildMatrix,
+  clampDetailHeight,
+  createMatrixMemo,
+  DETAIL_MIN_H,
   faceLabel,
   instructionNoOfSlot,
   type CharacterIndex,
@@ -44,6 +47,8 @@ import {
   type FaceFunction,
   type MatrixCell,
   type MatrixCellFunction,
+  type MatrixColumnGroup,
+  type MatrixRow,
 } from './matrix-logic';
 
 /** 矩阵行渲染上限（防 DOM 爆炸；过滤后仍受此限） */
@@ -66,6 +71,115 @@ function cellComparisons(cell: MatrixCell): string {
   for (const f of cell.functions) for (const c of f.comparisons) seen.add(c);
   return seen.size > 0 ? [...seen].join('、') : '无';
 }
+
+/** 跳转意图载荷（`editor.revealLocation` 消费） */
+interface RevealTarget {
+  readonly filePath: string;
+  readonly line: number;
+  readonly source: string;
+}
+
+/** 分隔线指针事件的最小形状（React 合成事件满足它；插件 tsconfig 无 DOM lib） */
+type SplitterPointer = {
+  pointerId: number;
+  clientY: number;
+  preventDefault(): void;
+  currentTarget: { setPointerCapture(pointerId: number): void };
+};
+
+/** 网格键盘事件的最小形状 */
+type GridKeyEvent = {
+  key: string;
+  target: unknown;
+  preventDefault(): void;
+};
+
+/* --------------------------- 行视图（memo：选中/折叠只重渲受影响行） --------------------------- */
+
+interface MatrixRowViewProps {
+  readonly row: MatrixRow;
+  readonly groups: readonly MatrixColumnGroup[];
+  readonly foldedFaces: ReadonlySet<string>;
+  /** 本行含选中格则为其列键，否则 null（非选中行传同一原始值，memo 得以整表跳过重渲） */
+  readonly selectedColumn: string | null;
+  readonly rowIndex: number;
+  readonly onCell: (rowKey: string, columnKey: string, target: RevealTarget | null) => void;
+}
+
+/**
+ * 单行渲染（`memo`）：选中态只在「选中行 ↔ 取消选中行」两行间变化，其余行 props 不变 → 跳过重渲。
+ * 格子带 `data-r`/`data-c`（渲染序索引）供网格方向键导航定位。
+ */
+const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): ReactNode {
+  const { row, groups, foldedFaces, selectedColumn, rowIndex, onCell } = props;
+  const cells: ReactNode[] = [];
+  let c = 0;
+  for (const group of groups) {
+    const folded = foldedFaces.has(group.face);
+    for (const col of group.columns) {
+      if (folded) {
+        // 折叠组：留占位空 td，维持与表头的列对齐
+        cells.push(createElement('td', { key: col.key, className: 'cm-gap' }));
+        continue;
+      }
+      const cell = row.cells[col.key];
+      const dataC = c++;
+      if (!cell || !cell.present) {
+        // 空白格：这个时机还没有针对该状态写过的反应（点击不导航）
+        cells.push(
+          createElement(
+            'td',
+            { key: col.key },
+            createElement(
+              'button',
+              { className: 'cm-cell off', title: '无', 'data-r': rowIndex, 'data-c': dataC },
+              '·',
+            ),
+          ),
+        );
+        continue;
+      }
+      const isSel = selectedColumn === col.key;
+      cells.push(
+        createElement(
+          'td',
+          { key: col.key },
+          createElement(
+            'button',
+            {
+              className: 'cm-cell on' + (isSel ? ' sel' : ''),
+              title: cellComparisons(cell),
+              'data-r': rowIndex,
+              'data-c': dataC,
+              onClick: () => {
+                const earliest = orderByLine(cell.functions)[0];
+                onCell(
+                  row.key,
+                  col.key,
+                  earliest
+                    ? { filePath: earliest.filePath, line: earliest.startLine, source: earliest.name }
+                    : null,
+                );
+              },
+            },
+            String(cell.count),
+          ),
+        ),
+      );
+    }
+  }
+  return createElement(
+    'tr',
+    null,
+    createElement(
+      'th',
+      { className: 'cm-rowhead', title: row.key },
+      createElement('span', { className: 'cm-row-name' }, row.label ?? row.key),
+      row.label ? createElement('span', { className: 'cm-row-key dim' }, row.key) : null,
+    ),
+    ...cells,
+  );
+});
 
 export function createUiConditionMatrixPlugin(): Plugin {
   return {
@@ -139,6 +253,10 @@ export function createUiConditionMatrixPlugin(): Plugin {
       let indexReady = false;
       /** 上一次建索引所用的索引实例（去重判据：同一实例不重复全量遍历） */
       let lastBuiltIndex: ErbIndex | null = null;
+      /** 抽取索引代次：每次重建索引 / 条件索引就绪即 +1——矩阵记忆化的失效判据 */
+      let depsEpoch = 0;
+      /** 矩阵结果记忆化（按「角色 × 依赖版本 × 适配器」缓存，杜绝选择/过滤时整表重算） */
+      const matrixMemo = createMatrixMemo();
       /** 索引/建表失败原因（必须可见 + 可重试，不静默停在占位） */
       let loadError: string | null = null;
       const listeners = new Set<() => void>();
@@ -158,6 +276,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
         // 两者拿到同一索引实例——同一实例不重复全量遍历（一次扫描即全量重算）。
         if (lastBuiltIndex === index) return;
         lastBuiltIndex = index;
+        depsEpoch++;
         if (!index || !project.current()) {
           characterIndex = null;
           indexReady = index !== null;
@@ -193,7 +312,13 @@ export function createUiConditionMatrixPlugin(): Plugin {
       ctx.onDispose(ctx.bus.on('project.opened', () => refresh()));
       ctx.onDispose(ctx.bus.on('project.closed', () => rebuild(null)));
       // 条件抽取索引就绪后重绘（填色依赖 functionConditions；立即回调一次，无副作用）
-      ctx.onDispose(conditionExtractor.subscribe(() => notify()));
+      // 代次 +1：抽取索引可能已更新，矩阵缓存须失效重算
+      ctx.onDispose(
+        conditionExtractor.subscribe(() => {
+          depsEpoch++;
+          notify();
+        }),
+      );
 
       // 激活时已有现成索引（插件晚于项目打开加载）→ 立即构建
       if (project.current()) refresh();
@@ -207,6 +332,78 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const [selected, setSelected] = useState<{ rowKey: string; columnKey: string } | null>(null);
         /** 已折叠的大时机类面集合（默认全展开；点分组表头切换） */
         const [foldedFaces, setFoldedFaces] = useState<Set<string>>(new Set<string>());
+        /** 详情区高度（px；null = 未拖过，走样式默认）——会话级，与壳层分栏同口径不持久化 */
+        const [detailH, setDetailH] = useState<number | null>(null);
+        /** 分隔线拖拽中（仅用于高亮） */
+        const [splitDragging, setSplitDragging] = useState(false);
+        const rootRef = useRef<{ clientHeight: number } | null>(null);
+        const detailRef = useRef<{ clientHeight: number } | null>(null);
+        const scrollRef = useRef<{ querySelector(sel: string): { focus(): void } | null } | null>(null);
+        const dragSeed = useRef<{ pointerId: number; startY: number; startH: number } | null>(null);
+        /** 过滤输入走 deferred：输入即时响应，重表延后重渲（大矩阵逐键打字不卡） */
+        const deferredFilter = useDeferredValue(filter);
+
+        /** 点击格子：发跳转意图 + 落选中态（稳定引用 → 行 memo 生效） */
+        const onCell = useCallback((rowKey: string, columnKey: string, target: RevealTarget | null): void => {
+          if (target) {
+            ctx.bus.emit('editor.revealLocation', {
+              filePath: target.filePath,
+              line: target.line,
+              source: target.source,
+            });
+          }
+          setSelected({ rowKey, columnKey });
+        }, []);
+
+        /** 网格方向键导航：格子带 data-r/data-c，按渲染序上下左右移动焦点（折叠组的空 td 不参与） */
+        const onGridKeyDown = (e: GridKeyEvent): void => {
+          const t = e.target as {
+            classList?: { contains(c: string): boolean };
+            getAttribute?: (n: string) => string | null;
+          } | null;
+          if (!t || !t.classList?.contains('cm-cell') || !t.getAttribute) return;
+          const r = Number(t.getAttribute('data-r'));
+          const c = Number(t.getAttribute('data-c'));
+          if (!Number.isFinite(r) || !Number.isFinite(c)) return;
+          let dr = 0;
+          let dc = 0;
+          if (e.key === 'ArrowUp') dr = -1;
+          else if (e.key === 'ArrowDown') dr = 1;
+          else if (e.key === 'ArrowLeft') dc = -1;
+          else if (e.key === 'ArrowRight') dc = 1;
+          else return;
+          const next = scrollRef.current?.querySelector(`.cm-cell[data-r="${r + dr}"][data-c="${c + dc}"]`);
+          if (next) {
+            e.preventDefault();
+            next.focus();
+          }
+        };
+
+        const onSplitDown = (e: SplitterPointer): void => {
+          e.preventDefault();
+          dragSeed.current = {
+            pointerId: e.pointerId,
+            startY: e.clientY,
+            // 首次拖拽从「当前真实高度」起步（未拖过时 = 内容自然高度），不跳变
+            startH: detailH ?? detailRef.current?.clientHeight ?? DETAIL_MIN_H,
+          };
+          setSplitDragging(true);
+          // 指针捕获：拖快了指头滑出命中区也不丢事件
+          e.currentTarget.setPointerCapture(e.pointerId);
+        };
+
+        const onSplitMove = (e: SplitterPointer): void => {
+          const seed = dragSeed.current;
+          if (!seed || seed.pointerId !== e.pointerId) return;
+          const dy = seed.startY - e.clientY; // 向上拖 = 详情区变高
+          setDetailH(clampDetailHeight(seed.startH + dy, rootRef.current?.clientHeight ?? 0));
+        };
+
+        const onSplitEnd = (e: { pointerId: number }): void => {
+          if (dragSeed.current?.pointerId !== e.pointerId) return;
+          dragSeed.current = null;
+          setSplitDragging(false);
+        };
 
         const toggleFace = (face: string): void => {
           setFoldedFaces((prev) => {
@@ -329,7 +526,11 @@ export function createUiConditionMatrixPlugin(): Plugin {
           const name = instructionTable()?.lookupByNo(no);
           return { key: `${fn.face}#${no}`, instructionNo: no, label: name ?? `#${no}` };
         };
-        const matrix = entry ? buildMatrix(entry, depsOf, labelOf, faceLabels(), columnOf) : null;
+        // 记忆化：选择 / 过滤 / 折叠 / 无关刷新都不重算矩阵，仅「角色 × 依赖版本 × 适配器」变化才重建
+        const matrixKey = `${entry?.no}|${depsEpoch}|${current.adapterId}`;
+        const matrix = entry
+          ? matrixMemo.resolve(matrixKey, () => buildMatrix(entry, depsOf, labelOf, faceLabels(), columnOf))
+          : null;
 
         // ---- 定位（网格）----
         let grid: ReactNode;
@@ -338,7 +539,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
         } else if (matrix.rows.length === 0) {
           grid = createElement('div', { className: 'cm-empty dim' }, '该角色尚未抽取到状态条件（无状态依赖）');
         } else {
-          const needle = filter.trim().toLowerCase();
+          const needle = deferredFilter.trim().toLowerCase();
           const rows = needle
             ? matrix.rows.filter(
                 (r) => r.key.toLowerCase().includes(needle) || (r.label ?? '').toLowerCase().includes(needle),
@@ -392,64 +593,22 @@ export function createUiConditionMatrixPlugin(): Plugin {
           const body = createElement(
             'tbody',
             null,
-            ...shown.map((row) =>
-              createElement(
-                'tr',
-                { key: row.key },
-                createElement(
-                  'th',
-                  { className: 'cm-rowhead', title: row.key },
-                  createElement('span', { className: 'cm-row-name' }, row.label ?? row.key),
-                  row.label ? createElement('span', { className: 'cm-row-key dim' }, row.key) : null,
-                ),
-                ...matrix.groups.flatMap((group) => {
-                  // 折叠组的单元格不渲染内容（留占位空 td，维持与表头的列对齐）
-                  if (foldedFaces.has(group.face)) {
-                    return group.columns.map((col) => createElement('td', { key: col.key, className: 'cm-gap' }));
-                  }
-                  return group.columns.map((col) => {
-                    const cell = row.cells[col.key];
-                    if (!cell || !cell.present) {
-                      // 空白格：这个时机还没有针对该状态写过的反应（点击不导航）
-                      return createElement(
-                        'td',
-                        { key: col.key },
-                        createElement('button', { className: 'cm-cell off', title: '无' }, '·'),
-                      );
-                    }
-                    const isSel = selected !== null && selected.rowKey === row.key && selected.columnKey === col.key;
-                    return createElement(
-                      'td',
-                      { key: col.key },
-                      createElement(
-                        'button',
-                        {
-                          className: 'cm-cell on' + (isSel ? ' sel' : ''),
-                          title: cellComparisons(cell),
-                          onClick: () => {
-                            const earliest = orderByLine(cell.functions)[0];
-                            if (earliest) {
-                              ctx.bus.emit('editor.revealLocation', {
-                                filePath: earliest.filePath,
-                                line: earliest.startLine,
-                                source: earliest.name,
-                              });
-                            }
-                            setSelected({ rowKey: row.key, columnKey: col.key });
-                          },
-                        },
-                        String(cell.count),
-                      ),
-                    );
-                  });
-                }),
-              ),
+            ...shown.map((row, rowIndex) =>
+              createElement(MatrixRowView, {
+                key: row.key,
+                row,
+                groups: matrix.groups,
+                foldedFaces,
+                selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
+                rowIndex,
+                onCell,
+              }),
             ),
           );
 
           grid = createElement(
             'div',
-            { className: 'cm-scroll' },
+            { className: 'cm-scroll', ref: scrollRef, onKeyDown: onGridKeyDown },
             createElement('table', { className: 'cm-table' }, head, body),
             rows.length > ROW_RENDER_CAP
               ? createElement(
@@ -462,6 +621,12 @@ export function createUiConditionMatrixPlugin(): Plugin {
         }
 
         // ---- 详情 ----
+        // 拖过分隔线后按拖拽高度固定（inline height+maxHeight 覆盖样式默认的 max-height），未拖过走样式默认
+        const detailProps = {
+          className: 'cm-detail',
+          ref: detailRef,
+          style: detailH === null ? undefined : { height: detailH, maxHeight: detailH },
+        };
         let detail: ReactNode;
         const selRow = selected && matrix ? matrix.rows.find((r) => r.key === selected.rowKey) ?? null : null;
         const selCell = selRow && selected ? selRow.cells[selected.columnKey] : undefined;
@@ -472,7 +637,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           const fns = orderByLine(selCell.functions);
           detail = createElement(
             'div',
-            { className: 'cm-detail' },
+            detailProps,
             createElement(
               'div',
               { className: 'cm-detail-head' },
@@ -515,12 +680,37 @@ export function createUiConditionMatrixPlugin(): Plugin {
         } else {
           detail = createElement(
             'div',
-            { className: 'cm-detail' },
+            detailProps,
             createElement('div', { className: 'cm-empty dim' }, '点击一个已填色的格子，查看其对应的口上函数'),
           );
         }
 
-        return createElement('div', { className: 'panel-condition-matrix' }, toolbar, status, grid, detail);
+        // 网格区 ↔ 详情区的拖拽分隔线（HK-14）：只在网格有内容时显形（无内容可拉伸时克制不出），
+        // 静息一条细线，悬停 / 拖拽中亮起（与壳层 .resizer / .kp-splitter 同族）；键盘不接。
+        const splitter =
+          entry && matrix && matrix.rows.length > 0
+            ? createElement('div', {
+                className: 'cm-split' + (splitDragging ? ' dragging' : ''),
+                role: 'separator',
+                'aria-orientation': 'horizontal',
+                'aria-label': '拖动调整详情区高度',
+                title: '拖动调整详情区高度',
+                onPointerDown: onSplitDown,
+                onPointerMove: onSplitMove,
+                onPointerUp: onSplitEnd,
+                onPointerCancel: onSplitEnd,
+              })
+            : null;
+
+        return createElement(
+          'div',
+          { className: 'panel-condition-matrix', ref: rootRef },
+          toolbar,
+          status,
+          grid,
+          splitter,
+          detail,
+        );
       }
 
       ctx.slots.register('ui.panel', {

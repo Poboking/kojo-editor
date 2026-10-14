@@ -294,10 +294,13 @@ export function buildMatrix(
   const resolveColumn =
     columnOf ?? ((fn: FaceFunction): ColumnDesc => ({ key: fn.face, instructionNo: null }));
 
-  // 列聚合：面 → 列键 → 列（去重；面顺序与 `entry.faces` 同口径）
+  // 列聚合：面 → 列键 → 列（去重；面顺序与 `entry.faces` 同口径）。
+  // 同时缓存每个函数的列键——第二轮聚合单元格时直接取用，`columnOf` 只解析一次。
   const byFace = new Map<string, Map<string, MatrixColumn>>();
+  const colKeyOf = new Map<FaceFunction, string>();
   for (const fn of entry.functions) {
     const desc = resolveColumn(fn);
+    colKeyOf.set(fn, desc.key);
     let cols = byFace.get(fn.face);
     if (!cols) {
       cols = new Map<string, MatrixColumn>();
@@ -334,7 +337,7 @@ export function buildMatrix(
     }
     if (deps.length > 0) depsFunctions++;
 
-    const columnKey = resolveColumn(fn).key;
+    const columnKey = colKeyOf.get(fn) ?? resolveColumn(fn).key;
     for (const dep of deps) {
       if (!dep) continue;
       let row = acc.get(dep.key);
@@ -407,6 +410,61 @@ export function buildMatrix(
     totalFunctions: entry.functions.length,
     depsFunctions,
   };
+}
+
+/* ------------------------------ 渲染记忆化 ------------------------------ */
+
+/**
+ * 矩阵结果记忆化（纯逻辑，单测钉住）：key 相同直接返回缓存，避免「选择 / 过滤 / 折叠 /
+ * 外部刷新」等**不改变数据**的重渲重复整表重算（角色函数多时，每次选择都要全量遍历一遍）。
+ *
+ * key 由调用方拼（本模块不认识角色号 / 依赖版本）：约定为 `${角色号}|${依赖版本}|${适配器}`；
+ * 依赖版本（抽取索引代次）一变即换 key，旧条目随容量上限淘汰——上限兜住内存，来回切角色
+ * 也不至于把大矩阵反复重算。
+ */
+export interface MatrixMemo {
+  resolve(key: string, build: () => ConditionMatrix): ConditionMatrix;
+  clear(): void;
+}
+
+export function createMatrixMemo(capacity = 8): MatrixMemo {
+  const cache = new Map<string, ConditionMatrix>();
+  return {
+    resolve(key, build) {
+      const hit = cache.get(key);
+      if (hit !== undefined) return hit;
+      const value = build();
+      cache.set(key, value);
+      if (cache.size > capacity) {
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined) cache.delete(oldest);
+      }
+      return value;
+    },
+    clear() {
+      cache.clear();
+    },
+  };
+}
+
+/* ------------------------------ 分隔线钳制 ------------------------------ */
+
+/** 详情区最小高度（拖到极限也要留住：至少几行 + 空态提示） */
+export const DETAIL_MIN_H = 96;
+/** 拖拽时给网格区保留的最小可视高度（工具条 / 状态条 + 若干行都在里面） */
+export const GRID_MIN_RESERVE = 160;
+
+/**
+ * 网格区 ←→ 详情区拖拽分隔线的钳制（纯函数，单测钉住）：下限兜住详情区、
+ * 上限 = 面板可视高度 - 网格区保留高度——两区都不能被拖没。
+ *
+ * panelHeight 未知（≤0 / 非有限值，如无 DOM 环境）时钳到下限——宁可不拖，也不把两区
+ * 挤没（与 eratw-adapter 的 `clampTutorialHeight` 同口径）。
+ */
+export function clampDetailHeight(height: number, panelHeight: number): number {
+  if (!Number.isFinite(panelHeight) || panelHeight <= 0) return DETAIL_MIN_H;
+  const max = Math.max(DETAIL_MIN_H, panelHeight - GRID_MIN_RESERVE);
+  return Math.min(max, Math.max(DETAIL_MIN_H, height));
 }
 
 /* ------------------------------ 标签 ------------------------------ */
