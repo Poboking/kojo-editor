@@ -2,11 +2,11 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-14 下午，E14 拖拽打开 + E15 亲密面方案 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 批合流后本机实测）
+## 一、基线（2026-10-14 下午，E14 拖拽打开 + E15 亲密面方案 + HK-4 UI-4/5/6 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 批合流后本机实测）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2126 passed / 15 skipped（2141）**；122 文件过 / 8 跳（130） |
+| 全量测试 | **2155 passed / 15 skipped（2170）**；124 文件过 / 8 跳（132） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **24 项全绿**（E7 写允许域批 +18→22；E14 拖放事件映射 +2；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
