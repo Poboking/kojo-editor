@@ -1340,6 +1340,11 @@ textarea {
 .erb-mode-hint.unlocked {
   color: var(--warning);
 }
+/* 直连模式可编辑：写权限来自作者批准的可写目录 → 信息色（非警示），与只读的中性色区分 */
+.erb-mode-hint.direct {
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
 
 /* 2026-10-13 UI 反馈 1/3：编辑器工具条的只读指示改用**底栏同一套胶囊**（黄色＝只读），
    去掉 🔒 与冗长括注；它只是状态说明，不可点（授权入口在底栏，避免两处入口互相抢）。 */

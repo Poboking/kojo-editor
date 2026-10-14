@@ -44,6 +44,7 @@ import {
   type MotionPref,
 } from './motion-pref';
 import { SEALED_PANEL_IDS, setSealed, useSealed } from './sealed';
+import { setDirectMode, useDirectMode } from './direct-mode';
 import { modalDepth, closeTopModal } from './modal-stack';
 import { resolveEscLayer, isComposingEvent, nextRovingIndex } from './shell-keys';
 import {
@@ -144,6 +145,8 @@ export function ShellLayout(props: Props): ReactElement {
 
   /** 封存总闸（`sealed.ts`；默认封存）：封存态下被点名的插件面板整只不进编排 */
   const sealed = useSealed();
+  /** 直连模式开关（`direct-mode.ts`；默认关）：设置页里经封存总闸 gated——封存态不渲染 */
+  const directMode = useDirectMode();
   const allPanels = useMemo(() => {
     const all = [...builtinViews, ...kernel.slots.query('ui.panel')];
     return sealed ? all.filter((p) => !SEALED_PANEL_IDS.has(p.id)) : all;
@@ -1040,6 +1043,26 @@ export function ShellLayout(props: Props): ReactElement {
                       <span className="settings-hint">
                         把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
                         只改显示、不改动文件。快捷键 Ctrl+Alt+T
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              ) : null}
+
+              {/* 直连模式开关：新增功能默认经封存总闸控制——封存态不渲染（与上方「编辑器」组同款 gated） */}
+              {!sealed ? (
+                <div className="settings-group">
+                  <div className="settings-group-title">游戏目录写入</div>
+                  <label className="settings-row">
+                    <input
+                      type="checkbox"
+                      checked={directMode}
+                      onChange={(e) => setDirectMode(e.target.checked)}
+                    />
+                    <span>
+                      直连模式（就地编辑游戏目录）
+                      <span className="settings-hint">
+                        开启后，游戏目录里已获写权限的 .ERB 视为可直接编辑，不再逐个文件询问。写保护不变：写权限仍只来自你批准的可写目录。
                       </span>
                     </span>
                   </label>

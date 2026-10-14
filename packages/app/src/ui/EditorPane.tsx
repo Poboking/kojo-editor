@@ -46,6 +46,7 @@ import {
   type FoldableSegment,
 } from './sugar-fold';
 import { isSealed, subscribeSealed, useSealed } from './sealed';
+import { isDirectMode, useDirectMode } from './direct-mode';
 import { isUnderAnyRoot, workspaceRootsOf } from './workspace-roots';
 // 问题汇总：refreshMarkers 逐文件整份发布两层波浪线（erb-parser / condition-extractor）到 problem-store
 import { clearAllProblems, clearProblems, setProblems } from './problem-store';
@@ -267,6 +268,12 @@ export function EditorPane({
    * 反而会把"本会话刚自选的那个新根"永远排除在外（一次取值定死 ⇒ 之后一路判成借阅件锁只读）。
    */
   const inWorkspace = (p: string): boolean => isUnderAnyRoot(workspaceRootsOf(kernel), p);
+  /**
+   * 直连模式（direct-mode.ts）可编辑判定：开关开 + 该文件在写白名单内（用户批准的可写目录）
+   * ⇒ 游戏目录 ERB 视为可直接编辑（就地编辑工作流）。写保护铁律不破：可写性仍完全来自
+   * `kernel.io.isWritable`（用户批准的 writablePaths），直连模式不扩权。
+   */
+  const directEditable = (p: string): boolean => isDirectMode() && kernel.io.isWritable(p);
   const onDirtyChangeRef = useRef(onDirtyChange);
   /** 编辑器状态上抛 ref（重载时读最新，避免把不稳定 prop 拖进回调依赖） */
   const onStatusInfoRef = useRef(onStatusInfo);
@@ -316,6 +323,11 @@ export function EditorPane({
    * 但**不碰偏好**——`sugarView` 维持用户原值，解封即按原偏好恢复。
    */
   const sealed = useSealed();
+  /**
+   * 直连模式开关（`direct-mode.ts`；默认关）—— React 触发（re-render）：切换时
+   * 走下方 effect 重算当前文件的可编辑态，并让糖视图让位/恢复。
+   */
+  const directMode = useDirectMode();
   /** 同一份"最新开关"给只注册一次的 Monaco 回调读（避免闭包过时） */
   const sugarViewRef = useRef<boolean>(sugarView);
   /** 糖视图摘要（null = 未启用 / 无文件）；工具条展示 */
@@ -473,7 +485,8 @@ export function EditorPane({
         sealed: isSealed(),
         isErbLike: isErbLike(path),
         inWorkspace: inWorkspace(path),
-        unlocked: unlockedPathsRef.current.has(path),
+        // 直连可编辑 ⟹ 糖视图让位（与 unlocks 同口径，ADR-0005 互斥）
+        unlocked: unlockedPathsRef.current.has(path) || directEditable(path),
       })
     )
       return;
@@ -638,6 +651,16 @@ export function EditorPane({
       applySugarView();
     });
   }, [applySugarView]);
+
+  // 直连模式开关切换：重算当前文件的可编辑态（readOnly），并让糖视图让位/恢复
+  useEffect(() => {
+    const ed = editorRef.current;
+    const p = filePathRef.current;
+    if (!ed || !p) return;
+    const canEdit = unlockedPathsRef.current.has(p) || directEditable(p);
+    ed.updateOptions({ readOnly: isErbLike(p) && !inWorkspace(p) && !canEdit });
+    applySugarView();
+  }, [directMode, kernel, applySugarView]);
 
   // 糖视图开关意图 → 宿主落地（插件发意图、宿主渲染；与 editor.liftPreview.show 同款）
   useEffect(() => {
@@ -1110,7 +1133,7 @@ export function EditorPane({
       //          按文件按会话、**不落盘**——"上次解锁过就一直可写"会让写保护形同虚设）。
       // 先按文件体量落 Monaco 选项，再挂 model——避免超长文件先在"默认全文级选项"
       // 下渲染一帧（大文件降级清单见 editor-options.ts）。
-      const allowEdit = unlockedPathsRef.current.has(filePath);
+      const allowEdit = unlockedPathsRef.current.has(filePath) || directEditable(filePath);
       setUnlocked(allowEdit);
       ed.updateOptions({
         readOnly: isErbLike(filePath) && !inWorkspace(filePath) && !allowEdit,
@@ -1153,7 +1176,9 @@ export function EditorPane({
       setUnlocked(allowEdit);
       // 轴二只管游戏目录那一份：工作区文件本就可写，不存在"解锁/回锁"这回事
       // （ADR-0005 给糖组的适配项——别把写保护铁律的代价转嫁到正常操作上）。
-      ed.updateOptions({ readOnly: isErbLike(path) && !inWorkspace(path) && !allowEdit });
+      // 回锁时若直连开门仍应保持可编辑（直连是独立的可编辑来源）。
+      const canEdit = allowEdit || directEditable(path);
+      ed.updateOptions({ readOnly: isErbLike(path) && !inWorkspace(path) && !canEdit });
       // 解锁 → 糖视图必须让位（原文要看得见）；回锁 → 重新生成糖视图
       applySugarView();
     },
@@ -1170,7 +1195,7 @@ export function EditorPane({
         sealed: isSealed(),
         isErbLike: isErbLike(filePath),
         inWorkspace: filePath !== null && inWorkspace(filePath),
-        unlocked: filePath !== null && unlockedPathsRef.current.has(filePath),
+        unlocked: filePath !== null && (unlockedPathsRef.current.has(filePath) || directEditable(filePath)),
       })
     )
       return;
@@ -1190,7 +1215,7 @@ export function EditorPane({
     if (!ed) return;
     const disposable = ed.onDidAttemptReadOnlyEdit(() => {
       const path = filePathRef.current;
-      if (!isErbLike(path) || unlockedPathsRef.current.has(path)) return;
+      if (!isErbLike(path) || unlockedPathsRef.current.has(path) || directEditable(path)) return;
       // 已弹着就不再重复弹（连按键盘会产生一串事件）
       setUnlockAsk((cur) => cur ?? path);
     });
@@ -1248,6 +1273,15 @@ export function EditorPane({
               >
                 <Icon name="edit" size={13} /> 已解锁编辑
               </button>
+            ) : directMode && kernel.io.isWritable(filePath) ? (
+              /* 直连模式：已获写权限的目录内文件直接可编辑 → 信息色提示（非警示）。
+                 直连可编辑 ⟹ 糖视图让位（与 unlocks 同口径，ADR-0005 互斥）→ 不渲染糖视图 toggle。 */
+              <span
+                className="erb-mode-hint direct"
+                title="直连模式已开启：这份文件在已获写权限的目录内，可直接编辑（就地修改游戏目录）。写权限仍只来自你批准的可写目录。"
+              >
+                直连可编辑
+              </span>
             ) : (
               <>
                 <span
