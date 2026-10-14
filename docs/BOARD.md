@@ -10,7 +10,6 @@
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
 | HK-4 | UI 打磨（常任；目标「专业 · 克制 · 流畅 · 高效 · 耐看」，VSCode 为基准） | 自拟六项按序推进：UI-1 字号尺度 ✅§5.121 / UI-2 圆角·边框·阴影 ✅§5.122 / **UI-3 图标 emoji→单色 SVG ✅**（`docs/log/2026-10-13-ui-icons.md`；宿主层渲染面归零；插件自绘面板符号＝跨包图标通道**已交付 ✅** `renderIcon` 桥，3299bd7） → **UI-4 焦点环与键盘可达 ✅**（roving tabindex 漫游 + `:focus-visible` 焦点环） → **UI-5 动效可关 ✅**（设置项 + `<html data-motion>`） → **UI-6 底部问题面板 ✅**（ERB 结构/表达式两层波浪线汇总、点击跳源行；状态栏 ✕/⚠/ℹ 计数经 `kojo.problems` 展开，Ctrl+Shift+M）；每项带可复跑量化判据 | 进行中 · 认领：hk4ui 2026-10-14 |
-| HK-17 | **多版本 eraTW 口上识别适配**（用户实测：`C:\game\eratw原生官方版4.842` 口上树认不出角色；4.980 画蛇添足版与魔王改版正常） | **根因（代码级）**：4.842 的 `ERB/口上・メッセージ関連/個人口上` 目录用**纯角色名**（`阿燐`/`阿求`/`八千慧`…），`chara-csv.ts:77 parseKojoDirName` 要求「三位编号 + 空格 + 名称」⇒ 全数失败 ⇒ `kojoDir` 不绑定（`plugin.ts` §2）⇒ `FileTree.tsx:169` 只按有 `kojoDir` 的 charaIndex 建角色组 ⇒ 只剩「(未归属)」。**主修**＝目录名不合约定时回退扫目录内文件名 `M_KOJO_K(\d+)` 取编号（游戏自身口径，实测 阿燐→K36、八千慧→K130）。**次修**＝4.842 部分角色包函数名用 `KX` 占位（`@M_KOJO_MESSAGE_COM_KX_90`），`family-index.ts` 判为 placeholder（`characterNo=null`）⇒ 函数树整包 orphan；按文件名编号把 `KX` 还原为 `K{no}`（additive：`FamilyIndexRule.match(name, filePath?)`）。**判据**：4.980/魔王改（目录合规）行为逐字不变；4.842 口上树出现角色组、KX 包函数归位；全量不回退 + 双 typecheck + audit ✅ | 认领：haruki 2026-10-14 |
 
 ## D. 已拍板（用户 2026-10-13 反馈批）
 
