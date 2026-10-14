@@ -14,6 +14,9 @@
  *    唯一的**原样放行**通道是 `engine-globals.ts` 的裸引擎全局白名单
  *    （`SELECTCOM` / `ARG` / `TARGET` …）：那些是引擎固定词、作者造不出这个名字，
  *    放行不会掩护拼写错误（判据与语料实测计数见该模块头注）。
+ *    带族头的 `族头:具名索引`（`NOWEX:噴乳`）走**另一条**通道：族头认得出就原样进产物，
+ *    但 P-10③（2026-10-14）起**不再零诊断**——字典的族名表在位而名称查无时报
+ *    `family-name-unknown`（**warning**，产物照旧；口径见 `reportUnlistedFamilyName`）。
  */
 
 import type { AliasValue, SugarDiagnostic, SugarPosition } from '@kojo/plugin-api';
@@ -370,7 +373,11 @@ function lowerPronounsAndAttributes(code: string, ctx: ExprContext): string {
         j = segEnd;
       }
       if (j > end) {
-        out += code.slice(i, j);
+        const ref = code.slice(i, j);
+        // 原生 ERB 变量引用（含 `:` 索引）——**原样保留**，但 P-10③ 起不再"零诊断"：
+        // 族表在位而名称段查无 ⇒ 报 warning（产物不变，见 `reportUnlistedFamilyName`）。
+        reportUnlistedFamilyName(ref, ctx);
+        out += ref;
         i = j;
         continue;
       }
@@ -502,6 +509,33 @@ function resolveBareIdentifier(ident: string, ctx: ExprContext): string {
     return ident;
   }
   return resolved;
+}
+
+/**
+ * `族头:具名索引` 的名称段核对（P-10③「族头直通改条件校验」；**warning 起步**）。
+ *
+ * 为什么报在这里而不是 `dictionary.resolve`：`resolve` 的返回只有"原文 / undefined"
+ * 两态，undefined 会被 `resolveBareIdentifier` 报成 `unknown-identifier`（**error**）——
+ * 而那正是本批要避免的误伤（真语料里 `NOWEX:i`、`NOWEX:COUNT` 这类动态索引形态合法）。
+ * 本点又与 `engine-globals.ts` 同源，故"族引用放行"只此一处，判据零分裂。
+ *
+ * 三条放行口径（与 `types.ts` 的 `unlistedFamilyName` 一致）：
+ * 1. 字典未注入 / 不提供核对（旧字典形态）⇒ 与今天逐字相同的静默放行；
+ * 2. 该族无名称表 / 名称段是纯数字 / 三段及以上作用域写法 ⇒ 无判据，放行；
+ * 3. 名称段本身是**裸引擎全局**（`NOWEX:COUNT`：循环/计数写法）⇒ 放行，不报。
+ */
+function reportUnlistedFamilyName(ref: string, ctx: ExprContext): void {
+  const check = ctx.dictionary?.unlistedFamilyName;
+  if (!check) return;
+  const off = check(ref);
+  if (!off) return;
+  if (resolveEngineGlobal(off.name)) return; // 动态索引（引擎固定词），不是拼错的具名
+  ctx.report({
+    code: 'family-name-unknown',
+    severity: 'warning',
+    message: `变量族「${off.family}」的名称表里查不到具名索引「${off.name}」——该行仍原样写进产物，但引擎多半取不到值（拼错请改正；该名字若来自游戏侧的追加名表，可忽略本提示）。`,
+    loc: ctx.loc,
+  });
 }
 
 /* ============================== 赋值左值展开（§5.0 / §3.1） ============================== */

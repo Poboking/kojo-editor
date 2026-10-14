@@ -39,6 +39,25 @@ export interface DictionaryLookup {
    * 未收录 / 该族无名称表 → undefined，同样原样保留。
    */
   nameAt?(family: string, index: string): string | undefined;
+  /**
+   * **具名索引核对**（**可选能力**；P-10③「族头直通改条件校验」）。
+   *
+   * 背景：`resolve` 历史上**只看族头**——族头认得出就整串放行 ⇒ 名称段拼错
+   * （`NOWEX:噴乳乳瞎写`）零诊断静默进产物，违铁律 4「内核不静默」。本方法把
+   * 「族表在位、但该名称查无」这一件事单独问一次，**不改写产物**（放行原文仍归
+   * 调用方决定），调用方据此报 warning（生效点 expression.ts 的族引用放行处）。
+   *
+   * 口径（与 `service.ts` 头注的既有宽容一致）：
+   * - **有表则校验**：该族（含引擎层同名表别名，见 `index.ts`）的名称表在位，
+   *   且名称段非纯数字 ⇒ 查表，查无 = 返回判据；
+   * - **无表则放行**：字典未注入 / 该族无机读名称表 / 未打开工程 ⇒ `undefined`，
+   *   行为与今天逐字相同（"没打开项目不许误伤"）；
+   * - 形态不认（三段及以上的作用域写法、族头不属引擎变量族）⇒ 同样 `undefined`。
+   *
+   * 返回 `{ family, name }` = 「族 `family` 的名称表在位，但 `name` 不在表内」；
+   * 返回 `undefined` = 无判据（放行）。
+   */
+  unlistedFamilyName?(ident: string): { family: string; name: string } | undefined;
 }
 
 /** 诊断收集器（parse 与 codegen 共用；保证 `internal` 绝不静默） */

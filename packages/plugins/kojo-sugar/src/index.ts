@@ -272,7 +272,11 @@ export function createKojoSugarPlugin(): Plugin {
  *   规范 §3.8 说"命中不唯一时编辑器弹窗"，那是 S4 编辑体验批的职责；
  *   转译器此处取**确定性**首个命中，不静默猜测顺序之外的语义）；
  * - `resolve(ident)`：裸标识符 → 原样（引擎变量表已收录的族名 + 冒号索引
- *   写法本就合法，不需要改写）。
+ *   写法本就合法，不需要改写）；
+ * - `unlistedFamilyName(ident)`（P-10③）：`族头:具名索引` 的**名称段**核对——
+ *   历史上 `resolve` 只看族头就整串放行，拼错的具名（`NOWEX:噴乳乳瞎写`）零诊断
+ *   进产物（违铁律 4）。本方法把"族表在位但该名查无"单独问一次，**不改写产物**，
+ *   报警由 `expression.ts` 的族引用放行点决定（**warning 起步**）。
  */
 const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
   'CFLAG',
@@ -297,16 +301,71 @@ const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
   'SOURCE',
 ];
 
-function makeLookup(schema: VariableSchema): DictionaryLookup {
+/**
+ * **本批具名索引核对的生效族 → 其名称表键候选**（P-10③；不在表内的族 = 不核对，逐字保持今天的放行）。
+ *
+ * 为什么是"候选表键"而不是"族名一律查自己的表"：引擎把**同一张名字表**挂在两个变量上
+ * （`NOWEX` 的具名索引住在 `EX` 的表里、`DOWNBASE` 住在 `BASE` 里），游戏目录里并没有
+ * `NOWEX.csv`。别名与上面那张族头清单同性质 —— 是 **ERB 语言层**知识，不是某个游戏的数据
+ * （数据本身仍由 adapter 的 CSV 表注入）。
+ *
+ * 入库判据 = 真语料实测（2026-10-14 只读，整个 `口上・メッセージ関連` 2,317 份 `.ERB`
+ * 的**代码行**里 `族头:具名` 二段形态，逐条喂给本核对逻辑 + 真实 adapter 字典）：
+ *
+ * | 族 | 二段具名引用 | 判表外 | 取舍 |
+ * | --- | --- | --- | --- |
+ * | `NOWEX` | 5,529 | 7 | **入库**（7 处里 `NOWEX:i`×2 / `NOWEX:COUNT`×1 是动态索引，
+ *   `COUNT` 由"裸引擎全局"口径吸收；余 4 = 汉化追加名 `Ｖ绝顶`，见下"已知残余误报"） |
+ * | `MARK` | 11,090 | 0 | **入库** |
+ * | `DOWNBASE` | 108 | 0 | **入库**（经 `base.csv` 命中 108/108） |
+ * | `STAIN` | 45 | 0 | **入库** |
+ * | `CFLAG` | 19,999 | 1,304 | **不入库** |
+ * | `TALENT` | 72,442 | 567 | **不入库** |
+ * | `FLAG` | 18,117 | 126 | **不入库** |
+ * | `TCVAR` | 17,722 | 172 | **不入库** |
+ * | `TEQUIP` | 5,284 | 75 | **不入库** |
+ * | `PALAM` | 1,724 | 46 | **不入库** |
+ * | `EXP` | 2,628 | 33 | **不入库** |
+ * | `ABL` | 8,754 | 26 | **不入库** |
+ * | `SOURCE` | 1,840 | 6 | **不入库** |
+ *
+ * 表外大户的成因不是作者拼错，而是**字典本身不全**：era 系汉化把追加/中文名放在
+ * `CSV/*.als`（如 `TCVAR.als` 的 `145,泥酔`、`ex.als` 的 `1,Ｖ绝顶`），角色级自定名又住在
+ * 角色目录 —— adapter 的 `variableSchema` 只读 `CSV/*.csv`，这些名字天然查无。
+ * 把这些族打成 warn 会**淹没作者的正常写法**（提案 §3b③ 的"不误伤"口径），故本批按读数收窄：
+ * 生效族只留实测表权威的四个。`CSV/*.als` 进字典 = 另批（届时把族一并放开）。
+ */
+const CHECKED_FAMILY_NAME_TABLES: Readonly<Record<string, readonly string[]>> = {
+  NOWEX: ['NOWEX', 'EX'],
+  MARK: ['MARK'],
+  DOWNBASE: ['DOWNBASE', 'BASE'],
+  STAIN: ['STAIN'],
+};
+
+/** 字典 `lookup` 的"真正收录"判据（与 `resolveFamily` 同一口径，不另立标准） */
+function isRecorded(info: { description?: string; resolvedIndex?: number } | undefined): boolean {
+  return info !== undefined && (info.description !== undefined || info.resolvedIndex !== undefined);
+}
+
+export function makeLookup(schema: VariableSchema): DictionaryLookup {
+  /**
+   * 生效族的**名称表键**：按上面登记的候选依次找（族名自己 → 引擎层同名表姊妹族）；
+   * 一张都不在位 → undefined（= 无表 = 不许校验，正是 `service.ts` 头注
+   * "字典未加载不误伤"的口径；未登记的族头同样直接返回 undefined）。
+   */
+  const nameTableKey = (family: string): string | undefined => {
+    for (const key of CHECKED_FAMILY_NAME_TABLES[family] ?? []) {
+      // 无索引的 lookup：表存在必回一条（哪怕只有变量名），表不存在回 undefined
+      if (schema.lookup(key) !== undefined) return key;
+    }
+    return undefined;
+  };
   return {
     resolveFamily(name: string): string | undefined {
       for (const family of ENGINE_VARIABLE_FAMILIES) {
-        const info = schema.lookup(family, name);
         // lookup 在"表不存在 / 名称不在表内"时返回 undefined 或仅回显 name；
         // 只有**真正收录**（description 或 resolvedIndex 落地）才算命中。
-        if (info && (info.description !== undefined || info.resolvedIndex !== undefined)) {
-          return family;
-        }
+        if (isRecorded(schema.lookup(family, name))) return family;
       }
       return undefined;
     },
@@ -316,9 +375,29 @@ function makeLookup(schema: VariableSchema): DictionaryLookup {
       // ——它们不属字典（CSV 建不出"引擎自带标量"这张表），且字典本身是可选注入的，
       // 寄生在这里会让"没打开项目时又写不了"。判据与实测计数见 `engine-globals.ts`，
       // 生效点在 `expression.ts` 的 `resolveBareIdentifier`（E16 批，2026-10-14）。
+      // 同一条"可选注入"纪律也约束着具名索引核对——它**不在这里**报（`resolve` 只能
+      // 返回原文或 undefined，返回 undefined 会被调用方报成 error），走
+      // `unlistedFamilyName`（P-10③，warning 起步）。
       const head = ident.split(':')[0]!.toUpperCase();
       if (ENGINE_VARIABLE_FAMILIES.includes(head)) return ident;
       return undefined;
+    },
+    unlistedFamilyName(ident: string): { family: string; name: string } | undefined {
+      // 只核 `族头:名称` **二段形**（P-10③ 的病根形态）。三段及以上（`CFLAG:TARGET:好感度`、
+      // `NOWEX:PLAYER:11`）混着作用域语义，本批不碰——实测它们的表外率高，误伤面大。
+      const sep = ident.indexOf(':');
+      if (sep <= 0 || ident.indexOf(':', sep + 1) >= 0) return undefined;
+      const family = ident.slice(0, sep).toUpperCase();
+      const name = ident.slice(sep + 1);
+      if (name.length === 0) return undefined;
+      // 生效族 = 上面按实测表权威登记的那几张（未登记的族头逐字保持今天的放行）
+      if (CHECKED_FAMILY_NAME_TABLES[family] === undefined) return undefined;
+      // 纯数字索引是引擎合法写法（`CFLAG:1088`），没有"名称表"可核 ⇒ 放行
+      if (/^[0-9]+$/.test(name)) return undefined;
+      const table = nameTableKey(family);
+      if (table === undefined) return undefined; // 无表则放行
+      if (isRecorded(schema.lookup(table, name))) return undefined; // 表内 ⇒ 放行
+      return { family, name };
     },
     nameAt(family: string, index: string): string | undefined {
       // 反向查询（升糖投影的属性反糖用）：`lookup(族, 索引).description` 即名称源。
