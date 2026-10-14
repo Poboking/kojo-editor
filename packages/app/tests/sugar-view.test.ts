@@ -122,6 +122,12 @@ describe('糖视图 / 配色回退', () => {
     expect(tokenColor('sugar.keyword.unknown')).toBe('#c678dd');
   });
 
+  it('注释 token → 默认注释色（不继承正文亮白）', () => {
+    // 糖文本注释行由 `.kojo` 词法判为 `comment`；必须着默认注释色，
+    // 否则 span 无颜色会继承 `.sugar-zone` 的正文色（亮白），注释反比正文显眼。
+    expect(tokenColor('comment')).toBe('#6a737d');
+  });
+
   it('主题未覆盖的 token → 正文色（旁白 = 正文色，是刻意口径）', () => {
     expect(tokenColor('')).toBe(SUGAR_DEFAULT_COLOR);
     expect(tokenColor('identifier')).toBe(SUGAR_DEFAULT_COLOR);

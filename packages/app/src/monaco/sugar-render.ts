@@ -24,13 +24,19 @@
 
 import type * as Monaco from 'monaco-editor';
 import { KOJO_LANGUAGE_ID, KOJO_SUGAR_THEME_RULES } from './kojo-language';
+import { ERB_COMMENT_THEME_RULE } from './erb-language';
 
-/** token → 前景色（`#rrggbb`）。从主题规则派生，不手抄第二份调色板 */
+/**
+ * token → 前景色（`#rrggbb`）。从主题规则派生，不手抄第二份调色板。
+ *
+ * 除糖专属规则外，还并入 `comment`（默认注释色）：糖文本的注释行由 `.kojo` 词法判为
+ * `comment`，若不给它配色，span 将不带颜色而继承 `.sugar-zone` 的正文色（亮白）——
+ * 注释就会比正文还显眼。其余通用 token（`identifier` 等）仍走正文色，刻意不并入。
+ */
 const TOKEN_COLORS: ReadonlyMap<string, string> = new Map(
-  KOJO_SUGAR_THEME_RULES.filter((r) => r.foreground !== undefined).map((r) => [
-    r.token,
-    `#${r.foreground}`,
-  ]),
+  [...KOJO_SUGAR_THEME_RULES, ERB_COMMENT_THEME_RULE]
+    .filter((r) => r.foreground !== undefined)
+    .map((r) => [r.token, `#${r.foreground}`]),
 );
 
 /** 未被主题覆盖的 token 的前景（空串 = 交给 CSS 的 `--fg`，即"旁白 = 正文色"） */

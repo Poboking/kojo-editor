@@ -6,7 +6,7 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2337 passed / 22 skipped（2359）**；129 文件过 / 9 跳（138） |
+| 全量测试 | **2338 passed / 22 skipped（2360）**；129 文件过 / 9 跳（138） |
 | 全量测试（挂语料 `KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"`） | **2358 passed / 1 skipped（2359）**；138 文件全过（138）——语料面零红 |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
