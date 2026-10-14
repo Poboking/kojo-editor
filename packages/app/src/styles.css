@@ -3881,6 +3881,13 @@ button.primary .hint {
   min-width: var(--cm-rowhead-w, 0);
   max-width: var(--cm-rowhead-w, none);
 }
+/* 首列列宽拖拽（HK-27 / HK-28）：接管期把表切成 `table-layout: fixed`——列宽由 <colgroup>
+   快照钉死，每帧只改第 0 个 col 的 width。原路径每帧改 .cm-scroll 上的 --cm-rowhead-w，自定义属性
+   按继承失效整棵 1 万节点子树 + 整表重排（CDP 实测 567ms/帧）；切定宽后 27ms/帧、max 50ms。
+   快照列宽取「相邻列左缘之差」⇒ 合计恰为表宽，接管零漂移（12476 → 12476）。 */
+.cm-scroll.col-pinned .cm-table {
+  table-layout: fixed;
+}
 /* 首列列宽拖拽把手：表头角格与**每一行的行头**右缘各一枚 8px 竖条 ⇒ 整列任意处都能拉伸
    （与 .cm-split 同族；键盘不接）。贴右缘内侧（right:0）而非外溢——行头在视口化路径下
    带 overflow:hidden，外溢的半截会被裁掉；命中区即该格最后 8px，::after 亮线仍在右缘。

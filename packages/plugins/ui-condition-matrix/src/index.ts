@@ -118,11 +118,21 @@ type GridKeyEvent = {
   preventDefault(): void;
 };
 
-/** 滚动容器的最小形状（视口化路径读滚动位置 / 可视高、按属性选择器聚焦格子） */
+/** 元素几何最小形状（量列宽用；插件 tsconfig 无 DOM lib ⇒ 自备） */
+type Rect = { left: number; right: number; width: number };
+/** 首列列宽拖拽：已快照的列宽 + 表宽（`key` = 快照时的 matrixKey，换角色 / 依赖版本即失效） */
+type ColSnap = { key: string; widths: number[]; tableW: number };
+
+/** 滚动容器的最小形状（视口化路径读滚动位置 / 可视高、按属性选择器聚焦格子；
+ *  首列列宽拖拽另需量列边界（querySelector / querySelectorAll）） */
 type ScrollBox = {
   scrollTop: number;
   clientHeight: number;
-  querySelector(sel: string): { focus(): void } | null;
+  querySelector(sel: string): { focus(): void; getBoundingClientRect(): Rect } | null;
+  querySelectorAll(sel: string): ArrayLike<{
+    getBoundingClientRect(): Rect;
+    classList: { add(c: string): void; remove(c: string): void };
+  }>;
 };
 
 /** 滚动事件的最小形状 */
@@ -389,8 +399,24 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const [splitDragging, setSplitDragging] = useState(false);
         /** 首列（「状态 \ 时机」）拖拽宽度（px；null = 未拖过，走自然宽度）——会话级，与详情高度同口径 */
         const [rowheadW, setRowheadW] = useState<number | null>(null);
-        /** 首列列宽拖拽中（仅用于高亮） */
-        const [colDragging, setColDragging] = useState(false);
+        /**
+         * 首列列宽拖拽（HK-27 / HK-28）：接管期把表切成 `table-layout: fixed` + `<colgroup>` 列宽快照
+         * + **显式表宽**，每帧只直写第 0 个 `<col>` 与表宽这两个内联样式。
+         *
+         * 原实现每帧改 `.cm-scroll` 上的 `--cm-rowhead-w`：自定义属性按继承失效整棵万节点子树，
+         * 且 `table-layout: auto` 要重测全表内容。CDP 实测（6487 格 / 26 行）：p50 483ms / max 567ms。
+         * 切定宽后同一张表实测 p50 33ms / avg 35ms / max 50ms（预热后；首帧仍 ~67ms）。
+         *
+         * 显式表宽**不能省**：只切 `table-layout: fixed` 时这张表的 `<col>` 宽会被浏览器忽略
+         * （探针实测：col0 由 160 改 300，角格恒 160、表宽纹丝不动）；把表宽写死成
+         * 「快照表宽 + (首列宽 - 首列原始宽)」后角格 160→320、表宽 12466→12724，几何精确跟手。
+         */
+        const [colSnap, setColSnap] = useState<ColSnap | null>(null);
+        const colSnapRef = useRef<ColSnap | null>(null);
+        const colRef = useRef<{ style: { width: string } } | null>(null);
+        const tableRef = useRef<{ style: { width: string } } | null>(null);
+        /** 拖拽中最后算出的宽度（pointerup 时 commit 回 state） */
+        const lastColW = useRef<number | null>(null);
         const rootRef = useRef<{ clientHeight: number } | null>(null);
         const detailRef = useRef<{ clientHeight: number } | null>(null);
         const cornerRef = useRef<{ offsetWidth: number } | null>(null);
@@ -489,19 +515,66 @@ export function createUiConditionMatrixPlugin(): Plugin {
           setSplitDragging(false);
         };
 
-        // 首列（「状态 \ 时机」）列宽拖拽（HK-25）：与详情分隔线同范式（pointer 捕获 + 钳制）。
+        // 首列（「状态 \ 时机」）列宽拖拽（HK-25 / HK-27·28）：与详情分隔线同范式（pointer 捕获 + 钳制）。
         // 把手遍布**整列**（表头角格 + 每一行的行头），故事件挂在 .cm-scroll 上**委派**：
         // 行组件不为拖拽持有 handler ⇒ `memo` 不被破坏；命中与否只看 target 落在不落在把手上。
+        /** 拖拽中把**整列**把手的边界线点亮（直接改 DOM 类，不走 React：理由见 onColDown 注释） */
+        const toggleHandles = (on: boolean): void => {
+          const handles = scrollRef.current?.querySelectorAll('.cm-corner-resize');
+          if (!handles) return;
+          for (let i = 0; i < handles.length; i++) {
+            if (on) handles[i]!.classList.add('cm-on');
+            else handles[i]!.classList.remove('cm-on');
+          }
+        };
+
+        /** 量当前自然列宽 + 表宽：相邻列（第二行子表头）左缘之差。整列按表宽归一 ⇒ 接管瞬间零漂移 */
+        const measureColSnap = (key: string): ColSnap | null => {
+          const box = scrollRef.current;
+          const table = box?.querySelector('.cm-table');
+          const subths = box?.querySelectorAll('.cm-subth');
+          if (!table || !subths || subths.length === 0) return null;
+          const tRect = table.getBoundingClientRect();
+          const widths: number[] = [];
+          let prevLeft = tRect.left;
+          for (let i = 0; i < subths.length; i++) {
+            const left = subths[i]!.getBoundingClientRect().left;
+            widths.push(left - prevLeft);
+            prevLeft = left;
+          }
+          widths.push(tRect.right - prevLeft);
+          // 相邻列左缘之差的和与表宽有亚像素差（折叠边框重叠）：整列同比缩放对齐，
+          // 使「快照列宽之和 === 表宽」严格成立 ⇒ 切定宽那一帧不会自己长胖 / 收窄。
+          const sum = widths.reduce((a, b) => a + b, 0);
+          if (sum > 0 && Math.abs(sum - tRect.width) > 0.5) {
+            const k = tRect.width / sum;
+            for (let i = 0; i < widths.length; i++) widths[i] = widths[i]! * k;
+          }
+          return { key, widths, tableW: tRect.width };
+        };
+
         const onColDown = (e: ColResizePointer): void => {
           if (!e.target?.closest?.('.cm-corner-resize')) return;
           e.preventDefault();
+          // 快照列宽；仅在失效时重量（快照有效 = 已经在定宽模式里，再量会量到定宽本身）
+          const cached = colSnapRef.current;
+          if (!cached || cached.key !== matrixKey) {
+            const snap = measureColSnap(matrixKey);
+            if (!snap) return; // 量不到就不接管：保持原行为，绝不半途而废
+            colSnapRef.current = snap;
+            setColSnap(snap);
+          }
+          lastColW.current = null;
           colDragSeed.current = {
             pointerId: e.pointerId,
             startX: e.clientX,
             // 首次拖拽从「当前真实列宽」起步（未拖过时 = 角格自然宽度），不跳变
             startW: rowheadW ?? cornerRef.current?.offsetWidth ?? ROWHEAD_MIN_W,
           };
-          setColDragging(true);
+          // 拖拽高亮：直接给**把手自己**加类，不走 React state。早先写的是 `.cm-scroll.col-resizing`
+          // ——后代选择器 ⇒ 一次类切换就让整棵 6.5k 格子子树失效重算（CDP 实测那一记 ~450ms 长帧的
+          // 头号嫌疑）；改挂到 37 枚把手上后失效面只剩 37 个元素，且拖拽起止不再触发 React 重渲。
+          toggleHandles(true);
           // 指针捕获：拖快了指头滑出命中区也不丢事件
           e.currentTarget.setPointerCapture(e.pointerId);
         };
@@ -509,13 +582,23 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const onColMove = (e: ColResizePointer): void => {
           const seed = colDragSeed.current;
           if (!seed || seed.pointerId !== e.pointerId) return;
-          setRowheadW(clampRowheadWidth(seed.startW + (e.clientX - seed.startX)));
+          const w = clampRowheadWidth(seed.startW + (e.clientX - seed.startX));
+          lastColW.current = w;
+          // 只写两个内联样式：第 0 个 `<col>` 的 width + 表宽（快照表宽 + 首列宽增量）。
+          // 同步写即可：浏览器把布局推迟到下一帧，同帧多次 pointermove 只落一次重排。
+          // 表宽必须同步写——定宽布局下「显式表宽」才让 `<col>` 生效（见上方注释）。
+          const snap = colSnapRef.current;
+          if (colRef.current) colRef.current.style.width = `${w}px`;
+          if (snap && tableRef.current) tableRef.current.style.width = `${snap.tableW + w - snap.widths[0]!}px`;
         };
 
         const onColEnd = (e: { pointerId: number }): void => {
           if (colDragSeed.current?.pointerId !== e.pointerId) return;
           colDragSeed.current = null;
-          setColDragging(false);
+          // 落库：commit 回 React state，由 `<colgroup>` 第 0 个 col 承接；定宽模式**保留**到换角色
+          // （matrixKey 变）为止 ⇒ 松手不再触发「1 万节点样式失效 + 整表重排」那一下。
+          if (lastColW.current !== null) setRowheadW(lastColW.current);
+          toggleHandles(false);
         };
 
         /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
@@ -705,7 +788,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           // 折叠组仍渲染占位格（空白）以维持列对齐，只是不渲染其内容。
           const head = createElement(
             'thead',
-            null,
+            { key: 'hd' },
             createElement(
               'tr',
               null,
@@ -761,6 +844,10 @@ export function createUiConditionMatrixPlugin(): Plugin {
           );
 
           const colCount = matrix.columns.length;
+          // 首列列宽拖拽接管判据：快照的 matrixKey 须与当前一致（换角色 / 依赖版本即失效）且列数吻合。
+          // 有效 ⇒ 表切 `table-layout: fixed` + `<colgroup>`（见 .cm-scroll.col-pinned）。
+          const activeSnap =
+            colSnap && colSnap.key === matrixKey && colSnap.widths.length === colCount + 1 ? colSnap : null;
           /** 占位块：单个 td 跨全部列、钉死高度撑出滚动条（视口化路径专用） */
           const spacer = (h: number, key: string): ReactNode =>
             h > 0
@@ -779,7 +866,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
             const win = computeViewportWindow(scrollTop, viewportH, MATRIX_ROW_H, rows.length, MATRIX_OVERSCAN);
             body = createElement(
               'tbody',
-              null,
+              { key: 'bd' },
               spacer(win.topPad, 'pad-top'),
               ...rows.slice(win.start, win.end).map((row, i) =>
                 createElement(MatrixRowView, {
@@ -798,7 +885,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
             const shown = rows.slice(0, ROW_RENDER_CAP);
             body = createElement(
               'tbody',
-              null,
+              { key: 'bd' },
               ...shown.map((row, rowIndex) =>
                 createElement(MatrixRowView, {
                   key: row.key,
@@ -823,12 +910,37 @@ export function createUiConditionMatrixPlugin(): Plugin {
           // 网格区 CSS 变量：行高常量唯一真源（视口化路径用）+ 首列拖拽宽度（HK-25，拖过才设）
           const gridStyle: Record<string, string> = {};
           if (virtualize) gridStyle['--cm-row-h'] = `${MATRIX_ROW_H}px`;
-          if (rowheadW !== null) gridStyle['--cm-rowhead-w'] = `${rowheadW}px`;
+          // 定宽接管期由 `<colgroup>` 第 0 个 col 承接首列宽 ⇒ 不再设 var（设了会按继承失效整棵子树）。
+          // 未接管（无有效快照）时仍走 var：这是「换角色后仍保留拖过的宽度」的唯一通道。
+          if (rowheadW !== null && activeSnap === null) gridStyle['--cm-rowhead-w'] = `${rowheadW}px`;
+
+          // 定宽接管：每列一条 `<col>`（第 0 条 = 首列，宽度跟 rowheadW；其余为快照的自然列宽）
+          const colgroup = activeSnap
+            ? createElement(
+                'colgroup',
+                { key: 'cg' },
+                createElement('col', {
+                  key: 'col-0',
+                  ref: colRef,
+                  style: { width: `${rowheadW ?? activeSnap.widths[0]}px` },
+                }),
+                ...activeSnap
+                  .widths.slice(1)
+                  .map((w, i) => createElement('col', { key: `col-${i + 1}`, style: { width: `${w}px` } })),
+              )
+            : null;
+          // 接管期的**显式表宽**：没有它，定宽布局下浏览器会忽略 `<col>` 宽（首列拖了不动）。
+          // 值 = 快照表宽 + (首列当前宽 - 首列原始宽) ⇒ 只动首列，其余列几何逐字不变。
+          const colW0 = activeSnap ? rowheadW ?? activeSnap.widths[0]! : 0;
+          const tableStyle: CSSProperties | undefined = activeSnap
+            ? { width: `${activeSnap.tableW + colW0 - activeSnap.widths[0]!}px` }
+            : undefined;
 
           grid = createElement(
             'div',
             {
-              className: 'cm-scroll' + (virtualize ? ' cm-virt' : '') + (colDragging ? ' col-resizing' : ''),
+              className:
+                'cm-scroll' + (virtualize ? ' cm-virt' : '') + (activeSnap ? ' col-pinned' : ''),
               ref: scrollRef,
               onKeyDown: onGridKeyDown,
               // 首列拖拽 **委派**到本容器：把手遍布整列（角格 + 每个行头），行组件不持有 handler
@@ -840,7 +952,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
               // 未拖过时变量未设 ⇒ CSS 回退 auto（自然宽度，逐字不变）
               style: Object.keys(gridStyle).length > 0 ? (gridStyle as CSSProperties) : undefined,
             },
-            createElement('table', { className: 'cm-table' }, head, body),
+            createElement('table', { className: 'cm-table', ref: tableRef, style: tableStyle }, colgroup, head, body),
             moreNotice,
           );
         }
