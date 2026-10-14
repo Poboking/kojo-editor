@@ -3985,3 +3985,33 @@ button.primary .hint {
   font-size: var(--fs-4);
   pointer-events: none;
 }
+
+/* ============================ HK-4 UI 打磨（2026-10-14） ============================ */
+
+/* --------------------- UI-4：壳层交互 chrome 焦点环补齐 --------------------- */
+/* 全局 :focus-visible（见文件上方「焦点可见性」）已给一切元素描边；这里对壳层交互
+   chrome 显式重述一遍，口径完全一致（1px var(--accent)、offset 1px）——把「标签条
+   按钮 / 活动栏图标按钮 / 面板折叠与关闭按钮 / 工具栏按钮」列成一张清单，避免日后
+   某处补了 outline:none 就静默丢掉键盘可见性。 */
+.ab-item:focus-visible,
+.sidebar-section-head:focus-visible,
+.panel-tab:focus-visible,
+.panel-float:focus-visible,
+.panel-close:focus-visible,
+.floating-panel-action:focus-visible,
+.toolbar-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* --------------------- UI-5：应用内「减弱动效」开关 --------------------- */
+/* 条件来自 motion-pref.ts 写在 <html> 上的 data-motion='reduced'（用户开关），
+   与上方 @media (prefers-reduced-motion: reduce) 块等效、但两条各自独立生效；
+   系统偏好那条保持不动。 */
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}

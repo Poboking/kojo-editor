@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
@@ -36,9 +37,15 @@ import {
   planPanelMoves,
 } from './panel-drop';
 import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
+import {
+  applyMotionPref,
+  loadMotionPref,
+  saveMotionPref,
+  type MotionPref,
+} from './motion-pref';
 import { SEALED_PANEL_IDS, setSealed, useSealed } from './sealed';
 import { modalDepth, closeTopModal } from './modal-stack';
-import { resolveEscLayer, isComposingEvent } from './shell-keys';
+import { resolveEscLayer, isComposingEvent, nextRovingIndex } from './shell-keys';
 import {
   buildCommandRegistry,
   chordFromEvent,
@@ -213,6 +220,23 @@ export function ShellLayout(props: Props): ReactElement {
     },
     [kernel],
   );
+
+  /**
+   * 减弱动效开关（UI-5；设置页里的那一项）。
+   *
+   * 真源是 `motion-pref.ts` 的 localStorage 偏好 + `<html data-motion>` 属性，
+   * 这里只持有会话内的镜像值供开关渲染。挂载时按存下的偏好同步一次属性——
+   * 否则「上次选了减弱动效」要到用户再打开设置页才生效。
+   */
+  const [motionPref, setMotionPref] = useState<MotionPref>(() => loadMotionPref());
+  useEffect(() => {
+    applyMotionPref(loadMotionPref());
+  }, []);
+  const commitMotionPref = useCallback((p: MotionPref) => {
+    saveMotionPref(p);
+    setMotionPref(p);
+    applyMotionPref(p);
+  }, []);
 
   // overlay 打开/关闭意图（内核事件落地；Esc 关闭在全局键盘处理器）
   useEffect(() => {
@@ -587,18 +611,65 @@ export function ShellLayout(props: Props): ReactElement {
     window.addEventListener('mouseup', onUp);
   };
 
+  /* -------------------- UI-4：活动栏 / 标签条方向键漫游（roving tabindex） -------------------- */
+
+  /** 活动栏视图项按 DOM 顺序（常规组 + 低频组）——方向键漫游的索引基准 */
+  const abHighFreq = org.views.filter((v) => !isLowFreqView(v));
+  const abLowFreq = org.views.filter(isLowFreqView);
+  const abViewList = [...abHighFreq, ...abLowFreq];
+  /** 活动栏 roving 的 tab 落点：当前激活视图；不在列表（视图被清空/迁移）则回退首项 */
+  const abTabKey = abViewList.some((v) => v.key === layout.sidebar.active)
+    ? layout.sidebar.active
+    : abViewList[0]?.key;
+
+  /** 活动栏方向键：移动焦点并同步激活该视图（Enter/Space 仍由按钮原生活化） */
+  const activityKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
+    const next = nextRovingIndex(index, abViewList.length, e.key);
+    if (next === null) return; // 非漫游键：原样让位（Enter/Space/Tab 不该被吞）
+    e.preventDefault();
+    const view = abViewList[next];
+    if (!view) return;
+    if (view.key !== layout.sidebar.active) {
+      dispatch({ type: 'activate', container: 'sidebar', key: view.key });
+    }
+    // 落点在视图项之内（设置按钮排在 `.ab-item` 序列末尾，next 不会落到它）
+    const btns = e.currentTarget.closest('nav')?.querySelectorAll<HTMLButtonElement>('.ab-item');
+    if (btns) Array.from(btns)[next]?.focus();
+  };
+
+  /** 标签条方向键：移动焦点并同步激活该面板（role=tablist 自动激活，与鼠标点击同语义） */
+  const tabStripKeyDown = (
+    e: ReactKeyboardEvent<HTMLButtonElement>,
+    container: 'aux' | 'bottom',
+    items: readonly UIPanelContribution[],
+    index: number,
+  ): void => {
+    const next = nextRovingIndex(index, items.length, e.key);
+    if (next === null) return;
+    e.preventDefault();
+    const tab = items[next];
+    if (!tab) return;
+    dispatch({ type: 'activate', container, key: tab.id });
+    const tabs = e.currentTarget
+      .closest('[role="tablist"]')
+      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    if (tabs) Array.from(tabs)[next]?.focus();
+  };
+
   const activityBar = (
     <nav
       className={`activitybar ${dropTarget === 'sidebar' ? 'drop-target' : ''}`}
       aria-label="活动栏"
       {...dropProps('sidebar')}
     >
-      {org.views.filter((v) => !isLowFreqView(v)).map((v) => (
+      {abHighFreq.map((v, i) => (
         <button
           key={v.key}
           className={`ab-item ${layout.sidebar.visible && v.key === layout.sidebar.active ? 'active' : ''}`}
           title={`${v.title}（可拖拽到其他容器）`}
           draggable
+          tabIndex={v.key === abTabKey ? 0 : -1}
+          onKeyDown={(e) => activityKeyDown(e, i)}
           onDragStart={(e) => startPanelDrag(e, v.panels.map((p) => p.id))}
           onDragEnd={dragEnd}
           onClick={() =>
@@ -613,12 +684,14 @@ export function ShellLayout(props: Props): ReactElement {
         </button>
       ))}
       <span className="ab-spacer" />
-      {org.views.filter(isLowFreqView).map((v) => (
+      {abLowFreq.map((v, i) => (
         <button
           key={v.key}
           className={`ab-item ${layout.sidebar.visible && v.key === layout.sidebar.active ? 'active' : ''}`}
           title={`${v.title}（可拖拽到其他容器）`}
           draggable
+          tabIndex={v.key === abTabKey ? 0 : -1}
+          onKeyDown={(e) => activityKeyDown(e, abHighFreq.length + i)}
           onDragStart={(e) => startPanelDrag(e, v.panels.map((p) => p.id))}
           onDragEnd={dragEnd}
           onClick={() =>
@@ -688,14 +761,16 @@ export function ShellLayout(props: Props): ReactElement {
 
   const tabStrip = (container: 'aux' | 'bottom', items: readonly UIPanelContribution[], activeId: string | null): ReactElement => (
     <div className="panel-tabs" role="tablist">
-      {items.map((p) => (
+      {items.map((p, i) => (
         <button
           key={p.id}
           role="tab"
           aria-selected={p.id === activeId}
+          tabIndex={p.id === activeId ? 0 : -1}
           className={`panel-tab ${p.id === activeId ? 'active' : ''}`}
           title={`${p.title}（可拖拽到其他容器）`}
           draggable
+          onKeyDown={(e) => tabStripKeyDown(e, container, items, i)}
           onDragStart={(e) => startPanelDrag(e, [p.id])}
           onDragEnd={dragEnd}
           onClick={() => dispatch({ type: 'activate', container, key: p.id })}
@@ -910,6 +985,22 @@ export function ShellLayout(props: Props): ReactElement {
                         ? '按一行正文的舒适宽度收拢；关闭则铺满整个窗口'
                         : '需要先开启写作模式'}
                     </span>
+                  </span>
+                </label>
+              </div>
+
+              {/* 动效（UI-5）：应用内的降噪开关，独立于系统级 prefers-reduced-motion */}
+              <div className="settings-group">
+                <div className="settings-group-title">外观</div>
+                <label className="settings-row">
+                  <input
+                    type="checkbox"
+                    checked={motionPref === 'reduced'}
+                    onChange={(e) => commitMotionPref(e.target.checked ? 'reduced' : 'full')}
+                  />
+                  <span>
+                    减弱动效
+                    <span className="settings-hint">收起面板过渡与入场动画，界面切换更干脆。系统级「减弱动效」设置仍会照常生效</span>
                   </span>
                 </label>
               </div>
