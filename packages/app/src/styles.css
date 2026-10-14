@@ -3175,6 +3175,30 @@ button.erb-mode-hint.unlocked:hover {
   padding-top: var(--space-3);
   border-top: 1px solid var(--border);
 }
+/* 更新 / 关于组（REL-2）：状态行三态色调沿用语义色 token；外链行复用 settings-row 栅格 */
+.settings-hint.is-ok {
+  color: var(--success);
+}
+.settings-hint.is-err {
+  color: var(--danger);
+}
+.settings-link {
+  color: inherit;
+  text-decoration: none;
+}
+.settings-link-icon {
+  margin-left: auto;
+  align-self: center;
+  color: var(--fg-dim);
+}
+.settings-avatar {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+}
 .wizard-error {
   color: var(--red);
   font-size: var(--fs-1);

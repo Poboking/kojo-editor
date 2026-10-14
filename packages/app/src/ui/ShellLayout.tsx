@@ -15,6 +15,8 @@ import {
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { EditorCommandContext, UIPanelContribution } from '@kojo/plugin-api';
+import { check, type Update } from '@tauri-apps/plugin-updater';
+import { getVersion } from '@tauri-apps/api/app';
 import {
   defaultLayout,
   loadLayout,
@@ -55,6 +57,12 @@ import {
 import { filterSealedPanels, setSealed, useSealed } from './sealed';
 import { setDirectMode, useDirectMode } from './direct-mode';
 import { setPanelVirtualize, usePanelVirtualize } from './panel-prefs';
+import {
+  isUpdateBusy,
+  reduceUpdatePhase,
+  updateStatus,
+  type UpdatePhase,
+} from './update-check';
 import { modalDepth, closeTopModal } from './modal-stack';
 import { resolveEscLayer, isComposingEvent, nextRovingIndex } from './shell-keys';
 import {
@@ -268,6 +276,70 @@ export function ShellLayout(props: Props): ReactElement {
     saveMotionPref(p);
     setMotionPref(p);
     applyMotionPref(p);
+  }, []);
+
+  /**
+   * 检查更新（REL-1 收尾 · REL-2 设置页）：状态机在 `update-check.ts`（零 React，可单测），
+   * 这里只持有会话内镜像 + 调宿主 API。版本号走 `getVersion()`（core:default 已放行）；
+   * 非 Tauri 环境（纯浏览器 dev / node 测试）读不到就保持 null，页面显示「未知」。
+   */
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [updatePhase, setUpdatePhase] = useState<UpdatePhase>({ kind: 'idle' });
+  const updateFoundRef = useRef<Update | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getVersion()
+      .then((v) => {
+        if (!cancelled) setAppVersion(v);
+      })
+      .catch(() => {
+        /* 非 Tauri 环境：保持「未知」 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 常驻状态行（found 态回 null——它另有带安装按钮的专属行）
+  const updateStatusLine = updateStatus(updatePhase);
+
+  const runUpdateCheck = useCallback(async () => {
+    setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'checkStart' }));
+    try {
+      const found = await check();
+      if (found == null) {
+        setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'checkLatest' }));
+      } else {
+        updateFoundRef.current = found;
+        setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'checkFound', version: found.version }));
+      }
+    } catch {
+      // 私仓尚未发布 release：端点现阶段必然 404，失败是常态路径——必须可见、可重试，绝不抛未捕获异常
+      updateFoundRef.current = null;
+      setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'checkFailed' }));
+    }
+  }, []);
+
+  const installUpdate = useCallback(async () => {
+    const found = updateFoundRef.current;
+    if (found == null) return;
+    setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installStart', total: null }));
+    try {
+      await found.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installStart', total: event.data.contentLength ?? null }));
+        } else if (event.event === 'Progress') {
+          setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installProgress', chunk: event.data.chunkLength }));
+        } else if (event.event === 'Finished') {
+          setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installDone' }));
+        }
+      });
+      setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installDone' }));
+    } catch {
+      // 下载 / 安装中断（断网、用户取消）：失败态可见可重试，之前的 Update 对象不再可信
+      updateFoundRef.current = null;
+      setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installFailed' }));
+    }
   }, []);
 
   // overlay 打开/关闭意图（内核事件落地；Esc 关闭在全局键盘处理器）
@@ -1194,6 +1266,87 @@ export function ShellLayout(props: Props): ReactElement {
                     <span className="settings-hint">不影响任何文件内容</span>
                   </span>
                 </div>
+              </div>
+
+              {/* 检查更新（REL-1 收尾 · REL-2）：状态机在 update-check.ts，行内三态而非弹窗。
+                  当前仓库尚未发布过 release，check() 现阶段必然 404——失败态是常态路径，
+                  必须可见可重试（见 runUpdateCheck 的 try-catch），绝不让按钮抛未捕获异常。 */}
+              <div className="settings-group">
+                <div className="settings-group-title">更新</div>
+                <div className="settings-row static">
+                  <button
+                    className="ghost small"
+                    onClick={runUpdateCheck}
+                    disabled={isUpdateBusy(updatePhase)}
+                  >
+                    {updatePhase.kind === 'checking' ? '检查中…' : '检查更新'}
+                  </button>
+                  <span>
+                    当前版本 {appVersion !== null ? `v${appVersion}` : '未知'}
+                    {updateStatusLine ? (
+                      <span
+                        className={
+                          updateStatusLine.tone === 'ok'
+                            ? 'settings-hint is-ok'
+                            : updateStatusLine.tone === 'err'
+                              ? 'settings-hint is-err'
+                              : 'settings-hint'
+                        }
+                      >
+                        {updateStatusLine.text}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+                {updatePhase.kind === 'found' ? (
+                  <div className="settings-row static">
+                    <button className="primary small" onClick={installUpdate}>
+                      下载并安装 v{updatePhase.version}
+                    </button>
+                    <span>
+                      发现新版本 v{updatePhase.version}
+                      <span className="settings-hint">下载安装完成后，重启应用生效</span>
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* 关于（REL-2）：开发者联系卡 + 意见反馈。外链用原生 <a target="_blank">——
+                  项目未装 opener/shell 插件，WebView2 会把新窗口请求交给系统默认浏览器，
+                  不为这事新增 Rust 依赖（最小改动面）。头像直接引 GitHub 头像端点。 */}
+              <div className="settings-group">
+                <div className="settings-group-title">关于</div>
+                <a
+                  className="settings-row settings-link"
+                  href="https://github.com/Poboking"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <img
+                    className="settings-avatar"
+                    src="https://github.com/Poboking.png"
+                    alt=""
+                    width={32}
+                    height={32}
+                  />
+                  <span>
+                    Poboking
+                    <span className="settings-hint">开发者 · GitHub 主页</span>
+                  </span>
+                  <Icon name="popout" size={12} className="settings-link-icon" />
+                </a>
+                <a
+                  className="settings-row settings-link"
+                  href="https://github.com/Poboking/kojo-editor/issues"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <span>
+                    意见反馈
+                    <span className="settings-hint">问题与建议请到 GitHub Issues 提出</span>
+                  </span>
+                  <Icon name="popout" size={12} className="settings-link-icon" />
+                </a>
               </div>
 
               {/* 单一页脚行，且沿用全站模态房规：primary 恒等于推荐项、排在最右 */}
