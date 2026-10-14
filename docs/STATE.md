@@ -2,12 +2,12 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-14 晚，E14 拖拽打开 + E15 亲密面方案 + HK-4 UI-4/5/6 + 糖复杂场景审计修复 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 + E16 拆解析墙 + HK-17 多版本口上识别 + 语料认内容不认名 + 159 先代占位文件名回退 + SV-1 糖视图原生对齐 + E13/P-1 段块糖与段级吸收 批合流后本机实测）
+## 一、基线（2026-10-14 深夜，E14 拖拽打开 + E15 亲密面方案 + HK-4 UI-4/5/6 + 糖复杂场景审计修复 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 + E16 拆解析墙 + HK-17 多版本口上识别 + 语料认内容不认名 + 159 先代占位文件名回退 + SV-1 糖视图原生对齐 + E13/P-1 段块糖与段级吸收 + L1 首屏白屏批 + HK-19 回放伪变量回收 + FT-2 方言口径收口 批合流后本机实测）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2333 passed / 22 skipped（2355）**；128 文件过 / 9 跳（137） |
-| 全量测试（挂语料 `KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"`） | **2354 passed / 1 skipped（2355）**；137 文件全过（137）——语料面零红 |
+| 全量测试 | **2353 passed / 23 skipped（2376）**；130 文件过 / 10 跳（140） |
+| 全量测试（挂语料 `KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"`） | **2375 passed / 1 skipped（2376）**；140 文件全过（140）——语料面零红 |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **24 项全绿**（E7 写允许域批 +18→22；E14 拖放事件映射 +2；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
