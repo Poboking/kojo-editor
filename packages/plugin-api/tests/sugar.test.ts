@@ -202,6 +202,7 @@ describe('SugarNode · 判别式 narrow', () => {
     { kind: 'colorBlock', color: '0xFF8080', body: [], loc: span(6, 1, 8, 1) },
     { kind: 'randomBlock', alternatives: [], loc: span(9, 1, 12, 1) },
     { kind: 'randomInline', alternatives: ['「嗯。」', '「哦？」'], loc: span(13) },
+    { kind: 'groupBlock', body: [], loc: span(13, 1, 15, 1) },
     { kind: 'choiceBlock', items: [], loc: span(14, 1, 20, 1) },
     { kind: 'whenBlock', subject: 'TFLAG:193', branches: [], loc: span(21, 1, 25, 1) },
     { kind: 'ifBlock', branches: [], loc: span(26, 1, 30, 1) },

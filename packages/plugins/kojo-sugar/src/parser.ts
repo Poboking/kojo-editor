@@ -15,6 +15,7 @@
 import type {
   AliasDecl,
   CustomCommandBlock,
+  GroupBlock,
   HeartLine,
   IfBlock,
   IfBranch,
@@ -569,6 +570,10 @@ class BlockParser {
         this.cursor.next();
         return this.parseColorBody(line, cls.color);
       }
+      case 'groupHead': {
+        this.cursor.next();
+        return this.parseGroupBody(line);
+      }
       case 'rawLine': {
         this.cursor.next();
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
@@ -1074,6 +1079,8 @@ class BlockParser {
         return { kind: 'randomInline', alternatives: cls.alternatives, loc: spanOf(line) } as RandomInline;
       case 'colorHead':
         return this.parseColorBody(line, cls.color);
+      case 'groupHead':
+        return this.parseGroupBody(line);
       case 'choiceHead':
         return this.parseChoiceBody(line);
       case 'exprHead':
@@ -1190,6 +1197,34 @@ class BlockParser {
     return {
       kind: 'colorBlock',
       color,
+      body,
+      loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
+    };
+  }
+
+  /* ------------------------------ 候选组（E18） ------------------------------ */
+
+  /**
+   * `组：` 候选组（规范 §3.6）——把「一个候选想说好几句」收成一条候选。
+   *
+   * 组体与「着色」块体同口径（`parseBody`：台词/旁白/心形/空行/原生行/注释/更深的块），
+   * 产物端**逐句透传**进所在候选（`codegen` 的 `groupBlock` 分支，不产生包装行）。
+   * 空组报 `block-empty`。
+   */
+  private parseGroupBody(headLine: LogicalLine): GroupBlock {
+    const bodyIndent = headLine.indent + 1;
+    const sub = new BlockParser(this.cursor, bodyIndent, this.sink);
+    const body = sub.parseBody();
+    if (body.length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: '「组：」是空的（组里至少要有一行内容）。',
+        loc: posOf(headLine),
+      });
+    }
+    return {
+      kind: 'groupBlock',
       body,
       loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
     };
@@ -1361,6 +1396,7 @@ function isBlockNode(node: SugarNode): boolean {
     node.kind === 'whenBlock' ||
     node.kind === 'colorBlock' ||
     node.kind === 'randomBlock' ||
+    node.kind === 'groupBlock' ||
     node.kind === 'choiceBlock'
   );
 }
@@ -1369,6 +1405,8 @@ function isBlockNode(node: SugarNode): boolean {
 function mergeBlockBody(node: SugarNode, extra: SugarNode[]): void {
   if (extra.length === 0) return;
   if (node.kind === 'colorBlock') {
+    node.body.push(...extra);
+  } else if (node.kind === 'groupBlock') {
     node.body.push(...extra);
   } else if (node.kind === 'ifBlock' && node.branches.length > 0) {
     node.branches[node.branches.length - 1]!.body.push(...extra);

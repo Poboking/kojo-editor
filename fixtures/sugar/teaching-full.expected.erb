@@ -132,6 +132,16 @@ IF LOCAL
 		CASE 1
 			PRINTFORMW 「再、再摸摸嘛。」
 	ENDSELECT
+	; 候选组（§3.6，E18）：在「随机：」里想让某一档连说好几句，也可以把这几句用
+	; 「组：」包起来——组内的多行合起来算**一个**候选（组外的裸行仍各算一个独立候选）
+	LOCAL:2 = RAND:2
+	SELECTCASE LOCAL:2
+		CASE 0
+			PRINTFORMW 「……呼。」
+			PRINTFORMW 「……呼……嘻嘻。」
+		CASE 1
+			PRINTFORMW 「再、再摸摸嘛。」
+	ENDSELECT
 	; 表达式如果（§3.5）：赋值右侧的分支——必须有「否则」（穷尽保证）
 	IF CFLAG:TARGET:好感度 >= 500
 		CFLAG:TARGET:1088 = 1

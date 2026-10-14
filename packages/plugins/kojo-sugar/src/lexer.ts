@@ -154,6 +154,7 @@ export type LineClass =
   | { kind: 'caseHead'; values: WhenCaseValue[] }
   | { kind: 'randomHead' }
   | { kind: 'randomInline'; alternatives: string[] }
+  | { kind: 'groupHead' }
   | { kind: 'choiceHead' }
   | { kind: 'choiceItem'; label: string }
   | { kind: 'colorHead'; color: string }
@@ -579,6 +580,9 @@ function parseBlockHead(content: string): LineClass | null {
       return { kind: 'caseHead', values: parseCaseValues(rest) };
     case 'block.random':
       return rest.length > 0 ? { kind: 'randomInline', alternatives: splitRandomAlternatives(rest) } : { kind: 'randomHead' };
+    case 'block.group':
+      // `组` 只作**裸块头**（`组：`）；带其它内容的写法不识别（按普通文本走，不静默吞掉）
+      return rest.length === 0 ? { kind: 'groupHead' } : null;
     case 'block.choice':
       return { kind: 'choiceHead' };
     case 'block.color':

@@ -249,6 +249,7 @@ export type {
   ChoiceItem,
   ColorBlock,
   CustomCommandBlock,
+  GroupBlock,
   HeartLine,
   IfBlock,
   IfBranch,

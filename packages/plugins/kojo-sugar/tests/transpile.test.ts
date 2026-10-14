@@ -686,6 +686,70 @@ describe('E17 · `当 RAND:n：` 缺档诊断', () => {
 });
 
 /* ============================================================================ */
+/* E18 · `组：` 候选组（一档多行）                                                   */
+/* ============================================================================ */
+
+describe('E18 · `组：` 候选组', () => {
+  it('混排（组 + 裸行）→ 2 候选，组内两行落进 CASE 0', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    随机：\n        组：\n            「……呼。」\n            「……呼……嘻嘻。」\n        「再、再摸摸嘛。」\n';
+    expect(codes(src)).toEqual([]);
+    const out = t(src).erb;
+    expect(out).toContain('LOCAL = RAND:2');
+    expect(out).toContain('CASE 0');
+    expect(out).toContain('PRINTFORMW 「……呼。」');
+    expect(out).toContain('PRINTFORMW 「……呼……嘻嘻。」');
+    expect(out).toContain('CASE 1');
+    expect(out).toContain('PRINTFORMW 「再、再摸摸嘛。」');
+  });
+
+  it('双组 → 2 候选，各自组体逐句透传', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    随机：\n        组：\n            「甲一。」\n            「甲二。」\n        组：\n            「乙一。」\n';
+    expect(codes(src)).toEqual([]);
+    const out = t(src).erb;
+    expect(out).toContain('LOCAL = RAND:2');
+    expect(out).toContain('PRINTFORMW 「甲一。」');
+    expect(out).toContain('PRINTFORMW 「甲二。」');
+    expect(out).toContain('PRINTFORMW 「乙一。」');
+  });
+
+  it('英文别名 `group：` 等价', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    随机：\n        group：\n            「甲。」\n            「乙。」\n        「丙。」\n';
+    expect(codes(src)).toEqual([]);
+    const out = t(src).erb;
+    expect(out).toContain('LOCAL = RAND:2');
+    expect(out).toContain('PRINTFORMW 「甲。」');
+    expect(out).toContain('PRINTFORMW 「乙。」');
+    expect(out).toContain('PRINTFORMW 「丙。」');
+  });
+
+  it('组内注释与原生行 → 逐句透传（注释保留、原生行原样）', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    随机：\n        组：\n            ; 组内注释\n            「甲。」\n            SETCOLOR 0xFFFFFF\n        「乙。」\n';
+    expect(codes(src)).toEqual([]);
+    const out = t(src).erb;
+    expect(out).toContain('; 组内注释');
+    expect(out).toContain('SETCOLOR 0xFFFFFF');
+    expect(out).toContain('PRINTFORMW 「甲。」');
+  });
+
+  it('空组 → block-empty', () => {
+    const src = '角色: 12\n时机 指令 310：\n    随机：\n        组：\n';
+    expect(codes(src)).toContain('block-empty');
+  });
+
+  it('时机正文顶层的 `组：` → 纯分组透传（无包装行）', () => {
+    const src = '角色: 12\n时机 指令 310：\n    组：\n        「甲。」\n        「乙。」\n';
+    expect(codes(src)).toEqual([]);
+    const out = t(src).erb;
+    expect(out).toContain('PRINTFORMW 「甲。」');
+    expect(out).toContain('PRINTFORMW 「乙。」');
+  });
+});
+
+/* ============================================================================ */
 /* §3.7 选项块                                                                   */
 /* ============================================================================ */
 

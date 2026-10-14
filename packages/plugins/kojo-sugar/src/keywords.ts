@@ -28,6 +28,7 @@ export type KeywordId =
   | 'block.when'
   | 'block.is'
   | 'block.random'
+  | 'block.group'
   | 'block.choice'
   | 'block.color'
   | 'block.customCommand'
@@ -78,6 +79,9 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['is', 'block.is'],
   ['随机', 'block.random'],
   ['random', 'block.random'],
+  // 候选组（E18）：把「随机：」的一个候选收成多行；只作**裸块头** `组：`
+  ['组', 'block.group'],
+  ['group', 'block.group'],
   ['选项', 'block.choice'],
   ['choice', 'block.choice'],
   ['着色', 'block.color'],

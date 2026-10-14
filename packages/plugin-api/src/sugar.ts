@@ -260,6 +260,23 @@ export interface RandomInline extends SugarNodeBase {
   alternatives: string[];
 }
 
+/* ============================== 候选组（§3.6） ============================== */
+
+/**
+ * `组：` 候选组（规范 §3.6）——把「一个候选想说好几句」写成一条候选。
+ *
+ * 有意义的位置是 `随机：` 的**候选**（也可在时机正文里作纯分组透传，文档不教）。
+ * 组体逐句**透传**进所在候选，不产生任何包装行——产物与「几行裸行候选」同构
+ * （`随机：` 的候选边界是**行**，这个写法只是把多行收进一条候选）。
+ * 组体允许与「如果」块体同口径的内容（台词 / 旁白 / 心形 / 空行 / 原生行 /
+ * 注释 / 更深的块）；空组报 `block-empty`。
+ */
+export interface GroupBlock extends SugarNodeBase {
+  kind: 'groupBlock';
+  /** 组体（逐句透传） */
+  body: SugarNode[];
+}
+
 /* ============================== 选项块 ============================== */
 
 /**
@@ -510,6 +527,7 @@ export type SugarStatement =
   | WhenBlock
   | RandomBlock
   | RandomInline
+  | GroupBlock
   | ChoiceBlock
   | ColorBlock
   | CustomCommandBlock

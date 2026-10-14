@@ -1000,6 +1000,11 @@ function emitStatement(em: Emitter, node: SugarNode, ctx: BodyContext, indent: n
     case 'randomInline':
       emitRandomInline(em, node, ctx, indent);
       break;
+    case 'groupBlock':
+      // `组：` 候选组（E18）：组体**逐句透传**进所在候选——同缩进、不产生包装行，
+      // 产物与「几行裸行候选」同构（`随机：` 的候选边界是行，本写法只把多行收成一条候选）。
+      for (const child of node.body) emitStatement(em, child, ctx, indent);
+      break;
     case 'choiceBlock':
       emitChoiceBlock(em, node, ctx, indent);
       break;
