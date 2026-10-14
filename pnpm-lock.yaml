@@ -92,6 +92,9 @@ importers:
       '@tauri-apps/api':
         specifier: ^2.12.2
         version: 2.12.2
+      '@tauri-apps/plugin-updater':
+        specifier: ^2.13.3
+        version: 2.13.3
       monaco-editor:
         specifier: ^0.57.0
         version: 0.57.0
@@ -795,6 +798,9 @@ packages:
     resolution: {integrity: sha512-kEDEiGzG+yAc5FeLxtXpES/VN+F2C8H0r4gDVtfRLKxT9np9101d9REG/Kgo2lr0hKi0IpDsODiHnU3+naOmLg==}
     engines: {node: '>= 10'}
     hasBin: true
+
+  '@tauri-apps/plugin-updater@2.13.3':
+    resolution: {integrity: sha512-CtbA8CZ79WJry2HbRiFGx6WZN7uspho6A4jM+TxmuqwWL2EEfJEMw6BIYgRncIZyqp4vEXw3U/97ZjQ33dKUgg==}
 
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
@@ -1712,6 +1718,10 @@ snapshots:
       '@tauri-apps/cli-win32-arm64-msvc': 2.12.1
       '@tauri-apps/cli-win32-ia32-msvc': 2.12.1
       '@tauri-apps/cli-win32-x64-msvc': 2.12.1
+
+  '@tauri-apps/plugin-updater@2.13.3':
+    dependencies:
+      '@tauri-apps/api': 2.12.2
 
   '@types/babel__core@7.20.5':
     dependencies:

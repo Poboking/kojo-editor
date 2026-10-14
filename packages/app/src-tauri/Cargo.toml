@@ -27,6 +27,7 @@ base64 = "0.22"
 walkdir = "2"
 rfd = "0.15"
 notify = "8.2.0"
+tauri-plugin-updater = "2"
 
 [profile.release]
 lto = true

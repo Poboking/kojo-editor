@@ -889,6 +889,7 @@ fn map_drag_drop(event: tauri::DragDropEvent) -> Option<DragDropPayload> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(WriteDomainState::default())
         .manage(WatchState::default())
         .on_window_event(|window, event| {

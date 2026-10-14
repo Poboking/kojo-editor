@@ -26,6 +26,18 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "icon": ["icons/icon.ico"]
+    "icon": ["icons/icon.ico"],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQyOTFDMjRFNzVFOUFENTgKUldSWXJlbDFUc0tSUXBnVXVvRmd3amMxcys3WDQralpVMGhVZVZRdG0zWjd4MXVFdnlNSGhybkQK",
+      "endpoints": [
+        "https://github.com/Poboking/kojo-editor/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
