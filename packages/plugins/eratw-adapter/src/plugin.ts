@@ -15,7 +15,7 @@ import type {
 import { KernelServices, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
-import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
+import { deriveCharaNoFromFileNames, parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { clearKojoFamilyMemo, createEratwFamilyIndex } from './family-index';
 import { createEratwConventions } from './conventions';
 import { loadEratwVariableSchema } from './variable-schema';
@@ -442,16 +442,31 @@ export function createEratwAdapterPlugin(): Plugin {
             if (!e.isDirectory) continue;
             inputParts.push(`kojoDir\u0000${e.name}`);
             const parsed = parseKojoDirName(e.name);
-            if (!parsed) {
+            let no: number | null = parsed?.no ?? null;
+            // 命名回退：目录名不带编号（纯角色名目录，如 4.842 的 `阿燐`）时，
+            // 按目录内 `M_KOJO_K{no}_*.ERB` / `M_KOJO_K{no}.ERH` 文件名反推编号
+            // （与引擎 `KOJO_MESSAGE.ERB` 的 `_K{no}` 调用同口径），取到即按编号路径绑定。
+            const label = parsed?.label ?? e.name;
+            if (parsed === null) {
+              let names: string[] = [];
+              try {
+                const inner = await io.listDir(e.path);
+                names = inner.filter((d) => !d.isDirectory).map((d) => d.name);
+              } catch (err) {
+                ctx.log.debug(`個人口上目录列举失败（按无编号处理）：${e.path} — ${String(err)}`);
+              }
+              no = deriveCharaNoFromFileNames(names);
+            }
+            if (no === null) {
               ctx.log.warn(`個人口上目录名不符合「{三位编号} {名称}」约定（跳过）：${e.name}`);
               continue;
             }
-            const info = charaIndex.get(parsed.no);
+            const info = charaIndex.get(no);
             if (info) {
               info.kojoDir = e.path;
             } else {
               // 口上目录存在但 CSV 中无该编号：补最小条目（不猜测显示名，用目录 label）
-              charaIndex.set(parsed.no, { no: parsed.no, name: parsed.label, kojoDir: e.path });
+              charaIndex.set(no, { no, name: label, kojoDir: e.path });
             }
             bound++;
           }

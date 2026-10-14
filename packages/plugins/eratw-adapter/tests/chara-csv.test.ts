@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from '../src/chara-csv';
+import { deriveCharaNoFromFileNames, parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from '../src/chara-csv';
 import { ERATW } from '../src/constants';
 
 describe('parseCharaCsv（eraTW 4.980 实测格式）', () => {
@@ -46,5 +46,27 @@ describe('parseKojoDirName（個人口上目录约定）', () => {
     expect(parseKojoDirName('of_new_kojo_api_TEST.ERB')).toBeNull();
     expect(parseKojoDirName('Reimu')).toBeNull();
     expect(parseKojoDirName('')).toBeNull();
+  });
+});
+
+describe('deriveCharaNoFromFileNames（纯名目录按文件名回退）', () => {
+  it('4.842 实测：纯角色名目录的 M_KOJO_K{no} 文件名', () => {
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K36_コマンド.ERB'])).toBe(36); // 阿燐
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K130_通常.ERB'])).toBe(130); // 八千慧
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K65_コマンド.ERB', 'M_KOJO_K65.ERH'])).toBe(65); // 椛
+  });
+
+  it('忽略大小写、忽略无关文件', () => {
+    expect(deriveCharaNoFromFileNames(['m_kojo_k36_event.erb', 'README.txt'])).toBe(36);
+  });
+
+  it('多个不同编号取出现次数最多者（并列取最小）', () => {
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K36_a.ERB', 'M_KOJO_K36_b.ERB', 'M_KOJO_K65_c.ERB'])).toBe(36);
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K65_c.ERB', 'M_KOJO_K36_a.ERB'])).toBe(36); // 并列 1:1 → 取小
+  });
+
+  it('目录内无 M_KOJO_K 文件 → null', () => {
+    expect(deriveCharaNoFromFileNames(['阿燐.ERB', 'README.txt'])).toBeNull();
+    expect(deriveCharaNoFromFileNames([])).toBeNull();
   });
 });

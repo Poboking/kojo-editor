@@ -161,6 +161,31 @@ describe('eraTW adapter · loadProject', () => {
     expect([...project.charaIndex.values()].some((c) => c.kojoDir?.includes('weird_name'))).toBe(false);
   });
 
+  it('纯角色名目录（无编号）→ 按文件名 M_KOJO_K{no} 回退绑定', async () => {
+    const tree = standardTree();
+    tree[`${ROOT}/ERB/口上・メッセージ関連/個人口上/阿燐`] = 'DIR';
+    tree[`${ROOT}/ERB/口上・メッセージ関連/個人口上/阿燐/M_KOJO_K36_コマンド.ERB`] =
+      '@M_KOJO_K36_コマンド\nPRINTL にゃー\n';
+    tree[`${ROOT}/ERB/口上・メッセージ関連/個人口上/阿燐/M_KOJO_K36.ERH`] = '';
+    const { adapter } = activate(fakeIO(tree));
+    const project = await adapter.loadProject(ROOT);
+    const orin = project.charaIndex.get(36);
+    expect(orin?.kojoDir).toContain('阿燐');
+    expect(orin?.name).toBe('阿燐');
+    // 编号目录行为不变
+    expect(project.charaIndex.get(1)?.kojoDir).toContain('001 Reimu');
+  });
+
+  it('纯名目录内无 M_KOJO_K 文件 → 仍警告且跳过', async () => {
+    const tree = standardTree();
+    tree[`${ROOT}/ERB/口上・メッセージ関連/個人口上/无名角色`] = 'DIR';
+    tree[`${ROOT}/ERB/口上・メッセージ関連/個人口上/无名角色/杂项.ERB`] = 'PRINTL x\n';
+    const { adapter, warns } = activate(fakeIO(tree));
+    const project = await adapter.loadProject(ROOT);
+    expect(warns.some((w) => w.includes('无名角色'))).toBe(true);
+    expect([...project.charaIndex.values()].some((c) => c.kojoDir?.includes('无名角色'))).toBe(false);
+  });
+
   it('注册到 game.adapter 槽位（onboarding 轮询依据）', () => {
     const { registrations } = activate(fakeIO(standardTree()));
     expect(registrations).toHaveLength(1);
