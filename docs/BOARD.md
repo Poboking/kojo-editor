@@ -27,9 +27,3 @@
 | E17 | **随机块「一档多句」边界写清 + `当 RAND:n：` 缺档诊断**（方案 1，语法零改动；全文 `docs/SUGAR-RANDOM-CANDIDATE-PROPOSAL.md` §2） | ① 教程⑬（`tutorial-content.ts:446`）补「候选=一行；一档说多句改用 `当 随机数：`」+ 对照迷你例——样例受溯源守卫管：先加 `fixtures/sugar/teaching-full.kojo`、`TEACHING_GOLDEN_WRITE=1` 真链路重生成 `.expected.erb`（**禁手写 golden**）；② 新增诊断 `rand-case-incomplete`（error）：`当 RAND:n：`（常量 n≥1、无 `否则`）档位未盖满 0..n-1——实测现在**零诊断静默**（`当 RAND:3：` 只写两档通过，掷到 2 永远沉默）；③ SPEC §3.6 边界句 + §8 lint 表加行。验收：全量不回退 + 双 typecheck + audit + teaching 链路真跑 | 待认领 |
 | E18 | **`随机：` 候选组 `组：`（方案 2；一档多行）**（全文 `…PROPOSAL.md` §3） | `组：`+缩进多行 = 一个候选（英别名 `group`；空组报错；`组：` 后不跟内容报错）。落点全为既有扩展点：`plugin-api/sugar.ts` additive 契约 + `keywords.ts:47` 一行（高亮/补全自动派生）+ `lexer.ts` 块头 + `parser.ts`（groupBlock / isBlockNode / mergeBlockBody）+ `codegen.ts:973` 透传；lift 多行体改产 `组：`（E18b：探针 E 形 `roundtrip-mismatch` 转自证通过）。与 E17a 同域（⑬章 + teaching fixtures）→ **串行认领、后到 rebase**。验收：混排/空组/组内注释单测 + 全量不回退 | 待认领 |
 
-## F. 调试/验证强化线（k12cli 会话立项，2026-10-14；E1 的延伸）
-
-| ID | 任务 | 关键判据 / 形态（已定死，勿再议形） | 认领 |
-|---|---|---|---|
-| V3 | **title fatal 定位（timebox 30 分钟）** | 关兼容开关「解釈不可能な行があっても実行する」跑 V1 镜像抓 file:line；仍无行号→给自建 SKIA fork 打 error-事件带行号补丁（引擎自己编，永远有兜底）。结论二选一：可绕→title 流程并入 V2 场景面；不可绕→板上钉"加载实测=SKIA 天花板"止损 | 认领：v34hand 2026-10-14（接手 k12cli 会话） |
-| V4 | `verify engine-setup`（引擎资产入库） | clone gitgud `develop-skiasharp`（直连/代理交替）→ `dotnet publish` → 落 `KOJO_CLIDBG_DIR`；缺 SDK=FAIL+winget 提示，**不自动装** | 认领：v34hand 2026-10-14（接手 k12cli 会话） |
