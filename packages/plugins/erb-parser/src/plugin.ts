@@ -10,7 +10,7 @@ import type {
   LineDecoration,
   Plugin,
 } from '@kojo/plugin-api';
-import { KernelServices, projectFingerprintOf } from '@kojo/plugin-api';
+import { KernelServices, isErbDialectPath, projectFingerprintOf } from '@kojo/plugin-api';
 import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload, type ScanFlowPayload } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
@@ -46,7 +46,14 @@ import {
  */
 
 const IO = 'kernel.io';
-const ERB_EXT = /\.er[bm]$/i;
+/**
+ * 「哪些文件算 ERB 方言」一律问契约层的单一真源（`plugin-api/erb-ext`，FT-2 收口）。
+ *
+ * 2026-10-14 起口径**含 `.ERH`**（引擎预载白名单认它是脚本文件，实测口上根内 31 份、
+ * 内容只有 `#DIM` / `#DIMS`）：索引文件数随之增加，而函数树不变——声明文件 0 个 `@` 定义，
+ * 这条不变量由 `tests/erh-index.corpus.test.ts` 在真语料上钉死。
+ */
+const isDialect = isErbDialectPath;
 
 /** 索引三段（walk 之外）的窗口并发度：stat 轻、parse 重 */
 const STAT_CONCURRENCY = 32;
@@ -118,10 +125,10 @@ export function createErbParserPlugin(): Plugin {
             includeFiles: true,
             includeDirs: false,
             withMetadata: true,
-            filter: (e) => e.isDirectory || ERB_EXT.test(e.name),
+            filter: (e) => e.isDirectory || isDialect(e.name),
           });
           for (const e of entries) {
-            if (e.isDirectory || !ERB_EXT.test(e.name)) continue;
+            if (e.isDirectory || !isDialect(e.name)) continue;
             allFiles.push(e.path);
             if (typeof e.mtimeMs === 'number' && typeof e.size === 'number') {
               metaByPath.set(e.path, { mtimeMs: e.mtimeMs, size: e.size });
@@ -364,7 +371,8 @@ export function createErbParserPlugin(): Plugin {
        **纯函数**（文本进、行级装饰出，无 React、无 IO）——放这里既不引入新的跨插件依赖，
        也不把"哪些行算控制流语句"这件事外化成第二份知识。
 
-       只管原生 ERB/ERM（`ERB_EXT` 同一条口径）；`.kojo` 的语法诊断另有其人（糖线）。
+       只管 ERB 方言全集（`isErbDialectPath` 同一条口径：正文 `.erb`/`.erm` + 声明 `.erh`）；
+       `.kojo` 的语法诊断另有其人（糖线）。
        超大文件不降级、不跳过：判据是单遍线性扫描，实测读数见 IMPLEMENTATION-LOG 本批记录，
        真要限流也应该由宿主那侧的去抖/上限来做，不在这里悄悄少报。
        */
@@ -373,7 +381,7 @@ export function createErbParserPlugin(): Plugin {
         title: 'ERB 结构错误波浪线',
         order: 20,
         decorate(file): LineDecoration[] {
-          if (!ERB_EXT.test(file.path) || file.text.length === 0) return [];
+          if (!isDialect(file.path) || file.text.length === 0) return [];
           return checkControlFlowStructure(file.text).map((issue) => ({
             line: issue.line,
             severity: 'error' as const,
@@ -401,7 +409,7 @@ export function createErbParserPlugin(): Plugin {
         id: 'erb-structure-fix',
         order: 30,
         provideActions: ({ path, text, line }) => {
-          if (!ERB_EXT.test(path) || text.length === 0) return [];
+          if (!isDialect(path) || text.length === 0) return [];
           // 位置未知就不猜：本包的动作**天生按行**（波浪线在哪行，💡 就在哪行给），
           // 少了这个约束会把几十条动作灌进同一个菜单。
           if (line === undefined) return [];

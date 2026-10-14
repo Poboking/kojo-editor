@@ -22,8 +22,9 @@ import {
  */
 
 describe('classifyDrop：扩展名这一层', () => {
-  it('白名单契约：改这五个扩展名必须同时改这里与覆盖提示（文案由它派生）', () => {
-    expect(OPENABLE_EXT).toEqual(['.kojo', '.erb', '.erm', '.md', '.txt']);
+  it('白名单契约：ERB 方言那一段来自契约层单一真源，非方言两类由本行自己决定', () => {
+    // 顺序即覆盖提示的显示顺序；`.erh` 是 FT-2 才进面的（拖得开 ⇔ 索引收得到，同一份清单）
+    expect(OPENABLE_EXT).toEqual(['.kojo', '.erb', '.erm', '.erh', '.md', '.txt']);
   });
 
   it('事件名与 Rust 侧 DRAG_DROP_EVENT 成对', () => {

@@ -1,4 +1,5 @@
 import type * as Monaco from 'monaco-editor';
+import { erbMonacoExtensions } from '@kojo/plugin-api';
 import { KOJO_SUGAR_THEME_RULES } from './kojo-language';
 
 /**
@@ -46,7 +47,15 @@ export const ERB_COMMENT_THEME_RULE: Monaco.editor.ITokenThemeRule = {
 export function registerErbLanguage(monaco: typeof Monaco): void {
   if (monaco.languages.getLanguages().some((l) => l.id === ERB_LANGUAGE_ID)) return;
 
-  monaco.languages.register({ id: ERB_LANGUAGE_ID, extensions: ['.ERB', '.erb'], aliases: ['ERB', 'EraBasic'] });
+  // 扩展名映射取自契约层单一真源（`plugin-api/erb-ext`，FT-2 收口）：
+  // 索引收哪些方言 ⇔ 高亮覆盖哪些方言，一条清单管两头。大小写两种写法由
+  // `erbMonacoExtensions` 现算派生（Monaco 按字面量匹配，盘上 `X.ERB`/`X.ERH` 都得命中），
+  // 不是第二处手抄。`.ERH` 自本批起进映射——声明文件同样是 `#DIM`/`#DEFINE` 的 ERB 语法。
+  monaco.languages.register({
+    id: ERB_LANGUAGE_ID,
+    extensions: erbMonacoExtensions(),
+    aliases: ['ERB', 'EraBasic'],
+  });
 
   monaco.languages.setMonarchTokensProvider(ERB_LANGUAGE_ID, {
     ignoreCase: false,

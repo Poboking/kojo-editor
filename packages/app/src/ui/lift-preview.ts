@@ -6,9 +6,32 @@
  * 判定（区间归一、ViewZone 计划、只读判定），Monaco 交互留在 EditorPane。
  */
 
-/** 是否原生 ERB（`.erb` / `.erm`）——默认只读预览对象（`.kojo` 不在此列） */
+import { isErbDialectPath } from '@kojo/plugin-api';
+
+/**
+ * ERB 方言扩展名 / 谓词的**单一真源**在 `@kojo/plugin-api/erb-ext`（FT-2 收口，2026-10-14）：
+ * 这里只留一个**同义别名**给 EditorPane 的既有读法，判定逻辑零副本。
+ *
+ * 口径自本批起**含 `.ERH`**（引擎预载白名单认它、盘上实测口上根内 31 份，内容只有
+ * `#DIM` / `#DIMS`）——所以"是否只读预览对象"这条轴与"是否进索引"这条轴**必须同源**，
+ * 否则就是"索引里有、面上开不了"的分裂。
+ */
 export function isErbLike(path: string): boolean {
-  return /\.er[bm]$/i.test(path);
+  return isErbDialectPath(path);
+}
+
+/**
+ * 编辑器只读门（**两轴合一**，纯函数便于单测；ADR-0005）：
+ *
+ * - 轴一 · 目录分野：作者工作区（常驻可写根）里的方言文件是创作源文件，恒可编辑；
+ *   游戏目录里的默认只读。
+ * - 轴二 · 显式解锁：`canEdit` = 本次会话已解锁该文件 **或** 直连模式开门且该路径已获写权限。
+ *
+ * 只有"方言文件 ∧ 不在工作区 ∧ 没拿到可编辑"三者同时成立才锁。`.ERH` 进来后走的是
+ * **同一条门**——写保护铁律不被新扩展名绕开：能不能真落盘仍由内核 io 的写允许域决定。
+ */
+export function erbReadOnlyGate(path: string, axes: { inWorkspace: boolean; canEdit: boolean }): boolean {
+  return isErbLike(path) && !axes.inWorkspace && !axes.canEdit;
 }
 
 /** ViewZone 计划（插入点 + 高度；纯函数，便于断言"不会把预览插到第 0 行之前"） */

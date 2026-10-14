@@ -20,7 +20,7 @@ import { SaveWarningDialog } from './SaveWarningDialog';
 import { editorOptionsForLineCount } from './editor-options';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
-import { clampRange, isErbLike } from './lift-preview';
+import { clampRange, erbReadOnlyGate, isErbLike } from './lift-preview';
 import { pathLabelParts, splitPath } from './path-label';
 import { Icon } from './icons';
 import { perf } from '../perf';
@@ -414,7 +414,7 @@ export function EditorPane({
           // 按当前文件重算 readOnly（解锁 / 直连 / 工作区口径与切换标签 effect 一致）
           const path = filePathRef.current;
           const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
-          ed.updateOptions({ readOnly: isErbLike(path) && !inWorkspace(path) && !canEdit });
+          ed.updateOptions({ readOnly: erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }) });
           sugarModel.dispose();
         } else {
           return; // 无处可还原：保留挂载、不 dispose，至少不白屏
@@ -531,7 +531,7 @@ export function EditorPane({
     const p = filePathRef.current;
     if (!ed || !p) return;
     const canEdit = unlockedPathsRef.current.has(p) || directEditable(p);
-    ed.updateOptions({ readOnly: isErbLike(p) && !inWorkspace(p) && !canEdit });
+    ed.updateOptions({ readOnly: erbReadOnlyGate(p, { inWorkspace: inWorkspace(p), canEdit }) });
     applySugarView();
   }, [directMode, kernel, applySugarView]);
 
@@ -1016,7 +1016,7 @@ export function EditorPane({
       const allowEdit = unlockedPathsRef.current.has(filePath) || directEditable(filePath);
       setUnlocked(allowEdit);
       ed.updateOptions({
-        readOnly: isErbLike(filePath) && !inWorkspace(filePath) && !allowEdit,
+        readOnly: erbReadOnlyGate(filePath, { inWorkspace: inWorkspace(filePath), canEdit: allowEdit }),
         ...editorOptionsForLineCount(entry.model.getLineCount()),
       });
       ed.setModel(entry.model);
@@ -1058,7 +1058,7 @@ export function EditorPane({
       // （ADR-0005 给糖组的适配项——别把写保护铁律的代价转嫁到正常操作上）。
       // 回锁时若直连开门仍应保持可编辑（直连是独立的可编辑来源）。
       const canEdit = allowEdit || directEditable(path);
-      ed.updateOptions({ readOnly: isErbLike(path) && !inWorkspace(path) && !canEdit });
+      ed.updateOptions({ readOnly: erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }) });
       // 解锁 → 糖视图必须让位（原文要看得见）；回锁 → 重新生成糖视图
       applySugarView();
     },

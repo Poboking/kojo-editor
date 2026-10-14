@@ -6,7 +6,10 @@
  * 而波浪线最怕的正是后者：一次假报告就能让作者从此不信所有提示（包括报对的那些）。
  *
  * 基线来源：2026-10-13 实测本机语料 `ERB/` 全量 3,818 个 `.ERB/.ERM`、4,115,009 行，
- * 体检**零报告**。第二项是**反证**：把最大的那个文件里的一条 `ENDIF` 删掉，必须报出来——
+ * 体检**零报告**。2026-10-14 FT-2 把口径换成契约层单一真源后**同一条基线覆盖 `.ERH`**：
+ * 3,971 文件（正文 3,818 + 声明 153）/ 4,126,929 行，仍然**零报告**——声明文件那种
+ * "整份只有 `#DIM`、一条语句都没有"的形态不需要特判，闸门对它是天然正确的。
+ * 第二项是**反证**：把最大的那个文件里的一条 `ENDIF` 删掉，必须报出来——
  * 没有这一条，"零报告"可能只是因为判据根本没在工作。
  *
  * ⚠ 这条基线的由来（写给下一个改判据的人）：初版把"`@` 开头的行"直接当函数边界，
@@ -18,6 +21,7 @@
 import { readdirSync, statSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { isErbBodyPath, isErbDeclarationPath, isErbDialectPath } from '@kojo/plugin-api';
 import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { MAX_STRUCTURE_ISSUES, checkControlFlowStructure } from '../src/structure';
@@ -35,7 +39,9 @@ function erbFilesUnder(dir: string, out: string[]): void {
   for (const e of entries) {
     const p = join(dir, e.name);
     if (e.isDirectory()) erbFilesUnder(p, out);
-    else if (/\.er[bm]$/i.test(e.name)) out.push(p);
+    // FT-2：口径从字面 `/\.er[bm]$/i` 换成契约层单一真源 ⇒ 本条零误报基线**同时覆盖 `.ERH`**
+    // （声明文件"整份只有 #DIM、一条语句都没有"的合法形态必须过同一道闸门）。
+    else if (isErbDialectPath(e.name)) out.push(p);
   }
 }
 
@@ -76,8 +82,10 @@ describe.skipIf(!SMOKE)('ERB 结构体检 · 真实语料基线', () => {
     }
 
     // 逐条打印耗时量级（不判死：机器差异太大，这里只留读数供 BASELINES 对照）
+    const decl = files.filter(isErbDeclarationPath).length;
     console.log(
-      `语料 ${files.length} 文件 / ${lines} 行；最慢单文件体检 ${slowest.toFixed(1)}ms（${slowestFile.replace(SMOKE!, '')}）`,
+      `语料 ${files.length} 文件（正文 ${files.length - decl} + 声明 ${decl}）/ ${lines} 行；` +
+        `最慢单文件体检 ${slowest.toFixed(1)}ms（${slowestFile.replace(SMOKE!, '')}）`,
     );
     expect(reported, `误报清单（应为空）：\n${reported.join('\n')}`).toEqual([]);
 

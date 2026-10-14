@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import type { DirEntry, ErbIndex, GameProject } from '@kojo/plugin-api';
+import { isErbDialectPath } from '@kojo/plugin-api';
 import {
   collapseAll,
   expandAll,
@@ -59,10 +60,11 @@ function pkey(p: string): string {
   return p.replace(/[\\/]+/g, '/').toLowerCase();
 }
 
-/** ERB 系扩展名（与 erb-parser 的 `ERB_EXT = /\.er[bm]$/i` 同口径）：
- *  嵌套目录里的 ERB 走普通文件行样式，非 ERB 才标「不在索引内」 */
+/** ERB 方言扩展名：口径直接问契约层的单一真源（`plugin-api/erb-ext`，FT-2 收口），
+ *  不再靠注释与人肉对齐。嵌套目录里的方言文件走普通文件行样式，非方言才标「不在索引内」。
+ *  与 erb-parser 的索引 walk 共用同一条谓词 ⇒ "标了在索引里"与"真在索引里"不可能再分裂。 */
 function erbExt(name: string): boolean {
-  return /\.er[bm]$/i.test(name);
+  return isErbDialectPath(name);
 }
 
 /**

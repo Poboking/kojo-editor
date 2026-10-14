@@ -1,4 +1,5 @@
 import type { FileIO } from '@kojo/plugin-api';
+import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { isTauri } from '../bridge/invoke';
 
 /**
@@ -9,8 +10,22 @@ import { isTauri } from '../bridge/invoke';
  * （requestOpenFile），编辑权限仍由写允许域既有分野决定，这里零写通道。
  */
 
-/** 能拖进来打开的扩展名（小写、含点）；新增即改这一行 + 覆盖提示文案随它派生 */
-export const OPENABLE_EXT: readonly string[] = ['.kojo', '.erb', '.erm', '.md', '.txt'];
+/**
+ * 能拖进来打开的扩展名（小写、含点）。
+ *
+ * ERB 方言那一段**不手抄**，从契约层单一真源 `plugin-api/erb-ext` 展开（FT-2 收口）：
+ * 拖得开的集合与索引收的集合从此同一条口径，不会再出现"索引里有、拖进来被拒"。
+ * 新增非方言类型才动这一行；覆盖提示文案由它派生（`App.tsx`）。
+ */
+export const OPENABLE_EXT: readonly string[] = ['.kojo', ...ERB_DIALECT_EXTENSIONS, '.md', '.txt'];
+
+/**
+ * 覆盖提示文案（拖拽悬停时浮层那句）。**由 {@link OPENABLE_EXT} 派生**，不另抄一份清单——
+ * FT-2 的 `.ERH` 进面就是靠这条：清单加一项，提示自动跟着变，不会有"能拖不能说"的错位。
+ */
+export function dropHintText(): string {
+  return `松手就能打开：${OPENABLE_EXT.join(' / ')}`;
+}
 
 /** 拒绝理由（面向零基础作者的中文人话，不出现内部词） */
 export const UNKNOWN_FILE_REASON = '这类文件本软件打不开';

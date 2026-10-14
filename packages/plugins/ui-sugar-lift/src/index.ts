@@ -33,7 +33,7 @@ import type {
   SugarProjectResult,
   SugarProjectStats,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, isErbDialectPath } from '@kojo/plugin-api';
 import { countLines, liftScanBudget } from './large-file';
 import { actionTitle, pickCandidate, toSugarEdit } from './lift-action';
 
@@ -114,7 +114,7 @@ export function createUiSugarLiftPlugin(): Plugin {
        * （契约明确"不适用该文件的贡献返回空数组"）。
        */
       const toProjectItems = (path: string, text: string): EditorLiftPreviewItem[] => {
-        if (!isErbFile(path)) return [];
+        if (!isErbDialectPath(path)) return [];
         return scanProject(path, text).segments.map((s) => ({
           fromLine: s.fromLine,
           toLine: s.toLine,
@@ -168,16 +168,18 @@ export function createUiSugarLiftPlugin(): Plugin {
 
 /* ============================== 内部工具 ============================== */
 
-/**
- * 是否原生 ERB（`.erb` / `.erm`）。
+/*
+ * 「是否原生 ERB」不再由本插件自己判（FT-2 收口，2026-10-14）。
  *
- * 与 app 壳的 `isErbLike` 同口径（那边定"是否只读预览对象"，这边定"是否该投影"）。
- * 刻意不跨包共享：两处都是单行判定，而插件**不允许** import 宿主代码
- * （"一切皆插件"纪律），为一行正则新增契约导出不划算。
+ * 这里原本抄着第五份 `/\.er[bm]$/i`，注释写着"刻意不跨包共享、为一行正则新增契约
+ * 导出不划算"——那句话被现实推翻了：口径一旦分处两包漂移，症状就是
+ * **「索引里有、面上开不了」或反过来**（与 `isIdentPart` 双副本同类事故）。
+ * 谓词与扩展名清单现在只住在 `@kojo/plugin-api/erb-ext` 一处，上面投影门直接消费它；
+ * 那边定"是否只读预览对象"，这边定"是否该投影"，**同一个问题只有一条答案**。
+ *
+ * 口径扩到 `.ERH` 后本插件的行为是"对声明文件也供投影"，而声明文件只有 `#DIM` 行、
+ * 扫不出任何可升糖片段 ⇒ 自然返回空段，不需要额外判据。
  */
-function isErbFile(path: string): boolean {
-  return /\.er[bm]$/i.test(path);
-}
 
 /** 是否语法糖源文件（`.kojo`）——💡 改写动作的对象 */
 function isKojoFile(path: string): boolean {

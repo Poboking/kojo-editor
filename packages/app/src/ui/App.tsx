@@ -5,8 +5,8 @@ import { invoke, isTauri } from '../bridge/invoke';
 import { bootstrapKernel } from '../bootstrap';
 import { ProjectView } from './ProjectView';
 import {
-  OPENABLE_EXT,
   PROJECT_GATE_MESSAGE,
+  dropHintText,
   nextDropOverlay,
   processDroppedFiles,
   subscribeDragDrop,
@@ -461,7 +461,7 @@ export function App(): ReactElement {
     <>
       {body}
       {dropHint === 'shown' ? (
-        <div className="drop-hint">{`松手就能打开：${OPENABLE_EXT.join(' / ')}`}</div>
+        <div className="drop-hint">{dropHintText()}</div>
       ) : null}
       {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
       {pendingClose ? (

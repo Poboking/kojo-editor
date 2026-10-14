@@ -48,6 +48,8 @@ const KOJO_OK = ['角色: 1', '时机 初见：', '    「你好。」', '    �
 const KOJO_BAD = ['角色: 1', '时机 初见：', '    「你好。续」', ''].join('\n');
 const PATH_KOJO = '/proj/口上/x.kojo';
 const PATH_ERB = '/proj/口上/x.ERB';
+/** 声明文件（FT-2 进面的 `.ERH`）：糖线一律不接管，保存原样写盘 */
+const PATH_ERH = '/proj/口上/x.ERH';
 
 /** 伪内核 io（内存 FS；与 preview / lift 集成测试同款） */
 function makeIO(files: Record<string, Uint8Array>): FileIO {
@@ -237,6 +239,10 @@ describe('S6 / 插件接线（跨插件只走服务槽）', () => {
     // `.kojo` 命中、原生 `.ERB` 不命中（接管只在糖源上生效）
     expect(k.saveHandlers[0]!.matches(PATH_KOJO)).toBe(true);
     expect(k.saveHandlers[0]!.matches(PATH_ERB)).toBe(false);
+    // `.ERH` 同样不接管：FT-2 让声明文件进面（能拖开 / 进索引 / 有高亮），
+    // 但**没有**把它拖进糖线 ⇒ 存盘走内核 io 原样写，产物不回退。
+    expect(k.saveHandlers[0]!.matches(PATH_ERH)).toBe(false);
+    expect(k.decorators[0]!.decorate({ path: PATH_ERH, text: '#DIM ABL:1\n', project: null })).toEqual([]);
     expect(k.panels).toHaveLength(1);
     expect(k.panels[0]!.id).toBe('sugar-verdict');
     expect(typeof k.panels[0]!.component).toBe('function');

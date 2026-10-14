@@ -204,6 +204,18 @@ export {
   type ComputeWorkerLike,
 } from './compute-worker';
 
+export {
+  ERB_BODY_EXTENSIONS,
+  ERB_DECLARATION_EXTENSIONS,
+  ERB_DIALECT_EXTENSIONS,
+  ERB_ENGINE_RESERVED_EXTENSIONS,
+  erbMonacoExtensions,
+  isErbBodyPath,
+  isErbDeclarationPath,
+  isErbDialectPath,
+} from './erb-ext';
+export type { ErbDialectExtension } from './erb-ext';
+
 export type {
   ControlFlowStatement,
   ErbDim,
