@@ -16,7 +16,6 @@
 | HK-21 | **回放未知率 · `call` 内联扩面**（368 = 9.8%） | 对主流「`LOCAL` 信封 ＋ 委托 `_1`」**纯转发形态**做**浅内联**（现有有界内联为 v0.2 第七批，`evaluate.ts:80-92`；残余 368 = 索引域外/不可内联）。与 E13/P-1 同族知识 ⇒ **跨线沟通后动**。判据：`call` 计数下降 | 待认领 |
 | HK-22 | **回放未知率 · `local-no-write` / `missing-var` 补面**（196 ＋ 80） | `local-no-write`＝`assignments` 未覆盖的赋值形态（分支内赋值 / `ARG`→`LOCAL` 转发 / 循环内赋值）⇒ 扩抽取面；`missing-var` 补 `variableSchema` / 引擎变量清单（注意 `JVEL`/`Juel` 笔误线索，**别在 ALS 批顺手改**）。判据：两项计数下降 ＋ 全量不回退 | 待认领 |
 | HK-23 | **回放未知率 · 口径拆分（架构层，小）** | 把**真随机**（RAND 类，不可约）与**能力缺口**（可补）拆成两个读数：`可判定率`（排除真随机）＋ `能力覆盖率`；ARCHITECTURE §5.3「unknown 是能力边界的诚实呈现」的自然延伸。判据：STATE/BASELINES 各记两数，且保留历史水位可比（62.9→48.5→32.0） | 待认领 |
-| HK-24 | **条件矩阵面板 · 横向滚动**（「时机」列太长 ⇒ 最右列看不到；用户明示**非浮窗**视图） | **病根**：条件矩阵无 `group` ⇒ standalone 独占单面板 view ⇒ 走单视图分支，滚动容器是 `.sidebar-views`（`overflow-x:hidden`）而面板自身高度不受限 ⇒ `.cm-scroll` 高＝整表高、横向滚动条沉在整表最底、顶部不可达。**修法**：照 E9 同款（`.sidebar-views:not(.split) > .panel-kojo-projects`）——给矩阵面板加单视图同位钳制 `.sidebar-views:not(.split) > .panel-condition-matrix { height:100%; overflow:hidden }` ⇒ 面板钉进侧栏可视高，`.cm-scroll`（`overflow:auto`）内部横竖自滚、横条钉在面板下缘，`verticalize` 的 `clientHeight` 也随之正确。**判据**：全量不回退 ＋ 双 typecheck ＋ `audit:decoupling` ✅ ＋ 真机目视横条可达最右列 | 认领：haruki 2026-10-14 |
 
 > **关联**（勿重复认领）：`named-index` 337（未知的 9.0%）已由 **ALS** 行承载（v34hand 2026-10-14 认领）——回放线不再单独立项。
 ## D. 已拍板（用户 2026-10-13 反馈批）

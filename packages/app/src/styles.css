@@ -3824,6 +3824,14 @@ button.primary .hint {
   min-height: 0;
   font-size: var(--fs-1);
 }
+/* 单视图（非分栏）时把面板钉进侧栏可视高度（与 E9 的 kojo-projects 同规）：矩阵是
+   standalone 面板 ⇒ 独占视图，滚动容器是 .sidebar-views（overflow-x: hidden）而面板
+   高度不受限，则 .cm-scroll 会长到整表高、横向滚动条沉在整表最底（顶部浏览时够不着）。
+   钉高后 .cm-scroll（overflow: auto）内部横竖自滚，「时机」再长也能在面板下缘左右拖动。 */
+.sidebar-views:not(.split) > .panel-condition-matrix {
+  height: 100%;
+  overflow: hidden;
+}
 .cm-toolbar {
   display: flex;
   align-items: center;
