@@ -28,3 +28,12 @@
 | ID | 任务 | 关键判据 / 口径（含原话摘引） | 认领 |
 |---|---|---|---|
 | E13 | **报红 · 升糖投影产出「不可写糖形」**（E7② 实测暴露；归 `kojo-sugar` 线） | **现象**：库里主流的「`@M_KOJO_MESSAGE_{COM|SCOM}_K<号>_<i>` ＝ `LOCAL` 信封 ＋ 委托到 `_1`」形态，`liftProject` 投出的是**给人看的显示注记**，不是作者能照抄的糖形。**复现**：取 `049 Satori [さとり]/古明地觉TOKI/古明地觉/M_KOJO_K49_奉仕系コマンド.ERB :: @M_KOJO_TOKI_MESSAGE_COM_K49_88_1`，或 `101 Tokiko [朱鷺子]/朱鷺子/M_KOJO_K101_絶頂 .ERB :: @M_KOJO_MESSAGE_PALAMCNG_B_K101`，把投影结果原样贴进 `.kojo` 保存。**期望**：投影输出即转译零 error 的可写糖形。**实际**：报 `indent-mismatch`（`LOCAL = 1` 留在 0 列、块体没缩进）＋ 中文指令名查不到。**屏上原样文案**：`时机 指令 88_1（TOKI版）：`、`时机 指令 317_1（RBK自制版）：`（`kojo-sugar/src/lexer.ts:367-408` 只认纯数字编号或纯中文指令名，这种 token 会被当指令名去查表）。**可借用判据**：`packages/plugins/eratw-adapter/tests/scaffold-cases.test.ts` 的「可写性守卫」（案例拼成最小文档过真实转译、零 error）及其自证用例。受影响面＝性交指令 / 奉仕指令 / 爱抚指令 / 绝顶，这四面脚手架案例按**宁缺勿编**暂缺，E13 修好即可补上 | 待认领 |
+
+## F. 调试/验证强化线（k12cli 会话立项，2026-10-14；E1 的延伸）
+
+| ID | 任务 | 关键判据 / 形态（已定死，勿再议形） | 认领 |
+|---|---|---|---|
+| V1 | **整包加载实测入库**：`tools/engine-loadtest.mjs` + `verify loadtest <kojo…>` | 同盘**硬链接镜像**建沙盒（禁全量拷贝）；断言=**告警增量比对**（原始态 baseline 警告集 → 换入态断言新增警告 ∅ + 加载完成行在位，自动化今晚 COLOR 撞名抓捕那次）；不进 `all`；缺引擎 SKIP | 待认领 |
+| V2 | **场景级断言闭环**：clidbg runner v2（状态注入 + 台词断言 + sourceMap 回映） | 场景清单 `{setup:[原生ERB行], calls:[{fn, expect:[正则]}]}`→ 生成 main.ERB（TITLE+ADDDEFCHARA+setup+**单启动顺序 CALL**）；FAIL 打产物行 + `.kojo` 原行双列；首批判据＝恋慕/屈服3/时姦中各一条"必打出含 X 台词"回归 | 待认领 |
+| V3 | **title fatal 定位（timebox 30 分钟）** | 关兼容开关「解釈不可能な行があっても実行する」跑 V1 镜像抓 file:line；仍无行号→给自建 SKIA fork 打 error-事件带行号补丁（引擎自己编，永远有兜底）。结论二选一：可绕→title 流程并入 V2 场景面；不可绕→板上钉"加载实测=SKIA 天花板"止损 | 待认领 |
+| V4 | `verify engine-setup`（引擎资产入库） | clone gitgud `develop-skiasharp`（直连/代理交替）→ `dotnet publish` → 落 `KOJO_CLIDBG_DIR`；缺 SDK=FAIL+winget 提示，**不自动装** | 待认领 |
