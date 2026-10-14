@@ -21,6 +21,12 @@ export const ERATW = {
   csvDir: ['CSV'] as const,
 
   /**
+   * ERB 根目录（引擎 `Program.ErbDir`）。变量字典的**作者自定名表**（FT-1）扫这一层：
+   * `.ERH` 具名常量声明散落在整棵 ERB 子树里（实测画蛇添足版 153 份 / 400KB）。
+   */
+  erbDir: ['ERB'] as const,
+
+  /**
    * 变量名汉化词典（游戏自带 JP→CN 名词典；引擎 `SYSTEM.ERB` 经 `MAP_FROMXML`
    * 装为 `CSV_MAP`，游戏 UI 的名称汉化就靠它）。相对工程根。
    */

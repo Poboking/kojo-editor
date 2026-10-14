@@ -476,6 +476,8 @@ export function createEratwAdapterPlugin(): Plugin {
             io,
             csvDir: join(rootDir, ...ERATW.csvDir),
             chsMapPath: join(rootDir, ...ERATW.chsNameMap),
+            // 作者自定名表（FT-1）：引擎从整个 ERB 根递归装 `.ERH`（`Process.cs:221`）
+            erbDir: join(rootDir, ...ERATW.erbDir),
             log: ctx.log,
           });
 

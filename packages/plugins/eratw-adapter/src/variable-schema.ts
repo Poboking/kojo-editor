@@ -8,6 +8,10 @@
  *   汉化 / 魔改版在同名 `.als` 里给同一编号补**别名**（`TCVAR.als:145 = 泥酔`，而
  *   `TCVAR.csv:145 = 烂醉`；`ex.als:1 = Ｖ绝顶`，而 `ex.csv:1 = Ｖ絶頂`）。作者写口上时
  *   抄的是游戏界面显示的 `.als` 名 ⇒ 不读 `.als`，这些具名索引在字典里天然查无。
+ * - **作者自定名表**（FT-1）：整棵 ERB 子树内 `*.ERH` 的具名常量声明（`#DIM CONST NAME = 1101` /
+ *   `#DEFINE NAME 0`）——口上作者自定义的符号名不住在 CSV 里，只住在 `.ERH`；引擎把它们
+ *   当**全局变量**装（`IdentifierDictionary.cs:436-444`，键只有名字），`族头:NAME` 走的是
+ *   "索引位是表达式"的求值路 ⇒ 收进字典 = 复刻引擎的可见性（详见下方"作者自定名表"注释）。
  * - 汉化词典：`plugins/tw_csv_chs.xml`（游戏自带 JP→CN 名词典，形如
  *   `<p><k>日文</k><v>中文</v></p>`；引擎 `SYSTEM.ERB` 经 `MAP_FROMXML` 装为
  *   `CSV_MAP`，游戏 UI 的名称汉化就靠它）——**叠加在名称表之上**：索引级名称
@@ -146,6 +150,11 @@ export interface LoadVariableSchemaOptions {
   csvDir: string;
   /** 变量名汉化词典路径（绝对路径；缺省 = 无词典，名称一律原文） */
   chsMapPath?: string;
+  /**
+   * ERB 根目录（绝对路径；FT-1）。**缺省 = 完全不读 `.ERH`** ⇒ 不传本参数的调用方
+   * （含既有 `*.als` 语料自证）字典与摘要逐字不变。
+   */
+  erbDir?: string;
   log: Logger;
 }
 
@@ -153,6 +162,90 @@ export interface LoadVariableSchemaOptions {
 interface NameTableFile {
   variableName: string;
   path: string;
+}
+
+/** `.ERH` 声明行的前置关键字（Emuera `UserDefinedVariableData.Create` 认的关键词集） */
+const ERH_DECL_KEYWORDS = new Set([
+  'CONST',
+  'LOCAL',
+  'STATIC',
+  'DYNAMIC',
+  'GLOBAL',
+  'SAVEDATA',
+  'REF',
+  'OUT',
+  'CHARADATA',
+]);
+
+/** 整数字面量（十进制 / `0x` 十六进制）→ 编号；其它形态（表达式、数组、字符串）一律不认 */
+function integerLiteral(text: string): number | undefined {
+  const s = text.trim();
+  if (!/^(0[xX][0-9a-fA-F]+|[0-9]+)$/.test(s)) return undefined;
+  const n = /^0[xX]/.test(s) ? Number.parseInt(s.slice(2), 16) : Number.parseInt(s, 10);
+  return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+}
+
+/**
+ * 解析 `.ERH` 声明行 → **作者自定名表** `Map<大写名称, 整数编号>`（纯函数；导出供测试）。
+ *
+ * 收的是**"名字 = 一个整数"**这一类声明——引擎侧它们与 CSV 名称表无关，是**全局具名常量**，
+ * `族头:名字` 走的是"索引位是一个表达式"这条普通求值路（`VariableEvaluator.cs:215` 只对
+ * **字面串**索引走 CSV 名称表；标识符索引直接求值）。实测盘上形态（画蛇添足版整棵 ERB 子树
+ * 153 份 `.ERH` / 7,223 条声明行，本表收 5,755 个名字；魔王版 169 份 / 6,407 名，原生官方
+ * 4.842 是 37 份 / 1,094 名）：
+ * - `#DIM CONST NAME = 1101`（本表主体；含 `0x` 十六进制 88 条）
+ * - `#DEFINE NAME 0`（纯整数 2 条；其余 `#DEFINE` 是 `"字符串"` / `TIME:2` / 名字别名 → 不收）
+ * - `#DIM NAME, 10`（声明的是"新变量族"，不是"名字=编号"）
+ * - `#DIM NAME = 351`（66 条，**无 `CONST` ⇒ 可写变量**，运行期可被改写 ⇒ 收了就是猜）
+ * - `#DIM CONST NAME = 0, 100, 500`（数组，无唯一编号）
+ *   / `#DIM CONST NAME = 0x44 + COLOR_FROMNAME(…)`（表达式，不在字典里求值）——**一个都不收**。
+ * 行尾 `;` 注释实测常见（`#DIM CONST LIST_MAX_SORT = 1 ;コメント`），先截后解析。
+ *
+ * 键按**大写**存（`emuera.config:1 IGNORE CASE:YES` ⇒ 引擎标识符本就大小写不敏感），
+ * 同名**首个定义优先**（与名称表同一裁决口径；实测三张盘 **0 组"同名不同值"**，故顺序不影响结果）。
+ */
+export function parseErhConsts(text: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const put = (name: string, value: number): void => {
+    const key = name.toUpperCase();
+    if (key.length === 0 || out.has(key)) return;
+    out.set(key, value);
+  };
+  for (const rawLine of text.split(/\r\n?|\n/)) {
+    // `trim()` 顺带吃掉 UTF-8 BOM；`;` 起行 = 整行注释，行中 `;` = 行尾注释 ⇒ 一律先截断
+    const head = rawLine.trim();
+    if (!head.startsWith('#')) continue;
+    const semi = head.indexOf(';');
+    const line = (semi >= 0 ? head.slice(0, semi) : head).trim();
+    const m = /^#(DIMS|DIMF|DIM|DEFINE)([\s\S]*)$/i.exec(line);
+    if (!m) continue;
+    let rest = (m[2] ?? '').trim();
+    const keywords = new Set<string>();
+    if (m[1]!.toUpperCase() !== 'DEFINE') {
+      for (;;) {
+        const km = /^([A-Za-z_][A-Za-z0-9_]*)[\s\S]*$/.exec(rest);
+        if (km === null) break;
+        const kw = (km[1] ?? '').toUpperCase();
+        if (!ERH_DECL_KEYWORDS.has(kw)) break;
+        keywords.add(kw);
+        rest = (km[0] ?? '').slice(km[1]!.length).trim();
+      }
+      if (!keywords.has('CONST')) continue; // 普通 `#DIM NAME, 10` 是"新变量族"，不是"名字=编号"
+      const eq = rest.indexOf('=');
+      if (eq <= 0) continue;
+      const name = (rest.slice(0, eq) ?? '').trim();
+      const value = integerLiteral(rest.slice(eq + 1) ?? '');
+      if (value === undefined) continue;
+      put(name, value);
+      continue;
+    }
+    const space = rest.search(/[\s(]/);
+    const name = (space < 0 ? rest : rest.slice(0, space)).trim();
+    const value = integerLiteral(space < 0 ? '' : rest.slice(space));
+    if (value === undefined) continue;
+    put(name, value);
+  }
+  return out;
 }
 
 /**
@@ -163,7 +256,7 @@ interface NameTableFile {
  * （首个定义优先 ⇒ 主表的编号名称逐字不变，追加名表只贡献新名称 / 主表缺的编号）。
  */
 export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): Promise<VariableSchema> {
-  const { io, csvDir, chsMapPath, log } = opts;
+  const { io, csvDir, chsMapPath, erbDir, log } = opts;
   const tables = new Map<string, VariableTable>();
   /** 输入摘要素材：实际读到的每个名称表文件的「路径 + 正文」哈希（排序后折叠 ⇒ 与目录顺序无关） */
   const digestParts: string[] = [];
@@ -226,6 +319,57 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
     );
   }
 
+  /**
+   * 作者自定名表（整棵 ERB 子树内的 `*.ERH` 具名常量声明，FT-1）——**全局一张，不按角色分桶**。
+   *
+   * 取证结论（Emuera 源码克隆 `C:\DSH\vendor\emuera-skia`，分支 develop-skiasharp）：
+   * `.ERH` 由 `Process.cs:221` 一次性从**整个 ERB 根**装载（递归与否取
+   * `Config.SearchSubdirectory`，eraTW `emuera.config:39 SEARCH SUBFOLDERS:YES` ⇒ 全树），
+   * 每行的 `#DIM` 进**同一条**队列（`ErhLoader.cs:126`，isPrivate 恒为 false），
+   * 全部文件读完才统一处理（`ErhLoader.cs:284-370`），最终落进
+   * `IdentifierDictionary.cs:436-444` 的 `varTokenDic`/`nameDic`——**键只有名字，
+   * 没有文件/角色维度**。⇒ 引擎侧"声明即全局可见"，跨角色引用是合法的既有写法
+   * （画蛇添足版收 5,755 个名字、**0 组同名不同值**；引擎用 `Dictionary.Add`，重名直接报错），
+   * 故本表按全局收录不会引入引擎不认的误判；`#DIM LOCAL`（函数体内）不属 `.ERH` 装载路，
+   * 本表天然不涉及。
+   */
+  const erhConsts = new Map<string, number>();
+  if (erbDir !== undefined) {
+    let erhFiles: Awaited<ReturnType<FileIO['walkDir']>> = [];
+    try {
+      // `filter` 返回 false 会**连目录一起剪掉**（见 `WalkOptions`）⇒ 目录一律放行，扩展名筛在文件侧
+      const found = await io.walkDir(erbDir, {
+        filter: (e) => e.isDirectory || /\.erh$/i.test(e.name),
+      });
+      // 确定性顺序：首个定义优先的裁决不该随目录枚举顺序漂移（引擎按路径排序装载）
+      erhFiles = found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    } catch (err) {
+      log.warn(`自定名表扫描失败（跳过，具名索引回落名称表）：${erbDir} — ${String(err)}`);
+    }
+    let skippedDup = 0;
+    for (const f of erhFiles) {
+      try {
+        const tf = await io.readText(f.path);
+        digestParts.push(stableHash(`${f.path}\u0000${tf.text}`));
+        for (const [name, value] of parseErhConsts(tf.text)) {
+          if (erhConsts.has(name)) {
+            skippedDup++;
+            continue;
+          }
+          erhConsts.set(name, value);
+        }
+      } catch (err) {
+        log.warn(`自定名表读取失败（跳过）：${f.path} — ${String(err)}`);
+      }
+    }
+    if (erhFiles.length > 0) {
+      log.info(
+        `自定名表（*.ERH 具名常量）：${erhFiles.length} 份，收录 ${erhConsts.size} 个名字` +
+          (skippedDup > 0 ? `（重名 ${skippedDup} 处按首个定义优先跳过）` : ''),
+      );
+    }
+  }
+
   // 汉化词典（JP→CN）：叠加在名称表之上。缺表 / 读失败 = 空词典（名称回落原文），**不抛**。
   const jpToCn = new Map<string, string>();
   if (chsMapPath !== undefined) {
@@ -273,6 +417,16 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
         if (!Number.isNaN(n)) info.resolvedIndex = n;
         return info;
       }
+      /**
+       * 名称表查无 → 作者自定名表（`.ERH` 具名常量）兜底。引擎侧这条路不是"名称表"，
+       * 而是"索引位是一个表达式"（`VariableEvaluator.cs:215` 只把**字面串**索引交给 CSV
+       * 名称表；标识符索引按变量求值）⇒ `CFLAG:K15C_X` 与 `CFLAG:1101` 是同一个槽位。
+       * 常量**不属于任何族**（同一个名字可以写在任意族后面），故此处只做"名字→编号"的
+       * 换算，不宣称族归属；描述取作者原文，**不喂汉化词典**（词典键是游戏显示词，
+       * 命中即误译）。名称表在前、本表在后 ⇒ 既有（含 `*.als`）读数一条都不受影响。
+       */
+      const constIndex = erhConsts.get(idxStr.toUpperCase());
+      if (constIndex !== undefined) return { name: key, index, description: idxStr, resolvedIndex: constIndex };
       return { name: key, index };
     },
   };
