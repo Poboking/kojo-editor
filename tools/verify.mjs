@@ -3,7 +3,9 @@
 //   检查名: unit / typecheck / audit / erbcheck / engine / corpus / dom / ipc / measure / all
 //   全局开关: --json  （每检查一行 JSON：{name,status,durationMs,note}，不打人话摘要行）
 // 前置依赖: engine 需 KOJO_CLIDBG_DIR（默认 C:/DSH/vendor/clidbg-probe）内含引擎 exe 或 KOJO_CLIDBG_EXE 指到实体；
-//   corpus 需 KOJO_SMOKE_PROJECT 指向真实语料目录；ipc/dom 需桌面环境；缺依赖一律 SKIP 不算 FAIL。
+//   corpus 需 KOJO_SMOKE_PROJECT 指向真实语料目录（该闸仍显式 opt-in，见下）；ipc/dom 需桌面环境；缺依赖一律 SKIP 不算 FAIL。
+//   loadtest 的语料目录**认内容不认名**（tools/corpus.mjs：--corpus > KOJO_CORPUS_DIR > 扫 C:/game/* 筛 ERB/+CSV/）；
+//   KOJO_CORPUS_DIR 设了但不成立 = 硬失败（列盘上候选、非零退出），不静默换版本。
 // all 取舍: 只跑无需额外参数的检查（unit/typecheck/audit/erbcheck + 条件可跑的 corpus），
 //   dom/ipc/measure 属桌面冒烟（分钟级、单实例）不进 all；
 //   engine 在 all 中为显式 opt-in——须同时满足 KOJO_VERIFY_ENGINE=1 且引擎沙盒存在，
@@ -14,6 +16,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveCorpusDir, corpusHint, CorpusError } from './corpus.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GOLDEN = 'packages/plugins/kojo-sugar/tests/goldens/corpus-k12-lumia-sekumara.kojo';
@@ -43,6 +46,17 @@ function engineExePath() {
   return path.join(dir, 'Emuera_skiaV16_x64.exe');
 }
 const exitToResult = (code) => (code === 0 ? { status: 'PASS' } : { status: 'FAIL', exit: code });
+
+// 语料前置检查：precheck 返回 string = SKIP（缺依赖），返回 { hardFail } = FAIL（env 指错了不许装作没看见），null = 就绪。
+// quiet=true 只判定不打印（真正的选择说明由被 spawn 的子进程打一次，避免同一条刷两遍）。
+function corpusPrecheck(quiet = false) {
+  try {
+    const dir = resolveCorpusDir({ print: !quiet, label: 'verify' });
+    return dir ? null : `未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；${corpusHint()}`;
+  } catch (e) {
+    return { hardFail: e instanceof CorpusError ? e.message : String(e) };
+  }
+}
 
 const CHECKS = [
   {
@@ -108,9 +122,7 @@ const CHECKS = [
     precheck: () => {
       const exe = engineExePath();
       if (!fs.existsSync(exe)) return `引擎 exe 缺失: ${exe}（可用 KOJO_CLIDBG_DIR / KOJO_CLIDBG_EXE 覆盖）`;
-      const corpus = process.env.KOJO_CORPUS_DIR || 'C:/game/eratw-sub-modding-eratw4.980';
-      if (!fs.existsSync(corpus)) return `语料目录缺失: ${corpus}（KOJO_CORPUS_DIR 可覆盖）`;
-      return null;
+      return corpusPrecheck(true) ?? null;
     },
     run: async (argv) => exitToResult(await shNode(['tools/engine-loadtest.mjs', ...argv])),
   },
@@ -128,8 +140,10 @@ const CHECKS = [
     describe: '真实语料集成冒烟（integration-plugins.test.ts）',
     precheck: () => {
       const p = process.env.KOJO_SMOKE_PROJECT;
-      if (!p || !fs.existsSync(p)) return '需 KOJO_SMOKE_PROJECT 指向真实语料目录';
-      return null;
+      if (p && fs.existsSync(p)) return null;
+      // 仍要显式 KOJO_SMOKE_PROJECT（跑全量不许带它，见 AGENTS.md §三）；这里只把「现在能指向哪」打出来。
+      const found = (() => { try { return resolveCorpusDir({ print: false }); } catch { return null; } })();
+      return `需 KOJO_SMOKE_PROJECT 指向真实语料目录${found ? `（按内容发现的候选: ${found}）` : ''}`;
     },
     run: async () =>
       exitToResult(await shNode(['node_modules/vitest/vitest.mjs', 'run', 'packages/kernel/tests/integration-plugins.test.ts'])),
@@ -159,12 +173,16 @@ const CHECKS = [
 
 const ALL_NAMES = ['unit', 'typecheck', 'audit', 'erbcheck', 'engine', 'corpus'];
 
+// precheck 返回值三态：null=就绪 / string=缺依赖(SKIP) / {hardFail}=前置指错了(FAIL)。
+const preNote = (reason) => (typeof reason === 'object' && reason !== null ? reason.hardFail : reason);
+
 function printList() {
   const width = Math.max(...CHECKS.map((c) => c.name.length));
   console.log('检查注册表（node tools/verify.mjs <名字> [参数...]）:');
   for (const c of CHECKS) {
     const reason = c.precheck();
-    console.log(`  ${c.name.padEnd(width)}  ${reason ? `缺依赖: ${reason}` : '依赖就绪'}  —  ${c.describe}`);
+    const note = preNote(reason);
+    console.log(`  ${c.name.padEnd(width)}  ${note ? (typeof reason === 'object' && reason !== null ? `前置有误: ${note}` : `缺依赖: ${note}`) : '依赖就绪'}  —  ${c.describe}`);
   }
   console.log(`  ${'all'.padEnd(width)}  聚合: ${ALL_NAMES.join(', ')}（engine 需 KOJO_VERIFY_ENGINE=1，见文件头）`);
 }
@@ -172,14 +190,17 @@ function printList() {
 async function runCheck(check, argv, json) {
   const t0 = performance.now();
   const reason = check.precheck();
-  const result = reason ? { status: 'SKIP', note: reason } : await check.run(argv);
+  const hardFail = typeof reason === 'object' && reason !== null;
+  const result = hardFail
+    ? { status: 'FAIL', exit: 2, note: reason.hardFail }
+    : reason ? { status: 'SKIP', note: reason } : await check.run(argv);
   const durationMs = Math.round(performance.now() - t0);
   if (json) {
     console.log(JSON.stringify({ name: check.name, status: result.status, durationMs, note: result.note ?? '' }));
   } else if (result.status === 'PASS') {
     console.log(`PASS  ${check.name}  ${(durationMs / 1000).toFixed(1)}s`);
   } else if (result.status === 'FAIL') {
-    console.log(`FAIL  ${check.name}  exit=${result.exit}  (see log above)`);
+    console.log(`FAIL  ${check.name}  exit=${result.exit}  ${result.note ? result.note + '  ' : ''}(see log above)`);
   } else {
     console.log(`SKIP  ${check.name}  ${result.note}`);
   }

@@ -6,7 +6,7 @@
 
 > 产物：`packages/app/src-tauri/target/release/bundle/nsis/kojo-editor_0.1.0_x64-setup.exe`（安装器）  
 > 或裸 exe：`packages/app/src-tauri/target/release/kojo-editor.exe`  
-> 测试游戏：`C:\game\eratw-sub-modding-eratw4.980`
+> 测试游戏：当前 4.980 语料目录（目录名会变 ⇒ 认内容不认名；`tools/corpus.mjs` 按 `ERB/`+`CSV/` 自动发现，`KOJO_CORPUS_DIR` 可指定，指纹表见 `docs/STATE.md` §三）
 > （⚠ haruki 主机只有 `C:` 盘；本文件早期版本里的 `D:\Game\...` 路径**照抄必失败**，
 > 　路径换算见 `docs/STATE.md` §三 与 `docs/archive/HANDOFF.md` §一 的历史换算表。）
 > 本清单合并：S7-UI 保存闭环（发版判据①终验）+ **文件监视（判据②终验，§2.J）** +

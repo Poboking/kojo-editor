@@ -5,7 +5,8 @@
 //                                     不给 --map 则纯基线双跑（A/B 同镜像状态，验证警告集可复现）。
 //   --strip-color-dupes              换入前剥掉 artifact 里目标原文件没有定义的 @*COLOR* 函数块
 //                                     （防 已经被定义过 类撞名新增警告；剥除动作逐文件打印）。
-//   --corpus DIR                     默认 KOJO_CORPUS_DIR || C:/game/eratw-sub-modding-eratw4.980（全程只读）。
+//   --corpus DIR                     默认按内容自动发现语料（认内容不认名，见 tools/corpus.mjs）；
+//                                     优先级 --corpus > KOJO_CORPUS_DIR > 扫 C:/game/* 筛 ERB/+CSV/（全程只读）。
 //   --engine EXE                     默认 KOJO_CLIDBG_EXE || KOJO_CLIDBG_DIR/Emuera_skiaV16_x64.exe
 //                                     || C:/DSH/vendor/clidbg-probe/Emuera_skiaV16_x64.exe。
 //   --workdir DIR                    默认 %TEMP%/kojo-loadtest-mirror；跑完删除（--keep 保留）。
@@ -37,11 +38,12 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { resolveCorpusDir, corpusHint } from './corpus.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXE_NAME = 'Emuera_skiaV16_x64.exe';
 const LOAD_DONE_RE = /ファイル読み込みが完了しました。経過時間：([\d.]+)秒/;
-const DEFAULT_CORPUS = process.env.KOJO_CORPUS_DIR || 'C:/game/eratw-sub-modding-eratw4.980';
+// 语料目录不设默认名（认内容不认名）：见 tools/corpus.mjs 与下面的 resolveCorpusDir 调用。
 const DEFAULT_ENGINE = process.env.KOJO_CLIDBG_EXE
   || path.join(process.env.KOJO_CLIDBG_DIR || 'C:/DSH/vendor/clidbg-probe', EXE_NAME);
 const DEFAULT_WORKDIR = path.join(os.tmpdir(), 'kojo-loadtest-mirror');
@@ -60,7 +62,7 @@ const usageErr = (msg) => { console.error('[用法] ' + msg); process.exit(2); }
 
 // ── 参数解析 ──
 const argv = process.argv.slice(2);
-const opts = { maps: [], keep: false, stripColorDupes: false, listWarnings: false, noTitle: false, corpus: DEFAULT_CORPUS, engine: DEFAULT_ENGINE, workdir: DEFAULT_WORKDIR, timeoutSec: 240 };
+const opts = { maps: [], keep: false, stripColorDupes: false, listWarnings: false, noTitle: false, corpus: undefined, engine: DEFAULT_ENGINE, workdir: DEFAULT_WORKDIR, timeoutSec: 240 };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--keep') opts.keep = true;
@@ -75,6 +77,13 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--timeout') opts.timeoutSec = Number(argv[++i]);
   else usageErr('未知选项: ' + a);
 }
+// 语料目录：--corpus > KOJO_CORPUS_DIR > 扫盘按内容发现（env 设了但不成立 = 硬失败，绝不静默换版本）。
+try {
+  opts.corpus = resolveCorpusDir({ explicit: opts.corpus, label: 'loadtest' });
+} catch (e) {
+  usageErr(e.message);
+}
+if (!opts.corpus) usageErr(`未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；${corpusHint()}`);
 opts.corpus = path.resolve(opts.corpus);
 opts.engine = path.resolve(opts.engine);
 opts.workdir = path.resolve(opts.workdir);
@@ -83,7 +92,6 @@ const maps = opts.maps.map((m) => {
   if (eq <= 0) usageErr('--map 需要 <artifact>=<相对路径>，得到: ' + m);
   return { artifact: path.resolve(m.slice(0, eq)), target: m.slice(eq + 1) };
 });
-if (!fs.existsSync(opts.corpus)) usageErr('语料目录不存在: ' + opts.corpus);
 if (!fs.existsSync(opts.engine)) usageErr('引擎 exe 不存在: ' + opts.engine);
 if (opts.workdir === opts.corpus || opts.workdir.startsWith(opts.corpus + path.sep)) usageErr('镜像目录不能落在语料内: ' + opts.workdir);
 if (opts.corpus.startsWith(opts.workdir + path.sep)) usageErr('语料不能在镜像目录内: ' + opts.corpus);

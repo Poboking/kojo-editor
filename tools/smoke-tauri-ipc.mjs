@@ -23,18 +23,31 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { resolveCorpusDir, discoverCorpora, corpusHint } from './corpus.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-// 语料路径**按主机而定**（haruki 机只有 C:，QA 机用 D:）——默认值猜不中就别猜，
-// 让它一开头就明确失败，比跑到 a 步"点了最近打开却没进项目"再猜原因省一整轮。
-const GAME_DIR =
-  process.argv[2] ??
-  process.env.KOJO_SMOKE_PROJECT ??
-  'D:\\Game\\eratw\\eratw-sub-modding-eratw4.980-260326-SANYOUSEI(PC)';
+// 语料路径**按主机而定**（haruki 机只有 C:，QA 机用 D:），且目录名会被反复重排 ⇒ 不写死默认名：
+//   优先级 位置参数 > KOJO_SMOKE_PROJECT > KOJO_CORPUS_DIR > 扫 C:/game/* 认内容发现（tools/corpus.mjs）。
+//   一条都没有仍**一开头明确失败**（列盘上候选），比跑到 a 步"点了最近打开却没进项目"再猜原因省一整轮。
+const explicitGameDir = process.argv[2] ?? process.env.KOJO_SMOKE_PROJECT;
+const GAME_DIR = explicitGameDir
+  ? path.resolve(explicitGameDir)
+  : (() => {
+      try {
+        return resolveCorpusDir({ label: 'ipc' }) ?? '';
+      } catch (e) {
+        console.error(`❌ ${e.message}`);
+        process.exit(2);
+      }
+    })();
 if (!fs.existsSync(GAME_DIR)) {
-  console.error(`❌ 游戏目录不存在：${GAME_DIR}\n   用法：node tools/smoke-tauri-ipc.mjs "<本机真实 eraTW 根目录>"`);
+  const hits = discoverCorpora({});
+  console.error(`❌ 游戏目录不存在：${GAME_DIR || '（未发现任何符合内容条件的语料目录）'}\n`
+    + `   盘上候选: ${hits.length ? hits.map((h) => h.dir).join('，') : '无（需 ERB/ 与 CSV/）'}\n`
+    + `   用法：node tools/smoke-tauri-ipc.mjs "<本机真实 eraTW 根目录>"；或 ${corpusHint()}`);
   process.exit(2);
 }
+console.log(`[ipc] 游戏目录 = ${GAME_DIR}${explicitGameDir ? '（显式指定）' : '（按内容自动发现）'}`);
 const OUTSIDE_PATH = 'C:\\Windows\\Temp\\kojo-smoke-outside.txt';
 const CDP_PORT = 9222;
 

@@ -15,6 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import readline from 'node:readline';
+import { resolveCorpusDir, corpusHint } from './corpus.mjs';
 
 const SRC_URL = 'https://gitgud.io/minus010001/emuera_lazyloading_selfmodified_version';
 const BRANCH = 'develop-skiasharp';
@@ -36,12 +37,25 @@ for (let i = 0; i < argv.length; i++) {
 }
 const SRC_DIR = process.env.KOJO_EMUERA_SRC || 'C:/DSH/vendor/emuera-skia';
 const PUBLISH_OUT = path.join(os.tmpdir(), 'emuera-build');
-const CORPUS_CSV = path.join(process.env.KOJO_CORPUS_DIR || 'C:/game/eratw-sub-modding-eratw4.980', 'CSV');
+// 语料 CSV 来源：只有沙盒缺 CSV 时才需要，故**惰性**解析（认内容不认名，见 tools/corpus.mjs）。
 const T0 = Date.now();
 const el = () => ((Date.now() - T0) / 1000).toFixed(1) + 's';
 
 function die1(msg) { console.error('[FAIL] ' + msg); process.exit(1); }
 function die2(msg) { console.error('[FAIL] ' + msg); process.exit(2); }
+
+/** 语料 CSV 目录（KOJO_CORPUS_DIR 优先，其次按内容发现；env 设了但不成立 = 硬失败）。 */
+function corpusCsvSource() {
+  let dir;
+  try {
+    dir = resolveCorpusDir({ label: 'engine-setup' });
+  } catch (e) {
+    return { err: e.message };
+  }
+  if (!dir) return { err: `未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；${corpusHint()}` };
+  const csv = path.join(dir, 'CSV');
+  return fs.existsSync(csv) ? { csv } : { err: `语料无 CSV/: ${csv}（KOJO_CORPUS_DIR 可覆盖）` };
+}
 
 // ── spawn 帮助：win32 走 shell:true（dotnet/git 是仓库惯例）；拼命令串免 DEP0190 ──
 function q(a) { return /[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a; }
@@ -156,11 +170,11 @@ fs.mkdirSync(dest, { recursive: true });
     const csvDir = path.join(dest, 'CSV');
     if (fs.existsSync(csvDir)) {
       console.log('  CSV 已存在：不动（' + csvDir + '）');
-    } else if (!fs.existsSync(CORPUS_CSV)) {
-      die1(`沙盒无 CSV 且语料 CSV 缺失: ${CORPUS_CSV}（KOJO_CORPUS_DIR 可覆盖）`);
     } else {
-      console.log('  布置 CSV（语料只读拷出）…');
-      fs.cpSync(CORPUS_CSV, csvDir, { recursive: true });
+      const src = corpusCsvSource();
+      if (src.err) die1(src.err);
+      console.log('  布置 CSV（语料只读拷出 ' + src.csv + '）…');
+      fs.cpSync(src.csv, csvDir, { recursive: true });
       // Windows 大小写不敏感：语料里的 GameBase.csv 已满足 GAMEBASE.CSV；仅在完全没有时兜底最小版。
       if (!fs.existsSync(path.join(csvDir, 'GAMEBASE.CSV'))) {
         fs.writeFileSync(path.join(csvDir, 'GAMEBASE.CSV'),

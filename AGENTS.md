@@ -30,12 +30,12 @@ pnpm typecheck            # root；app 另跑：pnpm --filter @kojo/app typechec
 pnpm audit:decoupling     # 必须 ✅（16 插件；A–D 四项）
 # 改了 Rust 才加跑（cargo 须经 node 起，Git-Bash TMP 坑见 PITFALLS）：
 node -e "require('child_process').execSync('cargo test --lib',{cwd:'packages/app/src-tauri',stdio:'inherit'})"
-# 真实语料集成冒烟（路径见 STATE.md「环境」；行号/文件名以仓库现状为准）：
-KOJO_SMOKE_PROJECT="C:\game\eratw-sub-modding-eratw4.980" \
+# 真实语料集成冒烟（语料目录名会变 ⇒ 认内容不认名，以 KOJO_CORPUS_DIR 为准，解析见 tools/corpus.mjs；行号/文件名以仓库现状为准）：
+KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)" \
   node node_modules/vitest/vitest.mjs run packages/kernel/tests/integration-plugins.test.ts
 # 桌面壳冒烟：
 node tools/smoke-tauri-dom.mjs   # DOM 冒烟（弹窗 ~100s 自动关）
-node tools/smoke-tauri-ipc.mjs "C:\game\eratw-sub-modding-eratw4.980"   # 真实 IPC 双闸 a–e（自动还原 store/文件/备份；~2min）
+node tools/smoke-tauri-ipc.mjs   # 真实 IPC 双闸 a–e（不传参即按内容自动发现语料目录——名字会变，以 KOJO_CORPUS_DIR 为准；也可 "C:\path\to\语料" 显式传；自动还原 store/文件/备份；~2min）
 ```
 
 带环境变量跑 vitest 一律 `node node_modules/vitest/vitest.mjs run <file>`——`npx vitest` 会吞环境变量（详 PITFALLS）。
