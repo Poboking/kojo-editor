@@ -32,7 +32,7 @@
 - 存档库：与语料同级的 `eratw-save\sav\` 与语料内 `sav\` **六档逐字节同容**（两处均只读；**面板读语料内 `sav\`**——adapter 固定 `<游戏目录>\sav`；注入前须去 R，见 PITFALLS §二）。
 - 代理：github 直连不稳的环境，给本 clone 配 repo 本地代理（`git config http.proxy <本机代理>`；新 clone 配一次；**永不改全局配置**）；引擎类工具的代理经 `KOJO_GIT_PROXY` 提供。
 - 桌面壳：`pnpm --filter @kojo/app tauri dev`；CDP 9222；**同一工作树只能一个桌面实例**。
-- 自动更新（REL-1）：签名密钥在构建机 `%USERPROFILE%\.tauri\kojo-editor.key`（**永不入库**；CI 走 secrets）；endpoint 指 GitHub Releases latest.json——**私仓 release 未认证不可直链下载，公开仓库后自动成立**。
+- 自动更新（REL-1）：签名密钥在构建机 `%USERPROFILE%\.tauri\kojo-editor.key`（**永不入库**；CI 走 secrets，**Secret 内容 = 密钥文件原样单行 base64**，`tauri signer generate` 的输出即此形态——再包一层 base64 会报 `Missing encoded key`）；endpoint 指 GitHub Releases latest.json；**v0.0.1 端到端已验证**（2026-10-15：check() → 拉取 latest.json → 签名验证 → 版本比较 → 已是最新，CDP 探针 `.local/test-updater.mjs`）；注意插件 `check` 命令的 `timeout` 单位是**毫秒**、`headers` 是序列、可选 `proxy` 参数（`http://…` 字符串）；**本机直连 GitHub Releases 时通时断 ⇒ 探针走 7890 代理**，「updater 跟随环境代理」为下批待办（Rust 侧读 env 后经 check 的 proxy 参数传入，或前端设置项）。
 
 ## 四、剩余欠账（数字/方向性的；认领的活在 BOARD.md）
 
