@@ -2,6 +2,9 @@ import type { ComponentType, ReactElement } from 'react';
 import type { UIPanelContribution, UIPanelProps } from '@kojo/plugin-api';
 import { Icon } from './icons';
 
+/** 宿主下传的 UI 偏好投影类型（从契约字段派生——`UiPrefs` 未从 plugin-api 桶导出） */
+type UiPrefs = NonNullable<UIPanelProps['uiPrefs']>;
+
 /**
  * 槽位渲染宿主：把 `ui.panel` 贡献挂到 React 树。
  *
@@ -23,15 +26,23 @@ const renderIcon = (name: string, size?: number): ReactElement => <Icon name={na
 export function PanelBody({
   contribution,
   floating,
+  uiPrefs,
 }: {
   contribution: Pick<UIPanelContribution, 'id' | 'component'>;
   /** 浮窗态（2026-10-14 UI 浮动批）：面板正渲染在可移动浮窗里时转发给贡献方，供其调整自身 chrome */
   floating?: boolean;
+  /**
+   * 宿主下传的 UI 偏好投影（2026-10-14 面板偏好批）：转发给贡献方（`UIPanelProps.uiPrefs`）。
+   *
+   * **可选**：缺省时不注入字段——贡献方按契约把「缺省」当最保守值（如 `panelVirtualize`
+   * 缺省即 `false` = 全量渲染 = 改动前行为）。宿主不必在此兜默认；语义由契约钉死。
+   */
+  uiPrefs?: UiPrefs;
 }): ReactElement {
   const Comp = contribution.component as ComponentType<UIPanelProps>;
   return (
     <div className={`panel panel-${contribution.id}`}>
-      <Comp renderIcon={renderIcon} {...(floating ? { floating: true } : {})} />
+      <Comp renderIcon={renderIcon} {...(floating ? { floating: true } : {})} {...(uiPrefs ? { uiPrefs } : {})} />
     </div>
   );
 }

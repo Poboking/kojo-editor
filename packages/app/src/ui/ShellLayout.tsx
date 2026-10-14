@@ -53,6 +53,7 @@ import {
 } from './motion-pref';
 import { SEALED_PANEL_IDS, setSealed, useSealed } from './sealed';
 import { setDirectMode, useDirectMode } from './direct-mode';
+import { setPanelVirtualize, usePanelVirtualize } from './panel-prefs';
 import { modalDepth, closeTopModal } from './modal-stack';
 import { resolveEscLayer, isComposingEvent, nextRovingIndex } from './shell-keys';
 import {
@@ -155,6 +156,16 @@ export function ShellLayout(props: Props): ReactElement {
   const sealed = useSealed();
   /** 直连模式开关（`direct-mode.ts`；默认关）：设置页里经封存总闸 gated——封存态不渲染 */
   const directMode = useDirectMode();
+  /**
+   * 面板 UI 偏好：长列表视口化（`panel-prefs.ts`；默认关）。
+   *
+   * 真源是壳层私有的 localStorage 偏好 + 订阅；这里只持有投影并**即时下传**给面板。
+   * `usePanelVirtualize` 走 `useSyncExternalStore`，设置页一翻开关即重渲染本壳层 ⇒
+   * 下面 `uiPrefs` 重算 ⇒ 面板以新偏好重渲染（无需重开设置页）。
+   */
+  const panelVirtualize = usePanelVirtualize();
+  /** 下传给面板的偏好投影（对象身份随开关稳定，开关不变则面板不因它白重渲染） */
+  const uiPrefs = useMemo(() => ({ panelVirtualize }), [panelVirtualize]);
   const allPanels = useMemo(() => {
     const all = [...builtinViews, ...kernel.slots.query('ui.panel')];
     return sealed ? all.filter((p) => !SEALED_PANEL_IDS.has(p.id)) : all;
@@ -802,7 +813,7 @@ export function ShellLayout(props: Props): ReactElement {
                 </span>
                 <span>{p.title}</span>
               </button>
-              {isCollapsed ? null : <PanelBody contribution={p} />}
+              {isCollapsed ? null : <PanelBody contribution={p} uiPrefs={uiPrefs} />}
             </section>
             {showSplitter ? (
               <div
@@ -818,7 +829,9 @@ export function ShellLayout(props: Props): ReactElement {
     </div>
   ) : (
     <div className="sidebar-views">
-      {activeView && activeView.panels[0] ? <PanelBody contribution={activeView.panels[0]} /> : null}
+      {activeView && activeView.panels[0] ? (
+        <PanelBody contribution={activeView.panels[0]} uiPrefs={uiPrefs} />
+      ) : null}
     </div>
   );
 
@@ -1068,6 +1081,21 @@ export function ShellLayout(props: Props): ReactElement {
                     <span className="settings-hint">收起面板过渡与入场动画，界面切换更干脆。系统级「减弱动效」设置仍会照常生效</span>
                   </span>
                 </label>
+                {/* 面板渲染偏好（panel-prefs.ts，2026-10-14 面板偏好批）：与「减弱动效」同组、
+                    一直可见（不随封存总闸收起——它是稳定可用的渲染选项，不是试用中的功能）。 */}
+                <label className="settings-row">
+                  <input
+                    type="checkbox"
+                    checked={panelVirtualize}
+                    onChange={(e) => setPanelVirtualize(e.target.checked)}
+                  />
+                  <span>
+                    长列表视口化
+                    <span className="settings-hint">
+                      只渲染屏幕上看得到的行（滚出即撤、滚入即建）：大角色首次打开不再有一次性卡顿。关掉则一次全渲染。
+                    </span>
+                  </span>
+                </label>
               </div>
 
               {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：三件暂不投入的功能整体封存，
@@ -1206,7 +1234,7 @@ export function ShellLayout(props: Props): ReactElement {
             >
               {tabStrip('aux', org.aux, layout.aux.active)}
               <div className="container-body">
-                <PanelBody contribution={activeAux} />
+                <PanelBody contribution={activeAux} uiPrefs={uiPrefs} />
               </div>
             </aside>
           </>
@@ -1227,7 +1255,7 @@ export function ShellLayout(props: Props): ReactElement {
           >
             {tabStrip('bottom', org.bottom, layout.bottom.active)}
             <div className="container-body">
-              <PanelBody contribution={activeBottom} />
+              <PanelBody contribution={activeBottom} uiPrefs={uiPrefs} />
             </div>
           </section>
         </>
@@ -1261,7 +1289,7 @@ export function ShellLayout(props: Props): ReactElement {
               </button>
             </header>
             <div className="floating-panel-body">
-              <PanelBody contribution={p} floating />
+              <PanelBody contribution={p} floating uiPrefs={uiPrefs} />
             </div>
             {/* 四角 + 四边缩放把手：默认隐形，hover / 聚焦时显形；光标方向由 fp-<dir> 类给 */}
             {RESIZE_HANDLES.map((dir) => (

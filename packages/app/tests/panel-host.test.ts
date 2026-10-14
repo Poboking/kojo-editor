@@ -49,3 +49,41 @@ describe('图标通道：宿主注入（PanelBody / StatusbarItem）', () => {
     expect(html).not.toContain('<svg');
   });
 });
+
+/**
+ * UI 偏好投影通道（2026-10-14 面板偏好批）：`PanelBody` 把宿主的 `uiPrefs` 转发给
+ * 贡献方（`UIPanelProps.uiPrefs`）。两条底线：
+ * - **转发**：给了 `{ panelVirtualize: true }` → 贡献方读到 true；
+ * - **缺省保守**：不给 / 给空对象时，贡献方按契约回落到最保守值（`panelVirtualize` 读作 false）。
+ */
+const prefsConsumer = (props: UIPanelProps) =>
+  h('span', { 'data-virtualize': String(props.uiPrefs?.panelVirtualize ?? false) });
+
+describe('UI 偏好投影：PanelBody 下传 uiPrefs', () => {
+  it('给了 uiPrefs 时原样转发给贡献方（panelVirtualize 开）', () => {
+    const html = renderToStaticMarkup(
+      h(PanelBody, {
+        contribution: { id: 'demo', component: prefsConsumer },
+        uiPrefs: { panelVirtualize: true },
+      }),
+    );
+    expect(html).toContain('data-virtualize="true"');
+  });
+
+  it('缺省 uiPrefs 时贡献方读到保守值 false（= 全量渲染，改动前行为）', () => {
+    const html = renderToStaticMarkup(
+      h(PanelBody, { contribution: { id: 'demo', component: prefsConsumer } }),
+    );
+    expect(html).toContain('data-virtualize="false"');
+  });
+
+  it('显式 false 也原样转发（缺省与显式关语义一致）', () => {
+    const html = renderToStaticMarkup(
+      h(PanelBody, {
+        contribution: { id: 'demo', component: prefsConsumer },
+        uiPrefs: { panelVirtualize: false },
+      }),
+    );
+    expect(html).toContain('data-virtualize="false"');
+  });
+});
