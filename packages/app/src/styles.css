@@ -3967,3 +3967,21 @@ button.primary .hint {
   border-bottom: 2px solid var(--border);
   opacity: 0.8;
 }
+
+/* 外部文件拖入的覆盖提示（drag-drop 批）：薄薄一层，pointer-events 必须为 none，
+   不能挡住真实落点。颜色全部复用既有令牌（accent 三件套），不引入新量纲。 */
+.drop-hint {
+  position: fixed;
+  inset: var(--space-2);
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: var(--space-4);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--accent-dim);
+  color: var(--accent-text);
+  font-size: var(--fs-4);
+  pointer-events: none;
+}

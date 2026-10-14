@@ -843,6 +843,47 @@ fn stop_watch(state: tauri::State<'_, WatchState>) -> Result<(), String> {
     Ok(())
 }
 
+/* ------------------------- 外部文件拖放（drag-drop 批） ------------------------- */
+//
+// Tauri v2 的 `dragDropEnabled` 默认为 true：OS 文件拖放被 webview 层拦截，
+// HTML5 `drop` 事件拿不到本地路径 ⇒ 唯一可靠通道是在这里接窗口事件并转发。
+// 本链路**只负责把路径说给前端听**；前端只拿去打开（读），不参与任何写授权
+// ⇒ 零新增命令、零写允许域改动。
+
+/// WebView 事件名：OS 文件拖放。payload = `{ phase, paths }`。
+const DRAG_DROP_EVENT: &str = "kojo:drag-drop";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DragDropPayload {
+    /// 'enter' | 'over' | 'leave' | 'drop'——前端覆盖提示状态机直接消费
+    phase: &'static str,
+    /// 仅 drop 携带路径；其余 phase 恒为空数组（理由见 `map_drag_drop`）
+    paths: Vec<String>,
+}
+
+/// Tauri 拖放事件 → 转发载荷（纯函数，可单测）。
+/// `drop` 之外的 phase 刻意丢掉路径：enter/over 每秒刷屏几十次，
+/// 前端只用它们亮/灭覆盖提示，转发路径只会白撑 IPC 载荷。
+fn map_drag_drop(event: tauri::DragDropEvent) -> Option<DragDropPayload> {
+    use tauri::DragDropEvent as D;
+    let (phase, paths) = match event {
+        D::Enter { .. } => ("enter", Vec::new()),
+        D::Over { .. } => ("over", Vec::new()),
+        D::Drop { paths, .. } => (
+            "drop",
+            paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+        ),
+        D::Leave => ("leave", Vec::new()),
+        // #[non_exhaustive]：上游将来新增 phase 时不冒充已知状态——宁可不提示也不给错的
+        _ => return None,
+    };
+    Some(DragDropPayload { phase, paths })
+}
+
 /* ------------------------------- 入口 ------------------------------- */
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -850,6 +891,14 @@ pub fn run() {
     tauri::Builder::default()
         .manage(WriteDomainState::default())
         .manage(WatchState::default())
+        .on_window_event(|window, event| {
+            use tauri::Emitter;
+            if let tauri::WindowEvent::DragDrop(ev) = event {
+                if let Some(payload) = map_drag_drop(ev.clone()) {
+                    let _ = window.emit(DRAG_DROP_EVENT, payload);
+                }
+            }
+        })
         .setup(|app| {
             use tauri::Manager;
             // 常驻授权根读回（自选项目位置的持久化半边）。
@@ -1406,5 +1455,60 @@ mod io_primitives_tests {
         assert!(!json.contains("mtimeMs"), "不该出现该键：{json}");
         assert!(!json.contains("\"size\""), "不该出现该键：{json}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod drag_drop_tests {
+    //! phase 映射与载荷形状：这是与前端 `subscribeDragDrop` 的契约——
+    //! camelCase、仅 drop 带路径，漂一条覆盖提示或开文件就断。
+    use super::map_drag_drop;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use tauri::{DragDropEvent, PhysicalPosition};
+
+    fn pos() -> PhysicalPosition<f64> {
+        PhysicalPosition::new(1.0, 2.0)
+    }
+
+    #[test]
+    fn only_drop_carries_paths() {
+        let p = PathBuf::from("C:\\temp\\事件.ERB");
+        let dropped = map_drag_drop(DragDropEvent::Drop {
+            paths: vec![p.clone()],
+            position: pos(),
+        })
+        .unwrap();
+        assert_eq!(dropped.phase, "drop");
+        assert_eq!(dropped.paths, vec![p.to_string_lossy().to_string()]);
+
+        for (ev, want) in [
+            (
+                DragDropEvent::Enter {
+                    paths: vec![p.clone()],
+                    position: pos(),
+                },
+                "enter",
+            ),
+            (DragDropEvent::Over { position: pos() }, "over"),
+            (DragDropEvent::Leave, "leave"),
+        ] {
+            let got = map_drag_drop(ev).unwrap();
+            assert_eq!(got.phase, want);
+            assert!(got.paths.is_empty(), "{want} 相位不该带路径");
+        }
+    }
+
+    #[test]
+    fn payload_json_is_camel_case_with_both_keys() {
+        let payload = map_drag_drop(DragDropEvent::Drop {
+            paths: vec![PathBuf::from("a b.erm")],
+            position: pos(),
+        })
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&payload).unwrap(),
+            json!({ "phase": "drop", "paths": ["a b.erm"] })
+        );
     }
 }

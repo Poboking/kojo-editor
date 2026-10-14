@@ -4,6 +4,14 @@ import type { ErbIndex, ErbParserService, GameProject, RecentProject } from '@ko
 import { invoke, isTauri } from '../bridge/invoke';
 import { bootstrapKernel } from '../bootstrap';
 import { ProjectView } from './ProjectView';
+import {
+  OPENABLE_EXT,
+  PROJECT_GATE_MESSAGE,
+  nextDropOverlay,
+  processDroppedFiles,
+  subscribeDragDrop,
+  type DropOverlayState,
+} from './drag-drop';
 import { useNotify } from './NotificationCenter';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { WelcomeView } from './WelcomeView';
@@ -41,6 +49,8 @@ export function App(): ReactElement {
   const [writable, setWritable] = useState<boolean | null>(null);
   /** 口上域索引构建失败原因（null = 成功/未构建）；驱动状态栏诊断与通知 */
   const [indexError, setIndexError] = useState<string | null>(null);
+  /** OS 文件拖放的覆盖提示（状态机见 drag-drop.nextDropOverlay；over 刷屏必须幂等） */
+  const [dropHint, setDropHint] = useState<DropOverlayState>('hidden');
   /** 通知中心（入口层 Provider 装配，App 自身也可发通知） */
   const notify = useNotify();
   /** 编辑器动作句柄（保存/保存指定/全部保存；EditorPane 注册） */
@@ -247,6 +257,51 @@ export function App(): ReactElement {
     [requestOpenFile],
   );
 
+  const phaseRef = useRef<AppPhase>(phase);
+  phaseRef.current = phase;
+
+  // 从资源管理器拖文件进窗口即打开（Rust `kojo:drag-drop` → 这里落地）。
+  // 只读链路：路径只喂既有打开入口，写权限仍由写允许域既有分野决定。
+  // 未打开项目时不接（拖了也只回一句人话）——文件树、写域等都还没有归属。
+  useEffect(() => {
+    if (!kernel) return;
+    const io = kernel.io;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    const overlay = (type: 'enter' | 'over' | 'leave' | 'drop'): void => {
+      setDropHint((s) => nextDropOverlay(s, { type }));
+    };
+    void subscribeDragDrop({
+      onEnter: () => overlay('enter'),
+      onOver: () => overlay('over'),
+      onLeave: () => overlay('leave'),
+      onDrop: (paths) => {
+        overlay('drop');
+        if (phaseRef.current !== 'project') {
+          notify({ kind: 'info', message: PROJECT_GATE_MESSAGE });
+          return;
+        }
+        void processDroppedFiles({
+          io,
+          paths,
+          openFile: (p) => requestOpenFile(p),
+          notifyRejections: (message) => notify({ kind: 'info', message }),
+        });
+      },
+    })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch((e: unknown) => {
+        console.warn('[drag-drop] 订阅失败:', e);
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [kernel, notify, requestOpenFile]);
+
   /** 关闭标签（无确认路径；model 回收由 EditorPane 的 openPaths effect 落地） */
   const doCloseTab = useCallback(
     (path: string) => {
@@ -405,6 +460,9 @@ export function App(): ReactElement {
   return (
     <>
       {body}
+      {dropHint === 'shown' ? (
+        <div className="drop-hint">{`松手就能打开：${OPENABLE_EXT.join(' / ')}`}</div>
+      ) : null}
       {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
       {pendingClose ? (
         <UnsavedConfirmDialog filePath={pendingClose} context="close" onDecide={decideClose} />
