@@ -160,6 +160,23 @@ describe('FamilyIndexRule 包装', () => {
     expect(labels['']).toBeUndefined();
     expect(labels.declare).toBeUndefined();
   });
+
+  it('instructionFaces：列出 8 个指令承载面（条件矩阵据此细分列）', () => {
+    const faces = createEratwFamilyIndex().instructionFaces!;
+    expect(faces).toHaveLength(8);
+    expect([...faces].sort()).toEqual(
+      [
+        'EXTRASOURCE_COM',
+        'EXTRASOURCE_SCOM',
+        'MESSAGE_COM',
+        'MESSAGE_CUSTOM_COM',
+        'MESSAGE_CUSTOM_SCOM',
+        'MESSAGE_SCOM',
+        'SUCCESS_COM',
+        'SUCCESS_SCOM',
+      ].sort(),
+    );
+  });
 });
 
 describe('家族识别 · K 锚点语义（BUG-3 显式化：取最后一个 _K{no}）', () => {

@@ -25,6 +25,7 @@ import type {
   ErbParserService,
   FamilyIndexRule,
   GameProject,
+  KojoInstructionTable,
   Plugin,
   ProjectService,
   SlotRegistry,
@@ -37,7 +38,10 @@ import {
   buildCharacterIndex,
   buildMatrix,
   faceLabel,
+  instructionNoOfSlot,
   type CharacterIndex,
+  type ColumnDesc,
+  type FaceFunction,
   type MatrixCell,
   type MatrixCellFunction,
 } from './matrix-logic';
@@ -98,6 +102,17 @@ export function createUiConditionMatrixPlugin(): Plugin {
         for (const c of slots.query('game.adapter')) {
           if (c.adapter.gameId !== current.adapterId) continue;
           return c.adapter.variableSchema;
+        }
+        return undefined;
+      };
+
+      /** 当前适配器的指令表（编号 ↔ 中文名；按 adapterId 精确匹配；缺省 → undefined） */
+      const instructionTable = (): KojoInstructionTable | undefined => {
+        const current = project.current();
+        if (!current) return undefined;
+        for (const c of slots.query('game.adapter')) {
+          if (c.adapter.gameId !== current.adapterId) continue;
+          return c.adapter.kojoInstructionTable;
         }
         return undefined;
       };
@@ -189,7 +204,18 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const [, force] = useState(0);
         const [selectedNo, setSelectedNo] = useState<number | null>(null);
         const [filter, setFilter] = useState('');
-        const [selected, setSelected] = useState<{ rowKey: string; face: string } | null>(null);
+        const [selected, setSelected] = useState<{ rowKey: string; columnKey: string } | null>(null);
+        /** 已折叠的大时机类面集合（默认全展开；点分组表头切换） */
+        const [foldedFaces, setFoldedFaces] = useState<Set<string>>(new Set<string>());
+
+        const toggleFace = (face: string): void => {
+          setFoldedFaces((prev) => {
+            const next = new Set(prev);
+            if (next.has(face)) next.delete(face);
+            else next.add(face);
+            return next;
+          });
+        };
 
         useEffect(() => {
           const cb = (): void => force((n) => n + 1);
@@ -294,7 +320,16 @@ export function createUiConditionMatrixPlugin(): Plugin {
             (idx.hasFamilyIndex ? ` · 未归属 ${idx.orphanCount}` : ' · 适配器未提供家族规则'),
         );
 
-        const matrix = entry ? buildMatrix(entry, depsOf, labelOf, faceLabels()) : null;
+        // 指令承载面 → 每指令一列（按面分组、UI 可折叠）；非指令面整面成列。
+        const instructionFaces = new Set(currentFamilyIndex()?.instructionFaces ?? []);
+        const columnOf = (fn: FaceFunction): ColumnDesc => {
+          if (!instructionFaces.has(fn.face)) return { key: fn.face, instructionNo: null };
+          const no = instructionNoOfSlot(fn.match.slot);
+          if (no === null) return { key: fn.face, instructionNo: null };
+          const name = instructionTable()?.lookupByNo(no);
+          return { key: `${fn.face}#${no}`, instructionNo: no, label: name ?? `#${no}` };
+        };
+        const matrix = entry ? buildMatrix(entry, depsOf, labelOf, faceLabels(), columnOf) : null;
 
         // ---- 定位（网格）----
         let grid: ReactNode;
@@ -311,16 +346,46 @@ export function createUiConditionMatrixPlugin(): Plugin {
             : matrix.rows;
           const shown = rows.slice(0, ROW_RENDER_CAP);
 
+          // 两行表头：第一行 = 大时机类（可点折叠，跨该组子列）；第二行 = 子列头。
+          // 折叠组仍渲染占位格（空白）以维持列对齐，只是不渲染其内容。
           const head = createElement(
             'thead',
             null,
             createElement(
               'tr',
               null,
-              createElement('th', { className: 'cm-corner' }, '状态 \\ 时机'),
-              ...matrix.columns.map((col) =>
-                createElement('th', { key: col.face, className: 'cm-th', title: col.face }, col.label),
-              ),
+              createElement('th', { className: 'cm-corner', rowSpan: 2 }, '状态 \\ 时机'),
+              ...matrix.groups.map((group) => {
+                const folded = foldedFaces.has(group.face);
+                return createElement(
+                  'th',
+                  {
+                    key: group.face,
+                    className: 'cm-group-th' + (folded ? ' folded' : ''),
+                    colSpan: group.columns.length,
+                    title: group.face,
+                    onClick: () => toggleFace(group.face),
+                  },
+                  createElement('span', { className: 'cm-fold', 'aria-hidden': 'true' }, folded ? '▸' : '▾'),
+                  group.label,
+                );
+              }),
+            ),
+            createElement(
+              'tr',
+              null,
+              ...matrix.groups.flatMap((group) => {
+                const folded = foldedFaces.has(group.face);
+                // 非指令的单列组：第二行留空（避免与第一行重复）
+                const blank = folded || (group.columns.length === 1 && group.columns[0]?.instructionNo === null);
+                return group.columns.map((col) =>
+                  createElement(
+                    'th',
+                    { key: col.key, className: 'cm-subth' + (folded ? ' folded' : ''), title: col.key },
+                    blank ? null : col.label,
+                  ),
+                );
+              }),
             ),
           );
 
@@ -337,40 +402,46 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   createElement('span', { className: 'cm-row-name' }, row.label ?? row.key),
                   row.label ? createElement('span', { className: 'cm-row-key dim' }, row.key) : null,
                 ),
-                ...matrix.columns.map((col) => {
-                  const cell = row.cells[col.face];
-                  if (!cell || !cell.present) {
-                    // 空白格：这个时机还没有针对该状态写过的反应（点击不导航）
+                ...matrix.groups.flatMap((group) => {
+                  // 折叠组的单元格不渲染内容（留占位空 td，维持与表头的列对齐）
+                  if (foldedFaces.has(group.face)) {
+                    return group.columns.map((col) => createElement('td', { key: col.key, className: 'cm-gap' }));
+                  }
+                  return group.columns.map((col) => {
+                    const cell = row.cells[col.key];
+                    if (!cell || !cell.present) {
+                      // 空白格：这个时机还没有针对该状态写过的反应（点击不导航）
+                      return createElement(
+                        'td',
+                        { key: col.key },
+                        createElement('button', { className: 'cm-cell off', title: '无' }, '·'),
+                      );
+                    }
+                    const isSel = selected !== null && selected.rowKey === row.key && selected.columnKey === col.key;
                     return createElement(
                       'td',
-                      { key: col.face },
-                      createElement('button', { className: 'cm-cell off', title: '无' }, '·'),
-                    );
-                  }
-                  const isSel = selected !== null && selected.rowKey === row.key && selected.face === col.face;
-                  return createElement(
-                    'td',
-                    { key: col.face },
-                    createElement(
-                      'button',
-                      {
-                        className: 'cm-cell on' + (isSel ? ' sel' : ''),
-                        title: cellComparisons(cell),
-                        onClick: () => {
-                          const earliest = orderByLine(cell.functions)[0];
-                          if (earliest) {
-                            ctx.bus.emit('editor.revealLocation', {
-                              filePath: earliest.filePath,
-                              line: earliest.startLine,
-                              source: earliest.name,
-                            });
-                          }
-                          setSelected({ rowKey: row.key, face: col.face });
+                      { key: col.key },
+                      createElement(
+                        'button',
+                        {
+                          className: 'cm-cell on' + (isSel ? ' sel' : ''),
+                          title: cellComparisons(cell),
+                          onClick: () => {
+                            const earliest = orderByLine(cell.functions)[0];
+                            if (earliest) {
+                              ctx.bus.emit('editor.revealLocation', {
+                                filePath: earliest.filePath,
+                                line: earliest.startLine,
+                                source: earliest.name,
+                              });
+                            }
+                            setSelected({ rowKey: row.key, columnKey: col.key });
+                          },
                         },
-                      },
-                      String(cell.count),
-                    ),
-                  );
+                        String(cell.count),
+                      ),
+                    );
+                  });
                 }),
               ),
             ),
@@ -393,7 +464,10 @@ export function createUiConditionMatrixPlugin(): Plugin {
         // ---- 详情 ----
         let detail: ReactNode;
         const selRow = selected && matrix ? matrix.rows.find((r) => r.key === selected.rowKey) ?? null : null;
-        const selCell = selRow && selected ? selRow.cells[selected.face] : undefined;
+        const selCell = selRow && selected ? selRow.cells[selected.columnKey] : undefined;
+        /** 选中列的显示名（列标签；找不到则回退面标签） */
+        const selColumn = selected && matrix ? matrix.columns.find((c) => c.key === selected.columnKey) ?? null : null;
+        const selColumnLabel = selColumn ? selColumn.label : selected ? faceLabel(selected.columnKey, faceLabels()) : '';
         if (selRow && selCell && selCell.present) {
           const fns = orderByLine(selCell.functions);
           detail = createElement(
@@ -406,7 +480,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
               createElement(
                 'span',
                 { className: 'dim' },
-                ` · ${faceLabel(selected!.face, faceLabels())} · ${selCell.count} 处响应`,
+                ` · ${selColumnLabel} · ${selCell.count} 处响应`,
               ),
             ),
             createElement(

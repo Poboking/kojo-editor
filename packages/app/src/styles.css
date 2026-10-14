@@ -3930,6 +3930,59 @@ button.primary .hint {
   align-items: center;
   gap: 4px;
 }
+/* 两行表头：第一行 = 大时机类（可点折叠，跨该组子列）；第二行 = 子列（指令名） */
+.cm-group-th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: center;
+  height: 22px;
+  box-sizing: border-box;
+  cursor: pointer;
+  user-select: none;
+}
+.cm-group-th:hover {
+  background: var(--bg-3);
+}
+/* 折叠态：分组头保留，但弱化配色以示该组子列已收起 */
+.cm-group-th.folded {
+  color: var(--fg-dim);
+}
+.cm-fold {
+  margin-right: 4px;
+  font-size: var(--fs-0);
+  opacity: 0.8;
+}
+.cm-subth {
+  position: sticky;
+  top: 22px;
+  z-index: 2;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 1px 4px;
+  font-weight: 500;
+  font-size: var(--fs-0);
+  white-space: nowrap;
+  text-align: center;
+  height: 20px;
+  box-sizing: border-box;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-subth.folded {
+  opacity: 0.3;
+}
+/* 折叠组在表体里的占位格：留空维持列对齐、几乎不可见 */
+.cm-gap {
+  border: 1px solid rgba(255, 255, 255, 0.03);
+  background: transparent;
+}
 
 /* --------------------- 浮动面板（2026-10-14 UI 浮动批：非模态可移动浮窗） --------------------- */
 

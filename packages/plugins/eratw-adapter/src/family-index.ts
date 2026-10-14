@@ -433,5 +433,15 @@ export function createEratwFamilyIndex(): FamilyIndexRule {
       return parseKojoFamily(fnName);
     },
     faceLabels: ERATW_FACE_LABELS,
+    instructionFaces: [
+      'MESSAGE_COM',
+      'MESSAGE_SCOM',
+      'MESSAGE_CUSTOM_COM',
+      'MESSAGE_CUSTOM_SCOM',
+      'SUCCESS_COM',
+      'SUCCESS_SCOM',
+      'EXTRASOURCE_COM',
+      'EXTRASOURCE_SCOM',
+    ],
   };
 }

@@ -18,7 +18,8 @@ import type {
   FamilyParseKind,
   StateDependency,
 } from '@kojo/plugin-api';
-import { FACE_ORDER, buildCharacterIndex, buildMatrix, faceLabel } from '../src/matrix-logic';
+import { FACE_ORDER, buildCharacterIndex, buildMatrix, faceLabel, instructionNoOfSlot } from '../src/matrix-logic';
+import type { CharacterEntry, ColumnDesc, FaceFunction } from '../src/matrix-logic';
 
 /* ------------------------------ 测试基建 ------------------------------ */
 
@@ -234,5 +235,89 @@ describe('faceLabel', () => {
     expect(faceLabel('SUCCESS_COM', labels)).toBe('指令成否');
     expect(faceLabel('MESSAGE', labels)).toBe('MESSAGE'); // 未收录 → 原样
     expect(faceLabel('', labels)).toBe('其它'); // 通用兜底不受 labels 影响
+  });
+});
+
+/* ------------------------------ 指令细分列（columnOf） ------------------------------ */
+
+describe('instructionNoOfSlot', () => {
+  it('取 slot 首位数字；无前导数字 → null', () => {
+    expect(instructionNoOfSlot('88_1')).toBe(88);
+    expect(instructionNoOfSlot('310')).toBe(310);
+    expect(instructionNoOfSlot('X')).toBeNull();
+    expect(instructionNoOfSlot('')).toBeNull();
+  });
+});
+
+describe('buildMatrix · columnOf 细分指令列', () => {
+  const withSlot = (face: string, slot: string): FamilyMatch => ({ ...mk('ok', face, 1), slot });
+  const fn = (name: string, face: string, slot: string, startLine: number): FaceFunction => ({
+    name,
+    normalizedName: name,
+    filePath: '/p/a.ERB',
+    startLine,
+    face,
+    match: withSlot(face, slot),
+  });
+
+  const entry: CharacterEntry = {
+    no: 1,
+    faces: ['EVENT', 'SUCCESS_COM', 'MESSAGE_COM'],
+    functions: [
+      fn('F_MSG_88_1', 'MESSAGE_COM', '88_1', 2),
+      fn('F_MSG_88_2', 'MESSAGE_COM', '88_2', 12), // 同编号 → 合并进同一列
+      fn('F_MSG_310', 'MESSAGE_COM', '310', 22),
+      fn('F_MSG_X', 'MESSAGE_COM', 'X', 32), // 非数字 slot → 回退整面列
+      fn('F_SUCCESS_12', 'SUCCESS_COM', '12', 42),
+      fn('F_EVENT', 'EVENT', '', 52),
+    ],
+  };
+  const depsByFn: Record<string, StateDependency[]> = {
+    F_MSG_88_1: [dep('CFLAG:318', 'CFLAG', ['318'], [cmp('>=', 500)])],
+    F_MSG_310: [dep('CFLAG:318', 'CFLAG', ['318'], [cmp('==', 1)])],
+  };
+  const depsOf = (n: string): StateDependency[] => depsByFn[n] ?? [];
+  const instructionFaces = new Set(['MESSAGE_COM', 'SUCCESS_COM']);
+  const columnOf = (f: FaceFunction): ColumnDesc => {
+    if (!instructionFaces.has(f.face)) return { key: f.face, instructionNo: null };
+    const no = instructionNoOfSlot(f.match.slot);
+    if (no === null) return { key: f.face, instructionNo: null };
+    return { key: `${f.face}#${no}`, instructionNo: no, label: `名${no}` };
+  };
+
+  it('列细分：每指令一列、非指令整面成列、面序沿用 FACE_ORDER、组内指令号升序', () => {
+    const m = buildMatrix(entry, depsOf, () => null, undefined, columnOf);
+    expect(m.columns.map((c) => c.key)).toEqual([
+      'EVENT', // 非指令面：整面一列
+      'SUCCESS_COM#12',
+      'MESSAGE_COM#88',
+      'MESSAGE_COM#310',
+      'MESSAGE_COM', // 非数字 slot 回退整面列（无编号 → 排最后）
+    ]);
+    expect(m.columns.map((c) => c.label)).toEqual(['EVENT', '名12', '名88', '名310', 'MESSAGE_COM']);
+    expect(m.columns.map((c) => c.instructionNo)).toEqual([null, 12, 88, 310, null]);
+  });
+
+  it('groups 按面聚合、组内子列有序、扁平 columns = groups 展平序', () => {
+    const m = buildMatrix(entry, depsOf, () => null, undefined, columnOf);
+    expect(m.groups.map((g) => g.face)).toEqual(['EVENT', 'SUCCESS_COM', 'MESSAGE_COM']);
+    expect(m.groups.find((g) => g.face === 'MESSAGE_COM')!.columns.map((c) => c.key)).toEqual([
+      'MESSAGE_COM#88',
+      'MESSAGE_COM#310',
+      'MESSAGE_COM',
+    ]);
+    expect(m.groups.find((g) => g.face === 'SUCCESS_COM')!.columns.map((c) => c.key)).toEqual(['SUCCESS_COM#12']);
+    expect(m.columns.map((c) => c.key)).toEqual(m.groups.flatMap((g) => g.columns.map((c) => c.key)));
+  });
+
+  it('单元格按列键聚合：MESSAGE_COM#88 / #310 各自命中', () => {
+    const m = buildMatrix(entry, depsOf, () => null, undefined, columnOf);
+    const row = m.rows.find((r) => r.key === 'CFLAG:318')!;
+    expect(row.cells['MESSAGE_COM#88']).toMatchObject({ present: true, count: 1 });
+    expect(row.cells['MESSAGE_COM#310']).toMatchObject({ present: true, count: 1 });
+    expect(row.cells['MESSAGE_COM']).toBeUndefined(); // 非数字 slot 无依赖 → 无响应
+    expect(row.cells['EVENT']).toBeUndefined();
+    expect(row.totalCount).toBe(2);
+    expect(m.depsFunctions).toBe(2);
   });
 });

@@ -197,20 +197,52 @@ export interface MatrixRow {
   readonly cells: Record<string, MatrixCell>;
 }
 
-/** 矩阵一列（一个时机面） */
+/** 矩阵一列（可细到「一个指令」；`instructionNo` = 该面的指令编号，无则 null） */
 export interface MatrixColumn {
+  /** 列键（唯一）：整面成列时 = face，细分为指令时 = `${face}#${no}` */
+  readonly key: string;
+  /** 归属面（大时机类） */
+  readonly face: string;
+  /** 列显示标签（细分时 = 指令中文名 / `#编号`，整面时 = 面标签） */
+  readonly label: string;
+  /** 指令编号（细分列才有；整面列 = null） */
+  readonly instructionNo: number | null;
+}
+
+/** 列的时机分组（一个大时机类下的若干子列） */
+export interface MatrixColumnGroup {
   readonly face: string;
   readonly label: string;
+  readonly columns: MatrixColumn[];
 }
 
 /** 单个角色的条件矩阵 */
 export interface ConditionMatrix {
   readonly charaNo: number;
+  /** 扁平列表（按 groups 展平序；渲染序） */
   readonly columns: MatrixColumn[];
+  /** 按大时机类聚合的分组（条件矩阵表头两行用；组内子列已定序） */
+  readonly groups: MatrixColumnGroup[];
   readonly rows: MatrixRow[];
   readonly totalFunctions: number;
   /** 含 ≥1 状态依赖的函数数（分母口径） */
   readonly depsFunctions: number;
+}
+
+/**
+ * 取 `FamilyMatch.slot` 首位数字（= 指令承载面上的指令编号）。
+ * `'88_1'` → 88、`'310'` → 310；无前导数字 → null（消费方据此整面成列，不猜）。
+ */
+export function instructionNoOfSlot(slot: string): number | null {
+  const m = /^(\d+)/.exec(slot);
+  return m ? Number(m[1]) : null;
+}
+
+/** 消费方对某函数的列描述（`columnOf` 回调返回；`label` 缺省 = 面标签） */
+export interface ColumnDesc {
+  readonly key: string;
+  readonly instructionNo: number | null;
+  readonly label?: string;
 }
 
 /** 构建期可变中间体（最终以只读形态对外） */
@@ -226,11 +258,25 @@ type RowAcc = {
   cells: Record<string, MutableCell>;
 };
 
+/** 组内子列定序：`instructionNo` 升序（无编号排最后），同号按 `key` 定序。 */
+function compareColumn(a: MatrixColumn, b: MatrixColumn): number {
+  const an = a.instructionNo;
+  const bn = b.instructionNo;
+  if (an === null && bn !== null) return 1;
+  if (an !== null && bn === null) return -1;
+  if (an !== null && bn !== null && an !== bn) return an - bn;
+  if (a.key < b.key) return -1;
+  if (a.key > b.key) return 1;
+  return 0;
+}
+
 /**
  * 从单个角色的聚合构建矩阵。
  *
- * - 列 = `entry.faces`；
- * - 行 = 按 `dep.key` 聚合的状态变量；`cells[fn.face]` 记一次响应（count+1，
+ * - 列集合来自 `entry.functions` **全量**（凡写过的面/指令都成列），经 `columnOf`
+ *   解析成列描述；`columnOf` 缺省 = 每个面一列（与旧口径逐字一致）；
+ * - 面顺序沿用 `FACE_ORDER`/`faceRank`，组内子列按 `instructionNo` 升序；
+ * - 行 = 按 `dep.key` 聚合的状态变量；`cells[列键]` 记一次响应（count+1，
  *   并压入该函数的贡献条目）；
  * - 行序：`totalCount` 降序，同数按 `key` 升序（确定性）；
  * - 未命中的单元格直接从 `cells` 记录中缺席（面板按 off 渲染）。
@@ -243,8 +289,39 @@ export function buildMatrix(
   depsOf: (normalizedName: string) => StateDependency[],
   labelOf: (key: string) => string | null,
   faceLabels?: Readonly<Record<string, string>>,
+  columnOf?: (fn: FaceFunction) => ColumnDesc,
 ): ConditionMatrix {
-  const columns: MatrixColumn[] = entry.faces.map((face) => ({ face, label: faceLabel(face, faceLabels) }));
+  const resolveColumn =
+    columnOf ?? ((fn: FaceFunction): ColumnDesc => ({ key: fn.face, instructionNo: null }));
+
+  // 列聚合：面 → 列键 → 列（去重；面顺序与 `entry.faces` 同口径）
+  const byFace = new Map<string, Map<string, MatrixColumn>>();
+  for (const fn of entry.functions) {
+    const desc = resolveColumn(fn);
+    let cols = byFace.get(fn.face);
+    if (!cols) {
+      cols = new Map<string, MatrixColumn>();
+      byFace.set(fn.face, cols);
+    }
+    if (!cols.has(desc.key)) {
+      cols.set(desc.key, {
+        key: desc.key,
+        face: fn.face,
+        instructionNo: desc.instructionNo,
+        label: desc.label ?? faceLabel(fn.face, faceLabels),
+      });
+    }
+  }
+
+  const groups: MatrixColumnGroup[] = [...byFace.entries()]
+    .map(([face, cols]) => ({
+      face,
+      label: faceLabel(face, faceLabels),
+      columns: [...cols.values()].sort(compareColumn),
+    }))
+    .sort((a, b) => faceRank(a.face) - faceRank(b.face) || a.face.localeCompare(b.face));
+  const columns: MatrixColumn[] = groups.flatMap((g) => g.columns);
+
   const acc = new Map<string, RowAcc>();
   let depsFunctions = 0;
 
@@ -257,6 +334,7 @@ export function buildMatrix(
     }
     if (deps.length > 0) depsFunctions++;
 
+    const columnKey = resolveColumn(fn).key;
     for (const dep of deps) {
       if (!dep) continue;
       let row = acc.get(dep.key);
@@ -281,10 +359,10 @@ export function buildMatrix(
       }
 
       const comps = (dep.comparisons ?? []).map((c) => `${c.op} ${c.text}`);
-      let cell = row.cells[fn.face];
+      let cell = row.cells[columnKey];
       if (!cell) {
         cell = { present: true, count: 0, functions: [] };
-        row.cells[fn.face] = cell;
+        row.cells[columnKey] = cell;
       }
       cell.count += 1;
       cell.functions.push({
@@ -324,6 +402,7 @@ export function buildMatrix(
   return {
     charaNo: entry.no,
     columns,
+    groups,
     rows,
     totalFunctions: entry.functions.length,
     depsFunctions,

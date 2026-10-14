@@ -89,6 +89,12 @@ export interface FamilyIndexRule {
    * 缺省 = 适配器未提供面标签，消费方全部原样显示。
    */
   readonly faceLabels?: Readonly<Record<string, string>>;
+  /**
+   * 「指令承载面」清单（游戏知识；只住 adapter）。
+   * 列出的 face，其 `FamilyMatch.slot` 首位数字 = 指令编号；消费方（条件矩阵）
+   * 据此把该面细分为「每指令一列」并经指令表取名。缺省 = 不细分（整面成列）。
+   */
+  readonly instructionFaces?: readonly string[];
 }
 
 /** 变量字典条目（v0.2 起消费） */
