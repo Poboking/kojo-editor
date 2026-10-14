@@ -105,6 +105,20 @@ export interface FamilyIndexRule {
   readonly instructionFaces?: readonly string[];
 }
 
+/**
+ * 变量字典条目的**来源层**（ ALS 批 / FT-1 三层数据源的显式化，可选字段）。
+ *
+ * - `'primary'`：主名表（游戏数据的第一层名字表）；
+ * - `'append'`：追加名表（汉化 / 魔改给同一编号补的别名）；
+ * - `'const'`：作者自定具名常量（剧本声明里的名字 = 整数）——**只做名字→编号换算，
+ *   不宣称族归属**（同一个名字可以写在任意族后面）。
+ *
+ * 消费方口径：`lookup` 的"收录"判定三层都算（拼错名检测受益）；**族归属只认前两层，
+ * 且主表优先**——否则追加表 / 常量表会把本来属于更早主表的归属抢走。
+ * 缺省 = 未知来源 ⇒ 消费方按 `'primary'` 处理（旧字典形态零改动）。
+ */
+export type VariableSource = 'primary' | 'append' | 'const';
+
 /** 变量字典条目（v0.2 起消费） */
 export interface VariableInfo {
   /** 变量名（如 'CFLAG'、'TCVAR'） */
@@ -121,6 +135,11 @@ export interface VariableInfo {
   resolvedIndex?: number;
   /** 位标志表（CFLAG 位图 / TCVAR:50 位表等） */
   bits?: ReadonlyArray<{ bit: number; label: string }>;
+  /**
+   * 本条目的来源层（见 `VariableSource`）。**可选、additive**：不提供的实现（旧字典）
+   * 一律按主表处理 ⇒ 族归属行为与今天逐字相同。
+   */
+  source?: VariableSource;
 }
 
 /** 变量字典（口上相关变量、CFLAG 位图、好感变量等；版本化） */

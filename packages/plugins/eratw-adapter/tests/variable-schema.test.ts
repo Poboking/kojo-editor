@@ -88,10 +88,10 @@ describe('loadEratwVariableSchema', () => {
       log: silentLog,
     });
 
-    expect(schema.lookup('CFLAG', 2)).toEqual({ name: 'CFLAG', index: 2, description: '好感度', resolvedIndex: 2 });
-    expect(schema.lookup('cflag', '2')).toEqual({ name: 'CFLAG', index: '2', description: '好感度', resolvedIndex: 2 });
-    expect(schema.lookup('TALENT', '恋慕')).toEqual({ name: 'TALENT', index: '恋慕', description: '恋慕', resolvedIndex: 3 });
-    // 家族级（无索引）：游戏无机读族名表 → 取适配器内置策展常量
+    expect(schema.lookup('CFLAG', 2)).toEqual({ name: 'CFLAG', index: 2, description: '好感度', resolvedIndex: 2, source: 'primary' });
+    expect(schema.lookup('cflag', '2')).toEqual({ name: 'CFLAG', index: '2', description: '好感度', resolvedIndex: 2, source: 'primary' });
+    expect(schema.lookup('TALENT', '恋慕')).toEqual({ name: 'TALENT', index: '恋慕', description: '恋慕', resolvedIndex: 3, source: 'primary' });
+    // 家族级（无索引）：游戏无机读族名表 → 取适配器内置策展常量（**不是索引条目 ⇒ 不标源**）
     expect(schema.lookup('CFLAG')).toEqual({ name: 'CFLAG', description: '角色标志' });
     expect(schema.lookup('CFLAG', 999)).toEqual({ name: 'CFLAG', index: 999 });
     expect(schema.lookup('NOPE', 1)).toBeUndefined();
@@ -108,8 +108,8 @@ describe('loadEratwVariableSchema', () => {
       chsMapPath: '/game/plugins/tw_csv_chs.xml',
       log: silentLog,
     });
-    // 词典命中 → 中文
-    expect(schema.lookup('CFLAG', 4)).toEqual({ name: 'CFLAG', index: 4, description: '信赖度', resolvedIndex: 4 });
+    // 词典命中 → 中文（来源层仍是主表：词典只改显示词，不改数据源）
+    expect(schema.lookup('CFLAG', 4)).toEqual({ name: 'CFLAG', index: 4, description: '信赖度', resolvedIndex: 4, source: 'primary' });
     // 词典未收录 → 回落名称表原文
     expect(schema.lookup('CFLAG', 2)?.description).toBe('好感度');
   });
@@ -281,7 +281,11 @@ describe('loadEratwVariableSchema：`CSV/*.als` 进字典（P-10③ 具名核对
       index: '泥酔',
       description: '泥酔',
       resolvedIndex: 145,
+      // ALS-R1：追加名表进来的名字**如实标源**（消费方靠它把族归属只认主表/追加表两层）
+      source: 'append',
     });
+    // 主表自己的写法仍是 primary（同一张表的两个名字来源不同，正是分层要区分的）
+    expect(schema.lookup('TCVAR', '烂醉')?.source).toBe('primary');
     expect(schema.lookup('EX', 'Ｖ绝顶')?.resolvedIndex).toBe(1);
     // 注意：字典的表键来自文件名（`ex.als` → `EX`），**没有** `NOWEX` 这张表——
     // `NOWEX:具名` 经 `EX` 表核对是 kojo-sugar 侧"同名表候选"的职责，读数见

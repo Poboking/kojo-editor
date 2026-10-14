@@ -34,6 +34,7 @@ import type {
   SugarLiftService,
   SugarPreviewService,
   SugarTranspileService,
+  VariableInfo,
   VariableSchema,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
@@ -268,15 +269,23 @@ export function createKojoSugarPlugin(): Plugin {
  * 把 adapter 的 `VariableSchema` 适配为转译器的 `DictionaryLookup`（只读消费）。
  *
  * - `resolveFamily(name)`：变量名字 → 族名。策略：按引擎变量族表逐个
- *   `lookup(FAMILY, name)`，命中即返回该族（**命中不唯一时返回首个**——
- *   规范 §3.8 说"命中不唯一时编辑器弹窗"，那是 S4 编辑体验批的职责；
- *   转译器此处取**确定性**首个命中，不静默猜测顺序之外的语义）；
+ *   `lookup(FAMILY, name)`，**两轮**取归属（ALS-R1）——第一轮只认**主表**（`'primary'`）
+ *   收录、按族表顺序取首个；一轮都不中才第二轮认**追加名表**（`'append'`）；
+ *   `'const'`（作者自定具名常量）**一律不参与族归属**（adapter FT-1 的自述口径就是
+ *   "本表只做名字→编号换算、不宣称族归属"，此前只因它返回 `description`/`resolvedIndex`
+ *   就被当成族收录 ⇒ 把主表的归属抢走，实测 `教養` ABL→CFLAG、`憤怒` TCVAR→BASE）。
+ *   **为什么必须分层**：升糖投影按 `nameAt(族, 编号)` 显示（`project.ts`），显示侧走的是
+ *   主表；作者照抄下来降糖时若 `resolveFamily` 给出另一个族，就是**显示与写不同族**。
+ *   规范 §3.8 说"命中不唯一时编辑器弹窗"，那是 S4 编辑体验批的职责；本函数取
+ *   **确定性**首个命中（同层内仍是族表顺序即优先级，不静默猜测顺序之外的语义）；
  * - `resolve(ident)`：裸标识符 → 原样（引擎变量表已收录的族名 + 冒号索引
  *   写法本就合法，不需要改写）；
  * - `unlistedFamilyName(ident)`（P-10③）：`族头:具名索引` 的**名称段**核对——
  *   历史上 `resolve` 只看族头就整串放行，拼错的具名（`NOWEX:噴乳乳瞎写`）零诊断
  *   进产物（违铁律 4）。本方法把"族表在位但该名查无"单独问一次，**不改写产物**，
  *   报警由 `expression.ts` 的族引用放行点决定（**warning 起步**）。
+ *   **收录判定三层都算**（含 `'const'`）：拼错名检测受益于常量表——作者写在 `.ERH`
+ *   里的名字是真名，不是拼错。
  */
 const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
   'CFLAG',
@@ -315,46 +324,66 @@ const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
  * 在真语料上把该族的**实际 warn 面打到 0** —— 或者只剩**真阳性**（作者确实写错的名称，
  * 引擎取不到值，正是本核对要抓的东西）。只要残余里还有**一条系统性假阳性类**，该族就不入库。
  *
- * ## 读数（2026-10-14 只读实测，本机语料画蛇添足版 4.980，`ERB/口上・メッセージ関連`
- * 2,317 份 `.ERB`；口径 = 与转译器同一个标识符字符集（`identifier-chars.ts`）扫**非注释行**，
- * 只取 `族头:具名` **二段形**且名称段非纯数字；"实际 warn" = 判表外后再过
- * `expression.ts` 的"名称段是裸引擎全局"放行。表内 `前` = 字典只读 `*.csv`（P-10③ 那批的基线，
- * 逐族与其发布读数**逐字相同**：CFLAG 1,304 / TALENT 567 / FLAG 126 / TCVAR 172 / TEQUIP 75 /
- * PALAM 46 / EXP 33 / ABL 26 / SOURCE 6 ⇒ 本批口径未放宽）。
+ * ## 读数（ALS-R2 批 2026-10-14 **按生产判据**全表重测，本机三盘；口径见下"口径声明"）
  *
- * | 族头 | 二段具名引用 | 判表外 前(csv) | 判表外 后(+als) | 实际 warn 后 | 取舍 |
- * | --- | --- | --- | --- | --- | --- |
- * | `MARK` | 10,943 | 0 | 0 | 0 | 保持入库（`Mark.als` 与 `Mark.csv` 逐字节相同） |
- * | `NOWEX` | 5,197 | 7 | 3 | 2 | 保持入库（`ex.als` 简写别名补进表 ⇒ `Ｖ绝顶`×4 归零） |
- * | `DOWNBASE` | 108 | 0 | 0 | 0 | 保持入库 |
- * | `STAIN` | 4 | 0 | 0 | 0 | 保持入库 |
- * | `BASE` | 1,842 | **711** | **0** | **0** | **入库**（`Base.als` 同时给简繁双写：`10,情绪`+`10,情緒`） |
- * | `FLAG` | 3,984 | **126** | **0** | **0** | **入库** |
- * | `TFLAG` | 1,262 | **46** | **0** | **0** | **入库** |
- * | `EX` | 1,068 | 3 | 3 | 2 | **不入库**（`.als` 一条也没替它消掉 ⇒ 零收益；2 条残余见下"第 5 类"） |
- * | `TEQUIP` | 3,462 | **75** | **3** | **1** | **入库**（残余 1 = `TEQUIP:震动棒`，表内是 `振動棒`／`バイブ` ⇒ **真阳性**） |
- * | `EXP` | 2,307 | 33 | 19 | 1 | **不入库**（残余 1 = `EXP:LOCAL`，假阳性类见下） |
- * | `ABL` | 8,245 | 26 | 7 | 5 | **不入库**（残余 = 作者自定义能力名 `ABL:K17C_部位V` 一类） |
- * | `PALAM` | 1,627 | 46 | 43 | 43 | **不入库**（残余 42/43 = `PALAM:LOCAL`） |
- * | `SOURCE` | 1,799 | 6 | 6 | 6 | **不入库**（残余 6/6 = `SOURCE:LOCAL`，`.als` 帮不上） |
- * | `TALENT` | 69,058 | 567 | 80 | 3 | **不入库**（77 = 作用域词；3 = 名称含全角 `／` 被扫描器截断） |
- * | `TCVAR` | 8,427 | 172 | 68 | 68 | **不入库**（残余几乎全是作者自定义名 `TCVAR:K58C_…`） |
- * | `CFLAG` | 8,370 | **1,304** | 589 | 576 | **不入库**（残余 = 自定义名族 `CFLAG:K42C_結婚` 一类，非字典缺表） |
- * | `EQUIP` | 456 | 306 | 305 | 305 | **不入库**（残余是 `EQUIP:下半身内衣` —— 表内是 `下半身内衣１`，全角数字被扫描器截断） |
- * | `ITEM` | 264 | 30 | 25 | 11 | **不入库**（自定义名 + 作用域词 + 异体名） |
- * | `DAY` | 1 | 1 | 1 | 1 | **不入库**（`DAY:晴朗`；且 `DAY.als` 名称段含行内 `;` 注释，见 adapter 测试） |
- * | `CSTR` | 18 | 0 | 0 | 0 | **不入库**（前后皆 0 ⇒ 入库零收益，且样本仅 18 处） |
- * | `JUEL` `BUFF` | 0 | — | — | — | **不入库**（本语料无二段具名引用；`BUFF.als` 只存在于魔王改版） |
+ * 列义：`具名` = 真二段形引用处数；`前/中/现` = 判表外处数，字典分别是
+ * 只 `*.csv` / `+*.als` / `+*.ERH`（现 = 今天的生产字典）；`warn` = 现字典判表外后再过
+ * `expression.ts:reportUnlistedFamilyName` 的"名称段是裸引擎全局"放行 ⇒ **warn 才是作者真会看到的数**。
  *
- * ### 四类残余（逐条核过 `文件:行`，写在测试与本报告里）
- * 1. **作用域词当名称段**：`PALAM:LOCAL` / `SOURCE:LOCAL` / `EXP:LOCAL` / `ITEM:ARG`。
+ * | 族头 | 具名 | 前 | 中 | 现 | warn | 取舍 |
+ * | --- | --- | --- | --- | --- | --- | --- |
+ * | `MARK` | 10,943 | 0 | 0 | 0 | 0 | 保持入库（`Mark.als` 与 `Mark.csv` 逐字节相同） |
+ * | `NOWEX` | 5,197 | 7 | 3 | 3 | 2 | 保持入库（残余 = `i`×2 动态索引 + `COUNT`，第 5 类） |
+ * | `DOWNBASE` | 108 | 0 | 0 | 0 | 0 | 保持入库 |
+ * | `STAIN` | 4 | 0 | 0 | 0 | 0 | 保持入库 |
+ * | `BASE` | 1,842 | **711** | **0** | 0 | 0 | 保持入库（`Base.als` 简繁双写：`10,情绪`+`10,情緒`） |
+ * | `FLAG` | 3,984 | **126** | **0** | 0 | 0 | 保持入库 |
+ * | `TFLAG` | 1,262 | **46** | **0** | 0 | 0 | 保持入库 |
+ * | `TEQUIP` | 3,460 | **73** | **1** | 1 | **1** | 保持入库（唯一残余 `TEQUIP:震动棒`，表内 `振動棒`／`バイブ` ⇒ **真阳性**） |
+ * | `SOURCE` | 1,793 | **0** | **0** | **0** | **0** | **入库**（ALS-R2：按生产判据三盘 0/0/0，与 `MARK`/`DOWNBASE`/`STAIN` 同判据形态；旧记"残余 6"是探针口径，见"口径声明"） |
+ * | `MAXBASE` | 823 | 21 | **0** | 0 | 0 | **候选·本批未入库**（无 `MAXBASE.csv`，名字全住 `BASE` 表：`['MAXBASE','BASE']` 判表外降到 0，三盘 warn 0；入库只需登记族头，**不需**扩 `ENGINE_VARIABLE_FAMILIES`——实测 `MAXBASE:具名` 今天就走表达式直通、零诊断。停在"生效族 = 九张"的交付口径，读数交 ALS 线） |
+ * | `EX` | 1,068 | 3 | 3 | 3 | 2 | **不入库**（`.als` 一条也没替它消掉 ⇒ 零收益；残余见第 5 类） |
+ * | `EXP` | 2,289 | 15 | 1 | 1 | 1 | **不入库**（残余 1 = `EXP:LOCAL`，第 1 类） |
+ * | `PALAM` | 1,626 | 45 | 42 | 42 | **42** | **不入库**（42/42 = `PALAM:LOCAL`，第 1 类） |
+ * | `ABL` | 8,245 | 26 | 7 | 2 | 0 | **不入库**（残余 2 = `ABL:TARGET`×1 + `ABL:MASTER`×1，被 E16 的"裸引擎全局"口径**放行成 0**，不是字典权威判出的 0；它真正的作者自定义名全靠 `.ERH` 常量兜住（`ABL:K17C_部位V`），而 FT-1 明令不收可写 `#DIM NAME = 351` ⇒ 登记后这类名字一出现就是误伤。读数交 ALS 线） |
+ * | `TCVAR` | 8,427 | 172 | 68 | 9 | 9 | **不入库**（残余几乎全是自定义名 `TCVAR:K58C_…`，第 2 类；`*.ERH` 替它消掉 59 处） |
+ * | `TALENT` | 69,038 | 547 | 60 | 60 | 3 | **不入库**（77 处作用域词 + 名称含全角 `／` 被切词，第 3 类） |
+ * | `CFLAG` | 8,350 | **1,284** | 569 | 69 | 69 | **不入库**（残余 = 自定义名族 `CFLAG:K42C_結婚` 一类，第 2 类，非字典缺表） |
+ * | `EQUIP` | 456 | 306 | 305 | 305 | 305 | **不入库**（残余 `EQUIP:下半身内衣` —— 表内是 `下半身内衣１`，全角数字被切词，第 3 类） |
+ * | `ITEM` | 264 | 30 | 25 | 25 | 11 | **不入库**（自定义名 + 作用域词 + 异体名） |
+ * | `DAY` | 1 | 1 | 1 | 1 | 1 | **不入库**（`DAY:晴朗`；且 `DAY.als` 名称段含行内 `;` 注释，见 adapter 测试） |
+ * | `CSTR` | 18 | 0 | 0 | 0 | 0 | **不入库**（前后皆 0 ⇒ 入库零收益，样本仅 18 处） |
+ * | `JUEL` `BUFF` `GOTJUEL` | 0 | — | — | — | — | **不入库**（本语料无真二段具名引用；`BUFF.als` 只存在于魔王改版） |
+ *
+ * 还有一类**别当候选**：盘上根本没有同名名称表的族头（`CALLNAME` 193,961 / `MASTERNAME` 269 /
+ * `NAME` 73 / `CUP` 51 / `TRAINNAME` 3 处二段具名，判表外都是 0）——那 0 是"**无表 ⇒ 一律放行**"
+ * 得来的（`nameTableKey` 找不到表就返回 undefined），不是字典判出来的，登记它们零收益。
+ *
+ * ### 口径声明（写给下一个读数的人；ALS-R2 把这句改到与判据同源）
+ * **与生产判据同一条**：`ERB/口上・メッセージ関連` 全部 `.ERB` 的**非注释行**，用与转译器
+ * 同一个标识符字符集（`identifier-chars.ts`）扫 `族头:具名` **恰好二段形**（名称段非纯数字），
+ * 且**不计**被扫描器在 `:` 处截断的三段作用域写法（`SOURCE:LOCAL:(LOCAL:1)` 这类——
+ * `unlistedFamilyName` 的"≥3 段一律放行"过去会被截词绕过，`expression.ts` 现按
+ * "截断处仍是 `:` 就不核"堵住，ALS-R2）。本表**只取二段**，不再含三段截词。
+ * 仍是**整行扫描**（含 `\@ … \@` 行内表达式与散文里的 `族头:名字` 字样）⇒ 处数是**上界**；
+ * 转译器真正的报点只在表达式上下文。
+ *
+ * 与 ALS 批旧记 `前` 列的差额**全部**是那条截词：旧列 = 本表 `前` + 截断形态处数
+ * （CFLAG 1,284+20=1,304 / TALENT 547+20=567 / TEQUIP 73+2=75 / PALAM 45+1=46 /
+ * EXP 15+18=33 / SOURCE 0+6=6；`FLAG` 126、`TCVAR` 172、`ABL` 26、`NOWEX` 7、`MARK` 0、
+ * `BASE` 711、`TFLAG` 46 无截断形态 ⇒ 逐字相同）。旧表把 `SOURCE:LOCAL` 计成 6 处判表外，
+ * 生产判据下它们一律放行 ⇒ `SOURCE` 的残余是 **0** 而不是"作用域词 6 条"，按本表自己的判据**应入库**。
+ *
+ * ### 五类残余（逐条核过 `文件:行`，读数钉在 `family-name-source-tier.corpus.test.ts`）
+ * 1. **作用域词当名称段**：`PALAM:LOCAL`×42 / `EXP:LOCAL`×1 / `ITEM:ARG`。
  *    `TARGET` `MASTER` `PLAYER` `ARG` `RESULT` 已在 `engine-globals.ts` 里、被"裸引擎全局"口径吸收；
- *    **`LOCAL` / `GETNUM` 不在那张表里** ⇒ 它们漏成本批最大的假阳性类（PALAM 43 条里 42 条是它）。
- *    那是 E16 线的判据面（动它会改属性/悬停命中集），**本批不越线补**。补上那一行即可一次性解锁
- *    `EXP` / `PALAM` / `SOURCE` 三族入库（届时各自残余降到 ≤1）。
+ *    **`LOCAL` / `GETNUM` 不在那张表里**（PALAM 42 条 warn 全是它）。那是 E16 线的判据面
+ *    （动它会改**裸标识符**属性/悬停命中集，且 `LOCAL` 是段块糖的信封槽），**本批不越线补**。
+ *    注意 `SOURCE:LOCAL:(LOCAL:1)` 属**截断形态**、生产已不判 ⇒ 不再卡 `SOURCE` 入库（旧表那句作废）。
  * 2. **作者自定义名**：`CFLAG:K42C_結婚`×86、`TCVAR:K58C_胖次剥ぎ重複阻止`×18、`ABL:K17C_部位V`×2 等
  *    —— 住在角色目录 / 各自口上的 `#DIM` 里，游戏 `CSV/*.csv` 与 `*.als` 都不含它。
- *    要治它得给字典加"每角色自定名表"这路数据源（**P-10③ 已立项的另一个方向**，不是本批）。
+ *    **`.ERH` 具名常量（FT-1）已经吃掉一大块**：`CFLAG` 判表外 569→69、`TCVAR` 68→9、`ABL` 7→2。
+ *    剩下的要治得加"每角色自定名表"这路数据源（**P-10③ 已立项的另一个方向**，不是本批）。
  * 3. **扫描器字符集截断**：表内名称含全角 `／`（`Talent.csv:24 开朗／阴郁`、`:150 幼児／幼児退行`）
  *    或全角数字（`Equip.csv:5 下半身内衣１`）时，`identifier-chars.ts` 在标点/全角数字处切词
  *    ⇒ 名称段被截成 `开朗` / `下半身内衣`，判表外。属**语言层字符集**口径（与本批正交），
@@ -362,31 +391,37 @@ const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
  * 4. **真阳性**：`TEQUIP:震动棒`（表内 `振动棒`→`振動棒`／`バイブ`，首字就不同）
  *    `M_KOJO_K55_絶頂.ERB:217`、`TCVAR:口服避孕药`（表内 `口服避孕薬`）—— 引擎本就取不到值，
  *    这类 warn 是功能在起作用，**不算误伤**。
- * 5. **名称段是变量而非常量名**（P-10③ 已有的 `NOWEX:i` 属这一类，本批新增观测到第二条）：
+ * 5. **名称段是变量而非常量名**（P-10③ 已有的 `NOWEX:i` 属这一类）：
  *    `IF NOWEX:i` 的 `i` 来自 `M_KOJO_K17_絶頂.ERB:64` 的 `FOR i,4,-1,-1`；
  *    `SIF EX:COUNT > EX:BEST` 的 `BEST` 来自同文件 `:4380` 的 `#DIM BEST`（映姫 K30_イベント.ERB:4395）。
  *    字典看不见符号表 ⇒ 这类形态**必然**判表外。`EX` 头因此**不入库**（它同时又是"`.als` 零收益"的头：
  *    前后都是 3 条）。要治它得让核对读别名/`#DIM` 声明，属另一条线。
  *
- * **口径声明**（写给下一个读数的人）：本表用**整行非注释扫描**（与 P-10③ 发布读数同一口径，
- * 故 `前` 列逐字可对照：CFLAG 1,304 / TALENT 567 / FLAG 126 / TCVAR 172 / TEQUIP 75 / PALAM 46 /
- * EXP 33 / ABL 26 / SOURCE 6），包含 `\@ … \@` 行内表达式，也包含散文里出现的 `族头:名字` 字样
- * ⇒ 它是**上界**。转译器真正的报点只在表达式上下文，散文命中不会进产物。
+ * **全语料实际 warn 面（本批最终登记态 = 九张生效族）= 3 条 / 2,317 份 `.ERB`**：
+ * `NOWEX:i`×2（第 5 类）+ `TEQUIP:震动棒`×1（第 4 类真阳性）。`SOURCE` 入库**一条都没加**
+ * （判表外 0）。对比 P-10③ 交付时的 4 条：汉化追加名 `Ｖ绝顶`×4 已由 `ex.als` 归零
+ * （`M_KOJO_K72_セクハラコマンド.ERB:5143/5164/5185/5206` `IF NOWEX:TARGET:Ｃ绝顶 || NOWEX:Ｖ绝顶`）。
  *
- * 全语料实际 warn 面（本批最终登记态）= **3 条 / 2,317 份 `.ERB`**：
- * `NOWEX:i`×2（第 5 类，P-10③ 既有残余）+ `TEQUIP:震动棒`×1（第 4 类，真阳性）。
- * 对比 P-10③ 交付时的 4 条：汉化追加名 `Ｖ绝顶`×4 已由 `ex.als` 归零（真代码条件头里，
- * `M_KOJO_K72_セクハラコマンド.ERB:5143/5164/5185/5206` `IF NOWEX:TARGET:Ｃ绝顶 || NOWEX:Ｖ绝顶`），
- * 动态索引 `i`×2 原样留着。
+ * **另两张盘的对照读数**（同一探针、同一口径，2026-10-14；格式 `具名 / 前 / 中 / 现 / warn`）：
+ * - **魔王改版**（38 份 `.csv` + 20 份 `.als`，2,370 份 `.ERB`）：九张生效族里
+ *   `NOWEX` 5,317/9/3/3/2、`TEQUIP` 3,502/96/1/1/1、`SOURCE` 1,805/0/0/0/**0**、
+ *   其余六张（`MARK` 11,162 / `BASE` 1,843 前 711 / `FLAG` 4,031 前 132 / `TFLAG` 1,271 前 43 /
+ *   `DOWNBASE` 108 / `STAIN` 4）现与 warn **全 0** ⇒ 实际 warn 面同样 **3 条**；
+ *   候选 `MAXBASE` 823/21/0/0/0。未入库族：`CFLAG` 8,493/1,326/561/61/61、`TALENT` 71,869/647/60/60/3、
+ *   `TCVAR` 8,627/185/68/9/9、`PALAM` 1,708/45/42/42/42、`EQUIP` 474/324/323/323/323。
+ * - **原生官方版 4.842**（25 份 `.csv`、**0 份 `.als`**，1,280 份 `.ERB`）：九张生效族的
+ *   `中` 与 `现` 只差 `.ERH` 那一档 ⇒ `NOWEX` 3,877/2/2/2/2、`TEQUIP` 2,392/1/1/1/**1**、
+ *   `SOURCE` 825/**0/0/0/0**、`MARK` 7,425/0、`BASE` 1,374/0、`FLAG` 2,772/0、`TFLAG` 607/0、
+ *   `DOWNBASE` 29/0、`STAIN` 0 处 ⇒ 实际 warn 面 **3 条**（`NOWEX:i`×2 + `TEQUIP:震动棒`×1，
+ *   同一个真 bug 也在这张盘里：`個人口上\聖\M_KOJO_K55_絶頂.ERB:205`）；候选 `MAXBASE` 525/0/0/0/0。
+ *   `.als` 缺席时字典与改前**逐字一致**（`inputDigest` 相同的断言钉在 adapter 侧 corpus 测试里）。
  *
- * 另两张盘的对照读数（同一探针、同一口径，2026-10-14）：
- * - **魔王改版**（20 份 `.als`，2,370 份 `.ERB`）：`BASE` 711→0、`FLAG` 132→0、`TFLAG` 43→0、
- *   `TEQUIP` 98→3（实际 warn 1）、`NOWEX` 9→3（实际 warn 2）⇒ 实际 warn 面同样是 **3 条**。
- * - **原生官方版 4.842**（**0 份 `.als`**，1,280 份 `.ERB`）：新入库的 `BASE`/`FLAG`/`TFLAG`
- *   判表外 **0/0/0**（日文盘写日文名，本来就在主表里）⇒ 扩族在这张盘上**零打扰**；
- *   实际 warn 面 3 条 = `NOWEX:i`×2 + `TEQUIP:震动棒`×1（同一个真 bug 也在这张盘里，
- *   `個人口上\聖\M_KOJO_K55_絶頂.ERB:205`）。`.als` 缺席时字典与改前**逐字一致**
- *   （`inputDigest` 相同的断言钉在 adapter 侧 corpus 测试里）。
+ * **R1（来源分层）的同盘读数**（名池 = 全部 `*.csv`+`*.als` 名称表的非纯数字名称键，
+ * 期望归属 = 主表优先→追加表次之，`*.ERH` 常量不参与）：三盘名池 **6,254 / 6,580 / 2,768**，
+ * 改前**改判 93 / 94 / 85** 处（追加表抢主表 1 处 = `憤怒` `TCVAR`→`Base.als` 的 `BASE`；
+ * 常量抢主表 92 / 93 / 84 处，`教養` `ABL`→`ERB/DIM.ERH` 的 `CFLAG` 是其中一条），
+ * 分层后 **改判 0 / 0 / 0**；追加名表新命中 **460 / 642 / 0** 条不少、
+ * `.ERH` 的**具名→编号换算**仍覆盖 **92 / 93 / 84** 个名字（换算与拼错名核对都不受分层影响）。
  */
 const CHECKED_FAMILY_NAME_TABLES: Readonly<Record<string, readonly string[]>> = {
   NOWEX: ['NOWEX', 'EX'],
@@ -398,11 +433,32 @@ const CHECKED_FAMILY_NAME_TABLES: Readonly<Record<string, readonly string[]>> = 
   FLAG: ['FLAG'],
   TFLAG: ['TFLAG'],
   TEQUIP: ['TEQUIP'],
+  // ↓ ALS-R2 批（2026-10-14）：`SOURCE` 按生产判据（只核二段形、截断的三段形不核）三盘
+  //   判表外 **0/0/0** ⇒ 符合本表自述的入库判据（与 `MARK`/`DOWNBASE`/`STAIN` 同一形态）。
+  //   旧读数"残余 6/6 = `SOURCE:LOCAL`"是**探针口径**产物（把 `SOURCE:LOCAL:(LOCAL:1)`
+  //   这类三段作用域写法截成二段来判），生产判据下它本就该放行——见下表的"口径"一句。
+  SOURCE: ['SOURCE'],
 };
 
 /** 字典 `lookup` 的"真正收录"判据（与 `resolveFamily` 同一口径，不另立标准） */
 function isRecorded(info: { description?: string; resolvedIndex?: number } | undefined): boolean {
   return info !== undefined && (info.description !== undefined || info.resolvedIndex !== undefined);
+}
+
+/**
+ * 条目所属的**来源层**（族归属用；ALS-R1）。
+ *
+ * - `'const'` → `undefined`：作者自定具名常量**不参与族归属**（同一个名字可以写在任意族
+ *   后面，宣称归属就是猜）；
+ * - `'append'` → 追加名表：只在主表一轮都不中时才用它；
+ * - `'primary'` **与缺省**（旧字典不标源）→ 主表：第一优先。
+ *   缺省按主表处理 ⇒ 不标源的字典行为与今天**逐字相同**（契约 additive 的另一半）。
+ * 未收录（`undefined` / 只回显）同样返回 `undefined`，与 `isRecorded` 同一口径。
+ */
+function familySourceTier(info: VariableInfo | undefined): 'primary' | 'append' | undefined {
+  if (info === undefined || !isRecorded(info)) return undefined;
+  if (info.source === 'const') return undefined;
+  return info.source === 'append' ? 'append' : 'primary';
 }
 
 export function makeLookup(schema: VariableSchema): DictionaryLookup {
@@ -420,12 +476,19 @@ export function makeLookup(schema: VariableSchema): DictionaryLookup {
   };
   return {
     resolveFamily(name: string): string | undefined {
+      // 两轮（ALS-R1）：主表优先，追加名表只在主表一轮都不中时才给出归属；
+      // `'const'`（`.ERH` 具名常量）不参与——它照样让 `lookup` 换算编号（快照回放 /
+      // 别名 / 具名索引），但不再宣称"这个名字属于哪个族"。
+      // 同层内仍是族表顺序即优先级（首个命中即返回，与改前同一确定性口径）。
+      let appendHit: string | undefined;
       for (const family of ENGINE_VARIABLE_FAMILIES) {
         // lookup 在"表不存在 / 名称不在表内"时返回 undefined 或仅回显 name；
         // 只有**真正收录**（description 或 resolvedIndex 落地）才算命中。
-        if (isRecorded(schema.lookup(family, name))) return family;
+        const tier = familySourceTier(schema.lookup(family, name));
+        if (tier === 'primary') return family;
+        if (tier === 'append' && appendHit === undefined) appendHit = family;
       }
-      return undefined;
+      return appendHit;
     },
     resolve(ident: string): string | undefined {
       // 原生 ERB 变量引用（`CFLAG:2` 形态）与引擎族名——原样保留。

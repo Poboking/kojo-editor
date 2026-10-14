@@ -323,11 +323,20 @@ describe('ALS-D 扩族登记面：入库族判得出、不入库族逐族钉死�
 
   it('**不入库族逐族钉死**：表在位、`.als` 别名也在位，族头不登记就一条都不判', () => {
     const l = dict();
-    const DECLINED = ['CFLAG', 'TALENT', 'TCVAR', 'ABL', 'PALAM', 'EXP', 'SOURCE', 'ITEM', 'EQUIP', 'CSTR', 'DAY', 'JUEL', 'EX'];
+    // `SOURCE` 已由 ALS-R2 入库（生产判据三盘判表外 0/0/0），故从这张清单里移出
+    const DECLINED = ['CFLAG', 'TALENT', 'TCVAR', 'ABL', 'PALAM', 'EXP', 'ITEM', 'EQUIP', 'CSTR', 'DAY', 'JUEL', 'EX'];
     for (const family of DECLINED) {
       // 连"一眼假"的名字都不判——扩族只按读数放行，不许顺手把误伤面打开
       expect(l.unlistedFamilyName?.(`${family}:肯定不在表里的瞎写名`), `${family} 不该被核对`).toBeUndefined();
     }
+  });
+
+  it('`SOURCE` 入库（ALS-R2）：表内名放行、表外名判得出', () => {
+    const l = dict();
+    // `source.csv:35 = 51,侮辱` / `source.als:35 = 51,辱め`（夹具同一形态）
+    expect(l.unlistedFamilyName?.('SOURCE:侮辱')).toBeUndefined();
+    expect(l.unlistedFamilyName?.('SOURCE:辱め')).toBeUndefined();
+    expect(l.unlistedFamilyName?.('SOURCE:侮辱瞎写')).toEqual({ family: 'SOURCE', name: '侮辱瞎写' });
   });
 
   it('`PALAM:润滑` 仍不判（**本批明知可判而不判**：残余 42/43 是 `PALAM:LOCAL` 作用域形态）', () => {

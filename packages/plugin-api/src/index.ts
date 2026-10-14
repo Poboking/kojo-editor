@@ -152,6 +152,7 @@ export type {
   StateModel,
   VariableInfo,
   VariableSchema,
+  VariableSource,
 } from './game';
 
 export type {

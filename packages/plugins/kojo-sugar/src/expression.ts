@@ -376,7 +376,13 @@ function lowerPronounsAndAttributes(code: string, ctx: ExprContext): string {
         const ref = code.slice(i, j);
         // 原生 ERB 变量引用（含 `:` 索引）——**原样保留**，但 P-10③ 起不再"零诊断"：
         // 族表在位而名称段查无 ⇒ 报 warning（产物不变，见 `reportUnlistedFamilyName`）。
-        reportUnlistedFamilyName(ref, ctx);
+        // ALS-R2：扫描器在 `:` 后遇到非标识符/非数字（语料实有 `SOURCE:LOCAL:(LOCAL:1)`
+        // 的 `(`）时，会把**三段作用域写法截成两段**，`unlistedFamilyName` 自己那条
+        // "三段及以上一律放行"就被截词绕过（实测 `SOURCE:LOCAL` 因此在画蛇添足版 /
+        // 魔王改版各多判 6 处假阳性）。截断处仍是 `:` ⇒ 整条不核：**只减假阳性，
+        // 不减抓错能力**（真二段形 `NOWEX:噴乳乳瞎写` 后面不接 `:`，照判）。
+        const truncatedAtColon = j < code.length && code[j] === ':';
+        if (!truncatedAtColon) reportUnlistedFamilyName(ref, ctx);
         out += ref;
         i = j;
         continue;
@@ -521,7 +527,8 @@ function resolveBareIdentifier(ident: string, ctx: ExprContext): string {
  *
  * 三条放行口径（与 `types.ts` 的 `unlistedFamilyName` 一致）：
  * 1. 字典未注入 / 不提供核对（旧字典形态）⇒ 与今天逐字相同的静默放行；
- * 2. 该族无名称表 / 名称段是纯数字 / 三段及以上作用域写法 ⇒ 无判据，放行；
+ * 2. 该族无名称表 / 名称段是纯数字 / 三段及以上作用域写法 ⇒ 无判据，放行
+ *    （**含被扫描器在 `:` 处截断的三段形**，ALS-R2：截断处仍是 `:` 就不调用本核对）；
  * 3. 名称段本身是**裸引擎全局**（`NOWEX:COUNT`：循环/计数写法）⇒ 放行，不报。
  */
 function reportUnlistedFamilyName(ref: string, ctx: ExprContext): void {

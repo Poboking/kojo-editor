@@ -36,16 +36,32 @@
  * 游戏自带工具 `tool/Generate_ERH.py` 实测同一口径（先 CSV 后 ALS，
  * 撞名时打印"保留旧值"），本并不另立标准。
  *
+ * **来源层（ALS-R1）**：三层数据源在条目上如实标注（契约字段 `VariableInfo.source`）——
+ * `.csv` → `'primary'`、`.als` → `'append'`、`.ERH` 具名常量 → `'const'`，
+ * 按"键第一次落地"的那一轮记源（与"首个定义优先"同一裁决）。本包只**标源**、
+ * 不裁决归属：族归属如何分层由消费方（`kojo-sugar` 的 `resolveFamily`）决定，
+ * 收录判定（拼错名核对）仍三层都算。
+ *
  * 读取失败/缺表 → `lookup` 返回 undefined（通用层照常工作，只是没有标签；
  * 引擎侧「不静默」由调用方日志保证）。
  */
 
 import { foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
-import type { FileIO, Logger, VariableInfo, VariableSchema } from '@kojo/plugin-api';
+import type { FileIO, Logger, VariableInfo, VariableSchema, VariableSource } from '@kojo/plugin-api';
+
+/** 名称表键的来源层：`.csv` = 主表 / `.als` = 追加名表（`.ERH` 常量走另一条路，见 `lookup`） */
+type NameTableSource = Extract<VariableSource, 'primary' | 'append'>;
 
 interface VariableTable {
   byIndex: Map<string, string>;
   byName: Map<string, string>;
+  /**
+   * 键 → 来源层（**与 `byIndex`/`byName` 同一裁决：首个定义优先**，键新增时才记源）。
+   * 存在的理由：族归属（`resolveFamily`）只许认主表 → 追加表这两层，而合并后的
+   * 两张 Map 本身分不出"这个名字是哪一轮进来的"（ALS-R1）。
+   */
+  indexSource: Map<string, NameTableSource>;
+  nameSource: Map<string, NameTableSource>;
 }
 
 /**
@@ -57,8 +73,16 @@ interface VariableTable {
  *
  * **裁决 = 首个定义优先**：已存在的 `编号` / `名称` 键一律不覆盖，只回计新增数。
  * 加载方按「先 `.csv` 后 `.als`」的顺序调用本函数 ⇒ 追加名表天然只补不盖。
+ *
+ * `source`（ALS-R1，additive）= 本轮往表里加的**是哪一层**，缺省 `'primary'`（主表）。
+ * 只有"键第一次落地"那一轮的名称才记为该层 ⇒ 主表已有的编号/名称，`.als` 再写一遍
+ * 也不改其来源（正是"只并集不覆盖"的另一面）。
  */
-export function mergeVariableTable(target: VariableTable, text: string): { addedIndex: number; addedName: number } {
+export function mergeVariableTable(
+  target: VariableTable,
+  text: string,
+  source: NameTableSource = 'primary',
+): { addedIndex: number; addedName: number } {
   const beforeIndex = target.byIndex.size;
   const beforeName = target.byName.size;
   for (const rawLine of text.split(/\r\n?|\n/)) {
@@ -72,15 +96,26 @@ export function mergeVariableTable(target: VariableTable, text: string): { added
     const secondComma = rest.indexOf(',');
     const name = (secondComma >= 0 ? rest.slice(0, secondComma) : rest).trim();
     if (name.length === 0) continue;
-    if (!target.byIndex.has(idx)) target.byIndex.set(idx, name);
-    if (!target.byName.has(name)) target.byName.set(name, idx);
+    if (!target.byIndex.has(idx)) {
+      target.byIndex.set(idx, name);
+      target.indexSource.set(idx, source);
+    }
+    if (!target.byName.has(name)) {
+      target.byName.set(name, idx);
+      target.nameSource.set(name, source);
+    }
   }
   return { addedIndex: target.byIndex.size - beforeIndex, addedName: target.byName.size - beforeName };
 }
 
 /** 解析单个变量名表 CSV（纯函数；导出供测试）——等价于并入一张空表 */
 export function parseVariableCsv(text: string): VariableTable {
-  const table: VariableTable = { byIndex: new Map(), byName: new Map() };
+  const table: VariableTable = {
+    byIndex: new Map(),
+    byName: new Map(),
+    indexSource: new Map(),
+    nameSource: new Map(),
+  };
   mergeVariableTable(table, text);
   return table;
 }
@@ -288,20 +323,20 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
   const tableOf = (variableName: string): VariableTable => {
     let t = tables.get(variableName);
     if (!t) {
-      t = { byIndex: new Map(), byName: new Map() };
+      t = { byIndex: new Map(), byName: new Map(), indexSource: new Map(), nameSource: new Map() };
       tables.set(variableName, t);
     }
     return t;
   };
 
   /** 一轮加载：读文件 → 并入表 → 记摘要。单文件读失败只 warn 跳过（不静默：日志可见） */
-  const runPass = async (files: readonly NameTableFile[], isAppend: boolean): Promise<void> => {
+  const runPass = async (files: readonly NameTableFile[], source: NameTableSource): Promise<void> => {
     for (const f of files) {
       try {
         const tf = await io.readText(f.path);
-        const merged = mergeVariableTable(tableOf(f.variableName), tf.text);
+        const merged = mergeVariableTable(tableOf(f.variableName), tf.text, source);
         digestParts.push(stableHash(`${f.path}\u0000${tf.text}`));
-        if (isAppend) {
+        if (source === 'append') {
           appendedNames += merged.addedName;
           appendedIndexes += merged.addedIndex;
         }
@@ -311,8 +346,8 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
     }
   };
 
-  await runPass(primaryFiles, false);
-  await runPass(appendFiles, true);
+  await runPass(primaryFiles, 'primary');
+  await runPass(appendFiles, 'append');
   if (appendFiles.length > 0) {
     log.info(
       `追加名表（*.als）：${appendFiles.length} 份，并入 ${appendedNames} 个新名称 / ${appendedIndexes} 个新编号（主表已有的编号名称不改写）`,
@@ -407,13 +442,25 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
       if (byIdx !== undefined) {
         // 编号索引（如 CFLAG:2）→ 名称为描述（经汉化词典得中文）；resolvedIndex = 自身
         const n = Number(idxStr);
-        const info: VariableInfo = { name: key, index, description: jpToCn.get(byIdx) ?? byIdx };
+        const info: VariableInfo = {
+          name: key,
+          index,
+          description: jpToCn.get(byIdx) ?? byIdx,
+          source: table.indexSource.get(idxStr) ?? 'primary',
+        };
         if (!Number.isNaN(n)) info.resolvedIndex = n;
         return info;
       }
       if (table.byName.has(idxStr)) {
         // 具名索引（如 TALENT:恋慕）→ 名称本身即描述（经汉化词典得中文）；resolvedIndex = 字典编号
-        const info: VariableInfo = { name: key, index, description: jpToCn.get(idxStr) ?? idxStr };
+        const info: VariableInfo = {
+          name: key,
+          index,
+          description: jpToCn.get(idxStr) ?? idxStr,
+          // 来源层如实上报（ALS-R1）：`.als` 给的别名 = `'append'`，主表给的 = `'primary'`。
+          // 消费方（族归属）据此区分"主表的归属"与"追加表抢走的归属"；收录判定不受影响。
+          source: table.nameSource.get(idxStr) ?? 'primary',
+        };
         const n = Number(table.byName.get(idxStr));
         if (!Number.isNaN(n)) info.resolvedIndex = n;
         return info;
@@ -425,9 +472,12 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
        * 常量**不属于任何族**（同一个名字可以写在任意族后面），故此处只做"名字→编号"的
        * 换算，不宣称族归属；描述取作者原文，**不喂汉化词典**（词典键是游戏显示词，
        * 命中即误译）。名称表在前、本表在后 ⇒ 既有（含 `*.als`）读数一条都不受影响。
+       * `source: 'const'`（ALS-R1）把"不宣称族归属"这条意图**交给消费方**：
+       * 收录判定（拼错名核对）三层都算，族归属只认 `'primary'` → `'append'` 两层。
        */
       const constIndex = erhConsts.get(idxStr.toUpperCase());
-      if (constIndex !== undefined) return { name: key, index, description: idxStr, resolvedIndex: constIndex };
+      if (constIndex !== undefined)
+        return { name: key, index, description: idxStr, resolvedIndex: constIndex, source: 'const' };
       return { name: key, index };
     },
   };

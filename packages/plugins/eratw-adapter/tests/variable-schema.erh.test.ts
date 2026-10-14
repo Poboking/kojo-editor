@@ -132,6 +132,8 @@ describe('loadEratwVariableSchema：erbDir（作者自定名表）接线', () =>
       index: 'K15C_SETTING_DISABLE_HATE_DIALOG',
       description: 'K15C_SETTING_DISABLE_HATE_DIALOG',
       resolvedIndex: 1101,
+      // ALS-R1：这一层标 `'const'` —— 消费方（`resolveFamily`）**只拿它换算编号，不认它的族归属**
+      source: 'const',
     });
     // 声明不属任何族：换个头写一样能查（引擎同样是把名字当表达式求值）
     expect(schema.lookup('ABL', 'K17C_部位V')?.resolvedIndex).toBe(1);

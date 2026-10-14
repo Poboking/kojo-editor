@@ -21,7 +21,9 @@ export type AliasTable = ReadonlyMap<string, AliasEntry>;
  *
  * - `resolveFamily(name)`：给定变量**名字**（中文/日文/英文均可），返回所属
  *   变量族（`CFLAG` / `TALENT` / `ABL` / …）；未收录 → undefined
- *   （用于 `她的X` 属性解析）；
+ *   （用于 `她的X` 属性解析）。**归属只认来源的前两层**：主表名 → 追加名表名，
+ *   作者自定具名常量（契约 `VariableInfo.source === 'const'`）不参与——它与 `nameAt`
+ *   的往返自证不同源，参与就会把主表的归属抢走（ALS-R1，读数见 `index.ts`）；
  * - `resolve(ident)`：给定**裸标识符**（如作者写的 `DAY` / `TFLAG:193`），
  *   返回可直接嵌入 ERB 的原文；未收录 → undefined
  *   （用于正文裸标识符）。
@@ -53,6 +55,9 @@ export interface DictionaryLookup {
    * - **无表则放行**：字典未注入 / 该族无机读名称表 / 未打开工程 ⇒ `undefined`，
    *   行为与今天逐字相同（"没打开项目不许误伤"）；
    * - 形态不认（三段及以上的作用域写法、族头不属引擎变量族）⇒ 同样 `undefined`。
+   *   注意本方法只看**交进来的那串**：扫描器把 `SOURCE:LOCAL:(LOCAL:1)` 这类三段形
+   *   在 `:` 处截断后只剩两段，本方法会照判——**放行由调用方负责**（生效点
+   *   `expression.ts`：截断处仍是 `:` 就不调用本核对，ALS-R2）。
    *
    * 返回 `{ family, name }` = 「族 `family` 的名称表在位，但 `name` 不在表内」；
    * 返回 `undefined` = 无判据（放行）。
