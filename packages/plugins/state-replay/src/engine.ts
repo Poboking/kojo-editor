@@ -15,6 +15,8 @@ import type {
   FunctionReplay,
   Logger,
   PredicateReplay,
+  ReplayCallContext,
+  ReplayCallContextResolver,
   ReplayFunctionOptions,
   ReplayStateView,
   SnapshotArchive,
@@ -36,6 +38,11 @@ export interface StateReplayEngineDeps {
   getSchemaLookup(): SchemaLookup | undefined;
   /** 读文件原文（v0.2 第七批：内联求值需要函数体行文本；走 kernel.io） */
   readFileText(path: string): Promise<string>;
+  /**
+   * 调用上下文推导器（HK-20；可选）——显式注入缺省时补「确定槽值」（游戏知识
+   * 经适配器协议注入）。缺省 / 返回 undefined → 保持 unknown('call-context')。
+   */
+  getCallContextResolver?(): ReplayCallContextResolver | undefined;
 }
 
 /** 谓词明细 → 回放结果（纯函数；测试可直用）。
@@ -142,7 +149,14 @@ export class StateReplayEngine implements StateReplayService {
     const detail = await this.deps.functionPredicates(functionName);
     if (!detail) return null;
     const read: ValueReader = (ref) => view.read(ref);
-    const overlay = createFunctionOverlay({ detail, callContext: options?.callContext, baseRead: read });
+    // 调用上下文：显式注入优先；否则经推导器补「确定事实」（HK-20）——
+    // 场景输入仍 unknown，只有引擎转发链未设置槽 / 发言者槽等确定值才被填。
+    let callContext: ReplayCallContext | undefined = options?.callContext;
+    if (!callContext) {
+      const resolver = options?.callContextResolver ?? this.deps.getCallContextResolver?.();
+      callContext = resolver?.(functionName, view.characterNo);
+    }
+    const overlay = createFunctionOverlay({ detail, callContext, baseRead: read });
     // 内联预热（异步阶段结束 → 执行期同步缓存命中）
     await this.inline.preanalyze(detail);
     const resolveCall: CallResolver = (name, args, callerCtx) =>

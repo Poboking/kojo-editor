@@ -94,6 +94,7 @@ export type {
   FunctionReplay,
   PredicateReplay,
   ReplayCallContext,
+  ReplayCallContextResolver,
   ReplayFunctionOptions,
   ReplayOutcome,
   ReplayStateView,

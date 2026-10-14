@@ -146,3 +146,44 @@ describe('loadEratwCallProtocol —— 模板具体性与覆盖语义', () => {
     expect(p.maxForwardedSlotsFor('M_KOJO_K49_完全无关函数')).toBeNull();
   });
 });
+
+/** 调用上下文推导（HK-20）：只填**确定事实**，场景输入不猜 */
+describe('deriveCallContext —— 确定槽值推导', () => {
+  const ROUTE3 = `
+	TRYCALLFORM M_KOJO%KOJO_NAME%_EVENT_K{NO:TARGET}_{ARG:1}(ARG:3,ARG:4)
+	TRYCALLFORM M_KOJO%KOJO_NAME%_DAILY_EVENT_K{NO:TARGET}_{ARG:1}(ARG:2,ARG:3,ARG:4,ARG:5,ARG:6,ARGS:1,ARGS:2)
+	TRYCALLFORM M_KOJO%RESULTS%_IRAI_K{NO:TARGET}(ARGS:1,ARGS:2,ARG:2)
+`;
+  async function proto3() {
+    const p = await loadEratwCallProtocol({ io: ioWith(ROUTE3), routeFile: 'KOJO_MESSAGE.ERB', log: silentLog });
+    expect(p).toBeTruthy();
+    return p!;
+  }
+
+  it('路由转发 ARG:2（= 発言者 = {NO:TARGET}）的槽 → 回放角色号；场景槽保持 undefined', async () => {
+    const p = await proto3();
+    // DAILY_EVENT：slot0 ← ARG:2（発言者），slot1..4 ← ARG:3..6（场景输入）
+    const ctx = p.deriveCallContext!('M_KOJO_X_DAILY_EVENT_K1_2', 49);
+    expect(ctx).toBeTruthy();
+    expect(ctx!.ints?.[0]).toBe(49);
+    expect(ctx!.ints?.[1]).toBeUndefined();
+    expect(ctx!.strs?.[0]).toBeUndefined();
+  });
+
+  it('IRAI：字符串槽在前，数值 slot0 ← ARG:2 → 角色号', async () => {
+    const p = await proto3();
+    const ctx = p.deriveCallContext!('M_KOJO_X_IRAI_K1', 12);
+    expect(ctx!.ints?.[0]).toBe(12);
+    expect(ctx!.strs?.[0]).toBeUndefined(); // ARGS:1 = 场景输入
+  });
+
+  it('不含 ARG:2 转发的路由（通用 EVENT）→ undefined（无确定事实，不猜）', async () => {
+    const p = await proto3();
+    expect(p.deriveCallContext!('M_KOJO_X_EVENT_K1_1', 49)).toBeUndefined();
+  });
+
+  it('协议不认识的函数（无路由匹配）→ undefined', async () => {
+    const p = await proto3();
+    expect(p.deriveCallContext!('M_KOJO_K49_完全无关函数', 49)).toBeUndefined();
+  });
+});

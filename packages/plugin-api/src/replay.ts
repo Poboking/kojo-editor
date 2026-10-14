@@ -166,10 +166,30 @@ export interface ReplayCallContext {
   strs?: readonly (string | undefined)[];
 }
 
+/**
+ * 调用上下文推导器（v1.0 HK-20；additive）。
+ *
+ * 入口回放未显式注入 `callContext` 时，引擎可经适配器协议推导**确定槽值**：
+ * 只含「引擎转发链未设置槽 = 0/''」（`plugin-api/src/game.ts` §KojoCallProtocol
+ * 注：「全 0/'' 是引擎转发链未设置槽的确定事实，非猜测」）与「路由转发
+ * 『发言者』槽 = 回放角色号」等**确定事实**；场景输入一律不填（`undefined`，
+ * 保持 `unknown('call-context')`）。返回 `undefined` = 无确定事实。
+ *
+ * 推导是游戏知识（路由模板形态），实现只住 game adapter；本契约只声明形状。
+ */
+export interface ReplayCallContextResolver {
+  (functionName: string, characterNo: number): ReplayCallContext | undefined;
+}
+
 /** 单函数回放选项 */
 export interface ReplayFunctionOptions {
-  /** 调用上下文（未提供 → ARG/ARGS 引用一律 unknown('call-context')） */
+  /** 调用上下文（显式注入优先） */
   callContext?: ReplayCallContext;
+  /**
+   * 调用上下文推导器：显式注入缺省时用它补「确定事实」；缺省 = 引擎内置推导
+   * （经适配器协议）。全部不可得 → ARG/ARGS 引用一律 unknown('call-context')。
+   */
+  callContextResolver?: ReplayCallContextResolver;
 }
 
 /**

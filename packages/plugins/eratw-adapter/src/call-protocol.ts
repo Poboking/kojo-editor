@@ -19,7 +19,7 @@
  * Process.CalledFunction ConvertArg（签名槽按序绑定）。
  */
 
-import type { FileIO, KojoCallProtocol, KojoCallSlot, Logger } from '@kojo/plugin-api';
+import type { FileIO, KojoCallProtocol, KojoCallSlot, Logger, ReplayCallContext } from '@kojo/plugin-api';
 
 /** 路由行：CALLFORM / TRYCALLFORM / TRYCCALLFORM（TRYC 系）<模板>(<实参表>)；
  *  括号可省（无实参转发）。**TRYCALLFORM 是 TRY+CALLFORM，TRYCCALLFORM 是
@@ -182,17 +182,53 @@ export async function loadEratwCallProtocol(opts: LoadCallProtocolOptions): Prom
     return { rule: r, int, str };
   });
 
+  /** 匹配优先级：①**字面最长**（最具体）优先——消解 `_EVENT_K…` 与
+   *  `_DAILY_EVENT_K…` / `_EVENT_K…_26_1` 等互相包含的歧义；②同字面长时
+   *  **数值时机模板优先**（尾部 \d+）——数值函数名不应被字符串时机模板
+   *  （尾部 .+）抢先匹配。 */
+  const slotsFor = (functionName: string): readonly KojoCallSlot[] | null => {
+    const name = functionName.toUpperCase();
+    for (const r of sortedBySpecificity) {
+      if (r.regex.test(name)) return r.slots;
+    }
+    return null;
+  };
+
+  /** 从槽位 label 抽出路由转发来源 token（如 `ARG:2`）；无 → null */
+  const forwardToken = (slot: KojoCallSlot): string | null =>
+    /转发自路由\s+(ARGS?:\d+)/.exec(slot.label)?.[1] ?? null;
+
   return {
-    slotsFor(functionName: string): readonly KojoCallSlot[] | null {
-      const name = functionName.toUpperCase();
-      // 匹配优先级：①**字面最长**（最具体）优先——消解 `_EVENT_K…` 与
-      // `_DAILY_EVENT_K…` / `_EVENT_K…_26_1` 等互相包含的歧义；②同字面长时
-      // **数值时机模板优先**（尾部 \d+）——数值函数名不应被字符串时机模板
-      // （尾部 .+）抢先匹配。
-      for (const r of sortedBySpecificity) {
-        if (r.regex.test(name)) return r.slots;
+    slotsFor,
+
+    /**
+     * 推导「确定槽值」调用上下文（HK-20）——只填**确定事实**：
+     * 路由转发来源为 `ARG:2` 的槽 = 回放角色号（`{NO:TARGET}` ≡ `ARG:2`：路由层
+     * `TARGET = ARG:2`，`KOJO_MESSAGE_SEND` 头注释「ARG:2 = 発言者」）；
+     * 其余转发槽（`ARG:3`/`ARG:4`/…）是场景输入、无路由匹配者协议不认识 ⇒ 不填。
+     * 全无确定事实 → `undefined`（调用方保持 unknown('call-context')，**不猜**）。
+     */
+    deriveCallContext(functionName: string, characterNo: number): ReplayCallContext | undefined {
+      const slots = slotsFor(functionName);
+      if (!slots) return undefined;
+      let ints: (number | undefined)[] | undefined;
+      let strs: (string | undefined)[] | undefined;
+      let derived = false;
+      for (const slot of slots) {
+        const tok = forwardToken(slot)?.toUpperCase() ?? null;
+        if (slot.kind === 'int') {
+          const arr = (ints ??= []);
+          if (tok === 'ARG:2') {
+            arr[slot.index] = characterNo;
+            derived = true;
+          } else {
+            arr[slot.index] = undefined;
+          }
+        } else {
+          (strs ??= [])[slot.index] = undefined;
+        }
       }
-      return null;
+      return derived ? { ints, strs } : undefined;
     },
 
     maxForwardedSlotsFor(functionName: string): { int: number; str: number } | null {

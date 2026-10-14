@@ -19,6 +19,7 @@ import type {
   FileIO,
   Plugin,
   ProjectService,
+  ReplayCallContextResolver,
   SlotRegistry,
   SnapshotSourceService,
 } from '@kojo/plugin-api';
@@ -57,12 +58,29 @@ export function createStateReplayPlugin(): Plugin {
         return undefined;
       };
 
+      /**
+       * 调用上下文推导器（HK-20）——从当前适配器**协议**取「确定槽值」推导
+       * （游戏知识只住 adapter；本插件只消费）。协议无此能力 → 返回 undefined
+       * （回放照旧全部 unknown('call-context')，不猜）。
+       */
+      const callContextResolver = (): ReplayCallContextResolver | undefined => {
+        const current = project.current();
+        if (!current) return undefined;
+        for (const contribution of slots.query('game.adapter')) {
+          if (contribution.adapter.gameId !== current.adapterId) continue;
+          const protocol = contribution.adapter.kojoCallProtocol;
+          if (protocol?.deriveCallContext) return (name, charNo) => protocol.deriveCallContext!(name, charNo);
+        }
+        return undefined;
+      };
+
       const engine = new StateReplayEngine({
         log: ctx.log,
         parseArchive: (path: string) => snapshot.parse(path),
         functionPredicates: (name: string) => extractor.functionPredicates(name),
         getSchemaLookup: schemaLookup,
         readFileText: async (path: string) => (await io.readText(path)).text,
+        getCallContextResolver: callContextResolver,
       });
 
       ctx.provide(WellKnownServices.StateReplay, engine);

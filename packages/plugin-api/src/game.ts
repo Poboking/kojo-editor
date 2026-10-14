@@ -6,6 +6,7 @@
  */
 
 import type { ConventionRule } from './conventions';
+import type { ReplayCallContext } from './replay';
 
 /** 角色条目（由适配器从游戏数据填充；内核只透传） */
 export interface CharaInfo {
@@ -194,6 +195,13 @@ export interface KojoCallProtocol {
    * 实现按函数名匹配路由模板（游戏知识），与本工程索引的函数名口径一致。
    */
   slotsFor(functionName: string): readonly KojoCallSlot[] | null;
+  /**
+   * 推导「确定槽值」调用上下文（v1.0 HK-20；可选——入口回放自动补确定事实用）。
+   * 只含**引擎转发链未设置槽（0/''）**与**路由转发『发言者』槽（= 回放角色号）**
+   * 等确定事实；场景输入一律不填（`undefined`）。无路由匹配 → `undefined`。
+   * **绝不猜测场景输入**（引擎语义：fresh 局部量默认 0/''，见本接口头注释）。
+   */
+  deriveCallContext?(functionName: string, characterNo: number): ReplayCallContext | undefined;
 }
 
 /**
