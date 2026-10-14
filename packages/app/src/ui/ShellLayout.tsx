@@ -413,7 +413,7 @@ export function ShellLayout(props: Props): ReactElement {
     dispatch({ type: 'float', id, geometry: { x, y, w, h } });
   }, []);
 
-  /** 浮窗拖拽（标题栏 mousedown → 全局 mousemove；拖拽期间只改 transform，松手 commit） */
+  /** 浮窗拖拽（标题栏 mousedown → 全局 mousemove；拖拽期间直写 left/top，松手 commit） */
   const startFloatDrag = useCallback((e: ReactMouseEvent, id: string) => {
     e.preventDefault();
     const f = layoutRef.current.floating[id];
@@ -427,8 +427,10 @@ export function ShellLayout(props: Props): ReactElement {
       x = Math.min(window.innerWidth - 80, Math.max(80 - f.w, f.x + (ev.clientX - startX)));
       y = Math.min(window.innerHeight - 32, Math.max(0, f.y + (ev.clientY - startY)));
       if (el) {
-        // 直接改 transform（走合成层）：不进 reducer ⇒ 不触发重渲染 / localStorage 写
-        el.style.transform = `translate3d(${x - f.x}px, ${y - f.y}px, 0)`;
+        // 直接写 inline left/top（**不用 transform**）：不进 reducer ⇒ 不触发重渲染 / localStorage 写。
+        // 关键：inline 值与松手后 React 落地的值同坐标系、逐字相同 ⇒ 交接时视觉零 delta（无抖动）。
+        el.style.left = `${x}px`;
+        el.style.top = `${y}px`;
       } else {
         dispatch({ type: 'moveFloating', id, x, y });
       }
@@ -436,12 +438,7 @@ export function ShellLayout(props: Props): ReactElement {
     const onUp = (): void => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      if (el) {
-        // 归一：把临时 transform 落成 left/top（与 state commit 后的值一致，无跳变）
-        el.style.transform = '';
-        el.style.left = `${x}px`;
-        el.style.top = `${y}px`;
-      }
+      // inline left/top 已 == 最终位置；此处只 commit，React 写入相同值 ⇒ 无跳变（无归一化步骤）
       if (x !== f.x || y !== f.y) dispatch({ type: 'moveFloating', id, x, y });
     };
     window.addEventListener('mousemove', onMove);
