@@ -4013,6 +4013,14 @@ button.primary .hint {
   min-width: 320px;
   min-height: 220px;
   overflow: hidden;
+  /* 拖拽中抬升（border-color → accent）的过渡；减弱动效下由全局 data-motion 规则压平 */
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+/* 拖拽进行中：轻微「抬升」——accent 描边（阴影已是最高档 --shadow-3，不再叠加新量纲） */
+.floating-panel--dragging {
+  border-color: var(--accent);
 }
 .floating-panel-head {
   flex: none;
@@ -4021,8 +4029,12 @@ button.primary .hint {
   gap: var(--space-2);
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
+  /* 标题栏比窗体略亮一档——层级暗示（复用既有 --bg-3，不新增颜色） */
+  background: var(--bg-3);
   cursor: grab;
   user-select: none;
+  /* 触屏：标题栏上的拖拽手势不应被滚动/缩放抢走 */
+  touch-action: none;
 }
 .floating-panel-head:active {
   cursor: grabbing;
@@ -4044,6 +4056,10 @@ button.primary .hint {
   padding: 0 6px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  /* 命中面积补齐到 §WCAG 2.5.8 的 24×24（同 .small 的口径）；静息无边框，悬停才亮 */
+  min-width: 24px;
+  border-color: transparent;
 }
 /* 浮窗体：让 PanelBody 外壳铺满并滚动（样式口径与侧栏分栏 section 内 .panel 一致） */
 .floating-panel-body {
@@ -4061,24 +4077,125 @@ button.primary .hint {
   overflow: auto;
   padding-top: 0;
 }
+/* 缩放把手（四角 + 四边，2026-10-14 四角缩放批）：默认隐形、hover / 聚焦时显形；
+   光标方向由 fp-<dir> 类给；命中区角 14px / 边 6px 条——够抓，但静息不占视觉。
+   浮窗:hover 即显形，故不必先猜位置；键盘获焦（:focus-visible）同样显形。 */
 .floating-panel-resize {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 18px;
-  height: 18px;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+  /* 触屏：把手上的拖拽手势不被滚动/缩放抢走 */
+  touch-action: none;
+}
+.floating-panel:hover .floating-panel-resize,
+.floating-panel:focus-within .floating-panel-resize,
+.floating-panel-resize:focus-visible {
+  opacity: 1;
+}
+/* 悬停到把手上给一点 accent 反馈（与壳层 .resizer 同族的语言） */
+.floating-panel-resize:hover {
+  background: var(--accent-dim);
+}
+/* 四角：14px 方块、对角光标 */
+.floating-panel-resize.fp-nw,
+.floating-panel-resize.fp-ne,
+.floating-panel-resize.fp-sw,
+.floating-panel-resize.fp-se {
+  width: 14px;
+  height: 14px;
+}
+.floating-panel-resize.fp-nw,
+.floating-panel-resize.fp-se {
   cursor: nwse-resize;
 }
-.floating-panel-resize::after {
+.floating-panel-resize.fp-ne,
+.floating-panel-resize.fp-sw {
+  cursor: nesw-resize;
+}
+.floating-panel-resize.fp-n,
+.floating-panel-resize.fp-s {
+  cursor: ns-resize;
+}
+.floating-panel-resize.fp-e,
+.floating-panel-resize.fp-w {
+  cursor: ew-resize;
+}
+.floating-panel-resize.fp-nw {
+  top: 0;
+  left: 0;
+}
+.floating-panel-resize.fp-ne {
+  top: 0;
+  right: 0;
+}
+.floating-panel-resize.fp-sw {
+  bottom: 0;
+  left: 0;
+}
+.floating-panel-resize.fp-se {
+  bottom: 0;
+  right: 0;
+}
+/* 四边：细条；中段让开四角，避免命中区重叠 */
+.floating-panel-resize.fp-n {
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 6px;
+}
+.floating-panel-resize.fp-s {
+  bottom: 0;
+  left: 14px;
+  right: 14px;
+  height: 6px;
+}
+.floating-panel-resize.fp-w {
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 6px;
+}
+.floating-panel-resize.fp-e {
+  right: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 6px;
+}
+/* 角标：显形时给一个淡淡的 L 形折角，暗示「可缩放」 */
+.floating-panel-resize.fp-nw::after,
+.floating-panel-resize.fp-ne::after,
+.floating-panel-resize.fp-sw::after,
+.floating-panel-resize.fp-se::after {
   content: '';
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 7px;
-  height: 7px;
-  border-right: 2px solid var(--border);
-  border-bottom: 2px solid var(--border);
-  opacity: 0.8;
+  width: 6px;
+  height: 6px;
+  opacity: 0.75;
+}
+.floating-panel-resize.fp-nw::after {
+  left: 3px;
+  top: 3px;
+  border-left: 2px solid var(--fg-dim);
+  border-top: 2px solid var(--fg-dim);
+}
+.floating-panel-resize.fp-ne::after {
+  right: 3px;
+  top: 3px;
+  border-right: 2px solid var(--fg-dim);
+  border-top: 2px solid var(--fg-dim);
+}
+.floating-panel-resize.fp-sw::after {
+  left: 3px;
+  bottom: 3px;
+  border-left: 2px solid var(--fg-dim);
+  border-bottom: 2px solid var(--fg-dim);
+}
+.floating-panel-resize.fp-se::after {
+  right: 3px;
+  bottom: 3px;
+  border-right: 2px solid var(--fg-dim);
+  border-bottom: 2px solid var(--fg-dim);
 }
 
 /* 外部文件拖入的覆盖提示（drag-drop 批）：薄薄一层，pointer-events 必须为 none，
@@ -4112,6 +4229,7 @@ button.primary .hint {
 .panel-float:focus-visible,
 .panel-close:focus-visible,
 .floating-panel-action:focus-visible,
+.floating-panel-resize:focus-visible,
 .toolbar-btn:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;

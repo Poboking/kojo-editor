@@ -9,13 +9,13 @@ import {
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { EditorCommandContext, UIPanelContribution } from '@kojo/plugin-api';
 import {
-  MIN_FLOAT,
   defaultLayout,
   loadLayout,
   organizePanels,
@@ -36,6 +36,14 @@ import {
   nextDropTarget,
   planPanelMoves,
 } from './panel-drop';
+import {
+  RESIZE_HANDLES,
+  keyResizeDelta,
+  resizeRect,
+  type ResizeHandle,
+  type Viewport,
+} from './float-geometry';
+import { beginFloatDrag, beginFloatResize } from './float-drag';
 import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
 import {
   applyMotionPref,
@@ -443,67 +451,116 @@ export function ShellLayout(props: Props): ReactElement {
     dispatch({ type: 'float', id, geometry: { x, y, w, h } });
   }, []);
 
-  /** 浮窗拖拽（标题栏 mousedown → 全局 mousemove；拖拽期间直写 left/top，松手 commit） */
-  const startFloatDrag = useCallback((e: ReactMouseEvent, id: string) => {
-    e.preventDefault();
-    const f = layoutRef.current.floating[id];
-    if (!f) return;
-    const el = floatElsRef.current.get(id) ?? null;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    let x = f.x;
-    let y = f.y;
-    const onMove = (ev: MouseEvent): void => {
-      x = Math.min(window.innerWidth - 80, Math.max(80 - f.w, f.x + (ev.clientX - startX)));
-      y = Math.min(window.innerHeight - 32, Math.max(0, f.y + (ev.clientY - startY)));
-      if (el) {
-        // 直接写 inline left/top（**不用 transform**）：不进 reducer ⇒ 不触发重渲染 / localStorage 写。
-        // 关键：inline 值与松手后 React 落地的值同坐标系、逐字相同 ⇒ 交接时视觉零 delta（无抖动）。
-        el.style.left = `${x}px`;
-        el.style.top = `${y}px`;
-      } else {
-        dispatch({ type: 'moveFloating', id, x, y });
-      }
-    };
-    const onUp = (): void => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      // inline left/top 已 == 最终位置；此处只 commit，React 写入相同值 ⇒ 无跳变（无归一化步骤）
-      if (x !== f.x || y !== f.y) dispatch({ type: 'moveFloating', id, x, y });
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, []);
+  /** 视口尺寸供应商（拖拽/缩放钳制的基准；每次手势现场取，窗口改变不吃旧值） */
+  const viewportSize = useCallback((): Viewport => ({ w: window.innerWidth, h: window.innerHeight }), []);
 
-  /** 浮窗右下角缩放（同样直改 DOM，松手 commit） */
-  const startFloatResize = useCallback((e: ReactMouseEvent, id: string) => {
+  /**
+   * 浮窗拖拽（标题栏 pointerdown → 全局 pointermove）。
+   *
+   * 性能口径（2026-10-14「拖拽依旧卡顿」根治，硬约束：不许引入松手抖动）：
+   * - 拖拽期用**合成层移动**（`transform: translate3d` + `will-change: transform`），
+   *   **不写 left/top** ⇒ 浮窗子树零 layout / 零重排；几何换算每 pointermove 一次（纯算）。
+   * - pointermove **合并到 rAF**（一帧最多落一次、只落最新值）；以 `{passive:true}` 在
+   *   pointerdown 挂上、pointerup/pointercancel 卸载；setPointerCapture 让指针出窗不丢事件。
+   * - 松手**原子交接**：同一同步块写最终 inline left/top（= 基准 + 累积 transform 位移）
+   *   + 清 transform，再 commit 给 React（值同坐标系、逐字相同）⇒ 视觉零 delta。
+   * 拖拽全程不进 reducer、不写 localStorage（仅松手那一次 commit 除外）。
+   *
+   * `button` 命中的 pointerdown 一律放行——标题栏里的关闭/停靠按钮不能被拖拽吃掉。
+   */
+  const startFloatDrag = useCallback((e: ReactPointerEvent<HTMLElement>, id: string) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
-    e.stopPropagation();
     const f = layoutRef.current.floating[id];
     if (!f) return;
-    const el = floatElsRef.current.get(id) ?? null;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    let w = f.w;
-    let h = f.h;
-    const onMove = (ev: MouseEvent): void => {
-      w = Math.max(MIN_FLOAT.w, f.w + (ev.clientX - startX));
-      h = Math.max(MIN_FLOAT.h, f.h + (ev.clientY - startY));
-      if (el) {
-        el.style.width = `${w}px`;
-        el.style.height = `${h}px`;
-      } else {
-        dispatch({ type: 'resizeFloating', id, w, h });
-      }
+    const el = floatElsRef.current.get(id);
+    if (!el) return;
+    const head = e.currentTarget;
+    const pointerId = e.pointerId;
+    head.setPointerCapture?.(pointerId);
+    const session = beginFloatDrag({
+      el,
+      base: f,
+      origin: { x: e.clientX, y: e.clientY },
+      viewport: viewportSize,
+    });
+    const onMove = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      session.onMove(ev.clientX, ev.clientY);
     };
-    const onUp = (): void => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      if (w !== f.w || h !== f.h) dispatch({ type: 'resizeFloating', id, w, h });
+    const onUp = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (head.hasPointerCapture?.(pointerId)) head.releasePointerCapture(pointerId);
+      const g = session.finish();
+      if (g) dispatch({ type: 'moveFloating', id, x: g.x, y: g.y });
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, []);
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [viewportSize]);
+
+  /**
+   * 浮窗缩放（四角 + 四边，指针拖拽）。
+   *
+   * 与拖拽同一套性能口径：直接改 DOM、合并到 rAF、松手才 commit（不进 reducer）。
+   * 缩放本就改尺寸（width/height 是布局属性，避不开 layout）——这里省不掉的是**重渲染**，
+   * 而每帧重渲染整棵壳层才是卡顿的根源，故同样拖拽期只写 inline、不进 state。
+   * 左/上系把手同时改 x/y，故 x/y 亦在拖拽期直写 inline，松手值与 React 落地值逐字一致。
+   */
+  const startFloatResize = useCallback((e: ReactPointerEvent<HTMLElement>, id: string, handle: ResizeHandle) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation(); // 把手不在标题栏内，防御性阻止冒泡到拖拽
+    const f = layoutRef.current.floating[id];
+    if (!f) return;
+    const el = floatElsRef.current.get(id);
+    if (!el) return;
+    const target = e.currentTarget;
+    const pointerId = e.pointerId;
+    target.setPointerCapture?.(pointerId);
+    const session = beginFloatResize({
+      el,
+      base: f,
+      handle,
+      origin: { x: e.clientX, y: e.clientY },
+      viewport: viewportSize,
+    });
+    const onMove = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      session.onMove(ev.clientX, ev.clientY);
+    };
+    const onUp = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (target.hasPointerCapture?.(pointerId)) target.releasePointerCapture(pointerId);
+      const g = session.finish();
+      if (!g) return;
+      // 左/上系把手会同时挪 x/y：分两动作 commit（同一事件回调内自动批处理 ⇒ 仍是一次渲染）
+      if (g.x !== f.x || g.y !== f.y) dispatch({ type: 'moveFloating', id, x: g.x, y: g.y });
+      if (g.w !== f.w || g.h !== f.h) dispatch({ type: 'resizeFloating', id, w: g.w, h: g.h });
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [viewportSize]);
+
+  /** 缩放把手的键盘操作（方向键）：与指针共用同一套几何，走同一条 commit 路径 */
+  const resizeKeyDown = useCallback((e: ReactKeyboardEvent<HTMLElement>, id: string, handle: ResizeHandle) => {
+    const delta = keyResizeDelta(handle, e.key);
+    if (!delta) return;
+    const f = layoutRef.current.floating[id];
+    if (!f) return;
+    e.preventDefault();
+    const next = resizeRect(f, handle, delta.dx, delta.dy, viewportSize());
+    if (next.x !== f.x || next.y !== f.y) dispatch({ type: 'moveFloating', id, x: next.x, y: next.y });
+    if (next.w !== f.w || next.h !== f.h) dispatch({ type: 'resizeFloating', id, w: next.w, h: next.h });
+  }, [viewportSize]);
 
   // 浮动面板意图（内核事件落地；停靠由浮窗自带的按钮完成）
   useEffect(() => {
@@ -1191,14 +1248,13 @@ export function ShellLayout(props: Props): ReactElement {
             style={{ left: f.x, top: f.y, width: f.w, height: f.h }}
             aria-label={p.title}
           >
-            <header className="floating-panel-head" onMouseDown={(e) => startFloatDrag(e, p.id)}>
+            <header className="floating-panel-head" onPointerDown={(e) => startFloatDrag(e, p.id)}>
               <Icon name={p.icon ?? 'preview'} size={14} />
               <span className="floating-panel-title">{p.title}</span>
               <span className="spacer" />
               <button
                 className="ghost small floating-panel-action"
                 title="关闭浮窗（回到侧栏）"
-                onMouseDown={(e) => e.stopPropagation()}
                 onClick={() => dispatch({ type: 'dock', id: p.id })}
               >
                 <Icon name="close" size={14} />
@@ -1207,11 +1263,19 @@ export function ShellLayout(props: Props): ReactElement {
             <div className="floating-panel-body">
               <PanelBody contribution={p} floating />
             </div>
-            <div
-              className="floating-panel-resize"
-              title="拖拽调整大小"
-              onMouseDown={(e) => startFloatResize(e, p.id)}
-            />
+            {/* 四角 + 四边缩放把手：默认隐形，hover / 聚焦时显形；光标方向由 fp-<dir> 类给 */}
+            {RESIZE_HANDLES.map((dir) => (
+              <div
+                key={dir}
+                className={`floating-panel-resize fp-${dir}`}
+                role="button"
+                tabIndex={0}
+                title="拖拽调整大小"
+                aria-label="调整浮窗大小"
+                onPointerDown={(e) => startFloatResize(e, p.id, dir)}
+                onKeyDown={(e) => resizeKeyDown(e, p.id, dir)}
+              />
+            ))}
           </section>
         );
       })}
