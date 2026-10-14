@@ -34,7 +34,7 @@
 
 | ID | 任务 | 关键判据 / 形态（已定死，勿再议形） | 认领 |
 |---|---|---|---|
-| V1 | **整包加载实测入库**：`tools/engine-loadtest.mjs` + `verify loadtest <kojo…>` | 同盘**硬链接镜像**建沙盒（禁全量拷贝）；断言=**告警增量比对**（原始态 baseline 警告集 → 换入态断言新增警告 ∅ + 加载完成行在位，自动化今晚 COLOR 撞名抓捕那次）；不进 `all`；缺引擎 SKIP | 待认领 |
-| V2 | **场景级断言闭环**：clidbg runner v2（状态注入 + 台词断言 + sourceMap 回映） | 场景清单 `{setup:[原生ERB行], calls:[{fn, expect:[正则]}]}`→ 生成 main.ERB（TITLE+ADDDEFCHARA+setup+**单启动顺序 CALL**）；FAIL 打产物行 + `.kojo` 原行双列；首批判据＝恋慕/屈服3/时姦中各一条"必打出含 X 台词"回归 | 待认领 |
+| V1 | **整包加载实测入库**：`tools/engine-loadtest.mjs` + `verify loadtest <kojo…>` | 同盘**硬链接镜像**建沙盒（禁全量拷贝）；断言=**告警增量比对**（原始态 baseline 警告集 → 换入态断言新增警告 ∅ + 加载完成行在位，自动化今晚 COLOR 撞名抓捕那次）；不进 `all`；缺引擎 SKIP | 认领：k12cli 会话 2026-10-14 |
+| V2 | **场景级断言闭环**：clidbg runner v2（状态注入 + 台词断言 + sourceMap 回映） | 场景清单 `{setup:[原生ERB行], calls:[{fn, expect:[正则]}]}`→ 生成 main.ERB（TITLE+ADDDEFCHARA+setup+**单启动顺序 CALL**）；FAIL 打产物行 + `.kojo` 原行双列；首批判据＝恋慕/屈服3/时姦中各一条"必打出含 X 台词"回归 | 认领：k12cli 会话 2026-10-14 |
 | V3 | **title fatal 定位（timebox 30 分钟）** | 关兼容开关「解釈不可能な行があっても実行する」跑 V1 镜像抓 file:line；仍无行号→给自建 SKIA fork 打 error-事件带行号补丁（引擎自己编，永远有兜底）。结论二选一：可绕→title 流程并入 V2 场景面；不可绕→板上钉"加载实测=SKIA 天花板"止损 | 待认领 |
 | V4 | `verify engine-setup`（引擎资产入库） | clone gitgud `develop-skiasharp`（直连/代理交替）→ `dotnet publish` → 落 `KOJO_CLIDBG_DIR`；缺 SDK=FAIL+winget 提示，**不自动装** | 待认领 |
