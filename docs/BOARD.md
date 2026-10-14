@@ -10,6 +10,13 @@
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
 | HK-4 | UI 打磨（常任；目标「专业 · 克制 · 流畅 · 高效 · 耐看」，VSCode 为基准） | 自拟六项按序推进：UI-1 字号尺度 ✅§5.121 / UI-2 圆角·边框·阴影 ✅§5.122 / **UI-3 图标 emoji→单色 SVG ✅**（`docs/log/2026-10-13-ui-icons.md`；宿主层渲染面归零；插件自绘面板符号＝跨包图标通道**已交付 ✅** `renderIcon` 桥，3299bd7） → **UI-4 焦点环与键盘可达 ✅**（roving tabindex 漫游 + `:focus-visible` 焦点环） → **UI-5 动效可关 ✅**（设置项 + `<html data-motion>`） → **UI-6 底部问题面板 ✅**（ERB 结构/表达式两层波浪线汇总、点击跳源行；状态栏 ✕/⚠/ℹ 计数经 `kojo.problems` 展开，Ctrl+Shift+M）；每项带可复跑量化判据 | 进行中 · 认领：hk4ui 2026-10-14 |
+| HK-18 | **回放未知率 · `pseudo` 桶归因与拆分**（1,886 = 未知的 50.4%） | **先量后改**：`pseudo` 的 message 已含变量名 ⇒ 先出逐名直方图，实测 `CHARANUM`/`RAND`/`__LINE__`/`__INT_MAX__` 各占多少（**归因前不动手**）。再按四档落地：①**回放上下文可得**——`__FILE__`/`__FUNCTION__`/`__LINE__`（谓词原文与来源行就在 `PredicateReplay` 里）、`__INT_MAX__`/`__INT_MIN__`（常量）、`CHARANUM`（= 快照角色块数）；②**快照本可读、现被误分类**——`MONEYLABEL`（字符串全局）、`LASTLOAD_*`，应走 `readTopVar`；③**RAND 经 RANDDATA 复现**——快照已带 RANDDATA 625 格，RAND 依 `Config.CompatiRAND`（`var-model.ts:125`），**单独批次、深水区**；④真·运行期量（`LINECOUNT`/`ISTIMEOUT`/`WINDOW_TITLE`/`DRAWLINESTR`/`EMUERA_VERSION`）判不可约 → 归 HK-22 口径。**顺带核**：`RESULT`/`COUNT` 同时在 `LANGUAGE_LOCAL` 与 `GLOBAL_INT_1D`，而 `read()`（`state-view.ts:131`）先判 language-local ⇒ 裸引用被误判 unknown（改次序前先核 CALL 覆写语义）。判据：全量不回退 ＋ `unknown/predTotal` 与 BASELINES §6 逐项分解**同步收紧并钉死**（现守门 `integration-plugins.test.ts:368` 仅 `<0.4`，注释记 62.9→48.5→32.0） | 待认领 |
+| HK-19 | **回放未知率 · `call-context`**（858 = 22.9%） | 入口回放未注入 `ReplayCallContext`（契约 `plugin-api/src/replay.ts:162-173` 已支持 `ints`/`strs`）。**名编码实参**：口上函数名内嵌指令号（`…_K49_88_1` ⇒ ARG 槽 0 = 88，E13 已踩）——**游戏知识 ⇒ 必须落 eratw-adapter**，对内核只出 **additive** 呼叫上下文提示契约（§六 分工纪律）。可复用既有「签名槽 vs 路由转发」实测（`call-slot-coverage.corpus.test.ts`，25,398 函数名）。真·场景输入（约会对象编号）推断不了 ⇒ UI 手输 ARG（计数不降、体验等价）。判据：`call-context` 计数下降 ＋ 全量不回退 ＋ 双 typecheck | 待认领 |
+| HK-20 | **回放未知率 · `call` 内联扩面**（368 = 9.8%） | 对主流「`LOCAL` 信封 ＋ 委托 `_1`」**纯转发形态**做**浅内联**（现有有界内联为 v0.2 第七批，`evaluate.ts:80-92`；残余 368 = 索引域外/不可内联）。与 E13/P-1 同族知识 ⇒ **跨线沟通后动**。判据：`call` 计数下降 | 待认领 |
+| HK-21 | **回放未知率 · `local-no-write` / `missing-var` 补面**（196 ＋ 80） | `local-no-write`＝`assignments` 未覆盖的赋值形态（分支内赋值 / `ARG`→`LOCAL` 转发 / 循环内赋值）⇒ 扩抽取面；`missing-var` 补 `variableSchema` / 引擎变量清单（注意 `JVEL`/`Juel` 笔误线索，**别在 ALS 批顺手改**）。判据：两项计数下降 ＋ 全量不回退 | 待认领 |
+| HK-22 | **回放未知率 · 口径拆分（架构层，小）** | 把**真随机**（RAND 类，不可约）与**能力缺口**（可补）拆成两个读数：`可判定率`（排除真随机）＋ `能力覆盖率`；ARCHITECTURE §5.3「unknown 是能力边界的诚实呈现」的自然延伸。判据：STATE/BASELINES 各记两数，且保留历史水位可比（62.9→48.5→32.0） | 待认领 |
+
+> **关联**（勿重复认领）：`named-index` 337（未知的 9.0%）已由 **ALS** 行承载（v34hand 2026-10-14 认领）——回放线不再单独立项。
 
 ## D. 已拍板（用户 2026-10-13 反馈批）
 
