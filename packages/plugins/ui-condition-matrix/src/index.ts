@@ -18,7 +18,17 @@
  * 呈现层只做「浏览 + 跳转意图」：点击函数 → `editor.revealLocation`（宿主消费）。
  */
 
-import { createElement, memo, useCallback, useDeferredValue, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  createElement,
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import type {
   ConditionExtractorService,
   ErbIndex,
@@ -38,10 +48,13 @@ import {
   buildCharacterIndex,
   buildMatrix,
   clampDetailHeight,
+  computeViewportWindow,
   createMatrixMemo,
   DETAIL_MIN_H,
   faceLabel,
   instructionNoOfSlot,
+  MATRIX_OVERSCAN,
+  MATRIX_ROW_H,
   type CharacterIndex,
   type ColumnDesc,
   type FaceFunction,
@@ -51,7 +64,7 @@ import {
   type MatrixRow,
 } from './matrix-logic';
 
-/** 矩阵行渲染上限（防 DOM 爆炸；过滤后仍受此限） */
+/** 矩阵行渲染上限（防 DOM 爆炸；过滤后仍受此限）——**仅全量（非视口化）路径** */
 const ROW_RENDER_CAP = 400;
 
 /** 取路径末两段（工具提示/详情里短显示） */
@@ -92,6 +105,18 @@ type GridKeyEvent = {
   key: string;
   target: unknown;
   preventDefault(): void;
+};
+
+/** 滚动容器的最小形状（视口化路径读滚动位置 / 可视高、按属性选择器聚焦格子） */
+type ScrollBox = {
+  scrollTop: number;
+  clientHeight: number;
+  querySelector(sel: string): { focus(): void } | null;
+};
+
+/** 滚动事件的最小形状 */
+type ScrollEvent = {
+  currentTarget: { scrollTop: number; clientHeight: number };
 };
 
 /* --------------------------- 行视图（memo：选中/折叠只重渲受影响行） --------------------------- */
@@ -338,10 +363,21 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const [splitDragging, setSplitDragging] = useState(false);
         const rootRef = useRef<{ clientHeight: number } | null>(null);
         const detailRef = useRef<{ clientHeight: number } | null>(null);
-        const scrollRef = useRef<{ querySelector(sel: string): { focus(): void } | null } | null>(null);
+        const scrollRef = useRef<ScrollBox | null>(null);
         const dragSeed = useRef<{ pointerId: number; startY: number; startH: number } | null>(null);
         /** 过滤输入走 deferred：输入即时响应，重表延后重渲（大矩阵逐键打字不卡） */
         const deferredFilter = useDeferredValue(filter);
+
+        /** 视口化开关（宿主下传；缺省 / false = 改动前的全量渲染路径，逐字不变） */
+        const virtualize = props.uiPrefs?.panelVirtualize === true;
+        /** 滚动位置（视口化路径驱动窗口；全量路径恒为 0，不参与渲染） */
+        const [scrollTop, setScrollTop] = useState(0);
+        /** 滚动容器可视高（视口化路径算窗口用；首帧未量到 → 0，仅画 overscan 行） */
+        const [viewportH, setViewportH] = useState(0);
+        /** 跨窗口键盘导航待聚焦的格子（渲染出该格后由 effect 落焦点，绝不聚焦不存在的节点） */
+        const pendingFocus = useRef<{ r: number; c: number } | null>(null);
+        /** 当前（过滤后）行数——键盘导航判上界用 */
+        const rowCountRef = useRef(0);
 
         /** 点击格子：发跳转意图 + 落选中态（稳定引用 → 行 memo 生效） */
         const onCell = useCallback((rowKey: string, columnKey: string, target: RevealTarget | null): void => {
@@ -372,11 +408,27 @@ export function createUiConditionMatrixPlugin(): Plugin {
           else if (e.key === 'ArrowLeft') dc = -1;
           else if (e.key === 'ArrowRight') dc = 1;
           else return;
-          const next = scrollRef.current?.querySelector(`.cm-cell[data-r="${r + dr}"][data-c="${c + dc}"]`);
+          const tr = r + dr;
+          const tc = c + dc;
+          if (tr < 0 || tc < 0) return;
+          const next = scrollRef.current?.querySelector(`.cm-cell[data-r="${tr}"][data-c="${tc}"]`);
           if (next) {
             e.preventDefault();
             next.focus();
+            return;
           }
+          // 目标格不在当前渲染窗口内 → 只可能是视口化路径下的**纵向**跨窗移动
+          // （横向同列在本窗内；纵向切到的是同一列，该列必然有格子）。
+          // 先把目标行滚进视野（顶到视口上沿，必落在窗口内），记账待重渲后聚焦——
+          // 分两步，绝不聚焦到尚未渲染的节点。
+          if (!virtualize || dr === 0) return;
+          if (tr >= rowCountRef.current) return; // 越过末行：无目标，保持原焦点
+          const box = scrollRef.current;
+          if (!box) return;
+          e.preventDefault();
+          box.scrollTop = tr * MATRIX_ROW_H;
+          setScrollTop(box.scrollTop);
+          pendingFocus.current = { r: tr, c: tc };
         };
 
         const onSplitDown = (e: SplitterPointer): void => {
@@ -421,6 +473,41 @@ export function createUiConditionMatrixPlugin(): Plugin {
             listeners.delete(cb);
           };
         }, []);
+
+        // 视口化路径：滚动即同步位置并重量可视高（分栏拖动会改变网格区高度）
+        const onScroll = (e: ScrollEvent): void => {
+          const box = e.currentTarget;
+          setScrollTop(box.scrollTop);
+          setViewportH((prev) => (prev === box.clientHeight ? prev : box.clientHeight));
+        };
+
+        // 视口化路径：量滚动容器可视高（首帧为 0 → 只画 overscan 行，量到后下一帧补全）。
+        // 每帧重量：分栏拖动 / 面板改尺寸都会改网格区高度，窗口须随之收放。
+        useEffect(() => {
+          if (!virtualize) return;
+          const h = scrollRef.current?.clientHeight ?? 0;
+          setViewportH((prev) => (prev === h ? prev : h));
+        });
+
+        // 视口化路径：切换角色 / 改过滤后回到顶部——否则旧滚动位置可能落到新内容的窗口之外
+        useEffect(() => {
+          if (!virtualize) return;
+          const box = scrollRef.current;
+          if (box && box.scrollTop !== 0) box.scrollTop = 0;
+          setScrollTop(0);
+        }, [virtualize, selectedNo, deferredFilter]);
+
+        // 视口化路径：跨窗口键盘导航——目标行滚进视野并重渲后，把焦点落到它的格子上
+        // （未渲染出该格前一直挂账，绝不聚焦不存在的节点）
+        useEffect(() => {
+          const pf = pendingFocus.current;
+          if (!pf) return;
+          const cell = scrollRef.current?.querySelector(`.cm-cell[data-r="${pf.r}"][data-c="${pf.c}"]`);
+          if (cell) {
+            cell.focus();
+            pendingFocus.current = null;
+          }
+        });
 
         // 失败态优先：显示原因 + 重试（不静默停在占位）
         if (loadError) {
@@ -545,7 +632,9 @@ export function createUiConditionMatrixPlugin(): Plugin {
                 (r) => r.key.toLowerCase().includes(needle) || (r.label ?? '').toLowerCase().includes(needle),
               )
             : matrix.rows;
-          const shown = rows.slice(0, ROW_RENDER_CAP);
+          const groups = matrix.groups;
+          // 键盘导航上界：当前（过滤后）行数——跨窗口纵向移动时判「是否越过末行」
+          rowCountRef.current = rows.length;
 
           // 两行表头：第一行 = 大时机类（可点折叠，跨该组子列）；第二行 = 子列头。
           // 折叠组仍渲染占位格（空白）以维持列对齐，只是不渲染其内容。
@@ -590,33 +679,78 @@ export function createUiConditionMatrixPlugin(): Plugin {
             ),
           );
 
-          const body = createElement(
-            'tbody',
-            null,
-            ...shown.map((row, rowIndex) =>
-              createElement(MatrixRowView, {
-                key: row.key,
-                row,
-                groups: matrix.groups,
-                foldedFaces,
-                selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
-                rowIndex,
-                onCell,
-              }),
-            ),
-          );
+          const colCount = matrix.columns.length;
+          /** 占位块：单个 td 跨全部列、钉死高度撑出滚动条（视口化路径专用） */
+          const spacer = (h: number, key: string): ReactNode =>
+            h > 0
+              ? createElement(
+                  'tr',
+                  { key, className: 'cm-spacer', 'aria-hidden': 'true', style: { height: h } },
+                  createElement('td', { colSpan: colCount + 1, style: { height: h } }),
+                )
+              : null;
+
+          let body: ReactNode;
+          let moreNotice: ReactNode = null;
+          if (virtualize) {
+            // 视口化：只渲染可见窗口（+上下 overscan），两段占位还原完整滚动高度——
+            // 全部行都可浏览、可键盘到达，不再受 400 行上限约束。
+            const win = computeViewportWindow(scrollTop, viewportH, MATRIX_ROW_H, rows.length, MATRIX_OVERSCAN);
+            body = createElement(
+              'tbody',
+              null,
+              spacer(win.topPad, 'pad-top'),
+              ...rows.slice(win.start, win.end).map((row, i) =>
+                createElement(MatrixRowView, {
+                  key: row.key,
+                  row,
+                  groups,
+                  foldedFaces,
+                  selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
+                  rowIndex: win.start + i, // 绝对行索引（data-r 跨窗一致，方向键据此平移）
+                  onCell,
+                }),
+              ),
+              spacer(win.bottomPad, 'pad-bottom'),
+            );
+          } else {
+            const shown = rows.slice(0, ROW_RENDER_CAP);
+            body = createElement(
+              'tbody',
+              null,
+              ...shown.map((row, rowIndex) =>
+                createElement(MatrixRowView, {
+                  key: row.key,
+                  row,
+                  groups,
+                  foldedFaces,
+                  selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
+                  rowIndex,
+                  onCell,
+                }),
+              ),
+            );
+            if (rows.length > ROW_RENDER_CAP) {
+              moreNotice = createElement(
+                'div',
+                { className: 'cm-more dim' },
+                `其余 ${rows.length - ROW_RENDER_CAP} 行未显示（可用过滤缩小范围）`,
+              );
+            }
+          }
 
           grid = createElement(
             'div',
-            { className: 'cm-scroll', ref: scrollRef, onKeyDown: onGridKeyDown },
+            {
+              className: 'cm-scroll' + (virtualize ? ' cm-virt' : ''),
+              ref: scrollRef,
+              onKeyDown: onGridKeyDown,
+              onScroll: virtualize ? onScroll : undefined,
+              // 行高常量唯一真源落成 CSS 变量，供 .cm-virt 规则取用（CSS 不再自写数字）
+              style: virtualize ? ({ '--cm-row-h': `${MATRIX_ROW_H}px` } as CSSProperties) : undefined,
+            },
             createElement('table', { className: 'cm-table' }, head, body),
-            rows.length > ROW_RENDER_CAP
-              ? createElement(
-                  'div',
-                  { className: 'cm-more dim' },
-                  `其余 ${rows.length - ROW_RENDER_CAP} 行未显示（可用过滤缩小范围）`,
-                )
-              : null,
+            moreNotice,
           );
         }
 

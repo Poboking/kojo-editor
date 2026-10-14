@@ -3860,6 +3860,28 @@ button.primary .hint {
   border-top: 1px solid var(--border);
   padding-top: 6px;
 }
+/* 视口化路径（宿主偏好开启时，`.cm-virt`）：固定行高 + 行头压成单行，
+   内容不得把行撑高（窗口数学以 `MATRIX_ROW_H` 为唯一真源，经 `--cm-row-h` 落入本规则）。
+   占位块的像素高度由 TS 侧以行内样式给出（不在此写数字）。 */
+.cm-scroll.cm-virt .cm-table tbody tr {
+  height: var(--cm-row-h);
+}
+.cm-scroll.cm-virt .cm-rowhead {
+  height: var(--cm-row-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.cm-scroll.cm-virt .cm-row-name,
+.cm-scroll.cm-virt .cm-row-key {
+  display: inline;
+}
+.cm-scroll.cm-virt .cm-spacer > td {
+  padding: 0;
+  border: 0;
+}
 .cm-table {
   border-collapse: collapse;
   font-size: var(--fs-0);
