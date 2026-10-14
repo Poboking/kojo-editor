@@ -262,8 +262,8 @@ function replaceToken(code: string, token: string, replacement: string): string 
  * `X 不在 a 到 b` → `!(X >= a && X <= b)`（规范 §3.5）。
  *
  * 规范明确：**不要**转成 `X < a || X > b`（`&&`/`||` 不短路，二者求值次数
- * 相同；取舍理由是语义直接映射）。`X 含 +/-/函数调用时先赋临时变量` 是
- * lint 提示项，转译器**不做**自动转写（避免擅自引入临时变量）。
+ * 相同；取舍理由是语义直接映射）。`X` 含 `+`/`-`/函数调用时转译器**不做**
+ * 自动转写（避免擅自引入临时变量），就地报 `notin-complex-operand`（warning）。
  */
 function lowerNotIn(expr: string, ctx: ExprContext): string {
   for (const kw of NOTIN_KEYWORDS) {
@@ -276,6 +276,14 @@ function lowerNotIn(expr: string, ctx: ExprContext): string {
     const lo = rest.slice(0, toIdx).trim();
     const hi = rest.slice(toIdx + (rest.startsWith('到', toIdx) ? 1 : 2)).trim();
     if (lhs.length === 0 || lo.length === 0 || hi.length === 0) continue;
+    if (/[()+-]/.test(lhs)) {
+      ctx.report({
+        code: 'notin-complex-operand',
+        severity: 'warning',
+        message: '「不在」左边是计算或函数调用，转译后会算两次（含 `随机(...)` 时会掷两次）。建议先赋给一个变量，再用「不在」。',
+        loc: ctx.loc,
+      });
+    }
     return `!(${lhs} >= ${lo} && ${lhs} <= ${hi})`;
   }
   // `不在` 出现但形态不完整 → 不静默（保持原样会产出非法 ERB）

@@ -455,6 +455,24 @@ describe('§3.5 如果块', () => {
     expect(out).not.toContain('||');
   });
 
+  it('`不在` 左值含函数调用 → warning notin-complex-operand（产物不变）', () => {
+    const src = '角色: 12\n时机 指令 310：\n    如果 最大值(她的好感度, 1) 不在 1 到 99：\n        「嗯。」\n';
+    const d = t(src).diagnostics.find((x) => x.code === 'notin-complex-operand');
+    expect(d?.severity).toBe('warning');
+    const out = body(src);
+    expect(out).toContain('!(MAX(CFLAG:TARGET:好感度, 1) >= 1 && MAX(CFLAG:TARGET:好感度, 1) <= 99)');
+  });
+
+  it('`不在` 左值含加减法 → warning', () => {
+    const src = '角色: 12\n时机 指令 310：\n    如果 她的好感度 + 1 不在 0 到 99：\n        「嗯。」\n';
+    expect(codes(src)).toContain('notin-complex-operand');
+  });
+
+  it('`不在` 简单左值 → 不报（不打扰既有写法）', () => {
+    const src = '角色: 12\n时机 指令 310：\n    如果 她的好感度 不在 0 到 99：\n        「嗯。」\n';
+    expect(codes(src)).not.toContain('notin-complex-operand');
+  });
+
   it('单行形式 `如果 条件： 内容`', () => {
     const out = body('角色: 12\n时机 指令 310：\n    如果 FLAG:70： 「这是……」\n');
     expect(out).toContain('IF FLAG:70');
@@ -577,6 +595,25 @@ describe('§3.6 随机块 · §5.4 LOCAL 槽位', () => {
     expect(out).toContain('LOCAL:1 = RAND:2');
   });
 
+  it('`当` 块作候选 → 零诊断、嵌套 SELECTCASE 完整（审计批：修双 next 越行）', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    随机：\n        「平」\n        当 1：\n            是 1：\n                「呼嘻嘻」\n        「尾」\n';
+    expect(codes(src)).toEqual([]);
+    const out = body(src);
+    expect(out).toContain('SELECTCASE 1');
+    expect(out).toContain('PRINTFORMW 「呼嘻嘻」');
+    expect(out).toContain('PRINTFORMW 「尾」');
+  });
+
+  it('`如果` / `着色` 块作候选回归 → 零诊断', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    随机：\n        「平」\n        如果 1 == 1：\n            「壳」\n        着色 0xFFB0C8：\n            「红」\n';
+    expect(codes(src)).toEqual([]);
+    const out = body(src);
+    expect(out).toContain('IF 1 == 1');
+    expect(out).toContain('SETCOLOR 0xFFB0C8');
+  });
+
   it('行内随机简写 `随机 「甲」,「乙」` → RAND + SELECTCASE', () => {
     const out = body('角色: 12\n时机 指令 310：\n    随机 「嗯。」,「哦？」\n');
     expect(out).toContain('LOCAL = RAND:2');
@@ -617,6 +654,15 @@ describe('§3.7 选项块', () => {
     const src =
       '角色: 12\n时机 指令 310：\n    如果 她的好感度 超过 0：\n        选项：\n            「A」：\n                「a」\n';
     expect(codes(src)).toContain('choice-nested');
+  });
+
+  it('选项块作随机候选 → choice-nested；产物只留一个 INPUTS（审计批：补候选面守卫）', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    随机：\n        「平」\n        选项：\n            「按钮」：\n                「选后」\n    选项：\n        「二按钮」：\n            「后」\n';
+    const r = t(src);
+    expect(r.diagnostics.map((d) => d.code)).toEqual(['choice-nested']);
+    expect(r.erb.match(/INPUTS/g)?.length).toBe(1);
+    expect(r.erb).not.toContain('选后');
   });
 
   it('条目内可含其它块（如果 / 随机）', () => {

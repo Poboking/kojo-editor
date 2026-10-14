@@ -887,6 +887,8 @@ export type SugarDiagnosticCode =
   /* --- 文本行（规范 §3.3 / §4.4） --- */
   | 'cont-inside-quotes' // `续` 标记写在了引号内
   | 'unknown-identifier' // 未命中别名的裸标识符且不在变量字典中
+  /** 规范 §3.5：`X 不在 a 到 b` 的 `X` 含 `+`/`-`/函数调用——会整体求值两次（含 `随机(...)` 时会掷两次）；提示先赋临时变量。 */
+  | 'notin-complex-operand'
   /* --- 原生直通（规范 §3.10） --- */
   | 'raw-block-inline' // 原生直通块出现在非顶层位置（如嵌在句子中间）
   /* --- 兜底 --- */

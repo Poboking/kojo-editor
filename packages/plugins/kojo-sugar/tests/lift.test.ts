@@ -390,6 +390,26 @@ describe('S5 / selectcase —— SELECTCASE 分派升糖', () => {
     expect(r.candidates[0]!.roundTrip.verified).toBe(true);
   });
 
+  it('正例：CASE 体内嵌 IF 块 → 自证通过（嵌套条件块可读可写）', () => {
+    const src = [
+      'SELECTCASE RAND:2',
+      '\tCASE 0',
+      '\t\tIF CFLAG:TARGET:1088',
+      '\t\t\tPRINTFORML 甲',
+      '\t\tENDIF',
+      '\tCASE 1',
+      '\t\tPRINTFORML 乙',
+      'ENDSELECT',
+    ].join('\n');
+    const r = lift(src);
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c.roundTrip.verified).toBe(true);
+    expect(c.sugarSource).toBe(
+      '当 RAND:2：\n\t是 0：\n\t\t如果 CFLAG:TARGET:1088：\n\t\t\t甲 续\n\t是 1：\n\t\t乙 续',
+    );
+  });
+
   it('正例：等概率随机组 → 「随机：」块（含上一行 LOCAL = RAND:n）', () => {
     const src = [
       'LOCAL = RAND:3',

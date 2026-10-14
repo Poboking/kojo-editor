@@ -309,6 +309,7 @@ describe('SugarDiagnostic · 结构', () => {
       'choice-nested',
       'cont-inside-quotes',
       'unknown-identifier',
+      'notin-complex-operand',
       'raw-block-inline',
       'internal',
     ];

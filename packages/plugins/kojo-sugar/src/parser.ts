@@ -758,6 +758,15 @@ class BlockParser {
 
   private parseWhenBlock(headLine: LogicalLine, subject: string): WhenBlock {
     this.cursor.next();
+    return this.parseWhenBodyAfterHead(headLine, subject);
+  }
+
+  /** 已消费行之后的块体解析（随机候选里出现块头时） */
+  private parseWhenBlockFromClass(line: LogicalLine, subject: string): WhenBlock {
+    return this.parseWhenBodyAfterHead(line, subject);
+  }
+
+  private parseWhenBodyAfterHead(headLine: LogicalLine, subject: string): WhenBlock {
     const branches: WhenBranch[] = [];
     const bodyIndent = headLine.indent + 1;
 
@@ -957,6 +966,18 @@ class BlockParser {
         this.cursor.next();
         continue;
       }
+      // 候选路径不过 parseBody，须在此补「选项」块守卫（与块体同款）
+      if (cls.kind === 'choiceHead') {
+        this.cursor.next();
+        this.sink.report({
+          code: 'choice-nested',
+          severity: 'error',
+          message: '「选项」块不能嵌套（内层 INPUTS 会覆盖外层 RESULTS）。',
+          loc: posOf(line),
+        });
+        this.parseChoiceBody(line); // 仍解析以正确跳行，节点丢弃
+        continue;
+      }
       // 候选：一行内容（可为文本行 / 心形 / 原生行 / 深一层块）
       this.cursor.next();
       const startLine = line;
@@ -998,7 +1019,7 @@ class BlockParser {
       case 'ifHead':
         return this.parseIfBlockFromClass(line, cls);
       case 'whenHead':
-        return this.parseWhenBlock(line, cls.subject);
+        return this.parseWhenBlockFromClass(line, cls.subject);
       case 'randomHead':
         return this.parseRandomBody(line);
       case 'randomInline':
