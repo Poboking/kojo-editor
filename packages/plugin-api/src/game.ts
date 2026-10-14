@@ -82,6 +82,13 @@ export interface FamilyMatch {
 export interface FamilyIndexRule {
   readonly name: string;
   match(fnName: string): FamilyMatch | null;
+  /**
+   * 面（`FamilyMatch.face`）→ 人类可读标签（可选；**游戏知识，只住 adapter**）。
+   * 消费方（函数树导航 / 条件矩阵列头）据此本地化展示；未收录的面原样显示 token
+   * （fail-visible，不猜）。`''`（其它）与 `'declare'`（家族声明）由消费方通用兜底。
+   * 缺省 = 适配器未提供面标签，消费方全部原样显示。
+   */
+  readonly faceLabels?: Readonly<Record<string, string>>;
 }
 
 /** 变量字典条目（v0.2 起消费） */

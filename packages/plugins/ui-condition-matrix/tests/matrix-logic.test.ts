@@ -156,6 +156,11 @@ describe('buildMatrix', () => {
     expect(m.depsFunctions).toBe(2); // MESSAGE_COM + EVENT 有依赖；MESSAGE_COUNTER 无
   });
 
+  it('注入 faceLabels → 列标签中文化；未收录的面原样 token', () => {
+    const m = buildMatrix(entry, depsOf, labelOf, { MESSAGE_COM: '指令口上', EVENT: '事件' });
+    expect(m.columns.map((c) => c.label)).toEqual(['事件', '指令口上', 'MESSAGE_COUNTER']);
+  });
+
   it('多面聚合：同一状态键跨面各自计数', () => {
     const m = buildMatrix(entry, depsOf, labelOf);
     const row = m.rows.find((r) => r.key === 'CFLAG:318')!;
@@ -221,5 +226,13 @@ describe('faceLabel', () => {
     expect(faceLabel('')).toBe('其它');
     expect(faceLabel('declare')).toBe('家族声明');
     expect(faceLabel('MESSAGE_COM')).toBe('MESSAGE_COM');
+  });
+
+  it('注入 labels → 命中给中文，未收录/通用面仍走兜底', () => {
+    const labels = { MESSAGE_COM: '指令口上', SUCCESS_COM: '指令成否' } as const;
+    expect(faceLabel('MESSAGE_COM', labels)).toBe('指令口上');
+    expect(faceLabel('SUCCESS_COM', labels)).toBe('指令成否');
+    expect(faceLabel('MESSAGE', labels)).toBe('MESSAGE'); // 未收录 → 原样
+    expect(faceLabel('', labels)).toBe('其它'); // 通用兜底不受 labels 影响
   });
 });

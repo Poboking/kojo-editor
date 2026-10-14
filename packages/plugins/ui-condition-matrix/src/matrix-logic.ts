@@ -242,8 +242,9 @@ export function buildMatrix(
   entry: CharacterEntry,
   depsOf: (normalizedName: string) => StateDependency[],
   labelOf: (key: string) => string | null,
+  faceLabels?: Readonly<Record<string, string>>,
 ): ConditionMatrix {
-  const columns: MatrixColumn[] = entry.faces.map((face) => ({ face, label: faceLabel(face) }));
+  const columns: MatrixColumn[] = entry.faces.map((face) => ({ face, label: faceLabel(face, faceLabels) }));
   const acc = new Map<string, RowAcc>();
   let depsFunctions = 0;
 
@@ -331,14 +332,17 @@ export function buildMatrix(
 
 /* ------------------------------ 标签 ------------------------------ */
 
-/** '' → '其它'；'declare' → '家族声明'；否则原样 */
-export function faceLabel(face: string): string {
+/**
+ * '' → '其它'；'declare' → '家族声明'；其余查 `labels`（适配器提供的面 → 中文），
+ * 未收录 / 未注入则原样显示面 token（fail-visible，不猜）。
+ */
+export function faceLabel(face: string, labels?: Readonly<Record<string, string>>): string {
   switch (face) {
     case '':
       return '其它';
     case 'declare':
       return '家族声明';
     default:
-      return face;
+      return labels?.[face] ?? face;
   }
 }

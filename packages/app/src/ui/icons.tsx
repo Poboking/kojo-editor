@@ -191,13 +191,6 @@ const ICONS = {
       {stroke('M9.6 2.8h3.6v3.6')}
     </>
   ),
-  dock: (
-    <>
-      {stroke('M2.4 13.4h11.2')}
-      {stroke('M8 2.6v7.6')}
-      {stroke('M5.2 7.4 8 10.2 10.8 7.4')}
-    </>
-  ),
 } satisfies Record<string, ReactElement>;
 
 /** 未命中注册表时按字形文本渲染（兼容第三方贡献的单字符 `icon`） */

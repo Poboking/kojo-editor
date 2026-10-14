@@ -14,6 +14,7 @@ import {
 import type { Kernel } from '@kojo/kernel';
 import type { EditorCommandContext, UIPanelContribution } from '@kojo/plugin-api';
 import {
+  MIN_FLOAT,
   defaultLayout,
   loadLayout,
   organizePanels,
@@ -387,6 +388,14 @@ export function ShellLayout(props: Props): ReactElement {
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
 
+  /**
+   * 浮窗 DOM 引用（id → 根 `<section>`）。
+   * 拖拽 / 缩放期间**直接改元素样式**、不进 reducer——否则每次 mousemove 都会产生新
+   * `LayoutState` ⇒ 整棵 ShellLayout（含浮窗内面板子树）重渲染 + `saveLayout` 写
+   * localStorage，于是拖起来卡。松手才 commit 一次几何到 state。
+   */
+  const floatElsRef = useRef(new Map<string, HTMLElement>());
+
   const floatingPanels = useMemo(
     () => allPanels.filter((p) => layout.floating[p.id] !== undefined),
     [allPanels, layout.floating],
@@ -404,42 +413,66 @@ export function ShellLayout(props: Props): ReactElement {
     dispatch({ type: 'float', id, geometry: { x, y, w, h } });
   }, []);
 
-  /** 浮窗拖拽（标题栏 mousedown → 全局 mousemove） */
+  /** 浮窗拖拽（标题栏 mousedown → 全局 mousemove；拖拽期间只改 transform，松手 commit） */
   const startFloatDrag = useCallback((e: ReactMouseEvent, id: string) => {
     e.preventDefault();
     const f = layoutRef.current.floating[id];
     if (!f) return;
-    const dx = e.clientX - f.x;
-    const dy = e.clientY - f.y;
+    const el = floatElsRef.current.get(id) ?? null;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let x = f.x;
+    let y = f.y;
     const onMove = (ev: MouseEvent): void => {
-      const x = Math.min(window.innerWidth - 80, Math.max(80 - f.w, ev.clientX - dx));
-      const y = Math.min(window.innerHeight - 32, Math.max(0, ev.clientY - dy));
-      dispatch({ type: 'moveFloating', id, x, y });
+      x = Math.min(window.innerWidth - 80, Math.max(80 - f.w, f.x + (ev.clientX - startX)));
+      y = Math.min(window.innerHeight - 32, Math.max(0, f.y + (ev.clientY - startY)));
+      if (el) {
+        // 直接改 transform（走合成层）：不进 reducer ⇒ 不触发重渲染 / localStorage 写
+        el.style.transform = `translate3d(${x - f.x}px, ${y - f.y}px, 0)`;
+      } else {
+        dispatch({ type: 'moveFloating', id, x, y });
+      }
     };
     const onUp = (): void => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      if (el) {
+        // 归一：把临时 transform 落成 left/top（与 state commit 后的值一致，无跳变）
+        el.style.transform = '';
+        el.style.left = `${x}px`;
+        el.style.top = `${y}px`;
+      }
+      if (x !== f.x || y !== f.y) dispatch({ type: 'moveFloating', id, x, y });
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   }, []);
 
-  /** 浮窗右下角缩放 */
+  /** 浮窗右下角缩放（同样直改 DOM，松手 commit） */
   const startFloatResize = useCallback((e: ReactMouseEvent, id: string) => {
     e.preventDefault();
     e.stopPropagation();
     const f = layoutRef.current.floating[id];
     if (!f) return;
-    const sx = e.clientX;
-    const sy = e.clientY;
-    const sw = f.w;
-    const sh = f.h;
+    const el = floatElsRef.current.get(id) ?? null;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let w = f.w;
+    let h = f.h;
     const onMove = (ev: MouseEvent): void => {
-      dispatch({ type: 'resizeFloating', id, w: sw + (ev.clientX - sx), h: sh + (ev.clientY - sy) });
+      w = Math.max(MIN_FLOAT.w, f.w + (ev.clientX - startX));
+      h = Math.max(MIN_FLOAT.h, f.h + (ev.clientY - startY));
+      if (el) {
+        el.style.width = `${w}px`;
+        el.style.height = `${h}px`;
+      } else {
+        dispatch({ type: 'resizeFloating', id, w, h });
+      }
     };
     const onUp = (): void => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      if (w !== f.w || h !== f.h) dispatch({ type: 'resizeFloating', id, w, h });
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -1033,6 +1066,11 @@ export function ShellLayout(props: Props): ReactElement {
         return (
           <section
             key={p.id}
+            ref={(node) => {
+              const els = floatElsRef.current;
+              if (node) els.set(p.id, node);
+              else els.delete(p.id);
+            }}
             className="floating-panel"
             style={{ left: f.x, top: f.y, width: f.w, height: f.h }}
             aria-label={p.title}
@@ -1043,11 +1081,11 @@ export function ShellLayout(props: Props): ReactElement {
               <span className="spacer" />
               <button
                 className="ghost small floating-panel-action"
-                title="停靠回侧栏"
+                title="关闭浮窗（回到侧栏）"
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={() => dispatch({ type: 'dock', id: p.id })}
               >
-                <Icon name="dock" size={14} />
+                <Icon name="close" size={14} />
               </button>
             </header>
             <div className="floating-panel-body">

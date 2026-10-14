@@ -102,6 +102,9 @@ export function createUiConditionMatrixPlugin(): Plugin {
         return undefined;
       };
 
+      /** 当前适配器的面 → 中文标签（与家族规则同源；缺省 → 消费方原样显示 token） */
+      const faceLabels = (): Readonly<Record<string, string>> | undefined => currentFamilyIndex()?.faceLabels;
+
       /** 状态键标签：按首个 ':' 切出变量名与首下标，查变量字典 */
       const labelOf = (key: string): string | null => {
         const schema = schemaLookup();
@@ -291,7 +294,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
             (idx.hasFamilyIndex ? ` · 未归属 ${idx.orphanCount}` : ' · 适配器未提供家族规则'),
         );
 
-        const matrix = entry ? buildMatrix(entry, depsOf, labelOf) : null;
+        const matrix = entry ? buildMatrix(entry, depsOf, labelOf, faceLabels()) : null;
 
         // ---- 定位（网格）----
         let grid: ReactNode;
@@ -403,7 +406,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
               createElement(
                 'span',
                 { className: 'dim' },
-                ` · ${faceLabel(selected!.face)} · ${selCell.count} 处响应`,
+                ` · ${faceLabel(selected!.face, faceLabels())} · ${selCell.count} 处响应`,
               ),
             ),
             createElement(

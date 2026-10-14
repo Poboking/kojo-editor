@@ -147,6 +147,19 @@ describe('FamilyIndexRule 包装', () => {
     expect(rule.match('M_KOJO_MESSAGE_COM_K1_30')?.face).toBe('MESSAGE_COM');
     expect(rule.match('NOT_A_KOJO_FUNC')).toBeNull();
   });
+
+  it('faceLabels：面 token → 中文（用户所见的 MESSAGE_COM/SUCCESS_COM/MESSAGE 均已收录）', () => {
+    const labels = createEratwFamilyIndex().faceLabels!;
+    expect(labels.MESSAGE_COM).toBe('指令口上');
+    expect(labels.SUCCESS_COM).toBe('指令成否');
+    expect(labels.MESSAGE).toBe('通用口上');
+    // 表与 PLAIN_FACES 同源：任一识别出的面都有标签（'' 与 declare 由消费方兜底，不入表）
+    for (const face of ['ENCOUNTER', 'EVENT', 'SPEVENT', 'COLOR', 'MESSAGE_ENDING', 'IRAI', 'DIARY']) {
+      expect(labels[face]).toBeTypeOf('string');
+    }
+    expect(labels['']).toBeUndefined();
+    expect(labels.declare).toBeUndefined();
+  });
 });
 
 describe('家族识别 · K 锚点语义（BUG-3 显式化：取最后一个 _K{no}）', () => {

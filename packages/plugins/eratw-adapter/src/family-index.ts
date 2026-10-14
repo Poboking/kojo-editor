@@ -86,6 +86,74 @@ const SPECIAL_HEADS: ReadonlyArray<{ face: string; re: RegExp }> = [
   { face: 'VERSION', re: /^(.*?)_VERSION$/ },
 ];
 
+/**
+ * 面（`FamilyMatch.face`）→ 中文标签（游戏知识，只住本包）。
+ *
+ * 键 = 上面 `PLAIN_FACES` / `SPECIAL_HEADS` 产生的 face token；中文口径取自
+ * `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` 附录 C（37 调用面的「触发场景」列）与
+ * `face-templates.ts` 的分野关键字。`''`（其它）与 `'declare'`（家族声明）是通用
+ * 语义、由消费方兜底，故不入本表。未收录的面消费方原样显示 token——**不猜**
+ * （规范 §5.3 精神）。
+ */
+export const ERATW_FACE_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  /* 系统时机 */
+  ENCOUNTER: '初见',
+  SPEVENT: '特殊事件',
+  CUSTOM_EVENT: '自定义事件',
+  EVENT: '事件',
+  DAILY_EVENT: '每日事件',
+  FLAGSETTING: '开关初始化',
+  CHECK: '查询钩子',
+  COLOR: '配色',
+  /* 指令口上 / 成否 */
+  MESSAGE: '通用口上',
+  MESSAGE_COM: '指令口上',
+  MESSAGE_SCOM: '副指令口上',
+  MESSAGE_CUSTOM_COM: '自定指令口上',
+  MESSAGE_CUSTOM_SCOM: '自定副指令口上',
+  SUCCESS: '成否',
+  SUCCESS_COM: '指令成否',
+  SUCCESS_SCOM: '副指令成否',
+  /* 计数器 / 参数变动 / 刻印 */
+  MESSAGE_COUNTER: '计数器',
+  MESSAGE_PALAMCNG: '参数变动',
+  MESSAGE_MARKCNG: '刻印变化',
+  /* 追加源 */
+  EXTRASOURCE: '追加源',
+  EXTRASOURCE_COM: '追加源（指令）',
+  EXTRASOURCE_SCOM: '追加源（副指令）',
+  /* 自定指令五钩子 */
+  COM: '自定指令',
+  COM_NAME: '自定指令名',
+  COM_ABLE: '自定指令可用',
+  CAN_COM: '自定指令可执行',
+  COM_Counter不发: '自定指令计数器',
+  /* 商店按钮 */
+  CUSTOM_BUTTON: '商店按钮',
+  CUSTOM_BUTTON_CONDITION: '商店按钮条件',
+  /* 结局 / 日记 / 训练前 */
+  MESSAGE_ENDING: '结局',
+  DIARY: '日记',
+  BEFORETRAIN: '训练前',
+  /* 炮友契约 */
+  SF_CONTRACT: '炮友契约',
+  SF_CONTRACT_EVENT: '炮友契约事件',
+  /* 自定义素质 */
+  CUSTOM_TALENT_SET: '自定义素质',
+  /* 委托 / 指南 / 版本 / 更新 */
+  IRAI: '委托',
+  OPTION: '游玩指南',
+  OPTION_EXIST: '游玩指南存在',
+  VERSION: '口上版本',
+  VERSION_UPDATE: '口上版本更新',
+  UPDATE: '更新钩子',
+  /* 图像 */
+  IMAGE: '图像口上',
+  IMAGE_EX: '图像口上（扩展）',
+  /* 其它面 token */
+  COMMAND: '指令',
+});
+
 const PREFIXES: readonly string[] = ['M_KOJO', 'KOJO', 'DIARY', 'RUN_INTO'];
 
 const MESSAGECHECK_MARKER = '_MESSAGECHECK';
@@ -364,5 +432,6 @@ export function createEratwFamilyIndex(): FamilyIndexRule {
     match(fnName: string): FamilyMatch | null {
       return parseKojoFamily(fnName);
     },
+    faceLabels: ERATW_FACE_LABELS,
   };
 }

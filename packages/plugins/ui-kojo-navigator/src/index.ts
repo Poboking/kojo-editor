@@ -61,15 +61,18 @@ function familyLabel(family: string): string {
   return family === '' ? '初始家族' : family;
 }
 
-/** 面显示名 */
-function faceLabel(face: string): string {
+/**
+ * 面显示名：'' → '其它'；'declare' → '家族声明'；其余查 `labels`（适配器提供的
+ * 面 → 中文），未收录 / 未注入则原样显示面 token（fail-visible，不猜）。
+ */
+function faceLabel(face: string, labels?: Readonly<Record<string, string>>): string {
   switch (face) {
     case '':
       return '其它';
     case 'declare':
       return '家族声明';
     default:
-      return face;
+      return labels?.[face] ?? face;
   }
 }
 
@@ -100,6 +103,10 @@ export function createUiKojoNavigatorPlugin(): Plugin {
         }
         return null;
       };
+
+      /** 当前适配器的面 → 中文标签（与家族规则同源；缺省 → 原样显示 token） */
+      const currentFaceLabels = (): Readonly<Record<string, string>> | undefined =>
+        currentFamilyIndex()?.faceLabels;
 
       // ---- 状态（React 外部源；面板组件读取并订阅） ----
       let tree: NavigatorTree | null = null;
@@ -401,7 +408,7 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                             'button',
                             { className: 'nav-face-btn', onClick: () => toggle(setOpenFaces, fcKey) },
                             createElement('span', { className: 'caret' }, fcOpen ? '▾' : '▸'),
-                            createElement('span', { className: 'nav-face-name' }, faceLabel(face.face)),
+                            createElement('span', { className: 'nav-face-name' }, faceLabel(face.face, currentFaceLabels())),
                             createElement('span', { className: 'nav-count dim' }, String(face.functions.length)),
                           ),
                           fcOpen
