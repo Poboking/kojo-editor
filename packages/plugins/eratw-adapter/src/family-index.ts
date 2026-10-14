@@ -25,6 +25,7 @@
  */
 
 import type { FamilyIndexRule, FamilyMatch, FamilyParseKind } from '@kojo/plugin-api';
+import { parseKojoDirName } from './chara-csv';
 
 /* ------------------------------- 面表 ------------------------------- */
 
@@ -351,15 +352,24 @@ function stripFamilyMarker(head: string): string {
 /* ------------------------ 占位符 → 文件编号还原 ------------------------ */
 
 /**
- * 从文件 basename 还原角色号：eraTW 变体（如 `eratw原生官方版4.842`）里大量个人口上
- * 把编号写成占位符，真编号**确定性地落在文件名的 `^M_KOJO_K{no}`** 上
- * （如 `…/個人口上/阿燐/M_KOJO_K36_コマンド.ERB` → 36，与 4.980 的编号口径一致）。
- * 取不到 → null（不改判定，绝不猜测）。
+ * 从文件路径还原角色号：eraTW 变体（如 `eratw原生官方版4.842`）里大量个人口上把编号写成
+ * 占位符，真编号**确定性地落在文件名的 `^M_KOJO_K{no}`** 上（如
+ * `…/個人口上/阿燐/M_KOJO_K36_コマンド.ERB` → 36，与 4.980 的编号口径一致）。
+ *
+ * 例外：`159 先代` 目录的文件名形如 `M_KOJO_K1[]_*.ERB`——`1` 是 dummy（函数体实际用
+ * `K159`），`[` 紧跟数字即判为占位（真形态后继字符实测只有 `_`/`.`/空格/`刻`）；此时
+ * 回退解析父目录名（`159 先代` → 159）。取不到 → null（不改判定，绝不猜测）。
  */
 function characterNoFromPath(filePath: string): number | null {
-  const base = filePath.split(/[\\/]/).pop() ?? '';
-  const m = /^M_KOJO_K(\d+)/.exec(base);
-  return m ? Number(m[1]) : null;
+  const parts = filePath.split(/[\\/]/);
+  const base = parts[parts.length - 1] ?? '';
+  const m = /^M_KOJO_K(\d+)(?!\[)/.exec(base);
+  if (m) return Number(m[1]);
+  if (/^M_KOJO_K\d+\[/.test(base)) {
+    const no = parseKojoDirName(parts[parts.length - 2] ?? '')?.no;
+    if (no !== undefined) return no;
+  }
+  return null;
 }
 
 /**

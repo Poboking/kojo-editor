@@ -85,6 +85,7 @@ export function parseKojoDirName(dirName: string): { no: number; label: string }
 /**
  * 从一组文件名反推角色编号：扫 `^M_KOJO_K(\d+)`（忽略大小写，与引擎
  * `KOJO_MESSAGE.ERB` 的 `TRYCALLFORM M_KOJO…_K{NO:TARGET}_…` 同口径）。
+ * `(?!\[)` 排除占位形态 `M_KOJO_K1[]_…`（`1` 是 dummy，真编号不在文件名里）。
  *
  * 纯角色名目录（如 4.842 的 `阿燐` → `M_KOJO_K36_コマンド.ERB`）目录名不带编号，
  * 编号只在目录内文件名里——这是回退绑定的依据。多个不同编号取**出现次数最多**者
@@ -93,7 +94,7 @@ export function parseKojoDirName(dirName: string): { no: number; label: string }
 export function deriveCharaNoFromFileNames(names: readonly string[]): number | null {
   const counts = new Map<number, number>();
   for (const name of names) {
-    const m = /^M_KOJO_K(\d+)/i.exec(name);
+    const m = /^M_KOJO_K(\d+)(?!\[)/i.exec(name);
     if (!m) continue;
     const no = Number.parseInt(m[1] ?? '', 10);
     if (!Number.isFinite(no)) continue;

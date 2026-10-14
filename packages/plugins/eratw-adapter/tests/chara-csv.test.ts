@@ -69,4 +69,15 @@ describe('deriveCharaNoFromFileNames（纯名目录按文件名回退）', () =>
     expect(deriveCharaNoFromFileNames(['阿燐.ERB', 'README.txt'])).toBeNull();
     expect(deriveCharaNoFromFileNames([])).toBeNull();
   });
+
+  it('占位形态 `K{n}[]` 不计入（dummy 编号，非真字符号）', () => {
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K1[]_コマンド.ERB'])).toBeNull();
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K159_コマンド.ERB', 'M_KOJO_K1[]_絶頂.ERB'])).toBe(159);
+  });
+
+  it('真形态 `.` / 空格 / 汉字后继仍取真编号', () => {
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K86.ERB'])).toBe(86);
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K37 カウンター.ERB'])).toBe(37);
+    expect(deriveCharaNoFromFileNames(['M_KOJO_K75刻印取得.ERB'])).toBe(75);
+  });
 });

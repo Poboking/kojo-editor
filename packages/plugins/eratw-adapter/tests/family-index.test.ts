@@ -329,4 +329,19 @@ describe('KX 占位符按文件路径编号还原（additive：第二参 filePat
     expect(memo.parse(name)?.characterNo).toBeNull();
     expect(memo.size()).toBe(3);
   });
+
+  it('159 先代：文件名 `M_KOJO_K1[]` 是 dummy → 回退父目录名取 159（非 1）', () => {
+    const m = rule.match(
+      'M_KOJO_MESSAGE_COM_KX_90',
+      'C:\\game\\eratw-画蛇添足版eratw4.980\\ERB\\口上・メッセージ関連\\個人口上\\159 先代\\M_KOJO_K1[]_コマンド.ERB',
+    )!;
+    expect(m).toMatchObject({ kind: 'placeholder', isPlaceholder: true, characterNo: 159 });
+  });
+
+  it('真形态后继字符（`.` / 空格 / 汉字）不受占位排除影响', () => {
+    const at = (file: string) => rule.match('M_KOJO_MESSAGE_COM_KX_90', `C:\\game\\個人口上\\x\\${file}`)!;
+    expect(at('M_KOJO_K86.ERB').characterNo).toBe(86);
+    expect(at('M_KOJO_K37 カウンター.ERB').characterNo).toBe(37);
+    expect(at('M_KOJO_K75刻印取得.ERB').characterNo).toBe(75);
+  });
 });
