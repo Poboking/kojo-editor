@@ -1548,10 +1548,6 @@ button.erb-mode-hint.unlocked:hover {
   padding: 0 3px;
   color: var(--fg-dim);
 }
-.nav-badge.warn {
-  color: var(--amber);
-  border-color: var(--amber);
-}
 /* 条件徽章（condition.extractor 标签；如 恋慕 / 好感度） */
 .nav-badge.cond {
   color: var(--accent, #61afef);

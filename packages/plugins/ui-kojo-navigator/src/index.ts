@@ -423,7 +423,6 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                                 ...face.functions.slice(0, cap).map((fn) => {
                                   const badges: ReactNode[] = [];
                                   if (fn.match?.isMessageCheck) badges.push(createElement('span', { key: 'mc', className: 'nav-badge' }, 'MC'));
-                                  if (fn.match?.isPlaceholder) badges.push(createElement('span', { key: 'kx', className: 'nav-badge warn' }, 'KX'));
                                   if (fn.match && fn.match.kind === 'declare' && fn.match.selector > 0)
                                     badges.push(createElement('span', { key: 'sel', className: 'nav-badge' }, `#${fn.match.selector}`));
                                   badges.push(...condBadges(fn.name));
