@@ -2,14 +2,14 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-14 上午，糖线 `参数:` 声明 + 露米娅 K12 语料批合流后本机实测）
+## 一、基线（2026-10-14 午后，E14 拖拽打开 + E15 亲密面方案批合流后本机实测）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2093 passed / 15 skipped（2108）**；119 文件过 / 8 跳（127） |
+| 全量测试 | **2110 passed / 15 skipped（2125）**；120 文件过 / 8 跳（128） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
-| Rust | `cargo test --lib` **22 项全绿**（E7 写允许域批 +18→22；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
+| Rust | `cargo test --lib` **24 项全绿**（E7 写允许域批 +18→22；E14 拖放事件映射 +2；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
 | app build | ✓ 38.71s（§5.112 读数，此后未改构建面） |
 
 ⚠ skipped 跨主机不必相等：存档 / 语料在位与否会让 corpus 用例在 passed / skipped 间移动。
