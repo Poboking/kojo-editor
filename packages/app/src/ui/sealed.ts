@@ -4,20 +4,21 @@
  * ## 为什么需要它（一句话）
  *
  * 试用反馈：「把那些没用的功能，都给我封存了！只留一个开关放在设置页面」。
- * 三件被点名的功能**整体封存**：
- * 1. **语法糖视图（现效果）**—— EditorPane 里把游戏目录 ERB 投影成中文表层的显示；
- * 2. **糖预览面板**（插件 `ui-sugar-preview`，面板 id `sugar-preview`，aux）；
- * 3. **归档浏览器面板**（插件 `ui-archive-browser`，面板 id `archive-browser`，aux）。
+ * 被点名**整体封存**的两件都是插件面板：
+ * 1. **糖预览面板**（插件 `ui-sugar-preview`，面板 id `sugar-preview`，aux）；
+ * 2. **归档浏览器面板**（插件 `ui-archive-browser`，面板 id `archive-browser`，aux）。
+ *
+ * 第三件被点名的"语法糖视图（现效果）"**已交付为常态功能（2026-10-14）**，
+ * 因此 2026-10-14 起退出本总闸的管辖：它的可用门（`sugar-view.ts` `sugarViewAllowed`）
+ * 不再读 `sealed`，入口（工具条按钮 / 命令 / 设置项 / 首次询问）也不再被总闸收起。
  *
  * ## 语义
  *
- * - **封存 = 默认**（`SEALED_DEFAULT`）：新用户 / 新会话看不到这三件，设置页只留
+ * - **封存 = 默认**（`SEALED_DEFAULT`）：新用户 / 新会话看不到这两只面板，设置页只留
  *   一个总开关（「显示已封存功能」）；
- * - **封存不是删除**：底层代码一行全保留（糖视图投影器、两个插件的面板都还在），
- *   只是入口被总闸挡住——勾选开关可临时恢复，随时可以再关；
- * - **封存优先于一切**：糖视图可用门（`sugar-view.ts` `sugarViewAllowed`）里它是
- *   最高优先级的一条轴；但**不动用户的底层偏好**——`editor.sugarView.set` 开关意图
- *   在封存态被直接忽略，不偷偷改写 `kojo.ui.sugarView.v1`，解封即按原偏好恢复。
+ * - **封存不是删除**：底层代码一行全保留（两个插件的面板都还在），只是入口被总闸挡住——
+ *   勾选开关可临时恢复，随时可以再关；
+ * - **只管面板**：本总闸不再过问任何宿主自身的功能；`SEALED_PANEL_IDS` 是它唯一的管辖清单。
  *
  * ## 纪律
  *
@@ -34,19 +35,27 @@ const PREF_KEY = 'kojo.ui.sealed.v1';
 /**
  * 默认**封存**。
  *
- * 这三件是试用反馈判定"暂不投入"的——默认关掉让设置页保持干净（用户口径：
+ * 这两只面板是试用反馈判定"暂不投入"的——默认关掉让设置页保持干净（用户口径：
  * "只留一个开关"）。想看的人在设置页勾一下即可，且**选择会被记住**。
  */
 export const SEALED_DEFAULT = true;
 
 /**
- * 被封存的**面板** id 全集（壳层编排 `ui.panel` 贡献时整只滤掉）。
+ * 被封存的**面板** id 全集（壳层编排 `ui.panel` 贡献时整只滤掉；见 `filterSealedPanels`）。
  *
  * 为什么按面板 id 而不是按插件：壳层零业务知识，它只认面板贡献 id 这张已定契约。
- * 糖视图（EditorPane 的现效果）不走面板，由宿主自身的三处入口单独挡
- * （见 `EditorPane` 的可用门 / 首次询问 / 开关监听）。
  */
 export const SEALED_PANEL_IDS: ReadonlySet<string> = new Set(['sugar-preview', 'archive-browser']);
+
+/**
+ * 封存态把 `SEALED_PANEL_IDS` 里的面板整只滤掉；非封存态原样返回。
+ *
+ * 抽成纯函数的理由只有一个：这条"封存只作用于面板集合"的口径需要能被单测**正面证明**
+ * （封着的两块确实消失、其余一块不动），而它在壳层里本来嵌在一句 useMemo 里。
+ */
+export function filterSealedPanels<T extends { id: string }>(panels: readonly T[], sealed: boolean): T[] {
+  return sealed ? panels.filter((p) => !SEALED_PANEL_IDS.has(p.id)) : [...panels];
+}
 
 /** localStorage 访问器（node 测试环境无 window；隐私模式可能抛错——都不该影响本会话） */
 function storage(): Storage | null {
@@ -74,7 +83,7 @@ export function loadSealed(): boolean {
 
 /**
  * 命令式读取"此刻"的闸门值（回调 / 事件监听里用——`useSealed` 之外的场合，
- * 如 `applySugarView` 与 `editor.sugarView.set` 监听）。
+ * 如 `EditorPane` 里只在解锁弹窗的**文案口径**上用到它）。
  */
 export function isSealed(): boolean {
   return loadSealed();

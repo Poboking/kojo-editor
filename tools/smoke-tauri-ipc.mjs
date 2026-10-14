@@ -422,26 +422,39 @@ async function main() {
     // 2026-10-13：游戏目录里的 ERB **默认只读**（ADR-0005 轴一）。此时 insertText 会被 Monaco
     // 整个吞掉——那是产品正确行为，不是探针该绕过去的坑；探针因此**显式走一遍轴二解锁**，
     // 顺便把屏上文案钉成断言（清单 7.17 / 7.20 的机器半边）。
-    // ⚠ 两颗胶囊的 class 不同源（§5.106 只把只读那颗归了状态栏口径）：
-    //   只读 = `.sb-writable.ro`（文案「只读」），已解锁 = `.erb-mode-hint.unlocked`（文案「✏ 已解锁编辑」）。
+    // 2026-10-14 只读面去重：全站只剩**一颗** `.sb-writable`——底部状态栏那颗，且它按**当前打开
+    // 文件所在的区域**上色 ⇒ 口上区这份 ERB 上它恒为「只读」（点了就是重新批准写权限）。
+    // "这份文件此刻能不能写"不在状态栏，在工具条：
+    //   已解锁 = `.erb-mode-hint.unlocked`（文案「已解锁编辑」）· 直连 = `.erb-mode-hint.direct`；
+    // 两处都没有，才轮到状态栏那颗读成 locked。
     const readPill = () =>
       cdp.evalJs(`(() => {
-        const ro = document.querySelector('.sb-writable.ro');
-        if (ro) return ['locked', (ro.textContent ?? '').trim()];
         const un = document.querySelector('.erb-mode-hint.unlocked');
         if (un) return ['unlocked', (un.textContent ?? '').trim()];
+        const direct = document.querySelector('.erb-mode-hint.direct');
+        if (direct) return ['editable', (direct.textContent ?? '').trim()];
+        const ro = document.querySelector('.sb-writable.ro');
+        if (ro) return ['locked', (ro.textContent ?? '').trim()];
         return ['editable', ''];
       })()`);
     // 首次打开游戏目录 ERB 会问一次「要开启 .kojo 预览吗」——那也是一朵 `.modal`。
     // 探针要的是**原文可编辑**，所以先答「不用」把局面清干净，免得后面等解锁弹窗时等错一朵。
-    await cdp.evalJs(`(() => {
+    // （2026-10-14 起这朵弹窗真的会出现：预览已摘出封存总闸，默认关，首次询问是它的发现路径。）
+    const intro = await cdp.evalJs(`(() => {
       const m = document.querySelector('.modal[aria-label=".kojo 预览"]');
       if (!m) return 'no-intro';
       const b = [...m.querySelectorAll('.modal-actions button')].find(e => e.textContent.trim() === '不用');
       if (b) b.click();
       return 'intro-dismissed';
     })()`);
+    console.log(`[smoke] .kojo 预览 引导弹窗：${intro}`);
     await sleep(600);
+    // 弹窗关掉后焦点不在编辑器上（上面那一次点击被弹窗吃掉了），重新点一次中心——
+    // 否则后面的合成按键打不到 Monaco，「只读态下尝试编辑」事件根本不会发生。
+    if (intro === 'intro-dismissed') {
+      await cdp.click(box.x, box.y);
+      await sleep(300);
+    }
 
     const [mode0, pill0] = await readPill();
     if (mode0 === 'locked') {
@@ -459,7 +472,7 @@ async function main() {
       })()`);
       if (unlockClick !== 'unlocked-click') throw new Error(`erb unlock failed: ${unlockClick}`);
       await waitFor(cdp, `!!document.querySelector('.erb-mode-hint.unlocked')`, 15000);
-      P('b1', '轴二解锁（游戏目录 ERB）', '打字 → 弹解锁询问 → 「仍要直接编辑」→ 胶囊转「✏ 已解锁编辑」');
+      P('b1', '轴二解锁（游戏目录 ERB）', '打字 → 弹解锁询问 → 「仍要直接编辑」→ 工具条转「已解锁编辑」（底栏那颗按区域仍读作「只读」）');
     } else if (mode0 === 'unlocked') {
       S('b0', '只读胶囊文案', `开局已是解锁态（${pill0}）`);
     }

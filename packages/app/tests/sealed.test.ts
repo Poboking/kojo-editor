@@ -1,13 +1,20 @@
 /**
- * 封存总闸单测（2026-10-13 试用反馈批）。
+ * 封存总闸单测（2026-10-13 试用反馈批；2026-10-14 缩到"只管两只面板"）。
  *
- * 钉死的是"默认封存、可临时恢复、选择被记住"三件事——这是用户口径「把没用的功能
- * 封存了、只留一个开关放在设置页」的宿主侧半边；另一半（糖视图可用门的封存轴）
- * 在 `sugar-view.test.ts`。
+ * 钉死的是"默认封存、可临时恢复、选择被记住"三件事，加上**管辖范围**这一件：
+ * 总闸只作用于 `SEALED_PANEL_IDS` 里的面板；`.kojo 预览`（宿主自身的显示功能）
+ * 已交付为常态功能，它的可用门不再读 `sealed`（那半边见 `sugar-view.test.ts`）。
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { SEALED_DEFAULT, SEALED_PANEL_IDS, loadSealed, setSealed, subscribeSealed } from '../src/ui/sealed';
+import {
+  SEALED_DEFAULT,
+  SEALED_PANEL_IDS,
+  filterSealedPanels,
+  loadSealed,
+  setSealed,
+  subscribeSealed,
+} from '../src/ui/sealed';
 
 /** 假 localStorage：只是键值袋，够测"记忆"这一件事（与 sugar-view.test.ts 同款） */
 function fakeWindow(seed: Record<string, string> = {}) {
@@ -92,5 +99,43 @@ describe('封存总闸 / 封存清单', () => {
   it('两个封存面板 id 在册（糖预览 / 归档浏览器）', () => {
     expect(SEALED_PANEL_IDS.has('sugar-preview')).toBe(true);
     expect(SEALED_PANEL_IDS.has('archive-browser')).toBe(true);
+  });
+
+  it('清单就是这两只，不多收（.kojo 预览的宿主入口不许被牵连进来）', () => {
+    expect([...SEALED_PANEL_IDS].sort()).toEqual(['archive-browser', 'sugar-preview']);
+  });
+});
+
+/**
+ * 封存总闸唯一的管辖面：面板编排（`ShellLayout` 的那句 useMemo 现在只是这一句的包装）。
+ * 正面证明"被封存的两只确实消失、其余一只都不动"，反向自证"解封后一只不少"。
+ */
+describe('封存总闸 / 面板编排', () => {
+  const panels = [
+    { id: 'kojo.files' },
+    { id: 'sugar-preview' },
+    { id: 'kojo.problems' },
+    { id: 'archive-browser' },
+  ];
+  const ids = (list: { id: string }[]): string[] => list.map((p) => p.id);
+
+  it('封存态：清单里两只整只滤掉，内建视图一只不动', () => {
+    expect(ids(filterSealedPanels(panels, true))).toEqual(['kojo.files', 'kojo.problems']);
+  });
+
+  it('解封态：一只不少（反向自证——上面那条通过不是因为恒删）', () => {
+    expect(ids(filterSealedPanels(panels, false))).toEqual([
+      'kojo.files',
+      'sugar-preview',
+      'kojo.problems',
+      'archive-browser',
+    ]);
+  });
+
+  it('返回值是新数组，不改写入参（编排 useMemo 的输入来自别处）', () => {
+    const input = [{ id: 'sugar-preview' }, { id: 'kojo.files' }];
+    filterSealedPanels(input, false);
+    expect(input).toHaveLength(2);
+    expect(ids(filterSealedPanels(input, true))).toEqual(['kojo.files']);
   });
 });

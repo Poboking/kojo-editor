@@ -1289,10 +1289,10 @@ textarea {
 /* 工具条溢出时的**让位次序**（2026-10-13 目视体检 + 量测：1180 视口下整条只有只读胶囊可缩，
    于是它被压成 36×38 的"只/读"竖排圆牌——上一轮 §5.99 只给 `button` 立了"不许裁"的规矩，
    而胶囊是 `<span>`，漏网）。规矩补齐，并把"谁该让位"写成显式次序：
-   ① 身份与状态（文件名、只读/解锁胶囊、糖开关、保存）一律不许缩；
+   ① 身份与状态（文件名、解锁胶囊、预览开关、保存）一律不许缩；
    ② 先让位的是糖摘要（悬停有全文）；③ 再让位的是编码·换行·行数（底部状态栏另有一份）。
-   溢出量因此落在"次要信息截断"上，而不是落在"状态控件变形"上。 */
-.editor-toolbar > .sb-writable,
+   溢出量因此落在"次要信息截断"上，而不是落在"状态控件变形"上。
+   （工具条那颗**只读**胶囊 2026-10-14 已删——与底部状态栏同一件事，两处并排互相抢答。） */
 .editor-toolbar > .erb-mode-hint {
   flex: 0 0 auto;
 }
@@ -1319,8 +1319,9 @@ textarea {
   /* 配色按**风险**给，不按"有没有字"给：只读是游戏目录的安全默认态，作者一开就是
      二十个文件——给它琥珀警示色等于天天喊狼来了，真正该被看见的破例态反被淹掉。
      故默认中性，`.unlocked` 才用 --warning。
-     ⚠ 2026-10-13 UI 反馈 1 之后，工具条的**只读**态已改用底栏同款 `.sb-writable.ro` 胶囊，
-     `.erb-mode-hint` 只剩「已解锁编辑」一家——别再把 🔒 加回来。 */
+     ⚠ 2026-10-13 UI 反馈 1 之后，工具条的**只读**态改用底栏同款胶囊；2026-10-14 那颗也删了
+     （与底部状态栏重复），`.erb-mode-hint` 只剩「已解锁编辑」与「直连可编辑」两家——
+     别再把 🔒 加回来，也别在工具条重造只读胶囊。 */
   color: var(--fg-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1328,13 +1329,26 @@ textarea {
   white-space: nowrap;
 }
 
-/* 糖视图开关（2026-10-12 语法糖批）：整份 ERB 显示为语法糖 / 切回原代码 */
+/* 预览开关（2026-10-12 语法糖批）：整份 ERB 投影成 .kojo 写法 / 切回原生代码。
+   观感对齐壳层工具栏那一族 toggle（`.toolbar-btn` / `.toolbar-btn.on`）：
+   常态幽灵底 + 描边，hover 走淡底，开启态 accent 文字 + accent 淡底 + accent 描边；
+   图标是单色 SVG（`currentColor`），跟着文字色一起变，不为它另写一档颜色。 */
 .sugar-toggle {
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.sugar-toggle:hover:not(:disabled) {
+  background: var(--hover);
 }
 .sugar-toggle.on {
   color: var(--accent-text);
+  background: rgba(76, 139, 245, 0.12);
   border-color: var(--accent);
+}
+.sugar-toggle.on:hover:not(:disabled) {
+  background: rgba(76, 139, 245, 0.18);
 }
 /* ERB 已解锁编辑：写保护此刻对这一份文件失效 → 警示色（口径见上方基类注释） */
 .erb-mode-hint.unlocked {
@@ -1344,16 +1358,6 @@ textarea {
 .erb-mode-hint.direct {
   color: var(--accent-text);
   border-color: var(--accent);
-}
-
-/* 2026-10-13 UI 反馈 1/3：编辑器工具条的只读指示改用**底栏同一套胶囊**（黄色＝只读），
-   去掉 🔒 与冗长括注；它只是状态说明，不可点（授权入口在底栏，避免两处入口互相抢）。 */
-span.sb-writable.ro {
-  cursor: default;
-}
-span.sb-writable.ro:hover {
-  background: rgba(209, 154, 102, 0.12);
-  border-color: rgba(209, 154, 102, 0.35);
 }
 
 /* 「可编辑」徽章自身就是回锁入口（原来的「恢复只读」按钮作废，能力没丢）：
@@ -2804,7 +2808,10 @@ button.erb-mode-hint.unlocked:hover {
 .sb-dirty.on {
   color: var(--amber);
 }
-/* 写权限徽章 pill 化：状态一眼可辨 */
+/* 写权限徽章 pill 化：状态一眼可辨。
+   2026-10-14 起这是**全站唯一**那颗可写/只读胶囊（工具条那颗同色的已删）：
+   配色按**当前打开文件所在区域**给——工作项目区绿「可写」（只是说明，不可点），
+   口上区黄「只读」（可点：重新批准写权限的入口）。 */
 .sb-writable {
   border: 1px solid transparent;
   background: transparent;
@@ -4336,8 +4343,8 @@ button.primary .hint {
 /* --------------------- UI-4：壳层交互 chrome 焦点环补齐 --------------------- */
 /* 全局 :focus-visible（见文件上方「焦点可见性」）已给一切元素描边；这里对壳层交互
    chrome 显式重述一遍，口径完全一致（1px var(--accent)、offset 1px）——把「标签条
-   按钮 / 活动栏图标按钮 / 面板折叠与关闭按钮 / 工具栏按钮」列成一张清单，避免日后
-   某处补了 outline:none 就静默丢掉键盘可见性。 */
+   按钮 / 活动栏图标按钮 / 面板折叠与关闭按钮 / 工具栏按钮 / 编辑器工具条的预览开关」
+   列成一张清单，避免日后某处补了 outline:none 就静默丢掉键盘可见性。 */
 .ab-item:focus-visible,
 .sidebar-section-head:focus-visible,
 .panel-tab:focus-visible,
@@ -4345,7 +4352,8 @@ button.primary .hint {
 .panel-close:focus-visible,
 .floating-panel-action:focus-visible,
 .floating-panel-resize:focus-visible,
-.toolbar-btn:focus-visible {
+.toolbar-btn:focus-visible,
+.sugar-toggle:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }

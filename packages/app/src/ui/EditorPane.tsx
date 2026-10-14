@@ -34,9 +34,9 @@ import {
   sugarViewAllowed,
   trimSegmentBlanks,
 } from './sugar-view';
-import { isSealed, subscribeSealed, useSealed } from './sealed';
+import { isSealed, useSealed } from './sealed';
 import { isDirectMode, useDirectMode } from './direct-mode';
-import { isUnderAnyRoot, workspaceRootsOf } from './workspace-roots';
+import { isInWorkspaceFile } from './file-area';
 // 问题汇总：refreshMarkers 逐文件整份发布两层波浪线（erb-parser / condition-extractor）到 problem-store
 import { clearAllProblems, clearProblems, setProblems } from './problem-store';
 
@@ -212,10 +212,11 @@ export function EditorPane({
    * 游戏目录内 ERB = 只读借阅；**全部工作区根**（默认根 + 作者自选的项目位置）内的 ERB
    * = 可编辑源文件（工作区批新增，自选位置批扩成多根）。
    *
-   * 每次判定现取，不缓存：`roots()` 是同步读内存数组、零 IO，缓存没有收益，
-   * 反而会把"本会话刚自选的那个新根"永远排除在外（一次取值定死 ⇒ 之后一路判成借阅件锁只读）。
+   * 判定本身住在 `file-area.ts`（状态栏可写胶囊问的是同一个问题，两处共用一把尺子，
+   * 不许在这里另写一份）。每次判定现取，不缓存：`roots()` 是同步读内存数组、零 IO，
+   * 缓存没有收益，反而会把"本会话刚自选的那个新根"永远排除在外（一次取值定死 ⇒ 之后一路判成借阅件锁只读）。
    */
-  const inWorkspace = (p: string): boolean => isUnderAnyRoot(workspaceRootsOf(kernel), p);
+  const inWorkspace = (p: string): boolean => isInWorkspaceFile(kernel, p);
   /**
    * 直连模式（direct-mode.ts）可编辑判定：开关开 + 该文件在写白名单内（用户批准的可写目录）
    * ⇒ 游戏目录 ERB 视为可直接编辑（就地编辑工作流）。写保护铁律不破：可写性仍完全来自
@@ -257,11 +258,11 @@ export function EditorPane({
   const [unlockAsk, setUnlockAsk] = useState<string | null>(null);
   /** 是否弹"首次引导：要不要用语法糖视图"（只在首次打开 ERB 时一次） */
   const [introAsk, setIntroAsk] = useState(false);
-  /** 糖视图开关（偏好持久化；默认开——见 `sugar-view.ts` 头注） */
+  /** 糖视图开关（偏好持久化；默认**关**——缺省即"看到的正是盘上那份"，见 `sugar-view.ts` 头注） */
   const [sugarView, setSugarView] = useState<boolean>(() => loadSugarViewPref());
   /**
-   * 封存总闸（`sealed.ts`；默认封存）。封存态下糖视图现效果整件不可用，
-   * 但**不碰偏好**——`sugarView` 维持用户原值，解封即按原偏好恢复。
+   * 封存总闸（`sealed.ts`；默认封存）。它如今**只作用于两个面板**，糖视图不在其内；
+   * 这里剩下的用处只有"解锁弹窗讲多少话"那一档文案口径（见 `decideUnlock` / 弹框选型）。
    */
   const sealed = useSealed();
   /**
@@ -446,16 +447,14 @@ export function EditorPane({
     clearSugarView(); // 先把上一次的糖 model 撤下（幂等）
     if (!ed || !entry) return;
     // 可用门（ADR-0005）：只对**游戏目录里、本次未解锁**的 ERB 生效。
-    // `.kojo` 与**工作区内 ERB**（作者自己的创作源文件，恒可编辑）都不放糖视图——
-    // 糖视图靠"整份文件换成只读 model"工作，可编辑的原文必须始终看得见。
-    // 封存总闸（sealed.ts）优先于一切：封存态直接不放（用户 2026-10-13 反馈批）。
+    // `.kojo` 与**工作区内 ERB**（作者自己的创作源文件，恒可编辑）都不放预览——
+    // 预览靠"整份文件换成只读 model"工作，可编辑的原文必须始终看得见。
     if (
       !sugarViewRef.current ||
       !sugarViewAllowed({
-        sealed: isSealed(),
         isErbLike: isErbLike(path),
         inWorkspace: inWorkspace(path),
-        // 直连可编辑 ⟹ 糖视图让位（与 unlocks 同口径，ADR-0005 互斥）
+        // 直连可编辑 ⟹ 预览让位（与 unlocks 同口径，ADR-0005 互斥）
         unlocked: unlockedPathsRef.current.has(path) || directEditable(path),
       })
     )
@@ -517,14 +516,6 @@ export function EditorPane({
     applySugarView();
   }, [sugarView, applySugarView]);
 
-  // 封存总闸切换：封存 → 现场撤下糖视图；解封 → 按用户偏好重新铺上
-  useEffect(() => {
-    return subscribeSealed(() => {
-      setIntroAsk(false);
-      applySugarView();
-    });
-  }, [applySugarView]);
-
   // 直连模式开关切换：重算当前文件的可编辑态（readOnly），并让糖视图让位/恢复
   useEffect(() => {
     const ed = editorRef.current;
@@ -538,8 +529,6 @@ export function EditorPane({
   // 糖视图开关意图 → 宿主落地（插件发意图、宿主渲染；与 editor.liftPreview.show 同款）
   useEffect(() => {
     return kernel.bus.on('editor.sugarView.set', (p) => {
-      // 封存态不接受开关意图——不偷偷改用户偏好（解封后按原偏好恢复，见 sealed.ts）
-      if (isSealed()) return;
       if (p.filePath && p.filePath !== filePathRef.current) return;
       // 省略 `on` = 反转：状态所有者是宿主，请求方不必先问"现在是开还是关"
       setSugarView((v) => p.on ?? !v);
@@ -1035,7 +1024,7 @@ export function EditorPane({
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
       refreshMarkers(entry.model, filePath);
-      applySugarView(); // 糖视图：整份 ERB 显示为糖（默认开；`.kojo` 自动跳过）
+      applySugarView(); // 预览：整份 ERB 投影成 .kojo 写法（默认关；`.kojo` 自动跳过）
       applyReveal();
       stopApply();
     })();
@@ -1065,14 +1054,14 @@ export function EditorPane({
     [applySugarView],
   );
 
-  // 首次打开 ERB：问一次"要不要用语法糖视图"（问过就再不问）。
-  // **工作区 ERB 不弹**（恒可编辑，糖视图本就不生效，问了没有意义——ADR-0005 轴一）；
-  // 已解锁编辑的文件同样不弹（轴二的破例态下糖视图也让位）；
-  // 封存总闸封存时不弹（三件封存功能默认隐藏，问了也没有入口可用）。
+  // 首次打开 ERB：问一次"要不要开预览"（问过就再不问）。
+  // **工作区 ERB 不弹**（恒可编辑，预览本就不生效，问了没有意义——ADR-0005 轴一）；
+  // 已解锁编辑的文件同样不弹（轴二的破例态下预览也让位）。
+  // 默认关之后，这一次询问就是本功能主要的发现路径 ⇒ **必须保留**（预览已不在封存清单里，
+  // 不再有"封存时不弹"这一条）。
   useEffect(() => {
     if (
       !sugarViewAllowed({
-        sealed: isSealed(),
         isErbLike: isErbLike(filePath),
         inWorkspace: filePath !== null && inWorkspace(filePath),
         unlocked: filePath !== null && (unlockedPathsRef.current.has(filePath) || directEditable(filePath)),
@@ -1137,7 +1126,9 @@ export function EditorPane({
         {isErbLike(filePath) && !inWorkspace(filePath) ? (
           <>
             {/* 两道正交轴的呈现（ADR-0005）：能走到这里说明这是**游戏目录里的 ERB**
-                （工作区 ERB 恒可编辑，不放只读徽章、也不开糖视图）。
+                （工作区 ERB 恒可编辑，不开预览）。
+                只读**不再在这里挂胶囊**——它与底部状态栏那颗是同一件事，两处并排等于互相抢答
+                （2026-10-14 去重），原先挂在徽章上的那句解释迁进了状态栏胶囊的悬停。
                 纯说明性标签不带操作入口——旧的「强制编辑 ERB」按钮按需求 §1.4 作废。 */}
             {unlocked ? (
               // 解锁 = 写保护对这一份文件暂时失效，是**需要被看见**的破例态 → 琥珀警示色；
@@ -1155,7 +1146,7 @@ export function EditorPane({
               </button>
             ) : directMode && kernel.io.isWritable(filePath) ? (
               /* 直连模式：已获写权限的目录内文件直接可编辑 → 信息色提示（非警示）。
-                 直连可编辑 ⟹ 糖视图让位（与 unlocks 同口径，ADR-0005 互斥）→ 不渲染糖视图 toggle。 */
+                 直连可编辑 ⟹ 预览让位（与 unlocks 同口径，ADR-0005 互斥）→ 不渲染预览 toggle。 */
               <span
                 className="erb-mode-hint direct"
                 title="直连模式已开启：这份文件在已获写权限的目录内，可直接编辑（就地修改游戏目录）。写权限仍只来自你批准的可写目录。"
@@ -1164,32 +1155,24 @@ export function EditorPane({
               </span>
             ) : (
               <>
-                <span
-                  className="sb-writable ro"
-                  title="游戏目录里的原生文件，默认只读——直接改它等于改别人装好的游戏内容。开始输入时编辑器会询问你是否破例；写权限授权入口在底部状态栏。"
+                {/* 预览开关：整份 ERB 投影成 .kojo 写法（只读显示，磁盘一字未动）——
+                    本功能的存在理由就是让不熟悉原生语法的人也能把别人的口上当剧本读懂。
+                    **默认关**（选择会被记住），发现路径 = 首次打开游戏目录 ERB 时的那一次询问。
+                    图标走 HK-4 UI-3 的单色 `Icon` 通道（`currentColor`，跟 `.on` 的文字色一起变）。
+                    标签**恒为「.kojo 预览」**，开关状态交给 .on 配色 + aria-pressed 表达：
+                    按状态换字时两档字数不同，每点一次工具条就横向抖一下（与 T3 根除的树抖动同类缺陷）。 */}
+                <button
+                  className={`ghost small sugar-toggle${sugarView ? ' on' : ''}`}
+                  aria-pressed={sugarView}
+                  onClick={() => setSugarView((v) => !v)}
+                  title={
+                    sugarView
+                      ? '已开启：当前显示的是 .kojo 写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。'
+                      : '把这份文件显示成 .kojo 写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。'
+                  }
                 >
-                  只读
-                </span>
-                {/* 糖视图：整份 ERB 显示为语法糖（只读）——本功能的存在理由就是让不熟悉
-                    原生语法的人也能把别人的口上当剧本读懂。默认开（偏好可记忆）。
-                    标签**恒为「语法糖视图」**，开关状态交给 .on 配色 + aria-pressed 表达：
-                    原先按状态在「语法糖视图 / 显示为语法糖」间换字，两者字数不同，
-                    每点一次工具条就横向抖一下（与 T3 根除的树抖动同类缺陷）。
-                    封存总闸（sealed.ts）封存时整只不渲染——入口齐撤，设置页勾选可临时恢复。 */}
-                {!sealed ? (
-                  <button
-                    className={`ghost small sugar-toggle${sugarView ? ' on' : ''}`}
-                    aria-pressed={sugarView}
-                    onClick={() => setSugarView((v) => !v)}
-                    title={
-                      sugarView
-                        ? '已开启：当前显示的是 .kojo 写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。'
-                        : '把这份文件显示成 .kojo 写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。'
-                    }
-                  >
-                    .kojo 预览
-                  </button>
-                ) : null}
+                  <Icon name="preview" size={13} /> .kojo 预览
+                </button>
                 {sugarView && sugarStats ? (
                   <span
                     className="sugar-stats dim"

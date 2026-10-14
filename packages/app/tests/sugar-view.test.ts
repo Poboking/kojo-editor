@@ -1,9 +1,10 @@
 /**
- * 糖视图宿主侧纯逻辑单测（2026-10-12 语法糖批；2026-10-14 改为「整份糖文本写进内存 model」）。
+ * 预览（.kojo 预览）宿主侧纯逻辑单测（2026-10-12 语法糖批；2026-10-14 改为「整份糖文本写进内存 model」）。
  *
  * 钉死的是"读者视角"的几件事：
- * - **默认开**：不熟悉 EraBasic 的人打开别人的 ERB 就该直接看到人话（本功能的存在理由）；
- * - **偏好记住**：关了它就不会每次重开又冒出来（否则默认开就变成骚扰）；
+ * - **默认关**：作者打开一份文件，默认看到的正是盘上那份内容；要不要投影成 .kojo 写法由他点头
+ *   （发现路径 = 首次打开游戏目录 ERB 时的那一次询问）；
+ * - **偏好记住**：开过一次就一直开着、关掉就一直关着（否则每次重开都要重来）；
  * - **整份拼装口径**：`composeSugarDoc` 把糖段拼进原文——被覆盖的行换成糖文本、未覆盖的行
  *   原样留，这是"糖文本写进编辑器本身"的核心算术。
  */
@@ -43,21 +44,21 @@ afterEach(() => {
 describe('糖视图 / 偏好', () => {
   it('无 window（测试环境 / 非浏览器）→ 回默认（且不抛）', () => {
     expect(loadSugarViewPref()).toBe(SUGAR_VIEW_DEFAULT);
-    expect(SUGAR_VIEW_DEFAULT).toBe(true);
+    expect(SUGAR_VIEW_DEFAULT).toBe(false);
     expect(() => saveSugarViewPref(true)).not.toThrow();
   });
 
-  it('首次（无记录）→ 默认开；写过之后按记录走', () => {
+  it('首次（无记录）→ 默认关；写过之后按记录走', () => {
     const f = fakeWindow();
     w.window = f;
-    expect(loadSugarViewPref()).toBe(true);
-
-    saveSugarViewPref(false);
-    expect(f.bag.get('kojo.ui.sugarView.v1')).toBe('0');
     expect(loadSugarViewPref()).toBe(false);
 
     saveSugarViewPref(true);
+    expect(f.bag.get('kojo.ui.sugarView.v1')).toBe('1');
     expect(loadSugarViewPref()).toBe(true);
+
+    saveSugarViewPref(false);
+    expect(loadSugarViewPref()).toBe(false);
   });
 
   it('localStorage 抛错（隐私模式 / 配额满）→ 降级为默认值，不让编辑器崩', () => {
@@ -98,29 +99,36 @@ describe('.kojo 预览 / 摘要文案', () => {
  * 钉死它，是为了防止后来者把糖视图重新做成"任何 ERB 都能开"——那会让用户
  * 在**看不见原文**的情况下编辑自己的工作区文件。
  *
- * 2026-10-13 试用反馈批给这条门加了**最高优先级否决轴**：封存总闸（`sealed.ts`）。
+ * 2026-10-14：预览交付为常态功能，**封存总闸（`sealed.ts`）退出这道门**——
+ * 输入里没有 `sealed` 这一项，总闸此后只 govern 两只面板（见 sealed.test.ts）。
  */
 describe('sugarViewAllowed（.kojo 预览可用门 = 不可编辑态的派生）', () => {
   it('游戏目录 ERB、未解锁 → 唯一放行的组合', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: false, sealed: false })).toBe(true);
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: false })).toBe(true);
   });
 
   it('.kojo 不开预览（本身就是 .kojo，再投影一遍没有意义）', () => {
-    expect(sugarViewAllowed({ isErbLike: false, inWorkspace: false, unlocked: false, sealed: false })).toBe(false);
+    expect(sugarViewAllowed({ isErbLike: false, inWorkspace: false, unlocked: false })).toBe(false);
   });
 
   it('工作区 ERB 不开 .kojo 预览（轴一：恒可编辑 ⟹ 原文必须看得见）', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: false, sealed: false })).toBe(false);
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: false })).toBe(false);
     // 解锁态不影响结论（工作区根本走不到解锁这条路）
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: true, sealed: false })).toBe(false);
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: true })).toBe(false);
   });
 
   it('游戏目录 ERB 一旦解锁 → 该份 .kojo 预览禁用（轴二与互斥规则一致）', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: true, sealed: false })).toBe(false);
+    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: true })).toBe(false);
   });
 
-  it('封存总闸开启 → 封存优先于一切（本来放行的组合也返回 false）', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: false, sealed: true })).toBe(false);
+  it('封存总闸**不再是否决轴**：面板封存中（SEALED_DEFAULT=true）游戏目录 ERB 照样放行', () => {
+    // 正向自证：输入里塞一个 `sealed: true` 也毫无作用——这道门已经不认这一项。
+    // （用变量传参而不是对象字面量：字面量会因"多余属性"被类型检查拦下，那正是我们要的
+    //  结构性证据——参数表里根本没有 sealed，但运行期不许被一个遗留字段否决。）
+    const withStaleSealedFlag = { isErbLike: true, inWorkspace: false, unlocked: false, sealed: true };
+    expect(sugarViewAllowed(withStaleSealedFlag)).toBe(true);
+    // 反向自证：同一份输入把 unlocked 翻成 true 就应当关门（说明上面那条通过不是"恒真"）
+    expect(sugarViewAllowed({ ...withStaleSealedFlag, unlocked: true })).toBe(false);
   });
 });
 

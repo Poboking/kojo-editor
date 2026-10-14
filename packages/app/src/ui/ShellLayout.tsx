@@ -45,13 +45,14 @@ import {
 } from './float-geometry';
 import { beginFloatDrag, beginFloatResize } from './float-drag';
 import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
+import { fileWritableArea, writablePillTone } from './file-area';
 import {
   applyMotionPref,
   loadMotionPref,
   saveMotionPref,
   type MotionPref,
 } from './motion-pref';
-import { SEALED_PANEL_IDS, setSealed, useSealed } from './sealed';
+import { filterSealedPanels, setSealed, useSealed } from './sealed';
 import { setDirectMode, useDirectMode } from './direct-mode';
 import { setPanelVirtualize, usePanelVirtualize } from './panel-prefs';
 import { modalDepth, closeTopModal } from './modal-stack';
@@ -103,8 +104,15 @@ interface Props {
   builtinViews: UIPanelContribution[];
   /** 编辑器区内容（只读横幅 + 编辑器/空态） */
   children: ReactNode;
-  /** 写权限状态（状态栏徽章；壳层通用 chrome） */
+  /**
+   * 写权限状态（P0 项目级授权口径）。
+   *
+   * 状态栏那颗胶囊现在**先看当前打开文件落在哪一区**（工作项目区 / 口上区），
+   * 区域答不出的时候（没有打开文件、或区域外的非 ERB）才回落到这个布尔。
+   */
   writable: boolean;
+  /** 当前活动文件（状态栏可写胶囊的区域依据；判定与编辑器共用 `file-area.ts` 一把尺子） */
+  activeFile?: string | null;
   onReauth: () => void;
   /** 编辑器状态（编码/EOL/行数；无打开文件时 null） */
   editorStatus: EditorStatusInfo | null;
@@ -139,6 +147,7 @@ export function ShellLayout(props: Props): ReactElement {
     builtinViews,
     children,
     writable,
+    activeFile,
     onReauth,
     editorStatus,
     dirty,
@@ -152,7 +161,7 @@ export function ShellLayout(props: Props): ReactElement {
     onRegisterWorkbench,
   } = props;
 
-  /** 封存总闸（`sealed.ts`；默认封存）：封存态下被点名的插件面板整只不进编排 */
+  /** 封存总闸（`sealed.ts`；默认封存）：封存态下 `SEALED_PANEL_IDS` 清单里的插件面板整只不进编排 */
   const sealed = useSealed();
   /** 直连模式开关（`direct-mode.ts`；默认关）：设置页里经封存总闸 gated——封存态不渲染 */
   const directMode = useDirectMode();
@@ -166,10 +175,10 @@ export function ShellLayout(props: Props): ReactElement {
   const panelVirtualize = usePanelVirtualize();
   /** 下传给面板的偏好投影（对象身份随开关稳定，开关不变则面板不因它白重渲染） */
   const uiPrefs = useMemo(() => ({ panelVirtualize }), [panelVirtualize]);
-  const allPanels = useMemo(() => {
-    const all = [...builtinViews, ...kernel.slots.query('ui.panel')];
-    return sealed ? all.filter((p) => !SEALED_PANEL_IDS.has(p.id)) : all;
-  }, [kernel, builtinViews, sealed]);
+  const allPanels = useMemo(
+    () => filterSealedPanels([...builtinViews, ...kernel.slots.query('ui.panel')], sealed),
+    [kernel, builtinViews, sealed],
+  );
   const toolbarItems = useMemo(() => kernel.slots.query('ui.toolbar'), [kernel]);
   const statusbarItems = useMemo(() => kernel.slots.query('ui.statusbar'), [kernel]);
   const slotCommands = useMemo(() => kernel.slots.query('editor.command'), [kernel]);
@@ -947,15 +956,34 @@ export function ShellLayout(props: Props): ReactElement {
     </header>
   );
 
+  /**
+   * 状态栏那颗可写胶囊（2026-10-14 去重 + 区域化）。
+   *
+   * 依据是**当前打开文件落在哪一区**，判定走 `file-area.ts`——与编辑器的只读分野同一把尺子，
+   * 不在这里另写一份（工具条上那颗同色胶囊已删，两处并排等于互相抢答；它原本独载的
+   * 解释性文字也一并迁到这里，别丢信息）。
+   * 区域答不出（没打开文件 / 区域外的非 ERB）才回落到项目级 `writable`。
+   */
+  const writableArea = fileWritableArea(kernel, activeFile ?? null);
+  const writablePill = writablePillTone(writableArea, writable);
+  const writablePillTitle =
+    writableArea === 'workspace'
+      ? '这份文件在你的工作项目区（你自己写的口上文件），可以直接保存。'
+      : writableArea === 'game-erb'
+        ? '口上区（游戏目录）里的原生文件：默认只读——直接改它等于改别人装好的游戏内容。开始输入时编辑器会询问你是否破例；点击这里可重新批准写权限。'
+        : writable
+          ? '写权限已批准'
+          : '只读：写权限未批准，点击重新授权';
+
   const statusbar = (
     <footer className={`statusbar ${layout.zen ? 'zen' : ''}`}>
       <div className="sb-left">
-        {writable ? (
-          <span className="sb-writable ok" title="写权限已批准">
+        {writablePill === 'ok' ? (
+          <span className="sb-writable ok" title={writablePillTitle}>
             可写
           </span>
         ) : (
-          <button className="sb-writable ro" title="只读：写权限未批准，点击重新授权" onClick={onReauth}>
+          <button className="sb-writable ro" title={writablePillTitle} onClick={onReauth}>
             只读
           </button>
         )}
@@ -1098,8 +1126,10 @@ export function ShellLayout(props: Props): ReactElement {
                 </label>
               </div>
 
-              {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：三件暂不投入的功能整体封存，
-                  设置页只留这一个总开关；勾选 = 临时恢复（代码未删，随时可以再关）。 */}
+              {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：两只暂不投入的面板整体封存，
+                  设置页只留这一个总开关；勾选 = 临时恢复（代码未删，随时可以再关）。
+                  管辖清单只有 `SEALED_PANEL_IDS` 上那两个 id——「.kojo 预览」已交付为常态功能，
+                  2026-10-14 起不在其内（它的开关常驻下面那个「编辑器」组，不随本总闸收起）。 */}
               <div className="settings-group">
                 <div className="settings-group-title">封存功能</div>
                 <label className="settings-row">
@@ -1107,34 +1137,33 @@ export function ShellLayout(props: Props): ReactElement {
                   <span>
                     显示已封存功能
                     <span className="settings-hint">
-                      .kojo 预览（现效果）· .kojo 转译检查 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。
+                      .kojo 转译检查 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。
                     </span>
                   </span>
                 </label>
               </div>
 
-              {/* 封存态设置页只有一个总开关：「语法糖视图」这一组随总闸收起（勾选总开关即回来） */}
-              {!sealed ? (
-                <div className="settings-group">
-                  <div className="settings-group-title">编辑器</div>
-                  <label className="settings-row">
-                    <input
-                      type="checkbox"
-                      checked={sugarViewOn}
-                      onChange={(e) => applySugarViewPref(e.target.checked)}
-                    />
-                    <span>
-                      .kojo 预览
-                      <span className="settings-hint">
-                        把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
-                        只改显示、不改动文件。快捷键 Ctrl+Alt+T
-                      </span>
+              {/* 「编辑器」组不再随总闸收起：这一组里的 .kojo 预览是已交付的常态功能，
+                  默认关 ⇒ 这一行（连同快捷键 Ctrl+Alt+T）就是它的正式入口。 */}
+              <div className="settings-group">
+                <div className="settings-group-title">编辑器</div>
+                <label className="settings-row">
+                  <input
+                    type="checkbox"
+                    checked={sugarViewOn}
+                    onChange={(e) => applySugarViewPref(e.target.checked)}
+                  />
+                  <span>
+                    .kojo 预览
+                    <span className="settings-hint">
+                      把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
+                      只改显示、不改动文件。默认关；快捷键 Ctrl+Alt+T
                     </span>
-                  </label>
-                </div>
-              ) : null}
+                  </span>
+                </label>
+              </div>
 
-              {/* 直连模式开关：新增功能默认经封存总闸控制——封存态不渲染（与上方「编辑器」组同款 gated） */}
+              {/* 直连模式开关：仍经封存总闸控制——封存态不渲染（本功能尚未交付为常态） */}
               {!sealed ? (
                 <div className="settings-group">
                   <div className="settings-group-title">游戏目录写入</div>
