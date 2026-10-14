@@ -7,10 +7,12 @@
  *
  * 三条纪律：
  * 1. **只收系统函数**：不含作者自定义函数（规范 §7.2 已排除"用户自定义扩展函数"）；
- * 2. **纯函数、无副作用、可扩展**：本模块不依赖任何其它模块（避免与
- *    `expression.ts` 形成循环 import），新增别名只改这一处；
+ * 2. **纯函数、无副作用、可扩展**：本模块只依赖叶子表 `identifier-chars`（标识符
+ *    字符集单一真源；**不**依赖 `expression.ts`，避免循环 import），新增别名只改这一处；
  * 3. **fail-visible**：未收录的中文名**原样保留**（不静默改写）。
  */
+
+import { isIdentPart } from './identifier-chars';
 
 /**
  * 入库判据（HK-11① 扩容批）：
@@ -85,11 +87,6 @@ export const SYSTEM_FUNCTION_ALIASES: ReadonlyMap<string, string> = new Map<stri
 const BY_LENGTH: ReadonlyArray<readonly [string, string]> = [...SYSTEM_FUNCTION_ALIASES].sort(
   (a, b) => b[0].length - a[0].length,
 );
-
-/** 标识符字符判定（与 `expression.ts` 同口径：含 CJK，供词边界检查） */
-function isIdentPart(ch: string): boolean {
-  return /[A-Za-z0-9_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(ch);
-}
 
 /** ERB 字符串字面量 `"…"`（无转义概念）的结束下标；返回**闭合引号之后**的位置 */
 function stringEnd(text: string, from: number): number {

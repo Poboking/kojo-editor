@@ -311,7 +311,11 @@ function makeLookup(schema: VariableSchema): DictionaryLookup {
       return undefined;
     },
     resolve(ident: string): string | undefined {
-      // 原生 ERB 变量引用（`CFLAG:2` 形态）与引擎族名——原样保留
+      // 原生 ERB 变量引用（`CFLAG:2` 形态）与引擎族名——原样保留。
+      // **注意**：无族头的**裸引擎全局**（`SELECTCOM` / `PREVCOM` / `ARG` …）不在这里判
+      // ——它们不属字典（CSV 建不出"引擎自带标量"这张表），且字典本身是可选注入的，
+      // 寄生在这里会让"没打开项目时又写不了"。判据与实测计数见 `engine-globals.ts`，
+      // 生效点在 `expression.ts` 的 `resolveBareIdentifier`（E16 批，2026-10-14）。
       const head = ident.split(':')[0]!.toUpperCase();
       if (ENGINE_VARIABLE_FAMILIES.includes(head)) return ident;
       return undefined;
@@ -341,6 +345,8 @@ export {
 export { createSugarTranspileService, type CreateSugarServiceOptions } from './service';
 // HK-11①：系统函数中文别名（单一真源）——宿主 Monaco 层从本包派生高亮/补全
 export { SYSTEM_FUNCTION_ALIASES, lowerSystemFunctions } from './system-functions';
+// E16：裸引擎全局白名单（`SELECTCOM`/`PREVCOM`/…；判据与实测计数在模块头注）
+export { ENGINE_GLOBAL_IDENTIFIERS, resolveEngineGlobal } from './engine-globals';
 export {
   createSugarPreviewService,
   foldMessageBlocks,

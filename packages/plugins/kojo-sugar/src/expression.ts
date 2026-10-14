@@ -11,11 +11,16 @@
  * 2. **宽容但不静默**：不认识的标识符不原样输出，而是报诊断
  *    （`unknown-identifier` / `alias-unknown-target`）——口上里拼写错误
  *    几乎一律表现为"口上静默失效"，必须显式暴露。
+ *    唯一的**原样放行**通道是 `engine-globals.ts` 的裸引擎全局白名单
+ *    （`SELECTCOM` / `ARG` / `TARGET` …）：那些是引擎固定词、作者造不出这个名字，
+ *    放行不会掩护拼写错误（判据与语料实测计数见该模块头注）。
  */
 
 import type { AliasValue, SugarDiagnostic, SugarPosition } from '@kojo/plugin-api';
 import { operatorTable, NOTIN_KEYWORDS, RESERVED_PRONOUNS } from './keywords';
 import { lowerSystemFunctions } from './system-functions';
+import { resolveEngineGlobal } from './engine-globals';
+import { isIdentPart, isIdentStart } from './identifier-chars';
 import type { AliasTable, DictionaryLookup } from './types';
 
 /** 降糖上下文 */
@@ -31,20 +36,13 @@ export interface ExprContext {
 }
 
 /**
- * 标识符字符判定。
+ * 判断是否为"裸标识符"（含可能的 `:` 索引段），返回结束下标；否则 -1。
  *
- * ERB 变量引用 = `IDENT` 或 `IDENT:index`（`index` 可为数字 / 中文名）。
- * 中文名必须支持（规范 §3.8：`CFLAG:TARGET:诶嘿嘿`）——故标识符字符集
- * 含 CJK 区间。
+ * 字符集走 `./identifier-chars`（**单一真源**，与 `system-functions.ts` 的函数名扫描
+ * 同一张表）：ERB 变量引用 = `IDENT` 或 `IDENT:index`（`index` 可为数字 / 中文名），
+ * 中文名必须支持（规范 §3.8：`CFLAG:TARGET:诶嘿嘿`），全角拉丁字母也必须支持
+ * （语料四面族写 `NOWEX:Ｃ絶頂`）——口径连同理由写在 `identifier-chars.ts`。
  */
-function isIdentStart(ch: string): boolean {
-  return /[A-Za-z_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(ch);
-}
-function isIdentPart(ch: string): boolean {
-  return /[A-Za-z0-9_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(ch);
-}
-
-/** 判断是否为"裸标识符"（含可能的 `:` 索引段），返回结束下标；否则 -1 */
 function scanIdentifier(src: string, from: number): number {
   if (from >= src.length || !isIdentStart(src[from]!)) return -1;
   let i = from + 1;
@@ -481,12 +479,18 @@ function resolveAttribute(scope: string, name: string, ctx: ExprContext): string
   return `${family}:${scope}:${name}`;
 }
 
-/** 裸标识符解析：字典命中 → 展开为 `FAMILY:index`；否则报错 */
+/** 裸标识符解析：引擎全局 → 原样；字典命中 → 展开为 `FAMILY:index`；否则报错 */
 function resolveBareIdentifier(ident: string, ctx: ExprContext): string {
   // 保留代词已在上游处理；此处仅防御
   if (RESERVED_PRONOUNS.includes(ident)) {
     return PRONOUN_MAP.get(ident) ?? ident;
   }
+  // **裸引擎全局**（`SELECTCOM` / `PREVCOM` / `ARG` / `TARGET` …无族头的引擎自带标量）
+  // → 原样输出。先于字典：字典是**可选注入**的（无工程 / 无 adapter 时 `dictionary`
+  // 为 undefined），而这些名字属 ERB 语言层、不属任何游戏的变量表（判据与实测计数
+  // 见 `engine-globals.ts`）。
+  const engineGlobal = resolveEngineGlobal(ident);
+  if (engineGlobal) return engineGlobal;
   const resolved = ctx.dictionary?.resolve(ident);
   if (!resolved) {
     ctx.report({
