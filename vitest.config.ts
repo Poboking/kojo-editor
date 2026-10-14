@@ -28,7 +28,9 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['packages/**/tests/**/*.test.ts'],
+    // tools/tests = 仓库 node 验收工具自己的纯逻辑护栏（产物落点 / 语料盘写入门禁）；
+    // 只有 tsconfig include 里的 packages/** 才进 tsc，故这一支不经 root typecheck。
+    include: ['packages/**/tests/**/*.test.ts', 'tools/tests/**/*.test.ts'],
     environment: 'node',
     testTimeout: 20000,
   },

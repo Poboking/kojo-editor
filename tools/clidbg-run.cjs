@@ -2,11 +2,15 @@
 // 用法: node tools/clidbg-run.cjs <xxx.kojo|xxx.erb> [函数名...]
 //   引擎沙盒目录: 环境变量 KOJO_CLIDBG_DIR（默认 C:/DSH/vendor/clidbg-probe，需含 --CliDebug 版 exe + CSV/GAMEBASE.CSV）
 //   exe 名覆盖:   KOJO_CLIDBG_EXE
+//   转译产物落点: C:/tmp/kojo-generated-erb（仓库外；KOJO_GENERATED_DIR 可覆盖）——
+//     旧版写在「输入文件旁边」= 把 .kojo.generated.ERB 落进仓库（污染 tests/goldens 抽样、破工作树干净前提），
+//     输入若是语料目录里的 .kojo 更直接违反铁律 5（游戏目录只读）。落点派生与语料盘写入门禁见 tools/generated-output.cjs。
 'use strict';
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
+const gen = require('./generated-output.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const PROBE_DIR = process.env.KOJO_CLIDBG_DIR || 'C:/DSH/vendor/clidbg-probe';
@@ -14,10 +18,18 @@ const EXE = process.env.KOJO_CLIDBG_EXE || path.join(PROBE_DIR, 'Emuera_skiaV16_
 
 function die(msg) { console.error('[FAIL] ' + msg); process.exit(1); }
 
+// 语料/游戏根清单（认内容不认名，走 tools/corpus.mjs CLI；本机无语料 → 空清单，门禁照常放行仓库外落点）。
+function collectGameRoots() {
+  const r = spawnSync(process.execPath, [path.join(REPO, 'tools', 'corpus.mjs'), '--print-all'], { encoding: 'utf8' });
+  if (r.status !== 0) return [];
+  return String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+}
+
 const argv = process.argv.slice(2);
 if (argv.length < 1 || argv[0] === '-h') {
   console.log('用法: node tools/clidbg-run.cjs <xxx.kojo|xxx.erb> [函数名...]');
   console.log('  .kojo → 先转译成 ERB（仓库内 kojo-sugar），再让 SKIA 引擎真加载并逐个 TRYCCALLFORM 执行。');
+  console.log('  产物落点: ' + gen.resolveOutRoot() + '（' + gen.ENV_OUT_DIR + ' 可覆盖；落在语料/游戏根之下直接拒绝执行）');
   process.exit(argv.length ? 0 : 2);
 }
 const input = path.resolve(argv[0]);
@@ -29,11 +41,18 @@ const isKojo = /\.kojo$/i.test(input);
 let erbPath = input;
 if (isKojo) {
   const tmpTest = path.join(REPO, 'packages/plugins/kojo-sugar/tests/__tmp.clidbg-transpile.test.ts');
-  const outFile = input + '.generated.ERB';
-  // 附带落盘 sourceMap（generatedLine→sourceLine 数组，同 compile.ts 惯例），供 scene-run 等回映工具消费（V2，additive）
-  const mapFile = input + '.generated.map.json';
+  // 产物对（.generated.ERB + .generated.map.json）落仓库外固定沙盒，**同目录同基名**——
+  // sourceMap 被 scene-run 一类回映工具按「产物同名兄弟」即时消费，拆开就断了。
+  const derived = gen.deriveGeneratedPaths(input);
+  const outFile = derived.erbPath;
+  const mapFile = derived.mapPath;
+  try {
+    gen.assertOutsideRoots([outFile, mapFile], collectGameRoots(), { label: 'clidbg-run 产物' });
+  } catch (e) {
+    die(e.message);
+  }
   fs.writeFileSync(tmpTest, [
-    "import { readFileSync, writeFileSync } from 'node:fs';",
+    "import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';",
     "import { expect, it } from 'vitest';",
     "import { createSugarTranspileService } from '../src/service';",
     "import { stubDict, stubFaceTable } from './support';",
@@ -43,6 +62,7 @@ if (isKojo) {
     '  const r = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(src);',
     "  const errs = r.diagnostics.filter(d => d.severity === 'error');",
     "  expect(errs, JSON.stringify(errs)).toEqual([]);",
+    `  mkdirSync(${JSON.stringify(derived.root)}, { recursive: true });`,
     `  writeFileSync(${JSON.stringify(outFile)}, '\\uFEFF' + r.erb.replace(/\\n/g, '\\r\\n'), 'utf8');`,
     `  writeFileSync(${JSON.stringify(mapFile)}, JSON.stringify(r.sourceMap, null, 2) + '\\n', 'utf8');`,
     '});',
@@ -53,6 +73,7 @@ if (isKojo) {
   if (t.status !== 0) die('转译失败:\n' + (t.stdout || '') + (t.stderr || ''));
   erbPath = outFile;
   console.log('[1/3] 转译 OK →', erbPath);
+  console.log('       sourceMap →', mapFile);
 }
 
 // ── 2. 布置沙盒：产物 + @SYSTEM_TITLE 里逐函数 TRYCCALLFORM（错一个不炸全批）──

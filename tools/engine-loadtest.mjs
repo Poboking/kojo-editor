@@ -1,7 +1,9 @@
 // 整游戏加载实测自动化：硬链接镜像 + --CliDebug 双跑（A 基线 / B 换入）增量警告对拍。
 // 用法: node tools/engine-loadtest.mjs [选项]
 //   --map <artifact>=<语料相对路径>   可重复。artifact = 已转译 .ERB 或 .kojo（.kojo 走 clidbg-run 同款
-//                                     vitest 内联转译）；target = 镜像根下的相对路径（真副本覆盖硬链接）。
+//                                     vitest 内联转译；产物落**仓库外**沙盒 C:/tmp/kojo-generated-erb，
+//                                     KOJO_GENERATED_DIR 可覆盖；落点在语料/游戏根之下 = 直接 FAIL，见 tools/generated-output.cjs）；
+//                                     target = 镜像根下的相对路径（真副本覆盖硬链接）。
 //                                     不给 --map 则纯基线双跑（A/B 同镜像状态，验证警告集可复现）。
 //   --strip-color-dupes              换入前剥掉 artifact 里目标原文件没有定义的 @*COLOR* 函数块
 //                                     （防 已经被定义过 类撞名新增警告；剥除动作逐文件打印）。
@@ -38,7 +40,8 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { resolveCorpusDir, corpusHint } from './corpus.mjs';
+import { resolveCorpusDir, discoverCorpora, corpusHint } from './corpus.mjs';
+import gen from './generated-output.cjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXE_NAME = 'Emuera_skiaV16_x64.exe';
@@ -266,11 +269,30 @@ function deltaW(B, A) {
 }
 
 // ── .kojo 转译（clidbg-run.cjs 步骤 1 同款内联 vitest 技巧） ──
+// 产物落点 = 仓库外固定沙盒（tools/generated-output.cjs），**不再写输入文件旁边**：
+// 传进来的 .kojo 可能位于语料/游戏目录（--map 的 artifact 由用户指），旧写法会把转译产物
+// 直接写进语料盘——绕过内核 io 写允许域、违反铁律 5。写盘前先过门禁，命中即 fail 退出（不静默改路径）。
+let gameRootsCache = null;
+/** 受保护根 = 本次镜像的语料 + 盘上全部符合内容条件的语料候选（认内容不认名；只算一次，纯 readdir/stat）。 */
+function gameRoots() {
+  if (!gameRootsCache) {
+    const all = [opts.corpus, ...discoverCorpora().map((h) => h.dir)]
+      .map((p) => path.resolve(p).toLowerCase().replace(/[\\/]+$/, ''));
+    gameRootsCache = [...new Set(all)];
+  }
+  return gameRootsCache;
+}
 function transpileKojo(kojoPath) {
   const tmpTest = path.join(REPO, 'packages/plugins/kojo-sugar/tests/__tmp.loadtest-transpile.test.ts');
-  const outFile = kojoPath + '.generated.ERB';
+  const derived = gen.deriveGeneratedPaths(kojoPath);
+  const outFile = derived.erbPath;
+  try {
+    gen.assertOutsideRoots(outFile, gameRoots(), { label: 'loadtest 产物' });
+  } catch (e) {
+    fail(e.message);
+  }
   fs.writeFileSync(tmpTest, [
-    "import { readFileSync, writeFileSync } from 'node:fs';",
+    "import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';",
     "import { expect, it } from 'vitest';",
     "import { createSugarTranspileService } from '../src/service';",
     "import { stubDict, stubFaceTable } from './support';",
@@ -280,6 +302,7 @@ function transpileKojo(kojoPath) {
     "  const r = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(src);",
     "  const errs = r.diagnostics.filter(d => d.severity === 'error');",
     "  expect(errs, JSON.stringify(errs)).toEqual([]);",
+    `  mkdirSync(${JSON.stringify(derived.root)}, { recursive: true });`,
     `  writeFileSync(${JSON.stringify(outFile)}, '\\uFEFF' + r.erb.replace(/\\n/g, '\\r\\n'), 'utf8');`,
     '});',
     '',
@@ -287,6 +310,7 @@ function transpileKojo(kojoPath) {
   const t = spawnSync('pnpm', ['vitest', 'run', tmpTest.replace(/\\/g, '/')], { cwd: REPO, encoding: 'utf8', shell: true });
   fs.rmSync(tmpTest, { force: true });
   if (t.status !== 0) fail('.kojo 转译失败（' + kojoPath + '）:\n' + (t.stdout || '') + (t.stderr || ''));
+  console.log('[transpile] ' + path.basename(kojoPath) + ' → ' + outFile + '（仓库外落点）');
   return outFile;
 }
 

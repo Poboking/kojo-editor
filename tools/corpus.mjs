@@ -204,10 +204,22 @@ export function resolveCorpusDir(opts = {}) {
 /* CLI（供文档与 shell 内联取值，别在文档里手写 node -e import）：
      node tools/corpus.mjs            → 打印解析过程（人看）
      node tools/corpus.mjs --print    → 只打目录名（KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"）
+     node tools/corpus.mjs --print-all→ 打**全部**符合内容条件的候选（一行一个，含 KOJO_CORPUS_DIR 那份），
+                                        给「写盘前门禁」用：产物掉进任何一个游戏盘都算违规，不只选中那份。
    退出码：0 有解 / 1 盘上无符合内容的语料 / 2 KOJO_CORPUS_DIR 或 --corpus 指了不成立的路径。 */
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const quiet = process.argv.slice(2).includes('--print');
+  const printAll = process.argv.slice(2).includes('--print-all');
   try {
+    if (printAll) {
+      const hits = discoverCorpora();
+      const envDir = (process.env[ENV_VAR] || '').trim();
+      const extra = envDir ? [canonical(envDir)] : [];   // env 指了盘上判据没选中的目录时也要进门禁
+      const all = [...new Set([...hits.map((h) => h.dir), ...extra])];
+      if (all.length === 0) { console.error(`[FAIL] 盘上未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；${corpusHint()}`); process.exit(1); }
+      process.stdout.write(all.join('\n') + '\n');
+      process.exit(0);
+    }
     const dir = resolveCorpusDir({ print: !quiet });
     if (!dir) { console.error(`[FAIL] 盘上未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；${corpusHint()}`); process.exit(1); }
     if (quiet) process.stdout.write(dir);
