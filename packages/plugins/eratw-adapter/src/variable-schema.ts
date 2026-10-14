@@ -40,7 +40,7 @@
  * 引擎侧「不静默」由调用方日志保证）。
  */
 
-import { foldDigest, stableHash } from '@kojo/plugin-api';
+import { foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
 import type { FileIO, Logger, VariableInfo, VariableSchema } from '@kojo/plugin-api';
 
 interface VariableTable {
@@ -337,9 +337,10 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
   if (erbDir !== undefined) {
     let erhFiles: Awaited<ReturnType<FileIO['walkDir']>> = [];
     try {
-      // `filter` 返回 false 会**连目录一起剪掉**（见 `WalkOptions`）⇒ 目录一律放行，扩展名筛在文件侧
+      // `filter` 返回 false 会**连目录一起剪掉**（见 `WalkOptions`）⇒ 目录一律放行，扩展名筛在文件侧；
+      // 判扩展名一律问契约层单一真源（FT-2 收口），本包不再抄第二份 `.erh` 字面量
       const found = await io.walkDir(erbDir, {
-        filter: (e) => e.isDirectory || /\.erh$/i.test(e.name),
+        filter: (e) => e.isDirectory || isErbDeclarationPath(e.name),
       });
       // 确定性顺序：首个定义优先的裁决不该随目录枚举顺序漂移（引擎按路径排序装载）
       erhFiles = found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
