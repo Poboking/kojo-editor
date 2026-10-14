@@ -123,6 +123,15 @@ IF LOCAL
 		CASE 2
 			PRINTFORMW 「……哈？！」
 	ENDSELECT
+	; 一档多句（§3.6）：想让随机挑中的一档连说好几句，用「当 随机数：」
+	; ——「随机：」的候选边界是**行**（一行一个候选）；一档多句改用「当 RAND:n：」写法
+	SELECTCASE RAND:2
+		CASE 0
+			PRINTFORMW 「……呼。」
+			PRINTFORMW 「……呼……嘻嘻。」
+		CASE 1
+			PRINTFORMW 「再、再摸摸嘛。」
+	ENDSELECT
 	; 表达式如果（§3.5）：赋值右侧的分支——必须有「否则」（穷尽保证）
 	IF CFLAG:TARGET:好感度 >= 500
 		CFLAG:TARGET:1088 = 1

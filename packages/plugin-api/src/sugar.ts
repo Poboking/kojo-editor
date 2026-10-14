@@ -848,6 +848,12 @@ export type SugarDiagnosticCode =
   /* --- 表达式 `如果` / `当`（规范 §3.5 / §3.6） --- */
   | 'expr-missing-else' // 赋值位置的 如果 / 当 缺 `否则` 分支（必须穷尽）
   | 'expr-body-not-expression' // 表达式 当/如果 的分支体不是 `-> 单个表达式`
+  /**
+   * E17：语句面「当」块主体为常量 `RAND:n` / 糖形 `随机(n)`（n ≥ 1）、无 `否则`，
+   * 且 `是` 档位并集未盖满 `0..n-1`——掷到缺失档位时引擎静默（什么都不会打印）。
+   * 分支值含别名 / 变量 / 字符串等不可证形态时不报（宁可不报、绝不猜）。
+   */
+  | 'rand-case-incomplete'
   /* --- 插值（规范 §3.4 / §3.6 边界） --- */
   | 'interpolation-block-expression' // `{}` 内出现 当 / 如果（行内条件不支持嵌套）
   | 'interpolation-unclosed' // `{` 未收尾

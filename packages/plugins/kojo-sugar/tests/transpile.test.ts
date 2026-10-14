@@ -626,6 +626,66 @@ describe('§3.6 随机块 · §5.4 LOCAL 槽位', () => {
 });
 
 /* ============================================================================ */
+/* E17 · `当 RAND:n：` 缺档诊断（rand-case-incomplete）                            */
+/* ============================================================================ */
+
+describe('E17 · `当 RAND:n：` 缺档诊断', () => {
+  it('缺档（RAND:3 只写 0、1）→ rand-case-incomplete', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    当 RAND:3：\n        是 0：\n            「甲。」\n        是 1：\n            「乙。」\n';
+    expect(codes(src)).toContain('rand-case-incomplete');
+  });
+
+  it('糖形 `随机(3)` 缺档 → rand-case-incomplete', () => {
+    const src = '角色: 12\n时机 指令 310：\n    当 随机(3)：\n        是 0：\n            「甲。」\n';
+    expect(codes(src)).toContain('rand-case-incomplete');
+  });
+
+  it('`是 0 到 2：` 盖满 n=3 档 → 不报', () => {
+    const src = '角色: 12\n时机 指令 310：\n    当 RAND:3：\n        是 0 到 2：\n            「甲。」\n';
+    expect(codes(src)).not.toContain('rand-case-incomplete');
+  });
+
+  it('单值 + 区间并集盖满（0、1 到 2）→ 不报', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    当 RAND:3：\n        是 0：\n            「甲。」\n        是 1 到 2：\n            「乙。」\n';
+    expect(codes(src)).not.toContain('rand-case-incomplete');
+  });
+
+  it('有 `否则：` 兜底 → 不报（即便档位不全）', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    当 RAND:3：\n        是 0：\n            「甲。」\n        否则：\n            「乙。」\n';
+    expect(codes(src)).not.toContain('rand-case-incomplete');
+  });
+
+  it('主体非 RAND 常量（`当 她的心情：`）→ 不查、不报', () => {
+    const src = '角色: 12\n时机 指令 310：\n    当 她的心情：\n        是 0：\n            「甲。」\n';
+    expect(codes(src)).not.toContain('rand-case-incomplete');
+  });
+
+  it('分支值含非数字字面量（`是 "A"：`）→ 不查、不报', () => {
+    const src = '角色: 12\n时机 指令 310：\n    当 RAND:2：\n        是 "A"：\n            「甲。」\n';
+    expect(codes(src)).not.toContain('rand-case-incomplete');
+  });
+
+  it('产物正常：RAND:3 块写出 SELECTCASE RAND:3 + CASE 0/1', () => {
+    const src =
+      '角色: 12\n时机 指令 310：\n    当 RAND:3：\n        是 0：\n            「甲。」\n        是 1：\n            「乙。」\n';
+    const out = t(src).erb;
+    expect(out).toContain('SELECTCASE RAND:3');
+    expect(out).toContain('CASE 0');
+    expect(out).toContain('CASE 1');
+  });
+
+  it('表达式「当」（赋值位）不受影响：缺否则仍只报 expr-missing-else', () => {
+    const src = '角色: 12\n时机 指令 310：\n    她的心情 = 当 她的好感度：\n        是 0 到 99 -> 0\n';
+    const c = codes(src);
+    expect(c).toContain('expr-missing-else');
+    expect(c).not.toContain('rand-case-incomplete');
+  });
+});
+
+/* ============================================================================ */
 /* §3.7 选项块                                                                   */
 /* ============================================================================ */
 

@@ -291,6 +291,7 @@ describe('SugarDiagnostic · 结构', () => {
       'unclosed-block',
       'expr-missing-else',
       'expr-body-not-expression',
+      'rand-case-incomplete',
       'interpolation-block-expression',
       'interpolation-unclosed',
       'interpolation-nested',

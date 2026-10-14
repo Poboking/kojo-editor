@@ -758,7 +758,55 @@ class BlockParser {
 
   private parseWhenBlock(headLine: LogicalLine, subject: string): WhenBlock {
     this.cursor.next();
-    return this.parseWhenBodyAfterHead(headLine, subject);
+    const block = this.parseWhenBodyAfterHead(headLine, subject);
+    this.checkRandCoverage(block);
+    return block;
+  }
+
+  /**
+   * E17：语句面「当」块的 `RAND:n` **缺档**诊断（规格见 `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` §3.6 / §8）。
+   *
+   * 仅查**可证伪**的情形——主体是常量 `RAND:n` / 糖形 `随机(n)`（n ≥ 1 的十进制字面量）、
+   * **没有** `否则：` 分支、且所有 `是` 值均为十进制字面量（单值或 `a 到 b` 区间）时，
+   * `是` 档位并集未盖满 `0..n-1` → 报错（掷到缺失档位时引擎静默、什么都不会打印）。
+   *
+   * 主语含别名 / 变量 / 字符串字面量，或分支值含非数字字面量 → **一律不报**
+   * （无法证明缺档，宁可不报、绝不猜）。表达式「当」（赋值位，`parseWhenExpr`）已有
+   * `expr-missing-else` 覆盖，不走此处；原生 `SELECTCASE` 亦不在糖管辖内。
+   */
+  private checkRandCoverage(block: WhenBlock): void {
+    const n = randLiteralCount(block.subject);
+    if (n === null) return;
+    if (block.branches.some((b) => b.kind === 'else')) return;
+
+    const intervals: Array<readonly [number, number]> = [];
+    const written: string[] = [];
+    for (const branch of block.branches) {
+      if (branch.kind !== 'case') continue;
+      for (const v of branch.values) {
+        const from = intLiteral(v.from);
+        if (from === null) return; // 含无法证明的值 → 放弃（不猜）
+        if (v.to === null) {
+          intervals.push([from, from]);
+          written.push(v.from.trim());
+        } else {
+          const to = intLiteral(v.to);
+          if (to === null) return;
+          intervals.push([from, to]);
+          written.push(`${v.from.trim()} 到 ${v.to.trim()}`);
+        }
+      }
+    }
+
+    if (coversRange(intervals, n)) return;
+    this.sink.report({
+      code: 'rand-case-incomplete',
+      severity: 'error',
+      message:
+        `「当 ${block.subject}：」的档位（${written.join('、')}）没盖满 0 到 ${n - 1}，` +
+        `也没有「否则：」——掷到没写的档位时什么都不会发生。请补齐档位，或加一个「否则：」。`,
+      loc: block.loc.start,
+    });
   }
 
   /** 已消费行之后的块体解析（随机候选里出现块头时） */
@@ -1271,6 +1319,39 @@ function mergeSpan2(
   const last = items.length > 0 ? items[items.length - 1]! : null;
   const end = last?.loc.end ?? { line: start.line, column: start.column };
   return { start, end };
+}
+
+/**
+ * `RAND:n` / 糖形 `随机(n)` 常量主体 → n（n ≥ 1 的十进制字面量）；非此形态返回 null
+ * （E17 缺档诊断只认这两种可证伪的常量主体）。大小写不敏感、允许中/半角括号与冒号。
+ */
+function randLiteralCount(subject: string): number | null {
+  const m = /^(?:RAND|随机)\s*(?:[:：]\s*(\d+)|[（(]\s*(\d+)\s*[）)])$/i.exec(subject.trim());
+  if (!m) return null;
+  const raw = m[1] ?? m[2];
+  if (raw === undefined) return null;
+  const n = Number(raw);
+  return n >= 1 ? n : null;
+}
+
+/** 十进制整数字面量 → 数值；否则 null（含别名 / 变量 / 字符串等不可证形态） */
+function intLiteral(raw: string): number | null {
+  const t = raw.trim();
+  return /^\d+$/.test(t) ? Number(t) : null;
+}
+
+/** 区间并集是否盖满 `[0, n-1]`（空集 → 否；先按起点排序再贪心合并） */
+function coversRange(intervals: ReadonlyArray<readonly [number, number]>, n: number): boolean {
+  if (intervals.length === 0) return false;
+  const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
+  if (sorted[0]![0] > 0) return false; // 0 档未覆盖
+  let hi = sorted[0]![1];
+  for (let i = 1; i < sorted.length; i++) {
+    const [a, b] = sorted[i]!;
+    if (a > hi + 1) break; // 出现空档，后续区间再高也补不上中间
+    if (b > hi) hi = b;
+  }
+  return hi >= n - 1;
 }
 
 /** 块类节点（需要继续吃更深缩进的块体） */
