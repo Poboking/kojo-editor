@@ -144,4 +144,4 @@ pnpm --filter @kojo/app tauri dev     # 首次需 cargo 编译 Tauri 依赖树�
 
 ## 许可
 
-[MIT](LICENSE)（内核与工具代码；不内置任何游戏内容）。
+[GPL-3.0](LICENSE)（内核与工具代码；不内置任何游戏内容）。
