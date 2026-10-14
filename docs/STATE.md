@@ -2,12 +2,12 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-14 深夜，E14 拖拽打开 + E15 亲密面方案 + HK-4 UI-4/5/6 + 糖复杂场景审计修复 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 + E16 拆解析墙 + HK-17 多版本口上识别 + 语料认内容不认名 + 159 先代占位文件名回退 + SV-1 糖视图原生对齐 + E13/P-1 段块糖与段级吸收 + L1 首屏白屏批 + HK-19 回放伪变量回收 + FT-2 方言口径收口 + FT-1 `.ERH` 作者自定名表 + 亲密面扩糖 P-3/P-4/P-6 + P-7 HPH 连续块 / P-8 MESSAGECHECK 数字返回投影 + HK-20 call-context 推导 + ALS-R3 验收产物落点外搬 + HK-23 未知率口径拆分 合流后本机实测）
+## 一、基线（2026-10-14 深夜，E14 拖拽打开 + E15 亲密面方案 + HK-4 UI-4/5/6 + 糖复杂场景审计修复 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 + E16 拆解析墙 + HK-17 多版本口上识别 + 语料认内容不认名 + 159 先代占位文件名回退 + SV-1 糖视图原生对齐 + E13/P-1 段块糖与段级吸收 + L1 首屏白屏批 + HK-19 回放伪变量回收 + FT-2 方言口径收口 + FT-1 `.ERH` 作者自定名表 + 亲密面扩糖 P-3/P-4/P-6 + P-7 HPH 连续块 / P-8 MESSAGECHECK 数字返回投影 + HK-20 call-context 推导 + ALS-R3 验收产物落点外搬 + HK-23 未知率口径拆分 + UX 术语清扫（`.kojo 语言` / `.kojo 预览`）与预览默认关 合流后本机实测）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2414 passed / 30 skipped（2444）**；135 文件过 / 11 跳（146） |
-| 全量测试（挂语料 `KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"`） | **2443 passed / 1 skipped（2444）**；146 文件全过（146）——语料面零红 |
+| 全量测试 | **2448 passed / 30 skipped（2478）**；138 文件过 / 11 跳（149） |
+| 全量测试（挂语料 `KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"`） | **2477 passed / 1 skipped（2478）**；149 文件全过（149）——语料面零红 |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **24 项全绿**（E7 写允许域批 +18→22；E14 拖放事件映射 +2；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
@@ -36,7 +36,7 @@
 ## 四、剩余欠账（数字/方向性的；认领的活在 BOARD.md）
 
 - ERB 波浪线两层：**结构类**（三类可证明错误，erb-parser，error）；**表达式级**已落地（E8，condition-extractor 复用自研表达式解析器，IF/ELSEIF/SIF/WHILE/SELECTCASE 条件表达式的词法/语法错，warning，code `erb.expr-*`；保守排除 CASE/PRINTDATA）。
-- 糖视图：**不走虚拟文档（原三问废止）**；现效果已封存（设置页「显示已封存功能」总开关可临时恢复）；新方向＝升糖语法写进编辑器原生显示（不写盘），未立项。
+- `.kojo 预览`（旧称"糖视图"）：**不走虚拟文档**（原三问废止）；已交付为常态功能——只读内存 model 原生渲染（2026-10-14 SV-1），**默认不开启**且不再受「显示已封存功能」总闸管辖（同日 UX-2；总闸现只管 `.kojo 转译检查` 与归档浏览器两只面板）；作者-facing 术语已去「语法糖」一族，统一 `.kojo 语言 / .kojo 预览 / .kojo 校验 / .kojo 转译检查`（守卫 `packages/app/tests/no-sugar-jargon.test.ts`）。
 
 ## 五、版图速览（代码地图）
 
