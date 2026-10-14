@@ -27,6 +27,9 @@ import { stubDict, stubFaceTable } from './support';
  * 名称表桩：`编号 → 名称`（与 eraTW `CSV/ex.csv` 同形态）。
  * **注意**没有 `NOWEX.csv` / `DOWNBASE.csv`——era 系里这两个族的名字就住在
  * `EX` / `BASE` 表上，正是 `index.ts` 那条"同名表候选"要解决的现实。
+ *
+ * ALS 批追加的那些表，**同编号写两行**就是盘上"主表 + `.als` 追加名表"并入后的形态
+ * （每行的取值与行号都逐字对过 `C:\Game\eratw-画蛇添足版eratw4.980\CSV\`）。
  */
 const TABLES: Record<string, [string, string][]> = {
   EX: [
@@ -35,11 +38,32 @@ const TABLES: Record<string, [string, string][]> = {
     ['10', '噴乳'],
     ['11', '射精'],
     ['55', 'TotalEX'],
+    ['1', 'Ｖ绝顶'], // ex.als:2
   ],
-  BASE: [['0', '胸部開発']],
+  BASE: [
+    ['0', '胸部開発'],
+    ['10', 'ムード'], // Base.csv:10
+    ['10', '情绪'], // Base.als:10（简写）
+    ['10', '情緒'], // Base.als:11（繁写）——同编号双写是 `.als` 的常态
+  ],
   MARK: [['0', '刻印Ａ']],
   STAIN: [['0', '污渍Ａ']],
   CFLAG: [['1088', '好感度']],
+  FLAG: [['1', 'SYS_EVENT起動FLAG'], ['73', '约会的对象'], ['73', 'デート相手']], // FLAG.csv:2 / :63 / FLAG.als:64
+  TFLAG: [['109', '被逆推開始時間'], ['109', '押し倒され開始時間']], // TFLAG.csv:59 / TFLAG.als:59
+  TEQUIP: [['13', '振動棒'], ['13', 'バイブ']], // Tequip.csv:16 / Tequip.als:16
+  // ↓ 以下族头**不入库**（读数见 `index.ts` 的表）：表在位、`.als` 别名也在位，但族头不判
+  PALAM: [['9', '潤滑'], ['9', '润滑']], // Palam.csv:6 / Palam.als:6
+  TCVAR: [['145', '烂醉'], ['145', '泥酔']], // TCVAR.csv:83 / TCVAR.als:76
+  TALENT: [['10', '胆量'], ['10', '度胸']], // Talent.csv:16 / Talent.als:16
+  ABL: [['9', '親密'], ['9', '亲密']], // Abl.csv:9 / Abl.als:9
+  EXP: [['26', '乳交経験'], ['26', 'パイズリ経験']], // exp.csv:31 / exp.als:32
+  SOURCE: [['51', '侮辱'], ['51', '辱め']], // source.csv:35 / source.als:35
+  ITEM: [['6', 'アナルビーズ']], // Item.als:7（主表 Item.csv:7 里 6 号是 `;6,後庭拉珠` 注释掉的）
+  EQUIP: [['1', 'アクセサリ']], // Equip.als:1
+  CSTR: [['15', 'モブ子能力']], // CSTR.als:19
+  DAY: [['2', '季節']], // DAY.csv:3（`DAY.als:3` 的名称段带行内 `;` 尾巴，见 adapter 侧测试）
+  JUEL: [['9', '潤滑'], ['9', '润滑']], // Juel.csv:6 / Juel.als:6
 };
 
 /** adapter 同语义的 `lookup`（表不在位 → undefined；未收录 → 只有回显，无 description） */
@@ -262,5 +286,74 @@ describe('P-10③-C 无字典装配零误伤（"未打开项目不误伤"钉死�
     expect(s.transpile(doc('    如果 她的好感度 > 0：\n        「x。」\n')).diagnostics).toEqual([]);
     const warn = s.transpile(cond('NOWEX:噴乳乳瞎写'));
     expect(warn.diagnostics).toEqual([]);
+  });
+});
+
+/* ============================================================= */
+/* D. ALS 批：`CSV/*.als` 进字典后的扩族面                        */
+/* ============================================================= */
+
+describe('ALS-D 扩族登记面：入库族判得出、不入库族逐族钉死不判', () => {
+  it('入库新族 `BASE` / `FLAG` / `TFLAG` / `TEQUIP`：`.als` 别名放行、瞎写判得出', () => {
+    const l = dict();
+    // `.als` 的简繁双写都在表里 ⇒ 两种写法都不判（BASE 实测 711 条表外全部由 `.als` 消掉）
+    for (const ref of ['BASE:情绪', 'BASE:情緒', 'BASE:ムード', 'FLAG:デート相手', 'FLAG:约会的对象', 'TFLAG:押し倒され開始時間', 'TEQUIP:バイブ']) {
+      expect(l.unlistedFamilyName?.(ref), `${ref} 应在表内`).toBeUndefined();
+    }
+    for (const ref of ['BASE:情緒瞎写', 'FLAG:デート相手瞎写', 'TFLAG:押し倒され開始時間瞎写', 'TEQUIP:バイブ瞎写']) {
+      const head = ref.slice(0, ref.indexOf(':'));
+      const name = ref.slice(head.length + 1);
+      expect(l.unlistedFamilyName?.(ref), `${ref} 应判表外`).toEqual({ family: head, name });
+    }
+  });
+
+  it('`TEQUIP:震动棒`（语料实有：`M_KOJO_K55_絶頂.ERB:217`）判得出 = 真阳性，不是误伤', () => {
+    // 表内是 `振動棒`（主表）/ `バイブ`（追加表），作者写的 `震动棒` 首字就不同 ⇒ 引擎取不到值
+    expect(dict().unlistedFamilyName?.('TEQUIP:震动棒')).toEqual({ family: 'TEQUIP', name: '震动棒' });
+  });
+
+  it('既有四族在并入 `.als` 后判据不变（`NOWEX:Ｖ绝顶` 由追加名表救回，其余逐字如旧）', () => {
+    const l = dict();
+    expect(l.unlistedFamilyName?.('NOWEX:Ｖ绝顶')).toBeUndefined(); // ← ex.als 的功劳（P-10③ 曾判表外 4 次）
+    expect(l.unlistedFamilyName?.('NOWEX:噴乳乳瞎写')).toEqual({ family: 'NOWEX', name: '噴乳乳瞎写' });
+    expect(l.unlistedFamilyName?.('MARK:刻印瞎写')).toEqual({ family: 'MARK', name: '刻印瞎写' });
+    expect(l.unlistedFamilyName?.('DOWNBASE:胸部開発')).toBeUndefined();
+    expect(l.unlistedFamilyName?.('STAIN:污渍Ａ')).toBeUndefined();
+  });
+
+  it('**不入库族逐族钉死**：表在位、`.als` 别名也在位，族头不登记就一条都不判', () => {
+    const l = dict();
+    const DECLINED = ['CFLAG', 'TALENT', 'TCVAR', 'ABL', 'PALAM', 'EXP', 'SOURCE', 'ITEM', 'EQUIP', 'CSTR', 'DAY', 'JUEL', 'EX'];
+    for (const family of DECLINED) {
+      // 连"一眼假"的名字都不判——扩族只按读数放行，不许顺手把误伤面打开
+      expect(l.unlistedFamilyName?.(`${family}:肯定不在表里的瞎写名`), `${family} 不该被核对`).toBeUndefined();
+    }
+  });
+
+  it('`PALAM:润滑` 仍不判（**本批明知可判而不判**：残余 42/43 是 `PALAM:LOCAL` 作用域形态）', () => {
+    const l = dict();
+    // 名字确实被 `.als` 带进字典了（负自证：换成登记族就判得出）
+    expect(l.unlistedFamilyName?.('PALAM:润滑')).toBeUndefined();
+    expect(l.unlistedFamilyName?.('PALAM:LOCAL')).toBeUndefined();
+    // 同一张表的姊妹写法在登记族里就判得出 ⇒ 上面两条"不判"是族头登记决定的，不是查不到
+    expect(l.unlistedFamilyName?.('BASE:润滑')).toEqual({ family: 'BASE', name: '润滑' });
+  });
+
+  it('转译层：登记族的表外名 → 恰 1 条 warning、产物原样；不登记族 → 0 条', () => {
+    const on = svc().transpile(cond('BASE:情緒瞎写 == 1'));
+    expect(familyWarns(on.diagnostics)).toHaveLength(1);
+    expect(on.diagnostics[0]!.severity).toBe('warning');
+    expect(on.erb).toContain('IF BASE:情緒瞎写 == 1');
+
+    const off = svc().transpile(cond('TCVAR:泥酔瞎写 == 1'));
+    expect(familyWarns(off.diagnostics)).toHaveLength(0);
+    expect(off.erb).toContain('IF TCVAR:泥酔瞎写 == 1');
+  });
+
+  it('登记族的名字经 `.als` 才查得到时，属性路径（`她的X`）也随之多命中一条', () => {
+    // `BASE:情绪` 是追加名表给的：属性反查（resolveFamily）现在认得它
+    expect(dict().resolveFamily('情绪')).toBe('BASE');
+    expect(dict().resolveFamily('情緒')).toBe('BASE');
+    expect(dict().nameAt?.('BASE', '10')).toBe('ムード'); // 编号侧仍是主表的名称（不被覆盖）
   });
 });
