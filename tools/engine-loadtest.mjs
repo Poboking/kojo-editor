@@ -11,6 +11,9 @@
 //   --workdir DIR                    默认 %TEMP%/kojo-loadtest-mirror；跑完删除（--keep 保留）。
 //   --timeout SEC                    单跑 watchdog，默认 240。
 //   --keep                           保留镜像目录。
+//   --list-warnings                  跑完后打印基线 A 的全部警告行（归一化去重后逐条，含 文件:第N行 定位；
+//                                     兼容选项 EXECUTE ERROR LINES:NO 时解释不成立的行即以 Lv2 警告形态出现，
+//                                     fatal「无法解释的行」本身不带定位，靠本开关捞取）+ fatal 上下文行。
 // 判定: 两次跑均见「ファイル読み込みが完了しました」 + W(B)−W(A)=∅（警告行= 警告Lv1/Lv2 前缀或含
 //   已经被定义过/解釈不可能；归一化剥 elapsed 数字） + 语料完整性抽查（3 个随机 ERB 前后哈希）不变。
 //   加载完成提示之后的 fatal（原版语料已知 title→menu 崩溃）一律忽略。
@@ -44,11 +47,12 @@ const usageErr = (msg) => { console.error('[用法] ' + msg); process.exit(2); }
 
 // ── 参数解析 ──
 const argv = process.argv.slice(2);
-const opts = { maps: [], keep: false, stripColorDupes: false, corpus: DEFAULT_CORPUS, engine: DEFAULT_ENGINE, workdir: DEFAULT_WORKDIR, timeoutSec: 240 };
+const opts = { maps: [], keep: false, stripColorDupes: false, listWarnings: false, corpus: DEFAULT_CORPUS, engine: DEFAULT_ENGINE, workdir: DEFAULT_WORKDIR, timeoutSec: 240 };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--keep') opts.keep = true;
   else if (a === '--strip-color-dupes') opts.stripColorDupes = true;
+  else if (a === '--list-warnings') opts.listWarnings = true;
   else if (a === '--map') { const v = argv[++i]; v === undefined ? usageErr('--map 需要 <artifact>=<相对路径>') : opts.maps.push(v); }
   else if (a.startsWith('--map=')) opts.maps.push(a.slice(6));
   else if (a === '--corpus') opts.corpus = argv[++i];
@@ -263,6 +267,10 @@ timings.push(['跑 A（基线）', runA.wallMs]);
 if (!runA.loadDone) fail(`跑 A 未见加载完成行（timedOut=${runA.timedOut}, waits=${runA.waitCount}, dialogs=${runA.dialogCount}）；输出尾部: ${runA.lines.slice(-5).join(' | ')}`);
 const W0 = warningSet(runA.lines);
 console.log(`[A] 加载完成：引擎报 ${runA.loadReportedSec}s / 实测 ${fmt(runA.loadWallMs)}（跑至退出 ${fmt(runA.wallMs)}）；警告 ${multisetSize(W0)} 条（去重 ${W0.size}），waits=${runA.waitCount}, dialogs=${runA.dialogCount}`);
+if (opts.listWarnings) {
+  for (const [k, c] of W0) console.log(`[warn×${c}] ${k}`);
+  for (const l of runA.lines) if (/无法解释|停止运行|解釈不可能/.test(l)) console.log('[fatal上下文] ' + l);
+}
 
 // 跑 B 前重建镜像：保证 B 与 A 的差 = 换入产物本身（引擎残留归零）
 const buildB = buildMirror('B');

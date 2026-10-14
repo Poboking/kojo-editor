@@ -92,6 +92,17 @@ const CHECKS = [
     },
   },
   {
+    name: 'engine-setup',
+    describe: 'CliDebug 引擎重建安装（engine-setup.mjs：dotnet 检查→clone→publish→安装→冒烟；分钟级，不进 all）',
+    precheck: () => {
+      const exe = process.platform === 'win32' ? 'dotnet.exe' : 'dotnet';
+      const found = (process.env.PATH || '').split(path.delimiter)
+        .some((d) => { try { return d && fs.existsSync(path.join(d, exe)); } catch { return false; } });
+      return found ? null : '缺 dotnet SDK（winget install Microsoft.DotNet.SDK.8；工具本身缺 SDK 会退出码 2 并打印提示）';
+    },
+    run: async (argv) => exitToResult(await shNode(['tools/engine-setup.mjs', ...argv])),
+  },
+  {
     name: 'loadtest',
     describe: '整包加载实测（engine-loadtest.mjs，硬链接镜像 + 双跑增量警告对拍；分钟级，不进 all）',
     precheck: () => {
