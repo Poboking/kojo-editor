@@ -3874,13 +3874,14 @@ button.primary .hint {
   min-width: var(--cm-rowhead-w, 0);
   max-width: var(--cm-rowhead-w, none);
 }
-/* 首列右缘的列宽拖拽把手：一枚 8px 命中条**骑在列边界上**（边界两侧各 4px），
-   鼠标落在可见边界线附近即可抓取（与 .cm-split 同族；键盘不接）。
-   角格 sticky ⇒ 把手随表头常驻；静息不显，悬停 / 拖拽中把边界线点亮。 */
+/* 首列列宽拖拽把手：表头角格与**每一行的行头**右缘各一枚 8px 竖条 ⇒ 整列任意处都能拉伸
+   （与 .cm-split 同族；键盘不接）。贴右缘内侧（right:0）而非外溢——行头在视口化路径下
+   带 overflow:hidden，外溢的半截会被裁掉；命中区即该格最后 8px，::after 亮线仍在右缘。
+   静息不显，悬停 / 拖拽中（.cm-scroll.col-resizing）把边界线点亮。 */
 .cm-corner-resize {
   position: absolute;
   top: 0;
-  right: -4px;
+  right: 0;
   bottom: 0;
   width: 8px;
   cursor: col-resize;
@@ -3892,13 +3893,13 @@ button.primary .hint {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 4px; /* 8px 把手的中线 ⇒ 正压在列边界上 */
+  right: 0;
   width: 1px;
   background: transparent;
   transition: background-color var(--dur-1) var(--ease-out);
 }
 .cm-corner-resize:hover::after,
-.cm-corner-resize.dragging::after {
+.cm-scroll.col-resizing .cm-corner-resize::after {
   background: var(--accent);
 }
 /* 单元格：紧凑方钮。.on 实心强调色、.off 近乎空白，一眼分辨填充/留空 */
@@ -4002,10 +4003,10 @@ button.primary .hint {
 .cm-subth.folded {
   opacity: 0.3;
 }
-/* 折叠组在表体里的占位格：留空维持列对齐、几乎不可见 */
-.cm-gap {
-  border: 1px solid rgba(255, 255, 255, 0.03);
-  background: transparent;
+/* 折叠组占位格里的按钮：只隐藏、**不卸载**——卸载会让一次折叠增删上万节点
+   （实测 276 列 × 可见行：主线程卡 ~1.9s + 整列闪白）。 */
+.cm-hid {
+  visibility: hidden;
 }
 /* 网格区 ←→ 详情区的拖拽分隔线（HK-14）：静息一条细线，悬停 / 拖拽中亮起
    （与壳层 .resizer / .kp-splitter 同族；键盘不接——与壳层分栏把手同口径）。 */

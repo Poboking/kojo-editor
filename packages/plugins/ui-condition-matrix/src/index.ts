@@ -102,10 +102,11 @@ type SplitterPointer = {
   currentTarget: { setPointerCapture(pointerId: number): void };
 };
 
-/** 首列列宽拖拽指针事件的最小形状（水平方向，读 clientX） */
+/** 首列列宽拖拽指针事件的最小形状（水平方向，读 clientX；事件在 .cm-scroll 上委派 ⇒ 读 target） */
 type ColResizePointer = {
   pointerId: number;
   clientX: number;
+  target: { closest?: (selector: string) => unknown } | null;
   preventDefault(): void;
   currentTarget: { setPointerCapture(pointerId: number): void };
 };
@@ -153,8 +154,20 @@ const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): Re
     const folded = foldedFaces.has(group.face);
     for (const col of group.columns) {
       if (folded) {
-        // 折叠组：留占位空 td，维持与表头的列对齐
-        cells.push(createElement('td', { key: col.key, className: 'cm-gap' }));
+        // 折叠组：占位格**保留同形 DOM**（td + button），只给按钮加 `.cm-hid`（visibility:hidden）。
+        // 实测（10224 格 / 276 列）：卡顿主因有两份——①浏览器样式重算，其中「改动 td 的 class」
+        // 一份就占 ~583ms、「只动 button 的 class」仅 ~134ms；②`table-layout:auto` 的整表重排
+        // （清空 subth 标签 / `display:none` 改内容尺寸都会触发，~1.8s）。故：td **不改 class**、
+        // 按钮只加 `.cm-hid`（visibility 不改布局、保留盒子）、表头 subth 标签照常渲染
+        // （由既有 `.cm-subth.folded{opacity:.3}` 弱化）——全流程只改非布局属性 ⇒ 只重绘不重排。
+        // 折叠格不给 data-r/data-c（沿用「折叠组不参与方向键导航」的原口径）。
+        cells.push(
+          createElement(
+            'td',
+            { key: col.key },
+            createElement('button', { className: 'cm-cell off cm-hid', 'aria-hidden': 'true' }, '·'),
+          ),
+        );
         continue;
       }
       const cell = row.cells[col.key];
@@ -211,6 +224,9 @@ const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): Re
       { className: 'cm-rowhead', title: row.key },
       createElement('span', { className: 'cm-row-name' }, row.label ?? row.key),
       row.label ? createElement('span', { className: 'cm-row-key dim' }, row.key) : null,
+      // 列宽拖拽把手（HK-25）：**整列**每一行的行头右缘都放一枚，使「状态 \ 时机」列
+      // 在任意行都能拉伸（不再只有表头角格可抓）。事件由 .cm-scroll 委派，此处不挂 handler。
+      createElement('div', { className: 'cm-corner-resize', 'aria-hidden': 'true' }),
     ),
     ...cells,
   );
@@ -474,8 +490,10 @@ export function createUiConditionMatrixPlugin(): Plugin {
         };
 
         // 首列（「状态 \ 时机」）列宽拖拽（HK-25）：与详情分隔线同范式（pointer 捕获 + 钳制）。
-        // 角格 sticky 定位 ⇒ 把手随表头常驻可见；拖出的宽度经 `--cm-rowhead-w` 落到角格与全部行头。
+        // 把手遍布**整列**（表头角格 + 每一行的行头），故事件挂在 .cm-scroll 上**委派**：
+        // 行组件不为拖拽持有 handler ⇒ `memo` 不被破坏；命中与否只看 target 落在不落在把手上。
         const onColDown = (e: ColResizePointer): void => {
+          if (!e.target?.closest?.('.cm-corner-resize')) return;
           e.preventDefault();
           colDragSeed.current = {
             pointerId: e.pointerId,
@@ -697,16 +715,13 @@ export function createUiConditionMatrixPlugin(): Plugin {
                 '状态 \\ 时机',
                 // 首列列宽拖拽把手（HK-25）：右缘一枚竖条，静息隐形、悬停 / 拖拽中亮起；
                 // 角格 sticky ⇒ 纵向滚动时随表头常驻，横向滚动时首列钉在 left:0 不漂移。
+                // 事件在 .cm-scroll 上委派（见 onColDown），此处只放标记。
                 createElement('div', {
-                  className: 'cm-corner-resize' + (colDragging ? ' dragging' : ''),
+                  className: 'cm-corner-resize',
                   role: 'separator',
                   'aria-orientation': 'vertical',
                   'aria-label': '拖动调整状态列宽',
                   title: '拖动调整状态列宽',
-                  onPointerDown: onColDown,
-                  onPointerMove: onColMove,
-                  onPointerUp: onColEnd,
-                  onPointerCancel: onColEnd,
                 }),
               ),
               ...matrix.groups.map((group) => {
@@ -730,8 +745,10 @@ export function createUiConditionMatrixPlugin(): Plugin {
               null,
               ...matrix.groups.flatMap((group) => {
                 const folded = foldedFaces.has(group.face);
-                // 非指令的单列组：第二行留空（避免与第一行重复）
-                const blank = folded || (group.columns.length === 1 && group.columns[0]?.instructionNo === null);
+                // 非指令的单列组：第二行留空（避免与第一行重复）。
+                // 折叠**不再清空标签**——清空会让该列固有宽度塌陷、逼 `table-layout:auto` 重排全表
+                // （实测折叠一次卡 ~1.8s + 整列闪白）；改由 `.cm-subth.folded{opacity:.3}` 弱化。
+                const blank = group.columns.length === 1 && group.columns[0]?.instructionNo === null;
                 return group.columns.map((col) =>
                   createElement(
                     'th',
@@ -811,9 +828,14 @@ export function createUiConditionMatrixPlugin(): Plugin {
           grid = createElement(
             'div',
             {
-              className: 'cm-scroll' + (virtualize ? ' cm-virt' : ''),
+              className: 'cm-scroll' + (virtualize ? ' cm-virt' : '') + (colDragging ? ' col-resizing' : ''),
               ref: scrollRef,
               onKeyDown: onGridKeyDown,
+              // 首列拖拽 **委派**到本容器：把手遍布整列（角格 + 每个行头），行组件不持有 handler
+              onPointerDown: onColDown,
+              onPointerMove: onColMove,
+              onPointerUp: onColEnd,
+              onPointerCancel: onColEnd,
               onScroll: virtualize ? onScroll : undefined,
               // 未拖过时变量未设 ⇒ CSS 回退 auto（自然宽度，逐字不变）
               style: Object.keys(gridStyle).length > 0 ? (gridStyle as CSSProperties) : undefined,
