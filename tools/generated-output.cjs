@@ -10,7 +10,7 @@
 //   ⇒ 落点搬到仓库外的固定沙盒（C:/tmp 下，与既有探针目录同族，跨主机可复现，不用 os.tmpdir 的随机路径），
 //     并在**任何一次写盘之前**加一道位置判定：目标落在语料/游戏根之下 = 直接报错退出（**绝不静默改路径**）。
 //
-// 纪律：本模块除 `ensureGeneratedDir` 外**全是纯函数**——只算路径、只做字符串判定，不扫盘、不读语料、
+// 纪律：本模块**全是纯函数**——只算路径、只做字符串判定，不建目录、不扫盘、不读语料、
 //   不碰引擎，因此可脱离真语料/真引擎单测（tools/tests/generated-output.test.ts）。
 // 路径语义：Windows（这两个工具只在 Windows 上驱真引擎，落点写死 C:/tmp），故一律按 win32 规则归一，
 //   比较默认大小写不敏感——单测在任意 host 平台跑结果都一致。
@@ -25,8 +25,7 @@ const DEFAULT_OUT_ROOT = 'C:/tmp/kojo-generated-erb';
 const ERB_SUFFIX = '.generated.ERB';
 const MAP_SUFFIX = '.generated.map.json';
 
-/** 产物对：`<stem>.<key>.generated.ERB` 与 `<stem>.<key>.generated.map.json`，同目录同基名——
- *  scene-run.cjs 的回映约定就是「产物同名兄弟」（`x.generated.ERB` → `x.generated.map.json`），拆不得。 */
+/** 门禁拒绝 / 派生入参不合法时抛这个（调用方一律硬失败退出，绝不退化成"换个路径继续跑"）。 */
 class GeneratedOutputError extends Error {}
 
 /** win32 归一：反斜杠→正斜杠、折叠 `.`/`..`、去尾斜杠（保留盘符根）。 */
@@ -60,6 +59,8 @@ function resolveOutRoot(env = process.env) {
  * 由输入文件路径派生一对产物路径（纯函数，不建目录）。
  * 派生规则（可预期 + 不撞名）：`<落点根>/<输入基名去扩展>.<输入绝对路径 sha256 前 10 位>.generated.ERB`
  *  ——同名夹具放在不同目录也各得其所（key 来自解析后的绝对路径），后跑的不覆盖先跑的。
+ * 产物**成对同目录同基名**：scene-run.cjs:128 的回映按「产物同名兄弟」找 map
+ *  （`x.generated.ERB` → `x.generated.map.json`），拆开就断了。
  * @param {string} input 夹具/语料里的 .kojo 或 .erb 路径
  * @param {{root?: string, env?: NodeJS.ProcessEnv}} [opts]
  * @returns {{root:string, input:string, key:string, erbPath:string, mapPath:string}}
@@ -106,11 +107,8 @@ function assertOutsideRoots(targets, protectedRoots, opts = {}) {
   return list;
 }
 
-/** 建落点目录（唯一的副作用点，调用方在门禁通过后才准调）。 */
-function ensureGeneratedDir(dir) {
-  require('node:fs').mkdirSync(dir, { recursive: true });
-  return dir;
-}
+/** 建落点目录由调用方在门禁通过后做（两个工具都是在内联 vitest 里 mkdirSync，
+ *  本模块自身不写盘——保持纯函数才可脱离引擎/语料单测）。 */
 
 module.exports = {
   ENV_OUT_DIR,
@@ -123,5 +121,4 @@ module.exports = {
   resolveOutRoot,
   deriveGeneratedPaths,
   assertOutsideRoots,
-  ensureGeneratedDir,
 };
