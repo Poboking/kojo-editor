@@ -277,6 +277,55 @@ export interface GroupBlock extends SugarNodeBase {
   body: SugarNode[];
 }
 
+/* ============================== 段块 ============================== */
+
+/**
+ * `段` 块（E13 批）——**多信封分段**的糖形。
+ *
+ * ## 它解决的问题
+ *
+ * 绝顶 / 性交面的库内主流形态是"一个函数里 N 个 `LOCAL = n` + `IF LOCAL && <条件>`
+ * 信封段"（`M2`/`M3` 记入チェック信封）。手写每段 6–7 行脚手架，且 `LOCAL` 槽
+ * **不可写**（它不是变量族头，糖里写不出来）。`段` 把整段脚手架收成一行块头。
+ *
+ * ## 写法与产物
+ *
+ * ```
+ * 段 NOWEX:噴乳：
+ *     「……」
+ * 段 TFLAG:193 关：
+ *     「……」
+ * ```
+ *
+ * 产物（每段一个信封；`关` 段写 `LOCAL = 0`，即库内"停用占位"语义）：
+ *
+ * ```
+ * ;-------------------------------------------------
+ * ;NOWEX:噴乳（記入チェック＝1）
+ * LOCAL = 1
+ * ;-------------------------------------------------
+ * IF LOCAL && NOWEX:噴乳
+ *     …
+ * ENDIF
+ * ```
+ *
+ * ## 契约口径
+ *
+ * - `condition` 是**段头原文**（`段` 之后、`关`/冒号之前的 ERB 条件表达式）——
+ *   与 `如果` 走**同一条**表达式降糖管线；契约层不解释它；
+ * - 段是**时机正文顶层**的写法：同一时机里要么全是 `段`、要么全无（混排报错，
+ *   见诊断码 `section-mixed`）；段内**不许再嵌套** `段`（`section-nested`）。
+ */
+export interface SectionBlock extends SugarNodeBase {
+  kind: 'sectionBlock';
+  /** 段头原文（ERB 条件表达式；未降糖） */
+  condition: string;
+  /** `关`（禁用占位）：产物把该段的 `LOCAL` 写成 `0`（与库内空模板同义） */
+  disabled: boolean;
+  /** 段体（缩进更深的节点序列；不得再含 `段`） */
+  body: SugarNode[];
+}
+
 /* ============================== 选项块 ============================== */
 
 /**
@@ -530,6 +579,7 @@ export type SugarStatement =
   | GroupBlock
   | ChoiceBlock
   | ColorBlock
+  | SectionBlock
   | CustomCommandBlock
   | RawLine
   | RawFunctionBlock
@@ -910,6 +960,14 @@ export type SugarDiagnosticCode =
   /* --- 选项（规范 §3.7） --- */
   | 'choice-multiple' // 一个时机内出现多个 `选项` 块
   | 'choice-nested' // `选项` 块嵌套
+  /* --- 段块（E13 批） --- */
+  /** `段` 块嵌套（段体内再出现 `段`）——库内信封段是同层的，嵌套会把 `LOCAL` 槽的语义搅混。 */
+  | 'section-nested'
+  /**
+   * 时机正文**顶层**同时写了 `段` 与普通语句——两种产物的骨架不同（有无外层
+   * `IF LOCAL` 信封），拼在一起没有唯一可写回的形状；报错并**不产半成品**。
+   */
+  | 'section-mixed'
   /* --- 文本行（规范 §3.3 / §4.4） --- */
   | 'cont-inside-quotes' // `续` 标记写在了引号内
   | 'unknown-identifier' // 未命中别名的裸标识符且不在变量字典中

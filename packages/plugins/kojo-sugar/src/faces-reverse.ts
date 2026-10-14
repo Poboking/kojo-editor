@@ -27,7 +27,7 @@
  * **产出的就是作者能写下的那一行**（糖视图的第一原则：看见的即写得出的）。故段取值
  * 不作位置段插在分野后面，而是按 §3.2 的**命名参数**写法收尾：
  *
- * `时机 <分野> [编号][ <命名参数>: <取值>][ 成否]< （X版）>：`
+ * `时机 <分野> [编号][ <命名参数>: <取值>][ 成否]：`
  *
  * - `类型:` 取值为 adapter 声明的**第一个候选**（= 规范"默认 `COM`"，codegen 同一口径）
  *   时**整个子句省略**：`M_KOJO_MESSAGE_COM_K1_310` → `时机 指令 310：`。把 `COM` 抄进
@@ -38,9 +38,9 @@
  * - **角色号 `{n}` 不进标签**（规范 §3.2：角色由文件头 `角色:` 声明，块头只有分野与编号；
  *  抄进来会得到 `时机 事件 1 2：` 这种分不清哪个是时机的标签）；
  * - 命中 `success` 子模板时补 ` 成否`（该函数在糖层由 `成否:` 子句生成，无独立写法）；
- * - 家族段非空（别人版 `_少女之梦`）时补 `（少女之梦版）`：署名/双真相源是本项目
- *  的一等公民，"这是谁改的版本"必须在读者视野里——它对应文件头 `口上:`，出现在每一段
- *  的开头是**读数时不需要回头翻头**。
+ *  家族段（别人版）**不进标签**（E13-1）：全角括号会把编号段变成"中文指令名"，
+ *  转译器查不到 ⇒ 照抄回写必报错。署名/双真相源仍是一等公民，改由 `family()` 出口
+ *  交给投影在**文件头**发一行 `口上: <家族名>`——那才是作者真能写下的声明。
  */
 
 import type { KojoFaceTable } from '@kojo/plugin-api';
@@ -70,6 +70,15 @@ const FAMILY_SEG = '((?:_[^（）()]*?(?:（[^）]*）)?)?)';
 export interface FaceNameIndex {
   /** 函数名 → 糖标签；解不出 / 有歧义 → `undefined`（绝不猜） */
   label(functionName: string): string | undefined;
+  /**
+   * 函数名 → **家族名**（`口上:` 的取值；标准版 = `undefined`）。
+   *
+   * E13-1：家族 fork 不再塞进块头（`时机 指令 88（TOKI版）：` 里的全角括号会把
+   * 编号段变成"中文指令名"，转译器查不到 ⇒ 作者照抄回写必报错），改由投影在
+   * **文件头**发一行 `口上: <家族名>` —— 那才是可写形的真实声明。故标签与家族
+   * 分两个出口，同源于一次匹配（不会互相漂移）。
+   */
+  family(functionName: string): string | undefined;
   /** 候选数（诊断与测试用） */
   readonly size: number;
 }
@@ -154,16 +163,20 @@ export function buildFaceNameIndex(table: KojoFaceTable | undefined): FaceNameIn
   // 具体度降序：第一个胜出候选即"最具体"（稳定排序，模板顺序仅在同分时决定优先级）
   matchers.sort((a, b) => b.literalLen - a.literalLen);
 
-  const cache = new Map<string, string | undefined>();
+  const cache = new Map<string, LabelHit | undefined>();
 
-  const label = (functionName: string): string | undefined => {
+  const compute = (functionName: string): LabelHit | undefined => {
     if (cache.has(functionName)) return cache.get(functionName);
     const hit = computeLabel(matchers, functionName);
     cache.set(functionName, hit);
     return hit;
   };
 
-  return { label, size: matchers.length };
+  return {
+    label: (functionName: string) => compute(functionName)?.label,
+    family: (functionName: string) => compute(functionName)?.family,
+    size: matchers.length,
+  };
 }
 
 /** 去掉 `（ARG,ARG:1）` 之类的参数段（糖表层不手写函数参数，规范 §3.2） */
@@ -172,7 +185,15 @@ export function stripParams(head: string): string {
   return (i < 0 ? head : head.slice(0, i)).trim();
 }
 
-function computeLabel(matchers: readonly FaceMatcher[], name: string): string | undefined {
+/** 一次匹配的产物：可写块头 + 家族名（E13-1 起分两个出口） */
+interface LabelHit {
+  /** 作者能照抄回写的块头（家族 fork **不进**这一行） */
+  label: string;
+  /** 家族名（`_TOKI` → `TOKI`；标准版 = `undefined`） */
+  family: string | undefined;
+}
+
+function computeLabel(matchers: readonly FaceMatcher[], name: string): LabelHit | undefined {
   const hits: Array<{ m: FaceMatcher; caps: string[] }> = [];
   for (const m of matchers) {
     const r = m.re.exec(name);
@@ -205,7 +226,15 @@ function computeLabel(matchers: readonly FaceMatcher[], name: string): string | 
     const declared = first.m.segments?.[slot];
     // 段取值换回**声明时的键名**（`CUSTOM_COM` → `自定指令`）：作者认的是中文键，
     // 而且这正好暴露"这个头是自定义指令面"这一事实。找不到键就用取值本身。
-    const key = declared ? (Object.keys(declared).find((k) => declared[k] === value) ?? value) : value;
+    const raw = declared ? (Object.keys(declared).find((k) => declared[k] === value) ?? value) : value;
+    // E13-1①：M1 委托桩的 `_1` 尾要剥掉（`…_COM_K49_88_1` → `编号 88`）。
+    // 理由：`时机 指令 88：` 正是这两个函数（桩 + 正文）的糖形——包着 `_1` 写出去
+    // 只会生成正文那一个函数，桩丢了；而库内 `{i}` 里的 `_1` 就是 M1 的委托后缀
+    // （判据见 `faces-reverse.test.ts`「`{i}` 允许带后缀的真实编号」）。**只剥 `_1`**：
+    // 别的后缀（`_EXTRA_SUFFIX`）不是委托记号，剥了就是改名。
+    const key = slot === 'i' ? stripDelegationSuffix(raw) : raw;
+    // `{i}` 恰好就是 `_1`（`…_K1__1`）⇒ 剥完是空的，给不出可写块头 → 整头不标
+    if (slot === 'i' && key.length === 0) return undefined;
     if (first.m.segNames.has(slot)) {
       // 上下文段 = 规范 §3.2 的**命名参数**（`com` ← `类型:`，与 codegen 同一函数）。
       // **默认取值 = adapter 声明的第一个键**（codegen 的缺省段规则同源，规范 §3.2
@@ -224,8 +253,20 @@ function computeLabel(matchers: readonly FaceMatcher[], name: string): string | 
     }
     positional.push(key);
   }
-  const fork = family.length > 0 ? `（${family.replace(/^_/, '')}版）` : '';
+  // E13-1②：家族 fork **不进块头**（全角括号会让编号段被当成中文指令名，转译报错）。
+  // 家族信息由 `family()` 出口单独给投影发文件头 `口上: <家族名>`。
   const tail = [...positional, ...named];
   if (first.m.kind === '成否') tail.push('成否');
-  return `时机 ${first.m.face}${tail.length ? ` ${tail.join(' ')}` : ''}${fork}：`;
+  return {
+    label: `时机 ${first.m.face}${tail.length ? ` ${tail.join(' ')}` : ''}：`,
+    family: family.length > 0 ? family.replace(/^_/, '') : undefined,
+  };
+}
+
+/**
+ * 剥 M1 委托桩的后缀（`88_1` → `88`；`600_1` → `600`）。
+ * **只剥恰好一个 `_1` 尾**——其余后缀（`_EXTRA_SUFFIX` / `ONABARE`）原样保留。
+ */
+function stripDelegationSuffix(index: string): string {
+  return index.endsWith('_1') ? index.slice(0, -2) : index;
 }

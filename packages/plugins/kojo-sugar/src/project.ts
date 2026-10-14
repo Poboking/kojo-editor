@@ -248,6 +248,10 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   const recs: LineRec[] = [];
   const nativeByReason = new Map<SugarProjectNativeReason, number>();
   let inSkip = false;
+  // E13-1②：家族 fork 改发文件头 `口上: <家族名>`——只发一次；源里已有 `口上:`
+  // 声明（作者自己写过）时不重复发。
+  let familyHeaderEmitted = false;
+  const sourceDeclaresFamily = lines.some((l) => /^\s*口上\s*[:：]/.test(l));
 
   for (let i = 0; i < total; i++) {
     const ln = i + 1;
@@ -289,6 +293,22 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         text: '',
         indent: 0,
         visible: false,
+        reason: null,
+      });
+      continue;
+    }
+
+    // 段信封（E13-2）：`LOCAL = n` + `IF LOCAL && <条件>` + `ENDIF` 折叠成一层
+    // `段 <条件>：` 头（`LOCAL = 0` → `关` 占位）。头落在原 `IF` 那一行上，
+    // 段体保持原相对深度（它本来就比 `IF` 深一层）。
+    const sectionHead = skeleton.sectionHeadAt.get(ln);
+    if (sectionHead !== undefined) {
+      recs.push({
+        line: ln,
+        kind: 'control',
+        text: sectionHead,
+        indent: ctx.indentAt(ln, raw),
+        visible: true,
         reason: null,
       });
       continue;
@@ -505,12 +525,22 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
 
     // 函数头：反解成糖的「时机 …：」块头（批 I）。解不出 / 歧义 → 原样留原代码
     if (content.startsWith('@') && headIndex !== undefined) {
-      const label = headIndex.label(stripParams(content.slice(1).trim()));
+      const fnName = stripParams(content.slice(1).trim());
+      const label = headIndex.label(fnName);
       if (label !== undefined) {
+        // E13-1②：家族 fork（`_TOKI`）不再塞进块头（全角括号会让编号段被当成中文
+        // 指令名，转译必报错），改为在投影产物里发一行**文件头** `口上: <家族名>`
+        // ——那才是可写形的真实声明（`口上:` 的取值规则见规范 §3.1）。只发一次；
+        // 源文本里已有 `口上:` 声明时一个都不发（不重复）。
+        const family = headIndex.family(fnName);
+        const withHeader =
+          family !== undefined && !familyHeaderEmitted && !sourceDeclaresFamily
+            ? ((familyHeaderEmitted = true), `口上: ${family}\n${label}`)
+            : label;
         recs.push({
           line: ln,
           kind: 'control',
-          text: label,
+          text: withHeader,
           indent: ctx.indentAt(ln, raw),
           visible: true,
           reason: null,
@@ -643,7 +673,10 @@ function toSegment(run: LineRec[]): SugarProjectSegment {
     fromLine: run[0]!.line,
     toLine: run[run.length - 1]!.line,
     sugarText: text,
-    lineCount: visible.length,
+    // 行数按**实际产出的行**数（`sugarText` 的行数）：一条记录可能带多行文本
+    // （E13-1② 的函数头记录 = `口上: <家族名>` + `时机 …：` 两行），
+    // 直接数记录条数会让宿主的 ViewZone 高度少一行。
+    lineCount: visible.reduce((n, r) => n + (r.text.length === 0 ? 1 : r.text.split('\n').length), 0),
   };
 }
 
@@ -655,6 +688,13 @@ interface SkeletonPlan {
   absorbed: Set<number>;
   /** 该行因"信封被拆掉"而应**减掉**的缩进层数 */
   dedentAt: (line: number) => number;
+  /**
+   * 该行是**段信封**的头 → 投影成 `段 <条件>：`（E13-2；`关` 段带 ` 关`）。
+   *
+   * 与 `absorbed` 的分工：段头那一行**要产出可见行**（它就是段块头），
+   * 信封的另两行（`LOCAL = n` / `ENDIF`）走 `absorbed`。
+   */
+  sectionHeadAt: Map<number, string>;
 }
 
 /**
@@ -693,6 +733,20 @@ function splitWrapperHead(content: string): { name: string; decl: string } | nul
  * `IF LOCAL` 在**缩进 0**；能配对到**同缩进** `ENDIF`；且**向上能找到函数头 `@…`**
  * （跳过注释/空行/`#` 指令）——证明这是函数级信封，而不是作者正文里的同名守卫。
  *
+ * **③ 段信封**（E13-2，`LOCAL = n` + `IF LOCAL && <条件>`）折叠成一层 `段 <条件>：` 头：
+ *
+ * ```
+ * LOCAL = 1           ┐ 吸收（记入チェック的值由糖的段头表达：`关` = 0）
+ * IF LOCAL && NOWEX:噴乳  ← 这一行变成 `段 NOWEX:噴乳：`（**要产出可见行**）
+ *     …段体…           │ 保持原相对深度（段头落在 `IF` 那一行上，段体本就深一层）
+ * ENDIF               ┘ 吸收
+ * ```
+ *
+ * 判据与纯信封**同款从严**，只有"函数头"这一条换成"**本行之前出现过 `@…`**"：
+ * 多信封分段是**一个函数里重复 N 次**的形态，第 2 段往上撞见的正是第 1 段的
+ * `ENDIF`（`funcHeadAbove` 的"紧邻"口径在这里必然落空）。"上无函数头就不动"这条
+ * 硬底线仍然成立（片段级投影不与段信封混淆）。
+ *
  * ## 为什么"宁可漏"是这里的硬底线
  *
  * 骨架与正文长得像（都是 `LOCAL = 1` / `IF` / `RETURN`）。判据放宽一点，就会把**作者的
@@ -703,17 +757,28 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
   const absorbed = new Set<number>();
   /** 逐行 dedent（信封内 -1；嵌套信封会叠加） */
   const dedent = new Array<number>(lines.length + 1).fill(0);
+  /** 段信封的头行 → `段 <条件>：`（E13-2） */
+  const sectionHeadAt = new Map<number, string>();
   const total = lines.length;
   let inSkip = false;
 
   const contentAt = (ln: number): string => contentOf(lines[ln - 1] ?? '');
   const indentAt = (ln: number): number => indentLevelOf(lines[ln - 1] ?? '');
 
-  /** 向上找最近的函数头 `@…`（跳过注释 / 空行 / `#` 指令）；找到返回行号 */
+  /**
+   * 向上找最近的函数头 `@…`（找到返回该行内容；否则 `undefined`）。
+   *
+   * 跳过四类行：注释 / 空行 / `#` 指令 / **已被骨架吸收或已是段头的行**
+   * （机器码可信），以及**任何缩进非 0 的行**（缩进行一定在某个块体里，而函数头
+   * 只能在第 0 列）。后两条是 E13-2 补的：多信封分段是**一个函数里重复 N 次**的
+   * 形态，第 2 段往上撞见的正是第 1 段的 `ENDIF` / 段头 / 段体——不跳过它们，
+   * "上无函数头就不动"这条底线会把**同函数的其余段**一起挡掉（K101 实测）。
+   */
   const funcHeadAbove = (from: number): string | undefined => {
     for (let ln = from - 1; ln >= 1; ln--) {
       const c = contentAt(ln);
-      if (c.length === 0 || c.startsWith(';') || c.startsWith('#')) continue;
+      if (c.length === 0 || c.startsWith(';') || c.startsWith('#') || indentAt(ln) !== 0) continue;
+      if (absorbed.has(ln) || sectionHeadAt.has(ln)) continue;
       return c.startsWith('@') ? c : undefined;
     }
     return undefined;
@@ -756,7 +821,7 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
     /* ---- ② 記入チェック信封 ---- */
     if (content !== 'LOCAL = 1' && content !== 'LOCAL = 0') continue;
     if (indentAt(ln) !== 0) continue;
-    // 向下跳过注释 / 空行，必须紧邻 `IF LOCAL`
+    // 向下跳过注释 / 空行，必须紧邻 `IF LOCAL`（纯）或 `IF LOCAL && <条件>`（段信封）
     let ifLn = ln + 1;
     while (ifLn <= total) {
       const c = contentAt(ifLn);
@@ -766,8 +831,18 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
       }
       break;
     }
-    if (contentAt(ifLn) !== 'IF LOCAL' || indentAt(ifLn) !== 0) continue;
-    // 必须能找到函数头（证明这是函数级信封，而不是正文里的同名守卫）
+    const ifContent = contentAt(ifLn);
+    if (indentAt(ifLn) !== 0) continue;
+    const isPlainEnvelope = ifContent === 'IF LOCAL';
+    // 段信封（E13-2）：`LOCAL = n` + `IF LOCAL && <条件>` + 配对 `ENDIF`（同一函数内）。
+    // 库内绝顶/性交面的主流形态——一个函数里 N 个这样的段门（`M_KOJO_K101_絶頂 .ERB`
+    // 的 噴乳/射精/放尿 三段即此形）。折叠成一层 `段 <条件>：` 头（n=0 → `关`）。
+    // 判据取**最紧**形态（与纯信封同款）：两行都在缩进 0、能配对到同缩进的 ENDIF、
+    // 且向上能找到函数头 `@…`；配不上就不动（宁缺勿吞作者逻辑）。
+    const sectionMatch = isPlainEnvelope ? null : /^IF LOCAL\s*&&\s*(.+)$/.exec(ifContent);
+    if (!isPlainEnvelope && sectionMatch === null) continue;
+    // "上无函数头就不动"：证明这是函数级信封，而不是正文里的同名守卫
+    // （`funcHeadAbove` 允许跳过已被骨架吸收的行 / 段头行 / 缩进行，见其注释）
     if (funcHeadAbove(ln) === undefined) continue;
     // 配对同缩进 ENDIF（自己数嵌套，不依赖扫描器的配对假设）
     let depth = 0;
@@ -786,6 +861,17 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
     }
     if (endLn < 0) continue;
 
+    if (!isPlainEnvelope) {
+      // **段信封**：`LOCAL = n` 与 `ENDIF` 吸收（段头由糖的 `段` 头表达），
+      // 段体**缩进不动**——段头落在原 `IF LOCAL && <条件>` 那一行上，段体本来
+      // 就比它深一层（信封拆掉后相对深度不变，与 §5.3 的缩进语义一致）。
+      const condition = sectionMatch![1]!.trim();
+      absorbed.add(ln);
+      absorbed.add(endLn);
+      sectionHeadAt.set(ifLn, content === 'LOCAL = 1' ? `段 ${condition}：` : `段 ${condition} 关：`);
+      continue;
+    }
+
     // 全中 → 吸收信封三行（+ 紧随的退出语句）
     absorbed.add(ln);
     absorbed.add(ifLn);
@@ -800,6 +886,7 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
   return {
     absorbed,
     dedentAt: (line) => (line >= 1 && line <= total ? (dedent[line] ?? 0) : 0),
+    sectionHeadAt,
   };
 }
 

@@ -29,6 +29,7 @@ import type {
   RandomInline,
   RawFunctionBlock,
   RawLine,
+  SectionBlock,
   SugarDiagnostic,
   SugarFrontMatter,
   SugarNode,
@@ -468,25 +469,64 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   em.pushGenerated(0, `RETURN RESULT`);
   em.blank();
 
-  em.pushGenerated(0, `@${baseName}_1${declClause}`);
-  em.pushGenerated(0, `;-------------------------------------------------`);
-  em.pushGenerated(0, `;記入チェック（=0, 非表示、1, 表示）`);
-  const empty = timing.body.length === 0;
-  em.pushGenerated(0, `LOCAL = ${empty ? 0 : 1}`);
-  em.pushGenerated(0, `;-------------------------------------------------`);
+  // ---- 段块（E13 批）：顶层含 `段` 时改用「逐段信封」骨架 ----
+  //
+  // 两种骨架**不可混排**：段块的产物里**没有**外层那对 `IF LOCAL`/`ENDIF`
+  // （每段自己带 `IF LOCAL && <条件>`），而普通正文靠外层信封守卫。混在一起
+  // 没有唯一可写回的形状 ⇒ 报 `section-mixed` 且**不产半成品**（与既有
+  // fail-closed 口径一致：宁可拒绝，不拼半个函数）。
+  const sections = timing.body.filter((n) => n.kind === 'sectionBlock');
+  const plain = timing.body.filter((n) => n.kind !== 'sectionBlock' && n.kind !== 'comment');
+  if (sections.length > 0 && plain.length > 0) {
+    ctx.sink.report({
+      code: 'section-mixed',
+      severity: 'error',
+      message:
+        '「段」块不能和别的语句混在同一个「时机」的最外层——「段」的产物没有外层 `IF LOCAL` 信封，混排没有唯一可写回的形状。请把普通语句挪进某一段里，或把段单独放在一个「时机」里。',
+      loc: timing.loc.start,
+    });
+    // **判据在发包装头之前**：报错后 return，产物里一个字都不留（"不产半成品"）。
+    return;
+  }
+  const sectionMode = sections.length > 0;
 
-  if (!empty) {
+  em.pushGenerated(0, `@${baseName}_1${declClause}`);
+  const empty = timing.body.length === 0;
+  if (!sectionMode) {
+    em.pushGenerated(0, `;-------------------------------------------------`);
+    em.pushGenerated(0, `;記入チェック（=0, 非表示、1, 表示）`);
+    em.pushGenerated(0, `LOCAL = ${empty ? 0 : 1}`);
+    em.pushGenerated(0, `;-------------------------------------------------`);
+  }
+  // 段模式**不发**函数级記入チェック信封：库内该形态（`M_KOJO_K101_絶頂 .ERB` 的
+  // 噴乳/射精/放尿/絶頂）本就是「每段自带 `LOCAL = n`」——函数级那三行在原文件里
+  // 根本不存在。多发一行的副作用是**投影读不回来**：`planSkeleton` 的 `funcHeadAbove`
+  // 从第一段的 `LOCAL = n` 往上撞见它（缩进 0、非注释、未被吸收）⇒ 段折叠整段落空，
+  // 投出 `如果 LOCAL && …：`（作者写不出的糖形）。故段模式与语料同形：无信封头。
+  // 语义不变：`LOCAL` 由每段在各自 `IF` 之前赋值，函数返回值取最后一次赋值。
+
+  // 正文发射上下文：段块路径的正文在**最外层**（段头自己带信封），普通正文在
+  // `IF LOCAL` 里面一层。
+  const bodyIndent = sectionMode ? 0 : 1;
+  const bodyCtx: BodyContext = {
+    aliases: ctx.aliases,
+    dictionary: ctx.dictionary,
+    instructionTable: ctx.instructionTable,
+    sink: ctx.sink,
+    frontMatter: ctx.frontMatter,
+    allocator: new SlotAllocator(),
+    baseIndent: bodyIndent,
+  };
+
+  if (sectionMode) {
+    // 逐段发信封；`RETURN 1` 全函数只发一次（在末尾）
+    for (const node of timing.body) {
+      if (node.kind === 'sectionBlock') emitSectionBlock(em, node, bodyCtx, bodyIndent);
+      // 顶层注释仍然落进产物（"注释不能丢"）——它不是语句，不参与混排判据
+      else if (node.kind === 'comment') em.push(bodyIndent, node.text, node.loc.start.line);
+    }
+  } else if (!empty) {
     em.pushGenerated(0, `IF LOCAL`);
-    const bodyIndent = 1;
-    const bodyCtx: BodyContext = {
-      aliases: ctx.aliases,
-      dictionary: ctx.dictionary,
-      instructionTable: ctx.instructionTable,
-      sink: ctx.sink,
-      frontMatter: ctx.frontMatter,
-      allocator: new SlotAllocator(),
-      baseIndent: bodyIndent,
-    };
     for (const node of timing.body) {
       emitStatement(em, node, bodyCtx, bodyIndent);
     }
@@ -494,6 +534,36 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   }
 
   em.pushGenerated(0, `RETURN 1`);
+}
+
+/**
+ * `段 …：` 块 → 库内手写的那 6 行信封（E13 批）。
+ *
+ * 产物逐字对齐语料里的主流写法（`M_KOJO_K101_絶頂 .ERB` 的 噴乳 / 射精 / 放尿 三段）：
+ *
+ * ```
+ * ;-------------------------------------------------
+ * ;<段头原文>（記入チェック＝n）      ← n = 1；写了 `关` 的段写 0
+ * LOCAL = n
+ * ;-------------------------------------------------
+ * IF LOCAL && <段条件降糖后的 ERB 条件>
+ *     <段体>
+ * ENDIF
+ * ```
+ *
+ * 段的**条件**走与 `如果` 完全相同的表达式降糖管线（`lowerExpression`）——
+ * 不另造一套条件语法（`段 NOWEX:噴乳：` 与 `如果 NOWEX:噴乳：` 的表达式口径同源）。
+ */
+function emitSectionBlock(em: Emitter, node: SectionBlock, ctx: BodyContext, indent: number): void {
+  const check = node.disabled ? 0 : 1;
+  const condition = lowerExpression(node.condition, exprCtx(ctx, node.loc.start));
+  em.pushGenerated(indent, `;-------------------------------------------------`);
+  em.pushGenerated(indent, `;${node.condition}（記入チェック＝${check}）`);
+  em.pushGenerated(indent, `LOCAL = ${check}`);
+  em.pushGenerated(indent, `;-------------------------------------------------`);
+  em.push(indent, `IF LOCAL && ${condition}`, node.loc.start.line);
+  for (const child of node.body) emitStatement(em, child, ctx, indent + 1);
+  em.push(indent, `ENDIF`, null);
 }
 
 /**
@@ -1004,6 +1074,11 @@ function emitStatement(em: Emitter, node: SugarNode, ctx: BodyContext, indent: n
       // `组：` 候选组（E18）：组体**逐句透传**进所在候选——同缩进、不产生包装行，
       // 产物与「几行裸行候选」同构（`随机：` 的候选边界是行，本写法只把多行收成一条候选）。
       for (const child of node.body) emitStatement(em, child, ctx, indent);
+      break;
+    case 'sectionBlock':
+      // 段块**只**在时机正文最外层走逐段信封（`emitTiming` 的 sectionMode 路径）；
+      // 落到这里说明它出现在别的块体里（判据外），仍按信封形态发——不静默丢内容。
+      emitSectionBlock(em, node, ctx, indent);
       break;
     case 'choiceBlock':
       emitChoiceBlock(em, node, ctx, indent);

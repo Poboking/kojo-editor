@@ -259,6 +259,7 @@ export type {
   RandomInline,
   RawFunctionBlock,
   RawLine,
+  SectionBlock,
   SugarCompileEncoding,
   SugarCompileOptions,
   SugarCompileResult,

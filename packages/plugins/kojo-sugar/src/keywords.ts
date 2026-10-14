@@ -31,6 +31,7 @@ export type KeywordId =
   | 'block.group'
   | 'block.choice'
   | 'block.color'
+  | 'block.section'
   | 'block.customCommand'
   /* 行内 / 时机子句 */
   | 'inline.cont'
@@ -82,6 +83,10 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 候选组（E18）：把「随机：」的一个候选收成多行；只作**裸块头** `组：`
   ['组', 'block.group'],
   ['group', 'block.group'],
+  // 段块（E13 批）：库内「多信封分段」的可写形（产物 = `LOCAL = n` + `IF LOCAL && <条件>` 信封）。
+  // 与 `如果` 同一降糖管线（段头原文当 ERB 条件），不另造一套条件语法。
+  ['段', 'block.section'],
+  ['section', 'block.section'],
   ['选项', 'block.choice'],
   ['choice', 'block.choice'],
   ['着色', 'block.color'],

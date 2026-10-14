@@ -17,15 +17,21 @@ describe('函数头反解 · 该标的必须标对', () => {
     expect(idx.label('M_KOJO_MESSAGE_COM_K12_310')).toBe('时机 指令 310：');
   });
 
-  it('别人版（家族段 `_名字`）→ 收成 `（名字版）`，不混进编号', () => {
-    expect(idx.label('M_KOJO_少女之梦_EVENT_K1_2')).toBe('时机 事件 2（少女之梦版）：');
-    expect(idx.label('M_KOJO_少女之梦_ENCOUNTER_K1')).toBe('时机 初见（少女之梦版）：');
+  it('别人版（家族段 `_名字`）→ **不进块头**，家族名走 `family()` 出口（E13-1）', () => {
+    // 块头里塞 `（少女之梦版）` 会让编号段被词法当成**中文指令名**去查表 ⇒ 作者
+    // 照抄投影必报 `timing-instruction-unknown`。糖视图第一原则是"看见的即写得出的"，
+    // 所以署名改由投影在文件头发一行 `口上: <家族名>`（那才是可写声明）。
+    expect(idx.label('M_KOJO_少女之梦_EVENT_K1_2')).toBe('时机 事件 2：');
+    expect(idx.family('M_KOJO_少女之梦_EVENT_K1_2')).toBe('少女之梦');
+    expect(idx.label('M_KOJO_少女之梦_ENCOUNTER_K1')).toBe('时机 初见：');
+    expect(idx.family('M_KOJO_少女之梦_ENCOUNTER_K1')).toBe('少女之梦');
+    // 负自证：标签里不许再出现全角括号（出现了就是 E13-1 复发）
+    expect(idx.label('M_KOJO_少女之梦_EVENT_K1_2')).not.toContain('（');
   });
 
-  it('括号版家族名（`口上名（改）`）也能整段吃掉', () => {
-    expect(idx.label('M_KOJO_破空自制（改）_MESSAGE_COM_K14_100')).toBe(
-      '时机 指令 100（破空自制（改）版）：',
-    );
+  it('括号版家族名（`口上名（改）`）整段吃掉，且括号不外溢进块头', () => {
+    expect(idx.label('M_KOJO_破空自制（改）_MESSAGE_COM_K14_100')).toBe('时机 指令 100：');
+    expect(idx.family('M_KOJO_破空自制（改）_MESSAGE_COM_K14_100')).toBe('破空自制（改）');
   });
 
   it('非默认段取值按 §3.2 写成**命名参数**，并换回声明键（`CUSTOM_COM` → `自定指令`）', () => {
@@ -108,8 +114,10 @@ describe('模板算术 · 自定义表也成立（不依赖 eraTW 字面量）',
   const ci = buildFaceNameIndex(custom);
 
   it('自定义表：默认段省略、非默认段进命名参数、家族段与编号各归其位', () => {
-    expect(ci.label('X__fork_HELLO_B_K9_3')).toBe('时机 测试面 3 类型: 乙（fork版）：');
+    expect(ci.label('X__fork_HELLO_B_K9_3')).toBe('时机 测试面 3 类型: 乙：');
+    expect(ci.family('X__fork_HELLO_B_K9_3')).toBe('fork');
     expect(ci.label('X__HELLO_A_K9_3')).toBe('时机 测试面 3：');
+    expect(ci.family('X__HELLO_A_K9_3')).toBeUndefined();
   });
 
   it('未声明的段取值不猜', () => {

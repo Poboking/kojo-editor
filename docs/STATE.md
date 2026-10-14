@@ -2,11 +2,12 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-14 下午，E14 拖拽打开 + E15 亲密面方案 + HK-4 UI-4/5/6 + 糖复杂场景审计修复 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 + E16 拆解析墙 批合流后本机实测）
+## 一、基线（2026-10-14 晚，E14 拖拽打开 + E15 亲密面方案 + HK-4 UI-4/5/6 + 糖复杂场景审计修复 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 + E16 拆解析墙 + HK-17 多版本口上识别 + 语料认内容不认名 + 159 先代占位文件名回退 + SV-1 糖视图原生对齐 + E13/P-1 段块糖与段级吸收 批合流后本机实测）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2297 passed / 15 skipped（2312）**；128 文件过 / 8 跳（136） |
+| 全量测试 | **2316 passed / 16 skipped（2332）**；129 文件过 / 8 跳（137） |
+| 全量测试（挂语料 `KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"`） | **2331 passed / 1 skipped（2332）**；137 文件全过（137）——语料面零红 |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **24 项全绿**（E7 写允许域批 +18→22；E14 拖放事件映射 +2；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |

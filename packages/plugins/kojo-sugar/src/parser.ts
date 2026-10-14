@@ -550,6 +550,10 @@ class BlockParser {
         this.cursor.next();
         return this.parseRandomBody(line);
       }
+      case 'sectionHead': {
+        this.cursor.next();
+        return this.parseSectionBody(line, cls);
+      }
       case 'randomInline': {
         this.cursor.next();
         return { kind: 'randomInline', alternatives: cls.alternatives, loc: spanOf(line) } as RandomInline;
@@ -1075,6 +1079,8 @@ class BlockParser {
         return this.parseWhenBlockFromClass(line, cls.subject);
       case 'randomHead':
         return this.parseRandomBody(line);
+      case 'sectionHead':
+        return this.parseSectionBody(line, cls);
       case 'randomInline':
         return { kind: 'randomInline', alternatives: cls.alternatives, loc: spanOf(line) } as RandomInline;
       case 'colorHead':
@@ -1124,6 +1130,69 @@ class BlockParser {
       current.body.push(...sub.parseBody());
     }
     return { kind: 'ifBlock', branches, loc: mergeSpan(branches) };
+  }
+
+  /* ------------------------------ 段块（E13 批） ------------------------------ */
+
+  /**
+   * `段 <ERB条件> [关]：` 块体（E13 批）——库内「多信封分段」的糖形。
+   *
+   * 判据与 `随机`/`着色` 同款：块体缩进更深，逐条走 `parseBody`。**禁止段嵌套**
+   * （段体内再出现 `段`）——库内信封段是同层的，嵌套会让 `LOCAL` 槽的语义没有
+   * 唯一写法；报 `section-nested` 并**不产半成品**（与 `choice-nested` 同口径）。
+   */
+  private parseSectionBody(headLine: LogicalLine, cls: LineClass & { kind: 'sectionHead' }): SugarNode {
+    const bodyIndent = headLine.indent + 1;
+    const body: SugarNode[] = [];
+    while (!this.cursor.done) {
+      const line = this.cursor.peek()!;
+      const content = contentOf(line);
+      if (content.length === 0) {
+        this.cursor.next();
+        continue;
+      }
+      if (line.indent < bodyIndent) break;
+      if (line.indent > bodyIndent) {
+        this.sink.report({
+          code: 'indent-mismatch',
+          severity: 'error',
+          message: '缩进比同级更深的行前面没有块头。',
+          loc: posOf(line),
+        });
+        this.skipOverIndented(line.indent);
+        continue;
+      }
+      const inner = classifyLine(line);
+      if (inner.kind === 'sectionHead') {
+        // 段嵌套：报错，但**仍然解析**以正确跳行（与 `choice-nested` 同款错误恢复）
+        this.cursor.next();
+        this.sink.report({
+          code: 'section-nested',
+          severity: 'error',
+          message: '「段」块不能嵌套——一个「时机」里的段是同层的，段内请用「如果」分叉。',
+          loc: posOf(line),
+        });
+        this.parseSectionBody(line, inner);
+        continue;
+      }
+      const node = this.parseStatement(inner, line, { choiceSeen: false });
+      if (node) body.push(node);
+    }
+    if (body.length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: '「段」块没有正文（缩进更深的内容）。',
+        loc: posOf(headLine),
+      });
+    }
+    return {
+      kind: 'sectionBlock',
+      condition: cls.condition,
+      disabled: cls.disabled,
+      body,
+      loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
+    } as SugarNode;
   }
 
   /* ------------------------------ 选项块 ------------------------------ */
@@ -1397,6 +1466,7 @@ function isBlockNode(node: SugarNode): boolean {
     node.kind === 'colorBlock' ||
     node.kind === 'randomBlock' ||
     node.kind === 'groupBlock' ||
+    node.kind === 'sectionBlock' ||
     node.kind === 'choiceBlock'
   );
 }
@@ -1404,9 +1474,7 @@ function isBlockNode(node: SugarNode): boolean {
 /** 把额外块体合并进已构建的块节点（随机候选里出现块头时用） */
 function mergeBlockBody(node: SugarNode, extra: SugarNode[]): void {
   if (extra.length === 0) return;
-  if (node.kind === 'colorBlock') {
-    node.body.push(...extra);
-  } else if (node.kind === 'groupBlock') {
+  if (node.kind === 'colorBlock' || node.kind === 'groupBlock' || node.kind === 'sectionBlock') {
     node.body.push(...extra);
   } else if (node.kind === 'ifBlock' && node.branches.length > 0) {
     node.branches[node.branches.length - 1]!.body.push(...extra);

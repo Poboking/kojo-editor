@@ -155,6 +155,7 @@ export type LineClass =
   | { kind: 'randomHead' }
   | { kind: 'randomInline'; alternatives: string[] }
   | { kind: 'groupHead' }
+  | { kind: 'sectionHead'; condition: string; disabled: boolean }
   | { kind: 'choiceHead' }
   | { kind: 'choiceItem'; label: string }
   | { kind: 'colorHead'; color: string }
@@ -483,6 +484,27 @@ function parseCustomCommandHead(rest: string): LineClass | null {
   };
 }
 
+/**
+ * `段 <ERB条件> [关]：`（E13 批）——库内「多信封分段」的可写块头。
+ *
+ * 段头一律按 **ERB 条件**解析（与 `如果` 同一条降糖管线，`expression.ts`）：
+ * `段 NOWEX:噴乳：` / `段 TFLAG:193 关：`。
+ *
+ * 尾随的 `关`（禁用占位）只在**空白之后**、且其后没有别的字符时才算标记——
+ * 条件是表达式，`关` 若不这样界定就可能吃掉条件本身的尾字。条件为空（`段 ：` /
+ * 只写了 `段 关：`）→ 返回 null，交给后面按普通文本处理（与 `当 X： 内容` 一类
+ * 未支持形态同一口径，不在此处造第二套诊断）。
+ */
+function parseSectionHead(rest: string): LineClass | null {
+  const trimmed = rest.trim();
+  if (trimmed.length === 0) return null;
+  const disabledMatch = /(?:^|\s)(关)$/.exec(trimmed);
+  const disabled = disabledMatch !== null;
+  const condition = (disabled ? trimmed.slice(0, disabledMatch.index) : trimmed).trim();
+  if (condition.length === 0) return null;
+  return { kind: 'sectionHead', condition, disabled };
+}
+
 /* ------------------------------ `参数:` 声明校验 ------------------------------ */
 
 /** 合法的形参令牌：`ARG` 或 `ARG:<数字>`（规范 §3.2；引擎侧实参位置记号） */
@@ -583,6 +605,8 @@ function parseBlockHead(content: string): LineClass | null {
     case 'block.group':
       // `组` 只作**裸块头**（`组：`）；带其它内容的写法不识别（按普通文本走，不静默吞掉）
       return rest.length === 0 ? { kind: 'groupHead' } : null;
+    case 'block.section':
+      return parseSectionHead(rest);
     case 'block.choice':
       return { kind: 'choiceHead' };
     case 'block.color':

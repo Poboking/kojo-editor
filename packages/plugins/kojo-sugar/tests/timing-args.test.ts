@@ -277,8 +277,14 @@ describe('§3.2 参数: · AST 承载与下游', () => {
     expect(ok.segments[0]!.sugarText.split('\n')).toEqual(['时机 事件 1：', '\t甲']);
     expect(ok.segments[0]!.toLine).toBe(5);
 
-    // `CALL` 少转发声明 = 真实功能差异（实参会被引擎丢弃），**不**许当排版噪声吸收
+    // `CALL` 少转发声明 = 真实功能差异（实参会被引擎丢弃），**不**许当排版噪声吸收。
+    // 不吸收的证据 = 转发行本身仍在读者视野里。**不是**靠 `_1` 尾巴区分两个头：
+    // E13-1 起 `{i}` 的委托后缀 `_1` 一律剥除，桩与正文的标签同形——那正是糖
+    // `时机 事件 1：` 一次生成这两个函数的现实。
     const bad = liftProject(deps, { source: wrapper('CALL M_KOJO_EVENT_K12_1_1', '@M_KOJO_EVENT_K12_1_1(ARG,ARG:1)') });
-    expect(bad.segments.map((s) => s.sugarText).join('\n')).toContain('时机 事件 1_1：');
+    // 桩没被合并 ⇒ 两个函数头各自成段（合并版只有 1 段，见上面的 `ok`）
+    expect(bad.segments).toHaveLength(2);
+    const badText = bad.segments.map((s) => s.sugarText).join('\n');
+    expect(badText.match(/时机 事件 1：/g)).toHaveLength(2);
   });
 });
