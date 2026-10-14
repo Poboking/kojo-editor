@@ -2778,29 +2778,35 @@ button.erb-mode-hint.unlocked:hover {
 
 /* ------------- 糖视图 ViewZone（整份 ERB 显示为语法糖，只读） ------------- */
 /*
- * 视觉定位：**稿纸**而不是**代码块**。读者要把别人的口上当剧本读，所以糖段用
- * 正文前景色（行内由 Monarch 配色接管：台词/关键字/原生代码各自成色，与 `.kojo`
- * 一致），左侧一条细accent 竖线标明"这一段是糖投影"，底色比原文亮一层——
- * 于是"糖"与"被原样保留的原代码"在同一屏里一眼可分。
+ * 视觉定位：**糖读起来就是文件本身**，而不是"插进去的一块盒子"。
+ * 用户 2026-10-13 反馈：旧的彩色底 + 左侧竖线让糖段像外挂卡片、"鸡肋、不对齐"。
+ * 现在糖段与编辑器正文行**同貌同 rhythm**——字体族 / 字号 / 行高 / 内容左边距全部由宿主
+ * 按编辑器**实测**值写进变量（见 `EditorPane` 的 ViewZone 创建），量不到时才走下面的兜底。
+ * 行内配色仍由 Monarch 接管（台词 / 关键字 / 原生代码各自成色，与 `.kojo` 一致），
+ * "这里收起了原文"的痕迹交回每段末尾那一行折叠柄 `button.sugar-fold`。
  */
 .sugar-zone {
   margin: 0;
-  padding: 3px 10px 3px 12px;
-  background: var(--bg-3);
-  border-left: 3px solid var(--accent);
-  font-family: var(--font-mono);
-  font-size: var(--fs-2);
-  /* 行高由宿主按编辑器实测值落进 `--sugar-lh`（见 EditorPane 的 ViewZone 创建）：
-     ViewZone 盒子高 = heightInLines × 编辑器行高，区内每行必须同高，否则长段尾部被裁。
-     兜底的 `1.6` 只在量不到时使用。 */
+  /* 左内距 = 实测内容左边距（gutter 之后到代码文本左缘）——糖文本左缘与代码文本左缘重合；
+     左缘对齐后，右缘留 0 才能让折行宽度也与正文一致。竖直方向不留白，才能与"这里本来
+     是哪一行代码"的位置对齐（段间距由 `heightInLines` 里的 +1 行呼吸承担）。 */
+  padding: 0 0 0 var(--sugar-pad-left, 12px);
+  font-family: var(--sugar-font, var(--font-mono));
+  font-size: var(--sugar-fs, var(--fs-2));
   line-height: var(--sugar-lh, 1.6);
   color: var(--fg);
-  overflow: hidden;
+  /* 不设 `overflow: hidden`：盒高已按实测内容落定（见 pump），这里再裁会变成尾部台词消失的元凶 */
+  overflow: visible;
 }
 /* 每行一个行框：空行也要撑出行高（`pre` 里连续换行会视觉塌陷） */
 .sugar-line {
   min-height: var(--sugar-lh, 1.6em);
-  white-space: pre;
+  /* 折行规则对齐编辑器 `wordWrap: 'on'`：`pre-wrap` 保留缩进且按容器宽折行；
+     `break-word` 只在单词单独超出行宽时才在词内断行——比 `anywhere` 更贴近 Monaco
+     （后者优先把整个词移到下一行，断行只作最后手段），避免 `%CALLNAME:MASTER%` 这类
+     标识符被过度切碎。 */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
 /* --------------------- status bar（P0 简化形态） --------------------- */

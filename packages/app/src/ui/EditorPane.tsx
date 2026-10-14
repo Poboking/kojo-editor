@@ -26,15 +26,17 @@ import { pathLabelParts, splitPath } from './path-label';
 import { Icon } from './icons';
 import { perf } from '../perf';
 import {
-  editorLineHeightPx,
+  editorNativeMetrics,
   loadSugarViewPref,
   loadSugarViewPrompted,
+  needsZoneRelayout,
   saveSugarViewPref,
   saveSugarViewPrompted,
   sugarSummary,
   sugarViewAllowed,
   sugarZonePlan,
   trimSegmentBlanks,
+  type EditorNativeMetrics,
 } from './sugar-view';
 import {
   foldKey,
@@ -73,6 +75,40 @@ const MARKER_DEBOUNCE_MS = 250;
  * 再按帧把内容填进去——每帧 ≤120 段，一屏之内几乎瞬间完成，且**不截断任何段**。
  */
 const SUGAR_HYDRATE_PER_FRAME = 120;
+
+/** ViewZone 重加时的参数骨架（不含高度；盒高自洽时在其上补 `heightInPx`） */
+interface SugarZoneSpec {
+  afterLineNumber: number;
+  domNode: HTMLElement;
+  suppressMouseDown: boolean;
+  showInHiddenAreas: boolean;
+}
+
+/** 一个待填充糖段的宿主侧记录（分帧填充 + 盒高自洽用） */
+interface SugarPendingItem {
+  /** `pre.sugar-zone`（糖文本容器） */
+  el: HTMLElement;
+  /** ViewZone 的 domNode（`div.sugar-zone-wrap`，含 `pre` 与折叠柄） */
+  wrap: HTMLElement;
+  text: string;
+  /** 当前 zone id（盒高重设后更新，并同步 `sugarZonesRef`） */
+  id: string;
+  /** 当前 zone 的分配行数（含呼吸 + 柄行）——盒高估算基准 */
+  heightInLines: number;
+  /** 盒高重设时复用同一 `wrap` 重加 zone 的参数 */
+  spec: SugarZoneSpec;
+}
+
+/**
+ * 把编辑器**实测**排版度量写进糖段 `wrap` 的 CSS 变量（`--sugar-lh / -fs / -font / -pad-left`）。
+ * 量不到的字段不写，交给 `styles.css` 的兜底值；首帧量不到时由分帧 `pump` 自愈补写。
+ */
+function writeSugarMetrics(wrap: HTMLElement, m: EditorNativeMetrics): void {
+  if (m.lineHeightPx !== null) wrap.style.setProperty('--sugar-lh', `${m.lineHeightPx}px`);
+  if (m.fontSizePx !== null) wrap.style.setProperty('--sugar-fs', `${m.fontSizePx}px`);
+  if (m.fontFamily !== null) wrap.style.setProperty('--sugar-font', m.fontFamily);
+  if (m.contentLeftPx !== null) wrap.style.setProperty('--sugar-pad-left', `${m.contentLeftPx}px`);
+}
 
 /** 按扩展名选语言：`.kojo` = 语法糖表层 DSL；其余按原生 ERB（v0.1 口径） */
 function languageFor(filePath: string): string {
@@ -313,7 +349,7 @@ export function EditorPane({
    * 空壳先插、内容后填：`changeViewZones` 只建 `<pre>`（O(1)/段），着色与文本在
    * 后续帧里按批填。可见窗口内的段排在最前——读者第一眼看到的一定是完整的。
    */
-  const sugarPendingRef = useRef<Array<{ el: HTMLElement; wrap: HTMLElement; text: string }>>([]);
+  const sugarPendingRef = useRef<SugarPendingItem[]>([]);
   /** 分帧填充的 rAF 句柄（换文件/关视图时取消，避免写进已移除的 DOM） */
   const sugarHydrateRafRef = useRef<number | null>(null);
   /** 糖视图开关（偏好持久化；默认开——见 `sugar-view.ts` 头注） */
@@ -519,20 +555,19 @@ export function EditorPane({
 
     // 插 ViewZone（**一次** changeViewZones：整份文件一个批次，避免逐段重排）
     //
-    // 先建**空壳**（`<pre class="sugar-zone">` 无内容）→ 立刻可见"这段是糖"的底色与
-    // 竖线，且创建成本与段内文本量无关；内容交给分帧填充，可见窗口优先。
+    // 先建**空壳**（`<pre class="sugar-zone">` 无内容）→ 立刻占好位置（创建成本与段内文本量
+    // 无关，O(1)/段）；内容交给分帧填充，可见窗口优先。空壳阶段还没内容，排版度量先走 CSS 兜底。
     const visible = ed.getVisibleRanges();
     const visibleFrom = visible.length > 0 ? visible[0]!.startLineNumber : 1;
     const visibleTo = visible.length > 0 ? visible[visible.length - 1]!.endLineNumber : 1;
-    const nearViewport: Array<{ el: HTMLElement; wrap: HTMLElement; text: string }> = [];
-    const rest: Array<{ el: HTMLElement; wrap: HTMLElement; text: string }> = [];
+    const nearViewport: SugarPendingItem[] = [];
+    const rest: SugarPendingItem[] = [];
     let sugarLines = 0;
-    // ViewZone 的盒子高 = `heightInLines × 编辑器行高`，而区内 DOM 由 `.sugar-zone` 自己
-    // 排版。两者不同一行数一多就对不上：CSS 原写 `12.5px × 1.6 = 20px`，比 Monaco 在
-    // fontSize 14 下的 19px 每行多出 1px，叠到 +1 行呼吸耗尽后**尾部台词被裁掉**
-    // （`overflow: hidden`）。这里把实测行高交给 CSS，糖行与相邻代码行永远同 rhythm，
-    // 也让「稿纸感」的小字号不再靠一个会过期的魔数。
-    const lineHeightPx = editorLineHeightPx(ed.getDomNode());
+    // 糖段必须与编辑器正文行**无法区分**：字体族 / 字号 / 行高 / 内容左边距全部从编辑器
+    // **实测**取得（`editorNativeMetrics`），写进下方 `wrap` 的 CSS 变量——不靠任何会随
+    // `fontSize` 一改就过期的硬编码。量不到（首帧还没有 `.view-line`）时走 CSS 兜底，
+    // 由分帧 `pump` 自愈补写。
+    const metrics = editorNativeMetrics(ed.getDomNode());
     const expanded = sugarExpandedRef.current;
     const foldables: FoldableSegment[] = [];
     /** 一行折叠柄：展开前说清"这里收了几行"，展开后给反向动作（ADR-0006「收起 ≠ 删除」） */
@@ -582,23 +617,25 @@ export function EditorPane({
         }
         const dom = document.createElement('pre');
         dom.className = 'sugar-zone';
-        // 行高变量落在**wrap**上：区内每一行与那一行折叠柄共用同一节奏（写在 `pre` 上时，
-        // 柄按默认行高排，盒子高就会比内容高少一点）。首帧量不到就先留空走 CSS 兜底，
-        // 由下面的 pump 自愈补写。
-        if (lineHeightPx !== null) wrap.style.setProperty('--sugar-lh', `${lineHeightPx}px`);
+        // 排版度量（字体族 / 字号 / 行高 / 内容左边距）全部落在 **wrap** 上：区内每一行与那
+        // 行折叠柄共用同一节奏（写在 `pre` 上时，柄按默认行高排，盒子高就会比内容高少一点）。
+        // 首帧量不到就先走 CSS 兜底，由下面的 pump 自愈补写。
         wrap.appendChild(dom);
         wrap.appendChild(makeHandle(foldable, false));
-        const id = acc.addZone({
+        writeSugarMetrics(wrap, metrics);
+        const spec: SugarZoneSpec = {
           afterLineNumber: plan.afterLineNumber,
-          heightInLines: plan.heightInLines + 1, // +1 行给折叠柄
           domNode: wrap,
           suppressMouseDown: false,
           // 锚点行可能落在被隐藏区间内（段首行的上一行就是隐藏区间的末行）——
           // 不声明这一点，糖会跟着原文一起消失。
           showInHiddenAreas: true,
-        });
+        };
+        // `heightInLines` = 糖行 + 1 行呼吸 + 1 行折叠柄；折行后内容若更高，pump 会实测补正。
+        const heightInLines = plan.heightInLines + 1;
+        const id = acc.addZone({ ...spec, heightInLines });
         sugarZonesRef.current.push(id);
-        const item = { el: dom, wrap, text: seg.sugarText };
+        const item: SugarPendingItem = { el: dom, wrap, text: seg.sugarText, id, heightInLines, spec };
         // 可见窗口内的段排最前；再各自按行号升序（读者从上往下读）
         if (seg.toLine >= visibleFrom && seg.fromLine <= visibleTo) nearViewport.push(item);
         else rest.push(item);
@@ -621,14 +658,35 @@ export function EditorPane({
     const pump = (): void => {
       sugarHydrateRafRef.current = null;
       const batch = sugarPendingRef.current.splice(0, SUGAR_HYDRATE_PER_FRAME);
-      /* 自愈：`applySugarView` 紧跟 `setModel`，首帧常常还没有 `.view-line` ⇒ 那次量不到
-         行高，CSS 兜底的 `1.6`（12.5px × 1.6 = 20px）就让每行比编辑器行高多 1px。
-         43 行的段溢出盒子 ~11px、281 行的段直接裁掉近 10 行**看不见**——而读者没有任何
-         线索知道少了什么。填充发生在帧里，那时行元素已经在 DOM 上，重问一次即可。 */
-      const lh = editorLineHeightPx(ed.getDomNode());
+      /* 自愈：`applySugarView` 紧跟 `setModel`，首帧常常还没有 `.view-line` ⇒ 那次度量量不到，
+         糖行只能走 CSS 兜底（字号 / 行高 / 左边距都可能与正文对不上）。填充发生在帧里，那时
+         行元素已经在 DOM 上，重问一次即可拿到与编辑器一致的度量并补写。 */
+      const metrics = editorNativeMetrics(ed.getDomNode());
+      const relayouts: Array<{ item: SugarPendingItem; measured: number }> = [];
       for (const item of batch) {
-        if (lh !== null) item.wrap.style.setProperty('--sugar-lh', `${lh}px`);
+        writeSugarMetrics(item.wrap, metrics);
         fillSugarBlock(item.el, monaco, item.text);
+        // 盒高自洽：折行后内容可能高出 `heightInLines` 估算（尾部被顶穿 / 与下文重叠）——
+        // 实测 `wrap` 的渲染高度，按需重设 ViewZone 的 `heightInPx`（只放大、不缩小，呼吸位与柄行不被压掉）。
+        if (metrics.lineHeightPx !== null) {
+          const allocated = item.heightInLines * metrics.lineHeightPx;
+          const measured = item.wrap.scrollHeight;
+          if (needsZoneRelayout(allocated, measured, metrics.lineHeightPx)) {
+            relayouts.push({ item, measured });
+          }
+        }
+      }
+      if (relayouts.length > 0) {
+        ed.changeViewZones((acc) => {
+          for (const { item, measured } of relayouts) {
+            const oldId = item.id;
+            acc.removeZone(oldId);
+            const newId = acc.addZone({ ...item.spec, heightInPx: measured });
+            item.id = newId;
+            const idx = sugarZonesRef.current.indexOf(oldId);
+            if (idx >= 0) sugarZonesRef.current[idx] = newId;
+          }
+        });
       }
       if (sugarPendingRef.current.length > 0) {
         sugarHydrateRafRef.current = window.requestAnimationFrame(pump);

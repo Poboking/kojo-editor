@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   SUGAR_VIEW_DEFAULT,
   loadSugarViewPref,
+  needsZoneRelayout,
   saveSugarViewPref,
   sugarSummary,
   sugarViewAllowed,
@@ -194,5 +195,38 @@ describe('trimSegmentBlanks · 只剪段首尾，段内分节不许动', () => {
     expect(plan.lineCount).toBe(2);
     expect(plan.heightInLines).toBe(3);
     expect(plan.afterLineNumber).toBe(4);
+  });
+});
+
+/* ============ 盒高自洽（折行后内容变高 → 把 ViewZone 估算高换成实测高） ============ */
+
+/**
+ * 真机反馈的病根：ViewZone 的盒子高按"糖逻辑行数 × 编辑器行高"估，一旦糖文本按 `wordWrap`
+ * 折行，实测渲染高度就超出估算——原来靠 `overflow: hidden` 兜，结果尾部台词被裁。
+ * 这里钉的是**只放大、不缩小**的判定：折行导致超高才重设，呼吸位 / 柄行的刻意留白不许被压掉。
+ */
+describe('needsZoneRelayout · 折行超高才重设（只放大不缩小）', () => {
+  const LH = 19; // 编辑器 fontSize 14 → 行高约 19px
+
+  it('折行后内容明显超出估算 → 需要重设', () => {
+    // 估算 5 行（95px），实测折行后 8 行（152px）——必须重设，否则尾部被裁
+    expect(needsZoneRelayout(5 * LH, 8 * LH, LH)).toBe(true);
+  });
+
+  it('内容与估算相当（差不足半行）→ 不动，省掉亚像素抖动引发的反复重排', () => {
+    expect(needsZoneRelayout(5 * LH, 5 * LH, LH)).toBe(false);
+    expect(needsZoneRelayout(5 * LH, 5 * LH + LH / 2 - 1, LH)).toBe(false);
+  });
+
+  it('内容比估算矮（没折行）→ 绝不缩小：呼吸位与折叠柄行必须留住', () => {
+    expect(needsZoneRelayout(5 * LH, 4 * LH, LH)).toBe(false);
+    expect(needsZoneRelayout(5 * LH, LH, LH)).toBe(false);
+  });
+
+  it('量不到 / 非法值 → 不重设（宁可保留估算，也不拿脏数据乱动盒高）', () => {
+    expect(needsZoneRelayout(5 * LH, 0, LH)).toBe(false);
+    expect(needsZoneRelayout(5 * LH, Number.NaN, LH)).toBe(false);
+    expect(needsZoneRelayout(5 * LH, 8 * LH, 0)).toBe(false);
+    expect(needsZoneRelayout(5 * LH, 8 * LH, Number.NaN)).toBe(false);
   });
 });

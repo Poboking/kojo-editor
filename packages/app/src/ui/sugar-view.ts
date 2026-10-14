@@ -144,36 +144,98 @@ export function sugarZonePlan(segment: { fromLine: number; sugarText: string }):
 }
 
 /**
- * 读编辑器**实测**行高（px），供 `.sugar-zone` 与代码行同 rhythm。
+ * 编辑器**原生排版度量**（字体族 / 字号 / 行高 / 内容左边距），供糖视图把糖段渲染成
+ * 与代码行**同貌同 rhythm**——这是「糖读起来就是文件本身」的前提（用户 2026-10-13 反馈：
+ * 现效果「鸡肋、不对齐」）。
  *
- * 为什么必须实测而不是在 CSS 里写死：`heightInLines` 换算成的盒子高是
- * `行数 × Monaco 行高`，而行高是 Monaco 由 `fontSize` 派生的（本宿主 `fontSize: 14`
- * 时约 19px）。区内 DOM 若按自己的字号排版，每行差 1px，长段就会顶穿盒子被
- * `overflow: hidden` 裁掉尾部——写死的数字会随 `fontSize` 一改就过期。
+ * 为什么必须实测而不是在 CSS 里写死：编辑器字号（本宿主 `fontSize: 14`）、行高（Monaco
+ * 由字号派生，约 19px）、字体族、以及 gutter 之后的内容左边距都随配置 / 主题变化，
+ * 写死的数字一改就过期：糖行与代码行字号不同、行高不同、文本列对不齐，长段还会顶穿
+ * ViewZone 盒子被裁掉尾部。
  *
- * Monaco 0.57 的顶层导出面没有 `EditorOption` 枚举（取不了 `lineHeight` 选项），
- * 于是直接问 DOM。但**问的必须是 `.view-line`（单数）而不是 `.view-lines`（容器）**：
- * Monaco 把 `height: Npx; line-height: Npx` **内联写在每一条行元素上**，容器
- * `.view-lines` 的 CSS 里只有 `white-space: nowrap`，读它只会拿到继承来的 `normal`。
- * （Monaco 自己在 `viewLines.css` 的注释里就写着 "view-lines in view-zones …
- * they don't set a line height"——Zone 恰恰是唯一拿不到行高的那一层。）
+ * Monaco 0.57 的顶层导出面没有 `EditorOption` 枚举（取不了 `lineHeight` / `contentLeft`
+ * 选项），于是直接问 DOM。但**问的必须是 `.view-line`（单数）而不是 `.view-lines`（容器）**：
+ * Monaco 把 `height: Npx; line-height: Npx` **内联写在每一条行元素上**，容器 `.view-lines`
+ * 的 CSS 里只有 `white-space: nowrap`，读它只会拿到继承来的 `normal`。（Monaco 自己在
+ * `viewLines.css` 的注释里就写着 "view-lines in view-zones … they don't set a line height"
+ * ——Zone 恰恰是唯一拿不到行高的那一层。）字号 / 字体族则相反：Monaco 对 `.view-lines` 整体
+ * `applyFontInfo`，行元素继承之。
  *
- * 量不到（宿主未挂载 / 模型还没有任何一行 / 计算样式给 `normal`）时返回 `null`，
- * 由 CSS 的兜底值接手，不因此放弃整块糖。
+ * 内容左边距（`contentLeftPx`）在**挂载后的 DOM** 上量：取某个 `.view-line` 文本左缘相对
+ * ViewZone 容器（`.view-zones`，与 `.view-lines` 同属 `.lines-content` 的同一坐标系）左缘的
+ * 差值。糖段 `wrap` 正是 `.view-zones` 的子节点、左缘与之对齐，把它作为 `.sugar-zone` 的
+ * `padding-left`，糖文本左缘即与代码文本左缘重合——**不假设任何固定值**。
  *
- * 为什么留一份模块级缓存：`applySugarView` 紧跟在 `setModel` 之后跑，**首帧可能还
- * 没有任何 `.view-line`**，于是第一次量会扑空。全应用共用同一个 `fontSize`（宿主写死
- * 14），所以量到一次就可以一直用；不缓存的话，冷启动第一眼就是兜底值，切一次文件才正。
+ * 量不到（宿主未挂载 / 模型还没有任何一行 / 计算样式给 `normal`）时返回 `null` 字段，由 CSS
+ * 兜底接手，不因此放弃整块糖。
+ *
+ * 为什么每项都留一份模块级缓存：`applySugarView` 紧跟在 `setModel` 之后跑，**首帧可能还没有
+ * 任何 `.view-line`**，于是第一次量会扑空。全应用共用同一套字体设置（宿主写死 `fontSize: 14`），
+ * 所以量到一次就可以一直用；不缓存的话，冷启动第一眼就是兜底值，切一次文件才正。
  */
-let cachedLineHeightPx: number | null = null;
+export interface EditorNativeMetrics {
+  /** 行高（px）；量不到 = null */
+  lineHeightPx: number | null;
+  /** 字号（px）；量不到 = null */
+  fontSizePx: number | null;
+  /** 字体族（computed `font-family`）；量不到 = null */
+  fontFamily: string | null;
+  /** 内容左边距（px）：代码文本左缘相对 ViewZone 坐标的偏移；量不到 = null */
+  contentLeftPx: number | null;
+}
 
-export function editorLineHeightPx(host: HTMLElement | null): number | null {
+let cachedLineHeightPx: number | null = null;
+let cachedFontSizePx: number | null = null;
+let cachedFontFamily: string | null = null;
+let cachedContentLeftPx: number | null = null;
+
+export function editorNativeMetrics(host: HTMLElement | null): EditorNativeMetrics {
   const line = host?.querySelector<HTMLElement>('.view-lines .view-line');
-  if (!line) return cachedLineHeightPx;
-  const px = Number.parseFloat(window.getComputedStyle(line).lineHeight);
-  if (!Number.isFinite(px) || px <= 0) return cachedLineHeightPx;
-  cachedLineHeightPx = px;
-  return px;
+  if (line && typeof window !== 'undefined') {
+    const cs = window.getComputedStyle(line);
+    const lh = Number.parseFloat(cs.lineHeight);
+    if (Number.isFinite(lh) && lh > 0) cachedLineHeightPx = lh;
+    const fs = Number.parseFloat(cs.fontSize);
+    if (Number.isFinite(fs) && fs > 0) cachedFontSizePx = fs;
+    if (cs.fontFamily) cachedFontFamily = cs.fontFamily;
+  }
+  if (line) {
+    const lineRect = line.getBoundingClientRect();
+    const ref =
+      host?.querySelector<HTMLElement>('.view-zones') ??
+      host?.querySelector<HTMLElement>('.view-lines');
+    // `lineRect.height > 0` = 这一行**真的渲染出来了**（未布局时 rect 全零，差值为 0 会污染缓存）
+    if (ref && lineRect.height > 0) {
+      const delta = lineRect.left - ref.getBoundingClientRect().left;
+      if (Number.isFinite(delta) && delta >= 0) cachedContentLeftPx = delta;
+    }
+  }
+  return {
+    lineHeightPx: cachedLineHeightPx,
+    fontSizePx: cachedFontSizePx,
+    fontFamily: cachedFontFamily,
+    contentLeftPx: cachedContentLeftPx,
+  };
+}
+
+/**
+ * 是否需要把糖段盒高从 `heightInLines` **估算**改成**实测**（`heightInPx`）。
+ *
+ * 口径：**只放大、不缩小**——`heightInLines` 里含的呼吸位与折叠柄行是刻意留白，不能被
+ * 实测内容压掉（那会让段与段贴到一起）；只有当折行后的内容比估算高（差 ≥ 半行高）时才
+ * 重设，阈值取半行高是为了避免亚像素抖动引发的反复重排。
+ *
+ * 纯函数（单测钉死）：宿主在分帧填充后用 `wrap.scrollHeight` 实测内容高，与
+ * `heightInLines × 行高` 比，命中即 `removeZone` + `addZone({ heightInPx })` 重新落高。
+ */
+export function needsZoneRelayout(
+  allocatedPx: number,
+  measuredPx: number,
+  lineHeightPx: number,
+): boolean {
+  if (!Number.isFinite(measuredPx) || measuredPx <= 0) return false;
+  if (!Number.isFinite(lineHeightPx) || lineHeightPx <= 0) return false;
+  return measuredPx - allocatedPx >= lineHeightPx / 2;
 }
 
 /**
