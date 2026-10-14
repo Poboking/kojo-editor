@@ -55,6 +55,7 @@ import {
 } from './commands';
 import { CommandPalette, QuickOpen } from './Palette';
 import { PanelBody, StatusbarItem } from './PanelHost';
+import { ProblemsStatusItem } from './ProblemPanel';
 import { Icon } from './icons';
 
 /**
@@ -263,6 +264,8 @@ export function ShellLayout(props: Props): ReactElement {
       { id: 'layout.openSettings', title: '打开设置', run: () => setSettingsOpen(true) },
       { id: 'workbench.commandPalette', title: '命令面板', keybinding: 'ctrl+shift+p', run: () => setPaletteOpen(true) },
       { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: 'ctrl+p', run: () => setQuickOpen(true) },
+      // 问题面板（HK-4 · UI-6）：打开底部区并激活「问题」视图（activate 会同时置 visible:true）
+      { id: 'workbench.problems', title: '问题面板', keybinding: 'ctrl+shift+m', run: () => dispatch({ type: 'activate', container: 'bottom', key: 'kojo.problems' }) },
       // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表
       ...(extraCommands ?? []),
     ],
@@ -888,6 +891,8 @@ export function ShellLayout(props: Props): ReactElement {
           .map((s) => (
             <StatusbarItem key={s.id} contribution={s} />
           ))}
+        {/* 问题计数小件（HK-4 · UI-6）：与约定校验的 `.sb-diag` 相邻；点击打开问题面板 */}
+        <ProblemsStatusItem onClick={() => dispatch({ type: 'activate', container: 'bottom', key: 'kojo.problems' })} />
         {!layout.zen &&
           (stats.indexError ? (
             <span className="sb-idx err" title={stats.indexError}>

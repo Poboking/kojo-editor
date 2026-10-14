@@ -4,6 +4,7 @@ import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-ap
 import { WellKnownCommands } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
+import { ProblemPanel } from './ProblemPanel';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
 import { FileTree } from './FileTree';
 import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
@@ -208,6 +209,25 @@ export function ProjectView({
     return StableFileTree;
   }, []);
 
+  // 底部「问题」面板（HK-4 · UI-6）的**稳定组件身份**：同 fileTreeComponent 的 ref 闭包写法——
+  // 内建视图组件不要每次 render 换新类型（会 remount 丢掉内部 state），用 ref 持有最新 kernel。
+  // 跳源行走既有通道 `editor.revealLocation`（宿主 App.tsx 监听并打开文件定位行）。
+  const problemArgsRef = useRef({ kernel });
+  problemArgsRef.current = { kernel };
+  const problemComponent = useMemo(() => {
+    const StableProblems = (): ReactElement => {
+      const a = problemArgsRef.current;
+      return (
+        <ProblemPanel
+          onReveal={(path, line) =>
+            a.kernel.bus.emit('editor.revealLocation', { filePath: path, line, source: '问题' })
+          }
+        />
+      );
+    };
+    return StableProblems;
+  }, []);
+
   const builtinViews = useMemo<UIPanelContribution[]>(
     () => [
       {
@@ -219,8 +239,18 @@ export function ProjectView({
         location: 'sidebar',
         component: fileTreeComponent,
       },
+      {
+        // defaultActive:false —— 不抢「约定校验」（bottom，order 50）现有的默认激活落点（Ctrl+J）
+        id: 'kojo.problems',
+        title: '问题',
+        icon: 'check',
+        order: 40,
+        location: 'bottom',
+        defaultActive: false,
+        component: problemComponent,
+      },
     ],
-    [fileTreeComponent],
+    [fileTreeComponent, problemComponent],
   );
 
   /* ---------------- 标签栏：拖拽重排 + 滚轮横滚 + 活动标签滚入视口 ---------------- */
