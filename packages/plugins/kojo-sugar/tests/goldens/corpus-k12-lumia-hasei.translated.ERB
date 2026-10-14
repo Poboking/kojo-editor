@@ -1,0 +1,510 @@
+; 露米娅 · 派生（副指令）系 1-19 —— 真实语料逆向翻译
+; 来源：個人口上/012 Rumia/ルーミア/M_KOJO_K12_派生コマンド.ERB（1030 行，逐时机对照）
+; 空体分支以注释行占位（糖的块体不允许为空，注释进产物、零运行时输出）
+; 本语料无 @M_KOJO_SUCCESS_SCOM_K12_* 函数 → 全部时机省略 `成否:`（糖仅在写了成否时才生成 SUCCESS 函数）
+; 各壳函数的 小分岐/初めて FIRSTTIME 分派在 LOCAL=0（或 LOCAL:1=0）下恒为死代码，随占位空壳一并折叠
+; 二人目 `_2` 函数（9_2 含 VARSET/MASTER_POSE 前置）糖无子索引形态 → 文末整函数原生 @ 块直通
+; 1,六九式（原语料 LOCAL=0 占位空壳）
+; 2,岩清水（原语料 LOCAL=0 占位空壳）
+; 3,Gスポット刺激（原语料 LOCAL=0 占位空壳）
+; 4,乱牡丹（原语料 LOCAL=0 占位空壳）
+; 5,手淫口交（原语料 LOCAL=0 占位空壳）
+; 6,挿入Ｇスポ責め（原语料 LOCAL=0 占位空壳）
+; 7,挿入子宮口玩弄（原语料 LOCAL=1，正文有效）
+; 8,６９乳交（原语料 LOCAL=0 占位空壳）
+; 9,双重口交（一人目 _1：原语料 LOCAL=0 占位空壳；包装函数原语料 RETURN RESULT，糖生成 RETURN RESULT 同值）
+; 10,双重素股（_1 同 9；_2 见文末原生 @ 块）
+; 11,双重乳交（_1 同 9；_2 见文末原生 @ 块）
+; 12,乳夾口交（原语料 LOCAL=0 占位空壳；FIRSTTIME(SELECTCOM) 分派恒死）
+; 13,交互挿入（_1 同 9；_2 见文末原生 @ 块）
+; 14,玩弄Ｓ状結腸（原语料 LOCAL=0 占位空壳）
+; 15,隔着刺激陰道（原语料 LOCAL=0 占位空壳）
+; 17,同時吸乳头（原语料 LOCAL=1，但所有分支正文均为空 PRINTFORMW 行 + RETURN 1 → 占位注释）
+; 19,授乳PLAY（原语料 LOCAL=0 占位空壳；此壳基本セット分派无 FLAG:70 分支，恒死代码随空壳折叠）
+
+@M_KOJO_MESSAGE_SCOM_K12_1
+CALL M_KOJO_MESSAGE_SCOM_K12_1_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_1_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_2
+CALL M_KOJO_MESSAGE_SCOM_K12_2_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_2_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_3
+CALL M_KOJO_MESSAGE_SCOM_K12_3_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_3_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_4
+CALL M_KOJO_MESSAGE_SCOM_K12_4_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_4_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_5
+CALL M_KOJO_MESSAGE_SCOM_K12_5_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_5_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_6
+CALL M_KOJO_MESSAGE_SCOM_K12_6_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_6_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_7
+CALL M_KOJO_MESSAGE_SCOM_K12_7_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_7_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMDL
+	;-------------------------------------------------
+	;小分岐
+	;-------------------------------------------------
+	;初めて
+	;記入チェック
+	LOCAL:1 = 1
+	;-------------------------------------------------
+	;IF LOCAL:1 && FIRSTTIME(TFLAG:50 + 500)
+	;	PRINTFORMW 「」
+	;	GOTO _SIKYUUKOU
+	;	RETURN 1
+	;ENDIF
+	;基本セット
+	IF FLAG:70
+		;時姦中（原语料正文只有空 PRINTFORMW 行 + RETURN 1 → 注释占位；RETURN 删除不改语义，下同）
+	ELSEIF TCVAR:102 && !NOWEX:MASTER:射精
+		;射精1ターン後。射精するときの口上はNOWEX:MASTER:射精
+		IF (TALENT:恋慕 || TALENT:恋人) && CFLAG:允许无套 > 0
+			;原 SELECTCASE RAND:5（CASE 1-4 + CASEELSE）与 RAND:2 各候选均为单节点、等概率（CASEELSE 只承接 RAND 的 0 值）→ 「随机」
+			LOCAL = RAND:5
+			SELECTCASE LOCAL
+				CASE 0
+					CALL HPH_PRINT(@"「用肉棒把子宫给堵住了…　就那么想让我怀孕吗？　呼呼HPH」","L")
+				CASE 1
+					CALL HPH_PRINT(@"「现在不能往里顶啊HPH　子宮正在欢欣雀跃哟…HPH」","L")
+				CASE 2
+					CALL HPH_PRINT(@"「这么深的地方被不停地欺负的话…　会开始想要小宝宝的哦HPH」","L")
+				CASE 3
+					CALL HPH_PRINT(@"「欸嘿嘿ーHPH　%CALLNAME:MASTER%真是美味啊。　请再来一次吧ーHPH」","L")
+				CASE 4
+					CALL HPH_PRINT(@"「精液HPH　被挤进小腹深处了…HPH」","L")
+			ENDSELECT
+			LOCAL:1 = RAND:2
+			SELECTCASE LOCAL:1
+				CASE 0
+					PRINTFORMW 露米娅的肉膣紧紧地缠住肉棒、试图从%CALLNAME:MASTER%身上榨取更多的精液…
+				CASE 1
+					PRINTFORMW 露米娅的子宫口为了吸尽%CALLNAME:MASTER%的精液而不断地吮吸着龟头…
+			ENDSELECT
+		ELSEIF CFLAG:既成事實 >= 1
+			LOCAL:2 = RAND:5
+			SELECTCASE LOCAL:2
+				CASE 0
+					PRINTFORMW 「今天明明一直在射个不停…　元气过头了啊」
+				CASE 1
+					PRINTFORMW 「刚刚才射进去的精液都溢出来了呢…　真是太H了♪」
+				CASE 2
+					PRINTFORMW 「呀ー嗯、在里面咕啾咕啾地响着…」
+				CASE 3
+					PRINTFORMW 「要一鼓作气、把精子射进最里面哦」
+				CASE 4
+					PRINTFORMW 「还没有射够吗？　大色鬼…」
+			ENDSELECT
+		ENDIF
+	ELSEIF TALENT:恋慕 || TALENT:恋人
+		IF EXP:子宮口開発経験 >= 50
+			;CASE 3 含嵌套 IF、CASEELSE 含两条 HPH 调用 → 候选非单节点，RAND:5 保持原生 SELECTCASE 直通（CASE 体与 CASE 同级，ERB 缩进无语义）
+			SELECTCASE RAND:5
+			CASE 1
+			CALL HPH_PRINT(@"「好喜欢那里被搅来搅去的HPH　再多来几下HPH」","L")
+			CASE 2
+			CALL HPH_PRINT(@"「里面的嘴巴把%CALLNAME:MASTER%的鸡鸡吃掉了HPH　就这样满满地射出来哦HPH」","L")
+			CASE 3
+			IF TALENT:妊娠
+			CALL HPH_PRINT(@"「子宮张开了…　宝宝要被精液盖住了…HPH」","L")
+			ELSE
+			CALL HPH_PRINT(@"「子宮张开了…　肉棒进来了哦…HPH」","L")
+			ENDIF
+			CASE 4
+			CALL HPH_PRINT(@"「尽情往里挤吧HPH　直到能够到子宮的深处为止…HPH」","L")
+			CASEELSE
+			CALL HPH_PRINT(@"「小穴全部都被变成属于%CALLNAME:MASTER%的东西了HPH」","L")
+			CALL HPH_PRINT(@"「在最深处进行的性交、真是舒服呢HPH」","L")
+			ENDSELECT
+			;RAND:4（CASE 1-3 + CASEELSE）候选均单节点、等概率 1/4 → 「随机」（旁白为非 D 系 PRINTFORMW，保持原生直通行以保作者色）
+			LOCAL:3 = RAND:4
+			SELECTCASE LOCAL:3
+				CASE 0
+					PRINTFORMW 露米娅承受着%CALLNAME:MASTER%的突刺、脸上染上了快乐的色彩…
+				CASE 1
+					PRINTFORMW 露米娅被%CALLNAME:MASTER%的阴茎蹂躏着发出了甜美的娇喘声…
+				CASE 2
+					PRINTFORMW 每当露米娅被捅到最深处时她的穴肉就会温和地缠住%CALLNAME:MASTER%的阴茎…
+				CASE 3
+					PRINTFORMW 露米娅的子宮口如同在欢迎阴茎的到来一样将其轻柔地包裹起来…
+			ENDSELECT
+		ELSE
+			LOCAL:4 = RAND:5
+			SELECTCASE LOCAL:4
+				CASE 0
+					PRINTFORML 「承受住了%CALLNAME:MASTER%的全部、好开心啊…♪」
+				CASE 1
+					PRINTFORML 「稍微有点紧呢ー。%CALLNAME:MASTER%没觉得痛吧？」
+				CASE 2
+					PRINTFORML 「%CALLNAME:MASTER%的真是大呢ー。都顶到肚脐的位置了哦」
+				CASE 3
+					PRINTFORML 「都因为%CALLNAME:MASTER%我的肚子才鼓鼓的。就好像怀孕了一样…♪」
+				CASE 4
+					PRINTFORML 「虽然最深处还在疼、但是又有些酥酥麻麻的感觉…」
+			ENDSELECT
+			PRINTFORMW 露米娅的膣肉紧紧地缠住了突刺进去的阴茎…
+		ENDIF
+	ELSEIF CFLAG:既成事實 >= 1
+		LOCAL:5 = RAND:5
+		SELECTCASE LOCAL:5
+			CASE 0
+				PRINTFORMW 「小腹、好难受啊…」
+			CASE 1
+				PRINTFORMW 「我说啊到此为止不要再往里进了ー…」
+			CASE 2
+				PRINTFORMW 「呀ー、那里好疼ー」
+			CASE 3
+				PRINTFORMW 「啊啊…　被进到最里面了哦…」
+			CASE 4
+				PRINTFORMW 「小宝宝的房间、要被压坏了…！」
+		ENDSELECT
+	ELSE
+		;(原语料空体 PRINTFORMW + RETURN 1)
+	ENDIF
+	;$_SIKYUUKOU
+	;未記入
+	;TRYCALLFORM M_KOJO_MESSAGE_COM_KX_{SELECTCOM}_1
+ENDIF
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_8
+CALL M_KOJO_MESSAGE_SCOM_K12_8_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_8_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_9
+CALL M_KOJO_MESSAGE_SCOM_K12_9_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_9_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_10
+CALL M_KOJO_MESSAGE_SCOM_K12_10_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_10_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_11
+CALL M_KOJO_MESSAGE_SCOM_K12_11_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_11_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_12
+CALL M_KOJO_MESSAGE_SCOM_K12_12_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_12_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_13
+CALL M_KOJO_MESSAGE_SCOM_K12_13_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_13_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_14
+CALL M_KOJO_MESSAGE_SCOM_K12_14_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_14_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_15
+CALL M_KOJO_MESSAGE_SCOM_K12_15_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_15_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_17
+CALL M_KOJO_MESSAGE_SCOM_K12_17_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_17_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	;小分岐/初めて：LOCAL:1 = 0，FIRSTTIME 分派恒死，未译
+	;基本セット
+	IF FLAG:70
+		;時姦中（原语料空体 PRINTFORMW + RETURN 1）
+	ELSEIF TALENT:恋慕
+		;恋慕（原语料空体 PRINTFORMW + RETURN 1）
+	ELSEIF MARK:不埒刻印 == 3
+		;屈服3（原语料空体 PRINTFORMW + RETURN 1）
+	ELSE
+		;それ以外（原语料空体 PRINTFORMW + RETURN 1）
+	ENDIF
+ENDIF
+RETURN 1
+
+@M_KOJO_MESSAGE_SCOM_K12_19
+CALL M_KOJO_MESSAGE_SCOM_K12_19_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_SCOM_K12_19_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+RETURN 1
+
+@M_KOJO_COLOR_K12
+SETCOLOR 0xE4FC08
+
+@M_KOJO_MESSAGE_SCOM_K12_9_2
+VARSET LOCAL
+;一人目
+LOCAL:101 = MASTER_POSE(4,1)
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+IF LOCAL
+	;-------------------------------------------------
+	;小分岐
+	;-------------------------------------------------
+	;初めて
+	;記入チェック
+	LOCAL:1 = 0
+	;-------------------------------------------------
+	IF LOCAL:1 && FIRSTTIME(TFLAG:50 + 500)
+		PRINTFORMW 
+		RETURN 1
+	ENDIF
+	;基本セット
+	;時姦中
+	IF FLAG:70
+		PRINTFORMW 
+		RETURN 1
+	;恋慕
+	ELSEIF TALENT:恋慕
+		PRINTFORMW 
+		RETURN 1
+	;屈服3
+	ELSEIF MARK:不埒刻印 == 3
+		PRINTFORMW 
+		RETURN 1
+	;それ以外
+	ELSE
+		PRINTFORMW 
+		RETURN 1
+	ENDIF
+ENDIF
+RETURN 1
+
+
+@M_KOJO_MESSAGE_SCOM_K12_10_2
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+IF LOCAL
+	;-------------------------------------------------
+	;小分岐
+	;-------------------------------------------------
+	;初めて
+	;記入チェック
+	LOCAL:1 = 0
+	;-------------------------------------------------
+	IF LOCAL:1 && FIRSTTIME(TFLAG:50 + 500)
+		PRINTFORMW 
+		RETURN 1
+	ENDIF
+	;基本セット
+	;時姦中
+	IF FLAG:70
+		PRINTFORMW 
+		RETURN 1
+	;恋慕
+	ELSEIF TALENT:恋慕
+		PRINTFORMW 
+		RETURN 1
+	;屈服3
+	ELSEIF MARK:不埒刻印 == 3
+		PRINTFORMW 
+		RETURN 1
+	;それ以外
+	ELSE
+		PRINTFORMW 
+		RETURN 1
+	ENDIF
+ENDIF
+RETURN 1
+
+
+@M_KOJO_MESSAGE_SCOM_K12_11_2
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+IF LOCAL
+	;-------------------------------------------------
+	;小分岐
+	;-------------------------------------------------
+	;初めて
+	;記入チェック
+	LOCAL:1 = 0
+	;-------------------------------------------------
+	IF LOCAL:1 && FIRSTTIME(TFLAG:50 + 500)
+		PRINTFORMW 
+		RETURN 1
+	ENDIF
+	;基本セット
+	;時姦中
+	IF FLAG:70
+		PRINTFORMW 
+		RETURN 1
+	;恋慕
+	ELSEIF TALENT:恋慕
+		PRINTFORMW 
+		RETURN 1
+	;屈服3
+	ELSEIF MARK:不埒刻印 == 3
+		PRINTFORMW 
+		RETURN 1
+	;それ以外
+	ELSE
+		PRINTFORMW 
+		RETURN 1
+	ENDIF
+ENDIF
+RETURN 1
+
+
+@M_KOJO_MESSAGE_SCOM_K12_13_2
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 0
+;-------------------------------------------------
+IF LOCAL
+	;-------------------------------------------------
+	;小分岐
+	;-------------------------------------------------
+	;初めて
+	;記入チェック
+	LOCAL:1 = 0
+	;-------------------------------------------------
+	IF LOCAL:1 && FIRSTTIME(TFLAG:50 + 500)
+		PRINTFORMW 
+		RETURN 1
+	ENDIF
+	;基本セット
+	;時姦中
+	IF FLAG:70
+		PRINTFORMW 
+		RETURN 1
+	;恋慕
+	ELSEIF TALENT:恋慕
+		PRINTFORMW 
+		RETURN 1
+	;屈服3
+	ELSEIF MARK:不埒刻印 == 3
+		PRINTFORMW 
+		RETURN 1
+	;それ以外
+	ELSE
+		PRINTFORMW 
+		RETURN 1
+	ENDIF
+ENDIF
+RETURN 1
+
