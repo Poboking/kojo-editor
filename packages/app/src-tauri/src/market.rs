@@ -372,7 +372,6 @@ pub(crate) async fn market_download(
     staging_name: String,
     timeout_ms: Option<u64>,
     max_bytes: Option<u64>,
-    proxy: Option<String>,
 ) -> Result<MarketDownloadResultDto, String> {
     let staging = staging_dir(&app)?;
     // 写允许域第二道闸：落点由本层拼出，恒在 appDataDir 内（`ensure_in_write_domain` 的常驻根）。
@@ -384,7 +383,8 @@ pub(crate) async fn market_download(
         &DownloadOptions {
             timeout_ms: timeout_ms.unwrap_or(MARKET_DEFAULT_TIMEOUT_MS),
             max_bytes: max_bytes.unwrap_or(MARKET_DEFAULT_MAX_DOWNLOAD_BYTES),
-            proxy,
+            // 代理不在这里决定：见 `DownloadOptions::proxy`（env ⇒ reqwest system-proxy）
+            proxy: None,
         },
     )
     .await

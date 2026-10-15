@@ -3,7 +3,9 @@
 //!
 //! 对平用的容器字节**逐字取自线上注册表资产**（`tests/fixtures/*.zip`；注册表侧是
 //! `node:zlib` 自写容器，不是 `zip` 命令产物），所以这条链路在开发机离线可复跑。
-//! 网络版对平见 `download_and_extract_real_release_asset`（`#[ignore]`，需本机代理）。
+//! 网络版对平有两条，都 `#[ignore]`（github 直连必 timeout，须经代理）：
+//! `download_and_extract_real_release_assets`（显式代理，三资产）与
+//! `download_through_env_proxy_uses_system_proxy`（命令侧 `proxy: None` 的生产口径）。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -613,4 +615,39 @@ fn download_and_extract_real_release_assets() {
         // 下载落盘的容器走**同一份**对平判据
         reconcile(&staging, fixture);
     }
+}
+
+/// 生产路径的代理口径：`market_download` 固定 `proxy: None` ⇒ 代理只能由**进程环境**生效
+/// （reqwest 的 `system-proxy`，实测已编进依赖图）。这条用例量的就是这个假设本身：
+/// 显式传 proxy 的链路（上一条）过得去、env 过不去 ⇒ 命令侧删 proxy 参数就是把用户锁在墙外。
+/// 跑法：`HTTPS_PROXY=http://127.0.0.1:7890 cargo test --lib market_tests::download_through_env_proxy -- --ignored`
+#[test]
+#[ignore = "需要网络与进程环境代理：离线 CI 阶段不跑"]
+fn download_through_env_proxy_uses_system_proxy() {
+    let fixture = &FIXTURES[2]; // demo.dict：最小的一个，够核这条链路
+    // env 由本用例自己钉：证明的是"命令不传 proxy 时代理仍生效"，不是"碰巧有人设过"
+    std::env::set_var(
+        "HTTPS_PROXY",
+        std::env::var("KOJO_MARKET_TEST_PROXY").unwrap_or_else(|_| "http://127.0.0.1:7890".to_string()),
+    );
+    let target = format!(
+        "https://github.com/Poboking/kojo-market/releases/download/demo.dict-v{}/{container}",
+        fixture.version,
+        container = fixture.container
+    );
+    let staging = Staging::new("env-proxy");
+    let opts = DownloadOptions {
+        timeout_ms: 60_000,
+        max_bytes: 8 * 1024 * 1024,
+        proxy: None,
+    };
+    let downloaded = tauri::async_runtime::block_on(download_to_staging(
+        staging.dir(),
+        &target,
+        fixture.container,
+        &opts,
+    ))
+    .unwrap_or_else(|e| panic!("proxy: None 且 env 有 HTTPS_PROXY 时下载失败：{e}"));
+    assert_eq!(downloaded.bytes, fixture.container_bytes, "{target} 字节不平");
+    reconcile(&staging, fixture);
 }
