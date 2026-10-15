@@ -229,6 +229,16 @@ function fakeIO(): FileIO {
       if (text === undefined) throw new Error(`not found: ${path}`);
       return { path, text, encoding: 'utf-8', eol: 'lf', mtimeMs: null };
     },
+    // 批量语义镜像内核 `FileIOService.readTexts`（读不到 = `null`，不抛）：
+    // `buildIndex` 的读盘腿自 2026-10-16 批量 IO 批起走这一条，缺它整条索引建不起来
+    async readTexts(paths: readonly string[]) {
+      return paths.map((path) => {
+        const text = TEXTS[path];
+        return text === undefined
+          ? null
+          : { path, text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: null };
+      });
+    },
     async stat(path: string) {
       const text = TEXTS[path];
       return text === undefined ? null : { size: text.length, mtimeMs: null, isDirectory: false };
