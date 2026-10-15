@@ -1,0 +1,365 @@
+/**
+ * SH-6 · 补全候选「kind 闭集 + 零 emoji」跨 seam（`.kojo` / `.erb`）卫生守卫。
+ *
+ * ## 为什么本批不是「新造图标桥」
+ *
+ * 候选的图标由 Monaco 按 `CompletionItem.kind`（`monaco.languages.CompletionItemKind`）
+ * 用内置**单色 codicon**自绘——宿主与插件都不自绘补全图标。宿主那枚「图标桥」
+ * `UIPanelProps.renderIcon?: (name, size) => unknown`（`packages/plugin-api/src/slots.ts:36`）
+ * **只作用于 `ui.panel` 面板贡献**，由 `packages/app/src/ui/PanelHost.tsx:24`
+ * 实现为 `<Icon name={…} size={…} />`，在 :45 / :59 只转发给面板组件；两个补全 seam
+ * （`kojo-completion.ts` / `erb-completion.ts`）**完全不碰 `renderIcon`**。
+ * 故本批真形态 = 把「kind 正确 ⇒ Monaco 自动画单色图标」「候选文本零 emoji」
+ * 钉成可回归守卫，**零生产代码改动**。
+ *
+ * Monaco 绑定刻意薄：桩 monaco（只给 `CompletionItemKind`）+ 桩 model + 桩 adapter 表，
+ * 不引真实 monaco-editor 运行时；候选来自静态词表 / 桩表（纯数据）。
+ * 桩 model 额外给 `getVersionId`（递增整数）——SH-3 记忆化会读 `model.getVersionId?.()`，
+ * 缺字段会让标签路线静默返回 `[]` 造成假绿。
+ */
+
+import { describe, expect, it } from 'vitest';
+import type * as Monaco from 'monaco-editor';
+import type { KojoFaceTable, VariableInfo, VariableSchema } from '@kojo/plugin-api';
+import {
+  KOJO_COMPLETION_SOURCES,
+  type CompletionSourceContext,
+  type CompletionTables,
+} from '../src/monaco/kojo-completion';
+import {
+  ERB_COMPLETION_SOURCES,
+  type ErbCompletionSourceContext,
+  type ErbCompletionTables,
+} from '../src/monaco/erb-completion';
+
+/* ============================== 桩 monaco / model / adapter 表 ============================== */
+
+/**
+ * 桩 `CompletionItemKind` —— **恰为两 seam 实际用到的枚举闭集**：
+ * kojo-lexicon 用 Variable / Keyword / Operator / Function；kojo-variable 用 Variable；
+ * kojo-face 用 EnumMember；erb-directives 用 Keyword；erb-variables 用 Variable / Field；
+ * erb-functions / erb-system-functions 用 Function；erb-labels 用 Reference。
+ */
+const KIND = {
+  Variable: 1,
+  Keyword: 2,
+  Operator: 3,
+  Function: 4,
+  Field: 5,
+  Reference: 6,
+  EnumMember: 7,
+} as const;
+
+const LEGAL_KINDS: ReadonlySet<number> = new Set<number>(Object.values(KIND));
+
+function stubMonaco(): typeof Monaco {
+  return { languages: { CompletionItemKind: KIND } } as unknown as typeof Monaco;
+}
+
+/** 桩 model：`getValue` / `getLineContent` / `getWordUntilPosition`（默认词法）+ `getVersionId` */
+function modelOf(text: string): Monaco.editor.ITextModel {
+  const lines = text.split('\n');
+  let version = 0;
+  return {
+    getValue: () => text,
+    getLineContent: (lineNumber: number) => lines[lineNumber - 1] ?? '',
+    getWordUntilPosition: (pos: Monaco.Position) => {
+      const line = lines[pos.lineNumber - 1] ?? '';
+      const m = /[A-Za-z0-9_]*$/.exec(line.slice(0, pos.column - 1));
+      const word = m ? m[0] : '';
+      return { word, startColumn: pos.column - word.length, endColumn: pos.column };
+    },
+    getVersionId: () => version++,
+  } as unknown as Monaco.editor.ITextModel;
+}
+
+/** 最小 `VariableSchema` 桩：几个族各给若干索引名（枚举能力），其余族空（不猜） */
+function fakeSchema(): VariableSchema {
+  const table: Record<string, VariableInfo[]> = {
+    CFLAG: [
+      { name: '好感度', index: 1088, description: '角色好感度', source: 'primary' },
+      { name: '恋慕度', index: 1089, description: '角色恋慕值', source: 'primary' },
+    ],
+    TALENT: [{ name: '恋慕', index: 3, description: '恋慕天赋', source: 'primary' }],
+    MARK: [{ name: '恋人', index: 5, source: 'primary' }],
+  };
+  return {
+    version: 'test',
+    lookup: () => undefined,
+    names: (family: string) => table[family] ?? [],
+  } as unknown as VariableSchema;
+}
+
+const KOJO_TABLES: CompletionTables = {
+  variableSchema: fakeSchema(),
+  faceTable: { faces: { 初见: { template: 'M_KOJO_K{n}_HATSUMI' } } } as unknown as KojoFaceTable,
+};
+
+/** 项目内函数名（同一数组引用：EC-3 前缀索引按数组身份记忆化） */
+const PROJECT_FNS: readonly string[] = ['M_KOJO_A', 'M_KOJO_B'];
+
+const ERB_TABLES: ErbCompletionTables = {
+  variableSchema: fakeSchema(),
+  erbFunctionNames: () => PROJECT_FNS,
+};
+
+/* ============================== 上下文构造（把桩喂给 seam 的 provide） ============================== */
+
+const MONACO = stubMonaco();
+
+function kojoCtx(text: string, column: number, lineNumber = 1): CompletionSourceContext {
+  const model = modelOf(text);
+  const position = { lineNumber, column } as Monaco.Position;
+  const word = model.getWordUntilPosition(position);
+  return {
+    monaco: MONACO,
+    model,
+    position,
+    range: {
+      startLineNumber: lineNumber,
+      endLineNumber: lineNumber,
+      startColumn: word.startColumn,
+      endColumn: word.endColumn,
+    } as Monaco.IRange,
+    tables: KOJO_TABLES,
+  };
+}
+
+function erbCtx(text: string, column: number, lineNumber = 1): ErbCompletionSourceContext {
+  const model = modelOf(text);
+  const position = { lineNumber, column } as Monaco.Position;
+  const word = model.getWordUntilPosition(position);
+  return {
+    monaco: MONACO,
+    model,
+    position,
+    range: {
+      startLineNumber: lineNumber,
+      endLineNumber: lineNumber,
+      startColumn: word.startColumn,
+      endColumn: word.endColumn,
+    } as Monaco.IRange,
+    tables: ERB_TABLES,
+  };
+}
+
+/** 每 seam 的遍历场景（每 source 给一个「能出货」的位置） */
+const KOJO_SCENARIOS: ReadonlyArray<readonly [string, CompletionSourceContext]> = [
+  ['kojo-lexicon', kojoCtx('别名 心 = 角色 3\n', 1)],
+  ['kojo-variable', kojoCtx('{她的好感', 5)],
+  ['kojo-face', kojoCtx('时机 初', 5)],
+];
+
+const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]> = [
+  ['erb-directives', erbCtx('#D', 3)], // 行首全表
+  ['erb-directives', erbCtx('IF A', 5)], // 行中关键字子集
+  ['erb-variables', erbCtx('CFLAG:', 7)], // 二段式
+  ['erb-variables', erbCtx('CFLAG:TARGET:', 14)], // 三段式
+  ['erb-functions', erbCtx('CALL M_KOJO', 11)], // 调用位
+  ['erb-labels', erbCtx('@F\n$TARGET_ONE\n\tGOTO $TA', 10, 3)], // 跳转位
+  ['erb-system-functions', erbCtx('IF A', 5)], // 表达式位
+];
+
+interface Collected {
+  readonly sourceId: string;
+  readonly item: Monaco.languages.CompletionItem;
+}
+
+function collectKojo(): Collected[] {
+  const out: Collected[] = [];
+  for (const [id, ctx] of KOJO_SCENARIOS) {
+    const source = KOJO_COMPLETION_SOURCES.find((s) => s.id === id)!;
+    for (const item of source.provide(ctx)) out.push({ sourceId: id, item });
+  }
+  return out;
+}
+
+function collectErb(): Collected[] {
+  const out: Collected[] = [];
+  for (const [id, ctx] of ERB_SCENARIOS) {
+    const source = ERB_COMPLETION_SOURCES.find((s) => s.id === id)!;
+    for (const item of source.provide(ctx)) out.push({ sourceId: id, item });
+  }
+  return out;
+}
+
+function labelText(label: Monaco.languages.CompletionItem['label']): string {
+  return typeof label === 'string' ? label : label.label;
+}
+
+function kojoSrc(id: string): (typeof KOJO_COMPLETION_SOURCES)[number] {
+  return KOJO_COMPLETION_SOURCES.find((s) => s.id === id)!;
+}
+function erbSrc(id: string): (typeof ERB_COMPLETION_SOURCES)[number] {
+  return ERB_COMPLETION_SOURCES.find((s) => s.id === id)!;
+}
+function find(items: readonly Monaco.languages.CompletionItem[], label: string) {
+  return items.find((i) => labelText(i.label) === label);
+}
+
+/* ============================== emoji 检测（纯函数） ============================== */
+
+/**
+ * 常见 emoji 区段：`\u{1F000}-\u{1FAFF}`（Emoji / 补充符号）、`\u{2600}-\u{27BF}`
+ * （杂项符号 + Dingbats）、`\u{2B00}-\u{2BFF}`、变体选择符 `\u{FE0F}`。
+ *
+ * `\u{2190}-\u{21FF}`（箭头块）**只在后随 `\u{FE0F}`（emoji 呈现）时才算**——
+ * 裸箭头是排版字符：`erb-system-functions` 的文档用 `↔`（U+2194）做「英 ↔ 中」对照，
+ * 那是纯文本，不该被误判为 emoji。中文全角标点（`：`/`（）`/`「」`/`。`/`、`）
+ * 均不在上述区段内。
+ */
+const EMOJI_RE =
+  /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]|[\u{2190}-\u{21FF}]\u{FE0F}/u;
+
+function hasEmoji(text: string): boolean {
+  return typeof text === 'string' && EMOJI_RE.test(text);
+}
+
+/** 把候选的一个文本字段（可能是 string / `{label}` / `{value}`）拆成可检字符串 */
+function textsOf(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (value !== null && typeof value === 'object') {
+    const out: string[] = [];
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.label === 'string') out.push(obj.label);
+    if (typeof obj.value === 'string') out.push(obj.value);
+    return out;
+  }
+  return [];
+}
+
+/* ============================== 1. kind 闭集守卫 ============================== */
+
+describe('SH-6 · kind 闭集守卫（漏设 kind ⇒ Monaco 画不出图标）', () => {
+  it('桩 CompletionItemKind 覆盖两 seam 实际用到的全部枚举（≥ 六个必需 + EnumMember）', () => {
+    for (const req of ['Variable', 'Keyword', 'Operator', 'Function', 'Field', 'Reference'] as const) {
+      expect(KIND).toHaveProperty(req);
+    }
+    expect(KIND).toHaveProperty('EnumMember'); // kojo-face 用
+  });
+
+  it('每个候选都有 kind（≠ undefined）且落在合法闭集内', () => {
+    const all = [...collectKojo(), ...collectErb()];
+    expect(all.length).toBeGreaterThan(0);
+    for (const { sourceId, item } of all) {
+      expect(item.kind, `${sourceId} 的候选「${labelText(item.label)}」缺 kind`).toBeDefined();
+      expect(
+        LEGAL_KINDS.has(item.kind as number),
+        `${sourceId} 的候选「${labelText(item.label)}」kind=${String(item.kind)} 越出闭集`,
+      ).toBe(true);
+    }
+  });
+
+  it('两 seam 实际用到的 kind 并集非空且落在闭集内', () => {
+    const used = new Set<number>([...collectKojo(), ...collectErb()].map((c) => c.item.kind as number));
+    expect(used.size).toBeGreaterThan(0);
+    for (const k of used) expect(LEGAL_KINDS.has(k)).toBe(true);
+  });
+});
+
+/* ============================== 2. 零 emoji 守卫 ============================== */
+
+describe('SH-6 · 零 emoji 守卫（宿主层候选文本）', () => {
+  it('hasEmoji 正反例自测（真候选集口径：全角标点 / 文本箭头不得误伤）', () => {
+    expect(hasEmoji('😀')).toBe(true); // 1F600
+    expect(hasEmoji('✨')).toBe(true); // 2728
+    expect(hasEmoji('☑')).toBe(true); // 2611
+    expect(hasEmoji('↩️')).toBe(true); // 箭头 + 变体选择符 = emoji 呈现
+    expect(hasEmoji('：（）「」。、！？')).toBe(false); // 中文全角标点
+    expect(hasEmoji('CFLAG:1088')).toBe(false);
+    expect(hasEmoji('**GETBIT** ↔ 系统函数')).toBe(false); // 裸箭头 = 排版字符，非 emoji
+    expect(hasEmoji('好感度')).toBe(false);
+    expect(hasEmoji('M_KOJO_K{n}_HATSUMI')).toBe(false);
+  });
+
+  it('全部候选的 label / insertText / detail / documentation 无 emoji 码点', () => {
+    const all = [...collectKojo(), ...collectErb()];
+    expect(all.length).toBeGreaterThan(0);
+    let hits = 0;
+    for (const { sourceId, item } of all) {
+      const fields: Array<[string, unknown]> = [
+        ['label', item.label],
+        ['insertText', item.insertText],
+        ['detail', item.detail],
+        ['documentation', item.documentation],
+      ];
+      for (const [name, raw] of fields) {
+        for (const text of textsOf(raw)) {
+          if (hasEmoji(text)) {
+            hits++;
+            throw new Error(`${sourceId} 候选「${labelText(item.label)}」.${name} 含 emoji：${text}`);
+          }
+        }
+      }
+    }
+    expect(hits).toBe(0);
+  });
+});
+
+/* ============================== 3. kind 语义映射（设计意图钉死） ============================== */
+
+describe('SH-6 · kind 语义映射（当前设计意图）', () => {
+  it('kojo-lexicon：别名 → Variable；保留代词 / 关键字 → Keyword', () => {
+    const items = kojoSrc('kojo-lexicon').provide(kojoCtx('别名 心 = 角色 3\n', 1));
+    expect(find(items, '心')!.kind).toBe(KIND.Variable); // 本文件别名
+    expect(find(items, '她')!.kind).toBe(KIND.Keyword); // 保留代词
+    expect(find(items, '如果')!.kind).toBe(KIND.Keyword); // 中文主形关键字
+  });
+
+  it('kojo-lexicon：运算符 → Operator；系统函数 → Function', () => {
+    const items = kojoSrc('kojo-lexicon').provide(kojoCtx('别名 心 = 角色 3\n', 1));
+    expect(find(items, '等于')!.kind).toBe(KIND.Operator);
+    expect(find(items, '不在')!.kind).toBe(KIND.Operator); // NOTIN 归运算符组
+    expect(find(items, '获取标记')!.kind).toBe(KIND.Function);
+  });
+
+  it('kojo-variable：插值内变量名 → Variable', () => {
+    const items = kojoSrc('kojo-variable').provide(kojoCtx('{她的好感', 5));
+    expect(find(items, '好感度')!.kind).toBe(KIND.Variable);
+  });
+
+  it('kojo-face：时机分野名 → EnumMember', () => {
+    const items = kojoSrc('kojo-face').provide(kojoCtx('时机 初', 5));
+    expect(find(items, '初见')!.kind).toBe(KIND.EnumMember);
+  });
+
+  it('erb-directives：指令 / 关键字 → Keyword', () => {
+    const head = erbSrc('erb-directives').provide(erbCtx('#D', 3));
+    expect(find(head, '#DIM')!.kind).toBe(KIND.Keyword);
+    const mid = erbSrc('erb-directives').provide(erbCtx('IF A', 5));
+    expect(find(mid, 'ELSE')!.kind).toBe(KIND.Keyword);
+  });
+
+  it('erb-variables：二段式（CFLAG:）→ Variable；三段式（CFLAG:TARGET:）→ Field', () => {
+    const seg2 = erbSrc('erb-variables').provide(erbCtx('CFLAG:', 7));
+    expect(find(seg2, '好感度')!.kind).toBe(KIND.Variable);
+    const seg3 = erbSrc('erb-variables').provide(erbCtx('CFLAG:TARGET:', 14));
+    expect(find(seg3, '好感度')!.kind).toBe(KIND.Field);
+  });
+
+  it('erb-functions / erb-system-functions → Function；erb-labels → Reference', () => {
+    const fns = erbSrc('erb-functions').provide(erbCtx('CALL M_KOJO', 11));
+    expect(find(fns, 'M_KOJO_A')!.kind).toBe(KIND.Function);
+    const sys = erbSrc('erb-system-functions').provide(erbCtx('IF A', 5));
+    expect(find(sys, 'GETBIT')!.kind).toBe(KIND.Function);
+    const labels = erbSrc('erb-labels').provide(erbCtx('@F\n$TARGET_ONE\n\tGOTO $TA', 10, 3));
+    expect(find(labels, 'TARGET_ONE')!.kind).toBe(KIND.Reference);
+  });
+});
+
+/* ============================== 4. 满表遍历（证明不是空跑） ============================== */
+
+describe('SH-6 · 满表遍历（读数：不是空跑）', () => {
+  it('两 seam 遍历到的候选 item 总数足够，且每个 source 均有出货', () => {
+    const kojo = collectKojo();
+    const erb = collectErb();
+    // eslint-disable-next-line no-console
+    console.log(`[SH-6] kojo items=${kojo.length} erb items=${erb.length} total=${kojo.length + erb.length}`);
+    expect(kojo.length).toBeGreaterThan(20); // 别名+代词+关键字+运算符+系统函数 ≥ 20
+    expect(erb.length).toBeGreaterThan(20); // 行首全表 + 表达式系统函数 ≥ 20
+    const kojoIds = new Set(kojo.map((c) => c.sourceId));
+    const erbIds = new Set(erb.map((c) => c.sourceId));
+    for (const s of KOJO_COMPLETION_SOURCES) expect(kojoIds.has(s.id)).toBe(true);
+    for (const s of ERB_COMPLETION_SOURCES) expect(erbIds.has(s.id)).toBe(true);
+  });
+});
