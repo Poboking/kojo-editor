@@ -25,7 +25,9 @@ import {
   markersToDecorations,
 } from '../monaco/kojo-code-action';
 import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
-import { dialectForLanguage, installDocumentFormatter } from '../monaco/kojo-format';
+import { dialectForLanguage, installDocumentFormatter, toTextEdits } from '../monaco/kojo-format';
+import { applyFormatOnSave } from './format-on-save';
+import { loadFormatOnSavePref } from './format-pref';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
@@ -649,7 +651,24 @@ export function EditorPane({
         onReauthRef.current();
         return false;
       }
-      const text = entry.model.getValue();
+      const rawText = entry.model.getValue();
+      // 保存前整理（E2）：跑 `Shift+Alt+F` 那一份纯函数（同一真源，不复制规则）。
+      // 只改**内存文本**并让它落进 model，随后的保存链路一条不绕：写允许域已在上面判过、
+      // 编码/行尾由内核 io 保、备份与原子写在 `writeText`/`compileToFile` 里。
+      // 全角空格告警因此天然少弹一次：`planSave` 看的就是这份整理后的文本。
+      // 糖视图下不重算预览（与 `reloadFromDisk` 同口径：派生视图随下一次切换刷新）。
+      const prepared = applyFormatOnSave(
+        rawText,
+        dialectForLanguage(languageFor(path)),
+        loadFormatOnSavePref(),
+      );
+      let text = rawText;
+      if (prepared.changed) {
+        // `pushEditOperations` 一次落地全部 edits ⇒ 落进撤销栈的是**一个**元素；
+        // 用它而不是 `ed.executeEdits` 是因为后台标签的 model 不在编辑器上（全部保存途中）。
+        entry.model.pushEditOperations([], toTextEdits(entry.model, prepared.edits), () => null);
+        text = entry.model.getValue();
+      }
       savingRef.current = true;
       try {
         const handler = pickSaveHandler(kernel, path);

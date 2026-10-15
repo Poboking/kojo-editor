@@ -47,6 +47,8 @@ import {
 } from './float-geometry';
 import { beginFloatDrag, beginFloatResize } from './float-drag';
 import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
+// 保存时整理空白（E2）：偏好真源在 localStorage（`format-pref.ts`），保存链路每次现读
+import { loadFormatOnSavePref, saveFormatOnSavePref } from './format-pref';
 import { fileWritableArea, writablePillTone } from './file-area';
 import {
   applyMotionPref,
@@ -277,6 +279,23 @@ export function ShellLayout(props: Props): ReactElement {
     saveMotionPref(p);
     setMotionPref(p);
     applyMotionPref(p);
+  }, []);
+
+  /**
+   * 保存时整理空白开关（E2；设置页里的那一项，默认关）。
+   *
+   * 与上面两个开关的分工差别值得说一句：**这里不推事件、也不持业务状态**——
+   * 保存链路（`EditorPane.savePath`）落盘前自己 `loadFormatOnSavePref()` 现读，
+   * 所以刚翻的开关立刻生效且不可能读到旧镜像。本组件只留一个渲染用的镜像值，
+   * 并在设置面板打开时重读一次（别的窗口/会话写过也能反映）。
+   */
+  const [formatOnSave, setFormatOnSave] = useState<boolean>(() => loadFormatOnSavePref());
+  useEffect(() => {
+    if (settingsOpen) setFormatOnSave(loadFormatOnSavePref());
+  }, [settingsOpen]);
+  const commitFormatOnSave = useCallback((on: boolean) => {
+    saveFormatOnSavePref(on);
+    setFormatOnSave(on);
   }, []);
 
   /**
@@ -1243,6 +1262,20 @@ export function ShellLayout(props: Props): ReactElement {
                     <span className="settings-hint">
                       把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
                       只改显示、不改动文件。默认关；快捷键 Ctrl+Alt+T
+                    </span>
+                  </span>
+                </label>
+                {/* 保存时整理空白（E2，2026-10-15 格式化批）：手动版是 Shift+Alt+F，本开关
+                    只是把同一次整理挂到保存前。默认关的理由写在 `format-pref.ts`：改的正是空白，
+                    而语料里的全角空格多数是有意的排版。文案回避内部术语（不上「糖」字）。 */}
+                <label className="settings-row">
+                  <input type="checkbox" checked={formatOnSave} onChange={(e) => commitFormatOnSave(e.target.checked)} />
+                  <span>
+                    保存时整理空白
+                    <span className="settings-hint">
+                      存盘前把行首与注释里的全角空格折成半角、统一 .kojo 的缩进写法。
+                      台词正文、行尾风格与文件编码都不动；整理是一次可撤销的改动。默认关，
+                      手动整理随时可用 Shift+Alt+F
                     </span>
                   </span>
                 </label>
