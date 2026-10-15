@@ -18,6 +18,9 @@
  * 全量登记（v1 有糖形态的入口 + 其余入口的完整模板），转译器只对 `faces`
  * 里存在的关键字出产物——v1 未开放糖写法的入口在函数名上与附录 C 逐字一致，
  * 供校验/补全取用（规范 §5.5 使用约定：**不要按 12 行反推全集**）。
+ *
+ * A4 另补 8 个**附录 C 未收录**的实测调用面（角色介绍 / 礼物 / 参数变动 / 触手 /
+ * 房间描述 / 游玩指南 ×3），caller 出处见各自条目注释（引擎源码确证，非猜测）。
  */
 
 import type { KojoFaceTable } from '@kojo/plugin-api';
@@ -95,6 +98,34 @@ export function createEratwFaceTable(): KojoFaceTable {
 
       // 附录 C #21：日记 `DIARY{t}_TEXT_K{n}`（前缀是 DIARY，非 M_KOJO）
       日记: { template: 'DIARY{t}_TEXT_K{n}' },
+
+      /* ---- A4：附录 C 之外的**实测**调用面（引擎源码确证，additive 补面） ---- */
+
+      // 角色介绍：`ステータス表示関連/PRINT_STATE2.ERB:165`
+      //   `TRYCALLFORM CHARA_INFO_KOJO%RESULTS%_K{ARG}`（无编号、无实参；样例 `@CHARA_INFO_KOJO_K160()`）
+      角色介绍: { template: 'CHARA_INFO_KOJO{t}_K{n}' },
+
+      // 礼物：`KOJO_MESSAGE.ERB:752`
+      //   `TRYCALLFORM M_KOJO%RESULTS%_EVENT_K{NO:TARGET}_GIFT(ARG:1, ARG:3, ARG:4, ARGS:1, ARGS:2)`
+      礼物: { template: 'M_KOJO{t}_EVENT_K{n}_GIFT' },
+
+      // 参数变动：`KOJO_MESSAGE.ERB:400`（PALAM CASE 4，`;==== パラメータ変動口上 ====`）
+      参数变动: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_D_K{n}' },
+      // 触手：`KOJO_MESSAGE.ERB:434`（PALAM CASE 5，`;==== 触手の射精 ====`）
+      触手: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_E_K{n}' },
+
+      // 房间描述：`ANOTHER_TALK.ERB:1023`
+      //   `TRYCCALLFORM K{NO:KROOM_DESC}%RESULTS%_ROOM_DESCRIPTION`（样例 `@K33_ROOM_DESCRIPTION` /
+      //   `@K34_顶空灿梦_ROOM_DESCRIPTION`）——**家族段在编号之后**（与 #27 BEFORETRAIN 同为特例）
+      房间描述: { template: 'K{n}{t}_ROOM_DESCRIPTION' },
+
+      // 游玩指南：`fromEN/NEW_UPDATE/UPDATE_MAIN.ERB:1133` `TRYCALLFORM KOJO%RESULTS%_OPTION_K{NO:ARG}`
+      // 游玩指南存在：同上 `:1487` `TRYCALLFORM KOJO%RESULTS%_OPTION_EXIST_K{C_ID}`
+      //   （`:1102` 那条 `OPTION_EXIST` 被注释掉，不采信；采信 `:1487` 有效 caller）
+      // 游玩指南结果：同上 `:1171` `TRYCCALLFORM KOJO%RESULTS%_OPTION_K{NO:ARG}_RESULT_{nInput}`
+      游玩指南: { template: 'KOJO{t}_OPTION_K{n}' },
+      游玩指南存在: { template: 'KOJO{t}_OPTION_EXIST_K{n}' },
+      游玩指南结果: { template: 'KOJO{t}_OPTION_K{n}_RESULT_{i}' },
 
       /* ---- 附录 C 其余入口（v1 走原生直通；模板登记供校验/补全取用） ---- */
 

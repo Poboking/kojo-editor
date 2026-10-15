@@ -1,0 +1,111 @@
+@CHARA_INFO_KOJO_K12
+CALL CHARA_INFO_KOJO_K12_1
+RETURN RESULT
+
+@CHARA_INFO_KOJO_K12_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「甲。」
+ENDIF
+RETURN 1
+
+@M_KOJO_EVENT_K12_GIFT
+CALL M_KOJO_EVENT_K12_GIFT_1
+RETURN RESULT
+
+@M_KOJO_EVENT_K12_GIFT_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「乙。」
+ENDIF
+RETURN 1
+
+@M_KOJO_MESSAGE_PALAMCNG_D_K12
+CALL M_KOJO_MESSAGE_PALAMCNG_D_K12_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_PALAMCNG_D_K12_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「丙。」
+ENDIF
+RETURN 1
+
+@M_KOJO_MESSAGE_PALAMCNG_E_K12
+CALL M_KOJO_MESSAGE_PALAMCNG_E_K12_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_PALAMCNG_E_K12_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「丁。」
+ENDIF
+RETURN 1
+
+@K12_ROOM_DESCRIPTION
+CALL K12_ROOM_DESCRIPTION_1
+RETURN RESULT
+
+@K12_ROOM_DESCRIPTION_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「戊。」
+ENDIF
+RETURN 1
+
+@KOJO_OPTION_K12
+CALL KOJO_OPTION_K12_1
+RETURN RESULT
+
+@KOJO_OPTION_K12_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「己。」
+ENDIF
+RETURN 1
+
+@KOJO_OPTION_EXIST_K12
+CALL KOJO_OPTION_EXIST_K12_1
+RETURN RESULT
+
+@KOJO_OPTION_EXIST_K12_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「庚。」
+ENDIF
+RETURN 1
+
+@KOJO_OPTION_K12_RESULT_3
+CALL KOJO_OPTION_K12_RESULT_3_1
+RETURN RESULT
+
+@KOJO_OPTION_K12_RESULT_3_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「辛。」
+ENDIF
+RETURN 1

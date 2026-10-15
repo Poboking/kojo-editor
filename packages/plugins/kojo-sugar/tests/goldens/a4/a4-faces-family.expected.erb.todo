@@ -1,0 +1,58 @@
+@M_KOJO_K12
+RESULTS = "_TOKI"
+
+@CHARA_INFO_KOJO_TOKI_K12
+CALL CHARA_INFO_KOJO_TOKI_K12_1
+RETURN RESULT
+
+@CHARA_INFO_KOJO_TOKI_K12_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「甲。」
+ENDIF
+RETURN 1
+
+@K12_TOKI_ROOM_DESCRIPTION
+CALL K12_TOKI_ROOM_DESCRIPTION_1
+RETURN RESULT
+
+@K12_TOKI_ROOM_DESCRIPTION_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「戊。」
+ENDIF
+RETURN 1
+
+@KOJO_TOKI_OPTION_K12
+CALL KOJO_TOKI_OPTION_K12_1
+RETURN RESULT
+
+@KOJO_TOKI_OPTION_K12_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「己。」
+ENDIF
+RETURN 1
+
+@KOJO_TOKI_OPTION_K12_RESULT_3
+CALL KOJO_TOKI_OPTION_K12_RESULT_3_1
+RETURN RESULT
+
+@KOJO_TOKI_OPTION_K12_RESULT_3_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「辛。」
+ENDIF
+RETURN 1

@@ -57,6 +57,30 @@ describe('KojoFaceTable · 分野模板（规范 §3.2 / 附录 C）', () => {
     }
   });
 
+  it('A4 补面：附录 C 之外 8 个实测调用面全部登记，模板逐字符合引擎 caller', () => {
+    const expectA4: Record<string, string> = {
+      // PRINT_STATE2.ERB:165 `TRYCALLFORM CHARA_INFO_KOJO%RESULTS%_K{ARG}`
+      角色介绍: 'CHARA_INFO_KOJO{t}_K{n}',
+      // KOJO_MESSAGE.ERB:752 `TRYCALLFORM M_KOJO%RESULTS%_EVENT_K{NO:TARGET}_GIFT(...)`
+      礼物: 'M_KOJO{t}_EVENT_K{n}_GIFT',
+      // KOJO_MESSAGE.ERB:400 PALAM CASE 4（パラメータ変動）
+      参数变动: 'M_KOJO{t}_MESSAGE_PALAMCNG_D_K{n}',
+      // KOJO_MESSAGE.ERB:434 PALAM CASE 5（触手の射精）
+      触手: 'M_KOJO{t}_MESSAGE_PALAMCNG_E_K{n}',
+      // ANOTHER_TALK.ERB:1023 `TRYCCALLFORM K{NO:KROOM_DESC}%RESULTS%_ROOM_DESCRIPTION`
+      // ——家族段在编号**之后**（与 #27 BEFORETRAIN 同为特例）
+      房间描述: 'K{n}{t}_ROOM_DESCRIPTION',
+      // UPDATE_MAIN.ERB:1133 / :1487 / :1171
+      游玩指南: 'KOJO{t}_OPTION_K{n}',
+      游玩指南存在: 'KOJO{t}_OPTION_EXIST_K{n}',
+      游玩指南结果: 'KOJO{t}_OPTION_K{n}_RESULT_{i}',
+    };
+    for (const [face, template] of Object.entries(expectA4)) {
+      expect(table.faces[face], `分野「${face}」`).toBeDefined();
+      expect(table.faces[face]!.template).toBe(template);
+    }
+  });
+
   it('三件套模板不带家族段（规范 §5.5），只含 {n}', () => {
     expect(table.registration?.declare).toBe('M_KOJO_K{n}');
     expect(table.registration?.color).toBe('M_KOJO_COLOR_K{n}');
