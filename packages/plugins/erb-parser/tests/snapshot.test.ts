@@ -37,10 +37,11 @@ function file(path: string, names: readonly string[]): ErbFile {
 }
 
 function entry(path: string, mtimeMs: number | null, names: readonly string[]): SnapshotEntry {
-  return { mtimeMs, textLength: 1000, file: file(path, names) };
+  // v4 起 decode 恒回填 refs（缺 = 结构不符）；夹具同形，round-trip 判据才不空转
+  return { mtimeMs, textLength: 1000, file: file(path, names), refs: [] };
 }
 
-/** 盘上形态：v3 起 entries 是位置元组，内存形状只在加载后存在 */
+/** 盘上形态：v4 起 entries 是位置元组（第 7 位 = 引用流水），内存形状只在加载后存在 */
 function snapshot(entries: Record<string, SnapshotEntry>, rootDir = ROOT): IndexSnapshot & { entries: unknown } {
   return { version: SNAPSHOT_VERSION, rootDir, savedAt: 1234, entries: encodeEntries(entries) } as never;
 }
@@ -170,6 +171,20 @@ describe('v3 元组编解码（瘦身不改语义）', () => {
     expect(bad((e) => ((e['/a.ERB'] as unknown[])[4] = [['FOO', 1, 2, [[['A', 3]]], 0]]))).toBeNull(); // 形参标记非 0|1
     expect(bad((e) => ((e['/a.ERB'] as unknown[])[4] = [['FOO', 1, 2, [], 0, 5]]))).toBeNull(); // 注释非字符串
     expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = [['X']]))).toBeNull(); // dims 元数
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[6] = [['FOO', 1, 2]]))).toBeNull(); // refs 元数（v4 新增位）
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[6] = [['FOO', 1, 2, 3]]))).toBeNull(); // refs 种类旗标非 0|1|2
+    expect(bad((e) => ((e['/a.ERB'] as unknown[]).length = 6))).toBeNull(); // refs 位缺失（v3 形态整弃）
+  });
+
+  it('refs 流水非空也必须原样往返（反向索引热复用的判据来源）', () => {
+    const src: SnapshotEntry = {
+      mtimeMs: 5,
+      textLength: 42,
+      file: file('/a.ERB', ['FOO']),
+      refs: [['FOO', 1, 1, 0], ['FOO', 3, 6, 1], ['BAR', 9, 2, 2]],
+    };
+    const back = decodeEntries(JSON.parse(JSON.stringify(encodeEntries({ '/a.ERB': src }))))!;
+    expect(back['/a.ERB']!.refs).toEqual(src.refs);
   });
 
   it('mtime 为 null 必须能原样往返（保守失效判据不能编造成数字）', () => {

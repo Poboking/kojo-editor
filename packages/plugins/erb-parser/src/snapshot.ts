@@ -31,6 +31,7 @@
  * - **零游戏知识**：本模块只认识"文件与函数边界"，不认识任何命名约定。
  */
 import type { ErbDim, ErbFile, ErbFunction, ErbFunctionRef, ErbParam, FileStat } from '@kojo/plugin-api';
+import type { FileRefs, RefRun } from './references';
 
 /**
  * 快照格式版本（结构不兼容时整体弃用重建）。
@@ -47,8 +48,13 @@ import type { ErbDim, ErbFile, ErbFunction, ErbFunctionRef, ErbParam, FileStat }
  * v3 把这三样从盘上去掉（加载时回填），条目与函数改用位置元组 ⇒ 预计降到 ~18 MB，
  * 热启动 `storage.get`（v2 实测 253 ms）应随之等比下降。
  * 内存里的 `SnapshotEntry` 形状**不变**：压缩只发生在存储边界，插件逻辑一行不用改。
+ *
+ * **v3 → v4**（2026-10-15 H2 反向索引批）：条目追加第 7 位 `refs`
+ * （`[归一化名, 行, 列, 种类旗标]` 流水）。反向引用必须在**读盘解析段**顺手产出
+ * （文本不许整份留驻），热复用若无盘上 refs 就得二次读全部文件 ⇒ 快照不存等于白热。
+ * v3 快照没有 refs ⇒ 版本 bump ⇒ fail-closed 整体弃用、一次冷重建（此后照常热）。
  */
-export const SNAPSHOT_VERSION = 3;
+export const SNAPSHOT_VERSION = 4;
 
 /** 单个文件的快照条目 */
 export interface SnapshotEntry {
@@ -58,6 +64,11 @@ export interface SnapshotEntry {
   readonly textLength: number;
   /** 该文件的完整解析结果（纯数据，JSON 安全） */
   readonly file: ErbFile;
+  /**
+   * 该文件的反向引用流水（见 `./references` 的 `FileRefs`）。
+   * v4 起恒在（缺失 = 结构不符 ⇒ 整体弃用）；构建序 = 行、列升序，聚合序因此确定。
+   */
+  readonly refs?: FileRefs;
 }
 
 /** 索引快照（按项目根一份） */
@@ -94,8 +105,10 @@ type ParamTuple = [string, 0 | 1];
 type FunctionTuple = [string, number, number, ParamTuple[], number, string?];
 /** `[变量名, 声明指令, 行号]` */
 type DimTuple = [string, string, number];
-/** `[mtimeMs, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量]` */
-type EntryTuple = [number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[]];
+/** `[归一化名, 行, 列, 种类旗标(0=定义 1=调用 2=提及)]` */
+type RefTuple = [string, number, number, 0 | 1 | 2];
+/** `[mtimeMs, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水]` */
+type EntryTuple = [number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[], RefTuple[]];
 
 const FLAG_EXPRESSION = 1;
 
@@ -118,16 +131,26 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       return fn;
     });
     const dims: DimTuple[] = e.file.dims.map((d): DimTuple => [d.name, d.directive, d.line]);
-    out[path] = [e.mtimeMs, e.textLength, e.file.lineCount, e.file.hasFunctionDirective ? 1 : 0, fns, dims];
+    const refs: RefTuple[] = (e.refs ?? []).map(
+      ([name, line, column, kind]) => [name, line, column, kind] as RefTuple,
+    );
+    out[path] = [e.mtimeMs, e.textLength, e.file.lineCount, e.file.hasFunctionDirective ? 1 : 0, fns, dims, refs];
   }
   return out;
 }
 
 function isEntryTuple(t: unknown): t is EntryTuple {
-  if (!Array.isArray(t) || t.length !== 6) return false;
+  if (!Array.isArray(t) || t.length !== 7) return false;
   if (t[0] !== null && typeof t[0] !== 'number') return false;
   return typeof t[1] === 'number' && typeof t[2] === 'number' && (t[3] === 0 || t[3] === 1) &&
-    Array.isArray(t[4]) && Array.isArray(t[5]);
+    Array.isArray(t[4]) && Array.isArray(t[5]) && Array.isArray(t[6]);
+}
+
+function isRefTuple(t: unknown): t is RefTuple {
+  return (
+    Array.isArray(t) && t.length === 4 && typeof t[0] === 'string' && typeof t[1] === 'number' &&
+    typeof t[2] === 'number' && (t[3] === 0 || t[3] === 1 || t[3] === 2)
+  );
 }
 
 function isFunctionTuple(t: unknown): t is FunctionTuple {
@@ -150,11 +173,12 @@ export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | nul
   const out: Record<string, SnapshotEntry> = {};
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!isEntryTuple(value)) return null;
-    const [mtimeMs, textLength, lineCount, hasDirective, fns, dims] = value;
+    const [mtimeMs, textLength, lineCount, hasDirective, fns, dims, refs] = value;
     if (!fns.every(isFunctionTuple)) return null;
     if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
       return null;
     }
+    if (!refs.every(isRefTuple)) return null;
     const functions: ErbFunction[] = fns.map(([name, startLine, endLine, params, flags, doc]) => ({
       name,
       normalizedName: name.toUpperCase(),
@@ -176,6 +200,7 @@ export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | nul
         hasFunctionDirective: hasDirective === 1,
         lineCount,
       },
+      refs: refs.map(([name, line, column, kind]): RefRun => [name, line, column, kind]),
     };
   }
   return out;
@@ -294,6 +319,25 @@ export function mergeEntries(
     }
     const old = prev?.entries[p];
     if (old) out[p] = old;
+  }
+  return out;
+}
+
+/**
+ * 把引用流水挂回快照条目（H2 批）。
+ *
+ * 为什么单独一步而不是并进 `mergeEntries`：`refs` 要等**全项目 `byName` 建好**才能扫
+ * （判据是全局名字表），而 `mergeEntries` 发生在解析段。挂接是纯函数重建条目对象，
+ * 不原地改——`SnapshotEntry` 的 readonly 纪律不破。
+ */
+export function attachRefs(
+  entries: Record<string, SnapshotEntry>,
+  refsByPath: ReadonlyMap<string, FileRefs>,
+): Record<string, SnapshotEntry> {
+  const out: Record<string, SnapshotEntry> = {};
+  for (const [path, e] of Object.entries(entries)) {
+    const refs = refsByPath.get(path);
+    out[path] = refs === undefined ? e : { ...e, refs };
   }
   return out;
 }

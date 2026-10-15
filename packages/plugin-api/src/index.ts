@@ -246,6 +246,8 @@ export type {
   ErbParserService,
   ErbStructureIssue,
 } from './erb';
+// 反向引用索引契约（2026-10-15 additive，H2 批独占追加）
+export type { ErbReference, ErbReferenceIndex, ErbReferenceKind } from './erb';
 
 export {
   hasArchive,

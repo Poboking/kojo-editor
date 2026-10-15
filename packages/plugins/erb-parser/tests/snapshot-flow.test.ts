@@ -155,7 +155,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
 
     openProject(bus);
     await waitIndexed();
-    expect(readsOf()).toBe(2); // 全量
+    expect(readsOf()).toBe(4); // 全量：每文件 2 读（解析 + H2 引用重扫；文本不留驻，只能重读）
     expect(service.currentIndex()!.files.size).toBe(2);
 
     expect(map.size).toBe(1);
@@ -179,7 +179,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
 
     openProject(bus); // 同一项目重开
     await waitIndexed();
-    expect(readsOf()).toBe(2); // 仍是首次那 2 次读：二次打开零读盘
+    expect(readsOf()).toBe(4); // 仍是首次那 4 次读：二次打开零读盘（refs 也走快照，增量批不放宽这条）
     expect(indexFingerprint(service.currentIndex()!)).toBe(first);
   });
 
@@ -198,7 +198,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     files.set(P1, { text: SRC1_TOUCHED, mtimeMs: 300 }); // 只改 P1
     openProject(bus);
     await waitIndexed();
-    expect(readsOf()).toBe(3); // 首次 2 次 + 本次只重扫 P1
+    expect(readsOf()).toBe(6); // 首次 4 + 本次只重扫 P1（解析 + 引用 = 2 读）；P2 复用快照零读
 
     const idx = service.currentIndex()!;
     expect(idx.files.get(P1)!.functions.map((f) => f.normalizedName)).toEqual(['FOO_A', 'FOO_B', 'FOO_C']);
@@ -247,7 +247,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     await waitIndexed();
 
     expect(deleted).toEqual([snapshotKeyFor(ROOT)]);
-    expect(readsOf()).toBe(4); // 2（首次）+ 2（弃用后全量重建）
+    expect(readsOf()).toBe(8); // 4（首次）+ 4（弃用后全量重建：每文件解析+引用各一读）
     expect(service.currentIndex()!.files.size).toBe(2);
   });
 
@@ -301,7 +301,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     await waitIndexed();
 
     await service.buildIndex([KOJO]);
-    expect(readsOf()).toBe(4); // 显式调用无视快照，全量重读
+    expect(readsOf()).toBe(8); // 显式调用无视快照，全量重读（每文件解析+引用两读）
   });
 
   /**

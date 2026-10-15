@@ -15,10 +15,12 @@ import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload,
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
 import { buildStructureFixes } from './structure-fix';
+import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt } from './symbols';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
+  attachRefs,
   coerceSnapshot,
   diffSnapshot,
   encodeEntries,
@@ -245,6 +247,39 @@ export function createErbParserPlugin(): Plugin {
         const { files, byName } = aggregateIndex(ordered);
         const aggMs = Date.now() - aggStartedAt;
 
+        /* ---------------- 反向引用扫描（H2 批，判据 = 全局 byName ⇒ 必须排在聚合后） ----------------
+         * 文本不许整份留驻（412 万行），所以重扫只对 **stale 文件**重读一次；
+         * 复用文件直接取快照里的 refs（热构建零额外读盘）。冷构建为此付一趟二次读，
+         * 实测读数进 breakdown 日志与 references.corpus.test.ts。 */
+        const refsStartedAt = Date.now();
+        const hasName = (upper: string): boolean => byName.has(upper);
+        const refsByPath = new Map<string, FileRefs>();
+        let refsFromSnapshot = 0;
+        for (const path of diff.reusable) {
+          const reused = snapshot?.entries[path];
+          if (reused?.refs !== undefined) {
+            refsByPath.set(path, reused.refs);
+            refsFromSnapshot++;
+          }
+        }
+        const refsToScan = diff.stale.filter((path) => fresh.has(path));
+        await compute.runSliced(
+          refsToScan,
+          { concurrency: STAT_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.refs' },
+          async (path) => {
+            try {
+              const tf = await io.readText(path);
+              refsByPath.set(path, scanFileRefs(tf.text, hasName));
+            } catch (err) {
+              ctx.log.warn(`Refs scan skipped (reread failed): ${path}: ${String(err)}`);
+            }
+          },
+        );
+        const references = buildReferenceIndex(ordered, refsByPath);
+        const refsMs = Date.now() - refsStartedAt;
+        let refSites = 0;
+        for (const list of references.bySymbol.values()) refSites += list.length;
+
         ctx.log.info(
           `Indexed ${files.size} ERB files, ${byName.size} distinct functions from ${rootsToScan.length} root(s) ` +
             `in ${Date.now() - buildStartedAt}ms`,
@@ -252,6 +287,7 @@ export function createErbParserPlugin(): Plugin {
         ctx.log.info(
           `  index breakdown: walk ${walkMs}ms · stat ${statMs}ms · snapshot ${snapMs}ms ` +
             `(get ${snapGetMs}ms, coerce ${snapCoerceMs}ms) · read+parse ${parseMs}ms · aggregate ${aggMs}ms · ` +
+            `refs ${refsMs}ms (${refSites} sites, rescan ${refsToScan.length}, snapshot ${refsFromSnapshot}) · ` +
             `mtime 来源 walk顺带 ${metaByPath.size} / 兜底逐文件 ${needStat.length} · ` +
             `reused ${diff.reusable.length}/${allFiles.length}`,
         );
@@ -262,7 +298,8 @@ export function createErbParserPlugin(): Plugin {
         if (useSnapshot && currentRoot && gen === generation) {
           const key = snapshotKeyFor(currentRoot);
           if (snapshotDirty) {
-            const entries = mergeEntries(snapshot, allFiles, fresh);
+            // refs 挂在条目上一起落盘：热复用时反向索引不花一次读盘（挂接纯函数，见 snapshot.attachRefs）
+            const entries = attachRefs(mergeEntries(snapshot, allFiles, fresh), refsByPath);
             const saveStartedAt = Date.now();
             void storage
               .set(key, {
@@ -289,9 +326,9 @@ export function createErbParserPlugin(): Plugin {
         }
 
         // 仅在仍是当前代际时提交（避免项目快速切换导致旧结果覆盖新结果）
-        if (gen !== generation) return { files, byName, fingerprint, fileMtimes };
+        if (gen !== generation) return { files, byName, fingerprint, fileMtimes, references };
 
-        const built: ErbIndex = { files, byName, fingerprint, fileMtimes };
+        const built: ErbIndex = { files, byName, fingerprint, fileMtimes, references };
         index = built;
         ctx.bus.emit('kojo.functionChanged', {
           projectRoot: currentRoot,
@@ -340,6 +377,9 @@ export function createErbParserPlugin(): Plugin {
 
         // 位置 → 符号（B0）：只读已构建的索引，不读盘；未构建 → undefined（不猜）
         functionAt: (path: string, line: number) => (index ? functionAt(index, path, line) : undefined),
+
+        // 符号 → 引用点（H2）：同上，只读 `index.references`，未构建 → 空数组
+        referencesTo: (name: string) => (index ? referencesOf(index, name) : []),
       };
 
       // 响应式：项目打开 → 自动构建；项目关闭 → 清空

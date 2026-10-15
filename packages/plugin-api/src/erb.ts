@@ -173,6 +173,11 @@ export interface ErbIndex {
    * 某文件取不到 stat ⇒ 该路径值为 `null` ⇒ 下游对**该文件**永不复用（保守，不影响别的文件）。
    */
   readonly fileMtimes?: ReadonlyMap<string, number | null>;
+  /**
+   * 反向引用索引（归一化名 → 定义点与引用点；**additive 可选**，2026-10-15）。
+   * 缺省 = 提供方未建（消费方降级），语义同 `functionAt?`。
+   */
+  readonly references?: ErbReferenceIndex;
 }
 
 /**
@@ -236,4 +241,58 @@ export interface ErbParserService {
    * 同 `checkStructure?`）；提供方须与索引同时生效。
    */
   functionAt?(path: string, line: number): ErbFunction | undefined;
+
+  /**
+   * 谁引用了 `name`（**additive 可选**，2026-10-15 反向索引批）：定义点与引用点全集，
+   * 按构建序 → 行 → 列确定排序。`name` 原样 / 大写均可（内部归一）。
+   *
+   * 与 `functionAt` 同纪律：只读已构建索引、**不读盘**；未构建或名字无记录 → 空数组。
+   * find-references / rename 的唯一前置；口径（什么算引用）见 {@link ErbReference.kind}。
+   */
+  referencesTo?(name: string): ErbReference[];
 }
+
+/* ---------------- 反向引用索引（2026-10-15 批，全部 additive） ---------------- */
+
+/** 引用点种类（口径详注见 {@link ErbReference.kind}） */
+export type ErbReferenceKind = 'definition' | 'call' | 'mention';
+
+/** 函数名的一处出现（1 基行列；`endColumn` 为不含端点，与 {@link SymbolToken} 同口径） */
+export interface ErbReference {
+  /** 出现所在文件（索引的方言文件路径，绝对路径） */
+  filePath: string;
+  /** 行号（1 基） */
+  line: number;
+  /** 起始列（1 基，指向名字首字符） */
+  column: number;
+  /** 结束列（不含端点 = column + 名字长度） */
+  endColumn: number;
+  /**
+   * - `definition`：`@NAME` 定义行**自身**的名字（rename 必须连定义一起改，故入表；
+   *   find-references 消费方按需过滤）；
+   * - `call`：行首关键字是 CALL 直系族（CALL / TRYCALL / TRYCCALL / TRYCALLLIST /
+   *   TRYCCALLLIST）时，关键字后**紧邻的第一个记号**且命中索引名——这是名字出现在
+   *   引擎"按名调用"语法位上的可证明子集；
+   * - `mention`：其余任何可见代码记号整串等于某个索引名（表达式函数调用、条件、
+   *   PRINT 实参……）。
+   *
+   * **不算引用**（口径与 `scanControlFlow` 的屏蔽面一致，实现见 `erb-parser/references.ts`）：
+   * 注释（整行 `;` 与行内 `;` 尾巴——改名不该重写散文，find-references 也不想看注释）、
+   * 字符串字面量**内容**（数据而非符号）、`[SKIPSTART]…[SKIPEND]` 死代码段（引擎根本不编译，
+   * 指过去会误导）、`#DIM` / `$label` 行（声明的是变量与标签，不是函数）、
+   * 变量成员访问（`:` / `：` 紧邻的记号两段都不算——`CFLAG:ALPHA`、`ALPHA:CFLAG` 都是变量世界）。
+   * 记号字符集 = Unicode 字母/数字/下划线（真语料 21% 的函数名含 CJK，ASCII 集会静默漏两成）；
+   * 定义名按解析器终止符口径（`(` / 空白 / `;`）截，与 `@` 头解析同源。
+   * **已知排除**：`JUMP`/`GOTO` 目标与 `*CALLFORM` 参数——前者的目标是行号/标签而非函数名；
+   * 后者的参数是表达式（裸记号在那里是变量），要正确解析得做数据流，超出"可证明正确"边界，
+   * 宁可少报不误报。
+   */
+  kind: ErbReferenceKind;
+}
+
+/** 项目级反向引用索引（只由构建产出，查询不改变它） */
+export interface ErbReferenceIndex {
+  /** 归一化函数名 → 该名的定义点与引用点全集（构建序 → 行 → 列，确定排序） */
+  bySymbol: ReadonlyMap<string, readonly ErbReference[]>;
+}
+
