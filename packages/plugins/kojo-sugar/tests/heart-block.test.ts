@@ -111,3 +111,53 @@ describe('P-7 心形连续块 · 负自证（宁缺勿编）', () => {
     expect(errsOf(src).map((d) => d.code)).toContain('block-empty');
   });
 });
+
+/* ============================================================================ */
+/* B. `你：` 自机台词行（B1 口径接进心形块）                                       */
+/* ============================================================================ */
+
+describe('P-7 心形连续块 · `你：` 自机台词行', () => {
+  it('镶前缀 + run 合并 + run 结束复原：连续行只发一次 SETCOLOR/RESETCOLOR', () => {
+    const src = doc(
+      '\t心形：\n' + '\t\t你：我也会难过\n' + '\t\t「普通台词」\n' + '\t\t你：这句也是我说的\n' + '\t\t你：还有这句\n',
+    );
+    expect(errsOf(src)).toEqual([]);
+    expect(
+      t(src)
+        .erb.split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.startsWith('SETCOLOR') || l.startsWith('RESETCOLOR') || l.startsWith('CALL HPH_PRINT')),
+    ).toEqual([
+      'SETCOLOR 0x4682B4',
+      'CALL HPH_PRINT(@"我也会难过","w")', // 前缀剥掉；自机台词强制非 D（dw 忽略 SETCOLOR）
+      'RESETCOLOR', // 非自机行打断 run
+      'CALL HPH_PRINT(@"普通台词","w")',
+      'SETCOLOR 0x4682B4', // run 重新起
+      'CALL HPH_PRINT(@"这句也是我说的","w")',
+      'CALL HPH_PRINT(@"还有这句","w")',
+      'RESETCOLOR', // 块尾收 run
+    ]);
+  });
+
+  it('`你：「…」` → 前缀与引号都剥掉，模式非 D', () => {
+    const src = doc('\t心形：\n\t\t你：「她说的话」\n');
+    expect(hphLines(src)).toEqual(['CALL HPH_PRINT(@"她说的话","w")']);
+  });
+
+  it('声明 `自机色:` 覆盖 adapter 缺省（非 D 变体照旧）', () => {
+    const src = '角色: 12\n自机色: 0x123456\n时机 绝顶：\n\t心形：\n\t\t你：上色了\n';
+    expect(hphLines(src)).toEqual(['CALL HPH_PRINT(@"上色了","w")']);
+    expect(t(src).erb).toContain('SETCOLOR 0x123456');
+  });
+
+  it('负自证：无色可发（无 `自机色:` 且 adapter 无缺省）→ 报 `face-table-missing`、前缀照剥、退回 D 系', () => {
+    const { playerColor: _omit, ...noPlayer } = stubFaceTable();
+    const res = createSugarTranspileService({ dictionary: stubDict, faceTable: noPlayer }).transpile(
+      doc('\t心形：\n\t\t你：无色的行\n'),
+    );
+    expect(res.diagnostics.filter((d) => d.severity === 'warning').map((d) => d.code)).toContain('face-table-missing');
+    expect(res.erb).not.toContain('SETCOLOR');
+    expect(res.erb).toContain('CALL HPH_PRINT(@"无色的行","dw")');
+    expect(res.erb).not.toContain('你：');
+  });
+});

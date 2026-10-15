@@ -1261,7 +1261,7 @@ function emitBody(em: Emitter, body: readonly SugarNode[], ctx: BodyContext, ind
     if (run) {
       // 复原到所处 `着色` 块的环境色（有则 `SETCOLOR <环境色>`，否则 `RESETCOLOR` 打回默认）——
       // 否则着色块里自机台词之后的非 D 行会丢掉块色（真语料同一回改处也是手动重发 SETCOLOR）。
-      em.push(indent, ctx.ambientColor !== undefined ? `SETCOLOR ${ctx.ambientColor}` : 'RESETCOLOR', null);
+      em.push(indent, ambientRestoreLine(ctx), null);
       run = false;
     }
   };
@@ -1293,6 +1293,11 @@ function emitBody(em: Emitter, body: readonly SugarNode[], ctx: BodyContext, ind
   closeRun();
 }
 
+/** 自机色 run / `着色` 块收尾的**复原行**（同一口径的唯一来源）：有环境色回退环境色，否则打回默认 */
+function ambientRestoreLine(ctx: BodyContext): string {
+  return ctx.ambientColor !== undefined ? `SETCOLOR ${ctx.ambientColor}` : 'RESETCOLOR';
+}
+
 /** `你：` 行首前缀（全/半角冒号各一；**只认行首**，正文中间的「你」不替换） */
 const PLAYER_PREFIX_RE = /^你[:：]/;
 
@@ -1301,11 +1306,16 @@ function isPlayerLine(node: SugarNode): node is TextLine {
   return node.kind === 'textLine' && PLAYER_PREFIX_RE.test(sourceTextOf(node));
 }
 
+/** `心形：` 块内的 `你：` 行——块体一律存成 `heartLine`，故不能复用 `isPlayerLine`，只按行首前缀判 */
+function isPlayerHeartLine(node: TextLine | HeartLine): boolean {
+  return PLAYER_PREFIX_RE.test(sourceTextOf(node));
+}
+
 /**
  * 自机色解析：作者 `自机色:` 优先，否则回退 adapter 的缺省自机色（`KojoFaceTable.playerColor`）。
  * 两者都缺省 → 报 `face-table-missing`（每时机一次）并返回 `null`（调用方按普通旁白输出，不静默）。
  */
-function resolvePlayerColor(node: TextLine, ctx: BodyContext): string | null {
+function resolvePlayerColor(node: TextLine | HeartLine, ctx: BodyContext): string | null {
   const declared = ctx.frontMatter.playerColor;
   if (declared !== undefined && declared.length > 0) return declared;
   const fallback = ctx.faceTable?.playerColor;
@@ -1567,7 +1577,15 @@ function emitReturnStatement(em: Emitter, node: ReturnStatement, ctx: BodyContex
 
 /* ------------------------------ 文本行 / 心形（§5.1 / §5.2 / §3.9） ------------------------------ */
 
-function emitTextLine(em: Emitter, node: TextLine | HeartLine, ctx: BodyContext, indent: number, heart: boolean): void {
+function emitTextLine(
+  em: Emitter,
+  node: TextLine | HeartLine,
+  ctx: BodyContext,
+  indent: number,
+  heart: boolean,
+  stripPlayerPrefix = false,
+  forceNonD = false,
+): void {
   const sourceLine = node.loc.start.line;
 
   // ---- §5.2 第 0 步（前置判定）：纯条件行 → IF 块 ----
@@ -1588,10 +1606,13 @@ function emitTextLine(em: Emitter, node: TextLine | HeartLine, ctx: BodyContext,
 
   // ---- 常规：整行文本体转译 ----
   const body = textBody(node, ctx);
+  // `心形：` 块内的 `你：` 行：只剥行首前缀（色由调用方按 run 口径另发），正文进 `HPH_PRINT` 时不留前缀
+  const text = stripPlayerPrefix ? body.raw.replace(PLAYER_PREFIX_RE, '') : body.raw;
   if (heart) {
-    em.push(indent, heartCall(body.raw, node.speech, node.wait), sourceLine);
+    // `forceNonD`：自机台词一律非 D 变体——`dw/dl` 忽略 `SETCOLOR`，上了色也看不见
+    em.push(indent, heartCall(text, forceNonD ? true : node.speech, node.wait), sourceLine);
   } else {
-    em.push(indent, printLine(body.raw, node.speech, node.wait, ctx), sourceLine);
+    em.push(indent, printLine(text, node.speech, node.wait, ctx), sourceLine);
   }
 }
 
@@ -2099,8 +2120,8 @@ function emitColorBlock(em: Emitter, node: ColorBlock, ctx: BodyContext, indent:
   emitBody(em, node.body, ctx, indent);
   ctx.ambientColor = prevAmbient;
   // 收尾复原到**上一层**的环境色（嵌套 `着色` 块逐层回退）；顶层无环境色才打 `RESETCOLOR`。
-  // 与自机台词 run 的 `closeRun` 同一口径——裸 `RESETCOLOR` 会把外层块色一起抹掉。
-  em.push(indent, prevAmbient !== undefined ? `SETCOLOR ${prevAmbient}` : 'RESETCOLOR', null);
+  // 与自机台词 run 的收尾同一口径——裸 `RESETCOLOR` 会把外层块色一起抹掉。
+  em.push(indent, ambientRestoreLine(ctx), null);
 }
 
 /* ------------------------------ 心形连续块（P-7） ------------------------------ */
@@ -2114,17 +2135,47 @@ function emitColorBlock(em: Emitter, node: ColorBlock, ctx: BodyContext, indent:
  *
  * **宁缺勿编**：`_invalid` 为真（块体混入了非文本行）时**一条字节都不产**——
  * 半成品比没有更坏（§5.3 口径）。
+ *
+ * **`你：` 行（B1 口径）**：块内行首写 `你：` 即自机台词——前缀**剥掉**（不进 `@"…"`），
+ * 色按 `emitBody` 同一 run 规则发（连续 `你：` 行只发一次 `SETCOLOR <自机色>`，run 结束
+ * 复原环境色/默认），且模式字母**强制非 D**（`dw/dl` 忽略 `SETCOLOR`，上了色也看不见）。
+ * 自机色仍走 `resolvePlayerColor`：文件头 `自机色:` 优先，否则 adapter 缺省，两者皆缺才报
+ * `face-table-missing` 并退化成该块原本的 D 系打印（前缀照剥，不静默带前缀输出）。
  */
 function emitHeartBlock(em: Emitter, node: HeartBlock, ctx: BodyContext, indent: number): void {
   if (node._invalid) return;
+  let run = false; // 块内生效的 `你：` 自机色 run（与 `emitBody` 同一口径：连续行只发一次 SETCOLOR）
+  const closeRun = (): void => {
+    if (run) {
+      em.push(indent, ambientRestoreLine(ctx), null);
+      run = false;
+    }
+  };
   for (const child of node.body) {
     if (child.kind === 'comment') {
+      closeRun();
       em.push(indent, child.text, child.loc.start.line);
       continue;
     }
     // 块体在 parser 段已保证只有「文本行（`heartLine`）/ 注释」两类（`_invalid` 拦下其余）
-    emitTextLine(em, child as TextLine | HeartLine, ctx, indent, true);
+    const line = child as TextLine | HeartLine;
+    // `你：` 行照旧走心形管线（块的打印家族不变），但前缀要剥、色按自机色发
+    if (!isPlayerHeartLine(line)) {
+      closeRun();
+      emitTextLine(em, line, ctx, indent, true);
+      continue;
+    }
+    const color = resolvePlayerColor(line, ctx);
+    if (color === null) {
+      // 未声明 `自机色:` 且 adapter 无缺省 → 退化：仍打印（已报 `face-table-missing`），只收掉 run
+      closeRun();
+    } else if (!run) {
+      em.push(indent, `SETCOLOR ${color}`, line.loc.start.line);
+      run = true;
+    }
+    emitTextLine(em, line, ctx, indent, true, true, color !== null);
   }
+  closeRun();
 }
 
 /* ------------------------------ 表达式 如果 / 当（§3.5 / §3.6） ------------------------------ */
