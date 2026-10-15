@@ -179,6 +179,12 @@ importers:
         specifier: workspace:*
         version: link:../../plugin-api
 
+  packages/plugins/kojo-market:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
   packages/plugins/kojo-sugar:
     dependencies:
       '@kojo/plugin-api':

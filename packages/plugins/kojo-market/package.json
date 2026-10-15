@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-kojo-market",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kojo market v1 (market.index service): no-server GitHub registry, ZIP containers, per-file sha256 verification anchor. Local-directory install only in this batch; offline closed loop. Contains zero game knowledge - it only knows packs.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}
