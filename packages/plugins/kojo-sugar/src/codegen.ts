@@ -28,6 +28,7 @@ import type {
   KojoInstructionTable,
   KojoLibraryTable,
   MenuBlock,
+  OnceBlock,
   RandomBlock,
   RandomInline,
   RawFunctionBlock,
@@ -712,6 +713,23 @@ function emitSectionBlock(em: Emitter, node: SectionBlock, ctx: BodyContext, ind
 }
 
 /**
+ * `初回 "key"：` 块（1 号任务）——产物 `IF ONCE(<key>)` … `ENDIF`。
+ *
+ * 块头走**表达式降糖**：把 `初回(<key>)` 交给 `lowerExpression`（复用 `lowerOnceCalls`
+ * 的同一重写），故二参形同样会补角色号，与表达式形产物**同源**。块体一律经 `emitBody`
+ * ——块内 `你：` 自机台词 / `着色` 的 run 与其它块完全同口径。
+ *
+ * 语义：`ONCE` 是变量式访问器，作为 `IF` 条件即"这个 key 还没被置位（是第一次）"——
+ * 与语料 `IF ONCE("…", 1, 11)` 同形。
+ */
+function emitOnceBlock(em: Emitter, node: OnceBlock, ctx: BodyContext, indent: number): void {
+  const condition = lowerExpression('初回(' + node.key + ')', exprCtx(ctx, node.loc.start));
+  em.push(indent, `IF ${condition}`, node.loc.start.line);
+  emitBody(em, node.body, ctx, indent + 1);
+  em.push(indent, `ENDIF`, null);
+}
+
+/**
  * 时机块头 `参数:` 的取值（规范 §3.2，v1.5）→ 形参声明串（`ARG,ARG:1`）；
  * 未声明 → `null`（产物与历史口径**逐字节一致**）。
  *
@@ -1272,6 +1290,9 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
       // 落到这里说明它出现在别的块体里（判据外），仍按信封形态发——不静默丢内容。
       emitSectionBlock(em, node, ctx, indent);
       break;
+    case 'onceBlock':
+      emitOnceBlock(em, node, ctx, indent);
+      break;
     case 'choiceBlock':
       emitChoiceBlock(em, node, ctx, indent);
       break;
@@ -1503,6 +1524,7 @@ function bodyOf(node: SugarNode): readonly SugarNode[] | null {
     case 'colorBlock':
     case 'groupBlock':
     case 'sectionBlock':
+    case 'onceBlock':
       return node.body;
     case 'choiceBlock':
       return node.items.flatMap((i) => i.body);
@@ -2478,6 +2500,7 @@ function exprCtx(ctx: BodyContext, loc: { line: number; column: number }): ExprC
     libraryTable: ctx.libraryTable,
     report: (d: SugarDiagnostic) => ctx.sink.report(d),
     loc,
+    charNo: ctx.frontMatter.charNo,
   };
 }
 

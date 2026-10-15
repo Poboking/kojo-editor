@@ -234,6 +234,8 @@ export type LineClass =
   | { kind: 'randomShapeDecl'; value: string }
   | { kind: 'groupHead' }
   | { kind: 'sectionHead'; condition: string; disabled: boolean }
+  /** `初回 "key"：` 块头（1 号任务；产物 = `IF ONCE(<key>)` … `ENDIF`） */
+  | { kind: 'onceHead'; key: string }
   /** `选项：` 块头（按钮形；产物 PRINTBUTTON + INPUTS + SELECTCASE RESULTS） */
   | { kind: 'choiceHead' }
   /** `菜单：` / `menu：` 块头（数字输入菜单形；产物 PRINTL [n] + INPUT + SELECTCASE RESULT + 回跳环） */
@@ -950,6 +952,10 @@ function parseBlockHead(content: string): LineClass | null {
       return rest.length === 0 ? { kind: 'groupHead' } : null;
     case 'block.section':
       return parseSectionHead(rest);
+    case 'block.once':
+      // `初回 "key"：`（1 号任务）——块头原文当 key（字符串字面量 / 既有表达式口径，可含 `{}` 插值）。
+      // 空 key 也返回，交给 parser 报 `block-empty`（不在此造第二套诊断）。
+      return { kind: 'onceHead', key: rest };
     case 'block.choice':
       // `选项：`（英文小写别名 `choice：`）——按钮形菜单，产物 PRINTBUTTON + INPUTS + RESULTS。
       return { kind: 'choiceHead' };

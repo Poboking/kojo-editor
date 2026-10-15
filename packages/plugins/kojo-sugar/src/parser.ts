@@ -724,6 +724,11 @@ class BlockParser {
         this.cursor.next();
         return this.parseSectionBody(line, cls);
       }
+      case 'onceHead': {
+        // `初回 "key"：`（1 号任务）：引擎 `ONCE(...)` 的块形糖。
+        this.cursor.next();
+        return this.parseOnceBody(line, cls.key);
+      }
       case 'randomInline': {
         this.cursor.next();
         return {
@@ -1324,6 +1329,8 @@ class BlockParser {
         return this.parseRandomBody(line);
       case 'sectionHead':
         return this.parseSectionBody(line, cls);
+      case 'onceHead':
+        return this.parseOnceBody(line, cls.key);
       case 'randomInline':
         return {
           kind: 'randomInline',
@@ -1448,6 +1455,45 @@ class BlockParser {
       body,
       loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
       ...(preset ? { _preset: preset } : {}),
+    } as SugarNode;
+  }
+
+  /* ------------------------------ 初回块（1 号任务） ------------------------------ */
+
+  /**
+   * `初回 "key"：` 块体（1 号任务）——引擎 `ONCE(...)` 变量式访问器的块形糖。
+   *
+   * 判据与 `着色` / `段` 同款：块体缩进更深，逐条走 `BlockParser.parseBody`（故块内
+   * `你：` / `着色` 的 run 口径与其它块完全同源）。**缺 key / 空体一律 fail-closed**：
+   * 报 `block-empty` 并**整块不产**（返回 null）——不拼半成品。
+   */
+  private parseOnceBody(headLine: LogicalLine, key: string): SugarNode | null {
+    const bodyIndent = headLine.indent + 1;
+    const sub = new BlockParser(this.cursor, bodyIndent, this.sink, this.randomShape);
+    const body = sub.parseBody();
+    if (key.trim().length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: '「初回」块头缺 key——写法是 `初回 "key"：`（key 进产物 `IF ONCE(<key>)`，字符串字面量或既有表达式口径均可）。',
+        loc: posOf(headLine),
+      });
+      return null;
+    }
+    if (body.length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: '「初回」块没有正文（缩进更深的内容）。',
+        loc: posOf(headLine),
+      });
+      return null;
+    }
+    return {
+      kind: 'onceBlock',
+      key: key.trim(),
+      body,
+      loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
     } as SugarNode;
   }
 
@@ -1945,6 +1991,7 @@ function isBlockNode(node: SugarNode): boolean {
     node.kind === 'randomBlock' ||
     node.kind === 'groupBlock' ||
     node.kind === 'sectionBlock' ||
+    node.kind === 'onceBlock' ||
     node.kind === 'choiceBlock' ||
     node.kind === 'menuBlock'
   );
@@ -1953,7 +2000,7 @@ function isBlockNode(node: SugarNode): boolean {
 /** 把额外块体合并进已构建的块节点（随机候选里出现块头时用） */
 function mergeBlockBody(node: SugarNode, extra: SugarNode[]): void {
   if (extra.length === 0) return;
-  if (node.kind === 'colorBlock' || node.kind === 'groupBlock' || node.kind === 'sectionBlock') {
+  if (node.kind === 'colorBlock' || node.kind === 'groupBlock' || node.kind === 'sectionBlock' || node.kind === 'onceBlock') {
     node.body.push(...extra);
   } else if (node.kind === 'ifBlock' && node.branches.length > 0) {
     node.branches[node.branches.length - 1]!.body.push(...extra);

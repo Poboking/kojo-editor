@@ -298,6 +298,7 @@ export type {
   IfExpr,
   Interpolation,
   MenuBlock,
+  OnceBlock,
   RandomBlock,
   RandomInline,
   RawFunctionBlock,

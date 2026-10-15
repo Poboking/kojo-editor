@@ -45,6 +45,12 @@ export interface ExprContext {
   /** 诊断定位（表达式子串的起始位置；列偏移由调用方补齐） */
   loc: SugarPosition | null;
   /**
+   * 文件头 `角色:` 解析出的**角色编号**（1 号任务 `初回` 用；编号只从 adapter 解析结果来，
+   * 糖里零硬编码）。`初回("key", 初期値)` 的二参形在此值存在时补成三参
+   * `ONCE("key", 初期値, <charNo>)`；缺省 = 不补（原样透传）。
+   */
+  charNo?: string;
+  /**
    * 条件别名展开的**环检测**栈（`别名 A = A ? …` 自引用会让条件降糖无限递归）。
    * 本层内部使用，调用方无需设置（`substituteAliases` 惰性初始化）。
    */
@@ -263,9 +269,12 @@ const ATTRIBUTE_PREFIX: ReadonlyMap<string, string> = new Map([
  * 使 `获取标记(…)` 在后续各步眼里是原生 `GETBIT(…)`。
  */
 export function lowerExpression(raw: string, ctx: ExprContext): string {
+  // ---- 0. `初回(...)` → `ONCE(...)`（1 号任务；先于一切，见 `lowerOnceCalls` 头注） ----
+  const onceLowered = lowerOnceCalls(raw, ctx);
+
   // ---- 0. 系统函数名中文化（HK-11①；先于一切，见模块头注顺序说明） ----
   // 系统函数表优先，次查 adapter 基础库函数表（ZH-F1）：两者都认的调用形态降为原生名。
-  const named = lowerSystemFunctions(raw, ctx.libraryTable);
+  const named = lowerSystemFunctions(onceLowered, ctx.libraryTable);
 
   // ---- 0b. 别名替换（先于一切降糖） ----
   // 条件别名先占位（`deferred`），待第 3 步后原样回填——分支/条件不再被后续降糖波及。
@@ -284,6 +293,129 @@ export function lowerExpression(raw: string, ctx: ExprContext): string {
   // ---- 4. 条件别名回填（行内条件 `\@条件?真#假\@`；用函数式替换避免 `$` 被当替换模式） ----
   if (deferred.length === 0) return expr;
   return expr.replace(COND_SLOT_RE, (_whole, digits: string) => deferred[Number(digits)] ?? '');
+}
+
+/**
+ * `初回(...)` → `ONCE(...)`（1 号任务）——引擎 `ONCE` 变量式访问器的表达式 / 块头降糖。
+ *
+ * 为什么单列一步、而不塞进 `SYSTEM_FUNCTION_ALIASES`：`ONCE` 是**变量式访问器**
+ * （`ONCE(名称, 初期値, キャラ番号…)`，可读可写），它的**二参形**要按文件头 `角色:` 的
+ * 编号**补第三参**——这不是"换名"，别名表机制表达不了（且反向投影会把它当普通函数）。
+ *
+ * 口径（对齐真实语料 `M_KOJO_K11_*.ERB`）：
+ * - 一参 `初回("key")` → `ONCE("key")`（原样）；
+ * - 二参 `初回("key", 1)` → `ONCE("key",1,<charNo>)`（**有** `角色:` 编号时补第三参）；
+ * - ≥三参原样（作者已显式给了角色号）；
+ * - 顶层逗号规整为无空格半角 `,`（与语料产物对齐）；
+ * - 尊重字符串字面量与括号配对（`"初回("` 不被误换；参数里的括号不打乱拆参）；
+ * - 零参 `初回()` → 报 `block-empty`（复用既有码；不静默）。
+ *
+ * 只在 `初回` 后（可隔空白）紧跟 `(` 时触发；`初回` 作为更大标识符的一部分不触发
+ * （前必须是标识符边界）。
+ */
+function lowerOnceCalls(raw: string, ctx: ExprContext): string {
+  const NAME = '初回';
+  let out = '';
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i]!;
+    // 字符串字面量原样透传（降糖不进入字符串）
+    if (ch === '"') {
+      const end = raw.indexOf('"', i + 1);
+      const stop = end < 0 ? raw.length : end + 1;
+      out += raw.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    const atWordStart = i === 0 || !isIdentPart(raw[i - 1]!);
+    if (atWordStart && raw.startsWith(NAME, i)) {
+      let j = i + NAME.length;
+      while (j < raw.length && (raw[j] === ' ' || raw[j] === '\t' || raw[j] === FULLWIDTH_SPACE)) j++;
+      if (raw[j] === '(') {
+        const close = matchCloseParen(raw, j);
+        if (close < 0) {
+          // 括号未闭合：不猜，只把名字原样透传（后续各步照常报可达诊断）
+          out += NAME;
+          i += NAME.length;
+          continue;
+        }
+        const args = splitTopLevelArgs(raw.slice(j + 1, close));
+        if (args.length === 0) {
+          ctx.report({
+            code: 'block-empty',
+            severity: 'error',
+            message:
+              '`初回(...)` 缺 key——引擎 `ONCE(名称, …)` 的第一个实参是变量名（字符串字面量或表达式），不能为空。',
+            loc: ctx.loc,
+          });
+          out += 'ONCE()';
+          i = close + 1;
+          continue;
+        }
+        if (args.length === 2 && ctx.charNo !== undefined && ctx.charNo.length > 0) {
+          args.push(ctx.charNo);
+        }
+        out += 'ONCE(' + args.join(',') + ')';
+        i = close + 1;
+        continue;
+      }
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/** 找 `open` 处 `(` 的配对 `)`（尊重字符串字面量）；找不到返回 -1 */
+function matchCloseParen(src: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  while (i < src.length) {
+    const ch = src[i]!;
+    if (ch === '"') {
+      const end = src.indexOf('"', i + 1);
+      i = end < 0 ? src.length : end + 1;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** 按**顶层**逗号（含全角 `，`）拆实参并 trim；空串 → `[]` */
+function splitTopLevelArgs(inner: string): string[] {
+  if (inner.trim().length === 0) return [];
+  const out: string[] = [];
+  let depth = 0;
+  let buf = '';
+  let i = 0;
+  while (i < inner.length) {
+    const ch = inner[i]!;
+    if (ch === '"') {
+      const end = inner.indexOf('"', i + 1);
+      const stop = end < 0 ? inner.length : end + 1;
+      buf += inner.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    if ((ch === ',' || ch === '，') && depth === 0) {
+      out.push(buf.trim());
+      buf = '';
+      i++;
+      continue;
+    }
+    buf += ch;
+    i++;
+  }
+  out.push(buf.trim());
+  return out;
 }
 
 /** 只在非字符串段上应用变换 */

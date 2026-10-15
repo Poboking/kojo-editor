@@ -326,6 +326,31 @@ export interface SectionBlock extends SugarNodeBase {
   body: SugarNode[];
 }
 
+/* ============================== 初回块（ONCE） ============================== */
+
+/**
+ * `初回 "key"：` 块 —— 引擎 `ONCE(...)` 变量式访问器的块形糖。
+ *
+ * 「这个 key 是第一次」时走块体：产物 = `IF ONCE(<key>)` … `ENDIF`（块体经 `emitBody`，
+ * 故块内 `你：` 自机台词 / `着色` 的 run 口径与其它块完全同源）。
+ *
+ * ## 契约口径
+ *
+ * - `key` 是**块头原文**（`初回` 之后、块头冒号之前；未降糖）——字符串字面量或既有
+ *   表达式口径（可含 `{}` 插值），走与 `如果` 同一条表达式降糖管线；
+ * - `ONCE` 是**变量式访问器**（`ONCE(名称, 初期値, キャラ番号…)`，可读可写）：一参形
+ *   `ONCE(名称)`、二参形 `ONCE(名称, 初期値)`、三参形 `ONCE(名称, 初期値, キャラ番号)`。
+ *   二参形在**有 `角色:` 文件头**时由转译器补上角色号（编号来自 adapter 解析出的
+ *   `charNo`，糖里零硬编码）；三参形原样。
+ */
+export interface OnceBlock extends SugarNodeBase {
+  kind: 'onceBlock';
+  /** 块头原文（`初回` 之后、块头冒号之前的 ERB 表达式原文；未降糖） */
+  readonly key: string;
+  /** 块体（缩进更深的节点序列） */
+  readonly body: SugarNode[];
+}
+
 /* ============================== 选项块 ============================== */
 
 /**
@@ -718,6 +743,7 @@ export type SugarStatement =
   | MenuBlock
   | ColorBlock
   | SectionBlock
+  | OnceBlock
   | CustomCommandBlock
   | CallStatement
   | ReturnStatement

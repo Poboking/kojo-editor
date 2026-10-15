@@ -119,6 +119,13 @@ function rawSymbol(node: SugarNode | SugarTopLevelNode): EditorDocumentSymbol | 
         ...(node.disabled ? { detail: '停用' } : {}),
         children: symbolsOfNodes(node.body),
       };
+    case 'onceBlock':
+      return {
+        name: joinParts(['初回', node.key]),
+        kind: 'block',
+        ...rangeOf(node.loc, node.body),
+        children: symbolsOfNodes(node.body),
+      };
     case 'ifBlock': {
       const first = node.branches[0];
       return {

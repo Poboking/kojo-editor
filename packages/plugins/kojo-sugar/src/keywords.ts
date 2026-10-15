@@ -39,6 +39,8 @@ export type KeywordId =
   | 'block.customCommand'
   /* 用户函数（B4 批：公共段 / 自定义函数最小形） */
   | 'block.function'
+  /* 初回块（1 号任务：`初回 "key"：` = 引擎 `ONCE(...)`） */
+  | 'block.once'
   /* 行内 / 时机子句 */
   | 'inline.cont'
   | 'inline.heart'
@@ -119,6 +121,10 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 与 `返回` / `调用` 同批，三者共同构成"作者自定义函数"这一最小面。
   ['函数', 'block.function'],
   ['function', 'block.function'],
+  // 初回块（1 号任务）：`初回 "key"：` → `IF ONCE("key")` … `ENDIF`。引擎 `ONCE(...)`
+  // 是**变量式访问器**（`ONCE(名称, 初期値, キャラ番号…)`，可读可写）。只登记中文主形——
+  // 英文别名 `once` 不登记（`ONCE` 是引擎函数名、不是作者输入别名，登记会与候选撞词）。
+  ['初回', 'block.once'],
   // 行内
   ['续', 'inline.cont'],  ['cont', 'inline.cont'],
   ['continue', 'inline.cont'],
