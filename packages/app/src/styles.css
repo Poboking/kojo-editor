@@ -4521,3 +4521,71 @@ button.primary .hint {
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
 }
+
+/* ===================== b/hist/1015 独占区块：通用 diff 视图 ===================== */
+/* 并发批次请勿重排本块；新样式在块内追加。 */
+.kd-host {
+  width: min(1180px, 92vw);
+}
+.kd-labels {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  font-size: 12px;
+  color: var(--fg-dim, #9aa4b2);
+}
+.kd-label {
+  padding: 2px 8px;
+  border: 1px solid var(--border, #3a4252);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+.kd-label-arrow {
+  flex: none;
+}
+.kd-editor {
+  height: 62vh;
+  min-height: 320px;
+  border: 1px solid var(--border, #3a4252);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.kd-banner.ok {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(60, 180, 110, 0.12);
+  color: #7ad39a;
+}
+.kd-error {
+  margin: 0 0 8px;
+  color: #e57373;
+  overflow-wrap: anywhere;
+}
+/* —— 部署比对窗（b/hist/1015，同属上块） —— */
+.dd-host {
+  width: min(1080px, 92vw);
+}
+.dd-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.dd-table th,
+.dd-table td {
+  text-align: left;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border, #3a4252);
+}
+.dd-path {
+  overflow-wrap: anywhere;
+}
+.dd-modified .dd-path {
+  color: #e8b86a;
+}
+.dd-workspace-only .dd-path,
+.dd-game-only .dd-path {
+  color: #9aa4b2;
+}

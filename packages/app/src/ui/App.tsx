@@ -18,6 +18,8 @@ import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { workspaceRootsOf } from './workspace-roots';
 import { resetSearch } from './search-store';
+import { bindDiffView, DIFF_VIEW_OVERLAY_ID } from './diff-view';
+import { createDiffViewOverlay } from './DiffViewOverlay';
 import type { EditorPaneActions } from './EditorPane';
 
 export type AppPhase = 'boot' | 'welcome' | 'opening' | 'project';
@@ -98,6 +100,27 @@ export function App(): ReactElement {
     const un = kernel.bus.on('kojo.functionChanged', refresh);
     return () => {
       un();
+    };
+  }, [kernel]);
+
+  // 通用 diff 视图（2026-10-15 比对/历史批）：宿主注册 ui.overlay 贡献并订阅
+  // `ui.diffView.open` 意图（插件发意图、宿主落地；与 editor.revealLocation 同款）。
+  useEffect(() => {
+    if (!kernel) return;
+    const unBind = bindDiffView(kernel);
+    const unReg = kernel.slots.register('ui.overlay', {
+      id: DIFF_VIEW_OVERLAY_ID,
+      order: 40,
+      size: 'wide',
+      component: createDiffViewOverlay({
+        io: kernel.io,
+        close: () =>
+          kernel.bus.emit('ui.overlay.close', { id: DIFF_VIEW_OVERLAY_ID, source: 'host:diff-view' }),
+      }),
+    });
+    return () => {
+      unBind();
+      unReg();
     };
   }, [kernel]);
 

@@ -13,6 +13,7 @@ export { KERNEL_EVENT_NAMES, KERNEL_EVENT_CLASSIFICATION_GUARD } from './events'
 export type {
   AnyEventMap,
   CustomEventKey,
+  DiffViewSide,
   EventBus,
   FileChangeKind,
   FileChangedEvent,

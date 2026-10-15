@@ -43,6 +43,18 @@ export interface ArtifactSource {
 export interface ArtifactEntry {
   relPath: string;
   bytes: Uint8Array;
+  /**
+   * 工作区侧的源相对路径（additive，2026-10-15 比对批）。
+   * 原样携带时 = relPath；`.kojo` 转译路径指向那份 `.kojo`——
+   * 「这行产物来自工作区哪个文件」由此反查，不用再发明第二套映射。
+   */
+  sourceRel: string;
+  /**
+   * 产物全文（仅 `.kojo` 转译路径给出，来自 `transpile.erb`；additive）。
+   * 转译产物只活在内存里（盘上没有这份字节），diff 视图要显示它只能靠这里；
+   * 原样携带的文件为 undefined——宿主按 `sourceRel` 直接读盘即可。
+   */
+  text?: string;
 }
 
 /** 计划结果与统计（反馈文案要能说清"转译了几个、原样带了几个"） */
@@ -108,7 +120,7 @@ export function planArtifacts(
 
     if (!isKojoSource(rel)) {
       claim(rel, rel);
-      entries.push({ relPath: rel, bytes: src.bytes });
+      entries.push({ relPath: rel, bytes: src.bytes, sourceRel: rel });
       passthrough += 1;
       continue;
     }
@@ -127,7 +139,7 @@ export function planArtifacts(
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(`「${rel}」转译失败，未生成制品：${reason}`);
     }
-    entries.push({ relPath: relTarget, bytes: compiled.bytes });
+    entries.push({ relPath: relTarget, bytes: compiled.bytes, sourceRel: rel, text: compiled.transpile.erb });
     transpiled += 1;
   }
 

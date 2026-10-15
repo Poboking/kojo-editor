@@ -2,6 +2,23 @@ import type { Unsubscribe } from './base';
 import type { GameProject } from './game';
 import type { PluginStatus } from './plugin';
 
+/**
+ * 通用 diff 视图的一侧内容（`ui.diffView.open` 载荷成员）。
+ *
+ * `text` 与 `path` 至少给一个：`text` = 发起方已在内存里算好的内容
+ * （如转译产物，盘上根本没有这份字节）；`path` = 磁盘真文件，由宿主经
+ * 内核 io 现读（读侧无写闸，游戏目录与备份目录同样读得到）。
+ * 两者都给时 `text` 优先——发起方最清楚哪份是权威。
+ */
+export interface DiffViewSide {
+  /** 人读标签（视图头部显示；如「工作区 · 事件.kojo 的产物」） */
+  label: string;
+  /** 内联文本（给了即优先） */
+  text?: string;
+  /** 磁盘路径（`text` 缺席时由宿主读取） */
+  path?: string;
+}
+
 /** 文件变更类型 */
 export type FileChangeKind = 'add' | 'change' | 'unlink';
 
@@ -162,6 +179,24 @@ export interface KernelEventMap {
    */
   'ui.overlay.close': { id: string; source?: string };
   /**
+   * 打开通用 diff 视图意图（2026-10-15 比对/历史批）：请求宿主弹一枚独立模态，
+   * 逐行对比发起方给定的两侧内容（宿主用 Monaco 内建 diff 编辑器渲染，行级差异
+   * 与并排/内联切换由 Monaco 提供，宿主零 diff 算法零业务判定）。
+   *
+   * 通用、游戏无关——插件发意图、宿主落地（与 `editor.revealLocation` 同款模式）；
+   * 消费场景：工作区版 vs 游戏目录版比对、历史版本 vs 当前内容对比。
+   * 载荷两侧各「内联文本或磁盘路径」二选一（见 `DiffViewSide`）；都不给 = 无效请求，
+   * 宿主必须**可见地拒绝**（呈现原因），不得静默。
+   */
+  'ui.diffView.open': {
+    title: string;
+    /** 左（旧/参照侧） */
+    original: DiffViewSide;
+    /** 右（新/对照侧） */
+    modified: DiffViewSide;
+    source?: string;
+  };
+  /**
    * 归档选中意图（v0.2 第十三批）：归档浏览器面板选中某档后广播。
    * 通用、游戏无关——任意插件可响应（未来的状态注入器 / 对比视图）；
    * 载荷只含归档路径与文件名（消费者按需自行深解析）。
@@ -228,6 +263,7 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'editor.sugarView.set',
   'ui.overlay.open',
   'ui.overlay.close',
+  'ui.diffView.open',
   'ui.panel.float',
   'workspace.importRequested',
   'workspace.newProjectRequested',
