@@ -6,8 +6,8 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **3212 passed / 35 skipped（3247）**；190 文件过 / 13 跳（203）（2026-10-15 本机实测于 master `ed7839d`，含合流后 rebase 到 origin 的复测） |
-| 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **3246 passed / 1 skipped（3247）**；203 文件全过（2026-10-15 本机实测于 master `ed7839d`，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
+| 全量测试 | **3244 passed / 35 skipped（3279）**；191 文件过 / 13 跳（204）（2026-10-15 本机实测于 master `8b834fd`） |
+| 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **3278 passed / 1 skipped（3279）**；204 文件全过（2026-10-15 本机实测于 master `8b834fd`，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **24 项全绿**（E7 写允许域批 +18→22；E14 拖放事件映射 +2；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
