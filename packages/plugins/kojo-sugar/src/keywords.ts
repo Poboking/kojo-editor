@@ -131,6 +131,8 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 问答块（作者爱用的引擎封装问答函数）：`询问` 多选（eraTW ASK_M）/ `确认` 二择（eraTW ASK_YN）。
   // 与 `选项`（PRINTBUTTON+INPUTS+RESULTS）/ `菜单`（PRINTL+INPUT+SELECTCASE RESULT）是**另一条
   // 管线**——本组产 `CALL <引擎函数>(...)` + `SELECTCASE`，函数名/参数/读回变量由 adapter 模板声明。
+  // 条目头 `「标签」 [逐项显示条件]：`——该槽是**逐项显示条件**（引擎逐条第 2 参：0 = 灰显无效 /
+  // 负 = 隐藏 / 非 0 = 有效），**不是**选中返回值（选中项由 `CASE 0..n-1` 位置决定）；槽可选、缺省 `1`。
   ['询问', 'block.askM'],
   ['ask', 'block.askM'],
   ['确认', 'block.askYN'],

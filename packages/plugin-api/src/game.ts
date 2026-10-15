@@ -441,8 +441,8 @@ export interface KojoAskForm {
   /** 读回变量名（`SELECTCASE <result>` 的主语；两类问句共用同一个返回值变量）。eraTW：`RESULT`。 */
   readonly result: string;
   /**
-   * 逐项条件**缺省值**（仅当 `option` 含 `{value}`）。作者未写 `「标签」 值：` 的 `值` 时，
-   * 用本值填充。缺省 = **必须写值**（缺则报错，不静默）。eraTW：`1`（= 选项有效）。
+   * 逐项显示条件**缺省值**（仅当 `option` 含 `{value}`）。作者未写 `「标签」 逐项显示条件：` 时，
+   * 用本值填充。缺省 = **必须写逐项显示条件**（缺则报错，不静默）。eraTW：`1`（= 选项有效）。
    */
   readonly defaultValue?: string;
   /** 项数下限（不足 → 报错，不产半成品）。 */

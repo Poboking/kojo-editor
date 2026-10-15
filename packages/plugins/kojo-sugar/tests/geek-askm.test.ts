@@ -1,6 +1,10 @@
 /**
  * 2 号批 · `询问` / `确认` = 引擎封装问答函数（eraTW `ASK_M` / `ASK_YN`）。
  *
+ * 条目头 = `「标签」 [逐项显示条件]：`——该槽是**逐项显示条件**（引擎逐条第 2 参：0 = 灰显无效 /
+ * 负 = 隐藏 / 非 0 = 有效），**不是**选中返回值；槽**可选**，缺省 `1`（语料绝大多数是 `,1)`）。
+ * 选中项由 `CASE 0..n-1` 的**书写次序**（0 基）决定，与逐项显示条件无关。
+ *
  * 产物形态**逐字照真实语料**（`C:\game\eratw-画蛇添足版eratw4.980\…\011 Marisa [魔理沙]\`
  * 的 `M_KOJO_K11_2_イベント.ERB` / 全目录 50 处 `CALL ASK_M|ASK_YN`）：
  * ```
@@ -68,7 +72,7 @@ describe('询问 · 多选（ASK_M）', () => {
     );
   });
 
-  it('选项值 = 引擎逐项**条件**（标签,条件）；CASE 序号是**位置** 0 基', () => {
+  it('逐项显示条件 = 引擎逐项**条件**（标签,条件）；CASE 序号是**位置** 0 基', () => {
     const out = t(src).erb;
     // 值 1 / 0 原样落在第二条参数上（0 = 灰显无效，非「选中值」）
     expect(out).toContain('CALL ASK_M("好呀",1,"下次吧",0)');
@@ -99,17 +103,42 @@ describe('询问 · 多选（ASK_M）', () => {
   });
 });
 
-describe('询问 · 选项值', () => {
-  it('省略值 → 用 adapter 模板缺省（eraTW `1`）', () => {
+describe('询问 · 逐项显示条件', () => {
+  it('省略逐项条件 → 用 adapter 模板缺省（eraTW `1`）', () => {
     const src = wrap('    询问：\n        「甲」：\n            「a」\n        「乙」：\n            「b」\n');
     expect(slice(src, 'CALL ASK_M')).toContain('CALL ASK_M("甲",1,"乙",1)');
   });
 
-  it('值可为表达式（走表达式降糖，非仅字面量）：变量族引用原样落产物', () => {
+  it('显式条件可为表达式（走表达式降糖，非仅字面量）：变量族引用原样落产物', () => {
     const src = wrap('    询问：\n        「甲」 CFLAG:TARGET:5：\n            「a」\n        「乙」 1：\n            「b」\n');
     const r = t(src);
     expect(r.diagnostics).toEqual([]);
     expect(r.erb).toContain('CALL ASK_M("甲",CFLAG:TARGET:5,"乙",1)');
+  });
+});
+
+describe('询问 · 逐项显示条件：可选槽（缺省 1）+ 原样透传', () => {
+  it('无显式条件 → 缺省 1；CASE 序号按书写次序 0 基', () => {
+    const src = wrap('    询问：\n        「甲」：\n            「a」\n        「乙」：\n            「b」\n');
+    expect(slice(src, 'CALL ASK_M')).toBe(
+      [
+        'CALL ASK_M("甲",1,"乙",1)',
+        'SELECTCASE RESULT',
+        '\tCASE 0',
+        '\t\tPRINTFORMW 「a」',
+        '\tCASE 1',
+        '\t\tPRINTFORMW 「b」',
+        'ENDSELECT',
+        '',
+      ].join('\n'),
+    );
+    expect(t(src).diagnostics).toEqual([]);
+  });
+
+  it('显式条件表达式原样透传（与缺省混写：一项带条件、一项省略）', () => {
+    const src = wrap('    询问：\n        「甲」 CFLAG:TARGET:5：\n            「a」\n        「乙」：\n            「b」\n');
+    expect(t(src).erb).toContain('CALL ASK_M("甲",CFLAG:TARGET:5,"乙",1)');
+    expect(t(src).diagnostics).toEqual([]);
   });
 });
 
@@ -140,7 +169,7 @@ describe('确认 · 二择（ASK_YN）', () => {
     expect(t(bad).erb).not.toContain('CALL ASK_YN');
   });
 
-  it('二择不接受选项值：写了值 → block-empty 且不产 CALL', () => {
+  it('二择不接受逐项显示条件：写了条件 → block-empty 且不产 CALL', () => {
     const bad = wrap('    确认：\n        「甲」 1：\n            「a」\n        「乙」：\n            「b」\n');
     expect(codes(bad)).toContain('block-empty');
     expect(t(bad).erb).not.toContain('CALL ASK_YN');

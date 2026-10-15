@@ -1586,9 +1586,9 @@ class BlockParser {
   }
 
   /**
-   * `询问` / `确认` 块体——条目 = `「标签」 [值]：` + 缩进分支体（与 `选项`/`菜单` 同构，
-   * 多一枚**选项值** `[值]`）。头部可选提示文案在此合成为一枚 `textLine`（走文本行管线：
-   * 插值 / 台词色都照常），附在节点上由 codegen 经 `emitBody` 发出。
+   * `询问` / `确认` 块体——条目 = `「标签」 [逐项显示条件]：` + 缩进分支体（与 `选项`/`菜单` 同构，
+   * 多一枚**逐项显示条件** `[逐项显示条件]`；可选、缺省 `1`）。头部可选提示文案在此合成为一枚
+   * `textLine`（走文本行管线：插值 / 台词色都照常），附在节点上由 codegen 经 `emitBody` 发出。
    *
    * **项数下限/上限是游戏知识**（由 adapter `KojoAskForm` 声明），故本段不校验——
    * 交由 codegen（`emitAskBlock`）按表判定、fail-closed 不产半成品。
@@ -1613,7 +1613,7 @@ class BlockParser {
         this.sink.report({
           code: 'indent-mismatch',
           severity: 'error',
-          message: `「${blockName}」的条目必须同级（每个条目是 \`「文本」 [值]：\` + 缩进正文）。`,
+          message: `「${blockName}」的条目必须同级（每个条目是 \`「文本」 [逐项显示条件]：\` + 缩进正文）。`,
           loc: posOf(line),
         });
         this.skipOverIndented(line.indent);
@@ -1623,7 +1623,7 @@ class BlockParser {
         this.sink.report({
           code: 'indent-mismatch',
           severity: 'error',
-          message: `「${blockName}」的条目要写成 \`「文本」 [值]：\`（以全角冒号结尾）。`,
+          message: `「${blockName}」的条目要写成 \`「文本」 [逐项显示条件]：\`（以全角冒号结尾）。`,
           loc: posOf(line),
         });
         this.cursor.next();
@@ -1992,9 +1992,9 @@ function stripAskPrompt(raw: string): string {
 }
 
 /**
- * `「标签」 [值]：` 头（已去尾冒号）→ 标签 + 可选值原文。
- * 标签引号三种（`「」` / `｢｣` / `""`）与 `选项` 同口径；`[值]` 是标签后的其余原文（可空）。
- * 无引号时的兜底：按首个空白切（首段为标签，其余为值）——`好呀 1` → 标签 `好呀`、值 `1`。
+ * `「标签」 [逐项显示条件]：` 头（已去尾冒号）→ 标签 + 可选条件原文。
+ * 标签引号三种（`「」` / `｢｣` / `""`）与 `选项` 同口径；条件槽是标签后的其余原文（可空 = 缺省 `1`）。
+ * 无引号时的兜底：按首个空白切（首段为标签，其余为条件）——`好呀 1` → 标签 `好呀`、条件 `1`。
  */
 function splitAskItem(raw: string): { label: string; value?: string } {
   const t = raw.trim();

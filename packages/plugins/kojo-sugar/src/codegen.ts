@@ -2360,7 +2360,7 @@ function emitMenuBlock(em: Emitter, node: MenuBlock, ctx: BodyContext, indent: n
  * `SELECTCASE RESULT` + `CASE 0..n-1` + `ENDSELECT`）：
  * ```
  * <提示行（可选，经 emitBody）>
- * CALL ASK_M("甲",1,"乙",1)   ← 逐项 `标签,条件`（无空格、ASCII 双引号）；条件取选项值、缺省用模板值
+ * CALL ASK_M("甲",1,"乙",1)   ← 逐项 `标签,逐项显示条件`（无空格、ASCII 双引号）；条件取自槽、缺省用模板值
  * SELECTCASE RESULT           ← 读回变量名由 adapter 声明
  *     CASE 0
  *         …
@@ -2372,7 +2372,7 @@ function emitMenuBlock(em: Emitter, node: MenuBlock, ctx: BodyContext, indent: n
  * fail-closed（不产半成品）：
  * - adapter 未声明问答模板（`faceTable.ask`）→ `face-table-missing`（error），一条字节都不产；
  * - 项数不满足模板 `minOptions`/`maxOptions` → 复用 `block-empty`（error），不产半成品；
- * - 模板 `option` 不含 `{value}`（二择形）却写了选项值 / 多选形却无从取值 → 复用 `block-empty`（error），不产半成品。
+ * - 模板 `option` 不含 `{value}`（二择形）却写了逐项显示条件 / 多选形却无从取值 → 复用 `block-empty`（error），不产半成品。
  *
  * 复用既有诊断码（`SugarDiagnosticCode` 是闭集，绝不新增）。
  */
@@ -2412,7 +2412,7 @@ function emitAskBlock(em: Emitter, node: AskMBlock | AskYNBlock, ctx: BodyContex
     ctx.sink.report({
       code: 'block-empty',
       severity: 'error',
-      message: `「${blockName}」块的选项不接受值（引擎函数只收标签）——已忽略该值，不产半成品。`,
+      message: `「${blockName}」块的条目不接受逐项显示条件（引擎函数只收标签）——已忽略，不产半成品。`,
       loc: node.loc.start,
     });
     return;
@@ -2421,7 +2421,7 @@ function emitAskBlock(em: Emitter, node: AskMBlock | AskYNBlock, ctx: BodyContex
     ctx.sink.report({
       code: 'block-empty',
       severity: 'error',
-      message: `「${blockName}」块的每个选项都必须写值（当前适配器未提供缺省值）。`,
+      message: `「${blockName}」块的每个条目都必须写逐项显示条件（当前适配器未提供缺省值）。`,
       loc: node.loc.start,
     });
     return;

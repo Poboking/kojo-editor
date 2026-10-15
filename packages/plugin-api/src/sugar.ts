@@ -433,12 +433,12 @@ export interface AskYNBlock extends SugarNodeBase {
   items: AskItem[];
 }
 
-/** 问答块的单条目（`「标签」 [值]：` + 缩进块体） */
+/** 问答块的单条目（`「标签」 [逐项显示条件]：` + 缩进块体） */
 export interface AskItem {
   /** 选项显示标签（不含引号；源为 `「…」` / `｢…｣` / `"…"`） */
   label: string;
   /**
-   * 选项值原文（标签后的表达式；**仅当** adapter 模板的 `option` 含 `{value}` 时消费）。
+   * 逐项显示条件的原文（标签后的表达式；**仅当** adapter 模板的 `option` 含 `{value}` 时消费）。
    * 缺省 = 用模板 `defaultValue` 填充（eraTW `1` = 有效）。游戏知识只住 adapter。
    */
   value?: string;
