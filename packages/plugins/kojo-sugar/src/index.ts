@@ -650,6 +650,8 @@ export {
   lookupFunctionName,
   isKnownFunctionName,
 } from './system-functions';
+// v1.7：行首语句形中文函数调用白名单（位糖 = 方案 E；单一真源）。
+export { STATEMENT_FUNCTIONS } from './statement-functions';
 // E16：裸引擎全局白名单（`SELECTCOM`/`PREVCOM`/…；判据与实测计数在模块头注）
 export { ENGINE_GLOBAL_IDENTIFIERS, resolveEngineGlobal } from './engine-globals';
 export {

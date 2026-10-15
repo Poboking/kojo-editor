@@ -739,6 +739,15 @@ class BlockParser {
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
       case 'settle':
         return { kind: 'rawLine', text: 'EXP:' + cls.expr, loc: spanOf(line) } as RawLine;
+      case 'statementCall':
+        // 位糖 = 方案 E（v1.7）：行首语句形中文函数调用。用 `rawLine` 承载并挂
+        // `_statementFn` 标记——降糖需 codegen 的别名表 / 字典 / 代词展开，在那边完成。
+        return {
+          kind: 'rawLine',
+          text: `${cls.engine} ${cls.target}, ${cls.slot}`,
+          loc: spanOf(line),
+          _statementFn: { engine: cls.engine, target: cls.target, slot: cls.slot },
+        } as RawLine;
       case 'assign':
         return {
           kind: 'rawLine',
@@ -838,6 +847,17 @@ class BlockParser {
         // 直通行（原样透传、不降糖、不解释作用域词）——保证手写与本糖产物同一字节形。
         this.cursor.next();
         return { kind: 'rawLine', text: 'EXP:' + cls.expr, loc: spanOf(line) } as RawLine;
+      }
+      case 'statementCall': {
+        // 位糖 = 方案 E（v1.7）：行首语句形中文函数调用。用 `rawLine` 承载并挂
+        // `_statementFn` 标记——降糖需 codegen 的别名表 / 字典 / 代词展开，在那边完成。
+        this.cursor.next();
+        return {
+          kind: 'rawLine',
+          text: `${cls.engine} ${cls.target}, ${cls.slot}`,
+          loc: spanOf(line),
+          _statementFn: { engine: cls.engine, target: cls.target, slot: cls.slot },
+        } as RawLine;
       }
       case 'assign': {
         // 语句级赋值 `X = 表达式`：左值走 §5.0 别名展开（只读别名报
@@ -1376,6 +1396,14 @@ class BlockParser {
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
       case 'settle':
         return { kind: 'rawLine', text: 'EXP:' + cls.expr, loc: spanOf(line) } as RawLine;
+      case 'statementCall':
+        // 位糖 = 方案 E（v1.7）：行首语句形中文函数调用（随机候选 / 选项体内联用）。
+        return {
+          kind: 'rawLine',
+          text: `${cls.engine} ${cls.target}, ${cls.slot}`,
+          loc: spanOf(line),
+          _statementFn: { engine: cls.engine, target: cls.target, slot: cls.slot },
+        } as RawLine;
       case 'ifHead':
         return this.parseIfBlockFromClass(line, cls);
       case 'whenHead':

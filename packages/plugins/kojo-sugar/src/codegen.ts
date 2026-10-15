@@ -62,6 +62,7 @@ import {
 import { checkTimingArgsDeclaration, CJK, type SectionPreset } from './lexer';
 import { RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_NAMED_PARAMS, TIMING_SUCCESS_PARAM } from './keywords';
 import { isIdentPart, isIdentStart } from './identifier-chars';
+import { STATEMENT_FUNCTIONS } from './statement-functions';
 import type { TopNode } from './parser';
 import type { AliasTable, DiagnosticSink, DictionaryLookup, HeartBlock, RandomShape } from './types';
 
@@ -1451,7 +1452,10 @@ function resolvePlayerColor(node: TextLine | HeartLine, ctx: BodyContext): strin
 /* ------------------------------ 原生直通行 / 语句赋值 ------------------------------ */
 
 /**
- * `rawLine` 两种来源：
+ * `rawLine` 三种来源：
+ * - **语句形中文函数调用** `设置标记 X, n`（parser 挂了 `_statementFn` 标记；位糖 = 方案 E）
+ *   → 目标 `X` 走左值展开（`expandTarget`，只读别名报错中止），位槽 `n` 走表达式降糖
+ *   （`lowerExpression`）；产 `SETBIT/CLEARBIT/INVERTBIT X, n`；
  * - **语句赋值** `X = 表达式`（parser 挂了 `_assign` 标记）→ 左值按 §5.0 展开
  *   （只读别名报 `readonly-alias-assignment` 并中止该行），右值走表达式降糖；
  * - **原生直通行**（全大写指令 / `$标签`）→ 原样透传，不降糖（规范 §3.10）。
@@ -1462,6 +1466,25 @@ function emitRawLine(
   ctx: BodyContext,
   indent: number,
 ): void {
+  const stmtFn = (node as { _statementFn?: { engine: string; target: string; slot: string } })._statementFn;
+  if (stmtFn) {
+    const target = expandTarget(stmtFn.target, exprCtx(ctx, node.loc.start));
+    if (target === null) return; // 只读别名：已在 expandTarget 报诊断，不产出半成品
+    if (stmtFn.slot.trim().length === 0) {
+      // 缺逗号 / 空位槽：报既有码（零新诊断码），位置指回该行，且**不产半成品**
+      const cnName = [...STATEMENT_FUNCTIONS.entries()].find(([, e]) => e === stmtFn.engine)?.[0] ?? stmtFn.engine;
+      ctx.sink.report({
+        code: 'unknown-identifier',
+        severity: 'error',
+        message: `「${cnName}」需要写成「${cnName} <变量引用>, <位号表达式>」——缺逗号或位号为空。`,
+        loc: node.loc.start,
+      });
+      return;
+    }
+    const slot = lowerExpression(stmtFn.slot, exprCtx(ctx, node.loc.start));
+    em.push(indent, `${stmtFn.engine} ${target}, ${slot}`, node.loc.start.line);
+    return;
+  }
   const assign = (node as { _assign?: { target: string; expr: string } })._assign;
   if (!assign) {
     em.push(indent, node.text, node.loc.start.line, verbatimRow(em, node));

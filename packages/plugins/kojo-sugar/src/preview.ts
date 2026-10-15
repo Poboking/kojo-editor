@@ -138,7 +138,9 @@ export function isStructuralLine(text: string): boolean {
   }
   // `LOCAL = n` / `TFLAG:192 = n` / `SETBIT RESULT, n` / `RESULTS* = …` 是骨架赋值
   if (/^(LOCAL(?::\d+)?|TFLAG:\d+|RESULTS(?::\d+)?|FLAG:[^=]+|RESULT)\s*=/.test(t)) return true;
-  if (/^SETBIT\s+RESULT\b/.test(t)) return true;
+  // 位原语三语句（`SETBIT` / `CLEARBIT` / `INVERTBIT <目标>, <位号>`）——位糖（v1.7）产物
+  // 与手写同形，都是**结构性操作**（不承载文本），不得折叠进消息块。
+  if (/^(SETBIT|CLEARBIT|INVERTBIT)\s+/.test(t)) return true;
   // `CALL <单 token>`（既有函数的转发调用，如包装函数的 `CALL X_1`）是骨架；
   // 带实参的 `CALL HPH_PRINT(@"…","w")` 是文本块。判据：令牌后无 `(` 与 `,`
   // （实参一定含其一二；转发的函数名不含）。

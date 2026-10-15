@@ -53,6 +53,7 @@ import {
   TIMING_ARGS_PARAM,
   type KeywordId,
 } from './keywords';
+import { STATEMENT_FUNCTIONS } from './statement-functions';
 import type { DiagnosticSink } from './types';
 
 /* ============================== 物理行 → 逻辑行 ============================== */
@@ -260,6 +261,12 @@ export type LineClass =
   | { kind: 'arrowElse'; value: string }
   /** 经验结算行（B5）：`结算 <引用> <op> <值>` → 产一行 `EXP:<引用> <op> <值>` 原生 ERB */
   | { kind: 'settle'; expr: string }
+  /**
+   * 行首语句形中文函数调用（位糖 = 方案 E；v1.7）：`设置标记 X, n` → `SETBIT X, n` 等。
+   * `engine` = 原生 ERB 语句形函数名（白名单 `statement-functions.ts` 单一真源）；
+   * `target` = 变量引用原文；`slot` = 位号表达式原文（皆在 codegen 降糖）。
+   */
+  | { kind: 'statementCall'; engine: string; target: string; slot: string }
   | { kind: 'assign'; target: string; expr: string }
   | { kind: 'blankLine'; wait: boolean }
   | { kind: 'heartText'; raw: string }
@@ -352,6 +359,39 @@ function parseReturnStatement(code: string): { kind: 'returnStatement'; value?: 
   const value = m[2]!.trim();
   if (value.length === 0) return { kind: 'returnStatement' };
   return { kind: 'returnStatement', value };
+}
+
+/* ------------------ 行首语句形中文函数调用（位糖 = 方案 E；v1.7） ------------------ */
+
+/** 白名单关键字整词 + 其后必须跟空白（半角或全角）——词形边界天然排除 `设置标记xx` / `置位状態` */
+const STATEMENT_FN_RE = new RegExp(`^(${[...STATEMENT_FUNCTIONS.keys()].join('|')})[ \\t\\u3000]+(.*)$`);
+
+/**
+ * `设置标记 <变量引用>, <位号表达式>`（严格白名单 3 枚）→ 行首语句形中文函数调用。
+ *
+ * `X`（变量引用）与 `n`（位号表达式）都只是**原文**——代词/别名/中文运算符/系统函数名
+ * 的降糖都在 codegen 完成（别名表、字典、`expandTarget`/`lowerExpression` 都在那边）。
+ * 此处只做：整词判定 + **赋值守卫** + 顶层逗号切分。
+ *
+ * **赋值守卫**：关键字后首个非空白字符若是 `=`，拒绝本形态（退回普通赋值判定）——
+ * 否则 `设置标记 = 1` 这类把关键字吞成左值前缀的静默 bug 会在此重演（同 `结算` 行
+ * 排在上方的理由）。
+ */
+function parseStatementFunction(
+  code: string,
+): { kind: 'statementCall'; engine: string; target: string; slot: string } | null {
+  const m = STATEMENT_FN_RE.exec(code);
+  if (!m) return null;
+  const name = m[1]!;
+  const rest = m[2]!;
+  if (rest.trimStart().startsWith('=')) return null; // 赋值守卫
+  const engine = STATEMENT_FUNCTIONS.get(name);
+  if (engine === undefined) return null;
+  const parts = splitTopLevel(rest, /[,，]/);
+  const target = parts[0]!.trim();
+  if (target.length === 0) return null;
+  const slot = parts.length > 1 ? parts.slice(1).join('，').trim() : '';
+  return { kind: 'statementCall', engine, target, slot };
 }
 
 /* ---------------------- 单行条件（本批）：`如果 <条件> 则 <语句>` ---------------------- */
@@ -532,6 +572,13 @@ export function classifyLine(line: LogicalLine): LineClass {
   if (settleHead && lookupKeyword(settleHead[1]!) === 'inline.settle') {
     return { kind: 'settle', expr: settleHead[2]!.trim() };
   }
+
+  // ---- 行首语句形中文函数调用（位糖 = 方案 E；v1.7）：`设置标记 X, n` ----
+  // 严格白名单 3 枚（`statement-functions.ts` 单一真源）。**排在赋值（`parseAssignment`）之前**：
+  // `设置标记 她的既成事実, 0` 若无此判定会落兜底 `text` 被当旁白静默吞掉（违反「内核不静默」）。
+  // 插在本处（结算之后、赋值之前）——不与块头 / 头部声明 / 别名 / 调用 / 返回 / 结算抢道。
+  const stmtFn = parseStatementFunction(code);
+  if (stmtFn) return stmtFn;
 
   // ---- 赋值（`X = 表达式`）——`=` 不在引号内、不是比较运算符 ----
   const assign = parseAssignment(code);

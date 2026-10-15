@@ -129,6 +129,10 @@ describe('产物函数扫描 / 结构行判定 / 消息块折叠', () => {
     expect(isStructuralLine('LOCAL:2 = RAND:2')).toBe(true);
     expect(isStructuralLine('TFLAG:192 = 0')).toBe(true);
     expect(isStructuralLine('SETBIT RESULT, 0')).toBe(true);
+    // 位糖（v1.7）产物/手写同形：三语句位原语都是结构行（不承载文本）
+    expect(isStructuralLine('SETBIT TFLAG:193, 0')).toBe(true);
+    expect(isStructuralLine('CLEARBIT TFLAG:193, 1')).toBe(true);
+    expect(isStructuralLine('INVERTBIT TFLAG:193, 2')).toBe(true);
     expect(isStructuralLine('CALL FN_A_1')).toBe(true); // 包装函数骨架：转发调用
     // 文本行 —— 必须不是结构行
     expect(isStructuralLine('\tPRINTFORMW 「一」')).toBe(false);
