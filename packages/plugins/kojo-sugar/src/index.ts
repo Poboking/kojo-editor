@@ -253,6 +253,8 @@ export function createKojoSugarPlugin(): Plugin {
         dictionary: () => dictionaryOf(),
         // 时机分野模板表（软取，批 I 的函数头反解用；缺席 = 一个头都不标）
         faceTable: () => faceTableOf(),
+        // 基础库 / 常用函数名表（软取，ZH-F2 的函数名反显用；缺席 = 英文函数名保持英文）
+        libraryTable: () => libraryTableOf(),
       });
 
       ctx.provide(WellKnownServices.SugarLift, liftService);
@@ -567,6 +569,7 @@ export { createSugarTranspileService, type CreateSugarServiceOptions } from './s
 // ZH-F1：另导出查表/收录判定（中文函数名 → 原生 ERB 名；系统表 + adapter 表）。
 export {
   SYSTEM_FUNCTION_ALIASES,
+  SYSTEM_FUNCTION_REVERSE,
   lowerSystemFunctions,
   lookupFunctionName,
   isKnownFunctionName,

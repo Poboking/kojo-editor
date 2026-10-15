@@ -13,8 +13,10 @@ import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from 'monaco-editor';
+import { makeLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
+import { type HoverTables, installHover } from '../monaco/kojo-hover';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { editorOptionsForLineCount } from './editor-options';
@@ -57,6 +59,29 @@ const MARKER_DEBOUNCE_MS = 250;
 /** 按扩展名选语言：`.kojo` = 语法糖表层 DSL；其余按原生 ERB（v0.1 口径） */
 function languageFor(filePath: string): string {
   return /\.kojo$/i.test(filePath) ? KOJO_LANGUAGE_ID : ERB_LANGUAGE_ID;
+}
+
+/**
+ * 悬停**中文名**的三张真源表（ZH-F2）——按当前项目 `adapterId` 精确匹配 `game.adapter`
+ * 槽位贡献，**运行时**现取（适配器随项目开闭重建，缓存会把上一个项目的表带过来）。
+ *
+ * 三张表全在适配器贡献上（游戏知识只住 adapter；宿主只读不解释）：
+ * 变量字典（`variableSchema` → `makeLookup`，与 kojo-sugar 转译器同一个构造器）、
+ * 基础库函数名表、指令名表。缺一即该路不反查（**显示侧不猜**）。
+ */
+function hoverTables(kernel: Kernel): HoverTables {
+  const project = kernel.project.current();
+  if (!project) return {};
+  for (const contribution of kernel.slots.query('game.adapter')) {
+    if (contribution.adapter.gameId !== project.adapterId) continue;
+    const adapter = contribution.adapter;
+    return {
+      ...(adapter.variableSchema ? { dictionary: makeLookup(adapter.variableSchema) } : {}),
+      ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
+      ...(adapter.kojoInstructionTable ? { instructionTable: adapter.kojoInstructionTable } : {}),
+    };
+  }
+  return {};
 }
 
 /**
@@ -902,7 +927,11 @@ export function EditorPane({
         },
       },
     );
+    // 悬停中文名（ZH-F2）：只读显示，光标下的原生记号 → 中文名。表按当前项目 adapterId
+    // **运行时**现取（`hoverTables`），查不到即不显示（**不猜**）。与 CodeAction 同款隔离。
+    const hoverDisposer = installHover(monaco, () => hoverTables(kernel));
     return () => {
+      hoverDisposer.dispose();
       cmdDisposer.dispose();
       providerDisposer.dispose();
       clearSugarView();

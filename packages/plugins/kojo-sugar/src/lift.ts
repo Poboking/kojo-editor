@@ -43,6 +43,7 @@ import type {
   ControlFlowStatement,
   ConditionExpr,
   KojoFaceTable,
+  KojoLibraryTable,
   SugarDiagnostic,
   SugarLiftCandidate,
   SugarLiftKind,
@@ -90,6 +91,14 @@ export interface LiftDeps {
    * `timing-face-unknown` fail-closed 同一条纪律）。
    */
   faceTable?: () => KojoFaceTable | undefined;
+  /**
+   * 基础库 / 常用函数名表（**软取**，适配器 `kojoLibraryTable`；ZH-F2）。
+   *
+   * 与 `dictionary` 同样做成函数：适配器随项目切换重建。显示侧只用它的**反查**
+   * （原生 ERB 函数名 → 中文名，`lookupByFunction`）。缺省 = 不做函数名反糖
+   * （投影照常工作，只是英文函数名保持英文——**不猜**）。
+   */
+  libraryTable?: () => KojoLibraryTable | undefined;
 }
 
 /* ============================== 主入口 ============================== */

@@ -74,6 +74,7 @@ import type {
 import type { LiftDeps } from './lift';
 import type { DictionaryLookup } from './types';
 import { PRONOUN_REVERSE } from './expression';
+import { SYSTEM_FUNCTION_REVERSE } from './system-functions';
 import { buildFaceNameIndex, stripParams } from './faces-reverse';
 import type { FaceNameIndex } from './faces-reverse';
 
@@ -1568,24 +1569,51 @@ function reverseAttributes(text: string, deps: LiftDeps): string {
 const EXPR_REF_RE =
   /\b(CFLAG|TALENT|ABL|EXP|MARK|BASE|PALAM|TEQUIP|TCVAR|CALLNAME|NAME)(?::[^:\s()[\]{},%+]+){1,2}/g;
 
+/** 原生 ERB 函数名**调用形态**（`名字(`，允许名与括号间空白）——ZH-F2 反显用 */
+const FUNCTION_CALL_RE = /\b([A-Za-z_][A-Za-z0-9_]*)([ \t]*\()/g;
+
 /**
- * 表达式侧反糖（**词级**）：把条件里的角色属性引用逐个换成糖写法。
- * 双引号字面量整段跳过（不识别的写法一律保留，不猜）。
+ * 英文函数名的**中文反显**（ZH-F2）：把 `GETBIT(` / `HPH_PRINT(` 这类已知函数名的调用形态
+ * 换成糖里作者能写下的**中文名**（`获取标记(` / `心形(`）。
+ *
+ * 名字来源两张**既有真源**，绝不新造：系统函数表反向（`SYSTEM_FUNCTION_REVERSE`，由
+ * `SYSTEM_FUNCTION_ALIASES` 派生）+ adapter 基础库表反查（`lookupByFunction`，游戏知识住 adapter）。
+ * 二者皆不认 → **原样保留**（`FUNCTION_CALL_RE` 命中但查不到名字的不动，**不猜**）。
+ *
+ * 与正向降糖 `lowerSystemFunctions` 的判据对称：只认**调用形态**（名字后随 `(`），
+ * 裸词 / 变量引用 / 别名的字样一律不碰；`CALL` 之类的裸 ERB 指令名不含 `(` 故不受影响。
+ */
+function reverseFunctionCalls(text: string, deps: LiftDeps): string {
+  const lib = deps.libraryTable?.();
+  return text.replace(FUNCTION_CALL_RE, (whole: string, name: string) => {
+    const cn = SYSTEM_FUNCTION_REVERSE.get(name) ?? lib?.lookupByFunction?.(name);
+    return cn === undefined ? whole : `${cn}${whole.slice(name.length)}`;
+  });
+}
+
+/**
+ * 表达式侧反糖（**词级**）：把条件里的角色属性引用逐个换成糖写法，并把已知函数名的
+ * 调用形态换成中文名（ZH-F2）。双引号字面量整段跳过（不识别的写法一律保留，不猜）。
+ *
+ * 两道替换互不相干（变量引用以族头 `FAMILY:` 起、函数名以 `名字(` 收），**各自 fail-visible**：
+ * 字典缺席只是不做属性反糖，函数名反显照常（系统函数表是语言级、恒可用）。
  */
 function reverseExprAttributes(text: string, deps: LiftDeps): string {
   const dict = deps.dictionary?.();
-  if (!dict?.nameAt) return text;
   return text
     .split(/("(?:[^"]*)")/g)
-    .map((seg) =>
-      seg.startsWith('"')
-        ? seg
-        : seg.replace(EXPR_REF_RE, (whole: string, family: string) => {
+    .map((seg) => {
+      // 双引号字面量整段跳过（那里可能恰好写着同样的字样）
+      if (seg.startsWith('"')) return seg;
+      const attrs = dict?.nameAt
+        ? seg.replace(EXPR_REF_RE, (whole: string, family: string) => {
             // 段数从匹配文本本身数出来（正则的第二捕获组只给"最后一段"，用它数会错）
             const segs = whole.slice(family.length + 1).split(':');
             return segmentsToSugar(family, segs, dict) ?? whole;
-          }),
-    )
+          })
+        : seg;
+      return reverseFunctionCalls(attrs, deps);
+    })
     .join('');
 }
 

@@ -15,6 +15,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ControlFlowStatement, SugarProjectSegment } from '@kojo/plugin-api';
 import { scanControlFlow } from '@kojo/plugin-erb-parser';
+import { createEratwLibraryTable } from '@kojo/plugin-eratw-adapter';
 import { liftProject } from '../src/project';
 import type { LiftDeps } from '../src/lift';
 import { stubFaceTable } from './support';
@@ -248,7 +249,9 @@ describe('糖投影 · 行内条件 `\\@cond?A#B\\@` → `{cond ? "A" : "B"}`（
 
   it('分支是变量引用 → 原样照抄（糖 §3.4 禁嵌套插值，不造读者写不出来的假语法）', () => {
     const r = project('PRINTFORML 走向\\@ GROUPMATCH(ARG,35,40) ? %LOCALS:1% # %LOCALS:0% \\@');
-    expect(segLines(r.segments[0]!)).toEqual(['走向{GROUPMATCH(ARG,35,40) ? %LOCALS:1% : %LOCALS:0%} 续']);
+    // ZH-F2（显示线）：条件里的英文函数名反显中文名（`GROUPMATCH` → `分组匹配`），
+    // 分支是变量引用仍**逐字节原样**（本条的判据不变，只多显示了函数名的中文名）。
+    expect(segLines(r.segments[0]!)).toEqual(['走向{分组匹配(ARG,35,40) ? %LOCALS:1% : %LOCALS:0%} 续']);
   });
 
   it('一行两支：全部降为三元，体外文本仍走可读化', () => {
@@ -887,6 +890,83 @@ describe('糖投影 · 属性反糖（需变量字典的反向查询）', () => 
   it('无字典（adapter 未激活）→ 退化为不做属性反糖，其余照常', () => {
     const r = project('PRINTFORMW 「{CFLAG:TARGET:1088}」');
     expect(segLines(r.segments[0]!)).toEqual(['「{CFLAG:TARGET:1088}」']);
+  });
+});
+
+/* ==================== ZH-F2：英文函数名反显中文名（显示线） ==================== */
+
+describe('糖投影 · 英文函数名反显为中文名（ZH-F2）', () => {
+  /** 桩字典（与上面属性反糖桩同口径）：CFLAG 1088 = 好感度，其余查不到 */
+  const dict = {
+    resolveFamily: () => undefined,
+    resolve: () => undefined,
+    nameAt: (family: string, index: string): string | undefined =>
+      family === 'CFLAG' && index === '1088' ? '好感度' : undefined,
+  };
+  /** 桩基础库表：由真 adapter builder 构造（与生产装配同构，杜绝形状不同构的空断言） */
+  const lib = createEratwLibraryTable(
+    new Map([
+      ['心形', 'HPH_PRINT'],
+      ['角色文本', 'CHARA_TEXT'],
+    ]),
+  );
+
+  const lift = (source: string, opts: { libraryTable?: boolean } = {}) =>
+    liftProject(
+      {
+        transpile: () => {
+          throw new Error('投影不应调用 transpile');
+        },
+        scanControlFlow,
+        dictionary: () => dict,
+        ...(opts.libraryTable === false ? {} : { libraryTable: () => lib }),
+      },
+      { source },
+    );
+
+  it('控制流条件里的英文函数名 → 中文名（与变量索引反糖同一趟，词级各管各的）', () => {
+    const r = lift('IF GETBIT(CFLAG:TARGET:1088,0)\nPRINTFORMDW 甲\nENDIF');
+    expect(segLines(r.segments[0]!)[0]).toBe('如果 获取标记(她的好感度,0)：');
+  });
+
+  it('adapter 基础库表反查（`HPH_PRINT` / `CHARA_TEXT` 不在系统表，只住 adapter）', () => {
+    const r = lift('IF HPH_PRINT(1) && CHARA_TEXT(A) > 0\nPRINTFORMDW 甲\nENDIF');
+    expect(segLines(r.segments[0]!)[0]).toBe('如果 心形(1) && 角色文本(A) > 0：');
+  });
+
+  it('无 adapter 表时各自 fail-visible：系统表照常反显，基础库名保持英文', () => {
+    const r = lift('IF GETBIT(A,0) && HPH_PRINT(1)\nPRINTFORMDW 甲\nENDIF', { libraryTable: false });
+    expect(segLines(r.segments[0]!)[0]).toBe('如果 获取标记(A,0) && HPH_PRINT(1)：');
+  });
+
+  it('负测：未收录的函数名 / 裸词（无 `(`）/ 双引号字面量 → **逐字节原样**（绝不猜）', () => {
+    const r = lift('IF GETBIT || MY_FUNC(1) && ABC(A) > 0\nPRINTFORMDW 甲\nENDIF');
+    expect(segLines(r.segments[0]!)[0]).toBe('如果 GETBIT || MY_FUNC(1) && ABC(A) > 0：');
+    const quoted = lift('IF A == "HPH_PRINT(1)"\nPRINTFORMDW 甲\nENDIF');
+    expect(segLines(quoted.segments[0]!)[0]).toBe('如果 A == "HPH_PRINT(1)"：');
+  });
+
+  it('函数名反显只走**表达式通道**：台词文本体里的同形字样一律不动', () => {
+    const r = lift('PRINTFORMDW 调用 GETBIT(1) 看看');
+    expect(segLines(r.segments[0]!)).toEqual(['调用 GETBIT(1) 看看']);
+  });
+
+  it('显示文本不是降糖输入：投影全程零次调用 `transpile`（计数为 0）', () => {
+    let calls = 0;
+    const r = liftProject(
+      {
+        transpile: () => {
+          calls++;
+          throw new Error('投影不应调用 transpile');
+        },
+        scanControlFlow,
+        dictionary: () => dict,
+        libraryTable: () => lib,
+      },
+      { source: 'IF GETBIT(A,0)\nPRINTFORMDW 甲\nENDIF' },
+    );
+    expect(calls).toBe(0);
+    expect(segLines(r.segments[0]!)[0]).toBe('如果 获取标记(A,0)：');
   });
 });
 

@@ -92,6 +92,19 @@ export const SYSTEM_FUNCTION_ALIASES: ReadonlyMap<string, string> = new Map<stri
   ['检查避妊理由二', 'CHK_HININ_REASON_2'],
 ]);
 
+/**
+ * 原生 ERB 函数名 → 中文名（**反向派生**自 `SYSTEM_FUNCTION_ALIASES`；正反对称是构造
+ * 事实，单一真源、绝不手抄第二张表——与 `PRONOUN_REVERSE` 同一条纪律）。同名多中文取
+ * **首条**。显示侧（ZH-F2：投影反糖 / 宿主 hover）用它；查不到一律 `undefined`（不猜）。
+ */
+export const SYSTEM_FUNCTION_REVERSE: ReadonlyMap<string, string> = (() => {
+  const reverse = new Map<string, string>();
+  for (const [cn, erb] of SYSTEM_FUNCTION_ALIASES) {
+    if (!reverse.has(erb)) reverse.set(erb, cn);
+  }
+  return reverse;
+})();
+
 /** ERB 字符串字面量 `"…"`（无转义概念）的结束下标；返回**闭合引号之后**的位置 */
 function stringEnd(text: string, from: number): number {
   let j = from + 1;
