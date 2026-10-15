@@ -61,6 +61,18 @@ function scan(patterns: RegExp[], roots: string[], skipComments = false): string
 
 const ALL = [nodeJoin(ROOT, 'packages')];
 
+/**
+ * 市场语义的**运行时代码面**（A5/A3 守卫用）：注册表怎么被读、落点怎么派生，
+ * 这几处是后来者会顺手"加个 latest / 存个路径"的地方，注释拦不住，测试拦得住。
+ */
+const MARKET_CODE_SURFACE = [
+  nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'market.ts'),
+  nodeJoin(ROOT, 'packages', 'kernel', 'src'),
+  nodeJoin(ROOT, 'packages', 'plugins', 'kojo-market'),
+  nodeJoin(ROOT, 'packages', 'plugins', 'ui-market'),
+  nodeJoin(ROOT, 'packages', 'app', 'src'),
+];
+
 describe('市场单一真源守门', () => {
   it('仓库根解析正确（判据不跑在假目录上）', () => {
     expect(readFileSync(nodeJoin(ROOT, 'package.json'), 'utf8')).toContain('"name": "kojo-editor"');
@@ -97,5 +109,18 @@ describe('市场单一真源守门', () => {
     for (const c of ['MARKET_PACKS_DIR', 'MARKET_STAGING_DIR', 'MARKET_CONTENT_DIR', 'MARKET_INDEX_FILE', 'MARKET_MANIFEST_FILE']) {
       expect(svc, c).toContain(c);
     }
+  });
+
+  it('市场只认 index.json：代码行里不许出现 releases/latest（契约 A5）', () => {
+    // 实测：`make_latest=false` 去不掉 GitHub 的 Latest 徽章（GET /releases/latest 照样 200），
+    // 所以"哪个是最新"在平台上根本不可靠 —— 版本事实一律从 index.json 的条目读。
+    // skipComments：契约里那条说明自身要提到这个字面量，注释不算违规。
+    expect(scan([/releases\/latest/], MARKET_CODE_SURFACE, true)).toEqual([]);
+  });
+
+  it('已装记录里没有第二份真相：无落点字段、无一词两义的容器摘要（契约 A2/A3）', () => {
+    expect(scan([/^\s*dir:\s/, /zipSha256/], [nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'market.ts')], true)).toEqual([]);
+    const contract = readFileSync(nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'market.ts'), 'utf8');
+    for (const f of ['contentDigest', 'containerSha256']) expect(contract, f).toContain(f);
   });
 });

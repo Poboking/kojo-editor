@@ -18,6 +18,9 @@ import { createUiSnapshotInjectorPlugin } from '@kojo/plugin-ui-snapshot-injecto
 import { createUiSugarLiftPlugin } from '@kojo/plugin-ui-sugar-lift';
 import { createUiSugarPreviewPlugin } from '@kojo/plugin-ui-sugar-preview';
 import { createUiSugarEditorPlugin } from '@kojo/plugin-ui-sugar-editor';
+import { createKojoMarketPlugin } from '@kojo/plugin-kojo-market';
+import { createUiMarketPlugin } from '@kojo/plugin-ui-market';
+import { version as APP_VERSION } from '../package.json';
 import { tauriBridge } from './bridge/tauri-bridge';
 import { computeTasks } from './compute-tasks';
 import { createCascadeWatermarks } from './cascade-watermarks';
@@ -69,6 +72,12 @@ export async function bootstrapKernel(): Promise<Kernel> {
       // Monaco markers）+ 糖判定面板。语义全在 kojo-sugar 的 sugar.transpile（纯函数）
       // ——排在 kojo-sugar 之后（它 require sugar.transpile）
       createUiSugarEditorPlugin(),
+      // 口上市场 v1：服务 `market`（本地目录源装卸 + 逐文件 sha256 锚）。
+      // appVersion 单一真源 = app 包清单（`packages/app/package.json`），插件源码不写版本号
+      createKojoMarketPlugin({ appVersion: APP_VERSION }),
+      // 市场面板（ui.panel）：消费 `market` 服务 ⇒ **必须排在 kojo-market 之后**
+      // （装配语义照 ui-sugar-lift 的 requires: ['sugar.lift']，不 import 市场插件）
+      createUiMarketPlugin({ appVersion: APP_VERSION }),
     ],
   });
   // 装配层任务表并入**宿主侧本地实现**（在 start 之前）：跨插件合成的 kind

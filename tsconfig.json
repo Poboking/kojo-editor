@@ -35,7 +35,8 @@
       "@kojo/plugin-ui-snapshot-injector": ["./packages/plugins/ui-snapshot-injector/src/index.ts"],
       "@kojo/plugin-ui-sugar-lift": ["./packages/plugins/ui-sugar-lift/src/index.ts"],
       "@kojo/plugin-ui-sugar-preview": ["./packages/plugins/ui-sugar-preview/src/index.ts"],
-      "@kojo/plugin-ui-sugar-editor": ["./packages/plugins/ui-sugar-editor/src/index.ts"]
+      "@kojo/plugin-ui-sugar-editor": ["./packages/plugins/ui-sugar-editor/src/index.ts"],
+      "@kojo/plugin-ui-market": ["./packages/plugins/ui-market/src/index.ts"]
     }
   },
   "include": [

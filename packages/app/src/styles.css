@@ -4860,3 +4860,93 @@ button.primary .hint {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ========================== 口上市场面板（mk-*，KM-3） ========================== */
+.panel-market {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  font-size: var(--fs-1);
+  min-height: 0;
+  overflow: auto;
+}
+.mk-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.mk-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.mk-status,
+.mk-hint {
+  color: var(--text-dim, #8b95a1);
+  white-space: pre-wrap;
+}
+.mk-status {
+  color: var(--yellow, #e5c07b);
+}
+.mk-note {
+  border-left: 2px solid var(--accent, #61afef);
+  padding: 2px 6px;
+}
+.mk-grouptitle {
+  margin: 6px 0 2px;
+  font-size: var(--fs-0, 11px);
+  color: var(--text-dim, #8b95a1);
+  font-weight: 600;
+}
+.mk-list,
+.mk-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+.mk-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+}
+.mk-row.open {
+  border-color: var(--accent, #61afef);
+}
+.mk-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.mk-name {
+  font-weight: 600;
+}
+.mk-meta,
+.mk-sub {
+  color: var(--text-dim, #8b95a1);
+}
+.mk-badge {
+  border: 1px solid var(--accent, #61afef);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+}
+.mk-warn {
+  color: var(--red, #e06c75);
+}
+.mk-empty {
+  padding: 6px 2px;
+  color: var(--text-dim, #8b95a1);
+}
+.mk-detail {
+  margin-top: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--text-dim, #8b95a1);
+}
+.mk-confirm {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}

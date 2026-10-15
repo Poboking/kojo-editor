@@ -26,6 +26,7 @@ export default defineConfig({
       '@kojo/plugin-ui-sugar-lift': r('./packages/plugins/ui-sugar-lift/src/index.ts'),
       '@kojo/plugin-ui-sugar-preview': r('./packages/plugins/ui-sugar-preview/src/index.ts'),
       '@kojo/plugin-ui-sugar-editor': r('./packages/plugins/ui-sugar-editor/src/index.ts'),
+      '@kojo/plugin-ui-market': r('./packages/plugins/ui-market/src/index.ts'),
     },
   },
   test: {

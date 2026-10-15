@@ -50,6 +50,9 @@ importers:
       '@kojo/plugin-erb-parser':
         specifier: workspace:*
         version: link:../plugins/erb-parser
+      '@kojo/plugin-kojo-market':
+        specifier: workspace:*
+        version: link:../plugins/kojo-market
       '@kojo/plugin-kojo-sugar':
         specifier: workspace:*
         version: link:../plugins/kojo-sugar
@@ -71,6 +74,9 @@ importers:
       '@kojo/plugin-ui-kojo-navigator':
         specifier: workspace:*
         version: link:../plugins/ui-kojo-navigator
+      '@kojo/plugin-ui-market':
+        specifier: workspace:*
+        version: link:../plugins/ui-market
       '@kojo/plugin-ui-snapshot-injector':
         specifier: workspace:*
         version: link:../plugins/ui-snapshot-injector
@@ -249,6 +255,22 @@ importers:
       react:
         specifier: ^19.3.0
         version: 19.3.0
+
+  packages/plugins/ui-market:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+    devDependencies:
+      '@kojo/plugin-kojo-market':
+        specifier: workspace:*
+        version: link:../kojo-market
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: ^19.3.0
+        version: 19.3.0(react@19.3.0)
 
   packages/plugins/ui-plugin-status:
     dependencies:
