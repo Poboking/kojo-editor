@@ -46,32 +46,3 @@
 | ID | 任务 | 现象 / 复现 / 期望 vs 实际（报红格式） | 认领 |
 |---|---|---|---|
 
-## I. 首屏白屏优化线（L1，2026-10-14 立项；根因已定位到代码行，**但至今无一个读数**）
-
-> **白屏定性**（用户 2026-10-14 确认时机＝「窗口刚出现就全白」，非开项目级联）：三段成本串成一队且**前面没有任何像素**——
-> ①`packages/app/index.html` 只有空 `#root`、无内联样式（dev 下 `styles.css` 由 JS 注入，`main.tsx:4`），而主题底色是深色 `--bg: #1e2227`（`styles.css:2`）⇒ 空窗期是 **WebView 默认白**；
-> ②静态 import 链 `App.tsx:10 → ProjectView.tsx:6 → EditorPane.tsx:15 import * as monaco from 'monaco-editor'`，**全仓零 `React.lazy`** ⇒ 0.57 根入口（`esm/vs/index.js`＝84 门语言 + 4 门重型 feature + lsp client + 全部 contrib）进首屏关键路径，入口块实测 **4.6 MB**；
-> ③`bootstrapKernel()` 一次性 `kernel.start()` 激活 **17 个插件** + `project.recent()` IPC 之后才 `setPhase('welcome')`，而「内核装配中…」这句本身也要等 React 挂载才画得出。
-> **保留面依据**＝§D「文件类型保留面（用户 2026-10-14 拍板）」四档 A/B/C/D。**顺序定死：L1-0 → L1-A → L1-B**，L1-C 视 L1-0 读数决定做不做。
-
-| ID | 任务 | 关键判据 / 已实测事实 | 认领 |
-|---|---|---|---|
-| L1-0 | **先取基线数（本线一切改动的分母，没数不许动手）** | **现状没有任何读数**——"白屏几秒"是体感，违反本仓「任何改好了必须带数」。**要量的四段**：`htmlParsed`（引导层可见）/ `firstPaint` / `bootInteractive`（欢迎页可点）/ `editorInteractive`（进项目后编辑器可输入）。**接法**：现成探针 `packages/app/src/perf.ts`（`perf.install()` / `perf.record()`，`bootstrap.ts` 已在用）补这四个标记，**不另起一套度量**；`tools/verify.mjs` 的 `dom` 条目加两条硬断言——①开机 ≤500 ms 内 `#root` 非空**或** `getComputedStyle(body).backgroundColor` 已是深色 ②欢迎页阶段网络请求里**不得出现 monaco**。**dev 与 build 各测一组**（`node tools/smoke-tauri-dom.mjs` 形态）。**⚠ 一条容易算错的账**：`ts.worker` 6.8 MB / `css.worker` 1.1 MB 等是 `?worker` **独立 chunk，躺在 `dist/assets` ≠ 开机加载**；先分清"入口块 4.6 MB"与"worker 总量"谁进首屏，否则会出现"瘦了 6.8 MB 白屏没变"的假结论。 | 认领：lead 2026-10-16（⇒ §P PERF-1） |
-| L1-A | **引导层 + 首屏分割（白屏归零，低风险先做）** | **A1 内联引导层**：`index.html` 内联 `<style>` 写底色 + `.boot-splash`（品牌字 + 骨架），React 挂载后被 `#root` 内容替换。判据：**内联底色必须等于 `styles.css` 的 `--bg` 现值**，且由 L1-0 的断言①钉住「内联底色 == 挂载后计算底色」——否则内联那份就是第二真相源，迟早漂移。**A2 代码分割**：`ProjectView` 改 `React.lazy` + `Suspense`（fallback 用现成骨架）。可达性已核：Monaco 只经 `EditorPane` 与 `monaco/{erb,kojo}-language.ts`、`sugar-render.ts` 进入，而这些**只有 `ProjectView` 一条路**（`ProjectView.tsx:6`）⇒ lazy 边界干净、不会漏拽。**验收**：`htmlParsed`→`firstPaint` 白屏段 ≈0；`bootInteractive` 显著下降；欢迎页零 monaco 请求。**已决不做并记由**：`tauri.conf.json` 加 `visible:false` + 就绪 `show()`——做了 A1 后收益趋零，而它引入"前端崩在挂载前 ⇒ 窗口永远不显示"的新失效模式，违铁律 4「内核不静默」；**若将来一定要用，必须配无条件超时兜底**。 | 认领：lead 2026-10-16（⇒ §P PERF-1） |
-| L1-B | **Monaco 自装配瘦身（按 §D 四档定稿执行）** | **不能简单换成 `editor.api`**（本行第一判据）：实测 `esm/vs/editor/editor.api.js` **只有 API 面、不含 contrib**，而补全弹窗（`contrib/suggest/browser/suggestController`）、💡 代码操作（`contrib/codeAction/browser/codeActionContributions`）、查找（`contrib/find/browser/findController`）、`editor.tokenize` 的实现（`contrib/tokenization`）全在 `editor.main.js` 的 contrib 段；0.57 的 `esm/vs/editor/` 下**只有** `editor.api.js` / `editor.main.js` / 两个 worker，**没有"要贡献不要语言"的现成入口** ⇒ 必须自装配。**接法**：新建 `packages/app/src/monaco/entry.ts`，逐条 import `editor.main.js` 的非语言 import 段（contrib + `codeEditorWidget` + `coreCommands`）+ `export * from 'monaco-editor/editor/editor.api'`；**不引** `languages/definitions/**`、`languages/features/**`、`external/monaco-lsp-client`；`EditorPane.tsx` 与 `monaco/*.ts` 全部改从 `entry.ts` 取（**单一装配点，禁第二份**）；worker 只留 `editor.worker`。**保留面照 §D**：A 档 `markdown`/`ini`/`xml` 三门轻量 definition 保留、B 档四门 feature 全砍且 `.json` 改自写微型 Monarch、C 档其余 ~79 门砍。**⚠ 交付判据必须是功能级不是体积级**（体积绿证明不了功能在）：逐条实机/CDP 断言——补全弹窗真弹、💡 真出、查找替换、撤销重做、括号匹配、行注释、粘滞滚动、**Unicode 高亮**（与「全角标点误用检测」直接相关，砍错即自毁功能）、marker 波浪线、折叠、主题、`editor.tokenize`。**⚠ 手抄清单会漂**：`entry.ts` 头注写明「清单抄自 monaco-editor 0.57 `editor.main.js` 的非语言 import 段」，并把 `monaco-editor` 从 `^0.57.0` 收成**精确钉版**。**顺带**：`vite.config.ts` 的 `chunkSizeWarningLimit: 4096` 恢复默认——那个数量级是"把告警调到能吞下问题"的形状，留着等于取消守门人。**与 FT-2 的关系**：`monaco/erb-language.ts` 是两线共同热点 ⇒ **串行认领、后到 rebase**，勿并发改同一文件。 | 认领：lead 2026-10-16（⇒ §P PERF-3） |
-| L1-C | **插件激活错峰（视 L1-0 读数再决定做不做；属内核生命周期语义变更）** | **动机读数**：`bootstrap.ts` 现在一次性 `kernel.start()` 激活 **17 个插件**才进 welcome，而欢迎页实际只需要 `kernel.*` + `project.recent()`。**⚠ 前置**：只有 L1-0 量出 `bootInteractive` 的大头确实落在 `kernel.start()` 段才做；**若 A1+A2 已把白屏归零，本行大概率不该做**（别为已消失的成本改生命周期）。**要做必须同时满足**：①错峰期间每个插件在状态面板如实显示 `pending`（铁律 4：inactive 必须可见，不许静默延后）；②`installPerfProbe`/`cascade-watermarks` 的三个级联水位依赖 `condition.extractor` / `convention.linter` 的 `subscribe` 已在位 ⇒ 接线要重排且不产生假水位；③`audit:decoupling` 与双 typecheck 全绿。**判据**：`bootInteractive` 前后对比 + 级联三水位不回退。**跨线**：动 `kernel/src/runtime.ts` 属内核面，开工前 `git log --oneline -- packages/kernel/src` 看最近一批口径。 | 待认领（**先评审后开工**） |
-
-## P. 性能攻坚批（lead 2026-10-16 统一认领；两波多 agent 并行；交付删行、回执进提交信息）
-
-> 依据＝lead 本机实测（2026-10-16，`90d69d0` 基线）：dev 首屏 15.1s（白屏段 5.7s＝monaco 模块瀑布）/ release 2.4s；入口块 4,995 kB 中 monaco 占 4,487 kB（92%）；开项目级联读盘 ~9,000 次单文件 IPC（2 次/文件）为 P1 最大头。
-> **L1-C 不做**（实测内核装配仅 ~0.2–0.5s，A1+A2 后无剩余成本可省）；**增量索引**归设计级后置（与 extract/lint 增量为一体，单开必造"保存→全量级联"）。
-
-| ID | 批次 | 工作树 / 分支 | 状态 |
-|---|---|---|---|
-| PERF-1 | 首屏：L1-0 探针四标记 + verify 断言 + 内联引导层 + ProjectView lazy + idle 预取（承接 §I L1-0/L1-A） | kojo-boot / b/lead/1016-boot | 认领：lead 2026-10-16 |
-| PERF-2 | P1 级联：批量读 IPC（Rust 二进制帧批量命令）+ 会话级文本缓存 + refs 重复读消除 + 抽取/校验共读一次 | kojo-io / b/lead/1016-batch-io | 认领：lead 2026-10-16 |
-| PERF-3 | Monaco 自装配瘦身（§I L1-B 全量 + chunk 告警恢复 + 功能级验收） | kojo-monaco / b/lead/1016-monaco-slim | 认领：lead 2026-10-16 |
-| PERF-4 | 装饰器池化（interactive 档）+ (path,versionId) 缓存 + 切文件减负 | kojo-hot / b/lead/1016-hotpath | 认领：lead 2026-10-16 |
-| PERF-5 | 糖线：转译器/结果共享缓存 + 补全静态表 + 保存链单次转译 | kojo-sugar / b/lead/1016-sugar-cache | 认领：lead 2026-10-16 |
-| PERF-6 | 树与面板：函数树 deferred+增量渲染 + 文件树即时化 + PanelBody memo | kojo-ui / b/lead/1016-ui-panels | 认领：lead 2026-10-16 |
-| PERF-7 | 快照热载瘦身：size 判据 + 懒还原 + 交替开项目核实 | kojo-snap / b/lead/1016-snapshot | 认领：lead 2026-10-16 |
