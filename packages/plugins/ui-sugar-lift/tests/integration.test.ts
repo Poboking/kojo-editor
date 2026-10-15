@@ -78,6 +78,10 @@ function makeIO(files: Record<string, Uint8Array>) {
     },
     isWritable: () => true,
     backup: async (p) => (files[p] ? `backup:///${p.replace(/\//g, '_')}.bak` : null),
+    listBackups: async () => [],
+    restoreBackup: async () => {
+      throw new Error('restoreBackup is not supported by this fake');
+    },
     exportFile: async () => {
       throw new Error('exportFile is not supported by this fake');
     },

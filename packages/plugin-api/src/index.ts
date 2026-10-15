@@ -47,7 +47,7 @@ export type {
 export type { ScopedStorage, StorageService } from './storage';
 
 export { WriteNotAllowedError } from './io';
-export type { EolStyle, FileIO, TextFile, WriteTextOptions } from './io';
+export type { BackupVersion, EolStyle, FileIO, TextFile, WriteTextOptions } from './io';
 
 export { ProjectDetectionError } from './project';
 export type { ProjectService, RecentProject } from './project';

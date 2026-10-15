@@ -1,4 +1,5 @@
 import type {
+  BackupVersion,
   DirEntry,
   FileEncoding,
   FileIO,
@@ -42,6 +43,39 @@ function timestamp(): string {
   const d = new Date();
   const p = (n: number, w = 2) => String(n).padStart(w, '0');
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${p(d.getMilliseconds(), 3)}`;
+}
+
+/** 备份版本文件名（timestamp() 的唯一合法形态；列举与恢复都按此认，别放宽） */
+export const BACKUP_VERSION_RE = /^\d{8}-\d{6}-\d{3}\.bak$/;
+
+/** 备份桶目录段名（backup() 的落点；哈希段才是身份，前缀只是人读便利） */
+export function backupBucketName(absPath: string): string {
+  return `${basename(absPath).slice(0, 40).replace(/[^A-Za-z0-9._-]/g, '_')}-${backupHashOf(absPath)}`;
+}
+
+/**
+ * 文件 → 备份桶哈希（身份尺：`pathKey` 折叠大小写与分隔符）。
+ * 列举/恢复**按哈希后缀找桶**而不是重拼段名——写侧段名取的是当时的 basename 原样，
+ * 同一个文件 "事件.ERB / 事件.erb" 两种写法会落进两个前缀；只认哈希才读得回全部版本。
+ */
+export function backupHashOf(absPath: string): string {
+  return fnv1a(pathKey(absPath));
+}
+
+/** 从版本文件名解析本地时刻（ms）；形态不对返回 null（判据不猜） */
+export function parseBackupTakenAtMs(id: string): number | null {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(\d{3})\.bak$/.exec(id);
+  if (!m) return null;
+  const d = new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    Number(m[6]),
+    Number(m[7]),
+  );
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
 }
 
 export class FileIOServiceImpl implements FileIO {
@@ -190,19 +224,85 @@ export class FileIOServiceImpl implements FileIO {
 
   /* ------------------------------ 备份 ------------------------------ */
 
+  /** 某文件当前写法下的备份桶目录（写侧：backup() 落点；路径写法归一后唯一） */
+  private async bucketDirFor(path: string): Promise<string> {
+    const appData = await this.bridge.appDataDir();
+    return join(appData, 'backup', backupBucketName(path));
+  }
+
+  /** 某文件**全部**备份桶目录（读侧：按哈希后缀找，折叠历史写法造成的前缀差异） */
+  private async findBucketDirs(path: string): Promise<string[]> {
+    const appData = await this.bridge.appDataDir();
+    const root = join(appData, 'backup');
+    const suffix = `-${backupHashOf(path)}`;
+    return (await this.bridge.listDir(root))
+      .filter((e) => e.isDirectory && e.name.endsWith(suffix))
+      .map((e) => e.path);
+  }
+
   async backup(path: string): Promise<string | null> {
     if (!(await this.bridge.exists(path))) return null;
-    const appData = await this.bridge.appDataDir();
     // 目录结构：backup/{sanitized-prefix-hash}/{basename}/{timestamp}.bak
-    const norm = pathKey(path);
-    const safePrefix = `${basename(path).slice(0, 40).replace(/[^A-Za-z0-9._-]/g, '_')}-${fnv1a(norm)}`;
-    const dir = join(appData, 'backup', safePrefix);
+    const dir = await this.bucketDirFor(path);
     await this.bridge.ensureDir(dir);
     const target = join(dir, `${timestamp()}.bak`);
     await this.bridge.copyFile(path, target);
     await this.pruneBackups(dir);
     this.log?.debug(`Backup created: ${target}`);
     return target;
+  }
+
+  async listBackups(path: string): Promise<BackupVersion[]> {
+    const out: BackupVersion[] = [];
+    for (const dir of await this.findBucketDirs(path)) {
+      const entries = (await this.bridge.listDir(dir)).filter(
+        (e) => !e.isDirectory && BACKUP_VERSION_RE.test(e.name),
+      );
+      for (const e of entries) {
+        const st: FileStat | null = await this.bridge.stat(e.path);
+        if (st === null) {
+          // stat 竞态失败（列完被删）：整条剔除并出声——宁可少一版，不给一版假的尺寸/时间
+          this.log?.warn(`备份版本 stat 失败（跳过该条）：${e.path}`);
+          continue;
+        }
+        out.push({
+          id: e.name,
+          path: e.path,
+          takenAtMs: parseBackupTakenAtMs(e.name),
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+        });
+      }
+    }
+    // 时间戳文件名字典序 = 时序；新在前（列表第一行就是"最近一版"）
+    return out.sort((a, b) => b.id.localeCompare(a.id));
+  }
+
+  async restoreBackup(path: string, versionId: string): Promise<void> {
+    if (!BACKUP_VERSION_RE.test(versionId)) {
+      throw new Error(`无效的历史版本号：${versionId}`);
+    }
+    // 第一道闸先行：只读的游戏目录在这里就可见拒绝（WriteNotAllowedError），不动盘也不读备份
+    this.assertWritable(path);
+    let src: string | null = null;
+    for (const dir of await this.findBucketDirs(path)) {
+      const candidate = join(dir, versionId);
+      const st = await this.bridge.stat(candidate);
+      if (st !== null && !st.isDirectory) {
+        src = candidate;
+        break;
+      }
+    }
+    if (src === null) throw new Error(`历史版本不存在：${versionId}`);
+    const bytes = await this.bridge.readFileBytes(src);
+    await this.backup(path); // 写前自动备份：恢复不吃掉现状（与 writeText 同款时序）
+    await this.bridge.writeFileBytes(path, bytes); // 字节级 + 平台原子写：零转码
+    // 编码/EOL 缓存跟着版本走：否则下一次 writeText 的 preserve 会用"恢复前那一版"的编码
+    const encoding = probeEncoding(bytes);
+    const raw = await this.bridge.decode(bytes, encoding);
+    this.encodingCache.set(pathKey(path), encoding);
+    this.eolCache.set(pathKey(path), detectEol(raw));
+    this.log?.info(`Backup restored: ${src} -> ${path}`);
   }
 
   private async pruneBackups(dir: string): Promise<void> {

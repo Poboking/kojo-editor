@@ -22,6 +22,24 @@ export interface WriteTextOptions {
 }
 
 /**
+ * 本地历史的一个备份版本（`listBackups` 条目；1015 历史批）。
+ *
+ * 版本来自**写前自动备份**的既有落点（`{appDataDir}/backup/{bucket}/{timestamp}.bak`），
+ * 本契约只是把这份目录读回来——不引入第二套备份约定。
+ */
+export interface BackupVersion {
+  /** 版本号 = 备份文件名（`YYYYMMDD-HHmmss-mmm.bak`；单层、无分隔符） */
+  id: string;
+  /** 备份文件绝对路径（appData 恒可读；可交给 readText / diff 视图现读） */
+  path: string;
+  /** 文件名时间戳解析出的版本时刻（本地时区 epoch ms；解析失败 = null，不猜） */
+  takenAtMs: number | null;
+  /** 字节数（与 `mtimeMs` 同源来自 stat；stat 竞态失败的条目整条剔除并记日志，不拿 0 兜底） */
+  size: number;
+  mtimeMs: number;
+}
+
+/**
  * 文件 IO 服务（内核 `kernel.io`）。
  *
  * 安全模型（对应架构文档 §3.4）：
@@ -80,6 +98,25 @@ export interface FileIO {
   isWritable(path: string): boolean;
   /** 手动备份文件；返回备份路径（文件不存在时返回 null） */
   backup(path: string): Promise<string | null>;
+  /**
+   * 列出某文件的全部本地历史版本（additive，1015 历史批）。
+   *
+   * 落点与哈希口径 = `backup()` 那一份单一真源（同桶名规则、同文件名格式），
+   * **新按旧排**（时间戳文件名字典序 = 时序）。从未写过 = 空数组，不是错误。
+   * 只读操作：不受写白名单约束，游戏目录里的文件同样列得到。
+   */
+  listBackups(path: string): Promise<BackupVersion[]>;
+  /**
+   * 用某个历史版本覆盖磁盘当前内容（additive，1015 历史批；本地时间线「恢复这一版」）。
+   *
+   * 写路径**只走既有链路**，不开新的写入口：
+   * - 第一道闸 `assertWritable` 先行（只读的游戏目录 → `WriteNotAllowedError`，可见拒绝）；
+   * - 恢复前对当前内容做**写前自动备份**（与 `writeText` 同款时序，恢复不吃掉现状）；
+   * - **字节级**写回 + 平台原子写：版本内容原样落盘（编码 / EOL = 那一版自己，零转码），
+   *   并同步刷新内核的编码/EOL 缓存，后续 `writeText` 的 preserve 口径跟着版本走。
+   * versionId 必须命中备份文件名格式（拒绝一切分隔符 / `..`，路径不可逃逸出备份桶）。
+   */
+  restoreBackup(path: string, versionId: string): Promise<void>;
   /**
    * 导出**单个文件**（2026-10-12 导出批）：平台保存对话框选落点 + 写字节，
    * 绑定在同一平台命令内。返回落点完整路径；取消 → null。

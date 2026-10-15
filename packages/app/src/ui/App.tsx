@@ -20,6 +20,12 @@ import { workspaceRootsOf } from './workspace-roots';
 import { resetSearch } from './search-store';
 import { bindDiffView, DIFF_VIEW_OVERLAY_ID } from './diff-view';
 import { createDiffViewOverlay } from './DiffViewOverlay';
+import {
+  FILE_HISTORY_OVERLAY_ID,
+  setFileHistoryTarget,
+  SHOW_FILE_HISTORY_COMMAND_ID,
+} from './file-history';
+import { createFileHistoryOverlay } from './FileHistoryOverlay';
 import type { EditorPaneActions } from './EditorPane';
 
 export type AppPhase = 'boot' | 'welcome' | 'opening' | 'project';
@@ -105,6 +111,8 @@ export function App(): ReactElement {
 
   // 通用 diff 视图（2026-10-15 比对/历史批）：宿主注册 ui.overlay 贡献并订阅
   // `ui.diffView.open` 意图（插件发意图、宿主落地；与 editor.revealLocation 同款）。
+  // 本地时间线（同批）：命令进（活动文件在 ctx 里）→ 状态单源 → ui.overlay 开窗；
+  // 「对比」发同一枚 diff 意图（F1 视图复用），「恢复」只经 kernel.io 既有写链路。
   useEffect(() => {
     if (!kernel) return;
     const unBind = bindDiffView(kernel);
@@ -118,9 +126,35 @@ export function App(): ReactElement {
           kernel.bus.emit('ui.overlay.close', { id: DIFF_VIEW_OVERLAY_ID, source: 'host:diff-view' }),
       }),
     });
+    const unRegHistory = kernel.slots.register('ui.overlay', {
+      id: FILE_HISTORY_OVERLAY_ID,
+      order: 41,
+      size: 'wide',
+      component: createFileHistoryOverlay({
+        io: kernel.io,
+        requestDiff: (p) => kernel.bus.emit('ui.diffView.open', { ...p, source: 'host:file-history' }),
+        close: () =>
+          kernel.bus.emit('ui.overlay.close', { id: FILE_HISTORY_OVERLAY_ID, source: 'host:file-history' }),
+      }),
+    });
+    const unRegHistoryCommand = kernel.slots.register('editor.command', {
+      id: SHOW_FILE_HISTORY_COMMAND_ID,
+      title: '显示当前文件的历史版本',
+      when: (ctx) => Boolean(ctx.activeFile),
+      run: (ctx) => {
+        if (!ctx.activeFile) return;
+        setFileHistoryTarget(ctx.activeFile);
+        kernel.bus.emit('ui.overlay.open', {
+          id: FILE_HISTORY_OVERLAY_ID,
+          source: 'host:file-history',
+        });
+      },
+    });
     return () => {
       unBind();
       unReg();
+      unRegHistory();
+      unRegHistoryCommand();
     };
   }, [kernel]);
 

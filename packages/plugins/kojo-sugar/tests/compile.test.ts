@@ -127,6 +127,10 @@ function makeFs(io: HarnessOptions = {}) {
       backups.push(target);
       return target;
     },
+    listBackups: async () => [],
+    restoreBackup: async () => {
+      throw new Error('restoreBackup is not supported by this fake');
+    },
     exportFile: async () => {
       throw new Error('exportFile is not supported by this fake');
     },

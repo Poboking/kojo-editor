@@ -4589,3 +4589,27 @@ button.primary .hint {
 .dd-game-only .dd-path {
   color: #9aa4b2;
 }
+/* —— 本地时间线（b/hist/1015，同属独占区块） —— */
+.fh-host {
+  width: min(860px, 92vw);
+}
+.fh-path {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.fh-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.fh-table th,
+.fh-table td {
+  text-align: left;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border, #3a4252);
+}
+.fh-actions {
+  display: flex;
+  gap: 6px;
+}

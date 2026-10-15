@@ -19,6 +19,12 @@ export {
 } from './storage';
 export { FileIOServiceImpl } from './io';
 export {
+  BACKUP_VERSION_RE,
+  backupBucketName,
+  backupHashOf,
+  parseBackupTakenAtMs,
+} from './io';
+export {
   FileWatcherServiceImpl,
   WATCH_DEBOUNCE_MS,
   type FileWatchController,
