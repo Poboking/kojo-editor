@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import type { ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
+import type { ErbFunctionRef, ErbIndex, VariableSchema } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
@@ -31,7 +31,7 @@ function stubMonaco(): { monaco: typeof Monaco; registered: Registered[] } {
   const registered: Registered[] = [];
   const monaco = {
     languages: {
-      CompletionItemKind: { Variable: 1, Keyword: 2, Operator: 3, Function: 4 },
+      CompletionItemKind: { Variable: 1, Keyword: 2, Operator: 3, Function: 4, Field: 5, Reference: 6 },
       registerCompletionItemProvider: (
         languageId: string,
         provider: Monaco.languages.CompletionItemProvider,
@@ -66,20 +66,34 @@ function labelText(label: Monaco.languages.CompletionItem['label']): string {
   return typeof label === 'string' ? label : label.label;
 }
 
-/** 走 provider 取一轮候选（同步实现 → 桩里直接读建议数组） */
+/** 走 provider 取一轮候选（同步实现 → 桩里直接读建议数组）；`lineNumber` 缺省 = 第 1 行 */
 function provide(
   provider: Monaco.languages.CompletionItemProvider,
   text: string,
   column: number,
+  lineNumber = 1,
 ): Monaco.languages.CompletionItem[] {
   const out = provider.provideCompletionItems(
     modelOf(text),
-    { lineNumber: 1, column } as Monaco.Position,
+    { lineNumber, column } as Monaco.Position,
     {} as Monaco.languages.CompletionContext,
     {} as Monaco.CancellationToken,
   ) as unknown as Monaco.languages.CompletionList;
   return out.suggestions;
 }
+
+/** 最小 VariableSchema 桩：`names(族)` 只认 `CFLAG`；其余族返回空（不猜） */
+function fakeSchema(): VariableSchema {
+  return {
+    version: 'test',
+    lookup: () => undefined,
+    names: (family: string) =>
+      family === 'CFLAG' ? [{ name: '好感度', index: 1088, description: '角色好感度' }] : [],
+  } as unknown as VariableSchema;
+}
+
+/** 项目函数名（同一数组引用：EC-3 前缀索引按数组身份记忆化） */
+const PROJECT_FNS: readonly string[] = ['M_KOJO_A', 'M_KOJO_B'];
 
 function fnRef(name: string): ErbFunctionRef {
   return { name, normalizedName: name, filePath: 'x.ERB', startLine: 1, endLine: 1 };
@@ -104,9 +118,15 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
     dispose.dispose();
   });
 
-  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，含本批指令 source', () => {
+  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，EC-1..EC-5 五个 source 全在册', () => {
     expect(Array.isArray(ERB_COMPLETION_SOURCES)).toBe(true);
-    expect(ERB_COMPLETION_SOURCES.some((s) => s.id === 'erb-directives')).toBe(true);
+    expect(ERB_COMPLETION_SOURCES.map((s) => s.id)).toEqual([
+      'erb-directives',
+      'erb-variables',
+      'erb-functions',
+      'erb-labels',
+      'erb-system-functions',
+    ]);
   });
 });
 
@@ -170,15 +190,75 @@ describe('EC-1 · erb-directives source 出货', () => {
 });
 
 describe('EC-1 · tables 缺席（fail-visible，不崩不猜）', () => {
-  it('空 tables：行首候选照常出货，且无非表候选（detail 全在静态集合内）', () => {
+  it('空 tables：语言层候选照常出货，依赖 adapter 表的 EC-2/EC-3 零候选', () => {
     const { monaco, registered } = stubMonaco();
     installErbCompletion(monaco, () => ({}));
     const provider = registered[0]!.provider;
     expect(() => provide(provider, HEAD, 3)).not.toThrow();
     const items = provide(provider, HEAD, 3);
     expect(items.length).toBeGreaterThan(0);
+    // 语言层（静态词表 + EC-5 单一真源系统函数表）不受 adapter 表缺席影响
     const details = new Set(items.map((i) => i.detail));
-    for (const d of details) expect(['指令', '预处理指令', '指令行', '关键字']).toContain(d);
+    for (const d of details) {
+      expect(['指令', '预处理指令', '指令行', '关键字', '系统函数']).toContain(d);
+    }
+    // 依赖 adapter 表 / 项目索引的两路：表缺席 ⇒ 零候选（不猜）
+    const vars = provide(provider, 'CFLAG:', 7);
+    expect(vars.some((i) => i.kind === monaco.languages.CompletionItemKind.Variable)).toBe(false);
+    const fns = provide(provider, 'CALL M_KOJO', 11);
+    expect(fns.some((i) => labelText(i.label) === 'M_KOJO_A')).toBe(false);
+  });
+});
+
+describe('EC-2..EC-5 · 四个 source 经 provider 端到端出货（装配接线验证）', () => {
+  const { monaco, registered } = stubMonaco();
+  installErbCompletion(monaco, () => ({ variableSchema: fakeSchema(), erbFunctionNames: () => PROJECT_FNS }));
+  const provider = registered[0]!.provider;
+
+  it('EC-2：`CFLAG:` 二段式弹名字表（kind=Variable，detail=族:编号）', () => {
+    const hit = provide(provider, 'CFLAG:', 7).find((i) => labelText(i.label) === '好感度');
+    expect(hit).toBeDefined();
+    expect(hit!.kind).toBe(monaco.languages.CompletionItemKind.Variable);
+    expect(hit!.detail).toBe('CFLAG:1088');
+    expect(hit!.documentation).toBe('角色好感度');
+  });
+
+  it('EC-2：`CFLAG:TARGET:` 三段式弹名字（kind=Field，替换范围只覆盖末段）', () => {
+    const hit = provide(provider, 'CFLAG:TARGET:', 14).find((i) => labelText(i.label) === '好感度');
+    expect(hit).toBeDefined();
+    expect(hit!.kind).toBe(monaco.languages.CompletionItemKind.Field);
+    expect(hit!.range).toMatchObject({ startColumn: 14, endColumn: 14 });
+  });
+
+  it('EC-3：`CALL M_K` 调用位弹项目函数名（kind=Function，不额外插 `@`）', () => {
+    const hit = provide(provider, 'CALL M_KOJO', 11).find((i) => labelText(i.label) === 'M_KOJO_A');
+    expect(hit).toBeDefined();
+    expect(hit!.kind).toBe(monaco.languages.CompletionItemKind.Function);
+    expect(hit!.insertText).toBe('M_KOJO_A');
+  });
+
+  it('EC-3：`@` 定义位弹项目函数名（行首定义形态）', () => {
+    const hit = provide(provider, '@M_KOJO', 8).find((i) => labelText(i.label) === 'M_KOJO_A');
+    expect(hit).toBeDefined();
+    expect(hit!.insertText).toBe('M_KOJO_A');
+  });
+
+  it('EC-4：`GOTO $TA` 弹本文件标签（kind=Reference，不重复补 `$`）', () => {
+    const hit = provide(provider, '@F\n$TARGET_ONE\n\tGOTO $TA', 10, 3).find(
+      (i) => labelText(i.label) === 'TARGET_ONE',
+    );
+    expect(hit).toBeDefined();
+    expect(hit!.kind).toBe(monaco.languages.CompletionItemKind.Reference);
+    expect(hit!.insertText).toBe('TARGET_ONE');
+    expect(hit!.detail).toBe('标签（本文件）');
+  });
+
+  it('EC-5：行中表达式位弹系统函数英文名（insertText 带 `(`，中文名进 documentation）', () => {
+    const hit = provide(provider, 'IF A', 5).find((i) => labelText(i.label) === 'GETBIT');
+    expect(hit).toBeDefined();
+    expect(hit!.kind).toBe(monaco.languages.CompletionItemKind.Function);
+    expect(hit!.insertText).toBe('GETBIT(');
+    expect(hit!.detail).toBe('系统函数');
   });
 });
 

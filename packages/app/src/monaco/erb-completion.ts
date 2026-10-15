@@ -7,6 +7,10 @@ import type {
 } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID } from './erb-language';
+import { erbFunctionCompletionItems } from './erb-completion-functions';
+import { erbLabelCompletionItems } from './erb-completion-labels';
+import { erbSystemFunctionCompletionItems } from './erb-completion-system-functions';
+import { erbVariableCompletionItems } from './erb-completion-variables';
 
 /**
  * `.erb` 方言补全的**装配 seam**（宿主层）——补 `erb-language.ts` 侧 Monarch 高亮之外的
@@ -153,11 +157,66 @@ const DIRECTIVES_SOURCE: ErbCompletionSource = {
   },
 };
 
+/* ============================== 变量 / 函数 / 标签 / 系统函数（EC-2..EC-5） ============================== */
+
 /**
- * 全部补全来源（**稳定扩展点**）。后续批次（EC-2 变量 / 基础库、EC-3 函数名）往这里
- * 追加 `ErbCompletionSource`，装配点与排序/去重口径零改动。
+ * 变量族 + 具名索引补全（EC-2）：`CFLAG:` → 名字表、`CFLAG:TARGET:` → 名字。
+ * 纯函数住在 `erb-completion-variables.ts`（族头白名单 = `ENGINE_VARIABLE_FAMILIES` 单一真源）。
+ * `variableSchema` 缺席 ⇒ 该纯函数返回 `[]`（不猜）。
  */
-export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [DIRECTIVES_SOURCE];
+const VARIABLES_SOURCE: ErbCompletionSource = {
+  id: 'erb-variables',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return erbVariableCompletionItems(monaco, model, position, tables.variableSchema);
+  },
+};
+
+/**
+ * 函数名补全（EC-3）：`@` 定义位 / `CALL` 系调用位。名字由宿主注入的
+ * `erbFunctionNames`（按 `ErbIndex.fingerprint` 记忆化）取用；缺席 ⇒ `[]`（不猜）。
+ * 纯函数内已做按数组身份记忆化的前缀二分索引（10 万条量级 O(log n + 命中数)）。
+ */
+const FUNCTIONS_SOURCE: ErbCompletionSource = {
+  id: 'erb-functions',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return erbFunctionCompletionItems(monaco, model, position, tables.erbFunctionNames?.());
+  },
+};
+
+/**
+ * `$标签` 补全（EC-4）：仅 `GOTO` / `JUMP` 后出货本文件标签（无模块系统 ⇒ 跨文件不做）。
+ * 标签来自当前 model 全文（纯函数内部扫，不读盘、不查索引）。
+ */
+const LABELS_SOURCE: ErbCompletionSource = {
+  id: 'erb-labels',
+  provide({ monaco, model, position }): Monaco.languages.CompletionItem[] {
+    return erbLabelCompletionItems(monaco, model, position);
+  },
+};
+
+/**
+ * 系统函数名补全（EC-5）：英文名（`GETBIT(`），词表**只读派生**自 kojo-sugar 的
+ * `SYSTEM_FUNCTION_REVERSE`（与 `.kojo` 侧同一张表，反向：那边插中文名、这边插英文名）。
+ * 纯函数内已排除行首指令位 / 注释行 / 字符串内。
+ */
+const SYSTEM_FUNCTIONS_SOURCE: ErbCompletionSource = {
+  id: 'erb-system-functions',
+  provide({ monaco, model, position }): Monaco.languages.CompletionItem[] {
+    return erbSystemFunctionCompletionItems(monaco, model, position);
+  },
+};
+
+/**
+ * 全部补全来源（**稳定扩展点**）。各 source **独立文件 + 各自纯函数**，此处只做一行接线；
+ * 装配点与排序/去重口径零改动（去重按 label、先注册者胜；排名 `前缀精确 > 前缀命中 > 其它`）。
+ */
+export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
+  DIRECTIVES_SOURCE,
+  VARIABLES_SOURCE,
+  FUNCTIONS_SOURCE,
+  LABELS_SOURCE,
+  SYSTEM_FUNCTIONS_SOURCE,
+];
 
 /* ============================== 记忆化：函数名 provider（EC-3 预置） ============================== */
 
