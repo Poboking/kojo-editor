@@ -52,8 +52,10 @@ export {
 export {
   probeEncoding,
   isValidUtf8,
+  decodeWithProbe,
   detectEol,
   normalizeEol,
   applyEol,
   type EolStyle,
+  type ProbedDecode,
 } from './encoding';

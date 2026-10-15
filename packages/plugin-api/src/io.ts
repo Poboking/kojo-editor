@@ -50,6 +50,19 @@ export interface BackupVersion {
  */
 export interface FileIO {
   readText(path: string): Promise<TextFile>;
+  /**
+   * **批量**读文本（2026-10-16 批量 IO 批；additive）。
+   *
+   * 语义与 `readText` 对齐（编码探测 / BOM / EOL 归一化同一条管线），差异有三：
+   * - 内部按批走平台批量原语（每批一次 IPC），不再是每文件两趟往返；
+   * - 逐文件失败**不抛整批**：失败位为 `null`（失败条件与 `readText` 抛错一致）；
+   * - 可命中**会话级文本缓存**（mtime+size 判据；`writeText`/`writeBytes` 会失效该 path）。
+   *   `readText` 单文件路径**刻意不接缓存**——打开文件永远新鲜读盘。
+   *
+   * 返回数组与入参一一对应（含重复路径）。批量抽帧/解码有一次性 CPU 成本，
+   * **不要**拿它逐个文件调用（批量接口按批划算，单文件请用 `readText`）。
+   */
+  readTexts(paths: readonly string[]): Promise<Array<TextFile | null>>;
   readBytes(path: string): Promise<Uint8Array>;
   /**
    * 写文本。

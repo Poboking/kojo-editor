@@ -71,6 +71,7 @@ function makeIO(opts: {
   const isWritable = opts.writable ?? (() => true);
   const io: FileIO = {
     readText: async (p) => ({ path: p, text: '', encoding: 'utf-8' as const, eol: 'lf' as const, bom: false, mtimeMs: 1, hasTrailingNewline: true }),
+    readTexts: async (paths: readonly string[]) => Promise.all(paths.map((p) => io.readText(p))),
     readBytes: async (p) => {
       const b = files[p];
       if (!b) throw new Error(`not found: ${p}`);

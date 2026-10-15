@@ -78,6 +78,8 @@ function makeFs(io: HarnessOptions = {}) {
       if (!b) throw new Error(`not found: ${p}`);
       return { path: p, text: new TextDecoder().decode(b), encoding: 'utf-8-bom', eol: 'lf', mtimeMs: 1 };
     },
+    readTexts: async (paths: readonly string[]): Promise<Array<TextFile | null>> =>
+      Promise.all(paths.map(async (p) => api.readText(p).catch(() => null))),
     readBytes: async (p: string): Promise<Uint8Array> => {
       if (io.failReread && written.includes(p)) throw new Error('readback exploded');
       const b = files[p];

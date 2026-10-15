@@ -16,6 +16,15 @@ const noopLogger: Logger = {
 function stubBridge(): PlatformBridge {
   return {
     readFileBytes: async () => new Uint8Array(),
+    readFilesRaw: async (paths) =>
+      paths.map((path) => ({
+        path,
+        status: 'not-found' as const,
+        mtimeMs: null,
+        size: null,
+        data: new Uint8Array(),
+      })),
+    statFiles: async (paths) => paths.map((path) => ({ path, exists: false, mtimeMs: null, size: null })),
     writeFileBytes: async () => {},
     ensureDir: async () => {},
     listDir: async () => [],

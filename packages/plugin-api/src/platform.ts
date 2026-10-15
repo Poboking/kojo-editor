@@ -26,6 +26,31 @@ export interface FileStat {
   isDirectory: boolean;
 }
 
+/**
+ * 批量读的**逐文件**结果（`readFilesRaw` 的返回值；2026-10-16 批量 IO 批）。
+ *
+ * 三态与 Rust 侧帧格式的 status 字段一一对应（0=ok / 1=not-found / 2=read-error）：
+ * 批量语义下**逐文件失败不抛整批**，失败的构成本对象如实带回（不静默）。
+ */
+export interface RawFileRead {
+  path: string;
+  status: 'ok' | 'not-found' | 'read-error';
+  /** 仅 `status==='ok'` 时有效；取不到为 null（绝不拿 0 兜底） */
+  mtimeMs: number | null;
+  /** 仅 `status==='ok'` 时有效；取不到为 null */
+  size: number | null;
+  /** `status==='ok'` 时为文件原始字节（不剥 BOM、不解码）；其余为空数组 */
+  data: Uint8Array;
+}
+
+/** 批量 stat 的逐文件结果（`statFiles` 的返回值）。不存在/取不到 ⇒ `exists:false` + null 数值 */
+export interface BatchFileStat {
+  path: string;
+  exists: boolean;
+  mtimeMs: number | null;
+  size: number | null;
+}
+
 export interface WalkOptions {
   /** 最大递归深度（相对于起点，0 = 只列本层）；默认不限 */
   maxDepth?: number;
@@ -74,6 +99,22 @@ export type WatchReportCallback = (report: WatchReport) => void;
  */
 export interface PlatformBridge {
   readFileBytes(path: string): Promise<Uint8Array>;
+  /**
+   * **批量**读原始字节 + 元数据（2026-10-16 批量 IO 批；additive）。
+   *
+   * 一次 IPC 带回 N 个文件（Tauri 侧走二进制帧，无 base64 膨胀）。冷开一次项目要读
+   * ~9,000 次单文件，每次单文件读= 2 趟 IPC 往返——批量命令把这笔账压成一趟。
+   *
+   * 契约：返回数组**与入参一一对应**（含重复路径的逐位对应）；逐文件失败以
+   * `RawFileRead.status` 如实带回，**不抛整批**；单次调用建议 ≤64 个路径
+   * （帧大小与解帧一条主线程同步段的量都随 N 线性涨）。
+   */
+  readFilesRaw(paths: readonly string[]): Promise<RawFileRead[]>;
+  /**
+   * **批量** stat（2026-10-16 批量 IO 批；additive）。小载荷，JSON 形态即可。
+   * 返回与入参一一对应；不存在 ⇒ `exists:false`（判据不猜，绝不拿 0 兜底）。
+   */
+  statFiles(paths: readonly string[]): Promise<BatchFileStat[]>;
   /** 原子写：同目录临时文件 + rename 覆盖 */
   writeFileBytes(path: string, data: Uint8Array): Promise<void>;
   ensureDir(path: string): Promise<void>;

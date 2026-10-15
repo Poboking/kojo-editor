@@ -2,11 +2,13 @@ import { promises as fs } from 'node:fs';
 import * as nodePath from 'node:path';
 import iconv from 'iconv-lite';
 import type {
+  BatchFileStat,
   DirEntry,
   FileChangeKind,
   FileEncoding,
   FileStat,
   PlatformBridge,
+  RawFileRead,
   Unsubscribe,
   WalkOptions,
   WatchCallback,
@@ -33,6 +35,24 @@ const DECODE_LABEL: Record<FileEncoding, string> = {
   'utf-16be': 'utf-16be',
 };
 
+/** 批量原语的并行度（与 Rust 侧 `BATCH_READ_THREADS` 同量级：读并行 8） */
+const BATCH_IO_CONCURRENCY = 8;
+
+/** 保序限并发（结果按下标回位；node 侧无 IPC，等价于 Rust 侧的线程池读） */
+async function mapLimitOrdered<T, R>(items: readonly T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length) as R[];
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 export class NodeBridge implements PlatformBridge {
   /**
    * @param dataDir 应用数据目录（等价 Rust 的 appDataDir）
@@ -47,6 +67,47 @@ export class NodeBridge implements PlatformBridge {
   async readFileBytes(path: string): Promise<Uint8Array> {
     const buf = await fs.readFile(path);
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+
+  /**
+   * 批量读（2026-10-16 批量 IO 批）：与 Tauri 侧同语义——逐文件失败不抛整批、
+   * 三态归类（缺文件 = not-found、其余读错 = read-error）与 Rust 侧逐字对应、
+   * **保序**且读并行（并发 8，与 Rust `BATCH_READ_THREADS` 同量级）。
+   * node 侧无 IPC，直接 fs；行为以契约（`RawFileRead`）为准、与 tauri 侧对齐。
+   */
+  async readFilesRaw(paths: readonly string[]): Promise<RawFileRead[]> {
+    return mapLimitOrdered(paths, BATCH_IO_CONCURRENCY, async (path): Promise<RawFileRead> => {
+      try {
+        const [buf, st] = [await fs.readFile(path), await fs.stat(path)];
+        return {
+          path,
+          status: 'ok',
+          mtimeMs: st.mtimeMs,
+          size: st.size,
+          data: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
+        };
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        return {
+          path,
+          status: code === 'ENOENT' ? 'not-found' : 'read-error',
+          mtimeMs: null,
+          size: null,
+          data: new Uint8Array(0),
+        };
+      }
+    });
+  }
+
+  async statFiles(paths: readonly string[]): Promise<BatchFileStat[]> {
+    return mapLimitOrdered(paths, BATCH_IO_CONCURRENCY, async (path): Promise<BatchFileStat> => {
+      try {
+        const st = await fs.stat(path);
+        return { path, exists: true, mtimeMs: st.mtimeMs, size: st.size };
+      } catch {
+        return { path, exists: false, mtimeMs: null, size: null };
+      }
+    });
   }
 
   async writeFileBytes(path: string, data: Uint8Array): Promise<void> {

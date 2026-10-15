@@ -33,10 +33,12 @@ export type {
 } from './plugin';
 
 export type {
+  BatchFileStat,
   DirEntry,
   FileEncoding,
   FileStat,
   PlatformBridge,
+  RawFileRead,
   WalkOptions,
   WatchCallback,
   WatchFailure,

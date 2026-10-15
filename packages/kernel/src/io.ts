@@ -1,17 +1,19 @@
 import type {
   BackupVersion,
+  BatchFileStat,
   DirEntry,
   FileEncoding,
   FileIO,
   FileStat,
   Logger,
   PlatformBridge,
+  RawFileRead,
   TextFile,
   WalkOptions,
   WriteTextOptions,
 } from '@kojo/plugin-api';
 import { WriteNotAllowedError } from '@kojo/plugin-api';
-import { applyEol, detectEol, normalizeEol, probeEncoding } from './encoding';
+import { applyEol, decodeWithProbe, detectEol, normalizeEol, probeEncoding } from './encoding';
 import { basename, isPathUnder, join, pathKey } from '@kojo/plugin-api';
 
 /**
@@ -29,6 +31,36 @@ import { basename, isPathUnder, join, pathKey } from '@kojo/plugin-api';
  */
 
 const BACKUP_KEEP_PER_FILE = 20;
+
+/* --------------------------- 批量读参数（2026-10-16 批量 IO 批） --------------------------- */
+
+/**
+ * `readTexts` 的读批大小：一次 `readFilesRaw` 的帧大小 ≈ 批大小 × 单文件均长。
+ * 64 × 60KB ≈ 4MB/帧——IPC 一趟的合理量级，同时把解帧+解码的单段主线程时间压在毫秒级。
+ */
+const READ_BATCH_SIZE = 64;
+/** 批量 stat 的分块（小载荷；分块只为不让单次 JSON 失控，与读批可不同） */
+const STAT_CHUNK_SIZE = 512;
+
+/**
+ * 会话文本缓存上限（**两把尺同时生效**，先到先削）。
+ *
+ * 取值的依据（这是"后续抽取/校验阶段零重复读盘"的成立条件——STOP 门槛）：
+ * 真实口上域约 2,317 文件 / 144MB（utf-8 字节）/ 3.6M 行（历史实测），
+ * 混合中日文与 ERB 语法后约 5–9 千万个 UTF-16 code unit（映射到 JS 堆约 100–180MB）；
+ * 两把尺都留一倍量级余量，低于它冷开时抽取/校验段会出现"缓存已被解析段挤掉"
+ * 的重读——那正是本批要消掉的数千次单文件读（2,000 文件合成探针在 96M 字符
+ * 上限下实测被削掉 347 个文件、引出 347 次重读，故这版取 128M）。
+ */
+const TEXT_CACHE_MAX_FILES = 4096;
+const TEXT_CACHE_MAX_CHARS = 128 * 1024 * 1024;
+
+interface TextCacheEntry {
+  /** 校验判据（与批量 stat 的值同源）：mtime+size 皆非空且全等才命中 */
+  mtimeMs: number | null;
+  size: number | null;
+  file: TextFile;
+}
 
 function fnv1a(text: string): string {
   let h = 0x811c9dc5;
@@ -84,11 +116,34 @@ export class FileIOServiceImpl implements FileIO {
   private appWritableRoots: string[] = [];
   private readonly encodingCache = new Map<string, FileEncoding>();
   private readonly eolCache = new Map<string, 'crlf' | 'lf'>();
+  /**
+   * 会话级文本缓存（**只服务 `readTexts` 批量路径**；`readText` 单文件路径不接——
+   * 打开文件永远新鲜读盘，编辑器语义）。
+   *
+   * FIFO（Map 插入序）：命中不动序（热点文件反复命中时不被反复推新，序更稳）；
+   * 重新读入=重新插入（挪到队尾）。写路径（writeText / writeBytes / restoreBackup）
+   * 失效对应 path——"刚写完再批量读"必须看到新内容。
+   */
+  private readonly textCache = new Map<string, TextCacheEntry>();
+  /** 缓存占用（UTF-16 code unit 计；字符串长度是内存量的可靠下界代理） */
+  private textCacheChars = 0;
+  private textCacheHits = 0;
+  private textCacheMisses = 0;
+  private readonly textCacheMaxFiles: number;
+  private readonly textCacheMaxChars: number;
 
   constructor(
     private readonly bridge: PlatformBridge,
     private readonly log?: Logger,
-  ) {}
+    /**
+     * 会话文本缓存上限的测试注入口（additive；缺省 = 上文两把尺）。
+     * 只为让"超限削最旧"这条纪律能被廉价地钉死——生产调用方零改动。
+     */
+    cacheCaps: { maxFiles?: number; maxChars?: number } = {},
+  ) {
+    this.textCacheMaxFiles = cacheCaps.maxFiles ?? TEXT_CACHE_MAX_FILES;
+    this.textCacheMaxChars = cacheCaps.maxChars ?? TEXT_CACHE_MAX_CHARS;
+  }
 
   /* ------------------------------ 读 ------------------------------ */
 
@@ -101,14 +156,116 @@ export class FileIOServiceImpl implements FileIO {
     // 真正的异常仍由下面 await 抛出，语义与串行版一致（不吞错）。
     statCall.catch(() => {});
     const bytes = await bytesCall;
-    const encoding = probeEncoding(bytes);
-    const raw = await this.bridge.decode(bytes, encoding);
+    // 探测+解码一次做完（2026-10-16 批量 IO 批）：旧的 probeEncoding+decode 是
+    // "全文 fatal 校验一遍 + 全文解码一遍"的双重成本，这里省掉第一遍。
+    const { text: raw, encoding } = decodeWithProbe(bytes);
     const eol = detectEol(raw);
     const text = normalizeEol(raw);
     this.encodingCache.set(pathKey(path), encoding);
     this.eolCache.set(pathKey(path), eol);
     const st = await statCall;
     return { path, text, encoding, eol, mtimeMs: st?.mtimeMs ?? null };
+  }
+
+  /**
+   * 批量读文本（2026-10-16 批量 IO 批）：
+   * 批量 stat 校验会话缓存 → 未命中者按批 `readFilesRaw`（每批一趟 IPC）→ 逐文件解码。
+   * 失败位为 null（与 `readText` 抛错的失败条件一致；批量语义下不整批抛）。
+   */
+  async readTexts(paths: readonly string[]): Promise<Array<TextFile | null>> {
+    if (paths.length === 0) return [];
+    const out: Array<TextFile | null> = new Array(paths.length).fill(null);
+
+    // 1) 缓存命中判定：批量 stat（小载荷）。mtime+size 任一缺失或不等 ⇒ 判未命中（保守）。
+    const missIdx: number[] = [];
+    for (let start = 0; start < paths.length; start += STAT_CHUNK_SIZE) {
+      const end = Math.min(start + STAT_CHUNK_SIZE, paths.length);
+      const chunk = paths.slice(start, end);
+      const stats = await this.bridge.statFiles(chunk);
+      for (let k = 0; k < chunk.length; k++) {
+        const st: BatchFileStat | undefined = stats[k];
+        const key = pathKey(chunk[k]!);
+        const cached = this.textCache.get(key);
+        if (
+          cached &&
+          st?.exists === true &&
+          st.mtimeMs !== null &&
+          st.size !== null &&
+          cached.mtimeMs !== null &&
+          cached.size !== null &&
+          cached.mtimeMs === st.mtimeMs &&
+          cached.size === st.size
+        ) {
+          out[start + k] = cached.file;
+          this.textCacheHits++;
+        } else {
+          missIdx.push(start + k);
+        }
+      }
+    }
+
+    // 2) 未命中：按批读（一批一趟 IPC），逐文件解码、入缓存
+    for (let start = 0; start < missIdx.length; start += READ_BATCH_SIZE) {
+      const idx = missIdx.slice(start, start + READ_BATCH_SIZE);
+      const chunkPaths = idx.map((i) => paths[i]!);
+      const reads = await this.bridge.readFilesRaw(chunkPaths);
+      for (let k = 0; k < idx.length; k++) {
+        const i = idx[k]!;
+        const path = paths[i]!;
+        const r: RawFileRead | undefined = reads[k];
+        if (!r || r.status !== 'ok') {
+          // 失败可见（不静默）：批量读的失败位在契约里就是 null，日志给出原因类别
+          this.textCacheMisses++;
+          this.log?.warn(
+            `readTexts: 读失败（${r?.status ?? 'missing-entry'}）：${path}`,
+          );
+          continue;
+        }
+        const { text: raw, encoding } = decodeWithProbe(r.data);
+        const eol = detectEol(raw);
+        const tf: TextFile = {
+          path,
+          text: normalizeEol(raw),
+          encoding,
+          eol,
+          mtimeMs: r.mtimeMs,
+        };
+        out[i] = tf;
+        this.textCacheMisses++;
+        // 与 readText 同口径的编码/EOL 缓存（写回 preserve 的判据）
+        this.encodingCache.set(pathKey(path), encoding);
+        this.eolCache.set(pathKey(path), eol);
+        this.putTextCache(pathKey(path), { mtimeMs: r.mtimeMs, size: r.size ?? r.data.length, file: tf });
+      }
+    }
+    return out;
+  }
+
+  /** 入缓存（FIFO：重读=重新入队尾；超尺从队首削） */
+  private putTextCache(key: string, entry: TextCacheEntry): void {
+    const existing = this.textCache.get(key);
+    if (existing) {
+      this.textCacheChars -= existing.file.text.length;
+      this.textCache.delete(key);
+    }
+    this.textCache.set(key, entry);
+    this.textCacheChars += entry.file.text.length;
+    while (this.textCache.size > this.textCacheMaxFiles || this.textCacheChars > this.textCacheMaxChars) {
+      const oldest = this.textCache.keys().next().value;
+      if (oldest === undefined) break;
+      const evicted = this.textCache.get(oldest);
+      this.textCache.delete(oldest);
+      if (evicted) this.textCacheChars -= evicted.file.text.length;
+    }
+  }
+
+  /** 失效某 path 的文本缓存（写路径调用：刚写完再批量读必须看到新内容） */
+  private invalidateTextCache(path: string): void {
+    const key = pathKey(path);
+    const existing = this.textCache.get(key);
+    if (!existing) return;
+    this.textCache.delete(key);
+    this.textCacheChars -= existing.file.text.length;
   }
 
   readBytes(path: string): Promise<Uint8Array> {
@@ -144,11 +301,14 @@ export class FileIOServiceImpl implements FileIO {
     await this.bridge.writeFileBytes(path, bytes);
     this.encodingCache.set(key, encoding);
     this.eolCache.set(key, eol);
+    // 会话文本缓存跟着失效：刚写完再批量读必须看到新内容（缓存判据的 mtime 已过期）
+    this.invalidateTextCache(path);
   }
 
   async writeBytes(path: string, data: Uint8Array): Promise<void> {
     this.assertWritable(path);
     await this.bridge.writeFileBytes(path, data);
+    this.invalidateTextCache(path);
   }
 
   private async probeOnDisk(path: string): Promise<FileEncoding | null> {
@@ -298,10 +458,10 @@ export class FileIOServiceImpl implements FileIO {
     await this.backup(path); // 写前自动备份：恢复不吃掉现状（与 writeText 同款时序）
     await this.bridge.writeFileBytes(path, bytes); // 字节级 + 平台原子写：零转码
     // 编码/EOL 缓存跟着版本走：否则下一次 writeText 的 preserve 会用"恢复前那一版"的编码
-    const encoding = probeEncoding(bytes);
-    const raw = await this.bridge.decode(bytes, encoding);
+    const { text: raw, encoding } = decodeWithProbe(bytes);
     this.encodingCache.set(pathKey(path), encoding);
     this.eolCache.set(pathKey(path), detectEol(raw));
+    this.invalidateTextCache(path); // 会话文本缓存同 writeText：恢复后批量读必须是新版
     this.log?.info(`Backup restored: ${src} -> ${path}`);
   }
 
@@ -336,8 +496,21 @@ export class FileIOServiceImpl implements FileIO {
     return target;
   }
 
-  /** 调试/测试辅助：当前缓存状态 */
-  debugCaches(): { encoding: Map<string, FileEncoding>; eol: Map<string, 'crlf' | 'lf'> } {
-    return { encoding: this.encodingCache, eol: this.eolCache };
+  /** 调试/测试辅助：当前缓存状态（含会话文本缓存的命中读数——批量 IO 批的轻量上报面） */
+  debugCaches(): {
+    encoding: Map<string, FileEncoding>;
+    eol: Map<string, 'crlf' | 'lf'>;
+    text: { files: number; chars: number; hits: number; misses: number };
+  } {
+    return {
+      encoding: this.encodingCache,
+      eol: this.eolCache,
+      text: {
+        files: this.textCache.size,
+        chars: this.textCacheChars,
+        hits: this.textCacheHits,
+        misses: this.textCacheMisses,
+      },
+    };
   }
 }

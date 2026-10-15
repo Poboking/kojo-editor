@@ -420,6 +420,170 @@ fn stat_file(path: String) -> Option<FileStatDto> {
     })
 }
 
+/* --------------------- 批量读（二进制帧，2026-10-16 批量 IO 批） --------------------- */
+//
+// 冷开一次项目要对语料做 ~9,000 次单文件读，而 JS 侧每读一个文件要 2 趟 IPC
+// （read_file_bytes_raw + stat_file）。本段把"读一批文件 + 带回元数据"压成一个命令一趟 IPC
+// —— 仍是纯 IO 原语（不认识任何领域概念，批大小与使用姿势全由调用方定）。
+//
+// 帧格式刻意朴素（定长头 + 长度前缀，全小端；JS 侧解帧器是纯 DataView 函数，
+// 见 packages/app/src/bridge/read-files-frame.ts，两份实现成对演进）：
+//   [u32 文件数]
+//   每文件：[u32 pathLen][path(utf-8 字节)][u32 status][i64 mtimeMs][u64 size][u64 dataLen][data]
+//
+// 设计口径：
+// - 逐文件失败**不失败整批**：status 三态（0=ok / 1=不存在 / 2=读错）如实带回；
+// - 输出顺序 = 入参顺序（并行只影响内部完成次序，结果按下标回位）；
+// - 字节原样进帧（不转码、不剥 BOM）——解码口径归调用方（内核 encoding.ts 单一真源）。
+
+/// 帧内单文件状态码（与 JS 侧解帧器逐字对应）
+const FRAME_STATUS_OK: u32 = 0;
+const FRAME_STATUS_NOT_FOUND: u32 = 1;
+const FRAME_STATUS_READ_ERROR: u32 = 2;
+
+/// 批量读的并行度（与检索段缺省同量级：索引/抽取段的读盘并发本就是 8）
+const BATCH_READ_THREADS: usize = 8;
+
+/// mtime → epoch 毫秒（i64 帧字段）。与 `mtime_ms_of`（f64）同源；ms 级整数在 f64 里
+/// 可精确表示 ⇒ 两侧比等值不会漂。
+fn mtime_ms_i64(t: Option<std::time::SystemTime>) -> i64 {
+    t.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 单文件读取结果（帧编码前的中介形态；纯数据）
+struct RawFileRead {
+    path: String,
+    status: u32,
+    mtime_ms: i64,
+    size: u64,
+    data: Vec<u8>,
+}
+
+/// 读一个文件（含元数据）。读不到的**分类如实**：NotFound 与其它 IO 错误分开报，
+/// 让调用方能区分"文件没了"与"读不动"（都不可静默）。
+fn read_one_file(path: &str) -> RawFileRead {
+    match std::fs::read(path) {
+        Ok(data) => {
+            // 元数据取不到不致命（退化为 0；缓存判据要求 stat 两侧都有值才命中，不会误中）
+            let (mtime_ms, size) = match std::fs::metadata(path) {
+                Ok(md) => (mtime_ms_i64(md.modified().ok()), md.len()),
+                Err(_) => (0, data.len() as u64),
+            };
+            RawFileRead {
+                path: path.to_string(),
+                status: FRAME_STATUS_OK,
+                mtime_ms,
+                size,
+                data,
+            }
+        }
+        Err(e) => RawFileRead {
+            path: path.to_string(),
+            status: if e.kind() == std::io::ErrorKind::NotFound {
+                FRAME_STATUS_NOT_FOUND
+            } else {
+                FRAME_STATUS_READ_ERROR
+            },
+            mtime_ms: 0,
+            size: 0,
+            data: Vec::new(),
+        },
+    }
+}
+
+/// 批量读并编码成帧（并行读、按下标回位；`len<=1` 不铺线程）。
+/// 纯函数面独立出来是为了可单测（帧一旦漂，前端解帧器静默错位——比读失败更坏）。
+fn read_files_frame(paths: &[String]) -> Vec<u8> {
+    let results: Vec<RawFileRead> = if paths.len() <= 1 {
+        paths.iter().map(|p| read_one_file(p)).collect()
+    } else {
+        let next = AtomicUsize::new(0);
+        let workers = paths.len().min(BATCH_READ_THREADS);
+        let mut collected: Vec<(usize, RawFileRead)> = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for _ in 0..workers {
+                let next = &next;
+                handles.push(scope.spawn(move || {
+                    let mut local: Vec<(usize, RawFileRead)> = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        if i >= paths.len() {
+                            break;
+                        }
+                        local.push((i, read_one_file(&paths[i])));
+                    }
+                    local
+                }));
+            }
+            let mut merged: Vec<(usize, RawFileRead)> = Vec::new();
+            for h in handles {
+                if let Ok(mut local) = h.join() {
+                    merged.append(&mut local);
+                }
+            }
+            merged
+        });
+        collected.sort_by_key(|(i, _)| *i);
+        collected.into_iter().map(|(_, r)| r).collect()
+    };
+
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(&(results.len() as u32).to_le_bytes());
+    for r in &results {
+        let path_bytes = r.path.as_bytes();
+        out.extend_from_slice(&(path_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(path_bytes);
+        out.extend_from_slice(&r.status.to_le_bytes());
+        out.extend_from_slice(&r.mtime_ms.to_le_bytes());
+        out.extend_from_slice(&r.size.to_le_bytes());
+        out.extend_from_slice(&(r.data.len() as u64).to_le_bytes());
+        out.extend_from_slice(&r.data);
+    }
+    out
+}
+
+/// 批量读：一次 IPC 带回多文件原始字节 + 元数据（`ipc::Response` 二进制过界，无 base64 膨胀）。
+/// 逐文件失败不改整批的成败（status 三态在帧里），故本命令无 Result 错误面。
+#[tauri::command]
+fn read_files_raw(paths: Vec<String>) -> tauri::ipc::Response {
+    tauri::ipc::Response::new(read_files_frame(&paths))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchStatDto {
+    path: String,
+    exists: bool,
+    /// 存在时与 `stat_file` 同源同值；不存在 ⇒ null（不拿 0 兜底）
+    mtime_ms: Option<f64>,
+    size: Option<u64>,
+}
+
+/// 批量 stat（小载荷，JSON 形态）：与 `stat_file` 共用 `mtime_ms_of`（判据同源不漂）。
+/// 逐文件失败 ⇒ `exists:false`，不抛整批（与 `read_files_raw` 同口径）。
+#[tauri::command]
+fn stat_files(paths: Vec<String>) -> Vec<BatchStatDto> {
+    paths
+        .iter()
+        .map(|p| match std::fs::metadata(p) {
+            Ok(md) => BatchStatDto {
+                path: p.clone(),
+                exists: true,
+                mtime_ms: Some(mtime_ms_of(md.modified().ok())),
+                size: Some(md.len()),
+            },
+            Err(_) => BatchStatDto {
+                path: p.clone(),
+                exists: false,
+                mtime_ms: None,
+                size: None,
+            },
+        })
+        .collect()
+}
+
 #[tauri::command]
 fn rename_path(
     app: tauri::AppHandle,
@@ -1514,6 +1678,8 @@ pub fn run() {
             walk_dir,
             path_exists,
             stat_file,
+            read_files_raw,
+            stat_files,
             rename_path,
             copy_file,
             remove_file,
@@ -2043,6 +2209,177 @@ mod io_primitives_tests {
         let json = serde_json::to_string(&entries).unwrap();
         assert!(!json.contains("mtimeMs"), "不该出现该键：{json}");
         assert!(!json.contains("\"size\""), "不该出现该键：{json}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod batch_io_tests {
+    //! 批量读帧格式与批量 stat 的判据。
+    //!
+    //! 帧是 Rust 与 JS 解帧器（`packages/app/src/bridge/read-files-frame.ts`）之间的
+    //! **逐字节契约**：字段一漂，前端不是报错而是静默错位（读到的"内容"错位成别的字段），
+    //! 所以这里自带一份解帧器做**往返对拍**——两份解码独立写、以帧格式为唯一真源。
+    use super::{read_files_frame, stat_files, FRAME_STATUS_NOT_FOUND, FRAME_STATUS_OK, FRAME_STATUS_READ_ERROR};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("kojo-batch-io-{}-{tag}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 测试用解帧器（与 JS 侧 DataView 解帧器同格式）：(path, status, mtimeMs, size, data)
+    fn decode_frame(frame: &[u8]) -> Vec<(String, u32, i64, u64, Vec<u8>)> {
+        let u32_at = |off: usize| u32::from_le_bytes(frame[off..off + 4].try_into().unwrap());
+        let mut off = 0usize;
+        let count = u32_at(off) as usize;
+        off += 4;
+        let mut out = Vec::new();
+        for _ in 0..count {
+            let plen = u32_at(off) as usize;
+            off += 4;
+            let path = String::from_utf8(frame[off..off + plen].to_vec()).unwrap();
+            off += plen;
+            let status = u32_at(off);
+            off += 4;
+            let mtime = i64::from_le_bytes(frame[off..off + 8].try_into().unwrap());
+            off += 8;
+            let size = u64::from_le_bytes(frame[off..off + 8].try_into().unwrap());
+            off += 8;
+            let dlen = u64::from_le_bytes(frame[off..off + 8].try_into().unwrap()) as usize;
+            off += 8;
+            let data = frame[off..off + dlen].to_vec();
+            off += dlen;
+            out.push((path, status, mtime, size, data));
+        }
+        assert_eq!(off, frame.len(), "帧尾不应有多余字节");
+        out
+    }
+
+    /// 正常路径：多文件按**入参顺序**回位，字节原样、size/mtime 与 stat_file 同值
+    #[test]
+    fn reads_multiple_files_in_input_order() {
+        let dir = temp_dir("multi");
+        let a = dir.join("a.ERB");
+        let b = dir.join("b.ERB");
+        std::fs::write(&a, "@A\nPRINTL 甲\n").unwrap();
+        std::fs::write(&b, "@B\n").unwrap();
+        let paths = vec![
+            a.to_string_lossy().to_string(),
+            b.to_string_lossy().to_string(),
+        ];
+        let decoded = decode_frame(&read_files_frame(&paths));
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].0, paths[0]);
+        assert_eq!(decoded[1].0, paths[1]);
+        assert_eq!(decoded[0].1, FRAME_STATUS_OK);
+        assert_eq!(decoded[1].1, FRAME_STATUS_OK);
+        assert_eq!(decoded[0].4, "@A\nPRINTL 甲\n".as_bytes());
+        assert_eq!(decoded[1].4, "@B\n".as_bytes());
+        let st = super::stat_file(paths[0].clone()).unwrap();
+        assert_eq!(decoded[0].2, st.mtime_ms as i64, "mtime 必须与 stat_file 逐位同值");
+        assert_eq!(decoded[0].3, st.size);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 缺文件：status=1（不存在）、空数据，且**不影响同批其它文件**（批量不整批失败）
+    #[test]
+    fn missing_file_is_not_found_and_rest_of_batch_survives() {
+        let dir = temp_dir("missing");
+        let ok = dir.join("ok.ERB");
+        std::fs::write(&ok, "x").unwrap();
+        let missing = dir.join("nope.ERB");
+        let paths = vec![
+            missing.to_string_lossy().to_string(),
+            ok.to_string_lossy().to_string(),
+        ];
+        let decoded = decode_frame(&read_files_frame(&paths));
+        assert_eq!(decoded[0].1, FRAME_STATUS_NOT_FOUND);
+        assert!(decoded[0].4.is_empty());
+        assert_eq!(decoded[1].1, FRAME_STATUS_OK);
+        assert_eq!(decoded[1].4, b"x");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 空数组：count=0 的合法帧（不是错误；调用方按"零结果"处理）
+    #[test]
+    fn empty_path_list_yields_zero_count_frame() {
+        let frame = read_files_frame(&[]);
+        assert_eq!(frame, vec![0, 0, 0, 0]);
+        assert!(decode_frame(&frame).is_empty());
+    }
+
+    /// 非 ASCII（多字节 UTF-8）路径：pathLen 按**字节**量、往返逐字一致
+    /// （Rust 入参是 String，路径字节必为 UTF-8；这条钉的是帧内长度口径不是字符数）
+    #[test]
+    fn multibyte_utf8_path_roundtrips_in_frame() {
+        let dir = temp_dir("utf8path");
+        let f = dir.join("事件·測試.ERB");
+        std::fs::write(&f, "@福\n").unwrap();
+        let paths = vec![f.to_string_lossy().to_string()];
+        let decoded = decode_frame(&read_files_frame(&paths));
+        assert_eq!(decoded[0].0, paths[0]);
+        assert_eq!(decoded[0].1, FRAME_STATUS_OK);
+        assert_eq!(decoded[0].4, "@福\n".as_bytes());
+        // 不存在的多字节路径同样如实回 None 态（不是读取错误）
+        let ghost = dir.join("不存在.ERB").to_string_lossy().to_string();
+        let decoded2 = decode_frame(&read_files_frame(&[ghost.clone()]));
+        assert_eq!(decoded2[0].0, ghost);
+        assert_eq!(decoded2[0].1, FRAME_STATUS_NOT_FOUND);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 空文件：status=0 + size=0 + dataLen=0（合法的零长内容，不是"读错"）
+    #[test]
+    fn empty_file_is_ok_with_zero_len() {
+        let dir = temp_dir("empty");
+        let f = dir.join("empty.ERB");
+        std::fs::write(&f, "").unwrap();
+        let path = f.to_string_lossy().to_string();
+        let decoded = decode_frame(&read_files_frame(&[path]));
+        assert_eq!(decoded[0].1, FRAME_STATUS_OK);
+        assert_eq!(decoded[0].3, 0);
+        assert!(decoded[0].4.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 读错（目录当文件读）：status=2——与"不存在"分开报，两类失败都可见
+    #[test]
+    fn directory_read_is_read_error_not_not_found() {
+        let dir = temp_dir("dirread");
+        let path = dir.to_string_lossy().to_string();
+        let decoded = decode_frame(&read_files_frame(&[path]));
+        assert_eq!(decoded[0].1, FRAME_STATUS_READ_ERROR);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// stat_files：存在项与 stat_file 同源同值；缺项 exists=false + null 数值
+    #[test]
+    fn stat_files_matches_stat_file_and_reports_missing() {
+        let dir = temp_dir("statbatch");
+        let f = dir.join("s.ERB");
+        std::fs::write(&f, "hello").unwrap();
+        let missing = dir.join("gone.ERB");
+        let out = stat_files(vec![
+            f.to_string_lossy().to_string(),
+            missing.to_string_lossy().to_string(),
+        ]);
+        let st = super::stat_file(f.to_string_lossy().to_string()).unwrap();
+        assert!(out[0].exists);
+        assert_eq!(out[0].size, Some(st.size));
+        assert_eq!(out[0].mtime_ms, Some(st.mtime_ms));
+        assert!(!out[1].exists);
+        assert_eq!(out[1].mtime_ms, None);
+        assert_eq!(out[1].size, None);
+        // JSON 形态：camelCase 键 + 缺项为 null（前端按 null 判"不可用"）
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains("\"mtimeMs\":null"), "缺项应为 null：{json}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

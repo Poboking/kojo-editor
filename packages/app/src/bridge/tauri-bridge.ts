@@ -1,5 +1,6 @@
 import type { FileChangeKind, FileEncoding, PlatformBridge, WatchCallback, WatchReportCallback } from '@kojo/plugin-api';
 import { base64ToBytes, bytesToBase64, invoke, isTauri } from './invoke';
+import { decodeReadFilesFrame } from './read-files-frame';
 
 /**
  * PlatformBridge 的 Tauri 实现。
@@ -32,6 +33,18 @@ export const tauriBridge: PlatformBridge = {
     // 二进制响应：字节以 ArrayBuffer 过界，不再 base64 膨胀 1.34× + 逐字节还原（§5.91）
     const buf = await invoke<ArrayBuffer>('read_file_bytes_raw', { path });
     return new Uint8Array(buf);
+  },
+
+  async readFilesRaw(paths: readonly string[]) {
+    // 批量读：一次 IPC 带回 N 个文件的字节+元数据（二进制帧，无 base64 膨胀）。
+    // 解帧是纯 DataView 函数（可单测）；帧与 Rust 侧 read_files_frame 成对演进。
+    const buf = await invoke<ArrayBuffer>('read_files_raw', { paths: [...paths] });
+    return decodeReadFilesFrame(buf);
+  },
+
+  async statFiles(paths: readonly string[]) {
+    // 小载荷 JSON：与 stat_file 同源同值（Rust 共用 mtime_ms_of）
+    return invoke('stat_files', { paths: [...paths] });
   },
 
   async writeFileBytes(path: string, data: Uint8Array): Promise<void> {

@@ -55,6 +55,19 @@ function makeIO(files: Record<string, Uint8Array>) {
         hasTrailingNewline: true,
       };
     },
+    readTexts: async (paths: readonly string[]) =>
+      paths.map((p) => {
+        const b = files[p];
+        return b
+          ? {
+              path: p,
+              text: new TextDecoder().decode(b).replace(/^\uFEFF/, ''),
+              encoding: 'utf-8' as const,
+              eol: 'lf' as const,
+              mtimeMs: 1,
+            }
+          : null;
+      }),
     readBytes: async (p) => {
       const b = files[p];
       if (!b) throw new Error(`not found: ${p}`);
