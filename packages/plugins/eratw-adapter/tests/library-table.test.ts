@@ -85,4 +85,19 @@ describe('createEratwLibraryTable · 查询与反查（纯数据，无 IO）', (
     expect(EMPTY_LIBRARY_TABLE.hasTable).toBe(false);
     expect(EMPTY_LIBRARY_TABLE.lookupByName('角色文本')).toBeUndefined();
   });
+
+  it('正向枚举 names()：按声明序返回（KC-4 正向补全面）', () => {
+    const table = createEratwLibraryTable(
+      new Map([
+        ['甲名', 'FUNC_A'],
+        ['乙名', 'FUNC_B'],
+      ]),
+    );
+    expect(table.names?.()).toEqual(['甲名', '乙名']);
+  });
+
+  it('空映射 / `EMPTY_LIBRARY_TABLE` 的 names() = []（不猜）', () => {
+    expect(createEratwLibraryTable(new Map()).names?.()).toEqual([]);
+    expect(EMPTY_LIBRARY_TABLE.names?.()).toEqual([]);
+  });
 });

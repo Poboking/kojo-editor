@@ -83,6 +83,16 @@ describe('createEratwInstructionTable', () => {
     expect(table.lookupByNo(310)).toBeUndefined();
     expect(EMPTY_INSTRUCTION_TABLE.hasTable).toBe(false);
   });
+
+  it('正向枚举 names()：按数据源声明序返回、去重（同值多号取首条不重复）', () => {
+    const table = createEratwInstructionTable(parseTrainCsv(CSV));
+    expect(table.names?.()).toEqual(['摸屁股', '告白', '会話']);
+  });
+
+  it('空表 / EMPTY_INSTRUCTION_TABLE 的 names() = []（不猜）', () => {
+    expect(createEratwInstructionTable(new Map()).names?.()).toEqual([]);
+    expect(EMPTY_INSTRUCTION_TABLE.names?.()).toEqual([]);
+  });
 });
 
 describe('loadEratwInstructionTable', () => {

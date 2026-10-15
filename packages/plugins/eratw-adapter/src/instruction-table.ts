@@ -61,6 +61,9 @@ export function createEratwInstructionTable(map: ReadonlyMap<string, number>): K
     hasTable: byName.size > 0,
     lookupByName: (name) => byName.get(name),
     lookupByNo: (no) => byNo.get(no),
+    // 正向补全的唯一名字源：`byName` 的键（CSV 原序，同名多编号在解析期已取首条）；
+    // 空映射 = `[]`（`EMPTY_INSTRUCTION_TABLE` 因此天然零候选，无需另写）
+    names: () => [...byName.keys()],
   };
 }
 

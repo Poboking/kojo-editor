@@ -1,0 +1,220 @@
+import type * as Monaco from './entry';
+import type { KojoInstructionTable } from '@kojo/plugin-api';
+import { TIMING_NAMED_PARAMS } from '@kojo/plugin-kojo-sugar';
+
+/**
+ * KC-3 · `.kojo` 中文**指令名**的正向补全（`instructionCompletionItems`）。
+ *
+ * 两个落点（表口径唯一真源 = adapter 的 `KojoInstructionTable`，宿主零游戏名词）：
+ * - `时机 <分野> <编号令牌位>：` 的编号槽 —— 编号可以是**中文指令名**（HK-11②，
+ *   `parseTimingHead` 的 `indexName`）；
+ * - `当 …： 是 <值…>：` 分支头的值位 —— 裸中文词经同一张表查编号（P-5，
+ *   `resolveCaseValueInstructionName`）。
+ *
+ * 名字来源 = `table.names?.()`（KC-3 新增的**可选**枚举能力；只有反查面时**零候选**，
+ * 降级信号由装配层的 `requires: 'instructionTable'` 发，本模块不另造一套）。
+ * `detail` 的编号一律回 `lookupByName` 取——**只用表、不猜**（枚举有而正查无 = 表自相矛盾，
+ * 该名直接跳过）。
+ *
+ * 纯函数：只读模型、不产生编辑、不写盘、不发事件；位置不符 / 表缺省 / 枚举能力缺席一律 `[]`，
+ * 绝不抛。Monaco provider 注册刻意不在此处——编排层（`kojo-completion.ts`）负责接进补全基座。
+ */
+
+/** 行首 `时机 ` 前缀（允许行首空白；`时机` 后至少一个空白）——与 `kojo-face` 同口径 */
+const TIMING_HEAD_RE = /^[ \t]*时机[ \t]+/;
+/** 分野名令牌的终止符：空白 / 全角冒号 / 半角冒号 */
+const FACE_TOKEN_END_RE = /[\s：:]/;
+/** 分支头 `是 <值…>：`（`is` 后须有空白——`issue` 这类词不认） */
+const CASE_HEAD_RE = /^[ \t]*(?:是|is)[ \t]+/;
+/** 令牌切分用空白 */
+const WHITESPACE_RE = /\s/;
+/** 值分隔符：半角 / 全角逗号 */
+const COMMA_RE = /[,，]/;
+/** 全 / 半角冒号 */
+const COLON_RE = /[：:]/;
+/** CJK 判定（含扩展 A / 假名）；CJK-primary 过滤用 */
+const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
+
+/**
+ * 命名参数**键**名集（单一真源 = `kojo-sugar` 的 `TIMING_NAMED_PARAMS`，含隐藏英文别名）：
+ * 编号槽扫描靠它把 `成否:` / `类型:` / `参数:` 认成键而非编号——否则会把键当成编号名来补。
+ */
+const NAMED_PARAM_KEYS: ReadonlySet<string> = new Set(
+  TIMING_NAMED_PARAMS.flatMap((p) => (p.alias === undefined ? [p.name] : [p.name, p.alias])),
+);
+
+/** 行内替换区间（1 基列；覆盖光标处的令牌 / 空插入点） */
+function lineRange(position: Monaco.Position, start: number, end: number): Monaco.IRange {
+  return {
+    startLineNumber: position.lineNumber,
+    endLineNumber: position.lineNumber,
+    startColumn: start + 1,
+    endColumn: end + 1,
+  };
+}
+
+/**
+ * 光标是否落在行内**字符串 / 注释**里（与 `kojo-sugar` 的 `inlineCommentIndex` 同口径：
+ * 引号配平后第一个 `;` 起至行尾）。字符串内 / 注释内不给候选（那些位置不是指令名）。
+ */
+function insideStringOrComment(line: string, col0: number): boolean {
+  let inString = false;
+  const stop = Math.min(col0, line.length);
+  for (let i = 0; i < stop; i++) {
+    const ch = line[i]!;
+    if (ch === '"') inString = !inString;
+    else if (!inString && ch === ';') return true;
+  }
+  return inString;
+}
+
+/** 一段替换区间（0 基列下标，`end` 不含） */
+interface Slot {
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * 落点 1：`时机 <分野> <编号令牌位>：` 的**编号槽**。
+ *
+ * 与 `parseTimingHead` 同口径：尾段只按**空白**切分（块头终结冒号贴在末令牌上、由
+ * `stripBlockColon` 剥掉），编号 = 第一个**非命名参数键**的尾令牌；`成否:` / `类型:` /
+ * `参数` 一出现即说明编号位已被跳过（那一处归 `kojo-face` 的 KC-2b）。
+ */
+function timingNumberSlot(line: string, col0: number): Slot | null {
+  const head = TIMING_HEAD_RE.exec(line);
+  if (!head) return null;
+  const faceStart = head[0].length;
+  let faceEnd = faceStart;
+  while (faceEnd < line.length && !FACE_TOKEN_END_RE.test(line[faceEnd]!)) faceEnd++;
+
+  // 分野令牌之后须有**至少一个空白**——否则光标仍在分野令牌内（那一处归 `kojo-face`）。
+  let slotStart = faceEnd;
+  while (slotStart < line.length && WHITESPACE_RE.test(line[slotStart]!)) slotStart++;
+  if (slotStart === faceEnd) return null;
+
+  // 行尾插入点（`时机 指令 |`）：光标恰在插入点才给候选。
+  if (slotStart >= line.length) return col0 === slotStart ? { start: slotStart, end: slotStart } : null;
+
+  let slotEnd = slotStart;
+  while (slotEnd < line.length && !WHITESPACE_RE.test(line[slotEnd]!)) slotEnd++;
+  const raw = line.slice(slotStart, slotEnd);
+  const trimmed = raw.endsWith('：') || raw.endsWith(':') ? raw.slice(0, -1) : raw;
+
+  // 令牌 = 命名参数键（`成否:` / `参数`）⇒ 不是编号槽（交回 `kojo-face`）。
+  if (NAMED_PARAM_KEYS.has(trimmed)) return null;
+
+  // 「编号 + 块头终结冒号」：替换区间**不含**那枚冒号。
+  const end = slotStart + trimmed.length;
+  if (col0 < slotStart || col0 > end) return null;
+  return { start: slotStart, end };
+}
+
+/**
+ * 落点 2：`当 …：` 块里 `是 <值…>：` 分支头的**值位**（P-5：裸中文词 = 指令名）。
+ * 顶层逗号（引号内的不算）分段 → 取含光标那段 → 段内以空白切出光标所在的"词"。
+ */
+function caseValueSlot(line: string, col0: number): Slot | null {
+  const head = CASE_HEAD_RE.exec(line);
+  if (!head) return null;
+  const bodyStart = head[0].length;
+
+  // 块头终结冒号 = 行（忽略行尾空白）的最后一枚 `：` / `:`；还没写它也照样认（作者正在写）。
+  let regionEnd = line.length;
+  while (regionEnd > bodyStart && WHITESPACE_RE.test(line[regionEnd - 1]!)) regionEnd--;
+  if (regionEnd > bodyStart && COLON_RE.test(line[regionEnd - 1]!)) {
+    regionEnd--;
+    while (regionEnd > bodyStart && WHITESPACE_RE.test(line[regionEnd - 1]!)) regionEnd--;
+  }
+  // 光标落在**末令牌之后的空白**（`是 1, |`）= 正在起一个新值：空插入点。与 `kojo-face` 的
+  // 尾段空位（`active === undefined` ⇒ `range = {col0, col0}`）同口径——只有光标恰在行尾、
+  // 其后全是空白才认（光标停在空白中间不认）；其余越界一律不认。
+  if (col0 > regionEnd) {
+    return col0 === line.length && line.slice(regionEnd).trim() === ''
+      ? { start: col0, end: col0 }
+      : null;
+  }
+  if (col0 < bodyStart) return null;
+
+  let segStart = bodyStart;
+  let segEnd = regionEnd;
+  let inString = false;
+  for (let i = bodyStart; i < regionEnd; i++) {
+    const ch = line[i]!;
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString || !COMMA_RE.test(ch)) continue;
+    if (col0 <= i) {
+      segEnd = i;
+      break;
+    }
+    segStart = i + 1;
+  }
+  if (col0 < segStart || col0 > segEnd) return null;
+
+  let start = col0;
+  let end = col0;
+  while (start > segStart && !WHITESPACE_RE.test(line[start - 1]!)) start--;
+  while (end < segEnd && !WHITESPACE_RE.test(line[end]!)) end++;
+  return { start, end };
+}
+
+/**
+ * 产出中文指令名候选（**纯函数**，供补全基座调用）。
+ *
+ * 行为：仅当光标落在上述两个落点之一时出货，`kind` = `EnumMember`，`insertText` = 名字，
+ * `detail` = `指令名 → 编号 N`（编号来自 `lookupByName`），替换范围**只覆盖光标处那个令牌**；
+ * 前缀过滤 / 排序（数据源原序，`names()` 返回序）与 CJK-primary（表里有中文名 ⇒ 纯 ASCII
+ * 名视作隐藏兼容别名，不进面板，同 `kojo-face` 的 `valueSetOf` 口径）照既有 source 打法。
+ */
+export function instructionCompletionItems(
+  monaco: typeof Monaco,
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  table: KojoInstructionTable | undefined,
+): Monaco.languages.CompletionItem[] {
+  if (!model || !position) return [];
+  if (!Number.isFinite(position.lineNumber) || position.lineNumber < 1) return [];
+  if (!Number.isFinite(position.column) || position.column < 1) return [];
+  // fail-closed：表缺席 / 空表 / 未提供枚举能力 ⇒ 零候选（降级信号由 `requires` 机制发）。
+  if (!table || table.hasTable === false) return [];
+  const enumerate = table.names;
+  if (typeof enumerate !== 'function') return [];
+
+  const line = model.getLineContent(position.lineNumber);
+  const col0 = position.column - 1;
+  if (col0 > line.length) return [];
+  if (insideStringOrComment(line, col0)) return [];
+
+  const slot = timingNumberSlot(line, col0) ?? caseValueSlot(line, col0);
+  if (slot === null) return [];
+
+  const prefix = line.slice(slot.start, col0);
+  const range = lineRange(position, slot.start, slot.end);
+  const kind = monaco.languages.CompletionItemKind.EnumMember;
+  const all = [...enumerate()];
+  const hasCjk = all.some((n) => CJK_RE.test(n));
+
+  const out: Monaco.languages.CompletionItem[] = [];
+  const seen = new Set<string>();
+  all.forEach((name, idx) => {
+    if (name.length === 0 || seen.has(name)) return;
+    if (hasCjk && !CJK_RE.test(name)) return;
+    if (prefix.length > 0 && !name.startsWith(prefix)) return;
+    const no = table.lookupByName(name);
+    if (no === undefined) return; // 枚举里有、正查无 = 表自相矛盾 ⇒ 不猜，跳过
+    seen.add(name);
+    out.push({
+      label: name,
+      kind,
+      insertText: name,
+      filterText: name,
+      detail: `指令名 → 编号 ${no}`,
+      range,
+      sortText: `${String(idx).padStart(3, '0')}_${name}`,
+    });
+  });
+  return out;
+}

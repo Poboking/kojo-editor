@@ -505,6 +505,12 @@ export interface KojoInstructionTable {
   lookupByName(name: string): number | undefined;
   /** 编号 → 中文名（无则 `undefined`） */
   lookupByNo(no: number): string | undefined;
+  /**
+   * 中文名的**枚举**（正向补全用；**可选能力**——未提供 = 宿主不产正向候选，**不猜**）。
+   * 返回序即表层候选展示序（实现按数据源原序返回；同名多编号已去重）；无表 / 空表 = `[]`。
+   * 与 `lookupByNo` 同一"反向查询"位置（本表原只有反查，正向补全缺枚举面）。
+   */
+  names?(): readonly string[];
 }
 
 /**
@@ -530,6 +536,12 @@ export interface KojoLibraryTable {
    * 无则 `undefined`。与 `KojoInstructionTable.lookupByNo` 同一"反向查询"位置。
    */
   lookupByFunction?(functionName: string): string | undefined;
+  /**
+   * 中文名的**枚举**（正向补全用；**可选能力**——未提供 = 宿主不产正向候选，**不猜**）。
+   * 返回序即表层候选展示序（实现按数据源原序返回）；无表 / 空表 = `[]`。
+   * 与 `lookupByFunction` 同一"反向查询"位置（本表原只有反查，正向补全缺枚举面）。
+   */
+  names?(): readonly string[];
 }
 
 /**

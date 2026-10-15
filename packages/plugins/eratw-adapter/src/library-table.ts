@@ -108,6 +108,9 @@ export function createEratwLibraryTable(map: ReadonlyMap<string, string>): KojoL
     hasTable: byName.size > 0,
     lookupByName: (name) => byName.get(name),
     lookupByFunction: (functionName) => byFunction.get(functionName),
+    // 正向补全的唯一名字源：`byName` 的键（种子表声明序）；空映射 = `[]`
+    // （`EMPTY_LIBRARY_TABLE` 因此天然零候选，无需另写）
+    names: () => [...byName.keys()],
   };
 }
 

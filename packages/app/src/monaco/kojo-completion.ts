@@ -14,6 +14,8 @@ import {
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
 import { variableCompletionItems } from './kojo-completion-variables';
 import { faceCompletionItems } from './kojo-completion-faces';
+import { instructionCompletionItems } from './kojo-completion-instructions';
+import { libraryCompletionItems } from './kojo-completion-library';
 
 /**
  * `.kojo` 表层 DSL 补全的**装配 seam**（宿主层）。
@@ -243,6 +245,31 @@ const FACE_SOURCE: CompletionSource = {
 };
 
 /**
+ * 指令名补全（KC-3）：`时机 <分野> <编号令牌位>：` 与 `当 …： 是 <值…>：` 的 CASE 值位
+ * 弹中文指令名候选（`tables.instructionTable.names()` 枚举）。非该位置 / 表缺省 /
+ * 无枚举能力 → `[]`。与 KC-2b 的命名参数键**同位置共存**（多 source 各自出货，按 label 去重）。
+ */
+const INSTRUCTION_SOURCE: CompletionSource = {
+  id: 'kojo-instruction',
+  requires: 'instructionTable',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return instructionCompletionItems(monaco, model, position, tables.instructionTable);
+  },
+};
+
+/**
+ * 库函数名补全（KC-4）：`.kojo` 表达式 / 正文的标识符位置弹中文库函数名候选
+ * （`tables.libraryTable.names()` 枚举）。字符串内 / 注释内 / 插值内 / 表缺省 → `[]`。
+ */
+const LIBRARY_SOURCE: CompletionSource = {
+  id: 'kojo-library',
+  requires: 'libraryTable',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return libraryCompletionItems(monaco, model, position, tables.libraryTable);
+  },
+};
+
+/**
  * 全部补全来源（**稳定扩展点**）。后续批次往这里追加 `CompletionSource`，
  * 装配点与排序/去重口径零改动。
  */
@@ -250,6 +277,8 @@ export const KOJO_COMPLETION_SOURCES: CompletionSource[] = [
   LEXICON_SOURCE,
   VARIABLE_SOURCE,
   FACE_SOURCE,
+  INSTRUCTION_SOURCE,
+  LIBRARY_SOURCE,
 ];
 
 /* ============================== 合并 / 去重 / 排序 ============================== */

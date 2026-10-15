@@ -10,7 +10,12 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import type { KojoFaceTable, VariableSchema } from '@kojo/plugin-api';
+import type {
+  KojoFaceTable,
+  KojoInstructionTable,
+  KojoLibraryTable,
+  VariableSchema,
+} from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
   KOJO_COMPLETION_SOURCES,
@@ -108,6 +113,11 @@ describe('C-1 · .kojo 补全装配（provider 注册）', () => {
     expect(KOJO_COMPLETION_SOURCES.some((s) => s.id === 'kojo-variable')).toBe(true);
     expect(KOJO_COMPLETION_SOURCES.some((s) => s.id === 'kojo-face')).toBe(true);
   });
+
+  it('KC-3 / KC-4 已接入扩展点：指令名与库函数名 source 在册', () => {
+    expect(KOJO_COMPLETION_SOURCES.some((s) => s.id === 'kojo-instruction')).toBe(true);
+    expect(KOJO_COMPLETION_SOURCES.some((s) => s.id === 'kojo-library')).toBe(true);
+  });
 });
 
 describe('C-1 · 静态词表 source 产出', () => {
@@ -187,6 +197,9 @@ const schemaY: VariableSchema = {
   names: (family) => (family === 'CFLAG' ? [{ name: '乙旗', index: 2, resolvedIndex: 2, source: 'primary' }] : []),
 };
 const faceX: KojoFaceTable = { faces: { 初见: { template: 'M_FACE_X' } } };
+// KC-3 / KC-4 两源的表（本 helper 不测它们，但「满表」态须喂上，否则会各首发一次降级）
+const instructionX: KojoInstructionTable = { hasTable: true, lookupByName: () => undefined, lookupByNo: () => undefined };
+const libraryX: KojoLibraryTable = { hasTable: true, lookupByName: () => undefined };
 
 /**
  * 在同一**已装配句柄**上连续跑三态（满分 → 缺表 → 切表 → 再缺），断言：
@@ -206,7 +219,7 @@ function threeStatesKojo(
     degrades.filter((d) => d.sourceId === id && d.missing === key).length;
 
   // 态 A：满表 ⇒ 变量 / 分野各路出货，零降级信号
-  setTables({ variableSchema: schemaX, faceTable: faceX });
+  setTables({ variableSchema: schemaX, faceTable: faceX, instructionTable: instructionX, libraryTable: libraryX });
   expect(has('{她的', '', 4, '甲旗')).toBe(true);
   expect(has('时机 初', '初', 5, '初见')).toBe(true);
   expect(degrades).toEqual([]);
@@ -255,6 +268,8 @@ describe('SH-4 · 依赖表缺席 = 降级不静默（三态可复跑）', () =>
     const byId = new Map(KOJO_COMPLETION_SOURCES.map((s) => [s.id, s.requires]));
     expect(byId.get('kojo-variable')).toBe('variableSchema');
     expect(byId.get('kojo-face')).toBe('faceTable');
+    expect(byId.get('kojo-instruction')).toBe('instructionTable');
+    expect(byId.get('kojo-library')).toBe('libraryTable');
     expect(byId.get('kojo-lexicon')).toBeUndefined();
   });
 });

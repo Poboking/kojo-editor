@@ -117,6 +117,19 @@ const KOJO_TABLES: CompletionTables = {
     // 成否位协议（键/取值联动的公开面；宿主据 `values` 给 `成否:` 取值候选）
     successFlag: { target: 'TFLAG:192', values: { 游戏判定: 0, 一定成功: 1 } },
   } as unknown as KojoFaceTable,
+  // KC-3 指令名表（正向枚举 `names()` + 反查编号）；KC-4 库函数名表（正向枚举 + 反查原生名）
+  instructionTable: {
+    hasTable: true,
+    lookupByName: (name: string) => ({ 摸屁股: 310, 告白: 705 } as Record<string, number>)[name],
+    lookupByNo: () => undefined,
+    names: () => ['摸屁股', '告白'],
+  },
+  libraryTable: {
+    hasTable: true,
+    lookupByName: (name: string) => ({ 心形: 'HPH_PRINT', 角色文本: 'CHARA_TEXT' } as Record<string, string>)[name],
+    lookupByFunction: () => undefined,
+    names: () => ['心形', '角色文本'],
+  },
 };
 
 /** 项目内函数名（同一数组引用：EC-3 前缀索引按数组身份记忆化） */
@@ -177,6 +190,10 @@ const KOJO_SCENARIOS: ReadonlyArray<readonly [string, CompletionSourceContext]> 
   ['kojo-face', kojoCtx('时机 指令 310 类型: ', 15)],
   ['kojo-face', kojoCtx('时机 指令 310 成否: ', 15)],
   ['kojo-face', kojoCtx('时机 指令 310 参数: ', 15)],
+  // KC-3 指令名：`时机 <分野> <编号令牌位>` 的编号槽
+  ['kojo-instruction', kojoCtx('时机 指令 摸屁股', 8)],
+  // KC-4 库函数名：表达式标识符位（调用形）
+  ['kojo-library', kojoCtx('心形(', 3)],
 ];
 
 const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]> = [
@@ -359,6 +376,13 @@ describe('SH-6 · kind 语义映射（当前设计意图）', () => {
     expect(find(keys, '成否')!.kind).toBe(KIND.Property);
     const values = kojoSrc('kojo-face').provide(kojoCtx('时机 指令 310 成否: ', 15));
     expect(find(values, '游戏判定')!.kind).toBe(KIND.EnumMember);
+  });
+
+  it('kojo-instruction：编号槽中文指令名 → EnumMember；kojo-library：库函数调用位 → Function', () => {
+    const ins = kojoSrc('kojo-instruction').provide(kojoCtx('时机 指令 摸屁股', 8));
+    expect(find(ins, '摸屁股')!.kind).toBe(KIND.EnumMember);
+    const lib = kojoSrc('kojo-library').provide(kojoCtx('心形(', 3));
+    expect(find(lib, '心形')!.kind).toBe(KIND.Function);
   });
 
   it('erb-directives：指令 / 关键字 → Keyword', () => {
