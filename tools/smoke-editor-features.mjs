@@ -30,6 +30,7 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CDP_PORT = 9222;
@@ -915,4 +916,11 @@ async function main() {
   process.exit(failCount === 0 ? 0 : 1);
 }
 
-main();
+// 只有**直接执行**（node tools/smoke-editor-features.mjs）才起壳；
+// 被 import / node -e import(...) 静态引入时**不**触发——否则一次误引用就误起 tauri dev。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    console.error('[feat] main failed:', e);
+    process.exit(1);
+  });
+}
