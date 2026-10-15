@@ -57,6 +57,15 @@ describe('B4-fp 前缀语义', () => {
     expect(erb).toContain('@K42_打招呼');
     expect(erb).not.toContain('K11_打招呼');
   });
+
+  // 文件头选项的英文别名与中文主形**同一产物**（发版样例里只能写一次头部，
+  // 故中英等价性在这里钉死；`function-prefix` 与 `char:` / `family:` 同类）。
+  it('英文别名 `function-prefix:` 与 `函数前缀:` 同形（产物逐字节相同）', () => {
+    const zh = t('角色: 11\n函数前缀: K{n}_\n函数 问候()：\n    「你好。」\n    返回\n');
+    const en = t('角色: 11\nfunction-prefix: K{n}_\n函数 问候()：\n    「你好。」\n    返回\n');
+    expect(en.erb).toBe(zh.erb);
+    expect(zh.diagnostics).toEqual([]);
+  });
 });
 
 /* ============================================================================ */

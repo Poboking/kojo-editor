@@ -652,6 +652,10 @@ ENDSELECT
 | `心形` | `heart` | `CALL HPH_PRINT(@"…", "l\|w\|dl\|dw")` |
 | `着色` | `color` | `SETCOLOR` … `RESETCOLOR` |
 | `隐藏情景` / `隐藏口上` | `skip-scene` / `skip-kojo` | MESSAGECHECK 的 `SETBIT RESULT, 0/1` |
+| `初回 "key"：` | （无别名） | `IF ONCE("key")` … `ENDIF`（引擎 `ONCE(...)` 变量式访问器）；表达式形 `初回("key")` → `ONCE(...)`（二参补角色号） |
+| `询问 "提示"：` / `确认 "提示"：` | `ask` / `confirm` | `CALL ASK_M(标签,条件,…)` / `CALL ASK_YN(标签,标签)` + `SELECTCASE RESULT`（0 基 `CASE`；函数名/参数/读回变量由 adapter 模板声明） |
+| `则`（单行条件，无尾冒号） | `then` | `如果 <条件> 则 <语句>` → `SIF <条件>` + 紧随**一条**语句，**不产 `ENDIF`** |
+| `常量 <名> = <整数>`（文件头，函数外） | `const` | 顶格 `#DIM CONST <名> = <值>`（**落函数定义之外**）；同名以"只读数字别名"并入别名表，裸名与 `CFLAG:n:名` 皆解析为数值 |
 | `别名`（文件头） | `alias` | 文件内声明，四种右值：变量引用（读写）/ 角色 N / 数值字面量 / 字符串字面量；后三者为**只读**（§3.1、§3.8、§5.0） |
 | （原生直通） | — | 全大写指令行 / `$标签` 原样透传；`@` 起为**整块**透传（§3.10） |
 
@@ -665,6 +669,7 @@ ENDSELECT
 | `口上色` | `color` | `@M_KOJO{家族}_COLOR_K{No}` 内 `SETCOLOR 0x…` |
 | `旁白色` | `narration-color` | `默认` = 旁白走 `D` 系；`作者色` = 旁白不走 `D` |
 | `开关` | `switch` | `@M_KOJO{家族}_FLAGSETTING_K{No}` |
+| `函数前缀` | `function-prefix` | 覆盖 adapter 的 `userFunction.template`；占位符 `{n}`=角色号、`{name}`=函数名，未含 `{name}` 时按前缀处理（末尾补名）；非法模板 → `face-table-missing` |
 
 ### 4.3 运算符（条件表达式中）
 

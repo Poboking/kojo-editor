@@ -2,12 +2,12 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史的逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结）。
 
-## 一、基线（2026-10-15 凌晨，E14 拖拽打开 + E15 亲密面方案 + HK-4 UI-4/5/6 + 糖复杂场景审计修复 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 + E16 拆解析墙 + HK-17 多版本口上识别 + 语料认内容不认名 + 159 先代占位文件名回退 + SV-1 糖视图原生对齐 + E13/P-1 段块糖与段级吸收 + L1 首屏白屏批 + HK-19 回放伪变量回收 + FT-2 方言口径收口 + FT-1 `.ERH` 作者自定名表 + 亲密面扩糖 P-3/P-4/P-6 + P-7 HPH 连续块 / P-8 MESSAGECHECK 数字返回投影 + HK-20 call-context 推导 + ALS-R3 验收产物落点外搬 + HK-23 未知率口径拆分 + UX 术语清扫（`.kojo 语言` / `.kojo 预览`）与预览默认关 + ALS-R1 字典来源分层 / ALS-R2 SOURCE 入库 + REL-1 自动更新链路 / REL-2 设置页（检查更新·开发者卡·反馈入口）+ 正式 logo + 转公开前脱敏 / GPL-3.0 本机实测）
+## 一、基线（2026-10-15 凌晨，E14 拖拽打开 + E15 亲密面方案 + HK-4 UI-4/5/6 + 糖复杂场景审计修复 + 条件矩阵时机细化 · 中日对照 · 多剧本编号上树 · 直连模式开关 + E16 拆解析墙 + HK-17 多版本口上识别 + 语料认内容不认名 + 159 先代占位文件名回退 + SV-1 糖视图原生对齐 + E13/P-1 段块糖与段级吸收 + L1 首屏白屏批 + HK-19 回放伪变量回收 + FT-2 方言口径收口 + FT-1 `.ERH` 作者自定名表 + 亲密面扩糖 P-3/P-4/P-6 + P-7 HPH 连续块 / P-8 MESSAGECHECK 数字返回投影 + HK-20 call-context 推导 + ALS-R3 验收产物落点外搬 + HK-23 未知率口径拆分 + UX 术语清扫（`.kojo 语言` / `.kojo 预览`）与预览默认关 + ALS-R1 字典来源分层 / ALS-R2 SOURCE 入库 + REL-1 自动更新链路 / REL-2 设置页（检查更新·开发者卡·反馈入口）+ 正式 logo + 转公开前脱敏 / GPL-3.0 本机实测 + 糖 1/2/4/5/7 五批（初回 ONCE · 询问/确认 ASK_M/ASK_YN · 单行条件 SIF · 函数前缀 · 文件级常量））
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2904 passed / 35 skipped（2939）**；171 文件过 / 13 跳（184）（2026-10-15 本机实测于 master `4281e57`） |
-| 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **2938 passed / 1 skipped（2939）**；184 文件全过（2026-10-15 本机实测于 master `4281e57`，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
+| 全量测试 | **3123 passed / 35 skipped（3158）**；184 文件过 / 13 跳（197）（2026-10-15 本机实测于 master `c56dd41`） |
+| 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **3157 passed / 1 skipped（3158）**；197 文件全过（2026-10-15 本机实测于 master `c56dd41`，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **24 项全绿**（E7 写允许域批 +18→22；E14 拖放事件映射 +2；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |

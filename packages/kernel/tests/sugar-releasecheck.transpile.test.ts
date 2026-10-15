@@ -53,10 +53,14 @@ const FIXTURE = nodeResolve(__dirname, '../../../fixtures/sugar/release-check.ko
 const GOLDEN = nodeResolve(__dirname, '../../../fixtures/sugar/release-check.expected.erb');
 
 /**
- * 头部声明的英文别名（`char` / `family` / `title` …）**不在本文件里断言**：
- * 一份 `.kojo` 只能声明一次头部，中英两套无法同时出现在同一份长跑样例里。
- * 它们的等价性由 `kojo-sugar/tests/transpile.test.ts` 的头部等价用例证明
+ * 头部声明 / 文件头选项的英文别名（`char` / `family` / `title` … / `function-prefix`）
+ * **不在本文件里断言**：一份 `.kojo` 只能声明一次头部，中英两套无法同时出现在同一份长跑
+ * 样例里（`函数前缀:` 与 `char:` 同属"文件头选项"一类，且它会改写**全文件**的用户函数名，
+ * 样例里再写一遍英文形只会让产物名与缺省口径分叉）。
+ * 它们的等价性由 `kojo-sugar/tests/transpile.test.ts` 的头部等价用例、
+ * `kojo-sugar/tests/geek-fnprefix.test.ts` 的 `函数前缀:` 中英等价用例证明
  * （同一份中文头部换成英文，产物逐字节相同）——覆盖口径不同，但**不留空**。
+ * 中文主形仍受断言管辖：`函数前缀:` 在本样例里真实出现过。
  */
 const HEAD_ALIAS_WORDS = new Set([
   'char',
@@ -68,6 +72,7 @@ const HEAD_ALIAS_WORDS = new Set([
   'narration-color',
   'switch',
   'alias',
+  'function-prefix',
 ]);
 
 /** 成对结构：产物里每一对都必须配平（未配平 = 游戏里"口上全哑"的那一类事故） */
@@ -206,6 +211,10 @@ describe.skipIf(!SMOKE_DIR)('发版验证样例 · release-check.kojo', () => {
       '#DIM L_TOTAL', // 直通块内的声明
       '@M_KOJO_K145_问候', // 用户函数（B4；命名走 adapter 的 userFunction.template）
       'CALL M_KOJO_K145_回声()', // 用户函数间的调用（零实参 `CALL 产物名()`）
+      'IF ONCE("发版检查_初见")', // 初回（1 号任务）→ 引擎 ONCE 访问器
+      'SIF CFLAG:TARGET:好感度 >= 500', // 单行条件（5 号任务）→ SIF，紧随一条语句、**不产 ENDIF**
+      'CALL ASK_M("好呀",1,"下次吧",0)', // 询问（2 号任务）→ 引擎 ASK_M，逐项 `标签,条件`
+      'CALL ASK_YN("开启","关闭")', // 确认（2 号任务）→ 引擎 ASK_YN，纯标签
     ];
     for (const needle of mustContain) {
       expect(result.erb, `产物缺少 ${needle}`).toContain(needle);
