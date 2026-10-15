@@ -128,7 +128,12 @@ export interface MarketIndex {
   packs: MarketIndexEntry[];
 }
 
-/** 本机已装记录（`ctx.storage` 持久化的形状；卸载即删这条） */
+/**
+ * 本机已装记录（`ctx.storage` 持久化的形状；卸载即删这条）。
+ *
+ * **落点路径不是字段**：装在哪儿永远由 `installDir(kind,id,version)` 派生
+ * （KM-1 契约收口 A3）。存一份 = 两份真相，目录被外部改名后记账会指着空气。
+ */
 export interface InstalledPack {
   kind: PackKind;
   id: string;
@@ -136,18 +141,25 @@ export interface InstalledPack {
   name: string;
   author: string;
   license: string;
-  /** 安装源容器的整包摘要；本地目录源 = 逐文件摘要折叠（插件侧算，见 service） */
-  zipSha256: string;
+  /**
+   * 逐文件校验锚的折叠摘要（口径见 `kojo-market` 的 `contentDigestOf`）。
+   * **恒有**，与源容器格式无关——它是"内容是不是同一份东西"的唯一答案。
+   */
+  contentDigest: string;
+  /**
+   * **容器**（zip 本体）的整包 sha256。
+   * 仅 zip 容器源有；本地目录源没有容器，此字段缺省。
+   * （KM-1 契约收口 A2：拆掉旧 `zipSha256` 的一词两义。）
+   */
+  containerSha256?: string;
   installedAt: number;
-  /** 安装落点目录（绝对路径，= `installDir(kind,id,version)`） */
-  dir: string;
   files: PackFileEntry[];
 }
 
 /* ------------------------------- 服务键 ------------------------------- */
 
 /** `MarketService` 的服务键（装配形态照 `WellKnownServices`：插件 provide、消费方 inject） */
-export const MARKET_SERVICE_KEY = 'market.index';
+export const MARKET_SERVICE_KEY = 'market';
 
 /**
  * 市场装卸服务（由 `kojo-market` 插件 provide）。
@@ -155,7 +167,14 @@ export const MARKET_SERVICE_KEY = 'market.index';
  * 落点全部住在 `<appData>/market` 下——这是本插件 activate 时**一次性**登记的
  * 常驻可写根（应用自有目录，铁律 5），因此装卸不触碰游戏目录。
  *
- * 本批只有 `installLocalDir` 一条源：remote / index-entry 源要等 Rust 解压命令落地
+ * **索引的唯一真源是 `<appData>/market/index.json`**（由注册表仓同步下来）。
+ * GitHub release 的 `latest` / 排序语义在本客户端**一律不作为依据**（KM-1 契约收口 A5）：
+ * 实测 `make_latest=false` **去不掉** Latest 徽章（`GET /releases/latest` 照样 200 命中），
+ * 也就是说"哪个是最新"这件事在平台上根本不可靠——版本只从 `index.json` 的条目读。
+ * 这条不是注释礼仪：`kojo-market/tests/single-source.test.ts` 有守卫测试，
+ * 市场相关源码里出现 `releases/latest` 字面量即红。
+ *
+ * 本批只有 `installLocalDir` 一条源：remote 装要等 Rust 解压命令落地
  * 后再扩契约（契约未定之前不留空壳）。
  */
 export interface MarketService {
@@ -163,13 +182,17 @@ export interface MarketService {
   rootDir(): Promise<string>;
   /** 读 `<appData>/market/index.json`；缺失/坏 ⇒ `null` **且 log.warn**（铁律 4：内核不静默） */
   index(): Promise<MarketIndex | null>;
-  /** 本机已装包（读 `ctx.storage`；目录被外部删掉的条目会被剔除并出声） */
+  /** 本机已装包（读 `ctx.storage`；派生落点不在位的条目会被剔除并出声） */
   installed(): Promise<InstalledPack[]>;
-  /** 从本地目录装（目录内须有 `pack.json` + `files/`） */
+  /**
+   * 从本地目录装（目录内须有 `pack.json` + `files/`）。
+   * @throws MarketError `id-kind-conflict` 当同 id 已按**另一个 kind** 装着
+   *   （一个 id 只能属于一个 kind，见 `packIdKindConflicts`）
+   */
   installLocalDir(sourceDir: string): Promise<InstalledPack>;
   uninstall(kind: PackKind, id: string, version: string): Promise<void>;
   isInstalled(kind: PackKind, id: string, version: string): Promise<boolean>;
-  /** `<appData>/market/packs/<kind>/<id>/<version>` */
+  /** `<appData>/market/packs/<kind>/<id>/<version>`（**唯一**的落点真源，记账里不存路径） */
   installDir(kind: PackKind, id: string, version: string): Promise<string>;
   /** `installDir(...)` + `files` */
   contentDir(kind: PackKind, id: string, version: string): Promise<string>;
@@ -188,6 +211,7 @@ export type MarketRejectCode =
   | 'schema-version'
   | 'kind-unknown'
   | 'id-invalid'
+  | 'id-kind-conflict'
   | 'version-invalid'
   | 'min-app-version-invalid'
   | 'redistribute-denied'
@@ -207,8 +231,7 @@ export type MarketRejectCode =
   | 'content-missing'
   | 'source-unreadable'
   | 'install-move-failed'
-  | 'installed-missing'
-  | 'io-unsupported';
+  | 'installed-missing';
 
 /** 带原因码的市场错误（装卸路径上所有拒绝都从这里出） */
 export class MarketError extends Error {
@@ -295,6 +318,40 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 | null {
 export function coreVersion(v: string): string {
   const dash = v.indexOf('-');
   return dash === -1 ? v : v.slice(0, dash);
+}
+
+/**
+ * 一条"包身份"的最小投影（`MarketIndexEntry`、`InstalledPack`、`PackManifest` 都天然满足）。
+ */
+export interface PackRef {
+  readonly kind: PackKind;
+  readonly id: string;
+}
+
+/**
+ * 注册表不变量（KM-1 契约收口 A4）：**一个 `id` 只能属于一个 `kind`**。
+ *
+ * 为什么是硬不变量而不是"建议"：注册表给每个包打的 tag 是 `<id>-v<version>`，
+ * **不含 kind** —— 同 id 异 kind 必然在 tag 上相撞（一个 tag 指向两种内容），
+ * 而后到的那个会安静地把前一个覆盖掉。实测：`demo.dict` 若同时以 `kojo-pack`
+ * 存在，索引里两条都"形状合法"，谁也发现不了，只有装完的内容不对。
+ *
+ * 因此冲突**必须拒并出声**（`log.warn` + `id-kind-conflict`），
+ * 不许"按 kind 取第一条"这类静默择一——那正是本函数要防的事。
+ *
+ * @returns 冲突涉及的 id（去重、字典序）；无冲突 ⇒ 空数组
+ */
+export function packIdKindConflicts(refs: readonly PackRef[]): string[] {
+  const kinds = new Map<string, Set<string>>();
+  for (const r of refs) {
+    const set = kinds.get(r.id) ?? new Set<string>();
+    set.add(r.kind);
+    kinds.set(r.id, set);
+  }
+  return [...kinds]
+    .filter(([, set]) => set.size > 1)
+    .map(([id]) => id)
+    .sort();
 }
 
 /**

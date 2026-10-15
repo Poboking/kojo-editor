@@ -24,14 +24,17 @@ import {
   MARKET_PACKS_DIR,
   MARKET_STAGING_DIR,
   MarketError,
+  SHA256_HEX_RE,
   dirname,
   join,
-  type FileIOWithPaths,
+  packIdKindConflicts,
+  type FileIO,
   type InstalledPack,
   type Logger,
   type MarketIndex,
   type MarketService,
   type PackKind,
+  type PackRef,
   type ScopedStorage,
 } from '@kojo/plugin-api';
 import { contentDigestOf, sha256Hex } from './digest';
@@ -42,7 +45,7 @@ const INSTALLED_KEY = 'installed';
 
 export interface MarketServiceDeps {
   /** 内核 io（已过第一道闸；`rename`/`removeDir` 两端都要断言） */
-  io: FileIOWithPaths;
+  io: FileIO;
   /** 本插件的存储域 */
   storage: ScopedStorage;
   log: Logger;
@@ -62,18 +65,21 @@ function samePack(r: InstalledPack, kind: PackKind, id: string, version: string)
 function isInstalledPack(v: unknown): v is InstalledPack {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
-  return (
-    typeof o['kind'] === 'string' &&
-    typeof o['id'] === 'string' &&
-    typeof o['version'] === 'string' &&
-    typeof o['name'] === 'string' &&
-    typeof o['author'] === 'string' &&
-    typeof o['license'] === 'string' &&
-    typeof o['zipSha256'] === 'string' &&
-    typeof o['installedAt'] === 'number' &&
-    typeof o['dir'] === 'string' &&
-    Array.isArray(o['files'])
-  );
+  if (
+    typeof o['kind'] !== 'string' ||
+    typeof o['id'] !== 'string' ||
+    typeof o['version'] !== 'string' ||
+    typeof o['name'] !== 'string' ||
+    typeof o['author'] !== 'string' ||
+    typeof o['license'] !== 'string' ||
+    typeof o['installedAt'] !== 'number' ||
+    !SHA256_HEX_RE.test(String(o['contentDigest'])) ||
+    !Array.isArray(o['files'])
+  ) {
+    return false;
+  }
+  // 容器摘要只有 zip 源才有；出现即必须是摘要形状（缺省合法）
+  return o['containerSha256'] === undefined || SHA256_HEX_RE.test(String(o['containerSha256']));
 }
 
 export function createMarketService(deps: MarketServiceDeps): MarketService {
@@ -117,6 +123,28 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     }
   }
 
+  /** 索引文件原始读结果（**不出声**——出声口径在 `index()`，装前查重也不该把"没有索引"当错误报） */
+  async function readIndexFile(): Promise<MarketIndex | null> {
+    const path = join(deps.root, MARKET_INDEX_FILE);
+    if (!(await io.exists(path))) return null;
+    let rawJson: unknown;
+    try {
+      rawJson = JSON.parse((await io.readText(path)).text);
+    } catch {
+      return null;
+    }
+    return parseIndex(rawJson).index;
+  }
+
+  /**
+   * 注册表不变量查重（契约 A4）：一个 `id` 只能属于一个 `kind`。
+   * 查重面 = 已装集 + 索引（索引缺席时只查已装集）；命中 ⇒ 调用方拒 + 出声。
+   */
+  async function findIdKindClash(ref: PackRef): Promise<PackRef | null> {
+    const known: PackRef[] = [...(await readRecords()), ...((await readIndexFile())?.packs ?? [])];
+    return known.find((r) => r.id === ref.id && r.kind !== ref.kind) ?? null;
+  }
+
   async function installLocalDir(sourceDir: string): Promise<InstalledPack> {
     /* ---------- 1. 读清单 + 全量校验（此刻零写盘） ---------- */
     const manifestPath = join(sourceDir, MARKET_MANIFEST_FILE);
@@ -136,6 +164,17 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       throw new MarketError('manifest-json', `${MARKET_MANIFEST_FILE} 不是合法 JSON：${String(err)}`, manifestPath);
     }
     const manifest = parseManifest(rawJson, deps.appVersion);
+    const clash = await findIdKindClash({ kind: manifest.kind, id: manifest.id });
+    if (clash !== null) {
+      // 一个 id 只能属于一个 kind（tag `<id>-v<version>` 不含 kind ⇒ 撞了就是两份内容抢一个名）
+      const detail = `${manifest.id}: ${clash.kind} vs ${manifest.kind}`;
+      log.warn(`id-kind-conflict：拒绝安装 —— ${detail}`);
+      throw new MarketError(
+        'id-kind-conflict',
+        `包 id ${manifest.id} 已经以「${clash.kind}」这个种类在用，不能再装成「${manifest.kind}」——同名不同类会让注册表 tag 相撞`,
+        detail,
+      );
+    }
     if (!(await io.exists(join(sourceDir, MARKET_CONTENT_DIR)))) {
       throw new MarketError('content-missing', `源目录里没有 ${MARKET_CONTENT_DIR}/ 子目录：${sourceDir}`, sourceDir);
     }
@@ -219,9 +258,9 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       name: manifest.name,
       author: manifest.author,
       license: manifest.license,
-      zipSha256: await contentDigestOf(manifest.files),
+      // 本地目录源没有容器 ⇒ 只有折叠摘要；`containerSha256` 刻意不写（缺省即"无容器"）
+      contentDigest: await contentDigestOf(manifest.files),
       installedAt: now(),
-      dir: target,
       files: manifest.files,
     };
     const rest = (await readRecords()).filter((r) => !samePack(r, record.kind, record.id, record.version));
@@ -229,6 +268,21 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     await writeRecords(rest);
     log.info(`装好了 ${record.kind}/${record.id} v${record.version}（${record.files.length} 个文件）→ ${target}`);
     return record;
+  }
+
+  /**
+   * 契约 A4：同 id 异 kind 的条目一律不呈现（拒并出声，绝不"取一条"）。
+   * 查重面 = 索引自身 + 已装集。
+   */
+  async function dropIdKindConflicts(index: MarketIndex): Promise<MarketIndex> {
+    const refs: PackRef[] = [...index.packs, ...(await readRecords())];
+    const ids = new Set(packIdKindConflicts(refs));
+    if (ids.size === 0) return index;
+    log.warn(
+      `id-kind-conflict：${ids.size} 个包 id 同时挂在多个种类下（索引内部，或索引与已装集相冲），` +
+        `这些条目全部不呈现、也不许被装 —— ${[...ids].join('、')}`,
+    );
+    return { ...index, packs: index.packs.filter((p) => !ids.has(p.id)) };
   }
 
   return {
@@ -257,7 +311,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       if (dropped.length > 0) {
         log.warn(`注册表索引丢掉了 ${dropped.length} 条坏条目：${dropped.slice(0, 5).join('；')}`);
       }
-      return index;
+      return dropIdKindConflicts(index);
     },
 
     async installed(): Promise<InstalledPack[]> {
@@ -265,7 +319,8 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       const alive: InstalledPack[] = [];
       const lost: string[] = [];
       for (const r of list) {
-        if (await io.exists(r.dir)) alive.push(r);
+        // 落点**不存字段**（契约 A3）：按派生路径核，记账里没有第二份真相
+        if (await io.exists(dirOf(r.kind, r.id, r.version))) alive.push(r);
         else lost.push(`${r.kind}/${r.id} v${r.version}`);
       }
       if (lost.length > 0) {

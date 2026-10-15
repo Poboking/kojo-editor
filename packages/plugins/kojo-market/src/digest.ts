@@ -60,7 +60,9 @@ export function utf8Bytes(text: string): Uint8Array {
 }
 
 /**
- * 逐文件锚的**折叠摘要**（本地目录源没有 zip 容器，`InstalledPack.zipSha256` 存这个）。
+ * 逐文件锚的**折叠摘要**（= `InstalledPack.contentDigest`，与源容器格式无关）。
+ *
+ * 容器摘要（`containerSha256`）是另一回事：只有 zip 容器源才有，本函数不看容器、只看内容。
  *
  * 口径钉死，别改：条目按 `path` 字典序排，每行 `${path}\u0000${sha256}`，
  * 行内以 `\u0001` 连接后整体 UTF-8 编码，再做一次 SHA-256。

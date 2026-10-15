@@ -12,6 +12,7 @@ import {
   minAppVersionSatisfied,
   packEntryPathProblem,
   packFilesProblem,
+  packIdKindConflicts,
   MarketError,
   type PackFileEntry,
   type PackManifest,
@@ -221,5 +222,37 @@ describe('parseManifest（装前全量闸）', () => {
   it('sha256 大写会被折成小写后使用（比较口径只有一种）', () => {
     const m = parseManifest(manifest({ files: [entry('files/a.erb', 1, 'A'.repeat(64))] }), APP);
     expect(m.files[0]!.sha256).toBe('a'.repeat(64));
+  });
+});
+
+describe('注册表不变量：一个 id 只能属于一个 kind（契约 A4）', () => {
+  it('同 id 异 kind ⇒ 报出这个 id；同 id 同 kind 多版本不算冲突', () => {
+    expect(packIdKindConflicts([])).toEqual([]);
+    expect(
+      packIdKindConflicts([
+        { kind: 'kojo-pack', id: 'a' },
+        { kind: 'kojo-pack', id: 'a' },
+        { kind: 'dict-pack', id: 'b' },
+      ]),
+    ).toEqual([]);
+    expect(
+      packIdKindConflicts([
+        { kind: 'kojo-pack', id: 'demo' },
+        { kind: 'kojo-pack', id: 'other' },
+        { kind: 'dict-pack', id: 'demo' },
+      ]),
+    ).toEqual(['demo']);
+  });
+
+  it('多个冲突 id 一次报全（去重 + 字典序，方便日志与 CI 对齐）', () => {
+    expect(
+      packIdKindConflicts([
+        { kind: 'template-pack', id: 'zz' },
+        { kind: 'kojo-pack', id: 'zz' },
+        { kind: 'dict-pack', id: 'aa' },
+        { kind: 'kojo-pack', id: 'aa' },
+        { kind: 'kojo-pack', id: 'aa' },
+      ]),
+    ).toEqual(['aa', 'zz']);
   });
 });

@@ -8,7 +8,6 @@ import {
   MARKET_SERVICE_KEY,
   WriteNotAllowedError,
   join,
-  withPathPrimitives,
   type InstalledPack,
   type Logger,
   type MarketService,
@@ -147,15 +146,14 @@ describe('市场装卸（真内核）', () => {
     await expect(h.io.writeBytes(join(h.appData, 'elsewhere', 'x.bin'), new Uint8Array(1))).rejects.toBeInstanceOf(
       WriteNotAllowedError,
     );
-    // 路径原语也同闸，且 rename **两端都断言**
-    const prim = withPathPrimitives(h.io);
-    await expect(prim.rename(join(h.appData, 'elsewhere', 'a'), join(h.market, 'b'))).rejects.toBeInstanceOf(
+    // 路径原语也在同一张面上，且 rename **两端都断言**
+    await expect(h.io.rename(join(h.appData, 'elsewhere', 'a'), join(h.market, 'b'))).rejects.toBeInstanceOf(
       WriteNotAllowedError,
     );
-    await expect(prim.rename(join(h.market, 'a'), join(h.appData, 'elsewhere', 'b'))).rejects.toBeInstanceOf(
+    await expect(h.io.rename(join(h.market, 'a'), join(h.appData, 'elsewhere', 'b'))).rejects.toBeInstanceOf(
       WriteNotAllowedError,
     );
-    await expect(prim.removeDir(join(h.appData, 'elsewhere'))).rejects.toBeInstanceOf(WriteNotAllowedError);
+    await expect(h.io.removeDir(join(h.appData, 'elsewhere'))).rejects.toBeInstanceOf(WriteNotAllowedError);
   });
 
   it('装成功：落点逐字节 = 原包（Shift-JIS + BOM + 二进制样本，证明没转码）', async () => {
@@ -174,8 +172,12 @@ describe('市场装卸（真内核）', () => {
       name: '演示包',
       installedAt: INSTALLED_AT,
     });
-    expect(rec.zipSha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(rec.dir).toBe(await h.service.installDir('kojo-pack', 'sjis.pack', '1.0.0'));
+    // 逐文件锚折叠摘要恒有；**本地目录源没有容器** ⇒ containerSha256 缺省（一词不再两义）
+    expect(rec.contentDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(rec.containerSha256).toBeUndefined();
+    // 落点是派生值（契约 A3）：记录里不许存 dir
+    expect(Object.keys(rec)).not.toContain('dir');
+    expect(await h.io.exists(await h.service.installDir('kojo-pack', 'sjis.pack', '1.0.0'))).toBe(true);
     const content = await h.service.contentDir('kojo-pack', 'sjis.pack', '1.0.0');
     expect(content).toBe(join(h.market, 'packs', 'kojo-pack', 'sjis.pack', '1.0.0', 'files'));
 
@@ -195,6 +197,11 @@ describe('市场装卸（真内核）', () => {
     expect(await h.service.isInstalled('kojo-pack', 'sjis.pack', '9.9.9')).toBe(false);
     // 状态住 ctx.storage（插件域），不在 market 根里自造 state.json
     expect(await h.kernel.storage.scope('kojo-market').keys()).toEqual(['installed']);
+    // 记账里只有身份与摘要，**没有路径**（路径 = installDir 派生；两份真相会指空）
+    const stored = await h.kernel.storage.scope('kojo-market').get<Record<string, unknown>[]>('installed');
+    expect(Object.keys(stored![0]!).sort()).toEqual(
+      ['author', 'contentDigest', 'files', 'id', 'installedAt', 'kind', 'license', 'name', 'version'].sort(),
+    );
     expect((await h.bridge.listDir(h.market)).map((e) => e.name).sort()).toEqual(['.staging', 'packs']);
     // 暂存壳随 rename 搬空
     expect(await h.bridge.listDir(nodeJoin(h.market, '.staging'))).toEqual([]);
@@ -405,7 +412,7 @@ describe('市场装卸（真内核）', () => {
     expect([...readFileSync(nodeJoin(dir, 'files', 'a.erb'))]).toEqual([2, 2, 2, 2]);
     expect([...readFileSync(nodeJoin(dir, 'files', 'added.erb'))]).toEqual([7]);
     expect(second.files).toHaveLength(2);
-    expect(second.zipSha256).not.toBe(first.zipSha256);
+    expect(second.contentDigest).not.toBe(first.contentDigest);
     const list = await h.service.installed();
     expect(list.filter((r) => r.id === 'dup.pack')).toHaveLength(1);
     expect(list[0]!.files).toHaveLength(2);
@@ -471,6 +478,56 @@ describe('市场装卸（真内核）', () => {
     h.warns.length = 0;
     expect(await h.service.index()).toBeNull();
     expect(h.warns.length).toBeGreaterThan(0);
+  });
+
+  it('同 id 异 kind（契约 A4）：装第二个种类 ⇒ 拒 + 出声，一个字节都不落', async () => {
+    const h = await boot();
+    const { manifest, tree } = await samplePack('clash.pack');
+    await h.service.installLocalDir(sourceDir(tree, manifest));
+    h.warns.length = 0;
+
+    const err = await h.service
+      .installLocalDir(sourceDir(tree, manifestOf(await entriesOf(tree), { id: 'clash.pack', kind: 'dict-pack' })))
+      .then(() => null)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MarketError);
+    expect((err as MarketError).code).toBe('id-kind-conflict');
+    expect(h.warns.some((w) => /id-kind-conflict/.test(w)), '拒并出声').toBe(true);
+    // 拒在校验层：dict-pack 那一支连目录都不该出现
+    expect(await h.service.isInstalled('dict-pack', 'clash.pack', '1.0.0')).toBe(false);
+    expect(await h.io.exists(join(h.market, 'packs', 'dict-pack'))).toBe(false);
+    // 同 id 同 kind 重装仍然合法（覆盖，不是冲突）
+    await expect(h.service.installLocalDir(sourceDir(tree, manifest))).resolves.toBeTruthy();
+  });
+
+  it('索引内同 id 异 kind ⇒ 两条一起不呈现（不许静默取一条）+ 出声', async () => {
+    const h = await boot();
+    mkdirSync(h.market, { recursive: true });
+    const entry = (kind: string): Record<string, unknown> => ({
+      kind,
+      id: 'dual.pack',
+      version: '1.0.0',
+      name: 'n',
+      author: 'a',
+      license: 'L',
+      minAppVersion: '0.4.0',
+      zip: { url: `https://example.test/${kind}.zip`, sha256: 'a'.repeat(64), bytes: 10 },
+      fileCount: 1,
+      unpackedBytes: 10,
+    });
+    writeFileSync(
+      nodeJoin(h.market, 'index.json'),
+      JSON.stringify({
+        schema: 1,
+        generatedAt: '2026-10-15T00:00:00Z',
+        packs: [entry('kojo-pack'), entry('dict-pack'), { ...entry('kojo-pack'), id: 'solo.pack' }],
+      }),
+      'utf8',
+    );
+    h.warns.length = 0;
+    const got = await h.service.index();
+    expect(got?.packs.map((p) => p.id)).toEqual(['solo.pack']);
+    expect(h.warns.some((w) => /id-kind-conflict/.test(w) && /dual\.pack/.test(w))).toBe(true);
   });
 
   it('已装目录被外部删掉 ⇒ installed() 剔除并出声；清单条目被改坏 ⇒ 忽略不崩', async () => {

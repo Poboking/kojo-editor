@@ -84,7 +84,7 @@ function memStorage(): ScopedStorage & { store: Map<string, unknown> } {
 }
 
 describe('kojo-market activate', () => {
-  it('插件形状：requires 只要 kernel.io，provides 只有 market.index，契约里没有的字段一个不自造', () => {
+  it('插件形状：requires 只要 kernel.io，provides 只有 market，契约里没有的字段一个不自造', () => {
     const p = createKojoMarketPlugin({ appVersion: '0.4.0-beta.1' });
     expect(p.id).toBe('kojo-market');
     expect(p.requires).toEqual(['kernel.io']);
