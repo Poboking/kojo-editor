@@ -371,8 +371,11 @@ export interface EditorDocumentSymbolRequest {
   readonly lineCount?: number;
 }
 
-/** 语言服务请求（`definition` / `documentSymbol`；新增能力 additive 追加联合成员，不改旧成员） */
-export type EditorLanguageServiceRequest = EditorDefinitionRequest | EditorDocumentSymbolRequest;
+/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange`；新增能力 additive 追加联合成员，不改旧成员） */
+export type EditorLanguageServiceRequest =
+  | EditorDefinitionRequest
+  | EditorDocumentSymbolRequest
+  | EditorFoldingRangeRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -416,8 +419,42 @@ export interface EditorDocumentSymbolResult {
   readonly symbols: readonly EditorDocumentSymbol[];
 }
 
+/**
+ * 折叠范围请求（D3，2026-10-15 折叠/面包屑批）——同一单槽的第三个判别成员。
+ *
+ * 输入形状与 `documentSymbol` 一致（整篇结构、不是光标处记号）；`text` 同样是
+ * **模型全文**（折叠区间必须对得上作者正在看的缓冲区）。
+ */
+export interface EditorFoldingRangeRequest {
+  readonly kind: 'foldingRange';
+  readonly path: string;
+  readonly text: string;
+  readonly project: GameProject | null;
+  /** 文件行数（体量事实，供贡献方按大小自行降级；缺省 = 未知，按不降级处理） */
+  readonly lineCount?: number;
+}
+
+/**
+ * 一条可折叠区间（D3）。行号为**模型坐标**（1 基、闭区间；宿主负责夹取越界值）。
+ * 语义上"折起来的是 `startLine` 之后到 `endLine` 的那一段"，`startLine` 那行留在面上。
+ */
+export interface EditorFoldingRange {
+  readonly startLine: number;
+  readonly endLine: number;
+}
+
+/** 折叠范围响应 */
+export interface EditorFoldingRangeResult {
+  readonly kind: 'foldingRange';
+  /** 可折叠区间（可重叠、可嵌套，宿主只夹取与去重，不解释层次）；空数组 = 认这个文件但整篇无可折块 */
+  readonly ranges: readonly EditorFoldingRange[];
+}
+
 /** 语言服务响应（按 `kind` 与请求一一对应） */
-export type EditorLanguageServiceResult = EditorDefinitionResult | EditorDocumentSymbolResult;
+export type EditorLanguageServiceResult =
+  | EditorDefinitionResult
+  | EditorDocumentSymbolResult
+  | EditorFoldingRangeResult;
 
 /**
  * 编辑器语言服务贡献（槽 `ui.editor.languageService`）。
@@ -425,8 +462,8 @@ export type EditorLanguageServiceResult = EditorDefinitionResult | EditorDocumen
  * **纯函数纪律**：`provide` 不读盘、不写盘、不发事件——数据**全部**来自贡献方，
  * 宿主只做 Monaco 协议翻译（位置进、位置出），绝不认识 ERB / 家族 / 角色。
  *
- * 返回值三态，宿主据此合并，无歧义（以 `definition` 为例；`documentSymbol` 同构，
- * 把"目标"换成"顶层符号树"）：
+ * 返回值三态，宿主据此合并，无歧义（以 `definition` 为例；`documentSymbol` /
+ * `foldingRange` 同构，把"目标"换成"顶层符号树 / 折叠区间"）：
  * - `undefined` = **我不认这个请求 / 这个文件**（不该由我应答）——宿主跳过；
  * - `{ locations: [] }` = 认这个文件、但此处没有定义（**不猜**）；
  * - `{ locations: [...] }` = 目标（可多个）。

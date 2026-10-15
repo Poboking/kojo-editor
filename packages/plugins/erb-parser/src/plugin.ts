@@ -16,6 +16,7 @@ import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
 import { buildStructureFixes, structureDiagnostic } from './structure-fix';
 import { erbDocumentSymbols } from './document-symbols';
+import { erbFoldingRanges } from './folding';
 import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt } from './symbols';
 import {
@@ -544,6 +545,23 @@ export function createErbParserPlugin(): Plugin {
           if (!isDialect(request.path)) return undefined;
           if (request.text.length === 0) return { kind: 'documentSymbol', symbols: [] };
           return { kind: 'documentSymbol', symbols: erbDocumentSymbols(parseErbText(request.text, request.path)) };
+        },
+      });
+
+      /* ---------------- 折叠范围（D3，2026-10-15 折叠/面包屑批） ----------------
+
+       同一枚槽的第三个判别成员。ERB 原文普遍不缩进，Monaco 默认的缩进折叠在其上几乎无效，
+       折叠层级只能由块结构算——数据源就是 `parseErbText` + `scanControlFlow` 两条既有
+       单遍纯函数（配对表单一真源在 scanner，见 `folding.ts` 头注），不新开第三份扫描。
+       与大纲同款**不按 lineCount 降级**：两遍线性扫描与波浪线同量级，实测见交付读数。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-folding',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'foldingRange') return undefined;
+          if (!isDialect(request.path)) return undefined;
+          return { kind: 'foldingRange', ranges: erbFoldingRanges(request.text) };
         },
       });
     },

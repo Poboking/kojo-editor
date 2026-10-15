@@ -46,6 +46,7 @@ import { createSugarLiftService } from './lift';
 import { createSugarLiftApplyService } from './lift-apply';
 import { resolveKojoDefinition } from './definition';
 import { kojoDocumentSymbols } from './document-symbols';
+import { kojoFoldingRanges } from './folding';
 import type { DictionaryLookup } from './types';
 
 export function createKojoSugarPlugin(): Plugin {
@@ -405,6 +406,25 @@ export function createKojoSugarPlugin(): Plugin {
           return {
             kind: 'documentSymbol',
             symbols: kojoDocumentSymbols(service.parse(request.text, { filePath: request.path })),
+          };
+        },
+      });
+
+      /* ---------------- 折叠范围（D3，2026-10-15 折叠/面包屑批） ----------------
+
+       同一枚槽的第三个判别成员，`.kojo` 这一腿由本包答：**糖的层级就是折叠层级**——
+       区间直接摊平自大纲的同一棵符号树（`loc` 来自转译器，行号与缓冲区逐行对齐），
+       不建第二份解析。折叠/大纲/吸顶/面包屑共用这一棵树。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-folding',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'foldingRange') return undefined;
+          if (resolveSugarTarget(request.path) === null) return undefined;
+          return {
+            kind: 'foldingRange',
+            ranges: kojoFoldingRanges(service.parse(request.text, { filePath: request.path })),
           };
         },
       });

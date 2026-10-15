@@ -112,14 +112,14 @@ describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
     return hit.contribution as unknown as SymbolsContribution;
   };
 
-  it('两枚贡献各管一个判别成员（`kojo-definition` / `kojo-symbols`）', () => {
+  it('三枚贡献各管一个判别成员（`kojo-definition` / `kojo-symbols` / `kojo-folding`）', () => {
     const { slots } = activate();
     expect(
       slots
         .filter((s) => s.kind === 'ui.editor.languageService')
         .map((s) => s.contribution.id)
         .sort(),
-    ).toEqual(['kojo-definition', 'kojo-symbols']);
+    ).toEqual(['kojo-definition', 'kojo-folding', 'kojo-symbols']);
   });
 
   it('只认 `.kojo`；ERB / 其它扩展名一律 undefined（让给 erb-parser 那条线）', () => {
@@ -149,5 +149,45 @@ describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
     expect(res!.symbols).toHaveLength(1);
     // 止行含末行换行后的那一线空行（模型也这么数行）——区间覆盖到文件尾，不留"截半个块"
     expect(res!.symbols[0]).toMatchObject({ name: '时机 指令 310', startLine: 2, endLine: 4 });
+  });
+});
+
+/* ============================== D3 折叠范围 ============================== */
+
+describe('kojo-sugar · foldingRange（D3 折叠）装配', () => {
+  type FoldingContribution = {
+    id: string;
+    provide(request: unknown): { kind: string; ranges: { startLine: number; endLine: number }[] } | undefined;
+  };
+
+  const foldingOf = (slots: SlotRecord[]): FoldingContribution => {
+    const hit = slots.find(
+      (s) => s.kind === 'ui.editor.languageService' && s.contribution.id === 'kojo-folding',
+    );
+    if (!hit) throw new Error('kojo-folding 未注册');
+    return hit.contribution as unknown as FoldingContribution;
+  };
+
+  it('只认 `.kojo`；ERB / 其它判别成员一律 undefined（各管各的）', () => {
+    const c = foldingOf(activate().slots);
+    expect(c.provide({ kind: 'foldingRange', path: 'C:\\p\\a.ERB', text: '@A\n', project: null })).toBeUndefined();
+    expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.kojo', text: '', project: null })).toBeUndefined();
+  });
+
+  it('`.kojo` → 区间摊平自大纲树；空文件 → 认但不给（`{ ranges: [] }`）', () => {
+    const c = foldingOf(activate().slots);
+    expect(c.provide({ kind: 'foldingRange', path: 'C:\\p\\a.kojo', text: '', project: null })).toEqual({
+      kind: 'foldingRange',
+      ranges: [],
+    });
+    const res = c.provide({
+      kind: 'foldingRange',
+      path: 'C:\\p\\a.kojo',
+      text: '角色: 12\n时机 指令 310：\n    「嗯。」\n',
+      project: null,
+      lineCount: 3,
+    });
+    expect(res?.kind).toBe('foldingRange');
+    expect(res!.ranges).toContainEqual({ startLine: 2, endLine: 4 });
   });
 });

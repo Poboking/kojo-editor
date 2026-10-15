@@ -30,6 +30,8 @@ import { dialectForLanguage, installDocumentFormatter, toTextEdits } from '../mo
 import { applyFormatOnSave } from './format-on-save';
 import { loadFormatOnSavePref } from './format-pref';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
+import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
+import { crumbsKey, symbolChainAt, toCrumbs, type CrumbItem } from './breadcrumb-path';
 import {
   type SignatureTables,
   installSignatureHelp,
@@ -1080,6 +1082,22 @@ export function EditorPane({
         return resolveSignature(model.getLineContent(position.lineNumber), position.column, editorTables(kernel).callProtocol);
       },
     });
+    // 折叠范围（D3）：同一枚 `ui.editor.languageService` 槽的第三个判别成员。ERB 原文不缩进，
+    // Monaco 的缩进折叠在其上几乎无效——注册供给器后 `foldingStrategy: auto` 自动改走这里。
+    // 应答判据与大纲逐字同款：糖 model 的行号属于派生物，折叠它会把作者折进不存在的位置。
+    const foldingDisposer = installFoldingRangeProvider(monaco, {
+      resolve: (model) => {
+        const path = filePathRef.current;
+        if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return [];
+        return collectFoldingRanges(kernel.slots.query('ui.editor.languageService'), {
+          kind: 'foldingRange',
+          path,
+          text: model.getValue(),
+          project: kernel.project.current(),
+          lineCount: model.getLineCount(),
+        });
+      },
+    });
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
     const completionDisposer = installKojoCompletion(monaco, () => editorTables(kernel));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
@@ -1099,6 +1117,7 @@ export function EditorPane({
       formatterDisposer.dispose();
       erbCompletionDisposer.dispose();
       completionDisposer.dispose();
+      foldingDisposer.dispose();
       symbolsDisposer.dispose();
       signatureDisposer.dispose();
       definitionDisposer.dispose();

@@ -112,7 +112,7 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
         .filter((s) => s.kind === 'ui.editor.languageService')
         .map((s) => s.contribution.id)
         .sort(),
-    ).toEqual(['erb-definition', 'erb-symbols']);
+    ).toEqual(['erb-definition', 'erb-folding', 'erb-symbols']);
     expect(languageServiceOf(slots).id).toBe('erb-definition');
   });
 
@@ -232,5 +232,46 @@ describe('erb-parser · documentSymbol（B3 大纲）', () => {
       .symbols[0]!.detail);
     expect(detail.length).toBeLessThanOrEqual(80);
     expect(detail.endsWith('…')).toBe(true);
+  });
+});
+
+/* ============================== D3 折叠范围 ============================== */
+
+describe('erb-parser · foldingRange（D3 折叠）装配', () => {
+  const foldingOf = (slots: SlotRecord[]) =>
+    languageServiceOf(slots, 'erb-folding') as unknown as {
+      provide(request: unknown): { kind: string; ranges: { startLine: number; endLine: number }[] } | undefined;
+    };
+
+  it('只认 ERB 方言；`.kojo` / 其它判别成员一律 undefined（判别式各管各的）', () => {
+    const { slots } = activate();
+    const c = foldingOf(slots);
+    expect(c.provide({ kind: 'foldingRange', path: '/t/X.kojo', text: '@A\n', project: null })).toBeUndefined();
+    expect(
+      c.provide({ kind: 'documentSymbol', path: A, text: FILES[A]!, project: null, lineCount: 3 }),
+    ).toBeUndefined();
+  });
+
+  it('函数块与 IF…ENDIF 各成区间（装配面走通纯函数 folding.ts）', () => {
+    const { slots } = activate();
+    const res = foldingOf(slots).provide({
+      kind: 'foldingRange',
+      path: A,
+      text: '@ALPHA\nIF A == 1\n\tPRINTL 甲\nENDIF\nRETURN\n',
+      project: null,
+      lineCount: 5,
+    });
+    expect(res?.kind).toBe('foldingRange');
+    // 尾随换行也计一线（与 B3 大纲同口径）：函数区间到文件尾
+    expect(res!.ranges).toContainEqual({ startLine: 1, endLine: 6 });
+    expect(res!.ranges).toContainEqual({ startLine: 2, endLine: 4 });
+  });
+
+  it('空文本 → 认这个文件但无可折块（`{ ranges: [] }`，不装不认）', () => {
+    const { slots } = activate();
+    expect(foldingOf(slots).provide({ kind: 'foldingRange', path: A, text: '', project: null })).toEqual({
+      kind: 'foldingRange',
+      ranges: [],
+    });
   });
 });
