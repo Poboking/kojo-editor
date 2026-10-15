@@ -30,6 +30,11 @@ import { dialectForLanguage, installDocumentFormatter, toTextEdits } from '../mo
 import { applyFormatOnSave } from './format-on-save';
 import { loadFormatOnSavePref } from './format-pref';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
+import {
+  type SignatureTables,
+  installSignatureHelp,
+  resolveSignature,
+} from '../monaco/kojo-signature';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
 import { useNotify } from './NotificationCenter';
@@ -89,7 +94,7 @@ function languageFor(filePath: string): string {
  * 另附 `erbFunctionNames`（**非** adapter 表）——项目内全部函数名（EC-3 函数名补全预置），
  * 由 `erb-parser` 的 `ErbIndex` 派生并按整项目指纹记忆化（见 `erb-function-names-for`）。
  */
-function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables {
+function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables & SignatureTables {
   const project = kernel.project.current();
   if (!project) return {};
   for (const contribution of kernel.slots.query('game.adapter')) {
@@ -102,6 +107,8 @@ function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables {
       ...(adapter.kojoFaceTemplates ? { faceTable: adapter.kojoFaceTemplates } : {}),
       ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
       ...(adapter.kojoInstructionTable ? { instructionTable: adapter.kojoInstructionTable } : {}),
+      // B5 签名帮助要的槽语义表（同一枚 adapter 贡献，运行时现取；缺席 = 不产签名）
+      ...(adapter.kojoCallProtocol ? { callProtocol: adapter.kojoCallProtocol } : {}),
       erbFunctionNames: erbFunctionNamesFor(kernel),
     };
   }
@@ -1063,6 +1070,16 @@ export function EditorPane({
         });
       },
     });
+    // 签名帮助（B5，形参槽语义）：唯一真源 = adapter 的调用协议表，`editorTables` 运行时现取
+    // （表缺席 / `slotsFor` 不认这个函数 ⇒ 不应答，**不猜**）。糖视图挂的是只读派生 model，
+    // 它的行列不属于原文 ⇒ 与 codeAction / 转到定义同判据一律不应答。
+    const signatureDisposer = installSignatureHelp(monaco, {
+      resolve: (model, position) => {
+        const path = filePathRef.current;
+        if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return null;
+        return resolveSignature(model.getLineContent(position.lineNumber), position.column, editorTables(kernel).callProtocol);
+      },
+    });
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
     const completionDisposer = installKojoCompletion(monaco, () => editorTables(kernel));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
@@ -1083,6 +1100,7 @@ export function EditorPane({
       erbCompletionDisposer.dispose();
       completionDisposer.dispose();
       symbolsDisposer.dispose();
+      signatureDisposer.dispose();
       definitionDisposer.dispose();
       hoverDisposer.dispose();
       cmdDisposer.dispose();
