@@ -105,6 +105,31 @@ function aliasNamesOf(text: string): string[] {
   return out;
 }
 
+/**
+ * 按 model 版本记忆化的别名表（与 `erb-completion-labels.ts` 的标签缓存同一纪律）。
+ *
+ * 别名全文正则扫描是每击键 `O(文件大小)`；同一版本（未编辑）下头部别名声明**必不变**
+ * ⇒ 复用上次数组（同一引用）。版本号缺席（桩 model / 旧运行时）⇒ 退化为每次重扫
+ * （行为正确，仅失去缓存），**不假定字段存在**。`WeakMap` 按 model 身份：关闭即回收。
+ */
+const ALIAS_CACHE = new WeakMap<
+  Monaco.editor.ITextModel,
+  { readonly versionId: number; readonly names: readonly string[] }
+>();
+
+function cachedAliasNames(model: Monaco.editor.ITextModel): readonly string[] {
+  const getVersionId = (model as { getVersionId?: () => number }).getVersionId;
+  const versionId = typeof getVersionId === 'function' ? getVersionId.call(model) : undefined;
+  if (typeof versionId !== 'number') return aliasNamesOf(model.getValue());
+
+  const cached = ALIAS_CACHE.get(model);
+  if (cached !== undefined && cached.versionId === versionId) return cached.names;
+
+  const names = aliasNamesOf(model.getValue());
+  ALIAS_CACHE.set(model, { versionId, names });
+  return names;
+}
+
 /* ============================== 语言层 + 文件层 source ============================== */
 
 /**
@@ -118,7 +143,7 @@ const LEXICON_SOURCE: CompletionSource = {
     const suggestions: Monaco.languages.CompletionItem[] = [];
 
     // 1. 文件内 `别名` 名字（别名补全——最常用，排最前）
-    for (const name of aliasNamesOf(model.getValue())) {
+    for (const name of cachedAliasNames(model)) {
       suggestions.push({
         label: name,
         kind: monaco.languages.CompletionItemKind.Variable,
