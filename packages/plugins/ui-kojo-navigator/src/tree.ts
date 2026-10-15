@@ -13,6 +13,7 @@
 
 import type {
   CharaInfo,
+  ErbFunction,
   ErbIndex,
   FamilyIndexRule,
   FamilyMatch,
@@ -291,6 +292,14 @@ export interface SearchHit {
 /**
  * 函数名子串搜索（大小写不敏感；覆盖全部函数含 orphans）。
  * 返回按「文件、行」排序的前 `limit` 条。
+ *
+ * 性能口径（UX 感知批，2026-10-16）：99k 函数集上这是**纯扫描**（每击键走一次），
+ * 所以三段拆开、把最贵的部分压到最小：
+ *   1) 轻量收集：只存函数引用，命中到 `limit*3` 即早停（保持旧实现的超采截断语义）；
+ *   2) 排序截断：按「文件、行」排完再切前 `limit` 条——结果与旧实现逐字相同；
+ *   3) 物化：只对最终 ≤limit 条做家族解析（正则）+ 建 Node 对象。
+ *      旧实现在超采阶段就对最多 `limit*3` 条各跑一次 `familyIndex.match`——这里省掉 2/3。
+ * 面板侧另有 `searchFunctionsCached`（按查询串记忆）与 `useDeferredValue`（击键折叠）。
  */
 export function searchFunctions(
   index: ErbIndex,
@@ -300,18 +309,85 @@ export function searchFunctions(
 ): SearchHit[] {
   const q = query.trim().toUpperCase();
   if (q.length < 2) return [];
-  const hits: SearchHit[] = [];
-  for (const file of index.files.values()) {
+  const cap = limit * 3;
+  const picked: ErbFunction[] = [];
+  outer: for (const file of index.files.values()) {
     for (const fn of file.functions) {
       if (!fn.normalizedName.includes(q)) continue;
-      const match = familyIndex ? familyIndex.match(fn.normalizedName, fn.filePath) : null;
-      hits.push({ node: makeNode(fn, match ?? emptyMatch()), charaNo: match?.characterNo ?? null });
-      if (hits.length >= limit * 3) break; // 超采后截断排序（保持结果大致确定性）
+      picked.push(fn);
+      if (picked.length >= cap) break outer; // 超采后截断排序（保持结果大致确定性）
     }
-    if (hits.length >= limit * 3) break;
   }
-  hits.sort((a, b) => a.node.filePath.localeCompare(b.node.filePath) || a.node.startLine - b.node.startLine);
-  return hits.slice(0, limit);
+  picked.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.startLine - b.startLine);
+  const hits: SearchHit[] = [];
+  for (const fn of picked.slice(0, limit)) {
+    const match = familyIndex ? familyIndex.match(fn.normalizedName, fn.filePath) : null;
+    hits.push({ node: makeNode(fn, match ?? emptyMatch()), charaNo: match?.characterNo ?? null });
+  }
+  return hits;
+}
+
+/**
+ * 搜索结果会话级 memo（按 `ErbIndex` 实例弱引用存储 ⇒ 索引换代自动失效）。
+ *
+ * 动机：`useDeferredValue` 只保证"中间击键不落盘"，同一次已提交的 deferred 值在
+ * 无关重渲染（徽章刷新 / 面板宿主重渲）里还会被重算——99k 扫描没有理由跑第二遍。
+ * 每实例只留最近 `SEARCH_MEMO_CAP` 条（长会话连续打字不背满历史命中）。
+ */
+const SEARCH_MEMO_CAP = 8;
+const searchMemo = new WeakMap<
+  ErbIndex,
+  { fi: FamilyIndexRule | null; limit: number; hits: Map<string, SearchHit[]> }
+>();
+
+export function searchFunctionsCached(
+  index: ErbIndex,
+  query: string,
+  familyIndex: FamilyIndexRule | null,
+  limit = 200,
+): SearchHit[] {
+  let slot = searchMemo.get(index);
+  if (!slot || slot.fi !== familyIndex || slot.limit !== limit) {
+    slot = { fi: familyIndex, limit, hits: new Map() };
+    searchMemo.set(index, slot);
+  }
+  const key = query.trim().toUpperCase(); // 与 searchFunctions 的归一化同口径（大小写不敏感）
+  const hit = slot.hits.get(key);
+  if (hit) return hit;
+  const res = searchFunctions(index, query, familyIndex, limit);
+  if (slot.hits.size >= SEARCH_MEMO_CAP) {
+    const oldest = slot.hits.keys().next().value;
+    if (oldest !== undefined) slot.hits.delete(oldest);
+  }
+  slot.hits.set(key, res);
+  return res;
+}
+
+/* ------------------------------ 面渲染窗口 ------------------------------ */
+
+/**
+ * 打开面的初始渲染窗口（行）。
+ *
+ * 旧实现是"每面硬截 300 行 + 其余只给一句提示"——上限存在但不可达（用户点不进去那 300 之外
+ * 的第 301 行）。窗口化后 INITIAL 决定**首帧 DOM 上界**，滚动触底自动加窗（STEP/次），
+ * 全量可达；步进增长保证浏览器永远不会一次挂一整面（最坏上千行）的行。
+ */
+export const FACE_WINDOW_INITIAL = 80;
+/** 触底后每次追加的行数（也是"显示更多"按钮一次的增量） */
+export const FACE_WINDOW_STEP = 160;
+
+/** 当前窗口应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
+export function faceWindowSize(total: number, limit: number | undefined): number {
+  return Math.min(total, limit ?? FACE_WINDOW_INITIAL);
+}
+
+/**
+ * 窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))。
+ * 单调不减、单步增量 ≤ STEP、终值 = total——"显示更多"与 IntersectionObserver 共用。
+ */
+export function nextFaceWindow(current: number | undefined, total: number): number {
+  const base = current ?? FACE_WINDOW_INITIAL;
+  return Math.min(total, Math.max(FACE_WINDOW_INITIAL, base + FACE_WINDOW_STEP));
 }
 
 function emptyMatch(): FamilyMatch {

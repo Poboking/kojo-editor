@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
-import type { DirEntry, ErbIndex, GameProject } from '@kojo/plugin-api';
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import type { DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
 import { isErbDialectPath } from '@kojo/plugin-api';
 import {
   collapseAll,
@@ -19,6 +19,15 @@ interface Props {
   onOpenFile: (path: string) => void;
   /** 目录列举（真实文件夹视图用；宿主注入内核 io，浏览器环境可能抛错——调用侧已兜底） */
   listDir?: (path: string) => Promise<DirEntry[]>;
+  /**
+   * 递归列举（冷开快照用；宿主注入内核 io — 与 erb-parser 的索引 walk 同一条桥）。
+   *
+   * 动机（2026-10-16 树即时批）：索引要 7.5s 才就绪，这期间左栏全空。冷开时对
+   * `project.kojoPaths` 各做**一次** `walkDir` 就能拿全口上域的方言文件清单（角色归属
+   * 来自 `charaIndex`，打开项目即已可用），按同一分组结构先出树；索引就绪后按同一
+   * 构建函数切回索引路径（同一文件集 ⇒ 不重排）。缺省 → 退回旧行为（等索引）。
+   */
+  walkDir?: (path: string, opts?: WalkOptions) => Promise<DirEntry[]>;
   /** 导入作者包为工作区项目（口上项目批 P-F；缺省 → 不显示导入菜单项） */
   onImportPackage?: (pkg: { dir: string; label: string }) => void;
   /**
@@ -35,14 +44,14 @@ interface Props {
 }
 
 /** 作者包子目录（角色目录下的一层子文件夹 = 作者版本号包目录） */
-interface PackageGroup {
+export interface PackageGroup {
   /** 包目录名；null = 直接挂在角色目录根下的散文件（如 159 先代 无包目录） */
   label: string | null;
   /** 包内 ERB 面文件（来自索引） */
   files: string[];
 }
 
-interface Group {
+export interface Group {
   label: string;
   /** 角色目录前缀（计算包目录绝对路径用） */
   prefix: string;
@@ -128,6 +137,183 @@ function baseName(p: string): string {
 }
 
 /**
+ * 角色归属表（charaIndex → 目录前缀；长前缀优先，避免嵌套目录误归属）。
+ * 单一来源：索引路径与冷开 walk 快照共用 —— 两边的分组结果才可能逐字一致。
+ */
+export function kojoOwners(project: GameProject): Array<{ prefix: string; label: string }> {
+  const owners: Array<{ prefix: string; label: string }> = [];
+  for (const c of project.charaIndex.values()) {
+    if (c.kojoDir) owners.push({ prefix: c.kojoDir, label: `#${c.no} ${c.name}` });
+  }
+  owners.sort((a, b) => b.prefix.length - a.prefix.length);
+  return owners;
+}
+
+/**
+ * 路径清单 → 角色 / 作者包分组（纯函数，可单测）。
+ *
+ * **索引路径与冷开 walk 快照共用这一个构建函数**：快照期与索引期按同一口径分组，
+ * 索引就绪切换时结构逐字相同 —— 不会出现"树重排"的视觉抖动。
+ * 旧实现把这段逻辑内嵌在 useMemo 里并直接吃 `index.files.keys()`，无法被 walk 复用。
+ */
+export function buildFileGroups(
+  paths: Iterable<string>,
+  owners: readonly { prefix: string; label: string }[],
+): Group[] {
+  const map = new Map<string, { prefix: string; subs: Map<string | null, string[]> }>();
+  for (const path of paths) {
+    const owner = ownerOf(path, owners) ?? { prefix: '', label: '(未归属)' };
+    let g = map.get(owner.label);
+    if (!g) {
+      g = { prefix: owner.prefix, subs: new Map() };
+      map.set(owner.label, g);
+    }
+    const sub = owner.prefix ? packageDirOf(path, owner.prefix) : null;
+    const arr = g.subs.get(sub);
+    if (arr) arr.push(path);
+    else g.subs.set(sub, [path]);
+  }
+
+  // 归属组按编号排（label 前缀 #n），未归属垫底；包按字典序，根散文件在前
+  const sorted = [...map.entries()].sort((a, b) => {
+    if (a[0] === '(未归属)') return 1;
+    if (b[0] === '(未归属)') return -1;
+    return parseInt(a[0].slice(1), 10) - parseInt(b[0].slice(1), 10);
+  });
+  return sorted.map(([label, g]) => {
+    const subs: PackageGroup[] = [...g.subs.entries()]
+      .sort((a, b) => {
+        if (a[0] === null) return -1;
+        if (b[0] === null) return 1;
+        return a[0].localeCompare(b[0]);
+      })
+      .map(([subLabel, files]) => ({ label: subLabel, files: files.sort() }));
+    return { label, prefix: g.prefix, subs, total: subs.reduce((n, s) => n + s.files.length, 0) };
+  });
+}
+
+/**
+ * 冷开快照：对口上根各做**一次** `walkDir`，拿全部方言文件路径。
+ *
+ * 过滤谓词与 erb-parser 的索引 walk **逐字同款**——特别含 `e.isDirectory ||`：
+ * `walkDir` 的 filter 对目录返回 false 会连整棵子树一起剪掉（PITFALLS §58 的静默少收），
+ * 写成纯扩展名筛就只剩根层。返回结果只留文件侧（目录条目排除）。
+ */
+export async function walkDialectPaths(
+  walkDir: (path: string, opts?: WalkOptions) => Promise<DirEntry[]>,
+  roots: readonly string[],
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const root of roots) {
+    const entries = await walkDir(root, {
+      includeFiles: true,
+      includeDirs: false,
+      filter: (e) => e.isDirectory || isErbDialectPath(e.name),
+    });
+    for (const e of entries) {
+      if (!e.isDirectory && isErbDialectPath(e.name)) out.push(e.path);
+    }
+  }
+  return out;
+}
+
+/**
+ * 过滤态首帧渲染的文件行上界（PERF-6，2026-10-16 树即时批）。
+ *
+ * **为什么过滤态要单独设窗**：过滤会把**每个命中组强制展开**
+ * （`isOpen = opened.has(label) || filter`——这是"打了字就看见结果"的既有语义，不许改）。
+ * 语料口径 155 组 / 2,325 文件：一个短词（如 `k1`）命中上千文件 ⇒ 一次 deferred 提交
+ * 就把上千行全挂进 DOM，输入框依旧卡。deferred 只让**打字**不卡，救不了**提交**那一帧。
+ * 这里给提交帧上界：首帧 120 行，点「继续显示后续命中」每次 +240（单调、可达全量——
+ * 不是"截了就不给看"的死上限）。函数树侧同理，见 navigator 的 `FaceList` 窗口。
+ */
+export const FILTER_WINDOW_INITIAL = 120;
+/** 每次「继续显示后续命中」追加的文件行数 */
+export const FILTER_WINDOW_STEP = 240;
+
+/** 包行键（组标签 + 包标签；根散文件 = 空串）——渲染计划与渲染侧共用这一份口径 */
+function rowKeyOf(groupLabel: string, subLabel: string | null): string {
+  return `${groupLabel}::${subLabel ?? ''}`;
+}
+
+/** 过滤态渲染计划（见 `filterRenderPlan`） */
+export interface FilterRenderPlan {
+  /** 每个包本次渲染的行数（缺键 = 0 行） */
+  readonly perPackage: ReadonlyMap<string, number>;
+  /** 本次真正渲染的文件行数 */
+  readonly rendered: number;
+  /** 命中总数（真实计数——组头/包头的计数用它，不用渲染数） */
+  readonly matched: number;
+  /** 本次未渲染的命中数（>0 时树尾挂「继续显示」哨兵） */
+  readonly hidden: number;
+}
+
+/**
+ * 过滤态的渲染计划（纯函数，可单测）。
+ *
+ * 预算按「组序 → 包序 → 包内路径序」贪心切分（即树本身的显示顺序 ⇒ 前两窗的内容
+ * 与不截断时**逐字同构**，不会出现"先显示的后面消失"）。
+ * **组与包结构一律保留**：组头/包头的计数始终是真实命中数，被裁的只是行 DOM
+ * ⇒ 计划不撒谎，也不改变命中集合（只是分帧显示）。
+ */
+export function filterRenderPlan(groups: readonly Group[], limit: number | undefined): FilterRenderPlan {
+  const budget = limit ?? FILTER_WINDOW_INITIAL;
+  let left = Math.max(0, budget);
+  const perPackage = new Map<string, number>();
+  let rendered = 0;
+  let matched = 0;
+  for (const g of groups) {
+    for (const s of g.subs) {
+      matched += s.files.length;
+      const take = Math.min(s.files.length, left);
+      if (take > 0) {
+        perPackage.set(rowKeyOf(g.label, s.label), take);
+        left -= take;
+        rendered += take;
+      }
+    }
+  }
+  return { perPackage, rendered, matched, hidden: matched - rendered };
+}
+
+/**
+ * 过滤窗口下一步（纯函数）：`min(matched, max(INITIAL, 当前 + STEP))`。
+ * 单调不减、单步增量 ≤ STEP、终值 = matched（全量可达）。
+ */
+export function nextFilterWindow(current: number | undefined, matched: number): number {
+  const base = current ?? FILTER_WINDOW_INITIAL;
+  return Math.min(matched, Math.max(FILTER_WINDOW_INITIAL, base + FILTER_WINDOW_STEP));
+}
+
+/** ERB 平铺行（模块级组件 ⇒ 可 SSR 单测"一次渲染多少行"；窗口大小由 `limit` 决定） */
+export interface FileRowsProps {
+  readonly files: readonly string[];
+  /** 本次最多渲染的行数（≥ files.length 即全量 = 改动前行为） */
+  readonly limit: number;
+  readonly activeFile: string | null;
+  readonly onOpenFile: (path: string) => void;
+}
+
+export function FileRows({ files, limit, activeFile, onOpenFile }: FileRowsProps): ReactElement {
+  const rows = limit >= files.length ? files : files.slice(0, Math.max(0, limit));
+  return (
+    <>
+      {rows.map((f) => (
+        <li key={f}>
+          <button
+            className={`tree-file ${f === activeFile ? 'active' : ''}`}
+            title={f}
+            onClick={() => onOpenFile(f)}
+          >
+            {baseName(f)}
+          </button>
+        </li>
+      ))}
+    </>
+  );
+}
+
+/**
  * 口上文件树：角色 → 作者包 → 口上文件（默认平铺共存，c087db9 形态）。
  *
  * 作者包**单态 + 追加式展开**（2026-10-12 用户反馈 6/7 重做）：
@@ -149,10 +335,12 @@ function baseName(p: string): string {
  * （不闪空白）。此前 `dirCache` 没有任何失效通道 ⇒ 外面丢进一个文件，树里不出现，
  * 除非重开项目——实机线在 §5.87 里把这条明记为"留给能做 GUI 的那一批"。
  */
-export function FileTree({ project, index, activeFile, onOpenFile, listDir, onImportPackage, refreshNonce, gloss }: Props): ReactElement {
+export function FileTree({ project, index, activeFile, onOpenFile, listDir, walkDir, onImportPackage, refreshNonce, gloss }: Props): ReactElement {
   /** 名称显示对照（缺省 = 恒等，保持旧行为） */
   const glossOf = gloss ?? ((n: string): string => n);
   const [filter, setFilter] = useState('');
+  /** 过滤走 deferred：输入框每击键即时响应，全量过滤 + 重渲染只对落定值跑 */
+  const deferredFilter = useDeferredValue(filter);
   const [opened, setOpened] = useState<Set<string>>(new Set());
   /** 展开了「真实文件夹内容」的作者包（默认关——只露 ERB 列表） */
   const [pkgFolder, setPkgFolder] = useState<Set<string>>(new Set());
@@ -165,49 +353,48 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
   /** 批量展开/收起后的一句可读数（反馈 6：没有反馈的批量动作＝用户读成"点了没反应"） */
   const [revealNote, setRevealNote] = useState<string | null>(null);
 
+  /* ---------------- 即时化：索引未就绪时用 walk 快照先出树（2026-10-16 树即时批） ---------------- */
+
+  /**
+   * 冷开快照（`{ proj, paths }` 带项目身份——切项目后旧快照立即视为不存在，
+   * 绝不让上一个项目的文件在渲染窗口里闪现）。索引就绪后被索引路径取代。
+   */
+  const [walkSnap, setWalkSnap] = useState<{ proj: GameProject; paths: string[] } | null>(null);
+  const [walkFailed, setWalkFailed] = useState(false);
+  /** 快照请求序号：项目切换/连续刷新时只认最后一次（与 dirReq 同一套"迟到不认领"口径） */
+  const walkSeq = useRef(0);
+  useEffect(() => {
+    if (index || !walkDir) return; // 索引就绪 ⇒ 快照退役；无 walkDir（纯浏览器宿主）⇒ 旧行为
+    const seq = ++walkSeq.current;
+    setWalkFailed(false);
+    void walkDialectPaths(walkDir, project.kojoPaths)
+      .then((paths) => {
+        if (walkSeq.current !== seq) return;
+        setWalkSnap({ proj: project, paths });
+      })
+      .catch(() => {
+        if (walkSeq.current !== seq) return;
+        setWalkFailed(true); // 失败不空转：退回「索引中…」占位（索引失败另有状态栏自解释）
+      });
+  }, [project, index, walkDir, refreshNonce]);
+
+  /** 当前有效的快照路径（项目身份匹配才认） */
+  const snapPaths = walkSnap && walkSnap.proj === project ? walkSnap.paths : null;
+
+  /**
+   * 分组来源优先级：索引（权威）→ 冷开快照（索引未就绪的先手）。
+   * 两者共用 `buildFileGroups` 同一构建函数 + 同一 owners 表 ⇒ 同一文件集下结构逐字相同，
+   * 索引就绪切换时不重排。
+   */
   const groups = useMemo<Group[]>(() => {
-    if (!index) return [];
-    const owners: Array<{ prefix: string; label: string }> = [];
-    for (const c of project.charaIndex.values()) {
-      if (c.kojoDir) owners.push({ prefix: c.kojoDir, label: `#${c.no} ${c.name}` });
-    }
-    owners.sort((a, b) => b.prefix.length - a.prefix.length);
-
-    const map = new Map<string, { prefix: string; subs: Map<string | null, string[]> }>();
-    for (const path of index.files.keys()) {
-      const owner = ownerOf(path, owners) ?? { prefix: '', label: '(未归属)' };
-      let g = map.get(owner.label);
-      if (!g) {
-        g = { prefix: owner.prefix, subs: new Map() };
-        map.set(owner.label, g);
-      }
-      const sub = owner.prefix ? packageDirOf(path, owner.prefix) : null;
-      const arr = g.subs.get(sub);
-      if (arr) arr.push(path);
-      else g.subs.set(sub, [path]);
-    }
-
-    // 归属组按编号排（label 前缀 #n），未归属垫底；包按字典序，根散文件在前
-    const sorted = [...map.entries()].sort((a, b) => {
-      if (a[0] === '(未归属)') return 1;
-      if (b[0] === '(未归属)') return -1;
-      return parseInt(a[0].slice(1), 10) - parseInt(b[0].slice(1), 10);
-    });
-    return sorted.map(([label, g]) => {
-      const subs: PackageGroup[] = [...g.subs.entries()]
-        .sort((a, b) => {
-          if (a[0] === null) return -1;
-          if (b[0] === null) return 1;
-          return a[0].localeCompare(b[0]);
-        })
-        .map(([subLabel, files]) => ({ label: subLabel, files: files.sort() }));
-      return { label, prefix: g.prefix, subs, total: subs.reduce((n, s) => n + s.files.length, 0) };
-    });
-  }, [index, project]);
+    const paths = index ? [...index.files.keys()] : snapPaths;
+    if (!paths) return [];
+    return buildFileGroups(paths, kojoOwners(project));
+  }, [index, snapPaths, project]);
 
   const visible = useMemo(() => {
-    if (!filter) return groups;
-    const q = filter.toLowerCase();
+    if (!deferredFilter) return groups;
+    const q = deferredFilter.toLowerCase();
     return groups
       .map((g) => {
         const subs = g.subs
@@ -221,7 +408,25 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
         return { ...g, subs, total: subs.reduce((n, s) => n + s.files.length, 0) };
       })
       .filter((g) => g.subs.length > 0 || g.label.toLowerCase().includes(q));
-  }, [groups, filter]);
+  }, [groups, deferredFilter]);
+
+  /**
+   * 过滤态渲染窗口（PERF-6）：窗口挂在**它所属的过滤词**上 ⇒ 换词自动回落到首帧上界，
+   * 不需要 useEffect（少一次重渲染，也不会有"旧窗口套到新词上"的中间帧）。
+   */
+  const [filterWin, setFilterWin] = useState<{ q: string; win: number | undefined }>({
+    q: '',
+    win: undefined,
+  });
+  const winOf = deferredFilter === filterWin.q ? filterWin.win : undefined;
+  /** 渲染计划（仅过滤态；非过滤态组默认折叠，行数已被展开态本身约束） */
+  const plan = useMemo(
+    () => (deferredFilter ? filterRenderPlan(visible, winOf) : null),
+    [visible, deferredFilter, winOf],
+  );
+  const growFilterWindow = (): void => {
+    setFilterWin({ q: deferredFilter, win: nextFilterWindow(winOf, plan?.matched ?? 0) });
+  };
 
   const toggleIn = (set: Set<string>) => (key: string) => {
     const next = new Set(set);
@@ -371,17 +576,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
     setMenu({ x: Math.min(e.clientX, window.innerWidth - 260), y: e.clientY, scope });
   };
 
-  const fileRow = (f: string): ReactElement => (
-    <li key={f}>
-      <button
-        className={`tree-file ${f === activeFile ? 'active' : ''}`}
-        title={f}
-        onClick={() => onOpenFile(f)}
-      >
-        {baseName(f)}
-      </button>
-    </li>
-  );
+  /**
+   * 该包本次渲染的行数（PERF-6 过滤窗口）。
+   * 非过滤态 `plan === null` ⇒ 全量（改动前行为）；过滤态按 `filterRenderPlan` 的预算切。
+   */
+  const renderLimitOf = (g: Group, s: PackageGroup): number =>
+    plan ? (plan.perPackage.get(rowKeyOf(g.label, s.label)) ?? 0) : s.files.length;
 
   /**
    * 一个目录的真实内容行（递归）。目录可再展开；文件按类型给不同处置。
@@ -446,8 +646,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
   /** 包层已平铺的 ERB 路径集（子目录渲染时去重用） */
   const erbKeysOf = (s: PackageGroup): Set<string> => new Set(s.files.map(pkey));
 
-  if (!index) {
-    return <div className="tree-loading">索引中…</div>;
+  if (!index && snapPaths === null) {
+    // 索引未就绪且快照未到：占位自解释。
+    // 没有 walkDir（纯浏览器宿主 ⇒ 根本没有先手快照）或快照读盘失败 ⇒ 退回旧文案，
+    // 不能对着人说"正在读取口上目录"而其实什么都没读。
+    const text = walkDir && !walkFailed ? '正在读取口上目录…' : '索引中…';
+    return <div className="tree-loading">{text}</div>;
   }
 
   return (
@@ -483,7 +687,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
       ) : null}
       <ul className="tree-groups">
         {visible.map((g) => {
-          const isOpen = opened.has(g.label) || filter.length > 0;
+          const isOpen = opened.has(g.label) || deferredFilter.length > 0;
           return (
             <li key={g.label} className="tree-group">
               <button
@@ -502,11 +706,21 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
                 <ul className="tree-files">
                   {g.subs.map((s) => {
                     // 根散文件（无包目录兜底）：直接平铺在角色组下
-                    if (s.label === null) return s.files.map(fileRow);
+                    if (s.label === null) {
+                      return (
+                        <FileRows
+                          key={`${g.label}::(根散文件)`}
+                          files={s.files}
+                          limit={renderLimitOf(g, s)}
+                          activeFile={activeFile}
+                          onOpenFile={onOpenFile}
+                        />
+                      );
+                    }
                     const label = s.label;
                     const pkgKey = `${g.label}::${label}`;
                     const pkgDir = pkgDirOf(g, label);
-                    const isFolder = pkgFolder.has(pkgKey) && filter.length === 0;
+                    const isFolder = pkgFolder.has(pkgKey) && deferredFilter.length === 0;
                     return (
                       <li key={label} className="tree-package-node">
                         <button
@@ -530,7 +744,14 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
                         {isFolder ? (
                           <ul className="tree-files nested pkg-real">{dirRows(pkgDir, 0, erbKeysOf(s))}</ul>
                         ) : null}
-                        <ul className="tree-files nested">{s.files.map(fileRow)}</ul>
+                        <ul className="tree-files nested">
+                          <FileRows
+                            files={s.files}
+                            limit={renderLimitOf(g, s)}
+                            activeFile={activeFile}
+                            onOpenFile={onOpenFile}
+                          />
+                        </ul>
                       </li>
                     );
                   })}
@@ -539,7 +760,19 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, onIm
             </li>
           );
         })}
+        {plan && plan.hidden > 0 ? (
+          <li className="tree-filter-more" key="__filter_window_more">
+            <button className="ghost small" onClick={growFilterWindow}>
+              命中 {plan.matched} 个文件，本帧只渲染 {plan.rendered} 个（其余 {plan.hidden} 个未挂载）——继续显示下一批
+            </button>
+          </li>
+        ) : null}
       </ul>
+      {plan && plan.hidden > 0 ? (
+        <p className="tree-reveal-note dim" role="status">
+          过滤强制全展开 ⇒ 只显示前 {plan.rendered} / {plan.matched} 个命中（点树尾按钮继续加载，或把过滤词写长一点）
+        </p>
+      ) : null}
       {menu ? (
         <>
           <div className="context-menu-backdrop" onMouseDown={() => setMenu(null)} />

@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { DirEntry } from '@kojo/plugin-api';
-import { dirsToRelist, visibleEntries } from '../src/ui/FileTree';
+import { createElement as h } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { CharaInfo, DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
+import {
+  FILTER_WINDOW_INITIAL,
+  FILTER_WINDOW_STEP,
+  FileRows,
+  FileTree,
+  buildFileGroups,
+  dirsToRelist,
+  filterRenderPlan,
+  kojoOwners,
+  nextFilterWindow,
+  visibleEntries,
+  walkDialectPaths,
+} from '../src/ui/FileTree';
 
 /**
  * 真实文件夹视图的条目筛选（反馈 6/7）。
@@ -82,5 +96,301 @@ describe('dirsToRelist · 外部改动后该重列哪些目录（HK-5）', () =>
 
   it('菜单项按 key 认，不认目录名（改包名不会把失效指错地方）', () => {
     expect(dirsToRelist(new Set(), new Set(['#1 灵梦::不存在的包']), PKGS)).toEqual([]);
+  });
+});
+
+/* ==================== 冷开即时化批（2026-10-16）：分组构建 + walk 快照 ==================== */
+
+/**
+ * 角色归属表：`charaIndex → 目录前缀`（长前缀优先）。
+ * 这层单测锁的是"同一 owners 表同时供索引路径与 walk 快照使用"的前提——
+ * 二者共用 `buildFileGroups` 才可能结构逐字一致。
+ */
+describe('kojoOwners · 角色目录归属表', () => {
+  it('只收有 kojoDir 的角色；长前缀排前（嵌套角色目录不误归属）', () => {
+    const charaIndex = new Map<number, CharaInfo>([
+      [1, { no: 1, name: '霊夢', kojoDir: 'C:/p/koa/001 A' }],
+      [2, { no: 2, name: '裏', kojoDir: 'C:/p/koa/001 A/裏' }],
+      [3, { no: 3, name: '无口上目录' }],
+    ]);
+    const owners = kojoOwners({ charaIndex } as unknown as GameProject);
+    expect(owners.map((o) => o.label)).toEqual(['#2 裏', '#1 霊夢']);
+    expect(owners[0]!.prefix.length).toBeGreaterThan(owners[1]!.prefix.length);
+  });
+});
+
+describe('buildFileGroups · 索引路径与冷开 walk 快照共用同一构建函数', () => {
+  const owners = [
+    { prefix: 'C:/p/koa/001 A', label: '#1 霊夢' },
+    { prefix: 'C:/p/koa/011 B', label: '#11 魔理沙' },
+  ];
+  const walkPaths = [
+    'C:/p/koa/001 A/M_KOJO_K1.ERB', // 根散文件（无包目录）
+    'C:/p/koa/001 A/少女之梦/M_KOJO_MESSAGE_COM_K1_2.ERB',
+    'C:/p/koa/001 A/少女之梦/M_KOJO_MESSAGE_COM_K1_1.ERB',
+    'C:/p/koa/011 B/包A/x.ERB',
+    'C:/p/koa/杂项.ERB', // 未归属
+  ];
+
+  it('分组结构与既有口径一致：角色按编号升序、未归属垫底；包按字典序、根散文件在前', () => {
+    const groups = buildFileGroups(walkPaths, owners);
+    expect(groups.map((g) => g.label)).toEqual(['#1 霊夢', '#11 魔理沙', '(未归属)']);
+    const k1 = groups[0]!;
+    expect(k1.total).toBe(3);
+    expect(k1.subs.map((s) => s.label)).toEqual([null, '少女之梦']); // 根散文件在前
+    expect(k1.subs[1]!.files.map((f) => f.split('/').pop())).toEqual([
+      'M_KOJO_MESSAGE_COM_K1_1.ERB',
+      'M_KOJO_MESSAGE_COM_K1_2.ERB',
+    ]); // 包内按路径字典序
+    expect(groups[2]!.prefix).toBe('');
+  });
+
+  it('索引键序（Map.keys）与 walk 数组序输入 → 结构逐字相同（索引就绪切换不重排）', () => {
+    const indexKeys = new Map(walkPaths.map((p) => [p, {}])).keys(); // 模拟 index.files.keys()
+    expect(buildFileGroups(indexKeys, owners)).toEqual(buildFileGroups(walkPaths, owners));
+  });
+
+  it('同一输入两次构建结果稳定（快照刷新/索引重建不产生顺序抖动）', () => {
+    expect(buildFileGroups(walkPaths, owners)).toEqual(buildFileGroups([...walkPaths], owners));
+  });
+});
+
+/* ---------------- walk 快照：一次 walkDir 拿全口上域方言文件 ---------------- */
+
+/** 伪文件树（值 'DIR' = 目录；叶子为文件名） */
+type WalkTree = Record<string, 'DIR' | string>;
+
+/**
+ * 伪 `walkDir`：**与真实实现同构**——filter 对目录返回 false 时剪整棵子树
+ * （PITFALLS §58：写成纯扩展名筛就只剩根层且不报错）。
+ */
+function fakeWalkDir(tree: WalkTree, calls: string[] = []) {
+  return async (root: string, opts?: WalkOptions): Promise<DirEntry[]> => {
+    calls.push(root);
+    const out: DirEntry[] = [];
+    const visit = (dir: string): void => {
+      const prefix = dir.endsWith('/') ? dir : `${dir}/`;
+      const seen = new Set<string>();
+      for (const key of Object.keys(tree)) {
+        if (!key.startsWith(prefix)) continue;
+        const rest = key.slice(prefix.length);
+        const name = rest.split('/')[0]!;
+        if (seen.has(name)) continue;
+        seen.add(name);
+        const path = `${prefix}${name}`;
+        const isDirectory = tree[path] === 'DIR' || rest.includes('/');
+        const entry: DirEntry = { name, path, isDirectory };
+        if (opts?.filter && !opts.filter(entry)) continue; // 目录 → 剪子树
+        if (isDirectory) {
+          if (opts?.includeDirs) out.push(entry);
+          visit(path);
+        } else if (opts?.includeFiles !== false) {
+          out.push(entry);
+        }
+      }
+    };
+    visit(root);
+    return out;
+  };
+}
+
+describe('walkDialectPaths · 冷开快照（索引未就绪时先出树）', () => {
+  const ROOT = 'C:/p/koa/個人口上';
+  const tree: WalkTree = {
+    [`${ROOT}/001 A`]: 'DIR',
+    [`${ROOT}/001 A/M_KOJO_K1.ERB`]: '',
+    [`${ROOT}/001 A/少女之梦`]: 'DIR',
+    [`${ROOT}/001 A/少女之梦/M_KOJO_MESSAGE_COM_K1_1.ERB`]: '',
+    [`${ROOT}/001 A/少女之梦/readme.txt`]: '', // 非方言：不收
+    [`${ROOT}/001 A/少女之梦/裏`]: 'DIR',
+    [`${ROOT}/001 A/少女之梦/裏/M_KOJO_MESSAGE_COM_K1_2.erb`]: '', // 深度 3 的方言文件（剪枝回归守卫）
+    [`${ROOT}/001 A/少女之梦/裏/note.md`]: '',
+    [`${ROOT}/001 A/包A`]: 'DIR',
+    [`${ROOT}/001 A/包A/M_KOJO_COMMAND_K1_1.ERH`]: '', // 方言扩展名命中
+    [`${ROOT}/011 B`]: 'DIR',
+    [`${ROOT}/011 B/x.ERB`]: '',
+  };
+
+  it('只收方言文件、深度不限（filter 对目录放行——剪枝即静默少收的守卫）', async () => {
+    const paths = await walkDialectPaths(fakeWalkDir(tree), [ROOT]);
+    expect(paths.sort()).toEqual(
+      [
+        `${ROOT}/001 A/M_KOJO_K1.ERB`,
+        `${ROOT}/001 A/少女之梦/M_KOJO_MESSAGE_COM_K1_1.ERB`,
+        `${ROOT}/001 A/少女之梦/裏/M_KOJO_MESSAGE_COM_K1_2.erb`,
+        `${ROOT}/001 A/包A/M_KOJO_COMMAND_K1_1.ERH`,
+        `${ROOT}/011 B/x.ERB`,
+      ].sort(),
+    );
+    expect(paths.some((p) => p.endsWith('readme.txt') || p.endsWith('note.md'))).toBe(false);
+  });
+
+  it('每根只发一次 walkDir（N 根 → N 次请求）；根不存在 → 空数组不抛', async () => {
+    const calls: string[] = [];
+    await walkDialectPaths(fakeWalkDir(tree, calls), [ROOT]);
+    expect(calls).toEqual([ROOT]);
+
+    const calls2: string[] = [];
+    const two = await walkDialectPaths(fakeWalkDir(tree, calls2), [`${ROOT}/001 A`, `${ROOT}/011 B`]);
+    expect(calls2).toEqual([`${ROOT}/001 A`, `${ROOT}/011 B`]);
+    expect(two).toHaveLength(5); // 001 A 子树 4 份 + 011 B 1 份
+
+    const missing = await walkDialectPaths(fakeWalkDir(tree), ['C:/nope']);
+    expect(missing).toEqual([]);
+  });
+
+  it('walk 结果可直接喂给 buildFileGroups（快照 → 分组的端到端形状）', async () => {
+    const paths = await walkDialectPaths(fakeWalkDir(tree), [ROOT]);
+    const owners = [{ prefix: `${ROOT}/001 A`, label: '#1 霊夢' }];
+    const groups = buildFileGroups(paths, owners);
+    expect(groups.map((g) => g.label)).toEqual(['#1 霊夢', '(未归属)']);
+    expect(groups[0]!.total).toBe(4);
+    expect(groups[1]!.subs[0]!.files.map((f) => f.split('/').pop())).toEqual(['x.ERB']);
+  });
+});
+
+/* ============ 过滤态渲染窗口（PERF-6：filter 强制全展开的卡顿处理） ============ */
+
+/** 造 N 个组的分组表（每组一个包、包内 filesEach 个文件） */
+function mkGroups(nGroups: number, filesEach: number) {
+  return Array.from({ length: nGroups }, (_, gi) => {
+    const label = `#${gi + 1} 角色`;
+    const files = Array.from({ length: filesEach }, (_, i) => `C:/koa/${gi}/M_KOJO_K${gi}_${i}.ERB`);
+    return { label, prefix: `C:/koa/${gi}`, subs: [{ label: '包A', files }], total: files.length };
+  });
+}
+
+describe('filterRenderPlan · 强制全展开时的每帧渲染预算', () => {
+  it('默认首帧 = FILTER_WINDOW_INITIAL 行（不随命中数放大）', () => {
+    const plan = filterRenderPlan(mkGroups(155, 20), undefined); // 命中 3100
+    expect(plan.matched).toBe(3100);
+    expect(plan.rendered).toBe(FILTER_WINDOW_INITIAL);
+    expect(plan.hidden).toBe(3100 - FILTER_WINDOW_INITIAL);
+    // 预算按显示顺序切：前 6 组满（20×6=120），第 7 组起一行不给
+    expect([...plan.perPackage.values()].reduce((n, v) => n + v, 0)).toBe(FILTER_WINDOW_INITIAL);
+    expect(plan.perPackage.get('#1 角色::包A')).toBe(20);
+    expect(plan.perPackage.get('#6 角色::包A')).toBe(20);
+    expect(plan.perPackage.has('#7 角色::包A')).toBe(false);
+  });
+
+  it('命中少于窗口 ⇒ 全渲染、hidden = 0（短词/常见路径 = 改动前行为）', () => {
+    const plan = filterRenderPlan(mkGroups(2, 10), undefined);
+    expect(plan).toMatchObject({ rendered: 20, matched: 20, hidden: 0 });
+    expect(plan.perPackage.size).toBe(2);
+  });
+
+  it('窗口是累加的：同一计划下前一窗渲染的行一定还在（不清旧添新 ⇒ 视觉不跳）', () => {
+    const groups = mkGroups(30, 15); // 450 命中
+    const w1 = filterRenderPlan(groups, undefined);
+    const w2 = filterRenderPlan(groups, nextFilterWindow(undefined, w1.matched));
+    for (const [k, n1] of w1.perPackage) expect(w2.perPackage.get(k)).toBeGreaterThanOrEqual(n1);
+    expect(w2.rendered).toBe(FILTER_WINDOW_INITIAL + FILTER_WINDOW_STEP);
+  });
+
+  it('反复按 STEP 生长到全量可达（不存在"截了就不给看"的死上限）', () => {
+    const groups = mkGroups(30, 15); // 450
+    let win: number | undefined = undefined;
+    let steps = 0;
+    for (;;) {
+      const plan = filterRenderPlan(groups, win);
+      if (plan.hidden === 0) break;
+      const next = nextFilterWindow(win, plan.matched);
+      expect(next).toBeGreaterThan(win ?? FILTER_WINDOW_INITIAL);
+      expect(next - (win ?? FILTER_WINDOW_INITIAL)).toBeLessThanOrEqual(FILTER_WINDOW_STEP);
+      win = next;
+      expect(++steps).toBeLessThan(50); // 不收敛必须红
+    }
+    expect(filterRenderPlan(groups, win).rendered).toBe(450);
+  });
+
+  it('零命中/空表 ⇒ 空计划且不抛', () => {
+    expect(filterRenderPlan([], undefined)).toEqual({ perPackage: new Map(), rendered: 0, matched: 0, hidden: 0 });
+  });
+
+  it('只读输入：计划不改动分组数组（组头计数继续显示真实命中数）', () => {
+    const groups = mkGroups(20, 10);
+    const snapshot = JSON.stringify(groups);
+    filterRenderPlan(groups, 5);
+    expect(JSON.stringify(groups)).toBe(snapshot);
+  });
+});
+
+describe('FileRows · 过滤态 DOM 行树上界（SSR 真实产出的行数）', () => {
+  const many = Array.from({ length: 3000 }, (_, i) => `C:/koa/0/M_KOJO_K1_${i}.ERB`);
+  const count = (markup: string): number => (markup.match(/class="tree-file/g) ?? []).length;
+
+  it('3000 个命中只挂 FILTER_WINDOW_INITIAL 行（旧实现：强制全展开 ⇒ 3000 行一起挂）', () => {
+    const html = renderToStaticMarkup(h(FileRows, { files: many, limit: FILTER_WINDOW_INITIAL, activeFile: null, onOpenFile: () => {} }));
+    expect(count(html)).toBe(FILTER_WINDOW_INITIAL);
+  });
+
+  it('limit ≥ 文件数 ⇒ 全量渲染（非过滤态行为逐字不变）', () => {
+    const html = renderToStaticMarkup(h(FileRows, { files: many, limit: many.length, activeFile: null, onOpenFile: () => {} }));
+    expect(count(html)).toBe(3000);
+  });
+
+  it('高亮当前文件不丢（PERF 不许改的那条行为）', () => {
+    const files = ['C:/a.ERB', 'C:/b.ERB'];
+    const html = renderToStaticMarkup(h(FileRows, { files, limit: 120, activeFile: 'C:/b.ERB', onOpenFile: () => {} }));
+    expect(html).toContain('class="tree-file active"');
+    expect(html.match(/class="tree-file active"/g)).toHaveLength(1);
+    expect(html).toContain('title="C:/b.ERB"');
+  });
+
+  it('首帧渲染数 = 计划的 rendered（计划与渲染同一条预算，两处不许各算各的）', () => {
+    const groups = mkGroups(40, 12); // 480 命中
+    const plan = filterRenderPlan(groups, undefined);
+    const rows = groups.flatMap((g) => g.subs.map((s) => plan.perPackage.get(`${g.label}::${s.label ?? ''}`) ?? 0));
+    expect(rows.reduce((n, v) => n + v, 0)).toBe(plan.rendered);
+  });
+
+  it('微基准：一次提交的行挂载成本 before（全量 3000 行）/ after（首帧 120 行）', () => {
+    const files = many;
+    const render = (limit: number): number => {
+      const t0 = performance.now();
+      renderToStaticMarkup(h(FileRows, { files, limit, activeFile: null, onOpenFile: () => {} }));
+      return performance.now() - t0;
+    };
+    for (let i = 0; i < 5; i++) {
+      render(FILTER_WINDOW_INITIAL);
+      render(files.length);
+    }
+    const sample = (limit: number, n: number): number => {
+      const ds: number[] = [];
+      for (let i = 0; i < n; i++) ds.push(render(limit));
+      ds.sort((a, b) => a - b);
+      return ds[Math.floor(n / 2)]!;
+    };
+    const before = sample(files.length, 15);
+    const after = sample(FILTER_WINDOW_INITIAL, 15);
+    console.log(
+      `[PERF tree] 过滤态一帧的行构造成本（3,000 命中 / SSR 计行 + 建元素）：\n` +
+        `  before（强制全展开 = 3000 行）median ${before.toFixed(3)} ms\n` +
+        `  after（首帧窗口 = ${FILTER_WINDOW_INITIAL} 行）median ${after.toFixed(3)} ms\n` +
+        `  ⇒ median 比 ${(before / Math.max(after, 1e-6)).toFixed(1)}×`,
+    );
+    expect(after).toBeLessThan(before);
+  });
+});
+
+/* ============ 冷开占位文案（PERF-6 即时化批） ============ */
+
+describe('FileTree · 索引未就绪时的占位自解释（SSR）', () => {
+  const project = { charaIndex: new Map(), kojoPaths: ['C:/koa'] } as unknown as GameProject;
+  const render = (walkDir?: (p: string, o?: WalkOptions) => Promise<DirEntry[]>): string =>
+    renderToStaticMarkup(
+      h(FileTree, { project, index: null, activeFile: null, onOpenFile: () => {}, walkDir }),
+    );
+
+  it('有 walkDir ⇒ 说"正在读取口上目录"（真的在读）', () => {
+    expect(render(async () => [])).toContain('正在读取口上目录…');
+  });
+
+  it('无 walkDir（纯浏览器宿主）⇒ 退回旧文案「索引中…」，不对人撒谎', () => {
+    expect(render(undefined)).toContain('索引中…');
+  });
+
+  it('占位期不渲染树（没有半棵空树、也没有过滤框）', () => {
+    expect(render(async () => [])).not.toContain('tree-filter');
   });
 });

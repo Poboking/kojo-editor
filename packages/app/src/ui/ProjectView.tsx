@@ -152,6 +152,9 @@ export function ProjectView({
   // React 视作新组件类型 → 整树卸载重挂 → 展开状态被清空。改为身份恒定的包装
   // 组件 + ref 桥接最新 props：重渲染只更新属性，绝不重挂，展开状态常驻）。
   const listDir = useMemo(() => kernel.io.listDir.bind(kernel.io), [kernel]);
+  // 冷开快照的递归列举桥（树即时化批）：索引要数秒才就绪，FileTree 用它在左栏先出文件
+  // （一次 walkDir 拿全口上域清单；索引就绪后按索引路径切换，同构不重排）。
+  const walkDir = useMemo(() => kernel.io.walkDir.bind(kernel.io), [kernel]);
   // 导入作者包为工作区项目（口上项目批 P-F）：壳层只发意图事件，
   // 「导入成什么形态」由工作区消费方（适配器）解释——跨层零游戏知识
   const importPackage = useCallback(
@@ -211,8 +214,8 @@ export function ProjectView({
     };
   }, [kernel, project]);
 
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, importPackage, treeNonce, gloss: nameGloss });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, importPackage, treeNonce, gloss: nameGloss };
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss };
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
       const a = fileTreeArgsRef.current;
@@ -223,6 +226,7 @@ export function ProjectView({
           activeFile={a.activeFile}
           onOpenFile={a.onOpenFile}
           listDir={a.listDir}
+          walkDir={a.walkDir}
           onImportPackage={a.importPackage}
           refreshNonce={a.treeNonce}
           gloss={a.gloss}

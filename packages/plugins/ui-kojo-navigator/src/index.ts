@@ -13,7 +13,17 @@
  * 文件维度的浏览由 app 壳的 FileTree 承担，本面板负责函数/家族维度。
  */
 
-import { createElement, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  createElement,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import type {
   ConditionExtractorService,
   ErbParserService,
@@ -28,22 +38,124 @@ import type {
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
+  FACE_WINDOW_INITIAL,
   buildNavigatorTree,
+  faceWindowSize,
   functionTooltip,
-  searchFunctions,
+  nextFaceWindow,
+  searchFunctionsCached,
   shouldRebuildIndex,
+  type FunctionNode,
   type NavigatorTree,
   type SearchHit,
 } from './tree';
 
-/** 单面最多渲染函数数（防 DOM 爆炸） */
-const FACE_RENDER_CAP = 300;
 /** 搜索结果上限 */
 const SEARCH_LIMIT = 200;
 /** 搜索最少输入长度 */
 const MIN_QUERY = 2;
 /** 每行最多显示的条件标签数（其余折叠为 +n） */
 const COND_BADGE_CAP = 2;
+
+/* ------------------------------ 面行窗口 ------------------------------ */
+
+/**
+ * 「显示更多」哨兵行（面窗口触底器）。
+ *
+ * 进入滚动视口即自动追加下一窗（IntersectionObserver —— 滚动容器 `.nav-tree` 自带
+ * `overflow-y: auto`，浏览器对滚动裁剪后的可见矩形判相交，不必手动传 root）；
+ * 观察器不可用（SSR / 测试 / 旧环境）时退化为**纯点击按钮**——功能不丢。
+ *
+ * 类型口径：本包装在 `lib: ES2022` 下编译（无 DOM lib），`IntersectionObserver` 与
+ * 元素一律走最小结构化类型；ref 用**稳定回调 ref**（`useCallback` 空依赖）拿真实节点，
+ * 避免每次渲染重挂 observer。
+ */
+type IntersectionObserverLike = new (
+  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
+) => { observe(target: object): void; disconnect(): void };
+
+function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
+  const anchor = useRef<unknown>(null);
+  const setAnchor = useCallback((node: unknown): void => {
+    anchor.current = node;
+  }, []);
+  /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
+  const onMoreRef = useRef(onMore);
+  onMoreRef.current = onMore;
+  useEffect(() => {
+    const el = anchor.current as object | null;
+    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
+    if (!el || !IO) return;
+    const io = new IO((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return createElement(
+    'li',
+    { ref: setAnchor, className: 'nav-more' },
+    createElement(
+      'button',
+      {
+        className: 'nav-more-btn',
+        title: '滚到此处会自动加载下一批；也可直接点击',
+        onClick: () => onMore(),
+      },
+      `显示更多（其余 ${remaining} 个）`,
+    ),
+  );
+}
+
+/** 面函数列表（窗口化渲染；模块级组件 ⇒ 可独立 SSR 单测 DOM 行数上界） */
+export interface FaceListProps {
+  /** 面窗口键（`chara|family|face`——`onGrow` 按它定位窗口） */
+  readonly faceKey: string;
+  readonly functions: readonly FunctionNode[];
+  /** 当前渲染窗口行数（undefined = 初始窗口） */
+  readonly limit: number | undefined;
+  /** 请求扩大该面窗口（新值由 `nextFaceWindow` 计算） */
+  readonly onGrow: (faceKey: string, total: number) => void;
+  /** 行尾徽章（条件 / 回放；宿主闭包提供） */
+  readonly badges: (fn: FunctionNode) => ReactNode[];
+  /** 点击行 = 跳函数意图 */
+  readonly onOpen: (fn: FunctionNode) => void;
+  /** 悬停提示 */
+  readonly tooltip: (fn: FunctionNode) => string;
+}
+
+export function FaceList(props: FaceListProps): ReactElement {
+  const { functions, limit } = props;
+  const win = faceWindowSize(functions.length, limit);
+  const rows = functions.slice(0, win);
+  return createElement(
+    'ul',
+    { className: 'nav-funcs' },
+    ...rows.map((fn) =>
+      createElement(
+        'li',
+        { key: `${fn.filePath}:${fn.startLine}` },
+        createElement(
+          'button',
+          {
+            className: 'nav-func-btn',
+            title: props.tooltip(fn),
+            onClick: () => props.onOpen(fn),
+          },
+          createElement('span', { className: 'nav-func-name' }, fn.name),
+          ...props.badges(fn),
+        ),
+      ),
+    ),
+    functions.length > win
+      ? createElement(MoreRow, {
+          key: 'more',
+          remaining: functions.length - win,
+          onMore: () => props.onGrow(props.faceKey, functions.length),
+        })
+      : null,
+  );
+}
 
 /** 依赖的悬停提示（标签 + 阈值） */
 function dependencyTitle(d: StateDependency): string {
@@ -180,8 +292,23 @@ export function createUiKojoNavigatorPlugin(): Plugin {
         const [, force] = useState(0);
         const [selectedNo, setSelectedNo] = useState<number | null>(null);
         const [query, setQuery] = useState('');
+        /** 搜索走 deferred：输入框即时响应，99k 全量扫只对**已落定**的查询值跑 */
+        const deferredQuery = useDeferredValue(query);
         const [openFamilies, setOpenFamilies] = useState<Set<string>>(new Set());
         const [openFaces, setOpenFaces] = useState<Set<string>>(new Set());
+        /** 各已展开面的渲染窗口（行数；缺省 = FACE_WINDOW_INITIAL——见 tree.ts 的窗口口径） */
+        const [faceWindows, setFaceWindows] = useState<Map<string, number>>(new Map());
+        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；计算在 tree.ts 可单测） */
+        const growFace = useCallback((faceKey: string, total: number): void => {
+          setFaceWindows((prev) => {
+            const cur = prev.get(faceKey);
+            const next = nextFaceWindow(cur, total);
+            if (next === (cur ?? FACE_WINDOW_INITIAL)) return prev; // 无变化不重渲
+            const m = new Map(prev);
+            m.set(faceKey, next);
+            return m;
+          });
+        }, []);
 
         /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
         const ic = (name: string, size: number, fallback: string): ReactNode =>
@@ -236,12 +363,14 @@ export function createUiKojoNavigatorPlugin(): Plugin {
         const chara = treeNow?.charas.find((c) => c.no === selectedNo) ?? null;
 
         const hits: SearchHit[] = useMemo(() => {
-          if (!indexReady || query.trim().length < MIN_QUERY) return [];
-          // 索引不变时 query 驱动；parser.currentIndex() 在面板生命周期内稳定
+          if (!indexReady || deferredQuery.trim().length < MIN_QUERY) return [];
+          // 索引不变时 deferredQuery 驱动；parser.currentIndex() 在面板生命周期内稳定。
+          // 结果按（索引实例 × 查询串）记忆（searchFunctionsCached）——无关重渲染
+          // （徽章刷新 / 面板宿主重渲）不再重跑 99k 扫描。
           const idx = parser.currentIndex();
-          return idx ? searchFunctions(idx, query, currentFamilyIndex(), SEARCH_LIMIT) : [];
+          return idx ? searchFunctionsCached(idx, deferredQuery, currentFamilyIndex(), SEARCH_LIMIT) : [];
           // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [query, indexReady, treeNow]);
+        }, [deferredQuery, indexReady, treeNow]);
 
         const toggle = (setter: typeof setOpenFamilies, key: string): void => {
           setter((prev) => {
@@ -332,7 +461,8 @@ export function createUiKojoNavigatorPlugin(): Plugin {
           : null;
 
         // ---- 搜索模式 ----
-        if (query.trim().length >= MIN_QUERY) {
+        // 模式切换也走 deferred：结果与列表同步出现，不闪「无匹配」中间态
+        if (deferredQuery.trim().length >= MIN_QUERY) {
           return createElement(
             'div',
             { className: 'panel-kojo-nav' },
@@ -405,7 +535,6 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                       ...family.faces.map((face) => {
                         const fcKey = `${fKey}|${face.face}`;
                         const fcOpen = openFaces.has(fcKey);
-                        const cap = FACE_RENDER_CAP;
                         return createElement(
                           'div',
                           { key: fcKey, className: 'nav-face' },
@@ -416,40 +545,27 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                             createElement('span', { className: 'nav-face-name' }, faceLabel(face.face, currentFaceLabels())),
                             createElement('span', { className: 'nav-count dim' }, String(face.functions.length)),
                           ),
+                          // 面函数列表：窗口化渲染（初始 80 行；触底/点击「显示更多」按 160 步进——
+                          // 旧实现是硬截 300 行 + 其余不可达，见 FaceList / tree.ts 的窗口口径）
                           fcOpen
-                            ? createElement(
-                                'ul',
-                                { className: 'nav-funcs' },
-                                ...face.functions.slice(0, cap).map((fn) => {
+                            ? createElement(FaceList, {
+                                key: `${fcKey}|funcs`,
+                                faceKey: fcKey,
+                                functions: face.functions,
+                                limit: faceWindows.get(fcKey),
+                                onGrow: growFace,
+                                badges: (fn: FunctionNode): ReactNode[] => {
                                   const badges: ReactNode[] = [];
                                   if (fn.match?.isMessageCheck) badges.push(createElement('span', { key: 'mc', className: 'nav-badge' }, 'MC'));
                                   if (fn.match && fn.match.kind === 'declare' && fn.match.selector > 0)
                                     badges.push(createElement('span', { key: 'sel', className: 'nav-badge' }, `#${fn.match.selector}`));
                                   badges.push(...condBadges(fn.name));
                                   badges.push(replayBadge(fn.name));
-                                  return createElement(
-                                    'li',
-                                    { key: `${fn.filePath}:${fn.startLine}` },
-                                    createElement(
-                                      'button',
-                                      {
-                                        className: 'nav-func-btn',
-                                        title: functionTooltip(fn, shortPath),
-                                        onClick: () => open(fn.filePath, fn.startLine, fn.name),
-                                      },
-                                      createElement('span', { className: 'nav-func-name' }, fn.name),
-                                      ...badges,
-                                    ),
-                                  );
-                                }),
-                                face.functions.length > cap
-                                  ? createElement(
-                                      'li',
-                                      { className: 'nav-more dim' },
-                                      `其余 ${face.functions.length - cap} 个未显示（用搜索定位）`,
-                                    )
-                                  : null,
-                              )
+                                  return badges;
+                                },
+                                onOpen: (fn: FunctionNode) => open(fn.filePath, fn.startLine, fn.name),
+                                tooltip: (fn: FunctionNode) => functionTooltip(fn, shortPath),
+                              })
                             : null,
                         );
                       }),

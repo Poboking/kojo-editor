@@ -1698,6 +1698,22 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-1);
   padding: 2px 4px;
 }
+/* 面窗口「显示更多」：触底自动加载的哨兵也是可点击按钮（观察器不可用时的退化路径） */
+.nav-more-btn {
+  width: 100%;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  padding: 3px 6px;
+  cursor: pointer;
+  text-align: center;
+}
+.nav-more-btn:hover {
+  color: var(--fg);
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+}
 .nav-hit-list {
   list-style: none;
   margin: 0;
@@ -4660,4 +4676,22 @@ button.primary .hint {
 }
 .editor-crumb-item:focus-visible {
   outline: 1px solid var(--accent, #61afef);
+}
+
+/* PERF-6（2026-10-16 树即时批）：过滤态强制全展开 ⇒ 渲染窗口的「继续显示下一批」尾行。
+   它是"还有多少命中没挂进 DOM"的读数，不是装饰：独占一行、不抢文件行的视觉。 */
+.tree-filter-more {
+  list-style: none;
+  padding: 4px 6px;
+}
+.tree-filter-more button {
+  width: 100%;
+  border: 1px dashed var(--border);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.tree-filter-more button:hover {
+  color: var(--fg);
 }

@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { createElement as h, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { UIPanelProps } from '@kojo/plugin-api';
-import { PanelBody, StatusbarItem } from '../src/ui/PanelHost';
+import { PanelBody, StatusbarItem, panelBodyPropsEqual } from '../src/ui/PanelHost';
 
 /** 最小消费方：renderIcon 在就画图标，不在就回退字形（贡献方须遵守的契约） */
 const consumer = (props: UIPanelProps) =>
@@ -85,5 +85,57 @@ describe('UI 偏好投影：PanelBody 下传 uiPrefs', () => {
       }),
     );
     expect(html).toContain('data-virtualize="false"');
+  });
+});
+
+/**
+ * 面板体 memo 批（2026-10-16）：壳层因无关状态（index/dirty/editorStatus/stats）重渲时，
+ * 挂载中的面板体不许跟着重渲。
+ *
+ * 证据分两层（node 环境无 DOM，无法挂载量真实渲染次数）：
+ * - **接线**：`PanelBody` / `StatusbarItem` 的 `$$typeof` 是 `react.memo`，且比较器就是
+ *   下面单测的 `panelBodyPropsEqual`（React.memo(type, compare) 把 compare 存在 .compare）；
+ * - **语义**：ShellLayout 重渲时传给 PanelBody 的 props 对象会新建，但三个值
+ *   （contribution / uiPrefs / floating）的**引用**都稳定 ⇒ 比较器判等 ⇒ React 跳过渲染。
+ *   反例（引用变了必须重修）也钉住——不然 `uiPrefs` 每次现建对象会让 memo 静默失效。
+ */
+
+describe('PanelBody / StatusbarItem · React.memo 接线与比较器语义', () => {
+  const MEMO_TAG = Symbol.for('react.memo');
+
+  it('PanelBody / StatusbarItem 都是 memo 组件（包装没被顺手拆掉）', () => {
+    expect((PanelBody as unknown as { $$typeof?: symbol }).$$typeof).toBe(MEMO_TAG);
+    expect((StatusbarItem as unknown as { $$typeof?: symbol }).$$typeof).toBe(MEMO_TAG);
+  });
+
+  it('比较器就是 React 实际使用的那一个（memo 的第二参 = panelBodyPropsEqual）', () => {
+    expect((PanelBody as unknown as { compare?: unknown }).compare).toBe(panelBodyPropsEqual);
+  });
+
+  it('壳层重渲形态（同引用 props、新对象字面量）→ 判等 ⇒ 面板体跳过渲染', () => {
+    const contribution = { id: 'demo', component: consumer };
+    const uiPrefs = { panelVirtualize: false };
+    // 同上一次渲染的 props
+    const prev = { contribution, uiPrefs, floating: undefined };
+    // 壳层重渲：外层对象必然新建，三个值引用不变
+    const next = { contribution, uiPrefs, floating: undefined };
+    expect(panelBodyPropsEqual(prev, next)).toBe(true);
+    expect(panelBodyPropsEqual(next, prev)).toBe(true);
+  });
+
+  it('任一引用变化 ⇒ 不判等（面板必须重渲）：contribution / uiPrefs / floating 三条都钉住', () => {
+    const contribution = { id: 'demo', component: consumer };
+    const uiPrefs = { panelVirtualize: false };
+    const base = { contribution, uiPrefs, floating: undefined };
+    expect(panelBodyPropsEqual(base, { ...base, contribution: { ...contribution } })).toBe(false);
+    expect(panelBodyPropsEqual(base, { ...base, uiPrefs: { panelVirtualize: false } })).toBe(false); // 现建对象 = memo 失效（ShellLayout 用 useMemo 防这个）
+    expect(panelBodyPropsEqual(base, { ...base, floating: true })).toBe(false);
+    expect(panelBodyPropsEqual(base, { ...base, uiPrefs: undefined })).toBe(false);
+  });
+
+  it('memo 包裹后 SSR 输出与裸组件一致（包装不改渲染结果）', () => {
+    const html = renderToStaticMarkup(h(PanelBody, { contribution: { id: 'demo', component: consumer }, uiPrefs: undefined }));
+    expect(html).toContain('<svg');
+    expect(html).toContain('panel panel-demo');
   });
 });
