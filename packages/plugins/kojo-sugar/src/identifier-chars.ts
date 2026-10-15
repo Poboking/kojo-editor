@@ -23,13 +23,21 @@
 
 /**
  * 标识符字符**类表源**（字母 / 下划线 / CJK / 全角拉丁 `Ａ`–`Ｚ` `ａ`–`ｚ`；不含数字）。
- * 起始集与后续集**由同一串派生**（后续集 = 起始集 + `0-9`）——两张表各抄一份正是
+ * 起始集与后续集**由同一串派生**（后续集 = 起始集 + `0-9` + `$`）——两张表各抄一份正是
  * 本模块要消掉的东西，故这里也不留两份可漂移的副本。
  */
 const IDENT_CHARS = 'A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A';
 
+/**
+ * 字符串视图形参 / 实参的**声明后缀** `$`（v1.7：`实参$` / 形参名 `名字$`）。
+ * **只进后续集、不进起始集**——`$` 起首的 ERB 标签（`$LABEL`）不受影响（起始集无 `$`）；
+ * 与 `@"…"` 心形记号零冲突（`@` 本就不是标识符字符）。
+ * 运算符边界判定（`下面的` 词边界）对 `$` 也因此成立——`实参$ 不在 …` 之类照常降糖。
+ */
+const IDENT_SUFFIX = '$';
+
 const IDENT_START_RE = new RegExp(`[${IDENT_CHARS}]`);
-const IDENT_PART_RE = new RegExp(`[${IDENT_CHARS}0-9]`);
+const IDENT_PART_RE = new RegExp(`[${IDENT_CHARS}0-9${IDENT_SUFFIX}]`);
 
 /** 标识符起始字符判定（`scanIdentifier` 的第一字符） */
 export function isIdentStart(ch: string): boolean {

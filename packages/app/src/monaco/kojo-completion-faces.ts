@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
 import type { KojoFaceTable } from '@kojo/plugin-api';
-import { TIMING_ARG_TOKENS, TIMING_NAMED_PARAMS, type TimingNamedParamSpec } from '@kojo/plugin-kojo-sugar';
+import { TIMING_ARG_TOKENS, TIMING_NAMED_PARAMS, argTokenCnLabel, type TimingNamedParamSpec } from '@kojo/plugin-kojo-sugar';
 
 /**
  * 语法糖（`.kojo`）补全 · **时机块头**——沿用单一 `kojo-face` source：
@@ -32,6 +32,8 @@ const BLOCK_COLON = '：';
 const TRAILING_COLON_RE = /[：:]$/;
 /** 令牌切分用空白 */
 const WHITESPACE_RE = /\s/;
+/** CJK 判定（含扩展 A / 假名）；用于 `类型:` 段取值的 CJK-primary 过滤 */
+const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 
 /** 命名参数**键**候选的 detail（宿主 UI 文案；键名一律取自 kojo-sugar 键表，非硬编码） */
 const KEY_DETAIL = '时机命名参数';
@@ -249,7 +251,9 @@ function valueCandidates(
   return out;
 }
 
-/** 某键在当前分野下的取值集合（只取公开面；缺则空集）。 */
+/**
+ * 某键在当前分野下的取值集合（只取公开面；缺则空集；含 CJK 时隐藏纯 ASCII 别名）。
+ */
 function valueSetOf(
   line: string,
   faceStart: number,
@@ -257,7 +261,9 @@ function valueSetOf(
   faceTable: KojoFaceTable,
   spec: TimingNamedParamSpec,
 ): readonly string[] {
-  if (spec.valueSource === 'args') return TIMING_ARG_TOKENS;
+  // `参数:` 的候选由语言层闭集**派生中文主形**（`实参` / `实参:1` / `实参$`），
+  // 编辑器侧零硬编码（单一真源 = kojo-sugar 的 `TIMING_ARG_TOKENS` + `argTokenCnLabel`）。
+  if (spec.valueSource === 'args') return TIMING_ARG_TOKENS.map((t) => argTokenCnLabel(t));
   if (spec.valueSource === 'successFlag') {
     const values = faceTable.successFlag?.values;
     return values ? Object.keys(values) : [];
@@ -267,5 +273,10 @@ function valueSetOf(
   if (segName === undefined) return [];
   const tpl = faceTable.faces[line.slice(faceStart, faceEnd)];
   const seg = tpl?.segments?.[segName];
-  return seg ? Object.keys(seg) : [];
+  if (!seg) return [];
+  const keys = Object.keys(seg);
+  // CJK-primary（规范 §4.1 中英不对等展示）：段表里一旦有中文键，纯 ASCII 键视作
+  // 隐藏兼容别名（如 `类型:` 的引擎令牌 `COM` / `SCOM`），不进补全面板；无中文键 → 原样。
+  const hasCjk = keys.some((k) => CJK_RE.test(k));
+  return hasCjk ? keys.filter((k) => CJK_RE.test(k)) : keys;
 }

@@ -297,10 +297,70 @@ export const TIMING_NAMED_PARAMS: readonly TimingNamedParamSpec[] = [
 ];
 
 /**
- * `参数:` 取值的语言层闭集令牌候选（单令牌；逗号分隔的**多值拼接不做**——
- * 补全不是解析器）。覆盖规范 §3.2 的两形态：裸 `ARG` 与带索引 `ARG:<数字>`。
+ * **实参令牌中文主形**（表层写法，v1.6）：`实参` = 数值视图、`实参$` = 字符串视图；
+ * 变长索引用 `:n`（**1 基**，从 1 开始）——`实参:1 ≡ 实参`、`实参$:1 ≡ 实参$`。
+ *
+ * 与引擎记号（`ARG` / `ARG:<数字>` / `ARGS`）的映射是**单一真源**：
+ * - 位置 k（**0 基**）→ 数值视图 `ARG:<k>`（k=0 写作裸 `ARG`）/ 字符串视图 `ARGS:<k>`；
+ * - 表层 `实参:n` → `ARG:<n-1>`、`实参$:n` → `ARGS:<n-1>`（n 指实参表位置，1 基）；
+ * - 老写法 `ARG` / `ARG:<数字>` / 裸 `ARGS` **继续兼容**，但降级为**隐藏兼容别名**
+ *   （既有的 CJK-primary 机制自动让它们不进补全面板）。
  */
-export const TIMING_ARG_TOKENS: readonly string[] = ['ARG', 'ARG:1'];
+export const VARIADIC_ARG_NUMERIC = '实参';
+/** `实参$`：不定参数的**字符串视图**关键字（`$` 结尾 = 取字符串槽）。 */
+export const VARIADIC_ARG_STRING = '实参$';
+
+/**
+ * 位置 k（0 基）+ 视图 → 引擎记号。k=0 归一为**裸** `ARG` / `ARGS`（对齐语料
+ * `(ARGS,ARG,ARG:1)` 与既有 `argumentToken` 口径，`ARG:0` 等价于 `ARG`）。
+ */
+export function argPositionToken(stringView: boolean, k: number): string {
+  if (stringView) return k === 0 ? 'ARGS' : `ARGS:${k}`;
+  return k === 0 ? 'ARG' : `ARG:${k}`;
+}
+
+/**
+ * `参数:` 取值令牌（中文主形**或**引擎记号）→ 引擎记号（规范化 `ARG`/`ARG:<数字>`/`ARGS`）。
+ * 不认（`FOO` / `实参:0` / `实参$:0` / `ARGS:<数字>` / 空令牌）→ `null`。
+ *
+ * 注：`ARGS:<数字>` 作为**手写原生令牌**仍非法（规范 §3.2 L271），故本函数只收裸 `ARGS`；
+ * 字符串视图的**带索引**形态只开放**中文**写法 `实参$:n`（由转译器规范化为 `ARGS:<n-1>`）。
+ */
+export function argTokenToEngineToken(tok: string): string | null {
+  const t = tok.trim();
+  if (t.length === 0) return null;
+  if (t === 'ARG' || t === 'ARGS') return t;
+  if (/^ARG:\d+$/.test(t)) return t;
+  if (t === VARIADIC_ARG_NUMERIC) return 'ARG';
+  if (t === VARIADIC_ARG_STRING) return 'ARGS';
+  const num = /^实参:(\d+)$/.exec(t);
+  if (num) {
+    const n = Number(num[1]!);
+    return n >= 1 ? argPositionToken(false, n - 1) : null;
+  }
+  const str = /^实参\$:(\d+)$/.exec(t);
+  if (str) {
+    const n = Number(str[1]!);
+    return n >= 1 ? argPositionToken(true, n - 1) : null;
+  }
+  return null;
+}
+
+/** 引擎记号 → 中文主形（补全/悬停**派生**用；编辑器侧禁硬编码中文形态）。 */
+export function argTokenCnLabel(tok: string): string {
+  if (tok === 'ARG') return VARIADIC_ARG_NUMERIC;
+  if (tok === 'ARGS') return VARIADIC_ARG_STRING;
+  const m = /^ARG:(\d+)$/.exec(tok);
+  if (m) return `${VARIADIC_ARG_NUMERIC}:${Number(m[1]!) + 1}`;
+  return tok;
+}
+
+/**
+ * `参数:` 取值的**引擎记号**闭集候选（单令牌；逗号分隔的**多值拼接不做**——补全不是解析器）。
+ * 覆盖规范 §3.2 的三形态：裸 `ARG`、带索引 `ARG:<数字>`、**裸 `ARGS`**（整组实参记号）。
+ * 补全面板据 {@link argTokenCnLabel} **派生中文主形**展示（编辑器侧零硬编码）。
+ */
+export const TIMING_ARG_TOKENS: readonly string[] = ['ARG', 'ARG:1', 'ARGS'];
 
 /* --------------------------- 运算符降糖（规范 §4.3） --------------------------- */
 

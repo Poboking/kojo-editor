@@ -60,7 +60,7 @@ import {
   type SourceLineView,
 } from './column-map';
 import { checkTimingArgsDeclaration, CJK, type SectionPreset } from './lexer';
-import { RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_NAMED_PARAMS, TIMING_SUCCESS_PARAM } from './keywords';
+import { argPositionToken, RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_NAMED_PARAMS, TIMING_SUCCESS_PARAM } from './keywords';
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import { STATEMENT_FUNCTIONS } from './statement-functions';
 import type { TopNode } from './parser';
@@ -661,6 +661,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
     frontMatter: ctx.frontMatter,
     allocator: new SlotAllocator(),
     baseIndent: bodyIndent,
+    argSlotCount: argsDecl === null ? 0 : argsDecl.split(',').length,
   };
 
   if (sectionMode) {
@@ -1255,6 +1256,8 @@ interface BodyContext {
    * `RETURNF`（值函数，空返回）/ `RETURN`（过程函数）——与函数头是否挂 `#FUNCTION` 同一判据。
    */
   functionIsValueFunction?: boolean;
+  /** 当前作用域声明的**实参槽位数**（v1.7；`实参:n` 未声明位置在此 fail-visible，见 `ExprContext`） */
+  argSlotCount?: number;
   sink: DiagnosticSink;
   frontMatter: SugarFrontMatter;
   allocator: SlotAllocator;
@@ -1518,9 +1521,13 @@ function renderUserFunctionName(template: string, charNo: string, name: string):
   return template.replace(/\{n\}/g, charNo).replace(/\{name\}/g, name);
 }
 
-/** 形参位置记号：声明位第 k 个（0 基）→ `ARG`（k=0）/ `ARG:<k>`（k≥1），与引擎实参位置绑定 */
-function argumentToken(k: number): string {
-  return k === 0 ? 'ARG' : `ARG:${k}`;
+/**
+ * 形参位置记号：声明位第 k 个（0 基）→ 数值视图 `ARG`（k=0）/`ARG:<k>`（k≥1）；
+ * 形参名以 `$` 结尾（`名字$`）= **字符串视图** `ARGS`（k=0）/`ARGS:<k>`（k≥1）。
+ * 数值 / 字符串是**同一实参位置表**的两种视图（引擎证据：spec 附录 C #37）。
+ */
+function paramDeclToken(name: string, k: number): string {
+  return argPositionToken(name.endsWith('$'), k);
 }
 
 /** 返回值是否为字符串字面量（`"…"`）——决定 `#FUNCTIONS` vs `#FUNCTION` */
@@ -1666,8 +1673,8 @@ function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext
   const valueFn = ret !== undefined && ret.value !== undefined;
 
   const decl = node.params
-    .map((_, i) => {
-      const token = argumentToken(i);
+    .map((name, i) => {
+      const token = paramDeclToken(name, i);
       const def = node.defaults?.[i];
       return def === undefined ? token : `${token} = ${def}`;
     })
@@ -1688,6 +1695,7 @@ function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext
     baseIndent: 1,
     inFunction: true,
     functionIsValueFunction: valueFn,
+    argSlotCount: node.params.length,
   };
   // 函数体一律经 `emitBody`（不是裸 `emitStatement` 循环）：`你：` 自机台词的
   // 换色/复原合并只住在 `emitBody` 里，绕开它就等于函数体内 `你：` 静默降级成旁白。
@@ -1695,14 +1703,16 @@ function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext
 }
 
 /**
- * 形参注入：在既有别名表之上叠一层「形参名 → `ARG` / `ARG:<k>`」（形参优先）。
+ * 形参注入：在既有别名表之上叠一层「形参名 → 位置视图记号」（形参优先）。
+ * `名字$`（字符串视图）与 `名字`（数值视图）各按声明位绑 `ARGS:<k>` / `ARG:<k>`
+ * （`$` 已在标识符字符集里，故 `名字$` 在函数体内按整词扫描，同 `实参$`）。
  * 无参 → 原样返回（既有产物逐字节不变）。
  */
 function withFunctionParams(aliases: AliasTable, params: readonly string[], line: number): AliasTable {
   if (params.length === 0) return aliases;
   const out = new Map(aliases);
   params.forEach((name, i) => {
-    out.set(name, { value: { kind: 'variable', text: argumentToken(i) }, readonly: false, line });
+    out.set(name, { value: { kind: 'variable', text: paramDeclToken(name, i) }, readonly: false, line });
   });
   return out;
 }
@@ -2640,6 +2650,7 @@ function exprCtx(ctx: BodyContext, loc: { line: number; column: number }): ExprC
     report: (d: SugarDiagnostic) => ctx.sink.report(d),
     loc,
     charNo: ctx.frontMatter.charNo,
+    argSlotCount: ctx.argSlotCount,
   };
 }
 

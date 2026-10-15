@@ -28,10 +28,22 @@ import type { KojoFaceTable } from '@kojo/plugin-api';
 /**
  * `类型:` 命名参数 → `%LOCALS%` 段（规范 §3.2 命名参数表）。
  * 键 = 语法层 `类型:` 取值，值 = 段文本。
+ *
+ * 四词一族中文主形（v1.7 语感统一）：`普通指令 / 副指令 / 自定指令 / 自定副指令`。
+ *
+ * **`COM` / `SCOM` 是引擎令牌**（会进生成函数名的 `${com}` 段，如 `_MESSAGE_COM_` /
+ * `_MESSAGE_SCOM_`），必须在 adapter 表内**显式保留映射**——老脚本 `类型: COM` / `类型: SCOM`
+ * 继续逐字节产原产物。它们**排在首位**：转译器取 `Object.keys(首键)` 作缺省段
+ * （缺省 = COM）、糖投影按首键回写声明键，两者据此与既有口径**逐字节一致**；
+ * `类型:` 补全面板按 CJK-primary 口径滤掉这两个纯 ASCII 键（不进列表）。
  */
 const LOCALS_SEGMENTS: Readonly<Record<string, string>> = {
+  // 引擎令牌（隐藏兼容键，缺省段 / 投影回写用；不进补全面板）
   COM: 'COM',
   SCOM: 'SCOM',
+  // 中文主形（补全面板只显示这四个，顺序即规范 §3.2 的声明序）
+  普通指令: 'COM',
+  副指令: 'SCOM',
   自定指令: 'CUSTOM_COM',
   自定副指令: 'CUSTOM_SCOM',
 };

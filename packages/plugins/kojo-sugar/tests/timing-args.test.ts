@@ -194,7 +194,7 @@ describe('§3.2 参数: · 取值校验（非法即 error，不出半个非法�
     expect(errs[0]!.loc?.line).toBe(2); // 指回块头那一行
   });
 
-  it('非法：`ARGS:2` / `ARG:x` / 空令牌 / 中文令牌 一律拒绝', () => {
+  it('非法：`ARGS:2` / `ARG:x` / 空令牌 / 非令牌中文词 一律拒绝', () => {
     for (const v of ['ARGS:2', 'ARG:x', 'ARG,', 'ARG,,ARG:1', '她', 'LOCAL', 'ARG1', 'ARG:1,FOO']) {
       expect(errMsgs(withParam(v)), `"${v}"`).not.toEqual([]);
     }
@@ -221,6 +221,52 @@ describe('§3.2 参数: · 取值校验（非法即 error，不出半个非法�
     const { erb, diagnostics } = t('角色: 12\n时机 事件 1 参数: ARG 参数: ARG,ARG:1：\n    「嗯。」\n');
     expect(diagnostics).toEqual([]);
     expect(head(erb, 'M_KOJO_EVENT_K12_1')).toBe('@M_KOJO_EVENT_K12_1(ARG)');
+  });
+});
+
+/* ============================================================================ */
+/* 中文主形令牌（v1.7）：`实参` / `实参$` + **全局 1 基**索引                      */
+/* ============================================================================ */
+
+describe('§3.2 参数: · 中文主形令牌（v1.7 表层）', () => {
+  const withParam = (v: string) => `角色: 12\n时机 事件 1 参数: ${v}：\n    「嗯。」\n`;
+
+  it('中文主形归一为引擎记号：`实参`/`实参:2`/`实参$`/`实参$:2` → `ARG`/`ARG:1`/`ARGS`/`ARGS:1`（全局 1 基）', () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['实参', 'ARG'],
+      ['实参:2', 'ARG:1'],
+      ['实参:3', 'ARG:2'],
+      ['实参$', 'ARGS'],
+      ['实参$:2', 'ARGS:1'],
+      ['实参,实参$:2', 'ARG,ARGS:1'],
+    ];
+    for (const [cn, engine] of cases) {
+      const { erb, diagnostics } = t(withParam(cn));
+      expect(diagnostics, cn).toEqual([]);
+      expect(head(erb, 'M_KOJO_EVENT_K12_1'), cn).toBe(`@M_KOJO_EVENT_K12_1(${engine})`);
+    }
+  });
+
+  it('中文主形与等价旧写法**产物逐字节一致**（归一为同一引擎记号闭集）', () => {
+    expect(t(withParam('实参,实参:2')).erb).toBe(t(withParam('ARG,ARG:1')).erb);
+    expect(t(withParam('实参$')).erb).toBe(t(withParam('ARGS')).erb);
+  });
+
+  it('非法中文索引一律拒绝：`实参:0` / `实参$:0` / `实参:x` / `实参$:x`', () => {
+    for (const v of ['实参:0', '实参$:0', '实参:x', '实参$:x']) {
+      expect(errMsgs(withParam(v)), `"${v}"`).not.toEqual([]);
+    }
+  });
+
+  it('时机体内按声明槽位降糖：`参数: 实参,实参$:2` 的正文里 `{实参:2}` → `{ARG:1}`', () => {
+    const { erb, diagnostics } = t('角色: 12\n时机 事件 1 参数: 实参,实参$:2：\n    「第{实参:2}位」\n');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(erb).toContain('{ARG:1}');
+  });
+
+  it('时机体内引用未声明位置（声明 2 槽位却写 `实参:3`）→ `unknown-identifier` error', () => {
+    const { diagnostics } = t('角色: 12\n时机 事件 1 参数: 实参,实参$:2：\n    「位置3 = {实参:3}」\n');
+    expect(diagnostics.filter((d) => d.severity === 'error').map((d) => d.code)).toContain('unknown-identifier');
   });
 });
 
@@ -322,7 +368,9 @@ describe('KC-2b · 时机命名参数键表（单一真源导出）', () => {
     expect(segmentParamName('未知段')).toBeUndefined();
   });
 
-  it('`参数:` 取值候选为语言层闭集（裸 ARG / 带索引 ARG:<数字>）', () => {
-    expect(TIMING_ARG_TOKENS).toEqual(['ARG', 'ARG:1']);
+  it('`参数:` 取值候选为语言层闭集（裸 ARG / 带索引 ARG:<数字> / 裸 ARGS）', () => {
+    // v1.7：补全据 `argTokenCnLabel` 派生中文主形展示（`实参` / `实参:2` / `实参$`），
+    // 本闭集仍是**引擎记号**真源（编辑器侧零硬编码）。
+    expect(TIMING_ARG_TOKENS).toEqual(['ARG', 'ARG:1', 'ARGS']);
   });
 });

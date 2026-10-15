@@ -20,7 +20,7 @@
  */
 
 import type { AliasValue, KojoLibraryTable, SugarDiagnostic, SugarPosition } from '@kojo/plugin-api';
-import { operatorTable, NOTIN_KEYWORDS, RESERVED_PRONOUNS } from './keywords';
+import { operatorTable, NOTIN_KEYWORDS, RESERVED_PRONOUNS, argPositionToken, VARIADIC_ARG_NUMERIC, VARIADIC_ARG_STRING } from './keywords';
 import { isKnownFunctionName, lowerSystemFunctions } from './system-functions';
 import { resolveEngineGlobal } from './engine-globals';
 import { isIdentPart, isIdentStart } from './identifier-chars';
@@ -46,10 +46,17 @@ export interface ExprContext {
   loc: SugarPosition | null;
   /**
    * 文件头 `角色:` 解析出的**角色编号**（1 号任务 `初回` 用；编号只从 adapter 解析结果来，
-   * 糖里零硬编码）。`初回("key", 初期値)` 的二参形在此值存在时补成三参
+   * `初回("key", 初期値)` 的二参形在此值存在时补成三参
    * `ONCE("key", 初期値, <charNo>)`；缺省 = 不补（原样透传）。
    */
   charNo?: string;
+  /**
+   * 当前作用域声明的**实参槽位数**（v1.7）：用户函数 = 形参表长度；时机 = `参数:`
+   * 归一化后的令牌数（无声明 = 0）。`实参:n` / `实参$:n` 引用位置 `n-1 ≥ 本数`
+   * （未声明槽位）时**报 error、绝不产静默空值**——引擎对未声明槽位的实参是静默丢弃
+   * （读到 0，见规范 §3.2 沙盒实测）。缺省 = 0（任何 `实参` 引用都 fail-visible）。
+   */
+  argSlotCount?: number;
   /**
    * 条件别名展开的**环检测**栈（`别名 A = A ? …` 自引用会让条件降糖无限递归）。
    * 本层内部使用，调用方无需设置（`substituteAliases` 惰性初始化）。
@@ -563,6 +570,49 @@ function lowerPronounsAndAttributes(code: string, ctx: ExprContext): string {
       continue;
     }
 
+    // `实参` / `实参$`（规范 §3.2，v1.7）：不定形参的**具名视图**。
+    // `实参:n → ARG:<n-1>`、`实参$:n → ARGS:<n-1>`（n = **全局 1 基**实参位置）；
+    // 裸 `实参` ≡ `实参:1`、裸 `实参$` ≡ `实参$:1`。整词匹配（`实参表` 不误伤）。
+    // 引用**未声明**位置（n-1 ≥ argSlotCount）→ error（fail-visible；引擎静默丢实参，绝不读空值）。
+    const argEnd = scanIdentifier(code, i);
+    if (argEnd > 0) {
+      const argIdent = code.slice(i, argEnd);
+      if (argIdent === VARIADIC_ARG_NUMERIC || argIdent === VARIADIC_ARG_STRING) {
+        const stringView = argIdent === VARIADIC_ARG_STRING;
+        let j = argEnd;
+        let seg = '';
+        let hadColon = false;
+        if (j < code.length && code[j] === ':') {
+          hadColon = true;
+          const segEnd = scanIndexSegment(code, j + 1);
+          if (segEnd > 0) {
+            seg = code.slice(j + 1, segEnd);
+            j = segEnd;
+          }
+        }
+        const malformed = hadColon && !/^\d+$/.test(seg);
+        const n = malformed ? 1 : Number(seg === '' ? 1 : seg);
+        const slots = ctx.argSlotCount ?? 0;
+        if (malformed || n < 1 || n - 1 >= slots) {
+          const tokenText = code.slice(i, j);
+          ctx.report({
+            code: 'unknown-identifier',
+            severity: 'error',
+            message: malformed
+              ? `「${tokenText}」——\`${argIdent}\` 后的索引只能是**正整数**（从 1 起的全局实参位置），如 \`${argIdent}:1\`、\`${argIdent}:3\`。`
+              : `「${tokenText}」引用的是实参表第 ${n} 个位置，但当前作用域只声明了 ${slots} 个实参槽位（时机用「参数:」、函数用形参表声明）——引擎对**未声明**槽位的实参是静默丢弃（读到 0），故这里拒绝生成、不写空值。请补声明或改用已声明的名字。`,
+            loc: ctx.loc,
+          });
+          out += tokenText;
+          i = j;
+          continue;
+        }
+        out += argPositionToken(stringView, n - 1);
+        i = j;
+        continue;
+      }
+    }
+
     // 标识符（可能是原生 ERB 变量引用 / 函数名 / 关键字）
     const end = scanIdentifier(code, i);
     if (end > 0) {
@@ -787,6 +837,17 @@ export function expandTarget(raw: string, ctx: ExprContext): string | null {
       return null;
     }
     return aliasValueToExpression(alias.value);
+  }
+  // `实参` / `实参$`（及其 `:n` 形）是**只读实参视图**，不能作为赋值目标（v1.7：
+  // 关键字后接 `=` 即拒绝——避免把「实参」当成一个可写变量名静默吞掉）。
+  if (/^实参(\$)?(:\d+)?$/.test(ident)) {
+    ctx.report({
+      code: 'unknown-identifier',
+      severity: 'error',
+      message: `「${ident}」是实参视图（\`实参:n\` / \`实参$:n\`），不能作为赋值目标；要写引擎槽位请直接用原生 \`ARG\` / \`ARGS\`。`,
+      loc: ctx.loc,
+    });
+    return null;
   }
   // 普通左值：只做运算符/代词降糖（左值一般是变量引用）
   return lowerExpression(ident, ctx);

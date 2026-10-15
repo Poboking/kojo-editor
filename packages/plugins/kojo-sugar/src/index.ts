@@ -766,6 +766,8 @@ export {
   // KC-2b：时机命名参数键表（单一真源）——宿主 Monaco 补全从本包派生键/取值候选。
   TIMING_NAMED_PARAMS,
   TIMING_ARG_TOKENS,
+  // v1.7：实参令牌中文主形（`参数:` 补全面板据引擎记号**派生**展示，编辑器侧零硬编码）。
+  argTokenCnLabel,
   type TimingNamedParamSpec,
   type TimingParamValueSource,
   type SugarEditorLexicon,

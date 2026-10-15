@@ -41,6 +41,7 @@ import type {
   WhenExpr,
 } from '@kojo/plugin-api';
 import {
+  argTokenToEngineToken,
   canonicalTimingParamName,
   CONT_MARKS,
   HEAD_DECL_KEYS,
@@ -952,41 +953,45 @@ export const RESERVED_SECTION_NAMES: ReadonlyMap<string, SectionPreset> = new Ma
 /* ------------------------------ `参数:` 声明校验 ------------------------------ */
 
 /**
- * 合法的形参令牌（规范 §3.2；引擎侧实参位置记号）：
- * - `ARG` / `ARG:<数字>`：标量实参；
- * - `ARGS`（**裸，不带 `:<数字>`**）：整组实参记号——引擎以
- *   `TRYCALLFORM …_K{No}_%ARGS:1%(ARGS:2,ARG:3,ARG:4)` 形态调用，语料侧的对应声明
- *   就是 `(ARGS,ARG,ARG:1)`（实测 `個人口上/030 Eiki [映姫]/映姫様/M_KOJO_K30_IMAGE.ERB:12`；
- *   引擎自身 1400+ 处同形）。`ARGS:<数字>` 仍是非法取值（规范 §3.2 明文）。
+ * 合法的形参令牌（规范 §3.2；引擎侧实参位置记号）——**中文主形 + 隐藏兼容别名**：
+ * - `实参` / `实参:<数字>`：数值视图（1 基索引）；等价 `ARG` / `ARG:<数字>`（旧写法，兼容）；
+ * - `实参$`：字符串视图（整组实参记号，位置 0）；等价裸 `ARGS`（旧写法，兼容）。
+ *   带索引的字符串视图只开放中文写法 `实参$:<数字>` → 规范化为 `ARGS:<n-1>`
+ *   （手写原生 `ARGS:<数字>` 仍非法，规范 §3.2 L271 明文）。
+ *
+ * 归一化单一真源见 `argTokenToEngineToken`（`keywords.ts`）。
  */
-const TIMING_ARG_TOKEN_RE = /^(?:ARG(?::\d+)?|ARGS)$/;
-
 /** `参数:` 校验结果（`decl` = 规范化声明串，逗号分隔、无空白；codegen 逐字转发用） */
 export type TimingArgsCheck =
   | { ok: true; decl: string; tokens: readonly string[] }
   | { ok: false; reason: string };
 
 /**
- * 校验时机块头 `参数:` 的取值（规范 §3.2，v1.5）。
+ * 校验时机块头 `参数:` 的取值（规范 §3.2，v1.5/v1.6）。
  *
- * 口径：**逗号分隔**（半角 `,` 与全角 `，` 均可）的令牌序列，每支恰为 `ARG` 或
- * `ARG:<数字>`；除此之外一律不认（`FOO` / `ARGS:2` / 空串 / 空令牌皆错）。
- * 纯函数——诊断由调用方（parser）落，词法层不碰 sink。
+ * 口径：**逗号分隔**（半角 `,` 与全角 `，` 均可）的令牌序列，每支经
+ * `argTokenToEngineToken` 归一为引擎记号（`ARG` / `ARG:<数字>` / `ARGS`）——
+ * 中文主形（`实参` / `实参:<数字>` / `实参$` / `实参$:<数字>`）与旧写法
+ * （`ARG` / `ARG:<数字>` / 裸 `ARGS`）都收，其余一律不认（`FOO` / `ARGS:2` /
+ * `实参:0` / 空串 / 空令牌皆错）。纯函数——诊断由调用方（parser）落，词法层不碰 sink。
  */
 export function checkTimingArgsDeclaration(value: string): TimingArgsCheck {
   const trimmed = value.trim();
-  if (trimmed.length === 0) return { ok: false, reason: '「参数:」后面是空的——要声明形参就写令牌（如 `参数: ARG,ARG:1`），不需要形参就整个子句别写。' };
-  const tokens = trimmed.split(/[,，]/).map((t) => t.trim());
-  const bad = tokens.find((t) => !TIMING_ARG_TOKEN_RE.test(t));
-  if (bad !== undefined) {
+  if (trimmed.length === 0) return { ok: false, reason: '「参数:」后面是空的——要声明形参就写令牌（如 `参数: 实参, 实参:2`），不需要形参就整个子句别写。' };
+  const raw = trimmed.split(/[,，]/).map((t) => t.trim());
+  const engine = raw.map((t) => argTokenToEngineToken(t));
+  const badIdx = engine.findIndex((t) => t === null);
+  if (badIdx >= 0) {
+    const bad = raw[badIdx]!;
     return {
       ok: false,
       reason:
-        '`参数:` 只接受逗号分隔的实参令牌 `ARG` 或 `ARG:<数字>`（如 `参数: ARG,ARG:1`），收到「' +
+        '`参数:` 只接受逗号分隔的实参令牌 `实参` / `实参:<数字>` / `实参$`（旧写法 `ARG` / `ARG:<数字>` / 裸 `ARGS` 仍兼容），收到「' +
         (bad.length === 0 ? '（空令牌）' : bad) +
         '」。',
     };
   }
+  const tokens = engine as string[];
   return { ok: true, decl: tokens.join(','), tokens };
 }
 

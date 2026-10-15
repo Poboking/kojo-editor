@@ -149,10 +149,12 @@ describe('KojoFaceTable · 分野模板（规范 §3.2 / 附录 C）', () => {
     expect(table.faces['事件']!.messageCheck).toBeUndefined();
   });
 
-  it('`类型:` 段映射：COM 默认 + SCOM + 两个自定（规范 §3.2 命名参数表）', () => {
+  it('`类型:` 段映射：引擎令牌 COM/SCOM（缺省与投影用）+ 四词一族中文主形（规范 §3.2 命名参数表）', () => {
     expect(table.faces['指令']!.segments?.com).toEqual({
       COM: 'COM',
       SCOM: 'SCOM',
+      普通指令: 'COM',
+      副指令: 'SCOM',
       自定指令: 'CUSTOM_COM',
       自定副指令: 'CUSTOM_SCOM',
     });

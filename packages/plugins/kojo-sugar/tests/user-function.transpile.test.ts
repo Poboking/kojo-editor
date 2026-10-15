@@ -276,6 +276,56 @@ describe('B4 用户函数 · 命名模板来自 adapter', () => {
 });
 
 /* ============================================================================ */
+/* ③C 实参视图（`实参` / `实参$`）与 `$` 结尾形参（v1.7 表层）                      */
+/* ============================================================================ */
+
+describe('B4 用户函数 · 实参视图与 `$` 结尾形参', () => {
+  it('`$` 结尾形参 = **字符串视图**：`函数 取串(甲, 乙$)：` 声明段 `(ARG,ARGS:1)`', () => {
+    const { erb, diagnostics } = t('角色: 12\n函数 取串(甲, 乙$)：\n    返回 乙$\n');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(erb).toContain('@M_KOJO_K12_取串(ARG,ARGS:1)');
+    expect(erb).toContain('\tRETURNF ARGS:1');
+  });
+
+  it('`$` 结尾形参别名注入：函数体内 `乙$` 读写皆落 `ARGS:1`', () => {
+    const { erb } = t('角色: 12\n函数 追加(甲, 乙$)：\n    乙$ = 乙$ + "！"\n    返回 乙$\n');
+    expect(erb).toContain('\tARGS:1 = ARGS:1 + "！"');
+    expect(erb).toContain('\tRETURNF ARGS:1');
+  });
+
+  it('`实参:n`（**全局 1 基**）→ `ARG:<n-1>`：`实参:2` → `ARG:1`，`实参:3` → `ARG:2`', () => {
+    const { erb, diagnostics } = t('角色: 12\n函数 取三(甲, 乙, 丙)：\n    返回 实参:2 + 实参:3\n');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(erb).toContain('\tRETURNF ARG:1 + ARG:2');
+  });
+
+  it('`实参$:n` → `ARGS:<n-1>`（`实参$:2` → `ARGS:1`）；裸形 ≡ `:1`', () => {
+    expect(t('角色: 12\n函数 取串2(甲, 乙)：\n    返回 实参$:2\n').erb).toContain('\tRETURNF ARGS:1');
+    expect(t('角色: 12\n函数 裸(甲)：\n    返回 实参 + 实参$\n').erb).toContain('\tRETURNF ARG + ARGS');
+  });
+
+  it('引用**未声明**位置（`实参:3` 而只声明 1 个形参）→ `unknown-identifier` error，不写空值', () => {
+    const res = t('角色: 12\n函数 单参(甲)：\n    返回 实参:3\n');
+    expect(res.diagnostics.filter((d) => d.severity === 'error').map((d) => d.code)).toContain('unknown-identifier');
+    expect(res.erb).not.toContain('RETURNF ARG:2');
+  });
+
+  it('实参视图作赋值目标（`实参 = 5` / `实参$:2 = 5`）→ error，不当可写变量静默吞', () => {
+    for (const bad of ['实参 = 5', '实参$:2 = 5']) {
+      const res = t(`角色: 12\n函数 写(甲, 乙)：\n    ${bad}\n`);
+      expect(res.diagnostics.filter((d) => d.severity === 'error').map((d) => d.code)).toContain('unknown-identifier');
+    }
+  });
+
+  it('老写法 `ARG` / `ARGS` 在函数体内**原样透传**（隐藏兼容别名，产物零位移）', () => {
+    const { erb, diagnostics } = t('角色: 12\n函数 老(甲)：\n    甲 = ARG + 1\n    返回 ARGS\n');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(erb).toContain('\tARG = ARG + 1');
+    expect(erb).toContain('\tRETURNF ARGS');
+  });
+});
+
+/* ============================================================================ */
 /* ⑦ 自机色（B1）在函数体内同样吃 adapter 兜底                                   */
 /* ============================================================================ */
 

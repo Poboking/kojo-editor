@@ -5,7 +5,8 @@
  * 桩 monaco / 桩 model / 桩 adapter 表（不引真实 monaco-editor 运行时）。覆盖：
  * - 分野令牌之后给**键**候选（`成否:` / `类型:` / `参数:`），`kind` = `Property`；
  * - 键之后给**取值**候选：`成否:` 取 adapter `successFlag.values`（公开面）、
- *   `类型:` 取该分野模板 `segments`、`参数:` 取语言层闭集 `ARG` / `ARG:1`；
+ *   `类型:` 取该分野模板 `segments`（CJK-primary：有中文键即滤掉纯 ASCII 引擎令牌）、
+ *   `参数:` 取语言层闭集 `TIMING_ARG_TOKENS` 派生的**中文主形** `实参` / `实参:2` / `实参$`；
  * - 隐藏英文别名 `args` 不进补全列表；前缀过滤；缺 `faceTable` / 块头已收尾 ⇒ 零候选。
  */
 
@@ -48,7 +49,18 @@ const FACE_TABLE: KojoFaceTable = {
     初见: { template: 'M_KOJO_K{n}_HATSUMI' },
     指令: {
       template: 'M_KOJO{t}_MESSAGE_${com}_K{n}_{i}',
-      segments: { com: { COM: 'COM', SCOM: 'SCOM', 自定指令: 'CUSTOM_COM' } },
+      // 贴合生产形状（eraTW adapter 的 `LOCALS_SEGMENTS`）：引擎令牌排在首位（缺省 / 投影用）、
+      // 中文主形随后（CJK-primary 过滤后即补全面板所见）。
+      segments: {
+        com: {
+          COM: 'COM',
+          SCOM: 'SCOM',
+          普通指令: 'COM',
+          副指令: 'SCOM',
+          自定指令: 'CUSTOM_COM',
+          自定副指令: 'CUSTOM_SCOM',
+        },
+      },
     },
   },
   successFlag: { target: 'TFLAG:192', values: { 游戏判定: 0, 一定成功: 1, 一定失败: -1, 不执行: -2 } },
@@ -117,18 +129,18 @@ describe('KC-2b · 取值联动（kind = EnumMember）', () => {
     expect(items[0]!.detail).toBe('成否 取值');
   });
 
-  it('`类型: ` → 该分野模板 `segments`（指令 → COM / SCOM / 自定指令）', () => {
+  it('`类型: ` → 该分野模板 `segments` 的中文主形（指令 → 普通指令 / 副指令 / 自定指令 / 自定副指令）', () => {
     const items = provide('时机 指令 310 类型: ', atEnd('时机 指令 310 类型: '));
-    expect(labels(items)).toEqual(['COM', 'SCOM', '自定指令']);
+    expect(labels(items)).toEqual(['普通指令', '副指令', '自定指令', '自定副指令']);
   });
 
   it('`类型: ` 在无该段的分野（初见）→ 零候选（不猜）', () => {
     expect(provide('时机 初见 类型: ', atEnd('时机 初见 类型: '))).toEqual([]);
   });
 
-  it('`参数: ` → 语言层闭集 `ARG` / `ARG:1`（多值拼接不做）', () => {
+  it('`参数: ` → 语言层闭集 `TIMING_ARG_TOKENS` 派生的**中文主形** `实参` / `实参:2` / `实参$`（多值拼接不做）', () => {
     const items = provide('时机 指令 310 参数: ', atEnd('时机 指令 310 参数: '));
-    expect(labels(items)).toEqual(['ARG', 'ARG:1']);
+    expect(labels(items)).toEqual(['实参', '实参:2', '实参$']);
   });
 
   it('取值前缀过滤：`成否: 游` → 只给 `游戏判定`', () => {
@@ -138,7 +150,7 @@ describe('KC-2b · 取值联动（kind = EnumMember）', () => {
 
   it('多命名参数同头（`成否: 游戏判定 类型: `）→ 值区按键识别，给 `类型:` 取值', () => {
     const items = provide('时机 指令 310 成否: 游戏判定 类型: ', atEnd('时机 指令 310 成否: 游戏判定 类型: '));
-    expect(labels(items)).toEqual(['COM', 'SCOM', '自定指令']);
+    expect(labels(items)).toEqual(['普通指令', '副指令', '自定指令', '自定副指令']);
   });
 });
 
