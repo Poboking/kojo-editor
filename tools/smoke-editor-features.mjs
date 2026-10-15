@@ -48,9 +48,9 @@ const PROJ_DIR = path.join(TEMP_ROOT, RUN_TAG);
 const WEBVIEW2_DIR = path.join(TEMP_ROOT, `${RUN_TAG}-webview2`);
 
 /** 合成文件路径（探针一切断言的锚点） */
-const ERB_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', '糖例', 'M_KOJO_K1_口上.ERB'];
+const ERB_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', '稿例', 'M_KOJO_K1_口上.ERB'];
 const LONG_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', '長文.ERB'];
-const KOJO_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', '糖例', 'lift-demo.kojo'];
+const KOJO_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', '稿例', 'lift-demo.kojo'];
 const ERB_PATH = path.join(PROJ_DIR, ...ERB_REL);
 const LONG_PATH = path.join(PROJ_DIR, ...LONG_REL);
 const KOJO_PATH = path.join(PROJ_DIR, ...KOJO_REL);
