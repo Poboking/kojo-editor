@@ -26,3 +26,5 @@ export {
   loadEratwInstructionTable,
   parseTrainCsv,
 } from './instruction-table';
+// ZH-F1 批：基础库 / 常用函数名表（additive；与指令表同形——adapter 建纯数据表，糖层只查）
+export { EMPTY_LIBRARY_TABLE, createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS } from './library-table';

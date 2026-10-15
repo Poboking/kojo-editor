@@ -25,6 +25,7 @@ import type {
   KojoFaceTable,
   KojoFaceTemplate,
   KojoInstructionTable,
+  KojoLibraryTable,
   RandomBlock,
   RandomInline,
   RawFunctionBlock,
@@ -180,6 +181,13 @@ export interface CodegenOptions {
    * 查不到报 `timing-instruction-unknown` 并**保留原文**（不猜、不换成编号）。
    */
   instructionTable?: KojoInstructionTable;
+  /**
+   * 基础库 / 常用函数名表（adapter 提供；游戏知识；ZH-F1）。
+   * 表达式里的**中文函数名调用形态**经本表（系统函数表优先，本表次之）降为原生 ERB
+   * 函数名；缺省 = 该适配器未声明 → 未收录的中文调用形态原样保留并报
+   * `function-name-unknown`（warning，fail-visible）。
+   */
+  libraryTable?: KojoLibraryTable;
   sink: DiagnosticSink;
   options: SugarTranspileOptions;
 }
@@ -245,6 +253,7 @@ export function codegen(
       dictionary: opts.dictionary,
       faceTable: opts.faceTable,
       instructionTable: opts.instructionTable,
+      libraryTable: opts.libraryTable,
       sink: opts.sink,
     });
   }
@@ -269,6 +278,7 @@ export function codegen(
         hooks: opts.faceTable?.customHooks,
         range: opts.faceTable?.customComRange,
         instructionTable: opts.instructionTable,
+        libraryTable: opts.libraryTable,
         occupied,
         allocated,
       });
@@ -416,6 +426,8 @@ interface TimingEmitContext {
   faceTable?: KojoFaceTable;
   /** 指令名表（adapter 提供；HK-11② 中文指令名 → 编号，缺省/查不到 → fail-closed） */
   instructionTable?: KojoInstructionTable;
+  /** 基础库 / 常用函数名表（adapter；ZH-F1：中文函数名调用形态 → 原生 ERB 名） */
+  libraryTable?: KojoLibraryTable;
   sink: DiagnosticSink;
 }
 
@@ -512,6 +524,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
     aliases: ctx.aliases,
     dictionary: ctx.dictionary,
     instructionTable: ctx.instructionTable,
+    libraryTable: ctx.libraryTable,
     sink: ctx.sink,
     frontMatter: ctx.frontMatter,
     allocator: new SlotAllocator(),
@@ -768,6 +781,7 @@ function emitMessageCheck(
     const exprCtx: ExprContext = {
       aliases: ctx.aliases,
       dictionary: ctx.dictionary,
+      libraryTable: ctx.libraryTable,
       report: (d) => ctx.sink.report(d),
       loc: mc.loc.start,
     };
@@ -839,6 +853,8 @@ interface CustomEmitContext {
   range?: { min: number; max: number };
   /** 指令名表（adapter；P-5：体内 `当/是` 的中文 CASE 值查此表，同时机头口径） */
   instructionTable?: KojoInstructionTable;
+  /** 基础库 / 常用函数名表（adapter；ZH-F1） */
+  libraryTable?: KojoLibraryTable;
   /** 全文档占号集合（原生 `@` 直通块 + 显式 `编号:`），分配时排除 */
   occupied: Set<number>;
   /** 本次 codegen 已自动分配的编号（防同批自撞车） */
@@ -995,6 +1011,7 @@ function emitCustomCommand(em: Emitter, node: CustomCommandBlock, ctx: CustomEmi
       aliases: ctx.aliases,
       dictionary: ctx.dictionary,
       instructionTable: ctx.instructionTable,
+      libraryTable: ctx.libraryTable,
       sink: ctx.sink,
       frontMatter: ctx.frontMatter,
       allocator: new SlotAllocator(),
@@ -1037,6 +1054,7 @@ function emitCustomHook(
   const cond = lowerExpression(condition, {
     aliases: ctx.aliases,
     dictionary: ctx.dictionary,
+    libraryTable: ctx.libraryTable,
     report: (d) => ctx.sink.report(d),
     loc: null,
   });
@@ -1055,6 +1073,8 @@ interface BodyContext {
   dictionary?: DictionaryLookup;
   /** 指令名表（adapter；P-5：`当/是` 的中文 CASE 值查此表得编号） */
   instructionTable?: KojoInstructionTable;
+  /** 基础库 / 常用函数名表（adapter；ZH-F1） */
+  libraryTable?: KojoLibraryTable;
   sink: DiagnosticSink;
   frontMatter: SugarFrontMatter;
   allocator: SlotAllocator;
@@ -1462,6 +1482,7 @@ function resolveCaseValueInstructionName(
   const lowered = lowerExpression(trimmed, {
     aliases: ctx.aliases,
     dictionary: ctx.dictionary,
+    libraryTable: ctx.libraryTable,
     report: (d) => {
       if (d.severity === 'warning') ctx.sink.report(d);
       else probeErrors.push(d);
@@ -1708,6 +1729,7 @@ function exprCtx(ctx: BodyContext, loc: { line: number; column: number }): ExprC
   return {
     aliases: ctx.aliases,
     dictionary: ctx.dictionary,
+    libraryTable: ctx.libraryTable,
     report: (d: SugarDiagnostic) => ctx.sink.report(d),
     loc,
   };

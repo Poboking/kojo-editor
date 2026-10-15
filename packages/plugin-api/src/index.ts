@@ -147,6 +147,7 @@ export type {
   KojoFaceTable,
   KojoFaceTemplate,
   KojoInstructionTable,
+  KojoLibraryTable,
   ScaffoldOptions,
   ScaffoldResult,
   StateModel,

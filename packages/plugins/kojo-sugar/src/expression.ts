@@ -19,11 +19,12 @@
  *    `family-name-unknown`（**warning**，产物照旧；口径见 `reportUnlistedFamilyName`）。
  */
 
-import type { AliasValue, SugarDiagnostic, SugarPosition } from '@kojo/plugin-api';
+import type { AliasValue, KojoLibraryTable, SugarDiagnostic, SugarPosition } from '@kojo/plugin-api';
 import { operatorTable, NOTIN_KEYWORDS, RESERVED_PRONOUNS } from './keywords';
-import { lowerSystemFunctions } from './system-functions';
+import { isKnownFunctionName, lowerSystemFunctions } from './system-functions';
 import { resolveEngineGlobal } from './engine-globals';
 import { isIdentPart, isIdentStart } from './identifier-chars';
+import { CJK } from './lexer';
 import type { AliasTable, DictionaryLookup } from './types';
 
 /** 降糖上下文 */
@@ -32,6 +33,13 @@ export interface ExprContext {
   aliases: AliasTable;
   /** 变量字典（adapter 提供；缺省 = 无字典，属性/裸标识符一律报错） */
   dictionary?: DictionaryLookup;
+  /**
+   * 基础库 / 常用函数名表（adapter 提供；游戏知识；ZH-F1）。
+   * 本层把**中文函数名调用形态**降为原生 ERB 函数名（系统函数表优先，本表次之）；
+   * 缺省 = 该适配器未声明 → 未收录的中文调用形态**原样保留**并报
+   * `function-name-unknown`（**warning**，fail-visible）。
+   */
+  libraryTable?: KojoLibraryTable;
   /** 诊断收集器 */
   report: (diag: SugarDiagnostic) => void;
   /** 诊断定位（表达式子串的起始位置；列偏移由调用方补齐） */
@@ -199,7 +207,8 @@ const ATTRIBUTE_PREFIX: ReadonlyMap<string, string> = new Map([
  */
 export function lowerExpression(raw: string, ctx: ExprContext): string {
   // ---- 0. 系统函数名中文化（HK-11①；先于一切，见模块头注顺序说明） ----
-  const named = lowerSystemFunctions(raw);
+  // 系统函数表优先，次查 adapter 基础库函数表（ZH-F1）：两者都认的调用形态降为原生名。
+  const named = lowerSystemFunctions(raw, ctx.libraryTable);
 
   // ---- 0b. 别名替换（先于一切降糖） ----
   const substituted = substituteAliases(named, ctx).text;
@@ -387,8 +396,24 @@ function lowerPronounsAndAttributes(code: string, ctx: ExprContext): string {
         i = j;
         continue;
       }
-      // ERB 运算符关键字 / 函数调用（后随 `(`）——原样保留
-      if (isErbKeyword(ident) || code[end] === '(') {
+      // ERB 运算符关键字——原样保留
+      if (isErbKeyword(ident)) {
+        out += ident;
+        i = end;
+        continue;
+      }
+      // 函数调用形态（后随 `(`）——原样保留；但**中文函数名**若系统表与 adapter 表
+      // 都不认，则报 `function-name-unknown`（**warning**，fail-visible，不猜、不纠，
+      // 产物逐字节照原样）。系统表命中的名字已在 step 0 降为原生名，不会走到这里。
+      if (code[end] === '(') {
+        if (CJK.test(ident) && !isKnownFunctionName(ident, ctx.libraryTable)) {
+          ctx.report({
+            code: 'function-name-unknown',
+            severity: 'warning',
+            message: `「${ident}」是中文函数名调用形态，但既不在系统函数表、也不在当前工程的基础库函数表里——该调用已原样写进产物（引擎多半取不到此函数）。若确认是自定义函数，请改为原生函数名，或确认该名已收录。`,
+            loc: ctx.loc,
+          });
+        }
         out += ident;
         i = end;
         continue;

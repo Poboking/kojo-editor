@@ -979,6 +979,15 @@ export type SugarDiagnosticCode =
    * 直接 error 会误伤；升级判据见 BOARD P-10③）。
    */
   | 'family-name-unknown'
+  /**
+   * ZH-F1：**中文函数名调用形态**（`名字(`）既不在跨游戏语言层的系统函数表
+   * （`SYSTEM_FUNCTION_ALIASES`）也不在该游戏的基础库/常用函数表
+   * （`KojoLibraryTable`）里。
+   * 与 `unknown-identifier` 的分工：后者是"裸标识符谁都认不出"（error）；本码只看
+   * **调用形态**（名字后随 `(`），散文 / 别名 / 变量引用不会命中——**产物照原样输出**
+   * （作者写的名字原样写进 ERB），只是不再静默。**严重度 = warning 起步**（不猜、不纠）。
+   */
+  | 'function-name-unknown'
   /** 规范 §3.5：`X 不在 a 到 b` 的 `X` 含 `+`/`-`/函数调用——会整体求值两次（含 `随机(...)` 时会掷两次）；提示先赋临时变量。 */
   | 'notin-complex-operand'
   /* --- 原生直通（规范 §3.10） --- */

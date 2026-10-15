@@ -26,6 +26,7 @@ import type {
   GameProject,
   KojoFaceTable,
   KojoInstructionTable,
+  KojoLibraryTable,
   Plugin,
   ProjectService,
   SlotRegistry,
@@ -159,17 +160,36 @@ export function createKojoSugarPlugin(): Plugin {
         return undefined;
       };
 
-      /** 统一的转译器构造（字典 + 分野表 + 指令表同源注入；保证各路径行为一致） */
+      /**
+       * 当前适配器的**基础库 / 常用函数名表**（游戏知识；`KojoLibraryTable`；ZH-F1）。
+       *
+       * 与 `instructionTableOf` 同源同生命周期（按 `adapterId` 精确匹配 `game.adapter`
+       * 槽位；纯数据、手工维护，不依赖 `loadProject`）。缺省 = 该适配器未声明 →
+       * 表达式里的中文函数名调用形态只认系统函数表，未收录的仍报
+       * `function-name-unknown`（warning，产物原样，fail-visible）。
+       */
+      const libraryTableOf = (): KojoLibraryTable | undefined => {
+        const current: GameProject | null = project.current();
+        if (!current) return undefined;
+        for (const contribution of slots.query('game.adapter')) {
+          if (contribution.adapter.gameId !== current.adapterId) continue;
+          if (contribution.adapter.kojoLibraryTable) return contribution.adapter.kojoLibraryTable;
+        }
+        return undefined;
+      };
+
+      /** 统一的转译器构造（字典 + 分野表 + 指令表 + 函数名表同源注入；保证各路径行为一致） */
       const makeTranspiler = (
         deps?: Omit<
           Parameters<typeof createSugarTranspileService>[0],
-          'dictionary' | 'faceTable' | 'instructionTable'
+          'dictionary' | 'faceTable' | 'instructionTable' | 'libraryTable'
         >,
       ) =>
         createSugarTranspileService({
           dictionary: dictionaryOf(),
           faceTable: faceTableOf(),
           instructionTable: instructionTableOf(),
+          libraryTable: libraryTableOf(),
           ...(deps ?? {}),
         });
 
@@ -543,8 +563,14 @@ export {
   type SugarLexiconWord,
 } from './keywords';
 export { createSugarTranspileService, type CreateSugarServiceOptions } from './service';
-// HK-11①：系统函数中文别名（单一真源）——宿主 Monaco 层从本包派生高亮/补全
-export { SYSTEM_FUNCTION_ALIASES, lowerSystemFunctions } from './system-functions';
+// HK-11①：系统函数中文别名（单一真源）——宿主 Monaco 层从本包派生高亮/补全。
+// ZH-F1：另导出查表/收录判定（中文函数名 → 原生 ERB 名；系统表 + adapter 表）。
+export {
+  SYSTEM_FUNCTION_ALIASES,
+  lowerSystemFunctions,
+  lookupFunctionName,
+  isKnownFunctionName,
+} from './system-functions';
 // E16：裸引擎全局白名单（`SELECTCOM`/`PREVCOM`/…；判据与实测计数在模块头注）
 export { ENGINE_GLOBAL_IDENTIFIERS, resolveEngineGlobal } from './engine-globals';
 export {

@@ -356,6 +356,31 @@ export interface KojoInstructionTable {
 }
 
 /**
+ * 基础库 / 常用函数名表（游戏知识，只住 adapter；ZH-F1）。
+ *
+ * 与 `KojoInstructionTable` 同形（同一 seam：adapter 建一张**纯数据表**、糖层只查
+ * 不解释）：面向作者可写的**中文函数名** ↔ 游戏基础库里的**原生函数名**。数据源 =
+ * 该游戏的基础库助手与宏（eraTW：`HPH_PRINT` / `TEXTR` / `ASK_YN` …），**静态、手工
+ * 维护、可扩展**，故不随项目文件变化（不依赖 `loadProject`）。
+ *
+ * 消费点：`.kojo` 表达式里的**中文函数名调用形态**（`名字(` → 原生函数名）；未收录的
+ * 中文调用形态**原样保留**并报诊断（fail-visible，绝不猜）。系统函数名（跨游戏语言层，
+ * 见 kojo-sugar 的 `SYSTEM_FUNCTION_ALIASES`）优先于本表。查不到一律 `undefined`，
+ * **绝不猜**（规范 §5.3 精神）。
+ */
+export interface KojoLibraryTable {
+  /** 无表 / 空表 = false */
+  readonly hasTable: boolean;
+  /** 中文名 → 原生 ERB 函数名（无则 `undefined`） */
+  lookupByName(name: string): string | undefined;
+  /**
+   * 原生函数名 → 中文名（反查；**可选能力**——宿主显示层据此本地化，未提供 = 不做）。
+   * 无则 `undefined`。与 `KojoInstructionTable.lookupByNo` 同一"反向查询"位置。
+   */
+  lookupByFunction?(functionName: string): string | undefined;
+}
+
+/**
  * 游戏适配器（槽位 `game.adapter` 的负载）。
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
  */
@@ -390,6 +415,12 @@ export interface GameAdapter {
    * 由 adapter 从当前工程数据填充；糖层只查表不解释。
    */
   readonly kojoInstructionTable?: KojoInstructionTable;
+  /**
+   * 基础库 / 常用函数名表（ZH-F1；可选——中文名 ↔ 原生 ERB 函数名）。
+   * 静态、手工维护（不依赖 `loadProject`）；糖层只查表不解释，未收录中文调用形态
+   * 原样保留并报诊断（fail-visible）。
+   */
+  readonly kojoLibraryTable?: KojoLibraryTable;
   /**
    * 口上包「日文名 → 中文名」对照词典（展示用；游戏/语言知识，只住 adapter）。
    * 消费方（导入向导 / 文件树）据此把日文名展示为「日文（中文）」。缺省 = 不做对照。
