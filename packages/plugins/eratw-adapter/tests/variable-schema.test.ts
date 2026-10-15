@@ -146,6 +146,41 @@ describe('loadEratwVariableSchema', () => {
     expect(typeof none.inputDigest).toBe('string');
     expect(none.inputDigest).not.toBe(a.inputDigest);
   });
+
+  /* ---------------- KC-1：`names`（枚举索引名，供插值补全） ---------------- */
+
+  it('names：由 `byIndex` 枚举该族索引名；缺族 / 未收录 → 空；`lookup` 行为一字不变', async () => {
+    const schema = await loadEratwVariableSchema({
+      io: fakeIo({
+        'CFLAG.csv': '2,好感度\n4,信頼度\n30,好色\n',
+        'Talent.csv': '3,恋慕\n',
+        'CFLAG.als': '5,追加名\n', // 追加名表：新编号也进枚举，且标源为 append
+      }),
+      csvDir: '/game/CSV',
+      log: silentLog,
+    });
+
+    const cflag = schema.names?.('CFLAG') ?? [];
+    expect(cflag.length).toBeGreaterThanOrEqual(4);
+    const byName = new Map(cflag.map((i) => [i.name, i]));
+    expect(byName.get('好感度')).toMatchObject({ index: 2, resolvedIndex: 2, source: 'primary' });
+    expect(byName.get('好色')).toMatchObject({ index: 30, resolvedIndex: 30, source: 'primary' });
+    expect(byName.get('追加名')).toMatchObject({ index: 5, resolvedIndex: 5, source: 'append' });
+
+    // 族名大小写不敏感（与 lookup 同口径）；未收录的族 → 空数组（不猜、不抛）
+    expect((schema.names?.('talent') ?? []).map((i) => i.name)).toEqual(['恋慕']);
+    expect(schema.names?.('NOPE')).toEqual([]);
+
+    // `lookup` 既有行为一字不变（本批只 additive 增一名，不动查表）
+    expect(schema.lookup('CFLAG', 2)).toEqual({
+      name: 'CFLAG',
+      index: 2,
+      description: '好感度',
+      resolvedIndex: 2,
+      source: 'primary',
+    });
+    expect(schema.lookup('CFLAG', 999)).toEqual({ name: 'CFLAG', index: 999 });
+  });
 });
 
 /* ========================= CSV/*.als 追加名表（ALS 批 2026-10-14） =========================

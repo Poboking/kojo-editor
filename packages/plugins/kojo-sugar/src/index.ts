@@ -309,7 +309,7 @@ export function createKojoSugarPlugin(): Plugin {
  *   **收录判定三层都算**（含 `'const'`）：拼错名检测受益于常量表——作者写在 `.ERH`
  *   里的名字是真名，不是拼错。
  */
-const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
+export const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
   'CFLAG',
   'TALENT',
   'ABL',

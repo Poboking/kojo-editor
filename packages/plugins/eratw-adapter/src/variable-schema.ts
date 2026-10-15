@@ -480,5 +480,28 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
         return { name: key, index, description: idxStr, resolvedIndex: constIndex, source: 'const' };
       return { name: key, index };
     },
+    /**
+     * 枚举该族可写的索引名（KC-1；契约 `VariableSchema.names` 的 eraTW 实现）。
+     *
+     * 由 `byIndex`（编号 → 名，天生可枚举）直接产出：每个条目的 `name` = **索引名**
+     * （作者可写的名字），`index`/`resolvedIndex` = 其编号，`source` = 该编号的来源层
+     * （`.csv` 主表 / `.als` 追加名表）。无该族 → 空数组。**不改动 `lookup` 既有行为**。
+     */
+    names(family: string): readonly VariableInfo[] {
+      const table = tables.get(family.toUpperCase());
+      if (!table) return [];
+      const out: VariableInfo[] = [];
+      for (const [idxStr, name] of table.byIndex) {
+        const n = Number(idxStr);
+        const info: VariableInfo = {
+          name,
+          index: Number.isNaN(n) ? idxStr : n,
+          source: table.indexSource.get(idxStr) ?? 'primary',
+        };
+        if (!Number.isNaN(n)) info.resolvedIndex = n;
+        out.push(info);
+      }
+      return out;
+    },
   };
 }

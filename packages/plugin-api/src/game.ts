@@ -156,6 +156,23 @@ export interface VariableSchema {
    */
   readonly inputDigest?: string;
   lookup(variableName: string, index?: number | string): VariableInfo | undefined;
+  /**
+   * 枚举某族**可写的索引名**（**可选能力**，additive）。
+   *
+   * 为什么需要：`lookup` 只能**按名查**，无法枚举；而编辑器补全（`.kojo` 插值里
+   * `{她的<前缀>}` / `{角色N的<前缀>}`，规范 §3.8）要先知道"这族有哪些名字可写"
+   * 才能弹出候选 —— 没有枚举就没法补全。
+   *
+   * 形状（**与 `lookup` 的语义分工**）：每个条目的 `name` = **该族的索引名**
+   * （作者可写的名字，如 `好感度`），`index` / `resolvedIndex` = 其编号，
+   * `source` = 来源层；`description` 若实现提供则作可读说明。条目的 `name` 因此
+   * 与 `lookup(族, 编号)` 的 `name`（= 族名）**语义不同**——枚举法只服务"列出名字"。
+   * 未收录 / 无该族 → 返回空数组（不猜，不抛）。
+   *
+   * 缺省（实现未提供本方法）= **不枚举**：消费方须据此返回空候选（不猜）。
+   * 旧实现零改动仍通过编译。
+   */
+  names?(family: string): readonly VariableInfo[];
 }
 
 /**
