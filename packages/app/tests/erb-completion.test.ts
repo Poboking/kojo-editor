@@ -19,6 +19,8 @@ import {
   installErbCompletion,
   isLineHeadContext,
   memoizedErbFunctionNames,
+  type ErbCompletionDegrade,
+  type ErbCompletionTables,
 } from '../src/monaco/erb-completion';
 
 interface Registered {
@@ -89,6 +91,15 @@ function fakeSchema(): VariableSchema {
     lookup: () => undefined,
     names: (family: string) =>
       family === 'CFLAG' ? [{ name: '好感度', index: 1088, description: '角色好感度' }] : [],
+  } as unknown as VariableSchema;
+}
+
+/** 内容不同的第二张变量 schema（切表可辨；族 `CFLAG` 出另一名字） */
+function fakeSchemaY(): VariableSchema {
+  return {
+    version: 'testY',
+    lookup: () => undefined,
+    names: (family: string) => (family === 'CFLAG' ? [{ name: '恶意', index: 999 }] : []),
   } as unknown as VariableSchema;
 }
 
@@ -293,5 +304,101 @@ describe('EC-1 · memoizedErbFunctionNames（按指纹失效）', () => {
         throw new Error('parser absent');
       })(),
     ).toEqual([]);
+  });
+});
+
+/* ============================== SH-4 · 失效与不静默（三态可复跑） ============================== */
+
+/**
+ * 在同一**已装配句柄**上连续跑三态（满分 → 缺表 → 切表 → 再缺），断言：
+ * - 态 A 满表：`erb-variables` / `erb-functions` 各路出货，零降级；
+ * - 态 B 缺表（`tables = {}`）：该路**零候选** + 降级信号 **可见且只报一次**（连调两次计数仍 1）；
+ * - 态 C 切表：候选**随新表变化**（证明现取、无缓存旧表）；再切空 ⇒ 零候选；
+ *   去重语义 = 一次装配内同一 `(来源, 缺键)` 只报一次 ⇒ 计数不增（不重复刷屏）。
+ */
+function threeStatesErb(
+  provider: Monaco.languages.CompletionItemProvider,
+  setTables: (t: ErbCompletionTables) => void,
+  degrades: ErbCompletionDegrade[],
+): void {
+  const has = (text: string, col: number, label: string): boolean =>
+    provide(provider, text, col).some((i) => labelText(i.label) === label);
+  const countOf = (id: string, key: string): number =>
+    degrades.filter((d) => d.sourceId === id && d.missing === key).length;
+
+  // 态 A：满表 ⇒ 变量 / 函数名各路出货，零降级信号
+  setTables({ variableSchema: fakeSchema(), erbFunctionNames: () => PROJECT_FNS });
+  expect(has('CFLAG:', 7, '好感度')).toBe(true);
+  expect(has('CALL M_KOJO', 11, 'M_KOJO_A')).toBe(true);
+  expect(degrades).toEqual([]);
+
+  // 态 B：缺表 ⇒ 该路零候选 + 信号可见且只报一次
+  setTables({});
+  expect(has('CFLAG:', 7, '好感度')).toBe(false);
+  expect(has('CALL M_KOJO', 11, 'M_KOJO_A')).toBe(false);
+  expect(countOf('erb-variables', 'variableSchema')).toBe(1);
+  expect(countOf('erb-functions', 'erbFunctionNames')).toBe(1);
+  provide(provider, 'CFLAG:', 7);
+  provide(provider, 'CALL M_KOJO', 11);
+  expect(countOf('erb-variables', 'variableSchema')).toBe(1);
+  expect(countOf('erb-functions', 'erbFunctionNames')).toBe(1);
+
+  // 态 C：切表 ⇒ 候选随新表变化（无缓存旧表）
+  setTables({ variableSchema: fakeSchemaY(), erbFunctionNames: () => PROJECT_FNS });
+  expect(has('CFLAG:', 7, '恶意')).toBe(true);
+  expect(has('CFLAG:', 7, '好感度')).toBe(false);
+  setTables({ variableSchema: fakeSchema(), erbFunctionNames: () => PROJECT_FNS });
+  expect(has('CFLAG:', 7, '好感度')).toBe(true);
+  expect(has('CFLAG:', 7, '恶意')).toBe(false);
+  // 再切空 ⇒ 零候选；一次装配内同一 (来源,缺键) 只报一次 ⇒ 计数不增
+  setTables({});
+  expect(has('CFLAG:', 7, '好感度')).toBe(false);
+  expect(countOf('erb-variables', 'variableSchema')).toBe(1);
+}
+
+describe('SH-4 · 依赖表 / 提供者缺席 = 降级不静默（三态可复跑）', () => {
+  it('同一装配句柄内连续跑：满分 → 缺表 → 切表 → 再缺', () => {
+    let tables: ErbCompletionTables = {};
+    const degrades: ErbCompletionDegrade[] = [];
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => tables, (d) => degrades.push(d));
+    threeStatesErb(registered[0]!.provider, (t) => (tables = t), degrades);
+  });
+
+  it('重新 install 一遍 → 同一结论（去重表随装配句柄创建，无跨 install 泄漏也不吞信号）', () => {
+    let tables: ErbCompletionTables = {};
+    const degrades: ErbCompletionDegrade[] = [];
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => tables, (d) => degrades.push(d));
+    threeStatesErb(registered[0]!.provider, (t) => (tables = t), degrades);
+  });
+
+  it('erbFunctionNames 求值抛错 ⇒ 该路零候选 + 降级可见一次（抛错即视为缺）', () => {
+    const degrades: ErbCompletionDegrade[] = [];
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(
+      monaco,
+      () => ({
+        variableSchema: fakeSchema(),
+        erbFunctionNames: () => {
+          throw new Error('parser absent');
+        },
+      }),
+      (d) => degrades.push(d),
+    );
+    const provider = registered[0]!.provider;
+    expect(provide(provider, 'CALL M_KOJO', 11).some((i) => labelText(i.label) === 'M_KOJO_A')).toBe(false);
+    expect(degrades.filter((d) => d.sourceId === 'erb-functions' && d.missing === 'erbFunctionNames')).toHaveLength(1);
+    provide(provider, 'CALL M_KOJO', 11);
+    expect(degrades.filter((d) => d.sourceId === 'erb-functions' && d.missing === 'erbFunctionNames')).toHaveLength(1);
+  });
+
+  it('requires 声明在册：erb-variables→variableSchema、erb-functions→erbFunctionNames（additive 可选字段）', () => {
+    const byId = new Map(ERB_COMPLETION_SOURCES.map((s) => [s.id, s.requires]));
+    expect(byId.get('erb-variables')).toBe('variableSchema');
+    expect(byId.get('erb-functions')).toBe('erbFunctionNames');
+    expect(byId.get('erb-directives')).toBeUndefined();
+    expect(byId.get('erb-labels')).toBeUndefined();
+    expect(byId.get('erb-system-functions')).toBeUndefined();
   });
 });

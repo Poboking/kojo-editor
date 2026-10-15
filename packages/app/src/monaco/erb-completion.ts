@@ -59,8 +59,32 @@ export interface ErbCompletionSourceContext {
 /** 一个补全候选来源（**扩展点**：往 `ERB_COMPLETION_SOURCES` 追加即可） */
 export interface ErbCompletionSource {
   readonly id: string;
+  /**
+   * 该来源依赖的 **adapter 能力键**（**additive** 可选声明；旧来源不写 = 无依赖）。
+   *
+   * 与 kojo 侧同纪律：`mergeSuggestions` 发现该键在当次 `tables` 中**缺席**
+   * （`undefined` / `null`；对 `erbFunctionNames` 这类**函数值**键即「提供者缺席」）时，
+   * **跳过**该来源（零候选，行为与今天一致）**并发出一次可见信号**（不静默）；该来源
+   * `provide` 抛错（如函数提供者求值抛错）同样按此键报一次降级（**抛错即视为缺**）。
+   * 信号经 `onDegrade` 回调 + 一行 `console.warn` 双通道，同一 `(来源 id, 缺键)` 在
+   * **一次装配内只报一次**。
+   */
+  readonly requires?: keyof ErbCompletionTables;
   provide(ctx: ErbCompletionSourceContext): Monaco.languages.CompletionItem[];
 }
+
+/** 一次「补全来源降级」的可断言描述（缺表信号） */
+export interface ErbCompletionDegrade {
+  /** 被跳过（或抛错）的来源 id */
+  readonly sourceId: string;
+  /** 未能满足的依赖：adapter 表键 / 提供者键（缺席或求值抛错） */
+  readonly missing: keyof ErbCompletionTables;
+  /** 一句中文说明（含「缺席 / 抛错」「已跳过」「不猜」） */
+  readonly reason: string;
+}
+
+/** 降级回调（`installErbCompletion` 可选第三参注入；便于测试直接断言，不依赖真 Monaco） */
+export type ErbCompletionDegradeReporter = (degrade: ErbCompletionDegrade) => void;
 
 /* ============================== 行首 / 行中判定 ============================== */
 
@@ -166,6 +190,7 @@ const DIRECTIVES_SOURCE: ErbCompletionSource = {
  */
 const VARIABLES_SOURCE: ErbCompletionSource = {
   id: 'erb-variables',
+  requires: 'variableSchema',
   provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
     return erbVariableCompletionItems(monaco, model, position, tables.variableSchema);
   },
@@ -178,6 +203,7 @@ const VARIABLES_SOURCE: ErbCompletionSource = {
  */
 const FUNCTIONS_SOURCE: ErbCompletionSource = {
   id: 'erb-functions',
+  requires: 'erbFunctionNames',
   provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
     return erbFunctionCompletionItems(monaco, model, position, tables.erbFunctionNames?.());
   },
@@ -266,22 +292,63 @@ function rankKey(item: Monaco.languages.CompletionItem, prefix: string): string 
   return `${boost}|${item.sortText ?? ''}|${label}`;
 }
 
+/**
+ * 报**一次**降级信号（同一 `(来源 id, 缺键)` 在一次装配内只报一次；去重表随装配句柄创建）。
+ * 双通道：`onDegrade` 回调（可断言）+ 一行 `console.warn`（运行时可读）——**不静默**。
+ */
+function reportDegrade(
+  reported: Set<string>,
+  sourceId: string,
+  missing: keyof ErbCompletionTables,
+  onDegrade: ErbCompletionDegradeReporter | undefined,
+  detail: string,
+): void {
+  const dedupKey = `${sourceId}:${missing}`;
+  if (reported.has(dedupKey)) return;
+  reported.add(dedupKey);
+  const reason = `来源 '${sourceId}' 依赖的适配器能力 '${missing}' ${detail}，已跳过该来源（不猜）`;
+  console.warn(`[erb-completion] 降级：${reason}`);
+  onDegrade?.({ sourceId, missing, reason });
+}
+
+/** 某来源的 `requires` 依赖在当次 `tables` 中是否缺席（`undefined` / `null`）；缺席则返回该键 */
+function missingRequirement(
+  source: ErbCompletionSource,
+  tables: ErbCompletionTables,
+): keyof ErbCompletionTables | undefined {
+  const key = source.requires;
+  if (key === undefined) return undefined;
+  const value = tables[key];
+  return value === undefined || value === null ? key : undefined;
+}
+
 /** 依次问各 source，按 label 去重（先注册者胜），再按排名键排序并写回 `sortText` */
 function mergeSuggestions(
   sources: readonly ErbCompletionSource[],
   ctx: ErbCompletionSourceContext,
   prefix: string,
+  reported: Set<string>,
+  onDegrade: ErbCompletionDegradeReporter | undefined,
 ): Monaco.languages.CompletionItem[] {
   const byLabel = new Map<string, Monaco.languages.CompletionItem>();
   for (const source of sources) {
+    // 依赖表缺席：跳过该来源（零候选）+ 发一次可见信号（不静默）
+    const missing = missingRequirement(source, ctx.tables);
+    if (missing !== undefined) {
+      reportDegrade(reported, source.id, missing, onDegrade, '缺席');
+      continue;
+    }
     let items: Monaco.languages.CompletionItem[];
     try {
       items = source.provide(ctx);
     } catch (e: unknown) {
       // source 由外部追加：单个抛错不拖垮整条补全链（退化可见，其余 source 照常出候选）
-      console.warn(
-        `[erb-completion] source '${source.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
-      );
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[erb-completion] source '${source.id}' provide 抛错：${msg}`);
+      // 抛错即视为缺：带 `requires` 的来源按该键报一次降级
+      if (source.requires !== undefined) {
+        reportDegrade(reported, source.id, source.requires, onDegrade, `求值抛错（${msg}）`);
+      }
       continue;
     }
     for (const item of items) {
@@ -302,11 +369,18 @@ function mergeSuggestions(
  * `triggerCharacters` 保守：只取指令记号 `#` 与区间标记 `[`（不打扰常规输入）。
  * `getTables` 每次补全时才调用（表按当前项目 adapter 实时取，同 hover 纪律）。
  * 返回可释放句柄——宿主在编辑器卸载时 `dispose()`。
+ *
+ * `onDegrade`（**可选第三参，additive**——旧调用方零改动）：某来源因依赖表 / 提供者缺席
+ * （或求值抛错）被跳过时**首次**回调一次；去重表随本句柄创建（**不做模块级全局去重**，
+ * 否则第二次 install 会吞掉信号 ⇒ 三态不可复跑）。不传 `onDegrade` 时降级仍以一行
+ * `console.warn` 可见。
  */
 export function installErbCompletion(
   monaco: typeof Monaco,
   getTables: () => ErbCompletionTables,
+  onDegrade?: ErbCompletionDegradeReporter,
 ): Monaco.IDisposable {
+  const reported = new Set<string>();
   return monaco.languages.registerCompletionItemProvider(ERB_LANGUAGE_ID, {
     triggerCharacters: ['#', '['],
     provideCompletionItems(model, position) {
@@ -317,6 +391,8 @@ export function installErbCompletion(
         ERB_COMPLETION_SOURCES,
         { monaco, model, position, range, tables: getTables() },
         prefix,
+        reported,
+        onDegrade,
       );
       return { suggestions };
     },

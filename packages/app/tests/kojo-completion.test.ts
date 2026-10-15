@@ -10,8 +10,14 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
+import type { KojoFaceTable, VariableSchema } from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
-import { KOJO_COMPLETION_SOURCES, installKojoCompletion, type CompletionTables } from '../src/monaco/kojo-completion';
+import {
+  KOJO_COMPLETION_SOURCES,
+  installKojoCompletion,
+  type CompletionDegrade,
+  type CompletionTables,
+} from '../src/monaco/kojo-completion';
 
 interface Registered {
   languageId: string;
@@ -23,7 +29,7 @@ function stubMonaco(): { monaco: typeof Monaco; registered: Registered[] } {
   const registered: Registered[] = [];
   const monaco = {
     languages: {
-      CompletionItemKind: { Variable: 1, Keyword: 2, Operator: 3, Function: 4 },
+      CompletionItemKind: { Variable: 1, Keyword: 2, Operator: 3, Function: 4, EnumMember: 5 },
       registerCompletionItemProvider: (
         languageId: string,
         provider: Monaco.languages.CompletionItemProvider,
@@ -164,5 +170,91 @@ describe('C-1 · tables 缺席（fail-visible，不崩不猜）', () => {
     const hit = items.find((i) => labelText(i.label) === '初见');
     expect(hit).toBeDefined();
     expect(hit!.detail).toBe('M_KOJO_K{n}_HATSUMI');
+  });
+});
+
+/* ============================== SH-4 · 失效与不静默（三态可复跑） ============================== */
+
+/** 合成变量 schema X / Y（内容不同 ⇒ 切表可辨）；族 `CFLAG` 各出一条名字 */
+const schemaX: VariableSchema = {
+  version: 'x',
+  lookup: () => undefined,
+  names: (family) => (family === 'CFLAG' ? [{ name: '甲旗', index: 1, resolvedIndex: 1, source: 'primary' }] : []),
+};
+const schemaY: VariableSchema = {
+  version: 'y',
+  lookup: () => undefined,
+  names: (family) => (family === 'CFLAG' ? [{ name: '乙旗', index: 2, resolvedIndex: 2, source: 'primary' }] : []),
+};
+const faceX: KojoFaceTable = { faces: { 初见: { template: 'M_FACE_X' } } };
+
+/**
+ * 在同一**已装配句柄**上连续跑三态（满分 → 缺表 → 切表 → 再缺），断言：
+ * - 态 A 满表：`kojo-variable` / `kojo-face` 各路出货，零降级；
+ * - 态 B 缺表（`tables = {}`）：该路**零候选** + 降级信号 **可见且只报一次**（连调两次计数仍 1）；
+ * - 态 C 切表：候选**随新表变化**（证明现取、无缓存旧表）；再切空 ⇒ 零候选；
+ *   去重语义 = 一次装配内同一 `(来源, 缺表键)` 只报一次 ⇒ 计数不增（不重复刷屏）。
+ */
+function threeStatesKojo(
+  provider: Monaco.languages.CompletionItemProvider,
+  setTables: (t: CompletionTables) => void,
+  degrades: CompletionDegrade[],
+): void {
+  const has = (text: string, word: string, col: number, label: string): boolean =>
+    provide(provider, text, word, col).some((i) => labelText(i.label) === label);
+  const countOf = (id: string, key: string): number =>
+    degrades.filter((d) => d.sourceId === id && d.missing === key).length;
+
+  // 态 A：满表 ⇒ 变量 / 分野各路出货，零降级信号
+  setTables({ variableSchema: schemaX, faceTable: faceX });
+  expect(has('{她的', '', 4, '甲旗')).toBe(true);
+  expect(has('时机 初', '初', 5, '初见')).toBe(true);
+  expect(degrades).toEqual([]);
+
+  // 态 B：缺表 ⇒ 该路零候选 + 信号可见且只报一次
+  setTables({});
+  expect(has('{她的', '', 4, '甲旗')).toBe(false);
+  expect(countOf('kojo-variable', 'variableSchema')).toBe(1);
+  expect(countOf('kojo-face', 'faceTable')).toBe(1);
+  provide(provider, '{她的', '', 4);
+  provide(provider, '时机 初', '初', 5);
+  expect(countOf('kojo-variable', 'variableSchema')).toBe(1);
+  expect(countOf('kojo-face', 'faceTable')).toBe(1);
+
+  // 态 C：切表 ⇒ 候选随新表变化（无缓存旧表）
+  setTables({ variableSchema: schemaY });
+  expect(has('{她的', '', 4, '乙旗')).toBe(true);
+  expect(has('{她的', '', 4, '甲旗')).toBe(false);
+  setTables({ variableSchema: schemaX });
+  expect(has('{她的', '', 4, '甲旗')).toBe(true);
+  expect(has('{她的', '', 4, '乙旗')).toBe(false);
+  // 再切空 ⇒ 零候选；一次装配内同一 (来源,缺键) 只报一次 ⇒ 计数不增
+  setTables({});
+  expect(has('{她的', '', 4, '甲旗')).toBe(false);
+  expect(countOf('kojo-variable', 'variableSchema')).toBe(1);
+}
+
+describe('SH-4 · 依赖表缺席 = 降级不静默（三态可复跑）', () => {
+  it('同一装配句柄内连续跑：满分 → 缺表 → 切表 → 再缺', () => {
+    let tables: CompletionTables = {};
+    const degrades: CompletionDegrade[] = [];
+    const { monaco, registered } = stubMonaco();
+    installKojoCompletion(monaco, () => tables, (d) => degrades.push(d));
+    threeStatesKojo(registered[0]!.provider, (t) => (tables = t), degrades);
+  });
+
+  it('重新 install 一遍 → 同一结论（去重表随装配句柄创建，无跨 install 泄漏也不吞信号）', () => {
+    let tables: CompletionTables = {};
+    const degrades: CompletionDegrade[] = [];
+    const { monaco, registered } = stubMonaco();
+    installKojoCompletion(monaco, () => tables, (d) => degrades.push(d));
+    threeStatesKojo(registered[0]!.provider, (t) => (tables = t), degrades);
+  });
+
+  it('requires 声明在册：kojo-variable→variableSchema、kojo-face→faceTable（additive 可选字段）', () => {
+    const byId = new Map(KOJO_COMPLETION_SOURCES.map((s) => [s.id, s.requires]));
+    expect(byId.get('kojo-variable')).toBe('variableSchema');
+    expect(byId.get('kojo-face')).toBe('faceTable');
+    expect(byId.get('kojo-lexicon')).toBeUndefined();
   });
 });
