@@ -47,6 +47,7 @@ import {
   endsWithBlockColon,
   lookupKeyword,
   stripBlockColon,
+  WAIT_MARKS,
   TIMING_ARGS_PARAM,
   type KeywordId,
 } from './keywords';
@@ -173,11 +174,14 @@ export type LineClass =
   | { kind: 'text'; raw: string };
 
 /**
- * `空行` / `blank`（可带一个行尾 `续` 类标记）→ 一条"输出一行空行"的语句（规范 §3.3，批 P）。
+ * `空行` / `blank`（可带一个行尾标记）→ 一条"输出一行空行"的语句（规范 §3.3，批 P）。
  *
  * 判据是**整行恰好是这个词**：台词里出现"空行"两个字的写法（`空行是什么`、`「空行」`）
- * 绝不能被当成指令——那会把作者要打印的字变成控制语句。标记只认 `CONT_MARKS` 那一组，
- * `空行 不等待` 一类自造说法不认（宁可作者写 `空行 续`）。
+ * 绝不能被当成指令——那会把作者要打印的字变成控制语句。标记只认 `CONT_MARKS` / `WAIT_MARKS`
+ * 那两组，`空行 不等待` 一类自造说法不认（宁可作者写 `空行` / `空行 续` / `空行 等待`）。
+ *
+ * **默认不等待**（v1.5，对齐语料主流）：`空行` → 裸 `PRINTFORML`；`空行 等待`（`WAIT_MARKS`）
+ * 才落 `PRINTFORMDW`。`续`（`CONT_MARKS`）与默认同义（都 = 不等待），保留以兼容既有写法。
  */
 const BLANK_LINE_RE = /^(空行|blank)(?:[ \t]+(\S+))?$/i;
 
@@ -185,8 +189,9 @@ function matchBlankLine(code: string): { kind: 'blankLine'; wait: boolean } | nu
   const m = BLANK_LINE_RE.exec(code);
   if (!m) return null;
   const mark = m[2];
-  if (mark === undefined) return { kind: 'blankLine', wait: true };
-  return CONT_MARKS.includes(mark) ? { kind: 'blankLine', wait: false } : null;
+  if (mark === undefined) return { kind: 'blankLine', wait: false };
+  if (CONT_MARKS.includes(mark)) return { kind: 'blankLine', wait: false };
+  return WAIT_MARKS.includes(mark) ? { kind: 'blankLine', wait: true } : null;
 }
 
 /** 全大写原生指令判定（规范 §3.10）：`SETCOLOR` / `IF` / `CALL` / `RAND` / `TFLAG:193 = 0` */

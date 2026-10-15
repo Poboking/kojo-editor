@@ -45,10 +45,10 @@ IF LOCAL
 	; 行尾「续」= 不等待，与下一行连打；默认（无「续」）= 等待玩家按键。
 	PRINTFORMW 「……嗯？是谁？」
 	PRINTFORML 她揉着眼睛，从阴影里探出半个脑袋。
-	; 空行（§3.3，v1.4）：`空行` 编译成一条裸 `PRINTFORMW`（这里因为头部写了
-	; `旁白色: 作者色`，所以不带 D），游戏里就是打出一个空行；`空行 续` = 不等待。
+	; 空行（§3.3，v1.5）：`空行` 编译成一条裸 `PRINTFORML`（不等待，对齐语料主流），
+	; 游戏里就是打出一个空行；`空行 等待` 才是等待形（`PRINTFORMDW`）。
 	; 源文件里的空白行仍然只是分隔，不进产物——想让玩家看到空行，必须显式写 `空行`。
-	PRINTFORMW
+	PRINTFORML
 	PRINTFORMW 「%CALLNAME:MASTER%……？%CALLNAME:MASTER%看得见%CALLNAME:TARGET%？」
 	; 插值（§3.4）：三套原生记号统一成 {…}，内容类别由编辑器自动判：
 	;   {她}/{你}          → %CALLNAME:TARGET% / %CALLNAME:MASTER%（字符串）

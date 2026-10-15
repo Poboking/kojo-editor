@@ -1341,14 +1341,17 @@ function detectSpeechText(text: string): boolean {
  * d    = (旁白色 == 默认) 且 (not speech)
  * 后缀 = (d ? "D" : "") + (wait ? "W" : "L")
  * ```
+ * 例外：**空文本体**（`空行`）走上面 `printLine` 里的短路径（`L` / `DW`，无 `D` 归属）。
  */
 function printLine(text: string, speech: boolean, wait: boolean, ctx: BodyContext): string {
+  // **空文本体**（`空行`，规范 §3.3 / 批 P）：空行没有可着色的内容，故 ①忽略 `d`（不落 `D` 后缀）；
+  // ②默认**不等待** → 裸 `PRINTFORML`（对齐真实语料 20,244 : 10）；等待形（`空行 等待`）才落 `PRINTFORMDW`。
+  // 两种形态都**不留尾随空格**：语料里打空行的写法就是裸指令，多一个空格是平白给 diff 与字节自证添噪。
+  if (text.length === 0) return wait ? 'PRINTFORMDW' : 'PRINTFORML';
   const narrationDefault = (ctx.frontMatter.narrationColor ?? '默认') === '默认';
   const d = narrationDefault && !speech;
   const suffix = (d ? 'D' : '') + (wait ? 'W' : 'L');
-  // **空文本体**（`空行`，规范 §3.3 / 批 P）不留尾随空格：语料里打空行的写法就是裸指令
-  // （`PRINTFORMW` / `PRINTL`），多一个空格是平白给 diff 与逐字节自证添噪。
-  return text.length === 0 ? `PRINTFORM${suffix}` : `PRINTFORM${suffix} ${text}`;
+  return `PRINTFORM${suffix} ${text}`;
 }
 
 /**

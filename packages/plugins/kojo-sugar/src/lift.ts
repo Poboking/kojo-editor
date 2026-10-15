@@ -1089,7 +1089,10 @@ function buildWhenSugarFromIdx(
  * PRINT 家族行 → 糖文本行（§5.1 的**逆**算法）。
  *
  * 逆向逻辑（与 `codegen.printLine` 严格互逆）：
- * - `wait=false`（`L` 后缀）→ 行尾加 ` 续`；
+ * - **空文本体**（`空行`）→ `空行`（不等待）/ `空行 等待`（等待）：空行没有可着色的内容，
+ *   故不看 `D` 归属——等待由 `W` 决定（`PRINTFORML` → `空行`、`PRINTFORMDW` → `空行 等待`）；
+ *   表外形态（`PRINTFORMW` / `PRINTFORMDL` 空体）自证会被拦下（产不出原变体），退回跳过。
+ * - 有文本体：`wait=false`（`L` 后缀）→ 行尾加 ` 续`；
  * - `sortByColor`（`D` 后缀）→ 糖里**不额外标注**：糖按"无引号 = 旁白 = 默认色"
  *   自动选 `D`，故旁白文本天然还原为 `D` 系；台词文本（`「` 起）还原为非 `D` 系。
  *
@@ -1102,6 +1105,7 @@ function printLineToSugar(word: string, body: string): string | null {
   if (!variant) return null;
   const text = body.replace(/[ \t\u3000]+$/, '');
   if (hasInlineCondition(text)) return null;
+  if (text.length === 0) return variant.wait ? '空行 等待' : '空行';
   const sugarBody = toSugarText(text);
   return variant.wait ? sugarBody : `${sugarBody} 续`;
 }

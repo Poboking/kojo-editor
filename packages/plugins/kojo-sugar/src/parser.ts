@@ -686,7 +686,7 @@ class BlockParser {
    * `空行` → 一条**文本为空的文本行**（规范 §3.3；批 P）。
    *
    * 不新增 AST 节点：它本来就是"一行文本，只是文本为空"，产物规则与旁白同源
-   * （`wait` 由 `空行` / `空行 续` 决定）。这样做的代价是零扩散——所有遍历 AST 的
+   * （`wait` 由 `空行` / `空行 等待` 决定）。这样做的代价是零扩散——所有遍历 AST 的
    * 地方（转译 / 预览 / 校验 / 高亮）不必为一个词多开一条分支。
    */
   private buildBlankNode(line: LogicalLine, wait: boolean): TextLine {

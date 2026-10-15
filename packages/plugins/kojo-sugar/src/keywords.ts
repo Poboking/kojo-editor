@@ -119,6 +119,13 @@ export const RESERVED_PRONOUNS: readonly string[] = ['她', '你'];
 /** `续`（不等待）标记：中文主形 + 隐藏别名（规范 §3.3） */
 export const CONT_MARKS: readonly string[] = ['续', '~', '⏎', 'cont', 'continue'];
 
+/**
+ * `空行` 的**等待形**标记（规范 §3.3，v1.5）：空行默认**不等待**（裸 `PRINTFORML`，
+ * 对齐语料 20,244 : 10），写了本组标记才落 `PRINTFORMDW`。
+ * 不进 `KEYWORDS`（不是独立语法分组；只由 lexer 的 `空行` 判定消费）。
+ */
+export const WAIT_MARKS: readonly string[] = ['等待', 'wait'];
+
 /** 查询关键字语义 id（大小写敏感的中文 / 小写英文别名） */
 export function lookupKeyword(word: string): KeywordId | undefined {
   return KEYWORDS.get(word);

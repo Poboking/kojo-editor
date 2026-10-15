@@ -15,7 +15,7 @@
  * |---|---|
  * | `PRINTFORMW 「台词」` / `PRINTFORMDL 旁白` | 文本行（`L` 后缀 → 行尾 ` 续`） |
  * | `PRINTL 文本` / `PRINTDW 文本` / `PRINTFORM 片段`（其余输出指令） | **文本行**（非 FORM 系**逐字符原样**，见下） |
- * | 裸指令打空行（`PRINTFORMW` / `PRINTL` / `PRINTDW␠`…） | **一行空行**（读者看到的是剧本节奏） |
+ * | 裸指令打空行（`PRINTFORML` / `PRINTL` / `PRINTDW␠`…） | `空行`（不等待）/ `空行 等待`（`W` 系） |
  * | `IF X` / `ELSEIF X` / `ELSE` | `如果 X：` / `否则如果 X：` / `否则：` |
  * | `ENDIF` | 缩进收束（**不显示**） |
  * | `SELECTCASE X` / `CASE v` / `CASEELSE` | `当 X：` / `是 v：` / `否则：` |
@@ -115,8 +115,9 @@ const CHAR_SCOPED_FAMILIES: ReadonlySet<string> = new Set([
  * - `newline`：是否产生一行（`L` / `W` 后缀）。只有 `newline` 的行，空体才是"打空行"。
  *   `PRINT` / `PRINTD` / `PRINTFORM` / `PRINTFORMD` 无后缀 = **不换行**（拼句片段），
  *   空体时什么都不输出 → 不投影为空行。
- * - `wait`：`W` 等待玩家 → 糖不加标记；`L` 不等待 → 行尾 `续`（规范 §3.3）。
- *   后缀 `续` 的判据 = `newline && !wait`（无换行的片段不能谎称"续行"）。
+ * - `wait`：**有文本体**时 `W` 等待玩家 → 糖不加标记；`L` 不等待 → 行尾 `续`（规范 §3.3）。
+ *   后缀 `续` 的判据 = `newline && !wait`（无换行的片段不能谎称"续行"）。**空体**（打空行）
+ *   不看 `D` 归属、只看 `wait`：不等待 → `空行`；等待 → `空行 等待`。
  *
  * `D` 后缀（默认色 / 旁白）不单独标注：糖按引号自动判定作者色（规范 §1.3、§3.3）。
  *
@@ -583,17 +584,17 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         // （FORM 系）+ **4.6 万行**（非 FORM 系：`PRINTL` 48%、`PRINTW` 97.4%、
         // `PRINTDW` 99.1%、`PRINTDL` 57.1% 为空体），且**形态 100% 是"指令后为空"**。
         //
-        // 糖表面没有"输出空行"的写法（§3.10 的空行是分隔符、不产出），所以这是一处
-        // **刻意的显示口径**而非等价改写：投影按"读者在游戏里看到的节奏"处理——
-        // 一行空行。收益有两层：
-        //   ① 读者看到的是剧本节奏，而不是一片 `PRINTFORMDL␠` / `PRINTW` 噪声；
+        // 糖表面 v1.4 补上了"输出空行"的写法（`空行`；§3.10 的空白行是分隔符、不产出），
+        // 故投影**回到等价改写**：按"读者在游戏里看到的节奏"投影成能往返回去的那一行。收益有两层：
+        //   ① 读者看到的是剧本节奏 / 糖写法，而不是一片 `PRINTFORMDL␠` / `PRINTW` 噪声；
         //   ② 它不再**切断**糖段——实测中它是段数暴涨的头号原因。
         //
         // 判据边界：**只有 `newline` 的变体**才算打空行。无后缀的 `PRINT` / `PRINTFORM`
         // 空体既不输出也不换行（是拼句片段的空段）——没有可显示的东西，原样保留。
         //
-        // 批 P 之前这里记着一笔代价（`W` 与 `L` 的空行不可分辨），已随糖补上`空行`写法一并修掉：
-        // `L` 系显示成带 `续` 的空行、`W` 系保持纯空行。
+        // 批 P 补掉这里记在案的代价（v1.5 对齐语料主流）：空行不再按 `D` 归属分，只按**等待**分——
+        // 默认不等待投影为糖里能写出来的 `空行`（裸 `PRINTFORML`），`W` 系投影为 `空行 等待`
+        // （`PRINTFORMDW`）。两种节奏（等待 / 不等待）仍可分辨，且都是糖里写得出、能往返的一行。
         if (!variant.newline) {
           recs.push(native(ln, 'unsupported-print-variant'));
           continue;
@@ -601,10 +602,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         recs.push({
           line: ln,
           kind: 'speech',
-          // 批 P 补掉这里记在案的代价：`W`（等待）与 `L`（不等待）的空行不再混成一个样子——
-          // `L` 系在空行上补 `续` 标记，与文本行的 `「……」 续` 同一套记号，
-          // 也正是糖里能写出来的那一行（`空行 续`）。`W` 系仍是纯空行（读者要的节奏）。
-          text: variant.wait ? '' : '续',
+          text: variant.wait ? '空行 等待' : '空行',
           indent: ctx.indentAt(ln, raw),
           visible: true,
           reason: null,
@@ -793,8 +791,7 @@ function toSegment(run: LineRec[]): SugarProjectSegment {
   const base = visible.reduce((m, r) => Math.min(m, r.indent), Number.POSITIVE_INFINITY);
   const baseIndent = Number.isFinite(base) ? base : 0;
   const text = visible
-    // 空行（"打空行"的输出）不带缩进：行首制表符在编辑器里是一条无内容的彩色横条
-    .map((r) => (r.text.length === 0 ? '' : '\t'.repeat(Math.max(0, r.indent - baseIndent)) + r.text))
+    .map((r) => '\t'.repeat(Math.max(0, r.indent - baseIndent)) + r.text)
     .join('\n');
   return {
     fromLine: run[0]!.line,

@@ -90,7 +90,7 @@ describe.skipIf(!SMOKE_DIR)('教学样例 · 真实链路转译（teaching-full.
       'SETCOLOR 0xFF8080', // 着色块
       'RESETCOLOR', // 着色块收尾
       'CALL HPH_PRINT', // 心形
-      '\n\tPRINTFORMW\n', // 空行（v1.4）：裸指令、**不带尾随空格**
+      '\n\tPRINTFORML\n', // 空行（v1.5）：默认不等待 → 裸 `PRINTFORML`、**不带尾随空格**
       'CASEELSE', // 当/随机的兜底
       '; .kojo 教学样例', // 头部注释保留到产物最前（用户第 3 条）
       '@MY_TOOL_FUNCTION', // 原生直通块

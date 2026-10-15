@@ -192,9 +192,11 @@ IF LOCAL
 		CASE 2
 			PRINTFORMW 「……哈？！」
 	ENDSELECT
-	; §3.3 空行语句（批 P）：整行恰为 `空行` / `blank` → 打一行空行（带 `续` = 不等待）
-	PRINTFORMW
+	; §3.3 空行语句（批 P / v1.5）：整行恰为 `空行` / `blank` → 打一行空行
+	; 默认**不等待**（裸 `PRINTFORML`）；`空行 等待` 才是等待形（`PRINTFORMDW`）。
 	PRINTFORML
+	PRINTFORML
+	PRINTFORMDW
 	; §3.5 / §3.6 表达式位置：赋值右侧的分支（`如果` 必须有 `否则`，`当` 必须有 `否则`）
 	IF CFLAG:TARGET:好感度 >= 500
 		CFLAG:TARGET:1088 = 1
