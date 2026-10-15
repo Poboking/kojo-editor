@@ -435,19 +435,19 @@ struct Fixture {
     version: &'static str,
     container_bytes: u64,
     manifest_bytes: u64,
-    entries: &'static [(&'static str, u64)], // audit-allow: 注册表真实资产文件名字面量，逐条目对平判据
+    entries: &'static [(&'static str, u64)],
 }
 
 const FIXTURES: &[Fixture] = &[
     Fixture {
-        container: "demo.era-tw-1.0.1.zip", // audit-allow: 注册表真实资产名，跨实现对平的锚点
+        container: "demo.era-tw-1.0.1.zip",
         version: "1.0.1",
         container_bytes: 1051,
         manifest_bytes: 625,
         entries: &[("files/M_KOJO_K900_DEMO.ERB", 471)], // audit-allow: 注册表真实资产文件名字面量，逐条目对平判据
     },
     Fixture {
-        container: "demo.era-tw-1.0.0.zip", // audit-allow: 注册表真实资产名，跨实现对平的锚点
+        container: "demo.era-tw-1.0.0.zip",
         version: "1.0.0",
         container_bytes: 1004,
         manifest_bytes: 625,
