@@ -87,8 +87,11 @@ export async function performSugarSave(deps: SugarSaveDeps, request: EditorSaveR
   }
 
   // ---- 3. 编译落盘（写链路见 kojo-sugar compile.ts；越权/回读失败在此抛出）----
+  // 传 `filePath` 与上面的 `planSave` **同键**：kojo-sugar 的共享结果缓存按
+  // (源文本, filePath) 命中（转译是纯函数）——"保存一次"只做一次真实转译，
+  // 重编译不再重转译（读数：misses 1 而不是 2）。产物字节与不传时逐字节相同。
   try {
-    const r = await sugar.compileToFile(request.text, plan.erbPath);
+    const r = await sugar.compileToFile(request.text, plan.erbPath, { filePath: request.path });
     return { status: 'saved', message: `已保存并编译 → ${baseName(r.erbPath)}（${r.byteSize}B）` };
   } catch (err) {
     return {

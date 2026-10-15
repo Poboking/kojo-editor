@@ -51,6 +51,146 @@ class Sink implements DiagnosticSink {
   }
 }
 
+/* ====================== 转译结果共享缓存（L2 批） ====================== */
+
+/**
+ * 缓存读数（`transpileCacheStats()`；**命中 = 一次真实被跳过的重转译**）。
+ *
+ * 用途：
+ * - 证据面——"三消费者同一版本各转各的 3 次 → 1 次"、"保存链 planSave +
+ *   重编译 2 次 → 1 次"都能用 `hits/misses` 直接断言（不依赖墙钟）；
+ * - debug 水位——`log.debug` 周期行带上同一组计数（生产里可读）。
+ */
+export interface SugarTranspileCacheStats {
+  /** 命中次数（跳过了一次真实转译） */
+  readonly hits: number;
+  /** 未命中次数（真实转译并写入缓存） */
+  readonly misses: number;
+  /** 淘汰条目数（超过条数 / 字符上限时按最近最少使用序剔除） */
+  readonly evictions: number;
+  /** 当前条目数 */
+  readonly entries: number;
+  /** 当前缓存的源文本总字符数（内存上界的可用读数） */
+  readonly sourceChars: number;
+}
+
+/** 缓存容量（也可经 `CreateSugarServiceOptions.cache` 覆盖；单测用小容量验证淘汰） */
+export interface SugarTranspileCacheOptions {
+  /** 路径桶上限（按 `filePath` 分桶；跨项目/跨文件互不挤占）。缺省 8 */
+  readonly maxBuckets?: number;
+  /** 单桶条目上限（同一文件的不同文本版本）。缺省 4 */
+  readonly maxEntriesPerBucket?: number;
+  /** 全缓存源文本字符数上限（UTF-16 码元）。缺省 1,000,000（约 2MB 文本） */
+  readonly maxSourceChars?: number;
+}
+
+const CACHE_DEFAULTS = { maxBuckets: 8, maxEntriesPerBucket: 4, maxSourceChars: 1_000_000 } as const;
+
+interface TranspileCacheEntry {
+  readonly source: string;
+  readonly result: SugarTranspileResult;
+}
+
+/**
+ * 转译结果 LRU（按 `filePath` 分桶，桶内按最近使用序）。
+ *
+ * **键为什么是 (源文本, filePath)**：转译是纯函数，输出只随这两者变化——
+ * `fileName` 在 kojo-sugar 内部**从不参与产物**（只可能进诊断/命名检查，
+ * 而它由 `filePath` 推导），故不入键。Generation（adapterId / 项目 / 变量字典代际）
+ * **不在这里**：每个转译器服务实例自带一份缓存，插件装配层按代际 memo 转译器
+ * 实例 ⇒ 换代即换实例即换缓存（见 `index.ts` 的适配器视图 memo）。
+ *
+ * **共享语义**：同一实例的 `transpile` 调用方（波浪线装饰器 / 糖判定面板 /
+ * 预览 / 保存链）拿到的是**同一个结果对象**——它们只读（契约语义），不得就地改写。
+ */
+class TranspileResultCache {
+  private readonly buckets = new Map<string, TranspileCacheEntry[]>(); // Map 序 = 桶的最近使用序
+  private sourceChars = 0;
+  private hits = 0;
+  private misses = 0;
+  private evictions = 0;
+
+  constructor(private readonly limits: Required<SugarTranspileCacheOptions>) {}
+
+  get(source: string, filePath: string): SugarTranspileResult | undefined {
+    const bucket = this.buckets.get(filePath);
+    if (bucket !== undefined) {
+      for (let i = 0; i < bucket.length; i++) {
+        if (bucket[i]!.source === source) {
+          const entry = bucket.splice(i, 1)[0]!;
+          bucket.unshift(entry); // 最近使用置前
+          this.buckets.delete(filePath);
+          this.buckets.set(filePath, bucket); // 桶也置最近使用位
+          this.hits++;
+          return entry.result;
+        }
+      }
+    }
+    this.misses++;
+    return undefined;
+  }
+
+  set(source: string, filePath: string, result: SugarTranspileResult): void {
+    // 超大文本不进缓存（否则单条就能挤空全表，命中率反而更差）
+    if (source.length > this.limits.maxSourceChars) return;
+
+    let bucket = this.buckets.get(filePath);
+    if (bucket === undefined) {
+      bucket = [];
+      this.buckets.set(filePath, bucket);
+    }
+    const existing = bucket.findIndex((e) => e.source === source);
+    if (existing >= 0) {
+      const old = bucket.splice(existing, 1)[0]!;
+      this.sourceChars -= old.source.length;
+    }
+    bucket.unshift({ source, result });
+    this.sourceChars += source.length;
+    this.buckets.delete(filePath);
+    this.buckets.set(filePath, bucket);
+
+    while (bucket.length > this.limits.maxEntriesPerBucket) {
+      this.sourceChars -= bucket.pop()!.source.length;
+      this.evictions++;
+    }
+    while (this.buckets.size > this.limits.maxBuckets) {
+      const oldestKey = this.buckets.keys().next().value as string;
+      const oldest = this.buckets.get(oldestKey)!;
+      for (const e of oldest) this.sourceChars -= e.source.length;
+      this.evictions += oldest.length;
+      this.buckets.delete(oldestKey);
+    }
+    while (this.sourceChars > this.limits.maxSourceChars) {
+      const oldestKey = this.buckets.keys().next().value as string | undefined;
+      if (oldestKey === undefined) break;
+      const oldest = this.buckets.get(oldestKey)!;
+      const entry = oldest.pop();
+      if (entry === undefined) {
+        this.buckets.delete(oldestKey);
+        continue;
+      }
+      this.sourceChars -= entry.source.length;
+      this.evictions++;
+      if (oldest.length === 0) this.buckets.delete(oldestKey);
+    }
+  }
+
+  stats(): SugarTranspileCacheStats {
+    let entries = 0;
+    for (const bucket of this.buckets.values()) entries += bucket.length;
+    return {
+      hits: this.hits,
+      misses: this.misses,
+      evictions: this.evictions,
+      entries,
+      sourceChars: this.sourceChars,
+    };
+  }
+}
+
+/** 缓存水位行的日志间隔（transpile 调用数；64 ≈ 编辑器停顿节奏下半分钟一行） */
+const CACHE_LOG_EVERY = 64;
+
 /**
  * 由 front-matter 的 `AliasDecl[]` 建别名表（只读性用契约守卫判定）。
  *
@@ -190,16 +330,44 @@ export interface CreateSugarServiceOptions {
    * 纯转译（`parse`/`transpile`/`sourceOf`）不需要它，故可选。
    */
   io?: FileIO;
-  /** 可选日志（编译摘要） */
+  /** 可选日志（编译摘要 + 缓存水位行） */
   log?: Logger;
+  /**
+   * 转译结果共享缓存容量（additive；缺省 = 生产口径 8 桶 × 4 条 / 1M 字符）。
+   * 单测用小容量验证淘汰而无需造大文本。
+   */
+  cache?: SugarTranspileCacheOptions;
+}
+
+/** 缓存读数访问器（返回对象上的**附加**能力；纯读数，零副作用） */
+export interface SugarTranspileServiceWithCache extends SugarTranspileService {
+  /** 本实例（= 一个 adapter 代际）的共享缓存读数 */
+  transpileCacheStats(): SugarTranspileCacheStats;
 }
 
 /** 创建转译服务实例（纯函数；可安全并发调用） */
-export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}): SugarTranspileService {
+export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}): SugarTranspileServiceWithCache {
   const dictionary = opts.dictionary;
   const faceTable = opts.faceTable;
   const instructionTable = opts.instructionTable;
   const libraryTable = opts.libraryTable;
+  const cache = new TranspileResultCache({
+    maxBuckets: opts.cache?.maxBuckets ?? CACHE_DEFAULTS.maxBuckets,
+    maxEntriesPerBucket: opts.cache?.maxEntriesPerBucket ?? CACHE_DEFAULTS.maxEntriesPerBucket,
+    maxSourceChars: opts.cache?.maxSourceChars ?? CACHE_DEFAULTS.maxSourceChars,
+  });
+  let callsSinceLog = 0;
+
+  /** 缓存水位行（每 `CACHE_LOG_EVERY` 次 transpile 一行；不静默、不刷屏） */
+  function maybeLogCache(): void {
+    callsSinceLog++;
+    if (callsSinceLog < CACHE_LOG_EVERY) return;
+    callsSinceLog = 0;
+    const s = cache.stats();
+    opts.log?.debug(
+      `sugar.transpile 缓存：命中 ${s.hits} · 未命中 ${s.misses} · 淘汰 ${s.evictions} · 条目 ${s.entries} · ${s.sourceChars} 字符`,
+    );
+  }
 
   function parse(source: string, options: SugarTranspileOptions = {}): SugarDoc {
     const sink = new Sink();
@@ -218,7 +386,13 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     }
   }
 
-  function transpile(source: string, options: SugarTranspileOptions = {}): SugarTranspileResult {
+  /**
+   * 转译本体（不做缓存）。
+   *
+   * 产物只随 `(source, filePath)` 变化：`fileName` 在本包内**从不参与产物**
+   * （只可能进诊断，且它本就从 `filePath` 推导），故缓存键取 `(source, filePath)`。
+   */
+  function transpileUncached(source: string, options: SugarTranspileOptions = {}): SugarTranspileResult {
     const sink = new Sink();
     const filePath = options.filePath ?? '';
     let doc: SugarDoc;
@@ -259,6 +433,27 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     });
 
     return { erb, sourceMap, diagnostics: sink.all() };
+  }
+
+  /**
+   * 转译（带共享缓存；L2 批）——**同实例的多个消费者（波浪线 / 糖判定面板 /
+   * 预览 / 保存链）在同一 (文本, filePath) 上只做一次真实转译**。
+   *
+   * 结果对象被多个消费者共享 ⇒ 消费方只读（本来就只读：装饰/面板/编译都只读它）。
+   * generation（adapterId / 项目 / 变量字典代际）不在键里——换代由装配层
+   * 换服务实例承担（`index.ts` 的适配器视图 memo），换代即缓存整体作废。
+   */
+  function transpile(source: string, options: SugarTranspileOptions = {}): SugarTranspileResult {
+    const filePath = options.filePath ?? '';
+    const hit = cache.get(source, filePath);
+    if (hit !== undefined) {
+      maybeLogCache();
+      return hit;
+    }
+    const result = transpileUncached(source, options);
+    cache.set(source, filePath, result);
+    maybeLogCache();
+    return result;
   }
 
   function sourceOf(result: SugarTranspileResult, generatedLine: number): SugarPosition | null {
@@ -337,5 +532,16 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     return runCompileToBytes(transpile, source, options, targetLabel);
   }
 
-  return { parse, transpile, sourceOf, sourceColumnOf, generatedOf, compileToFile, compileToBytes, planSave };
+  return {
+    parse,
+    transpile,
+    sourceOf,
+    sourceColumnOf,
+    generatedOf,
+    compileToFile,
+    compileToBytes,
+    planSave,
+    // 缓存读数（附加能力；契约 `SugarTranspileService` 的消费方零改动）
+    transpileCacheStats: () => cache.stats(),
+  };
 }

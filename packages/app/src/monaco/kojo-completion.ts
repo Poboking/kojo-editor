@@ -133,69 +133,84 @@ function cachedAliasNames(model: Monaco.editor.ITextModel): readonly string[] {
 /* ============================== 语言层 + 文件层 source ============================== */
 
 /**
- * 词表 source（原 `kojo-language.ts` 内联补全的 5 组静态候选，行为逐字等价）：
- * 本文件别名 → 保留代词 → 中文主形关键字 → 中文运算符（含 `不在`）→ 系统函数名。
+ * 静态候选规格（L2 批：**模块级一次构建、内容恒定**）。
+ *
+ * 四组静态建议（保留代词 / 中文主形关键字 / 中文运算符 + `不在` / 系统函数名）
+ * 的 label·kind·insertText·detail·sortText 只取决于 `kojo-sugar` 的词表常量
+ * （单一真源；进程内不变）⇒ 在这里一次性展开。`provide` 每次只做"补本次 `range`
+ * 与 Monaco kind 常量"这一件变量工作，不再每调从四个数组重新推导、展开对象
+ * （原实现 = 每次弹建议整体重建，纯分配浪费 + GC 压力）。
  * 英文隐藏别名**不进**补全列表（规范 §4.1 中英不对等展示）。
+ */
+type StaticSuggestionKind = 'pronoun' | 'keyword' | 'operator' | 'function';
+
+interface StaticSuggestionSpec {
+  readonly label: string;
+  readonly kind: StaticSuggestionKind;
+  readonly insertText: string;
+  readonly detail: string;
+  readonly sortText: string;
+}
+
+const STATIC_SUGGESTION_SPECS: readonly StaticSuggestionSpec[] = [
+  ...RESERVED_PRONOUNS.map(
+    (p): StaticSuggestionSpec => ({ label: p, kind: 'pronoun', insertText: p, detail: '保留代词', sortText: `2_${p}` }),
+  ),
+  ...PRIMARY_WORDS.map(
+    (w): StaticSuggestionSpec => ({
+      label: w.word,
+      kind: 'keyword',
+      insertText: w.word,
+      detail: SUGAR_KEYWORD_ROLE_LABEL[w.role],
+      sortText: `3_${w.role}_${w.word}`,
+    }),
+  ),
+  ...[...SUGAR_LEXICON_OPERATORS, ...NOTIN_MARKS].map(
+    (op): StaticSuggestionSpec => ({ label: op, kind: 'operator', insertText: op, detail: '运算符', sortText: `4_${op}` }),
+  ),
+  ...SYSTEM_FUNCTION_WORDS.map(
+    (name): StaticSuggestionSpec => ({
+      label: name,
+      kind: 'function',
+      insertText: `${name}(`,
+      detail: '系统函数',
+      sortText: `5_${name}`,
+    }),
+  ),
+];
+
+/**
+ * 词表 source（原 `kojo-language.ts` 内联补全的 5 组候选，行为逐字等价）：
+ * 本文件别名 → 保留代词 → 中文主形关键字 → 中文运算符（含 `不在`）→ 系统函数名。
+ * 第 2..5 组走模块级静态规格表；第 1 组（别名）随编辑变，保持每调派生（全文正则
+ * 已按 model 版本记忆化，见 `cachedAliasNames`）。
  */
 const LEXICON_SOURCE: CompletionSource = {
   id: 'kojo-lexicon',
   provide({ monaco, model, range }): Monaco.languages.CompletionItem[] {
+    const K = monaco.languages.CompletionItemKind;
     const suggestions: Monaco.languages.CompletionItem[] = [];
 
     // 1. 文件内 `别名` 名字（别名补全——最常用，排最前）
     for (const name of cachedAliasNames(model)) {
       suggestions.push({
         label: name,
-        kind: monaco.languages.CompletionItemKind.Variable,
+        kind: K.Variable,
         insertText: name,
         detail: '别名（本文件）',
         range,
         sortText: `1_${name}`,
       });
     }
-    // 2. 保留代词（她 / 你）
-    for (const p of RESERVED_PRONOUNS) {
+    // 2..5. 静态词表（模块级一次构建；此处只补 `range` 与 Monaco kind 常量）
+    for (const s of STATIC_SUGGESTION_SPECS) {
       suggestions.push({
-        label: p,
-        kind: monaco.languages.CompletionItemKind.Keyword,
-        insertText: p,
-        detail: '保留代词',
+        label: s.label,
+        kind: s.kind === 'operator' ? K.Operator : s.kind === 'function' ? K.Function : K.Keyword,
+        insertText: s.insertText,
+        detail: s.detail,
         range,
-        sortText: `2_${p}`,
-      });
-    }
-    // 3. 中文主形关键字（英文隐藏别名**不进**补全，规范 §4.1）
-    for (const w of PRIMARY_WORDS) {
-      suggestions.push({
-        label: w.word,
-        kind: monaco.languages.CompletionItemKind.Keyword,
-        insertText: w.word,
-        detail: SUGAR_KEYWORD_ROLE_LABEL[w.role],
-        range,
-        sortText: `3_${w.role}_${w.word}`,
-      });
-    }
-    // 4. 中文运算符 + `不在`
-    for (const op of [...SUGAR_LEXICON_OPERATORS, ...NOTIN_MARKS]) {
-      suggestions.push({
-        label: op,
-        kind: monaco.languages.CompletionItemKind.Operator,
-        insertText: op,
-        detail: '运算符',
-        range,
-        sortText: `4_${op}`,
-      });
-    }
-    // 5. 中文系统函数名（HK-11①；从 `SYSTEM_FUNCTION_ALIASES` 派生）
-    //    补全即调用形态——插入 `名字(`，作者接着写实参加 `)`
-    for (const name of SYSTEM_FUNCTION_WORDS) {
-      suggestions.push({
-        label: name,
-        kind: monaco.languages.CompletionItemKind.Function,
-        insertText: `${name}(`,
-        detail: '系统函数',
-        range,
-        sortText: `5_${name}`,
+        sortText: s.sortText,
       });
     }
 

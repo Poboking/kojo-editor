@@ -40,7 +40,7 @@ import type {
   VariableSchema,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices, resolveSugarTarget } from '@kojo/plugin-api';
-import { createSugarTranspileService } from './service';
+import { createSugarTranspileService, type SugarTranspileServiceWithCache } from './service';
 import { createSugarPreviewService } from './preview';
 import { createSugarLiftService } from './lift';
 import { createSugarLiftApplyService } from './lift-apply';
@@ -125,100 +125,144 @@ export function createKojoSugarPlugin(): Plugin {
       };
 
       /**
-       * 当前适配器的变量字典（按 adapterId 精确匹配；多适配器共存天然正确）。
+       * 当前适配器的**变量字典 / 分野表 / 指令表 / 函数名表**（一次槽位扫出四件）。
        *
-       * 每次 `transpile` 调用时才查询——适配器可能在项目切换后重建 schema，
-       * 转译服务本身保持无状态（纯函数语义）。
+       * 每次调用都**重查**（适配器可能在项目切换后重建 schema/表，正是代际判据
+       * 的来源）——但只做一次 `slots.query` + 一次逐字段首命中；四张表全齐且
+       * 对象引用未变 ⇒ 视为同一代际，转译器/字典实例（含共享缓存）整体复用。
        */
-      const dictionaryOf = (): DictionaryLookup | undefined => {
+      interface AdapterView {
+        readonly adapterId: string | null;
+        readonly projectRoot: string | null;
+        readonly inputDigest: string | undefined;
+        readonly variableSchema: VariableSchema | undefined;
+        readonly faceTable: KojoFaceTable | undefined;
+        readonly instructionTable: KojoInstructionTable | undefined;
+        readonly libraryTable: KojoLibraryTable | undefined;
+      }
+
+      const emptyView = (): AdapterView => ({
+        adapterId: null,
+        projectRoot: null,
+        inputDigest: undefined,
+        variableSchema: undefined,
+        faceTable: undefined,
+        instructionTable: undefined,
+        libraryTable: undefined,
+      });
+
+      const viewOf = (): AdapterView => {
         const current: GameProject | null = project.current();
-        if (!current) return undefined;
+        if (!current) return emptyView();
+        const v: {
+          adapterId: string;
+          projectRoot: string;
+          inputDigest: string | undefined;
+          variableSchema: VariableSchema | undefined;
+          faceTable: KojoFaceTable | undefined;
+          instructionTable: KojoInstructionTable | undefined;
+          libraryTable: KojoLibraryTable | undefined;
+        } = {
+          adapterId: current.adapterId,
+          projectRoot: current.rootDir,
+          inputDigest: current.inputDigest,
+          variableSchema: undefined,
+          faceTable: undefined,
+          instructionTable: undefined,
+          libraryTable: undefined,
+        };
         for (const contribution of slots.query('game.adapter')) {
           if (contribution.adapter.gameId !== current.adapterId) continue;
-          const vs: VariableSchema | undefined = contribution.adapter.variableSchema;
-          if (vs) return makeLookup(vs);
+          // 逐字段首命中（与改前四个独立查询函数逐条同义）
+          v.variableSchema ??= contribution.adapter.variableSchema;
+          v.faceTable ??= contribution.adapter.kojoFaceTemplates;
+          v.instructionTable ??= contribution.adapter.kojoInstructionTable;
+          v.libraryTable ??= contribution.adapter.kojoLibraryTable;
         }
-        return undefined;
+        return v;
       };
 
       /**
-       * 当前适配器的**时机分野模板表**（游戏知识；`KojoFaceTable`）。
-       *
-       * 与 `dictionaryOf` 同源同生命周期（按 `adapterId` 精确匹配 `game.adapter`
-       * 槽位）。缺省 = 该适配器未声明 → 转译含 `时机` 块的文档时报
-       * `timing-face-unknown`（**fail-closed**，绝不回退到内建模板——回退就是
-       * 把游戏知识搬回通用插件，正是本批要根除的）。
+       * 代际判据：项目根 + adapterId + 非 ERB 输入摘要 + 四张表的**对象引用**。
+       * 表对象换代（新对象）或项目换代 ⇒ 全新转译器实例（空缓存）；
+       * 引用全同 ⇒ 同一代际（产物只依赖这些对象的内容，纯函数语义下结果可复用）。
+       * **前提**：表以"整体换代"变更（eratw-adapter 每次 loadProject 重建 schema，
+       * 指令表随 `Train.csv` 换代）——原地改表内容的实现不在本判据面内。
        */
-      const faceTableOf = (): KojoFaceTable | undefined => {
-        const current: GameProject | null = project.current();
-        if (!current) return undefined;
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId !== current.adapterId) continue;
-          if (contribution.adapter.kojoFaceTemplates) return contribution.adapter.kojoFaceTemplates;
-        }
-        return undefined;
+      const sameView = (a: AdapterView, b: AdapterView): boolean =>
+        a.adapterId === b.adapterId &&
+        a.projectRoot === b.projectRoot &&
+        a.inputDigest === b.inputDigest &&
+        a.variableSchema === b.variableSchema &&
+        a.faceTable === b.faceTable &&
+        a.instructionTable === b.instructionTable &&
+        a.libraryTable === b.libraryTable;
+
+      interface ResolvedAdapter {
+        readonly view: AdapterView;
+        /** 字典（按 variableSchema 身份 memo；`lift` 服务经 `dictionaryOf()` 共享同一枚） */
+        readonly dictionary: DictionaryLookup | undefined;
+        /** 纯转译实例（含共享结果缓存）；同代际内被全部纯转译消费方复用 */
+        base?: SugarTranspileServiceWithCache;
+        /** 带内核 io 的编译实例（compileToFile；与 base 同代际同缓存语义） */
+        ioBound?: SugarTranspileServiceWithCache;
+      }
+
+      let resolved: ResolvedAdapter | null = null;
+
+      const resolveAdapter = (): ResolvedAdapter => {
+        const view = viewOf();
+        if (resolved !== null && sameView(resolved.view, view)) return resolved;
+        resolved = {
+          view,
+          dictionary: view.variableSchema ? makeLookup(view.variableSchema) : undefined,
+        };
+        return resolved;
       };
+
+      const dictionaryOf = (): DictionaryLookup | undefined => resolveAdapter().dictionary;
+
+      const faceTableOf = (): KojoFaceTable | undefined => resolveAdapter().view.faceTable;
+
+      const instructionTableOf = (): KojoInstructionTable | undefined => resolveAdapter().view.instructionTable;
+
+      const libraryTableOf = (): KojoLibraryTable | undefined => resolveAdapter().view.libraryTable;
 
       /**
-       * 当前适配器的**指令名表**（游戏知识；`KojoInstructionTable`；HK-11②）。
+       * 统一的转译器构造（字典 + 分野表 + 指令表 + 函数名表同源注入；保证各路径行为一致）。
        *
-       * 与 `faceTableOf` 同源同生命周期（按 `adapterId` 精确匹配 `game.adapter`
-       * 槽位；表内容随项目的 `CSV/Train.csv` 变化）。缺省 = 该适配器未声明 →
-       * `时机 指令 <中文名>：` 报 `timing-instruction-unknown`（**fail-closed**，
-       * 绝不猜——数字编号路径不受影响，逐字节保持旧行为）。
+       * **按代际 memo**（L2 批）：同代际内返回**同一实例**——既省去每次调用的
+       * 槽位查询 + `makeLookup` 闭包构造 + 服务装配，也让该实例的**共享结果缓存**
+       * 对所有消费者生效（波浪线 / 糖判定面板 / 预览 / 保存链同一份结果）。
        */
-      const instructionTableOf = (): KojoInstructionTable | undefined => {
-        const current: GameProject | null = project.current();
-        if (!current) return undefined;
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId !== current.adapterId) continue;
-          if (contribution.adapter.kojoInstructionTable) return contribution.adapter.kojoInstructionTable;
-        }
-        return undefined;
-      };
-
-      /**
-       * 当前适配器的**基础库 / 常用函数名表**（游戏知识；`KojoLibraryTable`；ZH-F1）。
-       *
-       * 与 `instructionTableOf` 同源同生命周期（按 `adapterId` 精确匹配 `game.adapter`
-       * 槽位；纯数据、手工维护，不依赖 `loadProject`）。缺省 = 该适配器未声明 →
-       * 表达式里的中文函数名调用形态只认系统函数表，未收录的仍报
-       * `function-name-unknown`（warning，产物原样，fail-visible）。
-       */
-      const libraryTableOf = (): KojoLibraryTable | undefined => {
-        const current: GameProject | null = project.current();
-        if (!current) return undefined;
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId !== current.adapterId) continue;
-          if (contribution.adapter.kojoLibraryTable) return contribution.adapter.kojoLibraryTable;
-        }
-        return undefined;
-      };
-
-      /** 统一的转译器构造（字典 + 分野表 + 指令表 + 函数名表同源注入；保证各路径行为一致） */
       const makeTranspiler = (
         deps?: Omit<
           Parameters<typeof createSugarTranspileService>[0],
           'dictionary' | 'faceTable' | 'instructionTable' | 'libraryTable'
         >,
-      ) =>
-        createSugarTranspileService({
-          dictionary: dictionaryOf(),
-          faceTable: faceTableOf(),
-          instructionTable: instructionTableOf(),
-          libraryTable: libraryTableOf(),
-          ...(deps ?? {}),
-        });
+      ): SugarTranspileService => {
+        const r = resolveAdapter();
+        const tables = {
+          dictionary: r.dictionary,
+          faceTable: r.view.faceTable,
+          instructionTable: r.view.instructionTable,
+          libraryTable: r.view.libraryTable,
+        };
+        if (deps === undefined) return (r.base ??= createSugarTranspileService({ ...tables, log: ctx.log }));
+        return (r.ioBound ??= createSugarTranspileService({ ...tables, ...deps }));
+      };
 
-      const service: SugarTranspileService = {
+      /** 无表只读查询（sourceOf / sourceColumnOf / generatedOf）——一个无状态实例用到底 */
+      const stateless = createSugarTranspileService();
+
+      const service: SugarTranspileService & Pick<SugarTranspileServiceWithCache, 'transpileCacheStats'> = {
         parse: (source, options) => makeTranspiler().parse(source, options),
         transpile: (source, options) => makeTranspiler().transpile(source, options),
-        sourceOf: (result, generatedLine) =>
-          createSugarTranspileService().sourceOf(result, generatedLine),
+        sourceOf: (result, generatedLine) => stateless.sourceOf(result, generatedLine),
         // S6 列级映射（纯查询：只读转译结果里的 sourceMap，不需要 adapter 注入）
         sourceColumnOf: (result, generatedLine, generatedColumn) =>
-          createSugarTranspileService().sourceColumnOf(result, generatedLine, generatedColumn),
-        generatedOf: (result, source) => createSugarTranspileService().generatedOf?.(result, source) ?? null,
+          stateless.sourceColumnOf(result, generatedLine, generatedColumn),
+        generatedOf: (result, source) => stateless.generatedOf?.(result, source) ?? null,
         // S3：编译落盘一体——转译（带当前 adapter 字典+分野表）+ 双闸写 + 备份 + 回读
         compileToFile: (source, targetPath, options) =>
           makeTranspiler({ io, log: ctx.log }).compileToFile(source, targetPath, options),
@@ -227,6 +271,16 @@ export function createKojoSugarPlugin(): Plugin {
           makeTranspiler().compileToBytes(source, options, targetLabel),
         // S7：保存前置检查（纯函数）——推导目标 + 转译 + 全角空格告警，同一转译器
         planSave: (request) => makeTranspiler().planSave(request),
+        // L2：共享缓存读数（**附加能力**，非契约面；契约消费方零改动）——
+        // 与 `transpile` 同源取当前代际实例（换代即读到新实例的空缓存，不混代际）。
+        transpileCacheStats: () =>
+          resolveAdapter().base?.transpileCacheStats() ?? {
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            entries: 0,
+            sourceChars: 0,
+          },
       };
 
       ctx.provide(WellKnownServices.SugarTranspile, service);
@@ -539,6 +593,17 @@ function isRecorded(info: { description?: string; resolvedIndex?: number } | und
 }
 
 /**
+ * 名称索引的**建档门槛**（真实线性扫次数）：扫到这么多次才付一次建表成本。
+ * 依据（本机微基准，见 `tests/hotpath-bench.test.ts`）：单次线性扫 ~1–2µs，
+ * 建表（Σ|names| 次 lookup）~亚毫秒—数毫秒 ⇒ 稀疏查询（小额文档 / 少量属性）
+ * 永远走"扫 + 记忆"，稠密会话（多文件、名字面广）建表后全额摊还。
+ */
+const INDEX_BUILD_AFTER_SCANS = 64;
+
+/** 回退扫结果记忆上限（含负结果；防超长会话里错名无限积累） */
+const FALLBACK_MEMO_MAX = 4096;
+
+/**
  * 条目所属的**来源层**（族归属用；ALS-R1）。
  *
  * - `'const'` → `undefined`：作者自定具名常量**不参与族归属**（同一个名字可以写在任意族
@@ -567,21 +632,88 @@ export function makeLookup(schema: VariableSchema): DictionaryLookup {
     }
     return undefined;
   };
+
+  /**
+   * 名称 → 族 的**惰性索引**（L2 批；命中路径由"每名 22 族线性扫"改 O(1) 查）。
+   *
+   * ## 为什么是"正表 + 精确回退"两段而不是纯索引
+   *
+   * 枚举面 = `schema.names(family)`（KC-1 的可选枚举能力；eratw 实现走 `byIndex`
+   * 的**值**）。但 `lookup` 还能命中 `byName` 独有的别名（同编号重名行，如
+   * `Base.als` 的 `10,情绪` + `10,情緒`——`byIndex` 只留首个、`byName` 两个都收），
+   * 那类名字**不在枚举面内**。故：
+   * - 枚举面内 ⇒ 正表 O(1)（tier 由**与线性扫逐字相同的** `lookup + familySourceTier`
+   *   判定，族表顺序即优先级、primary 压 append ⇒ 与改前逐位等价）；
+   * - 枚举面外 ⇒ **精确回退线性扫**（原口径），并把结果记忆到 `fallbackMemo`
+   *   （含 undefined——负结果也记忆，同一错名不再重复 22 族扫）。
+   *
+   * ## 建表时机（门槛门控）
+   *
+   * 累计**真实线性扫**达到 `INDEX_BUILD_AFTER_SCANS` 次才建表——小额/稀疏文档
+   * （属性解析寥寥）永远走"扫 + 记忆"、不付建表账；稠密会话建表后摊还。
+   * `names()` 缺席（旧 schema 形态）⇒ 建表返回 null，行为与改前逐字相同
+   * （回退记忆仍生效）。
+   *
+   * 生命周期 = `makeLookup` 产物（随代际 memo 复用）⇒ 建表账每个项目代际只付一次。
+   */
+  let familyIndex: { primary: Map<string, string>; append: Map<string, string> } | null | undefined;
+  let scansSeen = 0;
+  /** 回退扫结果记忆（含负结果；上限防超长会话积累） */
+  const fallbackMemo = new Map<string, string | undefined>();
+
+  const buildFamilyIndex = (): { primary: Map<string, string>; append: Map<string, string> } | null => {
+    if (typeof schema.names !== 'function') return null;
+    const primary = new Map<string, string>();
+    const append = new Map<string, string>();
+    for (const family of ENGINE_VARIABLE_FAMILIES) {
+      for (const info of schema.names(family) ?? []) {
+        const name = info.name;
+        if (name.length === 0) continue;
+        const tier = familySourceTier(schema.lookup(family, name));
+        if (tier === 'primary') {
+          if (!primary.has(name)) primary.set(name, family); // 族表顺序即优先级（首个命中胜）
+        } else if (tier === 'append') {
+          if (!append.has(name)) append.set(name, family);
+        }
+      }
+    }
+    return { primary, append };
+  };
+
+  /** 线性扫（建档前 / 枚举面外 / 无枚举能力时的原口径） */
+  const resolveFamilyLinear = (name: string): string | undefined => {
+    let appendHit: string | undefined;
+    for (const family of ENGINE_VARIABLE_FAMILIES) {
+      // lookup 在"表不存在 / 名称不在表内"时返回 undefined 或仅回显 name；
+      // 只有**真正收录**（description 或 resolvedIndex 落地）才算命中。
+      const tier = familySourceTier(schema.lookup(family, name));
+      if (tier === 'primary') return family;
+      if (tier === 'append' && appendHit === undefined) appendHit = family;
+    }
+    return appendHit;
+  };
+
   return {
     resolveFamily(name: string): string | undefined {
       // 两轮（ALS-R1）：主表优先，追加名表只在主表一轮都不中时才给出归属；
       // `'const'`（`.ERH` 具名常量）不参与——它照样让 `lookup` 换算编号（快照回放 /
       // 别名 / 具名索引），但不再宣称"这个名字属于哪个族"。
       // 同层内仍是族表顺序即优先级（首个命中即返回，与改前同一确定性口径）。
-      let appendHit: string | undefined;
-      for (const family of ENGINE_VARIABLE_FAMILIES) {
-        // lookup 在"表不存在 / 名称不在表内"时返回 undefined 或仅回显 name；
-        // 只有**真正收录**（description 或 resolvedIndex 落地）才算命中。
-        const tier = familySourceTier(schema.lookup(family, name));
-        if (tier === 'primary') return family;
-        if (tier === 'append' && appendHit === undefined) appendHit = family;
+      //
+      // L2：正表 O(1)（建表有门槛）；枚举面外走精确回退扫 + 结果记忆（含负结果）。
+      if (familyIndex === undefined && scansSeen >= INDEX_BUILD_AFTER_SCANS) {
+        familyIndex = buildFamilyIndex(); // 扫描量证明工作量足够，建表摊销
       }
-      return appendHit;
+      if (familyIndex) {
+        const hit = familyIndex.primary.get(name) ?? familyIndex.append.get(name);
+        if (hit !== undefined) return hit;
+      }
+      const memo = fallbackMemo.get(name);
+      if (memo !== undefined || fallbackMemo.has(name)) return memo;
+      const result = resolveFamilyLinear(name);
+      if (scansSeen < INDEX_BUILD_AFTER_SCANS) scansSeen++;
+      if (fallbackMemo.size < FALLBACK_MEMO_MAX) fallbackMemo.set(name, result);
+      return result;
     },
     resolve(ident: string): string | undefined {
       // 原生 ERB 变量引用（`CFLAG:2` 形态）与引擎族名——原样保留。
