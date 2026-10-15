@@ -111,3 +111,84 @@ describe('planArtifacts', () => {
     expect(seen).toBe('如果 A：');
   });
 });
+
+/** 取回抛出的错误消息（要逐项检查消息里指认了谁） */
+const msgOf = (fn: () => unknown): string => {
+  try {
+    fn();
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  throw new Error('预期抛错，但没有抛');
+};
+
+describe('跨文件函数名唯一性（制品级 fail-closed，2026-10-16 T4）', () => {
+  it('两个不同子目录的 .kojo 产出同名函数 → 拒绝，并指认双方来源与函数名', () => {
+    const a = src('a/事件.kojo', '@M_KOJO_K12_问候(ARG = 1)\n');
+    const b = src('b/问候.kojo', '@M_KOJO_K12_问候(ARG = 1, ARG:1)\n');
+    const msg = msgOf(() => planArtifacts([a, b], fakeCompile));
+    expect(msg).toContain('函数名冲突');
+    expect(msg).toContain('a/事件.kojo');
+    expect(msg).toContain('b/问候.kojo');
+    expect(msg).toContain('@M_KOJO_K12_问候');
+    // 判定是**全包级**：两者在不同目录（不会落成同一产物名）也必须拒绝
+    expect(msg).not.toContain('产物名冲突');
+  });
+
+  it('.kojo 产物与包内手写 .ERB 撞名 → 拒绝（不同目录，产物名并不冲突）', () => {
+    expect(() =>
+      planArtifacts([src('糖/问候.kojo', '@X\n'), src('原生/问候.ERB', '@X\n')], fakeCompile),
+    ).toThrow(/函数名冲突/);
+  });
+
+  it('同名但形参不同 → 仍拒绝（引擎按名匹配，不看形参）', () => {
+    const msg = msgOf(() =>
+      planArtifacts([src('a/事件.kojo', '@X\n'), src('b/事件.kojo', '@X(ARG)\n')], fakeCompile),
+    );
+    expect(msg).toContain('函数名冲突');
+    expect(msg).toContain('@X');
+  });
+
+  it('仅大小写不同也算同名（语料实证引擎大小写不敏感）', () => {
+    expect(() =>
+      planArtifacts([src('a/事件.kojo', '@M_KOJO_问候\n'), src('b/问候.kojo', '@m_kojo_问候\n')], fakeCompile),
+    ).toThrow(/函数名冲突/);
+  });
+
+  it('.ERH 头文件里的函数定义同样参与判定', () => {
+    expect(() =>
+      planArtifacts([src('a/事件.kojo', '@X\n'), src('b/声明.ERH', '@X\n')], fakeCompile),
+    ).toThrow(/函数名冲突/);
+  });
+
+  it('不同名 → 正常出计划（不误报）', () => {
+    const plan = planArtifacts([src('a/事件.kojo', '@A\n'), src('b/问候.kojo', '@B\n')], fakeCompile);
+    expect(plan.entries.map((e) => e.relPath).sort()).toEqual(['a/事件.ERB', 'b/问候.ERB']);
+    expect(plan.transpiled).toBe(2);
+  });
+
+  it('同一个文件内自己重复定义同名函数 → 不报（那是单文件内部的事）', () => {
+    const plan = planArtifacts([src('a/事件.kojo', '@X\n@X(ARG)\n')], fakeCompile);
+    expect(plan.transpiled).toBe(1);
+  });
+
+  it('只扫会被引擎编译的产物：.txt 里的 @ 不参与判定', () => {
+    const plan = planArtifacts([src('a/事件.kojo', '@X\n'), src('说明.txt', '@X\n')], fakeCompile);
+    expect(plan.transpiled).toBe(1);
+    expect(plan.passthrough).toBe(1);
+  });
+
+  it('走过新扫描后，原样携带的 .ERB 依旧逐字节不变（铁律 2）', () => {
+    const raw = enc.encode('; 注释\n@SHARED(ARG)\n改过编码就毁了\r\n');
+    const expected = [...raw];
+    const plan = planArtifacts([{ relPath: '原生/事件.ERB', bytes: raw }], fakeCompile);
+    expect(plan.entries[0]!.bytes).toBe(raw); // 同一个数组引用：连复制都没发生
+    expect([...plan.entries[0]!.bytes]).toEqual(expected); // 逐字节复核
+  });
+
+  it('#声明行 / $标签 / ;注释放了 @ 也不参与判定', () => {
+    const other = src('b/问候.kojo', ';@X\n#DIM @X\n$@X\n');
+    const plan = planArtifacts([src('a/事件.kojo', '@X\n'), other], fakeCompile);
+    expect(plan.transpiled).toBe(2);
+  });
+});

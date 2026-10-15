@@ -25,6 +25,27 @@
  *
  * 同目录下同时有 `事件.kojo` 与 `事件.ERB` 时，两者都会落到 `事件.ERB` —— 而它们内容
  * 不同，谁说了算？工具不替作者决定，直接报错让他改名。静默挑一个就是丢东西。
+ *
+ * ## 跨文件函数名必须唯一（2026-10-16 T4）
+ *
+ * 上面那条只挡「落成同一个**文件**」；而 Emuera 的函数名是**全局**的（`CALL` 按名找，
+ * 不看文件），两个不同目录的文件各自产出 `@X` 时引擎只取一处、另一处**静默失效**——
+ * 作者拿到的是坏包却毫无提示。工作区 `.kojo` 的产物落在常驻可写根，不在 `ErbIndex`
+ * 的 root（游戏目录口上 ERB）里，既有 `erb.duplicate-function` 覆盖不到，这条补的就是它。
+ *
+ * 判定对象是**制品**而非源：`.kojo` 扫内存里的 `transpile.erb`，原样携带的 `.ERB` / `.ERH`
+ * 也扫（**只解码不改字节**——扫名字是只读行为，铁律 2 字节级原样照旧）。函数定义名口径
+ * 与 `erb-parser` 同源：行首（允许前导空白）`@` 后到第一个 `(` / 空白 / `;` 之间；
+ * `$标签` / `#声明` / `;注释` 都不算。同名**也算**形参不同（引擎按名匹配）。
+ * 只报「**两个不同来源**撞名」；同一来源内部重复定义属单文件自己的事，别处管。
+ *
+ * **大小写口径 = 折叠（大小写不敏感）**，语料实证：本机语料自带引擎配置
+ * `魔改版更新记录文档/emuera_典文件内带的emueraconfig.txt` 有
+ * `関数・属性については大文字小文字を無視しない:NO`——该配置 ID 在
+ * `lang/emuera.zhs.xml` 映射到 `UI.ConfigDialog.Compatibility.NoIgnoreCase`
+ * 「函数以及参数的大小写敏感」，值为 NO 即**关**（= 函数名大小写不敏感）；同文件
+ * `同名の非イベント関数が複数定義されたとき警告する:NO` 说明引擎对重复定义**默认不警告**。
+ * 与全项目既有口径（`ErbFunction.normalizedName = name.toUpperCase()`）一致。
  */
 
 import {
@@ -85,12 +106,43 @@ function decodeSource(bytes: Uint8Array): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
+/** 引擎会编译的产物（`.ERB` / `.ERH`，大小写不敏感）——原样携带的也要扫函数名 */
+function isErbArtifact(relPath: string): boolean {
+  return /\.(erb|erh)$/i.test(relPath);
+}
+
+/**
+ * 扫出一段产物文本里的全部函数定义名（口径见模块头「跨文件函数名必须唯一」）。
+ *
+ * 与 `erb-parser` 的 `@` 头终止符同源（`(` / 空白 / `;`），但不 import 它——插件之间
+ * 禁交叉 import（审计 C）；这里是**只读扫名**，口径对齐即可。
+ */
+function scanFunctionNames(text: string): string[] {
+  const names: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith('@')) continue; // `;` 注释 / `#` 声明 / `$` 标签都被这行挡掉
+    const body = trimmed.slice(1);
+    let end = body.length;
+    for (let i = 0; i < body.length; i++) {
+      const c = body[i]!;
+      if (c === '(' || c === ' ' || c === '\t' || c === ';') {
+        end = i;
+        break;
+      }
+    }
+    const name = body.slice(0, end).trim();
+    if (name.length > 0) names.push(name);
+  }
+  return names;
+}
+
 /**
  * 生成制品计划。
  *
  * @param sources 包目录下的全部源文件（相对路径 + 字节）
  * @param compile `.kojo` → 产物字节（注入，便于单测用替身驱动 fail-closed）
- * @throws Error 命名冲突 / 转译失败（消息为中文，直接呈现给作者）
+ * @throws Error 命名冲突 / 函数名冲突 / 转译失败（消息为中文，直接呈现给作者）
  */
 export function planArtifacts(
   sources: readonly ArtifactSource[],
@@ -98,6 +150,7 @@ export function planArtifacts(
 ): ArtifactPlan {
   const entries: ArtifactEntry[] = [];
   const taken = new Map<string, string>(); // 归一化名 → 来源路径（报冲突时指认另一方）
+  const fnOwners = new Map<string, { rel: string; name: string }>(); // 折叠函数名 → 首个来源
   let transpiled = 0;
   let passthrough = 0;
 
@@ -111,6 +164,27 @@ export function planArtifacts(
     taken.set(key, from);
   };
 
+  // 函数名全局唯一：不同来源产出同名函数 → 引擎只取一处、另一处静默失效（fail-closed）
+  const claimNames = (rel: string, text: string): void => {
+    for (const name of scanFunctionNames(text)) {
+      const key = name.toUpperCase(); // 折叠口径：语料实证引擎大小写不敏感（见模块头）
+      const prev = fnOwners.get(key);
+      if (prev === undefined) {
+        fnOwners.set(key, { rel, name });
+        continue;
+      }
+      if (prev.rel === rel) continue; // 同一来源内部重复 = 单文件自己的事，不在此报
+      const shown =
+        prev.name === name
+          ? `@${name}`
+          : `@${name}（「${prev.rel}」写作 @${prev.name}，二者仅大小写不同）`;
+      throw new Error(
+        `函数名冲突：「${prev.rel}」与「${rel}」都会产出函数 ${shown}` +
+          `（Emuera 函数名是全局的，重复定义时引擎只取一处、另一处静默失效），请改名后再导出。`,
+      );
+    }
+  };
+
   for (const src of sources) {
     const rel = toRelPath(src.relPath);
     if (rel.length === 0) continue;
@@ -120,6 +194,8 @@ export function planArtifacts(
 
     if (!isKojoSource(rel)) {
       claim(rel, rel);
+      // 引擎会编译的产物（.ERB/.ERH）也要扫函数名；只解码，字节照旧原样进制品
+      if (isErbArtifact(rel)) claimNames(rel, decodeSource(src.bytes));
       entries.push({ relPath: rel, bytes: src.bytes, sourceRel: rel });
       passthrough += 1;
       continue;
@@ -139,6 +215,8 @@ export function planArtifacts(
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(`「${rel}」转译失败，未生成制品：${reason}`);
     }
+    // 产物全文里扫函数名（`.kojo` 只活在内存，其函数名与别处的冲突同样要挡）
+    claimNames(rel, compiled.transpile.erb);
     entries.push({ relPath: relTarget, bytes: compiled.bytes, sourceRel: rel, text: compiled.transpile.erb });
     transpiled += 1;
   }
