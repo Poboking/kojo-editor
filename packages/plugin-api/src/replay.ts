@@ -224,6 +224,18 @@ export interface BranchChainOutcome {
   /** 命中分支行（outcome = 'taken' 时非空；跳转定位用） */
   takenLine: number | null;
   /**
+   * 闭合行（ENDIF / ENDSELECT；G1 2026-10-16 additive）。
+   *
+   * 为什么值得公开：消费方要回答"这一行归不归这条链管"，只给 `headLine` 与成员行
+   * 就只能猜链在哪儿收口——猜出来的区间会把**已闭合的兄弟链**也算成管辖本行，
+   * 于是把"会执行"误报成"不会执行"。`endLine` 是引擎折叠时本就握住的事实
+   * （`ChainFrame.closeLine`），不给才是丢信息。
+   *
+   * 缺省（`undefined`）= **未闭合链**（源文件本身残缺）：未知不等于"一直管到文件尾"，
+   * 消费方须退回保守判据。
+   */
+  endLine?: number;
+  /**
    * - `taken`：确定命中某分支；
    * - `no-match`：全假且无 ELSE/CASEELSE（落空——口上域少见但合法）；
    * - `unknown`：链上存在未知条件且前序全假（无法判定走向）；

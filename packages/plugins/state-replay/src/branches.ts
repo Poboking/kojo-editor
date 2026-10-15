@@ -251,6 +251,10 @@ export function buildBranchOutcomes(
       takenLine,
       outcome,
       ...(unknown ? { unknown } : {}),
+      // G1（additive）：把闭合行交给消费方——"这一行归不归本链管"必须有收口，
+      // 否则已闭合的兄弟链会被当成仍在管辖，把"会执行"误报成"不会执行"。
+      // 未闭合链**不给**（未知 ≠ 管到文件尾），消费方自会退回保守判据。
+      ...(frame.closeLine !== null ? { endLine: frame.closeLine } : {}),
       __span: {
         head: frame.headLine,
         end: frame.closeLine ?? lastMember?.line ?? frame.headLine,

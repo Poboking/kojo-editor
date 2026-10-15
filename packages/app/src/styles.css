@@ -4775,3 +4775,50 @@ button.primary .hint {
 .search-scope-notice {
   color: var(--amber);
 }
+
+
+/* =====================================================================
+   G1「看这一行的状态」（2026-10-16 跳到命中状态批）
+   —— 全部挂在回放面板既有的 rp-* 词表下，不新增装饰通道：编辑器侧零标记
+   （同一状态只在一处显示；与 PERF-4 的 marker runner、与 B8 CodeLens 无交集）。
+   ===================================================================== */
+
+/* 「这一行」横幅：结论一句话 + 状态徽章（徽章色沿用 rp-badge 的 ok/bad/unk 三档） */
+.rp-locate {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 2px 0 6px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--accent, #61afef);
+  background: color-mix(in srgb, var(--accent, #61afef) 10%, transparent);
+  border-radius: 3px;
+}
+.rp-locate-text {
+  flex: 1 1 220px;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+/* 跳转命中的那一条记录（谓词行 / 分支行）：描边 + 一次性高亮，不改行高 */
+.rp-locate-row {
+  outline: 1px solid var(--accent, #61afef);
+  outline-offset: -1px;
+  border-radius: 3px;
+  animation: rp-locate-flash 1.2s ease-out 2;
+}
+@keyframes rp-locate-flash {
+  0%,
+  100% {
+    background: transparent;
+  }
+  40% {
+    background: color-mix(in srgb, var(--accent, #61afef) 26%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-locate-row {
+    animation: none;
+  }
+}

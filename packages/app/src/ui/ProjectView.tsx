@@ -13,6 +13,8 @@ import { Icon } from './icons';
 import type { ShellCommandSpec } from './commands';
 import { collectSearchScopes, type SearchScopeCatalog } from './search-scope';
 import { workspaceRootsOf } from './workspace-roots';
+import { useNotify } from './NotificationCenter';
+import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
 
 interface Props {
   kernel: Kernel;
@@ -95,6 +97,8 @@ export function ProjectView({
   onReauth,
 }: Props): ReactElement {
   const [editorStatus, setEditorStatus] = useState<EditorStatusInfo | null>(null);
+  /** 壳层通知（G1：命令按下去必须有回应——兑现不了就说一句人话，不灰掉不说话） */
+  const notify = useNotify();
   /** 壳层工作台 API（空态动作按钮：快速打开 / 命令面板 / 新建口上文件） */
   const [workbench, setWorkbench] = useState<WorkbenchApi | null>(null);
   /** Ctrl+W 命令读最新活动标签（壳层命令注册一次，闭包外取值） */
@@ -160,8 +164,25 @@ export function ProjectView({
           kernel.bus.emit('editor.sugarView.set', {});
         },
       },
+      // G1「看这一行的状态」（2026-10-16 跳到命中状态批）：光标所在那一段 + 那一行
+      // → 状态回放面板里对应的那条记录。宿主只做"位置 → 中性名字 → 发意图"，
+      // 命中判定与呈现全在回放面板那一处（编辑器里不画第二份标记，也不新建显示面）。
+      // 与「转到工作区符号」同款**刻意不给 `when`**：没打开文件也要按得下去，
+      // 按下去必须听到响（铁律 4）——兑现不了就回一句人话，绝不灰着不说话。
+      {
+        id: 'workbench.jumpToState',
+        title: '看这一行的状态',
+        keybinding: 'ctrl+alt+s',
+        run: () => {
+          requestJumpToState({
+            probe: readJumpProbe,
+            emit: (intent) => kernel.bus.emit('kojo.replayFunction', { ...intent, source: JUMP_TO_STATE_SOURCE }),
+            say: (message) => notify({ kind: 'info', message }),
+          });
+        },
+      },
     ],
-    [onRequestCloseTab, onSaveAll, kernel],
+    [onRequestCloseTab, onSaveAll, kernel, notify],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →

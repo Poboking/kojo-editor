@@ -31,6 +31,7 @@ import { dialectForLanguage, installDocumentFormatter, toTextEdits } from '../mo
 import { applyFormatOnSave } from './format-on-save';
 import { loadFormatOnSavePref } from './format-pref';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
+import { setJumpProbe } from './jump-to-state';
 import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
 import {
   crumbsKey,
@@ -1198,6 +1199,37 @@ export function EditorPane({
     };
     const crumbCursorSub = ed.onDidChangeCursorPosition(() => crumbRefreshRef.current?.());
     const crumbModelSub = ed.onDidChangeModel(() => crumbRefreshRef.current?.());
+    /* G1「跳到命中状态」的位点探针（2026-10-16）。
+     *
+     * **按下才取**，不挂常驻监听：这条键一秒可能被按一次，而面包屑一次按键要算一次，
+     * 两者对"最新光标行"的代价口径完全不同。符号树复用面包屑那份缓存（同一棵
+     * documentSymbol 树第二次上岗；缓存判据照旧 = path + model 版本号）。
+     * 派生视图（`.kojo` 糖视图挂的是只读 model）行号不属于这份文件本身，
+     * 一律如实标 `derivedView` 并**不给符号**——不许把作者导到不存在的位置。
+     */
+    setJumpProbe(() => {
+      const ed2 = editorRef.current;
+      const path = filePathRef.current;
+      const model = ed2?.getModel() ?? null;
+      if (!ed2 || !path || !model) return null;
+      const line = ed2.getPosition()?.lineNumber ?? 1;
+      if (sugarModelRef.current) return { path, line, symbols: null, derivedView: true };
+      const versionId = model.getAlternativeVersionId();
+      const cache = crumbTreeCacheRef.current;
+      let symbols: EditorDocumentSymbol[];
+      if (cache && cache.path === path && cache.versionId === versionId) symbols = cache.symbols;
+      else {
+        symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
+          kind: 'documentSymbol',
+          path,
+          text: model.getValue(),
+          project: kernel.project.current(),
+          lineCount: model.getLineCount(),
+        });
+        crumbTreeCacheRef.current = { path, versionId, symbols };
+      }
+      return { path, line, symbols, derivedView: false };
+    });
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
     const completionDisposer = installKojoCompletion(monaco, () => editorTables(kernel));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
@@ -1217,6 +1249,7 @@ export function EditorPane({
       crumbCursorSub.dispose();
       crumbModelSub.dispose();
       crumbRefreshRef.current = null;
+      setJumpProbe(null);
       formatterDisposer.dispose();
       erbCompletionDisposer.dispose();
       completionDisposer.dispose();

@@ -152,8 +152,23 @@ export interface KernelEventMap {
    * 回放意图（v0.2 第八批）：请求回放面板解释一个口上函数。
    * 通用、游戏无关——由回放面板（`state.replay` 的 UI 消费者）响应；
    * 任意插件可发起（导航面板"回放此函数"、未来的矩阵/预览联动）。
+   *
+   * `locate`（G1 跳到命中状态，2026-10-16；additive 可选，缺省 = 旧行为逐字不变）：
+   * 发起方手上有**一个位置**（作者正看着的那一行），要求面板把这条记录拉到眼前。
+   * 语义由消费方解释——它拿 `locate.filePath` 与本次结果的来源文件对一遍，
+   * 对得上就定位到那一行的判定并高亮，对不上就说清为什么对不上（绝不静默）。
+   * 之所以带上 `filePath`：同一份内容有两种写法视图时行号会错位，
+   * 只给行号就等于让消费方猜"这些行号属于哪份文本"。
+   *
+   * 分层口径：这个成员**只说"看哪一行"，不说"这一行是什么"**——发起方（宿主）
+   * 交出的是中性位点，函数名仍由它按符号树折好放在 `functionName` 里，
+   * 命中与否的判定权全在回放侧（避免第二套判据）。
    */
-  'kojo.replayFunction': { functionName: string; source?: string };
+  'kojo.replayFunction': {
+    functionName: string;
+    source?: string;
+    locate?: { filePath: string; line: number };
+  };
   /**
    * 打开 overlay 意图（2026-10-11 UI 重设计批 P2）：请求宿主打开某 `ui.overlay`
    * 贡献（新建向导 / 重授权 / 设置等模态）。

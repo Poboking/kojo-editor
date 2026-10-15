@@ -12,12 +12,23 @@
  *   复用——`sanitizeScenes` 容错反序列化，`captureSceneSlots` 采集当前输入，
  *   `applyScene` 应用到函数签名（冲突显式上报），`sceneSuggestionName` 由协议槽
  *   label 生成建议名（协议不可用 → 空串，降级纯手填）；场景值一律记为
- *   `manual`——它是**作者的场景假设**，不是引擎事实。
+ *   `manual`——它是**作者的场景假设**，不是引擎事实；
+ * - **跳到命中状态**（G1，2026-10-16）：`readLineAt` 把"作者正看着的那一行"
+ *   折成一句走/不走的结论（八态穷尽，判不出绝不并入不走），`describeReading`
+ *   出作者面的那句话。判定权仍在引擎（只投影 `FunctionReplay`，不重算条件）。
  *
  * 全部函数为纯函数：输入 → 输出，无副作用、无 React、无服务依赖。
  */
 
-import type { ConditionExpr, FunctionReplay, ReplayCallContext, ReplayUnknownCode } from '@kojo/plugin-api';
+import type {
+  BranchChainOutcome,
+  ConditionExpr,
+  FunctionReplay,
+  PredicateReplay,
+  ReplayCallContext,
+  ReplayUnknownCode,
+} from '@kojo/plugin-api';
+import { pathKey } from '@kojo/plugin-api';
 
 /** 解析失败的原因（呈现给用户） */
 export type CallContextParseError = 'bad-syntax' | 'bad-slot' | 'bad-value' | 'dup-slot';
@@ -466,4 +477,309 @@ export function newSceneId(existing: readonly string[], gen: () => string = defa
 
 function defaultSceneIdSeed(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/* ======================== G1 跳到命中状态（2026-10-16） ========================
+ *
+ * 作者站在原代码的某一行上按下列键，宿主交出的是**中性位点**（文件 + 行），
+ * 本模块负责把它折成"这一行在当前这份存档下走不走"。分层要点：
+ *
+ * - **判定权不外放**：走向结论一律采信回放引擎已算好的 `FunctionReplay`
+ *   （谓词三值 + 分支链可达性传播），本模块只做**行 → 记录**的对照，
+ *   绝不重算条件、绝不新建第二套可达性口径。
+ * - **管辖链判据与 `kojo-sugar/preview` 的 `foldReachability` 同形**（覆盖 =
+ *   链头在本行之前且不越过闭合行；归属 = 本行之前最近的成员）。为什么是"同形"
+ *   而非复用：跨插件 import 是审计 C 项禁止的，而两侧的输入本就不同（那边吃糖
+ *   源映射的块区间，这边吃单个行号）。漂移护栏：本模块的行号断言全部钉在
+ *   `tests/locate-reading.test.ts`，分歧会在那里现形，而不是在作者眼前。
+ * - **由外向内逐层折**，命中即停：外层没进来 / 外层走了别支都是决定性结论，
+ *   不该再往下看；遇到"判不出"的层先记下原因继续下钻，因为内层的失配同样是
+ *   决定性结论（引擎的 `unreachable` 已把可达性传播算过一遍，本层只做投影）。
+ */
+
+/** 一次跳转请求携带的位点（= 契约 `kojo.replayFunction.locate`） */
+export interface LocateRequest {
+  readonly filePath: string;
+  readonly line: number;
+}
+
+/**
+ * 一行的走法结论（面向作者的口径，八态穷尽；判不出不并入"不走"）。
+ * - `runs`：会执行；
+ * - `skipped`：不会执行（同一处条件走的是另一支）；
+ * - `outer-blocked`：外层分支没进来；
+ * - `no-entry`：这段条件全不成立、也没有兜底；
+ * - `undecided`：判不出（附带原因，不假装知道）；
+ * - `straight`：不在任何条件里，函数被调用就会执行；
+ * - `outside`：这一行不在这段记录的起点之后；
+ * - `no-record`：这一段没有登记到任何可判定的条件。
+ */
+export type LocateVerdict =
+  | 'runs'
+  | 'skipped'
+  | 'outer-blocked'
+  | 'no-entry'
+  | 'undecided'
+  | 'straight'
+  | 'outside'
+  | 'no-record';
+
+/** 本行条件的成色（仅当这一行自己就是某个条件时给出） */
+export interface LocateCondition {
+  readonly kind: 'IF' | 'ELSEIF' | 'SIF' | 'CASE';
+  readonly outcome: 'true' | 'false' | 'unknown';
+  readonly text: string;
+  readonly reason?: string;
+}
+
+/** 一行的读数（结论 + 支撑事实；文案统一由 `describeReading` 生成） */
+export interface LineReading {
+  readonly verdict: LocateVerdict;
+  readonly line: number;
+  /** 走到的那一支在哪行（`skipped` 时给作者"那到底走了哪"） */
+  readonly wentTo?: number;
+  /** 拦在外层的那条链的头行（`outer-blocked` 时有值） */
+  readonly blockedBy?: number;
+  /** 判不出的原因（`undecided` 时有值；已是人话，来自引擎的未知标注） */
+  readonly reason?: string;
+  /** 这一行自己就是一个条件 */
+  readonly condition?: LocateCondition;
+  /** 本段记录的起始行（仅 `outside` 时给出，让作者知道记录从哪开始） */
+  readonly fromLine?: number;
+  /** 本行在记录里对应几条条件（结果区据此决定高亮几行；0 = 没有可高亮的条目） */
+  readonly matchedRows: number;
+}
+
+/** 来源文件是否是同一份文本（宿主与索引各拿各的路径字符串，分隔符/大小写不保证一致） */
+export function sameSourcePath(a: string, b: string): boolean {
+  return pathKey(a) === pathKey(b);
+}
+
+/**
+ * 链 C 是否管辖第 L 行（本行落在 C 的体内，不是在 C 的链头上）。
+ *
+ * 收口判据优先用引擎给的 `endLine`（ENDIF / ENDSELECT 真行号）：**没有它就退回
+ * 深度判据**（期间开起过同深度或更浅的链 ⇒ 本链已闭合）。为什么必须优先真收口：
+ * 兄弟链只要深度比本链深，深度判据就看不出它已经结束，会把"已经翻篇的那条链"
+ * 当作还在管辖本行——于是把**会执行**误报成**不会执行**（假阴性比不回答更坏）。
+ */
+function coversInner(chain: BranchChainOutcome, line: number, all: readonly BranchChainOutcome[]): boolean {
+  if (chain.headLine >= line) return false;
+  if (chain.endLine !== undefined) return line <= chain.endLine;
+  for (const other of all) {
+    if (other === chain) continue;
+    if (other.headLine > chain.headLine && other.headLine < line && other.depth <= chain.depth) return false;
+  }
+  return true;
+}
+
+/** 管辖第 L 行的成员行（L 之前最近的一个）；无 → null（说明 L 就是链头那一行） */
+function owningMember(chain: BranchChainOutcome, line: number): number | null {
+  let owner: number | null = null;
+  for (const m of chain.members) {
+    if (m.line <= line) owner = m.line;
+    else break;
+  }
+  return owner;
+}
+
+/** 第 L 行是否是这条链的成员行（IF / ELSEIF / ELSE / CASE / CASEELSE 本身） */
+function isMemberLine(chain: BranchChainOutcome, line: number): boolean {
+  return chain.members.some((m) => m.line === line);
+}
+
+/**
+ * 同一行多条谓词的归约（与回放引擎 `branches.ts` 的折叠口径同款）：
+ * 相邻的 `and` 半边成对消费为一个 AND 组（`CASE a TO b` 的 `>=a` / `<=b`），
+ * 其余各自成组；组间取 OR。Kleene：含假即假，否则含未知即未知。
+ */
+function rollUpLine(preds: readonly PredicateReplay[]): LocateCondition | null {
+  if (preds.length === 0) return null;
+  const groups: ('true' | 'false' | 'unknown')[] = [];
+  const reasons: string[] = [];
+  let i = 0;
+  while (i < preds.length) {
+    if (preds[i]!.conjunction === 'and') {
+      let group: 'true' | 'false' | 'unknown' = 'true';
+      for (let k = 0; k < 2 && i < preds.length && preds[i]!.conjunction === 'and'; k++, i++) {
+        const o = preds[i]!.outcome;
+        if (o.kind === 'false') group = 'false';
+        else if (o.kind === 'unknown' && group !== 'false') {
+          group = 'unknown';
+          reasons.push(o.unknown.message);
+        }
+      }
+      groups.push(group);
+    } else {
+      const o = preds[i]!.outcome;
+      groups.push(o.kind);
+      if (o.kind === 'unknown') reasons.push(o.unknown.message);
+      i += 1;
+    }
+  }
+  const outcome: 'true' | 'false' | 'unknown' = groups.includes('true')
+    ? 'true'
+    : groups.includes('unknown')
+      ? 'unknown'
+      : 'false';
+  const head = preds[0]!;
+  return {
+    kind: head.kind,
+    outcome,
+    // 同多条时逐条列出原文（作者要认得出自己写的那一句）
+    text: preds.map((p) => p.text).join(' / '),
+    ...(reasons.length > 0 ? { reason: reasons[0]! } : {}),
+  };
+}
+
+/**
+ * 一行的读数（纯函数）。顺序即优先级，逐条可测：
+ * 1. 行号早于本段起点 → `outside`（越界不夹取：把过期行号折到附近等于给假答案）；
+ * 2. **管辖本行的链**优先（本行是某条链的成员行，或落在某条链的体内）：
+ *    链的 `outcome` 是引擎算好的三值结论，本模块只做投影；
+ * 3. 无链管辖 → 看这一行自己有没有条件记录（SIF、未闭合的 IF 等）；
+ * 4. 都没有 → `straight`；本段一条可判定记录都没有时给 `no-record`。
+ */
+export function readLineAt(replay: FunctionReplay, line: number): LineReading {
+  const predsAtLine = replay.predicates.filter((p) => p.line === line);
+  // 本行自己是个条件时，条件原文与成色**一律随读数带出**（每一态都可能要引用它，
+  // 尤其"走了别支"那一句：作者得看见被判成假的就是自己站的这一行）
+  const condition = rollUpLine(predsAtLine);
+  const base: Omit<LineReading, 'verdict'> = {
+    line,
+    matchedRows: predsAtLine.length,
+    ...(condition ? { condition } : {}),
+  };
+
+  if (!Number.isInteger(line) || line < replay.startLine) {
+    return { ...base, verdict: 'outside', fromLine: replay.startLine };
+  }
+
+  const chains = replay.branches;
+  // 本行自己是不是某条链的成员行或链头行（IF / ELSEIF / ELSE / CASE / CASEELSE / SELECTCASE）
+  const own = chains
+    .filter((c) => isMemberLine(c, line) || c.headLine === line)
+    .sort((a, b) => b.headLine - a.headLine)[0];
+  const covering = chains.filter((c) => coversInner(c, line, chains));
+  // 由外向内逐层折（同一条链可能既"覆盖"又是"本行所属"，去重后按链头升序）
+  const governing = [...new Set(own ? [own, ...covering] : covering)].sort((a, b) => a.headLine - b.headLine);
+
+  if (governing.length > 0) {
+    let softUnknown: BranchChainOutcome | null = null;
+    for (const c of governing) {
+      // 本行就是这条链的链头（IF / SELECTCASE）：链头**一定会执行**（它是"被判"的那一句），
+      // 链的走向对它没有意义——只有"外层没进来"这一种结论对它成立。
+      if (c.headLine === line) {
+        if (c.outcome === 'unreachable') return { ...base, verdict: 'outer-blocked', blockedBy: c.headLine };
+        continue;
+      }
+      // 决定性结论命中即停：外层没进来 / 全不成立没兜底 / 走了别支
+      if (c.outcome === 'unreachable') return { ...base, verdict: 'outer-blocked', blockedBy: c.headLine };
+      if (c.outcome === 'no-match') return { ...base, verdict: 'no-entry' };
+      if (c.outcome === 'unknown') {
+        if (!softUnknown) softUnknown = c;
+        continue; // 这一层判不出，但内层仍可能决定性失配 → 继续下钻
+      }
+      const owner = owningMember(c, line);
+      if (owner === null) continue; // 链头行本身（SELECTCASE）：进了这段就执行，不阻断
+      if (owner !== c.takenLine) return { ...base, verdict: 'skipped', wentTo: c.takenLine ?? undefined };
+    }
+    if (softUnknown) {
+      return {
+        ...base,
+        verdict: 'undecided',
+        reason: softUnknown.unknown?.message ?? '条件里有这份存档读不到的东西',
+      };
+    }
+    return { ...base, verdict: 'runs' };
+  }
+
+  if (condition) {
+    if (condition.outcome === 'true') return { ...base, verdict: 'runs' };
+    if (condition.outcome === 'false') return { ...base, verdict: 'skipped' };
+    return { ...base, verdict: 'undecided', reason: condition.reason ?? '读不到' };
+  }
+
+  if (replay.stats.total === 0 && chains.length === 0) return { ...base, verdict: 'no-record' };
+  return { ...base, verdict: 'straight' };
+}
+
+/** 结论的中文短标（与面板既有徽章同形，不新造第三套呈现） */
+export const VERDICT_LABEL: Record<LocateVerdict, { label: string; className: string }> = {
+  runs: { label: '会走', className: 'rp-badge ok' },
+  straight: { label: '会走', className: 'rp-badge ok' },
+  skipped: { label: '不会走', className: 'rp-badge bad' },
+  'outer-blocked': { label: '不会走', className: 'rp-badge bad' },
+  'no-entry': { label: '不会走', className: 'rp-badge bad' },
+  undecided: { label: '判不出', className: 'rp-badge unk' },
+  outside: { label: '对不上', className: 'rp-badge unk' },
+  'no-record': { label: '没记录', className: 'rp-badge unk' },
+};
+
+/**
+ * 一句人话（作者面）。去黑话是硬要求：这里不出现"回放 / 谓词 / 链 / 矩阵"这类词，
+ * 只说这一行走不走、为什么、那到底走了哪一行。
+ */
+export function describeReading(reading: LineReading): string {
+  const at = `第 ${reading.line} 行`;
+  switch (reading.verdict) {
+    case 'runs':
+      return reading.condition
+        ? `${at} 的条件「${reading.condition.text}」成立——这一行走得到。`
+        : `${at} 会执行：这一处的条件走的就是这一支。`;
+    case 'skipped':
+      return reading.wentTo
+        ? `${at} 不会执行：同一处的条件走的是第 ${reading.wentTo} 行那一支。`
+        : `${at} 不会执行：这一处的条件不成立。`;
+    case 'outer-blocked':
+      return `${at} 不会执行：外层第 ${reading.blockedBy} 行的条件就没让它进来。`;
+    case 'no-entry':
+      return `${at} 不会执行：这一整段的条件全都不成立，也没有兜底分支。`;
+    case 'undecided':
+      return `${at} 判不出：条件里用到了这份存档读不到的东西（${reading.reason ?? '未给出原因'}）。`;
+    case 'straight':
+      return `${at} 不在任何条件里——这一段只要被调用，它就会执行。`;
+    case 'outside':
+      return `${at} 不在这段程序的记录里——这段的记录从第 ${reading.fromLine ?? 1} 行才开始（大概是被改过、行号错位了）。`;
+    case 'no-record':
+      return '这一段没有登记到可判定的条件，给不出走不走的结论。';
+  }
+}
+
+/** 一条"这一行"的告示（横幅用；措辞全部在册，组件侧不再拼句子） */
+export interface LocateNotice {
+  readonly line: number;
+  readonly badge: string;
+  readonly className: string;
+  readonly sentence: string;
+  /** 结果区里有可对上的条目（false = 只有这句话，没有可高亮/可滚动的行） */
+  readonly hasRows: boolean;
+}
+
+/**
+ * 位点 → 横幅（纯函数）。
+ *
+ * 两条不静默的分支都要有句子：
+ * - 来源文本对不上（例如从另一份文件、或从行号会错位的派生视图发来）：
+ *   **不硬套**——明说对不上，整段结果照常呈现；
+ * - 对得上：把 `readLineAt` 的结论翻成那句人话。
+ */
+export function locateNoticeFor(result: FunctionReplay, locate: LocateRequest): LocateNotice {
+  if (!sameSourcePath(result.filePath, locate.filePath)) {
+    return {
+      line: locate.line,
+      badge: VERDICT_LABEL.outside.label,
+      className: VERDICT_LABEL.outside.className,
+      sentence: `第 ${locate.line} 行来自另一份文本，和这段记录的来源不是同一份——下面按整段呈现，没把它硬套到这一行上。`,
+      hasRows: false,
+    };
+  }
+  const reading = readLineAt(result, locate.line);
+  return {
+    line: locate.line,
+    badge: VERDICT_LABEL[reading.verdict].label,
+    className: VERDICT_LABEL[reading.verdict].className,
+    sentence: describeReading(reading),
+    hasRows: reading.matchedRows > 0,
+  };
 }

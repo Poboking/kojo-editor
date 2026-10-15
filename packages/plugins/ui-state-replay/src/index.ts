@@ -12,7 +12,9 @@
  *   - 求值在 state-replay 引擎、存档解析在 sav-parser、明细在 condition-extractor；
  *   - 调用上下文（ARG/ARGS 槽位）是**场景输入**，由用户填写、不猜测；
  *   - 谓词行点击 → `editor.revealLocation`（宿主消费，与校验面板同款）；
- *   - 监听 `kojo.replayFunction`（任意插件可发起的回放意图，如导航面板联动）。
+ *   - 监听 `kojo.replayFunction`（任意插件可发起的回放意图，如导航面板联动）；
+ *     **订阅在激活层**，面板没挂载时意图落进闭包等待兑现，带 `locate`（从编辑器
+ *     "跳到命中状态"那条键发来的位点）时面板自行浮出——按了必须有反应（铁律 4）。
  *
  * 本文件内部分两层（v1.0 收口 A3，职责归属注记见 ARCHITECTURE §5.4）：
  *   - **预览层**（`renderReplayPreview` + `branchRow`）：把 `FunctionReplay` 渲染为
@@ -44,7 +46,7 @@ import type {
   UIPanelProps,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
-import type { AssumedSlot, ReplayScene, SceneSlotValue, SlotOrigin } from './panel-logic';
+import type { AssumedSlot, LocateNotice, LocateRequest, ReplayScene, SceneSlotValue, SlotOrigin } from './panel-logic';
 import {
   DEFAULT_SCENE_ID,
   MAX_SCENES,
@@ -57,6 +59,7 @@ import {
   defaultScene,
   defaultSlotText,
   groupUnknowns,
+  locateNoticeFor,
   newSceneId,
   parseCallContextText,
   removeScene,
@@ -72,6 +75,8 @@ import {
 
 /** 函数名提示上限 */
 const SUGGEST_LIMIT = 50;
+/** 本面板的贡献 id（`ui.panel` 注册与"浮起自己"那条意图共用一个真源） */
+const PANEL_ID = 'state-replay';
 /** 谓词渲染上限（防 DOM 爆炸；单函数谓词通常 <100） */
 const PRED_RENDER_CAP = 300;
 /**
@@ -100,6 +105,11 @@ const BRANCH_MARK: Record<BranchChainOutcome['outcome'], { mark: string; classNa
 /** 跳转源码（source 缺省 = 本插件；谓词行沿用 normalizedName 作为来源标记） */
 type EmitReveal = (filePath: string, line: number, source?: string) => void;
 
+/** 结果区容器用到的**最小** DOM 形状（见下方滚动处的说明：本包 root typecheck 无 DOM lib） */
+interface ScrollHost {
+  querySelector(selectors: string): { scrollIntoView(options?: unknown): void } | null;
+}
+
 /** 假设值标记的内联样式（插件内自持，不改 app 样式表；虚线 = 与手输确定值视觉可区分） */
 const ASSUME_STYLE = { color: 'var(--amber, #d19a66)', borderColor: 'var(--amber, #d19a66)', borderStyle: 'dashed' } as const;
 
@@ -109,8 +119,11 @@ function branchRow(
   emit: EmitReveal,
   key: string,
   renderIcon?: (name: string, size?: number) => unknown,
+  /** G1：作者从编辑器跳到这一行时，管辖它的链要标出来（null = 本次不是跳转来的） */
+  atLine?: number | null,
 ): ReturnType<typeof createElement> {
   const mk = BRANCH_MARK[chain.outcome]!;
+  const isAt = atLine !== undefined && atLine !== null && (chain.headLine === atLine || chain.members.some((m) => m.line === atLine));
   /** 命中分支的 ✓ 走宿主图标注册表；缺省回退原字形（BRANCH_MARK 数据模型不改） */
   const mark: ReactNode =
     chain.outcome === 'taken' ? ((renderIcon?.('check', 12) as ReactNode | undefined) ?? mk.mark) : mk.mark;
@@ -127,8 +140,9 @@ function branchRow(
     'div',
     {
       key,
-      className: `rp-branch-row ${chain.outcome}`,
+      className: `rp-branch-row ${chain.outcome}${isAt ? ' rp-locate-row' : ''}`,
       style: { paddingLeft: `${chain.depth * 14 + 2}px` },
+      ...(isAt ? { 'data-locate': '1' } : {}),
     },
     createElement('span', { className: mk.className, title: mk.title }, mark),
     createElement(
@@ -158,11 +172,25 @@ function renderReplayPreview(opts: {
   assumedSlots: readonly AssumedSlot[];
   emitReveal: EmitReveal;
   renderIcon?: (name: string, size?: number) => unknown;
+  /** 「就是这一行」的横幅（G1；null = 本次不是从编辑器跳进来的，呈现与旧行为逐字一致） */
+  notice?: LocateNotice | null;
 }): ReturnType<typeof createElement> {
-  const { result, assumedSlots, emitReveal, renderIcon } = opts;
+  const { result, assumedSlots, emitReveal, renderIcon, notice } = opts;
   const conf = CONFIDENCE_BADGE[result.confidence];
   const unknowns = groupUnknowns(result);
   const impact = summarizeAssumptions(result, assumedSlots);
+  /** 高亮只给**对得上来源**的那一次（对不上时不许画出假的"就是这一行"） */
+  const atLine = notice && notice.hasRows ? notice.line : null;
+
+  // 「这一行」横幅：结论一句话 + 徽章，放在汇总行之前（作者要的正是这一句）
+  const noticeBanner = notice
+    ? createElement(
+        'div',
+        { className: 'rp-locate', role: 'status' },
+        createElement('span', { className: notice.className }, notice.badge),
+        createElement('span', { className: 'rp-locate-text' }, notice.sentence),
+      )
+    : null;
 
   // 假设参数汇总（C9 附加）：分支折叠结果区一眼可见的可信度提示
   const assumptionSummary =
@@ -190,7 +218,9 @@ function renderReplayPreview(opts: {
             `分支走向（${result.branches.length} 条链）`,
             assumptionSummary,
           ),
-          ...result.branches.map((b, i) => branchRow(b, result.filePath, emitReveal, `b${b.headLine}:${i}`, renderIcon)),
+          ...result.branches.map((b, i) =>
+            branchRow(b, result.filePath, emitReveal, `b${b.headLine}:${i}`, renderIcon, atLine),
+          ),
         )
       : assumptionSummary
         ? createElement(
@@ -203,6 +233,7 @@ function renderReplayPreview(opts: {
   return createElement(
     'div',
     { className: 'rp-result' },
+    noticeBanner,
     createElement(
       'div',
       { className: 'rp-summary' },
@@ -237,13 +268,15 @@ function renderReplayPreview(opts: {
       ...result.predicates.slice(0, PRED_RENDER_CAP).map((p, i) => {
         const cls =
           p.outcome.kind === 'true' ? 'rp-outcome hit' : p.outcome.kind === 'false' ? 'rp-outcome miss' : 'rp-outcome unk';
+        const isAt = atLine !== null && p.line === atLine;
         return createElement(
           'li',
           { key: `${p.line}:${i}` },
           createElement(
             'button',
             {
-              className: 'rp-pred-btn',
+              className: `rp-pred-btn${isAt ? ' rp-locate-row' : ''}`,
+              ...(isAt ? { 'data-locate': '1' } : {}),
               title: `${result.filePath}:${p.line}${p.outcome.kind === 'unknown' ? ` — ${p.outcome.unknown.message}` : ''}`,
               onClick: () => emitReveal(result.filePath, p.line, result.normalizedName),
             },
@@ -381,10 +414,36 @@ export function createUiStateReplayPlugin(): Plugin {
       ctx.onDispose(ctx.bus.on('project.closed', () => refreshArchives()));
       if (project.current()) refreshArchives();
 
+      /* ---------------- 待处理回放意图（G1，2026-10-16） ----------------
+       *
+       * 意图订阅从组件里**提到插件激活层**。本面板是 `location:'aux'` +
+       * `defaultActive:false`，作者按跳转键时它多半根本没挂载——旧写法（组件内
+       * `bus.on`）在那种情况下**一个监听者都没有**，事件发进空气里：这正是铁律 4
+       * 说的最坏失败模式（按了没反应），而且它此前也悄悄影响着导航面板那颗 ⟲。
+       * 提到这一层后：意图先落在闭包里，面板挂载（或被浮起）后自己取用。
+       *
+       * 带 `locate` 的请求（编辑器那条键）额外承诺"一定看得见"：面板不在屏上时
+       * 由本插件经既有的 `ui.panel.float` 意图把自己浮出来——可见性是本面板的私事，
+       * 宿主既不问也不该知道哪只面板挂着什么。**不带 `locate` 的旧发起方行为逐字不变**
+       * （不浮窗、不改任何既有面板的默认行为）。
+       */
+      let pending: { functionName: string; locate?: LocateRequest } | null = null;
+      /** 活着的面板实例（浮动窗与停靠位共用同一组件；空 = 没人在听） */
+      const mounted = new Set<object>();
+      ctx.onDispose(
+        ctx.bus.on('kojo.replayFunction', (ev) => {
+          pending = { functionName: ev.functionName, ...(ev.locate ? { locate: ev.locate } : {}) };
+          if (ev.locate && mounted.size === 0) {
+            ctx.bus.emit('ui.panel.float', { id: PANEL_ID, source: 'ui-state-replay' });
+          }
+          notify();
+        }),
+      );
+
       /* ------------------------------ 面板组件 ------------------------------ */
 
       function ReplayPanel(props: UIPanelProps): unknown {
-        const [, force] = useState(0);
+        const [tick, force] = useState(0);
         const [archivePath, setArchivePath] = useState<string>('');
         const [charaNo, setCharaNo] = useState<number | null>(null);
         const [view, setView] = useState<ReplayStateView | null>(null);
@@ -405,10 +464,18 @@ export function createUiStateReplayPlugin(): Plugin {
         const [result, setResult] = useState<FunctionReplay | null>(null);
         /** 与该结果同批的假设值槽位（快照于回放时刻——改槽不影响已出结果的可信度标注） */
         const [resultAssumed, setResultAssumed] = useState<AssumedSlot[]>([]);
+        /** 与该行结果同批的位点（G1：这一行的读数 + 那一行的条目高亮） */
+        const [resultLocate, setResultLocate] = useState<LocateRequest | null>(null);
+        /** 意图已收到但还没有存档/角色可算（不静默：先回一句"记下了"） */
+        const [pendingNote, setPendingNote] = useState<string | null>(null);
         const [replayBusy, setReplayBusy] = useState(false);
         const [replayError, setReplayError] = useState<string | null>(null);
         /** 视图代际（换档/换角色时使在途 createView 作废） */
         const viewGenRef = useRef(0);
+        /** 结果区容器（`locate` 到位后把对应那一条滚进视野） */
+        const resultWrapRef = useRef<HTMLDivElement | null>(null);
+        /** 本实例的挂载凭据（激活层用它判断"有没有人在听"） */
+        const mountTokenRef = useRef<object>({});
 
         // 协议槽位（函数名变化时重置输入为默认场景值：int=0 / str=''）
         const protocol = currentProtocol();
@@ -469,6 +536,7 @@ export function createUiStateReplayPlugin(): Plugin {
           setViewError(null);
           setResult(null);
           setResultAssumed([]);
+          setResultLocate(null);
           if (!archivePath || charaNo === null) {
             return;
           }
@@ -492,28 +560,45 @@ export function createUiStateReplayPlugin(): Plugin {
           };
         }, [archivePath, charaNo]);
 
-        // ---- 回放意图（任意插件发起；如导航面板"回放此函数"） ----
-        // 经 ref 调用最新的 runReplay（M5 修复：deps 不含 view 时旧闭包
-        // 会拿到挂接时刻的 view=null，误报"请先选择存档与角色"）。
-        const runReplayRef = useRef<(nameOverride?: string) => void>(null);
+        // ---- 挂载凭据（激活层的意图分发要看"有没有实例在听"） ----
         useEffect(() => {
-          const un = ctx.bus.on('kojo.replayFunction', (ev) => {
-            setFnQuery(ev.functionName);
-            runReplayRef.current?.(ev.functionName);
-          });
-          return un;
-          // eslint-disable-next-line react-hooks/exhaustive-deps
+          mounted.add(mountTokenRef.current);
+          return () => {
+            mounted.delete(mountTokenRef.current);
+          };
         }, []);
 
-        const runReplay = (nameOverride?: string): void => {
+        // 经 ref 调用最新的 runReplay（M5 修复：deps 不含 view 时旧闭包
+        // 会拿到挂接时刻的 view=null，误报"请先选择存档与角色"）。
+        const runReplayRef = useRef<(nameOverride?: string, locate?: LocateRequest | null) => void>(null);
+
+        // ---- 回放意图（G1：订阅在激活层，这里只消费落在闭包里的待处理项） ----
+        // 依赖 `[tick, view]`：意图到达（tick 变）或有存档视图了（用户刚选完档）都再试一次。
+        // 没有视图时**不**吞掉待处理项——只回一句"记下了"，选完档自动兑现，
+        // 这样"按了没反应"在这一路不可能发生（铁律 4）。
+        useEffect(() => {
+          const request = pending;
+          if (!request) return;
+          setFnQuery(request.functionName);
+          if (!view) {
+            setPendingNote(`已记下 ${request.functionName}——选好存档和角色后，这一行的结果会直接给出。`);
+            return;
+          }
+          pending = null;
+          setPendingNote(null);
+          runReplayRef.current?.(request.functionName, request.locate ?? null);
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [tick, view]);
+
+        const runReplay = (nameOverride?: string, locate: LocateRequest | null = null): void => {
           const name = (nameOverride ?? fnQuery).trim().toUpperCase();
           setReplayError(null);
           if (!name) {
-            setReplayError('请先输入函数名');
+            setReplayError('先写下要看的那一段的名字。');
             return;
           }
           if (!view) {
-            setReplayError('请先选择存档与角色（建立回放视图）');
+            setReplayError('先在这块面板里选好存档和角色——没有存档，就谈不上"这行走不走"。');
             return;
           }
           // 调用上下文组装：协议槽（结构化输入）优先；无协议 → 文本框解析
@@ -557,16 +642,19 @@ export function createUiStateReplayPlugin(): Plugin {
             .replayFunction(view, name, { callContext })
             .then((r) => {
               if (r === null) {
-                setReplayError(`函数不在条件索引中（未解析到该函数的谓词）：${name}`);
+                setReplayError(`这一段没有登记到可判定的条件（名字：${name}）——多半是这段里根本没有条件语句，或者它没进条件索引。`);
                 setResult(null);
                 setResultAssumed([]);
+                setResultLocate(null);
                 return;
               }
               setResult(r);
               setResultAssumed(assumedAtRun);
+              setResultLocate(locate);
             })
             .catch((err: unknown) => {
               setReplayError(err instanceof Error ? err.message : String(err));
+              setResultLocate(null);
             })
             .finally(() => setReplayBusy(false));
         };
@@ -854,12 +942,36 @@ export function createUiStateReplayPlugin(): Plugin {
             : null;
 
         // ---- 结果渲染（预览层：状态 → 分支 / 文本预览；实现见 renderReplayPreview） ----
+        // 跳转来的那一次（G1）多带一条"这一行"的横幅，并把对应条目滚进视野。
+        const notice = result && resultLocate ? locateNoticeFor(result, resultLocate) : null;
         let resultBody: ReturnType<typeof createElement> | null = null;
         if (result) {
           const emitReveal: EmitReveal = (filePath, line, source) =>
             ctx.bus.emit('editor.revealLocation', { filePath, line, source: source ?? 'ui-state-replay' });
-          resultBody = renderReplayPreview({ result, assumedSlots: resultAssumed, emitReveal, renderIcon: props.renderIcon });
+          resultBody = createElement(
+            'div',
+            { ref: resultWrapRef },
+            renderReplayPreview({
+              result,
+              assumedSlots: resultAssumed,
+              emitReveal,
+              renderIcon: props.renderIcon,
+              notice,
+            }),
+          );
         }
+
+        // 滚到"就是这一行"那一条：只在结果与位点同批时做一次，找不到就作罢
+        // （谓词渲染有上限，第 300 条之后的条目本就不在屏上——不为此再扩渲染面）。
+        // 为什么这里要 `as unknown as`：本包的 typecheck 跑在**无 DOM lib** 的 root 配置下
+        // （root `tsc` 与 app 那套都算数），DOM 成员在那一侧是不可见的类型名；
+        // 用到的能力只有"按选择器找一个能滚的东西"，就按这最小形状声明，不 import DOM 类型。
+        useEffect(() => {
+          if (!result || !resultLocate || !notice?.hasRows) return;
+          const host = resultWrapRef.current as unknown as ScrollHost | null;
+          host?.querySelector('[data-locate="1"]')?.scrollIntoView({ block: 'center' });
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [result, resultLocate]);
 
         const replayErrorEl =
           replayError !== null ? createElement('div', { className: 'rp-error' }, replayError) : null;
@@ -884,6 +996,7 @@ export function createUiStateReplayPlugin(): Plugin {
           slotInputs,
           contextHintEl,
           suggestList,
+          pendingNote !== null ? createElement('div', { className: 'rp-hint dim' }, pendingNote) : null,
           replayErrorEl,
           resultBody,
           result === null && !replayError
@@ -897,7 +1010,7 @@ export function createUiStateReplayPlugin(): Plugin {
       }
 
       ctx.slots.register('ui.panel', {
-        id: 'state-replay',
+        id: PANEL_ID,
         title: '状态回放',
         icon: 'history',
         order: 60,
