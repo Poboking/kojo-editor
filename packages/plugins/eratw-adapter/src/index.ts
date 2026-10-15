@@ -28,3 +28,6 @@ export {
 } from './instruction-table';
 // ZH-F1 批：基础库 / 常用函数名表（additive；与指令表同形——adapter 建纯数据表，糖层只查）
 export { EMPTY_LIBRARY_TABLE, createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS } from './library-table';
+// D2 批：家族头中文别名表（additive；糖层的写侧/投影侧消费走契约方法 `familyAlias` /
+// `familyAliasReverse`，此处导出纯数据表供**测试**零漂移引用真表，杜绝手抄镜像副本）
+export { FAMILY_ALIASES, FAMILY_ALIASES_REVERSE } from './variable-schema';

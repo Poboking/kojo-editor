@@ -241,6 +241,51 @@ function replaceInCode(code: string, replacer: (ident: string) => string | null)
   return out;
 }
 
+/* ======================== 家族头中文别名（D2，§表达式族头中文化） ======================== */
+
+/**
+ * 家族头中文别名替换（D2）——`<别名>:` / `<别名>：` → `<引擎族头>:`（**冒号归一为半角**）。
+ *
+ * 硬性约束（一条不满足即不替换）：
+ * 1. **挂在系统函数名降糖之后**（见 `lowerExpression` 的顺序注释）：`获取标记(` 此时已是
+ *    `GETBIT(`；且下方只认"紧跟冒号"的形态，两重保险；
+ * 2. **只认 `<别名>` 紧跟 `:` 或全角 `：`**（`现在:噴乳` / `现在：噴乳`）；**不跟冒号一律不碰**
+ *    ——这是避开 `获取标记(` / 裸词 `标记` 等误伤的主判据；
+ * 3. **作者别名优先**：`ctx.aliases` 已有同名条目 ⇒ **不替换**（作者写了 `别名 现在 = …`）；
+ * 4. **表住 adapter**：查 `ctx.dictionary?.familyAlias`（缺省 / 未登记 ⇒ 不替换，不猜）。
+ *
+ * 全角冒号**只在这一个位置**容忍（历史上 SIF 的冒号有歧义 ⇒ 不做表达式级全局归一）。
+ * 段条件（`若 …：`）/ `如果` / `当` / 行内条件天然同源生效——本函数就在唯一降糖管线里，
+ * **不另建第二套替换器**（lexer/parser 也不重复做）。
+ */
+function lowerFamilyAliases(code: string, ctx: ExprContext): string {
+  const alias = ctx.dictionary?.familyAlias;
+  if (!alias) return code;
+  let out = '';
+  let i = 0;
+  while (i < code.length) {
+    const end = scanIdentifier(code, i);
+    if (end < 0) {
+      out += code[i]!;
+      i++;
+      continue;
+    }
+    const name = code.slice(i, end);
+    const next = code[end];
+    if ((next === ':' || next === '：') && !ctx.aliases.has(name)) {
+      const family = alias(name);
+      if (family !== undefined && family.length > 0) {
+        out += `${family}:`;
+        i = end + 1;
+        continue;
+      }
+    }
+    out += name;
+    i = end;
+  }
+  return out;
+}
+
 /* ============================ 代词与属性（§3.8） ============================ */
 
 /** 代词 → 字符串插值（`{她}` → `%CALLNAME:TARGET%`） */
@@ -288,8 +333,12 @@ export function lowerExpression(raw: string, ctx: ExprContext): string {
   const deferred: string[] = [];
   const substituted = substituteAliases(named, ctx, deferred).text;
 
+  // ---- 0c. 家族头中文别名（D2；挂在系统函数名降糖之后，见 `lowerFamilyAliases` 头注）----
+  // 只认 `<别名>` 紧跟 `:`/`：` 的形态；作者同名别名优先（其替换已在 0b 生效 / 显式跳过）。
+  const familyAliased = replaceInCodeOutsideStrings(substituted, (code) => lowerFamilyAliases(code, ctx));
+
   // ---- 1. 中文运算符（在字符串字面量外） ----
-  let expr = replaceInCodeOutsideStrings(substituted, (code) => lowerOperators(code));
+  let expr = replaceInCodeOutsideStrings(familyAliased, (code) => lowerOperators(code));
 
   // ---- 2. `不在`（范围取反；结构级，需整段扫描） ----
   expr = lowerNotIn(expr, ctx);

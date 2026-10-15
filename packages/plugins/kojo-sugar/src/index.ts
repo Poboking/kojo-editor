@@ -753,6 +753,14 @@ export function makeLookup(schema: VariableSchema): DictionaryLookup {
       const name = info?.description;
       return name !== undefined && name.length > 0 ? name : undefined;
     },
+    // 家族头中文别名（D2）：直接转发 adapter 的 `familyAlias` / `familyAliasReverse`
+    // （单一真源，本包零硬编码）；**adapter 未提供 ⇒ 不挂**（消费方据 `undefined` 不替换，不猜）。
+    ...(schema.familyAlias
+      ? { familyAlias: (name: string) => schema.familyAlias!(name) }
+      : {}),
+    ...(schema.familyAliasReverse
+      ? { familyAliasReverse: (family: string) => schema.familyAliasReverse!(family) }
+      : {}),
   };
 }
 

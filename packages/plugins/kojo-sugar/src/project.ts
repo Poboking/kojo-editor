@@ -75,6 +75,7 @@ import type { LiftDeps } from './lift';
 import type { DictionaryLookup } from './types';
 import { PRONOUN_REVERSE } from './expression';
 import { SYSTEM_FUNCTION_REVERSE } from './system-functions';
+import { isIdentPart, isIdentStart } from './identifier-chars';
 import { stripInlineComment } from './lexer';
 import { buildFaceNameIndex, stripParams } from './faces-reverse';
 import type { FaceNameIndex } from './faces-reverse';
@@ -335,7 +336,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   // 收尾，猜边界会把别人的代码藏起来）。
   const color = planColorBlocks(lines, ctx);
   // 函数骨架（包装三联 + 記入チェック信封）——判据全部"可证明"，配不上就不动。
-  const skeleton = planSkeleton(lines, ctx);
+  const skeleton = planSkeleton(lines, ctx, deps);
   // `SIF 条件` + 下一行单语句 → 「如果 …：」块头 + 正文 +1 层缩进（批 H）
   const sif = planSif(lines, ctx);
   // 数据表（PRINTDATA 系）→ 块头标注 + 条目可读化（批 N；判据不满足的块整块不动）
@@ -891,10 +892,14 @@ interface SkeletonPlan {
  * 段条件回显（S5）：原生 `!` → 糖的否定运算符 `非 `（写侧 `非` 走既有中文运算符管线）。
  *
  * 判据只认**前置逻辑否定**（`^!(?!=)`）——`!=` 是不等号，不是否定；其余形态原样。
+ *
+ * D2：段头（`若 …：`）也必须走**家族头中文化**（`IF LOCAL && NOWEX:噴乳` → `若 现在：噴乳：`）
+ * ——与表达式侧同一个 `reverseFamilyAliases`（查 adapter 反向表；未登记原样保留，不猜）。
  */
-function projectSectionCondition(condition: string): string {
+function projectSectionCondition(condition: string, deps: LiftDeps): string {
   const t = condition.trim();
-  return /^!(?!=)/.test(t) ? `非 ${t.slice(1).trim()}` : t;
+  const negated = /^!(?!=)/.test(t) ? `非 ${t.slice(1).trim()}` : t;
+  return reverseFamilyAliases(negated, deps);
 }
 
 /**
@@ -953,7 +958,7 @@ function splitWrapperHead(content: string): { name: string; decl: string } | nul
  * 真实逻辑**藏进被吸收的行里——读者看不见却以为看全了，比"少合并"危险得多。所以每条
  * 判据都取"最紧的形态"，并且：**配不上就不动**（原样留原代码）。
  */
-function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
+function planSkeleton(lines: string[], ctx: ProjContext, deps: LiftDeps): SkeletonPlan {
   const absorbed = new Set<number>();
   /** 逐行 dedent（信封内 -1；嵌套信封会叠加） */
   const dedent = new Array<number>(lines.length + 1).fill(0);
@@ -1108,7 +1113,7 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
       // 值已保证是 `1`（值 `0` 早在上游 `continue`，不折）。
       absorbed.add(ln);
       absorbed.add(endLn);
-      const cond = projectSectionCondition(sectionCondition!);
+      const cond = projectSectionCondition(sectionCondition!, deps);
       sectionHeadAt.set(ifLn, `若 ${cond}：`);
       continue;
     }
@@ -1651,6 +1656,53 @@ function readableText(text: string, deps: LiftDeps): string {
 }
 
 /**
+ * 家族头**中文别名反糖**（D2）：把已登记的引擎族头 `NOWEX:` 渲染成糖面写法 `现在：`
+ * （**全角冒号**，对齐写侧糖面）。词级替换、**双引号字面量内不碰**。
+ *
+ * 表住 adapter：查 `dictionary().familyAliasReverse`（**单一真源**，本模块零硬编码族名）；
+ * 逐个"标识符 + 紧跟半角 `:`"的位置问一次，**未登记 / 查不到一律原样保留**（不猜）。
+ *
+ * 与 `EXPR_REF_RE`（`nameAt` 的属性反糖：`族:作用域:索引` → `她的X`）**并列、互不相干**：
+ * 本条只换族头 **字面**，那条管属性写法；两条各自 fail-visible、可独立关闭。
+ */
+function reverseFamilyAliases(text: string, deps: LiftDeps): string {
+  const reverse = deps.dictionary?.()?.familyAliasReverse;
+  if (!reverse) return text;
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === '"') {
+      // 双引号字面量整段跳过（那里可能恰好写着同样的字样）
+      const end = text.indexOf('"', i + 1);
+      const stop = end < 0 ? text.length : end + 1;
+      out += text.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (isIdentStart(ch)) {
+      let j = i + 1;
+      while (j < text.length && isIdentPart(text[j]!)) j++;
+      const name = text.slice(i, j);
+      if (text[j] === ':') {
+        const alias = reverse(name);
+        if (alias !== undefined && alias.length > 0) {
+          out += `${alias}：`;
+          i = j + 1;
+          continue;
+        }
+      }
+      out += name;
+      i = j;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/**
  * 属性反糖：把变量引用换成糖的"代词 + 属性"写法。**两种作用面，判据不同**：
  *
  * - **插值**（`{…}` / `%…%`）：只在"整支恰是一个变量引用"时替换——`{CFLAG:TARGET:1088}`
@@ -1658,18 +1710,25 @@ function readableText(text: string, deps: LiftDeps): string {
  *   替换时**定界符原样保留**（把 `{…}` 变成裸文本会直接改坏台词）。
  * - **表达式**（控制流条件 / 赋值右值）：引用夹在运算符之间（`CFLAG:TARGET:1088 >= 500`），
  *   故做**词级**替换；双引号字符串字面量内不碰（那里可能恰好写着同样的字样）。
+ *
+ * 定界符内**整支恰是原生引用**、属性反糖查不到名称时，退一步做**族头中文化**（D2：
+ * `{NOWEX:噴乳}` → `{现在：噴乳}`）——仍**只动有界记号**，不碰正文里的裸字样（不猜/不误伤台词）。
  */
 function reverseAttributes(text: string, deps: LiftDeps): string {
   const dict = deps.dictionary?.();
-  if (!dict?.nameAt) return text;
+  if (!dict?.nameAt && !dict?.familyAliasReverse) return text;
   return text
     .replace(/\{([^{}]+)\}/g, (whole, inner: string) => {
       const sugar = sugarForRef(inner, dict);
-      return sugar === undefined ? whole : `{${sugar}}`;
+      if (sugar !== undefined) return `{${sugar}}`;
+      const rev = reverseFamilyAliases(inner, deps);
+      return rev === inner ? whole : `{${rev}}`;
     })
     .replace(/%([^%]+)%/g, (whole, inner: string) => {
       const sugar = sugarForRef(inner, dict);
-      return sugar === undefined ? whole : `{${sugar}}`;
+      if (sugar !== undefined) return `{${sugar}}`;
+      const rev = reverseFamilyAliases(inner, deps);
+      return rev === inner ? whole : `{${rev}}`;
     });
 }
 
@@ -1727,7 +1786,8 @@ function reverseExprAttributes(text: string, deps: LiftDeps): string {
             return segmentsToSugar(family, segs, dict) ?? whole;
           })
         : seg;
-      return reverseFunctionCalls(attrs, deps);
+      // ZH-F2 函数名反显 + D2 族头中文化（后者与 `EXPR_REF_RE` 并列、互不相干）
+      return reverseFamilyAliases(reverseFunctionCalls(attrs, deps), deps);
     })
     .join('');
 }

@@ -161,6 +161,33 @@ const FAMILY_LABELS: Record<string, string> = {
 };
 
 /**
+ * 家族头的**作者可写中文别名** —— 与 `FAMILY_LABELS`（家族**显示名**）**不同轴**的独立策展常量。
+ *
+ * - `FAMILY_LABELS`：家族 → 人类可读**显示名**（悬停描述 / 家族级 `lookup` 的 `description`），
+ *   面向"看"（如 `FLAG:'全局标志'`）；
+ * - `FAMILY_ALIASES`：表层中文**输入别名** → 引擎变量族头，面向"写"——作者在表达式 / 段条件里
+ *   写 `现在:噴乳` 等价于原生 `NOWEX:噴乳`（语法糖 §表达式一节的族头中文化，D2 批）。
+ *
+ * **两者不许混用、不许覆盖**：显示名（`全局标志`）不是别名（`标记`），别名（`标记`）也不是
+ * 显示名；把一张表当另一张用必然产出"作者写不出 / 读者看不懂"的错位。表小、策展、纯数据，
+ * 与 `FAMILY_LABELS` 同属"游戏目录无机读表 ⇒ 适配器内置"（架构铁律 3）。未登记 ⇒ 不猜。
+ *
+ * 注：`随机` 同时是**随机块的块关键字**（糖的语言层），本表只声明"它在**表达式位**的族头
+ * 别名 = `RAND`"；块头位由词法器先判（`lexer.classifyLine`），两义不冲突（消歧见 D2 批测试）。
+ */
+export const FAMILY_ALIASES: Readonly<Record<string, string>> = {
+  现在: 'NOWEX',
+  时标: 'TFLAG',
+  标记: 'FLAG',
+  随机: 'RAND',
+};
+
+/** `FAMILY_ALIASES` 的反向表（族头 → 中文别名；键统一大写 ⇒ 引擎大小写不敏感） */
+export const FAMILY_ALIASES_REVERSE: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(FAMILY_ALIASES).map(([alias, family]) => [family.toUpperCase(), alias]),
+);
+
+/**
  * 解析游戏自带 JP→CN 名词典（`plugins/tw_csv_chs.xml`）→ `Map<日文名, 中文名>`（纯函数）。
  *
  * 文件形态：`<map>` 下大量 `<p><k>日文</k><v>中文</v></p>`（引擎 `MAP_FROMXML` 消费）。
@@ -524,6 +551,21 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
         out.push(info);
       }
       return out;
+    },
+    /**
+     * 家族头中文别名（D2；契约 `VariableSchema.familyAlias` 的 eraTW 实现）。
+     * 表层输入别名 → 引擎族头（`现在` → `NOWEX`）；**未登记 ⇒ `undefined`（不猜）**。
+     */
+    familyAlias(name: string): string | undefined {
+      return FAMILY_ALIASES[name];
+    },
+    /**
+     * 家族头中文别名的反向（D2；契约 `VariableSchema.familyAliasReverse`）。
+     * 引擎族头 → 表层中文别名（`NOWEX` → `现在`）；**未登记 ⇒ `undefined`（不猜）**。
+     * 引擎标识符大小写不敏感 ⇒ 键统一大写后查。
+     */
+    familyAliasReverse(family: string): string | undefined {
+      return FAMILY_ALIASES_REVERSE[family.toUpperCase()];
     },
   };
 }

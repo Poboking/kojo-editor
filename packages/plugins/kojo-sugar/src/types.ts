@@ -42,6 +42,26 @@ export interface DictionaryLookup {
    */
   nameAt?(family: string, index: string): string | undefined;
   /**
+   * **家族头中文别名**（**可选能力**；D2 批）：表层中文别名 → 引擎变量族头
+   * （`现在` → `NOWEX`）。**表住 adapter**（游戏知识），转译器只查表不解释。
+   *
+   * 用途：写侧把表达式 / 段条件里的中文族头替换成引擎族头（`现在:噴乳` → `NOWEX:噴乳`）。
+   *
+   * 缺省（字典不支持 / adapter 未提供）= **不做**：未登记的名字一律原样保留（**不猜**）。
+   * 作者若用同名**别名**（`别名 现在 = …`）声明了该名，作者别名优先、本表不替换。
+   */
+  familyAlias?(name: string): string | undefined;
+  /**
+   * **家族头中文别名的反向**（**可选能力**；D2 批）：引擎变量族头 → 表层中文别名
+   * （`NOWEX` → `现在`）。与 `familyAlias` 同一张 adapter 表的反向查询。
+   *
+   * 用途：升糖**投影**的族头中文化——文本体与表达式里的 `NOWEX:噴乳` 渲染成
+   * `现在：噴乳`（全角冒号，对齐糖面写法）。
+   *
+   * 缺省（字典不支持 / adapter 未提供）= **不做**：未登记的族头一律原样保留（**不猜**）。
+   */
+  familyAliasReverse?(family: string): string | undefined;
+  /**
    * **具名索引核对**（**可选能力**；P-10③「族头直通改条件校验」）。
    *
    * 背景：`resolve` 历史上**只看族头**——族头认得出就整串放行 ⇒ 名称段拼错
