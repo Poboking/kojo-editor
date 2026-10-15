@@ -732,6 +732,21 @@ export interface SugarFrontMatter {
    * `作者色` = 旁白也用角色色。**规范 §1.3 的引号×D 系 99% 相关律**的心智模型开关。
    */
   narrationColor?: '默认' | '作者色';
+  /**
+   * `函数前缀: <模板>`（B4-fp；**additive**）——作者**私有**的用户函数命名前缀。
+   *
+   * 声明时**优先于** adapter 的 `userFunction.template`；**未声明 = 逐字节走既有
+   * adapter 模板**（旧文档零改动）。模板串里的占位符：`{n}` = 角色编号（`角色:`）、
+   * `{name}` = 作者写的函数名原文（`函数 <名>：` 的 `<名>`）。**模板只给前缀/骨架、
+   * 由作者提供**——转译器零游戏字面量（真语料私有前缀如 `K{n}_` / `Music_` /
+   * `CHECK_COLLECTION_` 皆住 `.kojo` 文件头，不进任何插件）。
+   *
+   * 语义（纯函数）：模板含 `{name}` → 按位置代入函数名；**未含 `{name}`** → 视为
+   * 前缀、渲染后**在末尾补上函数名**（`函数前缀: K{n}_` + `函数 问候()` → `K11_问候`）。
+   * 非法模板（含未知占位符 / 空模板）→ 报既有码 `face-table-missing`（error）并
+   * fail-closed（该文件的「函数」块不产半成品）。
+   */
+  functionPrefix?: string;
   /** `开关:` 条目（→ `@M_KOJO…_FLAGSETTING_K{No}`），按源顺序 */
   switches: { name: string; value: string; loc: SugarSourceSpan }[];
   /** 头部 `别名` 声明（按源顺序；规范 §3.1 三约束） */

@@ -21,6 +21,8 @@ export type KeywordId =
   | 'head.narrationColor'
   | 'head.switch'
   | 'head.alias'
+  /* 头部选项（B4-fp：作者私有用户函数命名前缀） */
+  | 'head.functionPrefix'
   /* 块头 */
   | 'block.timing'
   | 'block.if'
@@ -73,6 +75,10 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['switch', 'head.switch'],
   ['别名', 'head.alias'],
   ['alias', 'head.alias'],
+  // 头部选项 `函数前缀: <模板>`（B4-fp）——不是块关键字，与 `随机形:` 同属"文件头选项"；
+  // 但因是 `词: 值` 形且需编辑器高亮/补全，故仍走 `KEYWORDS` + `HEAD_DECL_KEYS`（见下）。
+  ['函数前缀', 'head.functionPrefix'],
+  ['function-prefix', 'head.functionPrefix'],
   // 块头
   ['时机', 'block.timing'],
   ['timing', 'block.timing'],
@@ -169,6 +175,8 @@ export const HEAD_DECL_KEYS: readonly KeywordId[] = [
   'head.playerColor',
   'head.narrationColor',
   'head.switch',
+  // 头部选项 `函数前缀:`（B4-fp）——与 `角色:` / `口上:` 同走 `headDecl` 通路（`词: 值`）。
+  'head.functionPrefix',
 ];
 
 /**

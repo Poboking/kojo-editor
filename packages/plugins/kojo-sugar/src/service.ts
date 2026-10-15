@@ -64,6 +64,51 @@ function buildAliasTable(aliases: readonly AliasDecl[]): AliasTable {
   return map;
 }
 
+/**
+ * 前缀模板 → 等价的**完整命名模板**（B4-fp；纯函数）。
+ *
+ * 语法（零游戏知识）：占位符只认 `{n}`（角色号）/ `{name}`（作者函数名）。
+ * - 已含 `{name}` → 按位置代入（作者可把名字放任意处）；
+ * - **未含 `{name}`** → 视为**前缀**、末尾补 `{name}`（对齐真语料 `@K11_ZE` /
+ *   `@Music_INSTRUMENT`：「前缀 + 名」形态）。
+ * 非法（空模板 / 含未知占位符——剥掉 `{n}`/`{name}` 后仍残留花括号）→ `undefined`
+ * （调用方据此 fail-closed：不产半成品）。
+ */
+function normalizeFunctionPrefix(prefix: string): string | undefined {
+  if (prefix.trim().length === 0) return undefined;
+  const stripped = prefix.replace(/\{n\}/g, '').replace(/\{name\}/g, '');
+  if (stripped.includes('{') || stripped.includes('}')) return undefined;
+  return prefix.includes('{name}') ? prefix : `${prefix}{name}`;
+}
+
+/**
+ * 解出「用户函数命名」所用的分野表（B4-fp；additive）。
+ *
+ * - **未声明** `函数前缀:` → 原样返回（既有 adapter 模板路径逐字节不变）；
+ * - 声明且合法 → 浅拷贝分野表、以作者前缀覆盖 `userFunction.template`（其余字段零改动）；
+ * - 声明但非法 → 报既有码 `face-table-missing`（error，**不新增诊断码**），并**摘掉**
+ *   `userFunction`——令下游 `emitFunction` 的既有守卫（`!ctx.template` → 报错 + 跳过）
+ *   fail-closed，不产半成品。
+ */
+function resolveFaceTableForPrefix(
+  faceTable: KojoFaceTable | undefined,
+  prefix: string | undefined,
+  sink: DiagnosticSink,
+): KojoFaceTable | undefined {
+  if (prefix === undefined) return faceTable;
+  const template = normalizeFunctionPrefix(prefix);
+  if (template === undefined) {
+    sink.report({
+      code: 'face-table-missing',
+      severity: 'error',
+      message: `文件头「函数前缀: ${prefix}」的命名模板非法（只认「{n}」角色号与「{name}」函数名占位、且不能是空模板）——已停止编译本文件的「函数」块（不产半成品）。`,
+      loc: null,
+    });
+    return { ...(faceTable ?? { faces: {} }), userFunction: undefined };
+  }
+  return { ...(faceTable ?? { faces: {} }), userFunction: { template } };
+}
+
 export interface CreateSugarServiceOptions {
   /** 变量字典（adapter 提供；缺省 = 无字典） */
   dictionary?: DictionaryLookup;
@@ -138,11 +183,13 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     }
 
     const aliases = buildAliasTable(doc.frontMatter.aliases);
+    // B4-fp：作者私有命名前缀（`函数前缀:`）优先于 adapter 模板；未声明 → 原表原样。
+    const namedFaceTable = resolveFaceTableForPrefix(faceTable, doc.frontMatter.functionPrefix, sink);
     const { erb, sourceMap } = codegen(doc.topLevel as TopNode[], {
       frontMatter: doc.frontMatter,
       aliases,
       dictionary,
-      faceTable,
+      faceTable: namedFaceTable,
       instructionTable,
       libraryTable,
       sink,

@@ -271,6 +271,11 @@ function applyHeadDecl(fm: SugarFrontMatter, key: string, value: string): void {
     case 'head.narrationColor':
       fm.narrationColor = value === '作者色' ? '作者色' : '默认';
       break;
+    // 头部选项 `函数前缀: <模板>`（B4-fp）——原样收进 front-matter；模板合法性由
+    // 转译服务在出码前校验（fail-closed），解析段只做"存储"不做"解释"。
+    case 'head.functionPrefix':
+      fm.functionPrefix = value;
+      break;
     default:
       break;
   }
