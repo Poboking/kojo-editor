@@ -31,6 +31,22 @@ tauri-plugin-updater = "2"
 # 全文检索的匹配器（正则 / 字面量 / 全词 / 大小写四个口径合成一份 pattern）。
 # 已经躺在 tauri 依赖树里（Cargo.lock 既有 regex 1.13），提为直接依赖不新增编译单元。
 regex = "1"
+# 市场 IO 原语（远程下载 + ZIP 安全解压）。reqwest 0.13.5 / zip 4.6.1 已因
+# tauri-plugin-updater 躺在 Cargo.lock 里（Windows 上 reqwest 的唯一宿主就是它），
+# 提为直接依赖不新增编译单元。feature 逐条对齐 updater 的口径（default-features = false）：
+# rustls-no-provider ⇒ provider 由宿主装（见 market.rs::ensure_tls_provider）。
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls-no-provider"] }
+# zip 只取 deflate-flate2：默认 feature 的 "deflate" 还带 zopfli（**不在 Cargo.lock 里**，
+# 会新增编译单元）；解压只需要 flate2 解码路径。
+zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2"] }
+# **必须自己点 flate2 的后端**：zip 的 `deflate-flate2` 只做 `dep:flate2`、不选 backend，
+# 而 zip 侧声明 flate2 时 `default-features = false`；Windows 上 updater 的 flate2 依赖是
+# linux/macos target-gated（`tauri-plugin-updater-2.13.3/Cargo.toml:166,174`），feature 域里
+# 无人启用 rust_backend ⇒ flate2 直接 `compile_error!("No compression backend selected")`。
+# miniz_oxide 0.9.1 / adler2 / simd-adler32 已在 Cargo.lock（png → flate2 默认链）里。
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+futures-util = "0.3"
 
 [profile.release]
 lto = true
