@@ -1,4 +1,4 @@
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from './entry';
 import type { LineDecoration } from '@kojo/plugin-api';
 import { RESERVED_PRONOUNS, SUGAR_LEXICON_OPERATORS, SUGAR_LEXICON_WORDS, SYSTEM_FUNCTION_ALIASES } from '@kojo/plugin-kojo-sugar';
 

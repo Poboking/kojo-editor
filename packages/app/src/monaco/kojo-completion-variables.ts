@@ -1,4 +1,4 @@
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from './entry';
 import type { VariableSchema } from '@kojo/plugin-api';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
 

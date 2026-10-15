@@ -19,7 +19,7 @@
  * **纯函数**（`editorOptionsForLineCount`）便于单测；宿主在**每次切文件**时调用并
  * `editor.updateOptions(...)`。
  */
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from '../monaco/entry';
 
 /** 大文件阈值（行）：≥ 此行数即降级若干"全文级"Monaco 特性 */
 export const LARGE_FILE_LINES = 5000;

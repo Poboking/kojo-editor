@@ -81,7 +81,7 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
       let disposed = false;
       let editor: { dispose(): void } | null = null;
       void (async () => {
-        const monaco = await import('monaco-editor');
+        const monaco = await import('../monaco/entry');
         if (disposed || !containerRef.current) return;
         const langA = languageIdForSide(state.request.original);
         const langB = languageIdForSide(state.request.modified);

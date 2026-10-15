@@ -1,4 +1,4 @@
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from './entry';
 import { erbMonacoExtensions } from '@kojo/plugin-api';
 import { KOJO_SUGAR_THEME_RULES } from './kojo-language';
 

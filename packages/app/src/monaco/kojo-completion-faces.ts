@@ -1,4 +1,4 @@
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from './entry';
 import type { KojoFaceTable } from '@kojo/plugin-api';
 import { TIMING_ARG_TOKENS, TIMING_NAMED_PARAMS, type TimingNamedParamSpec } from '@kojo/plugin-kojo-sugar';
 

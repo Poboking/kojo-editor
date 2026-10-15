@@ -1,4 +1,4 @@
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from './entry';
 
 /**
  * EC-3 · `.erb` **函数名补全** —— 定义位（行首 `@<前缀>`）与调用位

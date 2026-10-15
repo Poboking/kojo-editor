@@ -1,4 +1,4 @@
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from './entry';
 
 /**
  * EC-4 · `.erb` 的 `$标签` 补全 —— 写 `GOTO` / `JUMP` 之后，弹**本文件内**已定义的标签名。
