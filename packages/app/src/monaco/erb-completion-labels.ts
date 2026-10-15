@@ -42,6 +42,28 @@ function definedLabels(text: string): string[] {
 }
 
 /**
+ * 按 model 版本记忆化的标签表。全文正则扫描是每击键 `O(文件大小)`；同一版本（未编辑）下
+ * 标签定义**必不变** ⇒ 复用上次数组（同一引用）。版本号缺席（桩 model / 旧运行时）⇒
+ * 退化为每次重扫（行为正确，仅失去缓存），**不假定字段存在**。
+ *
+ * `WeakMap` 按 model 身份：编辑器关闭后自动回收，不产生无界增长。
+ */
+const LABEL_CACHE = new WeakMap<Monaco.editor.ITextModel, { readonly versionId: number; readonly labels: readonly string[] }>();
+
+function cachedLabels(model: Monaco.editor.ITextModel): readonly string[] {
+  const getVersionId = (model as { getVersionId?: () => number }).getVersionId;
+  const versionId = typeof getVersionId === 'function' ? getVersionId.call(model) : undefined;
+  if (typeof versionId !== 'number') return definedLabels(model.getValue());
+
+  const cached = LABEL_CACHE.get(model);
+  if (cached !== undefined && cached.versionId === versionId) return cached.labels;
+
+  const labels = definedLabels(model.getValue());
+  LABEL_CACHE.set(model, { versionId, labels });
+  return labels;
+}
+
+/**
  * 产出跳转指令（`GOTO` / `JUMP`）后**本文件内** `$标签` 名的补全候选（**纯函数**）。
  *
  * 行为：仅当光标前文以跳转指令 + 空白收尾时产出候选；候选来自当前 model 全文的标签定义
@@ -63,7 +85,7 @@ export function erbLabelCompletionItems(
   const ctx = JUMP_CONTEXT_RE.exec(before);
   if (ctx === null) return [];
 
-  const labels = definedLabels(model.getValue());
+  const labels = cachedLabels(model);
   if (labels.length === 0) return [];
 
   const prefix = ctx[3] ?? '';

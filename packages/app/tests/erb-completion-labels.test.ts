@@ -87,6 +87,73 @@ describe('EC-4 标签补全 · 条目形态', () => {
   });
 });
 
+/**
+ * 可变桩 model（带 `getVersionId`）：记录 `getValue` 调用次数，用于证明按版本记忆化
+ * ——热路径（版本不变）**不再重扫全文**。
+ */
+function mutableModel(initial: string): {
+  model: Monaco.editor.ITextModel;
+  gets: () => number;
+  setText: (t: string) => void;
+  bump: () => void;
+} {
+  let text = initial;
+  let version = 1;
+  let gets = 0;
+  const model = {
+    getValue: () => {
+      gets++;
+      return text;
+    },
+    getLineContent: (lineNumber: number) => text.split('\n')[lineNumber - 1] ?? '',
+    getVersionId: () => version,
+  } as unknown as Monaco.editor.ITextModel;
+  return { model, gets: () => gets, setText: (t) => (text = t), bump: () => (version += 1) };
+}
+
+/** 光标停在全文末尾（末行行尾）：`GOTO ` 末行即跳转上下文，空前缀出全量标签 */
+function atEnd(model: Monaco.editor.ITextModel, text: string): Monaco.languages.CompletionItem[] {
+  const lines = text.split('\n');
+  const last = lines[lines.length - 1] ?? '';
+  return erbLabelCompletionItems(monaco, model, {
+    lineNumber: lines.length,
+    column: last.length + 1,
+  } as Monaco.Position);
+}
+
+describe('EC-4 标签补全 · 按 model 版本记忆化（SH-3）', () => {
+  const V1 = '@TEST\n$甲\n$乙\nGOTO ';
+  const V2 = '@TEST\n$甲\n$乙\n$丙\nGOTO ';
+
+  it('版本不变 ⇒ 后续调用不再重扫全文（`getValue` 只调一次），结果一致', () => {
+    const { model, gets } = mutableModel(V1);
+    expect(labels(atEnd(model, V1))).toEqual(['甲', '乙']);
+    const afterFirst = gets();
+    expect(labels(atEnd(model, V1))).toEqual(['甲', '乙']);
+    expect(labels(atEnd(model, V1))).toEqual(['甲', '乙']);
+    expect(gets()).toBe(afterFirst); // 缓存命中 ⇒ 未再取全文
+  });
+
+  it('版本变化 + 文本变化 ⇒ 重扫并取到新标签（编辑不失真）', () => {
+    const { model, gets, setText, bump } = mutableModel(V1);
+    expect(labels(atEnd(model, V1))).toEqual(['甲', '乙']);
+    const afterFirst = gets();
+    setText(V2);
+    bump(); // 作者敲入一行 ⇒ 版本自增
+    expect(labels(atEnd(model, V2))).toEqual(['甲', '乙', '丙']);
+    expect(gets()).toBe(afterFirst + 1); // 版本变了 ⇒ 重扫一次
+  });
+
+  it('`getVersionId` 缺席 ⇒ 退化为每次重扫，结果仍正确（不假定字段存在）', () => {
+    const { model, gets } = mutableModel(V1);
+    // 抹掉版本号：桩 model 无 `getVersionId`
+    delete (model as unknown as Record<string, unknown>).getVersionId;
+    expect(labels(atEnd(model, V1))).toEqual(['甲', '乙']);
+    expect(labels(atEnd(model, V1))).toEqual(['甲', '乙']);
+    expect(gets()).toBe(2); // 无版本号 ⇒ 每次重扫，绝不误用旧标签
+  });
+});
+
 describe('EC-4 标签补全 · fail-visible 负例（绝不猜、绝不抛）', () => {
   it('非跳转上下文（普通行 / 条件行）→ []', () => {
     expect(at(FILE.replace('\tPRINTL 你好', '\tPRINTL 你好|'))).toEqual([]);
