@@ -16,7 +16,30 @@
  * __kojoPerf.detail('markers.total')  // 单点全部样本（按序）
  * __kojoPerf.reset()              // 清空全部（重测用）
  * ```
+ *
+ * 引导四标记（L1-0，2026-10-16 首屏批）：`boot.htmlParsed` / `boot.firstPaint` /
+ * `boot.welcomeInteractive` / `boot.editorInteractive`——**值为自导航起点的绝对时刻
+ * （ms），不是耗时**；口径、幂等性与近似性见 `bootMark` 注释。
  */
+
+/** 引导四标记名（口径见 `bootMark`） */
+export type BootMarkName =
+  | 'boot.htmlParsed'
+  | 'boot.firstPaint'
+  | 'boot.welcomeInteractive'
+  | 'boot.editorInteractive';
+
+/** `index.html` 内联引导脚本落下的原始标记（parse 期；`performance.now()` 绝对毫秒） */
+export interface InlineBootMarks {
+  /** 内联引导层标记解析到位时刻（≈引导层可见） */
+  htmlParsed?: number;
+  /** 首帧 rAF 回调时刻（firstPaint 的近似回退用；rAF 回调在首次绘制前触发） */
+  raf1?: number;
+  /** parse 期 body 计算底色（tools 断言①的样本：内联底色 == 挂载后计算底色） */
+  bgAtParse?: string;
+  /** t+500ms 采样（断言①备选支：『≤500ms 内 #root 非空』） */
+  t500?: { at: number; rootChildren: number; bg: string; splash: boolean };
+}
 
 /** 单个计时点的汇总（`summary()` 的行） */
 export interface PerfStat {
@@ -83,6 +106,25 @@ export class PerfProbe {
   /** 给某个计时点补一条附注（不影响样本） */
   note(name: string, note: string): void {
     this.notes.set(name, note);
+  }
+
+  /**
+   * 记录一个**引导标记**（L1-0 首屏批的四标记）。
+   *
+   * 口径（与其余计时点不同，读法务必按此）：
+   * - 值是**自导航起点的绝对时刻（ms）**，不是耗时——相互做差即得段：
+   *   白屏段 = `boot.firstPaint` − `boot.htmlParsed`（≈0 即引导层无白屏空窗）；
+   *   `boot.welcomeInteractive` / `boot.editorInteractive` 本身就等于「窗口起来后多久可用」。
+   * - **幂等**：同名只记首样本（编辑器重建 / 项目重开 / effect 重跑不会把读数污染成后一次）。
+   * - 样本随页面导航重置；跨运行对比看 `last`（每枚标记每次导航只一个样本）。
+   * - 采集点：`htmlParsed` / `firstPaint` 由 index.html 内联脚本落盘、main.tsx 收编
+   *   （firstPaint 优先 PerformancePaintTiming，缺失回退首帧 rAF → 近似）；`welcomeInteractive`
+   *   在 App 内核就绪 effect（欢迎页主按钮提交后可点）；`editorInteractive` 在 EditorPane
+   *   的 Monaco 实例创建处（近似：实例已挂载，尚不含"首次按键"的最坏路径）。
+   */
+  bootMark(name: BootMarkName, at?: number, note?: string): void {
+    if (this.samples.has(name)) return;
+    this.record(name, at ?? performance.now(), note);
   }
 
   /** 汇总（按名称字典序；无样本的点不出现在结果里） */
@@ -157,3 +199,65 @@ export class PerfProbe {
 
 /** 宿主全局单例（编辑器与引导层共用） */
 export const perf = new PerfProbe();
+
+/**
+ * 收编 `index.html` 内联引导脚本的标记（main.tsx 在 createRoot 之前调一次）：
+ * - `boot.htmlParsed` = 内联脚本执行时刻（引导层标记已进 DOM，≈可见）；
+ * - `boot.firstPaint` = 浏览器首个 paint（`PerformancePaintTiming`，WebView2/Chromium 支持）；
+ *   不可得时回退内联脚本记的首帧 rAF（**近似**：rAF 回调在首次绘制前触发，通常略早于真首绘）。
+ *
+ * ⚠ release 形态实测（2026-10-16）：入口块瘦身后 main.tsx 在**首绘之前**就执行——
+ * 当场读 `getEntriesByType('paint')` 是空的、rAF 也还没轮到，若此刻放弃就永远丢这枚标记。
+ * 故本条做成**迟到收编**：优先缓冲 PerformanceObserver 等首绘条目到账；等不来就
+ * 退到"两帧后 performance.now()"近似。
+ * 回退值的口径是**上界、不是误差有界的近似**：主线程被入口块的解析/执行堵死时，两帧本身
+ * 就会排到几百毫秒之后（冷开机实测 `boot.firstPaint=487.7 > boot.welcomeInteractive=225.3`，
+ * 即"提交已完成、像素还没上过屏"）。读法：拿它当"首绘不晚于此"看，别拿它减 `htmlParsed`
+ * 当成白屏耗时的下界；真值优先由 `first-paint` / `first-contentful-paint` 计时条目给出。
+ */
+export function ingestInlineBootMarks(): void {
+  const raw = (globalThis as { __kojoBootMarks?: InlineBootMarks }).__kojoBootMarks;
+  if (!raw) return;
+  if (typeof raw.htmlParsed === 'number') {
+    perf.bootMark('boot.htmlParsed', raw.htmlParsed, '自导航起点 ms；引导层标记解析到位（≈可见）');
+  }
+
+  const paintAt = (name: string): number | undefined =>
+    performance.getEntriesByType('paint').find((e) => e.name === name)?.startTime;
+  const record = (at: number, how: string): void => {
+    const white =
+      typeof raw.htmlParsed === 'number' ? `；白屏段 Δ=${(at - raw.htmlParsed).toFixed(1)}ms` : '';
+    const fcp = paintAt('first-contentful-paint');
+    const contentful = fcp !== undefined ? `；首内容绘 FCP=${fcp.toFixed(1)}ms` : '';
+    perf.bootMark('boot.firstPaint', at, `自导航起点 ms（${how}${white}${contentful}）`);
+  };
+
+  const fp = paintAt('first-paint');
+  if (fp !== undefined) return record(fp, 'first-paint 计时');
+  if (typeof raw.raf1 === 'number') return record(raw.raf1, '首帧 rAF 近似');
+
+  // 首绘尚未发生（release 形态）：缓冲 observer 等首绘条目到账；两帧后端不出来就用帧后近似兜底。
+  let recorded = false;
+  const fallback = (): void => {
+    if (recorded) return;
+    recorded = true;
+    observer?.disconnect();
+    record(performance.now(), '帧后近似（首绘前收编，条目未到账）');
+  };
+  let observer: PerformanceObserver | null = null;
+  try {
+    observer = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        if (e.name === 'first-paint' && !recorded) {
+          recorded = true;
+          observer?.disconnect();
+          record(e.startTime, 'first-paint 计时');
+        }
+      }
+    });
+    observer.observe({ type: 'paint', buffered: true });
+    requestAnimationFrame(() => requestAnimationFrame(fallback));
+  } catch {
+    requestAnimationFrame(() => requestAnimationFrame(fallback));
+  }
+}

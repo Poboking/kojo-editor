@@ -4,8 +4,116 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>kojo-editor · 口上编辑器</title>
+    <!-- L1-A 内联引导层（2026-10-16 首屏批）：React 挂载前窗口里先画这一层，替代 WebView 默认白。
+         底色 #1e2227 必须与 styles.css 的 --bg 现值一致——由 tools/smoke-tauri-dom.mjs 断言①
+         钉住「内联底色 == 挂载后计算底色」，两处漂移即红。深色、零外链资源（dev 下 styles.css
+         由 JS 注入，这里等不了它）。React 首次提交后由 App.tsx 移除 #boot-splash。 -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e2227;
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #1e2227;
+        color: #d7dce2;
+        font-family: 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
+      }
+      .boot-splash-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+      }
+      .boot-splash-brand {
+        font-size: 26px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .boot-splash-tip {
+        font-size: 12px;
+        color: #8b949e;
+      }
+      .boot-splash-bar {
+        width: 168px;
+        height: 3px;
+        border-radius: 999px;
+        background: #2b3138;
+        overflow: hidden;
+      }
+      .boot-splash-bar::after {
+        content: '';
+        display: block;
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: #4c8bf5;
+        animation: boot-splash-sweep 1.15s ease-in-out infinite;
+      }
+      @keyframes boot-splash-sweep {
+        0% {
+          transform: translateX(-110%);
+        }
+        100% {
+          transform: translateX(320%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-splash-bar::after {
+          animation: none;
+          width: 100%;
+          opacity: 0.35;
+        }
+      }
+    </style>
   </head>
   <body>
+    <div id="boot-splash" aria-hidden="true">
+      <div class="boot-splash-card">
+        <div class="boot-splash-brand">kojo-editor</div>
+        <div class="boot-splash-tip">正在启动…</div>
+        <div class="boot-splash-bar"></div>
+      </div>
+    </div>
+    <!-- L1-0 引导标记（parse 期落盘，main.tsx 收编进 __kojoPerf；口径见 src/perf.ts bootMark）：
+         - htmlParsed：本脚本执行时刻 = 引导层标记已进 DOM（≈可见），自导航起点 ms；
+         - bgAtParse：parse 期 body 计算底色（断言①的内联样本，与挂载后计算值比对钉漂移）；
+         - t500：t+500ms 采样（断言①备选支「≤500ms 内 #root 非空」）；
+         - raf1：首帧 rAF 时刻（firstPaint 的近似回退）。
+         另：dev（vite 直服）把资源时间线缓冲放大——monaco 图 ~1338 模块，默认 250 条会把
+         早期请求挤掉，令「欢迎页可点前不得有 monaco 请求」的断言假绿（详 smoke-tauri-dom）。 -->
+    <script>
+      (function () {
+        var m = (window.__kojoBootMarks = window.__kojoBootMarks || {});
+        try {
+          if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+            performance.setResourceTimingBufferSize(6000);
+          }
+        } catch (e) {
+          /* 旧内核不支持就算了：断言侧按缓冲内可见条目判定，不因放大失败而挂 */
+        }
+        m.htmlParsed = performance.now();
+        m.bgAtParse = getComputedStyle(document.body).backgroundColor;
+        requestAnimationFrame(function () {
+          if (m.raf1 === undefined) m.raf1 = performance.now();
+        });
+        setTimeout(function () {
+          m.t500 = {
+            at: performance.now(),
+            rootChildren: document.getElementById('root').childElementCount,
+            bg: getComputedStyle(document.body).backgroundColor,
+            splash: !!document.getElementById('boot-splash'),
+          };
+        }, 500);
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

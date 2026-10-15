@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, GameProject, RecentProject } from '@kojo/plugin-api';
 import { invoke, isTauri } from '../bridge/invoke';
 import { bootstrapKernel } from '../bootstrap';
+import { perf } from '../perf';
 import { revealTargetOf, type RevealTarget } from '../monaco/reveal-position';
-import { ProjectView } from './ProjectView';
 import {
   PROJECT_GATE_MESSAGE,
   dropHintText,
@@ -28,6 +37,29 @@ import {
 } from './file-history';
 import { createFileHistoryOverlay } from './FileHistoryOverlay';
 import type { EditorPaneActions } from './EditorPane';
+
+/**
+ * L1-A 首屏分割（2026-10-16 首屏批）：项目视图的静态链会把 monaco 全图（~1338 模块 /
+ * 入口块 ~4.5 MB）拖进欢迎页关键路径——这里改按需 chunk。加载器独立成函数：
+ * `React.lazy` 与 idle 预取**共用同一个 import promise**（浏览器模块缓存去重，
+ * 预取完再进项目零等待）。
+ */
+const loadProjectView = (): Promise<{ default: typeof import('./ProjectView')['ProjectView'] }> =>
+  import('./ProjectView').then((m) => ({ default: m.ProjectView }));
+const ProjectView = lazy(loadProjectView);
+
+/** 项目视图 chunk 装载期间的骨架（与内联引导层同构；idle 预取命中时基本见不到） */
+function ProjectViewSkeleton(): ReactElement {
+  return (
+    <div className="boot-skeleton" aria-hidden="true">
+      <div className="boot-skeleton-card">
+        <div className="boot-skeleton-brand">kojo-editor</div>
+        <div className="boot-skeleton-tip">正在装载工作区…</div>
+        <div className="boot-skeleton-bar" />
+      </div>
+    </div>
+  );
+}
 
 export type AppPhase = 'boot' | 'welcome' | 'opening' | 'project';
 
@@ -93,6 +125,31 @@ export function App(): ReactElement {
       disposed = true;
     };
   }, []);
+
+  // L1-A：React 首次提交后移除 index.html 的内联引导层。用布局副作用（先于本次绘制）：
+  // 撤罩与真实界面的首帧同拍完成——既不闪"内容未绘先撤罩"的空窗，也不多挂一帧罩子。
+  useLayoutEffect(() => {
+    document.getElementById('boot-splash')?.remove();
+  }, []);
+
+  // L1-0 / L1-A 接线：内核就绪 ⇒ 欢迎页主按钮即渲染完成（本布局副作用随提交执行）。
+  // 顺序是硬约束：**先记** `boot.welcomeInteractive`、**再排** idle 预取——tools 的断言②
+  // 以该标记为界判「欢迎页可点前的网络请求不含 monaco」，而 rIC 最早也在下一帧才执行。
+  const prefetched = useRef(false);
+  useLayoutEffect(() => {
+    if (!kernel || prefetched.current) return;
+    prefetched.current = true;
+    perf.bootMark('boot.welcomeInteractive', undefined, '自导航起点 ms；内核就绪 ⇒ 欢迎页主按钮可点（提交时刻）');
+    const prefetch = (): void => {
+      // 预取尽力而为：失败不打扰（真加载失败由 lazy 的 Suspense 路径呈现）
+      void loadProjectView().catch(() => undefined);
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(prefetch, { timeout: 4000 });
+    } else {
+      setTimeout(prefetch, 1500);
+    }
+  }, [kernel]);
 
   // 索引所有权在 erb-parser：索引重建完成后由事件通知，宿主只同步展示
   useEffect(() => {
@@ -481,28 +538,30 @@ export function App(): ReactElement {
 
   const body =
     phase === 'project' && kernel && project ? (
-      <ProjectView
-        kernel={kernel}
-        project={project}
-        index={index}
-        indexing={indexing}
-        indexError={indexError}
-        activeFile={activeFile}
-        openTabs={openTabs}
-        dirtyPaths={dirtyPaths}
-        reveal={reveal}
-        onOpenFile={openFile}
-        onActivateTab={requestOpenFile}
-        onRequestCloseTab={requestCloseTab}
-        onReorderTab={reorderTab}
-        onSaveAll={saveAll}
-        onDirtyChange={onDirtyChange}
-        registerActions={registerActions}
-        onClose={closeProject}
-        onReload={() => void openProject(project.rootDir, { keepView: true })}
-        writable={writable ?? false}
-        onReauth={requestReauth}
-      />
+      <Suspense fallback={<ProjectViewSkeleton />}>
+        <ProjectView
+          kernel={kernel}
+          project={project}
+          index={index}
+          indexing={indexing}
+          indexError={indexError}
+          activeFile={activeFile}
+          openTabs={openTabs}
+          dirtyPaths={dirtyPaths}
+          reveal={reveal}
+          onOpenFile={openFile}
+          onActivateTab={requestOpenFile}
+          onRequestCloseTab={requestCloseTab}
+          onReorderTab={reorderTab}
+          onSaveAll={saveAll}
+          onDirtyChange={onDirtyChange}
+          registerActions={registerActions}
+          onClose={closeProject}
+          onReload={() => void openProject(project.rootDir, { keepView: true })}
+          writable={writable ?? false}
+          onReauth={requestReauth}
+        />
+      </Suspense>
     ) : (
       <WelcomeView
         phase={phase}

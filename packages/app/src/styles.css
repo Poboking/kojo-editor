@@ -4695,3 +4695,61 @@ button.primary .hint {
 .tree-filter-more button:hover {
   color: var(--fg);
 }
+/* —— L1-A 首屏引导批（b/lead/1016-boot，2026-10-16；只在文件末尾追加，禁重排既有规则）——
+   内联版引导层在 index.html（React 挂载前就得生效，等不了这份文件、也无外链）；
+   这里补 React 侧的同类骨架（ProjectView lazy 的 Suspense 兜底，样式走 token，
+   视觉与内联版同构：品牌字 + 一行提示 + 一条细进度条）。 */
+.boot-skeleton {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--fg);
+}
+.boot-skeleton-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.boot-skeleton-brand {
+  font-size: var(--fs-display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.boot-skeleton-tip {
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+}
+.boot-skeleton-bar {
+  width: 168px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.boot-skeleton-bar::after {
+  content: '';
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: boot-skeleton-sweep 1.15s var(--ease-out) infinite;
+}
+@keyframes boot-skeleton-sweep {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .boot-skeleton-bar::after {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}

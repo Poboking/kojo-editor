@@ -987,6 +987,7 @@ export function EditorPane({
       scrollbar: { verticalScrollbarSize: 12, horizontalScrollbarSize: 12 },
     });
     editorRef.current = ed;
+    perf.bootMark('boot.editorInteractive', undefined, '自导航起点 ms；Monaco 实例创建完成（近似：已挂载可输入）');
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveRef.current();
     });
