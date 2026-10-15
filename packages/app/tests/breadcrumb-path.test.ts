@@ -7,7 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 import type { EditorDocumentSymbol } from '@kojo/plugin-api';
-import { crumbsKey, symbolChainAt, toCrumbs } from '../src/ui/breadcrumb-path';
+import { crumbsKey, crumbsNeedRefresh, symbolChainAt, toCrumbs } from '../src/ui/breadcrumb-path';
+import { LARGE_FILE_LINES } from '../src/ui/editor-options';
 
 const sym = (
   name: string,
@@ -82,5 +83,25 @@ describe('toCrumbs / crumbsKey', () => {
     expect(crumbsKey(a)).not.toBe(crumbsKey(c));
     expect(crumbsKey(a)).not.toBe(crumbsKey(d));
     expect(crumbsKey([])).toBe('');
+  });
+});
+
+describe('crumbsNeedRefresh · 重算闸', () => {
+  const here = { path: '/t/A.erb', line: 10, lineCount: 400 };
+
+  it('首次（last=null）要算；同 path 同行不算（敲字改列不改行）', () => {
+    expect(crumbsNeedRefresh(here, null)).toBe(true);
+    expect(crumbsNeedRefresh(here, here)).toBe(false);
+    expect(crumbsNeedRefresh({ ...here, line: 11 }, here)).toBe(true);
+  });
+
+  it('换文件即便行号相同也要算（同一行号在两个文件里是两条链）', () => {
+    expect(crumbsNeedRefresh({ ...here, path: '/t/B.erb' }, here)).toBe(true);
+  });
+
+  it('大文件档一律不算（重算 = 全文解析，与 stickyScroll 同一条降级理由）', () => {
+    expect(crumbsNeedRefresh(here, null)).toBe(true);
+    expect(crumbsNeedRefresh({ ...here, lineCount: LARGE_FILE_LINES }, null)).toBe(false);
+    expect(crumbsNeedRefresh({ ...here, lineCount: LARGE_FILE_LINES - 1 }, null)).toBe(true);
   });
 });

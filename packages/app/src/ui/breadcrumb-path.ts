@@ -1,4 +1,5 @@
 import type { EditorDocumentSymbol } from '@kojo/plugin-api';
+import { LARGE_FILE_LINES } from './editor-options';
 
 /**
  * 面包屑链（D1，2026-10-15 折叠/面包屑批）——宿主自绘面包屑栏的**纯逻辑**。
@@ -54,4 +55,26 @@ export function toCrumbs(chain: readonly EditorDocumentSymbol[]): CrumbItem[] {
 /** 面包屑列表的**等值键**（同键 = 视觉无变化，光标每动一次不该白刷一次 React） */
 export function crumbsKey(crumbs: readonly CrumbItem[]): string {
   return crumbs.map((c) => `${c.startLine}\u0000${c.name}`).join('\u0001');
+}
+
+/** 一次刷新请求的位点事实（链只由这三项决定：文件 + 行 + 体量） */
+export interface CrumbCursor {
+  readonly path: string;
+  readonly line: number;
+  readonly lineCount: number;
+}
+
+/**
+ * 这次光标 / 文件变化值不值得重算链（性能闸）。
+ *
+ * 面包屑没有现成的"增量"可用：链要从**整篇符号树**下行，而符号树每次都要重解析全文。
+ * 两条判据各挡一类全文级开销：
+ * - **同 path 同行 ⇒ 不重算**：敲字改的是列，不是行；块的边界即使真的变了，最多滞后到
+ *   下一次换行即补上。换来的是"每敲一键全文解析一次"不再发生（光标监听没有防抖）。
+ * - **大文件档 ⇒ 不给面包屑**：与 `editor-options` 里 `stickyScroll` 同一条降级理由
+ *   （52,000 行那种文件上一次全文解析几十毫秒，一条呈现栏不值）。
+ */
+export function crumbsNeedRefresh(next: CrumbCursor, last: CrumbCursor | null): boolean {
+  if (next.lineCount >= LARGE_FILE_LINES) return false;
+  return last === null || last.path !== next.path || last.line !== next.line;
 }
