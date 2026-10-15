@@ -48,6 +48,22 @@ describe('函数头反解 · 该标的必须标对', () => {
     expect(idx.label('M_KOJO_MESSAGE_PALAMCNG_B_K1')).toBe('时机 绝顶：');
     expect(idx.label('M_KOJO_MESSAGE_MARKCNG_K1')).toBe('时机 标记：');
   });
+
+  it('图像面（附录 C #37）：`{i}` 是**运行期形态名**不是编号，照样反得出可写块头', () => {
+    expect(idx.label('M_KOJO_IMAGE_K30_特殊表情')).toBe('时机 图像 特殊表情：');
+    // 片假名令牌（`特殊エフェクト` / `自慰エフェクト`）：反侧字符类必须与正侧同源，
+    // 否则作者写得出来、糖视图读不回去（旧字符类只认汉字，会把整头判掉）。
+    expect(idx.label('M_KOJO_IMAGE_K30_特殊エフェクト')).toBe('时机 图像 特殊エフェクト：');
+    expect(idx.label('M_KOJO_IMAGE_K30_自慰エフェクト')).toBe('时机 图像 自慰エフェクト：');
+    // `_EX` 后缀是**面名**（IMAGE_EX）而非家族段：更长的 `图像扩展` 模板优先胜出
+    expect(idx.label('M_KOJO_IMAGE_EX_K59_特殊服装')).toBe('时机 图像扩展 特殊服装：');
+    expect(idx.family('M_KOJO_IMAGE_EX_K59_特殊服装')).toBeUndefined();
+  });
+
+  it('图像面 + 别人版家族段：家族名仍只走 `family()` 出口（块头不带家族）', () => {
+    expect(idx.label('M_KOJO_ARIMA_IMAGE_K141_特殊服装')).toBe('时机 图像 特殊服装：');
+    expect(idx.family('M_KOJO_ARIMA_IMAGE_K141_特殊服装')).toBe('ARIMA');
+  });
 });
 
 describe('函数头反解 · 不该标的必须放弃（错标比不标危险）', () => {
@@ -151,6 +167,10 @@ describe('标签可写回 · 反糖标签喂回转译器得到同一个函数名
     ['M_KOJO_DAILY_EVENT_K12_100', '时机 日常 100：'],
     ['M_KOJO_MESSAGE_COUNTER_K12_20', '时机 计数器 20：'],
     ['M_KOJO_ENCOUNTER_K12', '时机 初见：'],
+    // 图像面（附录 C #37）：`{i}` 是形态名——标签照样是可写块头，写回去得同名
+    ['M_KOJO_IMAGE_K12_特殊表情', '时机 图像 特殊表情：'],
+    ['M_KOJO_IMAGE_K12_特殊エフェクト', '时机 图像 特殊エフェクト：'],
+    ['M_KOJO_IMAGE_EX_K12_特殊服装', '时机 图像扩展 特殊服装：'],
   ];
 
   for (const [name, label] of cases) {

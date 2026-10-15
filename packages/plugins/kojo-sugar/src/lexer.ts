@@ -197,12 +197,26 @@ function matchBlankLine(code: string): { kind: 'blankLine'; wait: boolean } | nu
 /** 全大写原生指令判定（规范 §3.10）：`SETCOLOR` / `IF` / `CALL` / `RAND` / `TFLAG:193 = 0` */
 const RAW_INSTR_RE = /^[A-Z][A-Z0-9_]*(?:[:.][^\s]*)?(?:\s|=|$)/;
 
+/** CJK 区段（平假名 / 片假名 / 汉字 / 半角片假名）——下面两个字符类共用这一份区间 */
+const CJK_RANGES = '\\u3040-\\u30ff\\u4e00-\\u9fff\\uff66-\\uff9f';
+
 /**
- * 含 CJK（平假名 / 片假名 / 汉字 / 半角片假名）——中文指令名判定（HK-11②）。
+ * 含 CJK——中文指令名判定（HK-11②）。
  * **单一真源**：`codegen.ts` 的 `当/是` CASE 值判定（P-5）复用本串，别再抄第二份
  * （E16 刚为两份 `isIdentPart` 副本付过返工代价）。
  */
-export const CJK = /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]/;
+export const CJK = new RegExp(`[${CJK_RANGES}]`);
+
+/**
+ * 「名字令牌」字符类**源**（正反两侧单一真源）：ASCII 标识符字符 + 上面那批 CJK 区间。
+ *
+ * - 正向（本模块）：`时机 <分野> <令牌>` 的令牌判定（HK-11②）；
+ * - 反向（`faces-reverse`）：`{i}` 槽的锚定正则。
+ *
+ * 两侧不同源就会出现「写得出来、读不回来」的往返不闭合——实测坑：尾部形态名
+ * `特殊エフェクト` 含**片假名**，旧字符类 `[0-9A-Za-z_\u4e00-\u9fff]` 把它整头判掉。
+ */
+export const NAME_TOKEN_CHARS = `0-9A-Za-z_${CJK_RANGES}`;
 
 /**
  * 行分类（纯函数；不做配对）。
@@ -543,8 +557,15 @@ export const RESERVED_SECTION_NAMES: ReadonlyMap<string, SectionPreset> = new Ma
 
 /* ------------------------------ `参数:` 声明校验 ------------------------------ */
 
-/** 合法的形参令牌：`ARG` 或 `ARG:<数字>`（规范 §3.2；引擎侧实参位置记号） */
-const TIMING_ARG_TOKEN_RE = /^ARG(?::\d+)?$/;
+/**
+ * 合法的形参令牌（规范 §3.2；引擎侧实参位置记号）：
+ * - `ARG` / `ARG:<数字>`：标量实参；
+ * - `ARGS`（**裸，不带 `:<数字>`**）：整组实参记号——引擎以
+ *   `TRYCALLFORM …_K{No}_%ARGS:1%(ARGS:2,ARG:3,ARG:4)` 形态调用，语料侧的对应声明
+ *   就是 `(ARGS,ARG,ARG:1)`（实测 `個人口上/030 Eiki [映姫]/映姫様/M_KOJO_K30_IMAGE.ERB:12`；
+ *   引擎自身 1400+ 处同形）。`ARGS:<数字>` 仍是非法取值（规范 §3.2 明文）。
+ */
+const TIMING_ARG_TOKEN_RE = /^(?:ARG(?::\d+)?|ARGS)$/;
 
 /** `参数:` 校验结果（`decl` = 规范化声明串，逗号分隔、无空白；codegen 逐字转发用） */
 export type TimingArgsCheck =

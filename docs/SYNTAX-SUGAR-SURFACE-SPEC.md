@@ -262,11 +262,13 @@ ENDIF
 | --- | --- | --- |
 | `成否:` | `游戏判定`（默认）/ `一定成功` / `一定失败` / `不执行` | 生成 `SUCCESS` 函数里的 `TFLAG:192 = 0 / 1 / -1 / -2` |
 | `类型:` | `COM`（默认）/ `SCOM` / `自定指令` / `自定副指令` | 决定 `%LOCALS%` 段为 `COM/SCOM/CUSTOM_COM/CUSTOM_SCOM` |
-| `参数:`（v1.5 新增；隐藏别名 `args:`） | 逗号分隔的实参令牌列表，令牌只允许 `ARG` 与 `ARG:<数字>`（如 `ARG,ARG:1`）；**不写 = 不声明** | 时机函数头带形参声明，**三个发射点同带且逐字一致**：`@NAME(ARG,ARG:1)` → `CALL NAME_1(ARG,ARG:1)` → `@NAME_1(ARG,ARG:1)`。只作用于本时机的主体两函数，**不外溢**到 `成否:` 生成的 SUCCESS 与 MESSAGECHECK 伴生函数（那两条调用面的协议与本体形参无关） |
+| `参数:`（v1.5 新增；隐藏别名 `args:`） | 逗号分隔的实参令牌列表，令牌只允许 `ARG`、`ARG:<数字>` 与**裸 `ARGS`**（如 `ARG,ARG:1`、`ARGS,ARG,ARG:1`）；**不写 = 不声明** | 时机函数头带形参声明，**三个发射点同带且逐字一致**：`@NAME(ARG,ARG:1)` → `CALL NAME_1(ARG,ARG:1)` → `@NAME_1(ARG,ARG:1)`。只作用于本时机的主体两函数，**不外溢**到 `成否:` 生成的 SUCCESS 与 MESSAGECHECK 伴生函数（那两条调用面的协议与本体形参无关） |
 
 > **为什么需要 `参数:`**：**未声明形参的函数被带实参调用时，实参被引擎静默丢弃**（沙盒实测 `CALL INNER(7,8)` 而 `@INNER` 不声明 → `INNER` 内 `ARG` 读到 0，无报错）。分发器是 `TRYCALLFORM …_EVENT_K{NO}_%ARGS:1%(ARGS:2,ARG:3,ARG:4)` 一类的**带实参调用**，故这类调用面的糖函数**必须**声明——见 §9。
 >
 > **取值非法（`参数: FOO` / `参数: ARGS:2` / 空令牌）= error**，位置指回块头行，并阻止落盘；不新增诊断码（契约的 `SugarDiagnosticCode` 是闭集，复用"时机块头无法落地"那一族）。
+>
+> **裸 `ARGS` 与 `ARGS:<数字>` 的区别**：引擎有 `TRYCALLFORM …_K{No}_%ARGS:1%(ARGS:2,ARG:3,ARG:4)` 一类调用（整组实参记号），语料侧对应的声明正是 `(ARGS,ARG,ARG:1)`（实测附录 C #37 图像面，引擎自身 1400+ 处同形）⇒ **裸 `ARGS` 合法**；带编号的 `ARGS:<数字>` 仍非法（该记号无编号形态）。
 >
 > **缺省即历史口径**：不写 `参数:` 的产物与 v1.4 **逐字节相同**（行级源映射也不因声明段而位移）。
 
@@ -1160,7 +1162,7 @@ SETCOLOR 0xE4FC08
 | 34 | `COM` | `KOJO{t}_COM_NAME` / `_COM_ABLE` / `_COM` / `_CAN_COM` / `_COM_Counter不发_K{n}_{ARG:3}` | **自定义指令**（`ARG:1` = 0-4 选子功能） | 块头 `类型: 自定指令 \| 自定副指令` |
 | 35 | `COMMAND_ASSISTANT` | `M_KOJO{t}_MESSAGE_{COM\|SCOM}_K{n}_{LOCAL}_2` | 助手（多人）口上 | — |
 | 36 | `CHECK` | `M_KOJO{t}_CHECK_K{n}_{ARGS:1}` | 剧本侧查询钩子 | — |
-| 37 | `IMAGE` / `IMAGE_EX` | `M_KOJO{t}_{IMAGE\|IMAGE_EX}_K{n}_{ARGS:1}` | 图像口上 | — |
+| 37 | `IMAGE` / `IMAGE_EX` | `M_KOJO{t}_{IMAGE\|IMAGE_EX}_K{n}_{ARGS:1}` | 图像口上 | `时机 图像 {形态名}：`（图像扩展为 `时机 图像扩展 {形态名}：`）。**`{i}` 是运行期形态名**（引擎 `TRYCALLFORM …_%ARGS:1%` 拼名，非编号）⇒ 令牌原样拼进函数名、**不查指令表**；引擎以 3 实参调用 ⇒ 必写 `参数: ARGS, ARG, ARG:1` |
 
 **使用约定**：
 

@@ -213,6 +213,76 @@ describe('§3.2 时机 · 分野函数名（§5.5 模板）', () => {
   });
 });
 
+/* ============================================================================ */
+/* §3.2 时机 · 图像面：`{i}` 是**运行期形态名**（adapter 声明 `indexKind: literal`）  */
+/* ============================================================================ */
+
+describe('§3.2 时机 · 图像面（附录 C #37）· `{i}` 原样透传，不查任何表', () => {
+  // 引擎 `KOJO_MESSAGE.ERB:1107 CASE "IMAGE","IMAGE_EX"` → `:1123`
+  //   `TRYCALLFORM M_KOJO%KOJO_NAME%_%ARGS%_K{NO:(ARG:2)}_%ARGS:1%(ARGS:2,ARG:3,ARG:4)`
+  // 尾部 `%ARGS:1%` 是**运行期字符串**（形态名）⇒ 指令表里根本没有它，
+  // 必须原样拼名。实参固定三枚 ⇒ 糖层写 `参数: ARGS, ARG, ARG:1`。
+  const img = (face: string, token: string) =>
+    t(`角色: 12\n时机 ${face} ${token} 参数: ARGS, ARG, ARG:1：\n    「呀。」\n`);
+
+  it('令牌原样进函数名；三发射点（本体 / 委托桩 / 桩调用）形参逐字带 `(ARGS,ARG,ARG:1)`', () => {
+    const { erb, diagnostics } = img('图像', '特殊服装');
+    expect(diagnostics).toEqual([]);
+    expect(erb).toContain('@M_KOJO_IMAGE_K12_特殊服装(ARGS,ARG,ARG:1)');
+    expect(erb).toContain('CALL M_KOJO_IMAGE_K12_特殊服装_1(ARGS,ARG,ARG:1)');
+    expect(erb).toContain('@M_KOJO_IMAGE_K12_特殊服装_1(ARGS,ARG,ARG:1)');
+  });
+
+  it('片假名令牌（`特殊エフェクト` / `自慰エフェクト`）同样原样进名', () => {
+    // 反向字符类若不含片假名，这一条就会"写得出来、读不回去"——正反必须同源。
+    for (const token of ['特殊エフェクト', '自慰エフェクト', '特殊表情COM']) {
+      const { erb, diagnostics } = img('图像', token);
+      expect(diagnostics, token).toEqual([]);
+      expect(erb, token).toContain(`@M_KOJO_IMAGE_K12_${token}(ARGS,ARG,ARG:1)`);
+    }
+  });
+
+  it('不走指令表：即便表里存在同名条目也**照字面**用，绝不换算成编号', () => {
+    // `图像` 面声明 `literal`，指令表的同名命中不得介入（同一词在 `指令` 面才是编号）。
+    const { erb } = svcWithTable(instructionTable({ 特殊服装: 310 })).transpile(
+      '角色: 12\n时机 图像 特殊服装 参数: ARGS, ARG, ARG:1：\n    「呀。」\n',
+    );
+    expect(erb).toContain('@M_KOJO_IMAGE_K12_特殊服装(ARGS,ARG,ARG:1)');
+    expect(erb).not.toContain('_310');
+  });
+
+  it('缺指令表也不报错（literal 面与表无关，fail-closed 只针对查表面）', () => {
+    const { erb, diagnostics } = img('图像', '体形');
+    expect(diagnostics).toEqual([]);
+    expect(erb).toContain('@M_KOJO_IMAGE_K12_体形(ARGS,ARG,ARG:1)');
+  });
+
+  it('别人版家族段照常生效（`口上: ARIMA` → `M_KOJO_ARIMA_IMAGE_…`）', () => {
+    const { erb, diagnostics } = t(
+      '角色: 141\n口上: ARIMA\n时机 图像 特殊服装 参数: ARGS, ARG, ARG:1：\n    「呀。」\n',
+    );
+    expect(diagnostics).toEqual([]);
+    expect(erb).toContain('@M_KOJO_ARIMA_IMAGE_K141_特殊服装(ARGS,ARG,ARG:1)');
+  });
+
+  it('`图像` 与 `图像扩展` 是两个独立面（IMAGE / IMAGE_EX），同名令牌各出一头', () => {
+    const { erb, diagnostics } = t(
+      '角色: 12\n' +
+        '时机 图像 特殊表情 参数: ARGS, ARG, ARG:1：\n    「呀。」\n' +
+        '时机 图像扩展 特殊表情 参数: ARGS, ARG, ARG:1：\n    「呀。」\n',
+    );
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(erb).toContain('@M_KOJO_IMAGE_K12_特殊表情(ARGS,ARG,ARG:1)');
+    expect(erb).toContain('@M_KOJO_IMAGE_EX_K12_特殊表情(ARGS,ARG,ARG:1)');
+  });
+
+  it('对照：缺省口径（`指令` 面）仍走指令表查名，缺表即 fail-closed', () => {
+    expect(codes('角色: 12\n时机 指令 摸屁股：\n    「呀。」\n')).toContain(
+      'timing-instruction-unknown',
+    );
+  });
+});
+
 describe('§3.2 时机 · 命名参数 `成否:`', () => {
   it('游戏判定 → SUCCESS 函数 + TFLAG:192 = 0', () => {
     const { erb } = t('角色: 12\n时机 指令 310 成否: 游戏判定：\n    「呀。」\n');

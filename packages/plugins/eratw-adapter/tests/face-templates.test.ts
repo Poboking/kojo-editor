@@ -81,6 +81,24 @@ describe('KojoFaceTable · 分野模板（规范 §3.2 / 附录 C）', () => {
     }
   });
 
+  it('附录 C #37 图像面：模板逐字符合引擎 caller，且 `{i}` 是**运行期形态名**（`indexKind: literal`）', () => {
+    // 引擎 `KOJO_MESSAGE.ERB:1107 CASE "IMAGE","IMAGE_EX"`
+    //   → `:1123 TRYCALLFORM M_KOJO%KOJO_NAME%_%ARGS%_K{NO:(ARG:2)}_%ARGS:1%(ARGS:2,ARG:3,ARG:4)`
+    // 尾部 `%ARGS:1%` 是运行期字符串（形态名，`IMAGE.ERB:1263` 的 `FUNC_TYPE`）⇒
+    // **不能**按编号查指令表——令牌原样拼名，故两面都必须显式声明 `indexKind: 'literal'`。
+    const literalFaces: Record<string, string> = {
+      图像: 'M_KOJO{t}_IMAGE_K{n}_{i}',
+      图像扩展: 'M_KOJO{t}_IMAGE_EX_K{n}_{i}',
+    };
+    for (const [face, template] of Object.entries(literalFaces)) {
+      expect(table.faces[face], `分野「${face}」`).toBeDefined();
+      expect(table.faces[face]!.template).toBe(template);
+      expect(table.faces[face]!.indexKind, `分野「${face}」的 {i} 取值口径`).toBe('literal');
+    }
+    // 缺省口径仍是 `command`（其余面零改动）——抽查 `指令` 面（中文令牌要过指令表）
+    expect(table.faces['指令']!.indexKind).toBeUndefined();
+  });
+
   it('三件套模板不带家族段（规范 §5.5），只含 {n}', () => {
     expect(table.registration?.declare).toBe('M_KOJO_K{n}');
     expect(table.registration?.color).toBe('M_KOJO_COLOR_K{n}');

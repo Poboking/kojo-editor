@@ -45,6 +45,7 @@
 
 import type { KojoFaceTable } from '@kojo/plugin-api';
 import { segmentParamName } from './codegen';
+import { NAME_TOKEN_CHARS } from './lexer';
 
 /** 编译后的候选（一条模板 = 一个候选） */
 interface FaceMatcher {
@@ -121,7 +122,9 @@ function compile(
     if (template.startsWith('{i}', i)) {
       slots.push('i');
       i += 2;
-      src += '([0-9A-Za-z_\\u4e00-\\u9fff]+)';
+      // 字符集与正向 `lexer` 的令牌判定**同源**（`NAME_TOKEN_CHARS`）：尾部可能是
+      // 编号（`310`）、中文名（`摸屁股`）或运行期**形态名**（`特殊エフェクト`——含片假名）。
+      src += `([${NAME_TOKEN_CHARS}]+)`;
       continue;
     }
     const dollar = template.indexOf('${', i);
@@ -140,7 +143,7 @@ function compile(
         const values = Object.entries(table).sort((a, b) => b[1].length - a[1].length);
         src += `(${values.map(([, v]) => escapeRe(v)).join('|')})`;
       } else {
-        src += '([A-Za-z0-9_\\u4e00-\\u9fff]+)';
+        src += `([${NAME_TOKEN_CHARS}]+)`;
       }
       i = end;
       continue;

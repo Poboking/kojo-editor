@@ -155,6 +155,32 @@ export function createEratwFaceTable(): KojoFaceTable {
       游玩指南存在: { template: 'KOJO{t}_OPTION_EXIST_K{n}' },
       游玩指南结果: { template: 'KOJO{t}_OPTION_K{n}_RESULT_{i}' },
 
+      /* ---- 附录 C #37：图像口上（尾部是**运行期形态名**，故 `indexKind: 'literal'`） ---- */
+
+      // 引擎分发：`KOJO_MESSAGE.ERB:1107 CASE "IMAGE", "IMAGE_EX"`
+      //   → `:1123 TRYCALLFORM M_KOJO%KOJO_NAME%_%ARGS%_K{NO:(ARG:2)}_%ARGS:1%(ARGS:2,ARG:3,ARG:4)`
+      // `%ARGS:1%` 是**运行期字符串**（形态名，来自 `IMAGE.ERB:1263` 的 `FUNC_TYPE`），
+      // 故不进指令名表——令牌原样拼进函数名（`indexKind: 'literal'`）。
+      // 实测定义 20 处 / 6 个作者包（eraTW 4.980 漢化包），尾部形态名实取：
+      //   特殊表情 / 特殊表情COM / 特殊服装 / 体形 / 差分 / 特殊照れ / 特殊吐息 / 特殊汗 /
+      //   特殊エフェクト / 特殊エフェクトチェック / 自慰エフェクト
+      // 例：`個人口上/030 Eiki [映姫]/映姫様/M_KOJO_K30_IMAGE.ERB:12`
+      //   `@M_KOJO_IMAGE_K30_特殊表情(ARGS,ARG,ARG:1)`
+      // 例（别人版）：`個人口上/141 Chimata [千亦]/千亦/M_KOJO_K141_IMAGE.ERB:12`
+      //   `@M_KOJO_ARIMA_IMAGE_K141_特殊服装(ARGS,ARG,ARG:1)`
+      // 形参固定三枚 `(ARGS, ARG, ARG:1)`（引擎以 3 实参调用；未声明形参会被静默丢弃）
+      //   ⇒ 糖层写 `时机 图像 特殊表情 参数: ARGS, ARG, ARG:1：`。
+      图像: {
+        template: 'M_KOJO{t}_IMAGE_K{n}_{i}',
+        indexKind: 'literal',
+      },
+      // 同一 `CASE` 里的 `IMAGE_EX`（`:1107`）：本包实测 0 定义，但引擎真有该面，
+      // 且作者可自定（对 `IMAGE2.ERB` 系立绘替换）——按 A4 口径 additive 一并补上。
+      图像扩展: {
+        template: 'M_KOJO{t}_IMAGE_EX_K{n}_{i}',
+        indexKind: 'literal',
+      },
+
       /* ---- 附录 C 其余入口（v1 走原生直通；模板登记供校验/补全取用） ---- */
 
       // #2 特殊事件（带 SKIP 检查）；MESSAGECHECK 插在 `_K{n}` 前（引擎 :83）

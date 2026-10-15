@@ -460,7 +460,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
 
   // HK-11②：编号解析（中文名 → 编号；查不到 fail-closed）——**在 resolveFace 之后**，
   // 三者（本体 / 成否 / MESSAGECHECK）共用同一个已验证的编号。
-  const resolved = resolveTimingIndex(timing, ctx);
+  const resolved = resolveTimingIndex(timing, ctx, face);
   if (!resolved.ok) return;
   const index = resolved.index;
 
@@ -640,6 +640,11 @@ interface FaceResolution {
   template: string;
   /** 是否把 `timing.index` 用作 `{i}`（模板含 `{i}` 时为真） */
   paramIndex: boolean;
+  /**
+   * `{i}` 槽的取值口径（adapter 声明；缺省 `'command'`）。`'literal'` = 令牌原样
+   * 透传、**不查指令名表**（尾部是运行期形态名的面，如 `图像`）。
+   */
+  indexKind: 'command' | 'literal';
   /** 成否函数模板（写了 `成否:` 时生成） */
   success?: { template: string; paramIndex: boolean };
   /**
@@ -693,6 +698,7 @@ function resolveFace(face: string, timing: TimingBlock, ctx: TimingEmitContext):
   return {
     template,
     paramIndex: template.includes('{i}'),
+    indexKind: spec.indexKind ?? 'command',
     // `成功` 划分野自身即 SUCCESS 函数（避免重复生成同名函数）——由 adapter
     // 在表里把 `success` 留空表达（见 face-templates.ts 的 `成功` 条目）。
     success: successTpl,
@@ -842,10 +848,18 @@ interface IndexResolution {
  * 也不新增诊断）；**中文名路径**经 adapter 指令表查编号，**查不到 fail-closed**
  * （报 `timing-instruction-unknown`，措辞含「未命名指令（编号 N）」，绝不猜、
  * 不产半成品——规范 §5.3 精神）。
+ *
+ * 例外：面声明了 `indexKind: 'literal'`（如 `图像`）时，令牌是**运行期形态名**
+ * （引擎以 `%ARGS:1%` 拼名），指令表里根本没有它 ⇒ **原样透传**，不查表、不报错。
  */
-function resolveTimingIndex(timing: TimingBlock, ctx: TimingEmitContext): IndexResolution {
+function resolveTimingIndex(
+  timing: TimingBlock,
+  ctx: TimingEmitContext,
+  face: FaceResolution,
+): IndexResolution {
   const name = timing.indexName;
   if (name === undefined) return { ok: true, index: timing.index };
+  if (face.indexKind === 'literal') return { ok: true, index: name };
 
   const no = ctx.instructionTable?.lookupByName(name);
   if (no === undefined) {

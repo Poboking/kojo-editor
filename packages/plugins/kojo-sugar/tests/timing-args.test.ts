@@ -165,8 +165,19 @@ describe('§3.2 参数: · 三个发射点（规范 §3.2 v1.5 / §5.5）', () =
 describe('§3.2 参数: · 取值校验（非法即 error，不出半个非法函数头）', () => {
   const withParam = (v: string) => `角色: 12\n时机 事件 1 参数: ${v}：\n    「嗯。」\n`;
 
-  it('合法：`ARG` / `ARG:1` / `ARG:10` 及其逗号组合', () => {
-    for (const v of ['ARG', 'ARG:1', 'ARG:10', 'ARG,ARG:1', 'ARG,ARG:1,ARG:2', 'ARG:0']) {
+  it('合法：`ARG` / `ARG:1` / `ARG:10` / **裸 `ARGS`** 及其逗号组合', () => {
+    // 裸 `ARGS` = 整组实参记号：引擎 `TRYCALLFORM …_K{No}_%ARGS:1%(ARGS:2,ARG:3,ARG:4)`
+    // 形态的调用面（图像口上）语料侧正是 `(ARGS,ARG,ARG:1)`（见 `图像` 面用例）。
+    for (const v of [
+      'ARG',
+      'ARG:1',
+      'ARG:10',
+      'ARG,ARG:1',
+      'ARG,ARG:1,ARG:2',
+      'ARG:0',
+      'ARGS',
+      'ARGS,ARG,ARG:1',
+    ]) {
       expect(errMsgs(withParam(v)), v).toEqual([]);
     }
   });
