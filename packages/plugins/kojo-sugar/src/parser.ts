@@ -257,6 +257,9 @@ function applyHeadDecl(fm: SugarFrontMatter, key: string, value: string): void {
     case 'head.color':
       fm.color = value;
       break;
+    case 'head.playerColor':
+      fm.playerColor = value;
+      break;
     case 'head.narrationColor':
       fm.narrationColor = value === '作者色' ? '作者色' : '默认';
       break;

@@ -384,6 +384,12 @@ export interface KojoFaceTable {
    */
   readonly customComRange?: { readonly min: number; readonly max: number };
   /**
+   * 缺省**自机色**（`你：` 自机/玩家台词未声明 `自机色:` 时的兜底 `SETCOLOR` 原文，
+   * 如 `0x4682B4`）。**颜色字面量是游戏知识，只住 adapter**（kojo-sugar 无任何 `0x…`）。
+   * 缺省 = 该游戏无缺省自机色（作者未声明时转译器报 `face-table-missing` 并按普通旁白输出）。
+   */
+  readonly playerColor?: string;
+  /**
    * 自定函数钩子的函数名模板（附录 C 原文；{t}{n}{i} 占位符同主模板口径）。
    * 缺省 = 该游戏无对应钩子。eraTW 的九条见附录 C #34（自定指令五钩子）
    * 与 #3 自定事件 / #30 `CUSTOM_TALENT` / #31 `SHOP_BUTTON_CONDITION` / #32 `SHOP_BUTTON`。

@@ -64,6 +64,7 @@ const HEAD_ALIAS_WORDS = new Set([
   'title',
   'desc',
   'color',
+  'player-color',
   'narration-color',
   'switch',
   'alias',

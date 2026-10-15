@@ -276,6 +276,7 @@ export function codegen(
         aliases: opts.aliases,
         dictionary: opts.dictionary,
         sink: opts.sink,
+        faceTable: opts.faceTable,
         hooks: opts.faceTable?.customHooks,
         range: opts.faceTable?.customComRange,
         instructionTable: opts.instructionTable,
@@ -549,6 +550,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
     dictionary: ctx.dictionary,
     instructionTable: ctx.instructionTable,
     libraryTable: ctx.libraryTable,
+    faceTable: ctx.faceTable,
     sink: ctx.sink,
     frontMatter: ctx.frontMatter,
     allocator: new SlotAllocator(),
@@ -564,9 +566,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
     }
   } else if (!empty) {
     em.pushGenerated(0, `IF LOCAL`);
-    for (const node of timing.body) {
-      emitStatement(em, node, bodyCtx, bodyIndent);
-    }
+    emitBody(em, timing.body, bodyCtx, bodyIndent);
     em.pushGenerated(0, `ENDIF`);
   }
 
@@ -600,7 +600,7 @@ function emitSectionBlock(em: Emitter, node: SectionBlock, ctx: BodyContext, ind
   if (preset) {
     em.push(indent, `LOCAL:${preset.local} = ${check}`, node.loc.start.line);
     em.push(indent, `IF LOCAL:${preset.local} && ${preset.condition}`, null);
-    for (const child of node.body) emitStatement(em, child, ctx, indent + 1);
+    emitBody(em, node.body, ctx, indent + 1);
     em.push(indent, `ENDIF`, null);
     return;
   }
@@ -610,7 +610,7 @@ function emitSectionBlock(em: Emitter, node: SectionBlock, ctx: BodyContext, ind
   em.pushGenerated(indent, `LOCAL = ${check}`);
   em.pushGenerated(indent, `;-------------------------------------------------`);
   em.push(indent, `IF LOCAL && ${condition}`, node.loc.start.line);
-  for (const child of node.body) emitStatement(em, child, ctx, indent + 1);
+  emitBody(em, node.body, ctx, indent + 1);
   em.push(indent, `ENDIF`, null);
 }
 
@@ -887,6 +887,8 @@ interface CustomEmitContext {
   frontMatter: SugarFrontMatter;
   aliases: AliasTable;
   dictionary?: DictionaryLookup;
+  /** 分野模板表（adapter；仅供正体内 `你：` 自机台词的缺省自机色兜底） */
+  faceTable?: KojoFaceTable;
   sink: DiagnosticSink;
   /** 自定钩子模板（adapter；缺 comName/comAble/com 任一 → 跳过并告警） */
   hooks?: KojoFaceTable['customHooks'];
@@ -1053,12 +1055,13 @@ function emitCustomCommand(em: Emitter, node: CustomCommandBlock, ctx: CustomEmi
       dictionary: ctx.dictionary,
       instructionTable: ctx.instructionTable,
       libraryTable: ctx.libraryTable,
+      faceTable: ctx.faceTable,
       sink: ctx.sink,
       frontMatter: ctx.frontMatter,
       allocator: new SlotAllocator(),
       baseIndent: bodyIndent,
     };
-    for (const child of node.body) emitStatement(em, child, bodyCtx, bodyIndent);
+    emitBody(em, node.body, bodyCtx, bodyIndent);
     em.pushGenerated(0, `ENDIF`);
   }
   em.pushGenerated(0, `RETURN 1`);
@@ -1116,10 +1119,19 @@ interface BodyContext {
   instructionTable?: KojoInstructionTable;
   /** 基础库 / 常用函数名表（adapter；ZH-F1） */
   libraryTable?: KojoLibraryTable;
+  /** 分野模板表（adapter；`你：` 自机台词缺省自机色的兜底来源，游戏知识只住 adapter） */
+  faceTable?: KojoFaceTable;
   sink: DiagnosticSink;
   frontMatter: SugarFrontMatter;
   allocator: SlotAllocator;
   baseIndent: number;
+  /** 缺省自机色告警去重（每时机一次；内部可变） */
+  _playerColorWarned?: boolean;
+  /**
+   * 当前所处 `着色` 块的**环境色**（可选）。自机色 run 收尾时**复原**到它（而非 `RESETCOLOR`
+   * 打回默认）——否则着色块里一段自机台词之后，同块后续非 D 行会丢掉块色。缺省 = 无环境色（打 `RESETCOLOR`）。
+   */
+  ambientColor?: string;
 }
 
 function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyContext, indent: number): void {
@@ -1145,7 +1157,7 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
     case 'groupBlock':
       // `组：` 候选组（E18）：组体**逐句透传**进所在候选——同缩进、不产生包装行，
       // 产物与「几行裸行候选」同构（`随机：` 的候选边界是行，本写法只把多行收成一条候选）。
-      for (const child of node.body) emitStatement(em, child, ctx, indent);
+      emitBody(em, node.body, ctx, indent);
       break;
     case 'sectionBlock':
       // 段块**只**在时机正文最外层走逐段信封（`emitTiming` 的 sectionMode 路径）；
@@ -1185,6 +1197,85 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
       // aliasDecl / timingBlock 不该出现在块体（AST 段已保证）
       break;
   }
+}
+
+/* ------------------------------ 自机台词（`你：` 行首前缀） ------------------------------ */
+
+/**
+ * 语句列表发射（含 `你：` 自机台词的**色切换合并**）。
+ *
+ * 连续 `你：` 行只发**一次** `SETCOLOR <自机色>`（run 起点），run 结束（遇到非自机
+ * 语句或列表末尾）发**一次** `RESETCOLOR` 复原——避免逐行重复 SETCOLOR/RESETCOLOR。
+ * 非自机行照常走 `emitStatement`；进入任何块语句前先把当前 run 收尾，保证块内颜色
+ * 与块外互不串扰（块体自带一次 run 收尾，语义与运行期一致）。
+ */
+function emitBody(em: Emitter, body: readonly SugarNode[], ctx: BodyContext, indent: number): void {
+  let run = false; // 当前是否有生效的自机色 run
+  const closeRun = (): void => {
+    if (run) {
+      // 复原到所处 `着色` 块的环境色（有则 `SETCOLOR <环境色>`，否则 `RESETCOLOR` 打回默认）——
+      // 否则着色块里自机台词之后的非 D 行会丢掉块色（真语料同一回改处也是手动重发 SETCOLOR）。
+      em.push(indent, ctx.ambientColor !== undefined ? `SETCOLOR ${ctx.ambientColor}` : 'RESETCOLOR', null);
+      run = false;
+    }
+  };
+  for (const node of body) {
+    if (!isPlayerLine(node)) {
+      closeRun();
+      emitStatement(em, node, ctx, indent);
+      continue;
+    }
+    const text = textBody(node, ctx).raw.replace(PLAYER_PREFIX_RE, '');
+    const color = resolvePlayerColor(node, ctx);
+    if (color === null) {
+      // 未声明 `自机色:` 且 adapter 无缺省 → 退化：按普通旁白输出（已报 `face-table-missing`）
+      closeRun();
+      em.push(indent, printLine(text, detectSpeechText(text), node.wait, ctx), node.loc.start.line);
+      continue;
+    }
+    if (!run) {
+      em.push(indent, `SETCOLOR ${color}`, node.loc.start.line);
+      run = true;
+    }
+    // 非 D 变体：D 系忽略 `SETCOLOR`（= 旁白色），自机台词靠 `SETCOLOR` 上色。
+    em.push(
+      indent,
+      text.length === 0 ? (node.wait ? 'PRINTFORMDW' : 'PRINTFORML') : `PRINTFORM${node.wait ? 'W' : 'L'} ${text}`,
+      node.loc.start.line,
+    );
+  }
+  closeRun();
+}
+
+/** `你：` 行首前缀（全/半角冒号各一；**只认行首**，正文中间的「你」不替换） */
+const PLAYER_PREFIX_RE = /^你[:：]/;
+
+/** 该节点是否 `你：` 自机台词行（只看**行首前缀**，避免正文中间误伤） */
+function isPlayerLine(node: SugarNode): node is TextLine {
+  return node.kind === 'textLine' && PLAYER_PREFIX_RE.test(sourceTextOf(node));
+}
+
+/**
+ * 自机色解析：作者 `自机色:` 优先，否则回退 adapter 的缺省自机色（`KojoFaceTable.playerColor`）。
+ * 两者都缺省 → 报 `face-table-missing`（每时机一次）并返回 `null`（调用方按普通旁白输出，不静默）。
+ */
+function resolvePlayerColor(node: TextLine, ctx: BodyContext): string | null {
+  const declared = ctx.frontMatter.playerColor;
+  if (declared !== undefined && declared.length > 0) return declared;
+  const fallback = ctx.faceTable?.playerColor;
+  if (fallback !== undefined && fallback.length > 0) return fallback;
+  if (!ctx._playerColorWarned) {
+    ctx._playerColorWarned = true;
+    ctx.sink.report({
+      code: 'face-table-missing',
+      severity: 'warning',
+      message:
+        '写了 `你：` 自机台词，但文件头既未声明 `自机色:`，当前适配器也未提供缺省自机色——' +
+        '该行已按普通旁白输出（不上色）。请补 `自机色: <颜色>` 或使用支持自机色的适配器。',
+      loc: node.loc.start,
+    });
+  }
+  return null;
 }
 
 /* ------------------------------ 原生直通行 / 语句赋值 ------------------------------ */
@@ -1440,7 +1531,7 @@ function emitIfBlock(em: Emitter, node: IfBlock, ctx: BodyContext, indent: numbe
     } else {
       em.push(indent, `ELSE`, branch.loc.start.line);
     }
-    for (const child of branch.body) emitStatement(em, child, ctx, indent + 1);
+    emitBody(em, branch.body, ctx, indent + 1);
   }
   em.push(indent, `ENDIF`, null);
 }
@@ -1456,7 +1547,7 @@ function emitWhenBlock(em: Emitter, node: WhenBlock, ctx: BodyContext, indent: n
     } else {
       em.push(indent + 1, `CASEELSE`, branch.loc.start.line);
     }
-    for (const child of branch.body) emitStatement(em, child, ctx, indent + 2);
+    emitBody(em, branch.body, ctx, indent + 2);
   }
   em.push(indent, `ENDSELECT`, null);
 }
@@ -1577,7 +1668,7 @@ function emitRandomBlock(em: Emitter, node: RandomBlock, ctx: BodyContext, inden
     em.push(indent, `SELECTCASE RAND:${count}`, node.loc.start.line);
     node.alternatives.forEach((alt, i) => {
       em.push(indent + 1, `CASE ${i}`, alt.loc.start.line);
-      for (const child of alt.body) emitStatement(em, child, ctx, indent + 2);
+      emitBody(em, alt.body, ctx, indent + 2);
     });
     em.push(indent, `ENDSELECT`, null);
     return;
@@ -1588,7 +1679,7 @@ function emitRandomBlock(em: Emitter, node: RandomBlock, ctx: BodyContext, inden
   ctx.allocator.enter();
   node.alternatives.forEach((alt, i) => {
     em.push(indent + 1, `CASE ${i}`, alt.loc.start.line);
-    for (const child of alt.body) emitStatement(em, child, ctx, indent + 2);
+    emitBody(em, alt.body, ctx, indent + 2);
   });
   ctx.allocator.exit();
   em.push(indent, `ENDSELECT`, null);
@@ -1668,7 +1759,7 @@ function emitChoiceBlock(em: Emitter, node: ChoiceBlock, ctx: BodyContext, inden
   em.push(indent, `SELECTCASE RESULTS`, null);
   node.items.forEach((item, i) => {
     em.push(indent + 1, `CASE ${JSON.stringify(String(i + 1))}`, item.loc.start.line);
-    for (const child of item.body) emitStatement(em, child, ctx, indent + 2);
+    emitBody(em, item.body, ctx, indent + 2);
   });
   em.push(indent, `ENDSELECT`, null);
 }
@@ -1702,7 +1793,7 @@ function emitMenuBlock(em: Emitter, node: MenuBlock, ctx: BodyContext, indent: n
   em.pushGenerated(indent, `SELECTCASE RESULT`);
   node.items.forEach((item, i) => {
     em.push(indent + 1, `CASE ${i + 1}`, item.loc.start.line);
-    for (const child of item.body) emitStatement(em, child, ctx, indent + 2);
+    emitBody(em, item.body, ctx, indent + 2);
   });
   em.pushGenerated(indent + 1, `CASEELSE`);
   em.pushGenerated(indent + 2, `GOTO INPUT_LOOP`);
@@ -1713,7 +1804,11 @@ function emitMenuBlock(em: Emitter, node: MenuBlock, ctx: BodyContext, indent: n
 
 function emitColorBlock(em: Emitter, node: ColorBlock, ctx: BodyContext, indent: number): void {
   em.push(indent, `SETCOLOR ${node.color}`, node.loc.start.line);
-  for (const child of node.body) emitStatement(em, child, ctx, indent);
+  // 块体在块色下发射：块内自机台词 run 收尾须复原到**块色**（而非默认色），故暂存并换环境色。
+  const prevAmbient = ctx.ambientColor;
+  ctx.ambientColor = node.color;
+  emitBody(em, node.body, ctx, indent);
+  ctx.ambientColor = prevAmbient;
   em.push(indent, `RESETCOLOR`, null);
 }
 

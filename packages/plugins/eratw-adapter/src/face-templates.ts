@@ -209,6 +209,12 @@ export function createEratwFaceTable(): KojoFaceTable {
       查询: { template: 'M_KOJO{t}_CHECK_K{n}_{i}' },
     },
 
+    // 缺省自机色：`你：` 自机（MASTER）台词未声明 `自机色:` 时的兜底 `SETCOLOR`。
+    // 取值来自真实语料——新制美鈴口上（`M_KOJO_K58_1_日常系コマンド.ERB`）里自机台词行
+    // 统一 `SETCOLOR 0x4682B4` 上色（`0x4682B4` 亦为语料中第 2 高频的 SETCOLOR 字面量）。
+    // 颜色字面量是游戏知识，只住本包（kojo-sugar 无任何 `0x…`）。
+    playerColor: '0x4682B4',
+
     // 三件套（规范 §5.5：**不带家族段**，只有 `K{角色号}`）
     registration: {
       declare: 'M_KOJO_K{n}',

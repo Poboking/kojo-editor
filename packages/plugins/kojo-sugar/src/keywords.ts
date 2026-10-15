@@ -17,6 +17,7 @@ export type KeywordId =
   | 'head.title'
   | 'head.desc'
   | 'head.color'
+  | 'head.playerColor'
   | 'head.narrationColor'
   | 'head.switch'
   | 'head.alias'
@@ -59,6 +60,8 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['desc', 'head.desc'],
   ['口上色', 'head.color'],
   ['color', 'head.color'],
+  ['自机色', 'head.playerColor'],
+  ['player-color', 'head.playerColor'],
   ['旁白色', 'head.narrationColor'],
   ['narration-color', 'head.narrationColor'],
   ['开关', 'head.switch'],
@@ -143,6 +146,7 @@ export const HEAD_DECL_KEYS: readonly KeywordId[] = [
   'head.title',
   'head.desc',
   'head.color',
+  'head.playerColor',
   'head.narrationColor',
   'head.switch',
 ];

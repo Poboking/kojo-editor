@@ -656,6 +656,16 @@ export interface SugarFrontMatter {
   /** `口上色:` → `@M_KOJO…_COLOR_K{No}` 内 `SETCOLOR`（原文，如 `0xE4FC08`） */
   color?: string;
   /**
+   * `自机色:` → 正文 `你：` 自机（玩家）台词行的 `SETCOLOR`（原文，如 `0x4682B4`）。
+   *
+   * 与 `color`（角色色）**平行**：写侧 `你：<文本>` 行只认**行首前缀**，产物为
+   * `SETCOLOR <自机色>` + 该行的**非 D 变体**打印（`PRINTFORM{L|W}`，文本去掉前缀、
+   * 不加引号）——D 系忽略 `SETCOLOR`（= 旁白色），自机台词靠 `SETCOLOR` 上色。
+   * 缺省（未声明）时工具回退到 adapter 的缺省自机色（`KojoFaceTable.playerColor`）；
+   * 两者都缺省才报诊断并按普通旁白输出（不静默）。
+   */
+  playerColor?: string;
+  /**
    * `旁白色:`（`默认` / `作者色`）——`默认` = 旁白走 `D` 系（默认色）；
    * `作者色` = 旁白也用角色色。**规范 §1.3 的引号×D 系 99% 相关律**的心智模型开关。
    */
