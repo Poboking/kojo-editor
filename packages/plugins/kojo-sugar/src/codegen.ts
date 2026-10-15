@@ -26,6 +26,7 @@ import type {
   KojoFaceTemplate,
   KojoInstructionTable,
   KojoLibraryTable,
+  MenuBlock,
   RandomBlock,
   RandomInline,
   RawFunctionBlock,
@@ -1154,6 +1155,9 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
     case 'choiceBlock':
       emitChoiceBlock(em, node, ctx, indent);
       break;
+    case 'menuBlock':
+      emitMenuBlock(em, node, ctx, indent);
+      break;
     case 'colorBlock':
       emitColorBlock(em, node, ctx, indent);
       break;
@@ -1641,9 +1645,7 @@ function stripOuterQuotes(s: string): string {
 /* ------------------------------ 选项块（§3.7） ------------------------------ */
 
 /**
- * 选项块（规范 §3.7）——两种形按内部标记 `_numeric` 分派：
- *
- * - **按钮形**（`选项：`，缺省）：
+ * 选项块（规范 §3.7）——按钮形：
  * ```
  * PRINTBUTTON "文本", "n"     ← 按书写顺序
  * INPUTS
@@ -1652,13 +1654,8 @@ function stripOuterQuotes(s: string): string {
  *         …
  * ENDSELECT
  * ```
- * - **数字输入菜单形**（`选项 数字：`）：见 `emitNumericChoiceBlock`。
  */
 function emitChoiceBlock(em: Emitter, node: ChoiceBlock, ctx: BodyContext, indent: number): void {
-  if ((node as { _numeric?: boolean })._numeric === true) {
-    emitNumericChoiceBlock(em, node, ctx, indent);
-    return;
-  }
   node.items.forEach((item, i) => {
     em.push(indent, `PRINTBUTTON ${JSON.stringify(item.label)}, ${JSON.stringify(String(i + 1))}`, item.loc.start.line);
   });
@@ -1672,44 +1669,38 @@ function emitChoiceBlock(em: Emitter, node: ChoiceBlock, ctx: BodyContext, inden
 }
 
 /**
- * 数字输入菜单形的产物（`选项 数字：`）——**逐字照语料主流写法**。
+ * 菜单块（数字输入菜单形）的产物——**逐字照语料主流写法**。
  *
- * 语料实证（`口上・メッセージ関連/個人口上/016 Remilia .../M_KOJO_K16_10_イベント.ERB:121-135`、
- * 同目录 `073 Sekibanki .../M_KOJO_K73_1_イベント.ERB:239-250`）：
+ * 语料实测（全 ERB 1,770 处裸 `INPUT`）：主流是**标签回跳环**（`$标签` 紧贴 `INPUT`
+ * 之前、无效输入 `GOTO` 回跳，量 ~590 处），远多于 `DO`/`LOOP` 环（~105 处）；标签
+ * 命名以 `INPUT_LOOP` 为首（43 处）；菜单项打印命令 `PRINTL` 居首（1,186 行）。
+ * 故产物取：
  * ```
- * PRINTFORML [1] 标签          ← 编号项（普通打印，不是 PRINTBUTTON）
+ * PRINTL [1] 标签          ← 编号项（普通打印，非 PRINTBUTTON）
  * …
- * DO
+ * $INPUT_LOOP             ← 回跳落点（紧贴 INPUT 之前；项打印在其上方，回跳不重打印）
  * INPUT
- * CLEARLINE 1                 ← 清掉 INPUT 回显的那一行（不是整屏）
- * SIF RESULT >= 1 && RESULT <= n
- *         BREAK               ← 在范围内才跳出，否则重问
- * LOOP 1
- * SELECTCASE RESULT           ← 引擎约定变量是 RESULT（INPUT），不是按钮形的 RESULTS
+ * SELECTCASE RESULT       ← 引擎约定变量是 RESULT（INPUT），不是按钮形的 RESULTS
  *     CASE 1
  *         …
+ *     CASEELSE
+ *         GOTO INPUT_LOOP ← 无效/默认分支回菜单；正常分支透出 ENDSELECT 即退出
  * ENDSELECT
  * ```
- *
- * 与按钮形的两处关键差别：读回变量 `RESULT`（非 `RESULTS`）、多一圈
- * 「`INPUT` + 范围校验 + 无效重试」的 `DO`/`LOOP`。
  */
-function emitNumericChoiceBlock(em: Emitter, node: ChoiceBlock, ctx: BodyContext, indent: number): void {
-  const n = node.items.length;
+function emitMenuBlock(em: Emitter, node: MenuBlock, ctx: BodyContext, indent: number): void {
   node.items.forEach((item, i) => {
-    em.push(indent, `PRINTFORML [${i + 1}] ${item.label}`, item.loc.start.line);
+    em.push(indent, `PRINTL [${i + 1}] ${item.label}`, item.loc.start.line);
   });
-  em.pushGenerated(indent, `DO`);
+  em.pushGenerated(indent, `$INPUT_LOOP`);
   em.pushGenerated(indent, `INPUT`);
-  em.pushGenerated(indent, `CLEARLINE 1`);
-  em.pushGenerated(indent, `SIF RESULT >= 1 && RESULT <= ${n}`);
-  em.push(indent + 1, `BREAK`, null);
-  em.pushGenerated(indent, `LOOP 1`);
   em.pushGenerated(indent, `SELECTCASE RESULT`);
   node.items.forEach((item, i) => {
     em.push(indent + 1, `CASE ${i + 1}`, item.loc.start.line);
     for (const child of item.body) emitStatement(em, child, ctx, indent + 2);
   });
+  em.pushGenerated(indent + 1, `CASEELSE`);
+  em.pushGenerated(indent + 2, `GOTO INPUT_LOOP`);
   em.pushGenerated(indent, `ENDSELECT`);
 }
 

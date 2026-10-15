@@ -349,10 +349,29 @@ export interface ChoiceBlock extends SugarNodeBase {
 export interface ChoiceItem {
   /** 按钮显示文本（不含引号；源为 `「…」` / `｢…｣`） */
   label: string;
-  /** 条目体（可含 `如果`/`当`/`随机`/`着色` 等块，**不含** `选项` 块） */
+  /** 条目体（可含 `如果`/`当`/`随机`/`着色` 等块，**不含** `选项`/`菜单` 块） */
   body: SugarNode[];
   /** 条目头源位置 */
   loc: SugarSourceSpan;
+}
+
+/* ============================== 菜单块 ============================== */
+
+/**
+ * `菜单` 块（`菜单：` / `menu：`）——数字输入菜单（`INPUT` 读回 `RESULT`）。
+ *
+ * 产物 = 逐条 `PRINTL [n] 标签` + `$INPUT_LOOP` 标签 + `INPUT` + `SELECTCASE RESULT`
+ * 的 `CASE n` … `CASEELSE`（无效输入回跳重问，正常分支透出即退出）。**回跳环**是
+ * 逐字照真实语料主流写法（`$标签` + `GOTO` 回跳，见 `codegen.emitMenuBlock`）。
+ *
+ * 约束同 `选项`：**每个时机只允许一个 `菜单` 块、且不允许嵌套**——两个 `INPUT`
+ * 共用引擎约定的 `RESULT`，嵌套也解决不了冲突；违者复用诊断
+ * `choice-multiple` / `choice-nested`（`SugarDiagnosticCode` 是闭集）。
+ */
+export interface MenuBlock extends SugarNodeBase {
+  kind: 'menuBlock';
+  /** 菜单条目（按书写顺序；编号 `[1]..[n]` 按此顺序分配；结构与 `ChoiceItem` 同） */
+  items: ChoiceItem[];
 }
 
 /* ============================== 着色块 ============================== */
@@ -578,6 +597,7 @@ export type SugarStatement =
   | RandomInline
   | GroupBlock
   | ChoiceBlock
+  | MenuBlock
   | ColorBlock
   | SectionBlock
   | CustomCommandBlock

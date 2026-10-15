@@ -4,8 +4,8 @@
  * 配对规则（照抄规范 §5.3，不自由发挥）：
  * - 块头以全角 `：` 结尾；块体缩进必须**比块头更深**；
  * - 缩进异常（回缩不齐、块头无体）→ 报错并**阻止编译**（不生成半成品）；
- * - `如果/否则如果/否则`、`当/是/否则`、`随机`、`选项`、`着色`、时机 各自成块；
- * - `选项` 块：每时机最多一个、不可嵌套（诊断 `choice-multiple` / `choice-nested`）；
+ * - `如果/否则如果/否则`、`当/是/否则`、`随机`、`选项`、`菜单`、`着色`、时机 各自成块；
+ * - `选项` / `菜单` 块：每时机最多一个、不可嵌套（诊断 `choice-multiple` / `choice-nested`）；
  * - 表达式 `如果` / `当`：分支体必须是 `-> 单个表达式`，且必须有 `否则`
  *   （诊断 `expr-body-not-expression` / `expr-missing-else`）。
  *
@@ -488,6 +488,7 @@ class BlockParser {
     const messageCheck: { scope: 'scene' | 'kojo'; condition: string; loc: SugarSourceSpan }[] = [];
     const namedParams: TimingNamedParam[] = [];
     let choiceSeen = false;
+    let menuSeen = false;
 
     while (!this.cursor.done) {
       const line = this.cursor.peek()!;
@@ -521,9 +522,10 @@ class BlockParser {
         continue;
       }
       // 时机块头的命名参数若写在体内（少见）——忽略并前进
-      const node = this.parseStatement(cls, line, { choiceSeen });
+      const node = this.parseStatement(cls, line, { choiceSeen, menuSeen });
       if (node) {
         if (node.kind === 'choiceBlock') choiceSeen = true;
+        if (node.kind === 'menuBlock') menuSeen = true;
         body.push(node);
       }
     }
@@ -562,7 +564,7 @@ class BlockParser {
   private parseStatement(
     cls: LineClass,
     line: LogicalLine,
-    state: { choiceSeen: boolean },
+    state: { choiceSeen: boolean; menuSeen: boolean },
   ): SugarNode | null {
     switch (cls.kind) {
       case 'ifHead':
@@ -594,13 +596,23 @@ class BlockParser {
           this.sink.report({
             code: 'choice-multiple',
             severity: 'error',
-            message: cls.numeric
-              ? '一个「时机」内只允许一个「选项」块（两种形共用同一读回变量：两个 INPUT/INPUTS 会争用 RESULT/RESULTS）。多轮选择请用原生 `$标签` + `GOTO`。'
-              : '一个「时机」内只允许一个「选项」块（两个 INPUTS 会争用同一个 RESULTS）。多轮选择请用原生 `$标签` + `GOTO`。',
+            message: '一个「时机」内只允许一个「选项」块（两个 INPUTS 会争用同一个 RESULTS）。多轮选择请用原生 `$标签` + `GOTO`。',
             loc: posOf(line),
           });
         }
-        return this.parseChoiceBody(line, cls.numeric === true);
+        return this.parseChoiceBody(line);
+      }
+      case 'menuHead': {
+        this.cursor.next();
+        if (state.menuSeen) {
+          this.sink.report({
+            code: 'choice-multiple',
+            severity: 'error',
+            message: '一个「时机」内只允许一个「菜单」块（两个 INPUT 会争用同一个 RESULT）。多轮选择请用原生 `$标签` + `GOTO` 回跳。',
+            loc: posOf(line),
+          });
+        }
+        return this.parseMenuBody(line);
       }
       case 'colorHead': {
         this.cursor.next();
@@ -1059,18 +1071,27 @@ class BlockParser {
         this.cursor.next();
         continue;
       }
-      // 候选路径不过 parseBody，须在此补「选项」块守卫（与块体同款）
+      // 候选路径不过 parseBody，须在此补「选项」/「菜单」块守卫（与块体同款）
       if (cls.kind === 'choiceHead') {
         this.cursor.next();
         this.sink.report({
           code: 'choice-nested',
           severity: 'error',
-          message: cls.numeric
-            ? '「选项 数字」块不能嵌套（内层 INPUT 会覆盖外层 RESULT）。'
-            : '「选项」块不能嵌套（内层 INPUTS 会覆盖外层 RESULTS）。',
+          message: '「选项」块不能嵌套（内层 INPUTS 会覆盖外层 RESULTS）。',
           loc: posOf(line),
         });
-        this.parseChoiceBody(line, cls.numeric === true); // 仍解析以正确跳行，节点丢弃
+        this.parseChoiceBody(line); // 仍解析以正确跳行，节点丢弃
+        continue;
+      }
+      if (cls.kind === 'menuHead') {
+        this.cursor.next();
+        this.sink.report({
+          code: 'choice-nested',
+          severity: 'error',
+          message: '「菜单」块不能嵌套（内层 INPUT 会覆盖外层 RESULT）。',
+          loc: posOf(line),
+        });
+        this.parseMenuBody(line); // 仍解析以正确跳行，节点丢弃
         continue;
       }
       // 候选：一行内容（可为文本行 / 心形 / 原生行 / 深一层块）
@@ -1139,7 +1160,9 @@ class BlockParser {
       case 'groupHead':
         return this.parseGroupBody(line);
       case 'choiceHead':
-        return this.parseChoiceBody(line, cls.numeric === true);
+        return this.parseChoiceBody(line);
+      case 'menuHead':
+        return this.parseMenuBody(line);
       case 'exprHead':
         return this.parseExprHead(line, cls);
       case 'assign':
@@ -1226,7 +1249,7 @@ class BlockParser {
         this.parseSectionBody(line, inner);
         continue;
       }
-      const node = this.parseStatement(inner, line, { choiceSeen: false });
+      const node = this.parseStatement(inner, line, { choiceSeen: false, menuSeen: false });
       if (node) body.push(node);
     }
     if (body.length === 0) {
@@ -1253,14 +1276,29 @@ class BlockParser {
   /* ------------------------------ 选项块 ------------------------------ */
 
   /**
-   * `选项：` 块体（按钮形）/ `选项 数字：` 块体（数字输入菜单形）。
-   *
-   * 两种形的**条目结构完全同形**（`「标签」：` + 缩进分支体），差别只在产物
-   * （见 `codegen.emitChoiceBlock`）。故此处仅在节点上挂内部标记
-   * `_numeric`（转译器内部决策，契约 `ChoiceBlock` 不含此字段——与 `_randomShape` /
-   * `_preset` 同一手法），codegen 据此分派。
+   * `选项：` 块体（按钮形）——产物见 `codegen.emitChoiceBlock`。
    */
-  private parseChoiceBody(headLine: LogicalLine, numeric = false): SugarNode {
+  private parseChoiceBody(headLine: LogicalLine): SugarNode {
+    return this.parseItemizedBlock(headLine, '选项', 'choiceBlock');
+  }
+
+  /**
+   * `菜单：` 块体（数字输入菜单形）——**条目结构与 `选项` 完全同形**
+   * （`「标签」：` + 缩进分支体），差别只在产物（见 `codegen.emitMenuBlock`）。
+   */
+  private parseMenuBody(headLine: LogicalLine): SugarNode {
+    return this.parseItemizedBlock(headLine, '菜单', 'menuBlock');
+  }
+
+  /**
+   * `选项` / `菜单` 共用条目解析：条目 = `「标签」：` + 缩进分支体，逐条收集。
+   * `blockName`（`选项` / `菜单`）仅用于诊断文案；`kind` 决定节点类型。
+   */
+  private parseItemizedBlock(
+    headLine: LogicalLine,
+    blockName: string,
+    kind: 'choiceBlock' | 'menuBlock',
+  ): SugarNode {
     const itemIndent = headLine.indent + 1;
     const items: { label: string; body: SugarNode[]; loc: SugarSourceSpan }[] = [];
     while (!this.cursor.done) {
@@ -1275,7 +1313,7 @@ class BlockParser {
         this.sink.report({
           code: 'indent-mismatch',
           severity: 'error',
-          message: '「选项」的条目必须同级（每个条目是 `「文本」：` + 缩进正文）。',
+          message: `「${blockName}」的条目必须同级（每个条目是 \`「文本」：\` + 缩进正文）。`,
           loc: posOf(line),
         });
         this.skipOverIndented(line.indent);
@@ -1285,7 +1323,7 @@ class BlockParser {
         this.sink.report({
           code: 'indent-mismatch',
           severity: 'error',
-          message: '「选项」的条目要写成 `「文本」：`（以全角冒号结尾）。',
+          message: `「${blockName}」的条目要写成 \`「文本」：\`（以全角冒号结尾）。`,
           loc: posOf(line),
         });
         this.cursor.next();
@@ -1301,15 +1339,14 @@ class BlockParser {
       this.sink.report({
         code: 'block-empty',
         severity: 'error',
-        message: '「选项」块没有任何条目。',
+        message: `「${blockName}」块没有任何条目。`,
         loc: posOf(headLine),
       });
     }
     return {
-      kind: 'choiceBlock',
+      kind,
       items,
       loc: mergeSpan2(headLine, items),
-      ...(numeric ? { _numeric: true } : {}),
     } as SugarNode;
   }
 
@@ -1487,16 +1524,26 @@ class BlockParser {
         this.sink.report({
           code: 'choice-nested',
           severity: 'error',
-          message: cls.numeric
-            ? '「选项 数字」块不能嵌套（内层 INPUT 会覆盖外层 RESULT）。'
-            : '「选项」块不能嵌套（内层 INPUTS 会覆盖外层 RESULTS）。',
+          message: '「选项」块不能嵌套（内层 INPUTS 会覆盖外层 RESULTS）。',
           loc: posOf(line),
         });
         // 仍然解析块体以正确跳行
-        this.parseChoiceBody(line, cls.numeric === true);
+        this.parseChoiceBody(line);
         continue;
       }
-      const node = this.parseStatement(cls, line, { choiceSeen: false });
+      if (cls.kind === 'menuHead') {
+        this.cursor.next();
+        this.sink.report({
+          code: 'choice-nested',
+          severity: 'error',
+          message: '「菜单」块不能嵌套（内层 INPUT 会覆盖外层 RESULT）。',
+          loc: posOf(line),
+        });
+        // 仍然解析块体以正确跳行
+        this.parseMenuBody(line);
+        continue;
+      }
+      const node = this.parseStatement(cls, line, { choiceSeen: false, menuSeen: false });
       if (node) out.push(node);
     }
     return out;
@@ -1620,7 +1667,8 @@ function isBlockNode(node: SugarNode): boolean {
     node.kind === 'randomBlock' ||
     node.kind === 'groupBlock' ||
     node.kind === 'sectionBlock' ||
-    node.kind === 'choiceBlock'
+    node.kind === 'choiceBlock' ||
+    node.kind === 'menuBlock'
   );
 }
 

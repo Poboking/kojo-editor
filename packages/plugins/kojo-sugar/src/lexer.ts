@@ -159,8 +159,10 @@ export type LineClass =
   | { kind: 'randomShapeDecl'; value: string }
   | { kind: 'groupHead' }
   | { kind: 'sectionHead'; condition: string; disabled: boolean }
-  /** `选项：` 块头；`numeric` = 数字输入菜单形（`选项 数字：` / `choice number：`） */
-  | { kind: 'choiceHead'; numeric?: boolean }
+  /** `选项：` 块头（按钮形；产物 PRINTBUTTON + INPUTS + SELECTCASE RESULTS） */
+  | { kind: 'choiceHead' }
+  /** `菜单：` / `menu：` 块头（数字输入菜单形；产物 PRINTL [n] + INPUT + SELECTCASE RESULT + 回跳环） */
+  | { kind: 'menuHead' }
   | { kind: 'choiceItem'; label: string }
   | { kind: 'colorHead'; color: string }
   /** `心形：` / `heart：` 连续块头（P-7；块体是文本行，逐行产 HPH_PRINT） */
@@ -666,14 +668,12 @@ function parseBlockHead(content: string): LineClass | null {
     case 'block.section':
       return parseSectionHead(rest);
     case 'block.choice':
-      // `选项 数字：`（英文小写别名 `choice number：`）——数字输入菜单形。
-      //
-      // `数字` 按**位置**识别（块头里紧随 `选项` 的裸词），**不进 `KEYWORDS`**：
-      // 它是块头上下文里的位置词，不是独立语法分组——登记进词表会把它变成高亮/补全
-      // 关键字，污染正文文本（作者写「数字」二字时被当成关键字）。同款先例见
-      // `类型: SCOM` 与 `自定指令` 的子句键（`lexer.parseCustomCommandHead`）。
-      if (rest === '数字' || rest === 'number') return { kind: 'choiceHead', numeric: true };
+      // `选项：`（英文小写别名 `choice：`）——按钮形菜单，产物 PRINTBUTTON + INPUTS + RESULTS。
       return { kind: 'choiceHead' };
+    case 'block.menu':
+      // `菜单：`（英文小写别名 `menu：`）——数字输入菜单，产物 PRINTL [n] + INPUT + SELECTCASE RESULT。
+      // 只收**裸块头**（`菜单：`）——带其它内容的写法不识别（按普通文本走，不静默吞掉）。
+      return rest.length === 0 ? { kind: 'menuHead' } : null;
     case 'block.color':
       return { kind: 'colorHead', color: rest };
     case 'block.customCommand':

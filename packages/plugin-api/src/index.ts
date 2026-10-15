@@ -286,6 +286,7 @@ export type {
   IfBranch,
   IfExpr,
   Interpolation,
+  MenuBlock,
   RandomBlock,
   RandomInline,
   RawFunctionBlock,

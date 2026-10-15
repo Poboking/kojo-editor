@@ -30,6 +30,7 @@ export type KeywordId =
   | 'block.random'
   | 'block.group'
   | 'block.choice'
+  | 'block.menu'
   | 'block.color'
   | 'block.section'
   | 'block.customCommand'
@@ -89,6 +90,10 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['section', 'block.section'],
   ['选项', 'block.choice'],
   ['choice', 'block.choice'],
+  // 数字输入菜单（B2）：逐条 `PRINTL [n]` + `INPUT` + `SELECTCASE RESULT` + 回跳环。
+  // 与按钮形 `选项`（PRINTBUTTON + INPUTS + RESULTS）是**两个独立块头**——读回变量不同。
+  ['菜单', 'block.menu'],
+  ['menu', 'block.menu'],
   ['着色', 'block.color'],
   // 自定指令块（HK-12）：**块头**上下文（行首 `自定指令 名称：`）。
   // 注意与既有 `类型: 自定指令` 的**命名参数右值**撞词——后者按纯字符串取用、
