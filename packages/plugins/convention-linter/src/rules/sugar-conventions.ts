@@ -303,6 +303,9 @@ function isReadonlyAliasTarget(target: string): boolean {
   if (/^「.*」$/.test(t)) return true; // 全角引号字符串
   if (/^角色[:：]/.test(t)) return true; // 角色引用
   if (/^character[:：]/i.test(t)) return true;
+  // 条件表达式（B3：`条件 ? "真" : "假"`）——上面的字面量/角色形态已先行返回，
+  // 到这里还含 `?` 的右值必是条件形态，归只读（与契约 `isReadonlyAlias` 对齐）。
+  if (/[?？]/.test(t)) return true;
   return false;
 }
 

@@ -542,18 +542,28 @@ export interface RawFunctionBlock extends SugarNodeBase {
  * | `character` | `别名 X = 角色 15` | **只读**（→ `%CALLNAME:15%`） |
  * | `number` | `别名 X = 0` | **只读**（表达式位置展开为字面量） |
  * | `string` | `别名 X = "小露"` | **只读**（同上） |
+ * | `conditional` | `别名 X = 恋人 ? "甲" : "乙"` | **只读**（→ 行内条件 `\@…\@`） |
  *
  * 只读别名出现在**赋值左值**位置 → 编译错误（否则会展开成 `0 = 1`）——
  * 诊断码 `readonly-alias-assignment`（规范 §3.1 / §8 lint 清单）。
  */
-export type AliasValueKind = 'variable' | 'character' | 'number' | 'string';
+export type AliasValueKind = 'variable' | 'character' | 'number' | 'string' | 'conditional';
 
 /** 别名右值（判别式 `kind` 直接对应 `AliasValueKind`） */
 export type AliasValue =
   | { kind: 'variable'; /** 目标变量引用原文（如 `CFLAG:TARGET:1088` / `TCVAR:TARGET:20`） */ text: string }
   | { kind: 'character'; /** 角色 CSV 编号（原文，如 `15`） */ no: string }
   | { kind: 'number'; /** 数值字面量原文（如 `0`） */ text: string }
-  | { kind: 'string'; /** 字符串字面量内容（不含引号，如 `小露`） */ text: string };
+  | { kind: 'string'; /** 字符串字面量内容（不含引号，如 `小露`） */ text: string }
+  | {
+      kind: 'conditional';
+      /** 条件表达式原文（如 `她的恋慕`；展开时按表达式降糖） */
+      cond: string;
+      /** 真分支字面量（不含引号，如 `小露`；与 `{}` 行内条件同款，规范 §3.4） */
+      thenText: string;
+      /** 假分支字面量（不含引号）；缺省 = 省略假分支（与 `{条件 ? 真}` 同形） */
+      elseText?: string;
+    };
 
 /**
  * `别名` 声明（规范 §3.1 / §3.8 / §5.0）。
@@ -1180,10 +1190,15 @@ export function isStringAlias(value: AliasValue): value is Extract<AliasValue, {
   return value.kind === 'string';
 }
 
+/** 条件表达式别名（只读；右值展开为行内条件 `\@…\@`） */
+export function isConditionalAlias(value: AliasValue): value is Extract<AliasValue, { kind: 'conditional' }> {
+  return value.kind === 'conditional';
+}
+
 /**
  * 只读别名判定 —— **唯一的只读性真源**（消费者不要各自写 if 链）。
  *
- * 只读 = 角色引用 / 数值字面量 / 字符串字面量三种（规范 §3.1 表）。
+ * 只读 = 角色引用 / 数值字面量 / 字符串字面量 / 条件表达式四种（规范 §3.1 表）。
  * 只有变量别名可作赋值左值。
  */
 export function isReadonlyAlias(value: AliasValue): boolean {

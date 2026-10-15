@@ -306,6 +306,16 @@ function buildAliasDecl(
     });
     return null;
   }
+  if (cls.malformed) {
+    // 条件形态残缺（有顶层 `?` 但缺条件 / 真分支）→ **不新增诊断码**，复用 `alias-unknown-target`
+    sink.report({
+      code: 'alias-unknown-target',
+      severity: 'error',
+      message: `别名「${name}」的右值条件表达式残缺——请写成「条件 ? "真" : "假"」。`,
+      loc: posOf(line),
+    });
+    return null;
+  }
   if (name === '她' || name === '你') {
     sink.report({
       code: 'alias-name-conflict',

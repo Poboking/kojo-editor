@@ -44,6 +44,11 @@ export interface ExprContext {
   report: (diag: SugarDiagnostic) => void;
   /** 诊断定位（表达式子串的起始位置；列偏移由调用方补齐） */
   loc: SugarPosition | null;
+  /**
+   * 条件别名展开的**环检测**栈（`别名 A = A ? …` 自引用会让条件降糖无限递归）。
+   * 本层内部使用，调用方无需设置（`substituteAliases` 惰性初始化）。
+   */
+  expanding?: Set<string>;
 }
 
 /**
@@ -108,16 +113,21 @@ interface AliasSubstitution {
 /**
  * 别名替换（规范 §5.0 第 1 步）——在代码段内做**词边界**替换。
  *
- * 四形态处理：
+ * 各形态处理：
  * - `variable`：读位置 → 目标变量引用原文（`CFLAG:TARGET:1088`）；
  * - `character`：表达式位置 → `%CALLNAME:N%`（字符串插值形态；ERB 中
  *   `%…%` 是字符串记号，在条件表达式里按字符串比较）；
- * - `number` / `string`：表达式位置 → 字面量**纯文本展开**（规范 §5.0 边注）。
+ * - `number` / `string`：表达式位置 → 字面量**纯文本展开**（规范 §5.0 边注）；
+ * - `conditional`：表达式位置 → 行内条件 `\@条件?真#假\@`（B3）。**先占位、末尾回填**：
+ *   分支是字面量片段（同 codegen `expandFragment`），若让它随本层产物流过后续
+ *   运算符/代词降糖，`?只有你#别靠太近` 里的 `你` / `她的X` 会被静默改写
+ *   （正是 `expandFragment` 那条回归的口径）。占位符在 `lowerExpression` 末尾
+ *   原样回填 ⇒ 分支/条件**不再经过任何降糖** ⇒ 与 `{}` 行内条件逐字节同款。
  *
- * 注意：`character` / `number` / `string` 是**只读**的；出现在赋值左值时由
- * 调用方（`expandTarget`）报 `readonly-alias-assignment`——本函数只负责展开。
+ * 注意：`character` / `number` / `string` / `conditional` 是**只读**的；出现在赋值
+ * 左值时由调用方（`expandTarget`）报 `readonly-alias-assignment`——本函数只负责展开。
  */
-function substituteAliases(expr: string, ctx: ExprContext): AliasSubstitution {
+function substituteAliases(expr: string, ctx: ExprContext, deferred: string[]): AliasSubstitution {
   const used: string[] = [];
   const parts = splitStringLiterals(expr);
   const out = parts.map((part) => {
@@ -126,14 +136,30 @@ function substituteAliases(expr: string, ctx: ExprContext): AliasSubstitution {
       const alias = ctx.aliases.get(ident);
       if (!alias) return null;
       used.push(ident);
+      if (alias.value.kind === 'conditional') {
+        // 环检测：`别名 A = A ? …` 的条件降糖会无限递归。自引用时不展开（保持原样，
+        // 由既有 `unknown-identifier` 兜底——**不新增诊断码**）。
+        const guard = (ctx.expanding ??= new Set<string>());
+        if (guard.has(ident)) return null;
+        guard.add(ident);
+        const expansion = aliasValueToExpression(alias.value, ctx);
+        guard.delete(ident);
+        deferred.push(expansion);
+        return `${COND_SLOT_OPEN}${deferred.length - 1}${COND_SLOT_CLOSE}`;
+      }
       return aliasValueToExpression(alias.value);
     });
   });
   return { text: out.join(''), used };
 }
 
-/** 别名右值 → 表达式形态原文（只读性由调用方判定） */
-export function aliasValueToExpression(value: AliasValue): string {
+/** 条件别名占位符（PUA 包裹——非标识符字符，运算符/代词/`不在` 降糖一律绕过它） */
+const COND_SLOT_OPEN = '\uE000';
+const COND_SLOT_CLOSE = '\uE001';
+const COND_SLOT_RE = /\uE000(\d+)\uE001/g;
+
+/** 别名右值 → 表达式形态原文（只读性由调用方判定；`ctx` 仅条件形态需要） */
+export function aliasValueToExpression(value: AliasValue, ctx?: ExprContext): string {
   switch (value.kind) {
     case 'variable':
       return value.text;
@@ -143,7 +169,38 @@ export function aliasValueToExpression(value: AliasValue): string {
       return value.text;
     case 'string':
       return `"${value.text}"`;
+    case 'conditional':
+      return conditionalAliasExpression(value, ctx);
   }
+}
+
+/**
+ * 条件别名 → ERB 行内条件（B3）。
+ *
+ * 产物形态与 `{}` 行内条件**逐字节同款**（规范 §3.4；codegen `renderInterpolation`
+ * 的 `\\@${cond}?${then}#${else}\\@`）：省略假分支 → `\@条件?真\@`，不加空格。
+ * - 条件 → 表达式降糖（同 `renderInterpolation` 对 `it.condText` 的处理）；
+ * - 分支 → 字面量片段，只降糖 `%…%`（同 codegen `expandFragment`）。
+ * 无 `ctx`（纯函数调用点）时条件/分支原样——由调用方保证带台账走完整降糖。
+ */
+function conditionalAliasExpression(
+  value: Extract<AliasValue, { kind: 'conditional' }>,
+  ctx?: ExprContext,
+): string {
+  const cond = ctx ? lowerExpression(value.cond, ctx) : value.cond;
+  const thenText = ctx ? expandBranchFragment(value.thenText, ctx) : value.thenText;
+  const elseText = value.elseText === undefined
+    ? undefined
+    : ctx
+      ? expandBranchFragment(value.elseText, ctx)
+      : value.elseText;
+  if (elseText === undefined || elseText.length === 0) return `\\@${cond}?${thenText}\\@`;
+  return `\\@${cond}?${thenText}#${elseText}\\@`;
+}
+
+/** 行内条件分支片段降糖：只动 `%…%` 内的原生表达式，其余字面量原样（同 codegen `expandFragment`） */
+function expandBranchFragment(fragment: string, ctx: ExprContext): string {
+  return fragment.replace(/%([^%]+)%/g, (_whole, inner: string) => `%${lowerExpression(inner, ctx)}%`);
 }
 
 /**
@@ -211,7 +268,9 @@ export function lowerExpression(raw: string, ctx: ExprContext): string {
   const named = lowerSystemFunctions(raw, ctx.libraryTable);
 
   // ---- 0b. 别名替换（先于一切降糖） ----
-  const substituted = substituteAliases(named, ctx).text;
+  // 条件别名先占位（`deferred`），待第 3 步后原样回填——分支/条件不再被后续降糖波及。
+  const deferred: string[] = [];
+  const substituted = substituteAliases(named, ctx, deferred).text;
 
   // ---- 1. 中文运算符（在字符串字面量外） ----
   let expr = replaceInCodeOutsideStrings(substituted, (code) => lowerOperators(code));
@@ -222,7 +281,9 @@ export function lowerExpression(raw: string, ctx: ExprContext): string {
   // ---- 3. 代词与属性（在字符串字面量外） ----
   expr = replaceInCodeOutsideStrings(expr, (code) => lowerPronounsAndAttributes(code, ctx));
 
-  return expr;
+  // ---- 4. 条件别名回填（行内条件 `\@条件?真#假\@`；用函数式替换避免 `$` 被当替换模式） ----
+  if (deferred.length === 0) return expr;
+  return expr.replace(COND_SLOT_RE, (_whole, digits: string) => deferred[Number(digits)] ?? '');
 }
 
 /** 只在非字符串段上应用变换 */
@@ -588,7 +649,7 @@ export function expandTarget(raw: string, ctx: ExprContext): string | null {
       ctx.report({
         code: 'readonly-alias-assignment',
         severity: 'error',
-        message: `「${ident}」是只读别名（${alias.value.kind === 'character' ? '角色引用' : '字面量'}），不能作为赋值目标。`,
+        message: `「${ident}」是只读别名（${readonlyAliasKindLabel(alias.value.kind)}），不能作为赋值目标。`,
         loc: ctx.loc,
       });
       return null;
@@ -597,4 +658,16 @@ export function expandTarget(raw: string, ctx: ExprContext): string | null {
   }
   // 普通左值：只做运算符/代词降糖（左值一般是变量引用）
   return lowerExpression(ident, ctx);
+}
+
+/** 只读别名的类别标签（诊断文案用；与 `isReadonlyAlias` 的 kind 集合对齐） */
+function readonlyAliasKindLabel(kind: AliasValue['kind']): string {
+  switch (kind) {
+    case 'character':
+      return '角色引用';
+    case 'conditional':
+      return '条件表达式';
+    default:
+      return '字面量';
+  }
 }

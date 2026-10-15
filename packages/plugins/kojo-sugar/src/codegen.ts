@@ -1312,6 +1312,11 @@ function renderInterpolation(it: Interpolation, ctx: BodyContext): string {
   // expr 形态：字符串族 → `%…%`；数值族 → `{…}`
   const text = it.text;
   const lowered = lowerExpression(text, exprCtx(ctx, it.loc.start));
+  // 条件别名展开产物 = 行内条件 `\@条件?真#假\@`（`expression.ts` 的
+  // `conditionalAliasExpression`）：它是 **FORM 片段**，不是表达式——既不能包 `{}`
+  // （`{\@…\@}` 非法）也不能包 `%…%`。原样落进文本，与 `{}` 行内条件同款。
+  const inlineCond = lowered.trim();
+  if (inlineCond.startsWith('\\@') && inlineCond.endsWith('\\@')) return inlineCond;
   // 字符串**字面量别名**展开（`别名 昵称 = "小露"` → `{昵称}`）：lowered 是带引号的
   // 字符串字面量，它要**原样嵌进 FORM 文本**（不包 `{}`——`{"小露"}` 不是合法 FORM，
   // 包成 `{小露}` 更错：FORM 会把小露当变量名求值）。只认"整支恰是一个带引号字面量"，

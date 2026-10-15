@@ -252,6 +252,7 @@ export {
   hasCandidates,
   hasGenerated,
   isCharacterAlias,
+  isConditionalAlias,
   isConditionalInterpolation,
   isExprNode,
   isHeartLine,

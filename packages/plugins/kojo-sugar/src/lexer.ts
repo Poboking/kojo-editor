@@ -146,7 +146,13 @@ export type LineClass =
   | { kind: 'rawLine'; text: string }
   | { kind: 'rawBlockStart' }
   | { kind: 'headDecl'; key: KeywordId; value: string }
-  | { kind: 'aliasDecl'; name: string; value: AliasValue }
+  | {
+      kind: 'aliasDecl';
+      name: string;
+      value: AliasValue;
+      /** 右值形态残缺（有顶层 `?` 但非完整条件）→ 由 parser 报 `alias-unknown-target` */
+      malformed?: boolean;
+    }
   | { kind: 'switchItem'; name: string; value: string }
   | { kind: 'timingHead'; face: string; index?: string; indexName?: string; namedParams: TimingNamedParam[] }
   | { kind: 'customCommandHead'; name: string; index?: number; canCom?: string; comCounter?: string }
@@ -377,19 +383,52 @@ function parseAliasDecl(value: string): LineClass {
   }
   const name = m[1]!;
   const rhs = m[2]!.trim();
-  return { kind: 'aliasDecl', name, value: parseAliasValue(rhs) };
+  const parsed = parseAliasValue(rhs);
+  const malformed = hasTopLevelQuestion(rhs) && parsed.kind !== 'conditional';
+  return malformed
+    ? { kind: 'aliasDecl', name, value: parsed, malformed: true }
+    : { kind: 'aliasDecl', name, value: parsed };
+}
+
+/** 右值是否含顶层 `?`（引号 / 括号 / 花括号外）——用于识别"想写条件却没写完整"的残缺形态 */
+function hasTopLevelQuestion(rhs: string): boolean {
+  return findTopLevel(rhs.trim(), '?') >= 0;
 }
 
 /**
- * 别名右值四形态（规范 §3.1 表）。
+ * 别名右值形态（规范 §3.1 表 + 条件形态）。
  *
  * - `角色 N` / `char N` → `character`；
  * - `"…"` → `string`；
  * - 纯数字 → `number`；
+ * - 顶层 `?`（+ 可选 `:`）→ `conditional`（与 `{}` 行内条件同形，规范 §3.4）；
  * - 其余（含 `CFLAG:TARGET:1088` / `DAY`）→ `variable`。
+ *
+ * 条件形态残缺（`?` 后缺条件或缺真分支）→ 退回 `variable` 并由调用方标记 `malformed`
+ * （parser 报 `alias-unknown-target`——**不新增诊断码**）。
  */
 export function parseAliasValue(rhs: string): AliasValue {
   const trimmed = rhs.trim();
+
+  // 条件形态：顶层 `?`（真分支），可选 `:` 切假分支——与 `buildInterpolation` 同口径。
+  const qIdx = findTopLevel(trimmed, '?');
+  if (qIdx >= 0) {
+    const cond = trimmed.slice(0, qIdx).trim();
+    const branches = trimmed.slice(qIdx + 1);
+    const colonIdx = findTopLevel(branches, ':');
+    const thenRaw = colonIdx >= 0 ? branches.slice(0, colonIdx) : branches;
+    const elseRaw = colonIdx >= 0 ? branches.slice(colonIdx + 1) : undefined;
+    const thenText = unquote(thenRaw);
+    const elseText = elseRaw === undefined ? undefined : unquote(elseRaw);
+    if (cond.length > 0 && thenText.length > 0) {
+      return elseText === undefined || elseText.length === 0
+        ? { kind: 'conditional', cond, thenText }
+        : { kind: 'conditional', cond, thenText, elseText };
+    }
+    // 残缺 → 退回 `variable`（调用方据 `hasTopLevelQuestion` 标 malformed）
+    return { kind: 'variable', text: trimmed };
+  }
+
   if (/^角色\s+\S+$/.test(trimmed) || /^char\s+\S+$/.test(trimmed)) {
     const no = trimmed.replace(/^(角色|char)\s+/, '').trim();
     return { kind: 'character', no };
