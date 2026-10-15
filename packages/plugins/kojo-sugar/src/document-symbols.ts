@@ -101,7 +101,14 @@ function rawSymbol(node: SugarNode | SugarTopLevelNode): EditorDocumentSymbol | 
         name: joinParts(['函数', node.name]),
         kind: 'function',
         ...rangeOf(node.loc, node.body),
-        ...(node.params.length > 0 ? { detail: clip(`(${node.params.join(', ')})`, DETAIL_MAX) } : {}),
+        ...(node.params.length > 0
+          ? {
+              detail: clip(
+                `(${node.params.map((p, i) => (node.defaults?.[i] === undefined ? p : `${p} = ${node.defaults[i]}`)).join(', ')})`,
+                DETAIL_MAX,
+              ),
+            }
+          : {}),
         children: symbolsOfNodes(node.body),
       };
     case 'custom-command':

@@ -136,6 +136,51 @@ describe('B4 用户函数 · 参数传递（ARG 位置约定）', () => {
 });
 
 /* ============================================================================ */
+/* ③B 形参默认值（`形参 = 整数`）——引擎声明位默认值的可写形                        */
+/* ============================================================================ */
+
+describe('B4 用户函数 · 形参默认值', () => {
+  it('单个形参带默认值 → `ARG = 1`（等号两侧各一空格，值为原文逐字透传）', () => {
+    const { erb, diagnostics } = t('角色: 12\n函数 问候(次数 = 1)：\n    返回 次数\n');
+    expect(erb).toContain('@M_KOJO_K12_问候(ARG = 1)');
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
+  it('混合形：只给前几个形参默认值，后几个照旧裸写（对齐语料 `(ARG = 0, ARG:1, ARG:2)`）', () => {
+    const src = '角色: 12\n函数 混合(次数 = 1, 名字)：\n    返回 名字\n';
+    expect(t(src).erb).toContain('@M_KOJO_K12_混合(ARG = 1,ARG:1)');
+  });
+
+  it('负值默认值原样透传（`ARG = -1`，语料实测 `@CIRNO_FIND_AROUND(ARG = -1)`）', () => {
+    const src = '角色: 12\n函数 找周围(范围 = -1)：\n    返回 范围\n';
+    expect(t(src).erb).toContain('@M_KOJO_K12_找周围(ARG = -1)');
+  });
+
+  it('等号两侧空白自由（`次数=1` / `次数  =  1` 与 `次数 = 1` 等价）', () => {
+    expect(t('角色: 12\n函数 甲(次数=1)：\n    返回 次数\n').erb).toContain('@M_KOJO_K12_甲(ARG = 1)');
+    expect(t('角色: 12\n函数 乙(次数  =  1)：\n    返回 次数\n').erb).toContain('@M_KOJO_K12_乙(ARG = 1)');
+  });
+
+  it('默认值不进别名表：形参名仍映射到 `ARG`（`次数 = 次数 + 1` 落 `ARG = ARG + 1`）', () => {
+    const src = '角色: 12\n函数 累加(次数 = 1)：\n    次数 = 次数 + 1\n    返回 次数\n';
+    expect(t(src).erb).toContain('\tARG = ARG + 1');
+  });
+
+  it('非整数默认值（字符串 / 变量 / 表达式）→ `alias-unknown-target`（error），不产半成品默认值', () => {
+    for (const bad of ['"x"', '某变量', '1 + 2']) {
+      const res = t(`角色: 12\n函数 坏(次数 = ${bad})：\n    返回 次数\n`);
+      expect(res.diagnostics.filter((d) => d.severity === 'error').map((d) => d.code)).toContain('alias-unknown-target');
+      expect(res.erb).not.toContain('= "x"');
+      expect(res.erb).not.toContain(`= ${bad}`);
+    }
+  });
+
+  it('无默认值时产物逐字节不变（`defaults` 缺省，既有形参口径零改动）', () => {
+    expect(t('角色: 12\n函数 三参(甲, 乙, 丙)：\n    返回 丙\n').erb).toContain('@M_KOJO_K12_三参(ARG,ARG:1,ARG:2)');
+  });
+});
+
+/* ============================================================================ */
 /* ④ 块引用形态（调用处引用一个已声明的函数块）                                    */
 /* ============================================================================ */
 

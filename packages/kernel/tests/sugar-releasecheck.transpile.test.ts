@@ -210,6 +210,7 @@ describe.skipIf(!SMOKE_DIR)('发版验证样例 · release-check.kojo', () => {
       '$RELEASE_CHECK_LABEL', // 直通块内的标签
       '#DIM L_TOTAL', // 直通块内的声明
       '@M_KOJO_K145_问候', // 用户函数（B4；命名走 adapter 的 userFunction.template）
+      '@M_KOJO_K145_问候(ARG = 1,ARG:1)', // 形参默认值（本批）：`次数 = 1` → `ARG = 1`，后位裸 `ARG:1` 照旧
       'CALL M_KOJO_K145_回声()', // 用户函数间的调用（零实参 `CALL 产物名()`）
       'IF ONCE("发版检查_初见")', // 初回（1 号任务）→ 引擎 ONCE 访问器
       'SIF CFLAG:TARGET:好感度 >= 500', // 单行条件（5 号任务）→ SIF，紧随一条语句、**不产 ENDIF**

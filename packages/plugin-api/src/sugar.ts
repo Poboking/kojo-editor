@@ -633,6 +633,23 @@ export interface FunctionBlock extends SugarNodeBase {
   readonly name: string;
   /** 形参名（按声明顺序；空数组 = 无参） */
   readonly params: readonly string[];
+  /**
+   * 形参默认值（**与 `params` 下标对齐**；无默认值的位 = `undefined`）。
+   *
+   * 表层 `函数 <名>(次数 = 1, 名字)：` 里的 `= <默认值>` 一律**逐字透传**到产物形参段
+   * （产物 `@…(ARG = 1, ARG:1)`）——引擎侧声明位上的 `ARG = <值>` 是"缺省实参取此值"，
+   * 真实语料实测 1,078 处带默认值的 `@…(… = …)`（如 `@CIRNO_ADJUST(ARG = 0)`、
+   * `@CIRNO_RAND(ARG = 0, ARG:1, ARG:2, …)`——**允许只给前几个形参默认值**）。
+   *
+   * **v1 只收十进制整数（含负号）**：字符串 / 变量 / 表达式默认值一律不收、不发明——
+   * 那些形态的"默认值"引擎侧要求值可求，转译器无法在编译期证其语义，宁可不收。
+   * 非整数默认值不在这里体现（缺省该位），由转译器报既有诊断码。
+   *
+   * 与其他消费方的关系：`params` 仍是形参名数组——**别名表映射（`withFunctionParams`）
+   * 只看形参名**（默认值不进别名映射，否则 `次数 = 1` 会被当成名字）。本字段是
+   * **additive**：不消费它的调用方零改动（无默认值时不写本字段，既有产物逐字节不变）。
+   */
+  readonly defaults?: readonly (string | undefined)[];
   /** 正文节点（与 `TimingBlock` 正文同口径） */
   readonly body: readonly SugarNode[];
 }

@@ -1634,7 +1634,13 @@ function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext
   const ret = findReturnNode(node.body);
   const valueFn = ret !== undefined && ret.value !== undefined;
 
-  const decl = node.params.map((_, i) => argumentToken(i)).join(',');
+  const decl = node.params
+    .map((_, i) => {
+      const token = argumentToken(i);
+      const def = node.defaults?.[i];
+      return def === undefined ? token : `${token} = ${def}`;
+    })
+    .join(',');
   em.pushGenerated(0, decl.length > 0 ? `@${productName}(${decl})` : `@${productName}`);
   if (valueFn) em.pushGenerated(0, isStringLiteralReturn(ret!.value!) ? '#FUNCTIONS' : '#FUNCTION');
 

@@ -119,6 +119,13 @@ describe('stripParams · 函数头参数段剥离', () => {
     expect(stripParams('  M_KOJO_K1_2 (ARG)  ')).toBe('M_KOJO_K1_2');
     expect(idx.label(stripParams('M_KOJO_SPEVENT_K1_1 (ARG,ARG:1)'))).toBe('时机 特殊事件 1：');
   });
+
+  it('形参默认值（`ARG = 0, ARG:1`）照剥——`=` 与空白都在参数段内，不落到函数名上', () => {
+    expect(stripParams('M_KOJO_K12_问候(ARG = 1,ARG:1)')).toBe('M_KOJO_K12_问候');
+    expect(stripParams('M_KOJO_K12_问候(ARG = -1)')).toBe('M_KOJO_K12_问候');
+    // 用户函数的产物名不是任何时机分野 → 反解不出标签（原样留原代码，绝不猜）
+    expect(idx.label(stripParams('M_KOJO_K12_问候(ARG = 1,ARG:1)'))).toBeUndefined();
+  });
 });
 
 describe('模板算术 · 自定义表也成立（不依赖 eraTW 字面量）', () => {

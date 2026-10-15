@@ -120,6 +120,13 @@ describe('kojo-sugar · 文档大纲（documentSymbol）', () => {
     expect(out[1]!.detail).toBe('(值)');
   });
 
+  it('用户函数形参默认值进大纲 detail（`函数 甲(次数 = 1, 名字)：` → `(次数 = 1, 名字)`）', () => {
+    const src = ['角色: 12', '函数 甲(次数 = 1, 名字)：', '    返回 名字', ''].join('\n');
+    expect(symbols(src)[0]!.detail).toBe('(次数 = 1, 名字)');
+    // 无默认值的形参（既有口径）不带 `=`，产物逐字不变
+    expect(symbols('角色: 12\n函数 乙(值)：\n    返回 值\n')[0]!.detail).toBe('(值)');
+  });
+
   it('空 children 一律摘掉（Monaco 会画成点不开的假箭头）', () => {
     const [timing] = symbols('角色: 12\n时机 指令 310：\n    随机：\n        「甲」\n        「乙」\n');
     const random = (timing!.children ?? [])[0];

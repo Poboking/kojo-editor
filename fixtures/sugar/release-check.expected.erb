@@ -107,6 +107,9 @@
 ; 用户函数最小面（B4，§7.2 重开）——`函数 <名>(形参…)：` 声明作者自己的函数
 ; `调用 <名>(实参)` 是语句位置调用；裸 `返回` 是过程收尾（产物 `RETURN`）。
 ; 产物函数名走 adapter 的 `userFunction.template`（`M_KOJO_K{n}_{name}`）。
+; 形参默认值（本批）：形参写成 `名 = 整数` → 产物形参段照写 `ARG = 整数`
+; （引擎声明位默认值；语料实测 1,078 处，如 `@CIRNO_ADJUST(ARG = 0)`）；
+; 允许只给前几个形参默认值、后几个照旧裸写。默认值是作者原文**逐字**透传。
 ; ⚠ 本文件只用**过程态**（裸 `返回`，不产 `#FUNCTION`）——守门的
 ; `#FUNCTION` / `#FUNCTIONEND` 配平断言要求两者成对；值函数（`返回 <值>`）会产
 ; **不配对**的 `#FUNCTION` / `#FUNCTIONS`，那种形态改在单测
@@ -1174,7 +1177,8 @@ IF LOCAL
 ENDIF
 RETURN 1
 
-@M_KOJO_K145_问候
+@M_KOJO_K145_问候(ARG = 1,ARG:1)
+	ARG = ARG + 1
 	CALL M_KOJO_K145_回声()
 	RETURN
 

@@ -543,6 +543,12 @@ function readCustomCommandBlock(
  * 正文与 `TimingBlock` 同口径（`BlockParser.parseBody`：台词 / 控制流 / 赋值 / 原生行 /
  * 注释 / 更深的块，以及本批新增的 `调用` / `返回`）。空体合法（产物里由 codegen 落
  * 函数头 + 自然返回）。
+ *
+ * **形参默认值**（本批）：`形参 = 整数` 经词法拆出后在此校验——**只收十进制整数
+ * （含负号）**，非整数（字符串 / 变量 / 表达式）报既有的 `alias-unknown-target`
+ * （闭集不扩；与 `常量` 批"值不是整数字面量"同款：转译器无法在编译期证其语义，
+ * 与其产一个看着像默认值、引擎侧却另做解释的产物，不如在源头拦下）。校验不过的位
+ * 不写进 `defaults`（该形参退回"无默认值"），整块由 error 阻止编译、不产半成品。
  */
 function readFunctionBlock(
   cursor: Cursor,
@@ -550,17 +556,55 @@ function readFunctionBlock(
   randomShape: RandomShape,
 ): FunctionBlock {
   const head = cursor.next()!;
+  const defaults = checkFunctionDefaults(cls, head, cursor.sink);
   const body = new BlockParser(cursor, head.indent + 1, cursor.sink, randomShape).parseBody();
   return {
     kind: 'functionBlock',
     name: cls.name,
     params: cls.params,
+    ...(defaults !== undefined ? { defaults } : {}),
     body,
     loc: {
       start: posOf(head),
       end: { line: cursor.lines[Math.max(0, cursor.index - 1)]?.endLine ?? head.endLine, column: 1 },
     },
   };
+}
+
+/**
+ * 校验形参默认值：逐位查十进制整数，非整数报 `alias-unknown-target` 并**丢掉该位
+ * 的默认值**（退回裸形参）。全部通过且至少有一位带默认值才返回数组（否则 `undefined`
+ * ——不写 `defaults` 字段，既有产物逐字节不变）。
+ */
+function checkFunctionDefaults(
+  cls: LineClass & { kind: 'functionHead' },
+  head: LogicalLine,
+  sink: DiagnosticSink,
+): (string | undefined)[] | undefined {
+  if (cls.defaults === undefined) return undefined;
+  const out: (string | undefined)[] = [];
+  let hasAny = false;
+  for (let i = 0; i < cls.params.length; i++) {
+    const raw = cls.defaults[i];
+    if (raw === undefined) {
+      out.push(undefined);
+      continue;
+    }
+    if (!/^-?\d+$/.test(raw)) {
+      sink.report({
+        code: 'alias-unknown-target',
+        severity: 'error',
+        message: `形参「${cls.params[i]}」的默认值「${raw}」不是整数——产物里它是引擎声明位上的字面量，只接受十进制整数（含负号，如 次数 = 1 / 次数 = -1）。`,
+        loc: posOf(head),
+        span: spanOf(head),
+      });
+      out.push(undefined);
+      continue;
+    }
+    out.push(raw);
+    hasAny = true;
+  }
+  return hasAny ? out : undefined;
 }
 
 /**

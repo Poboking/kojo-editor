@@ -265,8 +265,17 @@ export type LineClass =
   | { kind: 'heartText'; raw: string }
   | { kind: 'text'; raw: string }
   /* ---- 用户函数最小面（B4 批） ---- */
-  /** 函数声明块头 `函数 <名>(形参,…)：` / `function <名>(…)：` */
-  | { kind: 'functionHead'; name: string; params: string[] }
+  /**
+   * 函数声明块头 `函数 <名>(形参,…)：` / `function <名>(…)：`（B4 批；形参默认值见
+   * `defaults`——本批新增 `形参 = 整数` 形）。
+   */
+  | {
+      kind: 'functionHead';
+      name: string;
+      params: string[];
+      /** 与 `params` 下标对齐的默认值**原文**（无默认值位 = undefined；只做词法拆分） */
+      defaults?: (string | undefined)[];
+    }
   /** 语句位置的用户函数调用 `调用 <名>(实参,…)` / `call <名>(…)` */
   | { kind: 'callStatement'; name: string; args: string }
   /** 函数体返回值 `返回 [值]` / `return [值]`（裸 `返回` = 过程函数收尾） */
@@ -794,6 +803,12 @@ function parseCustomCommandHead(rest: string): LineClass | null {
  * 名后可选括号形参（中/半角括号均可；形参以中/半角逗号分隔）；无括号 = 无参。
  * 名与形参名的合法性不在此校验（产物命名走 adapter 模板，形参 → `ARG` 位置映射在
  * codegen；函数名最终形态由模板渲染，转译器只做占位符求值）。
+ *
+ * **形参默认值**（本批）：形参写成 `名 = <值>` 时，`<值>` 作为默认值原样输出到产物
+ * 形参段（引擎声明位 `ARG = <值>`）。词法只做**位置式**拆分——形参片段以
+ * `/^(\S+)\s*=\s*(.+)$/` 切出「名 / 值」，与 `常量` 批（`parseConstDecl`）逐字同款；
+ * `=` 两侧空白自由、`名=值` 也认。**不在此判值是否整数**（交 parser 校验并落诊断）。
+ * 无任何默认值时**不写** `defaults` 字段（既有产物逐字节不变）。
  */
 function parseFunctionHead(rest: string): LineClass | null {
   const t = rest.trim();
@@ -803,9 +818,25 @@ function parseFunctionHead(rest: string): LineClass | null {
     const name = paren[1]!.trim();
     if (name.length === 0) return null;
     const inner = paren[2]!.trim();
-    const params =
+    const segs =
       inner.length === 0 ? [] : splitTopLevel(inner, /[,，]/).map((s) => s.trim()).filter((s) => s.length > 0);
-    return { kind: 'functionHead', name, params };
+    const params: string[] = [];
+    const defaults: (string | undefined)[] = [];
+    let hasDefault = false;
+    for (const seg of segs) {
+      const m = /^(\S+)\s*=\s*(.+)$/.exec(seg);
+      if (m && m[1]!.length > 0) {
+        params.push(m[1]!);
+        defaults.push(m[2]!.trim());
+        hasDefault = true;
+      } else {
+        params.push(seg);
+        defaults.push(undefined);
+      }
+    }
+    return hasDefault
+      ? { kind: 'functionHead', name, params, defaults }
+      : { kind: 'functionHead', name, params };
   }
   return { kind: 'functionHead', name: t, params: [] };
 }
