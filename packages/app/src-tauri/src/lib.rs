@@ -19,6 +19,10 @@ use notify::Event;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+/// 市场 IO 原语（远程下载 + ZIP 安全解压）独立成文件：它自带一整套安全闸与 fixture，
+/// 塞进本文件会把既有 IO 正文淹掉（照 `search_tests` 的分文件先例）。
+mod market;
+
 /* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
 //
 // JS 层 kernel io 的 writablePaths 白名单是第一道闸；本层是第二道闸：
@@ -1696,7 +1700,9 @@ pub fn run() {
             start_watch,
             stop_watch,
             search_text,
-            cancel_search
+            cancel_search,
+            market::market_download,
+            market::market_extract
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1708,6 +1714,10 @@ pub fn run() {
 /// 塞进本文件会把 IO 原语的正文淹掉。
 #[cfg(test)]
 mod search_tests;
+
+/// 市场 IO 原语的判据（白名单逐跳 / 暂存名字面 / 解压闸 / 真实容器对平）同理由独立成文件。
+#[cfg(test)]
+mod market_tests;
 
 #[cfg(test)]
 mod write_domain_tests {
