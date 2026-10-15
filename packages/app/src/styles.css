@@ -4613,3 +4613,43 @@ button.primary .hint {
   display: flex;
   gap: 6px;
 }
+
+/* ===== D1 面包屑（宿主自绘栏：standalone Monaco 无 breadcrumbs API，取证见 breadcrumb-path.ts） ===== */
+.editor-crumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--text-dim, #9aa4b2);
+  background: var(--panel-bg, #232834);
+  border-bottom: 1px solid var(--border, #3a4252);
+  user-select: none;
+}
+.editor-crumb-seg {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.editor-crumb-sep {
+  margin: 0 4px;
+  opacity: 0.6;
+}
+.editor-crumb-item {
+  all: unset;
+  cursor: pointer;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.editor-crumb-item:hover {
+  background: var(--hover-bg, #2f3646);
+  color: var(--text, #d7dce4);
+}
+.editor-crumb-item:focus-visible {
+  outline: 1px solid var(--accent, #61afef);
+}

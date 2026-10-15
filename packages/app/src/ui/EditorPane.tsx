@@ -3,6 +3,7 @@ import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import type {
   EditorCodeAction,
+  EditorDocumentSymbol,
   EditorSaveChoices,
   EditorSaveHandlerContribution,
   EditorSaveWarning,
@@ -367,6 +368,21 @@ export function EditorPane({
   const [error, setError] = useState<string | null>(null);
   /** 待用户决策的保存告警（非 null = 弹确认框；宿主全角空格"一键修复"的入口） */
   const [pendingChoice, setPendingChoice] = useState<EditorSaveWarning | null>(null);
+  /**
+   * D1 面包屑链（宿主自绘——取证：standalone Monaco 0.57 的 `monaco.d.ts` 里 `breadcrumb`
+   * 零命中，公开面没有面包屑，见 `breadcrumb-path.ts` 头注）。数据**复用 B3 的 documentSymbol
+   * 树**（与大纲/吸顶同源同判据，不建第二份符号树）；空数组 = 不渲染整条栏
+   * （糖视图 / 无文件 / 光标不在任何块内——只读派生态下绝不导到派生行号）。
+   */
+  const [crumbs, setCrumbs] = useState<readonly CrumbItem[]>([]);
+  /** 面包屑刷新入口（ref 化：光标/model 监听只注册一次，须读最新闭包） */
+  const crumbRefreshRef = useRef<(() => void) | null>(null);
+  /** 大纲树缓存（path + model 版本号为键：光标移动只换链、不重解析） */
+  const crumbTreeCacheRef = useRef<{ path: string; versionId: number; symbols: EditorDocumentSymbol[] } | null>(
+    null,
+  );
+  /** 上一次渲染的链键（等值即不 setState——光标每动一次不该白刷一次 React） */
+  const crumbsKeyRef = useRef('');
 
   /** O(1) 脏判定：model 当前版本号 ≠ 已保存基线版本号（BUG-4） */
   const computeDirty = useCallback((path: string): boolean => {
@@ -1098,6 +1114,48 @@ export function EditorPane({
         });
       },
     });
+    // 面包屑（D1，宿主自绘——standalone Monaco 无面包屑 API，取证见 `breadcrumb-path.ts`）。
+    // 数据复用大纲那棵树：`collectDocumentSymbols` 的应答判据与 provider 接线逐字同款
+    // （糖视图只读 model 一律不给——行号属派生物，面包屑不许把作者导到不存在的位置）。
+    // 树按 path+版本号缓存：光标移动只重算链（毫秒级树下行），敲字换版本才重新解析。
+    crumbRefreshRef.current = () => {
+      const ed = editorRef.current;
+      const path = filePathRef.current;
+      const model = ed?.getModel() ?? null;
+      const apply = (next: readonly CrumbItem[]): void => {
+        const key = crumbsKey(next);
+        if (key === crumbsKeyRef.current) return;
+        crumbsKeyRef.current = key;
+        setCrumbs(next);
+      };
+      if (!ed || !path || sugarModelRef.current || !model) {
+        apply([]);
+        return;
+      }
+      try {
+        const versionId = model.getAlternativeVersionId();
+        const cache = crumbTreeCacheRef.current;
+        let symbols: EditorDocumentSymbol[];
+        if (cache && cache.path === path && cache.versionId === versionId) symbols = cache.symbols;
+        else {
+          symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
+            kind: 'documentSymbol',
+            path,
+            text: model.getValue(),
+            project: kernel.project.current(),
+            lineCount: model.getLineCount(),
+          });
+          crumbTreeCacheRef.current = { path, versionId, symbols };
+        }
+        apply(toCrumbs(symbolChainAt(symbols, ed.getPosition()?.lineNumber ?? 1)));
+      } catch (e: unknown) {
+        // 面包屑是只读呈现面：出错就"没链"，绝不把光标处理链带崩
+        console.warn(`[breadcrumb] 刷新抛错：${e instanceof Error ? e.message : String(e)}`);
+        apply([]);
+      }
+    };
+    const crumbCursorSub = ed.onDidChangeCursorPosition(() => crumbRefreshRef.current?.());
+    const crumbModelSub = ed.onDidChangeModel(() => crumbRefreshRef.current?.());
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
     const completionDisposer = installKojoCompletion(monaco, () => editorTables(kernel));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
@@ -1114,6 +1172,9 @@ export function EditorPane({
       },
     });
     return () => {
+      crumbCursorSub.dispose();
+      crumbModelSub.dispose();
+      crumbRefreshRef.current = null;
       formatterDisposer.dispose();
       erbCompletionDisposer.dispose();
       completionDisposer.dispose();
@@ -1427,6 +1488,31 @@ export function EditorPane({
           保存 (Ctrl+S)
         </button>
       </div>
+      {/* 面包屑（D1，宿主自绘）：角色/家族级导航复用 documentSymbol 链（外→内）。
+          空链整条不渲染（糖视图 / 不在任何块内 = 没有可信的真文件行号可展示）。
+          点击走 `editor.revealLocation` 既有通道跳块头行——不新造导航机制。 */}
+      {crumbs.length > 0 ? (
+        <div className="editor-crumb" aria-label="位置面包屑">
+          {crumbs.map((c, i) => (
+            <span key={`${i}-${c.startLine}-${c.name}`} className="editor-crumb-seg">
+              {i > 0 ? <span className="editor-crumb-sep" aria-hidden="true">
+                ›
+              </span> : null}
+              <button
+                type="button"
+                className="editor-crumb-item"
+                title={`跳回「${c.name}」块头（第 ${c.startLine} 行）`}
+                onClick={() => {
+                  if (!filePath) return;
+                  kernel.bus.emit('editor.revealLocation', { filePath, line: c.startLine, source: '面包屑' });
+                }}
+              >
+                {c.name}
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div className="editor-body" ref={hostRef} />
       {pendingChoice ? <SaveWarningDialog warning={pendingChoice} onDecide={decideSaveWarning} /> : null}
       {introAsk ? <SugarViewIntroDialog onDecide={decideIntro} /> : null}
