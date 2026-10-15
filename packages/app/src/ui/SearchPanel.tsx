@@ -4,6 +4,7 @@ import {
   clearSearchResult,
   runSearch,
   setExtensionText,
+  setSearchScope,
   setQuery,
   snapshot,
   stopSearch,
@@ -21,6 +22,16 @@ import {
   searchSummaryText,
   shortSearchPath,
 } from './search-query';
+import {
+  describeAppliedScope,
+  findSearchScope,
+  narrowRoots,
+  scopeEmptyText,
+  scopeRootsTitle,
+  scopeStaleText,
+  scopeStatusText,
+  type SearchScopeItem,
+} from './search-scope';
 
 /**
  * 侧栏「在文件中搜索」面板（2026-10-15 全文检索批）。
@@ -37,6 +48,10 @@ import {
 
 /** 最多渲染多少行（与问题面板同精神：上万行 DOM 会拖垮面板） */
 const RENDER_CAP = 300;
+
+/** 两个列表 props 的缺省值：模块级常量，默认参数每次渲染新建数组会丢掉引用稳定性 */
+const EMPTY_SCOPES: readonly SearchScopeItem[] = [];
+const EMPTY_NOTICES: readonly string[] = [];
 
 function useSearchState(): SearchState {
   const [s, setS] = useState<SearchState>(() => snapshot());
@@ -66,10 +81,22 @@ function MatchPreview({ match }: { match: SearchMatch }): ReactElement {
 export interface SearchPanelProps {
   /** 检索根（项目根 ∪ 作者工作区根；由宿主 ProjectView 提供） */
   roots: readonly string[];
+  /**
+   * 可选的检索范围候选（C3 领域限定检索批；由宿主经 `search.scope` 槽向提供方取）。
+   * **空数组 ⇒ 整行不画**：没有提供方（没开项目 / 游戏无此概念）时面板与今天逐字一致。
+   */
+  scopes?: readonly SearchScopeItem[];
+  /** 范围提供方侧的可见故障说明（提供方抛错 / 候选非法；空 = 不画） */
+  scopeNotices?: readonly string[];
   onReveal: (path: string, line: number, column: number) => void;
 }
 
-export function SearchPanel({ roots, onReveal }: SearchPanelProps): ReactElement {
+export function SearchPanel({
+  roots,
+  scopes = EMPTY_SCOPES,
+  scopeNotices = EMPTY_NOTICES,
+  onReveal,
+}: SearchPanelProps): ReactElement {
   const s = useSearchState();
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -86,9 +113,15 @@ export function SearchPanel({ roots, onReveal }: SearchPanelProps): ReactElement
   const { rows, hidden } = result
     ? flattenSearchResults(result.files, RENDER_CAP)
     : { rows: [], hidden: 0 };
+  /** 选择器**现在**显示的范围（陈旧 key 归一成 `''`）；与 `appliedScope`（结果的范围）不是一回事 */
+  const selectedScopeKey = findSearchScope(scopes, s.scopeKey) ? s.scopeKey : '';
+  const staleScopeText = scopeStaleText(selectedScopeKey, s.appliedScope);
 
   const start = (): void => {
-    void runSearch(roots);
+    // 范围收窄发生在发请求**之前**：扫描代价在原生侧，少扫就是少扫（不是全扫再挑）。
+    const scope = findSearchScope(scopes, s.scopeKey);
+    const narrowing = narrowRoots(roots, scope);
+    void runSearch(narrowing.roots, describeAppliedScope(scope, narrowing));
   };
 
   return (
@@ -137,6 +170,40 @@ export function SearchPanel({ roots, onReveal }: SearchPanelProps): ReactElement
         />
       </div>
 
+      {scopes.length > 0 ? (
+        <div className="search-scope-row">
+          <label className="dim" htmlFor="search-scope-select">
+            只看
+          </label>
+          <select
+            id="search-scope-select"
+            className="search-scope"
+            title="默认不限：整个项目加作者工作区一起搜。选定后只搜那一处，速度更快，但范围外的文件这一轮不会搜。"
+            // 陈旧 key（换过项目）按"不限"显示与生效，不猜
+            value={findSearchScope(scopes, s.scopeKey) ? s.scopeKey : ''}
+            onChange={(e) => setSearchScope(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                start();
+              }
+            }}
+          >
+            <option value="">全部目录</option>
+            {scopes.map((o) => (
+              <option key={o.key} value={o.key} title={o.detail || undefined}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
+      {scopeNotices.length > 0 ? (
+        // 提供方抛错 / 候选非法：坏在明处（铁律 4），不静默少画几行候选
+        <div className="search-status search-scope-notice">{scopeNotices.join(' · ')}</div>
+      ) : null}
+
       <div className="search-actions">
         {s.phase === 'running' ? (
           <button className="small" onClick={() => void stopSearch()}>
@@ -162,11 +229,24 @@ export function SearchPanel({ roots, onReveal }: SearchPanelProps): ReactElement
         <div className="search-status search-error">{s.error}</div>
       ) : result !== null ? (
         <>
+          {s.appliedScope !== null ? (
+            <div className="search-status dim" title={scopeRootsTitle(s.appliedScope)}>
+              {scopeStatusText(s.appliedScope)}
+            </div>
+          ) : null}
           <div className={`search-status ${result.cancelled ? 'search-stopped' : ''}`}>
             {searchSummaryText(result)}
           </div>
+          {s.appliedScope !== null && result.filesScanned === 0 ? (
+            <div className="search-status search-scope-empty">
+              {scopeEmptyText(s.appliedScope, result.skipped.filtered)}
+            </div>
+          ) : null}
           {searchNoticeText(result) !== null ? (
             <div className="search-status dim">{searchNoticeText(result)}</div>
+          ) : null}
+          {staleScopeText !== null ? (
+            <div className="search-status search-scope-stale">{staleScopeText}</div>
           ) : null}
         </>
       ) : (

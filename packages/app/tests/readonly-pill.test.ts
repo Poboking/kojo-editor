@@ -72,12 +72,16 @@ describe('只读指示去重：状态栏那颗是唯一的胶囊', () => {
 /* ---------------- 区域判定只有一份 ---------------- */
 
 describe('工作区/口上区判定：单一口径（FT-2 / PITFALLS 42 的双副本教训）', () => {
-  it('调用 isUnderAnyRoot 的文件只有定义处与 file-area.ts', () => {
+  it('调用 isUnderAnyRoot 的文件只有定义处与登记过的调用方', () => {
+    // 登记表 = 这条约定的**本体**：加一个新调用方是允许的（判定仍只有一份），
+    // 就地再写一遍 `roots.some(...)` 才是它要拦的那件事。
+    //   ui/file-area.ts    —— 只读胶囊的区域判定（ad4e9b5）
+    //   ui/search-scope.ts —— 检索范围收窄：判"范围落不落得进现有检索根"（C3，1016）
     const hits = allFiles
       .filter((f) => readFileSync(f, 'utf8').includes('isUnderAnyRoot('))
       .map(rel)
       .filter((f) => f !== 'ui/workspace-roots.ts');
-    expect(hits).toEqual(['ui/file-area.ts']);
+    expect(hits).toEqual(['ui/file-area.ts', 'ui/search-scope.ts']);
   });
 
   it('EditorPane 的 inWorkspace 只是转调共享判定，不含路径比较细节', () => {

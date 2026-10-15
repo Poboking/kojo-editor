@@ -6,6 +6,7 @@ import {
   type SearchResult,
 } from '../bridge/search';
 import { DEFAULT_EXTENSION_TEXT, isValidSearchQuery, parseExtensions } from './search-query';
+import { scopeUnreachableText, type AppliedSearchScope } from './search-scope';
 
 /**
  * 全文检索面板的状态（壳层私有，2026-10-15 全文检索批）。
@@ -41,6 +42,16 @@ export interface SearchState {
   searchId: number;
   /** 焦点请求计数：快捷键再次命中时让输入框重新聚焦（`autoFocus` 只管首次挂载） */
   focusNonce: number;
+  /**
+   * 选定的检索范围（C3 领域限定检索批；`''` = 不限 = 今天的形状）。
+   * 这里只存**候选的 key**：候选本身（标签、目录）由提供方给，宿主不复制一份判据。
+   */
+  scopeKey: string;
+  /**
+   * 出结果那次检索**实际用的**范围快照（与 `scopeKey` 刻意分开：改选择器不改结果，
+   * 屏幕上的"只扫了这些"必须说结果的实话，而不是说选择器现在的样子）。
+   */
+  appliedScope: AppliedSearchScope | null;
 }
 
 /** 检索执行者（注入 seam：缺省 = Tauri 桥；单测注入假实现） */
@@ -59,6 +70,8 @@ const INITIAL: SearchState = {
   error: null,
   searchId: 0,
   focusNonce: 0,
+  scopeKey: '',
+  appliedScope: null,
 };
 
 let state: SearchState = INITIAL;
@@ -106,6 +119,14 @@ export function setExtensionText(text: string): void {
   set({ extensionText: text });
 }
 
+/**
+ * 选定检索范围（`''` = 不限）。切换**不改已有结果**（与三个开关同语义：下次检索才生效），
+ * 所以这里只动 `scopeKey`，不动 `appliedScope`——后者是"出这份结果时用的范围"。
+ */
+export function setSearchScope(key: string): void {
+  set({ scopeKey: key });
+}
+
 /** 三个开关（正则 / 大小写 / 全词）——切换不改结果，下次检索才生效 */
 export function toggleOption(key: keyof SearchOptionsState): void {
   set({ options: { ...state.options, [key]: !state.options[key] } });
@@ -119,20 +140,34 @@ export function requestSearchFocus(): void {
 /** 清空结果与错误（保留查询条件与开关——"清空结果"不是"重置面板"） */
 export function clearSearchResult(): void {
   if (state.phase === 'running') return;
-  set({ result: null, error: null, phase: 'idle', progress: null });
+  set({ result: null, error: null, phase: 'idle', progress: null, appliedScope: null });
 }
 
 /**
  * 发起一次检索。前置校验失败就地落 error 态（不静默：空查询 / 无根目录都不发请求）。
  * 单飞：正在跑时重复调用直接返回（想打断请走 `stopSearch`）。
+ *
+ * `applied`（C3 检索范围批，**additive**）：调用方已经把检索根按范围收窄好了，这里只
+ * 带上新增的两件事——①收窄后可能一个根都不剩（此时报错文案要说清"是范围没落进项目"，
+ * 不是"没打开项目"）；②结果要能说出"这轮只扫了哪个范围"。
+ * **不传 ⇒ 行为与今天逐字一致**（老调用方零改动）。
  */
-export async function runSearch(roots: readonly string[]): Promise<void> {
+export async function runSearch(
+  roots: readonly string[],
+  applied?: AppliedSearchScope | null,
+): Promise<void> {
   if (!isValidSearchQuery(state.query)) {
-    set({ phase: 'error', error: '请输入检索词', result: null, progress: null });
+    set({ phase: 'error', error: '请输入检索词', result: null, progress: null, appliedScope: null });
     return;
   }
   if (roots.length === 0) {
-    set({ phase: 'error', error: '没有可检索的根目录（请先打开项目）', result: null, progress: null });
+    set({
+      phase: 'error',
+      error: applied ? scopeUnreachableText(applied) : '没有可检索的根目录（请先打开项目）',
+      result: null,
+      progress: null,
+      appliedScope: null,
+    });
     return;
   }
   if (state.phase === 'running') return;
@@ -144,7 +179,14 @@ export async function runSearch(roots: readonly string[]): Promise<void> {
     query: state.query,
     options: { ...state.options, extensions: parseExtensions(state.extensionText) },
   };
-  set({ searchId, phase: 'running', error: null, result: null, progress: null });
+  set({
+    searchId,
+    phase: 'running',
+    error: null,
+    result: null,
+    progress: null,
+    appliedScope: applied ?? null,
+  });
 
   try {
     const result = await runner(request, (p) => {
@@ -160,6 +202,7 @@ export async function runSearch(roots: readonly string[]): Promise<void> {
       error: e instanceof Error ? e.message : String(e),
       result: null,
       progress: null,
+      appliedScope: null,
     });
   }
 }

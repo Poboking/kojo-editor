@@ -696,6 +696,7 @@ export interface SlotMap {
   'ui.editor.saveHandler': EditorSaveHandlerContribution;
   'game.adapter': GameAdapterContribution;
   'export.target': ExportTargetContribution;
+  'search.scope': SearchScopeContribution;
 }
 
 export type SlotName = keyof SlotMap;
@@ -708,4 +709,49 @@ export interface SlotRegistrar {
 /** 查询入口（内核服务 `kernel.slots`；消费者拿快照，渲染时按 order 排序） */
 export interface SlotRegistry extends SlotRegistrar {
   query<S extends SlotName>(slot: S): ReadonlyArray<SlotMap[S]>;
+}
+
+/* ----------------------------- search.scope ----------------------------- */
+
+/**
+ * 一条**限定检索范围**的候选（C3 领域限定检索批）。
+ *
+ * 宿主拿到的只有两样它**不需要理解**的东西：`label`（原样画进下拉，不解析、不改写）
+ * 与 `roots`（当作"更小的检索根"直接交给原生检索命令）。**"哪个范围对应哪些文件"是
+ * 领域判据，住提供方**；宿主里不许出现任何按名字/目录形状判定归属的代码
+ * （那条判据抄第二份就抄进了最不该有的层）。
+ */
+export interface SearchScopeOption {
+  /** 提供方内唯一的稳定 id（同一提供方的 id 之间不重复；改名即换 id，宿主不猜） */
+  readonly id: string;
+  /** 面向作者的短标签（下拉项文本；由提供方生成，宿主原文显示） */
+  readonly label: string;
+  /** 补充说明（宿主仅用作悬浮提示，不解释其含义；缺省 = 无补充） */
+  readonly detail?: string;
+  /**
+   * 该范围的**检索根**（绝对路径）。目录与单个文件皆可：原生检索命令对每个根做
+   * 一次目录遍历（`src-tauri` 的 `collect_files` → walkdir），文件根只产出它自己。
+   * 因此"范围细到某几个文件"与"范围粗到一个目录"**共用这一个形状**，不需要第二套
+   * 机制——粒度差在提供方给什么路径，不在宿主多认什么概念。
+   */
+  readonly roots: readonly string[];
+}
+
+/**
+ * 检索范围提供方（槽 `search.scope`）。
+ *
+ * 命名口径：`ui.*` 槽的贡献物**自己就是界面**（面板 / 工具栏 / 装饰器）；本槽的贡献物
+ * 是**领域事实**，由域插件算、宿主界面消费——同 `export.target` / `game.adapter` 一族，
+ * 所以不带 `ui.` 前缀。
+ *
+ * **纯函数纪律**：`provide` 不读盘、不写盘、不发事件——它只把**已加载的项目数据**
+ * 投影成候选清单（宿主已握着这份数据并原样递回来）。不提供范围 = 返回空数组
+ * （宿主据此**不画选择器**，与"今天完全一致"，这是新功能默认关的形态）。
+ *
+ * 同槽多注册（与除 `game.adapter` 外的所有槽同语义）：查询结果已按 `order` 排好，
+ * 消费者按顺序拼接各提供方的候选，并用 `pluginId` 给 id 加命名空间——
+ * 因此两个提供方的 `id` 相同也不会串线。
+ */
+export interface SearchScopeContribution extends ContributionBase {
+  provide(project: GameProject | null): SearchScopeOption[];
 }

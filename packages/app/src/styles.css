@@ -4753,3 +4753,25 @@ button.primary .hint {
     opacity: 0.35;
   }
 }
+
+/* ---- C3 领域限定检索：检索范围选择器（1016 独占追加区块；勿在他处重排） ---- */
+.search-scope-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-0);
+}
+.search-scope {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-0);
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 2px 4px;
+}
+.search-scope-empty,
+.search-scope-stale,
+.search-scope-notice {
+  color: var(--amber);
+}

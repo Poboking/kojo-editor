@@ -416,3 +416,6 @@ export type { SugarColumnRun } from './sugar';
 
 /* ---- 数值增减族表（1016 独占追加区块；勿在他处重排） ---- */
 export type { KojoMutatorSpec, KojoMutatorTable, MutatorArgRole } from './game';
+
+/* ---- C3 领域限定检索（1016 独占追加区块；勿在他处重排） ---- */
+export type { SearchScopeContribution, SearchScopeOption } from './slots';

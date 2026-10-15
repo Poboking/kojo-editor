@@ -11,6 +11,7 @@ import { FileTree } from './FileTree';
 import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
 import { Icon } from './icons';
 import type { ShellCommandSpec } from './commands';
+import { collectSearchScopes, type SearchScopeCatalog } from './search-scope';
 import { workspaceRootsOf } from './workspace-roots';
 
 interface Props {
@@ -60,6 +61,9 @@ function tabName(path: string): string {
  * 而对作者来说"外部丢的文件在不到一秒后自己出现"已经足够即时，再小没有体感收益。
  */
 const TREE_REFRESH_WINDOW_MS = 400;
+
+/** 检索范围候选的空值（ref 初值；没提供方时面板与改动前逐字一致） */
+const NO_SEARCH_SCOPES: SearchScopeCatalog = { items: [], notices: [] };
 
 /**
  * 项目视图（UI 重设计批 P1；P3 多标签）：壳层 = 五区布局（ShellLayout），
@@ -268,16 +272,29 @@ export function ProjectView({
   }, []);
 
   /**
+   * 检索范围候选（C3 领域限定检索批）：**判据不在本层**。宿主只做接线——问槽上
+   * 有哪些提供方、把当前项目递回去、拿回"标签 + 目录"这两样自己不需要理解的泛型事实。
+   * 没有任何提供方（没开项目 / 游戏不给这概念）⇒ 候选空 ⇒ 面板整行不画 = 今天的行为。
+   *
+   * 依赖刻意只到 `project`（不跟 `roots`）：候选是项目的属性，收窄在发请求那一刻才做。
+   */
+  const searchScopes = useMemo(
+    () => collectSearchScopes(kernel.slots.query('search.scope'), project),
+    [kernel, project],
+  );
+
+  /**
    * 侧栏「搜索」视图的稳定组件身份（同 problemComponent 的 ref 闭包写法）。
    *
    * 检索根 = **项目根 ∪ 作者工作区全部根**：工作区自 2026-10-14 起不再是一个目录
    * （默认根 + 对话框自选根），只搜项目根会把作者自己写的口上文件整批漏掉。
    * 跳转仍走既有 `editor.revealLocation`（与问题面板同一条通道）。
    */
-  const searchArgsRef = useRef({ kernel, roots: [] as string[] });
+  const searchArgsRef = useRef({ kernel, roots: [] as string[], scopes: NO_SEARCH_SCOPES });
   searchArgsRef.current = {
     kernel,
     roots: [...new Set([project.rootDir, ...workspaceRootsOf(kernel)])],
+    scopes: searchScopes,
   };
   const searchComponent = useMemo(() => {
     const StableSearch = (): ReactElement => {
@@ -285,6 +302,8 @@ export function ProjectView({
       return (
         <SearchPanel
           roots={a.roots}
+          scopes={a.scopes.items}
+          scopeNotices={a.scopes.notices}
           onReveal={(path, line, column) =>
             a.kernel.bus.emit('editor.revealLocation', {
               filePath: path,

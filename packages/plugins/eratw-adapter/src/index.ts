@@ -33,3 +33,6 @@ export { EMPTY_LIBRARY_TABLE, createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS }
 export { FAMILY_ALIASES, FAMILY_ALIASES_REVERSE } from './variable-schema';
 // 1016 批：数值增减族表（additive；族头 → 目标函数 + 参数序，同形 seam：adapter 建表、糖层只查）
 export { EMPTY_MUTATOR_TABLE, createEratwMutatorTable, ERATW_MUTATOR_FAMILIES } from './mutator-table';
+// C3 批（1016 独占追加区块；勿在他处重排）：检索范围提供方——判据（角色→目录）只住本包，
+// 宿主全文检索只消费「标签 + 检索根」两样泛型事实。导出纯函数供单测直接钉判据。
+export { charaSearchScopeOptions } from './search-scope';

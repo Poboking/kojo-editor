@@ -42,6 +42,7 @@ import {
 } from './tutorial-overlay';
 import { TUTORIALS } from './tutorial-content';
 import type { PendingDeploy } from './deploy';
+import { charaSearchScopeOptions } from './search-scope';
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -691,6 +692,25 @@ export function createEratwAdapterPlugin(): Plugin {
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: KOJO_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' }),
         }),
+      });
+
+      /* ---- 检索范围提供方（C3 领域限定检索批）----
+       *
+       * 「这个角色只有哪些文件」= 一个目录前缀，判据来自本包在 `loadProject` 里绑好的
+       * `charaIndex[].kojoDir`（唯一真源，这里不重算名单）。宿主全文检索只拿到
+       * "标签 + 目录"两样它不需要理解的泛型事实，并据此**收窄检索根**（少扫就是少扫）。
+       * 反过来写在宿主里（哪怕只是读 `charaIndex`）就是把游戏判据抄第二份、
+       * 还抄进了审计 A 射程内最不该有它的一层。
+       *
+       * 只认本项目：`adapterId` 不是自己的 ⇒ 空候选 ⇒ 宿主不画选择器（默认关）。
+       * 一次投影 155 条 ≈ 微秒级，不值得记忆化；宿主也只在换项目时重算一次。 */
+      ctx.slots.register('search.scope', {
+        id: `${ERATW.gameId}-chara-scope`,
+        order: 10,
+        provide: (project) =>
+          project !== null && project.adapterId === ERATW.gameId
+            ? charaSearchScopeOptions(project.charaIndex.values())
+            : [],
       });
     },
   };
