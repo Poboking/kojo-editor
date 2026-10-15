@@ -258,7 +258,14 @@ export type LineClass =
   /** 语句位置的用户函数调用 `调用 <名>(实参,…)` / `call <名>(…)` */
   | { kind: 'callStatement'; name: string; args: string }
   /** 函数体返回值 `返回 [值]` / `return [值]`（裸 `返回` = 过程函数收尾） */
-  | { kind: 'returnStatement'; value?: string };
+  | { kind: 'returnStatement'; value?: string }
+  /* ---- 单行条件（本批） ---- */
+  /**
+   * `如果 <条件> 则 <语句>` —— 整行一条语句（产物 `SIF <条件>` + 紧随一条语句行）。
+   * `statementOffset` = 语句原文在**去注释后的整行内容**里的 0 基码元偏移
+   * （parser 据它合成"语句行"以复用既有语句分类与列映射）。
+   */
+  | { kind: 'singleIfHead'; condition: string; statement: string; statementOffset: number };
 
 /**
  * `空行` / `blank`（可带一个行尾标记）→ 一条"输出一行空行"的语句（规范 §3.3，批 P）。
@@ -326,6 +333,48 @@ function parseReturnStatement(code: string): { kind: 'returnStatement'; value?: 
   return { kind: 'returnStatement', value };
 }
 
+/* ---------------------- 单行条件（本批）：`如果 <条件> 则 <语句>` ---------------------- */
+
+/** 行首 `如果` / `if` + 空白 + 余下正文（`则` 分隔词的界标判定在 `trySingleIfStatement` 内做） */
+const SINGLE_IF_HEAD_RE = /^(如果|if)[ \t\u3000]+(.+)$/;
+/**
+ * `则` / `then` 分隔词：**带空白边界**——前有空白（或行首）、后有空白（或行尾）。
+ * 只在条件里出现"独立的 `则` 词"时才切两段；`「则」`（引号内无空白边界）不受影响。
+ */
+const SINGLE_IF_SEP_RE = /(?:^|[ \t\u3000])(?:则|then)(?=[ \t\u3000]|$)/;
+
+/**
+ * `如果 <条件> 则 <语句>`（本批）→ **单行条件**。
+ *
+ * 判据：行首恰为 `如果` / `if`，其后跟空白，且余下正文里有一个**独立**的 `则` / `then`
+ * 分隔词（前后带空白边界）。条件为空 / `则` 后无语句仍返回类别（两段为空串），
+ * 由 parser 落 error、**不产半成品**（与"块头无体"同一口径）。
+ *
+ * 切分后各段用 `trim` 归整；`statementOffset` 给出语句原文在**去注释后内容**里的起点，
+ * 供 parser 合成语句行（列映射定准）。**未去注释**时（`code` 是 `content` 的前缀）偏移
+ * 可直接当 `content` 的偏移用。
+ */
+function trySingleIfStatement(content: string): LineClass | null {
+  const m = SINGLE_IF_HEAD_RE.exec(content);
+  if (!m) return null;
+  const rest = m[2]!;
+  const sep = SINGLE_IF_SEP_RE.exec(rest);
+  if (!sep) return null;
+  // 分隔词自身宽度（去掉可能的**前置空白**——`m[0]` 可能是 ` 则` 形态）
+  const sepTokenLen = sep[0]!.replace(/^[ \t\u3000]*/, '').length;
+  const sepIdxInRest = sep.index + sep[0]!.length - sepTokenLen;
+  const after = rest.slice(sepIdxInRest + sepTokenLen);
+  const lead = after.length - after.trimStart().length;
+  const statement = after.trim();
+  const statementOffset = content.length - rest.length + sepIdxInRest + sepTokenLen + lead;
+  return {
+    kind: 'singleIfHead',
+    condition: rest.slice(0, sepIdxInRest).trim(),
+    statement,
+    statementOffset,
+  };
+}
+
 /** 全大写原生指令判定（规范 §3.10）：`SETCOLOR` / `IF` / `CALL` / `RAND` / `TFLAG:193 = 0` */
 const RAW_INSTR_RE = /^[A-Z][A-Z0-9_]*(?:[:.][^\s]*)?(?:\s|=|$)/;
 
@@ -377,6 +426,13 @@ export function classifyLine(line: LogicalLine): LineClass {
   // 文本行与原生直通**不剥**：台词里的 `;` 是作者要打印的字符；ERB 直通行的
   // `;` 注释原样保留（那边本来就是合法注释）。
   const code = stripInlineComment(content);
+
+  // ---- 单行条件 `如果 条件 则 语句`（本批）----
+  // **必须先于块头判定**：`如果 X 则 Y`（无尾冒号）若先经块头判定会被当 `如果 X 则 Y` 的
+  // 块头并吞掉后续缩进行。`则`/`then` 是**位置式**界标（带空白边界），条件里的变量名撞词
+  // 不受影响；`「则」` 这类引号内的写法也切不到。
+  const singleIf = trySingleIfStatement(code);
+  if (singleIf) return singleIf;
 
   // ---- 块头优先（规范 §5.3：块头一律以冒号结尾）----
   // 注意：块头（`如果 …：` / `时机 …：` / `当 …：` …）也可能含冒号

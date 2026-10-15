@@ -591,6 +591,25 @@ export interface CallStatement extends SugarNodeBase {
   readonly args: string;
 }
 
+/**
+ * 单行条件（`如果 <条件> 则 <语句>`）——产物 `SIF <条件>` + 紧随其后的**恰好一条**
+ * 语句行，**不产** `ENDIF`。
+ *
+ * 与 `IfBlock`（块形，自动补 `ENDIF`）是两条独立通路，天然不歧义：块形由**行尾冒号**
+ * 触发（`如果 X：`），本形由**中缀 `则`**触发（`如果 X 则 Y`，无尾冒号）。引擎 `SIF`
+ * 只守护**下一行**，故 `statement` 必须是能编译为**单行产物**的语句；否则转译器自动
+ * 退化为完整 `IF` / `ENDIF` 块（不静默改变语义）。
+ *
+ * 对标真实语料：`SIF !CFLAG:11:K11EN_ZE` + 紧随一行 `RETURNF` 的引擎写法。
+ */
+export interface SingleIfStatement extends SugarNodeBase {
+  kind: 'singleIfStatement';
+  /** 条件原文（ERB 表达式，中文运算符未降糖前原样） */
+  readonly condition: string;
+  /** 被守护的单条语句 */
+  readonly statement: SugarNode;
+}
+
 /* ============================== 别名声明 ============================== */
 
 /**
@@ -702,6 +721,7 @@ export type SugarStatement =
   | CustomCommandBlock
   | CallStatement
   | ReturnStatement
+  | SingleIfStatement
   | RawLine
   | RawFunctionBlock
   | CommentLine;

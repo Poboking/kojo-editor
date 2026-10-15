@@ -319,6 +319,7 @@ export type {
   SugarLiftApplyPreview,
   SugarLiftApplyRequest,
   SugarLiftApplyResult,
+  SingleIfStatement,
   SugarLiftApplyService,
   SugarLiftDiffHunk,
   SugarLiftKind,

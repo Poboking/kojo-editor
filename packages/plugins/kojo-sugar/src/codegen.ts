@@ -34,6 +34,7 @@ import type {
   RawLine,
   ReturnStatement,
   SectionBlock,
+  SingleIfStatement,
   SugarDiagnostic,
   SugarFrontMatter,
   SugarNode,
@@ -1223,6 +1224,11 @@ interface BodyContext {
   userFunctions?: ReadonlyMap<string, UserFunctionInfo>;
   /** 当前是否在「函数 …：」块体内（B4 批；`返回` 仅在此为真时合法） */
   inFunction?: boolean;
+  /**
+   * 当前「函数 …：」块体是否为**值函数**（存在带值返回；本批）。裸 `返回` 据此落
+   * `RETURNF`（值函数，空返回）/ `RETURN`（过程函数）——与函数头是否挂 `#FUNCTION` 同一判据。
+   */
+  functionIsValueFunction?: boolean;
   sink: DiagnosticSink;
   frontMatter: SugarFrontMatter;
   allocator: SlotAllocator;
@@ -1293,6 +1299,10 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
     case 'returnStatement':
       // `返回 [值]`（B4 批）：只在「函数」块体内合法（非 inFunction → 报错，不产半成品）。
       emitReturnStatement(em, node, ctx, indent);
+      break;
+    case 'singleIfStatement':
+      // 单行条件（本批）：`SIF <条件>` + 一条语句；语句多行时自动退化 `IF`/`ENDIF`。
+      emitSingleIfStatement(em, node, ctx, indent);
       break;
     case 'rawFunctionBlock':
       for (const line of node.lines) em.pushRaw(line, node.loc.start.line, verbatimSpec(0, line.length));
@@ -1464,12 +1474,15 @@ function isStringLiteralReturn(value: string): boolean {
 }
 
 /**
- * 递归查找块体里**首个** `返回` 语句（含嵌套块体）——用于判定函数是否为「值函数」。
- * 只认语句位置；表达式块（`ifExpr`/`whenExpr`）分支体里不会出现 `返回`（AST 段保证）。
+ * 递归查找块体里**首个带值的** `返回` 语句（含嵌套块体）——用于判定函数是否为「值函数」。
+ *
+ * 口径（本批修正）：`@K11_ZE` 一类值函数的**首个**返回可能是裸 `RETURNF`（提前返回），
+ * 其后才是带值返回 ⇒ 只看"首个返回"会把值函数误判成过程。故改为"**存在任一**带值返回
+ * 即为值函数"。只认语句位置；表达式块（`ifExpr`/`whenExpr`）分支体里不会出现 `返回`。
  */
 function findReturnNode(nodes: readonly SugarNode[]): ReturnStatement | undefined {
   for (const node of nodes) {
-    if (node.kind === 'returnStatement') return node;
+    if (node.kind === 'returnStatement' && node.value !== undefined) return node;
     const kids = bodyOf(node);
     if (kids) {
       const found = findReturnNode(kids);
@@ -1493,6 +1506,10 @@ function bodyOf(node: SugarNode): readonly SugarNode[] | null {
       return node.body;
     case 'choiceBlock':
       return node.items.flatMap((i) => i.body);
+    case 'singleIfStatement':
+      // 单行条件守护的**一条语句**也是子语句——`返回` 藏在这里时值函数判定必须找得到它
+      // （否则带值返回的函数会漏挂 `#FUNCTION`，引擎侧 `RETURNF` 落空）。
+      return [node.statement];
     default:
       return null;
   }
@@ -1600,6 +1617,7 @@ function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext
     allocator: new SlotAllocator(),
     baseIndent: 1,
     inFunction: true,
+    functionIsValueFunction: valueFn,
   };
   // 函数体一律经 `emitBody`（不是裸 `emitStatement` 循环）：`你：` 自机台词的
   // 换色/复原合并只住在 `emitBody` 里，绕开它就等于函数体内 `你：` 静默降级成旁白。
@@ -1647,8 +1665,44 @@ function emitReturnStatement(em: Emitter, node: ReturnStatement, ctx: BodyContex
   if (node.value !== undefined && node.value.trim().length > 0) {
     const lowered = lowerExpression(node.value, exprCtx(ctx, node.loc.start));
     em.push(indent, `RETURNF ${lowered}`, node.loc.start.line);
+  } else if (ctx.functionIsValueFunction) {
+    // 值函数里的裸 `返回`（提前返回，如 `@K11_ZE` 的 `SIF !CFLAG:…` + `RETURNF`）→ 裸 `RETURNF`。
+    em.push(indent, `RETURNF`, node.loc.start.line);
   } else {
     em.push(indent, `RETURN`, node.loc.start.line);
+  }
+}
+
+/**
+ * 单行条件 `如果 <条件> 则 <语句>`（本批）→ `SIF <条件>` + **恰好一条**语句行，不产 `ENDIF`。
+ *
+ * 引擎 `SIF` 只守护**下一行** ⇒ 只有能编译为单行产物的语句才走 `SIF`；若语句会展开成
+ * 多行（`你：` 自机台词的换色 run、纯条件行的 `IF`/`ENDIF`），**自动退化**为完整
+ * `IF` / 语句 / `ENDIF` 块——不静默改变语义，也不给作者"条件没生效"的假象。
+ */
+function emitSingleIfStatement(em: Emitter, node: SingleIfStatement, ctx: BodyContext, indent: number): void {
+  const single = isSingleLineStatement(node.statement, ctx);
+  const cond = lowerExpression(node.condition, exprCtx(ctx, node.loc.start));
+  em.push(indent, `${single ? 'SIF' : 'IF'} ${cond}`, node.loc.start.line, [
+    ...identitySpec(viewTextOf(em, node.loc.start.line), node.condition, contentBase(node), single ? 4 : 3),
+  ]);
+  emitBody(em, [node.statement], ctx, indent + 1);
+  if (!single) em.push(indent, `ENDIF`, null);
+}
+
+/** 语句能否编译为**单行**产物（`SIF` 前提）：白名单——只认确定单行的语句形态 */
+function isSingleLineStatement(node: SugarNode, ctx: BodyContext): boolean {
+  switch (node.kind) {
+    case 'rawLine':
+    case 'callStatement':
+    case 'returnStatement':
+      return true;
+    case 'textLine':
+    case 'heartLine':
+      // 自机台词换色 run（≥2 行）与纯条件行（`IF`/`ENDIF` 两行）不是单行 → 退化 `IF` 块
+      return !isPlayerLine(node) && pureConditionalBody(node, ctx) === null;
+    default:
+      return false;
   }
 }
 

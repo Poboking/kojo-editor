@@ -818,6 +818,9 @@ class BlockParser {
           ...(cls.value !== undefined ? { value: cls.value } : {}),
         };
       }
+      case 'singleIfHead':
+        // 单行条件（本批）：`如果 条件 则 语句` —— 一条语句，**不消费后续行**。
+        return this.parseSingleIfStatement(line, cls);
       case 'comment':
         // 注释**保留**（用户 2026-10-12 第 3 条：注释不能丢）——推进游标后作为
         // `comment` 节点收进当前块体（空行仍按 §3.10 丢弃：只用于分隔）。
@@ -1307,6 +1310,8 @@ class BlockParser {
           loc: spanOf(line),
           ...(cls.value !== undefined ? { value: cls.value } : {}),
         };
+      case 'singleIfHead':
+        return this.parseSingleIfStatement(line, cls);
       case 'rawLine':
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
       case 'settle':
@@ -1725,6 +1730,106 @@ class BlockParser {
   /** 选项条目体：不允许 `选项` 块（同上），并允许任意其它块 */
   parseChoiceItemBody(): SugarNode[] {
     return this.parseBody();
+  }
+
+  /* ------------------------------ 单行条件（本批） ------------------------------ */
+
+  /**
+   * `如果 <条件> 则 <语句>`（本批）→ `singleIfStatement`（产物 `SIF <条件>` + 一条语句行）。
+   *
+   * **绝不吞后续行**：语句段**不递归解块**——用白名单（`buildSingleIfStatement`）只认
+   * 单行语句；块头 / 嵌套单行条件 / 已带冒号的写法一律拒绝并报错，**不调用**任何会消费
+   * 后续行的解析器（更深缩进行由外层 `parseBody` 按 `indent-mismatch` 跳过）。
+   *
+   * 列映射：把语句原文合成一条"语句行"（`rawIndent` = 语句前全前缀），使
+   * `contentOf` = 语句原文、`loc.start.column` = 语句在源行里的真实列。
+   */
+  private parseSingleIfStatement(
+    line: LogicalLine,
+    cls: LineClass & { kind: 'singleIfHead' },
+  ): SugarNode | null {
+    this.cursor.next();
+    if (cls.condition.length === 0) {
+      this.sink.report({
+        code: 'indent-mismatch',
+        severity: 'error',
+        message: '单行条件「如果 … 则 …」缺条件——`则` 前面要写一个条件。',
+        loc: posOf(line),
+      });
+      return null;
+    }
+    if (cls.statement.length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: '单行条件「如果 … 则 …」缺语句——`则` 后面要写一条语句。',
+        loc: posOf(line),
+      });
+      return null;
+    }
+    const stmtStart = line.rawIndent.length + cls.statementOffset;
+    const synthetic: LogicalLine = {
+      ...line,
+      text: line.text.slice(0, stmtStart) + cls.statement,
+      rawIndent: line.text.slice(0, stmtStart),
+      indent: line.indent,
+    };
+    const statement = this.buildSingleIfStatement(synthetic);
+    if (!statement) {
+      this.sink.report({
+        code: 'indent-mismatch',
+        severity: 'error',
+        message:
+          '单行条件「则」后面只能跟**一条语句**（打印行 / 心形行 / 原生指令行 / `调用` / `返回` 等）——' +
+          '块头（带 `：`）与嵌套的「如果 … 则 …」不在此列，请改用多行块。',
+        loc: posOf(line),
+      });
+      return null;
+    }
+    return {
+      kind: 'singleIfStatement',
+      condition: cls.condition,
+      statement,
+      loc: spanOf(line),
+    } as SugarNode;
+  }
+
+  /**
+   * 单行条件的「一条语句」构建：**白名单**——只认能编译成单行产物的语句形态；
+   * 块头 / 嵌套单行条件 / 头部声明等一律返回 `null`（由调用方报错，不产半成品、不吞行）。
+   */
+  private buildSingleIfStatement(line: LogicalLine): SugarNode | null {
+    const cls = classifyLine(line);
+    switch (cls.kind) {
+      case 'text':
+        return this.buildTextNode(line, 'textLine');
+      case 'heartText':
+        return this.buildHeartNode(line, cls.raw);
+      case 'blankLine':
+        return this.buildBlankNode(line, cls.wait);
+      case 'callStatement':
+        return { kind: 'callStatement', name: cls.name, args: cls.args, loc: spanOf(line) };
+      case 'returnStatement':
+        return {
+          kind: 'returnStatement',
+          loc: spanOf(line),
+          ...(cls.value !== undefined ? { value: cls.value } : {}),
+        };
+      case 'rawLine':
+        return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
+      case 'settle':
+        return { kind: 'rawLine', text: 'EXP:' + cls.expr, loc: spanOf(line) } as RawLine;
+      case 'assign':
+        return {
+          kind: 'rawLine',
+          text: `${cls.target} = ${cls.expr}`,
+          loc: spanOf(line),
+          _assign: { target: cls.target, expr: cls.expr },
+        } as RawLine;
+      default:
+        // 块头（`如果 X：` / `心形：` / `着色 …：`）/ 嵌套单行条件 / 其它 → 不认
+        return null;
+    }
   }
 }
 

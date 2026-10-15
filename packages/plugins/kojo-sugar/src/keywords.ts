@@ -49,6 +49,8 @@ export type KeywordId =
   | 'inline.hideScene'
   | 'inline.hideKojo'
   | 'inline.settle'
+  /* 单行条件的 `则` 分隔词（本批）：`如果 <条件> 则 <语句>`；不是独立语句，只是条件与语句的界标 */
+  | 'inline.then'
   /* 别名右值 */
   | 'alias.char';
 /**
@@ -143,6 +145,11 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 都由作者原样写在表达式里，转译器**不解释**作用域词、也不硬编码任何具体经验名。
   ['结算', 'inline.settle'],
   ['settle', 'inline.settle'],
+  // 单行条件的 `则` 分隔词（本批）——`如果 <条件> 则 <语句>` 里条件段与语句段的分界。
+  // 登记进表是为了让编辑器高亮/补全认得它（词表单一真源）；**判定不走本表**——
+  // 它在 `条件` 里可能与变量名撞词，故由 lexer 的位置式扫描（带空白边界）单独识别。
+  ['则', 'inline.then'],
+  ['then', 'inline.then'],
   // 别名的 `角色 N` 右值形态由 `isAliasCharKeyword` 按上下文判定，
   // **不**在此表登记（否则会覆盖 `head.char`——Map 保留最后一次插入）。
 ]);
