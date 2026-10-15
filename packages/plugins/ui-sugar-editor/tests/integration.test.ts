@@ -152,6 +152,9 @@ function makeKernel(files: Record<string, Uint8Array>) {
       provided.set(key, value);
     },
     bus,
+    // kojo-sugar 现在还注册一枚 `ui.editor.languageService` 贡献（转到定义，2026-10-15）——
+    // 上下文里得有个槽注册表；本文件断言的是它**提供什么服务**，故注册侧不必记录。
+    slots: { register: () => () => undefined },
     onDispose: (fn: unknown) => fn,
   };
 

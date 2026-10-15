@@ -141,6 +141,8 @@ function makeKernel(files: Record<string, Uint8Array>) {
       provided.set(key, value);
     },
     bus,
+    // kojo-sugar 现在还注册一枚 `ui.editor.languageService` 贡献（转到定义，2026-10-15）
+    slots: { register: () => () => undefined },
     onDispose: (fn: unknown) => fn,
   };
 

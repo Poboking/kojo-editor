@@ -588,6 +588,9 @@ describe('S4 装配：服务键与服务集合', () => {
         throw new Error(`未注册的服务：${key}`); // 模拟 state.replay 缺席
       },
       provide: (key: string, value: unknown) => provided.set(key, value),
+      // 本包还注册一枚 `ui.editor.languageService` 贡献（转到定义，2026-10-15）——
+      // 上下文里得有个槽注册表；本用例断言的是服务面，故注册侧不记录。
+      slots: { register: () => () => undefined },
     };
     createKojoSugarPlugin().activate(ctx as never);
     expect(provided.has('sugar.transpile')).toBe(true);

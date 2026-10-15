@@ -15,6 +15,7 @@ import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload,
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
 import { buildStructureFixes } from './structure-fix';
+import { definitionTargetsAt, functionAt } from './symbols';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
@@ -336,6 +337,9 @@ export function createErbParserPlugin(): Plugin {
           if (roots.length === 0) throw new Error('No project is open; cannot build the ERB index');
           return startBuild(generation);
         },
+
+        // 位置 → 符号（B0）：只读已构建的索引，不读盘；未构建 → undefined（不猜）
+        functionAt: (path: string, line: number) => (index ? functionAt(index, path, line) : undefined),
       };
 
       // 响应式：项目打开 → 自动构建；项目关闭 → 清空
@@ -421,6 +425,36 @@ export function createErbParserPlugin(): Plugin {
             // 有 `edits` 时宿主不调 `run`；仍给以满足契约（并在无改写通道的宿主下无害退化）
             run: () => undefined,
           }));
+        },
+      });
+
+      /* ---------------- 转到定义（2026-10-15 语言服务批） ----------------
+
+       为什么由解析器插件自己应答：判据（"光标处那个名字是不是本项目的一个函数"）
+       只有 `ErbIndex.byName` 说了算。放进任何别的插件都得先拿到索引，等于把同一份
+       判据抄第二遍、并在项目开闭时机上与解析器赛跑。
+
+       数据面只有两件事：光标处记号（`symbolTokenAt`）＋ `byName` 反查；跨文件怎么
+       跳由**宿主**决定（插件只给"文件:行"，不碰导航——宿主那条 `editor.revealLocation`
+       通道已经能开文件定位，不新造机制）。
+
+       三态返回（见契约 `EditorLanguageServiceContribution`）：非 ERB 方言或未打开
+       项目 → `undefined`（不是本包的活）；认这个文件但记号不在索引里 → 空数组
+       （**不猜**，作者会看到"没有定义"，而不是被跳到错地方）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-definition',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'definition') return undefined;
+          if (!isDialect(request.path)) return undefined;
+          const idx = index;
+          if (!idx) return undefined;
+          const refs = definitionTargetsAt(idx, request.path, request.text, request.line, request.column);
+          return {
+            kind: 'definition',
+            locations: refs.map((ref) => ({ filePath: ref.filePath, line: ref.startLine })),
+          };
         },
       });
     },

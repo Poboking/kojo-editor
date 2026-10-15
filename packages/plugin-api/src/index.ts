@@ -163,6 +163,11 @@ export type {
   EditorCommandContext,
   EditorCommandContribution,
   EditorDecoratorContribution,
+  EditorDefinitionRequest,
+  EditorDefinitionResult,
+  EditorLanguageServiceContribution,
+  EditorLanguageServiceRequest,
+  EditorLanguageServiceResult,
   EditorLiftPreviewContribution,
   EditorLiftPreviewItem,
   EditorSaveChoices,
@@ -170,6 +175,7 @@ export type {
   EditorSaveOutcome,
   EditorSaveRequest,
   EditorSaveWarning,
+  EditorSymbolLocation,
   EditorTextEdit,
   ExportOptions,
   ExportResult,
@@ -191,6 +197,10 @@ export type {
 
 export { WellKnownCommands } from './slots';
 export type { WellKnownCommandId } from './slots';
+
+// 光标处标识符整串（跨插件共享的极小纯函数；解耦审计禁插件交叉 import，故住契约层）
+export { symbolTokenAt } from './symbol-token';
+export type { SymbolToken } from './symbol-token';
 
 export { KernelServices, WellKnownServices } from './services';
 export type { KernelServiceKey, PluginRegistry, WellKnownServiceKey } from './services';

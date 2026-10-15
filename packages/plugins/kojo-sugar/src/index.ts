@@ -21,6 +21,7 @@ import type {
   ConditionExpr,
   ConditionExtractorService,
   ControlFlowStatement,
+  ErbIndex,
   ErbParserService,
   FileIO,
   GameProject,
@@ -38,11 +39,12 @@ import type {
   VariableInfo,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, resolveSugarTarget } from '@kojo/plugin-api';
 import { createSugarTranspileService } from './service';
 import { createSugarPreviewService } from './preview';
 import { createSugarLiftService } from './lift';
 import { createSugarLiftApplyService } from './lift-apply';
+import { resolveKojoDefinition } from './definition';
 import type { DictionaryLookup } from './types';
 
 export function createKojoSugarPlugin(): Plugin {
@@ -91,6 +93,20 @@ export function createKojoSugarPlugin(): Plugin {
           return (text: string) => parser.scanControlFlow(text);
         } catch {
           return undefined;
+        }
+      };
+
+      /**
+       * `erb.parser`.`currentIndex()`（软取，2026-10-15 语言服务批）——转到定义的
+       * **跨文件那一腿**：`.kojo` 里的函数名就是 ERB 函数名，别处的函数只能靠项目
+       * 索引反查（同一份 `byName`，不新造表）。软取理由同 `scanFlowOf`：索引缺席
+       * 只该让"跳到别处"这条路失效，不该让整个 kojo-sugar 静默 inactive。
+       */
+      const erbIndexOf = (): ErbIndex | null => {
+        try {
+          return ctx.inject<ErbParserService>(WellKnownServices.ErbParser).currentIndex();
+        } catch {
+          return null;
         }
       };
 
@@ -283,6 +299,32 @@ export function createKojoSugarPlugin(): Plugin {
       });
 
       ctx.provide(WellKnownServices.SugarLiftApply, liftApplyService);
+
+      /* ---------------- 转到定义（2026-10-15 语言服务批） ----------------
+
+       由 kojo-sugar 应答 `.kojo`：判据是**糖语义**（`.kojo` 里的名字指向编译产物
+       ERB 里的函数），只有本包有转译器与源映射。`erb-parser` 应答 ERB 方言，两条线
+       各管自己认得的文件，宿主只合并结果。
+
+       `.kojo` 的判定复用 `resolveSugarTarget`（"同目录换扩展名"的唯一真源），
+       不另写一条正则——两条判据漂移的表现是"保存认得、跳转不认得"这类鬼故事。
+       */
+      // 注册入口与另外 17 个插件同一条路（`ctx.slots.register`，单一约定）。
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-definition',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'definition') return undefined;
+          if (resolveSugarTarget(request.path) === null) return undefined;
+          return {
+            kind: 'definition',
+            locations: resolveKojoDefinition(
+              { path: request.path, text: request.text, line: request.line, column: request.column },
+              { transpile: service.transpile, sourceOf: service.sourceOf, index: erbIndexOf },
+            ),
+          };
+        },
+      });
     },
   };
 }
@@ -596,3 +638,5 @@ export {
   createSugarLiftApplyService,
   type LiftApplyDeps,
 } from './lift-apply';
+// 转到定义（2026-10-15 语言服务批；纯函数，转译与索引由装配层注入）
+export { findGeneratedHeaderLine, resolveKojoDefinition, type KojoDefinitionDeps } from './definition';

@@ -16,6 +16,8 @@ export {
 // 结构体检（2026-10-13 反馈 7；纯函数，配对表仍单源于 scanner.ts）
 export { MAX_STRUCTURE_ISSUES, checkControlFlowStructure } from './structure';
 export { applyStructureFix, buildStructureFixes, type ErbStructureFix } from './structure-fix';
+// 位置 → 符号（B0，2026-10-15 语言服务批；纯函数，索引为唯一真源）
+export { definitionTargetsAt, functionAt } from './symbols';
 // 可搬运任务表（并行运输层；宿主与 worker 入口共用同一份，避免映射漂移）
 export { PARSE_FILE_TASK, erbParserTasks, type ParseFilePayload } from './offload';
 // 索引快照（纯函数；增量复扫的判据与合并逻辑）

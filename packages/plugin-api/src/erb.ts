@@ -222,4 +222,18 @@ export interface ErbParserService {
   currentIndex(): ErbIndex | null;
   /** 取当前索引；未构建则触发构建（若已有在途构建则等待它完成） */
   ensureIndex(): Promise<ErbIndex>;
+  /**
+   * 位置 → 符号反查（additive，2026-10-15 语言服务批）：返回**包围该行**的函数定义。
+   *
+   * 这是 definition / hover / highlight 三类语言智能的共同前置——"我此刻在哪个
+   * 函数里"必须由解析器的索引回答（消费方各扫一遍文本必然与索引漂移）。
+   *
+   * 纯函数、**不读盘**：只读当前已构建的索引（未构建 → undefined）。
+   * 边界口径见 `erb-parser/symbols.ts`，一句话：越界/空文件/不在任何函数体内
+   * 一律 undefined，**不夹取**（静默夹取会把"行号过期"伪装成"命中旁边那个函数"）。
+   *
+   * **可选**：既有实现不提供时消费方自行降级（契约演进的 additive 纪律，
+   * 同 `checkStructure?`）；提供方须与索引同时生效。
+   */
+  functionAt?(path: string, line: number): ErbFunction | undefined;
 }

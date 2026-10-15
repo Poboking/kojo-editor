@@ -303,6 +303,65 @@ export const WellKnownCommands = {
 /** 知名命令 id 联合（注册/引用双方共用的字面量类型） */
 export type WellKnownCommandId = (typeof WellKnownCommands)[keyof typeof WellKnownCommands];
 
+/* -------------------- ui.editor.languageService -------------------- */
+
+/**
+ * 转到定义请求（单槽 + 请求判别，2026-10-15 语言服务批）。
+ *
+ * 为什么**单槽 + `kind` 判别**而不是每能力一个槽：definition 与将来的
+ * references / documentHighlight 的**输入形状完全相同**（文件 + 光标位置 + 项目），
+ * 差异只在产出。分槽会让宿主接线 N 次、让每个贡献方各抄一份"取光标位置的样板"；
+ * 单槽 + 判别式则**新增能力 = 往联合里加一个成员**——宿主与既有贡献方零改动。
+ */
+export interface EditorDefinitionRequest {
+  readonly kind: 'definition';
+  readonly path: string;
+  /** 模型全文（宿主给的是**真文件**的文本，糖视图下不供——见宿主接线注） */
+  readonly text: string;
+  /** 光标行（1 基） */
+  readonly line: number;
+  /** 光标列（1 基；UTF-16 码元，与 Monaco 同坐标系） */
+  readonly column: number;
+  readonly project: GameProject | null;
+  /** 文件行数（体量事实，供贡献方按文件大小自行降级；缺省 = 未知，按不降级处理） */
+  readonly lineCount?: number;
+}
+
+/** 语言服务请求（当前只有 `definition`；新增能力 additive 追加联合成员，不改旧成员） */
+export type EditorLanguageServiceRequest = EditorDefinitionRequest;
+
+/** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
+export interface EditorSymbolLocation {
+  readonly filePath: string;
+  readonly line: number;
+  readonly column?: number;
+}
+
+/** 转到定义响应 */
+export interface EditorDefinitionResult {
+  readonly kind: 'definition';
+  /** 候选目标（重名函数的多处定义都给）；空数组 = 认这个文件但这处没有定义 */
+  readonly locations: readonly EditorSymbolLocation[];
+}
+
+/** 语言服务响应（按 `kind` 与请求一一对应） */
+export type EditorLanguageServiceResult = EditorDefinitionResult;
+
+/**
+ * 编辑器语言服务贡献（槽 `ui.editor.languageService`）。
+ *
+ * **纯函数纪律**：`provide` 不读盘、不写盘、不发事件——数据**全部**来自贡献方，
+ * 宿主只做 Monaco 协议翻译（位置进、位置出），绝不认识 ERB / 家族 / 角色。
+ *
+ * 返回值三态，宿主据此合并，无歧义：
+ * - `undefined` = **我不认这个文件**（不该由我应答）——宿主跳过；
+ * - `{ locations: [] }` = 认这个文件、但此处没有定义（**不猜**）；
+ * - `{ locations: [...] }` = 目标（可多个）。
+ */
+export interface EditorLanguageServiceContribution extends ContributionBase {
+  provide(request: EditorLanguageServiceRequest): EditorLanguageServiceResult | undefined;
+}
+
 /* ----------------------- ui.editor.decorator ----------------------- */
 
 /**
@@ -434,6 +493,7 @@ export interface SlotMap {
   'editor.command': EditorCommandContribution;
   'ui.editor.decorator': EditorDecoratorContribution;
   'ui.editor.codeAction': EditorCodeActionContribution;
+  'ui.editor.languageService': EditorLanguageServiceContribution;
   'ui.editor.liftPreview': EditorLiftPreviewContribution;
   'ui.editor.saveHandler': EditorSaveHandlerContribution;
   'game.adapter': GameAdapterContribution;

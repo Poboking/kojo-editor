@@ -18,6 +18,7 @@ import { makeLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
 import { installHover } from '../monaco/kojo-hover';
+import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
 import { useNotify } from './NotificationCenter';
@@ -967,6 +968,36 @@ export function EditorPane({
     // 悬停中文名（ZH-F2）：只读显示，光标下的原生记号 → 中文名。表按当前项目 adapterId
     // **运行时**现取（`editorTables`），查不到即不显示（**不猜**）。与 CodeAction 同款隔离。
     const hoverDisposer = installHover(monaco, () => editorTables(kernel));
+    // 转到定义（2026-10-15 语言服务批）：宿主只做 Monaco 协议翻译——光标位置进、目标位置出；
+    // "那个名字是什么、定义在哪"全在 `ui.editor.languageService` 槽（ERB 由解析器答、
+    // `.kojo` 由糖线答）。跨文件跳转不新造机制：发 `editor.revealLocation`（宿主既有通道，
+    // App 据此开文件、编辑器据此滚动）——与 codeAction 的"宿主零业务"同一分层。
+    const definitionDisposer = installDefinitionProvider(monaco, {
+      resolve: (model, position) => {
+        const path = filePathRef.current;
+        // 与 codeAction 同一判据（见上方 provideCodeActions）：只应答当前活动标签的真 model。
+        // 糖视图下 `ed.getModel()` 是只读糖 model——它的行号对应糖文本，拿它去问 ERB 行号
+        // 会得到"派生物里的位置"，所以一律不供，避免把作者跳到错行。
+        if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return [];
+        return collectDefinitionLocations(kernel.slots.query('ui.editor.languageService'), {
+          kind: 'definition',
+          path,
+          text: model.getValue(),
+          line: position.lineNumber,
+          column: position.column,
+          project: kernel.project.current(),
+          lineCount: model.getLineCount(),
+        });
+      },
+      navigate: (location) => {
+        kernel.bus.emit('editor.revealLocation', {
+          filePath: location.filePath,
+          line: location.line,
+          ...(location.column !== undefined ? { column: location.column } : {}),
+          source: '转到定义',
+        });
+      },
+    });
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
     const completionDisposer = installKojoCompletion(monaco, () => editorTables(kernel));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
@@ -974,6 +1005,7 @@ export function EditorPane({
     return () => {
       erbCompletionDisposer.dispose();
       completionDisposer.dispose();
+      definitionDisposer.dispose();
       hoverDisposer.dispose();
       cmdDisposer.dispose();
       providerDisposer.dispose();
