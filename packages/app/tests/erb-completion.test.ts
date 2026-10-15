@@ -129,7 +129,7 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
     dispose.dispose();
   });
 
-  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，EC-1..EC-5 五个 source 全在册', () => {
+  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，EC-1..EC-5 + D7 六个 source 全在册', () => {
     expect(Array.isArray(ERB_COMPLETION_SOURCES)).toBe(true);
     expect(ERB_COMPLETION_SOURCES.map((s) => s.id)).toEqual([
       'erb-directives',
@@ -137,6 +137,7 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
       'erb-functions',
       'erb-labels',
       'erb-system-functions',
+      'erb-bits',
     ]);
   });
 });

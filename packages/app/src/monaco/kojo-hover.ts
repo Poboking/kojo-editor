@@ -1,7 +1,8 @@
 import type * as Monaco from 'monaco-editor';
-import type { KojoInstructionTable, KojoLibraryTable } from '@kojo/plugin-api';
+import type { KojoInstructionTable, KojoLibraryTable, VariableSchema } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
+import { erbBitHoverName } from './erb-completion-bits';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
 
@@ -13,7 +14,9 @@ import { KOJO_LANGUAGE_ID } from './kojo-language';
  *   宿主按当前项目 adapter 在运行时构造）；
  * - 英文函数名（`GETBIT` → 获取标记）：系统函数表反向 `SYSTEM_FUNCTION_REVERSE` +
  *   基础库表反查 `KojoLibraryTable.lookupByFunction`；
- * - 指令编号（`时机 指令 310：` 的 `310` → 指令表中文名）：`KojoInstructionTable.lookupByNo`。
+ * - 指令编号（`时机 指令 310：` 的 `310` → 指令表中文名）：`KojoInstructionTable.lookupByNo`；
+ * - 位号（D7，`.erb`）：`GETBIT/SETBIT/CLEARBIT/INVERTBIT` 第二实参的位号 → 变量 schema 里
+ *   该变量的 `VariableInfo.bits[].label`（中文位名）。
  *
  * 本模块是**只读显示**：不产生编辑、不写盘、不发事件。纯逻辑（`resolveHoverName`）与
  * Monaco 绑定（`installHover`）分离——前者可单测，后者只做位置 → 内容的薄翻译。
@@ -25,6 +28,11 @@ export interface HoverTables {
   readonly libraryTable?: KojoLibraryTable;
   /** 指令名表（adapter）；缺席 = 不做指令编号反查 */
   readonly instructionTable?: KojoInstructionTable;
+  /**
+   * 适配器变量 schema 本体（D7，additive 可选）——位名悬停用它把 `GETBIT/SETBIT/…` 第二实参
+   * 的位号反查成中文位名（`VariableInfo.bits`）。缺席 = 不做位名反查（不猜）。
+   */
+  readonly variableSchema?: VariableSchema;
 }
 
 /** 一次解析的产物：显示中文名 + 类别 + 命中的列区间（1 基，供 hover 高亮） */
@@ -117,6 +125,13 @@ export function resolveHoverName(lineText: string, column: number, tables: Hover
         };
       }
     }
+  }
+
+  // 4) 位号（D7）：`GETBIT/SETBIT/CLEARBIT/INVERTBIT` 第二实参的位号 → 中文位名。
+  //    只在可证明的位槽里认；非位槽 / 查不到位表一律不显示（不猜）。
+  const bit = erbBitHoverName(lineText, column, tables.variableSchema);
+  if (bit !== undefined) {
+    return { name: bit.name, kind: `位号 · ${bit.bit}`, startColumn: bit.startColumn, endColumn: bit.endColumn };
   }
 
   return undefined;

@@ -7,6 +7,7 @@ import type {
 } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID } from './erb-language';
+import { erbBitCompletionItems } from './erb-completion-bits';
 import { erbFunctionCompletionItems } from './erb-completion-functions';
 import { erbLabelCompletionItems } from './erb-completion-labels';
 import { erbSystemFunctionCompletionItems } from './erb-completion-system-functions';
@@ -233,6 +234,19 @@ const SYSTEM_FUNCTIONS_SOURCE: ErbCompletionSource = {
 };
 
 /**
+ * 位补全（D7）：`GETBIT(变量, 位)` / `SETBIT|CLEARBIT|INVERTBIT 变量, 位` 的**第二实参坑**
+ * 出货该变量位表（`VariableInfo.bits`）里的位号 + 中文位名。位表由 adapter 提供
+ * （`variableSchema`）；无表 / 无位表 / 位坑已有内容（含写成变量）⇒ 零候选（不猜）。
+ */
+const BITS_SOURCE: ErbCompletionSource = {
+  id: 'erb-bits',
+  requires: 'variableSchema',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return erbBitCompletionItems(monaco, model, position, tables.variableSchema);
+  },
+};
+
+/**
  * 全部补全来源（**稳定扩展点**）。各 source **独立文件 + 各自纯函数**，此处只做一行接线；
  * 装配点与排序/去重口径零改动（去重按 label、先注册者胜；排名 `前缀精确 > 前缀命中 > 其它`）。
  */
@@ -242,6 +256,7 @@ export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
   FUNCTIONS_SOURCE,
   LABELS_SOURCE,
   SYSTEM_FUNCTIONS_SOURCE,
+  BITS_SOURCE,
 ];
 
 /* ============================== 记忆化：函数名 provider（EC-3 预置） ============================== */

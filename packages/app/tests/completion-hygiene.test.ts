@@ -75,7 +75,8 @@ function modelOf(text: string): Monaco.editor.ITextModel {
   } as unknown as Monaco.editor.ITextModel;
 }
 
-/** 最小 `VariableSchema` 桩：几个族各给若干索引名（枚举能力），其余族空（不猜） */
+/** 最小 `VariableSchema` 桩：几个族各给若干索引名（枚举能力），其余族空（不猜）；
+ *  `lookup('CFLAG', 1)` 额外给位表（D7 `erb-bits` source 的出货面）。 */
 function fakeSchema(): VariableSchema {
   const table: Record<string, VariableInfo[]> = {
     CFLAG: [
@@ -87,7 +88,18 @@ function fakeSchema(): VariableSchema {
   };
   return {
     version: 'test',
-    lookup: () => undefined,
+    lookup: (name: string, index?: number | string) =>
+      name === 'CFLAG' && String(index) === '1'
+        ? {
+            name: 'CFLAG',
+            index: 1,
+            description: '既成事实',
+            bits: [
+              { bit: 0, label: '接吻' },
+              { bit: 2, label: '恋人' },
+            ],
+          }
+        : undefined,
     names: (family: string) => table[family] ?? [],
   } as unknown as VariableSchema;
 }
@@ -175,6 +187,7 @@ const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]
   ['erb-functions', erbCtx('CALL M_KOJO', 11)], // 调用位
   ['erb-labels', erbCtx('@F\n$TARGET_ONE\n\tGOTO $TA', 10, 3)], // 跳转位
   ['erb-system-functions', erbCtx('IF A', 5)], // 表达式位
+  ['erb-bits', erbCtx('SETBIT CFLAG:1, ', 17)], // 位槽（位号 + 中文位名）
 ];
 
 interface Collected {
