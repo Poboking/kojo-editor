@@ -11,7 +11,7 @@ import type {
 import { createErbParserPlugin } from '../src/plugin';
 import { makeComputeStub } from './support';
 
-/** 伪 FileIO：只用得到 readText / walkDir / stat */
+/** 伪 FileIO：只用得到 readText / readTexts / walkDir / stat */
 function fakeIO(files: Record<string, string>, isWritable?: (path: string) => boolean): FileIO {
   return {
     // 缺省 = 一律可写（本包绝大多数用例不关心写权限；💡 修复那条用例显式传 false）
@@ -20,6 +20,15 @@ function fakeIO(files: Record<string, string>, isWritable?: (path: string) => bo
       const text = files[path];
       if (text === undefined) throw new Error(`not found: ${path}`);
       return { path, text, encoding: 'utf-8', eol: 'lf', mtimeMs: null };
+    },
+    async readTexts(paths: readonly string[]) {
+      // 与内核 io 同语义：与入参一一对应，失败位 null（不整批抛）
+      return paths.map((path) => {
+        const text = files[path];
+        return text === undefined
+          ? null
+          : { path, text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: null };
+      });
     },
     async stat(path: string) {
       const text = files[path];
@@ -203,12 +212,17 @@ describe('erb-parser 插件', () => {
 
   it('buildIndex 对单文件解析失败不中断（记警告）', async () => {
     const io = fakeIO({ '/root/a.ERB': '@A\n' });
-    // 让某个文件读取抛错
+    // 让某个文件批量读的失败位落 null（与 readText 抛错同语义）
     const failing: FileIO = {
       ...io,
       async readText(path: string) {
         if (path.endsWith('broken.ERB')) throw new Error('io fail');
         return io.readText(path);
+      },
+      async readTexts(paths: readonly string[]) {
+        return (await io.readTexts(paths)).map((tf, i) =>
+          paths[i]!.endsWith('broken.ERB') ? null : tf,
+        );
       },
       async walkDir(root: string) {
         const r = await io.walkDir(root);
@@ -219,7 +233,7 @@ describe('erb-parser 插件', () => {
     const parser = services.get('erb.parser') as ErbParserService;
     const index = await parser.buildIndex(['/root']);
     expect(index.files.size).toBe(1);
-    expect(logs.some((l) => l.includes('Parse failed'))).toBe(true);
+    expect(logs.some((l) => l.includes('read failed'))).toBe(true);
   });
 
   describe('v0.2 响应式索引所有权', () => {

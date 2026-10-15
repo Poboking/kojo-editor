@@ -64,6 +64,11 @@ const STAT_CONCURRENCY = 32;
 const PARSE_CONCURRENCY = 12;
 /** 片预算：半个 60fps 帧（与计算池默认一致） */
 const SLICE_MS = 8;
+/**
+ * 批量读批大小（2026-10-16 批量 IO 批）：一次 `io.readTexts` 带 64 个文件
+ * （≈ 一帧 4MB 级 IPC 载荷），解析段/引用段的读盘就此从"每文件两趟 IPC"变成"每批一趟"。
+ */
+const READ_BATCH = 64;
 
 export function createErbParserPlugin(): Plugin {
   return {
@@ -208,22 +213,37 @@ export function createErbParserPlugin(): Plugin {
 
         const parseStartedAt = Date.now();
         const fresh = new Map<string, SnapshotEntry>();
-        await compute.runSliced(
-          diff.stale,
-          { concurrency: PARSE_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.parse' },
-          async (path) => {
-            try {
-              // IO 留主线程（worker 内 IPC 未验证），**只把纯解析**搬上并行通道：
-              // 有 worker 时是真并行（多槽轮转），无 worker / 通道失败时自动内联回退。
-              const tf = await io.readText(path);
-              const payload: ParseFilePayload = { text: tf.text, path };
-              const file = await compute.offload<ErbFile>(PARSE_FILE_TASK, payload);
-              fresh.set(path, { mtimeMs: tf.mtimeMs, textLength: tf.text.length, file });
-            } catch (err) {
-              ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
-            }
-          },
-        );
+        /**
+         * 批量读 + 分片解析（2026-10-16 批量 IO 批）：每 READ_BATCH 个文件一次 IPC
+         * （原：每个文件 readText = 2 趟 IPC，2285 个文件 ≈ 4,570 趟）。
+         * 读批在批内铺、**片调度/优先级语义原样保留**（批内仍走 runSliced：
+         * PARSE_CONCURRENCY / SLICE_MS / background 档一字未动）；
+         * 读失败位（null）与旧 readText 抛错同语义：记警告、不留结果。
+         */
+        for (let base = 0; base < diff.stale.length; base += READ_BATCH) {
+          const chunk = diff.stale.slice(base, base + READ_BATCH);
+          const texts = await io.readTexts(chunk);
+          await compute.runSliced(
+            chunk,
+            { concurrency: PARSE_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.parse' },
+            async (path, k) => {
+              const tf = texts[k];
+              if (!tf) {
+                ctx.log.warn(`Parse skipped (read failed): ${path}`);
+                return;
+              }
+              try {
+                // IO 留主线程（worker 内 IPC 未验证），**只把纯解析**搬上并行通道：
+                // 有 worker 时是真并行（多槽轮转），无 worker / 通道失败时自动内联回退。
+                const payload: ParseFilePayload = { text: tf.text, path };
+                const file = await compute.offload<ErbFile>(PARSE_FILE_TASK, payload);
+                fresh.set(path, { mtimeMs: tf.mtimeMs, textLength: tf.text.length, file });
+              } catch (err) {
+                ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
+              }
+            },
+          );
+        }
         const parseMs = Date.now() - parseStartedAt;
 
         // 合并：按本次 walk 顺序取数（快照只换"来源"，byName 聚合顺序与全量重建逐位一致）
@@ -249,9 +269,10 @@ export function createErbParserPlugin(): Plugin {
         const aggMs = Date.now() - aggStartedAt;
 
         /* ---------------- 反向引用扫描（H2 批，判据 = 全局 byName ⇒ 必须排在聚合后） ----------------
-         * 文本不许整份留驻（412 万行），所以重扫只对 **stale 文件**重读一次；
-         * 复用文件直接取快照里的 refs（热构建零额外读盘）。冷构建为此付一趟二次读，
-         * 实测读数进 breakdown 日志与 references.corpus.test.ts。 */
+         * 只对 **stale 文件**重扫；复用文件直接取快照里的 refs（热构建零额外读盘）。
+         * 2026-10-16 批量 IO 批：冷构建的二次文本改走 `io.readTexts` 批量路径——
+         * 解析段刚读过的正文还在会话缓存里（mtime+size 判据），这里**零读盘**命中；
+         * 万一被缓存上限挤掉，也只付"每批一趟 IPC"而不是每文件两趟。 */
         const refsStartedAt = Date.now();
         const hasName = (upper: string): boolean => byName.has(upper);
         const refsByPath = new Map<string, FileRefs>();
@@ -264,18 +285,22 @@ export function createErbParserPlugin(): Plugin {
           }
         }
         const refsToScan = diff.stale.filter((path) => fresh.has(path));
-        await compute.runSliced(
-          refsToScan,
-          { concurrency: STAT_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.refs' },
-          async (path) => {
-            try {
-              const tf = await io.readText(path);
+        for (let base = 0; base < refsToScan.length; base += READ_BATCH) {
+          const chunk = refsToScan.slice(base, base + READ_BATCH);
+          const texts = await io.readTexts(chunk);
+          await compute.runSliced(
+            chunk,
+            { concurrency: STAT_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.refs' },
+            async (path, k) => {
+              const tf = texts[k];
+              if (!tf) {
+                ctx.log.warn(`Refs scan skipped (reread failed): ${path}`);
+                return;
+              }
               refsByPath.set(path, scanFileRefs(tf.text, hasName));
-            } catch (err) {
-              ctx.log.warn(`Refs scan skipped (reread failed): ${path}: ${String(err)}`);
-            }
-          },
-        );
+            },
+          );
+        }
         const references = buildReferenceIndex(ordered, refsByPath);
         const refsMs = Date.now() - refsStartedAt;
         let refSites = 0;

@@ -110,6 +110,10 @@ function makeEngine(opts: {
   offload?: ComputePoolStats['offload'];
   /** 收集 info 级日志（分段剖面那条形迹） */
   logs?: string[];
+  /** 提供批量读通道（2026-10-16 批量 IO 批）；缺省 = 不提供（走逐文件 readFile） */
+  readFiles?: (paths: readonly string[]) => Promise<Array<string | null>>;
+  /** 收集批量调用的路径清单（断言"一次批取"用） */
+  batchCalls?: string[][];
 } = {}) {
   const mtimes = opts.mtimes === undefined ? new Map<string, number | null>([[A, 100], [B, 200]]) : opts.mtimes;
   const reads: string[] = [];
@@ -127,6 +131,7 @@ function makeEngine(opts: {
       reads.push(path);
       return 'IF CFLAG:2>=500\nENDIF\n';
     },
+    ...(opts.readFiles ? { readFiles: opts.readFiles } : {}),
     scanControlFlow: async (): Promise<ControlFlowStatement[]> => {
       scans.push('x');
       offload.dispatched++;
@@ -365,5 +370,77 @@ describe('ConditionEngine 按文件增量', () => {
     const seen: (ConditionIndex | null)[] = [];
     engine.subscribe((i) => seen.push(i));
     expect(seen).toHaveLength(1); // subscribe 立即以当前值回调
+  });
+});
+
+/* --------------- 批量读通道（2026-10-16 批量 IO 批：readFiles 注入） --------------- */
+
+describe('ConditionEngine · 批量读通道', () => {
+  it('readFiles 提供时：pending 一次批取，抽取循环内零单文件读', async () => {
+    const batchCalls: string[][] = [];
+    const { engine, reads, scans } = makeEngine({
+      batchCalls,
+      readFiles: async (paths) => {
+        batchCalls.push([...paths]);
+        return paths.map(() => 'IF CFLAG:2>=500\nENDIF\n');
+      },
+    });
+    const out = await engine.run();
+    expect(batchCalls).toHaveLength(1); // 一次批取（不是每文件一读）
+    expect(batchCalls[0]!.sort()).toEqual([A, B].sort());
+    expect(reads).toHaveLength(0); // 单文件读零次
+    expect(scans).toHaveLength(2); // 扫描/抽取段照常逐文件跑
+    expect(out.byFunction.size).toBe(2);
+    expect(out.stats.predicates).toBe(2);
+  });
+
+  it('批量失败位 null ⇒ 该文件不留桶（与逐文件读失败同语义），其余照常', async () => {
+    const saved: Map<string, FileBucket>[] = [];
+    const { engine, reads } = makeEngine({
+      readFiles: async (paths) => paths.map((p) => (p === A ? null : 'IF CFLAG:2>=500\nENDIF\n')),
+      port: {
+        load: async () => null,
+        save(buckets) {
+          saved.push(new Map(buckets));
+        },
+      },
+    });
+    const out = await engine.run();
+    expect(reads).toHaveLength(0); // 失败位不触发单文件兜底重读（批量语义内已定论）
+    expect(out.byFunction.has('M_KOJO_K1_B')).toBe(true);
+    expect(out.byFunction.has('M_KOJO_K1_A')).toBe(false);
+    expect(saved[0]!.has(A)).toBe(false); // 坏结果不进桶
+    expect(saved[0]!.has(B)).toBe(true);
+  });
+
+  it('批量通道整体抛错 ⇒ 回退逐文件 readFile（不把整轮打成空转）', async () => {
+    const { engine, reads, scans } = makeEngine({
+      readFiles: async () => {
+        throw new Error('ipc down');
+      },
+    });
+    const out = await engine.run();
+    expect(reads.sort()).toEqual([A, B].sort()); // 回退路径真的逐文件读了
+    expect(scans).toHaveLength(2);
+    expect(out.byFunction.size).toBe(2);
+  });
+
+  it('readFiles 提供时，复用的桶照常复用（批量预取只覆盖 pending）', async () => {
+    const batchCalls: string[][] = [];
+    const { engine } = makeEngine({
+      mtimes: new Map([[A, 100], [B, 201]]), // B 变过
+      batchCalls,
+      readFiles: async (paths) => {
+        batchCalls.push([...paths]);
+        return paths.map(() => 'IF CFLAG:2>=500\nENDIF\n');
+      },
+      port: {
+        load: async () => ({ [A]: bucketFor(A, 100), [B]: bucketFor(B, 200) }),
+      },
+    });
+    const out = await engine.run();
+    expect(batchCalls).toHaveLength(1);
+    expect(batchCalls[0]).toEqual([B]); // 只批取 pending（A 走复用桶，零读）
+    expect(out.byFunction.size).toBe(2);
   });
 });

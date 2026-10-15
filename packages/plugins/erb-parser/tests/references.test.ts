@@ -183,12 +183,29 @@ const FILES: Record<string, string> = {
 const MTIME = 1000;
 
 function fakeIO(counters: { readText: number }): FileIO {
+  type TF = { path: string; text: string; encoding: 'utf-8'; eol: 'lf'; mtimeMs: number };
+  /** 会话文本缓存（镜像内核 io.readTexts 的判据：mtime+size 全等才命中） */
+  const textCache = new Map<string, TF>();
+  const readOne = (path: string): TF => {
+    const text = FILES[path];
+    if (text === undefined) throw new Error(`not found: ${path}`);
+    counters.readText++;
+    return { path, text, encoding: 'utf-8', eol: 'lf', mtimeMs: MTIME };
+  };
   return {
     async readText(path: string) {
-      const text = FILES[path];
-      if (text === undefined) throw new Error(`not found: ${path}`);
-      counters.readText++;
-      return { path, text, encoding: 'utf-8', eol: 'lf', mtimeMs: MTIME };
+      return readOne(path); // 单文件路径不接缓存（与内核一致）
+    },
+    async readTexts(paths: readonly string[]) {
+      return paths.map((path) => {
+        const text = FILES[path];
+        if (text === undefined) return null;
+        const cached = textCache.get(path);
+        if (cached && cached.mtimeMs === MTIME && cached.text.length === text.length) return cached;
+        const tf = readOne(path);
+        textCache.set(path, tf);
+        return tf;
+      });
     },
     async stat(path: string) {
       const text = FILES[path];
@@ -268,14 +285,14 @@ describe('erb-parser · 反向索引装配（冷建/热复用/快照往返）', 
     ]);
   });
 
-  it('冷建付每文件两趟读（解析 + 引用重扫），热复用零额外读且查询逐位一致', async () => {
+  it('冷建每文件正文只读一遍（批量）；引用重扫命中会话缓存，热复用零额外读且查询逐位一致', async () => {
     const h = harness();
     h.emit('project.opened', { project: { rootDir: '/t', kojoPaths: ['/t'] } });
     const parser = h.services.get('erb.parser') as ErbParserService;
     const cold = await parser.ensureIndex();
     const coldRefs = JSON.stringify([...cold.references!.bySymbol.entries()]);
-    // 2 文件 ×（parse 1 次 + refs 1 次）
-    expect(h.reads.readText).toBe(4);
+    // 2 文件：解析段每文件一遍（批量 readTexts）；引用重扫走会话缓存（mtime+size 未变 ⇒ 零读盘）
+    expect(h.reads.readText).toBe(2);
     expect(parser.referencesTo!('caller')).toHaveLength(1);
     await settle(); // 等快照异步落盘
     expect(h.store.size).toBeGreaterThan(0);
@@ -286,7 +303,7 @@ describe('erb-parser · 反向索引装配（冷建/热复用/快照往返）', 
     const hotRefs = JSON.stringify([...hot.references!.bySymbol.entries()]);
     expect(hotRefs).toBe(coldRefs);
     // 热段：解析与引用都走快照 ⇒ readText 增量 0
-    expect(h.reads.readText).toBe(4);
+    expect(h.reads.readText).toBe(2);
     expect(parser.referencesTo!('ALPHA').map((r) => r.kind)).toEqual(['definition', 'call']);
   });
 

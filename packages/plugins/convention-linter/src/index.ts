@@ -102,6 +102,12 @@ export function createConventionLinterPlugin(): Plugin {
         getProject: () => project.current(),
         getIndex: () => parser.currentIndex(),
         readFile: async (path: string) => (await io.readText(path)).text,
+        // 批量读（2026-10-16 批量 IO 批）：逐文件规则的 stale 并集一次批取
+        // （批内一趟 IPC + 会话缓存——索引/抽取段刚读过的正文在这里零读盘）
+        readFiles: async (paths: readonly string[]) => {
+          const tfs = await io.readTexts(paths);
+          return tfs.map((tf) => tf?.text ?? null);
+        },
         getAdapterRules: adapterRules,
         snapshot: snapshotPort,
       });

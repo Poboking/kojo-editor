@@ -25,6 +25,14 @@ function fakeIO(): FileIO {
       if (text === undefined) throw new Error(`not found: ${path}`);
       return { path, text, encoding: 'utf-8', eol: 'lf', mtimeMs: null };
     },
+    async readTexts(paths: readonly string[]) {
+      return paths.map((path) => {
+        const text = FILES[path];
+        return text === undefined
+          ? null
+          : { path, text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: null };
+      });
+    },
     async stat(path: string) {
       const text = FILES[path];
       return text === undefined ? null : { size: text.length, mtimeMs: null, isDirectory: false };

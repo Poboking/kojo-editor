@@ -28,19 +28,46 @@ interface FakeFile {
 }
 
 /**
- * 假 io：内存 FS + readText 调用计数（增量复扫的核心断言依据）。
+ * 假 io：内存 FS + 读调用计数（增量复扫的核心断言依据）。
  * `withMetadata` ⇒ walkDir 顺带带回 mtimeMs/size（`walkDir({withMetadata})` 契约），
  * 用于钉死"walk 带回的值"与"逐文件 stat 的值"**结果完全一致**、且此时**一次 stat 都不发**。
+ *
+ * `readTexts`（2026-10-16 批量 IO 批）镜像内核 FileIOService 的批量语义：
+ * 批调 + mtime/size 全等才命中**会话文本缓存**（缓存命中不计入 reads）——
+ * 于是下方读数钉的正是"每次冷开每文件正文只读一遍"这条 KPI。
+ * 单文件 `readText` 与内核一致：不接缓存（永远新鲜读盘）。
  */
 function makeIO(files: Map<string, FakeFile>, opts?: { withMetadata?: boolean }) {
   let reads = 0;
   let stats = 0;
+  type FakeTextFile = { path: string; text: string; encoding: 'utf-8'; eol: 'lf'; mtimeMs: number };
+  const textCache = new Map<string, { mtimeMs: number; size: number; tf: FakeTextFile }>();
+  const readOne = (path: string): FakeTextFile => {
+    const f = files.get(path);
+    if (!f) throw new Error(`not found: ${path}`);
+    reads++;
+    return { path, text: f.text, encoding: 'utf-8', eol: 'lf', mtimeMs: f.mtimeMs };
+  };
   const io = {
-    readText: async (path: string) => {
-      const f = files.get(path);
-      if (!f) throw new Error(`not found: ${path}`);
-      reads++;
-      return { path, text: f.text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: f.mtimeMs };
+    readText: async (path: string) => readOne(path),
+    readTexts: async (paths: readonly string[]) => {
+      const out: Array<FakeTextFile | null> = [];
+      for (const path of paths) {
+        const f = files.get(path);
+        if (!f) {
+          out.push(null);
+          continue;
+        }
+        const cached = textCache.get(path);
+        if (cached && cached.mtimeMs === f.mtimeMs && cached.size === f.text.length) {
+          out.push(cached.tf);
+          continue;
+        }
+        const tf = readOne(path);
+        textCache.set(path, { mtimeMs: f.mtimeMs, size: f.text.length, tf });
+        out.push(tf);
+      }
+      return out;
     },
     walkDir: async (): Promise<DirEntry[]> =>
       [...files.keys()].map((p) => {
@@ -155,7 +182,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
 
     openProject(bus);
     await waitIndexed();
-    expect(readsOf()).toBe(4); // 全量：每文件 2 读（解析 + H2 引用重扫；文本不留驻，只能重读）
+    expect(readsOf()).toBe(2); // 全量：每文件正文**只读一遍**（解析段批量读；H2 引用重扫命中会话缓存）
     expect(service.currentIndex()!.files.size).toBe(2);
 
     expect(map.size).toBe(1);
@@ -179,7 +206,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
 
     openProject(bus); // 同一项目重开
     await waitIndexed();
-    expect(readsOf()).toBe(4); // 仍是首次那 4 次读：二次打开零读盘（refs 也走快照，增量批不放宽这条）
+    expect(readsOf()).toBe(2); // 仍是首次那 2 次读：二次打开零读盘（refs 也走快照，增量批不放宽这条）
     expect(indexFingerprint(service.currentIndex()!)).toBe(first);
   });
 
@@ -198,7 +225,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     files.set(P1, { text: SRC1_TOUCHED, mtimeMs: 300 }); // 只改 P1
     openProject(bus);
     await waitIndexed();
-    expect(readsOf()).toBe(6); // 首次 4 + 本次只重扫 P1（解析 + 引用 = 2 读）；P2 复用快照零读
+    expect(readsOf()).toBe(3); // 首次 2 + 本次只重读 P1（解析段）；P1 引用重扫走会话缓存、P2 复用快照——零额外读
 
     const idx = service.currentIndex()!;
     expect(idx.files.get(P1)!.functions.map((f) => f.normalizedName)).toEqual(['FOO_A', 'FOO_B', 'FOO_C']);
@@ -247,7 +274,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     await waitIndexed();
 
     expect(deleted).toEqual([snapshotKeyFor(ROOT)]);
-    expect(readsOf()).toBe(8); // 4（首次）+ 4（弃用后全量重建：每文件解析+引用各一读）
+    expect(readsOf()).toBe(2); // 首次 2；弃用后全量重建只重**解析**——文本 mtime/size 未变、会话缓存命中，零重读
     expect(service.currentIndex()!.files.size).toBe(2);
   });
 
@@ -301,7 +328,9 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     await waitIndexed();
 
     await service.buildIndex([KOJO]);
-    expect(readsOf()).toBe(8); // 显式调用无视快照，全量重读（每文件解析+引用两读）
+    // 显式调用无视**快照**（全量重解析）；正文仍命中会话缓存（mtime/size 未变）——
+    // "强制重建"是对缓存语义说的，不是对读盘：读次数与首开持平
+    expect(readsOf()).toBe(2);
   });
 
   /**

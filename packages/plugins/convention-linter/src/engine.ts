@@ -27,6 +27,7 @@ import type {
   ConventionReport,
   ConventionRule,
   ConventionSeverity,
+  ErbFile,
   ErbIndex,
   GameProject,
   Logger,
@@ -64,6 +65,17 @@ export interface ConventionEngineDeps {
   getIndex(): ErbIndex | null;
   /** 读文件纯文本（引擎在一次运行内记忆化） */
   readFile(path: string): Promise<string>;
+  /**
+   * 批量读文件纯文本（2026-10-16 批量 IO 批；可选）。
+   *
+   * 提供时：`runOnce` 在跑逐文件规则**之前**把本 run 全部 stale 文件的并集
+   * 一次性批量取回（内核 `io.readTexts`——批内一趟 IPC + 会话缓存，
+   * 跨 run/跨插件重复校验零读盘），规则循环里 `ctx.readFile` 直接命中预取表。
+   * 返回与入参一一对应，失败位为 `null`（不入预取表 ⇒ 落 `readFile` 兜底重试，
+   * 再失败即抛错 ⇒ 该文件不留桶——与旧语义逐条一致）。
+   * 缺省 / 批量通道整体失败 ⇒ 逐文件 `readFile`（旧行为）。
+   */
+  readFiles?(paths: readonly string[]): Promise<Array<string | null>>;
   /** 当前激活适配器提供的规则（按 project.adapterId 过滤后的结果） */
   getAdapterRules(): readonly ConventionRule[];
   /**
@@ -229,19 +241,55 @@ export class ConventionEngine implements ConventionLinterService {
     /**
      * 逐文件层：按本次索引顺序（= walk 顺序）决定"复用桶"还是"只算这个文件"。
      * 任一侧 mtime 取不到 ⇒ 该文件判过期（保守重算），别的路径不受影响。
+     *
+     * stale 清单**先算齐**（判据一字未动）：批量预取需要全部规则 stale 的并集。
      */
     const files = [...index.files.values()];
-    const buckets: Record<string, Record<string, LintFileBucket>> = {};
-    let recomputedFiles = 0;
+    const prevByRule = new Map<string, Record<string, LintFileBucket>>();
+    const staleByRule = new Map<string, ErbFile[]>();
+    const prefetchPaths: string[] = [];
+    const prefetchSeen = new Set<string>();
     for (const rule of runnableFileRules) {
-      const t0 = Date.now();
       const prev = stored?.buckets[rule.id] ?? {};
-      const fresh = new Map<string, LintFileBucket>();
+      prevByRule.set(rule.id, prev);
       const stale = files.filter((f) => {
         const mtime = index.fileMtimes?.get(f.path) ?? null;
         const b = prev[f.path];
         return !(b && b.mtimeMs !== null && mtime !== null && b.mtimeMs === mtime);
       });
+      staleByRule.set(rule.id, stale);
+      for (const f of stale) {
+        if (prefetchSeen.has(f.path)) continue;
+        prefetchSeen.add(f.path);
+        prefetchPaths.push(f.path);
+      }
+    }
+
+    /**
+     * 批量预取（2026-10-16 批量 IO 批）：本 run 全部 stale 文件一次批取
+     * （批内一趟 IPC + 会话缓存命中——索引/抽取段刚读过的正文在这里零读盘；
+     * 跨 run 的同文件重复校验同样命中会话缓存）。
+     * 失败项不入 textCache ⇒ 落 `readFile` 兜底重试（会再失败 ⇒ 规则抛错 ⇒ 不留桶）。
+     */
+    if (this.deps.readFiles && prefetchPaths.length > 0) {
+      try {
+        const texts = await this.deps.readFiles(prefetchPaths);
+        for (let i = 0; i < prefetchPaths.length; i++) {
+          const t = texts[i];
+          if (typeof t === 'string') textCache.set(prefetchPaths[i]!, Promise.resolve(t));
+        }
+      } catch (err) {
+        this.deps.log.warn(`Convention batch prefetch failed; falling back to per-file reads: ${String(err)}`);
+      }
+    }
+
+    const buckets: Record<string, Record<string, LintFileBucket>> = {};
+    let recomputedFiles = 0;
+    for (const rule of runnableFileRules) {
+      const t0 = Date.now();
+      const prev = prevByRule.get(rule.id)!;
+      const fresh = new Map<string, LintFileBucket>();
+      const stale = staleByRule.get(rule.id)!;
       let ruleFailed = false;
       await mapLimit(stale, LINT_FILE_CONCURRENCY, async (file) => {
         try {

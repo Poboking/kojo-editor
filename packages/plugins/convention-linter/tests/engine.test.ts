@@ -60,6 +60,8 @@ function harness(opts: {
   files?: Record<string, string>;
   /** 结果快照端口替身（缺省 = 不启用快照，与改造前行为一致） */
   snapshot?: Partial<Pick<SnapshotPort, 'load' | 'save'>> & { expectFor?: () => CacheExpect | null };
+  /** 批量读通道（2026-10-16 批量 IO 批）；缺省 = 不提供（走逐文件 readFile） */
+  readFiles?: (paths: readonly string[]) => Promise<Array<string | null>>;
 }): Harness {
   const readCalls: string[] = [];
   const rules: ConventionRule[] = opts.adapterRules ?? [];
@@ -74,6 +76,7 @@ function harness(opts: {
       if (text === undefined) throw new Error(`not found: ${path}`);
       return text;
     },
+    ...(opts.readFiles ? { readFiles: opts.readFiles } : {}),
     getAdapterRules: () => rules,
     snapshot: opts.snapshot
       ? {
@@ -165,6 +168,90 @@ describe('ConventionEngine', () => {
     });
     await engine.run();
     expect(readCalls.filter((p) => p === '/p/a.ERB')).toHaveLength(1);
+  });
+
+  it('批量预取（readFiles）：逐文件规则 stale 并集一次批取，规则内零单文件读', async () => {
+    const calls: string[][] = [];
+    const fileCalls: string[] = [];
+    const index = makeIndex({ '/p/a.ERB': '@A\n', '/p/b.ERB': '@B\n' });
+    const { engine, readCalls } = harness({
+      index,
+      adapterRules: [
+        {
+          id: 'g.file',
+          description: 'x',
+          severity: 'info',
+          scope: 'file',
+          async checkFile(ctx, file) {
+            fileCalls.push(file.path);
+            const t = await ctx.readFile(file.path);
+            return [{ ruleId: 'g.file', severity: 'info' as const, message: t, filePath: file.path, key: `g.file|${file.path}` }];
+          },
+        },
+      ],
+      files: { '/p/a.ERB': '@A\n', '/p/b.ERB': '@B\n' },
+      readFiles: async (paths) => {
+        calls.push([...paths]);
+        return paths.map((p) => ({ '/p/a.ERB': '@A\n', '/p/b.ERB': '@B\n' })[p] ?? null);
+      },
+    });
+    const rep = await engine.run();
+    expect(calls).toHaveLength(1); // 一次批取
+    expect(calls[0]!.sort()).toEqual(['/p/a.ERB', '/p/b.ERB'].sort());
+    expect(readCalls).toEqual([]); // 预取覆盖全部 stale ⇒ 兜底单读零次
+    expect(fileCalls.sort()).toEqual(['/p/a.ERB', '/p/b.ERB'].sort());
+    expect(rep.issues.filter((i) => i.ruleId === 'g.file')).toHaveLength(2);
+  });
+
+  it('批量失败位 null 不吞：落单文件兜底（再失败即抛错、不留桶，与旧语义一致）', async () => {
+    const index = makeIndex({ '/p/a.ERB': '@A\n', '/p/b.ERB': '@B\n' });
+    const { engine, readCalls } = harness({
+      index,
+      adapterRules: [
+        {
+          id: 'g.file',
+          description: 'x',
+          severity: 'info',
+          scope: 'file',
+          async checkFile(ctx, file) {
+            return [{ ruleId: 'g.file', severity: 'info' as const, message: await ctx.readFile(file.path), filePath: file.path, key: `g.file|${file.path}` }];
+          },
+        },
+      ],
+      files: { '/p/a.ERB': '@A\n' }, // b 的内容缺失 ⇒ 兜底读也会失败
+      readFiles: async (paths) => paths.map((p) => ({ '/p/a.ERB': '@A\n' })[p] ?? null),
+    });
+    const rep = await engine.run();
+    expect(readCalls).toContain('/p/b.ERB'); // 失败位没被吞：兜底确实尝试过
+    expect(rep.failedRules.map((f) => f.ruleId)).toContain('g.file');
+    const keys = rep.issues.filter((i) => i.ruleId === 'g.file').map((i) => i.key);
+    expect(keys).toEqual(['g.file|/p/a.ERB']); // a 照常出结论，b 不留痕（不伪造）
+  });
+
+  it('批量通道整体抛错 ⇒ 回退逐文件 readFile，结果不变', async () => {
+    const index = makeIndex({ '/p/a.ERB': '@A\n' });
+    const { engine, readCalls } = harness({
+      index,
+      adapterRules: [
+        {
+          id: 'g.file',
+          description: 'x',
+          severity: 'info',
+          scope: 'file',
+          async checkFile(ctx, file) {
+            await ctx.readFile(file.path);
+            return [];
+          },
+        },
+      ],
+      files: { '/p/a.ERB': '@A\n' },
+      readFiles: async () => {
+        throw new Error('ipc down');
+      },
+    });
+    const rep = await engine.run();
+    expect(readCalls).toEqual(['/p/a.ERB']); // 回退路径真的单读
+    expect(rep.failedRules).toEqual([]);
   });
 
   it('内置规则：同名函数多处定义产出 info', async () => {

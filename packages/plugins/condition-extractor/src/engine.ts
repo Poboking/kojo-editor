@@ -36,6 +36,15 @@ export interface ConditionEngineDeps {
   /** 读文件纯文本（内核 io，自动编码探测） */
   readFile(path: string): Promise<string>;
   /**
+   * 批量读文件纯文本（2026-10-16 批量 IO 批；可选）。
+   *
+   * 提供时：`run()` 先把 pending 文件一次性批量取回（内核 `io.readTexts`——
+   * 批内一趟 IPC、可命中会话缓存），抽取循环里零单文件读盘；返回数组与入参
+   * 一一对应，失败位为 `null`（与 `readFile` 抛错同语义：该文件不留桶）。
+   * 缺省 / 批量通道整体失败 ⇒ 逐文件 `readFile` 兜底（旧行为，语义不变）。
+   */
+  readFiles?(paths: readonly string[]): Promise<Array<string | null>>;
+  /**
    * 控制流骨架扫描（erb.parser 服务）。
    *
    * **异步**：调用方传 `scanControlFlowOffloaded`（走并行通道）——扫描是纯文本变换、
@@ -75,8 +84,9 @@ export interface ConditionEngineDeps {
 }
 
 /**
- * 抽取的窗口并发度与片预算：控制内存峰值（读一批、处理一批、释放一批），
- * 并保证窗口之间让出主线程（背景档 → 交互优先）。
+ * 抽取的窗口并发度与片预算：保证窗口之间让出主线程（背景档 → 交互优先）。
+ * 2026-10-16 批量 IO 批起，文本读取改为循环外的批量预取（见 `run()` 的 `readFiles` 段），
+ * 这两个常数现在只约束扫描/抽取段——档位语义一字未动。
  */
 const EXTRACT_CONCURRENCY = 8;
 const EXTRACT_SLICE_MS = 8;
@@ -250,6 +260,33 @@ export class ConditionEngine implements ConditionExtractorService {
     const runT0 = nowMs();
     const offBefore = this.deps.compute.stats().offload;
 
+    /**
+     * 批量预取（2026-10-16 批量 IO 批）：pending 文件先一次性取回文本。
+     * 读取挪到抽取循环之外 ⇒ 循环里只做扫描与抽取；窗口并发/片预算/背景档
+     * 全部保持原样（读取本来就是"等 IPC"，不再是本段墙钟的主要形状）。
+     * 批量通道失败（整体抛）⇒ 退回逐文件 readFile，不把整轮打成空转。
+     */
+    let batchTexts: Map<string, string> | null = null;
+    {
+      const readAll = this.deps.readFiles;
+      const r0 = nowMs();
+      if (readAll) {
+        const paths = pending.map(([path]) => path);
+        try {
+          const fetched = await readAll(paths);
+          batchTexts = new Map();
+          for (let i = 0; i < paths.length; i++) {
+            const t = fetched[i];
+            if (typeof t === 'string') batchTexts.set(paths[i]!, t);
+          }
+        } catch (err) {
+          batchTexts = null;
+          this.deps.log.warn(`Condition extract batch read failed; falling back to per-file reads: ${String(err)}`);
+        }
+      }
+      readMs += nowMs() - r0;
+    }
+
     // 分窗并发 + 窗口间让路（内核计算池，background 档）：抽取是"开项目级联"的第二段，
     // 4~11 s 的 CPU 洪水不能连续占住主线程（内核优化批）
     await this.deps.compute.runSliced(
@@ -264,7 +301,13 @@ export class ConditionEngine implements ConditionExtractorService {
         let text: string;
         const r0 = nowMs();
         try {
-          text = await this.deps.readFile(path);
+          if (batchTexts) {
+            const t = batchTexts.get(path);
+            if (t === undefined) throw new Error('batch read failed for this file');
+            text = t;
+          } else {
+            text = await this.deps.readFile(path);
+          }
         } catch (err) {
           // 读失败**不留桶**：下次开项目必须重试，否则坏一次就永久缓存坏结果
           this.deps.log.warn(`Condition extract skipped (read failed): ${path} — ${String(err)}`);
