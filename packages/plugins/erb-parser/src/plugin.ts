@@ -547,11 +547,14 @@ export function createErbParserPlugin(): Plugin {
       ctx.slots.register('ui.editor.codeAction', {
         id: 'erb-structure-fix',
         order: 30,
-        provideActions: ({ path, text, line, diagnostics }) => {
+        provideActions: ({ path, text, line, diagnostics, scope }) => {
           if (!isDialect(path) || text.length === 0) return [];
           // 位置未知就不猜：本包的动作**天生按行**（波浪线在哪行，💡 就在哪行给），
           // 少了这个约束会把几十条动作灌进同一个菜单。
-          if (line === undefined) return [];
+          // 唯一的例外是宿主的**整篇批量**请求（`scope:'document'`，E3）：那一次就是要
+          // 把全篇每条唯一解都交出来，且点明了整篇的波浪线（`diagnostics` 逐条 code+行
+          // 精确应答，与区间请求同一条口径，不近似）。
+          if (line === undefined && scope !== 'document') return [];
           if (!io.isWritable(path)) return [];
           return buildStructureFixes(text, line, diagnostics).map((fix) => ({
             title: fix.title,

@@ -25,6 +25,7 @@ import {
   markersToDecorations,
 } from '../monaco/kojo-code-action';
 import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
+import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
 import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
 import { dialectForLanguage, installDocumentFormatter, toTextEdits } from '../monaco/kojo-format';
 import { applyFormatOnSave } from './format-on-save';
@@ -1430,6 +1431,54 @@ export function EditorPane({
     },
     [unlockAsk, setErbEditable, notify],
   );
+
+  /**
+   * E3「全部修复」：把**当前文档**里每一条"只有唯一改法"的问题一次补好
+   * （2026-10-16 批量修复批）。
+   *
+   * 宿主在这里只做三件事，**零批量判据**（判据全在 `kojo-fix-all.ts` 的纯函数里）：
+   * ① 按既有的那道闸判"这份文件能不能改"（目录分野 + 逐份解锁，与 `setModel` 时
+   *    挂给 Monaco 的 `readOnly` 同一个表达式，不另立第二套口径）；
+   * ② 把 model 的读文本 / 行数 / 落改写包成 `FixAllDeps` 的四个回调——落地用的就是
+   *    💡 那一条 `applyTextEdits` 通道（降序 + 夹取 + 一次 `executeEdits`），
+   *    **不新造第二套编辑应用机制**，一轮 = 一个撤销步；
+   * ③ 结果如实说一句（补了几处 / 剩下几处为什么要逐处选），绝不静默返回"按了没反应"
+   *    （铁律 4）。命令恒可按下 = 就是这个道理：灰掉的命令要按得下去才知道为什么没修。
+   *
+   * 只改缓冲区、**不碰磁盘**：保存仍由作者 Ctrl+S 决定（与 💡 完全同级，批量只是次数）。
+   */
+  useEffect(() => {
+    const un = kernel.bus.on('editor.fixAll.request', () => {
+      const ed = editorRef.current;
+      const model = ed?.getModel();
+      const path = filePathRef.current;
+      if (!ed || !model || !path) {
+        notify({ kind: 'info', message: '先打开一份口上文件，再用一键修复。' });
+        return;
+      }
+      // .kojo 预览挂的是**只读派生 model**：在它上面改 = 改不到任何真文件 ⇒ 可见拒绝
+      if (sugarModelRef.current) {
+        notify({ kind: 'info', message: '.kojo 预览是只读显示，改不到原文件——先关掉预览再一键修复。' });
+        return;
+      }
+      const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
+      if (erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit })) {
+        notify({ kind: 'info', message: '这份文件当前只读，一键修复不动它——先按提示允许编辑这份文件。' });
+        return;
+      }
+      const report = runFixAll({
+        decorators: kernel.slots.query('ui.editor.decorator'),
+        codeActions: kernel.slots.query('ui.editor.codeAction'),
+        path,
+        project: kernel.project.current(),
+        readText: () => model.getValue(),
+        lineCount: () => model.getLineCount(),
+        apply: (edits) => applyTextEdits(ed, edits),
+      });
+      notify({ kind: 'info', message: fixAllSummary(report) });
+    });
+    return un;
+  }, [kernel, notify]);
 
   const labelParts = pathLabelParts(filePath);
 

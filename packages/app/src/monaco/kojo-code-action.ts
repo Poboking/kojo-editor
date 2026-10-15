@@ -75,15 +75,50 @@ export interface PreferredCandidate {
   readonly diagnostics: readonly LineDecoration[];
 }
 
+/** `quickFixOwnership` 的输出：一次请求里「谁认领了哪条诊断」的全部事实 */
+export interface FixOwnership {
+  /** 诊断键 → 认领它的候选下标（**没被任何候选认领的诊断不出现在表里**） */
+  readonly owners: ReadonlyMap<string, readonly number[]>;
+  /** 候选下标 → 它认领的、且确属本次请求的诊断键（非 quickfix 一律空表） */
+  readonly claims: readonly (readonly string[])[];
+}
+
+/**
+ * 「一条诊断有几个解」的**唯一判据底座**（R2 与「全部修复」共用，别再抄第二份）。
+ *
+ * 三条口径在此定死，`pickPreferred`（💡 里的 preferred 星标）与批量修复（能不能自动动）
+ * 读的是同一张表：
+ * - **只算 quickfix**：refactor 类动作不是"这条红线的解"，独一份也不算唯一解；
+ * - **只认本次请求里的诊断**：动作关联了别处/别的诊断 ⇒ 对这次请求不算认领（不猜）；
+ * - **同一动作重复列同一条关联只计一次**（贡献方的手滑不算"第二个解"）。
+ */
+export function quickFixOwnership(
+  candidates: readonly PreferredCandidate[],
+  requested: readonly LineDecoration[],
+): FixOwnership {
+  const owners = new Map<string, number[]>();
+  for (const decoration of requested) {
+    const key = diagnosticKey(decoration);
+    if (!owners.has(key)) owners.set(key, []); // 同一诊断画成两条重叠 marker 也只算一个问题
+  }
+  const claims = candidates.map((candidate, index) => {
+    const keys =
+      candidate.kind === QUICK_FIX_KIND
+        ? [...new Set(candidate.diagnostics.map(diagnosticKey))].filter((key) => owners.has(key))
+        : [];
+    for (const key of keys) owners.get(key)!.push(index);
+    return keys;
+  });
+  return { owners, claims };
+}
+
 /**
  * 哪些候选该置 `isPreferred`（R2；返回下标集合）。
  *
  * 规则收窄到**不猜**的一条：本次请求（面上正画着）的某条诊断，**恰好只有一条快速修复**
  * 认领它 ⇒ 那条修复 preferred；同一诊断有两条及以上认领 ⇒ 一律不置，多解时不替作者选。
- * 三个刻意的边界：
- * - 只算 quickfix：refactor 类动作不是"这条红线的解"，独一份也不给 preferred；
- * - 只认**本次请求里的**诊断：动作声明关联了别处/别的诊断 ⇒ 对这次请求不算唯一解（不猜）；
- * - 一条动作认领多条时要求**每条都唯一**：只要有另一条红线还有第二个解，把它顶到第一位
+ * 判据本体在 `quickFixOwnership`（批量修复读同一张表）。
+ * 一条动作认领多条时要求**每条都唯一**：只要有另一条红线还有第二个解，把它顶到第一位
  *   就等于在另一条问题上替作者选了。
  * 给的是下标而不是布尔：调用方只在命中时补 `isPreferred: true`，**从不写 false**
  * （省略才是"没有唯一解"的原意，`false` 会被 Monaco 当成一个明确的否定）。
@@ -92,20 +127,7 @@ export function pickPreferred(
   candidates: readonly PreferredCandidate[],
   requested: readonly LineDecoration[],
 ): Set<number> {
-  const owners = new Map<string, number[]>();
-  for (const decoration of requested) {
-    const key = diagnosticKey(decoration);
-    if (!owners.has(key)) owners.set(key, []); // 同一诊断画成两条重叠 marker 也只算一个问题
-  }
-  // 一条动作对同一条诊断的认领只计一次（贡献方重复列同一条关联不算"第二个解"）
-  const claims = candidates.map((candidate, index) =>
-    candidate.kind === QUICK_FIX_KIND
-      ? [...new Set(candidate.diagnostics.map(diagnosticKey))].filter((key) => owners.has(key))
-      : [],
-  );
-  for (const [index, keys] of claims.entries()) {
-    for (const key of keys) owners.get(key)!.push(index);
-  }
+  const { owners, claims } = quickFixOwnership(candidates, requested);
   const preferred = new Set<number>();
   for (const [index, keys] of claims.entries()) {
     if (keys.length > 0 && keys.every((key) => owners.get(key)!.length === 1)) preferred.add(index);

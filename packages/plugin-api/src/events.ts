@@ -230,6 +230,19 @@ export interface KernelEventMap {
    * 无关的创建里凭空造出一个作者没要过的文件（关联号不匹配即作废）。
    */
   'workspace.projectCreated': { projectId: string; requestToken?: string; source?: string };
+  /**
+   * 「全部修复」意图（E3，2026-10-16 批量快速修复批）：请求宿主把**当前文档**里
+   * 每一条"只有唯一改法"的问题一次补好。
+   *
+   * 通用、游戏无关——批量判据（哪些算唯一解、改写相撞怎么排）全在宿主一侧，
+   * 发起方只表达"我要一次补好"这一个意图（与 `editor.sugarView.set` 同款分工：
+   * 命令面板/快捷键发意图，编辑器宿主落地）。
+   *
+   * **只改编辑器缓冲区**：不写盘（落盘仍由作者 Ctrl+S 决定）、可 `Ctrl+Z` 撤销、
+   * 多解的问题一条都不动。宿主必须把结果如实说一句（补了几处 / 剩下几处为什么要
+   * 逐处选），不得静默返回"没反应"。
+   */
+  'editor.fixAll.request': { source?: string };
 }
 
 /* ------------------- 内核事件 emit 权限（单一真源 + 防漂移断言） ------------------- */
@@ -275,6 +288,9 @@ const KERNEL_ONLY_EVENT_NAMES = [
   'project.writableApprovalMismatch',
   // 监视状态 = "自动重载机制是否可信"的保证，与写权限同意度同类（BUG-5）
   'file.watchState',
+  // 「全部修复」= 改作者笔下的内容。批量落地只在宿主编辑器一侧，插件没有 emit 的理由，
+  // 而"插件能广播一次批量改写"显然不该成立（与写权限事件同一档）。
+  'editor.fixAll.request',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核事件名（= 插件可 emit 的集合；供 kernel `scopedBus` 执法使用） */

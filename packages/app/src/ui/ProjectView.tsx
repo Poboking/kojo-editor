@@ -130,6 +130,18 @@ export function ProjectView({
           void onSaveAll();
         },
       },
+      // 一键修复（E3 · 批量快速修复批）：把**当前这一份文件**里每一条"只有唯一改法"
+      // 的问题一次补好。与「全部保存」同形（壳层只发意图，落地与结果播报全在宿主
+      // EditorPane —— 壳层不认识波浪线、更不认识补词是什么）。
+      // **刻意不灰掉**（与 `workbench.workspaceSymbols` 同理）：按得下去才说得出为什么没修。
+      {
+        id: 'workbench.fixAll',
+        title: '一键修复当前文件',
+        keybinding: 'ctrl+shift+y',
+        run: () => {
+          kernel.bus.emit('editor.fixAll.request', {});
+        },
+      },
       // 预览开关的命令（含 Ctrl+Alt+T）恒在注册表里：预览已交付为常态功能，
       // 不再受封存总闸管辖（总闸现在只管 `sealed.ts` 清单里的两只面板）。
       {

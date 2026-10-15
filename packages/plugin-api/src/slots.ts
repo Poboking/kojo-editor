@@ -189,6 +189,21 @@ export interface EditorCodeActionContribution extends ContributionBase {
     project: GameProject | null;
     line?: number;
     /**
+     * 请求范围（additive，E3「全部修复」批 2026-10-16）：
+     * - 缺省 / `'range'` = **区间请求**（💡 / `Ctrl+.` 那一下），`line` 与 `diagnostics`
+     *   说的是光标所在的这一小段——既有供方的位置判据逐字不变；
+     * - `'document'` = **整篇批量**：`diagnostics` 是**整份文档**当下的波浪线（宿主直接
+     *   问 `ui.editor.decorator` 拿，与面上画的同一份真源），`line` 不给。
+     *
+     * 为什么要单独说这一件事，而不是让供方"看 `line` 缺省就知道是批量"：
+     * `line` 缺省在既有语义里是**位置未知**（旧宿主 / 非编辑器消费方），供方的既定纪律是
+     * "位置未知就不猜 ⇒ 返回空"。批量要的恰恰是"把整篇每一条唯一解都交出来"——
+     * 同一种输入形态、两种相反的期望 ⇒ 必须给出一枚显式意图，不能让供方去猜。
+     * 不实现批量的供方对 `'document'` 返回空数组即可（**批量能力按供方逐家开通**，
+     * 宿主不会因为"有供方没答"就少修别家的问题）。
+     */
+    scope?: 'range' | 'document';
+    /**
      * 当前**落在请求区间内的波浪线**（additive，B9 2026-10-15 快速修复批）：
      * 宿主把**面上正画着的那些 marker**（来源是 `ui.editor.decorator` 各贡献的
      * `LineDecoration`）按请求区间求交后原样递回来。

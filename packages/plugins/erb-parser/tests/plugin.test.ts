@@ -386,6 +386,7 @@ describe('erb-parser 插件 · ui.editor.codeAction（结构修复动作）', ()
     text = broken,
     line?: number,
     diagnostics?: LineDecoration[],
+    scope?: 'range' | 'document',
   ): unknown[] {
     const { slots } = activatePlugin(fakeIO({}, () => writable));
     const found = slots.find((s) => s.kind === 'ui.editor.codeAction')?.contribution;
@@ -397,6 +398,7 @@ describe('erb-parser 插件 · ui.editor.codeAction（结构修复动作）', ()
       lineCount: 3,
       ...(line === undefined ? {} : { line }),
       ...(diagnostics === undefined ? {} : { diagnostics }),
+      ...(scope === undefined ? {} : { scope }),
     });
   }
 
@@ -474,5 +476,44 @@ describe('erb-parser 插件 · ui.editor.codeAction（结构修复动作）', ()
     const decorations = deco({ path: erb, text: orphan, project: null }) as LineDecoration[];
     expect(decorations.map((d) => d.code)).toEqual(['erb.orphan-close']);
     expect(actions(true, erb, orphan, 3, decorations)).toEqual([]);
+  });
+
+  /* --------------------- E3：`scope:'document'` = 整篇批量 --------------------- */
+
+  /** 两处未闭合（两层各自一行），批量要一次给出两条 */
+  const twiceBroken = ['@AEGI', 'IF LOCAL', 'IF TRUE', '\tPRINTL 甲'].join('\n');
+
+  it('整篇批量（无 `line` + `scope:document`）⇒ 全篇每条唯一解都交出，不再"位置未知就不猜"', () => {
+    const { slots } = activatePlugin(fakeIO({}, () => true));
+    const deco = slots.find((s) => s.kind === 'ui.editor.decorator')?.contribution?.decorate!;
+    const decorations = deco({ path: erb, text: twiceBroken, project: null }) as LineDecoration[];
+    expect(decorations).toHaveLength(2);
+    const out = actions(true, erb, twiceBroken, undefined, decorations, 'document') as Array<{
+      title: string;
+    }>;
+    expect(out).toHaveLength(2);
+    expect(out.map((a) => a.title)).toEqual(expect.arrayContaining([expect.stringContaining('ENDIF')]));
+  });
+
+  it('批量请求仍按宿主点明的诊断精确应答：没点到的那条不给（不借"整篇"之名多改）', () => {
+    const { slots } = activatePlugin(fakeIO({}, () => true));
+    const deco = slots.find((s) => s.kind === 'ui.editor.decorator')?.contribution?.decorate!;
+    const decorations = deco({ path: erb, text: twiceBroken, project: null }) as LineDecoration[];
+    const out = actions(true, erb, twiceBroken, undefined, [decorations[0]!], 'document');
+    expect(out).toHaveLength(1);
+  });
+
+  it('`scope` 缺省 = 区间请求，逐字沿用旧判据（旧宿主零改动）：无 `line` 一律不给', () => {
+    const { slots } = activatePlugin(fakeIO({}, () => true));
+    const deco = slots.find((s) => s.kind === 'ui.editor.decorator')?.contribution?.decorate!;
+    const decorations = deco({ path: erb, text: twiceBroken, project: null }) as LineDecoration[];
+    expect(actions(true, erb, twiceBroken, undefined, decorations)).toEqual([]);
+  });
+
+  it('批量也要过可写闸门：只读目录里的文件不因"整篇请求"被改脏', () => {
+    const { slots } = activatePlugin(fakeIO({}, () => true));
+    const deco = slots.find((s) => s.kind === 'ui.editor.decorator')?.contribution?.decorate!;
+    const decorations = deco({ path: erb, text: twiceBroken, project: null }) as LineDecoration[];
+    expect(actions(false, erb, twiceBroken, undefined, decorations, 'document')).toEqual([]);
   });
 });
