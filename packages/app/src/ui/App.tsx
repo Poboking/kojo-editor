@@ -3,6 +3,7 @@ import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, GameProject, RecentProject } from '@kojo/plugin-api';
 import { invoke, isTauri } from '../bridge/invoke';
 import { bootstrapKernel } from '../bootstrap';
+import { revealTargetOf, type RevealTarget } from '../monaco/reveal-position';
 import { ProjectView } from './ProjectView';
 import {
   PROJECT_GATE_MESSAGE,
@@ -30,12 +31,8 @@ import type { EditorPaneActions } from './EditorPane';
 
 export type AppPhase = 'boot' | 'welcome' | 'opening' | 'project';
 
-/** 编辑器定位请求（来自校验面板 / 函数树等：内核事件 editor.revealLocation） */
-export interface RevealTarget {
-  line: number;
-  /** 同一文件重复定位时用于触发重新滚动（nonce 变化即重新定位） */
-  nonce: number;
-}
+/** 编辑器定位请求（来自校验面板 / 函数树等：内核事件 editor.revealLocation）；真源在 monaco 层 */
+export type { RevealTarget } from '../monaco/reveal-position';
 
 export function App(): ReactElement {
   const [kernel, setKernel] = useState<Kernel | null>(null);
@@ -180,10 +177,11 @@ export function App(): ReactElement {
 
   // 通用导航意图：任意插件提出"打开文件并定位"，宿主在此落地。
   // P3 多标签后切换零丢失（model 留内存），无需未保存确认——确认只发生在关闭脏标签。
+  // 列（R1）：发起方给得出列就一路带到编辑器（转到定义 / 源映射折回都带列），给不出就只定位行。
   useEffect(() => {
     if (!kernel) return;
     const un = kernel.bus.on('editor.revealLocation', (ev) => {
-      requestOpenFile(ev.filePath, ev.line ?? 1);
+      requestOpenFile(ev.filePath, ev.line ?? 1, ev.column);
     });
     return () => {
       un();
@@ -294,16 +292,16 @@ export function App(): ReactElement {
     }
   }, [openProject]);
 
-  const commitOpenFile = useCallback((path: string, line?: number) => {
+  const commitOpenFile = useCallback((path: string, line?: number, column?: number) => {
     setOpenTabs((prev) => (prev.includes(path) ? prev : [...prev, path]));
     setActiveFile(path);
-    setReveal(line ? { line, nonce: Date.now() } : null);
+    setReveal(line ? revealTargetOf({ line, column }, Date.now()) : null);
   }, []);
 
   const requestOpenFile = useCallback(
-    (path: string, line?: number) => {
+    (path: string, line?: number, column?: number) => {
       // P3 多标签：切换标签不丢内容（model 留内存），无需未保存确认
-      commitOpenFile(path, line);
+      commitOpenFile(path, line, column);
     },
     [commitOpenFile],
   );

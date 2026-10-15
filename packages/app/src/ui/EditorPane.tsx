@@ -25,6 +25,7 @@ import {
   markersToDecorations,
 } from '../monaco/kojo-code-action';
 import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
+import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
 import { dialectForLanguage, installDocumentFormatter, toTextEdits } from '../monaco/kojo-format';
 import { applyFormatOnSave } from './format-on-save';
 import { loadFormatOnSavePref } from './format-pref';
@@ -228,6 +229,8 @@ interface Props {
   openPaths: readonly string[];
   /** 定位行（来自校验面板 / 函数树的 `editor.revealLocation`） */
   revealLine?: number;
+  /** 定位列（1 基、UTF-16 码元；缺席 = 落行首，与列接线前一致） */
+  revealColumn?: number;
   /** 定位序号：同一文件重复定位时变化以触发重新滚动 */
   revealNonce?: number;
   /** 脏状态上抛（P3：按路径逐个上报，宿主维护 dirtyPaths 集合） */
@@ -257,6 +260,7 @@ export function EditorPane({
   filePath,
   openPaths,
   revealLine,
+  revealColumn,
   revealNonce,
   onDirtyChange,
   registerActions,
@@ -274,7 +278,7 @@ export function EditorPane({
   /** 上一个活动路径（切换时先把它的视图状态存下） */
   const prevPathRef = useRef<string | null>(null);
   const savingRef = useRef(false);
-  const revealRef = useRef<{ line: number; nonce: number } | null>(null);
+  const revealRef = useRef<RevealTarget | null>(null);
   /** 当前文件路径（供只注册一次的 Monaco 回调读取最新值，避免闭包过时） */
   const filePathRef = useRef<string>(filePath);
   const openPathsRef = useRef<readonly string[]>(openPaths);
@@ -389,9 +393,14 @@ export function EditorPane({
     const model = ed.getModel();
     const target = revealRef.current;
     if (!model || !target) return;
-    const line = Math.min(Math.max(1, target.line), model.getLineCount());
-    ed.revealLineInCenter(line);
-    ed.setPosition({ lineNumber: line, column: 1 });
+    // 行列夹取的判据在 `reveal-position`（纯函数）；行长一律问 model（`getLineMaxColumn`
+    // 本身就是 UTF-16 码元口径），宿主不自算字符数。
+    const position = clampRevealPosition(target, {
+      lineCount: model.getLineCount(),
+      maxColumn: (lineNumber) => model.getLineMaxColumn(lineNumber),
+    });
+    ed.revealLineInCenter(position.lineNumber);
+    ed.setPosition(position);
     ed.focus();
   }, []);
 
@@ -610,9 +619,11 @@ export function EditorPane({
 
   // 记录最新定位请求（同一文件重复定位靠 nonce 变化触发）
   useEffect(() => {
-    revealRef.current = revealLine ? { line: revealLine, nonce: revealNonce ?? 0 } : null;
+    revealRef.current = revealLine
+      ? { line: revealLine, ...(revealColumn !== undefined ? { column: revealColumn } : {}), nonce: revealNonce ?? 0 }
+      : null;
     applyReveal();
-  }, [revealLine, revealNonce, filePath, applyReveal]);
+  }, [revealLine, revealColumn, revealNonce, filePath, applyReveal]);
 
   /** 保存成功：把该文件 model 的当前版本号立为新基线 */
   const markSaved = useCallback(

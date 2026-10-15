@@ -37,13 +37,19 @@ function stubResult(lines: string[], map: [number, number | null][]): SugarTrans
   };
 }
 
-function depsOf(result: SugarTranspileResult, index: ErbIndex | null): KojoDefinitionDeps {
+function depsOf(
+  result: SugarTranspileResult,
+  index: ErbIndex | null,
+  /** 列级折回桩：默认**给不出列**（纯生成行 / 无列区段的真实语义），钉住"退回行级、不猜列"这条默认路 */
+  sourceColumnOf: KojoDefinitionDeps['sourceColumnOf'] = () => null,
+): KojoDefinitionDeps {
   return {
     transpile: () => result,
     sourceOf: (r, generatedLine) => {
       const e = r.sourceMap.find((x) => x.generatedLine === generatedLine);
       return e && e.sourceLine !== null ? { line: e.sourceLine, column: 1 } : null;
     },
+    sourceColumnOf,
     index: () => index,
   };
 }
@@ -167,6 +173,37 @@ describe('resolveKojoDefinition · fail-visible 负例（绝不猜、不崩）',
   });
 });
 
+describe('resolveKojoDefinition · 折回的列（R1：列级优先，给不出就退行级、绝不猜列）', () => {
+  /** 头行本身有源行的产物（原生直通那类）——只有这种行才谈得上列 */
+  const withSource = stubResult(['@NATIVE_FN', '\tRETURN 1'], [[1, 3], [2, 4]]);
+  const req = () => requestAt('CALL NATIVE_FN\n', 'CALL NATIVE|_FN');
+
+  it('列级映射命中**同一个源行** → 位置带上列（宿主直接当编辑器列用）', () => {
+    const locs = resolveKojoDefinition(req(), depsOf(withSource, null, () => ({ line: 3, column: 7 })));
+    expect(locs).toEqual([{ filePath: KOJO, line: 3, column: 7 }]);
+  });
+
+  it('列级映射给不出（纯生成头 / 无列区段）→ 只有行，`column` 键整个不出现', () => {
+    const [only] = resolveKojoDefinition(req(), depsOf(withSource, null, () => null));
+    expect(only).toEqual({ filePath: KOJO, line: 3 });
+    expect('column' in only!).toBe(false);
+  });
+
+  it('列级映射给的是**另一行**的列 → 丢列保行（不许把两处坐标拼成一个落点）', () => {
+    const [only] = resolveKojoDefinition(req(), depsOf(withSource, null, () => ({ line: 9, column: 4 })));
+    expect(only).toEqual({ filePath: KOJO, line: 3 });
+  });
+
+  it('头行是纯生成行（折回走"向下取最近有源行"）→ 一律只给行', () => {
+    const generated = stubResult(['@M_KOJO_K101_X', '\tPRINTFORMW "hi"'], [[1, null], [2, 7]]);
+    const locs = resolveKojoDefinition(
+      requestAt('CALL M_KOJO_K101_X\n', 'CALL M_KOJO_K101|_X'),
+      depsOf(generated, null, () => ({ line: 7, column: 5 })), // 桩就算给列，行级折回也不认它
+    );
+    expect(locs).toEqual([{ filePath: KOJO, line: 7 }]);
+  });
+});
+
 describe('findGeneratedHeaderLine · 与真实 codegen 同源', () => {
   const service = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
   const KOJO_SRC = ['角色: 101', '口上色: 0x88AACC', '', '时机 指令 310 成否: 游戏判定：', '\t「呀……！」'].join('\n');
@@ -196,6 +233,7 @@ describe('findGeneratedHeaderLine · 与真实 codegen 同源', () => {
     const locs = resolveKojoDefinition(requestAt(text, `CALL ${body}|(1)`), {
       transpile: () => result,
       sourceOf: (r, g) => service.sourceOf(r, g),
+      sourceColumnOf: (r, g, c) => service.sourceColumnOf(r, g, c),
       index: () => null,
     });
     expect(locs).toHaveLength(1);
@@ -203,5 +241,29 @@ describe('findGeneratedHeaderLine · 与真实 codegen 同源', () => {
     expect(locs[0]!.filePath).toBe(KOJO);
     expect(locs[0]!.line).toBeGreaterThanOrEqual(1);
     expect(locs[0]!.line).toBeLessThanOrEqual(lineCount);
+  });
+
+  it('真转译 + 真列级映射：折回给得出列时**一定落在该源行内**（列口径与编辑器同源，宿主不必换算）', () => {
+    const result = service.transpile(KOJO_SRC, { filePath: KOJO });
+    const srcLines = KOJO_SRC.split('\n');
+    const deps: KojoDefinitionDeps = {
+      transpile: () => result,
+      sourceOf: (r, g) => service.sourceOf(r, g),
+      sourceColumnOf: (r, g, c) => service.sourceColumnOf(r, g, c),
+      index: () => null,
+    };
+    const names = [...result.erb.matchAll(/^@([A-Za-z0-9_]+)/gm)].map((m) => m[1]!);
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      const text = `CALL ${name}(1)\n`;
+      for (const loc of resolveKojoDefinition(requestAt(text, `CALL ${name}|(1)`), deps)) {
+        const line = srcLines[loc.line - 1];
+        expect(line).toBeDefined();
+        if (loc.column === undefined) continue; // 纯生成头 ⇒ 行级折回，本就只给行
+        // 「行长 + 1」= Monaco 的最大合法列（同一 UTF-16 码元口径；这里只验不出界，不做第二次映射）
+        expect(loc.column).toBeGreaterThanOrEqual(1);
+        expect(loc.column).toBeLessThanOrEqual(line!.length + 1);
+      }
+    }
   });
 });

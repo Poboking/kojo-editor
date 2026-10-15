@@ -1,6 +1,7 @@
 import type {
   EditorSymbolLocation,
   ErbIndex,
+  SugarPosition,
   SugarSourceMapEntry,
   SugarTranspileResult,
 } from '@kojo/plugin-api';
@@ -12,10 +13,10 @@ import { symbolTokenAt } from '@kojo/plugin-api';
  * ## 语义（一句话，其余都从它推）
  * **`.kojo` 里的函数名 / `CALL` 指向的是编译产物 ERB 里的函数**——所以反查有两条腿：
  * 1. **本文件产出的函数**：把当前 `.kojo` 转译（纯函数，不读盘）拿到产物，找
- *    `@<名字>` 那一行，再用 `sourceOf` 把**产物行折回 `.kojo` 行**——作者要的是源码
- *    那一行，不是一份可能还不存在的生成物。函数头是**纯生成行**（`.kojo` 里没有
- *    `@`，头是编译器造的），`sourceOf` 对它返回 null；此时按"生成行取最近的下一条
- *    有源行"折回——它一定落在该函数体内，是行级可用的位置，**绝不返回别的函数**。
+ *    `@<名字>` 那一行，再用列级源映射（`sourceColumnOf`，S6）把**产物行折回 `.kojo` 的行与列**——
+ *    作者要的是源码那一行，不是一份可能还不存在的生成物。函数头是**纯生成行**（`.kojo` 里没有
+ *    `@`，头是编译器造的），列级映射对它给不出答案；此时按"生成行取最近的下一条有源行"
+ *    折回——它一定落在该函数体内，是行级可用的位置，**绝不返回别的函数**，也**绝不猜列**。
  * 2. **别处的函数**（库函数 / 另一个口上的产物）：复用**项目 ERB 索引** `byName`
  *    —— `.kojo` 里的名字就是 ERB 函数名，没有第二张表可查；索引里没有 = 没有定义
  *    （**不猜**）。
@@ -27,9 +28,17 @@ export interface KojoDefinitionDeps {
   transpile(source: string): SugarTranspileResult;
   /** 产物行 → 源位置（本包自己的 `sugar.transpile`.`sourceOf`；纯函数） */
   sourceOf(result: SugarTranspileResult, generatedLine: number): { line: number; column: number } | null;
+  /**
+   * 产物 (行, 列) → 源位置（本包 `sugar.transpile`.`sourceColumnOf`，S6 列级；纯函数）。
+   * 列口径 1 基、UTF-16 码元，与宿主编辑器（Monaco）同源——折回来的列**不需要任何人再换算一遍**。
+   */
+  sourceColumnOf(result: SugarTranspileResult, generatedLine: number, generatedColumn: number): SugarPosition | null;
   /** 当前项目 ERB 索引（软取；未打开项目 / 索引未建 → null） */
   index(): ErbIndex | null;
 }
+
+/** 折回时问列级映射用的产物列：**行首**（列 1）= "这一行映射到的源起点"，不依赖任何自算的字符宽度 */
+const LINE_HEAD_COLUMN = 1;
 
 /** `.kojo` 产物里的函数定义头：`@NAME` 或 `@NAME(...)`（`参数:` 声明段可有可无） */
 export function findGeneratedHeaderLine(erb: string, name: string): number | null {
@@ -85,10 +94,14 @@ export function resolveKojoDefinition(
 }
 
 /**
- * 名字由**本文件**产出 → 折回 `.kojo` 行；不由本文件产出 → undefined。
+ * 名字由**本文件**产出 → 折回 `.kojo` 行（能给列则一并给）；不由本文件产出 → undefined。
  *
  * 产物带 `error` 诊断时**整条路放弃**：半成品的源映射不可信，折回去等于给一个
  * 错位置（作者会照着它改错地方），此时让索引那条腿说话更安全。
+ *
+ * 列的去留看两条判据，缺一即只给行：① 折回必须是**精确命中**该产物行的映射（靠"向下取
+ * 最近有源行"那条保守路折回来的位置本就只保证行，拿另一行的列来配它就是猜）；② 列级映射
+ * 给出的必须是**同一个源行**的位置（本仓"不猜"口径）。
  */
 function selfDefinitionLocation(
   path: string,
@@ -102,7 +115,13 @@ function selfDefinitionLocation(
   if (headerLine === null) return undefined;
   const sourceLine = sourceLineNear(result, headerLine);
   if (sourceLine === null) return undefined;
-  return { filePath: path, line: sourceLine };
+  // 判据①：折回得是这一行**自己的**映射；"向下取最近有源行"那条保守路只保证行
+  const exact = result.sourceMap.find((e) => e.generatedLine === headerLine)?.sourceLine;
+  if (exact !== sourceLine) return { filePath: path, line: sourceLine };
+  // 判据②：列级映射得给出**同一个源行**上的列，否则只给行
+  const precise = deps.sourceColumnOf(result, headerLine, LINE_HEAD_COLUMN);
+  if (!precise || precise.line !== sourceLine) return { filePath: path, line: sourceLine };
+  return { filePath: path, line: sourceLine, column: precise.column };
 }
 
 /** 取 1 基行号的原文（越界 → undefined） */

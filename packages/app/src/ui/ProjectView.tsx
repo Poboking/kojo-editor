@@ -450,6 +450,7 @@ export function ProjectView({
             filePath={activeFile}
             openPaths={openTabs}
             revealLine={reveal?.line}
+            revealColumn={reveal?.column}
             revealNonce={reveal?.nonce}
             onDirtyChange={onDirtyChange}
             registerActions={registerActions}

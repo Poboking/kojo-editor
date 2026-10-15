@@ -325,7 +325,12 @@ export function createKojoSugarPlugin(): Plugin {
             kind: 'definition',
             locations: resolveKojoDefinition(
               { path: request.path, text: request.text, line: request.line, column: request.column },
-              { transpile: service.transpile, sourceOf: service.sourceOf, index: erbIndexOf },
+              {
+                transpile: service.transpile,
+                sourceOf: service.sourceOf,
+                sourceColumnOf: service.sourceColumnOf,
+                index: erbIndexOf,
+              },
             ),
           };
         },
