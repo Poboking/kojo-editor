@@ -18,6 +18,7 @@ import type {
   ChoiceBlock,
   ColorBlock,
   CustomCommandBlock,
+  FunctionBlock,
   HeartLine,
   IfBlock,
   IfExpr,
@@ -31,6 +32,7 @@ import type {
   RandomInline,
   RawFunctionBlock,
   RawLine,
+  ReturnStatement,
   SectionBlock,
   SugarDiagnostic,
   SugarFrontMatter,
@@ -241,6 +243,12 @@ export function codegen(
   // ---- 头部：登记函数 + 开关（规范 §5.5 三件套之登记/开关）----
   emitRegistration(em, fm, charNo, familySeg, opts.faceTable, opts.sink);
 
+  // ---- 用户函数（B4 批）：先扫全文件的「函数」声明，合成 per-file 函数名表 ----
+  // 产物命名走 adapter 的 `userFunction.template`（游戏知识不进转译器）；合成的表**并入**
+  // 既有 `libraryTable`（用户声明的名字优先），供正文里的表达式/语句调用降糖使用。
+  const userFunctions = collectUserFunctions(topLevel, opts.faceTable?.userFunction?.template, charNo);
+  const libraryTable = userFunctions.size > 0 ? mergeUserFunctionLibrary(opts.libraryTable, userFunctions) : opts.libraryTable;
+
   // ---- 时机块 ----
   const timings = topLevel.filter((n): n is TimingBlock => n.kind === 'timingBlock');
   for (const timing of timings) {
@@ -254,7 +262,8 @@ export function codegen(
       dictionary: opts.dictionary,
       faceTable: opts.faceTable,
       instructionTable: opts.instructionTable,
-      libraryTable: opts.libraryTable,
+      libraryTable,
+      userFunctions,
       sink: opts.sink,
     });
   }
@@ -280,11 +289,30 @@ export function codegen(
         hooks: opts.faceTable?.customHooks,
         range: opts.faceTable?.customComRange,
         instructionTable: opts.instructionTable,
-        libraryTable: opts.libraryTable,
+        libraryTable,
+        userFunctions,
         occupied,
         allocated,
       });
     }
+  }
+
+  // ---- 用户函数块（B4 批）：逐块发「可选 `#FUNCTION`/`#FUNCTIONS` + 函数头 + 函数体」----
+  for (const node of topLevel) {
+    if (node.kind !== 'functionBlock') continue;
+    if (em.length > 0) em.blank();
+    em.setOwner(node.loc.start.line);
+    emitFunction(em, node, {
+      charNo,
+      template: opts.faceTable?.userFunction?.template,
+      frontMatter: fm,
+      aliases: opts.aliases,
+      dictionary: opts.dictionary,
+      instructionTable: opts.instructionTable,
+      libraryTable,
+      userFunctions,
+      sink: opts.sink,
+    });
   }
 
   // ---- 配色函数（规范 §5.5 三件套之配色；golden §6.1 排在全部时机之后）----
@@ -453,6 +481,8 @@ interface TimingEmitContext {
   instructionTable?: KojoInstructionTable;
   /** 基础库 / 常用函数名表（adapter；ZH-F1：中文函数名调用形态 → 原生 ERB 名） */
   libraryTable?: KojoLibraryTable;
+  /** 本文件声明的用户函数（B4 批；供正文调用降糖与插值判型） */
+  userFunctions: ReadonlyMap<string, UserFunctionInfo>;
   sink: DiagnosticSink;
 }
 
@@ -551,6 +581,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
     instructionTable: ctx.instructionTable,
     libraryTable: ctx.libraryTable,
     faceTable: ctx.faceTable,
+    userFunctions: ctx.userFunctions,
     sink: ctx.sink,
     frontMatter: ctx.frontMatter,
     allocator: new SlotAllocator(),
@@ -898,6 +929,8 @@ interface CustomEmitContext {
   instructionTable?: KojoInstructionTable;
   /** 基础库 / 常用函数名表（adapter；ZH-F1） */
   libraryTable?: KojoLibraryTable;
+  /** 本文件声明的用户函数（B4 批；名字 → 产物名 + 返回类型），供正文调用降糖与插值判型 */
+  userFunctions: ReadonlyMap<string, UserFunctionInfo>;
   /** 全文档占号集合（原生 `@` 直通块 + 显式 `编号:`），分配时排除 */
   occupied: Set<number>;
   /** 本次 codegen 已自动分配的编号（防同批自撞车） */
@@ -1056,6 +1089,7 @@ function emitCustomCommand(em: Emitter, node: CustomCommandBlock, ctx: CustomEmi
       instructionTable: ctx.instructionTable,
       libraryTable: ctx.libraryTable,
       faceTable: ctx.faceTable,
+      userFunctions: ctx.userFunctions,
       sink: ctx.sink,
       frontMatter: ctx.frontMatter,
       allocator: new SlotAllocator(),
@@ -1121,6 +1155,10 @@ interface BodyContext {
   libraryTable?: KojoLibraryTable;
   /** 分野模板表（adapter；`你：` 自机台词缺省自机色的兜底来源，游戏知识只住 adapter） */
   faceTable?: KojoFaceTable;
+  /** 本文件声明的用户函数（B4 批；插值调用判型 + 语句调用降糖） */
+  userFunctions?: ReadonlyMap<string, UserFunctionInfo>;
+  /** 当前是否在「函数 …：」块体内（B4 批；`返回` 仅在此为真时合法） */
+  inFunction?: boolean;
   sink: DiagnosticSink;
   frontMatter: SugarFrontMatter;
   allocator: SlotAllocator;
@@ -1183,6 +1221,14 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
       // 注释原样落进产物（第 3 条：注释不能丢）。缩进跟着所在层级走——产物里的
       // 注释在 ERB 里是惰性的，缩进只影响可读性，但"和代码同层"才看得出它属于谁。
       em.push(indent, node.text, node.loc.start.line);
+      break;
+    case 'callStatement':
+      // `调用 名字(实参)`（B4 批）：语句位置调用 → `CALL <产物名>[(实参)]`。
+      emitCallStatement(em, node, ctx, indent);
+      break;
+    case 'returnStatement':
+      // `返回 [值]`（B4 批）：只在「函数」块体内合法（非 inFunction → 报错，不产半成品）。
+      emitReturnStatement(em, node, ctx, indent);
       break;
     case 'rawFunctionBlock':
       for (const line of node.lines) em.pushRaw(line, node.loc.start.line);
@@ -1301,6 +1347,217 @@ function emitRawLine(
   if (target === null) return; // 只读别名：已在 expandTarget 报诊断，不产出半成品
   const value = lowerExpression(assign.expr, exprCtx(ctx, node.loc.start));
   em.push(indent, `${target} = ${value}`, node.loc.start.line);
+}
+
+/* ------------------------------ 用户函数（B4 批：公共段 / 自定义函数最小形） ------------------------------ */
+
+/**
+ * 用户函数信息：产物函数名 + 返回类型（是否字符串返回——决定插值走 `%…%` 还是 `{…}`）。
+ * 返回类型由「函数体内首个 `返回`」的值形态判定：字符串字面量 → 字符串（`#FUNCTIONS`），
+ * 其余（含过程函数）→ 数值（`{…}`）。
+ */
+interface UserFunctionInfo {
+  readonly productName: string;
+  readonly returnsString: boolean;
+}
+
+/** 渲染用户函数产物名：`{n}` = 角色号、`{name}` = 作者写的函数名原文 */
+function renderUserFunctionName(template: string, charNo: string, name: string): string {
+  return template.replace(/\{n\}/g, charNo).replace(/\{name\}/g, name);
+}
+
+/** 形参位置记号：声明位第 k 个（0 基）→ `ARG`（k=0）/ `ARG:<k>`（k≥1），与引擎实参位置绑定 */
+function argumentToken(k: number): string {
+  return k === 0 ? 'ARG' : `ARG:${k}`;
+}
+
+/** 返回值是否为字符串字面量（`"…"`）——决定 `#FUNCTIONS` vs `#FUNCTION` */
+function isStringLiteralReturn(value: string): boolean {
+  return /^\s*"[^"]*"\s*$/.test(value);
+}
+
+/**
+ * 递归查找块体里**首个** `返回` 语句（含嵌套块体）——用于判定函数是否为「值函数」。
+ * 只认语句位置；表达式块（`ifExpr`/`whenExpr`）分支体里不会出现 `返回`（AST 段保证）。
+ */
+function findReturnNode(nodes: readonly SugarNode[]): ReturnStatement | undefined {
+  for (const node of nodes) {
+    if (node.kind === 'returnStatement') return node;
+    const kids = bodyOf(node);
+    if (kids) {
+      const found = findReturnNode(kids);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+/** 取出块类节点的子语句体（无子体 → null） */
+function bodyOf(node: SugarNode): readonly SugarNode[] | null {
+  switch (node.kind) {
+    case 'ifBlock':
+    case 'whenBlock':
+      return node.branches.flatMap((b) => b.body);
+    case 'randomBlock':
+      return node.alternatives.flatMap((a) => a.body);
+    case 'colorBlock':
+    case 'groupBlock':
+    case 'sectionBlock':
+      return node.body;
+    case 'choiceBlock':
+      return node.items.flatMap((i) => i.body);
+    default:
+      return null;
+  }
+}
+
+/**
+ * 扫全文件的「函数」声明，合成 per-file 名字表（名字 → 产物名 + 返回类型）。
+ * 无 adapter 模板 → 空表（emitFunction 逐块报 `face-table-missing`，fail-closed）。
+ */
+function collectUserFunctions(
+  topLevel: readonly TopNode[],
+  template: string | undefined,
+  charNo: string,
+): Map<string, UserFunctionInfo> {
+  const out = new Map<string, UserFunctionInfo>();
+  if (!template) return out;
+  for (const node of topLevel) {
+    if (node.kind !== 'functionBlock') continue;
+    if (out.has(node.name)) continue; // 同名第二次由 Emitter 的撞名记账报出
+    const ret = findReturnNode(node.body);
+    const valueFn = ret !== undefined && ret.value !== undefined;
+    out.set(node.name, {
+      productName: renderUserFunctionName(template, charNo, node.name),
+      returnsString: valueFn && isStringLiteralReturn(ret!.value!),
+    });
+  }
+  return out;
+}
+
+/**
+ * 合成 per-file 函数名表：**用户声明的名字优先**，其余落到既有 adapter 表。
+ * 只在有用户函数时才构造（无用户函数时原样透传 `opts.libraryTable`，既有产物逐字节不变）。
+ */
+function mergeUserFunctionLibrary(
+  base: KojoLibraryTable | undefined,
+  fns: ReadonlyMap<string, UserFunctionInfo>,
+): KojoLibraryTable {
+  // 产物名集合：让表**幂等**——`lowerSystemFunctions` 已把 `问候(` 降为 `M_KOJO_K145_问候(`，
+  // 其后 `lowerPronounsAndAttributes` 再遇该产物名时，若表只认作者名，`isKnownFunctionName`
+  // 会把它当"未收录的中文函数名"报 `function-name-unknown`（假告警）。收录产物名即可消解。
+  const productNames = new Set<string>();
+  for (const info of fns.values()) productNames.add(info.productName);
+  return {
+    hasTable: true,
+    lookupByName(name) {
+      const info = fns.get(name);
+      if (info) return info.productName;
+      if (productNames.has(name)) return name;
+      return base?.lookupByName(name);
+    },
+    lookupByFunction(functionName) {
+      return base?.lookupByFunction?.(functionName);
+    },
+  };
+}
+
+interface FunctionEmitContext {
+  charNo: string;
+  template?: string;
+  frontMatter: SugarFrontMatter;
+  aliases: AliasTable;
+  dictionary?: DictionaryLookup;
+  instructionTable?: KojoInstructionTable;
+  libraryTable?: KojoLibraryTable;
+  userFunctions: ReadonlyMap<string, UserFunctionInfo>;
+  sink: DiagnosticSink;
+}
+
+/**
+ * `函数 …：` 块 → 「函数头（带形参声明）+ 可选 `#FUNCTION`/`#FUNCTIONS` + 函数体」。
+ *
+ * **不套** `IF LOCAL` 信封、**不追加** `RETURN 1`——与时机块不同：时机块是引擎入口、
+ * 必须有返回 1；用户函数是作者自己的过程 / 值函数，返回值由作者的 `返回` 决定。
+ * 形参 → `ARG` 位置记号，并注入 per-function 别名表（作者照形参名读写即可）。
+ */
+function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext): void {
+  if (!ctx.template) {
+    ctx.sink.report({
+      code: 'face-table-missing',
+      severity: 'error',
+      message: `写了「函数 ${node.name}：」但当前适配器未声明用户函数命名模板（userFunction.template）——无法确定产物函数名，已停止编译本块（不产半成品）。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  const productName = renderUserFunctionName(ctx.template, ctx.charNo, node.name);
+  const ret = findReturnNode(node.body);
+  const valueFn = ret !== undefined && ret.value !== undefined;
+
+  const decl = node.params.map((_, i) => argumentToken(i)).join(',');
+  em.pushGenerated(0, decl.length > 0 ? `@${productName}(${decl})` : `@${productName}`);
+  if (valueFn) em.pushGenerated(0, isStringLiteralReturn(ret!.value!) ? '#FUNCTIONS' : '#FUNCTION');
+
+  const bodyCtx: BodyContext = {
+    aliases: withFunctionParams(ctx.aliases, node.params, node.loc.start.line),
+    dictionary: ctx.dictionary,
+    instructionTable: ctx.instructionTable,
+    libraryTable: ctx.libraryTable,
+    userFunctions: ctx.userFunctions,
+    sink: ctx.sink,
+    frontMatter: ctx.frontMatter,
+    allocator: new SlotAllocator(),
+    baseIndent: 1,
+    inFunction: true,
+  };
+  for (const child of node.body) emitStatement(em, child, bodyCtx, 1);
+}
+
+/**
+ * 形参注入：在既有别名表之上叠一层「形参名 → `ARG` / `ARG:<k>`」（形参优先）。
+ * 无参 → 原样返回（既有产物逐字节不变）。
+ */
+function withFunctionParams(aliases: AliasTable, params: readonly string[], line: number): AliasTable {
+  if (params.length === 0) return aliases;
+  const out = new Map(aliases);
+  params.forEach((name, i) => {
+    out.set(name, { value: { kind: 'variable', text: argumentToken(i) }, readonly: false, line });
+  });
+  return out;
+}
+
+/** `调用 名字(实参,…)` → `CALL <产物名>` / `CALL <产物名>(<降糖后的实参>)` */
+function emitCallStatement(
+  em: Emitter,
+  node: Extract<SugarNode, { kind: 'callStatement' }>,
+  ctx: BodyContext,
+  indent: number,
+): void {
+  // 调用名一律**带括号**交给降糖器：`lowerSystemFunctions` 只认「标识符后随 `(`」的调用
+  // 形态，无括号的裸名不会被降到产物函数名（零实参也要写成 `名字()` 才命中）。
+  // 产物 `CALL 产物名()` / `CALL 产物名(实参)`——与真实语料同形（`CALL qol_Xxx()`）。
+  const lowered = lowerExpression(`${node.name}(${node.args})`, exprCtx(ctx, node.loc.start));
+  em.push(indent, `CALL ${lowered}`, node.loc.start.line);
+}
+
+/** `返回 [值]` → `RETURNF <值>`（值函数）/ `RETURN`（过程函数）；非函数体 → 报错不产半成品 */
+function emitReturnStatement(em: Emitter, node: ReturnStatement, ctx: BodyContext, indent: number): void {
+  if (!ctx.inFunction) {
+    ctx.sink.report({
+      code: 'indent-mismatch',
+      severity: 'error',
+      message: '「返回」只能写在「函数 …：」块里——时机正文 / 其它块体里没有可返回的函数。',
+      loc: node.loc.start,
+    });
+    return;
+  }
+  if (node.value !== undefined && node.value.trim().length > 0) {
+    const lowered = lowerExpression(node.value, exprCtx(ctx, node.loc.start));
+    em.push(indent, `RETURNF ${lowered}`, node.loc.start.line);
+  } else {
+    em.push(indent, `RETURN`, node.loc.start.line);
+  }
 }
 
 /* ------------------------------ 文本行 / 心形（§5.1 / §5.2 / §3.9） ------------------------------ */
@@ -1426,6 +1683,10 @@ function renderInterpolation(it: Interpolation, ctx: BodyContext): string {
  * 变量族由字典提供"哪些族是字符串族"（`CALLNAME` / `NAME` / `CALLNAME` 系）。
  */
 function classifyInterpolation(original: string, lowered: string, ctx: BodyContext): string {
+  // 用户函数调用（B4 批）：按**声明时的返回类型**决定 `%…%`（字符串）/ `{…}`（数值）。
+  // 名字已在 `lowerExpression` 里降为产物名；这里只看原文首 token 是否是被声明的函数名。
+  const userKind = lookupUserFunctionCall(original, ctx.userFunctions);
+  if (userKind !== undefined) return userKind ? `%${lowered}%` : `{${lowered}}`;
   if (lowered.startsWith('%') && lowered.endsWith('%')) return lowered;
   if (/^(她|你)$/.test(original.trim())) return lowered; // 已含 `%…%`
   // 变量族判定：直接从**已降糖**的表达式取族名（`CALLNAME:TARGET:名字` → `CALLNAME`），
@@ -1438,6 +1699,29 @@ function classifyInterpolation(original: string, lowered: string, ctx: BodyConte
     return `%${lowered}%`;
   }
   return `{${lowered}}`;
+}
+
+/**
+ * 原文是否以某个**被声明的用户函数**开头并跟 `(`（B4 批）→ 返回该函数的「字符串返回」标志。
+ * 未命中 → `undefined`（走既有族判定）。取**最长**匹配名，避免前缀吞并（`问候` vs `问候语`）。
+ */
+function lookupUserFunctionCall(
+  original: string,
+  fns?: ReadonlyMap<string, UserFunctionInfo>,
+): boolean | undefined {
+  if (!fns || fns.size === 0) return undefined;
+  const text = original.trim();
+  let best: UserFunctionInfo | undefined;
+  let bestLen = -1;
+  for (const [name, info] of fns) {
+    if (name.length <= bestLen || !text.startsWith(name)) continue;
+    const rest = text.slice(name.length).replace(/^\s*/, '');
+    if (rest.startsWith('(') || rest.startsWith('（')) {
+      best = info;
+      bestLen = name.length;
+    }
+  }
+  return best ? best.returnsString : undefined;
 }
 
 /** 字符串族（规范 §3.4：`CALLNAME` 等）——引擎级语言知识，非游戏知识 */

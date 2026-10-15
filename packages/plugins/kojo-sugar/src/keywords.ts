@@ -35,11 +35,15 @@ export type KeywordId =
   | 'block.color'
   | 'block.section'
   | 'block.customCommand'
+  /* 用户函数（B4 批：公共段 / 自定义函数最小形） */
+  | 'block.function'
   /* 行内 / 时机子句 */
   | 'inline.cont'
   | 'inline.heart'
   | 'inline.blank'
   | 'inline.to'
+  | 'inline.call'
+  | 'inline.return'
   | 'inline.hideScene'
   | 'inline.hideKojo'
   | 'inline.settle'
@@ -103,6 +107,10 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 注意与既有 `类型: 自定指令` 的**命名参数右值**撞词——后者按纯字符串取用、
   // 不查本表（见 `lexer.parseTimingHead`），两上下文互不干扰（测试已钉住）。
   ['自定指令', 'block.customCommand'],
+  // 用户函数声明块（B4 批）——`函数 名字(形参,…)：`。**块头**上下文；
+  // 与 `返回` / `调用` 同批，三者共同构成"作者自定义函数"这一最小面。
+  ['函数', 'block.function'],
+  ['function', 'block.function'],
   // 行内
   ['续', 'inline.cont'],  ['cont', 'inline.cont'],
   ['continue', 'inline.cont'],
@@ -114,6 +122,12 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['blank', 'inline.blank'],
   ['到', 'inline.to'],
   ['to', 'inline.to'],
+  // 语句位置的用户函数调用（B4 批）——`调用 名字(实参,…)` 独立成行。
+  ['调用', 'inline.call'],
+  ['call', 'inline.call'],
+  // 函数体返回值（B4 批）——`返回 <值>`（值函数）或裸 `返回`（过程函数）。
+  ['返回', 'inline.return'],
+  ['return', 'inline.return'],
   ['隐藏情景', 'inline.hideScene'],
   ['skip-scene', 'inline.hideScene'],
   ['隐藏口上', 'inline.hideKojo'],

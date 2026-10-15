@@ -204,6 +204,8 @@ describe.skipIf(!SMOKE_DIR)('发版验证样例 · release-check.kojo', () => {
       '@RELEASE_CHECK_TOOL', // 原生直通块
       '$RELEASE_CHECK_LABEL', // 直通块内的标签
       '#DIM L_TOTAL', // 直通块内的声明
+      '@M_KOJO_K145_问候', // 用户函数（B4；命名走 adapter 的 userFunction.template）
+      'CALL M_KOJO_K145_回声()', // 用户函数间的调用（零实参 `CALL 产物名()`）
     ];
     for (const needle of mustContain) {
       expect(result.erb, `产物缺少 ${needle}`).toContain(needle);

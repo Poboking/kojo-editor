@@ -531,6 +531,66 @@ export interface RawFunctionBlock extends SugarNodeBase {
   fence?: boolean;
 }
 
+/* ============================== 用户函数（B4 批：公共段 / 自定义函数最小形） ============================== */
+
+/**
+ * 用户自定义函数声明块（B4 批；规范 §7.2 重开的最小形）。
+ *
+ * 表层：`函数 <名>(<形参,…>)：` + 缩进正文。作者**只写名字与形参**，
+ * 产物函数名由工具按 adapter 的命名模板拼接
+ * （`KojoFaceTable.userFunction.template`，如 `M_KOJO_K{n}_{name}`）——
+ * 游戏惯例只住 adapter，契约层零游戏名词（与 `TimingBlock` 同一条纪律）。
+ *
+ * 形参按**位置**绑定引擎实参记号：第 k 个形参（1 起）在产物里对应
+ * `ARG`（k=1）/ `ARG:1`（k=2）/ `ARG:2`（k=3）…（对齐真实语料
+ * `@K11_ZE(ARGS,ARG,ARG:1)` 的位置绑定口径：声明位第 k 个接第 k 个实参）。
+ * 形参名在函数体内经别名表映射为对应记号，作者照名字读写即可。
+ *
+ * 与既有面的边界（不冲突论证见 §7.2 与提交说明）：
+ * - 与 `RawFunctionBlock`（顶层 `@` 块原样透传）不同——本块**是糖**，产物按公式生成函数名；
+ * - 与 `自定指令`（`CustomCommandBlock`，生成引擎固定入口函数组）不同——本块生成的是
+ *   **作者自己的函数**，入口由作者在正文里 `调用` 或表达式调用；
+ * - 与 `libraryTable`（adapter 基础库函数名表）不同——本块走「**每文件合成表**」，
+ *   只把本文件声明的名字并入，不改变 adapter 表的口径。
+ */
+export interface FunctionBlock extends SugarNodeBase {
+  kind: 'functionBlock';
+  /** 作者写的函数名（中文/标识符原文；**不含**游戏侧前缀） */
+  readonly name: string;
+  /** 形参名（按声明顺序；空数组 = 无参） */
+  readonly params: readonly string[];
+  /** 正文节点（与 `TimingBlock` 正文同口径） */
+  readonly body: readonly SugarNode[];
+}
+
+/**
+ * `返回 <值>` / 裸 `返回`（B4 批）——用户函数体内的返回语句。
+ *
+ * 二态（按真实语料钉死）：
+ * - **有值** = 值函数：产物函数头挂 `#FUNCTION`（数值返回）/ `#FUNCTIONS`（字符串返回），
+ *   语句本身落 `RETURNF <值>`（表达式位置调用要求 `#FUNCTION` + `RETURNF`）；
+ * - **无值**（裸 `返回`）= 过程：产物落 `RETURN`，函数头**不**挂 `#FUNCTION`。
+ */
+export interface ReturnStatement extends SugarNodeBase {
+  kind: 'returnStatement';
+  /** 返回值原文（ERB 表达式/字面量；裸 `返回` 时缺省） */
+  readonly value?: string;
+}
+
+/**
+ * `调用 <名>(<实参…>)`（B4 批）——**语句位置**的用户函数调用（产物 `CALL <名>(<实参>)`）。
+ *
+ * 表达式位置的调用不另造语法：直接在条件 / 插值里写 `名字(实参)`，经每文件合成表降为
+ * 产物函数名（与系统函数名同一降糖管线）。
+ */
+export interface CallStatement extends SugarNodeBase {
+  kind: 'callStatement';
+  /** 被调函数名原文 */
+  readonly name: string;
+  /** 实参原文（逗号分隔；空串 = 无参） */
+  readonly args: string;
+}
+
 /* ============================== 别名声明 ============================== */
 
 /**
@@ -611,6 +671,8 @@ export type SugarStatement =
   | ColorBlock
   | SectionBlock
   | CustomCommandBlock
+  | CallStatement
+  | ReturnStatement
   | RawLine
   | RawFunctionBlock
   | CommentLine;
@@ -625,7 +687,7 @@ export type SugarNode = SugarStatement | SugarExprNode;
  * 文档级节点（只出现在文件顶层，不进块体）：
  * `别名` 声明 / 时机块 / 自定指令块。
  */
-export type SugarTopLevelNode = AliasDecl | TimingBlock | CustomCommandBlock | CommentLine;
+export type SugarTopLevelNode = AliasDecl | TimingBlock | CustomCommandBlock | FunctionBlock | CommentLine;
 
 /* ============================== 文档与头声明 ============================== */
 
@@ -1234,9 +1296,14 @@ export function isRawNode(node: SugarNode): node is RawLine | RawFunctionBlock {
   return node.kind === 'rawLine' || node.kind === 'rawFunctionBlock';
 }
 
-/** 文档级节点（别名声明 / 时机块 / 自定指令块） */
+/** 文档级节点（别名声明 / 时机块 / 自定指令块 / 用户函数块） */
 export function isTopLevelNode(node: SugarTopLevelNode): boolean {
-  return node.kind === 'aliasDecl' || node.kind === 'timingBlock' || node.kind === 'custom-command';
+  return (
+    node.kind === 'aliasDecl' ||
+    node.kind === 'timingBlock' ||
+    node.kind === 'custom-command' ||
+    node.kind === 'functionBlock'
+  );
 }
 
 /* ============================== 预览（S4 批） ============================== */

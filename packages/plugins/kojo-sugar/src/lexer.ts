@@ -182,7 +182,14 @@ export type LineClass =
   | { kind: 'assign'; target: string; expr: string }
   | { kind: 'blankLine'; wait: boolean }
   | { kind: 'heartText'; raw: string }
-  | { kind: 'text'; raw: string };
+  | { kind: 'text'; raw: string }
+  /* ---- 用户函数最小面（B4 批） ---- */
+  /** 函数声明块头 `函数 <名>(形参,…)：` / `function <名>(…)：` */
+  | { kind: 'functionHead'; name: string; params: string[] }
+  /** 语句位置的用户函数调用 `调用 <名>(实参,…)` / `call <名>(…)` */
+  | { kind: 'callStatement'; name: string; args: string }
+  /** 函数体返回值 `返回 [值]` / `return [值]`（裸 `返回` = 过程函数收尾） */
+  | { kind: 'returnStatement'; value?: string };
 
 /**
  * `空行` / `blank`（可带一个行尾标记）→ 一条"输出一行空行"的语句（规范 §3.3，批 P）。
@@ -203,6 +210,51 @@ function matchBlankLine(code: string): { kind: 'blankLine'; wait: boolean } | nu
   if (mark === undefined) return { kind: 'blankLine', wait: false };
   if (CONT_MARKS.includes(mark)) return { kind: 'blankLine', wait: false };
   return WAIT_MARKS.includes(mark) ? { kind: 'blankLine', wait: true } : null;
+}
+
+/* ---------------------- 用户函数最小面（B4 批）：调用 / 返回 ---------------------- */
+
+/** `调用 <名>(实参,…)` 的行首判定：词后必须跟空白（`调用 名字` 形态） */
+const CALL_STATEMENT_RE = /^(调用|call)[ \t\u3000]+(.+)$/;
+/** 裸 `返回` / `return`（整行恰为该词） */
+const RETURN_BARE_RE = /^(返回|return)$/;
+/** `返回 <值>` / `return <值>`（词后跟空白与一个值） */
+const RETURN_VALUE_RE = /^(返回|return)[ \t\u3000]+(.+)$/;
+
+/**
+ * `调用 <名>(实参,…)` / `调用 <名>`（B4 批）→ 语句位置**用户函数调用**。
+ *
+ * 判据：行首恰为 `调用` / `call`，其后跟空白。实参括号可选（中/半角括号均可）；
+ * 无括号 = 无实参调用。**实参原文整串交给 codegen**（与系统函数名同一条降糖管线）。
+ */
+function parseCallStatement(code: string): { kind: 'callStatement'; name: string; args: string } | null {
+  const m = CALL_STATEMENT_RE.exec(code);
+  if (!m) return null;
+  const target = m[2]!.trim();
+  if (target.length === 0) return null;
+  const paren = /^([^(（]*?)\s*[（(]\s*(.*?)\s*[)）]$/.exec(target);
+  if (paren) {
+    const name = paren[1]!.trim();
+    if (name.length === 0) return null;
+    return { kind: 'callStatement', name, args: paren[2]!.trim() };
+  }
+  return { kind: 'callStatement', name: target, args: '' };
+}
+
+/**
+ * `返回 [值]`（B4 批）→ 函数体**返回值**语句。
+ *
+ * 判据与 `空行` 同款"整行/词+空白"边界：
+ * - 整行恰为 `返回` / `return` → 裸返回（过程函数收尾，产物落 `RETURN`）；
+ * - 后跟空白与一个值 → 值返回（产物落 `RETURNF <值>`，函数头挂 `#FUNCTION`/`#FUNCTIONS`）。
+ */
+function parseReturnStatement(code: string): { kind: 'returnStatement'; value?: string } | null {
+  if (RETURN_BARE_RE.test(code)) return { kind: 'returnStatement' };
+  const m = RETURN_VALUE_RE.exec(code);
+  if (!m) return null;
+  const value = m[2]!.trim();
+  if (value.length === 0) return { kind: 'returnStatement' };
+  return { kind: 'returnStatement', value };
 }
 
 /** 全大写原生指令判定（规范 §3.10）：`SETCOLOR` / `IF` / `CALL` / `RAND` / `TFLAG:193 = 0` */
@@ -329,6 +381,14 @@ export function classifyLine(line: LogicalLine): LineClass {
   // ---- 赋值（`X = 表达式`）——`=` 不在引号内、不是比较运算符 ----
   const assign = parseAssignment(code);
   if (assign) return assign;
+
+  // ---- `调用 名字(实参)` / `返回 [值]`（B4 批：用户函数最小面）----
+  // 语句位置的调用与返回值。两者都是**整行语句**（不带块头冒号），判据与 `空行`
+  // 同款"词后必须跟空白 / 整行恰为该词"——`「返回」` 这类引号内的写法不在此列。
+  const call = parseCallStatement(code);
+  if (call) return call;
+  const ret = parseReturnStatement(code);
+  if (ret) return ret;
 
   // ---- `空行`（规范 §3.3；批 P）----
   // 判据是**整行恰为该词**（可带行尾 `续` 类标记）：台词里出现"空行"两个字的写法
@@ -568,6 +628,28 @@ function parseCustomCommandHead(rest: string): LineClass | null {
 }
 
 /**
+ * `函数 <名>(形参,…)：` / `函数 <名>：`（B4 批）→ 用户函数声明块头。
+ *
+ * 名后可选括号形参（中/半角括号均可；形参以中/半角逗号分隔）；无括号 = 无参。
+ * 名与形参名的合法性不在此校验（产物命名走 adapter 模板，形参 → `ARG` 位置映射在
+ * codegen；函数名最终形态由模板渲染，转译器只做占位符求值）。
+ */
+function parseFunctionHead(rest: string): LineClass | null {
+  const t = rest.trim();
+  if (t.length === 0) return null;
+  const paren = /^([^(（]*?)\s*[（(]\s*(.*?)\s*[)）]$/.exec(t);
+  if (paren) {
+    const name = paren[1]!.trim();
+    if (name.length === 0) return null;
+    const inner = paren[2]!.trim();
+    const params =
+      inner.length === 0 ? [] : splitTopLevel(inner, /[,，]/).map((s) => s.trim()).filter((s) => s.length > 0);
+    return { kind: 'functionHead', name, params };
+  }
+  return { kind: 'functionHead', name: t, params: [] };
+}
+
+/**
  * `段 <ERB条件> [关]：`（E13 批）——库内「多信封分段」的可写块头。
  *
  * 段头一律按 **ERB 条件**解析（与 `如果` 同一条降糖管线，`expression.ts`）：
@@ -730,6 +812,8 @@ function parseBlockHead(content: string): LineClass | null {
       return { kind: 'colorHead', color: rest };
     case 'block.customCommand':
       return parseCustomCommandHead(rest);
+    case 'block.function':
+      return parseFunctionHead(rest);
     case 'inline.heart':
       // `心形：` / `heart：` 连续块头（P-7）：块体是文本行（逐行产 HPH_PRINT）。
       // 只收**裸块头**（`rest` 为空）——单行形 `心形 「…」` 不带块头冒号，走

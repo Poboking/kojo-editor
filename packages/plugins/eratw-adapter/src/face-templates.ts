@@ -250,6 +250,10 @@ export function createEratwFaceTable(): KojoFaceTable {
     // 自定指令编号可用段（HK-12；eraTW 4.980：kojo_com 自定义段 = 270–299）
     customComRange: { min: 270, max: 299 },
 
+    // 用户自定义函数命名模板（B4 批；游戏惯例：`M_KOJO_K{角色号}_{作者函数名}`）。
+    // 与三件套同口径——转译器只替换 `{n}` / `{name}`，模板文本是**游戏知识**的落点。
+    userFunction: { template: 'M_KOJO_K{n}_{name}' },
+
     // 自定函数钩子模板（附录 C 原文；`{i}` = 编号/参数，占位符同主模板口径）：
     // #34 自定指令五钩子 + #3 自定事件 + #30 `CUSTOM_TALENT` + #31/#32 SHOP 按钮。
     customHooks: {

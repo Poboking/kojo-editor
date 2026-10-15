@@ -405,6 +405,15 @@ export interface KojoFaceTable {
     readonly shopButtonCondition?: string;
     readonly shopButton?: string;
   };
+  /**
+   * 用户自定义函数的**产物命名模板**（B4 批；游戏知识，只住 adapter）。
+   *
+   * 占位符：`{n}` = 角色号、`{name}` = 作者写的函数名原文（表层 `函数 <名>：` 的 `<名>`）。
+   * 转译器只做占位符求值，**不含任何游戏字面量**（与三件套 `registration.*` 同一条纪律）。
+   * 缺省 = 该游戏无此命名惯例 ⇒ 写了 `函数` 块时 `face-table-missing`（fail-closed，
+   * 不产半成品：无法确定函数名时宁可拒绝）。
+   */
+  readonly userFunction?: { readonly template: string };
 }
 
 /**

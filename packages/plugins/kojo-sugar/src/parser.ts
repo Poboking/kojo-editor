@@ -15,6 +15,7 @@
 import type {
   AliasDecl,
   CustomCommandBlock,
+  FunctionBlock,
   GroupBlock,
   HeartLine,
   IfBlock,
@@ -201,6 +202,13 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
       sawTiming = true;
       const block = readCustomCommandBlock(cursor, cls, randomShape);
       topLevel.push(block);
+      continue;
+    }
+
+    // ---- 用户函数声明块（B4 批；文档级，与时机/自定指令同级）----
+    if (cls.kind === 'functionHead') {
+      sawTiming = true;
+      topLevel.push(readFunctionBlock(cursor, cls, randomShape));
       continue;
     }
 
@@ -426,6 +434,32 @@ function readCustomCommandBlock(
     ...(cls.index !== undefined ? { index: cls.index } : {}),
     ...(cls.canCom !== undefined ? { canCom: cls.canCom } : {}),
     ...(cls.comCounter !== undefined ? { comCounter: cls.comCounter } : {}),
+    body,
+    loc: {
+      start: posOf(head),
+      end: { line: cursor.lines[Math.max(0, cursor.index - 1)]?.endLine ?? head.endLine, column: 1 },
+    },
+  };
+}
+
+/**
+ * 读取 `函数 <名>(形参,…)：` 块 → `FunctionBlock`（契约冻结形态，B4 批）。
+ *
+ * 正文与 `TimingBlock` 同口径（`BlockParser.parseBody`：台词 / 控制流 / 赋值 / 原生行 /
+ * 注释 / 更深的块，以及本批新增的 `调用` / `返回`）。空体合法（产物里由 codegen 落
+ * 函数头 + 自然返回）。
+ */
+function readFunctionBlock(
+  cursor: Cursor,
+  cls: LineClass & { kind: 'functionHead' },
+  randomShape: RandomShape,
+): FunctionBlock {
+  const head = cursor.next()!;
+  const body = new BlockParser(cursor, head.indent + 1, cursor.sink, randomShape).parseBody();
+  return {
+    kind: 'functionBlock',
+    name: cls.name,
+    params: cls.params,
     body,
     loc: {
       start: posOf(head),
@@ -675,6 +709,20 @@ class BlockParser {
       case 'heartText': {
         this.cursor.next();
         return this.buildHeartNode(line, cls.raw);
+      }
+      case 'callStatement': {
+        // `调用 名字(实参)`（B4 批）：语句位置用户函数调用——对任何块体都合法。
+        this.cursor.next();
+        return { kind: 'callStatement', name: cls.name, args: cls.args, loc: spanOf(line) };
+      }
+      case 'returnStatement': {
+        // `返回 [值]`（B4 批）：是否合法由 codegen 判定（只在「函数」块内合法）。
+        this.cursor.next();
+        return {
+          kind: 'returnStatement',
+          loc: spanOf(line),
+          ...(cls.value !== undefined ? { value: cls.value } : {}),
+        };
       }
       case 'comment':
         // 注释**保留**（用户 2026-10-12 第 3 条：注释不能丢）——推进游标后作为
@@ -1157,6 +1205,14 @@ class BlockParser {
         return this.buildBlankNode(line, cls.wait);
       case 'heartText':
         return this.buildHeartNode(line, cls.raw);
+      case 'callStatement':
+        return { kind: 'callStatement', name: cls.name, args: cls.args, loc: spanOf(line) };
+      case 'returnStatement':
+        return {
+          kind: 'returnStatement',
+          loc: spanOf(line),
+          ...(cls.value !== undefined ? { value: cls.value } : {}),
+        };
       case 'rawLine':
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
       case 'settle':
