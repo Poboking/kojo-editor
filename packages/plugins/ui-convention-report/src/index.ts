@@ -1,6 +1,19 @@
-import { createElement, useEffect, useState, type ReactNode } from 'react';
-import type { ConventionIssue, ConventionLinterService, ConventionReport, Plugin, UIPanelProps } from '@kojo/plugin-api';
-import { WellKnownServices } from '@kojo/plugin-api';
+import { createElement, useEffect, useMemo, useState, type ReactNode } from 'react';
+import type {
+  ConventionIssue,
+  ConventionLinterService,
+  ConventionReport,
+  ErbParserService,
+  FamilyIndexRule,
+  GameProject,
+  Plugin,
+  ProjectService,
+  SlotRegistry,
+  UIPanelProps,
+} from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { charaDirOwners, type OwnershipDeps } from './ownership';
+import { buildGroupView, GROUP_MODE_LABEL, GROUP_MODES, type GroupMode } from './view';
 
 /**
  * 约定校验结果面板（`ui.panel` 槽贡献）。
@@ -8,6 +21,11 @@ import { WellKnownServices } from '@kojo/plugin-api';
  * 分层：本插件只做**呈现 + 跳转意图**，不做校验逻辑（校验在 convention-linter 引擎、
  * 规则在 game adapter）。点击问题 → 通过内核事件 `editor.revealLocation` 请求宿主
  * 打开文件并定位行（不直接依赖 app 壳，保持插件可独立分发）。
+ *
+ * 三种分组视角（`./view.ts` + `./ownership.ts` 两个纯模块，本文件只搬运状态）：
+ * 默认「按规则看」与本批之前逐字一致；「按角色看 / 按家族看」把同一批条目换个主语，
+ * 归属判据一律来自 `ConventionIssue` 既有字段、适配器家族规则与 `charaIndex`
+ * ——本插件**不认识任何游戏命名形状**，也不在这里复刻第二份角色清单。
  */
 
 const SEVERITY_LABEL: Record<ConventionIssue['severity'], string> = {
@@ -34,15 +52,42 @@ export function createUiConventionReportPlugin(): Plugin {
   return {
     id: 'ui-convention-report',
     version: '0.2.0',
-    requires: [WellKnownServices.ConventionLinter],
+    requires: [WellKnownServices.ConventionLinter, WellKnownServices.ErbParser, KernelServices.Project, KernelServices.Slots],
     activate(ctx) {
       const linter = ctx.inject<ConventionLinterService>(WellKnownServices.ConventionLinter);
+      const parser = ctx.inject<ErbParserService>(WellKnownServices.ErbParser);
+      const project = ctx.inject<ProjectService>(KernelServices.Project);
+      const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
+
+      /** 当前激活适配器的家族规则（多适配器共存时按 adapterId 精确匹配；与导航树同一取法） */
+      const currentFamilyIndex = (current: GameProject | null): FamilyIndexRule | null => {
+        if (!current) return null;
+        for (const contribution of slots.query('game.adapter')) {
+          if (contribution.adapter.gameId === current.adapterId && contribution.adapter.functionFamilyIndex) {
+            return contribution.adapter.functionFamilyIndex;
+          }
+        }
+        return null;
+      };
+
+      /**
+       * 归属判据的三口子（每次取当前值：切项目 / 关项目后不能拿旧表去归属新数据）。
+       * `functionAt` 缺席（索引未就绪）与家族规则缺席都只意味着**少一级判据**，
+       * 条目的归属会相应变少并在总账里如实显示 —— 不降级成"全部未知角色"。
+       */
+      const ownershipDeps = (current: GameProject | null): OwnershipDeps => ({
+        familyIndex: currentFamilyIndex(current),
+        functionAt: parser.functionAt ? (path, line) => parser.functionAt!(path, line) : undefined,
+        dirOwners: charaDirOwners(current?.charaIndex ?? null),
+      });
 
       function ConventionPanel(props: UIPanelProps): unknown {
         const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
         const [running, setRunning] = useState(false);
         const [expanded, setExpanded] = useState<Set<string>>(new Set());
         const [showAll, setShowAll] = useState<Set<string>>(new Set());
+        /** 分组视角：默认「按规则看」（= 本批之前的视图） */
+        const [mode, setMode] = useState<GroupMode>('rule');
 
         /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
         const ic = (name: string, size: number, fallback: string): ReactNode =>
@@ -55,7 +100,21 @@ export function createUiConventionReportPlugin(): Plugin {
           };
         }, []);
 
-        const rulesById = new Map(linter.rules().map((r) => [r.id, r]));
+        const rulesById = useMemo(() => new Map(linter.rules().map((r) => [r.id, r])), [report]);
+
+        /**
+         * 当前视角的分组（纯函数，见 `./view.ts`）。
+         * 默认 `rule`：与改造前同一份分组、同一套排序；`character` / `family` 才会去
+         * 问索引与家族规则（不选就不付这笔钱）。
+         */
+        const view = useMemo(() => {
+          const current = project.current();
+          return buildGroupView(mode, report?.issues ?? [], {
+            ruleDescription: (id) => rulesById.get(id)?.description ?? id,
+            ownership: ownershipDeps(current),
+            charaIndex: current?.charaIndex ?? null,
+          });
+        }, [mode, report, rulesById]);
 
         const rerun = (): void => {
           setRunning(true);
@@ -72,12 +131,13 @@ export function createUiConventionReportPlugin(): Plugin {
           });
         };
 
-        const open = (issue: ConventionIssue, ruleTitle: string): void => {
+        /** 跳转意图：`source` 记的是"从哪一组点出来的"（角色/家族视角里就是那一组的标签） */
+        const open = (issue: ConventionIssue, groupTitle: string): void => {
           if (!issue.filePath) return;
           ctx.bus.emit('editor.revealLocation', {
             filePath: issue.filePath,
             line: issue.line,
-            source: ruleTitle,
+            source: groupTitle,
           });
         };
 
@@ -88,15 +148,6 @@ export function createUiConventionReportPlugin(): Plugin {
             createElement('div', { className: 'conv-empty dim' }, '尚未运行（打开项目后自动校验）'),
           );
         }
-
-        // 按规则分组
-        const byRule = new Map<string, ConventionIssue[]>();
-        for (const issue of report.issues) {
-          const arr = byRule.get(issue.ruleId);
-          if (arr) arr.push(issue);
-          else byRule.set(issue.ruleId, [issue]);
-        }
-        const groups = [...byRule.entries()].sort((a, b) => b[1].length - a[1].length);
 
         const header = createElement(
           'div',
@@ -115,8 +166,31 @@ export function createUiConventionReportPlugin(): Plugin {
             { className: 'ghost small', disabled: running, onClick: rerun },
             running ? '校验中…' : '重新校验',
           ),
+          // 分组视角切换（默认「按规则看」）。三个词都是人话，且都是**同一批条目的分组方式**，
+          // 不是三套数据 —— 切换不重跑校验、不改条目，只换主语。
+          createElement(
+            'span',
+            { className: 'conv-modes', role: 'group', 'aria-label': '分组方式' },
+            ...GROUP_MODES.map((m) =>
+              createElement(
+                'button',
+                {
+                  key: m,
+                  className: m === mode ? 'small conv-mode-on' : 'ghost small',
+                  'aria-pressed': m === mode,
+                  onClick: () => setMode(m),
+                },
+                GROUP_MODE_LABEL[m],
+              ),
+            ),
+          ),
           createElement('span', { className: 'dim conv-meta' }, report.adapterId ? `适配器 ${report.adapterId}` : '未打开项目'),
         );
+
+        // 归属总账（只有角色/家族视角才有；数字与条目数逐字对得上）
+        const summary = view.summary
+          ? createElement('div', { className: 'conv-rollup dim' }, view.summary)
+          : null;
 
         // 失败规则显式提示（绝不静默）
         const failed =
@@ -141,41 +215,39 @@ export function createUiConventionReportPlugin(): Plugin {
             : null;
 
         const list =
-          groups.length === 0
+          view.groups.length === 0
             ? createElement('div', { className: 'conv-empty dim' }, '未发现问题 ✅')
             : createElement(
                 'ul',
                 { className: 'conv-groups' },
-                ...groups.map(([ruleId, issues]) => {
-                  const rule = rulesById.get(ruleId);
-                  const title = rule ? rule.description : ruleId;
-                  const isOpen = expanded.has(ruleId);
-                  const cap = showAll.has(ruleId) ? issues.length : RENDER_CAP;
+                ...view.groups.map((group) => {
+                  const isOpen = expanded.has(group.key);
+                  const cap = showAll.has(group.key) ? group.count : RENDER_CAP;
                   return createElement(
                     'li',
-                    { key: ruleId, className: 'conv-group' },
+                    { key: group.key, className: 'conv-group' },
                     createElement(
                       'button',
-                      { className: 'conv-group-btn', onClick: () => toggle(setExpanded, ruleId) },
+                      { className: 'conv-group-btn', onClick: () => toggle(setExpanded, group.key) },
                       createElement('span', { className: 'caret' }, ic(isOpen ? 'chevron-down' : 'chevron-right', 12, isOpen ? '▾' : '▸')),
-                      createElement('span', { className: 'conv-rule-id' }, ruleId),
-                      createElement('span', { className: 'conv-group-count' }, String(issues.length)),
+                      createElement('span', { className: 'conv-rule-id' }, group.title),
+                      createElement('span', { className: 'conv-group-count' }, String(group.count)),
                     ),
-                    createElement('div', { className: 'conv-rule-desc dim' }, title),
+                    createElement('div', { className: 'conv-rule-desc dim' }, group.desc),
                     isOpen
                       ? createElement(
                           'ul',
                           { className: 'conv-issues' },
-                          ...issues.slice(0, cap).map((issue, i) =>
+                          ...group.issues.slice(0, cap).map((issue, i) =>
                             createElement(
                               'li',
-                              { key: issue.key ?? `${ruleId}-${i}`, className: 'conv-issue' },
+                              { key: issue.key ?? `${group.key}-${i}`, className: 'conv-issue' },
                               createElement(
                                 'button',
                                 {
                                   className: `conv-issue-btn sev-${issue.severity}`,
                                   title: issue.message,
-                                  onClick: () => open(issue, title),
+                                  onClick: () => open(issue, group.title),
                                 },
                                 createElement('span', {
                                   className: 'conv-dot',
@@ -186,18 +258,23 @@ export function createUiConventionReportPlugin(): Plugin {
                                   { className: 'conv-issue-loc dim' },
                                   issue.filePath ? `${shortPath(issue.filePath)}:${issue.line ?? 0}` : '（无定位）',
                                 ),
+                                // 角色/家族的一组里混着多条规则 ⇒ 条目行得说出它是哪条规则的事；
+                                // 规则视角那一带已经在组头上给过，不重复显示。
+                                group.showRuleTag
+                                  ? createElement('span', { className: 'conv-issue-rule dim' }, issue.ruleId)
+                                  : null,
                                 createElement('span', { className: 'conv-issue-msg' }, issue.message),
                               ),
                             ),
                           ),
-                          issues.length > cap
+                          group.count > cap
                             ? createElement(
                                 'li',
                                 { className: 'conv-more' },
                                 createElement(
                                   'button',
-                                  { className: 'ghost small', onClick: () => toggle(setShowAll, ruleId) },
-                                  `显示全部 ${issues.length} 条`,
+                                  { className: 'ghost small', onClick: () => toggle(setShowAll, group.key) },
+                                  `显示全部 ${group.count} 条`,
                                 ),
                               )
                             : null,
@@ -212,6 +289,7 @@ export function createUiConventionReportPlugin(): Plugin {
           { className: 'panel-convention-report' },
           header,
           toolbar,
+          summary,
           failed,
           list,
           createElement(

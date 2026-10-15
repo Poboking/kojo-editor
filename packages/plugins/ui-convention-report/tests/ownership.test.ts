@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CharaInfo, ConventionIssue, FamilyIndexRule, FamilyMatch } from '@kojo/plugin-api';
 import {
   attributeIssue,
+  charaDirOwners,
   characterLabel,
   rollupByCharacter,
   rollupByFamily,
@@ -103,6 +104,59 @@ describe('attributeIssue', () => {
   });
 });
 
+/* ============================ 目录档（第三级判据） ============================ */
+
+describe('charaDirOwners + 目录归属', () => {
+  const dirs = [
+    { prefix: 'C:/koa/001 灵梦', characterNo: 1 },
+    { prefix: 'C:/koa/001 灵梦/裏', characterNo: 36 },
+    { prefix: 'C:/koa/001 灵梦2', characterNo: 4 },
+  ];
+
+  it('长前缀优先：嵌套角色目录里的文件归内层角色，不漂到外层', () => {
+    const deps: OwnershipDeps = { familyIndex: null, dirOwners: dirs };
+    expect(attributeIssue(issue({ ruleId: 'r', filePath: 'C:/koa/001 灵梦/裏/a.ERB', line: 3 }), deps)).toEqual({
+      characterNo: 36,
+      family: null,
+      source: 'dir',
+    });
+    expect(attributeIssue(issue({ ruleId: 'r', filePath: 'C:/koa/001 灵梦/a.ERB' }), deps).characterNo).toBe(1);
+  });
+
+  it('前缀之后必须是分隔符：`001 灵梦` 不许盖住 `001 灵梦2` 的文件', () => {
+    const deps: OwnershipDeps = { familyIndex: null, dirOwners: [dirs[0]!, dirs[2]!] };
+    const own = attributeIssue(issue({ ruleId: 'r', filePath: 'C:/koa/001 灵梦2/b.ERB' }), deps);
+    expect(own.characterNo).toBe(4);
+    expect(own.source).toBe('dir');
+  });
+
+  it('目录表缺席 / 不在任何角色目录下 ⇒ 仍是未归属（不静默造一个归属）', () => {
+    expect(attributeIssue(issue({ ruleId: 'r', filePath: 'C:/koa/共享/c.ERB' }), { familyIndex: null }).source).toBeNull();
+    expect(attributeIssue(issue({ ruleId: 'r', filePath: 'C:/koa/共享/c.ERB' }), { familyIndex: null, dirOwners: [] }).source).toBeNull();
+  });
+
+  it('优先级：所在函数 > 所在目录（能认出编号就不退到"该在谁家里改"）', () => {
+    const deps = depsWith(new Map([['FOO', { characterNo: 1 }]]));
+    const withDir: OwnershipDeps = { ...deps, dirOwners: [{ prefix: 'A', characterNo: 36 }] };
+    expect(attributeIssue(issue({ ruleId: 'r', filePath: 'A', line: 10 }), withDir)).toEqual({
+      characterNo: 1,
+      family: '',
+      source: 'function',
+    });
+  });
+
+  it('目录表由 charaIndex 导出（无 kojoDir 的角色不进表；长前缀在前）', () => {
+    const withDirs = new Map<number, CharaInfo>([
+      [1, { no: 1, name: '灵梦', kojoDir: 'C:/koa/001 灵梦' }],
+      [2, { no: 2, name: '无目录' }],
+      [36, { no: 36, name: '阿燐', kojoDir: 'C:/koa/001 灵梦/裏/更深' }],
+    ]);
+    const owners = charaDirOwners(withDirs);
+    expect(owners.map((o) => o.characterNo)).toEqual([36, 1]);
+    expect(charaDirOwners(null)).toEqual([]);
+  });
+});
+
 /* ============================ 分组聚合 ============================ */
 
 const mixed: ConventionIssue[] = [
@@ -120,7 +174,7 @@ describe('rollupByCharacter', () => {
     expect(r.groups.reduce((s, g) => s + g.count, 0)).toBe(r.total);
     expect(r.groups.at(-1)!.label).toBe('未归属角色');
     expect(r.groups.at(-1)!.residual).toBe(true);
-    expect(r.sourceCounts).toEqual({ rule: 2, function: 1, none: 1 });
+    expect(r.sourceCounts).toEqual({ rule: 2, function: 1, dir: 0, none: 1 });
     expect(r.groups.map((g) => g.label)).toEqual(['#1 灵梦', '#36 阿燐', '未归属角色']);
   });
 
@@ -149,7 +203,7 @@ describe('rollupByCharacter', () => {
 
   it('没有家族规则时也照常按声明聚合（降级不静默：sourceCounts 说清出处）', () => {
     const r = rollupByCharacter(mixed, { familyIndex: null }, labelOf);
-    expect(r.sourceCounts).toEqual({ rule: 2, function: 0, none: 2 });
+    expect(r.sourceCounts).toEqual({ rule: 2, function: 0, dir: 0, none: 2 });
     expect(r.groups.reduce((s, g) => s + g.count, 0)).toBe(4);
   });
 
@@ -196,6 +250,37 @@ describe('rollupByFamily', () => {
   });
 });
 
+/* ============================ 未归属那一档的构成 ============================ */
+
+describe('未归属档必须说得出"是谁没归上"', () => {
+  it('残余组里的条目规则可数，且规则视角的分组与之逐条对得上', () => {
+    const issues = [
+      issue({ ruleId: 'eratw.kx-placeholder', filePath: '共享/模板.ERB', line: 4 }),
+      issue({ ruleId: 'eratw.kx-placeholder', filePath: '共享/模板.ERB', line: 9 }),
+      issue({ ruleId: 'erb.duplicate-function', filePath: '共享/杂项.ERB' }),
+      issue({ ruleId: 'declared', characterNo: 1 }),
+    ];
+    const r = rollupByCharacter(issues, { familyIndex: null }, labelOf);
+    const unowned = r.groups.at(-1)!;
+    expect(unowned.label).toBe('未归属角色');
+    expect(unowned.count).toBe(3);
+    // 这一档不是"一堆说不清的东西"：展开它就是这张规则清单（面板的条目行带规则标识）
+    expect(rollupRuleCounts(unowned)).toEqual({ 'eratw.kx-placeholder': 2, 'erb.duplicate-function': 1 });
+    // 账：未归属 + 已归属 = 总条数，且没有第三种数字
+    expect(r.groups.filter((g) => g.residual).reduce((x, g) => x + g.count, 0) + r.groups.filter((g) => !g.residual).reduce((x, g) => x + g.count, 0)).toBe(
+      r.total,
+    );
+    expect(rollupSummary('character', r)).toContain('未归属 3 处（单列在最后一组）');
+  });
+});
+
+/** 一组成员按规则计数（面板展开未归属那一档时作者看到的就是这张表） */
+function rollupRuleCounts(g: { issues: readonly ConventionIssue[] }): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const i of g.issues) out[i.ruleId] = (out[i.ruleId] ?? 0) + 1;
+  return out;
+}
+
 /* ============================ 标签与文案 ============================ */
 
 describe('标签', () => {
@@ -209,7 +294,7 @@ describe('标签', () => {
     const r = rollupByCharacter(mixed, deps36, labelOf);
     const text = rollupSummary('character', r);
     expect(text).toContain('合计 4 处');
-    expect(text).toContain('已归属 3 处（规则声明 2 / 所在函数 1）');
+    expect(text).toContain('已归属 3 处（规则注明 2 / 所在函数 1）');
     expect(text).toContain('未归属 1 处');
     expect(text).not.toMatch(/convention|rollup|facet|ownership|severity/i);
     expect(rollupSummary('family', r)).toMatch(/^按家族：/);

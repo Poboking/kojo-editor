@@ -4822,3 +4822,41 @@ button.primary .hint {
     animation: none;
   }
 }
+
+/* ===========================================================================
+   G3 修法条目的分组视角（约定校验面板；2026-10-16 批，只在文件尾部追加一节）
+   「按规则看 / 按角色看 / 按家族看」三枚切换 + 归属总账那一行。
+   默认态（按规则看）不渲染下面任何一件，除总账行本身为空。
+   =========================================================================*/
+.conv-modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+}
+/* 选中的那一枚用主色描边，不加底色块：面板工具条本来就没有块状背景，
+   一块实心会把「重新校验」那颗按钮的视觉重量压掉 */
+.conv-mode-on {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  padding: 1px 6px;
+  font-size: var(--fs-1);
+  cursor: default;
+}
+.conv-rollup {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  padding: 2px 0 4px;
+}
+/* 角色/家族的一组里混着多条规则 ⇒ 条目行补一枚规则标识（等宽、弱化，不抢正文） */
+.conv-issue-rule {
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: var(--fs-0);
+  flex: none;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
