@@ -16,7 +16,8 @@ import * as monaco from 'monaco-editor';
 import { makeLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
-import { type HoverTables, installHover } from '../monaco/kojo-hover';
+import { installHover } from '../monaco/kojo-hover';
+import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { editorOptionsForLineCount } from './editor-options';
@@ -62,14 +63,16 @@ function languageFor(filePath: string): string {
 }
 
 /**
- * 悬停**中文名**的三张真源表（ZH-F2）——按当前项目 `adapterId` 精确匹配 `game.adapter`
- * 槽位贡献，**运行时**现取（适配器随项目开闭重建，缓存会把上一个项目的表带过来）。
+ * 编辑器只读消费的**四张适配器表**（悬停 ZH-F2 + 补全 seam 共用）——按当前项目 `adapterId`
+ * 精确匹配 `game.adapter` 槽位贡献，**运行时**现取（适配器随项目开闭重建，缓存会把上一个
+ * 项目的表带过来）。
  *
- * 三张表全在适配器贡献上（游戏知识只住 adapter；宿主只读不解释）：
+ * 四张表全在适配器贡献上（游戏知识只住 adapter；宿主只读不解释）：
  * 变量字典（`variableSchema` → `makeLookup`，与 kojo-sugar 转译器同一个构造器）、
- * 基础库函数名表、指令名表。缺一即该路不反查（**显示侧不猜**）。
+ * 时机分野模板表（`kojoFaceTemplates`，补全 seam 的 KC-2 前置）、基础库函数名表、
+ * 指令名表。缺一即该路不产候选 / 不反查（**不猜**）。
  */
-function hoverTables(kernel: Kernel): HoverTables {
+function editorTables(kernel: Kernel): CompletionTables {
   const project = kernel.project.current();
   if (!project) return {};
   for (const contribution of kernel.slots.query('game.adapter')) {
@@ -77,6 +80,7 @@ function hoverTables(kernel: Kernel): HoverTables {
     const adapter = contribution.adapter;
     return {
       ...(adapter.variableSchema ? { dictionary: makeLookup(adapter.variableSchema) } : {}),
+      ...(adapter.kojoFaceTemplates ? { faceTable: adapter.kojoFaceTemplates } : {}),
       ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
       ...(adapter.kojoInstructionTable ? { instructionTable: adapter.kojoInstructionTable } : {}),
     };
@@ -928,9 +932,12 @@ export function EditorPane({
       },
     );
     // 悬停中文名（ZH-F2）：只读显示，光标下的原生记号 → 中文名。表按当前项目 adapterId
-    // **运行时**现取（`hoverTables`），查不到即不显示（**不猜**）。与 CodeAction 同款隔离。
-    const hoverDisposer = installHover(monaco, () => hoverTables(kernel));
+    // **运行时**现取（`editorTables`），查不到即不显示（**不猜**）。与 CodeAction 同款隔离。
+    const hoverDisposer = installHover(monaco, () => editorTables(kernel));
+    // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
+    const completionDisposer = installKojoCompletion(monaco, () => editorTables(kernel));
     return () => {
+      completionDisposer.dispose();
       hoverDisposer.dispose();
       cmdDisposer.dispose();
       providerDisposer.dispose();
