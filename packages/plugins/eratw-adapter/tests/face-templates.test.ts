@@ -101,12 +101,31 @@ describe('KojoFaceTable · 分野模板（规范 §3.2 / 附录 C）', () => {
     });
   });
 
-  it('MESSAGECHECK 位协议：SCENE→bit0 / KOJO→bit1，模板含家族段与编号', () => {
+  it('MESSAGECHECK 位协议：SCENE→bit0 / KOJO→bit1；函数名**逐面**（中缀插入点各异）', () => {
     const mc = table.messageCheck!;
-    expect(mc.scopes).toEqual({ scene: 'SCENE', kojo: 'KOJO' });
     expect(mc.bits).toEqual({ scene: 0, kojo: 1 });
     expect(mc.setBit).toBe('SETBIT RESULT, {bit}');
-    expect(mc.template).toBe('M_KOJO{t}_MESSAGECHECK_{scope}_K{n}_{i}');
+    // `_MESSAGECHECK` 插入点**不统一**，证据是引擎 KOJO_MESSAGE.ERB 的调用点行号：
+    //   COM 系插在 `_MESSAGE_` 之后、`${com}` 段之前；PALAM 系插在子类型之前；
+    //   其余（SPEVENT/CUSTOM_EVENT/DAILY_EVENT/MARKCNG/COUNTER）插在 `_K{n}` 之前。
+    expect(table.faces['指令']!.messageCheck?.template).toBe(
+      'M_KOJO{t}_MESSAGE_MESSAGECHECK_${com}_K{n}_{i}',
+    );
+    expect(table.faces['绝顶']!.messageCheck?.template).toBe(
+      'M_KOJO{t}_MESSAGE_PALAMCNG_MESSAGECHECK_B_K{n}',
+    );
+    expect(table.faces['日常']!.messageCheck?.template).toBe('M_KOJO{t}_DAILY_EVENT_MESSAGECHECK_K{n}_{i}');
+    expect(table.faces['特殊事件']!.messageCheck?.template).toBe(
+      'M_KOJO{t}_SPEVENT_MESSAGECHECK_K{n}_{i}',
+    );
+    expect(table.faces['计数器']!.messageCheck?.template).toBe(
+      'M_KOJO{t}_MESSAGE_COUNTER_MESSAGECHECK_K{n}_{i}',
+    );
+    expect(table.faces['标记']!.messageCheck?.template).toBe(
+      'M_KOJO{t}_MESSAGE_MARKCNG_MESSAGECHECK_K{n}',
+    );
+    // 无钩子面显式缺省（引擎从不调用）：事件 / 日记 / 初见…
+    expect(table.faces['事件']!.messageCheck).toBeUndefined();
   });
 
   it('`类型:` 段映射：COM 默认 + SCOM + 两个自定（规范 §3.2 命名参数表）', () => {

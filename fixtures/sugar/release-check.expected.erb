@@ -36,7 +36,7 @@
 ; 时机三 · 指令 311（时机内子句：MESSAGECHECK 位协议）
 ; ============================================================
 ; 英文别名子句 `skip-scene` / `skip-kojo` 与中文等价。**必须换编号**：
-; 同一个时机里写两次同义子句会生成两个**同名** MESSAGECHECK 函数，
+; 同一编号、同一面的两个时机各写 MESSAGECHECK 子句会生成**同名**钩子函数，
 ; 游戏加载时就是重复定义（下面的守门断言正是为这类错误而加）。
 ; ============================================================
 ; 时机四 · 指令 312 类型: SCOM（副指令面；`类型:` 决定函数名里的段）
@@ -234,12 +234,10 @@ IF LOCAL
 ENDIF
 RETURN 1
 
-@M_KOJO_发版检查_MESSAGECHECK_SCENE_K145_311
+@M_KOJO_发版检查_MESSAGE_MESSAGECHECK_COM_K145_311
 IF CFLAG:TARGET:诶嘿嘿 == 0
 SETBIT RESULT, 0
 ENDIF
-
-@M_KOJO_发版检查_MESSAGECHECK_KOJO_K145_311
 IF FLAG:70
 SETBIT RESULT, 1
 ENDIF
@@ -258,12 +256,10 @@ IF LOCAL
 ENDIF
 RETURN 1
 
-@M_KOJO_发版检查_MESSAGECHECK_SCENE_K145_315
+@M_KOJO_发版检查_MESSAGE_MESSAGECHECK_COM_K145_315
 IF TALENT:TARGET:恋慕 == 0
 SETBIT RESULT, 0
 ENDIF
-
-@M_KOJO_发版检查_MESSAGECHECK_KOJO_K145_315
 IF TALENT:TARGET:思慕 == 0
 SETBIT RESULT, 1
 ENDIF

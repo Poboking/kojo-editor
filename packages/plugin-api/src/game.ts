@@ -259,6 +259,23 @@ export interface KojoFaceTemplate {
    * 不同段——adapter 声明"段名 → 取值映射"，转译器按语法层语义选择取值。
    */
   readonly segments?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /**
+   * MESSAGECHECK 钩子函数名模板（**additive**；规范 §3.2 `隐藏情景/隐藏口上`）。
+   *
+   * 写了 `隐藏情景:` / `隐藏口上:` 的分野**必须**声明本字段；缺省 = 该面**无**
+   * MESSAGECHECK 钩子（转译器报 `face-table-missing` 并忽略该子句，**不静默**）。
+   * 占位符同主模板（`{t}{n}{i}` + 本条的 `${段}`，复用本条 `segments`）。
+   *
+   * **为什么逐面**：`_MESSAGECHECK` 的**插入点处处不同**（实测引擎 `KOJO_MESSAGE.ERB`），
+   * 统一成单条 `M_KOJO{t}_MESSAGECHECK_{scope}_K{n}_{i}` 会产出引擎**从不调用**的死函数名：
+   * - `MESSAGE`（指令）：插在 `_MESSAGE_` 之后、`${com}` 段之前
+   *   → `M_KOJO{t}_MESSAGE_MESSAGECHECK_${com}_K{n}_{i}`；
+   * - `PALAMCNG`（绝顶 B / 射精 A2…）：插在子类型 `_{B|B2|C|A2}` 之前
+   *   → `M_KOJO{t}_MESSAGE_PALAMCNG_MESSAGECHECK_{B|A2}_K{n}[_{i}]`；
+   * - 其余（SPEVENT / CUSTOM_EVENT / DAILY_EVENT / MARKCNG / COUNTER）：插在 `_K{n}` 之前
+   *   → `M_KOJO{t}_…_MESSAGECHECK_K{n}[_{i}]`。
+   */
+  readonly messageCheck?: { readonly template: string };
 }
 
 /**
@@ -298,15 +315,22 @@ export interface KojoFaceTable {
   /**
    * MESSAGECHECK 位协议的**目标段与原语**（规范 §3.2；游戏侧约定）。
    * 缺省 = 该游戏无 MESSAGECHECK 概念（转译器跳过 `隐藏情景/隐藏口上` 产物）。
+   *
+   * 函数名模板**不在这里**——`_MESSAGECHECK` 的插入点逐面不同，故由各分野的
+   * `KojoFaceTemplate.messageCheck` 声明；本字段只管**位协议**（置位原语 + 位号）。
    */
   readonly messageCheck?: {
     /**
-     * 函数名段模板。`{n}` = 角色号、`{i}` = 时机编号、`{base}` = 主体函数名、
-     * `{scope}` = 作用域段（语法层给语义名，转译器按 `scopes` 映射为段文本）。
+     * @deprecated 函数名已改为**逐面**声明（`KojoFaceTemplate.messageCheck.template`）：
+     * 单一全局模板表达不了"插入点逐面不同"，会产出引擎从不调用的死函数名。
+     * 保留本字段仅为旧适配器零改动，转译器已不再读取。
      */
-    readonly template: string;
-    /** 作用域语义名 → 段文本（如 `scene` → `SCENE`、`kojo` → `KOJO`） */
-    readonly scopes: Readonly<Record<string, string>>;
+    readonly template?: string;
+    /**
+     * @deprecated 作用域段文本（新形态的函数名里**没有** scope 段——只有位号随作用域变）。
+     * 保留仅为旧适配器零改动，转译器已不再读取。
+     */
+    readonly scopes?: Readonly<Record<string, string>>;
     /** 置位原语模板（`{bit}` = 位号）。缺省 = `SETBIT RESULT, {bit}` */
     readonly setBit?: string;
     /** 作用域语义名 → 位号 */

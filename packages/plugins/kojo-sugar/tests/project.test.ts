@@ -484,7 +484,7 @@ describe('糖投影 · MESSAGECHECK 数字返回协议（P-8，纯显示）', ()
 
   it('现行 SETBIT 产物 → 对应糖子句（写侧口径，位号来自 adapter）', () => {
     const r = withFaces(
-      ['@M_KOJO_MESSAGECHECK_SCENE_K1_310', 'SETBIT RESULT, 0', 'SETBIT RESULT, 1'].join('\n'),
+      ['@M_KOJO_MESSAGE_MESSAGECHECK_COM_K1_310', 'SETBIT RESULT, 0', 'SETBIT RESULT, 1'].join('\n'),
     );
     expect(segLines(r.segments[0]!)).toEqual(['隐藏情景：', '隐藏口上：']);
   });

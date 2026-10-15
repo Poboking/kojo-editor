@@ -55,30 +55,55 @@ export function createEratwFaceTable(): KojoFaceTable {
 
       // 附录 C #5：指令口上 `M_KOJO{t}_MESSAGE_{COM|SCOM}_K{n}_{LOCAL}`
       // `{i}` 消费编号；`${com}` 段由 `类型:` 决定（COM/SCOM/CUSTOM_*）。
+      // MESSAGECHECK：插在 `_MESSAGE_` 之后、`${com}` 段之前（引擎 :227）。
       指令: {
         template: 'M_KOJO{t}_MESSAGE_${com}_K{n}_{i}',
         success: { template: 'M_KOJO{t}_SUCCESS_${com}_K{n}_{i}' },
         segments: { com: LOCALS_SEGMENTS },
+        messageCheck: { template: 'M_KOJO{t}_MESSAGE_MESSAGECHECK_${com}_K{n}_{i}' },
       },
 
       // 附录 C #6：计数器 `KOJO_MESSAGE_SEND_COUNTER` 转交；
-      // 实测形态 `M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}`
-      计数器: { template: 'M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}' },
+      // 实测形态 `M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}`；MESSAGECHECK 在 `_K{n}` 前（引擎 :1153）
+      计数器: {
+        template: 'M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}',
+        messageCheck: { template: 'M_KOJO{t}_MESSAGE_COUNTER_MESSAGECHECK_K{n}_{i}' },
+      },
 
       // 附录 C #7 PALAM：射精 A2 / 绝顶 B（v1 只开放这两个子类）
-      绝顶: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_B_K{n}' },
-      射精: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_A2_K{n}_{i}' },
+      // PALAM 系 MESSAGECHECK 插在**子类型**之前（引擎 :312/:314/:353/:455、A2 走 :1209 通用钩子）：
+      //   B / B2 / C / F 无编号；A2（射精）带 `_{i}`（= 部位号）。
+      绝顶: {
+        template: 'M_KOJO{t}_MESSAGE_PALAMCNG_B_K{n}',
+        messageCheck: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_MESSAGECHECK_B_K{n}' },
+      },
+      射精: {
+        template: 'M_KOJO{t}_MESSAGE_PALAMCNG_A2_K{n}_{i}',
+        messageCheck: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_MESSAGECHECK_A2_K{n}_{i}' },
+      },
 
       // P-6 绝顶子面补糖（三条无参面，权威：`KOJO_MESSAGE.ERB:328-332/:366/:468`）。
       // 键**不含空格**：`时机 绝顶 恶作剧：` 里的 `恶作剧` 会被词法器当作中文指令名
       // （`indexName`）消费掉、分野 key 只剩 `绝顶`；故恶作剧子面写成单令牌
       // `绝顶恶作剧`（`时机 绝顶恶作剧：`）方能落表。`调教后` / `寸止` 本就是单令牌。
-      绝顶恶作剧: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_B2_K{n}' },
-      调教后: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_C_K{n}' },
-      寸止: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_F_K{n}' },
+      绝顶恶作剧: {
+        template: 'M_KOJO{t}_MESSAGE_PALAMCNG_B2_K{n}',
+        messageCheck: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_MESSAGECHECK_B2_K{n}' },
+      },
+      调教后: {
+        template: 'M_KOJO{t}_MESSAGE_PALAMCNG_C_K{n}',
+        messageCheck: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_MESSAGECHECK_C_K{n}' },
+      },
+      寸止: {
+        template: 'M_KOJO{t}_MESSAGE_PALAMCNG_F_K{n}',
+        messageCheck: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_MESSAGECHECK_F_K{n}' },
+      },
 
-      // 附录 C #8：刻印/素质变化 `M_KOJO{t}_MESSAGE_MARKCNG_K{n}`
-      标记: { template: 'M_KOJO{t}_MESSAGE_MARKCNG_K{n}' },
+      // 附录 C #8：刻印/素质变化 `M_KOJO{t}_MESSAGE_MARKCNG_K{n}`；MESSAGECHECK 在 `_K{n}` 前（引擎 :492）
+      标记: {
+        template: 'M_KOJO{t}_MESSAGE_MARKCNG_K{n}',
+        messageCheck: { template: 'M_KOJO{t}_MESSAGE_MARKCNG_MESSAGECHECK_K{n}' },
+      },
 
       // 附录 C #10：追加源 `M_KOJO{t}_EXTRASOURCE_{COM|SCOM}_K{n}_{LOCAL}`
       追加源: {
@@ -93,8 +118,11 @@ export function createEratwFaceTable(): KojoFaceTable {
         segments: { com: LOCALS_SEGMENTS },
       },
 
-      // 附录 C #20：每日事件 `M_KOJO{t}_DAILY_EVENT_K{n}_{i}`
-      日常: { template: 'M_KOJO{t}_DAILY_EVENT_K{n}_{i}' },
+      // 附录 C #20：每日事件 `M_KOJO{t}_DAILY_EVENT_K{n}_{i}`；MESSAGECHECK 在 `_K{n}` 前（引擎 :772）
+      日常: {
+        template: 'M_KOJO{t}_DAILY_EVENT_K{n}_{i}',
+        messageCheck: { template: 'M_KOJO{t}_DAILY_EVENT_MESSAGECHECK_K{n}_{i}' },
+      },
 
       // 附录 C #21：日记 `DIARY{t}_TEXT_K{n}`（前缀是 DIARY，非 M_KOJO）
       日记: { template: 'DIARY{t}_TEXT_K{n}' },
@@ -129,10 +157,16 @@ export function createEratwFaceTable(): KojoFaceTable {
 
       /* ---- 附录 C 其余入口（v1 走原生直通；模板登记供校验/补全取用） ---- */
 
-      // #2 特殊事件（带 SKIP 检查）
-      特殊事件: { template: 'M_KOJO{t}_SPEVENT_K{n}_{i}' },
-      // #3 剧本自定义事件
-      自定义事件: { template: 'M_KOJO{t}_CUSTOM_EVENT_K{n}_{i}' },
+      // #2 特殊事件（带 SKIP 检查）；MESSAGECHECK 插在 `_K{n}` 前（引擎 :83）
+      特殊事件: {
+        template: 'M_KOJO{t}_SPEVENT_K{n}_{i}',
+        messageCheck: { template: 'M_KOJO{t}_SPEVENT_MESSAGECHECK_K{n}_{i}' },
+      },
+      // #3 剧本自定义事件；MESSAGECHECK 插在 `_K{n}` 前（引擎 :119/:121）
+      自定义事件: {
+        template: 'M_KOJO{t}_CUSTOM_EVENT_K{n}_{i}',
+        messageCheck: { template: 'M_KOJO{t}_CUSTOM_EVENT_MESSAGECHECK_K{n}_{i}' },
+      },
       // #12 自慰被撞见
       撞见: { template: 'M_KOJO{t}_EVENT_K{n}_ONABARE_{i}' },
       // #14 推倒许可
@@ -167,11 +201,10 @@ export function createEratwFaceTable(): KojoFaceTable {
       },
     },
 
-    // MESSAGECHECK 位协议（规范 §3.2 时机内子句；`SETBIT RESULT, 0/1`）
-    // 函数名形态（实测）：`M_KOJO{_家族}_MESSAGECHECK_{SCENE|KOJO}_K{n}[_{i}]`
+    // MESSAGECHECK 位协议（规范 §3.2 时机内子句；`SETBIT RESULT, 0/1`）。
+    // 函数名模板**不在这里**——`_MESSAGECHECK` 插入点逐面不同，故**逐面**声明在
+    // 各分野的 `messageCheck`（见上）；本表只管位协议：置位原语 + 作用域→位号。
     messageCheck: {
-      template: 'M_KOJO{t}_MESSAGECHECK_{scope}_K{n}_{i}',
-      scopes: { scene: 'SCENE', kojo: 'KOJO' },
       setBit: 'SETBIT RESULT, {bit}',
       bits: { scene: 0, kojo: 1 },
     },

@@ -154,7 +154,7 @@ describe('§3.2 参数: · 三个发射点（规范 §3.2 v1.5 / §5.5）', () =
     expect(erb).toContain('CALL M_KOJO_MESSAGE_COM_K12_311_1(ARG,ARG:1)');
     // SUCCESS 与 MESSAGECHECK 保持裸头（分发器对它们是另一套调用协议）
     expect(head(erb, 'M_KOJO_SUCCESS_COM_K12_311')).toBe('@M_KOJO_SUCCESS_COM_K12_311');
-    expect(head(erb, 'M_KOJO_MESSAGECHECK_SCENE_K12_311')).toBe('@M_KOJO_MESSAGECHECK_SCENE_K12_311');
+    expect(head(erb, 'M_KOJO_MESSAGE_MESSAGECHECK_COM_K12_311')).toBe('@M_KOJO_MESSAGE_MESSAGECHECK_COM_K12_311');
   });
 });
 

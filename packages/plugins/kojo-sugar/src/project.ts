@@ -249,10 +249,12 @@ const MESSAGE_CHECK_CLAUSE: Readonly<Record<string, string>> = {
 /**
  * 从 adapter 的 MESSAGECHECK 模板抽出**判别字面片段**（占位符以外的定长串）。
  * 只保留长度 ≥ 3 的片段：`_` / `_K` 这类太泛，当判别串会误伤同前缀的普通函数头。
+ * `${段}`（如 `${com}`）也属占位符，须连同前导 `$` 一起切掉，否则残留的 `$` 让片段
+ * 永远匹配不到真实函数头（`_MESSAGE_MESSAGECHECK_$` ≠ 产物里的 `..._MESSAGECHECK_COM_...`）。
  */
 function messageCheckLiteralFragments(template: string): string[] {
   return template
-    .split(/\{[^}]*\}/)
+    .split(/\$\{[^}]*\}|\{[^}]*\}/g)
     .map((s) => s.trim())
     .filter((s) => s.length >= 3);
 }
@@ -343,8 +345,16 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   // 标了标签的那个头，其函数体 +1 层（规范 §3.2「正文缩进一级」）
   const fnBump = planFunctionBumps(lines, headIndex);
   // P-8：MESSAGECHECK 数字返回协议（纯显示）。协议来自 adapter——缺席 = 一条都不标。
+  // 函数名模板**逐面**（`KojoFaceTemplate.messageCheck`）：判别串取全部分野模板的片段并集，
+  // 头部命中**任一面**的片段集即视为 MESSAGECHECK 体（各面插入点不同，片段也各不同）。
   const mcProto = faceTable?.messageCheck;
-  const mcFragments = mcProto === undefined ? null : messageCheckLiteralFragments(mcProto.template);
+  const mcFragmentSets =
+    faceTable === undefined
+      ? []
+      : Object.values(faceTable.faces)
+          .map((f) => f.messageCheck?.template)
+          .filter((t): t is string => t !== undefined)
+          .map(messageCheckLiteralFragments);
   const mcBits = mcProto?.bits;
   const mcSetBitRe = mcProto === undefined ? null : buildBitLineRegex(mcProto.setBit ?? 'SETBIT RESULT, {bit}');
 
@@ -392,8 +402,9 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
 
     // P-8：函数头切换 MESSAGECHECK 作用域——体内 `RETURN n` / `SETBIT RESULT, n` 才有位协议语义。
     if (content.startsWith('@')) {
-      inMessageCheck =
-        mcFragments !== null && mcFragments.length > 0 && mcFragments.every((f) => content.includes(f));
+      inMessageCheck = mcFragmentSets.some(
+        (frags) => frags.length > 0 && frags.every((f) => content.includes(f)),
+      );
     }
 
     // 函数骨架：被合并吸收的行不产出可见行（读者不必看见 `CALL x_1` / `IF LOCAL` 包裹）

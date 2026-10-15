@@ -467,7 +467,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   // 同样**不带 `参数:` 声明**：MESSAGECHECK 由分发器以 `TRYCALLFORM …(RESULT)` 之类
   // 的自有协议调用，与本体形参无关（保守口径同上）。
   if (timing.messageCheck.length > 0) {
-    emitMessageCheck(em, timing, ctx, index);
+    emitMessageCheck(em, timing, ctx, index, face);
   }
 
   // ---- 主体两函数（规范 §5.5：包装 + `_1` 正文）----
@@ -619,6 +619,11 @@ interface FaceResolution {
   paramIndex: boolean;
   /** 成否函数模板（写了 `成否:` 时生成） */
   success?: { template: string; paramIndex: boolean };
+  /**
+   * MESSAGECHECK 函数名模板（**逐面**，段已求值）；`undefined` = 该面**无** MESSAGECHECK
+   * 钩子（写了 `隐藏情景/隐藏口上` 时报 `face-table-missing`，不静默）。
+   */
+  messageCheckTemplate?: string;
 }
 
 function resolveFace(face: string, timing: TimingBlock, ctx: TimingEmitContext): FaceResolution | null {
@@ -668,6 +673,9 @@ function resolveFace(face: string, timing: TimingBlock, ctx: TimingEmitContext):
     // `成功` 划分野自身即 SUCCESS 函数（避免重复生成同名函数）——由 adapter
     // 在表里把 `success` 留空表达（见 face-templates.ts 的 `成功` 条目）。
     success: successTpl,
+    // MESSAGECHECK 模板**逐面**（adapter 声明在同条的 `messageCheck`）；同一套段求值。
+    messageCheckTemplate:
+      spec.messageCheck === undefined ? undefined : applySegments(spec.messageCheck.template, segments),
   };
 }
 
@@ -736,14 +744,20 @@ export function buildFunctionName(
 /**
  * MESSAGECHECK 函数（规范 §3.2：`SETBIT RESULT, 0/1`）。
  *
- * 函数名模板 / 作用域段 / 位号 / 置位原语**全部来自 adapter**
- * （`KojoFaceTable.messageCheck`）；缺省 → 记 INFO 并跳过（该游戏无此概念）。
+ * 函数名模板**逐面**来自 adapter（`KojoFaceTemplate.messageCheck`，`_MESSAGECHECK`
+ * 插入点逐面不同——见契约头注释）；位号 / 置位原语来自位协议
+ * （`KojoFaceTable.messageCheck`）。一个面只有**一个**钩子函数，`隐藏情景` 与
+ * `隐藏口上` 是它的两条 `IF` 分支（各置各的位），故这里**只发一个函数头**。
+ *
+ * 缺位协议 → warning 跳过（该游戏无此概念）；面**无钩子**（模板缺省）→ error
+ * 忽略该子句（**不静默**：引擎从不调用无钩子面的 MESSAGECHECK）。
  */
 function emitMessageCheck(
   em: Emitter,
   timing: TimingBlock,
   ctx: TimingEmitContext,
   index: string | undefined,
+  face: FaceResolution,
 ): void {
   const proto = ctx.faceTable?.messageCheck;
   if (!proto) {
@@ -755,29 +769,29 @@ function emitMessageCheck(
     });
     return;
   }
-  const base = resolveFaceNameForMessageCheck(timing, ctx, index);
-  if (!base) return;
+  const tpl = face.messageCheckTemplate;
+  if (tpl === undefined) {
+    ctx.sink.report({
+      code: 'face-table-missing',
+      severity: 'error',
+      message: `分野「${timing.face.trim()}」没有 MESSAGECHECK 钩子（引擎不调用该面的 MESSAGECHECK）——\`隐藏情景:\` / \`隐藏口上:\` 无处落地，已忽略。`,
+      loc: timing.messageCheck[0]?.loc.start ?? null,
+    });
+    return;
+  }
+  const fnName = buildFunctionName(tpl, ctx.familySeg, ctx.charNo, index, tpl.includes('{i}'));
+  em.pushGenerated(0, `@${fnName}`);
   for (const mc of timing.messageCheck) {
-    const scopeSeg = proto.scopes[mc.scope];
     const bit = proto.bits[mc.scope];
-    if (scopeSeg === undefined || bit === undefined) {
+    if (bit === undefined) {
       ctx.sink.report({
         code: 'face-table-missing',
         severity: 'warning',
-        message: `适配器的 MESSAGECHECK 协议未声明作用域「${mc.scope}」的段/位号——已跳过该条。`,
+        message: `适配器的 MESSAGECHECK 协议未声明作用域「${mc.scope}」的位号——已跳过该条。`,
         loc: mc.loc.start,
       });
       continue;
     }
-    const fnName = buildFunctionName(
-      proto.template
-        .replace(/\{base\}/g, base)
-        .replace(/\{scope\}/g, scopeSeg),
-      ctx.familySeg,
-      ctx.charNo,
-      index,
-      true, // 模板含 `{i}`：有编号时消费、无编号时由 buildFunctionName 归一去掉
-    );
     const exprCtx: ExprContext = {
       aliases: ctx.aliases,
       dictionary: ctx.dictionary,
@@ -785,22 +799,11 @@ function emitMessageCheck(
       report: (d) => ctx.sink.report(d),
       loc: mc.loc.start,
     };
-    em.pushGenerated(0, `@${fnName}`);
     em.pushGenerated(0, `IF ${lowerExpression(mc.condition, exprCtx)}`);
     em.pushGenerated(0, (proto.setBit ?? 'SETBIT RESULT, {bit}').replace(/\{bit\}/g, String(bit)));
     em.pushGenerated(0, `ENDIF`);
-    em.blank();
   }
-}
-
-function resolveFaceNameForMessageCheck(
-  timing: TimingBlock,
-  ctx: TimingEmitContext,
-  index: string | undefined,
-): string | null {
-  const face = resolveFace(timing.face, timing, ctx);
-  if (!face) return null;
-  return buildFunctionName(face.template, ctx.familySeg, ctx.charNo, index, face.paramIndex);
+  em.blank();
 }
 
 /* ============================== HK-11②：指令编号解析 ============================== */

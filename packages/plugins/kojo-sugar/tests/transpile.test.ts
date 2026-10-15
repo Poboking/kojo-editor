@@ -235,10 +235,73 @@ describe('§3.2 时机 · MESSAGECHECK（隐藏情景 / 隐藏口上）', () => 
   it('隐藏情景 → SETBIT RESULT, 0；隐藏口上 → SETBIT RESULT, 1', () => {
     const src = '角色: 12\n时机 指令 311：\n    隐藏情景: 如果 她睡着了\n    隐藏口上: 如果 她睡着了\n    「呀。」\n';
     const { erb } = t(src);
-    expect(erb).toContain('MESSAGECHECK_SCENE_K12_311');
-    expect(erb).toContain('MESSAGECHECK_KOJO_K12_311');
+    // 一个面只有**一个**钩子函数（`_MESSAGECHECK` 中缀插在 `_MESSAGE_` 后、`${com}` 前）
+    expect(erb).toContain('@M_KOJO_MESSAGE_MESSAGECHECK_COM_K12_311');
     expect(erb).toContain('SETBIT RESULT, 0');
     expect(erb).toContain('SETBIT RESULT, 1');
+  });
+});
+
+describe('§3.2 时机 · MESSAGECHECK 函数名**逐面**（中缀插入点各异，引擎实录）', () => {
+  // 每面一条：产物函数头必须逐字等于引擎 `KOJO_MESSAGE.ERB` 的调用形。
+  // 三类插入点：COM 系插在 `_MESSAGE_` 之后、`${com}` 段之前；PALAM 系插在**子类型之前**；
+  // 其余（SPEVENT/CUSTOM_EVENT/DAILY_EVENT/MARKCNG/COUNTER）插在 `_K{n}` 之前。
+  const cases: ReadonlyArray<{ face: string; block: string; head: string }> = [
+    {
+      face: '指令·COM',
+      block: '时机 指令 311：\n    隐藏情景: 如果 TFLAG:193\n    「呀。」\n',
+      head: '@M_KOJO_MESSAGE_MESSAGECHECK_COM_K12_311',
+    },
+    {
+      face: '指令·SCOM',
+      block: '时机 指令 312 类型: SCOM：\n    隐藏情景: 如果 TFLAG:193\n    「呀。」\n',
+      head: '@M_KOJO_MESSAGE_MESSAGECHECK_SCOM_K12_312',
+    },
+    {
+      face: '计数器',
+      block: '时机 计数器 20：\n    隐藏情景: 如果 TFLAG:193\n    「呀。」\n',
+      head: '@M_KOJO_MESSAGE_COUNTER_MESSAGECHECK_K12_20',
+    },
+    {
+      face: '绝顶（PALAMCNG_B，无编号）',
+      block: '时机 绝顶：\n    隐藏情景: 如果 TFLAG:193\n    「呀。」\n',
+      head: '@M_KOJO_MESSAGE_PALAMCNG_MESSAGECHECK_B_K12',
+    },
+    {
+      face: '射精（PALAMCNG_A2，带部位号）',
+      block: '时机 射精 1：\n    隐藏情景: 如果 TFLAG:193\n    「呀。」\n',
+      head: '@M_KOJO_MESSAGE_PALAMCNG_MESSAGECHECK_A2_K12_1',
+    },
+    {
+      face: '标记（MARKCNG，无编号）',
+      block: '时机 标记：\n    隐藏情景: 如果 TFLAG:193\n    她沉默了很久。\n',
+      head: '@M_KOJO_MESSAGE_MARKCNG_MESSAGECHECK_K12',
+    },
+    {
+      face: '日常',
+      block: '时机 日常 100：\n    隐藏情景: 如果 TFLAG:193\n    「呀。」\n',
+      head: '@M_KOJO_DAILY_EVENT_MESSAGECHECK_K12_100',
+    },
+    {
+      face: '特殊事件',
+      block: '时机 特殊事件 1：\n    隐藏情景: 如果 TFLAG:193\n    「呀。」\n',
+      head: '@M_KOJO_SPEVENT_MESSAGECHECK_K12_1',
+    },
+  ];
+
+  it.each(cases)('$face → 产物含 $head', ({ block, head }) => {
+    const { erb, diagnostics } = t(`角色: 12\n${block}`);
+    expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(erb).toContain(head);
+    expect(erb).toContain('SETBIT RESULT, 0');
+  });
+
+  it('无钩子面（事件）写 `隐藏情景:` → face-table-missing error，**不静默**', () => {
+    const { erb, diagnostics } = t(
+      '角色: 12\n时机 事件 1：\n    隐藏情景: 如果 TFLAG:193\n    「呀。」\n',
+    );
+    expect(diagnostics.some((d) => d.code === 'face-table-missing' && d.severity === 'error')).toBe(true);
+    expect(erb).not.toContain('MESSAGECHECK');
   });
 });
 
@@ -1048,7 +1111,7 @@ describe('装配口径 · 分野模板来自 adapter（游戏知识只进 adapte
     );
     expect(erb).toContain('@M_KOJO_SUCCESS_COM_K12_311');
     expect(erb).toContain('TFLAG:192 = -1');
-    expect(erb).toContain('@M_KOJO_MESSAGECHECK_SCENE_K12_311');
+    expect(erb).toContain('@M_KOJO_MESSAGE_MESSAGECHECK_COM_K12_311');
     expect(erb).toContain('SETBIT RESULT, 0');
   });
 });

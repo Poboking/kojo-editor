@@ -700,18 +700,17 @@ export const SUGAR_TUTORIAL: Tutorial = {
         '时机块的最前面可以写两条特殊子句，条件成立时跳过一些内容。它们也以 `如果` 开头，条件写法和条件块里完全一样。',
         '`隐藏情景: 如果 条件` = 条件成立时，跳过游戏本来要显示的情景描写（游戏自己会讲的那段），直接让你的台词上场。',
         '`隐藏口上: 如果 条件` = 条件成立时，连你这份口上也跳过，等于这个场合你什么都没写。',
-        '两条都不写就都不跳过。它们翻译出来是两个很小的判断函数（`SETBIT RESULT, 0` / `1`），你只要写那一行。',
+        '两条都不写就都不跳过。它们翻译出来是同一个很小的判断函数，两条判断各置一位（`SETBIT RESULT, 0` / `1`），你只要写那两行。',
       ],
       samples: [
         {
-          caption: '两条子句各一条，以及它们翻译出来的两个小函数。',
+          caption: '两条子句各一条，以及它们共用的那个小函数。',
           kojo: ['时机 指令 311：', '    隐藏情景: 如果 她的诶嘿嘿 == 0', '    隐藏口上: 如果 FLAG:70'].join('\n'),
           erb: [
-            '@M_KOJO_教学示例_MESSAGECHECK_SCENE_K12_311',
+            '@M_KOJO_教学示例_MESSAGE_MESSAGECHECK_COM_K12_311',
             'IF CFLAG:TARGET:诶嘿嘿 == 0',
             'SETBIT RESULT, 0',
             'ENDIF',
-            '@M_KOJO_教学示例_MESSAGECHECK_KOJO_K12_311',
             'IF FLAG:70',
             'SETBIT RESULT, 1',
             'ENDIF',
