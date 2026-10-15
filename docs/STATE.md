@@ -6,7 +6,7 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **2615 passed / 34 skipped（2649）**；150 文件过 / 12 跳（162） |
+| 全量测试 | **2606 passed / 34 skipped（2640）**；150 文件过 / 12 跳（162） |
 | 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **2577 passed / 1 skipped（2578）**；157 文件全过（2026-10-15 haruki 实测于 master `b774253`，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
