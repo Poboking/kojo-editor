@@ -165,6 +165,7 @@ export type {
   EditorCodeActionContribution,
   EditorCommandContext,
   EditorCommandContribution,
+  EditorDecoratePayload,
   EditorDecoratorContribution,
   EditorDefinitionRequest,
   EditorDefinitionResult,

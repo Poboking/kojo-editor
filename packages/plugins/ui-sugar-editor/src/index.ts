@@ -73,10 +73,24 @@ export function createUiSugarEditorPlugin(): Plugin {
 
       /* -------------------- 贡献 1：编辑器波浪线（纯函数） -------------------- */
 
+      /**
+       * 任务 kind（2026-10-16 装饰热路径批）：`.kojo` 全量转译 + 诊断成形。
+       *
+       * **它天生搬不进 worker**：转译器要吃当前项目适配器注入的字典 / 时机分野模板 /
+       * 指令名表（游戏知识，`loadProject` 时才成形），worker 侧复现不了那份注入；
+       * 少了注入，`unknown-identifier` / `timing-face-unknown` 会凭空多出一批假错。
+       * 所以这张 kind **不进**装配层的 worker 表——宿主据此走"异步就地"那一档：
+       * 照样请出同步装饰轮（主线程只装配）、照样吃 `runLatest` 背压与版本校验，
+       * 只是 CPU 仍在宿主线程上。声明 `offloadKind` 而不是留空，是为了让
+       * "切回未改动标签零重算"的缓存对这三路同样生效。
+       */
+      const SUGAR_DECORATIONS_TASK = 'sugar.diagnostics';
+
       ctx.slots.register('ui.editor.decorator', {
         id: 'sugar-diagnostics',
         title: '.kojo 诊断波浪线',
         order: 10,
+        offloadKind: SUGAR_DECORATIONS_TASK,
         decorate(file): ReturnType<typeof diagnosticDecorations> {
           if (!isKojoFile(file.path)) return [];
           try {

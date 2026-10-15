@@ -31,7 +31,7 @@ import { EXTRACT_STORE_KEY, decodeBuckets, encodeBuckets, extractExpect } from '
 import type { ExtractExpect, FileBucket } from './snapshot';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { ConditionEngine } from './engine';
-import { collectExprSyntaxDecorations } from './decorator';
+import { EXPR_SYNTAX_DECORATIONS_TASK, conditionExtractorTasks, exprSyntaxDecorations } from './offload';
 import { diagnoseExpression } from './expr';
 import type { SchemaLookup } from './extract';
 
@@ -177,19 +177,19 @@ export function createConditionExtractorPlugin(): Plugin {
        复用 `requires` 里已声明的 `erb.parser` 服务（`parser`）——骨架扫描不重复实现，
        表达式诊断走 `./expr.ts`。管线是纯函数（文本进、行级装饰出），与槽契约一致。
        `decorate` 的匹配口径只认原生 ERB/ERM（`.kojo` 的语法诊断另有其人，糖线）。
+
+       2026-10-16 装饰热路径批 —— 声明 `offloadKind`：宿主据此把这条链请出同步装饰轮
+       （worker 表由装配层用 erb-parser 的 `scanControlFlow` 纯函数填好，见 `./offload.ts`）。
+       `decorate()` 保留为**就地回退**，与任务实现共用同一个纯函数 `exprSyntaxDecorations`，
+       两条走法不可能给出两种波浪线。
        */
       ctx.slots.register('ui.editor.decorator', {
         id: 'erb-expr-syntax',
         title: 'ERB 条件表达式波浪线',
         order: 21,
+        offloadKind: EXPR_SYNTAX_DECORATIONS_TASK,
         decorate(file): LineDecoration[] {
-          if (!/\.(erb|erm)$/i.test(file.path) || file.text.length === 0) return [];
-          return collectExprSyntaxDecorations(file.text, (t) => parser.scanControlFlow(t)).map((d) => ({
-            line: d.line,
-            severity: 'warning' as const,
-            message: d.message,
-            code: d.code,
-          }));
+          return exprSyntaxDecorations({ path: file.path, text: file.text }, (t) => parser.scanControlFlow(t));
         },
       });
     },
@@ -202,3 +202,5 @@ export { parseExpression, splitTopLevelCommas, walkExpr } from './expr';
 export { diagnoseExpression } from './expr';
 export type { ExprDiagnostic } from './expr';
 export { collectExprSyntaxDecorations, type ExprSyntaxDecoration } from './decorator';
+// 可搬运任务表（装饰热路径批；装配层用 erb-parser 的纯扫描器填这张表）
+export { EXPR_SYNTAX_DECORATIONS_TASK, conditionExtractorTasks, exprSyntaxDecorations } from './offload';

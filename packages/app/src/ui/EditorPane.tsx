@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import type {
@@ -9,7 +9,6 @@ import type {
   EditorSaveWarning,
   EditorTextEdit,
   ErbParserService,
-  LineDecoration,
 } from '@kojo/plugin-api';
 import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
@@ -71,6 +70,10 @@ import { isDirectMode, useDirectMode } from './direct-mode';
 import { isInWorkspaceFile } from './file-area';
 // 问题汇总：refreshMarkers 逐文件整份发布两层波浪线（erb-parser / condition-extractor）到 problem-store
 import { clearAllProblems, clearProblems, setProblems } from './problem-store';
+// 装饰热路径（PERF-4）：同步/异步分层、(path, versionId) LRU、陈旧结果落地前作废
+import { createMarkerRunner, type MarkerContributor } from './marker-pool';
+// worker 侧有没有这条 kind，判据只有一处：装配层那张两侧共用的任务表
+import { hasWorkerTask } from '../compute-tasks';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -439,42 +442,65 @@ export function EditorPane({
   }, []);
 
   /**
-   * 重算并应用编辑器波浪线：把全部 `ui.editor.decorator` 贡献（纯函数）的结果
-   * 合并为 Monaco markers。装饰器**抛错不打断编辑**（能力出错要"退化可见"而非
-   * 让编辑器崩）——出错即跳过该贡献，其余照常呈现。
+   * 重算并应用编辑器波浪线（2026-10-16 装饰热路径批：调度住在 `marker-pool.ts`）。
+   *
+   * 本函数只做两件事：**发起一次刷新** + **定义"结果怎么上屏"**。谁同步跑、谁进
+   * worker、同版本要不要重算、迟到的结果能不能信，全在 `createMarkerRunner` 里
+   * （那里的读数与判据都可单测）。
+   *
+   * 发布语义与改动前逐字相同：一次刷新 = 该 owner 的 markers **整档替换** +
+   * problem-store 该文件**整档替换**；装饰器抛错不打断编辑（退化可见）。
+   * 声明了 `offloadKind` 的贡献会分两拍落地（轻的先上屏、重的回来再整档替换一次），
+   * 每一拍仍是一整档，不存在"追加/残留"。
    */
+  const markerRunner = useMemo(
+    () =>
+      createMarkerRunner({
+        compute: kernel.compute,
+        workerHasTask: hasWorkerTask,
+        // 槽位贡献映射成热路径需要的最小面（顺序 = 槽位顺序 = 面板行序）
+        contributors: () =>
+          kernel.slots
+            .query('ui.editor.decorator')
+            .map((c): MarkerContributor => ({
+              id: c.id,
+              ...(c.offloadKind === undefined ? {} : { offloadKind: c.offloadKind }),
+              decorate: (payload) => c.decorate(payload),
+            })),
+        project: () => kernel.project.current(),
+        // 版本以**当前仍活着的那个 model** 为准：标签关了 / model 换了 → undefined
+        // ⇒ 在途结果一律丢弃（陈旧防护与"别给已关闭文件发问题"同一把尺子）
+        versionOf: (path) => {
+          const model = entriesRef.current.get(path)?.model;
+          return model && !model.isDisposed() ? model.getVersionId() : undefined;
+        },
+        publish: (path, decorations) => {
+          const model = entriesRef.current.get(path)?.model;
+          if (!model || model.isDisposed()) return; // 发布时标签已关：什么都不做
+          monaco.editor.setModelMarkers(model, MARKER_OWNER, decorationsToMarkers(monaco, model, decorations));
+          // 同一份 decorations 发布到问题面板：两层波浪线（结构 error / 表达式 warning）在此汇总成可展开列表
+          setProblems(
+            path,
+            decorations.map((d) => ({
+              path,
+              line: d.line,
+              severity: d.severity,
+              message: d.message,
+              ...(d.code ? { code: d.code } : {}),
+            })),
+          );
+        },
+        record: (name, ms, note) => perf.record(name, ms, note),
+      }),
+    [kernel],
+  );
+
   const refreshMarkers = useCallback(
     (model: Monaco.editor.ITextModel, path: string) => {
-      // 探针（内核优化 L0）：`markers.total` = 一次装饰刷新的主线程总耗时；
-      // 逐装饰器再记一条，用于区分"是 sugar 转译贵"还是"别的装饰器贵"。
-      const t0 = performance.now();
-      const project = kernel.project.current();
-      const text = model.getValue();
-      const decorations: LineDecoration[] = [];
-      for (const contribution of kernel.slots.query('ui.editor.decorator')) {
-        const d0 = performance.now();
-        try {
-          decorations.push(...contribution.decorate({ path, text, project }));
-        } catch {
-          // 单个装饰器失败不影响其余（错误写入由该插件自行上报，宿主不静默吞掉整轮）
-        }
-        perf.record(`markers.decorate:${contribution.id}`, performance.now() - d0);
-      }
-      monaco.editor.setModelMarkers(model, MARKER_OWNER, decorationsToMarkers(monaco, model, decorations));
-      // 同一份 decorations 发布到问题面板：两层波浪线（结构 error / 表达式 warning）在此汇总成可展开列表
-      setProblems(
-        path,
-        decorations.map((d) => ({
-          path,
-          line: d.line,
-          severity: d.severity,
-          message: d.message,
-          ...(d.code ? { code: d.code } : {}),
-        })),
-      );
-      perf.record('markers.total', performance.now() - t0, `${model.getLineCount()} 行 / ${text.length} 字符`);
+      if (model.isDisposed()) return;
+      markerRunner.refresh(path, () => (model.isDisposed() ? '' : model.getValue()));
     },
-    [kernel],
+    [markerRunner],
   );
 
   // ref 化刷新函数，供只注册一次的 Monaco 回调取用最新闭包
@@ -1228,12 +1254,15 @@ export function EditorPane({
       entry.listener.dispose();
       entry.model.dispose();
       clearProblems(path); // 标签关闭：同步清掉该文件在问题面板里的条目
+      // 装饰缓存跟着标签走：新开的 model 版本号会从 1 重新数，留着旧条目就可能
+      // 把"上一份 model 的同版本号"当成同一份内容发上屏（判据不成立就不许命中）
+      markerRunner.dropPath(path);
       entriesRef.current.delete(path);
       baseVersionRef.current.delete(path);
       viewStatesRef.current.delete(path);
       onDirtyChangeRef.current?.(path, false);
     }
-  }, [openPaths]);
+  }, [openPaths, markerRunner]);
 
   // 切换活动标签（model 复用；首次打开读盘建 model）
   useEffect(() => {

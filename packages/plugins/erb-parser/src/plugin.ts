@@ -12,10 +12,18 @@ import type {
   Plugin,
 } from '@kojo/plugin-api';
 import { KernelServices, isErbDialectPath, projectFingerprintOf } from '@kojo/plugin-api';
-import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload, type ScanFlowPayload } from './offload';
+import {
+  PARSE_FILE_TASK,
+  SCAN_FLOW_TASK,
+  STRUCTURE_DECORATIONS_TASK,
+  erbParserTasks,
+  erbStructureDecorations,
+  type ParseFilePayload,
+  type ScanFlowPayload,
+} from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
-import { buildStructureFixes, structureDiagnostic } from './structure-fix';
+import { buildStructureFixes } from './structure-fix';
 import { erbDocumentSymbols } from './document-symbols';
 import { erbFoldingRanges } from './folding';
 import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from './references';
@@ -506,16 +514,19 @@ export function createErbParserPlugin(): Plugin {
        `.kojo` 的语法诊断另有其人（糖线）。
        超大文件不降级、不跳过：判据是单遍线性扫描，实测读数见 IMPLEMENTATION-LOG 本批记录，
        真要限流也应该由宿主那侧的去抖/上限来做，不在这里悄悄少报。
+
+       2026-10-16 装饰热路径批 —— 声明 `offloadKind`：全文体检是**纯数据进纯数据出**，
+       于是宿主可以把它整条请出同步装饰轮、送进 worker（宿主主线程只装配）。适用性判据
+       与成形逻辑都住在 `offload.ts` 的 `erbStructureDecorations` **一处**，`decorate()`
+       （无通道时的就地回退）与任务实现共用它——两处各拼一份必然漂移。
        */
       ctx.slots.register('ui.editor.decorator', {
         id: 'erb-structure',
         title: 'ERB 结构错误波浪线',
         order: 20,
+        offloadKind: STRUCTURE_DECORATIONS_TASK,
         decorate(file): LineDecoration[] {
-          if (!isDialect(file.path) || file.text.length === 0) return [];
-          // 逐字段的形状只住在 `structureDiagnostic` 一处：💡 那边给出的"我修的是哪条诊断"
-          // 用的就是同一个函数 ⇒ 波浪线与快速修复不可能对不上（B9 的关联键全靠它）
-          return checkControlFlowStructure(file.text).map(structureDiagnostic);
+          return erbStructureDecorations({ path: file.path, text: file.text });
         },
       });
 

@@ -19,6 +19,7 @@ import { createUiSugarLiftPlugin } from '@kojo/plugin-ui-sugar-lift';
 import { createUiSugarPreviewPlugin } from '@kojo/plugin-ui-sugar-preview';
 import { createUiSugarEditorPlugin } from '@kojo/plugin-ui-sugar-editor';
 import { tauriBridge } from './bridge/tauri-bridge';
+import { computeTasks } from './compute-tasks';
 import { createCascadeWatermarks } from './cascade-watermarks';
 import { perf } from './perf';
 // vite ?worker：并行计算线程入口（纯 CPU 任务搬出主线程）
@@ -70,6 +71,11 @@ export async function bootstrapKernel(): Promise<Kernel> {
       createUiSugarEditorPlugin(),
     ],
   });
+  // 装配层任务表并入**宿主侧本地实现**（在 start 之前）：跨插件合成的 kind
+  //（如 `erb.exprSyntaxDecorations`）没有任何插件会自己注册它，而 worker 挂了 /
+  // 无并行通道时 `offload` 要能回落到本地实现——缺一条就是抛 "No local
+  // implementation registered"。同 kind 重复注册是幂等的（各插件仍按自己的表注册）。
+  for (const [kind, impl] of Object.entries(computeTasks)) kernel.compute.registerTask(kind, impl as never);
   // 并行运输层：**在 start 之前**接上，让首次索引构建就吃到多线程
   installComputeTransport(kernel);
   await kernel.start();

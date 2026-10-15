@@ -253,6 +253,10 @@ describe('S6 / 插件接线（跨插件只走服务槽）', () => {
     expect(k.decorators).toHaveLength(1);
     expect(k.decorators[0]!.id).toBe('sugar-diagnostics');
     expect(typeof k.decorators[0]!.decorate).toBe('function');
+    // 装饰热路径批（PERF-4）：声明 offloadKind ⇒ 宿主把整份 `.kojo` 转译请出同步装饰轮。
+    // 这条 kind **不在** worker 任务表里（转译器要吃项目内注入的适配器表），宿主走异步就地；
+    // 声明它的收益是"同版本重触发零重算"的缓存在这条线上同样生效。
+    expect(k.decorators[0]!.offloadKind).toBe('sugar.diagnostics');
     expect(k.saveHandlers).toHaveLength(1);
     expect(k.saveHandlers[0]!.id).toBe('sugar-save');
     expect(typeof k.saveHandlers[0]!.save).toBe('function');

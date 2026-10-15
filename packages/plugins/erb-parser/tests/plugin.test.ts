@@ -9,6 +9,7 @@ import type {
   Unsubscribe,
 } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
+import { erbParserTasks } from '../src/offload';
 import { makeComputeStub } from './support';
 
 /** 伪 FileIO：只用得到 readText / readTexts / walkDir / stat */
@@ -82,6 +83,8 @@ interface RegisteredSlot {
     id: string;
     title?: string;
     order?: number;
+    /** 契约 additive 字段（2026-10-16 装饰热路径批） */
+    offloadKind?: string;
     decorate?: (f: { path: string; text: string; project: GameProject | null }) => unknown[];
     provideActions?: (f: {
       path: string;
@@ -315,6 +318,21 @@ describe('erb-parser 插件 · ui.editor.decorator（ERB 结构波浪线）', ()
     const found = decorator();
     expect(found?.id).toBe('erb-structure');
     expect(found?.title ?? '').toContain('ERB');
+  });
+
+  it('声明 offloadKind，且任务实现与 decorate 同结果（两条走法不许漂移）', () => {
+    const found = decorator()!;
+    expect(found.offloadKind).toBe('erb.structureDecorations');
+    const task = erbParserTasks['erb.structureDecorations'] as unknown as (p: {
+      path: string;
+      text: string;
+    }) => unknown[];
+    const payload = { path: 'C:/game/ERB/SAMPLE.ERB', text: broken };
+    expect(task(payload)).toEqual(found.decorate!({ ...payload, project: null }));
+    // 不适用该文件 = 空数组；判据只住在 `erbStructureDecorations` 一处
+    expect(task({ path: 'C:/notes/readme.md', text: broken })).toEqual([]);
+    expect(task({ path: 'C:/game/ERB/a.erb', text: '' })).toEqual([]);
+    expect(found.decorate!({ path: 'C:/notes/readme.md', text: broken, project: null })).toEqual([]);
   });
 
   it('.ERB 少一个 ENDIF ⇒ 一条 error 装饰，行号指着开块那一行，code 带得上类型', () => {

@@ -540,13 +540,41 @@ export interface LineDecoration {
   readonly code?: string;
 }
 
+/**
+ * `offloadKind` 任务的**统一载荷**（纯数据，可结构化克隆——"传数据不传函数"）。
+ *
+ * 宿主在装饰刷新时按贡献的 `offloadKind` 把 `{path, text}` 送进计算池，任务实现
+ * 返回 `LineDecoration[]`。**不含 `project`**：可搬运的任务只吃文本与路径
+ * （要读项目内注入服务的装饰器因此天生搬不进 worker——见 `offloadKind` 注）。
+ */
+export interface EditorDecoratePayload {
+  readonly path: string;
+  readonly text: string;
+}
+
 export interface EditorDecoratorContribution extends ContributionBase {
   readonly title: string;
   /**
    * 对单个文件产出行级装饰（**纯函数**：给定同输入必得同输出，不读盘不写盘）。
    * 不适用该文件的贡献应返回空数组（`matcher` 语义内聚在实现里）。
+   *
+   * 声明了 `offloadKind` 的贡献：本方法是**就地回退路径**（无并行通道 / 该 kind
+   * 只能在宿主执行时走它），语义必须与任务实现**逐字段相同**——两者应共用同一个纯函数。
    */
   decorate(file: { path: string; text: string; project: GameProject | null }): LineDecoration[];
+  /**
+   * 可选（additive，2026-10-16 装饰热路径批）：**把本贡献的重计算请出同步装饰轮**。
+   *
+   * 值 = 已在计算池任务体系里注册的 kind（`ComputePool.registerTask` / 装配层
+   * `compute-tasks.ts` 两侧共用那张表）。载荷 `EditorDecoratePayload`，返回 `LineDecoration[]`。
+   * 宿主据此将本贡献改为**异步派发**：`compute.runLatest`（同文件尾缘合并背压，
+   * 交互档）里执行——kind 在 worker 侧在表 → `compute.offload`（真并行，主线程只装配）；
+   * 不在表（实现依赖插件内注入的服务，worker 复现不了）→ 宿主异步**就地**调 `decorate`。
+   * 两种走法都脱离同步装饰轮，结果落地前一律校验 model 版本（陈旧即丢）。
+   *
+   * **不声明 = 行为与本批之前完全一致**（同步、就地、零缓存语义变化）。
+   */
+  readonly offloadKind?: string;
 }
 
 /* ----------------------- ui.editor.saveHandler ----------------------- */
