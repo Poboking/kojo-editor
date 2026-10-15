@@ -7,12 +7,16 @@
 //!
 //! 二进制数据经 base64 字符串跨 IPC（确定性强；口上文件体量下开销可忽略）。
 
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use notify::event::{EventKind, ModifyKind, RenameMode};
 use notify::Event;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 /* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
@@ -884,6 +888,582 @@ fn map_drag_drop(event: tauri::DragDropEvent) -> Option<DragDropPayload> {
     Some(DragDropPayload { phase, paths })
 }
 
+/* -------------------- 全文检索（通用 IO 原语，零游戏知识） -------------------- */
+//
+// ADR-0003：本层只做 IO 原语——"读盘 + 匹配 + 切行"是纯机械活，不认识任何领域概念
+// （哪个目录是口上、哪个文件是剧本，全由调用方给 `roots`，本层只当路径用）。
+//
+// 为什么下沉到 Rust 而不是前端 Worker 池：语料 3.8k 文件 / 4.1M 行，索引阶段单是
+// 读盘就累计 45.1s（并发 8 摊到 ~9.0s 墙钟）；检索每次查询都要**全量重读**，把这份
+// 字节搬过 IPC 再在 JS 里匹配，等于把最贵的一段压在最热的路径上（还顺手把 4M 行的
+// 副本留在 WebView 内存里）。原生线程 + regex 在同一份字节上匹配，只有命中行过 IPC。
+//
+// 编码口径：**先解码再匹配**（不是"ASCII 按字节匹配 + 命中行再解码"）。
+// 理由：混编码语料里 utf-16 文件按字节永远匹配不到，字节路径必须特判；而"正则 /
+// 全词 / 大小写"三个开关在两条路径上会各有一套语义（正则根本无法按字节解释非 ASCII）。
+// 统一解码只有一套语义，代价是每文件多一趟解码——`byte_prefilter` 把大多数文件挡在
+// 解码之前（字面量 + 纯 ASCII + 大小写敏感时，命中必然在原始字节里出现）。
+
+/// 命中条数硬顶（前端上限之上再兜一层：IPC 载荷不许失控）
+const SEARCH_HARD_CAP: usize = 5000;
+/// 单文件命中上限（一个巨型文件不许吃掉全部结果）
+const SEARCH_PER_FILE_CAP: usize = 500;
+/// 命中行预览长度上限（UTF-16 code unit）
+const SEARCH_PREVIEW_UNITS: usize = 240;
+/// 大文件跳过阈值（字节）；跳过一律计数上报，不静默
+const SEARCH_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+/// 二进制嗅探窗口（字节）
+const SEARCH_SNIFF_BYTES: usize = 8192;
+/// 进度节流：文件数或时间先到者报
+const SEARCH_PROGRESS_FILES: usize = 200;
+const SEARCH_PROGRESS_MS: u128 = 150;
+/// 缺省并行度（与实际读盘段同量级：索引阶段就是 8 路并发）
+const SEARCH_DEFAULT_THREADS: usize = 8;
+
+/// WebView 事件名：检索进度。payload = `SearchProgressPayload`。
+const SEARCH_PROGRESS_EVENT: &str = "kojo:search-progress";
+
+/// 取消集合：`cancel_search` 写入、检索线程逐文件读取。
+/// 用 id 而不是布尔——同一时刻可能有多条检索（前端 id 自增），
+/// 取消必须精确命中一条，不许把别人的检索一起掐掉。
+#[derive(Default)]
+struct SearchState {
+    cancelled: std::sync::Arc<Mutex<HashSet<u64>>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct SearchOptionsDto {
+    is_regex: Option<bool>,
+    case_sensitive: Option<bool>,
+    whole_word: Option<bool>,
+    /// 限定扩展名（大小写与点号由本层再归一化一道：调用方给脏数据也不放行）
+    extensions: Option<Vec<String>>,
+    max_results: Option<usize>,
+    /// 并行度（缺省 8；上限 32 防"给我 512 线程"这类输入）
+    threads: Option<usize>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct SearchRequestDto {
+    /// 调用方自增 id：进度事件按它过滤，取消按它认领
+    search_id: u64,
+    /// 检索根（一个或多个；重叠/嵌套由本层去重）
+    roots: Vec<String>,
+    query: String,
+    options: SearchOptionsDto,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchMatchDto {
+    /// 1 基行号
+    line: u32,
+    /// 1 基列号（UTF-16 code unit，与 JS / Monaco 同口径）
+    column: u32,
+    /// 命中行文本（超长时以命中为中心开窗，两端的省略号算在窗口里）
+    preview: String,
+    /// 命中区间在 `preview` 内的起止（UTF-16 code unit，半开）
+    start: u32,
+    end: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchFileDto {
+    path: String,
+    matches: Vec<SearchMatchDto>,
+}
+
+#[derive(Serialize, Default, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct SearchSkippedDto {
+    /// 含 NUL 且非 utf-16（二进制：不参与检索，但要说得清跳过了多少）
+    binary: u32,
+    too_large: u32,
+    /// 读不到的文件（metadata / 读字节失败 + 遍历条目失败）——两者都是"这个文件没被检索"
+    unreadable: u32,
+    /// 扩展名过滤挡下的文件数
+    filtered: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResultDto {
+    /// 按路径升序（并行合并后排序 ⇒ 线程数不影响输出顺序）
+    files: Vec<SearchFileDto>,
+    total_matches: u64,
+    /// 结果不完整（命中上限 / 单文件上限 / 取消）——前端必须显式说明，不许看起来"搜完了"
+    truncated: bool,
+    cancelled: bool,
+    files_scanned: u32,
+    skipped: SearchSkippedDto,
+    elapsed_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchProgressPayload {
+    search_id: u64,
+    files_scanned: u32,
+    total_files: u32,
+    match_count: u64,
+}
+
+/// UTF-16 code unit 长度（JS 字符串下标的口径）
+fn utf16_len(s: &str) -> usize {
+    s.chars().map(|c| c.len_utf16()).sum()
+}
+
+fn utf16_units(s: &str) -> Vec<u16> {
+    s.encode_utf16().collect()
+}
+
+/// 省略号（U+2026）——作为 UTF-16 单元直接塞进窗口
+const ELLIPSIS_UNIT: u16 = 0x2026;
+
+/// 命中行 → 预览窗口。超长行以命中为中心开窗；两端截断时加省略号（计入窗口）。
+/// 返回 (窗口单元, 命中起点, 命中终点)，偏移**相对返回的窗口**。
+fn preview_window(units: &[u16], start: usize, end: usize, cap: usize) -> (Vec<u16>, u32, u32) {
+    let total = units.len();
+    if total <= cap {
+        return (units.to_vec(), start as u32, end as u32);
+    }
+    // 命中比窗口还长时，窗口至少装得下整段命中（宁可超一截预览，不可把命中切没）
+    let hit_len = end.saturating_sub(start);
+    let window = cap.max(hit_len);
+    let half = window.saturating_sub(hit_len) / 2;
+    let from = start.saturating_sub(half).min(total.saturating_sub(window));
+    let to = (from + window).min(total);
+    let head_trim = from > 0;
+    let tail_trim = to < total;
+    let mut out: Vec<u16> = Vec::with_capacity(window + 2);
+    if head_trim {
+        out.push(ELLIPSIS_UNIT);
+    }
+    out.extend_from_slice(&units[from..to]);
+    if tail_trim {
+        out.push(ELLIPSIS_UNIT);
+    }
+    let lead = if head_trim { 1 } else { 0 };
+    (
+        out,
+        (lead + start - from) as u32,
+        (lead + end - from) as u32,
+    )
+}
+
+/// 模式 + 三个开关 → 匹配器。口径 = **逐行匹配**（grep 语义：`^`/`$` 落在行首行尾，
+/// 跨行模式不参与；这与"点开能看到行号"的宿主呈现是一致的）。
+/// 全词 = `\b` 包夹，与主流编辑器同口径：首尾是非词字符的模式在全词模式下匹配不到，
+/// 那是 `\b` 的语义本身，不另发明一套"相邻字符判定"。
+fn build_matcher(
+    query: &str,
+    is_regex: bool,
+    case_sensitive: bool,
+    whole_word: bool,
+) -> Result<Regex, String> {
+    let body = if is_regex {
+        query.to_string()
+    } else {
+        regex::escape(query)
+    };
+    let body = if whole_word {
+        format!(r"\b(?:{body})\b")
+    } else {
+        body
+    };
+    let pattern = if case_sensitive {
+        body
+    } else {
+        format!("(?i){body}")
+    };
+    Regex::new(&pattern).map_err(|e| format!("正则无效：{e}"))
+}
+
+/// 字节级预筛：只在"字面量 + 纯 ASCII + 大小写敏感"时成立——
+/// 此时命中必然在原始字节里原样出现（utf-8 / shift_jis 对 ASCII 段逐字节相同），
+/// 字节里没有就不必解码（utf-16 由调用方先排除）。
+/// 大小写不敏感不做预筛：Unicode 简单大小写折叠（如 U+212A KELVIN ↔ 'k'）会让
+/// "字节里有"与"文本里能匹配"不再等价——省下的解码不值一次漏报。
+fn byte_prefilter(query: &str, is_regex: bool, case_sensitive: bool) -> Option<regex::bytes::Regex> {
+    if is_regex || !case_sensitive || query.is_empty() || !query.is_ascii() {
+        return None;
+    }
+    regex::bytes::Regex::new(&regex::escape(query)).ok()
+}
+
+/// utf-16 BOM → 对应编码（FF FE = LE / FE FF = BE）
+fn utf16_bom_encoding(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        Some(encoding_rs::UTF_16LE)
+    } else if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        Some(encoding_rs::UTF_16BE)
+    } else {
+        None
+    }
+}
+
+/// 二进制判定：utf-16 的 NUL 是编码产物（不是二进制信号），故带 BOM 的那支不算。
+fn looks_binary(bytes: &[u8], utf16ish: bool) -> bool {
+    !utf16ish && bytes[..bytes.len().min(SEARCH_SNIFF_BYTES)].contains(&0)
+}
+
+/// 字节 → 检索用文本。探测口径与内核 `probeEncoding` **逐条一致**
+/// （BOM → UTF-8 严格校验 → shift_jis 兜底；utf-16 只认 BOM 那一支）：
+/// 命中行的预览必须与编辑器打开同一文件看到的文本相同，两套探测会让"搜索结果"
+/// 与"点进去看到的正文"对不上——那比漏几个文件更坏。
+/// 代价：无 BOM 的 utf-16 会按 shift_jis 解成乱码，且因含 NUL 被计入 `skipped.binary`
+/// （可见、可数，不是静默漏报）。
+/// 解码失败不阻断（与 `decode_bytes` 同口径：替换字符只出声，只读检索不该硬失败）。
+fn decode_for_search(bytes: &[u8]) -> Cow<'_, str> {
+    if let Some(enc) = utf16_bom_encoding(bytes) {
+        let (text, _, had_errors) = enc.decode(bytes);
+        if had_errors {
+            eprintln!("[search] utf-16 解码出现替换字符（输入非法或不完整）");
+        }
+        return Cow::Owned(text.into_owned());
+    }
+    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    match std::str::from_utf8(body) {
+        Ok(s) => Cow::Borrowed(s),
+        Err(_) => {
+            let (text, _, _) = encoding_rs::SHIFT_JIS.decode(bytes);
+            Cow::Owned(text.into_owned())
+        }
+    }
+}
+
+/// 一份文本 → 命中（受 `cap` 限制）。返回 (命中, 是否因上限截断)。
+///
+/// 截断判定 = **真的又出现了一个装不下的命中**（不是"恰好装满就算截断"）：
+/// 恰好装满时结果其实是完整的，报截断会让作者去调上限，白折腾。
+fn scan_text(text: &str, matcher: &Regex, cap: usize) -> (Vec<SearchMatchDto>, bool) {
+    let cap = cap.max(1);
+    let mut out: Vec<SearchMatchDto> = Vec::new();
+    for (idx, raw) in text.split('\n').enumerate() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        let mut units: Option<Vec<u16>> = None;
+        for m in matcher.find_iter(line) {
+            if out.len() >= cap {
+                return (out, true);
+            }
+            let u = units.get_or_insert_with(|| utf16_units(line));
+            let start = utf16_len(&line[..m.start()]);
+            let end = utf16_len(&line[..m.end()]);
+            let (win, ws, we) = preview_window(u.as_slice(), start, end, SEARCH_PREVIEW_UNITS);
+            out.push(SearchMatchDto {
+                line: idx as u32 + 1,
+                column: start as u32 + 1,
+                preview: String::from_utf16_lossy(&win),
+                start: ws,
+                end: we,
+            });
+        }
+    }
+    (out, false)
+}
+
+enum FileOutcome {
+    Hits(Vec<SearchMatchDto>, bool),
+    Miss,
+    Binary,
+    TooLarge,
+    Unreadable,
+}
+
+fn scan_file(
+    path: &Path,
+    matcher: &Regex,
+    prefilter: Option<&regex::bytes::Regex>,
+    cap: usize,
+) -> FileOutcome {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return FileOutcome::Unreadable,
+    };
+    if meta.len() > SEARCH_MAX_FILE_BYTES {
+        return FileOutcome::TooLarge;
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(_) => return FileOutcome::Unreadable,
+    };
+    // 二进制判定放在预筛**之前**：`skipped.binary` 得是"这批候选里的二进制文件数"，
+    // 与查询词无关；反过来（先预筛）会让这个数字随查询漂——同一个目录换个词，
+    // 界面上的"跳过 N 个二进制文件"就变，那种读数没法信。
+    let utf16ish = utf16_bom_encoding(&bytes).is_some();
+    if looks_binary(&bytes, utf16ish) {
+        return FileOutcome::Binary;
+    }
+    // 字节级预筛：不命中的文件整个跳过解码（utf-16 的字节被 0 隔开，预筛对它不成立）
+    if !utf16ish {
+        if let Some(pre) = prefilter {
+            if !pre.is_match(&bytes) {
+                return FileOutcome::Miss;
+            }
+        }
+    }
+    let text = decode_for_search(&bytes);
+    let (hits, clipped) = scan_text(&text, matcher, cap);
+    if hits.is_empty() {
+        FileOutcome::Miss
+    } else {
+        FileOutcome::Hits(hits, clipped)
+    }
+}
+
+/// 隐藏项（`.git` / 编辑器临时文件）整棵跳过：与 ripgrep 缺省一致，也顺手绕开
+/// 版本库元数据这种"搜了全是噪声"的目录。
+fn is_hidden_entry(e: &walkdir::DirEntry) -> bool {
+    e.file_name()
+        .to_str()
+        .map(|n| n.starts_with('.'))
+        .unwrap_or(false)
+}
+
+/// 收集候选文件（去重 + 路径升序 ⇒ 并行合并后输出顺序与线程数无关）。
+///
+/// 遍历失败**计数 + 出声**（前若干条打 stderr，其余只计数）：walkdir 逐个条目返回 Result，
+/// 一个读不到 metadata 的条目（超长路径 / 权限 / 句柄）若被 filter 掉就再无声息——
+/// 那正是"搜不到某个文件却没有任何说法"的形状。计数汇入 `skipped.unreadable`。
+fn collect_files(
+    roots: &[String],
+    extensions: &[String],
+    filtered: &mut u32,
+    walk_errors: &mut u32,
+) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut reported = 0usize;
+    for root in roots {
+        let walker = walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| e.depth() == 0 || !is_hidden_entry(e));
+        for entry in walker {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    *walk_errors += 1;
+                    if reported < 5 {
+                        reported += 1;
+                        eprintln!("[search] 遍历条目失败（已计入 skipped.unreadable）：{err}");
+                    }
+                    continue;
+                }
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let p = entry.path();
+            if !extensions.is_empty() {
+                let ext = p
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                    .unwrap_or_default();
+                if !extensions.iter().any(|x| *x == ext) {
+                    *filtered += 1;
+                    continue;
+                }
+            }
+            out.push(p.to_path_buf());
+        }
+    }
+    out.sort_by(|a, b| {
+        a.to_string_lossy()
+            .to_lowercase()
+            .cmp(&b.to_string_lossy().to_lowercase())
+    });
+    out.dedup_by(|a, b| a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase());
+    out
+}
+
+#[derive(Default)]
+struct SkipCounters {
+    binary: AtomicU32,
+    too_large: AtomicU32,
+    unreadable: AtomicU32,
+}
+
+impl SkipCounters {
+    fn to_dto(&self, filtered: u32, walk_errors: u32) -> SearchSkippedDto {
+        SearchSkippedDto {
+            binary: self.binary.load(Ordering::Relaxed),
+            too_large: self.too_large.load(Ordering::Relaxed),
+            unreadable: self.unreadable.load(Ordering::Relaxed) + walk_errors,
+            filtered,
+        }
+    }
+}
+
+fn is_cancelled(cancel: &Mutex<HashSet<u64>>, id: u64) -> bool {
+    cancel.lock().map(|g| g.contains(&id)).unwrap_or(false)
+}
+
+/// 检索主体。`emit` 注入而非直接用 `AppHandle`：单测要能在没有 Tauri 运行时的情况下
+/// 跑真语料（进度回调对判据无影响，凭这一层把"并行检索"整段变成可测代码）。
+fn run_search(
+    emit: &(dyn Fn(SearchProgressPayload) + Sync),
+    cancel: &Mutex<HashSet<u64>>,
+    req: &SearchRequestDto,
+) -> Result<SearchResultDto, String> {
+    let started = std::time::Instant::now();
+    if req.query.is_empty() {
+        return Err("检索词为空".to_string());
+    }
+    let o = &req.options;
+    let is_regex = o.is_regex.unwrap_or(false);
+    let case_sensitive = o.case_sensitive.unwrap_or(false);
+    let whole_word = o.whole_word.unwrap_or(false);
+    let matcher = build_matcher(&req.query, is_regex, case_sensitive, whole_word)?;
+    let prefilter = byte_prefilter(&req.query, is_regex, case_sensitive);
+    let max_results = o.max_results.unwrap_or(2000).clamp(1, SEARCH_HARD_CAP);
+    let threads = o
+        .threads
+        .unwrap_or(SEARCH_DEFAULT_THREADS)
+        .clamp(1, 32);
+    let extensions: Vec<String> = o
+        .extensions
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| e.trim().trim_start_matches('.').to_ascii_lowercase())
+        .filter(|e| !e.is_empty())
+        .collect();
+
+    let mut filtered: u32 = 0;
+    let mut walk_errors: u32 = 0;
+    let files = collect_files(&req.roots, &extensions, &mut filtered, &mut walk_errors);
+    let total_files = files.len() as u32;
+
+    let next = AtomicUsize::new(0);
+    let scanned = AtomicUsize::new(0);
+    let hits_total = AtomicU64::new(0);
+    let overflow = AtomicBool::new(false);
+    let cancelled = AtomicBool::new(false);
+    let counters = SkipCounters::default();
+    let last_emit = Mutex::new(std::time::Instant::now());
+
+    let batches: Vec<Vec<SearchFileDto>> = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for _ in 0..threads {
+            handles.push(scope.spawn(|| {
+                let mut local: Vec<SearchFileDto> = Vec::new();
+                loop {
+                    if is_cancelled(cancel, req.search_id) {
+                        cancelled.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    if overflow.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let i = next.fetch_add(1, Ordering::SeqCst);
+                    if i >= files.len() {
+                        break;
+                    }
+                    let remaining = max_results
+                        .saturating_sub(hits_total.load(Ordering::Relaxed) as usize);
+                    if remaining == 0 {
+                        overflow.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    let cap = SEARCH_PER_FILE_CAP.min(remaining);
+                    match scan_file(&files[i], &matcher, prefilter.as_ref(), cap) {
+                        FileOutcome::Hits(hits, clipped) => {
+                            if clipped {
+                                overflow.store(true, Ordering::Relaxed);
+                            }
+                            hits_total.fetch_add(hits.len() as u64, Ordering::Relaxed);
+                            local.push(SearchFileDto {
+                                path: files[i].to_string_lossy().into_owned(),
+                                matches: hits,
+                            });
+                        }
+                        FileOutcome::Binary => {
+                            counters.binary.fetch_add(1, Ordering::Relaxed);
+                        }
+                        FileOutcome::TooLarge => {
+                            counters.too_large.fetch_add(1, Ordering::Relaxed);
+                        }
+                        FileOutcome::Unreadable => {
+                            counters.unreadable.fetch_add(1, Ordering::Relaxed);
+                        }
+                        FileOutcome::Miss => {}
+                    }
+                    let done = scanned.fetch_add(1, Ordering::SeqCst) + 1;
+                    let due = done % SEARCH_PROGRESS_FILES == 0
+                        || last_emit
+                            .lock()
+                            .map(|g| g.elapsed().as_millis() >= SEARCH_PROGRESS_MS)
+                            .unwrap_or(false);
+                    if due {
+                        if let Ok(mut g) = last_emit.lock() {
+                            *g = std::time::Instant::now();
+                        }
+                        emit(SearchProgressPayload {
+                            search_id: req.search_id,
+                            files_scanned: done as u32,
+                            total_files,
+                            match_count: hits_total.load(Ordering::Relaxed),
+                        });
+                    }
+                }
+                local
+            }));
+        }
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+
+    let mut out_files: Vec<SearchFileDto> = batches.into_iter().flatten().collect();
+    out_files.sort_by(|a, b| a.path.cmp(&b.path));
+    let total_matches: u64 = out_files.iter().map(|f| f.matches.len() as u64).sum();
+    if let Ok(mut g) = cancel.lock() {
+        g.remove(&req.search_id); // 本次取消标记用完即清，不留给下一次
+    }
+    Ok(SearchResultDto {
+        files: out_files,
+        total_matches,
+        truncated: overflow.load(Ordering::Relaxed),
+        cancelled: cancelled.load(Ordering::Relaxed),
+        files_scanned: scanned.load(Ordering::SeqCst) as u32,
+        skipped: counters.to_dto(filtered, walk_errors),
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+/// 全文检索：多线程读盘 + 行内匹配，逐文件上报进度，命中行才过 IPC。
+/// 结果上限（`maxResults` / 单文件上限）与取消都会在返回值里显式说明（不静默截断）。
+#[tauri::command]
+async fn search_text(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SearchState>,
+    request: SearchRequestDto,
+) -> Result<SearchResultDto, String> {
+    use tauri::Emitter;
+    let cancel = state.cancelled.clone();
+    // 命令本体跑在阻塞线程池上：这是纯 CPU + 磁盘的活，不许占住异步运行时的执行线程
+    tauri::async_runtime::spawn_blocking(move || {
+        let emit = |p: SearchProgressPayload| {
+            let _ = app.emit(SEARCH_PROGRESS_EVENT, p);
+        };
+        run_search(&emit, &cancel, &request)
+    })
+    .await
+    .map_err(|e| format!("检索线程失败：{e}"))?
+}
+
+/// 请求取消某条检索（按 `searchId`）。检索线程逐文件检查，命中即提前收尾并如实回报。
+#[tauri::command]
+fn cancel_search(state: tauri::State<'_, SearchState>, search_id: u64) -> Result<(), String> {
+    let mut guard = state
+        .cancelled
+        .lock()
+        .map_err(|_| "search state poisoned".to_string())?;
+    guard.insert(search_id);
+    Ok(())
+}
+
 /* ------------------------------- 入口 ------------------------------- */
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -892,6 +1472,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(WriteDomainState::default())
         .manage(WatchState::default())
+        .manage(SearchState::default())
         .on_window_event(|window, event| {
             use tauri::Emitter;
             if let tauri::WindowEvent::DragDrop(ev) = event {
@@ -947,13 +1528,20 @@ pub fn run() {
             decode_bytes,
             encode_string,
             start_watch,
-            stop_watch
+            stop_watch,
+            search_text,
+            cancel_search
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 /* ------------------------------- 单测（M3） ------------------------------- */
+
+/// 全文检索的判据独立成文件（`src/search_tests.rs`）：一整套编码 / 切行 / 并行的用例
+/// 塞进本文件会把 IO 原语的正文淹掉。
+#[cfg(test)]
+mod search_tests;
 
 #[cfg(test)]
 mod write_domain_tests {

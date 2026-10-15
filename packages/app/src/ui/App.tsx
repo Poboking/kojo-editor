@@ -17,6 +17,7 @@ import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { workspaceRootsOf } from './workspace-roots';
+import { resetSearch } from './search-store';
 import type { EditorPaneActions } from './EditorPane';
 
 export type AppPhase = 'boot' | 'welcome' | 'opening' | 'project';
@@ -388,6 +389,8 @@ export function App(): ReactElement {
     setPendingApproval(null);
     setWritable(null);
     setIndexError(null);
+    // 检索结果按项目根算出来的：项目一关，旧结果里的路径全部失去意义（留着只会误导）
+    resetSearch();
     setPhase('welcome');
     setRecent(await kernel.project.recent());
   }, [kernel]);

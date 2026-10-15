@@ -28,6 +28,9 @@ walkdir = "2"
 rfd = "0.15"
 notify = "8.2.0"
 tauri-plugin-updater = "2"
+# 全文检索的匹配器（正则 / 字面量 / 全词 / 大小写四个口径合成一份 pattern）。
+# 已经躺在 tauri 依赖树里（Cargo.lock 既有 regex 1.13），提为直接依赖不新增编译单元。
+regex = "1"
 
 [profile.release]
 lto = true

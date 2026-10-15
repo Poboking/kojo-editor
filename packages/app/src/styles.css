@@ -1215,6 +1215,127 @@ textarea {
   font-size: var(--fs-0);
 }
 
+/* ---------------------- 侧栏「在文件中搜索」（2026-10-15 检索批） ---------------------- */
+
+/* 结果行沿用问题面板的"位置 + 预览"两栏语言（.conv-issue-loc 同族），
+   只补输入条、三个开关与命中高亮。面板宽度只有一档（侧栏 260px 起），
+   所以预览一律尾部省略——换行会把"一屏几条结果"压到个位数。 */
+.panel-search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+}
+.search-toggle {
+  flex: none;
+  padding: 2px 5px;
+  font-size: var(--fs-0);
+  font-family: Consolas, 'Cascadia Mono', monospace;
+}
+/* 开关态：与壳层其它"已开启"控件同色（.on 用 accent 描边 + 淡底） */
+.search-toggle.on {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  background: var(--accent-dim);
+}
+.search-ext-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-0);
+}
+.search-ext {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-0);
+}
+.search-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.search-status {
+  font-size: var(--fs-0);
+  line-height: 1.5;
+}
+.search-error {
+  color: var(--red);
+}
+.search-stopped {
+  color: var(--amber);
+}
+.search-rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 46vh;
+  overflow: auto;
+  font-size: var(--fs-1);
+}
+.search-file {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 2px 2px;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  border-top: 1px solid var(--bg-3);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+.search-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-file-count {
+  flex: none;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+}
+.search-match {
+  width: 100%;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 1px 4px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+}
+.search-match:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.search-loc {
+  flex: none;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: var(--fs-0);
+  min-width: 3.4em;
+}
+.search-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 命中高亮：不用 <mark> 的浏览器默认黄底——那是浅色底的设计，深色主题下刺眼 */
+.search-hit {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+  border-radius: 2px;
+}
+
 /* ------------------------------ editor ------------------------------ */
 
 .editor-pane {

@@ -75,6 +75,7 @@ import {
 import { CommandPalette, QuickOpen } from './Palette';
 import { PanelBody, StatusbarItem } from './PanelHost';
 import { ProblemsStatusItem } from './ProblemPanel';
+import { requestSearchFocus } from './search-store';
 import { Icon } from './icons';
 
 /**
@@ -367,6 +368,18 @@ export function ShellLayout(props: Props): ReactElement {
       { id: 'layout.openSettings', title: '打开设置', run: () => setSettingsOpen(true) },
       { id: 'workbench.commandPalette', title: '命令面板', keybinding: 'ctrl+shift+p', run: () => setPaletteOpen(true) },
       { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: 'ctrl+p', run: () => setQuickOpen(true) },
+      // 全文搜索（2026-10-15 检索批）：打开侧栏「搜索」视图 + 请求输入框聚焦。
+      // 激活单位是视图 key（单独成视图的面板 = `panel:<id>`，见 layout.organizePanels）；
+      // 聚焦意图发进 search-store（面板订阅 focusNonce 落地）——壳层不知道面板内部的输入框。
+      {
+        id: 'workbench.searchInFiles',
+        title: '在文件中搜索',
+        keybinding: 'ctrl+shift+f',
+        run: () => {
+          requestSearchFocus();
+          dispatch({ type: 'activate', container: 'sidebar', key: 'panel:kojo.search' });
+        },
+      },
       // 问题面板（HK-4 · UI-6）：打开底部区并激活「问题」视图（activate 会同时置 visible:true）
       { id: 'workbench.problems', title: '问题面板', keybinding: 'ctrl+shift+m', run: () => dispatch({ type: 'activate', container: 'bottom', key: 'kojo.problems' }) },
       // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表

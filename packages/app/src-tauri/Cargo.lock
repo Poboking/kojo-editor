@@ -2089,6 +2089,7 @@ dependencies = [
  "encoding_rs",
  "indexmap 1.9.3",
  "notify",
+ "regex",
  "rfd",
  "serde",
  "serde_json",

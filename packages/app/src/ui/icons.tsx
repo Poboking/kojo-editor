@@ -46,6 +46,12 @@ const ICONS = {
     </>
   ),
   check: stroke('M3.2 8.4 6.4 11.6 12.8 4.6'),
+  search: (
+    <>
+      <circle key="l" cx="7.1" cy="7.1" r="4.3" />
+      {stroke('M10.3 10.3 13.8 13.8')}
+    </>
+  ),
   archive: (
     <>
       {stroke('M2.4 2.8h11.2v3H2.4z')}

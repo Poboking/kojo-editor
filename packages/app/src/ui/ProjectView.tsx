@@ -5,11 +5,13 @@ import { WellKnownCommands } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { ProblemPanel } from './ProblemPanel';
+import { SearchPanel } from './SearchPanel';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
 import { FileTree } from './FileTree';
 import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
 import { Icon } from './icons';
 import type { ShellCommandSpec } from './commands';
+import { workspaceRootsOf } from './workspace-roots';
 
 interface Props {
   kernel: Kernel;
@@ -249,6 +251,38 @@ export function ProjectView({
     return StableProblems;
   }, []);
 
+  /**
+   * 侧栏「搜索」视图的稳定组件身份（同 problemComponent 的 ref 闭包写法）。
+   *
+   * 检索根 = **项目根 ∪ 作者工作区全部根**：工作区自 2026-10-14 起不再是一个目录
+   * （默认根 + 对话框自选根），只搜项目根会把作者自己写的口上文件整批漏掉。
+   * 跳转仍走既有 `editor.revealLocation`（与问题面板同一条通道）。
+   */
+  const searchArgsRef = useRef({ kernel, roots: [] as string[] });
+  searchArgsRef.current = {
+    kernel,
+    roots: [...new Set([project.rootDir, ...workspaceRootsOf(kernel)])],
+  };
+  const searchComponent = useMemo(() => {
+    const StableSearch = (): ReactElement => {
+      const a = searchArgsRef.current;
+      return (
+        <SearchPanel
+          roots={a.roots}
+          onReveal={(path, line, column) =>
+            a.kernel.bus.emit('editor.revealLocation', {
+              filePath: path,
+              line,
+              column,
+              source: '搜索',
+            })
+          }
+        />
+      );
+    };
+    return StableSearch;
+  }, []);
+
   const builtinViews = useMemo<UIPanelContribution[]>(
     () => [
       {
@@ -261,6 +295,18 @@ export function ProjectView({
         component: fileTreeComponent,
       },
       {
+        // order 40 > 口上文件(30)：活动栏里排在文件树下一位（VSCode 同序），
+        // 且**不改默认激活落点**——默认激活取 order 最小的、未声明 defaultActive:false 的视图，
+        // 文件树仍旧是先落点。这里刻意**不写** defaultActive:false：那个字段还会把视图
+        // 判成"低频"并挪到活动栏下半区（与设置齿轮同排），搜索是有快捷键的主力面，不该在那儿。
+        id: 'kojo.search',
+        title: '搜索',
+        icon: 'search',
+        order: 40,
+        location: 'sidebar',
+        component: searchComponent,
+      },
+      {
         // defaultActive:false —— 不抢「约定校验」（bottom，order 50）现有的默认激活落点（Ctrl+J）
         id: 'kojo.problems',
         title: '问题',
@@ -271,7 +317,7 @@ export function ProjectView({
         component: problemComponent,
       },
     ],
-    [fileTreeComponent, problemComponent],
+    [fileTreeComponent, problemComponent, searchComponent],
   );
 
   /* ---------------- 标签栏：拖拽重排 + 滚轮横滚 + 活动标签滚入视口 ---------------- */
