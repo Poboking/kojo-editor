@@ -52,7 +52,7 @@ import type {
   WhenCaseValue,
   WhenExpr,
 } from '@kojo/plugin-api';
-import { lowerExpression, expandTarget, type ExprContext } from './expression';
+import { lowerExpression, expandTarget, resolveBitSlotName, type ExprContext } from './expression';
 import {
   buildColumnRuns,
   clipAndShift,
@@ -1499,7 +1499,8 @@ function emitRawLine(
   }
   const stmtFn = (node as { _statementFn?: { engine: string; target: string; slot: string } })._statementFn;
   if (stmtFn) {
-    const target = expandTarget(stmtFn.target, exprCtx(ctx, node.loc.start));
+    const exprCtxHere = exprCtx(ctx, node.loc.start);
+    const target = expandTarget(stmtFn.target, exprCtxHere);
     if (target === null) return; // 只读别名：已在 expandTarget 报诊断，不产出半成品
     if (stmtFn.slot.trim().length === 0) {
       // 缺逗号 / 空位槽：报既有码（零新诊断码），位置指回该行，且**不产半成品**
@@ -1512,7 +1513,11 @@ function emitRawLine(
       });
       return;
     }
-    const slot = lowerExpression(stmtFn.slot, exprCtx(ctx, node.loc.start));
+    // 位名表层语法（v1.8）：`<变量引用>, <位名>` 的位槽先按「该变量自身位表」解析
+    // （`resolveBitSlotName`，与表达式形 `GETBIT(` 挂钩**共用同一枚**）；解析在则用其结果，
+    // 否则回退既有表达式降糖（数字 / 表达式老写法产物逐字节不变）。
+    const slot =
+      resolveBitSlotName(target, stmtFn.slot, exprCtxHere) ?? lowerExpression(stmtFn.slot, exprCtxHere);
     em.push(indent, `${stmtFn.engine} ${target}, ${slot}`, node.loc.start.line);
     return;
   }

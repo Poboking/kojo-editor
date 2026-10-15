@@ -1286,6 +1286,16 @@ export type SugarDiagnosticCode =
    */
   | 'family-name-unknown'
   /**
+   * v1.8 位名表层语法：**位槽**（`获取标记(X, 名)` 的第二实参 / 语句形 `设置标记 X, 名`
+   * 的位号段）写了**裸中文位名**，但第一实参 `X` 所指变量**自身的位表**（`VariableInfo.bits`）
+   * 里查无该名，**或该名同时又是可解析的变量 / 引擎全局（歧义）**。
+   * 与 `unknown-identifier` 的分工：后者是"这个名字谁都认不出"；本码是"位表在、但该位名
+   * 落不到唯一位号"——**error**（fail-visible，不猜、不产半成品）。
+   * 位表数据只住 adapter（`DictionaryLookup.bitIndexOf`）；字典缺省（未打开工程 / 字典不
+   * 支持本能力）时**不报本码**，行为与改前逐字相同（走既有 `unknown-identifier`）。
+   */
+  | 'bit-name-unknown'
+  /**
    * ZH-F1：**中文函数名调用形态**（`名字(`）既不在跨游戏语言层的系统函数表
    * （`SYSTEM_FUNCTION_ALIASES`）也不在该游戏的基础库/常用函数表
    * （`KojoLibraryTable`）里。

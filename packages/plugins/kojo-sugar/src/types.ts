@@ -83,6 +83,23 @@ export interface DictionaryLookup {
    * 返回 `undefined` = 无判据（放行）。
    */
   unlistedFamilyName?(ident: string): { family: string; name: string } | undefined;
+  /**
+   * **位名 → 引擎位号**（**可选能力**；v1.8 位名表层语法）。
+   *
+   * 背景：位槽（`获取标记(X, 名)` 的第二实参 / 语句形 `设置标记 X, 名` 的位号段）
+   * 历史上只认数字 / 表达式——写**裸中文位名**会落到既有 `unknown-identifier`（error）。
+   * 本方法让位槽能写「该变量**自身**位表里的位名」（如 `CFLAG:TARGET:1` 的 `接吻`）。
+   *
+   * 判据（**同族同号**、零游戏知识）：`variableName` = 第一实参经既有
+   * `resolveFamily` / `resolve` 链路解析出的**变量引用**（`CFLAG:TARGET:1` / `TFLAG:193`）；
+   * `bitLabel` = 作者写的位名。实现须**只在该变量自身的 `bits` 表**内按 `label`
+   * **整词精确**匹配，返回 `VariableInfo.bits[].bit`（引擎位号，**不是**文本）；
+   * 该位表里查无 / 同一位表内多枚同名（歧义）⇒ `undefined`（**不猜**）。
+   *
+   * 缺省（字典不支持 / 未打开工程）= **不做**：位槽里的裸名照旧走既有
+   * `unknown-identifier`（**行为与今天逐字相同**）。
+   */
+  bitIndexOf?(variableName: string, bitLabel: string): number | undefined;
 }
 
 /**

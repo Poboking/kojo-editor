@@ -781,6 +781,28 @@ export function makeLookup(schema: VariableSchema): DictionaryLookup {
       const name = info?.description;
       return name !== undefined && name.length > 0 ? name : undefined;
     },
+    bitIndexOf(variableName: string, bitLabel: string): number | undefined {
+      // 位名 → 引擎位号（v1.8）。只认 `族头:…:索引`（**索引 = 末段**；中间的作用域词
+      // 如 `TARGET` / `MASTER` / 角色号跳过），族头必须是引擎变量族。位表数据由 adapter
+      // 挂在 `lookup(族, 索引).bits` 上（`variable-schema.withBits`，KC-1b）——
+      // 本方法**零游戏知识**：只按 `label` 整词精确匹配；查无 / 同一位表内多枚同名（歧义）
+      // ⇒ `undefined`（不猜）。
+      const segs = variableName.split(':');
+      if (segs.length < 2) return undefined;
+      const family = segs[0]!.toUpperCase();
+      if (!ENGINE_VARIABLE_FAMILIES.includes(family)) return undefined;
+      const index = segs[segs.length - 1]!;
+      if (index.length === 0) return undefined;
+      const bits = schema.lookup(family, index)?.bits;
+      if (bits === undefined) return undefined;
+      let hit: number | undefined;
+      for (const b of bits) {
+        if (b.label !== bitLabel) continue;
+        if (hit !== undefined) return undefined; // 同一位表内多枚同名 → 歧义（不猜）
+        hit = b.bit;
+      }
+      return hit;
+    },
     // 家族头中文别名（D2）：直接转发 adapter 的 `familyAlias` / `familyAliasReverse`
     // （单一真源，本包零硬编码）；**adapter 未提供 ⇒ 不挂**（消费方据 `undefined` 不替换，不猜）。
     ...(schema.familyAlias

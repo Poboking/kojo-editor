@@ -337,18 +337,35 @@ export function lowerExpression(raw: string, ctx: ExprContext): string {
   // 只认 `<别名>` 紧跟 `:`/`：` 的形态；作者同名别名优先（其替换已在 0b 生效 / 显式跳过）。
   const familyAliased = replaceInCodeOutsideStrings(substituted, (code) => lowerFamilyAliases(code, ctx));
 
+  // ---- 1–3. 表达式主体（中文运算符 → `不在` → 代词与属性） ----
+  const expr = lowerExpressionCore(familyAliased, ctx);
+
+  // ---- 4. 条件别名回填（行内条件 `\@条件?真#假\@`；用函数式替换避免 `$` 被当替换模式） ----
+  if (deferred.length === 0) return expr;
+  return expr.replace(COND_SLOT_RE, (_whole, digits: string) => deferred[Number(digits)] ?? '');
+}
+
+/**
+ * 表达式主体降糖（**步骤 1–3**：中文运算符 → `不在` → 代词与属性）——不含别名替换（步骤 0b）
+ * 与条件别名回填（步骤 4）。
+ *
+ * 抽成独立函数的唯一理由 = **位名表层语法**（v1.8）：`GETBIT(<变量引用>, <位名>)` 的第一
+ * 实参（变量引用）要在步骤 3 的 `GETBIT(` 挂钩处**单独**走一遍步骤 3，才能得到
+ * 「族头:…:索引」形态的变量引用，好交给 `DictionaryLookup.bitIndexOf` 解析位名。该子表达式
+ * 此时已过外侧的 0b/0c/1/2（重跑步骤 1/2 幂等），故只需补步骤 3（本函数照全跑）。
+ * 两条位槽路（表达式形 / 语句形）据此**共用同一枚解析函数 `resolveBitSlotName`**（单一真源）。
+ */
+function lowerExpressionCore(code: string, ctx: ExprContext): string {
   // ---- 1. 中文运算符（在字符串字面量外） ----
-  let expr = replaceInCodeOutsideStrings(familyAliased, (code) => lowerOperators(code));
+  let expr = replaceInCodeOutsideStrings(code, (c) => lowerOperators(c));
 
   // ---- 2. `不在`（范围取反；结构级，需整段扫描） ----
   expr = lowerNotIn(expr, ctx);
 
   // ---- 3. 代词与属性（在字符串字面量外） ----
-  expr = replaceInCodeOutsideStrings(expr, (code) => lowerPronounsAndAttributes(code, ctx));
+  expr = replaceInCodeOutsideStrings(expr, (c) => lowerPronounsAndAttributes(c, ctx));
 
-  // ---- 4. 条件别名回填（行内条件 `\@条件?真#假\@`；用函数式替换避免 `$` 被当替换模式） ----
-  if (deferred.length === 0) return expr;
-  return expr.replace(COND_SLOT_RE, (_whole, digits: string) => deferred[Number(digits)] ?? '');
+  return expr;
 }
 
 /**
@@ -694,6 +711,27 @@ function lowerPronounsAndAttributes(code: string, ctx: ExprContext): string {
         i = end;
         continue;
       }
+      // 位名表层语法（v1.8）：`GETBIT(<变量引用>, <位名>)` 的**第二实参**写成裸中文位名时，
+      // 先按「该变量自身位表」解析（`resolveBitSlotName`，与语句形**共用同一枚**）。
+      // 解析在则**消费整个调用**（第二实参换成引擎位号 / 报歧义或查无 error）；不解析
+      // （非裸名 / 作者别名 / 字典缺省）则落回下方原样放行——产物与改前逐字节相同。
+      if (code[end] === '(' && ident === 'GETBIT' && ctx.dictionary?.bitIndexOf !== undefined) {
+        const close = matchCloseParen(code, end);
+        if (close > 0) {
+          const args = splitTopLevelArgs(code.slice(end + 1, close));
+          if (args.length === 2) {
+            // 静默探测第一实参（不产任何诊断），只为拿「族头:…:索引」形态的变量引用
+            const probe: ExprContext = { ...ctx, report: () => {} };
+            const varRef = lowerExpressionCore(args[0]!, probe);
+            const resolved = resolveBitSlotName(varRef, args[1]!, ctx);
+            if (resolved !== null) {
+              out += `${ident}(${lowerExpressionCore(args[0]!, ctx)}, ${resolved})`;
+              i = close + 1;
+              continue;
+            }
+          }
+        }
+      }
       // 函数调用形态（后随 `(`）——原样保留；但**中文函数名**若系统表与 adapter 表
       // 都不认，则报 `function-name-unknown`（**warning**，fail-visible，不猜、不纠，
       // 产物逐字节照原样）。系统表命中的名字已在 step 0 降为原生名，不会走到这里。
@@ -832,6 +870,71 @@ function resolveBareIdentifier(ident: string, ctx: ExprContext): string {
     return ident;
   }
   return resolved;
+}
+
+/**
+ * **位槽**里的裸中文位名 → 引擎位号（v1.8 位名表层语法）——表达式形与语句形**共用**（单一真源）。
+ *
+ * `variableRef` = 位槽第一实参经既有 `resolveFamily` / `resolve` 链路解析出的**变量引用**
+ * （`CFLAG:TARGET:1` / `TFLAG:193`：语句形由 `expandTarget` 给出、表达式形由 `lowerExpressionCore`
+ * 给出）；`slotRaw` = 作者在位槽位置写的原文。
+ *
+ * 判据（**优先级不静默**；与 `DictionaryLookup.bitIndexOf` 头注一致）：
+ * ① 作者**别名**优先（同名别名存在 ⇒ 本函数不管）；② 再试**位名**（只在该变量**自身**位表内按
+ * `label` 整词精确匹配）；③ 位名命中而该名**同时**又是可解析的变量 / 引擎全局 ⇒ **报歧义 error**
+ * （绝不静默取其一）；④ 都不中 ⇒ 原样交回既有链路（`unknown-identifier`）。
+ *
+ * 返回值：
+ * - `null` = **本函数不管**（位槽非单一裸标识符 / 该名是作者别名 / 字典不支持本能力 / 该名是可
+ *   解析的变量），调用方照常走 `lowerExpression`（行为与改前逐字相同）；
+ * - **非 null 字符串** = 本函数已接管该位槽：`bit` 命中 → 该位号的**十进制文本**；`bit` 未命中
+ *   但第一实参确是引擎变量引用（或命中却有歧义）→ **原样**位名 + 报 error（fail-visible，
+ *   **不猜、不产半成品**，且不与 `unknown-identifier` 双报）。
+ */
+export function resolveBitSlotName(
+  variableRef: string | undefined,
+  slotRaw: string,
+  ctx: ExprContext,
+): string | null {
+  const name = slotRaw.trim();
+  if (name.length === 0) return null;
+  // 位名必须是**单一裸标识符**（无 `:` 索引、无运算符、无括号）——否则是普通表达式，交回下游
+  const end = scanIdentifier(name, 0);
+  if (end !== name.length) return null;
+  // ① 作者别名优先：同名别名存在 ⇒ 不管（交给别名替换 / `lowerExpression` 展开）
+  if (ctx.aliases.has(name)) return null;
+  // 缺省（字典不支持 / 未打开工程）⇒ 不做（行为与今天逐字相同）
+  const bitIndexOf = ctx.dictionary?.bitIndexOf;
+  if (!bitIndexOf) return null;
+  const bit = bitIndexOf(variableRef ?? '', name);
+  // ③ 该名同时又是可解析的变量 / 引擎全局
+  const alsoVariable =
+    resolveEngineGlobal(name) !== undefined || ctx.dictionary?.resolve(name) !== undefined;
+  if (bit !== undefined) {
+    if (alsoVariable) {
+      ctx.report({
+        code: 'bit-name-unknown',
+        severity: 'error',
+        message: `位槽里的「${name}」既是变量引用「${variableRef ?? ''}」位表里的位名、又是可解析的变量 / 引擎全局——位名解析存在**歧义**，拒绝猜测。请改用数字位号，或把该变量名别名化以消歧。`,
+        loc: ctx.loc,
+      });
+      return name;
+    }
+    return String(bit);
+  }
+  // ② 位名未命中，但该名是可解析的变量 ⇒ 交回既有链路（按变量解析）
+  if (alsoVariable) return null;
+  // 第一实参确是引擎变量引用（有族头）⇒ 报「该变量位表里查无此位名」；否则交回 `unknown-identifier`
+  if (variableRef !== undefined && ctx.dictionary?.resolve(variableRef) !== undefined) {
+    ctx.report({
+      code: 'bit-name-unknown',
+      severity: 'error',
+      message: `位槽写了位名「${name}」，但变量引用「${variableRef}」的位表里查无此名（或该变量没有位表数据）——拒绝猜测。请改用数字位号，或确认该位名已收录。`,
+      loc: ctx.loc,
+    });
+    return name;
+  }
+  return null;
 }
 
 /**
