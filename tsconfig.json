@@ -26,6 +26,7 @@
       "@kojo/plugin-sav-parser": ["./packages/plugins/sav-parser/src/index.ts"],
       "@kojo/plugin-state-replay": ["./packages/plugins/state-replay/src/index.ts"],
       "@kojo/plugin-kojo-sugar": ["./packages/plugins/kojo-sugar/src/index.ts"],
+    "@kojo/plugin-kojo-market": ["./packages/plugins/kojo-market/src/index.ts"],
       "@kojo/plugin-ui-condition-matrix": ["./packages/plugins/ui-condition-matrix/src/index.ts"],
       "@kojo/plugin-ui-convention-report": ["./packages/plugins/ui-convention-report/src/index.ts"],
       "@kojo/plugin-ui-state-replay": ["./packages/plugins/ui-state-replay/src/index.ts"],
