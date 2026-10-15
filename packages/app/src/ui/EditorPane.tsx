@@ -1002,6 +1002,8 @@ export function EditorPane({
     // "那个名字是什么、定义在哪"全在 `ui.editor.languageService` 槽（ERB 由解析器答、
     // `.kojo` 由糖线答）。跨文件跳转不新造机制：发 `editor.revealLocation`（宿主既有通道，
     // App 据此开文件、编辑器据此滚动）——与 codeAction 的"宿主零业务"同一分层。
+    // D4（2026-10-15 Peek 批）追加两条腿：目标在同文件/已开标签时**返回真 LocationLink**
+    // （Monaco 的 `Alt+F12` Peek 与就地跳都以这份返回为数据源），其余情形照旧发事件。
     const definitionDisposer = installDefinitionProvider(monaco, {
       resolve: (model, position) => {
         const path = filePathRef.current;
@@ -1026,6 +1028,22 @@ export function EditorPane({
           ...(location.column !== undefined ? { column: location.column } : {}),
           source: '转到定义',
         });
+      },
+      // D4（Peek 就地预览）两条腿的判据都来自宿主自己的标签表 `entriesRef`（键 = 打开时的
+      // 路径，值 = 那份 model），路径比较一律走 `matchOpenedPath` 的 `pathKey` 口径
+      // （HK-7：平台原样路径与宿主键在 Windows 上分隔符/大小写不一致，裸字符串比会静默判不上）：
+      // - openModelFor：目标文件是否**已经开着**（开着 ⇒ 有 model ⇒ Monaco 能给 Peek 显示）；
+      // - pathForUri：Monaco 的跨 model 跳转请求（opener）反回宿主路径，落回同一条
+      //   `editor.revealLocation` 通道——不新造第二套导航机制。
+      openModelFor: (filePath) => {
+        const key = matchOpenedPath(entriesRef.current.keys(), filePath);
+        return key ? entriesRef.current.get(key)?.model : undefined;
+      },
+      pathForUri: (uri) => {
+        for (const [path, entry] of entriesRef.current) {
+          if (entry.model.uri.toString() === uri) return path;
+        }
+        return undefined;
       },
     });
     // 文档大纲（B3）：同一枚 `ui.editor.languageService` 槽的第二个判别成员。宿主照旧只做
