@@ -48,8 +48,51 @@ export type {
 
 export type { ScopedStorage, StorageService } from './storage';
 
-export { WriteNotAllowedError } from './io';
-export type { BackupVersion, EolStyle, FileIO, TextFile, WriteTextOptions } from './io';
+export { WriteNotAllowedError, withPathPrimitives } from './io';
+export type {
+  BackupVersion,
+  EolStyle,
+  FileIO,
+  FileIOWithPaths,
+  IoPathPrimitives,
+  TextFile,
+  WriteTextOptions,
+} from './io';
+
+export {
+  MARKET_SCHEMA_VERSION,
+  MARKET_PACK_KINDS,
+  MARKET_MANIFEST_FILE,
+  MARKET_CONTENT_DIR,
+  MARKET_DIR_NAME,
+  MARKET_INDEX_FILE,
+  MARKET_PACKS_DIR,
+  MARKET_STAGING_DIR,
+  MARKET_MAX_FILE_ENTRIES,
+  MARKET_MAX_PATH_DEPTH,
+  MARKET_MAX_UNPACKED_BYTES,
+  PACK_ID_RE,
+  PACK_VERSION_RE,
+  VERSION_SEG_RE,
+  SHA256_HEX_RE,
+  MARKET_SERVICE_KEY,
+  MarketError,
+  packEntryPathProblem,
+  packFilesProblem,
+  compareVersions,
+  coreVersion,
+  minAppVersionSatisfied,
+} from './market';
+export type {
+  InstalledPack,
+  MarketIndex,
+  MarketIndexEntry,
+  MarketRejectCode,
+  MarketService,
+  PackFileEntry,
+  PackKind,
+  PackManifest,
+} from './market';
 
 export { ProjectDetectionError } from './project';
 export type { ProjectService, RecentProject } from './project';

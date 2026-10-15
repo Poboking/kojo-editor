@@ -5,6 +5,7 @@ import type {
   FileEncoding,
   FileIO,
   FileStat,
+  IoPathPrimitives,
   Logger,
   PlatformBridge,
   RawFileRead,
@@ -110,7 +111,7 @@ export function parseBackupTakenAtMs(id: string): number | null {
   return Number.isNaN(d.getTime()) ? null : d.getTime();
 }
 
-export class FileIOServiceImpl implements FileIO {
+export class FileIOServiceImpl implements FileIO, IoPathPrimitives {
   private writableRoots: string[] = [];
   /** 应用自有常驻可写根（工作区等；不受 setWritableRoots([]) 收回影响） */
   private appWritableRoots: string[] = [];
@@ -496,6 +497,25 @@ export class FileIOServiceImpl implements FileIO {
     return target;
   }
 
+  /* ------------------------ 平台原语透传（零新逻辑） ------------------------ */
+
+  /** 见契约：只用于派生应用自有子目录；**不是**写允许域的扩大入口（铁律 6） */
+  appDataDir(): Promise<string> {
+    return this.bridge.appDataDir();
+  }
+
+  /** 移动：from 与 to **两端都断言**（越权的一端任一个都足以拒绝） */
+  async rename(from: string, to: string): Promise<void> {
+    this.assertWritable(from);
+    this.assertWritable(to);
+    await this.bridge.rename(from, to);
+  }
+
+  async removeDir(path: string): Promise<void> {
+    this.assertWritable(path);
+    await this.bridge.removeDir(path);
+  }
+
   /** 调试/测试辅助：当前缓存状态（含会话文本缓存的命中读数——批量 IO 批的轻量上报面） */
   debugCaches(): {
     encoding: Map<string, FileEncoding>;
@@ -512,5 +532,6 @@ export class FileIOServiceImpl implements FileIO {
         misses: this.textCacheMisses,
       },
     };
+  }
   }
 }
