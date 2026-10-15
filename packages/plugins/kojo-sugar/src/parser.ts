@@ -158,6 +158,9 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
     if (cls.kind === 'headDecl') {
       cursor.next();
       applyHeadDecl(frontMatter, cls.key, cls.value);
+      // B4-fp：记下 `函数前缀:` 那一行的源位置（诊断定位用；additive）——
+      // 解析器手边就有 `line`，无需另存；未写该行则字段缺省。
+      if (cls.key === 'head.functionPrefix') frontMatter.functionPrefixLoc = posOf(line);
       // `开关:` 后的缩进块
       if (cls.key === 'head.switch') {
         readSwitchItems(cursor, line.indent, frontMatter);

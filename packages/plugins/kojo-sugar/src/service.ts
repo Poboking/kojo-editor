@@ -142,6 +142,7 @@ function normalizeFunctionPrefix(prefix: string): string | undefined {
 function resolveFaceTableForPrefix(
   faceTable: KojoFaceTable | undefined,
   prefix: string | undefined,
+  prefixLoc: SugarPosition | undefined,
   sink: DiagnosticSink,
 ): KojoFaceTable | undefined {
   if (prefix === undefined) return faceTable;
@@ -150,8 +151,10 @@ function resolveFaceTableForPrefix(
     sink.report({
       code: 'face-table-missing',
       severity: 'error',
-      message: `文件头「函数前缀: ${prefix}」的命名模板非法（只认「{n}」角色号与「{name}」函数名占位、且不能是空模板）——已停止编译本文件的「函数」块（不产半成品）。`,
-      loc: null,
+      // 注意：本码也用于"适配器未声明模板"，两成因**靠文案区分**（不新增诊断码）——
+      // 本处说的是"你写的那行非法"，**不提适配器**，作者据此知道该改文件头这一行。
+      message: `文件头「函数前缀: ${prefix}」的命名模板非法——命名模板只认「{n}」（角色编号）与「{name}」（函数名）两个占位，且不能留空。请改文件头这一行；在改好之前，本文件的「函数」块都不会生成。`,
+      loc: prefixLoc ?? null,
     });
     return { ...(faceTable ?? { faces: {} }), userFunction: undefined };
   }
@@ -235,7 +238,12 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     guardConstShadowing(consts, dictionary, sink);
     const aliases = buildAliasTable(doc.frontMatter.aliases, consts);
     // B4-fp：作者私有命名前缀（`函数前缀:`）优先于 adapter 模板；未声明 → 原表原样。
-    const namedFaceTable = resolveFaceTableForPrefix(faceTable, doc.frontMatter.functionPrefix, sink);
+    const namedFaceTable = resolveFaceTableForPrefix(
+      faceTable,
+      doc.frontMatter.functionPrefix,
+      doc.frontMatter.functionPrefixLoc,
+      sink,
+    );
     const { erb, sourceMap } = codegen(doc.topLevel as TopNode[], {
       frontMatter: doc.frontMatter,
       aliases,

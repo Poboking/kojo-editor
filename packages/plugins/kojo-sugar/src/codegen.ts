@@ -1622,10 +1622,18 @@ interface FunctionEmitContext {
  */
 function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext): void {
   if (!ctx.template) {
+    // 同一个码 `face-table-missing` 有**两种成因**，靠文案区分（不新增诊断码）：
+    // ①作者写了非法的 `函数前缀:`（`resolveFaceTableForPrefix` 已摘掉模板）——该改文件头那行；
+    // ②没写前缀、但当前适配器压根没声明用户函数命名模板——该找适配器 / 自行加前缀。
+    // 两文案互斥：①含「命名模板非法」不含「适配器」，②含「适配器」不含「命名模板非法」。
+    const prefix = ctx.frontMatter.functionPrefix;
     ctx.sink.report({
       code: 'face-table-missing',
       severity: 'error',
-      message: `写了「函数 ${node.name}：」但当前适配器未声明用户函数命名模板（userFunction.template）——无法确定产物函数名，已停止编译本块（不产半成品）。`,
+      message:
+        prefix !== undefined
+          ? `写了「函数 ${node.name}：」，但文件头「函数前缀: ${prefix}」的命名模板非法——请改文件头那一行（命名模板只认「{n}」（角色编号）与「{name}」（函数名）两个占位，且不能留空）；在改好之前，本文件的「函数」块都不会生成。`
+          : `写了「函数 ${node.name}：」，但当前适配器没有为你这一类「函数」声明命名模板——无法确定产物函数名。请让所用的适配器补上该模板，或在本文件头加一行「函数前缀: <你的前缀>」自行指定命名。`,
       loc: node.loc.start,
     });
     return;

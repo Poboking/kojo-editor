@@ -899,6 +899,13 @@ export interface SugarFrontMatter {
    * fail-closed（该文件的「函数」块不产半成品）。
    */
   functionPrefix?: string;
+  /**
+   * `函数前缀:` 那一行在源文件里的位置（additive；诊断定位用）。
+   *
+   * 只在**确实写了** `函数前缀:` 时存在；解析器拿不到（未记）时缺省。
+   * 与 `functionPrefix` 的值无关：值为非法模板时它仍指向作者该改的那一行。
+   */
+  functionPrefixLoc?: SugarPosition;
   /** `开关:` 条目（→ `@M_KOJO…_FLAGSETTING_K{No}`），按源顺序 */
   switches: { name: string; value: string; loc: SugarSourceSpan }[];
   /** 头部 `别名` 声明（按源顺序；规范 §3.1 三约束） */

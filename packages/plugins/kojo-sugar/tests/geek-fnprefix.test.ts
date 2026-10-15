@@ -117,6 +117,35 @@ describe('B4-fp 非法前缀模板 fail-closed', () => {
     const msgs = errs('角色: 11\n函数前缀: {bad}\n函数 问候()：\n    「x」\n    返回\n').map((d) => d.message);
     expect(msgs.some((m) => m.includes('函数前缀'))).toBe(true);
   });
+
+  /* --- 两成因可区分性（同码 `face-table-missing`，靠文案分锅；不新增诊断码） --- */
+
+  it('成因①（非法前缀）：文案含「命名模板非法」不含「适配器」，指明改文件头那一行', () => {
+    const diags = errs('角色: 11\n函数前缀: {bad}\n函数 问候()：\n    「x」\n    返回\n');
+    expect(diags.map((d) => d.code)).toContain('face-table-missing');
+    const msgs = diags.map((d) => d.message);
+    expect(msgs.some((m) => m.includes('命名模板非法'))).toBe(true);
+    expect(msgs.every((m) => !m.includes('适配器'))).toBe(true);
+    // 作者下一步：改文件头那一行
+    expect(msgs.some((m) => m.includes('改文件头'))).toBe(true);
+    // 位置：真实 loc 已取代从前的 null（`函数前缀:` 在第 2 行）
+    expect(diags.every((d) => d.loc !== null)).toBe(true);
+    expect(diags.some((d) => d.loc?.line === 2)).toBe(true);
+  });
+
+  it('成因②（适配器未声明模板）：文案含「适配器」不含「命名模板非法」，指明可自加前缀', () => {
+    const { userFunction: _omit, ...noTpl } = stubFaceTable();
+    const res = svc(noTpl).transpile('角色: 11\n函数 问候()：\n    「x」\n    返回\n');
+    const diags = res.diagnostics.filter((d) => d.severity === 'error');
+    expect(diags.map((d) => d.code)).toContain('face-table-missing');
+    const msgs = diags.map((d) => d.message);
+    expect(msgs.some((m) => m.includes('适配器'))).toBe(true);
+    expect(msgs.every((m) => !m.includes('命名模板非法'))).toBe(true);
+    // 作者下一步：找适配器 / 自行加前缀
+    expect(msgs.some((m) => m.includes('函数前缀'))).toBe(true);
+    // 位置：指向函数块本身（第 2 行）——与你写的文件头无关（你没写前缀）
+    expect(diags.some((d) => d.loc?.line === 2)).toBe(true);
+  });
 });
 
 /* ============================================================================ */
