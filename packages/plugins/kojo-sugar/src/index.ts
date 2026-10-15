@@ -602,6 +602,11 @@ export {
   SUGAR_KEYWORD_ROLE_LABEL,
   RESERVED_PRONOUNS,
   CONT_MARKS,
+  // KC-2b：时机命名参数键表（单一真源）——宿主 Monaco 补全从本包派生键/取值候选。
+  TIMING_NAMED_PARAMS,
+  TIMING_ARG_TOKENS,
+  type TimingNamedParamSpec,
+  type TimingParamValueSource,
   type SugarEditorLexicon,
   type SugarKeywordRole,
   type SugarLexiconWord,

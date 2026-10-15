@@ -48,7 +48,7 @@ import type {
 } from '@kojo/plugin-api';
 import { lowerExpression, expandTarget, type ExprContext } from './expression';
 import { checkTimingArgsDeclaration, CJK, type SectionPreset } from './lexer';
-import { RESERVED_PRONOUNS, TIMING_ARGS_PARAM } from './keywords';
+import { RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_NAMED_PARAMS, TIMING_SUCCESS_PARAM } from './keywords';
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import type { TopNode } from './parser';
 import type { AliasTable, DiagnosticSink, DictionaryLookup, HeartBlock, RandomShape } from './types';
@@ -750,8 +750,7 @@ function resolveFace(face: string, timing: TimingBlock, ctx: TimingEmitContext):
  * 否则投影出来的标签作者读不出、也写不回。
  */
 export function segmentParamName(segName: string): string | undefined {
-  if (segName === 'com') return '类型';
-  return undefined;
+  return TIMING_NAMED_PARAMS.find((p) => p.segmentName === segName)?.name;
 }
 
 /** 把模板里的 `${段名}` 替换为段文本（未命中的段保持原样，便于诊断） */
@@ -762,12 +761,12 @@ function applySegments(template: string, segments: Record<string, string>): stri
 }
 
 function hasSuccessNamed(timing: TimingBlock): boolean {
-  return timing.namedParams.some((p) => p.name === '成否');
+  return timing.namedParams.some((p) => p.name === TIMING_SUCCESS_PARAM);
 }
 
 /** `成否:` 取值 → 适配器位协议目标变量的值（规范 §3.2 表；默认 `游戏判定` = 0） */
 function successFlag(timing: TimingBlock, values?: Readonly<Record<string, number>>): number {
-  const p = timing.namedParams.find((x) => x.name === '成否');
+  const p = timing.namedParams.find((x) => x.name === TIMING_SUCCESS_PARAM);
   const v = p?.value;
   // 未写 `成否:` 或写默认值 `游戏判定` → 适配器映射表的默认项（eraTW = 0，
   // 与引擎兜底 `TFLAG:192 = 0` 等价，见规范 §3.2 命名参数表注）。

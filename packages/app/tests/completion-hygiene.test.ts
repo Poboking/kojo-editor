@@ -37,7 +37,8 @@ import {
 /**
  * 桩 `CompletionItemKind` —— **恰为两 seam 实际用到的枚举闭集**：
  * kojo-lexicon 用 Variable / Keyword / Operator / Function；kojo-variable 用 Variable；
- * kojo-face 用 EnumMember；erb-directives 用 Keyword；erb-variables 用 Variable / Field；
+ * kojo-face 分野名 / 命名参数取值用 EnumMember、命名参数**键**用 Property；
+ * erb-directives 用 Keyword；erb-variables 用 Variable / Field；
  * erb-functions / erb-system-functions 用 Function；erb-labels 用 Reference。
  */
 const KIND = {
@@ -48,6 +49,7 @@ const KIND = {
   Field: 5,
   Reference: 6,
   EnumMember: 7,
+  Property: 8,
 } as const;
 
 const LEGAL_KINDS: ReadonlySet<number> = new Set<number>(Object.values(KIND));
@@ -92,7 +94,17 @@ function fakeSchema(): VariableSchema {
 
 const KOJO_TABLES: CompletionTables = {
   variableSchema: fakeSchema(),
-  faceTable: { faces: { 初见: { template: 'M_KOJO_K{n}_HATSUMI' } } } as unknown as KojoFaceTable,
+  faceTable: {
+    faces: {
+      初见: { template: 'M_KOJO_K{n}_HATSUMI' },
+      指令: {
+        template: 'M_KOJO{t}_MESSAGE_${com}_K{n}_{i}',
+        segments: { com: { COM: 'COM', SCOM: 'SCOM' } },
+      },
+    },
+    // 成否位协议（键/取值联动的公开面；宿主据 `values` 给 `成否:` 取值候选）
+    successFlag: { target: 'TFLAG:192', values: { 游戏判定: 0, 一定成功: 1 } },
+  } as unknown as KojoFaceTable,
 };
 
 /** 项目内函数名（同一数组引用：EC-3 前缀索引按数组身份记忆化） */
@@ -148,6 +160,11 @@ const KOJO_SCENARIOS: ReadonlyArray<readonly [string, CompletionSourceContext]> 
   ['kojo-lexicon', kojoCtx('别名 心 = 角色 3\n', 1)],
   ['kojo-variable', kojoCtx('{她的好感', 5)],
   ['kojo-face', kojoCtx('时机 初', 5)],
+  // KC-2b：分野令牌之后给命名参数键（Property）；键之后给取值（EnumMember）
+  ['kojo-face', kojoCtx('时机 初见 ', 7)],
+  ['kojo-face', kojoCtx('时机 指令 310 类型: ', 15)],
+  ['kojo-face', kojoCtx('时机 指令 310 成否: ', 15)],
+  ['kojo-face', kojoCtx('时机 指令 310 参数: ', 15)],
 ];
 
 const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]> = [
@@ -231,11 +248,12 @@ function textsOf(value: unknown): string[] {
 /* ============================== 1. kind 闭集守卫 ============================== */
 
 describe('SH-6 · kind 闭集守卫（漏设 kind ⇒ Monaco 画不出图标）', () => {
-  it('桩 CompletionItemKind 覆盖两 seam 实际用到的全部枚举（≥ 六个必需 + EnumMember）', () => {
+  it('桩 CompletionItemKind 覆盖两 seam 实际用到的全部枚举（≥ 六个必需 + EnumMember + Property）', () => {
     for (const req of ['Variable', 'Keyword', 'Operator', 'Function', 'Field', 'Reference'] as const) {
       expect(KIND).toHaveProperty(req);
     }
-    expect(KIND).toHaveProperty('EnumMember'); // kojo-face 用
+    expect(KIND).toHaveProperty('EnumMember'); // kojo-face 分野名 / 命名参数取值
+    expect(KIND).toHaveProperty('Property'); // KC-2b kojo-face 命名参数键
   });
 
   it('每个候选都有 kind（≠ undefined）且落在合法闭集内', () => {
@@ -321,6 +339,13 @@ describe('SH-6 · kind 语义映射（当前设计意图）', () => {
   it('kojo-face：时机分野名 → EnumMember', () => {
     const items = kojoSrc('kojo-face').provide(kojoCtx('时机 初', 5));
     expect(find(items, '初见')!.kind).toBe(KIND.EnumMember);
+  });
+
+  it('kojo-face：命名参数**键** → Property；键**取值** → EnumMember（KC-2b）', () => {
+    const keys = kojoSrc('kojo-face').provide(kojoCtx('时机 初见 ', 7));
+    expect(find(keys, '成否')!.kind).toBe(KIND.Property);
+    const values = kojoSrc('kojo-face').provide(kojoCtx('时机 指令 310 成否: ', 15));
+    expect(find(values, '游戏判定')!.kind).toBe(KIND.EnumMember);
   });
 
   it('erb-directives：指令 / 关键字 → Keyword', () => {

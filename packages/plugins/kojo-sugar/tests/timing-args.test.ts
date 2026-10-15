@@ -18,6 +18,8 @@ import { createSugarTranspileService } from '../src/service';
 import { isStructuralLine } from '../src/preview';
 import { liftProject } from '../src/project';
 import type { LiftDeps } from '../src/lift';
+import { TIMING_ARG_TOKENS, TIMING_NAMED_PARAMS } from '../src/index';
+import { segmentParamName } from '../src/codegen';
 import { stubDict, stubFaceTable } from './support';
 
 const svc = () => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
@@ -297,5 +299,30 @@ describe('§3.2 参数: · AST 承载与下游', () => {
     expect(bad.segments).toHaveLength(2);
     const badText = bad.segments.map((s) => s.sugarText).join('\n');
     expect(badText.match(/时机 事件 1：/g)).toHaveLength(2);
+  });
+});
+
+/* ============================================================================ */
+/* KC-2b：时机命名参数**键表**（单一真源；宿主补全据本表派生键 / 取值候选）        */
+/* ============================================================================ */
+
+describe('KC-2b · 时机命名参数键表（单一真源导出）', () => {
+  it('键表含已验证集合 成否 / 类型 / 参数，各带取值来源', () => {
+    expect(TIMING_NAMED_PARAMS.map((p) => p.name)).toEqual(['成否', '类型', '参数']);
+    const byName = new Map(TIMING_NAMED_PARAMS.map((p) => [p.name, p]));
+    expect(byName.get('成否')!.valueSource).toBe('successFlag');
+    expect(byName.get('类型')!.valueSource).toBe('segment');
+    expect(byName.get('类型')!.segmentName).toBe('com');
+    expect(byName.get('参数')!.valueSource).toBe('args');
+    expect(byName.get('参数')!.alias).toBe('args');
+  });
+
+  it('`类型` 的段名映射与转译器 `segmentParamName` 同源（com → 类型）', () => {
+    expect(segmentParamName('com')).toBe('类型');
+    expect(segmentParamName('未知段')).toBeUndefined();
+  });
+
+  it('`参数:` 取值候选为语言层闭集（裸 ARG / 带索引 ARG:<数字>）', () => {
+    expect(TIMING_ARG_TOKENS).toEqual(['ARG', 'ARG:1']);
   });
 });

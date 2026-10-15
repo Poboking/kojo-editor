@@ -207,6 +207,55 @@ export function canonicalTimingParamName(name: string): string {
   return TIMING_PARAM_ALIASES.get(name.toLowerCase()) ?? name;
 }
 
+/** `成否:` 命名参数的**规范名**（中文主形；规范 §3.2 命名参数表）。 */
+export const TIMING_SUCCESS_PARAM = '成否';
+
+/**
+ * 时机命名参数**取值**的派生来源（宿主补全据此前向取候选；**不包括解析器职责**）。
+ * - `'successFlag'`：adapter 成否位协议的 `values`（`KojoFaceTable.successFlag.values`，
+ *   **契约公开面**——公开才给候选，未公开则只给键、不猜值）；
+ * - `'segment'`：adapter 分野模板的上下文段 `segments`（段名见 `segmentName`）；
+ * - `'args'`：语言层闭集实参令牌（`ARG` / `ARG:<数字>`；见 `TIMING_ARG_TOKENS`）。
+ */
+export type TimingParamValueSource = 'successFlag' | 'segment' | 'args';
+
+/**
+ * 时机命名参数键条目——规范名 + 隐藏英文别名 + 取值来源。
+ * 宿主补全**只认本表**（零硬编码中文键名：键形与取值来源都由这里给）。
+ */
+export interface TimingNamedParamSpec {
+  /** 规范名（中文主形；块头 `X:` 的 X） */
+  readonly name: string;
+  /** 隐藏英文别名（小写 ASCII；只影响**输入**，不进补全列表——规范 §4.1） */
+  readonly alias?: string;
+  /** 取值派生来源 */
+  readonly valueSource: TimingParamValueSource;
+  /** `valueSource === 'segment'` 时：adapter 模板里对应的段名（`KojoFaceTemplate.segments` 的键） */
+  readonly segmentName?: string;
+}
+
+/**
+ * 时机命名参数**键表**（规范 §3.2「命名参数」表）——**单一真源**。
+ *
+ * 收敛此前散落三处的键集合（同一语义只写一份，避免补全与转译发散）：
+ * - `成否`：原为 `codegen.ts` 的字面量（`hasSuccessNamed` / `successFlag`）→ `TIMING_SUCCESS_PARAM`；
+ * - `类型`：原经 `segmentParamName('com')` 与段名关联 → 本表 `segmentName: 'com'`；
+ * - `参数`（英文别名 `args`）：原为 `TIMING_ARGS_PARAM`。
+ *
+ * 转译器（`codegen.ts` 的 `segmentParamName` / 成否键字面量）与宿主补全共用本表。
+ */
+export const TIMING_NAMED_PARAMS: readonly TimingNamedParamSpec[] = [
+  { name: TIMING_SUCCESS_PARAM, valueSource: 'successFlag' },
+  { name: '类型', valueSource: 'segment', segmentName: 'com' },
+  { name: TIMING_ARGS_PARAM, alias: 'args', valueSource: 'args' },
+];
+
+/**
+ * `参数:` 取值的语言层闭集令牌候选（单令牌；逗号分隔的**多值拼接不做**——
+ * 补全不是解析器）。覆盖规范 §3.2 的两形态：裸 `ARG` 与带索引 `ARG:<数字>`。
+ */
+export const TIMING_ARG_TOKENS: readonly string[] = ['ARG', 'ARG:1'];
+
 /* --------------------------- 运算符降糖（规范 §4.3） --------------------------- */
 
 /**
