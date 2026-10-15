@@ -17,7 +17,12 @@ import {
   type PackFileEntry,
   type PackManifest,
 } from '@kojo/plugin-api';
-import { parseManifest } from '../src/manifest';
+import { parseManifest, packContainerProblem } from '../src/manifest';
+import {
+  packUpdateCheck,
+  type InstalledPack,
+  type MarketIndexEntry,
+} from '@kojo/plugin-api';
 
 /** 校验规则的"会拦住后来者"的那一份：每条规则一个拒例 + 一个放行例，纯函数、零 IO。 */
 
@@ -254,5 +259,153 @@ describe('注册表不变量：一个 id 只能属于一个 kind（契约 A4）'
         { kind: 'kojo-pack', id: 'aa' },
       ]),
     ).toEqual(['aa', 'zz']);
+  });
+});
+
+/* ------------------------- 容器双向对平（KM-10..12） ------------------------- */
+
+describe('packContainerProblem：清单与容器的双向对平', () => {
+  const file = entry('files/a.erb', 3, HEX);
+  const mani = manifest({ files: [file] });
+  const declared: MarketIndexEntry = {
+    kind: 'kojo-pack',
+    id: 'demo.pack-1',
+    version: '1.0.0',
+    name: '示例包',
+    author: 'someone',
+    license: 'CC-BY-NC 4.0',
+    minAppVersion: '0.4.0',
+    zip: { url: 'https://github.com/p/p/releases/download/a/a.zip', sha256: HEX, bytes: 1 },
+    fileCount: 1,
+    unpackedBytes: 3,
+  };
+  const facts = (
+    entries: Array<{ path: string; bytes: number }>,
+    over: Partial<MarketIndexEntry> = {},
+  ) => ({ sha256: HEX, entries, declared: { ...declared, ...over } });
+
+  it('平：根 pack.json 是元数据（不算"清单外多出来的条目"），条目字节一致 ⇒ null', () => {
+    expect(
+      packContainerProblem(mani, facts([{ path: 'pack.json', bytes: 40 }, { path: 'files/a.erb', bytes: 3 }])),
+    ).toBeNull();
+  });
+
+  it('清单声明了、容器没解出 ⇒ entry-missing', () => {
+    expect(packContainerProblem(mani, facts([{ path: 'pack.json', bytes: 40 }]))?.code).toBe('entry-missing');
+  });
+
+  it('容器解出、清单没声明 ⇒ entry-extra（根 pack.json 以外都不许多）', () => {
+    expect(
+      packContainerProblem(mani, facts([
+        { path: 'pack.json', bytes: 40 },
+        { path: 'files/a.erb', bytes: 3 },
+        { path: 'files/b.erb', bytes: 1 },
+      ]))?.code,
+    ).toBe('entry-extra');
+    // 根级多出来的一个文件同样是"清单没声明"（它不会被搬进落点，所以只能靠这一闸发现）
+    expect(
+      packContainerProblem(mani, facts([
+        { path: 'pack.json', bytes: 40 },
+        { path: 'files/a.erb', bytes: 3 },
+        { path: '悄悄塞进来的.erb', bytes: 1 },
+      ]))?.code,
+    ).toBe('entry-extra');
+  });
+
+  it('同一容器路径重复出现 ⇒ entry-duplicate', () => {
+    expect(
+      packContainerProblem(mani, facts([
+        { path: 'pack.json', bytes: 40 },
+        { path: 'files/a.erb', bytes: 3 },
+        { path: 'files/a.erb', bytes: 3 },
+      ]))?.code,
+    ).toBe('entry-duplicate');
+  });
+
+  it('条目两边都有但字节数不同 ⇒ entry-bytes', () => {
+    expect(
+      packContainerProblem(mani, facts([{ path: 'pack.json', bytes: 40 }, { path: 'files/a.erb', bytes: 4 }]))?.code,
+    ).toBe('entry-bytes');
+  });
+
+  it('容器里的身份与注册表那一行不符 ⇒ container-identity（kind / id / version 各一例）', () => {
+    for (const over of [{ id: 'other.pack' }, { kind: 'dict-pack' as const }, { version: '1.0.1' }]) {
+      const p = packContainerProblem(mani, facts([{ path: 'pack.json', bytes: 40 }, { path: 'files/a.erb', bytes: 3 }], over));
+      expect(p?.code, JSON.stringify(over)).toBe('container-identity');
+      expect(p?.detail, JSON.stringify(over)).toContain('container=');
+    }
+  });
+
+  it('身份判的是逐字相等，不比"数值相等"（1.0.01 也算不符）', () => {
+    expect(packContainerProblem(mani, facts([], { version: '1.0.00' }))?.code).toBe('container-identity');
+  });
+
+  it('对平顺序：身份先于条目（身份就不对时不必再报条目缺失）', () => {
+    const p = packContainerProblem(mani, facts([], { id: 'other.pack' }));
+    expect(p?.code).toBe('container-identity');
+  });
+});
+
+/* ---------------------------- 更新检测三态（KM-10） ---------------------------- */
+
+describe('packUpdateCheck：索引条目 vs 已装集', () => {
+  const entryRow: MarketIndexEntry = {
+    kind: 'kojo-pack',
+    id: 'demo.pack-1',
+    version: '1.0.1',
+    name: '示例包',
+    author: 'someone',
+    license: 'CC-BY-NC 4.0',
+    minAppVersion: '0.4.0',
+    zip: { url: 'https://github.com/p/p/releases/download/a/a.zip', sha256: HEX, bytes: 1 },
+    fileCount: 1,
+    unpackedBytes: 3,
+  };
+  const installed = (version: string, containerSha256?: string): InstalledPack => ({
+    kind: 'kojo-pack',
+    id: 'demo.pack-1',
+    version,
+    name: '示例包',
+    author: 'someone',
+    license: 'CC-BY-NC 4.0',
+    contentDigest: HEX,
+    ...(containerSha256 === undefined ? {} : { containerSha256 }),
+    installedAt: 1,
+    files: [entry('files/a.erb', 3, HEX)],
+  });
+
+  it('本机没装过 ⇒ null（"没装"不是一个态，是另一个动作：给「安装」）', () => {
+    expect(packUpdateCheck(entryRow, [])).toBeNull();
+    expect(packUpdateCheck(entryRow, [{ ...installed('1.0.0'), id: 'other.pack' }])).toBeNull();
+  });
+
+  it('索引更新 ⇒ updatable；索引更旧 ⇒ ahead；同版 ⇒ latest', () => {
+    expect(packUpdateCheck(entryRow, [installed('1.0.0')])?.state).toBe('updatable');
+    expect(packUpdateCheck(entryRow, [installed('2.0.0')])?.state).toBe('ahead');
+    expect(packUpdateCheck(entryRow, [installed('1.0.1')])?.state).toBe('latest');
+  });
+
+  it('本机装着多个版本 ⇒ 一律与**最高**那条比（不与低版本比出"可更新"的假象）', () => {
+    const c = packUpdateCheck(entryRow, [installed('2.0.0'), installed('1.0.0'), installed('1.9.9')]);
+    expect(c?.state).toBe('ahead');
+    expect(c?.local.version).toBe('2.0.0');
+  });
+
+  it('异 kind 的同 id 不参与比较（这种组合早就被 id/kind 查重拦在外层）', () => {
+    expect(
+      packUpdateCheck(entryRow, [{ ...installed('1.0.0'), kind: 'dict-pack' }]),
+    ).toBeNull();
+  });
+
+  it('同版时容器锚比得出"是不是同一份东西"；目录源没有容器 ⇒ null（不拿 contentDigest 冒充）', () => {
+    expect(packUpdateCheck(entryRow, [installed('1.0.1', HEX)])?.sameContainer).toBe(true);
+    expect(packUpdateCheck(entryRow, [installed('1.0.1', 'b'.repeat(64))])?.sameContainer).toBe(false);
+    expect(packUpdateCheck(entryRow, [installed('1.0.1')])?.sameContainer).toBeNull();
+    // 只有 latest 这一态才谈"同一份"：可更新时容器锚不同是常态，给 null 而不是误导
+    expect(packUpdateCheck(entryRow, [installed('1.0.0', 'b'.repeat(64))])?.sameContainer).toBeNull();
+  });
+
+  it('版本号形如非法 ⇒ 不给判定（不猜大小）', () => {
+    expect(packUpdateCheck({ ...entryRow, version: '1.0' as string }, [installed('1.0.0')])).toBeNull();
   });
 });

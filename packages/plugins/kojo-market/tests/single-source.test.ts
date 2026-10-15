@@ -232,3 +232,73 @@ describe('市场单一真源守门', () => {
     expect(scan([/fetchText|fetchRemote|\bhttps?:\/\//], [nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'io.ts'), nodeJoin(ROOT, 'packages', 'kernel', 'src', 'io.ts')], true)).toEqual([]);
   });
 });
+
+/* ---------------- 2026-10-16 安装面批（KM-10..12）：容器原语与"一条路径"的机器闸 ---------------- */
+
+const KOJO_MARKET_SERVICE = nodeJoin(ROOT, 'packages', 'plugins', 'kojo-market', 'src', 'service.ts');
+const UI_MARKET_SRC = nodeJoin(ROOT, 'packages', 'plugins', 'ui-market', 'src');
+const CONTRACT_MARKET = nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'market.ts');
+
+describe('安装面单一真源守门（KM-10..12）', () => {
+  it('容器下载/解压与 fetchText 同键同面：生产面只住那四个文件，Rust 仍只有三条市场命令', () => {
+    // 新开一个服务键、或让某个插件自己 invoke Rust，都是"第二条远程路"——当场红
+    expect(
+      scan([/marketDownload|marketExtract/], PROD_SURFACE).map(rel).sort(),
+    ).toEqual([
+      'packages/app/src/bridge/tauri-bridge.ts',
+      'packages/kernel/src/remote.ts',
+      'packages/plugin-api/src/platform.ts',
+      'packages/plugins/kojo-market/src/service.ts',
+    ]);
+    expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /#\[tauri::command\]/), 'market.rs 的命令数').toBe(3);
+  });
+
+  it('装卸校验只有一条路径：清单读取、搬运、双向对平、逐文件锚各只有一处', () => {
+    const svc = readFileSync(KOJO_MARKET_SERVICE, 'utf8');
+    // 定义 1 + 两条源各调 1 ⇒ 3；任何一条源自己另起一套读写都会让计数变大
+    expect(codeMatchCount(svc, /readSourceManifest\s*\(/), '清单读取处数').toBe(3);
+    expect(codeMatchCount(svc, /commitPack\s*\(/), '搬运路径处数').toBe(3);
+    expect(codeMatchCount(svc, /parseManifest\s*\(/), '清单校验调用处数').toBe(1);
+    expect(codeMatchCount(svc, /packContainerProblem\s*\(/), '双向对平调用处数').toBe(1);
+    expect(codeMatchCount(svc, /'entry-sha256'/), '逐文件锚拒码处数').toBe(1);
+    expect(codeMatchCount(svc, /'source-unreadable'/), '源文件读不到拒码处数').toBe(1);
+    expect(scan([/^export function packContainerProblem\(/m], ALL)).toEqual([
+      'packages/plugins/kojo-market/src/manifest.ts',
+    ]);
+  });
+
+  it('容器名只从契约派生：TS 运行时面不出现 .zip 字面量，Rust 那道闸也没被放宽', () => {
+    const names = [
+      KOJO_MARKET_SERVICE,
+      nodeJoin(ROOT, 'packages', 'plugins', 'kojo-market', 'src', 'index.ts'),
+      nodeJoin(ROOT, 'packages', 'plugins', 'kojo-market', 'src', 'manifest.ts'),
+    ];
+    // 拦的是**自己拼容器名的字符串字面量**（`entry.zip.url` 那种属性访问不算）；
+    // skipComments：文件头的链路图里要写 `.staging/<id>-<version>.zip` 说明落点形态。
+    expect(scan([/['"]\.(?:zip|unpacked)['"]/], names, true), '容器名应当只由契约派生').toEqual([]);
+    // 面板连暂存区都不该知道（"面板不摸盘"那条纪律的延伸）
+    expect(scan([/'\.staging'/, /'packs'/, /'\.zip'/], [UI_MARKET_SRC])).toEqual([]);
+    expect(codeMatchCount(readFileSync(CONTRACT_MARKET, 'utf8'), /^export function packContainerName\(/m), '容器名派生处数').toBe(1);
+    const rs = readFileSync(RUST_MARKET_RS, 'utf8');
+    expect(codeMatchCount(rs, /ends_with\(ZIP_SUFFIX\)/), '容器名后缀闸处数').toBe(1);
+    expect(codeMatchCount(rs, /container_name_problem\s*\(/), '定义 1 + 下载与解压各 1').toBe(3);
+  });
+
+  it('解压限额三个数只住契约：service 里不许出现第二个 5000 / 128 MiB', () => {
+    const svc = readFileSync(KOJO_MARKET_SERVICE, 'utf8');
+    expect(codeMatchCount(svc, /\b5000\b/), '条目数上限的字面量').toBe(0);
+    expect(codeMatchCount(svc, /134217728|128 \* 1024 \* 1024/), '解压体积上限的字面量').toBe(0);
+    for (const c of ['MARKET_MAX_FILE_ENTRIES', 'MARKET_MAX_PATH_DEPTH', 'MARKET_MAX_UNPACKED_BYTES']) {
+      expect(svc, c).toContain(c);
+    }
+  });
+
+  it('版本比较与三态判定只住契约：面板只消费 packUpdateCheck，不自己比版本', () => {
+    expect(
+      scan([/compareVersions|PackUpdateState/], [UI_MARKET_SRC], true).map((s) => String(s)),
+      '面板自己比版本 = 第二份口径',
+    ).toEqual([]);
+    expect(codeMatchCount(readFileSync(CONTRACT_MARKET, 'utf8'), /^export function packUpdateCheck\(/m), '三态判定定义处数').toBe(1);
+    expect(scan([/PackUpdateState|packUpdateCheck/], [nodeJoin(ROOT, 'packages', 'kernel')], true)).toEqual([]);
+  });
+});
