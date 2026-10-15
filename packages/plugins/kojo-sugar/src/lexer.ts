@@ -220,7 +220,7 @@ export type LineClass =
       /** 右值形态残缺（有顶层 `?` 但非完整条件）→ 由 parser 报 `alias-unknown-target` */
       malformed?: boolean;
     }
-  /** 文件级常量声明 `常量 <名> = <值>`（7 号批）——产物 `#DIM CONST`（函数外） */
+  /** 文件级常量声明 `常量 <名> = <值>`（7 号批）——编译期展开为字面量，产物零声明 */
   | { kind: 'constDecl'; name: string; value: string; malformed?: boolean }
   | { kind: 'switchItem'; name: string; value: string }
   | { kind: 'timingHead'; face: string; index?: string; indexName?: string; namedParams: TimingNamedParam[] }
@@ -495,7 +495,7 @@ export function classifyLine(line: LogicalLine): LineClass {
     return parseAliasDecl(aliasMatch[2]!);
   }
 
-  // ---- `常量 <名> = <值>`（7 号批：文件级常量 → 产物 `#DIM CONST`）----
+  // ---- `常量 <名> = <值>`（7 号批：文件级常量 → 编译期展开，产物零声明）----
   // 与 `别名 X = 目标` 同款"一行一条、词后跟空白"形态（`常量名` 这类无空白的词形不识别）。
   // **排在 `parseAssignment` 之前**：否则 `常量 X = 1022` 会被赋值扫描吞成左值 `常量 X`
   // （同 `结算` 行排在赋值之前的理由）。

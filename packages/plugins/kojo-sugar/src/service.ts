@@ -56,7 +56,7 @@ class Sink implements DiagnosticSink {
  *
  * `consts`（7 号批）：**文件级常量**以"只读数字别名"并入同一张表——这样
  * `CFLAG:11:<常量名>`、裸 `<常量名>` 都在既有的别名替换通路（`expression.ts` 的
- * §5.0 第 1 步）里解析为数值字面量，与 `常量 → #DIM CONST` 的产物同源；
+ * §5.0 第 1 步）里解析为数值字面量，与"产物不再发射任何声明"的宏化口径同源；
  * **不另起一层字典**（既有 FT-1 分层字典建在 adapter/项目级 `.ERH` 上，
  * 无法容纳"本 `.kojo` 尚未编译就声明的常量"）。
  * 同名时别名优先（`map.has` 守卫）——冲突已在 AST 段报 `alias-name-conflict`。
@@ -80,6 +80,37 @@ function buildAliasTable(aliases: readonly AliasDecl[], consts: readonly ConstDe
     });
   }
   return map;
+}
+
+/**
+ * 常量遮蔽守门（7 号批的宏化修订；只读**查字典**，零 IO）。
+ *
+ * 背景：常量已**不再发射** `#DIM CONST`（函数外的该声明是游戏级全局，跨文件同名 =
+ * 加载期整体失败）。宏化后只剩一个残余坑——**文件内静默遮蔽**：`常量 好感度 = 5`
+ * 会把本文件里所有 `好感度`（含 `CFLAG:…:好感度` 的第三段）都换成 `5`，代码照跑、
+ * 语义已变。字典已知的标识符 ⇒ 拦下（复用闭集码 `alias-name-conflict`，**不新增码**）。
+ *
+ * 口径：`resolveFamily(name)` 即"引擎/CSV 变量名"（`source:'const'` 的 `.ERH` 具名
+ * 常量不参与族归属，故只有"同时是变量名"的 `.ERH` 名会被抓到；纯编号起名式的
+ * `.ERH` 常量名**不在本守门面内**——字典没有"这个名字是不是全局常量"的反查能力，
+ * 那类同名会在本文件内取值一致或不一致，属作者命名口径，不在本批）。字典未注入
+ * （未打开工程 / 无适配器）⇒ 一律放行，与既有"字典可选注入、不误伤"的口径一致。
+ */
+function guardConstShadowing(
+  consts: readonly ConstDecl[],
+  dictionary: DictionaryLookup | undefined,
+  sink: DiagnosticSink,
+): void {
+  if (dictionary === undefined) return;
+  for (const decl of consts) {
+    if (dictionary.resolveFamily(decl.name) === undefined) continue;
+    sink.report({
+      code: 'alias-name-conflict',
+      severity: 'error',
+      message: `常量「${decl.name}」与引擎变量同名——编译期展开会把本文件里所有「${decl.name}」改写成常量值（CFLAG:…:${decl.name} 这类写法也会取到它），请改名。`,
+      loc: { line: decl.loc.start.line, column: decl.loc.start.column },
+    });
+  }
 }
 
 /**
@@ -201,6 +232,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     }
 
     const consts = doc.topLevel.filter((n): n is ConstDecl => n.kind === 'constDecl');
+    guardConstShadowing(consts, dictionary, sink);
     const aliases = buildAliasTable(doc.frontMatter.aliases, consts);
     // B4-fp：作者私有命名前缀（`函数前缀:`）优先于 adapter 模板；未声明 → 原表原样。
     const namedFaceTable = resolveFaceTableForPrefix(faceTable, doc.frontMatter.functionPrefix, sink);

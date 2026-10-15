@@ -21,7 +21,7 @@ export type KeywordId =
   | 'head.narrationColor'
   | 'head.switch'
   | 'head.alias'
-  /* 文件级常量（7 号批：`常量 <名> = <整数>` → 函数外顶格 `#DIM CONST`） */
+  /* 文件级常量（7 号批：`常量 <名> = <整数>` → 编译期展开，产物零声明） */
   | 'head.const'
   /* 头部选项（B4-fp：作者私有用户函数命名前缀） */
   | 'head.functionPrefix'
@@ -84,7 +84,7 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['switch', 'head.switch'],
   ['别名', 'head.alias'],
   ['alias', 'head.alias'],
-  // 文件级常量（7 号批）：`常量 <名> = <整数>` → 函数外顶格 `#DIM CONST`。
+  // 文件级常量（7 号批）：`常量 <名> = <整数>` → 编译期展开为字面量，产物零声明。
   // 形态是**词后跟空白 + `名 = 值`**（`常量 X = 5`），不是 `词: 值` ⇒ 与 `别名` 同款的
   // "不靠本表判定"关键字：登记进表只为让编辑器**高亮/补全认得它**（词表单一真源，
   // 同 `则` / `随机形` 的理由），判定归 lexer 的位置式扫描（`lexer.classifyLine`）。

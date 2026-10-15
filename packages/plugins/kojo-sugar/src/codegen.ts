@@ -299,13 +299,18 @@ export function codegen(
     em.push(0, node.text, node.loc.start.line, verbatimRow(em, node));
   }
 
-  // ---- 文件级常量（7 号批）：`#DIM CONST <名> = <值>` 落在**函数定义之外** ----
-  // Emuera 里 `#DIM CONST` 出现在函数体（`@` 行之后的缩进内容）内是错的；故此处统一在
-  // 文件头、注释之后、登记函数之前发射——与既有 `@` 块产物顺序稳定共存（源顺序）。
-  // `#` 开头不匹配函数头正则，不触发撞名记账。
+  // ---- 文件级常量（7 号批 → 宏化修订）：**只落一行注释，不发射 `#DIM CONST`** ----
+  // 原实现把常量写成函数外顶格的 `#DIM CONST`——而 Emuera 里函数外的 `#DIM CONST` 是
+  // **游戏级全局**：两个 `.kojo` 各声明一个同名常量，或与语料既有 `.ERH` 全局名撞上，
+  // 都会让游戏**加载期**整体失败（实测语料：顶层声明 6,011 条、跨文件重名 0 条——作者
+  // 一贯守规，正因撞上就是崩）。而糖内**全部**引用早已被字面量替换（`常量 X = 1022`
+  // ⇒ 表达式里就是 `1022`）⇒ 该声明对糖语义是死重，却是**唯一的引擎全局足迹与全部
+  // 撞名面** ⇒ 直接去掉，"用户 × 用户"与"用户 × 语料 `.ERH`"两类撞名构造性消失。
+  // 留一行注释：常量不凭空消失，产物里仍看得到它被展开成了什么。
+  // ⚠ 本行会进产物（进而进 golden），**不许含被 `no-sugar-jargon.test.ts` 封禁的术语**。
   for (const node of topLevel) {
     if (node.kind !== 'constDecl') continue;
-    em.push(0, `#DIM CONST ${node.name} = ${node.value}`, node.loc.start.line);
+    em.push(0, `; 常量 ${node.name} = ${node.value}（编译期展开为字面量，不占引擎全局名）`, node.loc.start.line);
   }
 
   // ---- 头部：登记函数 + 开关（规范 §5.5 三件套之登记/开关）----

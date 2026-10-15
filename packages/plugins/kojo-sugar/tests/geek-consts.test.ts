@@ -1,18 +1,21 @@
 /**
- * 7 号批 · 文件级常量 `常量 <名> = <值>` → 产物 `#DIM CONST <名> = <值>`。
+ * 7 号批 · 文件级常量 `常量 <名> = <值>`（**宏化修订**：编译期展开，产物零引擎足迹）。
  *
  * 判据（本批）：
  * - 形态：`常量 <名> = <整数>`（英文别名 `const`，词后跟空白；`=` 两侧空白自由）；
- * - 产物：**函数定义之外**（文件顶部区块、注释之后、登记函数之前）顶格一行
- *   `#DIM CONST <名> = <值>`，与既有 `@` 块产物共存、按源顺序稳定；Emuera 里该声明
- *   出现在函数体（`@` 行之后缩进内）是错的——本文件用"落在第一个 `@` 之前"钉死；
+ * - 产物：**不发射任何声明**——只落一行注释 `; 常量 <名> = <值>（编译期展开为字面量，
+ *   不占引擎全局名）`，与既有 `@` 块产物共存、按源顺序稳定。理由：函数外的
+ *   `#DIM CONST` 在 Emuera 里是**游戏级全局**，两个 `.kojo` 各写一个同名常量、或与
+ *   语料既有 `.ERH` 全局名撞上 ⇒ 游戏**加载期**整体失败；而糖内所有引用早已字面量
+ *   替换 ⇒ 该声明是死重，却占着唯一的引擎全局足迹与全部撞名面（详见 codegen.ts）。
+ *   本文件用"产物里一条 `#DIM …` 声明都没有"钉死"零引擎足迹"。
  * - 同名可查：常量名以**只读数字别名**并入本文件别名表 ⇒ 裸名与 `CFLAG:11:<名>` 在
  *   表达式里都解析为数值（`expression.ts` §5.0 第 1 步）；**不另起一层字典**
  *   （既有「来源分层」字典建在 adapter/项目级 `.ERH` 上，容不下"本 `.kojo` 尚未编译
  *   就声明的常量"）。
  * - 冲突/残缺**复用既有诊断码、不静默**：保留代词或撞别名 → `alias-name-conflict`；
- *   重名 → `alias-duplicate`；名/值残缺 → `alias-unknown-target`；写在时机之后 →
- *   `alias-not-in-header`。
+ *   撞字典已知变量名（宏化后的残余坑：文件内静默遮蔽）→ 同码；重名 → `alias-duplicate`；
+ *   名/值残缺 → `alias-unknown-target`；写在时机之后 → `alias-not-in-header`。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -23,34 +26,46 @@ import { stubDict, stubFaceTable } from './support';
 const svc = () => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
 const t = (src: string) => svc().transpile(src);
 
-/** 产物按行展开（**保留缩进**——"顶格"是本批铁律之一） */
+/** 产物按行展开（**保留缩进**——"顶格落注释"是本批铁律之一） */
 const outLines = (src: string): string[] => t(src).erb.split('\n');
 /** 产物按行展开、去缩进（表达式断言用） */
 const trimmed = (src: string): string[] => outLines(src).map((l) => l.trim());
 /** error 诊断的 code 列表 */
 const errCodes = (src: string): string[] =>
   t(src).diagnostics.filter((d) => d.severity === 'error').map((d) => d.code);
+/** 产物里是否落了引擎声明（本批必须恒 false：常量改为编译期展开） */
+const hasEngineDecl = (src: string): boolean =>
+  outLines(src).some((l) => l.trimStart().startsWith('#DIM'));
+/** 常量在产物里的那行注释（宏化后唯一的痕迹） */
+const constLine = (name: string, value: string): string =>
+  `; 常量 ${name} = ${value}（编译期展开为字面量，不占引擎全局名）`;
 
-/** `角色:` + 常量区 + 一个时机块（让产物既有常量、又有 `@` 函数） */
+/** `角色:` + 常量区 + 一个时机块（让产物既有常量痕迹、又有 `@` 函数） */
 const doc = (decls: string): string => `角色: 12\n${decls}\n时机 绝顶：\n\t「…」\n`;
 
 /* ================================ 正向：产物形态 ================================ */
 
-describe('7 号 · 常量 → #DIM CONST（正向）', () => {
-  it('`常量 X = 1022` → 产物顶格一行 `#DIM CONST X = 1022`，且落在第一个 `@` 函数之前', () => {
+describe('7 号 · 常量宏化（正向：零引擎足迹）', () => {
+  it('`常量 X = 1022` → 产物顶格一行注释，落在第一个 `@` 函数之前，且**零** `#DIM` 声明', () => {
     const src = doc('常量 X = 1022');
     expect(errCodes(src)).toEqual([]);
     const lines = outLines(src);
-    const declIdx = lines.indexOf('#DIM CONST X = 1022'); // 精确匹配 = 顶格（无缩进）
+    const declIdx = lines.indexOf(constLine('X', '1022')); // 精确匹配 = 顶格（无缩进）
     const atIdx = lines.findIndex((l) => l.startsWith('@'));
     expect(declIdx).toBeGreaterThanOrEqual(0);
-    expect(atIdx).toBeGreaterThan(declIdx); // 声明在函数定义之外（文件顶部区块）
+    expect(atIdx).toBeGreaterThan(declIdx); // 痕迹在函数定义之外（文件顶部区块）
+    expect(hasEngineDecl(src)).toBe(false); // 撞引擎面构造性消失
   });
 
-  it('多条常量按源顺序稳定发射', () => {
+  it('同名常量写在两个文件里都零引擎足迹（"用户 × 用户"撞名不再可能）', () => {
+    expect(hasEngineDecl(doc('常量 撞名 = 1'))).toBe(false);
+    expect(hasEngineDecl(`角色: 13\n常量 撞名 = 2\n时机 绝顶：\n\t「…」\n`)).toBe(false);
+  });
+
+  it('多条常量按源顺序稳定落注释', () => {
     const lines = outLines(doc('常量 甲 = 1\n常量 乙 = 2'));
-    const a = lines.indexOf('#DIM CONST 甲 = 1');
-    const b = lines.indexOf('#DIM CONST 乙 = 2');
+    const a = lines.indexOf(constLine('甲', '1'));
+    const b = lines.indexOf(constLine('乙', '2'));
     expect(a).toBeGreaterThanOrEqual(0);
     expect(b).toBeGreaterThan(a);
   });
@@ -64,7 +79,7 @@ describe('7 号 · 常量 → #DIM CONST（正向）', () => {
   });
 
   it('负整数字面量照收', () => {
-    expect(outLines(doc('常量 X = -5'))).toContain('#DIM CONST X = -5');
+    expect(outLines(doc('常量 X = -5'))).toContain(constLine('X', '-5'));
   });
 
   it('`常量名`（词后无空白）不判为常量，按文本行打印（不误吞）', () => {
@@ -111,35 +126,47 @@ describe('7 号 · 常量冲突与残缺（复用既有诊断码，闭集不扩�
     expect(errCodes(doc('常量 X = 1\n常量 X = 2'))).toContain('alias-duplicate');
   });
 
-  it('值不是整数字面量 → `alias-unknown-target`，且**不产** `#DIM CONST`', () => {
+  it('值不是整数字面量 → `alias-unknown-target`，且**零引擎声明**', () => {
     const src = doc('常量 X = 恋人');
     expect(errCodes(src)).toContain('alias-unknown-target');
-    expect(outLines(src).some((l) => l.startsWith('#DIM CONST'))).toBe(false);
+    expect(hasEngineDecl(src)).toBe(false);
+    expect(outLines(src)).not.toContain(constLine('X', '恋人'));
   });
 
-  it('缺 `=`（残缺）→ `alias-unknown-target`，且**不产** `#DIM CONST`', () => {
+  it('缺 `=`（残缺）→ `alias-unknown-target`，且**零引擎声明**', () => {
     const src = doc('常量 X 1022');
     expect(errCodes(src)).toContain('alias-unknown-target');
-    expect(outLines(src).some((l) => l.startsWith('#DIM CONST'))).toBe(false);
+    expect(hasEngineDecl(src)).toBe(false);
   });
 
   it('写在时机块之后 → `alias-not-in-header`', () => {
     const src = `角色: 12\n时机 绝顶：\n\t「…」\n常量 X = 1\n`;
     expect(errCodes(src)).toContain('alias-not-in-header');
   });
+
+  it('**宏化后的残余坑**：常量名撞字典已知变量 → `alias-name-conflict`（否则本文件静默遮蔽）', () => {
+    expect(errCodes(doc('常量 好感度 = 5'))).toContain('alias-name-conflict');
+    expect(errCodes(doc('常量 心情 = 5'))).toContain('alias-name-conflict'); // 走同一码
+  });
+
+  it('字典不认识的常量名照常放行（守门不误伤）', () => {
+    expect(errCodes(doc('常量 我的阈值 = 5'))).toEqual([]);
+  });
 });
 
 /* ================================ 与既有面共存 ================================ */
 
 describe('7 号 · 与既有 `@` 块产物共存', () => {
-  it('顶层原生 `@` 块仍原样透传，常量声明排在其前（函数外区块）', () => {
+  it('顶层原生 `@` 块仍原样透传，常量痕迹排在其前（函数外区块）', () => {
     const src = `角色: 12\n常量 X = 1\n@MY_RAW\n\t#DIM Y\n\tRETURN\n`;
     const lines = outLines(src);
-    const declIdx = lines.indexOf('#DIM CONST X = 1');
+    const declIdx = lines.indexOf(constLine('X', '1'));
     const rawIdx = lines.indexOf('@MY_RAW');
     expect(declIdx).toBeGreaterThanOrEqual(0);
     expect(rawIdx).toBeGreaterThan(declIdx);
     expect(lines).toContain('\t#DIM Y'); // 原生块逐行原样透传（缩进保留）
+    // 直通块里的 `#DIM` 是作者手写的，不在本批"零引擎足迹"的管辖内（常量自身不产声明）
+    expect(lines.filter((l) => l.trimStart().startsWith('#DIM'))).toEqual(['\t#DIM Y']);
   });
 });
 
@@ -157,11 +184,12 @@ describe('7 号 · 关键字登记进词表（高亮/补全单一真源）', () 
     expect(SUGAR_LEXICON_WORDS.find((x) => x.word === 'const')!.primary).toBe(false);
   });
 
-  it('登记进词表**不改判定**：`常量 X = 5` 仍走常量通路（产物顶格 `#DIM CONST`），不进 `headDecl`', () => {
+  it('登记进词表**不改判定**：`常量 X = 5` 仍走常量通路（落注释、零 `#DIM`），不进 `headDecl`', () => {
     const src = doc('常量 X = 5');
     expect(errCodes(src)).toEqual([]);
-    expect(outLines(src)).toContain('#DIM CONST X = 5');
-    // 若被 `词: 值` 通路截半，产物里会出现把 `=` 前那截当头部值的怪东西
-    expect(outLines(src).some((l) => l.includes('X =') && !l.startsWith('#DIM CONST'))).toBe(false);
+    expect(outLines(src)).toContain(constLine('X', '5'));
+    expect(hasEngineDecl(src)).toBe(false);
+    // 若被 `词: 值` 通路截半，产物里会出现把 `=` 前那截当头部值的怪东西（`X = 5` 裸行）
+    expect(trimmed(src).some((l) => /^X\s*=/.test(l))).toBe(false);
   });
 });

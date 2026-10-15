@@ -193,7 +193,7 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
       continue;
     }
 
-    // ---- 常量声明（7 号批：文件级 → 产物 `#DIM CONST`，与别名同受"须在头"约束）----
+    // ---- 常量声明（7 号批：文件级 → 编译期展开、产物零声明，与别名同受"须在头"约束）----
     if (cls.kind === 'constDecl') {
       cursor.next();
       const decl = buildConstDecl(cls, line, sink, aliasNames, constNames);
@@ -381,8 +381,8 @@ function buildAliasDecl(
  *
  * 校验（**全部复用既有诊断码**，闭集不扩）：
  * - 名残缺 / 缺 `=`（`malformed`）→ `alias-unknown-target`；
- * - 值不是十进制整数字面量 → `alias-unknown-target`（`#DIM CONST` 只接整数字面量，
- *   写个变量名让引擎在声明期报错 = 产物看似能跑、加载即崩，必须在此拦下）；
+ * - 值不是十进制整数字面量 → `alias-unknown-target`（编译期展开只接整数字面量，
+ *   写个变量名会让这条声明在任何位置都取不到值 = 看似能跑、语义已错，必须在此拦下）；
  * - 名是保留代词 `她` / `你`，或与**既有别名**同名 → `alias-name-conflict`
  *   （两者会在表达式里争夺同一个标识符）；
  * - 常量重名 → `alias-duplicate`。
@@ -408,7 +408,7 @@ function buildConstDecl(
     sink.report({
       code: 'alias-unknown-target',
       severity: 'error',
-      message: `常量「${name}」的值「${cls.value}」不是整数——#DIM CONST 只接受十进制整数字面量（如 常量 ${name} = 1022）。`,
+      message: `常量「${name}」的值「${cls.value}」不是整数——常量在编译期展开成字面量，只接受十进制整数（如 常量 ${name} = 1022）。`,
       loc: posOf(line),
     });
     return null;
