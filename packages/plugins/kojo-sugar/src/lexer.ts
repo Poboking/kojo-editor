@@ -263,6 +263,13 @@ export type LineClass =
   /** 经验结算行（B5）：`结算 <引用> <op> <值>` → 产一行 `EXP:<引用> <op> <值>` 原生 ERB */
   | { kind: 'settle'; expr: string }
   /**
+   * 数值增减行（1016 批）：`增减 <族>:<对象>:<槽> <op> <增量>` → 产一行
+   * `CALL <族目标函数>(…)`。`ref` = `族:对象:槽` 原文；`op` ∈ `+=` / `-=` / `=`；
+   * `delta` = 增量表达式原文。**族 → 目标函数 + 参数序由 adapter 增减族表声明**
+   * （游戏知识只住 adapter），codegen 只查不解释；未登记族 / 变量槽形态不符 fail-closed。
+   */
+  | { kind: 'mutator'; ref: string; op: '+' | '-' | '='; delta: string }
+  /**
    * 行首语句形中文函数调用（位糖 = 方案 E；v1.7）：`设置标记 X, n` → `SETBIT X, n` 等。
    * `engine` = 原生 ERB 语句形函数名（白名单 `statement-functions.ts` 单一真源）；
    * `target` = 变量引用原文；`slot` = 位号表达式原文（皆在 codegen 降糖）。
@@ -360,6 +367,53 @@ function parseReturnStatement(code: string): { kind: 'returnStatement'; value?: 
   const value = m[2]!.trim();
   if (value.length === 0) return { kind: 'returnStatement' };
   return { kind: 'returnStatement', value };
+}
+
+/* ------------------ 数值增减行（1016 批）：`增减 <族>:<对象>:<槽> <op> <增量>` ------------------ */
+
+/** `增减` / `adjust` 行体的结构切分（词后正文 → `ref` / `op` / `delta` 三段原文） */
+interface MutatorParts {
+  readonly ref: string;
+  readonly op: '+' | '-' | '=';
+  readonly delta: string;
+}
+
+/**
+ * 把 `增减` 之后的正文切成 `族:对象:槽` / 运算符 / 增量三段（纯词法，不解释族语义）。
+ *
+ * 运算符取**首个**顶层出现的 `+=` / `-=` / 裸 `=`，且**排除比较运算符**
+ * （前一字符为 `=` / `!` / `<` / `>` / `\` 时不算）——`增减 CFLAG:TARGET:2 等于 3`
+ * 走运算符表（`=` 前后带空白）时不会在此被误切。
+ *
+ * 三段缺任一（无 ref / 无运算符 / 空增量）→ 返回 `null`：退回普通文本行（同 `结算`
+ * 的结构残缺退化口径）。三段内容**原样**交给 codegen——族 / 对象 / 槽的语义由
+ * adapter 增减族表声明，转译器不解释（游戏知识只住 adapter）。
+ */
+function parseMutatorLine(body: string): MutatorParts | null {
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] !== '=') continue;
+    const prev = i > 0 ? body[i - 1]! : '';
+    // 比较运算符族一律不算赋值运算符：`!=` / `<=` / `>=`（前字符）+ `==`（后字符）
+    if (prev === '=' || prev === '!' || prev === '<' || prev === '>' || prev === '\\') continue;
+    if (body[i + 1] === '=') continue;
+    let op: '+' | '-' | '=';
+    let refEnd: number;
+    if (prev === '+') {
+      op = '+';
+      refEnd = i - 1;
+    } else if (prev === '-') {
+      op = '-';
+      refEnd = i - 1;
+    } else {
+      op = '=';
+      refEnd = i;
+    }
+    const ref = body.slice(0, refEnd).trim();
+    const delta = body.slice(i + 1).trim();
+    if (ref.length === 0 || delta.length === 0) return null;
+    return { ref, op, delta };
+  }
+  return null;
 }
 
 /* ------------------ 行首语句形中文函数调用（位糖 = 方案 E；v1.7） ------------------ */
@@ -572,6 +626,22 @@ export function classifyLine(line: LogicalLine): LineClass {
   const settleHead = /^(\S+)[ \t\u3000]+(.+)$/.exec(code);
   if (settleHead && lookupKeyword(settleHead[1]!) === 'inline.settle') {
     return { kind: 'settle', expr: settleHead[2]!.trim() };
+  }
+
+  // ---- 数值增减行（1016 批）：`增减 <族>:<对象>:<槽> <op> <增量>` ----
+  // 与 `结算` 同款"词 + 空白 + 余下正文"的位置式判定（不走关键字表）。三元结构
+  // `族:对象:槽` + 运算符 + 增量；运算符切分须**排除比较运算符**（`==` / `!=` /
+  // `<=` / `>=`）——否则 `增减 CFLAG:TARGET:2 等于 3` 类写法会被误吞。结构残缺
+  // （无 ref / 无运算符 / 空增量）→ 返回 null，退回普通文本行（同 `结算` 的退化口径）。
+  const mutHead = /^(增减|adjust)[ \t\u3000]+(.+)$/.exec(code);
+  if (mutHead) {
+    const parsed = parseMutatorLine(mutHead[2]!);
+    if (parsed) return { kind: 'mutator', ...parsed };
+    // 结构残缺（无运算符 / 空增量 / 比较运算符）→ **直接落文本行**：不能让
+    // `增减 CFLAG:TARGET:2 +=` 掉进赋值扫描被吞成左值 `增减 CFLAG:TARGET:2 +`
+    // （那会报 `unknown-identifier` 且产出半成品赋值行）。与 `结算` 退化口径一致：
+    // 原样打印、不静默吞、不产 CALL。
+    return { kind: 'text', raw: content };
   }
 
   // ---- 行首语句形中文函数调用（位糖 = 方案 E；v1.7）：`设置标记 X, n` ----

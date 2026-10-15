@@ -16,6 +16,7 @@ import { KernelServices, WellKnownServices, combineDigests, foldDigest, join, pa
 import { ERATW } from './constants';
 import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
 import { createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS } from './library-table';
+import { createEratwMutatorTable, ERATW_MUTATOR_FAMILIES } from './mutator-table';
 import { deriveCharaNoFromFileNames, parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 import { clearKojoFamilyMemo, createEratwFamilyIndex } from './family-index';
 import { createEratwConventions } from './conventions';
@@ -402,6 +403,9 @@ export function createEratwAdapterPlugin(): Plugin {
         // 基础库/常用函数名表（ZH-F1）——同样纯数据、无 IO（手工维护的静态表），
         // 糖层在表达式里把中文函数名降为原生 ERB 函数名。
         kojoLibraryTable: createEratwLibraryTable(ERATW_LIBRARY_FUNCTIONS),
+        // 数值增减族表（1016 批）——同样纯数据、无 IO（手工维护的静态表）：
+        // 糖层把 `增减 族:对象:槽 ± n` 降为 `CALL <engine>(…)`，参数序由本表声明。
+        kojoMutatorTable: createEratwMutatorTable(ERATW_MUTATOR_FAMILIES),
         // 日文名 → 中文名对照词典（只加显示备注，不改任何实际目录/文件名）
         nameGlossary: ERATW_NAME_GLOSSARY,
 

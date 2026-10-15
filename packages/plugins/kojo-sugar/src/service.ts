@@ -18,6 +18,7 @@ import type {
   KojoFaceTable,
   KojoInstructionTable,
   KojoLibraryTable,
+  KojoMutatorTable,
   Logger,
   SugarCompileOptions,
   SugarCompileResult,
@@ -325,6 +326,12 @@ export interface CreateSugarServiceOptions {
    */
   libraryTable?: KojoLibraryTable;
   /**
+   * 数值增减族表（adapter 提供；游戏知识；1016 批）。
+   * **缺省 = 该适配器未声明** → `增减 <族>:<对象>:<槽> <op> <增量>` 查不到族头，
+   * 报既有码 `unknown-identifier`（error，fail-closed；不降糖、不产半成品）。
+   */
+  mutatorTable?: KojoMutatorTable;
+  /**
    * 编译落盘所需的内核文件 IO（S3 批）。
    * **缺省 = 本服务不支持 `compileToFile`**（调用即抛错，绝不静默假装成功）——
    * 纯转译（`parse`/`transpile`/`sourceOf`）不需要它，故可选。
@@ -351,6 +358,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
   const faceTable = opts.faceTable;
   const instructionTable = opts.instructionTable;
   const libraryTable = opts.libraryTable;
+  const mutatorTable = opts.mutatorTable;
   const cache = new TranspileResultCache({
     maxBuckets: opts.cache?.maxBuckets ?? CACHE_DEFAULTS.maxBuckets,
     maxEntriesPerBucket: opts.cache?.maxEntriesPerBucket ?? CACHE_DEFAULTS.maxEntriesPerBucket,
@@ -368,6 +376,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       `sugar.transpile 缓存：命中 ${s.hits} · 未命中 ${s.misses} · 淘汰 ${s.evictions} · 条目 ${s.entries} · ${s.sourceChars} 字符`,
     );
   }
+
 
   function parse(source: string, options: SugarTranspileOptions = {}): SugarDoc {
     const sink = new Sink();
@@ -425,6 +434,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       faceTable: namedFaceTable,
       instructionTable,
       libraryTable,
+      mutatorTable,
       sink,
       options,
       // 列级映射（S6）：与源文本同一次切分出的逻辑行视图（含折行段）——

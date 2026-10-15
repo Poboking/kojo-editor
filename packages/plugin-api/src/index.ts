@@ -413,3 +413,6 @@ export {
 
 /* ---- S6 列级源映射（1015 独占追加区块；勿在他处重排） ---- */
 export type { SugarColumnRun } from './sugar';
+
+/* ---- 数值增减族表（1016 独占追加区块；勿在他处重排） ---- */
+export type { KojoMutatorSpec, KojoMutatorTable, MutatorArgRole } from './game';

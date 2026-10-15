@@ -265,6 +265,11 @@ IF LOCAL
 	; 经验结算行（B5）：`结算 <表达式>` → 一行原生 `EXP:<表达式>`；中英两形都过一次
 	EXP:Ｍ経験 += 1
 	EXP:Ｍ経験 += 1
+	; 数值增减行（1016 批）：`增减 <族>:<对象>:<槽> <op> <增量>` → 一行 `CALL <族目标函数>(…)`；
+	; 中英两形、两族（CFLAG 槽在前 / BASE 对象在前）、`+=`/`-=` 两向都过一次。
+	CALL CHANGE_CFLAG(2, TARGET, 100)
+	CALL CHANGE_CFLAG(2, TARGET, -100)
+	CALL BUFF_BASE(MASTER, BASE_体力, 300)
 	; 初回（1 号任务）：`初回 "key"：` → `IF ONCE("key")` … `ENDIF`（引擎 `ONCE(...)` 访问器）
 	IF ONCE("发版检查_初见")
 		PRINTFORMW 「……第一次这样，是你。」

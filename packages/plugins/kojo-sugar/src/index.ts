@@ -28,6 +28,7 @@ import type {
   KojoFaceTable,
   KojoInstructionTable,
   KojoLibraryTable,
+  KojoMutatorTable,
   Plugin,
   ProjectService,
   SlotRegistry,
@@ -140,6 +141,7 @@ export function createKojoSugarPlugin(): Plugin {
         readonly faceTable: KojoFaceTable | undefined;
         readonly instructionTable: KojoInstructionTable | undefined;
         readonly libraryTable: KojoLibraryTable | undefined;
+        readonly mutatorTable: KojoMutatorTable | undefined;
       }
 
       const emptyView = (): AdapterView => ({
@@ -150,6 +152,7 @@ export function createKojoSugarPlugin(): Plugin {
         faceTable: undefined,
         instructionTable: undefined,
         libraryTable: undefined,
+        mutatorTable: undefined,
       });
 
       const viewOf = (): AdapterView => {
@@ -163,6 +166,7 @@ export function createKojoSugarPlugin(): Plugin {
           faceTable: KojoFaceTable | undefined;
           instructionTable: KojoInstructionTable | undefined;
           libraryTable: KojoLibraryTable | undefined;
+          mutatorTable: KojoMutatorTable | undefined;
         } = {
           adapterId: current.adapterId,
           projectRoot: current.rootDir,
@@ -171,6 +175,7 @@ export function createKojoSugarPlugin(): Plugin {
           faceTable: undefined,
           instructionTable: undefined,
           libraryTable: undefined,
+          mutatorTable: undefined,
         };
         for (const contribution of slots.query('game.adapter')) {
           if (contribution.adapter.gameId !== current.adapterId) continue;
@@ -179,12 +184,13 @@ export function createKojoSugarPlugin(): Plugin {
           v.faceTable ??= contribution.adapter.kojoFaceTemplates;
           v.instructionTable ??= contribution.adapter.kojoInstructionTable;
           v.libraryTable ??= contribution.adapter.kojoLibraryTable;
+          v.mutatorTable ??= contribution.adapter.kojoMutatorTable;
         }
         return v;
       };
 
       /**
-       * 代际判据：项目根 + adapterId + 非 ERB 输入摘要 + 四张表的**对象引用**。
+       * 代际判据：项目根 + adapterId + 非 ERB 输入摘要 + 五张表的**对象引用**。
        * 表对象换代（新对象）或项目换代 ⇒ 全新转译器实例（空缓存）；
        * 引用全同 ⇒ 同一代际（产物只依赖这些对象的内容，纯函数语义下结果可复用）。
        * **前提**：表以"整体换代"变更（eratw-adapter 每次 loadProject 重建 schema，
@@ -197,7 +203,8 @@ export function createKojoSugarPlugin(): Plugin {
         a.variableSchema === b.variableSchema &&
         a.faceTable === b.faceTable &&
         a.instructionTable === b.instructionTable &&
-        a.libraryTable === b.libraryTable;
+        a.libraryTable === b.libraryTable &&
+        a.mutatorTable === b.mutatorTable;
 
       interface ResolvedAdapter {
         readonly view: AdapterView;
@@ -239,7 +246,7 @@ export function createKojoSugarPlugin(): Plugin {
       const makeTranspiler = (
         deps?: Omit<
           Parameters<typeof createSugarTranspileService>[0],
-          'dictionary' | 'faceTable' | 'instructionTable' | 'libraryTable'
+          'dictionary' | 'faceTable' | 'instructionTable' | 'libraryTable' | 'mutatorTable'
         >,
       ): SugarTranspileService => {
         const r = resolveAdapter();
@@ -248,6 +255,7 @@ export function createKojoSugarPlugin(): Plugin {
           faceTable: r.view.faceTable,
           instructionTable: r.view.instructionTable,
           libraryTable: r.view.libraryTable,
+          mutatorTable: r.view.mutatorTable,
         };
         if (deps === undefined) return (r.base ??= createSugarTranspileService({ ...tables, log: ctx.log }));
         return (r.ioBound ??= createSugarTranspileService({ ...tables, ...deps }));

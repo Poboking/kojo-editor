@@ -533,6 +533,38 @@ export interface KojoLibraryTable {
 }
 
 /**
+ * 「数值增减」族表规格（游戏知识，只住 adapter）。
+ *
+ * 与 `KojoLibraryTable` 同形（同一 seam：adapter 建一张**纯数据表**、糖层只查不解释）：
+ * 把「变量族头」（作者写的 `族:对象:槽` 里的族头）映射到"改该族某个槽"的**目标函数 +
+ * 参数序**。数值增减糖（动词 + `族:对象:槽` ± 增量）据此降成 `CALL <engine>(…)`；
+ * 未登记族 / 变量槽形态不符**一律 fail-closed**（查不到即不降糖、报诊断，绝不猜）。
+ */
+export interface KojoMutatorSpec {
+  /** 目标原生 ERB 函数名（产物形 = `CALL <engine>(…)`）。 */
+  readonly engine: string;
+  /** 三个实参各取哪一段（顺序 = 调用实参顺序）：表层 `族:对象:槽` 三段的角色 + 增量。 */
+  readonly argOrder: readonly [MutatorArgRole, MutatorArgRole, MutatorArgRole];
+  /**
+   * 变量槽（`族:对象:槽` 的第三段）取值形态：
+   * - `'number'`：只接受数字下标（写了名 ⇒ 不降糖、报诊断，fail-closed）；
+   * - `'name-or-number'`：名或数字都**原样**传（该族接受名，由语料实证）。
+   */
+  readonly slotMode: 'number' | 'name-or-number';
+}
+
+/** 增减实参角色：`对象` / `变量槽` / `增量`（与表层 `族:对象:槽` + 右值一一对应）。 */
+export type MutatorArgRole = 'object' | 'slot' | 'delta';
+
+/**
+ * 数值增减族表的**查询面**（糖层只查不解释；`hasTable=false` = 空表，查啥都 `undefined`）。
+ */
+export interface KojoMutatorTable {
+  readonly hasTable: boolean;
+  lookupByFamily(family: string): KojoMutatorSpec | undefined;
+}
+
+/**
  * 游戏适配器（槽位 `game.adapter` 的负载）。
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
  */
@@ -573,6 +605,12 @@ export interface GameAdapter {
    * 原样保留并报诊断（fail-visible）。
    */
   readonly kojoLibraryTable?: KojoLibraryTable;
+  /**
+   * 数值增减族表（可选——变量族头 ↔ 目标函数 + 参数序）。
+   * 静态、手工维护（不依赖 `loadProject`）；糖层只查表不解释，未登记族 / 变量槽形态
+   * 不符**不降糖并报诊断**（fail-closed，绝不猜）。
+   */
+  readonly kojoMutatorTable?: KojoMutatorTable;
   /**
    * 口上包「日文名 → 中文名」对照词典（展示用；游戏/语言知识，只住 adapter）。
    * 消费方（导入向导 / 文件树）据此把日文名展示为「日文（中文）」。缺省 = 不做对照。

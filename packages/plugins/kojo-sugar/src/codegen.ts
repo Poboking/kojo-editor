@@ -29,7 +29,9 @@ import type {
   KojoFaceTemplate,
   KojoInstructionTable,
   KojoLibraryTable,
+  KojoMutatorTable,
   MenuBlock,
+  MutatorArgRole,
   OnceBlock,
   RandomBlock,
   RandomInline,
@@ -245,6 +247,13 @@ export interface CodegenOptions {
    * `function-name-unknown`（warning，fail-visible）。
    */
   libraryTable?: KojoLibraryTable;
+  /**
+   * 数值增减族表（adapter 提供；游戏知识；1016 批）。
+   * `增减 <族>:<对象>:<槽> <op> <增量>` 里的族头经本表查「目标函数 + 参数序 + 变量槽形态」
+   * 再降成 `CALL <engine>(…)`；缺省（空表）/ 未登记族 / 变量槽形态不符一律 **fail-closed**
+   * （不降糖、报既有码 `unknown-identifier`，绝不猜）。
+   */
+  mutatorTable?: KojoMutatorTable;
   sink: DiagnosticSink;
   options: SugarTranspileOptions;
   /**
@@ -337,6 +346,7 @@ export function codegen(
       faceTable: opts.faceTable,
       instructionTable: opts.instructionTable,
       libraryTable,
+      mutatorTable: opts.mutatorTable,
       userFunctions,
       sink: opts.sink,
     });
@@ -364,6 +374,7 @@ export function codegen(
         range: opts.faceTable?.customComRange,
         instructionTable: opts.instructionTable,
         libraryTable,
+        mutatorTable: opts.mutatorTable,
         userFunctions,
         occupied,
         allocated,
@@ -384,6 +395,7 @@ export function codegen(
       dictionary: opts.dictionary,
       instructionTable: opts.instructionTable,
       libraryTable,
+      mutatorTable: opts.mutatorTable,
       faceTable: opts.faceTable,
       userFunctions,
       sink: opts.sink,
@@ -556,6 +568,8 @@ interface TimingEmitContext {
   instructionTable?: KojoInstructionTable;
   /** 基础库 / 常用函数名表（adapter；ZH-F1：中文函数名调用形态 → 原生 ERB 名） */
   libraryTable?: KojoLibraryTable;
+  /** 数值增减族表（adapter；1016 批：`增减 族:对象:槽 ± n` → `CALL <engine>(…)`，未登记族 fail-closed） */
+  mutatorTable?: KojoMutatorTable;
   /** 本文件声明的用户函数（B4 批；供正文调用降糖与插值判型） */
   userFunctions: ReadonlyMap<string, UserFunctionInfo>;
   sink: DiagnosticSink;
@@ -655,6 +669,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
     dictionary: ctx.dictionary,
     instructionTable: ctx.instructionTable,
     libraryTable: ctx.libraryTable,
+    mutatorTable: ctx.mutatorTable,
     faceTable: ctx.faceTable,
     userFunctions: ctx.userFunctions,
     sink: ctx.sink,
@@ -1022,6 +1037,8 @@ interface CustomEmitContext {
   instructionTable?: KojoInstructionTable;
   /** 基础库 / 常用函数名表（adapter；ZH-F1） */
   libraryTable?: KojoLibraryTable;
+  /** 数值增减族表（adapter；1016 批） */
+  mutatorTable?: KojoMutatorTable;
   /** 本文件声明的用户函数（B4 批；名字 → 产物名 + 返回类型），供正文调用降糖与插值判型 */
   userFunctions: ReadonlyMap<string, UserFunctionInfo>;
   /** 全文档占号集合（原生 `@` 直通块 + 显式 `编号:`），分配时排除 */
@@ -1181,6 +1198,7 @@ function emitCustomCommand(em: Emitter, node: CustomCommandBlock, ctx: CustomEmi
       dictionary: ctx.dictionary,
       instructionTable: ctx.instructionTable,
       libraryTable: ctx.libraryTable,
+      mutatorTable: ctx.mutatorTable,
       faceTable: ctx.faceTable,
       userFunctions: ctx.userFunctions,
       sink: ctx.sink,
@@ -1246,6 +1264,8 @@ interface BodyContext {
   instructionTable?: KojoInstructionTable;
   /** 基础库 / 常用函数名表（adapter；ZH-F1） */
   libraryTable?: KojoLibraryTable;
+  /** 数值增减族表（adapter；1016 批——正文 `增减` 行的族头查询面） */
+  mutatorTable?: KojoMutatorTable;
   /** 分野模板表（adapter；`你：` 自机台词缺省自机色的兜底来源，游戏知识只住 adapter） */
   faceTable?: KojoFaceTable;
   /** 本文件声明的用户函数（B4 批；插值调用判型 + 语句调用降糖） */
@@ -1456,10 +1476,12 @@ function resolvePlayerColor(node: TextLine | HeartLine, ctx: BodyContext): strin
 /* ------------------------------ 原生直通行 / 语句赋值 ------------------------------ */
 
 /**
- * `rawLine` 三种来源：
+ * `rawLine` 四种来源：
  * - **语句形中文函数调用** `设置标记 X, n`（parser 挂了 `_statementFn` 标记；位糖 = 方案 E）
  *   → 目标 `X` 走左值展开（`expandTarget`，只读别名报错中止），位槽 `n` 走表达式降糖
  *   （`lowerExpression`）；产 `SETBIT/CLEARBIT/INVERTBIT X, n`；
+ * - **数值增减行** `增减 <族>:<对象>:<槽> <op> <增量>`（parser 挂了 `_mutator` 标记；1016 批）
+ *   → 族头查 adapter 增减族表得目标函数 + 参数序，产一行 `CALL <engine>(…)`（见 `emitMutator`）；
  * - **语句赋值** `X = 表达式`（parser 挂了 `_assign` 标记）→ 左值按 §5.0 展开
  *   （只读别名报 `readonly-alias-assignment` 并中止该行），右值走表达式降糖；
  * - **原生直通行**（全大写指令 / `$标签`）→ 原样透传，不降糖（规范 §3.10）。
@@ -1470,6 +1492,11 @@ function emitRawLine(
   ctx: BodyContext,
   indent: number,
 ): void {
+  const mutator = (node as { _mutator?: { ref: string; op: '+' | '-' | '='; delta: string } })._mutator;
+  if (mutator) {
+    emitMutator(em, node, mutator, ctx, indent);
+    return;
+  }
   const stmtFn = (node as { _statementFn?: { engine: string; target: string; slot: string } })._statementFn;
   if (stmtFn) {
     const target = expandTarget(stmtFn.target, exprCtx(ctx, node.loc.start));
@@ -1503,6 +1530,84 @@ function emitRawLine(
     ...identitySpec(view, assign.target, contentBase(node), 0),
     ...identitySpec(view, assign.expr, contentBase(node), line.length - value.length),
   ]);
+}
+
+/* ------------------------------ 数值增减行（1016 批） ------------------------------ */
+
+/**
+ * 「数值增减」行降糖：`增减 <族>:<对象>:<槽> <op> <增量>` → 一行 `CALL <engine>(…)`。
+ *
+ * - **族 → 目标函数（`engine`）+ 参数序（`argOrder`）+ 变量槽形态（`slotMode`）** 由 adapter 的
+ *   增减族表声明（游戏知识只住 adapter）；糖层**只查表**、按 `argOrder` 排实参。对象与变量槽
+ *   **原样**透传（变量槽是引擎变量下标 / 名，走 `lowerExpression` 会误报 `unknown-identifier`），
+ *   只有增量交表达式降糖（`lowerExpression`）。
+ * - **fail-closed（两成因互斥文案，零新诊断码，复用既有码 `unknown-identifier` error）**：
+ *   ①族头未登记（查表 `undefined`，含空表 / 拼错）→ 不降糖；
+ *   ②变量槽形态不符（引用非三段 / 对象或槽为空 / 该族要求数字下标却写了名字）→ 不降糖。
+ *   两处都**不产半成品**（不往 `em` 落任何行），与 `_statementFn` 空位槽同一口径。
+ * - `-=` 的增量取负：单原子（`100` / `好感度`）直接前置 `-`；含顶层运算符时加括号 `-(…)` 防优先级错。
+ */
+function emitMutator(
+  em: Emitter,
+  node: Extract<SugarNode, { kind: 'rawLine' }>,
+  m: { ref: string; op: '+' | '-' | '='; delta: string },
+  ctx: BodyContext,
+  indent: number,
+): void {
+  const parts = m.ref.split(/[:：]/).map((s) => s.trim());
+  const spec = parts.length === 3 ? ctx.mutatorTable?.lookupByFamily(parts[0]!) : undefined;
+  if (!spec) {
+    if (parts.length !== 3 || parts[0]!.length === 0) {
+      // 成因 B（变量槽形态不符）：引用不是三段，无「族 / 对象 / 槽」可查——文案含「变量槽」
+      ctx.sink.report({
+        code: 'unknown-identifier',
+        severity: 'error',
+        message: `「增减」需要写成「增减 <族>:<对象>:<变量槽> <运算符> <增量>」——第三段「变量槽」取不到（引用不是三段）。收到「${m.ref}」。`,
+        loc: node.loc.start,
+      });
+      return;
+    }
+    // 成因 A（族头未登记）：文案含「增减族表」「适配器」，与成因 B 文案互斥
+    ctx.sink.report({
+      code: 'unknown-identifier',
+      severity: 'error',
+      message: `「增减」的族头「${parts[0]}」不在当前适配器的增减族表里——无法确定目标函数与参数序。请核对族名，或让所用的适配器补上该增减族的声明。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  const object = parts[1]!;
+  const slot = parts[2]!;
+  if (object.length === 0 || slot.length === 0) {
+    // 成因 B（变量槽形态不符）：对象 / 槽任一为空——文案含「变量槽」
+    ctx.sink.report({
+      code: 'unknown-identifier',
+      severity: 'error',
+      message: `「增减」的对象与变量槽都不可为空（族头「${parts[0]}」）——请核对「<对象>:<变量槽>」两段。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  if (spec.slotMode === 'number' && !/^-?\d+$/.test(slot)) {
+    // 成因 B（变量槽形态不符）：该族只收数字下标，却写了名字 ⇒ 取不到编号，绝不猜——文案含「变量槽」
+    ctx.sink.report({
+      code: 'unknown-identifier',
+      severity: 'error',
+      message: `「增减」的变量槽「${slot}」（族头「${parts[0]}」）只接受数字下标——写了名字取不到编号，故不改写为 CALL。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  const lowered = lowerExpression(m.delta, exprCtx(ctx, node.loc.start));
+  const delta = m.op === '-' ? (isSimpleMutatorOperand(m.delta) ? `-${lowered}` : `-(${lowered})`) : lowered;
+  const byRole: Record<MutatorArgRole, string> = { object, slot, delta };
+  const args = spec.argOrder.map((role) => byRole[role]);
+  em.push(indent, `CALL ${spec.engine}(${args.join(', ')})`, node.loc.start.line);
+}
+
+/** 单原子增量判定（`-=` 取负时决定是否加括号防优先级错）：无顶层二元运算符、无内部空白 */
+function isSimpleMutatorOperand(raw: string): boolean {
+  return /^[ \t]*[\w:：\[\]\u4e00-\u9fff\u3040-\u30ff]+\s*$/.test(raw);
 }
 
 /* ------------------------------ 用户函数（B4 批：公共段 / 自定义函数最小形） ------------------------------ */
@@ -1638,6 +1743,8 @@ interface FunctionEmitContext {
   dictionary?: DictionaryLookup;
   instructionTable?: KojoInstructionTable;
   libraryTable?: KojoLibraryTable;
+  /** 数值增减族表（adapter；1016 批——函数体内 `增减` 行同口径降糖） */
+  mutatorTable?: KojoMutatorTable;
   /** 分野模板表（adapter）——函数体内 `你：` 也要吃缺省自机色，与时机正文同口径 */
   faceTable?: KojoFaceTable;
   userFunctions: ReadonlyMap<string, UserFunctionInfo>;
@@ -1688,6 +1795,7 @@ function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext
     dictionary: ctx.dictionary,
     instructionTable: ctx.instructionTable,
     libraryTable: ctx.libraryTable,
+    mutatorTable: ctx.mutatorTable,
     faceTable: ctx.faceTable,
     userFunctions: ctx.userFunctions,
     sink: ctx.sink,

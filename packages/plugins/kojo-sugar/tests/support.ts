@@ -7,8 +7,14 @@
  * 又符合解耦审计 C 项对 `tests/` 的豁免（测试可跨包 import）。
  */
 
-import { createEratwFaceTable, createEratwInstructionTable, parseTrainCsv } from '@kojo/plugin-eratw-adapter';
-import type { KojoFaceTable, KojoInstructionTable } from '@kojo/plugin-api';
+import {
+  ERATW_MUTATOR_FAMILIES,
+  createEratwFaceTable,
+  createEratwInstructionTable,
+  createEratwMutatorTable,
+  parseTrainCsv,
+} from '@kojo/plugin-eratw-adapter';
+import type { KojoFaceTable, KojoInstructionTable, KojoMutatorTable } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '../src/types';
 
 /** 测试用最小字典（覆盖 golden 用到的 胆怯 / 恋慕 / 思慕 / 好感度 / 心情 + 原生族名） */
@@ -83,4 +89,12 @@ export function stubInstructionTable(): KojoInstructionTable {
   return createEratwInstructionTable(parseTrainCsv(REAL_TRAIN_CSV_SNAPSHOT));
 }
 
-export { createEratwFaceTable, createEratwInstructionTable, parseTrainCsv };
+/**
+ * 测试用数值增减族表 = eraTW adapter 的真实族表（`ERATW_MUTATOR_FAMILIES`）。
+ * 糖层只查不解释；断言贴近生产（与 `stubFaceTable` 同惯例），迁移/替换适配器只需换表。
+ */
+export function stubMutatorTable(): KojoMutatorTable {
+  return createEratwMutatorTable(ERATW_MUTATOR_FAMILIES);
+}
+
+export { createEratwFaceTable, createEratwInstructionTable, createEratwMutatorTable, parseTrainCsv };

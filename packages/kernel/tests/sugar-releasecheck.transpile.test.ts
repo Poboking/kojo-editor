@@ -218,6 +218,9 @@ describe.skipIf(!SMOKE_DIR)('发版验证样例 · release-check.kojo', () => {
       'CALL ASK_YN("开启","关闭")', // 确认（2 号任务）→ 引擎 ASK_YN，纯标签
       '; 常量 发版检查_阈值 = 1200（编译期展开为字面量，不占引擎全局名）', // 常量（7 号任务 → 宏化修订：零引擎足迹）
       'IF 1200 > 3', // 常量名在表达式里当**只读数值**用（裸名直接展开成字面量）
+      'CALL CHANGE_CFLAG(2, TARGET, 100)', // 数值增减（1016 批；族 CFLAG → 槽在前）`+=`
+      'CALL CHANGE_CFLAG(2, TARGET, -100)', // 数值增减（1016 批）`-=` 取负
+      'CALL BUFF_BASE(MASTER, BASE_体力, 300)', // 数值增减（1016 批；族 BASE 对象在前；英文别名 `adjust`）
     ];
     for (const needle of mustContain) {
       expect(result.erb, `产物缺少 ${needle}`).toContain(needle);
