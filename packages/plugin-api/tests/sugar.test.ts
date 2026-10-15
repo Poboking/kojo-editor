@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   isCharacterAlias,
+  isConditionalAlias,
   isConditionalInterpolation,
   isExprNode,
   isHeartLine,
@@ -70,6 +71,13 @@ const VARIABLE_ALIAS = alias('今天已触发', { kind: 'variable', text: 'CFLAG
 const CHARACTER_ALIAS = alias('朋友', { kind: 'character', no: '15' });
 const NUMBER_ALIAS = alias('平静', { kind: 'number', text: '0' });
 const STRING_ALIAS = alias('昵称', { kind: 'string', text: '小露' });
+/** 条件（行内三元）别名（B3 · additive 第五形态）：右值 `条件 ? "真" : "假"` */
+const CONDITIONAL_ALIAS = alias('恋语', {
+  kind: 'conditional',
+  cond: '她的恋慕',
+  thenText: '只有你',
+  elseText: '别靠太近',
+});
 
 /* ------------------------------ 别名四右值 ------------------------------ */
 
@@ -110,20 +118,39 @@ describe('别名 · 四种右值的类型守卫', () => {
     }
   });
 
-  it('全部四形态的 kind 取值覆盖 AliasValueKind 闭集', () => {
-    const kinds: AliasValueKind[] = [VARIABLE_ALIAS, CHARACTER_ALIAS, NUMBER_ALIAS, STRING_ALIAS].map(
-      (a) => a.value.kind,
-    );
-    expect(new Set(kinds)).toEqual(new Set(['variable', 'character', 'number', 'string']));
+  it('全部五形态的 kind 取值覆盖 AliasValueKind 闭集', () => {
+    const kinds: AliasValueKind[] = [
+      VARIABLE_ALIAS,
+      CHARACTER_ALIAS,
+      NUMBER_ALIAS,
+      STRING_ALIAS,
+      CONDITIONAL_ALIAS,
+    ].map((a) => a.value.kind);
+    expect(new Set(kinds)).toEqual(new Set(['variable', 'character', 'number', 'string', 'conditional']));
+  });
+
+  it('条件别名被唯一识别，且不与其它四种混淆（B3 · additive）', () => {
+    const v = CONDITIONAL_ALIAS.value;
+    expect(isConditionalAlias(v)).toBe(true);
+    expect(isVariableAlias(v)).toBe(false);
+    expect(isCharacterAlias(v)).toBe(false);
+    expect(isNumberAlias(v)).toBe(false);
+    expect(isStringAlias(v)).toBe(false);
+    // 类型守卫成功后可直接取形状字段
+    if (isConditionalAlias(v)) {
+      expect(v.cond).toBe('她的恋慕');
+      expect(v.thenText).toBe('只有你');
+      expect(v.elseText).toBe('别靠太近');
+    }
   });
 });
 
 describe('别名 · 只读判别（规范 §3.1 表的唯一真源）', () => {
-  it('只有变量别名可写；其余三种只读', () => {
+  it('只有变量别名可写；其余四种只读', () => {
     expect(isReadonlyAlias(VARIABLE_ALIAS.value)).toBe(false);
     expect(isWritableAlias(VARIABLE_ALIAS.value)).toBe(true);
 
-    for (const a of [CHARACTER_ALIAS, NUMBER_ALIAS, STRING_ALIAS]) {
+    for (const a of [CHARACTER_ALIAS, NUMBER_ALIAS, STRING_ALIAS, CONDITIONAL_ALIAS]) {
       expect(isReadonlyAlias(a.value)).toBe(true);
       expect(isWritableAlias(a.value)).toBe(false);
     }
@@ -135,6 +162,7 @@ describe('别名 · 只读判别（规范 §3.1 表的唯一真源）', () => {
       CHARACTER_ALIAS.value,
       NUMBER_ALIAS.value,
       STRING_ALIAS.value,
+      CONDITIONAL_ALIAS.value,
     ];
     for (const v of all) {
       expect(isReadonlyAlias(v)).toBe(!isWritableAlias(v));
