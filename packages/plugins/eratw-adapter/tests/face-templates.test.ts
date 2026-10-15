@@ -86,9 +86,12 @@ describe('KojoFaceTable · 分野模板（规范 §3.2 / 附录 C）', () => {
     expect(table.registration?.color).toBe('M_KOJO_COLOR_K{n}');
     expect(table.registration?.flagSetting).toBe('M_KOJO_FLAGSETTING_K{n}');
     for (const tpl of Object.values(table.registration ?? {})) {
+      if (typeof tpl !== 'string') continue; // declareSelector（别人版）是 {template,pragmas}
       expect(tpl).not.toContain('{t}'); // 三件套无家族段
       expect(tpl).toContain('{n}');
     }
+    // 别人版登记函数：仍不带家族段，选择器段 `{s}` 记在函数名尾（规范 §5.5 变体）
+    expect(table.registration?.declareSelector?.template).toBe('M_KOJO_K{n}_{s}(ARG)');
   });
 
   it('成否位协议 = TFLAG:192，四档取值符合规范 §3.2', () => {

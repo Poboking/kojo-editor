@@ -186,6 +186,12 @@ export function createEratwFaceTable(): KojoFaceTable {
     // 三件套（规范 §5.5：**不带家族段**，只有 `K{角色号}`）
     registration: {
       declare: 'M_KOJO_K{n}',
+      // 别人版（选择器）登记函数（实测 `@M_KOJO_K58_1(ARG)` + `#LOCALSIZE/#LOCALSSIZE`，
+      // 见 4.980 `個人口上/058 Meiling/…/M_KOJO_K58_1_イベント.ERB:46-48`）。
+      declareSelector: {
+        template: 'M_KOJO_K{n}_{s}(ARG)',
+        pragmas: ['#LOCALSIZE 1', '#LOCALSSIZE 1'],
+      },
       color: 'M_KOJO_COLOR_K{n}',
       flagSetting: 'M_KOJO_FLAGSETTING_K{n}',
     },

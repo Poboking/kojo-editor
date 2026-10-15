@@ -367,6 +367,9 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   // 声明（作者自己写过）时不重复发。
   let familyHeaderEmitted = false;
   const sourceDeclaresFamily = lines.some((l) => /^\s*口上\s*[:：]/.test(l));
+  // E13-1 同源：选择器（`_1`）记在选择器登记函数上（`@M_KOJO_K58_1`），家族名记在带
+  // `{t}` 的时机函数上——两者合成文件头一行 `口上: <家族名> 选择器: <n>`。
+  let pendingSelector: number | undefined;
 
   for (let i = 0; i < total; i++) {
     const ln = i + 1;
@@ -662,16 +665,21 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
     // 函数头：反解成糖的「时机 …：」块头（批 I）。解不出 / 歧义 → 原样留原代码
     if (content.startsWith('@') && headIndex !== undefined) {
       const fnName = stripParams(content.slice(1).trim());
+      // 选择器登记函数（`@M_KOJO_K58_1`）——先记下选择器，供随后带 `{t}` 的函数头
+      // 在文件头合成 `口上: <家族名> 选择器: <n>`。
+      const sel = headIndex.selector(fnName);
+      if (sel !== undefined) pendingSelector = sel;
       const label = headIndex.label(fnName);
       if (label !== undefined) {
         // E13-1②：家族 fork（`_TOKI`）不再塞进块头（全角括号会让编号段被当成中文
         // 指令名，转译必报错），改为在投影产物里发一行**文件头** `口上: <家族名>`
         // ——那才是可写形的真实声明（`口上:` 的取值规则见规范 §3.1）。只发一次；
-        // 源文本里已有 `口上:` 声明时一个都不发（不重复）。
+        // 源文本里已有 `口上:` 声明时一个都不发（不重复）。选择器（有则）随行带出。
         const family = headIndex.family(fnName);
         const withHeader =
           family !== undefined && !familyHeaderEmitted && !sourceDeclaresFamily
-            ? ((familyHeaderEmitted = true), `口上: ${family}\n${label}`)
+            ? ((familyHeaderEmitted = true),
+              `口上: ${family}${pendingSelector !== undefined ? ` 选择器: ${pendingSelector}` : ''}\n${label}`)
             : label;
         recs.push({
           line: ln,

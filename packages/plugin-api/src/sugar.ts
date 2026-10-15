@@ -613,6 +613,12 @@ export interface SugarFrontMatter {
   charNo?: string;
   /** `口上:` 家族名（别人版；省略 = 标准版，登记函数 `RESULTS` 保持为空） */
   family?: string;
+  /**
+   * 剧本选择器编号（`口上: <家族名> 选择器: <n>`）——同一个家族下的第 n 版口上。
+   * 省略 = 初始（登记函数名不带选择器段）。**游戏知识的落点在 adapter**：登记函数名
+   * 模板由 `KojoFaceTable.registration.declareSelector` 提供，转译器只补 `{n}`/`{s}`。
+   */
+  selector?: number;
   /** `显示名:` → 登记函数 `RESULTS:1` */
   displayName?: string;
   /** `简介:` → 登记函数 `RESULTS:2` */

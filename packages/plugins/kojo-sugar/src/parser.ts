@@ -236,9 +236,18 @@ function applyHeadDecl(fm: SugarFrontMatter, key: string, value: string): void {
     case 'head.char':
       fm.charNo = value;
       break;
-    case 'head.family':
-      fm.family = value;
+    case 'head.family': {
+      // `口上: <家族名> [选择器: <n>]`——选择器是同一家族下的第 n 版口上。
+      // 形态嵌在 `口上:` 一行的尾部（投影在文件头发 `口上:` 时即用它带出选择器）。
+      const m = /^(.*?)\s+(?:选择器|selector)\s*[:：]\s*(\d+)$/.exec(value);
+      if (m) {
+        fm.family = m[1]!.trim();
+        fm.selector = Number(m[2]!);
+      } else {
+        fm.family = value;
+      }
       break;
+    }
     case 'head.title':
       fm.displayName = value;
       break;

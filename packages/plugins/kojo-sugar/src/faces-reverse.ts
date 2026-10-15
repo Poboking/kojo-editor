@@ -79,6 +79,16 @@ export interface FaceNameIndex {
    * 分两个出口，同源于一次匹配（不会互相漂移）。
    */
   family(functionName: string): string | undefined;
+  /**
+   * 函数名 → **选择器编号**（`口上: … 选择器: <n>` 的取值；非「选择器」登记函数 = `undefined`）。
+   *
+   * E13-1 同源问题：别人版的选择器（`_1`）记在**登记函数**上
+   * （`@M_KOJO_K58_1(ARG)`），而家族名记在**带 `{t}` 的时机函数**上——投影把两者
+   * 合成文件头一行 `口上: <家族名> 选择器: <n>`。故本出口专门给投影取选择器，
+   * 与 `label()`/`family()`（时机入口面）**分属两个识别域**，互不干扰
+   * （`registration` 不进 `faces`、不进 `label()`，测试已钉住）。
+   */
+  selector(functionName: string): number | undefined;
   /** 候选数（诊断与测试用） */
   readonly size: number;
 }
@@ -172,11 +182,45 @@ export function buildFaceNameIndex(table: KojoFaceTable | undefined): FaceNameIn
     return hit;
   };
 
+  // 选择器登记函数（别人版）——**单独编译、单独出口**：它不是"时机入口"，
+  // 不进 `matchers`/`label()`（测试「三件套不参与」钉住了这一点）。
+  const declareRe = compileDeclareSelector(table?.registration?.declareSelector?.template);
+
   return {
     label: (functionName: string) => compute(functionName)?.label,
     family: (functionName: string) => compute(functionName)?.family,
+    selector: (functionName: string) => {
+      const m = declareRe?.exec(functionName);
+      return m ? Number(m[1]) : undefined;
+    },
     size: matchers.length,
   };
+}
+
+/**
+ * 选择器登记函数模板 → 锚定正则（`{n}` = 角色号、`{s}` = 选择器段，捕获前者）。
+ *
+ * 参数段（`(ARG)`）按 `stripParams` 剥掉——糖表层不手写函数参数，投影匹配用的
+ * 是剥参后的函数名（`@M_KOJO_K58_1(ARG)` → `M_KOJO_K58_1`）。
+ */
+function compileDeclareSelector(template: string | undefined): RegExp | null {
+  if (template === undefined) return null;
+  const name = stripParams(template);
+  let src = '';
+  for (let i = 0; i < name.length; i++) {
+    if (name.startsWith('{n}', i)) {
+      src += '\\d{1,4}';
+      i += 2;
+      continue;
+    }
+    if (name.startsWith('{s}', i)) {
+      src += '(\\d{1,4})';
+      i += 2;
+      continue;
+    }
+    src += escapeRe(name[i]!);
+  }
+  return new RegExp(`^${src}$`);
 }
 
 /** 去掉 `（ARG,ARG:1）` 之类的参数段（糖表层不手写函数参数，规范 §3.2） */

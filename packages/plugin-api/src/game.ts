@@ -299,6 +299,16 @@ export interface KojoFaceTable {
     readonly color?: string;
     /** 开关函数 */
     readonly flagSetting?: string;
+    /**
+     * 「选择器」登记函数（additive；规范 §5.5 的别人版变体）。
+     * 占位符：`{n}` = 角色号、`{s}` = 选择器编号（写作 `口上: <家族名> 选择器: <n>`）。
+     * `pragmas` = 紧随函数头的预处理行（原样输出，如 `#LOCALSIZE 1`）。
+     * 缺省 = 该游戏无选择器登记形态 ⇒ 写了 `选择器:` 时报错（fail-closed，不产半成品）。
+     */
+    readonly declareSelector?: {
+      readonly template: string;
+      readonly pragmas?: readonly string[];
+    };
   };
   /**
    * 成否判定位协议的**目标变量与原语**（规范 §5.5；游戏侧约定）。

@@ -356,6 +356,7 @@ function emitRegistration(
   if (charNo.length === 0) return;
 
   const declareTpl = faceTable?.registration?.declare;
+  const declareSelTpl = faceTable?.registration?.declareSelector;
   const flagTpl = faceTable?.registration?.flagSetting;
 
   // 登记函数只在**有内容可写**时生成（规范 §3.1：未声明的可选项，工具不生成
@@ -364,11 +365,23 @@ function emitRegistration(
   const hasRegistration =
     familySeg.length > 0 || Boolean(fm.displayName) || Boolean(fm.description);
   if (hasRegistration) {
-    if (declareTpl) {
+    if (fm.selector !== undefined) {
+      // 选择器形态（别人版）：登记函数名带 `_{s}` 段，并附预处理行（如 LOCALSIZE）。
+      if (declareSelTpl) {
+        em.pushGenerated(0, `@${renderSkeleton(declareSelTpl.template, charNo, fm.selector)}`);
+        for (const p of declareSelTpl.pragmas ?? []) em.pushGenerated(0, p);
+        emitRegistrationResults(em, fm, familySeg);
+      } else {
+        sink.report({
+          code: 'face-table-missing',
+          severity: 'warning',
+          message: '写了 `选择器:` 但当前适配器未声明选择器登记函数模板——已跳过（请检查适配器）。',
+          loc: null,
+        });
+      }
+    } else if (declareTpl) {
       em.pushGenerated(0, `@${renderSkeleton(declareTpl, charNo)}`);
-      if (familySeg.length > 0) em.pushGenerated(0, `RESULTS = ${JSON.stringify(familySeg)}`);
-      if (fm.displayName) em.pushGenerated(0, `RESULTS:1 = "${fm.displayName}"`);
-      if (fm.description) em.pushGenerated(0, `RESULTS:2 = "${fm.description}"`);
+      emitRegistrationResults(em, fm, familySeg);
     } else {
       sink.report({
         code: 'face-table-missing',
@@ -399,12 +412,22 @@ function emitRegistration(
   }
 }
 
+/** 登记函数的 RESULTS 体（`口上:` / `显示名:` / `简介:` 有其一才发；规范 §5.5） */
+function emitRegistrationResults(em: Emitter, fm: SugarFrontMatter, familySeg: string): void {
+  if (familySeg.length > 0) em.pushGenerated(0, `RESULTS = ${JSON.stringify(familySeg)}`);
+  if (fm.displayName) em.pushGenerated(0, `RESULTS:1 = "${fm.displayName}"`);
+  if (fm.description) em.pushGenerated(0, `RESULTS:2 = "${fm.description}"`);
+}
+
 /**
- * 纯骨架模板求值（登记 / 配色 / 开关三件套用）：只替换 `{n}`（角色号）。
+ * 纯骨架模板求值（登记 / 配色 / 开关三件套用）：替换 `{n}`（角色号）；
+ * 传了选择器时再替换 `{s}`（登记函数的别人版段）。
  * 三件套模板按规范 §5.5 不含家族段，故无需 `{t}` / `{i}`。
  */
-function renderSkeleton(template: string, charNo: string): string {
-  return template.replace(/\{n\}/g, charNo);
+function renderSkeleton(template: string, charNo: string, selector?: number): string {
+  let out = template.replace(/\{n\}/g, charNo);
+  if (selector !== undefined) out = out.replace(/\{s\}/g, String(selector));
+  return out;
 }
 
 /** 家族段（规范 §5.5）：标准版 `""`；别人版 `"_" + 口上名` */
