@@ -88,6 +88,10 @@ pub struct StagingLimits {
 pub(crate) struct DownloadOptions {
     pub timeout_ms: u64,
     pub max_bytes: u64,
+    /// **只有 `download_to_staging` 直接消费时才用得到（判据注入）；`market_download` 一律传 `None`**。
+    /// 代理若由 JS 递进来，白名单就形同虚设：任意代理能对白名单 URL 返回任意字节，
+    /// 甚至把请求转到内网（SSRF）。生产路径的代理只来自**进程环境**
+    /// （reqwest 的 `system-proxy` feature 已由 tauri-plugin-updater 默认启用编进依赖图）。
     pub proxy: Option<String>,
 }
 
@@ -205,7 +209,7 @@ fn entry_path_problem(name: &str, max_depth: usize) -> Option<&'static str> {
     if segments.iter().any(|s| s.is_empty() || *s == ".") {
         return Some("path-empty-segment");
     }
-    if segments.iter().any(|s| *s == "..") {
+    if segments.contains(&"..") {
         return Some("path-dotdot");
     }
     if segments.len() > max_depth {
@@ -219,7 +223,7 @@ fn entry_path_problem(name: &str, max_depth: usize) -> Option<&'static str> {
 /// ⇒ `unix_mode()` 为 `None`，此时靠路径闸（尾斜杠=空段）兜目录条目。
 /// 硬链接在 zip 容器里**没有独立表示**（zip 4.6.1 全文无 hardlink 概念，链接关系只能落成
 /// 重复路径的普通条目），因此由 `entry-duplicate` 与本题闸共同覆盖。
-fn entry_type_problem(
+pub(crate) fn entry_type_problem(
     is_symlink: bool,
     unix_mode: Option<u32>,
 ) -> Option<&'static str> {
@@ -300,7 +304,7 @@ pub(crate) async fn download_to_staging(
         .get(parsed)
         .send()
         .await
-        .map_err(|e| format!("下载失败 {url}: {e}"))?;
+        .map_err(|e| format!("下载失败 {url}: {}", chain_string(&e)))?;
     let status = response.status();
     let final_url = response.url().clone();
     if !status.is_success() {
