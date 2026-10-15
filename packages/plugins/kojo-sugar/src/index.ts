@@ -669,3 +669,11 @@ export {
 } from './lift-apply';
 // 转到定义（2026-10-15 语言服务批；纯函数，转译与索引由装配层注入）
 export { findGeneratedHeaderLine, resolveKojoDefinition, type KojoDefinitionDeps } from './definition';
+// E1/E2 文档格式化（Shift+Alt+F 与「保存时格式化」共用同一真源；纯函数、零 IO）
+export {
+  applyFormatEdits,
+  computeFormatEdits,
+  formatText,
+  type FormatDialect,
+  type FormatEdit,
+} from './formatter';

@@ -181,18 +181,27 @@ export function contentOf(line: LogicalLine): string {
 }
 
 /**
+ * 行内第一个**引号外** `;` 的下标（没有则 -1）。`stripInlineComment` 与格式化共用这一份
+ * 判据——"注释从哪开始"有两份实现就会分叉（格式化按另一套切，注释掉进代码里就是改语义）。
+ */
+export function inlineCommentIndex(content: string): number {
+  let inStr = false;
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i]!;
+    if (ch === '"') inStr = !inStr;
+    else if (ch === ';' && !inStr) return i;
+  }
+  return -1;
+}
+
+/**
  * 结构化行的 `;` 行内注释剥离：截到行内第一个**引号外**的 `;`（含）为止。
  * 引号内的 `;` 属于字符串值（如字符串别名），不剥。文本行不经此函数——
  * 台词里的 `;` 是作者要打印的字符（见 `classifyLine` 的分派注释）。
  */
 export function stripInlineComment(content: string): string {
-  let inStr = false;
-  for (let i = 0; i < content.length; i++) {
-    const ch = content[i]!;
-    if (ch === '"') inStr = !inStr;
-    else if (ch === ';' && !inStr) return content.slice(0, i).replace(/\s+$/, '');
-  }
-  return content;
+  const i = inlineCommentIndex(content);
+  return i < 0 ? content : content.slice(0, i).replace(/\s+$/, '');
 }
 
 /* ============================== 行分类（词法决策） ============================== */
