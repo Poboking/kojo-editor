@@ -1,4 +1,4 @@
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from './entry';
 import type { KojoCallProtocol, KojoCallSlot } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
