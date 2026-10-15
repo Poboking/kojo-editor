@@ -134,8 +134,9 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           }
         };
 
-        const installedKeys = new Set(snapshot.installed.map((r) => installedKey(r.kind, r.id, r.version)));
-        const groups = buildGroups(snapshot.packs, av, query, installedKeys);
+        // 已装清单**原样**交给视图层：三态与"这一行该给什么动作"由契约的 `packUpdateCheck`
+        // 从这份清单算；面板自己再拼一份已装键集就是第二份真相（`buildGroups` 的签名拦的就是这个）
+        const groups = buildGroups(snapshot.packs, av, query, snapshot.installed);
         const rows = buildInstalledRows(snapshot.installed);
         const line = statusText(snapshot.status, snapshot.reason);
         const time = dataTimeLine(snapshot);

@@ -324,8 +324,8 @@ export interface MarketService {
   installLocalDir(sourceDir: string): Promise<InstalledPack>;
   /**
    * 从注册表条目装（**容器源**，KM-10..12）：
-   * `marketDownload`（容器名 = `packContainerName(id,version)`，体积上限取索引声明的
-   * `zip.bytes` ⇒ 比声明多一个字节都不收）→ 容器整包 sha256 与索引锚对平 → `marketExtract`
+   * *平台侧容器下载原语（容器名 = `packContainerName(id,version)`，体积上限取索引声明的
+   * `zip.bytes` ⇒ 比声明多一个字节都不收）→ 容器整包 sha256 与索引锚对平 → 平台侧解压原语
    * （限额取契约常量）→ 解出的根 `pack.json` 与容器条目**双向对平**（清单声明而没解出 = 拒；
    * 解出而清单没声明 = 拒，根 `pack.json` 本身算元数据不算内容；逐条目字节数不符 = 拒）
    * → **走与 `installLocalDir` 完全同一条**校验+落暂存+逐文件复核+原子搬运+记账路径。
