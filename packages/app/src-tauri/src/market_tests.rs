@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::market::{
-    container_name_problem, download_to_staging, entry_type_problem, extract_staging,
-    host_in_allowlist, redirect_problem, staging_component_problem, url_problem, DownloadOptions,
+    advance_byte_cap, container_name_problem, content_length_problem, download_to_staging,
+    entry_type_problem, extract_staging, fetch_text, host_in_allowlist, market_fetch_text,
+    redirect_problem, staging_component_problem, url_problem, utf8_text, DownloadOptions,
     StagingLimits,
 };
 
@@ -223,6 +224,221 @@ fn staging_component_gate_rejects_dot_names_and_separators() {
         );
     }
     assert!(staging_component_problem("demo.era-tw-1.0.1").is_none());
+}
+
+/* ------------------------------ 取文本（KM-8） ------------------------------ */
+
+/// `market_fetch_text` 的 URL 闸与 `market_download` **必须是同一份函数**：
+/// 同一条非法 URL 走两条链路，错误里的判定文案要逐字相同（复制一份必然漂）。
+#[test]
+fn fetch_text_rejects_the_same_urls_as_download_gate() {
+    let staging = Staging::new("fetch-gate");
+    for bad in [
+        "http://github.com/a/index.json",
+        "file:///C:/x/index.json",
+        "https://evil.com/index.json",
+        "https://a.b.github.io/index.json",
+        "https://github.com:8443/index.json",
+        "https://github.com@evil.io/index.json",
+    ] {
+        let opts = DownloadOptions {
+            timeout_ms: 1_000,
+            max_bytes: 4_096,
+            proxy: None,
+        };
+        let fetched = tauri::async_runtime::block_on(fetch_text(bad, &opts))
+            .expect_err("白名单外 / 非 https 的 URL 不该出网");
+        let downloaded = tauri::async_runtime::block_on(download_to_staging(
+            staging.dir(),
+            bad,
+            "index.zip",
+            &opts,
+        ))
+        .expect_err("同一条 URL 在下载链路也必须被拒");
+        // 同一条判定 ⇒ 同一段文案；两条链路的差异只许在命令名前缀
+        let problem = url_problem(&url(bad)).expect("夹具本身必须被 url_problem 拒");
+        assert!(fetched.contains(&problem), "fetch 的判定文案不符：{fetched}");
+        assert!(
+            downloaded.contains(&problem),
+            "download 与 fetch 用的不是同一份判定：{downloaded} vs {fetched}"
+        );
+        assert!(
+            fetched.starts_with("market_fetch_text 拒绝"),
+            "错误没自报出处：{fetched}"
+        );
+        // 拒在出网之前 ⇒ 暂存区一个字节都不许多出来
+        assert_eq!(
+            std::fs::read_dir(staging.dir()).unwrap().count(),
+            0,
+            "闸前就写了盘：{bad}"
+        );
+    }
+}
+
+/// 取文本**没有**容器名闸（不落盘 ⇒ 不该有 `.zip` 前提）；这条同时钉住
+/// "没为拉索引放宽 `.zip`"与"没把下载侧的名字闸错套到取文本上"。
+#[test]
+fn fetch_text_has_no_container_name_gate_but_download_still_does() {
+    let staging = Staging::new("fetch-name");
+    let opts = DownloadOptions {
+        timeout_ms: 1_000,
+        max_bytes: 4_096,
+        proxy: None,
+    };
+    // 非法容器名 ⇒ 下载侧照旧拒（不放宽）
+    let e = tauri::async_runtime::block_on(download_to_staging(
+        staging.dir(),
+        "https://demo.github.io/index.json",
+        "index.bin",
+        &opts,
+    ))
+    .expect_err(".zip 容器名闸不许为拉索引放宽");
+    assert!(e.contains(".zip"), "拒因不符：{e}");
+    assert_eq!(std::fs::read_dir(staging.dir()).unwrap().count(), 0, "名字闸拒在写盘之前");
+    // 同一条 URL 走取文本 ⇒ 不报容器名、不被 URL 闸拒（白名单内）；本机无网 ⇒ 停在请求阶段
+    let e = tauri::async_runtime::block_on(fetch_text("https://demo.github.io/index.json", &opts))
+        .expect_err("离线夹具不该成功");
+    assert!(!e.contains(".zip"), "取文本被错套了容器名闸：{e}");
+    assert!(!e.contains("拒绝"), "白名单内的 URL 不该被 URL 闸拒：{e}");
+}
+
+/// 体积闸的两处纯判定（`Content-Length` 预核 + 逐块累计）：两条链路共用同一份，边界钉住。
+#[test]
+fn byte_cap_gates_share_boundaries() {
+    assert_eq!(content_length_problem(1024, 2048), None);
+    assert!(content_length_problem(2049, 2048)
+        .unwrap()
+        .contains("Content-Length"));
+    assert_eq!(advance_byte_cap(2040, 8, 2048).unwrap(), 2048);
+    assert!(advance_byte_cap(2048, 1, 2048)
+        .unwrap_err()
+        .contains("2049"));
+    // 溢出兜底：u64 相加不许 wrap（恶意分片长度不能绕过体积闸）
+    assert!(advance_byte_cap(u64::MAX, usize::MAX, 2048).is_err());
+}
+
+/// UTF-8 闸（纯判定、离线可跑）：取文本只认 UTF-8，非法字节明确拒绝。
+#[test]
+fn fetch_text_decodes_only_utf8() {
+    assert_eq!(utf8_text(b"{\"schema\":1}").unwrap(), "{\"schema\":1}");
+    assert!(utf8_text(&[0xff, 0xfe, 0x00]).unwrap_err().contains("UTF-8"));
+    // 空响应体不在本层拒（交给上层 JSON 解析去判"形状不受支持"），本层不替它做主
+    assert_eq!(utf8_text(b"").unwrap(), "");
+}
+
+/// **命令面**（不是内部函数）也被同一条闸管着：`market_fetch_text` 自己就得拒掉白名单外 /
+/// 非 https 的 URL，且拒在出网与写盘之前。这条防的是"后来者给命令另起一条 reqwest 调用"——
+/// 那种接线绕过 `guarded_send`，单测内部函数是拦不住的。
+#[test]
+fn fetch_text_command_itself_rejects_before_any_network() {
+    for bad in [
+        "http://poboking.github.io/kojo-market/index.json",
+        "https://evil.example/index.json",
+        "https://github.com@evil.example/index.json",
+    ] {
+        let e = tauri::async_runtime::block_on(market_fetch_text(bad.to_string(), Some(1_000), Some(4_096)))
+            .expect_err("命令面不许把内部闸漏掉");
+        assert!(e.starts_with("market_fetch_text 拒绝"), "命令没自报出处：{e}");
+        // 拒因**逐字**等于同一份 `url_problem` 的判定（命令面不许自己重写一套文案）
+        let problem = url_problem(&url(bad)).expect("夹具本身必须被 url_problem 拒");
+        assert!(e.contains(&problem), "命令面的拒因与内部闸不符：{e}");
+    }
+    // 限额走**入参**，本层不私藏第二份业务真相：没传时才有兜底默认值（传了就按传的拒）
+    let e = tauri::async_runtime::block_on(market_fetch_text(
+        "https://poboking.github.io/kojo-market/index.json".to_string(),
+        Some(1),
+        Some(1),
+    ))
+    .expect_err("timeout_ms=1 / max_bytes=1 不可能取回 1.6 KB 索引");
+    assert!(!e.starts_with("market_fetch_text 拒绝"), "白名单内被 URL 闸误拒：{e}");
+}
+
+/// 真链路（**需联网**；`poboking.github.io` 直连可达，按产品口径不需要代理）：
+/// 取回线上注册表索引，钉 200 / 1,586 B / 逐条目读数，
+/// 并在同一条链路上证明**体积闸按入参生效**（GitHub Pages 回 Content-Length ⇒ 预核就拒）。
+/// 条目读数实测于 2026-10-15（`index.json` 的 sha256 对平归 Node 侧工具，本层**不算哈希**）：
+/// `packs` = 2 条（`dict-pack/demo.dict@1.0.0`、`kojo-pack/demo.era-tw@1.0.1`）——
+/// 不是"≥3"（任务书给的 ≥3 是旧读数，实测就是 2 条，见 `tools/smoke-tauri-market.mjs` 的同一条锚）。
+/// 跑法：`node -e "require('child_process').execSync('cargo test --lib market_tests::fetch_real_index -- --ignored --nocapture',{cwd:'packages/app/src-tauri',stdio:'inherit'})"`
+#[test]
+#[ignore = "需要网络：离线 CI 阶段不跑（poboking.github.io 直连即可）"]
+fn fetch_real_index_matches_pinned_anchor_and_honours_byte_cap() {
+    let url = "https://poboking.github.io/kojo-market/index.json";
+    let got = tauri::async_runtime::block_on(fetch_text(
+        url,
+        &DownloadOptions {
+            timeout_ms: 15_000,
+            max_bytes: 512 * 1024,
+            proxy: None,
+        },
+    ))
+    .unwrap_or_else(|e| panic!("真实索引取不回来 {url}: {e}"));
+    assert_eq!(got.status, 200, "线上索引状态非 200");
+    // 锚点读数（2026-10-15 复算）：1,586 B ⇒ 字节数与 Content-Length 都得钉住
+    assert_eq!(got.bytes, 1_586, "线上索引字节与钉数不平");
+    assert_eq!(got.text.len() as u64, got.bytes, "回报字节与实际正文不平");
+    assert!(got.final_url.starts_with("https://poboking.github.io/"), "落点跑白：{}", got.final_url);
+
+    let v: serde_json::Value = serde_json::from_str(&got.text).expect("线上索引必须是合法 JSON");
+    assert_eq!(v["schema"].as_i64(), Some(1), "线上索引 schema 不是 1");
+    let packs = v["packs"].as_array().expect("packs 必须是数组");
+    let mut rows: Vec<(String, String, String, i64, i64)> = packs
+        .iter()
+        .map(|p| {
+            (
+                p["kind"].as_str().unwrap_or_default().to_string(),
+                p["id"].as_str().unwrap_or_default().to_string(),
+                p["version"].as_str().unwrap_or_default().to_string(),
+                p["fileCount"].as_i64().unwrap_or(-1),
+                p["unpackedBytes"].as_i64().unwrap_or(-1),
+            )
+        })
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("dict-pack".to_string(), "demo.dict".to_string(), "1.0.0".to_string(), 1, 77),
+            ("kojo-pack".to_string(), "demo.era-tw".to_string(), "1.0.1".to_string(), 1, 471),
+        ],
+        "线上索引条目与钉数不平"
+    );
+    for p in packs {
+        let sha = p["zip"]["sha256"].as_str().unwrap_or_default();
+        assert!(sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()), "条目没有 64 位整包 sha256 锚：{p}");
+    }
+
+    // 同一条链路、把上限压到 128 B ⇒ 必须被 Content-Length 预核拒掉（闸吃入参，不是写死的）
+    let e = tauri::async_runtime::block_on(fetch_text(
+        url,
+        &DownloadOptions { timeout_ms: 15_000, max_bytes: 128, proxy: None },
+    ))
+    .expect_err("128 B 的上限必须拒掉 1,586 B 的索引");
+    assert!(e.contains("Content-Length"), "体积闸没按入参生效：{e}");
+    assert!(e.contains("128"), "拒因里没给出上限值：{e}");
+}
+
+/// 超时不是装饰（**需可控网络环境**）：进程环境的代理指向不可路由地址 ⇒ 连接挂住，
+/// 必须由 client 的 `timeout_ms` 落地成人话错误。命令面 `proxy: None` 时代理来自 env，
+/// 这条同时也证明"env 侧的代理设置真的进了这条链路"。
+/// 跑法：`node -e "process.env.KOJO_NONE='1';require('child_process').execSync('cargo test --lib market_tests::fetch_text_honours -- --ignored --nocapture',{cwd:'packages/app/src-tauri',stdio:'inherit'})"`
+#[test]
+#[ignore = "需要把 HTTPS_PROXY 指向不可路由地址：离线 CI 阶段不跑"]
+fn fetch_text_honours_the_request_timeout() {
+    std::env::set_var("HTTPS_PROXY", "http://10.255.255.1:1");
+    let started = std::time::Instant::now();
+    let e = tauri::async_runtime::block_on(fetch_text(
+        "https://poboking.github.io/kojo-market/index.json",
+        &DownloadOptions { timeout_ms: 1_500, max_bytes: 4_096, proxy: None },
+    ))
+    .expect_err("代理指向黑洞时不该成功");
+    let took = started.elapsed();
+    assert!(
+        e.contains("timeout") || e.contains("timed out") || e.contains("超时"),
+        "错误里没有超时形状：{e}"
+    );
+    // 钉在"超时确实生效"的量级上：远小于系统 TCP 的 21 s，又不能提前到没跑起来
+    assert!(took < std::time::Duration::from_secs(10), "超时没在预算内落地：{took:?}");
 }
 
 /// 本地头里条目数据的起始偏移（sig4 ver2 flags2 method2 time2 date2 crc4 csize4 usize4 **namelen2 extralen2**）。

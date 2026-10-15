@@ -1702,6 +1702,7 @@ pub fn run() {
             search_text,
             cancel_search,
             market::market_download,
+            market::market_fetch_text,
             market::market_extract
         ])
         .run(tauri::generate_context!())

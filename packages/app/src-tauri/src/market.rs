@@ -1,8 +1,11 @@
-//! 市场（无服务器口上包分发）的两个 IO 原语：**远程下载** 与 **ZIP 安全解压**。
+//! 市场（无服务器口上包分发）的 IO 原语：**远程下载**、**ZIP 安全解压**、
+//! 以及**不落盘的远程取文本**（注册表索引）。
 //!
 //! 分层（ADR-0003：Rust 只做 IO 原语、零业务逻辑、零游戏知识）：
 //! - **不算任何哈希**：SHA-256 的唯一实现点在 TS（`plugins/kojo-market/src/digest.ts`），
 //!   校验语义属于"判定"，判定不下沉本层；本层只保证"字节落盘"与"解压不越界"。
+//!   （这条过去只有注释担保 ⇒ 现在有机器闸：`kojo-market/tests/single-source.test.ts`
+//!   的扫描面含 `.rs`。）
 //! - **落点决定权在本层**：命令不接受绝对目标路径，只接受一个受限的暂存名字，
 //!   真实落点由本层拼成 `<appDataDir>/market/.staging/...`（形态照 `export_file`：
 //!   授权绑在命令内，JS 拿不到落点决定权）。正式目录的搬运由 TS 侧 `io.rename` 原子完成。
@@ -35,6 +38,9 @@ const MARKET_GITHUB_PAGES_SUFFIX: &str = ".github.io";
 const MARKET_MAX_REDIRECT_HOPS: usize = 5;
 const MARKET_DEFAULT_TIMEOUT_MS: u64 = 60_000;
 const MARKET_DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
+/// 取文本（注册表索引）的兜底体积上限：TS 侧恒从契约 `MARKET_MAX_INDEX_BYTES` 传入，
+/// 这个数只在没传时生效（照下载侧同一条口径，不是第二份业务真相）。
+const MARKET_DEFAULT_MAX_FETCH_BYTES: u64 = 256 * 1024;
 const MARKET_USER_AGENT: &str = "kojo-editor-market";
 
 /// 市场在应用数据区的根 / 暂存子目录（与契约 `MARKET_DIR_NAME` / `MARKET_STAGING_DIR` 同字面；
@@ -72,6 +78,18 @@ pub struct ExtractedEntryDto {
 pub struct MarketExtractResultDto {
     pub entries: Vec<ExtractedEntryDto>,
     pub total_bytes: u64,
+}
+
+/// 远程取文本的结果（**不落盘**：索引只有 ~1.6 KB，字节经 IPC 回去即可）。
+/// 刻意只有"内容 + 这次请求的事实"四项：条件请求（ETag/`If-None-Match`）要命令面收
+/// 任意请求头 ⇒ 口子比"多打一次 1.6 KB"大得多，本批的新鲜度口径是 TS 侧 TTL。
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketFetchTextResultDto {
+    pub text: String,
+    pub bytes: u64,
+    pub status: u16,
+    pub final_url: String,
 }
 
 /// 解压限额：三个数**全部由调用方从契约常量传入**，缺一个就报 serde 错，不给默认值
@@ -236,6 +254,104 @@ pub(crate) fn entry_type_problem(
     }
 }
 
+/* ---------------------------- 体积与解码闸 ---------------------------- */
+
+/// `Content-Length` 预核：**下载与取文本同一份**（声明值超限就拒，一个字节都不收）。
+pub(crate) fn content_length_problem(len: u64, max_bytes: u64) -> Option<String> {
+    if len > max_bytes {
+        Some(format!("Content-Length {len} 超过上限 {max_bytes}，已拒绝"))
+    } else {
+        None
+    }
+}
+
+/// 逐块累计体积闸：**下载与取文本同一份**（超限即中止，由调用方清半截）。
+pub(crate) fn advance_byte_cap(received: u64, chunk: usize, max_bytes: u64) -> Result<u64, String> {
+    let total = received.saturating_add(chunk as u64);
+    if total > max_bytes {
+        return Err(format!("响应体累计 {total} 字节超过上限 {max_bytes}"));
+    }
+    Ok(total)
+}
+
+/// 远程文本必须是 UTF-8（"看起来像 JSON 的别的编码"不进本层）。
+pub(crate) fn utf8_text(bytes: &[u8]) -> Result<String, String> {
+    String::from_utf8(bytes.to_vec())
+        .map_err(|e| format!("响应体不是 UTF-8 文本（{} 字节）：{e}", bytes.len()))
+}
+
+/* ---------------------------- 出网（唯一一条） ---------------------------- */
+
+/// 请求用的 client：UA + 超时 + **逐跳重核**策略；代理只认进程环境（见 `DownloadOptions::proxy`）。
+fn http_client(opts: &DownloadOptions) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .user_agent(MARKET_USER_AGENT)
+        .timeout(Duration::from_millis(opts.timeout_ms))
+        .redirect(reqwest::redirect::Policy::custom(redirect_action));
+    if let Some(proxy) = opts.proxy.as_deref() {
+        builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| format!("proxy {proxy}: {e}"))?);
+    }
+    builder.build().map_err(|e| format!("http client: {e}"))
+}
+
+/// **本模块唯一一条出网路径**：URL 形态 + 白名单 → client → 发送 → 状态码 →
+/// 终态 URL 重核 → `Content-Length` 预核。
+///
+/// `market_download` 与 `market_fetch_text` 都只经这里，两份判定因此**不存在**
+/// （协议、主机白名单、逐跳重核、声明体积各只有一处实现）。
+pub(crate) async fn guarded_send(
+    url: &str,
+    opts: &DownloadOptions,
+    gate: &str,
+) -> Result<(reqwest::Response, u16, reqwest::Url), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("URL 解析失败 {url}: {e}"))?;
+    if let Some(problem) = url_problem(&parsed) {
+        return Err(format!("{gate} 拒绝（{problem}）"));
+    }
+    ensure_tls_provider();
+    let client = http_client(opts)?;
+    let response = client
+        .get(parsed)
+        .send()
+        .await
+        .map_err(|e| format!("{gate} 请求失败 {url}: {}", chain_string(&e)))?;
+    let status = response.status();
+    let final_url = response.url().clone();
+    if !status.is_success() {
+        return Err(format!("HTTP 状态非 2xx：{status}（最终 URL {final_url}）"));
+    }
+    // 终态 URL 再核一次白名单（策略闸管的是"跳"，这一闸管"落点"）。
+    if let Some(problem) = url_problem(&final_url) {
+        return Err(format!("{gate} 拒绝（最终 URL：{problem}）"));
+    }
+    if let Some(len) = response.content_length() {
+        if let Some(problem) = content_length_problem(len, opts.max_bytes) {
+            return Err(format!("{gate} 拒绝（{problem}）"));
+        }
+    }
+    Ok((response, status.as_u16(), final_url))
+}
+
+/// 收响应体进任意 `sink`，**逐块核累计上限**（落盘与进内存因此共用同一把尺）。
+pub(crate) async fn stream_capped<W: Write>(
+    response: reqwest::Response,
+    max_bytes: u64,
+    sink: &mut W,
+) -> Result<u64, String> {
+    let mut stream = response.bytes_stream();
+    let mut total: u64 = 0;
+    loop {
+        let chunk = match stream.next().await {
+            Some(item) => item.map_err(|e| format!("读取响应体失败: {e}"))?,
+            None => break,
+        };
+        total = advance_byte_cap(total, chunk.len(), max_bytes)?;
+        sink.write_all(&chunk)
+            .map_err(|e| format!("写响应体失败: {e}"))?;
+    }
+    Ok(total)
+}
+
 /* ---------------------------- 下载（落盘） ---------------------------- */
 
 /// reqwest 的错误是一条 source 链（顶层只有 "error sending request for url"），
@@ -269,7 +385,8 @@ fn ensure_tls_provider() {
 }
 
 /// 下载响应体到 `<staging_dir>/<staging_name>`：同目录临时文件 + rename（既有原子写形态），
-/// 体积双闸（`Content-Length` 预核 + 累计字节边下边核），超限**中止并删掉半截文件**。
+/// 体积双闸走 `guarded_send` / `stream_capped`（**与取文本同一份判定**），
+/// 超限**中止并删掉半截文件**。
 pub(crate) async fn download_to_staging(
     staging_dir: &Path,
     url: &str,
@@ -279,79 +396,27 @@ pub(crate) async fn download_to_staging(
     if let Some(problem) = container_name_problem(staging_name) {
         return Err(format!("market_download: {problem}"));
     }
-    let parsed = reqwest::Url::parse(url).map_err(|e| format!("URL 解析失败 {url}: {e}"))?;
-    if let Some(problem) = url_problem(&parsed) {
-        return Err(format!("market_download 拒绝（{problem}）"));
-    }
-    ensure_tls_provider();
-
-    let client = {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(MARKET_USER_AGENT)
-            .timeout(Duration::from_millis(opts.timeout_ms))
-            .redirect(reqwest::redirect::Policy::custom(redirect_action));
-        if let Some(proxy) = opts.proxy.as_deref() {
-            builder = builder
-                .proxy(reqwest::Proxy::all(proxy).map_err(|e| format!("proxy {proxy}: {e}"))?);
-        }
-        builder.build().map_err(|e| format!("http client: {e}"))?
-    };
+    let (response, status, final_url) = guarded_send(url, opts, "market_download").await?;
 
     std::fs::create_dir_all(staging_dir)
         .map_err(|e| format!("创建暂存目录失败 {}: {e}", staging_dir.display()))?;
-
-    let response = client
-        .get(parsed)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败 {url}: {}", chain_string(&e)))?;
-    let status = response.status();
-    let final_url = response.url().clone();
-    if !status.is_success() {
-        return Err(format!("HTTP 状态非 2xx：{status}（最终 URL {final_url}）"));
-    }
-    // 终态 URL 再核一次白名单（策略闸管的是"跳"，这一闸管"落点"）。
-    if let Some(problem) = url_problem(&final_url) {
-        return Err(format!("market_download 拒绝（最终 URL：{problem}）"));
-    }
-    if let Some(len) = response.content_length() {
-        if len > opts.max_bytes {
-            return Err(format!(
-                "Content-Length {len} 超过上限 {}，已拒绝且未落盘",
-                opts.max_bytes
-            ));
-        }
-    }
 
     let target = staging_dir.join(staging_name);
     let tmp = staging_dir.join(format!(
         ".{staging_name}.{}.kojo-dl-tmp",
         std::process::id()
     ));
-    let mut total: u64 = 0;
-    let mut stream = response.bytes_stream();
     let mut file = match std::fs::File::create(&tmp) {
         Ok(f) => f,
         Err(e) => return Err(format!("创建暂存文件失败 {}: {e}", tmp.display())),
     };
-    loop {
-        let chunk = match stream.next().await {
-            Some(item) => item.map_err(|e| format!("读取响应体失败: {e}"))?,
-            None => break,
-        };
-        total = total.saturating_add(chunk.len() as u64);
-        if total > opts.max_bytes {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(format!(
-                "响应体累计 {total} 字节超过上限 {}，半截文件已删除",
-                opts.max_bytes
-            ));
+    let total = match stream_capped(response, opts.max_bytes, &mut file).await {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp); // 半截容器不许留在暂存区
+            return Err(e);
         }
-        if let Err(e) = file.write_all(&chunk) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(format!("写暂存文件失败 {}: {e}", tmp.display()));
-        }
-    }
+    };
     drop(file);
     if let Err(e) = std::fs::rename(&tmp, &target) {
         let _ = std::fs::remove_file(&tmp);
@@ -359,7 +424,20 @@ pub(crate) async fn download_to_staging(
     }
     Ok(MarketDownloadResultDto {
         bytes: total,
-        status: status.as_u16(),
+        status,
+        final_url: final_url.to_string(),
+    })
+}
+
+/// 取一段远程文本（注册表索引）：**不落盘**、不碰写允许域，闸与下载同一份。
+pub(crate) async fn fetch_text(url: &str, opts: &DownloadOptions) -> Result<MarketFetchTextResultDto, String> {
+    let (response, status, final_url) = guarded_send(url, opts, "market_fetch_text").await?;
+    let mut body: Vec<u8> = Vec::new();
+    let bytes = stream_capped(response, opts.max_bytes, &mut body).await?;
+    Ok(MarketFetchTextResultDto {
+        text: utf8_text(&body)?,
+        bytes,
+        status,
         final_url: final_url.to_string(),
     })
 }
@@ -384,6 +462,26 @@ pub(crate) async fn market_download(
             timeout_ms: timeout_ms.unwrap_or(MARKET_DEFAULT_TIMEOUT_MS),
             max_bytes: max_bytes.unwrap_or(MARKET_DEFAULT_MAX_DOWNLOAD_BYTES),
             // 代理不在这里决定：见 `DownloadOptions::proxy`（env ⇒ reqwest system-proxy）
+            proxy: None,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn market_fetch_text(
+    url: String,
+    timeout_ms: Option<u64>,
+    max_bytes: Option<u64>,
+) -> Result<MarketFetchTextResultDto, String> {
+    // 没有 `app` / 没有 `WriteDomainState`：这条命令**一个字节都不写盘**，
+    // 也就没有任何写允许域参与（索引经 TS 侧 `io.writeText` 落到常驻可写根之内）。
+    fetch_text(
+        &url,
+        &DownloadOptions {
+            timeout_ms: timeout_ms.unwrap_or(MARKET_DEFAULT_TIMEOUT_MS),
+            max_bytes: max_bytes.unwrap_or(MARKET_DEFAULT_MAX_FETCH_BYTES),
+            // 与 `market_download` 同一口径：代理只认进程环境（env ⇒ reqwest system-proxy）
             proxy: None,
         },
     )
