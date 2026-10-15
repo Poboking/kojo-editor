@@ -147,6 +147,33 @@ describe('loadEratwVariableSchema', () => {
     expect(none.inputDigest).not.toBe(a.inputDigest);
   });
 
+  /* ---------------- KC-1b：`bits`（策展位表挂接，零契约改动） ---------------- */
+
+  it('bits：能定号时按 `(族:号)` 挂策展位表；未收录的号不挂字段（不猜、不伪造空表）', async () => {
+    const schema = await loadEratwVariableSchema({
+      io: fakeIo({
+        'CFLAG.csv': '1,既成事実\n2,好感度\n', // 1 在策展表内、2 不在
+      }),
+      csvDir: '/game/CSV',
+      log: silentLog,
+    });
+
+    // 编号直查（主表命中）与具名索引两条路径都要挂上同一份位表
+    const byIndex = schema.lookup('CFLAG', 1);
+    expect(byIndex?.bits?.length).toBeGreaterThan(0);
+    expect(schema.lookup('CFLAG', '既成事実')?.bits).toEqual(byIndex?.bits);
+
+    // 未收录的号 ⇒ 字段缺省（不是空数组）
+    expect('bits' in (schema.lookup('CFLAG', 2) ?? {})).toBe(false);
+    expect(schema.lookup('CFLAG', 2)?.bits).toBeUndefined();
+
+    // 家族级查询（无可定编号）不挂
+    expect(schema.lookup('CFLAG')?.bits).toBeUndefined();
+
+    // 位表是冻结常量，同键两次查询共享同一引用（零拷贝、零状态）
+    expect(schema.lookup('CFLAG', 1)?.bits).toBe(byIndex?.bits);
+  });
+
   /* ---------------- KC-1：`names`（枚举索引名，供插值补全） ---------------- */
 
   it('names：由 `byIndex` 枚举该族索引名；缺族 / 未收录 → 空；`lookup` 行为一字不变', async () => {

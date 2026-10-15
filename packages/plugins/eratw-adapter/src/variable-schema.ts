@@ -49,6 +49,8 @@
 import { foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
 import type { FileIO, Logger, VariableInfo, VariableSchema, VariableSource } from '@kojo/plugin-api';
 
+import { BITS_BY_FAMILY_INDEX } from './bit-tables';
+
 /** 名称表键的来源层：`.csv` = 主表 / `.als` = 追加名表（`.ERH` 常量走另一条路，见 `lookup`） */
 type NameTableSource = Extract<VariableSource, 'primary' | 'append'>;
 
@@ -284,6 +286,20 @@ export function parseErhConsts(text: string): Map<string, number> {
 }
 
 /**
+ * 位表挂接（KC-1b）：把策展位表（`bit-tables.ts`）按 `(族:号)` 挂到 `lookup()` 的返回值上。
+ *
+ * - 只在**能确定编号**时挂（`resolvedIndex` 有值）；家族级查询（无索引）不挂。
+ * - 策展表里没有该 `(族:号)` ⇒ **不加字段**（不猜、不伪造空位表）。
+ * - 位表是冻结只读常量，同族同号多次查询共享同一份数组（零拷贝、零状态）。
+ */
+function withBits(info: VariableInfo): VariableInfo {
+  if (info.resolvedIndex === undefined) return info;
+  const bits = BITS_BY_FAMILY_INDEX.get(`${info.name}:${info.resolvedIndex}`);
+  if (bits !== undefined) info.bits = bits;
+  return info;
+}
+
+/**
  * 加载 eraTW 变量字典：扫描 `CSV/` 根目录的全部 `*.csv` 名称表**与** `*.als` 追加名表
  * （文件名去掉扩展名后大写即变量名；子目录不进入——Chara 子目录是角色数据，不是变量表）。
  *
@@ -449,7 +465,7 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
           source: table.indexSource.get(idxStr) ?? 'primary',
         };
         if (!Number.isNaN(n)) info.resolvedIndex = n;
-        return info;
+        return withBits(info);
       }
       if (table.byName.has(idxStr)) {
         // 具名索引（如 TALENT:恋慕）→ 名称本身即描述（经汉化词典得中文）；resolvedIndex = 字典编号
@@ -463,7 +479,7 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
         };
         const n = Number(table.byName.get(idxStr));
         if (!Number.isNaN(n)) info.resolvedIndex = n;
-        return info;
+        return withBits(info);
       }
       /**
        * 名称表查无 → 作者自定名表（`.ERH` 具名常量）兜底。引擎侧这条路不是"名称表"，
@@ -477,7 +493,13 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
        */
       const constIndex = erhConsts.get(idxStr.toUpperCase());
       if (constIndex !== undefined)
-        return { name: key, index, description: idxStr, resolvedIndex: constIndex, source: 'const' };
+        return withBits({
+          name: key,
+          index,
+          description: idxStr,
+          resolvedIndex: constIndex,
+          source: 'const',
+        });
       return { name: key, index };
     },
     /**
