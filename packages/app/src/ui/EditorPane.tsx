@@ -24,6 +24,13 @@ import {
   collectCodeActions,
   markersToDecorations,
 } from '../monaco/kojo-code-action';
+import {
+  codeLensAffordable,
+  collectCodeLenses,
+  installCodeLensProvider,
+  withinCodeLensBudget,
+} from '../monaco/kojo-code-lens';
+import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
 import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
 import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
@@ -981,6 +988,11 @@ export function EditorPane({
       renderWhitespace: 'none',
       scrollBeyondLastLine: false,
       wordWrap: 'on',
+      // 行上内联注解（B8）：**创建时就按默认关**——Monaco 这条选项的缺省是 `true`
+      // （`common/config/editorOptions.js` 的 `EditorBooleanOption(23, 'codeLens', true)`），
+      // 只靠下面那个偏好 effect 事后覆盖，等于让"默认关"依赖一次 effect 的时序；
+      // 真值仍只有一处（`CODE_LENS_DEFAULT`），这里不另写 `false`。
+      codeLens: CODE_LENS_DEFAULT,
       // 编辑器体感（ui-polish）：平滑滚动 / 平滑光标 / 整行高亮 / 上下留白
       smoothScrolling: true,
       cursorSmoothCaretAnimation: 'on',
@@ -1245,12 +1257,47 @@ export function EditorPane({
         return dialect === null ? null : { text: model.getValue(), dialect };
       },
     });
+    // 行上内联注解（B8，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第五个判别成员。
+    // 宿主在这里做的事只有四件：认活动标签的**真** model、把体量/预算两档降级判掉、问槽、
+    // 把点击落到**既有**的 `editor.revealLocation` 通道（不新造第二套跳转，与转到定义同腿）。
+    // 注解说什么（"被 N 处用到"、何时不说、大数为什么说 `1000+`）全在贡献方，宿主零判定——
+    // 分工与取舍见 `monaco/kojo-code-lens.ts` 与 `plugins/erb-parser/src/usage-lens.ts` 头注。
+    //
+    // **开关不在这儿**：那是 Monaco 的 `codeLens` 编辑器选项，由下面那条独立的偏好 effect
+    // 落地（关掉时 Monaco 根本不发请求，省掉一次整篇解析）。
+    const codeLensDisposer = installCodeLensProvider(monaco, {
+      resolve: (model) => {
+        const path = filePathRef.current;
+        if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return [];
+        const lineCount = model.getLineCount();
+        // 大文件档：先于请求判掉（一次开口就是整篇文档的解析，实测读数见宿主模块头注）
+        if (!codeLensAffordable(lineCount)) return [];
+        const lenses = collectCodeLenses(kernel.slots.query('ui.editor.languageService'), {
+          kind: 'codeLens',
+          path,
+          text: model.getValue(),
+          project: kernel.project.current(),
+          lineCount,
+        });
+        // 产出预算：**全有或全无**（缺席携带语义，不许用来表示"额度用完了"）
+        return withinCodeLensBudget(lenses.length, lineCount) ? lenses : [];
+      },
+      navigate: (target) => {
+        kernel.bus.emit('editor.revealLocation', {
+          filePath: target.filePath,
+          line: target.line,
+          ...(target.column !== undefined ? { column: target.column } : {}),
+          source: '行上注解',
+        });
+      },
+    });
     return () => {
       crumbCursorSub.dispose();
       crumbModelSub.dispose();
       crumbRefreshRef.current = null;
       setJumpProbe(null);
       formatterDisposer.dispose();
+      codeLensDisposer.dispose();
       erbCompletionDisposer.dispose();
       completionDisposer.dispose();
       foldingDisposer.dispose();
@@ -1280,6 +1327,28 @@ export function EditorPane({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * 「标注函数被谁调用」开关落地（B8，2026-10-16 行内注解批）。
+   *
+   * 偏好真源是 `code-lens-pref.ts` 的 localStorage（**默认关**，理由写在那份文件里），
+   * 本 effect 只做一件事：把它写成 Monaco 的 `codeLens` 选项。
+   * 这条腿必须在**选项**上而不是在 `resolve()` 里返回空数组——关掉时 Monaco 不再发请求，
+   * 于是那份文档的整篇解析一次都不付（供给器没有可视区间，开着的代价是"每次停笔解析一遍"）。
+   *
+   * 翻开关为什么要听事件而不是自己再读一次偏好：Monaco 只在 `EditorOption.codeLens`
+   * 变化时重算注解（取证 `codelensController.js` 的 `e.hasChanged(...) → _onModelChange()`），
+   * 不推就是"作者关掉设置页回到编辑器，一条注解都没动"。壳层的设置页与本页读的都是同一把
+   * localStorage，所以这里不存在两份状态——事件只是"去重算一次"的扳机（同 `editor.sugarView.set`）。
+   */
+  useEffect(() => {
+    const apply = (on: boolean): void => {
+      editorRef.current?.updateOptions({ codeLens: on });
+    };
+    apply(loadCodeLensPref());
+    const un = kernel.bus.on('editor.codeLens.set', ({ on }) => apply(on));
+    return un;
+  }, [kernel]);
 
   // 标签关闭 → model 回收（不在 openPaths 中的一律 dispose；绝不泄漏）
   useEffect(() => {

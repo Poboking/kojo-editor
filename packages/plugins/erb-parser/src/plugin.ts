@@ -29,6 +29,7 @@ import { erbFoldingRanges } from './folding';
 import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt } from './symbols';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
+import { usageLenses } from './usage-lens';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
@@ -659,6 +660,34 @@ export function createErbParserPlugin(): Plugin {
           if (!idx) return undefined;
           const hit = workspaceSymbolsInIndex(idx, request.query, request.limit);
           return { kind: 'workspaceSymbol', symbols: hit.symbols, totalMatched: hit.totalMatched };
+        },
+      });
+
+      /* ---------------- 行上内联注解（B8，2026-10-16 行内注解批） ----------------
+
+       同一枚槽的第五个判别成员（additive：往联合末尾追加，宿主与既有贡献方零改动）。
+       判据与口径全在 `./usage-lens.ts` 的纯函数里，这里只做接线；为什么由本包应答
+       而不是放进某个 UI 插件，理由与 `erb-definition` / `erb-workspace-symbols` 完全一致：
+       两件事实（缓冲区里的定义、某名的反向引用表）都是本包私产，抄到别处就是抄第二份口径。
+
+       索引缺席（未开项目 / 还没建好）⇒ `undefined` = **本包不答**，而不是答「没有引用」
+       （与 `erb-workspace-symbols` 同一区分：真没有 ≠ 我根本还没有名录，铁律 4 不静默）。
+       非方言文件（`.kojo` 的行号属派生文本，本批不参与）同样 `undefined`。
+       体量/条数/密度三道降级**不归这里**，一律在宿主（`app/src/monaco/kojo-code-lens.ts`）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-usage-lens',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'codeLens') return undefined;
+          if (!isDialect(request.path)) return undefined;
+          const idx = index;
+          if (!idx) return undefined;
+          const lenses = usageLenses(parseErbText(request.text, request.path).functions, {
+            definitionsOf: (normalizedName) => idx.byName.get(normalizedName)?.length ?? 0,
+            referencesOf: (name) => referencesOf(idx, name),
+          });
+          return { kind: 'codeLens', lenses };
         },
       });
     },

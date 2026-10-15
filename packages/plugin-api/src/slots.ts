@@ -386,12 +386,13 @@ export interface EditorDocumentSymbolRequest {
   readonly lineCount?: number;
 }
 
-/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol`；新增能力 additive 追加联合成员，不改旧成员） */
+/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` / `codeLens`；新增能力 additive 追加联合成员，不改旧成员） */
 export type EditorLanguageServiceRequest =
   | EditorDefinitionRequest
   | EditorDocumentSymbolRequest
   | EditorFoldingRangeRequest
-  | EditorWorkspaceSymbolRequest;
+  | EditorWorkspaceSymbolRequest
+  | EditorCodeLensRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -471,7 +472,8 @@ export type EditorLanguageServiceResult =
   | EditorDefinitionResult
   | EditorDocumentSymbolResult
   | EditorFoldingRangeResult
-  | EditorWorkspaceSymbolResult;
+  | EditorWorkspaceSymbolResult
+  | EditorCodeLensResult;
 
 /**
  * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
@@ -514,6 +516,57 @@ export interface EditorWorkspaceSymbolResult {
    * 缺省 = 提供方未给（宿主只显示"结果已达上限"，不编数字）。
    */
   readonly totalMatched?: number;
+}
+
+/**
+ * 行上内联注解请求（B8，2026-10-16 行内注解批）——同一单槽的**第五个**判别成员
+ * （additive：往联合末尾追加，宿主与既有贡献方零改动）。
+ *
+ * 输入形状与 `documentSymbol` / `foldingRange` 同族（要的是整篇结构，不是光标处那一个
+ * 记号），`text` 同样是**模型全文**——注解钉在定义行上，行号必须对得上作者正在看的缓冲区。
+ *
+ * **为什么不发 `limit`**（与 `workspaceSymbol` 唯一的形态差别，值得写清楚）：Monaco 的
+ * code lens 供给器**没有可视区间参数**（`provideCodeLenses(model, token)`，取证
+ * monaco-editor 0.57 `editor/contrib/codelens/browser/codelens.js:42`），一次请求就是
+ * 整篇文档的注解，且每次内容变化后都会重算（同文件 `onDidChangeModelContent` 那段
+ * "Ask for all references again"）。预算因此**只能由宿主按"整篇"裁决**（判据与实测见宿主
+ * `monaco/kojo-code-lens.ts`），不能让供方"少报一部分"——**行上注解的缺席本身就是一句话**
+ * （"这一行没有可证明的东西可说"），一旦把它用来表示"额度用完了"，作者读到的是假事实。
+ * 工作区符号那种"另有 N 条未列出"的补白在这里没有落点（code lens 没有列表头可写），
+ * 所以那条口径**刻意不搬**过来。
+ */
+export interface EditorCodeLensRequest {
+  readonly kind: 'codeLens';
+  readonly path: string;
+  readonly text: string;
+  readonly project: GameProject | null;
+  /** 文件行数（体量事实；宿主据此整篇降级。供方按 `documentSymbol` 同款纪律**不据此少报**） */
+  readonly lineCount?: number;
+}
+
+/**
+ * 一条行上注解：显示在 `line` 那一行**上方**的一小段文本。
+ *
+ * 字段刻意只有两个主语——**说什么**（`label`）与**点了去哪**（`target?`）：
+ * Monaco 的 code lens 标签就是一个纯字符串（渲染的是 `command.title`，无富文本、无分段、
+ * 无逐段配色），所以契约不伪造"文本段 / 强调档"这类渲染面给不出的结构——那只会让宿主
+ * 凭空长出一套按语义分支的样式表（业务判据进宿主，破铁律 1）。
+ * 要突出什么，请贡献方**把话说在 `label` 里**；不想让某行有话说，就别给那行注解。
+ */
+export interface EditorCodeLens {
+  /** 锚点行（1 基，**模型坐标**）。越界行由宿主**丢弃**而非夹取——"挪到最近的有效行"等于把这句话安在隔壁那个函数头上 */
+  readonly line: number;
+  /** 面向作者的一行文本（宿主原样显示，不解释内容、不加工、不截断） */
+  readonly label: string;
+  /** 点击落点（省略 = 这条注解不可点）；落地走宿主既有导航通道，供方不自己跳 */
+  readonly target?: EditorSymbolLocation;
+}
+
+/** 行上内联注解响应 */
+export interface EditorCodeLensResult {
+  readonly kind: 'codeLens';
+  /** 注解（宿主按行升序排列并按 行+文本 去重）；空数组 = 认这个文件，但整篇无话可说 */
+  readonly lenses: readonly EditorCodeLens[];
 }
 
 /**

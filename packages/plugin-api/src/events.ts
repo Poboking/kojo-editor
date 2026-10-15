@@ -258,6 +258,19 @@ export interface KernelEventMap {
    * 逐处选），不得静默返回"没反应"。
    */
   'editor.fixAll.request': { source?: string };
+  /**
+   * 行上内联注解开关（B8，2026-10-16 行内注解批）：设置页那一项的真值由宿主写入偏好，
+   * 并广播这一意图让**编辑器**把它落到 Monaco 的 `codeLens` 选项上。
+   *
+   * 通用、游戏无关；状态所有者是编辑器（同 `editor.sugarView.set` 的分工：壳层的设置页
+   * 只写偏好 + 发意图，不在自己这里另存一份业务态）。
+   *
+   * 为什么非要有这条事件而不是"编辑器每次自己读偏好"：`codeLens` 是 Monaco 的**编辑器选项**，
+   * 翻开关后必须让 Monaco 重算一次才当场见效（取证 `codelensController.js`
+   * `e.hasChanged(EditorOption.codeLens) → _onModelChange()`）。只读不推 = 作者关掉设置页
+   * 回到编辑器，注解一条都没动，要等下一次打字才变——那是"按了没反应"。
+   */
+  'editor.codeLens.set': { on: boolean };
 }
 
 /* ------------------- 内核事件 emit 权限（单一真源 + 防漂移断言） ------------------- */
@@ -306,6 +319,9 @@ const KERNEL_ONLY_EVENT_NAMES = [
   // 「全部修复」= 改作者笔下的内容。批量落地只在宿主编辑器一侧，插件没有 emit 的理由，
   // 而"插件能广播一次批量改写"显然不该成立（与写权限事件同一档）。
   'editor.fixAll.request',
+  // 显示偏好开关：真源是宿主的 localStorage 偏好 + Monaco 编辑器选项，插件既不持有偏好
+  // 也不碰选项（B8）。放开 emit 只会让插件能"替作者改设置"。
+  'editor.codeLens.set',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核事件名（= 插件可 emit 的集合；供 kernel `scopedBus` 执法使用） */

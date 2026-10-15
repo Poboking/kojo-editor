@@ -112,7 +112,7 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
         .filter((s) => s.kind === 'ui.editor.languageService')
         .map((s) => s.contribution.id)
         .sort(),
-    ).toEqual(['erb-definition', 'erb-folding', 'erb-symbols', 'erb-workspace-symbols']);
+    ).toEqual(['erb-definition', 'erb-folding', 'erb-symbols', 'erb-usage-lens', 'erb-workspace-symbols']);
     expect(languageServiceOf(slots).id).toBe('erb-definition');
   });
 
@@ -273,5 +273,59 @@ describe('erb-parser · foldingRange（D3 折叠）装配', () => {
       kind: 'foldingRange',
       ranges: [],
     });
+  });
+});
+
+/* ============================== B8 行上内联注解 ============================== */
+
+describe('erb-parser · codeLens（B8 行上「被 N 处用到」）', () => {
+  const lensOf = (slots: SlotRecord[]) =>
+    languageServiceOf(slots, 'erb-usage-lens') as unknown as {
+      provide(request: unknown): { kind: string; lenses: { line: number; label: string; target?: unknown }[] } | undefined;
+    };
+
+  it('未建索引 → undefined（本包不答，而不是答「没有引用」）；非方言 → undefined', () => {
+    const { slots } = activate();
+    const c = lensOf(slots);
+    expect(c.provide({ kind: 'codeLens', path: A, text: FILES[A]!, project: null, lineCount: 3 })).toBeUndefined();
+  });
+
+  it('认 ERB 但整篇无话可说 → `{ lenses: [] }`（空文本同理，不装不认）', async () => {
+    const { services, slots } = activate();
+    await (services.get('erb.parser') as ErbParserService).buildIndex(['/t']);
+    const c = lensOf(slots);
+    // B 里的 @CALLER 没有任何可证明的使用处 ⇒ 闭嘴；B 里也没有 ALPHA 的定义
+    expect(c.provide({ kind: 'codeLens', path: B, text: FILES[B]!, project: null, lineCount: 3 })).toEqual({
+      kind: 'codeLens',
+      lenses: [],
+    });
+    expect(c.provide({ kind: 'codeLens', path: A, text: '', project: null, lineCount: 0 })).toEqual({
+      kind: 'codeLens',
+      lenses: [],
+    });
+    expect(c.provide({ kind: 'codeLens', path: '/t/X.kojo', text: 'CALL ALPHA', project: null, lineCount: 1 })).toBeUndefined();
+  });
+
+  it('A 的 @ALPHA 被 B 用了一次 ⇒ 钉在定义行、给出可点的落点', async () => {
+    const { services, slots } = activate();
+    await (services.get('erb.parser') as ErbParserService).buildIndex(['/t']);
+    const res = lensOf(slots).provide({ kind: 'codeLens', path: A, text: FILES[A]!, project: null, lineCount: 3 });
+    expect(res?.lenses).toHaveLength(1);
+    expect(res!.lenses[0]!.line).toBe(2); // @ALPHA 在 A 的第 2 行
+    expect(res!.lenses[0]!.label).toBe('被 1 处用到');
+    expect(res!.lenses[0]!.target).toMatchObject({ filePath: B, line: 2 });
+  });
+
+  it('缓冲区改了名字、索引还不认识 ⇒ 这一行不开口（不拿旧行号说话）', async () => {
+    const { services, slots } = activate();
+    await (services.get('erb.parser') as ErbParserService).buildIndex(['/t']);
+    const res = lensOf(slots).provide({
+      kind: 'codeLens',
+      path: A,
+      text: '; 目标文件\n@BETA(ARG)\n\tRETURN 1\n', // ALPHA 已被改名
+      project: null,
+      lineCount: 3,
+    });
+    expect(res?.lenses).toEqual([]);
   });
 });

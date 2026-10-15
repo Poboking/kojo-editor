@@ -49,6 +49,8 @@ import { beginFloatDrag, beginFloatResize } from './float-drag';
 import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
 // 保存时整理空白（E2）：偏好真源在 localStorage（`format-pref.ts`），保存链路每次现读
 import { loadFormatOnSavePref, saveFormatOnSavePref } from './format-pref';
+// 行上内联注解（B8）：同一份偏好形态，默认关；开关真源在 localStorage，这里只写值 + 发意图
+import { loadCodeLensPref, saveCodeLensPref } from './code-lens-pref';
 import { fileWritableArea, writablePillTone } from './file-area';
 import {
   applyMotionPref,
@@ -304,6 +306,27 @@ export function ShellLayout(props: Props): ReactElement {
     saveFormatOnSavePref(on);
     setFormatOnSave(on);
   }, []);
+
+  /**
+   * 「标注函数被谁调用」开关（B8，2026-10-16 行内注解批；默认关）。
+   *
+   * 与上面「保存时整理空白」的差别值得一句：那条挂在**保存那一刻**上，链路自己现读偏好
+   * 就够；这条改的是**编辑器选项**，翻完必须让 Monaco 重算一次才当场见效 ⇒ 除了写值还要
+   * 发一条 `editor.codeLens.set`（落地在 `EditorPane`，状态所有者仍是编辑器）。
+   * 真源仍然只有一份 localStorage：本组件只持渲染用的镜像，并在设置页打开时重读一次。
+   */
+  const [codeLensOn, setCodeLensOn] = useState<boolean>(() => loadCodeLensPref());
+  useEffect(() => {
+    if (settingsOpen) setCodeLensOn(loadCodeLensPref());
+  }, [settingsOpen]);
+  const commitCodeLens = useCallback(
+    (on: boolean) => {
+      saveCodeLensPref(on);
+      setCodeLensOn(on);
+      kernel.bus.emit('editor.codeLens.set', { on });
+    },
+    [kernel],
+  );
 
   /**
    * 检查更新（REL-1 收尾 · REL-2 设置页）：状态机在 `update-check.ts`（零 React，可单测），
@@ -1353,6 +1376,20 @@ export function ShellLayout(props: Props): ReactElement {
                       存盘前把行首与注释里的全角空格折成半角、统一 .kojo 的缩进写法。
                       台词正文、行尾风格与文件编码都不动；整理是一次可撤销的改动。默认关，
                       手动整理随时可用 Shift+Alt+F
+                    </span>
+                  </span>
+                </label>
+                {/* 行上内联注解（B8，2026-10-16）：往正文里插行的能力，默认关的理由写在
+                    `code-lens-pref.ts`。文案刻意不上「CodeLens / 反向索引」这类机器词，
+                    并且把"没标注 ≠ 没人用"这条最容易读反的口径当场说清（铁律 4：不静默、也不误导）。 */}
+                <label className="settings-row">
+                  <input type="checkbox" checked={codeLensOn} onChange={(e) => commitCodeLens(e.target.checked)} />
+                  <span>
+                    标注函数被谁调用
+                    <span className="settings-hint">
+                      在函数开头那一行的上方写一句「被 N 处用到」，点一下跳到第一处用到它的地方；满项目都在用的系统函数写作「1000+」。
+                      没找到出处的函数不写这一句——那只代表编辑器证明不了，不代表真的没人调用。
+                      太长或函数太密的文件整份不标注。只改显示、不动文件；默认关
                     </span>
                   </span>
                 </label>
