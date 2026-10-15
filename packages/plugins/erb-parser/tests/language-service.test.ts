@@ -97,7 +97,7 @@ type LanguageServiceContribution = {
   provide(request: unknown): { kind: string; locations: { filePath: string; line: number }[] } | undefined;
 };
 
-/** 按 id 取语言服务贡献（B3 起本包注册两枚：`erb-definition` / `erb-symbols`） */
+/** 按 id 取语言服务贡献（B3 起本包注册两枚：`erb-definition` / `erb-symbols`；D2 加 `erb-workspace-symbols`） */
 function languageServiceOf(slots: SlotRecord[], id = 'erb-definition'): LanguageServiceContribution {
   const hit = slots.find((s) => s.kind === 'ui.editor.languageService' && s.contribution.id === id);
   if (!hit) throw new Error(`ui.editor.languageService '${id}' 未注册`);
@@ -112,7 +112,7 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
         .filter((s) => s.kind === 'ui.editor.languageService')
         .map((s) => s.contribution.id)
         .sort(),
-    ).toEqual(['erb-definition', 'erb-folding', 'erb-symbols']);
+    ).toEqual(['erb-definition', 'erb-folding', 'erb-symbols', 'erb-workspace-symbols']);
     expect(languageServiceOf(slots).id).toBe('erb-definition');
   });
 

@@ -371,11 +371,12 @@ export interface EditorDocumentSymbolRequest {
   readonly lineCount?: number;
 }
 
-/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange`；新增能力 additive 追加联合成员，不改旧成员） */
+/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol`；新增能力 additive 追加联合成员，不改旧成员） */
 export type EditorLanguageServiceRequest =
   | EditorDefinitionRequest
   | EditorDocumentSymbolRequest
-  | EditorFoldingRangeRequest;
+  | EditorFoldingRangeRequest
+  | EditorWorkspaceSymbolRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -454,7 +455,51 @@ export interface EditorFoldingRangeResult {
 export type EditorLanguageServiceResult =
   | EditorDefinitionResult
   | EditorDocumentSymbolResult
-  | EditorFoldingRangeResult;
+  | EditorFoldingRangeResult
+  | EditorWorkspaceSymbolResult;
+
+/**
+ * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
+ * （additive：往联合末尾追加，宿主与既有贡献方零改动）。
+ *
+ * 与前三员的输入差异：**没有文件**。问的是"整个工作区里谁叫这个名字"，
+ * 所以只给查询串与项目；数据源（项目索引 / 别的名录）由提供方自己认得，宿主不递文件。
+ *
+ * `query` 是**原样字符串**（未归一大小写、未 trim）：匹配口径归提供方——ERB 名按引擎
+ * 惯例大小写不敏感，别的方言未必，宿主不替各方归一。
+ * `limit` 是宿主给的**产出预算**：十万条名字不许整份递回去（渲染与 IPC 都付不起）。
+ */
+export interface EditorWorkspaceSymbolRequest {
+  readonly kind: 'workspaceSymbol';
+  readonly query: string;
+  readonly project: GameProject | null;
+  readonly limit?: number;
+}
+
+/** 一条工作区符号（位置 = 定义点，1 基行号；`column` 缺省 = 行首） */
+export interface EditorWorkspaceSymbol {
+  readonly name: string;
+  /** 中性类别（与大纲同表；宿主只按它挑图标，零格式知识） */
+  readonly kind: EditorDocumentSymbolKind;
+  readonly filePath: string;
+  readonly line: number;
+  readonly column?: number;
+  /** 副行补充（形参 / 注释块首行等；可缺省，宿主不依赖其存在） */
+  readonly detail?: string;
+}
+
+/** 工作区符号响应 */
+export interface EditorWorkspaceSymbolResult {
+  readonly kind: 'workspaceSymbol';
+  /** 至多 `limit` 条；空数组 = 提供方认得这个查询但一条没命中（**不猜**） */
+  readonly symbols: readonly EditorWorkspaceSymbol[];
+  /**
+   * 命中**总数**（可大于 `symbols.length` = 提供方按预算截断了）。
+   * 宿主据此显示"另有 N 条未列出"：上限是渲染预算，不是把结果悄悄丢掉（铁律 4）。
+   * 缺省 = 提供方未给（宿主只显示"结果已达上限"，不编数字）。
+   */
+  readonly totalMatched?: number;
+}
 
 /**
  * 编辑器语言服务贡献（槽 `ui.editor.languageService`）。

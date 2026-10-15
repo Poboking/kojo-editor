@@ -19,6 +19,7 @@ import { erbDocumentSymbols } from './document-symbols';
 import { erbFoldingRanges } from './folding';
 import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt } from './symbols';
+import { workspaceSymbolsInIndex } from './workspace-symbols';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
@@ -562,6 +563,29 @@ export function createErbParserPlugin(): Plugin {
           if (request.kind !== 'foldingRange') return undefined;
           if (!isDialect(request.path)) return undefined;
           return { kind: 'foldingRange', ranges: erbFoldingRanges(request.text) };
+        },
+      });
+
+      /* ---------------- 工作区符号（D2，2026-10-15 工作区符号批） ----------------
+
+       同一枚槽的第四个判别成员。判据只有一个：`ErbIndex.byName`（归一化名 → 定义列表），
+       而它是本包的私产——放宿主就得让宿主认识 ERB 的名字口径（破"壳层零业务知识"），
+       放别的插件就得把索引再抄一份。查询/排序/预算的实现见 `./workspace-symbols.ts`
+       （纯函数，逐条断言在 `tests/workspace-symbols.test.ts`）。
+
+       索引缺席（未开项目 / 未建好）→ `undefined`：本包**不答**这个查询，而不是答"没有"。
+       区分点在于"项目里真的没有这个名字"与"我根本还没有名录"是两件事，宿主据
+       `stats.indexing / stats.indexError` 把后者**说给作者听**（铁律 4 不静默）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-workspace-symbols',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'workspaceSymbol') return undefined;
+          const idx = index;
+          if (!idx) return undefined;
+          const hit = workspaceSymbolsInIndex(idx, request.query, request.limit);
+          return { kind: 'workspaceSymbol', symbols: hit.symbols, totalMatched: hit.totalMatched };
         },
       });
     },

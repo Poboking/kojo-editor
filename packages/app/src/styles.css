@@ -3105,6 +3105,14 @@ button.erb-mode-hint.unlocked:hover {
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.04);
 }
+/* 溢出提示（D2 工作区符号）：列表**下方**常驻一行，不参与键盘导航。
+   刻意不做成一条 disabled 候选——那样 ↑↓ 能停在它上面而 Enter 按下去没反应，
+   正是「按了没反应」这一类要根除的形态。 */
+.picker-note {
+  border-top: 1px solid var(--border);
+  padding: 5px 14px;
+  font-size: var(--fs-1);
+}
 
 /* --------------------- P2：overlay 宿主（向导 / 设置等模态） --------------------- */
 

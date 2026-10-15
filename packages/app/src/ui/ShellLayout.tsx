@@ -14,7 +14,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { EditorCommandContext, UIPanelContribution } from '@kojo/plugin-api';
+import type { EditorCommandContext, EditorWorkspaceSymbol, UIPanelContribution } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import {
@@ -74,7 +74,12 @@ import {
   parseKeybinding,
   type ShellCommandSpec,
 } from './commands';
-import { CommandPalette, QuickOpen } from './Palette';
+import { CommandPalette, QuickOpen, WorkspaceSymbols } from './Palette';
+import {
+  collectWorkspaceSymbols,
+  workspaceSymbolNotice,
+  WORKSPACE_SYMBOL_RENDER_LIMIT,
+} from './workspace-symbols';
 import { PanelBody, StatusbarItem } from './PanelHost';
 import { ProblemsStatusItem } from './ProblemPanel';
 import { requestSearchFocus } from './search-store';
@@ -236,11 +241,13 @@ export function ShellLayout(props: Props): ReactElement {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
+  /** 工作区符号面板（D2 · Ctrl+T）：与上面两个 picker 同一层 Esc 优先级 */
+  const [symbolsOpen, setSymbolsOpen] = useState(false);
   const [activeOverlay, setActiveOverlay] = useState<{ id: string; payload?: unknown } | null>(null);
   const overlayRef = useRef(activeOverlay);
   overlayRef.current = activeOverlay;
   const pickerRef = useRef(false);
-  pickerRef.current = paletteOpen || quickOpen;
+  pickerRef.current = paletteOpen || quickOpen || symbolsOpen;
   // 设置 overlay（P4；壳层私有——设置项全是容器语义，不经 ui.overlay 槽）
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef(settingsOpen);
@@ -387,6 +394,12 @@ export function ShellLayout(props: Props): ReactElement {
       { id: 'layout.openSettings', title: '打开设置', run: () => setSettingsOpen(true) },
       { id: 'workbench.commandPalette', title: '命令面板', keybinding: 'ctrl+shift+p', run: () => setPaletteOpen(true) },
       { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: 'ctrl+p', run: () => setQuickOpen(true) },
+      // 工作区符号（D2 · Ctrl+T）：按名字找函数定义并跳过去（候选来自
+      // `ui.editor.languageService` 的 `workspaceSymbol` 应答，壳层不认识 ERB）。
+      // **刻意不给 `when`**（与 `workbench.quickOpen` 同形态，而命令面板的禁用位另有用途）：
+      // 没项目 / 索引没建好时命令仍要**按得下去**——面板里那句原因才是给作者的答复；
+      // 把它灰掉就成了"按了没反应"（铁律 4）。
+      { id: 'workbench.workspaceSymbols', title: '转到工作区符号', keybinding: 'ctrl+t', run: () => setSymbolsOpen(true) },
       // 全文搜索（2026-10-15 检索批）：打开侧栏「搜索」视图 + 请求输入框聚焦。
       // 激活单位是视图 key（单独成视图的面板 = `panel:<id>`，见 layout.organizePanels）；
       // 聚焦意图发进 search-store（面板订阅 focusNonce 落地）——壳层不知道面板内部的输入框。
@@ -415,6 +428,62 @@ export function ShellLayout(props: Props): ReactElement {
   registryRef.current = registry;
   const commandCtxRef = useRef(commandCtx);
   commandCtxRef.current = commandCtx;
+
+  /* -------------------- D2：工作区符号（Ctrl+T）的宿主接线 -------------------- */
+
+  /**
+   * 符号应答方（与「转到定义 / 文档大纲」**同一枚槽**的第三个判别成员）。
+   * 宿主只按 `kind` 问、把返回的候选合并——**不认识** ERB / 家族 / 角色；
+   * 名字口径与索引归属全在应答方（ERB 侧 = erb-parser 的 `ErbIndex.byName`）。
+   */
+  const languageServices = useMemo(() => kernel.slots.query('ui.editor.languageService'), [kernel]);
+
+  /**
+   * 问一次（面板每次击键问一次；预算 = DOM 行数，提供方那侧另有内存预算）。
+   * 读 `commandCtxRef` 而不是 `commandCtx`：项目切换要拿**当下**的项目，
+   * 而闭包按 `languageServices` 记忆化——依赖里塞 project 会让每次活动文件变化都重建。
+   */
+  const fetchWorkspaceSymbols = useCallback(
+    (query: string) =>
+      collectWorkspaceSymbols(languageServices, {
+        query,
+        project: commandCtxRef.current.project,
+        limit: WORKSPACE_SYMBOL_RENDER_LIMIT,
+      }),
+    [languageServices],
+  );
+
+  /**
+   * 空结果的**可见原因**（铁律 4「不静默」在 UI 侧的那一半）。
+   *
+   * 用的是壳层**本来就有的事实**（项目开没开 + 状态栏那三个索引读数），不去问插件
+   * "你为什么没答"——应答方给的是 `undefined`（不认这个查询），而"为什么不认"
+   * 只有宿主这一侧说得出（否则作者看到的是"无匹配符号"这种假答案）。
+   */
+  const workspaceSymbolNoticeFor = useCallback(
+    (query: string) =>
+      workspaceSymbolNotice({
+        hasProject: commandCtx.project !== null,
+        indexing: stats.indexing,
+        indexError: stats.indexError,
+        fileCount: stats.fileCount,
+        query,
+      }),
+    [commandCtx.project, stats.indexing, stats.indexError, stats.fileCount],
+  );
+
+  /** 选中 ⇒ 发既有 `editor.revealLocation`（开文件 + 定位由 App 落地，不新造跳转机制） */
+  const revealWorkspaceSymbol = useCallback(
+    (symbol: EditorWorkspaceSymbol) => {
+      kernel.bus.emit('editor.revealLocation', {
+        filePath: symbol.filePath,
+        line: symbol.line,
+        ...(symbol.column !== undefined ? { column: symbol.column } : {}),
+        source: '工作区符号',
+      });
+    },
+    [kernel],
+  );
 
   // 工作台 API 注册（编辑器区空态动作按钮反向取 picker/命令入口）
   useEffect(() => {
@@ -1147,6 +1216,14 @@ export function ShellLayout(props: Props): ReactElement {
       ) : null}
       {quickOpen && quickOpenFiles && onOpenFile ? (
         <QuickOpen files={quickOpenFiles} onOpenFile={onOpenFile} onClose={() => setQuickOpen(false)} />
+      ) : null}
+      {symbolsOpen ? (
+        <WorkspaceSymbols
+          fetchSymbols={fetchWorkspaceSymbols}
+          notice={workspaceSymbolNoticeFor}
+          onPickSymbol={revealWorkspaceSymbol}
+          onClose={() => setSymbolsOpen(false)}
+        />
       ) : null}
       {overlayContribution ? (
         <div className="overlay-backdrop" onMouseDown={() => setActiveOverlay(null)}>
