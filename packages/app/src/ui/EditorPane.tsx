@@ -79,7 +79,9 @@ function editorTables(kernel: Kernel): CompletionTables {
     if (contribution.adapter.gameId !== project.adapterId) continue;
     const adapter = contribution.adapter;
     return {
-      ...(adapter.variableSchema ? { dictionary: makeLookup(adapter.variableSchema) } : {}),
+      ...(adapter.variableSchema
+        ? { dictionary: makeLookup(adapter.variableSchema), variableSchema: adapter.variableSchema }
+        : {}),
       ...(adapter.kojoFaceTemplates ? { faceTable: adapter.kojoFaceTemplates } : {}),
       ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
       ...(adapter.kojoInstructionTable ? { instructionTable: adapter.kojoInstructionTable } : {}),

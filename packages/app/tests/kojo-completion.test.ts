@@ -36,10 +36,12 @@ function stubMonaco(): { monaco: typeof Monaco; registered: Registered[] } {
   return { monaco: monaco as unknown as typeof Monaco, registered };
 }
 
-/** 桩 model：`getValue`（别名扫描）+ `getWordUntilPosition`（已输入词，驱动排序与替换区间） */
+/** 桩 model：`getValue`（别名扫描）+ `getWordUntilPosition`（已输入词）+ `getLineContent`（KC-1/KC-2 上下文解析） */
 function modelOf(text: string, word = ''): Monaco.editor.ITextModel {
+  const lines = text.split('\n');
   return {
     getValue: () => text,
+    getLineContent: (lineNumber: number) => lines[lineNumber - 1] ?? '',
     getWordUntilPosition: () => ({ word, startColumn: 1, endColumn: 1 + word.length }),
   } as unknown as Monaco.editor.ITextModel;
 }
@@ -53,10 +55,11 @@ function provide(
   provider: Monaco.languages.CompletionItemProvider,
   text: string,
   word = '',
+  column = 1,
 ): Monaco.languages.CompletionItem[] {
   const out = provider.provideCompletionItems(
     modelOf(text, word),
-    { lineNumber: 1, column: 1 } as Monaco.Position,
+    { lineNumber: 1, column } as Monaco.Position,
     {} as Monaco.languages.CompletionContext,
     {} as Monaco.CancellationToken,
   ) as unknown as Monaco.languages.CompletionList;
@@ -93,6 +96,11 @@ describe('C-1 · .kojo 补全装配（provider 注册）', () => {
   it('扩展点稳定：KOJO_COMPLETION_SOURCES 是可追加数组，含静态词表 source', () => {
     expect(Array.isArray(KOJO_COMPLETION_SOURCES)).toBe(true);
     expect(KOJO_COMPLETION_SOURCES.some((s) => s.id === 'kojo-lexicon')).toBe(true);
+  });
+
+  it('KC-1 / KC-2 已接入扩展点：变量与分野 source 在册', () => {
+    expect(KOJO_COMPLETION_SOURCES.some((s) => s.id === 'kojo-variable')).toBe(true);
+    expect(KOJO_COMPLETION_SOURCES.some((s) => s.id === 'kojo-face')).toBe(true);
   });
 });
 
@@ -148,5 +156,13 @@ describe('C-1 · tables 缺席（fail-visible，不崩不猜）', () => {
     for (const d of details) {
       expect(['别名（本文件）', '保留代词', '运算符', '系统函数', '头部声明', '块关键字', '行内关键字', '别名右值']).toContain(d);
     }
+  });
+
+  it('KC-2 分野 source 经 provider 出货：行首 `时机 初` → 命中 `初见`（表驱动，零硬编码）', () => {
+    const provider = withTables.registered[0]!.provider;
+    const items = provide(provider, '时机 初', '初', 5);
+    const hit = items.find((i) => labelText(i.label) === '初见');
+    expect(hit).toBeDefined();
+    expect(hit!.detail).toBe('M_KOJO_K{n}_HATSUMI');
   });
 });

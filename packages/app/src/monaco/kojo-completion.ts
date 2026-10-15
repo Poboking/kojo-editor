@@ -1,5 +1,10 @@
 import type * as Monaco from 'monaco-editor';
-import type { KojoFaceTable, KojoInstructionTable, KojoLibraryTable } from '@kojo/plugin-api';
+import type {
+  KojoFaceTable,
+  KojoInstructionTable,
+  KojoLibraryTable,
+  VariableSchema,
+} from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import {
   RESERVED_PRONOUNS,
@@ -7,6 +12,8 @@ import {
   SUGAR_LEXICON_OPERATORS,
 } from '@kojo/plugin-kojo-sugar';
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
+import { variableCompletionItems } from './kojo-completion-variables';
+import { faceCompletionItems } from './kojo-completion-faces';
 
 /**
  * `.kojo` 表层 DSL 补全的**装配 seam**（宿主层）。
@@ -29,6 +36,12 @@ import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } f
 export interface CompletionTables {
   /** 变量字典（`makeLookup(adapter.variableSchema)` 产物）；缺席 = 不做变量补全 */
   readonly dictionary?: DictionaryLookup;
+  /**
+   * 适配器变量 schema **本体**（KC-1 枚举名字用 `VariableSchema.names`）。
+   * 与 `dictionary` 同源（同一个 `adapter.variableSchema`）：`dictionary` 供 hover 反查，
+   * 本体供补全**枚举**——两者都缺席 = 不做变量补全（**不猜**）。
+   */
+  readonly variableSchema?: VariableSchema;
   /** 时机分野模板表（adapter `kojoFaceTemplates`）；缺席 = 不做分野补全 */
   readonly faceTable?: KojoFaceTable;
   /** 指令名表（adapter `kojoInstructionTable`）；缺席 = 不做指令名补全 */
@@ -144,10 +157,36 @@ const LEXICON_SOURCE: CompletionSource = {
 };
 
 /**
+ * 变量 / 属性补全（KC-1）：`{她的<前缀>}` / `{角色12的<前缀>}` 插值内弹变量名
+ * （名字来自 `tables.variableSchema.names(...)` 枚举）。非该位置 / schema 缺省 → `[]`。
+ */
+const VARIABLE_SOURCE: CompletionSource = {
+  id: 'kojo-variable',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return variableCompletionItems(monaco, model, position, tables.variableSchema);
+  },
+};
+
+/**
+ * 时机分野补全（KC-2）：行首 `时机 <分野>：` 弹分野候选（`tables.faceTable.faces` 枚举）。
+ * 非该位置 / 表缺省 → `[]`。
+ */
+const FACE_SOURCE: CompletionSource = {
+  id: 'kojo-face',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return faceCompletionItems(monaco, model, position, tables.faceTable);
+  },
+};
+
+/**
  * 全部补全来源（**稳定扩展点**）。后续批次往这里追加 `CompletionSource`，
  * 装配点与排序/去重口径零改动。
  */
-export const KOJO_COMPLETION_SOURCES: CompletionSource[] = [LEXICON_SOURCE];
+export const KOJO_COMPLETION_SOURCES: CompletionSource[] = [
+  LEXICON_SOURCE,
+  VARIABLE_SOURCE,
+  FACE_SOURCE,
+];
 
 /* ============================== 合并 / 去重 / 排序 ============================== */
 
