@@ -215,6 +215,10 @@ export function createKojoSugarPlugin(): Plugin {
         transpile: (source, options) => makeTranspiler().transpile(source, options),
         sourceOf: (result, generatedLine) =>
           createSugarTranspileService().sourceOf(result, generatedLine),
+        // S6 列级映射（纯查询：只读转译结果里的 sourceMap，不需要 adapter 注入）
+        sourceColumnOf: (result, generatedLine, generatedColumn) =>
+          createSugarTranspileService().sourceColumnOf(result, generatedLine, generatedColumn),
+        generatedOf: (result, source) => createSugarTranspileService().generatedOf?.(result, source) ?? null,
         // S3：编译落盘一体——转译（带当前 adapter 字典+分野表）+ 双闸写 + 备份 + 回读
         compileToFile: (source, targetPath, options) =>
           makeTranspiler({ io, log: ctx.log }).compileToFile(source, targetPath, options),

@@ -758,13 +758,14 @@ export interface SugarDoc {
 /* ============================== 源映射与产物 ============================== */
 
 /**
- * 行级源映射（审阅 §1.2：从第一天维护）。
+ * 源映射条目（审阅 §1.2：从第一天维护）。
  *
- * **粒度决策（请勿擅自细化/粗化）**：v1 只做**行级**映射（规范 §6 的 golden
- * 验收是逐字节文本一致，行级足以支撑"生成的每一行回溯到源位置"）；列级留到
- * S6 编辑体验批（规范 §9 待实测第 3 条要求"定位到源文件具体列"）。
- * 源折行 `\` 会把多条源行合并为一条产物行 → 此时 `sourceLine` 取**首行**，
- * 后续行计入 `span`。
+ * **粒度决策（请勿擅自细化/粗化）**：**行级**是 v1 地基（规范 §6 的 golden 验收是
+ * 逐字节文本一致，行级足以支撑"生成的每一行回溯到源位置"）；`runs` 是 S6 编辑体验批
+ * 补上的**列级**区段（规范 §9 待实测第 3 条"定位到源文件具体列"）——additive：
+ * 行级字段语义与旧判据逐字不变，`runs` 缺省 = 该行只有可信的列区间为空（降糖改写行），
+ * 消费端据此退行级。源折行 `\` 把多条源行合成一条产物行 → `sourceLine` 仍取**首行**，
+ * 各列区段按 `runs` 落回**自己那条物理源行**（不是统统落回首行起点）。
  */
 export interface SugarSourceMapEntry {
   /** 产物行号（1 基） */
@@ -773,13 +774,37 @@ export interface SugarSourceMapEntry {
   sourceLine: number | null;
   /** 该产物行覆盖的源区间（可为多行；纯生成行缺省） */
   span?: SugarSourceSpan;
+  /**
+   * 列级区段（S6 批；按 `generatedColumn` 升序、互不重叠；缺省 = 无列级记录）。
+   * 只收录**逐码元恒等**的区段（源切片与产物切片逐码元相等）——绝不记录猜出来的列。
+   */
+  runs?: SugarColumnRun[];
+}
+
+/**
+ * 列级区段（S6 批）——产物列 ↔ 源列的一段**逐码元恒等**对齐。
+ *
+ * 列口径（全链一致，勿改）：**1 基**、宽度按 **UTF-16 码元**（`String.length` / `slice`
+ * 口径，与 Monaco 的列完全一致）。故中文/全角标点 = 1 码元，emoji（代理对）= 2 码元，
+ * **不是码点数**；产物的 `\t` 缩进同样按 1 码元计入列。
+ *
+ * 段内映射是恒等平移：`源列 = source.column + (产物列 - generatedColumn)`，
+ * 段外（产物前缀 / 降糖改写区）由查询端按「就近夹紧」回落，不猜。
+ */
+export interface SugarColumnRun {
+  /** 区段起点所在产物列（1 基；UTF-16 码元） */
+  generatedColumn: number;
+  /** 区段宽度（码元数；产物与源同宽——恒等区段的定义） */
+  length: number;
+  /** 区段起点所在源位置（1 基列；折行时是该区段所属的**物理源行**，非逻辑首行） */
+  source: SugarPosition;
 }
 
 /** 转译产物 */
 export interface SugarTranspileResult {
   /** 生成的 ERB 全文（**未落盘**；写盘走 `compileToFile`，S3 批） */
   erb: string;
-  /** 行级源映射（按 generatedLine 升序） */
+  /** 源映射（行级地基 + S6 列级区段；按 generatedLine 升序） */
   sourceMap: SugarSourceMapEntry[];
   /**
    * 全量诊断（parse + transpile）。**非空不必然代表失败**：
@@ -1165,6 +1190,20 @@ export interface SugarTranspileService {
    * 例如包装函数骨架这类纯生成行）。
    */
   sourceOf(result: SugarTranspileResult, generatedLine: number): SugarPosition | null;
+  /**
+   * **列级反查**（S6 批；additive，两参 `sourceOf` 逐字不变）：产物 (行, 列) → 源位置。
+   * 列 1 基、UTF-16 码元（口径同 `SugarPosition`）。
+   * 该行有列区段时逐码元定位；列落进产物前缀 / 行尾越界 / 降糖改写区 → **就近夹紧**到
+   * 相邻区段边界（仍在本产物行的映射之内，绝不跨行猜）；该行无列区段 → 退化为
+   * `sourceOf` 的行级结果。纯生成行（`sourceLine === null`）→ null。
+   */
+  sourceColumnOf(result: SugarTranspileResult, generatedLine: number, generatedColumn: number): SugarPosition | null;
+  /**
+   * **正查**（S6 批；**可选能力**——旧实现方零改动）：源位置 → 产物 (行, 列)。
+   * 与 `sourceColumnOf` 共用同一条 `runs` 数据的正向索引，用于往返自证与
+   * "源改处高亮产物"。源位置落在无区段的降糖改写区 → null（不猜）；多候选取产物行最小者。
+   */
+  generatedOf?(result: SugarTranspileResult, source: SugarPosition): SugarPosition | null;
   /**
    * 编译并落盘（S3 批；**唯一含 IO 的方法**）。
    *

@@ -27,6 +27,7 @@ import type {
   SugarDoc,
   SugarFrontMatter,
   SugarNode,
+  SugarPosition,
   SugarSourceSpan,
   SugarTopLevelNode,
   TextLine,
@@ -55,6 +56,21 @@ import type { DiagnosticSink } from './types';
 
 /* ============================== 物理行 → 逻辑行 ============================== */
 
+/**
+ * 折行段（S6 列级映射的地基）：一条逻辑行由哪几个**物理行**拼成。
+ *
+ * 折行把多条源行合成一条产物行 ⇒ 只有知道「逻辑偏移落在哪个物理行」，
+ * 产物列才能折回**正确的源行与源列**（而不是统统落回首行起点）。
+ */
+export interface FoldSegment {
+  /** 该段起点在**逻辑文本**里的 0 基码元偏移 */
+  offset: number;
+  /** 该段所属物理行（1 基） */
+  line: number;
+  /** 该段首字符在物理行里的列（1 基；UTF-16 码元。续接行按 `trimStart` 合并 ⇒ 跳过行首空白） */
+  column: number;
+}
+
 /** 逻辑行：一条"逻辑上不可分"的源行（`\` 折行已合并） */
 export interface LogicalLine {
   /** 首个物理行的行号（1 基） */
@@ -67,6 +83,8 @@ export interface LogicalLine {
   indent: number;
   /** 原始缩进前缀（用于诊断消息） */
   rawIndent: string;
+  /** 折行段（升序；未折行 = 单段 `{offset:0, line, column:1}`） */
+  segments: readonly FoldSegment[];
 }
 
 /**
@@ -83,13 +101,19 @@ export function splitLogicalLines(source: string): LogicalLine[] {
     const startLine = i + 1;
     let text = physical[i]!;
     let endLine = startLine;
+    const segments: FoldSegment[] = [{ offset: 0, line: startLine, column: 1 }];
     // 折行续接：仅在行尾（去尾空白后）为 `\` 时合并
     while (/(^|[^\\])\\\s*$/.test(text)) {
       text = text.replace(/\\\s*$/, '');
       i++;
       if (i >= physical.length) break;
       endLine = i + 1;
-      text += physical[i]!.trimStart();
+      const next = physical[i]!;
+      // `trimStart` 去掉的**码元**数 = 续接段在物理行里的起始列（-1）；
+      // 用长度差而非正则，口径与 JS 的空白定义（含全角空格 U+3000）逐字一致。
+      const head = next.length - next.trimStart().length;
+      segments.push({ offset: text.length, line: endLine, column: head + 1 });
+      text += next.trimStart();
     }
     const rawIndentMatch = /^[ \t\u3000]*/.exec(text)!;
     const rawIndent = rawIndentMatch[0];
@@ -99,10 +123,44 @@ export function splitLogicalLines(source: string): LogicalLine[] {
       text,
       indent: indentLevel(rawIndent),
       rawIndent,
+      segments,
     });
     i++;
   }
   return out;
+}
+
+/**
+ * 源侧「逻辑行」视图（S6 列级映射用；键 = 该逻辑行的**首个物理行号**，1 基）。
+ *
+ * 转译是 `source → AST → 产物` 的单向流，codegen 手里只有节点 `loc`；本视图补上
+ * 「那一行的逻辑全文 + 折行段」，让列区段能在**生成时**就地校验并落到物理列，
+ * 而不是事后拿正则去产物里回推（产物里没有源列信息，回推只能猜）。
+ */
+export interface SourceLineView {
+  /** 合并折行后的逻辑全文（含首行缩进） */
+  readonly text: string;
+  /** 折行段（升序；未折行 = 单段） */
+  readonly segments: readonly FoldSegment[];
+}
+
+export function sourceLineViews(source: string): Map<number, SourceLineView> {
+  const map = new Map<number, SourceLineView>();
+  for (const line of splitLogicalLines(source)) map.set(line.line, { text: line.text, segments: line.segments });
+  return map;
+}
+
+/**
+ * 逻辑偏移（0 基码元）→ 物理源位置（1 基列）。越界按尾段夹紧，绝不抛错——
+ * 列映射是**查询**，宁可给保守值也不静默失败。
+ */
+export function logicalPosition(segments: readonly FoldSegment[], offset: number): SugarPosition {
+  let seg = segments[0] ?? { offset: 0, line: 1, column: 1 };
+  for (const s of segments) {
+    if (s.offset > offset) break;
+    seg = s;
+  }
+  return { line: seg.line, column: seg.column + Math.max(0, offset - seg.offset) };
 }
 
 /** 缩进折算：TAB = 1 级；空格每 4 个 = 1 级（余数按 1 级算，避免半级丢失）；全角空格同理 */

@@ -47,6 +47,14 @@ import type {
   WhenExpr,
 } from '@kojo/plugin-api';
 import { lowerExpression, expandTarget, type ExprContext } from './expression';
+import {
+  buildColumnRuns,
+  clipAndShift,
+  identitySpec,
+  verbatimSpec,
+  type RunSpec,
+  type SourceLineView,
+} from './column-map';
 import { checkTimingArgsDeclaration, CJK, type SectionPreset } from './lexer';
 import { RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_NAMED_PARAMS, TIMING_SUCCESS_PARAM } from './keywords';
 import { isIdentPart, isIdentStart } from './identifier-chars';
@@ -57,6 +65,9 @@ import type { AliasTable, DiagnosticSink, DictionaryLookup, HeartBlock, RandomSh
 
 /** 函数头记号：产物第 1 列的 `@NAME`（带缩进的不是函数头） */
 const FUNCTION_HEADER_RE = /^@([A-Za-z0-9_一-龥]+)$/;
+
+/** 无源侧视图（= 关掉列级记录，行级行为逐字同旧版） */
+const EMPTY_VIEWS: ReadonlyMap<number, SourceLineView> = new Map();
 
 /**
  * **生成**头的函数名（`@NAME` 或 `@NAME(ARG,ARG:1)`；规范 §3.2 `参数:` 声明）。
@@ -92,21 +103,55 @@ class Emitter {
    * 由发射单元提供，而不是让每个 push 点多带一个参数。
    */
   private owner: number | null = null;
+  /**
+   * 源侧逻辑行视图（S6 列级映射）。缺省 = 无视图 ⇒ 全部只记行级（旧行为逐字不变）。
+   */
+  private views: ReadonlyMap<number, SourceLineView> = EMPTY_VIEWS;
+
+  setViews(views: ReadonlyMap<number, SourceLineView>): void {
+    this.views = views;
+  }
+
+  /** 源侧逻辑行视图（发射点用它定位 needle；无视图 ⇒ 该行不记列） */
+  viewOf(sourceLine: number): SourceLineView | undefined {
+    return this.views.get(sourceLine);
+  }
 
   setOwner(sourceLine: number | null): void {
     this.owner = sourceLine;
   }
 
-  /** 追加一行（`sourceLine` = null → 纯生成行，如 `ENDIF` / 骨架） */
-  push(indent: number, text: string, sourceLine: number | null = null): void {
+  /**
+   * 追加一行（`sourceLine` = null → 纯生成行，如 `ENDIF` / 骨架）。
+   *
+   * `runs` = 生成时就地拿到的列区段规格（源偏移 ↔ 产物偏移）；能否落账由
+   * `buildColumnRuns` 的逐码元相等校验决定，不通过则该行退化为纯行级映射。
+   */
+  push(indent: number, text: string, sourceLine: number | null = null, runs?: readonly RunSpec[]): void {
     this.lines.push('\t'.repeat(indent) + text);
-    this.map.push({ generatedLine: this.lines.length, sourceLine });
+    this.map.push({
+      generatedLine: this.lines.length,
+      sourceLine,
+      ...this.columnRuns(runs, text, indent, sourceLine),
+    });
     // 生成头允许带 `参数:` 声明（`@NAME(ARG,ARG:1)`）——比对时剥掉声明，
     // 否则带形参的时机头**逃过**「重复定义」检测（旧正则只认裸 `@NAME`）。
     if (indent === 0) {
       const name = GENERATED_HEADER_RE.exec(text)?.[1];
       if (name) this.noteDefinition(name, sourceLine ?? this.owner);
     }
+  }
+
+  /** 列区段落账（无视图 / 无源行 ⇒ 空对象，条目形状与旧版逐字相同）；`text` 是**未加缩进**的行文本 */
+  private columnRuns(
+    runs: readonly RunSpec[] | undefined,
+    text: string,
+    indent: number,
+    sourceLine: number | null,
+  ): Pick<SugarSourceMapEntry, 'runs'> {
+    if (!runs || runs.length === 0 || sourceLine === null) return {};
+    const built = buildColumnRuns(runs, text, indent, sourceLine, this.views.get(sourceLine));
+    return built.length > 0 ? { runs: built } : {};
   }
 
   /** 追加一行但**不**记源映射（用于纯骨架行；等价于 sourceLine=null） */
@@ -120,10 +165,14 @@ class Emitter {
     this.map.push({ generatedLine: this.lines.length, sourceLine: null });
   }
 
-  /** 原始行（原生直通块）：逐行透传，保留原缩进 */
-  pushRaw(text: string, sourceLine: number | null): void {
+  /** 原始行（原生直通块）：逐行透传，保留原缩进（列基准 = 逻辑全文 0 偏移，校验不过不记） */
+  pushRaw(text: string, sourceLine: number | null, runs?: readonly RunSpec[]): void {
     this.lines.push(text);
-    this.map.push({ generatedLine: this.lines.length, sourceLine });
+    this.map.push({
+      generatedLine: this.lines.length,
+      sourceLine,
+      ...this.columnRuns(runs, text, 0, sourceLine),
+    });
     if (/^@/.test(text)) {
       const m = FUNCTION_HEADER_RE.exec(text);
       if (m) this.noteDefinition(m[1]!, sourceLine ?? this.owner);
@@ -193,6 +242,11 @@ export interface CodegenOptions {
   libraryTable?: KojoLibraryTable;
   sink: DiagnosticSink;
   options: SugarTranspileOptions;
+  /**
+   * 源侧逻辑行视图（S6 列级映射）。缺省 = 不记列，`sourceMap` 与旧版逐字同形。
+   * 由调用方（`service.transpile`）从**同一份源文本**切出；键 = 逻辑行首个物理行号。
+   */
+  views?: ReadonlyMap<number, SourceLineView>;
 }
 
 /** `LOCAL:N` 槽位分配器（规范 §5.4：每块独占、嵌套递增） */
@@ -228,6 +282,7 @@ export function codegen(
   opts: CodegenOptions,
 ): { erb: string; sourceMap: SugarSourceMapEntry[] } {
   const em = new Emitter();
+  em.setViews(opts.views ?? EMPTY_VIEWS);
   const fm = opts.frontMatter;
   const charNo = fm.charNo ?? '';
   const familySeg = familySegment(fm.family);
@@ -237,7 +292,7 @@ export function codegen(
   // 生成的三件套函数是**从头部声明派生**的，注释自然该在派生结果之前。
   for (const node of topLevel) {
     if (node.kind !== 'comment') continue;
-    em.push(0, node.text, node.loc.start.line);
+    em.push(0, node.text, node.loc.start.line, verbatimRow(em, node));
   }
 
   // ---- 头部：登记函数 + 开关（规范 §5.5 三件套之登记/开关）----
@@ -340,7 +395,7 @@ export function codegen(
   for (const raw of raws) {
     if (em.length > 0) em.blank();
     em.setOwner(raw.loc.start.line);
-    for (const line of raw.lines) em.pushRaw(line, raw.loc.start.line);
+    for (const line of raw.lines) em.pushRaw(line, raw.loc.start.line, verbatimSpec(0, line.length));
   }
 
   // ---- 产物层撞名（写法面上看不出冲突、引擎侧却是「重复定义」）----
@@ -594,7 +649,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
     for (const node of timing.body) {
       if (node.kind === 'sectionBlock') emitSectionBlock(em, node, bodyCtx, bodyIndent);
       // 顶层注释仍然落进产物（"注释不能丢"）——它不是语句，不参与混排判据
-      else if (node.kind === 'comment') em.push(bodyIndent, node.text, node.loc.start.line);
+      else if (node.kind === 'comment') em.push(bodyIndent, node.text, node.loc.start.line, verbatimRow(em, node));
     }
   } else if (!empty) {
     em.pushGenerated(0, `IF LOCAL`);
@@ -1220,7 +1275,7 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
     case 'comment':
       // 注释原样落进产物（第 3 条：注释不能丢）。缩进跟着所在层级走——产物里的
       // 注释在 ERB 里是惰性的，缩进只影响可读性，但"和代码同层"才看得出它属于谁。
-      em.push(indent, node.text, node.loc.start.line);
+      em.push(indent, node.text, node.loc.start.line, verbatimRow(em, node));
       break;
     case 'callStatement':
       // `调用 名字(实参)`（B4 批）：语句位置调用 → `CALL <产物名>[(实参)]`。
@@ -1231,7 +1286,7 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
       emitReturnStatement(em, node, ctx, indent);
       break;
     case 'rawFunctionBlock':
-      for (const line of node.lines) em.pushRaw(line, node.loc.start.line);
+      for (const line of node.lines) em.pushRaw(line, node.loc.start.line, verbatimSpec(0, line.length));
       break;
     case 'ifExpr':
       emitIfExpr(em, node, ctx, indent);
@@ -1271,12 +1326,18 @@ function emitBody(em: Emitter, body: readonly SugarNode[], ctx: BodyContext, ind
       emitStatement(em, node, ctx, indent);
       continue;
     }
-    const text = textBody(node, ctx).raw.replace(PLAYER_PREFIX_RE, '');
+    const base = rawBase(em, node);
+    const parsed = textBody(node, ctx, base);
+    // `你：` 前缀不进产物 ⇒ 区段整体左移其宽度；位移后为负的段（落在被剥掉的前缀里）自动丢弃
+    const text = parsed.raw.replace(PLAYER_PREFIX_RE, '');
+    const stripped = parsed.raw.length - text.length;
+    const runs = clipAndShift(parsed.runs, stripped, parsed.raw.length, 0);
     const color = resolvePlayerColor(node, ctx);
     if (color === null) {
       // 未声明 `自机色:` 且 adapter 无缺省 → 退化：按普通旁白输出（已报 `face-table-missing`）
       closeRun();
-      em.push(indent, printLine(text, detectSpeechText(text), node.wait, ctx), node.loc.start.line);
+      const line = printLine(text, detectSpeechText(text), node.wait, ctx);
+      em.push(indent, line, node.loc.start.line, clipAndShift(runs, 0, Number.POSITIVE_INFINITY, line.length - text.length));
       continue;
     }
     if (!run) {
@@ -1284,11 +1345,13 @@ function emitBody(em: Emitter, body: readonly SugarNode[], ctx: BodyContext, ind
       run = true;
     }
     // 非 D 变体：D 系忽略 `SETCOLOR`（= 旁白色），自机台词靠 `SETCOLOR` 上色。
-    em.push(
-      indent,
-      text.length === 0 ? (node.wait ? 'PRINTFORMDW' : 'PRINTFORML') : `PRINTFORM${node.wait ? 'W' : 'L'} ${text}`,
-      node.loc.start.line,
-    );
+    const line =
+      text.length === 0
+        ? node.wait
+          ? 'PRINTFORMDW'
+          : 'PRINTFORML'
+        : `PRINTFORM${node.wait ? 'W' : 'L'} ${text}`;
+    em.push(indent, line, node.loc.start.line, clipAndShift(runs, 0, Number.POSITIVE_INFINITY, text.length === 0 ? 0 : line.length - text.length));
   }
   closeRun();
 }
@@ -1350,13 +1413,18 @@ function emitRawLine(
 ): void {
   const assign = (node as { _assign?: { target: string; expr: string } })._assign;
   if (!assign) {
-    em.push(indent, node.text, node.loc.start.line);
+    em.push(indent, node.text, node.loc.start.line, verbatimRow(em, node));
     return;
   }
   const target = expandTarget(assign.target, exprCtx(ctx, node.loc.start));
   if (target === null) return; // 只读别名：已在 expandTarget 报诊断，不产出半成品
   const value = lowerExpression(assign.expr, exprCtx(ctx, node.loc.start));
-  em.push(indent, `${target} = ${value}`, node.loc.start.line);
+  const line = `${target} = ${value}`;
+  const view = viewTextOf(em, node.loc.start.line);
+  em.push(indent, line, node.loc.start.line, [
+    ...identitySpec(view, assign.target, contentBase(node), 0),
+    ...identitySpec(view, assign.expr, contentBase(node), line.length - value.length),
+  ]);
 }
 
 /* ------------------------------ 用户函数（B4 批：公共段 / 自定义函数最小形） ------------------------------ */
@@ -1577,6 +1645,35 @@ function emitReturnStatement(em: Emitter, node: ReturnStatement, ctx: BodyContex
 
 /* ------------------------------ 文本行 / 心形（§5.1 / §5.2 / §3.9） ------------------------------ */
 
+/**
+ * 列基准（S6）：节点内容在**逻辑全文**里的 0 基码元偏移。
+ *
+ * `-1` = 该行没有可用的源侧视图（⇒ 本行不记列，退现行级）。行内体（`如果 …： 内容`
+ * 的单行形，parser 的合成逻辑行）与块首混写时基准会失配，由 `buildColumnRuns` 的
+ * 逐码元相等校验兜底丢弃——本函数只做**便宜的**前缀一致预检，不承诺精确。
+ */
+function rawBase(em: Emitter, node: TextLine | HeartLine): number {
+  const base = node.loc.start.column - 1;
+  if (base < 0) return -1;
+  return em.viewOf(node.loc.start.line) ? base : -1;
+}
+
+/** 该源行的逻辑全文（无视图 ⇒ 空串 ⇒ `identitySpec` 一律定位不到 ⇒ 不记列） */
+function viewTextOf(em: Emitter, sourceLine: number): string {
+  return em.viewOf(sourceLine)?.text ?? '';
+}
+
+/** 节点内容在逻辑全文里的起点（块头 / 注释 / 原生行同一口径） */
+function contentBase(node: { loc: { start: { line: number; column: number } } }): number {
+  return node.loc.start.column - 1;
+}
+
+/** 产物行 = 源文本原样（注释 / 原生直通行）⇒ 一条覆盖整行的恒等区段 */
+function verbatimRow(em: Emitter, node: { text: string; loc: { start: { line: number; column: number } } }): RunSpec[] {
+  if (!em.viewOf(node.loc.start.line)) return [];
+  return verbatimSpec(contentBase(node), node.text.length);
+}
+
 function emitTextLine(
   em: Emitter,
   node: TextLine | HeartLine,
@@ -1587,32 +1684,57 @@ function emitTextLine(
   forceNonD = false,
 ): void {
   const sourceLine = node.loc.start.line;
+  const base = rawBase(em, node);
+  const view = em.viewOf(sourceLine);
 
   // ---- §5.2 第 0 步（前置判定）：纯条件行 → IF 块 ----
   const pure = pureConditionalBody(node, ctx);
   if (pure) {
     const cond = lowerExpression(pure.condText, exprCtx(ctx, pure.condLoc));
-    em.push(indent, `IF ${cond}`, sourceLine);
+    em.push(
+      indent,
+      `IF ${cond}`,
+      sourceLine,
+      view ? identitySpec(view.text, pure.condText, base < 0 ? 0 : base, 3) : [],
+    );
     const inner = pure.thenText;
     const speech = detectSpeechText(inner);
-    if (heart) {
-      em.push(indent + 1, heartCall(inner, speech, node.wait), sourceLine);
-    } else {
-      em.push(indent + 1, printLine(inner, speech, node.wait, ctx), sourceLine);
-    }
+    // `thenText` 是插值内的字面片段（源里原样存在）；产物把它包进 `PRINTFORM`/`HPH_PRINT`
+    // 前缀之后 ⇒ 定位 needle、算出体起始偏移，仍是一段恒等区段。
+    const line = heart ? heartCall(inner, speech, node.wait) : printLine(inner, speech, node.wait, ctx);
+    const at = inner.length > 0 ? line.indexOf(inner) : -1;
+    em.push(
+      indent + 1,
+      line,
+      sourceLine,
+      view && at >= 0 ? identitySpec(view.text, inner, base < 0 ? 0 : base, at) : [],
+    );
     em.push(indent + 1 - 1, `ENDIF`, null);
     return;
   }
 
   // ---- 常规：整行文本体转译 ----
-  const body = textBody(node, ctx);
+  const body = textBody(node, ctx, base);
   // `心形：` 块内的 `你：` 行：只剥行首前缀（色由调用方按 run 口径另发），正文进 `HPH_PRINT` 时不留前缀
   const text = stripPlayerPrefix ? body.raw.replace(PLAYER_PREFIX_RE, '') : body.raw;
+  // 剥掉的行首宽度：区段窗口整体左移它，落在前缀内的段丢弃（位移后为负 ⇒ 窗外）
+  const stripped = body.raw.length - text.length;
+  const windowed = clipAndShift(body.runs, stripped, body.raw.length, 0);
   if (heart) {
     // `forceNonD`：自机台词一律非 D 变体——`dw/dl` 忽略 `SETCOLOR`，上了色也看不见
-    em.push(indent, heartCall(text, forceNonD ? true : node.speech, node.wait), sourceLine);
+    const call = heartCallAnchored(text, forceNonD ? true : node.speech, node.wait);
+    em.push(
+      indent,
+      call.line,
+      sourceLine,
+      call.innerAt < 0
+        ? []
+        : clipAndShift(windowed, call.innerAt, call.innerAt + call.inner.length, HEART_PRINT_PREFIX.length),
+    );
   } else {
-    em.push(indent, printLine(text, node.speech, node.wait, ctx), sourceLine);
+    const line = printLine(text, node.speech, node.wait, ctx);
+    // 体在产物行里的起始偏移 = 行宽 - 体宽（`printLine` 只在体前加前缀，不削体）
+    em.push(indent, line, sourceLine, clipAndShift(windowed, 0, Number.POSITIVE_INFINITY, line.length - text.length));
   }
 }
 
@@ -1657,21 +1779,32 @@ function sourceTextOf(node: TextLine | HeartLine): string {
 /**
  * 常规文本体转译（规范 §5.2）。
  * 逐字符扫描：插值 → 分支；落单 `%` → 告警；其它原样。
+ *
+ * `base` ≥ 0 时**顺路记下列区段**（S6）：字面片段是逐码元恒等拷贝 ⇒ 源偏移 = base +
+ * 片段起点，产物偏移 = 拼接时的 `out.length`；插值展开位是生成内容 ⇒ 留空（查询端夹紧）。
  */
-function textBody(node: TextLine | HeartLine, ctx: BodyContext): { raw: string } {
+function textBody(node: TextLine | HeartLine, ctx: BodyContext, base = -1): { raw: string; runs: RunSpec[] } {
   const source = sourceTextOf(node);
   const interps = [...node.interpolations].sort((a, b) => a.loc.start.column - b.loc.start.column);
   let out = '';
   let cursor = 0;
+  const runs: RunSpec[] = [];
+  // 恒等拷贝一段源文本（同时记区段）
+  const copy = (from: number, to: number): void => {
+    const slice = source.slice(from, to);
+    if (slice.length === 0) return;
+    if (base >= 0) runs.push({ generatedOffset: out.length, length: slice.length, sourceOffset: base + from });
+    out += slice;
+  };
   for (const it of interps) {
     if (it.loc.start.line !== it.loc.end.line) continue;
-    out += source.slice(cursor, it.loc.start.column - 1);
+    copy(cursor, it.loc.start.column - 1);
     out += renderInterpolation(it, ctx);
     cursor = it.loc.end.column - 1;
   }
-  out += source.slice(cursor);
-  out = scanStrayPercent(out, node, ctx);
-  return { raw: out };
+  copy(cursor, source.length);
+  // `scanStrayPercent` 只报诊断、不改文本 ⇒ 区段保持对齐
+  return { raw: scanStrayPercent(out, node, ctx), runs };
 }
 
 /** 插值 → FORM 片段（规范 §3.4 表） */
@@ -1815,7 +1948,19 @@ function heartCall(text: string, speech: boolean, wait: boolean): string {
   const d = !speech; // 心形沿用"旁白走 D 系"的同构规则（w/l ↔ dw/dl）
   const mode = (d ? 'd' : '') + (wait ? 'w' : 'l');
   const inner = speech ? stripQuotesForHeart(text) : text;
-  return `CALL HPH_PRINT(@"${inner}","${mode}")`;
+  return `${HEART_PRINT_PREFIX}${inner}","${mode}")`;
+}
+
+/** `CALL HPH_PRINT(@"` —— 心形调用里文本体之前的固定前缀（宽 = 文本体在产物行的起始偏移） */
+const HEART_PRINT_PREFIX = 'CALL HPH_PRINT(@"';
+
+/**
+ * 同 `heartCall`，另给「体原文里 `@""` 内那段文本的起点」（S6 列区段的裁剪窗口）。
+ * 引号剥离/`trim` 后找不到定位点（空体）⇒ `-1`，调用方不记列。
+ */
+function heartCallAnchored(text: string, speech: boolean, wait: boolean): { line: string; inner: string; innerAt: number } {
+  const inner = speech ? stripQuotesForHeart(text) : text;
+  return { line: heartCall(text, speech, wait), inner, innerAt: inner.length > 0 ? text.indexOf(inner) : -1 };
 }
 
 /** 剥离台词引号（`「…」` / `｢…｣` / `"…"`）——仅心形使用 */
@@ -1834,10 +1979,14 @@ function emitIfBlock(em: Emitter, node: IfBlock, ctx: BodyContext, indent: numbe
   for (const branch of node.branches) {
     if (branch.kind === 'if') {
       const cond = lowerExpression(branch.condition, exprCtx(ctx, branch.loc.start));
-      em.push(indent, `IF ${cond}`, branch.loc.start.line);
+      em.push(indent, `IF ${cond}`, branch.loc.start.line, [
+        ...identitySpec(viewTextOf(em, branch.loc.start.line), branch.condition, contentBase(branch), 3),
+      ]);
     } else if (branch.kind === 'elseif') {
       const cond = lowerExpression(branch.condition, exprCtx(ctx, branch.loc.start));
-      em.push(indent, `ELSEIF ${cond}`, branch.loc.start.line);
+      em.push(indent, `ELSEIF ${cond}`, branch.loc.start.line, [
+        ...identitySpec(viewTextOf(em, branch.loc.start.line), branch.condition, contentBase(branch), 7),
+      ]);
     } else {
       em.push(indent, `ELSE`, branch.loc.start.line);
     }
@@ -1850,7 +1999,9 @@ function emitIfBlock(em: Emitter, node: IfBlock, ctx: BodyContext, indent: numbe
 
 function emitWhenBlock(em: Emitter, node: WhenBlock, ctx: BodyContext, indent: number): void {
   const subject = lowerExpression(node.subject, exprCtx(ctx, node.loc.start));
-  em.push(indent, `SELECTCASE ${subject}`, node.loc.start.line);
+  em.push(indent, `SELECTCASE ${subject}`, node.loc.start.line, [
+    ...identitySpec(viewTextOf(em, node.loc.start.line), node.subject, contentBase(node), 11),
+  ]);
   for (const branch of node.branches) {
     if (branch.kind === 'case') {
       em.push(indent + 1, `CASE ${renderCaseValues(branch.values, ctx, branch.loc.start)}`, branch.loc.start.line);
@@ -2154,7 +2305,7 @@ function emitHeartBlock(em: Emitter, node: HeartBlock, ctx: BodyContext, indent:
   for (const child of node.body) {
     if (child.kind === 'comment') {
       closeRun();
-      em.push(indent, child.text, child.loc.start.line);
+      em.push(indent, child.text, child.loc.start.line, verbatimRow(em, child));
       continue;
     }
     // 块体在 parser 段已保证只有「文本行（`heartLine`）/ 注释」两类（`_invalid` 拦下其余）
@@ -2192,7 +2343,14 @@ function emitIfExpr(em: Emitter, node: IfExpr, ctx: BodyContext, indent: number)
       em.push(indent, `ELSE`, branch.loc.start.line);
     } else {
       const cond = lowerExpression(branch.condition, exprCtx(ctx, branch.loc.start));
-      em.push(indent, branch.kind === 'if' ? `IF ${cond}` : `ELSEIF ${cond}`, branch.loc.start.line);
+      em.push(indent, branch.kind === 'if' ? `IF ${cond}` : `ELSEIF ${cond}`, branch.loc.start.line, [
+        ...identitySpec(
+          viewTextOf(em, branch.loc.start.line),
+          branch.condition,
+          contentBase(branch),
+          branch.kind === 'if' ? 3 : 7,
+        ),
+      ]);
     }
     const valueNode = branch.body[0];
     if (valueNode) {

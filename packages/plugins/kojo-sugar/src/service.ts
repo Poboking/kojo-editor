@@ -34,6 +34,8 @@ import type {
 import { fullwidthSpaceLines, isReadonlyAlias, resolveSugarTarget, SugarCompileError } from '@kojo/plugin-api';
 import { buildDoc, type TopNode } from './parser';
 import { codegen } from './codegen';
+import { generatedPositionOf, sourceColumnOfEntry } from './column-map';
+import { sourceLineViews } from './lexer';
 import { compileToBytes as runCompileToBytes, compileToFile as runCompileToFile } from './compile';
 import type { AliasEntry, AliasTable, DiagnosticSink, DictionaryLookup } from './types';
 
@@ -145,6 +147,9 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       libraryTable,
       sink,
       options,
+      // 列级映射（S6）：与源文本同一次切分出的逻辑行视图（含折行段）——
+      // codegen 用它就地校验「产物这段 == 源这段」，不过校验的段一律不记。
+      views: sourceLineViews(source),
     });
 
     return { erb, sourceMap, diagnostics: sink.all() };
@@ -154,6 +159,22 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     const entry = result.sourceMap.find((e) => e.generatedLine === generatedLine);
     if (!entry || entry.sourceLine === null) return null;
     return { line: entry.sourceLine, column: entry.span?.start.column ?? 1 };
+  }
+
+  /** 产物列 → 源位置（S6；行级 `sourceOf` 的逐字超集，纯查询零 IO） */
+  function sourceColumnOf(
+    result: SugarTranspileResult,
+    generatedLine: number,
+    generatedColumn: number,
+  ): SugarPosition | null {
+    const entry = result.sourceMap.find((e) => e.generatedLine === generatedLine);
+    if (!entry) return null;
+    return sourceColumnOfEntry(entry, generatedColumn);
+  }
+
+  /** 源位置 → 产物位置（S6 正向索引；改写区无区段可依 ⇒ null，不猜） */
+  function generatedOf(result: SugarTranspileResult, source: SugarPosition): SugarPosition | null {
+    return generatedPositionOf(result, source);
   }
 
   /**
@@ -210,5 +231,5 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     return runCompileToBytes(transpile, source, options, targetLabel);
   }
 
-  return { parse, transpile, sourceOf, compileToFile, compileToBytes, planSave };
+  return { parse, transpile, sourceOf, sourceColumnOf, generatedOf, compileToFile, compileToBytes, planSave };
 }
