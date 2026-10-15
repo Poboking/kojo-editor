@@ -144,17 +144,6 @@ export interface FileIO {
    * 一条没人用的能力。要恢复请照 `exportFile` 的形态重新加，别留"以防万一"。）
    */
   exportFile(fileName: string, bytes: Uint8Array, opts?: { title?: string }): Promise<string | null>;
-}
-
-/**
- * 平台桥的路径原语（市场批 KM-2 起对插件可见）。
- *
- * **为什么不直接写进 `FileIO`**：本仓有 5 处测试替身按 `const io: FileIO = {...}`
- * 逐方法实现（其中 2 处住在冻结包 `kojo-sugar` 里），加必填成员 = 当场撕裂它们。
- * 故本组能力以**独立接口 + 运行期窄化**additive 落地：`FileIO` 一个字节没动，
- * 内核 `FileIOServiceImpl` 恒实现这两张面，需要时由 `withPathPrimitives` 取。
- */
-export interface IoPathPrimitives {
   /**
    * 应用数据目录（**平台桥已有原语的内核透传**）。
    *
@@ -174,24 +163,6 @@ export interface IoPathPrimitives {
    * 同样先过 `assertWritable`——删是比写更狠的盘上动作。
    */
   removeDir(path: string): Promise<void>;
-}
-
-/** 一张面都齐的 io（内核实现恒齐；插件经 `withPathPrimitives` 拿到本类型） */
-export type FileIOWithPaths = FileIO & IoPathPrimitives;
-
-/**
- * 把 `FileIO` 窄化成 `FileIOWithPaths`（**运行期真检**，不是 `as` 骗编译器）。
- * 平台桥/替身缺能力时抛错并点名缺哪个方法——绝不静默退化成一个"多半能用"的假设。
- */
-export function withPathPrimitives(io: FileIO): FileIOWithPaths {
-  const cand = io as unknown as Partial<IoPathPrimitives>;
-  const missing = (['appDataDir', 'rename', 'removeDir'] as const).filter(
-    (m) => typeof cand[m] !== 'function',
-  );
-  if (missing.length > 0) {
-    throw new Error(`FileIO lacks platform path primitives: ${missing.join(', ')}`);
-  }
-  return io as FileIOWithPaths;
 }
 
 /** 越权写入错误（内核抛出、UI 捕获展示） */

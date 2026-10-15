@@ -48,16 +48,8 @@ export type {
 
 export type { ScopedStorage, StorageService } from './storage';
 
-export { WriteNotAllowedError, withPathPrimitives } from './io';
-export type {
-  BackupVersion,
-  EolStyle,
-  FileIO,
-  FileIOWithPaths,
-  IoPathPrimitives,
-  TextFile,
-  WriteTextOptions,
-} from './io';
+export { WriteNotAllowedError } from './io';
+export type { BackupVersion, EolStyle, FileIO, TextFile, WriteTextOptions } from './io';
 
 export {
   MARKET_SCHEMA_VERSION,
@@ -79,6 +71,7 @@ export {
   MarketError,
   packEntryPathProblem,
   packFilesProblem,
+  packIdKindConflicts,
   compareVersions,
   coreVersion,
   minAppVersionSatisfied,
@@ -92,6 +85,7 @@ export type {
   PackFileEntry,
   PackKind,
   PackManifest,
+  PackRef,
 } from './market';
 
 export { ProjectDetectionError } from './project';

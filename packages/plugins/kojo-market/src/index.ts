@@ -1,7 +1,7 @@
 /**
  * @kojo/plugin-kojo-market
  *
- * 口上市场 v1 插件（服务 `market.index`）——**无服务器**：注册表是公开 GitHub 仓里的
+ * 口上市场 v1 插件（服务 `market`）——**无服务器**：注册表是公开 GitHub 仓里的
  * `index.json`，容器是 ZIP，权威校验锚是 `pack.json` 里的**逐文件 sha256**。
  *
  * 本批（KM-2）范围：离线闭环 = **本地目录源**装卸 + 校验 + 落点 + 记账。
@@ -26,7 +26,6 @@ import {
   KernelServices,
   coreVersion,
   join,
-  withPathPrimitives,
   type FileIO,
   type MarketService,
   type Plugin,
@@ -59,7 +58,7 @@ export function createKojoMarketPlugin(opts: KojoMarketPluginOptions): Plugin {
     requires: [KernelServices.IO],
     provides: [MARKET_SERVICE_KEY],
     async activate(ctx): Promise<void> {
-      const io = withPathPrimitives(ctx.inject<FileIO>(KernelServices.IO));
+      const io = ctx.inject<FileIO>(KernelServices.IO);
       const appData = await io.appDataDir();
       const root = join(appData, MARKET_DIR_NAME);
 

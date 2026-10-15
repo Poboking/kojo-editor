@@ -5,7 +5,6 @@ import type {
   FileEncoding,
   FileIO,
   FileStat,
-  IoPathPrimitives,
   Logger,
   PlatformBridge,
   RawFileRead,
@@ -111,7 +110,7 @@ export function parseBackupTakenAtMs(id: string): number | null {
   return Number.isNaN(d.getTime()) ? null : d.getTime();
 }
 
-export class FileIOServiceImpl implements FileIO, IoPathPrimitives {
+export class FileIOServiceImpl implements FileIO {
   private writableRoots: string[] = [];
   /** 应用自有常驻可写根（工作区等；不受 setWritableRoots([]) 收回影响） */
   private appWritableRoots: string[] = [];

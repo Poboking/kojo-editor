@@ -119,6 +119,9 @@ function makeFs(io: HarnessOptions = {}) {
     setWritableRoots: () => {},
     setAppWritableRoots: () => {},
     addAppWritableRoot: () => {},
+    appDataDir: async () => '/appdata',
+    rename: async () => { throw new Error('rename is not wired in this fake'); },
+    removeDir: async () => { throw new Error('removeDir is not wired in this fake'); },
     chooseWorkspaceRoot: async () => {
       throw new Error('chooseWorkspaceRoot is not supported by this fake');
     },
