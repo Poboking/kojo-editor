@@ -1,5 +1,6 @@
 /**
- * E13 批 · 段块糖（`段 <ERB条件> [关]：`）+ 投影**段级吸收** + 投影标签可写回。
+ * E13 批 · 段块糖（`若 <ERB条件> [（关）]：`；旧形 `段 …：` / `段 … 关：` 兼容）
+ * + 投影**段级吸收** + 投影标签可写回。
  *
  * E13 报红的原话是「把投影结果原样贴进 `.kojo` 保存」期望**零 error**。所以本文件的
  * 主判据不是"产了几行"，而是三段闭环：
@@ -57,9 +58,9 @@ const segText = (source: string): string[] =>
 /* ============================================================================ */
 
 describe('E13-A 写侧 · 段块产物逐字', () => {
-  const src = doc('\t段 NOWEX:噴乳：\n\t\t「涩涩的话」\n\t段 TFLAG:193 关：\n\t\t「日常的对话」\n');
+  const src = doc('\t若 NOWEX:噴乳：\n\t\t「涩涩的话」\n\t若 TFLAG:193（关）：\n\t\t「日常的对话」\n');
 
-  it('两段（含 `关`）→ 逐段信封；`RETURN 1` 全函数只一次', () => {
+  it('两段（含 `（关）`）→ 逐段信封；`RETURN 1` 全函数只一次', () => {
     expect(errsOf(src)).toEqual([]);
     expect(bodyOf(productOf(src))).toEqual([
       '@M_KOJO_MESSAGE_PALAMCNG_B_K12_1',
@@ -89,31 +90,77 @@ describe('E13-A 写侧 · 段块产物逐字', () => {
     expect(productOf(src)).not.toMatch(/^IF LOCAL$/m);
   });
 
-  it('负自证：去掉 `段` 关键字 ⇒ 块头不成立，缩进的正文立刻报红（不是静默少一层）', () => {
+  it('负自证：去掉 `若` 关键字 ⇒ 块头不成立，缩进的正文立刻报红（不是静默少一层）', () => {
     const broken = doc('\tNOWEX:噴乳：\n\t\t「涩涩的话」\n');
     expect(codesOf(broken)).toContain('indent-mismatch');
   });
 
   it('负自证：段体不缩进 ⇒ 该段没有正文，报 error 不产空段', () => {
-    const flat = doc('\t段 NOWEX:噴乳：\n\t「涩涩的话」\n');
+    const flat = doc('\t若 NOWEX:噴乳：\n\t「涩涩的话」\n');
     expect(codesOf(flat)).toContain('block-empty');
   });
 });
 
+describe('P-1R 语言表层 · 新形 `若` / 旧形兼容 / 头位闸', () => {
+  it('旧形头 `段` / `section` 的产物与 `若` **逐字相同**（兼容受理、产物不变）', () => {
+    expect(productOf(doc('\t段 NOWEX:噴乳：\n\t\t「甲」\n'))).toBe(productOf(doc('\t若 NOWEX:噴乳：\n\t\t「甲」\n')));
+    expect(productOf(doc('\tsection TFLAG:193 关：\n\t\t「甲」\n'))).toBe(
+      productOf(doc('\t若 TFLAG:193（关）：\n\t\t「甲」\n')),
+    );
+  });
+
+  it('旧形尾随 `关` 仍受理：`段 TFLAG:193 关：` ⇒ `LOCAL = 0`（与 `若 …（关）：` 同产物）', () => {
+    expect(errsOf(doc('\t段 TFLAG:193 关：\n\t\t「甲」\n'))).toEqual([]);
+    const legacy = bodyOf(productOf(doc('\t段 TFLAG:193 关：\n\t\t「甲」\n')));
+    expect(legacy).toContain('LOCAL = 0');
+    expect(legacy).toContain('IF LOCAL && TFLAG:193');
+  });
+
+  it('行尾 `（关）` = **停用态**（記入チェック＝0，与普通条件不同轴）：`LOCAL = 0` + `IF LOCAL && <条件>`', () => {
+    expect(errsOf(doc('\t若 NOWEX:噴乳（关）：\n\t\t「甲」\n'))).toEqual([]);
+    const lines = bodyOf(productOf(doc('\t若 NOWEX:噴乳（关）：\n\t\t「甲」\n')));
+    expect(lines).toContain('LOCAL = 0');
+    expect(lines).toContain('IF LOCAL && NOWEX:噴乳'); // 条件照写，未被 `（关）` 改写
+  });
+
+  it('条件里的 `非 X` = **逻辑否定**（不是停用态）：`LOCAL = 1` + `IF LOCAL && !X`', () => {
+    expect(errsOf(doc('\t若 非 NOWEX:噴乳：\n\t\t「甲」\n'))).toEqual([]);
+    const lines = bodyOf(productOf(doc('\t若 非 NOWEX:噴乳：\n\t\t「甲」\n')));
+    expect(lines).toContain('LOCAL = 1'); // 否定 ≠ 停用 ⇒ 仍是 1
+    expect(lines).toContain('IF LOCAL && ! NOWEX:噴乳');
+  });
+
+  it('负自证：伪头「若干年后：」不是段头（首词非独立关键字 ⇒ 落回普通文本）', () => {
+    const pseudo = doc('\t若干年后：\n\t\t「甲」\n');
+    expect(productOf(pseudo)).not.toContain('IF LOCAL && '); // 没折出段信封
+    expect(codesOf(pseudo)).toContain('indent-mismatch');
+  });
+
+  it('负自证：新形 `若` 必须行尾**全角** `：`（半角 `:` 落回普通行）', () => {
+    const half = doc('\t若 NOWEX:噴乳:\n\t\t「甲」\n');
+    expect(productOf(half)).not.toContain('IF LOCAL && ');
+    expect(codesOf(half)).toContain('indent-mismatch');
+  });
+
+  it('负自证：`非 首次` 无意义（保留段名整串匹配）⇒ 报 `unknown-identifier`', () => {
+    expect(codesOf(doc('\t若 非 首次：\n\t\t「甲」\n'))).toContain('unknown-identifier');
+  });
+});
+
 describe('E13-A 写侧 · 段条件与 `如果` 同源（不另造一套条件语法）', () => {
-  it('`段 她的恋慕 >= 1：` 的条件降糖 == `如果 她的恋慕 >= 1：`', () => {
+  it('`若 她的恋慕 >= 1：` 的条件降糖 == `如果 她的恋慕 >= 1：`', () => {
     const asIf = bodyOf(productOf(doc('\t如果 她的恋慕 >= 1：\n\t\t「甲」\n'))).find((l) => l.startsWith('IF '));
-    const asSec = bodyOf(productOf(doc('\t段 她的恋慕 >= 1：\n\t\t「甲」\n'))).find((l) => l.startsWith('IF '));
+    const asSec = bodyOf(productOf(doc('\t若 她的恋慕 >= 1：\n\t\t「甲」\n'))).find((l) => l.startsWith('IF '));
     expect(asIf).toBe('IF LOCAL'); // 普通正文的条件写在信封里那层
     expect(asSec).toBe('IF LOCAL && TALENT:TARGET:恋慕 >= 1');
   });
 
   it('负自证：段条件里拼错的标识符照样 `unknown-identifier`（白名单没被段头绕开）', () => {
-    expect(codesOf(doc('\t段 噴乳乳瞎写：\n\t\t「甲」\n'))).toContain('unknown-identifier');
+    expect(codesOf(doc('\t若 噴乳乳瞎写：\n\t\t「甲」\n'))).toContain('unknown-identifier');
   });
 
-  it('`关` 只认**独立尾词**：`段 NOWEX:噴乳关：` 里的 `关` 是条件的一部分，不算标记', () => {
-    const merged = bodyOf(productOf(doc('\t段 NOWEX:噴乳关：\n\t\t「甲」\n')));
+  it('`关` 只认**独立尾词**：`若 NOWEX:噴乳关：` 里的 `关` 是条件的一部分，不算标记', () => {
+    const merged = bodyOf(productOf(doc('\t若 NOWEX:噴乳关：\n\t\t「甲」\n')));
     // 没被当成 `关` ⇒ 仍是 LOCAL = 1，且条件里带着那个 `关`（原样进产物，不静默改名）
     expect(merged).toContain('LOCAL = 1');
     expect(merged).toContain('IF LOCAL && NOWEX:噴乳关');
@@ -122,18 +169,18 @@ describe('E13-A 写侧 · 段条件与 `如果` 同源（不另造一套条件�
 
 describe('E13-A 写侧 · 骨架冲突一律 fail-closed（不拼半成品）', () => {
   it('段与普通语句混排 → `section-mixed`，且**不产出正文函数**', () => {
-    const mixed = doc('\t段 NOWEX:噴乳：\n\t\t「甲」\n\t「乙」\n');
+    const mixed = doc('\t若 NOWEX:噴乳：\n\t\t「甲」\n\t「乙」\n');
     expect(codesOf(mixed)).toContain('section-mixed');
     expect(productOf(mixed)).not.toContain('@M_KOJO_MESSAGE_PALAMCNG_B_K12_1');
   });
 
   it('段内再写段 → `section-nested`（库内信封段是同层的）', () => {
-    const nested = doc('\t段 NOWEX:噴乳：\n\t\t段 TFLAG:193：\n\t\t\t「甲」\n');
+    const nested = doc('\t若 NOWEX:噴乳：\n\t\t若 TFLAG:193：\n\t\t\t「甲」\n');
     expect(codesOf(nested)).toContain('section-nested');
   });
 
   it('负自证：段体里用 `如果` 分叉是**合法**的（不许把嵌套判据放宽成"段内不许有块"）', () => {
-    expect(codesOf(doc('\t段 NOWEX:噴乳：\n\t\t如果 TFLAG:193：\n\t\t\t「甲」\n'))).toEqual([]);
+    expect(codesOf(doc('\t若 NOWEX:噴乳：\n\t\t如果 TFLAG:193：\n\t\t\t「甲」\n'))).toEqual([]);
   });
 });
 
@@ -142,7 +189,7 @@ describe('E13-A 写侧 · 骨架冲突一律 fail-closed（不拼半成品）', 
 /* ============================================================================ */
 
 describe('P-3 初回段 · 保留段名 `首次` 整串硬编译', () => {
-  const src = doc('\t段 首次：\n\t\t「涩涩的话」\n');
+  const src = doc('\t若 首次：\n\t\t「涩涩的话」\n');
 
   it('产物 = `LOCAL:1 = 1` + `IF LOCAL:1 && FIRSTTIME(SELECTCOM)`（不经 lowerExpression）', () => {
     // `首次` 裸词不是可解析标识符、`SELECTCOM` 在糖表达式里也接不住 ⇒ 若走常规段管线会报
@@ -158,8 +205,8 @@ describe('P-3 初回段 · 保留段名 `首次` 整串硬编译', () => {
     ]);
   });
 
-  it('`关` 版本 ⇒ `LOCAL:1 = 0`（`IF` 条件照写；信封槽仍是 `LOCAL:1`）', () => {
-    const off = doc('\t段 首次 关：\n\t\t「涩涩的话」\n');
+  it('`（关）` 版本 ⇒ `LOCAL:1 = 0`（`IF` 条件照写；信封槽仍是 `LOCAL:1`）', () => {
+    const off = doc('\t若 首次（关）：\n\t\t「涩涩的话」\n');
     expect(errsOf(off)).toEqual([]);
     const lines = bodyOf(productOf(off));
     expect(lines).toContain('LOCAL:1 = 0');
@@ -169,7 +216,7 @@ describe('P-3 初回段 · 保留段名 `首次` 整串硬编译', () => {
   });
 
   it('负自证：普通段 `LOCAL = 1` 形没被改坏（保留段名分支不吞普通段）', () => {
-    const plain = doc('\t段 NOWEX:噴乳：\n\t\t「甲」\n');
+    const plain = doc('\t若 NOWEX:噴乳：\n\t\t「甲」\n');
     expect(errsOf(plain)).toEqual([]);
     const lines = bodyOf(productOf(plain));
     expect(lines).toContain('LOCAL = 1');
@@ -204,10 +251,10 @@ describe('E13-B 投影 · 段级吸收', () => {
     'RETURN 1',
   ].join('\n');
 
-  it('每一段都折成 `段 …：`（`LOCAL = 0` → ` 关`），**不是只折最外层**', () => {
+  it('每一段都折成 `若 …：`（`LOCAL = 0` → `（关）`），**不是只折最外层**', () => {
     const text = segText(threeSections).join('\n');
-    expect(text).toContain('段 NOWEX:噴乳：');
-    expect(text).toContain('段 NOWEX:射精 关：');
+    expect(text).toContain('若 NOWEX:噴乳：');
+    expect(text).toContain('若 NOWEX:射精（关）：');
     // 信封的机器码一行都不许留下（留下了就是 E13 报红的原样）
     expect(text).not.toContain('LOCAL = 1');
     expect(text).not.toContain('IF LOCAL');
@@ -217,14 +264,14 @@ describe('E13-B 投影 · 段级吸收', () => {
   it('段体**不额外减缩进**（段头落在原 `IF` 那一行，正文本来就比它深一层）', () => {
     const lines = segText(threeSections).join('\n').split('\n');
     const tabs = (l: string): number => /^\t*/.exec(l)![0].length;
-    const head = lines.findIndex((l) => l.trim() === '段 NOWEX:噴乳：');
+    const head = lines.findIndex((l) => l.trim() === '若 NOWEX:噴乳：');
     expect(head).toBeGreaterThanOrEqual(0);
     // 只钉**相对**层级：紧跟段头的正文恰比段头深一级（绝对列数由 `时机` 头决定，不是本判据）
     expect(lines[head + 1]!.trim()).toBe('「甲」');
     expect(tabs(lines[head + 1]!)).toBe(tabs(lines[head]!) + 1);
   });
 
-  it('纯 `IF LOCAL`（外层信封）仍走原吸收，**不多出一个 `段`**', () => {
+  it('纯 `IF LOCAL`（外层信封）仍走原吸收，**不多出一个 `若`**', () => {
     const plain = [
       '@M_KOJO_MESSAGE_PALAMCNG_B_K12',
       'LOCAL = 1',
@@ -235,7 +282,7 @@ describe('E13-B 投影 · 段级吸收', () => {
     ].join('\n');
     const text = segText(plain).join('\n');
     expect(text).toContain('时机 绝顶：');
-    expect(text).not.toContain('段 ');
+    expect(text).not.toContain('若 ');
   });
 
   it('负自证①：`ENDIF` 配不上（段没闭合）→ **不折叠**，机器码留在原行里', () => {
@@ -243,14 +290,14 @@ describe('E13-B 投影 · 段级吸收', () => {
       '\n',
     );
     const r = project(unclosed);
-    expect(r.segments.map((s) => s.sugarText).join('\n')).not.toContain('段 NOWEX');
+    expect(r.segments.map((s) => s.sugarText).join('\n')).not.toContain('若 NOWEX');
     // 未被吸收 ⇒ 那三行仍在"保留原生"的成因计数里（不静默吞掉）
     expect(r.stats.projectedLines).toBeLessThan(4);
   });
 
   it('负自证②：片段级投影（往上没有函数头）→ 不折叠（"上无函数头就不动"底线）', () => {
     const fragment = ['LOCAL = 1', 'IF LOCAL && NOWEX:噴乳', '\tPRINTFORMW 「甲」', 'ENDIF'].join('\n');
-    expect(segText(fragment).join('\n')).not.toContain('段 NOWEX:噴乳：');
+    expect(segText(fragment).join('\n')).not.toContain('若 NOWEX:噴乳：');
   });
 
   it('闭环：多信封函数投影 → 原样喂回转译器 ⇒ **零 error**（E13 的判据本体）', () => {

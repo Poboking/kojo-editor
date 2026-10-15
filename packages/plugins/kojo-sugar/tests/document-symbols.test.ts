@@ -83,15 +83,15 @@ describe('kojo-sugar · 文档大纲（documentSymbol）', () => {
     assertContained(symbols(src));
   });
 
-  it('段块成节；`段 … 关` 标"停用"；命名参数进副标题（副标题只解释，不改名）', () => {
+  it('段块成节；`若 …（关）` 标"停用"；命名参数进副标题（副标题只解释，不改名）', () => {
     const [named] = symbols('角色: 12\n时机 指令 310 成否: 游戏判定：\n    「甲」\n');
     expect(named).toMatchObject({ name: '时机 指令 310', detail: '成否: 游戏判定' });
     const [timing] = symbols(
-      '角色: 12\n时机 指令 310：\n    段 NOWEX:噴乳：\n        「甲」\n    段 TFLAG:193 关：\n        「乙」\n',
+      '角色: 12\n时机 指令 310：\n    若 NOWEX:噴乳：\n        「甲」\n    若 TFLAG:193（关）：\n        「乙」\n',
     );
     expect((timing!.children ?? []).map((c) => [c.name, c.kind, c.detail])).toEqual([
-      ['段 NOWEX:噴乳', 'section', undefined],
-      ['段 TFLAG:193', 'section', '停用'],
+      ['若 NOWEX:噴乳', 'section', undefined],
+      ['若 TFLAG:193', 'section', '停用'],
     ]);
   });
 
@@ -129,7 +129,7 @@ describe('kojo-sugar · 文档大纲（documentSymbol）', () => {
   });
 
   it('长条件截断带省略号（大纲一行一项，不许折行）', () => {
-    const long = `角色: 12\n时机 指令 310：\n    段 ${'条'.repeat(90)}：\n        「甲」\n`;
+    const long = `角色: 12\n时机 指令 310：\n    若 ${'条'.repeat(90)}：\n        「甲」\n`;
     const name = symbols(long)[0]!.children?.[0]?.name ?? '';
     expect(name.length).toBeLessThanOrEqual(70);
     expect(name.endsWith('…')).toBe(true);

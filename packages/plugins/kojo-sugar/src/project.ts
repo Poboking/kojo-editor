@@ -75,6 +75,7 @@ import type { LiftDeps } from './lift';
 import type { DictionaryLookup } from './types';
 import { PRONOUN_REVERSE } from './expression';
 import { SYSTEM_FUNCTION_REVERSE } from './system-functions';
+import { stripInlineComment } from './lexer';
 import { buildFaceNameIndex, stripParams } from './faces-reverse';
 import type { FaceNameIndex } from './faces-reverse';
 
@@ -425,7 +426,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
     }
 
     // 段信封（E13-2）：`LOCAL = n` + `IF LOCAL && <条件>` + `ENDIF` 折叠成一层
-    // `段 <条件>：` 头（`LOCAL = 0` → `关` 占位）。头落在原 `IF` 那一行上，
+    // `若 <条件>：` 头（`LOCAL = 0` → `（关）` 占位）。头落在原 `IF` 那一行上，
     // 段体保持原相对深度（它本来就比 `IF` 深一层）。
     const sectionHead = skeleton.sectionHeadAt.get(ln);
     if (sectionHead !== undefined) {
@@ -716,6 +717,51 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
     recs.push(native(ln, 'other'));
   }
 
+  // ---- P-1R 手段 3：函数级 all-or-nothing（原生直通回退）----
+  //
+  // **段式骨架**（有 `若` 段头）与**普通正文**不可混在同一个「时机」的最外层——段块的产物
+  // 里没有外层 `IF LOCAL` 信封，混排没有唯一可写回的形状（写侧 `codegen` 对此报
+  // `section-mixed`）。而 segment 的缩进基准**逐段重置**（`toSegment`：base = 段内可见行的
+  // 最小 indent），native 行又**切断段**——段式函数里只要还有未投影的行**夹在中间**，
+  // 段一被切开，拼接后缩进与块结构就互不相认 ⇒ 转译必报 `indent-mismatch`。
+  //
+  // 判据取**全有或全无**：函数范围内既折出了 `若` 段头、又会被切成**两段以上**可映射段
+  // ⇒ 整个函数（含 `@` 头）回退为原生直通（读者看到的就是原代码，不是半个坏投影）。
+  // 段数口径与 `buildSegments` 同源（native 切断；只有含 `speech`/`control` 的段才成段）——
+  // 首/尾的 native（未标标签的 `@` 头、收尾的 `RETURN`）只切出**一段**，不误伤。
+  // 手段 1/2 让信封吸收更完整（更少函数需要回退），本条保证剩下的段式函数**绝不**产出坏投影。
+  for (const [start, end] of functionRanges(lines)) {
+    let hasSection = false;
+    for (const r of recs) {
+      if (r.line >= start && r.line <= end && skeleton.sectionHeadAt.has(r.line)) {
+        hasSection = true;
+        break;
+      }
+    }
+    if (!hasSection) continue;
+    let runs = 0;
+    let runMapped = false;
+    for (const r of recs) {
+      if (r.line < start || r.line > end) continue;
+      if (r.kind === 'native') {
+        if (runMapped) runs++;
+        runMapped = false;
+        continue;
+      }
+      if (r.kind === 'speech' || r.kind === 'control') runMapped = true;
+    }
+    if (runMapped) runs++;
+    if (runs < 2) continue;
+    for (const r of recs) {
+      if (r.line < start || r.line > end || r.kind === 'native') continue;
+      r.kind = 'native';
+      r.text = '';
+      r.indent = 0;
+      r.visible = false;
+      r.reason = 'other';
+    }
+  }
+
   // ---- 缩进补正（一处口径，漏改不了）：着色块**体内** +1；`SIF` 管辖的那一行 +1；
   //      标了「时机 …：」的函数头其**函数体** +1（规范 §3.2 正文缩进一级）；
   //      記入チェック信封**体内** -1（信封被拆，缩进必须跟着拆）----
@@ -833,12 +879,22 @@ interface SkeletonPlan {
   /** 该行因"信封被拆掉"而应**减掉**的缩进层数 */
   dedentAt: (line: number) => number;
   /**
-   * 该行是**段信封**的头 → 投影成 `段 <条件>：`（E13-2；`关` 段带 ` 关`）。
+   * 该行是**段信封**的头 → 投影成 `若 <条件>：`（E13-2；`关` 段带 `（关）`）。
    *
    * 与 `absorbed` 的分工：段头那一行**要产出可见行**（它就是段块头），
    * 信封的另两行（`LOCAL = n` / `ENDIF`）走 `absorbed`。
    */
   sectionHeadAt: Map<number, string>;
+}
+
+/**
+ * 段条件回显（S5）：原生 `!` → 糖的否定运算符 `非 `（写侧 `非` 走既有中文运算符管线）。
+ *
+ * 判据只认**前置逻辑否定**（`^!(?!=)`）——`!=` 是不等号，不是否定；其余形态原样。
+ */
+function projectSectionCondition(condition: string): string {
+  const t = condition.trim();
+  return /^!(?!=)/.test(t) ? `非 ${t.slice(1).trim()}` : t;
 }
 
 /**
@@ -877,11 +933,11 @@ function splitWrapperHead(content: string): { name: string; decl: string } | nul
  * `IF LOCAL` 在**缩进 0**；能配对到**同缩进** `ENDIF`；且**向上能找到函数头 `@…`**
  * （跳过注释/空行/`#` 指令）——证明这是函数级信封，而不是作者正文里的同名守卫。
  *
- * **③ 段信封**（E13-2，`LOCAL = n` + `IF LOCAL && <条件>`）折叠成一层 `段 <条件>：` 头：
+ * **③ 段信封**（E13-2，`LOCAL = n` + `IF LOCAL && <条件>`）折叠成一层 `若 <条件>：` 头：
  *
  * ```
- * LOCAL = 1           ┐ 吸收（记入チェック的值由糖的段头表达：`关` = 0）
- * IF LOCAL && NOWEX:噴乳  ← 这一行变成 `段 NOWEX:噴乳：`（**要产出可见行**）
+ * LOCAL = 1           ┐ 吸收（记入チェック的值由糖的段头表达：`（关）` = 0）
+ * IF LOCAL && NOWEX:噴乳  ← 这一行变成 `若 NOWEX:噴乳：`（**要产出可见行**）
  *     …段体…           │ 保持原相对深度（段头落在 `IF` 那一行上，段体本就深一层）
  * ENDIF               ┘ 吸收
  * ```
@@ -901,12 +957,20 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
   const absorbed = new Set<number>();
   /** 逐行 dedent（信封内 -1；嵌套信封会叠加） */
   const dedent = new Array<number>(lines.length + 1).fill(0);
-  /** 段信封的头行 → `段 <条件>：`（E13-2） */
+  /** 段信封的头行 → `若 <条件>：`（E13-2 / S5） */
   const sectionHeadAt = new Map<number, string>();
   const total = lines.length;
   let inSkip = false;
 
   const contentAt = (ln: number): string => contentOf(lines[ln - 1] ?? '');
+  /**
+   * 行尾注释剥离后的内容（`LOCAL = 1 ;custom code` → `LOCAL = 1`）。
+   *
+   * 魔王改版语料有 26 行在 `LOCAL = n` / `IF LOCAL …` 后挂行尾注释（同一行里再写一段
+   * 原生代码），字面比较会把它们全部漏掉。剥离走 `lexer.stripInlineComment`（**引号感知**，
+   * 与格式化/词法同一份口径——"注释从哪开始"有两份实现就会分叉）。
+   */
+  const codeAt = (ln: number): string => stripInlineComment(contentAt(ln));
   const indentAt = (ln: number): number => indentLevelOf(lines[ln - 1] ?? '');
 
   /**
@@ -926,6 +990,26 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
       return c.startsWith('@') ? c : undefined;
     }
     return undefined;
+  };
+
+  /**
+   * 配对同缩进 `ENDIF`（自己数嵌套，不依赖扫描器的配对假设）。
+   *
+   * `baseIndent` = 信封所在缩进层（函数级信封 = 0；缩进层子段信封 = 子段自己的层）。
+   * 只在这一层里数 `IF`/`ENDIF`——更深层的 `IF` 属于子段内部，与本次配对无关。
+   */
+  const pairEndif = (from: number, baseIndent: number): number => {
+    let depth = 0;
+    for (let k = from; k <= total; k++) {
+      if (indentAt(k) !== baseIndent) continue;
+      const c = codeAt(k);
+      if (/^IF\s/.test(c)) depth++;
+      else if (c === 'ENDIF') {
+        if (depth === 0) return k;
+        depth--;
+      }
+    }
+    return -1;
   };
 
   for (let ln = 1; ln <= total; ln++) {
@@ -962,10 +1046,27 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
       continue;
     }
 
-    /* ---- ② 記入チェック信封 ---- */
-    if (content !== 'LOCAL = 1' && content !== 'LOCAL = 0') continue;
-    if (indentAt(ln) !== 0) continue;
-    // 向下跳过注释 / 空行，必须紧邻 `IF LOCAL`（纯）或 `IF LOCAL && <条件>`（段信封）
+    /* ---- ② 記入チェック信封 / ③ 段信封（P-1R：槽位感知，含缩进层子段） ---- */
+    //
+    // 形态识别（`LOCAL` 可带命名槽 `:n`；行尾注释已剥离 — 见 `codeAt`）：
+    //   函数级纯信封：`LOCAL = n`        + `IF LOCAL`                → 吸收三行 + 正文 -1 缩进
+    //   段信封（无槽）：`LOCAL = n`      + `IF LOCAL && <条件>`        → `若 <条件>：`
+    //   段信封（带槽）：`LOCAL:n = m`    + `IF LOCAL:n && <条件>`      → `若 <条件>：`
+    //   段信封（带槽）：`LOCAL:n = m`    + 裸 `IF <条件>`（槽写在上一行）→ `若 <条件>：`
+    //
+    // **`n` 不进语法**：写回时由 codegen 自动分配槽位（`若` 段头的产物是 bare `LOCAL`）。
+    // **判据仍从严**（"宁可漏"是硬底线）：向上能找到函数头 `@…`、向下紧邻 `IF`、能配对到
+    // **同缩进** `ENDIF`；配不上就不动（宁缺勿吞作者逻辑）。
+    // P-1R 手段 2：**没有 `LOCAL` 信封的条件链根本不是段**——裸 `IF <条件>` 只有在
+    // 上一行是 `LOCAL:n = m`（槽位信封）时才受理；`IF/ELSEIF` 分叉链头因此天然落在门外。
+    const assign = /^LOCAL(?::(\d+))?\s*=\s*([01])$/.exec(codeAt(ln));
+    if (assign === null) continue;
+    const slot = assign[1];
+    const value = assign[2]!;
+    // 无槽位（函数级）信封仍限缩进 0；带槽位的子段信封允许缩进层（P-1R 手段 1）
+    if (slot === undefined && indentAt(ln) !== 0) continue;
+    const baseIndent = indentAt(ln);
+    // 向下跳过注释 / 空行，必须紧邻 `IF`（纯信封 / 段信封）
     let ifLn = ln + 1;
     while (ifLn <= total) {
       const c = contentAt(ifLn);
@@ -975,44 +1076,35 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
       }
       break;
     }
-    const ifContent = contentAt(ifLn);
-    if (indentAt(ifLn) !== 0) continue;
-    const isPlainEnvelope = ifContent === 'IF LOCAL';
-    // 段信封（E13-2）：`LOCAL = n` + `IF LOCAL && <条件>` + 配对 `ENDIF`（同一函数内）。
-    // 库内绝顶/性交面的主流形态——一个函数里 N 个这样的段门（`M_KOJO_K101_絶頂 .ERB`
-    // 的 噴乳/射精/放尿 三段即此形）。折叠成一层 `段 <条件>：` 头（n=0 → `关`）。
-    // 判据取**最紧**形态（与纯信封同款）：两行都在缩进 0、能配对到同缩进的 ENDIF、
-    // 且向上能找到函数头 `@…`；配不上就不动（宁缺勿吞作者逻辑）。
-    const sectionMatch = isPlainEnvelope ? null : /^IF LOCAL\s*&&\s*(.+)$/.exec(ifContent);
-    if (!isPlainEnvelope && sectionMatch === null) continue;
+    if (ifLn > total || indentAt(ifLn) !== baseIndent) continue;
+    const ifCode = codeAt(ifLn);
+    const isPlainEnvelope = slot === undefined && ifCode === 'IF LOCAL';
+    let sectionCondition: string | null = null;
+    if (!isPlainEnvelope) {
+      const andLocal = /^IF\s+LOCAL(?::(\d+))?\s*&&\s*(.+)$/.exec(ifCode);
+      if (andLocal !== null && (andLocal[1] ?? undefined) === slot) {
+        sectionCondition = andLocal[2]!.trim();
+      } else if (slot !== undefined) {
+        // 槽在新一行（`LOCAL:n = m` + 裸 `IF <条件>`）；`IF LOCAL…` 形态已由上支覆盖
+        const bareIf = /^IF\s+(?!LOCAL(?::|\s|$))(.+)$/.exec(ifCode);
+        if (bareIf !== null) sectionCondition = bareIf[1]!.trim();
+      }
+    }
+    if (!isPlainEnvelope && sectionCondition === null) continue;
     // "上无函数头就不动"：证明这是函数级信封，而不是正文里的同名守卫
     // （`funcHeadAbove` 允许跳过已被骨架吸收的行 / 段头行 / 缩进行，见其注释）
     if (funcHeadAbove(ln) === undefined) continue;
-    // 配对同缩进 ENDIF（自己数嵌套，不依赖扫描器的配对假设）
-    let depth = 0;
-    let endLn = -1;
-    for (let k = ifLn + 1; k <= total; k++) {
-      const c = contentAt(k);
-      if (indentAt(k) !== 0) continue;
-      if (c === 'IF LOCAL' || /^IF\s/.test(c)) depth++;
-      else if (c === 'ENDIF') {
-        if (depth === 0) {
-          endLn = k;
-          break;
-        }
-        depth--;
-      }
-    }
+    const endLn = pairEndif(ifLn + 1, baseIndent);
     if (endLn < 0) continue;
 
     if (!isPlainEnvelope) {
-      // **段信封**：`LOCAL = n` 与 `ENDIF` 吸收（段头由糖的 `段` 头表达），
-      // 段体**缩进不动**——段头落在原 `IF LOCAL && <条件>` 那一行上，段体本来
-      // 就比它深一层（信封拆掉后相对深度不变，与 §5.3 的缩进语义一致）。
-      const condition = sectionMatch![1]!.trim();
+      // **段信封**：`LOCAL = n` 与 `ENDIF` 吸收（段头由糖的 `若` 头表达），
+      // 段体**缩进不动**——段头落在原 `IF` 那一行上，段体本来就比它深一层。
+      // `n = 0`（記入チェック＝0）→ `（关）`；与 `非`（逻辑否定）不同轴。
       absorbed.add(ln);
       absorbed.add(endLn);
-      sectionHeadAt.set(ifLn, content === 'LOCAL = 1' ? `段 ${condition}：` : `段 ${condition} 关：`);
+      const cond = projectSectionCondition(sectionCondition!);
+      sectionHeadAt.set(ifLn, value === '0' ? `若 ${cond}（关）：` : `若 ${cond}：`);
       continue;
     }
 
@@ -1020,7 +1112,7 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
     absorbed.add(ln);
     absorbed.add(ifLn);
     absorbed.add(endLn);
-    const after = contentAt(endLn + 1);
+    const after = codeAt(endLn + 1);
     if (/^RETURN(\s.*)?$/.test(after)) absorbed.add(endLn + 1);
     // 正文整体减 1 层
     for (let k = ifLn + 1; k < endLn; k++) dedent[k] = (dedent[k] ?? 0) + 1;
@@ -1437,6 +1529,24 @@ function splitSourceLines(source: string): string[] {
 /** 去行首缩进 + 行尾空白 */
 function contentOf(line: string): string {
   return line.replace(/^[ \t\u3000]*/, '').replace(/[ \t\u3000]+$/, '');
+}
+
+/**
+ * `@` 函数范围（P-1R 函数级 all-or-nothing 的判定单位；1 基闭区间）。
+ *
+ * 每个 `@…` 头行起、**下一个 `@…` 头行的前一行**止。文件头（首个 `@` 之前）不属任何
+ * 函数——那里的行按常规口径投影，不参与回退。
+ */
+function functionRanges(lines: string[]): Array<[number, number]> {
+  const heads: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (contentOf(lines[i]!).startsWith('@')) heads.push(i + 1);
+  }
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < heads.length; i++) {
+    out.push([heads[i]!, (heads[i + 1] ?? lines.length + 1) - 1]);
+  }
+  return out;
 }
 
 /** 原文缩进层（TAB 数 + 空格按 4 折算；与 lexer 的 indentLevel 同口径） */

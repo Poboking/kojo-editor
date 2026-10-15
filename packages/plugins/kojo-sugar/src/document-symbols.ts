@@ -113,7 +113,7 @@ function rawSymbol(node: SugarNode | SugarTopLevelNode): EditorDocumentSymbol | 
       };
     case 'sectionBlock':
       return {
-        name: joinParts(['段', node.condition]),
+        name: joinParts(['若', node.condition]),
         kind: 'section',
         ...rangeOf(node.loc, node.body),
         ...(node.disabled ? { detail: '停用' } : {}),

@@ -623,7 +623,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
       code: 'section-mixed',
       severity: 'error',
       message:
-        '「段」块不能和别的语句混在同一个「时机」的最外层——「段」的产物没有外层 `IF LOCAL` 信封，混排没有唯一可写回的形状。请把普通语句挪进某一段里，或把段单独放在一个「时机」里。',
+        '「若」块不能和别的语句混在同一个「时机」的最外层——「若」的产物没有外层 `IF LOCAL` 信封，混排没有唯一可写回的形状。请把普通语句挪进某一段里，或把段单独放在一个「时机」里。',
       loc: timing.loc.start,
     });
     // **判据在发包装头之前**：报错后 return，产物里一个字都不留（"不产半成品"）。
@@ -679,7 +679,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
 }
 
 /**
- * `段 …：` 块 → 库内手写的那 6 行信封（E13 批）。
+ * `若 …：` 块 → 库内手写的那 6 行信封（E13 批；旧形 `段 …：` 兼容）。
  *
  * 产物逐字对齐语料里的主流写法（`M_KOJO_K101_絶頂 .ERB` 的 噴乳 / 射精 / 放尿 三段）：
  *
@@ -694,7 +694,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
  * ```
  *
  * 段的**条件**走与 `如果` 完全相同的表达式降糖管线（`lowerExpression`）——
- * 不另造一套条件语法（`段 NOWEX:噴乳：` 与 `如果 NOWEX:噴乳：` 的表达式口径同源）。
+ * 不另造一套条件语法（`若 NOWEX:噴乳：` 与 `如果 NOWEX:噴乳：` 的表达式口径同源）。
  */
 function emitSectionBlock(em: Emitter, node: SectionBlock, ctx: BodyContext, indent: number): void {
   const check = node.disabled ? 0 : 1;

@@ -45,6 +45,7 @@ import {
   CONT_MARKS,
   HEAD_DECL_KEYS,
   FULLWIDTH_SPACE,
+  FULLWIDTH_COLON,
   endsWithBlockColon,
   lookupKeyword,
   stripBlockColon,
@@ -810,24 +811,42 @@ function parseFunctionHead(rest: string): LineClass | null {
 }
 
 /**
- * `段 <ERB条件> [关]：`（E13 批）——库内「多信封分段」的可写块头。
+ * `若 <ERB条件> [（关）]：`（P-1R 批新形；`段 …：` 为兼容受理的旧形）——库内
+ * 「多信封分段」的可写块头。
  *
  * 段头一律按 **ERB 条件**解析（与 `如果` 同一条降糖管线，`expression.ts`）：
- * `段 NOWEX:噴乳：` / `段 TFLAG:193 关：`。
+ * `若 NOWEX:噴乳：` / `若 非 NOWEX:噴乳：` / `若 NOWEX:噴乳（关）：`；
+ * 旧形 `段 NOWEX:噴乳：` / `段 TFLAG:193 关：` 继续受理。
  *
- * 尾随的 `关`（禁用占位）只在**空白之后**、且其后没有别的字符时才算标记——
- * 条件是表达式，`关` 若不这样界定就可能吃掉条件本身的尾字。条件为空（`段 ：` /
- * 只写了 `段 关：`）→ 返回 null，交给后面按普通文本处理（与 `当 X： 内容` 一类
- * 未支持形态同一口径，不在此处造第二套诊断）。
+ * 两条头位规则：
+ * - **只认行首那一个独立词**：`parseBlockHead` 的首词切分已保证——`若干年后：` 的首词是
+ *   `若干年后`（非关键字）⇒ 天然落回普通行，不会被当段头；
+ * - **新形 `若` 要求行尾终止符是全角 `：`**（半角 `:` 只留给旧形 `段`）。判据不满足 →
+ *   返回 null，整行按普通文本处理（不造第二套诊断）。
+ *
+ * 停用标记两形并存：**新形** `（关）` 行尾括注（投影发这一形）/ **旧形** 尾随独立 ` 关`
+ * （只在**空白之后**、且其后没有别的字符时才算——条件是表达式，`关` 若不这样界定就可能
+ * 吃掉条件本身的尾字）。条件为空（`若 ：` / 只写了 `若 关：`）→ 返回 null。
  */
-function parseSectionHead(rest: string): LineClass | null {
-  const trimmed = rest.trim();
+function parseSectionHead(rest: string, head: string, raw: string): LineClass | null {
+  // 新形头 `若`：行尾终止符必须全角（旧形 `段` / `section` 不设此闸，保持原宽容面）
+  if (head === '若' && !raw.endsWith(FULLWIDTH_COLON)) return null;
+  let trimmed = rest.trim();
   if (trimmed.length === 0) return null;
-  const disabledMatch = /(?:^|\s)(关)$/.exec(trimmed);
-  const disabled = disabledMatch !== null;
-  const condition = (disabled ? trimmed.slice(0, disabledMatch.index) : trimmed).trim();
-  if (condition.length === 0) return null;
-  return { kind: 'sectionHead', condition, disabled };
+  let disabled = false;
+  const paren = /[（(]关[)）]$/.exec(trimmed);
+  if (paren) {
+    disabled = true;
+    trimmed = trimmed.slice(0, paren.index).trim();
+  } else {
+    const disabledMatch = /(?:^|\s)(关)$/.exec(trimmed);
+    if (disabledMatch) {
+      disabled = true;
+      trimmed = trimmed.slice(0, disabledMatch.index).trim();
+    }
+  }
+  if (trimmed.length === 0) return null;
+  return { kind: 'sectionHead', condition: trimmed, disabled };
 }
 
 /**
@@ -835,7 +854,7 @@ function parseSectionHead(rest: string): LineClass | null {
  *
  * 为什么不能走 `lowerExpression`：`首次` 只是 `system-functions.ts` 的**函数别名**
  * （`首次(` → `FIRSTTIME(`），而 `SELECTCOM` 在糖表达式的裸标识符路径上不是可解析
- * 标识符 ⇒ `段 首次：` 若走常规段管线会报 `unknown-identifier`。故本段把
+ * 标识符 ⇒ `若 首次：` 若走常规段管线会报 `unknown-identifier`。故本段把
  * `FIRSTTIME(SELECTCOM)` **整串硬编译**（对齐 `M_KOJO_K35_奉仕系コマンド.ERB:20-32`）。
  *
  * 信封口径与普通段不同：普通段写 bare `LOCAL = n` + `IF LOCAL && <条件>`，
@@ -960,7 +979,7 @@ function parseBlockHead(content: string): LineClass | null {
       // `组` 只作**裸块头**（`组：`）；带其它内容的写法不识别（按普通文本走，不静默吞掉）
       return rest.length === 0 ? { kind: 'groupHead' } : null;
     case 'block.section':
-      return parseSectionHead(rest);
+      return parseSectionHead(rest, m[1]!, content);
     case 'block.once':
       // `初回 "key"：`（1 号任务）——块头原文当 key（字符串字面量 / 既有表达式口径，可含 `{}` 插值）。
       // 空 key 也返回，交给 parser 报 `block-empty`（不在此造第二套诊断）。

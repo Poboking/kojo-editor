@@ -1405,7 +1405,8 @@ class BlockParser {
   /* ------------------------------ 段块（E13 批） ------------------------------ */
 
   /**
-   * `段 <ERB条件> [关]：` 块体（E13 批）——库内「多信封分段」的糖形。
+   * `若 <ERB条件> [（关）]：` 块体（E13 批；旧形 `段 …：` / `段 … 关：` 兼容）——库内
+   * 「多信封分段」的糖形。
    *
    * 判据与 `随机`/`着色` 同款：块体缩进更深，逐条走 `parseBody`。**禁止段嵌套**
    * （段体内再出现 `段`）——库内信封段是同层的，嵌套会让 `LOCAL` 槽的语义没有
@@ -1439,7 +1440,7 @@ class BlockParser {
         this.sink.report({
           code: 'section-nested',
           severity: 'error',
-          message: '「段」块不能嵌套——一个「时机」里的段是同层的，段内请用「如果」分叉。',
+          message: '「若」块不能嵌套——一个「时机」里的段是同层的，段内请用「如果」分叉。',
           loc: posOf(line),
         });
         this.parseSectionBody(line, inner);
@@ -1452,7 +1453,7 @@ class BlockParser {
       this.sink.report({
         code: 'block-empty',
         severity: 'error',
-        message: '「段」块没有正文（缩进更深的内容）。',
+        message: '「若」块没有正文（缩进更深的内容）。',
         loc: posOf(headLine),
       });
     }
