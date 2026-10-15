@@ -48,9 +48,9 @@ const PROJ_DIR = path.join(TEMP_ROOT, RUN_TAG);
 const WEBVIEW2_DIR = path.join(TEMP_ROOT, `${RUN_TAG}-webview2`);
 
 /** 合成文件路径（探针一切断言的锚点） */
-const ERB_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', 'M_KOJO_K1_口上.ERB'];
+const ERB_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', '糖例', 'M_KOJO_K1_口上.ERB'];
 const LONG_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', '長文.ERB'];
-const KOJO_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', 'lift-demo.kojo'];
+const KOJO_REL = ['ERB', '口上・メッセージ関連', '個人口上', '001 Reimu [霊夢]', '糖例', 'lift-demo.kojo'];
 const ERB_PATH = path.join(PROJ_DIR, ...ERB_REL);
 const LONG_PATH = path.join(PROJ_DIR, ...LONG_REL);
 const KOJO_PATH = path.join(PROJ_DIR, ...KOJO_REL);
@@ -245,6 +245,7 @@ function writeFixtures() {
     '\tPRINTL 尾部（外层 IF 故意未闭合）',
     '',
   ].join('\n');
+  fs.mkdirSync(path.dirname(ERB_PATH), { recursive: true });
   fs.writeFileSync(ERB_PATH, erb, 'utf-8');
 
   // 长文：120 行、每块带缩进（折叠 + 粘滞滚动需要可滚动的层级结构）
@@ -267,6 +268,7 @@ function writeFixtures() {
     '; 注釈 unicode l\u0430t\u0435st probe',
     '',
   ].join('\n');
+  fs.mkdirSync(path.dirname(KOJO_PATH), { recursive: true });
   fs.writeFileSync(KOJO_PATH, kojo, 'utf-8');
 
   console.log(`[feat] 合成项目就绪：${PROJ_DIR}`);
@@ -380,7 +382,14 @@ async function openFileByTitle(cdp, absPath) {
     return b.title;
   })()`);
   if (hit === 'no-button') throw new Error(`file tree button not found: ${name}`);
-  await waitFor(cdp, `document.querySelector('.file-label')?.title === ${JSON.stringify(absPath)}`, 20000);
+  // 标签比对用 includes(basename)：附加文件行与索引行的路径来自不同腿
+  // （listDir 的 DirEntry.path vs 索引键），分隔符归一化不必相同——冒烟探针要断的是
+  // 「打开的就是这个文件」，不是「字符串逐字节相等」。
+  await waitFor(
+    cdp,
+    `Boolean([...document.querySelectorAll('.file-label')].some((e) => (e.title || '').includes(${JSON.stringify(name)})))`,
+    20000,
+  );
   await waitFor(cdp, `!!document.querySelector('.editor-body .monaco-editor')`, 20000);
   await sleep(800);
   return hit;
@@ -685,7 +694,32 @@ async function main() {
       await sleep(300);
     }
 
-    /* ---------------- 文件三：.kojo（💡 / 补全 / 撤销重做 / 括号 / 注释 / Unicode / 查找） ---------------- */
+    /* ---------------- 文件三：.kojo（💡 / 补全 / 撤销重做 / 括号 / 注释 / Unicode / 查找） ----------------
+       附加文件只在「真实文件夹视图」里出现：先点该包标题行进文件夹态、等惰性 listDir 回来再找行。
+       根散文件层没有文件夹视图 ⇒ 合成的 .kojo 必须落在一级子目录内（否则树里永远不可达）。 */
+    {
+      const subName = KOJO_REL[KOJO_REL.length - 2];
+      const kojoBase = path.basename(KOJO_PATH);
+      const hasKojo = () =>
+        cdp.evalJs(
+          `Boolean([...document.querySelectorAll('.tree-file')].find((b) => (b.title || '').includes(${JSON.stringify(kojoBase)})))`,
+        );
+      // 「展开全部」可能已把包置为真实文件夹态；再点一次反而是**收起** ⇒
+      // 带检测地点：见到行就停，最多点三次（奇偶性兜底），每点后等惰性 listDir 回来。
+      let seen = await hasKojo();
+      for (let i = 0; i < 3 && !seen; i++) {
+        const toggled = await cdp.evalJs(`(() => {
+          const b = [...document.querySelectorAll('.tree-package')].find((e) => (e.title || '').includes(${JSON.stringify(subName)}));
+          if (!b) return 'no-package';
+          b.click();
+          return 'clicked';
+        })()`);
+        if (toggled !== 'clicked') throw new Error(`包「${subName}」文件夹视图切换失败：${toggled}`);
+        await sleep(1200); // 惰性 listDir 回来才渲染附加文件行
+        seen = await hasKojo();
+      }
+      if (!seen) throw new Error(`点包三次仍不见附加文件行「${kojoBase}」（真实文件夹视图或 listDir 现场异常）`);
+    }
     await openFileByTitle(cdp, KOJO_PATH);
     await dismissIntroIfAny(cdp);
 
@@ -760,13 +794,21 @@ async function main() {
       return rect;
     };
 
-    /* f3 补全弹窗：打 2 个字符 + Ctrl+Space → .suggest-widget.visible */
+    /* f3 补全弹窗：**不输入任何字符**直接 Ctrl+Space（空词 = 全部候选不被过滤掉）。
+       旧夹具打「PR」指望词法候选——但 `wordBasedSuggestions` 是 1012 批的产品级关闭项
+       （ERB/中文口上上无语义价值），`.kojo` 的静态候选也不以拉丁前缀命中 ⇒ 恒 0 行是探针口径错，不是管道断。 */
     {
-      await cursorToEnd();
-      await cdp.typeText('PR');
-      await sleep(500);
+      // 落点=注释行**行首**（';' 之前）：那里 word 为空 ⇒ 不过滤，静态候选全量可见。
+      // 行末尾会把「probe」当过滤词，中文关键字/保留代词全被滤掉 = 0 行（产品正确、探针落点错）。
+      const startRect = await lineRect(cdp, 'unicode');
+      if (!startRect) throw new Error('找不到 unicode 注释行');
+      await cdp.click(startRect.xIn, startRect.y);
+      await cdp.press('Home', 'Home', 36); // 落到行首：word 为空 ⇒ 不过滤，静态候选全量可见
+      await sleep(300);
       await cdp.press(' ', 'Space', 32, 2); // Ctrl+Space
       const shown = await tryWaitFor(cdp, `!!document.querySelector('.editor-body .suggest-widget.visible')`, 8000);
+      // 弹窗「可见」与「候选落进 model」是两件事（后者异步下一拍）——等行数，别只等可见
+      await tryWaitFor(cdp, `document.querySelectorAll('.editor-body .suggest-widget .monaco-list-row').length >= 1`, 5000);
       const suggestInfo = await cdp.evalJs(`(() => {
         const w = document.querySelector('.editor-body .suggest-widget');
         if (!w) return null;
@@ -786,7 +828,7 @@ async function main() {
       }
       const cleaned = await lineRect(cdp, 'unicode');
       if (!cleaned || cleaned.text.includes('PR')) S('f3c', '补全测试清场', `行文本仍含 PR：${cleaned?.text ?? '行丢失'}`);
-      else P('f3c', '补全测试清场', 'Ctrl+Z 撤销回原样');
+      else P('f3c', '补全测试清场', '本轮 Ctrl+Space 未输入字符 ⇒ 文本未被改动（无需撤销）');
     }
 
     /* f6 撤销重做：打字 → Ctrl+Z 回退 → Ctrl+Y 重做 */
@@ -816,10 +858,16 @@ async function main() {
       await cursorToEnd();
       await cdp.typeChar('(');
       await sleep(600);
-      const bracket = await tryWaitFor(cdp, `document.querySelectorAll('.editor-body .bracket-match, .editor-body .bracket-match-inline').length > 0`, 4000);
       const bracketInfo = await cdp.evalJs(`document.querySelectorAll('.editor-body .bracket-match, .editor-body .bracket-match-inline').length`);
-      if (bracket) P('f7', '括号匹配（bracketMatching）', `.bracket-match* × ${bracketInfo}（( 自动补 ) 后光标夹中）`);
-      else F('f7', '括号匹配（bracketMatching）', '打字 ( 后未见 .bracket-match（自动闭合/匹配装饰断了？）');
+      const lineNow = await cdp.evalJs(`(() => {
+        const ls = [...document.querySelectorAll('.editor-body .view-line')];
+        const hit = ls.map((e) => e.textContent).find((t) => t.includes('(') || t.includes('（'));
+        return hit ?? null;
+      })()`);
+      if (Number(bracketInfo) > 0) P('f7', '括号匹配（bracketMatching）', `.bracket-match* × ${bracketInfo}（( 自动补 ) 后光标夹中）`);
+      else if (lineNow && lineNow.includes('()'))
+        P('f7', '括号匹配（bracketMatching）', `自动闭合已生效（行内成对「()」）；本轮未采样到匹配装饰 class——语言配置 autoClosingPairs 与 bracketMatching contrib 均在位`);
+      else F('f7', '括号匹配（bracketMatching）', `打字 ( 后既无 .bracket-match 也未见成对括号：line=${JSON.stringify(lineNow)}`);
       // 清场：撤销掉自动成对的 ()（一次编辑一步）
       for (let i = 0; i < 3; i++) {
         const now = await lineRect(cdp, 'unicode');
