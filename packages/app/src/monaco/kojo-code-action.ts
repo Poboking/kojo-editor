@@ -29,6 +29,8 @@ import { decorationsToMarkers } from './kojo-language';
  *    （`codeActionsComparator`）、"可自动修"（`hasAutoFix`）、"应用后高亮被修区间"
  *    （`codeActionController` 的 DECORATION）这些内建行为全都拿不到。
  *    贡献方在契约里给 `diagnostics`（`LineDecoration[]`），宿主翻成 Monaco 的 marker 形状。
+ * 4. **唯一解才标 preferred**（R2，2026-10-15 列接线批）：本次请求的某条诊断**恰好只有一条
+ *    快速修复**认领 ⇒ 该条 `isPreferred: true`；同一诊断多条认领一律不置（判据见 `pickPreferred`）。
  *
  * 分层同 `kojo-definition` / `kojo-hover`：**纯逻辑**（`markersToDecorations`、
  * `collectCodeActions`：问槽、隔离抛错、翻译形状）与 **Monaco 运行时**（`actionDiagnostics`：
@@ -53,6 +55,62 @@ export const PROVIDED_CODE_ACTION_KINDS: readonly string[] = [QUICK_FIX_KIND, RE
 /** 契约里的 `kind` 是窄联合；缺省按 quickfix（与改动前宿主行为一致） */
 export function monacoActionKind(kind: EditorCodeAction['kind']): string {
   return kind === REFACTOR_KIND ? REFACTOR_KIND : QUICK_FIX_KIND;
+}
+
+/**
+ * 一条诊断的身份键：严重级 + 行 + 消息 + 诊断码，**刻意不含列**。
+ *
+ * 递给贡献方的诊断是从面上已渲染的 marker 反翻译来的（markersToDecorations），而 marker 的
+ * 起止列在正向翻译时被补过默认值（行首 / 行尾）——同一条诊断两侧的列未必逐字相等。列进了键，
+ * "这条动作修的正是面上那条红线"就会静默判成两条不同诊断，isPreferred 永远点不亮
+ * （接了等于没接，比不接更难查）。
+ */
+export function diagnosticKey(decoration: LineDecoration): string {
+  return [decoration.severity, decoration.line, decoration.message, decoration.code ?? ''].join('\u0000');
+}
+
+/** `pickPreferred` 的输入：一条候选动作的**中性事实**（已归一的 kind + 它自己声明关联的诊断） */
+export interface PreferredCandidate {
+  readonly kind: string;
+  readonly diagnostics: readonly LineDecoration[];
+}
+
+/**
+ * 哪些候选该置 `isPreferred`（R2；返回下标集合）。
+ *
+ * 规则收窄到**不猜**的一条：本次请求（面上正画着）的某条诊断，**恰好只有一条快速修复**
+ * 认领它 ⇒ 那条修复 preferred；同一诊断有两条及以上认领 ⇒ 一律不置，多解时不替作者选。
+ * 三个刻意的边界：
+ * - 只算 quickfix：refactor 类动作不是"这条红线的解"，独一份也不给 preferred；
+ * - 只认**本次请求里的**诊断：动作声明关联了别处/别的诊断 ⇒ 对这次请求不算唯一解（不猜）；
+ * - 一条动作认领多条时要求**每条都唯一**：只要有另一条红线还有第二个解，把它顶到第一位
+ *   就等于在另一条问题上替作者选了。
+ * 给的是下标而不是布尔：调用方只在命中时补 `isPreferred: true`，**从不写 false**
+ * （省略才是"没有唯一解"的原意，`false` 会被 Monaco 当成一个明确的否定）。
+ */
+export function pickPreferred(
+  candidates: readonly PreferredCandidate[],
+  requested: readonly LineDecoration[],
+): Set<number> {
+  const owners = new Map<string, number[]>();
+  for (const decoration of requested) {
+    const key = diagnosticKey(decoration);
+    if (!owners.has(key)) owners.set(key, []); // 同一诊断画成两条重叠 marker 也只算一个问题
+  }
+  // 一条动作对同一条诊断的认领只计一次（贡献方重复列同一条关联不算"第二个解"）
+  const claims = candidates.map((candidate, index) =>
+    candidate.kind === QUICK_FIX_KIND
+      ? [...new Set(candidate.diagnostics.map(diagnosticKey))].filter((key) => owners.has(key))
+      : [],
+  );
+  for (const [index, keys] of claims.entries()) {
+    for (const key of keys) owners.get(key)!.push(index);
+  }
+  const preferred = new Set<number>();
+  for (const [index, keys] of claims.entries()) {
+    if (keys.length > 0 && keys.every((key) => owners.get(key)!.length === 1)) preferred.add(index);
+  }
+  return preferred;
 }
 
 /**
@@ -142,6 +200,7 @@ export function collectCodeActions(
   commandId: string,
 ): Monaco.languages.CodeAction[] {
   const actions: Monaco.languages.CodeAction[] = [];
+  const candidates: PreferredCandidate[] = [];
   for (const contribution of contributions) {
     let provided: EditorCodeAction[];
     try {
@@ -164,15 +223,22 @@ export function collectCodeActions(
     for (const action of provided) {
       const actionId = sink.register(contribution.id, action);
       const diagnostics = sink.markerDataFor(action);
+      const kind = monacoActionKind(action.kind);
+      candidates.push({ kind, diagnostics: action.diagnostics ?? [] });
       actions.push({
         title: action.title,
-        kind: monacoActionKind(action.kind),
+        kind,
         command: { id: commandId, title: action.title, arguments: [actionId] },
         // 省略而不是给空数组：空数组在 Monaco 里同样算"无关联"，但 `undefined`
         // 才是"这条动作不是冲着某条诊断来的"的原意
         ...(diagnostics ? { diagnostics } : {}),
       });
     }
+  }
+  // R2：唯一解才 preferred（判据见 `pickPreferred`）——波浪线上 `Ctrl+.` 直接命中，
+  // 多解时一律不置，让作者自己在 💡 里选。
+  for (const index of pickPreferred(candidates, request.diagnostics)) {
+    actions[index]!.isPreferred = true;
   }
   return actions;
 }

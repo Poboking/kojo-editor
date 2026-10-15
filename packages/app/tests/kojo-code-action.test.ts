@@ -23,8 +23,10 @@ import {
   REFACTOR_KIND,
   actionDiagnostics,
   collectCodeActions,
+  diagnosticKey,
   markersToDecorations,
   monacoActionKind,
+  pickPreferred,
 } from '../src/monaco/kojo-code-action';
 
 /* -------------------------- 桩：monaco 与 model -------------------------- */
@@ -306,5 +308,147 @@ describe('actionDiagnostics · 翻译器本体', () => {
         endColumn: 4,
       },
     ]);
+  });
+});
+
+/* -------------------------- (d) isPreferred -------------------------- */
+
+describe('diagnosticKey · 一条诊断的身份', () => {
+  it('列不参与判定（marker 往返补的默认列不许把同一条红线判成两条诊断）', () => {
+    const bare: LineDecoration = { line: 2, severity: 'error', message: '少一个 ENDIF', code: 'erb.unclosed-open' };
+    const withColumns: LineDecoration = { ...bare, startColumn: 1, endColumn: 9 };
+    expect(diagnosticKey(bare)).toBe(diagnosticKey(withColumns));
+  });
+
+  it('码 / 消息 / 行 / 严重级任一不同就是不同诊断（不许宽到把两个问题并成一个唯一解）', () => {
+    const base: LineDecoration = { line: 2, severity: 'error', message: '甲', code: 'a' };
+    expect(diagnosticKey({ ...base, code: 'b' })).not.toBe(diagnosticKey(base));
+    expect(diagnosticKey({ ...base, message: '乙' })).not.toBe(diagnosticKey(base));
+    expect(diagnosticKey({ ...base, line: 3 })).not.toBe(diagnosticKey(base));
+    expect(diagnosticKey({ ...base, severity: 'warning' })).not.toBe(diagnosticKey(base));
+    expect(diagnosticKey({ line: 2, severity: 'error', message: '甲' })).not.toBe(diagnosticKey(base));
+  });
+});
+
+describe('pickPreferred · 唯一解判据', () => {
+  const d = (message: string): LineDecoration => ({ line: 2, severity: 'error', message });
+  const fix = (diagnostics: LineDecoration[]) => ({ kind: QUICK_FIX_KIND, diagnostics });
+
+  it('某条诊断只有一条快速修复认领 ⇒ 它的下标入选', () => {
+    const one = d('甲');
+    expect(pickPreferred([fix([one])], [one])).toEqual(new Set([0]));
+  });
+
+  it('同一诊断两条认领 ⇒ 谁都不入选（多解时不替作者选）', () => {
+    const one = d('甲');
+    expect(pickPreferred([fix([one]), fix([one])], [one])).toEqual(new Set());
+  });
+
+  it('认领的诊断不在本次请求里 ⇒ 不算这次请求的唯一解（不猜）', () => {
+    expect(pickPreferred([fix([d('别处的红线')])], [d('甲')])).toEqual(new Set());
+  });
+
+  it('一条动作认领多条时要求每条都唯一：另有一条红线存在第二个解 ⇒ 整条不入选', () => {
+    const first = d('甲');
+    const second = d('乙');
+    expect(pickPreferred([fix([first, second]), fix([second])], [first, second])).toEqual(new Set());
+  });
+
+  it('两条动作各修各的红线 ⇒ 各自都是自己那条的唯一解', () => {
+    const first = d('甲');
+    const second = d('乙');
+    expect(pickPreferred([fix([first]), fix([second])], [first, second])).toEqual(new Set([0, 1]));
+  });
+
+  it('同一动作把同一条诊断列两遍 ⇒ 仍算一次认领（不自相冲突）', () => {
+    const one = d('甲');
+    expect(pickPreferred([fix([one, one])], [one])).toEqual(new Set([0]));
+  });
+
+  it('面上同一条诊断画成两条重叠 marker ⇒ 仍只有一个解', () => {
+    const one = d('甲');
+    expect(pickPreferred([fix([one])], [one, { ...one, line: 2 }])).toEqual(new Set([0]));
+  });
+
+  it('refactor 类即便唯一也不是"这条红线的解" ⇒ 一律不入选', () => {
+    const one = d('甲');
+    expect(pickPreferred([{ kind: REFACTOR_KIND, diagnostics: [one] }], [one])).toEqual(new Set());
+  });
+
+  it('没声明关联的动作不参与（无关联 = 不是冲着诊断来的）', () => {
+    expect(pickPreferred([fix([])], [d('甲')])).toEqual(new Set());
+  });
+});
+
+describe('collectCodeActions · isPreferred 落地（R2）', () => {
+  const model = stubModel(['@AEGI', 'IF LOCAL', '\tPRINTL 甲']);
+  const unclosed: LineDecoration = { line: 2, severity: 'error', message: '少一个 ENDIF', code: 'erb.unclosed-open' };
+  const missingElse: LineDecoration = {
+    line: 2,
+    severity: 'warning',
+    message: '表达式缺 ELSE 分支',
+    code: 'sugar.expr-missing-else',
+  };
+
+  /** 一次收集：`requested` = 面上画着的诊断，`providers[i]` 产一条动作并声明它修哪些 */
+  function collect(
+    requested: LineDecoration[],
+    providers: readonly (readonly LineDecoration[])[],
+  ): Monaco.languages.CodeAction[] {
+    const { sink } = sinkFor(model);
+    return collectCodeActions(
+      providers.map((diagnostics, i) =>
+        contribution(`p${i}`, () => [action({ title: `修复 ${i}`, diagnostics: [...diagnostics] })]),
+      ),
+      { ...REQUEST, diagnostics: requested },
+      sink,
+      COMMAND,
+    );
+  }
+
+  it('钉死：同一条诊断两条候选 ⇒ 两条都不带 isPreferred（不写 false，只省略）', () => {
+    const actions = collect([unclosed], [[unclosed], [unclosed]]);
+    expect(actions).toHaveLength(2);
+    expect(actions.every((a) => !('isPreferred' in a))).toBe(true);
+  });
+
+  it('钉死：同一条诊断恰好一条候选 ⇒ 该条 isPreferred: true（Ctrl+. 直接命中）', () => {
+    const actions = collect([unclosed], [[unclosed]]);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]!.isPreferred).toBe(true);
+  });
+
+  it('两条候选各修一条不同红线 ⇒ 两条都 preferred（各自都是唯一解）', () => {
+    const actions = collect([unclosed, missingElse], [[unclosed], [missingElse]]);
+    expect(actions.map((a) => a.isPreferred)).toEqual([true, true]);
+  });
+
+  it('缺省 kind（契约省略）按 quickfix 参与判定 —— 与 monacoActionKind 同一口径', () => {
+    const { sink } = sinkFor(model);
+    const [only] = collectCodeActions(
+      [contribution('bare-kind', () => [action({ diagnostics: [unclosed] })])],
+      { ...REQUEST, diagnostics: [unclosed] },
+      sink,
+      COMMAND,
+    );
+    expect(only!.kind).toBe(QUICK_FIX_KIND);
+    expect(only!.isPreferred).toBe(true);
+  });
+
+  it('动作修的是别处诊断（本次请求没画它）⇒ 不 preferred', () => {
+    const actions = collect([unclosed], [[missingElse]]);
+    expect('isPreferred' in actions[0]!).toBe(false);
+  });
+
+  it('无关联动作与 preferred 判定互不干扰（不给关联就是没有）', () => {
+    const { sink } = sinkFor(model);
+    const actions = collectCodeActions(
+      [contribution('mix', () => [action(), action({ title: '带关联', diagnostics: [unclosed] })])],
+      { ...REQUEST, diagnostics: [unclosed] },
+      sink,
+      COMMAND,
+    );
+    expect('isPreferred' in actions[0]!).toBe(false);
+    expect(actions[1]!.isPreferred).toBe(true);
   });
 });
