@@ -49,7 +49,9 @@ export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch 
     minimap: large ? { enabled: false } : { enabled: true, renderCharacters: false, maxColumn: 72 },
     // 当前行高亮：'all' 会额外整行铺色；大文件只保留行号侧
     renderLineHighlight: large ? 'line' : 'all',
-    // 粘性滚动一律关闭（层级信息由函数树 / 糖折叠承担，不靠编辑器贴顶）
-    stickyScroll: { enabled: false },
+    // 粘性滚动（B3）：小文件档开——贴顶行给的就是大纲项（当前函数 / 当前时机块），
+    // 读长正文时"我在哪一层"不再靠滚回开头看。大文件档仍关：贴顶要在每次滚动后
+    // 按可见区间重算行位置，52,000 行那种文件上不划算（与本模块其余降级同一条理由）。
+    stickyScroll: large ? { enabled: false } : { enabled: true, maxLineCount: 4 },
   };
 }

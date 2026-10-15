@@ -15,6 +15,8 @@ describe('editorOptionsForLineCount（Monaco 大文件降级）', () => {
     expect(o.bracketPairColorization).toEqual({ enabled: true });
     expect(o.renderLineHighlight).toBe('all');
     expect(o.minimap).toEqual({ enabled: true, renderCharacters: false, maxColumn: 72 });
+    // B3：小文件开吸顶（贴顶行 = 当前大纲项）
+    expect(o.stickyScroll).toEqual({ enabled: true, maxLineCount: 4 });
   });
 
   it('大文件档：关掉全部"全文级"开销', () => {
@@ -24,6 +26,7 @@ describe('editorOptionsForLineCount（Monaco 大文件降级）', () => {
     expect(o.bracketPairColorization).toEqual({ enabled: false });
     expect(o.renderLineHighlight).toBe('line');
     expect(o.minimap).toEqual({ enabled: false });
+    expect(o.stickyScroll).toEqual({ enabled: false });
   });
 
   it('阈值边界含等号（LARGE_FILE_LINES 即降级）', () => {
@@ -31,11 +34,18 @@ describe('editorOptionsForLineCount（Monaco 大文件降级）', () => {
     expect(editorOptionsForLineCount(LARGE_FILE_LINES).occurrencesHighlight).toBe('off');
   });
 
-  it('两档都关词建议与粘性滚动（对 ERB / 中文口上无语义价值）', () => {
+  it('两档都关词建议（对 ERB / 中文口上无语义价值）；吸顶按体量分档（B3）', () => {
     for (const n of [10, 100_000]) {
       expect(editorOptionsForLineCount(n).wordBasedSuggestions).toBe('off');
-      expect(editorOptionsForLineCount(n).stickyScroll).toEqual({ enabled: false });
     }
+    // 小文件开、大文件关；两档都不许把吸顶"卡死"在开（切标签要能恢复）
+    expect(editorOptionsForLineCount(10).stickyScroll).toEqual({ enabled: true, maxLineCount: 4 });
+    expect(editorOptionsForLineCount(100_000).stickyScroll).toEqual({ enabled: false });
+    expect(editorOptionsForLineCount(LARGE_FILE_LINES - 1).stickyScroll).toEqual({
+      enabled: true,
+      maxLineCount: 4,
+    });
+    expect(editorOptionsForLineCount(LARGE_FILE_LINES).stickyScroll).toEqual({ enabled: false });
   });
 
   it('切回小文件可恢复（同一个函数既给降级也给还原，切标签不会"降级卡死"）', () => {

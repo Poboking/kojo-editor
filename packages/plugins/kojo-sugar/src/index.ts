@@ -45,6 +45,7 @@ import { createSugarPreviewService } from './preview';
 import { createSugarLiftService } from './lift';
 import { createSugarLiftApplyService } from './lift-apply';
 import { resolveKojoDefinition } from './definition';
+import { kojoDocumentSymbols } from './document-symbols';
 import type { DictionaryLookup } from './types';
 
 export function createKojoSugarPlugin(): Plugin {
@@ -322,6 +323,25 @@ export function createKojoSugarPlugin(): Plugin {
               { path: request.path, text: request.text, line: request.line, column: request.column },
               { transpile: service.transpile, sourceOf: service.sourceOf, index: erbIndexOf },
             ),
+          };
+        },
+      });
+
+      /* ---------------- 文档大纲（B3，2026-10-15 编辑器特性批） ----------------
+
+       同一个判别式联合的第二个成员，`.kojo` 这一腿由本包答：大纲项就是糖 AST 的
+       结构节点（时机 / 段 / 分支 / 选项…），节点自带 `loc`，行号与作者正在编辑的
+       缓冲区逐行对齐——不存在"索引过期"这回事，也不需要第二份表。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-symbols',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'documentSymbol') return undefined;
+          if (resolveSugarTarget(request.path) === null) return undefined;
+          return {
+            kind: 'documentSymbol',
+            symbols: kojoDocumentSymbols(service.parse(request.text, { filePath: request.path })),
           };
         },
       });

@@ -95,3 +95,59 @@ describe('kojo-sugar · ui.editor.languageService 装配', () => {
     expect(provided).toContain('sugar.transpile');
   });
 });
+
+/* ============================== B3 文档大纲 ============================== */
+
+describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
+  type SymbolsContribution = {
+    id: string;
+    provide(request: unknown): { kind: string; symbols: unknown[] } | undefined;
+  };
+
+  const symbolsOf = (slots: SlotRecord[]): SymbolsContribution => {
+    const hit = slots.find(
+      (s) => s.kind === 'ui.editor.languageService' && s.contribution.id === 'kojo-symbols',
+    );
+    if (!hit) throw new Error('ui.editor.languageService 未注册');
+    return hit.contribution as unknown as SymbolsContribution;
+  };
+
+  it('两枚贡献各管一个判别成员（`kojo-definition` / `kojo-symbols`）', () => {
+    const { slots } = activate();
+    expect(
+      slots
+        .filter((s) => s.kind === 'ui.editor.languageService')
+        .map((s) => s.contribution.id)
+        .sort(),
+    ).toEqual(['kojo-definition', 'kojo-symbols']);
+  });
+
+  it('只认 `.kojo`；ERB / 其它扩展名一律 undefined（让给 erb-parser 那条线）', () => {
+    const c = symbolsOf(activate().slots);
+    expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.ERB', text: '@A\n', project: null })).toBeUndefined();
+    expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.txt', text: '时机 指令 1：\n', project: null })).toBe(
+      undefined,
+    );
+    // definition 请求不打扰大纲贡献
+    expect(c.provide({ kind: 'definition', path: 'C:\\p\\a.kojo', text: '', line: 1, column: 1 })).toBeUndefined();
+  });
+
+  it('`.kojo` → 大纲树；空文件 → 认但不给（`{ symbols: [] }`，不装不认）', () => {
+    const c = symbolsOf(activate().slots);
+    expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.kojo', text: '', project: null })).toEqual({
+      kind: 'documentSymbol',
+      symbols: [],
+    });
+    const res = c.provide({
+      kind: 'documentSymbol',
+      path: 'C:\\p\\a.kojo',
+      text: '角色: 12\n时机 指令 310：\n    「嗯。」\n',
+      project: null,
+      lineCount: 3,
+    });
+    expect(res?.kind).toBe('documentSymbol');
+    expect(res!.symbols).toHaveLength(1);
+    // 止行含末行换行后的那一线空行（模型也这么数行）——区间覆盖到文件尾，不留"截半个块"
+    expect(res!.symbols[0]).toMatchObject({ name: '时机 指令 310', startLine: 2, endLine: 4 });
+  });
+});

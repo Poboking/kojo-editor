@@ -15,6 +15,7 @@ import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload,
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
 import { buildStructureFixes } from './structure-fix';
+import { erbDocumentSymbols } from './document-symbols';
 import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt } from './symbols';
 import {
@@ -495,6 +496,28 @@ export function createErbParserPlugin(): Plugin {
             kind: 'definition',
             locations: refs.map((ref) => ({ filePath: ref.filePath, line: ref.startLine })),
           };
+        },
+      });
+
+      /* ---------------- 文档大纲（B3，2026-10-15 编辑器特性批） ----------------
+
+       同一枚槽、同一个判别式联合的第二个成员（这正是单槽设计的意图：宿主与既有
+       贡献方零改动）。与 `erb-definition` 分枚注册而不是塞进同一个 `provide`：
+       两者**数据来源不同**（定义查项目索引、大纲解析当前缓冲区），混在一枚里
+       会让"索引未建 ⇒ 大纲也没了"这种假联动发生——大纲不该依赖项目开闭。
+
+       不按 `lineCount` 降级：判据是单遍线性扫描，与波浪线装饰器同一条口径
+       （见上方 decorator 的注册注）；吸顶用的就是它，大文件那档由宿主的选项分级
+       决定开不开，不由贡献方悄悄少报。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-symbols',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'documentSymbol') return undefined;
+          if (!isDialect(request.path)) return undefined;
+          if (request.text.length === 0) return { kind: 'documentSymbol', symbols: [] };
+          return { kind: 'documentSymbol', symbols: erbDocumentSymbols(parseErbText(request.text, request.path)) };
         },
       });
     },

@@ -89,17 +89,22 @@ type LanguageServiceContribution = {
   provide(request: unknown): { kind: string; locations: { filePath: string; line: number }[] } | undefined;
 };
 
-/** 取语言服务贡献（注册顺序里它是第三枚：decorator / codeAction / languageService） */
-function languageServiceOf(slots: SlotRecord[]): LanguageServiceContribution {
-  const hit = slots.find((s) => s.kind === 'ui.editor.languageService');
-  if (!hit) throw new Error('ui.editor.languageService 未注册');
+/** 按 id 取语言服务贡献（B3 起本包注册两枚：`erb-definition` / `erb-symbols`） */
+function languageServiceOf(slots: SlotRecord[], id = 'erb-definition'): LanguageServiceContribution {
+  const hit = slots.find((s) => s.kind === 'ui.editor.languageService' && s.contribution.id === id);
+  if (!hit) throw new Error(`ui.editor.languageService '${id}' 未注册`);
   return hit.contribution as unknown as LanguageServiceContribution;
 }
 
 describe('erb-parser · ui.editor.languageService 装配', () => {
   it('注册了语言服务贡献（id 稳定，便于宿主/诊断指认）', () => {
     const { slots } = activate();
-    expect(slots.filter((s) => s.kind === 'ui.editor.languageService')).toHaveLength(1);
+    expect(
+      slots
+        .filter((s) => s.kind === 'ui.editor.languageService')
+        .map((s) => s.contribution.id)
+        .sort(),
+    ).toEqual(['erb-definition', 'erb-symbols']);
     expect(languageServiceOf(slots).id).toBe('erb-definition');
   });
 
@@ -156,5 +161,68 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
     expect(parser.functionAt!(A, 2)?.name).toBe('ALPHA');
     expect(parser.functionAt!(A, 3)?.name).toBe('ALPHA');
     expect(parser.functionAt!(A, 99)).toBeUndefined();
+  });
+});
+
+/* ============================== B3 文档大纲 ============================== */
+
+describe('erb-parser · documentSymbol（B3 大纲）', () => {
+  /** 大纲贡献的返回形状与 definition 不同（`symbols` 树），故单独收窄一层 */
+  const symbolsOf = (slots: SlotRecord[]) =>
+    languageServiceOf(slots, 'erb-symbols') as unknown as {
+      provide(request: unknown): { kind: string; symbols: Record<string, unknown>[] } | undefined;
+    };
+
+  it('不认 `.kojo`（undefined）；认但空文本 → `{ symbols: [] }`（认但不给，不装不认）', () => {
+    const { slots } = activate();
+    const c = symbolsOf(slots);
+    expect(c.provide({ kind: 'documentSymbol', path: '/t/X.kojo', text: '@A\n', project: null })).toBeUndefined();
+    expect(c.provide({ kind: 'documentSymbol', path: A, text: '', project: null })).toEqual({
+      kind: 'documentSymbol',
+      symbols: [],
+    });
+  });
+
+  it('definition 请求不打扰大纲贡献（判别式各管各的）', () => {
+    const { slots } = activate();
+    expect(
+      symbolsOf(slots).provide({ kind: 'definition', path: A, text: FILES[A]!, line: 2, column: 2, project: null }),
+    ).toBeUndefined();
+  });
+
+  it('大纲来自**缓冲区文本**而非索引：未打开项目也给出，行号跟着未保存的编辑走', () => {
+    const { slots } = activate();
+    // 无注释、无形参 ⇒ 不给 detail（空串副标题是噪声）
+    const text = '\n\n@BETA\n\tRETURN 1\n';
+    const res = symbolsOf(slots).provide({ kind: 'documentSymbol', path: A, text, project: null });
+    expect(res?.kind).toBe('documentSymbol');
+    expect(res!.symbols).toEqual([{ name: 'BETA', kind: 'function', startLine: 3, endLine: 5 }]);
+  });
+
+  it('带注释块时用注释首行当副标题，无注释时用形参；`#DIM` 也进大纲（声明文件不空）', () => {
+    const { slots } = activate();
+    const c = symbolsOf(slots);
+    const text = '#DIM FOO\n;====\n;告白用\n@GAMMA(ARGS, ARG:1)\n\tRETURN 1\n';
+    const symbols = c.provide({ kind: 'documentSymbol', path: A, text, project: null })!.symbols;
+    expect(symbols.map((s) => s.name)).toEqual(['FOO', 'GAMMA']);
+    expect(symbols[0]).toMatchObject({ kind: 'declaration', startLine: 1, endLine: 1, detail: 'DIM' });
+    expect(symbols[1]).toMatchObject({ kind: 'function', startLine: 4, detail: '告白用' });
+    // 注释优先于形参；只有形参时给形参
+    const paramsOnly = c.provide({
+      kind: 'documentSymbol',
+      path: A,
+      text: '@GAMMA(ARGS, ARG:1)\n\tRETURN 1\n',
+      project: null,
+    })!.symbols;
+    expect(paramsOnly[0]).toMatchObject({ detail: '(ARGS, ARG:1)' });
+  });
+
+  it('超长注释截断（大纲一行放不下；截断带省略号）', () => {
+    const { slots } = activate();
+    const long = `;${'字'.repeat(120)}\n@DELTA\n\tRETURN 1\n`;
+    const detail = String(symbolsOf(slots).provide({ kind: 'documentSymbol', path: A, text: long, project: null })!
+      .symbols[0]!.detail);
+    expect(detail.length).toBeLessThanOrEqual(80);
+    expect(detail.endsWith('…')).toBe(true);
   });
 });

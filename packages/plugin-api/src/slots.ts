@@ -327,8 +327,24 @@ export interface EditorDefinitionRequest {
   readonly lineCount?: number;
 }
 
-/** 语言服务请求（当前只有 `definition`；新增能力 additive 追加联合成员，不改旧成员） */
-export type EditorLanguageServiceRequest = EditorDefinitionRequest;
+/**
+ * 文档大纲请求（B3，2026-10-15 编辑器特性批）——同一单槽的第二个判别成员。
+ *
+ * 与 `definition` 的输入差异**只有位置**：大纲要的是整篇结构，不是光标处那一个记号。
+ * `text` 仍是**模型全文**（不是磁盘内容）——大纲行号必须对得上作者正在看的那份缓冲区，
+ * 用索引里磁盘上的行号会随未保存编辑整体错位。
+ */
+export interface EditorDocumentSymbolRequest {
+  readonly kind: 'documentSymbol';
+  readonly path: string;
+  readonly text: string;
+  readonly project: GameProject | null;
+  /** 文件行数（体量事实，供贡献方按大小自行降级；缺省 = 未知，按不降级处理） */
+  readonly lineCount?: number;
+}
+
+/** 语言服务请求（`definition` / `documentSymbol`；新增能力 additive 追加联合成员，不改旧成员） */
+export type EditorLanguageServiceRequest = EditorDefinitionRequest | EditorDocumentSymbolRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -344,8 +360,36 @@ export interface EditorDefinitionResult {
   readonly locations: readonly EditorSymbolLocation[];
 }
 
+/**
+ * 文档符号的**中性类别**（B3）：契约只说"这是哪种层次的东西"，具体是什么语言结构
+ * （ERB 的 `@` 函数 / 表层 DSL 的时机块 / `#DIM` 声明）由贡献方决定并写进 `name`。
+ * 宿主按本字段映射编辑器图标，**零格式知识**。
+ */
+export type EditorDocumentSymbolKind = 'function' | 'section' | 'block' | 'declaration';
+
+/**
+ * 一条大纲项（B3）。行号为**模型坐标**（1 基、闭区间；宿主负责夹取越界值）。
+ * `children` 给出层次（时机块 → 段 → 分支…）；扁平结构省略。
+ */
+export interface EditorDocumentSymbol {
+  readonly name: string;
+  readonly kind: EditorDocumentSymbolKind;
+  readonly startLine: number;
+  readonly endLine: number;
+  /** 副标题（形参 / 条件原文等；编辑器按空间截断） */
+  readonly detail?: string;
+  readonly children?: readonly EditorDocumentSymbol[];
+}
+
+/** 文档大纲响应 */
+export interface EditorDocumentSymbolResult {
+  readonly kind: 'documentSymbol';
+  /** 顶层符号（含 `children` 树）；空数组 = 认这个文件但整篇无结构 */
+  readonly symbols: readonly EditorDocumentSymbol[];
+}
+
 /** 语言服务响应（按 `kind` 与请求一一对应） */
-export type EditorLanguageServiceResult = EditorDefinitionResult;
+export type EditorLanguageServiceResult = EditorDefinitionResult | EditorDocumentSymbolResult;
 
 /**
  * 编辑器语言服务贡献（槽 `ui.editor.languageService`）。
@@ -353,8 +397,9 @@ export type EditorLanguageServiceResult = EditorDefinitionResult;
  * **纯函数纪律**：`provide` 不读盘、不写盘、不发事件——数据**全部**来自贡献方，
  * 宿主只做 Monaco 协议翻译（位置进、位置出），绝不认识 ERB / 家族 / 角色。
  *
- * 返回值三态，宿主据此合并，无歧义：
- * - `undefined` = **我不认这个文件**（不该由我应答）——宿主跳过；
+ * 返回值三态，宿主据此合并，无歧义（以 `definition` 为例；`documentSymbol` 同构，
+ * 把"目标"换成"顶层符号树"）：
+ * - `undefined` = **我不认这个请求 / 这个文件**（不该由我应答）——宿主跳过；
  * - `{ locations: [] }` = 认这个文件、但此处没有定义（**不猜**）；
  * - `{ locations: [...] }` = 目标（可多个）。
  */

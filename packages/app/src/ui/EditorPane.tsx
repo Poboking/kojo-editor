@@ -19,6 +19,7 @@ import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
 import { installHover } from '../monaco/kojo-hover';
 import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
+import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
 import { useNotify } from './NotificationCenter';
@@ -998,6 +999,23 @@ export function EditorPane({
         });
       },
     });
+    // 文档大纲（B3）：同一枚 `ui.editor.languageService` 槽的第二个判别成员。宿主照旧只做
+    // 协议翻译——"这篇文档有哪些层"全在插件（ERB 给函数与声明、`.kojo` 给时机/段/分支）。
+    // 这份树同时是**粘性滚动**的贴顶来源（吸顶显示"当前在哪个函数 / 哪个时机块里"），
+    // 所以它必须在糖视图之外只认真 model：糖 model 的行号属于派生物，贴出来是错的层次。
+    const symbolsDisposer = installDocumentSymbolProvider(monaco, {
+      resolve: (model) => {
+        const path = filePathRef.current;
+        if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return [];
+        return collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
+          kind: 'documentSymbol',
+          path,
+          text: model.getValue(),
+          project: kernel.project.current(),
+          lineCount: model.getLineCount(),
+        });
+      },
+    });
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
     const completionDisposer = installKojoCompletion(monaco, () => editorTables(kernel));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
@@ -1005,6 +1023,7 @@ export function EditorPane({
     return () => {
       erbCompletionDisposer.dispose();
       completionDisposer.dispose();
+      symbolsDisposer.dispose();
       definitionDisposer.dispose();
       hoverDisposer.dispose();
       cmdDisposer.dispose();
