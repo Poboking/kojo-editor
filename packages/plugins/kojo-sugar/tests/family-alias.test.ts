@@ -99,6 +99,11 @@ describe('D2 写侧 · lowerExpression 家族头别名（唯一管线）', () =>
   it('防护③：字符串字面量内不碰', () => {
     expect(lowerExpression('"现在：噴乳"', exprCtx())).toBe('"现在：噴乳"');
   });
+
+  it('防护④：`Object.prototype` 成员名（`constructor:`）不替换（未登记 ⇒ 不猜，绝不吐函数源码）', () => {
+    expect(lowerExpression('constructor:5', exprCtx())).toBe('constructor:5');
+    expect(lowerExpression('hasOwnProperty:5', exprCtx())).toBe('hasOwnProperty:5');
+  });
 });
 
 /* ============================================================================ */

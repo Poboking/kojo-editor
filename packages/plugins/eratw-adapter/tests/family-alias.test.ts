@@ -63,6 +63,16 @@ describe('家族头中文别名（D2）× adapter', () => {
     expect(s.familyAliasReverse!('TALENT')).toBeUndefined();
   });
 
+  it('负自证：Object.prototype 成员名不命中（表无原型 ⇒ 绝不吐函数源码）', async () => {
+    const s = await schema();
+    // 作者写 `constructor:` / `hasOwnProperty:` 是未登记输入 ⇒ 必须 undefined，
+    // 而不是从 Object.prototype 继承到函数（那会静默替换成 `[native code]` 源码）
+    expect(s.familyAlias!('constructor')).toBeUndefined();
+    expect(s.familyAlias!('hasOwnProperty')).toBeUndefined();
+    expect(s.familyAlias!('__proto__')).toBeUndefined();
+    expect(s.familyAliasReverse!('CONSTRUCTOR')).toBeUndefined();
+  });
+
   it('表本身：四条映射且与 FAMILY_LABELS（显示名轴）不混用', () => {
     // 策展常量形态自证（`FAMILY_LABELS` 是显示名轴，`FAMILY_ALIASES` 是输入别名轴）
     expect(FAMILY_ALIASES).toEqual({ 现在: 'NOWEX', 时标: 'TFLAG', 标记: 'FLAG', 随机: 'RAND' });

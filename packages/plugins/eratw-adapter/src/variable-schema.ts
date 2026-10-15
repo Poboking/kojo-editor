@@ -174,17 +174,26 @@ const FAMILY_LABELS: Record<string, string> = {
  *
  * 注：`随机` 同时是**随机块的块关键字**（糖的语言层），本表只声明"它在**表达式位**的族头
  * 别名 = `RAND`"；块头位由词法器先判（`lexer.classifyLine`），两义不冲突（消歧见 D2 批测试）。
+ *
+ * **表必须是"无原型"对象**（`Object.create(null)`）：查表键来自**作者字节**，普通对象字面量
+ * 会让 `constructor:` / `hasOwnProperty:` 这类未登记输入命中 `Object.prototype` 成员（函数），
+ * 静默替换成函数源码 —— 正是"未登记 ⇒ 不猜"要根除的 fail-open。
  */
-export const FAMILY_ALIASES: Readonly<Record<string, string>> = {
+const aliasTable = (entries: Record<string, string>): Readonly<Record<string, string>> =>
+  Object.assign(Object.create(null) as Record<string, string>, entries);
+
+export const FAMILY_ALIASES: Readonly<Record<string, string>> = aliasTable({
   现在: 'NOWEX',
   时标: 'TFLAG',
   标记: 'FLAG',
   随机: 'RAND',
-};
+});
 
 /** `FAMILY_ALIASES` 的反向表（族头 → 中文别名；键统一大写 ⇒ 引擎大小写不敏感） */
-export const FAMILY_ALIASES_REVERSE: Readonly<Record<string, string>> = Object.fromEntries(
-  Object.entries(FAMILY_ALIASES).map(([alias, family]) => [family.toUpperCase(), alias]),
+export const FAMILY_ALIASES_REVERSE: Readonly<Record<string, string>> = aliasTable(
+  Object.fromEntries(
+    Object.entries(FAMILY_ALIASES).map(([alias, family]) => [family.toUpperCase(), alias]),
+  ),
 );
 
 /**

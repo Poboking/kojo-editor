@@ -6,7 +6,7 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **3294 passed / 35 skipped（3329）**；192 文件过 / 13 跳（205）（2026-10-16 本机实测，含糖 1/2/4/5/7 合流 + 常量入词表 + 常量宏化 + 段头 `若` P-1R + 形参默认值 + face-table-missing 两成因可区分 + 制品跨文件函数名唯一性 + D7 位补全） |
+| 全量测试 | **3296 passed / 35 skipped（3331）**；193 文件过 / 13 跳（206）（2026-10-16 本机实测，含段头去形 `若` + D2 家族头中文别名） |
 | 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **3327 passed / 1 skipped / ⚠ 1 failed（3329）**；失败 = `sugar-projection.corpus.test.ts`（台词行覆盖 62.5% < 99%），**由 `ff1b8ae`（P-1R 段头 `若` · 手段 3「函数级 all-or-nothing」）引入，与本批无关**；`12ed541` 同用例 99.2% 通过（2026-10-16 本机实测，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
