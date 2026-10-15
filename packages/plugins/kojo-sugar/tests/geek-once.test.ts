@@ -130,7 +130,7 @@ describe('1 号-A · 块体经 `emitBody`（块内 run / 嵌套同源）', () =>
     expect(p).toContain('IF ONCE("KEY")');
   });
 
-  it('与普通语句混排**不**触发 `section-mixed`（`初回` 不是 `段`，不走逐段信封）', () => {
+  it('与普通语句混排**不**触发 `section-mixed`（`初回` 不是 `若` 段，不走逐段信封）', () => {
     const src = doc('\t初回 "KEY"：\n\t\t「甲」\n\t「乙」\n');
     expect(codesOf(src)).not.toContain('section-mixed');
     expect(errsOf(src)).toEqual([]);

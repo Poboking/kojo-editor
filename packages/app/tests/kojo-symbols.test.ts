@@ -172,11 +172,11 @@ describe('toMonacoDocumentSymbols · 协议翻译', () => {
         kind: 'function',
         startLine: 1,
         endLine: 5,
-        children: [{ name: '段 喷乳', kind: 'section', startLine: 2, endLine: 3, detail: '停用' }],
+        children: [{ name: '若 噴乳', kind: 'section', startLine: 2, endLine: 3, detail: '备注' }],
       },
     ]);
     expect(timing?.detail).toBe('');
-    expect(timing?.children?.[0]).toMatchObject({ name: '段 喷乳', detail: '停用' });
+    expect(timing?.children?.[0]).toMatchObject({ name: '若 噴乳', detail: '备注' });
     expect(timing?.children?.[0]?.range.startLineNumber).toBe(2);
   });
 });

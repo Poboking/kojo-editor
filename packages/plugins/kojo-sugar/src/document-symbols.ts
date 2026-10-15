@@ -123,7 +123,6 @@ function rawSymbol(node: SugarNode | SugarTopLevelNode): EditorDocumentSymbol | 
         name: joinParts(['若', node.condition]),
         kind: 'section',
         ...rangeOf(node.loc, node.body),
-        ...(node.disabled ? { detail: '停用' } : {}),
         children: symbolsOfNodes(node.body),
       };
     case 'onceBlock':

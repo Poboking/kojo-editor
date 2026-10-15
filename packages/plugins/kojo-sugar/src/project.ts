@@ -426,8 +426,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
     }
 
     // 段信封（E13-2）：`LOCAL = n` + `IF LOCAL && <条件>` + `ENDIF` 折叠成一层
-    // `若 <条件>：` 头（`LOCAL = 0` → `（关）` 占位）。头落在原 `IF` 那一行上，
-    // 段体保持原相对深度（它本来就比 `IF` 深一层）。
+    // `若 <条件>：` 头。头落在原 `IF` 那一行上，段体保持原相对深度（它本来就比 `IF` 深一层）。
+    // 值 `0`（停用占位）的信封**不折**——见 `planSkeleton` 的"值 0 一律不折"条款。
     const sectionHead = skeleton.sectionHeadAt.get(ln);
     if (sectionHead !== undefined) {
       recs.push({
@@ -879,7 +879,7 @@ interface SkeletonPlan {
   /** 该行因"信封被拆掉"而应**减掉**的缩进层数 */
   dedentAt: (line: number) => number;
   /**
-   * 该行是**段信封**的头 → 投影成 `若 <条件>：`（E13-2；`关` 段带 `（关）`）。
+   * 该行是**段信封**的头 → 投影成 `若 <条件>：`（E13-2）。
    *
    * 与 `absorbed` 的分工：段头那一行**要产出可见行**（它就是段块头），
    * 信封的另两行（`LOCAL = n` / `ENDIF`）走 `absorbed`。
@@ -936,7 +936,7 @@ function splitWrapperHead(content: string): { name: string; decl: string } | nul
  * **③ 段信封**（E13-2，`LOCAL = n` + `IF LOCAL && <条件>`）折叠成一层 `若 <条件>：` 头：
  *
  * ```
- * LOCAL = 1           ┐ 吸收（记入チェック的值由糖的段头表达：`（关）` = 0）
+ * LOCAL = 1           ┐ 吸收（记入チェック的值由糖的段头表达；值 0 的信封一律不折）
  * IF LOCAL && NOWEX:噴乳  ← 这一行变成 `若 NOWEX:噴乳：`（**要产出可见行**）
  *     …段体…           │ 保持原相对深度（段头落在 `IF` 那一行上，段体本就深一层）
  * ENDIF               ┘ 吸收
@@ -1063,6 +1063,11 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
     if (assign === null) continue;
     const slot = assign[1];
     const value = assign[2]!;
+    // 1016 批：**值 `0` 的信封一律不折**（函数级纯信封 `LOCAL = 0` + `IF LOCAL`、段信封
+    // `LOCAL:n = 0` + `IF LOCAL:n && <条件>` 都算）。表层已删 `（关）` 停用标记；投影若照折，
+    // 作者原文件里 `LOCAL = 0` 的停用段会被折成与启用段一模一样的 `若 <条件>：`，贴回时写侧
+    // 恒发 `LOCAL = 1` ⇒ **静默把"停用"改成"启用" = 篡改作者数据**。宁可漏折（宁缺勿吞）。
+    if (value === '0') continue;
     // 无槽位（函数级）信封仍限缩进 0；带槽位的子段信封允许缩进层（P-1R 手段 1）
     if (slot === undefined && indentAt(ln) !== 0) continue;
     const baseIndent = indentAt(ln);
@@ -1100,11 +1105,11 @@ function planSkeleton(lines: string[], ctx: ProjContext): SkeletonPlan {
     if (!isPlainEnvelope) {
       // **段信封**：`LOCAL = n` 与 `ENDIF` 吸收（段头由糖的 `若` 头表达），
       // 段体**缩进不动**——段头落在原 `IF` 那一行上，段体本来就比它深一层。
-      // `n = 0`（記入チェック＝0）→ `（关）`；与 `非`（逻辑否定）不同轴。
+      // 值已保证是 `1`（值 `0` 早在上游 `continue`，不折）。
       absorbed.add(ln);
       absorbed.add(endLn);
       const cond = projectSectionCondition(sectionCondition!);
-      sectionHeadAt.set(ifLn, value === '0' ? `若 ${cond}（关）：` : `若 ${cond}：`);
+      sectionHeadAt.set(ifLn, `若 ${cond}：`);
       continue;
     }
 

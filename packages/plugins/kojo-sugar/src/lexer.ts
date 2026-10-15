@@ -236,7 +236,7 @@ export type LineClass =
   /** 文件头选项 `随机形: <值>`（P-4；`直出` = 随机块直出形，别的值按缺省形处理） */
   | { kind: 'randomShapeDecl'; value: string }
   | { kind: 'groupHead' }
-  | { kind: 'sectionHead'; condition: string; disabled: boolean }
+  | { kind: 'sectionHead'; condition: string }
   /** `初回 "key"：` 块头（1 号任务；产物 = `IF ONCE(<key>)` … `ENDIF`） */
   | { kind: 'onceHead'; key: string }
   /** `选项：` 块头（按钮形；产物 PRINTBUTTON + INPUTS + SELECTCASE RESULTS） */
@@ -890,42 +890,27 @@ function parseFunctionHead(rest: string): LineClass | null {
 }
 
 /**
- * `若 <ERB条件> [（关）]：`（P-1R 批新形；`段 …：` 为兼容受理的旧形）——库内
+ * `若 <ERB条件>：`（P-1R 批；1016 批删去旧形 `段` / `section`，只留 `若` 一词形）——库内
  * 「多信封分段」的可写块头。
  *
  * 段头一律按 **ERB 条件**解析（与 `如果` 同一条降糖管线，`expression.ts`）：
- * `若 NOWEX:噴乳：` / `若 非 NOWEX:噴乳：` / `若 NOWEX:噴乳（关）：`；
- * 旧形 `段 NOWEX:噴乳：` / `段 TFLAG:193 关：` 继续受理。
+ * `若 NOWEX:噴乳：` / `若 非 NOWEX:噴乳：` / `若 她的恋慕 >= 1：`。
  *
- * 两条头位规则：
+ * 头位规则：
  * - **只认行首那一个独立词**：`parseBlockHead` 的首词切分已保证——`若干年后：` 的首词是
  *   `若干年后`（非关键字）⇒ 天然落回普通行，不会被当段头；
- * - **新形 `若` 要求行尾终止符是全角 `：`**（半角 `:` 只留给旧形 `段`）。判据不满足 →
- *   返回 null，整行按普通文本处理（不造第二套诊断）。
+ * - **`若` 要求行尾终止符是全角 `：`**。判据不满足 → 返回 null，整行按普通文本处理
+ *   （不造第二套诊断）。
  *
- * 停用标记两形并存：**新形** `（关）` 行尾括注（投影发这一形）/ **旧形** 尾随独立 ` 关`
- * （只在**空白之后**、且其后没有别的字符时才算——条件是表达式，`关` 若不这样界定就可能
- * 吃掉条件本身的尾字）。条件为空（`若 ：` / 只写了 `若 关：`）→ 返回 null。
+ * 表层**没有**停用标记：`（关）` / 尾随 `关` 都不再被识别（1016 批删去）——行尾括注只当
+ * 条件的一部分。条件为空（`若 ：`）→ 返回 null。
  */
 function parseSectionHead(rest: string, head: string, raw: string): LineClass | null {
-  // 新形头 `若`：行尾终止符必须全角（旧形 `段` / `section` 不设此闸，保持原宽容面）
+  // 头位闸：唯一词形 `若`，行尾终止符必须全角
   if (head === '若' && !raw.endsWith(FULLWIDTH_COLON)) return null;
-  let trimmed = rest.trim();
+  const trimmed = rest.trim();
   if (trimmed.length === 0) return null;
-  let disabled = false;
-  const paren = /[（(]关[)）]$/.exec(trimmed);
-  if (paren) {
-    disabled = true;
-    trimmed = trimmed.slice(0, paren.index).trim();
-  } else {
-    const disabledMatch = /(?:^|\s)(关)$/.exec(trimmed);
-    if (disabledMatch) {
-      disabled = true;
-      trimmed = trimmed.slice(0, disabledMatch.index).trim();
-    }
-  }
-  if (trimmed.length === 0) return null;
-  return { kind: 'sectionHead', condition: trimmed, disabled };
+  return { kind: 'sectionHead', condition: trimmed };
 }
 
 /**

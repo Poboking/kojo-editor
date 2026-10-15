@@ -116,12 +116,9 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['group', 'block.group'],
   // 段块（E13 批）：库内「多信封分段」的可写形（产物 = `LOCAL = n` + `IF LOCAL && <条件>` 信封）。
   // 与 `如果` 同一降糖管线（段头原文当 ERB 条件），不另造一套条件语法。
-  // **新形头 = `若`**（P-1R 批，投影只发这一形）：段头非纯条件，`非 X` 是**逻辑否定**
-  // （走既有中文运算符管线，产物 `IF LOCAL && !X`），与"停用态"（`（关）`）不同轴。
+  // **唯一词形 = `若`**（P-1R 批；1016 批删去旧形 `段` / 英文 `section`）：段头非纯条件，
+  // `非 X` 是**逻辑否定**（走既有中文运算符管线，产物 `IF LOCAL && !X`），与"停用态"不同轴。
   ['若', 'block.section'],
-  // 旧形头（兼容受理；投影不再发）。`section` 是英文旧别名。
-  ['段', 'block.section'],
-  ['section', 'block.section'],
   ['选项', 'block.choice'],
   ['choice', 'block.choice'],
   // 数字输入菜单（B2）：逐条 `PRINTL [n]` + `INPUT` + `SELECTCASE RESULT` + 回跳环。

@@ -1480,11 +1480,11 @@ class BlockParser {
   /* ------------------------------ 段块（E13 批） ------------------------------ */
 
   /**
-   * `若 <ERB条件> [（关）]：` 块体（E13 批；旧形 `段 …：` / `段 … 关：` 兼容）——库内
+   * `若 <ERB条件>：` 块体（E13 批；1016 批只留 `若` 一词形）——库内
    * 「多信封分段」的糖形。
    *
    * 判据与 `随机`/`着色` 同款：块体缩进更深，逐条走 `parseBody`。**禁止段嵌套**
-   * （段体内再出现 `段`）——库内信封段是同层的，嵌套会让 `LOCAL` 槽的语义没有
+   * （段体内再出现 `若`）——库内信封段是同层的，嵌套会让 `LOCAL` 槽的语义没有
    * 唯一写法；报 `section-nested` 并**不产半成品**（与 `choice-nested` 同口径）。
    */
   private parseSectionBody(headLine: LogicalLine, cls: LineClass & { kind: 'sectionHead' }): SugarNode {
@@ -1538,7 +1538,6 @@ class BlockParser {
     return {
       kind: 'sectionBlock',
       condition: cls.condition,
-      disabled: cls.disabled,
       body,
       loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
       ...(preset ? { _preset: preset } : {}),
@@ -1550,7 +1549,7 @@ class BlockParser {
   /**
    * `初回 "key"：` 块体（1 号任务）——引擎 `ONCE(...)` 变量式访问器的块形糖。
    *
-   * 判据与 `着色` / `段` 同款：块体缩进更深，逐条走 `BlockParser.parseBody`（故块内
+   * 判据与 `着色` / `若` 同款：块体缩进更深，逐条走 `BlockParser.parseBody`（故块内
    * `你：` / `着色` 的 run 口径与其它块完全同源）。**缺 key / 空体一律 fail-closed**：
    * 报 `block-empty` 并**整块不产**（返回 null）——不拼半成品。
    */
@@ -1784,7 +1783,7 @@ class BlockParser {
       }
       if (line.indent < bodyIndent) break;
       if (line.indent > bodyIndent) {
-        // 更深但前面没有块头承接 → 缩进异常（与 `段`/`随机` 同款错误恢复）
+        // 更深但前面没有块头承接 → 缩进异常（与 `若`/`随机` 同款错误恢复）
         this.sink.report({
           code: 'indent-mismatch',
           severity: 'error',

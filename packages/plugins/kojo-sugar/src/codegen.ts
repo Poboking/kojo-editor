@@ -611,7 +611,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   em.pushGenerated(0, `RETURN RESULT`);
   em.blank();
 
-  // ---- 段块（E13 批）：顶层含 `段` 时改用「逐段信封」骨架 ----
+  // ---- 段块（E13 批）：顶层含 `若` 时改用「逐段信封」骨架 ----
   //
   // 两种骨架**不可混排**：段块的产物里**没有**外层那对 `IF LOCAL`/`ENDIF`
   // （每段自己带 `IF LOCAL && <条件>`），而普通正文靠外层信封守卫。混在一起
@@ -681,13 +681,13 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
 }
 
 /**
- * `若 …：` 块 → 库内手写的那 6 行信封（E13 批；旧形 `段 …：` 兼容）。
+ * `若 …：` 块 → 库内手写的那 6 行信封（E13 批）。
  *
  * 产物逐字对齐语料里的主流写法（`M_KOJO_K101_絶頂 .ERB` 的 噴乳 / 射精 / 放尿 三段）：
  *
  * ```
  * ;-------------------------------------------------
- * ;<段头原文>（記入チェック＝n）      ← n = 1；写了 `关` 的段写 0
+ * ;<段头原文>（記入チェック＝n）      ← n = 1
  * LOCAL = n
  * ;-------------------------------------------------
  * IF LOCAL && <段条件降糖后的 ERB 条件>
@@ -697,9 +697,10 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
  *
  * 段的**条件**走与 `如果` 完全相同的表达式降糖管线（`lowerExpression`）——
  * 不另造一套条件语法（`若 NOWEX:噴乳：` 与 `如果 NOWEX:噴乳：` 的表达式口径同源）。
+ * 表层无停用标记（1016 批删去 `（关）`）⇒ 每段的 `check` 恒为 `1`。
  */
 function emitSectionBlock(em: Emitter, node: SectionBlock, ctx: BodyContext, indent: number): void {
-  const check = node.disabled ? 0 : 1;
+  const check = 1;
   // P-3 保留段名（`首次`）：**整串硬编译**——`LOCAL:1 = n` + `IF LOCAL:1 && FIRSTTIME(SELECTCOM)`
   // （M6 子信封口径，与普通段的 bare `LOCAL` 不同）。段名不走 `lowerExpression`
   // （`SELECTCOM` 在糖表达式里不可解析）。产物无 `;---` 分节线（对齐库内全形）。

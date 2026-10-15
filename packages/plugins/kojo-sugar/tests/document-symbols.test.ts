@@ -83,15 +83,15 @@ describe('kojo-sugar · 文档大纲（documentSymbol）', () => {
     assertContained(symbols(src));
   });
 
-  it('段块成节；`若 …（关）` 标"停用"；命名参数进副标题（副标题只解释，不改名）', () => {
+  it('段块成节；命名参数进副标题（副标题只解释，不改名）', () => {
     const [named] = symbols('角色: 12\n时机 指令 310 成否: 游戏判定：\n    「甲」\n');
     expect(named).toMatchObject({ name: '时机 指令 310', detail: '成否: 游戏判定' });
     const [timing] = symbols(
-      '角色: 12\n时机 指令 310：\n    若 NOWEX:噴乳：\n        「甲」\n    若 TFLAG:193（关）：\n        「乙」\n',
+      '角色: 12\n时机 指令 310：\n    若 NOWEX:噴乳：\n        「甲」\n    若 TFLAG:193：\n        「乙」\n',
     );
     expect((timing!.children ?? []).map((c) => [c.name, c.kind, c.detail])).toEqual([
       ['若 NOWEX:噴乳', 'section', undefined],
-      ['若 TFLAG:193', 'section', '停用'],
+      ['若 TFLAG:193', 'section', undefined],
     ]);
   });
 
