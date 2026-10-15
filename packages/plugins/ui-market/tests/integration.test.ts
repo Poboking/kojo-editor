@@ -9,6 +9,8 @@ import {
   type Logger,
   type MarketService,
   type PluginContext,
+  type RemoteService,
+  type RemoteText,
   type ScopedStorage,
   type TextFile,
   type UIPanelContribution,
@@ -226,8 +228,27 @@ async function writeSource(fs: MemFS, id = 'demo.pack', kind = 'kojo-pack'): Pro
   );
 }
 
+/**
+ * 面板判据**不需要真出网**（面板也不碰远程：`refreshIndex` 的失败态另由
+ * `kernel/tests/integration-market.test.ts` 判），所以这里的远程面替身只会抛。
+ */
+function refusedRemote(): RemoteService {
+  return {
+    async fetchText(): Promise<RemoteText> {
+      throw new Error('本用例不该出网');
+    },
+  };
+}
+
 function makeService(io: FileIO, log: Logger = quietLog): MarketService {
-  return createMarketService({ io, storage: memStorage(), log, root: ROOT, appVersion: APP_VERSION });
+  return createMarketService({
+    io,
+    remote: refusedRemote(),
+    storage: memStorage(),
+    log,
+    root: ROOT,
+    appVersion: APP_VERSION,
+  });
 }
 
 interface FakeCtx {
@@ -265,10 +286,12 @@ function panelCtx(market: MarketService, io: FileIO, log: Logger): FakeCtx {
 /* --------------------------------- 判据 --------------------------------- */
 
 describe('ui-market 接线', () => {
-  it('插件声明：require 市场服务键 + kernel.io；不 provides；面板默认不激活', async () => {
+  it('插件声明：只 require 市场服务键（**面板不摸盘、也不碰远程**）；不 provides；面板默认不激活', async () => {
     const p = createUiMarketPlugin({ appVersion: APP_VERSION });
     expect(p.id).toBe('ui-market');
-    expect(p.requires).toEqual([MARKET_SERVICE_KEY, 'kernel.io']);
+    // 收口 A：三态与"拉不拉得动远程"都由服务给 ⇒ kernel.io 这条依赖已被摘掉
+    expect(p.requires).toEqual([MARKET_SERVICE_KEY]);
+    expect(p.requires).not.toContain('kernel.io');
     expect(p.provides ?? []).toEqual([]);
     expect(p.requires).not.toContain('kernel.storage');
 
@@ -307,7 +330,7 @@ describe('ui-market 接线', () => {
 describe('面板取数：四条显式态', () => {
   it('列表文件不在位 ⇒ list-missing（一句人话，不是空白屏）', async () => {
     const { io } = makeIo();
-    const snap = await loadMarketSnapshot({ market: makeService(io), io, log: quietLog });
+    const snap = await loadMarketSnapshot({ market: makeService(io), log: quietLog });
     expect(snap.status).toBe('list-missing');
     expect(snap.packs).toEqual([]);
     expect(snap.installed).toEqual([]);
@@ -316,14 +339,14 @@ describe('面板取数：四条显式态', () => {
   it('列表文件在位但 JSON 坏 ⇒ list-broken；packs 为空 ⇒ no-packs', async () => {
     const h = makeIo();
     h.fs.write(join(ROOT, 'index.json'), new TextEncoder().encode('{坏 JSON'));
-    let snap = await loadMarketSnapshot({ market: makeService(h.io), io: h.io, log: quietLog });
+    let snap = await loadMarketSnapshot({ market: makeService(h.io), log: quietLog });
     expect(snap.status).toBe('list-broken');
 
     h.fs.write(
       join(ROOT, 'index.json'),
       new TextEncoder().encode(JSON.stringify({ schema: 1, generatedAt: '2026-10-15T00:00:00Z', packs: [] })),
     );
-    snap = await loadMarketSnapshot({ market: makeService(h.io), io: h.io, log: quietLog });
+    snap = await loadMarketSnapshot({ market: makeService(h.io), log: quietLog });
     expect(snap.status).toBe('no-packs');
 
     h.fs.write(
@@ -349,7 +372,7 @@ describe('面板取数：四条显式态', () => {
         }),
       ),
     );
-    snap = await loadMarketSnapshot({ market: makeService(h.io), io: h.io, log: quietLog });
+    snap = await loadMarketSnapshot({ market: makeService(h.io), log: quietLog });
     expect(snap.status).toBe('ready');
     expect(snap.packs).toHaveLength(1);
   });
@@ -358,7 +381,7 @@ describe('面板取数：四条显式态', () => {
     const h = makeIo();
     const { log, warns } = captureLog();
     h.breakExists(true);
-    const snap = await loadMarketSnapshot({ market: makeService(h.io, log), io: h.io, log });
+    const snap = await loadMarketSnapshot({ market: makeService(h.io, log), log });
     expect(snap.status).toBe('list-unreadable');
     expect(warns.length).toBeGreaterThan(0);
   });
@@ -382,7 +405,7 @@ describe('面板卸载：一次确认 + 列表与磁盘同时为空', () => {
     const h = makeIo();
     await writeSource(h.fs);
     const market = counting(makeService(h.io));
-    const deps = { market, io: h.io, log: quietLog };
+    const deps = { market, log: quietLog };
     const rec = await market.installLocalDir(SOURCE);
     const dir = await market.installDir(rec.kind, rec.id, rec.version);
     expect(h.fs.exists(dir)).toBe(true);
@@ -399,7 +422,7 @@ describe('面板卸载：一次确认 + 列表与磁盘同时为空', () => {
     const h = makeIo();
     await writeSource(h.fs);
     const market = counting(makeService(h.io));
-    const deps = { market, io: h.io, log: quietLog };
+    const deps = { market, log: quietLog };
     const rec = await market.installLocalDir(SOURCE);
     const dir = await market.installDir(rec.kind, rec.id, rec.version);
 
@@ -420,7 +443,7 @@ describe('面板卸载：一次确认 + 列表与磁盘同时为空', () => {
     await writeSource(h.fs);
     const { log, warns } = captureLog();
     const market = makeService(h.io, log);
-    const deps = { market, io: h.io, log };
+    const deps = { market, log };
     const rec = await market.installLocalDir(SOURCE);
     const out = await runUninstall(deps, { ...rec, id: '没装过的包' }, true);
     expect(out.kind).toBe('failed');
@@ -437,7 +460,11 @@ describe('面板渲染（静态；node 环境无 DOM 事件）', () => {
     const panel = f.slots.find((s) => s.slot === 'ui.panel')!.item as UIPanelContribution;
     const html = renderToStaticMarkup(createElement(panel.component as never, {} as never));
     expect(html).toContain('本机还没有装好的包');
-    expect(html).toContain('刷新');
+    // 取数按钮 label = 「拉取列表」（busy 首帧读作「拉取中…」且禁用）；旧文案「刷新」已随面板接线改掉
+    expect(html).toContain('拉取中…');
+    expect(html).toContain('disabled');
+    // 数据时间行常驻，不被 busy 遮掩（作者要看得见自己用的是哪一刻的列表）
+    expect(html).toContain('还没有数据时间');
     expect(html).toContain('按包名或作者过滤');
     // 主行不许出现机器词（展开层是机器面，静态渲染里没有展开）
     for (const word of ['index.json', 'sha256', 'manifest', 'schema', 'kind', 'minAppVersion']) {

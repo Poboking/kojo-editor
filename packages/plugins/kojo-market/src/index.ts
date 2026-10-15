@@ -29,6 +29,7 @@ import {
   type FileIO,
   type MarketService,
   type Plugin,
+  type RemoteService,
 } from '@kojo/plugin-api';
 import { createMarketService } from './service';
 
@@ -55,10 +56,13 @@ export function createKojoMarketPlugin(opts: KojoMarketPluginOptions): Plugin {
   return {
     id: 'kojo-market',
     version: '0.1.0',
-    requires: [KernelServices.IO],
+    // 远程面走 `kernel.remote`（内核服务键）：**不借道 kernel.io**——出网是另一种能力，
+    // 显式 require 才审计得到（能力面 = 服务键面）
+    requires: [KernelServices.IO, KernelServices.Remote],
     provides: [MARKET_SERVICE_KEY],
     async activate(ctx): Promise<void> {
       const io = ctx.inject<FileIO>(KernelServices.IO);
+      const remote = ctx.inject<RemoteService>(KernelServices.Remote);
       const appData = await io.appDataDir();
       const root = join(appData, MARKET_DIR_NAME);
 
@@ -68,6 +72,7 @@ export function createKojoMarketPlugin(opts: KojoMarketPluginOptions): Plugin {
 
       const service: MarketService = createMarketService({
         io,
+        remote,
         storage: ctx.storage,
         log: ctx.log,
         root,

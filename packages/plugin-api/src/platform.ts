@@ -51,6 +51,45 @@ export interface BatchFileStat {
   size: number | null;
 }
 
+/**
+ * 远程**文本**拉取的结果（不落盘；小文件走 IPC 回字节）。
+ * `finalUrl` 是重定向之后的落点，平台侧已按同一份白名单重核过（诊断用）。
+ */
+export interface RemoteText {
+  text: string;
+  bytes: number;
+  status: number;
+  finalUrl: string;
+}
+
+/** 远程拉取的可调项（限额由调用方从契约常量传入；平台侧只保留"没传时"的兜底口径） */
+export interface RemoteTextOptions {
+  timeoutMs?: number;
+  maxBytes?: number;
+}
+
+/**
+ * 远程取文本的两层契约（内核服务键 `kernel.remote`，实现 = 平台桥的零逻辑透传）。
+ *
+ * 单独立一个服务键的理由与 `sugar.liftApply` 同源：**能力面 = 服务键面**。
+ * 出网与读写文件是两种能力，插件要网络就得显式 require，
+ * 不能靠"反正我已经有 `kernel.io` 了"顺带拿到。
+ * `FileIO` 因此**没有**任何远程方法（2026-10-15 收口：远程面只有 `kernel.remote` 这一条入口）。
+ *
+ * 契约里**没有任何主机名**：哪些地址可信由平台侧唯一决定（Rust `market.rs`），
+ * 两处各写一份白名单必然漂。
+ *
+ * 方法名两层同名 `fetchText`（桥 = 传输原语、服务 = 插件面；改名只许一次改齐两侧，
+ * 半个改名会让 `kernel.remote` 与桥各说各话）。
+ */
+export interface RemoteService {
+  /**
+   * @throws 平台无此能力（Node 桥）、URL 被白名单/协议/端口闸拒、跳到白名单外、
+   * 体积超限、超时、非 UTF-8 —— 一律抛错并带人话原因，调用侧自解释呈现。
+   */
+  fetchText(url: string, opts?: RemoteTextOptions): Promise<RemoteText>;
+}
+
 export interface WalkOptions {
   /** 最大递归深度（相对于起点，0 = 只列本层）；默认不限 */
   maxDepth?: number;
@@ -67,7 +106,6 @@ export interface WalkOptions {
 
 /** 文件监视回调（内核会在平台事件之上做去抖与归一化） */
 export type WatchCallback = (kind: FileChangeKind, path: string) => void;
-
 /** 某个根目录没能监视上（路径不存在 / 权限 / 句柄耗尽） */
 export interface WatchFailure {
   root: string;
@@ -170,6 +208,17 @@ export interface PlatformBridge {
   listWorkspaceRoots(): Promise<string[]>;
   /** 应用数据目录（存储域 / 备份的根） */
   appDataDir(): Promise<string>;
+  /**
+   * 拉一个远程**文本**（注册表索引这类小文件；**不落盘**，字节经 IPC 回来）。
+   *
+   * **能信哪些主机由平台侧唯一决定**：协议 / 主机白名单 / 逐跳重定向重核 / 体积上限 / 超时
+   * 全在平台命令内完成，本层与内核零判定 ⇒ 全仓不存在第二份白名单（它会漂）。
+   * 调用方只拿到"要么是人话错误、文本要么可信"。
+   *
+   * 无此能力的平台（Node 桥）**抛错**，调用侧自解释呈现（照 `exportFile` / `chooseWorkspaceRoot`
+   * 口径）——不许为了"测试里能跑"在 Node 桥复制一份白名单或退回 `fetch()`。
+   */
+  fetchText(url: string, opts?: RemoteTextOptions): Promise<RemoteText>;
   /** 字节 → 字符串 */
   decode(bytes: Uint8Array, encoding: FileEncoding): Promise<string>;
   /** 字符串 → 字节 */

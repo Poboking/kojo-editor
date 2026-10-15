@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { InstalledPack, MarketIndex, MarketIndexEntry, PackKind } from '@kojo/plugin-api';
+import type { InstalledPack, MarketIndex, MarketIndexEntry, MarketIndexState, PackKind } from '@kojo/plugin-api';
 import {
   appVersionRequirement,
   buildGroups,
   buildInstalledRows,
   CAPABILITY_HINT,
+  droppedNotice,
   formatBytes,
   KIND_LABEL,
   matchesQuery,
+  refreshNote,
   resolveStatus,
   STATUS_TEXT,
   statusText,
@@ -55,7 +57,10 @@ describe('种类与文案', () => {
       for (const w of banned) expect(`${status}:${text}`, w).not.toContain(w);
     }
     expect(statusText('ready')).toBe('');
-    expect(CAPABILITY_HINT).toContain('本批');
+    // 能力面说明说清两件事：网络装包没开放 + 本机文件夹装一直在（**作者面口径，不用「本批」这类开发黑话**）
+    expect(CAPABILITY_HINT).toContain('从网络直接装包还没有开放');
+    expect(CAPABILITY_HINT).toContain('装本机文件夹里的包一直在');
+    for (const jargon of ['本批', 'KM', 'endpoint', 'index']) expect(CAPABILITY_HINT, jargon).not.toContain(jargon);
   });
 
   it('版本要求说成「这个包要求编辑器不低于 x.y.z」', () => {
@@ -78,13 +83,53 @@ describe('显式态判定', () => {
     generatedAt: '2026-10-15T00:00:00Z',
     packs,
   });
+  const ok = (packs: MarketIndexEntry[]): MarketIndexState => ({
+    state: 'ok',
+    index: idx(packs),
+    dropped: [],
+    fetchedAt: 1_700_000_000_000,
+  });
 
-  it('四条各判一个状态，互不混用', () => {
-    expect(resolveStatus({ probe: 'absent', index: null })).toBe('list-missing');
-    expect(resolveStatus({ probe: 'unreadable', index: null })).toBe('list-unreadable');
-    expect(resolveStatus({ probe: 'present', index: null })).toBe('list-broken');
-    expect(resolveStatus({ probe: 'present', index: idx([]) })).toBe('no-packs');
-    expect(resolveStatus({ probe: 'present', index: idx([entry()]) })).toBe('ready');
+  it('判别联三态各判一个状态，互不混用（三态之外的分支编译期就不存在）', () => {
+    expect(resolveStatus({ state: 'absent' })).toBe('list-missing');
+    expect(resolveStatus({ state: 'invalid', reason: 'JSON 坏了', detail: 'p' })).toBe('list-broken');
+    expect(resolveStatus(ok([]))).toBe('no-packs');
+    expect(resolveStatus(ok([entry()]))).toBe('ready');
+    // `dropped` 非空但仍有可用条目 ⇒ 照样 ready（丢的那几条由 `droppedNotice` 单独出声）
+    const withDropped: MarketIndexState = { state: 'ok', index: idx([entry()]), dropped: ['x: id 不合规'], fetchedAt: null };
+    expect(resolveStatus(withDropped)).toBe('ready');
+  });
+
+  it('`list-unreadable` 不由判别联产生（它是"读这件事本身抛了"，归取数层的 catch）', () => {
+    const all: MarketIndexState[] = [{ state: 'absent' }, { state: 'invalid', reason: 'r' }, ok([]), ok([entry()])];
+    for (const s of all) {
+      expect(resolveStatus(s)).not.toBe('list-unreadable');
+    }
+  });
+
+  it('invalid 的人话与机器细节都进状态行（不许只剩一句"读不出"）', () => {
+    expect(statusText(resolveStatus({ state: 'invalid', reason: 'schema 不受支持' }), 'schema 不受支持')).toContain(
+      'schema 不受支持',
+    );
+  });
+
+  it('refreshNote 覆盖刷新的三个态（cached 不许演成"刚拉过"）', () => {
+    expect(refreshNote({ state: 'refreshed', index: ok([entry()]), fetchedAt: 1 })).toContain('1 个包');
+    expect(refreshNote({ state: 'refreshed', index: { state: 'absent' }, fetchedAt: 1 })).toContain('读不出内容');
+    expect(refreshNote({ state: 'cached', index: ok([]), fetchedAt: 1_700_000_000_000 })).toContain('没有回源');
+    const failed = refreshNote({ state: 'failed', reason: '域名不在允许清单', index: ok([entry()]) });
+    expect(failed).toContain('还是本机已有的那份');
+    expect(refreshNote({ state: 'failed', reason: 'r', index: { state: 'absent' } })).toContain('还没有可用的列表');
+  });
+
+  it('dropped 非空必须出声，一条没丢不占行', () => {
+    expect(droppedNotice([])).toBe('');
+    const line = droppedNotice(['a.pack: id 不合规', 'b.pack: id-kind-conflict（同名挂在多个种类下）']);
+    expect(line).toContain('2 条');
+    expect(line).toContain('a.pack: id 不合规');
+    expect(line).toContain('b.pack');
+    // 只列前三条，其余以省略号收（长列表不许把面板顶出屏）
+    expect(droppedNotice(['1', '2', '3', '4', '5'])).toContain('……');
   });
 });
 

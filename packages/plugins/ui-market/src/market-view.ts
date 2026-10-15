@@ -12,8 +12,9 @@ import {
   MARKET_PACK_KINDS,
   minAppVersionSatisfied,
   type InstalledPack,
-  type MarketIndex,
   type MarketIndexEntry,
+  type MarketIndexRefresh,
+  type MarketIndexState,
   type PackKind,
 } from '@kojo/plugin-api';
 
@@ -33,38 +34,104 @@ export type MarketViewStatus =
   | 'ready';
 
 export const STATUS_TEXT: Record<Exclude<MarketViewStatus, 'ready'>, string> = {
-  'list-missing': '本机还没有包列表：把注册表的列表文件放进编辑器的市场目录，再点「刷新」',
-  'list-broken': '包列表文件读不出内容（可能被外部改坏了）',
+  'list-missing': '本机还没有包列表：点上面的「拉取列表」从注册表同步',
+  'list-broken': '包列表文件读不出内容（可能被外部改坏了）：点「拉取列表」覆盖它',
   'list-unreadable': '市场目录读不出来（本机磁盘或权限问题）',
   'no-packs': '包列表里暂时没有可展示的包',
 };
 
-/** 本批能力面说明（远程装包要等解压原语落地 ⇒ 不留按钮、只说清楚） */
+/** 本批能力面说明（索引能拉能看，**装**还得等安装面接线 ⇒ 不留按钮、只说清楚） */
 export const CAPABILITY_HINT =
-  '这里只列本机市场目录里的包列表；从网络直接装包本批还没有开放（不是你的包有问题）。';
-
-/** 列表文件探测结果（区分"没有"与"读不动"，两者的人话不一样） */
-export type ListProbe = 'present' | 'absent' | 'unreadable';
+  '这里能拉取并浏览注册表列表；从网络直接装包还没有开放（不是你的包有问题）。装本机文件夹里的包一直在。';
 
 /**
- * 显式态判定。
- * `index === null` 而列表文件在位 ⇒ "读不出"（损坏/形状不认识）；
- * 文件不在位 ⇒ "还没有"。**服务缺席不在这里**：装配用 `requires` 硬声明，
- * 缺席时面板根本不会注册，不留一条永远不会走到的兜底。
+ * 显式态判定：**只吃服务的三态判别联**。
+ *
+ * 面板过去要先 `io.exists(index.json)` 摸一遍盘才能分辨"没有"与"读不出"——
+ * 那份摸盘判定是服务判定的复制品（会漂）。现在 `absent` / `invalid` / `ok` 互斥，
+ * 两句人话直接从判别联的分支来。
+ * `list-unreadable` 不在这里：它是"读这件事本身抛了"，由取数层的 catch 给。
+ * 服务缺席也不在这里：装配用 `requires` 硬声明，缺席时面板根本不会注册。
  */
-export function resolveStatus(o: {
-  probe: ListProbe;
-  index: MarketIndex | null;
-}): MarketViewStatus {
-  if (o.probe === 'unreadable') return 'list-unreadable';
-  if (o.probe === 'absent') return 'list-missing';
-  if (o.index === null) return 'list-broken';
-  return o.index.packs.length === 0 ? 'no-packs' : 'ready';
+export function resolveStatus(state: MarketIndexState): MarketViewStatus {
+  switch (state.state) {
+    case 'absent':
+      return 'list-missing';
+    case 'invalid':
+      return 'list-broken';
+    case 'ok':
+      return state.index.packs.length === 0 ? 'no-packs' : 'ready';
+  }
 }
 
-export function statusText(status: MarketViewStatus): string {
-  return status === 'ready' ? '' : STATUS_TEXT[status];
+export function statusText(status: MarketViewStatus, reason = ''): string {
+  if (status === 'ready') return '';
+  return reason === '' ? STATUS_TEXT[status] : `${STATUS_TEXT[status]}（${reason}）`;
 }
+
+/**
+ * 一次刷新的人话（`cached` 不是失败，但也不许演成"刚拉过"）。
+ * 三态全覆盖、无 default 分支 ⇒ 契约加第四个态时编译期就红。
+ */
+export function refreshNote(r: MarketIndexRefresh): string {
+  switch (r.state) {
+    case 'refreshed':
+      return r.index.state === 'ok'
+        ? `已拉取注册表列表（${r.index.index.packs.length} 个包）`
+        : '已拉取注册表列表，但本机这份读不出内容';
+    case 'cached':
+      return `列表还在新鲜期内（${formatClock(r.fetchedAt)} 拉取），这次没有回源`;
+    case 'failed':
+      return r.index.state === 'ok'
+        ? `拉取注册表没有成功：${r.reason}——现在显示的还是本机已有的那份`
+        : `拉取注册表没有成功：${r.reason}——本机还没有可用的列表`;
+  }
+}
+
+/**
+ * 被剔除条目必须可见（铁律 4）：形状坏的、同 id 异 kind 冲突的都算。
+ * 一条没丢 ⇒ 空串（不占行，也不写"暂无"）。
+ */
+export function droppedNotice(dropped: readonly string[]): string {
+  if (dropped.length === 0) return '';
+  return (
+    `包列表里有 ${dropped.length} 条形如破坏或互相冲突的条目，` +
+    '没有列出、也不许安装（这是注册表那边的问题，不是你的包）：' +
+    dropped.slice(0, 3).join('；') +
+    (dropped.length > 3 ? '……' : '')
+  );
+}
+
+/** epoch ms → 本地 `MM-DD HH:mm`（面板只给"数据时间"这种粗粒度，秒是噪声） */
+export function formatClock(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '—';
+  const d = new Date(ms);
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * 注册表自带的生成时刻（ISO 串）→ 人读；读不懂就原样给（**不许**拿"未知"盖住一个畸形值，
+ * 那正是作者要去追注册表 CI 的线索）。
+ */
+export function formatGeneratedAt(iso: string): string {
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? formatClock(ms) : iso;
+}
+
+/** 数据时间一行（面板主行；`fetchedAt` = 本机拉取时刻，`generatedAt` = 注册表生成时刻） */
+export function dataTimeLine(o: {
+  fetchedAt: number | null;
+  generatedAt: string | null;
+  endpoint: string;
+}): string {
+  const where = o.endpoint === '' ? '' : `（来源 ${o.endpoint}）`;
+  if (o.fetchedAt === null && o.generatedAt === null) return `还没有数据时间${where}`;
+  const pulled = o.fetchedAt === null ? '手工放置、本机没拉过' : `${formatClock(o.fetchedAt)} 拉取`;
+  const made = o.generatedAt === null ? '' : ` · 注册表生成于 ${formatGeneratedAt(o.generatedAt)}`;
+  return `数据时间：${pulled}${made}${where}`;
+}
+
 
 /** 字节数 → 人读体积（阈值固定，别让面板出现 `1048576`） */
 export function formatBytes(n: number): string {

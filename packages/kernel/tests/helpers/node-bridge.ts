@@ -9,6 +9,8 @@ import type {
   FileStat,
   PlatformBridge,
   RawFileRead,
+  RemoteText,
+  RemoteTextOptions,
   Unsubscribe,
   WalkOptions,
   WatchCallback,
@@ -248,6 +250,16 @@ export class NodeBridge implements PlatformBridge {
   async chooseWorkspaceRoot(): Promise<string | null> {
     // 同上：自选项目位置依赖系统目录对话框（且授权登记发生在平台命令内）
     throw new Error('chooseWorkspaceRoot is not supported by NodeBridge');
+  }
+
+  /**
+   * 远程取文本：**本桥刻意不复刻白名单**（那是 Rust 侧唯一真源，抄一份必然漂），
+   * 也不降级去 `fetch()`。生产口径 = 无此能力即抛错，调用侧自解释呈现（照 `exportFile`）。
+   * 判据要跑刷新链路时在实例上覆盖这一个方法即可（见 `integration-market.test.ts`）。
+   */
+  // 签名与契约一致（桥的替身若把参数抹掉，判据里覆盖这个方法就编不过 ⇒ 桩本身也得跟着契约走）
+  async fetchText(_url?: string, _opts?: RemoteTextOptions): Promise<RemoteText> {
+    throw new Error('本平台的桥没有远程取文本能力（Node 测试桥）');
   }
 
   async listWorkspaceRoots(): Promise<string[]> {

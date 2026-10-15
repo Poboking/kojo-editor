@@ -18,6 +18,7 @@ export {
   type StorageBackend,
 } from './storage';
 export { FileIOServiceImpl } from './io';
+export { RemoteServiceImpl } from './remote';
 export {
   BACKUP_VERSION_RE,
   backupBucketName,

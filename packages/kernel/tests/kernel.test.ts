@@ -43,6 +43,9 @@ function stubBridge(): PlatformBridge {
     chooseWorkspaceRoot: async () => {
       throw new Error('chooseWorkspaceRoot is not supported by this stub');
     },
+    fetchText: async () => {
+      throw new Error('本平台的桥没有远程取文本能力（测试桩）');
+    },
     listWorkspaceRoots: async () => [],
     appDataDir: async () => 'C:\\AppData\\kojo-test',
     decode: async () => '',

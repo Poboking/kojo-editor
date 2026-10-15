@@ -1,4 +1,4 @@
-import type { FileChangeKind, FileEncoding, PlatformBridge, WatchCallback, WatchReportCallback } from '@kojo/plugin-api';
+import type { FileChangeKind, FileEncoding, PlatformBridge, RemoteText, WatchCallback, WatchReportCallback } from '@kojo/plugin-api';
 import { base64ToBytes, bytesToBase64, invoke, isTauri } from './invoke';
 import { decodeReadFilesFrame } from './read-files-frame';
 
@@ -163,6 +163,20 @@ export const tauriBridge: PlatformBridge = {
 
   async appDataDir(): Promise<string> {
     return invoke<string>('app_data_dir');
+  },
+
+  /**
+   * 远程取文本（市场注册表索引）：**本层零判定**——协议 / 可信主机白名单 / 逐跳重定向重核 /
+   * 体积上限 / 超时全在 Rust `market_fetch_text` 内，与下载走的是**同一份**函数
+   * （两份白名单必然漂，故这里连主机名都不出现）。
+   * 非桌面壳时 `invoke` 自身抛错（`invoke.ts`），调用侧呈现"需要桌面壳"。
+   */
+  async fetchText(url: string, opts): Promise<RemoteText> {
+    return invoke<RemoteText>('market_fetch_text', {
+      url,
+      timeoutMs: opts?.timeoutMs ?? null,
+      maxBytes: opts?.maxBytes ?? null,
+    });
   },
 
   async decode(bytes: Uint8Array, encoding: FileEncoding): Promise<string> {

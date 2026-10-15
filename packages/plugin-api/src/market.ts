@@ -42,6 +42,16 @@ export const MARKET_PACKS_DIR = 'packs';
 /** 暂存目录段名（装完/失败都必须被清空；崩溃残壳由下次安装清扫） */
 export const MARKET_STAGING_DIR = '.staging';
 
+/* ------------------------- 注册表索引端点（KM-9） ------------------------- */
+
+/**
+ * 默认注册表端点（GitHub Pages 上注册表仓的 `index.json`）。
+ * 作者**可以覆盖**成自建镜像 / 内测源（`MarketService.setEndpoint`）——
+ * 但**没有"代理"这一项**：受众绝大部分没有代理客户端，跟随系统 / 进程环境即可，
+ * 做一个代理输入框等于把"没配好就一片红"的成本摊到所有人头上。
+ */
+export const MARKET_DEFAULT_INDEX_URL = 'https://poboking.github.io/kojo-market/index.json';
+
 /* --------------------------- 硬限额（DoS 面） --------------------------- */
 
 /** 清单条目数上限 */
@@ -52,6 +62,22 @@ export const MARKET_MAX_PATH_DEPTH = 12;
 
 /** 解压后总字节上限（128 MiB） */
 export const MARKET_MAX_UNPACKED_BYTES = 128 * 1024 * 1024;
+
+/**
+ * 索引体积上限（512 KiB）。实测线上 `index.json` = 1,586 B ⇒ 这是**注册表增长余量**，
+ * 不是猜测：超了就是有人在往索引里塞不该塞的东西，拒得对。
+ */
+export const MARKET_MAX_INDEX_BYTES = 512 * 1024;
+
+/** 拉索引的超时（索引是索引不是包体，不该让面板挂着转圈） */
+export const MARKET_INDEX_TIMEOUT_MS = 15_000;
+
+/**
+ * 索引新鲜度窗口（6 小时）：窗口内开面板**不回源**（`refreshIndex()` 直接给 `fresh`）。
+ * 口径 = TTL 而非 ETag：远程拉取只有一条不落盘的窄原语，条件请求要它带请求头
+ * ⇒ 命令面就得收"任意头部"，那是比"多打一次 1.6 KB"大得多的口子。
+ */
+export const MARKET_INDEX_TTL_MS = 6 * 60 * 60 * 1000;
 
 /* ------------------------------ 字面约束 ------------------------------ */
 
@@ -162,6 +188,40 @@ export interface InstalledPack {
 export const MARKET_SERVICE_KEY = 'market';
 
 /**
+ * 本机索引的**三态判别联**（取代旧的 `MarketIndex | null`）。
+ *
+ * 为什么不留 `null`：`null` 同时表达"本机还没有列表"和"有文件但读不出"，
+ * 面板要分辨就只能自己摸盘 ⇒ 摸盘的那份判定是第二份真相（而且它会漂）。
+ * 三态互斥、各带自己那句话，`absent` 不需要 reason（"没有"不是错误）。
+ */
+export type MarketIndexState =
+  | { readonly state: 'absent' }
+  /** 文件在位但读不出内容，或形状不受支持：`reason` 给人话，`detail` 给机器 */
+  | { readonly state: 'invalid'; readonly reason: string; readonly detail?: string }
+  | {
+      readonly state: 'ok';
+      readonly index: MarketIndex;
+      /**
+       * **被剔除条目的人话清单**（形状不合格的、以及同 id 异 kind 冲突的都在这里，
+       * 铁律 4：冲突必须可见——过去它被静默过滤在函数内部）。空数组 = 一条没丢。
+       */
+      readonly dropped: readonly string[];
+      /** 本机这份列表的拉取时刻（epoch ms）；手工放的/从没拉过的 = `null` */
+      readonly fetchedAt: number | null;
+    };
+
+/** 一次"从注册表刷新索引"的结果（失败也是一等态，不许"加载中"常驻） */
+export type MarketIndexRefresh =
+  | {
+      readonly state: 'refreshed';
+      readonly index: MarketIndexState;
+      readonly fetchedAt: number;
+    }
+  /** TTL 窗口内 ⇒ 没回源（不是失败，也不该装作拉过） */
+  | { readonly state: 'cached'; readonly index: MarketIndexState; readonly fetchedAt: number }
+  | { readonly state: 'failed'; readonly reason: string; readonly detail?: string; readonly index: MarketIndexState };
+
+/**
  * 市场装卸服务（由 `kojo-market` 插件 provide）。
  *
  * 落点全部住在 `<appData>/market` 下——这是本插件 activate 时**一次性**登记的
@@ -174,14 +234,32 @@ export const MARKET_SERVICE_KEY = 'market';
  * 这条不是注释礼仪：`kojo-market/tests/single-source.test.ts` 有守卫测试，
  * 市场相关源码里出现 `releases/latest` 字面量即红。
  *
- * 本批只有 `installLocalDir` 一条源：remote 装要等 Rust 解压命令落地
- * 后再扩契约（契约未定之前不留空壳）。
+ * 本批（KM-8/KM-9）索引面 = **读 + 从注册表刷新 + 端点覆盖**；
+ * **装包**仍只有 `installLocalDir` 一条源（远程装要等安装面接线，不留空壳）。
  */
 export interface MarketService {
   /** `<appData>/market` */
   rootDir(): Promise<string>;
-  /** 读 `<appData>/market/index.json`；缺失/坏 ⇒ `null` **且 log.warn**（铁律 4：内核不静默） */
-  index(): Promise<MarketIndex | null>;
+  /**
+   * 读 `<appData>/market/index.json` 的**三态判别联**（零网络）。
+   * 被 id/kind 唯一性剔除的条目如实出现在 `dropped` 里，并且**出声**（铁律 4）。
+   */
+  index(): Promise<MarketIndexState>;
+  /**
+   * 从生效端点拉索引 → 校验 schema → 经 `io.writeText` 落 `<appData>/market/index.json`
+   * → 记数据时间。TTL 窗口内不回源（`cached`）；任何一步失败都 ⇒ `failed` + 盘上旧列表原样保留。
+   *
+   * 写落点住在常驻可写根 `<appData>/market` 之内 ⇒ **不新增任何写允许域**（铁律 5）。
+   * 远程能力由平台侧唯一决定（Node 桥没有 ⇒ `failed`，不在别处复刻白名单）。
+   */
+  refreshIndex(opts?: { readonly force?: boolean }): Promise<MarketIndexRefresh>;
+  /** 生效端点（用户覆盖优先，否则 `MARKET_DEFAULT_INDEX_URL`） */
+  endpoint(): Promise<string>;
+  /**
+   * 覆盖注册表端点（作者自建镜像 / 内测源）；空串 = 恢复默认。
+   * @throws MarketError `endpoint-invalid` 形态不合格（只核形态：**可信主机的唯一真源在平台侧**）
+   */
+  setEndpoint(url: string): Promise<void>;
   /** 本机已装包（读 `ctx.storage`；派生落点不在位的条目会被剔除并出声） */
   installed(): Promise<InstalledPack[]>;
   /**
@@ -231,7 +309,8 @@ export type MarketRejectCode =
   | 'content-missing'
   | 'source-unreadable'
   | 'install-move-failed'
-  | 'installed-missing';
+  | 'installed-missing'
+  | 'endpoint-invalid';
 
 /** 带原因码的市场错误（装卸路径上所有拒绝都从这里出） */
 export class MarketError extends Error {
@@ -318,6 +397,27 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 | null {
 export function coreVersion(v: string): string {
   const dash = v.indexOf('-');
   return dash === -1 ? v : v.slice(0, dash);
+}
+
+/**
+ * 端点**形态**闸（纯函数，零网络）：必须是 https、必须有主机名、不许带 userinfo。
+ *
+ * 这不是白名单——**可信主机的唯一真源在平台侧**（Rust `market.rs` 的
+ * `host_in_allowlist`，逐跳重核）。TS 侧再写一份主机名单就是第二份真相，
+ * 而且它会漂（本仓为两份 `isIdentPart` 付过两次代价）。本闸只拦"一看就打不开"的输入，
+ * 让作者在自己的镜像地址还没联网时就拿到一句人话。
+ */
+export function endpointProblem(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return '不是一个合法 URL';
+  }
+  if (parsed.protocol !== 'https:') return `协议必须是 https（收到 ${parsed.protocol}）`;
+  if (parsed.hostname.length === 0) return 'URL 没有主机名';
+  if (parsed.username.length > 0 || parsed.password.length > 0) return 'URL 不许带账号信息';
+  return null;
 }
 
 /**

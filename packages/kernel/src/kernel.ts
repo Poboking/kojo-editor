@@ -18,6 +18,7 @@ import { ServiceContainer } from './container';
 import { FileIOServiceImpl } from './io';
 import { ProjectServiceImpl } from './project';
 import { PluginRuntime } from './runtime';
+import { RemoteServiceImpl } from './remote';
 import { SlotRegistryImpl } from './slots';
 import { FileStorageBackend, StorageServiceImpl } from './storage';
 import { WorkspaceServiceImpl } from './workspace';
@@ -113,6 +114,8 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
   container.provide(KernelServices.Storage, storage, 'kernel');
   container.provide(KernelServices.Slots, slots, 'kernel');
   container.provide(KernelServices.Compute, compute, 'kernel');
+  // 远程取文本：桥的零逻辑透传（判定不住内核；见 `remote.ts`）
+  container.provide(KernelServices.Remote, new RemoteServiceImpl(opts.platform), 'kernel');
 
   const runtime = new PluginRuntime({
     container,

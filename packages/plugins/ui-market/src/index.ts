@@ -1,19 +1,23 @@
 /**
  * @kojo/plugin-ui-market
  *
- * 口上市场面板（`ui.panel` 贡献；KM-3）。
+ * 口上市场面板（`ui.panel` 贡献；KM-3 + KM-8 索引面接线）。
  *
  * ## 本批能力面（刻意**很小**，别自己加）
  *
- * Rust 解压原语还没落地 ⇒ 远程装包**没有能力**。所以面板不放安装按钮、不留空壳，
- * 只做四件完整的事：
+ * 安装面（从注册表装包）还没接线 ⇒ 面板不放安装按钮、不留空壳，只做五件完整的事：
  * 1. 索引浏览（按种类分组 + 名称/作者过滤 + 版本/体积/文件数/作者/许可/版本要求）；
  * 2. 已装列表（版本 + 来源；核对码前 8 位只住展开层）；
  * 3. 卸载（**一次确认**，走 `runUninstall`：不确认连服务都不叫）；
- * 4. 显式态（列表缺失 / 读不出 / 损坏 / 没有包 ⇒ 各一句人话；绝不空白屏、绝不"加载中"常驻）。
+ * 4. 拉取列表（挂载走 TTL、按钮硬回源；**数据时间**常驻，失败态显式）；
+ * 5. 显式态（没有列表 / 读不出 / 目录读不动 / 没有包 ⇒ 各一句人话；绝不空白屏、绝不"加载中"常驻）。
  *
- * 装配语义照 `ui-sugar-lift`：`requires: [MARKET_SERVICE_KEY]` + `ctx.inject`——
- * **不 import `@kojo/plugin-kojo-market`**（audit C：插件间禁交叉 import；服务面就是接缝）。
+ * 依赖只有一个：`requires: [MARKET_SERVICE_KEY]`。**面板不摸盘**——
+ * "本机有没有列表"与"有但读不出"是 `MarketService.index()` 判别联的两个分支，
+ * 面板自己 `io.exists()` 一次就是把它复制了一遍（会漂）。
+ *
+ * 装配语义照 `ui-sugar-lift`：**不 import `@kojo/plugin-kojo-market`**
+ * （audit C：插件间禁交叉 import；服务面就是接缝）。
  *
  * 文案纪律（作者长期口径）：机器词（`kind`/`id`/`manifest`/`index.json`/`sha256`/`schema`）
  * 不上主行，只在展开层与日志里出现；卸载结果走**面板内联状态行**，不弹窗（HK-4）。
@@ -21,21 +25,27 @@
 
 import { createElement, useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
-  KernelServices,
   MARKET_SERVICE_KEY,
   PACK_VERSION_RE,
   coreVersion,
-  type FileIO,
   type MarketService,
   type Plugin,
   type UIPanelProps,
 } from '@kojo/plugin-api';
-import { loadMarketSnapshot, runUninstall, type MarketActionDeps, type MarketSnapshot } from './actions';
+import {
+  loadMarketSnapshot,
+  pullMarketSnapshot,
+  runUninstall,
+  type MarketActionDeps,
+  type MarketSnapshot,
+} from './actions';
 import {
   appVersionRequirement,
   buildGroups,
   buildInstalledRows,
   CAPABILITY_HINT,
+  dataTimeLine,
+  droppedNotice,
   formatBytes,
   installedKey,
   pendingKey,
@@ -60,12 +70,11 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
   return {
     id: 'ui-market',
     version: '0.1.0',
-    requires: [MARKET_SERVICE_KEY, KernelServices.IO],
+    // 只有服务一个依赖：三态与"拉不拉得动远程"都在服务里，面板不再摸盘（收口 A）
+    requires: [MARKET_SERVICE_KEY],
     activate(ctx): void {
       const deps: MarketActionDeps = {
         market: ctx.inject<MarketService>(MARKET_SERVICE_KEY),
-        // 只用来区分"列表文件没有"与"有但读不出"——两种情形是两句不同的话
-        io: ctx.inject<FileIO>(KernelServices.IO),
         log: ctx.log,
       };
 
@@ -75,6 +84,12 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           status: 'list-missing',
           packs: [],
           installed: [],
+          dropped: [],
+          reason: '',
+          fetchedAt: null,
+          generatedAt: null,
+          endpoint: '',
+          pullNote: '',
         });
         const [busy, setBusy] = useState(true);
         const [note, setNote] = useState('');
@@ -83,9 +98,21 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
         const [pending, setPending] = useState<string | null>(null);
         const [open, setOpen] = useState<string | null>(null);
 
+        /** 打开面板：走 TTL（新鲜期内不回源，但数据时间与拉取结果照样显示） */
         const reload = useCallback(async (): Promise<void> => {
           setBusy(true);
-          setSnapshot(await loadMarketSnapshot(deps));
+          const snap = await pullMarketSnapshot(deps, false);
+          setSnapshot(snap);
+          setNote(snap.pullNote);
+          setBusy(false);
+        }, []);
+
+        /** 点「拉取列表」：无视 TTL 硬回源一次（作者刚改了注册表就是要立刻看到） */
+        const pull = useCallback(async (): Promise<void> => {
+          setBusy(true);
+          const snap = await pullMarketSnapshot(deps, true);
+          setSnapshot(snap);
+          setNote(snap.pullNote);
           setBusy(false);
         }, []);
 
@@ -110,7 +137,9 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
         const installedKeys = new Set(snapshot.installed.map((r) => installedKey(r.kind, r.id, r.version)));
         const groups = buildGroups(snapshot.packs, av, query, installedKeys);
         const rows = buildInstalledRows(snapshot.installed);
-        const line = statusText(snapshot.status);
+        const line = statusText(snapshot.status, snapshot.reason);
+        const time = dataTimeLine(snapshot);
+        const droppedLine = droppedNotice(snapshot.dropped);
 
         const indexSection = (g: ReturnType<typeof buildGroups>[number]): ReactNode =>
           createElement(
@@ -159,12 +188,15 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
             }),
             createElement(
               'button',
-              { className: 'ghost small', disabled: busy, onClick: () => void reload() },
-              busy ? '刷新中…' : '刷新',
+              { className: 'ghost small', disabled: busy, onClick: () => void pull() },
+              busy ? '拉取中…' : '拉取列表',
             ),
           ),
           line === '' || busy ? null : createElement('div', { className: 'mk-status' }, line),
+          // 数据时间与拉取结果**不受 busy 遮掩**：失败态必须一直在屏上（不许"加载中"常驻顶掉它）
+          time === '' ? null : createElement('div', { className: 'mk-time' }, time),
           note === '' ? null : createElement('div', { className: 'mk-note' }, note),
+          droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
           createElement('div', { className: 'mk-hint' }, CAPABILITY_HINT),
           createElement('h4', { className: 'mk-grouptitle' }, '已安装'),
           rows.length === 0
@@ -245,18 +277,29 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
   };
 }
 
-export { loadMarketSnapshot, runUninstall, type MarketActionDeps, type UninstallOutcome } from './actions';
+export {
+  loadMarketSnapshot,
+  pullMarketSnapshot,
+  runUninstall,
+  type MarketActionDeps,
+  type MarketSnapshot,
+  type UninstallOutcome,
+} from './actions';
 export {
   appVersionRequirement,
   buildGroups,
   buildInstalledRows,
   CAPABILITY_HINT,
+  dataTimeLine,
+  droppedNotice,
   formatBytes,
+  formatClock,
+  formatGeneratedAt,
   KIND_LABEL,
   matchesQuery,
+  refreshNote,
   resolveStatus,
   STATUS_TEXT,
   statusText,
-  type ListProbe,
   type MarketViewStatus,
 } from './market-view';

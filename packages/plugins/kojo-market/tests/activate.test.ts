@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  KernelServices,
   MARKET_DIR_NAME,
   MARKET_SERVICE_KEY,
   join,
@@ -7,6 +8,8 @@ import {
   type Logger,
   type MarketService,
   type PluginContext,
+  type RemoteService,
+  type RemoteText,
   type ScopedStorage,
 } from '@kojo/plugin-api';
 import { createKojoMarketPlugin } from '../src/index';
@@ -47,6 +50,12 @@ function recordingIo(): { io: FileIO; order: string[]; roots: string[] } {
 function fakeCtx(io: FileIO, storage: ScopedStorage): { ctx: PluginContext; provided: Map<string, unknown> } {
   const provided = new Map<string, unknown>();
   const log: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+  const remote: RemoteService = {
+    // activate 阶段不拉远程（拉不拉得动是刷新链路的判据）；这里只证明**它确实被 require 了**
+    async fetchText(): Promise<RemoteText> {
+      throw new Error('activate 不该出网');
+    },
+  };
   const ctx = {
     pluginId: 'kojo-market',
     log,
@@ -54,8 +63,9 @@ function fakeCtx(io: FileIO, storage: ScopedStorage): { ctx: PluginContext; prov
     slots: { register: () => () => {}, query: () => [] },
     bus: { on: () => () => {}, emit: () => {}, once: () => () => {}, off: () => {} },
     inject: (key: string) => {
-      if (key !== 'kernel.io') throw new Error(`unexpected hard dependency: ${key}`);
-      return io;
+      if (key === 'kernel.io') return io;
+      if (key === 'kernel.remote') return remote;
+      throw new Error(`unexpected hard dependency: ${key}`);
     },
     provide: (key: string, value: unknown) => provided.set(key, value),
     tryInject: () => undefined,
@@ -84,10 +94,10 @@ function memStorage(): ScopedStorage & { store: Map<string, unknown> } {
 }
 
 describe('kojo-market activate', () => {
-  it('插件形状：requires 只要 kernel.io，provides 只有 market，契约里没有的字段一个不自造', () => {
+  it('插件形状：requires = kernel.io + kernel.remote（远程面显式 require，不借道 io），provides 只有 market', () => {
     const p = createKojoMarketPlugin({ appVersion: '0.4.0-beta.1' });
     expect(p.id).toBe('kojo-market');
-    expect(p.requires).toEqual(['kernel.io']);
+    expect(p.requires).toEqual([KernelServices.IO, KernelServices.Remote]);
     expect(p.provides).toEqual([MARKET_SERVICE_KEY]);
     expect(Object.keys(p).sort()).toEqual(['activate', 'id', 'provides', 'requires', 'version']);
   });
