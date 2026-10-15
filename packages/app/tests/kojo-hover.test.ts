@@ -1,8 +1,9 @@
 /**
  * ZH-F2 · 悬停**中文名**解析（`resolveHoverName`）纯逻辑单测。
  *
- * Monaco 绑定（`installHover`）刻意薄——本文件只测"光标位置 + 三张表 → 中文名"的解析，
- * 不引入 Monaco（注册只做协议翻译，逻辑全在纯函数里）。
+ * Monaco 绑定（`installHover`）刻意薄——本文件主要测"光标位置 + 三张表 → 中文名"的解析，
+ * 另以**假 Monaco**（`import type`，无运行时依赖）钉住"`.erb` 与 `.kojo` 两个语言 id 复用
+ * 同一 provider"（EC-6）。
  *
  * 覆盖：数值变量索引（`CFLAG:TARGET:1088` → 好感度）、英文函数名（系统表反向 + adapter
  * 基础库表反查）、指令编号（只在糖的 `时机 <分野> <编号>：` 块头里认）；以及三组
@@ -10,9 +11,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type * as Monaco from 'monaco-editor';
 import type { KojoInstructionTable, KojoLibraryTable } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
-import { type HoverTables, resolveHoverName } from '../src/monaco/kojo-hover';
+import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
+import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { type HoverTables, installHover, resolveHoverName } from '../src/monaco/kojo-hover';
 
 /** 桩变量字典：CFLAG 1088 = 好感度（另含一条具名索引，用于钉住"中文名不进反查面"） */
 const dict: DictionaryLookup = {
@@ -105,5 +109,80 @@ describe('悬停中文名 · fail-visible 负例（绝不猜）', () => {
   it('光标落在空格 / 空白处 → 不显示', () => {
     expect(at('IF |  A')).toBeUndefined();
     expect(at('|')).toBeUndefined();
+  });
+});
+
+/**
+ * ERB 悬浮拓展（EC-6）——证明 `.erb` 语言 id 下**复用同一 hover provider**。
+ *
+ * `installHover` 对 `ERB_LANGUAGE_ID` 与 `KOJO_LANGUAGE_ID` 注册**同一个** provider 实例；
+ * provider 只做"位置 → `resolveHoverName` → Monaco hover"的薄翻译，本身与语言无关，
+ * 故 ERB 语境下的变量路（`CFLAG:TARGET:1088`）与函数路（`GETBIT`）天然出货中文名。
+ * 这里用**假 Monaco** 捕获注册与出货，不引入真 Monaco 运行时。
+ */
+
+/** 假 Monaco：只记录 hover provider 注册（含释放句柄），用于钉住"同一 provider 挂两个语言 id" */
+function fakeMonaco() {
+  const regs: { langId: string; provider: Monaco.languages.HoverProvider; disposed: boolean }[] = [];
+  const monaco = {
+    languages: {
+      registerHoverProvider: (langId: string, provider: Monaco.languages.HoverProvider) => {
+        const rec = { langId, provider, disposed: false };
+        regs.push(rec);
+        return {
+          dispose: () => {
+            rec.disposed = true;
+          },
+        };
+      },
+    },
+  } as unknown as typeof Monaco;
+  return { monaco, regs };
+}
+
+const noopToken = {
+  isCancellationRequested: false,
+  onCancellationRequested: () => ({ dispose: () => undefined }),
+} as unknown as Monaco.CancellationToken;
+
+/** 让给定 provider 在带 `|` 标记的行文本上出货（1 基列 = 标记前字符数 + 1；与 `at` 同口径） */
+function hoverAt(provider: Monaco.languages.HoverProvider, marked: string) {
+  const line = marked.replace('|', '');
+  const model = { getLineContent: () => line } as unknown as Monaco.editor.ITextModel;
+  const position = { lineNumber: 1, column: marked.indexOf('|') + 1 } as Monaco.Position;
+  return provider.provideHover(model, position, noopToken) as Monaco.languages.Hover | undefined;
+}
+
+describe('ERB 悬浮 · installHover 复用同一 provider', () => {
+  it('对 `ERB_LANGUAGE_ID` 与 `KOJO_LANGUAGE_ID` 注册**同一个** provider 实例', () => {
+    const { monaco, regs } = fakeMonaco();
+    installHover(monaco, () => tables);
+    expect(regs.map((r) => r.langId)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID]);
+    expect(regs[0]!.provider).toBe(regs[1]!.provider);
+  });
+
+  it('ERB 语境 · 变量路：`CFLAG:TARGET:1088` 出货中文名「好感度」', () => {
+    const { monaco, regs } = fakeMonaco();
+    installHover(monaco, () => tables);
+    const erb = regs.find((r) => r.langId === ERB_LANGUAGE_ID)!;
+    const text = JSON.stringify(hoverAt(erb.provider, 'IF CFLAG:TARGET:|1088 >= 500')?.contents);
+    expect(text).toContain('好感度');
+    expect(text).toContain('变量');
+  });
+
+  it('ERB 语境 · 函数路：英文函数名 `GETBIT` 出货中文名「获取标记」', () => {
+    const { monaco, regs } = fakeMonaco();
+    installHover(monaco, () => tables);
+    const erb = regs.find((r) => r.langId === ERB_LANGUAGE_ID)!;
+    const text = JSON.stringify(hoverAt(erb.provider, 'SIF |GETBIT(A,0)')?.contents);
+    expect(text).toContain('获取标记');
+    expect(text).toContain('GETBIT');
+  });
+
+  it('释放句柄 → 两个语言 id 的注册一并 dispose', () => {
+    const { monaco, regs } = fakeMonaco();
+    installHover(monaco, () => tables).dispose();
+    expect(regs.map((r) => r.langId)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID]);
+    expect(regs.every((r) => r.disposed)).toBe(true);
   });
 });
