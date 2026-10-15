@@ -17,6 +17,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { createSugarTranspileService } from '../src/service';
+import { SUGAR_LEXICON_WORDS } from '../src/keywords';
 import { stubDict, stubFaceTable } from './support';
 
 const svc = () => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
@@ -139,5 +140,28 @@ describe('7 号 · 与既有 `@` 块产物共存', () => {
     expect(declIdx).toBeGreaterThanOrEqual(0);
     expect(rawIdx).toBeGreaterThan(declIdx);
     expect(lines).toContain('\t#DIM Y'); // 原生块逐行原样透传（缩进保留）
+  });
+});
+
+/* ================================ 编辑器词表 ================================ */
+
+describe('7 号 · 关键字登记进词表（高亮/补全单一真源）', () => {
+  it('`常量` / `const` 在 `SUGAR_LEXICON_WORDS` 里（role=head，中文主形 primary）', () => {
+    for (const w of ['常量', 'const']) {
+      const hit = SUGAR_LEXICON_WORDS.find((x) => x.word === w);
+      expect(hit, `${w} 未登记`).toBeDefined();
+      expect(hit!.id).toBe('head.const');
+      expect(hit!.role).toBe('head');
+    }
+    expect(SUGAR_LEXICON_WORDS.find((x) => x.word === '常量')!.primary).toBe(true);
+    expect(SUGAR_LEXICON_WORDS.find((x) => x.word === 'const')!.primary).toBe(false);
+  });
+
+  it('登记进词表**不改判定**：`常量 X = 5` 仍走常量通路（产物顶格 `#DIM CONST`），不进 `headDecl`', () => {
+    const src = doc('常量 X = 5');
+    expect(errCodes(src)).toEqual([]);
+    expect(outLines(src)).toContain('#DIM CONST X = 5');
+    // 若被 `词: 值` 通路截半，产物里会出现把 `=` 前那截当头部值的怪东西
+    expect(outLines(src).some((l) => l.includes('X =') && !l.startsWith('#DIM CONST'))).toBe(false);
   });
 });

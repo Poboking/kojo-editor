@@ -21,6 +21,8 @@ export type KeywordId =
   | 'head.narrationColor'
   | 'head.switch'
   | 'head.alias'
+  /* 文件级常量（7 号批：`常量 <名> = <整数>` → 函数外顶格 `#DIM CONST`） */
+  | 'head.const'
   /* 头部选项（B4-fp：作者私有用户函数命名前缀） */
   | 'head.functionPrefix'
   /* 块头 */
@@ -82,6 +84,13 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['switch', 'head.switch'],
   ['别名', 'head.alias'],
   ['alias', 'head.alias'],
+  // 文件级常量（7 号批）：`常量 <名> = <整数>` → 函数外顶格 `#DIM CONST`。
+  // 形态是**词后跟空白 + `名 = 值`**（`常量 X = 5`），不是 `词: 值` ⇒ 与 `别名` 同款的
+  // "不靠本表判定"关键字：登记进表只为让编辑器**高亮/补全认得它**（词表单一真源，
+  // 同 `则` / `随机形` 的理由），判定归 lexer 的位置式扫描（`lexer.classifyLine`）。
+  // **不得**进 `HEAD_DECL_KEYS`——那会让 `常量 X = 5` 被 `词: 值` 通路截半（值变 `=` 前那截）。
+  ['常量', 'head.const'],
+  ['const', 'head.const'],
   // 头部选项 `函数前缀: <模板>`（B4-fp）——不是块关键字，与 `随机形:` 同属"文件头选项"；
   // 但因是 `词: 值` 形且需编辑器高亮/补全，故仍走 `KEYWORDS` + `HEAD_DECL_KEYS`（见下）。
   ['函数前缀', 'head.functionPrefix'],
