@@ -8,6 +8,8 @@ import {
   type Logger,
   type MarketService,
   type PluginContext,
+  type RemoteDownload,
+  type RemoteExtractResult,
   type RemoteService,
   type RemoteText,
   type ScopedStorage,
@@ -54,6 +56,12 @@ function fakeCtx(io: FileIO, storage: ScopedStorage): { ctx: PluginContext; prov
     // activate 阶段不拉远程（拉不拉得动是刷新链路的判据）；这里只证明**它确实被 require 了**
     async fetchText(): Promise<RemoteText> {
       throw new Error('activate 不该出网');
+    },
+    async marketDownload(): Promise<RemoteDownload> {
+      throw new Error('activate 不该下载容器');
+    },
+    async marketExtract(): Promise<RemoteExtractResult> {
+      throw new Error('activate 不该解压容器');
     },
   };
   const ctx = {

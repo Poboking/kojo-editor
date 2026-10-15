@@ -42,6 +42,52 @@ export const MARKET_PACKS_DIR = 'packs';
 /** 暂存目录段名（装完/失败都必须被清空；崩溃残壳由下次安装清扫） */
 export const MARKET_STAGING_DIR = '.staging';
 
+/**
+ * 容器（zip 本体）的名字后缀：Rust 侧 `container_name_problem` 也要求它以 `.zip` 结尾，
+ * 且**下载与解压共用同一个名字**（两个命令指向同一个文件 ⇒ 不存在"写 .bin 读 .zip"的两份真相）。
+ * 名字由这两个函数派生，插件/面板/测试都从这里拿，不在别处拼第二次。
+ */
+export const MARKET_ZIP_SUFFIX = '.zip';
+
+/** 解压目录后缀（与容器名同主体、不同条目 ⇒ 暂存区内两者不互相覆盖） */
+export const MARKET_UNPACKED_SUFFIX = '.unpacked';
+
+/** `<id>-<version>.zip`：暂存区里的容器名（主体受平台侧字符集与 64 字符闸约束） */
+export function packContainerName(id: string, version: string): string {
+  return `${id}-${version}${MARKET_ZIP_SUFFIX}`;
+}
+
+/** `<id>-<version>.unpacked`：容器解出来的目录名（只当中间态，装完即删） */
+export function packUnpackedName(id: string, version: string): string {
+  return `${id}-${version}${MARKET_UNPACKED_SUFFIX}`;
+}
+
+/** 旧副本的暂存名后缀（同版本重装时先把它挪开，搬不动就还原回去） */
+export const MARKET_STALE_SUFFIX = '.__previous__';
+
+/** `<id>-<version>`：搬运用的暂存目录名（字节级写进来、逐文件复核后才 rename 进落点） */
+export function packStagingName(id: string, version: string): string {
+  return `${id}-${version}`;
+}
+
+/** `<id>-<version>.__previous__`：重装同版本时被挪开的旧副本 */
+export function packStaleName(id: string, version: string): string {
+  return `${id}-${version}${MARKET_STALE_SUFFIX}`;
+}
+
+/**
+ * 一个包在暂存区里可能留下的**全部**名字（卸载后清扫、失败后清扫都从这一张表来）。
+ * 名字规则改了只需改这里——面板/插件/测试都不自己拼，不留第二份真相。
+ */
+export function packStagingNames(id: string, version: string): string[] {
+  return [
+    packContainerName(id, version),
+    packUnpackedName(id, version),
+    packStagingName(id, version),
+    packStaleName(id, version),
+  ];
+}
+
 /* ------------------------- 注册表索引端点（KM-9） ------------------------- */
 
 /**
@@ -235,7 +281,7 @@ export type MarketIndexRefresh =
  * 市场相关源码里出现 `releases/latest` 字面量即红。
  *
  * 本批（KM-8/KM-9）索引面 = **读 + 从注册表刷新 + 端点覆盖**；
- * **装包**仍只有 `installLocalDir` 一条源（远程装要等安装面接线，不留空壳）。
+ * 安装面（KM-10..12）= `installLocalDir`（本机目录源）+ `installFromIndex`（注册表容器源）。
  */
 export interface MarketService {
   /** `<appData>/market` */
@@ -263,11 +309,38 @@ export interface MarketService {
   /** 本机已装包（读 `ctx.storage`；派生落点不在位的条目会被剔除并出声） */
   installed(): Promise<InstalledPack[]>;
   /**
+   * 已装包占用的字节数（KM-11 的"占用"读数；面板显示用）。
+   *
+   * 口径 = 记账里 `files[]` 声明字节之和（`packEntryPathProblem` 的前缀闸保证这些条目
+   * 就是落点 `files/` 的全部内容）⇒ **不落 IO**、不在两处各算一遍。
+   * 不含市场根下的其它文件（`index.json` 与暂存区不属于任何已装包）。
+   */
+  installedBytes(): Promise<number>;
+  /**
    * 从本地目录装（目录内须有 `pack.json` + `files/`）。
    * @throws MarketError `id-kind-conflict` 当同 id 已按**另一个 kind** 装着
    *   （一个 id 只能属于一个 kind，见 `packIdKindConflicts`）
    */
   installLocalDir(sourceDir: string): Promise<InstalledPack>;
+  /**
+   * 从注册表条目装（**容器源**，KM-10..12）：
+   * `marketDownload`（容器名 = `packContainerName(id,version)`，体积上限取索引声明的
+   * `zip.bytes` ⇒ 比声明多一个字节都不收）→ 容器整包 sha256 与索引锚对平 → `marketExtract`
+   * （限额取契约常量）→ 解出的根 `pack.json` 与容器条目**双向对平**（清单声明而没解出 = 拒；
+   * 解出而清单没声明 = 拒，根 `pack.json` 本身算元数据不算内容；逐条目字节数不符 = 拒）
+   * → **走与 `installLocalDir` 完全同一条**校验+落暂存+逐文件复核+原子搬运+记账路径。
+   *
+   * 记账比目录源多一个 `containerSha256`（容器本体的整包摘要；"内容是不是注册表说的那份"
+   * 的答案仍是逐文件锚折出来的 `contentDigest`）。
+   *
+   * 任一步失败 ⇒ 暂存区内这一次的全部痕迹（容器 / 解压目录 / 半成品）被删掉，
+   * 落点要么完整要么不存在（同版本重装时旧副本先搬进 `.staging` 再删）。
+   *
+   * @throws MarketError：`download-failed` / `container-sha256` / `container-bytes` /
+   *   `extract-failed` / `container-identity` / `entry-missing` / `entry-extra` /
+   *   `entry-bytes` / `entry-sha256`，以及 `installLocalDir` 会抛的全部清单类码
+   */
+  installFromIndex(entry: MarketIndexEntry): Promise<InstalledPack>;
   uninstall(kind: PackKind, id: string, version: string): Promise<void>;
   isInstalled(kind: PackKind, id: string, version: string): Promise<boolean>;
   /** `<appData>/market/packs/<kind>/<id>/<version>`（**唯一**的落点真源，记账里不存路径） */
@@ -310,7 +383,22 @@ export type MarketRejectCode =
   | 'source-unreadable'
   | 'install-move-failed'
   | 'installed-missing'
-  | 'endpoint-invalid';
+  | 'endpoint-invalid'
+  /* ---- 容器源（KM-10..12）新增：全部只由 `installFromIndex` 抛出 ---- */
+  /** 下载没成功（出网闸拒、非 2xx、体积超声明、超时；平台侧那句人话原样带在消息里） */
+  | 'download-failed'
+  /** 容器里的 `pack.json` 与注册表那一行不是同一个包（`kind`/`id`/`version` 逐字比） */
+  | 'container-identity'
+  /** 容器整包摘要与注册表声明的 `zip.sha256` 不是同一份东西 */
+  | 'container-sha256'
+  /** 容器字节数与注册表声明的 `zip.bytes` 不符（先于摘要核，给一句更快的话） */
+  | 'container-bytes'
+  /** 解压被平台侧拒（条目路径/类型/深度/条数/总字节违例，或容器不可读） */
+  | 'extract-failed'
+  /** 清单声明了、容器里没解出来（缺内容） */
+  | 'entry-missing'
+  /** 容器解出来了、清单却没声明（多内容；根 `pack.json` 不算） */
+  | 'entry-extra';
 
 /** 带原因码的市场错误（装卸路径上所有拒绝都从这里出） */
 export class MarketError extends Error {
@@ -469,4 +557,58 @@ export function minAppVersionSatisfied(currentAppVersion: string, minAppVersion:
   if (!PACK_VERSION_RE.test(core)) return false;
   const c = compareVersions(core, minAppVersion);
   return c !== null && c >= 0;
+}
+
+/* ------------------------- 更新检测（KM-10） ------------------------- */
+
+/** 三态：注册表那条比本机那份新 / 就是同一版 / 本机反而更高（`null` = 本机没装过这个包） */
+export type PackUpdateState = 'updatable' | 'latest' | 'ahead';
+
+export interface PackUpdateCheck {
+  readonly state: PackUpdateState;
+  /** 本机同 `(kind,id)` 里**版本最高**的那条（三态一律拿它比，不与低版本比） */
+  readonly local: InstalledPack;
+  /**
+   * 同版本时"是不是同一份东西"：本机那份有容器摘要 ⇒ 与索引的 `zip.sha256` 逐字比。
+   *
+   * 本机那份从目录源装的（`containerSha256` 缺省）⇒ `null`，**不拿 `contentDigest` 顶替**：
+   * 索引条目里没有逐文件锚（`MarketIndexEntry` 只有 `zip` + `fileCount` + `unpackedBytes`），
+   * 一个是内容锚的折叠摘要、一个是容器整包摘要，比出来的"相等"没有意义（实测契约字段面）。
+   * 真正的逐文件对平发生在装的那一刻（`installFromIndex` 走 `installLocalDir` 同一条路径）。
+   */
+  readonly sameContainer: boolean | null;
+}
+
+/**
+ * 索引条目 vs 已装集的更新检测（纯函数、零 IO、**不改任何东西**）。
+ *
+ * 版本事实只从索引条目读（契约 A5：GitHub 的 `latest` 徽章实测去不掉，不可作为依据）；
+ * 比较只用 `compareVersions`（全仓唯一定义，见 `single-source.test.ts` 的守卫）。
+ * 本机一条都没有 ⇒ `null`（"没装过"不是一个态，是另一个动作：面板给「安装」而不是「更新」）。
+ */
+export function packUpdateCheck(
+  entry: MarketIndexEntry,
+  installed: readonly InstalledPack[],
+): PackUpdateCheck | null {
+  const local = installed.filter((r) => r.kind === entry.kind && r.id === entry.id);
+  let best: InstalledPack | null = null;
+  for (const r of local) {
+    if (best === null) {
+      best = r;
+      continue;
+    }
+    const c = compareVersions(r.version, best.version);
+    if (c !== null && c > 0) best = r;
+  }
+  if (best === null) return null;
+  const cmp = compareVersions(entry.version, best.version);
+  if (cmp === null) return null;
+  const state: PackUpdateState = cmp > 0 ? 'updatable' : cmp < 0 ? 'ahead' : 'latest';
+  return {
+    state,
+    local: best,
+    sameContainer: state === 'latest' && best.containerSha256 !== undefined
+      ? best.containerSha256 === entry.zip.sha256
+      : null,
+  };
 }

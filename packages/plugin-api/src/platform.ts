@@ -69,17 +69,64 @@ export interface RemoteTextOptions {
 }
 
 /**
- * 远程取文本的两层契约（内核服务键 `kernel.remote`，实现 = 平台桥的零逻辑透传）。
+ * 容器（ZIP 包体）下载的结果。
+ * **字节不经 IPC 回 TS**——容器落进平台侧自拼的暂存区，TS 只拿到"这次请求的事实"
+ * （体积 / 状态码 / 终态 URL），摘要由 TS 侧对同一个文件复算。
+ */
+export interface RemoteDownload {
+  bytes: number;
+  status: number;
+  finalUrl: string;
+}
+
+/** 容器下载的可调项（与取文本同口径；**刻意没有 proxy**——代理只认进程环境，见 Rust 侧） */
+export interface RemoteDownloadOptions {
+  timeoutMs?: number;
+  /** 体积硬上限：调用方按注册表声明的 `zip.bytes` 传入 ⇒ 超声明一个字节都不收 */
+  maxBytes?: number;
+}
+
+/**
+ * 解压限额：三个数**全部由调用方从契约常量传入**（`market.ts` 的 `MARKET_MAX_*`）。
+ * 平台侧不留默认值 = 不留第二份真相。
+ */
+export interface RemoteExtractLimits {
+  maxEntries: number;
+  maxDepth: number;
+  maxUnpackedBytes: number;
+}
+
+/** 解出来的一个条目：posix 相对路径（`/`）+ 落盘真实字节数 */
+export interface RemoteExtractEntry {
+  path: string;
+  bytes: number;
+}
+
+export interface RemoteExtractResult {
+  entries: RemoteExtractEntry[];
+  totalBytes: number;
+}
+
+/**
+ * 远程面的**两层唯一契约**（内核服务键 `kernel.remote`，实现 = 平台桥的零逻辑透传）：
+ * 取文本 / 容器下载 / 容器解压。
  *
  * 单独立一个服务键的理由与 `sugar.liftApply` 同源：**能力面 = 服务键面**。
  * 出网与读写文件是两种能力，插件要网络就得显式 require，
  * 不能靠"反正我已经有 `kernel.io` 了"顺带拿到。
  * `FileIO` 因此**没有**任何远程方法（2026-10-15 收口：远程面只有 `kernel.remote` 这一条入口）。
  *
+ * 容器下载/解压**也挂在这个键**而不是新开一个键，理由是实测的：本键的 `marketDownload`
+ * 与 `fetchText` 在平台侧共用同一条出网链路（协议/白名单/逐跳重核/体积各只有一份实现），
+ * 而新开键要动装配（`bootstrap.ts`）与 `KernelServices`；`kojo-market` 已经 `requires` 本键
+ * ⇒ 加方法零接线改动、插件侧仍只有"一条远程入口"这一个事实。
+ * 解压不远程，但它只碰 `marketDownload` 落下的那个同名容器，与它同键 = 一条链路的两个动词，
+ * 分键反而让"能不能装包"变成两个独立条件的乘积。
+ *
  * 契约里**没有任何主机名**：哪些地址可信由平台侧唯一决定（Rust `market.rs`），
  * 两处各写一份白名单必然漂。
  *
- * 方法名两层同名 `fetchText`（桥 = 传输原语、服务 = 插件面；改名只许一次改齐两侧，
+ * 三个方法名三层同名（Rust 命令 / 桥 / 服务；改名只许一次改齐三层，
  * 半个改名会让 `kernel.remote` 与桥各说各话）。
  */
 export interface RemoteService {
@@ -88,6 +135,27 @@ export interface RemoteService {
    * 体积超限、超时、非 UTF-8 —— 一律抛错并带人话原因，调用侧自解释呈现。
    */
   fetchText(url: string, opts?: RemoteTextOptions): Promise<RemoteText>;
+  /**
+   * 把一个远程**容器**下载进平台侧暂存区，返回这次请求的事实。
+   *
+   * **没有目标路径参数**：落点由平台侧拼成 `<appData>/market/.staging/<containerName>`
+   * （形态照 `exportFile`——授权绑在命令内，JS 拿不到落点决定权）。名字受平台侧的字面闸
+   * （必须 `.zip` 结尾、字符集 `[a-z0-9._-]`），**下载与解压共用同一个名字** ⇒ 不存在
+   * "写成 .bin 读成 .zip"的两份真相。出网判定（协议 / 可信主机 / 逐跳重核 / 体积）与
+   * `fetchText` 是同一条链路，故不在本层再写一份。
+   *
+   * @throws 平台无此能力（Node 测试桥）/ 名字不合规 / URL 被闸拒 / 体积超限 / 超时 / 非 2xx
+   */
+  marketDownload(url: string, containerName: string, opts?: RemoteDownloadOptions): Promise<RemoteDownload>;
+  /**
+   * 把暂存区里那个容器解到**暂存子树内**的 `targetName` 目录，返回解出的条目清单与真实总字节。
+   *
+   * 与 `marketDownload` 共用同一个容器名 ⇒ 两个命令指向同一个文件。条目路径 / 类型（符号链接
+   * 与普通文件）/ 深度 / 条目数 / 解压总字节的闸全在平台侧，**限额数字来自本调用**（契约常量）。
+   * 内容口径（哪些条目算合法包内容）不在这层——由 `kojo-market` 按 `pack.json` 双向对平。
+   * 失败 ⇒ 平台侧已解出的部分整体删掉，不留残壳。
+   */
+  marketExtract(containerName: string, targetName: string, limits: RemoteExtractLimits): Promise<RemoteExtractResult>;
 }
 
 export interface WalkOptions {
@@ -219,6 +287,17 @@ export interface PlatformBridge {
    * 口径）——不许为了"测试里能跑"在 Node 桥复制一份白名单或退回 `fetch()`。
    */
   fetchText(url: string, opts?: RemoteTextOptions): Promise<RemoteText>;
+  /**
+   * 容器下载到平台侧暂存区（语义与拒因见 `RemoteService.marketDownload`，**同一份口径**）。
+   * 落点由平台侧自己拼、名字受平台侧字面闸约束 ⇒ 本层没有目标路径参数。
+   * 无此能力的平台（Node 桥）抛错，不降级。
+   */
+  marketDownload(url: string, containerName: string, opts?: RemoteDownloadOptions): Promise<RemoteDownload>;
+  /**
+   * 容器解压到暂存子树内的 `targetName` 目录（语义见 `RemoteService.marketExtract`）。
+   * 限额三个数一律由调用方从契约常量传入；失败由平台侧清掉已解出的全部内容。
+   */
+  marketExtract(containerName: string, targetName: string, limits: RemoteExtractLimits): Promise<RemoteExtractResult>;
   /** 字节 → 字符串 */
   decode(bytes: Uint8Array, encoding: FileEncoding): Promise<string>;
   /** 字符串 → 字节 */

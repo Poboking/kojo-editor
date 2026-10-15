@@ -39,6 +39,11 @@ export type {
   FileStat,
   PlatformBridge,
   RawFileRead,
+  RemoteDownload,
+  RemoteDownloadOptions,
+  RemoteExtractEntry,
+  RemoteExtractLimits,
+  RemoteExtractResult,
   RemoteService,
   RemoteText,
   RemoteTextOptions,
@@ -63,6 +68,8 @@ export {
   MARKET_INDEX_FILE,
   MARKET_PACKS_DIR,
   MARKET_STAGING_DIR,
+  MARKET_ZIP_SUFFIX,
+  MARKET_UNPACKED_SUFFIX,
   MARKET_DEFAULT_INDEX_URL,
   MARKET_MAX_FILE_ENTRIES,
   MARKET_MAX_PATH_DEPTH,
@@ -83,6 +90,13 @@ export {
   coreVersion,
   minAppVersionSatisfied,
   endpointProblem,
+  packContainerName,
+  packUnpackedName,
+  packStagingName,
+  packStagingNames,
+  packStaleName,
+  MARKET_STALE_SUFFIX,
+  packUpdateCheck,
 } from './market';
 export type {
   InstalledPack,
@@ -96,6 +110,8 @@ export type {
   PackKind,
   PackManifest,
   PackRef,
+  PackUpdateCheck,
+  PackUpdateState,
 } from './market';
 
 export { ProjectDetectionError } from './project';

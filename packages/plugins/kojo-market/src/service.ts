@@ -1,15 +1,26 @@
 /**
- * `MarketService` 实现（KM-2 的落盘侧 + KM-8/KM-9 的索引面）。
+ * `MarketService` 实现（KM-2 的落盘侧 + KM-8/KM-9 的索引面 + KM-10..12 的安装面）。
  *
- * 两条链路：
+ * 三条链路，**校验与搬运只有一条**：
  *
- * **装（本批仍只有 local-dir 源）**
+ * **装（本机目录源）**
  * ```
  * <sourceDir>/pack.json ── 全量校验（零写盘）──┐
  *                                              ├─ .staging/<id>-<version>/ ── 逐文件 sha256 复核
  *                                              │        （字节级 writeBytes，绝不 readText/writeText）
  *                                              └─ rename ──> packs/<kind>/<id>/<version>/
  * ```
+ *
+ * **装（注册表容器源 = `installFromIndex`）**
+ * ```
+ * zip.url ──marketDownload──> .staging/<id>-<version>.zip ── TS 复算 sha256 对平
+ *                                  └──marketExtract──> .staging/<id>-<version>.unpacked/
+ *                                            └── 双向对平（packContainerProblem）──┐
+ *                                                                                  └─ 上面那条路径，一次调用都不多
+ * ```
+ * 容器源**不新写任何校验**：解出来的目录就是一个普通 sourceDir，交给同一个
+ * `installFromManifestDir`（逐文件 sha256 复核、原子搬运、`.staging.__previous__` 回滚、
+ * 记账全部沿用），只多带一份"事实"（容器摘要 + 解出的条目清单 + 注册表那一行的身份）。
  *
  * **索引（KM-8：拉 → 校验 → 落 `<appData>/market/index.json`）**
  * ```
@@ -25,6 +36,9 @@
  * 3. **失败不留半成品**：暂存区整体删掉，落点要么完整要么不存在；
  * 4. **可信主机白名单不在本文件**（也不在 TS 任何地方）：出网判定唯一住在 Rust `market.rs`，
  *    Node 桥没有远程能力 ⇒ 抛错 ⇒ 显式 `failed`，**不降级去 `fetch()`**；
+ *    装包用的 `marketDownload` 与 `fetchText` 在 Rust 侧共用同一条 `guarded_send`（同一份闸）。
+ *    本文件只多做一件纯形态的事：出网前用契约的 `endpointProblem` 拦掉"一看就打不开"的地址，
+ *    让作者不联网也拿到一句人话——**这不是白名单**（白名单在平台侧，两处各写必然漂）。
  * 5. **数据时间只记"什么时候拉的"**：内容真相只有 `index.json` 一份，存储域里不再存第二份列表。
  */
 
@@ -35,7 +49,10 @@ import {
   MARKET_INDEX_TIMEOUT_MS,
   MARKET_INDEX_TTL_MS,
   MARKET_MANIFEST_FILE,
+  MARKET_MAX_FILE_ENTRIES,
   MARKET_MAX_INDEX_BYTES,
+  MARKET_MAX_PATH_DEPTH,
+  MARKET_MAX_UNPACKED_BYTES,
   MARKET_PACKS_DIR,
   MARKET_STAGING_DIR,
   MarketError,
@@ -43,7 +60,12 @@ import {
   dirname,
   endpointProblem,
   join,
+  packContainerName,
   packIdKindConflicts,
+  packStagingName,
+  packStagingNames,
+  packStaleName,
+  packUnpackedName,
   type FileIO,
   type InstalledPack,
   type Logger,
@@ -53,13 +75,18 @@ import {
   type MarketIndexState,
   type MarketService,
   type PackKind,
+  type PackManifest,
   type PackRef,
+  type RemoteDownload,
+  type RemoteDownloadOptions,
+  type RemoteExtractLimits,
+  type RemoteExtractResult,
   type RemoteService,
   type RemoteText,
   type ScopedStorage,
 } from '@kojo/plugin-api';
 import { contentDigestOf, sha256Hex } from './digest';
-import { parseIndex, parseManifest } from './manifest';
+import { packContainerProblem, parseIndex, parseManifest, type ContainerFacts } from './manifest';
 
 /** `ctx.storage`（域 = 本插件 id）里存已装清单的键 */
 const INSTALLED_KEY = 'installed';
@@ -72,7 +99,8 @@ export interface MarketServiceDeps {
   /** 内核 io（已过第一道闸；`rename`/`removeDir` 两端都要断言） */
   io: FileIO;
   /**
-   * 远程取文本（`kernel.remote`）。**没它就没有索引刷新**——
+   * 远程面（`kernel.remote`）：索引取文本 + 容器下载/解压，**三条都在这一张面上**。
+   * **没它就没有索引刷新、也没有从注册表装包**——
    * 出网与读写文件是两种能力，故分键；白名单不住这里（唯一真源在平台侧）。
    */
   remote: RemoteService;
@@ -320,8 +348,12 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     return known.find((r) => r.id === ref.id && r.kind !== ref.kind) ?? null;
   }
 
-  async function installLocalDir(sourceDir: string): Promise<InstalledPack> {
-    /* ---------- 1. 读清单 + 全量校验（此刻零写盘） ---------- */
+  /**
+   * 源目录里的 `pack.json`：读 + 全量校验 + id/kind 查重。**此刻零写盘**（纪律 1）。
+   *
+   * 本机目录源与容器解出来的目录**共用这一句** ⇒ "什么算合法的包"全仓只有一份口径。
+   */
+  async function readSourceManifest(sourceDir: string): Promise<PackManifest> {
     const manifestPath = join(sourceDir, MARKET_MANIFEST_FILE);
     if (!(await io.exists(manifestPath))) {
       throw new MarketError('manifest-missing', `源目录里没有 ${MARKET_MANIFEST_FILE}：${sourceDir}`, sourceDir);
@@ -350,13 +382,45 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
         detail,
       );
     }
+    return manifest;
+  }
+
+  /**
+   * **本机目录源**（KM-2）：读清单 + 全量校验 → `commitPack`。
+   * 目录源额外要求源目录里有 `files/` 子目录（zip 源由 `packContainerProblem` 的双向对平担保
+   * 每一个清单条目都真在容器里，不需要再看目录本身）。
+   */
+  async function installLocalDir(sourceDir: string): Promise<InstalledPack> {
+    const manifest = await readSourceManifest(sourceDir);
     if (!(await io.exists(join(sourceDir, MARKET_CONTENT_DIR)))) {
       throw new MarketError('content-missing', `源目录里没有 ${MARKET_CONTENT_DIR}/ 子目录：${sourceDir}`, sourceDir);
     }
+    return commitPack(sourceDir, manifest);
+  }
 
+  /**
+   * **唯一的搬运路径**（纪律 1/2/3 + KM-12 的回滚形态都住在这里，两个源共用）：
+   * 逐文件字节级搬进 `.staging` → 逐文件重算 sha256 复核 → `rename` 原子搬进落点
+   * （同版本重装 = 旧副本先搬进 `.staging` 再删）→ 清 `.staging` → `ctx.storage` 记账。
+   *
+   * `container` 只影响两件事：记账里多一个 `containerSha256`、以及**在写第一个字节之前**
+   * 先做容器双向对平（`packContainerProblem`）。搬运与逐文件复核一步都不新增、不复制。
+   */
+  async function commitPack(
+    sourceDir: string,
+    manifest: PackManifest,
+    container?: ContainerFacts,
+  ): Promise<InstalledPack> {
+    if (container !== undefined) {
+      const problem = packContainerProblem(manifest, container);
+      if (problem !== null) {
+        log.warn(`容器与清单对不平（${problem.code}）：${problem.why}`);
+        throw new MarketError(problem.code, `${problem.why}（注册表那一行：${container.declared.id} v${container.declared.version}）`, problem.detail);
+      }
+    }
     /* ---------- 2. 写进暂存区（字节级）+ 逐文件重算复核 ---------- */
-    const staging = join(stagingRoot, `${manifest.id}-${manifest.version}`);
-    const stale = join(stagingRoot, `${manifest.id}-${manifest.version}.__previous__`);
+    const staging = join(stagingRoot, packStagingName(manifest.id, manifest.version));
+    const stale = join(stagingRoot, packStaleName(manifest.id, manifest.version));
     const target = dirOf(manifest.kind, manifest.id, manifest.version);
     await quietRemove(staging); // 上次崩在这里的残壳
     await quietRemove(stale);
@@ -433,8 +497,10 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       name: manifest.name,
       author: manifest.author,
       license: manifest.license,
-      // 本地目录源没有容器 ⇒ 只有折叠摘要；`containerSha256` 刻意不写（缺省即"无容器"）
+      // 逐文件锚的折叠摘要：两个源都有，且是"内容是不是同一份东西"的唯一答案
       contentDigest: await contentDigestOf(manifest.files),
+      // 目录源没有容器 ⇒ `containerSha256` 刻意不写（缺省即"无容器"，也是"来源"的判据）
+      ...(container === undefined ? {} : { containerSha256: container.sha256 }),
       installedAt: now(),
       files: manifest.files,
     };
@@ -443,6 +509,106 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     await writeRecords(rest);
     log.info(`装好了 ${record.kind}/${record.id} v${record.version}（${record.files.length} 个文件）→ ${target}`);
     return record;
+  }
+
+  /**
+   * 清掉容器源留在暂存区的两样东西（容器文件 + 解压目录），成功与失败走同一条。
+   *
+   * `FileIO` 只暴露 `removeDir`（递归删**目录**），而容器是一个**文件** ⇒ 先把它搬进
+   * 那棵要整棵删掉的解压目录，一次 `removeDir` 清两样；不为市场给内核加一条删文件原语。
+   * 搬运失败就单独出声（暂存区会留下 `<id>-<version>.zip`），但**绝不抛**——
+   * 清理永远不该盖住主错误（照 `quietRemove` 的口径）。
+   */
+  async function quietRemoveContainer(containerName: string, unpackedDir: string): Promise<void> {
+    const containerPath = join(stagingRoot, containerName);
+    try {
+      if (await io.exists(containerPath)) {
+        await io.ensureDir(unpackedDir);
+        await io.rename(containerPath, join(unpackedDir, containerName));
+      }
+    } catch (err) {
+      log.warn(`暂存区里的容器没能搬进解压目录（下一次装同一个包会原样覆盖它）：${containerName} —— ${errMessage(err)}`);
+    }
+    await quietRemove(unpackedDir);
+  }
+
+  /**
+   * **注册表容器源**（KM-10..12）：下载 → 容器整包摘要对平 → 解压 → 读清单 → 双向对平
+   * → **`commitPack`（与目录源同一条校验+搬运路径，一个环节都不重写）**。
+   *
+   * 三条只在容器源出现的口径：
+   * - 体积上限取**索引声明的 `zip.bytes`**（平台侧的 Content-Length 预核与逐块累计都按这把尺
+   *   ⇒ 比声明多一个字节就不收），但声明本身可以撒谎，故再与 `MARKET_MAX_UNPACKED_BYTES` 取小；
+   * - **哈希只在 TS 算**（`sha256Hex` 是全仓唯一实现点；宿主层算哈希有机器闸拦着）；
+   * - 任何一步失败 ⇒ 暂存区里这一次的容器与解出目录全部删掉，落点要么完整要么不存在。
+   */
+  async function installFromIndex(entry: MarketIndexEntry): Promise<InstalledPack> {
+    const containerName = packContainerName(entry.id, entry.version);
+    const unpackedName = packUnpackedName(entry.id, entry.version);
+    const unpackedDir = join(stagingRoot, unpackedName);
+    try {
+      // 0) 形态闸（零网络、与端点共用同一份 `endpointProblem`）：先让作者拿到一句人话。
+      //    **这不是白名单**——哪些地址可信只由平台侧那一条链路决定（两份必然漂）。
+      const urlProblem = endpointProblem(entry.zip.url);
+      if (urlProblem !== null) {
+        throw new MarketError('download-failed', `容器地址不合法：${urlProblem}`, entry.zip.url);
+      }
+
+      /* ---------- 1. 下载容器（落点由平台侧在暂存区内自己拼） ---------- */
+      let downloaded: RemoteDownload;
+      try {
+        downloaded = await remote.marketDownload(entry.zip.url, containerName, {
+          maxBytes: Math.min(entry.zip.bytes, MARKET_MAX_UNPACKED_BYTES),
+        });
+      } catch (err) {
+        throw new MarketError('download-failed', `容器没能从注册表取回来：${errMessage(err)}`, entry.zip.url);
+      }
+      let blob: Uint8Array;
+      try {
+        blob = await io.readBytes(join(stagingRoot, containerName));
+      } catch (err) {
+        throw new MarketError('download-failed', `容器落盘后读不出来：${errMessage(err)}`, containerName);
+      }
+      if (blob.length !== entry.zip.bytes || downloaded.bytes !== entry.zip.bytes) {
+        throw new MarketError(
+          'container-bytes',
+          `容器字节数与注册表声明不符：下载回报 ${downloaded.bytes}B、盘上 ${blob.length}B，那一行写的是 ${entry.zip.bytes}B`,
+          `${downloaded.bytes}/${blob.length}/${entry.zip.bytes}`,
+        );
+      }
+      // 整包锚：容器本体与注册表钉的那一份是同一个文件（逐文件锚在下面那条路径里核）
+      const hex = await sha256Hex(blob);
+      if (hex !== entry.zip.sha256) {
+        throw new MarketError(
+          'container-sha256',
+          `容器整包摘要与注册表不符（下载回来的不是那一行说的包）：期望 ${entry.zip.sha256}，实算 ${hex}`,
+          containerName,
+        );
+      }
+
+      /* ---------- 2. 解压到暂存子树（限额三个数全取契约常量，平台侧不写死） ---------- */
+      const limits: RemoteExtractLimits = {
+        maxEntries: MARKET_MAX_FILE_ENTRIES,
+        maxDepth: MARKET_MAX_PATH_DEPTH,
+        maxUnpackedBytes: MARKET_MAX_UNPACKED_BYTES,
+      };
+      let extracted: RemoteExtractResult;
+      try {
+        extracted = await remote.marketExtract(containerName, unpackedName, limits);
+      } catch (err) {
+        throw new MarketError('extract-failed', `容器解压没有成功：${errMessage(err)}`, containerName);
+      }
+
+      /* ---------- 3. 读清单 + 双向对平 + 搬运：与目录源同一条路径 ---------- */
+      const manifest = await readSourceManifest(unpackedDir);
+      return await commitPack(unpackedDir, manifest, {
+        sha256: hex,
+        entries: extracted.entries,
+        declared: entry,
+      });
+    } finally {
+      await quietRemoveContainer(containerName, unpackedDir);
+    }
   }
 
   return {
@@ -490,6 +656,19 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
 
     installLocalDir,
 
+    installFromIndex,
+
+    async installedBytes(): Promise<number> {
+      // 口径：记账里逐文件声明字节之和。`pack.json` 的 `files[]` 只列 `files/` 之内的条目
+      // （契约 `packEntryPathProblem` 的前缀闸保证这一点），所以这个数**就是落点的内容字节**
+      // ——不摸盘、不在两处各算一遍（摸盘那份会跟真实目录漂）。
+      let total = 0;
+      for (const r of await readRecords()) {
+        for (const f of r.files) total += f.bytes;
+      }
+      return total;
+    },
+
     async uninstall(kind: PackKind, id: string, version: string): Promise<void> {
       const dir = dirOf(kind, id, version);
       const list = await readRecords();
@@ -501,6 +680,10 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       if (hadDir) await io.removeDir(dir);
       await writeRecords(rest);
       await removeEmptyAncestors(dir);
+      // KM-11：卸完不许在暂存区留下这个包的任何残壳（崩在半路的容器 / 解压目录 / 回滚副本）。
+      // 名字全部由契约派生 ⇒ 这里是一张表而不是四条抄写；只碰这一个 id-version，
+      // 不动别人的暂存条目（并发装同一个包本来就会被 `commitPack` 的残壳清扫覆盖）。
+      for (const name of packStagingNames(id, version)) await quietRemove(join(stagingRoot, name));
       if (hadDir) {
         log.info(`卸掉了 ${kind}/${id} v${version}：${dir}`);
       } else {

@@ -6,6 +6,7 @@
  */
 
 import {
+  MARKET_MANIFEST_FILE,
   MARKET_PACK_KINDS,
   MARKET_SCHEMA_VERSION,
   PACK_ID_RE,
@@ -15,8 +16,10 @@ import {
   packFilesProblem,
   type MarketIndex,
   type MarketIndexEntry,
+  type MarketRejectCode,
   type PackKind,
   type PackManifest,
+  type RemoteExtractEntry,
 } from '@kojo/plugin-api';
 import { MarketError } from '@kojo/plugin-api';
 
@@ -142,6 +145,80 @@ export function parseManifest(raw: unknown, appVersion: string): PackManifest {
   if (sourceUrl !== undefined) manifest.sourceUrl = sourceUrl;
   if (gameId !== undefined) manifest.gameId = gameId;
   return manifest;
+}
+
+/** 容器源要比的三样事实：容器整包摘要（已与索引锚对平过）+ 解出的条目清单 + 注册表那一行 */
+export interface ContainerFacts {
+  /** 容器本体的整包 sha256（调用方已核过它等于注册表声明的那个锚） */
+  readonly sha256: string;
+  readonly entries: readonly RemoteExtractEntry[];
+  readonly declared: MarketIndexEntry;
+}
+
+export interface ContainerProblem {
+  readonly code: MarketRejectCode;
+  readonly detail: string;
+  /** 人话那半句（调用方拼成 MarketError 的 message） */
+  readonly why: string;
+}
+
+/**
+ * 容器源的**双向对平**（纯函数、零 IO）：`pack.json` 说有什么，容器就得解出什么，反过来也一样。
+ *
+ * 三个方向各自的失败模式不同，缺一维就留了个洞：
+ * - 清单声明、容器没解出来 ⇒ 装完的包少文件（`entry-missing`）；
+ * - 容器解出来、清单没声明 ⇒ 落点里躺着没人核对过的东西（`entry-extra`）：它**不会**被
+ *   `installLocalDir` 那条复制路径写进落点，所以"看起来没事"正是它危险的地方——
+ *   有人往容器里塞一个 pack.json 没声明的文件，注册表与本机就此对不上账；
+ * - 同一份路径两边都有但字节数不同 ⇒ 内容与清单说的不是同一份东西（`entry-bytes`）。
+ *
+ * 根 `pack.json` 是**元数据**而不是内容条目（清单自己的那一行），所以它是唯一允许出现在
+ * 容器里而不出现在 `files[]` 中的路径 —— Rust 的条目闸刻意不判 `files/` 前缀，正是为了
+ * 让它进来（内容口径归本函数）。路径必须在 `files/` 之内这件事已由 `packFilesProblem`
+ * 在 `parseManifest` 里核过，这里不重述（不出现第二份校验实现）。
+ *
+ * 顺带核容器身份：注册表那条说 `kind/id/version`，容器里的 pack.json 必须逐字一致——
+ * 落点是按**清单**派生的，两者不一致时空有注册表那行会指着别处。
+ */
+export function packContainerProblem(manifest: PackManifest, facts: ContainerFacts): ContainerProblem | null {
+  const d = facts.declared;
+  if (manifest.kind !== d.kind || manifest.id !== d.id || manifest.version !== d.version) {
+    return {
+      code: 'container-identity',
+      detail: `container=${manifest.kind}/${manifest.id}@${manifest.version} index=${d.kind}/${d.id}@${d.version}`,
+      why: `容器里的 pack.json 写的是 ${manifest.kind}/${manifest.id} v${manifest.version}，注册表那一行说的是 ${d.kind}/${d.id} v${d.version}——不是同一个包`,
+    };
+  }
+  const byPath = new Map<string, number>();
+  for (const e of facts.entries) {
+    if (byPath.has(e.path)) {
+      return { code: 'entry-duplicate', detail: e.path, why: `容器里同一个路径出现两次：${e.path}` };
+    }
+    byPath.set(e.path, e.bytes);
+  }
+  for (const f of manifest.files) {
+    const got = byPath.get(f.path);
+    if (got === undefined) {
+      return { code: 'entry-missing', detail: f.path, why: `清单声明了 ${f.path}，容器里没解出来` };
+    }
+    if (got !== f.bytes) {
+      return {
+        code: 'entry-bytes',
+        detail: f.path,
+        why: `${f.path} 清单声明 ${f.bytes}B，容器里解出 ${got}B`,
+      };
+    }
+  }
+  const declared = new Set(manifest.files.map((f) => f.path));
+  for (const e of facts.entries) {
+    if (e.path === MARKET_MANIFEST_FILE || declared.has(e.path)) continue;
+    return {
+      code: 'entry-extra',
+      detail: e.path,
+      why: `容器里解出了 ${e.path}，清单却没有声明它`,
+    };
+  }
+  return null;
 }
 
 /** 索引条目是否可用（形状 + 字面约束）；不可用时返回人话原因 */

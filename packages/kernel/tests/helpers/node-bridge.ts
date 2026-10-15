@@ -9,6 +9,10 @@ import type {
   FileStat,
   PlatformBridge,
   RawFileRead,
+  RemoteDownload,
+  RemoteDownloadOptions,
+  RemoteExtractLimits,
+  RemoteExtractResult,
   RemoteText,
   RemoteTextOptions,
   Unsubscribe,
@@ -260,6 +264,24 @@ export class NodeBridge implements PlatformBridge {
   // 签名与契约一致（桥的替身若把参数抹掉，判据里覆盖这个方法就编不过 ⇒ 桩本身也得跟着契约走）
   async fetchText(_url?: string, _opts?: RemoteTextOptions): Promise<RemoteText> {
     throw new Error('本平台的桥没有远程取文本能力（Node 测试桥）');
+  }
+
+  /**
+   * 容器下载 / 解压：**本桥同样不复刻**（出网白名单与 ZIP 安全解压的唯一真源在 Rust，
+   * 在测试桥里再写一份 = 那条"不许有第二份实现"的口径当场作废）。
+   * 判据要跑装包编排链路时在实例上覆盖这两个方法即可（见 `integration-market.test.ts`）——
+   * 覆盖只证明**编排顺序与拒因**，不证明解压。
+   */
+  async marketDownload(_url?: string, _containerName?: string, _opts?: RemoteDownloadOptions): Promise<RemoteDownload> {
+    throw new Error('本平台的桥没有容器下载能力（Node 测试桥）');
+  }
+
+  async marketExtract(
+    _containerName?: string,
+    _targetName?: string,
+    _limits?: RemoteExtractLimits,
+  ): Promise<RemoteExtractResult> {
+    throw new Error('本平台的桥没有容器解压能力（Node 测试桥）');
   }
 
   async listWorkspaceRoots(): Promise<string[]> {

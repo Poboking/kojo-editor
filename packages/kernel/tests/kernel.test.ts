@@ -46,6 +46,12 @@ function stubBridge(): PlatformBridge {
     fetchText: async () => {
       throw new Error('本平台的桥没有远程取文本能力（测试桩）');
     },
+    marketDownload: async () => {
+      throw new Error('本平台的桥没有容器下载能力（测试桩）');
+    },
+    marketExtract: async () => {
+      throw new Error('本平台的桥没有容器解压能力（测试桩）');
+    },
     listWorkspaceRoots: async () => [],
     appDataDir: async () => 'C:\\AppData\\kojo-test',
     decode: async () => '',

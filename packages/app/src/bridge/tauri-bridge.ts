@@ -1,4 +1,14 @@
-import type { FileChangeKind, FileEncoding, PlatformBridge, RemoteText, WatchCallback, WatchReportCallback } from '@kojo/plugin-api';
+import type {
+  FileChangeKind,
+  FileEncoding,
+  PlatformBridge,
+  RemoteDownload,
+  RemoteExtractLimits,
+  RemoteExtractResult,
+  RemoteText,
+  WatchCallback,
+  WatchReportCallback,
+} from '@kojo/plugin-api';
 import { base64ToBytes, bytesToBase64, invoke, isTauri } from './invoke';
 import { decodeReadFilesFrame } from './read-files-frame';
 
@@ -176,6 +186,36 @@ export const tauriBridge: PlatformBridge = {
       url,
       timeoutMs: opts?.timeoutMs ?? null,
       maxBytes: opts?.maxBytes ?? null,
+    });
+  },
+
+  /**
+   * 容器下载（市场 zip 包体）：**本层零判定**，且**没有目标路径参数**——落点由 Rust 拼成
+   * `<appData>/market/.staging/<containerName>`（与 `market_extract` 共用同一个名字）。
+   * 出网与体积闸与 `fetchText` 在 Rust 侧是同一条函数（`guarded_send`），不在这层复述。
+   */
+  async marketDownload(url: string, containerName: string, opts): Promise<RemoteDownload> {
+    return invoke<RemoteDownload>('market_download', {
+      url,
+      stagingName: containerName,
+      timeoutMs: opts?.timeoutMs ?? null,
+      maxBytes: opts?.maxBytes ?? null,
+    });
+  },
+
+  /**
+   * 容器解压（只在暂存子树内）：三个限额数字由调用方从契约常量传入，Rust 不写死。
+   * 条目路径/类型/深度的违例由 Rust 拒并清掉已解出的内容 ⇒ 本层只搬运事实。
+   */
+  async marketExtract(
+    containerName: string,
+    targetName: string,
+    limits: RemoteExtractLimits,
+  ): Promise<RemoteExtractResult> {
+    return invoke<RemoteExtractResult>('market_extract', {
+      stagingName: containerName,
+      targetName,
+      limits,
     });
   },
 
