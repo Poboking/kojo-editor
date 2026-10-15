@@ -1,7 +1,7 @@
 import type {
   ComputePool,
   EventBus,
-  FileIO,
+  FileIOWithPaths,
   Logger,
   PlatformBridge,
   Plugin,
@@ -43,7 +43,8 @@ export interface CreateKernelOptions {
 
 export interface Kernel {
   readonly bus: EventBus;
-  readonly io: FileIO;
+  /** 内核 io：恒带平台路径原语（`appDataDir`/`rename`/`removeDir`，均受第一道闸约束） */
+  readonly io: FileIOWithPaths;
   readonly storage: StorageService;
   readonly slots: SlotRegistry;
   readonly plugins: PluginRegistry;

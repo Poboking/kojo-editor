@@ -205,6 +205,7 @@ export type MarketRejectCode =
   | 'entry-bytes'
   | 'entry-sha256'
   | 'content-missing'
+  | 'source-unreadable'
   | 'install-move-failed'
   | 'installed-missing'
   | 'io-unsupported';
