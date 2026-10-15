@@ -229,3 +229,16 @@ describe('B4 用户函数 · 命名模板来自 adapter', () => {
     expect(res.erb).not.toContain('@M_KOJO_K12_问候');
   });
 });
+
+/* ============================================================================ */
+/* ⑦ 自机色（B1）在函数体内同样吃 adapter 兜底                                   */
+/* ============================================================================ */
+
+describe('B4 用户函数 · 自机色兜底不漏函数体', () => {
+  it('未声明 `自机色:` → 函数体内 `你：` 取 adapter 缺省自机色（零诊断 + 非 D 打印）', () => {
+    const res = svc().transpile('角色: 12\n函数 问候()：\n    你：我来了\n    返回\n');
+    expect(res.diagnostics).toEqual([]);
+    expect(res.erb).toContain('SETCOLOR 0x4682B4');
+    expect(res.erb).toContain('PRINTFORMW 我来了');
+  });
+});

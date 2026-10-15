@@ -310,6 +310,7 @@ export function codegen(
       dictionary: opts.dictionary,
       instructionTable: opts.instructionTable,
       libraryTable,
+      faceTable: opts.faceTable,
       userFunctions,
       sink: opts.sink,
     });
@@ -1470,6 +1471,8 @@ interface FunctionEmitContext {
   dictionary?: DictionaryLookup;
   instructionTable?: KojoInstructionTable;
   libraryTable?: KojoLibraryTable;
+  /** 分野模板表（adapter）——函数体内 `你：` 也要吃缺省自机色，与时机正文同口径 */
+  faceTable?: KojoFaceTable;
   userFunctions: ReadonlyMap<string, UserFunctionInfo>;
   sink: DiagnosticSink;
 }
@@ -1504,6 +1507,7 @@ function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext
     dictionary: ctx.dictionary,
     instructionTable: ctx.instructionTable,
     libraryTable: ctx.libraryTable,
+    faceTable: ctx.faceTable,
     userFunctions: ctx.userFunctions,
     sink: ctx.sink,
     frontMatter: ctx.frontMatter,
@@ -1511,7 +1515,9 @@ function emitFunction(em: Emitter, node: FunctionBlock, ctx: FunctionEmitContext
     baseIndent: 1,
     inFunction: true,
   };
-  for (const child of node.body) emitStatement(em, child, bodyCtx, 1);
+  // 函数体一律经 `emitBody`（不是裸 `emitStatement` 循环）：`你：` 自机台词的
+  // 换色/复原合并只住在 `emitBody` 里，绕开它就等于函数体内 `你：` 静默降级成旁白。
+  emitBody(em, node.body, bodyCtx, 1);
 }
 
 /**
@@ -2093,7 +2099,9 @@ function emitColorBlock(em: Emitter, node: ColorBlock, ctx: BodyContext, indent:
   ctx.ambientColor = node.color;
   emitBody(em, node.body, ctx, indent);
   ctx.ambientColor = prevAmbient;
-  em.push(indent, `RESETCOLOR`, null);
+  // 收尾复原到**上一层**的环境色（嵌套 `着色` 块逐层回退）；顶层无环境色才打 `RESETCOLOR`。
+  // 与自机台词 run 的 `closeRun` 同一口径——裸 `RESETCOLOR` 会把外层块色一起抹掉。
+  em.push(indent, prevAmbient !== undefined ? `SETCOLOR ${prevAmbient}` : 'RESETCOLOR', null);
 }
 
 /* ------------------------------ 心形连续块（P-7） ------------------------------ */

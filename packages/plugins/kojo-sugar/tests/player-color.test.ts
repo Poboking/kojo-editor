@@ -185,4 +185,23 @@ describe('B1-⑥ `着色` 块内自机台词 run 复原到**块色**', () => {
   it('无环境色时 run 收尾仍打 `RESETCOLOR`（顶层不受影响）', () => {
     expect(fnBody(doc(you('甲。') + '    「乙」\n'))).toContain('RESETCOLOR');
   });
+
+  it('嵌套 `着色` 块：内层收尾须复原**外层块色**', () => {
+    const src = doc(
+      '    着色 0xFF0000：\n' +
+        '        「红1」\n' +
+        '        着色 0x00FF00：\n' +
+        '            「绿1」\n' +
+        '        「红2」\n',
+    );
+    expect(fnBody(src)).toEqual([
+      'SETCOLOR 0xFF0000',
+      'PRINTFORMW 「红1」',
+      'SETCOLOR 0x00FF00',
+      'PRINTFORMW 「绿1」',
+      'SETCOLOR 0xFF0000', // 内层收尾复原到外层块色（缺此步则「红2」丢色）
+      'PRINTFORMW 「红2」',
+      'RESETCOLOR',
+    ]);
+  });
 });
