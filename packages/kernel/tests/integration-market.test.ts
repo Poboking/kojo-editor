@@ -656,7 +656,7 @@ describe('索引刷新与远程面单一入口（真内核 + 真桥）', () => {
     expect(seen, '服务没把调用透传给桥').toEqual(['https://demo.github.io/index.json']);
     // **FileIO 上没有第二个远程入口**（有的话就是两份真相：两处各自演化白名单与限额）
     const ioAsRecord = h.kernel.io as unknown as Record<string, unknown>;
-    for (const name of ['fetchText', 'fetchRemoteText', 'download']) {
+    for (const name of ['fetchText', 'fetchRemote', 'download', 'fetchDirectory']) {
       expect(ioAsRecord[name], `kernel.io 混进了远程方法 ${name}`).toBeUndefined();
     }
   });

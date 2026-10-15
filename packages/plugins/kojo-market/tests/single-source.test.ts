@@ -210,7 +210,7 @@ describe('市场单一真源守门', () => {
     for (const cmd of ['market_download', 'market_fetch_text']) {
       const m = new RegExp(`async fn ${cmd}\\(([\n\\s\\S]*?)\\n\\) ->`).exec(rs);
       expect(m, `找不到命令 ${cmd} 的签名`).not.toBeNull();
-      expect(m![1].toLowerCase(), `${cmd} 的签名里出现了 proxy`).not.toContain('proxy');
+      expect(m![1]!.toLowerCase(), `${cmd} 的签名里出现了 proxy`).not.toContain('proxy');
     }
     // 两条链路都**固定** proxy: None ⇒ 代理只可能来自进程环境（reqwest system-proxy）
     expect(codeMatchCount(rs, /proxy: None,/), '两个命令各写一次 None').toBe(2);
