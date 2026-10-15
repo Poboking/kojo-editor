@@ -6,6 +6,11 @@
 [简体中文](README.md) | **English** | [日本語](README_JA.md)
 
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-263146?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Windows-0078d6?style=flat-square)
+![Built with](https://img.shields.io/badge/Tauri_2_·_React_19_·_Monaco-24C8DB?style=flat-square)
+![Latest Release](https://img.shields.io/github/v/release/Poboking/kojo-editor?style=flat-square)
+![Downloads](https://img.shields.io/github/downloads-pre/Poboking/kojo-editor/total?style=flat-square)
+![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg)
 
 > A structure-aware editor for Kojo (call-name script) authors.  
 > Thousands of script files, tens of thousands of functions —  
