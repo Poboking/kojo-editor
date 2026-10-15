@@ -159,7 +159,8 @@ export type LineClass =
   | { kind: 'randomShapeDecl'; value: string }
   | { kind: 'groupHead' }
   | { kind: 'sectionHead'; condition: string; disabled: boolean }
-  | { kind: 'choiceHead' }
+  /** `选项：` 块头；`numeric` = 数字输入菜单形（`选项 数字：` / `choice number：`） */
+  | { kind: 'choiceHead'; numeric?: boolean }
   | { kind: 'choiceItem'; label: string }
   | { kind: 'colorHead'; color: string }
   /** `心形：` / `heart：` 连续块头（P-7；块体是文本行，逐行产 HPH_PRINT） */
@@ -665,6 +666,13 @@ function parseBlockHead(content: string): LineClass | null {
     case 'block.section':
       return parseSectionHead(rest);
     case 'block.choice':
+      // `选项 数字：`（英文小写别名 `choice number：`）——数字输入菜单形。
+      //
+      // `数字` 按**位置**识别（块头里紧随 `选项` 的裸词），**不进 `KEYWORDS`**：
+      // 它是块头上下文里的位置词，不是独立语法分组——登记进词表会把它变成高亮/补全
+      // 关键字，污染正文文本（作者写「数字」二字时被当成关键字）。同款先例见
+      // `类型: SCOM` 与 `自定指令` 的子句键（`lexer.parseCustomCommandHead`）。
+      if (rest === '数字' || rest === 'number') return { kind: 'choiceHead', numeric: true };
       return { kind: 'choiceHead' };
     case 'block.color':
       return { kind: 'colorHead', color: rest };

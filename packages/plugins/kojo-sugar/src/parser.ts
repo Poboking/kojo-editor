@@ -594,11 +594,13 @@ class BlockParser {
           this.sink.report({
             code: 'choice-multiple',
             severity: 'error',
-            message: '一个「时机」内只允许一个「选项」块（两个 INPUTS 会争用同一个 RESULTS）。多轮选择请用原生 `$标签` + `GOTO`。',
+            message: cls.numeric
+              ? '一个「时机」内只允许一个「选项」块（两种形共用同一读回变量：两个 INPUT/INPUTS 会争用 RESULT/RESULTS）。多轮选择请用原生 `$标签` + `GOTO`。'
+              : '一个「时机」内只允许一个「选项」块（两个 INPUTS 会争用同一个 RESULTS）。多轮选择请用原生 `$标签` + `GOTO`。',
             loc: posOf(line),
           });
         }
-        return this.parseChoiceBody(line);
+        return this.parseChoiceBody(line, cls.numeric === true);
       }
       case 'colorHead': {
         this.cursor.next();
@@ -1063,10 +1065,12 @@ class BlockParser {
         this.sink.report({
           code: 'choice-nested',
           severity: 'error',
-          message: '「选项」块不能嵌套（内层 INPUTS 会覆盖外层 RESULTS）。',
+          message: cls.numeric
+            ? '「选项 数字」块不能嵌套（内层 INPUT 会覆盖外层 RESULT）。'
+            : '「选项」块不能嵌套（内层 INPUTS 会覆盖外层 RESULTS）。',
           loc: posOf(line),
         });
-        this.parseChoiceBody(line); // 仍解析以正确跳行，节点丢弃
+        this.parseChoiceBody(line, cls.numeric === true); // 仍解析以正确跳行，节点丢弃
         continue;
       }
       // 候选：一行内容（可为文本行 / 心形 / 原生行 / 深一层块）
@@ -1135,7 +1139,7 @@ class BlockParser {
       case 'groupHead':
         return this.parseGroupBody(line);
       case 'choiceHead':
-        return this.parseChoiceBody(line);
+        return this.parseChoiceBody(line, cls.numeric === true);
       case 'exprHead':
         return this.parseExprHead(line, cls);
       case 'assign':
@@ -1248,7 +1252,15 @@ class BlockParser {
 
   /* ------------------------------ 选项块 ------------------------------ */
 
-  private parseChoiceBody(headLine: LogicalLine): SugarNode {
+  /**
+   * `选项：` 块体（按钮形）/ `选项 数字：` 块体（数字输入菜单形）。
+   *
+   * 两种形的**条目结构完全同形**（`「标签」：` + 缩进分支体），差别只在产物
+   * （见 `codegen.emitChoiceBlock`）。故此处仅在节点上挂内部标记
+   * `_numeric`（转译器内部决策，契约 `ChoiceBlock` 不含此字段——与 `_randomShape` /
+   * `_preset` 同一手法），codegen 据此分派。
+   */
+  private parseChoiceBody(headLine: LogicalLine, numeric = false): SugarNode {
     const itemIndent = headLine.indent + 1;
     const items: { label: string; body: SugarNode[]; loc: SugarSourceSpan }[] = [];
     while (!this.cursor.done) {
@@ -1297,7 +1309,8 @@ class BlockParser {
       kind: 'choiceBlock',
       items,
       loc: mergeSpan2(headLine, items),
-    };
+      ...(numeric ? { _numeric: true } : {}),
+    } as SugarNode;
   }
 
   /* ------------------------------ 着色块 ------------------------------ */
@@ -1474,11 +1487,13 @@ class BlockParser {
         this.sink.report({
           code: 'choice-nested',
           severity: 'error',
-          message: '「选项」块不能嵌套（内层 INPUTS 会覆盖外层 RESULTS）。',
+          message: cls.numeric
+            ? '「选项 数字」块不能嵌套（内层 INPUT 会覆盖外层 RESULT）。'
+            : '「选项」块不能嵌套（内层 INPUTS 会覆盖外层 RESULTS）。',
           loc: posOf(line),
         });
         // 仍然解析块体以正确跳行
-        this.parseChoiceBody(line);
+        this.parseChoiceBody(line, cls.numeric === true);
         continue;
       }
       const node = this.parseStatement(cls, line, { choiceSeen: false });
