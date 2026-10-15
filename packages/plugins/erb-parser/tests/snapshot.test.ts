@@ -36,12 +36,12 @@ function file(path: string, names: readonly string[]): ErbFile {
   };
 }
 
-function entry(path: string, mtimeMs: number | null, names: readonly string[]): SnapshotEntry {
+function entry(path: string, mtimeMs: number | null, names: readonly string[], size: number | null = 4096): SnapshotEntry {
   // v4 起 decode 恒回填 refs（缺 = 结构不符）；夹具同形，round-trip 判据才不空转
-  return { mtimeMs, textLength: 1000, file: file(path, names), refs: [] };
+  return { mtimeMs, size, textLength: 1000, file: file(path, names), refs: [] };
 }
 
-/** 盘上形态：v4 起 entries 是位置元组（第 7 位 = 引用流水），内存形状只在加载后存在 */
+/** 盘上形态：v5 起 entries 是位置元组（第 2 位 size、第 8 位引用流水），内存形状只在加载后存在 */
 function snapshot(entries: Record<string, SnapshotEntry>, rootDir = ROOT): IndexSnapshot & { entries: unknown } {
   return { version: SNAPSHOT_VERSION, rootDir, savedAt: 1234, entries: encodeEntries(entries) } as never;
 }
@@ -70,36 +70,58 @@ describe('aggregateIndex（聚合必须与全量重建同源同序）', () => {
     expect(byName.get('BAR')).toHaveLength(1);
     expect(byName.get('BAR')![0]).toMatchObject({ name: 'BAR', filePath: '/a.ERB', startLine: 11, endLine: 20 });
   });
+
+  it('快照懒外壳（未经还原）与直出 ErbFile 混装聚合，byName 逐项相同', () => {
+    const parsed = parseErbText('@FOO\n;doc\nEND\n@BAR\nEND\n', '/p/a.ERB');
+    const encoded = encodeEntries({ '/p/a.ERB': { mtimeMs: 1, size: 9, textLength: 9, file: parsed } });
+    const decoded = decodeEntries(JSON.parse(JSON.stringify(encoded)))!;
+    const viaSnapshot = aggregateIndex([decoded['/p/a.ERB']!.file]);
+    const direct = aggregateIndex([parsed]);
+    expect([...viaSnapshot.byName.keys()]).toEqual([...direct.byName.keys()]);
+    expect(viaSnapshot.byName.get('FOO')).toEqual(direct.byName.get('FOO'));
+    // 聚合不消费 functions ⇒ 懒字段仍是 accessor（100k 函数对象的构造留给真正要读的人）
+    const view = decoded['/p/a.ERB']!.file;
+    expect(Object.getOwnPropertyDescriptor(view, 'functions')?.get).toBeTypeOf('function');
+  });
 });
 
-describe('diffSnapshot（保守失效）', () => {
+describe('diffSnapshot（保守失效，mtime + size 双判据）', () => {
   const snap = coerceSnapshot(
     snapshot({
-      '/a.ERB': entry('/a.ERB', 100, ['FOO']),
+      '/a.ERB': entry('/a.ERB', 100, ['FOO'], 4000),
       '/b.ERB': entry('/b.ERB', null, ['BAR']), // 平台未提供 mtime
+      '/c.ERB': entry('/c.ERB', 100, ['BAZ'], null), // 构建时取不到 size
     }),
     ROOT,
   )!;
 
-  it('mtime 一致 → 复用；缺失 / 变了 / 任一侧 null → 过期', () => {
-    const stats = new Map<string, { mtimeMs: number } | null>([
-      ['/a.ERB', { mtimeMs: 100 }],
-      ['/b.ERB', { mtimeMs: 100 }],
-      ['/c.ERB', { mtimeMs: 100 }], // 快照里没有
-      ['/d.ERB', null], // stat 失败
+  it('mtime 与 size 都一致 → 复用；缺失 / 变了 / 任一侧 null → 过期', () => {
+    const stats = new Map([
+      ['/a.ERB', { mtimeMs: 100, size: 4000 }],
+      ['/b.ERB', { mtimeMs: 100, size: 4000 }],
+      ['/c.ERB', { mtimeMs: 100, size: 4000 }],
+      ['/d.ERB', { mtimeMs: 100, size: 4000 }], // 快照里没有
+      ['/e.ERB', null], // stat 失败
     ]);
-    const d = diffSnapshot(snap, ['/a.ERB', '/b.ERB', '/c.ERB', '/d.ERB'], stats as never);
+    const d = diffSnapshot(snap, ['/a.ERB', '/b.ERB', '/c.ERB', '/d.ERB', '/e.ERB'], stats as never);
     expect(d.reusable).toEqual(['/a.ERB']);
-    expect(d.stale).toEqual(['/b.ERB', '/c.ERB', '/d.ERB']);
+    expect(d.stale).toEqual(['/b.ERB', '/c.ERB', '/d.ERB', '/e.ERB']);
   });
 
-  it('mtime 是浮点也必须逐位相等（同源口径才可比）', () => {
-    const stats = new Map<string, { mtimeMs: number } | null>([['/a.ERB', { mtimeMs: 100.5 }]]);
-    expect(diffSnapshot(snap, ['/a.ERB'], stats as never).reusable).toEqual([]);
+  it('mtime 同值但 size 变了 → 判过期（保留时间戳的替换被 size 兜住）', () => {
+    const stats = new Map([['/a.ERB', { mtimeMs: 100, size: 4001 }]]);
+    expect(diffSnapshot(snap, ['/a.ERB'], stats as never).stale).toEqual(['/a.ERB']);
+  });
+
+  it('mtime 或 size 是浮点也必须逐位相等（同源口径才可比）', () => {
+    const floatMtime = new Map([['/a.ERB', { mtimeMs: 100.5, size: 4000 }]]);
+    expect(diffSnapshot(snap, ['/a.ERB'], floatMtime as never).reusable).toEqual([]);
+    const floatSize = new Map([['/a.ERB', { mtimeMs: 100, size: 4000.5 }]]);
+    expect(diffSnapshot(snap, ['/a.ERB'], floatSize as never).reusable).toEqual([]);
   });
 });
 
-describe('v3 元组编解码（瘦身不改语义）', () => {
+describe('v3 元组编解码（瘦身不改语义；v5：+size、懒还原）', () => {
   /** 含全部可选形态的真实感样本：表达式函数、带默认值形参、多行注释块、#DIM 声明 */
   const SRC = [
     ';==================================================',
@@ -121,12 +143,13 @@ describe('v3 元组编解码（瘦身不改语义）', () => {
   it('与 parseErbText 直出结果逐字段相同（经 JSON 一趟）', () => {
     const parsed = parseErbText(SRC, '/p/M_KOJO_K1_MESSAGE.ERB');
     const entries: Record<string, SnapshotEntry> = {
-      '/p/M_KOJO_K1_MESSAGE.ERB': { mtimeMs: 123.5, textLength: SRC.length, file: parsed },
+      '/p/M_KOJO_K1_MESSAGE.ERB': { mtimeMs: 123.5, size: 2048, textLength: SRC.length, file: parsed },
     };
     const restored = decodeEntries(JSON.parse(JSON.stringify(encodeEntries(entries))))!;
     const back = restored['/p/M_KOJO_K1_MESSAGE.ERB']!;
 
     expect(back.mtimeMs).toBe(123.5);
+    expect(back.size).toBe(2048);
     expect(back.textLength).toBe(SRC.length);
     expect(back.file).toEqual(parsed); // 深相等：含 name/normalizedName/params/行号/flags/docComment/dims
     expect(back.file.functions.length).toBe(parsed.functions.length);
@@ -137,7 +160,7 @@ describe('v3 元组编解码（瘦身不改语义）', () => {
   it('聚合结果也必须与直出一致（byName 顺序、引用等价语义）', () => {
     const parsed = parseErbText(SRC, '/p/a.ERB');
     const restored = decodeEntries(
-      JSON.parse(JSON.stringify(encodeEntries({ '/p/a.ERB': { mtimeMs: 1, textLength: 1, file: parsed } }))),
+      JSON.parse(JSON.stringify(encodeEntries({ '/p/a.ERB': { mtimeMs: 1, size: 1, textLength: 1, file: parsed } }))),
     )!;
     const direct = aggregateIndex([parsed]);
     const viaSnapshot = aggregateIndex([restored['/p/a.ERB']!.file]);
@@ -155,7 +178,7 @@ describe('v3 元组编解码（瘦身不改语义）', () => {
     expect(decodeEntries(JSON.parse(JSON.stringify(encodeEntries(entries))))).toEqual(entries);
   });
 
-  it('结构损坏一律 null（fail-closed，绝不"修"快照）', () => {
+  it('结构损坏一律 null（fail-closed，绝不"修"快照；懒还原不打折校验）', () => {
     const good = encodeEntries({ '/a.ERB': entry('/a.ERB', 1, ['FOO']) });
     const bad = (mut: (e: Record<string, unknown>) => void) => {
       const clone = JSON.parse(JSON.stringify(good)) as Record<string, unknown>;
@@ -164,21 +187,30 @@ describe('v3 元组编解码（瘦身不改语义）', () => {
     };
     expect(decodeEntries(undefined)).toBeNull();
     expect(decodeEntries('nope')).toBeNull();
-    expect(decodeEntries({ '/a.ERB': [1, 1, 1, 0, [], []].slice(0, 5) })).toBeNull(); // 元数不对
-    expect(bad((e) => (e['/a.ERB'] as unknown[])[3] = 2)).toBeNull(); // hasDirective 非 0|1
-    expect(bad((e) => (e['/a.ERB'] as unknown[])[1] = 'x')).toBeNull(); // textLength 非数
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[4] = [[['FOO', 1]]]))).toBeNull(); // 函数元组元数
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[4] = [['FOO', 1, 2, [[['A', 3]]], 0]]))).toBeNull(); // 形参标记非 0|1
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[4] = [['FOO', 1, 2, [], 0, 5]]))).toBeNull(); // 注释非字符串
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = [['X']]))).toBeNull(); // dims 元数
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[6] = [['FOO', 1, 2]]))).toBeNull(); // refs 元数（v4 新增位）
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[6] = [['FOO', 1, 2, 3]]))).toBeNull(); // refs 种类旗标非 0|1|2
-    expect(bad((e) => ((e['/a.ERB'] as unknown[]).length = 6))).toBeNull(); // refs 位缺失（v3 形态整弃）
+    expect(decodeEntries({ '/a.ERB': [1, 1, 1, 1, 0, [], [], []].slice(0, 7) })).toBeNull(); // 元数不对
+    expect(bad((e) => (e['/a.ERB'] as unknown[])[4] = 2)).toBeNull(); // hasDirective 非 0|1
+    expect(bad((e) => (e['/a.ERB'] as unknown[])[1] = 'x')).toBeNull(); // size 非数非 null
+    expect(bad((e) => (e['/a.ERB'] as unknown[])[2] = 'x')).toBeNull(); // textLength 非数
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = [[['FOO', 1]]]))).toBeNull(); // 函数元组元数
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = [['FOO', 1, 2, [[['A', 3]]], 0]]))).toBeNull(); // 形参标记非 0|1
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = [['FOO', 1, 2, [], 0, 5]]))).toBeNull(); // 注释非字符串
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[6] = [['X']]))).toBeNull(); // dims 元数
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[7] = [['FOO', 1, 2]]))).toBeNull(); // refs 元数（v4 新增位）
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[7] = [['FOO', 1, 2, 3]]))).toBeNull(); // refs 种类旗标非 0|1|2
+    expect(bad((e) => ((e['/a.ERB'] as unknown[]).length = 7))).toBeNull(); // refs 位缺失（v4 形态整弃）
+    // 深层损坏也要在 decode 时被查掉（懒还原不许把 fail-closed 推迟到消费方）
+    const twoEntries = encodeEntries({
+      '/a.ERB': entry('/a.ERB', 1, ['FOO']),
+      '/b.ERB': entry('/b.ERB', 2, ['BAR']),
+    });
+    (twoEntries['/b.ERB']![7] as unknown[])[0] = ['BAR', 1, 2, 9];
+    expect(decodeEntries(twoEntries)).toBeNull();
   });
 
   it('refs 流水非空也必须原样往返（反向索引热复用的判据来源）', () => {
     const src: SnapshotEntry = {
       mtimeMs: 5,
+      size: 128,
       textLength: 42,
       file: file('/a.ERB', ['FOO']),
       refs: [['FOO', 1, 1, 0], ['FOO', 3, 6, 1], ['BAR', 9, 2, 2]],
@@ -187,9 +219,42 @@ describe('v3 元组编解码（瘦身不改语义）', () => {
     expect(back['/a.ERB']!.refs).toEqual(src.refs);
   });
 
-  it('mtime 为 null 必须能原样往返（保守失效判据不能编造成数字）', () => {
-    const entries = { '/a.ERB': entry('/a.ERB', null, ['FOO']) };
+  it('mtime / size 为 null 必须能原样往返（保守失效判据不能编造成数字）', () => {
+    const entries = { '/a.ERB': entry('/a.ERB', null, ['FOO'], null) };
     expect(decodeEntries(JSON.parse(JSON.stringify(encodeEntries(entries))))).toEqual(entries);
+  });
+
+  it('懒还原两段：decode 后 functions/dims 是 getter，读一次换值属性；refs 零拷贝别名元组', () => {
+    const parsed = parseErbText(SRC, '/p/a.ERB');
+    const entries = { '/p/a.ERB': { mtimeMs: 1, size: 10, textLength: 10, file: parsed, refs: [['FOO', 1, 1, 0]] as never } };
+    const payload = JSON.parse(JSON.stringify(encodeEntries(entries))) as Record<string, unknown>;
+    const decoded = decodeEntries(payload)!;
+    const e = decoded['/p/a.ERB']!;
+
+    // 装载只建轻外壳：重字段未建对象（accessor 在位、Enumerable 保持）
+    const fDesc = Object.getOwnPropertyDescriptor(e.file, 'functions')!;
+    expect(fDesc.get).toBeTypeOf('function');
+    expect(fDesc.enumerable).toBe(true);
+    expect(Object.keys(e.file)).toContain('functions');
+    // refs 直接别名盘上元组（零拷贝）
+    expect(e.refs).toBe((payload['/p/a.ERB'] as unknown[])[7]);
+    // 首次消费才还原，且与直出等值；再次读取零开销
+    expect(e.file.functions).toEqual(parsed.functions);
+    expect(Object.getOwnPropertyDescriptor(e.file, 'functions')!.get).toBeUndefined();
+    const first = e.file.functions;
+    expect(e.file.functions).toBe(first);
+    expect(e.file.dims).toEqual(parsed.dims);
+  });
+
+  it('未经消费的懒条目落盘原样复用盘上元组（存盘不做无谓重建）', () => {
+    const entries = { '/a.ERB': entry('/a.ERB', 7, ['FOO', 'BAR']) };
+    const payload = JSON.parse(JSON.stringify(encodeEntries(entries))) as Record<string, unknown>;
+    const decoded = decodeEntries(payload)!;
+    const re = encodeEntries(decoded);
+    expect(re['/a.ERB']).toBe(payload['/a.ERB']); // 同一对象：快路径零重建
+    // 消费过的条目走重建路径，内容仍逐字段等值
+    void decoded['/a.ERB']!.file.functions;
+    expect(encodeEntries(decoded)['/a.ERB']).toEqual(payload['/a.ERB']);
   });
 
   /**
@@ -236,12 +301,18 @@ describe('coerceSnapshot（fail-closed）', () => {
   });
 });
 
-describe('pruneSnapshotKeys（索引快照统一单文件语义）', () => {
+describe('pruneSnapshotKeys（保留集 = 传入的键集合，其余快照键回收）', () => {
   const KEEP = snapshotKeyFor(ROOT);
 
-  it('只留当前项目的键，删掉其它项目的快照', () => {
+  it('只留传入的键，删掉其它项目的快照', () => {
     const keys = [KEEP, snapshotKeyFor('D:/other'), snapshotKeyFor('D:/third')];
     expect(pruneSnapshotKeys(keys, KEEP).sort()).toEqual([snapshotKeyFor('D:/other'), snapshotKeyFor('D:/third')].sort());
+  });
+
+  it('保留集可含多个键（本会话工作集：交替开项目不互删）', () => {
+    const other = snapshotKeyFor('D:/other');
+    const third = snapshotKeyFor('D:/third');
+    expect(pruneSnapshotKeys([KEEP, other, third], [KEEP, other])).toEqual([third]);
   });
 
   it('格式升级遗留的旧版本键也清掉（v1/v2 孤儿不再永远躺着）', () => {

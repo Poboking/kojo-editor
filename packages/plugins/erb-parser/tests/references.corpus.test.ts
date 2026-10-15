@@ -145,8 +145,14 @@ describe.skipIf(!SMOKE)('反向引用索引 · 真实语料自证', () => {
       const index = await parser.buildIndex([root]);
       const coldMs = performance.now() - t0;
       const breakdown = infoLines.find((m) => m.includes('index breakdown')) ?? '';
-      const refsLog = /refs (\d+)ms \((\d+) sites, rescan (\d+), snapshot (\d+)\)/.exec(breakdown);
-      expect(refsLog, `插件未打出 refs 读数行：${breakdown}`).not.toBeNull();
+      // PERF-7 起 bySymbol 惰性聚合：buildIndex 只报扫描段（rescan = 全量），
+      // 聚合读数在首次消费 `index.references` 时打（下方取用后即可读到）。
+      const refsLog = /refs scan (\d+)ms \(rescan (\d+), aggregate deferred\)/.exec(breakdown);
+      expect(refsLog, `插件未打出 refs 扫描读数行：${breakdown}`).not.toBeNull();
+      void index.references; // 首次消费 ⇒ 触发惰性聚合，下方读 on-demand 读数行
+      const onDemand = infoLines.find((m) => m.includes('references built on demand')) ?? '';
+      const onDemandLog = /\((\d+) sites, (\d+)ms; scan (\d+)ms, rescan (\d+), snapshot (\d+)\)/.exec(onDemand);
+      expect(onDemandLog, `插件未打出惰性聚合读数行：${onDemand}`).not.toBeNull();
 
       // ---- 1. 规模与不变量 ----
       let functions = 0;
@@ -170,8 +176,8 @@ describe.skipIf(!SMOKE)('反向引用索引 · 真实语料自证', () => {
           `被名 ${refs.bySymbol.size}`,
       );
       console.log(
-        `[refs] 冷建：总 ${coldMs.toFixed(0)}ms；插件读数 refs ${refsLog![1]}ms（重扫 ${refsLog![3]} / ` +
-          `快照 ${refsLog![4]}），快照路径本批语料未走（service.buildIndex 强制重建）`,
+        `[refs] 冷建：总 ${coldMs.toFixed(0)}ms；扫描 refs scan ${refsLog![1]}ms（重扫 ${refsLog![2]}）· ` +
+          `惰性聚合 ${onDemandLog![2]}ms（${onDemandLog![1]} sites），快照路径本批语料未走（service.buildIndex 强制重建）`,
       );
 
       expect(functions).toBeGreaterThanOrEqual(90_000); // 与 erh 批同闸（历史读数 99,104）

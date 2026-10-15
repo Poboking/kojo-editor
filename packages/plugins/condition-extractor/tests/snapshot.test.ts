@@ -34,8 +34,9 @@ const cond = (name: string, path: string, deps: StateDependency[]): FunctionCond
   dependencies: deps,
 });
 
-const bucket = (mtimeMs: number | null, conds: FunctionConditions[], functions = 7): FileBucket => ({
+const bucket = (mtimeMs: number | null, conds: FunctionConditions[], functions = 7, size: number | null = 2048): FileBucket => ({
   mtimeMs,
+  size,
   stats: {
     functions,
     functionsWithDeps: conds.filter((c) => c.dependencies.length > 0).length,
@@ -66,7 +67,7 @@ const roundTrip = (src: Map<string, FileBucket>, expect: ExtractExpect = EXPECT)
 };
 
 describe('v3 按文件桶编解码', () => {
-  it('往返等价：路径由桶键还原、归一化名由条目键还原、mtime 与逐文件统计一致', () => {
+  it('往返等价：路径由桶键还原、归一化名由条目键还原、mtime/size 与逐文件统计一致', () => {
     const src = buckets();
     const { back } = roundTrip(src);
     expect(back).not.toBeNull();
@@ -74,9 +75,28 @@ describe('v3 按文件桶编解码', () => {
     expect(Object.keys(got).sort()).toEqual(['D:/game/k1.ERB', 'D:/game/k2.ERB', 'D:/game/k3.ERB']);
     for (const [path, b] of src) {
       expect(got[path]!.mtimeMs).toBe(b.mtimeMs);
+      expect(got[path]!.size).toBe(b.size);
       expect(got[path]!.stats).toEqual(b.stats);
       expect(got[path]!.conds).toEqual(b.conds);
     }
+  });
+
+  it('懒还原：decode 后 dependencies 是 getter（装载不建对象），首次消费才还原且与直出等值', () => {
+    const src = buckets();
+    const { back } = roundTrip(src);
+    const cond = back!.buckets['D:/game/k1.ERB']!.conds[0]!;
+    // 校验急、还原懒：引用对象未建（accessor 在位、Enumerable 保持）
+    const desc = Object.getOwnPropertyDescriptor(cond, 'dependencies')!;
+    expect(desc.get).toBeTypeOf('function');
+    expect(desc.enumerable).toBe(true);
+    expect(Object.keys(cond)).toContain('dependencies');
+    // 首次消费才还原，值仍与直出逐字段等值；再次读取零开销
+    expect(cond.dependencies).toEqual(src.get('D:/game/k1.ERB')!.conds[0]!.dependencies);
+    expect(Object.getOwnPropertyDescriptor(cond, 'dependencies')!.get).toBeUndefined();
+    const first = cond.dependencies;
+    expect(cond.dependencies).toBe(first);
+    // 同批没被问过的函数桶仍是 accessor（谁问谁付）
+    expect(Object.getOwnPropertyDescriptor(back!.buckets['D:/game/k3.ERB']!.conds[0]!, 'dependencies')!.get).toBeTypeOf('function');
   });
 
   it('schema 去重表：重复标签只存一份（还原后仍等值）', () => {
@@ -113,6 +133,13 @@ describe('v3 按文件桶编解码', () => {
     const src = new Map<string, FileBucket>([['/a.ERB', bucket(null, [cond('A', '/a.ERB', [])])]]);
     const { back } = roundTrip(src);
     expect(back!.buckets['/a.ERB']!.mtimeMs).toBeNull();
+    expect(back!.buckets['/a.ERB']!.size).toBe(2048);
+  });
+
+  it('size 为 null 也必须原样往返（additive 判据缺信号时不许伪造）', () => {
+    const src = new Map<string, FileBucket>([['/a.ERB', bucket(100, [cond('A', '/a.ERB', [])], 7, null)]]);
+    const { back } = roundTrip(src);
+    expect(back!.buckets['/a.ERB']!.size).toBeNull();
   });
 
   it('体积比朴素 JSON 小（字典 + 元组生效），且解码与输入逐字段相等', () => {
@@ -148,14 +175,15 @@ describe('v3 按文件桶编解码', () => {
       'schema',
     ]);
     expect(Object.keys(c.dependencies[0]!.schema!).sort()).toEqual(['description', 'index', 'name']);
-    expect(EXTRACT_SNAPSHOT_FORMAT).toBe(4);
+    expect(EXTRACT_SNAPSHOT_FORMAT).toBe(5);
   });
 
   /** v4 的全部收益都建立在这一条不变式上：`key` 不落盘 = 它一定是 name/indices 的派生值 */
   it('盘上没有 key 槽；还原出的 key 恒等于 dependencyKey(name, indices)', () => {
     const { payload, back } = roundTrip(buckets());
-    const tuple = (payload.buckets as Record<string, [number | null, number[], unknown[][]]>)['D:/game/k1.ERB']!;
-    const cond = tuple[2][0] as [string, number, number, number, unknown[]];
+    const tuple = (payload.buckets as Record<string, [number | null, number | null, number[], unknown[][]]>)['D:/game/k1.ERB']!;
+    expect(tuple[1]).toBe(2048); // v5：第 2 位是 size
+    const cond = tuple[3][0] as [string, number, number, number, unknown[]];
     const dep = cond[4][0] as [number, string[], number, number, unknown[], number];
     expect(dep.length).toBe(6); // [nameIdx, indices, count, firstLine, comparisons, schemaIdx]
     expect(typeof dep[0]).toBe('number'); // name 字典的下标，而不是 key 字符串
@@ -229,7 +257,7 @@ describe('全局判据 fail-closed', () => {
     expect(decodeBuckets(base(), { ...EXPECT, inputDigest: 'csv-digest-2' })).toBeNull();
   });
 
-  it('结构损坏 ⇒ null（非对象 / 桶元数 / stats 形状 / 依赖越界 / mtime 类型）', () => {
+  it('结构损坏 ⇒ null（非对象 / 桶元数 / stats 形状 / size 类型 / 依赖越界 / mtime 类型）', () => {
     expect(decodeBuckets(undefined, EXPECT)).toBeNull();
     expect(decodeBuckets('nope', EXPECT)).toBeNull();
     expect(decodeBuckets({ ...base(), buckets: null }, EXPECT)).toBeNull();
@@ -238,14 +266,15 @@ describe('全局判据 fail-closed', () => {
       ...(base() as Record<string, unknown>),
       buckets: { ...(base().buckets as Record<string, unknown>), [path]: tuple },
     });
-    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0]]), EXPECT)).toBeNull(); // 桶元数
-    expect(decodeBuckets(bad('/x.ERB', ['no', [0, 0, 0, 0, 0], []]), EXPECT)).toBeNull(); // mtime 类型
-    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0], []]), EXPECT)).toBeNull(); // stats 长度
+    expect(decodeBuckets(bad('/x.ERB', [1, 5, [0, 0, 0, 0, 0]]), EXPECT)).toBeNull(); // 桶元数（v5 = 4）
+    expect(decodeBuckets(bad('/x.ERB', ['no', 5, [0, 0, 0, 0, 0], []]), EXPECT)).toBeNull(); // mtime 类型
+    expect(decodeBuckets(bad('/x.ERB', [1, 'x', [0, 0, 0, 0, 0], []]), EXPECT)).toBeNull(); // size 类型
+    expect(decodeBuckets(bad('/x.ERB', [1, 5, [0, 0, 0], []]), EXPECT)).toBeNull(); // stats 长度
     // 依赖元组 v4 = [nameIdx, indices, count, firstLine, comparisons, schemaIdx]
-    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [[0, [], 1, 1, []]]]]]), EXPECT)).toBeNull(); // 依赖元数
-    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [[0, [], 1, 1, [], 99]]]]]), EXPECT)).toBeNull(); // schemaIdx 越界
-    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [[9999, [], 1, 1, [], -1]]]]]), EXPECT)).toBeNull(); // nameIdx 越界
-    expect(decodeBuckets(bad('/x.ERB', [1, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [['CFLAG', [], 1, 1, [], -1]]]]]), EXPECT)).toBeNull(); // v3 的 key 形态混进来 ⇒ 拒
+    expect(decodeBuckets(bad('/x.ERB', [1, 5, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [[0, [], 1, 1, []]]]]]), EXPECT)).toBeNull(); // 依赖元数
+    expect(decodeBuckets(bad('/x.ERB', [1, 5, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [[0, [], 1, 1, [], 99]]]]]), EXPECT)).toBeNull(); // schemaIdx 越界
+    expect(decodeBuckets(bad('/x.ERB', [1, 5, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [[9999, [], 1, 1, [], -1]]]]]), EXPECT)).toBeNull(); // nameIdx 越界
+    expect(decodeBuckets(bad('/x.ERB', [1, 5, [0, 0, 0, 0, 0], [['A', 1, 1, 1, [['CFLAG', [], 1, 1, [], -1]]]]]), EXPECT)).toBeNull(); // v3 的 key 形态混进来 ⇒ 拒
     expect(decodeBuckets({ ...base(), names: undefined }, EXPECT)).toBeNull(); // 缺 name 字典
   });
 
@@ -292,6 +321,19 @@ describe('planReuse（逐文件判据：改一个文件只重算那一个）', (
     )!.buckets;
     expect(planReuse(stored, [{ path: 'D:/game/noStat.ERB', mtimeMs: 5 }]).stale).toEqual(['D:/game/noStat.ERB']);
     expect(planReuse(stored, [{ path: 'D:/game/noStat.ERB', mtimeMs: null }]).stale).toEqual(['D:/game/noStat.ERB']);
+  });
+
+  it('size 判据（v5 additive）：两侧都有数时不相等 ⇒ 判过期；任一侧缺数 ⇒ 退回 mtime 判据', () => {
+    const stored = decoded().buckets; // 桶 size = 2048
+    const withSizes = all.map((f) => ({ ...f, size: 2048 }));
+    expect(planReuse(stored, withSizes).allHit).toBe(true);
+    // mtime 同值、size 变了（保留时间戳的替换）⇒ 只有它过期
+    const bumped = withSizes.map((f) => (f.path === 'D:/game/k3.ERB' ? { ...f, size: 2049 } : f));
+    expect(planReuse(stored, bumped).stale).toEqual(['D:/game/k3.ERB']);
+    // 索引没提供 fileSizes ⇒ size=null ⇒ 不把"没信号"当"过期"（退回纯 mtime 判据，与旧行为一致）
+    expect(planReuse(stored, all.map((f) => ({ ...f, size: null }))).allHit).toBe(true);
+    // 索引干脆没这个字段 ⇒ 同上
+    expect(planReuse(stored, all).allHit).toBe(true);
   });
 
   it('没有快照（首次）⇒ 全部 stale、allHit=false（空 files 也不算命中）', () => {

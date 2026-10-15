@@ -9,14 +9,12 @@
  *
  * ## 方案
  *
- * 按**项目根**把 `{ path → (mtimeMs, textLength, ErbFile) }` 存进本插件的存储域
- * （`{appData}/store/erb-parser/<key>.json`，实测全量 JSON 约 10–20 MB、
- * `JSON.parse` 约 100–200 ms，满足 HANDOFF §十一 的"<500 ms"门槛）。重新打开项目时：
+ * 按**项目根**把 `{ path → (mtimeMs, size, textLength, ErbFile) }` 存进本插件的存储域
+ * （`{appData}/store/erb-parser/<key>.json`）。重新打开项目时：
  *
  * ```
- * walkDir（1 次）→ 逐文件 stat 取 mtime（并发 IPC）
- *   → 与快照比对：mtime 一致 → **直接复用**解析结果（零读盘零解析）
- *              → 不一致/缺失 → 只重扫这些文件
+ * walkDir（1 次，顺带 mtime+size）→ 与快照比对：mtime 与 size 都一致 → **直接复用**
+ *   → 不一致/缺失/任一侧取不到 → 只重扫这些文件
  *   → 按本次 walk 顺序聚合（与全量重建的 byName 顺序逐位一致）
  *   → 广播 kojo.functionChanged（消费方无感）→ 异步落盘新快照
  * ```
@@ -24,8 +22,9 @@
  * ## 纪律
  *
  * - **fail-closed**：快照结构/版本/项目根任一不符 → 整体弃用 + 删除 + 全量重建
- *   （绝不"修"快照——解析错误的结果比慢更危险）；
- * - **保守失效**：mtime 任一侧为 null（平台未提供/读失败）→ 视为过期；
+ *   （绝不"修"快照——解析错误的结果比慢更危险）。校验是**急**的（decode 时逐元组查完），
+ *   懒的只是**还原成对象**这一步；
+ * - **保守失效**：mtime 或 size 任一侧为 null（平台未提供/读失败）→ 视为过期；
  * - **顺序确定**：聚合永远按本次 walkDir 的顺序进行，快照只替换"来源"，
  *   不改变 `byName` 的聚合顺序（消费方对顺序的任何假设都不受影响）；
  * - **零游戏知识**：本模块只认识"文件与函数边界"，不认识任何命名约定。
@@ -47,26 +46,43 @@ import type { FileRefs, RefRun } from './references';
  * （scanner.ts:263 唯一定义处）；再加**函数对象的键名本身 9.75 MB**。
  * v3 把这三样从盘上去掉（加载时回填），条目与函数改用位置元组 ⇒ 预计降到 ~18 MB，
  * 热启动 `storage.get`（v2 实测 253 ms）应随之等比下降。
- * 内存里的 `SnapshotEntry` 形状**不变**：压缩只发生在存储边界，插件逻辑一行不用改。
  *
  * **v3 → v4**（2026-10-15 H2 反向索引批）：条目追加第 7 位 `refs`
  * （`[归一化名, 行, 列, 种类旗标]` 流水）。反向引用必须在**读盘解析段**顺手产出
  * （文本不许整份留驻），热复用若无盘上 refs 就得二次读全部文件 ⇒ 快照不存等于白热。
  * v3 快照没有 refs ⇒ 版本 bump ⇒ fail-closed 整体弃用、一次冷重建（此后照常热）。
+ *
+ * **v4 → v5**（2026-10-16 PERF-7 快照批）：两处改动，都是行为修正/信号增强：
+ * - 条目追加 `size`（文件**字节数**，与 walkDir/stat 同源）。原失效判据只看 mtime——
+ *   "保留时间戳的替换"（拷贝/工具改写）会被静默复用；mtime+size 双判据把它兜住。
+ *   注意：**不能拿 `textLength` 当 size 用**——它是解码后的 UTF-16 码元数，与盘上
+ *   字节数在 CJK 语料里差 3 倍，直接比会把几乎每份文件判过期（全量重扫）。
+ *   `textLength` 保留为惰性还原前的冗余校验位。
+ * - 还原改为**两段**：decode 只做校验 + 建"轻外壳"（ErbFile 视图的 `functions`/`dims`
+ *   是惰性 getter，refs 直接别名盘上元组数组、零拷贝），重字段在**首次真正消费时**
+ *   才建对象。热开时条件抽取/校验只吃 `files` 的路径与统计、编辑器面板按需拉取 ⇒
+ *   100k 级函数对象的构造从"开项目"这一班岗上撤下。
+ *   v4 快照没有 size ⇒ 版本 bump ⇒ fail-closed 整体弃用、一次冷重建（此后照常热）。
  */
-export const SNAPSHOT_VERSION = 4;
+export const SNAPSHOT_VERSION = 5;
 
 /** 单个文件的快照条目 */
 export interface SnapshotEntry {
   /** 构建该条目时的文件 mtime（`readText`/`stat` 同源口径）；null = 平台未提供 → 恒视为过期 */
   readonly mtimeMs: number | null;
-  /** 冗余校验位：条目文本长度（UTF-16 码元数；将来可升级为失效判据） */
+  /** 构建该条目时的文件**字节数**（walkDir 顺带 / stat 兜底同源）；null = 取不到 → 恒视为过期 */
+  readonly size: number | null;
+  /** 冗余校验位：条目文本长度（UTF-16 码元数；**不可与 `size` 混用**——单位不同） */
   readonly textLength: number;
-  /** 该文件的完整解析结果（纯数据，JSON 安全） */
+  /**
+   * 该文件的解析结果。**懒还原**：`functions` / `dims` 是 getter，首次被读时才建对象；
+   * 在此之前只持有盘上元组。消费方读到的值与直接 `parseErbText` 逐字段相同。
+   */
   readonly file: ErbFile;
   /**
    * 该文件的反向引用流水（见 `./references` 的 `FileRefs`）。
    * v4 起恒在（缺失 = 结构不符 ⇒ 整体弃用）；构建序 = 行、列升序，聚合序因此确定。
+   * **零拷贝**：direct 别名盘上元组的第 7 位（RefTuple 与 RefRun 同形，decode 已逐条验过）。
    */
   readonly refs?: FileRefs;
 }
@@ -96,7 +112,7 @@ export function snapshotKeyFor(rootDir: string): string {
 }
 
 /* ---------------------------------------------------------------------------
- * v3 盘上形态：位置元组（只在存储边界使用，内存形状不变）
+ * v3 起盘上形态：位置元组（只在存储边界使用）
  * ------------------------------------------------------------------------- */
 
 /** `[形参名, 是否有默认值(0|1)]` */
@@ -107,14 +123,35 @@ type FunctionTuple = [string, number, number, ParamTuple[], number, string?];
 type DimTuple = [string, string, number];
 /** `[归一化名, 行, 列, 种类旗标(0=定义 1=调用 2=提及)]` */
 type RefTuple = [string, number, number, 0 | 1 | 2];
-/** `[mtimeMs, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水]` */
-type EntryTuple = [number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[], RefTuple[]];
+/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水]` */
+type EntryTuple = [number | null, number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[], RefTuple[]];
 
 const FLAG_EXPRESSION = 1;
 
 /**
+ * 懒还原的原始元组句柄（Symbol ⇒ 不进 `Object.keys`/JSON/spread）。
+ * `aggregateIndex` 凭它直接从元组建 `byName`，不经过 ErbFunction 对象。
+ */
+const RAW = Symbol('kojo.erb.snapshot.raw');
+
+interface RawCarrier {
+  [RAW]?: EntryTuple;
+}
+
+/** 惰性还原的一个字段：读一次建对象，随后换成普通值属性（再次读写零开销） */
+function materialize<T>(obj: object, key: string, build: () => T): T {
+  const built = build();
+  Object.defineProperty(obj, key, { value: built, enumerable: true, writable: true, configurable: true });
+  return built;
+}
+
+/**
  * 把内存条目压成盘上元组：剥掉三样可派生数据（`file.path`、`function.filePath`
  * 都等于条目键；`function.normalizedName` = `name.toUpperCase()`），并把键名换成位置。
+ *
+ * **快路径**：decode 产出的懒外壳（元组原样、refs 零拷贝、functions/dims 未被动过）直接
+ * 复用盘上元组，不重建 100k 级函数元组——落盘路径（改一个文件也要存全库）因此也是
+ * "改谁编码谁"。被动过的条目（如 `attachRefs` 换过 refs）走逐字段重建，语义不变。
  *
  * ⚠ **位置契约**：`ErbFile` / `ErbFunction` 增删字段时，这里必须同步改并
  * **bump `SNAPSHOT_VERSION`**——元组不会自动兼容新字段。哨兵测试
@@ -123,6 +160,20 @@ const FLAG_EXPRESSION = 1;
 export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>): Record<string, EntryTuple> {
   const out: Record<string, EntryTuple> = {};
   for (const [path, e] of Object.entries(entries)) {
+    const raw = (e.file as RawCarrier)[RAW];
+    if (
+      raw !== undefined &&
+      raw[0] === e.mtimeMs &&
+      raw[1] === e.size &&
+      raw[2] === e.textLength &&
+      raw[7] === (e.refs as unknown) &&
+      // functions/dims 仍是 accessor = 惰性外壳未被消费方动过 ⇒ 元组即真相
+      Object.getOwnPropertyDescriptor(e.file, 'functions')?.get !== undefined &&
+      Object.getOwnPropertyDescriptor(e.file, 'dims')?.get !== undefined
+    ) {
+      out[path] = raw;
+      continue;
+    }
     const fns: FunctionTuple[] = e.file.functions.map((f): FunctionTuple => {
       const flags = f.isExpressionFunction ? FLAG_EXPRESSION : 0;
       const params: ParamTuple[] = f.params.map((p): ParamTuple => [p.name, p.hasDefault ? 1 : 0]);
@@ -131,19 +182,19 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       return fn;
     });
     const dims: DimTuple[] = e.file.dims.map((d): DimTuple => [d.name, d.directive, d.line]);
-    const refs: RefTuple[] = (e.refs ?? []).map(
-      ([name, line, column, kind]) => [name, line, column, kind] as RefTuple,
-    );
-    out[path] = [e.mtimeMs, e.textLength, e.file.lineCount, e.file.hasFunctionDirective ? 1 : 0, fns, dims, refs];
+    // refs 与 RefTuple 同形（懒外壳是别名，重扫结果本来就是同形元组）——不再逐条复制
+    const refs = (e.refs ?? []) as unknown as RefTuple[];
+    out[path] = [e.mtimeMs, e.size, e.textLength, e.file.lineCount, e.file.hasFunctionDirective ? 1 : 0, fns, dims, refs];
   }
   return out;
 }
 
 function isEntryTuple(t: unknown): t is EntryTuple {
-  if (!Array.isArray(t) || t.length !== 7) return false;
+  if (!Array.isArray(t) || t.length !== 8) return false;
   if (t[0] !== null && typeof t[0] !== 'number') return false;
-  return typeof t[1] === 'number' && typeof t[2] === 'number' && (t[3] === 0 || t[3] === 1) &&
-    Array.isArray(t[4]) && Array.isArray(t[5]) && Array.isArray(t[6]);
+  if (t[1] !== null && typeof t[1] !== 'number') return false;
+  return typeof t[2] === 'number' && typeof t[3] === 'number' && (t[4] === 0 || t[4] === 1) &&
+    Array.isArray(t[5]) && Array.isArray(t[6]) && Array.isArray(t[7]);
 }
 
 function isRefTuple(t: unknown): t is RefTuple {
@@ -163,44 +214,67 @@ function isFunctionTuple(t: unknown): t is FunctionTuple {
   );
 }
 
+function toFunction(path: string, [name, startLine, endLine, params, flags, doc]: FunctionTuple): ErbFunction {
+  return {
+    name,
+    normalizedName: name.toUpperCase(),
+    params: params.map(([pname, hasDefault]): ErbParam => ({ name: pname, hasDefault: hasDefault === 1 })),
+    startLine,
+    endLine,
+    filePath: path,
+    // scanner 对每个函数都显式写这个布尔（false 也在），还原必须同样显式，不能缺键
+    isExpressionFunction: (flags & FLAG_EXPRESSION) !== 0,
+    ...(doc === undefined ? {} : { docComment: doc }),
+  };
+}
+
+/**
+ * 建懒还原的 ErbFile 视图：字段与 `parseErbText` 的产物同形同值，但 `functions`/`dims`
+ * 是 getter（首次读才建对象）。`aggregateIndex` 见到 RAW 标记就直接吃元组，
+ * 因此"热开时的聚合"不必先把 100k 级函数对象建出来。
+ */
+function lazyFile(path: string, tuple: EntryTuple): ErbFile {
+  const [, , , lineCount, hasDirective, fns, dims] = tuple;
+  const file: ErbFile = {
+    path,
+    hasFunctionDirective: hasDirective === 1,
+    lineCount,
+    get functions(): ErbFunction[] {
+      return materialize(file, 'functions', () => fns.map((t) => toFunction(path, t)));
+    },
+    get dims(): ErbDim[] {
+      return materialize(file, 'dims', () => dims.map(([name, directive, line]): ErbDim => ({ name, directive, line })));
+    },
+  };
+  Object.defineProperty(file, RAW, { value: tuple, enumerable: false });
+  return file;
+}
+
 /**
  * 还原盘上元组为内存条目；结构任一不符 ⇒ null（整体弃用，全量重建）。
  * 键即路径 ⇒ 回填 `file.path` 与 `function.filePath`；`normalizedName` 按 scanner 的
- * 唯一定义（`name.toUpperCase()`）回填。
+ * 唯一定义（`name.toUpperCase()`）回填（惰性，在 `toFunction` / `aggregateIndex` 里）。
+ *
+ * **校验急、还原懒**：每个函数元组 / 声明元组 / 引用元组在 decode 时逐条查完
+ * （fail-closed 不打折），查过之后对象构造才推迟。
  */
 export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const out: Record<string, SnapshotEntry> = {};
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!isEntryTuple(value)) return null;
-    const [mtimeMs, textLength, lineCount, hasDirective, fns, dims, refs] = value;
+    const [mtimeMs, size, textLength, , , fns, dims, refs] = value;
     if (!fns.every(isFunctionTuple)) return null;
     if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
       return null;
     }
     if (!refs.every(isRefTuple)) return null;
-    const functions: ErbFunction[] = fns.map(([name, startLine, endLine, params, flags, doc]) => ({
-      name,
-      normalizedName: name.toUpperCase(),
-      params: params.map(([pname, hasDefault]): ErbParam => ({ name: pname, hasDefault: hasDefault === 1 })),
-      startLine,
-      endLine,
-      filePath: path,
-      // scanner 对每个函数都显式写这个布尔（false 也在），还原必须同样显式，不能缺键
-      isExpressionFunction: (flags & FLAG_EXPRESSION) !== 0,
-      ...(doc === undefined ? {} : { docComment: doc }),
-    }));
     out[path] = {
       mtimeMs,
+      size,
       textLength,
-      file: {
-        path,
-        functions,
-        dims: dims.map(([name, directive, line]): ErbDim => ({ name, directive, line })),
-        hasFunctionDirective: hasDirective === 1,
-        lineCount,
-      },
-      refs: refs.map(([name, line, column, kind]): RefRun => [name, line, column, kind]),
+      file: lazyFile(path, value),
+      refs: refs as unknown as FileRefs, // 同形零拷贝（见 SnapshotEntry.refs 注）
     };
   }
   return out;
@@ -211,15 +285,39 @@ export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | nul
  *
  * 从 `plugin.ts` 的内联循环抽出：**全量重建**与**快照复用**必须走同一份聚合代码，
  * 否则两条路径会悄悄分叉。顺序 = 传入顺序 = 本次 walkDir 顺序。
+ *
+ * `sources` 可混装：本次重扫的 `ErbFile` 与快照懒外壳（带 RAW 标记）。后者直接
+ * 从元组建 `byName`（`name.toUpperCase()` 与 `toFunction` 同一条口径）⇒ 聚合阶段
+ * 不触发任何 ErbFunction 对象的构造；`files` 里存的就是那个懒视图，消费方读
+ * `functions` 时才按文件补齐。
  */
-export function aggregateIndex(files: Iterable<ErbFile>): {
+export function aggregateIndex(sources: Iterable<ErbFile>): {
   files: Map<string, ErbFile>;
   byName: Map<string, ErbFunctionRef[]>;
 } {
   const fileMap = new Map<string, ErbFile>();
   const byName = new Map<string, ErbFunctionRef[]>();
-  for (const file of files) {
-    fileMap.set(file.path, file);
+  for (const file of sources) {
+    const path = file.path;
+    fileMap.set(path, file);
+    const raw = (file as RawCarrier)[RAW];
+    if (raw !== undefined) {
+      for (const t of raw[5]) {
+        const name = t[0];
+        const normalizedName = name.toUpperCase();
+        const refs = byName.get(normalizedName) ?? [];
+        refs.push({
+          name,
+          normalizedName,
+          filePath: path,
+          startLine: t[1],
+          endLine: t[2],
+          ...(t[5] === undefined ? {} : { docComment: t[5] }),
+        });
+        byName.set(normalizedName, refs);
+      }
+      continue;
+    }
     for (const fn of file.functions) {
       const refs = byName.get(fn.normalizedName) ?? [];
       refs.push({
@@ -245,31 +343,41 @@ const SNAPSHOT_KEY_RE = /^index-v\d+-[0-9a-f]{8}$/;
 /**
  * 该删掉的旧快照键（**纯函数**，可单测）。
  *
- * 索引快照此前按项目根哈希留文件 ⇒ 开过 N 个项目就攒 N 份（v3 每份约 12 MB、v2 是 44 MB），
- * 永不回收。而抽取 / 校验两段一直是**单文件覆盖式**（判据在快照本体里，换项目即失效重算）
- * ——三段语义不一致，还留着无上限的磁盘口子。这里把索引也统一成单文件：只保留当前项目的
- * 键，删掉同域其它快照键（含格式升级遗留的 `index-v1-*` / `index-v2-*`）。
+ * 语义（2026-10-16 PERF-7 批修订）：**保留 = 本会话工作集**
+ * （`keepKeys` = 本会话已构建过的各项目键），其余索引快照键（含格式升级遗留的
+ * `index-v1-*` / `v2-*` 孤儿）一律清理。
  *
- * 代价说清楚：**交替打开两个游戏目录时，每次切换付一次冷索引**（约 2.3 s）——这与抽取/
- * 校验本来的行为一致，不是新增的痛。真要支持多项目常驻，得三段一起上登记表，而不是让索引段特殊。
+ * 为什么不是"只留当前项目那一份"（上一版语义）：那会让**交替开两个游戏目录**
+ * 演变成"每次切换都全冷重建"——A 存盘即删 B 的键，回头开 B 又全冷……
+ * 实测（合成 2,000 文件口径）交替 3 轮 6 次全冷。作者拿两三个版本对拍是真实工作流
+ * （本仓 STATE 就挂着三盘语料），每次切换付一次冷索引（真语料 ~2.3 s）不是可接受的代价。
+ *
+ * 为什么不是"全部保留"：开过的项目越多攒得越多、永不回收（v3 每份约 12 MB），
+ * 单文件覆盖式（抽取/校验两段）的初衷就是用**有界**换"不留无上限的磁盘口子"。
+ * 本会话工作集给两条约束一个交点：常用项目的来回切换落在工作集内（热），
+ * 工作集之外的旧键在下次构建时回收（界 = 一次会话摸过的项目数）。
+ * 代价说清楚：跨会话首次打开别的项目仍可能清掉未入工作集的旧键——那一次是冷的。
  */
-export function pruneSnapshotKeys(keys: readonly string[], keepKey: string): string[] {
-  return keys.filter((k) => SNAPSHOT_KEY_RE.test(k) && k !== keepKey);
+export function pruneSnapshotKeys(keys: readonly string[], keepKeys: string | readonly string[]): string[] {
+  const keep = typeof keepKeys === 'string' ? new Set([keepKeys]) : new Set(keepKeys);
+  return keys.filter((k) => SNAPSHOT_KEY_RE.test(k) && !keep.has(k));
 }
 
 /** 快照比对结果 */
 export interface SnapshotDiff {
-  /** mtime 一致、可直接复用解析结果的文件 */
+  /** mtime 与 size 都一致、可直接复用解析结果的文件 */
   readonly reusable: string[];
-  /** 需要重新读盘解析的文件（缺失 / mtime 变了 / mtime 不可判） */
+  /** 需要重新读盘解析的文件（缺失 / mtime 或 size 变了 / 任一侧不可判） */
   readonly stale: string[];
 }
 
 /**
  * 比对快照与当前文件清单（**纯函数**）。
  *
- * `stats` 取自 `io.stat`——与 `readText` 的 `mtimeMs` 同源（内核 readText 内部就是
- * stat），口径一致才可比。任一侧为 null（平台未提供 / stat 失败）一律判过期。
+ * 判据 = **mtimeMs 与 size 双等**。`stats` 取自 walkDir 顺带 / `io.stat` 兜底
+ * ——与构建条目时同源（内核 readText 内部就是 stat），口径一致才可比。
+ * 任一侧为 null（平台未提供 / stat 失败）一律判过期：size 是"mtime 同值替换"
+ * （保留时间戳的拷贝/工具改写）的唯一防线，取不到就不敢复用。
  */
 export function diffSnapshot(
   snapshot: IndexSnapshot,
@@ -282,13 +390,18 @@ export function diffSnapshot(
     const entry = snapshot.entries[p];
     const st = stats.get(p) ?? null;
     const fresh =
-      entry !== undefined && entry.mtimeMs !== null && st !== null && st.mtimeMs === entry.mtimeMs;
+      entry !== undefined &&
+      entry.mtimeMs !== null &&
+      entry.size !== null &&
+      st !== null &&
+      st.mtimeMs === entry.mtimeMs &&
+      st.size === entry.size;
     (fresh ? reusable : stale).push(p);
   }
   return { reusable, stale };
 }
 
-/** 校验未知数据是否为**本项目**的 v3 快照；任一不符返回 null（整体弃用） */
+/** 校验未知数据是否为**本项目**的 v5 快照；任一不符返回 null（整体弃用） */
 export function coerceSnapshot(raw: unknown, rootDir: string): IndexSnapshot | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;

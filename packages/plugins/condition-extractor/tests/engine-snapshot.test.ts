@@ -72,18 +72,20 @@ function erbFile(path: string): ErbFile {
  * 本次索引。文件清单**由 mtime 键推导**——增量复用的输入就是"这次 walk 到了哪些文件"，
  * 硬编码清单会让"新文件出现/旧文件消失"两类用例测不到真路径。
  * `mtimes = null` ⇒ 索引不带 `fileMtimes`（模拟旧版 / 取不到 stat 的索引）。
+ * `sizes`（PERF-7 additive）缺省 = 索引不带 `fileSizes`（旧提供方；判据退回纯 mtime）。
  */
-function erbIndex(mtimes: Map<string, number | null> | null): ErbIndex {
+function erbIndex(mtimes: Map<string, number | null> | null, sizes?: Map<string, number | null>): ErbIndex {
   const paths = mtimes === null ? [A, B] : [...mtimes.keys()];
   const files = new Map<string, ErbFile>(paths.map((p) => [p, erbFile(p)]));
-  return { files, byName: new Map(), fileMtimes: mtimes ?? undefined } as ErbIndex;
+  return { files, byName: new Map(), fileMtimes: mtimes ?? undefined, fileSizes: sizes } as ErbIndex;
 }
 
 /** 一个文件算完的桶（与引擎内部同构，用于造"上次留下的快照"） */
-function bucketFor(path: string, mtimeMs: number | null): FileBucket {
+function bucketFor(path: string, mtimeMs: number | null, size: number | null = null): FileBucket {
   const name = fnName(path);
   return {
     mtimeMs,
+    size,
     stats: { functions: 1, functionsWithDeps: 1, predicates: 1, unparsed: 0, dependencies: 1 },
     conds: [
       {
@@ -105,6 +107,8 @@ type Port = NonNullable<ConstructorParameters<typeof ConditionEngine>[0]['snapsh
 function makeEngine(opts: {
   /** 缺省 = A(100)/B(200)；`null` = 索引不提供 fileMtimes */
   mtimes?: Map<string, number | null> | null;
+  /** 缺省 = 索引不提供 fileSizes（退回纯 mtime 判据） */
+  sizes?: Map<string, number | null>;
   port?: Partial<Pick<Port, 'load' | 'save'>> & { expectFor?: () => ExtractExpect | null };
   /** 计算池的 offload 计数（引擎的分段日志要说"扫描段走了几条 worker"） */
   offload?: ComputePoolStats['offload'];
@@ -126,7 +130,7 @@ function makeEngine(opts: {
   const engine = new ConditionEngine({
     log,
     getProject: () => project,
-    getIndex: () => erbIndex(mtimes),
+    getIndex: () => erbIndex(mtimes, opts.sizes),
     readFile: async (path: string) => {
       reads.push(path);
       return 'IF CFLAG:2>=500\nENDIF\n';
@@ -213,6 +217,37 @@ describe('ConditionEngine 按文件增量', () => {
     expect(out.stats.functions).toBe(2);
     expect(saved[0]!.get(B)!.mtimeMs).toBe(201); // 新 mtime 进桶
     expect(saved[0]!.get(A)!.mtimeMs).toBe(100);
+  });
+
+  it('size 判据接通（PERF-7）：mtime 同值但 size 变了 ⇒ 只重算那一个；新桶带本次 size', async () => {
+    const saved: Map<string, FileBucket>[] = [];
+    const { engine, reads } = makeEngine({
+      mtimes: new Map([[A, 100], [B, 200]]), // 两个 mtime 都没变
+      sizes: new Map([[A, 4096], [B, 8192]]), // B 的字节数变了（桶里记的是 2048）
+      port: {
+        async load() {
+          return { [A]: bucketFor(A, 100, 4096), [B]: bucketFor(B, 200, 2048) };
+        },
+        save(buckets) {
+          saved.push(new Map(buckets));
+        },
+      },
+    });
+    const out = await engine.run();
+    expect(reads).toEqual([B]); // 只有 B 被 size 判据揪出重算
+    expect(out.byFunction.size).toBe(2);
+    expect(saved[0]!.get(B)!.size).toBe(8192); // 新桶带本次 size——下次判据才接得上
+    expect(saved[0]!.get(A)!.size).toBe(4096);
+  });
+
+  it('索引不带 fileSizes ⇒ 逐文件判据退回纯 mtime（旧提供方零改动，不把没信号当过期）', async () => {
+    const { engine, reads } = makeEngine({
+      // 缺省 sizes ⇒ index.fileSizes undefined；桶里的 size 与磁盘对不上也不影响复用
+      port: { load: async () => ({ [A]: bucketFor(A, 100, 999), [B]: bucketFor(B, 200, 999) }) },
+    });
+    const out = await engine.run();
+    expect(reads).toHaveLength(0);
+    expect(out.stats.functions).toBe(2);
   });
 
   it('新文件出现 ⇒ 只算新的；消失的文件不再进桶（天然收尸）', async () => {

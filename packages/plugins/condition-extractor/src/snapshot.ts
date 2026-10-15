@@ -6,7 +6,7 @@
  * 而插件在 `kojo.functionChanged` 上**自动催动**——每次开项目都重跑一遍。抽取是逐文件的
  * 纯函数：某个文件的正文没变 ⇒ 该文件的产出必相同。
  *
- * ## 四版演进（每一版都是量出来的，不是猜的）
+ * ## 五版演进（每一版都是量出来的，不是猜的）
  * - **v1** 整项目 JSON：45.86 MB，判据 = 全库 ERB 指纹。
  * - **v2** 字典 + 元组：schema 标签全库只有 1,832 种却重复写 164,910 次、`filePath` 只对应
  *   2,285 个文件、`normalizedName` 就是 map 键 ⇒ 剥掉后 12.47 MB。
@@ -17,15 +17,8 @@
  *   逐条验 0 例外）却占盘上 18%，`name` 全库只有 1,176 种也被逐条写一遍 ⇒ 删前者、后者进字典。
  *   体积 **12.31 MB → 9.01 MB（实测 −26.8%）**，但**热路径没有变快**（366ms，v3 为 349–363ms）：
  *   时间花在 `JSON.parse`（138ms）和还原成对象（126ms）上，不在字节数上。见下方"v4 的读数"。
- *
- * ## 两层失效判据（分工明确）
- * - **全局层**（判不符 ⇒ 整包弃用）：项目根 / `adapterId` / `inputDigest` / 格式版本。
- *   `inputDigest` 是 adapter 在 `loadProject` 吃进的非 ERB 输入摘要——eraTW 的变量字典由
- *   `CSV/*.csv` 驱动，抽取结果里的 `StateDependency.schema` 标签正是它给的
- *   （2026-10-12 自查发现：只看 ERB 指纹时，改一行 `CFLAG.csv` 描述会让快照继续吐旧标签）。
- * - **逐文件层**（判不符 ⇒ 只重算该文件）：桶里存的 `mtimeMs` 与 `ErbIndex.fileMtimes` 比对；
- *   任一侧为 `null`（取不到 stat）⇒ 该文件永不复用。
- *   磁盘上消失的文件不在本次 walk 顺序里 ⇒ 天然收尸，快照不会越攒越大。
+ * - **v5 懒还原 + size 判据**（2026-10-16 PERF-7）：桶追加 `size`；`conds` 的 `dependencies`
+ *   改成惰性 getter（校验照旧急做，fail-closed 不打折）。
  *
  * ## v4 的读数：体积真降了 27%，水位一点没动（如实记录）
  * 逐字段量过字节构成（探针，真实语料 164,910 条依赖）：依赖固定槽 **57.4%**、
@@ -36,13 +29,30 @@
  * 但热路径抽取段 **366ms**（v3 三次读数 349–363ms）——落在噪声之上一点，不是提速。
  * 分段成本把这解释清楚了：读盘 36ms / `JSON.parse` **138ms** / 还原成 `FunctionConditions`
  * 对象 **126ms**。也就是说 366ms 里约 **72% 是"解析 + 造对象"**，字节数只买得到读盘那 36ms。
- * **压体积不等于提速**——下一刀要砍的是每轮开项目的重复反序列化（桶级懒还原），
- * 而不是继续找字典。
+ * **压体积不等于提速**——v5 的刀就落在这条读数上：对象构造按"谁问谁付"拆两段。
  *
  * 两个被实测**否掉**的想法（记下来免得有人再试）：
  * - 把 `indices` 拼成 `a:b` 字符串省括号：语料里**有 361 个索引本身就含 `:`**，拼回来自带歧义，
  *   为 2.7pp 体积换一条"索引不许含冒号"的隐式约束不值；
  * - 比较式原文进字典：原文平均 4.3 B，换成下标几乎不省（3.2pp），不值多一层字典与一处越界判据。
+ *
+ * ## 两层失效判据（分工明确）
+ * - **全局层**（判不符 ⇒ 整包弃用）：项目根 / `adapterId` / `inputDigest` / 格式版本。
+ *   `inputDigest` 是 adapter 在 `loadProject` 吃进的非 ERB 输入摘要——eraTW 的变量字典由
+ *   `CSV/*.csv` 驱动，抽取结果里的 `StateDependency.schema` 标签正是它给的
+ *   （2026-10-12 自查发现：只看 ERB 指纹时，改一行 `CFLAG.csv` 描述会让快照继续吐旧标签）。
+ * - **逐文件层**（判不符 ⇒ 只重算该文件）：桶里存的 `mtimeMs` 与 `ErbIndex.fileMtimes` 比对；
+ *   任一侧为 `null`（取不到 stat）⇒ 该文件永不复用。
+ *   **v5 起再叠 size 判据**（PERF-7）：两侧都有数时要求与桶里存的字节数相等——
+ *   "mtime 同值替换"（保留时间戳的拷贝 / 工具改写）只有 size 兜得住；任一侧没数
+ *   （索引提供方未建 `fileSizes` / stat 取不到）就退回纯 mtime 判据（不伪造信号）。
+ *   磁盘上消失的文件不在本次 walk 顺序里 ⇒ 天然收尸，快照不会越攒越大。
+ *
+ * ## v5 的读数（PERF-7 快照热载瘦身）
+ * 还原两段化：decode 只做校验 + 建桶壳，`conds[i].dependencies` 是**惰性 getter**——
+ * 聚合（`mergeBuckets` 只吃 `normalizedName` 与桶级 stats）与开项目路径不再构造
+ * 16 万级 `StateDependency` 对象；谁问谁付（条件矩阵按函数拉取、落盘路径一次性编码）。
+ * 合成 2,000 文件口径（28k 函数桶 / 168k 依赖）实测见提交信息。
  *
  * ## 纪律
  * **fail-closed**：全局判据或结构任一不符 ⇒ 整包 null；元组是**位置契约**，
@@ -63,7 +73,7 @@ import type {
 } from '@kojo/plugin-api';
 
 /** 快照格式版本；改 `FunctionConditions`/`StateDependency` 语义或抽取口径时 +1 */
-export const EXTRACT_SNAPSHOT_FORMAT = 4;
+export const EXTRACT_SNAPSHOT_FORMAT = 5;
 
 /** 存储键 = 固定槽位名（版本在 payload 里，换格式时旧文件读出即判死并被覆盖） */
 export const EXTRACT_STORE_KEY = 'extract-snapshot-v1';
@@ -74,6 +84,8 @@ export type FileStats = ConditionIndex['stats'];
 /** 一个文件的结果桶 */
 export interface FileBucket {
   readonly mtimeMs: number | null;
+  /** 构建该桶时的文件**字节数**（与 `ErbIndex.fileSizes` 同源）；null = 取不到 ⇒ 退回纯 mtime 判据 */
+  readonly size: number | null;
   readonly stats: FileStats;
   readonly conds: FunctionConditions[];
 }
@@ -95,8 +107,8 @@ type DependencyTuple = [number, string[], number, number, ComparisonTuple[], num
 type ComparisonTuple = [string, number | string, string];
 /** `[归一化名, startLine, predicateCount, unparsedCount, deps]`；`filePath` 由桶键给出 */
 type CondTuple = [string, number, number, number, DependencyTuple[]];
-/** `[mtimeMs, 该文件统计, 函数桶]` */
-type BucketTuple = [number | null, [number, number, number, number, number], CondTuple[]];
+/** `[mtimeMs, size, 该文件统计, 函数桶]`（v5 起第 2 位是 size） */
+type BucketTuple = [number | null, number | null, [number, number, number, number, number], CondTuple[]];
 
 /** 落盘形态（v4） */
 export interface StoredConditionIndex {
@@ -196,7 +208,12 @@ export function encodeBuckets(args: {
       }),
     ]);
     const s = b.stats;
-    out[path] = [b.mtimeMs, [s.functions, s.functionsWithDeps, s.predicates, s.unparsed, s.dependencies], conds];
+    out[path] = [
+      b.mtimeMs,
+      b.size,
+      [s.functions, s.functionsWithDeps, s.predicates, s.unparsed, s.dependencies],
+      conds,
+    ];
   }
 
   return {
@@ -244,16 +261,63 @@ function isCondTuple(t: unknown): t is CondTuple {
 }
 
 function isBucketTuple(t: unknown): t is BucketTuple {
-  if (!Array.isArray(t) || t.length !== 3) return false;
-  const [mtime, stats, conds] = t as unknown[];
+  if (!Array.isArray(t) || t.length !== 4) return false;
+  const [mtime, size, stats, conds] = t as unknown[];
   if (mtime !== null && typeof mtime !== 'number') return false;
+  if (size !== null && typeof size !== 'number') return false;
   if (!Array.isArray(stats) || stats.length !== 5 || !stats.every((n) => typeof n === 'number')) return false;
   return Array.isArray(conds) && conds.every(isCondTuple);
 }
 
 /**
+ * 建**惰性**函数条件壳：`dependencies` 首次被读时才把盘上元组还原成 `StateDependency[]`
+ * （`key` 按**同一个** `dependencyKey` 现算——它必须与 `extract.ts` 产出的键逐字节相同，
+ * 否则徽章/依赖分组会在"冷算 vs 还原"两条路上分叉）。
+ *
+ * 校验（`isDependencyTuple` / `isComparisonTuple` / 下标越界）在 decode 时**已逐条做完**
+ * （fail-closed 不打折），这里只是把"造 16 万级对象"这一步推迟到首个真正的消费方：
+ * 开项目级联只吃桶级 stats 与 `normalizedName`，不该替一次查看面板的点击买单。
+ */
+function lazyConditions(
+  path: string,
+  c: CondTuple,
+  names: readonly string[],
+  schemas: readonly (VariableInfo | null)[],
+): FunctionConditions {
+  const [normalizedName, startLine, predicateCount, unparsedCount, deps] = c;
+  const cond: FunctionConditions = {
+    normalizedName,
+    filePath: path,
+    startLine,
+    predicateCount,
+    unparsedCount,
+    get dependencies(): StateDependency[] {
+      const built = deps.map((d): StateDependency => {
+        const [nameIx, indices, count, firstLine, comparisons, sIdx] = d;
+        const name = names[nameIx]!;
+        const dep: StateDependency = {
+          key: dependencyKey({ name, indices }),
+          name,
+          indices,
+          count,
+          comparisons: comparisons.map((cmp): ConditionComparison => ({ op: cmp[0], value: cmp[1], text: cmp[2] })),
+          firstLine,
+        };
+        if (sIdx >= 0) dep.schema = schemas[sIdx] as VariableInfo;
+        return dep;
+      });
+      // 读一次建对象，随后换成普通值属性（再次读写零开销；`toEqual` 深比照常走通）
+      Object.defineProperty(cond, 'dependencies', { value: built, enumerable: true, writable: true, configurable: true });
+      return built;
+    },
+  };
+  return cond;
+}
+
+/**
  * 还原为按文件桶；**全局判据**（格式 / 项目根 / 适配器 / `inputDigest`）或结构任一不符 ⇒ null。
- * 逐文件是否可用交给 `planReuse`（比 mtime）。
+ * 逐文件是否可用交给 `planReuse`（比 mtime + size）。
+ * 校验急、还原懒：引用元组的形状/下标在 decode 时全查过，函数条件对象的 `dependencies` 才惰性。
  */
 export function decodeBuckets(
   raw: unknown,
@@ -269,17 +333,19 @@ export function decodeBuckets(
   if (!Array.isArray(s.schemas) || !s.schemas.every((v) => v === null || typeof v === 'object')) return null;
   if (!Array.isArray(s.names) || !s.names.every((v) => typeof v === 'string')) return null;
   const names = s.names as readonly string[];
+  const schemas = s.schemas as readonly (VariableInfo | null)[];
 
   const out: Record<string, FileBucket> = {};
   for (const [path, tuple] of Object.entries(s.buckets as Record<string, unknown>)) {
     if (!isBucketTuple(tuple)) return null;
-    const [mtimeMs, st, conds] = tuple;
+    const [mtimeMs, size, st, conds] = tuple;
     const depsOk = conds.every((c) =>
-      c[4].every((d) => isDependencyTuple(d, s.schemas!.length, names.length)),
+      c[4].every((d) => isDependencyTuple(d, schemas.length, names.length)),
     );
     if (!depsOk) return null;
     out[path] = {
       mtimeMs,
+      size,
       stats: {
         functions: st[0],
         functionsWithDeps: st[1],
@@ -287,29 +353,10 @@ export function decodeBuckets(
         unparsed: st[3],
         dependencies: st[4],
       },
-      conds: conds.map((c): FunctionConditions => {
-        const [normalizedName, startLine, predicateCount, unparsedCount, deps] = c;
-        const dependencies: StateDependency[] = deps.map((d): StateDependency => {
-          const [nameIx, indices, count, firstLine, comparisons, sIdx] = d;
-          const name = names[nameIx]!;
-          // `key` 不落盘，在这里按**同一个** `dependencyKey` 现算——它必须与 `extract.ts`
-          // 产出的键逐字节相同，否则徽章/依赖分组会在"冷算 vs 还原"两条路上分叉。
-          const dep: StateDependency = {
-            key: dependencyKey({ name, indices }),
-            name,
-            indices,
-            count,
-            comparisons: comparisons.map((cmp): ConditionComparison => ({ op: cmp[0], value: cmp[1], text: cmp[2] })),
-            firstLine,
-          };
-          if (sIdx >= 0) dep.schema = s.schemas![sIdx] as VariableInfo;
-          return dep;
-        });
-        return { normalizedName, filePath: path, startLine, predicateCount, unparsedCount, dependencies };
-      }),
+      conds: conds.map((c) => lazyConditions(path, c, names, schemas)),
     };
   }
-  return { buckets: out, schemas: s.schemas };
+  return { buckets: out, schemas };
 }
 
 /** 逐文件比对结果：可复用哪些桶、哪些文件要重算 */
@@ -324,19 +371,24 @@ export interface ReusePlan {
 /**
  * 决定哪些文件能复用（**纯函数**，可单测）。
  *
- * 判据：桶里的 `mtimeMs` 与本次索引的 `fileMtimes` **逐位相等**且都不为 null。
+ * 判据：桶里的 `mtimeMs` 与本次索引的 `fileMtimes` **逐位相等**且都不为 null；
+ * 若两侧**都**带 size（`ErbIndex.fileSizes` / 桶里的构建期字节数），再要求二者相等——
+ * "mtime 同值替换"只有 size 兜得住。size 是 additive 信号：任一侧没数（索引提供方
+ * 未建 `fileSizes` / stat 取不到）就退回纯 mtime 判据，不伪造判据也不把没信号当"过期"。
  * 快照里没有该文件、文件消失、mtime 变了、任一侧取不到 mtime ⇒ 进 `stale`（或不进结果）。
  * 顺序：`files` 传入顺序 = 本次 walkDir 顺序 ⇒ 合并结果与全量重建同序。
  */
 export function planReuse(
   buckets: Readonly<Record<string, FileBucket>> | null,
-  files: readonly { path: string; mtimeMs: number | null }[],
+  files: readonly { path: string; mtimeMs: number | null; size?: number | null }[],
 ): ReusePlan {
   const reusable = new Map<string, FileBucket>();
   const stale: string[] = [];
   for (const f of files) {
     const b = buckets?.[f.path];
-    if (b && b.mtimeMs !== null && f.mtimeMs !== null && b.mtimeMs === f.mtimeMs) {
+    const sizeOk =
+      typeof b?.size === 'number' && typeof f.size === 'number' ? b.size === f.size : true;
+    if (b && b.mtimeMs !== null && f.mtimeMs !== null && b.mtimeMs === f.mtimeMs && sizeOk) {
       reusable.set(f.path, b);
     } else {
       stale.push(f.path);

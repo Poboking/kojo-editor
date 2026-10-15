@@ -233,26 +233,41 @@ export class ConditionEngine implements ConditionExtractorService {
     const expect = this.deps.snapshot ? this.deps.snapshot.expectFor({ project, index }) : null;
 
     /**
-     * 本次文件清单 + 逐文件 mtime（顺序 = 本次 walk 顺序 = 结果顺序）。
-     * 索引没给 mtime 或该文件取不到 stat ⇒ null ⇒ 该文件判过期，保守重算。
+     * 本次文件清单 + 逐文件 mtime/size（顺序 = 本次 walk 顺序 = 结果顺序）。
+     * 索引没给 mtime 或该文件取不到 stat ⇒ null ⇒ 该文件判过期，保守重算；
+     * size（additive，2026-10-16 PERF-7）与 mtime 同源，两侧都有数时逐文件判据多一层
+     * "mtime 同值替换"防线（索引没提供 `fileSizes` ⇒ 退回纯 mtime 判据，见 `planReuse`）。
      */
     const files = [...index.files.entries()];
-    const stamps = files.map(([path]) => ({ path, mtimeMs: index.fileMtimes?.get(path) ?? null }));
+    const stamps = files.map(([path]) => ({
+      path,
+      mtimeMs: index.fileMtimes?.get(path) ?? null,
+      size: index.fileSizes?.get(path) ?? null,
+    }));
+    const loadT0 = nowMs();
     const stored = this.deps.snapshot && expect ? await this.deps.snapshot.load(expect) : null;
     const plan = planReuse(stored, stamps);
+    /**
+     * **热载第一段**（PERF-7 两段拆分）：读快照 + 全局判据 + 逐桶校验 + 建桶壳 + 逐文件判据。
+     * 与**第二段**（下面真正要用的时候还原依赖对象 / 重算 stale 文件）分开计时——
+     * v5 的懒还原把第二段从"每次开项目都付"改成"谁问谁付"，没有这条读数就看不出挪到哪去了。
+     * 缺快照 / 判据不全时这一段等于白跑一趟读盘，照样打点（形状本身就是要看的）。
+     */
+    const loadMs = nowMs() - loadT0;
 
     const t0 = Date.now();
     const lookup = this.deps.getSchemaLookup();
     const extractOpts = lookup ? { lookup } : {};
     const mtimeOf = new Map(stamps.map((s) => [s.path, s.mtimeMs]));
+    const sizeOf = new Map(stamps.map((s) => [s.path, s.size]));
     const computed = new Map<string, FileBucket>();
     /** 只算没命中的文件（作者改 3 个文件 ⇒ 只重抽这 3 个，不是 2,285 个） */
     const pending = files.filter(([path]) => !plan.reusable.has(path));
 
     /**
-     * 分段墙钟。⚠ **三段之和会大于本轮总时长**：窗口里 8 个文件同时在读，
-     * 读盘/扫描/循环三段是叠着计时的。所以这条读数用来**看形状**（哪一段是秒级、哪一段是百毫秒级），
-     * 不能当占比读。
+     * 分段墙钟。⚠ **读盘/扫描/循环这三段之和会大于本轮总时长**：窗口里 8 个文件同时在读，
+     * 三段是叠着计时的。所以这条读数用来**看形状**（哪一段是秒级、哪一段是百毫秒级），
+     * 不能当占比读。`装载` 不在这个重叠里——它发生在分窗并发之前，是纯串行的一段。
      */
     let readMs = 0;
     let scanMs = 0;
@@ -348,7 +363,7 @@ export class ConditionEngine implements ConditionExtractorService {
             if (cond.dependencies.length > 0) st.functionsWithDeps++;
           }
         }
-        computed.set(path, { mtimeMs: mtimeOf.get(path) ?? null, stats: st, conds });
+        computed.set(path, { mtimeMs: mtimeOf.get(path) ?? null, size: sizeOf.get(path) ?? null, stats: st, conds });
         extractMs += nowMs() - e0;
       },
     );
@@ -364,7 +379,7 @@ export class ConditionEngine implements ConditionExtractorService {
     const inline = offAfter.inline - offBefore.inline;
     const fellBack = offAfter.fellBack - offBefore.fellBack;
     this.deps.log.info(
-      `  extract breakdown: 读盘 ${readMs.toFixed(0)}ms · 扫描 ${scanMs.toFixed(0)}ms` +
+      `  extract breakdown: 装载 ${loadMs.toFixed(0)}ms · 读盘 ${readMs.toFixed(0)}ms · 扫描 ${scanMs.toFixed(0)}ms` +
         `（worker ${dispatched} · 内联 ${inline} · 回退 ${fellBack}）· 抽取循环 ${extractMs.toFixed(0)}ms` +
         ` ｜ 处理 ${computed.size} 文件（复用 ${plan.reusable.size}）· 本轮 ${(nowMs() - runT0).toFixed(0)}ms`,
     );

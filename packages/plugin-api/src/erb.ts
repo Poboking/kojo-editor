@@ -174,6 +174,16 @@ export interface ErbIndex {
    */
   readonly fileMtimes?: ReadonlyMap<string, number | null>;
   /**
+   * 逐文件字节数（**additive 可选**，2026-10-16 PERF-7 快照批）。与 `fileMtimes` 同源
+   * （walkDir 顺带带回的 size / 逐文件 stat 兜底），用途是同族：下游按文件比对快照桶时
+   * 给 mtime 判据**再叠一层 size 判据**——mtime 相同的替换（保留时间戳的拷贝/工具改写）
+   * 靠它兜住；只有 mtime 一层时那种改写会被静默复用。
+   *
+   * 缺省 = 提供方未建（消费方退回纯 mtime 判据）；某文件取不到 stat ⇒ 该路径值为 `null`
+   * ⇒ 下游对**该文件**退回纯 mtime 判据（与 `fileMtimes` 的保守方向一致，不伪造）。
+   */
+  readonly fileSizes?: ReadonlyMap<string, number | null>;
+  /**
    * 反向引用索引（归一化名 → 定义点与引用点；**additive 可选**，2026-10-15）。
    * 缺省 = 提供方未建（消费方降级），语义同 `functionAt?`。
    */

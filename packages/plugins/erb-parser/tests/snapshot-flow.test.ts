@@ -69,12 +69,15 @@ function makeIO(files: Map<string, FakeFile>, opts?: { withMetadata?: boolean })
       }
       return out;
     },
-    walkDir: async (): Promise<DirEntry[]> =>
-      [...files.keys()].map((p) => {
-        const f = files.get(p)!;
-        const base: DirEntry = { name: p.split('/').pop()!, path: p, isDirectory: false };
-        return opts?.withMetadata ? { ...base, mtimeMs: f.mtimeMs, size: f.text.length } : base;
-      }),
+    walkDir: async (root: string): Promise<DirEntry[]> =>
+      // 按 root 前缀过滤（与真内核同形——A/B 两个项目共用一个假 io 时判据才不串）
+      [...files.keys()]
+        .filter((p) => p.startsWith(root))
+        .map((p) => {
+          const f = files.get(p)!;
+          const base: DirEntry = { name: p.split('/').pop()!, path: p, isDirectory: false };
+          return opts?.withMetadata ? { ...base, mtimeMs: f.mtimeMs, size: f.text.length } : base;
+        }),
     stat: async (path: string): Promise<FileStat | null> => {
       stats++;
       const f = files.get(path);
@@ -110,7 +113,7 @@ function makeStorage() {
   return { storage, map, deleted };
 }
 
-function activate(io: FileIO, storage: ScopedStorage) {
+function activate(io: FileIO, storage: ScopedStorage, logs?: string[]) {
   const provided = new Map<string, unknown>();
   const handlers = new Map<string, Set<(p: never) => void>>();
   const bus = {
@@ -129,7 +132,12 @@ function activate(io: FileIO, storage: ScopedStorage) {
   };
   const ctx = {
     pluginId: 'erb-parser',
-    log: { debug() {}, info() {}, warn() {}, error() {} },
+    log: {
+      debug() {},
+      info: (m: string) => logs?.push(m),
+      warn: (m: string) => logs?.push(m),
+      error() {},
+    },
     bus,
     storage,
     inject: (key: string) => {
@@ -145,9 +153,9 @@ function activate(io: FileIO, storage: ScopedStorage) {
   };
   createErbParserPlugin().activate(ctx as never);
   const service = provided.get('erb.parser') as ErbParserService;
-  const waitIndexed = (): Promise<void> =>
+  const waitIndexed = (timeoutMs = 2000): Promise<void> =>
     new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('timeout waiting kojo.functionChanged')), 2000);
+      const t = setTimeout(() => reject(new Error('timeout waiting kojo.functionChanged')), timeoutMs);
       const un = bus.on('kojo.functionChanged', () => {
         clearTimeout(t);
         un();
@@ -235,6 +243,217 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     // 只会表现为「抽取段悄悄退回全库重算」，覆盖率类尺子量不到（同 §5.67 那条教训）。
     expect(idx.fileMtimes!.get(P1)).toBe(300);
     expect(idx.fileMtimes!.get(P2)).toBe(200);
+    // size 同源（PERF-7 additive 判据）：P1 本次、P2 快照
+    expect(idx.fileSizes!.get(P1)).toBe(SRC1_TOUCHED.length);
+    expect(idx.fileSizes!.get(P2)).toBe(SRC2.length);
+  });
+
+  it('size 判据：mtime 同值但字节数变了 ⇒ 该文件仍判过期重扫（保留时间戳的替换兜底）', async () => {
+    const files = new Map<string, FakeFile>([
+      [P1, { text: SRC1, mtimeMs: 100 }],
+      [P2, { text: SRC2, mtimeMs: 200 }],
+    ]);
+    const { io, readsOf } = makeIO(files);
+    const { storage } = makeStorage();
+    const { service, bus, waitIndexed } = activate(io, storage);
+
+    openProject(bus);
+    await waitIndexed();
+
+    // 只改内容、**不改 mtime**（模拟保留时间戳的拷贝/工具改写）
+    files.set(P1, { text: SRC1_TOUCHED + '\n;尾注\n', mtimeMs: 100 });
+    openProject(bus);
+    await waitIndexed();
+    expect(readsOf()).toBe(3); // 首次 2 + P1 被 size 判据揪出重读
+
+    const idx = service.currentIndex()!;
+    expect(idx.files.get(P1)!.functions.map((f) => f.normalizedName)).toEqual(['FOO_A', 'FOO_B', 'FOO_C']);
+    expect(idx.fileSizes!.get(P1)).toBe((SRC1_TOUCHED + '\n;尾注\n').length);
+  });
+
+  it('references 惰性聚合：热开不建 bySymbol，首次查询才建（且结果与冷建逐位一致）', async () => {
+    const files = new Map<string, FakeFile>([
+      [P1, { text: SRC1, mtimeMs: 100 }],
+      [P2, { text: SRC2, mtimeMs: 200 }],
+    ]);
+    const { io } = makeIO(files);
+    const { storage } = makeStorage();
+    const logs: string[] = [];
+    const { service, bus, waitIndexed } = activate(io, storage, logs);
+
+    openProject(bus);
+    await waitIndexed();
+    expect(logs.some((m) => m.includes('references built on demand'))).toBe(false); // 冷建也没人问 ⇒ 不建
+    expect(service.currentIndex()!.references!.bySymbol.has('FOO_A')).toBe(true); // 首次问才建
+    expect(logs.filter((m) => m.includes('references built on demand'))).toHaveLength(1);
+    const first = service.currentIndex()!.references!;
+
+    logs.length = 0;
+    openProject(bus); // 热开
+    await waitIndexed();
+    // 热开阶段没人读 references ⇒ 聚合不发生（这是热载省下的那一段）
+    expect(logs.some((m) => m.includes('references built on demand'))).toBe(false);
+    const idx = service.currentIndex()!;
+    expect(logs.some((m) => m.includes('refs scan'))).toBe(true); // 扫描段照常报数
+    const hot = idx.references!;
+    expect(logs.filter((m) => m.includes('references built on demand'))).toHaveLength(1);
+    expect(JSON.stringify([...hot.bySymbol.entries()])).toBe(JSON.stringify([...first.bySymbol.entries()]));
+    expect(hot).not.toBe(first); // 每次构建各持一份（换代不复用旧闭包）
+  });
+
+  it('增量落盘（未消费条目的元组原样复用）后再次热开：refs 完整往返、查询逐位一致、全量命中', async () => {
+    const files = new Map<string, FakeFile>([
+      [P1, { text: SRC1, mtimeMs: 100 }],
+      [P2, { text: SRC2, mtimeMs: 200 }],
+    ]);
+    const { io } = makeIO(files);
+    const { storage, map } = makeStorage();
+    const logs: string[] = [];
+    const { service, bus, waitIndexed } = activate(io, storage, logs);
+    const key = snapshotKeyFor(ROOT);
+
+    openProject(bus);
+    await waitIndexed();
+
+    files.set(P1, { text: SRC1_TOUCHED, mtimeMs: 300 }); // 触发增量落盘（P2 走快路径原样入盘）
+    openProject(bus);
+    await waitIndexed();
+    const afterIncremental = JSON.stringify([...service.currentIndex()!.references!.bySymbol.entries()]);
+    // 等异步落盘完成（判据：盘上那份已含新增函数 FOO_C）
+    for (let i = 0; i < 100 && !(map.get(key) ?? '').includes('FOO_C'); i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect((map.get(key) ?? '').includes('FOO_C')).toBe(true);
+
+    logs.length = 0;
+    openProject(bus); // 纯热开：读的正是刚才那份（含快路径原样元组）
+    await waitIndexed();
+    const line = logs.find((m) => m.includes('index breakdown')) ?? '';
+    expect(line).toContain('reused 2/2');
+    const third = JSON.stringify([...service.currentIndex()!.references!.bySymbol.entries()]);
+    expect(third).toBe(afterIncremental); // P2 的 refs 经"原样复用"快照往返后逐位一致
+  });
+
+  it('交替开项目 A/B 各 3 轮：首轮各冷一次，此后每轮全量走快照（会话工作集不互删）', async () => {
+    const rootA = 'D:/proj/alt-a';
+    const rootB = 'D:/proj/alt-b';
+    const files = new Map<string, FakeFile>([
+      [`${rootA}/ERB/a.ERB`, { text: SRC1, mtimeMs: 100 }],
+      [`${rootB}/ERB/b.ERB`, { text: SRC2, mtimeMs: 200 }],
+    ]);
+    const { io } = makeIO(files);
+    const { storage, map } = makeStorage();
+    const logs: string[] = [];
+    const { bus, waitIndexed } = activate(io, storage, logs);
+
+    const open = (root: string): void =>
+      bus.emit('project.opened', {
+        project: { rootDir: root, adapterId: 'eratw', kojoPaths: [`${root}/ERB`], writablePaths: [], charaIndex: new Map() } as GameProject,
+      });
+    const route = async (root: string): Promise<string> => {
+      logs.length = 0;
+      open(root);
+      await waitIndexed();
+      const line = logs.find((m) => m.includes('index breakdown')) ?? '';
+      const m = /reused (\d+)\/(\d+)/.exec(line);
+      return m ? `${m[1]}/${m[2]}` : 'no-breakdown';
+    };
+
+    const rounds: string[] = [];
+    for (let r = 0; r < 3; r++) {
+      rounds.push(await route(rootA));
+      rounds.push(await route(rootB));
+    }
+    // 首轮：两个项目都还没快照 ⇒ 全冷。此后：两份快照都在（本会话工作集）⇒ 每轮全量复用。
+    expect(rounds).toEqual(['0/1', '0/1', '1/1', '1/1', '1/1', '1/1']);
+    // 收口后两份快照并存；无关键不碰
+    for (let i = 0; i < 50 && !(map.has(snapshotKeyFor(rootA)) && map.has(snapshotKeyFor(rootB))); i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect([...map.keys()].sort()).toEqual([snapshotKeyFor(rootA), snapshotKeyFor(rootB)].sort());
+  });
+
+  /**
+   * PERF-7 交付项 2「交替开项目确诊」的**合成规模**版：两个 200 文件级项目 A/B 交替开各 3 轮，
+   * 逐轮从插件自己的 `index breakdown` 读数里取 `reused N/M` 记账（不走快照 = `0/M`）。
+   * 结论写在这里而不是只写在提交信息里，是因为这一条**曾经真的互踩**：
+   * 旧 prune 语义 = "只留当前项目那一份" ⇒ A 落盘即删 B 的键 ⇒ 6 轮全冷（`0/200 × 6`）。
+   * 修法 = 保留集换成**本会话工作集**（`sessionSnapshotKeys`，见 `plugin.ts`）。
+   */
+  it('交替开项目（合成 200 文件 × 2 项目 × 3 轮）：逐轮读数 + 首轮冷、此后全热', async () => {
+    const rootA = 'D:/proj/perf7-a';
+    const rootB = 'D:/proj/perf7-b';
+    const N_FILES = 200;
+    const src = (tag: string, i: number): string => {
+      const lines: string[] = [];
+      for (let k = 0; k < 25; k++) {
+        lines.push(`; ${tag} 第 ${i} 卷 · 函数 ${k} —— 好感度分支`, `@F_${tag}_${i}_${k}`, '\tRETURN 1', 'END', '');
+      }
+      return lines.join('\n');
+    };
+    const files = new Map<string, FakeFile>();
+    for (let i = 0; i < N_FILES; i++) {
+      files.set(`${rootA}/ERB/f${String(i).padStart(3, '0')}.ERB`, { text: src('A', i), mtimeMs: 100 + i });
+      files.set(`${rootB}/ERB/f${String(i).padStart(3, '0')}.ERB`, { text: src('B', i), mtimeMs: 200 + i });
+    }
+    const { io } = makeIO(files);
+    const { storage, map } = makeStorage();
+    const logs: string[] = [];
+    const { service, bus, waitIndexed } = activate(io, storage, logs);
+
+    const open = (root: string): void =>
+      bus.emit('project.opened', {
+        project: {
+          rootDir: root,
+          adapterId: 'eratw',
+          kojoPaths: [`${root}/ERB`],
+          writablePaths: [],
+          charaIndex: new Map(),
+        } as GameProject,
+      });
+
+    const route = async (root: string): Promise<{ reused: number; total: number; reusedAll: boolean }> => {
+      logs.length = 0;
+      open(root);
+      await waitIndexed(20_000); // 合成规模冷开也只要百毫秒级，放宽只为防 CI 抖动
+      const line = logs.find((m) => m.includes('index breakdown')) ?? '';
+      const m = /reused (\d+)\/(\d+)/.exec(line);
+      if (!m) throw new Error(`插件未打出 breakdown 读数行：${line}`);
+      const reused = Number(m[1]);
+      const total = Number(m[2]);
+      return { reused, total, reusedAll: reused === total };
+    };
+
+    const rounds: string[] = [];
+    const indexShape: string[] = [];
+    for (let r = 0; r < 3; r++) {
+      const a = await route(rootA);
+      indexShape.push(
+        `${service.currentIndex()!.files.size}文件/${service.currentIndex()!.byName.size}名/` +
+          `${service.currentIndex()!.files.get(`${rootA}/ERB/f199.ERB`)!.functions.map((f) => f.normalizedName).join(',').length}`,
+      );
+      const b = await route(rootB);
+      rounds.push(`A${r + 1}=${a.reused}/${a.total}`, `B${r + 1}=${b.reused}/${b.total}`);
+      expect(service.currentIndex()!.byName.has('F_B_199_24')).toBe(true);
+    }
+    console.log(
+      `[perf7][alternating] 合成 200 文件 × 2 项目 × 3 轮 逐轮 reused 读数：${rounds.join(' · ')}\n` +
+        `[perf7][alternating] A 侧热载索引形状（文件数/名字数/末文件函数表字符量，三轮必须一致）：${indexShape.join(' | ')}`,
+    );
+
+    // 每项目首轮全冷（没有快照），此后每轮全热（两份快照都在工作集里 ⇒ 不互删）
+    expect(rounds[0]).toBe('A1=0/200');
+    expect(rounds[1]).toBe('B1=0/200');
+    // 互踩已修：任何一轮都不许掉回 0（旧 prune 语义"只留当前项目"下这里会是 6 个 0/200）
+    expect(rounds.slice(2)).toEqual(['A2=200/200', 'B2=200/200', 'A3=200/200', 'B3=200/200']);
+    // 三轮热载的索引形状逐字相同（懒还原没改口径）
+    expect(new Set(indexShape).size).toBe(1);
+
+    // 落盘收口：两份快照并存（= 本会话工作集），且没有第三份
+    for (let i = 0; i < 200 && !(map.has(snapshotKeyFor(rootA)) && map.has(snapshotKeyFor(rootB))); i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect([...map.keys()].sort()).toEqual([snapshotKeyFor(rootA), snapshotKeyFor(rootB)].sort());
   });
 
   it('消失的文件被收尸（快照不越攒越大）', async () => {
@@ -278,13 +497,13 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     expect(service.currentIndex()!.files.size).toBe(2);
   });
 
-  it('磁盘卫生：落盘后收口成单文件，旧版本孤儿被清、别人的键不碰', async () => {
+  it('磁盘卫生：本会话未摸过的项目快照与旧版本孤儿被清，非快照键不碰', async () => {
     const files = new Map<string, FakeFile>([[P1, { text: SRC1, mtimeMs: 100 }]]);
     const { io } = makeIO(files);
     const { storage, map, deleted } = makeStorage();
     const { bus, waitIndexed } = activate(io, storage);
 
-    // 磁盘上躺着：别的项目的快照 + 格式升级遗留的 v2 孤儿 + 一个与快照无关的键
+    // 磁盘上躺着：本会话没开过的项目快照 + 格式升级遗留的 v2 孤儿 + 一个与快照无关的键
     map.set(snapshotKeyFor('D:/other/game'), JSON.stringify({ version: 3, rootDir: 'D:/other/game', savedAt: 1, entries: {} }));
     map.set('index-v2-aabbccdd', JSON.stringify({ version: 2, rootDir: ROOT, savedAt: 1, entries: {} }));
     map.set('user-notes', 'not-a-snapshot');

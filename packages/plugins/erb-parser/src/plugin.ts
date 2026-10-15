@@ -4,6 +4,7 @@ import type {
   ErbFile,
   ErbIndex,
   ErbParserService,
+  ErbReferenceIndex,
   FileIO,
   FileStat,
   GameProject,
@@ -49,6 +50,12 @@ import {
  * 2026-10-12「内核优化」批 —— **索引快照 + 增量复扫**（例 1：第二次开项目不用再等）：
  * 文件没变（mtime 一致）时直接复用上次的解析结果，只重扫变过的文件。
  * 设计与纪律见 `./snapshot.ts` 头注（fail-closed / 保守失效 / 顺序确定）。
+ *
+ * 2026-10-16 PERF-7「快照热载瘦身」批：
+ * - 失效判据加 size（mtime 同值替换兜底；`fileSizes` 一并对下游暴露，additive）；
+ * - 还原两段化（懒外壳见 `./snapshot.ts`）+ `references` 惰性聚合（首发消费才建 bySymbol）；
+ * - prune 语义从"只留当前项目"改为"保留本会话工作集"（交替开项目不再互删，见
+ *   `pruneStaleSnapshots` 的取舍注）。
  */
 
 const IO = 'kernel.io';
@@ -104,14 +111,21 @@ export function createErbParserPlugin(): Plugin {
       let generation = 0;
 
       /**
-       * 磁盘卫生：索引快照统一成**单文件语义**，只留当前项目这一份。
-       * 与抽取 / 校验两段的覆盖式行为对齐，顺带清掉格式升级留下的 `index-v1-*` / `v2-*` 孤儿。
+       * 磁盘卫生：索引快照的**保留集 = 本会话工作集**（本会话构建过的各项目键）。
+       * 其余索引快照键（含格式升级留下的 `index-v1-*` / `v2-*` 孤儿）回收。
+       *
+       * 为什么不是"只留当前项目这一份"（上一版语义）：那会让**交替开两个游戏目录**
+       * 演变成"每次切换都全冷重建"——A 落盘即删 B 的键，回头开 B 又全冷，往复（实测
+       * 合成 A/B 交替 3 轮 6 次全冷）。作者拿两三个版本对拍是真实工作流（三盘语料），
+       * 不该拿冷索引（真语料 ~2.3 s）当税。工作集把切换收进内存判据，界 = 一次会话
+       * 摸过的项目数（典型 1–3 份快照落盘），"不留无上限磁盘口子"的初衷不破。
        * 纯清理动作，失败只记一行——缓存回收不该影响索引正确性。
        */
-      function pruneStaleSnapshots(keepKey: string): void {
+      const sessionSnapshotKeys = new Set<string>();
+      function pruneStaleSnapshots(): void {
         void (async () => {
           try {
-            const doomed = pruneSnapshotKeys(await storage.keys(), keepKey);
+            const doomed = pruneSnapshotKeys(await storage.keys(), [...sessionSnapshotKeys]);
             for (const k of doomed) await storage.delete(k);
             if (doomed.length > 0) ctx.log.info(`Index snapshot store pruned (${doomed.length} stale key(s))`);
           } catch (err) {
@@ -148,7 +162,7 @@ export function createErbParserPlugin(): Plugin {
         }
         const walkMs = Date.now() - buildStartedAt;
 
-        // 体量指纹：mtime 是增量复扫的判据——mtime 没变的文件，解析结果必然不变（纯函数）。
+        // 体量指纹：mtime（+ size，PERF-7）是增量复扫的判据——两者都没变的文件，解析结果必然不变（纯函数）。
         // 首选 walk 带回的值；**缺项才逐文件 stat 兜底**（桥没实现 withMetadata / 个别取不到），
         // 兜底也不许伪造：拿不到 stat ⇒ null ⇒ 该文件一律判过期（保守）。
         const statStartedAt = Date.now();
@@ -187,6 +201,9 @@ export function createErbParserPlugin(): Plugin {
         let snapCoerceMs = 0;
         if (useSnapshot && currentRoot) {
           const key = snapshotKeyFor(currentRoot);
+          // 本会话摸过的项目入保留集（在首次 await **之前**登记：prune 是异步收尾，
+          // 登记先于落盘就位 ⇒ 交替开项目时不会被别的项目的 prune 竞态误删）
+          sessionSnapshotKeys.add(key);
           try {
             // get 内含「读盘 + decode + JSON.parse」——体积过大时这一项就是热启动的主要成本
             const getStartedAt = Date.now();
@@ -239,7 +256,13 @@ export function createErbParserPlugin(): Plugin {
                 // 有 worker 时是真并行（多槽轮转），无 worker / 通道失败时自动内联回退。
                 const payload: ParseFilePayload = { text: tf.text, path };
                 const file = await compute.offload<ErbFile>(PARSE_FILE_TASK, payload);
-                fresh.set(path, { mtimeMs: tf.mtimeMs, textLength: tf.text.length, file });
+                fresh.set(path, {
+                  mtimeMs: tf.mtimeMs,
+                  // 双判据的 size 位（PERF-7）：与 mtime 同源口径（walk 顺带 / stat 兜底）
+                  size: stats.get(path)?.size ?? null,
+                  textLength: tf.text.length,
+                  file,
+                });
               } catch (err) {
                 ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
               }
@@ -251,20 +274,24 @@ export function createErbParserPlugin(): Plugin {
         // 合并：按本次 walk 顺序取数（快照只换"来源"，byName 聚合顺序与全量重建逐位一致）
         const aggStartedAt = Date.now();
         const ordered: ErbFile[] = [];
-        // 逐文件 mtime 顺手记下来（同源：重扫文件用 readText 的、复用文件用快照的）——
-        // 下游条件抽取按文件粒度复用结果时，只有整项目指纹会出现"改一个文件重算全库"
+        // 逐文件 mtime / size 顺手记下来（同源：重扫文件用 readText/stat 的、复用文件用快照的）——
+        // 下游条件抽取按文件粒度复用结果时，只有整项目指纹会出现"改一个文件重算全库"；
+        // size（PERF-7 additive）给下游的逐文件判据再叠一层"mtime 同值替换"防线。
         const fileMtimes = new Map<string, number | null>();
+        const fileSizes = new Map<string, number | null>();
         for (const path of allFiles) {
           const parsed = fresh.get(path);
           if (parsed?.file) {
             ordered.push(parsed.file);
             fileMtimes.set(path, parsed.mtimeMs);
+            fileSizes.set(path, parsed.size);
             continue;
           }
           const old = snapshot?.entries[path];
           if (old?.file) {
             ordered.push(old.file);
             fileMtimes.set(path, old.mtimeMs);
+            fileSizes.set(path, old.size);
           }
         }
         const { files, byName } = aggregateIndex(ordered);
@@ -274,18 +301,16 @@ export function createErbParserPlugin(): Plugin {
          * 只对 **stale 文件**重扫；复用文件直接取快照里的 refs（热构建零额外读盘）。
          * 2026-10-16 批量 IO 批：冷构建的二次文本改走 `io.readTexts` 批量路径——
          * 解析段刚读过的正文还在会话缓存里（mtime+size 判据），这里**零读盘**命中；
-         * 万一被缓存上限挤掉，也只付"每批一趟 IPC"而不是每文件两趟。 */
+         * 万一被缓存上限挤掉，也只付"每批一趟 IPC"而不是每文件两趟。
+         *
+         * 2026-10-16 PERF-7：**聚合（bySymbol）推迟到首次被消费**（`index.references`
+         * 是惰性属性）。消费方只有 find-references / rename 这类按需动作，而聚合要建
+         * 全部引用点对象（合成 2,000 文件口径 900k 点 ≈ 170ms + 同量对象）——
+         * 热开项目不该替一次可能不发生的查询买单。stale 文件的**扫描**照旧（本轮新读的
+         * 文件本来就要扫，且快照落盘需要它们的 refs 一并挂回）。 */
         const refsStartedAt = Date.now();
         const hasName = (upper: string): boolean => byName.has(upper);
         const refsByPath = new Map<string, FileRefs>();
-        let refsFromSnapshot = 0;
-        for (const path of diff.reusable) {
-          const reused = snapshot?.entries[path];
-          if (reused?.refs !== undefined) {
-            refsByPath.set(path, reused.refs);
-            refsFromSnapshot++;
-          }
-        }
         const refsToScan = diff.stale.filter((path) => fresh.has(path));
         for (let base = 0; base < refsToScan.length; base += READ_BATCH) {
           const chunk = refsToScan.slice(base, base + READ_BATCH);
@@ -303,10 +328,42 @@ export function createErbParserPlugin(): Plugin {
             },
           );
         }
-        const references = buildReferenceIndex(ordered, refsByPath);
-        const refsMs = Date.now() - refsStartedAt;
-        let refSites = 0;
-        for (const list of references.bySymbol.values()) refSites += list.length;
+        const refsScanMs = Date.now() - refsStartedAt;
+
+        /**
+         * 惰性聚合：首次读 `index.references` 才建 bySymbol。
+         * 复用条目的 refs 就地汇入（快照元组别名，零拷贝）；构建结果自持缓存，
+         * 后续查询零成本。判据（`hasName` = 聚合后的全局名字表）与冷建逐位同源，
+         * 因此"冷建 vs 快照"两条路径的 bySymbol 逐字节一致（references.test 钉死）。
+         */
+        let referencesBuilt: ErbReferenceIndex | null = null;
+        const referencesBuild = (): ErbReferenceIndex => {
+          if (referencesBuilt) return referencesBuilt;
+          const t0 = Date.now();
+          let fromSnapshot = 0;
+          for (const path of diff.reusable) {
+            const reused = snapshot?.entries[path];
+            if (reused?.refs !== undefined) {
+              refsByPath.set(path, reused.refs);
+              fromSnapshot++;
+            }
+          }
+          referencesBuilt = buildReferenceIndex(ordered, refsByPath);
+          let sites = 0;
+          for (const list of referencesBuilt.bySymbol.values()) sites += list.length;
+          ctx.log.info(
+            `Index references built on demand (${sites} sites, ${Date.now() - t0}ms; ` +
+              `scan ${refsScanMs}ms, rescan ${refsToScan.length}, snapshot ${fromSnapshot})`,
+          );
+          return referencesBuilt;
+        };
+
+        const makeIndex = (): ErbIndex => {
+          const idx: ErbIndex = { files, byName, fingerprint, fileMtimes, fileSizes };
+          // references 惰性装配（enumerable 保持"索引里有这一项"的既有观感）
+          Object.defineProperty(idx, 'references', { get: referencesBuild, enumerable: true, configurable: true });
+          return idx;
+        };
 
         ctx.log.info(
           `Indexed ${files.size} ERB files, ${byName.size} distinct functions from ${rootsToScan.length} root(s) ` +
@@ -315,7 +372,7 @@ export function createErbParserPlugin(): Plugin {
         ctx.log.info(
           `  index breakdown: walk ${walkMs}ms · stat ${statMs}ms · snapshot ${snapMs}ms ` +
             `(get ${snapGetMs}ms, coerce ${snapCoerceMs}ms) · read+parse ${parseMs}ms · aggregate ${aggMs}ms · ` +
-            `refs ${refsMs}ms (${refSites} sites, rescan ${refsToScan.length}, snapshot ${refsFromSnapshot}) · ` +
+            `refs scan ${refsScanMs}ms (rescan ${refsToScan.length}, aggregate deferred) · ` +
             `mtime 来源 walk顺带 ${metaByPath.size} / 兜底逐文件 ${needStat.length} · ` +
             `reused ${diff.reusable.length}/${allFiles.length}`,
         );
@@ -326,7 +383,9 @@ export function createErbParserPlugin(): Plugin {
         if (useSnapshot && currentRoot && gen === generation) {
           const key = snapshotKeyFor(currentRoot);
           if (snapshotDirty) {
-            // refs 挂在条目上一起落盘：热复用时反向索引不花一次读盘（挂接纯函数，见 snapshot.attachRefs）
+            // refs 挂在条目上一起落盘：热复用时反向索引不花一次读盘（挂接纯函数，见 snapshot.attachRefs）。
+            // refsByPath 现在只含 stale 文件（PERF-7 惰性聚合），恰好是需要挂接的那批；
+            // 复用条目自带快照 refs、原样留用（attachRefs 对没有新 refs 的条目零触碰）。
             const entries = attachRefs(mergeEntries(snapshot, allFiles, fresh), refsByPath);
             const saveStartedAt = Date.now();
             void storage
@@ -334,7 +393,7 @@ export function createErbParserPlugin(): Plugin {
                 version: SNAPSHOT_VERSION,
                 rootDir: currentRoot,
                 savedAt: Date.now(),
-                // 盘上用 v3 紧凑元组（剥可派生字段 + 位置化），加载时由 decodeEntries 还原
+                // 盘上用 v5 紧凑元组（剥可派生字段 + 位置化），加载时由 decodeEntries 还原
                 entries: encodeEntries(entries),
               })
               .then(() => {
@@ -342,21 +401,21 @@ export function createErbParserPlugin(): Plugin {
                   `Index snapshot saved (${Object.keys(entries).length} entries, key ${key}, ` +
                     `${Date.now() - saveStartedAt}ms)`,
                 );
-                pruneStaleSnapshots(key);
+                pruneStaleSnapshots();
               })
               .catch((err: unknown) => {
                 ctx.log.warn(`Index snapshot save failed: ${String(err)}`);
               });
           } else {
-            // 没变更也要收口：磁盘上可能躺着别的项目的快照或旧版本孤儿
-            pruneStaleSnapshots(key);
+            // 没变更也要收口：磁盘上可能躺着本会话未摸过的项目快照或旧版本孤儿
+            pruneStaleSnapshots();
           }
         }
 
         // 仅在仍是当前代际时提交（避免项目快速切换导致旧结果覆盖新结果）
-        if (gen !== generation) return { files, byName, fingerprint, fileMtimes, references };
+        if (gen !== generation) return makeIndex();
 
-        const built: ErbIndex = { files, byName, fingerprint, fileMtimes, references };
+        const built = makeIndex();
         index = built;
         ctx.bus.emit('kojo.functionChanged', {
           projectRoot: currentRoot,
