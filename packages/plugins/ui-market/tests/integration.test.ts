@@ -2,11 +2,20 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
+  MARKET_CONTENT_DIR,
+  MARKET_INDEX_FILE,
+  MARKET_MANIFEST_FILE,
+  MARKET_SCHEMA_VERSION,
   MARKET_SERVICE_KEY,
+  MARKET_STAGING_DIR,
   join,
+  packContainerName,
+  packUnpackedName,
   type DirEntry,
   type FileIO,
+  type InstalledPack,
   type Logger,
+  type MarketIndexEntry,
   type MarketService,
   type PluginContext,
   type RemoteDownload,
@@ -17,11 +26,12 @@ import {
   type TextFile,
   type UIPanelContribution,
 } from '@kojo/plugin-api';
-// 测试面（audit C 对测试豁免）：拿**真**市场服务实现跑面板的取数/卸载判据，
-// 这样"卸完了列表与磁盘同时为空"钉的是实现，不是自造的假盘。
+// 测试面（audit C 对测试豁免）：拿**真**市场服务实现跑面板的取数/装卸判据，
+// 这样"卸完了列表与磁盘同时为空"、"装完落点与记账同时到位"钉的是实现，不是自造的假盘。
 import { createMarketService, sha256Hex } from '@kojo/plugin-kojo-market';
-import { createUiMarketPlugin } from '../src/index';
-import { loadMarketSnapshot, runUninstall } from '../src/actions';
+import { createUiMarketPlugin, MarketPanelView } from '../src/index';
+import { loadMarketSnapshot, runInstall, runUninstall, type MarketActionDeps, type MarketSnapshot } from '../src/actions';
+import { buildGroups, REJECT_TEXT } from '../src/market-view';
 
 const APP_VERSION = '0.4.0-beta.1';
 const ROOT = '/appdata/market';
@@ -248,15 +258,112 @@ function refusedRemote(): RemoteService {
   };
 }
 
-function makeService(io: FileIO, log: Logger = quietLog): MarketService {
+function makeService(io: FileIO, log: Logger = quietLog, remote: RemoteService = refusedRemote()): MarketService {
   return createMarketService({
     io,
-    remote: refusedRemote(),
+    remote,
     storage: memStorage(),
     log,
     root: ROOT,
     appVersion: APP_VERSION,
   });
+}
+
+/* ---------------- 容器源的假桥（装面判据用；**不证明解压**，见下注） ---------------- */
+
+/**
+ * 一个能装的最小容器：`pack.json` + `files/a.ERB`，容器字节 = 两者串起来
+ * （照 `kojo-market/tests/install-index.test.ts` 的 `FakeBridge` 口径）。
+ *
+ * ⚠ 这里的 `marketDownload` 只是把给定字节写到平台侧要求的位置、`marketExtract` 只是把给定
+ * 文件表摊平到目标目录：它按给定清单**构造**"解出来的样子"，不读 ZIP。真解压的判据在
+ * cargo（`market_tests.rs`）与真壳 k 项。本文件用它只证一件事：**面板点下去之后走的是服务里
+ * 那一条容器源路径**（落点、记账、清场都由那条路径负责）。
+ */
+interface Container {
+  version: string;
+  manifestBytes: Uint8Array;
+  body: Uint8Array;
+  containerBytes: Uint8Array;
+}
+
+async function makeContainer(version: string): Promise<Container> {
+  const body = new TextEncoder().encode('口上テスト\r\n');
+  const manifestBytes = new TextEncoder().encode(
+    JSON.stringify(
+      {
+        schema: MARKET_SCHEMA_VERSION,
+        kind: 'kojo-pack',
+        id: 'demo.pack',
+        version,
+        name: '演示口上包',
+        author: '某人',
+        license: 'CC-BY-NC 4.0',
+        redistribute: true,
+        minAppVersion: '0.4.0',
+        files: [{ path: `${MARKET_CONTENT_DIR}/a.ERB`, bytes: body.length, sha256: await sha256Hex(body) }],
+      },
+      null,
+      2,
+    ),
+  );
+  const containerBytes = new Uint8Array([...manifestBytes, ...body]);
+  return { version, manifestBytes, body, containerBytes };
+}
+
+/** 索引那一行（默认与容器逐字一致；要造不符就自己覆盖 `zip`） */
+async function entryOf(c: Container, over: Partial<MarketIndexEntry> = {}): Promise<MarketIndexEntry> {
+  return {
+    kind: 'kojo-pack',
+    id: 'demo.pack',
+    version: c.version,
+    name: '演示口上包',
+    author: '某人',
+    license: 'CC-BY-NC 4.0',
+    minAppVersion: '0.4.0',
+    zip: {
+      url: `https://example.test/releases/download/v${c.version}/${packContainerName('demo.pack', c.version)}`,
+      sha256: await sha256Hex(c.containerBytes),
+      bytes: c.containerBytes.length,
+    },
+    fileCount: 1,
+    unpackedBytes: c.body.length,
+    ...over,
+  };
+}
+
+/** 假桥：写平台侧要的位置、回报条目表；`calls` 用来证明"摘要不符时根本不解压" */
+function containerRemote(
+  h: CountingIo,
+  pick: () => Container,
+  calls: Array<'download' | 'extract'>,
+  opts: { failDownload?: boolean } = {},
+): RemoteService {
+  const staged = (name: string): string => join(ROOT, MARKET_STAGING_DIR, name);
+  return {
+    async fetchText(): Promise<RemoteText> {
+      throw new Error('本用例不刷新索引');
+    },
+    async marketDownload(url: string, containerName: string): Promise<RemoteDownload> {
+      calls.push('download');
+      if (opts.failDownload === true) throw new Error('对面把门关了');
+      const c = pick();
+      await h.io.writeBytes(staged(containerName), c.containerBytes);
+      return { bytes: c.containerBytes.length, status: 200, finalUrl: url };
+    },
+    async marketExtract(_containerName: string, targetName: string): Promise<RemoteExtractResult> {
+      calls.push('extract');
+      const c = pick();
+      const dir = staged(targetName);
+      await h.io.writeBytes(join(dir, MARKET_MANIFEST_FILE), c.manifestBytes);
+      await h.io.writeBytes(join(dir, MARKET_CONTENT_DIR, 'a.ERB'), c.body);
+      const entries = [
+        { path: MARKET_MANIFEST_FILE, bytes: c.manifestBytes.length },
+        { path: `${MARKET_CONTENT_DIR}/a.ERB`, bytes: c.body.length },
+      ];
+      return { entries, totalBytes: entries.reduce((s, e) => s + e.bytes, 0) };
+    },
+  };
 }
 
 interface FakeCtx {
@@ -460,6 +567,172 @@ describe('面板卸载：一次确认 + 列表与磁盘同时为空', () => {
   });
 });
 
+/** 把列表写到盘上（面板的 packs 只能从这里来，它自己不认识任何"列表"） */
+async function writeIndex(h: CountingIo, packs: MarketIndexEntry[]): Promise<void> {
+  h.fs.write(
+    join(ROOT, MARKET_INDEX_FILE),
+    new TextEncoder().encode(
+      JSON.stringify({ schema: MARKET_SCHEMA_VERSION, generatedAt: '2026-10-16T00:00:00Z', packs }),
+    ),
+  );
+}
+
+describe('面板装包：注册表容器源（真服务 + 假桥；一行一次点击）', () => {
+  /** 暂存区零残壳（KM-12）：容器与解压目录都不该留下来 */
+  const stagingClean = async (h: CountingIo, id: string, version: string): Promise<void> => {
+    const staged = join(ROOT, MARKET_STAGING_DIR);
+    expect(h.fs.exists(join(staged, packContainerName(id, version))), '容器残壳').toBe(false);
+    expect(h.fs.exists(join(staged, packUnpackedName(id, version))), '解压目录残壳').toBe(false);
+    expect(h.fs.children(staged), '暂存区里这一次的其余痕迹').toEqual([]);
+  };
+
+  it('点「安装」⇒ 走服务里那一条容器源路径：落点有内容、记账带容器核对码、暂存区清空', async () => {
+    const h = makeIo();
+    const c = await makeContainer('1.0.0');
+    const entry = await entryOf(c);
+    const calls: Array<'download' | 'extract'> = [];
+    const market = makeService(h.io, quietLog, containerRemote(h, () => c, calls));
+    const deps: MarketActionDeps = { market, log: quietLog };
+
+    const out = await runInstall(deps, entry, 'install');
+    expect(out.kind).toBe('done');
+    if (out.kind !== 'done') return;
+    // 文案就是那一句人话：包名 + 版本（版本来自服务记账，不是索引那一行抄的）
+    expect(out.note).toBe('已装上「演示口上包」（版本 1.0.0）');
+    expect(out.rec.id).toBe('demo.pack');
+    expect(calls).toEqual(['download', 'extract']);
+
+    // 容器源的身份：`containerSha256` **只有容器源才写** ⇒ 它同时是"来源"判据
+    const list = await market.installed();
+    expect(list.map((r) => r.version)).toEqual(['1.0.0']);
+    expect(list[0]!.containerSha256).toBe(entry.zip.sha256);
+    const dir = await market.installDir('kojo-pack', 'demo.pack', '1.0.0');
+    expect(h.fs.exists(join(dir, MARKET_CONTENT_DIR, 'a.ERB'))).toBe(true);
+    await stagingClean(h, 'demo.pack', '1.0.0');
+
+    // 面板读回来就是已装列表里那句"来源 压缩包"（不是自猜的）；
+    // 同一行再判一次三态 ⇒ 已经是最新，按钮消失（装完不会留一个还能点的「安装」）
+    const snap = await loadMarketSnapshot(deps);
+    expect(snap.installed).toHaveLength(1);
+    const row = buildGroups([entry], APP_VERSION, '', snap.installed).flatMap((g) => g.rows)[0]!;
+    expect(row.update?.state).toBe('latest');
+    expect(row.action).toBe('none');
+  });
+
+  it('点「更新」⇒ 记账里两版并存（面板不自动覆盖），行上说的版本是服务刚记账那一版', async () => {
+    const h = makeIo();
+    let current = await makeContainer('1.0.0');
+    const calls: Array<'download' | 'extract'> = [];
+    const market = makeService(h.io, quietLog, containerRemote(h, () => current, calls));
+    const deps: MarketActionDeps = { market, log: quietLog };
+
+    expect((await runInstall(deps, await entryOf(current), 'install')).kind).toBe('done');
+    current = await makeContainer('1.0.1');
+    const out = await runInstall(deps, await entryOf(current), 'update');
+    expect(out.kind).toBe('done');
+    expect(out.note).toBe('已把「演示口上包」更新到版本 1.0.1');
+
+    const list = await market.installed();
+    expect(list.map((r) => r.version).sort()).toEqual(['1.0.0', '1.0.1']);
+    // 索引那一行（1.0.1）对已装集判出来就是"已装最新" ⇒ 下一次不再给按钮
+    const row = buildGroups([await entryOf(current)], APP_VERSION, '', list).flatMap((g) => g.rows)[0]!;
+    expect(row.update?.state).toBe('latest');
+    expect(row.action).toBe('none');
+    await stagingClean(h, 'demo.pack', '1.0.1');
+  });
+
+  it('行的动作来自盘上两份事实（列表 + 记账），不是面板自己拼的键集', async () => {
+    const h = makeIo();
+    const upRow = await makeContainer('1.0.1');
+    const calls: Array<'download' | 'extract'> = [];
+    const market = makeService(h.io, quietLog, containerRemote(h, () => upRow, calls));
+    const deps: MarketActionDeps = { market, log: quietLog };
+    // 先按目录源装一版 1.0.0（这条路径一直在），再把 1.0.1 那一行摆进列表
+    await writeSource(h.fs);
+    await market.installLocalDir(SOURCE);
+    await writeIndex(h, [await entryOf(upRow)]);
+
+    const snap = await loadMarketSnapshot(deps);
+    const row = buildGroups(snap.packs, APP_VERSION, '', snap.installed).flatMap((g) => g.rows)[0]!;
+    expect(row.action).toBe('update');
+    expect(row.installed).toBe(false);
+    // 点它：交给服务的正是列表里那一行（原样，不重造）
+    expect((await runInstall(deps, row.entry, 'update')).kind).toBe('done');
+    expect((await market.installed()).map((r) => r.version).sort()).toEqual(['1.0.0', '1.0.1']);
+  });
+
+  it('拒因走映射表：下载没成功 ⇒ 那一句人话、本机一个字节没动、机器面带码出声', async () => {
+    const h = makeIo();
+    const c = await makeContainer('1.0.0');
+    const entry = await entryOf(c);
+    const calls: Array<'download' | 'extract'> = [];
+    const { log, warns } = captureLog();
+    const market = makeService(h.io, log, containerRemote(h, () => c, calls, { failDownload: true }));
+
+    const out = await runInstall({ market, log }, entry, 'install');
+    expect(out.kind).toBe('failed');
+    // 作者看到的这一句**逐字等于**表里那句，不是把异常消息甩上去
+    expect(out.note).toBe(`「演示口上包」没装成：${REJECT_TEXT['download-failed']}`);
+    for (const w of ['kind', 'id', 'manifest', 'index.json', 'sha256', 'schema', 'minAppVersion']) {
+      expect(out.note, w).not.toContain(w);
+    }
+    expect(warns.some((w) => /download-failed/.test(w))).toBe(true);
+    expect(await market.installed()).toEqual([]);
+    expect(h.fs.exists(await market.installDir('kojo-pack', 'demo.pack', '1.0.0'))).toBe(false);
+    expect(calls).toEqual(['download']);
+    await stagingClean(h, 'demo.pack', '1.0.0');
+  });
+
+  it('整包核对码与注册表钉的不符 ⇒ 一句"不是同一份"，而且**根本不解压**', async () => {
+    const h = makeIo();
+    const c = await makeContainer('1.0.0');
+    const entry = await entryOf(c, {});
+    const lying: MarketIndexEntry = { ...entry, zip: { ...entry.zip, sha256: 'f'.repeat(64) } };
+    const calls: Array<'download' | 'extract'> = [];
+    const { log, warns } = captureLog();
+    const market = makeService(h.io, log, containerRemote(h, () => c, calls));
+
+    const out = await runInstall({ market, log }, lying, 'install');
+    expect(out.kind).toBe('failed');
+    expect(out.note).toBe(`「演示口上包」没装成：${REJECT_TEXT['container-sha256']}`);
+    expect(calls, '摘要不符就不该对容器动盘').toEqual(['download']);
+    expect(await market.installed()).toEqual([]);
+    expect(warns.some((w) => /container-sha256/.test(w))).toBe(true);
+    await stagingClean(h, 'demo.pack', '1.0.0');
+  });
+
+  it('没有码的异常不静默：原话给出，仍带那一句前缀（面板不演成"成功"）', async () => {
+    const h = makeIo();
+    const c = await makeContainer('1.0.0');
+    const entry = await entryOf(c);
+    const boom: MarketService = {
+      ...makeService(h.io),
+      async installFromIndex(): Promise<never> {
+        throw new Error('桥自己炸了');
+      },
+    };
+    const out = await runInstall({ market: boom, log: quietLog }, entry, 'install');
+    expect(out.kind).toBe('failed');
+    expect(out.note).toBe('「演示口上包」没装成：桥自己炸了');
+  });
+
+  it('装完的列表读回来是一句人话的已装条目，卸载按钮仍在同一条上（装与卸共用一份已装真相）', async () => {
+    const h = makeIo();
+    const c = await makeContainer('1.0.0');
+    const entry = await entryOf(c);
+    const calls: Array<'download' | 'extract'> = [];
+    const market = makeService(h.io, quietLog, containerRemote(h, () => c, calls));
+    const deps: MarketActionDeps = { market, log: quietLog };
+    await runInstall(deps, entry, 'install');
+    const snap = await loadMarketSnapshot(deps);
+    const rec = snap.installed[0]!;
+    expect(rec.name).toBe('演示口上包');
+    const out = await runUninstall(deps, rec, true);
+    expect(out.kind).toBe('done');
+    expect((await loadMarketSnapshot(deps)).installed).toEqual([]);
+  });
+});
+
 describe('面板渲染（静态；node 环境无 DOM 事件）', () => {
   it('挂载初期也不空白：显式态句子 + 能力面说明都在主行，机器词不在', async () => {
     const h = makeIo();
@@ -480,3 +753,139 @@ describe('面板渲染（静态；node 环境无 DOM 事件）', () => {
     }
   });
 });
+
+/* ---------------- 渲染层判据：哪一行给按钮（`MarketPanelView` 零状态 ⇒ 能静态检） ---------------- */
+
+const HEX_A = 'a'.repeat(64);
+
+const viewEntry = (id: string, version: string, over: Partial<MarketIndexEntry> = {}): MarketIndexEntry => ({
+  kind: 'kojo-pack',
+  id,
+  version,
+  name: `示例 ${id}`,
+  author: '某人',
+  license: 'CC-BY-NC 4.0',
+  minAppVersion: '0.4.0',
+  zip: { url: `https://example.test/releases/download/v${version}/${packContainerName(id, version)}`, sha256: HEX_A, bytes: 10 },
+  fileCount: 1,
+  unpackedBytes: 20,
+  ...over,
+});
+
+const viewRec = (id: string, version: string): InstalledPack => ({
+  kind: 'kojo-pack',
+  id,
+  version,
+  name: `示例 ${id}`,
+  author: '某人',
+  license: 'CC-BY-NC 4.0',
+  contentDigest: HEX_A,
+  installedAt: 1_700_000_000_000,
+  files: [],
+});
+
+const noop = (): void => undefined;
+
+/** 静态渲染一版面（`overrides` 想改哪个状态就改哪个） */
+function renderView(
+  packs: MarketIndexEntry[],
+  installed: InstalledPack[],
+  overrides: Partial<Parameters<typeof MarketPanelView>[0]> = {},
+): string {
+  const snapshot: MarketSnapshot = {
+    status: 'ready',
+    packs,
+    installed,
+    dropped: [],
+    reason: '',
+    fetchedAt: 1_700_000_000_000,
+    generatedAt: '2026-10-16T00:00:00Z',
+    endpoint: '',
+    pullNote: '',
+  };
+  return renderToStaticMarkup(
+    createElement(MarketPanelView, {
+      snapshot,
+      appVersion: APP_VERSION,
+      query: '',
+      busy: false,
+      note: '',
+      pending: null,
+      open: null,
+      installing: null,
+      onQuery: noop,
+      onPull: noop,
+      onInstall: noop,
+      onRequestUninstall: noop,
+      onConfirmUninstall: noop,
+      onCancelUninstall: noop,
+      onToggleDetail: noop,
+      ...overrides,
+    }),
+  );
+}
+
+/** 屏上的按钮（标签 + 是否禁用）：动作判据只看这个，不去猜 JSX */
+function buttonsOf(html: string): string[] {
+  return [...html.matchAll(/<button([^>]*)>([^<]*)<\/button>/g)].map(
+    (m) => `${m[2] ?? ''}${(m[1] ?? '').includes('disabled') ? '（禁用）' : ''}`,
+  );
+}
+
+describe('面板安装面的渲染判据（哪一行有按钮）', () => {
+  const packs = [
+    viewEntry('new.pack', '1.0.1'),
+    viewEntry('up.pack', '1.0.1'),
+    viewEntry('high.pack', '1.0.1'),
+    viewEntry('same.pack', '1.0.1'),
+    viewEntry('old.app.pack', '1.0.1', { minAppVersion: '9.9.9' }),
+  ];
+  const installed = [viewRec('up.pack', '1.0.0'), viewRec('high.pack', '2.0.0'), viewRec('same.pack', '1.0.1')];
+
+  it('没装过的行有「安装」、`updatable` 的行有「更新」，各恰一个（其余行一个都不许多）', () => {
+    const html = renderView(packs, installed);
+    const bs = buttonsOf(html);
+    expect(bs.filter((b) => b === '安装')).toEqual(['安装']);
+    expect(bs.filter((b) => b === '更新')).toEqual(['更新']);
+    // 行上说清要更到哪一版
+    expect(html).toContain('可更新到 1.0.1');
+  });
+
+  it('`ahead` 的行**不给按钮**，只如实说本机更高；`latest` 的行同样没有按钮', () => {
+    const html = renderView([packs[2]!], [viewRec('high.pack', '2.0.0')]);
+    expect(html).toContain('本机已是 2.0.0（比注册表那条新）');
+    expect(buttonsOf(html).filter((b) => b === '安装' || b === '更新')).toEqual([]);
+    const latest = renderView([packs[3]!], [viewRec('same.pack', '1.0.1')]);
+    expect(buttonsOf(latest).filter((b) => b === '安装' || b === '更新')).toEqual([]);
+    expect(latest).toContain('已安装');
+  });
+
+  it('本机版本不够装 ⇒ 行上没有按钮，只有一句"要求编辑器不低于 x.y.z"', () => {
+    const html = renderView([packs[4]!], []);
+    expect(buttonsOf(html).filter((b) => b === '安装' || b === '更新')).toEqual([]);
+    expect(html).toContain('这个包要求编辑器不低于 9.9.9');
+  });
+
+  it('正在进行那一次 ⇒ 全部动作按钮禁用（进度只写在状态行一处，按钮文字不变）', () => {
+    const html = renderView(packs, installed, {
+      installing: 'kojo-pack/new.pack@1.0.1',
+      note: '正在安装「示例 new.pack」…',
+    });
+    const bs = buttonsOf(html);
+    expect(bs).toContain('安装（禁用）');
+    expect(bs).toContain('更新（禁用）');
+    expect(bs).toContain('卸载（禁用）');
+    expect(bs.filter((b) => b === '安装' || b === '更新')).toEqual([]);
+    // 同一件事不在两处显示：按钮上不写"安装中"，那句只在状态行
+    expect(bs.filter((b) => /中…/.test(b))).toEqual([]);
+    expect(html).toContain('正在安装「示例 new.pack」…');
+  });
+
+  it('渲染层的主行也不含机器词（展开层没展开 ⇒ 核对码与 id/kind 都不该出现）', () => {
+    const html = renderView(packs, installed);
+    for (const word of ['index.json', 'sha256', 'manifest', 'schema', 'kind', 'minAppVersion', 'id ', 'zip']) {
+      expect(html, word).not.toContain(word);
+    }
+  });
+});
+

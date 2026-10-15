@@ -2,7 +2,7 @@
   "name": "@kojo/plugin-ui-market",
   "version": "0.1.0",
   "private": true,
-  "description": "Market panel (ui.panel contribution): browse the local registry list grouped by pack kind with a name/author filter, list installed packs, uninstall behind one inline confirmation, and state explicitly when the list file is missing / unreadable / broken / empty. No install button in this batch - the Rust unpack primitive has not landed, so remote installs have no capability yet. Consumes the market service via requires + ctx.inject; never imports the market plugin. Contains zero game knowledge.",
+  "description": "Market panel (ui.panel contribution): browse the local registry list grouped by pack kind with a name/author filter, install or update a pack straight from the registry row (action decided by the contract's packUpdateCheck - no button on rows that are already latest or newer locally), list installed packs, uninstall behind one inline confirmation, and state explicitly when the list file is missing / unreadable / broken / empty. Every result and rejection reason lands on one inline status line (never a dialog) using author-facing wording. Consumes the market service via requires + ctx.inject; never imports the market plugin. Contains zero game knowledge.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

@@ -1,13 +1,13 @@
 /**
- * 面板的两条**动作/取数**通道（零 React，可直接对着真服务判据跑）。
+ * 面板的**取数 / 装 / 卸**三条通道（零 React，可直接对着真服务判据跑）。
  *
  * 为什么要独立成文件：面板组件里写 `onClick` 的闭包在 node 测试环境点不动，
- * 而"确认门"和"显式态"这两件恰恰是要钉死的行为。把意图落成函数、
+ * 而"确认门"、"拒因只出自一张表"和"显式态"这三件恰恰是要钉死的行为。把意图落成函数、
  * 组件只负责把点击接到它们上面，判据才跑得起来。
  *
  * **本文件不摸盘**：面板过去靠 `io.exists(index.json)` 分辨"没有列表"与"读不出列表"，
  * 那份判定是服务判定的复制品。现在三态由 `MarketService.index()` 的判别联给，
- * 拉不拉得动远程由 `refreshIndex()` 给——面板只需要一个服务。
+ * 拉不拉得动远程由 `refreshIndex()` 给，装不装得上去由 `installFromIndex()` 给——面板只需要一个服务。
  */
 
 import {
@@ -18,7 +18,14 @@ import {
   type MarketIndexState,
   type MarketService,
 } from '@kojo/plugin-api';
-import { refreshNote, resolveStatus, type MarketViewStatus } from './market-view';
+import {
+  installNote,
+  refreshNote,
+  rejectNote,
+  resolveStatus,
+  type InstallAction,
+  type MarketViewStatus,
+} from './market-view';
 
 export interface MarketActionDeps {
   market: MarketService;
@@ -127,6 +134,9 @@ export type UninstallOutcome =
   | { readonly kind: 'done'; readonly note: string }
   | { readonly kind: 'failed'; readonly note: string };
 
+export type InstallOutcome =
+  | { readonly kind: 'done'; readonly rec: InstalledPack; readonly note: string }
+  | { readonly kind: 'failed'; readonly note: string };
 /**
  * 卸载（**一次确认**：`confirmed` 为假时一个字节都不动、连服务都不叫）。
  * 结果一律是内联状态行的文案，不弹窗（HK-4）。
@@ -147,5 +157,30 @@ export async function runUninstall(
     const message = err instanceof Error ? err.message : String(err);
     deps.log.warn(`市场卸载没有成功（${code}）：${message}`);
     return { kind: 'failed', note: `卸载没有成功：${message}` };
+  }
+}
+
+/**
+ * 从注册表装 / 更新（**一次点击一个包**，不设确认门：装是往本机添东西，
+ * 覆盖与被覆盖的判定、清场与原子搬运全在服务侧那条唯一路径里，面板一个字节都不碰）。
+ *
+ * 结果与拒因都只回**一句内联状态行**的文案，不弹窗（HK-4）；
+ * 拒因一律出自 `REJECT_TEXT` 那一张表（`MarketError` 有码 ⇒ 查表；没码的异常 ⇒ 原话给出，不静默），
+ * 机器面（拒码 + 原消息）另走 `log.warn`，作者面因此永远不需要认识 `sha256` 这类词。
+ */
+export async function runInstall(
+  deps: MarketActionDeps,
+  entry: MarketIndexEntry,
+  action: InstallAction,
+): Promise<InstallOutcome> {
+  try {
+    // 记账回来的那条才是落点上真正装着的东西：文案的版本一律取它，不取索引那一行
+    const rec = await deps.market.installFromIndex(entry);
+    return { kind: 'done', rec, note: installNote(action, rec.name, rec.version) };
+  } catch (err: unknown) {
+    const code = err instanceof MarketError ? err.code : 'unknown';
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log.warn(`市场装包没有成功（${code}）：${message}`);
+    return { kind: 'failed', note: rejectNote(entry.name, err) };
   }
 }
