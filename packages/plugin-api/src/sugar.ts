@@ -399,6 +399,55 @@ export interface MenuBlock extends SugarNodeBase {
   items: ChoiceItem[];
 }
 
+/* ============================== 问答块（询问 / 确认） ============================== */
+
+/**
+ * `询问` / `确认` 块（作者面糖形）——**引擎封装的问答函数调用**（eraTW `ASK_M` / `ASK_YN`）。
+ *
+ * 与 `选项` / `菜单` 是**另一条管线**：后两者产引擎原生 `INPUTS` / `INPUT` 读回自己约定的
+ * 变量（`RESULTS` / `RESULT`）；本组则产 `CALL ASK_M(...)`（或 `ASK_YN`）+ `SELECTCASE RESULT`
+ * ——函数名 / 参数拼装 / 读回变量全是**游戏知识**，由 adapter（`KojoFaceTable.ask`）声明模板，
+ * 契约层零游戏名词（与 `TimingBlock` 同一条纪律）。
+ *
+ * 两项是**不同族**（参数签名 / 返回语义不同），故各占一个糖位：
+ * - `询问`（多选）：逐项 `标签,条件`，条件非 0 = 可选、0 = 灰显；
+ * - `确认`（二择）：恰两项纯标签。
+ *
+ * 契约层只描述**源事实**（提示行 / 条目序列），产物形态（函数名 / 参数 / 读回变量）挂在
+ * adapter 表上、由 codegen 求值。
+ */
+export interface AskMBlock extends SugarNodeBase {
+  kind: 'askMBlock';
+  /** 提问提示行（头部可选文案；缺省 = 不产提示行）。经文本行管线发出（可含插值 / 台词色） */
+  prompt?: TextLine;
+  /** 选项条目（按书写顺序；返回序号 `CASE 0..n-1` 按此顺序分配） */
+  items: AskItem[];
+}
+
+/** `确认` 块（二择问句；eraTW `ASK_YN`）——结构与 `AskMBlock` 同，仅 adapter 模板不同 */
+export interface AskYNBlock extends SugarNodeBase {
+  kind: 'askYNBlock';
+  /** 提问提示行（同上） */
+  prompt?: TextLine;
+  /** 选项条目（恰 `KojoAskForm.minOptions`/`maxOptions` 个） */
+  items: AskItem[];
+}
+
+/** 问答块的单条目（`「标签」 [值]：` + 缩进块体） */
+export interface AskItem {
+  /** 选项显示标签（不含引号；源为 `「…」` / `｢…｣` / `"…"`） */
+  label: string;
+  /**
+   * 选项值原文（标签后的表达式；**仅当** adapter 模板的 `option` 含 `{value}` 时消费）。
+   * 缺省 = 用模板 `defaultValue` 填充（eraTW `1` = 有效）。游戏知识只住 adapter。
+   */
+  value?: string;
+  /** 条目体（可含 `如果`/`当`/`随机`/`着色` 等块） */
+  body: SugarNode[];
+  /** 条目头源位置 */
+  loc: SugarSourceSpan;
+}
+
 /* ============================== 着色块 ============================== */
 
 /**
@@ -741,6 +790,8 @@ export type SugarStatement =
   | GroupBlock
   | ChoiceBlock
   | MenuBlock
+  | AskMBlock
+  | AskYNBlock
   | ColorBlock
   | SectionBlock
   | OnceBlock

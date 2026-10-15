@@ -240,6 +240,15 @@ export type LineClass =
   | { kind: 'choiceHead' }
   /** `菜单：` / `menu：` 块头（数字输入菜单形；产物 PRINTL [n] + INPUT + SELECTCASE RESULT + 回跳环） */
   | { kind: 'menuHead' }
+  /**
+   * `询问 [提示]：` / `ask [提示]：` 块头（引擎封装多选问答；产物 `CALL <adapter 函数>(...)` +
+   * `SELECTCASE`）。`prompt` = 头部可选提问文案原文（缺省 = 不产提示行）。
+   */
+  | { kind: 'askMHead'; prompt?: string }
+  /**
+   * `确认 [提示]：` / `confirm [提示]：` 块头（引擎封装二择问答；产物同上，模板不同）。
+   */
+  | { kind: 'askYNHead'; prompt?: string }
   | { kind: 'choiceItem'; label: string }
   | { kind: 'colorHead'; color: string }
   /** `心形：` / `heart：` 连续块头（P-7；块体是文本行，逐行产 HPH_PRINT） */
@@ -963,6 +972,13 @@ function parseBlockHead(content: string): LineClass | null {
       // `菜单：`（英文小写别名 `menu：`）——数字输入菜单，产物 PRINTL [n] + INPUT + SELECTCASE RESULT。
       // 只收**裸块头**（`菜单：`）——带其它内容的写法不识别（按普通文本走，不静默吞掉）。
       return rest.length === 0 ? { kind: 'menuHead' } : null;
+    case 'block.askM':
+      // `询问 [提示]：` / `ask [提示]：`——引擎封装多选问答（产物 CALL <adapter 函数> + SELECTCASE）。
+      // 头部可带**可选**提问文案（`询问 "要不要一起修炼？"：`）——原文交给 parser 走文本行管线。
+      return rest.length === 0 ? { kind: 'askMHead' } : { kind: 'askMHead', prompt: rest };
+    case 'block.askYN':
+      // `确认 [提示]：` / `confirm [提示]：`——引擎封装二择问答，头部提示同 `询问`。
+      return rest.length === 0 ? { kind: 'askYNHead' } : { kind: 'askYNHead', prompt: rest };
     case 'block.color':
       return { kind: 'colorHead', color: rest };
     case 'block.customCommand':

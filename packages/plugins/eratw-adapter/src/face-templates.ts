@@ -254,6 +254,28 @@ export function createEratwFaceTable(): KojoFaceTable {
     // 与三件套同口径——转译器只替换 `{n}` / `{name}`，模板文本是**游戏知识**的落点。
     userFunction: { template: 'M_KOJO_K{n}_{name}' },
 
+    // 问答函数调用面模板（`询问` / `确认` 糖位；游戏知识，只住本包）。
+    // 引擎（COMMON.ERB）：`@ASK_M(ARGS:0, ARG:0, …, ARGS:9, ARG:9)` —— 参数**成对** (标签, 条件)，
+    //   条件 0 = 灰显无效 / 负 = 隐藏 / 非 0 = 有效；`RETURN RESULT`（选中项序号 0..9）。
+    //   `@ASK_YN(ARGS:0 = "是", ARGS:1 = "否")` —— 恰两个标签、无条件参数；`RETURN RESULT`（0=是，1=否）。
+    // 语料口径：`CALL ASK_M("甲",1,"乙",1)` / `CALL ASK_YN("甲","乙")`（逗号连接、无空格、ASCII 双引号）。
+    ask: {
+      askM: {
+        call: 'CALL ASK_M({options})',
+        option: '{label},{value}',
+        result: 'RESULT',
+        defaultValue: '1',
+        minOptions: 2,
+      },
+      askYN: {
+        call: 'CALL ASK_YN({options})',
+        option: '{label}',
+        result: 'RESULT',
+        minOptions: 2,
+        maxOptions: 2,
+      },
+    },
+
     // 自定函数钩子模板（附录 C 原文；`{i}` = 编号/参数，占位符同主模板口径）：
     // #34 自定指令五钩子 + #3 自定事件 + #30 `CUSTOM_TALENT` + #31/#32 SHOP 按钮。
     customHooks: {

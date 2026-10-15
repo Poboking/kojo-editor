@@ -14,6 +14,7 @@
 
 import type {
   AliasDecl,
+  AskItem,
   ConstDecl,
   CustomCommandBlock,
   FunctionBlock,
@@ -762,6 +763,13 @@ class BlockParser {
         }
         return this.parseMenuBody(line);
       }
+      case 'askMHead':
+      case 'askYNHead': {
+        this.cursor.next();
+        // `询问` / `确认`：引擎封装问答函数调用。多次调用各自读回 `RESULT`、顺序执行互不冲突，
+        // 故**不设**「每时机一个」限制（与 `选项`/`菜单` 的 INPUTS/INPUT 争用不同）。
+        return this.parseAskBody(line, cls.prompt, cls.kind === 'askMHead' ? 'askMBlock' : 'askYNBlock');
+      }
       case 'colorHead': {
         this.cursor.next();
         return this.parseColorBody(line, cls.color);
@@ -1348,6 +1356,9 @@ class BlockParser {
         return this.parseChoiceBody(line);
       case 'menuHead':
         return this.parseMenuBody(line);
+      case 'askMHead':
+      case 'askYNHead':
+        return this.parseAskBody(line, cls.prompt, cls.kind === 'askMHead' ? 'askMBlock' : 'askYNBlock');
       case 'exprHead':
         return this.parseExprHead(line, cls);
       case 'assign':
@@ -1572,6 +1583,81 @@ class BlockParser {
       items,
       loc: mergeSpan2(headLine, items),
     } as SugarNode;
+  }
+
+  /**
+   * `询问` / `确认` 块体——条目 = `「标签」 [值]：` + 缩进分支体（与 `选项`/`菜单` 同构，
+   * 多一枚**选项值** `[值]`）。头部可选提示文案在此合成为一枚 `textLine`（走文本行管线：
+   * 插值 / 台词色都照常），附在节点上由 codegen 经 `emitBody` 发出。
+   *
+   * **项数下限/上限是游戏知识**（由 adapter `KojoAskForm` 声明），故本段不校验——
+   * 交由 codegen（`emitAskBlock`）按表判定、fail-closed 不产半成品。
+   */
+  private parseAskBody(
+    headLine: LogicalLine,
+    promptRaw: string | undefined,
+    kind: 'askMBlock' | 'askYNBlock',
+  ): SugarNode {
+    const itemIndent = headLine.indent + 1;
+    const blockName = kind === 'askMBlock' ? '询问' : '确认';
+    const items: AskItem[] = [];
+    while (!this.cursor.done) {
+      const line = this.cursor.peek()!;
+      const content = contentOf(line);
+      if (content.length === 0) {
+        this.cursor.next();
+        continue;
+      }
+      if (line.indent < itemIndent) break;
+      if (line.indent !== itemIndent) {
+        this.sink.report({
+          code: 'indent-mismatch',
+          severity: 'error',
+          message: `「${blockName}」的条目必须同级（每个条目是 \`「文本」 [值]：\` + 缩进正文）。`,
+          loc: posOf(line),
+        });
+        this.skipOverIndented(line.indent);
+        continue;
+      }
+      if (!endsWithColon(content)) {
+        this.sink.report({
+          code: 'indent-mismatch',
+          severity: 'error',
+          message: `「${blockName}」的条目要写成 \`「文本」 [值]：\`（以全角冒号结尾）。`,
+          loc: posOf(line),
+        });
+        this.cursor.next();
+        continue;
+      }
+      this.cursor.next();
+      const { label, value } = splitAskItem(stripTrailingColon(content));
+      const sub = new BlockParser(this.cursor, itemIndent + 1, this.sink, this.randomShape);
+      const body = sub.parseBody();
+      items.push(value !== undefined ? { label, value, body, loc: spanOf(line) } : { label, body, loc: spanOf(line) });
+    }
+    if (items.length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: `「${blockName}」块没有任何条目。`,
+        loc: posOf(headLine),
+      });
+    }
+    const prompt = promptRaw === undefined ? undefined : this.buildAskPrompt(headLine, promptRaw);
+    return {
+      kind,
+      ...(prompt !== undefined ? { prompt } : {}),
+      items,
+      loc: mergeSpan2(headLine, items),
+    } as SugarNode;
+  }
+
+  /** 头部可选提问文案 → `textLine`（走文本行管线：插值 / 台词色与普通正文同源） */
+  private buildAskPrompt(headLine: LogicalLine, raw: string): TextLine {
+    // 作者可写 `询问 "文案"：`（ASCII 引号包裹，剥掉引号）或 `询问 文案：`（原文即文案）。
+    const text = stripAskPrompt(raw);
+    const synthetic: LogicalLine = { ...headLine, text: headLine.rawIndent + text };
+    return this.buildTextNode(synthetic, 'textLine') as TextLine;
   }
 
   /* ------------------------------ 着色块 ------------------------------ */
@@ -1896,6 +1982,32 @@ function stripQuotes(s: string): string {
   }
   if (t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1);
   return t;
+}
+
+/** 提问提示文案：剥掉外层 ASCII 双引号（`"文案"` → `文案`）；未包裹则原文返回 */
+function stripAskPrompt(raw: string): string {
+  const t = raw.trim();
+  if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1);
+  return t;
+}
+
+/**
+ * `「标签」 [值]：` 头（已去尾冒号）→ 标签 + 可选值原文。
+ * 标签引号三种（`「」` / `｢｣` / `""`）与 `选项` 同口径；`[值]` 是标签后的其余原文（可空）。
+ * 无引号时的兜底：按首个空白切（首段为标签，其余为值）——`好呀 1` → 标签 `好呀`、值 `1`。
+ */
+function splitAskItem(raw: string): { label: string; value?: string } {
+  const t = raw.trim();
+  const quoted = /^(?:「([^」]*)」|｢([^｣]*)｣|"([^"]*)")\s*([\s\S]*)$/.exec(t);
+  if (quoted) {
+    const label = (quoted[1] ?? quoted[2] ?? quoted[3])!;
+    const rest = quoted[4]!.trim();
+    return rest.length > 0 ? { label, value: rest } : { label };
+  }
+  const m = /^(\S+)(?:\s+([\s\S]*))?$/.exec(t);
+  const label = m ? m[1]! : t;
+  const value = m?.[2]?.trim();
+  return value !== undefined && value.length > 0 ? { label, value } : { label };
 }
 
 /** `是 0 到 99 -> 值` / `否则 -> 值` */

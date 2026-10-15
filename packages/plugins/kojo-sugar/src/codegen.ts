@@ -15,6 +15,8 @@
 
 import type {
   AliasDecl,
+  AskMBlock,
+  AskYNBlock,
   ChoiceBlock,
   ColorBlock,
   CustomCommandBlock,
@@ -1299,6 +1301,10 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
     case 'menuBlock':
       emitMenuBlock(em, node, ctx, indent);
       break;
+    case 'askMBlock':
+    case 'askYNBlock':
+      emitAskBlock(em, node, ctx, indent);
+      break;
     case 'colorBlock':
       emitColorBlock(em, node, ctx, indent);
       break;
@@ -2343,6 +2349,97 @@ function emitMenuBlock(em: Emitter, node: MenuBlock, ctx: BodyContext, indent: n
   });
   em.pushGenerated(indent + 1, `CASEELSE`);
   em.pushGenerated(indent + 2, `GOTO INPUT_LOOP`);
+  em.pushGenerated(indent, `ENDSELECT`);
+}
+
+/* ------------------------------ 问答块（询问 / 确认） ------------------------------ */
+
+/**
+ * `询问` / `确认` 块的产物——**引擎封装问答函数调用**（函数名 / 参数 / 读回变量由 adapter 声明，
+ * 糖里零硬编码）。形态**逐字照语料主流写法**（`CALL ASK_M(...)` / `CALL ASK_YN(...)` +
+ * `SELECTCASE RESULT` + `CASE 0..n-1` + `ENDSELECT`）：
+ * ```
+ * <提示行（可选，经 emitBody）>
+ * CALL ASK_M("甲",1,"乙",1)   ← 逐项 `标签,条件`（无空格、ASCII 双引号）；条件取选项值、缺省用模板值
+ * SELECTCASE RESULT           ← 读回变量名由 adapter 声明
+ *     CASE 0
+ *         …
+ *     CASE 1
+ *         …
+ * ENDSELECT
+ * ```
+ *
+ * fail-closed（不产半成品）：
+ * - adapter 未声明问答模板（`faceTable.ask`）→ `face-table-missing`（error），一条字节都不产；
+ * - 项数不满足模板 `minOptions`/`maxOptions` → 复用 `block-empty`（error），不产半成品；
+ * - 模板 `option` 不含 `{value}`（二择形）却写了选项值 / 多选形却无从取值 → 复用 `block-empty`（error），不产半成品。
+ *
+ * 复用既有诊断码（`SugarDiagnosticCode` 是闭集，绝不新增）。
+ */
+function emitAskBlock(em: Emitter, node: AskMBlock | AskYNBlock, ctx: BodyContext, indent: number): void {
+  const isYN = node.kind === 'askYNBlock';
+  const blockName = isYN ? '确认' : '询问';
+  const form = isYN ? ctx.faceTable?.ask?.askYN : ctx.faceTable?.ask?.askM;
+  if (!form) {
+    ctx.sink.report({
+      code: 'face-table-missing',
+      severity: 'error',
+      message: `写了「${blockName}：」块，但当前适配器未声明问答函数模板——已忽略（不产半成品）。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  const usesValue = form.option.includes('{value}');
+  if (node.items.length > 0 && node.items.length < form.minOptions) {
+    ctx.sink.report({
+      code: 'block-empty',
+      severity: 'error',
+      message: `「${blockName}」块至少需要 ${form.minOptions} 个选项。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  if (form.maxOptions !== undefined && node.items.length > form.maxOptions) {
+    ctx.sink.report({
+      code: 'block-empty',
+      severity: 'error',
+      message: `「${blockName}」块最多 ${form.maxOptions} 个选项。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  if (!usesValue && node.items.some((it) => it.value !== undefined)) {
+    ctx.sink.report({
+      code: 'block-empty',
+      severity: 'error',
+      message: `「${blockName}」块的选项不接受值（引擎函数只收标签）——已忽略该值，不产半成品。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  if (usesValue && form.defaultValue === undefined && node.items.some((it) => it.value === undefined)) {
+    ctx.sink.report({
+      code: 'block-empty',
+      severity: 'error',
+      message: `「${blockName}」块的每个选项都必须写值（当前适配器未提供缺省值）。`,
+      loc: node.loc.start,
+    });
+    return;
+  }
+  // 头部可选提示行：经 emitBody 发（文本行管线——插值 / 台词色都照常）
+  if (node.prompt) emitBody(em, [node.prompt], ctx, indent);
+  const opts = node.items.map((item) => {
+    const labelLiteral = JSON.stringify(item.label);
+    if (!usesValue) return form.option.replace('{label}', labelLiteral);
+    const value = lowerExpression(item.value ?? form.defaultValue ?? '', exprCtx(ctx, item.loc.start));
+    return form.option.replace('{label}', labelLiteral).replace('{value}', value);
+  });
+  em.push(indent, form.call.replace('{options}', opts.join(',')), node.loc.start.line);
+  em.pushGenerated(indent, `SELECTCASE ${form.result}`);
+  node.items.forEach((item, i) => {
+    em.push(indent + 1, `CASE ${i}`, item.loc.start.line);
+    emitBody(em, item.body, ctx, indent + 2);
+  });
   em.pushGenerated(indent, `ENDSELECT`);
 }
 

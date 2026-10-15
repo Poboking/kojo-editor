@@ -41,6 +41,9 @@ export type KeywordId =
   | 'block.function'
   /* 初回块（1 号任务：`初回 "key"：` = 引擎 `ONCE(...)`） */
   | 'block.once'
+  /* 问答块（询问 / 确认）：引擎封装问答函数调用（eraTW ASK_M / ASK_YN） */
+  | 'block.askM'
+  | 'block.askYN'
   /* 行内 / 时机子句 */
   | 'inline.cont'
   | 'inline.heart'
@@ -125,6 +128,13 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 是**变量式访问器**（`ONCE(名称, 初期値, キャラ番号…)`，可读可写）。只登记中文主形——
   // 英文别名 `once` 不登记（`ONCE` 是引擎函数名、不是作者输入别名，登记会与候选撞词）。
   ['初回', 'block.once'],
+  // 问答块（作者爱用的引擎封装问答函数）：`询问` 多选（eraTW ASK_M）/ `确认` 二择（eraTW ASK_YN）。
+  // 与 `选项`（PRINTBUTTON+INPUTS+RESULTS）/ `菜单`（PRINTL+INPUT+SELECTCASE RESULT）是**另一条
+  // 管线**——本组产 `CALL <引擎函数>(...)` + `SELECTCASE`，函数名/参数/读回变量由 adapter 模板声明。
+  ['询问', 'block.askM'],
+  ['ask', 'block.askM'],
+  ['确认', 'block.askYN'],
+  ['confirm', 'block.askYN'],
   // 行内
   ['续', 'inline.cont'],  ['cont', 'inline.cont'],
   ['continue', 'inline.cont'],

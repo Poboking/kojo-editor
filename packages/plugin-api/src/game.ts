@@ -414,6 +414,55 @@ export interface KojoFaceTable {
    * 不产半成品：无法确定函数名时宁可拒绝）。
    */
   readonly userFunction?: { readonly template: string };
+  /**
+   * 引擎封装的**问答函数**调用面模板（游戏知识，只住 adapter）。
+   *
+   * 表层 DSL 的 `询问` / `确认` 块产**引擎函数调用** + 读回返回值的 `SELECTCASE`——
+   * 函数名（eraTW：`ASK_M` / `ASK_YN`）、参数拼装与读回变量（`RESULT`）都是游戏知识，
+   * 故由 adapter 声明模板、转译器只替换占位符（糖里零硬编码）。
+   * 缺省 = 该游戏无此问答函数 ⇒ 写了 `询问`/`确认` 块时 `face-table-missing`（fail-closed）。
+   */
+  readonly ask?: KojoAskTable;
+}
+
+/** 单个问答糖位的产物模板（`KojoFaceTable.ask` 的键值） */
+export interface KojoAskForm {
+  /**
+   * 调用行模板。占位符 `{options}` = 逐项参数串（按书写顺序、以 `,` 连接、无空格）。
+   * 例（eraTW 多选）：`CALL ASK_M({options})` → `CALL ASK_M("甲",1,"乙",1)`。
+   */
+  readonly call: string;
+  /**
+   * 单项参数模板。占位符：`{label}` = 已加引号的标签字面量、`{value}` = 逐项条件的
+   * **降糖后**表达式（仅当本模板含 `{value}` 时才消费）。
+   * 例（eraTW 多选）：`{label},{value}` → `"甲",1`；（eraTW 二择）：`{label}` → `"是"`。
+   */
+  readonly option: string;
+  /** 读回变量名（`SELECTCASE <result>` 的主语；两类问句共用同一个返回值变量）。eraTW：`RESULT`。 */
+  readonly result: string;
+  /**
+   * 逐项条件**缺省值**（仅当 `option` 含 `{value}`）。作者未写 `「标签」 值：` 的 `值` 时，
+   * 用本值填充。缺省 = **必须写值**（缺则报错，不静默）。eraTW：`1`（= 选项有效）。
+   */
+  readonly defaultValue?: string;
+  /** 项数下限（不足 → 报错，不产半成品）。 */
+  readonly minOptions: number;
+  /** 项数上限（超出 → 报错；缺省 = 不限）。 */
+  readonly maxOptions?: number;
+}
+
+/**
+ * 问答糖位表：多选 `询问`（eraTW `ASK_M`，逐项 `标签,条件`）与二择 `确认`
+ * （eraTW `ASK_YN`，恰两项纯标签）。
+ *
+ * 两者是**不同族**（参数签名 / 返回语义不同），故各占一个糖位、各一条模板，
+ * 由转译器按糖关键字分派（不合并成一条，避免参数形态被猜）。
+ */
+export interface KojoAskTable {
+  /** `询问` 糖位（eraTW：`CALL ASK_M`） */
+  readonly askM: KojoAskForm;
+  /** `确认` 糖位（eraTW：`CALL ASK_YN`） */
+  readonly askYN: KojoAskForm;
 }
 
 /**
