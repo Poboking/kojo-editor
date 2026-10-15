@@ -177,6 +177,8 @@ export type LineClass =
   | { kind: 'messageCheck'; scope: 'scene' | 'kojo'; condition: string }
   | { kind: 'arrowCase'; values: WhenCaseValue[]; value: string }
   | { kind: 'arrowElse'; value: string }
+  /** 经验结算行（B5）：`结算 <引用> <op> <值>` → 产一行 `EXP:<引用> <op> <值>` 原生 ERB */
+  | { kind: 'settle'; expr: string }
   | { kind: 'assign'; target: string; expr: string }
   | { kind: 'blankLine'; wait: boolean }
   | { kind: 'heartText'; raw: string }
@@ -311,6 +313,17 @@ export function classifyLine(line: LogicalLine): LineClass {
   if (endsWithBlockColon(code)) {
     const exprHead = parseExprHead(stripBlockColon(code));
     if (exprHead) return exprHead;
+  }
+
+  // ---- 经验结算行（B5）：`结算 <表达式>` → `EXP:<表达式>` ----
+  // 行级糖：把 `EXP:` 变量族的一次经验结算收成一行可读糖。表达式**原文逐字**接到
+  // `EXP:` 前缀后——省略/显式作用域两形态都归作者写（转译器不解释作用域词、也不编名字）。
+  // 排在赋值（`parseAssignment`）**之前**：`结算 Ｍ经验 += 1` 里的 `+=` 会被赋值扫描
+  // 误吞成左值 `结算 Ｍ经验 +`。手写 `EXP:…` 行不受此影响——它们由更早的 `RAW_INSTR_RE`
+  // 截获（全大写族头），只有本糖关键字以 CJK 起头时才需要在这里守门。
+  const settleHead = /^(\S+)[ \t\u3000]+(.+)$/.exec(code);
+  if (settleHead && lookupKeyword(settleHead[1]!) === 'inline.settle') {
+    return { kind: 'settle', expr: settleHead[2]!.trim() };
   }
 
   // ---- 赋值（`X = 表达式`）——`=` 不在引号内、不是比较运算符 ----

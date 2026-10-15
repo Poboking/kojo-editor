@@ -561,6 +561,8 @@ class BlockParser {
         return this.buildBlankNode(synthetic, cls.wait);
       case 'rawLine':
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
+      case 'settle':
+        return { kind: 'rawLine', text: 'EXP:' + cls.expr, loc: spanOf(line) } as RawLine;
       case 'assign':
         return {
           kind: 'rawLine',
@@ -642,6 +644,12 @@ class BlockParser {
       case 'rawLine': {
         this.cursor.next();
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
+      }
+      case 'settle': {
+        // 经验结算行（B5）：`结算 <表达式>` 逐字接到 `EXP:` 前缀后，产一行原生 ERB
+        // 直通行（原样透传、不降糖、不解释作用域词）——保证手写与本糖产物同一字节形。
+        this.cursor.next();
+        return { kind: 'rawLine', text: 'EXP:' + cls.expr, loc: spanOf(line) } as RawLine;
       }
       case 'assign': {
         // 语句级赋值 `X = 表达式`：左值走 §5.0 别名展开（只读别名报
@@ -1151,6 +1159,8 @@ class BlockParser {
         return this.buildHeartNode(line, cls.raw);
       case 'rawLine':
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
+      case 'settle':
+        return { kind: 'rawLine', text: 'EXP:' + cls.expr, loc: spanOf(line) } as RawLine;
       case 'ifHead':
         return this.parseIfBlockFromClass(line, cls);
       case 'whenHead':

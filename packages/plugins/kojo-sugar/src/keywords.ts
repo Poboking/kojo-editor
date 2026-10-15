@@ -42,6 +42,7 @@ export type KeywordId =
   | 'inline.to'
   | 'inline.hideScene'
   | 'inline.hideKojo'
+  | 'inline.settle'
   /* 别名右值 */
   | 'alias.char';
 /**
@@ -117,6 +118,11 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['skip-scene', 'inline.hideScene'],
   ['隐藏口上', 'inline.hideKojo'],
   ['skip-kojo', 'inline.hideKojo'],
+  // 经验结算行（B5）：`结算 <引用> += 1` → `EXP:<引用> += 1`——把 `EXP:` 变量族的一次
+  // 经验结算收成一行可读糖。表达式**原文逐字**接到 `EXP:` 前缀后；省略/显式作用域两形态
+  // 都由作者原样写在表达式里，转译器**不解释**作用域词、也不硬编码任何具体经验名。
+  ['结算', 'inline.settle'],
+  ['settle', 'inline.settle'],
   // 别名的 `角色 N` 右值形态由 `isAliasCharKeyword` 按上下文判定，
   // **不**在此表登记（否则会覆盖 `head.char`——Map 保留最后一次插入）。
 ]);
