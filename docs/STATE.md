@@ -6,8 +6,8 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **3296 passed / 35 skipped（3331）**；193 文件过 / 13 跳（206）（2026-10-16 本机实测，含段头去形 `若` + D2 家族头中文别名） |
-| 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **3327 passed / 1 skipped / ⚠ 1 failed（3329）**；失败 = `sugar-projection.corpus.test.ts`（台词行覆盖 62.5% < 99%），**由 `ff1b8ae`（P-1R 段头 `若` · 手段 3「函数级 all-or-nothing」）引入，与本批无关**；`12ed541` 同用例 99.2% 通过（2026-10-16 本机实测，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
+| 全量测试 | **3393 passed / 36 skipped（3429）**；198 文件过 / 13 跳（211）（2026-10-16 本机实测，含段头去形 `若` + D2 家族头中文别名 + KC-1b 位表·数据侧） |
+| 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | ⚠ **1 failed**：`sugar-projection.corpus.test.ts` 台词行覆盖 **62.5%（`339a0ca`）/ 69.7%（本批后）**，门槛 99% —— **由 `ff1b8ae`（P-1R 手段 3「函数级 all-or-nothing」）引入，非本批**（`12ed541` 同用例 99.2%）；本批另跑 `integration-plugins` 3/3 过（2026-10-16 本机实测，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（17 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **24 项全绿**（E7 写允许域批 +18→22；E14 拖放事件映射 +2；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
