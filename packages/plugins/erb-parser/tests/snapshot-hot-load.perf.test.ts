@@ -101,7 +101,7 @@ const ms = (n: number): string => `${n.toFixed(1)}ms`;
 const FLAG_EXPRESSION = 1;
 
 /** 盘上元组（v5 形状：`[mtime, size, textLength, 行数, #FUNCTION 旗标, 函数, 声明, 引用]`） */
-type Tuple = [number | null, number | null, number, number, 0 | 1, never[], never[], never[]];
+type Tuple = [number | null, number | null, number, number, 0 | 1, unknown[], unknown[], unknown[]];
 
 /**
  * **before 参照实现**＝改动前的 `decodeEntries` 体：同样的逐条校验（fail-closed 一格不缺），
