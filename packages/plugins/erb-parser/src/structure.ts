@@ -37,6 +37,15 @@ import { closerNameForPair, forEachControlFlowLine, parseFunctionDefinition } fr
  */
 export const MAX_STRUCTURE_ISSUES = 50;
 
+/**
+ * 一条结构发现的**诊断码**（单一真源）。
+ *
+ * 波浪线（`ui.editor.decorator`）与 💡 修复（`ui.editor.codeAction`）必须给同一个字符串：
+ * B9 之后宿主把码写进 Monaco marker 的 `code` 字段，作者按 `Ctrl+.` 时"这条诊断 ↔ 这个动作"
+ * 靠的就是它——两处各拼一份 `"erb." + kind`，一处改名一处没改，关联就静默断了。
+ */
+export const structureIssueCode = (issue: ErbStructureIssue): string => `erb.${issue.kind}`;
+
 /** 一个还开着的块（栈元素） */
 interface OpenBlock {
   readonly kind: string;

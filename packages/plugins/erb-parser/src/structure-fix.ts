@@ -1,6 +1,5 @@
-import type { EditorTextEdit, ErbStructureIssue } from '@kojo/plugin-api';
-import { checkControlFlowStructure } from './structure';
-
+import type { EditorTextEdit, ErbStructureIssue, LineDecoration } from '@kojo/plugin-api';
+import { checkControlFlowStructure, structureIssueCode } from './structure';
 /**
  * 结构体检的**就地修复**（💡 那一下）：给未闭合的开块补上它缺的闭合语句。
  *
@@ -24,7 +23,39 @@ export interface ErbStructureFix {
   readonly title: string;
   /** 波浪线所在行（宿主按光标行筛选） */
   readonly issueLine: number;
+  /**
+   * 这条修复**消解的那一条波浪线**（B9）：与 `ui.editor.decorator` 发布出去的那一份
+   * 同源同形（同一个 `structureDiagnostic`，见下）。宿主把它挂进 Monaco 的
+   * `CodeAction.diagnostics` —— `Ctrl+.` 落在哪条波浪线上、优先排谁、应用时高亮哪一段，
+   * 全看这一份对不对得上。
+   */
+  readonly diagnostic: LineDecoration;
   readonly edits: readonly EditorTextEdit[];
+}
+
+/**
+ * 一条结构发现 → 它对应的那条波浪线（**单一真源**）。
+ *
+ * 为什么要有这个函数：波浪线（`ui.editor.decorator`）与修复动作（`ui.editor.codeAction`）
+ * 是同一个插件的两个贡献，B9 之后它们必须**逐字段相等**才能被 Monaco 认作
+ * "这条诊断 ↔ 这个修复"。两处各拼一遍 `{line, severity, message, code}`，
+ * 一处改了另一处没改，症状是"💡 里躺着修不了的动作"或"波浪线上按不出菜单"——
+ * 静默、且不报错。抄一份不如交一份。
+ */
+export function structureDiagnostic(issue: ErbStructureIssue): LineDecoration {
+  return {
+    line: issue.line,
+    severity: 'error',
+    message: issue.message,
+    code: structureIssueCode(issue),
+  };
+}
+
+/** 这条波浪线是不是本次请求点明的那几条之一（按 `code` + 行精确匹配，**不做近似**） */
+function isRequested(diagnostic: LineDecoration, requested: readonly LineDecoration[]): boolean {
+  return requested.some(
+    (d) => d.line === diagnostic.line && d.code !== undefined && d.code === diagnostic.code,
+  );
 }
 
 /** 与 `scanner.normalizeEol` 同一口径：行号坐标系必须和体检器一致 */
@@ -47,6 +78,7 @@ function fixFor(issue: ErbStructureIssue, lines: readonly string[]): ErbStructur
   const before = issue.fixBeforeLine;
   if (closer === undefined || closer === '' || before === undefined) return null;
   if (lines.length === 0) return null;
+  const diagnostic = structureDiagnostic(issue);
   const last = lines.length;
   // 开块那一行的缩进跟着走：ERB 不靠缩进语法，但作者靠缩进读层次
   const indent = /^[ \t]*/.exec(lineAt(lines, issue.line))?.[0] ?? '';
@@ -58,12 +90,14 @@ function fixFor(issue: ErbStructureIssue, lines: readonly string[]): ErbStructur
     if (tail.trim() === '') {
       return {
         issueLine: issue.line,
+        diagnostic,
         title: `补上缺失的 ${patch.trim()}（放在文件末尾）`,
         edits: [{ fromLine: last, toLine: last, newText: patch }],
       };
     }
     return {
       issueLine: issue.line,
+      diagnostic,
       title: `补上缺失的 ${patch.trim()}（放在文件末尾）`,
       edits: [{ fromLine: last, toLine: last, newText: tail + '\n' + patch }],
     };
@@ -76,6 +110,7 @@ function fixFor(issue: ErbStructureIssue, lines: readonly string[]): ErbStructur
   }
   return {
     issueLine: issue.line,
+    diagnostic,
     title: `补上缺失的 ${patch.trim()}（放在第 ${anchor} 行之前）`,
     edits: [{ fromLine: anchor, toLine: anchor, newText: patch + '\n' + anchorText }],
   };
@@ -86,15 +121,27 @@ function fixFor(issue: ErbStructureIssue, lines: readonly string[]): ErbStructur
  *
  * `cursorLine` 给出时只返回**光标所在那一行**的动作（波浪线就在那行上，作者在那儿按
  * 💡 才找得到）；不给则返回全部（消费方自行筛选）。同一份文本必得同一份结果。
+ *
+ * `requested`（additive，B9）= 宿主点明的"当前这几条波浪线才是本次请求的对象"。
+ * 给了就**只应答对得上的那些**（按 `code` + 行精确匹配，不近似）：
+ * `Ctrl+.` 是一条针对具体诊断的请求，把同一行另一族的修复、或另一行的问题一起塞进
+ * 菜单，就是"假装能修"。**没给**（旧宿主 / 非编辑器消费方）⇒ 沿用 `cursorLine` 判据，
+ * 行为与改动前逐字节一致。
  */
-export function buildStructureFixes(text: string, cursorLine?: number): ErbStructureFix[] {
+export function buildStructureFixes(
+  text: string,
+  cursorLine?: number,
+  requested?: readonly LineDecoration[],
+): ErbStructureFix[] {
   const lines = toLines(text);
   const out: ErbStructureFix[] = [];
   for (const issue of checkControlFlowStructure(text)) {
     if (issue.kind !== 'unclosed-open') continue;
     if (cursorLine !== undefined && issue.line !== cursorLine) continue;
     const fix = fixFor(issue, lines);
-    if (fix) out.push(fix);
+    if (!fix) continue;
+    if (requested && !isRequested(fix.diagnostic, requested)) continue;
+    out.push(fix);
   }
   return out;
 }

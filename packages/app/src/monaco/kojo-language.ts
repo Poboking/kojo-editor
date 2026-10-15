@@ -203,6 +203,10 @@ function markerSeverity(monaco: typeof Monaco, s: LineDecoration['severity']): M
 /**
  * 把装饰贡献（`LineDecoration[]`，含可选列区间）翻译为 Monaco markers。
  * 列越界一律**夹到行内**（装饰是外部数据，不能假定它算准了列）。
+ *
+ * 诊断码走 `code` 字段（B9）：这是 Monaco 里"这条诊断的标识"，快速修复按它认领、
+ * 同类问题按它归组；早先放在 `source` 只是拿悬浮提示当出口，波浪线与 💡 之间并没有
+ * 可对齐的键（悬浮里仍会显示，形态从 `code：消息` 变成 `消息 (code)`）。
  */
 export function decorationsToMarkers(
   monaco: typeof Monaco,
@@ -219,7 +223,7 @@ export function decorationsToMarkers(
     markers.push({
       severity: markerSeverity(monaco, d.severity),
       message: d.message,
-      source: d.code,
+      code: d.code,
       startLineNumber: line,
       startColumn,
       endLineNumber: line,

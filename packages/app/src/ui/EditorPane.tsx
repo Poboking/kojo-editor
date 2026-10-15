@@ -18,6 +18,12 @@ import { makeLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
 import { installHover } from '../monaco/kojo-hover';
+import {
+  PROVIDED_CODE_ACTION_KINDS,
+  actionDiagnostics,
+  collectCodeActions,
+  markersToDecorations,
+} from '../monaco/kojo-code-action';
 import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
@@ -918,53 +924,45 @@ export function EditorPane({
     const providerDisposer = monaco.languages.registerCodeActionProvider(
       [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID],
       {
-        provideCodeActions: (model, range) => {
+        provideCodeActions: (model, range, context) => {
           const path = filePathRef.current;
           // 只对当前活动标签的 model 供动作（后台 model 的 provider 调用不响应）；
           // 糖视图下挂的是只读糖 model，不供任何 CodeAction（编辑落点无真文件可依）。
           if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) {
             return { actions: [], dispose: () => undefined };
           }
-          const project = kernel.project.current();
-          const text = model.getValue();
-          const line = range?.startLineNumber;
           const pending = pendingActionsRef.current;
           // 超阈值整体清理（长期运行不至于无限增长）；id 单调递增，绝不复用
           if (pending.size > 500) pending.clear();
-          const actions: Monaco.languages.CodeAction[] = [];
-          for (const contribution of kernel.slots.query('ui.editor.codeAction')) {
-            let provided: EditorCodeAction[];
-            try {
-              provided = contribution.provideActions({
-                path,
-                text,
-                project,
-                // 体量事实：供贡献方对超长文件降级（见 plugin-api slots.ts 头注）
-                lineCount: model.getLineCount(),
-                ...(line !== undefined ? { line } : {}),
-              });
-            } catch (e: unknown) {
-              // 单个贡献抛错不影响其余（与装饰器同款隔离：能力出错退化可见，不让 💡 整体消失）
-              console.warn(
-                `[EditorPane] codeAction '${contribution.id}' provideActions 抛错：${
-                  e instanceof Error ? e.message : String(e)
-                }`,
-              );
-              continue;
-            }
-            for (const a of provided) {
-              const actionId = `${contribution.id}#${++actionSeqRef.current}`;
-              pending.set(actionId, a);
-              actions.push({
-                title: a.title,
-                kind: a.kind === 'refactor' ? 'refactor' : 'quickfix',
-                command: { id: CODE_ACTION_COMMAND, title: a.title, arguments: [actionId] },
-              });
-            }
-          }
+          const actions = collectCodeActions(
+            kernel.slots.query('ui.editor.codeAction'),
+            {
+              path,
+              text: model.getValue(),
+              project: kernel.project.current(),
+              lineCount: model.getLineCount(),
+              ...(range?.startLineNumber !== undefined ? { line: range.startLineNumber } : {}),
+              // 本次请求对应的**当前波浪线**（B9）：Monaco 的 standalone 包装层已按
+              // 区间求交填好 `context.markers` ⇒ 贡献方按 `code` 精确应答，
+              // 零 marker = 这个区间本来就没红线 ⇒ 不该有 quickfix
+              diagnostics: markersToDecorations(monaco, context.markers ?? []),
+            },
+            {
+              register: (contributionId, action) => {
+                const actionId = `${contributionId}#${++actionSeqRef.current}`;
+                pending.set(actionId, action);
+                return actionId;
+              },
+              markerDataFor: (action) => actionDiagnostics(monaco, model, action),
+            },
+            CODE_ACTION_COMMAND,
+          );
           return { actions, dispose: () => undefined };
         },
       },
+      // B9：类别声明走 metadata（Monaco 用它决定 `Ctrl+.` 这条 only=quickfix 的
+      // 显式请求要不要调用本 provider，并写进 `supportedCodeActions` 上下文键）
+      { providedCodeActionKinds: PROVIDED_CODE_ACTION_KINDS },
     );
     // 悬停中文名（ZH-F2）：只读显示，光标下的原生记号 → 中文名。表按当前项目 adapterId
     // **运行时**现取（`editorTables`），查不到即不显示（**不猜**）。与 CodeAction 同款隔离。

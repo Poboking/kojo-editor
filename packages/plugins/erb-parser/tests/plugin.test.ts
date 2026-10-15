@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { ErbParserService, EventBus, FileIO, GameProject, PluginContext, Unsubscribe } from '@kojo/plugin-api';
+import type {
+  ErbParserService,
+  EventBus,
+  FileIO,
+  GameProject,
+  LineDecoration,
+  PluginContext,
+  Unsubscribe,
+} from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
 import { makeComputeStub } from './support';
 
@@ -72,7 +80,14 @@ interface RegisteredSlot {
       project: GameProject | null;
       lineCount?: number;
       line?: number;
-    }) => Array<{ title: string; kind?: string; edits?: Array<{ fromLine: number; toLine: number; newText: string }> }>;
+      /** B9：宿主点明的"本次请求对应的当前波浪线"（测试里手动给，缺省 = 旧宿主） */
+      diagnostics?: LineDecoration[];
+    }) => Array<{
+      title: string;
+      kind?: string;
+      diagnostics?: LineDecoration[];
+      edits?: Array<{ fromLine: number; toLine: number; newText: string }>;
+    }>;
   };
 }
 
@@ -333,11 +348,24 @@ describe('erb-parser 插件 · ui.editor.codeAction（结构修复动作）', ()
   const broken = ['@AEGI', 'IF LOCAL', '\tPRINTL 甲'].join('\n');
   const erb = 'C:/ws/包/事件.ERB';
 
-  function actions(writable: boolean, path = erb, text = broken, line?: number): unknown[] {
+  function actions(
+    writable: boolean,
+    path = erb,
+    text = broken,
+    line?: number,
+    diagnostics?: LineDecoration[],
+  ): unknown[] {
     const { slots } = activatePlugin(fakeIO({}, () => writable));
     const found = slots.find((s) => s.kind === 'ui.editor.codeAction')?.contribution;
     if (!found?.provideActions) return [];
-    return found.provideActions({ path, text, project: null, lineCount: 3, ...(line === undefined ? {} : { line }) });
+    return found.provideActions({
+      path,
+      text,
+      project: null,
+      lineCount: 3,
+      ...(line === undefined ? {} : { line }),
+      ...(diagnostics === undefined ? {} : { diagnostics }),
+    });
   }
 
   it('注册进 ui.editor.codeAction，id 与波浪线那条同族', () => {
@@ -374,5 +402,45 @@ describe('erb-parser 插件 · ui.editor.codeAction（结构修复动作）', ()
 
   it('配平文本零动作（好的文件不该看见💡 里冒出"补 ENDIF"）', () => {
     expect(actions(true, erb, ['@A', 'IF X', 'PRINT Y', 'ENDIF'].join('\n'), 2)).toEqual([]);
+  });
+
+  /* --------------------- B9：波浪线 ↔ 快速修复的关联 --------------------- */
+
+  /** 同一次激活取两槽：装饰器交出的那条诊断，必须就是修复动作交回宿主的那一条 */
+  function squiggle(): LineDecoration[] {
+    const { slots } = activatePlugin(fakeIO({}));
+    const deco = slots.find((s) => s.kind === 'ui.editor.decorator')?.contribution?.decorate;
+    return (deco?.({ path: erb, text: broken, project: null }) as LineDecoration[] | undefined) ?? [];
+  }
+
+  it('动作把**那条波浪线原样**交回宿主（与装饰器逐字段相等 ⇒ 关联不可能各说一套）', () => {
+    const out = actions(true, erb, broken, 2) as Array<{ diagnostics?: LineDecoration[] }>;
+    expect(out[0]!.diagnostics).toEqual(squiggle());
+    expect(out[0]!.diagnostics![0]!.code).toBe('erb.unclosed-open');
+  });
+
+  it('宿主点明这条诊断 ⇒ 给它的修复；点明的是**另一族**（同码不同行 / 同行不同码）⇒ 不给', () => {
+    const asked = squiggle();
+    expect(actions(true, erb, broken, 2, asked)).toHaveLength(1);
+    expect(actions(true, erb, broken, 2, [{ ...asked[0]!, line: 99 }])).toEqual([]);
+    expect(actions(true, erb, broken, 2, [{ ...asked[0]!, code: 'erb.orphan-close' }])).toEqual([]);
+  });
+
+  it('区间里没有波浪线（空诊断）⇒ 零动作：没有"要修的东西"就不假装能修', () => {
+    expect(actions(true, erb, broken, 2, [])).toEqual([]);
+  });
+
+  it('旧宿主没给 `diagnostics` ⇒ 行判据照旧（additive 零改动）', () => {
+    expect(actions(true, erb, broken, 2)).toHaveLength(1);
+    expect(actions(true, erb, broken, 3)).toEqual([]);
+  });
+
+  it('孤儿闭合（`orphan-close`）有诊断、没动作：不确定就不删用户的行', () => {
+    const orphan = ['@A', 'PRINTL 甲', 'ENDIF'].join('\n');
+    const { slots } = activatePlugin(fakeIO({}, () => true));
+    const deco = slots.find((s) => s.kind === 'ui.editor.decorator')?.contribution?.decorate!;
+    const decorations = deco({ path: erb, text: orphan, project: null }) as LineDecoration[];
+    expect(decorations.map((d) => d.code)).toEqual(['erb.orphan-close']);
+    expect(actions(true, erb, orphan, 3, decorations)).toEqual([]);
   });
 });

@@ -14,7 +14,7 @@ import { KernelServices, isErbDialectPath, projectFingerprintOf } from '@kojo/pl
 import { PARSE_FILE_TASK, SCAN_FLOW_TASK, erbParserTasks, type ParseFilePayload, type ScanFlowPayload } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
-import { buildStructureFixes } from './structure-fix';
+import { buildStructureFixes, structureDiagnostic } from './structure-fix';
 import { erbDocumentSymbols } from './document-symbols';
 import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt } from './symbols';
@@ -427,12 +427,9 @@ export function createErbParserPlugin(): Plugin {
         order: 20,
         decorate(file): LineDecoration[] {
           if (!isDialect(file.path) || file.text.length === 0) return [];
-          return checkControlFlowStructure(file.text).map((issue) => ({
-            line: issue.line,
-            severity: 'error' as const,
-            message: issue.message,
-            code: `erb.${issue.kind}`,
-          }));
+          // 逐字段的形状只住在 `structureDiagnostic` 一处：💡 那边给出的"我修的是哪条诊断"
+          // 用的就是同一个函数 ⇒ 波浪线与快速修复不可能对不上（B9 的关联键全靠它）
+          return checkControlFlowStructure(file.text).map(structureDiagnostic);
         },
       });
 
@@ -453,15 +450,19 @@ export function createErbParserPlugin(): Plugin {
       ctx.slots.register('ui.editor.codeAction', {
         id: 'erb-structure-fix',
         order: 30,
-        provideActions: ({ path, text, line }) => {
+        provideActions: ({ path, text, line, diagnostics }) => {
           if (!isDialect(path) || text.length === 0) return [];
           // 位置未知就不猜：本包的动作**天生按行**（波浪线在哪行，💡 就在哪行给），
           // 少了这个约束会把几十条动作灌进同一个菜单。
           if (line === undefined) return [];
           if (!io.isWritable(path)) return [];
-          return buildStructureFixes(text, line).map((fix) => ({
+          return buildStructureFixes(text, line, diagnostics).map((fix) => ({
             title: fix.title,
             kind: 'quickfix' as const,
+            // B9：把这条动作消解的那条波浪线交出去（宿主挂进 Monaco 的
+            // `CodeAction.diagnostics`）——作者在这条红线上按 `Ctrl+.` 才捞得到它，
+            // 应用后 Monaco 还会把被修的那一段标出来
+            diagnostics: [fix.diagnostic],
             edits: fix.edits,
             // 有 `edits` 时宿主不调 `run`；仍给以满足契约（并在无改写通道的宿主下无害退化）
             run: () => undefined,

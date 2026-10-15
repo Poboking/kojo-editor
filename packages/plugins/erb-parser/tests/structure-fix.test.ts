@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { applyStructureFix, buildStructureFixes } from '../src/structure-fix';
-import { checkControlFlowStructure } from '../src/structure';
+import {
+  applyStructureFix,
+  buildStructureFixes,
+  structureDiagnostic,
+} from '../src/structure-fix';
+import { checkControlFlowStructure, structureIssueCode } from '../src/structure';
 
 /**
  * 结构体检的**一键补齐**单测（2026-10-13 反馈 7 的第二步）。
@@ -148,5 +152,67 @@ describe('buildStructureFixes · 不确定就不给动作', () => {
     const text = L('@A', 'IF X', 'PRINT Y');
     const once = applyStructureFix(text, buildStructureFixes(text, 2)[0]!);
     expect(buildStructureFixes(once)).toEqual([]);
+  });
+});
+
+/* ================= B9：波浪线 ↔ 快速修复的关联键 ================= */
+
+/**
+ * 这一段钉的是"**Ctrl+. 落在哪条红线上，就拿得到那一条的修复**"的因：
+ * 诊断形状只有一份（`structureDiagnostic`），匹配只认 `code` + 行，
+ * 对不上就**没有动作**——不是"给个差不多的动作"。
+ */
+describe('structureDiagnostic · 波浪线与修复共用同一份形状', () => {
+  const text = L('@AEGI', 'IF LOCAL', '\tPRINTL 甲');
+  const issue = checkControlFlowStructure(text)[0]!;
+
+  it('诊断的四个字段逐一对应那条发现（码走 `structureIssueCode`，不复述第二遍）', () => {
+    expect(structureDiagnostic(issue)).toEqual({
+      line: issue.line,
+      severity: 'error',
+      message: issue.message,
+      code: structureIssueCode(issue),
+    });
+    expect(structureIssueCode(issue)).toBe('erb.unclosed-open');
+  });
+
+  it('修复动作携带的就是那一条 ⇒ 与装饰器给宿主的是同一份数据（关联不可能断）', () => {
+    const fix = buildStructureFixes(text, 2)[0]!;
+    expect(fix.diagnostic).toEqual(structureDiagnostic(checkControlFlowStructure(text)[0]!));
+    expect(fix.diagnostic.line).toBe(fix.issueLine);
+  });
+});
+
+describe('buildStructureFixes · 按宿主点明的诊断应答（B9）', () => {
+  const two = L('@A', 'IF X', 'PRINT Y', '@B', 'REPEAT Z', 'PRINT W');
+
+  it('给了诊断就**只**答对得上的那些：同一行另一族问题不进这次菜单', () => {
+    const fixes = buildStructureFixes(two);
+    expect(fixes.map((f) => f.issueLine)).toEqual([2, 5]);
+    const asked = [fixes[1]!.diagnostic];
+    expect(buildStructureFixes(two, 5, asked).map((f) => f.issueLine)).toEqual([5]);
+    // 宿主按区间给出的 `line` 与 `requested` 指向同一条时才会出动作（两个约束取交集）
+    expect(buildStructureFixes(two, 2, asked)).toEqual([]);
+  });
+
+  it('空诊断数组 ⇒ 零动作（区间里没有波浪线，就没有"这条诊断的修复"可给）', () => {
+    expect(buildStructureFixes(two, 2, [])).toEqual([]);
+  });
+
+  it('`code` 对不上 ⇒ 不给动作（**不假装能修**：孤儿闭合至今没有安全修法）', () => {
+    const orphan = L('@A', 'PRINT X', 'ENDIF');
+    const issue = checkControlFlowStructure(orphan)[0]!;
+    expect(structureIssueCode(issue)).toBe('erb.orphan-close');
+    expect(buildStructureFixes(orphan, 3, [structureDiagnostic(issue)])).toEqual([]);
+  });
+
+  it('宿主没给诊断（旧宿主 / 非编辑器消费方）⇒ 沿用行判据，行为与改动前一致', () => {
+    expect(buildStructureFixes(two, 2).map((f) => f.issueLine)).toEqual([2]);
+    expect(buildStructureFixes(two).map((f) => f.issueLine)).toEqual([2, 5]);
+  });
+
+  it('行号对不上但码相同 ⇒ 依旧不答（匹配是 code+行，不是"同一个码就万事大吉"）', () => {
+    const asked = { line: 99, severity: 'error' as const, message: '别处的', code: 'erb.unclosed-open' };
+    expect(buildStructureFixes(two, undefined, [asked])).toEqual([]);
   });
 });

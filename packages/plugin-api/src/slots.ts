@@ -150,8 +150,22 @@ export interface EditorTextEdit {
 /** 编辑器 CodeAction（💡 形态；宿主适配为 Monaco registerCodeActionProvider，宿主零绘制） */
 export interface EditorCodeAction {
   readonly title: string;
+  /**
+   * 动作类别。宿主按它映射 Monaco 的 `CodeActionKind`：
+   * `quickfix` = **修一条诊断**（波浪线上 `Ctrl+.` 的那一栏），`refactor` = 改写写法
+   * （只在"重构"请求里出现，显式按 quickfix 过滤时会被 Monaco 剔除）。缺省按 `quickfix`。
+   */
   readonly kind?: 'quickfix' | 'refactor';
-  /** 关联诊断（quickfix 形态） */
+  /**
+   * 这条动作**消解的是哪几条诊断**（B9，additive：不给就是"没有可关联的诊断"）。
+   *
+   * 填法：原样给出波浪线那条 `LineDecoration`（同行、同 `code`、同 `message`）——
+   * 宿主翻成 Monaco 的 marker 形状挂进 `CodeAction.diagnostics`，Monaco 据此
+   * 把它认作"这条诊断的修复"（排序优先、应用后高亮被修区间、`hasAutoFix` 判据）。
+   *
+   * **没有对应修复就不要填**，也别填"差不多那条"：关联错了，作者按 `Ctrl+.`
+   * 拿到的是一个改不动眼前红线的动作（本仓口径：不猜、不静默）。
+   */
   readonly diagnostics?: LineDecoration[];
   /**
    * 就地改写（可选）。给出时宿主**优先**执行改写（可撤销），不再调用 `run`；
@@ -174,6 +188,20 @@ export interface EditorCodeActionContribution extends ContributionBase {
     text: string;
     project: GameProject | null;
     line?: number;
+    /**
+     * 当前**落在请求区间内的波浪线**（additive，B9 2026-10-15 快速修复批）：
+     * 宿主把**面上正画着的那些 marker**（来源是 `ui.editor.decorator` 各贡献的
+     * `LineDecoration`）按请求区间求交后原样递回来。
+     *
+     * 为什么要给：`Ctrl+.` 是**针对某一条诊断**的请求，"光标在哪一行"不足以定位——
+     * 一条跨列的诊断、一行里两条同族问题、或作者把光标停在波浪线旁边的空白列，
+     * 都只有一处权威答案，就是当下渲染出来的那条 marker。贡献方按 `code`（+行）
+     * 精确应答即可，别再自己扫一遍文本重算诊断（两处各算一份必然漂移）。
+     *
+     * 缺省 / 空数组 = 宿主没给（旧宿主、或该区间本来就没有波浪线）。此时**不该**
+     * 凭空造 quickfix：按既有位置判据降级即可，或干脆返回空。
+     */
+    diagnostics?: LineDecoration[];
     /**
      * 文件行数（additive，2026-10-12「内核优化」批）：宿主提供的中性事实，
      * 供贡献方**按文件体量自行决定是否降级**——超长文件上的全量分析会阻塞
