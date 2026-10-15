@@ -13,6 +13,7 @@
 
 import type {
   AliasDecl,
+  ConstDecl,
   FileIO,
   KojoFaceTable,
   KojoInstructionTable,
@@ -50,14 +51,31 @@ class Sink implements DiagnosticSink {
   }
 }
 
-/** 由 front-matter 的 `AliasDecl[]` 建别名表（只读性用契约守卫判定） */
-function buildAliasTable(aliases: readonly AliasDecl[]): AliasTable {
+/**
+ * 由 front-matter 的 `AliasDecl[]` 建别名表（只读性用契约守卫判定）。
+ *
+ * `consts`（7 号批）：**文件级常量**以"只读数字别名"并入同一张表——这样
+ * `CFLAG:11:<常量名>`、裸 `<常量名>` 都在既有的别名替换通路（`expression.ts` 的
+ * §5.0 第 1 步）里解析为数值字面量，与 `常量 → #DIM CONST` 的产物同源；
+ * **不另起一层字典**（既有 FT-1 分层字典建在 adapter/项目级 `.ERH` 上，
+ * 无法容纳"本 `.kojo` 尚未编译就声明的常量"）。
+ * 同名时别名优先（`map.has` 守卫）——冲突已在 AST 段报 `alias-name-conflict`。
+ */
+function buildAliasTable(aliases: readonly AliasDecl[], consts: readonly ConstDecl[] = []): AliasTable {
   const map = new Map<string, AliasEntry>();
   for (const decl of aliases) {
     if (map.has(decl.name)) continue; // 重复已在 AST 段报诊断
     map.set(decl.name, {
       value: decl.value,
       readonly: isReadonlyAlias(decl.value),
+      line: decl.loc.start.line,
+    });
+  }
+  for (const decl of consts) {
+    if (map.has(decl.name)) continue;
+    map.set(decl.name, {
+      value: { kind: 'number', text: decl.value },
+      readonly: true,
       line: decl.loc.start.line,
     });
   }
@@ -182,7 +200,8 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       return { erb: '', sourceMap: [], diagnostics: sink.all() };
     }
 
-    const aliases = buildAliasTable(doc.frontMatter.aliases);
+    const consts = doc.topLevel.filter((n): n is ConstDecl => n.kind === 'constDecl');
+    const aliases = buildAliasTable(doc.frontMatter.aliases, consts);
     // B4-fp：作者私有命名前缀（`函数前缀:`）优先于 adapter 模板；未声明 → 原表原样。
     const namedFaceTable = resolveFaceTableForPrefix(faceTable, doc.frontMatter.functionPrefix, sink);
     const { erb, sourceMap } = codegen(doc.topLevel as TopNode[], {

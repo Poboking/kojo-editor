@@ -288,6 +288,7 @@ export type {
   ChoiceBlock,
   ChoiceItem,
   ColorBlock,
+  ConstDecl,
   CustomCommandBlock,
   FunctionBlock,
   GroupBlock,

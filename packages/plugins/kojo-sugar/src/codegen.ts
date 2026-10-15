@@ -295,6 +295,15 @@ export function codegen(
     em.push(0, node.text, node.loc.start.line, verbatimRow(em, node));
   }
 
+  // ---- 文件级常量（7 号批）：`#DIM CONST <名> = <值>` 落在**函数定义之外** ----
+  // Emuera 里 `#DIM CONST` 出现在函数体（`@` 行之后的缩进内容）内是错的；故此处统一在
+  // 文件头、注释之后、登记函数之前发射——与既有 `@` 块产物顺序稳定共存（源顺序）。
+  // `#` 开头不匹配函数头正则，不触发撞名记账。
+  for (const node of topLevel) {
+    if (node.kind !== 'constDecl') continue;
+    em.push(0, `#DIM CONST ${node.name} = ${node.value}`, node.loc.start.line);
+  }
+
   // ---- 头部：登记函数 + 开关（规范 §5.5 三件套之登记/开关）----
   emitRegistration(em, fm, charNo, familySeg, opts.faceTable, opts.sink);
 

@@ -14,6 +14,7 @@
 
 import type {
   AliasDecl,
+  ConstDecl,
   CustomCommandBlock,
   FunctionBlock,
   GroupBlock,
@@ -117,6 +118,8 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
   const topLevel: TopNode[] = [];
   const cursor = new Cursor(lines, sink);
   const aliasNames = new Set<string>();
+  /** 已解析的常量名（重名 → `alias-duplicate`；与既有别名撞名 → `alias-name-conflict`） */
+  const constNames = new Set<string>();
   let sawTiming = false;
   // P-4 文档级随机产物模式：文件头 `随机形: 直出` ⇒ `direct`（缺省 `default`）。
   // 头部选项先于时机块出现（照抄 `口上:` 一侧的写法约定），故在此按源顺序生效。
@@ -183,6 +186,24 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
           });
         } else {
           registerAlias(decl);
+        }
+        topLevel.push(decl);
+      }
+      continue;
+    }
+
+    // ---- 常量声明（7 号批：文件级 → 产物 `#DIM CONST`，与别名同受"须在头"约束）----
+    if (cls.kind === 'constDecl') {
+      cursor.next();
+      const decl = buildConstDecl(cls, line, sink, aliasNames, constNames);
+      if (decl) {
+        if (sawTiming) {
+          sink.report({
+            code: 'alias-not-in-header',
+            severity: 'error',
+            message: '「常量」只能写在文件头（所有「时机」之前）。',
+            loc: posOf(line),
+          });
         }
         topLevel.push(decl);
       }
@@ -352,6 +373,74 @@ function buildAliasDecl(
   }
   seen.add(name);
   return { kind: 'aliasDecl', name, value: cls.value, loc: spanOf(line) };
+}
+
+/**
+ * 构建 `ConstDecl`（7 号批）——文件级常量。
+ *
+ * 校验（**全部复用既有诊断码**，闭集不扩）：
+ * - 名残缺 / 缺 `=`（`malformed`）→ `alias-unknown-target`；
+ * - 值不是十进制整数字面量 → `alias-unknown-target`（`#DIM CONST` 只接整数字面量，
+ *   写个变量名让引擎在声明期报错 = 产物看似能跑、加载即崩，必须在此拦下）；
+ * - 名是保留代词 `她` / `你`，或与**既有别名**同名 → `alias-name-conflict`
+ *   （两者会在表达式里争夺同一个标识符）；
+ * - 常量重名 → `alias-duplicate`。
+ */
+function buildConstDecl(
+  cls: LineClass & { kind: 'constDecl' },
+  line: LogicalLine,
+  sink: DiagnosticSink,
+  aliasNames: ReadonlySet<string>,
+  seen: Set<string>,
+): ConstDecl | null {
+  const name = cls.name;
+  if (name.length === 0 || cls.malformed) {
+    sink.report({
+      code: 'alias-unknown-target',
+      severity: 'error',
+      message: '「常量」声明要写成 `常量 <名> = <整数>`。',
+      loc: posOf(line),
+    });
+    return null;
+  }
+  if (!/^-?\d+$/.test(cls.value)) {
+    sink.report({
+      code: 'alias-unknown-target',
+      severity: 'error',
+      message: `常量「${name}」的值「${cls.value}」不是整数——#DIM CONST 只接受十进制整数字面量（如 常量 ${name} = 1022）。`,
+      loc: posOf(line),
+    });
+    return null;
+  }
+  if (name === '她' || name === '你') {
+    sink.report({
+      code: 'alias-name-conflict',
+      severity: 'error',
+      message: `「${name}」是保留代词，不能用作常量名。`,
+      loc: posOf(line),
+    });
+    return null;
+  }
+  if (aliasNames.has(name)) {
+    sink.report({
+      code: 'alias-name-conflict',
+      severity: 'error',
+      message: `常量「${name}」与既有别名同名——两者会在表达式里争夺同一个标识符，请改名。`,
+      loc: posOf(line),
+    });
+    return null;
+  }
+  if (seen.has(name)) {
+    sink.report({
+      code: 'alias-duplicate',
+      severity: 'error',
+      message: `常量「${name}」重复声明。`,
+      loc: posOf(line),
+    });
+    return null;
+  }
+  seen.add(name);
+  return { kind: 'constDecl', name, value: cls.value, loc: spanOf(line) };
 }
 
 /* ------------------------------ 原生函数块（§3.10） ------------------------------ */

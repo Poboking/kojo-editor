@@ -643,6 +643,35 @@ export interface AliasDecl extends SugarNodeBase {
   value: AliasValue;
 }
 
+/* ============================== 常量声明（7 号批） ============================== */
+
+/**
+ * `常量 <名> = <值>` 声明（7 号批）——**文件级**常量 → 产物 `#DIM CONST <名> = <值>`。
+ *
+ * 动机（真实语料）：eraTW 口上作者把"给数值编号起名"的共享常量集中在 `.ERH` 里
+ * （`#DIM CONST K11_雾雨迷境_被下药次数 = 1022`），正文里再用 `CFLAG:11:<常量名>`
+ * 或裸常量名当数值。糖此前**只读** `.ERH`（适配器分层字典），没有"在 `.kojo` 里
+ * 声明常量"的入口——本节点补上这一半。
+ *
+ * 形态（与 `别名` 同款"词后跟空白"）：`常量 <名> = <整数>`（英文别名 `const`）。
+ * **右值限十进制整数字面量**（`#DIM CONST` 的引擎口径；编号起名场景不需要别的）。
+ *
+ * 三条约束（与 `AliasDecl` 同口径）：
+ * ① 只能出现在文件头（所有 `时机` 之前）——违者 `alias-not-in-header`；
+ * ② 不得与保留代词 `她` / `你`、既有别名同名；不得重名——`alias-name-conflict` /
+ *    `alias-duplicate`；
+ * ③ 只在当前文件生效——同时以"只读数字别名"并入表达式别名表（`CFLAG:11:<名>`、
+ *    裸 `<名>` 均解析为数值），并由 codegen 在**函数定义之外**（文件顶部区块）
+ *    发射 `#DIM CONST`（Emuera 里该声明出现在函数体内是错的）。
+ */
+export interface ConstDecl extends SugarNodeBase {
+  kind: 'constDecl';
+  /** 常量名（作者自定义标识符） */
+  name: string;
+  /** 十进制整数字面量原文（如 `1022`） */
+  value: string;
+}
+
 /* ============================== SugarNode 联合 ============================== */
 
 /**
@@ -687,7 +716,7 @@ export type SugarNode = SugarStatement | SugarExprNode;
  * 文档级节点（只出现在文件顶层，不进块体）：
  * `别名` 声明 / 时机块 / 自定指令块。
  */
-export type SugarTopLevelNode = AliasDecl | TimingBlock | CustomCommandBlock | FunctionBlock | CommentLine;
+export type SugarTopLevelNode = AliasDecl | ConstDecl | TimingBlock | CustomCommandBlock | FunctionBlock | CommentLine;
 
 /* ============================== 文档与头声明 ============================== */
 

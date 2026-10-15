@@ -220,6 +220,8 @@ export type LineClass =
       /** 右值形态残缺（有顶层 `?` 但非完整条件）→ 由 parser 报 `alias-unknown-target` */
       malformed?: boolean;
     }
+  /** 文件级常量声明 `常量 <名> = <值>`（7 号批）——产物 `#DIM CONST`（函数外） */
+  | { kind: 'constDecl'; name: string; value: string; malformed?: boolean }
   | { kind: 'switchItem'; name: string; value: string }
   | { kind: 'timingHead'; face: string; index?: string; indexName?: string; namedParams: TimingNamedParam[] }
   | { kind: 'customCommandHead'; name: string; index?: number; canCom?: string; comCounter?: string }
@@ -426,6 +428,15 @@ export function classifyLine(line: LogicalLine): LineClass {
     return parseAliasDecl(aliasMatch[2]!);
   }
 
+  // ---- `常量 <名> = <值>`（7 号批：文件级常量 → 产物 `#DIM CONST`）----
+  // 与 `别名 X = 目标` 同款"一行一条、词后跟空白"形态（`常量名` 这类无空白的词形不识别）。
+  // **排在 `parseAssignment` 之前**：否则 `常量 X = 1022` 会被赋值扫描吞成左值 `常量 X`
+  // （同 `结算` 行排在赋值之前的理由）。
+  const constMatch = /^(常量|const)\s+(.+)$/.exec(code);
+  if (constMatch) {
+    return parseConstDecl(constMatch[2]!);
+  }
+
   // ---- 表达式 如果 / 当（赋值位置；规范 §3.5 / §3.6 识别规则）----
   // 行首是"目标变量 + `=`"、右侧以 `如果`/`当` 开头、行尾是块头冒号。
   // **不依赖 headMatch**——目标变量名可能含空白（如 `她的心情 = 当 …：`）。
@@ -528,6 +539,21 @@ function parseAliasDecl(value: string): LineClass {
   return malformed
     ? { kind: 'aliasDecl', name, value: parsed, malformed: true }
     : { kind: 'aliasDecl', name, value: parsed };
+}
+
+/**
+ * `常量 <名> = <值>` → 原始形态（7 号批）。
+ *
+ * 只做**词法**拆分（名 / 值原文）；右值是否整数字面量、名是否合法一律交 `parser`
+ * 校验并落诊断（与 `别名` 同一分工）。缺 `=` → 标 `malformed`，由 parser 报
+ * `alias-unknown-target`（**不新增诊断码**）。
+ */
+function parseConstDecl(value: string): LineClass {
+  const m = /^(\S+)\s*=\s*(.+)$/.exec(value.trim());
+  if (!m) {
+    return { kind: 'constDecl', name: value.trim(), value: '', malformed: true };
+  }
+  return { kind: 'constDecl', name: m[1]!, value: m[2]!.trim() };
 }
 
 /** 右值是否含顶层 `?`（引号 / 括号 / 花括号外）——用于识别"想写条件却没写完整"的残缺形态 */
