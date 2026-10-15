@@ -3311,6 +3311,21 @@ button.erb-mode-hint.unlocked:hover {
   flex: 0 0 auto;
   margin-top: 1px;
 }
+/* 注册表来源行（KM-9）：唯一可编辑的市场设置就是一个 URL */
+.settings-text {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-1);
+}
+.settings-text:disabled {
+  opacity: 0.55;
+}
 /* 页脚：单一一行、primary 靠右（全站模态房规） */
 .settings-footer {
   display: flex;
@@ -4884,6 +4899,11 @@ button.primary .hint {
 .mk-hint {
   color: var(--text-dim, #8b95a1);
   white-space: pre-wrap;
+}
+/* 数据时间行（KM-8）：常驻，不被 busy 遮掩——作者要看得见自己用的是哪一刻的列表 */
+.mk-time {
+  color: var(--text-dim, #8b95a1);
+  font-size: var(--fs-0, 11px);
 }
 .mk-status {
   color: var(--yellow, #e5c07b);

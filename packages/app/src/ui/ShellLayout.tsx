@@ -14,7 +14,8 @@ import {
   type ReactNode,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { EditorCommandContext, EditorWorkspaceSymbol, UIPanelContribution } from '@kojo/plugin-api';
+import type { EditorCommandContext, EditorWorkspaceSymbol, MarketService, UIPanelContribution } from '@kojo/plugin-api';
+import { MARKET_DEFAULT_INDEX_URL, MARKET_SERVICE_KEY } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import {
@@ -62,6 +63,12 @@ import {
 import { filterSealedPanels, setSealed, useSealed } from './sealed';
 import { setDirectMode, useDirectMode } from './direct-mode';
 import { setPanelVirtualize, usePanelVirtualize } from './panel-prefs';
+import {
+  applyEndpointEdit,
+  isOverridden,
+  NO_SERVICE_VIEW,
+  type MarketSourceView,
+} from './market-source';
 import {
   isUpdateBusy,
   reduceUpdatePhase,
@@ -337,6 +344,49 @@ export function ShellLayout(props: Props): ReactElement {
    * **不需要重开文件**（与 `useDirectMode` 同一条通路，只是订阅方是编辑器而不是壳层）。
    */
   const nameColorOn = useNameColorPref();
+
+  /**
+   * 注册表来源（KM-9 设置页那一行）。
+   *
+   * 真源在 `market` 服务里（= `kojo-market` 的 `ctx.storage` 域）：面板取数、拉取、这一行
+   * 读写的都是同一个 `endpoint()` ⇒ 壳不抄第二份（localStorage 那套偏好只管壳自己的渲染）。
+   * **这一组只有一个 URL 输入框**：代理不是产品前提，也不许从 JS 递进下载命令（SSRF），
+   * 所以既没有代理输入框也没有代理开关——见 `market-source.ts` 顶部说明。
+   */
+  const [marketSource, setMarketSource] = useState<MarketSourceView | null>(null);
+  const [marketEndpointDraft, setMarketEndpointDraft] = useState('');
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const svc = kernel.services.tryGet<MarketService>(MARKET_SERVICE_KEY);
+    if (svc === undefined) {
+      setMarketSource(NO_SERVICE_VIEW);
+      setMarketEndpointDraft('');
+      return;
+    }
+    let cancelled = false;
+    void svc
+      .endpoint()
+      .then((effective) => {
+        if (cancelled) return;
+        setMarketSource({ effective, overridden: isOverridden(effective), note: '' });
+        // 输入框预填**覆盖值**；用默认时留空（空 = "跟默认"，不是"存一个空地址"）
+        setMarketEndpointDraft(isOverridden(effective) ? effective : '');
+      })
+      .catch(() => {
+        if (!cancelled) setMarketSource({ effective: '', overridden: false, note: '注册表地址读不出来' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsOpen, kernel]);
+  const saveMarketEndpoint = useCallback(async (): Promise<void> => {
+    const svc = kernel.services.tryGet<MarketService>(MARKET_SERVICE_KEY);
+    if (svc === undefined) {
+      setMarketSource(NO_SERVICE_VIEW);
+      return;
+    }
+    setMarketSource(await applyEndpointEdit(svc, marketEndpointDraft));
+  }, [kernel, marketEndpointDraft]);
 
   /**
    * 检查更新（REL-1 收尾 · REL-2 设置页）：状态机在 `update-check.ts`（零 React，可单测），
@@ -1438,6 +1488,43 @@ export function ShellLayout(props: Props): ReactElement {
                   </label>
                 </div>
               ) : null}
+
+              {/* 口上市场：注册表来源（KM-9）。**只有一个 URL**——代理既不做输入框也不做开关
+                  （受众大多没有代理客户端；且 JS 递进来的代理等于把白名单作废，见 market-source.ts）。 */}
+              <div className="settings-group">
+                <div className="settings-group-title">口上市场</div>
+                <label className="settings-row static">
+                  <input
+                    className="settings-text"
+                    type="url"
+                    value={marketEndpointDraft}
+                    placeholder={MARKET_DEFAULT_INDEX_URL}
+                    spellCheck={false}
+                    disabled={marketSource === null || marketSource === NO_SERVICE_VIEW}
+                    onChange={(e) => setMarketEndpointDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void saveMarketEndpoint();
+                    }}
+                  />
+                  <span>
+                    包列表来源
+                    <span className="settings-hint">
+                      {marketSource === null
+                        ? '读取中…'
+                        : `${marketSource.overridden ? '当前用自建地址' : '当前用默认地址'}`}
+                    </span>
+                  </span>
+                  <button className="ghost small" disabled={marketSource === null || marketSource === NO_SERVICE_VIEW} onClick={() => void saveMarketEndpoint()}>
+                    保存
+                  </button>
+                </label>
+                <label className="settings-row static">
+                  <span className="settings-hint">
+                    留空 = 用默认地址。网络走系统代理设置，这里没有开关
+                    {marketSource !== null && marketSource.note !== '' ? ` · ${marketSource.note}` : ''}
+                  </span>
+                </label>
+              </div>
 
               <div className="settings-group">
                 <div className="settings-group-title">布局</div>
