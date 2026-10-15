@@ -7,6 +7,7 @@ import type {
   EditorSaveHandlerContribution,
   EditorSaveWarning,
   EditorTextEdit,
+  ErbParserService,
   LineDecoration,
 } from '@kojo/plugin-api';
 import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
@@ -18,6 +19,7 @@ import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
 import { installHover } from '../monaco/kojo-hover';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
+import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { editorOptionsForLineCount } from './editor-options';
@@ -63,16 +65,19 @@ function languageFor(filePath: string): string {
 }
 
 /**
- * 编辑器只读消费的**四张适配器表**（悬停 ZH-F2 + 补全 seam 共用）——按当前项目 `adapterId`
- * 精确匹配 `game.adapter` 槽位贡献，**运行时**现取（适配器随项目开闭重建，缓存会把上一个
- * 项目的表带过来）。
+ * 编辑器只读消费的适配器表（悬停 ZH-F2 + `.kojo` / `.erb` 两个补全 seam 共用）——按当前项目
+ * `adapterId` 精确匹配 `game.adapter` 槽位贡献，**运行时**现取（适配器随项目开闭重建，
+ * 缓存会把上一个项目的表带过来）。**单一数据源**：kojo 与 erb 两个 seam 共用它，不各建一份。
  *
- * 四张表全在适配器贡献上（游戏知识只住 adapter；宿主只读不解释）：
- * 变量字典（`variableSchema` → `makeLookup`，与 kojo-sugar 转译器同一个构造器）、
- * 时机分野模板表（`kojoFaceTemplates`，补全 seam 的 KC-2 前置）、基础库函数名表、
- * 指令名表。缺一即该路不产候选 / 不反查（**不猜**）。
+ * 表全在适配器贡献上（游戏知识只住 adapter；宿主只读不解释）：变量字典
+ * （`variableSchema` → `makeLookup`，与 kojo-sugar 转译器同一个构造器）、时机分野模板表
+ * （`kojoFaceTemplates`，`.kojo` 补全 seam 的 KC-2 前置）、基础库函数名表、指令名表。
+ * 缺一即该路不产候选 / 不反查（**不猜**）。
+ *
+ * 另附 `erbFunctionNames`（**非** adapter 表）——项目内全部函数名（EC-3 函数名补全预置），
+ * 由 `erb-parser` 的 `ErbIndex` 派生并按整项目指纹记忆化（见 `erb-function-names-for`）。
  */
-function editorTables(kernel: Kernel): CompletionTables {
+function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables {
   const project = kernel.project.current();
   if (!project) return {};
   for (const contribution of kernel.slots.query('game.adapter')) {
@@ -85,9 +90,35 @@ function editorTables(kernel: Kernel): CompletionTables {
       ...(adapter.kojoFaceTemplates ? { faceTable: adapter.kojoFaceTemplates } : {}),
       ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
       ...(adapter.kojoInstructionTable ? { instructionTable: adapter.kojoInstructionTable } : {}),
+      erbFunctionNames: erbFunctionNamesFor(kernel),
     };
   }
   return {};
+}
+
+/**
+ * 每 kernel 一份的「函数名（已排序）」提供者缓存（`WeakMap`：同一 kernel 跨多次补全请求复用
+ * 同一份记忆化闭包，指纹不变即不重排；kernel 随 App 生命周期，弱引用不碍回收）。
+ */
+const erbFnMemoByKernel = new WeakMap<Kernel, () => readonly string[]>();
+
+/**
+ * 取 `kernel` 对应的记忆化函数名提供者。`erb.parser` **软取**（`services.tryGet` + try/catch）：
+ * 解析器缺席 / 索引在途只让此路**无候选**（退化可见），绝不抛到补全 seam。
+ */
+function erbFunctionNamesFor(kernel: Kernel): () => readonly string[] {
+  let fn = erbFnMemoByKernel.get(kernel);
+  if (!fn) {
+    fn = memoizedErbFunctionNames(() => {
+      try {
+        return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+      } catch {
+        return null;
+      }
+    });
+    erbFnMemoByKernel.set(kernel, fn);
+  }
+  return fn;
 }
 
 /**
@@ -938,7 +969,10 @@ export function EditorPane({
     const hoverDisposer = installHover(monaco, () => editorTables(kernel));
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
     const completionDisposer = installKojoCompletion(monaco, () => editorTables(kernel));
+    // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
+    const erbCompletionDisposer = installErbCompletion(monaco, () => editorTables(kernel));
     return () => {
+      erbCompletionDisposer.dispose();
       completionDisposer.dispose();
       hoverDisposer.dispose();
       cmdDisposer.dispose();

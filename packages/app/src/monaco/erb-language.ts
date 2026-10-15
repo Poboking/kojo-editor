@@ -11,7 +11,7 @@ import { KOJO_SUGAR_THEME_RULES } from './kojo-language';
  * - FORM 串内 `{表达式}` / `%字符串%` 作为字符串内的第二层（Monarch 嵌套限制，v0.1 简化）。
  */
 
-const DIRECTIVES = [
+export const ERB_DIRECTIVES = [
   'PRINT', 'PRINTL', 'PRINTW', 'PRINTV', 'PRINTVL',
   'PRINTFORM', 'PRINTFORML', 'PRINTFORMS', 'PRINTFORMW', 'PRINTFORMV',
   'PRINTDATA', 'PRINTDATAL', 'PRINTDATAW', 'PRINTDATAS',
@@ -60,7 +60,7 @@ export function registerErbLanguage(monaco: typeof Monaco): void {
   monaco.languages.setMonarchTokensProvider(ERB_LANGUAGE_ID, {
     ignoreCase: false,
     defaultToken: '',
-    directives: DIRECTIVES,
+    directives: ERB_DIRECTIVES,
     tokenizer: {
       root: [
         // 行首注释（Emuera 语义：行首 ; 整行注释）
