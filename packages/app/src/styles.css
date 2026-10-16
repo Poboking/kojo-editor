@@ -22,7 +22,7 @@
      向导里的 `code` 4.04:1，正文级需 4.5:1）。文字档给亮一点的 `--accent-text`
      （5.54:1）；描边仍用 `--accent`（非文字元素按 3:1，实测 4.15:1 已过）。 */
   --accent-text: #6ea8ff;
-  --accent-dim: rgba(76, 139, 245, 0.22);
+  --accent-dim: rgb(var(--accent-rgb) / 0.22);
   --green: #4fc08d;
   --red: #e06c75;
   --amber: #d19a66;
@@ -117,7 +117,24 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   /* 交互色 token（散落于各面板的 fallback 值收编为唯一来源） */
   --hover: rgba(255, 255, 255, 0.06);
-  --active: rgba(76, 139, 245, 0.16);
+  --active: rgb(var(--accent-rgb) / 0.16);
+  /* —— 主题可翻的交互色族（主题系统 2026-10-17 · Phase 0 地基）——
+     把原先散在组件里的白/黑/字面 hex 收成语义 token，浅色/薄荷主题只需在此**同名重定义**，
+     不必逐条 `[data-theme]` 覆盖几十个选择器。默认值 = 既有深色现值，逐字节不变（断言① 稳）。 */
+  /* accent 的 RGB 三元组（= `--accent` #4c8bf5）：所有 accent alpha wash 由它派生，主题翻一处全跟 */
+  --accent-rgb: 76 139 245;
+  --hover-soft: rgba(255, 255, 255, 0.04); /* 最淡底：树组行 / 标签 / kbd chip */
+  --hover-strong: rgba(255, 255, 255, 0.1); /* 关闭钮一类的强底 */
+  --sel-bg: rgb(var(--accent-rgb) / 0.35); /* 文本选区（accent 族） */
+  --scroll-thumb: rgba(255, 255, 255, 0.12);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.24);
+  --scroll-thumb-active: rgba(255, 255, 255, 0.34);
+  --on-accent: #fff; /* accent 填充上的文字/滑块色（各主题多为白） */
+  /* 按钮/主按钮三态底色（上批的实机值原样搬进 token，值不变、只是可被主题翻） */
+  --btn-bg-hover: #333a42;
+  --btn-bg-active: #262c33;
+  --accent-strong-hover: #3272d4; /* 白字 4.67:1，达 AA */
+  --accent-strong-active: #2a66c0; /* 白字 5.58:1 */
   --danger: var(--red);
   --warning: var(--amber);
   --success: var(--green);
@@ -162,12 +179,12 @@ button {
 /* 悬停 = 底色亮一档 + 描边转强档（不再只闪一条 accent 边）。特异性与旧 `button:hover` 持平
    （0,1,1），组件级 `.xxx:hover`（0,2,0+）照常压过它——不扰乱既有层叠。 */
 button:hover {
-  background: #333a42;
+  background: var(--btn-bg-hover);
   border-color: var(--border-strong);
 }
 /* 按下 = 底色回落 + 0.5px 下沉，给"按进去"的实感（替掉旧的 filter brightness，可控且不糊字） */
 button:active:not(:disabled) {
-  background: #262c33;
+  background: var(--btn-bg-active);
   transform: translateY(0.5px);
 }
 button:disabled {
@@ -178,15 +195,15 @@ button:disabled {
 button.primary {
   background: var(--accent-strong);
   border-color: transparent;
-  color: #fff;
+  color: var(--on-accent);
 }
 /* primary 三态走实测过对比度的显式底色（白字：base 4.87 / hover 4.67 / active 5.58，均达 AA），
    不再用 filter brightness 提亮——那会把白字对比度悄悄拉到线下。 */
 button.primary:hover {
-  background: #3272d4;
+  background: var(--accent-strong-hover);
 }
 button.primary:active:not(:disabled) {
-  background: #2a66c0;
+  background: var(--accent-strong-active);
 }
 button.ghost {
   background: transparent;
@@ -214,7 +231,7 @@ button.link {
 }
 code {
   font-family: var(--font-mono);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
   padding: 1px 5px;
   border-radius: var(--radius-sm);
   font-size: var(--fs-1);
@@ -227,7 +244,7 @@ code {
 
 /* 文本选区 / 输入光标：与 accent 同族 */
 ::selection {
-  background: rgba(76, 139, 245, 0.35);
+  background: var(--sel-bg);
 }
 input,
 textarea,
@@ -271,17 +288,17 @@ textarea {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--scroll-thumb);
   border-radius: var(--radius-sm);
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.24);
+  background: var(--scroll-thumb-hover);
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:active {
-  background: rgba(255, 255, 255, 0.34);
+  background: var(--scroll-thumb-active);
   background-clip: content-box;
 }
 ::-webkit-scrollbar-corner {
@@ -305,7 +322,7 @@ textarea {
   place-items: center;
   position: relative;
   overflow: hidden;
-  background: radial-gradient(ellipse at 50% 30%, rgba(76, 139, 245, 0.05), transparent 62%);
+  background: radial-gradient(ellipse at 50% 30%, rgb(var(--accent-rgb) / 0.05), transparent 62%);
 }
 /* 极光背景层（VSCode 精修批）：两团 accent/紫径向光斑，靠 **transform** 缓慢漂移（GPU 友好、
    不触发重排/重绘，比动 background-position 省得多），幅度小到"台面上有呼吸、看不出在动"。
@@ -317,7 +334,7 @@ textarea {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(36% 40% at 30% 32%, rgba(76, 139, 245, 0.18), transparent 62%),
+    radial-gradient(36% 40% at 30% 32%, rgb(var(--accent-rgb) / 0.18), transparent 62%),
     radial-gradient(32% 38% at 72% 68%, rgba(124, 92, 255, 0.15), transparent 64%);
   filter: blur(28px);
   animation: welcome-aurora 26s var(--ease-in-out) infinite;
@@ -372,8 +389,8 @@ textarea {
   color: var(--fg-dim);
 }
 .notice {
-  background: rgba(76, 139, 245, 0.1);
-  border: 1px solid rgba(76, 139, 245, 0.4);
+  background: rgb(var(--accent-rgb) / 0.1);
+  border: 1px solid rgb(var(--accent-rgb) / 0.4);
   border-radius: var(--radius-lg);
   padding: 10px 14px;
 }
@@ -568,7 +585,7 @@ textarea {
 .toolbar-btn.on {
   /* 图标也是"文字"：`--accent` 压在深底上实测 3.74:1（布局切换键这类图标钮） */
   color: var(--accent-text);
-  background: rgba(76, 139, 245, 0.12);
+  background: rgb(var(--accent-rgb) / 0.12);
 }
 
 /* 活动栏 */
@@ -605,7 +622,7 @@ textarea {
 }
 .ab-item.active {
   color: var(--fg);
-  background: rgba(76, 139, 245, 0.14);
+  background: rgb(var(--accent-rgb) / 0.14);
 }
 /* 选中指示条常驻渲染、scaleY 驱动——切换视图时生长/收回而非硬闪现 */
 .ab-item::before {
@@ -876,7 +893,7 @@ textarea {
   border: 1px solid var(--border);
   border-bottom-width: 2px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-soft);
   color: var(--fg-dim);
 }
 
@@ -938,7 +955,7 @@ textarea {
     opacity var(--dur-1) var(--ease-out);
 }
 .editor-tabs-bar .tab-save-all:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
   color: var(--fg);
 }
 .editor-tabs-bar .tab-save-all.idle {
@@ -966,7 +983,7 @@ textarea {
     box-shadow var(--dur-2) var(--ease-out);
 }
 .editor-tab:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-soft);
   color: var(--fg);
 }
 .editor-tab.active {
@@ -1032,7 +1049,7 @@ textarea {
   opacity: 1;
 }
 .editor-tab .tab-close:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--hover-strong);
   color: var(--fg);
 }
 /* 拖拽重排的落点指示（左/右缘竖条；与活动标签的顶部指示可叠加） */
@@ -1094,7 +1111,7 @@ textarea {
   text-align: left;
 }
 .tree-group-btn:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-soft);
 }
 .caret {
   flex: 0 0 auto;
@@ -1425,7 +1442,7 @@ textarea {
   text-align: left;
 }
 .conv-group-btn:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-soft);
 }
 .conv-rule-id {
   flex: 1;
@@ -1462,7 +1479,7 @@ textarea {
   font-size: var(--fs-1);
 }
 .conv-issue-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
 }
 .conv-dot {
   width: 7px;
@@ -1619,7 +1636,7 @@ textarea {
   border-radius: var(--radius-sm);
 }
 .search-match:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
 }
 .search-loc {
   flex: none;
@@ -1797,11 +1814,11 @@ textarea {
 }
 .sugar-toggle.on {
   color: var(--accent-text);
-  background: rgba(76, 139, 245, 0.12);
+  background: rgb(var(--accent-rgb) / 0.12);
   border-color: var(--accent);
 }
 .sugar-toggle.on:hover:not(:disabled) {
-  background: rgba(76, 139, 245, 0.18);
+  background: rgb(var(--accent-rgb) / 0.18);
 }
 /* ERB 已解锁编辑：写保护此刻对这一份文件失效 → 警示色（口径见上方基类注释） */
 .erb-mode-hint.unlocked {
@@ -3355,7 +3372,7 @@ button.erb-mode-hint.unlocked:hover {
   border-radius: var(--radius-sm);
 }
 .sb-problems:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
   color: var(--fg);
 }
 /* 禅模式：状态栏退为背景，悬停才回到前台 */
@@ -3480,7 +3497,7 @@ button.erb-mode-hint.unlocked:hover {
   border: 1px solid var(--border);
   border-bottom-width: 2px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-soft);
 }
 /* 溢出提示（D2 工作区符号）：列表**下方**常驻一行，不参与键盘导航。
    刻意不做成一条 disabled 候选——那样 ↑↓ 能停在它上面而 Enter 按下去没反应，
@@ -3794,6 +3811,36 @@ button.erb-mode-hint.unlocked:hover {
   font-variant-numeric: tabular-nums;
   font-size: var(--fs-1);
   color: var(--fg);
+}
+/* 主题分段单选（主题系统 2026-10-17）：三档并排成一颗胶囊控件，选中档走 accent 淡底 + 内描边。
+   覆盖 base `button` 的实心/描边/高光（用 `.theme-seg-btn` 0,2,0 压过 `button` 0,0,1）。 */
+.theme-segment {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.theme-seg-btn {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  padding: 3px 10px;
+  min-height: 24px;
+  border-radius: var(--radius-sm);
+}
+.theme-seg-btn:hover {
+  color: var(--fg);
+  background: var(--hover-soft);
+}
+.theme-seg-btn.on,
+.theme-seg-btn.on:hover {
+  color: var(--fg);
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 /* 注册表来源行（KM-9）：唯一可编辑的市场设置就是一个 URL */
 .settings-text {
@@ -4388,12 +4435,12 @@ button.primary .hint {
 /* toast 动作按钮：accent 淡底（与关闭叉拉开层级） */
 .toast-action {
   flex: none;
-  border-color: rgba(76, 139, 245, 0.4);
-  background: rgba(76, 139, 245, 0.12);
+  border-color: rgb(var(--accent-rgb) / 0.4);
+  background: rgb(var(--accent-rgb) / 0.12);
 }
 .toast-action:hover {
   border-color: transparent;
-  background: rgba(76, 139, 245, 0.22);
+  background: rgb(var(--accent-rgb) / 0.22);
 }
 .toast-close {
   flex: none;
@@ -4972,7 +5019,7 @@ button.primary .hint {
 }
 .cm-cell.off {
   background: transparent;
-  border-color: rgba(255, 255, 255, 0.04);
+  border-color: var(--hover-soft);
   opacity: 0.22;
 }
 .cm-cell:hover {
@@ -6620,7 +6667,7 @@ button.resume-session {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--on-accent);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
   transition: transform var(--dur-2) var(--ease-spring);
 }
@@ -6665,7 +6712,7 @@ button.resume-session {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  background: linear-gradient(90deg, transparent, var(--hover), transparent);
   transform: translateX(-100%);
   animation: u-shimmer 1.4s var(--ease-in-out) infinite;
 }

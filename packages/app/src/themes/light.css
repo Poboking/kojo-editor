@@ -1,0 +1,85 @@
+/* ============================================================================
+   浅色主题（VSCode Light+ 气质，保留 kojo 蓝灰身份）
+   ----------------------------------------------------------------------------
+   机制：`:root[data-theme='light']` 只**重定义 token 值**，不碰组件规则——styles.css 的
+   一切经 `var(--…)` 取色，翻 token 即全场换装（同 `--glass-alpha`/`data-glass` 的生效哲学）。
+   本文件由 main.tsx 在 styles.css 之后引入，特异性 `:root[data-theme=…]` 稳压基础 `:root`。
+
+   ⚠ 当前是 Phase 0 地基的**功能种子**（证明翻转 live + 默认可读）。完整浅色调色、逐色 WCAG
+   对比度自证（正文 ≥4.5、UI ≥3）、以及残留白值（`.u-sheen`/`.u-ripple` 高亮、个别 0.32 边框）
+   的 `[data-theme='light']` 局部覆盖，由「浅色主题子 agent」补全。
+   需覆盖的 token 全集（缺一则那处仍是深色值）：
+     表面：--bg --bg-2 --bg-3 --surface-sunken --surface --surface-raised --surface-overlay
+     描边：--border --border-subtle --border-strong
+     文字：--fg --fg-dim --on-accent
+     accent：--accent --accent-rgb --accent-strong --accent-strong-hover --accent-strong-active
+             --accent-text --accent-dim --active --focus-ring --focus-glow
+     语义：--green --red --amber
+     交互底：--hover --hover-soft --hover-strong --sel-bg --btn-bg-hover --btn-bg-active
+     滚动条：--scroll-thumb --scroll-thumb-hover --scroll-thumb-active
+     阴影/高光：--shadow-1 --shadow-2 --shadow-3 --edge-raise --shadow-focus
+     玻璃：--glass-tint --glass-tint-raise --glass-edge --glass-alpha --glass-saturate --glass-blur
+   ============================================================================ */
+
+:root[data-theme='light'] {
+  /* 表面：蓝灰身份的浅色梯度（编辑器最浅 → 侧栏/浮层逐级加深，方向与深色相反） */
+  --bg: #f6f8fa;
+  --bg-2: #eaeef2;
+  --bg-3: #dde3ea;
+  --surface-sunken: #e7ebf0;
+  --surface: var(--bg);
+  --surface-raised: var(--bg-2);
+  --surface-overlay: var(--bg-3);
+
+  /* 描边：浅色下靠"更深的灰线"分层，不是更亮的线 */
+  --border: #d0d7de;
+  --border-subtle: #e1e6eb;
+  --border-strong: #b6bec7;
+
+  /* 文字：深墨字压浅底 */
+  --fg: #1f2328;
+  --fg-dim: #59636e;
+
+  /* accent：深色档在浅底上对比不足，浅色主题走更饱和的蓝（白字按钮仍成立） */
+  --accent: #0a5cc2;
+  --accent-rgb: 10 92 194;
+  --accent-strong: #0a5cc2;
+  --accent-text: #0550ae;
+
+  /* 交互底：浅色下的"提亮"其实是压暗（黑墨淡底），深色靠白墨——语义反转全在这几个 token */
+  --hover: rgba(9, 30, 66, 0.08);
+  --hover-soft: rgba(9, 30, 66, 0.05);
+  --hover-strong: rgba(9, 30, 66, 0.14);
+  --active: rgba(10, 92, 194, 0.16);
+  --sel-bg: rgba(10, 92, 194, 0.25);
+
+  /* 按钮/主按钮：浅底按钮悬停压深一档 */
+  --btn-bg-hover: #d3d9e0;
+  --btn-bg-active: #c7ced6;
+
+  /* 滚动条 thumb 走深墨 */
+  --scroll-thumb: rgba(9, 30, 66, 0.18);
+  --scroll-thumb-hover: rgba(9, 30, 66, 0.3);
+  --scroll-thumb-active: rgba(9, 30, 66, 0.42);
+
+  /* 阴影：浅色主题的投影要更淡、更贴地（纯黑 0.45 在白底过重） */
+  --shadow-1:
+    0 1px 2px rgba(31, 35, 40, 0.12),
+    0 6px 16px rgba(31, 35, 40, 0.12);
+  --shadow-2:
+    0 2px 5px rgba(31, 35, 40, 0.12),
+    0 12px 30px rgba(31, 35, 40, 0.16);
+  --shadow-3:
+    0 2px 6px rgba(31, 35, 40, 0.14),
+    0 16px 44px rgba(31, 35, 40, 0.2),
+    0 0 0 1px rgba(31, 35, 40, 0.08);
+  --edge-raise: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+
+  /* 玻璃 tint 走浅底三元组（默认档仍保留适度通透） */
+  --glass-tint: 234 238 242;
+  --glass-tint-raise: 221 227 234;
+  --glass-edge: rgba(255, 255, 255, 0.55);
+
+  --focus-ring: #0969da;
+  --focus-glow: rgba(9, 105, 218, 0.3);
+}

@@ -83,6 +83,9 @@ import {
   stepGlassTransparencyPref,
   useGlassTransparencyPref,
 } from './glass-pref';
+// 主题（2026-10-17 主题系统）：真源在 theme-pref 的 localStorage，挂载/翻开关时写 <html data-theme>，
+// 由 themes/*.css 的 :root[data-theme=…] 读；与 glass/motion 同款分层（生效路径单源、可单测）
+import { applyThemePref, setThemePref, THEME_IDS, useThemePref, type ThemePref } from './theme-pref';
 import { filterSealedPanels, setSealed, useSealed } from './sealed';
 import { setDirectMode, useDirectMode } from './direct-mode';
 import { setPanelVirtualize, usePanelVirtualize } from './panel-prefs';
@@ -124,6 +127,13 @@ import { ProblemsStatusItem } from './ProblemPanel';
 import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
 import { Switch } from './Switch';
+
+/** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
+const THEME_LABELS: Record<ThemePref, string> = {
+  dark: '深色',
+  light: '浅色',
+  'mint-dark': '薄荷',
+};
 
 /**
  * 壳层五区布局（2026-10-11 UI 重设计批 P1；定稿 §二）。
@@ -346,6 +356,18 @@ export function ShellLayout(props: Props): ReactElement {
   useEffect(() => {
     applyGlassPref(glassTransparency);
   }, [glassTransparency]);
+
+  /**
+   * 主题（2026-10-17 主题系统；设置页「外观」里的那一项）。
+   *
+   * 与「减弱动效 / 毛玻璃」同款分层：真源是 `theme-pref.ts` 的 localStorage，生效是把值写到
+   * 根元素 `data-theme`，由 `themes/*.css` 读取。index.html 早期内联脚本已在首屏前设过一次
+   * （免闪深色）；这里挂载时按存下的偏好再断言一次并订阅——设置页一翻，全场 token 立即重算。
+   */
+  const themePref = useThemePref();
+  useEffect(() => {
+    applyThemePref(themePref);
+  }, [themePref]);
 
   /**
    * 保存时整理空白开关（E2；设置页里的那一项，默认关）。
@@ -1452,6 +1474,28 @@ export function ShellLayout(props: Props): ReactElement {
               {/* 动效（UI-5）：应用内的降噪开关，独立于系统级 prefers-reduced-motion */}
               <div className="settings-group">
                 <div className="settings-group-title">外观</div>
+                {/* 主题（2026-10-17 主题系统）：分段单选，缺省深色。翻档即写 data-theme、
+                    全场 token 当场重算（与动效/毛玻璃同款即时生效），只改显示、不动文件。 */}
+                <div className="settings-row static">
+                  <span className="theme-segment" role="radiogroup" aria-label="主题">
+                    {THEME_IDS.map((id) => (
+                      <button
+                        key={id}
+                        type="button"
+                        role="radio"
+                        aria-checked={themePref === id}
+                        className={`theme-seg-btn${themePref === id ? ' on' : ''}`}
+                        onClick={() => setThemePref(id)}
+                      >
+                        {THEME_LABELS[id]}
+                      </button>
+                    ))}
+                  </span>
+                  <span>
+                    主题
+                    <span className="settings-hint">深色为缺省（蓝灰），另有浅色、薄荷暗色；一翻即全场生效，只改显示、不动文件</span>
+                  </span>
+                </div>
                 <label className="settings-row">
                   <Switch
                     checked={motionPref === 'reduced'}

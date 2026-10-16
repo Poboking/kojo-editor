@@ -3,6 +3,10 @@ import { App } from './ui/App';
 import { NotificationCenter } from './ui/NotificationCenter';
 import { ingestInlineBootMarks } from './perf';
 import './styles.css';
+// 主题覆盖（2026-10-17 主题系统）：必须在 styles.css 之后引入，`:root[data-theme=…]` 特异性
+// 才能压过基础 `:root`。缺省 dark 无对应文件块（基础 :root 即深色），light/mint 各自翻 token。
+import './themes/light.css';
+import './themes/mint-dark.css';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('#root not found');

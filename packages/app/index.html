@@ -4,10 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>kojo-editor · 口上编辑器</title>
+    <!-- 主题早应用（主题系统 2026-10-17）：React 挂载前就把保存过的主题落到 <html data-theme>，
+         免得浅色/薄荷用户先闪一下深色。真源与归一口径同 `ui/theme-pref.ts`（读不到/非法 ⇒ dark）。
+         dark 是缺省档，此时下面的引导底色 #1e2227 仍与 styles.css 的 --bg 相等——smoke-tauri-dom 断言①
+         钉的那条不变量不被破坏。 */
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('kojo.ui.theme.v1');
+          document.documentElement.setAttribute(
+            'data-theme',
+            t === 'light' || t === 'mint-dark' ? t : 'dark',
+          );
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
     <!-- L1-A 内联引导层（2026-10-16 首屏批）：React 挂载前窗口里先画这一层，替代 WebView 默认白。
          底色 #1e2227 必须与 styles.css 的 --bg 现值一致——由 tools/smoke-tauri-dom.mjs 断言①
          钉住「内联底色 == 挂载后计算底色」，两处漂移即红。深色、零外链资源（dev 下 styles.css
-         由 JS 注入，这里等不了它）。React 首次提交后由 App.tsx 移除 #boot-splash。 -->
+         由 JS 注入，这里等不了它）。React 首次提交后由 App.tsx 移除 #boot-splash。
+         ⚠ 浅色/薄荷引导底色见下方 [data-theme] 覆盖——必须与各 themes/*.css 的 --bg / --fg 现值
+         一致；主题子 agent 若改某档 --bg/--fg，请同步改这里对应那两行。 */
     <style>
       html,
       body {
@@ -71,6 +90,41 @@
           width: 100%;
           opacity: 0.35;
         }
+      }
+      /* 引导层跟随主题（底色/文字须与对应 themes/*.css 的 --bg/--fg 现值一致，见上方注释） */
+      html[data-theme='light'],
+      html[data-theme='light'] body {
+        background: #f6f8fa;
+      }
+      html[data-theme='light'] #boot-splash {
+        background: #f6f8fa;
+        color: #1f2328;
+      }
+      html[data-theme='light'] .boot-splash-tip {
+        color: #59636e;
+      }
+      html[data-theme='light'] .boot-splash-bar {
+        background: #dde3ea;
+      }
+      html[data-theme='light'] .boot-splash-bar::after {
+        background: #0a5cc2;
+      }
+      html[data-theme='mint-dark'],
+      html[data-theme='mint-dark'] body {
+        background: #0f1713;
+      }
+      html[data-theme='mint-dark'] #boot-splash {
+        background: #0f1713;
+        color: #d7e8de;
+      }
+      html[data-theme='mint-dark'] .boot-splash-tip {
+        color: #85a593;
+      }
+      html[data-theme='mint-dark'] .boot-splash-bar {
+        background: #1a2a22;
+      }
+      html[data-theme='mint-dark'] .boot-splash-bar::after {
+        background: #35d0a0;
       }
     </style>
   </head>

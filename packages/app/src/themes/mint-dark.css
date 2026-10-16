@@ -1,0 +1,60 @@
+/* ============================================================================
+   薄荷暗色主题（参考 Qoder 薄荷暗色：深墨绿底 + 薄荷/青绿高光）
+   ----------------------------------------------------------------------------
+   机制同 `light.css`：`:root[data-theme='mint-dark']` 只重定义 token 值，全场换装。
+   ⚠ 当前是 Phase 0 地基的**功能种子**（证明翻转 live）。完整薄荷调色、逐色 WCAG 对比度自证
+   （正文 ≥4.5、UI ≥3，尤其薄荷白字压 accent 那一档）、残留白值与 amber/red/green 语义 wash 的
+   局部覆盖，由「薄荷暗色子 agent」补全。
+   需覆盖的 token 全集见 light.css 顶部注释（同一张清单）。
+   ============================================================================ */
+
+:root[data-theme='mint-dark'] {
+  /* 表面：深墨绿梯度（比纯蓝灰更暖一档，眼睛在长文写作里更松） */
+  --bg: #0f1713;
+  --bg-2: #14211b;
+  --bg-3: #1a2a22;
+  --surface-sunken: #0b120e;
+  --surface: var(--bg);
+  --surface-raised: var(--bg-2);
+  --surface-overlay: var(--bg-3);
+
+  /* 描边：绿灰 */
+  --border: #2a3d34;
+  --border-subtle: #213029;
+  --border-strong: #3a5548;
+
+  /* 文字：微带绿的白 */
+  --fg: #d7e8de;
+  --fg-dim: #85a593;
+
+  /* accent：薄荷 / 青绿 */
+  --accent: #35d0a0;
+  --accent-rgb: 53 208 160;
+  --accent-strong: #12a37a;
+  --accent-text: #57e0b4;
+  --accent-dim: rgb(53 208 160 / 0.22);
+
+  /* 交互底：薄荷淡底 */
+  --hover: rgba(53, 208, 160, 0.08);
+  --hover-soft: rgba(53, 208, 160, 0.05);
+  --hover-strong: rgba(53, 208, 160, 0.14);
+  --active: rgba(53, 208, 160, 0.18);
+  --sel-bg: rgba(53, 208, 160, 0.32);
+
+  --btn-bg-hover: #234a3b;
+  --btn-bg-active: #1a3a2e;
+  --accent-strong-hover: #17b688;
+  --accent-strong-active: #0f8a66;
+
+  --scroll-thumb: rgba(53, 208, 160, 0.16);
+  --scroll-thumb-hover: rgba(53, 208, 160, 0.3);
+  --scroll-thumb-active: rgba(53, 208, 160, 0.42);
+
+  /* 玻璃 tint = 本主题 bg-2/bg-3 三元组 */
+  --glass-tint: 20 33 27;
+  --glass-tint-raise: 26 42 34;
+  --glass-edge: rgba(180, 255, 220, 0.1);
+
+  --focus-ring: #35d0a0;
+  --focus-glow: rgba(53, 208, 160, 0.32);
+}
