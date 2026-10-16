@@ -25,6 +25,11 @@ export const IMPORT_KOJO_OVERLAY_ID = 'eratw.importKojoProject';
 export interface PendingImport {
   sourceDir: string;
   suggestedName?: string;
+  /**
+   * 导入来源标记（KM-13；冻结约定：市场行发字面量 `'market'`，其余缺省）。
+   * 只影响署名读取：市场来源的包正文通常没有 README，署名在上一级 `pack.json` 里。
+   */
+  source?: string;
 }
 
 export interface ImportKojoWizardDeps {
@@ -45,8 +50,9 @@ export interface ImportKojoWizardDeps {
   /**
    * 读取源包的署名 / 授权（T2）。导入时**原样带进制品 meta**——
    * 二次创作最容易丢的就是原作者，而语料里署名写在 README 正文、不在目录名上。
+   * `source`（KM-13）透传来源标记：市场来源据此先补读上一级 `pack.json` 兜底署名。
    */
-  loadAttribution(absDir: string): Promise<PackageAttribution>;
+  loadAttribution(absDir: string, source?: string): Promise<PackageAttribution>;
 }
 
 /** 目标项目选择的「新建」哨兵值 */
@@ -75,7 +81,7 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
       }
       let cancelled = false;
       deps
-        .loadAttribution(src)
+        .loadAttribution(src, pending?.source)
         .then((a) => {
           if (!cancelled) setSourceAttr(a);
         })
@@ -85,7 +91,7 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
       return () => {
         cancelled = true;
       };
-    }, [deps, pending?.sourceDir]);
+    }, [deps, pending?.sourceDir, pending?.source]);
 
     // 已有项目列表（目标项目下拉）
     useEffect(() => {

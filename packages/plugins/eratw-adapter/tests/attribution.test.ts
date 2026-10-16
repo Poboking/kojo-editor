@@ -10,8 +10,11 @@ import {
   attributionSummary,
   classifyAuxFile,
   licenseLabel,
+  mergePackAuthorship,
+  packManifestPathOf,
   parseAttributionText,
   readPackageAttribution,
+  readSourceAttribution,
   type PackageAttribution,
 } from '../src/attribution';
 
@@ -333,5 +336,135 @@ describe('attributionMeta · 导入携带', () => {
         readmeFiles: ['r.txt'],
       }),
     ).toEqual({ originalAuthor: 'holy', licenseKind: 'template-only', licenseFile: 'ライセンステンプレ.txt' });
+  });
+});
+
+/* ------------------- 市场来源署名兜底（KM-13：pack.json 在源目录上一级） ------------------- */
+
+/**
+ * 市场包的正文（`files/`）通常没有 README，署名只住在上一级 `pack.json`——
+ * 从市场导入这些包时，"原作者是谁"只有清单这一条线索。四条判据：
+ * 1. 市场来源：README 抽不到的字段才用清单兜底（清单是兜底，不覆盖 README）；
+ * 2. 非市场来源：**不读上一级**（普通目录的上一级可能是家里另一个包的清单，读到就是冒认署名）；
+ * 3. 读不到 / 解析不出：回退 README 画像，绝不抛（署名缺失不允许阻断导入）；
+ * 4. 出处照 `AttributionField` / `LicenseSignal` 既有形状，不新增类型。
+ */
+describe('readSourceAttribution · 市场来源 pack.json 兜底（KM-13）', () => {
+  const PACK_DIR = '/appdata/market/packs/kojo-pack/demo.kojo/1.0.0/files';
+  const MANIFEST = '/appdata/market/packs/kojo-pack/demo.kojo/1.0.0/pack.json';
+
+  /** 内存树 io（只列本层文件；readText 记录读过的路径，用来钉"没读上一级"） */
+  const treeIo = (tree: Record<string, string>, reads?: string[]) => ({
+    listDir: async (dir: string): Promise<Array<{ name: string; path: string; isDirectory: boolean }>> =>
+      Object.keys(tree)
+        .filter((p) => p.startsWith(`${dir}/`) && !p.slice(dir.length + 1).includes('/'))
+        .map((p) => ({ name: p.slice(dir.length + 1), path: p, isDirectory: false })),
+    readText: async (p: string): Promise<{ text: string }> => {
+      reads?.push(p);
+      const t = tree[p];
+      if (t === undefined) throw new Error(`没有这个文件：${p}`);
+      return { text: t };
+    },
+  });
+
+  it('清单落点 = contentDir 上一级 pack.json（唯一派生，不自己拼第二份目录约定）', () => {
+    expect(packManifestPathOf(PACK_DIR)).toBe(MANIFEST);
+  });
+
+  it('README 侧什么都没抽到：清单声明的 author / license 兜底出来，出处记为 pack.json', async () => {
+    const io = treeIo({
+      [`${PACK_DIR}/口上.ERB`]: '@SAY こんにちは',
+      [MANIFEST]: JSON.stringify({ kind: 'kojo-pack', author: '原作者的群友', license: 'CC BY-NC-SA 4.0' }),
+    });
+    const a = await readSourceAttribution({ io, absDir: PACK_DIR, source: 'market' });
+    expect(a.author).toEqual({ value: '原作者的群友', file: 'pack.json', line: 1 });
+    expect(a.license).toEqual({ kind: 'statement', file: 'pack.json' });
+    // 既有 meta 链路自动受益：导入时带走的就是这两个字段
+    expect(attributionMeta(a)).toEqual({
+      originalAuthor: '原作者的群友',
+      licenseKind: 'statement',
+      licenseFile: 'pack.json',
+    });
+    // 摘要里看得见署名（面板/向导同一口径）
+    expect(attributionSummary(a)).toContain('原作者 原作者的群友');
+  });
+
+  it('README 抽到了作者：README 优先（带自己那份出处），清单只补它没有的授权那半', async () => {
+    const io = treeIo({
+      [`${PACK_DIR}/readme.txt`]: '作者：holy',
+      [MANIFEST]: JSON.stringify({ author: '另一个人', license: 'MIT' }),
+    });
+    const a = await readSourceAttribution({ io, absDir: PACK_DIR, source: 'market' });
+    expect(a.author).toEqual({ value: 'holy', file: 'readme.txt', line: 1 });
+    expect(a.license).toEqual({ kind: 'statement', file: 'pack.json' });
+  });
+
+  it('README 侧有真授权文件：清单不覆盖（包内那份文件比清单一行更具体）', async () => {
+    const io = treeIo({
+      [`${PACK_DIR}/readme.txt`]: '作者：holy',
+      [`${PACK_DIR}/ライセンス.txt`]: '加筆・改変は自由です',
+      [MANIFEST]: JSON.stringify({ author: '另一个人', license: 'MIT' }),
+    });
+    const base = await readPackageAttribution({ io, absDir: PACK_DIR });
+    const a = await readSourceAttribution({ io, absDir: PACK_DIR, source: 'market' });
+    expect(a.author?.value).toBe('holy');
+    expect(a.license).toEqual({ kind: 'statement', file: 'ライセンス.txt' });
+    // 与不开兜底时的画像逐字一致（没有可补的字段 ⇒ 原样）
+    expect(a).toEqual(base);
+  });
+
+  it('非市场来源：连上一级 pack.json 都不读（那里可能是别家包的清单，读到就是冒认署名）', async () => {
+    const reads: string[] = [];
+    const io = treeIo(
+      {
+        [`${PACK_DIR}/readme.txt`]: '正文里没有署名标签',
+        [MANIFEST]: JSON.stringify({ author: '不该出现的人' }),
+      },
+      reads,
+    );
+    const a = await readSourceAttribution({ io, absDir: PACK_DIR }); // 无 source = 普通目录导入
+    expect(a.author).toBeNull();
+    expect(a.license).toEqual({ kind: 'none' });
+    expect(reads.some((p) => p.endsWith('pack.json'))).toBe(false);
+  });
+
+  it('清单读不到 / 坏 JSON：回退 README 画像，不抛（署名缺失绝不阻断导入）', async () => {
+    const noManifest = treeIo({ [`${PACK_DIR}/readme.txt`]: '作者：holy' });
+    const a = await readSourceAttribution({ io: noManifest, absDir: PACK_DIR, source: 'market' });
+    expect(a.author?.value).toBe('holy');
+    expect(a.license).toEqual({ kind: 'none' });
+
+    const badJson = treeIo({
+      [`${PACK_DIR}/readme.txt`]: '作者：holy',
+      [MANIFEST]: '{ not json',
+    });
+    const b = await readSourceAttribution({ io: badJson, absDir: PACK_DIR, source: 'market' });
+    expect(b.author?.value).toBe('holy');
+    expect(b.license).toEqual({ kind: 'none' });
+  });
+
+  it('多行清单：出处行号 = "author" 首次出现的那一行（给证据，不给结论）', async () => {
+    const manifest = [
+      '{',
+      '  "kind": "kojo-pack",',
+      '  "author": "某人",',
+      '  "license": "MIT"',
+      '}',
+    ].join('\n');
+    const io = treeIo({ [`${PACK_DIR}/口上.ERB`]: '@SAY こんにちは', [MANIFEST]: manifest });
+    const a = await readSourceAttribution({ io, absDir: PACK_DIR, source: 'market' });
+    expect(a.author).toEqual({ value: '某人', file: 'pack.json', line: 3 });
+  });
+
+  it('mergePackAuthorship：没有可补的字段时原样返回 base（引用相等，调用方据此可判"没改过"）', () => {
+    const complete: PackageAttribution = {
+      author: { value: 'holy', file: 'readme.txt', line: 3 },
+      updated: { value: '2023-10-07', file: 'readme.txt', line: 4 },
+      license: { kind: 'statement', file: 'ライセンス.txt' },
+      readmeFiles: ['readme.txt'],
+    };
+    expect(mergePackAuthorship(complete, null)).toBe(complete);
+    expect(mergePackAuthorship(complete, { author: '', license: '', authorLine: 1 })).toBe(complete);
+    expect(mergePackAuthorship(complete, { author: '别人', license: 'MIT', authorLine: 2 })).toBe(complete);
   });
 });

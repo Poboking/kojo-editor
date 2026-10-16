@@ -26,7 +26,7 @@ import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
 import { createEratwFaceTable } from './face-templates';
 import { ERATW_NAME_GLOSSARY } from './name-glossary';
 import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
-import { readPackageAttribution, type AttributionState as AttrState } from './attribution';
+import { readPackageAttribution, readSourceAttribution, type AttributionState as AttrState } from './attribution';
 import { createPackageActions } from './package-actions';
 import { resolveNewItemPath, type NewItemKind } from './new-item';
 import { workspaceChangeOf } from './watch-scope';
@@ -385,6 +385,8 @@ export function createEratwAdapterPlugin(): Plugin {
           pendingImport = {
             sourceDir: ev.sourceDir,
             ...(ev.suggestedName !== undefined ? { suggestedName: ev.suggestedName } : {}),
+            // KM-13：来源标记原样记住——市场来源的导入据此读上一级 pack.json 兜底署名
+            ...(ev.source !== undefined ? { source: ev.source } : {}),
           };
           ctx.bus.emit('ui.overlay.open', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eratw-adapter' });
         }),
@@ -677,7 +679,10 @@ export function createEratwAdapterPlugin(): Plugin {
           // 导入向导的「新建项目」分支同样是在建项目——事件要说事实，与入口无关；
           // 这条路径没有人在等，故不带关联号。
           projectCreated: (projectId) => emitProjectCreated(projectId),
-          loadAttribution: (absDir) => readPackageAttribution({ io, absDir }),
+          // KM-13：来源标记透传给读取器——市场来源先补读上一级 pack.json 兜底署名
+          // （读不到就退回 README 扫描，绝不阻断导入）
+          loadAttribution: (absDir, source) =>
+            readSourceAttribution({ io, absDir, ...(source !== undefined ? { source } : {}) }),
         }),
       });
 

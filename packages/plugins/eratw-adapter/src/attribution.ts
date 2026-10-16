@@ -239,6 +239,12 @@ const MAX_READ_CHARS = 8000;
 /** 最多读几份 readme 候选（防异常包把请求打爆） */
 const MAX_READ_FILES = 3;
 
+/** 本模块署名读取所需的**最小 IO 面**：列举目录 + 读正文（编码探测在 io 内部） */
+type AttributionIO = {
+  listDir(path: string): Promise<Array<{ name: string; path: string; isDirectory: boolean }>>;
+  readText(path: string): Promise<{ text: string }>;
+};
+
 /**
  * 读取一个包目录的署名 / 授权画像。
  *
@@ -247,7 +253,7 @@ const MAX_READ_FILES = 3;
  * 单个文件读失败不影响整体（记下来继续，最后 readmeFiles 仍呈现）。
  */
 export async function readPackageAttribution(deps: {
-  io: { listDir(path: string): Promise<Array<{ name: string; path: string; isDirectory: boolean }>>; readText(path: string): Promise<{ text: string }> };
+  io: AttributionIO;
   absDir: string;
 }): Promise<PackageAttribution> {
   const entries = await deps.io.listDir(deps.absDir);
@@ -361,6 +367,54 @@ export async function readPackAuthorship(deps: {
   } catch {
     return null;
   }
+}
+
+/**
+ * `pack.json` 署名 → 补齐 README 扫描的画像（KM-13 导入兜底；纯函数，不发明新体系）。
+ *
+ * 合并口径（README 是作者写给**人**的正文，优先；清单声明只兜底）：
+ * - `author`：README 抽到就用 README 的（带文件 / 行号出处）；没抽到且清单声明了 ⇒
+ *   填 `{value, file: 'pack.json', line}`——出处照 `AttributionField` 既有形状，不加新字段；
+ * - `license`：README 侧报 `none`（既没有授权文件、也没有模板）时才采纳清单里的声明，
+ *   形态记 `statement` + file `'pack.json'`——`LicenseSignal` 只有形态三态、不判条款，
+ *   不为清单声明新增第四态；README 侧已报 `statement` / `template-only` 一律保持
+ *   （包内那份文件比清单一行更具体）；
+ * - `updated` / `readmeFiles`：清单没有这两个概念，原样保留。
+ * 没有可补的字段 ⇒ 原样返回 `base`（连同引用），调用方可按引用相等判"没改过"。
+ */
+export function mergePackAuthorship(base: PackageAttribution, pack: PackAuthorship | null): PackageAttribution {
+  if (pack === null) return base;
+  let author = base.author;
+  let license = base.license;
+  if (author === null && pack.author.length > 0) {
+    author = { value: pack.author, file: MARKET_MANIFEST_FILE, line: pack.authorLine };
+  }
+  if (license.kind === 'none' && pack.license.length > 0) {
+    license = { kind: 'statement', file: MARKET_MANIFEST_FILE };
+  }
+  if (author === base.author && license === base.license) return base;
+  return { ...base, author, license };
+}
+
+/**
+ * 导入向导的署名读取（KM-13）：`source === 'market'` 时先 best-effort 读包目录上一级的
+ * `pack.json` 兜底，其余来源就是今天的 README 扫描（逐字不变）。
+ *
+ * 为什么只有市场来源读上一级清单：市场包的正文（`files/`）通常没有 README，署名只在
+ * 清单里；而普通导入源的"上一级目录"是作者自己的文件夹，那里的同名文件与这次导入无关
+ * （可能是家里另一个包的清单）——读到就是冒认署名。
+ * 读不到 / 解析不出 ⇒ 原样返回 README 画像：**署名缺失绝不允许阻断导入**。
+ */
+export async function readSourceAttribution(deps: {
+  io: AttributionIO;
+  absDir: string;
+  /** 导入来源标记（冻结约定：市场行为字面量 `'market'`）；缺省 = 普通目录 */
+  source?: string;
+}): Promise<PackageAttribution> {
+  const base = await readPackageAttribution({ io: deps.io, absDir: deps.absDir });
+  if (deps.source !== 'market') return base;
+  const pack = await readPackAuthorship({ io: deps.io, contentDir: deps.absDir });
+  return mergePackAuthorship(base, pack);
 }
 
 /* ------------------------------ 呈现文案 ------------------------------ */
