@@ -1406,7 +1406,7 @@ export function App(): ReactElement {
       // 对话框的动作字面量与关项目共用一套（save-then-close），归一到切换语义
       const decision: ProjectSwitchDecision = action === 'save-then-close' ? 'save-then-go' : action;
       const saveOk =
-        decision === 'save-then-go' ? (actionsRef.current ? await actionsRef.current.saveAll() : false) : true;
+        decision === 'save-then-go' ? (actionsByGroupRef.current.size > 0 ? await saveAll() : false) : true;
       if (resolveProjectSwitch(decision, saveOk).kind === 'stay') return;
       try {
         await autosaveRef.current?.discard();
