@@ -6,7 +6,24 @@
 
 use std::path::Path;
 
-use crate::shell::{external_url_problem, open_url_command, reveal_command, trim_trailing_separators, TargetOs};
+use crate::shell::{
+    external_url_problem, open_url_command, reveal_command, trim_trailing_separators,
+    unc_path_problem, TargetOs,
+};
+
+/* ---------------------------- UNC 早退闸 ---------------------------- */
+
+#[test]
+fn unc_and_device_namespace_paths_are_rejected_before_any_stat() {
+    // 关键回归锚：`\\attacker\share` 若在存在性探针里被触碰 ⇒ NTLM 凭据外泄 + 主线程阻塞
+    assert!(unc_path_problem(r"\\attacker\share\a.ERB").is_some());
+    assert!(unc_path_problem(r"\\10.0.0.1\c$\x").is_some());
+    assert!(unc_path_problem(r"\\?\C:\weird").is_some());
+    // 本地路径与相对路径一律放行（只有前导 `\\` 才是网络/设备命名空间）
+    assert!(unc_path_problem(r"C:\proj\scenario\a.ERB").is_none());
+    assert!(unc_path_problem(r"relative\dir").is_none());
+    assert!(unc_path_problem("/unix/path").is_none());
+}
 
 /* ---------------------------- Windows 分支 ---------------------------- */
 

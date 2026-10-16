@@ -136,6 +136,13 @@ describe('packEntryPathProblem（清单路径硬闸）', () => {
     ['files/', 'path-empty-segment', '尾斜杠'],
     ['files', 'path-prefix', '裸目录名'],
     ['', 'path-empty-segment', '空路径'],
+    // 与 Rust `market.rs::entry_path_problem` 对齐的两族（2026-10-17 契约镜像批）
+    ['files/a:b.erb', 'path-drive', '盘符位之外的冒号（NTFS ADS 注入面）'],
+    ['files/個:名', 'path-drive', '非 ASCII 段名里的冒号同样拒'],
+    ['files/a.txt.', 'path-windows-unsafe', '文件名尾随点（Windows 静默剥）'],
+    ['files/a.txt ', 'path-windows-unsafe', '文件名尾随空格'],
+    ['files/sub./a.erb', 'path-windows-unsafe', '目录段尾随点'],
+    ['files/sub /a.erb', 'path-windows-unsafe', '目录段尾随空格'],
   ])('%s → %s（%s）', (path, code) => {
     expect(packEntryPathProblem(path)).toBe(code);
   });

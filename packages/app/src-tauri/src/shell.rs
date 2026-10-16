@@ -102,10 +102,27 @@ pub(crate) fn reveal_command(os: TargetOs, path: &Path) -> RevealCommand {
 
 /* ---------------------------- 派发（副作用） ---------------------------- */
 
+/// UNC 路径判定（纯函数，可单测）：以 `\\` 开头的网络命名空间路径。
+///
+/// 交给 explorer / 做 `path.exists()` 之前必须早退拒掉：`\\attacker\share` 会让
+/// `exists()` 触发 SMB 认证、**泄漏 NTLM 凭据**并阻塞调用线程最长约 30 秒；本原语天然只读，
+/// 更没有理由为"显示一个文件"去够网络路径。`\\?\` 设备命名空间前缀同理一并拒（本地路径
+/// 从不需要它，而它同样能裹住 UNC/怪路径）。
+pub(crate) fn unc_path_problem(path: &str) -> Option<String> {
+    if path.starts_with(r"\\") {
+        Some(format!("拒绝网络/设备命名空间路径（UNC）：{path}"))
+    } else {
+        None
+    }
+}
+
 /// 「在系统资源管理器中显示」：只读原语，见模块头注释。
 /// 失败只可能是「目标不存在」或「拉不起文件管理器进程」，中文人话返回。
 pub(crate) fn reveal_in_folder(path: &Path) -> Result<(), String> {
     let shown = path.display().to_string();
+    if let Some(problem) = unc_path_problem(&shown) {
+        return Err(problem);
+    }
     if !path.exists() {
         return Err(format!("路径不存在，无法在资源管理器中显示：{shown}"));
     }
@@ -137,9 +154,16 @@ pub(crate) fn reveal_in_folder(path: &Path) -> Result<(), String> {
 /// Tauri 命令：`show_in_folder(path)`。
 ///
 /// 天然只读、无写盘副作用 ⇒ 不取 `WriteDomainState`、不做允许域检查（见模块头）。
+/// `async` + `spawn_blocking`：`path.exists()` 是可能触盘的阻塞调用，主线程（WebView IPC 线程）
+/// 上跑它——即便已拒 UNC，一个慢/离线卷仍会冻住界面 ⇒ 挪到阻塞线程池，形态照 `search_text`。
 #[tauri::command]
-pub(crate) fn show_in_folder(path: String) -> Result<(), String> {
-    reveal_in_folder(Path::new(&path))
+pub(crate) async fn show_in_folder(path: String) -> Result<(), String> {
+    if let Some(problem) = unc_path_problem(&path) {
+        return Err(problem);
+    }
+    tauri::async_runtime::spawn_blocking(move || reveal_in_folder(Path::new(&path)))
+        .await
+        .map_err(|e| format!("在资源管理器中显示线程失败：{e}"))?
 }
 
 /* ---------------------------- 外链（浏览器打开） ---------------------------- */

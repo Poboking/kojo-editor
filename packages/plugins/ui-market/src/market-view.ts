@@ -79,6 +79,7 @@ export const REJECT_TEXT: Record<MarketRejectCode, string> = {
   'path-backslash': '这个包里有条内容用了反斜杠路径',
   'path-dotdot': '这个包里有条内容想往上跳目录',
   'path-empty-segment': '这个包里有条内容的路径写法有空段',
+  'path-windows-unsafe': '这个包里有条内容的名字结尾是点或空格，在 Windows 上会被悄悄改名',
   'path-depth': '这个包里的目录套得太深',
   'entry-duplicate': '这个包里同一个文件出现了两次',
   'entries-limit': '这个包里的文件数量超过上限',

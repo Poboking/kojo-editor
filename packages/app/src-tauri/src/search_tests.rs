@@ -116,6 +116,25 @@ fn decode_follows_probe_encoding_order() {
     assert_eq!(decode_for_search(&[0xFE, 0xFF, 0x00, b'a']), "a");
 }
 
+/// 三族评分（2026-10-17 编码标签批）——**与内核 `encoding.test.ts` 的 GBK/Big5 用例逐条同判据**：
+/// 检索预览与编辑器必须对同一份字节看到同一文本。
+#[test]
+fn gbk_and_big5_chinese_no_longer_forced_into_shift_jis() {
+    // GBK 的 你好，世界（c4e3 bac3 a3ac cac0 bde7）：SJIS 兜底解含 U+FFFD 且零假名证据 ⇒ gbk 胜
+    let gbk: [u8; 10] = [0xC4, 0xE3, 0xBA, 0xC3, 0xA3, 0xAC, 0xCA, 0xC0, 0xBD, 0xE7];
+    assert_eq!(decode_for_search(&gbk), "你好，世界");
+    // Big5 的 你好（a741 a66e）：gbk 族解出的是符号区垃圾（0 分）⇒ big5 以 2 分上位
+    let big5: [u8; 4] = [0xA7, 0x41, 0xA6, 0x6E];
+    assert_eq!(decode_for_search(&big5), "你好");
+    // 真 Shift-JIS 日文不被抢（假名独有证据每字 +2）
+    let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("「こんにちは」");
+    assert_eq!(decode_for_search(&sjis), "「こんにちは」");
+    // 纯高位垃圾三族零分 ⇒ 仍兜底 shift_jis（含替换字符，与旧口径逐字节一致）
+    let junk = decode_for_search(&[0x41, 0xFF, 0x42]);
+    assert!(junk.contains('\u{FFFD}'), "非法字节必须留下可见的替换字符");
+    assert!(junk.starts_with('A') && junk.ends_with('B'));
+}
+
 #[test]
 fn binary_detection_ignores_utf16_nul_bytes() {
     assert!(!looks_binary(&[0xFF, 0xFE, b'a', 0x00], true), "utf-16 的 NUL 不是二进制信号");

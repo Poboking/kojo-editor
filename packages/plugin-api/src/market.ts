@@ -414,6 +414,8 @@ export type MarketRejectCode =
   | 'path-backslash'
   | 'path-dotdot'
   | 'path-empty-segment'
+  /** 任一段尾随 `.` 或空格（Windows 落盘静默改名面）——盘符位之外的 `:` 是 ADS 注入面，归 `path-drive` */
+  | 'path-windows-unsafe'
   | 'path-depth'
   | 'entry-duplicate'
   | 'entries-limit'
@@ -462,16 +464,22 @@ export class MarketError extends Error {
  * 只认 posix 相对路径（`files/` 前缀）——Windows 反斜杠**不许**出现在清单里，
  * 否则同一份包在两个平台上会解成两种树。盘符判定独立于 `isAbsolute`，
  * 因为 `C:x` 这种"相对盘符"形态 `isAbsolute` 不认。
+ * **顺序与拒绝码字面与 Rust `market.rs::entry_path_problem` 逐条对齐**（两层错误逐字对上）：
+ * 盘符位之外的 `:` 一律拒（NTFS 备用数据流 ADS 注入面，复用 `path-drive` 码）；
+ * 任一段尾随 `.` 或空格拒（Windows 落盘会静默剥掉它们，清单与落盘从此不平）。
  */
 export function packEntryPathProblem(path: string): MarketRejectCode | null {
   if (typeof path !== 'string' || path.length === 0) return 'path-empty-segment';
   if (/^[A-Za-z]:/.test(path)) return 'path-drive';
+  if (path.includes(':')) return 'path-drive';
   if (path.includes('\\')) return 'path-backslash';
   if (path.startsWith('/')) return 'path-absolute';
   const segments = path.split('/');
   // 空段与 `.` 段都算"路径里掺了非成分"——两种写法都会让解压端对同一份清单给出两种树
   if (segments.some((s) => s.length === 0 || s === '.')) return 'path-empty-segment';
   if (segments.some((s) => s === '..')) return 'path-dotdot';
+  // 尾随 `.` / 空格：资源管理器与文件系统落盘时悄悄剥掉（`a.txt.` → `a.txt`），一视同仁逐段核
+  if (segments.some((s) => s.endsWith('.') || s.endsWith(' '))) return 'path-windows-unsafe';
   if (segments[0] !== MARKET_CONTENT_DIR) return 'path-prefix';
   // 必须**在 files/ 之内**（裸 `files` 是目录不是文件），且段数含 `files` 本身不超限
   if (segments.length < 2) return 'path-prefix';

@@ -32,8 +32,10 @@ mod shell;
 // JS 层 kernel io 的 writablePaths 白名单是第一道闸；本层是第二道闸：
 // 即便 JS 层被绕过，Rust 命令也只接受「允许域」内的写路径。
 //
-// 允许域 = 项目根目录（project.opened 时由前端注册；project.closed 后清除）
+// 允许域 = 项目根目录（project.opened 时经 `register_write_domain` 注册；project.closed 后清除）
 //        + appDataDir（备份 / 配置 / 存储，常驻允许）。
+// 注册本身带**准入门**：`register_write_domain` 只接受宿主亲自交付过的目录（系统目录对话框
+// 选定项 / OS 拖放），JS 凭空递一个路径不会成为项目根。
 // 其余路径一律拒绝并返回明确错误（不静默、fail-closed）。
 //
 // 判定域语义与 kernel writablePaths 一致：项目根目录整体（含游戏目录）。
@@ -41,15 +43,23 @@ mod shell;
 // 语义以更严者为准，双闸并存不冲突。
 
 /// Tauri 托管状态：当前注册的项目根目录（None = 仅 appDataDir 可写）
-/// + **常驻授权的项目位置根**（`extra_roots`，2026-10-14 新建项目自选位置批）。
+/// + **常驻授权的项目位置根**（`extra_roots`，2026-10-14 新建项目自选位置批）
+/// + **宿主亲自见过的可开项目根**（`approved_roots`）。
 ///
 /// `extra_roots` 的唯一来源是 `choose_workspace_root` 里**用户在系统目录对话框中选定**
 /// 的目录（对话框即授权）与磁盘清单 `<appDataDir>/workspace_roots.txt` 的读回。
-/// **没有任何命令接受路径参数来授予写权限**——JS 侧不存在"给个路径就放行"的入口。
+///
+/// `approved_roots` 是 `register_write_domain` 的**准入门**：只有**由宿主亲自交付给 WebView
+/// 的路径**才进得来——即系统目录对话框返回的选定项（`choose_directory` / `choose_workspace_root`）
+/// 与 OS 文件拖放（`WindowEvent::DragDrop` 的 drop 相位）交来的目录。清单同样落盘
+/// `<appDataDir>/approved_roots.txt`，故"最近项目 / 常驻根"重开时其根早已在册、照常放行。
+/// **没有任何命令接受路径参数来授予写权限**——JS 侧递来一个字符串就放行的入口不存在；
+/// `register_write_domain` 只把"确实被宿主交出去过"的目录（或其子目录）认作项目根。
 #[derive(Default)]
 struct WriteDomainState {
     project_root: Mutex<Option<PathBuf>>,
     extra_roots: Mutex<Vec<PathBuf>>,
+    approved_roots: Mutex<Vec<PathBuf>>,
 }
 
 /// 规范化路径：找到最深的已存在祖先做 canonicalize（解析 `..` 与符号链接），
@@ -165,6 +175,131 @@ fn write_workspace_roots(app_data_dir: &Path, roots: &[PathBuf]) -> Result<(), S
     std::fs::write(&file, body).map_err(|e| format!("写授权根清单失败 {}: {e}", file.display()))
 }
 
+/// 宿主亲自交付过（对话框选定 / OS 拖放）的可开项目根清单文件。
+const APPROVED_ROOTS_FILE: &str = "approved_roots.txt";
+
+fn approved_roots_file(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(APPROVED_ROOTS_FILE)
+}
+
+/// 从磁盘读回准入根清单：不存在 = 空（首次运行正常态）；读失败出声后按空处理。
+fn read_approved_roots(app_data_dir: &Path) -> Vec<PathBuf> {
+    let file = approved_roots_file(app_data_dir);
+    match std::fs::read_to_string(&file) {
+        Ok(text) => text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            eprintln!(
+                "[approved_roots] 读取准入根清单失败（按空处理）{}: {e}",
+                file.display()
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// 落盘准入根清单（整表重写 ⇒ 天然去重、无追加竞态）。
+fn write_approved_roots(app_data_dir: &Path, roots: &[PathBuf]) -> Result<(), String> {
+    let file = approved_roots_file(app_data_dir);
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建准入根清单目录失败 {}: {e}", parent.display()))?;
+    }
+    let mut body = roots
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !body.is_empty() {
+        body.push('\n');
+    }
+    std::fs::write(&file, body).map_err(|e| format!("写准入根清单失败 {}: {e}", file.display()))
+}
+
+/// 追加一个准入根（按规范化路径去重，同一目录的多种写法只留一条）。
+fn push_approved_root(list: &mut Vec<PathBuf>, root: &Path) -> bool {
+    let canon = match canonicalize_deep(root) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "[approved_roots] 规范化失败，仍按原样登记 {}: {e}",
+                root.display()
+            );
+            root.to_path_buf()
+        }
+    };
+    let dup = |p: &Path| -> bool {
+        match (canonicalize_deep(p), canonicalize_deep(&canon)) {
+            (Ok(a), Ok(b)) => is_same_path(&a, &b),
+            _ => is_same_path(p, &canon),
+        }
+    };
+    if list.iter().any(|p| dup(p)) {
+        return false;
+    }
+    list.push(canon);
+    true
+}
+
+/// 纯判定（可单测，不依赖 Tauri 类型）：`register_write_domain` 想把 `root` 认作项目根，
+/// 必须满足 `root`（已规范化）等于或落在**宿主亲自交付过的**某个准入根内。
+/// `approved_roots` = 对话框/拖放交来的目录清单；`extra_roots` = 常驻自选项目位置根
+/// （其新建项目的实际根常是它的一个子目录 ⇒ 一并算作准入来源）。
+/// `app_data_dir` 本身也是常驻允许域 ⇒ 一并放行。
+fn is_root_approved(
+    app_data_dir: &Path,
+    approved_roots: &[PathBuf],
+    extra_roots: &[PathBuf],
+    canon_root: &Path,
+) -> bool {
+    let canon_app = canonicalize_deep(app_data_dir).ok();
+    if let Some(app) = canon_app.as_ref() {
+        if is_within(canon_root, app) {
+            return true;
+        }
+    }
+    for list in [approved_roots, extra_roots] {
+        for root in list {
+            if let Ok(canon) = canonicalize_deep(root) {
+                if is_within(canon_root, &canon) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// 登记一个宿主亲自交付的目录为准入根，并落盘（对话框 / OS 拖放共用）。
+/// 落盘失败只出声不阻断（内存态已更新，本次会话内仍可注册；清单是持久化半边）。
+fn record_approved_root(
+    state: &WriteDomainState,
+    app_data_dir: &Path,
+    root: &Path,
+) -> Result<(), String> {
+    let snapshot = {
+        let mut guard = state
+            .approved_roots
+            .lock()
+            .map_err(|_| "write domain state poisoned".to_string())?;
+        if push_approved_root(&mut guard, root) {
+            guard.clone()
+        } else {
+            // 已在册：仍取一份快照落盘（幂等重写，与磁盘对齐；不新增条目）
+            guard.clone()
+        }
+    };
+    if let Err(e) = write_approved_roots(app_data_dir, &snapshot) {
+        eprintln!("[approved_roots] 落盘失败（内存态已更新）：{e}");
+    }
+    Ok(())
+}
+
 /// 纯逻辑判定（可单测，不依赖 Tauri 类型）：
 /// `project_root` = 当前注册的项目根（可为 None），`app_data_dir` 常驻允许，
 /// `extra_roots` = 用户经对话框自选并常驻授权的项目位置根。
@@ -225,8 +360,48 @@ fn ensure_write_allowed(
 }
 
 /// project.opened：前端注册项目根目录（允许域 = 项目根 + appDataDir）。
+///
+/// **准入门**（审阅批：修复"接受任意 JS 路径"的漏洞）：只有 `root`（规范化后）等于或落在
+/// **宿主亲自交付过的某个目录**之内才放行——即系统目录对话框（`choose_directory` /
+/// `choose_workspace_root`）返回项或 OS 拖放（`WindowEvent::DragDrop`）交来的目录，或其子目录
+/// （新建项目落自选位置下的一层），或 appDataDir 本身。
+/// 恶意 WebView JS 直接 `invoke('register_write_domain',{root:"<任意路径>"})` 会因不在准入清单而拒；
+/// 合法开项目路径（对话框/拖放选定 → 已登记 → 注册）照常放行。注册失败即 fail-closed，
+/// 前端据此退回"仅 appDataDir 可写"并显式报错。
+///
+/// UNC（`\\...`）在规范化之前先拒：既绕开网络命名空间触发的凭据外泄与主线程阻塞，
+/// 拖放/对话框也从不交付 UNC 作为可写根。
 #[tauri::command]
-fn register_write_domain(state: tauri::State<'_, WriteDomainState>, root: String) -> Result<(), String> {
+fn register_write_domain(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    root: String,
+) -> Result<(), String> {
+    use tauri::Manager;
+    if root.starts_with(r"\\") {
+        return Err("写允许域注册拒绝：不接受网络路径（UNC）作为项目根".to_string());
+    }
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    let canon_root = canonicalize_deep(Path::new(&root))
+        .map_err(|e| format!("写允许域注册失败：路径解析失败 {root}: {e}"))?;
+    let approved = state
+        .approved_roots
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?
+        .clone();
+    let extras = state
+        .extra_roots
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?
+        .clone();
+    if !is_root_approved(&app_dir, &approved, &extras, &canon_root) {
+        return Err(format!(
+            "写允许域注册拒绝：{root} 未经系统目录对话框或拖放由宿主交付，不在准入清单内"
+        ));
+    }
     let mut guard = state
         .project_root
         .lock()
@@ -373,9 +548,13 @@ fn ensure_dir(
 #[tauri::command]
 fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
     let mut out = Vec::new();
+    // 铁律 4（内核不许静默）：只有"目录不存在"折叠成空列表（与 NodeBridge 语义一致，
+    // 首次运行/尚未创建的目录是正常态）；其它 `read_dir` 错误（权限、路径是文件、句柄失效、
+    // 网络名不可达……）必须**如实报错上抛**，绝不与"空目录"混为一谈。
     let read = match std::fs::read_dir(&path) {
         Ok(r) => r,
-        Err(_) => return Ok(out), // 路径不存在 → 空列表（与 NodeBridge 语义一致）
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(format!("列目录失败 {path}: {e}")),
     };
     for entry in read.flatten() {
         let md = entry.metadata().ok();
@@ -637,7 +816,10 @@ fn copy_file(
     // from 是读取源（读路径不受允许域限制）；to 是写入目标，必须过闸
     ensure_write_allowed(&app, &state, Path::new(&to), "copy_dst")?;
     if let Some(parent) = Path::new(&to).parent() {
-        let _ = std::fs::create_dir_all(parent);
+        // 铁律 4：建目录失败不许静默吞掉（吞了会把"父目录建不出来"伪装成"copy 失败"、
+        // 丢掉真正的 IO 错）。create_dir_all 对已存在目录返回 Ok ⇒ 只有真错才上抛。
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目标目录失败 {}: {e}", parent.display()))?;
     }
     std::fs::copy(&from, &to).map(|_| ()).map_err(|e| e.to_string())
 }
@@ -669,16 +851,30 @@ fn remove_dir(
 
 /* ---------------------------- 对话框 / 环境 ---------------------------- */
 
+/// 系统目录对话框选一个目录返回给前端。**选定的目录同时登记进准入根清单**
+/// （`approved_roots`）——这是"对话框即授权"：用户在原生对话框里点选的目录才是宿主亲自
+/// 交付过的路径，`register_write_domain` 据此放行。取消（None）不改任何状态。
 #[tauri::command]
-async fn choose_directory(title: Option<String>) -> Result<Option<String>, String> {
+async fn choose_directory(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
+    use tauri::Manager;
     let mut dialog = rfd::AsyncFileDialog::new();
     if let Some(t) = title.as_deref() {
         dialog = dialog.set_title(t);
     }
-    Ok(dialog
-        .pick_folder()
-        .await
-        .map(|h| h.path().to_string_lossy().to_string()))
+    let Some(handle) = dialog.pick_folder().await else {
+        return Ok(None); // 取消 = 不登记、不返回
+    };
+    let picked = handle.path();
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    record_approved_root(&state, &app_dir, &picked)?;
+    Ok(Some(picked.to_string_lossy().to_string()))
 }
 
 /// 自选**项目位置**（2026-10-14 新建口上项目自选位置批）。
@@ -720,6 +916,9 @@ async fn choose_workspace_root(
         .app_data_dir()
         .map_err(|e| format!("app_data_dir: {e}"))?;
     write_workspace_roots(&app_dir, &snapshot)?;
+    // 同时登记为准入根：新建项目落在此自选位置的一层子目录下，`register_write_domain`
+    // 走 `extra_roots` 前缀判定已能放行，这里再登记让"直接在选定根开项目"也留痕于准入清单。
+    record_approved_root(&state, &app_dir, &picked)?;
     eprintln!(
         "[choose_workspace_root] 项目位置已授权并登记：{}（常驻根共 {} 个）",
         picked.display(),
@@ -822,6 +1021,11 @@ fn encoding_for(name: &str) -> Result<&'static encoding_rs::Encoding, String> {
     Ok(match name {
         "utf-8" | "utf-8-bom" => encoding_rs::UTF_8,
         "shift_jis" => encoding_rs::SHIFT_JIS,
+        // CJK 三族（2026-10-17 编码标签批）：WHATWG Encoding Standard 的一等标签，
+        // 与客户端 TextDecoder('gbk'/'gb18030'/'big5') 同表同规则（探测口径见 `cjk_family_score`）
+        "gbk" => encoding_rs::GBK,
+        "gb18030" => encoding_rs::GB18030,
+        "big5" => encoding_rs::BIG5,
         "utf-16le" => encoding_rs::UTF_16LE,
         "utf-16be" => encoding_rs::UTF_16BE,
         other => return Err(format!("unsupported encoding: {other}")),
@@ -1320,11 +1524,55 @@ fn looks_binary(bytes: &[u8], utf16ish: bool) -> bool {
     !utf16ish && bytes[..bytes.len().min(SEARCH_SNIFF_BYTES)].contains(&0)
 }
 
+/// 族评分：与内核 `encoding.ts` 的 `scoreLegacyFamily` **逐条一致**
+/// （CJK 表意文字 / 中日韩标点与全角形式各 +1；假名族是日文独有证据、只计给 shift_jis、+2；
+/// ASCII 与 U+FFFD 不计；半角片假名 U+FF61–U+FF9F 故意不计——GBK 垃圾按 SJIS 解的典型产物）。
+fn cjk_family_score(text: &str, is_sjis: bool) -> i32 {
+    let mut score = 0i32;
+    for ch in text.chars() {
+        let cp = ch as u32;
+        if cp < 0x80 || cp == 0xFFFD {
+            continue;
+        }
+        if (0x4E00..=0x9FFF).contains(&cp)
+            || (0x3000..=0x303F).contains(&cp)
+            || (0xFF01..=0xFF60).contains(&cp)
+        {
+            score += 1;
+        } else if is_sjis
+            && ((0x3041..=0x3096).contains(&cp) || (0x30A1..=0x30FA).contains(&cp) || cp == 0x30FC)
+        {
+            score += 2;
+        }
+    }
+    score
+}
+
+/// 非 UTF-8 字节的三族裁决（shift_jis / gbk / big5），与内核 `probeLegacyCjk` 同规则：
+/// gbk / big5 必须**全文件零替换字符**且分数**严格大于**当前最好者才上位；
+/// 顺序 sjis → gbk → big5（平局归先者），三族零分 ⇒ 兜底 shift_jis（与旧口径逐字节一致）。
+/// 检索预览与编辑器必须对同一份字节给出同一文本，两套探测会让结果与正文对不上。
+fn decode_legacy_family(bytes: &[u8]) -> Cow<'_, str> {
+    let (sjis, _, _) = encoding_rs::SHIFT_JIS.decode(bytes);
+    let mut best = (cjk_family_score(&sjis, true), Cow::Owned(sjis.into_owned()));
+    for enc in [encoding_rs::GBK, encoding_rs::BIG5] {
+        let (text, _, had_errors) = enc.decode(bytes);
+        if had_errors {
+            continue;
+        }
+        let score = cjk_family_score(&text, false);
+        if score > best.0 {
+            best = (score, Cow::Owned(text.into_owned()));
+        }
+    }
+    best.1
+}
+
 /// 字节 → 检索用文本。探测口径与内核 `probeEncoding` **逐条一致**
-/// （BOM → UTF-8 严格校验 → shift_jis 兜底；utf-16 只认 BOM 那一支）：
+/// （BOM → UTF-8 严格校验 → 三族评分 shift_jis/gbk/big5 → shift_jis 兜底；utf-16 只认 BOM 那一支）：
 /// 命中行的预览必须与编辑器打开同一文件看到的文本相同，两套探测会让"搜索结果"
 /// 与"点进去看到的正文"对不上——那比漏几个文件更坏。
-/// 代价：无 BOM 的 utf-16 会按 shift_jis 解成乱码，且因含 NUL 被计入 `skipped.binary`
+/// 代价：无 BOM 的 utf-16 会按兜底族解成乱码，且因含 NUL 被计入 `skipped.binary`
 /// （可见、可数，不是静默漏报）。
 /// 解码失败不阻断（与 `decode_bytes` 同口径：替换字符只出声，只读检索不该硬失败）。
 fn decode_for_search(bytes: &[u8]) -> Cow<'_, str> {
@@ -1338,10 +1586,7 @@ fn decode_for_search(bytes: &[u8]) -> Cow<'_, str> {
     let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     match std::str::from_utf8(body) {
         Ok(s) => Cow::Borrowed(s),
-        Err(_) => {
-            let (text, _, _) = encoding_rs::SHIFT_JIS.decode(bytes);
-            Cow::Owned(text.into_owned())
-        }
+        Err(_) => decode_legacy_family(bytes),
     }
 }
 
@@ -1685,7 +1930,25 @@ pub fn run() {
         .manage(SearchState::default())
         .on_window_event(|window, event| {
             use tauri::Emitter;
+            use tauri::Manager;
             if let tauri::WindowEvent::DragDrop(ev) = event {
+                // OS 拖放 = 用户显式动作、路径由宿主（而非 JS）交付 ⇒ 与目录对话框同信任级。
+                // 把 drop 到的**本地目录**登记进准入根清单，让"拖入开项目"仍能注册写允许域；
+                // UNC（网络路径）与非目录一律不登记（既防凭据外泄，也不给文件路径升格成根）。
+                if let tauri::DragDropEvent::Drop { paths, .. } = ev {
+                    let state = window.state::<WriteDomainState>();
+                    if let Ok(app_dir) = window.path().app_data_dir() {
+                        for p in paths {
+                            if p.to_string_lossy().starts_with(r"\\") {
+                                continue;
+                            }
+                            if !p.is_dir() {
+                                continue;
+                            }
+                            let _ = record_approved_root(&state, &app_dir, p);
+                        }
+                    }
+                }
                 if let Some(payload) = map_drag_drop(ev.clone()) {
                     let _ = window.emit(DRAG_DROP_EVENT, payload);
                 }
@@ -1693,26 +1956,36 @@ pub fn run() {
         })
         .setup(|app| {
             use tauri::Manager;
-            // 常驻授权根读回（自选项目位置的持久化半边）。
-            // 文件不存在 = 首次运行，正常态；读失败已在 `read_workspace_roots` 里出声。
+            // 常驻授权根 + 准入根清单读回（自选项目位置的持久化半边 + 开项目准入门的持久化半边）。
+            // 文件不存在 = 首次运行，正常态；读失败已在各自函数里出声。
             let handle = app.handle().clone();
             let Ok(app_dir) = handle.path().app_data_dir() else {
-                eprintln!("[setup] 无 app_data_dir，常驻授权根保持为空");
+                eprintln!("[setup] 无 app_data_dir，常驻授权根与准入根保持为空");
                 return Ok(());
             };
-            let persisted = read_workspace_roots(&app_dir);
-            if persisted.is_empty() {
-                return Ok(());
-            }
             let state = handle.state::<WriteDomainState>();
-            let mut guard = state
-                .extra_roots
-                .lock()
-                .map_err(|_| "write domain state poisoned".to_string())?;
-            for root in persisted {
-                push_extra_root(&mut guard, &root);
+            let persisted = read_workspace_roots(&app_dir);
+            if !persisted.is_empty() {
+                let mut guard = state
+                    .extra_roots
+                    .lock()
+                    .map_err(|_| "write domain state poisoned".to_string())?;
+                for root in persisted {
+                    push_extra_root(&mut guard, &root);
+                }
+                eprintln!("[setup] 常驻授权根读回 {} 个", guard.len());
             }
-            eprintln!("[setup] 常驻授权根读回 {} 个", guard.len());
+            let approved = read_approved_roots(&app_dir);
+            if !approved.is_empty() {
+                let mut guard = state
+                    .approved_roots
+                    .lock()
+                    .map_err(|_| "write domain state poisoned".to_string())?;
+                for root in approved {
+                    push_approved_root(&mut guard, &root);
+                }
+                eprintln!("[setup] 准入根读回 {} 个", guard.len());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1771,8 +2044,9 @@ mod shell_tests;
 #[cfg(test)]
 mod write_domain_tests {
     use super::{
-        canonicalize_deep, ensure_in_write_domain, is_same_path, is_within, push_extra_root,
-        read_workspace_roots, write_workspace_roots,
+        canonicalize_deep, ensure_in_write_domain, is_root_approved, is_same_path, is_within,
+        push_approved_root, push_extra_root, read_approved_roots, read_workspace_roots,
+        write_approved_roots, write_workspace_roots,
     };
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2008,6 +2282,85 @@ mod write_domain_tests {
         write_workspace_roots(&appdata, &[a.clone()]).unwrap();
         assert_eq!(read_workspace_roots(&appdata).len(), 1);
     }
+
+    /* -------- 开项目准入门（register_write_domain 的纯判定半边，2026-10 安全审阅批） -------- */
+
+    fn canon(p: &Path) -> PathBuf {
+        canonicalize_deep(p).unwrap()
+    }
+
+    /// 准入门正向：对话框交付的目录本身、及其子目录（新建项目落自选根的一层下）都放行
+    #[test]
+    fn approved_root_admits_itself_and_subdirectories() {
+        let appdata = temp_root("appdata");
+        let picked = mkdir(&temp_root("picked"));
+        let sub = mkdir(&picked.join("作品").join("包"));
+        let approved = vec![canon(&picked)];
+        assert!(is_root_approved(&appdata, &approved, &[], &canon(&picked)));
+        assert!(is_root_approved(&appdata, &approved, &[], &canon(&sub)));
+    }
+
+    /// 准入门负向：一个 JS 凭空的任意路径（与准入根无包含关系的兄弟目录）被拒——
+    /// 正是"给个路径就放行"漏洞的回归锚
+    #[test]
+    fn arbitrary_root_outside_approved_set_is_rejected() {
+        let appdata = temp_root("appdata");
+        let base = temp_root("base");
+        let picked = mkdir(&base.join("picked"));
+        let victim = mkdir(&base.join("victim"));
+        let approved = vec![canon(&picked)];
+        assert!(
+            !is_root_approved(&appdata, &approved, &[], &canon(&victim)),
+            "准入根之外的路径被放行（写允许域被 JS 任意放宽）"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// appDataDir 恒为准入（常驻允许域），无需先登记
+    #[test]
+    fn app_data_dir_is_always_approved() {
+        let appdata = temp_root("appdata");
+        let inside = mkdir(&appdata.join("store"));
+        assert!(is_root_approved(&appdata, &[], &[], &canon(&inside)));
+    }
+
+    /// 常驻自选根（extra_roots）也是准入来源：新建项目落其子目录 ⇒ 放行
+    #[test]
+    fn extra_workspace_root_admits_new_project_subdir() {
+        let appdata = temp_root("appdata");
+        let chosen = mkdir(&temp_root("chosen"));
+        let new_project = mkdir(&chosen.join("我的作品"));
+        assert!(is_root_approved(&appdata, &[], &[canon(&chosen)], &canon(&new_project)));
+    }
+
+    /// 准入根去重：同一目录两种写法只留一条（与 push_extra_root 同口径）
+    #[test]
+    fn push_approved_root_dedups_same_directory() {
+        let picked = mkdir(&temp_root("picked"));
+        let mut list: Vec<PathBuf> = Vec::new();
+        assert!(push_approved_root(&mut list, &picked));
+        assert!(!push_approved_root(&mut list, &picked.join(".")));
+        assert_eq!(list.len(), 1);
+        let other = mkdir(&temp_root("other"));
+        assert!(push_approved_root(&mut list, &other));
+        assert_eq!(list.len(), 2);
+    }
+
+    /// 准入根持久化：写下去读得回；文件不存在 = 空列表不报错
+    #[test]
+    fn approved_roots_file_roundtrip() {
+        let appdata = temp_root("appdata");
+        assert!(read_approved_roots(&appdata).is_empty());
+        let a = mkdir(&temp_root("a"));
+        let b = mkdir(&temp_root("b"));
+        write_approved_roots(&appdata, &[a.clone(), b.clone()]).unwrap();
+        let back = read_approved_roots(&appdata);
+        assert_eq!(back.len(), 2);
+        assert!(is_same_path(&canon(&back[0]), &canon(&a)));
+        assert!(is_same_path(&canon(&back[1]), &canon(&b)));
+        write_approved_roots(&appdata, &[a.clone()]).unwrap();
+        assert_eq!(read_approved_roots(&appdata).len(), 1);
+    }
 }
 
 #[cfg(test)]
@@ -2210,7 +2563,7 @@ mod watch_runtime_tests {
 
 #[cfg(test)]
 mod io_primitives_tests {
-    use crate::{stat_file, walk_dir, WalkOptionsDto};
+    use crate::{list_dir, stat_file, walk_dir, WalkOptionsDto};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2268,6 +2621,29 @@ mod io_primitives_tests {
         let json = serde_json::to_string(&entries).unwrap();
         assert!(!json.contains("mtimeMs"), "不该出现该键：{json}");
         assert!(!json.contains("\"size\""), "不该出现该键：{json}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 铁律 4：`list_dir` 只把"目录不存在"折叠成空列表，其它 IO 错误必须如实上抛——
+    /// 绝不与"空目录"混为一谈（旧实现把所有 read_dir 错误都吞成 Ok([])）。
+    #[test]
+    fn list_dir_folds_only_not_found_and_propagates_other_errors() {
+        let dir = temp_dir("listdir");
+        std::fs::write(dir.join("a.ERB"), "x").unwrap();
+
+        // 已存在目录 ⇒ Ok + 条目
+        let ok = list_dir(dir.to_string_lossy().to_string()).unwrap();
+        assert!(ok.iter().any(|e| e.name == "a.ERB"), "正常目录没列出条目");
+
+        // 不存在的目录 ⇒ Ok(空)（首次运行/尚未创建的目录是正常态，与 NodeBridge 一致）
+        let missing = dir.join("nope").to_string_lossy().to_string();
+        assert_eq!(list_dir(missing).unwrap().len(), 0, "不存在应折叠成空列表");
+
+        // 其它错误 ⇒ Err：路径含内嵌 NUL ⇒ std 在进入文件系统前就返回 InvalidInput
+        // （非 NotFound、跨平台确定），旧实现会把它误吞成 Ok([])
+        let nul = format!("{}\0bad", dir.display());
+        assert!(list_dir(nul).is_err(), "非 NotFound 的 read_dir 错误被静默吞掉");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

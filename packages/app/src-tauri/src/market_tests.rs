@@ -11,10 +11,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::market::{
-    advance_byte_cap, container_name_problem, content_length_problem, download_to_staging,
-    entry_type_problem, extract_staging, extract_staging_off_thread, fetch_text, host_in_allowlist,
-    market_fetch_text, redirect_problem, staging_component_problem, url_problem, utf8_text,
-    DownloadOptions, StagingLimits,
+    advance_byte_cap, cap_download_limits, cap_fetch_limits, cap_staging_limits,
+    container_name_problem, content_length_problem, download_to_staging, entry_type_problem,
+    extract_staging, extract_staging_off_thread, fetch_text, host_in_allowlist, market_fetch_text,
+    redirect_problem, staging_component_problem, url_problem, utf8_text, DownloadOptions,
+    StagingLimits,
 };
 
 /// 限额字面照契约常量（`plugin-api/market.ts`）；Rust 侧不写死，测试里显式传入。
@@ -317,6 +318,79 @@ fn byte_cap_gates_share_boundaries() {
         .contains("2049"));
     // 溢出兜底：u64 相加不许 wrap（恶意分片长度不能绕过体积闸）
     assert!(advance_byte_cap(u64::MAX, usize::MAX, 2048).is_err());
+}
+
+/* ---------------------- 编译期硬顶（JS 不可放宽） ---------------------- */
+
+/// 取文本硬顶：全程驻内存，是最直接的 OOM 面 ⇒ 调用方给的 `maxBytes` 只会往下夹到 1 MiB。
+#[test]
+fn fetch_limits_are_capped_at_compile_time_ceiling() {
+    // 恶意/失控入参（u64::MAX）被夹到硬顶；合法小值原样保留（只降不升）
+    let (_t, mb) = cap_fetch_limits(60_000, u64::MAX);
+    assert_eq!(mb, 1024 * 1024, "取文本体积没夹进 1 MiB 硬顶");
+    assert_eq!(cap_fetch_limits(60_000, 1_600).1, 1_600, "合法小限额被误压");
+    // 超时同样夹顶（u64::MAX → 15 分钟）
+    let (t, _) = cap_fetch_limits(u64::MAX, 1024);
+    assert_eq!(t, 15 * 60_000, "超时没夹进 15 分钟硬顶");
+}
+
+/// 下载硬顶：落盘不进内存，但仍受磁盘/暂存配额顶（512 MiB）。
+#[test]
+fn download_limits_are_capped_at_compile_time_ceiling() {
+    let (_t, mb) = cap_download_limits(60_000, u64::MAX);
+    assert_eq!(mb, 512 * 1024 * 1024, "下载体积没夹进 512 MiB 硬顶");
+    assert_eq!(cap_download_limits(60_000, 8 * 1024 * 1024).1, 8 * 1024 * 1024);
+}
+
+/// 解压三限额逐一夹顶：炸弹闸（条目/深度/解压总字节）不许被调用方解除。
+#[test]
+fn staging_limits_are_capped_at_compile_time_ceilings() {
+    let huge = StagingLimits {
+        max_entries: usize::MAX,
+        max_depth: usize::MAX,
+        max_unpacked_bytes: u64::MAX,
+    };
+    let capped = cap_staging_limits(huge);
+    assert_eq!(capped.max_entries, 200_000, "条目数没夹进硬顶");
+    assert_eq!(capped.max_depth, 64, "深度没夹进硬顶");
+    assert_eq!(capped.max_unpacked_bytes, 512 * 1024 * 1024, "解压字节没夹进硬顶");
+    // 合法小值原样保留
+    let small = cap_staging_limits(LIMITS);
+    assert_eq!(small.max_entries, LIMITS.max_entries);
+    assert_eq!(small.max_unpacked_bytes, LIMITS.max_unpacked_bytes);
+}
+
+/* ---------------------- 条目名 Windows 不安全面（审阅批） ---------------------- */
+
+/// ADS 冒号与尾随 `.` / 空格：`files/a:stream` 是备用数据流注入（两个不同条目名、路径闸
+/// 与 entry-duplicate 都拦不住）；尾随点/空格会被文件系统静默改名 ⇒ 清单与落盘不平。
+/// 一律在写第一个字节之前拒。
+#[test]
+fn extract_rejects_ads_colon_and_trailing_dot_or_space() {
+    for (case, name, code) in [
+        ("ads", "files/a:stream.txt", "path-drive"),
+        ("ads-mid", "pack:json", "path-drive"),
+        ("trailing-dot", "files/a.txt.", "path-windows-unsafe"),
+        ("trailing-space", "files/a.txt ", "path-windows-unsafe"),
+        ("trailing-dot-seg", "files/sub./a.txt", "path-windows-unsafe"),
+    ] {
+        let staging = Staging::new(case);
+        write_container(&staging, "a.zip", &build_zip(&[(name, b"x".as_slice())]));
+        let err = extract_staging(staging.dir(), "a.zip", "out", &LIMITS).unwrap_err();
+        assert!(
+            err.starts_with(&format!("{code}：")) && err.contains(&format!("{name:?}")),
+            "{case} 的拒绝码或名字不可诊断：{err}"
+        );
+        assert!(!staging.dir().join("out").exists(), "{case} 留下了目标目录");
+    }
+    // 反向：无冒号、无尾随点/空格的正常条目照常放行（不误伤既有容器）
+    let ok = Staging::new("unsafe-ok");
+    write_container(
+        &ok,
+        "a.zip",
+        &build_zip(&[("files/a.txt", b"x".as_slice()), ("pack.json", b"{}".as_slice())]),
+    );
+    assert!(extract_staging(ok.dir(), "a.zip", "out", &LIMITS).is_ok());
 }
 
 /// UTF-8 闸（纯判定、离线可跑）：取文本只认 UTF-8，非法字节明确拒绝。

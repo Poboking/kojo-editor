@@ -43,6 +43,53 @@ const MARKET_DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
 const MARKET_DEFAULT_MAX_FETCH_BYTES: u64 = 256 * 1024;
 const MARKET_USER_AGENT: &str = "kojo-editor-market";
 
+/* ----------------------- 编译期硬顶（不可被 JS 放宽） ----------------------- */
+//
+// 上面三个默认值只在"JS 没传"时兜底；一旦 JS 传了 `max_bytes` / 解压限额，本层过去
+// 全盘接受、没有任何 Rust 侧上界。市场下载会拉进**插件代码**（CSP 已关 ⇒ WebView JS
+// 可信度存疑），一条 `invoke('market_fetch_text',{maxBytes: 2**40})` 就能让"整份响应体
+// 收进 Vec"直接 OOM（取文本全程在内存），一条 `market_extract` 的巨型限额就拆掉了
+// 解压炸弹闸。这些硬顶是**编译期常量**，任何调用方给的限额都只会往下夹、绝不放大——
+// 形态照 `lib.rs` 检索段 `threads.clamp(1, 32)`（同样是给 JS 传参兜底）。
+
+/// 单次请求超时硬顶（15 分钟：远大于任何合法包/索引，又能掐死"永不返回"的连接挂线）。
+const MARKET_HARD_MAX_TIMEOUT_MS: u64 = 15 * 60_000;
+/// 下载落盘体积硬顶（512 MiB：落盘不进内存，但磁盘配额与暂存区不许被无限撑）。
+const MARKET_HARD_MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
+/// 取文本硬顶（1 MiB：注册表索引实测 ~1.6 KB，这条对合法用量零影响，只拦 OOM）。
+const MARKET_HARD_MAX_FETCH_BYTES: u64 = 1024 * 1024;
+/// 解压条目数硬顶。
+const MARKET_HARD_MAX_ENTRIES: usize = 200_000;
+/// 解压嵌套深度硬顶。
+const MARKET_HARD_MAX_DEPTH: usize = 64;
+/// 解压总字节硬顶（512 MiB）。
+const MARKET_HARD_MAX_UNPACKED_BYTES: u64 = 512 * 1024 * 1024;
+
+/// 下载：把调用方给的超时/体积夹进编译期硬顶（默认值也过一遍，口径统一）。
+pub(crate) fn cap_download_limits(timeout_ms: u64, max_bytes: u64) -> (u64, u64) {
+    (
+        timeout_ms.min(MARKET_HARD_MAX_TIMEOUT_MS),
+        max_bytes.min(MARKET_HARD_MAX_DOWNLOAD_BYTES),
+    )
+}
+
+/// 取文本：同上，但体积顶更低（全程驻内存，是最直接的 OOM 面）。
+pub(crate) fn cap_fetch_limits(timeout_ms: u64, max_bytes: u64) -> (u64, u64) {
+    (
+        timeout_ms.min(MARKET_HARD_MAX_TIMEOUT_MS),
+        max_bytes.min(MARKET_HARD_MAX_FETCH_BYTES),
+    )
+}
+
+/// 解压：三个限额逐一夹进硬顶（炸弹闸不许被调用方解除）。
+pub(crate) fn cap_staging_limits(limits: StagingLimits) -> StagingLimits {
+    StagingLimits {
+        max_entries: limits.max_entries.min(MARKET_HARD_MAX_ENTRIES),
+        max_depth: limits.max_depth.min(MARKET_HARD_MAX_DEPTH),
+        max_unpacked_bytes: limits.max_unpacked_bytes.min(MARKET_HARD_MAX_UNPACKED_BYTES),
+    }
+}
+
 /// 市场在应用数据区的根 / 暂存子目录（与契约 `MARKET_DIR_NAME` / `MARKET_STAGING_DIR` 同字面；
 /// 本层必须自己拼落点，这是"落点决定权留在 Rust"的代价，不是第二份业务真相）。
 const MARKET_DIR_NAME: &str = "market";
@@ -224,7 +271,14 @@ fn entry_path_problem(name: &str, max_depth: usize) -> Option<&'static str> {
     if name.is_empty() {
         return Some("path-empty-segment");
     }
+    // 冒号 anywhere：`C:` 盘符（首字母+冒号）之外的 `foo:stream` 是 NTFS 备用数据流
+    // （ADS）注入面——落盘时 `foo` 是宿主文件、`:stream` 是藏进去的第二份数据，
+    // 路径闸看不见它、`entry-duplicate` 也拦不住（两个不同条目名）。一律拒。
+    // 复用 `path-drive` 码：正是要把"任何 Windows 保留冒号语义"归一类，错误仍逐字可示人。
     if name.as_bytes()[0].is_ascii_alphabetic() && name.get(1..2) == Some(":") {
+        return Some("path-drive");
+    }
+    if name.contains(':') {
         return Some("path-drive");
     }
     if name.contains('\\') {
@@ -240,6 +294,14 @@ fn entry_path_problem(name: &str, max_depth: usize) -> Option<&'static str> {
     }
     if segments.contains(&"..") {
         return Some("path-dotdot");
+    }
+    // Windows 静默改名面：任一段尾随 `.` 或空格在落盘时被资源管理器/文件系统悄悄剥掉
+    // （`a.txt.` → `a.txt`），清单与实际落盘从此不平。逐段核尾，非空段一视同仁。
+    if segments
+        .iter()
+        .any(|s| s.ends_with('.') || s.ends_with(' '))
+    {
+        return Some("path-windows-unsafe");
     }
     if segments.len() > max_depth {
         return Some("path-depth");
@@ -531,13 +593,18 @@ pub(crate) async fn market_download(
     let staging = staging_dir(&app)?;
     // 写允许域第二道闸：落点由本层拼出，恒在 appDataDir 内（`ensure_in_write_domain` 的常驻根）。
     ensure_write_allowed(&app, &state, &staging, "market_staging")?;
+    // 调用方限额一律夹进编译期硬顶（默认值也过一遍，口径统一；只降不升）。
+    let (timeout_ms, max_bytes) = cap_download_limits(
+        timeout_ms.unwrap_or(MARKET_DEFAULT_TIMEOUT_MS),
+        max_bytes.unwrap_or(MARKET_DEFAULT_MAX_DOWNLOAD_BYTES),
+    );
     download_to_staging(
         &staging,
         &url,
         &staging_name,
         &DownloadOptions {
-            timeout_ms: timeout_ms.unwrap_or(MARKET_DEFAULT_TIMEOUT_MS),
-            max_bytes: max_bytes.unwrap_or(MARKET_DEFAULT_MAX_DOWNLOAD_BYTES),
+            timeout_ms,
+            max_bytes,
             // 代理不在这里决定：见 `DownloadOptions::proxy`（env ⇒ reqwest system-proxy）
             proxy: None,
         },
@@ -554,11 +621,16 @@ pub(crate) async fn market_fetch_text(
 ) -> Result<MarketFetchTextResultDto, String> {
     // 没有 `app` / 没有 `WriteDomainState`：这条命令**一个字节都不写盘**，
     // 也就没有任何写允许域参与（索引经 TS 侧 `io.writeText` 落到常驻可写根之内）。
+    // 全程驻内存的取文本是最直接的 OOM 面 ⇒ 调用方限额夹进编译期硬顶（只降不升）。
+    let (timeout_ms, max_bytes) = cap_fetch_limits(
+        timeout_ms.unwrap_or(MARKET_DEFAULT_TIMEOUT_MS),
+        max_bytes.unwrap_or(MARKET_DEFAULT_MAX_FETCH_BYTES),
+    );
     fetch_text(
         &url,
         &DownloadOptions {
-            timeout_ms: timeout_ms.unwrap_or(MARKET_DEFAULT_TIMEOUT_MS),
-            max_bytes: max_bytes.unwrap_or(MARKET_DEFAULT_MAX_FETCH_BYTES),
+            timeout_ms,
+            max_bytes,
             // 与 `market_download` 同一口径：代理只认进程环境（env ⇒ reqwest system-proxy）
             proxy: None,
         },
@@ -730,5 +802,7 @@ pub(crate) async fn market_extract(
     // 越权连阻塞线程池都上不去，一个字节都不会被解出来。
     let staging = staging_dir(&app)?;
     ensure_write_allowed(&app, &state, &staging, "market_staging")?;
+    // 解压限额夹进编译期硬顶：JS 递来的 `limits` 只会往下压，绝不让解压炸弹闸被解除。
+    let limits = cap_staging_limits(limits);
     extract_staging_off_thread(staging, staging_name, target_name, limits).await
 }
