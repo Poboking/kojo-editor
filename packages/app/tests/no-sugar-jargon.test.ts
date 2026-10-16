@@ -5,7 +5,9 @@
  * 查的是**上屏文案**：字符串字面量（单引号 / 双引号 / 反引号，允许 `${…}` 插值）与 JSX 文本。
  * 不查注释、标识符、事件 id、localStorage 键、插件 id——那些不是作者读到的东西。
  *
- * 范围：`packages/app/src` 与 `packages/plugins/<插件>/src` 下的 `.ts` / `.tsx`（测试不在范围内）。
+ * 范围：`packages/app/src` 与 `packages/plugins/<插件>/src` 下的 `.ts` / `.tsx`（测试不在范围内）；
+ * 2026-10-16 扩面：`docs/USER-GUIDE.md`——作者指南整篇都是要给人读的散文，代码里收干净的
+ * 旧词留在文档里，就是教下一批改文案的人继续照抄（这一批旧词正是这么扩散出去的）。
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -269,5 +271,29 @@ describe('用户可见文案不含「糖」一族术语', () => {
       }
     }
     expect(hits, `样例文件 / tools 脚本里仍有旧术语：\n${hits.join('\n')}`).toEqual([]);
+  });
+
+  /**
+   * 2026-10-16 扩面：`docs/USER-GUIDE.md`（作者指南）。
+   *
+   * 为什么进守卫：指南是**最常被作者读的用户面文案**，比任何一条 UI 字符串影响面都大——
+   * 上一轮把代码里的词收干净了，文档里的「语法糖 / 糖视图」却留了下来（还是 20 多处），
+   * 谁照文档学写字就学的是旧词。防再漂移的最低成本就是让它进同一条闸。
+   *
+   * 误报面评估（散文 vs 字符串字面量）：指南整篇按行扫、**零豁免**——扫出来的每一处
+   * 都是要改的实词，没有"句法上的糖"这类正当用法；列表里唯一的必要写法（规范文件名
+   * `SYNTAX-SUGAR-SURFACE-SPEC.md`）是 ASCII，不触中文词表。若将来真要引旧词作史料，
+   * 必须像 `LITERAL_EXEMPT` 那样逐条答"为何必须给作者看"再加豁免，不许开整篇。
+   */
+  it('作者指南（docs/USER-GUIDE.md）里没有这些术语', () => {
+    const f = path.join(ROOT, 'docs', 'USER-GUIDE.md');
+    const src = readFileSync(f, 'utf8');
+    const lines = src.split('\n');
+    const hits: string[] = [];
+    for (const m of src.matchAll(TERM_RE)) {
+      const line = lineOf(src, m.index!);
+      hits.push(`${rel(f)}:${line} [${m[0]}] ${lines[line - 1]!.trim().slice(0, 120)}`);
+    }
+    expect(hits, `作者指南里仍有旧术语：\n${hits.join('\n')}`).toEqual([]);
   });
 });

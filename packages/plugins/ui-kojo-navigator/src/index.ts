@@ -556,9 +556,35 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                                 onGrow: growFace,
                                 badges: (fn: FunctionNode): ReactNode[] => {
                                   const badges: ReactNode[] = [];
-                                  if (fn.match?.isMessageCheck) badges.push(createElement('span', { key: 'mc', className: 'nav-badge' }, 'MC'));
+                                  // 徽标写作者的词，不写查表记号（裸 `MC` / `#n` 是内部缩记，
+                                  // 作者读到的是又一个要背的格式）：MESSAGECHECK 否决钩子是
+                                  // 「隐藏情景:」「隐藏口上:」的产物；剧本编号沿用项目管理面板的「剧本N」。
+                                  if (fn.match?.isMessageCheck)
+                                    badges.push(
+                                      createElement(
+                                        'span',
+                                        {
+                                          key: 'mc',
+                                          className: 'nav-badge',
+                                          title:
+                                            '隐藏钩子（MESSAGECHECK 否决钩子）：写「隐藏情景:」「隐藏口上:」时由工具生成，' +
+                                            '按 RETURN 位掩码决定跳过游戏情景还是这份口上',
+                                        },
+                                        '隐藏钩子',
+                                      ),
+                                    );
                                   if (fn.match && fn.match.kind === 'declare' && fn.match.selector > 0)
-                                    badges.push(createElement('span', { key: 'sel', className: 'nav-badge' }, `#${fn.match.selector}`));
+                                    badges.push(
+                                      createElement(
+                                        'span',
+                                        {
+                                          key: 'sel',
+                                          className: 'nav-badge',
+                                          title: `剧本${fn.match.selector}：同一家族的这一版口上（多剧本作品按剧本号分开）`,
+                                        },
+                                        `剧本${fn.match.selector}`,
+                                      ),
+                                    );
                                   badges.push(...condBadges(fn.name));
                                   badges.push(replayBadge(fn.name));
                                   return badges;

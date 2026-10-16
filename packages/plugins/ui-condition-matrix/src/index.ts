@@ -657,12 +657,17 @@ export function createUiConditionMatrixPlugin(): Plugin {
           }
         });
 
-        // 失败态优先：显示原因 + 重试（不静默停在占位）
+        // 失败态优先：显示原因 + 重试（不静默停在占位）。可见文案给**中文原因**，
+        // 原始错误串留在悬停 title 里——技术信息不丢，但不是甩给作者的第一眼。
         if (loadError) {
           return createElement(
             'div',
             { className: 'panel-condition-matrix' },
-            createElement('div', { className: 'cm-error', title: loadError }, `条件矩阵加载失败：${loadError}`),
+            createElement(
+              'div',
+              { className: 'cm-error', title: loadError },
+              '条件矩阵加载失败：口上函数索引构建出错（悬停查看原始错误）',
+            ),
             createElement('button', { className: 'small', onClick: () => refresh() }, '重试'),
           );
         }
@@ -759,7 +764,9 @@ export function createUiConditionMatrixPlugin(): Plugin {
           const no = instructionNoOfSlot(fn.match.slot);
           if (no === null) return { key: fn.face, instructionNo: null };
           const name = instructionTable()?.lookupByNo(no);
-          return { key: `${fn.face}#${no}`, instructionNo: no, label: name ?? `#${no}` };
+          // 表里查不到名字时给**可读中文兜底**（「指令 310」，与「时机 指令 310：」同词序）：
+          // 裸 `#310` 是查表记号，作者读到的是又一个要背的格式。
+          return { key: `${fn.face}#${no}`, instructionNo: no, label: name ?? `指令 ${no}` };
         };
         // 记忆化：选择 / 过滤 / 折叠 / 无关刷新都不重算矩阵，仅「角色 × 依赖版本 × 适配器」变化才重建
         const matrixKey = `${entry?.no}|${depsEpoch}|${current.adapterId}`;

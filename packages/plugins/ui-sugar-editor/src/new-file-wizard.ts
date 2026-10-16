@@ -247,7 +247,9 @@ export function createNewKojoWizard(deps: WizardDeps): () => unknown {
         h('span', { className: 'wizard-label' }, '家族名（可选）'),
         h('input', {
           value: family,
-          placeholder: '如：セクハラコマンド；留空 = 初始家族',
+          // 示例取语料里真实存在、且语义即范例的版本名（M_KOJO_中文自制_*，语料 426 处）：
+          // 家族段是「别人版」的版本标签，旧日语示例（某个内容分类词）会误导成"填分类"。
+          placeholder: '如：中文自制；留空 = 初始家族',
           onChange: (e: { target: { value: string } }) => setFamily(e.target.value),
         })),
 
