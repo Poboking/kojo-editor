@@ -14,12 +14,343 @@
  * - 输入：`INPUT` / `INPUTS` / `PRINTBUTTON` / `PRINTBUTTONC`。
  *
  * 与 ZH-C 的分工：**本层只管"非块、非预处理"的行**；两条 pass 不许互相 import。
+ *
+ * ## 口径备忘（写死在这里，免得读代码的人猜）
+ * - 语言层槽位中文名：`LOCAL→局部` `LOCALS→局部$` `LOCALSS→局部表` `RESULT→结果`
+ *   `RESULTS→结果$` `COUNT→计数` `COUNTS→计数$` `COUNTSS→计数表` `SUCCESS→成否`；
+ *   `ARG→实参` / `ARGS→实参$` **复用 `keywords.ts` 的单一真源**（1 基换算：`ARG:k → 实参:(k+1)`，
+ *   与 `argTokenCnLabel` 同口径），本层不另造第二套。
+ * - 行尾节奏记号沿用投影既有语言：换行不等待 → ` 续`，等待 → ` 等待`，空体 → `空行`。
+ * - 参数体（`%VAR%`、`@"…"`、函数名、数字索引）**原样照抄**——行内残留英文记号是允许的，
+ *   红线只禁"整行逐字等于源行"。
+ * - 认不出 ⇒ `null`（`passes.ts` 负责显式兜底），宁缺勿猜。
  */
 
-import type { NativeDisplayInput } from './types';
+import { VARIADIC_ARG_NUMERIC, VARIADIC_ARG_STRING } from '../keywords';
+import type { NativeDisplayInput, NativeDisplayLookup, NativeDisplayPass } from './types';
+
+/* ==================== 词法小工具（行级，不建 token 流） ==================== */
+
+/** 剥行尾 `;` 注释（引号内的 `;` 不算）；注释原样回填到渲染结果尾部 */
+function splitTrailingComment(line: string): { code: string; comment: string } {
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === ';') return { code: line.slice(0, i).trimEnd(), comment: line.slice(i) };
+  }
+  return { code: line, comment: '' };
+}
+
+/** 按**顶层** `sep` 拆分（括号深度与引号内的分隔符不切） */
+function splitTopLevel(s: string, sep: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let cur = '';
+  for (const ch of s) {
+    if (quote !== null) {
+      cur += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      cur += ch;
+      quote = ch;
+      continue;
+    }
+    if (ch === '[' || ch === '(') depth++;
+    else if (ch === ']' || ch === ')') depth = Math.max(0, depth - 1);
+    if (ch === sep && depth === 0) {
+      out.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/* ==================== 目标（赋值左值 / 位原语第一参数） ==================== */
+
+/**
+ * 语言层内置槽位（Emuera 引擎级、非游戏知识）。
+ * `实参` / `实参$` 不在这张表里——ARG 族走 `keywords.ts` 的单一真源单独处理。
+ */
+const LANG_SLOTS: Readonly<Record<string, string>> = {
+  LOCAL: '局部',
+  LOCALS: '局部$',
+  LOCALSS: '局部表',
+  RESULT: '结果',
+  RESULTS: '结果$',
+  COUNT: '计数',
+  COUNTS: '计数$',
+  COUNTSS: '计数表',
+  SUCCESS: '成否',
+};
+
+/** 一个可赋值的引用：族头（可含 `$`）+ 零或多个 `:索引` / `[索引]` / `(索引)` 后缀 */
+const TARGET_RE = /^([A-Za-z][A-Za-z0-9_$]*)((?::[^:,()[\]\s]+|\[[^[\]]*\]|\([^()]*\))*)$/;
+/** 后缀链的第一段索引名（数字或符号名都喂 `slotCn`——批 F 口径：数字索引也能查到槽位中文名） */
+const FIRST_SUFFIX_RE = /^:([^:()[\]\s]+)|^\[([^[\]]*)\]|^\(([^()]*)\)/;
+
+interface RenderedTarget {
+  readonly text: string;
+  /** 至少发生了一次中文替换（别名 / 语言层槽位）——决定要不要补 `赋值` 动词 */
+  readonly translated: boolean;
+}
+
+function renderTarget(raw: string, lookup: NativeDisplayLookup | undefined): RenderedTarget | null {
+  const t = raw.trim();
+  const m = TARGET_RE.exec(t);
+  if (!m) return null;
+  const family = m[1]!;
+  const upper = family.toUpperCase();
+  const suffixText = m[2] ?? '';
+
+  if (upper === 'ARG' || upper === 'ARGS') {
+    // 与 argTokenCnLabel 同口径：k=0 归一为裸形，k>=1 → 视图:(k+1)（表层索引是 1 基）
+    const view = upper === 'ARG' ? VARIADIC_ARG_NUMERIC : VARIADIC_ARG_STRING;
+    const idx = /^:(\d+)$/.exec(suffixText);
+    if (idx) {
+      const k = Number(idx[1]!);
+      return { text: k === 0 ? view : `${view}:${k + 1}`, translated: true };
+    }
+    return { text: `${view}${suffixText}`, translated: true };
+  }
+
+  const lang = LANG_SLOTS[upper];
+  if (lang !== undefined) return { text: `${lang}${suffixText}`, translated: true };
+
+  const alias = lookup?.familyAlias(upper);
+  if (alias === undefined) return { text: t, translated: false };
+
+  let text = `${alias}${suffixText}`;
+  const fm = FIRST_SUFFIX_RE.exec(suffixText);
+  const indexName = fm?.[1] ?? fm?.[2] ?? fm?.[3];
+  if (indexName !== undefined) {
+    const cn = lookup?.slotCn(upper, indexName);
+    if (cn !== undefined) text = `${text}（${cn}）`;
+  }
+  return { text, translated: true };
+}
+
+/* ==================== 赋值 ==================== */
+
+/** `目标[, 目标…] <op> <值>`；op ∈ `= += -= *= /=`（`==`/`<=` 这类比较不进这里） */
+const ASSIGN_RE = /^([^;=<>!]+?)\s*(\+=|-=|\*=|\/=|=)(.*)$/;
+
+function renderAssignment(code: string, lookup: NativeDisplayLookup | undefined, depth: number): string | null {
+  if (depth > 3) return null;
+  const m = ASSIGN_RE.exec(code);
+  if (!m) return null;
+  const lhsRaw = m[1]!.trim();
+  const op = m[2]!;
+  const rhs = m[3]!.trimStart();
+  if (rhs.length === 0 || rhs.startsWith('=') || rhs.startsWith('==')) return null;
+
+  const rendered: string[] = [];
+  let translated = false;
+  for (const part of splitTopLevel(lhsRaw, ',')) {
+    const t = renderTarget(part, lookup);
+    if (t === null) return null; // 左里有读不懂的目标 ⇒ 整行不认领（宁缺勿猜）
+    rendered.push(t.text);
+    translated ||= t.translated;
+  }
+
+  let rhsOut = rhs;
+  if (ASSIGN_RE.test(rhs)) {
+    const inner = renderAssignment(rhs, lookup, depth + 1);
+    if (inner !== null) rhsOut = inner; // 链式 `A = B = 0`；翻不动就原样（行内英文允许）
+  }
+
+  if (translated) return `${rendered.join('，')} ${op} ${rhsOut}`;
+  return `赋值 ${lhsRaw} ${op} ${rhsOut}`; // 查不到别名也必须给中文形
+}
+
+/* ==================== 调用 ==================== */
+
+const CALL_RE = /^(?:([A-Z][A-Z0-9_]*)[ \t]+(\S[\s\S]*)|([A-Z][A-Z0-9_]*))$/;
+const CALL_VERBS: Readonly<Record<string, { readonly verb: string; readonly tail: string }>> = {
+  CALL: { verb: '调用', tail: '' },
+  CALLL: { verb: '调用', tail: ' 续' },
+  CALLFORM: { verb: '调用形', tail: '' },
+  TRYCALL: { verb: '尝试调用', tail: '' },
+  TRYCALLFORM: { verb: '尝试调用形', tail: '' },
+  TRYJUMP: { verb: '尝试跳转', tail: '' },
+};
+
+function renderCall(code: string): string | null {
+  const m = CALL_RE.exec(code);
+  if (!m) return null;
+  const kw = (m[1] ?? m[3] ?? '').toUpperCase();
+  const shape = CALL_VERBS[kw];
+  if (shape === undefined) return null;
+  const target = m[2];
+  if (target === undefined) return null; // 裸 `CALL` 无目标 = 畸形行
+  return `${shape.verb} ${target}${shape.tail}`;
+}
+
+/* ==================== 位原语 ==================== */
+
+const BIT_RE = /^(SETBIT|CLEARBIT|INVERTBIT)[ \t]+(\S[\s\S]*)$/;
+const BIT_VERBS: Readonly<Record<string, string>> = { SETBIT: '置位', CLEARBIT: '清位', INVERTBIT: '翻位' };
+
+function renderBitOp(code: string, lookup: NativeDisplayLookup | undefined): string | null {
+  const m = BIT_RE.exec(code);
+  if (!m) return null;
+  const parts = splitTopLevel(m[2]!, ',').map((x) => x.trim());
+  const targetRaw = parts[0];
+  const bits = parts.slice(1);
+  if (targetRaw === undefined || bits.length === 0) return null; // 缺位号 = 畸形行
+  const target = renderTarget(targetRaw, lookup);
+  const targetText = target === null ? targetRaw : target.text;
+  return `${BIT_VERBS[m[1]!.toUpperCase()]!} ${targetText} 第${bits.join('，')}位`;
+}
+
+/* ==================== 输出族 ==================== */
+
+const PRINT_RE = /^(PRINT[A-Z]*)(?:[ \t]+(\S[\s\S]*))?$/;
+
+interface PrintShape {
+  readonly verb: string;
+  /** 行尾节奏记号：` 续` / ` 等待`（沿用投影既有口径） */
+  readonly tail?: string;
+  /** 块开词：渲染成 `数据打印（逐行）：` 一类的块头，`''` = 无括注 */
+  readonly data?: string;
+}
+
+/**
+ * 只登记**投影表外**的变体（`PRINT_VARIANTS` 已认领的台词形不重复接管）；
+ * 表外的 `PRINTKONST` / `PRINTLC` 等一律 `null`——没把握的记号不配拥有中文名。
+ */
+const PRINT_SHAPES: Readonly<Record<string, PrintShape>> = {
+  PRINT: { verb: '片段打印' },
+  PRINTL: { verb: '打印', tail: ' 续' },
+  PRINTW: { verb: '打印', tail: ' 等待' },
+  PRINTV: { verb: '数值打印' },
+  PRINTVL: { verb: '数值打印', tail: ' 续' },
+  PRINTVW: { verb: '数值打印', tail: ' 等待' },
+  PRINTFORMV: { verb: '格式数值打印' },
+  PRINTFORMVL: { verb: '格式数值打印', tail: ' 续' },
+  PRINTSINGLE: { verb: '单项打印' },
+  PRINTSINGLEL: { verb: '单项打印', tail: ' 续' },
+  PRINTSINGLEW: { verb: '单项打印', tail: ' 等待' },
+  PRINTSINGLEV: { verb: '单项数值打印' },
+  PRINTSINGLEVL: { verb: '单项数值打印', tail: ' 续' },
+  PRINTSINGLEVW: { verb: '单项数值打印', tail: ' 等待' },
+  PRINTDATA: { verb: '数据打印', data: '' },
+  PRINTDATAL: { verb: '数据打印', data: '逐行' },
+  PRINTDATAW: { verb: '数据打印', data: '等待' },
+  PRINTDATAS: { verb: '数据打印', data: '并排' },
+};
+
+function renderPrint(code: string): string | null {
+  const m = PRINT_RE.exec(code);
+  if (!m) return null;
+  const shape = PRINT_SHAPES[m[1]!.toUpperCase()];
+  if (shape === undefined) return null;
+  const body = m[2];
+  if (shape.data !== undefined) {
+    const head = shape.data.length > 0 ? `${shape.verb}（${shape.data}）：` : `${shape.verb}：`;
+    return body === undefined ? head : `${head} ${body}`;
+  }
+  if (body === undefined) {
+    if (shape.tail === ' 等待') return '空行 等待';
+    if (shape.tail === ' 续') return '空行';
+    return shape.verb;
+  }
+  return `${shape.verb} ${body}${shape.tail ?? ''}`;
+}
+
+/* ==================== 按钮 / 输入 ==================== */
+
+const BUTTON_RE = /^(PRINTBUTTON|PRINTBUTTONC)[ \t]+(\S[\s\S]*)$/;
+
+function renderButton(code: string): string | null {
+  const m = BUTTON_RE.exec(code);
+  if (!m) return null;
+  const verb = m[1] === 'PRINTBUTTON' ? '按钮' : '按钮C';
+  const parts = splitTopLevel(m[2]!, ',').map((x) => x.trim());
+  const label = parts[0];
+  if (label === undefined || label.length === 0) return null;
+  const rest = parts.slice(1);
+  return rest.length > 0 ? `${verb} ${label} → ${rest.join('，')}` : `${verb} ${label}`;
+}
+
+/* ==================== 排版 / 等待（单词指令表） ==================== */
+
+const LINE_WORD_RE = /^([A-Za-z][A-Za-z0-9_]*)(?:[ \t]+(\S[\s\S]*))?$/;
+
+interface LayoutShape {
+  readonly verb?: string;
+  /** `none` = 不许带参数；`keep` = 参数原样照抄（必需）；`optional` = 参数原样（可缺）；`onoff` = `0/1 → 关/开` 其余照抄 */
+  readonly arg?: 'none' | 'keep' | 'optional' | 'onoff';
+  readonly tail?: string;
+  /** 整行固定形（`INPUT` 这类"输出槽位是语言层约定"的行） */
+  readonly fixed?: string;
+}
+
+const LAYOUT_SHAPES: Readonly<Record<string, LayoutShape>> = {
+  SETCOLOR: { verb: '着色', arg: 'keep' },
+  RESETCOLOR: { verb: '复原颜色', arg: 'none' },
+  FONTBOLD: { verb: '粗体', arg: 'onoff' },
+  FONTITALIC: { verb: '斜体', arg: 'onoff' },
+  FONTSIZE: { verb: '字号', arg: 'optional' },
+  CLEARLINE: { verb: '清空本行', arg: 'none' },
+  FORCEWAIT: { verb: '强制等待', arg: 'none' },
+  WAIT: { verb: '等待', arg: 'none' },
+  DRAWLINE: { verb: '分隔线', arg: 'optional' },
+  BAR: { verb: '进度条', arg: 'keep' },
+  BARL: { verb: '进度条', arg: 'keep', tail: ' 续' },
+  REDRAW: { verb: '重绘', arg: 'optional' },
+  RETURN: { verb: '返回', arg: 'optional' },
+  INPUT: { fixed: '输入 → 结果' },
+  INPUTS: { fixed: '输入 → 结果$' },
+};
+
+function renderLayout(code: string): string | null {
+  const m = LINE_WORD_RE.exec(code);
+  if (!m) return null;
+  const shape = LAYOUT_SHAPES[m[1]!.toUpperCase()];
+  if (shape === undefined) return null;
+  const body = m[2];
+  if (shape.fixed !== undefined) return body === undefined ? shape.fixed : null; // 固定形不许挂参数
+  if (shape.arg === 'none' && body !== undefined) return null; // 带参的"裸指令"不是我认的那条指令
+  if (shape.arg === 'keep' && body === undefined) return null;
+  let argOut = body;
+  if (shape.arg === 'onoff' && body !== undefined) {
+    argOut = body === '1' ? '开' : body === '0' ? '关' : body;
+  }
+  const head = argOut === undefined ? shape.verb! : `${shape.verb!} ${argOut}`;
+  return `${head}${shape.tail ?? ''}`;
+}
+
+/* ==================== 入口 ==================== */
+
+/** 前缀即"不归本层"的整行形态：`;` 注释、`#` 预处理、`$` 标签、`[` 停用区、`@` 函数头（全在 ZH-C / 结构层） */
+const NOT_MY_LINE_RE = /^[;#$[@]/;
 
 /** ZH-S 的入口（签名由 lead 钉死，禁止改名或加参） */
-export function renderStatementLine(input: NativeDisplayInput): string | null {
-  void input;
-  return null;
-}
+export const renderStatementLine: NativeDisplayPass = (input: NativeDisplayInput): string | null => {
+  const trimmed = input.content.trim();
+  if (trimmed.length === 0 || NOT_MY_LINE_RE.test(trimmed)) return null;
+  const { code, comment } = splitTrailingComment(trimmed);
+  if (code.length === 0) return null;
+  const rendered =
+    renderCall(code) ??
+    renderBitOp(code, input.lookup) ??
+    renderPrint(code) ??
+    renderButton(code) ??
+    renderLayout(code) ??
+    renderAssignment(code, input.lookup, 0);
+  if (rendered === null) return null;
+  const line = comment.length > 0 ? `${rendered} ${comment}` : rendered;
+  return line === input.content ? null : line; // 红线自证：原样返回一律视为失败
+};
