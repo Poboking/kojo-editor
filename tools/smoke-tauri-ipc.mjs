@@ -17,6 +17,24 @@
  * 用法：node tools/smoke-tauri-ipc.mjs [游戏目录]
  * 退出码：0 = 全 PASS；1 = 有 FAIL（输出逐项诊断）。
  * 注意：会弹出应用窗口（结束自动关闭）；会临时改写 store/recent-projects.json（结束还原）。
+ *
+ * 前置（HK-28 复跑配方；2026-10-16 真语料机跑通全绿：8 项 / FAIL 0，b1 PASS）：
+ *   1. 语料在位：位置参数 / KOJO_SMOKE_PROJECT / KOJO_CORPUS_SCAN_DIRS 任一能解析出目录；
+ *   2. 端口 1420/9222 空闲（`exit 2` = 别人在用，退避重试，别抢清端口）；
+ *   3. **本工具自带的 WebView2 隔离目录**（PITFALLS 70，跑完自删）：直连门 `kojo.ui.directMode.v1`
+ *      与「.kojo 预览」的引导选择都存 WebView localStorage ⇒ 共用画像时只要上一轮把直连打开过，
+ *      本轮游戏目录 ERB 就直接可编辑，b1 的「只读前置」根本不成立。
+ *   4. b1 的两个**实测**要点（缺一就红，红的是探针不是产品）：
+ *      ① 「.kojo 预览」引导弹窗在 filePath 的 effect 里 setState，**晚于**文件标签出现 ⇒
+ *         单次判定会把"还没弹"读成"没有弹窗"，于是打字打在还开着的 `.modal-mask` 上、
+ *         焦点被遮罩吃掉 ⇒ 只读事件永远不发生。本工具因此改成**重试式清弹窗 + 等弹窗真关 +
+ *         打字前无条件把焦点真点回编辑器中心**（实测读数 `focused=native-edit-context/div`）。
+ *      ② 按键两路都试，命中哪路记哪路：路 A `keyDown`(带 text)+`keyUp`、路 B
+ *         `rawKeyDown`+`char`+`keyUp`（EditContext 通道，PITFALLS §三-32）。本次实测
+ *         **route=keyDown+text** ⇒ 曾怀疑的"合成按键在 WebView2 下彻底失效"**不成立**，路 B 只兜底。
+ *   注：`approved-writable.json` 含不含该语料目录**不影响** b1 的只读前置——读数见
+ *   `[b1-diag] store 前置`：门是 `isErbLike ∧ ¬inWorkspace ∧ ¬canEdit`，批准写权限只喂
+ *   `canEdit` 的「直连门 ∧ 已批准」那一路，直连门关着照样只读、照样该弹解锁窗 ⇒ 本工具**不动 store**。
  */
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -50,6 +68,25 @@ if (!fs.existsSync(GAME_DIR)) {
 console.log(`[ipc] 游戏目录 = ${GAME_DIR}${explicitGameDir ? '（显式指定）' : '（按内容自动发现）'}`);
 const OUTSIDE_PATH = 'C:\\Windows\\Temp\\kojo-smoke-outside.txt';
 const CDP_PORT = 9222;
+/**
+ * 临时根：Git-Bash 下 `TMP` 可能是 POSIX 风格 `/tmp` 或干脆为空 —— 那样 cargo 起 link.exe
+ * 会往 `C:\WINDOWS\lnk{…}.tmp` 写而报 LNK1104（PITFALLS 26 同款，编译期直接红一轮）。
+ * Windows 一律落真 Temp 目录（照 tools/smoke-editor-features.mjs 的写法）。
+ */
+const TEMP_ROOT = (() => {
+  const t = os.tmpdir();
+  if (process.platform === 'win32' && !/^[A-Za-z]:[\\/]/.test(t)) {
+    return path.join(process.env.LOCALAPPDATA || `C:\\Users\\${os.userInfo().username}\\AppData\\Local`, 'Temp');
+  }
+  return t;
+})();
+/**
+ * WebView2 专用画像（PITFALLS 70）：同 identifier 实例并存时新窗口必挂 0x8007139F；
+ * 且 **直连模式 / 糖视图引导都存 WebView localStorage** ⇒ 共用画像会串味（上一轮把直连
+ * 打开过，本轮游戏目录 ERB 直接可编辑，b1 的「只读前置」根本不存在）。每次跑换新画像。
+ */
+const RUN_TAG = `kojo-smoke-ipc-${Date.now()}`;
+const WEBVIEW2_DIR = path.join(TEMP_ROOT, `${RUN_TAG}-webview2`);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const stripAnsi = (s) => s.replace(/\u001b\[[0-9;]*m/g, '');
@@ -147,6 +184,18 @@ class Cdp {
   async insertText(text) {
     await this.send('Input.insertText', { text });
   }
+  /**
+   * 单字符输入 —— Chromium **EditContext 通道**（PITFALLS §三-32 的实机成功路径；形态与
+   * smoke-editor-features.mjs 的 `typeChar` 逐字一致：rawKeyDown + char(带 text) + keyUp）。
+   * b1 里它是**兜底**：1016 真语料机实测路 A（`keyDown` 带 text）就足以触发
+   * `onDidAttemptReadOnlyEdit`（`[b1] … 按键路=keyDown+text`），换机器/换 WebView 版本时
+   * 若路 A 失灵，路 B 接手并且打印是哪一路命中的。
+   */
+  async typeChar(ch) {
+    await this.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: ch, text: ch, unmodifiedText: ch });
+    await this.send('Input.dispatchKeyEvent', { type: 'char', key: ch, text: ch, unmodifiedText: ch });
+    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+  }
   close() {
     try {
       this.ws?.close();
@@ -179,6 +228,64 @@ async function waitFor(cdp, expr, timeoutMs = 60000, intervalMs = 700) {
     await sleep(intervalMs);
   }
   throw new Error(`waitFor timeout (${timeoutMs}ms): ${expr} last=${JSON.stringify(last)}`);
+}
+
+/** 轮询到真为止；超时**不抛**，返回 false（判因探针要的是"有没有"，不是异常） */
+async function tryWaitFor(cdp, expr, timeoutMs, intervalMs = 500) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      if (await cdp.evalJs(expr, 8000)) return true;
+    } catch {}
+    await sleep(intervalMs);
+  }
+  return false;
+}
+
+/** 只读保护弹窗（糖版 / 简易版两朵都要认）——b1 断言的靶心，比裸 `.modal` 精确 */
+const READONLY_MODAL = `!!document.querySelector('.modal[aria-label="ERB 只读保护"], .modal[aria-label="文件只读保护"]')`;
+
+/**
+ * 只读态的**现场读数**（HK-28：把「红是环境还是代码」变成一眼可分的读数）。
+ * 读的全是屏上的东西，不改任何东西：
+ *   hints = 工具条那一族胶囊的 class + 文案（unlocked / direct 有没有）
+ *   sb    = 底部那颗 `.sb-writable` 的 class（口上区恒为 ro ⇒ 单看它判不出能不能写）
+ *   input = Monaco 输入面：`inputarea` 的 readonly 属性 / EditContext 是否存在 / 焦点在哪
+ *   modals= 此刻屏上的弹窗 aria-label 列表（等错一朵是历史红因之一）
+ */
+async function editorReadout(cdp) {
+  return cdp.evalJs(`(() => {
+    const t = (e) => (e ? (e.textContent ?? '').trim() : null);
+    const ia = document.querySelector('.editor-body .inputarea');
+    const ae = document.activeElement;
+    return {
+      hints: [...document.querySelectorAll('.erb-mode-hint, .sugar-toggle')].map((e) => e.className + '|' + t(e)),
+      sb: (() => { const s = document.querySelector('.sb-writable'); return s ? s.className + '|' + t(s) : null; })(),
+      input: {
+        has: !!ia,
+        readonly: ia ? ia.readOnly === true || ia.hasAttribute('readonly') : null,
+        tag: ia ? ia.tagName.toLowerCase() : null,
+        editContext: !!document.querySelector('.editcontext, [aria-multiline]') || 'editContext' in document,
+        focused: ae ? ae.className + '/' + ae.tagName.toLowerCase() : null,
+      },
+      modals: [...document.querySelectorAll('.modal')].map((m) => m.getAttribute('aria-label')),
+    };
+  })()`);
+}
+
+/**
+ * 打字触发「只读态下尝试编辑」——**两路都试，谁灵记谁**（HK-28 判因）：
+ *   路 A = 既有配方 `keyDown`(带 text) + `keyUp`
+ *   路 B = EditContext 通道 `rawKeyDown` + `char` + `keyUp`（PITFALLS §三-32 的实机成功路径）
+ * 返回命中那一路的名字，两路都不灵返回 'no-modal'。
+ */
+async function attemptReadonlyTyping(cdp) {
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', text: 'x', key: 'x', windowsVirtualKeyCode: 88, code: 'KeyX' });
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'x', windowsVirtualKeyCode: 88, code: 'KeyX' });
+  if (await tryWaitFor(cdp, READONLY_MODAL, 3000)) return 'keyDown+text';
+  await cdp.typeChar('x');
+  if (await tryWaitFor(cdp, READONLY_MODAL, 5000)) return 'rawKeyDown+char+keyUp';
+  return 'no-modal';
 }
 
 /* ----------------------- store 备（recent 播种） ----------------------- */
@@ -223,6 +330,44 @@ function restoreStore() {
   }
 }
 
+/**
+ * b1 的**前置读数**（node 侧只读 store 文件，不写）：把「只读门到底成不成立」拆开摆出来。
+ *
+ * 门的口径是 `isErbLike ∧ ¬inWorkspace ∧ ¬canEdit`（`lift-preview.ts`），其中
+ * `inWorkspace` 看 `workspace_roots.txt`、`canEdit` 看「直连门（WebView localStorage）」+
+ * `approved-writable.json`。**单看 approved-writable 判不出只读态**——批准过写权限但直连门
+ * 关着，ERB 照样只读、照样该弹解锁窗；这条读数的作用是把那种猜测当场证伪/证实。
+ */
+function storePrecheck() {
+  const low = (s) => String(s).toLowerCase();
+  let approvedDirs = [];
+  let approvedHasRoot = false;
+  try {
+    const j = JSON.parse(fs.readFileSync(approvedFile, 'utf-8'));
+    const key = low(GAME_DIR);
+    approvedHasRoot = Object.prototype.hasOwnProperty.call(j, key);
+    approvedDirs = approvedHasRoot ? (j[key] ?? []) : [];
+  } catch {
+    approvedDirs = ['（approved-writable.json 读不到）'];
+  }
+  let wsRoots = [];
+  try {
+    wsRoots = fs
+      .readFileSync(path.join(path.dirname(path.dirname(storeDir)), 'workspace_roots.txt'), 'utf-8')
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    wsRoots = [];
+  }
+  return {
+    approvedHasRoot,
+    approvedDirs,
+    workspaceRoots: wsRoots,
+    gameDirIsWorkspace: wsRoots.some((r) => low(GAME_DIR).startsWith(low(r) + '\\') || low(GAME_DIR).startsWith(low(r) + '/')),
+  };
+}
+
 /** 预检：等两个端口都空闲（上一轮遗留进程会占用，直接起会互相干扰） */
 async function waitPortsFree(timeoutMs = 60000) {
   const started = Date.now();
@@ -241,11 +386,24 @@ async function main() {
   seedRecent();
   await waitPortsFree();
 
-  console.log('[smoke] launching tauri dev (CDP %d) …', CDP_PORT);
+  // WebView2 画像：操作者显式给了就照用（并且**不动它**），否则本工具自带一具新鲜隔离画像。
+  const ownedWebviewDir = !process.env.WEBVIEW2_USER_DATA_FOLDER;
+  const webviewDir = ownedWebviewDir ? WEBVIEW2_DIR : process.env.WEBVIEW2_USER_DATA_FOLDER;
+  if (ownedWebviewDir) {
+    try {
+      fs.rmSync(webviewDir, { recursive: true, force: true });
+    } catch {}
+  }
+  console.log('[smoke] launching tauri dev (CDP %d, WebView2 画像 %s%s) …',
+    CDP_PORT, webviewDir, ownedWebviewDir ? '，跑完删除' : '，操作者指定，保留');
   const child = spawn('pnpm --filter @kojo/app tauri dev', {
     shell: true,
     cwd: ROOT,
-    env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}` },
+    env: {
+      ...process.env,
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
+      WEBVIEW2_USER_DATA_FOLDER: webviewDir,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -440,30 +598,51 @@ async function main() {
     // 首次打开游戏目录 ERB 会问一次「要开启 .kojo 预览吗」——那也是一朵 `.modal`。
     // 探针要的是**原文可编辑**，所以先答「不用」把局面清干净，免得后面等解锁弹窗时等错一朵。
     // （2026-10-14 起这朵弹窗真的会出现：预览已摘出封存总闸，默认关，首次询问是它的发现路径。）
-    const intro = await cdp.evalJs(`(() => {
-      const m = document.querySelector('.modal[aria-label=".kojo 预览"]');
-      if (!m) return 'no-intro';
-      const b = [...m.querySelectorAll('.modal-actions button')].find(e => e.textContent.trim() === '不用');
-      if (b) b.click();
-      return 'intro-dismissed';
-    })()`);
-    console.log(`[smoke] .kojo 预览 引导弹窗：${intro}`);
-    await sleep(600);
-    // 弹窗关掉后焦点不在编辑器上（上面那一次点击被弹窗吃掉了），重新点一次中心——
-    // 否则后面的合成按键打不到 Monaco，「只读态下尝试编辑」事件根本不会发生。
-    if (intro === 'intro-dismissed') {
-      await cdp.click(box.x, box.y);
-      await sleep(300);
+    // **重试式**（HK-28 照 smoke-editor-features 的 `dismissIntroIfAny`）：这朵弹窗在 filePath
+    // effect 里 setState，晚于文件标签出现；单次判定会把「还没弹」读成「没有弹窗」，
+    // 于是打字打在还开着的 `.modal-mask` 上——焦点被遮罩吃掉，只读事件永远不发生。
+    const dismissIntro = async () =>
+      cdp.evalJs(`(() => {
+        const m = document.querySelector('.modal[aria-label=".kojo 预览"]');
+        if (!m) return 'no-intro';
+        const b = [...m.querySelectorAll('.modal-actions button')].find(e => e.textContent.trim() === '不用');
+        if (b) b.click();
+        return 'intro-dismissed';
+      })()`);
+    let intro = 'no-intro';
+    for (let i = 0; i < 3; i++) {
+      intro = await dismissIntro();
+      if (intro === 'intro-dismissed') break;
+      await sleep(900);
     }
+    console.log(`[smoke] .kojo 预览 引导弹窗：${intro}`);
+    if (intro === 'intro-dismissed') {
+      await waitFor(cdp, `!document.querySelector('.modal')`, 10000);
+      await sleep(400);
+    }
+    // 无论有没有引导弹窗，打字前都把焦点真点回编辑器中心。
+    await cdp.click(box.x, box.y);
+    await sleep(300);
 
     const [mode0, pill0] = await readPill();
+    console.log(`[b1-diag] readPill=${mode0}/${pill0} 现场读数=${JSON.stringify(await editorReadout(cdp))}`);
+    console.log(`[b1-diag] store 前置=${JSON.stringify(storePrecheck())}`);
     if (mode0 === 'locked') {
       if (pill0 !== '只读') F('b0', '只读胶囊文案', `期望「只读」，实际「${pill0}」`);
       else P('b0', '只读胶囊文案', '屏上原样＝「只读」（无 🔒 字符）');
-      // 真实按键触发 Monaco 的"只读态下尝试编辑"事件（insertText 在只读下不产生该事件）
-      await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', text: 'x', key: 'x', windowsVirtualKeyCode: 88, code: 'KeyX' });
-      await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'x', windowsVirtualKeyCode: 88, code: 'KeyX' });
-      await waitFor(cdp, `!!document.querySelector('.modal')`, 15000);
+      const route = await attemptReadonlyTyping(cdp);
+      if (route === 'no-modal') {
+        F('b1', '轴二解锁（游戏目录 ERB）',
+          `两路合成按键都没弹出只读保护弹窗（keyDown+text / rawKeyDown+char+keyUp 各试一次）；` +
+          `此刻读数=${JSON.stringify(await editorReadout(cdp))}——按读数分「没焦点/没只读」与「按键通道失效」`);
+        throw new Error('b1: unlock modal never appeared');
+      }
+      const dlg = await cdp.evalJs(`(() => {
+        const m = document.querySelector('.modal[aria-label="ERB 只读保护"], .modal[aria-label="文件只读保护"]');
+        if (!m) return null;
+        return { label: m.getAttribute('aria-label'), h2: (m.querySelector('h2')?.textContent ?? '').trim(),
+                 btns: [...m.querySelectorAll('.modal-actions button')].map((e) => e.textContent.trim()) };
+      })()`);
       const unlockClick = await cdp.evalJs(`(() => {
         const b = [...document.querySelectorAll('.modal-actions button')].find(e => e.textContent.includes('仍要直接编辑'));
         if (!b) return 'no-unlock-button';
@@ -472,9 +651,17 @@ async function main() {
       })()`);
       if (unlockClick !== 'unlocked-click') throw new Error(`erb unlock failed: ${unlockClick}`);
       await waitFor(cdp, `!!document.querySelector('.erb-mode-hint.unlocked')`, 15000);
-      P('b1', '轴二解锁（游戏目录 ERB）', '打字 → 弹解锁询问 → 「仍要直接编辑」→ 工具条转「已解锁编辑」（底栏那颗按区域仍读作「只读」）');
-    } else if (mode0 === 'unlocked') {
-      S('b0', '只读胶囊文案', `开局已是解锁态（${pill0}）`);
+      P('b1', '轴二解锁（游戏目录 ERB）',
+        `按键路=${route} → 弹窗「${dlg ? dlg.label + '／' + dlg.h2 : '(aria-label 未匹配，仍按 .modal 命中)'}」` +
+        `按钮=${dlg ? dlg.btns.join('、') : '—'} → 「仍要直接编辑」→ 工具条转「已解锁编辑」（底栏那颗按区域仍读作「只读」）`);
+    } else {
+      // 'unlocked' = 上一段真解锁过；其余（'editable'）= 直连门被串开了 ⇒ 只读前置不存在。
+      // 两者都是**环境**问题不是代码问题，但都不许当 PASS 也不算 SKIP：报 FAIL 带读数。
+      const why = mode0 === 'unlocked' ? '开局已是解锁态' : '直连可编辑（画像串味：localStorage 里直连门是开的）';
+      S('b0', '只读胶囊文案', `${why}（${pill0}）`);
+      F('b1', '轴二解锁（游戏目录 ERB）',
+        `只读前置不成立：${why}；读数=${JSON.stringify(await editorReadout(cdp))} ` +
+        `store 前置=${JSON.stringify(storePrecheck())}`);
     }
 
     await cdp.insertText(`\n${marker}\n`);
@@ -590,6 +777,7 @@ async function main() {
   } finally {
     killTree();
     restoreStore();
+    if (ownedWebviewDir) await removeDirRetry(webviewDir, 'WebView2 隔离画像');
   }
 
   /* ------------------------------ 汇总 ------------------------------ */
@@ -599,6 +787,20 @@ async function main() {
   console.log(`共 ${results.length} 项；FAIL ${failCount}`);
   console.log(failCount === 0 ? '✅ tauri IPC 冒烟全部通过' : '❌ tauri IPC 冒烟存在失败项');
   process.exit(failCount === 0 ? 0 : 1);
+}
+
+/** 删临时目录（WebView2 进程收尾要几秒，EBUSY/EPERM 就重试；失败只报不抛） */
+async function removeDirRetry(dir, label) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      console.log(`[smoke] ${label} 已删除：${dir}`);
+      return;
+    } catch (e) {
+      if (attempt === 4) console.log(`[smoke] ${label} 删除失败（${dir}）：${String(e)}`);
+      else await sleep(1500);
+    }
+  }
 }
 
 /** 列 backup 目录下全部 .bak → Map(绝对路径 -> mtimeMs) */
