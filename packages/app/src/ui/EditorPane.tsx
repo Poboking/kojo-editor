@@ -161,6 +161,8 @@ function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables & 
       ...(adapter.kojoFaceTemplates ? { faceTable: adapter.kojoFaceTemplates } : {}),
       ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
       ...(adapter.kojoInstructionTable ? { instructionTable: adapter.kojoInstructionTable } : {}),
+      // 计数器中文名 → 原生编号的反查（ZH-D3）：与补全/诊断同一枚 adapter，运行时现取
+      ...(adapter.kojoCounterTable ? { counterTable: adapter.kojoCounterTable } : {}),
       // B5 签名帮助要的槽语义表（同一枚 adapter 贡献，运行时现取；缺席 = 不产签名）
       ...(adapter.kojoCallProtocol ? { callProtocol: adapter.kojoCallProtocol } : {}),
       erbFunctionNames: erbFunctionNamesFor(kernel),
@@ -1691,6 +1693,9 @@ export function EditorPane({
       renderWhitespace: 'none',
       scrollBeyondLastLine: false,
       wordWrap: 'on',
+      // 中文块回车的精确缩进层（ZH-D4）：`onEnterRules` 的正则只看得到原文，块头行尾带 `;`
+      // 注释这类同步层判不了的形态靠 on-type provider 兜；Monaco 只在 `formatOnType` 为真时派发它。
+      formatOnType: true,
       // 行上内联注解（B8）：**创建时就按默认关**——Monaco 这条选项的缺省是 `true`
       // （`common/config/editorOptions.js` 的 `EditorBooleanOption(23, 'codeLens', true)`），
       // 只靠下面那个偏好 effect 事后覆盖，等于让"默认关"依赖一次 effect 的时序；
