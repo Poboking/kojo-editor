@@ -292,3 +292,50 @@ describe('Kernel 组装级', () => {
     await kernel.stop();
   });
 });
+
+describe('Kernel 最近项目列表 removeRecent', () => {
+  it('移除中间一条：其余条目顺序与内容逐字不动', async () => {
+    const kernel = await bootKernel([makeFakeAdapterPlugin({ detect: [], load: [] })]);
+    await kernel.project.open('C:\\valid-root\\aaa');
+    await kernel.project.open('C:\\valid-root\\bbb');
+    await kernel.project.open('C:\\valid-root\\ccc');
+    const before = await kernel.project.recent();
+    expect(before.map((r) => r.rootDir)).toEqual([
+      'C:\\valid-root\\ccc',
+      'C:\\valid-root\\bbb',
+      'C:\\valid-root\\aaa',
+    ]);
+
+    await kernel.project.removeRecent('C:\\valid-root\\bbb');
+    const after = await kernel.project.recent();
+    expect(after.map((r) => r.rootDir)).toEqual(['C:\\valid-root\\ccc', 'C:\\valid-root\\aaa']);
+    // 逐字比对：除被移除条目外，其余对象（adapterId / lastOpenedAt）零变化
+    expect(after).toEqual([before[0]!, before[2]!]);
+    await kernel.stop();
+  });
+
+  it('移除不存在的路径：幂等 no-op，不抛错且列表不动', async () => {
+    const kernel = await bootKernel([makeFakeAdapterPlugin({ detect: [], load: [] })]);
+    await kernel.project.open('C:\\valid-root\\game');
+    const before = await kernel.project.recent();
+    await expect(kernel.project.removeRecent('C:\\nowhere')).resolves.toBeUndefined();
+    expect(await kernel.project.recent()).toEqual(before);
+    await kernel.stop();
+  });
+
+  it('移除最后一条后 recent() 读数为空', async () => {
+    const kernel = await bootKernel([makeFakeAdapterPlugin({ detect: [], load: [] })]);
+    await kernel.project.open('C:\\valid-root\\game');
+    await kernel.project.removeRecent('C:\\valid-root\\game');
+    expect(await kernel.project.recent()).toEqual([]);
+    await kernel.stop();
+  });
+
+  it('大小写 / 分隔符差异路径也能移除（Windows 判等走 pathKey）', async () => {
+    const kernel = await bootKernel([makeFakeAdapterPlugin({ detect: [], load: [] })]);
+    await kernel.project.open('C:\\valid-root\\game');
+    await kernel.project.removeRecent('c:/VALID-ROOT/GAME');
+    expect(await kernel.project.recent()).toEqual([]);
+    await kernel.stop();
+  });
+});

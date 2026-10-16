@@ -27,6 +27,12 @@ export interface ProjectService {
   /** 清空最近项目列表 */
   clearRecent(): Promise<void>;
   /**
+   * 从最近列表移除单条记录。路径判等走 pathKey（折叠大小写与分隔符），
+   * 与 pushRecent 的去重口径一致；目录不在列表时静默返回（幂等），
+   * 其余条目原样保留——UI 删除按钮对用户来说「点了就没了」，不该再弹错。
+   */
+  removeRecent(rootDir: string): Promise<void>;
+  /**
    * 用户批准写权限（onboarding 确认步骤调用）：
    * 立即对 io 生效 + 按 rootDir 持久化，下次打开同一目录自动恢复。
    * paths 必须是 project.writablePaths 的子集——UI 不能越权扩权。

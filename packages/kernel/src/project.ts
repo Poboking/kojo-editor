@@ -120,6 +120,15 @@ export class ProjectServiceImpl implements ProjectService {
     await this.deps.globalStorage.delete(KEY_RECENT);
   }
 
+  /** 按归一键移除单条最近记录；不存在时幂等 no-op，其余条目顺序与内容逐字保留 */
+  async removeRecent(rootDir: string): Promise<void> {
+    const list = (await this.deps.globalStorage.get<RecentProject[]>(KEY_RECENT)) ?? [];
+    const target = pathKey(rootDir);
+    const kept = list.filter((r) => pathKey(r.rootDir) !== target);
+    if (kept.length === list.length) return; // 未命中：不动存储，避免无谓写放大
+    await this.deps.globalStorage.set(KEY_RECENT, kept);
+  }
+
   /**
    * 用户批准写权限：立即生效 + 持久化（下次打开同一目录自动放行）。
    * paths 必须是 project.writablePaths 的子集（不允许 UI 越权扩权）。
