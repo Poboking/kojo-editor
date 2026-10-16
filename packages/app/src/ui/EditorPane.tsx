@@ -46,6 +46,12 @@ import { installRangeFormatter } from '../monaco/kojo-format-range';
 import { applyFormatOnSave } from './format-on-save';
 import { classifySaveRace } from './save-race';
 import { selectionStatusText } from './selection-status';
+import {
+  createPathMutex,
+  runSaveBatch,
+  withPathLock,
+  type SaveFileOutcome,
+} from './save-coordinator';
 import { loadFormatOnSavePref } from './format-pref';
 import { applyNameColorPref, subscribeNameColorPref } from './semantic-color-pref';
 import {
@@ -293,7 +299,7 @@ export interface EditorPaneActions {
   save: () => Promise<boolean>;
   /** 保存指定标签（含后台标签；model 仍在内存中，无需切换） */
   savePath: (path: string) => Promise<boolean>;
-  /** 保存全部脏标签（逐一走保存接管链；needs-choice 的后台标签跳过并通知） */
+  /** 保存全部脏标签（并发池 + 一条合成回执；needs-choice 跳过计入回执，不静默） */
   saveAll: () => Promise<boolean>;
   /** 全部脏标签的内容快照（autosave 兜底用：O(脏数) 取值，不切标签不落盘） */
   snapshots: () => EditorSnapshotRecord[];
@@ -877,6 +883,13 @@ function pathForUriAcrossGroups(uri: string): string | undefined {
 }
 
 
+/**
+ * A10：保存互斥从"组件实例一把全局锁"降为 **per-path 锁**，且提到模块级共享——
+ * 分屏后同一文件可在多组打开，锁必须跨实例生效；不同文件则放行使能并发写
+ * （IPC 桥逐命令独立、Rust 原子写临时名逐次唯一，跨文件并发无共享态可踩）。
+ */
+const sharedSaveLock = createPathMutex();
+
 interface Props {
   kernel: Kernel;
   /** 所属编辑器组 id（SPLIT-1 分屏：糖视图 model URI 隔离、宿主按组收动作句柄） */
@@ -937,7 +950,6 @@ export function EditorPane({
   const viewStatesRef = useRef(new Map<string, Monaco.editor.ICodeEditorViewState | null>());
   /** 上一个活动路径（切换时先把它的视图状态存下） */
   const prevPathRef = useRef<string | null>(null);
-  const savingRef = useRef(false);
   /** 上一次 savePath 是否走了"竞态保留脏"分支（写成功但保存期间又来新输入）——非失败，A6 不误报 */
   const saveRacedRef = useRef(false);
   const revealRef = useRef<RevealTarget | null>(null);
@@ -1465,131 +1477,149 @@ export function EditorPane({
   );
 
   /**
-   * 保存指定文件（活动标签与后台标签同一条路径）：
+   * 保存指定文件（活动标签与后台标签同一条路径；A10 起返回逐文件结果）：
+   * - **per-path 互斥**（`sharedSaveLock`）：同文件连点只写一次（第二次记 skipped-busy，
+   *   不排队重复落盘）；不同文件互不阻塞——全局锁的旧语义退役；
    * - 先就近征询**保存接管者**（槽 `ui.editor.saveHandler`）：命中（如 `.kojo`）
    *   则由接管者完成"保存源 + 编译产物"，宿主只消费其 `outcome`；
    * - 未命中 → 缺省路径：内核 io `writeText`（保编码保换行，受写白名单约束）；
-   * - `needs-choice`（全角空格告警）→ 活动标签弹确认框、**本次不落盘**；后台
-   *   标签（全部保存途中）跳过并显式通知（不静默吞）。
+   * - `needs-choice`（全角空格告警）→ 活动标签弹确认框、**本次不落盘**；后台标签
+   *   跳过并计入回执（`quiet` 模式逐条通知收进一条合成回执，跳过必须可见、不静默吞）。
    */
-  const savePath = useCallback(
-    async (path: string, choices?: EditorSaveChoices): Promise<boolean> => {
+  const savePathDetailed = useCallback(
+    async (path: string, choices?: EditorSaveChoices, quiet = false): Promise<SaveFileOutcome> => {
       const entry = entriesRef.current.get(path);
-      if (!entry || savingRef.current) return false;
-      const isActive = filePathRef.current === path;
-      // P0 前置拦截：按文件实际可写性判定（工作区恒可写，不被项目授权状态误伤——
-      // 双真相源：工作区 = 创作权威，游戏目录 = 部署目标）
-      if (!kernel.io.isWritable(path)) {
-        notify({
-          kind: 'error',
-          message: '保存被拒绝：项目当前为只读（写权限未批准或批准已失效）。',
-          action: { label: '去授权', run: () => onReauthRef.current() },
-        });
-        if (isActive) setError('只读：写权限未批准');
-        // 用户已表达明确的写入意图 → 软件主动重弹授权对话框（实机反馈：让用户自己去
-        // 发现并点击「重新授权」按钮 = 把软件的责任抛给用户，是设计错误）
-        onReauthRef.current();
-        return false;
-      }
-      const rawText = entry.model.getValue();
-      // 保存前整理（E2）：跑 `Shift+Alt+F` 那一份纯函数（同一真源，不复制规则）。
-      // 只改**内存文本**并让它落进 model，随后的保存链路一条不绕：写允许域已在上面判过、
-      // 编码/行尾由内核 io 保、备份与原子写在 `writeText`/`compileToFile` 里。
-      // 全角空格告警因此天然少弹一次：`planSave` 看的就是这份整理后的文本。
-      // 糖视图下不重算预览（与 `reloadFromDisk` 同口径：派生视图随下一次切换刷新）。
-      const prepared = applyFormatOnSave(
-        rawText,
-        dialectForLanguage(languageFor(path)),
-        loadFormatOnSavePref(),
-      );
-      let text = rawText;
-      if (prepared.changed) {
-        // `pushEditOperations` 一次落地全部 edits ⇒ 落进撤销栈的是**一个**元素；
-        // 用它而不是 `ed.executeEdits` 是因为后台标签的 model 不在编辑器上（全部保存途中）。
-        entry.model.pushEditOperations([], toTextEdits(entry.model, prepared.edits), () => null);
-        text = entry.model.getValue();
-      }
-      // A1 保存竞态守卫：文本定稿（保存前整理已落地）即快照版本号——写盘窗口内的
-      // 新输入只进 model 不进盘，落盘回包后必须版本未变才允许 markSaved 立基线，
-      // 否则保持脏并如实报失败（旧链路在 await 之后立基线，把没落盘的字节标成已保存）。
-      const versionAtFinalize = entry.model.getAlternativeVersionId();
-      const racedAfterWrite = (isActiveTab: boolean): false => {
-        saveRacedRef.current = true; // 写成功了，只是保存窗口内又来了新输入——A6 不当失败报
-        if (isActiveTab) setStatus('已保存，但保存期间又有新输入——文件仍标记为未保存');
-        else notify({ kind: 'info', message: `「${path}」保存完成，但保存期间又有新输入——已保留未保存标记` });
-        return false;
-      };
-      saveRacedRef.current = false;
-      savingRef.current = true;
-      try {
-        const handler = pickSaveHandler(kernel, path);
-        if (handler) {
-          const outcome = await handler.save({
-            path,
-            text,
-            project: kernel.project.current(),
-            ...(choices ? { choices } : {}),
-          });
-          if (outcome.status === 'needs-choice') {
-            if (isActive) {
-              setPendingChoice(outcome.warning); // 尚未落盘：由确认框决定
-              pendingChoiceRef.current = outcome.warning; // A6 护栏读同步镜像（effect 慢一帧，定时器等不起）
-            } else {
+      if (!entry) return { path, status: 'failed', message: '标签已不在编辑器中' };
+      saveRacedRef.current = false; // 每次保存尝试重记竞态（A6 失败守卫读这一位）
+      return withPathLock(
+        sharedSaveLock,
+        path,
+        async () => {
+          const isActive = filePathRef.current === path;
+          // P0 前置拦截：按文件实际可写性判定（工作区恒可写，不被项目授权状态误伤——
+          // 双真相源：工作区 = 创作权威，游戏目录 = 部署目标）
+          if (!kernel.io.isWritable(path)) {
+            if (!quiet) {
               notify({
-                kind: 'info',
-                message: `「${path}」存在保存告警，全部保存时已跳过——切到该标签单独保存可处理。`,
+                kind: 'error',
+                message: '保存被拒绝：项目当前为只读（写权限未批准或批准已失效）。',
+                action: { label: '去授权', run: () => onReauthRef.current() },
               });
+              // 用户已表达明确的写入意图 → 软件主动重弹授权对话框（实机反馈：让用户自己去
+              // 发现并点击「重新授权」按钮 = 把软件的责任抛给用户，是设计错误）
+              // quiet（全保存）下改由回执挂「去授权」action，一次弹窗不轰炸。
+              onReauthRef.current();
             }
-            return false;
+            if (isActive) setError('只读：写权限未批准');
+            return { path, status: 'failed', message: '项目当前为只读', needsReauth: true };
           }
-          if (outcome.status === 'error') {
-            if (isActive) setError(outcome.message);
-            else notify({ kind: 'error', message: `保存「${path}」失败：${outcome.message}` });
-            return false;
+          const rawText = entry.model.getValue();
+          // 保存前整理（E2）：跑 `Shift+Alt+F` 那一份纯函数（同一真源，不复制规则）。
+          // 只改**内存文本**并让它落进 model，随后的保存链路一条不绕：写允许域已在上面判过、
+          // 编码/行尾由内核 io 保、备份与原子写在 `writeText`/`compileToFile` 里。
+          // 全角空格告警因此天然少弹一次：`planSave` 看的就是这份整理后的文本。
+          // 糖视图下不重算预览（与 `reloadFromDisk` 同口径：派生视图随下一次切换刷新）。
+          const prepared = applyFormatOnSave(
+            rawText,
+            dialectForLanguage(languageFor(path)),
+            loadFormatOnSavePref(),
+          );
+          let text = rawText;
+          if (prepared.changed) {
+            // `pushEditOperations` 一次落地全部 edits ⇒ 落进撤销栈的是**一个**元素；
+            // 用它而不是 `ed.executeEdits` 是因为后台标签的 model 不在编辑器上（全部保存途中）。
+            entry.model.pushEditOperations([], toTextEdits(entry.model, prepared.edits), () => null);
+            text = entry.model.getValue();
           }
-          if (classifySaveRace(versionAtFinalize, entry.model.getAlternativeVersionId()) !== 'unchanged') {
-            return racedAfterWrite(isActive);
+          // A1 保存竞态守卫：文本定稿（保存前整理已落地）即快照版本号——写盘窗口内的
+          // 新输入只进 model 不进盘，落盘回包后必须版本未变才允许 markSaved 立基线，
+          // 否则保持脏并如实报失败（旧链路在 await 之后立基线，把没落盘的字节标成已保存）。
+          const versionAtFinalize = entry.model.getAlternativeVersionId();
+          const racedAfterWrite = (): SaveFileOutcome => {
+            saveRacedRef.current = true; // 写成功了，只是保存窗口内又来了新输入——A6 不当失败报
+            if (isActive) setStatus('已保存，但保存期间又有新输入——文件仍标记为未保存');
+            else if (!quiet) notify({ kind: 'info', message: `「${path}」保存完成，但保存期间又有新输入——已保留未保存标记` });
+            return { path, status: 'kept-dirty' };
+          };
+          try {
+            const handler = pickSaveHandler(kernel, path);
+            if (handler) {
+              const outcome = await handler.save({
+                path,
+                text,
+                project: kernel.project.current(),
+                ...(choices ? { choices } : {}),
+              });
+              if (outcome.status === 'needs-choice') {
+                if (isActive) {
+                  setPendingChoice(outcome.warning); // 尚未落盘：由确认框决定
+                  pendingChoiceRef.current = outcome.warning; // A6 护栏读同步镜像（effect 慢一帧，定时器等不起）
+                } else if (!quiet) {
+                  notify({
+                    kind: 'info',
+                    message: `「${path}」存在保存告警，全部保存时已跳过——切到该标签单独保存可处理。`,
+                  });
+                }
+                return { path, status: 'skipped-choice' };
+              }
+              if (outcome.status === 'error') {
+                if (isActive) setError(outcome.message);
+                else if (!quiet) notify({ kind: 'error', message: `保存「${path}」失败：${outcome.message}` });
+                return { path, status: 'failed', message: outcome.message };
+              }
+              if (classifySaveRace(versionAtFinalize, entry.model.getAlternativeVersionId()) !== 'unchanged') {
+                return racedAfterWrite();
+              }
+              markSaved(path, entry);
+              if (isActive) {
+                setError(null);
+                setStatus(outcome.note ? `${outcome.message} · ${outcome.note}` : outcome.message);
+              }
+              return { path, status: 'saved' };
+            }
+            // 缺省保存（无接管者 / 提供者未激活 → 优雅降级）
+            await kernel.io.writeText(path, text);
+            if (classifySaveRace(versionAtFinalize, entry.model.getAlternativeVersionId()) !== 'unchanged') {
+              return racedAfterWrite();
+            }
+            markSaved(path, entry);
+            if (isActive) {
+              setError(null);
+              setStatus(`已保存 ${new Date().toLocaleTimeString()}`);
+            }
+            return { path, status: 'saved' };
+          } catch (e: unknown) {
+            // 竞态兜底（批准在保存途中被收回等）：WriteNotAllowedError → 中文人话 + 去授权
+            if (e instanceof WriteNotAllowedError) {
+              if (!quiet) {
+                notify({
+                  kind: 'error',
+                  message: '保存被拒绝：写入路径不在已批准范围内。',
+                  action: { label: '去授权', run: () => onReauthRef.current() },
+                });
+                onReauthRef.current();
+              }
+              if (isActive) setError('只读：写权限未批准');
+              return { path, status: 'failed', message: '写入路径不在已批准范围内', needsReauth: true };
+            }
+            const msg = e instanceof Error ? e.message : String(e);
+            if (isActive) setError(msg);
+            else if (!quiet) notify({ kind: 'error', message: `保存「${path}」失败：${msg}` });
+            return { path, status: 'failed', message: msg };
           }
-          markSaved(path, entry);
-          if (isActive) {
-            setError(null);
-            setStatus(outcome.note ? `${outcome.message} · ${outcome.note}` : outcome.message);
-          }
-          return true;
-        }
-        // 缺省保存（无接管者 / 提供者未激活 → 优雅降级）
-        await kernel.io.writeText(path, text);
-        if (classifySaveRace(versionAtFinalize, entry.model.getAlternativeVersionId()) !== 'unchanged') {
-          return racedAfterWrite(isActive);
-        }
-        markSaved(path, entry);
-        if (isActive) {
-          setError(null);
-          setStatus(`已保存 ${new Date().toLocaleTimeString()}`);
-        }
-        return true;
-      } catch (e: unknown) {
-        // 竞态兜底（批准在保存途中被收回等）：WriteNotAllowedError → 中文人话 + 去授权
-        if (e instanceof WriteNotAllowedError) {
-          notify({
-            kind: 'error',
-            message: '保存被拒绝：写入路径不在已批准范围内。',
-            action: { label: '去授权', run: () => onReauthRef.current() },
-          });
-          if (isActive) setError('只读：写权限未批准');
-          // 与前置拦截同款：写被拒后自动重弹授权框，而不是让用户去找按钮
-          onReauthRef.current();
-          return false;
-        }
-        const msg = e instanceof Error ? e.message : String(e);
-        if (isActive) setError(msg);
-        else notify({ kind: 'error', message: `保存「${path}」失败：${msg}` });
-        return false;
-      } finally {
-        savingRef.current = false;
-      }
+        },
+        // 同文件在途（连点 / 跨组分屏并发）：拒绝第二次，绝不排队重复写盘
+        (): SaveFileOutcome => ({ path, status: 'skipped-busy' }),
+      );
     },
     [kernel, markSaved, notify],
+  );
+
+  /** 保存指定标签（对外保持布尔语义：非 saved 一律 false，与旧调用方零改动） */
+  const savePath = useCallback(
+    async (path: string, choices?: EditorSaveChoices): Promise<boolean> =>
+      (await savePathDetailed(path, choices)).status === 'saved',
+    [savePathDetailed],
   );
 
   /** 保存当前活动标签（Ctrl+S / 工具栏按钮） */
@@ -1602,17 +1632,26 @@ export function EditorPane({
     [savePath],
   );
 
-  /** 全部保存：逐一走保存接管链；任一失败整体返回 false（成功的不回滚） */
+  /**
+   * 全部保存（A10）：并发池（≤ `SAVE_MAX_CONCURRENCY` 路，防 IPC 洪泛）逐文件走
+   * 保存链——不同文件并发写、同文件被 per-path 锁挡成 skipped-busy（不排队重复写）。
+   * 成功/失败/跳过逐文件收集成**一条**回执通知（失败不轰炸、needs-choice 跳过必须
+   * 可见）；全部 saved 才返回 true（成功的不回滚）。
+   */
   const saveAll = useCallback(async (): Promise<boolean> => {
     const targets = openPathsRef.current.filter((p) => computeDirty(p));
-    let ok = true;
-    for (const p of targets) {
-      // 串行而非并行：保存接管者可能写多个产物文件，串行让状态/通知次序可预期
-      const r = await savePath(p);
-      if (!r) ok = false;
+    if (targets.length === 0) return true;
+    const { ok, receipt } = await runSaveBatch(targets, (p) => savePathDetailed(p, undefined, true));
+    if (receipt) {
+      notify({
+        kind: receipt.kind,
+        message: receipt.message,
+        // 写允许域拒绝合并进回执后，「去授权」入口跟着这条唯一的通知走
+        ...(receipt.needsReauth ? { action: { label: '去授权', run: () => onReauthRef.current() } } : {}),
+      });
     }
     return ok;
-  }, [computeDirty, savePath]);
+  }, [computeDirty, savePathDetailed, notify]);
 
   /**
    * 以磁盘最新内容重载某个打开中的 model（2026-10-12 审阅补丁，修 B1）。
@@ -1767,8 +1806,8 @@ export function EditorPane({
    */
   const runAutosave = useCallback(
     async (path: string): Promise<void> => {
-      // 只管活动标签；互斥被手动保存在途占住 = 这一拍放弃（下一次输入会重新计时）
-      if (path !== filePathRef.current || savingRef.current) return;
+      // 只管活动标签；per-path 锁被手动保存在途占住 = 这一拍放弃（下一次输入会重新计时）
+      if (path !== filePathRef.current || sharedSaveLock.isBusy(path)) return;
       const entry = entriesRef.current.get(path);
       if (!entry || entry.model.isDisposed()) return;
       const decision = decideAutosave({
