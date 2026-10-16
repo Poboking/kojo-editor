@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import { TUTORIALS, type TutorialSection } from '../src/tutorial-content';
 import { createTutorialOverlay } from '../src/tutorial-overlay';
 import { createEratwFaceTable } from '../src/face-templates';
+import { FAMILY_ALIASES } from '../src/variable-schema';
 import { parseTutorialInline, type TutorialInlineNode } from '../src/tutorial-inline';
 import {
   CONT_MARKS,
@@ -122,6 +123,16 @@ describe('全表 ↔ 实现真表（表漂移即红）', () => {
     expect(ENGINE_VARIABLE_FAMILIES.length).toBeGreaterThanOrEqual(20);
     const missing = ENGINE_VARIABLE_FAMILIES.filter((f) => !haystack.includes(f));
     expect(missing, `全表缺变量族：${missing.join(' / ')}`).toEqual([]);
+  });
+
+  it('中文族头别名：别名表的行由实现生成，条数与内容一致', () => {
+    const aliases = Object.keys(FAMILY_ALIASES);
+    expect(aliases.length).toBeGreaterThanOrEqual(20);
+    const sec = REF.sections.find((s) => s.heading.includes('变量与族'));
+    if (!sec) throw new Error('目录里没有「变量与族」那一节');
+    const rows = (sec.tables ?? []).flatMap((t) => t.rows);
+    const missing = aliases.filter((a) => !rows.some((r) => (r[0] ?? '').includes(a)));
+    expect(missing, `别名表缺：${missing.join(' / ')}`).toEqual([]);
   });
 
   it('行尾标记与保留代词：全部在表里', () => {

@@ -7,8 +7,10 @@
  * - 中文族头 `eratw-adapter/src/variable-schema.ts:189-194`（现在/时标/标记/随机），
  *   生效点 `kojo-sugar/src/expression.ts:261-287`（只认紧跟 `:` / `：`）；
  * - 名字来源与优先级 `eratw-adapter/src/variable-schema.ts:5-21, 87-115, 258-288`；
+ * - 中文族头别名 `eratw-adapter/src/variable-schema.ts:203-247`（23 条 + 排除台账 1 条；
+ *   下面那张别名表**由 `FAMILY_ALIASES` 当场生成**，不手抄）；
  * - 运算符表 `kojo-sugar/src/keywords.ts:379-396`；`不在` `expression.ts:538-575`；
- * - 系统函数表 `kojo-sugar/src/system-functions.ts:39-93`（45 条）；基础库表
+ * - 系统函数表 `kojo-sugar/src/system-functions.ts:39`起（55 条）；基础库表
  *   `eratw-adapter/src/library-table.ts:31-93`（55 条）；裸引擎全局
  *   `kojo-sugar/src/engine-globals.ts:44-67`（实测 **18** 条，此前口径的「17」与代码不符）；
  * - 标识符字符集 `kojo-sugar/src/identifier-chars.ts:11-29`；
@@ -26,6 +28,8 @@
  */
 
 import type { TutorialSection, TutorialTable } from './tutorial-content';
+// 中文族头对照表**由实现当场生成**（同包导入，不另抄一份 ⇒ 上游扩容别名这张表跟着长）
+import { FAMILY_ALIAS_EXCLUSIONS, FAMILY_ALIASES } from './variable-schema';
 
 /* ===================== 一、变量与族全表 ===================== */
 
@@ -76,10 +80,10 @@ const TABLE_VARIABLES: TutorialTable = {
       '「原样」连不认识的族头也照办：`亲和:1`、`GLOBAL:5`、`好感:2` 都零提示直通（实测）——游戏认不认是游戏的事。',
     ],
     [
-      '现在: 时标: 标记: 随机:',
-      '四个中文族头（全角冒号 现在： 也认）',
-      '现在:1→ `NOWEX:1`；时标:2→ `TFLAG:2`；标记:3→ `FLAG:3`；随机:100→ `RAND:100`；现在：噴乳→ `NOWEX:噴乳`（全部实测）',
-      '只有紧跟冒号才替换：光写一个 `现在` 后面没冒号，按没见过的名字报错（实测）。你用自己声明的「别名」占了这四个词时，你的别名优先（`expression.ts:252-255`）。',
+      '中文族头 + 冒号（`现在:` `刻印:` `角色标志:` …）',
+      '把引擎的族头写成中文；全角冒号 `现在：` 也认',
+      '一条规则：`<中文族头>:<槽位>` 编译成 `<引擎族头>:<槽位>`。例：现在:1→ `NOWEX:1`；时标:2→ `TFLAG:2`；标记:3→ `FLAG:3`；随机:100→ `RAND:100`；现在：噴乳→ `NOWEX:噴乳`（实测）',
+      '只有紧跟冒号才替换：光写一个 `现在` 后面没冒号，按没见过的名字报错（实测）。你自己用「别名」占了这些词时，你的别名优先（`expression.ts:252-255`）。全部对照见下一张表。',
     ],
     [
       '认账的族头（共 20 个）',
@@ -120,6 +124,20 @@ const TABLE_VARIABLES: TutorialTable = {
   ],
 };
 
+/**
+ * 中文族头对照表——**行由 `FAMILY_ALIASES` 当场生成**：上游扩容别名这张表跟着长，
+ * 不手抄一份等着过期。排除台账（目前没有中文写法的那些族）也从台账生成。
+ */
+const TABLE_FAMILY_ALIASES: TutorialTable = {
+  note:
+    '写法：`<中文族头>:<槽位>`，编译成 `<引擎族头>:<槽位>`；全角冒号也认。' +
+    `没有中文写法的族：${Object.keys(FAMILY_ALIAS_EXCLUSIONS)
+      .map((f) => `\`${f}\``)
+      .join('、')}——「参数」已经是块头子句里的词，同词两义宁缺勿滥（见 variable-schema.ts:246-248 的排除台账）。`,
+  columns: ['中文写法', '编译成的族头'],
+  rows: Object.entries(FAMILY_ALIASES).map(([alias, family]) => [`\`${alias}:\``, `\`${family}:\``]),
+};
+
 export const SEC_VARIABLES: TutorialSection = {
   heading: '「变量与族全表」',
   paragraphs: [
@@ -145,7 +163,7 @@ export const SEC_VARIABLES: TutorialSection = {
       erb: ['IF TALENT:12:恋慕 > 0', '    PRINTFORMW 「嗯。」', 'PRINTFORMW 「%CALLNAME:12%」'].join('\n'),
     },
   ],
-  tables: [TABLE_VARIABLES],
+  tables: [TABLE_VARIABLES, TABLE_FAMILY_ALIASES],
 };
 
 /* ===================== 二、别名与常量 ===================== */
@@ -339,7 +357,7 @@ const TABLE_BITS: TutorialTable = {
 };
 
 const TABLE_FUNCTIONS: TutorialTable = {
-  note: '中文函数名必须紧跟左括号（中间隔空格也认）；不带括号的光词永远不动（`system-functions.ts:133-165`）。下表 45 条全量照抄自系统函数表（`system-functions.ts:39-93`）。',
+  note: '中文函数名必须紧跟左括号（中间隔空格也认）；不带括号的光词永远不动（`system-functions.ts:133-165`）。下表照系统函数表全量列（`system-functions.ts:39`起）——条数不写死在这里，守卫按实现逐个对账。',
   columns: ['写法', '意思', '编译成什么', '注意'],
   rows: [
     ['获取标记( 设置标记( 清除标记( 反转标记(', '位的一读一写一清一翻', 'GETBIT / SETBIT / CLEARBIT / INVERTBIT', '位槽可写位名，见上一张表。'],
@@ -350,6 +368,9 @@ const TABLE_FUNCTIONS: TutorialTable = {
     ['取常量( 数组求和( 数组计数( 数组查找( 区间判定( 区间计数( 取角色号(', '对数组和 CSV 的批量操作', 'GETNUM / SUMARRAY / MATCH / FINDELEMENT / INRANGE / INRANGEARRAY / GETCHARA', '—'],
     ['首次(', '这件事是不是头一回', 'FIRSTTIME', '实测：首次("key") → `IF FIRSTTIME("key")`。另有「初回(…)」的写法会替你补上角色号，那是块语法，见全表另一篇。'],
     ['检查约会中( 检查焦点( 检查入口( 检查有孩子( 检查子名重复( 检查避妊恋爱( 检查避妊恋爱二( 检查避妊理由( 检查避妊理由二(', '游戏的九个状态检查', 'CHK_DATENOW / CHK_FOCUS / CHK_ENTRANCE / CHK_HAVE_CHILD / CHK_CHILDNAME_DUPLICATION / CHK_HININ_LOVE / CHK_HININ_LOVE_2 / CHK_HININ_REASON / CHK_HININ_REASON_2', '—'],
+    ['转小写( 转大写( 数值判定(', '文字换大小写、判断一串字是不是数', 'TOLOWER / TOUPPER / ISNUMERIC', '大小写那两条常用来把颜色名、输入归一成同一种写法。'],
+    ['数组大小( 数组最大值( 立方根(', '数组有几格、数组里最大的是几、开三次方', 'VARSIZE / MAXARRAY / CBRT', '与 `最大值(` 同族；`数组大小(` 读的是游戏用 `#DIM` 开出来的那格数。'],
+    ['取当前颜色( 取背景色( 取默认色( 取当前字体(', '问游戏此刻在用哪种颜色与字体', 'GETCOLOR / GETBGCOLOR / GETDEFCOLOR / GETFONT', '写色靠 `着色 …：` 块；这四条是反过来**读**当前状态，配合「存了再复归」的写法用。'],
     [
       '基础库函数的中文名',
       '游戏自带基础库里的常用帮手（心形、角色文本、着色消息、随机文本、询问是非、询问选项、显示图片、显示表情、设定口上色、调教消息、计数器消息、口上选项项、参数消息甲、男性名文本、料理名、呻吟、呻吟文本、拟声文本、他她、阴核描述、胸部描述、内裤名、显示下装、醉态表情、酒口味、自动喘息、淡入、加经验、改角色标记、恢复、基础强化、取得物品、取礼物数据、取目标数、分割串、建整数变量、建字符串变量、是男性、有阴茎、有阴道、是否立位、非人类判定、是否室内、是否室外、是否浴场、星期匹配、条件随机、取地图编号、未读判定、日记页设置、发情周期、时间推进、相互接吻、设定初吻、主角体位，共 55 条）',
