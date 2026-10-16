@@ -13,7 +13,7 @@ import type {
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { KernelServices, MARKET_SERVICE_KEY, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
+import { KernelServices, MARKET_SERVICE_KEY, WellKnownServices, basename, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { createEratwCounterTable, ERATW_COUNTER_ENTRIES } from './counter-table';
 import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
@@ -392,6 +392,51 @@ export function createEratwAdapterPlugin(): Plugin {
           ctx.bus.emit('ui.overlay.open', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eratw-adapter' });
         }),
       );
+
+      /* ---- 「从文件夹导入口上项目…」命令（命令面板入口） ---- */
+
+      /**
+       * 文件树右键只覆盖"目录已经在当前树里"的情形；作者手上更多是磁盘上任意
+       * 位置的作者包文件夹。这里用系统目录对话框补上这一口：选定 → 发**既有**
+       * 的 `workspace.importRequested` 意图，导入流程（P-F 向导）零改动复用——
+       * 本命令只负责把目录递进门里，不解释怎么导。
+       *
+       * 对话框通道即 `io.chooseWorkspaceRoot`（对话框即授权，铁律 6 的法定形态；
+       * 与新建向导的「项目位置」同族）——这里只借它的"选目录"形态，授权登记
+       * 由平台命令内部完成，本插件不碰授权本身。
+       */
+      ctx.slots.register('editor.command', {
+        id: 'kojo.importKojoProject',
+        title: '从文件夹导入口上项目…',
+        category: '文件',
+        // 不写 when：命令不依赖活动文件也不依赖打开的项目，任何上下文都可用
+        // （宿主对缺省 when 按"恒可用"求值）——按下去必须听到响，绝不灰着不说话。
+        run: async () => {
+          let picked: string | null;
+          try {
+            picked = await io.chooseWorkspaceRoot({ title: '选择要导入的作者包文件夹' });
+          } catch (err) {
+            // 对话框本身起不来（如无对话框能力的环境）：人话出声，不吞——
+            // 宁可让作者知道"这条路今天走不通"，也不让他对着毫无反应的按钮发呆。
+            const reason = err instanceof Error ? err.message : String(err);
+            ctx.log.error(`「从文件夹导入口上项目」打不开目录选择对话框：${reason}`);
+            return;
+          }
+          if (picked === null) {
+            // 取消 = 用户自己的动作，安静返回是尊重，不是静默失败：
+            // 他刚刚亲手关掉了对话框，再补一句"已取消"就是噪音。
+            return;
+          }
+          // 末段名做预填建议；根目录（`/`、`C:\`）没有末段 → 不带这个键，
+          // 让导入向导按自己的回退链取名，绝不让空串混进事件载荷。
+          const suggestedName = basename(picked);
+          ctx.bus.emit('workspace.importRequested', {
+            sourceDir: picked,
+            ...(suggestedName.length > 0 ? { suggestedName } : {}),
+            source: 'command-palette',
+          });
+        },
+      });
 
       /**
        * 名称解析 memo 随项目关闭清空（§5.73）。
