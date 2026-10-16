@@ -18,8 +18,11 @@ import { KOJO_LANGUAGE_ID } from './kojo-language';
  * 注册码却换不来任何新数据 ⇒ 只做宿主层，将来若插件要交**自己的**形参表（如 ERB 声明的
  * 实参名）再按 additive 形态加成员。
  *
- * 分层照旧：`findCallSite`（纯文本解析）→ `resolveSignature`（查表 + 夹取，纯函数）→
- * `installSignatureHelp`（只做 Monaco 协议翻译）。
+ * 分层照旧：`findCallSite`（纯文本解析，单行）→ `resolveSignature`（查表 + 夹取，纯函数）→
+ * `installSignatureHelp`（只做 Monaco 协议翻译）。R5 起另有跨行链：`findCallSiteAt`
+ * （向上收未闭合括号拼串）**复用** `findCallSite` 切分，`resolveSignatureInText` 是宿主
+ * 的多行入口；ERB 用户函数形参签名（`describeErbSignature`）作为调用协议不认识时的
+ * 第二查表面，由宿主按 additive 回调注入。
  */
 
 /** 一个实参的区间（0 基，`[start, end)`：`end` 落在分隔符或右括号那一格，不含它） */
@@ -84,8 +87,8 @@ function splitArguments(
  * 光标落在字符串字面量里／光标不在任何未闭合左括号之内／左括号前没有名字（如 `(1,2)` 裸一段）。
  *
  * 取的是**最内层**未闭合括号（`f(g(a,|), b)` 认 `g` 不认 `f`）——光标紧挨哪一层就在填哪一层的槽。
- * 只认**单行**：口上的续行形态（`+` 折行 / 跨行实参）不在本批射程内，跨行一律判 `null`，
- * 不去猜上一行是不是某个调用的开头。
+ * 这是**单行**入口（行为与本批前逐字一致）；跨行形态走 {@link findCallSiteAt}——它把
+ * 向上收来的行拼成单串后**复用本函数**，"最内层括号"语义天然跨行一致（同一段扫描代码）。
  */
 export function findCallSite(lineText: string, column: number): CallSite | null {
   if (!Number.isFinite(column) || column < 1) return null;
@@ -124,6 +127,91 @@ export function findCallSite(lineText: string, column: number): CallSite | null 
   }
   return { callee, args, activeIndex, closed };
 }
+
+/* ============================== 跨行调用位点（R5） ============================== */
+
+/**
+ * 跨行回看的**窗口上限**（行数）。签名帮助在**每次击键**时同步应答，回看必须封顶：
+ * 口上的调用实参撑死几行，64 行窗口覆盖一切真实形态；无界回看在大文件上每键 O(n)
+ * 纯浪费。窗口走满仍找不到调用起点 ⇒ 就地判 `null`（不猜）。
+ */
+export const SIGNATURE_LOOKBACK_LINES = 64;
+
+/**
+ * 截断一行里**引号外**的行内注释（`;` 起、至行尾；与 `kojo-completion-instructions`
+ * 的 `insideStringOrComment` 同口径：引号配平后第一个 `;`）。注释里的括号 / 逗号 / 引号
+ * 不能参与跨行深度与拼接——截掉，注释行自然截成空串。
+ */
+function stripInlineComment(line: string): string {
+  let inString = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === '"') inString = !inString;
+    else if (!inString && ch === ';') return line.slice(0, i);
+  }
+  return line;
+}
+
+/** 单行括号净增量（开 - 闭；字符串感知；**行内注释先截断**——注释里的括号不参与深度） */
+function lineParenDelta(line: string): number {
+  let delta = 0;
+  let inString = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === '"') inString = !inString;
+    else if (!inString) {
+      if (ch === ';') break; // 引号外 `;` 起是注释（与 stripInlineComment 同口径）
+      if (ch === '(' || ch === '[') delta++;
+      else if (ch === ')' || ch === ']') delta--;
+    }
+  }
+  return delta;
+}
+
+/**
+ * **跨行**调用位点解析（R5；**纯函数**；`column` = Monaco 的 1 基列，`lineIndex` 0 基）。
+ *
+ * 从光标行**向上**收未闭合括号：逐行累加 `lineParenDelta`（注释已截断、字符串感知），
+ * **"关多"行**（累计深度变负——它的闭合属于别的调用）即停；平衡行（delta=0）与正值行
+ * 都收进来——平衡行深度不变、拼进来无害（调用实参经常摊在没有括号的行上）。收到的区间
+ * **截掉行内注释后拼接**，光标列平移到拼串坐标，**复用** {@link findCallSite} 做切分
+ * ——"最内层括号 / 活跃槽 / 闭合"语义与单行完全同源，不存在第二套括号模型（两个真源
+ * 比没测更坏）。
+ *
+ * 边界口径：
+ * - 拼接后 {@link findCallSite} 的行首注释判定作用于拼串首行 = 调用起点行，语义不变；
+ * - 光标行**不截注释**（光标列平移后必须逐格对应原行）；
+ * - "关多"截断后拼串内括号若不闭合 ⇒ `findCallSite` 自然判 `null`（不猜）；
+ * - 回看窗口 {@link SIGNATURE_LOOKBACK_LINES} 走满仍未找到调用起点 ⇒ 就地收手
+ *   （签名帮助在每次击键时同步应答，回看必须 O(窗口)）。
+ */
+export function findCallSiteAt(lines: readonly string[], lineIndex: number, column: number): CallSite | null {
+  if (!Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= lines.length) return null;
+  const cursorLine = lines[lineIndex]!;
+  let start = lineIndex;
+  let depth = 0;
+  for (let k = lineIndex - 1; k >= 0 && lineIndex - k <= SIGNATURE_LOOKBACK_LINES; k--) {
+    depth += lineParenDelta(lines[k]!);
+    if (depth < 0) {
+      start = k + 1; // 关多：这枚闭合属于别的调用，起点在它之后
+      break;
+    }
+    start = k; // 平衡 / 正值都收进来（平衡行深度不变，拼进来无害）
+  }
+  const middle = lines
+    .slice(start, lineIndex)
+    .map(stripInlineComment)
+    .join('');
+  return findCallSite(middle + cursorLine, middle.length + column);
+}
+
+/** ERB 用户函数的形参（宿主从解析器索引取；本层不触盘、不查内核） */
+export interface ErbFunctionParam {
+  readonly name: string;
+}
+
+/** 按被调者名取形参表的宿主回调（缺席 / 不认识 ⇒ `null`，**不猜**） */
+export type ErbFunctionParamsResolver = (callee: string) => readonly ErbFunctionParam[] | null;
 
 /** 一次签名的中性呈现（不含 Monaco 类型，便于纯测） */
 export interface CallSignature {
@@ -166,7 +254,26 @@ export function describeCallSignature(
 }
 
 /**
+ * ERB 用户函数签名（R5）：`函数名(形参, 形参:1)`。
+ *
+ * 形参名**原文照抄**解析器索引（`ErbFunction.params` 的 `name`——作者在 `@` 头里写的
+ * 引擎记号，如 `ARG` / `ARGS:1 = 3` 里解析出的名）：这就是"有数据就用数据"——没有
+ * 形参表时本函数不会被调到（宿主回调回 `null`），**不存在 ARG:n 兜底造名**。
+ * `activeParameter` 夹取口径与 {@link describeCallSignature} 一致。
+ */
+export function describeErbSignature(
+  callee: string,
+  params: readonly ErbFunctionParam[],
+  activeIndex: number,
+): CallSignature {
+  const parameters = params.map((p) => p.name);
+  const activeParameter = parameters.length === 0 ? 0 : Math.min(Math.max(0, activeIndex), parameters.length - 1);
+  return { label: `${callee}(${parameters.join(', ')})`, parameters, activeParameter };
+}
+
+/**
  * 行文本 + 光标列 → 签名（**纯函数**，`installSignatureHelp` 与单测共用这一层）。
+ * 单行入口：行为与本批前逐字一致（跨行走 {@link resolveSignatureInText}）。
  *
  * `protocol` 缺省（项目没开 / adapter 没这张表）⇒ `null`；`slotsFor(callee)` 返回 `null`
  * （协议不认识这个函数）⇒ `null`；`slotsFor` 抛错 ⇒ `null`（能力出错退化可见，不让提示崩）。
@@ -187,6 +294,51 @@ export function resolveSignature(
   }
   if (!slots) return null; // 协议不认识 ⇒ 不应答（不猜）
   return { callee: callSite.callee, signature: describeCallSignature(callSite.callee, slots, callSite.activeIndex) };
+}
+
+/**
+ * **多行文本** + 光标行列 → 签名（R5；**纯函数**，宿主与单测共用）。
+ *
+ * 查表顺序（先具体后泛化）：调用协议表（槽语义，游戏知识）命中 ⇒ 用它；不认识且宿主
+ * 提供了 ERB 用户函数形参回调（`erbParams`，解析器索引）⇒ 用形参原文组装签名；两表
+ * 皆不认识 ⇒ `null`（**不猜**——既不造 ARG:n 兜底名，也不猜形参个数）。`erbParams`
+ * 抛错按"不认识"处理（退化可见、不让提示崩）。
+ *
+ * 跨行口径见 {@link findCallSiteAt}；`lineNumber` / `column` 都是 Monaco 1 基。
+ */
+export function resolveSignatureInText(
+  text: string,
+  lineNumber: number,
+  column: number,
+  protocol: KojoCallProtocol | undefined,
+  erbParams?: ErbFunctionParamsResolver,
+): ResolvedSignature | null {
+  if (!Number.isFinite(lineNumber) || lineNumber < 1) return null;
+  if (!Number.isFinite(column) || column < 1) return null;
+  const lines = text.split(/\r\n|\n/);
+  const lineIndex = lineNumber - 1;
+  if (lineIndex >= lines.length) return null;
+  const callSite = findCallSiteAt(lines, lineIndex, column);
+  if (!callSite) return null;
+  if (protocol) {
+    try {
+      const slots = protocol.slotsFor(callSite.callee);
+      if (slots) {
+        return { callee: callSite.callee, signature: describeCallSignature(callSite.callee, slots, callSite.activeIndex) };
+      }
+    } catch {
+      return null; // 协议表出错退化可见（与单行口径一致：不让提示崩）
+    }
+  }
+  if (!erbParams) return null;
+  let params: readonly ErbFunctionParam[] | null;
+  try {
+    params = erbParams(callSite.callee);
+  } catch {
+    return null;
+  }
+  if (!params) return null;
+  return { callee: callSite.callee, signature: describeErbSignature(callSite.callee, params, callSite.activeIndex) };
 }
 
 /** 宿主注入：这个位置该答什么签名（宿主在此做糖视图判据 + **运行时**现取 adapter 表） */

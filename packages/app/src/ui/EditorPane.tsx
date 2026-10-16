@@ -72,7 +72,7 @@ import {
 import {
   type SignatureTables,
   installSignatureHelp,
-  resolveSignature,
+  resolveSignatureInText,
 } from '../monaco/kojo-signature';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
@@ -1267,14 +1267,32 @@ export function EditorPane({
         });
       },
     });
-    // 签名帮助（B5，形参槽语义）：唯一真源 = adapter 的调用协议表，`editorTables` 运行时现取
-    // （表缺席 / `slotsFor` 不认这个函数 ⇒ 不应答，**不猜**）。糖视图挂的是只读派生 model，
-    // 它的行列不属于原文 ⇒ 与 codeAction / 转到定义同判据一律不应答。
+    // 签名帮助（B5 形参槽语义 + R5 跨行 / ERB 形参签名）：唯一真源两层——
+    // ① adapter 的调用协议表（槽语义）；② 协议不认识时的 ERB 用户函数形参（解析器索引
+    // `erb.parser`，按归一化名查定义取 `params` 原文）。两层都运行时现取（表随项目开闭
+    // 重建，缓存会把上一个项目的表带过来）；都缺席 / 都不认 ⇒ 不应答，**不猜**。
+    // 跨行：`resolveSignatureInText` 从光标行向上收未闭合括号（窗口封顶），最内层括号
+    // 语义与单行同源。糖视图挂的是只读派生 model，它的行列不属于原文 ⇒ 与 codeAction /
+    // 转到定义同判据一律不应答。
     const signatureDisposer = installSignatureHelp(monaco, {
       resolve: (model, position) => {
         const path = filePathRef.current;
         if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return null;
-        return resolveSignature(model.getLineContent(position.lineNumber), position.column, editorTables(kernel).callProtocol);
+        const protocol = editorTables(kernel).callProtocol;
+        return resolveSignatureInText(model.getValue(), position.lineNumber, position.column, protocol, (callee) => {
+          try {
+            const index = kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+            if (!index) return null;
+            const defs = index.byName.get(callee.toUpperCase());
+            const ref = defs?.[0];
+            if (!ref) return null;
+            const file = index.files.get(ref.filePath);
+            const fn = file?.functions.find((f) => f.startLine === ref.startLine);
+            return fn ? fn.params : null;
+          } catch {
+            return null;
+          }
+        });
       },
     });
     // 折叠范围（D3）：同一枚 `ui.editor.languageService` 槽的第三个判别成员。ERB 原文不缩进，

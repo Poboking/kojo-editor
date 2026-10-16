@@ -15,11 +15,15 @@ import type { KojoCallProtocol, KojoCallSlot } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
+  SIGNATURE_LOOKBACK_LINES,
   SIGNATURE_TRIGGER_CHARACTERS,
   describeCallSignature,
+  describeErbSignature,
   findCallSite,
+  findCallSiteAt,
   installSignatureHelp,
   resolveSignature,
+  resolveSignatureInText,
   slotParameterLabel,
   toMonacoSignatureHelp,
 } from '../src/monaco/kojo-signature';
@@ -156,6 +160,130 @@ describe('resolveSignature · 数据只从协议表来', () => {
         activeParameter: 2,
       },
     });
+  });
+});
+
+/* ============================== 跨行调用位点（R5 · findCallSiteAt / resolveSignatureInText） ============================== */
+
+describe('findCallSiteAt · 跨行未闭合括号', () => {
+  const linesOf = (text: string) => text.split('\n');
+  // `CALL F(A,\n    B)`：光标在第二行 `B` 上（列 5）
+  const MULTI = 'CALL F(A,\n    B)';
+
+  it('调用跨两行：起点行收上来，callee / 槽位 / 闭合判定与单行一致', () => {
+    // 第二行 `    B)`：光标列 5 = B 上 ⇒ 第 1 槽
+    expect(findCallSiteAt(linesOf(MULTI), 1, 5)).toMatchObject({ callee: 'F', activeIndex: 1, closed: true });
+    // 光标在第一行 `A` 上（列 8）照常（单行形态未破坏）
+    expect(findCallSiteAt(linesOf(MULTI), 0, 8)).toMatchObject({ callee: 'F', activeIndex: 0 });
+  });
+
+  it('括号跨行未闭合：`CALL F(A,\n    B` 照常应答（作者正写最后实参），closed=false', () => {
+    const hit = findCallSiteAt(linesOf('CALL F(A,\n    B'), 1, 7);
+    expect(hit).toMatchObject({ callee: 'F', activeIndex: 1, closed: false });
+  });
+
+  it('前一行是无关平衡行（delta=0）⇒ 一并拼入无害：光标行无调用 ⇒ null', () => {
+    // `PRINTL "x"` 深度 0；下一行没有括号 ⇒ null
+    expect(findCallSiteAt(linesOf('PRINTL "x"\n     '), 1, 3)).toBeNull();
+  });
+
+  it('前一行行内注释里的括号不参与深度（`;` 截断）：注释行不会把调用起点吞掉', () => {
+    // 注释行 `; F(1, 2` 的括号若参与深度，会把光标行调用的起点关联错
+    const hit = findCallSiteAt(linesOf('; F(1, 2\nCALL G(X)'), 1, 8);
+    expect(hit).toMatchObject({ callee: 'G' });
+  });
+
+  it('前一行"关多"（闭合属于别的调用）⇒ 截断收点，光标行自身的调用照常应答', () => {
+    // `X = F(1))` 多出一个 `)`（delta=-1）→ 向上收点截在它之后；光标行 `CALL G(A`
+    // 是合法的未闭合调用（作者正写）⇒ 照常应答 G，不被上一行的残括号连坐
+    expect(findCallSiteAt(linesOf('X = F(1))\nCALL G(A'), 1, 12)).toMatchObject({ callee: 'G', closed: false });
+  });
+
+  it('最内层括号语义跨行一致：跨行外层 + 行内内层，光标在内层认内层', () => {
+    // `CALL F(\n    G(A, B), C)` 光标在 B 上（第 2 行列 9）⇒ 认 G
+    const hit = findCallSiteAt(linesOf('CALL F(\n    G(A, B), C)'), 1, 9);
+    expect(hit).toMatchObject({ callee: 'G', activeIndex: 1 });
+    // 光标在 C 上（列 14）⇒ 认 F
+    expect(findCallSiteAt(linesOf('CALL F(\n    G(A, B), C)'), 1, 14)?.callee).toBe('F');
+  });
+
+  it('字符串里的跨行内容不参与：上一行引号内逗号不是分隔符、括号不计数', () => {
+    const hit = findCallSiteAt(linesOf('CALL F("A(B",\n    B)'), 1, 5);
+    expect(hit).toMatchObject({ callee: 'F', activeIndex: 1 });
+  });
+
+  it('回看窗口封顶：调用起点在窗口之外 ⇒ null（每击键同步应答，回看必须 O(窗口)）', () => {
+    const far = ['CALL F(', ...Array.from({ length: SIGNATURE_LOOKBACK_LINES }, () => '    A,'), '    B)'];
+    expect(findCallSiteAt(far, far.length - 1, 6)).toBeNull();
+    const near = ['CALL F(', ...Array.from({ length: SIGNATURE_LOOKBACK_LINES - 1 }, () => '    A,'), '    B)'];
+    expect(findCallSiteAt(near, near.length - 1, 6)).toMatchObject({ callee: 'F' });
+  });
+
+  it('非法行号 / 空文本 ⇒ null（不抛）', () => {
+    expect(findCallSiteAt([], 0, 1)).toBeNull();
+    expect(findCallSiteAt(linesOf('A'), 5, 1)).toBeNull();
+    expect(findCallSiteAt(linesOf('CALL F(A)'), -1, 5)).toBeNull();
+  });
+});
+
+describe('resolveSignatureInText · 跨行查表组装', () => {
+  it('跨行调用 + 协议命中：签名与单行一致（同一 describeCallSignature）', () => {
+    const hit = resolveSignatureInText('CALL F(A,\n    B, C)', 2, 9, protocol(SLOTS));
+    expect(hit).toEqual({
+      callee: 'F',
+      signature: {
+        label: 'F(ARG:3 事件子参数, ARG:4 日期偏移, ARGS:1 发言文本)',
+        parameters: ['ARG:3 事件子参数', 'ARG:4 日期偏移', 'ARGS:1 发言文本'],
+        activeParameter: 2,
+      },
+    });
+  });
+
+  it('协议不认识 → ERB 形参回调：形参名原文组装签名（有数据就用数据）', () => {
+    const hit = resolveSignatureInText('CALL MY_FUNC(X,\n    Y)', 2, 5, protocol(SLOTS), (name) =>
+      name === 'MY_FUNC' ? [{ name: 'ARG' }, { name: 'ARGS:1' }] : null,
+    );
+    expect(hit).toEqual({
+      callee: 'MY_FUNC',
+      signature: { label: 'MY_FUNC(ARG, ARGS:1)', parameters: ['ARG', 'ARGS:1'], activeParameter: 1 },
+    });
+  });
+
+  it('两表皆不认识 ⇒ null（**不造 ARG:n 兜底名**、不猜形参个数）', () => {
+    // protocol 只认 `F`；`MYSTERY` 两表皆不认识
+    expect(resolveSignatureInText('CALL MYSTERY(A,\n    B)', 2, 5, protocol(SLOTS), () => null)).toBeNull();
+    expect(resolveSignatureInText('CALL MYSTERY(A,\n    B)', 2, 5, protocol(SLOTS))).toBeNull();
+  });
+
+  it('协议命中优先于 ERB 形参回调（先具体后泛化）', () => {
+    const seen: string[] = [];
+    const hit = resolveSignatureInText('CALL F(A, B)', 1, 10, protocol(SLOTS, (n) => seen.push(n)), () => [
+      { name: '兜底' },
+    ]);
+    expect(hit!.signature.parameters[0]).toBe('ARG:3 事件子参数'); // 协议槽，不是 ERB 形参
+  });
+
+  it('ERB 形参回调抛错 ⇒ null（不让提示崩）', () => {
+    expect(
+      resolveSignatureInText('CALL F(A, B)', 1, 10, undefined, () => {
+        throw new Error('boom');
+      }),
+    ).toBeNull();
+  });
+
+  it('非法行 / 列 ⇒ null（不抛）', () => {
+    expect(resolveSignatureInText('CALL F(A)', 0, 5, protocol(SLOTS))).toBeNull();
+    expect(resolveSignatureInText('CALL F(A)', 1, 0, protocol(SLOTS))).toBeNull();
+  });
+});
+
+describe('describeErbSignature · ERB 用户函数签名', () => {
+  it('label 逐字包含每个形参名（Monaco 正则定位高亮的硬口径）；activeParameter 夹取', () => {
+    const signature = describeErbSignature('MY_FUNC', [{ name: 'ARG' }, { name: 'ARGS:1' }], 99);
+    expect(signature.label).toBe('MY_FUNC(ARG, ARGS:1)');
+    for (const p of signature.parameters) expect(signature.label).toContain(p);
+    expect(signature.activeParameter).toBe(1);
+    expect(describeErbSignature('F', [], 0)).toEqual({ label: 'F()', parameters: [], activeParameter: 0 });
   });
 });
 
