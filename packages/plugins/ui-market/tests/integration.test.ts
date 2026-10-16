@@ -796,6 +796,8 @@ function renderView(
     status: 'ready',
     packs,
     installed,
+    // 夹具自己加一遍只是给展示层一个输入；产品侧的唯一口径在服务 `installedBytes()`
+    installedBytes: installed.reduce((s, r) => s + r.files.reduce((t, f) => t + f.bytes, 0), 0),
     dropped: [],
     reason: '',
     fetchedAt: 1_700_000_000_000,
@@ -858,6 +860,18 @@ describe('面板安装面的渲染判据（哪一行有按钮）', () => {
     const latest = renderView([packs[3]!], [viewRec('same.pack', '1.0.1')]);
     expect(buttonsOf(latest).filter((b) => b === '安装' || b === '更新')).toEqual([]);
     expect(latest).toContain('已安装');
+  });
+
+  it('已装区给出「占用」读数（取快照里那条服务口径，本机没装就不显示）', () => {
+    const sized: InstalledPack = {
+      ...viewRec('sized.pack', '1.0.0'),
+      files: [
+        { path: 'files/a.ERB', bytes: 1024, sha256: HEX_A },
+        { path: 'files/b.ERB', bytes: 512, sha256: HEX_A },
+      ],
+    };
+    expect(renderView([], [sized])).toContain('占用 1.5 KB');
+    expect(renderView([], [])).not.toContain('占用');
   });
 
   it('本机版本不够装 ⇒ 行上没有按钮，只有一句"要求编辑器不低于 x.y.z"', () => {

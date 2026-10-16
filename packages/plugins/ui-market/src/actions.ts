@@ -36,6 +36,11 @@ export interface MarketSnapshot {
   readonly status: MarketViewStatus;
   readonly packs: MarketIndexEntry[];
   readonly installed: InstalledPack[];
+  /**
+   * 已装包占用字节（KM-11 的"占用"读数，口径 = 服务 `installedBytes()`）。
+   * 面板**不**自己把 `installed[].files` 加一遍——那是把服务的口径复制到展示层（第二份真相）。
+   */
+  readonly installedBytes: number;
   /** 被剔除条目（形状坏 / 同 id 异 kind 冲突）；`absent`/`invalid` 时为空 */
   readonly dropped: readonly string[];
   /** `invalid` 的可诊断原因（其余态空串） */
@@ -53,6 +58,7 @@ export interface MarketSnapshot {
 function snapOf(
   state: MarketIndexState,
   installed: InstalledPack[],
+  installedBytes: number,
   endpoint: string,
   pullNote = '',
 ): MarketSnapshot {
@@ -60,6 +66,7 @@ function snapOf(
     status: resolveStatus(state),
     packs: state.state === 'ok' ? state.index.packs : [],
     installed,
+    installedBytes,
     dropped: state.state === 'ok' ? state.dropped : [],
     reason: state.state === 'invalid' ? state.reason : '',
     fetchedAt: state.state === 'ok' ? state.fetchedAt : null,
@@ -78,6 +85,7 @@ function failedSnapshot(pullNote: string): MarketSnapshot {
     status: 'list-unreadable',
     packs: [],
     installed: [],
+    installedBytes: 0,
     dropped: [],
     reason: pullNote,
     fetchedAt: null,
@@ -91,8 +99,13 @@ function failedSnapshot(pullNote: string): MarketSnapshot {
 export async function loadMarketSnapshot(deps: MarketActionDeps): Promise<MarketSnapshot> {
   const { market, log } = deps;
   try {
-    const [state, installed, endpoint] = await Promise.all([market.index(), market.installed(), market.endpoint()]);
-    return snapOf(state, installed, endpoint);
+    const [state, installed, endpoint, bytes] = await Promise.all([
+      market.index(),
+      market.installed(),
+      market.endpoint(),
+      market.installedBytes(),
+    ]);
+    return snapOf(state, installed, bytes, endpoint);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log.warn(`市场面板读列表失败：${message}`);
@@ -120,8 +133,12 @@ export async function pullMarketSnapshot(
       log.warn(`市场索引拉取失败：${refresh.reason}（${refresh.detail ?? ''}）`);
     }
     // 刷新结果**自带**盘上那份状态：成功是新列表，失败是原样旧列表（失败绝不清空）
-    const [installed, endpoint] = await Promise.all([market.installed(), market.endpoint()]);
-    return snapOf(refresh.index, installed, endpoint, note);
+    const [installed, endpoint, bytes] = await Promise.all([
+      market.installed(),
+      market.endpoint(),
+      market.installedBytes(),
+    ]);
+    return snapOf(refresh.index, installed, bytes, endpoint, note);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log.warn(`市场面板刷新失败：${message}`);

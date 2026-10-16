@@ -183,7 +183,15 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
     p.note === '' ? null : createElement('div', { className: 'mk-note' }, p.note),
     droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
     createElement('div', { className: 'mk-hint' }, CAPABILITY_HINT),
-    createElement('h4', { className: 'mk-grouptitle' }, '已安装'),
+    // 占用读数取服务 `installedBytes()`（契约里那条唯一口径），面板不自己把 files 加一遍
+    createElement(
+      'h4',
+      { className: 'mk-grouptitle' },
+      '已安装',
+      rows.length === 0
+        ? null
+        : createElement('span', { className: 'mk-meta' }, `占用 ${formatBytes(snapshot.installedBytes)}`),
+    ),
     rows.length === 0
       ? createElement('div', { className: 'mk-empty' }, '本机还没有装好的包')
       : createElement(
@@ -282,6 +290,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           status: 'list-missing',
           packs: [],
           installed: [],
+          installedBytes: 0,
           dropped: [],
           reason: '',
           fetchedAt: null,
