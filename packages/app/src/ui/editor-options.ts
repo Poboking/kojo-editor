@@ -1,23 +1,18 @@
 /**
- * Monaco 选项：按文件体量分级（2026-10-12「内核优化」批；目标 = 超长文件丝滑）。
+ * Monaco 选项：按文件体量分三档降级（表驱动；目标 = 超长文件丝滑）。
  *
- * ## 背景（实测，见 `docs/archive/PERF-REVIEW-2026-10-11.md` §7.3/§7.6）
- *
- * 真实口上语料里最大的单个 ERB 达 **52,601 行 / 2.35 MB**（2,317 个文件中 ≥5,000 行的
- * 占 6.0%）。原先 `monaco.editor.create` 里**一个相关开关都没设**，全部走 Monaco 默认值，
- * 其中三项的默认值在大文件上是"全文级"操作：
- *
- * | 选项 | 默认 | 大文件上的代价 |
+ * | 档 | 行数 | 定位 |
  * |---|---|---|
- * | `occurrencesHighlight` | `singleFile` | 光标一停就**整篇找同词** |
- * | `bracketPairColorization` | 开 | 需在**整篇文档**上建配对标色 |
- * | `matchBrackets` | `always` | 整篇文档找配对括号 |
+ * | `small` | < 5,000 | 全部便利特性（引导线全开、光标动画全速） |
+ * | `large` | ≥ 5,000（语料 ≥5,000 行占 6.0%，最大单文件 52,601 行） | 关"全文级"开销 |
+ * | `huge` | ≥ 50,000（语料有 99 万行级盘） | 装饰性渲染也一并关 |
  *
- * 本模块把这些开关按体量分两档（阈值 `LARGE_FILE_LINES`），编辑口上的实际需求
- * （读/改台词行）不需要上述任何一项在大文件上开启。
+ * 全档不变式：`CJK_TYPING_BASELINE` 每档 spread；降级集永不含 `fontSize` / `zoomLevel`
+ * （A1 偏好独立管，走 EditorZoom 单例）。所有键已对 monaco-editor@0.57.0 `monaco.d.ts`
+ * 实测核实（IEditorOptions / IGlobalEditorOptions / IGuidesOptions）。
  *
  * **纯函数**（`editorOptionsForLineCount`）便于单测；宿主在**每次切文件**时调用并
- * `editor.updateOptions(...)`。
+ * `editor.updateOptions(...)`，切回小文件即恢复（补丁是全量重发、不卡死）。
  */
 import type * as Monaco from '../monaco/entry';
 import { CJK_AMBIGUOUS_WHITELIST, CJK_WORD_SEPARATORS } from '../monaco/word-separators';
@@ -25,11 +20,17 @@ import { CJK_AMBIGUOUS_WHITELIST, CJK_WORD_SEPARATORS } from '../monaco/word-sep
 /** 大文件阈值（行）：≥ 此行数即降级若干"全文级"Monaco 特性 */
 export const LARGE_FILE_LINES = 5000;
 
+/** 超大文件阈值（行）：≥ 此行数连视口级的装饰性渲染也一并关 */
+export const HUGE_FILE_LINES = 50_000;
+
+/** 体量档位（表驱动降级：每档一行表项，差异一眼可读、可测） */
+export type EditorProfileTier = 'small' | 'large' | 'huge';
+
 /** 供 `editor.updateOptions` 使用的选项补丁 */
 export type EditorOptionPatch = Monaco.editor.IEditorOptions & Monaco.editor.IGlobalEditorOptions;
 
 /**
- * 中文语料的打字噪声 / 选词基线（A2+A3，**大小文件两档同值**）：
+ * 中文语料的打字噪声 / 选词基线（A2+A3，**所有档位同值**）：
  * 既 spread 进 `editorOptionsForLineCount`（切文件路径），也 spread 进 EditorPane 的 create options。
  *
  * - `quickSuggestions:false`——两个补全 provider 在任何 token 上下文都无门槛地返回候选
@@ -58,32 +59,106 @@ export const CJK_TYPING_BASELINE: EditorOptionPatch = {
   },
 };
 
+/** 与体量无关的公共补丁（各档共用，不进档位表） */
+const COMMON_OPTIONS: EditorOptionPatch = {
+  // 基于词的建议对 ERB / 口上中文文本无意义（补全由自带 provider 提供），且默认会扫文档
+  wordBasedSuggestions: 'off',
+  // 语料缩进实况（fixtures 全量 .ERB/.erb 清点：tab 488 行 vs 空格缩进 2 行且非语料文件）：
+  // tab 惯例钉死；关探测后（large/huge）靠这两键兜底，探测开着时（small）仍随文件内容走
+  tabSize: 4,
+  insertSpaces: false,
+};
+
+/** small 档全量（与 EditorPane 的 create options 对齐——切标签往返不产生"半套恢复"） */
+const TIER_SMALL: EditorOptionPatch = {
+  occurrencesHighlight: 'singleFile',
+  matchBrackets: 'always',
+  bracketPairColorization: { enabled: true },
+  // 引导线全开：括号对纵向 guide + 缩进 guide + 活动项高亮
+  guides: {
+    bracketPairs: true,
+    bracketPairsHorizontal: 'active',
+    highlightActiveBracketPair: true,
+    indentation: true,
+    highlightActiveIndentation: true,
+  },
+  minimap: { enabled: true, renderCharacters: false, maxColumn: 72 },
+  renderLineHighlight: 'all',
+  renderLineHighlightOnlyWhenFocus: false,
+  // 粘性滚动（B3）：贴顶行给的就是大纲项（当前函数 / 当前时机块）
+  stickyScroll: { enabled: true, maxLineCount: 4 },
+  smoothScrolling: true,
+  cursorBlinking: 'blink',
+  cursorSmoothCaretAnimation: 'on',
+  // 偶尔混排的空格文件跟内容走（探测只扫文件头，代价可忽略）
+  detectIndentation: true,
+};
+
+/** large 档全量（huge 在其上再削；同时也是 huge 档的继承基座） */
+const TIER_LARGE: EditorOptionPatch = {
+  // 光标停留即"整篇找同词"——大文件头号隐性开销
+  occurrencesHighlight: 'off',
+  // 括号配对高亮：'always' 对整篇文档找配对；大文件降为"仅视口附近"
+  matchBrackets: 'near',
+  // 括号对着色需在整篇文档上建索引——大文件关
+  bracketPairColorization: { enabled: false },
+  // 引导线缩到"活动括号对"：视口级、不随全文增长
+  guides: {
+    bracketPairs: 'active',
+    bracketPairsHorizontal: 'active',
+    highlightActiveBracketPair: false,
+    indentation: false,
+    highlightActiveIndentation: false,
+  },
+  minimap: { enabled: false },
+  renderLineHighlight: 'line',
+  // 失焦仍铺高亮是白烧一次整行重绘
+  renderLineHighlightOnlyWhenFocus: true,
+  // 贴顶要在每次滚动后按可见区间重算行位置，这个体量不划算
+  stickyScroll: { enabled: false },
+  // 平滑滚动每帧插值重排视口；光标动画是持续重绘源——大档起全停
+  smoothScrolling: false,
+  cursorBlinking: 'solid',
+  cursorSmoothCaretAnimation: 'off',
+  // 语料同质（tab），不值得为探测再扫一遍文件头
+  detectIndentation: false,
+};
+
+/** huge 档 = large 档再削掉一切视口级装饰 */
+const TIER_HUGE: EditorOptionPatch = {
+  ...TIER_LARGE,
+  // 99 万行级盘：连视口级的括号配对查找也关（'never' 是 0.57 d.ts 合法值）
+  matchBrackets: 'never',
+  guides: {
+    bracketPairs: false,
+    bracketPairsHorizontal: false,
+    highlightActiveBracketPair: false,
+    indentation: false,
+    highlightActiveIndentation: false,
+  },
+};
+
+/** 档位差异表（键 = 档名，每档差异一眼可读、可测） */
+const TIER_OPTIONS: Record<EditorProfileTier, EditorOptionPatch> = {
+  small: TIER_SMALL,
+  large: TIER_LARGE,
+  huge: TIER_HUGE,
+};
+
+/** 档位判定（纯函数；阈值含等号，与降级语义"≥ 即降"一致） */
+export function editorProfileTierForLineCount(lineCount: number): EditorProfileTier {
+  if (lineCount >= HUGE_FILE_LINES) return 'huge';
+  if (lineCount >= LARGE_FILE_LINES) return 'large';
+  return 'small';
+}
+
 /**
- * 与文件规模相称的 Monaco 选项（**纯函数**）。
- *
- * 小文件档 = 保留全部便利特性；大文件档 = 关掉"全文级"开销，只留视图内的那些。
+ * 与文件规模相称的 Monaco 选项（**纯函数**）= 中文基线 + 公共补丁 + 档位表全量。
  */
 export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch {
-  const large = lineCount >= LARGE_FILE_LINES;
   return {
     ...CJK_TYPING_BASELINE,
-    // 光标停留即"整篇找同词"——大文件头号隐性开销
-    occurrencesHighlight: large ? 'off' : 'singleFile',
-    // 基于词的建议对 ERB / 口上中文文本无意义（补全由自带 provider 提供），
-    // 且默认会在输入时扫文档——一律关
-    wordBasedSuggestions: 'off',
-    // 括号配对高亮：'always' 对整篇文档找配对；大文件降为"仅视口附近"
-    matchBrackets: large ? 'near' : 'always',
-    // 括号对着色需在整篇文档上建索引——大文件关
-    bracketPairColorization: { enabled: !large },
-    // 缩略图：小文件保留"文本块"模式（口上是长行文，色块更干净也更省）；
-    // 大文件整篇渲染不划算，关掉
-    minimap: large ? { enabled: false } : { enabled: true, renderCharacters: false, maxColumn: 72 },
-    // 当前行高亮：'all' 会额外整行铺色；大文件只保留行号侧
-    renderLineHighlight: large ? 'line' : 'all',
-    // 粘性滚动（B3）：小文件档开——贴顶行给的就是大纲项（当前函数 / 当前时机块），
-    // 读长正文时"我在哪一层"不再靠滚回开头看。大文件档仍关：贴顶要在每次滚动后
-    // 按可见区间重算行位置，52,000 行那种文件上不划算（与本模块其余降级同一条理由）。
-    stickyScroll: large ? { enabled: false } : { enabled: true, maxLineCount: 4 },
+    ...COMMON_OPTIONS,
+    ...TIER_OPTIONS[editorProfileTierForLineCount(lineCount)],
   };
 }
