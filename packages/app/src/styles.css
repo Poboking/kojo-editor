@@ -3413,6 +3413,9 @@ button.primary .hint {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* 样例区按容器宽度断行（.tutorial-sample 用 cqw 突破正文列）——
+     查询容器挂在滚动体上，cqw 天然扣掉滚动条与宿主 padding */
+  container-type: inline-size;
 }
 /* 正文列：限宽居中——宽版浮层里保持可读行长，读起来像一篇文档 */
 .tutorial-doc {
@@ -3420,37 +3423,51 @@ button.primary .hint {
   margin: 0 auto;
   padding-right: var(--space-1);
 }
-/* 节标题（①…⑩）：层级靠字号 + 上间距拉开；首节标题不空一截。
-   注意别用 `h4:first-child`——每节的 h4 都是所在节的第一个孩子，那样会把所有节的
-   上间距都清掉（旧样式的隐性缺陷，本次顺手修正）。 */
+/* 节标题（①…⑩）：层级靠字号 + 节间分隔线拉开。 */
 .tutorial-section h4 {
-  margin: var(--space-4) 0 var(--space-2);
+  margin: 0 0 var(--space-3);
   font-size: var(--fs-3);
 }
-.tutorial-section:first-child h4 {
-  margin-top: 0;
+/* 相邻节之间一条细线：十八节的长文没有分隔线，滚动时找不准"这几段属于哪一节" */
+.tutorial-section + .tutorial-section {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 .tutorial-body p {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-2);
   line-height: 1.7;
 }
+/* 粗体略收一档：正文里的强调不该跳成另一套字面（分色靠 <code> 芯片） */
+.wizard.tutorial strong {
+  font-weight: 600;
+}
 .tutorial-caption {
+  margin: 0 0 var(--space-1);
   font-size: var(--fs-1);
   line-height: 1.5;
 }
+/* 样例区突破 680px 正文列、按浮层实际宽度吃到 860 级：左右对照要放两份代码。
+   cqw 不可用时整条失效、回落正文列内，不报错不破版。 */
 .tutorial-sample {
-  margin: var(--space-3) 0;
+  --sample-w: min(100cqw - 2 * var(--space-2), 860px);
+  width: var(--sample-w);
+  margin-block: var(--space-4);
+  margin-inline: calc((100% - var(--sample-w)) / 2);
 }
-/* 样例代码块：md 式围栏代码的观感——井底色（--bg，与向导预览同源）、细边、等宽字；
-   横向溢出自己滚，不撑破浮层 */
+/* 样例代码块：围栏代码的观感——井底色（--bg，与向导预览同源）、细边、等宽字。
+   长行软折行（pre-wrap）：对照块里 CJK 台词很长，横滚会把左右对照撕开；
+   overflow-wrap 只管整词放不下的那种折断，正常换行机会仍走空白与 CJK 字间 */
 .tutorial-code {
-  margin: var(--space-1) 0 0;
+  margin: 0;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
   overflow-x: auto;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
   font-size: var(--fs-1);
   line-height: 1.6;
 }
@@ -3458,7 +3475,38 @@ button.primary .hint {
   background: none;
   padding: 0;
   font-size: inherit;
-  white-space: pre;
+}
+/* 左右对照：kojo | 「编译为」 | 产物。窄容器（< 700px）回落上下堆叠——
+   两栏都不到 ~310px 时并排只剩互相挤，堆叠加「↓ 编译为」反而读得顺 */
+.tutorial-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  align-items: start;
+}
+.tutorial-arrow {
+  align-self: center;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  white-space: nowrap;
+  user-select: none;
+}
+.tutorial-arrow::before {
+  content: '→ ';
+}
+@container (max-width: 699px) {
+  .tutorial-pair {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    align-items: stretch;
+  }
+  .tutorial-arrow {
+    align-self: center;
+  }
+  .tutorial-arrow::before {
+    content: '↓ ';
+  }
 }
 .wizard.tutorial .wizard-actions {
   flex: none;
