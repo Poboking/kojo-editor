@@ -189,6 +189,20 @@ function faceLabel(face: string, labels?: Readonly<Record<string, string>>): str
   }
 }
 
+/**
+ * 函数树失败态的第一眼文案（模块级纯函数 ⇒ 可单测；范式抄 `ui-condition-matrix` 的收口）。
+ *
+ * 上屏的必须是**作者读得懂的中文短句**，内部原始错误串（`ensureIndex` / `buildNavigatorTree`
+ * 抛出的 message，往往是路径 + 栈式英文片段）只进悬停 `title`——技术信息一条不丢，
+ * 但它不是甩给作者的第一眼。
+ */
+export function navLoadErrorCopy(loadError: string): { readonly text: string; readonly title: string } {
+  return {
+    text: '函数树加载失败：口上函数索引构建出错（悬停查看原始错误）',
+    title: loadError,
+  };
+}
+
 export function createUiKojoNavigatorPlugin(): Plugin {
   return {
     id: 'ui-kojo-navigator',
@@ -405,12 +419,14 @@ export function createUiKojoNavigatorPlugin(): Plugin {
             ic('history', 12, '⟲'),
           );
 
-        // 失败态优先：显示原因 + 重试（此前静默停在占位，用户无从判断与自救）
+        // 失败态优先：显示中文原因 + 重试（此前静默停在占位，用户无从判断与自救）。
+        // 原始错误串不在第一眼——它进悬停 title，一条技术信息都不丢。
         if (loadError) {
+          const copy = navLoadErrorCopy(loadError);
           return createElement(
             'div',
             { className: 'panel-kojo-nav' },
-            createElement('div', { className: 'nav-empty err', title: loadError }, `函数索引加载失败：${loadError}`),
+            createElement('div', { className: 'nav-empty err', title: copy.title }, copy.text),
             createElement(
               'button',
               { className: 'small', onClick: () => refresh() },
@@ -493,7 +509,9 @@ export function createUiKojoNavigatorPlugin(): Plugin {
                           createElement(
                             'span',
                             { className: 'nav-hit-loc dim' },
-                            `${h.charaNo !== null ? `K${h.charaNo}` : '—'} · ${shortPath(h.node.filePath)}:${h.node.startLine}`,
+                            // 归属列写作者的词，不写破折号记号：`—` 要读者自己反推「没归到角色」，
+                            // 而状态栏与占位文案用的就是「未归属」这一词（同词同义，不再二义）。
+                            `${h.charaNo !== null ? `K${h.charaNo}` : '未归属'} · ${shortPath(h.node.filePath)}:${h.node.startLine}`,
                           ),
                         ),
                       ),
