@@ -36,6 +36,7 @@ import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
 import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
 import { dialectForLanguage, installDocumentFormatter, toTextEdits } from '../monaco/kojo-format';
 import { applyFormatOnSave } from './format-on-save';
+import { classifySaveRace } from './save-race';
 import { loadFormatOnSavePref } from './format-pref';
 import { applyNameColorPref, subscribeNameColorPref } from './semantic-color-pref';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
@@ -765,6 +766,15 @@ export function EditorPane({
         entry.model.pushEditOperations([], toTextEdits(entry.model, prepared.edits), () => null);
         text = entry.model.getValue();
       }
+      // A1 保存竞态守卫：文本定稿（保存前整理已落地）即快照版本号——写盘窗口内的
+      // 新输入只进 model 不进盘，落盘回包后必须版本未变才允许 markSaved 立基线，
+      // 否则保持脏并如实报失败（旧链路在 await 之后立基线，把没落盘的字节标成已保存）。
+      const versionAtFinalize = entry.model.getAlternativeVersionId();
+      const racedAfterWrite = (isActiveTab: boolean): false => {
+        if (isActiveTab) setStatus('已保存，但保存期间又有新输入——文件仍标记为未保存');
+        else notify({ kind: 'info', message: `「${path}」保存完成，但保存期间又有新输入——已保留未保存标记` });
+        return false;
+      };
       savingRef.current = true;
       try {
         const handler = pickSaveHandler(kernel, path);
@@ -791,6 +801,9 @@ export function EditorPane({
             else notify({ kind: 'error', message: `保存「${path}」失败：${outcome.message}` });
             return false;
           }
+          if (classifySaveRace(versionAtFinalize, entry.model.getAlternativeVersionId()) !== 'unchanged') {
+            return racedAfterWrite(isActive);
+          }
           markSaved(path, entry);
           if (isActive) {
             setError(null);
@@ -800,6 +813,9 @@ export function EditorPane({
         }
         // 缺省保存（无接管者 / 提供者未激活 → 优雅降级）
         await kernel.io.writeText(path, text);
+        if (classifySaveRace(versionAtFinalize, entry.model.getAlternativeVersionId()) !== 'unchanged') {
+          return racedAfterWrite(isActive);
+        }
         markSaved(path, entry);
         if (isActive) {
           setError(null);
@@ -884,27 +900,32 @@ export function EditorPane({
       const decision = decideExternalChange(entry.model.getValue(), text, computeDirty(path));
       if (decision === 'noop') return;
       const applyReload = (): void => {
+        // 常驻通知的 action 闭包可能晚于标签关闭才被点击——闭包只持 path+text，
+        // 落地前现取 entry；缺失或 model 已 dispose（Monaco 标准 API）直接放弃，
+        // 绝不对 disposed model setValue 炸异常（深审 A3）。
+        const live = entriesRef.current.get(path);
+        if (!live || live.model.isDisposed()) return;
         const ed = editorRef.current;
         const isActive = filePathRef.current === path;
         const vs = isActive && ed ? ed.saveViewState() : null;
         reloadingRef.current = true;
         try {
-          entry.model.setValue(text);
+          live.model.setValue(text);
         } finally {
           reloadingRef.current = false;
         }
-        const version = entry.model.getAlternativeVersionId();
+        const version = live.model.getAlternativeVersionId();
         baseVersionRef.current.set(path, version);
         onDirtyChangeRef.current?.(path, false);
         if (isActive && ed && vs) ed.restoreViewState(vs);
-        if (refreshMarkersRef.current) refreshMarkersRef.current(entry.model, path);
+        if (refreshMarkersRef.current) refreshMarkersRef.current(live.model, path);
         if (isActive) {
           setDirty(false);
           setStatus('已从磁盘重新加载（文件在外部被修改）');
           onStatusInfoRef.current?.({
-            encoding: entry.encoding,
-            eol: entry.eol,
-            lines: entry.model.getLineCount(),
+            encoding: live.encoding,
+            eol: live.eol,
+            lines: live.model.getLineCount(),
           });
         }
       };

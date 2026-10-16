@@ -25,6 +25,8 @@ import {
 } from './drag-drop';
 import { useNotify } from './NotificationCenter';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
+import { UnsavedFilesConfirmDialog } from './UnsavedFilesConfirmDialog';
+import { installWindowCloseGuard } from './window-close-guard';
 import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { workspaceRootsOf } from './workspace-roots';
@@ -81,6 +83,12 @@ export function App(): ReactElement {
   const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set());
   /** 待确认的脏标签关闭（非 null = 弹确认框） */
   const [pendingClose, setPendingClose] = useState<string | null>(null);
+  /** 待确认的关项目/关窗（非 null = 弹全项目未保存确认；深审 A2） */
+  const [pendingProjectClose, setPendingProjectClose] = useState<ReadonlySet<string> | null>(null);
+  /** Alt+F4 批准后：关项目完成即退出应用（窗口关闭意图延续，不走二次确认） */
+  const exitAfterCloseRef = useRef(false);
+  /** 关窗放行标志：确认框批准 + 关项目完成后置位，守卫对主动 close() 不拦（退出通道） */
+  const windowCloseApprovedRef = useRef(false);
   const [reveal, setReveal] = useState<RevealTarget | null>(null);
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [pendingApproval, setPendingApproval] = useState<GameProject | null>(null);
@@ -428,6 +436,38 @@ export function App(): ReactElement {
   // 拖放落地要用、但不值得整依赖进订阅 effect 的快照（脏标签集合 / 当前项目根）
   const dirtyRef = useRef(dirtyPaths);
   dirtyRef.current = dirtyPaths;
+
+  // Alt+F4 / 关窗守卫（深审 A2）：Tauri 的 onCloseRequested 不 preventDefault 就直接
+  // 关窗（EditorPane 卸载 dispose 全部 model，脏修改静默丢失）。一律先拦下再分流：
+  // 无脏 → 直接退出；有脏 → 复用关项目确认框，批准后关项目 + 退出。
+  // 仅 Tauri 壳生效；浏览器 dev 无窗口关闭语义，不装。
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const cleanup = await installWindowCloseGuard(
+        {
+          onCloseRequested: (handler) => getCurrentWindow().onCloseRequested(handler),
+        },
+        {
+          isApproved: () => windowCloseApprovedRef.current,
+          hasDirty: () => dirtyRef.current.size > 0,
+          onConfirm: () => {
+            exitAfterCloseRef.current = true;
+            setPendingProjectClose(dirtyRef.current);
+          },
+        },
+      );
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
   const rootDirRef = useRef<string | null>(null);
   rootDirRef.current = project?.rootDir ?? null;
 
@@ -595,6 +635,39 @@ export function App(): ReactElement {
     [kernel, pendingApproval, notify],
   );
 
+  /** 关项目入口（深审 A2）：有脏文件先弹全项目确认，绝不静默 dispose 全部 model */
+  const requestCloseProject = useCallback(() => {
+    if (dirtyPaths.size > 0) {
+      exitAfterCloseRef.current = false;
+      setPendingProjectClose(dirtyPaths);
+      return;
+    }
+    void closeProject();
+  }, [dirtyPaths, closeProject]);
+
+  const decideProjectClose = useCallback(
+    async (action: 'save-then-close' | 'discard' | 'cancel') => {
+      const paths = pendingProjectClose;
+      setPendingProjectClose(null);
+      if (!paths || action === 'cancel') return;
+      if (action === 'save-then-close') {
+        const ok = actionsRef.current ? await actionsRef.current.saveAll() : false;
+        if (!ok) return; // 保存失败：留在项目里（错误已显示在编辑器状态栏/通知），绝不静默丢
+      }
+      const exitAfter = exitAfterCloseRef.current;
+      exitAfterCloseRef.current = false;
+      await closeProject();
+      if (exitAfter && isTauri()) {
+        // 退出通道 = 放行原生 close：置放行标志后主动 close()，守卫对这次请求不拦
+        //（@tauri-apps/api v2 核心无 process 模块；capabilities 已加 core:window:allow-close）
+        windowCloseApprovedRef.current = true;
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        await getCurrentWindow().close();
+      }
+    },
+    [pendingProjectClose, closeProject],
+  );
+
   /** 重授权入口（定稿 Q9：状态栏徽章点击 + 通知 action 两者都留） */
   const requestReauth = useCallback(() => {
     if (project) setPendingApproval(project);
@@ -620,7 +693,7 @@ export function App(): ReactElement {
           onSaveAll={saveAll}
           onDirtyChange={onDirtyChange}
           registerActions={registerActions}
-          onClose={closeProject}
+          onClose={requestCloseProject}
           onReload={() => void openProject(project.rootDir, { keepView: true })}
           writable={writable ?? false}
           onReauth={requestReauth}
@@ -650,6 +723,9 @@ export function App(): ReactElement {
       {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
       {pendingClose ? (
         <UnsavedConfirmDialog filePath={pendingClose} context="close" onDecide={decideClose} />
+      ) : null}
+      {pendingProjectClose ? (
+        <UnsavedFilesConfirmDialog paths={pendingProjectClose} onDecide={decideProjectClose} />
       ) : null}
     </>
   );
