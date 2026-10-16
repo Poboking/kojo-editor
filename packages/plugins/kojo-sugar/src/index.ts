@@ -942,6 +942,10 @@ export {
 } from './system-functions';
 // v1.7：行首语句形中文函数调用白名单（位糖 = 方案 E；单一真源）。
 export { STATEMENT_FUNCTIONS } from './statement-functions';
+// ZH-D3：悬停反查（中文 → 原生形态）要拼时机函数名——**复用转译器同一条命名链**
+// （规范 §5.5 的 `{t}` / `{n}` / `{i}` 求值只此一份实现），宿主侧不得另拼字符串。
+// additive 纯再导出：`codegen.ts` 本体零改动、旧消费方零改动。
+export { buildFunctionName } from './codegen';
 // E16：裸引擎全局白名单（`SELECTCOM`/`PREVCOM`/…；判据与实测计数在模块头注）
 export { ENGINE_GLOBAL_IDENTIFIERS, resolveEngineGlobal } from './engine-globals';
 export {

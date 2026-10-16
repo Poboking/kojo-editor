@@ -1,6 +1,8 @@
 import type * as Monaco from './entry';
 import type {
-  ErbIndex,
+    ErbIndex,
+    KojoCounterTable,
+    KojoFaceTable,
   KojoInstructionTable,
   KojoLibraryTable,
   VariableSchema,
@@ -9,6 +11,7 @@ import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
 import { erbBitHoverName } from './erb-completion-bits';
 import { ERB_LANGUAGE_ID } from './erb-language';
+import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from './kojo-hover-native';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
 
 /**
@@ -25,6 +28,11 @@ import { KOJO_LANGUAGE_ID } from './kojo-language';
  *
  * 本模块是**只读显示**：不产生编辑、不写盘、不发事件。纯逻辑（`resolveHoverName`）与
  * Monaco 绑定（`installHover`）分离——前者可单测，后者只做位置 → 内容的薄翻译。
+ *
+ * **ZH-D3 反向面**（中文 → 原生形态）在同一入口末尾接上 `kojo-hover-native.ts`：
+ * 上面四条正向路都只认 ASCII 记号，作者在 `.kojo` 里写的中文词（族头 / 中文函数名 /
+ * 时机分野与指令名）此前查不到原生形态。反查**不新建任何映射**，只复用降糖与拼名链上
+ * 已在用的那几张表（详见 `kojo-hover-native.ts` 头注）；正向命中优先，正向无果才走反向。
  */
 export interface HoverTables {
   /** 变量字典（`makeLookup(adapter.variableSchema)` 产物）；缺席 = 不做变量反查 */
@@ -39,24 +47,37 @@ export interface HoverTables {
    */
   readonly variableSchema?: VariableSchema;
   /**
-   * ERB 函数索引通道（additive 可选）——宿主装配时注入，数据来自 `erb.parser` 服务的
-   * `currentIndex()`（**每次悬停现取**：索引随项目开闭重建，缓存会带来上一个项目的脏索引，
-   * 与 `getTables` 同款纪律）。通道缺席 / 索引未建 / 求值抛错 ⇒ 本路不产结果（不猜）。
-   */
-  readonly erbIndex?: () => ErbIndex | null | undefined;
+     * ERB 函数索引通道（additive 可选）——宿主装配时注入，数据来自 `erb.parser` 服务的
+     * `currentIndex()`（**每次悬停现取**：索引随项目开闭重建，缓存会带来上一个项目的脏索引，
+     * 与 `getTables` 同款纪律）。通道缺席 / 索引未建 / 求值抛错 ⇒ 本路不产结果（不猜）。
+     */
+    readonly erbIndex?: () => ErbIndex | null | undefined;
+    /**
+     * 时机分野模板表（adapter `kojoFaceTemplates`；ZH-D3，additive 可选）——中文分野名反查
+     * **拼出来的原生函数名**用它。缺席 = 不做分野反查（不猜）。
+     */
+    readonly faceTable?: KojoFaceTable;
+    /**
+     * 计数器值域表（adapter `kojoCounterTable`；ZH-D3，additive 可选）——
+     * `时机 计数器 <中文名>：` 的中文名 → 原生编号。缺席 = 该路不反查（不猜），
+     * 由宿主 `editorTables()` 从当前 adapter 现取注入。
+     */
+    readonly counterTable?: KojoCounterTable;
 }
 
-/** 一次解析的产物：显示中文名 + 类别 + 命中的列区间（1 基，供 hover 高亮） */
+/** 一次解析的产物：显示名 + 类别 + 命中的列区间（1 基，供 hover 高亮）+ 附加行 */
 export interface HoverHit {
   readonly name: string;
   readonly kind: string;
   readonly startColumn: number;
   readonly endColumn: number;
   /**
-   * 附加正文行（additive 可选）——命中带可读正文（如 ERB 函数的 docComment / 形参签名 /
-   * 定义位置）时逐行给出；每行渲染为独立的 markdown 块。缺省 = 只显示名字行。
-   */
-  readonly lines?: readonly string[];
+    /**
+     * 附加正文行（additive 可选）——命中带可读正文时逐行给出：ERB 函数的 docComment / 形参签名 /
+     * 定义位置，或中文反查出的**拼出来的函数名 / 模板 / 含义 / 原文对照**。每行渲染为独立的
+     * markdown 块。缺省 = 只显示名字行（正向各路的行为与改前逐字一致）。
+     */
+    readonly lines?: readonly string[];
 }
 
 const isRefChar = (ch: string): boolean => /[A-Za-z0-9_:]/.test(ch);
@@ -88,9 +109,16 @@ function spanAround(line: string, col0: number, isChar: (ch: string) => boolean)
 
 /**
  * 解析光标下的中文名（**纯函数**）。`lineText` = 该行文本，`column` = Monaco 的 1 基列。
- * 返回 `undefined` = 该处没有可显示的中文名（**不猜**：查不到一律不显示）。
+ * `header`（ZH-D3，additive）= 文件头的 `角色:` / `口上:` 事实，反向路用它拼原生函数名；
+ * 缺省 = 只给模板、不拼半个名字。
+ * 返回 `undefined` = 该处没有可显示的名字（**不猜**：查不到一律不显示）。
  */
-export function resolveHoverName(lineText: string, column: number, tables: HoverTables): HoverHit | undefined {
+export function resolveHoverName(
+  lineText: string,
+  column: number,
+  tables: HoverTables,
+  header: KojoDocHeader = {},
+): HoverHit | undefined {
   if (!Number.isFinite(column) || column < 1) return undefined;
   const col0 = Math.min(column - 1, lineText.length);
 
@@ -156,7 +184,10 @@ export function resolveHoverName(lineText: string, column: number, tables: Hover
   const erbFn = resolveErbFunctionHover(lineText, col0, tables.erbIndex);
   if (erbFn !== undefined) return erbFn;
 
-  return undefined;
+  // 6) 中文 → **原生形态**反查（ZH-D3；`kojo-hover-native.ts`）：族头中文别名、中文函数名 /
+  //    语句形调用、时机块头的分野与中文指令名。前五路只认 ASCII 记号与位槽，本路只认中文，
+  //    两条路天然不撞；同样「查不到即不显示」（不猜）。
+  return resolveNativeHover(lineText, column, tables, header);
 }
 
 /**
@@ -212,12 +243,21 @@ function resolveErbFunctionHover(
  * 为 ERB 方言（`.erb` / `.erh` / `.erd`）与 `.kojo` 两种语言注册**只读** hover provider。
  *
  * `getTables` 每次悬停时才调用（表按当前项目 adapterId 实时取，同 `refreshMarkers` 纪律）。
+ * 文件头事实（`角色:` / `口上:`）同样**当场从模型读**（只读 `getLineContent` /
+ * `getLineCount`，不缓存、不改文档），反向路据此拼出原生函数名。
  * 返回可释放句柄——宿主在编辑器卸载时调用 `dispose()`。
  */
 export function installHover(monaco: typeof Monaco, getTables: () => HoverTables): Monaco.IDisposable {
   const provider: Monaco.languages.HoverProvider = {
     provideHover(model, position) {
-      const hit = resolveHoverName(model.getLineContent(position.lineNumber), position.column, getTables());
+      const lineCount = typeof model.getLineCount === 'function' ? model.getLineCount() : position.lineNumber;
+      const header = docHeaderOf((n) => model.getLineContent(n), lineCount);
+      const hit = resolveHoverName(
+        model.getLineContent(position.lineNumber),
+        position.column,
+        getTables(),
+        header,
+      );
       if (!hit) return undefined;
       const contents = [{ value: `**${hit.name}**（${hit.kind}）` }];
       for (const line of hit.lines ?? []) contents.push({ value: line });
