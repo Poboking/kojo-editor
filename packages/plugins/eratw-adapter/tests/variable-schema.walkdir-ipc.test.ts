@@ -102,7 +102,7 @@ beforeAll(() => {
   erbDir = join(root, 'ERB');
   buildFixture();
   facts = newWireFacts();
-});
+}, 60_000);
 
 /** 每条判据只看自己这一轮的过线事实（读数累加会把上一轮的账算进本轮） */
 beforeEach(() => {
@@ -111,7 +111,7 @@ beforeEach(() => {
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
-});
+}, 60_000);
 
 describe('walkDir filter 跨 IPC：作者自定名表只该读 `.ERH`（桥分叉守门）', () => {
   it('谓词不得作为跨进程参数递给平台桥（闭包过不了 JSON）', async () => {
