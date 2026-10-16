@@ -165,6 +165,34 @@ const SUGAR_CONTROL: ReadonlyMap<string, ControlSugarMaker> = new Map<string, Co
   ['ENDSELECT', () => null],
 ]);
 
+/**
+ * 控制流行 → 块头记录（`如果 …：` / `当 …：` / 收束行）。
+ *
+ * **单一口径**：主循环与 CR-1 的「段折叠回退」（`unfoldSectionEnvelope`）都调这一个函数——
+ * 回退一条 `IF LOCAL && 条件` 时若另抄一份判据，两份规则迟早分叉（本项目已多次踩过）。
+ * 返回 `undefined` = 该 `kind` 没有糖块头形态（调用方自行决定留原代码）。
+ */
+function controlHeadRec(
+  ln: number,
+  st: ControlFlowStatement,
+  deps: LiftDeps,
+): LineRec | undefined {
+  const mk = SUGAR_CONTROL.get(st.kind);
+  if (mk === undefined) return undefined;
+  const expr = st.expression.trim();
+  // 需要表达式的块头若表达式为空 → 不猜，原样保留
+  if (needsExpression(st.kind) && expr.length === 0) return native(ln, 'other');
+  const text = mk(reverseExprAttributes(expr, deps));
+  return {
+    line: ln,
+    kind: 'control',
+    text: text ?? '',
+    indent: st.depth,
+    visible: text !== null,
+    reason: null,
+  };
+}
+
 /** 开块语句 → 配对类别（与 `erb-parser/scanner.ts` 同口径；用于重建"包着这一行的块种类"） */
 const OPEN_PAIR: Readonly<Record<string, string>> = {
   IF: 'if',
@@ -336,7 +364,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   // 收尾，猜边界会把别人的代码藏起来）。
   const color = planColorBlocks(lines, ctx);
   // 函数骨架（包装三联 + 記入チェック信封）——判据全部"可证明"，配不上就不动。
-  const skeleton = planSkeleton(lines, ctx, deps);
+  const plan0 = planSkeleton(lines, ctx, deps);
   // `SIF 条件` + 下一行单语句 → 「如果 …：」块头 + 正文 +1 层缩进（批 H）
   const sif = planSif(lines, ctx);
   // 数据表（PRINTDATA 系）→ 块头标注 + 条目可读化（批 N；判据不满足的块整块不动）
@@ -361,407 +389,382 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
   const mcBits = mcProto?.bits;
   const mcSetBitRe = mcProto === undefined ? null : buildBitLineRegex(mcProto.setBit ?? 'SETBIT RESULT, {bit}');
 
-  const recs: LineRec[] = [];
   const nativeByReason = new Map<SugarProjectNativeReason, number>();
-  let inSkip = false;
-  // P-8：当前行是否落在 MESSAGECHECK 函数体内（函数头切换；体内 `RETURN`/`SETBIT` 才有位协议语义）
-  let inMessageCheck = false;
   // E13-1②：家族 fork 改发文件头 `口上: <家族名>`——只发一次；源里已有 `口上:`
   // 声明（作者自己写过）时不重复发。
-  let familyHeaderEmitted = false;
   const sourceDeclaresFamily = lines.some((l) => /^\s*口上\s*[:：]/.test(l));
-  // E13-1 同源：选择器（`_1`）记在选择器登记函数上（`@M_KOJO_K58_1`），家族名记在带
-  // `{t}` 的时机函数上——两者合成文件头一行 `口上: <家族名> 选择器: <n>`。
-  let pendingSelector: number | undefined;
 
-  for (let i = 0; i < total; i++) {
-    const ln = i + 1;
-    const raw = lines[i]!;
-    const content = contentOf(raw);
+  /* ---- 逐行分类管线（CR-1：收成一个以 `SkeletonPlan` 为唯一输入的闭包）----
+   *
+   * 为什么是闭包而不是就地改写记录：回退一段折叠需要变化的**只有**"这一段不折了"，
+   * 其余每一行的分类判据一个字都不许动。就地改写 `recs` 就得在第二处再抄一遍
+   * "这一行本来该怎么投"（`LOCAL = n` → 原样、`IF …` → `如果 …：`、`ENDIF` → 收束），
+   * 两处口径迟早分叉——本项目反复栽过的同类坑。故回退 = **换一份 plan 重跑同一条管线**。
+   * 只有真的需要回退的文件才付第二次遍历的代价（全语料实测见 CR-1 读数）。
+   */
+  const buildRecs = (plan: SkeletonPlan): LineRec[] => {
+    const skeleton = plan;
+    const recs: LineRec[] = [];
+    let inSkip = false;
+    // P-8：当前行是否落在 MESSAGECHECK 函数体内（函数头切换；体内 `RETURN`/`SETBIT` 才有位协议语义）
+    let inMessageCheck = false;
+    let familyHeaderEmitted = false;
+    // E13-1 同源：选择器（`_1`）记在选择器登记函数上（`@M_KOJO_K58_1`），家族名记在带
+    // `{t}` 的时机函数上——两者合成文件头一行 `口上: <家族名> 选择器: <n>`。
+    let pendingSelector: number | undefined;
 
-    if (content === '[SKIPSTART]') {
-      inSkip = true;
-      recs.push(native(ln, 'data-or-skip'));
-      continue;
-    }
-    if (content === '[SKIPEND]') {
-      inSkip = false;
-      recs.push(native(ln, 'data-or-skip'));
-      continue;
-    }
-    if (inSkip) {
-      recs.push(native(ln, 'data-or-skip'));
-      continue;
-    }
-    if (content.length === 0 || content.startsWith(';')) {
-      // 注释 / 空行 → 透传（糖表层语法与 ERB 完全一致）
-      recs.push({
-        line: ln,
-        kind: 'passthrough',
-        text: content,
-        indent: ctx.indentAt(ln, raw),
-        visible: true,
-        reason: null,
-      });
-      continue;
-    }
+    for (let i = 0; i < total; i++) {
+      const ln = i + 1;
+      const raw = lines[i]!;
+      const content = contentOf(raw);
 
-    // P-8：函数头切换 MESSAGECHECK 作用域——体内 `RETURN n` / `SETBIT RESULT, n` 才有位协议语义。
-    if (content.startsWith('@')) {
-      inMessageCheck = mcFragmentSets.some(
-        (frags) => frags.length > 0 && frags.every((f) => content.includes(f)),
-      );
-    }
-
-    // 函数骨架：被合并吸收的行不产出可见行（读者不必看见 `CALL x_1` / `IF LOCAL` 包裹）
-    if (skeleton.absorbed.has(ln)) {
-      recs.push({
-        line: ln,
-        kind: 'control',
-        text: '',
-        indent: 0,
-        visible: false,
-        reason: null,
-      });
-      continue;
-    }
-
-    // 段信封（E13-2）：`LOCAL = n` + `IF LOCAL && <条件>` + `ENDIF` 折叠成一层
-    // `若 <条件>：` 头。头落在原 `IF` 那一行上，段体保持原相对深度（它本来就比 `IF` 深一层）。
-    // 值 `0`（停用占位）的信封**不折**——见 `planSkeleton` 的"值 0 一律不折"条款。
-    const sectionHead = skeleton.sectionHeadAt.get(ln);
-    if (sectionHead !== undefined) {
-      recs.push({
-        line: ln,
-        kind: 'control',
-        text: sectionHead,
-        indent: ctx.indentAt(ln, raw),
-        visible: true,
-        reason: null,
-      });
-      continue;
-    }
-
-    // 着色块：配对成功的那行 SETCOLOR → 块头；配对的 RESETCOLOR → 被吸收（不产出可见行）
-    const colorOpen = color.openAt.get(ln);
-    if (colorOpen !== undefined) {
-      recs.push({
-        line: ln,
-        kind: 'control',
-        text: `着色 ${colorOpen}：`,
-        indent: ctx.indentAt(ln, raw),
-        visible: true,
-        reason: null,
-      });
-      continue;
-    }
-    if (color.absorbed.has(ln)) {
-      recs.push({
-        line: ln,
-        kind: 'control',
-        text: '',
-        indent: ctx.indentAt(ln, raw),
-        visible: false,
-        reason: null,
-      });
-      continue;
-    }
-
-    // 数据表（PRINTDATA 系，批 N）：块头一条结构标注，条目行降成缩进的候选清单。
-    // **不借用任何糖关键字**（糖表层没有数据表写法；写成 `随机：` 会"看着像糖、写回语义不同"）。
-    const dataLabel = data.labelAt.get(ln);
-    if (dataLabel !== undefined) {
-      recs.push({
-        line: ln,
-        kind: 'control',
-        text: dataLabel,
-        indent: ctx.indentAt(ln, raw),
-        visible: true,
-        reason: null,
-      });
-      continue;
-    }
-    if (data.absorbed.has(ln)) {
-      recs.push({
-        line: ln,
-        kind: 'control',
-        text: '',
-        indent: ctx.indentAt(ln, raw),
-        visible: false,
-        reason: null,
-      });
-      continue;
-    }
-    const dataEntry = data.entryAt.get(ln);
-    if (dataEntry !== undefined) {
-      const body = dataEntry.replace(/[ \t　]+$/, '');
-      if (body.length === 0) {
-        recs.push(native(ln, 'data-or-skip')); // 空条目：没有可显示的东西
-        continue;
-      }
-      const text = hasInlineCondition(body)
-        ? inlineConditionsToSugar(body, deps)
-        : readableText(body, deps);
-      if (text === undefined) {
-        recs.push(native(ln, 'inline-condition'));
-        continue;
-      }
-      recs.push({
-        line: ln,
-        kind: 'speech',
-        text,
-        indent: data.entryIndentAt.get(ln) ?? ctx.indentAt(ln, raw),
-        visible: true,
-        reason: null,
-      });
-      continue;
-    }
-
-    // P-8：MESSAGECHECK 数字返回协议（纯显示）——只在 MECHECK 函数体内生效。
-    // 判据：`RETURN n`（位掩码）或 adapter 置位原语（位号）；解不出糖子句 → 保持原生。
-    if (inMessageCheck && mcBits !== undefined && mcSetBitRe !== null) {
-      const note = messageCheckNote(content, mcBits, mcSetBitRe);
-      if (note !== undefined) {
-        recs.push({
-          line: ln,
-          kind: 'control',
-          text: note,
-          indent: ctx.indentAt(ln, raw),
-          visible: true,
-          reason: null,
-        });
-        continue;
-      }
-    }
-
-    const st = ctx.stmtAt(ln);
-    if (st) {
-      // `SIF 条件` → 块头「如果 …：」（批 H；它管辖的那一正文行在缩进补正里 +1 层）
-      if (st.kind === 'SIF' && sif.headAt.has(ln)) {
-        recs.push({
-          line: ln,
-          kind: 'control',
-          text: `如果 ${reverseExprAttributes(st.expression.trim(), deps)}：`,
-          indent: st.depth,
-          visible: true,
-          reason: null,
-        });
-        continue;
-      }
-      const mk = SUGAR_CONTROL.get(st.kind);
-      if (mk !== undefined) {
-        const expr = st.expression.trim();
-        // 需要表达式的块头若表达式为空 → 不猜，原样保留
-        if (needsExpression(st.kind) && expr.length === 0) {
-          recs.push(native(ln, 'other'));
-          continue;
-        }
-        const text = mk(reverseExprAttributes(expr, deps));
-        recs.push({
-          line: ln,
-          kind: 'control',
-          text: text ?? '',
-          indent: st.depth,
-          visible: text !== null,
-          reason: null,
-        });
-        continue;
-      }
-      // 其余控制流（循环 / TRY / PRINTDATA / 标签等，以及**判据不满足的 SIF**）→ 原样保留
-      recs.push(native(ln, 'unsupported-control-flow'));
-      continue;
-    }
-
-    const pm = PRINT_FAMILY_RE.exec(content);
-    if (pm) {
-      const word = pm[1]!;
-      const variant = PRINT_VARIANTS.get(word);
-      if (!variant) {
-        recs.push(native(ln, 'unsupported-print-variant'));
-        continue;
-      }
-      // 结构判据**先于**内容判据：落在 PRINTDATA 数据表体内的行是"数据"而非"显示
-      // 语句"，无论它长什么样（哪怕文本体为空）都不该被当成台词投影。
-      if (ctx.enclosingAt(ln).includes('data')) {
+      if (content === '[SKIPSTART]') {
+        inSkip = true;
         recs.push(native(ln, 'data-or-skip'));
         continue;
       }
-      const body = pm[2]!.replace(/[ \t\u3000]+$/, '');
-      // 指令后紧跟 `;` → 这里是**注释**而不是要打印的字（Emuera 的 `;` 在任意位置起效）。
-      // 一行给不出"空行 + 注释"两行显示 → 原样保留（语料 1 行，判据为不误导而设）。
-      if (body.startsWith(';')) {
-        recs.push(native(ln, 'unsupported-print-variant'));
+      if (content === '[SKIPEND]') {
+        inSkip = false;
+        recs.push(native(ln, 'data-or-skip'));
         continue;
       }
-      if (body.length === 0) {
-        // ---- 「输出一行空行」----
-        //
-        // 作者用**裸指令**打空行（`PRINTFORMW` / `PRINTFORMDL␠` / `PRINTL` / `PRINTDW␠`）。
-        // 真实语料里这不是零星写法：全量 2,285 文件中 `L`/`W` 变体的空体约 **16 万行**
-        // （FORM 系）+ **4.6 万行**（非 FORM 系：`PRINTL` 48%、`PRINTW` 97.4%、
-        // `PRINTDW` 99.1%、`PRINTDL` 57.1% 为空体），且**形态 100% 是"指令后为空"**。
-        //
-        // 糖表面 v1.4 补上了"输出空行"的写法（`空行`；§3.10 的空白行是分隔符、不产出），
-        // 故投影**回到等价改写**：按"读者在游戏里看到的节奏"投影成能往返回去的那一行。收益有两层：
-        //   ① 读者看到的是剧本节奏 / 糖写法，而不是一片 `PRINTFORMDL␠` / `PRINTW` 噪声；
-        //   ② 它不再**切断**糖段——实测中它是段数暴涨的头号原因。
-        //
-        // 判据边界：**只有 `newline` 的变体**才算打空行。无后缀的 `PRINT` / `PRINTFORM`
-        // 空体既不输出也不换行（是拼句片段的空段）——没有可显示的东西，原样保留。
-        //
-        // 批 P 补掉这里记在案的代价（v1.5 对齐语料主流）：空行不再按 `D` 归属分，只按**等待**分——
-        // 默认不等待投影为糖里能写出来的 `空行`（裸 `PRINTFORML`），`W` 系投影为 `空行 等待`
-        // （`PRINTFORMDW`）。两种节奏（等待 / 不等待）仍可分辨，且都是糖里写得出、能往返的一行。
-        if (!variant.newline) {
-          recs.push(native(ln, 'unsupported-print-variant'));
+      if (inSkip) {
+        recs.push(native(ln, 'data-or-skip'));
+        continue;
+      }
+      if (content.length === 0 || content.startsWith(';')) {
+        // 注释 / 空行 → 透传（糖表层语法与 ERB 完全一致）
+        recs.push({
+          line: ln,
+          kind: 'passthrough',
+          text: content,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: null,
+        });
+        continue;
+      }
+
+      // P-8：函数头切换 MESSAGECHECK 作用域——体内 `RETURN n` / `SETBIT RESULT, n` 才有位协议语义。
+      if (content.startsWith('@')) {
+        inMessageCheck = mcFragmentSets.some(
+          (frags) => frags.length > 0 && frags.every((f) => content.includes(f)),
+        );
+      }
+
+      // 函数骨架：被合并吸收的行不产出可见行（读者不必看见 `CALL x_1` / `IF LOCAL` 包裹）
+      if (skeleton.absorbed.has(ln)) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: '',
+          indent: 0,
+          visible: false,
+          reason: null,
+        });
+        continue;
+      }
+
+      // 段信封（E13-2）：`LOCAL = n` + `IF LOCAL && <条件>` + `ENDIF` 折叠成一层
+      // `若 <条件>：` 头。头落在原 `IF` 那一行上，段体保持原相对深度（它本来就比 `IF` 深一层）。
+      // 值 `0`（停用占位）的信封**不折**——见 `planSkeleton` 的"值 0 一律不折"条款。
+      const sectionHead = skeleton.sectionHeadAt.get(ln);
+      if (sectionHead !== undefined) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: sectionHead,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: null,
+        });
+        continue;
+      }
+
+      // 着色块：配对成功的那行 SETCOLOR → 块头；配对的 RESETCOLOR → 被吸收（不产出可见行）
+      const colorOpen = color.openAt.get(ln);
+      if (colorOpen !== undefined) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: `着色 ${colorOpen}：`,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: null,
+        });
+        continue;
+      }
+      if (color.absorbed.has(ln)) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: '',
+          indent: ctx.indentAt(ln, raw),
+          visible: false,
+          reason: null,
+        });
+        continue;
+      }
+
+      // 数据表（PRINTDATA 系，批 N）：块头一条结构标注，条目行降成缩进的候选清单。
+      // **不借用任何糖关键字**（糖表层没有数据表写法；写成 `随机：` 会"看着像糖、写回语义不同"）。
+      const dataLabel = data.labelAt.get(ln);
+      if (dataLabel !== undefined) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: dataLabel,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: null,
+        });
+        continue;
+      }
+      if (data.absorbed.has(ln)) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: '',
+          indent: ctx.indentAt(ln, raw),
+          visible: false,
+          reason: null,
+        });
+        continue;
+      }
+      const dataEntry = data.entryAt.get(ln);
+      if (dataEntry !== undefined) {
+        const body = dataEntry.replace(/[ \t　]+$/, '');
+        if (body.length === 0) {
+          recs.push(native(ln, 'data-or-skip')); // 空条目：没有可显示的东西
+          continue;
+        }
+        const text = hasInlineCondition(body)
+          ? inlineConditionsToSugar(body, deps)
+          : readableText(body, deps);
+        if (text === undefined) {
+          recs.push(native(ln, 'inline-condition'));
           continue;
         }
         recs.push({
           line: ln,
           kind: 'speech',
-          text: variant.wait ? '空行 等待' : '空行',
-          indent: ctx.indentAt(ln, raw),
+          text,
+          indent: data.entryIndentAt.get(ln) ?? ctx.indentAt(ln, raw),
           visible: true,
           reason: null,
         });
         continue;
       }
-      // **可读化只对 FORM 行做**（文件头纪律 2）；非 FORM 行逐字符原样。
-      // FORM 行的行内条件 `\@cond?A#B\@` 先降为糖三元（批 G）；解析不了 → 整行原样（不猜）。
-      let text: string | undefined;
-      if (!variant.form) {
-        text = body;
-      } else {
-        text = hasInlineCondition(body)
-          ? inlineConditionsToSugar(body, deps)
-          : readableText(body, deps);
+
+      // P-8：MESSAGECHECK 数字返回协议（纯显示）——只在 MECHECK 函数体内生效。
+      // 判据：`RETURN n`（位掩码）或 adapter 置位原语（位号）；解不出糖子句 → 保持原生。
+      if (inMessageCheck && mcBits !== undefined && mcSetBitRe !== null) {
+        const note = messageCheckNote(content, mcBits, mcSetBitRe);
+        if (note !== undefined) {
+          recs.push({
+            line: ln,
+            kind: 'control',
+            text: note,
+            indent: ctx.indentAt(ln, raw),
+            visible: true,
+            reason: null,
+          });
+          continue;
+        }
       }
-      if (text === undefined) {
-        recs.push(native(ln, 'inline-condition'));
+
+      const st = ctx.stmtAt(ln);
+      if (st) {
+        // `SIF 条件` → 块头「如果 …：」（批 H；它管辖的那一正文行在缩进补正里 +1 层）
+        if (st.kind === 'SIF' && sif.headAt.has(ln)) {
+          recs.push({
+            line: ln,
+            kind: 'control',
+            text: `如果 ${reverseExprAttributes(st.expression.trim(), deps)}：`,
+            indent: st.depth,
+            visible: true,
+            reason: null,
+          });
+          continue;
+        }
+        const cr = controlHeadRec(ln, st, deps);
+        if (cr !== undefined) {
+          recs.push(cr);
+          continue;
+        }
+        // 其余控制流（循环 / TRY / PRINTDATA / 标签等，以及**判据不满足的 SIF**）→ 原样保留
+        recs.push(native(ln, 'unsupported-control-flow'));
         continue;
       }
-      recs.push({
-        line: ln,
-        kind: 'speech',
-        text: variant.newline && !variant.wait ? `${text} 续` : text,
-        indent: ctx.indentAt(ln, raw),
-        visible: true,
-        reason: null,
-      });
-      continue;
-    }
 
-    // 演出行：`CALL HPH_PRINT,@"…","L"` → `心形 …… 续`（批 K，规范 §3.9）。
-    const heart = heartProjection(content, deps);
-    if (heart !== undefined) {
-      recs.push({
-        line: ln,
-        kind: 'speech',
-        text: heart,
-        indent: ctx.indentAt(ln, raw),
-        visible: true,
-        reason: null,
-      });
-      continue;
-    }
-
-    // 函数头：反解成糖的「时机 …：」块头（批 I）。解不出 / 歧义 → 原样留原代码
-    if (content.startsWith('@') && headIndex !== undefined) {
-      const fnName = stripParams(content.slice(1).trim());
-      // 选择器登记函数（`@M_KOJO_K58_1`）——先记下选择器，供随后带 `{t}` 的函数头
-      // 在文件头合成 `口上: <家族名> 选择器: <n>`。
-      const sel = headIndex.selector(fnName);
-      if (sel !== undefined) pendingSelector = sel;
-      const label = headIndex.label(fnName);
-      if (label !== undefined) {
-        // E13-1②：家族 fork（`_TOKI`）不再塞进块头（全角括号会让编号段被当成中文
-        // 指令名，转译必报错），改为在投影产物里发一行**文件头** `口上: <家族名>`
-        // ——那才是可写形的真实声明（`口上:` 的取值规则见规范 §3.1）。只发一次；
-        // 源文本里已有 `口上:` 声明时一个都不发（不重复）。选择器（有则）随行带出。
-        const family = headIndex.family(fnName);
-        const withHeader =
-          family !== undefined && !familyHeaderEmitted && !sourceDeclaresFamily
-            ? ((familyHeaderEmitted = true),
-              `口上: ${family}${pendingSelector !== undefined ? ` 选择器: ${pendingSelector}` : ''}\n${label}`)
-            : label;
-        recs.push({
-          line: ln,
-          kind: 'control',
-          text: withHeader,
-          indent: ctx.indentAt(ln, raw),
-          visible: true,
-          reason: null,
-        });
-        continue;
-      }
-    }
-
-    // 状态变化行：`CFLAG:TARGET:1088 = "热情"` → `她的心情 = "热情"`（批 J）。
-    // 反糖**一个字都没改动**就留原代码——半中不日的行既不给读者信息，也不是他能写的。
-    const assign = stateAssignment(content);
-    if (assign !== undefined) {
-      const sugar = reverseExprAttributes(content, deps);
-      if (sugar !== content) {
+      const pm = PRINT_FAMILY_RE.exec(content);
+      if (pm) {
+        const word = pm[1]!;
+        const variant = PRINT_VARIANTS.get(word);
+        if (!variant) {
+          recs.push(native(ln, 'unsupported-print-variant'));
+          continue;
+        }
+        // 结构判据**先于**内容判据：落在 PRINTDATA 数据表体内的行是"数据"而非"显示
+        // 语句"，无论它长什么样（哪怕文本体为空）都不该被当成台词投影。
+        if (ctx.enclosingAt(ln).includes('data')) {
+          recs.push(native(ln, 'data-or-skip'));
+          continue;
+        }
+        const body = pm[2]!.replace(/[ \t\u3000]+$/, '');
+        // 指令后紧跟 `;` → 这里是**注释**而不是要打印的字（Emuera 的 `;` 在任意位置起效）。
+        // 一行给不出"空行 + 注释"两行显示 → 原样保留（语料 1 行，判据为不误导而设）。
+        if (body.startsWith(';')) {
+          recs.push(native(ln, 'unsupported-print-variant'));
+          continue;
+        }
+        if (body.length === 0) {
+          // ---- 「输出一行空行」----
+          //
+          // 作者用**裸指令**打空行（`PRINTFORMW` / `PRINTFORMDL␠` / `PRINTL` / `PRINTDW␠`）。
+          // 真实语料里这不是零星写法：全量 2,285 文件中 `L`/`W` 变体的空体约 **16 万行**
+          // （FORM 系）+ **4.6 万行**（非 FORM 系：`PRINTL` 48%、`PRINTW` 97.4%、
+          // `PRINTDW` 99.1%、`PRINTDL` 57.1% 为空体），且**形态 100% 是"指令后为空"**。
+          //
+          // 糖表面 v1.4 补上了"输出空行"的写法（`空行`；§3.10 的空白行是分隔符、不产出），
+          // 故投影**回到等价改写**：按"读者在游戏里看到的节奏"投影成能往返回去的那一行。收益有两层：
+          //   ① 读者看到的是剧本节奏 / 糖写法，而不是一片 `PRINTFORMDL␠` / `PRINTW` 噪声；
+          //   ② 它不再**切断**糖段——实测中它是段数暴涨的头号原因。
+          //
+          // 判据边界：**只有 `newline` 的变体**才算打空行。无后缀的 `PRINT` / `PRINTFORM`
+          // 空体既不输出也不换行（是拼句片段的空段）——没有可显示的东西，原样保留。
+          //
+          // 批 P 补掉这里记在案的代价（v1.5 对齐语料主流）：空行不再按 `D` 归属分，只按**等待**分——
+          // 默认不等待投影为糖里能写出来的 `空行`（裸 `PRINTFORML`），`W` 系投影为 `空行 等待`
+          // （`PRINTFORMDW`）。两种节奏（等待 / 不等待）仍可分辨，且都是糖里写得出、能往返的一行。
+          if (!variant.newline) {
+            recs.push(native(ln, 'unsupported-print-variant'));
+            continue;
+          }
+          recs.push({
+            line: ln,
+            kind: 'speech',
+            text: variant.wait ? '空行 等待' : '空行',
+            indent: ctx.indentAt(ln, raw),
+            visible: true,
+            reason: null,
+          });
+          continue;
+        }
+        // **可读化只对 FORM 行做**（文件头纪律 2）；非 FORM 行逐字符原样。
+        // FORM 行的行内条件 `\@cond?A#B\@` 先降为糖三元（批 G）；解析不了 → 整行原样（不猜）。
+        let text: string | undefined;
+        if (!variant.form) {
+          text = body;
+        } else {
+          text = hasInlineCondition(body)
+            ? inlineConditionsToSugar(body, deps)
+            : readableText(body, deps);
+        }
+        if (text === undefined) {
+          recs.push(native(ln, 'inline-condition'));
+          continue;
+        }
         recs.push({
           line: ln,
           kind: 'speech',
-          text: sugar,
+          text: variant.newline && !variant.wait ? `${text} 续` : text,
           indent: ctx.indentAt(ln, raw),
           visible: true,
           reason: null,
         });
         continue;
       }
-    }
 
-    // 其余（赋值 / 调用 / `@` / `#` / `$` / 其他指令）→ 原样保留
-    recs.push(native(ln, 'other'));
-  }
-
-  // ---- P-1R 手段 3：函数级 all-or-nothing（原生直通回退）----
-  //
-  // **段式骨架**（有 `若` 段头）与**普通正文**不可混在同一个「时机」的最外层——段块的产物
-  // 里没有外层 `IF LOCAL` 信封，混排没有唯一可写回的形状（写侧 `codegen` 对此报
-  // `section-mixed`）。而 segment 的缩进基准**逐段重置**（`toSegment`：base = 段内可见行的
-  // 最小 indent），native 行又**切断段**——段式函数里只要还有未投影的行**夹在中间**，
-  // 段一被切开，拼接后缩进与块结构就互不相认 ⇒ 转译必报 `indent-mismatch`。
-  //
-  // 判据取**全有或全无**：函数范围内既折出了 `若` 段头、又会被切成**两段以上**可映射段
-  // ⇒ 整个函数（含 `@` 头）回退为原生直通（读者看到的就是原代码，不是半个坏投影）。
-  // 段数口径与 `buildSegments` 同源（native 切断；只有含 `speech`/`control` 的段才成段）——
-  // 首/尾的 native（未标标签的 `@` 头、收尾的 `RETURN`）只切出**一段**，不误伤。
-  // 手段 1/2 让信封吸收更完整（更少函数需要回退），本条保证剩下的段式函数**绝不**产出坏投影。
-  for (const [start, end] of functionRanges(lines)) {
-    let hasSection = false;
-    for (const r of recs) {
-      if (r.line >= start && r.line <= end && skeleton.sectionHeadAt.has(r.line)) {
-        hasSection = true;
-        break;
-      }
-    }
-    if (!hasSection) continue;
-    let runs = 0;
-    let runMapped = false;
-    for (const r of recs) {
-      if (r.line < start || r.line > end) continue;
-      if (r.kind === 'native') {
-        if (runMapped) runs++;
-        runMapped = false;
+      // 演出行：`CALL HPH_PRINT,@"…","L"` → `心形 …… 续`（批 K，规范 §3.9）。
+      const heart = heartProjection(content, deps);
+      if (heart !== undefined) {
+        recs.push({
+          line: ln,
+          kind: 'speech',
+          text: heart,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: null,
+        });
         continue;
       }
-      if (r.kind === 'speech' || r.kind === 'control') runMapped = true;
+
+      // 函数头：反解成糖的「时机 …：」块头（批 I）。解不出 / 歧义 → 原样留原代码
+      if (content.startsWith('@') && headIndex !== undefined) {
+        const fnName = stripParams(content.slice(1).trim());
+        // 选择器登记函数（`@M_KOJO_K58_1`）——先记下选择器，供随后带 `{t}` 的函数头
+        // 在文件头合成 `口上: <家族名> 选择器: <n>`。
+        const sel = headIndex.selector(fnName);
+        if (sel !== undefined) pendingSelector = sel;
+        const label = headIndex.label(fnName);
+        if (label !== undefined) {
+          // E13-1②：家族 fork（`_TOKI`）不再塞进块头（全角括号会让编号段被当成中文
+          // 指令名，转译必报错），改为在投影产物里发一行**文件头** `口上: <家族名>`
+          // ——那才是可写形的真实声明（`口上:` 的取值规则见规范 §3.1）。只发一次；
+          // 源文本里已有 `口上:` 声明时一个都不发（不重复）。选择器（有则）随行带出。
+          const family = headIndex.family(fnName);
+          const withHeader =
+            family !== undefined && !familyHeaderEmitted && !sourceDeclaresFamily
+              ? ((familyHeaderEmitted = true),
+                `口上: ${family}${pendingSelector !== undefined ? ` 选择器: ${pendingSelector}` : ''}\n${label}`)
+              : label;
+          recs.push({
+            line: ln,
+            kind: 'control',
+            text: withHeader,
+            indent: ctx.indentAt(ln, raw),
+            visible: true,
+            reason: null,
+          });
+          continue;
+        }
+      }
+
+      // 状态变化行：`CFLAG:TARGET:1088 = "热情"` → `她的心情 = "热情"`（批 J）。
+      // 反糖**一个字都没改动**就留原代码——半中不日的行既不给读者信息，也不是他能写的。
+      const assign = stateAssignment(content);
+      if (assign !== undefined) {
+        const sugar = reverseExprAttributes(content, deps);
+        if (sugar !== content) {
+          recs.push({
+            line: ln,
+            kind: 'speech',
+            text: sugar,
+            indent: ctx.indentAt(ln, raw),
+            visible: true,
+            reason: null,
+          });
+          continue;
+        }
+      }
+
+      // 其余（赋值 / 调用 / `@` / `#` / `$` / 其他指令）→ 原样保留
+      recs.push(native(ln, 'other'));
     }
-    if (runMapped) runs++;
-    if (runs < 2) continue;
-    for (const r of recs) {
-      if (r.line < start || r.line > end || r.kind === 'native') continue;
-      r.kind = 'native';
-      r.text = '';
-      r.indent = 0;
-      r.visible = false;
-      r.reason = 'other';
-    }
-  }
+    return recs;
+  };
+
+  /* ---- CR-1：段折叠回退（P-1R 手段 3 —— 触发条件一字未动，**动作**换了）----
+   *
+   * 触发（原样保留）：函数范围内既折出了 `若` 段头、又会被 native 行切成**两段以上**可映射段。
+   * 此时「时机」顶层同时存在段块与普通正文：段块的产物里没有外层 `IF LOCAL` 信封，混排没有
+   * 唯一可写回的形状（写侧 `codegen` 报 `section-mixed`）；而 `toSegment` 的缩进基准逐段重置，
+   * 段一被切开，拼接后缩进与块结构互不相认（实测报 `section-unclosed` / `indent-mismatch`）。
+   *
+   * 动作（改掉）：原实现把**整个函数**（连 `@` 头带所有台词行）抹回原生直通。真实语料里这条
+   * 判据命中 7,963 个函数、连带抹掉约 30 万行**本来已经投影成功**的台词——台词行覆盖率从
+   * 99.2% 跌到 69.7%（CR-1 六把尺子全红的根因）。
+   * 但"混排不可折"只否定**折叠**本身，不否定那一段里每一行的投影：`LOCAL = n` 回到原样行、
+   * `IF LOCAL && 条件` 走主循环同一条 `如果 …：` 口径、`ENDIF` 照常收束——函数里一个 `若`
+   * 都不留，混排自然不成立，读者看到的是一份**逐行等价**的普通糖文（只是没享受到 `若` 的
+   * 排版红利）。于是回退单位从"函数"降到"段折叠"：同一文件里的其它函数、同一函数里的
+   * 台词/输出/演出/数据条目/函数头标签**一行都不退**。
+   */
+  const recs0 = buildRecs(plan0);
+  const unfold = pickSectionUnfolds(lines, plan0, recs0);
+  const skeleton = unfold.size === 0 ? plan0 : unfoldSections(plan0, unfold);
+  const recs = unfold.size === 0 ? recs0 : buildRecs(skeleton);
 
   // ---- 缩进补正（一处口径，漏改不了）：着色块**体内** +1；`SIF` 管辖的那一行 +1；
   //      标了「时机 …：」的函数头其**函数体** +1（规范 §3.2 正文缩进一级）；
@@ -886,6 +889,23 @@ interface SkeletonPlan {
    * 信封的另两行（`LOCAL = n` / `ENDIF`）走 `absorbed`。
    */
   sectionHeadAt: Map<number, string>;
+  /**
+   * 段信封的**完整区间**（键 = 段头行号 = 原 `IF` 行）。
+   *
+   * CR-1 的「段折叠回退」需要它：只有 `sectionHeadAt` / `absorbed` 的话，`LOCAL = n` 行
+   * 与配对 `ENDIF` 行在集合里已被拍平、认不回来，回退就无从下手。
+   */
+  envelopes: Map<number, SectionEnvelope>;
+}
+
+/** 一个**段信封**的三行区间（1 基行号）：`LOCAL = n` / `IF … && 条件` / 配对 `ENDIF` */
+interface SectionEnvelope {
+  /** `LOCAL = n`（或 `LOCAL:k = n`）赋值行——折叠时被吸收，回退后**恢复成原样行** */
+  localLine: number;
+  /** 段头行（原 `IF` 行）；`sectionHeadAt` 的键 */
+  ifLine: number;
+  /** 配对的同缩进 `ENDIF` 行 */
+  endLine: number;
 }
 
 /**
@@ -964,6 +984,8 @@ function planSkeleton(lines: string[], ctx: ProjContext, deps: LiftDeps): Skelet
   const dedent = new Array<number>(lines.length + 1).fill(0);
   /** 段信封的头行 → `若 <条件>：`（E13-2 / S5） */
   const sectionHeadAt = new Map<number, string>();
+  /** CR-1：段信封区间（段头行 → 三行完整区间），回退折叠时按它把行还原回原生口径 */
+  const envelopes = new Map<number, SectionEnvelope>();
   const total = lines.length;
   let inSkip = false;
 
@@ -1115,6 +1137,7 @@ function planSkeleton(lines: string[], ctx: ProjContext, deps: LiftDeps): Skelet
       absorbed.add(endLn);
       const cond = projectSectionCondition(sectionCondition!, deps);
       sectionHeadAt.set(ifLn, `若 ${cond}：`);
+      envelopes.set(ifLn, { localLine: ln, ifLine: ifLn, endLine: endLn });
       continue;
     }
 
@@ -1133,7 +1156,126 @@ function planSkeleton(lines: string[], ctx: ProjContext, deps: LiftDeps): Skelet
     absorbed,
     dedentAt: (line) => (line >= 1 && line <= total ? (dedent[line] ?? 0) : 0),
     sectionHeadAt,
+    envelopes,
   };
+}
+
+/* ============================== CR-1 段折叠回退 ============================== */
+
+/**
+ * 哪些**段折叠**要回退（返回段头行号集合）。四条判据取并集，全部是**结构可证**的：
+ *
+ * - **R1（逐段）**：信封自己的区间 `[LOCAL 行, ENDIF 行]` 里有 native 行 ⇒ 段头与它的正文
+ *   被一行原码切开（拼接产物报 `section-unclosed` / `indent-mismatch`）。**只撤这一段的
+ *   折叠**，同函数别的干净段照折——这就是"分段粒度"。
+ *   （旧版没有这一条：它用"函数范围内 native 把可映射段切成两段以上"这一把**代理尺子**，
+ *   命中就抹**整个函数**——真实语料 7,963 个函数、约 30 万行已经投影成功的台词一起陪葬，
+ *   台词行覆盖 99.2% → 69.7%。那正是 CR-1。）
+ * - **R2（逐段）**：外层信封的区间里还套着另一条段头 ⇒ 折出来就是段内套段
+ *   （写侧报 `section-nested`）。撤外层、留内层（外层退回 `如果 …：` 后内层落在普通块里，
+ *   不再是"段里套段"）。
+ * - **R3（逐段）**：段头那条 `IF` 在**同缩进**上还有 `ELSE` / `ELSEIF` 分叉 ⇒ 折叠等于把
+ *   `IF / ELSEIF / ENDIF` 这条链的开头摘走，链的其余部分失去归属（`section-mixed` 的一类）。
+ * - **R4（逐函数）**：「时机」**顶层**除了段以外还有别的东西——**已经投影成功的**正文行也算
+ *   （`如果 …：` / `当 …：` / 台词行 / 着色块头）。`section-mixed` 的本义就是"段块与普通语句
+ *   同顶层"，普通语句能不能投影与它无关；旧版只把"投不了的行"当混排，漏掉这一类
+ *   （真实语料实测残留 `section-mixed` 全部来自这里）。判据直接问结构：段信封区间**之外**、
+ *   比函数头更深的那一层里还有可见的 `speech` / `control` 或 native 行 ⇒ 这一函数一律不折。
+ *
+ * 四条都**只撤折叠**、不动逐行投影，所以覆盖率只会比旧口径**高**，不是靠抹内容换数字。
+ */
+function pickSectionUnfolds(lines: string[], plan: SkeletonPlan, recs: LineRec[]): Set<number> {
+  const out = new Set<number>();
+  if (plan.envelopes.size === 0) return out;
+  /** native 行索引（`buildRecs` 每行恰一条记录，`recs[ln-1]` 即该行；越界或不一致时保守当作非 native） */
+  const nativeAt = (ln: number): boolean => {
+    const r = recs[ln - 1];
+    return r !== undefined && r.line === ln && r.kind === 'native';
+  };
+  /** 段信封按段头行升序（`planSkeleton` 自上而下扫描，插入序即行号序） */
+  const envs = [...plan.envelopes.entries()];
+  for (let i = 0; i < envs.length; i++) {
+    const [ifLn, env] = envs[i]!;
+    // R1：区间里有投不了的行
+    for (let k = env.localLine; k <= env.endLine; k++) {
+      if (nativeAt(k)) {
+        out.add(ifLn);
+        break;
+      }
+    }
+    if (out.has(ifLn)) continue;
+    // R2：外层区间里还套着另一条段头（内层只会更深，故向后扫到本层结束即可）
+    for (let j = i + 1; j < envs.length && envs[j]![1].localLine < env.endLine; j++) {
+      out.add(ifLn);
+      break;
+    }
+    if (out.has(ifLn)) continue;
+    // R3：同缩进上还有 `ELSE` / `ELSEIF` 分叉——折叠只搬得走 `IF` 那一行，链的其余部分失去归属
+    const chain = indentLevelOf(lines[ifLn - 1] ?? '');
+    for (let k = ifLn + 1; k < env.endLine; k++) {
+      if (indentLevelOf(lines[k - 1] ?? '') !== chain) continue;
+      const c = stripInlineComment(contentOf(lines[k - 1] ?? ''));
+      if (/^ELSE(\s|$)/.test(c) || /^ELSEIF\s/.test(c)) {
+        out.add(ifLn);
+        break;
+      }
+    }
+  }
+  // R4 只看**活下来的**折叠：被 R1/R2/R3 撤掉的信封，它的 `LOCAL` / 段体 / `ENDIF` 会重新
+  // 变成「时机」顶层的普通行——那正是混排的另一半，不能当成"还在段里"放过。
+  const insideEnvelope = new Set<number>();
+  for (const [ifLn, env] of plan.envelopes) {
+    if (out.has(ifLn)) continue;
+    for (let k = env.localLine; k <= env.endLine; k++) insideEnvelope.add(k);
+  }
+  if (insideEnvelope.size === 0) return out;
+  for (const [start, end] of functionRanges(lines)) {
+    const inRange: number[] = [];
+    for (const ifLn of plan.envelopes.keys()) {
+      if (ifLn >= start && ifLn <= end && !out.has(ifLn)) inRange.push(ifLn);
+    }
+    if (inRange.length === 0) continue;
+    // 「时机」块的正文 = 比函数头更深的那些行（第 0 列的行——收尾 `RETURN`、下一个 `@`——
+    // 落在块外，与段块不同顶层，不构成混排）
+    const headIndent = indentLevelOf(lines[start - 1] ?? '');
+    let mixed = false;
+    for (let ln = start + 1; ln <= end; ln++) {
+      const r = recs[ln - 1];
+      if (r === undefined || r.line !== ln || r.kind === 'passthrough') continue;
+      if (insideEnvelope.has(ln)) continue;
+      if (indentLevelOf(lines[ln - 1] ?? '') <= headIndent) continue;
+      if (r.kind === 'native' || r.kind === 'speech' || (r.kind === 'control' && r.visible)) {
+        mixed = true;
+        break;
+      }
+    }
+    if (!mixed) continue;
+    for (const ifLn of inRange) out.add(ifLn);
+  }
+  return out;
+}
+
+/**
+ * 把选中的段信封**还原成没折过**的样子（不改原对象——`plan0` 还要被第一轮记录解释）。
+ *
+ * 还原 = 从 `absorbed` 里放掉 `LOCAL = n` 与配对 `ENDIF` 两行、删掉段头文本与区间。
+ * 下一轮 `buildRecs` 于是把它们当成普通行走各自的既有口径：`LOCAL = n` 落进"其余 → 原样保留"
+ * （native `other`，与全语料所有赋值行同一条路），`IF LOCAL && 条件` 落进 `controlHeadRec`
+ * （`如果 LOCAL && 条件：`），`ENDIF` 落进收束行（不可见）。**没有第二条判据。**
+ */
+function unfoldSections(plan: SkeletonPlan, ifLines: ReadonlySet<number>): SkeletonPlan {
+  const absorbed = new Set(plan.absorbed);
+  const sectionHeadAt = new Map(plan.sectionHeadAt);
+  const envelopes = new Map(plan.envelopes);
+  for (const ifLn of ifLines) {
+    const env = envelopes.get(ifLn);
+    if (env === undefined) continue;
+    absorbed.delete(env.localLine);
+    absorbed.delete(env.endLine);
+    sectionHeadAt.delete(ifLn);
+    envelopes.delete(ifLn);
+  }
+  return { absorbed, dedentAt: plan.dedentAt, sectionHeadAt, envelopes };
 }
 
 /* ============================== SIF → 单语句「如果」 ============================== */

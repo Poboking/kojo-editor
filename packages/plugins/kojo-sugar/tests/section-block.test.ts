@@ -10,8 +10,9 @@
  *   `eratw-adapter/tests/scaffold-cases.test.ts`）。
  *
  * 1016 批删去 `（关）` 停用标记：写侧每段的 `LOCAL` 恒为 `1`；投影侧 **`LOCAL = 0` 信封
- * 一律不折**（照折会把作者的"停用"静默改成"启用"）⇒ 停用段留在原生直通里，并切断段、
- * 触发函数级 all-or-nothing 回退（已知覆盖率代价，见下方用例）。
+ * 一律不折**（照折会把作者的"停用"静默改成"启用"）⇒ 它留成一行原码并切断段，与同函数的
+ * `若` 段混排。CR-1 把这一情形的回退单位从"整个函数"降到"**这一段折叠**"（`若` 全部退回
+ * `如果 …：`，台词行一行不退）——见下方"混排"与"闭环②③"三条用例。
  *
  * 装配不依赖游戏盘（字典/分野表用 `support.ts` 的桩）；真语料那条单独 skip。
  * **每条正向断言都配负自证**——改一个字符 / 去掉块头必须被抓出，防断言空转。
@@ -56,6 +57,29 @@ const projectDeps = (): LiftDeps => ({
 const project = (source: string) => liftProject(projectDeps(), { source });
 const segText = (source: string): string[] =>
   project(source).segments.map((s) => s.sugarText);
+
+/**
+ * **按宿主的做法**把投影产物拼回原文：段区间换成 `sugarText`，其余行原样。
+ *
+ * E13 报红的原话是"把投影结果原样贴进 `.kojo` 保存"期望零 error——只看 `sugarText`
+ * 拼接（`segText`）测不出"原生行留在两段之间"这种形态，而那正是 CR-1 回退判据要防的
+ * 唯一真实危害。故闭环一律走这一条：拼出来的整份文件必须能被转译器**无 error** 收下。
+ */
+function composeLikeHost(
+  source: string,
+  segments: ReadonlyArray<{ fromLine: number; toLine: number; sugarText: string }>,
+): string {
+  const src = source.replace(/\r\n/g, '\n').split('\n');
+  const out: string[] = [];
+  let cur = 1;
+  for (const s of segments) {
+    for (; cur < s.fromLine; cur++) out.push(src[cur - 1]!);
+    if (s.sugarText.length > 0) out.push(...s.sugarText.split('\n'));
+    cur = s.toLine + 1;
+  }
+  for (; cur <= src.length; cur++) out.push(src[cur - 1]!);
+  return out.join('\n');
+}
 
 /* ============================================================================ */
 /* A. 写侧：段块的产物必须是库内手写的样子                                          */
@@ -348,14 +372,64 @@ describe('E13-B 投影 · 段级吸收', () => {
     expect(text).not.toContain('LOCAL = 1');
   });
 
-  it('混排（启用段 + 停用段）：停用段不折 ⇒ 切断段 ⇒ 整函数回退原生直通（零糖段）', () => {
-    // 已知覆盖率代价：一个停用段就把整函数打回原生直通——`若` 段一个都不折
+  it('混排（启用段 + 停用段）：**只回退"折叠"本身**，一行台词都不陪葬（CR-1）', () => {
+    // 停用段（`LOCAL = 0`）不折 ⇒ 它在「时机」顶层留成一行原码 ⇒ 与 `若` 段混排（写侧没有
+    // 唯一可写回形状）。旧实现据此把**整个函数**打回原生直通：一个 `LOCAL = 0` 抹掉全函数台词。
+    // CR-1 把回退单位降到"段折叠"——函数里 `若` 一个不留（混排判据照常成立），
+    // 但每一行照常按各自口径投影：`LOCAL = 0` 留原码、`IF …` 降成 `如果 …：`、台词行降成文本行。
     const r = project(mixedOff);
     const text = r.segments.map((s) => s.sugarText).join('\n');
     expect(text).not.toContain('若 ');
-    // **零糖段**：整函数（含 `@` 头）全归"保留原生"，读者看到的就是原代码，不是半折的坏投影
-    expect(r.segments).toEqual([]);
-    expect(r.stats.projectedLines).toBe(0);
+    // 台词行**不退**：两条段的正文都还在糖段里
+    expect(text).toContain('「甲」');
+    expect(text).toContain('「乙」');
+    // 函数头照常反解成「时机 …：」（旧实现连它一起抹掉）
+    expect(text).toContain('时机 绝顶：');
+    // 机器码一行都没被吞、也没被改写：`LOCAL` 行在拼接产物里**逐字还是源里那两行**
+    // （停用态没被悄悄翻成启用态——1016 批立的红线）
+    const composed = composeLikeHost(mixedOff, r.segments);
+    expect(composed.split('\n').filter((l) => /LOCAL\s*=/.test(l))).toEqual(['LOCAL = 1', 'LOCAL = 0']);
+    // 不再是零糖段
+    expect(r.segments.length).toBeGreaterThan(0);
+    expect(r.stats.projectedLines).toBeGreaterThan(0);
+  });
+
+  it('闭环②：混排回退后的产物**不再有 `section-*` 结构诊断**（CR-1 的判据本体）', () => {
+    // 回退要防的是"半个坏投影"——具体就是段块与普通正文混在一个「时机」顶层所产生的
+    // `section-mixed` / `section-unclosed` / `section-nested`。回退把 `若` 全换成 `如果`
+    // 之后这三类一个都不该剩。
+    // （对照事实：`indent-mismatch` 是**逐段缩进重新基准**的既有显示近似——非段式函数被
+    // 原生行切开时同样会出现，HEAD 版本实测即报，不是本条判据要挡的东西，也不是写盘路径。）
+    const r = project(mixedOff);
+    const composed = composeLikeHost(mixedOff, r.segments);
+    expect(codesOf(composed).filter((c) => c.startsWith('section-'))).toEqual([]);
+  });
+
+  it('闭环③：段体内有投不了的行（`CALL`）⇒ 该段退回 `如果 …：`，台词行一行不退', () => {
+    const src = [
+      '@M_KOJO_MESSAGE_PALAMCNG_B_K12',
+      'LOCAL = 1',
+      'IF LOCAL && NOWEX:噴乳',
+      '\tPRINTFORMW 「甲」',
+      '\tCALL SOMEThing',
+      'ENDIF',
+      'LOCAL = 1',
+      'IF LOCAL && NOWEX:射精',
+      '\tPRINTFORMW 「乙」',
+      'ENDIF',
+      'RETURN 1',
+    ].join('\n');
+    const r = project(src);
+    const text = r.segments.map((s) => s.sugarText).join('\n');
+    // `CALL` 在段体里 ⇒ 这条折叠被撤（否则 `若` 头与它的正文被一行原生代码切开）
+    expect(text).toContain('如果 LOCAL && NOWEX:噴乳：');
+    expect(text).not.toContain('若 ');
+    // 两条段的台词都还在糖里（旧实现这里 `segs=0`，两行台词一起陪葬）
+    expect(text).toContain('「甲」');
+    expect(text).toContain('「乙」');
+    // 撤折叠≠吞内容：`CALL` 那行仍以原生形态出现在拼接产物里（没被折掉、也没被删）
+    expect(composeLikeHost(src, r.segments)).toContain('CALL SOMEThing');
+    expect(codesOf(composeLikeHost(src, r.segments)).filter((c) => c.startsWith('section-'))).toEqual([]);
   });
 
   it('闭环：多信封函数（全启用）投影 → 原样喂回转译器 ⇒ **零 error**（E13 的判据本体）', () => {
