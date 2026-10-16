@@ -45,6 +45,7 @@ import { dialectForLanguage, installDocumentFormatter, toTextEdits, type FormatH
 import { installRangeFormatter } from '../monaco/kojo-format-range';
 import { applyFormatOnSave } from './format-on-save';
 import { classifySaveRace } from './save-race';
+import { selectionStatusText } from './selection-status';
 import { loadFormatOnSavePref } from './format-pref';
 import { applyNameColorPref, subscribeNameColorPref } from './semantic-color-pref';
 import {
@@ -896,8 +897,8 @@ interface Props {
   registerActions?: (actions: EditorPaneActions | null) => void;
   /** 重授权入口（通知 action「去授权」落地处） */
   onReauth: () => void;
-  /** 编辑器状态上抛（状态栏右区显示编码/EOL/行数；卸载或无文件时 null；autosavedAt 走同一条链路，A6 状态栏轻指示） */
-  onStatusInfo?: (info: { encoding: string; eol: string; lines: number; autosavedAt?: number | null } | null) => void;
+  /** 编辑器状态上抛（状态栏右区显示编码/EOL/行数 + A9 选区/光标读数；卸载或无文件时 null；autosavedAt 走同一条链路，A6 状态栏轻指示） */
+  onStatusInfo?: (info: { encoding: string; eol: string; lines: number; autosavedAt?: number | null; sel?: string } | null) => void;
   /** 编辑器获得焦点（SPLIT-1：宿主据此把焦点组切到本组） */
   onFocused?: () => void;
 }
@@ -1054,6 +1055,35 @@ export function EditorPane({
     if (!entry || base === undefined) return false;
     return entry.model.getAlternativeVersionId() !== base;
   }, []);
+
+  /**
+   * A9 状态栏选区读数：活动文件真 model 的选区/光标 → 文案（判据全在纯函数
+   * `selection-status.ts`）。糖视图给空串——派生 model 的行号不属于真文件，
+   * 状态栏不许用它误导作者（与面包屑同口径）。
+   */
+  const selStatusRef = useRef('');
+  const selReadout = (): string => {
+    const ed = editorRef.current;
+    if (!ed || !filePathRef.current || sugarModelRef.current) return '';
+    const model = ed.getModel();
+    const sel = model ? ed.getSelection() : null;
+    if (!model || !sel) return '';
+    return selectionStatusText(model, sel, { line: sel.positionLineNumber, column: sel.positionColumn });
+  };
+  /** 读数上抛：复用 dirty/编码 在走的 onStatusInfo 链路；文案未变则不惊动壳层重渲染 */
+  const pushSelStatus = (force = false): void => {
+    const entry = entriesRef.current.get(filePathRef.current);
+    if (!entry) return;
+    const sel = selReadout();
+    if (!force && sel === selStatusRef.current) return;
+    selStatusRef.current = sel;
+    onStatusInfoRef.current?.({
+      encoding: entry.encoding,
+      eol: entry.eol,
+      lines: entry.model.getLineCount(),
+      sel,
+    });
+  };
 
   /**
    * 全部脏标签的内容快照（autosave 兜底句柄，退出/崩溃守护批）：逐 model 读
@@ -1642,11 +1672,7 @@ export function EditorPane({
         if (isActive) {
           setDirty(false);
           setStatus('已从磁盘重新加载（文件在外部被修改）');
-          onStatusInfoRef.current?.({
-            encoding: live.encoding,
-            eol: live.eol,
-            lines: live.model.getLineCount(),
-          });
+          pushSelStatus(true);
         }
       };
       if (decision === 'reload') {
@@ -1970,8 +1996,15 @@ export function EditorPane({
         apply([]);
       }
     };
-    const crumbCursorSub = ed.onDidChangeCursorPosition(() => crumbRefreshRef.current?.());
-    const crumbModelSub = ed.onDidChangeModel(() => crumbRefreshRef.current?.());
+    // A9 选区读数搭同一条光标监听：不新增高频监听，等值去抖在 pushSelStatus 内
+    const crumbCursorSub = ed.onDidChangeCursorPosition(() => {
+      crumbRefreshRef.current?.();
+      pushSelStatus();
+    });
+    const crumbModelSub = ed.onDidChangeModel(() => {
+      crumbRefreshRef.current?.();
+      pushSelStatus();
+    });
     // 视图状态：光标/滚动驱动快照（store 内防抖合并落盘）；页面卸载前 flush 一次
     const viewCurSub = ed.onDidChangeCursorPosition(snapshotActiveView);
     const viewScrSub = ed.onDidScrollChange(snapshotActiveView);
@@ -2203,11 +2236,7 @@ export function EditorPane({
       setError(null);
       setPendingChoice(null); // 换文件即作废未决的保存告警（避免误对旧文件应用修复）
       setStatus(`${entry.encoding} · ${entry.eol} · ${entry.model.getLineCount()} 行`);
-      onStatusInfo?.({
-        encoding: entry.encoding,
-        eol: entry.eol,
-        lines: entry.model.getLineCount(),
-      });
+      pushSelStatus(true);
       // 打开/切换即算一次装饰（不等用户编辑）——首屏就能看到波浪线
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;

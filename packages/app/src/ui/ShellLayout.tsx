@@ -130,6 +130,8 @@ export interface EditorStatusInfo {
   lines: number;
   /** 最近一次自动保存成功的时刻（epochMs；手动保存/切文件不写这条，链路复用 onStatusInfo 不新开协议） */
   autosavedAt?: number | null;
+  /** A9 选区/光标读数文案（`选中 …` 或 `行:列`；糖视图/无文件时 ''） */
+  sel?: string;
 }
 
 /**
@@ -1327,6 +1329,7 @@ export function ShellLayout(props: Props): ReactElement {
             {editorStatus.encoding} · {editorStatus.eol} · {editorStatus.lines} 行
           </span>
         ) : null}
+        {editorStatus && editorStatus.sel ? <span className="sb-sel">{editorStatus.sel}</span> : null}
         <span className={`sb-dirty ${dirty ? 'on' : ''}`} title={dirty ? '有未保存修改' : '已保存'}>
           {dirty ? (
             <>

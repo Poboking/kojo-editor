@@ -3106,6 +3106,12 @@ button.erb-mode-hint.unlocked:hover {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+/* A9 选区/光标读数：与 .sb-editor 同款视觉（同一族状态栏读数件） */
+.sb-sel {
+  color: var(--fg-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .sb-dirty {
   color: var(--fg-dim);
   white-space: nowrap;

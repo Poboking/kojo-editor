@@ -1405,8 +1405,8 @@ export function App(): ReactElement {
       if (!pending) return;
       // 对话框的动作字面量与关项目共用一套（save-then-close），归一到切换语义
       const decision: ProjectSwitchDecision = action === 'save-then-close' ? 'save-then-go' : action;
-      const saveOk =
-        decision === 'save-then-go' ? (actionsByGroupRef.current.size > 0 ? await saveAll() : false) : true;
+      // SPLIT-1 遗留红：`actionsRef` 已更名 `actionsByGroupRef`，此处改走跨组收口的 saveAll 本体
+      const saveOk = decision === 'save-then-go' ? await saveAll() : true;
       if (resolveProjectSwitch(decision, saveOk).kind === 'stay') return;
       try {
         await autosaveRef.current?.discard();
@@ -1415,7 +1415,7 @@ export function App(): ReactElement {
       }
       await openProject(pending.dir, { skipDirtyConfirm: true });
     },
-    [pendingProjectSwitch, openProject],
+    [pendingProjectSwitch, openProject, saveAll],
   );
 
   /** 重授权入口（定稿 Q9：状态栏徽章点击 + 通知 action 两者都留） */
