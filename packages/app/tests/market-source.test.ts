@@ -6,9 +6,15 @@ import {
 } from '@kojo/plugin-api';
 import {
   applyEndpointEdit,
+  classifyNote,
+  hintClassFor,
+  isDraftNoop,
   isOverridden,
   NO_SERVICE_VIEW,
   planEndpointEdit,
+  resetEndpoint,
+  sourceRowUi,
+  type MarketSourceView,
 } from '../src/ui/market-source';
 
 /**
@@ -109,5 +115,98 @@ describe('注册表来源（设置页那一行）', () => {
     );
     // JS 递得进去的代理 = 白名单作废（能对白名单 URL 回任意字节、还能转去内网）⇒ 命令面与设置面都不许出现它
     expect(src.toLowerCase()).not.toContain('proxy');
+  });
+});
+
+const MIRROR = 'https://mirror.example.test/kojo/index.json';
+
+describe('设置页那一行的显示口径（生效地址显式化 / 保存可点性 / 回执三态）', () => {
+  it('isDraftNoop：与生效值逐字相同或"空草稿 + 本来就用默认" ⇒ 不给保存机会', () => {
+    expect(isDraftNoop('', MARKET_DEFAULT_INDEX_URL)).toBe(true);
+    expect(isDraftNoop('  ', MARKET_DEFAULT_INDEX_URL)).toBe(true);
+    expect(isDraftNoop(MARKET_DEFAULT_INDEX_URL, MARKET_DEFAULT_INDEX_URL)).toBe(true);
+    expect(isDraftNoop(MIRROR, MIRROR)).toBe(true);
+    expect(isDraftNoop(`  ${MIRROR}  `, MIRROR)).toBe(true);
+    // 覆盖态下的空草稿 = 撤销覆盖（一次真改动），不是"没动"
+    expect(isDraftNoop('', MIRROR)).toBe(false);
+    expect(isDraftNoop('https://other.example.test/i.json', MARKET_DEFAULT_INDEX_URL)).toBe(false);
+  });
+
+  it('classifyNote 三态互斥：成功=ok、失败=err、无改动与读取中=dim（判据只住这一处）', () => {
+    expect(classifyNote('')).toBe('dim');
+    expect(classifyNote('没有改动')).toBe('dim');
+    expect(classifyNote('已改用自建地址（下次打开市场面板生效）')).toBe('ok');
+    expect(classifyNote('已恢复默认注册表地址（下次打开市场面板生效）')).toBe('ok');
+    expect(classifyNote('没有保存：协议必须是 https')).toBe('err');
+    expect(classifyNote(NO_SERVICE_VIEW.note)).toBe('err');
+    expect(classifyNote('注册表地址读不出来')).toBe('err');
+    expect(classifyNote('存储域写不动')).toBe('dim');
+  });
+
+  it('hintClassFor：三态只映射到设置页既有类名（不造新样式）', () => {
+    expect(hintClassFor('ok')).toBe('settings-hint is-ok');
+    expect(hintClassFor('err')).toBe('settings-hint is-err');
+    expect(hintClassFor('dim')).toBe('settings-hint');
+  });
+
+  it('sourceRowUi 读取中 ⇒ 不给"能改"的错觉，也不显示地址', () => {
+    const row = sourceRowUi(null);
+    expect(row).toEqual({
+      loading: true,
+      canEdit: false,
+      showReset: false,
+      statusText: '正在读取当前用的地址…',
+      statusTone: 'dim',
+      address: '',
+      note: '',
+      noteTone: 'dim',
+    });
+  });
+
+  it('sourceRowUi 服务缺席 ⇒ 一句实话 + err 着色；输入框与按钮都不可操作', () => {
+    const row = sourceRowUi(NO_SERVICE_VIEW);
+    expect(row.canEdit).toBe(false);
+    expect(row.showReset).toBe(false);
+    expect(row.address).toBe('');
+    expect(row.statusText).toContain('市场服务没装配');
+    expect(row.statusTone).toBe('err');
+    expect(hintClassFor(row.statusTone)).toBe('settings-hint is-err');
+  });
+
+  it('sourceRowUi 默认态 ⇒ 显式显示契约常量本身（不是将就在占位符里），且不出现恢复默认', () => {
+    const row = sourceRowUi({ effective: MARKET_DEFAULT_INDEX_URL, overridden: false, note: '' });
+    expect(row.canEdit).toBe(true);
+    expect(row.showReset).toBe(false);
+    expect(row.address).toBe(MARKET_DEFAULT_INDEX_URL);
+    expect(row.statusText).toBe('当前用的是默认地址');
+  });
+
+  it('sourceRowUi 覆盖态 ⇒ 摊开自建地址本身 + 给出恢复默认入口', () => {
+    const row = sourceRowUi({ effective: MIRROR, overridden: true, note: '已改用自建地址（下次打开市场面板生效）' });
+    expect(row.canEdit).toBe(true);
+    expect(row.showReset).toBe(true);
+    expect(row.address).toBe(MIRROR);
+    expect(row.statusText).toBe('当前用的是自建地址');
+    expect(row.noteTone).toBe('ok');
+  });
+
+  it('sourceRowUi 读不出来（有视图但地址为空）⇒ 与缺席同档：不可编辑、err、无假读数', () => {
+    const view: MarketSourceView = { effective: '', overridden: false, note: '注册表地址读不出来' };
+    const row = sourceRowUi(view);
+    expect(row.canEdit).toBe(false);
+    expect(row.address).toBe('');
+    expect(row.statusText).toBe('注册表地址读不出来');
+    expect(row.statusTone).toBe('err');
+  });
+
+  it('恢复默认 = 既有 reset 通路（applyEndpointEdit 传空串）：只发一次写、回到契约常量；服务缺席时不假装成功', async () => {
+    const { market, writes } = fakeMarket(MIRROR);
+    const v = await resetEndpoint(market);
+    expect(writes).toEqual(['']);
+    expect(v.effective).toBe(MARKET_DEFAULT_INDEX_URL);
+    expect(v.overridden).toBe(false);
+    expect(classifyNote(v.note)).toBe('ok');
+
+    expect(await resetEndpoint(undefined)).toBe(NO_SERVICE_VIEW);
   });
 });

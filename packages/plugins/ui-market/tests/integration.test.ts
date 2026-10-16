@@ -874,6 +874,7 @@ function viewProps(
     open: null,
     installing: null,
     onQuery: noop,
+    onClearQuery: noop,
     onPull: noop,
     onInstall: noop,
     onImport: noop,
@@ -1129,6 +1130,198 @@ describe('索引行的来源网址', () => {
     );
     expect(html).toContain('<div class="mk-sub">一句包介绍</div>');
     expect(html).toContain('<div class="mk-sub">来源 https://example.test/k.pack</div>');
+  });
+});
+
+/* ---------------- 结构判据（DOM 契约：工具条 / 状态簇 / 自滚列表 / 行内动作簇） ---------------- */
+
+/** 渲染树里的元素（本层判据只把 React 元素当普通对象读，不跑 DOM） */
+interface El {
+  type: unknown;
+  props: Record<string, unknown>;
+}
+
+const isEl = (node: unknown): node is El =>
+  node !== null && typeof node === 'object' && 'props' in node && 'type' in node;
+
+/** 子元素（数组与嵌套数组一律摊平；文本与 null 保留给调用方自己滤） */
+function kids(el: El): unknown[] {
+  const flat = (n: unknown): unknown[] => (Array.isArray(n) ? n.flatMap(flat) : [n]);
+  return flat(el.props.children);
+}
+
+/** 子树里 `className` 含该 token 的元素（`mk-row open` 也算 `mk-row`） */
+function byClass(node: unknown, cls: string, out: El[] = []): El[] {
+  if (Array.isArray(node)) {
+    for (const n of node) byClass(n, cls, out);
+    return out;
+  }
+  if (!isEl(node)) return out;
+  const cn = node.props.className;
+  if (typeof cn === 'string' && cn.split(/\s+/).includes(cls)) out.push(node);
+  for (const c of kids(node)) byClass(c, cls, out);
+  return out;
+}
+
+/** 子树里的 button 元素（要数按钮、要读 `aria-*`、要真的调用 `onClick`） */
+function buttonEls(node: unknown, out: El[] = []): El[] {
+  if (Array.isArray(node)) {
+    for (const n of node) buttonEls(n, out);
+    return out;
+  }
+  if (!isEl(node)) return out;
+  if (node.type === 'button') out.push(node);
+  for (const c of kids(node)) buttonEls(c, out);
+  return out;
+}
+
+/** 标签为 `label` 的那枚 button 元素本身（`findButton` 只给 onClick，这里要看的更多） */
+const buttonEl = (node: unknown, label: string): El | null =>
+  buttonEls(node).find((b) => b.props.children === label) ?? null;
+
+/** 状态簇那一段（`mk-flash` 起、`mk-body` 止）与列表那一段（`mk-body` 起、到结尾） */
+const flashOf = (html: string): string =>
+  html.slice(html.indexOf('class="mk-flash"'), html.indexOf('class="mk-body"'));
+const bodyOf = (html: string): string => html.slice(html.indexOf('class="mk-body"'));
+
+describe('面板结构分层（工具条 / 状态簇 / 自滚列表）', () => {
+  const packs2 = [viewEntry('a.pack', '1.0.0'), viewEntry('b.pack', '1.0.0', { summary: '一句包介绍' })];
+  const installed1 = [viewRec('a.pack', '1.0.0', { name: '示例 a.pack' })];
+
+  it('三段的家：工具条在最前，状态与数据时间住 .mk-flash，列表住 .mk-body', () => {
+    const html = renderView(packs2, installed1, { note: '已装上「示例 a.pack」（版本 1.0.0）' });
+    expect(html.indexOf('class="mk-toolbar"')).toBeLessThan(html.indexOf('class="mk-flash"'));
+    expect(html.indexOf('class="mk-flash"')).toBeLessThan(html.indexOf('class="mk-body"'));
+    const flash = flashOf(html);
+    // 状态簇：数据时间、那一句结果、能力面说明（无过滤时）都在滚动区之外
+    expect(flash).toContain('数据时间');
+    expect(flash).toContain('已装上「示例 a.pack」');
+    expect(flash).toContain('mk-hint');
+    // 列表的家在滚动区里，绝不该出现在状态簇（否则一滚就丢了"这是哪一刻的数据"）
+    expect(flash).not.toContain('mk-grouptitle');
+    expect(flash).not.toContain('class="mk-row"');
+    expect(bodyOf(html)).toContain('mk-grouptitle');
+    expect(bodyOf(html)).toContain('class="mk-row"');
+  });
+
+  it('可达性：状态簇 role=status、结果那一句 aria-live=polite、过滤输入有 aria-label', () => {
+    const html = renderView(packs2, installed1, { note: '正在安装「示例 a.pack」…' });
+    expect(html).toMatch(/<div class="mk-flash"[^>]*role="status"/);
+    expect(html).toMatch(/<div class="mk-note"[^>]*aria-live="polite"/);
+    expect(html).toMatch(/<input class="mk-search"[^>]*aria-label="按包名或作者过滤"/);
+    // 拉取按钮的 className 一个字节没动（外层样式契约）
+    expect(html).toContain('<button class="ghost small">拉取列表</button>');
+  });
+
+  it('行的层级：一张卡两排——第一排名字 + 动作（.mk-head），第二排事实（.mk-facts），行本身不是 button', () => {
+    const tree = MarketPanelView(viewProps(packs2, installed1));
+    const rows = byClass(tree, 'mk-row');
+    expect(rows).toHaveLength(3);
+    for (const r of rows) expect(r.type, '行不许是 button 语义').toBe('div');
+    const mains = byClass(tree, 'mk-main');
+    expect(mains).toHaveLength(3);
+    for (const main of mains) {
+      const lines = kids(main).filter(isEl);
+      expect(
+        lines.map((e) => (e.props.className as string).split(/\s+/)[0]),
+        '一张卡恰好两排',
+      ).toEqual(['mk-head', 'mk-facts']);
+      const head = lines[0]!;
+      const headEls = kids(head).filter(isEl);
+      expect((headEls[0]!.props.className as string).split(/\s+/)).toContain('mk-name');
+      expect(headEls[headEls.length - 1]!.props.className, '动作簇是第一排的最后一项').toBe('mk-actions');
+      // 事实一律在第二排，且只有事实
+      for (const f of kids(lines[1]!).filter(isEl)) {
+        expect((f.props.className as string).split(/\s+/)).toContain('mk-meta');
+      }
+      const acts = byClass(main, 'mk-actions');
+      expect(acts, '一个 .mk-main 只有一个动作簇').toHaveLength(1);
+      // 这一行的按钮一枚都不许落在动作簇之外
+      expect(buttonEls(main).length).toBe(buttonEls(acts[0]!).length);
+    }
+  });
+
+  it('组标题给计数：已装组 = 条数 + 服务口径的占用，索引组 = 屏上剩几条（过滤后跟着变，已装组不跟着变）', () => {
+    const sized: InstalledPack = {
+      ...viewRec('a.pack', '1.0.0'),
+      files: [{ path: 'files/a.ERB', bytes: 1024, sha256: HEX_A }],
+    };
+    const html = renderView(packs2, [sized]);
+    expect(html).toContain('<h4 class="mk-grouptitle">已安装<span class="mk-count">1 个 · 占用 1.0 KB</span></h4>');
+    expect(html).toContain('<h4 class="mk-grouptitle">口上包<span class="mk-count">2 个</span></h4>');
+    const filtered = renderView(packs2, [sized], { query: 'b.pack' });
+    expect(filtered).toContain('<h4 class="mk-grouptitle">口上包<span class="mk-count">1 个</span></h4>');
+    expect(filtered).toContain('<h4 class="mk-grouptitle">已安装<span class="mk-count">1 个 · 占用 1.0 KB</span></h4>');
+    // 占用读数只有一个口径：过滤不重新加总、也不换算法
+    expect(filtered).not.toContain('占用 2.0 KB');
+  });
+
+  it('过滤态：「清除」出现（点下去真的清空查询）、能力说明让位、空态那句照给；不写查询时都没有', () => {
+    const idle = renderView(packs2, []);
+    expect(idle).not.toContain('mk-clear');
+    expect(idle).toContain('mk-hint');
+
+    const cleared: number[] = [];
+    const tree = MarketPanelView(viewProps(packs2, [], { query: '查无此包', onClearQuery: () => cleared.push(1) }));
+    const html = renderView(packs2, [], { query: '查无此包' });
+    expect(html).toContain('class="ghost small mk-clear"');
+    expect(html).not.toContain('mk-hint');
+    expect(html).toContain('没有名字或作者里含「查无此包」的包');
+    const btn = buttonEl(tree, '清除');
+    expect(btn).not.toBeNull();
+    (btn!.props.onClick as () => void)();
+    expect(cleared).toEqual([1]);
+  });
+
+  it('卸载确认簇：簇内 Esc 取消（不抢全局键），确认/取消仍是纯文字按钮且住在这一行的动作簇里', () => {
+    const key = 'kojo-pack/a.pack@1.0.0';
+    const cancelled: string[] = [];
+    const tree = MarketPanelView(
+      viewProps([], installed1, { pending: key, onCancelUninstall: () => cancelled.push('esc') }),
+    );
+    const cluster = byClass(tree, 'mk-confirm');
+    expect(cluster).toHaveLength(1);
+    const onKeyDown = cluster[0]!.props.onKeyDown as (event: { key: string }) => void;
+    expect(typeof onKeyDown).toBe('function');
+    onKeyDown({ key: 'Enter' });
+    expect(cancelled, 'Esc 之外的键不该被这一簇吃掉').toEqual([]);
+    onKeyDown({ key: 'Escape' });
+    expect(cancelled).toEqual(['esc']);
+    expect(buttonEls(byClass(tree, 'mk-actions')[0]!).map((b) => b.props.children)).toEqual([
+      '详情',
+      '导入为我的口上项目',
+      '确认',
+      '取消',
+    ]);
+  });
+
+  it('进行中：确认簇的「取消」与展开切换仍可点（不把作者锁在确认态里），装/卸动作一律禁用', () => {
+    const key = 'kojo-pack/a.pack@1.0.0';
+    const bs = buttonsOf(
+      renderView([], installed1, {
+        pending: key,
+        installing: 'kojo-pack/other@9.9.9',
+        note: '正在安装「别的包」…',
+      }),
+    );
+    expect(bs).toContain('确认（禁用）');
+    expect(bs).toContain('导入为我的口上项目（禁用）');
+    expect(bs).toContain('取消');
+    expect(bs).toContain('详情');
+    expect(bs.filter((b) => b === '取消（禁用）' || b === '详情（禁用）')).toEqual([]);
+    expect(bs.filter((b) => /中…/.test(b))).toEqual([]);
+  });
+
+  it('展开切换给 aria-expanded；机器词只在展开层出现', () => {
+    const key = 'kojo-pack/a.pack@1.0.0';
+    const closed = MarketPanelView(viewProps([], installed1));
+    expect(buttonEl(closed, '详情')!.props['aria-expanded']).toBe(false);
+    const opened = MarketPanelView(viewProps([], installed1, { open: key }));
+    expect(buttonEl(opened, '收起')!.props['aria-expanded']).toBe(true);
+    const openedHtml = renderToStaticMarkup(createElement(MarketPanelView, viewProps([], installed1, { open: key })));
+    expect(openedHtml).toContain('<div class="mk-row open">');
+    expect(openedHtml).toContain('kind kojo-pack');
+    expect(renderToStaticMarkup(createElement(MarketPanelView, viewProps([], installed1)))).not.toContain('kind');
   });
 });
 

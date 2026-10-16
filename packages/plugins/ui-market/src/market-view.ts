@@ -281,6 +281,40 @@ export interface PackGroup {
   readonly rows: PackRow[];
 }
 
+/**
+ * 工具条「清除过滤」那枚按钮的标签。
+ * **children 必须是纯字符串**（渲染判据按标签找按钮、并把 `onClick` 真的调一次），
+ * 所以这里不放图标、不放 Fragment——一个字的标签就是它的全部。
+ */
+export const CLEAR_LABEL = '清除';
+
+/**
+ * 索引组标题的计数（过滤后这一组还剩几条）。
+ * 纯展示层加出来的读数，不参与任何判定；组本来就只在 `rows.length > 0` 时存在。
+ */
+export function groupCountPhrase(count: number): string {
+  return `${count} 个`;
+}
+
+/**
+ * 已装组标题的计数（条数 + 占用）。
+ * 占用读数**只有一个口径**：快照里服务 `installedBytes()` 那一份（`snapshot.installedBytes`），
+ * 这里绝不把 `files[].bytes` 再加一遍（那是第二份真相）。一条没装 ⇒ 空串（连"占用 0 B"都不占行）。
+ */
+export function installedCountPhrase(count: number, bytes: number): string {
+  if (count === 0) return '';
+  return `${count} 个 · 占用 ${formatBytes(bytes)}`;
+}
+
+/**
+ * 过滤把索引清空那一句。
+ * 清除路径就是工具条上那枚「清除」（`CLEAR_LABEL`，只在 query 非空时出现）——
+ * 这一句不再自己复述按钮位置，也不新增弹窗。
+ */
+export function filterEmptyPhrase(query: string): string {
+  return `没有名字或作者里含「${query}」的包`;
+}
+
 /** 名称/作者过滤（大小写不敏感、子串匹配；空查询 = 全通过） */
 export function matchesQuery(e: MarketIndexEntry, query: string): boolean {
   const q = query.trim().toLowerCase();

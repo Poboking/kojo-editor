@@ -65,8 +65,12 @@ import { setDirectMode, useDirectMode } from './direct-mode';
 import { setPanelVirtualize, usePanelVirtualize } from './panel-prefs';
 import {
   applyEndpointEdit,
+  hintClassFor,
+  isDraftNoop,
   isOverridden,
   NO_SERVICE_VIEW,
+  resetEndpoint,
+  sourceRowUi,
   type MarketSourceView,
 } from './market-source';
 import {
@@ -1489,42 +1493,92 @@ export function ShellLayout(props: Props): ReactElement {
                 </div>
               ) : null}
 
-              {/* 口上市场：注册表来源（KM-9）。**只有一个 URL**——代理既不做输入框也不做开关
-                  （受众大多没有代理客户端；且 JS 递进来的代理等于把白名单作废，见 market-source.ts）。 */}
-              <div className="settings-group">
-                <div className="settings-group-title">口上市场</div>
-                <label className="settings-row static">
-                  <input
-                    className="settings-text"
-                    type="url"
-                    value={marketEndpointDraft}
-                    placeholder={MARKET_DEFAULT_INDEX_URL}
-                    spellCheck={false}
-                    disabled={marketSource === null || marketSource === NO_SERVICE_VIEW}
-                    onChange={(e) => setMarketEndpointDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void saveMarketEndpoint();
-                    }}
-                  />
-                  <span>
-                    包列表来源
-                    <span className="settings-hint">
-                      {marketSource === null
-                        ? '读取中…'
-                        : `${marketSource.overridden ? '当前用自建地址' : '当前用默认地址'}`}
-                    </span>
-                  </span>
-                  <button className="ghost small" disabled={marketSource === null || marketSource === NO_SERVICE_VIEW} onClick={() => void saveMarketEndpoint()}>
-                    保存
-                  </button>
-                </label>
-                <label className="settings-row static">
-                  <span className="settings-hint">
-                    留空 = 用默认地址。网络走系统代理设置，这里没有开关
-                    {marketSource !== null && marketSource.note !== '' ? ` · ${marketSource.note}` : ''}
-                  </span>
-                </label>
-              </div>
+              {/* 口上市场：注册表来源（KM-9）。**只有一个可编辑项**——代理既不做输入框也不做开关
+                  （受众大多没有代理客户端；且 JS 递进来的代理等于把白名单作废，见 market-source.ts）。
+                  这一组的每条判据（能不能保存、显示哪句话、三态着色）都住在 `market-source.ts`；
+                  这里只做排版。派生量算不出来就得重复调纯函数，所以整组包在一个本地作用域里——
+                  上面的 state 块不属于本行的改动范围，故用 IIFE 把 `row`/`canSave` 关在这段内。 */}
+              {(() => {
+                const row = sourceRowUi(marketSource);
+                const canSave = row.canEdit && !isDraftNoop(marketEndpointDraft, row.address);
+                return (
+                  <div className="settings-group">
+                    <div className="settings-group-title">口上市场</div>
+
+                    {/* 生效地址是**读数**，不是占位符：默认态也把那串地址摊开给人看（可复制、长串折行）。
+                        不加 `<a>`、不冒充链接——这不是"点出去看看"的东西，是"我现在用的是哪一个"。
+                        折行与收缩这两条只能就地写：样式表此刻由另一条线在改，本行不越界（见 §分工边界）。 */}
+                    <div className="settings-row static">
+                      <span style={{ minWidth: 0 }}>
+                        包列表来源
+                        <span className={hintClassFor(row.statusTone)}>{row.statusText}</span>
+                        {row.address !== '' ? (
+                          <span className="settings-hint" style={{ overflowWrap: 'anywhere' }} title={row.address}>
+                            {row.address}
+                          </span>
+                        ) : null}
+                      </span>
+                    </div>
+
+                    {/* 草稿行：填的是"改成别的地址"，不是当前值的复读机；Tab 顺序 = 草稿框 → 保存 → 恢复默认 */}
+                    <div className={`settings-row static${row.canEdit ? '' : ' off'}`}>
+                      <input
+                        className="settings-text"
+                        type="url"
+                        value={marketEndpointDraft}
+                        placeholder={MARKET_DEFAULT_INDEX_URL}
+                        spellCheck={false}
+                        aria-label="改成别的包列表地址"
+                        disabled={!row.canEdit}
+                        onChange={(e) => setMarketEndpointDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && canSave) void saveMarketEndpoint();
+                        }}
+                      />
+                      <span>
+                        改成别的地址
+                        <span className="settings-hint">
+                          填一个新地址再点「保存」；不填就什么都不改。下载走系统网络设置，这里没有开关
+                        </span>
+                      </span>
+                      {/* 没改动 ⇒ 按钮本身不可点：禁用态就是"没什么可保存"最直白的表达，不用点完才知道 */}
+                      <button
+                        className="ghost small"
+                        disabled={!canSave}
+                        onClick={() => void saveMarketEndpoint()}
+                      >
+                        保存
+                      </button>
+                      {/* 覆盖态才出现的显式退路：点它 = 走既有 reset 通路回到默认，作者不必再猜"清空再保存" */}
+                      {row.showReset ? (
+                        <button
+                          className="ghost small"
+                          onClick={() =>
+                            void resetEndpoint(
+                              kernel.services.tryGet<MarketService>(MARKET_SERVICE_KEY),
+                            ).then((next) => {
+                              setMarketSource(next);
+                              // 回到默认后草稿框重新按既有约定预填：用默认 ⇒ 空框
+                              setMarketEndpointDraft(next.overridden ? next.effective : '');
+                            })
+                          }
+                        >
+                          恢复默认
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {/* 回执独立成行、三态着色：成功、无改动、失败一眼能分，不再淹在说明文字的尾巴里 */}
+                    {row.note !== '' ? (
+                      <div className="settings-row static">
+                        <span className={hintClassFor(row.noteTone)} role="status">
+                          {row.note}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()}
 
               <div className="settings-group">
                 <div className="settings-group-title">布局</div>

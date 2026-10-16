@@ -57,11 +57,15 @@ import {
   buildGroups,
   buildInstalledRows,
   CAPABILITY_HINT,
+  CLEAR_LABEL,
   dataTimeLine,
   droppedNotice,
+  filterEmptyPhrase,
   formatBytes,
+  groupCountPhrase,
   IMPORT_LABEL,
   indexRowKey,
+  installedCountPhrase,
   installBusyNote,
   pendingKey,
   statusText,
@@ -101,9 +105,14 @@ export interface MarketPanelViewProps {
   readonly pending: string | null;
   /** 展开的已装条目（机器面） */
   readonly open: string | null;
-  /** 正在进行装/更新的那一行；非空 ⇒ 所有动作按钮禁用（同一时刻只搬一次） */
+  /**
+   * 正在进行装/更新的那一行；非空 ⇒ 所有动作按钮禁用（同一时刻只搬一次）。
+   * 禁用**只改 `disabled`，不改按钮文字**：进度那一句只住 `.mk-note` 一处。
+   */
   readonly installing: string | null;
   onQuery(q: string): void;
+  /** 清空过滤（工具条上那枚「清除」；过滤态下它是空态那句话的唯一出路，不另设弹窗） */
+  onClearQuery(): void;
   onPull(): void;
   onInstall(row: PackRow): void;
   /** 已装的口上包行：把这一条经 `workspace.importRequested` 交给工作区消费方 */
@@ -114,6 +123,29 @@ export interface MarketPanelViewProps {
   onToggleDetail(key: string): void;
 }
 
+/**
+ * 一版面的 DOM 契约（样式由 app 侧 `mk-*` 区块实现，本层只负责产出这些类名与层级）：
+ *
+ * ```text
+ * .panel-market                 根：列布局，外层不滚
+ * ├─ .mk-toolbar                flex:none —— 搜索框 / 清除 / 拉取（永不随列表滚走）
+ * ├─ .mk-flash                  状态簇（role=status）：.mk-status .mk-time .mk-note(aria-live) .mk-warn .mk-hint
+ * └─ .mk-body                   flex:1 自滚 —— 只有列表随滚动移动
+ *     ├─ .mk-grouptitle + span.mk-count → .mk-list → .mk-row × n（已装）
+ *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row × n（索引）
+ *         .mk-row > .mk-main > .mk-head[ span.mk-name | span.mk-badge? | div.mk-actions ]
+ *                            + .mk-facts[ span.mk-meta × n ]
+ *                  ＋ 行级附属：.mk-warn（版本要求）/ .mk-sub（摘要）/ .mk-sub（来源）/ .mk-detail（展开层）
+ * ```
+ *
+ * 四条结构性口径：
+ * 1. **两排，不是一排挤到底**——第一排只有名字、徽章与动作（动作钉右端），第二排才是次要事实；
+ *    把动作丢进同一个 wrap 容器末尾会让名字吃掉剩余宽度、把动作挤到第三排（窄侧栏密度事故）；
+ * 2. **状态与列表分家**——工具条、状态、数据时间、说明住在滚动区之外，
+ *    列表长到几十条时作者仍然看得见"这是哪一刻的数据"；
+ * 3. **按钮 children 永远是纯字符串**（图标一律不上按钮）：动作判据按标签找按钮、并把 `onClick` 真的调一次；
+ * 4. **类名是跨包契约**——本层只产出这些类名与层级，一切视觉（颜色 / 圆角 / 滚动 / 焦点环）住 app 侧 `mk-*` 区块。
+ */
 export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const { snapshot } = p;
   // 已装清单**原样**交给视图层：三态由契约的 `packUpdateCheck` 从这份清单算。
@@ -123,40 +155,71 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const line = statusText(snapshot.status, snapshot.reason);
   const time = dataTimeLine(snapshot);
   const droppedLine = droppedNotice(snapshot.dropped);
+  // 过滤态：能力面说明讲的是"这面板能干什么"，与作者此刻正在找的这几条无关 ⇒ 让位不占行；
+  // 空态 / 错误态那几句照给——它们说的正是这一屏此刻的事实。
+  const filtering = p.query !== '';
+  // 占用读数取服务 `installedBytes()`（契约里那条唯一口径），面板不自己把 files 加一遍
+  const installedCount = installedCountPhrase(rows.length, snapshot.installedBytes);
+
+  /** 次要事实（版本 / 体积 / 作者 / 许可…）一律退到第二排 */
+  const meta = (text: string): ReactNode => createElement('span', { className: 'mk-meta' }, text);
+  /** 动作按钮的统一形状：`ghost small` + 进行中禁用；**文字永远不变**（进度只住 `.mk-note` 一处） */
+  const btn = (label: string, onClick: () => void, disabled: boolean): ReactNode =>
+    createElement('button', { className: 'ghost small', disabled, onClick }, label);
+  /** 这一行的全部动作都住这里（名字那一排的右端；`.mk-main` 里不再有裸按钮） */
+  const actions = (...buttons: ReactNode[]): ReactNode =>
+    createElement('div', { className: 'mk-actions' }, ...buttons);
+  /**
+   * 第一排 = 名字 + 徽章 + 动作（动作钉右端）；第二排 = 次要事实。
+   * 分两排而不是把动作丢在同一个 wrap 容器末尾：后者会让"名字吃掉剩余宽度"把动作簇
+   * 挤到第三排，一张卡从两行变四行——窄侧栏里这就是密度事故。
+   */
+  const main = (name: string, badge: ReactNode, acts: ReactNode, facts: ReactNode[]): ReactNode =>
+    createElement(
+      'div',
+      { className: 'mk-main' },
+      createElement(
+        'div',
+        { className: 'mk-head' },
+        createElement('span', { className: 'mk-name', title: name }, name),
+        badge,
+        acts,
+      ),
+      createElement('div', { className: 'mk-facts' }, ...facts),
+    );
 
   const indexSection = (g: ReturnType<typeof buildGroups>[number]): ReactNode =>
     createElement(
       'section',
       { className: 'mk-group', key: g.kind },
-      createElement('h4', { className: 'mk-grouptitle' }, g.label),
+      createElement(
+        'h4',
+        { className: 'mk-grouptitle' },
+        g.label,
+        createElement('span', { className: 'mk-count' }, groupCountPhrase(g.rows.length)),
+      ),
       ...g.rows.map((row) => {
         const e = row.entry;
         const phrase = updatePhrase(row);
         return createElement(
           'div',
           { className: 'mk-row', key: indexRowKey(e) },
-          createElement(
-            'div',
-            { className: 'mk-main' },
-            createElement('span', { className: 'mk-name' }, e.name),
-            createElement('span', { className: 'mk-meta' }, `版本 ${e.version}`),
-            createElement(
-              'span',
-              { className: 'mk-meta' },
-              `${formatBytes(e.unpackedBytes)} · ${e.fileCount} 个文件`,
-            ),
-            createElement('span', { className: 'mk-meta' }, `作者 ${e.author}`),
-            createElement('span', { className: 'mk-meta' }, `许可 ${e.license}`),
+          main(
+            e.name,
             phrase === '' ? null : createElement('span', { className: 'mk-badge' }, phrase),
             // `action === 'none'` ⇒ 这一行没有可点动作（已装最新 / 本机更高 / 版本要求不够），
-            // 行上那句 `mk-badge` 或 `mk-warn` 就是它的说明
-            row.action === 'none'
-              ? null
-              : createElement(
-                  'button',
-                  { className: 'ghost small', disabled: p.installing !== null, onClick: () => p.onInstall(row) },
-                  ACTION_LABEL[row.action],
-                ),
+            // 行上那句 `mk-badge` 或 `mk-warn` 就是它的说明（动作簇仍占右端位，行与行不错位）
+            actions(
+              row.action === 'none'
+                ? null
+                : btn(ACTION_LABEL[row.action], () => p.onInstall(row), p.installing !== null),
+            ),
+            [
+              meta(`版本 ${e.version}`),
+              meta(`${formatBytes(e.unpackedBytes)} · ${e.fileCount} 个文件`),
+              meta(`作者 ${e.author}`),
+              meta(`许可 ${e.license}`),
+            ],
           ),
           row.appOk
             ? null
@@ -181,118 +244,123 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
         className: 'mk-search',
         type: 'search',
         placeholder: '按包名或作者过滤',
+        'aria-label': '按包名或作者过滤',
         value: p.query,
         onInput: (event: { currentTarget: { value: string } }) => p.onQuery(event.currentTarget.value),
       }),
+      // 只在过滤态出现：这一枚就是空态那句话唯一的出路（点了清空查询，不弹窗）
+      filtering
+        ? createElement(
+            'button',
+            { className: 'ghost small mk-clear', onClick: () => p.onClearQuery() },
+            CLEAR_LABEL,
+          )
+        : null,
       createElement(
         'button',
         { className: 'ghost small', disabled: p.busy || p.installing !== null, onClick: () => p.onPull() },
         p.busy ? '拉取中…' : '拉取列表',
       ),
     ),
-    line === '' || p.busy ? null : createElement('div', { className: 'mk-status' }, line),
-    // 数据时间与拉取结果**不受 busy 遮掩**：失败态必须一直在屏上（不许"加载中"常驻顶掉它）
-    time === '' ? null : createElement('div', { className: 'mk-time' }, time),
-    p.note === '' ? null : createElement('div', { className: 'mk-note' }, p.note),
-    droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
-    createElement('div', { className: 'mk-hint' }, CAPABILITY_HINT),
-    // 占用读数取服务 `installedBytes()`（契约里那条唯一口径），面板不自己把 files 加一遍
+    // 状态簇在滚动区之外：列表再长，"这一次到底拉没拉成"也不会被滚出视野
     createElement(
-      'h4',
-      { className: 'mk-grouptitle' },
-      '已安装',
-      rows.length === 0
-        ? null
-        : createElement('span', { className: 'mk-meta' }, `占用 ${formatBytes(snapshot.installedBytes)}`),
+      'div',
+      { className: 'mk-flash', role: 'status' },
+      line === '' || p.busy ? null : createElement('div', { className: 'mk-status' }, line),
+      // 数据时间与拉取结果**不受 busy 遮掩**：失败态必须一直在屏上（不许"加载中"常驻顶掉它）
+      time === '' ? null : createElement('div', { className: 'mk-time' }, time),
+      // 装 / 卸的进行中与结果全写在这一处（`aria-live` 让读屏跟得上；不弹窗）
+      p.note === '' ? null : createElement('div', { className: 'mk-note', 'aria-live': 'polite' }, p.note),
+      droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
+      filtering ? null : createElement('div', { className: 'mk-hint' }, CAPABILITY_HINT),
     ),
-    rows.length === 0
-      ? createElement('div', { className: 'mk-empty' }, '本机还没有装好的包')
-      : createElement(
-          'div',
-          { className: 'mk-list' },
-          ...rows.map((r) => {
-            const key = pendingKey(r.rec);
-            const expanded = p.open === key;
-            const confirming = p.pending === key;
-            return createElement(
-              'div',
-              { className: expanded ? 'mk-row open' : 'mk-row', key },
-              createElement(
+    createElement(
+      'div',
+      { className: 'mk-body' },
+      createElement(
+        'h4',
+        { className: 'mk-grouptitle' },
+        '已安装',
+        installedCount === '' ? null : createElement('span', { className: 'mk-count' }, installedCount),
+      ),
+      rows.length === 0
+        ? createElement('div', { className: 'mk-empty' }, '本机还没有装好的包')
+        : createElement(
+            'div',
+            { className: 'mk-list' },
+            ...rows.map((r) => {
+              const key = pendingKey(r.rec);
+              const expanded = p.open === key;
+              const confirming = p.pending === key;
+              return createElement(
                 'div',
-                { className: 'mk-main' },
-                createElement(
-                  'button',
-                  { className: 'ghost small', onClick: () => p.onToggleDetail(key) },
-                  expanded ? '收起' : '详情',
-                ),
-                createElement('span', { className: 'mk-name' }, r.rec.name),
-                createElement('span', { className: 'mk-meta' }, `版本 ${r.rec.version}`),
-                createElement('span', { className: 'mk-meta' }, r.kindLabel),
-                createElement('span', { className: 'mk-meta' }, `来源 ${r.sourceLabel}`),
-                createElement('span', { className: 'mk-meta' }, `作者 ${r.rec.author}`),
-                createElement('span', { className: 'mk-meta' }, `许可 ${r.rec.license}`),
-                // 只有口上包能导入成口上项目（判定在 `buildInstalledRows` 的行标记上）；
-                // 同一屏动作纪律：装/更新进行中一律禁用，进度仍只写状态行一处
-                r.canImport
-                  ? createElement(
+                { className: expanded ? 'mk-row open' : 'mk-row', key },
+                main(
+                  r.rec.name,
+                  null,
+                  actions(
+                    // 展开切换是这一行的第一个动作：`aria-expanded` 给读屏（行本身是 div，不是按钮语义）
+                    createElement(
                       'button',
                       {
                         className: 'ghost small',
-                        disabled: p.installing !== null,
-                        onClick: () => p.onImport(r.rec),
+                        'aria-expanded': expanded,
+                        onClick: () => p.onToggleDetail(key),
                       },
-                      IMPORT_LABEL,
+                      expanded ? '收起' : '详情',
+                    ),
+                    // 只有口上包能导入成口上项目（判定在 `buildInstalledRows` 的行标记上）；
+                    // 同一屏动作纪律：装/更新进行中一律禁用，进度仍只写状态行一处
+                    r.canImport
+                      ? btn(IMPORT_LABEL, () => p.onImport(r.rec), p.installing !== null)
+                      : null,
+                    confirming
+                      ? createElement(
+                          'span',
+                          {
+                            className: 'mk-confirm',
+                            // 簇内按 Esc 就取消（焦点在簇里的按钮上，事件冒泡到这一层）；
+                            // 刻意不注册全局键，也不碰 shell-keys——离开这一簇键盘照常走
+                            onKeyDown: (event: { key: string }) => {
+                              if (event.key === 'Escape') p.onCancelUninstall();
+                            },
+                          },
+                          '确认卸载？',
+                          btn('确认', () => p.onConfirmUninstall(key), p.installing !== null),
+                          // 取消永远可点：正在装别的包也不该把作者锁在确认态里
+                          btn('取消', () => p.onCancelUninstall(), false),
+                        )
+                      : btn('卸载', () => p.onRequestUninstall(key), p.installing !== null),
+                  ),
+                  [
+                    meta(`版本 ${r.rec.version}`),
+                    meta(r.kindLabel),
+                    meta(`来源 ${r.sourceLabel}`),
+                    meta(`作者 ${r.rec.author}`),
+                    meta(`许可 ${r.rec.license}`),
+                  ],
+                ),
+                // 展开层 = 机器面：核对码 / 种类 / id 照旧给全（主行不放机器词）
+                expanded
+                  ? createElement(
+                      'div',
+                      { className: 'mk-detail' },
+                      createElement('div', null, `核对码 ${r.digestPrefix}`),
+                      createElement('div', null, `文件 ${r.rec.files.length} 个`),
+                      createElement('div', null, `id ${r.rec.id} · kind ${r.rec.kind}`),
                     )
                   : null,
-                confirming
-                  ? createElement(
-                      'span',
-                      { className: 'mk-confirm' },
-                      '确认卸载？',
-                      createElement(
-                        'button',
-                        {
-                          className: 'ghost small',
-                          disabled: p.installing !== null,
-                          onClick: () => p.onConfirmUninstall(key),
-                        },
-                        '确认',
-                      ),
-                      createElement(
-                        'button',
-                        { className: 'ghost small', onClick: () => p.onCancelUninstall() },
-                        '取消',
-                      ),
-                    )
-                  : createElement(
-                      'button',
-                      {
-                        className: 'ghost small',
-                        disabled: p.installing !== null,
-                        onClick: () => p.onRequestUninstall(key),
-                      },
-                      '卸载',
-                    ),
-              ),
-              // 展开层 = 机器面：核对码 / 种类 / id 照旧给全（主行不放机器词）
-              expanded
-                ? createElement(
-                    'div',
-                    { className: 'mk-detail' },
-                    createElement('div', null, `核对码 ${r.digestPrefix}`),
-                    createElement('div', null, `文件 ${r.rec.files.length} 个`),
-                    createElement('div', null, `id ${r.rec.id} · kind ${r.rec.kind}`),
-                  )
-                : null,
-            );
-          }),
-        ),
-    snapshot.status === 'ready' && groups.length === 0
-      ? createElement('div', { className: 'mk-empty' }, `没有名字或作者里含「${p.query}」的包`)
-      : null,
-    ...groups.map((g) => indexSection(g)),
+              );
+            }),
+          ),
+      snapshot.status === 'ready' && groups.length === 0
+        ? createElement('div', { className: 'mk-empty' }, filterEmptyPhrase(p.query))
+        : null,
+      ...groups.map((g) => indexSection(g)),
+    ),
   );
 }
+
 export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
   const av = opts?.appVersion;
   if (typeof av !== 'string' || !PACK_VERSION_RE.test(coreVersion(av))) {
@@ -411,6 +479,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           open,
           installing,
           onQuery: setQuery,
+          onClearQuery: () => setQuery(''),
           onPull: () => void pull(),
           onInstall: (row: PackRow) => void doInstall(row),
           onImport: (rec: InstalledPack) => void doImport(rec),
@@ -453,17 +522,21 @@ export {
   buildGroups,
   buildInstalledRows,
   CAPABILITY_HINT,
+  CLEAR_LABEL,
   dataTimeLine,
   droppedNotice,
+  filterEmptyPhrase,
   formatBytes,
   formatClock,
   formatGeneratedAt,
+  groupCountPhrase,
   IMPORT_LABEL,
   importFailNote,
   importNote,
   indexRowKey,
   installBusyNote,
   installNote,
+  installedCountPhrase,
   KIND_LABEL,
   matchesQuery,
   refreshNote,

@@ -15,14 +15,18 @@ import {
   buildGroups,
   buildInstalledRows,
   CAPABILITY_HINT,
+  CLEAR_LABEL,
   droppedNotice,
+  filterEmptyPhrase,
   formatBytes,
+  groupCountPhrase,
   IMPORT_LABEL,
   importFailNote,
   importNote,
   indexRowKey,
   installBusyNote,
   installNote,
+  installedCountPhrase,
   KIND_LABEL,
   matchesQuery,
   pendingKey,
@@ -368,6 +372,31 @@ describe('已装列表', () => {
       for (const w of ['kind', 'sha256', 'manifest', 'index.json', 'schema', 'importRequested']) {
         expect(s, w).not.toContain(w);
       }
+    }
+  });
+});
+
+describe('组标题的计数与过滤短语（结构层的纯逻辑）', () => {
+  it('索引组计数 = 屏上条数；已装组 = 条数 + 占用，一条没装就整句不给（不写"占用 0 B"）', () => {
+    expect(groupCountPhrase(1)).toBe('1 个');
+    expect(groupCountPhrase(12)).toBe('12 个');
+    expect(installedCountPhrase(0, 0)).toBe('');
+    expect(installedCountPhrase(0, 9_999)).toBe('');
+    expect(installedCountPhrase(3, 1024)).toBe('3 个 · 占用 1.0 KB');
+    // 占用一律走 `formatBytes` 那一条口径（面板不自己加总 files，也不自己拼单位）
+    expect(installedCountPhrase(1, 0)).toBe('1 个 · 占用 0 B');
+    expect(installedCountPhrase(2, 5 * 1024 * 1024)).toContain('5.0 MB');
+  });
+
+  it('过滤空态那一句带上作者刚输入的词，清除路径就是工具条那枚「清除」（纯字符串标签）', () => {
+    expect(filterEmptyPhrase('某人')).toBe('没有名字或作者里含「某人」的包');
+    expect(CLEAR_LABEL).toBe('清除');
+  });
+
+  it('这几句都是作者面口径：机器词一个都不上（计数与占用住在组标题上）', () => {
+    const banned = ['kind', 'id', 'manifest', 'index.json', 'sha256', 'schema', 'minAppVersion', 'zip'];
+    for (const s of [groupCountPhrase(4), installedCountPhrase(4, 2048), filterEmptyPhrase('甲'), CLEAR_LABEL]) {
+      for (const w of banned) expect(s, w).not.toContain(w);
     }
   });
 });
