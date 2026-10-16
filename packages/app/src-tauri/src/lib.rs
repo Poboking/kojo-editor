@@ -303,8 +303,47 @@ fn read_file_bytes_raw(path: String) -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// 原子写：同目录临时文件 + rename（Windows 上 rename 覆盖已存在文件）。
-/// 写允许域第二道闸（M3）：目标路径必须在允许域内。
+/// 原子写临时名的唯一段：`{pid}-{进程内单调序号}`。
+/// 只用 pid 时，同进程两条并发写命令拿到的是同一个临时名——`fs::write` 互踩截断、
+/// rename 抢跑，结果是一方报成功、盘上却是他方字节（或败者假性 NotFound）。
+/// pid 隔开跨进程并发，序号隔开进程内并发，两段合取才唯一。
+static ATOMIC_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn tmp_unique_id() -> String {
+    format!(
+        "{}-{}",
+        std::process::id(),
+        ATOMIC_WRITE_SEQ.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// 原子写核心（可单测，不依赖 Tauri 类型）：同目录临时文件 + rename（Windows 上
+/// rename 覆盖已存在文件）。临时名带 `tmp_unique_id` ⇒ 同一目标的并发写各用各的
+/// 临时文件，rename 原子生效：读方任一时刻读到的都是某一次**完整**写入。
+fn atomic_write(target: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let dir = target.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("no parent directory: {}", target.display()),
+        )
+    })?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("mkdir {}: {e}", dir.display())))?;
+    let file_name = target
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unnamed");
+    let tmp = dir.join(format!(".{file_name}.{}.kojo-tmp", tmp_unique_id()));
+    std::fs::write(&tmp, bytes)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("write tmp: {e}")))?;
+    if let Err(e) = std::fs::rename(&tmp, target) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(std::io::Error::new(e.kind(), format!("rename: {e}")));
+    }
+    Ok(())
+}
+
+/// 原子写：同目录临时文件 + rename。写允许域第二道闸（M3）：目标路径必须在允许域内。
 #[tauri::command]
 fn write_file_bytes(
     app: tauri::AppHandle,
@@ -314,24 +353,7 @@ fn write_file_bytes(
 ) -> Result<(), String> {
     ensure_write_allowed(&app, &state, Path::new(&path), "write")?;
     let bytes = B64.decode(data).map_err(|e| format!("base64 decode: {e}"))?;
-    let target = PathBuf::from(&path);
-    let dir = target
-        .parent()
-        .ok_or_else(|| format!("no parent directory: {path}"))?
-        .to_path_buf();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
-
-    let file_name = target
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unnamed");
-    let tmp = dir.join(format!(".{file_name}.{}.kojo-tmp", std::process::id()));
-    std::fs::write(&tmp, &bytes).map_err(|e| format!("write tmp: {e}"))?;
-    if let Err(e) = std::fs::rename(&tmp, &target) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("rename: {e}"));
-    }
-    Ok(())
+    atomic_write(Path::new(&path), &bytes).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -856,7 +878,7 @@ fn encode_string(text: String, encoding: String) -> Result<String, String> {
 // 「内核会在平台事件之上做去抖与归一化」）。
 //
 // 唯一的例外是下面 `is_atomic_write_temp`：那是**本文件自己的原子写产物**
-// （`write_file_bytes` 造 `.{name}.{pid}.kojo-tmp` 再 rename），属于 IO 机械噪声，
+// （`write_file_bytes` 造 `.{name}.{pid}-{序号}.kojo-tmp` 再 rename），属于 IO 机械噪声，
 // 留在 IO 层滤掉，不算业务策略。
 
 /// WebView 事件名：原始文件变更。payload = `{ kind, path }`。
@@ -2039,9 +2061,9 @@ mod watch_tests {
 
     #[test]
     fn atomic_write_temp_is_filtered_and_real_files_are_not() {
-        // write_file_bytes 的产物：.{name}.{pid}.kojo-tmp
+        // write_file_bytes 的产物：.{name}.{pid}-{序号}.kojo-tmp
         assert!(is_atomic_write_temp(Path::new(
-            r"C:\data\dir\.payload.txt.4242.kojo-tmp"
+            r"C:\data\dir\.payload.txt.4242-7.kojo-tmp"
         )));
         // 真实文件与相邻命名都不该被误滤
         assert!(!is_atomic_write_temp(Path::new(
@@ -2220,6 +2242,162 @@ mod io_primitives_tests {
         let json = serde_json::to_string(&entries).unwrap();
         assert!(!json.contains("mtimeMs"), "不该出现该键：{json}");
         assert!(!json.contains("\"size\""), "不该出现该键：{json}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    //! 原子写的判据：临时名进程内唯一（同目标并发写不互踩）、
+    //! 并发写期间读方任一时刻读到的都是某一次**完整**写入、不留临时残骸。
+    use super::{atomic_write, is_atomic_write_temp, tmp_unique_id};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("kojo-atomic-{}-{tag}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 回归锚（tmp 名只含 pid 的互踩缺陷）：临时名必须进程内逐次唯一，
+    /// 且新形态 `.{name}.{pid}-{seq}.kojo-tmp` 仍被文件监视的噪声滤网命中。
+    #[test]
+    fn tmp_names_are_unique_within_process_and_still_watch_filtered() {
+        let a = tmp_unique_id();
+        let b = tmp_unique_id();
+        assert_ne!(a, b, "连续两次取号必须不同：{a} vs {b}");
+        let dir = temp_dir("uniq");
+        let tmp = dir.join(format!(".snap.json.{a}.kojo-tmp"));
+        assert!(
+            is_atomic_write_temp(&tmp),
+            "新临时名仍应被 is_atomic_write_temp 滤掉：{}",
+            tmp.display()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 顺序替换：目标逐字一致，目录里只剩目标本身（rename 成功 ⇒ 临时文件消失）。
+    #[test]
+    fn sequential_write_replaces_content_and_leaves_no_tmp() {
+        let dir = temp_dir("seq");
+        let target = dir.join("a.ERB");
+        atomic_write(&target, b"first").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"first");
+        atomic_write(&target, b"second-payload").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"second-payload");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(leftovers, vec!["a.ERB".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归（同目标并发写互踩）：多线程反复写同一目标，读者全程采样。
+    /// 断言每次读到的都是某一次**完整**载荷（无交错半截）；读者遇到任何混入即测败。
+    /// Windows 上并发 rename 覆盖同一目标可能瞬时 ACCESS_DENIED（delete-pending），
+    /// 写者对这类瞬时错做有界重试——同一载荷重写不改「读到必完整」的判据。
+    #[test]
+    fn concurrent_writes_to_same_target_are_always_read_whole() {
+        const WRITERS: usize = 8;
+        const ROUNDS: usize = 8;
+        let dir = temp_dir("conc");
+        let target = dir.join("save.json");
+
+        // 每线程一份固定载荷（字节值与长度都互异，混入即穿帮）
+        let payloads: Vec<Vec<u8>> = (0..WRITERS)
+            .map(|w| vec![w as u8 + 1; 8192 + w * 333])
+            .collect();
+        let known: Arc<HashSet<Vec<u8>>> = Arc::new(payloads.iter().cloned().collect());
+
+        // 先落一粒种子，读者起点起目标恒存在（瞬时 NotFound 仍按噪声容忍并计数）
+        atomic_write(&target, &payloads[0]).unwrap();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let barrier = Arc::new(Barrier::new(WRITERS + 1));
+        let reader = {
+            let done = done.clone();
+            let known = known.clone();
+            let target = target.clone();
+            std::thread::spawn(move || {
+                let mut samples = 0usize;
+                let mut transient_missing = 0usize;
+                while !done.load(Ordering::SeqCst) {
+                    match std::fs::read(&target) {
+                        Ok(bytes) => {
+                            assert!(
+                                known.contains(&bytes),
+                                "读到交错半截：len={}（合法载荷长度集={:?}）",
+                                bytes.len(),
+                                known.iter().map(|p| p.len()).collect::<Vec<_>>()
+                            );
+                            samples += 1;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            transient_missing += 1;
+                            assert!(
+                                transient_missing <= 100,
+                                "目标反复消失：{transient_missing}"
+                            );
+                        }
+                        Err(e) => panic!("读者读目标失败：{e}"),
+                    }
+                }
+                assert!(samples > 0, "读者一次都没读到");
+            })
+        };
+
+        let mut handles = Vec::new();
+        for (w, payload) in payloads.iter().enumerate() {
+            let barrier = barrier.clone();
+            let target = target.clone();
+            let payload = payload.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait(); // 全体写者同时开跑，把并发窗拉到最大
+                for _ in 0..ROUNDS {
+                    let mut attempts = 0usize;
+                    loop {
+                        match atomic_write(&target, &payload) {
+                            Ok(()) => break,
+                            Err(e) => {
+                                attempts += 1;
+                                assert!(
+                                    attempts <= 200,
+                                    "writer {w} 连续 {attempts} 次失败：{e}"
+                                );
+                                std::thread::sleep(std::time::Duration::from_millis(1));
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+        barrier.wait();
+        for h in handles {
+            h.join().unwrap();
+        }
+        done.store(true, Ordering::SeqCst);
+        reader.join().unwrap();
+
+        // 收尾：终值必是某一次完整写入，且无临时残骸
+        let final_bytes = std::fs::read(&target).unwrap();
+        assert!(known.contains(&final_bytes), "终值不是完整载荷");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            leftovers,
+            vec!["save.json".to_string()],
+            "留了临时残骸：{leftovers:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

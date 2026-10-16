@@ -613,6 +613,31 @@ fn extract_rejects_symlink_entry() {
     assert!(!staging.dir().join("escape.txt").exists());
 }
 
+/// 回归（seen 集合大小写敏感去重）：`files/A.erb` 与 `files/a.erb` 在 Windows 的
+/// 大小写不敏感文件系统上是**同一个文件**——按字节比较会放行两条，落盘互覆，
+/// 清单还虚报条目数。去重键与写允许域同款 `to_lowercase` 折叠后，容器在写第一个
+/// 字节之前按 entry-duplicate 拒绝（清单恒与盘面一致：报几条就是真落了几条）。
+#[test]
+fn extract_rejects_case_colliding_duplicate_entries() {
+    let staging = Staging::new("case-dup");
+    write_container(
+        &staging,
+        "a.zip",
+        &build_zip(&[
+            ("files/A.erb", b"from upper".as_slice()),
+            ("files/a.erb", b"from lower".as_slice()),
+        ]),
+    );
+    let err = extract_staging(staging.dir(), "a.zip", "out", &LIMITS).unwrap_err();
+    assert!(err.contains("entry-duplicate"), "大小写重名条目没被拒：{err}");
+    assert!(err.contains("files/"), "错误应带原始条目名：{err}");
+    assert!(!staging.dir().join("out").exists(), "大小写重名容器留下了目标目录");
+}
+
+// 注：没有"精确同名重复仍拒绝"的用例——zip crate（≥1.3）的 ZipWriter 自身拒绝写
+// 精确同名条目（InvalidArchive("Duplicate filename")），同款夹具物理上造不出；
+// 且折叠键下它与上面的 case-colliding 用例走生产代码**同一个分支**（同一折叠键的
+// 第二次 seen.insert → entry-duplicate），删去不丢覆盖。勿盲补。
 #[test]
 fn extract_enforces_entry_count_and_depth_limits() {
     let staging = Staging::new("counts");

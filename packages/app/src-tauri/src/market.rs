@@ -19,7 +19,7 @@ use std::time::Duration;
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 
-use crate::{ensure_write_allowed, WriteDomainState};
+use crate::{ensure_write_allowed, tmp_unique_id, WriteDomainState};
 
 /* --------------------------- 编译期固定的闸 --------------------------- */
 
@@ -402,9 +402,11 @@ pub(crate) async fn download_to_staging(
         .map_err(|e| format!("创建暂存目录失败 {}: {e}", staging_dir.display()))?;
 
     let target = staging_dir.join(staging_name);
+    // tmp 名带 pid + 进程内序号（`write_file_bytes` 同款）：pid 只隔开跨进程，
+    // 同一暂存名的并发下载若共用临时名会互踩——一方落盘另一方字节。
     let tmp = staging_dir.join(format!(
         ".{staging_name}.{}.kojo-dl-tmp",
-        std::process::id()
+        tmp_unique_id()
     ));
     let mut file = match std::fs::File::create(&tmp) {
         Ok(f) => f,
@@ -557,7 +559,10 @@ fn extract_into<R: Read + std::io::Seek>(
         if let Some(code) = entry_type_problem(entry.is_symlink(), entry.unix_mode()) {
             return Err(format!("{code}：条目不是普通文件 {name:?}（容器 {}）", archive_path.display()));
         }
-        if !seen.insert(name.clone()) {
+        // 去重键大小写折叠（与写允许域 `lowered_components` 同款 `to_lowercase` 口径）：
+        // Windows 文件系统大小写不敏感，`A.erb` 与 `a.erb` 落盘互覆，清单还虚报条目数；
+        // 折叠后在写第一个字节之前按重复拒绝 ⇒ `entries` 报的恒是真落盘的条目。
+        if !seen.insert(name.to_lowercase()) {
             return Err(format!("entry-duplicate：条目路径重复 {name:?}"));
         }
         declared_total = declared_total.saturating_add(entry.size());
