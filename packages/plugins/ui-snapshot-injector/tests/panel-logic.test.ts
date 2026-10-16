@@ -2,8 +2,15 @@
  * 注入面板纯逻辑单测（panel-logic，零 React）：
  * 变量目录 / 作用域 / 覆盖集构建 / diff / 输入解析 / 清单去重。
  */
-import { describe, expect, it } from 'vitest';
-import type { ArchiveCharacterBlock, ArchiveVariable, SnapshotArchive, VariableSchema } from '@kojo/plugin-api';
+import { describe, expect, it, vi } from 'vitest';
+import type {
+  ArchiveCharacterBlock,
+  ArchiveOverrides,
+  ArchiveVariable,
+  SnapshotArchive,
+  SnapshotInjectionResult,
+  VariableSchema,
+} from '@kojo/plugin-api';
 import {
   buildOverrides,
   cellLabel,
@@ -17,6 +24,7 @@ import {
   parseCellIndex,
   parseCellInput,
   parseScalarInput,
+  runInjectFlow,
   scopeLabel,
   supersededCount,
   varLabel,
@@ -274,5 +282,91 @@ describe('varLabel / cellLabel', () => {
     expect(cellLabel(schema, 'EXP', [])).toBeNull();
     expect(cellLabel(schema, 'UNKNOWN', [0])).toBeNull();
     expect(cellLabel(schema, 'CFLAG', [0])).toBeNull(); // description 为空串
+  });
+});
+
+/* ---------------- 2026-10-16 修复批：留空守卫 + 注入归属守卫 ---------------- */
+
+describe('parseCellIndex：留空 ≠ 下标 0（Number(\'\')===0 静默写错单元）', () => {
+  it('空段 / 全角空白 / 尾逗号一律走失败路径', () => {
+    expect(parseCellIndex([10], '').ok).toBe(false);
+    expect(parseCellIndex([10], '   ').ok).toBe(false);
+    expect(parseCellIndex([10], '\u3000').ok).toBe(false);
+    expect(parseCellIndex([10, 20], '1,').ok).toBe(false);
+    expect(parseCellIndex([10, 20], ',2').ok).toBe(false);
+    expect(parseCellIndex([10, 20], '1,\u3000').ok).toBe(false);
+    // 守卫不误伤合法输入
+    expect(parseCellIndex([10, 20], '1, 2')).toEqual({ ok: true, index: [1, 2] });
+    expect(parseCellIndex([10], '0')).toEqual({ ok: true, index: [0] });
+  });
+});
+
+describe('runInjectFlow：注入/重解析全链选档归属守卫', () => {
+  const fakeResult = { verifiedCount: 1, byteSize: 8, backupPath: null } as unknown as SnapshotInjectionResult;
+  const fakeArchive = { fileType: 'normal' } as unknown as SnapshotArchive;
+
+  function makeHooks() {
+    return {
+      onInjected: vi.fn(),
+      onReloaded: vi.fn(),
+      onFailed: vi.fn(),
+      onDropped: vi.fn(),
+    };
+  }
+  function makeDeps(impl?: { inject?: () => Promise<unknown>; parse?: () => Promise<unknown> }) {
+    return {
+      inject: vi.fn(impl?.inject ?? (async () => fakeResult)),
+      parse: vi.fn(impl?.parse ?? (async () => fakeArchive)),
+    } as unknown as Parameters<typeof runInjectFlow>[0];
+  }
+
+  it('归属未变：注入结果与新变量树都落地', async () => {
+    const deps = makeDeps();
+    const hooks = makeHooks();
+    await runInjectFlow(deps, { path: 'A.sav', overrides: {} as ArchiveOverrides, stillSelected: () => true }, hooks);
+    expect(deps.inject).toHaveBeenCalledWith('A.sav', {});
+    expect(deps.parse).toHaveBeenCalledWith('A.sav', { keepArrayCells: true, keepRaw: true });
+    expect(hooks.onInjected).toHaveBeenCalledWith(fakeResult);
+    expect(hooks.onReloaded).toHaveBeenCalledWith(fakeArchive);
+    expect(hooks.onDropped).not.toHaveBeenCalled();
+    expect(hooks.onFailed).not.toHaveBeenCalled();
+  });
+
+  it('注入回包时已换档：整链丢弃，不再重解析（跨档写混淆守卫）', async () => {
+    const deps = makeDeps();
+    const hooks = makeHooks();
+    await runInjectFlow(deps, { path: 'A.sav', overrides: {} as ArchiveOverrides, stillSelected: () => false }, hooks);
+    expect(deps.inject).toHaveBeenCalledTimes(1);
+    expect(hooks.onInjected).not.toHaveBeenCalled();
+    expect(deps.parse).not.toHaveBeenCalled();
+    expect(hooks.onDropped).toHaveBeenCalledTimes(1);
+  });
+
+  it('重解析回包时已换档：变量树不落地', async () => {
+    const deps = makeDeps();
+    const hooks = makeHooks();
+    let calls = 0;
+    const stillSelected = (): boolean => ++calls <= 1; // 注入回包时仍选中，重解析回包时已换档
+    await runInjectFlow(deps, { path: 'A.sav', overrides: {} as ArchiveOverrides, stillSelected }, hooks);
+    expect(hooks.onInjected).toHaveBeenCalledTimes(1);
+    expect(hooks.onReloaded).not.toHaveBeenCalled();
+    expect(hooks.onDropped).toHaveBeenCalledTimes(1);
+  });
+
+  it('失败且归属未变：onFailed；失败时已换档：丢弃不报错', async () => {
+    const boom = makeDeps({ inject: async () => {
+      throw new Error('boom');
+    } });
+    const hooks = makeHooks();
+    await runInjectFlow(boom, { path: 'A.sav', overrides: {} as ArchiveOverrides, stillSelected: () => true }, hooks);
+    expect(hooks.onFailed).toHaveBeenCalledWith('boom');
+
+    const dropped = makeDeps({ inject: async () => {
+      throw new Error('boom');
+    } });
+    const hooks2 = makeHooks();
+    await runInjectFlow(dropped, { path: 'A.sav', overrides: {} as ArchiveOverrides, stillSelected: () => false }, hooks2);
+    expect(hooks2.onFailed).not.toHaveBeenCalled();
+    expect(hooks2.onDropped).toHaveBeenCalledTimes(1);
   });
 });

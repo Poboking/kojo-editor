@@ -278,12 +278,19 @@ export function createUiKojoNavigatorPlugin(): Plugin {
           rebuild(null);
           return;
         }
+        // 2026-10-16 归属守卫：ensureIndex 在途时可能发生跨项目切换，旧回包落地前
+        // 必须校验项目归属，否则建成「A 索引 + B 角色字典」的树（点击跳转会打开旧项目文件）。
+        const requested = project.current();
         loadError = null;
         notify();
         void parser
           .ensureIndex()
-          .then((index) => rebuild(index))
+          .then((index) => {
+            if (project.current() !== requested) return;
+            rebuild(index);
+          })
           .catch((err: unknown) => {
+            if (project.current() !== requested) return;
             // 失败必须可见（含建树抛错，此前被同一个 catch 静默吞掉）
             const msg = err instanceof Error ? err.message : String(err);
             loadError = msg;

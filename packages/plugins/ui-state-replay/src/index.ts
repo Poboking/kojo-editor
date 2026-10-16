@@ -392,6 +392,8 @@ export function createUiStateReplayPlugin(): Plugin {
         void snapshots
           .scan()
           .then((scan) => {
+            // 2026-10-16 归属守卫：扫描在途时可能换项目，旧回包整链丢弃
+            if (project.current() !== current) return;
             archives = scan.entries
               .filter((e) => !e.error)
               .map((e) => ({
@@ -404,6 +406,7 @@ export function createUiStateReplayPlugin(): Plugin {
             notify();
           })
           .catch((err) => {
+            if (project.current() !== current) return;
             ctx.log.warn(`Replay panel scan failed: ${String(err)}`);
             archivesReady = true; // 失败也是"就绪"（空列表 + 显式错误，不静默转圈）
             notify();
@@ -571,6 +574,8 @@ export function createUiStateReplayPlugin(): Plugin {
         // 经 ref 调用最新的 runReplay（M5 修复：deps 不含 view 时旧闭包
         // 会拿到挂接时刻的 view=null，误报"请先选择存档与角色"）。
         const runReplayRef = useRef<(nameOverride?: string, locate?: LocateRequest | null) => void>(null);
+        /** 回放在途标志（ref 口径）：Enter 与按钮同门，同一次在途不并发第二回放 */
+        const replayBusyRef = useRef(false);
 
         // ---- 回放意图（G1：订阅在激活层，这里只消费落在闭包里的待处理项） ----
         // 依赖 `[tick, view]`：意图到达（tick 变）或有存档视图了（用户刚选完档）都再试一次。
@@ -591,6 +596,9 @@ export function createUiStateReplayPlugin(): Plugin {
         }, [tick, view]);
 
         const runReplay = (nameOverride?: string, locate: LocateRequest | null = null): void => {
+          // 2026-10-16 busy 同门：按钮 disabled 只拦鼠标，Enter 直调绕过拦截——
+          // 并发回放结果乱序覆盖。统一在函数入口同门拦截（ref 口径，防同 tick 双击）。
+          if (replayBusyRef.current) return;
           const name = (nameOverride ?? fnQuery).trim().toUpperCase();
           setReplayError(null);
           if (!name) {
@@ -637,6 +645,7 @@ export function createUiStateReplayPlugin(): Plugin {
           }
           // 假设值快照（C9）：与本结果同批——未手改的预填 0 记入"基于假设"标注
           const assumedAtRun = callSlots ? collectAssumedSlots(callSlots, slotTexts, slotEdited) : [];
+          replayBusyRef.current = true;
           setReplayBusy(true);
           void replay
             .replayFunction(view, name, { callContext })
@@ -656,7 +665,10 @@ export function createUiStateReplayPlugin(): Plugin {
               setReplayError(err instanceof Error ? err.message : String(err));
               setResultLocate(null);
             })
-            .finally(() => setReplayBusy(false));
+            .finally(() => {
+              replayBusyRef.current = false;
+              setReplayBusy(false);
+            });
         };
         runReplayRef.current = runReplay;
 

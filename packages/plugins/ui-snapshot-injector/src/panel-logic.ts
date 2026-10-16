@@ -15,6 +15,7 @@ import type {
   ArchiveOverrides,
   ArchiveVariable,
   SnapshotArchive,
+  SnapshotInjectionResult,
   VariableSchema,
 } from '@kojo/plugin-api';
 
@@ -208,6 +209,11 @@ export function parseCellIndex(saveLen: readonly number[], raw: string): { ok: t
   }
   const index: number[] = [];
   for (let i = 0; i < parts.length; i++) {
+    // 2026-10-16 守卫：留空 ≠ 下标 0——trim（String.trim 覆盖全角空白 U+3000）后
+    // 的空串经 Number('')===0 会静默变成下标 0（写错单元）。空/非法一律走失败路径。
+    if ((parts[i] ?? '') === '') {
+      return { ok: false, error: `第 ${i + 1} 维下标不能留空（留空不按 0 处理）` };
+    }
     const n = Number(parts[i]);
     if (!Number.isInteger(n) || n < 0 || n >= (saveLen[i] ?? 0)) {
       return { ok: false, error: `第 ${i + 1} 维下标须为 0..${(saveLen[i] ?? 0) - 1} 的整数` };
@@ -300,4 +306,69 @@ export function dedupePending(pending: readonly PendingEdit[]): PendingEdit[] {
 export function supersededCount(pending: readonly PendingEdit[], incoming: PendingEdit): number {
   const key = editKey(incoming);
   return pending.filter((e) => editKey(e) === key).length;
+}
+
+// ---------------------------------------------------------------------------
+// 注入编排（零 React，可单测）：注入 → 重解析，全程带「选档归属」守卫
+// ---------------------------------------------------------------------------
+
+/** 注入编排依赖：注入写侧 + 深解析（签名与 SnapshotWriteService.inject / SnapshotSourceService.parse 对齐） */
+export interface InjectFlowDeps {
+  inject(path: string, overrides: ArchiveOverrides): Promise<SnapshotInjectionResult>;
+  parse(path: string, options: { keepArrayCells: boolean; keepRaw: boolean }): Promise<SnapshotArchive>;
+}
+
+/** 编排落地钩子（组件侧接 setState；仅在回包仍归属当前选档时触发） */
+export interface InjectFlowHooks {
+  /** 注入成功且归属未变：落结果（组件同时清空待注入清单） */
+  onInjected(result: SnapshotInjectionResult): void;
+  /** 重解析成功且归属未变：落落盘后的新变量树 */
+  onReloaded(archive: SnapshotArchive): void;
+  /** 注入 / 重解析失败且归属未变：落错误 */
+  onFailed(message: string): void;
+  /** 归属不符（注入在途时用户已换档）：整条回包链丢弃（可记日志） */
+  onDropped(): void;
+}
+
+export interface InjectFlowArgs {
+  /** 发起注入时选中的档位路径 */
+  path: string;
+  overrides: ArchiveOverrides;
+  /**
+   * 归属校验：回包落地时「发起时的选档」是否仍是当前选档。
+   * 组件实现为 `pathRef.current === 发起时 path`（ref 在 render 期镜像最新选档）。
+   */
+  stillSelected(): boolean;
+}
+
+/**
+ * 注入 → 成功后重解析同一档位（展示落盘后的新值）。
+ *
+ * 2026-10-16 恶性缺陷守卫：注入在途时，档位下拉与 `kojo.snapshotSelected`
+ * 事件都可以换档——旧档 A 的回包若无校验，会把 A 的变量树盖到已选 B 档的
+ * 界面下，后续编辑经两击确认注入进 B 档（跨档写混淆）。
+ * 守卫同构（与 navigator / archive-browser / state-replay 同一套写法）：
+ * 发起记选档 → 每个回包落地前 `stillSelected()` 校验，不符整链丢弃。
+ */
+export async function runInjectFlow(deps: InjectFlowDeps, args: InjectFlowArgs, hooks: InjectFlowHooks): Promise<void> {
+  try {
+    const result = await deps.inject(args.path, args.overrides);
+    if (!args.stillSelected()) {
+      hooks.onDropped();
+      return;
+    }
+    hooks.onInjected(result);
+    const archive = await deps.parse(args.path, { keepArrayCells: true, keepRaw: true });
+    if (!args.stillSelected()) {
+      hooks.onDropped();
+      return;
+    }
+    hooks.onReloaded(archive);
+  } catch (err) {
+    if (!args.stillSelected()) {
+      hooks.onDropped();
+      return;
+    }
+    hooks.onFailed(err instanceof Error ? err.message : String(err));
+  }
 }

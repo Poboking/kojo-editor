@@ -93,12 +93,16 @@ export function createUiArchiveBrowserPlugin(): Plugin {
         }
         list = buildArchiveList({ project: current, scanning: true, scan: snapshots.current() });
         notify();
+        // 2026-10-16 代际守卫：扫描回包落地前校验项目归属——旧项目的扫描结果
+        // 不得配新项目的表头落回（project.opened 触发的 refresh 同样受守卫保护）。
         return snapshots
           .scan()
           .then((scan) => {
+            if (project.current() !== current) return;
             list = buildArchiveList({ project: project.current(), scanning: false, scan });
           })
           .catch((err: unknown) => {
+            if (project.current() !== current) return;
             list = buildArchiveList({
               project: project.current(),
               scanning: false,
@@ -108,6 +112,7 @@ export function createUiArchiveBrowserPlugin(): Plugin {
             ctx.log.warn(`Archive browser scan failed: ${String(err)}`);
           })
           .finally(() => {
+            if (project.current() !== current) return;
             details.clear();
             notify();
           });

@@ -18,7 +18,7 @@
  *   - 变量语义标签（可选）来自当前 game adapter 的 variableSchema（槽位查询透传）。
  */
 
-import { createElement, useEffect, useState, type ReactNode } from 'react';
+import { createElement, useEffect, useRef, useState, type ReactNode } from 'react';
 import type {
   Plugin,
   ProjectService,
@@ -35,6 +35,7 @@ import {
   buildOverrides,
   cellLabel,
   dedupePending,
+  runInjectFlow,
   diffRows,
   listScopes,
   listVars,
@@ -102,6 +103,12 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
         const [injectError, setInjectError] = useState<string | null>(null);
         const [result, setResult] = useState<SnapshotInjectionResult | null>(null);
         const [armed, setArmed] = useState(false);
+
+        /** 选档路径镜像（异步回包的归属守卫判据，见 runInjectFlow 注释） */
+        const pathRef = useRef(path);
+        useEffect(() => {
+          pathRef.current = path;
+        }, [path]);
 
         /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
         const ic = (name: string, size: number, fallback: string): ReactNode =>
@@ -232,20 +239,26 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
           setInjecting(true);
           setInjectError(null);
           const overrides = buildOverrides(dedupePending(pending));
-          void writer
-            .inject(path, overrides)
-            .then((r) => {
-              setResult(r);
-              setPending([]);
-              // 注入成功 → 重新深解析（展示落盘后的新值）
-              return snapshots.parse(path, { keepArrayCells: true, keepRaw: true }).then((a) => {
-                setArchive(a);
-              });
-            })
-            .catch((err: unknown) => {
-              setInjectError(err instanceof Error ? err.message : String(err));
-            })
-            .finally(() => setInjecting(false));
+          const selectedAtStart = path;
+          void runInjectFlow(
+            {
+              inject: (p, ov) => writer.inject(p, ov),
+              parse: (p, opts) => snapshots.parse(p, opts),
+            },
+            { path, overrides, stillSelected: () => pathRef.current === selectedAtStart },
+            {
+              onInjected: (r) => {
+                setResult(r);
+                setPending([]);
+              },
+              onReloaded: (a) => setArchive(a),
+              onFailed: (msg) => setInjectError(msg),
+              onDropped: () => {
+                // 换档后旧回包整链丢弃：新档的变量树已由选档 effect 装好，这里不动任何状态
+                ctx.log.info('Inject flow dropped: snapshot switched mid-inject');
+              },
+            },
+          ).finally(() => setInjecting(false));
         };
 
         /* ------------------------------ 渲染 ------------------------------ */
