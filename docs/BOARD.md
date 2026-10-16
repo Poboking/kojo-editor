@@ -77,3 +77,24 @@
 
 | ID | 任务（现象 / 复现 / 期望 vs 实际） | 认领 |
 |---|---|---|
+
+## Z. kojo 全中文化系列（lead 2026-10-17 立项并全权推进；七线并行，文件族互不相交）
+
+> **系列总目标（用户 2026-10-17 令）**：`.kojo 预览`（升糖显示）**屏上一整行原样 ERB 归零**——行内允许残留英文记号（引擎函数名、槽位原名），
+> 但「这一行就是源文件那一行逐字抄来」必须 = 0 行。口径澄清：**升糖是只读理解面**（糖 model `readOnly`，磁盘零改动），
+> **不存在**「原文转糖再编译」这条链路，因此本系列一切判据只看「作者读到什么」，不看产物可逆性；原 `.ERB` 逻辑由「投影不改盘」天然保持。
+> **两条尺子分开记**：红线 = `isVerbatimNativeLine` 命中数（契约 `kojo-sugar/src/native-display/types.ts`，必须 0）；
+> 质量线 = 未识别兜底行数（允许非零，但必须可数、逐线下降）。历史基线 = 整篇行覆盖 60.8%（STATE §一 CR-1）。
+> **并行纪律**：一条线一个工作树 + 一条短命分支（`b/<agent>/1017-zh-*`）；**热点文件单主**——`project.ts` 只归 ZH-P、
+> `expression.ts`+`keywords.ts` 只归 ZH-E、`variable-schema.ts`+`plugin-api/game.ts` 只归 ZH-N、`app/src/monaco/*` 只归 ZH-L；
+> 落地由 lead 逐条过 master 窄门（fetch → rebase → 门槛全绿 → `push HEAD:master`，永不 force），agent 只推自己的分支。
+
+| ID | 任务 | 关键判据 / 已实测事实 | 认领 |
+|---|---|---|---|
+| ZH-M | **度量先行**：把「整行原样 ERB」做成可复跑尺子并进 CI——fixture 全谱 + 语料轮读数 | 用契约 `native-display/types.ts` 的 `countVerbatimNativeLines`（**唯一口径，禁第二份判据**）；新建 `kojo-sugar/tests/native-zero-lines.test.ts` 覆盖现有一切 `native()` 落点（`reason` 五类：`unsupported-print-variant` / `inline-condition` / `unsupported-control-flow` / `data-or-skip` / `other`）逐类给出「改前 = 原样 1 行」的负自证，供其余六线当靶子；本线**只出尺子与读数，不改产品码** | 认领：zhm 2026-10-17 |
+| ZH-C | **控制流 / 预处理行的中文显示形**：`IF/ELSE/ENDIF/SIF`、`SELECTCASE/CASE/CASEELSE/ENDSELECT`、`FOR…NEXT`/`WHILE…WEND`/`REPEAT…REND`/`DO…LOOP`、`GOTO/JUMP/$标签/BREAK/RESTART/CATCH`、`#DIM/#LOCALSIZE/#FUNCTION/#SFUNCTION` 等 | 只准动 `native-display/control.ts` + 自己的测试；认不出返 `null`、**绝不原样返回入参行**；中文形与既有 `如果/当/是/否则` 同一词表（`keywords.ts` 只读引用，不许改） | 认领：zhc 2026-10-17 |
+| ZH-S | **赋值 / 调用 / 输出行的中文显示形**：`族头:索引 = 值` 族头中文化、`CALL/CALLFORM/TRYCALL*`、`SETBIT/CLEARBIT/INVERTBIT`、`PRINTDATA*`/`PRINTSINGLE*`/`PRINTV*` 变体、`SETCOLOR/RESETCOLOR/FONT*/WAIT/BAR/DRAWLINE`、`INPUT/PRINTBUTTON` | 只准动 `native-display/statement.ts` + 自己的测试；`lookup` 缺席时仍须产出中文形（语言层词不依赖名表）；已有台词投影的形态**不重复接管** | 认领：zhs 2026-10-17 |
+| ZH-P | **投影集成 + RETURN 行归零**：`project.ts` 的 `native()` 全部接 `localizeNativeLine`，认不出走显式兜底；函数尾 / 包装三联里的 `RETURN …` **永不上屏** | 只准动 `project.ts`（+ 其测试）；红线判据＝本文件产出的糖文本零整行原样 ERB；`RETURN` 吸收判据从「紧随 ENDIF」扩到「函数体内任何单独成行的 RETURN」，吸收 = 只读视图不显示，磁盘一字不动；既有闭环测试（投影→转译零 error）不许回退 | 认领：zhpp 2026-10-17 |
+| ZH-N | **名表汉化扩面 + JP→CN 槽名通道**：`FAMILY_ALIASES` 补引擎其余族（`CONF/MFLAG/CHARVAR/PALAMLV/EXPLV/NICKNAME/MASTERNAME/MONEY/UP/DOWN/SAVESTR/…`），全覆盖闸分母从策展表换成**引擎族全集**（漏族必须报红而非静默）；已解析的 `tw_csv_chs.xml` JP→CN 词典从「只进悬停 description」升级出 `slotCn` 查询面 | 只准动 `eratw-adapter/src/variable-schema.ts` + `plugin-api/src/game.ts`（additive 契约，旧消费方零改动）；一形不可配两族、撞语言关键字进 `FAMILY_ALIAS_EXCLUSIONS` 台账给理由；查不到 ⇒ 原样不猜 | 认领：zhn 2026-10-17 |
+| ZH-E | **表达式中文层补齐**：`true/false/null/AND/OR/XOR/TO` 的中文主形（`真/假/空/且/或/异或/到`）——中文收进输入、产物仍落引擎记号；`随机形`/`直出`/`等待`/`选择器` 进 `KEYWORDS` 单一真源（今天靠注释「不进 KEYWORDS」躲开高亮/补全） | 只准动 `kojo-sugar/src/expression.ts` + `keywords.ts`（+ 各自测试）；长词优先与「双角色词不冲突」既有判据不许破（`随机` 既是块头又是族头）；产物逐字节不变 | 认领：zhe 2026-10-17 |
+| ZH-L | **编辑器可见面**：高亮/补全/悬停认得上述所有中文形；`kojo-language.ts` 停止重抄 `CONT_MARKS`/`NOTIN_MARKS`（改 import 词表真源，`~`/`⏎` 必须着色）；糖视图里 `.ERB` 记号着色分级，让「残留英文」一眼可辨 | 只准动 `packages/app/src/monaco/*` + `packages/app/tests/*`；词表单一真源，宿主零硬编码中文词形；Monaco 功能级判据（补全真弹 / 高亮真出）不许只给体积读数 | 认领：zhl 2026-10-17 |
