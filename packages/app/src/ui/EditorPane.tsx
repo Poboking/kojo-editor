@@ -34,7 +34,8 @@ import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
 import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
 import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
-import { dialectForLanguage, installDocumentFormatter, toTextEdits } from '../monaco/kojo-format';
+import { dialectForLanguage, installDocumentFormatter, toTextEdits, type FormatHandlers } from '../monaco/kojo-format';
+import { installRangeFormatter } from '../monaco/kojo-format-range';
 import { applyFormatOnSave } from './format-on-save';
 import { classifySaveRace } from './save-race';
 import { loadFormatOnSavePref } from './format-pref';
@@ -1347,14 +1348,17 @@ export function EditorPane({
     // 文档格式化（E1，`Shift+Alt+F`）：规则全在插件（`computeFormatEdits` 纯函数），宿主只做
     // 协议翻译。应答判据与 codeAction / 转到定义逐字同款：只认**当前活动标签的真 model**——
     // 糖视图挂着只读派生 model，格式化它改的不是真文件，所以一律不应答。
-    const formatterDisposer = installDocumentFormatter(monaco, {
+    const formatResolve: FormatHandlers = {
       resolve: (model) => {
         const path = filePathRef.current;
         if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return null;
         const dialect = dialectForLanguage(model.getLanguageId());
         return dialect === null ? null : { text: model.getValue(), dialect };
       },
-    });
+    };
+    const formatterDisposer = installDocumentFormatter(monaco, formatResolve);
+    // 选区格式化 + 打字规范化（T13）：同一份 resolve、同一份规则核心，只多一层行裁剪（ERB 语言）
+    const rangeFormatterDisposer = installRangeFormatter(monaco, formatResolve);
     // 行上内联注解（B8，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第五个判别成员。
     // 宿主在这里做的事只有四件：认活动标签的**真** model、把体量/预算两档降级判掉、问槽、
     // 把点击落到**既有**的 `editor.revealLocation` 通道（不新造第二套跳转，与转到定义同腿）。
@@ -1396,6 +1400,7 @@ export function EditorPane({
       crumbRefreshRef.current = null;
       setJumpProbe(null);
       formatterDisposer.dispose();
+      rangeFormatterDisposer.dispose();
       codeLensDisposer.dispose();
       erbCompletionDisposer.dispose();
       erbRenameDisposer.dispose();
