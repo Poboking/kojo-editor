@@ -17,6 +17,7 @@ import {
   KOJO_TUTORIAL_OVERLAY_ID,
   SUGAR_TUTORIAL_OVERLAY_ID,
   createTutorialOverlay,
+  splitHeadingMarker,
 } from '../src/tutorial-overlay';
 
 /** 一份教程的全部**叙述**文本（标题、导语、节标题、段落、样例说明；不含代码样例） */
@@ -216,5 +217,84 @@ describe('教程浮层接线（E6）', () => {
     for (const tutorial of [SUGAR_TUTORIAL, KOJO_TUTORIAL]) {
       expect(typeof createTutorialOverlay({ tutorial, close: () => {} })).toBe('function');
     }
+  });
+});
+
+/**
+ * 极简元素树遍历：`createElement` 产物是 `{ props: { className, children, … } }` 的嵌套对象，
+ * children 可能是数组。按 className 收集节点即可钉结构，不必引第三方渲染器。
+ */
+type Elt = { props?: Record<string, unknown> };
+function collectNodes(node: unknown, className: string, out: Elt[] = []): Elt[] {
+  if (Array.isArray(node)) {
+    for (const child of node) collectNodes(child, className, out);
+    return out;
+  }
+  if (node && typeof node === 'object') {
+    const el = node as Elt;
+    if (el.props?.className === className) out.push(el);
+    const children = el.props?.children;
+    if (children !== undefined) collectNodes(children, className, out);
+  }
+  return out;
+}
+
+/** 真正**调用**组件拿元素树（既有接线测试只验"工厂返回函数"，没调用过——这里补上，顺带抓渲染期抛错） */
+const renderOverlay = (t: Tutorial): Elt =>
+  (createTutorialOverlay({ tutorial: t, close: () => {} }) as () => Elt)();
+
+describe('节标题圈码记号拆分（splitHeadingMarker）', () => {
+  it('拆出起首圈码 + 其余标题', () => {
+    expect(splitHeadingMarker('① 先分清：你写的这份')).toEqual({ marker: '①', text: '先分清：你写的这份' });
+    expect(splitHeadingMarker('⑲ 写错了怎么读')).toEqual({ marker: '⑲', text: '写错了怎么读' });
+    expect(splitHeadingMarker('⑳ 边界')).toEqual({ marker: '⑳', text: '边界' });
+  });
+  it('无起首圈码（附录各节 / 空串）原样返回 marker:null', () => {
+    expect(splitHeadingMarker('文件头键')).toEqual({ marker: null, text: '文件头键' });
+    expect(splitHeadingMarker('')).toEqual({ marker: null, text: '' });
+  });
+  it('圈码不在起首就不算记号（只认开头）', () => {
+    expect(splitHeadingMarker('看① 这个')).toEqual({ marker: null, text: '看① 这个' });
+  });
+  it('语法全表附录各节无圈码（拆分对它是恒等）', () => {
+    for (const s of TUTORIALS.reference.sections) {
+      expect(splitHeadingMarker(s.heading).marker, s.heading).toBeNull();
+    }
+  });
+});
+
+describe('教程浮层结构（2026-10-17 文档式重排）', () => {
+  const ALL = [SUGAR_TUTORIAL, KOJO_TUTORIAL, TUTORIALS.reference];
+
+  it('根是 .wizard.tutorial，含抬头 / 两列主体 / 目录栏 / 正文列', () => {
+    for (const t of ALL) {
+      const tree = renderOverlay(t);
+      expect(tree.props?.className, t.title).toBe('wizard tutorial');
+      for (const cls of ['tutorial-head', 'tutorial-main', 'tutorial-toc', 'tutorial-body', 'tutorial-doc']) {
+        expect(collectNodes(tree, cls).length, `${t.title} 缺 .${cls}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('目录项数 = 节数、正文节数 = 节数（目录与正文一一对应）', () => {
+    for (const t of ALL) {
+      const tree = renderOverlay(t);
+      expect(collectNodes(tree, 'tutorial-toc-item'), t.title).toHaveLength(t.sections.length);
+      expect(collectNodes(tree, 'tutorial-section'), t.title).toHaveLength(t.sections.length);
+    }
+  });
+
+  it('初始只有首项目录点亮 aria-current（其余交给 scroll-spy）', () => {
+    const items = collectNodes(renderOverlay(SUGAR_TUTORIAL), 'tutorial-toc-item');
+    const current = items.filter((n) => n.props?.['aria-current'] === 'true');
+    expect(current).toHaveLength(1);
+    expect(current[0]).toBe(items[0]);
+  });
+
+  it('每节带锚点 id（tu-<教程>-s<i>，跳转与 spy 都靠它）', () => {
+    const sections = collectNodes(renderOverlay(SUGAR_TUTORIAL), 'tutorial-section');
+    sections.forEach((sec, i) => {
+      expect(sec.props?.id).toBe(`tu-sugar-s${i}`);
+    });
   });
 });

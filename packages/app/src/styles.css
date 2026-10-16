@@ -3371,6 +3371,13 @@ button.erb-mode-hint.unlocked:hover {
 .overlay-host-wide {
   width: min(920px, 94vw);
 }
+/* 教程宿主再放宽（2026-10-17 文档式重排）：左目录栏 + 右正文两列要吃宽度，920 放不下
+   「目录 + 680 正文 + 样例/表突破」。用 :has 精确命中教程宿主，不动共享的 .overlay-host-wide
+   （部署 diff 等宽版浮层照旧 920；它自己另有 .kd-host 覆盖）。:has 不可用时退回 920，只是
+   正文列窄些、不破版。 */
+.overlay-host-wide:has(.wizard.tutorial) {
+  width: min(1160px, 94vw);
+}
 /* 回落一：老内核不支持 backdrop-filter ⇒ 实心，绝不破版（磨砂只是加分项，不是前提） */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass,
@@ -3650,16 +3657,19 @@ button.primary .hint {
   flex-direction: column;
   max-height: calc(80vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
 }
-/* 文档头：标题 + 导语；导语下一条渐隐发丝线把抬头与正文分开（滚动时抬头不丢） */
+/* 抬头（标题 + 导语）固定不滚；导语下那条渐隐发丝线把抬头与两列主体分开（滚动时抬头不丢） */
+.tutorial-head {
+  flex: none;
+}
 .wizard.tutorial h3 {
   font-size: var(--fs-5);
   font-weight: 600;
   letter-spacing: 0.01em;
-  margin-bottom: var(--space-2);
+  margin: 0 0 var(--space-2);
 }
 .tutorial-lead {
-  margin: 0 0 var(--space-4);
-  padding-bottom: var(--space-4);
+  margin: 0;
+  padding-bottom: var(--space-3);
   /* 渐隐发丝线：右端淡出，比通栏实线更轻，读起来像杂志导语的分隔。
      先声明实色底、再叠 border-image——不支持的引擎自然回落到那条实线，不留白。 */
   border-bottom: 1px solid var(--border);
@@ -3667,70 +3677,54 @@ button.primary .hint {
   color: var(--fg-dim);
   font-size: var(--fs-2);
   line-height: 1.65;
+  /* 导语限一个舒适行长：宽版浮层里通栏拉满，眼睛回扫找行首会累 */
+  max-width: 78ch;
 }
-.tutorial-body {
+/* 两列主体（现代文档式）：左目录栏 + 右正文列，只有正文滚、目录栏自己另滚。目录常驻左侧、
+   不随正文滚走——随时知道"读到哪了"、随时能跳，这正是文档站区别于长浮层的读法。 */
+.tutorial-main {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-  /* 目录跳转的平滑滚动写在样式里（插件包不碰 DOM 属性）：减弱动效下面那条规则
-     把它压成瞬移，跳转本身不受影响 */
-  scroll-behavior: smooth;
-  /* 样例区按容器宽度断行（.tutorial-sample 用 cqw 突破正文列）——
-     查询容器挂在滚动体上，cqw 天然扣掉滚动条与宿主 padding */
-  container-type: inline-size;
-}
-/* 正文列：限宽居中——宽版浮层里保持可读行长，读起来像一篇文档 */
-.tutorial-doc {
-  max-width: 680px;
-  margin: 0 auto;
-  padding-right: var(--space-1);
-}
-/* 目录：贴在滚动体顶部的一条横向胶囊带。十九节的长文没有目录，只能靠拖滚动条找；
-   单行横滚比竖排列表省高度，也不跟正文列抢宽度。磨砂底：正文从它下面滚过时虚化，
-   而不是被一条实心底边生硬切断——这是 backdrop-filter 在"读"界面里最值的一处。
-   底色用抬升档（--glass-tint-raise），与浮层卡片拉开一层。 */
-.tutorial-toc {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   display: flex;
-  gap: var(--space-1);
-  overflow-x: auto;
-  padding: var(--space-2) 0;
-  background: rgb(var(--glass-tint-raise) / calc(var(--glass-alpha) * 0.92));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  border-bottom: 1px solid var(--glass-edge);
+  gap: var(--space-4);
+  margin-top: var(--space-3);
 }
-/* 磨砂的两条回落与浮层卡片同源：老内核无 backdrop-filter、旋钮 0%（实心档）都退回实心底 */
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .tutorial-toc {
-    background: var(--bg-2);
-    border-bottom-color: var(--border);
-  }
+/* 目录栏：竖排、独立滚动、右侧一条发丝线与正文分开。磨砂在这里不需要——目录是正文的兄弟列、
+   内容不从它底下滚过，实心底更稳、也省一层 backdrop-filter（磨砂留给遮罩与浮层卡片那两处）。 */
+.tutorial-toc {
+  flex: 0 0 208px;
+  min-width: 0;
+  overflow-y: auto;
+  /* spy 把当前条目滚进视野时平滑；减弱动效下被全局那条压成瞬移 */
+  scroll-behavior: smooth;
+  padding: 0 var(--space-2) var(--space-2) 0;
+  border-right: 1px solid var(--border);
 }
-:root[data-glass='solid'] .tutorial-toc {
-  background: var(--bg-2);
-  border-bottom-color: var(--border);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-/* 横滚条走全局那套（`scrollbar-width` 会让 Chromium 换回原生浅色条，别加） */
-.tutorial-toc::-webkit-scrollbar,
-.tutorial-table-scroll::-webkit-scrollbar {
-  height: 8px;
-  width: 8px;
-}
-.tutorial-toc-item {
-  flex: none;
-  padding: 3px var(--space-3);
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  background: none;
+.tutorial-toc-label {
+  padding: 0 var(--space-2) var(--space-2);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
   color: var(--fg-dim);
   font-size: var(--fs-0);
-  line-height: 1.6;
-  white-space: nowrap;
+  letter-spacing: 0.12em;
+}
+/* 目录项：竖排行 = [圈码记号 | 标题]。当前节由 scroll-spy 挂 aria-current：左侧 accent 竖条 +
+   淡底 + 亮字；悬停给一条中性竖条 + 微亮，与"当前节"的 accent 竖条区分开。文字走 --accent-text
+   （达标的文字档），不用 --accent——后者压在深底上做文字只有 4.4:1，见文件头的对比度记账。 */
+.tutorial-toc-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 5px var(--space-2);
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.45;
+  text-align: left;
   cursor: pointer;
   transition:
     color var(--dur-1) var(--ease-out),
@@ -3740,33 +3734,107 @@ button.primary .hint {
 .tutorial-toc-item:hover {
   color: var(--fg);
   background: var(--hover);
+  border-left-color: var(--border);
 }
-/* 当前节：填一枚 accent 淡底胶囊，比"只描边"更一眼可辨。文字走 --accent-text（达标的
-   文字档），不用 --accent——后者压在深底上做文字只有 4.4:1，见文件头的对比度记账。 */
 .tutorial-toc-item[aria-current='true'] {
   color: var(--accent-text);
   background: var(--accent-dim);
-  border-color: transparent;
+  border-left-color: var(--accent);
 }
-/* 节标题（①…⑩）：层级靠字号 + 字重 + 节间分隔线拉开。 */
+.tutorial-toc-num {
+  flex: none;
+  font-size: var(--fs-0);
+  opacity: 0.85;
+}
+.tutorial-toc-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 正文列：滚动 + 容器查询上下文（样例/表用 cqw 突破 680 正文列，窄窗回落见下方 @container） */
+.tutorial-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  /* 目录跳转的平滑滚动写在样式里（插件包不碰 DOM 属性）：减弱动效下面那条规则压成瞬移 */
+  scroll-behavior: smooth;
+  container-type: inline-size;
+}
+/* 正文限宽居中：宽版浮层里保持可读行长，读起来像一篇文档 */
+.tutorial-doc {
+  max-width: 680px;
+  margin: 0 auto;
+  padding-right: var(--space-1);
+}
+/* 目录栏与表横滚条走窄滚动条（全局 10px 太粗）；scrollbar-width 会让 Chromium 换回原生浅色条，别加 */
+.tutorial-toc::-webkit-scrollbar,
+.tutorial-table-scroll::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+/* 窄窗（宿主 ≈94vw；窗宽到 680 时两列挤不下）：目录栏塌回顶部横滚胶囊带、正文占满宽——
+   与既有"窄窗样例回落上下堆叠"同一套降级思路，不破版。 */
+@media (max-width: 680px) {
+  .tutorial-main {
+    flex-direction: column;
+    gap: 0;
+  }
+  .tutorial-toc {
+    flex: none;
+    display: flex;
+    gap: var(--space-1);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-behavior: auto;
+    padding: 0 0 var(--space-2);
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: var(--space-3);
+  }
+  .tutorial-toc-label {
+    display: none;
+  }
+  .tutorial-toc-item {
+    flex: none;
+    width: auto;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    padding: 3px var(--space-3);
+    white-space: nowrap;
+  }
+  .tutorial-toc-item:hover {
+    border-color: transparent;
+  }
+  .tutorial-toc-text {
+    overflow-wrap: normal;
+  }
+}
+/* 节标题（①…⑲）：文档式层级——明显大过正文一档；圈码记号 inline 排在标题前（不成 flex，
+   好让标题里的行内标记正常折行），给章节一个安静的锚点色。 */
 .tutorial-section h4 {
   margin: 0 0 var(--space-3);
-  font-size: var(--fs-3);
+  font-size: var(--fs-4);
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.005em;
+  line-height: 1.4;
 }
-/* 相邻节之间一条两端渐隐的细线：十八节的长文没有分隔线，滚动时找不准"这几段属于哪一节"；
-   渐隐比通栏实线更轻，不抢正文。实色底先声明，border-image 不支持时自然回落。 */
+.tutorial-num {
+  margin-right: 0.4em;
+  color: var(--accent-text);
+  font-weight: 600;
+}
+/* 节间距拉到"一章一节"的呼吸感：十八节的长文，节与节要一眼分得开。两端渐隐的细线比通栏实线更轻。 */
 .tutorial-section + .tutorial-section {
-  margin-top: var(--space-4);
-  padding-top: var(--space-4);
+  margin-top: calc(var(--space-4) * 2);
+  padding-top: calc(var(--space-4) * 1.5);
   border-top: 1px solid var(--border);
   border-image: linear-gradient(90deg, transparent, var(--border) 10%, var(--border) 90%, transparent) 1;
 }
+/* 正文：文档阅读的行高与段距（13px / 1.8，段间留白够断句） */
 .tutorial-body p {
-  margin: 0 0 var(--space-2);
+  margin: 0 0 var(--space-3);
   font-size: var(--fs-2);
-  line-height: 1.7;
+  line-height: 1.8;
 }
 /* 粗体略收一档：正文里的强调不该跳成另一套字面（分色靠 <code> 芯片） */
 .wizard.tutorial strong {
