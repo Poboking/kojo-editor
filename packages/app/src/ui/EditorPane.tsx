@@ -72,6 +72,8 @@ import {
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
 import { applyReferenceEdits, installErbRename } from '../monaco/erb-rename';
+import { collectReferenceLocations, installReferenceProvider } from '../monaco/find-references';
+import { installKojoRename } from '../monaco/kojo-rename';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { CJK_TYPING_BASELINE, editorOptionsForLineCount } from './editor-options';
@@ -1440,6 +1442,76 @@ export function EditorPane({
         return { applied: next.applied, stale: next.stale };
       },
     });
+    // 查找所有引用（R2，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别
+    // 成员。宿主只做协议翻译——认活动标签的真 model（与转到定义逐字同判据）、问槽、
+    // 把"未打开文件"那条腿的点击落回 `editor.revealLocation`（与转到定义同通道）。
+    // 引用什么算、谁在索引外，全在贡献方（ERB 由解析器答、`.kojo` 由糖线答）。
+    const referenceSearchDisposer = installReferenceProvider(monaco, {
+      resolve: (model, position) => {
+        const path = filePathRef.current;
+        if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return [];
+        return collectReferenceLocations(kernel.slots.query('ui.editor.languageService'), {
+          kind: 'references',
+          path,
+          text: model.getValue(),
+          line: position.lineNumber,
+          column: position.column,
+          project: kernel.project.current(),
+          lineCount: model.getLineCount(),
+        });
+      },
+      navigate: (location) => {
+        kernel.bus.emit('editor.revealLocation', {
+          filePath: location.filePath,
+          line: location.line,
+          ...(location.column !== undefined ? { column: location.column } : {}),
+          source: '查找引用',
+        });
+      },
+      openModelFor: (filePath) => {
+        const key = matchOpenedPath(entriesRef.current.keys(), filePath);
+        return key ? entriesRef.current.get(key)?.model : undefined;
+      },
+    });
+    // `.kojo` 用户函数改名（R1，2026-10-16）：同一枚槽的第八个判别成员。ERB 方言不归它
+    // 管（全项目改名走上面 `erbRenameDisposer` 的专用通道）；`.kojo` 的判定（可证明引用面
+    // + 整卷复核）全在糖线，宿主只做 Monaco 协议翻译与落地前的现文本验证（模块头注）。
+    const kojoRenameDisposer = installKojoRename(monaco, {
+      canAnswer: (model) => {
+        const path = filePathRef.current;
+        return !!path && !sugarModelRef.current && model === editorRef.current?.getModel();
+      },
+      resolve: (model, position, newName) => {
+        const path = filePathRef.current;
+        if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) {
+          return { edits: [], rejectReason: '当前视图不参与重命名（请在原文视图内按 F2）' };
+        }
+        for (const contribution of kernel.slots.query('ui.editor.languageService')) {
+          let result: ReturnType<typeof contribution.provide>;
+          try {
+            result = contribution.provide({
+              kind: 'rename',
+              path,
+              text: model.getValue(),
+              line: position.lineNumber,
+              column: position.column,
+              newName,
+              project: kernel.project.current(),
+              lineCount: model.getLineCount(),
+            });
+          } catch (e: unknown) {
+            console.warn(
+              `[kojo-rename] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+            );
+            continue;
+          }
+          if (result && result.kind === 'rename') {
+            return { edits: result.edits, ...(result.oldName !== undefined ? { oldName: result.oldName } : {}), ...(result.rejectReason !== undefined ? { rejectReason: result.rejectReason } : {}) };
+          }
+        }
+        return { edits: [], rejectReason: '「.kojo」改名只认本文件「函数」块声明的名字（语言服务未应答这处请求）' };
+      },
+    });
     // 文档格式化（E1，`Shift+Alt+F`）：规则全在插件（`computeFormatEdits` 纯函数），宿主只做
     // 协议翻译。应答判据与 codeAction / 转到定义逐字同款：只认**当前活动标签的真 model**——
     // 糖视图挂着只读派生 model，格式化它改的不是真文件，所以一律不应答。
@@ -1504,6 +1576,8 @@ export function EditorPane({
       codeLensDisposer.dispose();
       erbCompletionDisposer.dispose();
       erbRenameDisposer.dispose();
+      referenceSearchDisposer.dispose();
+      kojoRenameDisposer.dispose();
       completionDisposer.dispose();
       semanticDisposer.dispose();
       foldingDisposer.dispose();

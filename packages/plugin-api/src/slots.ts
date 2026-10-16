@@ -386,14 +386,16 @@ export interface EditorDocumentSymbolRequest {
   readonly lineCount?: number;
 }
 
-/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` / `codeLens` / `semanticToken`；新增能力 additive 追加联合成员，不改旧成员） */
+/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` / `codeLens` / `semanticToken` / `references` / `rename`；新增能力 additive 追加联合成员，不改旧成员） */
 export type EditorLanguageServiceRequest =
   | EditorDefinitionRequest
   | EditorDocumentSymbolRequest
   | EditorFoldingRangeRequest
   | EditorWorkspaceSymbolRequest
   | EditorCodeLensRequest
-  | EditorSemanticTokenRequest;
+  | EditorSemanticTokenRequest
+  | EditorReferencesRequest
+  | EditorRenameRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -475,7 +477,9 @@ export type EditorLanguageServiceResult =
   | EditorFoldingRangeResult
   | EditorWorkspaceSymbolResult
   | EditorCodeLensResult
-  | EditorSemanticTokenResult;
+  | EditorSemanticTokenResult
+  | EditorReferencesResult
+  | EditorRenameResult;
 
 /**
  * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
@@ -640,6 +644,79 @@ export interface EditorSemanticTokenRequest {
 export interface EditorSemanticTokenResult {
   readonly kind: 'semanticToken';
   readonly spans: readonly EditorSemanticTokenSpan[];
+}
+
+/**
+ * 查找引用请求（R2，2026-10-16 语言服务批）——同一单槽的**第七个**判别成员
+ * （additive：往联合末尾追加，宿主与既有贡献方零改动）。
+ *
+ * 输入形状与 `definition` **逐字同族**（文件 + 光标位置 + 项目）：引用与定义回答的
+ * 本就是同一个名字的两面。产出按 {@link EditorSymbolLocation} 给"文件:行:列"——
+ * 落地（Peek / 跳转）由宿主决定，贡献方不碰导航。
+ */
+export interface EditorReferencesRequest {
+  readonly kind: 'references';
+  readonly path: string;
+  /** 模型全文（宿主给的是**真文件**的文本，糖视图下不供——与 `definition` 同一判据） */
+  readonly text: string;
+  /** 光标行（1 基） */
+  readonly line: number;
+  /** 光标列（1 基；UTF-16 码元，与 Monaco 同坐标系） */
+  readonly column: number;
+  readonly project: GameProject | null;
+  /** 文件行数（体量事实，供贡献方按文件大小自行降级；缺省 = 未知，按不降级处理） */
+  readonly lineCount?: number;
+}
+
+/** 查找引用响应；空数组 = 认这个文件但这个名字没有可证明的引用（**不猜**） */
+export interface EditorReferencesResult {
+  readonly kind: 'references';
+  readonly locations: readonly EditorSymbolLocation[];
+}
+
+/**
+ * 一处**列级**文本编辑（`rename` 的产物；1 基行列，`endColumn` 不含端点——与
+ * `ErbReference` 同一口径）。rename 只改名字记号，行级 `EditorTextEdit` 的粒度
+ * 表达不了"行内哪一段"，故本成员自带列区间；宿主按行号降序合并成一次编辑。
+ */
+export interface EditorRenameEdit {
+  readonly line: number;
+  readonly startColumn: number;
+  readonly endColumn: number;
+  readonly newText: string;
+}
+
+/**
+ * 重命名请求（R1，2026-10-16 语言服务批）——同一单槽的**第八个**判别成员。
+ *
+ * 与 `references` 同族（文件 + 光标位置），多带 `newName`。ERB 方言的全项目
+ * rename 走 `erb-rename` 的专用通道（双通道送达 + 只读全或无，2026-10-16 已交付），
+ * **不经本成员**；本成员服务 `.kojo` 这类"单文件、判据在转译器"的改名面。
+ */
+export interface EditorRenameRequest {
+  readonly kind: 'rename';
+  readonly path: string;
+  readonly text: string;
+  readonly line: number;
+  readonly column: number;
+  readonly newName: string;
+  readonly project: GameProject | null;
+  /** 文件行数（体量事实，供贡献方按文件大小自行降级；缺省 = 未知，按不降级处理） */
+  readonly lineCount?: number;
+}
+
+/** 重命名响应：可证明的编辑集，或一条给作者看的拒绝理由（二选一，铁律 4 不静默） */
+export interface EditorRenameResult {
+  readonly kind: 'rename';
+  readonly edits: readonly EditorRenameEdit[];
+  /**
+   * 被改的原名（宿主落地前逐处对照 live model 现文本验证——请求与落地之间作者可能
+   * 已继续打字，坐标失效就整次拒绝让作者重按 F2，绝不按陈旧坐标硬写；与 `erb-rename`
+   * 的"陈旧索引防误写"同一条纪律）。
+   */
+  readonly oldName?: string;
+  /** 给出时宿主原样弹给作者（Monaco `rejectReason`），`edits` 必为空 */
+  readonly rejectReason?: string;
 }
 
 /**

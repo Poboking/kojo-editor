@@ -50,6 +50,7 @@ import { resolveKojoDefinition } from './definition';
 import { kojoDocumentSymbols } from './document-symbols';
 import { kojoFoldingRanges } from './folding';
 import { kojoSemanticTokens } from './semantic-tokens';
+import { kojoReferencesAt, planKojoRename } from './rename';
 import type { DictionaryLookup } from './types';
 
 export function createKojoSugarPlugin(): Plugin {
@@ -465,6 +466,72 @@ export function createKojoSugarPlugin(): Plugin {
           if (resolveSugarTarget(request.path) === null) return undefined;
           const doc = service.parse(request.text, { filePath: request.path });
           return { kind: 'semanticToken', spans: kojoSemanticTokens(doc, request.text) };
+        },
+      });
+
+      /* ---------------- 查找引用（R2，2026-10-16 语言服务批） ----------------
+
+       同一枚槽的第七个判别成员，`.kojo` 这一腿由本包答。判据为什么必须住在转译器：
+       "这个出现点是不是函数引用"只有转译行为说了算（台词/注释/原生直通里的同名出现
+       不是引用），词法正则答不了。数据面在 `./rename.ts`（探针法，纯函数），此处只接线。
+
+       编译错误 / 不是本文件「函数」声明的名字 ⇒ 空数组（**不猜**，作者看到"没有引用"）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-references',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'references') return undefined;
+          if (resolveSugarTarget(request.path) === null) return undefined;
+          return {
+            kind: 'references',
+            locations: kojoReferencesAt({
+              source: request.text,
+              path: request.path,
+              line: request.line,
+              column: request.column,
+              transpile: service.transpile,
+            }),
+          };
+        },
+      });
+
+      /* ---------------- 用户函数改名（R1，2026-10-16 语言服务批） ----------------
+
+       同一枚槽的第八个判别成员。与 `erb-rename` 的分工：ERB 函数的全项目改名走它的
+       专用通道（双通道送达 + 只读全或无）；`.kojo` 用户函数**文件局部**（规范 §7.2
+       排除跨文件可见），引用集只在同一份文件里，故走单槽应答 + 宿主 WorkspaceEdit
+       单步落地。可证明引用面与"整卷复核"纪律见 `./rename.ts` 头注——转译器当判官，
+       产物 diff 越出预期行 ⇒ 整次取消并明说（宁可不改，不做名字分叉的半成品）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-rename',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'rename') return undefined;
+          if (resolveSugarTarget(request.path) === null) return undefined;
+          const idx = erbIndexOf();
+          const plan = planKojoRename({
+            source: request.text,
+            path: request.path,
+            line: request.line,
+            column: request.column,
+            newName: request.newName,
+            transpile: service.transpile,
+            // 产物名撞名守门（软取：索引缺席 = 不判，不猜索引外的事）
+            productNameExists: idx ? (name) => idx.byName.has(name.toUpperCase()) : undefined,
+          });
+          if (plan.kind === 'reject') return { kind: 'rename', edits: [], rejectReason: plan.reason };
+          return {
+            kind: 'rename',
+            edits: plan.edits.map((e) => ({
+              line: e.line,
+              startColumn: e.column,
+              endColumn: e.endColumn,
+              newText: request.newName,
+            })),
+            oldName: plan.oldName,
+          };
         },
       });
     },

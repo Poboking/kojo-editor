@@ -112,14 +112,21 @@ describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
     return hit.contribution as unknown as SymbolsContribution;
   };
 
-  it('四枚贡献各管一个判别成员（`kojo-definition` / `kojo-symbols` / `kojo-folding` / `kojo-semantic-tokens`）', () => {
+  it('六枚贡献各管一个判别成员（`kojo-definition` / `kojo-symbols` / `kojo-folding` / `kojo-semantic-tokens` / `kojo-references` / `kojo-rename`）', () => {
     const { slots } = activate();
     expect(
       slots
         .filter((s) => s.kind === 'ui.editor.languageService')
         .map((s) => s.contribution.id)
         .sort(),
-    ).toEqual(['kojo-definition', 'kojo-folding', 'kojo-semantic-tokens', 'kojo-symbols']);
+    ).toEqual([
+      'kojo-definition',
+      'kojo-folding',
+      'kojo-references',
+      'kojo-rename',
+      'kojo-semantic-tokens',
+      'kojo-symbols',
+    ]);
   });
 
   it('只认 `.kojo`；ERB / 其它扩展名一律 undefined（让给 erb-parser 那条线）', () => {

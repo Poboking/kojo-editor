@@ -250,6 +250,11 @@ export type {
   EditorLanguageServiceResult,
   EditorLiftPreviewContribution,
   EditorLiftPreviewItem,
+  EditorReferencesRequest,
+  EditorReferencesResult,
+  EditorRenameEdit,
+  EditorRenameRequest,
+  EditorRenameResult,
   EditorSaveChoices,
   EditorSaveHandlerContribution,
   EditorSaveOutcome,
@@ -503,4 +508,4 @@ export type {
   EditorSemanticTokenSpan,
   EditorSemanticTokenType,
 } from './slots';
-export { MODEL_TOKEN_CLASS, locateIdentifier, modelLineAt, splitModelLines } from './semantic-locate';
+export { MODEL_TOKEN_CLASS, locateIdentifier, modelLineAt, splitModelLines, unicodeTokenAt } from './semantic-locate';

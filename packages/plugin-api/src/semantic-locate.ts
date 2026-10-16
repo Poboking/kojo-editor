@@ -41,6 +41,30 @@ export function locateIdentifier(text: string, needle: string, fromIndex: number
   return -1;
 }
 
+/**
+ * 光标列 → 所在词的 1 基半开区间（**Unicode 记号集**；`column` = Monaco 1 基列）。
+ *
+ * 与 `symbolTokenAt` 的分工（那张表的有意分歧见文件头）：rename / references 一族
+ * 的"光标处是哪个名字"必须认中文（`函数 问候` 的 `问候` 是 ASCII 集判不出边界），
+ * 故走本文件同一张 `MODEL_TOKEN_CLASS`。词判定向两侧看一格（贴着词都算在词上），
+ * 与 Monaco `getWordAtPosition` 的行为一致；两侧都不是标识字符 ⇒ `null`。
+ */
+export function unicodeTokenAt(lineText: string, column: number): { startColumn: number; endColumn: number; text: string } | null {
+  const col0 = Math.min(Math.max(0, column - 1), lineText.length);
+  let start = -1;
+  let end = -1;
+  if (col0 < lineText.length && IDENT_CHAR.test(lineText[col0]!)) {
+    start = col0;
+  } else if (col0 > 0 && IDENT_CHAR.test(lineText[col0 - 1]!)) {
+    start = col0 - 1;
+  }
+  if (start < 0) return null;
+  end = start + 1;
+  while (start > 0 && IDENT_CHAR.test(lineText[start - 1]!)) start--;
+  while (end < lineText.length && IDENT_CHAR.test(lineText[end]!)) end++;
+  return { startColumn: start + 1, endColumn: end + 1, text: lineText.slice(start, end) };
+}
+
 /** 换行归一并切成行数组（与 `parseErbText` / `scanFileRefs` 逐字同一条规则：`\r\n` 与裸 `\r` 都算一行） */
 export function splitModelLines(text: string): string[] {
   return text.replace(/\r\n?/g, '\n').split('\n');

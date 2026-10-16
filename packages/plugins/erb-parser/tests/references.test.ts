@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ErbIndex, ErbParserService, FileIO, Plugin, PluginContext, Unsubscribe } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from '../src/references';
+import { buildReferenceIndex, erbReferenceLocationsAt, referencesOf, scanFileRefs, type FileRefs } from '../src/references';
 import { makeComputeStub } from './support';
 
 const dict = (names: readonly string[]) => {
@@ -311,5 +311,40 @@ describe('erb-parser · 反向索引装配（冷建/热复用/快照往返）', 
     const { services } = harness();
     const parser = services.get('erb.parser') as ErbParserService;
     expect(parser.referencesTo!('ALPHA')).toEqual([]);
+  });
+});
+
+describe('erbReferenceLocationsAt · find-references 数据面', () => {
+  const index = {
+    files: new Map(),
+    byName: new Map(),
+    references: {
+      bySymbol: new Map([
+        [
+          'ALPHA',
+          [
+            { filePath: '/t/A.ERB', line: 1, column: 2, endColumn: 7, kind: 'definition' as const },
+            { filePath: '/t/B.ERB', line: 2, column: 7, endColumn: 12, kind: 'call' as const },
+          ],
+        ],
+      ]),
+    },
+  } as unknown as ErbIndex;
+
+  it('光标词整串命中 ⇒ 引用点全集（文件:行:列，含定义点）', () => {
+    expect(erbReferenceLocationsAt(index, 'CALL ALPHA\n', 1, 6)).toEqual([
+      { filePath: '/t/A.ERB', line: 1, column: 2 },
+      { filePath: '/t/B.ERB', line: 2, column: 7 },
+    ]);
+  });
+
+  it('小写引用按归一口径命中（与 referencesTo 同一把尺子）', () => {
+    expect(erbReferenceLocationsAt(index, 'call alpha()', 1, 6)).toHaveLength(2);
+  });
+
+  it('光标无词 / 记号不在索引 / 行越界 ⇒ 空数组（不猜）', () => {
+    expect(erbReferenceLocationsAt(index, 'A + B\n', 1, 3)).toEqual([]);
+    expect(erbReferenceLocationsAt(index, 'CALL BETA\n', 1, 6)).toEqual([]);
+    expect(erbReferenceLocationsAt(index, 'CALL ALPHA\n', 9, 1)).toEqual([]);
   });
 });

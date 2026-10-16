@@ -1,5 +1,6 @@
 import type {
   EditorDecoratePayload,
+  EditorSymbolLocation,
   ErbFile,
   ErbIndex,
   ErbReference,
@@ -7,7 +8,7 @@ import type {
   ErbReferenceKind,
   LineDecoration,
 } from '@kojo/plugin-api';
-import { isErbDialectPath, MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
+import { isErbDialectPath, MODEL_TOKEN_CLASS, symbolTokenAt } from '@kojo/plugin-api';
 
 /**
  * 反向引用索引（H2 批，2026-10-15）：**谁提到了这个名字**。
@@ -310,4 +311,31 @@ export function buildReferenceIndex(
 export function referencesOf(index: ErbIndex, name: string): ErbReference[] {
   const hit = index.references?.bySymbol.get(name.toUpperCase());
   return hit === undefined ? [] : hit.slice();
+}
+
+/**
+ * 光标处的记号 → 它的引用点全集（find-references 的数据面，**纯函数**）。
+ *
+ * 判据与 rename 完全同源：光标词整串在 `bySymbol` 里有记录才给（未收录 = 空数组，
+ * **不猜**）；查询单一真源是 `referencesOf`，本函数只补"光标 → 名字"这一步
+ * （`symbolTokenAt`，与 `definitionTargetsAt` 同一把尺子）。
+ */
+export function erbReferenceLocationsAt(
+  index: ErbIndex,
+  text: string,
+  line: number,
+  column: number,
+): EditorSymbolLocation[] {
+  if (!Number.isFinite(line) || !Number.isFinite(column)) return [];
+  const n = Math.trunc(line);
+  if (n < 1) return [];
+  const lineText = text.replace(/\r\n?/g, '\n').split('\n')[n - 1];
+  if (lineText === undefined) return [];
+  const token = symbolTokenAt(lineText, Math.trunc(column));
+  if (!token) return [];
+  return referencesOf(index, token.text).map((ref) => ({
+    filePath: ref.filePath,
+    line: ref.line,
+    column: ref.column,
+  }));
 }

@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { unicodeTokenAt } from '../src/semantic-locate';
 import { symbolTokenAt } from '../src/symbol-token';
 
 /** 用 `|` 标光标（1 基列 = 标记在原文里的 0 基下标 + 1） */
@@ -74,5 +75,24 @@ describe('symbolTokenAt · 不认（不猜）', () => {
     const tok = symbolTokenAt('ab.c', 2, (ch) => ch !== '/');
     expect(tok?.text).toBe('ab.c');
     expect(tok).toEqual({ text: 'ab.c', startColumn: 1, endColumn: 5 });
+  });
+});
+
+describe('unicodeTokenAt · Unicode 记号集（rename / references 一族的光标词）', () => {
+  const at = (marked: string) => unicodeTokenAt(marked.replace('|', ''), marked.indexOf('|') + 1);
+
+  it('中文名整串命中（ASCII 集判不出的那一半）', () => {
+    expect(at('函数 问候|()：')).toEqual({ text: '问候', startColumn: 4, endColumn: 6 });
+    expect(at('调用 |问候()')).toEqual({ text: '问候', startColumn: 4, endColumn: 6 });
+  });
+
+  it('中英混合名 / 词尾后一格与词首上一格同整串', () => {
+    expect(at('@cloth_着替え処理|(ARG)')?.text).toBe('cloth_着替え処理');
+    expect(at('函数 |问候')?.text).toBe('问候'); // 词首上一格贴着词
+  });
+
+  it('两侧都不是标识字符 ⇒ null；空行 ⇒ null', () => {
+    expect(at('A + | B')).toBeNull();
+    expect(unicodeTokenAt('', 1)).toBeNull();
   });
 });

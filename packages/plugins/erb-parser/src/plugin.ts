@@ -26,7 +26,7 @@ import { checkControlFlowStructure } from './structure';
 import { buildStructureFixes } from './structure-fix';
 import { erbDocumentSymbols } from './document-symbols';
 import { erbFoldingRanges } from './folding';
-import { buildReferenceIndex, erbReferenceDecorations, referencesOf, scanFileRefs, type FileRefs } from './references';
+import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt } from './symbols';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
@@ -781,6 +781,31 @@ export function createErbParserPlugin(): Plugin {
             referencesOf: (name) => referencesOf(idx, name),
           });
           return { kind: 'codeLens', lenses };
+        },
+      });
+
+      /* ---------------- 查找引用（R2，2026-10-16 语言服务批） ----------------
+
+       同一枚槽的第七个判别成员（additive：往联合末尾追加，宿主与既有贡献方零改动）。
+       判据与 rename 完全同源——`referencesOf`（反向索引）+ `symbolTokenAt`（光标 →
+       名字），单一真源都在本包（`references.ts`），宿主只做 Monaco 协议翻译。
+
+       索引缺席（未开项目 / 还没建好）⇒ `undefined` = **本包不答**，而不是答"没有引用"
+       （与 `erb-workspace-symbols` 同一区分：真没有 ≠ 我根本还没有名录，铁律 4 不静默）。
+       记号不在索引里（变量 / 标签 / 散文）⇒ 空数组（**不猜**，作者看到"没有引用"）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-references',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'references') return undefined;
+          if (!isDialect(request.path)) return undefined;
+          const idx = index;
+          if (!idx) return undefined;
+          return {
+            kind: 'references',
+            locations: erbReferenceLocationsAt(idx, request.text, request.line, request.column),
+          };
         },
       });
 
