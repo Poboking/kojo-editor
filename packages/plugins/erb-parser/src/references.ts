@@ -103,13 +103,20 @@ const isMemberColon = (c: string | undefined): boolean => c === ':' || c === '�
 /**
  * 一条**可见代码行**的形状（`visibleCodeLines` 的产出；列坐标与原文逐位对齐）。
  */
-interface VisibleCodeLine {
+export interface VisibleCodeLine {
   /** 1 基行号 */
   readonly line: number;
   /** 行原文（未 trim；列对齐的基准） */
   readonly raw: string;
-  /** 代码视野（字符串内容与行内注释尾巴等长刷白；与 `raw` 等长同位） */
-  readonly code: string;
+  /**
+   * 代码视野（字符串内容与行内注释尾巴等长刷白；与 `raw` 等长同位）。
+   *
+   * **惰性**（2026-10-16 LS-R6 批改为方法）：行内提示供方高频调用，而它只对
+   * CALL 行要代码视野——早先"每行都算"的实现实测在 52,602 行的真实语料上
+   * 一次整篇扫描 114ms（52k 行 × 全行逐字符刷白），改成"谁要谁付"后同一读数
+   * 降到个位数毫秒。消费方只在**确定要看这行**时才调，别无条件调。
+   */
+  codeView(): string;
   /** `@` 定义行（定义名按解析器口径截，调用方自理） */
   readonly isDefinition: boolean;
   /** 行首是 CALL 直系族（名字槽判据，同一张 `CALL_FAMILY` 表） */
@@ -120,12 +127,12 @@ interface VisibleCodeLine {
 
 /**
  * 可见代码行的**唯一**遍历（2026-10-16 语言服务批）：
- * `scanFileRefs`（反向索引）与 `scanUndefinedCallTargets`（未定义 CALL 波浪线）共用
- * ——屏蔽规则（`[SKIPSTART]` 区、空行、整行 `;`、`#` 指令、`$` 标签、`@` 定义行）
- * 与"哪行有名字槽"只写在这里。两处各写一遍就是第二判据，漂移的表现是
- * "引用面板说没有、波浪线却红"（反之亦然）。
+ * `scanFileRefs`（反向索引）/ `scanUndefinedCallTargets`（未定义 CALL 波浪线）/
+ * `callArgumentHints`（LS-R6 实参位提示）共用——屏蔽规则（`[SKIPSTART]` 区、空行、
+ * 整行 `;`、`#` 指令、`$` 标签、`@` 定义行）与"哪行有名字槽"只写在这里。
+ * 三处各写一遍就是第二判据，漂移的表现是"引用面板说没有、波浪线却红"（反之亦然）。
  */
-function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
+export function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
   const lines = normalizeEol(text).split('\n');
   let inSkipBlock = false;
   for (let i = 0; i < lines.length; i++) {
@@ -145,7 +152,7 @@ function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
 
     if (trimmed.startsWith('@')) {
       // 定义行：名字提取按解析器口径（调用方自理）；调用判据一概不适用
-      yield { line: i + 1, raw, code: '', isDefinition: true, isCallLine: false, keywordEnd: -1 };
+      yield { line: i + 1, raw, codeView: () => '', isDefinition: true, isCallLine: false, keywordEnd: -1 };
       continue;
     }
 
@@ -154,12 +161,20 @@ function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
     const isCallLine = lead !== null && CALL_FAMILY.has(lead[0]!.toUpperCase());
     // 名字槽起点（行内 0 基偏移）= 缩进 + 关键字长度；缩进只算行首空白（trailing 会干扰差值）
     const keywordEnd = isCallLine ? raw.length - raw.trimStart().length + lead![0]!.length : -1;
-    yield { line: i + 1, raw, code: codeViewOf(raw), isDefinition: false, isCallLine, keywordEnd };
+    let codeCache: string | undefined;
+    yield {
+      line: i + 1,
+      raw,
+      codeView: () => (codeCache ??= codeViewOf(raw)),
+      isDefinition: false,
+      isCallLine,
+      keywordEnd,
+    };
   }
 }
 
 /** 归一化快路径：无小写拉丁（半/全角）就不分配 toUpperCase 副本（412 万行的热路径）。 */
-function normalizedUpper(run: string): string {
+export function normalizedUpper(run: string): string {
   return /[a-zａ-ｚ]/.test(run) ? run.toUpperCase() : run;
 }
 
@@ -173,7 +188,7 @@ function normalizedUpper(run: string): string {
  */
 export function scanFileRefs(text: string, hasName: (normalizedName: string) => boolean): FileRefs {
   const out: RefRun[] = [];
-  for (const { line, raw, code, isDefinition, isCallLine, keywordEnd } of visibleCodeLines(text)) {
+  for (const { line, raw, isDefinition, isCallLine, keywordEnd, codeView } of visibleCodeLines(text)) {
     if (isDefinition) {
       // 定义行：名字按**解析器的口径**截（终止符 `(`/空白/`;` + 截后 trim，与
       // `parseFunctionDefinition` 逐字符对齐——真语料实测 4 条定义名带全角空白，
@@ -193,6 +208,7 @@ export function scanFileRefs(text: string, hasName: (normalizedName: string) => 
 
     let slotTaken = !isCallLine; // 非调用行没有槽位概念，全部走 mention
 
+    const code = codeView();
     TOKEN_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = TOKEN_RE.exec(code)) !== null) {
@@ -237,8 +253,9 @@ export interface UndefinedCallTarget {
  */
 export function scanUndefinedCallTargets(text: string, hasName: (upper: string) => boolean): UndefinedCallTarget[] {
   const out: UndefinedCallTarget[] = [];
-  for (const { line, raw, code, isCallLine, keywordEnd } of visibleCodeLines(text)) {
+  for (const { line, raw, isCallLine, keywordEnd, codeView } of visibleCodeLines(text)) {
     if (!isCallLine) continue;
+    const code = codeView();
     TOKEN_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = TOKEN_RE.exec(code)) !== null) {

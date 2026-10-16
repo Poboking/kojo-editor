@@ -508,4 +508,5 @@ export type {
   EditorSemanticTokenSpan,
   EditorSemanticTokenType,
 } from './slots';
+export type { EditorInlayHint, EditorInlayHintRequest, EditorInlayHintResult } from './slots';
 export { MODEL_TOKEN_CLASS, locateIdentifier, modelLineAt, splitModelLines, unicodeTokenAt } from './semantic-locate';

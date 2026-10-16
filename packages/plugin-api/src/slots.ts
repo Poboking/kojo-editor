@@ -386,7 +386,7 @@ export interface EditorDocumentSymbolRequest {
   readonly lineCount?: number;
 }
 
-/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` / `codeLens` / `semanticToken` / `references` / `rename`；新增能力 additive 追加联合成员，不改旧成员） */
+/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` / `codeLens` / `semanticToken` / `references` / `rename` / `inlayHint`；新增能力 additive 追加联合成员，不改旧成员） */
 export type EditorLanguageServiceRequest =
   | EditorDefinitionRequest
   | EditorDocumentSymbolRequest
@@ -395,7 +395,8 @@ export type EditorLanguageServiceRequest =
   | EditorCodeLensRequest
   | EditorSemanticTokenRequest
   | EditorReferencesRequest
-  | EditorRenameRequest;
+  | EditorRenameRequest
+  | EditorInlayHintRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -479,7 +480,8 @@ export type EditorLanguageServiceResult =
   | EditorCodeLensResult
   | EditorSemanticTokenResult
   | EditorReferencesResult
-  | EditorRenameResult;
+  | EditorRenameResult
+  | EditorInlayHintResult;
 
 /**
  * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
@@ -645,6 +647,64 @@ export interface EditorSemanticTokenResult {
   readonly kind: 'semanticToken';
   readonly spans: readonly EditorSemanticTokenSpan[];
 }
+
+/* ------------------------------ inlayHint（第七员） ------------------------------ */
+
+/**
+ * 行内提示（LS-R6，2026-10-16 语言服务批）——同一枚单槽的**第七个**判别成员
+ * （additive：往两个联合的末尾各加一行，宿主与既有贡献方零改动）。
+ *
+ * ## 这条能力回答什么
+ *
+ * 「**这一格实参会落到形参表的哪一格**」——调用点实参的形参名。它必须由持有函数签名
+ * 索引的一方回答（ERB 是解析器的 `@` 头形参表），词法正则答不了。
+ *
+ * ## 与签名帮助（`kojo-signature`）的分工
+ *
+ * 签名帮助是**拉**（光标进括号才弹一次浮层），行内提示是**常驻**（整屏实参位都标着）；
+ * 数据源可以同源（槽位表 / 形参表），呈现面互不替代。
+ *
+ * ## 与 codeLens 的预算口径差异
+ *
+ * 行内提示**不插行**（Monaco 里是行内嵌片，行高不变、只把本行余部往右推），所以
+ * codeLens 那套"每 5 行 1 条"的密度档在这里**不适用**；宿主侧仍保留体量档与条数上限
+ * （见宿主 `kojo-inlay-hints.ts` 的代价模型）。供方纪律不变：索引缺席返回空数组、
+ * 不读盘、绝不触发整项目扫描——只对请求给进来的这份缓冲区做单遍线性扫描。
+ */
+export interface EditorInlayHintRequest {
+  readonly kind: 'inlayHint';
+  readonly path: string;
+  /** 模型全文（与 documentSymbol / foldingRange 同族：提示钉在缓冲区坐标上） */
+  readonly text: string;
+  readonly project: GameProject | null;
+  /** 文件行数（体量事实；宿主据此降级。供方按既有纪律**不据此少报**） */
+  readonly lineCount?: number;
+}
+
+/**
+ * 一条行内提示：画在 `line:column` 所指字符**之前**的一小段文本。
+ *
+ * 坐标为**模型坐标**（1 基行、1 基 UTF-16 码元列），与 `EditorSemanticTokenSpan` 同一
+ * 口径——越界与乱序由宿主夹取/丢弃，贡献方不许假定自己算准了列。
+ * `label` 宿主原样显示不加工；`tooltip` 可选（中文，面向作者）。
+ */
+export interface EditorInlayHint {
+  readonly line: number;
+  readonly column: number;
+  /** 提示文本（如形参名 `変動フラグ:` / `ARG:1:`） */
+  readonly label: string;
+  /** 悬停说明（缺省 = 无） */
+  readonly tooltip?: string;
+  /** 提示与前方文字之间留空（Monaco `paddingLeft`；缺省 = 不留） */
+  readonly paddingLeft?: boolean;
+}
+
+/** 行内提示响应；空数组 = 认这个文件但这篇没有可证明的提示 */
+export interface EditorInlayHintResult {
+  readonly kind: 'inlayHint';
+  readonly hints: readonly EditorInlayHint[];
+}
+
 
 /**
  * 查找引用请求（R2，2026-10-16 语言服务批）——同一单槽的**第七个**判别成员

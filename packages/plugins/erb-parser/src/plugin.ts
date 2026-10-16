@@ -31,6 +31,7 @@ import { definitionTargetsAt, functionAt } from './symbols';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
 import { erbSemanticTokens } from './semantic-tokens';
+import { callArgumentHints, inlaySlotsOf } from './inlay-hints';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
@@ -827,6 +828,29 @@ export function createErbParserPlugin(): Plugin {
           if (request.kind !== 'semanticToken') return undefined;
           if (!isDialect(request.path)) return undefined;
           return { kind: 'semanticToken', spans: erbSemanticTokens(request.text, index) };
+        },
+      });
+
+      /* ---------------- 实参位行内提示（LS-R6，2026-10-16 语言服务批） ----------------
+
+       同一枚槽的第七个判别成员。判据为什么必须住在本包：提示说什么（第 j 个实参 =
+       第 j 个声明槽，槽名来自被调方 `@` 头）全是 `ErbIndex` 的私产——放宿主就得让宿主
+       认识形参表，放别的插件就得把索引再抄一份（与 erb-definition / erb-workspace-symbols
+       同一条理由）。说什么 / 不说什么的可证明边界与性能纪律见 `./inlay-hints.ts` 头注。
+
+       索引缺席（未开项目 / 还没建好）⇒ `undefined` = 本包不答（与 workspace-symbols
+       同一区分：真没有提示 ≠ 我还没有名录）；非方言文件同样 `undefined`。
+       宿主侧的体量降级与 Monaco 形状翻译见 `app/src/monaco/kojo-inlay-hints.ts`。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-inlay-hints',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'inlayHint') return undefined;
+          if (!isDialect(request.path)) return undefined;
+          const idx = index;
+          if (!idx) return undefined;
+          return { kind: 'inlayHint', hints: callArgumentHints(request.text, (name) => inlaySlotsOf(idx, name)) };
         },
       });
     },

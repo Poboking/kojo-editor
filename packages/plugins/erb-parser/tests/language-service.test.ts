@@ -116,6 +116,7 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
       'erb-definition',
       'erb-folding',
       'erb-references',
+      'erb-inlay-hints',
       'erb-semantic-tokens',
       'erb-symbols',
       'erb-usage-lens',
