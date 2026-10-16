@@ -32,6 +32,11 @@ import {
 } from '../monaco/kojo-code-lens';
 import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
 import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
+import {
+  collectInlayHints,
+  inlayHintsAffordable,
+  installInlayHintsProvider,
+} from '../monaco/kojo-inlay-hints';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
 import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
 import { dialectForLanguage, installDocumentFormatter, toTextEdits, type FormatHandlers } from '../monaco/kojo-format';
@@ -74,6 +79,7 @@ import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTable
 import { applyReferenceEdits, installErbRename } from '../monaco/erb-rename';
 import { collectReferenceLocations, installReferenceProvider } from '../monaco/find-references';
 import { installKojoRename } from '../monaco/kojo-rename';
+import { installImplementationProvider } from '../monaco/erb-implementation';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { CJK_TYPING_BASELINE, editorOptionsForLineCount } from './editor-options';
@@ -1473,6 +1479,42 @@ export function EditorPane({
         return key ? entriesRef.current.get(key)?.model : undefined;
       },
     });
+    // 跳到实现（R3 残项，2026-10-16）：数据源 = `erb.parser` 的 `byName`（本项目用户函数
+    // 的定义位；引擎系统函数不在索引 ⇒ 不应答 = 真话"没有实现"）。三条腿复用转到定义的
+    // 分腿判据与链接构造（`planDefinitionJump` / `toDefinitionLinks`），跨文件落地同一条
+    // `editor.revealLocation` 通道——不新造第二套跳转。取数走服务本体而非 languageService
+    // 槽（同 erb-rename 先例：为转发加联合成员换不来新数据）。
+    const implementationDisposer = installImplementationProvider(monaco, {
+      canAnswer: (model) => {
+        const path = filePathRef.current;
+        return !!path && !sugarModelRef.current && model === editorRef.current?.getModel();
+      },
+      currentIndex: () => {
+        try {
+          return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+        } catch {
+          return null;
+        }
+      },
+      navigate: (location) => {
+        kernel.bus.emit('editor.revealLocation', {
+          filePath: location.filePath,
+          line: location.line,
+          ...(location.column !== undefined ? { column: location.column } : {}),
+          source: '跳到实现',
+        });
+      },
+      openModelFor: (filePath) => {
+        const key = matchOpenedPath(entriesRef.current.keys(), filePath);
+        return key ? entriesRef.current.get(key)?.model : undefined;
+      },
+      pathForUri: (uri) => {
+        for (const [path, entry] of entriesRef.current) {
+          if (entry.model.uri.toString() === uri) return path;
+        }
+        return undefined;
+      },
+    });
     // `.kojo` 用户函数改名（R1，2026-10-16）：同一枚槽的第八个判别成员。ERB 方言不归它
     // 管（全项目改名走上面 `erbRenameDisposer` 的专用通道）；`.kojo` 的判定（可证明引用面
     // + 整卷复核）全在糖线，宿主只做 Monaco 协议翻译与落地前的现文本验证（模块头注）。
@@ -1560,6 +1602,27 @@ export function EditorPane({
         });
       },
     });
+    // 行内提示（LS-R6，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别成员。
+    // 应答判据与 codeLens 逐字同款：只认活动标签的真 model（糖视图挂的是只读派生 model，
+    // 它的行列不属于原文），体量档 `inlayHintsAffordable` 判在请求之前（52,602 行实测
+    // 50ms/次，档线与 stickyScroll / 面包屑 / codeLens 同一条）。提示说什么（实参落
+    // 哪个形参槽）全在 erb-parser（`erb-inlay-hints`），宿主零判据——取舍见
+    // `monaco/kojo-inlay-hints.ts` 与 `plugins/erb-parser/src/inlay-hints.ts` 头注。
+    const inlayHintsDisposer = installInlayHintsProvider(monaco, {
+      resolve: (model) => {
+        const path = filePathRef.current;
+        if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return [];
+        const lineCount = model.getLineCount();
+        if (!inlayHintsAffordable(lineCount)) return [];
+        return collectInlayHints(kernel.slots.query('ui.editor.languageService'), {
+          kind: 'inlayHint',
+          path,
+          text: model.getValue(),
+          project: kernel.project.current(),
+          lineCount,
+        });
+      },
+    });
     return () => {
       nameColorUnsub();
       fontSizeUnsub();
@@ -1574,10 +1637,12 @@ export function EditorPane({
       formatterDisposer.dispose();
       rangeFormatterDisposer.dispose();
       codeLensDisposer.dispose();
+      inlayHintsDisposer.dispose();
       erbCompletionDisposer.dispose();
       erbRenameDisposer.dispose();
       referenceSearchDisposer.dispose();
       kojoRenameDisposer.dispose();
+      implementationDisposer.dispose();
       completionDisposer.dispose();
       semanticDisposer.dispose();
       foldingDisposer.dispose();
