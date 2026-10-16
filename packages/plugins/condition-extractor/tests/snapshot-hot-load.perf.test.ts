@@ -93,6 +93,29 @@ function medianOf(runs: number, fn: () => void): number {
   return ds[Math.floor(ds.length / 2)]!;
 }
 
+/**
+ * 两条腿**同一窗口交替采样**（每轮各测一次，轮内顺序逐轮反转），各自取中位数。
+ * 口径抄 `packages/plugins/erb-parser/tests/semantic-tokens.perf.test.ts` 的 `measureTogether`：
+ * 先后两个独立窗口在 CI 共享 CPU 上不可比（`afterLoadMs` 47.7 vs `beforeLoadMs` 41.7 那次红
+ * 就是跨窗互换高低）。同窗交替后两条腿铺满同一段负载曲线，窗口漂移被摊掉。
+ * @returns 与 `fns` 同序的中位数数组
+ */
+function measureTogether(runs: number, fns: readonly (() => void)[]): number[] {
+  const buckets: number[][] = fns.map(() => []);
+  const idx = fns.map((_, f) => f);
+  for (let i = 0; i < runs; i++) {
+    for (const f of i % 2 === 0 ? idx : [...idx].reverse()) {
+      const t0 = performance.now();
+      fns[f]!();
+      buckets[f]!.push(performance.now() - t0);
+    }
+  }
+  return buckets.map((ds) => {
+    ds.sort((a, b) => a - b);
+    return ds[Math.floor(ds.length / 2)]!;
+  });
+}
+
 const ms = (n: number): string => `${n.toFixed(1)}ms`;
 
 /* ============================== before：v4 急还原 ============================== */
@@ -187,12 +210,17 @@ const parsed = JSON.parse(json) as unknown;
 describe('PERF-7 抽取快照热载合成基准（2,000 文件 / 28k 函数桶 / 168k 依赖）', () => {
   const encodeMs = medianOf(3, () => void JSON.stringify(encodeBuckets({ buckets: srcBuckets, expect: EXPECT })));
   const jsonParseMs = medianOf(3, () => void JSON.parse(json));
-  const afterLoadMs = medianOf(5, () => {
-    if (decodeBuckets(parsed, EXPECT) === null) throw new Error('decode failed');
-  });
-  const beforeLoadMs = medianOf(5, () => {
-    if (decodeBucketsEager(parsed, EXPECT) === null) throw new Error('eager decode failed');
-  });
+  // 装载段的 A/B **必须在同一窗口里交替**（跨窗口的 median 不可比，理由见 measureTogether）
+  const hotLoad = measureTogether(5, [
+    () => {
+      if (decodeBuckets(parsed, EXPECT) === null) throw new Error('decode failed');
+    },
+    () => {
+      if (decodeBucketsEager(parsed, EXPECT) === null) throw new Error('eager decode failed');
+    },
+  ]);
+  const afterLoadMs = hotLoad[0]!;
+  const beforeLoadMs = hotLoad[1]!;
   const after = decodeBuckets(parsed, EXPECT)!;
   const before = decodeBucketsEager(parsed, EXPECT)!;
   const consumeMs = medianOf(3, () => {
@@ -231,6 +259,7 @@ describe('PERF-7 抽取快照热载合成基准（2,000 文件 / 28k 函数桶 /
     );
     console.log(
       `[perf7][ce-load] before(v4 急还原) ${ms(beforeLoadMs)} → after(v5 懒还原) ${ms(afterLoadMs)}` +
+        `（同窗交替 n=5，median）` +
         ` ｜ 省 ${ms(beforeLoadMs - afterLoadMs)}（after/before = ${(afterLoadMs / beforeLoadMs).toFixed(2)}）·` +
         ` 全消费最坏口径 ${ms(consumeMs)}（= 装载 + 每个函数都被问一次）· 同段共有的 JSON.parse ${ms(jsonParseMs)}`,
     );

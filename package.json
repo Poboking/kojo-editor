@@ -7,7 +7,9 @@
   "type": "module",
   "packageManager": "pnpm@11.22.0",
   "scripts": {
-    "test": "vitest run",
+    "test": "pnpm test:unit && pnpm test:perf",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:watch": "vitest",
     "test:erbcheck": "node tools/verify.mjs erbcheck",
     "verify:engine": "node tools/clidbg-run.cjs",

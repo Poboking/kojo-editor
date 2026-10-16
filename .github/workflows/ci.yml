@@ -36,8 +36,12 @@ jobs:
         run: pnpm install
 
       # 无游戏目录 → 真实工程集成冒烟/金样本自动跳过（describe.skipIf）
-      - name: Unit + integration tests
-        run: pnpm test
+      # 两池必须分开跑：功能用例吃满并行池，墙钟计时用例挤进同一池会互相饿死（CI 随机红的根因）。
+      - name: 功能用例（并行池）
+        run: pnpm test:unit
+
+      - name: 计时预算用例（串行静默池）
+        run: pnpm test:perf
 
       - name: Typecheck (root)
         run: pnpm typecheck

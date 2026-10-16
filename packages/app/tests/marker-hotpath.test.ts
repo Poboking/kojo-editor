@@ -132,6 +132,18 @@ function syncCost(fn: () => void): number {
   return performance.now() - t0;
 }
 
+/**
+ * **同窗对照分母**：同一份文本、同一个 setup 形态走「改动前三路本地同步」（重活在同步轮里跑完）
+ * 的那一次 `refresh()` 成本。
+ *
+ * 为什么要有它：`expect(ms).toBeLessThan(2)` 这种**单样本绝对预算**在 CI 上是抛硬币——
+ * 安静时 0.15–0.6 ms、并行池里被别的 worker 饿到 2.5 ms（2026-10 六次红全这么来的）。
+ * 同窗量一个"重活就地跑完"的成本当分母，负载对分子分母同时抬，判据（装配 ≪ 全部 CPU）才稳。
+ */
+function heavySyncCost(): number {
+  return syncCost(() => setup(false, true).runner.refresh('/a.erb', () => TEXT));
+}
+
 describe('装饰热路径读数（真装饰器 + 6000 行合成文件）', () => {
   it('改动前：重装饰在同步轮里跑完（本轮耗时 = 全部 CPU）', () => {
     const s = setup(false, true);
@@ -145,13 +157,19 @@ describe('装饰热路径读数（真装饰器 + 6000 行合成文件）', () =>
   it('改动后：同步轮只装配——重装饰一次都不在本轮跑，发布分两拍', async () => {
     const s = setup(true, true);
     const ms = syncCost(() => s.runner.refresh('/a.erb', () => TEXT));
+    const heavyMs = heavySyncCost(); // 同一轮、同一份文本的"重活就地跑完"对照
     expect(s.invokeCount()).toBe(0); // 同步轮里一次通道调用都没发出（只排进 runLatest）
     expect(s.published).toHaveLength(1);
     expect(s.published[0]!.length).toBe(1); // 此刻屏上只有轻的那一档
     await s.settle();
     expect(s.invokeCount()).toBe(2); // 两条重装饰都在"线程"上跑过
     expect(s.published.at(-1)!.length).toBeGreaterThan(1); // 重装饰回来，整档替换
-    expect(ms).toBeLessThan(2);
+    console.info(
+      `[PERF-4] 同步轮只装配 ${ms.toFixed(2)} ms ｜ 同窗重活就地 ${heavyMs.toFixed(2)} ms` +
+        ` ｜ 比值 ${(ms / heavyMs).toFixed(4)}（判据 <0.2）`,
+    );
+    expect(ms).toBeLessThan(heavyMs * 0.2);
+    expect(ms).toBeLessThan(200); // 塌方级绝对护栏（只拦"整档重算搬回同步轮"这种量级事故）
   });
 
   it('两条走法结果逐字段相等（offload 不改语义）＋ 同步轮读数', async () => {
@@ -199,11 +217,17 @@ describe('装饰热路径读数（真装饰器 + 6000 行合成文件）', () =>
   it('worker 不在表时：异步就地执行（同步轮不跑重活，CPU 留在本线程）', async () => {
     const s = setup(true, false);
     const ms = syncCost(() => s.runner.refresh('/a.erb', () => TEXT));
+    const heavyMs = heavySyncCost(); // 同一轮、同一份文本的"重活就地跑完"对照
     expect(s.published).toHaveLength(1); // 只有没声明 offloadKind 的轻装饰
     expect(s.published[0]!.length).toBe(1);
     await s.settle();
     expect(s.published.at(-1)!.length).toBeGreaterThan(1);
-    expect(ms).toBeLessThan(2);
+    console.info(
+      `[PERF-4] worker 不在表（异步就地）同步轮 ${ms.toFixed(2)} ms ｜ 同窗重活就地 ${heavyMs.toFixed(2)} ms` +
+        ` ｜ 比值 ${(ms / heavyMs).toFixed(4)}（判据 <0.2）`,
+    );
+    expect(ms).toBeLessThan(heavyMs * 0.2);
+    expect(ms).toBeLessThan(200); // 塌方级绝对护栏
     expect(s.invokeCount()).toBe(0); // 一条都没进通道
     expect(s.runner.stats().inline).toBe(2);
     expect(s.runner.stats().worker).toBe(0);

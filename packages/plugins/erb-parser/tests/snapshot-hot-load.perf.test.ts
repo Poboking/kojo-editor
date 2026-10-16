@@ -95,6 +95,31 @@ function medianOf(runs: number, fn: () => void): number {
   return ds[Math.floor(ds.length / 2)]!;
 }
 
+/**
+ * A/B 两条腿**同一窗口交替采样**（每轮各测一次，轮内顺序逐轮反转），各自取中位数。
+ *
+ * 为什么不能各测各的（口径抄 `semantic-tokens.perf.test.ts` 的 `measureTogether`）：
+ * 先后两个独立窗口在 CI 共享 CPU 上**不可比**——`after ≤ before` 的三条红字
+ * （217 vs 207、276 vs 246、383 vs 295 ms）就是跨窗互换高低的代价，不是代码变慢。
+ * 同窗交替后两条腿的样本均匀铺满同一段负载曲线，窗口漂移与轮内顺序偏差都被摊掉。
+ * @returns 与 `fns` 同序的中位数数组
+ */
+function measureTogether(runs: number, fns: readonly (() => void)[]): number[] {
+  const buckets: number[][] = fns.map(() => []);
+  const idx = fns.map((_, f) => f);
+  for (let i = 0; i < runs; i++) {
+    for (const f of i % 2 === 0 ? idx : [...idx].reverse()) {
+      const t0 = performance.now();
+      fns[f]!();
+      buckets[f]!.push(performance.now() - t0);
+    }
+  }
+  return buckets.map((ds) => {
+    ds.sort((a, b) => a - b);
+    return ds[Math.floor(ds.length / 2)]!;
+  });
+}
+
 const ms = (n: number): string => `${n.toFixed(1)}ms`;
 
 /* ============================== before：v4 急还原 ============================== */
@@ -251,17 +276,9 @@ describe('PERF-7 快照热载合成基准（2,000 文件 / 100,000 函数）', (
   const encodeMs = medianOf(3, () => void JSON.stringify(encodeEntries(coldEntries)));
   const jsonParseMs = medianOf(3, () => void JSON.parse(json));
 
-  // ---- 热载段 1：coerce（JSON.parse 之后 → 条目可用） ----
-  const afterCoerceMs = medianOf(5, () => {
-    const snap = coerceSnapshot({ version: SNAPSHOT_VERSION, rootDir: ROOT, savedAt: 1, entries: parsedV5 }, ROOT);
-    if (snap === null) throw new Error('coerce failed');
-  });
-  const beforeCoerceMs = medianOf(5, () => {
-    const snap = decodeEntriesEager(parsedV5);
-    if (snap === null) throw new Error('eager decode failed');
-  });
-
-  // ---- 热载段 2：聚合（byName） ----
+  // ---- 热载段 1（coerce）+ 段 2（聚合）：**四条腿同一窗口交替**，各自 median ----
+  // 为什么要并成一个窗口：`after ≤ before` 与 `afterTotal ≤ beforeTotal` 是跨腿比较，
+  // 而先后两个独立 medianOf(5) 窗口在共享 CPU 上不可比（CI 三条红字即此代价）。
   const afterSnap = coerceSnapshot(
     { version: SNAPSHOT_VERSION, rootDir: ROOT, savedAt: 1, entries: parsedV5 } as unknown as IndexSnapshot,
     ROOT,
@@ -270,8 +287,22 @@ describe('PERF-7 快照热载合成基准（2,000 文件 / 100,000 函数）', (
   const beforeEntries = decodeEntriesEager(parsedV5)!;
   const beforeFiles = Object.values(beforeEntries).map((e) => e.file);
 
-  const afterAggMs = medianOf(5, () => void aggregateIndex(afterFiles));
-  const beforeAggMs = medianOf(5, () => void aggregateIndex(beforeFiles));
+  const hotLoad = measureTogether(5, [
+    () => {
+      const snap = coerceSnapshot({ version: SNAPSHOT_VERSION, rootDir: ROOT, savedAt: 1, entries: parsedV5 }, ROOT);
+      if (snap === null) throw new Error('coerce failed');
+    },
+    () => {
+      const snap = decodeEntriesEager(parsedV5);
+      if (snap === null) throw new Error('eager decode failed');
+    },
+    () => void aggregateIndex(afterFiles),
+    () => void aggregateIndex(beforeFiles),
+  ]);
+  const afterCoerceMs = hotLoad[0]!;
+  const beforeCoerceMs = hotLoad[1]!;
+  const afterAggMs = hotLoad[2]!;
+  const beforeAggMs = hotLoad[3]!;
 
   // ---- 热载段 3：反向引用聚合（v4 每次热开都建；v5 推迟到首次消费） ----
   const refsByPath = new Map<string, FileRefs>();
@@ -338,17 +369,24 @@ describe('PERF-7 快照热载合成基准（2,000 文件 / 100,000 函数）', (
   });
 
   it('落盘快路径：未消费的懒条目原样复用元组（存全库不再重建 100k 元组）', () => {
-    const decoded = decodeEntries(parsedV5)!;
+    // 两条腿各自**独立**的 decode 目标：重建那一腿会把懒条目全部消费掉，
+    // 与快路径共用同一份对象就会污染快路径的样本（交替采样必须要求两腿互不干扰）。
+    const fastTarget = decodeEntries(parsedV5)!;
+    const rebuiltTarget = decodeEntries(parsedV5)!;
     // 先钉"零重建"这件事（消费之后就再也拿不到同一对象了）
-    expect(encodeEntries(decoded)[pathOf(0)]).toBe(parsedV5[pathOf(0)]);
-    const fastMs = medianOf(3, () => void JSON.stringify(encodeEntries(decoded)));
-    const rebuilt = medianOf(3, () => {
-      for (const e of Object.values(decoded)) void (e.file as ErbFile).functions; // 全部消费 ⇒ 快路径失效
-      void JSON.stringify(encodeEntries(decoded));
-    });
+    expect(encodeEntries(fastTarget)[pathOf(0)]).toBe(parsedV5[pathOf(0)]);
+    const together = measureTogether(7, [
+      () => void JSON.stringify(encodeEntries(fastTarget)),
+      () => {
+        for (const e of Object.values(rebuiltTarget)) void (e.file as ErbFile).functions; // 全部消费 ⇒ 快路径失效
+        void JSON.stringify(encodeEntries(rebuiltTarget));
+      },
+    ]);
+    const fastMs = together[0]!;
+    const rebuilt = together[1]!;
     console.log(
       `[perf7][encode] 未消费(复用盘上元组) ${ms(fastMs)} → 全消费后(逐字段重建再序列化) ${ms(rebuilt)}` +
-        ` ｜ 增量落盘（改 1 个文件也要存全库）因此同样不吃这笔重建`,
+        `（同窗交替 n=7，median）｜ 增量落盘（改 1 个文件也要存全库）因此同样不吃这笔重建`,
     );
     expect(fastMs).toBeLessThanOrEqual(rebuilt);
   });

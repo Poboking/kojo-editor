@@ -1,9 +1,12 @@
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
+import { mainExclude } from './tools/perf-suite.mjs';
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+/** 仓库根（本文件所在目录）；分池扫描以它为锚，与 `--config` 的调用目录无关 */
+const rootDir = fileURLToPath(new URL('.', import.meta.url));
 
-export default defineConfig({
+export const config = defineConfig({
   resolve: {
     extensions: ['.ts', '.tsx', '.mts', '.js', '.jsx', '.mjs', '.cjs', '.json'],
     alias: {
@@ -33,7 +36,13 @@ export default defineConfig({
     // tools/tests = 仓库 node 验收工具自己的纯逻辑护栏（产物落点 / 语料盘写入门禁）；
     // 只有 tsconfig include 里的 packages/** 才进 tsc，故这一支不经 root typecheck。
     include: ['packages/**/tests/**/*.test.ts', 'tools/tests/**/*.test.ts'],
+    // 墙钟计时用例**不在本池跑**：并行池里计时用例互相饿死 = CI 随机红（分池判据见 tools/perf-suite.mjs）。
+    // vitest 里显式写 exclude 会覆盖默认值，所以默认那三项由 mainExclude() 自己列全。
+    exclude: [...mainExclude(rootDir)],
     environment: 'node',
     testTimeout: 20000,
   },
 });
+
+/** 计时池（`vitest.perf.config.ts`）直接复用这一个对象，杜绝两份 alias 漂移 */
+export default config;
