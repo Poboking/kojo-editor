@@ -80,12 +80,15 @@ export {
   MARKET_MAX_INDEX_BYTES,
   MARKET_INDEX_TIMEOUT_MS,
   MARKET_INDEX_TTL_MS,
+  MARKET_DOWNLOAD_TIMEOUT_BASE_MS,
+  MARKET_DOWNLOAD_TIMEOUT_MS_PER_MIB,
   PACK_ID_RE,
   PACK_VERSION_RE,
   VERSION_SEG_RE,
   SHA256_HEX_RE,
   MARKET_SERVICE_KEY,
   MarketError,
+  marketDownloadTimeoutMs,
   packEntryPathProblem,
   packFilesProblem,
   packIdKindConflicts,
@@ -103,6 +106,7 @@ export {
 } from './market';
 export type {
   InstalledPack,
+  MarketDownloadProgress,
   MarketIndex,
   MarketIndexEntry,
   MarketIndexRefresh,

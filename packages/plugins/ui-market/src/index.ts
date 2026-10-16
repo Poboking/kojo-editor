@@ -11,7 +11,8 @@
  *    `latest` / `ahead` / 版本要求不够的行**不给按钮**，只在行上说清本机是哪一版；
  * 3. 已装列表（版本 + 来源；核对码前 8 位、id/kind 只住展开层）；
  * 4. 卸载（**一次确认**，走 `runUninstall`：不确认连服务都不叫）；
- * 5. 拉取列表（挂载走 TTL、按钮硬回源；**数据时间**常驻，失败态显式）；
+ * 5. 拉取列表（挂载走 **stale-while-revalidate**：本地事实零网络上屏、TTL 到期才后台回源，
+ *    cached 静默、refreshed/failed 出声；按钮硬回源；**数据时间**常驻，失败态显式）；
  * 6. 显式态（没有列表 / 读不出 / 目录读不动 / 没有包 ⇒ 各一句人话；绝不空白屏、绝不"加载中"常驻）；
  * 7. 已装的口上包行给「导入为我的口上项目」：面板只发意图
  *    （`workspace.importRequested`，载荷 `source: 'market'` 逐字冻结），
@@ -38,12 +39,14 @@ import {
   PACK_VERSION_RE,
   coreVersion,
   type InstalledPack,
+  type MarketDownloadProgress,
   type MarketService,
   type Plugin,
   type UIPanelProps,
 } from '@kojo/plugin-api';
 import {
   loadMarketSnapshot,
+  pullMarketOutcome,
   pullMarketSnapshot,
   runImport,
   runInstall,
@@ -69,6 +72,7 @@ import {
   indexRowKey,
   installedCountPhrase,
   installBusyNote,
+  installProgressNote,
   pendingKey,
   statusText,
   updatePhrase,
@@ -119,6 +123,8 @@ export interface MarketPanelViewProps {
   onInstall(row: PackRow): void;
   /** 已装的口上包行：把这一条经 `workspace.importRequested` 交给工作区消费方 */
   onImport(rec: InstalledPack): void;
+  /** 索引行来源网址：把 URL 经 `ui.openExternal` 交给壳层（闸在 Rust，本层只发意图） */
+  onOpenSource(url: string): void;
   onRequestUninstall(key: string): void;
   onConfirmUninstall(key: string): void;
   onCancelUninstall(): void;
@@ -137,7 +143,7 @@ export interface MarketPanelViewProps {
  *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row × n（索引）
  *         .mk-row > .mk-main > .mk-head[ span.mk-name | span.mk-badge? | div.mk-actions ]
  *                            + .mk-facts[ span.mk-meta × n ]
- *                  ＋ 行级附属：.mk-warn（版本要求）/ .mk-sub（摘要）/ .mk-sub（来源）/ .mk-detail（展开层）
+ *                  ＋ 行级附属：.mk-warn（版本要求）/ .mk-sub（摘要）/ button.mk-sub.mk-link（来源，可点）/ .mk-detail（展开层）
  * ```
  *
  * 四条结构性口径：
@@ -203,6 +209,7 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
       ...g.rows.map((row) => {
         const e = row.entry;
         const phrase = updatePhrase(row);
+        const sourceUrl = e.sourceUrl;
         return createElement(
           'div',
           { className: 'mk-row', key: indexRowKey(e) },
@@ -227,11 +234,21 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
             ? null
             : createElement('div', { className: 'mk-warn' }, appVersionRequirement(e.minAppVersion)),
           e.summary === undefined ? null : createElement('div', { className: 'mk-sub' }, e.summary),
-          // 来源网址只住**子层**（灰色小行），主行纪律不动；刻意不做 `<a>` 链接——
-          // Tauri webview 里外链没接 opener，点了没反应比没有更坏，作者自己复制即可
-          e.sourceUrl === undefined
+          // 来源网址住**子层**（灰色小行），主行纪律不动；已接 `ui.openExternal` 外链原语
+          // ——button 语义、`mk-sub` 观感不变，只发意图：闸（https + 主机白名单）在 Rust，
+          // 本层不复制白名单、不摸平台（插件够不着）
+          sourceUrl === undefined
             ? null
-            : createElement('div', { className: 'mk-sub' }, `来源 ${e.sourceUrl}`),
+            : createElement(
+                'button',
+                {
+                  className: 'mk-sub mk-link',
+                  type: 'button',
+                  title: `在浏览器打开 ${sourceUrl}`,
+                  onClick: () => p.onOpenSource(sourceUrl),
+                },
+                `来源 ${sourceUrl}`,
+              ),
         );
       }),
     );
@@ -422,14 +439,28 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           });
         }, []);
 
-        /** 打开面板：走 TTL（新鲜期内不回源，但数据时间与拉取结果照样显示） */
+        /**
+         * 打开面板：**stale-while-revalidate** 两段式——
+         * 先零网络读本地立刻上屏（有列表秒出列表，没有就诚实说没有），再后台按 TTL 回源
+         * （TTL 判定在服务里，`cached` = 无事发生）。busy 只罩本地读那一下：
+         * 远程慢（超时最长 15s）不许把"打开面板"卡成"屏幕上像没有包"。
+         */
         const reload = useCallback(async (): Promise<void> => {
-          readSeq.current += 1; // 在途的后台校对不许再落（下面的全量读数比它新）
+          const local = ++readSeq.current; // 在途的后台读数（上一次回源/校对）一律作废
           setBusy(true);
-          const snap = await pullMarketSnapshot(deps, false);
-          setSnapshot(snap);
-          setNote(snap.pullNote);
+          const localSnap = await loadMarketSnapshot(deps);
+          // 本地读到手的这一刻 busy 就交还（背景段再慢也不占用它）；
+          // 快照落不落地看序号：被更新的一手（pull / 下一次挂载）顶掉就整包丢弃
           setBusy(false);
+          if (readSeq.current === local) setSnapshot(localSnap);
+          const remote = ++readSeq.current;
+          void pullMarketOutcome(deps, false).then((out) => {
+            if (readSeq.current !== remote) return; // 序号被抬走 ⇒ 旧读数不倒灌
+            // 服务整体炸了（list-unreadable）不清掉刚上屏的本地事实（与 reconcile 同一条纪律），但要出声
+            if (out.snap.status !== 'list-unreadable') setSnapshot(out.snap);
+            // cached = 一切正常 ⇒ 静默（正常面板不该有废话）；refreshed / failed 才出声
+            if (out.state !== 'cached') setNote(out.snap.pullNote);
+          });
         }, []);
 
         /** 点「拉取列表」：无视 TTL 硬回源一次（作者刚改了注册表就是要立刻看到） */
@@ -442,7 +473,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           setBusy(false);
         }, []);
 
-        // 挂载即拉一次（`defaultActive:false` ⇒ 作者点开侧栏才发数据，不开不占资源）
+        // 挂载即两段式刷新（`defaultActive:false` ⇒ 作者点开侧栏才发数据，不开不占资源）
         useEffect(() => {
           void reload();
         }, [reload, props.refreshTick]);
@@ -452,11 +483,18 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
          * 这里只负责：把这一行交给服务 → 结果写成状态行那一句 → 成了就重读一遍本机事实（不回源）。
          */
         const doInstall = async (row: PackRow): Promise<void> => {
-          if (row.action === 'none' || installing !== null) return;
+          // 先把动作提出局部常量：进度闭包捕获**属性**会丢缩窄（TS 对回调内的 `row.action` 不保留判别）
+          const action = row.action;
+          if (action === 'none' || installing !== null) return;
           const key = indexRowKey(row.entry);
           setInstalling(key);
-          setNote(installBusyNote(row.action, row.entry.name));
-          const out = await runInstall(deps, row.entry, row.action);
+          setNote(installBusyNote(action, row.entry.name));
+          // 进度接进同一条状态行（Rust 侧已节流，这里不重复闸）。回调只在下载段发：
+          // 解压/搬运阶段停在最后一条读数是**如实**的（那两段快，不发假进度）。
+          const onProgress = (p: MarketDownloadProgress): void => {
+            setNote(installProgressNote(action, row.entry.name, p));
+          };
+          const out = await runInstall(deps, row.entry, action, onProgress);
           setInstalling(null);
           setNote(out.note);
           if (out.kind === 'done') {
@@ -519,6 +557,9 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           onPull: () => void pull(),
           onInstall: (row: PackRow) => void doInstall(row),
           onImport: (rec: InstalledPack) => void doImport(rec),
+          // 来源网址可点：只发意图（`ui.openExternal`），壳层调 Rust 原语落地——
+          // 面板不持有任何"能不能开"的判定（闸在 Rust，第二份白名单必然漂）
+          onOpenSource: (url: string) => deps.bus.emit('ui.openExternal', { url }),
           onRequestUninstall: setPending,
           onConfirmUninstall: (key: string) => void doUninstall(key),
           onCancelUninstall: () => setPending(null),
@@ -542,6 +583,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
 
 export {
   loadMarketSnapshot,
+  pullMarketOutcome,
   pullMarketSnapshot,
   runImport,
   runInstall,
@@ -549,6 +591,7 @@ export {
   type ImportOutcome,
   type InstallOutcome,
   type MarketActionDeps,
+  type MarketPullOutcome,
   type MarketSnapshot,
   type UninstallOutcome,
 } from './actions';
@@ -575,6 +618,7 @@ export {
   installedCountPhrase,
   KIND_LABEL,
   matchesQuery,
+  platformFailNote,
   refreshNote,
   REJECT_TEXT,
   rejectNote,

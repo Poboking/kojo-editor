@@ -60,6 +60,7 @@ import {
   dirname,
   endpointProblem,
   join,
+  marketDownloadTimeoutMs,
   packContainerName,
   packIdKindConflicts,
   packStagingName,
@@ -69,6 +70,7 @@ import {
   type FileIO,
   type InstalledPack,
   type Logger,
+  type MarketDownloadProgress,
   type MarketIndex,
   type MarketIndexEntry,
   type MarketIndexRefresh,
@@ -180,6 +182,33 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
 
   async function writeRecords(list: InstalledPack[]): Promise<void> {
     await storage.set(INSTALLED_KEY, list);
+  }
+
+  /**
+   * 已装记录的唯一核验口径：一趟批量 stat 核派生落点在位 → 剔除丢失条目 → 丢了就写回（自愈）。
+   * `installed()` 与 `installedBytes()` 都走这一条 ⇒ 清单与占用两个读数永远同一份在位真相
+   * （面板 `Promise.all` 并发双调会跑两趟 stat——批量 stat 是毫秒级，为此加缓存不值得）。
+   */
+  async function verifiedRecords(): Promise<InstalledPack[]> {
+    const list = await readRecords();
+    // 落点**不存字段**（契约 A3）：按派生路径核，记账里没有第二份真相。
+    // 趟数形态（PERF-10b）：旧写法是 N 条记录 = N 趟串行 `await io.exists`，
+    // 现在 N 条 = **一趟**批量 stat（内核侧按 512 分块走平台现成的 `statFiles` 命令，
+    // 判定与 `exists` 同源：同一个 metadata/stat 调用、取不到一律 `exists:false`，不猜、不补位）。
+    const dirs = list.map((r) => dirOf(r.kind, r.id, r.version));
+    const stats = dirs.length === 0 ? [] : await io.statFiles(dirs);
+    const alive: InstalledPack[] = [];
+    const lost: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i]!;
+      if (stats[i]?.exists === true) alive.push(r);
+      else lost.push(`${r.kind}/${r.id} v${r.version}`);
+    }
+    if (lost.length > 0) {
+      log.warn(`已装清单里有 ${lost.length} 条目录已不在位，一并剔除：${lost.join('；')}`);
+      await writeRecords(alive);
+    }
+    return alive;
   }
 
   /** 删目录但不在"目录本就不存在/被占用"这类清理副作用上炸（清理永远不该盖住主错误） */
@@ -610,7 +639,10 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
    * - **哈希只在 TS 算**（`sha256Hex` 是全仓唯一实现点；宿主层算哈希有机器闸拦着）；
    * - 任何一步失败 ⇒ 暂存区里这一次的容器与解出目录全部删掉，落点要么完整要么不存在。
    */
-  async function installFromIndex(entry: MarketIndexEntry): Promise<InstalledPack> {
+  async function installFromIndex(
+    entry: MarketIndexEntry,
+    onProgress?: (p: MarketDownloadProgress) => void,
+  ): Promise<InstalledPack> {
     const containerName = packContainerName(entry.id, entry.version);
     const unpackedName = packUnpackedName(entry.id, entry.version);
     const unpackedDir = join(stagingRoot, unpackedName);
@@ -623,10 +655,16 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       }
 
       /* ---------- 1. 下载容器（落点由平台侧在暂存区内自己拼） ---------- */
+      // 体积上限与超时都从**同一份**声明换算：上限 = 声明与解压上限取小（撒谎的声明换不来
+      // 无上限下载），超时 = `marketDownloadTimeoutMs`（慢网直连 ~1MB/s ⇒ 每 MiB 1s 预算）。
+      const maxBytes = Math.min(entry.zip.bytes, MARKET_MAX_UNPACKED_BYTES);
       let downloaded: RemoteDownload;
       try {
         downloaded = await remote.marketDownload(entry.zip.url, containerName, {
-          maxBytes: Math.min(entry.zip.bytes, MARKET_MAX_UNPACKED_BYTES),
+          maxBytes,
+          timeoutMs: marketDownloadTimeoutMs(maxBytes),
+          // 进度只透传（节流在平台侧），本层不加工；解压/搬运快，不发进度
+          onProgress,
         });
       } catch (err) {
         throw new MarketError('download-failed', `容器没能从注册表取回来：${errMessage(err)}`, entry.zip.url);
@@ -711,25 +749,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     },
 
     async installed(): Promise<InstalledPack[]> {
-      const list = await readRecords();
-      // 落点**不存字段**（契约 A3）：按派生路径核，记账里没有第二份真相。
-      // 趟数形态（PERF-10b）：旧写法是 N 条记录 = N 趟串行 `await io.exists`，
-      // 现在 N 条 = **一趟**批量 stat（内核侧按 512 分块走平台现成的 `statFiles` 命令，
-      // 判定与 `exists` 同源：同一个 metadata/stat 调用、取不到一律 `exists:false`，不猜、不补位）。
-      const dirs = list.map((r) => dirOf(r.kind, r.id, r.version));
-      const stats = dirs.length === 0 ? [] : await io.statFiles(dirs);
-      const alive: InstalledPack[] = [];
-      const lost: string[] = [];
-      for (let i = 0; i < list.length; i++) {
-        const r = list[i]!;
-        if (stats[i]?.exists === true) alive.push(r);
-        else lost.push(`${r.kind}/${r.id} v${r.version}`);
-      }
-      if (lost.length > 0) {
-        log.warn(`已装清单里有 ${lost.length} 条目录已不在位，一并剔除：${lost.join('；')}`);
-        await writeRecords(alive);
-      }
-      return alive;
+      return verifiedRecords();
     },
 
     installLocalDir,
@@ -737,11 +757,12 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     installFromIndex,
 
     async installedBytes(): Promise<number> {
-      // 口径：记账里逐文件声明字节之和。`pack.json` 的 `files[]` 只列 `files/` 之内的条目
-      // （契约 `packEntryPathProblem` 的前缀闸保证这一点），所以这个数**就是落点的内容字节**
-      // ——不摸盘、不在两处各算一遍（摸盘那份会跟真实目录漂）。
+      // 口径：**核验在位**的各包 files 声明字节之和。`pack.json` 的 `files[]` 只列 `files/`
+      // 之内的条目（契约 `packEntryPathProblem` 的前缀闸保证这一点），所以这个数**就是落点的
+      // 内容字节**——不摸盘逐文件求和（摸盘那份会跟真实目录漂）；在位与否只信 `verifiedRecords`
+      // 那一趟批量 stat，目录已丢的包不计入（与 `installed()` 同一条核验、同一次自愈写回）。
       let total = 0;
-      for (const r of await readRecords()) {
+      for (const r of await verifiedRecords()) {
         for (const f of r.files) total += f.bytes;
       }
       return total;

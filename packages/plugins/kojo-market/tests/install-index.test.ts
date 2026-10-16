@@ -8,6 +8,7 @@ import {
   MARKET_MAX_UNPACKED_BYTES,
   MARKET_SCHEMA_VERSION,
   MarketError,
+  marketDownloadTimeoutMs,
   packContainerName,
   packStagingName,
   packStagingNames,
@@ -16,6 +17,7 @@ import {
   type BatchFileStat,
   type InstalledPack,
   type Logger,
+  type MarketDownloadProgress,
   type MarketIndexEntry,
   type MarketService,
   type PackFileEntry,
@@ -200,6 +202,8 @@ interface FakeOpts {
   wrongEntryBytes?: boolean;
   downloadThrows?: string;
   extractThrows?: string;
+  /** 下载段给服务透传回来的进度帧（测 onProgress 的原样透传） */
+  progressFrames?: MarketDownloadProgress[];
   /** 索引那一行想说什么（默认 = 与容器里的清单一致） */
   declared?: Partial<MarketIndexEntry>;
   /** 索引那行的 zip（默认 = 真容器的 sha256/bytes；要造不符就自己给） */
@@ -290,6 +294,7 @@ class FakeBridge {
       marketDownload: async (url: string, containerName: string, opts?: RemoteDownloadOptions) => {
         this.calls.push('download');
         this.downloadOpts.push(opts);
+        for (const f of this.o.progressFrames ?? []) opts?.onProgress?.(f);
         if (this.o.downloadThrows !== undefined) throw new Error(this.o.downloadThrows);
         // 平台侧的落点决定权：TS 只给名字，这里按名字把字节写进同一个位置
         await this.write(this.staged(containerName), this.containerBytes());
@@ -322,6 +327,8 @@ interface Harness {
   root: string;
   bridge: FakeBridge;
   entry: MarketIndexEntry;
+  /** 服务记账的存储域（判据要直接看"写回自愈"之后记账里剩什么） */
+  storage: ScopedStorage;
   /** 换一次容器内容（重装判据必须在**同一个服务实例**上跑——服务的 remote 是创建时绑定的那一个） */
   retarget(o: FakeOpts): Promise<MarketIndexEntry>;
 }
@@ -334,10 +341,11 @@ async function boot(o: FakeOpts): Promise<Harness> {
   const io = fakeIo(root);
   const bridge = new FakeBridge(o);
   bridge.arm(root, io);
+  const storage = memStorage();
   const svc = createMarketService({
     io,
     remote: bridge.remote(),
-    storage: memStorage(),
+    storage,
     log: quietLog,
     root,
     appVersion: APP_VERSION,
@@ -349,6 +357,7 @@ async function boot(o: FakeOpts): Promise<Harness> {
     root,
     bridge,
     entry: await bridge.entry(),
+    storage,
     retarget: async (next: FakeOpts) => {
       bridge.calls.length = 0;
       bridge.downloadOpts.length = 0;
@@ -422,6 +431,35 @@ describe('installFromIndex 的编排顺序', () => {
     await codeOf(b.svc.installFromIndex(b.entry));
     expect(b.bridge.downloadOpts[0]?.maxBytes).toBe(MARKET_MAX_UNPACKED_BYTES);
     expect(b.bridge.calls).toEqual(['download']); // 谎报的行不会换来"整包摘要对平之后继续解压"
+  });
+
+  it('下载超时按同一份声明换算（marketDownloadTimeoutMs），进度回调原样透传且只在下载段被调', async () => {
+    const tree = { 'a.erb': bytesOf('x') };
+    const manifest = await manifestOf(tree);
+    const seen: MarketDownloadProgress[] = [];
+    const onProgress = (p: MarketDownloadProgress): void => {
+      seen.push(p);
+    };
+    // 假桥在"下载"内回两帧进度（一帧带总数、一帧缺失总数）
+    const h = await boot({
+      files: tree,
+      manifest,
+      progressFrames: [
+        { receivedBytes: 10, totalBytes: 100 },
+        { receivedBytes: 50, totalBytes: null },
+      ],
+    });
+
+    await h.svc.installFromIndex(h.entry, onProgress);
+
+    // 超时 = maxBytes（同一份声明换算，见上一条判据）经纯函数得出，服务层不写第二份公式
+    expect(h.bridge.downloadOpts[0]?.timeoutMs).toBe(
+      marketDownloadTimeoutMs(Math.min(h.entry.zip.bytes, MARKET_MAX_UNPACKED_BYTES)),
+    );
+    expect(seen).toEqual([
+      { receivedBytes: 10, totalBytes: 100 },
+      { receivedBytes: 50, totalBytes: null },
+    ]);
   });
 
   it('解压限额三个数全部来自契约常量（Rust 不写死数值）', async () => {
@@ -688,5 +726,17 @@ describe('已装占用字节（KM-11）', () => {
     expect(await h.svc.installedBytes()).toBe(8 + 6);
     expect((await h.svc.installed()).map((r) => r.id).sort()).toEqual(['demo.pack', 'local.pack']);
     expect(rec.containerSha256).toBeDefined();
+  });
+
+  it('记账有、目录无 ⇒ installedBytes 剔除之且写回自愈（与 installed() 同一条核验）', async () => {
+    const tree = { 'a.erb': bytesOf('12345') };
+    const h = await boot({ files: tree, manifest: await manifestOf(tree) });
+    await h.svc.installFromIndex(h.entry);
+    expect(await h.svc.installedBytes()).toBe(5);
+    // 目录整个丢掉（外部清了盘 / 手滑删了包目录）：占用读数只数核验在位的那部分
+    await h.io.removeDir(await h.svc.installDir('kojo-pack', 'demo.pack', '1.0.0'));
+    expect(await h.svc.installedBytes()).toBe(0);
+    // 写回自愈：记账里那条已丢记录当场被剔除，不是每次读都重新数一遍丢失的
+    expect(await h.storage.get<InstalledPack[]>('installed')).toEqual([]);
   });
 });

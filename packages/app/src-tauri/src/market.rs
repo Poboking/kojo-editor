@@ -14,7 +14,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,15 @@ pub struct MarketDownloadResultDto {
     pub bytes: u64,
     pub status: u16,
     pub final_url: String,
+}
+
+/// 下载进度（经 Tauri Channel 回 JS）。`total_bytes` = 终态响应的 `Content-Length`，
+/// 缺失（chunked 等）⇒ `null`——**如实缺**，不拿累计上限冒充总数（那是造谣）。
+#[derive(Clone, Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketProgressDto {
+    pub received_bytes: u64,
+    pub total_bytes: Option<u64>,
 }
 
 #[derive(Serialize, Debug)]
@@ -282,6 +291,27 @@ pub(crate) fn utf8_text(bytes: &[u8]) -> Result<String, String> {
         .map_err(|e| format!("响应体不是 UTF-8 文本（{} 字节）：{e}", bytes.len()))
 }
 
+/* ---------------------------- 进度节流（纯判定） ---------------------------- */
+
+/// 节流阈值的字节段：累计新增 ≥64 KiB 才发一条（reqwest 的块常在 8–64 KiB，
+/// 逐块直发 128 MiB 会是一万多条 IPC；压到这条后同量级包 ≤2 千条，UI 却已够顺滑）。
+const PROGRESS_MIN_DELTA_BYTES: u64 = 64 * 1024;
+/// 节流阈值的时间段：距上次发出 ≥100 ms 也发（慢网涓流时 UI 不至于长时间停在旧读数）。
+const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
+
+/// 该不该发这条进度（纯函数）。`delta_bytes` = 距上次已发出的新增字节，
+/// `delta_time` = 距上次发出的时长（`None` = 一次都没发过 ⇒ 首块直接发，
+/// UI 不该在 0% 停到半程）。字节段与时间段满足其一即发；新增为 0（收尾重复调用）不发。
+pub(crate) fn progress_due(delta_bytes: u64, delta_time: Option<Duration>) -> bool {
+    if delta_bytes >= PROGRESS_MIN_DELTA_BYTES {
+        return true;
+    }
+    match delta_time {
+        None => true,
+        Some(t) => delta_bytes > 0 && t >= PROGRESS_MIN_INTERVAL,
+    }
+}
+
 /* ---------------------------- 出网（唯一一条） ---------------------------- */
 
 /// 请求用的 client：UA + 超时 + **逐跳重核**策略；代理只认进程环境（见 `DownloadOptions::proxy`）。
@@ -340,6 +370,18 @@ pub(crate) async fn stream_capped<W: Write>(
     max_bytes: u64,
     sink: &mut W,
 ) -> Result<u64, String> {
+    stream_capped_report(response, max_bytes, sink, &mut |_| {}).await
+}
+
+/// `stream_capped` 的带进度形态：每收一块（写盘后）把**运行总量**交给 `on_chunk`，
+/// 发不发、怎么节流由调用方闭包决定（取文本用不上进度，走上面的无回调委托）。
+/// `+ Send`：tauri 命令的 future 必须 `Send`，闭包随循环跨 await 持有。
+pub(crate) async fn stream_capped_report<W: Write>(
+    response: reqwest::Response,
+    max_bytes: u64,
+    sink: &mut W,
+    on_chunk: &mut (dyn FnMut(u64) + Send),
+) -> Result<u64, String> {
     let mut stream = response.bytes_stream();
     let mut total: u64 = 0;
     loop {
@@ -350,6 +392,7 @@ pub(crate) async fn stream_capped<W: Write>(
         total = advance_byte_cap(total, chunk.len(), max_bytes)?;
         sink.write_all(&chunk)
             .map_err(|e| format!("写响应体失败: {e}"))?;
+        on_chunk(total);
     }
     Ok(total)
 }
@@ -389,16 +432,40 @@ fn ensure_tls_provider() {
 /// 下载响应体到 `<staging_dir>/<staging_name>`：同目录临时文件 + rename（既有原子写形态），
 /// 体积双闸走 `guarded_send` / `stream_capped`（**与取文本同一份判定**），
 /// 超限**中止并删掉半截文件**。
+///
+/// `on_progress` 给了就按 [`progress_due`] 节流回报进度（**写盘后**才报——报的是"真落了盘"
+/// 的量；收尾补一发让 UI 落在终值，重复调用由节流判定压掉）；没给则全程零回调。
+/// 总数取终态响应的 `Content-Length`（`guarded_send` 已核 ≤ 体积上限），缺失如实回 `None`。
 pub(crate) async fn download_to_staging(
     staging_dir: &Path,
     url: &str,
     staging_name: &str,
     opts: &DownloadOptions,
+    on_progress: Option<&tauri::ipc::Channel<MarketProgressDto>>,
 ) -> Result<MarketDownloadResultDto, String> {
     if let Some(problem) = container_name_problem(staging_name) {
         return Err(format!("market_download: {problem}"));
     }
     let (response, status, final_url) = guarded_send(url, opts, "market_download").await?;
+    let total_declared = response.content_length();
+    let mut last_report: Option<(u64, Instant)> = None;
+    let mut report = |received: u64| {
+        let Some(channel) = on_progress else { return };
+        let now = Instant::now();
+        let due = match last_report {
+            None => progress_due(received, None),
+            Some((sent, at)) => {
+                progress_due(received.saturating_sub(sent), Some(now.duration_since(at)))
+            }
+        };
+        if due {
+            let _ = channel.send(MarketProgressDto {
+                received_bytes: received,
+                total_bytes: total_declared,
+            });
+            last_report = Some((received, now));
+        }
+    };
 
     std::fs::create_dir_all(staging_dir)
         .map_err(|e| format!("创建暂存目录失败 {}: {e}", staging_dir.display()))?;
@@ -414,13 +481,16 @@ pub(crate) async fn download_to_staging(
         Ok(f) => f,
         Err(e) => return Err(format!("创建暂存文件失败 {}: {e}", tmp.display())),
     };
-    let total = match stream_capped(response, opts.max_bytes, &mut file).await {
+    let total = match stream_capped_report(response, opts.max_bytes, &mut file, &mut report).await {
         Ok(n) => n,
         Err(e) => {
             let _ = std::fs::remove_file(&tmp); // 半截容器不许留在暂存区
             return Err(e);
         }
     };
+    if total > 0 {
+        report(total);
+    }
     drop(file);
     if let Err(e) = std::fs::rename(&tmp, &target) {
         let _ = std::fs::remove_file(&tmp);
@@ -454,6 +524,9 @@ pub(crate) async fn market_download(
     staging_name: String,
     timeout_ms: Option<u64>,
     max_bytes: Option<u64>,
+    // Channel **必传**（tauri 2 的 `Option<Channel>` 不走 CommandArg：Option 的 blanket
+    // 实现要 T: Deserialize，Channel 没有）。JS 侧没进度回调也传一个空通道——照发不误，没人听。
+    on_progress: tauri::ipc::Channel<MarketProgressDto>,
 ) -> Result<MarketDownloadResultDto, String> {
     let staging = staging_dir(&app)?;
     // 写允许域第二道闸：落点由本层拼出，恒在 appDataDir 内（`ensure_in_write_domain` 的常驻根）。
@@ -468,6 +541,7 @@ pub(crate) async fn market_download(
             // 代理不在这里决定：见 `DownloadOptions::proxy`（env ⇒ reqwest system-proxy）
             proxy: None,
         },
+        Some(&on_progress),
     )
     .await
 }

@@ -241,9 +241,10 @@ const CONTRACT_MARKET = nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'market.
 
 describe('安装面单一真源守门（KM-10..12）', () => {
   it('容器下载/解压与 fetchText 同键同面：生产面只住那四个文件，Rust 仍只有三条市场命令', () => {
-    // 新开一个服务键、或让某个插件自己 invoke Rust，都是"第二条远程路"——当场红
+    // 新开一个服务键、或让某个插件自己 invoke Rust，都是"第二条远程路"——当场红。
+    // `\b` 只钉**端口方法**：契约纯函数 `marketDownloadTimeoutMs`（住 market.ts）不许误命中。
     expect(
-      scan([/marketDownload|marketExtract/], PROD_SURFACE).map(rel).sort(),
+      scan([/marketDownload\b|marketExtract\b/], PROD_SURFACE).map(rel).sort(),
     ).toEqual([
       'packages/app/src/bridge/tauri-bridge.ts',
       'packages/kernel/src/remote.ts',

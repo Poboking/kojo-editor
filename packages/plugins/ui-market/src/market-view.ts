@@ -14,6 +14,7 @@ import {
   minAppVersionSatisfied,
   packUpdateCheck,
   type InstalledPack,
+  type MarketDownloadProgress,
   type MarketIndexEntry,
   type MarketIndexRefresh,
   type MarketIndexState,
@@ -99,11 +100,48 @@ export const REJECT_TEXT: Record<MarketRejectCode, string> = {
 };
 
 /**
+ * 平台侧失败（`download-failed` / `extract-failed`）的 Rust 原话 → 更具体的人话。
+ * 原话是给机器看的技术串（主机名、状态码、超时链），作者只该看到"哪里出了问题"。
+ * 没认出的模式**原话照给**（不静默、不编造）；要不要上作者主行由 `rejectNote` 决定——
+ * 那边的纪律是机器原话只进日志，认不出时退回 `REJECT_TEXT` 的泛句。
+ * 顺序即优先级（最具体的放行列表在前）；`needles` 大小写不敏感（原话可能大写 DNS/HTTP）。
+ */
+const PLATFORM_FAIL_TEXT: ReadonlyArray<readonly [needles: readonly string[], phrase: string]> = [
+  [['不在平台放行列表'], '这个镜像地址用不了（平台只放行 GitHub 系的下载地址），本机没动'],
+  [['timed out', '超时'], '连不上注册表（超时），检查网络或稍后再试，本机没动'],
+  [['getaddrinfo', 'dns'], '注册表地址解析不了（地址可能写错或域名已失效），本机没动'],
+  [['404'], '注册表上没有这个文件（可能已下架），本机没动'],
+  [['403'], '注册表拒绝访问，本机没动'],
+];
+
+/** 认出已知模式 ⇒ 那句人话；没认出 ⇒ `null`（`platformFailNote` 与 `rejectNote` 各取所需） */
+function matchPlatformFail(raw: string): string | null {
+  const lower = raw.toLowerCase();
+  for (const [needles, phrase] of PLATFORM_FAIL_TEXT) {
+    if (needles.some((n) => lower.includes(n))) return phrase;
+  }
+  return null;
+}
+
+/** 平台失败原话的翻译出口：已知模式 → 具体人话；查不到就原话照给（不静默） */
+export function platformFailNote(raw: string): string {
+  return matchPlatformFail(raw) ?? raw;
+}
+
+/**
  * 拒因 → 内联状态行那一句（**一处**、不弹窗）。`name` = 包名（作者认得的东西）。
+ * 平台侧两个码的原话里埋着具体病因（哪个镜像、超时还是 404）⇒ 认得出就换那句具体人话；
  * 未知异常（不是 `MarketError`）也走这一句，不静默——它没有码，就把原话给出来。
  */
 export function rejectNote(name: string, err: unknown): string {
-  if (err instanceof MarketError) return `「${name}」没装成：${REJECT_TEXT[err.code]}`;
+  if (err instanceof MarketError) {
+    if (err.code === 'download-failed' || err.code === 'extract-failed') {
+      const phrase = matchPlatformFail(err.message);
+      // 认不出 ⇒ 泛句照旧：机器原话不上作者行（它已随 log.warn 落日志），但本机没动这一点两句话都说
+      return `「${name}」没装成：${phrase ?? REJECT_TEXT[err.code]}`;
+    }
+    return `「${name}」没装成：${REJECT_TEXT[err.code]}`;
+  }
   return `「${name}」没装成：${err instanceof Error ? err.message : String(err)}`;
 }
 
@@ -240,6 +278,24 @@ export type InstallAction = Extract<PackRowAction, 'install' | 'update'>;
  */
 export function installBusyNote(action: InstallAction, name: string): string {
   return `正在${action === 'update' ? '更新' : '安装'}「${name}」…`;
+}
+
+/**
+ * 下载进行中的那一句（接平台节流后的进度回报，仍是 `mk-note` 这一处内联状态行）。
+ * 总数已知 ⇒ 百分比（向下取整、封顶 100——响应头与实际流对不齐时只许少说不许超卖）；
+ * 缺失（chunked 等）⇒ 报"已收多少"，不编假百分比。
+ */
+export function installProgressNote(
+  action: InstallAction,
+  name: string,
+  p: MarketDownloadProgress,
+): string {
+  const busy = installBusyNote(action, name);
+  if (p.totalBytes !== null && p.totalBytes > 0) {
+    const pct = Math.min(100, Math.floor((p.receivedBytes / p.totalBytes) * 100));
+    return `${busy} ${pct}%`;
+  }
+  return `${busy} 已收 ${formatBytes(p.receivedBytes)}`;
 }
 
 /**

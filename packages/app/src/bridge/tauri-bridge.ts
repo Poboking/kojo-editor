@@ -1,6 +1,7 @@
 import type {
   FileChangeKind,
   FileEncoding,
+  MarketDownloadProgress,
   PlatformBridge,
   RemoteDownload,
   RemoteExtractLimits,
@@ -193,13 +194,26 @@ export const tauriBridge: PlatformBridge = {
    * 容器下载（市场 zip 包体）：**本层零判定**，且**没有目标路径参数**——落点由 Rust 拼成
    * `<appData>/market/.staging/<containerName>`（与 `market_extract` 共用同一个名字）。
    * 出网与体积闸与 `fetchText` 在 Rust 侧是同一条函数（`guarded_send`），不在这层复述。
+   * 进度经 Tauri v2 `Channel` 回传（点对点回调，不走全局事件总线）；Rust 侧已节流，
+   * 这里只做转发。`onProgress` 命令侧**必传**（tauri 2 的 `Option<Channel>` 反序列化不走）
+   * ⇒ 桌面壳内**总是**建通道（没回调就不挂 `onmessage`，进度照发、没人听）；
+   * Channel 构造摸 `window.__TAURI_INTERNALS__` ⇒ 先 `isTauri()` 再建，
+   * 浏览器环境保持 `invoke` 自身的报错口径（不抢在它前面炸）。
    */
   async marketDownload(url: string, containerName: string, opts): Promise<RemoteDownload> {
+    let onProgress: unknown = null;
+    if (isTauri()) {
+      const { Channel } = await import('@tauri-apps/api/core');
+      const channel = new Channel<MarketDownloadProgress>();
+      if (opts?.onProgress !== undefined) channel.onmessage = opts.onProgress;
+      onProgress = channel;
+    }
     return invoke<RemoteDownload>('market_download', {
       url,
       stagingName: containerName,
       timeoutMs: opts?.timeoutMs ?? null,
       maxBytes: opts?.maxBytes ?? null,
+      onProgress,
     });
   },
 
@@ -228,3 +242,14 @@ export const tauriBridge: PlatformBridge = {
     return base64ToBytes(b64);
   },
 };
+
+/**
+ * 外链打开（系统默认浏览器）：面板经总线发 `ui.openExternal`、壳层消费方调到这里。
+ * **本层零判定**——scheme / 主机白名单闸的唯一执法点在 Rust `open_url_external`
+ * （与市场下载同一份白名单），被拒时错误原样上抛，由壳层做用户可见反馈。
+ * 不进 `PlatformBridge`：这是壳层消费方的直达通道，不是插件可经桥调用的面
+ * （插件侧只有总线意图，插件伪造不了"绕过闸"的直达调用）。
+ */
+export async function openExternal(url: string): Promise<void> {
+  await invoke('open_url_external', { url });
+}

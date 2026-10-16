@@ -1,17 +1,21 @@
-//! 「在系统资源管理器中显示」的 OS 原语：拉起外部文件管理器并选中目标。
+//! 「唤起 OS」类原语：**在资源管理器中显示**（拉起外部文件管理器并选中目标）与
+//! **在系统浏览器打开外链**（拉起默认浏览器访问白名单 https URL）。
 //!
-//! **天然只读**（铁律 6 之外的零接触区）：这条链路不打开任何文件句柄、不创建 /
-//! 改名 / 删除任何盘上内容——它只向 OS 派发一个"请打开你的文件管理器"的进程请求，
-//! 之后的一切（窗口、选中高亮）都发生在本进程之外。因此它**不碰
+//! 两条都**天然只读**（铁律 6 之外的零接触区）：不打开任何文件句柄、不创建 /
+//! 改名 / 删除任何盘上内容——只向 OS 派发一个"请打开你的某程序"的进程请求，
+//! 之后的一切（窗口、浏览器页面）都发生在本进程之外。因此**不碰
 //! `WriteDomainState`、不需要任何允许域检查**，形态与 `choose_directory` 同类
 //! （纯"唤起 OS UI"原语），不需要也不应该有写路径判据。
 //!
 //! 平台派发（`#[cfg]` 只出现在 `current_target_os` 一个点）：
-//! - Windows：`explorer /select,"<path>"`（实测结论见 `reveal_command` 注释）
-//! - macOS：`open -R <path>`（Finder 中显示；**未实测**——本机只有 Windows）
-//! - Linux：`xdg-open <父目录>`（Linux 无"选中"协议，只能开到所在文件夹；**未实测**）
+//! - reveal：Windows `explorer /select,"<path>"`（实测结论见 `reveal_command` 注释）、
+//!   macOS `open -R <path>`（Finder 中显示；**未实测**——本机只有 Windows）、
+//!   Linux `xdg-open <父目录>`（Linux 无"选中"协议，只能开到所在文件夹；**未实测**）
+//! - 外链：Windows `explorer <url>` / macOS `open <url>` / Linux `xdg-open <url>`（见 `open_url_command`）
 
 use std::path::Path;
+
+use crate::market::url_problem;
 
 /* ---------------------------- 纯判定（可单测） ---------------------------- */
 
@@ -136,4 +140,66 @@ pub(crate) fn reveal_in_folder(path: &Path) -> Result<(), String> {
 #[tauri::command]
 pub(crate) fn show_in_folder(path: String) -> Result<(), String> {
     reveal_in_folder(Path::new(&path))
+}
+
+/* ---------------------------- 外链（浏览器打开） ---------------------------- */
+
+/// 外链双闸（纯判定）：scheme 必须 https、主机过市场白名单。
+///
+/// 判定**整体复用** market 的 `url_problem` 而不是自己再写一份——那正是"第二份
+/// 真相必然漂"的形状：能被下载闸放行的 URL 才可能出现在索引 `sourceUrl` 上，
+/// 外开闸与它是同一份函数（userinfo / 非默认端口两闸是顺带的加固，不是分叉）。
+/// 返回 WHATWG 规范化后的 URL 串供 argv 使用（`Ok` = 放行，`Err` = 拒因直接可示人）。
+pub(crate) fn external_url_problem(raw: &str) -> Result<String, String> {
+    let parsed = reqwest::Url::parse(raw).map_err(|e| format!("URL 解析失败 {raw}: {e}"))?;
+    if let Some(problem) = url_problem(&parsed) {
+        return Err(format!("外链被平台闸拒绝（{problem}）"));
+    }
+    Ok(parsed.to_string())
+}
+
+/// 派发给 OS 的外链命令（程序名 + argv），由 `open_url_command` 纯构造。
+pub(crate) struct ExternalUrlCommand {
+    pub program: &'static str,
+    pub args: Vec<String>,
+}
+
+/// URL → 平台命令 argv 的**纯构造**（不碰进程）。
+///
+/// URL **恒是单个 argv 元素**，三平台同形、只有程序名不同——`cmd /c start` 那条路
+/// 是注入洞（URL 里的 `&` / 空格会逃逸成 shell 语法），本原语从形态上封死它：
+/// `std::process::Command` 直接把 argv 交给 OS，不存在解释层。
+/// （explorer / open / xdg-open 对单参 URL 都交给默认浏览器处理。）
+pub(crate) fn open_url_command(os: TargetOs, url: &str) -> ExternalUrlCommand {
+    let program = match os {
+        TargetOs::Windows => "explorer",
+        TargetOs::MacOS => "open",
+        TargetOs::Linux => "xdg-open",
+    };
+    ExternalUrlCommand { program, args: vec![url.to_string()] }
+}
+
+/// 「在系统浏览器打开外链」：只读原语，见模块头。
+/// 闸（双闸见 `external_url_problem`）的**唯一执法点**就在这里——TS 侧不复制白名单。
+pub(crate) fn spawn_external_url(raw: &str) -> Result<(), String> {
+    let url = external_url_problem(raw)?;
+    let cmd = open_url_command(current_target_os(), &url);
+    let mut command = std::process::Command::new(cmd.program);
+    // URL 无引号需求（WHATWG 序列化不出 `"` 与裸空格），普通 arg 走标准 argv 通道；
+    // 不经 shell ⇒ 参数内容不可能变成命令语法。
+    command.args(&cmd.args);
+    // 只认 spawn 失败（程序不存在 / 权限拒绝）；浏览器开没开是用户看得见的事，不 wait。
+    match command.spawn() {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("无法调用系统浏览器（{}）：{e}", cmd.program)),
+    }
+}
+
+/// Tauri 命令：`open_url_external(url)`。
+///
+/// 天然只读、无写盘副作用 ⇒ 不取 `WriteDomainState`、不做允许域检查（见模块头）；
+/// 出网面的闸（https + 主机白名单）即在本函数链路内，插件侧与 JS 桥都不复述。
+#[tauri::command]
+pub(crate) fn open_url_external(url: String) -> Result<(), String> {
+    spawn_external_url(&url)
 }

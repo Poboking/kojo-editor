@@ -122,6 +122,34 @@ export const MARKET_MAX_INDEX_BYTES = 512 * 1024;
 export const MARKET_INDEX_TIMEOUT_MS = 15_000;
 
 /**
+ * 容器下载进度（平台侧流式回报）。`totalBytes` = `Content-Length`（重定向后的终态响应头）；
+ * 缺失（chunked 传输等）⇒ `null`，UI 只能报"已收多少"而不是百分比。
+ */
+export interface MarketDownloadProgress {
+  receivedBytes: number;
+  totalBytes: number | null;
+}
+
+/** 容器下载超时的基础段（TLS 握手 / 302 逐跳重核 / 首字节延迟；与体积无关的那部分） */
+export const MARKET_DOWNLOAD_TIMEOUT_BASE_MS = 60_000;
+/** 容器下载超时的体积段（每 MiB 1s） */
+export const MARKET_DOWNLOAD_TIMEOUT_MS_PER_MIB = 1_000;
+
+/**
+ * 按容器声明体积换算下载超时（纯函数）。
+ *
+ * 依据：受众直连 GitHub release 资产的慢网量级 ~1 MB/s（无代理环境实测），原 60s 常量
+ * 只够 60 MB 以下的包；公式 = 60s 基础 + 每 MiB 1s，即按**比慢网再慢一倍**的速率预算
+ * （≈0.5 MB/s），128 MiB 上限下最坏 188s——够慢网走完，又不至于让真断线挂到天荒地老
+ * （断线由平台侧请求错误与逐块读错兜住，不需要超时单扛）。
+ * 非有限 / 非正数按 0 处理 ⇒ 回基础段（调用方传入的声明值已过契约校验，这里只兜形状）。
+ */
+export function marketDownloadTimeoutMs(declaredBytes: number): number {
+  const safe = Number.isFinite(declaredBytes) && declaredBytes > 0 ? declaredBytes : 0;
+  return MARKET_DOWNLOAD_TIMEOUT_BASE_MS + Math.ceil(safe / (1024 * 1024)) * MARKET_DOWNLOAD_TIMEOUT_MS_PER_MIB;
+}
+
+/**
  * 索引新鲜度窗口（6 小时）：窗口内开面板**不回源**（`refreshIndex()` 直接给 `fresh`）。
  * 口径 = TTL 而非 ETag：远程拉取只有一条不落盘的窄原语，条件请求要它带请求头
  * ⇒ 命令面就得收"任意头部"，那是比"多打一次 1.6 KB"大得多的口子。
@@ -316,8 +344,10 @@ export interface MarketService {
   /**
    * 已装包占用的字节数（KM-11 的"占用"读数；面板显示用）。
    *
-   * 口径 = 记账里 `files[]` 声明字节之和（`packEntryPathProblem` 的前缀闸保证这些条目
-   * 就是落点 `files/` 的全部内容）⇒ **不落 IO**、不在两处各算一遍。
+   * 口径 = **核验在位**的那部分包的 `files[]` 声明字节之和（`packEntryPathProblem` 的前缀闸
+   * 保证这些条目就是落点 `files/` 的全部内容）——不摸盘逐文件求和、不在两处各算一遍。
+   * 在位核验与 `installed()` 同一条路径（一趟批量 stat，毫秒级；与 `installed()` 并发双调
+   * 即两趟），目录已丢的包不计入、并按 `installed()` 同语义从记账剔除写回（自愈）。
    * 不含市场根下的其它文件（`index.json` 与暂存区不属于任何已装包）。
    */
   installedBytes(): Promise<number>;
@@ -344,8 +374,14 @@ export interface MarketService {
    * @throws MarketError：`download-failed` / `container-sha256` / `container-bytes` /
    *   `extract-failed` / `container-identity` / `entry-missing` / `entry-extra` /
    *   `entry-bytes` / `entry-sha256`，以及 `installLocalDir` 会抛的全部清单类码
+   *
+   * @param onProgress 容器下载的进度回调（**只覆盖下载段**；解压/搬运快，不发进度、不造假进度）。
+   *   体积上限与超时都从声明的 `zip.bytes` 换算（`marketDownloadTimeoutMs`），调用方不用管。
    */
-  installFromIndex(entry: MarketIndexEntry): Promise<InstalledPack>;
+  installFromIndex(
+    entry: MarketIndexEntry,
+    onProgress?: (p: MarketDownloadProgress) => void,
+  ): Promise<InstalledPack>;
   uninstall(kind: PackKind, id: string, version: string): Promise<void>;
   isInstalled(kind: PackKind, id: string, version: string): Promise<boolean>;
   /** `<appData>/market/packs/<kind>/<id>/<version>`（**唯一**的落点真源，记账里不存路径） */

@@ -34,6 +34,7 @@ import { createMarketService, sha256Hex } from '@kojo/plugin-kojo-market';
 import { createUiMarketPlugin, MarketPanelView } from '../src/index';
 import {
   loadMarketSnapshot,
+  pullMarketOutcome,
   runImport,
   runInstall,
   runUninstall,
@@ -574,6 +575,57 @@ describe('面板取数：四条显式态', () => {
   });
 });
 
+describe('面板取数：回源三态（SWR 后台段的判定面）', () => {
+  /** 会回一份合法索引的远程替身（refreshed / cached 判据；failed 由 refusedRemote 给） */
+  const servingRemote = (indexJson: string): RemoteService => ({
+    async fetchText(): Promise<RemoteText> {
+      return { text: indexJson, bytes: indexJson.length, status: 200, finalUrl: 'https://example.test/index.json' };
+    },
+    async marketDownload(): Promise<RemoteDownload> {
+      throw new Error('本用例不下载容器');
+    },
+    async marketExtract(): Promise<RemoteExtractResult> {
+      throw new Error('本用例不解压容器');
+    },
+  });
+
+  it('首回源 refreshed；TTL 内再问 cached；硬回源失败 failed 且带着盘上旧列表回来（不清列表）', async () => {
+    const h = makeIo();
+    const indexJson = JSON.stringify({
+      schema: MARKET_SCHEMA_VERSION,
+      generatedAt: '2026-10-16T00:00:00Z',
+      packs: [await entryOf(await makeContainer('1.0.0'))],
+    });
+    // refreshIndex 校验通过后要把原文 writeText 落盘（夹具默认对 writeText 即红）：
+    // 只对本用例放行这条通道，写的就是替身回的原文
+    const io: FileIO = {
+      ...h.io,
+      async writeText(p: string, text: string): Promise<void> {
+        h.fs.write(p, new TextEncoder().encode(text));
+      },
+    };
+    const market = makeService(io, quietLog, servingRemote(indexJson));
+    // 端点是服务判定（空端点当场 failed，轮不到远程替身），刷新前先配好
+    await market.setEndpoint('https://example.test/index.json');
+    const deps = depsOf(market);
+
+    const first = await pullMarketOutcome(deps, false);
+    expect(first.state).toBe('refreshed');
+    expect(first.snap.status).toBe('ready');
+    expect(first.snap.packs).toHaveLength(1);
+
+    const second = await pullMarketOutcome(deps, false);
+    expect(second.state).toBe('cached');
+    expect(second.snap.status).toBe('ready');
+
+    // 换一座会拒的桥硬回源：失败态带旧列表回来，屏幕不至于从"有列表"闪成"没有"
+    const failed = await pullMarketOutcome(depsOf(makeService(h.io, quietLog, refusedRemote())), true);
+    expect(failed.state).toBe('failed');
+    expect(failed.snap.status).toBe('ready');
+    expect(failed.snap.packs).toHaveLength(1);
+  });
+});
+
 describe('面板卸载：一次确认 + 列表与磁盘同时为空', () => {
   let uninstallCalls = 0;
   const counting = (market: MarketService): MarketService => ({
@@ -892,6 +944,7 @@ function viewProps(
     onPull: noop,
     onInstall: noop,
     onImport: noop,
+    onOpenSource: noop,
     onRequestUninstall: noop,
     onConfirmUninstall: noop,
     onCancelUninstall: noop,
@@ -1122,14 +1175,17 @@ describe('导入请求的行为判据（`runImport`：取目录 → 发意图）
   });
 });
 
-/* ---------------- 索引行来源网址（KM-16 尾巴：子层可见、不做链接） ---------------- */
+/* ---------------- 索引行来源网址（KM-16 尾巴：子层可见、已接外链原语可点） ---------------- */
 
 describe('索引行的来源网址', () => {
-  it('有 sourceUrl ⇒ 子层多一行「来源 <url>」纯文本；缺省就不占行（主行不动）', () => {
+  it('有 sourceUrl ⇒ 子层多一行「来源 <url>」可点按钮；缺省就不占行（主行不动）', () => {
     const url = 'https://example.test/k.pack';
     const withUrl = renderView([viewEntry('k.pack', '1.0.0', { sourceUrl: url })], []);
-    expect(withUrl).toContain(`<div class="mk-sub">来源 ${url}</div>`);
-    // 刻意不做 `<a>`：Tauri webview 外链没接 opener，点了没反应比没有更坏
+    // button 语义 + mk-sub 灰字观感（外链原语已接，壳层消费 `ui.openExternal`）
+    expect(withUrl).toContain(
+      `<button class="mk-sub mk-link" type="button" title="在浏览器打开 ${url}">来源 ${url}</button>`,
+    );
+    // 依旧不做 `<a>`（webview 内导航不进原语；点击走壳层 → Rust 闸）
     expect(withUrl).not.toMatch(/<a[\s>]/);
 
     const without = renderView([viewEntry('k.pack', '1.0.0')], []);
@@ -1143,7 +1199,7 @@ describe('索引行的来源网址', () => {
       [],
     );
     expect(html).toContain('<div class="mk-sub">一句包介绍</div>');
-    expect(html).toContain('<div class="mk-sub">来源 https://example.test/k.pack</div>');
+    expect(html).toContain('<button class="mk-sub mk-link" type="button" title="在浏览器打开 https://example.test/k.pack">来源 https://example.test/k.pack</button>');
   });
 });
 

@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use crate::shell::{reveal_command, trim_trailing_separators, TargetOs};
+use crate::shell::{external_url_problem, open_url_command, reveal_command, trim_trailing_separators, TargetOs};
 
 /* ---------------------------- Windows 分支 ---------------------------- */
 
@@ -76,4 +76,56 @@ fn linux_root_target_falls_back_to_itself() {
     // 没有父目录（根）就开它本身，别把空串递给 xdg-open
     let cmd = reveal_command(TargetOs::Linux, Path::new("/"));
     assert_eq!(cmd.args, vec!["/".to_string()]);
+}
+
+/* ---------------------------- 外链：argv 构造 ---------------------------- */
+
+#[test]
+fn external_url_is_a_single_arg_on_every_platform() {
+    // URL 恒是**单个 argv 元素**、三平台同形只有程序名不同——绝不拼进 shell 字符串
+    // （`cmd /c start` 是注入洞：URL 里的 `&` / 空格会逃逸成 shell 语法）
+    let url = "https://github.com/kojo/editor/releases/download/v1/a.zip";
+    for (os, program) in [
+        (TargetOs::Windows, "explorer"),
+        (TargetOs::MacOS, "open"),
+        (TargetOs::Linux, "xdg-open"),
+    ] {
+        let cmd = open_url_command(os, url);
+        assert_eq!(cmd.program, program);
+        assert_eq!(cmd.args, vec![url.to_string()]);
+    }
+}
+
+/* ---------------------------- 外链：双闸 ---------------------------- */
+
+#[test]
+fn external_url_gate_accepts_allowlisted_https() {
+    // 白名单内 https 原样放行（返回 WHATWG 规范化串）
+    assert_eq!(
+        external_url_problem("https://github.com/kojo/editor"),
+        Ok("https://github.com/kojo/editor".to_string())
+    );
+    assert!(external_url_problem("https://kojo.github.io/index.json").is_ok());
+}
+
+#[test]
+fn external_url_gate_rejects_scheme_and_host_outside_allowlist() {
+    // scheme 闸：非 https 一律拒
+    assert!(external_url_problem("http://github.com/x").is_err());
+    assert!(external_url_problem("ftp://github.com/x").is_err());
+    assert!(external_url_problem("file:///C:/x").is_err());
+    // 主机闸：与 market 下载同一份白名单（第二份真相必然漂，这里零复制）
+    assert!(external_url_problem("https://evil.com/path").is_err());
+    // `*.github.io` 只认一级子域：前缀拼多级或整体伪装都拦下
+    assert!(external_url_problem("https://a.b.github.io/x").is_err());
+    assert!(external_url_problem("https://github.io.evil.com/x").is_err());
+    // 根本不是 URL
+    assert!(external_url_problem("not a url").is_err());
+}
+
+#[test]
+fn external_url_gate_rejects_userinfo_and_custom_port() {
+    // url_problem 的顺带加固闸（与下载闸同一份判定）：userinfo / 非默认端口
+    assert!(external_url_problem("https://user@github.com/x").is_err());
+    assert!(external_url_problem("https://github.com:8443/x").is_err());
 }

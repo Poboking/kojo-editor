@@ -212,6 +212,16 @@ export interface KernelEventMap {
     source?: string;
   };
   /**
+   * 外链打开意图（2026-10-16 市场外链批）：请求宿主用**系统默认浏览器**打开一个外链。
+   * 通用、游戏无关——插件够不着平台，跨层意图走总线（与 `workspace.importRequested`
+   * 同款分工：发起方发意图，壳层消费方调桥接落地）。
+   *
+   * 闸（scheme 必须 https + 主机过平台放行列表）的**唯一执法点在 Rust**
+   * `open_url_external`——本载荷只冻结 `{ url }` 一项，白名单不进契约、不进插件
+   * （第二份真相必然漂）；被拒时由壳层用户可见地反馈，不由发起方猜原因。
+   */
+  'ui.openExternal': { url: string };
+  /**
    * 归档选中意图（v0.2 第十三批）：归档浏览器面板选中某档后广播。
    * 通用、游戏无关——任意插件可响应（未来的状态注入器 / 对比视图）；
    * 载荷只含归档路径与文件名（消费者按需自行深解析）。
@@ -320,6 +330,7 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'ui.overlay.close',
   'ui.diffView.open',
   'ui.panel.float',
+  'ui.openExternal',
   'workspace.importRequested',
   'workspace.newProjectRequested',
   'workspace.projectCreated',

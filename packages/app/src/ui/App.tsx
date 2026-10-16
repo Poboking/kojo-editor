@@ -13,7 +13,7 @@ import type { ErbIndex, ErbParserService, FileStat, GameProject, RecentProject }
 import { isPathUnder, join } from '@kojo/plugin-api';
 import { removeRecentOptimistic } from './WelcomeView';
 import { invoke, isTauri } from '../bridge/invoke';
-import { tauriBridge } from '../bridge/tauri-bridge';
+import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
 import {
   AutosaveJournal,
   HEARTBEAT_INTERVAL_MS,
@@ -473,6 +473,20 @@ export function App(): ReactElement {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kernel]);
+
+  // 外链打开意图：插件够不着平台，跨层走总线（与 editor.revealLocation 同款分工）。
+  // 闸（https + 主机白名单）的唯一执法点在 Rust，这里不复制白名单；被拒时 toast 一句
+  // ——主机闸让失败面只剩"非白名单 URL"这种发起方就不该发出的输入，log 级静默不可接受
+  // （铁律 4），但也不需要比 toast 更重的仪式。
+  useEffect(() => {
+    if (!kernel) return;
+    const un = kernel.bus.on('ui.openExternal', (ev) => {
+      void openExternal(ev.url).catch((e: unknown) => {
+        notify({ kind: 'error', message: `外链打开被拒：${e instanceof Error ? e.message : String(e)}` });
+      });
+    });
+    return un;
+  }, [kernel, notify]);
 
   // 当前文件广播（v0.3 批 S5-UI）：宿主是"当前打开哪个文件"的唯一权威，
   // 面板（如升糖建议器）需要它才知道该扫哪个文件。做成事件而非查询接口，

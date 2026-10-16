@@ -5495,6 +5495,16 @@ button.primary .hint {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+/* 来源网址可点（已接外链原语）：button 语义、沿用 .mk-sub 的灰字观感，hover 提一下色 */
+.mk-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mk-link:hover { color: var(--accent); }
 /* 展开层 = 调试抽屉：等宽小字 + 竖线 + 抬一档淡底，不像正文 */
 .mk-detail {
   display: flex;

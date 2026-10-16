@@ -1746,7 +1746,8 @@ pub fn run() {
             market::market_download,
             market::market_fetch_text,
             market::market_extract,
-            shell::show_in_folder
+            shell::show_in_folder,
+            shell::open_url_external
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

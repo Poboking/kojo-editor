@@ -253,6 +253,7 @@ fn fetch_text_rejects_the_same_urls_as_download_gate() {
             bad,
             "index.zip",
             &opts,
+            None,
         ))
         .expect_err("同一条 URL 在下载链路也必须被拒");
         // 同一条判定 ⇒ 同一段文案；两条链路的差异只许在命令名前缀
@@ -291,6 +292,7 @@ fn fetch_text_has_no_container_name_gate_but_download_still_does() {
         "https://demo.github.io/index.json",
         "index.bin",
         &opts,
+        None,
     ))
     .expect_err(".zip 容器名闸不许为拉索引放宽");
     assert!(e.contains(".zip"), "拒因不符：{e}");
@@ -896,6 +898,7 @@ fn download_and_extract_real_release_assets() {
                 &target,
                 fixture.container,
                 &opts,
+                None,
             ))
             .unwrap_or_else(|e| panic!("真实下载失败 {target}: {e}"));
         assert_eq!(downloaded.status, 200, "{target} 状态非 200");
@@ -949,8 +952,31 @@ fn download_through_env_proxy_uses_system_proxy() {
         &target,
         fixture.container,
         &opts,
+        None,
     ))
     .unwrap_or_else(|e| panic!("proxy: None 且 env 有 HTTPS_PROXY 时下载失败：{e}"));
     assert_eq!(downloaded.bytes, fixture.container_bytes, "{target} 字节不平");
     reconcile(&staging, fixture);
+}
+
+/* ---------------------------- 进度节流（纯判定） ---------------------------- */
+
+/// 节流判据全部钉常量语义：新增 ≥64 KiB / 时隔 ≥100 ms / 首块直发 / 零新增不发。
+/// 不含真实时钟读数 ⇒ 全确定性，离线可跑。
+#[test]
+fn progress_due_throttles_by_bytes_or_interval() {
+    use crate::market::progress_due;
+    use std::time::Duration;
+    let zero = Duration::ZERO;
+    // 首块直发：UI 不该在 0% 停到半程（received>0 由调用方闭包保证，这里只钉"None ⇒ 发"）
+    assert!(progress_due(1, None), "首块必须直发");
+    assert!(progress_due(0, None), "None（没发过）就是发，与新增量无关");
+    // 字节段：满 64 KiB 立即发，差一字节且时间未到不发
+    assert!(progress_due(64 * 1024, Some(zero)), "满 64 KiB 该发");
+    assert!(!progress_due(64 * 1024 - 1, Some(zero)), "差一字节且时间未到不该发");
+    // 时间段：涓流（新增>0 但 <64 KiB）满了 100 ms 也要发，否则 UI 长时间停在旧读数
+    assert!(progress_due(1, Some(Duration::from_millis(100))), "100 ms 到点且新增>0 该发");
+    assert!(!progress_due(1, Some(Duration::from_millis(99))), "时间未到且新增不足不该发");
+    // 零新增永远不发（收尾补发的重复调用被压掉）
+    assert!(!progress_due(0, Some(Duration::from_secs(10))), "零新增不该发");
 }

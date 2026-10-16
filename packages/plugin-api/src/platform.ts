@@ -1,5 +1,6 @@
 import type { FileChangeKind } from './events';
 import type { Unsubscribe } from './base';
+import type { MarketDownloadProgress } from './market';
 
 /** 内核支持的文本编码（内部统一 UTF-8 表示，读写时按文件探测/保持） */
 export type FileEncoding = 'utf-8' | 'utf-8-bom' | 'shift_jis' | 'utf-16le' | 'utf-16be';
@@ -84,6 +85,11 @@ export interface RemoteDownloadOptions {
   timeoutMs?: number;
   /** 体积硬上限：调用方按注册表声明的 `zip.bytes` 传入 ⇒ 超声明一个字节都不收 */
   maxBytes?: number;
+  /**
+   * 下载进度回调（平台侧流式回报，**节流后**才到这里——不是逐块直发，见 Rust `market.rs`）。
+   * 可选：不给 ⇒ 平台侧一条进度都不发。Node 测试桥没有远程能力，本项随之缺席。
+   */
+  onProgress?: (p: MarketDownloadProgress) => void;
 }
 
 /**

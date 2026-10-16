@@ -15,7 +15,9 @@ import {
   type EventBus,
   type InstalledPack,
   type Logger,
+  type MarketDownloadProgress,
   type MarketIndexEntry,
+  type MarketIndexRefresh,
   type MarketIndexState,
   type MarketService,
 } from '@kojo/plugin-api';
@@ -166,16 +168,26 @@ export async function loadMarketSnapshot(deps: MarketActionDeps): Promise<Market
 }
 
 /**
- * 打开面板 / 点「刷新」走的那条路：先问服务要不要回源（TTL 在 `kojo-market` 里判），
- * 再把拉取结果与列表一起返回。
+ * 一次回源的完整结果：快照之外还带回 `refreshIndex` 的三态。
+ * 面板的 stale-while-revalidate 后台段要拿它分"出声（refreshed / failed）还是静默（cached）"——
+ * 一切正常的面板不该有废话，cached 不能靠猜 pullNote 的文案来判。
+ */
+export interface MarketPullOutcome {
+  readonly snap: MarketSnapshot;
+  /** 服务判定的三态；服务整体抛了（连失败态都拿不回来）也归入 `failed` */
+  readonly state: MarketIndexRefresh['state'];
+}
+
+/**
+ * 回源（force=false 走 TTL、force=true 硬回源）并带回快照 + 三态。
  *
  * **失败也是一条人话**，且绝不清掉本机已有列表——`refreshIndex()` 的 `failed` 分支
  * 带着盘上那份的原样状态回来（校验不过就不写盘，见 service）。
  */
-export async function pullMarketSnapshot(
+export async function pullMarketOutcome(
   deps: MarketActionDeps,
   force: boolean,
-): Promise<MarketSnapshot> {
+): Promise<MarketPullOutcome> {
   const { market, log } = deps;
   try {
     const refresh = await market.refreshIndex({ force });
@@ -190,12 +202,20 @@ export async function pullMarketSnapshot(
       market.endpoint(),
       market.installedBytes(),
     ]);
-    return snapOf(refresh.index, installed, bytes, endpoint, note);
+    return { snap: snapOf(refresh.index, installed, bytes, endpoint, note), state: refresh.state };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log.warn(`市场面板刷新失败：${message}`);
-    return failedSnapshot(`刷新失败：${message}`);
+    return { snap: failedSnapshot(`刷新失败：${message}`), state: 'failed' };
   }
+}
+
+/** 只要快照不要三态的旧口径（「拉取列表」按钮：点了就等，结果照旧出声） */
+export async function pullMarketSnapshot(
+  deps: MarketActionDeps,
+  force: boolean,
+): Promise<MarketSnapshot> {
+  return (await pullMarketOutcome(deps, force)).snap;
 }
 
 export type UninstallOutcome =
@@ -241,10 +261,11 @@ export async function runInstall(
   deps: MarketActionDeps,
   entry: MarketIndexEntry,
   action: InstallAction,
+  onProgress?: (p: MarketDownloadProgress) => void,
 ): Promise<InstallOutcome> {
   try {
     // 记账回来的那条才是落点上真正装着的东西：文案的版本一律取它，不取索引那一行
-    const rec = await deps.market.installFromIndex(entry);
+    const rec = await deps.market.installFromIndex(entry, onProgress);
     return { kind: 'done', rec, note: installNote(action, rec.name, rec.version) };
   } catch (err: unknown) {
     const code = err instanceof MarketError ? err.code : 'unknown';

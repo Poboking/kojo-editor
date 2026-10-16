@@ -25,11 +25,13 @@ import {
   importNote,
   indexRowKey,
   installBusyNote,
+  installProgressNote,
   installNote,
   installedCountPhrase,
   KIND_LABEL,
   matchesQuery,
   pendingKey,
+  platformFailNote,
   REJECT_TEXT,
   refreshNote,
   rejectNote,
@@ -329,6 +331,67 @@ describe('拒因只出自一张表（REJECT_TEXT）', () => {
     for (const s of [installNote('install', 'x', '1.0.0'), installBusyNote('update', 'x')]) {
       for (const w of ['kind', 'id', 'sha256', 'manifest', 'index.json', 'schema']) expect(s, w).not.toContain(w);
     }
+  });
+
+  it('下载进度那一句：总数已知给百分比（向下取整、封顶 100），缺失只报已收数（不编假百分比）', () => {
+    expect(installProgressNote('install', '演示口上包', { receivedBytes: 45, totalBytes: 100 })).toBe(
+      '正在安装「演示口上包」… 45%',
+    );
+    expect(installProgressNote('update', '演示口上包', { receivedBytes: 1, totalBytes: 3 })).toBe(
+      '正在更新「演示口上包」… 33%',
+    );
+    // 响应头与实际流对不齐 ⇒ 只许少说不许超卖
+    expect(installProgressNote('install', 'x', { receivedBytes: 120, totalBytes: 100 })).toBe('正在安装「x」… 100%');
+    // Content-Length 缺失（chunked 等）⇒ 报已收量
+    expect(installProgressNote('install', 'x', { receivedBytes: 0, totalBytes: null })).toBe('正在安装「x」… 已收 0 B');
+    expect(installProgressNote('update', 'x', { receivedBytes: 2048, totalBytes: null })).toBe(
+      '正在更新「x」… 已收 2.0 KB',
+    );
+  });
+});
+
+describe('平台失败原话的人话表（platformFailNote）', () => {
+  it('已知 Rust 原话 → 具体人话（表驱动：每条模式一个真实形状的样本）', () => {
+    const cases: ReadonlyArray<readonly [raw: string, phrase: string]> = [
+      [
+        'market_download 拒绝（主机 evil.example.com 不在平台放行列表（当前仅放行 GitHub 系主机与 *.github.io 一级子域镜像））',
+        '这个镜像地址用不了',
+      ],
+      ['market_download 请求失败 https://…: error sending request: operation timed out', '连不上注册表（超时）'],
+      ['market_download 请求失败 https://…: 请求超时', '连不上注册表（超时）'],
+      ['market_download 请求失败 https://…: dns error: failed to lookup address information', '注册表地址解析不了'],
+      ['market_download 请求失败 https://…: getaddrinfo ENOTFOUND registry.example.test', '注册表地址解析不了'],
+      ['market_download 请求失败 https://…: HTTP 状态非 2xx：404 Not Found（最终 URL …）', '注册表上没有这个文件'],
+      ['market_download 请求失败 https://…: HTTP 状态非 2xx：403 Forbidden（最终 URL …）', '注册表拒绝访问'],
+    ];
+    for (const [raw, phrase] of cases) {
+      const note = platformFailNote(raw);
+      expect(note, raw).toContain(phrase);
+      // 具体人话也要过作者面纪律：机器词不上主行
+      for (const w of ['kind', 'id', 'manifest', 'index.json', 'sha256', 'schema']) {
+        expect(note, raw).not.toContain(w);
+      }
+    }
+  });
+
+  it('没认出的原话照给（不静默、不编造）', () => {
+    const raw = 'market_download 请求失败 https://…: 对面把门关了';
+    expect(platformFailNote(raw)).toBe(raw);
+  });
+
+  it('rejectNote 对这两个码走新表：认得出 ⇒ 具体人话；认不出 ⇒ 泛句照旧（机器原话只进日志）', () => {
+    const gated = new MarketError(
+      'download-failed',
+      '容器没能从注册表取回来：market_download 拒绝（主机 evil.example.com 不在平台放行列表）',
+      'u',
+    );
+    expect(rejectNote('演示口上包', gated)).toBe(
+      '「演示口上包」没装成：这个镜像地址用不了（平台只放行 GitHub 系的下载地址），本机没动',
+    );
+    const unknown = new MarketError('download-failed', '容器没能从注册表取回来：对面把门关了', 'u');
+    expect(rejectNote('演示口上包', unknown)).toBe(`「演示口上包」没装成：${REJECT_TEXT['download-failed']}`);
+    const extract = new MarketError('extract-failed', '容器解压没有成功：operation timed out', 'u');
+    expect(rejectNote('演示口上包', extract)).toContain('连不上注册表（超时）');
   });
 });
 
