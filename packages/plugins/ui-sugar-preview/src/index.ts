@@ -24,7 +24,7 @@
  * 故不发 `file.changed`（谁改盘谁发）。`sugar.preview` 自身亦只读、不发事件。
  */
 
-import { createElement, useCallback, useEffect, useRef, useState } from 'react';
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import type {
   FileIO,
@@ -282,6 +282,29 @@ export function createUiSugarPreviewPlugin(): Plugin {
           };
         }, [filePath, nonce, archivePath, liveTick]);
 
+        /* ---------------- 派生渲染数据（memo：只随 result / source / withReach 变） ---------------- */
+        /**
+         * 行表与概要是 `result + source + withReach` 的纯函数——**与光标行、渲染窗口都无关**。
+         *
+         * 旧形态每次 render 都重算：`summarize`（内部又 build 一遍全量行）+ `buildPreviewRows`
+         * = 每帧两遍 O(源行数) 全量重建，而 `editor.cursorMoved` 每换一行就 setState 触发 render
+         * ⇒ 大 `.kojo` 下光标一动就是几遍数万行重建，主线程被压死（编辑界面卡死、滚不动、
+         * 着色排队）。memo 到输入身份上：真正重算只在预览结果/源文本变化那一拍发生；
+         * 光标移动与「显示更多」增窗零重算。**输出逐字不变**（同样的入参、同样的纯函数）。
+         *
+         * 位置是硬约束：必须排在下面那串降级态**早返回之前**——React Hooks 不能条件调用。
+         */
+        const arch: ArchiveStatus = archiveStatus(result);
+        const withReach = arch.connected;
+        const rows: PreviewRow[] = useMemo(
+          () => buildPreviewRows(result, source ?? '', withReach),
+          [result, source, withReach],
+        );
+        const summary: PreviewSummary = useMemo(
+          () => summarize(result, source ?? '', withReach),
+          [result, source, withReach],
+        );
+
         /** 点击定位：请求宿主打开并滚动到该行（同文件时仅滚动） */
         const reveal = (line: number): void => {
           if (!filePath) return;
@@ -347,13 +370,9 @@ export function createUiSugarPreviewPlugin(): Plugin {
 
         /* ------------------------------ 内容 ------------------------------ */
 
-        const arch: ArchiveStatus = archiveStatus(result);
-        // **未接入存档 → 不显示可达徽章**：无回放数据时数据层会把每个块折成
-        // `reachable`，那是"不可判定"而非"可达"——显式降级，不误导作者。
-        const withReach = arch.connected;
-        const summary: PreviewSummary = summarize(result, source, withReach);
+        // `arch` / `withReach` / `summary` / `rows` 全部取自上方 memo（早返回之前算的那一组）——
+        // 走到这里 `source` / `result` 必非空（上面已拦），与 memo 的 `source ?? ''` 同值、结果逐字一致。
         const diagRows = buildDiagnosticRows(result.transpile.diagnostics);
-        const rows = buildPreviewRows(result, source, withReach);
 
         return shell([
           summaryBox(summary, arch),

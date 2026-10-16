@@ -83,7 +83,11 @@ interface ProductFunction {
  * 产物是转译器生成的，形态可控——不必做容错解析。
  */
 export function scanProductFunctions(erb: string): ProductFunction[] {
-  const lines = erb.split('\n');
+  return scanFunctionsOfLines(erb.split('\n'));
+}
+
+/** `scanProductFunctions` 的行数组形态（`preview()` 复用同一次 split，不重复切分产物） */
+function scanFunctionsOfLines(lines: readonly string[]): ProductFunction[] {
   const out: ProductFunction[] = [];
   let current: { name: string; fromLine: number } | null = null;
 
@@ -159,14 +163,30 @@ export function isStructuralLine(text: string): boolean {
  * 不进块（折进 `guards`——本版直接以行区间暴露，不重复表达）。
  */
 export function foldMessageBlocks(erb: string): { fromLine: number; toLine: number; text: string }[] {
-  const lines = erb.split('\n');
+  return foldProductLines(erb.split('\n')).blocks;
+}
+
+/**
+ * 产物结构的**单遍**扫描：消息块 + 结构行清单一次走完。
+ *
+ * 为什么合并：两者都以 `isStructuralLine` 为唯一判据（结构行 = 块的断点），
+ * 分开做就是**同一份产物跑两遍正则**——`isStructuralLine` 每行 6 条正则，
+ * 5 万行级产物下这是可测的常数倍。合并后产物只被 `split` 一次、每行只判一次，
+ * 输出与"两次分开扫"逐条相同（含末尾空尾行的 `pop` 口径）。
+ */
+function foldProductLines(lines: readonly string[]): {
+  blocks: { fromLine: number; toLine: number; text: string }[];
+  structuralLines: number[];
+} {
   const blocks: { fromLine: number; toLine: number; text: string }[] = [];
+  const structuralLines: number[] = [];
   let run: { fromLine: number; texts: string[] } | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!;
     const lineNo = i + 1;
     if (isStructuralLine(raw)) {
+      structuralLines.push(lineNo);
       if (run) {
         blocks.push({ fromLine: run.fromLine, toLine: lineNo - 1, text: run.texts.join('\n') });
         run = null;
@@ -182,7 +202,9 @@ export function foldMessageBlocks(erb: string): { fromLine: number; toLine: numb
   if (run) {
     blocks.push({ fromLine: run.fromLine, toLine: lines.length, text: run.texts.join('\n') });
   }
-  return blocks;
+  // 产物末尾的空尾行（join + '\n' 产生）不算结构行
+  if (lines.length > 0 && lines[lines.length - 1] === '') structuralLines.pop();
+  return { blocks, structuralLines };
 }
 
 /* ============================== 回放折叠 ============================== */
@@ -316,9 +338,11 @@ export async function preview(deps: PreviewDeps, request: SugarPreviewRequest): 
   if (request.fileName !== undefined) transpileOptions.fileName = request.fileName;
   const transpile = deps.transpile(source, transpileOptions);
 
-  // --- 2. 产物侧索引 ---
-  const productFns = scanProductFunctions(transpile.erb);
-  const rawBlocks = foldMessageBlocks(transpile.erb);
+  // --- 2. 产物侧索引（**一次 split、每行只判一次结构行**；旧形态是三次 split + 两遍 isStructuralLine） ---
+  const productLines = transpile.erb.split('\n');
+  const productFns = scanFunctionsOfLines(productLines);
+  const folded = foldProductLines(productLines);
+  const rawBlocks = folded.blocks;
 
   // --- 3. 源映射反查：sourceLine → generatedLines[] ---
   const bySource = new Map<number, number[]>();
@@ -332,16 +356,8 @@ export async function preview(deps: PreviewDeps, request: SugarPreviewRequest): 
   }
   const sourceLineOfGenerated = (generatedLine: number): number | null => sourceOfGenerated.get(generatedLine) ?? null;
 
-  // 结构行清单（供 UI 过滤/折叠）
-  const structuralLines: number[] = [];
-  {
-    const plines = transpile.erb.split('\n');
-    for (let i = 0; i < plines.length; i++) {
-      if (isStructuralLine(plines[i]!)) structuralLines.push(i + 1);
-    }
-    // 产物末尾的空尾行（join + '\n' 产生）不算结构行
-    if (plines.length > 0 && plines[plines.length - 1] === '') structuralLines.pop();
-  }
+  // 结构行清单（供 UI 过滤/折叠）——与消息块同遍产出，口径不变（末尾空尾行不算）
+  const structuralLines = folded.structuralLines;
 
   // --- 4. 回放（可选；结构化降级） ---
   const archiveOutcome = await resolveArchive(deps, request, transpile, productFns);
@@ -464,35 +480,56 @@ function buildLines(
   const functionOf = (line: number): SugarPreviewFunctionReplay | undefined =>
     fnList.find((f) => line >= f.fromLine && line <= f.toLine);
 
+  // 消息块 → 归属源行（**反查一遍**，取代旧形态「每条源行线性扫全部块」的 O(源行 × 块数)）。
+  //
+  // 旧循环：外层每条源行 i、内层遍历**全部** rawBlocks 判 `hit`——大文件（数万行 × 数千块）
+  // 就是数十万次判等，且同一个块每被一条源行命中就**重新构造一遍** block 对象（而 block 的
+  // 内容只由 blk+fn 决定，与源行无关，纯属重复劳动）。
+  // 新循环：块区间 [fromLine,toLine] 互不重叠（`foldMessageBlocks` 的产物是结构行之间的
+  // 极大连续段），对每个块只走一遍它覆盖的产物行、经 `sourceLineOfGenerated` 反查归属源行，
+  // block 构造一次挂给所有归属行 ⇒ 总代价 = O(产物行数 + 块数 × 链数)，与源行数无关。
+  //
+  // 归属集合与旧 `hit` **等价**：源行 i 命中块 ⟺ i 拥有落在 [from,to] 内的某产物行
+  // ⟺ i ∈ { sourceLineOfGenerated(g) : g∈[from,to] }。块的**内容**也逐字不变。
+  // 同一 block 对象被多个源行共享引用是安全的——下游（可达性计数、渲染）只读不写。
+  const blocksBySource = new Map<number, SugarPreviewMessageBlock[]>();
+  for (const blk of rawBlocks) {
+    const owners = new Set<number>();
+    for (let g = blk.fromLine; g <= blk.toLine; g++) {
+      const s = sourceLineOfGenerated(g);
+      if (s !== null) owners.add(s);
+    }
+    if (owners.size === 0) continue;
+    const fn = functionOf(blk.fromLine);
+    const replay = fn?.replay ?? null;
+    const fnBranches = replay?.branches ?? [];
+    // 信封链（`IF LOCAL` 等转译器骨架守卫）不参与可达性折叠，但仍列出
+    const authorChains = fnBranches.filter((c) => !isEnvelopeChain(c, sourceLineOfGenerated));
+    const chains = fnBranches.filter((c) => coversLine(c, blk.fromLine, authorChains));
+    const folded = foldReachability(blk, authorChains);
+    const block: SugarPreviewMessageBlock = {
+      fromLine: blk.fromLine,
+      toLine: blk.toLine,
+      text: blk.text,
+      branches: chains,
+      reachability: folded.reachability,
+    };
+    if (fn) block.functionName = fn.functionName;
+    if (folded.unknown) block.unknown = folded.unknown;
+    for (const s of owners) {
+      const list = blocksBySource.get(s);
+      if (list) list.push(block);
+      else blocksBySource.set(s, [block]);
+    }
+  }
+
   const out: SugarPreviewLine[] = [];
   for (let i = 0; i < srcLines.length; i++) {
     const sourceLine = i + 1;
     const generatedLines = bySource.get(sourceLine) ?? [];
-
-    const messageBlocks: SugarPreviewMessageBlock[] = [];
-    for (const blk of rawBlocks) {
-      const hit = generatedLines.some((g) => g >= blk.fromLine && g <= blk.toLine);
-      if (!hit) continue;
-      const fn = functionOf(blk.fromLine);
-      const replay = fn?.replay ?? null;
-      const fnBranches = replay?.branches ?? [];
-      // 信封链（`IF LOCAL` 等转译器骨架守卫）不参与可达性折叠，但仍列出
-      const authorChains = fnBranches.filter((c) => !isEnvelopeChain(c, sourceLineOfGenerated));
-      const chains = fnBranches.filter((c) => coversLine(c, blk.fromLine, authorChains));
-      const folded = foldReachability(blk, authorChains);
-      const block: SugarPreviewMessageBlock = {
-        fromLine: blk.fromLine,
-        toLine: blk.toLine,
-        text: blk.text,
-        branches: chains,
-        reachability: folded.reachability,
-      };
-      if (fn) block.functionName = fn.functionName;
-      if (folded.unknown) block.unknown = folded.unknown;
-      messageBlocks.push(block);
-    }
-    messageBlocks.sort((a, b) => a.fromLine - b.fromLine);
-
+    const messageBlocks = blocksBySource.get(sourceLine) ?? [];
+    // rawBlocks 升序 ⇒ 挂进去本就按 fromLine 递增；保留一次排序与旧实现逐字同口径（防御乱序）。
+    if (messageBlocks.length > 1) messageBlocks.sort((a, b) => a.fromLine - b.fromLine);
     out.push({ sourceLine, sourceText: srcLines[i]!, generatedLines, messageBlocks });
   }
   return out;
