@@ -24,6 +24,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -43,23 +44,28 @@ import type {
   UIPanelProps,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, pathKey } from '@kojo/plugin-api';
 import {
   buildCharacterIndex,
   buildMatrix,
+  cellKeysOfFunction,
   clampDetailHeight,
   clampRowheadWidth,
   computeViewportWindow,
   createMatrixMemo,
   DETAIL_MIN_H,
   faceLabel,
+  functionRangeAt,
   instructionNoOfSlot,
   MATRIX_OVERSCAN,
   MATRIX_ROW_H,
   ROWHEAD_MIN_W,
   type CharacterIndex,
   type ColumnDesc,
+  type ConditionMatrix,
+  type CursorSight,
   type FaceFunction,
+  type FunctionRange,
   type MatrixCell,
   type MatrixCellFunction,
   type MatrixColumnGroup,
@@ -68,6 +74,9 @@ import {
 
 /** 矩阵行渲染上限（防 DOM 爆炸；过滤后仍受此限）——**仅全量（非视口化）路径** */
 const ROW_RENDER_CAP = 400;
+
+/** 光标没命中任何格时的空集合（常量身份：无命中路径零分配，行 memo 也据此跳过） */
+const NO_CURSOR_CELLS: ReadonlyMap<string, string> = new Map<string, string>();
 
 /** 取路径末两段（工具提示/详情里短显示） */
 function shortPath(p: string): string {
@@ -128,7 +137,12 @@ type ColSnap = { key: string; widths: number[]; tableW: number };
 type ScrollBox = {
   scrollTop: number;
   clientHeight: number;
-  querySelector(sel: string): { focus(): void; getBoundingClientRect(): Rect } | null;
+  querySelector(sel: string): {
+    focus(): void;
+    getBoundingClientRect(): Rect;
+    /** C1 反向联动：光标高亮格的最小滚动跟随（真 DOM 必然有；测试替身可不给） */
+    scrollIntoView?(arg: { block: string }): void;
+  } | null;
   querySelectorAll(sel: string): ArrayLike<{
     getBoundingClientRect(): Rect;
     classList: { add(c: string): void; remove(c: string): void };
@@ -148,6 +162,8 @@ interface MatrixRowViewProps {
   readonly foldedFaces: ReadonlySet<string>;
   /** 本行含选中格则为其列键，否则 null（非选中行传同一原始值，memo 得以整表跳过重渲） */
   readonly selectedColumn: string | null;
+  /** 本行含「光标所在函数」贡献的格则为其列键，否则 null（C1 反向联动；与 selectedColumn 同款 memo 口径） */
+  readonly cursorColumn: string | null;
   readonly rowIndex: number;
   readonly onCell: (rowKey: string, columnKey: string, target: RevealTarget | null) => void;
 }
@@ -157,7 +173,7 @@ interface MatrixRowViewProps {
  * 格子带 `data-r`/`data-c`（渲染序索引）供网格方向键导航定位。
  */
 const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): ReactNode {
-  const { row, groups, foldedFaces, selectedColumn, rowIndex, onCell } = props;
+  const { row, groups, foldedFaces, selectedColumn, cursorColumn, rowIndex, onCell } = props;
   const cells: ReactNode[] = [];
   let c = 0;
   for (const group of groups) {
@@ -198,6 +214,8 @@ const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): Re
         continue;
       }
       const isSel = selectedColumn === col.key;
+      // C1 反向联动：光标所在函数贡献的格描一圈亮环（.cur；与 .sel 的白色内环互不覆盖）
+      const isCur = cursorColumn === col.key;
       cells.push(
         createElement(
           'td',
@@ -205,7 +223,7 @@ const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): Re
           createElement(
             'button',
             {
-              className: 'cm-cell on' + (isSel ? ' sel' : ''),
+              className: 'cm-cell on' + (isSel ? ' sel' : '') + (isCur ? ' cur' : ''),
               title: cellComparisons(cell),
               'data-r': rowIndex,
               'data-c': dataC,
@@ -657,6 +675,77 @@ export function createUiConditionMatrixPlugin(): Plugin {
           }
         });
 
+        /* --------- C1 反向下行：光标位点 → 矩阵高亮（判据全在 matrix-logic 的纯函数） --------- */
+
+        /**
+         * 最近一次光标位点（宿主 `editor.cursorMoved` 广播）。只留 文件 + 行 + 派生视图
+         * 三件：同一行上的列级移动不该惊动面板（载荷变了、这里的判据没变 → 不重渲）。
+         */
+        const [cursorSight, setCursorSight] = useState<CursorSight | null>(null);
+        useEffect(() => {
+          const un = ctx.bus.on('editor.cursorMoved', (p) => {
+            setCursorSight((prev) =>
+              prev && prev.filePath === p.filePath && prev.line === p.line && prev.derivedView === p.derivedView
+                ? prev
+                : { filePath: p.filePath, line: p.line, derivedView: p.derivedView },
+            );
+          });
+          return un;
+        }, []);
+
+        // 换文件即清高亮：新位点稍后才到（读盘 + 建 model），中间这一拍若留着旧文件
+        // 的行号，就会拿它对上**别的文件**的机会去高亮（宁可清，不乱高亮）
+        useEffect(() => {
+          const un = ctx.bus.on('editor.activeFileChanged', () => setCursorSight(null));
+          return un;
+        }, []);
+
+        /**
+         * 光标行 → 函数祖先（区间包含，最紧一层）。数据取 `erb.parser` 当前索引的
+         * 逐文件函数区间：`FunctionConditions` 没有 endLine、`functionPredicates`
+         * 是按名现拉的异步明细（读盘）——光标路径上只能用同步索引。无位点 / 派生视图
+         * （行号不属于真文件）/ 无索引 / 文件或行对不上 → null = 清高亮，不是错误。
+         * depsEpoch：索引重建后同一光标位点的数据源变了，须重算（它正是索引代次）。
+         */
+        const cursorHit: FunctionRange | null = useMemo(() => {
+          if (!cursorSight || cursorSight.derivedView || cursorSight.filePath === null) return null;
+          const index = parser.currentIndex();
+          if (!index) return null;
+          // 直取索引键；不中再按 pathKey 扫一遍（大小写 / 分隔符写法差异）
+          let file = index.files.get(cursorSight.filePath);
+          if (!file) {
+            const want = pathKey(cursorSight.filePath);
+            for (const f of index.files.values()) {
+              if (pathKey(f.path) === want) {
+                file = f;
+                break;
+              }
+            }
+          }
+          return file ? functionRangeAt(file.functions, cursorSight) : null;
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [cursorSight, depsEpoch]);
+
+        /**
+         * 光标高亮格的滚动跟随：只在**命中函数换人**时滚一次（nearest——已在视野内就不动）。
+         * 目标格不在当前渲染窗口（视口化 / 超出全量上限）→ 静默跳过：面板的滚动位置是
+         * 用户的，不为了跟随而劫持；也不按帧重滚（滚动重渲不会重触发本 effect）。
+         */
+        const cursorFollowRef = useRef<FunctionRange | null>(null);
+        useEffect(() => {
+          if (cursorHit === cursorFollowRef.current) return;
+          cursorFollowRef.current = cursorHit;
+          if (!cursorHit) return;
+          scrollRef.current?.querySelector('.cm-cell.cur')?.scrollIntoView?.({ block: 'nearest' });
+        }, [cursorHit]);
+
+        /** 光标高亮格集合的手工记忆化仓（键 = 命中函数 + 矩阵；两者都是身份稳定的记忆化产物） */
+        const cursorCellsRef = useRef<{
+          hit: FunctionRange | null;
+          matrix: ConditionMatrix | null;
+          cells: ReadonlyMap<string, string>;
+        } | null>(null);
+
         // 失败态优先：显示原因 + 重试（不静默停在占位）。可见文案给**中文原因**，
         // 原始错误串留在悬停 title 里——技术信息不丢，但不是甩给作者的第一眼。
         if (loadError) {
@@ -774,6 +863,18 @@ export function createUiConditionMatrixPlugin(): Plugin {
           ? matrixMemo.resolve(matrixKey, () => buildMatrix(entry, depsOf, labelOf, faceLabels(), columnOf))
           : null;
 
+        // 光标命中函数贡献的格子（行键 → 列键；高亮只落在确实由它贡献的格上，判据在 matrix-logic）。
+        // 手工记忆化（不能用 useMemo：matrix 在早退分支之后才算出来，hook 不能放那儿）：
+        // 键 = 命中函数 + 矩阵两个记忆化产物（身份稳定）——滚动 / 无关重渲命中缓存，零重扫。
+        const cursorCache = cursorCellsRef.current;
+        let cursorCells: ReadonlyMap<string, string>;
+        if (cursorCache && cursorCache.hit === cursorHit && cursorCache.matrix === matrix) {
+          cursorCells = cursorCache.cells;
+        } else {
+          cursorCells = cursorHit && matrix ? cellKeysOfFunction(matrix, cursorHit) : NO_CURSOR_CELLS;
+          cursorCellsRef.current = { hit: cursorHit, matrix, cells: cursorCells };
+        }
+
         // ---- 定位（网格）----
         let grid: ReactNode;
         if (!entry || !matrix) {
@@ -882,6 +983,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   groups,
                   foldedFaces,
                   selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
+                  cursorColumn: cursorCells.get(row.key) ?? null,
                   rowIndex: win.start + i, // 绝对行索引（data-r 跨窗一致，方向键据此平移）
                   onCell,
                 }),
@@ -900,6 +1002,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   groups,
                   foldedFaces,
                   selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
+                  cursorColumn: cursorCells.get(row.key) ?? null,
                   rowIndex,
                   onCell,
                 }),

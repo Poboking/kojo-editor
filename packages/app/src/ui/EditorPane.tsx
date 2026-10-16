@@ -112,6 +112,8 @@ import {
 import { isSealed, useSealed } from './sealed';
 import { isDirectMode, useDirectMode } from './direct-mode';
 import { isInWorkspaceFile } from './file-area';
+// C1 反向下行批：光标位点广播的载荷构造 + 连续相同载荷去重（纯逻辑，单测在 app/tests）
+import { createCursorBroadcaster, cursorMovedPayload } from './cursor-broadcast';
 // 问题汇总：refreshMarkers 逐文件整份发布两层波浪线（erb-parser / condition-extractor）到 problem-store
 import { clearAllProblems, clearProblems, setProblems } from './problem-store';
 // 装饰热路径（PERF-4）：同步/异步分层、(path, versionId) LRU、陈旧结果落地前作废
@@ -1106,6 +1108,30 @@ export function EditorPane({
     return ed.getModel();
   }, []);
 
+  /**
+   * 光标位点广播（C1 反向下行批）：光标动 / 切文件完成 / 糖视图翻转三处都调它。
+   * 广播器实例挂 ref（去重状态跨三处触发存活）；载荷构造与"连续相同不发"的判据
+   * 全在 `cursor-broadcast.ts`（纯逻辑，单测钉死）——这里只做"现取此刻事实"。
+   */
+  const cursorBroadcasterRef = useRef<ReturnType<typeof createCursorBroadcaster> | null>(null);
+  const publishCursor = useCallback((): void => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    let broadcaster = cursorBroadcasterRef.current;
+    if (!broadcaster) {
+      broadcaster = createCursorBroadcaster((payload) => kernel.bus.emit('editor.cursorMoved', payload));
+      cursorBroadcasterRef.current = broadcaster;
+    }
+    broadcaster.publish(
+      cursorMovedPayload({
+        filePath: filePathRef.current || null,
+        position: ed.getPosition(),
+        // 糖视图下屏幕上那份是派生物：行号不属于真文件，如实标 derivedView（消费方据此清高亮）
+        derivedView: !!sugarModelRef.current,
+      }),
+    );
+  }, [kernel]);
+
   const applyReveal = useCallback(() => {
     const ed = editorRef.current;
     if (!ed) return;
@@ -1255,7 +1281,9 @@ export function EditorPane({
     sugarModelRef.current = null;
     sugarOriginalModelRef.current = null;
     setSugarStats(null);
-  }, [kernel]);
+    // C1 反向下行批：糖视图撤下 = derivedView 翻转（true→false），立刻透出给面板
+    publishCursor();
+  }, [kernel, publishCursor]);
 
   /**
    * 生成糖视图：整份文件投影成糖文本 → 建一份**只读内存 model** → `ed.setModel()` 换上。
@@ -1340,7 +1368,9 @@ export function EditorPane({
     ed.updateOptions({ readOnly: true }); // 糖是派生物，禁止在糖视图上编辑
     ed.setModel(sugarModel);
     setSugarStats(sugarSummary(sugarLines, 0));
-  }, [kernel, clearSugarView, documentBroadcaster, readDocumentTruth]);
+    // C1 反向下行批：糖视图挂上 = derivedView 翻转（false→true），立刻透出给面板
+    publishCursor();
+  }, [kernel, clearSugarView, documentBroadcaster, readDocumentTruth, publishCursor]);
 
   // 开关变化：记住偏好（下次启动仍是你的选择）+ 就地重算视图
   useEffect(() => {
@@ -1841,6 +1871,10 @@ export function EditorPane({
     // 视图状态：光标/滚动驱动快照（store 内防抖合并落盘）；页面卸载前 flush 一次
     const viewCurSub = ed.onDidChangeCursorPosition(snapshotActiveView);
     const viewScrSub = ed.onDidScrollChange(snapshotActiveView);
+    // C1 反向下行批：光标位点广播（面板跟着光标走）。选区也要听——拖动选择区改变的是
+    // 活动端（position），Monaco 两条事件都可能先到，重复的那次由广播器去重吞掉（零成本）。
+    const cursorSub = ed.onDidChangeCursorPosition(() => publishCursor());
+    const cursorSelSub = ed.onDidChangeCursorSelection(() => publishCursor());
     const flushViewOnUnload = (): void => flushViewStates();
     window.addEventListener('beforeunload', flushViewOnUnload);
     return () => {
@@ -1852,6 +1886,8 @@ export function EditorPane({
       crumbModelSub.dispose();
       viewCurSub.dispose();
       viewScrSub.dispose();
+      cursorSub.dispose();
+      cursorSelSub.dispose();
       window.removeEventListener('beforeunload', flushViewOnUnload);
       crumbRefreshRef.current = null;
       // SPLIT-1：本实例退册；全局 provider 属于"活实例集合"，最后一个实例退场才拆
@@ -2067,12 +2103,15 @@ export function EditorPane({
       refreshMarkers(entry.model, filePath);
       applySugarView(); // 预览：整份 ERB 投影成 .kojo 写法（默认关；`.kojo` 自动跳过）
       applyReveal();
+      // C1 反向下行批：setModel + 视图恢复 + 定位都落定后补发一次位点——面板刚切过来
+      // 就有位点（此前收到的还是上一份文件的旧位点，消费方按 filePath 判等自会忽略）
+      publishCursor();
       stopApply();
     })();
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor]);
 
   /* ------------------- 只读锁：编辑意图 → 询问 → 解锁 ------------------- */
 

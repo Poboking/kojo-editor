@@ -28,11 +28,13 @@ import {
   ROWHEAD_MIN_W,
   buildCharacterIndex,
   buildMatrix,
+  cellKeysOfFunction,
   clampDetailHeight,
   clampRowheadWidth,
   computeViewportWindow,
   createMatrixMemo,
   faceLabel,
+  functionRangeAt,
   instructionNoOfSlot,
 } from '../src/matrix-logic';
 import type { CharacterEntry, ColumnDesc, ConditionMatrix, FaceFunction } from '../src/matrix-logic';
@@ -555,5 +557,99 @@ describe('computeViewportWindow', () => {
     expect(MATRIX_OVERSCAN).toBeGreaterThanOrEqual(6);
     expect(MATRIX_OVERSCAN).toBeLessThanOrEqual(10);
     expect(MATRIX_ROW_H).toBeGreaterThan(0);
+  });
+});
+
+/* ------------------------------ 反向光标联动（C1） ------------------------------ */
+
+describe('functionRangeAt — 光标行 → 函数祖先（区间包含，最紧一层）', () => {
+  const fns = [
+    { filePath: '/p/a.ERB', startLine: 2, endLine: 9 },
+    { filePath: '/p/a.ERB', startLine: 12, endLine: 19 },
+    { filePath: '/p/b.ERB', startLine: 2, endLine: 30 },
+  ];
+
+  it('区间包含即命中；行落在边界上也算', () => {
+    expect(functionRangeAt(fns, { filePath: '/p/a.ERB', line: 5, derivedView: false })).toBe(fns[0]);
+    expect(functionRangeAt(fns, { filePath: '/p/a.ERB', line: 12, derivedView: false })).toBe(fns[1]);
+    expect(functionRangeAt(fns, { filePath: '/p/a.ERB', line: 9, derivedView: false })).toBe(fns[0]);
+  });
+
+  it('三态一律 null：无位点 / 无文件 / 派生视图（行号不属于真文件）', () => {
+    expect(functionRangeAt(fns, null)).toBeNull();
+    expect(functionRangeAt(fns, { filePath: null, line: 5, derivedView: false })).toBeNull();
+    expect(functionRangeAt(fns, { filePath: '/p/a.ERB', line: 5, derivedView: true })).toBeNull();
+  });
+
+  it('行不在任何区间（函数之间的空隙 / 文件头）→ null，不乱高亮', () => {
+    expect(functionRangeAt(fns, { filePath: '/p/a.ERB', line: 1, derivedView: false })).toBeNull();
+    expect(functionRangeAt(fns, { filePath: '/p/a.ERB', line: 11, derivedView: false })).toBeNull();
+    expect(functionRangeAt(fns, { filePath: '/p/a.ERB', line: 99, derivedView: false })).toBeNull();
+  });
+
+  it('文件判等走 pathKey：Windows 盘符路径折叠大小写与分隔符；POSIX 不折叠大小写', () => {
+    expect(
+      functionRangeAt([{ filePath: 'C:\\Users\\me\\a.ERB', startLine: 2, endLine: 9 }], {
+        filePath: 'c:/users/me/a.erb',
+        line: 5,
+        derivedView: false,
+      }),
+    ).not.toBeNull();
+    // pathKey 的口径是"Windows 折叠"——POSIX 形态大小写敏感，不夸大
+    expect(functionRangeAt(fns, { filePath: '/p/A.ERB', line: 5, derivedView: false })).toBeNull();
+    expect(functionRangeAt(fns, { filePath: '/p/c.ERB', line: 5, derivedView: false })).toBeNull();
+  });
+
+  it('区间嵌套（同名内层）：最紧一层胜；同宽取靠后定义（确定性）', () => {
+    const outer = { filePath: '/p/a.ERB', startLine: 1, endLine: 40 };
+    const inner = { filePath: '/p/a.ERB', startLine: 10, endLine: 20 };
+    expect(functionRangeAt([outer, inner], { filePath: '/p/a.ERB', line: 15, derivedView: false })).toBe(inner);
+    // 同宽同文件的两段都包住此行（病态输入）→ 取靠后定义，结果确定
+    const late = { filePath: '/p/a.ERB', startLine: 14, endLine: 22 };
+    expect(functionRangeAt([inner, late], { filePath: '/p/a.ERB', line: 15, derivedView: false })).toBe(late);
+  });
+});
+
+describe('cellKeysOfFunction — 命中函数 → 矩阵高亮格集合', () => {
+  const index = makeIndex({
+    '/p/a.ERB': ['FAM_MESSAGE_COM_K1', 'FAM_EVENT_K1', 'FAM_MESSAGE_COUNTER_K1'],
+  });
+  const entry = buildCharacterIndex(index, fakeFamilyIndex).entries.get(1)!;
+  const depsByFn: Record<string, StateDependency[]> = {
+    FAM_MESSAGE_COM_K1: [
+      dep('CFLAG:318', 'CFLAG', ['318'], [cmp('>=', 500)]),
+      dep('TALENT:恋慕', 'TALENT', ['恋慕'], [cmp('==', 1)]),
+    ],
+    FAM_EVENT_K1: [dep('CFLAG:318', 'CFLAG', ['318'], [cmp('!=', 0)])],
+  };
+  const matrix = buildMatrix(entry, (n) => depsByFn[n] ?? [], () => null);
+
+  it('函数贡献的每一格都列出（一个函数只贡献一条列上的一格：行键 → 列键）', () => {
+    // FAM_MESSAGE_COM_K1 在 /p/a.ERB 第 2 行：贡献 CFLAG:318 / TALENT:恋慕 两个 MESSAGE_COM 格
+    const cells = cellKeysOfFunction(matrix, { filePath: '/p/a.ERB', startLine: 2 });
+    expect(cells.get('CFLAG:318')).toBe('MESSAGE_COM');
+    expect(cells.get('TALENT:恋慕')).toBe('MESSAGE_COM');
+    expect(cells.size).toBe(2);
+  });
+
+  it('路径判等走 pathKey（分隔符折叠）；startLine 不同即不命中', () => {
+    expect(cellKeysOfFunction(matrix, { filePath: '/p\\a.ERB', startLine: 2 }).size).toBe(2);
+    expect(cellKeysOfFunction(matrix, { filePath: '/p/a.ERB', startLine: 3 }).size).toBe(0);
+  });
+
+  it('Windows 盘符路径：大小写 / 分隔符折叠后仍命中', () => {
+    const wIdx = makeIndex({ 'C:\\p\\a.ERB': ['FAM_MESSAGE_COM_K1'] });
+    const wEntry = buildCharacterIndex(wIdx, fakeFamilyIndex).entries.get(1)!;
+    const wMatrix = buildMatrix(wEntry, (n) => depsByFn[n] ?? [], () => null);
+    expect(cellKeysOfFunction(wMatrix, { filePath: 'c:/p/A.erb', startLine: 2 }).size).toBe(2);
+  });
+
+  it('函数不在当前矩阵（选了别的角色 / 未归属）→ 空集合 = 静默不高亮', () => {
+    expect(cellKeysOfFunction(matrix, { filePath: '/p/z.ERB', startLine: 2 }).size).toBe(0);
+  });
+
+  it('无依赖函数（矩阵里没有它的格）→ 空集合', () => {
+    // FAM_MESSAGE_COUNTER_K1 在 /p/a.ERB 第 22 行，但 depsOf 恒空 → 无格可高亮
+    expect(cellKeysOfFunction(matrix, { filePath: '/p/a.ERB', startLine: 22 }).size).toBe(0);
   });
 });

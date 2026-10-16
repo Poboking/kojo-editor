@@ -17,7 +17,8 @@
  *     广播前的兜底）——两者都只是订阅，不持有宿主引用；
  *   - 跳转复用宿主既有通道 `editor.revealLocation`（与校验面板 / 函数树同款）。
  *
- * 事件纪律：本插件**只消费** `editor.activeFileChanged` / `editor.documentChanged`，
+ * 事件纪律：本插件**只消费** `editor.activeFileChanged` / `editor.documentChanged`（C2 文本真相）
+ * / `editor.cursorMoved`（C1 反向下行：光标动、面板跟——高亮同源行），
  * **只发**导航意图 `editor.revealLocation`（用户点击行 → 请宿主定位）。它**不写盘**
  * 之外——读盘（`kernel.io.readText`）只在缓冲真相还没广播到的窗口期兜底，绝不改盘，
  * 故不发 `file.changed`（谁改盘谁发）。`sugar.preview` 自身亦只读、不发事件。
@@ -56,6 +57,9 @@ const ROW_CAP = 400;
 /** 诊断渲染上限 */
 const DIAG_CAP = 100;
 
+/** 高亮行的最小节点形状（插件 tsconfig 无 DOM lib ⇒ 自备；scrollIntoView 跟随用） */
+type FollowNode = { scrollIntoView?(arg: { block: string }): void };
+
 export function createUiSugarPreviewPlugin(): Plugin {
   return {
     id: 'ui-sugar-preview',
@@ -86,6 +90,13 @@ export function createUiSugarPreviewPlugin(): Plugin {
         const liveRef = useRef(createLiveTextPool());
         /** 当前文件的真相更新序号（广播命中当前文件时 +1，驱动重算） */
         const [liveTick, setLiveTick] = useState(0);
+        /**
+         * C1 反向下行：光标行（只在「光标就在面板显示的这一份文件里、且不是派生视图」时非 null）。
+         * 派生视图的行号不属于这份文件——宁可清高亮，也不指错行。
+         */
+        const [cursorLine, setCursorLine] = useState<number | null>(null);
+        /** 当前高亮行的节点（scrollIntoView 跟随；无匹配 / 未渲染到 = null，静默跳过） */
+        const cursorRowRef = useRef<FollowNode | null>(null);
 
         // 当前文件（宿主广播）——换文件即重置全部状态
         useEffect(() => {
@@ -95,6 +106,9 @@ export function createUiSugarPreviewPlugin(): Plugin {
             setResult(null);
             setError(null);
             setNonce(0);
+            // 高亮随旧文件一起清掉：新文件的位点稍后才到（读盘 + 转译），
+            // 中间这一拍若留着旧行号，就会在新文件里"指错行"
+            setCursorLine(null);
             setDegrade(p.filePath ? (isKojoFile(p.filePath) ? 'reading' : 'not-kojo') : 'no-project');
           });
           return un;
@@ -110,6 +124,29 @@ export function createUiSugarPreviewPlugin(): Plugin {
           });
           return un;
         }, [filePath]);
+
+        // C1 反向下行：光标位点跟过来。文件判等走 pathKey（大小写 / 分隔符）；
+        // 别的文件 / 派生视图 / 无打开文件 → 清高亮（"没有"，不是错误，静默）
+        useEffect(() => {
+          const un = ctx.bus.on('editor.cursorMoved', (p) => {
+            const here =
+              !p.derivedView &&
+              filePath !== null &&
+              p.filePath !== null &&
+              pathKey(p.filePath) === pathKey(filePath);
+            setCursorLine((prev) => {
+              const next = here ? p.line : null;
+              return prev === next ? prev : next; // 同一行上的列级移动不重渲
+            });
+          });
+          return un;
+        }, [filePath]);
+
+        // 跟随：光标行换人时滚一次（nearest——已在视野内就不动）。行未渲染 / 行号无匹配 → 静默跳过。
+        useEffect(() => {
+          if (cursorLine === null) return;
+          cursorRowRef.current?.scrollIntoView?.({ block: 'nearest' });
+        }, [cursorLine]);
 
         // 归档浏览器选中档 → 预填（UI 插件间零直接依赖，走内核事件）
         useEffect(() => {
@@ -250,7 +287,7 @@ export function createUiSugarPreviewPlugin(): Plugin {
           summaryBox(summary, arch),
           arch.hint ? createElement('div', { className: 'dim pv-hint' }, arch.hint) : null,
           diagBox(diagRows, reveal),
-          rowsBox(rows, reveal),
+          rowsBox(rows, reveal, cursorLine, cursorRowRef),
         ]);
       }
 
@@ -330,8 +367,13 @@ function diagBox(diags: readonly DiagnosticRow[], reveal: (line: number) => void
   );
 }
 
-/** 逐行映射区 */
-function rowsBox(rows: readonly PreviewRow[], reveal: (line: number) => void): ReactNode {
+/** 逐行映射区（C1 反向下行：`cursorLine` = 光标所在源行，高亮 + nearest 跟随） */
+function rowsBox(
+  rows: readonly PreviewRow[],
+  reveal: (line: number) => void,
+  cursorLine: number | null,
+  cursorRef: { current: FollowNode | null },
+): ReactNode {
   const shown = rows.slice(0, ROW_CAP);
   return createElement(
     'div',
@@ -340,12 +382,14 @@ function rowsBox(rows: readonly PreviewRow[], reveal: (line: number) => void): R
     createElement(
       'div',
       { className: 'pv-rows' },
-      ...shown.map((r) =>
-        createElement(
+      ...shown.map((r) => {
+        const isCur = cursorLine !== null && r.sourceLine === cursorLine;
+        return createElement(
           'div',
           {
             key: r.key,
-            className: `pv-row${r.blank ? ' blank' : ''}`,
+            className: `pv-row${r.blank ? ' blank' : ''}${isCur ? ' cur' : ''}`,
+            ref: isCur ? cursorRef : undefined,
             onClick: () => reveal(r.sourceLine),
             title: '点击定位到该源行',
           },
@@ -358,8 +402,8 @@ function rowsBox(rows: readonly PreviewRow[], reveal: (line: number) => void): R
           r.reachClass !== 'none'
             ? createElement('span', { className: `pv-reach ${r.reachClass}` }, r.reachLabel)
             : null,
-        ),
-      ),
+        );
+      }),
       rows.length > ROW_CAP
         ? createElement('div', { className: 'dim pv-hint' }, `其余 ${rows.length - ROW_CAP} 行未显示`)
         : null,

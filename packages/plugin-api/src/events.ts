@@ -120,6 +120,19 @@ export interface KernelEventMap {
    */
   'editor.documentChanged': { filePath: string; text: string; dirty: boolean };
   /**
+   * 编辑器光标位点变更（2026-10-16 反向下行批）：宿主在光标移动 / 切文件完成 /
+   * 糖视图翻转后广播**最新位点**，让面板（条件矩阵 / 糖预览 / 糖判定）跟着光标走。
+   *
+   * 通用、游戏无关——「光标在哪」是宿主状态（与 `editor.activeFileChanged` 同档：
+   * 面板只想"知道变了"，不想持有宿主引用）。方向与 `editor.revealLocation` 相反：
+   * 那条是面板点一下、编辑器跳过去；本条是光标动、面板跟过来。
+   *
+   * `line` / `column` 为 1 基模型坐标；`filePath: null` = 无打开文件。
+   * `derivedView: true` = 屏幕上显示的是转出来的糖视图，行号不属于真文件——
+   * 消费方据此**清高亮**，不许拿它当源文件行号用。
+   */
+  'editor.cursorMoved': { filePath: string | null; line: number; column: number; derivedView: boolean };
+  /**
    * 升糖预览意图（2026-10-12 升糖重定位批）：请求宿主在编辑器内**就地**显示
    * 某段原生 ERB 的语法糖写法（折叠原文区间 + 打字机透镜），**纯前端、不写盘**。
    *
@@ -372,6 +385,9 @@ const KERNEL_ONLY_EVENT_NAMES = [
   // 插件伪造 = 谎报文件内容（消费方会拿伪造文本当权威去转译/校验）——与
   // `editor.codeLens.set` 同档：白名单即信任面，不放开 emit（C2）。
   'editor.documentChanged',
+  // 光标位点 = 编辑器此刻的宿主状态（与 editor.codeLens.set 同档：插件伪造"光标在哪"
+  // 就是谎报编辑器状态，面板据此乱高亮/乱清高亮）。宿主广播，插件只许听。
+  'editor.cursorMoved',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核事件名（= 插件可 emit 的集合；供 kernel `scopedBus` 执法使用） */

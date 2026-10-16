@@ -2667,6 +2667,11 @@ button.erb-mode-hint.unlocked:hover {
 .pv-row:hover {
   background: var(--hover, rgba(128, 128, 128, 0.12));
 }
+/* C1 反向下行：光标所在源行（与 hover 同款底色 + 左缘一根强调色竖条，指认不抢眼） */
+.pv-row.cur {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .pv-row.blank {
   opacity: 0.5;
 }
@@ -2818,6 +2823,11 @@ button.erb-mode-hint.unlocked:hover {
 }
 .sv-row:hover {
   background: var(--hover, rgba(128, 128, 128, 0.12));
+}
+/* C1 反向下行：光标所在源行的诊断（与 pv-row.cur 同一记号：底色 + 左缘竖条） */
+.sv-row.cur {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .sv-sev {
   flex: 0 0 auto;
@@ -4550,6 +4560,12 @@ button.primary .hint {
 /* 选中格：内侧描白环，与「有响应」的实心强调色区分，且不与全局焦点环（accent 外描边）打架 */
 .cm-cell.sel {
   box-shadow: inset 0 0 0 1px var(--fg);
+}
+/* C1 反向下行：光标所在函数贡献的格。用 outline（独立属性）而非 box-shadow——与 .sel 的
+   白色内环可同时成立；环画在格子内侧（负 offset），不与相邻格的重叠 */
+.cm-cell.cur {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
 }
 /* 焦点环：与壳层全局口径一致（1px accent、offset 1px）；同时把 .off 的淡出恢复，
    使空白格被键盘导航聚焦时也看得清 */

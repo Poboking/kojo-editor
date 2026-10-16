@@ -12,6 +12,7 @@
  */
 
 import type { ErbIndex, FamilyIndexRule, FamilyMatch, StateDependency } from '@kojo/plugin-api';
+import { pathKey } from '@kojo/plugin-api';
 
 /* ------------------------------ 面语义排序 ------------------------------ */
 
@@ -549,6 +550,79 @@ export function computeViewportWindow(
     topPad: start * rowHeight,
     bottomPad: (totalRows - end) * rowHeight,
   };
+}
+
+/* ------------------------------ 反向光标联动（C1） ------------------------------ */
+
+/** 光标位点（`editor.cursorMoved` 载荷的消费形状；本模块只关心 文件 + 行 + 是否派生视图） */
+export interface CursorSight {
+  readonly filePath: string | null;
+  readonly line: number;
+  readonly derivedView: boolean;
+}
+
+/**
+ * 行 → 函数判据所需的形状：`ErbFunction` / `FunctionPredicates` 的公共子集（区间三件套 + 路径）。
+ *
+ * 光标路径上只能同步取数据：`FunctionConditions` 没有 endLine、`functionPredicates`
+ * 是按名现拉的异步明细（读盘）——都不可用；`erb.parser` 当前索引的逐文件函数表
+ * 本身就是这套区间的真源（谓词明细的 startLine/endLine 正取自它）。
+ */
+export interface FunctionRange {
+  readonly filePath: string;
+  readonly startLine: number;
+  readonly endLine: number;
+}
+
+/**
+ * 光标位点 → 所在函数（区间包含，**最紧一层**）。
+ *
+ * 判据与宿主 `jump-to-state.ts` 的 `functionNameAt` 同思路（同一套折法不建第二套口径），
+ * 但数据在面板侧取，不 import app 包。三态一律 `null` = 清高亮（"没有"，不是错误）：
+ * 无位点 / 无文件 / **派生视图**（行号不属于真文件）；区间命中多个取最紧，
+ * 同宽取靠后定义（确定性）。filePath 判等走 `pathKey`（折叠大小写与分隔符）。
+ */
+export function functionRangeAt(
+  functions: readonly FunctionRange[],
+  sight: CursorSight | null,
+): FunctionRange | null {
+  if (!sight || sight.filePath === null || sight.derivedView) return null;
+  const key = pathKey(sight.filePath);
+  const span = (f: FunctionRange): number => f.endLine - f.startLine;
+  let best: FunctionRange | null = null;
+  for (const fn of functions) {
+    if (pathKey(fn.filePath) !== key) continue;
+    if (fn.startLine > sight.line || sight.line > fn.endLine) continue;
+    if (!best || span(fn) < span(best) || (span(fn) === span(best) && fn.startLine > best.startLine)) best = fn;
+  }
+  return best;
+}
+
+/**
+ * 命中函数在矩阵里**确实由它贡献**的单元格集合（行键 → 列键）。
+ *
+ * 高亮必须落在"这个格子真的包含这个函数"上：函数与单元格的对应关系以
+ * `MatrixCellFunction`（name + filePath + startLine）为准，与 `buildMatrix` 同源，
+ * 不另立"函数 → 列"的推导（那是第二套判据 = 漂移源）。光标函数不在当前矩阵
+ * （选了别的角色 / 未归属）→ 空集合 = 不高亮（静默，这是"没有"）。
+ */
+export function cellKeysOfFunction(
+  matrix: ConditionMatrix,
+  fn: { readonly filePath: string; readonly startLine: number },
+): Map<string, string> {
+  const out = new Map<string, string>();
+  const key = pathKey(fn.filePath);
+  for (const row of matrix.rows) {
+    for (const colKey of Object.keys(row.cells)) {
+      const cell = row.cells[colKey];
+      if (!cell) continue;
+      if (cell.functions.some((f) => f.startLine === fn.startLine && pathKey(f.filePath) === key)) {
+        out.set(row.key, colKey);
+        break; // 一个函数只贡献一格（一行一列）
+      }
+    }
+  }
+  return out;
 }
 
 /* ------------------------------ 标签 ------------------------------ */

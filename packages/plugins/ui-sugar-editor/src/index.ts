@@ -17,9 +17,10 @@
  *   - 装饰与判定都是**纯函数**（不读盘不写盘不发事件）——`decorate()` 拿到的
  *     就是宿主给的 `{path, text}`，转译器无 IO；面板的读盘走内核 io（只读）；
  *   - 判定/装饰归类在 `panel-logic.ts`（零 React，可单测）；
- *   - 当前文件来自宿主事件 `editor.activeFileChanged`；判定用的**文本真相**来自
- *     宿主事件 `editor.documentChanged`（C2：编辑器缓冲 = 当前可编译真相，读盘只是
- *     还没收到广播前的兜底）——两者都只是订阅，不持有宿主引用；
+ *   - 当前文件 / 文本真相 / 光标位点分别来自宿主事件 `editor.activeFileChanged` /
+ *     `editor.documentChanged`（C2：编辑器缓冲 = 当前可编译真相，读盘只是还没收到
+ *     广播前的兜底）/ `editor.cursorMoved`（C1 反向下行：光标动、诊断高亮跟）——
+ *     三者都只是订阅，不持有宿主引用；
  *   - 跳转复用宿主既有通道 `editor.revealLocation`；
  *   - 零游戏知识：本插件不认得任何游戏术语，变量字典/分野模板全在 adapter。
  */
@@ -60,6 +61,9 @@ import { performSugarSave } from './save-handler';
 
 /** 诊断渲染上限（防 DOM 爆炸；超出显式计数） */
 const DIAG_CAP = 200;
+
+/** 高亮行的最小节点形状（插件 tsconfig 无 DOM lib ⇒ 自备；scrollIntoView 跟随用） */
+type FollowNode = { scrollIntoView?(arg: { block: string }): void };
 
 export function createUiSugarEditorPlugin(): Plugin {
   return {
@@ -141,6 +145,13 @@ export function createUiSugarEditorPlugin(): Plugin {
         const liveRef = useRef(createLiveTextPool());
         /** 当前文件的真相更新序号（广播命中当前文件时 +1，驱动重算） */
         const [liveTick, setLiveTick] = useState(0);
+        /**
+         * C1 反向下行：光标行（只在「光标就在面板显示的这一份文件里、且不是派生视图」时非 null）。
+         * 派生视图的行号不属于这份文件——宁可清高亮，也不指错行。
+         */
+        const [cursorLine, setCursorLine] = useState<number | null>(null);
+        /** 当前高亮行的节点（scrollIntoView 跟随；无匹配 / 未渲染到 = null，静默跳过） */
+        const cursorRowRef = useRef<FollowNode | null>(null);
 
         // 当前文件（宿主广播）——换文件即重置
         useEffect(() => {
@@ -150,6 +161,9 @@ export function createUiSugarEditorPlugin(): Plugin {
             setRows([]);
             setError(null);
             setNonce(0);
+            // 高亮随旧文件一起清掉：新文件的位点稍后才到（读盘 + 转译），
+            // 中间这一拍若留着旧行号，就会在新文件里"指错行"
+            setCursorLine(null);
             setDegrade(p.filePath ? (isKojoFile(p.filePath) ? 'reading' : 'not-kojo') : 'no-project');
           });
           return un;
@@ -165,6 +179,29 @@ export function createUiSugarEditorPlugin(): Plugin {
           });
           return un;
         }, [filePath]);
+
+        // C1 反向下行：光标位点跟过来。文件判等走 pathKey（大小写 / 分隔符）；
+        // 别的文件 / 派生视图 / 无打开文件 → 清高亮（"没有"，不是错误，静默）
+        useEffect(() => {
+          const un = ctx.bus.on('editor.cursorMoved', (p) => {
+            const here =
+              !p.derivedView &&
+              filePath !== null &&
+              p.filePath !== null &&
+              pathKey(p.filePath) === pathKey(filePath);
+            setCursorLine((prev) => {
+              const next = here ? p.line : null;
+              return prev === next ? prev : next; // 同一行上的列级移动不重渲
+            });
+          });
+          return un;
+        }, [filePath]);
+
+        // 跟随：光标行换人时滚一次（nearest——已在视野内就不动）。行未渲染 / 无匹配行 → 静默跳过。
+        useEffect(() => {
+          if (cursorLine === null) return;
+          cursorRowRef.current?.scrollIntoView?.({ block: 'nearest' });
+        }, [cursorLine]);
 
         // 取"当前真相"：编辑器缓冲广播优先（live），还没收到广播的窗口期退回读盘（disk）；
         // 换文件 / 手动刷新 / 缓冲更新都走这里。转译有共享缓存，此处按收即算。
@@ -285,11 +322,14 @@ export function createUiSugarEditorPlugin(): Plugin {
                   // （报障要能贴码）。真源 = 契约层 `plugin-api/diagnostic-copy.ts`，
                   // 本面板**不自带映射**——两处各抄一份迟早分叉。
                   const disp = diagnosticDisplay(r.code);
+                  // C1 反向下行：光标所在源行的诊断高亮（文件级诊断 r.line = null 不参与比对）
+                  const isCur = cursorLine !== null && r.line === cursorLine;
                   return createElement(
                     'div',
                     {
                       key: r.key,
-                      className: `sv-row ${r.severity}`,
+                      className: `sv-row ${r.severity}${isCur ? ' cur' : ''}`,
+                      ref: isCur ? cursorRowRef : undefined,
                       onClick: r.line !== null ? () => reveal(r.line as number) : undefined,
                       title: r.line !== null ? '点击定位到源行' : '文件级诊断',
                     },
