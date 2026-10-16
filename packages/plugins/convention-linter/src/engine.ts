@@ -24,6 +24,7 @@ import type {
   ConventionCheckContext,
   ConventionIssue,
   ConventionLinterService,
+  ConventionProjectUnitEntry,
   ConventionReport,
   ConventionRule,
   ConventionSeverity,
@@ -35,13 +36,33 @@ import type {
 import { CONVENTION_SEVERITY_ORDER } from '@kojo/plugin-api';
 import { duplicateFunctionRule } from './rules/duplicate-function';
 import { sugarStaticConventionsRule } from './rules/sugar-conventions';
-import type { LintCache, LintFileBucket } from './snapshot';
+import type { LintCache, LintFileBucket, LintUnitEntry } from './snapshot';
 
 /**
  * 逐文件规则的并发上限（沿用规则内部原来的 `mapLimit(…, 12, …)` 口径）。
  * 现在由**引擎**驱动这个循环：桶归引擎持有，规则只描述"一个文件怎么判"。
  */
 const LINT_FILE_CONCURRENCY = 12;
+
+/**
+ * 分区规则的内存态（PERF-12b）：全局判据 `expect.fingerprint` + 外部输入摘要
+ * `partition.key()` 双门，逐文件分区按 `fileMtimes` 复用（与逐文件桶同族判据）。
+ * 任一门不符 ⇒ 该规则分区整体弃用重算（fail-closed，绝不拿旧分区配新判据）。
+ */
+interface RuleUnitState {
+  expectFingerprint: string;
+  key: string;
+  byPath: Map<string, LintUnitEntry>;
+}
+
+/** 一条分区规则本轮的执行计划 */
+interface PartitionPlan {
+  rule: ConventionRule;
+  state: RuleUnitState;
+  stale: ErbFile[];
+  unitsReused: number;
+  unitsTotal: number;
+}
 
 /** 限并发执行（结果写进调用方的 Map；装配仍按 walk 顺序取 ⇒ 输出与完成顺序无关） */
 async function mapLimit<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -126,6 +147,8 @@ export class ConventionEngine implements ConventionLinterService {
   /** 在途运行（自动触发与面板手动重跑叠跑 = 白跑两遍 3.1 s，故共享同一次） */
   private inFlight: Promise<ConventionReport> | null = null;
   private readonly listeners = new Set<(report: ConventionReport | null) => void>();
+  /** 分区规则的内存态（ruleId → 状态）；判据不符即弃，见 `RuleUnitState` */
+  private readonly unitStates = new Map<string, RuleUnitState>();
 
   constructor(private readonly deps: ConventionEngineDeps) {}
 
@@ -214,28 +237,85 @@ export class ConventionEngine implements ConventionLinterService {
      * "改一个文件重算全库"的由来（§5.70 同一课）。
      */
     const canReuseProject = !force && !!stored && !!index.fingerprint && stored.erbFingerprint === index.fingerprint;
+    const tLoad = Date.now();
 
-    const ruleTimings: { ruleId: string; ms: number; issues: number; reused: boolean }[] = [];
+    const ruleTimings: {
+      ruleId: string;
+      ms: number;
+      issues: number;
+      reused: boolean;
+      /** 分区规则的本轮贡献复用读数（PERF-12b）；非分区规则缺省 */
+      cross?: { reused: number; total: number };
+    }[] = [];
     const projectResults: Record<string, ConventionIssue[]> = {};
 
+    const files = [...index.files.values()];
+
+    /**
+     * 分区计划（PERF-12b，2026-10-16）：声明了 `partition` 的跨文件规则不再"整包重算"——
+     * 每文件的结构化贡献按 **mtime（与逐文件桶同族判据）+ 外部输入摘要 `key()`**
+     * 双门复用，每轮只重算 mtime 变了的那些文件，合并本身只看贡献。
+     * 判据任一不符 ⇒ 该规则分区整体弃用重算（fail-closed）；`force` ⇒ 全文件重算
+     * （用户的显式意图不被分区糊住），算完照常回填缓存。
+     */
+    const partitionPlans = new Map<string, PartitionPlan>();
+    const partitionSkipped = new Set<string>();
     for (const rule of projectRules) {
-      const t0 = Date.now();
-      const cached = canReuseProject ? stored!.projectResults[rule.id] : undefined;
-      if (cached) {
-        projectResults[rule.id] = cached;
-        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: cached.length, reused: true });
+      if (!rule.partition) continue;
+      if (canReuseProject && stored!.projectResults[rule.id]) continue; // 整包复用更快，不必分区
+      const partition = rule.partition;
+      let gateKey: string;
+      try {
+        gateKey = partition.key ? String(await partition.key(checkCtx)) : '';
+      } catch (err) {
+        // key() 失败 = 外部输入读不出 ⇒ 判据不全：该规则本次**没有结论**（不拿旧分区凑）
+        failedRules.push({
+          ruleId: rule.id,
+          error: `分区判据 key() 失败：${err instanceof Error ? err.message : String(err)}`,
+        });
+        partitionSkipped.add(rule.id);
+        this.deps.log.warn(`Convention rule '${rule.id}' partition key failed: ${String(err)}`);
         continue;
       }
-      try {
-        const produced = (await rule.check!(checkCtx)) ?? [];
-        projectResults[rule.id] = produced;
-        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: produced.length, reused: false });
-      } catch (err) {
-        // 抛错的规则**不写 projectResults** ⇒ 下次必然重算它（坏一次不能永久缓存坏结果）
-        failedRules.push({ ruleId: rule.id, error: err instanceof Error ? err.message : String(err) });
-        this.deps.log.warn(`Convention rule '${rule.id}' failed: ${String(err)}`);
-        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: 0, reused: false });
+      const gateFp = expect ? expect.fingerprint : '';
+      let state = gateFp ? this.unitStates.get(rule.id) : undefined;
+      if (!state || state.expectFingerprint !== gateFp || state.key !== gateKey) {
+        state = { expectFingerprint: gateFp, key: gateKey, byPath: new Map() };
+        if (gateFp) this.unitStates.set(rule.id, state);
+        const storedUnits = !force && expect ? stored?.projectUnits?.[rule.id] : undefined;
+        if (storedUnits && (stored?.partitionKeys?.[rule.id] ?? '') === gateKey) {
+          let bad = false;
+          for (const [path, e] of Object.entries(storedUnits)) {
+            if (partition.isUnit && !partition.isUnit(e.unit)) {
+              bad = true;
+              break;
+            }
+            state.byPath.set(path, e);
+          }
+          if (bad) {
+            state.byPath.clear();
+            this.deps.log.warn(
+              `Convention partition units for '${rule.id}' failed structure check; recomputing all (fail-closed)`,
+            );
+          }
+        }
       }
+      const stale: ErbFile[] = [];
+      for (const f of files) {
+        if (!force) {
+          const mtime = index.fileMtimes?.get(f.path) ?? null;
+          const e = state.byPath.get(f.path);
+          if (e && e.mtimeMs !== null && mtime !== null && e.mtimeMs === mtime) continue;
+        }
+        stale.push(f);
+      }
+      partitionPlans.set(rule.id, {
+        rule,
+        state,
+        stale,
+        unitsReused: files.length - stale.length,
+        unitsTotal: files.length,
+      });
     }
 
     /**
@@ -244,7 +324,6 @@ export class ConventionEngine implements ConventionLinterService {
      *
      * stale 清单**先算齐**（判据一字未动）：批量预取需要全部规则 stale 的并集。
      */
-    const files = [...index.files.values()];
     const prevByRule = new Map<string, Record<string, LintFileBucket>>();
     const staleByRule = new Map<string, ErbFile[]>();
     const prefetchPaths: string[] = [];
@@ -259,6 +338,14 @@ export class ConventionEngine implements ConventionLinterService {
       });
       staleByRule.set(rule.id, stale);
       for (const f of stale) {
+        if (prefetchSeen.has(f.path)) continue;
+        prefetchSeen.add(f.path);
+        prefetchPaths.push(f.path);
+      }
+    }
+    // 分区规则的 stale 文件并入同一批预取（贡献可能要读正文——如糖侧静态扫描）
+    for (const plan of partitionPlans.values()) {
+      for (const f of plan.stale) {
         if (prefetchSeen.has(f.path)) continue;
         prefetchSeen.add(f.path);
         prefetchPaths.push(f.path);
@@ -280,6 +367,56 @@ export class ConventionEngine implements ConventionLinterService {
         }
       } catch (err) {
         this.deps.log.warn(`Convention batch prefetch failed; falling back to per-file reads: ${String(err)}`);
+      }
+    }
+    const tPrefetch = Date.now();
+
+    for (const rule of projectRules) {
+      const t0 = Date.now();
+      const cached = canReuseProject ? stored!.projectResults[rule.id] : undefined;
+      if (cached) {
+        projectResults[rule.id] = cached;
+        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: cached.length, reused: true });
+        continue;
+      }
+      if (partitionSkipped.has(rule.id)) {
+        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: 0, reused: false });
+        continue;
+      }
+      const plan = partitionPlans.get(rule.id);
+      if (plan) {
+        const outcome = await this.runPartitionedRule(plan, checkCtx, files);
+        if (!outcome.ok) {
+          // 分区/合并不全 ⇒ 整条规则本次**没有结论**（跨文件结论绝不带洞拼造）；不写 projectResults
+          failedRules.push({ ruleId: rule.id, error: outcome.error });
+          ruleTimings.push({
+            ruleId: rule.id,
+            ms: Date.now() - t0,
+            issues: 0,
+            reused: false,
+            cross: { reused: plan.unitsReused, total: plan.unitsTotal },
+          });
+        } else {
+          projectResults[rule.id] = outcome.issues;
+          ruleTimings.push({
+            ruleId: rule.id,
+            ms: Date.now() - t0,
+            issues: outcome.issues.length,
+            reused: false,
+            cross: { reused: plan.unitsReused, total: plan.unitsTotal },
+          });
+        }
+        continue;
+      }
+      try {
+        const produced = (await rule.check!(checkCtx)) ?? [];
+        projectResults[rule.id] = produced;
+        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: produced.length, reused: false });
+      } catch (err) {
+        // 抛错的规则**不写 projectResults** ⇒ 下次必然重算它（坏一次不能永久缓存坏结果）
+        failedRules.push({ ruleId: rule.id, error: err instanceof Error ? err.message : String(err) });
+        this.deps.log.warn(`Convention rule '${rule.id}' failed: ${String(err)}`);
+        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: 0, reused: false });
       }
     }
 
@@ -365,25 +502,116 @@ export class ConventionEngine implements ConventionLinterService {
         `in ${report.durationMs}ms across ${executed} rule(s)` +
         (failedRules.length ? `, ${failedRules.length} rule(s) failed` : ''),
     );
-    // 规则顺序 = 执行顺序（确定性）；`复用` 标记是"增量到底命中没有"的读数
+    // 规则顺序 = 执行顺序（确定性）；`复用` 标记是"增量到底命中没有"的读数，
+    // `分复用 a/b` = 分区规则本轮按 mtime 复用的文件贡献数（PERF-12b 判据读数）
     this.deps.log.info(
       `  lint breakdown: ${ruleTimings
-        .map((t) => `${t.ruleId} ${t.ms}ms/${t.issues}项${t.reused ? '(复用)' : ''}`)
-        .join(' · ')}` + ` ｜ 逐文件重算 ${recomputedFiles} 个文件`,
+        .map(
+          (t) =>
+            `${t.ruleId} ${t.ms}ms/${t.issues}项` +
+            (t.reused ? '(复用)' : t.cross ? `分复用 ${t.cross.reused}/${t.cross.total}` : ''),
+        )
+        .join(' · ')}` +
+        ` ｜ 逐文件重算 ${recomputedFiles} 个文件` +
+        ` ｜ 规则外：装载 ${tLoad - startedAt}ms · 预取 ${tPrefetch - tLoad}ms · 装配 ${Date.now() - tPrefetch}ms`,
     );
     this.commit(report);
 
     /**
      * 落盘：只在真算过东西时写（全命中再刷一遍是纯浪费）。
      * `index.fingerprint` 缺失时存空串——下次 `canReuseProject` 仍判假，保守不命中。
+     * 分区贡献随本轮实际状态写盘（键 = 本轮 `key()`；ruleId 缺项 = 下次该规则全量重算分区）。
      */
     if (this.deps.snapshot && expect && (recomputedFiles > 0 || ruleTimings.some((t) => !t.reused))) {
+      const projectUnits: Record<string, Record<string, LintUnitEntry>> = {};
+      const partitionKeys: Record<string, string> = {};
+      for (const plan of partitionPlans.values()) {
+        const byPath: Record<string, LintUnitEntry> = {};
+        for (const f of files) {
+          const e = plan.state.byPath.get(f.path);
+          if (e) byPath[f.path] = e; // 只留本次索引里还活着的文件（与桶同纪律：快照不越攒越大）
+        }
+        projectUnits[plan.rule.id] = byPath;
+        partitionKeys[plan.rule.id] = plan.state.key;
+      }
+      // 本轮走整包复用、没建计划的分区规则：把上次盘上的分区原样带走（判据仍由 key+mtime 把关）
+      if (canReuseProject && stored?.projectUnits) {
+        for (const rule of projectRules) {
+          if (!rule.partition || projectUnits[rule.id]) continue;
+          const prev = stored.projectUnits[rule.id];
+          if (!prev) continue;
+          const byPath: Record<string, LintUnitEntry> = {};
+          for (const f of files) {
+            const e = prev[f.path];
+            if (e) byPath[f.path] = e;
+          }
+          projectUnits[rule.id] = byPath;
+          partitionKeys[rule.id] = stored.partitionKeys?.[rule.id] ?? '';
+        }
+      }
       this.deps.snapshot.save(
-        { erbFingerprint: index.fingerprint ?? '', projectResults, buckets },
+        {
+          erbFingerprint: index.fingerprint ?? '',
+          projectResults,
+          buckets,
+          projectUnits,
+          partitionKeys,
+        },
         expect,
       );
     }
     return report;
+  }
+
+  /**
+   * 分区路径执行一条规则（PERF-12b）。
+   *
+   * 纪律与桶同族但**更严**：跨文件结论绝不带洞拼造——任一文件的贡献算不出来（抛错）
+   * ⇒ **整条规则本次没有结论**（记 `failedRules`，不写 `projectResults`）；
+   * 规则自己声明"本文件无结论"（`fileUnit` 返回 `undefined`，如读盘失败的跳过口径）
+   * ⇒ 该文件不入合并、不缓存，其余照常（与改造前的逐文件跳过语义逐条一致）。
+   */
+  private async runPartitionedRule(
+    plan: PartitionPlan,
+    ctx: ConventionCheckContext,
+    files: readonly ErbFile[],
+  ): Promise<{ ok: true; issues: ConventionIssue[] } | { ok: false; error: string }> {
+    const { rule, state, stale } = plan;
+    const partition = rule.partition!;
+    const fresh = new Map<string, unknown>();
+    let failedUnits = 0;
+    await mapLimit(stale, LINT_FILE_CONCURRENCY, async (file) => {
+      const mtime = ctx.index.fileMtimes?.get(file.path) ?? null;
+      try {
+        const produced = await partition.fileUnit(ctx, file);
+        if (produced === undefined) {
+          state.byPath.delete(file.path); // 规则声明"无结论"：不缓存、不入合并
+          return;
+        }
+        fresh.set(file.path, produced);
+        if (mtime !== null) state.byPath.set(file.path, { mtimeMs: mtime, unit: produced });
+        else state.byPath.delete(file.path); // mtime 判据不可得 ⇒ 算了也不缓存（保守）
+      } catch (err) {
+        failedUnits++;
+        state.byPath.delete(file.path);
+        this.deps.log.warn(`Convention rule '${rule.id}' partition failed on ${file.path}: ${String(err)}`);
+      }
+    });
+    if (failedUnits > 0) {
+      return { ok: false, error: `分区计算失败 ${failedUnits} 个文件（详见日志）——跨文件结论不带洞拼造` };
+    }
+    const entries: ConventionProjectUnitEntry[] = [];
+    for (const file of files) {
+      if (fresh.has(file.path)) entries.push({ file, unit: fresh.get(file.path) });
+      else if (state.byPath.has(file.path)) entries.push({ file, unit: state.byPath.get(file.path)!.unit });
+      // 都没有 ⇒ 本文件这轮无结论（规则自己声明的跳过口径），绝不伪造
+    }
+    try {
+      const produced = (await partition.combine(ctx, entries)) ?? [];
+      return { ok: true, issues: produced };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   private commit(report: ConventionReport): void {

@@ -21,6 +21,11 @@
  * 「跨文件规则 + 那一个文件的逐文件规则」，不再付全库正文扫描。
  * 两个指纹字段**刻意分开**：合成一个就又回到"改一个文件让全局判据也失效"的老毛病。
  *
+ * ## v3：跨文件规则的分区层（`units` + `partitionKeys`）
+ * `partition` 化的 `scope:'project'` 规则把"每文件的结构化贡献"按 mtime 逐文件缓存
+ * （与桶同族判据），另按 `partitionKeys[ruleId]`（外部输入摘要，如路由表内容）整体失效；
+ * `projectResults` 仍受整项目指纹约束——分区层是它在"改一棵"时的补救路径。
+ *
  * ## 纪律
  * - **fail-closed**：全局判据或结构任一不符 ⇒ null（调用方删除并重算），绝不"修"快照；
  * - **有失败的就不存那一块**：某条整项目规则抛错 ⇒ 不写它的结论；某文件抛错 ⇒ 不留该文件的桶。
@@ -38,8 +43,8 @@ import type {
   GameProject,
 } from '@kojo/plugin-api';
 
-/** 校验语义版本；改任何规则的判定口径时 +1（v1 整块报告 ⇒ v2 三层判据 + 逐文件桶） */
-export const LINT_SNAPSHOT_FORMAT = 2;
+/** 校验语义版本；改任何规则的判定口径时 +1（v1 整块报告 ⇒ v2 三层判据 + 逐文件桶 ⇒ v3 跨文件分区） */
+export const LINT_SNAPSHOT_FORMAT = 3;
 
 /** 存储键（固定槽位：版本在 payload 里，换格式时旧文件读出即判死并被覆盖，不留孤儿） */
 export const LINT_STORE_KEY = 'lint-report-v1';
@@ -52,6 +57,12 @@ export interface LintFileBucket {
   readonly issues: ConventionIssue[];
 }
 
+/** 一个文件在某条分区化跨文件规则（`partition`）下的贡献（JSON 值；null = 本文件无贡献） */
+export interface LintUnitEntry {
+  readonly mtimeMs: number | null;
+  readonly unit: unknown;
+}
+
 /** 可复用的校验缓存本体（三层判据里后两层的"结果侧"） */
 export interface LintCache {
   /** 本次缓存对应的整项目 ERB 指纹——只约束 `projectResults`，不约束桶 */
@@ -60,10 +71,16 @@ export interface LintCache {
   readonly projectResults: Record<string, ConventionIssue[]>;
   /** `scope:'file'` 规则的逐文件桶（ruleId → 路径 → 桶） */
   readonly buckets: Record<string, Record<string, LintFileBucket>>;
+  /** 分区化跨文件规则的逐文件贡献（ruleId → 路径 → 分区）；判据 = mtime + `partitionKeys` */
+  readonly projectUnits?: Record<string, Record<string, LintUnitEntry>>;
+  /** 分区规则的外部输入摘要（ruleId → `partition.key()`）；不等 ⇒ 该规则分区全弃 */
+  readonly partitionKeys?: Record<string, string>;
 }
 
 /** 落盘形态（v2）。桶的元组：`[mtime]` = 该文件这次什么都没产出，`[mtime, issues]` = 有结论 */
 type BucketTuple = [number | null] | [number | null, ConventionIssue[]];
+/** 分区元组：`[mtime, unit]`（unit 恒在——null 也是合法结论「本文件无贡献」） */
+type UnitTuple = [number | null, unknown];
 
 export interface StoredLintCache {
   readonly format: number;
@@ -76,6 +93,8 @@ export interface StoredLintCache {
   readonly savedAt: number;
   readonly project: Record<string, ConventionIssue[]>;
   readonly buckets: Record<string, Record<string, BucketTuple>>;
+  readonly units: Record<string, Record<string, UnitTuple>>;
+  readonly partitionKeys: Record<string, string>;
 }
 
 /**
@@ -115,6 +134,12 @@ export function encodeCache(args: { cache: LintCache; expect: CacheExpect; saved
     }
     buckets[ruleId] = out;
   }
+  const units: Record<string, Record<string, UnitTuple>> = {};
+  for (const [ruleId, byPath] of Object.entries(args.cache.projectUnits ?? {})) {
+    const out: Record<string, UnitTuple> = {};
+    for (const [path, u] of Object.entries(byPath)) out[path] = [u.mtimeMs, u.unit];
+    units[ruleId] = out;
+  }
   return {
     format: LINT_SNAPSHOT_FORMAT,
     projectRoot: args.expect.projectRoot,
@@ -124,6 +149,8 @@ export function encodeCache(args: { cache: LintCache; expect: CacheExpect; saved
     savedAt: args.savedAt ?? Date.now(),
     project: args.cache.projectResults,
     buckets,
+    units,
+    partitionKeys: args.cache.partitionKeys ?? {},
   };
 }
 
@@ -179,5 +206,35 @@ export function decodeCache(raw: unknown, expect: CacheExpect): LintCache | null
     }
     buckets[ruleId] = out;
   }
-  return { erbFingerprint: s.erbFingerprint, projectResults, buckets };
+
+  const projectUnits: Record<string, Record<string, LintUnitEntry>> = {};
+  if (s.units !== undefined) {
+    if (typeof s.units !== 'object' || s.units === null) return null;
+    for (const [ruleId, byPath] of Object.entries(s.units)) {
+      if (typeof byPath !== 'object' || byPath === null) return null;
+      const out: Record<string, LintUnitEntry> = {};
+      for (const [path, tuple] of Object.entries(byPath as Record<string, unknown>)) {
+        if (!Array.isArray(tuple) || tuple.length !== 2) return null;
+        const mtime = tuple[0];
+        if (mtime !== null && typeof mtime !== 'number') return null;
+        out[path] = { mtimeMs: mtime as number | null, unit: tuple[1] };
+      }
+      projectUnits[ruleId] = out;
+    }
+  }
+  const partitionKeys: Record<string, string> = {};
+  if (s.partitionKeys !== undefined) {
+    if (typeof s.partitionKeys !== 'object' || s.partitionKeys === null) return null;
+    for (const [ruleId, key] of Object.entries(s.partitionKeys)) {
+      if (typeof key !== 'string') return null;
+      partitionKeys[ruleId] = key;
+    }
+  }
+  return {
+    erbFingerprint: s.erbFingerprint,
+    projectResults,
+    buckets,
+    projectUnits: Object.keys(projectUnits).length > 0 ? projectUnits : undefined,
+    partitionKeys: Object.keys(partitionKeys).length > 0 ? partitionKeys : undefined,
+  };
 }

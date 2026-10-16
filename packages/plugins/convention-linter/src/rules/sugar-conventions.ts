@@ -375,6 +375,17 @@ function checkReadonlyAliasAssign(lines: ScanLine[], filePath: string): Conventi
 
 /* ============================== 规则导出 ============================== */
 
+/** 单文件四项扫描（`check` 与 `partition.fileUnit` 共用同一份实现 ⇒ 两路产出天然同形） */
+function scanFileConventions(text: string, path: string): ConventionIssue[] {
+  const lines = scanLines(text);
+  return [
+    ...checkContInsideQuotes(lines, path),
+    ...checkMultipleChoiceBlocks(lines, path),
+    ...checkExprMissingElse(lines, path),
+    ...checkReadonlyAliasAssign(lines, path),
+  ];
+}
+
 /**
  * 合并成一条引擎规则（单一 `check`，内部跑四项扫描后再统一返回）。
  *
@@ -384,12 +395,55 @@ function checkReadonlyAliasAssign(lines: ScanLine[], filePath: string): Conventi
  */
 export const SUGAR_STATIC_CONVENTIONS_RULE_ID = 'sugar.static-conventions';
 
+/**
+ * 分区复用（PERF-12b）：这四项判据**逐条都只看单文件正文**，跨文件部分是假象——
+ * 合成一条 `'project'` 规则后它吃了整项目指纹，"改一棵"就重扫全库 `.kojo` 正文
+ * （真语料实测这条是校验段的大头）。分区口径与旧 `check` 逐条一致：
+ * - 非 `.kojo` 文件 ⇒ 单元 `null`（"没扫，结论是不适用"，可缓存）；
+ * - 读盘失败 ⇒ `undefined`（本轮无结论，不入缓存 ⇒ 下轮重试——与旧代码
+ *   `try/catch + warn + continue` 的跳过语义**完全同形**，不算规则失败）；
+ * - 产出 = 该文件的 issue 数组，`combine` 按 walk 序拼接（旧 check 也按 walk 序）。
+ */
 export const sugarStaticConventionsRule: ConventionRule = {
   id: SUGAR_STATIC_CONVENTIONS_RULE_ID,
   description:
     '.kojo 侧静态约定（规范 §8 子集）：`续` 标记写在引号内、每时机多个「选项」块、表达式 `如果`/`当` 缺「否则」、只读别名作赋值左值',
   severity: 'error',
   source: 'docs/SYNTAX-SUGAR-SURFACE-SPEC.md §3.3 / §3.7 / §3.5 / §3.6 / §5.0 / §8',
+  partition: {
+    async fileUnit(ctx, file): Promise<ConventionIssue[] | null | undefined> {
+      const path = file.path;
+      if (!/\.kojo$/i.test(path)) return null;
+      let text: string;
+      try {
+        text = await ctx.readFile(path);
+      } catch (err) {
+        ctx.log.warn(`sugar conventions: 读取 ${path} 失败，跳过：${String(err)}`);
+        return undefined;
+      }
+      return scanFileConventions(text, path);
+    },
+    combine(_ctx, entries): ConventionIssue[] {
+      const issues: ConventionIssue[] = [];
+      for (const e of entries) {
+        const unit = e.unit;
+        if (Array.isArray(unit)) issues.push(...unit);
+      }
+      return issues;
+    },
+    isUnit(v): boolean {
+      if (v === null) return true;
+      if (!Array.isArray(v)) return false;
+      return v.every(
+        (i) =>
+          typeof i === 'object' &&
+          i !== null &&
+          typeof (i as ConventionIssue).ruleId === 'string' &&
+          typeof (i as ConventionIssue).message === 'string' &&
+          typeof (i as ConventionIssue).severity === 'string',
+      );
+    },
+  },
   async check(ctx): Promise<ConventionIssue[]> {
     const issues: ConventionIssue[] = [];
     for (const file of ctx.index.files.values()) {
@@ -405,13 +459,7 @@ export const sugarStaticConventionsRule: ConventionRule = {
         ctx.log.warn(`sugar conventions: 读取 ${path} 失败，跳过：${String(err)}`);
         continue;
       }
-      const lines = scanLines(text);
-      issues.push(
-        ...checkContInsideQuotes(lines, path),
-        ...checkMultipleChoiceBlocks(lines, path),
-        ...checkExprMissingElse(lines, path),
-        ...checkReadonlyAliasAssign(lines, path),
-      );
+      issues.push(...scanFileConventions(text, path));
     }
     return issues;
   },

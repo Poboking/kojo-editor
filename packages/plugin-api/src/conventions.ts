@@ -69,6 +69,46 @@ export interface ConventionCheckContext {
  */
 export type ConventionRuleScope = 'project' | 'file';
 
+/**
+ * 跨文件规则的**分区复用**端口（PERF-12b，2026-10-16）。
+ *
+ * `scope:'project'` 的规则默认"任一 ERB 变 ⇒ 整包重算"。但多数跨文件判定的真实形态是
+ * **逐文件的结构化贡献**（这棵文件里有哪些函数名/家族面/签名槽）+ **一次廉价合并**：
+ * 重活（正文扫描、名字解析、逐条比对）全部只依赖该文件自身的事实，可以由引擎按
+ * `ErbIndex.fileMtimes` 逐文件缓存；合并只看贡献集合，与文件内容无额外耦合。
+ *
+ * 声明 `partition` 是继 `scope` 之后的第二个**语义承诺**：
+ * - `fileUnit(file)` 只能是该文件自身事实（`ctx` 读到的文本、`index` 里该文件的条目、
+ *   以及 `key()` 所摘要的外部输入）的**纯函数**，产出必须是 JSON 可序列化值
+ *   （引擎会落盘复用）；返回 `undefined` = "本文件这轮没有结论"（引擎不入合并、
+ *   **不缓存**，下次必重算它——读盘失败等瞬态要用这条，绝不把"没结论"编造成结论）；
+ * - `combine(entries)` 只看传入贡献（walk 序）与 `ctx`，产出必须与 `check(ctx)`
+ *   在全部文件新鲜计算时**逐条相同**——`check` 保留为对拍基准，引擎在分区路径
+ *   不再调用它；
+ * - `key(ctx)` 摘要规则吃掉的**非 ERB 外部输入**（如路由表内容摘要）；两次运行
+ *   `key` 不等 ⇒ 该规则全部分区作废重算（fail-closed，绝不拿旧分区配新外部输入）；
+ * - `isUnit(v)` 校验从盘上还原的分区结构；任一不符 ⇒ 该规则分区整体弃用重算。
+ *   缺省 = 结构由 JSON 往返保证。
+ *
+ * 引擎侧的失效判据与逐文件桶完全同族：mtime 任一侧取不到 ⇒ 该文件必重算。
+ */
+export interface ConventionProjectUnitEntry {
+  /** 本文件（贡献来自它的自身事实） */
+  readonly file: ErbFile;
+  /** `fileUnit` 的产出（JSON 值） */
+  readonly unit: unknown;
+}
+
+export interface ConventionProjectPartition {
+  fileUnit(ctx: ConventionCheckContext, file: ErbFile): unknown | Promise<unknown>;
+  combine(
+    ctx: ConventionCheckContext,
+    entries: readonly ConventionProjectUnitEntry[],
+  ): ConventionIssue[] | Promise<ConventionIssue[]>;
+  key?(ctx: ConventionCheckContext): string | Promise<string>;
+  isUnit?(unit: unknown): boolean;
+}
+
 /** 可校验的剧本约定。`check` 缺省 = 仅登记元数据（未实现校验）。 */
 export interface ConventionRule {
   readonly id: string;
@@ -85,6 +125,12 @@ export interface ConventionRule {
    * 因此这里的 issue `key` 不得跨文件聚合（否则作者改 A 文件会让 B 文件的结论过期）。
    */
   checkFile?(ctx: ConventionCheckContext, file: ErbFile): ConventionIssue[] | Promise<ConventionIssue[]>;
+  /**
+   * 跨文件分区复用（见 {@link ConventionProjectPartition}）。仅对 `scope:'project'`
+   * 生效；缺省 = 不分区（整包重算，旧行为）。实现后 `check` 仍必须存在（对拍基准 +
+   * 判据不全时的兜底路径）。
+   */
+  readonly partition?: ConventionProjectPartition;
 }
 
 /** 某条规则本次未能产出结果（执行抛错）——绝不静默 */

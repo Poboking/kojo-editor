@@ -99,7 +99,7 @@ describe('全局判据 fail-closed', () => {
 
   it('存储键是安全段（固定槽位名；版本在 payload 里，换格式不留孤儿）', () => {
     expect(LINT_STORE_KEY).toMatch(/^[A-Za-z0-9_][A-Za-z0-9._-]{0,119}$/);
-    expect(LINT_SNAPSHOT_FORMAT).toBe(2);
+    expect(LINT_SNAPSHOT_FORMAT).toBe(3);
   });
 });
 

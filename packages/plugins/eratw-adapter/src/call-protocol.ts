@@ -20,6 +20,7 @@
  */
 
 import type { FileIO, KojoCallProtocol, KojoCallSlot, Logger, ReplayCallContext } from '@kojo/plugin-api';
+import { stableHash } from '@kojo/plugin-api';
 
 /** 路由行：CALLFORM / TRYCALLFORM / TRYCCALLFORM（TRYC 系）<模板>(<实参表>)；
  *  括号可省（无实参转发）。**TRYCALLFORM 是 TRY+CALLFORM，TRYCCALLFORM 是
@@ -117,6 +118,11 @@ export interface LoadCallProtocolOptions {
 export interface EratwCallProtocol extends KojoCallProtocol {
   /** 所有匹配模板的**逐类最大**转发槽数；无模板匹配 → null（协议不认识该函数） */
   maxForwardedSlotsFor(functionName: string): { int: number; str: number } | null;
+  /**
+   * 路由表正文摘要（PERF-12b，additive）：分区缓存判据（`ConventionProjectPartition.key`）
+   * 用它把"路由文件变了但口上 ERB 没变"的失效也兜住。同内容重建 ⇒ 同摘要（可跨开项目复用）。
+   */
+  readonly routeDigest?: string;
 }
 
 /**
@@ -200,6 +206,8 @@ export async function loadEratwCallProtocol(opts: LoadCallProtocolOptions): Prom
 
   return {
     slotsFor,
+    /** 路由表正文摘要（分区缓存判据用；正文含注释——保守方向，宁多废一次不多复用一次） */
+    routeDigest: stableHash(text),
 
     /**
      * 推导「确定槽值」调用上下文（HK-20）——只填**确定事实**：

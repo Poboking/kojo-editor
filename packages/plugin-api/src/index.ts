@@ -138,6 +138,8 @@ export type {
   ConventionCheckContext,
   ConventionIssue,
   ConventionLinterService,
+  ConventionProjectPartition,
+  ConventionProjectUnitEntry,
   ConventionReport,
   ConventionRule,
   ConventionRuleFailure,

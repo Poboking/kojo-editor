@@ -15,6 +15,7 @@
 import type {
   ConventionCheckContext,
   ConventionIssue,
+  ConventionProjectUnitEntry,
   ConventionRule,
   ErbParam,
 } from '@kojo/plugin-api';
@@ -49,11 +50,89 @@ const KX_RULE = 'eratw.kx-placeholder';
  * 一个**函数名**一个 issue（按归一化名去重）——实测 1,546 处占位符对应
  * 约 603 个去重函数名；逐处列举会淹没面板，逐名列举才是可操作清单。
  */
+/** 一个 KX 命中点（`check` 与 `partition.combine` 共用的最小形态） */
+interface KxRef {
+  readonly name: string;
+  readonly filePath: string;
+  readonly startLine: number;
+}
+
+/** 一条命中组 ⇒ 一个 issue（两路共用这一份构造 ⇒ 产出逐字同形） */
+function kxIssue(hit: KxRef, where: readonly string[]): ConventionIssue {
+  const m = parseKojoFamily(hit.name);
+  return {
+    ruleId: KX_RULE,
+    severity: 'warning',
+    message:
+      `「${hit.name}」为 KX 占位符残留（共 ${where.length} 处）：模板以 K1 编写后需全文替换为 K{角色号}，` +
+      `漏改则该口上永远不会被引擎调用。`,
+    filePath: hit.filePath,
+    line: hit.startLine,
+    characterNo: m?.characterNo ?? undefined,
+    family: m?.family || undefined,
+    key: `${KX_RULE}|${hit.name.toUpperCase()}`,
+  };
+}
+
+/** `check` 的命中判据（`_KX` 子串前置过滤 + 占位符解析），两路共用 */
+function isKxHit(name: string): boolean {
+  return name.includes('_KX') && parseKojoFamily(name)?.isPlaceholder === true;
+}
+
+/** 分区 combine 用：单元 `[原名, 行号]` 按归一化名分组；插入序 = 首现 walk 序（= `byName` 组序） */
+function groupKxHits(entries: readonly ConventionProjectUnitEntry[]): Map<string, KxRef[]> {
+  const groups = new Map<string, KxRef[]>();
+  for (const e of entries) {
+    for (const [name, startLine] of e.unit as Array<readonly [string, number]>) {
+      const norm = name.toUpperCase();
+      const refs = groups.get(norm);
+      const ref: KxRef = { name, filePath: e.file.path, startLine };
+      if (refs) refs.push(ref);
+      else groups.set(norm, [ref]);
+    }
+  }
+  return groups;
+}
+
+/**
+ * 分区复用（PERF-12b）：本规则的跨文件部分只是"同名去重后取首个命中"——
+ * 前置过滤与占位符判定**纯看函数名**（`_KX` 子串 + `parseKojoFamily`），文件级可判。
+ * 单元 = 该文件里过完前置过滤的候选 `[原名, 行号]`（合成盘几乎恒为空数组 ⇒ 每轮合并
+ * 只走 O(文件数) 的空跳过，不再 O(函数数) 扫全库名）。
+ * 分组的插入序 = 首现 walk 序（`erb-parser` 的 `byName` 由 `aggregateIndex` 按 walk
+ * 序插入 ⇒ 与旧 `check` 遍历 `byName.values()` 的组序/组内序一致）。
+ */
 export const kxPlaceholderRule: ConventionRule = {
   id: KX_RULE,
   description: 'KX 占位符残留（模板置换 K1→K{角色号} 漏改，函数名永远匹配不到任何角色）',
   severity: 'warning',
   source: 'eratw4.980-口上机制深挖.md §1.2 / §11.3（模板置换发行约定）',
+  partition: {
+    fileUnit(_ctx, file): Array<readonly [string, number]> {
+      const hits: Array<readonly [string, number]> = [];
+      for (const fn of file.functions) {
+        if (!isKxHit(fn.name)) continue;
+        hits.push([fn.name, fn.startLine]);
+      }
+      return hits;
+    },
+    combine(_ctx, entries): ConventionIssue[] {
+      const groups = groupKxHits(entries);
+      const issues: ConventionIssue[] = [];
+      for (const refs of groups.values()) {
+        const hit = refs[0]!;
+        const where = refs.map((r) => `${r.filePath}:${r.startLine}`);
+        issues.push(kxIssue(hit, where));
+      }
+      return issues;
+    },
+    isUnit(v): boolean {
+      return (
+        Array.isArray(v) &&
+        v.every((t) => Array.isArray(t) && t.length === 2 && typeof t[0] === 'string' && typeof t[1] === 'number')
+      );
+    },
+  },
   check(ctx): ConventionIssue[] {
     const issues: ConventionIssue[] = [];
     for (const refs of ctx.index.byName.values()) {
@@ -64,27 +143,15 @@ export const kxPlaceholderRule: ConventionRule = {
        * 不加这道过滤就等于让这条规则替全场跑完整个解析链（实测它占校验段一半以上）。
        * 一遍收集，不再 `find` + `filter` 跑两遍。
        */
-      const hits: typeof refs = [];
+      const hits: KxRef[] = [];
       for (const r of refs) {
-        if (!r.name.includes('_KX')) continue;
-        if (parseKojoFamily(r.name)?.isPlaceholder) hits.push(r);
+        if (!isKxHit(r.name)) continue;
+        hits.push({ name: r.name, filePath: r.filePath, startLine: r.startLine });
       }
       const hit = hits[0];
       if (!hit) continue;
-      const m = parseKojoFamily(hit.name);
       const where = hits.map((r) => `${r.filePath}:${r.startLine}`);
-      issues.push({
-        ruleId: KX_RULE,
-        severity: 'warning',
-        message:
-          `「${hit.name}」为 KX 占位符残留（共 ${where.length} 处）：模板以 K1 编写后需全文替换为 K{角色号}，` +
-          `漏改则该口上永远不会被引擎调用。`,
-        filePath: hit.filePath,
-        line: hit.startLine,
-        characterNo: m?.characterNo ?? undefined,
-        family: m?.family || undefined,
-        key: `${KX_RULE}|${hit.normalizedName}`,
-      });
+      issues.push(kxIssue(hit, where));
     }
     return issues;
   },
@@ -106,71 +173,154 @@ const REQUIRED_FACES: ReadonlyArray<{ face: string; severity: 'warning' | 'info'
   { face: 'EXTRASOURCE', severity: 'info', note: '缺 EXTRASOURCE：指令追加文本不可扩展（标配四件套之一）' },
 ];
 
+/** 完整性判定折叠后的三份事实（`check` 与 `partition.combine` 共用的中间形态） */
+interface CompletenessFacts {
+  readonly facesByNo: Map<number, Set<string>>;
+  readonly declareNos: Set<number>;
+  readonly anchorByNo: Map<number, { filePath: string; line: number }>;
+}
+
+/** 一条"家族可归属"的函数引用（两路共用） */
+interface CompletenessRef {
+  readonly no: number;
+  readonly declare: boolean;
+  readonly face: string;
+  readonly filePath: string;
+  readonly line: number;
+}
+
+/**
+ * 折叠引用流 ⇒ 三份事实。**遍历序必须一致**（anchor = 首个带面的引用）：
+ * `check` 走 `byName` 组序（组序 = 名字首现 walk 序、组内 walk 序）；
+ * `combine` 走文件 walk 序 × 文件内函数序。"面"是名字派生属性 ⇒ 同组引用同面 ⇒
+ * 两个口径下"某 no 的首个带面引用"取的是同一个 min(walk 位置)，结论一致（对拍用例钉死）。
+ */
+function foldCompleteness(refs: Iterable<CompletenessRef>): CompletenessFacts {
+  const facesByNo = new Map<number, Set<string>>();
+  const declareNos = new Set<number>();
+  const anchorByNo = new Map<number, { filePath: string; line: number }>();
+  for (const ref of refs) {
+    if (ref.declare) declareNos.add(ref.no);
+    if (ref.face) {
+      let set = facesByNo.get(ref.no);
+      if (!set) {
+        set = new Set<string>();
+        facesByNo.set(ref.no, set);
+      }
+      set.add(ref.face);
+      if (!anchorByNo.has(ref.no)) anchorByNo.set(ref.no, { filePath: ref.filePath, line: ref.line });
+    }
+  }
+  return { facesByNo, declareNos, anchorByNo };
+}
+
+/** 由三份事实产出问题（charaIndex 循环，两路共用的唯一一份） */
+function completenessIssues(ctx: ConventionCheckContext, facts: CompletenessFacts): ConventionIssue[] {
+  const issues: ConventionIssue[] = [];
+  for (const chara of ctx.project.charaIndex.values()) {
+    if (!chara.kojoDir) continue;
+    const faces = facts.facesByNo.get(chara.no);
+    // 该角色在口上域里一条可识别函数都没有 → 不是"完整性"问题（可能整目录是未接入的草稿）
+    if (!faces || faces.size === 0) continue;
+
+    const anchor = facts.anchorByNo.get(chara.no);
+    const label = `#${chara.no} ${chara.name}`;
+
+    if (!facts.declareNos.has(chara.no)) {
+      issues.push({
+        ruleId: COMPLETENESS_RULE,
+        severity: 'warning',
+        message: `${label} 缺少家族声明函数 M_KOJO_K${chara.no}：引擎存在判定会失败，整个口上不会被接通。`,
+        filePath: anchor?.filePath,
+        line: anchor?.line,
+        characterNo: chara.no,
+        key: `${COMPLETENESS_RULE}|declare|${chara.no}`,
+      });
+    }
+
+    for (const req of REQUIRED_FACES) {
+      if (faces.has(req.face)) continue;
+      issues.push({
+        ruleId: COMPLETENESS_RULE,
+        severity: req.severity,
+        message: `${label} ${req.note}`,
+        filePath: anchor?.filePath,
+        line: anchor?.line,
+        characterNo: chara.no,
+        key: `${COMPLETENESS_RULE}|${req.face}|${chara.no}`,
+      });
+    }
+  }
+  return issues;
+}
+
+/** 分区单元：该文件的可归属引用摘要 `[no, declare(1/0), face(''=无面), startLine]` */
+type CompletenessUnit = Array<readonly [number, 0 | 1, string, number]>;
+
+/**
+ * 分区复用（PERF-12b）：本规则的 O(函数数) 部分 = 对每个名字跑 `parseKojoFamily`
+ * （正则链，实测占校验段最大单项：2,000 棵盘 242–291ms/轮）；跨文件部分只是三份
+ * 事实的并集 + charaIndex 循环（O(文件数 + 角色数)，微秒级 Map/Set 操作）。
+ * 于是"改一棵"只重析那一棵的名字，其余文件的解析结果按 mtime 复用。
+ */
 export const kojoCompletenessRule: ConventionRule = {
   id: COMPLETENESS_RULE,
   description: '口上家族完整性：家族声明 + 标配四件套（FLAGSETTING/COLOR/ENCOUNTER/EXTRASOURCE）',
   severity: 'warning',
   source: 'eratw4.980-口上机制深挖.md §6（FLAGSETTING）与 §11.2（四件套数量）',
-  check(ctx): ConventionIssue[] {
-    // 索引中每个角色号出现过哪些面 / 是否有家族声明 / 首个可跳转位置
-    const facesByNo = new Map<number, Set<string>>();
-    const declareNos = new Set<number>();
-    const anchorByNo = new Map<number, { filePath: string; line: number }>();
-
-    for (const refs of ctx.index.byName.values()) {
-      for (const ref of refs) {
-        const m = parseKojoFamily(ref.name);
+  partition: {
+    fileUnit(_ctx, file): CompletenessUnit {
+      const out: CompletenessUnit = [];
+      for (const fn of file.functions) {
+        const m = parseKojoFamily(fn.name);
         if (!m || m.characterNo === null) continue;
-        const no = m.characterNo;
-        if (m.kind === 'declare') declareNos.add(no);
-        if (m.face) {
-          let set = facesByNo.get(no);
-          if (!set) {
-            set = new Set<string>();
-            facesByNo.set(no, set);
+        const declare: 0 | 1 = m.kind === 'declare' ? 1 : 0;
+        const face = m.face || '';
+        if (declare === 0 && face === '') continue; // 对三份事实无贡献
+        out.push([m.characterNo, declare, face, fn.startLine]);
+      }
+      return out;
+    },
+    combine(ctx, entries): ConventionIssue[] {
+      const facts = foldCompleteness(
+        (function* () {
+          for (const e of entries) {
+            for (const [no, declare, face, line] of e.unit as CompletenessUnit) {
+              yield { no, declare: declare === 1, face, filePath: e.file.path, line };
+            }
           }
-          set.add(m.face);
+        })(),
+      );
+      return completenessIssues(ctx, facts);
+    },
+    isUnit(v): boolean {
+      return (
+        Array.isArray(v) &&
+        v.every(
+          (t) =>
+            Array.isArray(t) &&
+            t.length === 4 &&
+            typeof t[0] === 'number' &&
+            (t[1] === 0 || t[1] === 1) &&
+            typeof t[2] === 'string' &&
+            typeof t[3] === 'number',
+        )
+      );
+    },
+  },
+  check(ctx): ConventionIssue[] {
+    const facts = foldCompleteness(
+      (function* () {
+        for (const refs of ctx.index.byName.values()) {
+          for (const ref of refs) {
+            const m = parseKojoFamily(ref.name);
+            if (!m || m.characterNo === null) continue;
+            yield { no: m.characterNo, declare: m.kind === 'declare', face: m.face, filePath: ref.filePath, line: ref.startLine };
+          }
         }
-        if (m.face && !anchorByNo.has(no)) anchorByNo.set(no, { filePath: ref.filePath, line: ref.startLine });
-      }
-    }
-
-    const issues: ConventionIssue[] = [];
-    for (const chara of ctx.project.charaIndex.values()) {
-      if (!chara.kojoDir) continue;
-      const faces = facesByNo.get(chara.no);
-      // 该角色在口上域里一条可识别函数都没有 → 不是"完整性"问题（可能整目录是未接入的草稿）
-      if (!faces || faces.size === 0) continue;
-
-      const anchor = anchorByNo.get(chara.no);
-      const label = `#${chara.no} ${chara.name}`;
-
-      if (!declareNos.has(chara.no)) {
-        issues.push({
-          ruleId: COMPLETENESS_RULE,
-          severity: 'warning',
-          message: `${label} 缺少家族声明函数 M_KOJO_K${chara.no}：引擎存在判定会失败，整个口上不会被接通。`,
-          filePath: anchor?.filePath,
-          line: anchor?.line,
-          characterNo: chara.no,
-          key: `${COMPLETENESS_RULE}|declare|${chara.no}`,
-        });
-      }
-
-      for (const req of REQUIRED_FACES) {
-        if (faces.has(req.face)) continue;
-        issues.push({
-          ruleId: COMPLETENESS_RULE,
-          severity: req.severity,
-          message: `${label} ${req.note}`,
-          filePath: anchor?.filePath,
-          line: anchor?.line,
-          characterNo: chara.no,
-          key: `${COMPLETENESS_RULE}|${req.face}|${chara.no}`,
-        });
-      }
-    }
-    return issues;
+      })(),
+    );
+    return completenessIssues(ctx, facts);
   },
 };
 
@@ -321,6 +471,13 @@ function declaredSlotCounts(params: readonly ErbParam[]): { int: number; str: nu
 }
 
 /**
+ * 分区单元的越界记录：`[原名, 归一化名, 定义行, characterNo|null, family, 声明数值槽, 声明字符串槽, 转发数值槽, 转发字符串槽]`。
+ * 外部输入（协议）的**判定结果也进单元**——允许的前提是 `key()` 摘要了路由表内容：
+ * 路由一变 key 变 ⇒ 全部单元作废重算（fail-closed），绝不出现"旧协议的单元 × 新协议"。
+ */
+type CallSlotUnit = Array<readonly [string, string, number, number | null, string, number, number, number, number]>;
+
+/**
  * 口上函数调用槽覆盖校验：**签名声明槽** vs **路由转发实参槽**。
  *
  * 路由层（KOJO_MESSAGE.ERB）按**家族模板**转发实参——如 SPEVENT 家族
@@ -341,42 +498,94 @@ function declaredSlotCounts(params: readonly ErbParam[]): { int: number; str: nu
  * - 协议**不认识**该函数名（非路由可达家族）→ 跳过，不归本规则管。
  */
 export function createCallSlotCoverageRule(getProtocol?: () => EratwCallProtocol | undefined): ConventionRule {
+  /** 越界判定的唯一实现（`check` 全量路径与 `partition.fileUnit` 共用 ⇒ 两路产出构造性同形） */
+  const offenderOf = (
+    protocol: EratwCallProtocol,
+    fn: { name: string; normalizedName: string; startLine: number; filePath: string; params: readonly ErbParam[] },
+  ): CallSlotUnit[number] | null => {
+    const m = parseKojoFamily(fn.name);
+    // 协议模板统一形如 `M_KOJO%口上名%_家族_K…`，口上名段要求**非空**
+    // （`.+`）。空口上名函数（如 `M_KOJO_EVENT_K1_x`）协议无法可靠归属
+    // （会被更短的家族模板误配）——跳过，绝不据歧义匹配产出误报。
+    if (!m || m.family === '') return null;
+    const fwd = protocol.maxForwardedSlotsFor(fn.name);
+    if (!fwd) return null; // 协议不认识 → 非路由可达家族
+    const declared = declaredSlotCounts(fn.params);
+    if (declared.int <= fwd.int && declared.str <= fwd.str) return null;
+    return [fn.name, fn.normalizedName, fn.startLine, m.characterNo, m.family, declared.int, declared.str, fwd.int, fwd.str];
+  };
+  const issueOf = (o: CallSlotUnit[number], filePath: string): ConventionIssue => {
+    const parts: string[] = [];
+    if (o[5] > o[7]) parts.push(`数值槽 声明 ${o[5]} / 转发 ${o[7]}`);
+    if (o[6] > o[8]) parts.push(`字符串槽 声明 ${o[6]} / 转发 ${o[8]}`);
+    return {
+      ruleId: CALL_SLOT_RULE,
+      severity: 'warning',
+      message:
+        `「${o[0]}」的签名槽未被路由覆盖（${parts.join('，')}）：` +
+        `多出的槽在调用时永远收到引擎默认值（数值 0 / 字符串空串），声明无效。`,
+      filePath,
+      line: o[2],
+      characterNo: o[3] ?? undefined,
+      family: o[4] || undefined,
+      key: `${CALL_SLOT_RULE}|${o[1]}`,
+    };
+  };
   return {
     id: CALL_SLOT_RULE,
     description: '口上函数签名槽未被路由转发覆盖（多出的参数槽永远收引擎默认 0/空串）',
     severity: 'warning',
     source: 'KOJO_MESSAGE.ERB 路由表（call-protocol.ts）+ erb-parser 函数签名解析（ErbFunction.params）',
+    partition: {
+      key(): string {
+        const protocol = getProtocol?.();
+        return protocol ? `r${protocol.routeDigest ?? 'nodigest'}` : 'none';
+      },
+      fileUnit(_ctx, file): CallSlotUnit | undefined {
+        const protocol = getProtocol?.();
+        if (!protocol) return undefined; // 协议缺失 ⇒ 本轮无结论（降级不产问题，也不缓存）
+        const out: CallSlotUnit = [];
+        for (const fn of file.functions) {
+          const o = offenderOf(protocol, fn);
+          if (o) out.push(o);
+        }
+        return out;
+      },
+      combine(_ctx, entries): ConventionIssue[] {
+        const issues: ConventionIssue[] = [];
+        for (const e of entries) {
+          for (const o of e.unit as CallSlotUnit) issues.push(issueOf(o, e.file.path));
+        }
+        return issues;
+      },
+      isUnit(v): boolean {
+        return (
+          Array.isArray(v) &&
+          v.every(
+            (t) =>
+              Array.isArray(t) &&
+              t.length === 9 &&
+              typeof t[0] === 'string' &&
+              typeof t[1] === 'string' &&
+              typeof t[2] === 'number' &&
+              (t[3] === null || typeof t[3] === 'number') &&
+              typeof t[4] === 'string' &&
+              typeof t[5] === 'number' &&
+              typeof t[6] === 'number' &&
+              typeof t[7] === 'number' &&
+              typeof t[8] === 'number',
+          )
+        );
+      },
+    },
     check(ctx: ConventionCheckContext): ConventionIssue[] {
       const protocol = getProtocol?.();
       if (!protocol) return [];
       const issues: ConventionIssue[] = [];
       for (const file of ctx.index.files.values()) {
         for (const fn of file.functions) {
-          const m = parseKojoFamily(fn.name);
-          // 协议模板统一形如 `M_KOJO%口上名%_家族_K…`，口上名段要求**非空**
-          // （`.+`）。空口上名函数（如 `M_KOJO_EVENT_K1_x`）协议无法可靠归属
-          // （会被更短的家族模板误配）——跳过，绝不据歧义匹配产出误报。
-          if (!m || m.family === '') continue;
-          const fwd = protocol.maxForwardedSlotsFor(fn.name);
-          if (!fwd) continue; // 协议不认识 → 非路由可达家族
-          const declared = declaredSlotCounts(fn.params);
-          if (declared.int <= fwd.int && declared.str <= fwd.str) continue;
-
-          const parts: string[] = [];
-          if (declared.int > fwd.int) parts.push(`数值槽 声明 ${declared.int} / 转发 ${fwd.int}`);
-          if (declared.str > fwd.str) parts.push(`字符串槽 声明 ${declared.str} / 转发 ${fwd.str}`);
-          issues.push({
-            ruleId: CALL_SLOT_RULE,
-            severity: 'warning',
-            message:
-              `「${fn.name}」的签名槽未被路由覆盖（${parts.join('，')}）：` +
-              `多出的槽在调用时永远收到引擎默认值（数值 0 / 字符串空串），声明无效。`,
-            filePath: fn.filePath,
-            line: fn.startLine,
-            characterNo: m.characterNo ?? undefined,
-            family: m.family || undefined,
-            key: `${CALL_SLOT_RULE}|${fn.normalizedName}`,
-          });
+          const o = offenderOf(protocol, fn);
+          if (o) issues.push(issueOf(o, fn.filePath));
         }
       }
       return issues;
