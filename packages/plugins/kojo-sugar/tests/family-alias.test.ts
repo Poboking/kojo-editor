@@ -1,12 +1,14 @@
 /**
- * D2 批 · 家族头中文别名（`现在` / `时标` / `标记` / `随机` → `NOWEX` / `TFLAG` / `FLAG` / `RAND`）。
+ * 家族头中文别名（D2 批 4 条 → 全量批 23 条；本文件对全表做端到端）。
  *
- * 三件事：
+ * 四件事：
  * 1. **写侧**：糖表达式 / 段条件里的中文族头 → 引擎族头（走 `lowerExpression` **唯一管线**，
- *    与 `如果` / `当` / 行内条件同源）；
+ *    与 `如果` / `当` / 行内条件同源）；另有**全表 23 条字节对照**：含别名源 ≡ 英文族头手写源
+ *    （可执行行逐字节相等；`;` 回显注释按设计保留作者输入，不在对照范围）；
  * 2. **投影侧**：原生 ERB 里的引擎族头 → 糖面中文族头（段头 / 表达式 / 插值三处，复用既有
  *    反向渲染位置，不新造第二张表）；
  * 3. **`随机` 三义消歧**（本批最险）：块头仍走随机块、表达式位降 `RAND`、文件头 `随机形:` 不误伤。
+ * 4. **排除族负自证**：`PALAM`（撞时机命名参数关键字「参数」）在写侧 / 投影侧都不许被替换。
  *
  * 装配不依赖游戏盘：别名表 = adapter **真表**（`@kojo/plugin-eratw-adapter` 导出，
  * 零漂移——测试侧镜像手抄正是 PITFALLS 点名的"形状不同构 ⇒ 空断言"隐患），其余仍用
@@ -67,7 +69,7 @@ const exprCtx = (aliases = new Map<string, AliasEntry>()): ExprContext => ({
 });
 
 /* ============================================================================ */
-/* A. 写侧 · lowerExpression 唯一管线（四族 + 同源 + 防护）                          */
+/* A. 写侧 · lowerExpression 唯一管线（既有 4 条 + 同源 + 防护） */
 /* ============================================================================ */
 
 describe('D2 写侧 · lowerExpression 家族头别名（唯一管线）', () => {
@@ -168,6 +170,37 @@ describe('D2 写侧 · 四族别名的负自证（改一个字 / 少写冒号 �
 /* D. 写侧 · `随机` 三义消歧（本批最险）                                           */
 /* ============================================================================ */
 
+/* ============================================================================ */
+/* C2. 写侧 · 全量表驱动「字节对照」：含别名源 ≡ 英文族头手写源（端到端真链）          */
+/* ============================================================================ */
+
+describe('全量批 写侧 · 全表 23 条字节对照（真表驱动，零镜像手抄）', () => {
+  /** 可执行行视图：`;` 回显注释按设计保留作者输入（`;现在：5` vs `;NOWEX:5`），不在对照范围 */
+  const execLines = (erb: string): string =>
+    erb.split('\n').filter((l) => !l.trimStart().startsWith(';')).join('\n');
+
+  it.each(Object.entries(FAMILY_ALIASES))(
+    '字节对照 · `%s` 别名源 ≡ `%s` 英文族头源（可执行行逐字节相等 + 零 error）',
+    (alias, family) => {
+      const cn = doc(`\t若 ${alias}：5：\n\t\t「甲」\n`);
+      const en = doc(`\t若 ${family}:5：\n\t\t「甲」\n`);
+      expect(errsOf(cn), `别名源 ${alias} 不许有 error`).toEqual([]);
+      expect(errsOf(en), `英文源 ${family} 不许有 error`).toEqual([]);
+      expect(execLines(productOf(cn)), '含别名源与英文源的可执行行必须逐字节相等').toBe(
+        execLines(productOf(en)),
+      );
+      // 反向再钉一步：产物里的条件就是引擎族头 + 半角冒号；回显注释保留作者写的别名
+      expect(productOf(cn)).toContain(`IF LOCAL && ${family}:5`);
+      expect(productOf(cn)).toContain(`;${alias}：5`);
+    },
+  );
+
+  it('排除族负自证：`参数`（PALAM 未登记）⇒ 表达式位不许替换（半角 / 全角冒号都不碰）', () => {
+    expect(lowerExpression('参数:3', exprCtx())).toBe('参数:3');
+    expect(lowerExpression('参数：3', exprCtx())).toBe('参数：3');
+  });
+});
+
 describe('D2 `随机` 消歧 · 块头 / 表达式位 / 文件头', () => {
   it('① 块头 `随机：` 仍走随机块（绝不被降成 RAND 常量）', () => {
     const src = '角色: 12\n时机 指令 310：\n    随机：\n        「甲。」\n        「乙。」\n';
@@ -223,10 +256,19 @@ describe('D2 投影侧 · 族头中文化', () => {
     expect(text).toContain('「{现在：噴乳}」');
   });
 
-  it('反例：adapter 未登记的族头（`CFLAG`）**不被**中文化', () => {
-    const src = ['@M_KOJO_MESSAGE_PALAMCNG_B_K12_1', 'PRINTFORMW 「{CFLAG:2}」', 'RETURN 1'].join('\n');
-    expect(segText(src).join('\n')).toContain('{CFLAG:2}');
+  it('反例：排除族族头（`PALAM`）**不被**中文化（撞命名参数关键字 ⇒ 不登记、不猜）', () => {
+    const src = ['@M_KOJO_MESSAGE_PALAMCNG_B_K12_1', 'PRINTFORMW 「{PALAM:2}」', 'RETURN 1'].join('\n');
+    expect(segText(src).join('\n')).toContain('{PALAM:2}');
   });
+
+  it.each(Object.entries(FAMILY_ALIASES).map(([alias, family]) => [family, alias]))(
+    '全表插值逐条：`{%s:5}` → `{%s：5}`（投影侧真表驱动）',
+    (family, alias) => {
+      const src = ['@M_KOJO_MESSAGE_PALAMCNG_B_K12_1', `PRINTFORMW 「{${family}:5}」`, 'RETURN 1'].join('\n');
+      const text = segText(src).join('\n');
+      expect(text, `{${family}:5} 未被中文化为 {${alias}：5}`).toContain(`{${alias}：5}`);
+    },
+  );
 
   it('闭环：段头投影产物原样喂回转译器 ⇒ 零 error，且折回原信封段', () => {
     const text = segText(threeEnabled).join('\n');

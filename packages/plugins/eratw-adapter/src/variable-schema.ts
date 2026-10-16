@@ -139,7 +139,7 @@ export function parseVariableCsv(text: string): VariableTable {
  * （`ERB/CHARALIST_DT/TEMP_CHARA_LIST_BY_DT.ERB` 的 `C_FILTERTARGET_NAME`）、
  * EXP→快感経験（`EXP.csv` 表头）；其余取 emuera 通用族名。改动本表 = 改产品的显示口径。
  */
-const FAMILY_LABELS: Record<string, string> = {
+export const FAMILY_LABELS: Record<string, string> = {
   BASE: '基础值',
   MAXBASE: '基础上限',
   ABL: '能力',
@@ -170,7 +170,7 @@ const FAMILY_LABELS: Record<string, string> = {
  * - `FAMILY_LABELS`：家族 → 人类可读**显示名**（悬停描述 / 家族级 `lookup` 的 `description`），
  *   面向"看"（如 `FLAG:'全局标志'`）；
  * - `FAMILY_ALIASES`：表层中文**输入别名** → 引擎变量族头，面向"写"——作者在表达式 / 段条件里
- *   写 `现在:噴乳` 等价于原生 `NOWEX:噴乳`（语法糖 §表达式一节的族头中文化，D2 批）。
+ *   写 `现在:噴乳` 等价于原生 `NOWEX:噴乳`（语法糖 §表达式一节的族头中文化，D2 批起步；全量批收官）。
  *
  * **两者不许混用、不许覆盖**：显示名（`全局标志`）不是别名（`标记`），别名（`标记`）也不是
  * 显示名；把一张表当另一张用必然产出"作者写不出 / 读者看不懂"的错位。表小、策展、纯数据，
@@ -186,11 +186,46 @@ const FAMILY_LABELS: Record<string, string> = {
 const aliasTable = (entries: Record<string, string>): Readonly<Record<string, string>> =>
   Object.assign(Object.create(null) as Record<string, string>, entries);
 
+/**
+ * 全量批策展口径（目标 = 安全上限；每条别名都可考据，宁缺毋滥）：
+ * 1. 别名取「作者会自然写的表头形」——能站住的显示名原样采纳（本批新增 19 条 = `FAMILY_LABELS`
+ *    里除 `FLAG` / `TFLAG`（沿用 D2 绰号）与 `PALAM`（排除台账）之外的全部显示名 + 装备对拆分名）；
+ * 2. 一形不可配两族：`TEQUIP` / `EQUIP` 显示名同为「装备」⇒「装备」归 `EQUIP`、`TEQUIP` 取
+ *    「临时装备」（对齐 emuera 一時装備；T 系临时族显示名皆「临时」前缀：TFLAG / TCVAR 同款）；
+ * 3. 长别名包含短别名（「角色字符串」⊃「字符串」、「临时装备」⊃「装备」）可同登：写侧按
+ *    **标识符整段**匹配（`lowerFamilyAliases` 先扫标识符 run 再查表）⇒「角色字符串:」整段命中
+ *    `CSTR:`，绝不切出「字符串:」误配 `STR:`（消歧钉在 kojo-sugar 的「字节对照」表驱动测试上）；
+ * 4. 撞语言关键字的族不进表、进 `FAMILY_ALIAS_EXCLUSIONS` 台账（全覆盖闸要求二选一）。
+ *
+ * 另：`FLAG` / `TFLAG` 保持 D2 绰号（「标记」/「时标」）——**不做显示名整表合并**：两张表
+ * 各自策展（「全局标志」/「临时标志」不是别名），本批只是新增条目恰好与显示名同形。
+ */
 export const FAMILY_ALIASES: Readonly<Record<string, string>> = aliasTable({
+  // —— D2 批原样（既有 4 条，一字不动）——
   现在: 'NOWEX',
   时标: 'TFLAG',
   标记: 'FLAG',
   随机: 'RAND',
+  // —— 全量批新增 19 条（顺序 = `FAMILY_LABELS` 声明序；`PALAM` 见排除台账）——
+  基础值: 'BASE',
+  基础上限: 'MAXBASE',
+  能力: 'ABL',
+  素质: 'TALENT',
+  快感经验: 'EXP',
+  刻印: 'MARK',
+  角色标志: 'CFLAG',
+  角色字符串: 'CSTR',
+  字符串: 'STR',
+  欲求: 'SOURCE',
+  污渍: 'STAIN',
+  宝珠: 'JUEL',
+  道具: 'ITEM',
+  临时装备: 'TEQUIP',
+  装备: 'EQUIP',
+  临时角色变量: 'TCVAR',
+  时间: 'TIME',
+  日期: 'DAY',
+  技能: 'TRAIN',
 });
 
 /** `FAMILY_ALIASES` 的反向表（族头 → 中文别名；键统一大写 ⇒ 引擎大小写不敏感） */
@@ -199,6 +234,17 @@ export const FAMILY_ALIASES_REVERSE: Readonly<Record<string, string>> = aliasTab
     Object.entries(FAMILY_ALIASES).map(([alias, family]) => [family.toUpperCase(), alias]),
   ),
 );
+
+/**
+ * `FAMILY_ALIASES` 的**排除名单**（家族 → 一行理由）：暂不登记的族在此留名，不留白——
+ * 全覆盖闸（`tests/family-alias.test.ts`）要求 `FAMILY_LABELS` 每族**要么有别名、要么在此名单
+ * 且有理由**，防"悄悄没登记"（增删条目时两张台账对账）。
+ *
+ * 同由 `aliasTable` 造（无原型）：本台账键 = 引擎族头（ASCII 大写），不装作者输入。
+ */
+export const FAMILY_ALIAS_EXCLUSIONS: Readonly<Record<string, string>> = aliasTable({
+  PALAM: '「参数」是语法层关键字（时机命名参数声明 `参数: ARG`，规范 §3.2）：同词再作族头别名 = 一形两义，宁缺',
+});
 
 /**
  * 解析游戏自带 JP→CN 名词典（`plugins/tw_csv_chs.xml`）→ `Map<日文名, 中文名>`（纯函数）。
