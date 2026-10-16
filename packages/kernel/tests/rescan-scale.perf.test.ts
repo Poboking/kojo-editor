@@ -122,6 +122,10 @@ interface RoundReading {
   readonly lintRecomputedFiles: number;
   readonly lintReusedRules: number;
   readonly lintRules: number;
+  /** 分区复用读数（PERF-12b）：`lint breakdown` 里各分区规则 `分复用 r/t` 的 r 之和与 t（=本轮文件数） */
+  readonly lintCrossReusedSum: number;
+  readonly lintCrossRules: number;
+  readonly lintCrossTotal: number;
   readonly lintIssues: number;
   readonly failedRules: number;
   /** 产品自报的分段时长（`ConditionIndex.durationMs` / `ConventionReport.durationMs`） */
@@ -160,6 +164,22 @@ const RE_LINT_FILES = /逐文件重算 (\d+) 个文件/;
 const RE_COND_DURATION = /Condition index:[\s\S]*?in (\d+)ms（复用/;
 const RE_LINT_DURATION = /Convention lint:[\s\S]*?in (\d+)ms across (\d+) rule\(s\)/;
 const RE_LINT_BREAKDOWN = /lint breakdown: [^\n]*/g;
+/** `分复用 r/t`（PERF-12b）：分区规则本轮按 mtime 复用的贡献数（t=本轮文件数） */
+const RE_LINT_CROSS = /分复用 (\d+)\/(\d+)/g;
+
+function readCrossReuse(breakdown: string): { sum: number; rules: number; total: number } {
+  let sum = 0;
+  let rules = 0;
+  let total = 0;
+  const re = new RegExp(RE_LINT_CROSS.source, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(breakdown)) !== null) {
+    sum += Number(m[1]);
+    total = Number(m[2]);
+    rules++;
+  }
+  return { sum, rules, total };
+}
 
 /**
  * 取窗口内**最后一条**匹配（一轮里若有多次运行，最后一条才是本轮那一次）。
@@ -271,6 +291,7 @@ async function runRound(
     const window = logs.slice(logFrom).join('\n');
 
     const lintBreakdown = lastMatch(RE_LINT_BREAKDOWN, window);
+    const cross = readCrossReuse(lintBreakdown);
     const lintDurationMs = num(RE_LINT_DURATION, window, 1);
     const lintRulesMs = sumRuleMs(lintBreakdown);
 
@@ -298,6 +319,9 @@ async function runRound(
       extractRecomputed: num(RE_EXTRACT_PROCESSED, window, 1),
       lintRecomputedFiles: num(RE_LINT_FILES, window, 1),
       lintReusedRules: countMatches(window, /\(复用\)/g),
+      lintCrossReusedSum: cross.sum,
+      lintCrossRules: cross.rules,
+      lintCrossTotal: cross.total,
       lintRules: num(RE_LINT_LINE, window, 3),
       lintIssues: num(RE_LINT_LINE, window, 1),
       failedRules: lint.report.failedRules.length,
@@ -458,7 +482,8 @@ function reportTier(readings: RoundReading[]): void {
     ` 复用 ${r.indexReused}/${r.indexTotal}）` +
     ` · extract ${ms(r.extractMs - r.indexMs)}（装载 ${ms(r.loadMs)}/读盘 ${ms(r.readMs)}/扫描 ${ms(r.scanMs)}/循环 ${ms(r.extractLoopMs)}` +
     ` 复用 ${r.extractReused} / 重算 ${r.extractRecomputed}）` +
-    ` · lint ${ms(r.lintMs - r.indexMs)}（规则复用 ${r.lintReusedRules}/${r.lintRules}、逐文件重算 ${r.lintRecomputedFiles}）` +
+    ` · lint ${ms(r.lintMs - r.indexMs)}（规则复用 ${r.lintReusedRules}/${r.lintRules}、逐文件重算 ${r.lintRecomputedFiles}、` +
+    `跨文件分复用 ${r.lintCrossReusedSum}/${r.lintCrossRules * r.lintCrossTotal}${r.lintCrossRules ? `（${r.lintCrossRules} 条×${r.lintCrossTotal} 棵）` : ''}）` +
     ` ｜ 函数 ${r.condFunctions} 谓词 ${r.condPredicates} 依赖 ${r.condDeps} 问题 ${r.lintIssues}` +
     ` ｜ 自报 抽取 ${ms(r.condDurationMs)} 校验 ${ms(r.lintDurationMs)}` +
     `（逐规则 ${ms(r.lintRulesMs)} / 规则外 ${ms(r.lintOverheadMs)}）\n` +
@@ -507,6 +532,9 @@ function reportTier(readings: RoundReading[]): void {
       ` · lint ${ratio(hot0.lint, cold.lint)} —— 这一行就是「改一棵也躲不掉的固定税」占全量的比例\n` +
       `[perf9][比值 改摘要 ÷ 全量] index ${ratio(digest.index, cold.index)} · extract ${ratio(digest.extract, cold.extract)}` +
       ` · lint ${ratio(digest.lint, cold.lint)} —— 摘要换代＝一次性全量，形状应与 COLD 同形\n` +
+      `[perf9][分区复用（PERF-12b 判据②）] ONE 轮分区规则 ${med('ONE', (r) => r.lintCrossRules)} 条，` +
+      `共复用 ${med('ONE', (r) => r.lintCrossReusedSum)}/${med('ONE', (r) => r.lintCrossRules * r.lintCrossTotal)} 份跨文件贡献` +
+      `（COLD ${med('COLD', (r) => r.lintCrossReusedSum)} 份、DIGEST ${med('DIGEST', (r) => r.lintCrossReusedSum)} 份——都该是 0）\n` +
       `[perf9][固定税拆分] 改一棵轮里**一件都没重算也照样付**的那几段（中位数）：` +
       `walk ${ms(med('ONE', (r) => r.walkMs))}（全量 ${ms(med('COLD', (r) => r.walkMs))}）· ` +
       `快照装载 ${ms(med('ONE', (r) => r.snapshotMs))} · 索引聚合 ${ms(med('ONE', (r) => r.aggregateMs))} · ` +
@@ -572,6 +600,21 @@ describe('PERF-9 改一棵的重抽/重校成本随规模的形状（合成可�
         expect(digest.indexReused).toBe(files);
         expect(digest.extractReused).toBe(0);
         expect(digest.extractRecomputed).toBe(files);
+
+        // —— 判据②（PERF-12b 追加）：跨文件分区复用读数
+        // COLD：分区路径全量建贡献（复用 0，但规则确实走了分区）；本轮装配了 4 条分区规则
+        expect(cold.lintCrossRules).toBe(4);
+        expect(cold.lintCrossTotal).toBe(files);
+        expect(cold.lintCrossReusedSum).toBe(0);
+        // HOT0：整包复用快路径 ⇒ 分区根本不进（不是"分区没生效"，是更快的路径）
+        expect(hot0.lintCrossRules).toBe(0);
+        // ONE：4 条分区规则各自复用 files−1 份贡献（改一棵 ⇒ 只重算那一棵）——"0/7 整包重算"的反证
+        expect(one.lintCrossRules).toBe(4);
+        expect(one.lintCrossTotal).toBe(files);
+        expect(one.lintCrossReusedSum).toBe(4 * (files - 1));
+        // DIGEST：全局判据变 ⇒ 分区与桶一起作废（一次性全量，形状与 COLD 同）
+        expect(digest.lintCrossRules).toBe(4);
+        expect(digest.lintCrossReusedSum).toBe(0);
 
         reportTier(readings);
       },

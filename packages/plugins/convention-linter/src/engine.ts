@@ -149,6 +149,20 @@ export class ConventionEngine implements ConventionLinterService {
   private readonly listeners = new Set<(report: ConventionReport | null) => void>();
   /** 分区规则的内存态（ruleId → 状态）；判据不符即弃，见 `RuleUnitState` */
   private readonly unitStates = new Map<string, RuleUnitState>();
+  /**
+   * 上一轮的 mtime 快照（PERF-12b）：全局判据不变时用来**投机预取**——
+   * mtime 变过/新增的文件几乎必然就是本轮的 stale 集，让批量读盘与快照装载并行
+   * （串行装载→预取在 2,000 棵盘上被抽取段的事件循环占用放大到秒级）。
+   * 只是提前量热，**过期判定仍按装载后的盘上结论**；漏猜的文件走原预取/惰性读，语义不变。
+   */
+  private lastRun: { fingerprint: string; mtimes: Map<string, number | null> } | null = null;
+  /**
+   * 热缓存（PERF-12b）：本引擎**上一次实际装载/产出**的 `LintCache`（内存镜像，键 =
+   * 全局判据）。同一内核里连续运行（开项目→改一棵→重校验）不必再走一趟
+   * `snapshot.load` 的异步往返——2,000 棵盘上那次装载在事件循环里被抽取段挤到
+   * 数百毫秒。落盘照旧（重启后的冷开仍从盘还原）；`force` 与判据变化一律绕过热缓存。
+   */
+  private hotCache: { expectFingerprint: string; cache: LintCache } | null = null;
 
   constructor(private readonly deps: ConventionEngineDeps) {}
 
@@ -187,6 +201,8 @@ export class ConventionEngine implements ConventionLinterService {
     const project = this.deps.getProject();
     const index = this.deps.getIndex();
     if (!project || !index) {
+      // 项目关闭不清内存态：重开同一项目（全局判据相同）正是"改一棵"复用的主场；
+      // 判据不符的路径由 `expect.fingerprint` 门自然作废（见 `hotCache`/`lastRun` 注释）。
       const rep = emptyReport(project?.adapterId ?? '');
       this.commit(rep);
       return rep;
@@ -229,7 +245,44 @@ export class ConventionEngine implements ConventionLinterService {
 
     /** 全局判据（不含 ERB 指纹）；null ⇒ 既不还原也不落盘 */
     const expect = this.deps.snapshot ? this.deps.snapshot.expectFor({ project, rules }) : null;
-    const stored = this.deps.snapshot && expect && !force ? await this.deps.snapshot.load(expect) : null;
+    const files = [...index.files.values()];
+
+    /**
+     * 投机预取（PERF-12b）：与快照装载**并行**发出批量读盘。候选 = 相对上一轮
+     * mtime 变过/新增的文件（全局判据变了则等于全部）。这只是提前量热——真正的
+     * stale 判定照旧以装载结果为准，投机失败只损失命中，不损失正确性。
+     */
+    const specPaths = new Set<string>();
+    if (this.deps.readFiles && !force && expect) {
+      const last = this.lastRun && this.lastRun.fingerprint === expect.fingerprint ? this.lastRun : null;
+      for (const f of files) {
+        const mtime = index.fileMtimes?.get(f.path) ?? null;
+        if (last && last.mtimes.get(f.path) === mtime) continue;
+        specPaths.add(f.path);
+      }
+    }
+    const prefetchInto = (paths: readonly string[], tag: string): Promise<void> => {
+      if (!this.deps.readFiles || paths.length === 0) return Promise.resolve();
+      return this.deps.readFiles(paths).then(
+        (texts) => {
+          for (let i = 0; i < paths.length; i++) {
+            const t = texts[i];
+            if (typeof t === 'string') textCache.set(paths[i]!, Promise.resolve(t));
+          }
+        },
+        (err: unknown) => {
+          this.deps.log.warn(`Convention ${tag} batch prefetch failed; falling back to per-file reads: ${String(err)}`);
+        },
+      );
+    };
+    const specPromise = prefetchInto([...specPaths], 'speculative');
+
+    // 热缓存优先（PERF-12b）：判据相同 ⇒ 不再走一次异步装载（见 `hotCache` 注释）。
+    const hot = !force && expect && this.hotCache && this.hotCache.expectFingerprint === expect.fingerprint
+      ? this.hotCache.cache
+      : null;
+    const stored = hot ?? (this.deps.snapshot && expect && !force ? await this.deps.snapshot.load(expect) : null);
+    if (stored && expect && !hot) this.hotCache = { expectFingerprint: expect.fingerprint, cache: stored };
 
     /**
      * 整项目层能否复用：**必须**本次索引带 `fingerprint` 且与缓存里那条相等。
@@ -248,8 +301,6 @@ export class ConventionEngine implements ConventionLinterService {
       cross?: { reused: number; total: number };
     }[] = [];
     const projectResults: Record<string, ConventionIssue[]> = {};
-
-    const files = [...index.files.values()];
 
     /**
      * 分区计划（PERF-12b，2026-10-16）：声明了 `partition` 的跨文件规则不再"整包重算"——
@@ -353,22 +404,14 @@ export class ConventionEngine implements ConventionLinterService {
     }
 
     /**
-     * 批量预取（2026-10-16 批量 IO 批）：本 run 全部 stale 文件一次批取
-     * （批内一趟 IPC + 会话缓存命中——索引/抽取段刚读过的正文在这里零读盘；
-     * 跨 run 的同文件重复校验同样命中会话缓存）。
-     * 失败项不入 textCache ⇒ 落 `readFile` 兜底重试（会再失败 ⇒ 规则抛错 ⇒ 不留桶）。
+     * 批量预取（2026-10-16 批量 IO 批 → PERF-12b 投机化）：本 run 全部 stale 文件
+     * 一次批取（批内一趟 IPC + 会话缓存命中——索引/抽取段刚读过的正文在这里零读盘；
+     * 跨 run 的同文件重复校验同样命中会话缓存）。投机批（装载开始前已并行发出）覆盖到
+     * 的路径不再重取；失败项不入 textCache ⇒ 落 `readFile` 兜底重试（会再失败 ⇒ 规则
+     * 抛错 ⇒ 不留桶）。语义不变，只把"装载→预取"的串行等待并成 max。
      */
-    if (this.deps.readFiles && prefetchPaths.length > 0) {
-      try {
-        const texts = await this.deps.readFiles(prefetchPaths);
-        for (let i = 0; i < prefetchPaths.length; i++) {
-          const t = texts[i];
-          if (typeof t === 'string') textCache.set(prefetchPaths[i]!, Promise.resolve(t));
-        }
-      } catch (err) {
-        this.deps.log.warn(`Convention batch prefetch failed; falling back to per-file reads: ${String(err)}`);
-      }
-    }
+    const restPaths = prefetchPaths.filter((p) => !specPaths.has(p));
+    await Promise.all([specPromise, prefetchInto(restPaths, 'stale')]);
     const tPrefetch = Date.now();
 
     for (const rule of projectRules) {
@@ -515,6 +558,10 @@ export class ConventionEngine implements ConventionLinterService {
         ` ｜ 逐文件重算 ${recomputedFiles} 个文件` +
         ` ｜ 规则外：装载 ${tLoad - startedAt}ms · 预取 ${tPrefetch - tLoad}ms · 装配 ${Date.now() - tPrefetch}ms`,
     );
+    // 记下本轮 mtime ⇒ 下一轮的投机预取候选（判据变了会自动失效为"全量候选"）
+    this.lastRun = expect && index.fileMtimes
+      ? { fingerprint: expect.fingerprint, mtimes: new Map(index.fileMtimes) }
+      : null;
     this.commit(report);
 
     /**
@@ -549,16 +596,15 @@ export class ConventionEngine implements ConventionLinterService {
           partitionKeys[rule.id] = stored.partitionKeys?.[rule.id] ?? '';
         }
       }
-      this.deps.snapshot.save(
-        {
-          erbFingerprint: index.fingerprint ?? '',
-          projectResults,
-          buckets,
-          projectUnits,
-          partitionKeys,
-        },
-        expect,
-      );
+      const freshCache: LintCache = {
+        erbFingerprint: index.fingerprint ?? '',
+        projectResults,
+        buckets,
+        projectUnits,
+        partitionKeys,
+      };
+      this.hotCache = { expectFingerprint: expect.fingerprint, cache: freshCache };
+      this.deps.snapshot.save(freshCache, expect);
     }
     return report;
   }
