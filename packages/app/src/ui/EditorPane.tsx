@@ -40,6 +40,13 @@ import { applyFormatOnSave } from './format-on-save';
 import { classifySaveRace } from './save-race';
 import { loadFormatOnSavePref } from './format-pref';
 import { applyNameColorPref, subscribeNameColorPref } from './semantic-color-pref';
+import {
+  applyFontSizePref,
+  applyFontZoomPref,
+  loadFontSizePref,
+  setFontZoomPref,
+  subscribeFontSizePref,
+} from './font-size-pref';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { setJumpProbe } from './jump-to-state';
 import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
@@ -1015,13 +1022,15 @@ export function EditorPane({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    // 缩放在实例创建**之前**播种：EditorZoom 是全局单例，创建时算 fontInfo 就按它缩放
+    applyFontZoomPref(monaco.editor.EditorZoom);
     const ed = monaco.editor.create(host, {
       theme: 'kojo-dark',
       language: ERB_LANGUAGE_ID,
       automaticLayout: true,
       // 缩略图：文本块模式（不逐字符渲染——口上文本为长行文，色块更干净也更省性能）
       minimap: { enabled: true, renderCharacters: false, maxColumn: 72 },
-      fontSize: 14,
+      fontSize: loadFontSizePref(),
       lineNumbers: 'on',
       renderWhitespace: 'none',
       scrollBeyondLastLine: false,
@@ -1230,6 +1239,13 @@ export function EditorPane({
     // 不用重开文件（standalone 的 DocumentSemanticTokensFeature 自己监听这条配置）。
     applyNameColorPref(ed);
     const nameColorUnsub = subscribeNameColorPref(() => applyNameColorPref(ed));
+    // 字号/缩放偏好（A1）：设置页一改立即生效；反向（Monaco 原生 fontZoom 动作改了
+    // EditorZoom 单例）也落盘，两条方向都收敛到 localStorage 这一份真源。
+    const fontSizeUnsub = subscribeFontSizePref(() => {
+      applyFontSizePref(ed);
+      applyFontZoomPref(monaco.editor.EditorZoom);
+    });
+    const fontZoomSync = monaco.editor.EditorZoom.onDidChangeZoomLevel((level) => setFontZoomPref(level));
     // 面包屑（D1，宿主自绘——standalone Monaco 无面包屑 API，取证见 `breadcrumb-path.ts`）。
     // 数据复用大纲那棵树：`collectDocumentSymbols` 的应答判据与 provider 接线逐字同款
     // （糖视图只读 model 一律不给——行号属派生物，面包屑不许把作者导到不存在的位置）。
@@ -1397,6 +1413,8 @@ export function EditorPane({
     });
     return () => {
       nameColorUnsub();
+      fontSizeUnsub();
+      fontZoomSync.dispose();
       crumbCursorSub.dispose();
       crumbModelSub.dispose();
       crumbRefreshRef.current = null;
