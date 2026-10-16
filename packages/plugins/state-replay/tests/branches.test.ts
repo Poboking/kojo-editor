@@ -166,6 +166,47 @@ describe('嵌套可达性传播', () => {
     expect(byHead.get(10)!.outcome).toBe('no-match');
     expect(byHead.get(20)!.outcome).toBe('unreachable');
   });
+
+  // 2026-10-16 修复回归：可达性必须逐条包络链校验（旧版只取深度最小=最外层，
+  // 中间链 no-match 被跳过 → 内层误判可达；最外层 unknown → 传播整体跳过）。
+  const threeLevel = cf([
+    ['IF', 'A', 0, 10],
+    ['IF', 'B', 1, 20],
+    ['IF', 'C', 2, 30],
+    ['ENDIF', '', 2, 40],
+    ['ENDIF', '', 1, 50],
+    ['ENDIF', '', 0, 60],
+  ]);
+
+  it('三层嵌套：中间链 no-match 时内层不可达（旧版只看最外层会误判可达）', () => {
+    const got = buildBranchOutcomes(threeLevel, [pred(10, T), pred(20, F), pred(30, T)]);
+    const byHead = new Map(got.map((g) => [g.headLine, g]));
+    expect(byHead.get(10)!.outcome).toBe('taken');
+    expect(byHead.get(20)!.outcome).toBe('no-match');
+    expect(byHead.get(30)!.outcome).toBe('unreachable');
+  });
+
+  it('三层嵌套：全部包络链都命中 → 内层可达', () => {
+    const got = buildBranchOutcomes(threeLevel, [pred(10, T), pred(20, T), pred(30, T)]);
+    const byHead = new Map(got.map((g) => [g.headLine, g]));
+    expect(byHead.get(30)!.outcome).toBe('taken');
+  });
+
+  it('三层嵌套：内层头落在中间链未命中分支（ELSE 体）→ 不可达', () => {
+    const withElse = cf([
+      ['IF', 'A', 0, 10],
+      ['IF', 'B', 1, 20],
+      ['ELSE', '', 1, 30],
+      ['IF', 'C', 2, 40],
+      ['ENDIF', '', 2, 50],
+      ['ENDIF', '', 1, 60],
+      ['ENDIF', '', 0, 70],
+    ]);
+    const got = buildBranchOutcomes(withElse, [pred(10, T), pred(20, T), pred(40, T)]);
+    const byHead = new Map(got.map((g) => [g.headLine, g]));
+    expect(byHead.get(20)!.outcome).toBe('taken');
+    expect(byHead.get(40)!.outcome).toBe('unreachable');
+  });
 });
 
 describe('宽容性', () => {

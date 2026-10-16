@@ -229,8 +229,8 @@ function applyBit(op: string, a: number | string, b: number | string): ReplayVal
   if (!Number.isInteger(x) || !Number.isInteger(y)) {
     return unknown('other', `位运算要求整数：${x} ${op} ${y}`);
   }
-  const bx = BigInt(x);
-  const by = BigInt(y);
+  const bx = BigInt.asIntN(64, BigInt(x));
+  const by = BigInt.asIntN(64, BigInt(y));
   let r: bigint;
   switch (op) {
     case '&':
@@ -243,10 +243,13 @@ function applyBit(op: string, a: number | string, b: number | string): ReplayVal
       r = bx ^ by;
       break;
     case '<<':
-      r = bx << by;
+      // C# long 移位计数按 63 掩码（负数补码 &63 即引擎语义）。裸 BigInt 位移：
+      // 负数抛 RangeError、巨量位移巨量内存——2026-10-16 修复：运算符路径与全链
+      // 「绝不抛错」契约对齐（GETBIT 的越界回错误串是 builtin 语义，两不混同）。
+      r = BigInt.asIntN(64, bx << (by & 63n));
       break;
-    default: // >>（BigInt 为算术右移）
-      r = bx >> by;
+    default: // >>（BigInt 为算术右移；计数同 C# 掩码）
+      r = bx >> (by & 63n);
       break;
   }
   return { kind: 'value', value: Number(r) };

@@ -262,28 +262,36 @@ export function buildBranchOutcomes(
     });
   }
 
-  // ---- 可达性传播（简单版）：链头位于外层链"未进入分支"区间 → unreachable ----
-  // 外层 = 包含本链头的、深度更小的链；取深度最小（最直接外层）。
+  // ---- 可达性传播：**每一条**包络链都要通过（2026-10-16 修复：旧版只取深度最小
+  // 的最外层链做判定——三层嵌套时中间链 outcome=no-match 被完全跳过，内层链被
+  // 误判可达；最外层 unknown 时传播整体跳过，同样漏判）。
+  // 判据：遍历所有包络链（head < 本链头 < end）——任一链 no-match → unreachable；
+  // 任一链 taken 但本链头不在其命中分支区间 → unreachable；全部 taken 且都落在
+  // 命中分支内 → 可达；unknown 链不传播（保持既有文档口径：内层保留自身结果）。
   const final = outcomes.map((o) => {
     const { __span, ...rest } = o;
     const span = __span!;
-    let outer: (typeof outcomes)[number] | null = null;
+    let unreachable = false;
     for (const p of outcomes) {
       if (p === o) continue;
       const ps = p.__span!;
-      if (ps.head < span.head && span.head < ps.end) {
-        if (!outer || p.depth < outer.depth) outer = p;
+      if (!(ps.head < span.head && span.head < ps.end)) continue; // 非包络链
+      if (p.outcome === 'no-match') {
+        unreachable = true; // 这条外层链整体没进 → 内层必不执行
+        break;
       }
-    }
-    if (outer && (outer.outcome === 'taken' || outer.outcome === 'no-match')) {
-      // 外层确定走向：检查本链头是否在命中分支区间内
-      const idx = outer.members.findIndex((m) => m.line === outer!.takenLine);
-      if (idx >= 0) {
-        const sp = spanOfOuter(outer, idx);
-        if (span.head >= sp.start && span.head < sp.end) return rest; // 在命中分支内 → 可达
+      if (p.outcome === 'taken') {
+        const idx = p.members.findIndex((m) => m.line === p.takenLine);
+        if (idx >= 0) {
+          const sp = spanOfOuter(p, idx);
+          if (span.head >= sp.start && span.head < sp.end) continue; // 在这条外层的命中分支内 → 过
+        }
+        unreachable = true; // taken 但链头不在命中分支区间（含 takenLine 异常的保守处理）
+        break;
       }
-      return { ...rest, outcome: 'unreachable' as const, takenLine: null, unknown: undefined };
+      // p.outcome === 'unknown' → 不传播（内层保留自身结果）
     }
+    if (unreachable) return { ...rest, outcome: 'unreachable' as const, takenLine: null, unknown: undefined };
     return rest;
   });
 

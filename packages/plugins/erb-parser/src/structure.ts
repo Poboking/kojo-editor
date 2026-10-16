@@ -67,12 +67,27 @@ interface OpenBlock {
  * 漏判边界是**安全方向**（未闭合会在文件结尾照样报出来，行号仍然指着开块那一行），
  * 误判边界则直接制造假缺陷——两者代价不对称，所以规则只写能证明的那一条。
  */
+/**
+ * 标识符**起始**字符类（erb-parser 本地一份，**不跨包 import**——audit C 禁插件间依赖）。
+ * 与 `kojo-sugar/src/identifier-chars.ts` 的起始集同口径：ASCII 字母/下划线 +
+ * 平假名·片假名（\u3040-\u30ff）+ 扩展A·汉字（\u3400-\u4dbf \u4e00-\u9fff）+
+ * 全角拉丁 `Ａ-Ｚａ-ｚ`（\uFF21-\uFF3A \uFF41-\uFF5A）；不含数字/`$`/全角标点/全角数字。
+ * 两包服务同一引擎事实（ERB 记号的字符集），漂移的表现是"引用面板找得到、
+ * 结构体检却认不出定义行"——改这串时两边必须对拍（kojo-sugar 侧还有后续集，别抄错行）。
+ */
+const IDENT_START = /^[A-Za-z_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uFF21-\uFF3A\uFF41-\uFF5A]/;
+
 function isFunctionBoundary(trimmed: string): boolean {
   if (!trimmed.startsWith('@')) return false;
   const def = parseFunctionDefinition(trimmed);
   // 名字必须像标识符：续行里的 @"给%CALLNAME:TARGET%使用…（剩余{ITEM:45}枚）" 也能被
-  // parseFunctionDefinition 切出一个"名字"（空格即断），但它显然不是函数名。
-  return def !== null && /^[A-Za-z_]/.test(def.name);
+  // parseFunctionDefinition 切出一个"名字"（空格即断），但它显然不是函数名——
+  // 首字符 `"` 不在起始类里，自然被拒（`@"` 排除因此不需要单独一条 if）。
+  // 2026-10-16 修复：起始类从 ASCII 扩到 ERB 标识符全集。语料 21% 定义名含 CJK，
+  // `@日本語関数` 这类**汉字起首**的定义此前不认成边界 ⇒ 结构栈跨函数串连：
+  // A 函数的未闭合 IF 被 B 函数的 ENDIF 吸收（真缺陷消失），或 B 的合法 ENDIF
+  // 被判孤儿（假缺陷凭空生）——两个方向都是错的。
+  return def !== null && IDENT_START.test(def.name);
 }
 
 /** 栈里是否压着某一类的开块（用于 CATCH 的"归属存疑就不报"判据） */

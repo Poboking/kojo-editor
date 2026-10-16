@@ -72,6 +72,19 @@ describe('evaluateExpr：基础', () => {
     expect(val(ev('1024 >> 2', r))).toBe(256);
   });
 
+  it('位运算：移位计数按 C# long 语义 &63 掩码，绝不抛错（2026-10-16 修复）', () => {
+    const r = makeReader({});
+    // 负位移：C# count&63 → 1 << -1 ≡ 1 << 63 = Int64.MIN；旧实现裸 BigInt 位移抛 RangeError
+    expect(val(ev('1 << -1', r))).toBe(-9223372036854775808);
+    expect(val(ev('8 >> -1', r))).toBe(0); // 8 >> 63 = 0
+    // 巨量位移：&63 后只做一次小位移，不分配巨量内存（999999999 & 63 = 63）
+    expect(val(ev('1 << 999999999', r))).toBe(-9223372036854775808);
+    expect(val(ev('1 << 64', r))).toBe(1); // 64 & 63 = 0
+    expect(val(ev('1 << 65', r))).toBe(2); // 65 & 63 = 1
+    // 结果包回 Int64：1 << 63 = Int64.MIN（不爆域）
+    expect(val(ev('-1 >> 63', r))).toBe(-1); // 算术右移，符号保持
+  });
+
   it('单目运算', () => {
     const r = makeReader({ 'CFLAG:2': 5 });
     expect(val(ev('!CFLAG:2', r))).toBe(0);

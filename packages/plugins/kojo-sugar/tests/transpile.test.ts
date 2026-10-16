@@ -222,8 +222,8 @@ describe('§3.2 时机 · 图像面（附录 C #37）· `{i}` 原样透传，不
   //   `TRYCALLFORM M_KOJO%KOJO_NAME%_%ARGS%_K{NO:(ARG:2)}_%ARGS:1%(ARGS:2,ARG:3,ARG:4)`
   // 尾部 `%ARGS:1%` 是**运行期字符串**（形态名）⇒ 指令表里根本没有它，
   // 必须原样拼名。实参固定三枚 ⇒ 糖层写 `参数: ARGS, ARG, ARG:1`。
-  const img = (face: string, token: string) =>
-    t(`角色: 12\n时机 ${face} ${token} 参数: ARGS, ARG, ARG:1：\n    「呀。」\n`);
+  const img = (face: string, word: string) =>
+    t(`角色: 12\n时机 ${face} ${word} 参数: ARGS, ARG, ARG:1：\n    「呀。」\n`);
 
   it('令牌原样进函数名；三发射点（本体 / 委托桩 / 桩调用）形参逐字带 `(ARGS,ARG,ARG:1)`', () => {
     const { erb, diagnostics } = img('图像', '特殊服装');
@@ -608,6 +608,41 @@ describe('§3.5 如果块', () => {
   it('`不在` 简单左值 → 不报（不打扰既有写法）', () => {
     const src = '角色: 12\n时机 指令 310：\n    如果 她的好感度 不在 0 到 99：\n        「嗯。」\n';
     expect(codes(src)).not.toContain('notin-complex-operand');
+  });
+
+  // 2026-10-16 恶性修复回归：旧版把两侧布尔运算吞进范围 ——
+  // `A 不在 1 到 3 且 B` 产出 `!(A>=1 && A<=3 && B)`（语义反转）。修复后只取本操作数。
+  it('`不在` 右侧接 且 → 取反不吞后续条件（旧版语义反转）', () => {
+    const src = '角色: 12\n时机 指令 310：\n    如果 她的好感度 不在 0 到 99 且 她的心情 不等于 0：\n        「嗯。」\n';
+    const out = body(src);
+    expect(out).toContain('!(CFLAG:TARGET:好感度 >= 0 && CFLAG:TARGET:好感度 <= 99) && CFLAG:TARGET:心情 != 0');
+    expect(out).not.toContain('<= 99 &&');
+  });
+
+  it('`不在` 右侧接 或 → 括号内不含或项（旧版产出优先级垃圾）', () => {
+    const src = '角色: 12\n时机 指令 310：\n    如果 她的好感度 不在 0 到 99 或 她的心情 == 1：\n        「嗯。」\n';
+    const out = body(src);
+    expect(out).toContain('!(CFLAG:TARGET:好感度 >= 0 && CFLAG:TARGET:好感度 <= 99) || CFLAG:TARGET:心情 == 1');
+  });
+
+  it('`不在` 左侧接 且 → lhs 只取本操作数（旧版把前件吞进取反）', () => {
+    const src = '角色: 12\n时机 指令 310：\n    如果 她的心情 不等于 0 且 她的好感度 不在 0 到 99：\n        「嗯。」\n';
+    const out = body(src);
+    expect(out).toContain('CFLAG:TARGET:心情 != 0 && !(CFLAG:TARGET:好感度 >= 0 && CFLAG:TARGET:好感度 <= 99)');
+  });
+
+  it('同一条件多个 `不在` → 全部降糖（旧版只降第一个，其余原样泄漏）', () => {
+    const src = '角色: 12\n时机 指令 310：\n    如果 她的好感度 不在 0 到 9 且 她的心情 不在 1 到 2：\n        「嗯。」\n';
+    const out = body(src);
+    expect(out).toContain('!(CFLAG:TARGET:好感度 >= 0 && CFLAG:TARGET:好感度 <= 9)');
+    expect(out).toContain('!(CFLAG:TARGET:心情 >= 1 && CFLAG:TARGET:心情 <= 2)');
+    expect(out).not.toContain('不在');
+  });
+
+  it('台词字面量里的「不在」不是运算符：不误拦也不误改', () => {
+    const src = '角色: 12\n时机 指令 310：\n    如果 她的心情 == "今天不在家"：\n        「嗯。」\n';
+    expect(codes(src)).not.toContain('unknown-identifier');
+    expect(body(src)).toContain('"今天不在家"');
   });
 
   it('单行形式 `如果 条件： 内容`', () => {

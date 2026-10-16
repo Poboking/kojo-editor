@@ -158,6 +158,27 @@ describe('checkControlFlowStructure · 三类可证明错误', () => {
     expect(issues.some((i) => i.line === 5)).toBe(false);
   });
 
+  it('汉字起首的定义行同样是函数边界（2026-10-16 修复：起始类扩到 ERB 标识符全集）', () => {
+    // 修复前：@日本語関数 不认成边界 ⇒ A 函数未闭合的 IF 被 B 函数的 ENDIF 吸收
+    //（0 报，跨函数串栈——A 的真缺陷被抹掉，B 的合法 ENDIF 被当成 A 的账）
+    const issues = checkControlFlowStructure(L('@AEGI', 'IF A', '@日本語関数', 'ENDIF'));
+    expect(issues.map((i) => [i.kind, i.line])).toEqual([
+      ['unclosed-open', 2],
+      ['orphan-close', 4],
+    ]);
+  });
+
+  it('CJK / 全角拉丁起首的函数名：体配平时一条都不报（修复不得制造假边界）', () => {
+    expect(
+      checkControlFlowStructure(L('@日本語関数', 'IF A', '\tPRINTL 甲', 'ENDIF', '@ＥＲＢ処理', 'IF B', 'ENDIF')),
+    ).toEqual([]);
+  });
+
+  it('`@"` 续行仍然不是边界：续行不当新函数收口、ENDIF 照常配对（排除机制不被误伤）', () => {
+    const text = L('@AEGI', 'IF A', '\t@"给%CALLNAME:TARGET%使用（剩余{ITEM:45}枚）",ITEM:45,', '\tENDIF');
+    expect(checkControlFlowStructure(text)).toEqual([]);
+  });
+
   it('闭合语句把更深的层吞掉时（IF → REPEAT → ENDIF），报那层的 REND 缺失', () => {
     const text = L('IF A', '\tREPEAT', '\t\tPRINTL 甲', 'ENDIF');
     const issues = checkControlFlowStructure(text);

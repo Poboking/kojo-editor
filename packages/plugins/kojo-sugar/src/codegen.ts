@@ -545,9 +545,19 @@ function emitRegistration(
 
 /** 登记函数的 RESULTS 体（`口上:` / `显示名:` / `简介:` 有其一才发；规范 §5.5） */
 function emitRegistrationResults(em: Emitter, fm: SugarFrontMatter, familySeg: string): void {
-  if (familySeg.length > 0) em.pushGenerated(0, `RESULTS = ${JSON.stringify(familySeg)}`);
-  if (fm.displayName) em.pushGenerated(0, `RESULTS:1 = "${fm.displayName}"`);
-  if (fm.description) em.pushGenerated(0, `RESULTS:2 = "${fm.description}"`);
+  if (familySeg.length > 0) em.pushGenerated(0, `RESULTS = ${erbStringLiteral(familySeg)}`);
+  if (fm.displayName) em.pushGenerated(0, `RESULTS:1 = ${erbStringLiteral(fm.displayName)}`);
+  if (fm.description) em.pushGenerated(0, `RESULTS:2 = ${erbStringLiteral(fm.description)}`);
+}
+
+/**
+ * ERB 字符串字面量包裹。引擎的 `"` 不可内嵌、**无转义概念**——
+ * `JSON.stringify` 的 `\"` 产物在 ERB 里是非法字节（旧缺陷）；内嵌 `"`
+ * 一律降级为全角 `＂`（U+FF02，字形几乎一致、不破坏字面量结构）。
+ * 无 `"` 时逐字节不变（golden 不受扰动）。
+ */
+function erbStringLiteral(value: string): string {
+  return `"${value.replace(/"/g, '＂')}"`;
 }
 
 /**

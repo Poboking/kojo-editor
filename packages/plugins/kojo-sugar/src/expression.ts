@@ -512,19 +512,19 @@ function lowerOperators(code: string): string {
  * `非` 是单字且可能出现在标识符里（如变量名含"非"），故必须做边界判定：
  * 前一个字符不是标识符字符、后一个字符不是标识符字符。
  */
-function replaceToken(code: string, token: string, replacement: string): string {
+function replaceToken(code: string, word: string, replacement: string): string {
   let out = '';
   let i = 0;
   while (i < code.length) {
-    if (code.startsWith(token, i)) {
+    if (code.startsWith(word, i)) {
       const before = i > 0 ? code[i - 1]! : '';
-      const after = i + token.length < code.length ? code[i + token.length]! : '';
-      const isCjkToken = /[\u4e00-\u9fff]/.test(token);
-      const boundaryBefore = isCjkToken ? !isIdentPart(before) : !isIdentPart(before);
-      const boundaryAfter = isCjkToken ? !isIdentPart(after) : !isIdentPart(after);
+      const after = i + word.length < code.length ? code[i + word.length]! : '';
+      const isCjkWord = /[\u4e00-\u9fff]/.test(word);
+      const boundaryBefore = !isIdentPart(before);
+      const boundaryAfter = !isIdentPart(after);
       if (boundaryBefore && boundaryAfter) {
         out += replacement;
-        i += token.length;
+        i += word.length;
         continue;
       }
     }
@@ -542,16 +542,47 @@ function replaceToken(code: string, token: string, replacement: string): string 
  * 自动转写（避免擅自引入临时变量），就地报 `notin-complex-operand`（warning）。
  */
 function lowerNotIn(expr: string, ctx: ExprContext): string {
-  for (const kw of NOTIN_KEYWORDS) {
-    const idx = findToken(expr, kw);
-    if (idx < 0) continue;
-    const lhs = expr.slice(0, idx).trim();
-    const rest = expr.slice(idx + kw.length).trim();
-    const toIdx = findToken(rest, '到') >= 0 ? findToken(rest, '到') : findToken(rest, 'to');
-    if (toIdx < 0) continue;
-    const lo = rest.slice(0, toIdx).trim();
-    const hi = rest.slice(toIdx + (rest.startsWith('到', toIdx) ? 1 : 2)).trim();
-    if (lhs.length === 0 || lo.length === 0 || hi.length === 0) continue;
+  const ops = topLevelBoolOps(expr);
+  let out = '';
+  let consumed = 0;
+  let scanFrom = 0;
+  let lowered = false;
+  let broken = false;
+  for (;;) {
+    let hit: { idx: number; kw: string } | null = null;
+    for (const kw of NOTIN_KEYWORDS) {
+      const rel = findTokenOutsideStrings(expr.slice(scanFrom), kw);
+      if (rel < 0) continue;
+      const abs = scanFrom + rel;
+      if (hit === null || abs < hit.idx) hit = { idx: abs, kw };
+    }
+    if (hit === null) break;
+    const { idx, kw } = hit;
+    // 本命中所属的布尔操作数：lhs 截到上一个顶层 &&/|| 之右
+    const prevOp = [...ops].reverse().find((o) => o.idx + o.text.length <= idx);
+    const start = prevOp ? prevOp.idx + prevOp.text.length : 0;
+    const segFrom = idx + kw.length;
+    const toA = findTokenOutsideStrings(expr.slice(segFrom), '到');
+    const toB = findTokenOutsideStrings(expr.slice(segFrom), 'to');
+    const toRel = toA < 0 ? toB : toB < 0 ? toA : Math.min(toA, toB);
+    const toAbs = toRel < 0 ? -1 : segFrom + toRel;
+    const toLen = toAbs >= 0 && expr.startsWith('到', toAbs) ? 1 : 2;
+    // hi 截到下一个顶层 &&/|| 之左（原文运算符接回后缀）
+    const nextOp = toAbs >= 0 ? ops.find((o) => o.idx > toAbs) : undefined;
+    const end = nextOp ? nextOp.idx : expr.length;
+    const lhs = toAbs >= 0 ? expr.slice(start, idx).trim() : '';
+    const lo = toAbs >= 0 ? expr.slice(segFrom, toAbs).trim() : '';
+    const hi = toAbs >= 0 ? expr.slice(toAbs + toLen, end).trim() : '';
+    if (
+      toAbs < 0 ||
+      lhs.length === 0 ||
+      lo.length === 0 ||
+      hi.length === 0 ||
+      NOTIN_KEYWORDS.some((k) => findTokenOutsideStrings(lo, k) >= 0 || findTokenOutsideStrings(hi, k) >= 0)
+    ) {
+      broken = true; // 形态不完整 / 边界内嵌套「不在」：整条保守放弃，不产出半吊子 ERB
+      break;
+    }
     if (/[()+-]/.test(lhs)) {
       ctx.report({
         code: 'notin-complex-operand',
@@ -560,32 +591,85 @@ function lowerNotIn(expr: string, ctx: ExprContext): string {
         loc: ctx.loc,
       });
     }
-    return `!(${lhs} >= ${lo} && ${lhs} <= ${hi})`;
+    // 接缝空白保原文（trim 的代价不能转嫁给拼接缝）：lhs 段的首空白接在上一运算符
+    // 之后、hi 段的尾空白接在下一运算符之前——丢了就烧成 `99)&&` / `&&!(`
+    //（2026-10-16 修复批自己的回归用例抓到的形状）。
+    const leadWs = /^\s*/.exec(expr.slice(start, idx))![0]!;
+    const tailWs = /\s*$/.exec(expr.slice(toAbs + toLen, end))![0]!;
+    out += expr.slice(consumed, start) + leadWs + `!(${lhs} >= ${lo} && ${lhs} <= ${hi})` + tailWs;
+    consumed = end;
+    scanFrom = end;
+    lowered = true;
   }
-  // `不在` 出现但形态不完整 → 不静默（保持原样会产出非法 ERB）
-  if (NOTIN_KEYWORDS.some((kw) => expr.includes(kw))) {
+  if (broken) {
+    // `不在` 出现但形态不完整 → 不静默（保持原样会产出非法 ERB）
     ctx.report({
       code: 'unknown-identifier',
       severity: 'error',
       message: '`不在` 需要写成「X 不在 a 到 b」，无法解析为范围取反。',
       loc: ctx.loc,
     });
+    return expr;
   }
-  return expr;
+  if (!lowered) return expr;
+  return out + expr.slice(consumed);
 }
 
-/** 找 token（词边界；返回首个下标，-1 = 未找到） */
-function findToken(code: string, token: string): number {
+/** 找词（词边界；返回首个下标，-1 = 未找到） */
+function findToken(code: string, word: string): number {
   let i = 0;
   while (i < code.length) {
-    if (code.startsWith(token, i)) {
+    if (code.startsWith(word, i)) {
       const before = i > 0 ? code[i - 1]! : '';
-      const after = i + token.length < code.length ? code[i + token.length]! : '';
+      const after = i + word.length < code.length ? code[i + word.length]! : '';
       if (!isIdentPart(before) && !isIdentPart(after)) return i;
     }
     i++;
   }
   return -1;
+}
+
+/** 找词（词边界；**跳过字符串字面量段**——台词里的「不在」不是运算符；-1 = 未找到） */
+function findTokenOutsideStrings(code: string, word: string): number {
+  let offset = 0;
+  for (const part of splitStringLiterals(code)) {
+    if (!part.isString) {
+      const hit = findToken(part.text, word);
+      if (hit >= 0) return offset + hit;
+    }
+    offset += part.text.length;
+  }
+  return -1;
+}
+
+/** 顶层布尔运算符（&& / ||；字符串外、括号深度 0；按出现序）——「不在」的边界尺 */
+function topLevelBoolOps(code: string): { idx: number; text: string }[] {
+  const out: { idx: number; text: string }[] = [];
+  let offset = 0;
+  for (const part of splitStringLiterals(code)) {
+    if (!part.isString) {
+      let depth = 0;
+      let i = 0;
+      while (i < part.text.length) {
+        const ch = part.text[i]!;
+        if (ch === '(') {
+          depth++;
+        } else if (ch === ')') {
+          if (depth > 0) depth--;
+        } else if (depth === 0 && (ch === '&' || ch === '|')) {
+          const two = part.text.slice(i, i + 2);
+          if (two === '&&' || two === '||') {
+            out.push({ idx: offset + i, text: two });
+            i += 2;
+            continue;
+          }
+        }
+        i++;
+      }
+    }
+    offset += part.text.length;
+  }
+  return out;
 }
 
 /**
