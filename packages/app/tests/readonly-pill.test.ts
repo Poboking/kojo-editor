@@ -129,7 +129,10 @@ describe('.kojo 预览的入口不再被封存总闸收起', () => {
     expect(hintLine).not.toContain('预览');
     const editorGroupStart = shell.indexOf('settings-group-title">编辑器');
     expect(editorGroupStart).toBeGreaterThan(-1);
-    const applyCall = shell.indexOf('applySugarViewPref(e.target.checked)', editorGroupStart);
+    // 预览开关（VSCode 精修批起走 <Switch onChange={applySugarViewPref}>）必须落在「编辑器」组内，
+    // 且组标题到它之间不许出现 `!sealed`——即这一项不随封存总闸收起。抓函数名而非整段调用写法，
+    // 免得一改控件形态就误报（真正的守卫是下面那条 `!sealed`）。
+    const applyCall = shell.indexOf('applySugarViewPref', editorGroupStart);
     expect(applyCall).toBeGreaterThan(-1);
     expect(shell.slice(editorGroupStart, applyCall)).not.toContain('!sealed');
   });

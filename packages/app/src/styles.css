@@ -3,6 +3,12 @@
   --bg-2: #24292f;
   --bg-3: #2b3138;
   --border: #3a424b;
+  /* 描边双档（VSCode 精修批 2026-10-17）：既有 `--border` 是控件描边的中档；密集区分隔
+     （树行 / 表格线 / 面板内 hairline）用更低对比的 `--border-subtle`，悬停与聚焦前的过渡、
+     以及需要"看得见边界"的地方用 `--border-strong`。三档都是非文字元素，发丝线本就低于 3:1
+     （装饰性分隔，不承担可点区识别），故只按视觉层次取，不套文字对比判据。 */
+  --border-subtle: #2f363d;
+  --border-strong: #4a545f;
   --fg: #d7dce2;
   --fg-dim: #8b949e;
   --accent: #4c8bf5;
@@ -33,11 +39,27 @@
   --radius-md: 6px; /* 中件：工具条按钮、输入框、面板块、状态条 */
   --radius-lg: 10px; /* 浮层与卡片：picker、overlay、toast、notice、modal、欢迎卡 */
   --radius-pill: 999px; /* 胶囊徽章 */
-  /* 阴影（UI P4 · §5.122）：6 种浮层阴影收成 3 档抬升（轻浮层 → 浮层 → 模态）。
+  /* 阴影（UI P4 · §5.122；VSCode 精修批 2026-10-17 改为**分层抬升**）：每档 = 一层贴地
+     接触阴影（近、实、小偏移）+ 一层环境投影（远、虚、大偏移），比单层纯黑更"有厚度"、
+     更像真实光照下浮起来的物件。3 档抬升（轻浮层 → 浮层 → 模态）。
      边条式 inset 阴影（`.editor-tab.active` 等的 accent 指示条）语义不同，不并入。 */
-  --shadow-1: 0 6px 20px rgba(0, 0, 0, 0.45); /* 轻浮层：右键菜单、toast */
-  --shadow-2: 0 12px 36px rgba(0, 0, 0, 0.5); /* 浮层：picker、overlay 宿主 */
-  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.55); /* 模态与欢迎卡 */
+  --shadow-1:
+    0 1px 2px rgba(0, 0, 0, 0.32),
+    0 6px 20px rgba(0, 0, 0, 0.45); /* 轻浮层：右键菜单、toast */
+  --shadow-2:
+    0 2px 5px rgba(0, 0, 0, 0.34),
+    0 12px 36px rgba(0, 0, 0, 0.5); /* 浮层：picker、overlay 宿主 */
+  --shadow-3:
+    0 2px 6px rgba(0, 0, 0, 0.36),
+    0 16px 48px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(0, 0, 0, 0.24); /* 模态与欢迎卡：末层 1px 环给浮层与背景一条明确切边 */
+  /* 抬升面顶边高光（VSCode 精修批）：raised/overlay 面挂一条极淡的 inset 顶亮边，
+     是"这块面比后面那块更靠近光源"的最省笔墨的暗示——磨砂玻璃的 `--glass-edge` 同族思路。 */
+  --edge-raise: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  /* 焦点环柔光：配 `:focus-visible` 的 box-shadow 用（见下），比硬 outline 更高级、不占布局。 */
+  --shadow-focus:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 4px var(--focus-glow);
   /* 磨砂玻璃 token（glass，2026-10-17 教程打磨批）：可复用的毛玻璃面。
      `--glass-alpha` = 填充不透明度，真源是 `glass-pref.ts`（设置页「外观 · 毛玻璃透明度」），
      挂载时写到 `<html>`；任意面都能 `style="--glass-alpha:.5"` 局部覆盖，旋钮一动全场面跟着变。
@@ -50,6 +72,19 @@
   --glass-tint: 36 41 47;
   --glass-tint-raise: 43 49 56;
   --glass-edge: rgba(255, 255, 255, 0.09);
+  /* 语义表面分层（VSCode 精修批 2026-10-17）：`--bg` / `--bg-2` / `--bg-3` 是这三档的**实现值**，
+     全站数百处规则与实机度量过的对比度都钉在上面，故一律不改；这里只给"新写的规则"一个
+     **按角色取面**的入口（值指向既有档），换主题色时一处联动。`sunken` 比 `--bg` 再低半档，
+     用于输入井 / 内嵌区 / 代码块底——本仓既有约定就是"输入比容器暗"（wizard 输入用 `--bg`）。 */
+  --surface-sunken: #191d22;
+  --surface: var(--bg);
+  --surface-raised: var(--bg-2);
+  --surface-overlay: var(--bg-3);
+  /* 焦点环（VSCode focusBorder 的同位）：键盘焦点专用，比 `--accent` 亮一档（非文字元素，
+     实测 `--focus-ring` 压 `--bg` = 5.72:1，远超 UI 组件 3:1 判据）。`--focus-glow` 是环外那圈
+     柔光，配 `--shadow-focus`（box-shadow）用——比硬 outline 更高级、且不吃布局宽度。 */
+  --focus-ring: #5b9aff;
+  --focus-glow: rgba(91, 154, 255, 0.35);
   --z-toolbar: 10;
   --z-overlay: 1000;
   --z-modal: 1100;
@@ -67,10 +102,17 @@
   --fs-4: 16px; /* 空态主句 / 大按钮 */
   --fs-5: 18px; /* 模态标题 */
   --fs-display: 26px; /* 欢迎页标题（唯一一处 display） */
-  /* 动效 token（ui-polish）：统一节奏，改一处全局生效 */
+  /* 动效 token（ui-polish；VSCode 精修批 2026-10-17 补齐节奏与缓动族）：统一节奏，改一处全局生效。
+     `--dur-3` 是入场/浮层展开的更长档；缓动按角色分工——`--ease-out` 减速（悬停、位移收尾），
+     `--ease-spring` 带一丝回弹（浮层/弹窗入场、开关拨动，"活"但不夸张），`--ease-in-out` 对称
+     （滑块、进度），`--ease-standard` 是 Material 式通用档。全部在 `data-motion='reduced'` 下被压平。 */
   --dur-1: 120ms;
   --dur-2: 200ms;
+  --dur-3: 320ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   /* 交互色 token（散落于各面板的 fallback 值收编为唯一来源） */
   --hover: rgba(255, 255, 255, 0.06);
   --active: rgba(76, 139, 245, 0.16);
@@ -99,38 +141,54 @@ button {
   font-family: inherit;
   font-size: inherit;
   border: 1px solid var(--border);
-  background: var(--bg-3);
+  background: var(--surface-overlay);
   color: var(--fg);
   border-radius: var(--radius-md);
   padding: 6px 14px;
   cursor: pointer;
+  /* 顶边高光（VSCode 精修批）：实心按钮挂一条极淡 inset 亮边，"这块面朝向光源"的暗示；
+     透明/幽灵按钮在下方各自清掉。 */
+  box-shadow: var(--edge-raise);
   transition:
     background-color var(--dur-1) var(--ease-out),
     border-color var(--dur-1) var(--ease-out),
     color var(--dur-1) var(--ease-out),
     box-shadow var(--dur-1) var(--ease-out),
+    transform var(--dur-1) var(--ease-out),
     opacity var(--dur-1) var(--ease-out);
 }
+/* 悬停 = 底色亮一档 + 描边转强档（不再只闪一条 accent 边）。特异性与旧 `button:hover` 持平
+   （0,1,1），组件级 `.xxx:hover`（0,2,0+）照常压过它——不扰乱既有层叠。 */
 button:hover {
-  border-color: var(--accent);
+  background: #333a42;
+  border-color: var(--border-strong);
 }
+/* 按下 = 底色回落 + 0.5px 下沉，给"按进去"的实感（替掉旧的 filter brightness，可控且不糊字） */
 button:active:not(:disabled) {
-  filter: brightness(0.94);
+  background: #262c33;
+  transform: translateY(0.5px);
 }
 button:disabled {
   opacity: 0.5;
   cursor: default;
+  box-shadow: none;
 }
 button.primary {
   background: var(--accent-strong);
-  border-color: var(--accent-strong);
+  border-color: transparent;
   color: #fff;
 }
+/* primary 三态走实测过对比度的显式底色（白字：base 4.87 / hover 4.67 / active 5.58，均达 AA），
+   不再用 filter brightness 提亮——那会把白字对比度悄悄拉到线下。 */
 button.primary:hover {
-  filter: brightness(1.1);
+  background: #3272d4;
+}
+button.primary:active:not(:disabled) {
+  background: #2a66c0;
 }
 button.ghost {
   background: transparent;
+  box-shadow: none;
 }
 button.big {
   font-size: var(--fs-4);
@@ -220,13 +278,20 @@ textarea {
   background: rgba(255, 255, 255, 0.24);
   background-clip: content-box;
 }
+::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 255, 255, 0.34);
+  background-clip: content-box;
+}
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-/* 焦点可见性（定稿 §十）：键盘导航统一描边 */
+/* 焦点可见性（定稿 §十；VSCode 精修批：改用更亮的 `--focus-ring`，与 accent 分工——
+   accent 是品牌/选中色，focus-ring 专司键盘焦点，亮一档在深底上更易一眼锁定。
+   仍走 outline 而非 box-shadow：outline 不被 overflow 裁、不占布局、也不与组件自己的
+   box-shadow 抢层叠。想要"柔光环"的地方另挂可复用的 `.u-focus-glow`（见效果库）。 */
 :focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -236,29 +301,69 @@ textarea {
   height: 100%;
   display: grid;
   place-items: center;
+  position: relative;
+  overflow: hidden;
   background: radial-gradient(ellipse at 50% 30%, rgba(76, 139, 245, 0.05), transparent 62%);
 }
+/* 极光背景层（VSCode 精修批）：两团 accent/紫径向光斑，靠 **transform** 缓慢漂移（GPU 友好、
+   不触发重排/重绘，比动 background-position 省得多），幅度小到"台面上有呼吸、看不出在动"。
+   减弱动效时全局规则把它压成一帧静态光斑。欢迎卡 z-index:1 浮在其上。 */
+.welcome::before {
+  content: '';
+  position: absolute;
+  inset: -25%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(36% 40% at 30% 32%, rgba(76, 139, 245, 0.18), transparent 62%),
+    radial-gradient(32% 38% at 72% 68%, rgba(124, 92, 255, 0.15), transparent 64%);
+  filter: blur(28px);
+  animation: welcome-aurora 26s var(--ease-in-out) infinite;
+}
+@keyframes welcome-aurora {
+  0%,
+  100% {
+    transform: translate3d(-2%, -1%, 0) scale(1.04) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(3%, 2%, 0) scale(1.12) rotate(5deg);
+  }
+}
 .welcome-card {
+  position: relative;
+  z-index: 1;
   width: 620px;
   max-width: 92vw;
-  background: var(--bg-2);
+  background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 40px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  box-shadow: var(--shadow-3);
-  animation: overlay-in var(--dur-2) var(--ease-out);
+  /* 分层抬升 + 顶边高光：欢迎卡是首屏第一件"浮起来"的物件，给足厚度；弹簧缓动入场 */
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-3);
+  animation: overlay-in var(--dur-3) var(--ease-spring);
 }
 .welcome-card h1 {
   margin: 0;
   font-size: var(--fs-display);
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
+/* 版本号从"标题尾巴上的灰字"升成一枚独立胶囊 chip（VSCode 精修批） */
 .welcome-card h1 .ver {
   color: var(--fg-dim);
-  font-size: var(--fs-3);
+  font-size: var(--fs-0);
   font-weight: normal;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 1px 9px;
+  background: var(--surface-sunken);
 }
 .tagline {
   margin: 0 0 8px;
@@ -306,10 +411,33 @@ textarea {
   overflow: auto;
 }
 .recent li {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  position: relative;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.recent li:hover {
+  background: var(--hover);
+}
+/* 左缘 accent 条：悬停 / 键盘聚焦时生长（VSCode 列表的选中语义），scaleY 驱动零布局抖动 */
+.recent li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+  transform: scaleY(0);
+  transition: transform var(--dur-2) var(--ease-spring);
+}
+.recent li:hover::before,
+.recent li:focus-within::before {
+  transform: scaleY(1);
 }
 .recent li .link {
   flex: 1;
@@ -318,7 +446,7 @@ textarea {
   gap: 10px;
   justify-content: space-between;
   align-items: center;
-  padding: 7px 0;
+  padding: 7px 10px;
 }
 .recent-dir {
   overflow: hidden;
@@ -360,13 +488,18 @@ textarea {
 }
 .recent-adapter {
   color: var(--fg-dim);
-  font-size: var(--fs-1);
+  font-size: var(--fs-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 8px;
+  line-height: 1.6;
+  background: var(--surface-sunken);
 }
 .hint {
   color: var(--fg-dim);
   font-size: var(--fs-1);
   line-height: 1.7;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-subtle);
   padding-top: 12px;
 }
 
@@ -820,7 +953,7 @@ textarea {
   height: 34px;
   font-size: var(--fs-2);
   color: var(--fg-dim);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--border-subtle);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -1163,6 +1296,21 @@ textarea {
 .tree-file.active {
   background: var(--active);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+/* 树行悬停过渡（VSCode 精修批）：只碰 background/color，hover 不再硬切。
+   **绝不**加 height/margin 过渡——那正是上方 1138 行注释警告过的"整棵树抖动"来源。 */
+.tree-group-btn,
+.tree-package,
+.tree-dir,
+.tree-file {
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+.tree-filter:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-glow);
 }
 .tree-loading {
   color: var(--fg-dim);
@@ -1692,21 +1840,29 @@ button.erb-mode-hint.unlocked:hover {
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  /* 磨砂遮罩（与 .overlay-backdrop 同款思路、幅度更收敛）：把背后虚化 + 压暗，视线收到模态上。
+     确认类对话框（保存告警 / 未保存 / 写权限）文字要脆，故只虚化背景、模态本体保持实心。 */
+  background:
+    radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.55)),
+    rgba(8, 10, 13, 0.4);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.6)) saturate(1.1);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.6)) saturate(1.1);
   display: grid;
   place-items: center;
   z-index: var(--z-modal);
-  animation: fade-in var(--dur-1) var(--ease-out);
+  animation: fade-in var(--dur-2) var(--ease-out);
 }
 .modal {
   width: 620px;
   max-width: 92vw;
-  background: var(--bg-2);
+  background: var(--surface-overlay);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 24px 28px;
-  box-shadow: var(--shadow-3);
-  animation: overlay-in var(--dur-2) var(--ease-out);
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-3);
+  animation: overlay-in var(--dur-3) var(--ease-spring);
 }
 .modal h2 {
   margin: 0 0 10px;
@@ -3216,23 +3372,28 @@ button.erb-mode-hint.unlocked:hover {
   position: fixed;
   inset: 0;
   z-index: var(--z-overlay);
-  background: rgba(0, 0, 0, 0.35);
+  /* 命令面板/快速打开的遮罩也走轻磨砂：与 modal/overlay 一致的"背后虚化"纵深 */
+  background: rgba(8, 10, 13, 0.35);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
   display: flex;
   justify-content: center;
   align-items: flex-start;
   padding-top: 12vh;
-  animation: fade-in var(--dur-1) var(--ease-out);
+  animation: fade-in var(--dur-2) var(--ease-out);
 }
 .picker {
   width: min(640px, 80vw);
-  background: var(--bg-2);
+  background: var(--surface-overlay);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-2);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: pop-in var(--dur-2) var(--ease-out);
+  animation: pop-in var(--dur-2) var(--ease-spring);
 }
 .picker-input {
   border: none;
@@ -3365,7 +3526,7 @@ button.erb-mode-hint.unlocked:hover {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
   padding: var(--space-4);
-  animation: overlay-in var(--dur-2) var(--ease-out);
+  animation: overlay-in var(--dur-3) var(--ease-spring);
 }
 /* 宽版浮层宿主（E9）：长文阅读类（教程）放宽到文档宽度——560px 的行长连一段样例都放不下 */
 .overlay-host-wide {
@@ -3385,7 +3546,9 @@ button.erb-mode-hint.unlocked:hover {
     background: var(--bg-2);
     border-color: var(--border);
   }
-  .overlay-backdrop {
+  .overlay-backdrop,
+  .modal-mask,
+  .picker-backdrop {
     background: rgba(0, 0, 0, 0.5);
   }
 }
@@ -3398,7 +3561,9 @@ button.erb-mode-hint.unlocked:hover {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-:root[data-glass='solid'] .overlay-backdrop {
+:root[data-glass='solid'] .overlay-backdrop,
+:root[data-glass='solid'] .modal-mask,
+:root[data-glass='solid'] .picker-backdrop {
   background: rgba(0, 0, 0, 0.45);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
@@ -3432,7 +3597,9 @@ button.erb-mode-hint.unlocked:hover {
 }
 .wizard-field select:focus-visible,
 .wizard-field input:focus-visible {
-  border-color: var(--accent);
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-glow);
 }
 /* 选中项的说明（许可协议等）：紧贴控件下方，比 tooltip 更适合"读完再决定"的场景 */
 .wizard-hint {
@@ -3508,6 +3675,11 @@ button.erb-mode-hint.unlocked:hover {
   margin-top: 2px;
   accent-color: var(--accent);
 }
+/* 拨动开关（VSCode 精修批：替裸 checkbox）：首列定宽、与标题首行对齐，不随行内容伸缩 */
+.settings-row > .switch {
+  flex: none;
+  margin-top: 1px;
+}
 .settings-row > span {
   display: flex;
   flex-direction: column;
@@ -3517,17 +3689,29 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--fg-dim);
   font-size: var(--fs-1);
 }
+/* 设置页头（VSCode 精修批）：标题 + 一条发丝底边，把"页头"与"可滚动的设置体"分开。
+   选择器带 `.wizard` 前缀以压过共用的 `.wizard h3`（0,1,1）——设置头要的是 fs-5 大字重。 */
+.wizard .settings-title {
+  margin: 0 0 var(--space-3);
+  padding-bottom: var(--space-2);
+  font-size: var(--fs-5);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--border-subtle);
+}
 /* 设置分组标题：靠"缩进 + 更小的字号 + 一条分隔"分层，不靠加粗大字号抢视线 */
 .settings-group + .settings-group {
   margin-top: var(--space-3);
   padding-top: var(--space-3);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-subtle);
 }
 .settings-group-title {
   color: var(--fg-dim);
   font-size: var(--fs-1);
-  letter-spacing: 0.04em;
-  margin-bottom: var(--space-1);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: var(--space-2);
 }
 /* 从属项：缩进一级，视觉上明确"它属于上面那一项" */
 .settings-row.nested {
@@ -3557,19 +3741,41 @@ button.erb-mode-hint.unlocked:hover {
   flex: 0 0 auto;
   margin-top: 1px;
 }
-/* 字号步进器（A1）：与开关行同栅格，首列换成「− 读数 ＋」；读数定宽防跳动 */
+/* 字号步进器（A1；VSCode 精修批：从松散幽灵按钮升级成一个内聚控件）：sunken 井 + 边框，
+   内含「− 读数 ＋」三格；读数定宽防跳动。首列与开关行同栅格。 */
 .settings-stepper {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.settings-stepper > button {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+}
+.settings-stepper > button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--fg);
 }
 .settings-row.static > .settings-stepper {
   margin-top: 1px;
 }
 .settings-stepper-value {
-  min-width: 4.5em;
+  min-width: 4em;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  font-size: var(--fs-1);
   color: var(--fg);
 }
 /* 注册表来源行（KM-9）：唯一可编辑的市场设置就是一个 URL */
@@ -3583,6 +3789,11 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--fg);
   font-family: var(--font-mono, monospace);
   font-size: var(--fs-1);
+}
+.settings-text:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-glow);
 }
 .settings-text:disabled {
   opacity: 0.55;
@@ -4004,14 +4215,16 @@ button.primary .hint {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  background: var(--bg-2);
+  background: var(--surface-overlay);
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-lg);
   padding: 10px 12px;
-  box-shadow: var(--shadow-1);
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-1);
   font-size: var(--fs-2);
-  animation: toast-in var(--dur-2) var(--ease-out);
+  animation: toast-in var(--dur-3) var(--ease-spring);
   transition: box-shadow var(--dur-1) var(--ease-out);
 }
 .toast:hover {
@@ -5048,7 +5261,7 @@ button.primary .hint {
 
 /* --------------------- UI-4：壳层交互 chrome 焦点环补齐 --------------------- */
 /* 全局 :focus-visible（见文件上方「焦点可见性」）已给一切元素描边；这里对壳层交互
-   chrome 显式重述一遍，口径完全一致（1px var(--accent)、offset 1px）——把「标签条
+   chrome 显式重述一遍，口径完全一致（1px var(--focus-ring)、offset 1px）——把「标签条
    按钮 / 活动栏图标按钮 / 面板折叠与关闭按钮 / 工具栏按钮 / 编辑器工具条的预览开关」
    列成一张清单，避免日后某处补了 outline:none 就静默丢掉键盘可见性。 */
 .ab-item:focus-visible,
@@ -5060,7 +5273,7 @@ button.primary .hint {
 .floating-panel-resize:focus-visible,
 .toolbar-btn:focus-visible,
 .sugar-toggle:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -5956,4 +6169,369 @@ button.resume-session {
 .editor-divider:hover,
 .editor-divider:active {
   background: rgba(128, 128, 128, 0.35);
+}
+
+/* ============================================================================
+   可复用效果库（VSCode 精修批 2026-10-17 · 独占区块，新样式在块内追加，勿在他处重排）
+   ----------------------------------------------------------------------------
+   继「磨砂玻璃」之后的第二件可复用视觉系统：一组**克制而高级**的效果原语，全部是
+   纯 CSS 工具类 / 关键帧，任意面挂类即用，零 JS、零依赖。三条纪律：
+   ① **受全局动效开关管辖**——`data-motion='reduced'` 与 `prefers-reduced-motion` 那两条
+      全局规则已把所有 animation/transition 压到 0.01ms，本库的连续动画（aurora/breathe/
+      shimmer/spin）随之停在终态，无需逐条再写；下面只对「滚动渐入」补一条显式还原。
+   ② **不吃布局**——位移/缩放走 transform，环/光走 box-shadow，绝不改 width/margin 触发重排。
+   ③ **有回落**——滚动渐入用 `@supports (animation-timeline: view())` 守卫，老内核不支持时
+      元素就是常显，绝不卡在不可见的入场态。
+   命名：工具类一律 `.u-*`（utility），组件类（.switch/.spinner/.skeleton）按其角色命名。
+   ============================================================================ */
+
+/* ---- 关键帧：入场 / 循环 / 交互反馈 ---- */
+@keyframes u-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes u-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes u-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* 骨架屏扫光：把既有 boot-skeleton-sweep 通用化成任何 `.skeleton` 都能吃的一条 */
+@keyframes u-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+/* 按压涟漪：中心向外扩散一次（零 JS，非指针原点——克制版，够给"按到了"的实感） */
+@keyframes u-ripple {
+  0% {
+    transform: scale(0);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+@keyframes u-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* 缓慢漂移的极光渐变（欢迎页背景）：background-position 往返，配 background-size:200% */
+@keyframes u-aurora {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+/* accent 柔光呼吸：给"进行中 / 录制 / 已连接"这类活体状态一点生命感，幅度刻意小 */
+@keyframes u-glow-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 12px -4px var(--focus-glow);
+  }
+  50% {
+    box-shadow: 0 0 22px -2px var(--focus-glow);
+  }
+}
+
+/* ---- 入场编排：`.stagger` 让直接子元素错峰浮起（欢迎卡、设置分组、空态） ---- */
+.stagger > * {
+  animation: u-rise var(--dur-3) var(--ease-out) both;
+}
+.stagger > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.stagger > *:nth-child(2) {
+  animation-delay: 45ms;
+}
+.stagger > *:nth-child(3) {
+  animation-delay: 90ms;
+}
+.stagger > *:nth-child(4) {
+  animation-delay: 135ms;
+}
+.stagger > *:nth-child(5) {
+  animation-delay: 180ms;
+}
+.stagger > *:nth-child(6) {
+  animation-delay: 225ms;
+}
+.stagger > *:nth-child(7) {
+  animation-delay: 270ms;
+}
+.stagger > *:nth-child(8) {
+  animation-delay: 315ms;
+}
+.stagger > *:nth-child(n + 9) {
+  animation-delay: 360ms;
+}
+/* 单独取用的入场工具（不想整组错峰时） */
+.u-rise {
+  animation: u-rise var(--dur-3) var(--ease-out) both;
+}
+.u-scale-in {
+  animation: u-scale-in var(--dur-2) var(--ease-spring) both;
+}
+
+/* ---- 滚动渐入：进视口时浮起（长文档/教程/列表）。@supports 守卫，老内核常显 ---- */
+@supports (animation-timeline: view()) {
+  .reveal {
+    animation-name: u-rise;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: view();
+    animation-range: entry 4% cover 26%;
+  }
+}
+/* 减弱动效时把滚动渐入显式还原成常显（滚动驱动动画不吃 duration，单靠全局压时不保险） */
+:root[data-motion='reduced'] .reveal {
+  animation: none;
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- 表面 / 抬升 ---- */
+/* 可复用卡片面：overlay 底 + 描边 + 分层阴影 + 顶边高光，一处定义全场一致 */
+.u-card {
+  background: var(--surface-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-1);
+}
+/* 悬停抬升：向上浮 2px + 阴影加深，弹簧缓动收尾——可点卡片/列表项的"拿得起来"感 */
+.u-lift {
+  transition:
+    transform var(--dur-2) var(--ease-spring),
+    box-shadow var(--dur-2) var(--ease-out),
+    border-color var(--dur-2) var(--ease-out);
+}
+.u-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+}
+.u-lift:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-1);
+}
+/* 按压缩放：芯片/小按钮按下去缩一档，配合 button:active 的下沉 */
+.u-press {
+  transition: transform var(--dur-1) var(--ease-out);
+}
+.u-press:active {
+  transform: scale(0.97);
+}
+/* 发丝分隔线（比 --border 更低对比，密集区用） */
+.u-hairline-top {
+  border-top: 1px solid var(--border-subtle);
+}
+.u-hairline-bottom {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* ---- 交互光效 ---- */
+/* 渐变描边环：hero/特殊卡用，accent→紫→亮蓝的 1px 渐变边（background-clip 双层法，不吃额外元素） */
+.u-gradient-ring {
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(var(--surface-overlay), var(--surface-overlay)) padding-box,
+    linear-gradient(135deg, var(--accent), #7c5cff 48%, var(--accent-text)) border-box;
+}
+/* accent 柔光：悬停 / .is-active / focus-within 时亮起一圈，用于强调当前焦点面 */
+.u-glow {
+  transition: box-shadow var(--dur-2) var(--ease-out);
+}
+.u-glow:hover,
+.u-glow.is-active,
+.u-glow:focus-within {
+  box-shadow: 0 0 18px -3px var(--focus-glow);
+}
+/* 呼吸柔光：活体状态（进行中/已连接/录制）用，幅度小、循环慢 */
+.u-breathe {
+  animation: u-glow-breathe 2.8s var(--ease-in-out) infinite;
+}
+/* 键盘焦点柔光环：给想要"环 + 光"而非硬 outline 的控件（与全局 :focus-visible 并存，
+   挂本类即改用 box-shadow 环，outline 让位） */
+.u-focus-glow:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+/* 高光扫过：primary CTA 悬停时一道斜向亮光扫过（"贵"最省笔墨的一笔） */
+.u-sheen {
+  position: relative;
+  overflow: hidden;
+}
+.u-sheen::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+  transform: skewX(-20deg);
+  transition: left var(--dur-3) var(--ease-out);
+  pointer-events: none;
+}
+.u-sheen:hover::before {
+  left: 120%;
+}
+/* 按压涟漪：容器需 relative + overflow:hidden（本类已给），:active 时中心扩散一次 */
+.u-ripple {
+  position: relative;
+  overflow: hidden;
+}
+.u-ripple::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 200px;
+  height: 200px;
+  margin: -100px 0 0 -100px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 60%);
+  transform: scale(0);
+  opacity: 0;
+  pointer-events: none;
+}
+.u-ripple:active::after {
+  animation: u-ripple 480ms var(--ease-out);
+}
+
+/* ---- 质感 ---- */
+/* 颗粒噪点：给大面积深色面（欢迎背景、hero 卡）一层极淡噪点，消除纯色的"塑料感"。
+   容器需 position:relative；mix-blend overlay + 3.5% 不透明度，看得见质感、看不见噪点本身。 */
+.u-grain {
+  position: relative;
+}
+.u-grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---- 组件：开关 / 加载 / 骨架 ---- */
+/* 拨动开关（替裸 checkbox；设置页首个消费方）。结构：
+   <label class="switch"><input type="checkbox"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+   input 仍是真的 checkbox（只是视觉隐藏）⇒ checked/onChange 与既有测试查询口径不变。 */
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  width: 36px;
+  height: 20px;
+}
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  transition: background-color var(--dur-2) var(--ease-out);
+}
+.switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: transform var(--dur-2) var(--ease-spring);
+}
+.switch input:checked ~ .switch-track {
+  background: var(--accent-strong);
+}
+.switch input:checked ~ .switch-track .switch-thumb {
+  transform: translateX(16px);
+}
+.switch input:focus-visible ~ .switch-track {
+  box-shadow: var(--shadow-focus);
+}
+.switch input:disabled ~ .switch-track {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.switch input:disabled {
+  cursor: not-allowed;
+}
+
+/* 加载转圈：16px 单色环，accent 头 */
+.spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: u-spin 700ms linear infinite;
+}
+
+/* 骨架占位：sunken 底 + 扫光，加载态用它替"空白/转圈"，减少布局跳动 */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+  color: transparent !important;
+  user-select: none;
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  transform: translateX(-100%);
+  animation: u-shimmer 1.4s var(--ease-in-out) infinite;
 }

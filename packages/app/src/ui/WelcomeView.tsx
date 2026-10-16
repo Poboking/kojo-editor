@@ -107,8 +107,8 @@ export function WelcomeView({
   }, [kernelReady, recent, statPath, statCache]);
 
   return (
-    <div className="welcome">
-      <div className="welcome-card">
+    <div className="welcome u-grain">
+      <div className="welcome-card stagger">
         <h1>
           kojo-editor <span className="ver">v0.1</span>
         </h1>
@@ -124,7 +124,7 @@ export function WelcomeView({
           <div className="notice">内核装配中…</div>
         ) : (
           <>
-            <button className="primary big" onClick={onOpenDirectory} disabled={phase === 'opening'}>
+            <button className="primary big u-sheen u-ripple" onClick={onOpenDirectory} disabled={phase === 'opening'}>
               {phase === 'opening' ? '正在打开…' : '打开文件夹…'}
             </button>
 

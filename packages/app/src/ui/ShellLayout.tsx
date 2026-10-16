@@ -123,6 +123,7 @@ import { PanelBody, StatusbarItem } from './PanelHost';
 import { ProblemsStatusItem } from './ProblemPanel';
 import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
+import { Switch } from './Switch';
 
 /**
  * 壳层五区布局（2026-10-11 UI 重设计批 P1；定稿 §二）。
@@ -1413,15 +1414,15 @@ export function ShellLayout(props: Props): ReactElement {
         <div className="overlay-backdrop" onMouseDown={() => setSettingsOpen(false)}>
           <div className="overlay-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
             <div className="wizard">
-              <h3>设置</h3>
+              <h3 className="settings-title">设置</h3>
 
               <div className="settings-group">
                 <div className="settings-group-title">视图</div>
                 <label className="settings-row">
-                  <input
-                    type="checkbox"
+                  <Switch
                     checked={layout.zen}
-                    onChange={(e) => dispatch(e.target.checked ? { type: 'toggleZen' } : { type: 'exitZen' })}
+                    onChange={(c) => dispatch(c ? { type: 'toggleZen' } : { type: 'exitZen' })}
+                    label="写作模式"
                   />
                   <span>
                     写作模式
@@ -1431,11 +1432,11 @@ export function ShellLayout(props: Props): ReactElement {
                 {/* 居中限宽只在写作模式下有意义——非写作模式时它**什么都控制不了**，
                     所以不是"灰着好看"，而是不给一个点了没反应的控件。 */}
                 <label className={`settings-row nested${layout.zen ? '' : ' off'}`}>
-                  <input
-                    type="checkbox"
+                  <Switch
                     checked={layout.zenLimitWidth}
                     disabled={!layout.zen}
-                    onChange={(e) => dispatch({ type: 'setZenLimitWidth', value: e.target.checked })}
+                    onChange={(c) => dispatch({ type: 'setZenLimitWidth', value: c })}
+                    label="编辑器居中限宽"
                   />
                   <span>
                     编辑器居中限宽
@@ -1452,10 +1453,10 @@ export function ShellLayout(props: Props): ReactElement {
               <div className="settings-group">
                 <div className="settings-group-title">外观</div>
                 <label className="settings-row">
-                  <input
-                    type="checkbox"
+                  <Switch
                     checked={motionPref === 'reduced'}
-                    onChange={(e) => commitMotionPref(e.target.checked ? 'reduced' : 'full')}
+                    onChange={(c) => commitMotionPref(c ? 'reduced' : 'full')}
+                    label="减弱动效"
                   />
                   <span>
                     减弱动效
@@ -1465,11 +1466,7 @@ export function ShellLayout(props: Props): ReactElement {
                 {/* 面板渲染偏好（panel-prefs.ts，2026-10-14 面板偏好批）：与「减弱动效」同组、
                     一直可见（不随封存总闸收起——它是稳定可用的渲染选项，不是试用中的功能）。 */}
                 <label className="settings-row">
-                  <input
-                    type="checkbox"
-                    checked={panelVirtualize}
-                    onChange={(e) => setPanelVirtualize(e.target.checked)}
-                  />
+                  <Switch checked={panelVirtualize} onChange={setPanelVirtualize} label="长列表视口化" />
                   <span>
                     长列表视口化
                     <span className="settings-hint">
@@ -1518,7 +1515,7 @@ export function ShellLayout(props: Props): ReactElement {
               <div className="settings-group">
                 <div className="settings-group-title">封存功能</div>
                 <label className="settings-row">
-                  <input type="checkbox" checked={!sealed} onChange={(e) => setSealed(!e.target.checked)} />
+                  <Switch checked={!sealed} onChange={(c) => setSealed(!c)} label="显示已封存功能" />
                   <span>
                     显示已封存功能
                     <span className="settings-hint">
@@ -1575,11 +1572,7 @@ export function ShellLayout(props: Props): ReactElement {
                   </span>
                 </div>
                 <label className="settings-row">
-                  <input
-                    type="checkbox"
-                    checked={sugarViewOn}
-                    onChange={(e) => applySugarViewPref(e.target.checked)}
-                  />
+                  <Switch checked={sugarViewOn} onChange={applySugarViewPref} label=".kojo 预览" />
                   <span>
                     .kojo 预览
                     <span className="settings-hint">
@@ -1592,7 +1585,7 @@ export function ShellLayout(props: Props): ReactElement {
                     只是把同一次整理挂到保存前。默认关的理由写在 `format-pref.ts`：改的正是空白，
                     而语料里的全角空格多数是有意的排版。文案回避内部术语（不上「糖」字）。 */}
                 <label className="settings-row">
-                  <input type="checkbox" checked={formatOnSave} onChange={(e) => commitFormatOnSave(e.target.checked)} />
+                  <Switch checked={formatOnSave} onChange={commitFormatOnSave} label="保存时整理空白" />
                   <span>
                     保存时整理空白
                     <span className="settings-hint">
@@ -1606,7 +1599,7 @@ export function ShellLayout(props: Props): ReactElement {
                     `code-lens-pref.ts`。文案刻意不上「CodeLens / 反向索引」这类机器词，
                     并且把"没标注 ≠ 没人用"这条最容易读反的口径当场说清（铁律 4：不静默、也不误导）。 */}
                 <label className="settings-row">
-                  <input type="checkbox" checked={codeLensOn} onChange={(e) => commitCodeLens(e.target.checked)} />
+                  <Switch checked={codeLensOn} onChange={commitCodeLens} label="标注函数被谁调用" />
                   <span>
                     标注函数被谁调用
                     <span className="settings-hint">
@@ -1620,7 +1613,7 @@ export function ShellLayout(props: Props): ReactElement {
                     文案按本仓口径去黑话——不写「语义高亮 / semantic token」，写作者看得懂的效果。
                     默认关的理由见 `semantic-color-pref.ts`：它会顶掉作者看惯的词法配色。 */}
                 <label className="settings-row">
-                  <input type="checkbox" checked={nameColorOn} onChange={(e) => setNameColorPref(e.target.checked)} />
+                  <Switch checked={nameColorOn} onChange={setNameColorPref} label="定义与调用的名字分色" />
                   <span>
                     定义与调用的名字分色
                     <span className="settings-hint">
@@ -1633,10 +1626,10 @@ export function ShellLayout(props: Props): ReactElement {
                 {/* 自动保存（A6，2026-10-20）：写盘只复用既有 save 一条路（全局互斥 + 写允许域闸门）；
                     默认关的理由 = 游戏目录是部署目标，静默写盘必须是显式选择。护栏见 autosave-pref.decideAutosave。 */}
                 <label className="settings-row">
-                  <input
-                    type="checkbox"
+                  <Switch
                     checked={autosaveMode === 'afterDelay'}
-                    onChange={(e) => setAutosavePref(e.target.checked ? 'afterDelay' : 'off')}
+                    onChange={(c) => setAutosavePref(c ? 'afterDelay' : 'off')}
+                    label="自动保存"
                   />
                   <span>
                     自动保存
@@ -1653,11 +1646,7 @@ export function ShellLayout(props: Props): ReactElement {
                 <div className="settings-group">
                   <div className="settings-group-title">游戏目录写入</div>
                   <label className="settings-row">
-                    <input
-                      type="checkbox"
-                      checked={directMode}
-                      onChange={(e) => setDirectMode(e.target.checked)}
-                    />
+                    <Switch checked={directMode} onChange={setDirectMode} label="直连模式（就地编辑游戏目录）" />
                     <span>
                       直连模式（就地编辑游戏目录）
                       <span className="settings-hint">
