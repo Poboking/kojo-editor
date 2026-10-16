@@ -80,6 +80,8 @@ export interface CommandEntry {
 export interface ShellCommandSpec {
   readonly id: string;
   readonly title: string;
+  /** 命令面板分类（缺省 = 「布局」；编辑器动作等自陈分类，R8 起） */
+  readonly category?: string;
   readonly keybinding?: string;
   run(): void;
 }
@@ -91,7 +93,7 @@ export function buildCommandRegistry(
 ): CommandEntry[] {
   const map = new Map<string, CommandEntry>();
   for (const s of shellCommands) {
-    const entry: CommandEntry = { id: s.id, title: s.title, category: '布局', run: () => s.run() };
+    const entry: CommandEntry = { id: s.id, title: s.title, category: s.category ?? '布局', run: () => s.run() };
     if (s.keybinding !== undefined) (entry as { keybinding?: string }).keybinding = s.keybinding;
     map.set(s.id, entry);
   }

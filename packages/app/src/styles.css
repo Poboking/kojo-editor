@@ -5105,8 +5105,7 @@ button.primary .hint {
 }
 
 
-/* =====================================================================
-   G1「看这一行的状态」（2026-10-16 跳到命中状态批）
+/* ==============================================================   G1「看这一行的状态」（2026-10-16 跳到命中状态批）
    —— 全部挂在回放面板既有的 rp-* 词表下，不新增装饰通道：编辑器侧零标记
    （同一状态只在一处显示；与 PERF-4 的 marker runner、与 B8 CodeLens 无交集）。
    ===================================================================== */
@@ -5151,8 +5150,7 @@ button.primary .hint {
   }
 }
 
-/* ===========================================================================
-   G3 修法条目的分组视角（约定校验面板；2026-10-16 批，只在文件尾部追加一节）
+/* ====================================================================   G3 修法条目的分组视角（约定校验面板；2026-10-16 批，只在文件尾部追加一节）
    「按规则看 / 按角色看 / 按家族看」三枚切换 + 归属总账那一行。
    默认态（按规则看）不渲染下面任何一件，除总账行本身为空。
    =========================================================================*/
@@ -5620,4 +5618,54 @@ button.resume-session {
 }
 .oh-kind-new {
   color: var(--green, #7ec699);
+/* 键盘快捷键对话框（R8）：注册表可查可改的显示面；复用 .modal 骨架 */
+.keybindings-dialog {
+  width: min(640px, 92vw);
+}
+.keybindings-dialog h2 {
+  margin: 0 0 4px;
+  font-size: var(--fs-2);
+}
+.keybindings-list {
+  max-height: 56vh;
+  overflow: auto;
+  margin: 8px 0;
+  border: 1px solid var(--bg-3);
+  border-radius: var(--radius-sm);
+}
+.keybindings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: var(--fs-1);
+  border-bottom: 1px solid var(--bg-3);
+}
+.keybindings-row:last-child {
+  border-bottom: none;
+}
+.keybindings-row.capturing {
+  background: var(--accent-dim);
+}
+.keybindings-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.keybinding-chord {
+  flex: none;
+  min-width: 9em;
+  text-align: right;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  color: var(--fg-dim);
+}
+.keybindings-notice {
+  font-size: var(--fs-0);
+  color: var(--accent-text);
+  background: var(--accent-dim);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  margin: 4px 0;
 }

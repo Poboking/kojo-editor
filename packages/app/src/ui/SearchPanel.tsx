@@ -114,10 +114,12 @@ export function SearchPanel({
   }, [s.focusNonce]);
 
   // 「在文件中替换」命令命中（replaceFocusNonce 变化）：聚焦替换框并全选。
-  // 同时把焦点请求传播给检索框的 effect 链路之外——替换框与检索框互斥聚焦，
-  // 后到的请求赢（两个 nonce 都可能连续自增，最后渲染出的焦点即用户要的落点）。
+  // 挂载时记住当时已在的 nonce：只响应**此后**的请求——否则侧栏切走再切回来，
+  // 一次历史请求会把焦点从检索框抢到替换框（控件还没碰就换落点 = 闹鬼）。
+  const seenReplaceNonce = useRef(s.replaceFocusNonce);
   useEffect(() => {
-    if (s.replaceFocusNonce === 0) return; // 初始态不抢焦点（首次聚焦是检索框的）
+    if (s.replaceFocusNonce === seenReplaceNonce.current) return;
+    seenReplaceNonce.current = s.replaceFocusNonce;
     const el = replaceInputRef.current;
     if (!el) return;
     el.focus();

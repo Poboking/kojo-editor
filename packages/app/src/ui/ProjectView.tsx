@@ -15,6 +15,7 @@ import type { ShellCommandSpec } from './commands';
 import { collectSearchScopes, type SearchScopeCatalog } from './search-scope';
 import { createFileReplaceRunner } from './search-replace-exec';
 import { setReplaceRunner } from './search-store';
+import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
 import { workspaceRootsOf } from './workspace-roots';
 import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
@@ -151,13 +152,15 @@ export function ProjectView({
   // 快速打开候选（P2）：索引全量文件路径（壳层只消费泛型路径列表）
   const quickOpenFiles = useMemo<string[]>(() => (index ? [...index.files.keys()].sort() : []), [index]);
 
-  // 编辑器区壳层命令（P3：关闭标签 / 全部保存——容器语义，零业务知识）
+  // 编辑器区壳层命令（P3：关闭标签 / 全部保存——容器语义，零业务知识）。
+  // 键位从键位注册表现取（R8）：缺省 + 用户改键覆盖，kbVersion 变化即重建。
+  const kbVersion = useKeybindingsVersion();
   const extraCommands = useMemo<readonly ShellCommandSpec[]>(
     () => [
       {
         id: 'workbench.closeActiveTab',
         title: '关闭当前标签',
-        keybinding: 'ctrl+w',
+        keybinding: effectiveKeybindingOf('workbench.closeActiveTab'),
         run: () => {
           const p = activeFileRef.current;
           if (p) onRequestCloseTab(p);
@@ -166,7 +169,7 @@ export function ProjectView({
       {
         id: 'workbench.saveAll',
         title: '全部保存',
-        keybinding: 'ctrl+shift+s',
+        keybinding: effectiveKeybindingOf('workbench.saveAll'),
         run: () => {
           void onSaveAll();
         },
@@ -178,7 +181,7 @@ export function ProjectView({
       {
         id: 'workbench.fixAll',
         title: '一键修复当前文件',
-        keybinding: 'ctrl+shift+y',
+        keybinding: effectiveKeybindingOf('workbench.fixAll'),
         run: () => {
           kernel.bus.emit('editor.fixAll.request', {});
         },
@@ -192,7 +195,7 @@ export function ProjectView({
         // （「.kojo 预览」——命令面板是作者找到这功能的入口，名字必须一致）。
         id: 'workbench.toggleSugarView',
         title: '切换 .kojo 预览',
-        keybinding: 'ctrl+alt+t',
+        keybinding: effectiveKeybindingOf('workbench.toggleSugarView'),
         run: () => {
           kernel.bus.emit('editor.sugarView.set', {});
         },
@@ -205,7 +208,7 @@ export function ProjectView({
       {
         id: 'workbench.jumpToState',
         title: '看这一行的状态',
-        keybinding: 'ctrl+alt+s',
+        keybinding: effectiveKeybindingOf('workbench.jumpToState'),
         run: () => {
           requestJumpToState({
             probe: readJumpProbe,
@@ -214,8 +217,53 @@ export function ProjectView({
           });
         },
       },
+      /* ---- 编辑器动作（R8 命令面板补齐批）：壳层发意图，EditorPane 落 Monaco 动作 ----
+       * **刻意不带缺省键位**：编辑器内这些动作 Monaco 已有内建键（Ctrl+F / Ctrl+H /
+       * Shift+Alt+F / F2 / Shift+F12），宿主命令不抢键（注册表带键会在编辑器聚焦时
+       * 与 Monaco 抢同一次按键）；命令面板是无键入口，想要键位可在键盘快捷键里自绑。 */
+      {
+        id: 'editor.action.find',
+        title: '查找',
+        category: '编辑器',
+        run: () => {
+          kernel.bus.emit('editor.action.request', { action: 'find', source: '命令面板' });
+        },
+      },
+      {
+        id: 'editor.action.replace',
+        title: '替换',
+        category: '编辑器',
+        run: () => {
+          kernel.bus.emit('editor.action.request', { action: 'replace', source: '命令面板' });
+        },
+      },
+      {
+        id: 'editor.action.formatDocument',
+        title: '格式化文档',
+        category: '编辑器',
+        run: () => {
+          kernel.bus.emit('editor.action.request', { action: 'formatDocument', source: '命令面板' });
+        },
+      },
+      {
+        id: 'editor.action.rename',
+        title: '重命名符号',
+        category: '编辑器',
+        run: () => {
+          kernel.bus.emit('editor.action.request', { action: 'rename', source: '命令面板' });
+        },
+      },
+      {
+        id: 'editor.action.references',
+        title: '查找引用',
+        category: '编辑器',
+        run: () => {
+          kernel.bus.emit('editor.action.request', { action: 'references', source: '命令面板' });
+        },
+      },
     ],
-    [onRequestCloseTab, onSaveAll, kernel, notify],
+    // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
+    [onRequestCloseTab, onSaveAll, kernel, notify, kbVersion],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →

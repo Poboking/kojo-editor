@@ -8,7 +8,9 @@ import type {
   EditorSaveHandlerContribution,
   EditorSaveWarning,
   EditorTextEdit,
+  ErbIndex,
   ErbParserService,
+  ErbReference,
 } from '@kojo/plugin-api';
 import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
@@ -1434,26 +1436,31 @@ export function EditorPane({
     // ERB 函数重命名（F2，2026-10-16）：判定与编辑收集全在解析器索引（`erb.parser`），
     // 宿主只注入 monaco 拿不到的东西——活动标签判据（同 codeAction 逐字同款）、写权限
     // （`kernel.io.isWritable`，与保存同源口径）、已开标签表、未打开文件的 io 落盘通道。
+    // 「查找引用」的 ERB 数据源由下方 `referenceSearchDisposer`（languageService 槽）承担；
+    // 这组 helpers 只喂重命名（ErbReferenceHandlers = 重命名 handlers）。
+    const canAnswerErb = (model: Monaco.editor.ITextModel): boolean => {
+      const path = filePathRef.current;
+      return !!path && !sugarModelRef.current && model === editorRef.current?.getModel();
+    };
+    const currentIndexErb = (): ErbIndex | null => {
+      try {
+        return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+      } catch {
+        return null;
+      }
+    };
+    const referencesToErb = (name: string): readonly ErbReference[] | null => {
+      try {
+        const parser = kernel.services.tryGet<ErbParserService>('erb.parser');
+        return parser?.referencesTo ? parser.referencesTo(name) : null;
+      } catch {
+        return null;
+      }
+    };
     const erbRenameDisposer = installErbRename(monaco, {
-      canAnswer: (model) => {
-        const path = filePathRef.current;
-        return !!path && !sugarModelRef.current && model === editorRef.current?.getModel();
-      },
-      currentIndex: () => {
-        try {
-          return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-        } catch {
-          return null;
-        }
-      },
-      referencesTo: (name) => {
-        try {
-          const parser = kernel.services.tryGet<ErbParserService>('erb.parser');
-          return parser?.referencesTo ? parser.referencesTo(name) : null;
-        } catch {
-          return null;
-        }
-      },
+      canAnswer: canAnswerErb,
+      currentIndex: currentIndexErb,
+      referencesTo: referencesToErb,
       isWritable: (path) => kernel.io.isWritable(path),
       openModelFor: (filePath) => {
         const key = matchOpenedPath(entriesRef.current.keys(), filePath);
@@ -1934,6 +1941,42 @@ export function EditorPane({
     },
     [unlockAsk, setErbEditable, notify],
   );
+
+  /**
+   * 编辑器动作意图（R8 命令面板补齐批）：命令面板的查找/替换/格式化/重命名/引用
+   * 都从这里落地。壳层只发意图（`editor.action.request`），Monaco action id 的知识
+   * 留在编辑器这一侧——发起方不必知道 Monaco 的内部命名。
+   *
+   * 判据与 fixAll 同款：没有活动文件 / 糖视图挂着（只读派生 model）时**可见拒绝**
+   * 不静默；动作缺席（当前语言没注册对应能力）也明说。
+   */
+  useEffect(() => {
+    const ACTION_IDS = {
+      find: 'actions.find',
+      replace: 'editor.action.startFindReplaceAction',
+      formatDocument: 'editor.action.formatDocument',
+      rename: 'editor.action.rename',
+      references: 'editor.action.goToReferences',
+    } as const;
+    const un = kernel.bus.on('editor.action.request', (p) => {
+      const ed = editorRef.current;
+      if (!ed) {
+        notify({ kind: 'info', message: '先打开一份文件，再执行这个动作。' });
+        return;
+      }
+      if (sugarModelRef.current) {
+        notify({ kind: 'info', message: '.kojo 预览是只读显示，动作改的是派生文本——先关掉预览再执行。' });
+        return;
+      }
+      const action = ed.getAction(ACTION_IDS[p.action]);
+      if (!action) {
+        notify({ kind: 'info', message: '当前文件类型不支持这个动作。' });
+        return;
+      }
+      void action.run();
+    });
+    return un;
+  }, [kernel, notify]);
 
   /**
    * E3「全部修复」：把**当前文档**里每一条"只有唯一改法"的问题一次补好

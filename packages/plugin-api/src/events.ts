@@ -271,6 +271,20 @@ export interface KernelEventMap {
    * 回到编辑器，注解一条都没动，要等下一次打字才变——那是"按了没反应"。
    */
   'editor.codeLens.set': { on: boolean };
+  /**
+   * 编辑器动作意图（R8 命令面板补齐批，2026-10-16）：命令面板/键位请求宿主在
+   * **当前活动编辑器**上执行一条 Monaco 内建动作（查找 / 替换 / 格式化文档 /
+   * 重命名符号 / 查找引用）。
+   *
+   * 通用、游戏无关——壳层发意图、编辑器宿主落地（与 `editor.fixAll.request` 同款
+   * 分工：动作真源在编辑器，发起方不必也不该知道 Monaco 的 action id）。
+   * **刻意不带缺省键位**：编辑器内这些动作 Monaco 已有内建键（Ctrl+F / Ctrl+H /
+   * Shift+Alt+F / F2 / Shift+F12），宿主命令不抢键；命令面板是无键入口。
+   */
+  'editor.action.request': {
+    action: 'find' | 'replace' | 'formatDocument' | 'rename' | 'references';
+    source?: string;
+  };
 }
 
 /* ------------------- 内核事件 emit 权限（单一真源 + 防漂移断言） ------------------- */
@@ -322,6 +336,9 @@ const KERNEL_ONLY_EVENT_NAMES = [
   // 显示偏好开关：真源是宿主的 localStorage 偏好 + Monaco 编辑器选项，插件既不持有偏好
   // 也不碰选项（B8）。放开 emit 只会让插件能"替作者改设置"。
   'editor.codeLens.set',
+  // 编辑器动作（查找/替换/格式化/重命名/引用）落在作者笔下的内容与编辑器会话上，
+  // 与「全部修复」同档：宿主编辑器一侧落地，插件没有 emit 的理由（R8）。
+  'editor.action.request',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核事件名（= 插件可 emit 的集合；供 kernel `scopedBus` 执法使用） */

@@ -283,6 +283,18 @@ export function createUiSugarEditorPlugin(): Plugin {
         },
       });
 
+      // 「浮动 .kojo 校验面板」（R8 命令面板补齐批，additive）：糖判定是编辑 .kojo 时的
+      // 高频面，命令面板给它一个入口——发既有 `ui.panel.float` 意图、宿主落地为浮窗
+      // （非模态，与 overlay 同款模式）。判定知识全在 VerdictPanel，命令只负责"叫它出来"。
+      ctx.slots.register('editor.command', {
+        id: 'kojo.sugarVerdict.float',
+        title: '浮动 .kojo 校验面板',
+        category: '文件',
+        run: () => {
+          ctx.bus.emit('ui.panel.float', { id: 'sugar-verdict', source: 'ui-sugar-editor' });
+        },
+      });
+
       ctx.slots.register('ui.toolbar', {
         id: 'sugar-new-kojo-btn',
         title: '新建口上文件',

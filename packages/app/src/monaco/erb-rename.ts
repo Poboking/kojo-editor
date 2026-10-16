@@ -374,3 +374,7 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
   const sub = monaco.languages.registerRenameProvider(ERB_LANGUAGE_ID, provider);
   return { dispose: () => sub.dispose() };
 }
+
+/* ============================== 查找引用（R8 命令面板补齐批） ============================== */
+
+/** 引用查找的 handlers（重命名的子集：同一份索引与同一套判定，不各写一份） */

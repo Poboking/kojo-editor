@@ -118,7 +118,8 @@ describe('.kojo 预览的入口不再被封存总闸收起', () => {
 
   it('命令与快捷键恒在注册表（ProjectView 不再读总闸）', () => {
     expect(projectView).toContain("id: 'workbench.toggleSugarView'");
-    expect(projectView).toContain("keybinding: 'ctrl+alt+t'");
+    // 键位真源在键位注册表（缺省 ctrl+alt+t，可改），命令表经 effectiveKeybindingOf 取值
+    expect(projectView).toContain("keybinding: effectiveKeybindingOf('workbench.toggleSugarView')");
     expect(projectView).not.toContain('useSealed');
   });
 

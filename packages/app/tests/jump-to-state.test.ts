@@ -199,7 +199,8 @@ describe('命令入口恒在注册表（与「切换 .kojo 预览」同一片）
   it('workbench.jumpToState 带快捷键注册进 extraCommands', async () => {
     const src = await read();
     expect(src).toContain("id: 'workbench.jumpToState'");
-    expect(src).toContain("keybinding: 'ctrl+alt+s'");
+    // 键位真源在键位注册表（可查可改可显示），命令表经 effectiveKeybindingOf 取值
+    expect(src).toContain("keybinding: effectiveKeybindingOf('workbench.jumpToState')");
     expect(src).toContain("title: '看这一行的状态'");
     // 刻意不给 when：灰掉不说话就是"按了没反应"（铁律 4）
     expect(src).not.toMatch(/jumpToState[\s\S]{0,200}when:/);

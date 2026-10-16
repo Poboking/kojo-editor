@@ -100,6 +100,8 @@ import {
   type ShellCommandSpec,
 } from './commands';
 import { CommandPalette, QuickOpen, WorkspaceSymbols } from './Palette';
+import { KeybindingsDialog } from './KeybindingsDialog';
+import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
 import {
   collectWorkspaceSymbols,
   workspaceSymbolNotice,
@@ -107,7 +109,7 @@ import {
 } from './workspace-symbols';
 import { PanelBody, StatusbarItem } from './PanelHost';
 import { ProblemsStatusItem } from './ProblemPanel';
-import { requestSearchFocus } from './search-store';
+import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
 
 /**
@@ -275,6 +277,8 @@ export function ShellLayout(props: Props): ReactElement {
   pickerRef.current = paletteOpen || quickOpen || symbolsOpen;
   // 设置 overlay（P4；壳层私有——设置项全是容器语义，不经 ui.overlay 槽）
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 键盘快捷键对话框（R8）：命令入口 + 未来设置页链接共用这一态
+  const [keybindingsOpen, setKeybindingsOpen] = useState(false);
   const settingsRef = useRef(settingsOpen);
   settingsRef.current = settingsOpen;
   /**
@@ -485,46 +489,66 @@ export function ShellLayout(props: Props): ReactElement {
     };
   }, [kernel]);
 
-  // 壳层布局命令（定稿 §五-3：合法容器语义）与槽命令合并为统一注册表
+  // 壳层布局命令（定稿 §五-3：合法容器语义）与槽命令合并为统一注册表。
+  // 键位不再写死在这里：缺省值与用户改键覆盖统一从键位注册表取（R8），
+  // `kbVersion` 变化即重建——改键即刻生效，无需重启。
+  const kbVersion = useKeybindingsVersion();
   const shellCommands = useMemo<readonly ShellCommandSpec[]>(
     () => [
-      { id: 'layout.toggleSidebar', title: '切换主侧栏', keybinding: 'ctrl+b', run: () => dispatch({ type: 'toggle', container: 'sidebar' }) },
-      { id: 'layout.toggleBottom', title: '切换底部区', keybinding: 'ctrl+j', run: () => dispatch({ type: 'toggle', container: 'bottom' }) },
-      { id: 'layout.toggleAux', title: '切换副侧栏', keybinding: 'ctrl+alt+b', run: () => dispatch({ type: 'toggle', container: 'aux' }) },
-      { id: 'layout.toggleZen', title: '切换写作模式', keybinding: 'ctrl+k z', run: () => dispatch({ type: 'toggleZen' }) },
+      { id: 'layout.toggleSidebar', title: '切换主侧栏', keybinding: effectiveKeybindingOf('layout.toggleSidebar'), run: () => dispatch({ type: 'toggle', container: 'sidebar' }) },
+      { id: 'layout.toggleBottom', title: '切换底部区', keybinding: effectiveKeybindingOf('layout.toggleBottom'), run: () => dispatch({ type: 'toggle', container: 'bottom' }) },
+      { id: 'layout.toggleAux', title: '切换副侧栏', keybinding: effectiveKeybindingOf('layout.toggleAux'), run: () => dispatch({ type: 'toggle', container: 'aux' }) },
+      // Ctrl+K Z 和弦是全局键盘处理器的特例分支（注册表单键表达不了），键位在
+      // 键位注册表里登记为不可改；此处不带 keybinding，避免全局处理器重复消费。
+      { id: 'layout.toggleZen', title: '切换写作模式', run: () => dispatch({ type: 'toggleZen' }) },
       { id: 'layout.reset', title: '重置布局', run: () => doResetRef.current() },
       { id: 'layout.openSettings', title: '打开设置', run: () => setSettingsOpen(true) },
-      { id: 'workbench.commandPalette', title: '命令面板', keybinding: 'ctrl+shift+p', run: () => setPaletteOpen(true) },
-      { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: 'ctrl+p', run: () => setQuickOpen(true) },
+      { id: 'workbench.commandPalette', title: '命令面板', keybinding: effectiveKeybindingOf('workbench.commandPalette'), run: () => setPaletteOpen(true) },
+      { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: effectiveKeybindingOf('workbench.quickOpen'), run: () => setQuickOpen(true) },
       // 工作区符号（D2 · Ctrl+T）：按名字找函数定义并跳过去（候选来自
       // `ui.editor.languageService` 的 `workspaceSymbol` 应答，壳层不认识 ERB）。
       // **刻意不给 `when`**（与 `workbench.quickOpen` 同形态，而命令面板的禁用位另有用途）：
       // 没项目 / 索引没建好时命令仍要**按得下去**——面板里那句原因才是给作者的答复；
       // 把它灰掉就成了"按了没反应"（铁律 4）。
-      { id: 'workbench.workspaceSymbols', title: '转到工作区符号', keybinding: 'ctrl+t', run: () => setSymbolsOpen(true) },
+      { id: 'workbench.workspaceSymbols', title: '转到工作区符号', keybinding: effectiveKeybindingOf('workbench.workspaceSymbols'), run: () => setSymbolsOpen(true) },
       // 全文搜索（2026-10-15 检索批）：打开侧栏「搜索」视图 + 请求输入框聚焦。
       // 激活单位是视图 key（单独成视图的面板 = `panel:<id>`，见 layout.organizePanels）；
       // 聚焦意图发进 search-store（面板订阅 focusNonce 落地）——壳层不知道面板内部的输入框。
       {
         id: 'workbench.searchInFiles',
         title: '在文件中搜索',
-        keybinding: 'ctrl+shift+f',
+        keybinding: effectiveKeybindingOf('workbench.searchInFiles'),
         run: () => {
           requestSearchFocus();
           dispatch({ type: 'activate', container: 'sidebar', key: 'panel:kojo.search' });
         },
       },
+      // 全文替换（R7/R8）：同一视图，聚焦的是替换框（替换是搜索面板的下半身，
+      // 不另开视图——与 VSCode 的搜索/替换一体同构）。
+      {
+        id: 'workbench.replaceInFiles',
+        title: '在文件中替换',
+        keybinding: effectiveKeybindingOf('workbench.replaceInFiles'),
+        run: () => {
+          requestReplaceFocus();
+          dispatch({ type: 'activate', container: 'sidebar', key: 'panel:kojo.search' });
+        },
+      },
+      // 键盘快捷键（R8）：一张可查、可显示、可改的键位表（改键覆盖即刻生效）。
+      { id: 'workbench.keybindings', title: '打开键盘快捷键', run: () => setKeybindingsOpen(true) },
       // 问题面板（HK-4 · UI-6）：打开底部区并激活「问题」视图（activate 会同时置 visible:true）
-      { id: 'workbench.problems', title: '问题面板', keybinding: 'ctrl+shift+m', run: () => dispatch({ type: 'activate', container: 'bottom', key: 'kojo.problems' }) },
+      { id: 'workbench.problems', title: '问题面板', keybinding: effectiveKeybindingOf('workbench.problems'), run: () => dispatch({ type: 'activate', container: 'bottom', key: 'kojo.problems' }) },
       // 文字缩放（A1）：走 font-size-pref 的档位真源，Monaco 原生 fontZoom contrib
-      // 装载但未自带键位（standalone 无 workbench 绑定），键位由这张命令表给出。
-      { id: 'editor.fontZoomIn', title: '放大文字', keybinding: 'ctrl+=', run: () => stepFontZoomPref(1) },
-      { id: 'editor.fontZoomOut', title: '缩小文字', keybinding: 'ctrl+-', run: () => stepFontZoomPref(-1) },
-      { id: 'editor.fontZoomReset', title: '重置文字缩放', keybinding: 'ctrl+0', run: () => resetFontZoomPref() },
+      // 装载但未自带键位（standalone 无 workbench 绑定），键位由这张命令表给出
+      // （缺省值登记在键位注册表，可查可改）。
+      { id: 'editor.fontZoomIn', title: '放大文字', keybinding: effectiveKeybindingOf('editor.fontZoomIn'), run: () => stepFontZoomPref(1) },
+      { id: 'editor.fontZoomOut', title: '缩小文字', keybinding: effectiveKeybindingOf('editor.fontZoomOut'), run: () => stepFontZoomPref(-1) },
+      { id: 'editor.fontZoomReset', title: '重置文字缩放', keybinding: effectiveKeybindingOf('editor.fontZoomReset'), run: () => resetFontZoomPref() },
       // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表
       ...(extraCommands ?? []),
     ],
-    [extraCommands],
+    // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
+    [extraCommands, kbVersion],
   );
   const registry = useMemo(
     () => buildCommandRegistry(shellCommands, slotCommands),
@@ -1331,6 +1355,9 @@ export function ShellLayout(props: Props): ReactElement {
           onPickSymbol={revealWorkspaceSymbol}
           onClose={() => setSymbolsOpen(false)}
         />
+      ) : null}
+      {keybindingsOpen ? (
+        <KeybindingsDialog commands={registry} onClose={() => setKeybindingsOpen(false)} />
       ) : null}
       {overlayContribution ? (
         <div className="overlay-backdrop" onMouseDown={() => setActiveOverlay(null)}>
