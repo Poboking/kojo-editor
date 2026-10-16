@@ -27,6 +27,8 @@ function mockMonaco() {
   const configs: Array<{ id: string; config: Monaco.languages.LanguageConfiguration }> = [];
   const monaco = {
     languages: {
+      // ZH-D4 回车层合流后 kojo 配置会引用 IndentAction（与 kojo-enter.test.ts 的 mock 同款）
+      IndentAction: { None: 0, Indent: 1, IndentOutdent: 2, Outdent: 3 },
       getLanguages: () => configs.map((c) => ({ id: c.id })),
       register: vi.fn(),
       setMonarchTokensProvider: vi.fn(),
