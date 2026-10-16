@@ -46,3 +46,14 @@
 | ID | 任务 | 现象 / 复现 / 期望 vs 实际（报红格式） | 认领 |
 |---|---|---|---|
 
+## R. 语料换版后遗留红项（lead 2026-10-16 报红；归口对应线，性能批已排除自身）
+
+> 复现前置：语料在本机（扫描根路径只在本地记忆，不入仓库）——`export KOJO_CORPUS_SCAN_DIRS=<语料扫描根>` 后
+> `node tools/corpus.mjs --print` 应 rc=0；再 `KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)" node node_modules/vitest/vitest.mjs run <file>`。
+> **归因**：以下两条在 `4303cf6`（1016 性能批落地**之前**）用同一份语料跑同一条命令**逐字复现** ⇒ 非 1016 引入；
+> 1016 期间唯一受影响的 `encoding-roundtrip` 钉值已随换版重校（2,285→2,294，字节差异 0 复跑 7/7 绿）。
+
+| ID | 任务（现象 / 复现 / 期望 vs 实际） | 认领 |
+|---|---|---|
+| CR-1 | **糖投影台词行覆盖率跌破门槛**（`packages/kernel/tests/sugar-projection.corpus.test.ts`）。现象：`AssertionError: expected 0.6970855403854256 to be greater than 0.99`。复现：上面前置后跑该文件（约 40s）。期望：台词行覆盖 ≥99%（STATE §二 旧读数 99.2%，990,914/999,114）；实际：**69.7%**，且在同语料同命令下 `4303cf6` 更低（**62.5%**）⇒ 期间有改善但仍未达标。已挂账成因＝`ff1b8ae`（P-1R 手段 3「函数级 all-or-nothing」：一个函数里任一段不可投影即整函数不投影）⇒ 修法要么做函数内部分段投影，要么把不可投影形态（原生直同/复杂段）吸收到面级；**不许把门槛调低来凑绿** | 待认领（糖线） |
+| CR-2 | **族归属 R2 在未知指纹盘上断言形状不成立**（`packages/plugins/kojo-sugar/tests/family-name-source-tier.corpus.test.ts`）。现象：屏上原样 `判表外逐族：[["FLAG",4],["NOWEX",3],["TEQUIP",1]]`，断言在未知指纹盘走 else 分支只允许 `[NOWEX×3, TEQUIP×1]`。复现：同前置跑该文件。期望 vs 实际：期望八张族里只有 NOWEX/TEQUIP 残余；实际本盘 `FLAG` 另有 **4 处判表外**。两条分岔要先判：①**真覆盖缺口**——本盘的 FLAG 名未被 `.als`/主表收录（`KC-1b` 位表展开刚落，名表覆盖面需复测），该补数据；②**断言过窄**——R2 对未知盘应改断不变量（NOWEX 动态索引残余 + `TEQUIP:震动棒` 真阳性必在，其余族数只作读数不参与判绿），而不是复用已知盘的逐族计数。先判因再动手，**不许直接放宽成恒真** | 待认领（糖线 / ALS） |

@@ -161,8 +161,9 @@ describe.skipIf(!hasCorpus)('编码往返：真实语料全量 golden（KOJO_SMO
       }
 
       expect(files.length).toBeGreaterThan(0);
-      // 基线：2,285 文件全过，0 字节差异（eraTW 4.980 汉化整合版）
-      expect(kojoTotal).toBe(2285);
+      // 基线：口上域全过、0 字节差异。钉值随语料换版重校（2026-10-16：sub-modding 4.980-260326-SANYOUSEI 盘
+      // = 口上 2,294 / 工程 4,394 文件，字节差异 0；旧盘「汉化整合版」为 2,285）。
+      expect(kojoTotal).toBe(2294);
       expect(diffs).toEqual([]);
 
       await kernel.stop();
