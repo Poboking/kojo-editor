@@ -6,8 +6,8 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **4288 passed / 50 skipped（4338）**；257 文件过 / 17 跳（274）（2026-10-16 本机实测于 TUT-1 教程批树〔= origin/master `5e92cb1` + 1 提交〕；本批新增 17 条〔`eratw-adapter/tests/tutorial-inline`＝解析单测 10 + 内容零残留守卫 3 + 渲染树遍历 4〕）。⚠ 此前并发恒红的三条挂钟闸（`file-tree` 微基准 / `marker-hotpath` ×2 / `workspace-symbols`）已确认为负载形，见 PITFALLS 72 |
-| 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **3591 passed / 1 skipped / ⚠ 1 failed（3593）**；221 文件过 / 1 挂（222）。失败 = `sugar-projection.corpus.test.ts` 台词行覆盖 **62.5%（`339a0ca`）/ 69.7%（本批后）**，门槛 99% —— **由 `ff1b8ae`（P-1R 手段 3「函数级 all-or-nothing」）引入，非本批**（`12ed541` 同用例 99.2%）；本批另跑 `integration-plugins` 3/3 过（2026-10-16 本机实测，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
+| 全量测试 | **4357 passed / 50 skipped（4407）**；258 文件过 / 17 跳（275）（2026-10-16 本机实测于中文欠账清扫批树〔= origin/master `2ceb281` + 3 提交：时机编号自动分配 + 家族头别名全量 + 术语文案收口〕；本批新增 69 条〔`kojo-sugar/tests/event-autoindex` 18 · `family-alias` 双侧 50〔adapter 5→8、sugar 21→68〕 · 术语守卫扩面扫作者指南 1〕）。⚠ 此前并发恒红的三条挂钟闸（`file-tree` 微基准 / `marker-hotpath` ×2 / `workspace-symbols`）已确认为负载形，见 PITFALLS 72（本批 `marker-hotpath` 并发轮 9.24ms 假红、单跑 7/7 绿，再次坐实） |
+| 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **4394 passed / 10 skipped / ⚠ 3 failed（4407）**；272 文件过 / 3 挂（275）（2026-10-16 中文欠账清扫批本机实测；语料解析＝`C:\game\eratw-画蛇添足版eratw4.980`〔口上 2,285〕）。三条红逐条归因：①`sugar-projection.corpus.test.ts` 台词行覆盖 **69.7%**（696,773/999,114）门槛 99% ＝ BOARD **CR-1**（`ff1b8ae` 引入，非本批；本批家族别名全量把同文件「状态赋值可读率」42.6%→**69.6%**）；②`encoding-roundtrip.test.ts` 口上钉值 **2,285 ≠ 2,294** ＝ 校准盘 `sub-modding 4.980-260326-SANYOUSEI` 今日不在位 ＝ BOARD **ENC-1**（非本批）；③`marker-hotpath.test.ts` 6.55ms < 2ms ＝ **负载形**（同文件单跑 7/7 绿，PITFALLS 72）。本批另复跑 `integration-plugins` 3/3 过、release-check 真语料产物与 golden 逐字节一致 |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（19 插件；A–D 四项全绿） |
 | Rust | `cargo test --lib` **74 passed / 0 failed / 5 ignored**（市场批新增 `market_tests` 24 项：ZIP 落盘 / 单文件 sha256 / 写域拒绝与原子替换 / 容器名守门；1016 批量 IO 批 47→54；旧记 24 项系滞后；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
