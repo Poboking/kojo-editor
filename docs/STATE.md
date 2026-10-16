@@ -6,11 +6,11 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **4365 passed / 51 skipped（4416）**；259 文件过 / 18 跳（277）（2026-10-16 本机实测于中文欠账清扫三批树〔CR-1 之外全部落地：`d27fd4f` 时机编号自动分配 · `490789e` 家族别名 4→23 · `e9edbde` 术语文案收口 · 函数长尾表 100→193＋覆盖率闸 · 函数树文案收口〕；本批累计新增 77 条〔事件自动分配 18 · 别名双侧 50 · 术语守卫扫指南 1 · 函数表闸与防撞 4 · 函数树文案钉 4〕）。⚠ 此前并发恒红的三条挂钟闸（`file-tree` 微基准 / `marker-hotpath` ×2 / `workspace-symbols`）已确认为负载形，见 PITFALLS 72（本批并发轮 `marker-hotpath` 又假红一次、单跑 7/7 绿；空闲轮已 0 红） |
+| 全量测试 | **4377 passed / 51 skipped（4428）**；261 文件过 / 18 跳（279）（2026-10-16 本机实测于 PERF-10 批树〔= origin/master `cbf6ae8` + 1 提交，落地后即 master `bf48873`〕。上一批（中文欠账清扫三批，CR-1 之外全部落地：`d27fd4f` 时机编号自动分配 · `490789e` 家族别名 4→23 · `e9edbde` 术语文案收口 · 函数长尾表 100→193＋覆盖率闸 · 函数树文案收口）累计 77 条〔事件自动分配 18 · 别名双侧 50 · 术语守卫扫指南 1 · 函数表闸与防撞 4 · 函数树文案钉 4〕；本批再 +12 条〔PERF-10 导入 `copyFile` 趟数与写域闸 6 · 装包批量 IPC 守门 · 契约与 io 桩补配〕。⚠ 此前并发恒红的三条挂钟闸（`file-tree` 微基准 / `marker-hotpath` ×2 / `workspace-symbols`）已确认为负载形，见 PITFALLS 72（本批评测期间并发轮 `marker-hotpath` 亦假红过、单跑绿；空闲轮 0 红） |
 | 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **4404 passed / 10 skipped / ⚠ 2 failed（4416）**；275 文件过 / 2 挂（277）（2026-10-16 本机实测；语料解析＝`C:\game\eratw-画蛇添足版eratw4.980`〔口上 2,285〕）。两条红逐条归因：①BOARD **CR-1** `sugar-projection.corpus.test.ts` 台词行覆盖 **69.7%**（696,773/999,114）门槛 99% ＝ `ff1b8ae` 函数级 all-or-nothing（非本批；家族别名批把同文件「状态赋值可读率」42.6%→69.6%）；②BOARD **ENC-1** `encoding-roundtrip.test.ts` 口上钉值 **2,285 ≠ 2,294** ＝ 校准盘 `sub-modding 4.980-260326-SANYOUSEI` 今日不在位（与文件计数/转译语义无关）。本批新增语料门 `library-coverage.corpus.test.ts` 过（调用点 52,713，两表合并覆盖率 **85.41%→96.41%**，阈值 ≥0.90 不变量式＋反恒真护栏）；`integration-plugins` 3/3 过、release-check 真语料产物与 golden 逐字节一致 |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（19 插件；A–D 四项全绿） |
-| Rust | `cargo test --lib` **74 passed / 0 failed / 5 ignored**（市场批新增 `market_tests` 24 项：ZIP 落盘 / 单文件 sha256 / 写域拒绝与原子替换 / 容器名守门；1016 批量 IO 批 47→54；旧记 24 项系滞后；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
+| Rust | `cargo test --lib` **75 passed / 0 failed / 5 ignored**（PERF-10 ③ 新增「`market_extract` async 包装与同步实现逐字段同果」判据；市场批原为 74）：74 passed / 0 failed / 5 ignored（市场批新增 `market_tests` 24 项：ZIP 落盘 / 单文件 sha256 / 写域拒绝与原子替换 / 容器名守门；1016 批量 IO 批 47→54；旧记 24 项系滞后；改了 Rust 才跑；必须经 node 起，见 PITFALLS） |
 | app build | ✓ **21.7s / 产物 13 件 5.5 MB**（1016 终验于 master `70b7bf9`；改前：97 件 15.2 MB、38.71s）。**开机关键路径入口块 4,995 kB → 865.9 kB（gzip 1,352→286.8 kB，−83%）**：懒分割把 Monaco 整段（`entry` 3,978.1 kB，gzip 1,026.6 kB）推到进项目时才加载，`ProjectView` 132.9 kB 同为懒块；ts/css/html/json 四个 worker（9.0 MB）随 B 档砍除从构建面消失。⚠ 入口大头本是 `editor.main` 的 contrib 段（语言与重型 feature 历来是懒 chunk），故自装配单看只 −67 kB——真正的收益在分割与 worker 面 |
 
 ⚠ skipped 跨主机不必相等：存档 / 语料在位与否会让 corpus 用例在 passed / skipped 间移动。
