@@ -35,17 +35,23 @@ export function magicFor(format: ArchiveContainerFormat): bigint {
 /**
  * 组装完整存档文件：16 字节明文头 + 正文（容器格式沿用原档——gzip 档写回
  * 仍是 gzip，raw 档写回仍是 raw；gzip 压缩流不要求逐字节还原，读侧解压即同）。
+ *
+ * `reservedHeader`（保真旁路携带的原档保留字段 [12..16]）：给出即**逐字节原样
+ * 回写**（非 0 保留字节的档也能 round-trip）；缺省时保留字段维持历史行为写零
+ * （Uint8Array 初始化即全零），手工构造 / 无旁路调用者零改动。
  */
 export async function assembleArchiveFile(
   payload: Uint8Array,
   format: ArchiveContainerFormat,
+  reservedHeader?: Uint8Array,
 ): Promise<Uint8Array> {
   const body = format === 'gzip' ? await gzipBytes(payload) : payload;
   const out = new Uint8Array(16 + body.length);
   const dv = new DataView(out.buffer);
   dv.setBigUint64(0, magicFor(format), true);
   dv.setUint32(8, FORMAT_VERSION, true);
-  // out[12..16] 保留字段恒 0（Uint8Array 初始化即全零）
+  if (reservedHeader && reservedHeader.length === 4) out.set(reservedHeader, 12);
+  // 否则 out[12..16] 保留字段维持全零（Uint8Array 初始化即 0）
   out.set(body, 16);
   return out;
 }

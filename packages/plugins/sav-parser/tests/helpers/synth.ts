@@ -164,3 +164,46 @@ export function simpleCharBlock(w: W, no: number): void {
   w.u8(0x00).str('TEST_DIM').int(-1); // 0xD0 路径
   w.u8(0xfe); // EOC
 }
+
+/**
+ * 手工装配一个 **RAW**（未压缩）完整存档文件：16 字节明文头 + 任意 body 字节。
+ * 供字节保真测试直接构造含尾字节 / 多分隔符 / 非零保留头的载荷。
+ * @param body 载荷层字节（顶层 fileType…直到 EOF）
+ * @param reserved 保留头 [12..16] 4 字节（默认全零）
+ */
+export function makeRawFile(body: Uint8Array, reserved?: readonly number[]): Uint8Array {
+  const header = new W();
+  header.i64(MAGIC_RAW);
+  header.u32(1808);
+  if (reserved) {
+    for (const b of reserved) header.u8(b & 0xff);
+  } else {
+    header.u32(0);
+  }
+  return W.concat(header.bytes(), body);
+}
+
+/** 一个 `var` 型档的载荷前缀（fileType=2 + 唯一码 + 版本 + 备注），不含变量流 */
+export function varFileBodyPrefix(w: W, saveMes = ''): W {
+  w.u8(2); // fileType = var
+  w.i64(7153n);
+  w.i64(0n);
+  w.str(saveMes);
+  return w;
+}
+
+/**
+ * 手工装配一个 **GZIP** 完整存档文件：16 字节明文头 + gzipSync(body)。
+ * 与 makeRawFile 同构，供容器无关的字节保真对拍（body 解压后逐字节比较）。
+ */
+export function makeGzipFile(body: Uint8Array, reserved?: readonly number[]): Uint8Array {
+  const header = new W();
+  header.i64(MAGIC_GZIP);
+  header.u32(1808);
+  if (reserved) {
+    for (const b of reserved) header.u8(b & 0xff);
+  } else {
+    header.u32(0);
+  }
+  return W.concat(header.bytes(), new Uint8Array(gzipSync(body)));
+}

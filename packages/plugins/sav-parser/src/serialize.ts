@@ -34,6 +34,7 @@ import type {
   SnapshotArchive,
 } from '@kojo/plugin-api';
 import { ArchiveParseError } from './binary';
+import { getFidelity } from './fidelity';
 import { ByteWriter } from './writer';
 
 const TYPE_TOKEN: Record<ArchiveVariable['type'], number> = {
@@ -425,19 +426,51 @@ function writeVar(w: ByteWriter, v: ArchiveVariable, override?: ArchiveOverrideV
   }
 }
 
-function writeVarStream(w: ByteWriter, vars: readonly ArchiveVariable[], overrides?: ReadonlyMap<string, ArchiveOverrideValue>): void {
-  for (const v of vars) writeVar(w, v, overrides?.get(v.key));
+function writeVarStream(
+  w: ByteWriter,
+  vars: readonly ArchiveVariable[],
+  seps: readonly number[],
+  overrides?: ReadonlyMap<string, ArchiveOverrideValue>,
+): void {
+  // seps 按 parse 记账顺序天然升序；下标 i 处 = "在第 i 个变量之前写一个 0xFD"，
+  // 末尾下标（=== vars.length）在全部变量之后补写，保序还原区级流里的分隔符。
+  let sepAt = 0;
+  for (let i = 0; i < vars.length; i++) {
+    while (sepAt < seps.length && seps[sepAt] === i) {
+      w.byte(0xfd);
+      sepAt++;
+    }
+    const v = vars[i]!;
+    writeVar(w, v, overrides?.get(v.key));
+  }
+  while (sepAt < seps.length) {
+    w.byte(0xfd);
+    sepAt++;
+  }
   w.byte(0xff); // EOF
 }
 
-function writeCharBlock(w: ByteWriter, block: ArchiveCharacterBlock, overrides?: ReadonlyMap<string, ArchiveOverrideValue>): void {
-  const sep = block.dimSepIndex;
+function writeCharBlock(
+  w: ByteWriter,
+  block: ArchiveCharacterBlock,
+  seps: readonly number[],
+  overrides?: ReadonlyMap<string, ArchiveOverrideValue>,
+): void {
+  // 分隔符位置来自保真旁路（全部、有序）；无旁路的 legacy 手工档回退为 dimSepIndex
+  // 单点语义（与旧实现逐字节一致）。
+  let sepAt = 0;
   for (let i = 0; i < block.vars.length; i++) {
-    if (sep !== null && sep !== undefined && i === sep) w.byte(0xfd); // Separator（#DIM 界）
+    while (sepAt < seps.length && seps[sepAt] === i) {
+      w.byte(0xfd);
+      sepAt++;
+    }
     const v = block.vars[i]!;
     writeVar(w, v, overrides?.get(v.key));
   }
-  if (sep !== null && sep !== undefined && sep >= block.vars.length) w.byte(0xfd);
+  while (sepAt < seps.length) {
+    w.byte(0xfd);
+    sepAt++;
+  }
   w.byte(0xfe); // EOC
 }
 
@@ -462,6 +495,7 @@ const FILE_TYPE_CODE: Record<ArchiveFileType, number> = {
  */
 export function serializePayload(archive: SnapshotArchive, opts?: { overrides?: ArchiveOverrides }): Uint8Array {
   const w = new ByteWriter();
+  const fid = getFidelity(archive);
   const ft = archive.fileType;
   w.byte(FILE_TYPE_CODE[ft]);
   w.int64(BigInt(archive.uniqueCode));
@@ -470,17 +504,22 @@ export function serializePayload(archive: SnapshotArchive, opts?: { overrides?: 
   if (ft === 'normal' || ft === 'charvar') {
     w.int64(BigInt(archive.charCount));
     for (const block of archive.chars ?? []) {
-      writeCharBlock(w, block, opts?.overrides?.chars?.get(block.index));
+      // 有旁路 → 用全部有序分隔符；无旁路（手工档）→ 回退单点 dimSepIndex 语义
+      const seps = fid?.charSeps.get(block.index) ?? (block.dimSepIndex != null ? [block.dimSepIndex] : []);
+      writeCharBlock(w, block, seps, opts?.overrides?.chars?.get(block.index));
     }
   }
   if (ft === 'normal' || ft === 'var') {
-    writeVarStream(w, archive.vars ?? [], opts?.overrides?.vars);
+    writeVarStream(w, archive.vars ?? [], fid?.varSeps ?? [], opts?.overrides?.vars);
   }
   if (ft === 'global') {
-    writeVarStream(w, archive.globalVars ?? [], opts?.overrides?.vars);
+    writeVarStream(w, archive.globalVars ?? [], fid?.globalVarSeps ?? [], opts?.overrides?.vars);
   }
   if ((ft === 'normal' || ft === 'global') && archive.emVars) {
-    writeVarStream(w, archive.emVars, opts?.overrides?.vars);
+    writeVarStream(w, archive.emVars, fid?.emVarSeps ?? [], opts?.overrides?.vars);
   }
+  // 尾部残余字节（最后 EOF 之后未消费的正文）原样回写，逐字节还原；
+  // 无旁路（手工构造档）时无尾字节，行为不变。
+  if (fid && fid.trailingBytes.length > 0) w.bytes(fid.trailingBytes);
   return w.toBytes();
 }

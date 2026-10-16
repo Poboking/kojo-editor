@@ -36,6 +36,7 @@ import {
 } from './arrays';
 import { ArchiveParseError, ByteReader } from './binary';
 import { gunzipBytes } from './gunzip';
+import { recordFidelity, type SepPositions } from './fidelity';
 
 /** 压缩存档魔数（明文头前 8 字节） */
 export const MAGIC_GZIP = 0x0a50495a41524589n;
@@ -124,21 +125,38 @@ function readVar(r: ByteReader, policy: CellPolicy): VarToken {
   return v;
 }
 
-/** 读变量流（到 EOF / EOC 为止；区级流中的 separator 罕见，跳过） */
-function readVarStream(r: ByteReader, policy: CellPolicy): ArchiveVariable[] {
+/** 变量流读取结果：变量本体 + **有序分隔符位置**（保真回环需按原位置回写 0xFD） */
+interface VarStreamResult {
+  vars: ArchiveVariable[];
+  seps: number[];
+}
+
+/** 读变量流（到 EOF / EOC 为止；区级流中的 separator 保序记账，不再丢弃） */
+function readVarStream(r: ByteReader, policy: CellPolicy): VarStreamResult {
   const vars: ArchiveVariable[] = [];
+  const seps: number[] = [];
   for (;;) {
     const v = readVar(r, policy);
-    if (v === 'eof' || v === 'eoc') return vars;
-    if (v === 'separator') continue;
+    if (v === 'eof' || v === 'eoc') return { vars, seps };
+    if (v === 'separator') {
+      seps.push(vars.length);
+      continue;
+    }
     vars.push(v);
   }
 }
 
-/** 读一个角色块（内置变量流 + Separator + #DIM 变量流 + EOC） */
-function readCharBlock(r: ByteReader, index: number, policy: CellPolicy): ArchiveCharacterBlock {
+/** 角色块读取结果：变量本体 + **全部**分隔符位置 + 内置/#DIM 分界（首分隔符） */
+interface CharBlockResult {
+  vars: ArchiveVariable[];
+  seps: number[];
+  dimSepIndex: number | null;
+}
+
+/** 读一个角色块（内置变量流 + Separator + #DIM 变量流 + EOC；分隔符可有多个） */
+function readCharBlock(r: ByteReader, index: number, policy: CellPolicy): CharBlockResult {
   const vars: ArchiveVariable[] = [];
-  let dimSepIndex: number | null = null;
+  const seps: number[] = [];
   for (;;) {
     const v = readVar(r, policy);
     if (v === 'eof') {
@@ -146,12 +164,14 @@ function readCharBlock(r: ByteReader, index: number, policy: CellPolicy): Archiv
     }
     if (v === 'eoc') break;
     if (v === 'separator') {
-      dimSepIndex = vars.length;
+      seps.push(vars.length);
       continue;
     }
     vars.push(v);
   }
-  return { index, vars, dimSepIndex };
+  // 契约字段仍表意"内置 / #DIM 分界"：取**首个**分隔符位置（金样本 ≤1 分隔符时
+  // 与旧"仅记最后一个"的行为一致，多分隔符时不再互相覆盖丢字节）。
+  return { vars, seps, dimSepIndex: seps.length > 0 ? seps[0]! : null };
 }
 
 /**
@@ -185,7 +205,9 @@ export async function parseArchive(
   if (version !== FORMAT_VERSION) {
     throw new ArchiveParseError(`不支持的二进制格式版本 ${version}（本解析器支持 ${FORMAT_VERSION}）`, 8);
   }
-  // head[12..16] 为引擎保留字段（实测恒 0，不消费）
+  // head[12..16] 为引擎保留字段（实测恒 0，但**不假设**——捕获原始 4 字节，
+  // 重组容器时原样回写，使非 0 保留字节的档也能逐字节 round-trip）。
+  const reservedHeader = bytes.slice(12, 16);
 
   // ---- 正文 ----
   const body = format === 'gzip' ? await gunzipBytes(bytes.subarray(16)) : bytes.subarray(16);
@@ -232,28 +254,45 @@ export async function parseArchive(
 
   // ---- 角色区 ----
   let chars: ArchiveCharacterBlock[] | undefined;
+  const charSeps = new Map<number, SepPositions>();
   if (fileType === 'normal' || fileType === 'charvar') {
     chars = [];
-    for (let i = 0; i < charCount; i++) chars.push(readCharBlock(r, i, policy));
+    for (let i = 0; i < charCount; i++) {
+      const block = readCharBlock(r, i, policy);
+      if (block.seps.length > 0) charSeps.set(i, block.seps);
+      chars.push({ index: i, vars: block.vars, dimSepIndex: block.dimSepIndex });
+    }
   }
 
   // ---- 主变量区（normal / var） ----
   let vars: ArchiveVariable[] | undefined;
+  let varSeps: SepPositions = [];
   if (fileType === 'normal' || fileType === 'var') {
-    vars = readVarStream(r, policy);
+    const stream = readVarStream(r, policy);
+    vars = stream.vars;
+    varSeps = stream.seps;
   }
 
   // ---- 全局变量区（global） ----
   let globalVars: ArchiveVariable[] | undefined;
+  let globalVarSeps: SepPositions = [];
   if (fileType === 'global') {
-    globalVars = readVarStream(r, policy);
+    const stream = readVarStream(r, policy);
+    globalVars = stream.vars;
+    globalVarSeps = stream.seps;
   }
 
   // ---- EM 扩展区（normal / global 的第二段） ----
   let emVars: ArchiveVariable[] | undefined;
+  let emVarSeps: SepPositions = [];
   if ((fileType === 'normal' || fileType === 'global') && r.remaining > 0) {
-    emVars = readVarStream(r, policy);
+    const stream = readVarStream(r, policy);
+    emVars = stream.vars;
+    emVarSeps = stream.seps;
   }
+
+  // ---- 尾部残余字节（最后一个 EOF 之后未被消费的正文；原样回写才能逐字节还原）----
+  const trailingBytes = body.slice(r.offset);
 
   const out: SnapshotArchive = {
     ...meta,
@@ -266,5 +305,13 @@ export async function parseArchive(
   if (globalVars) out.globalVars = globalVars;
   if (emVars) out.emVars = emVars;
   if (r.warnings.length > 0) out.warnings = [...r.warnings];
+  recordFidelity(out, {
+    reservedHeader,
+    trailingBytes,
+    varSeps,
+    globalVarSeps,
+    emVarSeps,
+    charSeps,
+  });
   return out;
 }

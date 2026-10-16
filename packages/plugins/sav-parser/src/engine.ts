@@ -24,6 +24,7 @@ import type {
 } from '@kojo/plugin-api';
 import { basename } from '@kojo/plugin-api';
 import { assembleArchiveFile, assertPayloadNonEmpty } from './container';
+import { getFidelity } from './fidelity';
 import { parseArchive } from './parse';
 import { serializePayload } from './serialize';
 import { ArchiveParseError } from './binary';
@@ -215,7 +216,8 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
       const archive = await parseArchive(original, path, { keepArrayCells: true, keepRaw: true });
       const payload = serializePayload(archive, { overrides });
       assertPayloadNonEmpty(payload);
-      const full = await assembleArchiveFile(payload, archive.format);
+      // 保真旁路：保留头部字段 [12..16] 原样回写（未修字节逐字节还原）
+      const full = await assembleArchiveFile(payload, archive.format, getFidelity(archive)?.reservedHeader);
 
       // record 先于一切盘上动作（此刻的字节快照才是"操作前"）；
       // 守卫（Int64/协议）抛错走 abort——空 op 回滚无副作用，语义干净
