@@ -13,7 +13,7 @@
  *
  * 1. **语言层词形零手抄**：`如果 / 否则如果 / 否则 / 当 / 是 / 到 / 则 / 调用` 一律由
  *    `keywords.ts` 的 `SUGAR_LEXICON_WORDS`（中文主形投影）与 `operatorTable()`（**反向**投影）给出，
- *    闭合行是同一套 `<块头词> + 结束`（`如果结束` / `当结束` / `循环结束` / `出错结束`）。
+ *    闭合行是同一套 `<块头词> + 结束`（`如果结束` / `当结束` / `循环结束` / `出错处理结束`）。
  *    本表与 `project.ts` 的 `SUGAR_CONTROL`（`如果 X：` / `当 X：` / `是 v：` / `否则：`）同一口径——
  *    预览里同一种块只会有一种中文写法。
  * 2. **本层新增词形只在循环/跳转/声明这三族**（糖层没有对应语法，故关键字表里没有词可用）：
@@ -144,14 +144,15 @@ function showExpr(raw: string, lookup: NativeDisplayLookup | undefined, compareE
       });
     }
     if (compareEquals && EQ_W.length > 0) out = out.replace(COMPARE_EQ_RE, ` ${EQ_W} `);
-    return out.replace(OPERATOR_RE, (whole) => {
-      const cn = ERB_TO_WORD.get(whole);
-      if (cn === undefined) return whole;
-      return whole === '!' ? `${cn} ` : cn; // 逻辑否定要留出词界（`非A` 读不出）
-    });
-  })
-    .replace(/ {2,}/g, ' ')
-    .trim();
+    // 收掉多余空白（`!` → `非 ` 会留双空格）；**只在代码段内**收——引号字面量的空格属于台词
+    return out
+      .replace(OPERATOR_RE, (whole) => {
+        const cn = ERB_TO_WORD.get(whole);
+        if (cn === undefined) return whole;
+        return whole === '!' ? `${cn} ` : cn; // 逻辑否定要留出词界（`非A` 读不出）
+      })
+      .replace(/ {2,}/g, ' ');
+  }).trim();
 }
 
 /** `CASE 1 TO 5` → `1 到 5`（`到` 与写侧同一个词形；引号段不碰） */
