@@ -752,7 +752,20 @@ textarea {
 .editor-tabs-bar {
   display: flex;
   align-items: stretch;
-  flex: none;
+  /* **铺满 head，不许按内容定宽**（bug 1/2/3 同根）。SPLIT-1 之后本条的唯一父容器是
+     `.editor-group-head`（行 flex）：旧的 `flex: none` 在行 flex 里读作"主轴=横向按
+     max-content、不伸不缩"⇒ 标签条宽 = 全部标签内容宽之和，既不铺满组宽，多标签时又
+     溢出 `.editor-group`（被其 overflow:hidden 裁剪）。两个后果：
+     ① 兄弟节点 `.tab-save-all` 紧跟最后一个标签，而 `.editor-tab.active .tab-label`
+        加粗会让 max-content 宽随活动标签变化 ⇒ 切标签按钮横移；
+     ② 裁剪祖先 `.editor-group` 变成"可程序化滚动"，tabs-bar 的 scrollIntoView 在内层
+        `.editor-tabs` 够宽不滚时改滚它 ⇒ 整组（标签条+工具条+面包屑+Monaco）在裁剪口里
+        平移，Monaco automaticLayout 感知不到 scroll 偏移也不复位 ⇒ 编辑器肉眼位移。
+     改成 `1 1 auto + min-width:0`：条宽恒等于 head 剩余宽（与标签内容无关），横向滚动
+     关回内层 `.editor-tabs`（它已是 `flex:1 1 auto; min-width:0; overflow-x:auto`），
+     `.editor-group` 因此不再产生横向溢出。 */
+  flex: 1 1 auto;
+  min-width: 0;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
 }
@@ -5818,7 +5831,13 @@ button.resume-session {
   flex: 1 1 0%;
   min-width: 200px;
   min-height: 0;
+  /* 裁剪但**不成为滚动容器**：`overflow:hidden` 的元素虽然不显示滚动条，却是"可程序化
+     滚动"的 ⇒ 子树里任何一次 `scrollIntoView`（标签栏在 activeFile 变化时就会调）都可能
+     拿它当滚动目标，把整组在裁剪口里平移，而 Monaco automaticLayout 感知不到 scroll 偏移
+     也不复位 ⇒ 编辑器肉眼位移。`clip` 从根上取消这个可能性（scrollLeft 恒 0）。
+     第二行是给不认 `clip` 的引擎留的兜底：无效声明被丢弃，退回 `hidden`（视觉一致）。 */
   overflow: hidden;
+  overflow: clip;
   border-right: 1px solid var(--border, rgba(128, 128, 128, 0.2));
 }
 
@@ -5844,6 +5863,10 @@ button.resume-session {
   flex: 0 0 auto;
   width: 26px;
   border: none;
+  /* 标签条现在铺满 head 剩余宽（见 `.editor-tabs-bar`），它那条下划线就停在按钮左侧
+     26px 处 ⇒ 补上同一条线，head 的下边缘才连续。border-box + stretch，高度不变（仍 35px），
+     hover 只改 background，两者不打架。 */
+  border-bottom: 1px solid var(--border);
   background: transparent;
   color: inherit;
   opacity: 0.6;
