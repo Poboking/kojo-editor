@@ -16,6 +16,7 @@ import { variableCompletionItems } from './kojo-completion-variables';
 import { faceCompletionItems } from './kojo-completion-faces';
 import { instructionCompletionItems } from './kojo-completion-instructions';
 import { libraryCompletionItems } from './kojo-completion-library';
+import { KOJO_SNIPPET_SOURCE } from './kojo-completion-snippets';
 
 /**
  * `.kojo` 表层 DSL 补全的**装配 seam**（宿主层）。
@@ -172,9 +173,12 @@ const STATIC_SUGGESTION_SPECS: readonly StaticSuggestionSpec[] = [
   ),
   ...SYSTEM_FUNCTION_WORDS.map(
     (name): StaticSuggestionSpec => ({
+      // snippet 调用模板（R4）：插入后光标落在括号内（`名($1)$0`）。词表没有形参数据
+      // ⇒ 不造参数 placeholder（不猜）；item 需带 `insertTextRules`，静态表存不下
+      // ⇒ 在 `LEXICON_SOURCE.provide` 里对 function 组统一补。
       label: name,
       kind: 'function',
-      insertText: `${name}(`,
+      insertText: `${name}($1)$0`,
       detail: '系统函数',
       sortText: `5_${name}`,
     }),
@@ -204,16 +208,23 @@ const LEXICON_SOURCE: CompletionSource = {
         sortText: `1_${name}`,
       });
     }
-    // 2..5. 静态词表（模块级一次构建；此处只补 `range` 与 Monaco kind 常量）
+    // 2..5. 静态词表（模块级一次构建；此处只补 `range` 与 Monaco kind 常量）。
+    // function 组是 snippet 调用模板（R4）：补 `insertTextRules` 让 Monaco 按 snippet 解析。
+    // 常量对象防御性读取（测试桩 / 旧运行时可能不挂 `CompletionItemInsertTextRule`）。
+    const insertAsSnippet = monaco.languages.CompletionItemInsertTextRule?.InsertAsSnippet;
     for (const s of STATIC_SUGGESTION_SPECS) {
-      suggestions.push({
+      const item: Monaco.languages.CompletionItem = {
         label: s.label,
         kind: s.kind === 'operator' ? K.Operator : s.kind === 'function' ? K.Function : K.Keyword,
         insertText: s.insertText,
         detail: s.detail,
         range,
         sortText: s.sortText,
-      });
+      };
+      if (s.kind === 'function' && insertAsSnippet !== undefined) {
+        item.insertTextRules = insertAsSnippet;
+      }
+      suggestions.push(item);
     }
 
     return suggestions;
@@ -272,8 +283,13 @@ const LIBRARY_SOURCE: CompletionSource = {
 /**
  * 全部补全来源（**稳定扩展点**）。后续批次往这里追加 `CompletionSource`，
  * 装配点与排序/去重口径零改动。
+ *
+ * `kojo-snippet`（R4）注册在**最前**：行首位置的块头模板与 `kojo-lexicon` 的同名
+ * 纯文本关键字按 label 去重（先注册者胜）⇒ 行首只留 snippet、行中纯文本照旧——
+ * 「snippet 与既有纯文本补全项不重复出条目」就靠这个次序（见 snippet 模块头注）。
  */
 export const KOJO_COMPLETION_SOURCES: CompletionSource[] = [
+  KOJO_SNIPPET_SOURCE,
   LEXICON_SOURCE,
   VARIABLE_SOURCE,
   FACE_SOURCE,

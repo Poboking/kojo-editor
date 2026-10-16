@@ -13,6 +13,7 @@ import { erbFunctionCompletionItems } from './erb-completion-functions';
 import { erbLabelCompletionItems } from './erb-completion-labels';
 import { erbSystemFunctionCompletionItems } from './erb-completion-system-functions';
 import { erbVariableCompletionItems } from './erb-completion-variables';
+import { ERB_SNIPPET_SOURCE } from './erb-completion-snippets';
 
 /**
  * `.erb` 方言补全的**装配 seam**（宿主层）——补 `erb-language.ts` 侧 Monarch 高亮之外的
@@ -250,8 +251,12 @@ const BITS_SOURCE: ErbCompletionSource = {
 /**
  * 全部补全来源（**稳定扩展点**）。各 source **独立文件 + 各自纯函数**，此处只做一行接线；
  * 装配点与排序/去重口径零改动（去重按 label、先注册者胜；排名 `前缀精确 > 前缀命中 > 其它`）。
+ *
+ * `erb-snippet`（R4）注册在**最前**：行首位置的块骨架与 `erb-directives` 的同名纯文本
+ * 项按 label 去重（先注册者胜）⇒ 行首只留骨架、行中纯文本照旧（见 snippet 模块头注）。
  */
 export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
+  ERB_SNIPPET_SOURCE,
   DIRECTIVES_SOURCE,
   VARIABLES_SOURCE,
   FUNCTIONS_SOURCE,

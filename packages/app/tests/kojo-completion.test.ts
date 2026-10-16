@@ -34,7 +34,8 @@ function stubMonaco(): { monaco: typeof Monaco; registered: Registered[] } {
   const registered: Registered[] = [];
   const monaco = {
     languages: {
-      CompletionItemKind: { Variable: 1, Keyword: 2, Operator: 3, Function: 4, EnumMember: 5 },
+      CompletionItemKind: { Variable: 1, Keyword: 2, Operator: 3, Function: 4, EnumMember: 5, Snippet: 15 },
+      CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
       registerCompletionItemProvider: (
         languageId: string,
         provider: Monaco.languages.CompletionItemProvider,
@@ -125,19 +126,22 @@ describe('C-1 · 静态词表 source 产出', () => {
   installKojoCompletion(monaco, () => ({}));
   const provider = registered[0]!.provider;
 
-  it('中文主形关键字在列：`如果`（块关键字），且英文隐藏别名不进列表', () => {
+  it('中文主形关键字在列：行首命中 R4 块头模板（snippet 优先于纯文本），英文隐藏别名不进列表', () => {
     const items = provide(provider, SAMPLE, '如');
     const ifItem = items.find((i) => labelText(i.label) === '如果');
     expect(ifItem).toBeDefined();
-    expect(ifItem!.detail).toBe('块关键字');
+    // 行首位置 snippet 与纯文本同 label，去重先注册者胜 ⇒ 只留块头模板（R4 设计意图）
+    expect(/模板/.test(ifItem!.detail as string)).toBe(true);
+    expect(ifItem!.insertTextRules).toBe(4);
     expect(items.some((i) => labelText(i.label) === 'if')).toBe(false);
   });
 
-  it('系统函数名以调用形态插入：`获取标记` → insertText `获取标记(`', () => {
+  it('系统函数名以 snippet 调用形态插入（R4）：`获取标记` → `获取标记($1)$0`，光标落括号内', () => {
     const items = provide(provider, SAMPLE, '获');
     const fn = items.find((i) => labelText(i.label) === '获取标记');
     expect(fn).toBeDefined();
-    expect(fn!.insertText).toBe('获取标记(');
+    expect(fn!.insertText).toBe('获取标记($1)$0');
+    expect(fn!.insertTextRules).toBe(4); // InsertAsSnippet
     expect(fn!.detail).toBe('系统函数');
   });
 
@@ -167,10 +171,13 @@ describe('C-1 · tables 缺席（fail-visible，不崩不猜）', () => {
     const fullItems = provide(fullProvider, SAMPLE, '').map((i) => labelText(i.label));
     expect(emptyItems.length).toBeGreaterThan(0);
     expect(fullItems).toEqual(emptyItems);
-    // 静态 source 仅产语言/文件层候选：detail 全在固定集合内，无 adapter 派生项
+    // 静态 source 仅产语言/文件层候选 + R4 行首块头模板：detail 全在固定集合或模板措辞内
     const details = new Set(provide(emptyProvider, SAMPLE, '').map((i) => i.detail));
     for (const d of details) {
-      expect(['别名（本文件）', '保留代词', '运算符', '系统函数', '头部声明', '块关键字', '行内关键字', '别名右值']).toContain(d);
+      expect(
+        ['别名（本文件）', '保留代词', '运算符', '系统函数', '头部声明', '块关键字', '行内关键字', '别名右值'].includes(d as string) ||
+          /模板|分支头/.test(d as string),
+      ).toBe(true);
     }
   });
 
