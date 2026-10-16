@@ -129,9 +129,10 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
     dispose.dispose();
   });
 
-  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，EC-1..EC-5 + D7 六个 source 全在册', () => {
+  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，R4 骨架 + EC-1..EC-5 + D7 七个 source 全在册', () => {
     expect(Array.isArray(ERB_COMPLETION_SOURCES)).toBe(true);
     expect(ERB_COMPLETION_SOURCES.map((s) => s.id)).toEqual([
+      'erb-snippet',
       'erb-directives',
       'erb-variables',
       'erb-functions',
@@ -170,12 +171,13 @@ describe('EC-1 · erb-directives source 出货', () => {
   const provider = registered[0]!.provider;
   const labels = (items: readonly Monaco.languages.CompletionItem[]): string[] => items.map((i) => labelText(i.label));
 
-  it('行首：给 `#DIM`（预处理指令）、`[SKIPSTART]`（指令行）、`PRINTFORM` / `IF`（指令表）', () => {
+  it('行首：给 `#DIM`（预处理指令）、`[SKIPSTART]`（指令行）、`PRINTFORM`（指令表）/ `IF`（R4 骨架胜出）', () => {
     const items = provide(provider, HEAD, 3);
     expect(items.find((i) => labelText(i.label) === '#DIM')!.detail).toBe('预处理指令');
     expect(items.find((i) => labelText(i.label) === '[SKIPSTART]')!.detail).toBe('指令行');
     expect(items.find((i) => labelText(i.label) === 'PRINTFORM')!.detail).toBe('指令');
-    expect(items.find((i) => labelText(i.label) === 'IF')!.detail).toBe('指令');
+    // 行首 `IF` 与 erb-snippet 骨架同 label，去重先注册者胜 ⇒ 只留骨架（R4 设计意图）
+    expect(items.find((i) => labelText(i.label) === 'IF')!.detail).toBe('条件块骨架');
   });
 
   it('行首：`#DIM` 前缀精确命中置顶（替换区间覆盖 `#`，插入即补全）', () => {
@@ -209,10 +211,12 @@ describe('EC-1 · tables 缺席（fail-visible，不崩不猜）', () => {
     expect(() => provide(provider, HEAD, 3)).not.toThrow();
     const items = provide(provider, HEAD, 3);
     expect(items.length).toBeGreaterThan(0);
-    // 语言层（静态词表 + EC-5 单一真源系统函数表）不受 adapter 表缺席影响
+    // 语言层（静态词表 + EC-5 单一真源系统函数表 + R4 行首骨架）不受 adapter 表缺席影响
     const details = new Set(items.map((i) => i.detail));
     for (const d of details) {
-      expect(['指令', '预处理指令', '指令行', '关键字', '系统函数']).toContain(d);
+      expect(
+        ['指令', '预处理指令', '指令行', '关键字', '系统函数'].includes(d as string) || /骨架|分支|循环|分派/.test(d as string),
+      ).toBe(true);
     }
     // 依赖 adapter 表 / 项目索引的两路：表缺席 ⇒ 零候选（不猜）
     const vars = provide(provider, 'CFLAG:', 7);

@@ -29,7 +29,7 @@ export const ERB_SNIPPET_SOURCE: ErbCompletionSource = {
       { label: 'IF-ELSE', insertText: 'IF ${1:条件}\n$2\nELSE\n$3\nENDIF$0', detail: '条件块骨架：含 ELSE' },
       { label: 'ELSEIF', insertText: 'ELSEIF ${1:条件}', detail: '否则如果分支' },
       { label: 'ELSE', insertText: 'ELSE', detail: '否则分支' },
-      { label: 'SIF', insertText: 'SIF ${1:条件}\n$0', detail: '单行条件：只守护下一行' },
+      { label: 'SIF', insertText: 'SIF ${1:条件}\n$0', detail: '单行条件骨架：只守护下一行' },
       { label: 'WHILE', insertText: 'WHILE ${1:条件}\n$2\nWEND$0', detail: '循环块骨架' },
       { label: 'FOR', insertText: 'FOR ${1:变量}, ${2:起始}, ${3:结束}, ${4:步进}\n$5\nNEXT$0', detail: '计数循环骨架' },
       {

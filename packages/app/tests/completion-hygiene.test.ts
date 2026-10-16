@@ -50,6 +50,7 @@ const KIND = {
   Reference: 6,
   EnumMember: 7,
   Property: 8,
+  Snippet: 9, // R4：kojo/erb 两 seam 的块头模板 / 控制流骨架
 } as const;
 
 const LEGAL_KINDS: ReadonlySet<number> = new Set<number>(Object.values(KIND));
@@ -183,6 +184,8 @@ function erbCtx(text: string, column: number, lineNumber = 1): ErbCompletionSour
 /** 每 seam 的遍历场景（每 source 给一个「能出货」的位置） */
 const KOJO_SCENARIOS: ReadonlyArray<readonly [string, CompletionSourceContext]> = [
   ['kojo-lexicon', kojoCtx('别名 心 = 角色 3\n', 1)],
+  // R4 块头模板：行首（token 之前只有空白）才有候选
+  ['kojo-snippet', kojoCtx('如果', 1)],
   ['kojo-variable', kojoCtx('{她的好感', 5)],
   ['kojo-face', kojoCtx('时机 初', 5)],
   // KC-2b：分野令牌之后给命名参数键（Property）；键之后给取值（EnumMember）
@@ -199,6 +202,8 @@ const KOJO_SCENARIOS: ReadonlyArray<readonly [string, CompletionSourceContext]> 
 const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]> = [
   ['erb-directives', erbCtx('#D', 3)], // 行首全表
   ['erb-directives', erbCtx('IF A', 5)], // 行中关键字子集
+  // R4 控制流骨架：行首才有候选
+  ['erb-snippet', erbCtx('IF', 3)],
   ['erb-variables', erbCtx('CFLAG:', 7)], // 二段式
   ['erb-variables', erbCtx('CFLAG:TARGET:', 14)], // 三段式
   ['erb-functions', erbCtx('CALL M_KOJO', 11)], // 调用位

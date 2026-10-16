@@ -255,7 +255,7 @@ describe('SH-3 · (c) kojo 大文件别名扫描（provider → mergeSuggestions
     const { monaco, registered } = stubMonaco();
     installKojoCompletion(monaco, () => ({}));
     expect(registered).toHaveLength(1);
-    expect(KOJO_COMPLETION_SOURCES).toHaveLength(5); // 词表 / 变量 / 分野 / 指令名 / 库函数名五源一轮
+    expect(KOJO_COMPLETION_SOURCES).toHaveLength(6); // 块头模板 / 词表 / 变量 / 分野 / 指令名 / 库函数名六源一轮
 
     const provider = registered[0]!.provider;
     const { text, lineNumber, column } = bigKojoText();
