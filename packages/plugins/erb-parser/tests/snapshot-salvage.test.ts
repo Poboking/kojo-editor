@@ -579,10 +579,10 @@ describe('PERF-12a salvage 判据（纯函数）', () => {
   });
 
   it('sameProjectRoot 只归一写法，不归一位置', () => {
-    expect(sameProjectRoot('D:\\Game\\eratw\\', 'D:/Game/eratw')).toBe(true);
-    expect(sameProjectRoot('d:/game/eratw', 'D:/Game/eratw')).toBe(true);
-    expect(sameProjectRoot('D:/Game/eratw', 'E:/Game/eratw')).toBe(false);
-    expect(sameProjectRoot('D:/Game/eratw', 'D:/Game/eratw2')).toBe(false);
+    expect(sameProjectRoot('D:\\games\\eratw\\', 'D:/games/eratw')).toBe(true);
+    expect(sameProjectRoot('d:/games/eratw', 'D:/games/eratw')).toBe(true);
+    expect(sameProjectRoot('D:/games/eratw', 'E:/games/eratw')).toBe(false);
+    expect(sameProjectRoot('D:/games/eratw', 'D:/games/eratw2')).toBe(false);
     expect(projectRootKey('D:\\a\\b\\')).toBe('d:/a/b');
   });
 

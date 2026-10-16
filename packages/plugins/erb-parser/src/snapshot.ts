@@ -162,7 +162,7 @@ export function snapshotKeyFor(rootDir: string, version: number = SNAPSHOT_VERSI
  * 项目根的**同一性**判据（大小写 / 斜杠方向 / 尾分隔符都不算换项目）。
  *
  * 旧口径拿 `rootDir` 字符串逐字比 ⇒ "同一份盘、写法不同"（用户从 `D:\game\eratw`
- * 与 `D:/Game/eratw/` 两个入口各开过一次）会被判成两个项目 ⇒ 整份快照作废。
+ * 与 `D:/games/eratw/` 两个入口各开过一次）会被判成两个项目 ⇒ 整份快照作废。
  * 只归一化**写法**，不归一化**位置**：盘符变了、目录挪了 ⇒ 依然不同项目
  * （条目键是绝对路径，跨项目尾巴撞上也不该由这份快照来答，见 `salvageSnapshot` 的头注）。
  */
