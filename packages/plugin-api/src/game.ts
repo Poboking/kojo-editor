@@ -294,12 +294,16 @@ export interface KojoFaceTemplate {
    *   **运行期字符串**（形态名）而非编号的调用面——引擎以
    *   `TRYCALLFORM …_K{n}_%ARGS:1%` 拼名（如 `时机 图像 特殊服装：` →
    *   `M_KOJO{t}_IMAGE_K{n}_特殊服装`）。
+   * - `'counter'`（additive）：令牌按**计数器值域表**（`KojoCounterTable`）换算成编号
+   *   （如 `时机 计数器 偷看：` → `…_K{n}_2`）。**纯数字令牌不查表、逐字节直通**（旧写法
+   *   `时机 计数器 20：` 零改动）；**名查不到 fail-closed**（绝不猜编号）；**`hasTable=false`
+   *   时名路径一律 fail-closed**。适用于 `{i}` 取值域是"引擎登记过的计数器集合"的调用面。
    *
    * **为什么必须由 adapter 声明**：同一个中文令牌在 `指令` 面是编号查表、在 `图像` 面
-   * 是字面名；语法层据形态判不出来，只有游戏知识知道引擎怎么拼这个名。语义中立、
-   * 零游戏名词——转译器只按本字段决定"查不查表"。
+   * 是字面名、在 `计数器` 面是另一张**值域名表**；语法层据形态判不出来，只有游戏知识
+   * 知道引擎怎么拼这个名。语义中立、零游戏名词——转译器只按本字段决定"查不查表、查哪张表"。
    */
-  readonly indexKind?: 'command' | 'literal';
+  readonly indexKind?: 'command' | 'literal' | 'counter';
   /**
    * 成否判定函数模板（`成否:` 非默认值时才生成；缺省 = 该分野无成否函数）。
    * 与主模板同一套占位符；`{i}` 消费编号。
@@ -577,6 +581,28 @@ export interface KojoMutatorTable {
 }
 
 /**
+ * 计数器值域名表（游戏知识，只住 adapter；1016 批）。
+ *
+ * 与 `KojoLibraryTable` / `KojoMutatorTable` 同形（同一 seam：adapter 建一张**纯数据表**、
+ * 糖层只查不解释）：把 `KojoFaceTemplate.indexKind: 'counter'` 的面（eraTW：`计数器`）里
+ * `{i}` 槽的**中文名**换算成**计数器编号**。数据源是该游戏引擎登记的计数器定义集合
+ * （eraTW：`COUNTER_MESSAGE.ERB` 的 `@EVENT_COUNTER_MESSAGE{n}` 家族），**静态、手工维护、
+ * 随实测增补**，故不依赖 `loadProject`。
+ *
+ * 消费点：`时机 <计数器面> <中文名>：` 的编号解析——**纯数字令牌不查表、逐字节直通**；
+ * 名查不到 **fail-closed**（不降糖、报诊断，绝不猜编号）；`hasTable=false` 时名路径一律
+ * fail-closed。查询一律可名可号，查不到返回 `undefined`（**绝不猜**，规范 §5.3 精神）。
+ */
+export interface KojoCounterTable {
+  /** 无表 / 空表 = false */
+  readonly hasTable: boolean;
+  /** 编号 → 名（无则 undefined；"登记了编号但没拿到可靠名"同样 undefined） */
+  lookupByNumber(no: number): string | undefined;
+  /** 名 → 编号（无则 undefined；同名多编号取**首条**） */
+  lookupByName(name: string): number | undefined;
+}
+
+/**
  * 游戏适配器（槽位 `game.adapter` 的负载）。
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
  */
@@ -623,6 +649,12 @@ export interface GameAdapter {
    * 不符**不降糖并报诊断**（fail-closed，绝不猜）。
    */
   readonly kojoMutatorTable?: KojoMutatorTable;
+  /**
+   * 计数器值域名表（1016 批；可选——计数器编号 ↔ 中文名）。
+   * 静态、手工维护（不依赖 `loadProject`）；糖层只查表不解释，未登记的**名**一律
+   * `undefined`（**不降糖并报诊断**，fail-closed，绝不猜）；纯数字令牌不查表、直通。
+   */
+  readonly kojoCounterTable?: KojoCounterTable;
   /**
    * 口上包「日文名 → 中文名」对照词典（展示用；游戏/语言知识，只住 adapter）。
    * 消费方（导入向导 / 文件树）据此把日文名展示为「日文（中文）」。缺省 = 不做对照。
