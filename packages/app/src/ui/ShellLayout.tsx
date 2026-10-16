@@ -65,6 +65,7 @@ import {
   useFontZoomPref,
 } from './font-size-pref';
 import { fileWritableArea, writablePillTone } from './file-area';
+import { AUTOSAVE_IDLE_MS, setAutosavePref, useAutosavePref } from './autosave-pref';
 import {
   applyMotionPref,
   loadMotionPref,
@@ -127,6 +128,8 @@ export interface EditorStatusInfo {
   encoding: string;
   eol: string;
   lines: number;
+  /** 最近一次自动保存成功的时刻（epochMs；手动保存/切文件不写这条，链路复用 onStatusInfo 不新开协议） */
+  autosavedAt?: number | null;
 }
 
 /**
@@ -367,6 +370,8 @@ export function ShellLayout(props: Props): ReactElement {
   // 字号/缩放读数（A1）：真源在 font-size-pref 的 localStorage，这里只拿投影
   const fontSize = useFontSizePref();
   const fontZoom = useFontZoomPref();
+  // 自动保存读数（A6）：真源在 autosave-pref 的 localStorage，这里只拿投影
+  const autosaveMode = useAutosavePref();
 
   /**
    * 注册表来源（KM-9 设置页那一行）。
@@ -1331,6 +1336,12 @@ export function ShellLayout(props: Props): ReactElement {
             '已保存'
           )}
         </span>
+        {/* 自动保存轻指示（A6）：同一条 onStatusInfo 链路带出的读数，不做第二个协议 */}
+        {editorStatus?.autosavedAt != null ? (
+          <span className="sb-editor" title={`自动保存于 ${new Date(editorStatus.autosavedAt).toLocaleTimeString()}`}>
+            自动保存 {new Date(editorStatus.autosavedAt).toLocaleTimeString()}
+          </span>
+        ) : null}
       </div>
     </footer>
   );
@@ -1557,6 +1568,22 @@ export function ShellLayout(props: Props): ReactElement {
                       同一个函数名，在「它被定义的那一行」与「它被调用的地方」显示成两种颜色；
                       .kojo 里的函数、别名、常量名字同理。只改显示、不动文件；
                       超过 5,000 行的文件不生效（与粘性滚动同一档降级）。默认关
+                    </span>
+                  </span>
+                </label>
+                {/* 自动保存（A6，2026-10-20）：写盘只复用既有 save 一条路（全局互斥 + 写允许域闸门）；
+                    默认关的理由 = 游戏目录是部署目标，静默写盘必须是显式选择。护栏见 autosave-pref.decideAutosave。 */}
+                <label className="settings-row">
+                  <input
+                    type="checkbox"
+                    checked={autosaveMode === 'afterDelay'}
+                    onChange={(e) => setAutosavePref(e.target.checked ? 'afterDelay' : 'off')}
+                  />
+                  <span>
+                    自动保存
+                    <span className="settings-hint">
+                      当前标签停手 {AUTOSAVE_IDLE_MS / 1000} 秒后自动落盘，走的是与 Ctrl+S 完全同一条保存路（同样的写权限闸、保存告警、外部改动确认）。
+                      有未决的保存告警 / 外部改动、或正显示 .kojo 预览时**不会**自动存。默认关
                     </span>
                   </span>
                 </label>

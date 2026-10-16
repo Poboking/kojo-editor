@@ -85,6 +85,7 @@ import { installImplementationProvider } from '../monaco/erb-implementation';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { CJK_TYPING_BASELINE, editorOptionsForLineCount } from './editor-options';
+import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
 import { createDocumentBroadcaster } from './document-broadcast';
@@ -895,8 +896,8 @@ interface Props {
   registerActions?: (actions: EditorPaneActions | null) => void;
   /** 重授权入口（通知 action「去授权」落地处） */
   onReauth: () => void;
-  /** 编辑器状态上抛（状态栏右区显示编码/EOL/行数；卸载或无文件时 null） */
-  onStatusInfo?: (info: { encoding: string; eol: string; lines: number } | null) => void;
+  /** 编辑器状态上抛（状态栏右区显示编码/EOL/行数；卸载或无文件时 null；autosavedAt 走同一条链路，A6 状态栏轻指示） */
+  onStatusInfo?: (info: { encoding: string; eol: string; lines: number; autosavedAt?: number | null } | null) => void;
   /** 编辑器获得焦点（SPLIT-1：宿主据此把焦点组切到本组） */
   onFocused?: () => void;
 }
@@ -936,6 +937,8 @@ export function EditorPane({
   /** 上一个活动路径（切换时先把它的视图状态存下） */
   const prevPathRef = useRef<string | null>(null);
   const savingRef = useRef(false);
+  /** 上一次 savePath 是否走了"竞态保留脏"分支（写成功但保存期间又来新输入）——非失败，A6 不误报 */
+  const saveRacedRef = useRef(false);
   const revealRef = useRef<RevealTarget | null>(null);
   /** 当前文件路径（供只注册一次的 Monaco 回调读取最新值，避免闭包过时） */
   const filePathRef = useRef<string>(filePath);
@@ -1018,6 +1021,14 @@ export function EditorPane({
   const [error, setError] = useState<string | null>(null);
   /** 待用户决策的保存告警（非 null = 弹确认框；宿主全角空格"一键修复"的入口） */
   const [pendingChoice, setPendingChoice] = useState<EditorSaveWarning | null>(null);
+  /** 保存告警的 ref 镜像（A6：自动保存 tick 是定时器闭包，护栏须读最新值） */
+  const pendingChoiceRef = useRef<EditorSaveWarning | null>(null);
+  /** 外部改动与本地脏冲突、用户未处置的路径集（A6 护栏：未决不自动保存） */
+  const externalConflictRef = useRef(new Set<string>());
+  /** 自动保存连败已报过的路径（同一文件连败只报一次；保存成功即销账） */
+  const autosaveFailedRef = useRef(new Set<string>());
+  /** 自动保存闲置定时器（A6；卸载与文件切换都要能取消） */
+  const autosaveTimerRef = useRef<number | null>(null);
   /**
    * D1 面包屑链（宿主自绘——取证：standalone Monaco 0.57 的 `monaco.d.ts` 里 `breadcrumb`
    * 零命中，公开面没有面包屑，见 `breadcrumb-path.ts` 头注）。数据**复用 B3 的 documentSymbol
@@ -1233,6 +1244,10 @@ export function EditorPane({
     onDirtyChangeRef.current = onDirtyChange;
     onStatusInfoRef.current = onStatusInfo;
   }, [onReauth, onDirtyChange, onStatusInfo]);
+  // 保存告警镜像（A6 护栏读它：定时器闭包拿不到 state 最新值）
+  useEffect(() => {
+    pendingChoiceRef.current = pendingChoice;
+  }, [pendingChoice]);
 
   /** 编辑停顿后重算装饰（去抖；换文件时立即算，见文件加载 effect） */
   const scheduleMarkers = useCallback(() => {
@@ -1412,6 +1427,9 @@ export function EditorPane({
       editorModelPool.setBaseline(path, entry.model.getAlternativeVersionId());
       onDirtyChangeRef.current?.(path, false);
       if (filePathRef.current === path) setDirty(false);
+      // 落盘成功 = 外部冲突已被用户表达处置、连败计数销账（A6 护栏与"只报一次"的复位点）
+      externalConflictRef.current.delete(path);
+      autosaveFailedRef.current.delete(path);
     },
     [],
   );
@@ -1466,10 +1484,12 @@ export function EditorPane({
       // 否则保持脏并如实报失败（旧链路在 await 之后立基线，把没落盘的字节标成已保存）。
       const versionAtFinalize = entry.model.getAlternativeVersionId();
       const racedAfterWrite = (isActiveTab: boolean): false => {
+        saveRacedRef.current = true; // 写成功了，只是保存窗口内又来了新输入——A6 不当失败报
         if (isActiveTab) setStatus('已保存，但保存期间又有新输入——文件仍标记为未保存');
         else notify({ kind: 'info', message: `「${path}」保存完成，但保存期间又有新输入——已保留未保存标记` });
         return false;
       };
+      saveRacedRef.current = false;
       savingRef.current = true;
       try {
         const handler = pickSaveHandler(kernel, path);
@@ -1483,6 +1503,7 @@ export function EditorPane({
           if (outcome.status === 'needs-choice') {
             if (isActive) {
               setPendingChoice(outcome.warning); // 尚未落盘：由确认框决定
+              pendingChoiceRef.current = outcome.warning; // A6 护栏读同步镜像（effect 慢一帧，定时器等不起）
             } else {
               notify({
                 kind: 'info',
@@ -1600,6 +1621,7 @@ export function EditorPane({
         // 绝不对 disposed model setValue 炸异常（深审 A3）。
         const live = entriesRef.current.get(path);
         if (!live || live.model.isDisposed()) return;
+        externalConflictRef.current.delete(path); // 用户已处置（放弃我的修改）：A6 护栏放行
         const ed = editorRef.current;
         const isActive = filePathRef.current === path;
         const vs = isActive && ed ? ed.saveViewState() : null;
@@ -1631,6 +1653,8 @@ export function EditorPane({
         applyReload();
         return;
       }
+      // conflict：外部改动未决期间自动保存必须让路（A6 护栏；处置点 = applyReload / 保存成功 / 关标签）
+      externalConflictRef.current.add(path);
       notify({
         kind: 'error',
         message: `「${path}」已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容。`,
@@ -1707,6 +1731,70 @@ export function EditorPane({
   // Ctrl+S 回调经 ref 读最新 save（编辑器只创建一次，save 闭包随 kernel 更新）
   const saveRef = useRef(save);
   saveRef.current = save;
+
+  /* ------------------------ 自动保存（A6；写盘只走上面那一条 save，绝不抄第二条路） ------------------------ */
+
+  /**
+   * 闲置到点的一次尝试：现场读数进 `decideAutosave`（护栏判据是纯函数，单测钉死），
+   * 放行才调 `saveRef.current()`——同一全局互斥、同一写允许域闸门、同一竞态守卫。
+   * 失败如实进通知队列，但同一文件连败只报一次（销账点 = 保存成功 / 关标签）。
+   */
+  const runAutosave = useCallback(
+    async (path: string): Promise<void> => {
+      // 只管活动标签；互斥被手动保存在途占住 = 这一拍放弃（下一次输入会重新计时）
+      if (path !== filePathRef.current || savingRef.current) return;
+      const entry = entriesRef.current.get(path);
+      if (!entry || entry.model.isDisposed()) return;
+      const decision = decideAutosave({
+        mode: loadAutosavePref(),
+        dirty: computeDirty(path),
+        saving: false,
+        saveWarningPending: pendingChoiceRef.current !== null,
+        externalChangePending: externalConflictRef.current.has(path),
+        sugarView: sugarModelRef.current !== null,
+        writable: kernel.io.isWritable(path),
+      });
+      if (decision !== 'run') return;
+      if (await saveRef.current()) {
+        const live = entriesRef.current.get(path);
+        if (live) {
+          // 状态栏轻指示：复用 onStatusInfo 同一条上报链路，不新开协议
+          onStatusInfoRef.current?.({
+            encoding: live.encoding,
+            eol: live.eol,
+            lines: live.model.getLineCount(),
+            autosavedAt: Date.now(),
+          });
+        }
+        return;
+      }
+      // false 的三种含义只有"真失败"该进通知队列：needs-choice 已弹框待决（pendingChoiceRef）、
+      // 竞态保脏已自行说话（saveRacedRef）——都不许再叠一条"自动保存未成功"惊扰作者。
+      if (pendingChoiceRef.current !== null || saveRacedRef.current) return;
+      if (!autosaveFailedRef.current.has(path)) {
+        autosaveFailedRef.current.add(path);
+        notify({
+          kind: 'error',
+          message: `自动保存「${path}」未成功——内容仍标记未保存；原因见编辑器工具条的红色提示，手动 Ctrl+S 同样可处理。`,
+        });
+      }
+    },
+    [computeDirty, kernel, notify],
+  );
+
+  /** 闲置去抖：最后一次输入重起计时；关着开关就不挂定时器（零成本）。**恒稳引用**——model 监听只注册一次，靠 ref 读最新 tick（与 saveRef 同款纪律） */
+  const runAutosaveRef = useRef(runAutosave);
+  runAutosaveRef.current = runAutosave;
+  const scheduleAutosave = useCallback((): void => {
+    if (loadAutosavePref() !== 'afterDelay') return;
+    if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
+    const path = filePathRef.current;
+    if (!path) return;
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null;
+      void runAutosaveRef.current(path);
+    }, AUTOSAVE_IDLE_MS);
+  }, []);
 
   /* ---------------- 视图状态跨会话持久化（view-state-store，落盘防抖在 store 内） ---------------- */
 
@@ -1905,6 +1993,10 @@ export function EditorPane({
       sugarOriginalModelRef.current = null;
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
+      if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+      externalConflictRef.current.clear();
+      autosaveFailedRef.current.clear();
       // 卸载 = 会话终点：补一次最后快照（在途防抖窗口内的改动）再同步 flush
       if (prevPathRef.current) persistEditorSlice(ed, prevPathRef.current);
       flushViewStates();
@@ -1994,6 +2086,8 @@ export function EditorPane({
       viewStatesRef.current.delete(path);
       if (left === 0) {
         clearProblems(path); // 最后一份引用：同步清掉该文件在问题面板里的条目
+        externalConflictRef.current.delete(path);
+        autosaveFailedRef.current.delete(path);
         onDirtyChangeRef.current?.(path, false);
       }
     }
@@ -2048,6 +2142,7 @@ export function EditorPane({
                 // C2：活动文件缓冲变化 → 防抖广播"当前真相"（糖视图激活时广播器自行抑制；
                 // 程序性整篇改写——fix-all / 重命名批量 / 保存前整理——同样走这条通道）
                 documentBroadcaster.schedule(filePath, () => readDocumentTruth(filePath));
+                if (d) scheduleAutosave(); // A6：脏了才起闲置计时（撤销回干净由 tick 的护栏判掉）
               }
             } finally {
               perf.record('input.handler', performance.now() - t0);
@@ -2111,7 +2206,7 @@ export function EditorPane({
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, scheduleAutosave, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor]);
 
   /* ------------------- 只读锁：编辑意图 → 询问 → 解锁 ------------------- */
 
