@@ -1,4 +1,4 @@
-import type { ControlFlowStatement, ErbDim, ErbFile, ErbFunction, ErbParam } from '@kojo/plugin-api';
+import type { ControlFlowStatement, ErbDim, ErbFile, ErbFunction, ErbLabel, ErbParam } from '@kojo/plugin-api';
 
 /**
  * ERB 结构扫描器（宽容解析，不做完整语法检查）。
@@ -9,6 +9,8 @@ import type { ControlFlowStatement, ErbDim, ErbFile, ErbFunction, ErbParam } fro
  * - 标记：`#FUNCTION` / `#FUNCTIONS`（真实写法在 @ 行**之后**的函数体内，见 AUTO_AEGI.ERB:60-61；
  *   同样兼容写在 @ 前——宽容解析两种都标记）；
  * - 区间：`[SKIPSTART]` … `[SKIPEND]` 内不解析；
+ * - 标签：函数内 `$LABEL` 收集进 `ErbFile.labels`（函数局部作用域，各归各的函数；
+ *   skip 区与顶层不收——引擎不编译它们）；
  * - 注释：行首 `;`；定义行支持行内 `;` 注释（在括号配对之后截断）。
  *
  * 已知边界（v0.1 接受）：关键字缩写（IF 的 `I`、`SIF`…）不识别（无害）；
@@ -169,12 +171,33 @@ export function cleanDocBlock(rawLines: readonly string[]): string | undefined {
   return text;
 }
 
+/** 解析 `$` 标签行的标签名（行首 `$` 之后到终止符；终止符 = 空白 / `;`，与 `@` 名同款宽容）。空 → undefined */
+export function parseLabelDefinition(trimmed: string): string | undefined {
+  let end = trimmed.length;
+  for (let i = 1; i < trimmed.length; i++) {
+    const c = trimmed[i]!;
+    if (c === ' ' || c === '\t' || c === ';') {
+      end = i;
+      break;
+    }
+  }
+  const name = trimmed.slice(1, end).trim();
+  return name.length > 0 ? name : undefined;
+}
+
 export function parseErbText(text: string, path = '<memory>'): ErbFile {
   const lines = normalizeEol(text).split('\n');
   const lineCount = lines.length;
 
   const functions: ErbFunction[] = [];
   const dims: ErbDim[] = [];
+  /**
+   * 函数内 `$` 标签（T4，2026-10-16 语言服务批，additive）：标签是**函数局部作用域**，
+   * 跨函数的同名定义各归各的函数（归属判据 = 收集时的 `currentFuncStart`）。
+   * 顶层（第一个 `@` 之前）与 `[SKIPSTART]` 区间内的不收——引擎根本不编译它们；
+   * 无标签 = 缺省不给空数组（与 `docComment` 同纪律，索引不堆空字段）。
+   */
+  let labels: ErbLabel[] | undefined;
   let hasFunctionDirective = false;
   let inSkipBlock = false;
 
@@ -251,6 +274,11 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
 
     if (trimmed.startsWith('$')) {
       clearDoc(); // 跳转标签同理：注释属于标签，不属于后面第一个函数
+      // 函数内才收集：标签是函数局部作用域（T4）；顶层 `$` 行引擎不编译，不收
+      if (currentFuncStart >= 0) {
+        const name = parseLabelDefinition(trimmed);
+        if (name !== undefined) (labels ??= []).push({ name, line: i + 1, functionStartLine: currentFuncStart });
+      }
       continue;
     }
 
@@ -284,7 +312,7 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
     functions[i]!.endLine = next ? next.startLine - 1 : lineCount;
   }
 
-  return { path, functions, dims, hasFunctionDirective, lineCount };
+  return { path, functions, dims, hasFunctionDirective, lineCount, ...(labels ? { labels } : {}) };
 }
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ import {
   coerceSnapshot,
   decodeEntries,
   encodeEntries,
+  SNAPSHOT_VERSION,
   type IndexSnapshot,
   type SnapshotEntry,
 } from '../src/snapshot';
@@ -100,8 +101,8 @@ const ms = (n: number): string => `${n.toFixed(1)}ms`;
 
 const FLAG_EXPRESSION = 1;
 
-/** 盘上元组（v5 形状：`[mtime, size, textLength, 行数, #FUNCTION 旗标, 函数, 声明, 引用]`） */
-type Tuple = [number | null, number | null, number, number, 0 | 1, unknown[], unknown[], unknown[]];
+/** 盘上元组（v6 形状：`[mtime, size, textLength, 行数, #FUNCTION 旗标, 函数, 声明, 引用, 标签]`） */
+type Tuple = [number | null, number | null, number, number, 0 | 1, unknown[], unknown[], unknown[], unknown[]];
 
 /**
  * **before 参照实现**＝改动前的 `decodeEntries` 体：同样的逐条校验（fail-closed 一格不缺），
@@ -113,7 +114,7 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
   for (const [path, value] of Object.entries(raw)) {
     const t = value as unknown[];
     if (
-      t.length !== 8 ||
+      t.length !== 9 ||
       (t[0] !== null && typeof t[0] !== 'number') ||
       (t[1] !== null && typeof t[1] !== 'number') ||
       typeof t[2] !== 'number' ||
@@ -121,11 +122,12 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
       (t[4] !== 0 && t[4] !== 1) ||
       !Array.isArray(t[5]) ||
       !Array.isArray(t[6]) ||
-      !Array.isArray(t[7])
+      !Array.isArray(t[7]) ||
+      !Array.isArray(t[8])
     ) {
       return null;
     }
-    const [mtimeMs, size, textLength, lineCount, hasDirective, fns, dims, refs] = value as Tuple;
+    const [mtimeMs, size, textLength, lineCount, hasDirective, fns, dims, refs, labels] = value as Tuple;
     const okFn = (x: unknown): boolean =>
       Array.isArray(x) &&
       (x.length === 5 || x.length === 6) &&
@@ -143,11 +145,14 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
       typeof x[1] === 'number' &&
       typeof x[2] === 'number' &&
       (x[3] === 0 || x[3] === 1 || x[3] === 2);
+    const okLabel = (x: unknown): boolean =>
+      Array.isArray(x) && x.length === 3 && typeof x[0] === 'string' && typeof x[1] === 'number' && typeof x[2] === 'number';
     if (!fns.every(okFn)) return null;
     if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
       return null;
     }
     if (!refs.every(okRef)) return null;
+    if (!labels.every(okLabel)) return null;
     const functions: ErbFunction[] = fns.map((x) => {
       const [name, startLine, endLine, params, flags, doc] = x as unknown as [
         string,
@@ -248,7 +253,7 @@ describe('PERF-7 快照热载合成基准（2,000 文件 / 100,000 函数）', (
 
   // ---- 热载段 1：coerce（JSON.parse 之后 → 条目可用） ----
   const afterCoerceMs = medianOf(5, () => {
-    const snap = coerceSnapshot({ version: 5, rootDir: ROOT, savedAt: 1, entries: parsedV5 }, ROOT);
+    const snap = coerceSnapshot({ version: SNAPSHOT_VERSION, rootDir: ROOT, savedAt: 1, entries: parsedV5 }, ROOT);
     if (snap === null) throw new Error('coerce failed');
   });
   const beforeCoerceMs = medianOf(5, () => {
@@ -258,7 +263,7 @@ describe('PERF-7 快照热载合成基准（2,000 文件 / 100,000 函数）', (
 
   // ---- 热载段 2：聚合（byName） ----
   const afterSnap = coerceSnapshot(
-    { version: 5, rootDir: ROOT, savedAt: 1, entries: parsedV5 } as unknown as IndexSnapshot,
+    { version: SNAPSHOT_VERSION, rootDir: ROOT, savedAt: 1, entries: parsedV5 } as unknown as IndexSnapshot,
     ROOT,
   )!;
   const afterFiles = Object.values(afterSnap.entries).map((e) => e.file);

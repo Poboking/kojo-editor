@@ -61,11 +61,31 @@ export interface ErbDim {
   line: number;
 }
 
+/**
+ * `$` 标签定义（函数局部跳转目标；**additive 可选**，2026-10-16 语言服务批）。
+ *
+ * 标签是**函数局部作用域**：跨函数的同名 `$` 定义各归各的函数（`functionStartLine`
+ * 归属判据），`[SKIPSTART]` 区间内与第一个 `@` 之前的标签不收集（引擎不编译它们）。
+ */
+export interface ErbLabel {
+  /** 标签名（原样；查表按大写归一——Emuera 标签名大小写不敏感） */
+  name: string;
+  /** 标签所在行（1 基） */
+  line: number;
+  /** 所属函数的定义行（1 基，`@` 行）——"当前函数内有没有这个标签"的判据 */
+  functionStartLine: number;
+}
+
 /** 单个 ERB 文件的解析结果 */
 export interface ErbFile {
   path: string;
   functions: ErbFunction[];
   dims: ErbDim[];
+  /**
+   * 函数内收集到的 `$` 标签（**additive 可选**，2026-10-16 语言服务批）。
+   * 缺省 = 本文件没有标签（解析器不给空数组，避免索引堆空字段——与 `docComment` 同纪律）。
+   */
+  labels?: ErbLabel[];
   /**
    * 含 `#FUNCTION` / `#FUNCTIONS` 指令。
    * 关键用途：Emuera LazyLoading 对含该指令的文件**整文件排除**（不参与懒加载索引），

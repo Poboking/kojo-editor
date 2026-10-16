@@ -29,7 +29,7 @@
  *   不改变 `byName` 的聚合顺序（消费方对顺序的任何假设都不受影响）；
  * - **零游戏知识**：本模块只认识"文件与函数边界"，不认识任何命名约定。
  */
-import type { ErbDim, ErbFile, ErbFunction, ErbFunctionRef, ErbParam, FileStat } from '@kojo/plugin-api';
+import type { ErbDim, ErbFile, ErbFunction, ErbFunctionRef, ErbLabel, ErbParam, FileStat } from '@kojo/plugin-api';
 import type { FileRefs, RefRun } from './references';
 
 /**
@@ -63,8 +63,13 @@ import type { FileRefs, RefRun } from './references';
  *   才建对象。热开时条件抽取/校验只吃 `files` 的路径与统计、编辑器面板按需拉取 ⇒
  *   100k 级函数对象的构造从"开项目"这一班岗上撤下。
  *   v4 快照没有 size ⇒ 版本 bump ⇒ fail-closed 整体弃用、一次冷重建（此后照常热）。
+ *
+ * **v5 → v6**（2026-10-16 语言服务批）：`ErbFile` 新增 `labels`（函数内 `$` 标签，
+ * `$` 标签转定义的数据面）。条目追加第 9 位 `labels`（`[名, 行, 所属函数定义行]` 元组，
+ * **恒在**——v4 收 refs 位的同款先例；内存里无标签 = 缺省不挂，与解析器同形）。
+ * v5 快照没有 labels ⇒ 版本 bump ⇒ fail-closed 整体弃用、一次冷重建（此后照常热）。
  */
-export const SNAPSHOT_VERSION = 5;
+export const SNAPSHOT_VERSION = 6;
 
 /** 单个文件的快照条目 */
 export interface SnapshotEntry {
@@ -123,8 +128,10 @@ type FunctionTuple = [string, number, number, ParamTuple[], number, string?];
 type DimTuple = [string, string, number];
 /** `[归一化名, 行, 列, 种类旗标(0=定义 1=调用 2=提及)]` */
 type RefTuple = [string, number, number, 0 | 1 | 2];
-/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水]` */
-type EntryTuple = [number | null, number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[], RefTuple[]];
+/** `[标签名, 行, 所属函数定义行]`（v6 起；无标签 = 空数组） */
+type LabelTuple = [string, number, number];
+/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水, 标签]` */
+type EntryTuple = [number | null, number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[], RefTuple[], LabelTuple[]];
 
 const FLAG_EXPRESSION = 1;
 
@@ -182,19 +189,30 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       return fn;
     });
     const dims: DimTuple[] = e.file.dims.map((d): DimTuple => [d.name, d.directive, d.line]);
-    // refs 与 RefTuple 同形（懒外壳是别名，重扫结果本来就是同形元组）——不再逐条复制
+    // refs 与 LabelTuple 同理（懒外壳是别名，重扫结果本来就是同形元组）——不再逐条复制
     const refs = (e.refs ?? []) as unknown as RefTuple[];
-    out[path] = [e.mtimeMs, e.size, e.textLength, e.file.lineCount, e.file.hasFunctionDirective ? 1 : 0, fns, dims, refs];
+    const labels = (e.file.labels ?? []).map((l): LabelTuple => [l.name, l.line, l.functionStartLine]);
+    out[path] = [
+      e.mtimeMs,
+      e.size,
+      e.textLength,
+      e.file.lineCount,
+      e.file.hasFunctionDirective ? 1 : 0,
+      fns,
+      dims,
+      refs,
+      labels,
+    ];
   }
   return out;
 }
 
 function isEntryTuple(t: unknown): t is EntryTuple {
-  if (!Array.isArray(t) || t.length !== 8) return false;
+  if (!Array.isArray(t) || t.length !== 9) return false;
   if (t[0] !== null && typeof t[0] !== 'number') return false;
   if (t[1] !== null && typeof t[1] !== 'number') return false;
   return typeof t[2] === 'number' && typeof t[3] === 'number' && (t[4] === 0 || t[4] === 1) &&
-    Array.isArray(t[5]) && Array.isArray(t[6]) && Array.isArray(t[7]);
+    Array.isArray(t[5]) && Array.isArray(t[6]) && Array.isArray(t[7]) && Array.isArray(t[8]);
 }
 
 function isRefTuple(t: unknown): t is RefTuple {
@@ -202,6 +220,10 @@ function isRefTuple(t: unknown): t is RefTuple {
     Array.isArray(t) && t.length === 4 && typeof t[0] === 'string' && typeof t[1] === 'number' &&
     typeof t[2] === 'number' && (t[3] === 0 || t[3] === 1 || t[3] === 2)
   );
+}
+
+function isLabelTuple(t: unknown): t is LabelTuple {
+  return Array.isArray(t) && t.length === 3 && typeof t[0] === 'string' && typeof t[1] === 'number' && typeof t[2] === 'number';
 }
 
 function isFunctionTuple(t: unknown): t is FunctionTuple {
@@ -234,11 +256,15 @@ function toFunction(path: string, [name, startLine, endLine, params, flags, doc]
  * 因此"热开时的聚合"不必先把 100k 级函数对象建出来。
  */
 function lazyFile(path: string, tuple: EntryTuple): ErbFile {
-  const [, , , lineCount, hasDirective, fns, dims] = tuple;
+  const [, , , lineCount, hasDirective, fns, dims, , labels] = tuple;
   const file: ErbFile = {
     path,
     hasFunctionDirective: hasDirective === 1,
     lineCount,
+    // 无标签 = 缺省不挂（与 parseErbText 同形同值：不给空数组）
+    ...(labels.length > 0
+      ? { labels: labels.map(([name, line, fnLine]): ErbLabel => ({ name, line, functionStartLine: fnLine })) }
+      : {}),
     get functions(): ErbFunction[] {
       return materialize(file, 'functions', () => fns.map((t) => toFunction(path, t)));
     },
@@ -263,12 +289,13 @@ export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | nul
   const out: Record<string, SnapshotEntry> = {};
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!isEntryTuple(value)) return null;
-    const [mtimeMs, size, textLength, , , fns, dims, refs] = value;
+    const [mtimeMs, size, textLength, , , fns, dims, refs, labels] = value;
     if (!fns.every(isFunctionTuple)) return null;
     if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
       return null;
     }
     if (!refs.every(isRefTuple)) return null;
+    if (!labels.every(isLabelTuple)) return null;
     out[path] = {
       mtimeMs,
       size,
