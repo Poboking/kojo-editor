@@ -342,6 +342,10 @@ export function codegen(
 
   // ---- 时机块 ----
   const timings = topLevel.filter((n): n is TimingBlock => n.kind === 'timingBlock');
+  // 编号自动分配池：面声明 `autoIndex`（adapter 游戏知识）时才建；占号面 = 本文件
+  // 原生直通块里本族函数头的数字尾 + 本文件显式数字编号的同族时机。**全文档**扫一遍
+  // （在循环之前），保证"先省略、后显式"的显式编号不被抢。
+  const autoPools = buildAutoIndexPools(topLevel, opts.faceTable, charNo);
   for (const timing of timings) {
     if (em.length > 0) em.blank();
     em.setOwner(timing.loc.start.line); // 函数头是生成行，撞名诊断要能点回这个时机
@@ -356,6 +360,7 @@ export function codegen(
       libraryTable,
       mutatorTable: opts.mutatorTable,
       counterTable: opts.counterTable,
+      autoPools,
       userFunctions,
       sink: opts.sink,
     });
@@ -563,6 +568,103 @@ function familySegment(family?: string): string {
   return `_${name}`;
 }
 
+/* ============================== 时机编号自动分配（面声明 autoIndex）============================== */
+
+/**
+ * 一个可自动分配面的占号池（与 HK-12 自定指令的 `occupied`/`allocated` 同形）：
+ * - `occupied`：编译前已占——本文件原生直通块里本族函数头的数字尾 + 本文件
+ *   显式写了数字编号的同族时机；
+ * - `allocated`：本次编译已自动分配的号（防同文件两个省略编号撞车）。
+ */
+interface AutoIndexPool {
+  occupied: Set<number>;
+  allocated: Set<number>;
+}
+
+function escapeRegExpText(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 分野模板 → 原生直通块函数头正则（**纯模板推导**，不硬编码任何族名/字面量）：
+ * - `{t}` → `.*`（家族段：标准版空串、别人版 `_口上名`——本文件两种都要算占号）；
+ * - `{n}` → 本文件角色号（逐字；**别的角色号不占**本文件的号）；
+ * - `{i}` → 数字尾捕获组；
+ * - `${段}` → 任一非下划线段（段分歧的名字面**并池保守**：宁可少分号，绝不撞名）；
+ * - 允许函数头的形参尾 `( … )`（原生块可自带实参声明）。
+ *
+ * 模板不含 `{i}`（无编号可分配）或结构坏损 → 返回 `null`（调用侧跳过，不猜）。
+ */
+function faceHeaderRegex(template: string, charNo: string): RegExp | null {
+  if (!template.includes('{i}')) return null;
+  let pat = '';
+  for (let i = 0; i < template.length; ) {
+    if (template.startsWith('{t}', i)) {
+      pat += '.*';
+      i += 3;
+    } else if (template.startsWith('{n}', i)) {
+      pat += escapeRegExpText(charNo);
+      i += 3;
+    } else if (template.startsWith('{i}', i)) {
+      pat += '([0-9]+)';
+      i += 3;
+    } else if (template.startsWith('${', i)) {
+      const close = template.indexOf('}', i);
+      if (close === -1) return null;
+      pat += '[^_()]+';
+      i = close + 1;
+    } else {
+      pat += escapeRegExpText(template[i]!);
+      i += 1;
+    }
+  }
+  return new RegExp(`^@${pat}(?:\\([^()]*\\))?$`);
+}
+
+/**
+ * 为声明了 `autoIndex: true` 的分野建占号池（在 `codegen` 入口**全文档**扫一遍——
+ * 后声明的显式编号也不许被前面的省略编号抢走）。缺省（无面声明）→ `undefined`。
+ */
+function buildAutoIndexPools(
+  topLevel: readonly TopNode[],
+  faceTable: KojoFaceTable | undefined,
+  charNo: string,
+): Map<string, AutoIndexPool> | undefined {
+  const autoFaces = Object.entries(faceTable?.faces ?? {}).filter(([, spec]) => spec.autoIndex === true);
+  if (autoFaces.length === 0) return undefined;
+  const pools = new Map<string, AutoIndexPool>();
+  for (const [key, spec] of autoFaces) {
+    const headerRe = faceHeaderRegex(spec.template, charNo);
+    if (!headerRe) continue;
+    const pool: AutoIndexPool = { occupied: new Set(), allocated: new Set() };
+    for (const node of topLevel) {
+      if (node.kind === 'rawFunctionBlock') {
+        for (const line of node.lines) {
+          const m = headerRe.exec(line.trim());
+          if (m) pool.occupied.add(Number(m[1]));
+        }
+      } else if (
+        node.kind === 'timingBlock' &&
+        node.face.trim() === key &&
+        node.index !== undefined &&
+        /^[0-9]+$/.test(node.index)
+      ) {
+        pool.occupied.add(Number(node.index));
+      }
+    }
+    pools.set(key, pool);
+  }
+  return pools.size > 0 ? pools : undefined;
+}
+
+/** 从 1 起取**最小未用**编号（排除 occupied ∪ allocated），并立即登记已分配（防同批撞车）。 */
+function allocateAutoIndex(pool: AutoIndexPool): number {
+  let no = 1;
+  while (pool.occupied.has(no) || pool.allocated.has(no)) no += 1;
+  pool.allocated.add(no);
+  return no;
+}
+
 /* ============================== 时机块 → 函数组 ============================== */
 
 interface TimingEmitContext {
@@ -581,6 +683,12 @@ interface TimingEmitContext {
   mutatorTable?: KojoMutatorTable;
   /** 计数器值域表（adapter；1016 批：`时机 计数器 <中文名>：` 名 → 编号，缺省/查不到 fail-closed） */
   counterTable?: KojoCounterTable;
+  /**
+   * 编号自动分配池（面声明 `autoIndex: true` 时按分野建；缺省 = 无面可分配）。
+   * 键 = 分野关键字（与 `faceTable.faces` 同键）；占号/已分配集合的构建见
+   * `buildAutoIndexPools`（在 `codegen` 入口**全文档**扫一遍）。
+   */
+  autoPools?: ReadonlyMap<string, AutoIndexPool>;
   /** 本文件声明的用户函数（B4 批；供正文调用降糖与插值判型） */
   userFunctions: ReadonlyMap<string, UserFunctionInfo>;
   sink: DiagnosticSink;
@@ -788,10 +896,17 @@ function timingArgsDeclaration(timing: TimingBlock): string | null {
  * 绝不回退到内建模板——回退就等于把游戏知识搬回通用插件。
  */
 interface FaceResolution {
+  /** 分野关键字（表的键；自动分配池按此键取） */
+  faceKey: string;
   /** 函数名模板：含 `{t}` / `{n}` / `{i}` 占位（求值见 `buildFunctionName`） */
   template: string;
   /** 是否把 `timing.index` 用作 `{i}`（模板含 `{i}` 时为真） */
   paramIndex: boolean;
+  /**
+   * 该面是否允许**省略编号自动分配**（adapter 声明 `autoIndex` 且模板含 `{i}`；
+   * 缺省 = `false`，省略编号行为与旧版逐字节相同）。
+   */
+  autoIndex: boolean;
   /**
    * `{i}` 槽的取值口径（adapter 声明；缺省 `'command'`）。`'literal'` = 令牌原样
    * 透传、**不查指令名表**（尾部是运行期形态名的面，如 `图像`）；`'counter'` = 纯数字
@@ -850,8 +965,11 @@ function resolveFace(face: string, timing: TimingBlock, ctx: TimingEmitContext):
     : undefined;
 
   return {
+    faceKey: key,
     template,
     paramIndex: template.includes('{i}'),
+    // 自动分配只在"模板真有 `{i}` 槽"时才有意义（无槽 = 没有编号可写）。
+    autoIndex: spec.autoIndex === true && template.includes('{i}'),
     indexKind: spec.indexKind ?? 'command',
     // `成功` 划分野自身即 SUCCESS 函数（避免重复生成同名函数）——由 adapter
     // 在表里把 `success` 留空表达（见 face-templates.ts 的 `成功` 条目）。
@@ -1012,7 +1130,27 @@ function resolveTimingIndex(
   face: FaceResolution,
 ): IndexResolution {
   const name = timing.indexName;
-  if (name === undefined) return { ok: true, index: timing.index };
+  if (name === undefined) {
+    // 面声明 `autoIndex`（adapter 游戏知识）且**完全省略编号** → 从 1 起最小未用自动分配；
+    // 分配结果直通 `buildFunctionName`——与手写编号同一条命名链，不存在第二套拼法。
+    // 显式数字路径（`timing.index !== undefined`）与旧写法**逐字节相同**，不进本分支。
+    if (timing.index === undefined && face.autoIndex) {
+      const pool = ctx.autoPools?.get(face.faceKey);
+      if (!pool) {
+        // 声明了可分配却没有池（池在 codegen 入口按同一张表构建，正常到不了这里）——
+        // fail-closed：宁可不产，不许拼出无人核对的函数名。
+        ctx.sink.report({
+          code: 'face-table-missing',
+          severity: 'error',
+          message: `分野「${face.faceKey}」声明了编号自动分配，但本次编译未建立分配池——已停止编译本时机（不产半成品）。请检查适配器分野表。`,
+          loc: timing.loc.start,
+        });
+        return { ok: false };
+      }
+      return { ok: true, index: String(allocateAutoIndex(pool)) };
+    }
+    return { ok: true, index: timing.index };
+  }
   if (face.indexKind === 'literal') return { ok: true, index: name };
 
   if (face.indexKind === 'counter') {

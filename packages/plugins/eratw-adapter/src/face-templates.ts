@@ -63,7 +63,14 @@ export function createEratwFaceTable(): KojoFaceTable {
       初见: { template: 'M_KOJO{t}_ENCOUNTER_K{n}' },
 
       // 附录 C #4：通用事件 `M_KOJO{t}_EVENT_K{n}_{i}`
-      事件: { template: 'M_KOJO{t}_EVENT_K{n}_{i}' },
+      // 编号自动分配（autoIndex；语料核实：`M_KOJO_K*_イベント.ERB` 222 个文件里数字尾
+      // 由作者按文件内序号维护、常见缺号=空位——最小未用正是补空位。分发器
+      // `KOJO_MESSAGE.ERB` 直接按 `TRYCALLFORM M_KOJO%RESULTS%_EVENT_K{NO:TARGET}_{ARG:1}`
+      // 拼名调用，`_i` 就是文件名尾段的数字本身）。其余「事件」名族**不声明**：
+      // `日常`（DAIRY_EV2/4/12）、`特殊事件`（SP_EVENT 引擎 id 1..7）、`撞见`
+      // （ONABARE_1/2/3）、`推倒许可`（PERMISSION 1..4）、`自定义事件`（场景 id）
+      // 的编号是**引擎键值**，不可挪用。
+      事件: { template: 'M_KOJO{t}_EVENT_K{n}_{i}', autoIndex: true },
 
       // 附录 C #5：指令口上 `M_KOJO{t}_MESSAGE_{COM|SCOM}_K{n}_{LOCAL}`
       // `{i}` 消费编号；`${com}` 段由 `类型:` 决定（COM/SCOM/CUSTOM_*）。
