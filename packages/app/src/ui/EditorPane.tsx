@@ -37,9 +37,15 @@ import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-positio
 import { dialectForLanguage, installDocumentFormatter, toTextEdits } from '../monaco/kojo-format';
 import { applyFormatOnSave } from './format-on-save';
 import { loadFormatOnSavePref } from './format-pref';
+import { applyNameColorPref, subscribeNameColorPref } from './semantic-color-pref';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { setJumpProbe } from './jump-to-state';
 import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
+import {
+  collectSemanticTokenSpans,
+  installSemanticTokensProvider,
+  shouldComputeSemanticTokens,
+} from '../monaco/kojo-semantic-tokens';
 import {
   crumbsKey,
   crumbsNeedRefresh,
@@ -1164,6 +1170,32 @@ export function EditorPane({
         });
       },
     });
+
+    // 结构化着色（B6，作者面叫「名字按用途着色」）：同一枚 `ui.editor.languageService` 槽的
+    // 第六个判别成员。宿主照旧只做协议翻译——"这个名字在这里是定义、形参槽还是引用"
+    // 全在插件（ERB 由解析器答、`.kojo` 由表层 DSL 线答），本层一个 ERB / 糖名词都不认识。
+    // 应答判据与大纲/折叠逐字同款：糖 model 的行号属派生物，着色它就是把颜色画到
+    // 一份不存在的文本上。开关**不在这里判**：Monaco 的 `editor.semanticHighlighting.enabled`
+    // 关着时根本不会问 provider（见 `semantic-color-pref.ts`），这里只留大文件那一道降级闸。
+    const semanticDisposer = installSemanticTokensProvider(monaco, {
+      resolve: (model) => {
+        const path = filePathRef.current;
+        if (!path || sugarModelRef.current || model !== editorRef.current?.getModel()) return [];
+        const lineCount = model.getLineCount();
+        if (!shouldComputeSemanticTokens(lineCount)) return [];
+        return collectSemanticTokenSpans(kernel.slots.query('ui.editor.languageService'), {
+          kind: 'semanticToken',
+          path,
+          text: model.getValue(),
+          project: kernel.project.current(),
+          lineCount,
+        });
+      },
+    });
+    // 偏好落盘只在设置页，生效走 Monaco 配置项：开 ⇒ 逐 model 挂上着色器，关 ⇒ 卸掉，
+    // 不用重开文件（standalone 的 DocumentSemanticTokensFeature 自己监听这条配置）。
+    applyNameColorPref(ed);
+    const nameColorUnsub = subscribeNameColorPref(() => applyNameColorPref(ed));
     // 面包屑（D1，宿主自绘——standalone Monaco 无面包屑 API，取证见 `breadcrumb-path.ts`）。
     // 数据复用大纲那棵树：`collectDocumentSymbols` 的应答判据与 provider 接线逐字同款
     // （糖视图只读 model 一律不给——行号属派生物，面包屑不许把作者导到不存在的位置）。
@@ -1292,6 +1324,7 @@ export function EditorPane({
       },
     });
     return () => {
+      nameColorUnsub();
       crumbCursorSub.dispose();
       crumbModelSub.dispose();
       crumbRefreshRef.current = null;
@@ -1300,6 +1333,7 @@ export function EditorPane({
       codeLensDisposer.dispose();
       erbCompletionDisposer.dispose();
       completionDisposer.dispose();
+      semanticDisposer.dispose();
       foldingDisposer.dispose();
       symbolsDisposer.dispose();
       signatureDisposer.dispose();

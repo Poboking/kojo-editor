@@ -30,6 +30,7 @@ import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from '
 import { definitionTargetsAt, functionAt } from './symbols';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
+import { erbSemanticTokens } from './semantic-tokens';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
@@ -688,6 +689,27 @@ export function createErbParserPlugin(): Plugin {
             referencesOf: (name) => referencesOf(idx, name),
           });
           return { kind: 'codeLens', lenses };
+        },
+      });
+
+      /* ---------------- 结构化着色（B6，2026-10-16） ----------------
+
+       同一枚槽的**第六个**判别成员。判据为什么必须住在解析器：这条能力给的是
+       "这个名字在这里是定义、形参槽还是引用"，答案是 `parseErbText`（缓冲区结构）与
+       `scanFileRefs` + `byName`（名录）算出来的——放到宿主就得让宿主认识 `@` 与 `CALL`，
+       放到别的插件就得把这两把尺子各抄一份（漂移的表现是"引用面板说有引用、
+       着色却不亮"）。引用那条腿**逐字复用** `scanFileRefs`，与查找引用/重命名同判据。
+
+       索引缺席时**仍应答**（只交声明那部分）：`@` 定义与 `#DIM` 声明本就是缓冲区事实，
+       与项目开闭无关；返回 `undefined` 等于谎称"这文件不归我管"。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-semantic-tokens',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'semanticToken') return undefined;
+          if (!isDialect(request.path)) return undefined;
+          return { kind: 'semanticToken', spans: erbSemanticTokens(request.text, index) };
         },
       });
     },

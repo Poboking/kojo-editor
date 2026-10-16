@@ -1,4 +1,5 @@
 import type { ErbFile, ErbIndex, ErbReference, ErbReferenceIndex, ErbReferenceKind } from '@kojo/plugin-api';
+import { MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
 
 /**
  * 反向引用索引（H2 批，2026-10-15）：**谁提到了这个名字**。
@@ -72,8 +73,12 @@ function codeViewOf(line: string): string {
  * （`M_KOJO_無個性_…` 一族，eraTW 作者手写），ASCII 字符集会静默漏掉两成定义的反向边。
  * 与 `plugin-api/symbol-token` 的 ASCII 集**不同**是有意分歧：那张表服务"光标命中"
  * （宁可窄），这张表服务"全库反向索引"（漏了就是错）。
+ *
+ * 字符集**字面量只住在 `plugin-api/semantic-locate` 的 `MODEL_TOKEN_CLASS`**：着色落点
+ * （`locateIdentifier`）与本条反向索引回答的是同一个事实——"什么字符算一个记号"。
+ * 两处各写一遍就是第二判据，漂移表现是"引用面板说有引用、着色却不亮"（反之亦然）。
  */
-const TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+const TOKEN_RE = new RegExp(`${MODEL_TOKEN_CLASS}+`, 'gu');
 
 /** 定义名截断（与 `parseFunctionDefinition` 同一组终止符；名字在这里只按解析器口径取） */
 const DEF_STOP = new Set(['(', ' ', '\t', ';']);

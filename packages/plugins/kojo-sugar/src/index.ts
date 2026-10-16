@@ -48,6 +48,7 @@ import { createSugarLiftApplyService } from './lift-apply';
 import { resolveKojoDefinition } from './definition';
 import { kojoDocumentSymbols } from './document-symbols';
 import { kojoFoldingRanges } from './folding';
+import { kojoSemanticTokens } from './semantic-tokens';
 import type { DictionaryLookup } from './types';
 
 export function createKojoSugarPlugin(): Plugin {
@@ -434,6 +435,27 @@ export function createKojoSugarPlugin(): Plugin {
             kind: 'foldingRange',
             ranges: kojoFoldingRanges(service.parse(request.text, { filePath: request.path })),
           };
+        },
+      });
+
+      /* ---------------- 结构化着色（B6，2026-10-16） ----------------
+
+       同一枚槽的第六个判别成员，`.kojo` 这一腿由本包答：判据是**糖 AST 的节点身份**
+       （`函数` / `自定指令` 的名字、形参表、`别名` / `常量` 声明、`调用` 的被调者），
+       与大纲/折叠共用同一棵 `loc` 树，不建第二份解析。宿主只把 span 翻成编辑器的
+       着色协议——它不认识 `函数` 这个词。
+
+       只画**声明位与调用位**，不画别名在条件里的使用点：糖节点把条件存成原文字符串，
+       段内没有子记号区间，要画就得自己再切一遍表达式（与本包 `expression.ts` 分叉）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-semantic-tokens',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'semanticToken') return undefined;
+          if (resolveSugarTarget(request.path) === null) return undefined;
+          const doc = service.parse(request.text, { filePath: request.path });
+          return { kind: 'semanticToken', spans: kojoSemanticTokens(doc, request.text) };
         },
       });
     },
@@ -876,3 +898,6 @@ export {
   type FormatDialect,
   type FormatEdit,
 } from './formatter';
+
+// 结构化着色（B6，2026-10-16；纯函数，糖 AST 与缓冲区文本进、着色 span 出）
+export { kojoSemanticTokens } from './semantic-tokens';

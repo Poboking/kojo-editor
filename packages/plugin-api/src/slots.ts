@@ -386,13 +386,14 @@ export interface EditorDocumentSymbolRequest {
   readonly lineCount?: number;
 }
 
-/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` / `codeLens`；新增能力 additive 追加联合成员，不改旧成员） */
+/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` / `codeLens` / `semanticToken`；新增能力 additive 追加联合成员，不改旧成员） */
 export type EditorLanguageServiceRequest =
   | EditorDefinitionRequest
   | EditorDocumentSymbolRequest
   | EditorFoldingRangeRequest
   | EditorWorkspaceSymbolRequest
-  | EditorCodeLensRequest;
+  | EditorCodeLensRequest
+  | EditorSemanticTokenRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -473,7 +474,8 @@ export type EditorLanguageServiceResult =
   | EditorDocumentSymbolResult
   | EditorFoldingRangeResult
   | EditorWorkspaceSymbolResult
-  | EditorCodeLensResult;
+  | EditorCodeLensResult
+  | EditorSemanticTokenResult;
 
 /**
  * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
@@ -567,6 +569,77 @@ export interface EditorCodeLensResult {
   readonly kind: 'codeLens';
   /** 注解（宿主按行升序排列并按 行+文本 去重）；空数组 = 认这个文件，但整篇无话可说 */
   readonly lenses: readonly EditorCodeLens[];
+}
+
+/**
+ * 语义着色（B6，2026-10-16 结构化着色批）——同一枚单槽的**第六个**判别成员
+ * （additive：往两个联合的末尾各加一行，宿主与既有贡献方零改动）。
+ *
+ * ## 这条能力回答什么
+ *
+ * 「**这个名字在这处是什么角色**」——定义 / 形参声明位 / 引用，只有解析器（结构）
+ * 或字典才知道；词法正则答不了（`@` 行与 `CALL` 行上的同一个名字，词法形状一模一样）。
+ *
+ * ## 与词法高亮的分工（本契约的核心边界，宿主注释里再抄一遍）
+ *
+ * - **词法归 Monarch**：关键字、字符串、数字、注释、变量族多段引用（`CFLAG:ARG:1`
+ *   这类"形状可判"的东西）；
+ * - **结构归本成员**：定义 vs 调用、形参声明位、声明出的名字——**只覆盖词法判不出来的
+ *   span**，不去重画 Monarch 已经着色的区间。
+ *
+ * Monaco 的合并规则是**覆盖区间上语义 token 优先**，所以两处各画一份就是第二真相源：
+ * 同一个名字今天词法色、明天语义色，漂移无人能解释。贡献方交出的每个 span 必须是
+ * "结构才知道的"，否则就该删掉这条产出。
+ *
+ * ## 词表（为什么住在契约而不是宿主）
+ *
+ * 下面两张表是**类别的名字**（三个中性词 + 两个中性修饰），没有任何游戏名词；
+ * 它们必须住在契约，否则贡献方无法类型标注（`EditorSemanticTokenType` 就是它们的派生）。
+ * **legend（实际生效的那份 + 颜色）的唯一真源在宿主**：宿主可以只把词表的一个子集
+ * 放进 legend，命中不了的名字**不着色且 `console.warn` 出去**（铁律 4：退化可见，
+ * 不静默、不猜）。
+ */
+
+/** 语义着色的中性类别（词表；宿主 legend 是其子集，名字对不上即不着色 + 可见退化） */
+export const EDITOR_SEMANTIC_TOKEN_TYPES = ['function', 'variable', 'parameter'] as const;
+
+/** 语义着色的中性修饰（同上口径；`declaration` = 声明位，`readonly` = 写了会编译不过的只读名字） */
+export const EDITOR_SEMANTIC_TOKEN_MODIFIERS = ['declaration', 'readonly'] as const;
+
+export type EditorSemanticTokenType = (typeof EDITOR_SEMANTIC_TOKEN_TYPES)[number];
+export type EditorSemanticTokenModifier = (typeof EDITOR_SEMANTIC_TOKEN_MODIFIERS)[number];
+
+/**
+ * 一处着色（**模型坐标**：1 基行、1 基 UTF-16 码元列、`endColumn` 半开）。
+ *
+ * 与 `LineDecoration` 同一条列口径（同一份源文本、同一个 Monaco 坐标系），
+ * 越界由宿主夹取（参照 `clampRevealPosition` 的既有纪律）——贡献方不许假定自己算准了列。
+ */
+export interface EditorSemanticTokenSpan {
+  readonly line: number;
+  readonly startColumn: number;
+  readonly endColumn: number;
+  readonly tokenType: EditorSemanticTokenType;
+  readonly modifiers?: readonly EditorSemanticTokenModifier[];
+}
+
+/**
+ * 语义着色请求：形状与 `documentSymbol` / `foldingRange` 逐字同族（整篇结构、不是光标处记号），
+ * 因此 `text` 同样是**模型全文**、`provide` 同样是**纯函数**（不读盘、不写盘、不发事件）。
+ */
+export interface EditorSemanticTokenRequest {
+  readonly kind: 'semanticToken';
+  readonly path: string;
+  readonly text: string;
+  readonly project: GameProject | null;
+  /** 文件行数（体量事实，供贡献方按大小自行降级；缺省 = 未知，按不降级处理） */
+  readonly lineCount?: number;
+}
+
+/** 语义着色响应；空数组 = 认这个文件但整篇没有"结构才知道的名字" */
+export interface EditorSemanticTokenResult {
+  readonly kind: 'semanticToken';
+  readonly spans: readonly EditorSemanticTokenSpan[];
 }
 
 /**

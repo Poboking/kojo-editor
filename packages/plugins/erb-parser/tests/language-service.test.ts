@@ -97,7 +97,7 @@ type LanguageServiceContribution = {
   provide(request: unknown): { kind: string; locations: { filePath: string; line: number }[] } | undefined;
 };
 
-/** 按 id 取语言服务贡献（B3 起本包注册两枚：`erb-definition` / `erb-symbols`；D2 加 `erb-workspace-symbols`） */
+/** 按 id 取语言服务贡献（B3 起两枚：`erb-definition` / `erb-symbols`；D2 加 `erb-workspace-symbols`；B6 加 `erb-semantic-tokens`） */
 function languageServiceOf(slots: SlotRecord[], id = 'erb-definition'): LanguageServiceContribution {
   const hit = slots.find((s) => s.kind === 'ui.editor.languageService' && s.contribution.id === id);
   if (!hit) throw new Error(`ui.editor.languageService '${id}' 未注册`);
@@ -112,7 +112,14 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
         .filter((s) => s.kind === 'ui.editor.languageService')
         .map((s) => s.contribution.id)
         .sort(),
-    ).toEqual(['erb-definition', 'erb-folding', 'erb-symbols', 'erb-usage-lens', 'erb-workspace-symbols']);
+    ).toEqual([
+      'erb-definition',
+      'erb-folding',
+      'erb-semantic-tokens',
+      'erb-symbols',
+      'erb-usage-lens',
+      'erb-workspace-symbols',
+    ]);
     expect(languageServiceOf(slots).id).toBe('erb-definition');
   });
 
@@ -327,5 +334,64 @@ describe('erb-parser · codeLens（B8 行上「被 N 处用到」）', () => {
       lineCount: 3,
     });
     expect(res?.lenses).toEqual([]);
+  });
+});
+
+/* ============================== B6 结构化着色 ============================== */
+
+describe('erb-parser · semanticToken（B6 着色）装配', () => {
+  const tokensOf = (slots: SlotRecord[]) =>
+    languageServiceOf(slots, 'erb-semantic-tokens') as unknown as {
+      provide(request: unknown): { kind: string; spans: unknown[] } | undefined;
+    };
+
+  it('只认 ERB 方言；`.kojo` / 其它判别成员一律 undefined（判别式各管各的）', () => {
+    const { slots } = activate();
+    const c = tokensOf(slots);
+    expect(c.provide({ kind: 'semanticToken', path: '/t/X.kojo', text: '@A\n', project: null })).toBeUndefined();
+    expect(
+      c.provide({ kind: 'foldingRange', path: A, text: FILES[A]!, project: null, lineCount: 3 }),
+    ).toBeUndefined();
+  });
+
+  it('索引未建时**仍应答**声明（`@` 与 `#DIM` 是缓冲区事实，与项目开闭无关）', () => {
+    const { slots } = activate();
+    const res = tokensOf(slots).provide({
+      kind: 'semanticToken',
+      path: A,
+      text: '#DIM FLAG_X\n@ALPHA(ARG)\n\tRETURN 1\n',
+      project: null,
+      lineCount: 3,
+    });
+    expect(res?.kind).toBe('semanticToken');
+    expect(res!.spans.map((s) => (s as { tokenType: string }).tokenType).sort()).toEqual([
+      'function',
+      'parameter',
+      'variable',
+    ]);
+  });
+
+  it('索引建好后引用点补上（判据 = 反向索引那把尺子；CALL 的名字带 `function`）', async () => {
+    const { services, slots } = activate();
+    await (services.get('erb.parser') as ErbParserService).buildIndex(['/t']);
+    const res = tokensOf(slots).provide({
+      kind: 'semanticToken',
+      path: B,
+      text: '@CALLER\n\tCALL ALPHA(1)\n\tCALL NOPE\n',
+      project: null,
+      lineCount: 3,
+    });
+    expect(res!.spans).toEqual([
+      { line: 1, startColumn: 2, endColumn: 8, tokenType: 'function', modifiers: ['declaration'] },
+      { line: 2, startColumn: 7, endColumn: 12, tokenType: 'function' },
+    ]);
+  });
+
+  it('空文本 → 认这个文件但无可着色 span（不装不认）', () => {
+    const { slots } = activate();
+    expect(tokensOf(slots).provide({ kind: 'semanticToken', path: A, text: '', project: null })).toEqual({
+      kind: 'semanticToken',
+      spans: [],
+    });
   });
 });

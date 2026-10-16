@@ -51,6 +51,7 @@ import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
 import { loadFormatOnSavePref, saveFormatOnSavePref } from './format-pref';
 // 行上内联注解（B8）：同一份偏好形态，默认关；开关真源在 localStorage，这里只写值 + 发意图
 import { loadCodeLensPref, saveCodeLensPref } from './code-lens-pref';
+import { setNameColorPref, useNameColorPref } from './semantic-color-pref';
 import { fileWritableArea, writablePillTone } from './file-area';
 import {
   applyMotionPref,
@@ -327,6 +328,15 @@ export function ShellLayout(props: Props): ReactElement {
     },
     [kernel],
   );
+
+  /**
+   * 「定义与调用的名字分色」开关（B6，2026-10-16 结构化着色批；设置页里的那一项，默认关）。
+   *
+   * 真源是 `semantic-color-pref.ts` 的 localStorage + 订阅表，这里只拿投影；
+   * 写下去的瞬间 `EditorPane` 那位订阅者会把新值推给 Monaco 的配置项，
+   * **不需要重开文件**（与 `useDirectMode` 同一条通路，只是订阅方是编辑器而不是壳层）。
+   */
+  const nameColorOn = useNameColorPref();
 
   /**
    * 检查更新（REL-1 收尾 · REL-2 设置页）：状态机在 `update-check.ts`（零 React，可单测），
@@ -1390,6 +1400,20 @@ export function ShellLayout(props: Props): ReactElement {
                       在函数开头那一行的上方写一句「被 N 处用到」，点一下跳到第一处用到它的地方；满项目都在用的系统函数写作「1000+」。
                       没找到出处的函数不写这一句——那只代表编辑器证明不了，不代表真的没人调用。
                       太长或函数太密的文件整份不标注。只改显示、不动文件；默认关
+                    </span>
+                  </span>
+                </label>
+                {/* 结构化着色（B6，2026-10-16）：判据来自解析器而不是正则，宿主只翻译协议。
+                    文案按本仓口径去黑话——不写「语义高亮 / semantic token」，写作者看得懂的效果。
+                    默认关的理由见 `semantic-color-pref.ts`：它会顶掉作者看惯的词法配色。 */}
+                <label className="settings-row">
+                  <input type="checkbox" checked={nameColorOn} onChange={(e) => setNameColorPref(e.target.checked)} />
+                  <span>
+                    定义与调用的名字分色
+                    <span className="settings-hint">
+                      同一个函数名，在「它被定义的那一行」与「它被调用的地方」显示成两种颜色；
+                      .kojo 里的函数、别名、常量名字同理。只改显示、不动文件；
+                      超过 5,000 行的文件不生效（与粘性滚动同一档降级）。默认关
                     </span>
                   </span>
                 </label>

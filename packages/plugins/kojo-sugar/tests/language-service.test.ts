@@ -112,14 +112,14 @@ describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
     return hit.contribution as unknown as SymbolsContribution;
   };
 
-  it('三枚贡献各管一个判别成员（`kojo-definition` / `kojo-symbols` / `kojo-folding`）', () => {
+  it('四枚贡献各管一个判别成员（`kojo-definition` / `kojo-symbols` / `kojo-folding` / `kojo-semantic-tokens`）', () => {
     const { slots } = activate();
     expect(
       slots
         .filter((s) => s.kind === 'ui.editor.languageService')
         .map((s) => s.contribution.id)
         .sort(),
-    ).toEqual(['kojo-definition', 'kojo-folding', 'kojo-symbols']);
+    ).toEqual(['kojo-definition', 'kojo-folding', 'kojo-semantic-tokens', 'kojo-symbols']);
   });
 
   it('只认 `.kojo`；ERB / 其它扩展名一律 undefined（让给 erb-parser 那条线）', () => {
@@ -189,5 +189,50 @@ describe('kojo-sugar · foldingRange（D3 折叠）装配', () => {
     });
     expect(res?.kind).toBe('foldingRange');
     expect(res!.ranges).toContainEqual({ startLine: 2, endLine: 4 });
+  });
+});
+
+/* ============================== B6 结构化着色 ============================== */
+
+describe('kojo-sugar · semanticToken（B6 着色）装配', () => {
+  const KOJO = 'C:\\p\\a.kojo';
+  const tokensOf = (slots: SlotRecord[]) => {
+    const hit = slots.find(
+      (s) => s.kind === 'ui.editor.languageService' && s.contribution.id === 'kojo-semantic-tokens',
+    );
+    if (!hit) throw new Error('kojo-semantic-tokens 未注册');
+    return hit.contribution as unknown as { provide(request: unknown): { kind: string; spans: unknown[] } | undefined };
+  };
+
+  it('只认 `.kojo`；ERB / 其它判别成员一律 undefined（让给 erb-parser 那条线）', () => {
+    const { slots } = activate();
+    const c = tokensOf(slots);
+    expect(c.provide({ kind: 'semanticToken', path: 'C:\\p\\a.ERB', text: '@A\n', project: null })).toBeUndefined();
+    expect(c.provide({ kind: 'semanticToken', path: 'C:\\p\\a.txt', text: '函数 甲：\n', project: null })).toBeUndefined();
+    expect(c.provide({ kind: 'documentSymbol', path: KOJO, text: '函数 甲：\n', project: null })).toBeUndefined();
+  });
+
+  it('声明位与调用位各得其所（装配面走通纯函数 semantic-tokens.ts）', () => {
+    const { slots } = activate();
+    const res = tokensOf(slots).provide({
+      kind: 'semanticToken',
+      path: KOJO,
+      text: '函数 计算伤害(次数)：\n  返回 次数\n',
+      project: null,
+      lineCount: 2,
+    });
+    expect(res?.kind).toBe('semanticToken');
+    expect(res!.spans.map((s) => (s as { tokenType: string }).tokenType).sort()).toEqual([
+      'function',
+      'parameter',
+    ]);
+  });
+
+  it('空文本 → 认这个文件但无可着色 span', () => {
+    const { slots } = activate();
+    expect(tokensOf(slots).provide({ kind: 'semanticToken', path: KOJO, text: '', project: null })).toEqual({
+      kind: 'semanticToken',
+      spans: [],
+    });
   });
 });

@@ -44,3 +44,6 @@ export {
   type IndexSnapshot,
   type SnapshotEntry,
 } from './snapshot';
+
+// 结构化着色（B6，2026-10-16；纯函数，缓冲区文本 + 可空索引进、着色 span 出）
+export { erbSemanticTokens } from './semantic-tokens';
