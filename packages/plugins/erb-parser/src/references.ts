@@ -94,8 +94,8 @@ function codeViewOf(line: string): string {
  */
 const TOKEN_RE = new RegExp(`${MODEL_TOKEN_CLASS}+`, 'gu');
 
-/** 定义名截断（与 `parseFunctionDefinition` 同一组终止符；名字在这里只按解析器口径取） */
-const DEF_STOP = new Set(['(', ' ', '\t', ';']);
+/** 定义名截断（与 `parseFunctionDefinition` 同一组终止符，**含逗号形的 `,`**；名字在这里只按解析器口径取） */
+const DEF_STOP = new Set(['(', ',', ' ', '\t', ';']);
 
 /** 变量成员访问的分隔冒号（半/全角）：`FLAG:NAME` 里 NAME 引用的是 FLAG 的成员，不是函数 */
 const isMemberColon = (c: string | undefined): boolean => c === ':' || c === '：';

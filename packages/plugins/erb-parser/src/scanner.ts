@@ -70,14 +70,21 @@ export function parseParams(inner: string): ErbParam[] {
     .filter((p): p is ErbParam => p !== null);
 }
 
-/** 解析 `@NAME(…)` 定义行（输入为已 trim 的行） */
+/**
+ * 解析 `@NAME(…)` / `@NAME, …` 定义行（输入为已 trim 的行）。
+ *
+ * **逗号形**是 EraBasic 的传统声明式（真语料 130 处，`@IN_ROOM_MEMBER, ARGS, ARG, ARGS:1, ARG:1`）：
+ * 名字终止符因此含 `,`——漏了它名字会带上尾逗号（`byName` 里成了 `IN_ROOM_MEMBER,`，
+ * 转到定义 / 重命名 / 未定义 CALL 波浪线全部对不上），且逗号后的**声明槽**全丢。
+ * 逗号后直到行内注释（`;` 起，字符串里的 `;` 不算）的段落与括号形共用同一张 `parseParams`。
+ */
 export function parseFunctionDefinition(trimmed: string): { name: string; params: ErbParam[] } | null {
   if (!trimmed.startsWith('@')) return null;
   const body = trimmed.slice(1);
   let nameEnd = body.length;
   for (let i = 0; i < body.length; i++) {
     const c = body[i]!;
-    if (c === '(' || c === ' ' || c === '\t' || c === ';') {
+    if (c === '(' || c === ',' || c === ' ' || c === '\t' || c === ';') {
       nameEnd = i;
       break;
     }
@@ -112,6 +119,20 @@ export function parseFunctionDefinition(trimmed: string): { name: string; params
       }
     }
     const inner = end > 0 ? rest.slice(1, end) : rest.slice(1);
+    params = parseParams(inner);
+  } else if (rest.startsWith(',')) {
+    // 逗号形：`, 形参, 形参…`——行内注释尾巴（`;` 起）不进形参表；字符串里的 `;` 不算注释
+    let commentAt = -1;
+    let inStr = false;
+    for (let i = 0; i < rest.length; i++) {
+      const c = rest[i]!;
+      if (c === '"') inStr = !inStr;
+      else if (c === ';' && !inStr) {
+        commentAt = i;
+        break;
+      }
+    }
+    const inner = commentAt >= 0 ? rest.slice(1, commentAt) : rest.slice(1);
     params = parseParams(inner);
   }
   return { name, params };

@@ -258,7 +258,7 @@ async function rebuildFromScratch(files: Map<string, FakeFile>): Promise<{ idx: 
 }
 
 describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）', () => {
-  it('触发面「版本换代」：盘上是 v6 形态 ⇒ 新键必然空手，结构一棵不重解析（只有 refs 溯源补正扫一趟）', async () => {
+  it('触发面「版本换代」：盘上 v7（口径外代）⇒ 一条不续用、全量重建（逗号形修复改了解析口径，fail-closed）', async () => {
     const files = new Map<string, FakeFile>([
       [P1, { text: SRC1, mtimeMs: 100 }],
       [P2, { text: SRC2, mtimeMs: 200 }],
@@ -267,7 +267,8 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     const mark = seeded.fs.log.length;
     expect(mark).toBe(4); // 关缓存的真·冷建：2 棵 × 两趟（解析段 + 引用段）
 
-    // v6 形态 = 前 9 位逐字同义、只缺第 10 位（refs 名录摘要）⇒ 结构可续用、refs 溯源未知
+    // v7 形态 = 缺第 10 位（refs 名录摘要）。但 v8 的逗号形修复改了名字/形参的值语义，
+    // v7 不在 SALVAGEABLE_VERSIONS ⇒ 结构也不许续用（复用 = 索引脏数据）
     const v7 = diskOf(seeded.map, v7key);
     const v6entries: Record<string, unknown[]> = {};
     for (const [p, t] of Object.entries(v7.entries)) v6entries[p] = t.slice(0, 9);
@@ -282,15 +283,15 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
 
     const r = readBreakdown(logs);
     expect(r.total).toBe(2);
-    expect(r.reused).toBe(2); // 元组相符 ⇒ 全部续用（改前这里是 0/2）
-    expect(r.salvaged).toBe(2);
+    expect(r.reused).toBe(0); // 版本表外 ⇒ 结构一并作废（改前 v6 同义时代这里是 2）
+    expect(r.salvaged).toBe(0);
     expect(r.skipped).toBe(0);
-    expect(r.legacy).toBe(1);
-    expect(r.provenance).toBe(2); // v6 没记溯源 ⇒ 两条 refs 都要补正（开项目扫，落盘即自愈）
-    // 解析段一趟读盘都没有（结构全部续用）；只有 refs 补正扫了这 2 棵
-    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 });
+    expect(r.legacy).toBe(0); // 表外版本连 salvage 都不启动（salvaged=null ⇒ 无「旧形态」记账）
+    expect(r.provenance).toBe(0); // 没有续用条目 ⇒ 无补正可言
+    // 全树重读：两趟 × 2 棵（口径换代的钱必须付，判据不为省时间放松）
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 4, files: 2 });
 
-    // 自愈闭环：改写回当前键 + 旧键被 prune 收走 ⇒ 下一轮是纯热开，不会再付一次读旧键
+    // 自愈闭环：重读写回当前键 + 旧键被 prune 收走 ⇒ 下一轮是纯热开，不会再付一次读旧键
     await waitFor(() => diskOf(seeded.map, v7key).version === SNAPSHOT_VERSION && diskOf(seeded.map, v7key).entries[P1]!.length === 10);
     expect(seeded.map.has(legacyKey)).toBe(false);
 
@@ -316,7 +317,8 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     openProject(first.bus);
     await first.waitIndexed();
     await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === 10);
-    expect(readBreakdown(firstLogs).provenance).toBe(2);
+    // 第一轮对 v7 盘是全量重建（口径外代 fail-closed）：新扫的 refs 恒带溯源 ⇒ 补正计数为 0
+    expect(readBreakdown(firstLogs).provenance).toBe(0);
 
     const mark = seeded.fs.log.length;
     const secondLogs: string[] = [];
@@ -589,7 +591,8 @@ describe('PERF-12a salvage 判据（纯函数）', () => {
   it('snapshotKeyCandidatesFor：当前键在第一位，含版本 × 写法变体，且不含非快照形态', () => {
     const cands = snapshotKeyCandidatesFor('D:/proj/eratw');
     expect(cands[0]).toBe(snapshotKeyFor('D:/proj/eratw'));
-    expect(cands).toContain(snapshotKeyFor('D:\\proj\\eratw', SNAPSHOT_VERSION - 1));
+    // 候选只认表内版本：v8 的逗号形修复把 v7 请出 salvage 表 ⇒ 旧版本键不再进候选
+    expect(cands).not.toContain(snapshotKeyFor('D:\\proj\\eratw', SNAPSHOT_VERSION - 1));
     expect(cands).toContain(snapshotKeyFor('d:/proj/eratw', SNAPSHOT_VERSION));
     expect(new Set(cands).size).toBe(cands.length);
     for (const k of cands) expect(k).toMatch(/^index-v\d+-[0-9a-f]{8}$/);
@@ -616,19 +619,21 @@ describe('PERF-12a salvage 判据（纯函数）', () => {
   });
 
   it('salvageSnapshot：版本表外 / 项目根不符 / savedAt 坏 ⇒ null；knownPaths 负责把条目键归位', () => {
+    // 同版本完整条目（机制场景：现实里同版本恒 10 位；缺位补 null 的语义在 salvageEntries 用例钉）
     const payload = {
-      version: SNAPSHOT_VERSION - 1,
+      version: SNAPSHOT_VERSION,
       rootDir: 'D:\\proj\\eratw',
       savedAt: 1,
-      entries: { 'D:\\proj\\eratw\\ERB\\a.ERB': (JSON.parse(JSON.stringify(encodeEntries({ 'D:/proj/eratw/ERB/a.ERB': entryOf('D:/x', []) })))['D:/proj/eratw/ERB/a.ERB'] as unknown[]).slice(0, 9) },
+      entries: { 'D:\\proj\\eratw\\ERB\\a.ERB': JSON.parse(JSON.stringify(encodeEntries({ 'D:/proj/eratw/ERB/a.ERB': entryOf('D:/x', []) })))['D:/proj/eratw/ERB/a.ERB'] as unknown[] },
     };
     const opts = { rootDir: ROOT, key: snapshotKeyFor(ROOT), knownPaths: ['D:/proj/eratw/ERB/a.ERB'] };
     const s = salvageSnapshot(payload, opts)!;
-    expect(s.legacy).toBe(true);
+    expect(s.legacy).toBe(false); // 当前版本 hasRefsFp=true ⇒ 非 legacy（v6 时代才有 legacy=true 形态）
     expect(s.skipped).toBe(0);
     expect(Object.keys(s.entries)).toEqual(['D:/proj/eratw/ERB/a.ERB']); // 归位到本轮 walkDir 的写法
     expect(s.entries['D:/proj/eratw/ERB/a.ERB']!.file.path).toBe('D:/proj/eratw/ERB/a.ERB');
-    // 表外版本 / 不同根 / savedAt 非数 ⇒ 一律 null
+    // 表外版本 / 不同根 / savedAt 非数 ⇒ 一律 null（v7 在表外：逗号形修复改了口径，本批的负向判据）
+    expect(salvageSnapshot({ ...payload, version: SNAPSHOT_VERSION - 1 }, opts)).toBeNull();
     expect(salvageSnapshot({ ...payload, version: 5 }, opts)).toBeNull();
     expect(salvageSnapshot({ ...payload, rootDir: 'Z:/elsewhere' }, opts)).toBeNull();
     expect(salvageSnapshot({ ...payload, savedAt: 'x' }, opts)).toBeNull();

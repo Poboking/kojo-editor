@@ -69,6 +69,29 @@ describe('parseFunctionDefinition', () => {
     expect(def?.params[4]!.name).toBe('DESCRIPTION');
   });
 
+  it('逗号形定义：名字不带尾逗号、形参表完整（真语料 @IN_ROOM_MEMBER 形态）', () => {
+    const def = parseFunctionDefinition('@IN_ROOM_MEMBER, ARGS, ARG, ARGS:1, ARG:1');
+    expect(def?.name).toBe('IN_ROOM_MEMBER');
+    expect(def?.params.map((p) => p.name)).toEqual(['ARGS', 'ARG', 'ARGS:1', 'ARG:1']);
+  });
+
+  it('逗号形定义：形参带默认值与字符串默认', () => {
+    const def = parseFunctionDefinition('@PRINTLINE, ARGS, ARGS:1 = "-"');
+    expect(def?.name).toBe('PRINTLINE');
+    expect(def?.params.map((p) => p.name)).toEqual(['ARGS', 'ARGS:1']);
+    expect(def?.params[1]!.hasDefault).toBe(true);
+  });
+
+  it('逗号形定义：行内注释不进形参表，字符串里的 ; 不算注释', () => {
+    const def = parseFunctionDefinition('@FOO, ARG, ARGS = "a;b" ; 备注');
+    expect(def?.name).toBe('FOO');
+    expect(def?.params.map((p) => p.name)).toEqual(['ARG', 'ARGS']);
+  });
+
+  it('逗号形定义：名字后紧跟逗号（无空格）', () => {
+    expect(parseFunctionDefinition('@FOO,ARG')?.name).toBe('FOO');
+  });
+
   it('$ 标签不是 @，null', () => {
     expect(parseFunctionDefinition('$LABEL')).toBeNull();
     expect(parseFunctionDefinition('PRINTL foo')).toBeNull();

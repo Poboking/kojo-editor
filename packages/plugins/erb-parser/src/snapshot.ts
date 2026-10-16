@@ -83,8 +83,15 @@ import type { FileRefs, RefRun } from './references';
  * - **单条损坏不再连坐**：`salvageSnapshot` 逐条目校验，坏几条只重读那几条；
  * - **rootDir 只是写法不同（大小写/斜杠方向/尾分隔符）不再连坐**：见 `sameProjectRoot`。
  * 版本 bump 仍然 bump（键换代 ⇒ 升级后第一轮走 salvage，此后走热）。
+ *
+ * **v7 → v8**（2026-10-16 LS-R6 逗号形函数头修复批）：**解析口径变化 ⇒ 旧版一条都不复用**。
+ * 真语料 130 处 `@NAME, ARGS, ARG…` 形态此前解析成名字 `"NAME,"` 且形参全丢；修复后
+ * 名字不带尾逗号、形参表完整——条目第 1 位（函数名）与形参位的**值语义**变了。
+ * 按准入纪律第 1 条（解析器口径没变才准入），v7 及更早**全部不得入表**：升 v8 后
+ * 第一轮对存量盘付一次整体冷重建（fail-closed），此后照常热。
+ * 「缺溯源位 ⇒ 结构续用 + refs 补正」机制原样保留，待下个**只加位不动口径**的版本重新准入。
  */
-export const SNAPSHOT_VERSION = 7;
+export const SNAPSHOT_VERSION = 8;
 
 /**
  * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
@@ -94,15 +101,12 @@ export const SNAPSHOT_VERSION = 7;
  * 2. 新旧差异只能是**新条目多了位**（旧 payload 缺位 ⇒ 该位按"未知"处理，绝不猜值）；
  * 3. 缺位的"未知"必须落在**保守侧**：要么触发一次重扫，要么判该文件过期，不许静默当真。
  *
- * - `7`：同形（10 位）。
- * - `6`：前 9 位逐字同义，缺第 10 位 `refsNamesFp` ⇒ 条目结构可续用、其 refs 标为可疑。
- *
- * **不在表里的版本（含 ≤5）一条都不复用**：v5 及更早的条目缺 `labels`（v6 新增），
- * 那是解析结果本体少了字段，复用＝索引缺数据，只能整体重读。
+ * - `8`：同形（10 位）。
+ * - `7` 及更早**一律不在表**：v8 的逗号形修复改了解析口径（旧条目名字可能带尾逗号、
+ *   形参整段缺失），复用 = 索引脏数据；v5 及更早还缺 `labels`（v6 新增）。
  */
 const SALVAGEABLE_VERSIONS: ReadonlyMap<number, { readonly arity: number; readonly hasRefsFp: boolean }> = new Map([
-  [7, { arity: 10, hasRefsFp: true }],
-  [6, { arity: 9, hasRefsFp: false }],
+  [8, { arity: 10, hasRefsFp: true }],
 ]);
 
 /** 单个文件的快照条目 */
