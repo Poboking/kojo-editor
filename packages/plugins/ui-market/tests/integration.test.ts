@@ -126,6 +126,10 @@ function makeIo(): CountingIo {
       if (b === undefined) throw new Error(`not found: ${p}`);
       return { path: p, text: utf8.decode(b), encoding: 'utf-8', eol: 'lf', mtimeMs: 1 };
     },
+    async readTexts(paths) {
+      // 装卸链路只逐条按清单读写；批量读不走这条线，走到即红
+      throw new Error(`面板/市场不该走批量读：${paths.length} 条`);
+    },
     async readBytes(p) {
       const b = fs.files.get(p);
       if (b === undefined) throw new Error(`not found: ${p}`);
@@ -167,6 +171,12 @@ function makeIo(): CountingIo {
     isWritable: () => true,
     async backup() {
       return null;
+    },
+    async listBackups() {
+      throw new Error('面板/市场不该走备份列表');
+    },
+    async restoreBackup() {
+      throw new Error('面板/市场不该走备份还原');
     },
     async exportFile() {
       return null;
