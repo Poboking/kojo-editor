@@ -45,6 +45,14 @@ export const DEFAULT_SLICE_MS = 8;
 /** 通道连续失败到这个次数就停发（避免每次任务都白等一次超时） */
 const TRANSPORT_FAILURE_LIMIT = 3;
 
+/**
+ * `statsByLabel` 词表上限：label 由调用方给（可能是 `索引:C:\...\某个文件` 这种
+ * 每次都不一样的串），不设上限就是**按运行次数无界增长**的内存泄漏。
+ * 超了按 LRU 淘汰最久未用的那一项（统计是观测面，不是正确性面——淘汰可接受，
+ * 泄漏不可接受），并在首次淘汰时出声。
+ */
+export const MAX_STAT_LABELS = 64;
+
 const ANON = 'anonymous';
 
 function now(): number {
@@ -98,6 +106,8 @@ export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
   const log = opts.log;
   const yieldToMain = createYielder();
   const statsByLabel = new Map<string, ComputeTaskStat>();
+  /** 因词表封顶被淘汰的 label 数（生命周期计数，resetStats 不清——它是"调用方 label 失控"的证据） */
+  let evictedLabels = 0;
   let totalYields = 0;
   let interactiveDepth = 0;
   const latestSlots = new Map<string, LatestSlot>();
@@ -110,9 +120,27 @@ export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
 
   function statFor(label: string, priority: ComputePriority): ComputeTaskStat {
     let s = statsByLabel.get(label);
-    if (!s) {
+    if (s) {
+      // LRU：命中即提到队尾（Map 迭代序 = 由旧到新），被淘汰的永远是最久没跑的 label
+      statsByLabel.delete(label);
+      statsByLabel.set(label, s);
+    } else {
       s = { label, priority, items: 0, slices: 0, yields: 0, durationMs: 0, runs: 0 };
       statsByLabel.set(label, s);
+      while (statsByLabel.size > MAX_STAT_LABELS) {
+        const oldest = statsByLabel.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        statsByLabel.delete(oldest);
+        evictedLabels++;
+        // 铁律 #4：观测面丢数据不许全静默——首次必报，其后每 100 次报一次累计
+        if (evictedLabels === 1 || evictedLabels % 100 === 0) {
+          log?.warn(
+            `Compute stats vocabulary capped at ${MAX_STAT_LABELS} labels; ` +
+              `evicted "${oldest}" (total evictions: ${evictedLabels}). ` +
+              `Use a stable label per task kind to keep its history.`,
+          );
+        }
+      }
     }
     // 优先级以最近一次调用为准（同一 label 混用是调用方的 bug，这里不隐藏）
     s.priority = priority;

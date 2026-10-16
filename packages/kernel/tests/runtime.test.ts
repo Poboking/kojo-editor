@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Logger, Plugin } from '@kojo/plugin-api';
-import { scopedBus, TypedEventBus } from '../src/bus';
+import type { Logger, Plugin, PluginContext } from '@kojo/plugin-api';
+import { busScopeSize, scopedBus, TypedEventBus } from '../src/bus';
 import { ServiceContainer } from '../src/container';
 import { PluginRuntime, type PluginRuntimeDeps } from '../src/runtime';
 import { SlotRegistryImpl } from '../src/slots';
@@ -373,5 +373,149 @@ describe('PluginRuntime · 事件命名空间纪律', () => {
     expect(received).toEqual([1]); // 违规事件不得触发任何订阅
     expect(violations).toHaveLength(1);
     expect(violations[0]).toContain("without its 'p1:' prefix");
+  });
+});
+
+describe('PluginRuntime · 订阅生命周期（监听器泄漏治理）', () => {
+  it('stop 释放该插件的全部 bus 订阅：停用后事件不再进已拆除的状态', async () => {
+    const { runtime, bus } = makeRuntime();
+    const hits: string[] = [];
+    runtime.register({
+      id: 'listener',
+      version: '1.0.0',
+      activate(ctx) {
+        ctx.bus.on('file.changed', (p) => hits.push(p.path));
+        ctx.bus.once('project.closed', () => hits.push('closed'));
+      },
+    });
+    await runtime.tryActivateAll();
+    bus.emit('file.changed', { kind: 'add', path: 'a' });
+    expect(hits).toEqual(['a']);
+    expect(bus.listenerCount('file.changed')).toBe(1);
+    expect(busScopeSize(bus, 'listener')).toBe(2);
+
+    await runtime.stop('listener');
+    expect(bus.listenerCount('file.changed')).toBe(0);
+    expect(bus.listenerCount('project.closed')).toBe(0);
+    expect(busScopeSize(bus, 'listener')).toBe(0);
+    bus.emit('file.changed', { kind: 'add', path: 'b' });
+    expect(hits).toEqual(['a']); // 停用后再来的事件不进插件
+  });
+
+  it('级联停用同样逐个释放依赖方的订阅', async () => {
+    const { runtime, bus } = makeRuntime();
+    runtime.register({ id: 'provider', version: '1.0.0', provides: ['svc.p'], activate(ctx) { ctx.provide('svc.p', {}); } });
+    runtime.register({
+      id: 'dep',
+      version: '1.0.0',
+      requires: ['svc.p'],
+      activate(ctx) {
+        ctx.bus.on('file.changed', () => {});
+      },
+    });
+    await runtime.tryActivateAll();
+    expect(bus.listenerCount('file.changed')).toBe(1);
+    await runtime.stop('provider');
+    expect(runtime.get('dep')?.status).toBe('stopped');
+    expect(bus.listenerCount('file.changed')).toBe(0);
+  });
+
+  it('activate 抛错 → 失败前登记的订阅一并回滚；retry 重激活只留一份 handler', async () => {
+    const { runtime, bus } = makeRuntime();
+    const hits: number[] = [];
+    let attempts = 0;
+    runtime.register({
+      id: 'flaky',
+      version: '1.0.0',
+      activate(ctx) {
+        attempts++;
+        ctx.bus.on('file.changed', () => hits.push(attempts));
+        if (attempts === 1) throw new Error('first attempt fails');
+      },
+    });
+    await runtime.tryActivateAll();
+    expect(runtime.get('flaky')?.status).toBe('error');
+    expect(bus.listenerCount('file.changed')).toBe(0); // 回滚把失败前 on 的那份清掉了
+    expect(busScopeSize(bus, 'flaky')).toBe(0);
+
+    await runtime.retry('flaky');
+    expect(runtime.get('flaky')?.status).toBe('active');
+    bus.emit('file.changed', { kind: 'add', path: 'a' });
+    expect(hits).toHaveLength(1); // 只有一份 handler 在跑，不是新旧两份
+  });
+
+  it('插件持有 ctx.bus 不放（引用泄漏）——停用仍按插件 id 归口收干净', async () => {
+    const { runtime, bus } = makeRuntime();
+    const held: PluginContext['bus'][] = [];
+    runtime.register({
+      id: 'hoarder',
+      version: '1.0.0',
+      activate(ctx) {
+        held.push(ctx.bus);
+        ctx.bus.on('file.changed', () => {});
+      },
+    });
+    await runtime.tryActivateAll();
+    held[0]!.on('file.changed', () => {}); // 停用后又用旧句柄加订阅（登记仍在同一插件 id 名下）
+    expect(bus.listenerCount('file.changed')).toBe(2);
+    await runtime.stop('hoarder');
+    expect(bus.listenerCount('file.changed')).toBe(0);
+  });
+});
+
+describe('PluginRuntime · 重扫记账（嵌套 tryActivateAll）', () => {
+  it('激活期间嵌套重扫被记账：外层收尾时新注册的插件已就位，不停在 pending', async () => {
+    const { runtime } = makeRuntime();
+    const seen: string[] = [];
+    runtime.register({
+      id: 'host',
+      version: '1.0.0',
+      activate: async (ctx) => {
+        // 模拟"激活里经 kernel.plugins.register 装了个新插件"的形态
+        runtime.register({ id: 'late', version: '1.0.0', activate: () => { seen.push('late'); } });
+        await runtime.tryActivateAll(); // 嵌套：不得被一句 return 丢掉
+        expect(runtime.get('late')?.status).not.toBe('active'); // 嵌套调用不重入循环（防死锁）
+      },
+    });
+    await runtime.tryActivateAll();
+    expect(runtime.get('host')?.status).toBe('active');
+    expect(runtime.get('late')?.status).toBe('active'); // 外层补扫把 pending 收干净
+    expect(seen).toEqual(['late']);
+  });
+
+  it('statusChanged 同步处理里发起的嵌套重扫同样记账（不静默丢）', async () => {
+    const { runtime, bus, container } = makeRuntime();
+    let fired = false;
+    const un = bus.on('plugin.statusChanged', (p) => {
+      // 只在"被判 inactive 的那一刻"反应（register 时的 pending 广播不能算，那时外层还没开跑）
+      if (fired || p.pluginId !== 'needs' || p.status !== 'inactive') return;
+      fired = true;
+      container.provide('svc.arrives', {}, 'external');
+      void runtime.tryActivateAll(); // 同步嵌套（此刻外层循环还在跑）
+    });
+    runtime.register({
+      id: 'needs',
+      version: '1.0.0',
+      requires: ['svc.arrives'],
+      activate() {},
+    });
+    await runtime.tryActivateAll();
+    un();
+    expect(fired).toBe(true); // 反应确实发生在循环内
+    expect(runtime.get('needs')?.status).toBe('active'); // 外层必须补那一轮
+  });
+});
+
+describe('PluginRuntime · 状态记录不可外泄内部数组', () => {
+  it('get() 的 missing 是拷贝：消费方 push/改写不腐蚀内核状态', async () => {
+    const { runtime } = makeRuntime();
+    runtime.register({ id: 'needs', version: '1.0.0', requires: ['svc.gone'], activate() {} });
+    await runtime.tryActivateAll();
+    const rec = runtime.get('needs')!;
+    expect(rec.missing).toEqual(['svc.gone']);
+    rec.missing!.push('svc.bogus');
+    rec.missing![0] = 'hacked';
+    expect(runtime.get('needs')?.missing).toEqual(['svc.gone']);
+    expect(runtime.list().find((r) => r.id === 'needs')?.missing).toEqual(['svc.gone']);
   });
 });

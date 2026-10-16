@@ -8,7 +8,7 @@ import type {
   ServiceKey,
   SlotRegistrar,
 } from '@kojo/plugin-api';
-import { scopedBus, type TypedEventBus } from './bus';
+import { disposeBusScope, scopedBus, type TypedEventBus } from './bus';
 import { ServiceContainer } from './container';
 import type { SlotRegistryImpl } from './slots';
 
@@ -19,7 +19,9 @@ import type { SlotRegistryImpl } from './slots';
  * 1. **inactive 永远是"暂时"的**：依赖未满足不静默（cordis 的 __INACTIVE__ 死锁教训），
  *    状态面板强制显示 missing 列表；任何一次依赖变化都会触发重扫（tryActivateAll），
  *    满足即自动激活。
- * 2. **停用彻底可逆**：deactivate → 逆序执行 disposer → 撤销槽位注册 → 释放服务。
+ * 2. **停用彻底可逆**：deactivate → 逆序执行 disposer → 撤销槽位注册 → 释放服务
+ *    → **放掉该插件在总线上的全部订阅**（`bus.on/once` 句柄按插件 id 归口登记，
+ *    停用/激活失败都收干净；否则重激活就是双份 handler 跑在已拆除的状态上）。
  *    开发工具必须做到热重载插件，否则迭代效率极差（DSH"改插件必须完全重启"的教训）。
  * 3. **错误隔离**：activate 抛错 → 状态转 error（含堆栈摘要），其余插件继续接线；
  *    activate 内已收集的副作用自动回滚。
@@ -46,6 +48,12 @@ interface PluginStateInternal {
 export class PluginRuntime {
   private readonly states = new Map<string, PluginStateInternal>();
   private activatingDepth = 0;
+  /**
+   * 嵌套 `tryActivateAll()` 的请求记账：激活过程中（同步 emit 的 statusChanged 处理里、
+   * 或插件 activate 里经 `kernel.plugins.register`）再发起的重扫**不再被丢弃**，
+   * 而是置这个旗，由外层 while 循环补一轮（2026-10-17 修复）。
+   */
+  private rescanRequested = false;
 
   constructor(private readonly deps: PluginRuntimeDeps) {}
 
@@ -66,12 +74,14 @@ export class PluginRuntime {
   }
 
   list(): PluginStateRecord[] {
-    return [...this.states.values()].map((s) => ({ ...s.record, missing: s.record.missing ? [...s.record.missing] : undefined }));
+    return [...this.states.values()].map((s) => toRecord(s));
   }
 
   get(id: string): PluginStateRecord | undefined {
     const s = this.states.get(id);
-    return s ? { ...s.record } : undefined;
+    // 与 list() 同口径的深拷 missing：浅拷会把内部数组交出去，消费方 push/sort
+    // 会当场篡改内核状态（2026-10-17 修复）
+    return s ? toRecord(s) : undefined;
   }
 
   /* ------------------------------ 接线 ------------------------------ */
@@ -129,14 +139,21 @@ export class PluginRuntime {
 
   /**
    * 全量尝试激活：反复扫描直到没有新进展。
-   * 幂等、可重入（重入时直接返回，避免 activate 内再触发）。
+   * 幂等、可重入——重入不静默丢弃请求，而是置 `rescanRequested` 让外层补扫一轮
+   * （2026-10-17 修复：此前 `if (depth>0) return` 会把「activate 期间注册的新插件」
+   * 这类嵌套重扫整件事丢掉，新插件永远停在 pending）。
    */
   async tryActivateAll(): Promise<void> {
-    if (this.activatingDepth > 0) return;
+    if (this.activatingDepth > 0) {
+      this.rescanRequested = true;
+      return;
+    }
     this.activatingDepth++;
     try {
       let progressed = true;
-      while (progressed) {
+      while (progressed || this.rescanRequested) {
+        // 补扫一轮由嵌套请求触发；本轮开始时先清旗，本轮内嵌套再置则再补一轮
+        this.rescanRequested = false;
         progressed = false;
         for (const [id, state] of this.states) {
           const status = state.record.status;
@@ -152,6 +169,7 @@ export class PluginRuntime {
       }
     } finally {
       this.activatingDepth--;
+      this.rescanRequested = false;
     }
   }
 
@@ -174,6 +192,10 @@ export class PluginRuntime {
     const plugin = state.plugin;
     const disposers: Array<() => void | Promise<void>> = [];
     const provided = new Set<ServiceKey>();
+
+    // 上一轮（失败激活 / 泄漏引用）残留的订阅先清干净：本插件的 `on/once` 必须
+    // 从干净作用域起步，否则重激活就是双份 handler 跑在已拆除的状态上。
+    this.releaseBusScope(id);
 
     const log = this.deps.logFactory(plugin.id);
     const bus = scopedBus(this.deps.bus, plugin.id, (msg) => log.warn(msg));
@@ -224,8 +246,10 @@ export class PluginRuntime {
       state.provided = provided;
       this.setStatus(id, 'active');
     } catch (err) {
-      // 回滚激活过程中已收集的副作用
+      // 回滚激活过程中已收集的副作用（含本作用域已登记的订阅——失败前 on 过的那些）
       await this.runDisposers(disposers, id);
+      this.releaseBusScope(id);
+      state.ctx = null;
       this.setStatus(id, 'error', { error: errorSummary(err) });
     }
   }
@@ -280,8 +304,27 @@ export class PluginRuntime {
     state.disposers = [];
     state.ctx = null;
     state.provided.clear();
+    // 订阅也是副作用：EventBus 没有批量 off，此前只清槽位与服务、`bus.on/once` 的
+    // 句柄随 ctx 一起被丢 ⇒ 停用后仍在收事件（跑在已拆除的状态上），重激活又叠一份。
+    this.releaseBusScope(id);
     this.deps.slots.removeAllFor(id);
     this.setStatus(id, 'stopped');
+  }
+
+  /**
+   * 释放该插件本轮激活登记的全部 `bus.on/once` 订阅（幂等，可安全重复调用）。
+   * 铁律 #4：释放了多少要看得见——退订自身抛错（failed>0）必须 warn，不许静默吞。
+   */
+  private releaseBusScope(id: string): void {
+    const { released, failed } = disposeBusScope(this.deps.bus, id);
+    if (failed > 0) {
+      this.deps.kernelLog.warn(
+        `Plugin '${id}' bus scope release incomplete: ${released} listener(s) dropped, ` +
+          `${failed} unsubscribe handle(s) threw`,
+      );
+    } else if (released > 0) {
+      this.deps.kernelLog.debug(`Plugin '${id}' bus scope released: ${released} listener(s)`);
+    }
   }
 
   /**
@@ -346,5 +389,16 @@ export class PluginRuntime {
 function errorSummary(err: unknown): string {
   if (err instanceof Error) return `${err.name}: ${err.message}`;
   return String(err);
+}
+
+/**
+ * 对外快照：`missing` 一定拷贝。
+ * 返回的记录会被状态面板/插件持有并排序或改写，共享内部数组等于把内核状态交出去。
+ */
+function toRecord(s: PluginStateInternal): PluginStateRecord {
+  return {
+    ...s.record,
+    missing: s.record.missing ? [...s.record.missing] : undefined,
+  };
 }
 

@@ -49,13 +49,20 @@ export class TypedEventBus implements EventBus {
   }
 
   emit<K extends keyof AnyEventMap>(type: K, payload: AnyEventMap[K]): void {
-    const set = this.handlers.get(type as string);
+    const key = type as string;
+    const set = this.handlers.get(key);
     if (!set || set.size === 0) return;
+    // 快照迭代：允许 handler 在本轮里订阅/退订（改集合本身不会炸迭代器）。
+    // 但**被本轮更早的 handler 退订掉的那一个不得再被调用**——它已经表态说
+    // "我不要再收事件"，再叫它跑就会作用在已拆除的状态上（2026-10-17 修复）。
+    // 若整组被清空（键被删）或换成新集合（全清后重订阅），剩余快照一律作废。
     for (const handler of [...set]) {
+      if (this.handlers.get(key) !== set) break; // 键已删/已换集合 ⇒ 本轮到此为止
+      if (!set.has(handler)) continue; // 本轮内已被退订 ⇒ 跳过
       try {
         handler(payload);
       } catch (err) {
-        this.onHandlerError?.(type as string, err);
+        this.onHandlerError?.(key, err);
       }
     }
   }
@@ -66,17 +73,86 @@ export class TypedEventBus implements EventBus {
   }
 }
 
+/** 一次作用域释放的结果（可观测：释放了多少、有多少退订自身抛错） */
+export interface BusScopeRelease {
+  released: number;
+  failed: number;
+}
+
+/**
+ * scopedBus 订阅登记表：`基础总线 → (插件 id → 该插件经本作用域拿到的全部退订句柄)`。
+ *
+ * 为什么需要它：`EventBus` 契约没有"批量退订"，而插件的 `on/once` 句柄一旦丢掉就永远
+ * 退不掉——停用/激活失败后重激活会**再注册一份**，双份 handler 跑在已拆除的状态上
+ * （铁律 #4：不许静默留脏）。登记表按插件 id 归口，运行时停谁就清谁的订阅。
+ * WeakMap 键 ⇒ 总线被回收时登记表一并回收，本身不泄漏。
+ */
+const busScopes = new WeakMap<EventBus, Map<string, Set<Unsubscribe>>>();
+
+function scopeSetFor(bus: EventBus, pluginId: string): Set<Unsubscribe> {
+  let byPlugin = busScopes.get(bus);
+  if (!byPlugin) {
+    byPlugin = new Map();
+    busScopes.set(bus, byPlugin);
+  }
+  let set = byPlugin.get(pluginId);
+  if (!set) {
+    set = new Set();
+    byPlugin.set(pluginId, set);
+  }
+  return set;
+}
+
+/**
+ * 释放某插件在指定总线上登记的全部 `on/once` 订阅（幂等：再次调用返回 0）。
+ * 退订句柄自身抛错不中断清理，只计入 `failed` 由调用方呈现。
+ */
+export function disposeBusScope(bus: EventBus, pluginId: string): BusScopeRelease {
+  const set = busScopes.get(bus)?.get(pluginId);
+  if (!set || set.size === 0) return { released: 0, failed: 0 };
+  const handles = [...set];
+  set.clear(); // 先摘表：退订动作自身不得回灌登记表
+  let failed = 0;
+  for (const un of handles) {
+    try {
+      un();
+    } catch {
+      failed++;
+    }
+  }
+  return { released: handles.length, failed };
+}
+
+/** 某插件当前登记的订阅句柄数（诊断/测试面） */
+export function busScopeSize(bus: EventBus, pluginId: string): number {
+  return busScopes.get(bus)?.get(pluginId)?.size ?? 0;
+}
+
+/** `scopedBus` 的返回值：EventBus 的超集（既有消费方按 EventBus 用，零改动） */
+export interface ScopedBus extends EventBus {
+  /** 释放本插件在本总线上的全部订阅（stopDirect / activate 回滚路径调用） */
+  disposeScope(): BusScopeRelease;
+  /** 本插件当前登记的订阅句柄数 */
+  scopeSize(): number;
+}
+
 /**
  * 插件视角的总线包装：
- * - `on/once` 原样透传（消费者可订阅任意事件）；
+ * - `on/once` 原样透传（消费者可订阅任意事件），并把拿到的退订句柄按插件 id 登记，
+ *   供 `disposeBusScope` / `disposeScope()` 在停用与激活失败回滚时统一释放；
  * - `emit` 强制命名空间纪律：内核事件之外的 emit 必须携带 `插件id:` 前缀，
  *   违反即抛错（把"约定"升格为内核保障，对应 DSH 的事件命名空间约定）。
  */
-export function scopedBus(bus: EventBus, pluginId: string, onViolation?: (message: string) => void): EventBus {
+export function scopedBus(bus: EventBus, pluginId: string, onViolation?: (message: string) => void): ScopedBus {
   const prefix = `${pluginId}:`;
+  /** 登记一次订阅拿到的句柄（每次都在登记表里查，跨多次 scopedBus 调用共享同一份名单） */
+  const track = (un: Unsubscribe): Unsubscribe => {
+    scopeSetFor(bus, pluginId).add(un);
+    return un;
+  };
   return {
-    on: (type, handler) => bus.on(type, handler),
-    once: (type, handler) => bus.once(type, handler),
+    on: (type, handler) => track(bus.on(type, handler)),
+    once: (type, handler) => track(bus.once(type, handler)),
     emit: (type, payload) => {
       const t = type as string;
       if (!KERNEL_EVENT_NAMES.has(t as KernelEventName) && !t.startsWith(prefix)) {
@@ -88,5 +164,7 @@ export function scopedBus(bus: EventBus, pluginId: string, onViolation?: (messag
       }
       bus.emit(type, payload);
     },
+    disposeScope: () => disposeBusScope(bus, pluginId),
+    scopeSize: () => busScopeSize(bus, pluginId),
   };
 }

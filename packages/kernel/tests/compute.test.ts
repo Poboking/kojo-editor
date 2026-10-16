@@ -5,7 +5,7 @@
  * 时间片让路 / 交互档优先让路 / 单飞 + 尾缘合并 / 统计 / 错误传播 / 保序。
  */
 import { describe, expect, it } from 'vitest';
-import { createComputePool } from '../src/compute';
+import { MAX_STAT_LABELS, createComputePool } from '../src/compute';
 
 /** 宏任务边界：把挂起的微任务全部排空（比 await Promise.resolve() 稳） */
 const tick = (): Promise<void> => new Promise<void>((r) => setTimeout(r, 0));
@@ -257,6 +257,49 @@ describe('stats', () => {
     await pool.runSliced([1], {}, (n) => n);
     expect(pool.stats().tasks[0]!.label).toBe('anonymous');
     expect(pool.stats().tasks[0]!.priority).toBe('background');
+  });
+});
+
+describe('statsByLabel 词表封顶（LRU，不许无界增长）', () => {
+  const capLog = (warns: string[]) => ({
+    debug: () => {},
+    info: () => {},
+    warn: (m: string) => warns.push(m),
+    error: () => {},
+  });
+
+  it('调用方 label 失控时按上限封顶：条目数不超过 MAX_STAT_LABELS，淘汰有声音', async () => {
+    const warns: string[] = [];
+    const pool = createComputePool({ log: capLog(warns) });
+    for (let i = 0; i < MAX_STAT_LABELS + 37; i++) {
+      await pool.runSliced([1], { label: `per-file:${i}` }, (n) => n);
+      expect(pool.stats().tasks.length).toBeLessThanOrEqual(MAX_STAT_LABELS);
+    }
+    expect(pool.stats().tasks.length).toBe(MAX_STAT_LABELS);
+    expect(warns.some((w) => /vocabulary capped/.test(w))).toBe(true);
+  });
+
+  it('LRU：常被重跑的 label 留在表里，最久未用的先被淘汰', async () => {
+    const pool = createComputePool();
+    const hot = 'hot-index-scan';
+    await pool.runSliced([1], { label: hot }, (n) => n);
+    await pool.runSliced([1], { label: 'cold-0' }, (n) => n);
+    for (let i = 0; i < MAX_STAT_LABELS; i++) {
+      await pool.runSliced([1], { label: hot }, (n) => n); // 每轮都命中 ⇒ 一直提到队尾
+      await pool.runSliced([1], { label: `filler-${i}` }, (n) => n);
+    }
+    const labels = pool.stats().tasks.map((t) => t.label);
+    expect(labels).toContain(hot);
+    expect(labels).not.toContain('cold-0'); // 最先被淘汰的就是最久未用的
+    expect(labels).not.toContain('filler-0');
+  });
+
+  it('淘汰不串数据：热 label 的累计量只涨不丢（在自己还在表里的时候）', async () => {
+    const pool = createComputePool();
+    for (let i = 0; i < 5; i++) await pool.runSliced([1, 2], { label: 'steady' }, (n) => n);
+    const st = pool.stats().tasks.find((t) => t.label === 'steady')!;
+    expect(st.runs).toBe(5);
+    expect(st.items).toBe(10);
   });
 });
 
