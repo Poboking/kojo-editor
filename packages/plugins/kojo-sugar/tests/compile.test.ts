@@ -129,6 +129,8 @@ function makeFs(io: HarnessOptions = {}) {
     // 契约 additive（2026-10-16 市场与导入 IO 批）：本夹具不提供服务端复制 ⇒ 走到即红
     copyFile: async () => { throw new Error('copyFile is not wired in this fake'); },
     removeDir: async () => { throw new Error('removeDir is not wired in this fake'); },
+    // 契约 additive（2026-10-16 文件树编辑批）：本夹具不提供单文件删除 ⇒ 走到即红
+    removeFile: async () => { throw new Error('removeFile is not wired in this fake'); },
     chooseWorkspaceRoot: async () => {
       throw new Error('chooseWorkspaceRoot is not supported by this fake');
     },

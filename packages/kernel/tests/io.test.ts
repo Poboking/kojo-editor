@@ -199,6 +199,59 @@ describe('FileIOService · 备份', () => {
   });
 });
 
+describe('FileIOService · removeFile（文件树编辑批；与 removeDir 同闸，但不做幂等兜底）', () => {
+  it('域内删除成功：盘上真的没了', async () => {
+    const kojo = path.join(tmpDir, 'game', '個人口上');
+    io.setWritableRoots([kojo]);
+    const f = path.join(kojo, 'a.ERB');
+    await writeRaw(f, Buffer.from('PRINTL 1', 'utf8'));
+    await expect(io.removeFile(f)).resolves.toBeUndefined();
+    expect(await io.exists(f)).toBe(false);
+  });
+
+  it('目标不存在时如实拒绝（平台 NotFound 原样上抛，不静默吞）', async () => {
+    const kojo = path.join(tmpDir, 'game', '個人口上');
+    io.setWritableRoots([kojo]);
+    const missing = path.join(kojo, '没有这个文件.ERB');
+    await expect(io.removeFile(missing)).rejects.toThrow();
+    // 对齐 Rust 侧 std::fs::remove_file 的 NotFound 语义：拒绝即拒绝，不做幂等兜底
+  });
+
+  it('越域拒绝（WriteNotAllowedError），盘上不动', async () => {
+    const kojo = path.join(tmpDir, 'game', '個人口上');
+    io.setWritableRoots([kojo]);
+    const outside = path.join(tmpDir, 'game', 'ERB', 'other.ERB');
+    await writeRaw(outside, Buffer.from('x', 'utf8'));
+    await expect(io.removeFile(outside)).rejects.toThrow(WriteNotAllowedError);
+    expect(await io.exists(outside)).toBe(true);
+  });
+
+  it('未声明任何可写根时一律拒绝', async () => {
+    const f = path.join(tmpDir, 'game', 'a.ERB');
+    await writeRaw(f, Buffer.from('x', 'utf8'));
+    await expect(io.removeFile(f)).rejects.toThrow(WriteNotAllowedError);
+    expect(await io.exists(f)).toBe(true);
+  });
+
+  it('删除成功后失效会话文本缓存：删后批量读必须看到"没了"（口径与 writeBytes 逐字相同）', async () => {
+    const dir = path.join(tmpDir, 'game');
+    io.setWritableRoots([dir]);
+    const f = path.join(dir, 'cached.ERB');
+    await writeRaw(f, Buffer.from('PRINTL 旧内容', 'utf8'));
+
+    await io.readTexts([f]); // 进会话缓存
+    expect(io.debugCaches().text.files).toBe(1);
+
+    await io.removeFile(f);
+    expect(io.debugCaches().text.files).toBe(0); // 盘上没了，缓存不能还留着旧内容
+
+    // 删后再批量读：该位为 null（失败条件与 readText 一致），且不复活任何缓存条目
+    const reread = await io.readTexts([f]);
+    expect(reread[0]).toBeNull();
+    expect(io.debugCaches().text.files).toBe(0);
+  });
+});
+
 describe('FileIOService · 导出（唯一法定绕闸通道，§5.97）', () => {
   /** 以 NodeBridge 为原型覆写单个方法（类方法在原型上，展开复制会丢） */
   function bridgeWith(overrides: Partial<PlatformBridge>): PlatformBridge {

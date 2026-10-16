@@ -217,6 +217,10 @@ function makeIo(): CountingIo {
       calls.push(`removeDir:${p}`);
       fs.removeTree(p);
     },
+    // 契约 additive（2026-10-16 文件树编辑批）：市场这条线不用单文件删除 ⇒ 走到即红
+    async removeFile() {
+      throw new Error('面板/市场不该走单文件删除');
+    },
   };
   return {
     io,

@@ -220,6 +220,24 @@ export interface FileIO {
    * 同样先过 `assertWritable`——删是比写更狠的盘上动作。
    */
   removeDir(path: string): Promise<void>;
+  /**
+   * 删除**单个文件**（透传平台桥 `removeFile`；additive，文件树编辑批）。
+   *
+   * 闸的语义与 `removeDir` 同闸同罚：先过 `assertWritable`——删是比写更狠的盘上动作，
+   * 判定口径与 Windows 大小写/分隔符折叠都沿用第一道闸的既有约定（`pathKey`）；
+   * 平台侧另有第二道闸（Rust `remove_file` 的 `ensure_write_allowed(.., "remove")`）。
+   * 删除成功后内核会同步失效该 path 的会话文本缓存（口径与 `writeBytes` 逐字相同：
+   * 盘上没了，缓存不能还留着旧内容）。
+   *
+   * **与 `removeDir` 的语义差**：本方法**不做幂等兜底**——目标不存在时如实拒绝
+   * （平台侧 NotFound 原样上抛）。"删一个自以为存在的东西"应当听见响，
+   * 而不是被静默吞掉；调用侧要"无所谓在不在"的清理语义请自行 catch。
+   *
+   * 只能删文件：目录请用 `removeDir`（平台侧对目录同样按 NotFound/失败拒绝）。
+   *
+   * @throws WriteNotAllowedError 当路径不在可写白名单内
+   */
+  removeFile(path: string): Promise<void>;
 }
 
 /** 越权写入错误（内核抛出、UI 捕获展示） */

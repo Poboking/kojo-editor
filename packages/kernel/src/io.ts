@@ -611,6 +611,17 @@ export class FileIOServiceImpl implements FileIO {
     await this.bridge.removeDir(path);
   }
 
+  /**
+   * 删除单个文件：与 `removeDir` 同闸（`assertWritable`），成功后失效会话文本缓存
+   * （口径与 writeBytes/copyFile 逐字相同：盘上没了，缓存不能还留着旧内容）。
+   * 不做幂等兜底：目标不存在时平台侧 NotFound 原样上抛（见契约 `FileIO.removeFile`）。
+   */
+  async removeFile(path: string): Promise<void> {
+    this.assertWritable(path);
+    await this.bridge.removeFile(path);
+    this.invalidateTextCache(path);
+  }
+
   /** 调试/测试辅助：当前缓存状态（含会话文本缓存的命中读数——批量 IO 批的轻量上报面） */
   debugCaches(): {
     encoding: Map<string, FileEncoding>;
