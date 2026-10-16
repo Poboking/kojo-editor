@@ -16,6 +16,7 @@ import { TypedEventBus } from './bus';
 import { createComputePool } from './compute';
 import { ServiceContainer } from './container';
 import { FileIOServiceImpl } from './io';
+import { OpsJournalImpl } from './journal';
 import { ProjectServiceImpl } from './project';
 import { PluginRuntime } from './runtime';
 import { RemoteServiceImpl } from './remote';
@@ -116,6 +117,10 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
   container.provide(KernelServices.Compute, compute, 'kernel');
   // 远程取文本：桥的零逻辑透传（判定不住内核；见 `remote.ts`）
   container.provide(KernelServices.Remote, new RemoteServiceImpl(opts.platform), 'kernel');
+  // 批操作 journal（2026-10-16 undo 批，additive）：操作级 undo/批回滚的唯一真源。
+  // 宿主与插件都经服务键 `kernel.ops` 取用（可选能力，缺席方降级自有行为）。
+  const ops = new OpsJournalImpl({ bridge: opts.platform, io, log: kernelLog });
+  container.provide(KernelServices.Ops, ops, 'kernel');
 
   const runtime = new PluginRuntime({
     container,
@@ -143,8 +148,9 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
   });
 
   // 作者工作区：初始化失败（无平台数据目录）不连累内核启动——服务降级为
-  // 「调用时抛带原因错误」，面板自解释呈现
-  const workspaces = new WorkspaceServiceImpl({ bridge: opts.platform, io, log: kernelLog });
+  // 「调用时抛带原因错误」，面板自解释呈现。journal 直注入（同包内核服务，
+  // 不过服务键——服务键是给插件的通道）
+  const workspaces = new WorkspaceServiceImpl({ bridge: opts.platform, io, log: kernelLog, journal: ops });
   try {
     await workspaces.init();
   } catch (err) {

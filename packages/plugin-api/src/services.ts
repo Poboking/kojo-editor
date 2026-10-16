@@ -31,6 +31,15 @@ export const KernelServices = {
    * 平台无此能力（Node 桥）时抛错，调用侧自解释呈现。
    */
   Remote: 'kernel.remote',
+  /**
+   * 批操作 journal（2026-10-16 undo 批，additive）：操作级 begin/record/commit/abort
+   * + 历史撤销（undo 也进历史，可重做）。契约 `plugin-api/journal.ts`。
+   *
+   * 独立服务键的理由与 `kernel.remote` 同源（能力面 = 服务键面）：记操作历史是
+   * 一种能力，消费方显式 require/tryInject，不藏在 `kernel.io` 里顺带发放。
+   * 旧消费方零改动：缺席时消费方降级为自有行为（可选依赖，不阻塞激活）。
+   */
+  Ops: 'kernel.ops',
 } as const;
 
 /**

@@ -69,6 +69,10 @@ import {
   SHOW_FILE_HISTORY_COMMAND_ID,
 } from './file-history';
 import { createFileHistoryOverlay } from './FileHistoryOverlay';
+import { OPS_HISTORY_OVERLAY_ID, SHOW_OPS_HISTORY_COMMAND_ID } from './ops-history';
+import { createOpsHistoryOverlay } from './OpsHistoryOverlay';
+import type { OpJournal } from '@kojo/plugin-api';
+import { KernelServices } from '@kojo/plugin-api';
 import {
   CALL_HIERARCHY_COMMAND_ID,
   CALL_HIERARCHY_OVERLAY_ID,
@@ -397,11 +401,40 @@ export function App(): ReactElement {
         kernel.bus.emit('ui.overlay.open', { id: CALL_HIERARCHY_OVERLAY_ID, source: 'host:call-hierarchy' });
       },
     });
+    // 操作历史（2026-10-16 undo 批）：磁盘侧批操作的撤销面。服务键 additive
+    // （kernel.ops 缺席 = 不注册，命令面板里也不出现——降级零痕迹）。
+    const opsService = kernel.services.tryGet<OpJournal>(KernelServices.Ops);
+    const unRegOps = opsService
+      ? kernel.slots.register('ui.overlay', {
+          id: OPS_HISTORY_OVERLAY_ID,
+          order: 43,
+          size: 'wide',
+          component: createOpsHistoryOverlay({
+            ops: opsService,
+            close: () =>
+              kernel.bus.emit('ui.overlay.close', { id: OPS_HISTORY_OVERLAY_ID, source: 'host:ops-history' }),
+          }),
+        })
+      : undefined;
+    const unRegOpsCommand = opsService
+      ? kernel.slots.register('editor.command', {
+          id: SHOW_OPS_HISTORY_COMMAND_ID,
+          title: '操作历史（脚手架/保存/注入的批回滚）',
+          run: () => {
+            kernel.bus.emit('ui.overlay.open', {
+              id: OPS_HISTORY_OVERLAY_ID,
+              source: 'host:ops-history',
+            });
+          },
+        })
+      : undefined;
     return () => {
       unBind();
       unReg();
       unRegHistory();
       unRegHistoryCommand();
+      unRegOps?.();
+      unRegOpsCommand?.();
       unRegCallHierarchy();
       unRegCallHierarchyCommand();
     };

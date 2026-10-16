@@ -5553,3 +5553,44 @@ button.primary .hint {
 button.resume-session {
   width: 100%;
 }
+
+/* ===== 操作历史（b/undo/1016-batch-undo 独占追加区块：oh-*；同族观感照 fh-*） ===== */
+.oh-host {
+  width: min(860px, 92vw);
+}
+.oh-path {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+/* 列表直接复用 .fh-table 的表格骨架，这里只补操作历史自己的差异 */
+.oh-table td:nth-child(2) {
+  font-weight: 500;
+}
+.oh-detail > td {
+  /* 展开行的文件清单嵌在表格里：整体缩进 + 更弱的分隔，视觉上隶属上一行 */
+  padding-top: 0;
+  border-bottom: 1px solid var(--border, #3a4252);
+  background: color-mix(in srgb, var(--panel-bg, #232834) 40%, transparent);
+}
+.oh-files {
+  margin: 4px 0 6px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.oh-kind-mod,
+.oh-kind-new {
+  display: inline-block;
+  min-width: 30px;
+  font-size: 11px;
+  text-align: center;
+  border-radius: 3px;
+  margin-right: 4px;
+}
+.oh-kind-mod {
+  color: var(--amber, #e8b86a);
+}
+.oh-kind-new {
+  color: var(--green, #7ec699);
+}

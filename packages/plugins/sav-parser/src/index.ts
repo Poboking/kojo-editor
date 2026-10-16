@@ -14,7 +14,7 @@
  * `project.closed` 清空。深解析由消费者按需调用 `parse(path)`。
  */
 
-import type { FileIO, Plugin, ProjectService } from '@kojo/plugin-api';
+import type { FileIO, OpJournal, Plugin, ProjectService } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { SnapshotSourceEngine } from './engine';
 
@@ -27,6 +27,8 @@ export function createSavParserPlugin(): Plugin {
     activate(ctx) {
       const io = ctx.inject<FileIO>(KernelServices.IO);
       const project = ctx.inject<ProjectService>(KernelServices.Project);
+      // 批操作 journal（2026-10-16 undo 批，additive 可选）：缺席 = 注入行为退回原样
+      const journal = ctx.tryInject<OpJournal>(KernelServices.Ops);
 
       const engine = new SnapshotSourceEngine({
         log: ctx.log,
@@ -36,6 +38,7 @@ export function createSavParserPlugin(): Plugin {
         stat: (p) => io.stat(p),
         writeBytes: (p, d) => io.writeBytes(p, d),
         backup: (p) => io.backup(p),
+        journal: journal ?? undefined,
       });
 
       // 读写职责分离：只读消费者依赖 snapshot.source；注入面板依赖 snapshot.writer

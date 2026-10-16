@@ -117,6 +117,8 @@ function activatePlugin(
       throw new Error(`unexpected inject: ${key}`);
     },
     provide: (key: string, value: unknown) => services.set(key, value),
+    // 可选依赖通道（kernel.ops journal，2026-10-16 undo 批）：替身缺席它 → 注入行为退回原样
+    tryInject: (): undefined => undefined,
     onDispose: (fn: () => void) => disposers.push(fn),
   } as unknown as PluginContext;
   createSavParserPlugin().activate(ctx);

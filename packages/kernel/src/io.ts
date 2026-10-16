@@ -15,6 +15,7 @@ import type {
 import { WriteNotAllowedError } from '@kojo/plugin-api';
 import { applyEol, decodeWithProbe, detectEol, normalizeEol, probeEncoding } from './encoding';
 import { basename, isPathUnder, join, pathKey } from '@kojo/plugin-api';
+import { TrashManager } from './trash';
 
 /**
  * 文件 IO 服务实现。
@@ -62,7 +63,8 @@ interface TextCacheEntry {
   file: TextFile;
 }
 
-function fnv1a(text: string): string {
+/** FNV-1a 32 位哈希（备份桶 / 回收站条目 id 的身份尺；输入先经 pathKey 折叠写法） */
+export function fnv1a(text: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
@@ -71,7 +73,8 @@ function fnv1a(text: string): string {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-function timestamp(): string {
+/** 本地时刻文件名段（备份版本 / 回收站条目 / ops journal id 共用同一形态） */
+export function timestamp(): string {
   const d = new Date();
   const p = (n: number, w = 2) => String(n).padStart(w, '0');
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${p(d.getMilliseconds(), 3)}`;
@@ -116,6 +119,8 @@ export class FileIOServiceImpl implements FileIO {
   private appWritableRoots: string[] = [];
   private readonly encodingCache = new Map<string, FileEncoding>();
   private readonly eolCache = new Map<string, 'crlf' | 'lf'>();
+  /** 回收站（2026-10-16 undo 批）：removeDir/removeFile 的落点从"直接删"改为"移入" */
+  private readonly trash: TrashManager;
   /**
    * 会话级文本缓存（**只服务 `readTexts` 批量路径**；`readText` 单文件路径不接——
    * 打开文件永远新鲜读盘，编辑器语义）。
@@ -143,6 +148,7 @@ export class FileIOServiceImpl implements FileIO {
   ) {
     this.textCacheMaxFiles = cacheCaps.maxFiles ?? TEXT_CACHE_MAX_FILES;
     this.textCacheMaxChars = cacheCaps.maxChars ?? TEXT_CACHE_MAX_CHARS;
+    this.trash = new TrashManager(bridge, log);
   }
 
   /* ------------------------------ 读 ------------------------------ */
@@ -553,6 +559,8 @@ export class FileIOServiceImpl implements FileIO {
     const excess = entries.length - BACKUP_KEEP_PER_FILE;
     for (let i = 0; i < excess; i++) {
       try {
+        // 管理性裁剪直走桥（2026-10-16 undo 批）：备份桶裁剪进回收站会让回收站
+        // 自增殖（每 20 版裁一轮塞 1-2 条目），且被裁的版本永远没人"后悔"。
         await this.bridge.removeFile(entries[i]!.path);
       } catch (err) {
         this.log?.warn(`Failed to prune backup ${entries[i]!.path}: ${String(err)}`);
@@ -606,19 +614,35 @@ export class FileIOServiceImpl implements FileIO {
     this.invalidateTextCache(to);
   }
 
+  /**
+   * 递归删除目录（2026-10-16 undo 批：改为**移入回收站** `{appData}/trash/`，
+   * manifest 记原路径，`restore` 可整体还原；不存在时幂等成功——契约不变）。
+   * 同样先过 `assertWritable`——删是比写更狠的盘上动作，回收站不放宽闸。
+   * 平台第二道闸仍拦真删（trash 内部的搬运走的是内核自有管理域，与备份同先例）。
+   */
   async removeDir(path: string): Promise<void> {
     this.assertWritable(path);
-    await this.bridge.removeDir(path);
+    if (!(await this.bridge.exists(path))) return; // 幂等语义与旧 bridge.removeDir 一致
+    await this.trash.moveIntoTrash(path, 'dir');
   }
 
   /**
-   * 删除单个文件：与 `removeDir` 同闸（`assertWritable`），成功后失效会话文本缓存
-   * （口径与 writeBytes/copyFile 逐字相同：盘上没了，缓存不能还留着旧内容）。
-   * 不做幂等兜底：目标不存在时平台侧 NotFound 原样上抛（见契约 `FileIO.removeFile`）。
+   * 删除**单个文件**（2026-10-16 undo 批：同样改为**移入回收站**）。
+   *
+   * 闸的语义与 `removeDir` 同闸同罚：先过 `assertWritable`，平台侧另有第二道闸。
+   * 删除成功后内核会同步失效该 path 的会话文本缓存（口径与 `writeBytes` 逐字相同）。
+   *
+   * **幂等语义不变**：目标不存在时如实拒绝（trash 搬不动一个不存在的东西，
+   * rename 的 NotFound 原样上抛）——"删一个自以为存在的东西"应当听见响。
+   *
+   * 例外（管理性删除绕回收站）：内核内部对自身域的裁剪（如备份桶 prune）直走
+   * 桥原语——管理性删除进回收站会让回收站自增殖，是错位不是安全。
+   *
+   * @throws WriteNotAllowedError 当路径不在可写白名单内
    */
   async removeFile(path: string): Promise<void> {
     this.assertWritable(path);
-    await this.bridge.removeFile(path);
+    await this.trash.moveIntoTrash(path, 'file');
     this.invalidateTextCache(path);
   }
 

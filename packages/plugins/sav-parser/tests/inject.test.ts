@@ -26,6 +26,8 @@ function makeHarness(opts: {
   writable?: (path: string) => boolean;
   /** 'zero' = 写入非法字节（回读 parse 抛）；'stale' = 写回旧档（回读值不匹配 → 验证失败路径） */
   writeMode?: 'zero' | 'stale';
+  /** 2026-10-16 undo 批：注入记录型 journal，观测编排顺序（begin/record/commit/abort） */
+  withJournal?: boolean;
 }) {
   const files = opts.files;
   const backups: string[] = [];
@@ -75,7 +77,31 @@ function makeHarness(opts: {
       return target;
     },
   });
-  return { engine, backups, written, files };
+  const journalCalls: string[] = [];
+  if (opts.withJournal) {
+    engineWithJournal(engine, journalCalls);
+  }
+  return { engine, backups, written, files, journalCalls };
+}
+
+/** 记录型 journal 替身：只观测编排顺序，不做真快照（内容回滚由 kernel 单测证） */
+function engineWithJournal(engine: SnapshotSourceEngine, calls: string[]): void {
+  const fake = {
+    begin: async () => {
+      calls.push('begin');
+      return 'op-20261016-000000-000-abc123';
+    },
+    record: async () => {
+      calls.push('record');
+    },
+    commit: async () => {
+      calls.push('commit');
+    },
+    abort: async () => {
+      calls.push('abort');
+    },
+  };
+  (engine as unknown as { deps: { journal?: typeof fake } }).deps.journal = fake;
 }
 
 /* ---------------- 容器组装 ---------------- */
@@ -256,6 +282,35 @@ describe('SnapshotSourceEngine.inject', () => {
       h.engine.inject('/g/sav/save00.sav', { chars: new Map([[0, new Map([['NO', 5]])]]) }),
     ).rejects.toThrow(/回读验证失败.*备份/);
     expect(h.backups).toHaveLength(1);
+  });
+
+  it('journal 在场（2026-10-16 undo 批）：成功路径 begin→record→…→commit，record 先于写盘', async () => {
+    const data = makeArchiveFile(spec());
+    const h = makeHarness({ files: { '/g/sav/save00.sav': data }, withJournal: true });
+    await h.engine.inject('/g/sav/save00.sav', { chars: new Map([[0, new Map([['NO', 5]])]]) });
+    expect(h.journalCalls).toEqual(['begin', 'record', 'commit']);
+    expect(h.backups).toHaveLength(1);
+  });
+
+  it('journal 在场：回读验证失败 → abort（回滚编排），原始错误仍上抛', async () => {
+    const data = makeArchiveFile(spec());
+    const h = makeHarness({ files: { '/g/sav/save00.sav': data }, writeMode: 'stale', withJournal: true });
+    await expect(
+      h.engine.inject('/g/sav/save00.sav', { chars: new Map([[0, new Map([['NO', 5]])]]) }),
+    ).rejects.toThrow(/回读验证失败/);
+    expect(h.journalCalls).toEqual(['begin', 'record', 'abort']);
+    expect(h.journalCalls).not.toContain('commit');
+  });
+
+  it('journal 在场：Int64 守卫拒绝 → abort 清理空 op，备份与写盘都未发生', async () => {
+    const data = makeArchiveFile(spec());
+    const h = makeHarness({ files: { '/g/sav/save00.sav': data }, withJournal: true });
+    await expect(
+      h.engine.inject('/g/sav/save00.sav', { chars: new Map([[0, new Map([['NO', 2 ** 60]])]]) }),
+    ).rejects.toThrow(/安全整数/);
+    expect(h.journalCalls).toEqual(['begin', 'abort']);
+    expect(h.backups).toHaveLength(0);
+    expect(h.written).toHaveLength(0);
   });
 
   it('全局档（global）：vars 覆盖集作用于全局变量区', async () => {

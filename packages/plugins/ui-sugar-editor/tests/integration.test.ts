@@ -226,6 +226,8 @@ function bootSugar(k: ReturnType<typeof makeKernel>): SugarTranspileService {
         if (v === undefined) throw new Error(`未注册的服务：${key}`);
         return v as never;
       },
+    // 可选依赖通道（kernel.ops journal）：测试替身一律缺席 → 插件走自有快照兜底路径
+    tryInject: (): undefined => undefined,
     slots: {
       register: (slot: string, contribution: unknown) => {
         if (slot === 'ui.panel') k.panels.push(contribution as UIPanelContribution);

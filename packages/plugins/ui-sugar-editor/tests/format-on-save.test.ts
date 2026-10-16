@@ -41,6 +41,7 @@ function harness(): Harness {
   const sugar = createSugarTranspileService({ faceTable: createEratwFaceTable() });
   const writes: Array<{ path: string; text: string }> = [];
   const compiles: Array<{ source: string; targetPath: string }> = [];
+  const files = new Map<string, string>();
   const deps: SugarSaveDeps = {
     sugar: {
       planSave: (request) => sugar.planSave(request),
@@ -52,6 +53,16 @@ function harness(): Harness {
     io: {
       writeText: async (path, text) => {
         writes.push({ path, text });
+        files.set(path, text);
+      },
+      readText: async (path) => {
+        const text = files.get(path);
+        if (text === undefined) throw new Error(`not found: ${path}`);
+        return { path, text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: 1 };
+      },
+      exists: async (path) => files.has(path),
+      removeFile: async (path) => {
+        files.delete(path);
       },
     },
   };

@@ -56,6 +56,9 @@ interface Recorder {
   readonly deps: SugarSaveDeps;
   readonly writes: Array<{ path: string; text: string }>;
   readonly compiles: Array<{ source: string; targetPath: string }>;
+  readonly removed: string[];
+  /** 内存文件表（snapshotBefore/restoreBefore 的读删面由此驱动） */
+  readonly files: Map<string, string>;
 }
 
 /** 记录型 fake（精确断言"是否落盘/落盘几次/目标是谁"） */
@@ -66,6 +69,8 @@ function recorder(opts: {
 }): Recorder {
   const writes: Array<{ path: string; text: string }> = [];
   const compiles: Array<{ source: string; targetPath: string }> = [];
+  const removed: string[] = [];
+  const files = new Map<string, string>();
   const deps: SugarSaveDeps = {
     sugar: {
       planSave: () => opts.plan,
@@ -84,10 +89,21 @@ function recorder(opts: {
       writeText: async (path, text) => {
         writes.push({ path, text });
         if (opts.writeText) return opts.writeText(path, text);
+        files.set(path, text);
+      },
+      readText: async (path) => {
+        const text = files.get(path);
+        if (text === undefined) throw new Error(`not found: ${path}`);
+        return { path, text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: 1 };
+      },
+      exists: async (path) => files.has(path),
+      removeFile: async (path) => {
+        removed.push(path);
+        files.delete(path);
       },
     },
   };
-  return { deps, writes, compiles };
+  return { deps, writes, compiles, removed, files };
 }
 
 function request(over: Partial<EditorSaveRequest> = {}): EditorSaveRequest {
@@ -188,20 +204,39 @@ describe('保存编排 / 失败一律转 error（不抛、不静默）', () => {
     expect(r.compiles).toEqual([]);
   });
 
-  it('编译落盘失败 → error，消息明确「源已保存」', async () => {
+  it('编译落盘失败 → error，源回滚到保存前（半批态治理，2026-10-16 undo 批）', async () => {
     const r = recorder({
       plan: planOf(),
       compile: async () => {
         throw new Error('回读验证不一致');
       },
     });
+    // 源是既有文件（保存前有旧内容）：产物失败 → 源必须回到旧内容
+    r.files.set(PATH_KOJO, '旧内容');
     const out = await performSugarSave(r.deps, request());
 
     expect(out.status).toBe('error');
     if (out.status !== 'error') return;
-    expect(out.message).toContain('源已保存');
+    expect(out.message).toContain('已回滚到保存前');
     expect(out.message).toContain('回读验证不一致');
-    // 源确已落盘（失败发生在产物阶段）
-    expect(r.writes).toHaveLength(1);
+    // 磁盘回到保存前：源是旧内容、产物未落
+    expect(r.files.get(PATH_KOJO)).toBe('旧内容');
+    expect(r.files.has(PATH_ERB)).toBe(false);
+  });
+
+  it('编译落盘失败且源是本次新建 → 源被删除（零残留）', async () => {
+    const r = recorder({
+      plan: planOf(),
+      compile: async () => {
+        throw new Error('磁盘满');
+      },
+    });
+    const out = await performSugarSave(r.deps, request());
+
+    expect(out.status).toBe('error');
+    if (out.status !== 'error') return;
+    expect(out.message).toContain('已回滚到保存前');
+    expect(r.files.has(PATH_KOJO)).toBe(false);
+    expect(r.removed).toEqual([PATH_KOJO]);
   });
 });

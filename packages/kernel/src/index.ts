@@ -25,6 +25,9 @@ export {
   backupHashOf,
   parseBackupTakenAtMs,
 } from './io';
+// 回收站 + 批操作 journal（2026-10-16 undo 批）：实现类供测试/宿主注入替身
+export { TrashManager, TRASH_DIR_NAME, TRASH_ID_RE, TRASH_KEEP_DAYS, type TrashEntryView, type TrashManifest } from './trash';
+export { OpsJournalImpl, OP_ID_RE, type OpsJournalDeps } from './journal';
 export {
   FileWatcherServiceImpl,
   WATCH_DEBOUNCE_MS,

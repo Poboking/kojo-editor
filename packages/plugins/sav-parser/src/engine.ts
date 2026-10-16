@@ -14,6 +14,7 @@ import type {
   FileStat,
   GameProject,
   Logger,
+  OpJournal,
   SnapshotArchive,
   SnapshotArchiveEntry,
   SnapshotInjectionResult,
@@ -21,6 +22,7 @@ import type {
   SnapshotSourceService,
   SnapshotWriteService,
 } from '@kojo/plugin-api';
+import { basename } from '@kojo/plugin-api';
 import { assembleArchiveFile, assertPayloadNonEmpty } from './container';
 import { parseArchive } from './parse';
 import { serializePayload } from './serialize';
@@ -47,6 +49,12 @@ export interface SnapshotEngineDeps {
   writeBytes(path: string, data: Uint8Array): Promise<void>;
   /** 写前备份（内核 io；复制到 {appData}/backup/，返回备份路径；原文件不存在时 null） */
   backup(path: string): Promise<string | null>;
+  /**
+   * 批操作 journal（2026-10-16 undo 批，additive 可选）：注入链路进操作历史，
+   * 失败（含回读验证失败）时 abort 回滚原档——比"指个备份路径让用户自己救"强一档。
+   * 旧内核无 `kernel.ops` 时缺席，行为退回原样。
+   */
+  journal?: Pick<OpJournal, 'begin' | 'record' | 'commit' | 'abort'>;
 }
 
 async function mapLimit<T, R>(
@@ -198,39 +206,61 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
    */
   async inject(path: string, overrides: ArchiveOverrides): Promise<SnapshotInjectionResult> {
     const t0 = Date.now();
-    const original = await this.deps.readBytes(path);
-    const archive = await parseArchive(original, path, { keepArrayCells: true, keepRaw: true });
-    const payload = serializePayload(archive, { overrides });
-    assertPayloadNonEmpty(payload);
-    const full = await assembleArchiveFile(payload, archive.format);
-
-    const backupPath = await this.deps.backup(path);
+    // 操作 journal（2026-10-16 undo 批，additive）：写链路整体进一次批操作；
+    // 任何失败（含回读验证失败）abort 回滚原档，成功 commit 供操作历史整批撤销。
+    const journal = this.deps.journal ?? null;
+    const opId = journal ? await journal.begin('snapshot-inject', `注入存档变量：${basename(path)}`) : null;
     try {
-      await this.deps.writeBytes(path, full);
-    } catch (err) {
-      this.deps.log.warn(
-        `Snapshot inject: write failed for ${path}${backupPath ? ` (backup at ${backupPath})` : ''}: ${String(err)}`,
+      const original = await this.deps.readBytes(path);
+      const archive = await parseArchive(original, path, { keepArrayCells: true, keepRaw: true });
+      const payload = serializePayload(archive, { overrides });
+      assertPayloadNonEmpty(payload);
+      const full = await assembleArchiveFile(payload, archive.format);
+
+      // record 先于一切盘上动作（此刻的字节快照才是"操作前"）；
+      // 守卫（Int64/协议）抛错走 abort——空 op 回滚无副作用，语义干净
+      if (opId !== null) await journal!.record(opId, path);
+
+      const backupPath = await this.deps.backup(path);
+      try {
+        await this.deps.writeBytes(path, full);
+      } catch (err) {
+        this.deps.log.warn(
+          `Snapshot inject: write failed for ${path}${backupPath ? ` (backup at ${backupPath})` : ''}: ${String(err)}`,
+        );
+        throw err;
+      }
+
+      // 回读验证（强制：注入的价值建立在"值确实落盘"上）
+      const reread = await this.deps.readBytes(path);
+      const reparsed = await parseArchive(reread, path, { keepArrayCells: true });
+      const report = verifyOverrides(reparsed, overrides);
+      if (report.mismatches.length > 0) {
+        throw new ArchiveParseError(
+          `注入回读验证失败（${report.mismatches.length} 项不匹配）` +
+            (backupPath ? `——原档已备份于 ${backupPath}` : '（原档无备份）') +
+            `：${report.mismatches.join('；')}`,
+          0,
+        );
+      }
+
+      if (opId !== null) await journal!.commit(opId);
+      this.deps.log.info(
+        `Snapshot inject: ${path} — ${report.checked} override(s) verified, ${full.length}B written` +
+          `${backupPath ? `, backup ${backupPath}` : ''} (${Date.now() - t0}ms)`,
       );
+      return { path, backupPath, byteSize: full.length, verifiedCount: report.checked };
+    } catch (err) {
+      if (opId !== null) {
+        // abort 回滚原档（回读验证失败时已写内容恢复原样）；回滚失败不出声——
+        // 原始错误才是用户要看见的，backupPath 那条兜底信息仍在错误文本里
+        try {
+          await journal!.abort(opId);
+        } catch (rollbackErr) {
+          this.deps.log.warn(`Snapshot inject: journal abort failed: ${String(rollbackErr)}`);
+        }
+      }
       throw err;
     }
-
-    // 回读验证（强制：注入的价值建立在"值确实落盘"上）
-    const reread = await this.deps.readBytes(path);
-    const reparsed = await parseArchive(reread, path, { keepArrayCells: true });
-    const report = verifyOverrides(reparsed, overrides);
-    if (report.mismatches.length > 0) {
-      throw new ArchiveParseError(
-        `注入回读验证失败（${report.mismatches.length} 项不匹配）` +
-          (backupPath ? `——原档已备份于 ${backupPath}` : '（原档无备份）') +
-          `：${report.mismatches.join('；')}`,
-        0,
-      );
-    }
-
-    this.deps.log.info(
-      `Snapshot inject: ${path} — ${report.checked} override(s) verified, ${full.length}B written` +
-        `${backupPath ? `, backup ${backupPath}` : ''} (${Date.now() - t0}ms)`,
-    );
-    return { path, backupPath, byteSize: full.length, verifiedCount: report.checked };
   }
 }

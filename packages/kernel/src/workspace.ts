@@ -2,6 +2,7 @@ import type {
   DirEntry,
   FileIO,
   Logger,
+  OpJournal,
   PlatformBridge,
   TextFile,
   WorkspaceArtifact,
@@ -36,6 +37,8 @@ export interface WorkspaceServiceDeps {
   bridge: PlatformBridge;
   io: FileIO;
   log: Logger;
+  /** 批操作 journal（2026-10-16 undo 批，additive）：createArtifact 的半成品治理 + 操作历史 */
+  journal?: OpJournal | null;
 }
 
 function newId(prefix: string): string {
@@ -372,22 +375,43 @@ export class WorkspaceServiceImpl implements WorkspaceService {
       }
       return this.resolveIn(projectId, join(input.dirName, rel));
     });
-    for (let i = 0; i < entries.length; i++) {
-      await this.deps.io.writeText(targets[i]!, entries[i]![1]);
+    // 批操作 journal（2026-10-16 undo 批）：逐文件 record→write，任一失败 abort
+    // 回滚已写文件（旧形态中途失败留半成品目录，重试撞 already exists——本批治理）；
+    // 成功 commit 进操作历史（操作历史 overlay 可整批撤销，manifest 登记一并回退）。
+    const journal = this.deps.journal ?? null;
+    const opId = journal ? await journal.begin('scaffold', `创建制品：${name}`) : null;
+    try {
+      for (let i = 0; i < entries.length; i++) {
+        if (opId !== null) await journal!.record(opId, targets[i]!);
+        await this.deps.io.writeText(targets[i]!, entries[i]![1]);
+      }
+      const artifact: WorkspaceArtifact = {
+        id: newId('a'),
+        name,
+        dirName: input.dirName,
+        meta: input.meta ?? {},
+        createdAt: Date.now(),
+      };
+      project.artifacts.push(artifact);
+      project.updatedAt = Date.now();
+      // manifest 一并进 journal：撤销时登记同步回退（否则文件删了、面板还挂着空制品）
+      if (opId !== null) await journal!.record(opId, this.manifestPath(projectId));
+      await this.writeManifest(project);
+      if (opId !== null) await journal!.commit(opId);
+      this.deps.log.info(`Artifact created: ${name} in project ${projectId}`);
+      return artifact;
+    } catch (err) {
+      if (opId !== null) {
+        try {
+          await journal!.abort(opId); // 失败即回滚：已写文件恢复/删除，零残留
+        } catch (rollbackErr) {
+          this.deps.log.warn(
+            `createArtifact: 半成品回滚失败（保留现场）：${String(rollbackErr)}`,
+          );
+        }
+      }
+      throw err;
     }
-
-    const artifact: WorkspaceArtifact = {
-      id: newId('a'),
-      name,
-      dirName: input.dirName,
-      meta: input.meta ?? {},
-      createdAt: Date.now(),
-    };
-    project.artifacts.push(artifact);
-    project.updatedAt = Date.now();
-    await this.writeManifest(project);
-    this.deps.log.info(`Artifact created: ${name} in project ${projectId}`);
-    return artifact;
   }
 
   async importDirectory(projectId: string, input: WorkspaceImportInput): Promise<WorkspaceArtifact> {

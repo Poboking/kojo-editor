@@ -26,6 +26,7 @@ import { createElement, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
   FileIO,
+  OpJournal,
   Plugin,
   ProjectService,
   SlotRegistry,
@@ -70,6 +71,9 @@ export function createUiSugarEditorPlugin(): Plugin {
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
       const workspaces = ctx.inject<WorkspaceService>(KernelServices.Workspaces);
+      // 批操作 journal（2026-10-16 undo 批，additive 可选）：`.kojo` 保存的两文件批
+      // 进操作历史；缺席 = save-handler 自有快照兜底，行为仍是"半批回滚"
+      const journal = ctx.tryInject<OpJournal>(KernelServices.Ops);
 
       /* -------------------- 贡献 1：编辑器波浪线（纯函数） -------------------- */
 
@@ -113,7 +117,7 @@ export function createUiSugarEditorPlugin(): Plugin {
         title: '.kojo 保存（转译 + 编译落盘）',
         order: 10,
         matches: (path) => isKojoFile(path),
-        save: (request) => performSugarSave({ sugar, io }, request),
+        save: (request) => performSugarSave({ sugar, io, journal: journal ?? undefined }, request),
       });
 
       /* -------------------- 贡献 3：糖判定面板 -------------------- */
