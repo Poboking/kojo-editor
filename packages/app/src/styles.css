@@ -60,18 +60,20 @@
   --shadow-focus:
     0 0 0 1px var(--focus-ring),
     0 0 0 4px var(--focus-glow);
-  /* 磨砂玻璃 token（glass，2026-10-17 教程打磨批）：可复用的毛玻璃面。
+  /* 磨砂玻璃 token（glass）：可复用的毛玻璃面。
      `--glass-alpha` = 填充不透明度，真源是 `glass-pref.ts`（设置页「外观 · 毛玻璃透明度」），
      挂载时写到 `<html>`；任意面都能 `style="--glass-alpha:.5"` 局部覆盖，旋钮一动全场面跟着变。
-     `--glass-tint` / `--glass-tint-raise` 用**空格分隔的 RGB 三元组**，好让 `rgb(… / alpha)` 直接
-     拼透明度（值分别 = `--bg-2` / `--bg-3`，改主题色时两处一并改）。模糊与饱和是设计常量、
-     不暴露给用户；`--glass-edge` 是顶边高光，磨砂玻璃的"厚度"就靠这一条亮边立起来。 */
-  --glass-blur: 20px;
-  --glass-saturate: 1.5;
-  --glass-alpha: 0.85; /* 缺省 15% 通透（= glass-pref 的 GLASS_TRANSPARENCY_DEFAULT） */
-  --glass-tint: 36 41 47;
-  --glass-tint-raise: 43 49 56;
-  --glass-edge: rgba(255, 255, 255, 0.09);
+     **合色标定**（2026-10-17 跨切面统一批）：tint 不是直接抄 `--bg-2`，而是"预合成"值——让 alpha=.85
+     时压在暗化遮罩上的**合成结果**正好等于编辑器自己的 chrome（tint→--bg-2、tint-raise→--bg-3）。
+     于是"拧透明度"只改变背后泄漏多少、**不改色相**，且 `data-glass='solid'` 实心档落 --bg-2 与磨砂档
+     合成色一致（开关只切质感、不跳色）。换主题色时 tint/tint-raise 与 --bg-2/--bg-3 一并重算。
+     blur/saturate 是设计常量、不暴露给用户；edge 是顶边高光（磨砂玻璃的"厚度"）。 */
+  --glass-blur: 16px; /* 20→16：遮罩已在同层先做 0.8× 模糊，串联后 20px 边际收益为 0，只多耗 GPU */
+  --glass-saturate: 1.25; /* 1.5→1.25：底近无彩，1.5 把泄漏边缘推成可察觉彩噪；且与遮罩饱和相乘 */
+  --glass-alpha: 0.85; /* 缺省 15% 通透（= glass-pref 的 GLASS_TRANSPARENCY_DEFAULT，两处同步） */
+  --glass-tint: 40 45 51; /* 预合成：alpha .85 落 --bg-2 */
+  --glass-tint-raise: 48 54 62; /* 预合成：alpha .85 落 --bg-3（玻璃面上的抬升件用） */
+  --glass-edge: rgba(255, 255, 255, 0.07); /* 0.09→0.07：1px 绕一圈，0.09 在面上读成"贴纸白边" */
   /* 语义表面分层（VSCode 精修批 2026-10-17）：`--bg` / `--bg-2` / `--bg-3` 是这三档的**实现值**，
      全站数百处规则与实机度量过的对比度都钉在上面，故一律不改；这里只给"新写的规则"一个
      **按角色取面**的入口（值指向既有档），换主题色时一处联动。`sunken` 比 `--bg` 再低半档，
@@ -3497,9 +3499,9 @@ button.erb-mode-hint.unlocked:hover {
   z-index: var(--z-modal);
   /* 磨砂遮罩：把背后的应用虚化 + 压暗，视线自然收到浮层上——比一层纯黑更"高级"、
      也少了那种生硬切断感。叠一层极淡的顶部径向暗角给纵深。旋钮走到 0%（data-glass=solid）
-     时撤掉虚化回到纯压暗（见下方 off-switch）。 */
+     时撤掉虚化回到纯压暗（见下方回落二）。 */
   background:
-    radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.56)),
+    radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.55)),
     rgba(8, 10, 13, 0.4);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(1.15);
   backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(1.15);
@@ -3511,10 +3513,14 @@ button.erb-mode-hint.unlocked:hover {
 /* 可复用毛玻璃面（glass）：磨砂背景 + 半透明着色 + 顶边高光。任意浮层 / 贴顶栏挂上 `.glass`
    即可，透明度随 `--glass-alpha`（设置页旋钮）联动；换底色就地覆盖 `--glass-tint`。
    圆角 / 阴影 / 尺寸留给消费方自己给——本类只负责"面"这一层，好组合。
-   `.overlay-host` 与本类共用同一条规则：它是这套磨砂最主要的消费方。 */
+   `.overlay-host` 与本类共用同一条规则：它是这套磨砂最主要的消费方。
+   顶上一档 `--glass-tint-raise` 在 96px 内淡出：像从上方被打光，比整面平色更有厚度；
+   两层都用同一个 `--glass-alpha`，所以旋钮走的仍然是整面透明度，不会只淡了高光。 */
 .glass,
 .overlay-host {
-  background: rgb(var(--glass-tint) / var(--glass-alpha));
+  background:
+    linear-gradient(180deg, rgb(var(--glass-tint-raise) / var(--glass-alpha)) 0, transparent 96px),
+    rgb(var(--glass-tint) / var(--glass-alpha));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-edge);
@@ -3533,11 +3539,21 @@ button.erb-mode-hint.unlocked:hover {
   width: min(920px, 94vw);
 }
 /* 教程宿主再放宽（2026-10-17 文档式重排）：左目录栏 + 右正文两列要吃宽度，920 放不下
-   「目录 + 680 正文 + 样例/表突破」。用 :has 精确命中教程宿主，不动共享的 .overlay-host-wide
+   「目录 + 正文列 + 样例/表突破」。用 :has 精确命中教程宿主，不动共享的 .overlay-host-wide
    （部署 diff 等宽版浮层照旧 920；它自己另有 .kd-host 覆盖）。:has 不可用时退回 920，只是
-   正文列窄些、不破版。 */
+   正文列窄些、不破版。
+   overflow:hidden 是这套两列布局的前提：滚动只发生在栏内部（目录栏、正文列、代码块、表），
+   宿主自己不再滚——否则正文高度算差 1px 就会长出第二条滚动条，两条滚轮互相抢。
+   max-height 从 80vh 抬到 88vh：长文阅读吃的就是纵向视野。 */
 .overlay-host-wide:has(.wizard.tutorial) {
   width: min(1160px, 94vw);
+  max-height: 88vh;
+  overflow: hidden;
+}
+/* 宿主抬到 88vh，内层那条算式必须一起抬：只放宽宿主不动内层，多出来的 8vh 会空在正文下方
+   （宿主按内容收缩）。选择器与上面同源，:has 不可用时两条一起退回 80vh 那一档。 */
+.overlay-host:has(.wizard.tutorial) .wizard.tutorial {
+  max-height: calc(88vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
 }
 /* 回落一：老内核不支持 backdrop-filter ⇒ 实心，绝不破版（磨砂只是加分项，不是前提） */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
@@ -3553,7 +3569,8 @@ button.erb-mode-hint.unlocked:hover {
   }
 }
 /* 回落二：旋钮 0% = 实心档（glass-pref 落 data-glass='solid'）⇒ 撤掉磨砂与半透明，
-   回到改动前的不透明面。这既是"不喜欢毛玻璃"的干净出口，也省掉整屏 backdrop-filter 的开销。 */
+   回到改动前的不透明面。这既是"不喜欢毛玻璃"的干净出口，也省掉整屏 backdrop-filter 的开销。
+   走 --bg-2 而不是新的色调：实心档与磨砂档是"质感"之差，不该同时是"颜色"之差。 */
 :root[data-glass='solid'] .glass,
 :root[data-glass='solid'] .overlay-host {
   background: var(--bg-2);
@@ -3861,9 +3878,12 @@ button.primary .hint {
 /* --------------------- 内置教程浮层（E6·E9：宽版居中 + 文档式排版） --------------------- */
 
 /* 长文阅读：标题与「关闭」固定，只有正文滚——整宿主滚动会把标题和按钮卷出视野，
-   而教程恰恰是"读到一半还得能关"。max-height 与 .overlay-host 的 80vh 对齐
-   （扣掉宿主 padding、面板 padding 与边框，让内层先于宿主到限，避免双滚动条）。 */
+   而教程恰恰是"读到一半还得能关"。max-height 与宿主 .overlay-host 的 80vh 对齐
+   （扣掉宿主 padding、面板 padding 与边框，让内层先于宿主到限，避免双滚动条）；
+   教程宿主经 :has 放宽到 88vh 时，末尾那条 :has 规则把这份算式一起换掉。
+   --sb：本浮层内所有滚动条收窄一档（全局 10px 在 8px 的窄栏里像根栏杆）。 */
 .wizard.tutorial {
+  --sb: 8px;
   display: flex;
   flex-direction: column;
   max-height: calc(80vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
@@ -3873,10 +3893,25 @@ button.primary .hint {
   flex: none;
 }
 .wizard.tutorial h3 {
+  position: relative;
+  padding-left: var(--space-3);
   font-size: var(--fs-5);
   font-weight: 600;
   letter-spacing: 0.01em;
+  text-wrap: balance;
   margin: 0 0 var(--space-2);
+}
+/* 标题左侧一枚 accent 短竖标：与「活动 tab / 侧栏活动条」同一套身份语言，
+   让浮层的层级靠标记撑，而不是把字号一路加到与全站失调。 */
+.wizard.tutorial h3::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.3em;
+  width: 3px;
+  height: 1em;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
 }
 .tutorial-lead {
   margin: 0;
@@ -3884,12 +3919,13 @@ button.primary .hint {
   /* 渐隐发丝线：右端淡出，比通栏实线更轻，读起来像杂志导语的分隔。
      先声明实色底、再叠 border-image——不支持的引擎自然回落到那条实线，不留白。 */
   border-bottom: 1px solid var(--border);
-  border-image: linear-gradient(90deg, var(--border), var(--border) 40%, transparent 88%) 1;
+  border-image: linear-gradient(90deg, var(--border), var(--border) 40%, transparent 92%) 1;
   color: var(--fg-dim);
   font-size: var(--fs-2);
-  line-height: 1.65;
+  line-height: 1.7;
   /* 导语限一个舒适行长：宽版浮层里通栏拉满，眼睛回扫找行首会累 */
-  max-width: 78ch;
+  max-width: 74ch;
+  text-wrap: pretty;
 }
 /* 两列主体（现代文档式）：左目录栏 + 右正文列，只有正文滚、目录栏自己另滚。目录常驻左侧、
    不随正文滚走——随时知道"读到哪了"、随时能跳，这正是文档站区别于长浮层的读法。 */
@@ -3901,15 +3937,20 @@ button.primary .hint {
   margin-top: var(--space-3);
 }
 /* 目录栏：竖排、独立滚动、右侧一条发丝线与正文分开。磨砂在这里不需要——目录是正文的兄弟列、
-   内容不从它底下滚过，实心底更稳、也省一层 backdrop-filter（磨砂留给遮罩与浮层卡片那两处）。 */
+   内容不从它底下滚过，实心底更稳、也省一层 backdrop-filter（磨砂留给遮罩与浮层卡片那两处）。
+   224px 是"⑱ + 一圈中文短标题"不折行的实测宽度；overscroll-behavior 让目录滚到尽头时
+   不把惯性传给正文列（长文里"翻目录翻到正文飞走"是最典型的烦躁来源）。 */
 .tutorial-toc {
-  flex: 0 0 208px;
+  flex: 0 0 224px;
   min-width: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   /* spy 把当前条目滚进视野时平滑；减弱动效下被全局那条压成瞬移 */
   scroll-behavior: smooth;
   padding: 0 var(--space-2) var(--space-2) 0;
   border-right: 1px solid var(--border);
+  /* 上端淡出：分界线从第一条目起画，不在"目录"标签上方就撞一条硬线 */
+  border-image: linear-gradient(180deg, transparent, var(--border) 6%, var(--border) 94%, transparent) 1;
 }
 .tutorial-toc-label {
   padding: 0 var(--space-2) var(--space-2);
@@ -3947,41 +3988,54 @@ button.primary .hint {
   background: var(--hover);
   border-left-color: var(--border);
 }
+/* 当前节除了竖条，字重也抬一档：文档站的目录靠"加粗"说"你在这是第几节"，
+   颜色只作为辅助——灰底上单靠 0.22 alpha 的淡底，扫一眼是分不出来的。 */
 .tutorial-toc-item[aria-current='true'] {
   color: var(--accent-text);
   background: var(--accent-dim);
   border-left-color: var(--accent);
+  font-weight: 500;
+}
+/* 键盘落点：条目贴栏边，全局那圈外描边会被栏宽与宿主裁掉，改走内侧偏移 */
+.tutorial-toc-item:focus-visible {
+  outline-offset: -1px;
 }
 .tutorial-toc-num {
   flex: none;
+  min-width: 1.2em;
   font-size: var(--fs-0);
-  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
 }
 .tutorial-toc-text {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-/* 正文列：滚动 + 容器查询上下文（样例/表用 cqw 突破 680 正文列，窄窗回落见下方 @container） */
+/* 正文列：滚动 + 容器查询上下文（样例/表用 cqw 突破正文列，窄窗回落见下方 @container） */
 .tutorial-body {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   /* 目录跳转的平滑滚动写在样式里（插件包不碰 DOM 属性）：减弱动效下面那条规则压成瞬移 */
   scroll-behavior: smooth;
   container-type: inline-size;
 }
-/* 正文限宽居中：宽版浮层里保持可读行长，读起来像一篇文档 */
+/* 正文限宽居中：42em 而不是死像素——行长跟着字号旋钮一起走（13px 正文 ≈ 546px ≈ 40 个汉字，
+   中文长文阅读的舒适量程），旋钮拧大一档，行长也同步变宽而不是把字挤爆 */
 .tutorial-doc {
-  max-width: 680px;
+  max-width: 42em;
   margin: 0 auto;
   padding-right: var(--space-1);
 }
-/* 目录栏与表横滚条走窄滚动条（全局 10px 太粗）；scrollbar-width 会让 Chromium 换回原生浅色条，别加 */
-.tutorial-toc::-webkit-scrollbar,
-.tutorial-table-scroll::-webkit-scrollbar {
-  height: 8px;
-  width: 8px;
+/* 浮层内滚动条统一收窄一档（目录栏 / 正文 / 代码块 / 表横滚都是 8px）；thumb 沿用全局那条
+   rgba 白，只改尺寸与内衬，保持全站一个样子。scrollbar-width 会让 Chromium 换回原生浅色条，别加。 */
+.wizard.tutorial ::-webkit-scrollbar {
+  width: var(--sb);
+  height: var(--sb);
+}
+.wizard.tutorial ::-webkit-scrollbar-thumb {
+  border-width: 1px;
 }
 /* 窄窗（宿主 ≈94vw；窗宽到 680 时两列挤不下）：目录栏塌回顶部横滚胶囊带、正文占满宽——
    与既有"窄窗样例回落上下堆叠"同一套降级思路，不破版。 */
@@ -3998,8 +4052,10 @@ button.primary .hint {
     overflow-y: hidden;
     scroll-behavior: auto;
     padding: 0 0 var(--space-2);
+    /* 塌成横带后分隔线改水平，之前那条 border-image 是竖向渐变、这里必须换掉 */
     border-right: none;
     border-bottom: 1px solid var(--border);
+    border-image: linear-gradient(90deg, transparent, var(--border) 6%, var(--border) 94%, transparent) 1;
     margin-bottom: var(--space-3);
   }
   .tutorial-toc-label {
@@ -4016,6 +4072,9 @@ button.primary .hint {
   .tutorial-toc-item:hover {
     border-color: transparent;
   }
+  .tutorial-toc-item[aria-current='true'] {
+    border-color: var(--accent);
+  }
   .tutorial-toc-text {
     overflow-wrap: normal;
   }
@@ -4028,11 +4087,16 @@ button.primary .hint {
   font-weight: 600;
   letter-spacing: 0.005em;
   line-height: 1.4;
+  /* 两三行的短标题宁可整体换行也不留一个孤字——标题尾挂一个字是文档最常见的难看 */
+  text-wrap: balance;
 }
 .tutorial-num {
   margin-right: 0.4em;
   color: var(--accent-text);
   font-weight: 600;
+  /* 圈码记号比标题小一档才像"编号"而不是"第一个字"；等宽数字让 ⑩ 与 ① 占位一致 */
+  font-size: 0.875em;
+  font-variant-numeric: tabular-nums;
 }
 /* 节间距拉到"一章一节"的呼吸感：十八节的长文，节与节要一眼分得开。两端渐隐的细线比通栏实线更轻。 */
 .tutorial-section + .tutorial-section {
@@ -4041,20 +4105,46 @@ button.primary .hint {
   border-top: 1px solid var(--border);
   border-image: linear-gradient(90deg, transparent, var(--border) 10%, var(--border) 90%, transparent) 1;
 }
-/* 正文：文档阅读的行高与段距（13px / 1.8，段间留白够断句） */
+/* 正文：文档阅读的行高与段距（13px / 1.85）。CJK 没有词间空隙，行高要靠得上 1.8 才不糊；
+   字距 +0.01em 让 13px 的汉字肩膀松开一点。pretty 折行避免行尾孤字，弱引擎直接忽略。 */
 .tutorial-body p {
   margin: 0 0 var(--space-3);
   font-size: var(--fs-2);
-  line-height: 1.8;
+  line-height: 1.85;
+  letter-spacing: 0.01em;
+  text-wrap: pretty;
+  hanging-punctuation: allow-end;
 }
 /* 粗体略收一档：正文里的强调不该跳成另一套字面（分色靠 <code> 芯片） */
 .wizard.tutorial strong {
   font-weight: 600;
 }
+/* 行内代码芯片：正文 / 表格 / 说明行同一套。全局那条 code 是给 UI 控件用的 12px 死值，
+   文档行里要跟着正文字号缩放，所以按 em 重给；边框 + --bg-3 底让芯片在磨砂面上也站得住。
+   块级代码是 pre.tutorial-code > code（祖先不在这个 :is 列表里），两套互不命中。 */
+.wizard.tutorial :is(p, td, th, .tutorial-caption) code {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0.06em 0.34em;
+  font-size: 0.9em;
+  color: var(--fg);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  /* keep-all：芯片是"一个记号"，CJK 之间不许断行——`角色：12` 被拆成"角 / 色：12"两截
+     （每截各带一圈边框）是文档里最难看的一种断法；放不下时由 anywhere 兜底。 */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+/* 说明行（样例行文 / 表注）：左侧一根短标 + 弱化字色，做成"注"的口径——
+   它是元信息，不该和正文抢同一种排法 */
 .tutorial-caption {
   margin: 0 0 var(--space-1);
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--border);
+  color: var(--fg-dim);
   font-size: var(--fs-1);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 /* 样例区突破 680px 正文列、按浮层实际宽度吃到 860 级：左右对照要放两份代码。
    cqw 不可用时整条失效、回落正文列内，不报错不破版。 */
@@ -4066,7 +4156,9 @@ button.primary .hint {
 }
 /* 样例代码块：围栏代码的观感——井底色（--bg，与向导预览同源）、细边、等宽字。
    长行软折行（pre-wrap）：对照块里 CJK 台词很长，横滚会把左右对照撕开；
-   overflow-wrap 只管整词放不下的那种折断，正常换行机会仍走空白与 CJK 字间 */
+   overflow-wrap 只管整词放不下的那种折断，正常换行机会仍走空白与 CJK 字间。
+   max-height 封顶 + 内部滚动：口上块动辄二十行，不设上限会把「编译为」的对照关系
+   拉出整整两屏；320px 大约 14 行，够读完一段、又始终在同屏见到对面那块。 */
 .tutorial-code {
   margin: 0;
   background: var(--bg);
@@ -4076,15 +4168,42 @@ button.primary .hint {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.03),
     0 1px 2px rgba(0, 0, 0, 0.18);
-  padding: var(--space-2) var(--space-3);
-  overflow-x: auto;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  max-height: 320px;
+  overflow: auto;
+  overscroll-behavior: contain;
   overflow-wrap: break-word;
   white-space: pre-wrap;
+  font-family: var(--font-mono);
   font-size: var(--fs-1);
   line-height: 1.6;
+  tab-size: 2;
+}
+/* 围栏的语言标签：块自己说"我是哪一侧"。贴住滚动区顶吸住，长块滚多远也知道在读什么。
+   负 margin 把标签推到 padding 边、贴住内圈边框，做成块的一条"标题行"而不是飘着的字。 */
+.tutorial-code::before {
+  content: 'kojo 口上';
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: block;
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-3)) var(--space-1);
+  padding: 2px var(--space-3);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+}
+.tutorial-pair > .tutorial-code:last-child::before {
+  content: '编译产物';
 }
 .tutorial-code code {
   background: none;
+  border: none;
   padding: 0;
   font-size: inherit;
 }
@@ -4135,7 +4254,10 @@ button.primary .hint {
   margin-inline: calc((100% - var(--table-w)) / 2);
 }
 .tutorial-table-scroll {
-  overflow-x: auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  /* 与代码块同一档封顶：语法全表一张能到七八十行，不封顶时"表头是谁、这行是哪一列"滚一眼就丢 */
+  max-height: 460px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg);
@@ -4145,9 +4267,11 @@ button.primary .hint {
 .tutorial-section:focus {
   outline: none;
 }
+/* separate 而不是 collapse：collapse 的边框不属于单元格，表头 sticky 滚起来边框会脱节留在原位 */
 .tutorial-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: var(--fs-1);
   line-height: 1.55;
 }
@@ -4159,12 +4283,22 @@ button.primary .hint {
   border-bottom: 1px solid var(--border);
 }
 .tutorial-table thead th {
+  /* 吸顶表头：横滚 + 竖滚都在同一个容器里，滚到第 50 行还得知道"写法 / 编译成 / 说明"分别是谁。
+     底色必须实（走 --bg-2），半透明会让滚过来的行透出字影。 */
+  position: sticky;
+  top: 0;
+  z-index: 1;
   color: var(--fg-dim);
   font-weight: 600;
   letter-spacing: 0.02em;
   white-space: nowrap;
-  /* 抬升一档的表头底：与表体分开，长表滚读时"这几列是什么"始终压得住 */
   background: var(--bg-2);
+}
+.tutorial-table thead th:first-child {
+  border-top-left-radius: var(--radius-md);
+}
+.tutorial-table thead th:last-child {
+  border-top-right-radius: var(--radius-md);
 }
 .tutorial-table tbody tr:last-child td {
   border-bottom: none;
