@@ -44,6 +44,7 @@
 | `packages/app/tsconfig.json` 的 types 只有 `vite/client` | 测试里显式 `import 'node:fs'` 可用；报 TS2307 时改测试写法，**别**往 app 配置塞 node 全局 |
 | vite build `prepare-out-dir` 偶发 EPERM（文件瞬时占用） | 手动 `rmSync(dist)` 后重试，不是代码问题 |
 | 语料 `sav\`（与 `C:\game\eratw-save\sav\` 六档逐字节同容）**全带只读属性** ⇒ 注入写盘必失败（原子写 rename 收尾，覆盖只读目标 = EPERM；Rust 未做去 R） | 注入测试先造可写副本：`cmd copy save03.sav save90.sav`（cmd copy **不**继承 R；node `fs.copyFileSync` **会**继承 ⇒ 补 `attrib -R` 兜底），只对副本注入 |
+| **WorkBuddy 沙箱工作树里 pnpm 默认 isolated 布局的 junction 创建静默失败**（2026-10-16 实测）：install rc=0"Done"，但根链接（`node_modules/vitest` 等）与 `.pnpm` 内 scoped 链接全缺、只剩空实体目录 ⇒ `node node_modules/vitest/vitest.mjs` MODULE_NOT_FOUND、`tsc` 报 TS2688 找不到 node 类型；`--force` 与整删重装都复现，%TEMP% 下 junction 却正常 | 改用 hoisted 布局（纯拷贝无链接）：`pnpm install --config.node-linker=hoisted`；**每条会触发依赖校验的 pnpm 命令都会用默认配置把布局打回 isolated**（`pnpm typecheck` 实测先重装再跑脚本）⇒ 跑门槛用直连形态绕开脚本壳（`node node_modules/vitest/vitest.mjs run`、`node node_modules/typescript/lib/tsc.js --noEmit -p …`）或命令行都带 `--config.node-linker=hoisted`；**别改全局/仓库配置**（会溅射别的 agent 的树） |
 
 ## 三、会话坑（一行制；1–50 = 原 §九去重名单，51 起为重构后新增，细节在 `docs/archive/HANDOFF.md` §九）
 
