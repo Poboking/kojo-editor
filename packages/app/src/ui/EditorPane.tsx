@@ -91,7 +91,7 @@ import { installKojoRename } from '../monaco/kojo-rename';
 import { installImplementationProvider } from '../monaco/erb-implementation';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
-import { CJK_TYPING_BASELINE, FIND_BASELINE, editorOptionsForLineCount } from './editor-options';
+import { CJK_TYPING_BASELINE, FIND_BASELINE, LARGE_FILE_LINES, editorOptionsForLineCount } from './editor-options';
 import { CODE_FONT_BASELINE } from './code-font'; // 编程字体单一真源（与 styles.css 的 --font-code 逐字同一条栈）
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
@@ -1185,6 +1185,12 @@ export function EditorPane({
   const publishCursor = useCallback((): void => {
     const ed = editorRef.current;
     if (!ed) return;
+    // 异步 acquire 竞态闸：`filePathRef` 先于 model 换装更新——此刻可能"新路径 + 旧 model"，
+    // 不加闸会把 A 的行号广播成 {B, A 行}。判据：屏幕 model 必须是当前路径的真 model，
+    // 或当前糖 model（糖视图是有意展示派生物，derivedView 标注由 payload 自己处理）。
+    const entry = entriesRef.current.get(filePathRef.current);
+    const shown = ed.getModel();
+    if (!entry || (shown !== entry.model && shown !== sugarModelRef.current)) return;
     let broadcaster = cursorBroadcasterRef.current;
     if (!broadcaster) {
       broadcaster = createCursorBroadcaster((payload) => kernel.bus.emit('editor.cursorMoved', payload));
@@ -1687,10 +1693,15 @@ export function EditorPane({
    * - `conflict`（磁盘变了、model 脏）→ **绝不静默覆盖**：弹常驻通知说明
    *   「保存将覆盖磁盘内容」，用户可点「重新加载（放弃我的修改）」。
    */
+  /** reloadFromDisk 恒稳引用（冲突 toast 的 action 点击时经它**现读盘**重跑；与 saveRef / runAutosaveRef 同款纪律——闭包不持过期文本） */
+  const reloadFromDiskRef = useRef<((path: string) => Promise<void>) | null>(null);
+  /** 「重新加载」点击意图（一次性：reloadFromDisk 入口消费，强制以现读盘文本落地，不再走冲突提示分支） */
+  const forceReloadPathsRef = useRef(new Set<string>());
   const reloadFromDisk = useCallback(
     async (path: string): Promise<void> => {
       const entry = entriesRef.current.get(path);
       if (!entry) return; // 该文件未打开 → 与编辑器无关
+      const forced = forceReloadPathsRef.current.delete(path);
       let text: string;
       try {
         ({ text } = await kernel.io.readText(path));
@@ -1704,7 +1715,11 @@ export function EditorPane({
       // 读盘期间 model 可能已被关闭/替换（标签关闭竞态）→ 放弃
       if (entriesRef.current.get(path) !== entry) return;
       const decision = decideExternalChange(entry.model.getValue(), text, computeDirty(path));
-      if (decision === 'noop') return;
+      if (decision === 'noop') {
+        // 点击重跑时盘已等于 model（如用户手工撤销回同内容）：冲突即已了结，销账放行自动保存
+        if (forced) externalConflictRef.current.delete(path);
+        return;
+      }
       const applyReload = (): void => {
         // 常驻通知的 action 闭包可能晚于标签关闭才被点击——闭包只持 path+text，
         // 落地前现取 entry；缺失或 model 已 dispose（Monaco 标准 API）直接放弃，
@@ -1735,20 +1750,34 @@ export function EditorPane({
           pushSelStatus(true);
         }
       };
-      if (decision === 'reload') {
+      if (decision === 'reload' || forced) {
         applyReload();
         return;
       }
-      // conflict：外部改动未决期间自动保存必须让路（A6 护栏；处置点 = applyReload / 保存成功 / 关标签）
+      // conflict：外部改动未决期间自动保存必须让路（A6 护栏；处置点 = 重新加载 / 保存成功 / 关标签）
+      // 防旧文本覆盖（数据丢失）：action **不闭包本次读到的 text**——点击时经 ref 置一次性强制
+      // 意图并重跑 reloadFromDisk 现读盘；点击前若又有第二次外部写入，应用的也是那一刻的真相
+      // 而非过期的 T1（旧闭包 T1 + 钉基线为干净 ⇒ 下一次保存覆盖 T2）。
+      // 同一文件已有未决冲突时不再叠第二条通知（去重；现存通知的 action 现读盘，同样覆盖新改动）。
+      const conflictPending = externalConflictRef.current.has(path);
       externalConflictRef.current.add(path);
-      notify({
-        kind: 'error',
-        message: `「${path}」已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容。`,
-        action: { label: '重新加载（放弃我的修改）', run: applyReload },
-      });
+      if (!conflictPending) {
+        notify({
+          kind: 'error',
+          message: `「${path}」已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容。`,
+          action: {
+            label: '重新加载（放弃我的修改）',
+            run: () => {
+              forceReloadPathsRef.current.add(path);
+              void reloadFromDiskRef.current?.(path);
+            },
+          },
+        });
+      }
     },
     [kernel, notify, computeDirty, documentBroadcaster, readDocumentTruth],
   );
+  reloadFromDiskRef.current = reloadFromDisk;
 
   // 外部写盘 → 重载对应 model（B1 修复）：宿主只**消费** `file.changed`，不认识"升糖"
   //
@@ -1845,11 +1874,13 @@ export function EditorPane({
         const live = entriesRef.current.get(path);
         if (live) {
           // 状态栏轻指示：复用 onStatusInfo 同一条上报链路，不新开协议
+          // sel 随行——不带的话「选中…」widget 会在自动保存成功的一瞬消失（口径同 pushSelStatus）
           onStatusInfoRef.current?.({
             encoding: live.encoding,
             eol: live.eol,
             lines: live.model.getLineCount(),
             autosavedAt: Date.now(),
+            sel: selStatusRef.current,
           });
         }
         return;
@@ -1896,7 +1927,13 @@ export function EditorPane({
   const snapshotActiveView = (): void => {
     const ed = editorRef.current;
     const path = filePathRef.current;
-    if (ed && path) persistEditorSlice(ed, path);
+    if (!ed || !path) return;
+    // 异步 acquire 竞态闸：`filePathRef` 先于 model 换装更新——不加闸会把 A 的光标/滚动
+    // 存进 B 的键下（切回 A 时视图错位）。只认"屏幕 model == 当前路径的真 model"；
+    // 糖视图（派生 model）本就落盘即跳过，这里一并挡在门外。
+    const entry = entriesRef.current.get(path);
+    if (!entry || ed.getModel() !== entry.model) return;
+    persistEditorSlice(ed, path);
   };
 
   /** 从持久层恢复：行列钳进当前 model（文件可能变短）；滚动越界由 monaco 内部钳制，不抛 */
@@ -2035,6 +2072,14 @@ export function EditorPane({
         return;
       }
       const cursor: CrumbCursor = { path, line: ed.getPosition()?.lineNumber ?? 1, lineCount: model.getLineCount() };
+      // 大文件降级闸（判据在 `crumbsNeedRefresh`）：返回 false 有两种含义——"同 path 同行、
+      // 链仍有效"与"大文件、不给面包屑"。后者**必须清空**：不然后一份文件的旧链残留，
+      // 点击段会把**别的文件**的行号 reveal 进当前文件（数据错位，比没有面包屑更糟）。
+      if (cursor.lineCount >= LARGE_FILE_LINES) {
+        crumbLastRef.current = null;
+        apply([]);
+        return;
+      }
       if (!crumbsNeedRefresh(cursor, crumbLastRef.current)) return;
       crumbLastRef.current = cursor;
       try {
@@ -2316,7 +2361,9 @@ export function EditorPane({
       else applyPersistedView(ed, entry.model, filePath);
       setDirty(computeDirty(filePath));
       setError(null);
-      setPendingChoice(null); // 换文件即作废未决的保存告警（避免误对旧文件应用修复）
+      // 换文件才作废未决的保存告警（避免误对旧文件应用修复）；同文件重跑（依赖抖动 /
+      // kernel 换代）不清——否则正弹着的确认框会被静默吞掉，保存意图丢失。
+      if (prev !== filePath) setPendingChoice(null);
       setStatus(`${entry.encoding} · ${entry.eol} · ${entry.model.getLineCount()} 行`);
       pushSelStatus(true);
       // 打开/切换即算一次装饰（不等用户编辑）——首屏就能看到波浪线
@@ -2333,7 +2380,7 @@ export function EditorPane({
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, scheduleAutosave, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, computeDirty, scheduleMarkers, scheduleAutosave, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor]);
 
   /* ------------------- 只读锁：编辑意图 → 询问 → 解锁 ------------------- */
 

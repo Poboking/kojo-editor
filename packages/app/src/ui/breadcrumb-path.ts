@@ -73,6 +73,9 @@ export interface CrumbCursor {
  *   下一次换行即补上。换来的是"每敲一键全文解析一次"不再发生（光标监听没有防抖）。
  * - **大文件档 ⇒ 不给面包屑**：与 `editor-options` 里 `stickyScroll` 同一条降级理由
  *   （52,000 行那种文件上一次全文解析几十毫秒，一条呈现栏不值）。
+ *   注意：false 对大文件是"**必须清空链**"而非"维持现状"——调用方须另行判体量
+ *   （`LARGE_FILE_LINES`）并清链，否则前一份文件的旧链残留，点击段会把别的文件的
+ *   行号 reveal 进当前文件（EditorPane 的 `crumbRefresh` 负责这件事）。
  */
 export function crumbsNeedRefresh(next: CrumbCursor, last: CrumbCursor | null): boolean {
   if (next.lineCount >= LARGE_FILE_LINES) return false;
