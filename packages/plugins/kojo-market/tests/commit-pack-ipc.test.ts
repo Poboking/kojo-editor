@@ -249,7 +249,9 @@ describe('commitPack · 装包的往返趟数（PERF-10 ②）', () => {
     // 装完之后暂存区零残壳（搬运靠 rename，不靠再抄一遍）
     expect(existsSync(nodeJoin(stagingRoot, packStagingName(PACK_ID, PACK_VERSION)))).toBe(false);
     console.info(`commitPack 读数：${FILE_COUNT} 条目 / 批量读 ${trips.batchReads.length} 趟 / 写 ${FILE_COUNT} 趟 / ${ms}ms`);
-  });
+    // 纯 IO 量太大（150 文件 × 真盘读写；满载并行池下实测本体逼近 60s）：
+    // 预算给足 120s（收尾钩子 60_000 同族），判据与 N 均不动
+  }, 120_000);
 
   it('锚来自**落盘那一份**字节：写侧同长度篡改一个字节 ⇒ entry-sha256 红且落点不存在', async () => {
     const sourceDir = await buildSource();
