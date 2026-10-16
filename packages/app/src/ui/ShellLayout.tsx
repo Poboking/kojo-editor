@@ -72,6 +72,17 @@ import {
   saveMotionPref,
   type MotionPref,
 } from './motion-pref';
+// 毛玻璃透明度（2026-10-17 教程打磨批）：真源在 glass-pref 的 localStorage，挂载时写一次根元素，
+// 设置页旋钮改值即时联动全场磨砂面（--glass-alpha + data-glass）
+import {
+  applyGlassPref,
+  GLASS_TRANSPARENCY_DEFAULT,
+  GLASS_TRANSPARENCY_MAX,
+  GLASS_TRANSPARENCY_MIN,
+  GLASS_TRANSPARENCY_STEP,
+  stepGlassTransparencyPref,
+  useGlassTransparencyPref,
+} from './glass-pref';
 import { filterSealedPanels, setSealed, useSealed } from './sealed';
 import { setDirectMode, useDirectMode } from './direct-mode';
 import { setPanelVirtualize, usePanelVirtualize } from './panel-prefs';
@@ -321,6 +332,19 @@ export function ShellLayout(props: Props): ReactElement {
     setMotionPref(p);
     applyMotionPref(p);
   }, []);
+
+  /**
+   * 毛玻璃透明度（2026-10-17 教程打磨批；设置页「外观」里的那一项）。
+   *
+   * 与「减弱动效」同款分层：真源是 `glass-pref.ts` 的 localStorage，生效是把值写到根元素
+   * （`--glass-alpha` + `data-glass`），样式表读取。这里只拿投影 + 一个 effect 落地——
+   * 挂载时按存下的偏好同步一次（否则上次调的透明度要重开设置页才生效），旋钮改值时
+   * `glassTransparency` 变 ⇒ effect 重跑 ⇒ 全场磨砂面即时联动，不用重开浮层。
+   */
+  const glassTransparency = useGlassTransparencyPref();
+  useEffect(() => {
+    applyGlassPref(glassTransparency);
+  }, [glassTransparency]);
 
   /**
    * 保存时整理空白开关（E2；设置页里的那一项，默认关）。
@@ -1453,6 +1477,38 @@ export function ShellLayout(props: Props): ReactElement {
                     </span>
                   </span>
                 </label>
+                {/* 毛玻璃透明度（glass-pref.ts）：与字号步进器同款排版（− 读数 ＋）。透明度越高，
+                    浮层与教程目录越通透；调到 0% 即实心档，撤掉磨砂回到不透明面。只改显示、不动文件。 */}
+                <div className="settings-row static">
+                  <span className="settings-stepper">
+                    <button
+                      className="ghost small"
+                      onClick={() => stepGlassTransparencyPref(-1)}
+                      disabled={glassTransparency <= GLASS_TRANSPARENCY_MIN}
+                      title="更实心"
+                      aria-label="降低毛玻璃透明度"
+                    >
+                      −
+                    </button>
+                    <span className="settings-stepper-value">{glassTransparency}%</span>
+                    <button
+                      className="ghost small"
+                      onClick={() => stepGlassTransparencyPref(1)}
+                      disabled={glassTransparency >= GLASS_TRANSPARENCY_MAX}
+                      title="更通透"
+                      aria-label="提高毛玻璃透明度"
+                    >
+                      ＋
+                    </button>
+                  </span>
+                  <span>
+                    毛玻璃透明度
+                    <span className="settings-hint">
+                      浮层与教程目录的磨砂通透程度，默认 {GLASS_TRANSPARENCY_DEFAULT}%（每档 {GLASS_TRANSPARENCY_STEP}%）。
+                      调到 0% 即实心、关掉磨砂。只改显示、不动文件
+                    </span>
+                  </span>
+                </div>
               </div>
 
               {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：两只暂不投入的面板整体封存，

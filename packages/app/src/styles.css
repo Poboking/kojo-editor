@@ -38,6 +38,18 @@
   --shadow-1: 0 6px 20px rgba(0, 0, 0, 0.45); /* 轻浮层：右键菜单、toast */
   --shadow-2: 0 12px 36px rgba(0, 0, 0, 0.5); /* 浮层：picker、overlay 宿主 */
   --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.55); /* 模态与欢迎卡 */
+  /* 磨砂玻璃 token（glass，2026-10-17 教程打磨批）：可复用的毛玻璃面。
+     `--glass-alpha` = 填充不透明度，真源是 `glass-pref.ts`（设置页「外观 · 毛玻璃透明度」），
+     挂载时写到 `<html>`；任意面都能 `style="--glass-alpha:.5"` 局部覆盖，旋钮一动全场面跟着变。
+     `--glass-tint` / `--glass-tint-raise` 用**空格分隔的 RGB 三元组**，好让 `rgb(… / alpha)` 直接
+     拼透明度（值分别 = `--bg-2` / `--bg-3`，改主题色时两处一并改）。模糊与饱和是设计常量、
+     不暴露给用户；`--glass-edge` 是顶边高光，磨砂玻璃的"厚度"就靠这一条亮边立起来。 */
+  --glass-blur: 20px;
+  --glass-saturate: 1.5;
+  --glass-alpha: 0.85; /* 缺省 15% 通透（= glass-pref 的 GLASS_TRANSPARENCY_DEFAULT） */
+  --glass-tint: 36 41 47;
+  --glass-tint-raise: 43 49 56;
+  --glass-edge: rgba(255, 255, 255, 0.09);
   --z-toolbar: 10;
   --z-overlay: 1000;
   --z-modal: 1100;
@@ -3309,18 +3321,34 @@ button.erb-mode-hint.unlocked:hover {
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
-  background: rgba(0, 0, 0, 0.45);
+  /* 磨砂遮罩：把背后的应用虚化 + 压暗，视线自然收到浮层上——比一层纯黑更"高级"、
+     也少了那种生硬切断感。叠一层极淡的顶部径向暗角给纵深。旋钮走到 0%（data-glass=solid）
+     时撤掉虚化回到纯压暗（见下方 off-switch）。 */
+  background:
+    radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.56)),
+    rgba(8, 10, 13, 0.4);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(1.15);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(1.15);
   display: flex;
   justify-content: center;
   align-items: center;
   animation: fade-in var(--dur-1) var(--ease-out);
 }
+/* 可复用毛玻璃面（glass）：磨砂背景 + 半透明着色 + 顶边高光。任意浮层 / 贴顶栏挂上 `.glass`
+   即可，透明度随 `--glass-alpha`（设置页旋钮）联动；换底色就地覆盖 `--glass-tint`。
+   圆角 / 阴影 / 尺寸留给消费方自己给——本类只负责"面"这一层，好组合。
+   `.overlay-host` 与本类共用同一条规则：它是这套磨砂最主要的消费方。 */
+.glass,
+.overlay-host {
+  background: rgb(var(--glass-tint) / var(--glass-alpha));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-edge);
+}
 .overlay-host {
   width: min(560px, 86vw);
   max-height: 80vh;
   overflow-y: auto;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
   padding: var(--space-4);
@@ -3329,6 +3357,31 @@ button.erb-mode-hint.unlocked:hover {
 /* 宽版浮层宿主（E9）：长文阅读类（教程）放宽到文档宽度——560px 的行长连一段样例都放不下 */
 .overlay-host-wide {
   width: min(920px, 94vw);
+}
+/* 回落一：老内核不支持 backdrop-filter ⇒ 实心，绝不破版（磨砂只是加分项，不是前提） */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass,
+  .overlay-host {
+    background: var(--bg-2);
+    border-color: var(--border);
+  }
+  .overlay-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+/* 回落二：旋钮 0% = 实心档（glass-pref 落 data-glass='solid'）⇒ 撤掉磨砂与半透明，
+   回到改动前的不透明面。这既是"不喜欢毛玻璃"的干净出口，也省掉整屏 backdrop-filter 的开销。 */
+:root[data-glass='solid'] .glass,
+:root[data-glass='solid'] .overlay-host {
+  background: var(--bg-2);
+  border-color: var(--border);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-glass='solid'] .overlay-backdrop {
+  background: rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* --------------------- P2：新建向导（插件组件，壳层只提供容器语义类名） --------------------- */
@@ -3584,18 +3637,23 @@ button.primary .hint {
   flex-direction: column;
   max-height: calc(80vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
 }
-/* 文档头：标题 + 导语；导语下一条分隔线把抬头与正文分开（滚动时抬头不丢） */
+/* 文档头：标题 + 导语；导语下一条渐隐发丝线把抬头与正文分开（滚动时抬头不丢） */
 .wizard.tutorial h3 {
   font-size: var(--fs-5);
-  margin-bottom: var(--space-1);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-bottom: var(--space-2);
 }
 .tutorial-lead {
-  margin: 0 0 var(--space-3);
-  padding-bottom: var(--space-3);
+  margin: 0 0 var(--space-4);
+  padding-bottom: var(--space-4);
+  /* 渐隐发丝线：右端淡出，比通栏实线更轻，读起来像杂志导语的分隔。
+     先声明实色底、再叠 border-image——不支持的引擎自然回落到那条实线，不留白。 */
   border-bottom: 1px solid var(--border);
+  border-image: linear-gradient(90deg, var(--border), var(--border) 40%, transparent 88%) 1;
   color: var(--fg-dim);
   font-size: var(--fs-2);
-  line-height: 1.6;
+  line-height: 1.65;
 }
 .tutorial-body {
   flex: 1 1 auto;
@@ -3615,7 +3673,9 @@ button.primary .hint {
   padding-right: var(--space-1);
 }
 /* 目录：贴在滚动体顶部的一条横向胶囊带。十九节的长文没有目录，只能靠拖滚动条找；
-   单行横滚比竖排列表省高度，也不跟正文列抢宽度 */
+   单行横滚比竖排列表省高度，也不跟正文列抢宽度。磨砂底：正文从它下面滚过时虚化，
+   而不是被一条实心底边生硬切断——这是 backdrop-filter 在"读"界面里最值的一处。
+   底色用抬升档（--glass-tint-raise），与浮层卡片拉开一层。 */
 .tutorial-toc {
   position: sticky;
   top: 0;
@@ -3623,9 +3683,24 @@ button.primary .hint {
   display: flex;
   gap: var(--space-1);
   overflow-x: auto;
-  padding: var(--space-1) 0 var(--space-2);
+  padding: var(--space-2) 0;
+  background: rgb(var(--glass-tint-raise) / calc(var(--glass-alpha) * 0.92));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border-bottom: 1px solid var(--glass-edge);
+}
+/* 磨砂的两条回落与浮层卡片同源：老内核无 backdrop-filter、旋钮 0%（实心档）都退回实心底 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .tutorial-toc {
+    background: var(--bg-2);
+    border-bottom-color: var(--border);
+  }
+}
+:root[data-glass='solid'] .tutorial-toc {
   background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
+  border-bottom-color: var(--border);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 /* 横滚条走全局那套（`scrollbar-width` 会让 Chromium 换回原生浅色条，别加） */
 .tutorial-toc::-webkit-scrollbar,
@@ -3635,7 +3710,7 @@ button.primary .hint {
 }
 .tutorial-toc-item {
   flex: none;
-  padding: 2px var(--space-2);
+  padding: 3px var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: none;
@@ -3644,25 +3719,36 @@ button.primary .hint {
   line-height: 1.6;
   white-space: nowrap;
   cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 .tutorial-toc-item:hover {
   color: var(--fg);
   background: var(--hover);
 }
+/* 当前节：填一枚 accent 淡底胶囊，比"只描边"更一眼可辨。文字走 --accent-text（达标的
+   文字档），不用 --accent——后者压在深底上做文字只有 4.4:1，见文件头的对比度记账。 */
 .tutorial-toc-item[aria-current='true'] {
-  color: var(--accent);
-  border-color: var(--accent-dim);
+  color: var(--accent-text);
+  background: var(--accent-dim);
+  border-color: transparent;
 }
-/* 节标题（①…⑩）：层级靠字号 + 节间分隔线拉开。 */
+/* 节标题（①…⑩）：层级靠字号 + 字重 + 节间分隔线拉开。 */
 .tutorial-section h4 {
   margin: 0 0 var(--space-3);
   font-size: var(--fs-3);
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
-/* 相邻节之间一条细线：十八节的长文没有分隔线，滚动时找不准"这几段属于哪一节" */
+/* 相邻节之间一条两端渐隐的细线：十八节的长文没有分隔线，滚动时找不准"这几段属于哪一节"；
+   渐隐比通栏实线更轻，不抢正文。实色底先声明，border-image 不支持时自然回落。 */
 .tutorial-section + .tutorial-section {
   margin-top: var(--space-4);
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
+  border-image: linear-gradient(90deg, transparent, var(--border) 10%, var(--border) 90%, transparent) 1;
 }
 .tutorial-body p {
   margin: 0 0 var(--space-2);
@@ -3694,6 +3780,10 @@ button.primary .hint {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  /* 一线顶边高光 + 极淡投影：代码块从磨砂卡片上"浮"起一点，比纯平贴更有质感（内敛，不抢眼） */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 1px 2px rgba(0, 0, 0, 0.18);
   padding: var(--space-2) var(--space-3);
   overflow-x: auto;
   overflow-wrap: break-word;
@@ -3716,13 +3806,19 @@ button.primary .hint {
 }
 .tutorial-arrow {
   align-self: center;
+  /* 「编译为」做成一枚安静的小胶囊：给左右对照一个明确的轴心，而不是飘着的灰字 */
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-2);
   color: var(--fg-dim);
-  font-size: var(--fs-1);
+  font-size: var(--fs-0);
   white-space: nowrap;
   user-select: none;
 }
 .tutorial-arrow::before {
   content: '→ ';
+  color: var(--accent-text);
 }
 @container (max-width: 699px) {
   .tutorial-pair {
@@ -3773,7 +3869,10 @@ button.primary .hint {
 .tutorial-table thead th {
   color: var(--fg-dim);
   font-weight: 600;
+  letter-spacing: 0.02em;
   white-space: nowrap;
+  /* 抬升一档的表头底：与表体分开，长表滚读时"这几列是什么"始终压得住 */
+  background: var(--bg-2);
 }
 .tutorial-table tbody tr:last-child td {
   border-bottom: none;
@@ -3782,11 +3881,18 @@ button.primary .hint {
 .tutorial-table tbody tr:nth-child(even) {
   background: var(--bg-2);
 }
+/* 悬停整行微亮：逐行扫读时的横向引导，比斑马更跟着眼睛走。放在斑马之后——同特异度靠
+   源序压过偶数行底色，悬停哪行哪行亮 */
+.tutorial-table tbody tr:hover {
+  background: var(--hover);
+}
 .wizard.tutorial .wizard-actions {
   flex: none;
   margin-top: var(--space-3);
   padding-top: var(--space-3);
+  /* 脚部与正文之间也走两端渐隐的发丝线，与导语分隔同一套语言 */
   border-top: 1px solid var(--border);
+  border-image: linear-gradient(90deg, transparent, var(--border) 15%, var(--border) 85%, transparent) 1;
 }
 .sb-idx.err {
   color: var(--red);
@@ -5645,6 +5751,7 @@ button.resume-session {
 }
 .oh-kind-new {
   color: var(--green, #7ec699);
+}
 /* 键盘快捷键对话框（R8）：注册表可查可改的显示面；复用 .modal 骨架 */
 .keybindings-dialog {
   width: min(640px, 92vw);
