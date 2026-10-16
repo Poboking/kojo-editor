@@ -24,7 +24,18 @@ import type {
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
 import { ConventionEngine } from './engine';
-import { LINT_STORE_KEY, decodeCache, encodeCache, lintExpect, type LintCache } from './snapshot';
+import {
+  LINT_STORE_KEY,
+  LINT_UNITS_KEY_PREFIX,
+  decodeCache,
+  decodeUnits,
+  encodeCache,
+  encodeUnits,
+  lintExpect,
+  lintUnitsKey,
+  type LintCache,
+  type LintUnitEntry,
+} from './snapshot';
 
 const IO = 'kernel.io';
 const PROJECT = 'kernel.project';
@@ -61,6 +72,24 @@ export function createConventionLinterPlugin(): Plugin {
        * 校验实测 3.6 s / 产出 0.4 MB，而其中 55% 的成本在一条只看单文件的规则上
        * ⇒ 逐文件桶 + 整项目结论分开存，改一个文件只重算那一个文件。
        */
+      /**
+       * 分区贡献键的写入链（PERF-12c）：`save`/`prune`/`dropAll` 全部排队串行。
+       * `prune` 要 listDir 求补集，必须排在同轮 `save` 之后——否则看不见在途的键，
+       * 会把刚写的贡献当孤儿删掉（竞态 = 自己造孤儿）。
+       */
+      let unitsChain: Promise<void> = Promise.resolve();
+      const queueUnits = (what: 'save' | 'prune' | 'drop', run: () => Promise<void>, note?: string): void => {
+        unitsChain = unitsChain
+          .then(run)
+          .catch((err: unknown) => {
+            ctx.log.warn(`Convention partition units ${what} failed${note ? ` for '${note}'` : ''}: ${String(err)}`);
+          });
+      };
+      const listUnitKeys = async (): Promise<string[]> => {
+        const listed = await storage.keys();
+        return listed.filter((k) => k.startsWith(LINT_UNITS_KEY_PREFIX));
+      };
+
       const snapshotPort = {
         expectFor({ project: p, rules }: { project: GameProject; rules: readonly ConventionRule[] }) {
           return lintExpect({ project: p, rules });
@@ -72,6 +101,10 @@ export function createConventionLinterPlugin(): Plugin {
             const restored = decodeCache(raw, expect);
             if (restored === null) {
               void storage.delete(LINT_STORE_KEY).catch(() => undefined);
+              // 主快照被判死（换项目 / 输入摘要变了）⇒ 拆出去的贡献键同批作废，不留跨项目残留
+              queueUnits('drop', async () => {
+                for (const key of await listUnitKeys()) await storage.delete(key);
+              });
               ctx.log.warn('Convention snapshot unusable (format/root/adapter/inputDigest/rules/structure); linting from scratch');
             }
             return restored;
@@ -94,6 +127,48 @@ export function createConventionLinterPlugin(): Plugin {
             .catch((err: unknown) => {
               ctx.log.warn(`Convention snapshot save failed: ${String(err)}`);
             });
+        },
+
+        /**
+         * 分区贡献 = **每条规则一个存储键**（PERF-12c）。
+         *
+         * 真语料读数：贡献占主快照 4.0 MB / 5.1 MB（79%），而"全命中轮"为了一句零计算
+         * 要把整份读盘 + parse（装载 1.4–2.0 s）。拆键后主快照只剩桶与结论；贡献只在
+         * **真有分区规则要重算**时按 ruleId 懒取那一条（引擎里那条规则没建计划就完全不碰盘）。
+         *
+         * 生命周期：① 键名由 `lintUnitsKey(ruleId)` 正算 ⇒ 规则改名/换适配器后 `prune`
+         * 拿得到孤儿；② 每条键自带全局判据 + ruleId，判据不符即删（fail-closed，绝不"修"）；
+         * ③ 主快照被判死时整批贡献跟着清（见上面 `load`）。
+         */
+        units: {
+          async load(ruleId: string, expect: CacheExpect) {
+            const keyName = lintUnitsKey(ruleId);
+            try {
+              const raw = await storage.get<unknown>(keyName);
+              if (raw === undefined) return null;
+              const decoded = decodeUnits(raw, expect, ruleId);
+              if (decoded === null) {
+                void storage.delete(keyName).catch(() => undefined);
+                ctx.log.warn(`Convention partition units for '${ruleId}' unusable; recomputing (fail-closed)`);
+              }
+              return decoded;
+            } catch (err) {
+              ctx.log.warn(`Convention partition units read failed for '${ruleId}': ${String(err)}`);
+              return null;
+            }
+          },
+          save(ruleId: string, state: { key: string; units: Record<string, LintUnitEntry> }, expect: CacheExpect) {
+            queueUnits('save', () => storage.set(lintUnitsKey(ruleId), encodeUnits({ ruleId, ...state, expect })).then(() => undefined), ruleId);
+          },
+          prune(keepRuleIds: readonly string[]) {
+            const keep = new Set(keepRuleIds.map((id) => lintUnitsKey(id)));
+            queueUnits('prune', async () => {
+              for (const key of await listUnitKeys()) {
+                if (keep.has(key)) continue;
+                await storage.delete(key);
+              }
+            });
+          },
         },
       };
 

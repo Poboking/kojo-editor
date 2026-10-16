@@ -835,3 +835,150 @@ describe('ConventionEngine 的分层复用（2026-10-12 按文件增量批）', 
     expect(calls).toHaveLength(2); // 一轮，两个文件各一次
   });
 });
+
+/**
+ * 投机预取的收窄（PERF-12c）。
+ *
+ * 12b 的写法在 `lastRun` 取不到时把候选退化成"全部文件"，而真壳每一轮都是**新载入的页面**
+ * （⇒ lastRun 必空）⇒ 每轮白读全库正文（真语料 2,325 棵实测 4.1 s），而同轮 `lint reuse`
+ * 显示整条复用 7/7（本轮压根不需要任何正文）。这几条用例钉死两件事：
+ * ①零重算轮**一次批量读都不发**；②真要重算的文件**一个都不能少**（覆盖面由装载后的
+ * stale 并集兜底，投机只是提前量热）。12b 之所以能把回退漏过去，就是因为这批形状零覆盖。
+ */
+describe('投机预取只在同引擎连续轮生效（PERF-12c）', () => {
+  const A = '/p/kojo/a.ERB';
+  const B = '/p/kojo/b.ERB';
+  const pf: Record<string, string> = { [A]: '@M_KOJO_K1_A\nA\nEND\n', [B]: '@M_KOJO_K1_B\nB\nEND\n' };
+  const EXPECT: CacheExpect = { projectRoot: '/p', adapterId: 'test', fingerprint: 'global-1' };
+
+  const mkIndex = (over: { bMtime?: number; fingerprint?: string } = {}): ErbIndex => {
+    const map = new Map<string, ErbFile>();
+    const byName = new Map<string, ErbFunctionRef[]>();
+    for (const [path, text] of Object.entries(pf)) {
+      const f = parseErbText(text, path);
+      map.set(path, f);
+      for (const fn of f.functions) {
+        const refs = byName.get(fn.normalizedName) ?? [];
+        refs.push({
+          name: fn.name,
+          normalizedName: fn.normalizedName,
+          filePath: fn.filePath,
+          startLine: fn.startLine,
+          endLine: fn.endLine,
+        });
+        byName.set(fn.normalizedName, refs);
+      }
+    }
+    return {
+      files: map,
+      byName,
+      fingerprint: over.fingerprint ?? 'erbfp-1',
+      fileMtimes: new Map<string, number | null>([[A, 100], [B, over.bMtime ?? 200]]),
+    };
+  };
+
+  /** 只看正文长度的逐文件规则 ⇒ 预取没覆盖到就会走单文件兜底读（batches/singles 都看得见） */
+  const textRule: ConventionRule = {
+    id: 'g.text',
+    description: 'reads own text',
+    severity: 'info',
+    scope: 'file',
+    async checkFile(ctx, file) {
+      const t = await ctx.readFile(file.path);
+      return [
+        {
+          ruleId: 'g.text',
+          severity: 'info',
+          message: `${file.path}:${t.length}`,
+          filePath: file.path,
+          line: 1,
+          key: `g.text|${file.path}`,
+        },
+      ];
+    },
+  };
+
+  interface Disk {
+    cache: LintCache | null;
+    loads: number;
+    saves: number;
+    singles: string[];
+    batches: string[][];
+  }
+
+  function wired(getIndex: () => ErbIndex, disk: Disk): ConventionEngine {
+    return new ConventionEngine({
+      log: silentLog,
+      getProject: () => fakeProject(),
+      getIndex,
+      readFile: async (path: string) => {
+        disk.singles.push(path);
+        const t = pf[path];
+        if (t === undefined) throw new Error(`not found: ${path}`);
+        return t;
+      },
+      readFiles: async (paths) => {
+        disk.batches.push([...paths]);
+        return paths.map((p) => pf[p] ?? null);
+      },
+      getAdapterRules: () => [textRule],
+      snapshot: {
+        expectFor: () => EXPECT,
+        load: async () => {
+          disk.loads++;
+          return disk.cache;
+        },
+        save: (cache) => {
+          disk.saves++;
+          disk.cache = cache;
+        },
+      },
+    });
+  }
+
+  it('冷轮（盘上无缓存）⇒ 装载后一次批取全部 stale，不重复批取', async () => {
+    const disk: Disk = { cache: null, loads: 0, saves: 0, singles: [], batches: [] };
+    const rep = await wired(() => mkIndex(), disk).run();
+    expect(rep.failedRules).toEqual([]);
+    expect(disk.batches).toHaveLength(1);
+    expect([...disk.batches[0]!].sort()).toEqual([A, B].sort());
+    expect(disk.singles).toEqual([]); // 批取覆盖齐 ⇒ 零单读
+  });
+
+  it('新引擎 + 盘上缓存齐 + 一个字节没改 ⇒ 本轮零批量读（真壳热轮的形状）', async () => {
+    const disk: Disk = { cache: null, loads: 0, saves: 0, singles: [], batches: [] };
+    await wired(() => mkIndex(), disk).run(); // 第一轮建桶
+    expect(disk.saves).toBe(1);
+    const batchesAfterCold = disk.batches.length;
+    // 模拟"页面重新载入"：全新引擎实例（lastRun 为空），盘上还是那份缓存
+    const rep = await wired(() => mkIndex(), disk).run();
+    expect(rep.failedRules).toEqual([]);
+    expect(rep.issues.filter((i) => i.ruleId === 'g.text')).toHaveLength(2); // 结论照旧复用
+    expect(disk.batches).toHaveLength(batchesAfterCold); // **本轮没有发任何批量读**
+    expect(disk.singles).toEqual([]);
+  });
+
+  it('同引擎改一棵 ⇒ 只读那一棵；未变的那一棵零 IO', async () => {
+    let index = mkIndex();
+    const disk: Disk = { cache: null, loads: 0, saves: 0, singles: [], batches: [] };
+    const engine = wired(() => index, disk);
+    await engine.run();
+    disk.batches.length = 0;
+    index = mkIndex({ bMtime: 201, fingerprint: 'erbfp-2' });
+    const rep = await engine.run();
+    expect(rep.failedRules).toEqual([]);
+    expect([...new Set(disk.batches.flat())].sort()).toEqual([B]); // 变过的必读、没变的绝不读
+    expect(disk.singles).toEqual([]);
+  });
+
+  it('force（面板重新校验）⇒ 全部文件都在批取覆盖面里，一个都不能少', async () => {
+    const disk: Disk = { cache: null, loads: 0, saves: 0, singles: [], batches: [] };
+    const engine = wired(() => mkIndex(), disk);
+    await engine.run();
+    disk.batches.length = 0;
+    await engine.run({ force: true });
+    expect([...new Set(disk.batches.flat())].sort()).toEqual([A, B].sort());
+    expect(disk.singles).toEqual([]);
+  });
+});
+

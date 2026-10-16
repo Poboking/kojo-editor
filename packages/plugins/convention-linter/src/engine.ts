@@ -110,6 +110,26 @@ export interface ConventionEngineDeps {
     expectFor(args: { project: GameProject; rules: readonly ConventionRule[] }): CacheExpect | null;
     load(expect: CacheExpect): Promise<LintCache | null>;
     save(cache: LintCache, expect: CacheExpect): void;
+    /**
+     * 分区贡献的**独立存储端口**（PERF-12c，additive 可选）。
+     *
+     * 提供时：盘上的逐文件贡献**不随 `LintCache.projectUnits` 整份装载**——引擎只在
+     * "某条分区规则本轮真要建计划"时按 ruleId 懒取那一条；写盘同样按规则分键，
+     * 本轮没建计划的规则不碰盘（整包复用轮 ⇒ 贡献零 IO）。`prune` 收到**当前规则集里
+     * 所有声明了 `partition` 的 ruleId**（不是本轮建过计划的那批），用于清掉规则改名/
+     * 适配器换游戏后留下的孤儿键。
+     *
+     * 缺省时：沿用 v3 同键形态（贡献随主快照读写），老装配零改动。
+     */
+    units?: {
+      load(ruleId: string, expect: CacheExpect): Promise<{ key: string; units: Record<string, LintUnitEntry> } | null>;
+      save(
+        ruleId: string,
+        state: { key: string; units: Record<string, LintUnitEntry> },
+        expect: CacheExpect,
+      ): void;
+      prune(keepRuleIds: readonly string[]): void;
+    };
   };
 }
 
@@ -150,10 +170,11 @@ export class ConventionEngine implements ConventionLinterService {
   /** 分区规则的内存态（ruleId → 状态）；判据不符即弃，见 `RuleUnitState` */
   private readonly unitStates = new Map<string, RuleUnitState>();
   /**
-   * 上一轮的 mtime 快照（PERF-12b）：全局判据不变时用来**投机预取**——
-   * mtime 变过/新增的文件几乎必然就是本轮的 stale 集，让批量读盘与快照装载并行
-   * （串行装载→预取在 2,000 棵盘上被抽取段的事件循环占用放大到秒级）。
-   * 只是提前量热，**过期判定仍按装载后的盘上结论**；漏猜的文件走原预取/惰性读，语义不变。
+   * 上一轮的 mtime 快照（PERF-12b）：**同引擎实例内**连续运行时用来投机预取——
+   * mtime 变过/新增的文件几乎必然就是本轮的 stale 集，让批量读盘与快照装载并行。
+   * 只是提前量热，**过期判定仍按装载后的盘上结论**；漏猜的文件走装载后的批量兜底，语义不变。
+   * 取不到（新页面 / 新内核 / 判据变了）⇒ 本轮**不投机**，绝不让候选退化成"全库都要重读"
+   * （PERF-12c：真语料 2,325 棵上那一退就是每轮 4.1 s 白读，而同轮 reuse 显示零重算）。
    */
   private lastRun: { fingerprint: string; mtimes: Map<string, number | null> } | null = null;
   /**
@@ -248,16 +269,21 @@ export class ConventionEngine implements ConventionLinterService {
     const files = [...index.files.values()];
 
     /**
-     * 投机预取（PERF-12b）：与快照装载**并行**发出批量读盘。候选 = 相对上一轮
-     * mtime 变过/新增的文件（全局判据变了则等于全部）。这只是提前量热——真正的
-     * stale 判定照旧以装载结果为准，投机失败只损失命中，不损失正确性。
+     * 投机预取（PERF-12b → PERF-12c 收窄）：与快照装载**并行**发出批量读盘。
+     *
+     * 候选**只**取"与本引擎上一轮（`lastRun`）的 mtime 快照相比变过/新增的文件"。
+     * `lastRun` 缺失（新载入的页面 / 新内核 / 判据变了）时**一律不投机**——旧写法在这里
+     * 退化成"全库候选"，真语料 2,325 棵上每轮白读 4.1 s，而同轮的 `lint reuse` 显示
+     * 整条复用 7/7（本轮压根不需要任何正文）。不投机不等于不读：真正要重算的文件
+     * 仍由装载后算出的 stale 并集（`restPaths`）一次批取，覆盖面一字未减。
      */
     const specPaths = new Set<string>();
-    if (this.deps.readFiles && !force && expect) {
-      const last = this.lastRun && this.lastRun.fingerprint === expect.fingerprint ? this.lastRun : null;
+    const warmRun = !force && expect ? this.lastRun : null;
+    const specBase = warmRun && expect && warmRun.fingerprint === expect.fingerprint ? warmRun : null;
+    if (this.deps.readFiles && specBase && index.fileMtimes) {
       for (const f of files) {
-        const mtime = index.fileMtimes?.get(f.path) ?? null;
-        if (last && last.mtimes.get(f.path) === mtime) continue;
+        const mtime = index.fileMtimes.get(f.path) ?? null;
+        if (specBase.mtimes.get(f.path) === mtime) continue;
         specPaths.add(f.path);
       }
     }
@@ -311,6 +337,10 @@ export class ConventionEngine implements ConventionLinterService {
      */
     const partitionPlans = new Map<string, PartitionPlan>();
     const partitionSkipped = new Set<string>();
+    const unitsPort = this.deps.snapshot?.units;
+    /** 本轮懒取盘上贡献的读数（`lint units` 行）：次数 / 命中次数 */
+    let unitsLazyLoads = 0;
+    let unitsLazyHits = 0;
     for (const rule of projectRules) {
       if (!rule.partition) continue;
       if (canReuseProject && stored!.projectResults[rule.id]) continue; // 整包复用更快，不必分区
@@ -333,8 +363,27 @@ export class ConventionEngine implements ConventionLinterService {
       if (!state || state.expectFingerprint !== gateFp || state.key !== gateKey) {
         state = { expectFingerprint: gateFp, key: gateKey, byPath: new Map() };
         if (gateFp) this.unitStates.set(rule.id, state);
-        const storedUnits = !force && expect ? stored?.projectUnits?.[rule.id] : undefined;
-        if (storedUnits && (stored?.partitionKeys?.[rule.id] ?? '') === gateKey) {
+        /**
+         * 盘上贡献的来源（PERF-12c）：装了独立端口 ⇒ **只有这条规则本轮要建计划**才懒取
+         * 它那一条键（整包复用轮根本不走到这里）；没装 ⇒ v3 同键形态，从主快照里拿。
+         */
+        let storedUnits: Record<string, LintUnitEntry> | undefined;
+        let storedUnitsKey = '';
+        if (!force && expect) {
+          if (unitsPort) {
+            unitsLazyLoads++;
+            const blob = await unitsPort.load(rule.id, expect);
+            if (blob) {
+              storedUnits = blob.units;
+              storedUnitsKey = blob.key;
+              unitsLazyHits++;
+            }
+          } else {
+            storedUnits = stored?.projectUnits?.[rule.id];
+            storedUnitsKey = stored?.partitionKeys?.[rule.id] ?? '';
+          }
+        }
+        if (storedUnits && storedUnitsKey === gateKey) {
           let bad = false;
           for (const [path, e] of Object.entries(storedUnits)) {
             if (partition.isUnit && !partition.isUnit(e.unit)) {
@@ -375,6 +424,7 @@ export class ConventionEngine implements ConventionLinterService {
      *
      * stale 清单**先算齐**（判据一字未动）：批量预取需要全部规则 stale 的并集。
      */
+    const tUnits = Date.now();
     const prevByRule = new Map<string, Record<string, LintFileBucket>>();
     const staleByRule = new Map<string, ErbFile[]>();
     const prefetchPaths: string[] = [];
@@ -571,8 +621,13 @@ export class ConventionEngine implements ConventionLinterService {
         `  lint reuse: 整条复用 ${reusedRules}/${ruleTimings.length} · 分区 ${crossReused}/${crossTotal} · 逐文件重算 ${recomputedFiles}` +
           ` · 装载 ${tLoad - startedAt}ms 预取 ${tPrefetch - tLoad}ms 装配 ${Date.now() - tPrefetch}ms`,
       );
+      // 单独成行（PITFALLS 86：壳侧单行 170 字符）：贡献懒取的命中与预取覆盖面归因
+      this.deps.log.info(
+        `  lint units: 懒取 ${unitsLazyLoads} 键命中 ${unitsLazyHits} · 判据段 ${tUnits - tLoad}ms` +
+          ` · 投机候选 ${specPaths.size} 补取 ${restPaths.length}`,
+      );
     }
-    // 记下本轮 mtime ⇒ 下一轮的投机预取候选（判据变了会自动失效为"全量候选"）
+    // 记下本轮 mtime ⇒ 同引擎下一轮的投机预取候选（判据变了/新引擎 ⇒ 本轮不投机）
     this.lastRun = expect && index.fileMtimes
       ? { fingerprint: expect.fingerprint, mtimes: new Map(index.fileMtimes) }
       : null;
@@ -582,21 +637,31 @@ export class ConventionEngine implements ConventionLinterService {
      * 落盘：只在真算过东西时写（全命中再刷一遍是纯浪费）。
      * `index.fingerprint` 缺失时存空串——下次 `canReuseProject` 仍判假，保守不命中。
      * 分区贡献随本轮实际状态写盘（键 = 本轮 `key()`；ruleId 缺项 = 下次该规则全量重算分区）。
+     *
+     * 装了独立端口（PERF-12c）时贡献**不进主快照**：逐规则各写各的键，本轮没建计划的规则
+     * **不碰盘**（它那条键还带着自己的 `key` 门，下次懒取时照常自证是否过期）；
+     * `prune` 的保留集是**当前规则集里所有声明 partition 的 ruleId**——规则改名/换适配器
+     * 留下的孤儿键在这里清掉，不是只清"本轮没算的那几条"。
      */
     if (this.deps.snapshot && expect && (recomputedFiles > 0 || ruleTimings.some((t) => !t.reused))) {
       const projectUnits: Record<string, Record<string, LintUnitEntry>> = {};
       const partitionKeys: Record<string, string> = {};
+      const unitsByRule = new Map<string, Record<string, LintUnitEntry>>();
       for (const plan of partitionPlans.values()) {
         const byPath: Record<string, LintUnitEntry> = {};
         for (const f of files) {
           const e = plan.state.byPath.get(f.path);
           if (e) byPath[f.path] = e; // 只留本次索引里还活着的文件（与桶同纪律：快照不越攒越大）
         }
-        projectUnits[plan.rule.id] = byPath;
-        partitionKeys[plan.rule.id] = plan.state.key;
+        if (unitsPort) unitsByRule.set(plan.rule.id, byPath);
+        else {
+          projectUnits[plan.rule.id] = byPath;
+          partitionKeys[plan.rule.id] = plan.state.key;
+        }
       }
       // 本轮走整包复用、没建计划的分区规则：把上次盘上的分区原样带走（判据仍由 key+mtime 把关）
-      if (canReuseProject && stored?.projectUnits) {
+      // —— 独立端口下这条键本来就在盘上、自带判据，无需搬运，搬运就是每轮多写 4 MB
+      if (!unitsPort && canReuseProject && stored?.projectUnits) {
         for (const rule of projectRules) {
           if (!rule.partition || projectUnits[rule.id]) continue;
           const prev = stored.projectUnits[rule.id];
@@ -614,11 +679,16 @@ export class ConventionEngine implements ConventionLinterService {
         erbFingerprint: index.fingerprint ?? '',
         projectResults,
         buckets,
-        projectUnits,
-        partitionKeys,
+        ...(unitsPort ? {} : { projectUnits, partitionKeys }),
       };
       this.hotCache = { expectFingerprint: expect.fingerprint, cache: freshCache };
       this.deps.snapshot.save(freshCache, expect);
+      if (unitsPort) {
+        for (const plan of partitionPlans.values()) {
+          unitsPort.save(plan.rule.id, { key: plan.state.key, units: unitsByRule.get(plan.rule.id)! }, expect);
+        }
+        unitsPort.prune(projectRules.filter((r) => r.partition).map((r) => r.id));
+      }
     }
     return report;
   }

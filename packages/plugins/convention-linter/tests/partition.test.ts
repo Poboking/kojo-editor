@@ -17,7 +17,7 @@ import type {
 } from '@kojo/plugin-api';
 import { parseErbText } from '@kojo/plugin-erb-parser';
 import { ConventionEngine } from '../src/engine';
-import type { LintCache } from '../src/snapshot';
+import type { LintCache, LintUnitEntry } from '../src/snapshot';
 
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
@@ -54,11 +54,25 @@ interface Harness2 {
   diskLoad: () => LintCache | null;
 }
 
+/** 分区贡献独立键的替身盘（PERF-12c）：每条规则一条 blob + 三类调用记账 */
+interface UnitsDisk {
+  blobs: Record<string, { key: string; units: Record<string, LintUnitEntry> }>;
+  loads: string[];
+  saves: string[];
+  prunes: string[][];
+}
+
+function unitsDisk(): UnitsDisk {
+  return { blobs: {}, loads: [], saves: [], prunes: [] };
+}
+
 function harness2(args: {
   index: ErbIndex | null;
   adapterRules: ConventionRule[];
   loadImpl?: () => Promise<LintCache | null>;
   readFiles?: (paths: readonly string[]) => Promise<Array<string | null>>;
+  /** 提供时引擎走"贡献独立键 + 懒取"路径；不提供 ⇒ v3 同键形态（老装配零改动） */
+  units?: UnitsDisk;
 }): Harness2 {
   const saves: LintCache[] = [];
   let loads = 0;
@@ -82,6 +96,26 @@ function harness2(args: {
       save: (cache) => {
         saves.push(cache);
       },
+      ...(args.units
+        ? {
+            units: {
+              load: async (ruleId: string) => {
+                args.units!.loads.push(ruleId);
+                return args.units!.blobs[ruleId] ?? null;
+              },
+              save: (
+                ruleId: string,
+                state: { key: string; units: Record<string, LintUnitEntry> },
+              ) => {
+                args.units!.saves.push(ruleId);
+                args.units!.blobs[ruleId] = { key: state.key, units: state.units };
+              },
+              prune: (keepRuleIds: readonly string[]) => {
+                args.units!.prunes.push([...keepRuleIds]);
+              },
+            },
+          }
+        : {}),
     },
   });
   return { engine, saves, get loads() { return loads; }, diskLoad: () => (saves.length ? saves[saves.length - 1]! : null) };
@@ -317,3 +351,152 @@ describe('分区复用引擎机械（PERF-12b）', () => {
     expect(r2.units).toEqual([B]);
   });
 });
+
+/**
+ * 贡献拆键 + 懒取（PERF-12c）。
+ * 真语料读数：贡献占主快照 4.0 MB / 5.1 MB ⇒ "整条复用 7/7"的那一轮也要整份读盘 + parse
+ * 才换来零计算（装载 1.4–2.0 s）。拆开后：主快照只剩桶与结论，贡献只在**真有分区规则
+ * 要重算**时按 ruleId 懒取那一条；整包复用轮完全不碰它。
+ */
+describe('分区贡献独立存储键的懒取与生命周期（PERF-12c）', () => {
+  /** 引擎内置规则里带 partition 的那条（装配后与 adapter 规则一起各占一条键） */
+  const SUGAR = 'sugar.static-conventions';
+
+  it('装了端口 ⇒ 主快照不再携带贡献；贡献按规则落在自己那条键上', async () => {
+    const disk = unitsDisk();
+    const r1 = makePartitionRule();
+    const h1 = harness2({ index: makeIndex(), adapterRules: [r1.rule], units: disk });
+    await h1.engine.run();
+    const main = h1.saves[0]!;
+    expect(main.projectUnits).toBeUndefined(); // 主快照瘦身：不再背 4 MB
+    expect(main.partitionKeys).toBeUndefined();
+    expect(disk.saves).toContain('g.part');
+    expect(Object.keys(disk.blobs['g.part']!.units).sort()).toEqual([A, B].sort());
+    expect(disk.prunes[disk.prunes.length - 1]!.sort()).toEqual(['g.part', SUGAR].sort());
+  });
+
+  it('整包复用轮（新引擎 + 指纹未变）⇒ 贡献一次都不懒取', async () => {
+    const disk = unitsDisk();
+    const r1 = makePartitionRule();
+    const h1 = harness2({ index: makeIndex(), adapterRules: [r1.rule], units: disk });
+    await h1.engine.run();
+    const main = JSON.parse(JSON.stringify(h1.saves[0]!)) as LintCache;
+    const loadsAfterCold = disk.loads.length; // 冷轮必然懒取过（键还空着）
+
+    const r2 = makePartitionRule();
+    // 新引擎 = 真壳"页面重新载入后的一轮"：无热缓存、无 lastRun，盘上主快照 + 贡献俱在
+    const h2 = harness2({ index: makeIndex(), adapterRules: [r2.rule], loadImpl: async () => main, units: disk });
+    const rep = await h2.engine.run();
+    expect(disk.loads).toHaveLength(loadsAfterCold); // **本轮一次都没懒取**
+    expect(r2.units).toEqual([]); // 一条贡献都没重算
+    expect(rep.failedRules).toEqual([]);
+    expect(rep.issues.filter((i) => i.ruleId === 'g.part')).toHaveLength(2);
+  });
+
+  it('改一棵 ⇒ 只懒取要重算的那条规则、只补算变过的那一棵，合并仍看到全部贡献', async () => {
+    const disk = unitsDisk();
+    const r1 = makePartitionRule();
+    const h1 = harness2({ index: makeIndex(), adapterRules: [r1.rule], units: disk });
+    await h1.engine.run();
+    const main = JSON.parse(JSON.stringify(h1.saves[0]!)) as LintCache;
+
+    const r2 = makePartitionRule();
+    const h2 = harness2({
+      index: makeIndex({ fingerprint: 'erbfp-2', fileMtimes: new Map([[A, 100], [B, 201]]) }),
+      adapterRules: [r2.rule],
+      loadImpl: async () => main,
+      units: disk,
+    });
+    const rep = await h2.engine.run();
+    expect(disk.loads).toContain('g.part'); // 这条规则本轮要重算 ⇒ 懒取自己那一条
+    expect(r2.units).toEqual([B]); // A 的贡献从独立键里按 mtime 命中
+    expect(r2.combines).toEqual([2]);
+    expect(rep.issues.filter((i) => i.ruleId === 'g.part')).toHaveLength(2);
+    expect(Object.keys(disk.blobs['g.part']!.units).sort()).toEqual([A, B].sort()); // 写回也是整份
+  });
+
+  it('外部输入摘要（key）变了 ⇒ 该规则整条分区作废重算（fail-closed，不拿旧贡献凑）', async () => {
+    const disk = unitsDisk();
+    let protocol = 'p1';
+    const r1 = makePartitionRule({ key: () => protocol });
+    const h1 = harness2({ index: makeIndex(), adapterRules: [r1.rule], units: disk });
+    await h1.engine.run();
+    expect(disk.blobs['g.part']!.key).toBe('p1');
+    const main = JSON.parse(JSON.stringify(h1.saves[0]!)) as LintCache;
+
+    protocol = 'p2';
+    const r2 = makePartitionRule({ key: () => protocol });
+    const h2 = harness2({
+      index: makeIndex({ fingerprint: 'erbfp-2' }),
+      adapterRules: [r2.rule],
+      loadImpl: async () => main,
+      units: disk,
+    });
+    await h2.engine.run();
+    expect(r2.units.sort()).toEqual([A, B].sort()); // 两棵全重算
+    expect(disk.blobs['g.part']!.key).toBe('p2'); // 坏判据的键被本轮真结果覆盖
+  });
+
+  it('键上读不出东西（新键 / 被判死删掉）⇒ 全量重算，结论照常产出', async () => {
+    const disk = unitsDisk();
+    const r1 = makePartitionRule();
+    const main = JSON.parse(
+      JSON.stringify({
+        erbFingerprint: 'erbfp-2',
+        projectResults: {},
+        buckets: {},
+      } as LintCache),
+    ) as LintCache;
+    const h = harness2({
+      index: makeIndex({ fingerprint: 'erbfp-2' }),
+      adapterRules: [r1.rule],
+      loadImpl: async () => main,
+      units: disk,
+    });
+    const rep = await h.engine.run();
+    expect(r1.units.sort()).toEqual([A, B].sort());
+    expect(disk.loads).toContain('g.part');
+    expect(rep.failedRules).toEqual([]);
+    expect(rep.issues.filter((i) => i.ruleId === 'g.part')).toHaveLength(2);
+  });
+
+  it('prune 的保留集 = 当前规则集里所有声明 partition 的规则（含本轮没建计划的那条）', async () => {
+    const disk = unitsDisk();
+    const ok = makePartitionRule({ id: 'g.ok' });
+    const broken: ConventionRule = {
+      id: 'g.badkey',
+      description: 'key throws',
+      severity: 'info',
+      check: () => [],
+      partition: {
+        key() {
+          throw new Error('route table gone');
+        },
+        fileUnit: () => [],
+        combine: () => [],
+      },
+    };
+    const h = harness2({ index: makeIndex(), adapterRules: [ok.rule, broken], units: disk });
+    const rep = await h.engine.run();
+    expect(rep.failedRules.map((f) => f.ruleId)).toContain('g.badkey');
+    expect(disk.saves).toContain('g.ok');
+    expect(disk.saves).not.toContain('g.badkey'); // 坏判据那条不写盘
+    expect(disk.prunes[disk.prunes.length - 1]!.sort()).toEqual(['g.badkey', 'g.ok', SUGAR].sort());
+  });
+
+  it('没装端口 ⇒ 仍走 v3 同键形态（老装配零改动，贡献随主快照读写）', async () => {
+    const r1 = makePartitionRule();
+    const h1 = harness2({ index: makeIndex(), adapterRules: [r1.rule] });
+    await h1.engine.run();
+    expect(Object.keys(h1.saves[0]!.projectUnits!['g.part']!)).toHaveLength(2);
+    const r2 = makePartitionRule();
+    const h2 = harness2({
+      index: makeIndex({ fingerprint: 'erbfp-2', fileMtimes: new Map([[A, 100], [B, 201]]) }),
+      adapterRules: [r2.rule],
+      loadImpl: async () => h1.saves[0]!,
+    });
+    await h2.engine.run();
+    expect(r2.units).toEqual([B]);
+  });
+});
+

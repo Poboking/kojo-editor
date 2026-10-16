@@ -3,11 +3,16 @@ import type { CacheExpect, ConventionIssue, ConventionRule, GameProject } from '
 import {
   LINT_SNAPSHOT_FORMAT,
   LINT_STORE_KEY,
+  LINT_UNITS_KEY_PREFIX,
   decodeCache,
+  decodeUnits,
   encodeCache,
+  encodeUnits,
   lintExpect,
+  lintUnitsKey,
   rulesDigest,
   type LintCache,
+  type LintUnitEntry,
 } from '../src/snapshot';
 
 const EXPECT: CacheExpect = { projectRoot: '/p', adapterId: 'eratw', fingerprint: 'global-digest-1' };
@@ -149,3 +154,81 @@ describe('rulesDigest：规则清单摘要必须含 scope', () => {
     );
   });
 });
+
+/**
+ * 分区贡献的独立存储键（PERF-12c）：贡献从主快照拆出来 ⇒ "全命中轮"不再为一句零计算
+ * 整份读 4 MB。拆出去的代价是**生命周期要自己管**——键名安全（内核 storage 硬校验）、
+ * 判据自带（不符即判死，绝不"修"），孤儿由当前规则集正算键名求补集清掉。
+ */
+describe('分区贡献的存储键与判据（PERF-12c）', () => {
+  /** 与内核 `assertSafeSegment` 同一条正则（测试里复刻，插件不 import 内核） */
+  const SAFE = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,119}$/;
+  const units = (): Record<string, LintUnitEntry> => ({
+    '/p/a.ERB': { mtimeMs: 100, unit: ['A', 'B'] },
+    '/p/b.ERB': { mtimeMs: null, unit: [] },
+  });
+
+  it('键名过得了内核的键校验、随 ruleId 稳定、清洗撞车也不共用一键', () => {
+    const ids = [
+      'eratw.kojo-completeness',
+      'sugar.static-conventions',
+      'x/y', // 清洗后与下面的 'x-y' 前缀相同 ⇒ 靠摘要尾缀区分
+      'x-y',
+      '..%2e%2e',
+      '_lead.dash-dot_1',
+      `r${'g'.repeat(300)}`,
+    ];
+    const keys = ids.map((id) => lintUnitsKey(id));
+    for (const k of keys) {
+      expect(SAFE.test(k)).toBe(true);
+      expect(k.startsWith(LINT_UNITS_KEY_PREFIX)).toBe(true);
+      expect(k).not.toContain('..');
+      expect(k.length).toBeLessThanOrEqual(120);
+    }
+    expect(lintUnitsKey('eratw.kojo-completeness')).toBe(keys[0]);
+    expect(new Set(keys).size).toBe(keys.length); // 无碰撞
+  });
+
+  it('encode/decode 往返：判据齐 ⇒ 外部输入摘要与贡献原样拿回', () => {
+    const blob = encodeUnits({ ruleId: 'g.part', key: 'proto-7', units: units(), expect: EXPECT, savedAt: 1 });
+    const decoded = decodeUnits(JSON.parse(JSON.stringify(blob)), EXPECT, 'g.part');
+    expect(decoded).not.toBeNull();
+    expect(decoded!.key).toBe('proto-7');
+    expect(Object.keys(decoded!.units).sort()).toEqual(['/p/a.ERB', '/p/b.ERB'].sort());
+    expect(decoded!.units['/p/a.ERB']).toEqual({ mtimeMs: 100, unit: ['A', 'B'] });
+    expect(decoded!.units['/p/b.ERB']!.mtimeMs).toBeNull();
+  });
+
+  it('全局判据 / ruleId / 格式 任一不符 ⇒ null（调用方删键重算）', () => {
+    const blob = encodeUnits({ ruleId: 'g.part', key: 'k1', units: units(), expect: EXPECT });
+    expect(decodeUnits(blob, { ...EXPECT, fingerprint: 'other' }, 'g.part')).toBeNull();
+    expect(decodeUnits(blob, { ...EXPECT, projectRoot: '/q' }, 'g.part')).toBeNull();
+    expect(decodeUnits(blob, { ...EXPECT, adapterId: 'other' }, 'g.part')).toBeNull();
+    expect(decodeUnits(blob, EXPECT, 'g.other')).toBeNull();
+    expect(decodeUnits({ ...blob, format: LINT_SNAPSHOT_FORMAT + 1 }, EXPECT, 'g.part')).toBeNull();
+    expect(decodeUnits(blob, EXPECT, 'g.other')).toBeNull();
+    expect(decodeUnits(undefined, EXPECT, 'g.part')).toBeNull();
+  });
+
+  it('结构不符（元组长度 / mtime 类型）⇒ null，绝不带着坏贡献进合并', () => {
+    const blob = encodeUnits({ ruleId: 'g.part', key: 'k1', units: units(), expect: EXPECT });
+    const brokenUnits = { ...blob.units, '/p/c.ERB': [100] as unknown as [number, unknown] };
+    expect(decodeUnits({ ...blob, units: brokenUnits }, EXPECT, 'g.part')).toBeNull();
+    expect(decodeUnits({ ...blob, units: { '/p/a.ERB': ['x', []] } }, EXPECT, 'g.part')).toBeNull();
+    expect(decodeUnits({ ...blob, key: 7 as unknown as string }, EXPECT, 'g.part')).toBeNull();
+  });
+
+  it('旧主快照（v3 同键携带 units）读出来仍能拿到贡献 ⇒ 拆键是 additive', () => {
+    const legacy: LintCache = {
+      erbFingerprint: 'erbfp-1',
+      projectResults: { 'g.part': [] },
+      buckets: {},
+      projectUnits: { 'g.part': units() },
+      partitionKeys: { 'g.part': 'k1' },
+    };
+    const restored = decodeCache(encodeCache({ cache: legacy, expect: EXPECT }), EXPECT);
+    expect(restored!.projectUnits!['g.part']).toEqual(legacy.projectUnits!['g.part']);
+    expect(restored!.partitionKeys!['g.part']).toBe('k1');
+  });
+});
+

@@ -25,6 +25,9 @@
  * `partition` 化的 `scope:'project'` 规则把"每文件的结构化贡献"按 mtime 逐文件缓存
  * （与桶同族判据），另按 `partitionKeys[ruleId]`（外部输入摘要，如路由表内容）整体失效；
  * `projectResults` 仍受整项目指纹约束——分区层是它在"改一棵"时的补救路径。
+ * **PERF-12c**：真语料上贡献占了主快照 79% 的体积（4.0 MB / 5.1 MB）⇒ "全命中轮"也要
+ * 整份读盘 + parse 才换来一句零计算。贡献改走**按规则一条键**（`lint-units-v1-*`），
+ * 只在真有分区规则要重算时懒取；主快照不再携带 `units`（旧键读出仍兼容：字段可选）。
  *
  * ## 纪律
  * - **fail-closed**：全局判据或结构任一不符 ⇒ null（调用方删除并重算），绝不"修"快照；
@@ -95,6 +98,86 @@ export interface StoredLintCache {
   readonly buckets: Record<string, Record<string, BucketTuple>>;
   readonly units: Record<string, Record<string, UnitTuple>>;
   readonly partitionKeys: Record<string, string>;
+}
+
+/** 分区贡献的独立存储键前缀（PERF-12c）：`lint-units-v1-<ruleId 摘要>`，每条分区规则一键 */
+export const LINT_UNITS_KEY_PREFIX = 'lint-units-v1-';
+
+/**
+ * 分区贡献的存储键名（确定性、有界、防穿越）。
+ * 尾缀固定带 `ruleId` 的摘要 ⇒ 清洗后的前缀即使相互撞车也不会共用一键；
+ * 键名不可反解，清理孤儿由**当前规则集正算键名取补集**完成（见 `decodeUnits` 的同侧纪律）。
+ */
+export function lintUnitsKey(ruleId: string): string {
+  const safe = ruleId
+    .replace(/[^A-Za-z0-9._-]/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[^A-Za-z0-9_]/, '_')
+    .slice(0, 90); // 14（前缀）+ 90 + 1 + 12（摘要）≤ 120 ⇒ 过得了内核的键名校验
+  const digest = foldDigest([ruleId]).slice(0, 12);
+  return `${LINT_UNITS_KEY_PREFIX}${safe}-${digest}`;
+}
+
+/** 盘上的分区贡献（单规则一条键；判据自带，不与主快照同生共死） */
+export interface StoredLintUnits {
+  readonly format: number;
+  readonly projectRoot: string;
+  readonly adapterId: string;
+  readonly expectFingerprint: string;
+  readonly ruleId: string;
+  /** 写入时的 `partition.key()`（外部输入摘要）；不等 ⇒ 整键弃用 */
+  readonly key: string;
+  readonly savedAt: number;
+  readonly units: Record<string, UnitTuple>;
+}
+
+export function encodeUnits(args: {
+  ruleId: string;
+  key: string;
+  units: Readonly<Record<string, LintUnitEntry>>;
+  expect: CacheExpect;
+  savedAt?: number;
+}): StoredLintUnits {
+  const out: Record<string, UnitTuple> = {};
+  for (const [path, u] of Object.entries(args.units)) out[path] = [u.mtimeMs, u.unit];
+  return {
+    format: LINT_SNAPSHOT_FORMAT,
+    projectRoot: args.expect.projectRoot,
+    adapterId: args.expect.adapterId,
+    expectFingerprint: args.expect.fingerprint,
+    ruleId: args.ruleId,
+    key: args.key,
+    savedAt: args.savedAt ?? Date.now(),
+    units: out,
+  };
+}
+
+/**
+ * 还原某条规则的分区贡献；**全局判据 / ruleId / 结构**任一不符 ⇒ null（调用方删键并重算）。
+ * 返回里的 `key` 交给引擎与本轮 `partition.key()` 比对（外部输入摘要不符 ⇒ 整键弃用，fail-closed）。
+ */
+export function decodeUnits(
+  raw: unknown,
+  expect: CacheExpect,
+  ruleId: string,
+): { key: string; units: Record<string, LintUnitEntry> } | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const s = raw as Partial<StoredLintUnits>;
+  if (s.format !== LINT_SNAPSHOT_FORMAT) return null;
+  if (s.projectRoot !== expect.projectRoot) return null;
+  if (s.adapterId !== expect.adapterId) return null;
+  if (s.expectFingerprint !== expect.fingerprint) return null;
+  if (s.ruleId !== ruleId) return null;
+  if (typeof s.key !== 'string') return null;
+  if (typeof s.units !== 'object' || s.units === null) return null;
+  const units: Record<string, LintUnitEntry> = {};
+  for (const [path, tuple] of Object.entries(s.units)) {
+    if (!Array.isArray(tuple) || tuple.length !== 2) return null;
+    const mtime = tuple[0];
+    if (mtime !== null && typeof mtime !== 'number') return null;
+    units[path] = { mtimeMs: mtime as number | null, unit: tuple[1] };
+  }
+  return { key: s.key, units };
 }
 
 /**
