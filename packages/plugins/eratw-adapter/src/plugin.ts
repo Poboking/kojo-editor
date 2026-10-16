@@ -41,8 +41,6 @@ import {
 } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID, createDeployKojoWizard } from './deploy-wizard';
-import { DEPLOY_DIFF_OVERLAY_ID, createDeployDiffOverlay } from './deploy-diff-panel';
-import type { PendingCompare } from './deploy-diff';
 import {
   KOJO_TUTORIAL_OVERLAY_ID,
   REFERENCE_TUTORIAL_OVERLAY_ID,
@@ -334,22 +332,6 @@ export function createEratwAdapterPlugin(): Plugin {
 
       /** 待导入请求（overlay 组件无 props，payload 不经组件——读插件闭包） */
       let pendingImport: PendingImport | null = null;
-
-      /* ---- 比对请求（1015 比对批）：包行「比对」→ 只读比对窗（工作区版 vs 游戏目录版） ---- */
-
-      /** 待比对请求（同款闭包模式；目标角色缺 meta 时由比对窗里挑） */
-      let pendingCompare: PendingCompare | null = null;
-
-      const requestCompare = (artifact: WorkspaceArtifact, absDir: string): void => {
-        const metaCharaNo = artifact.meta.charaNo;
-        pendingCompare = {
-          absDir,
-          dirName: artifact.dirName,
-          displayName: artifact.name,
-          ...(typeof metaCharaNo === 'number' ? { charaNo: metaCharaNo } : {}),
-        };
-        ctx.bus.emit('ui.overlay.open', { id: DEPLOY_DIFF_OVERLAY_ID, source: 'eratw-adapter' });
-      };
 
       /* ---- 新建项目向导的「谁叫我开的」关联号（反馈 3，2026-10-13） ---- */
 
@@ -687,7 +669,6 @@ export function createEratwAdapterPlugin(): Plugin {
           dismissStatus: () => actions.dismiss(),
           exportArtifact: (absDir, displayName) => actions.exportArtifact(absDir, displayName),
           deployArtifact: (artifact, absDir) => requestDeploy(artifact, absDir),
-          compareArtifact: (artifact, absDir) => requestCompare(artifact, absDir),
           attribution: (absDir) => wsAttrCache.get(absDir),
           ensureAttribution: ensureWsAttribution,
           createItem,
@@ -765,27 +746,6 @@ export function createEratwAdapterPlugin(): Plugin {
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: DEPLOY_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
           deploy: (pkg, target) => actions.deployArtifact(pkg, target),
-        }),
-      });
-
-      /* ---- 部署比对窗（1015 比对批）：只读比对工作区版 vs 游戏目录版 ---- */
-
-      ctx.slots.register('ui.overlay', {
-        id: DEPLOY_DIFF_OVERLAY_ID,
-        order: 23,
-        size: 'wide',
-        component: createDeployDiffOverlay({
-          pending: () => pendingCompare,
-          clearPending: () => {
-            pendingCompare = null;
-          },
-          close: () =>
-            ctx.bus.emit('ui.overlay.close', { id: DEPLOY_DIFF_OVERLAY_ID, source: 'eratw-adapter' }),
-          gameProject: () => project.current(),
-          io,
-          compileKojo,
-          requestDiff: (payload) =>
-            ctx.bus.emit('ui.diffView.open', { ...payload, source: 'eratw-adapter' }),
         }),
       });
 

@@ -67,8 +67,6 @@ export interface KojoProjectsPanelDeps {
   exportArtifact(absDir: string, displayName: string): void;
   /** 发起「部署到游戏目录」（P-E：打开向导，落点与写权限在向导里确认） */
   deployArtifact(artifact: WorkspaceArtifact, absDir: string): void;
-  /** 发起「与游戏目录比对」（1015 比对批：只读比对窗，回答"部署了没有、差在哪"） */
-  compareArtifact(artifact: WorkspaceArtifact, absDir: string): void;
   /** 署名 / 授权读取态（T2；未触发加载 → undefined） */
   attribution(absDir: string): AttributionState | undefined;
   /** 请求加载某包的署名（已加载 / 在途 → no-op） */
@@ -508,15 +506,6 @@ export function createKojoProjectsPanel(
                     onClick: () => deps.deployArtifact(a, dir),
                   },
                   '部署',
-                ),
-                h(
-                  'button',
-                  {
-                    className: 'kp-action',
-                    title: `只读比对「${a.name}」的工作区版与游戏目录版（期望侧 = 当前包转译后的产物；不改任何文件）`,
-                    onClick: () => deps.compareArtifact(a, dir),
-                  },
-                  '比对',
                 ),
               ),
             ),
