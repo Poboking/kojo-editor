@@ -76,6 +76,13 @@ import { SaveWarningDialog } from './SaveWarningDialog';
 import { CJK_TYPING_BASELINE, editorOptionsForLineCount } from './editor-options';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
+import {
+  clampSlice,
+  extractViewSlice,
+  flushViewStates,
+  getViewState,
+  setViewState,
+} from './view-state-store';
 import { clampRange, erbReadOnlyGate, isErbLike } from './lift-preview';
 import { pathLabelParts, splitPath } from './path-label';
 import { Icon } from './icons';
@@ -1018,6 +1025,45 @@ export function EditorPane({
   const saveRef = useRef(save);
   saveRef.current = save;
 
+  /* ---------------- 视图状态跨会话持久化（view-state-store，落盘防抖在 store 内） ---------------- */
+
+  /** 快照当前编辑器（选区 + 滚动读数）→ 持久层。糖视图不落盘：糖的行号不属于真文件 */
+  const persistEditorSlice = (ed: Monaco.editor.IStandaloneCodeEditor, path: string): void => {
+    if (sugarModelRef.current) return;
+    const root = kernel.project.current()?.rootDir;
+    if (!root) return;
+    const slice = extractViewSlice(ed.saveViewState(), ed.getScrollTop(), ed.getScrollLeft());
+    if (slice) setViewState(root, path, slice);
+  };
+  /** 活动标签的即时快照（光标/滚动事件驱动；store 防抖合并落盘） */
+  const snapshotActiveView = (): void => {
+    const ed = editorRef.current;
+    const path = filePathRef.current;
+    if (ed && path) persistEditorSlice(ed, path);
+  };
+
+  /** 从持久层恢复：行列钳进当前 model（文件可能变短）；滚动越界由 monaco 内部钳制，不抛 */
+  const applyPersistedView = (
+    ed: Monaco.editor.IStandaloneCodeEditor,
+    model: Monaco.editor.ITextModel,
+    path: string,
+  ): void => {
+    const root = kernel.project.current()?.rootDir;
+    if (!root) return;
+    const slice = getViewState(root, path);
+    if (!slice) return;
+    const clamped = clampSlice(slice, model.getLineCount(), (l) => model.getLineMaxColumn(l));
+    try {
+      // Selection 构造自带归一化（钳制后 start 可能越过 end，交换由 monaco 处理）
+      ed.setSelections(
+        clamped.selections.map((r) => new monaco.Selection(r.startLineNumber, r.startColumn, r.endLineNumber, r.endColumn)),
+      );
+      ed.setScrollPosition({ scrollTop: clamped.scrollTop, scrollLeft: clamped.scrollLeft });
+    } catch {
+      // 出错退化 = 这次不恢复：视图状态是易失偏好，绝不反绑打开流程
+    }
+  };
+
   // 编辑器实例（仅一次）；卸载时 dispose 全部 model
   useEffect(() => {
     const host = hostRef.current;
@@ -1293,6 +1339,11 @@ export function EditorPane({
     };
     const crumbCursorSub = ed.onDidChangeCursorPosition(() => crumbRefreshRef.current?.());
     const crumbModelSub = ed.onDidChangeModel(() => crumbRefreshRef.current?.());
+    // 视图状态：光标/滚动驱动快照（store 内防抖合并落盘）；页面卸载前 flush 一次
+    const viewCurSub = ed.onDidChangeCursorPosition(snapshotActiveView);
+    const viewScrSub = ed.onDidScrollChange(snapshotActiveView);
+    const flushViewOnUnload = (): void => flushViewStates();
+    window.addEventListener('beforeunload', flushViewOnUnload);
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *
      * **按下才取**，不挂常驻监听：这条键一秒可能被按一次，而面包屑一次按键要算一次，
@@ -1417,6 +1468,9 @@ export function EditorPane({
       fontZoomSync.dispose();
       crumbCursorSub.dispose();
       crumbModelSub.dispose();
+      viewCurSub.dispose();
+      viewScrSub.dispose();
+      window.removeEventListener('beforeunload', flushViewOnUnload);
       crumbRefreshRef.current = null;
       setJumpProbe(null);
       formatterDisposer.dispose();
@@ -1441,6 +1495,9 @@ export function EditorPane({
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
       clearAllProblems(); // 编辑器整体卸载：清掉全部文件的问题，防幽灵诊断残留
+      // 卸载 = 会话终点：补一次最后快照（在途防抖窗口内的改动）再同步 flush
+      if (prevPathRef.current) persistEditorSlice(ed, prevPathRef.current);
+      flushViewStates();
       ed.dispose();
       editorRef.current = null;
       for (const entry of entriesRef.current.values()) {
@@ -1500,6 +1557,11 @@ export function EditorPane({
     const keep = new Set(openPaths);
     for (const [path, entry] of [...entriesRef.current]) {
       if (keep.has(path)) continue;
+      // 关闭的是活动标签：切换 effect 不会再为它存视图（条目即 dispose），此处补最后快照
+      if (path === prevPathRef.current) {
+        const closing = editorRef.current;
+        if (closing && closing.getModel() === entry.model) persistEditorSlice(closing, path);
+      }
       entry.listener.dispose();
       entry.model.dispose();
       clearProblems(path); // 标签关闭：同步清掉该文件在问题面板里的条目
@@ -1523,6 +1585,7 @@ export function EditorPane({
       const prev = prevPathRef.current;
       if (prev && prev !== filePath && entriesRef.current.has(prev)) {
         viewStatesRef.current.set(prev, ed.saveViewState());
+        persistEditorSlice(ed, prev);
       }
       let entry = entriesRef.current.get(filePath);
       if (!entry) {
@@ -1583,6 +1646,7 @@ export function EditorPane({
       ed.setModel(entry.model);
       const vs = viewStatesRef.current.get(filePath);
       if (vs) ed.restoreViewState(vs);
+      else applyPersistedView(ed, entry.model, filePath);
       setDirty(computeDirty(filePath));
       setError(null);
       setPendingChoice(null); // 换文件即作废未决的保存告警（避免误对旧文件应用修复）
