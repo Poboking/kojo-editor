@@ -343,6 +343,12 @@ export interface InstalledRow {
   readonly kindLabel: string;
   /** 来源的人话说法：有容器摘要 = 压缩包；没有 = 本机文件夹 */
   readonly sourceLabel: string;
+  /**
+   * 这一行给不给「导入为我的口上项目」——**只有口上包能导入成口上项目**
+   * （字典包 / 模板包不是口上制品，导入向导解释不了它们的内容形态）。
+   * 判定住这一层（零状态），渲染层照标记画、测试可静态钉死。
+   */
+  readonly canImport: boolean;
 }
 
 /** 已安装列表（按种类顺序 + 包名；`containerSha256` 缺省即"本机文件夹装的"） */
@@ -360,10 +366,29 @@ export function buildInstalledRows(list: readonly InstalledPack[]): InstalledRow
       digestPrefix: rec.contentDigest.slice(0, 8),
       kindLabel: KIND_LABEL[rec.kind],
       sourceLabel: rec.containerSha256 === undefined ? '本机文件夹' : '压缩包',
+      canImport: rec.kind === 'kojo-pack',
     }));
 }
 
 /** 卸载确认键（同一时刻只允许一条处于待确认态） */
 export function pendingKey(r: InstalledPack): string {
   return installedKey(r.kind, r.id, r.version);
+}
+
+/* ---------------- 「导入为我的口上项目」（KM-13 消费侧：只发意图） ---------------- */
+
+/** 导入按钮的人话标签（与文件树右键那条入口同一说法，作者认得） */
+export const IMPORT_LABEL = '导入为我的口上项目';
+
+/**
+ * 导入请求已发出那一句（**"已请求"不是"已导入"**：落地由工作区消费方
+ * 弹向导、作者选完目标项目后才发生——面板不替对方宣布结果）。
+ */
+export function importNote(name: string): string {
+  return `已请求导入「${name}」，请在弹出的窗口里选择要导入到的项目`;
+}
+
+/** 请求连发出都没成（取内容目录失败）那一句：走同一条内联状态行，不弹窗、不静默 */
+export function importFailNote(name: string, err: unknown): string {
+  return `「${name}」没能开始导入：${err instanceof Error ? err.message : String(err)}`;
 }

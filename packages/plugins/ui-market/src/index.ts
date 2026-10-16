@@ -5,14 +5,17 @@
  *
  * ## 本批能力面（刻意**很小**，别自己加）
  *
- * 只做这六件完整的事，不留空壳：
+ * 只做这七件完整的事，不留空壳：
  * 1. 索引浏览（按种类分组 + 名称/作者过滤 + 版本/体积/文件数/作者/许可/版本要求）；
  * 2. 安装面动作：没装过的行给「安装」，`packUpdateCheck` 判为 `updatable` 的行给「更新」，
  *    `latest` / `ahead` / 版本要求不够的行**不给按钮**，只在行上说清本机是哪一版；
- * 3. 已装列表（版本 + 来源；核对码前 8 位只住展开层）；
+ * 3. 已装列表（版本 + 来源；核对码前 8 位、id/kind 只住展开层）；
  * 4. 卸载（**一次确认**，走 `runUninstall`：不确认连服务都不叫）；
  * 5. 拉取列表（挂载走 TTL、按钮硬回源；**数据时间**常驻，失败态显式）；
- * 6. 显式态（没有列表 / 读不出 / 目录读不动 / 没有包 ⇒ 各一句人话；绝不空白屏、绝不"加载中"常驻）。
+ * 6. 显式态（没有列表 / 读不出 / 目录读不动 / 没有包 ⇒ 各一句人话；绝不空白屏、绝不"加载中"常驻）；
+ * 7. 已装的口上包行给「导入为我的口上项目」：面板只发意图
+ *    （`workspace.importRequested`，载荷 `source: 'market'` 逐字冻结），
+ *    向导与落地都住工作区消费方——面板不弹自己的窗、不摸盘（目录取 `contentDir()`）。
  *
  * 装与卸的结果、以及被拒的原因，一律只有**一处内联状态行**（`mk-status` / `mk-note`），不弹窗。
  * "该给哪个动作"不在本面板判定：三态出自契约的 `packUpdateCheck`，装得上去不去出自服务；
@@ -34,6 +37,7 @@ import {
   MARKET_SERVICE_KEY,
   PACK_VERSION_RE,
   coreVersion,
+  type InstalledPack,
   type MarketService,
   type Plugin,
   type UIPanelProps,
@@ -41,6 +45,7 @@ import {
 import {
   loadMarketSnapshot,
   pullMarketSnapshot,
+  runImport,
   runInstall,
   runUninstall,
   type MarketActionDeps,
@@ -55,6 +60,7 @@ import {
   dataTimeLine,
   droppedNotice,
   formatBytes,
+  IMPORT_LABEL,
   indexRowKey,
   installBusyNote,
   pendingKey,
@@ -100,6 +106,8 @@ export interface MarketPanelViewProps {
   onQuery(q: string): void;
   onPull(): void;
   onInstall(row: PackRow): void;
+  /** 已装的口上包行：把这一条经 `workspace.importRequested` 交给工作区消费方 */
+  onImport(rec: InstalledPack): void;
   onRequestUninstall(key: string): void;
   onConfirmUninstall(key: string): void;
   onCancelUninstall(): void;
@@ -218,6 +226,19 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
                 createElement('span', { className: 'mk-meta' }, `来源 ${r.sourceLabel}`),
                 createElement('span', { className: 'mk-meta' }, `作者 ${r.rec.author}`),
                 createElement('span', { className: 'mk-meta' }, `许可 ${r.rec.license}`),
+                // 只有口上包能导入成口上项目（判定在 `buildInstalledRows` 的行标记上）；
+                // 同一屏动作纪律：装/更新进行中一律禁用，进度仍只写状态行一处
+                r.canImport
+                  ? createElement(
+                      'button',
+                      {
+                        className: 'ghost small',
+                        disabled: p.installing !== null,
+                        onClick: () => p.onImport(r.rec),
+                      },
+                      IMPORT_LABEL,
+                    )
+                  : null,
                 confirming
                   ? createElement(
                       'span',
@@ -281,6 +302,8 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
     activate(ctx): void {
       const deps: MarketActionDeps = {
         market: ctx.inject<MarketService>(MARKET_SERVICE_KEY),
+        // 导入请求经总线发意图（面板不弹自己的窗：向导与落地都住工作区消费方）
+        bus: ctx.bus,
         log: ctx.log,
       };
 
@@ -361,6 +384,17 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           }
         };
 
+        /**
+         * 已装的口上包行「导入为我的口上项目」：只发意图（事件），不自己弹窗。
+         * 不另设 busy 态——这一步只是取一个目录路径 + 发一条事件，没有可展示的进度；
+         * 结果与失败照旧写内联状态行一处。装/更新进行中与其它按钮同样不响应（按钮已禁用）。
+         */
+        const doImport = async (rec: InstalledPack): Promise<void> => {
+          if (installing !== null) return;
+          const out = await runImport(deps, rec);
+          setNote(out.note);
+        };
+
         // 状态与回调住这一层；怎么画、哪一行给不给按钮全在 `MarketPanelView`（可静态渲染判据）
         return createElement(MarketPanelView, {
           snapshot,
@@ -374,6 +408,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           onQuery: setQuery,
           onPull: () => void pull(),
           onInstall: (row: PackRow) => void doInstall(row),
+          onImport: (rec: InstalledPack) => void doImport(rec),
           onRequestUninstall: setPending,
           onConfirmUninstall: (key: string) => void doUninstall(key),
           onCancelUninstall: () => setPending(null),
@@ -398,8 +433,10 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
 export {
   loadMarketSnapshot,
   pullMarketSnapshot,
+  runImport,
   runInstall,
   runUninstall,
+  type ImportOutcome,
   type InstallOutcome,
   type MarketActionDeps,
   type MarketSnapshot,
@@ -416,6 +453,9 @@ export {
   formatBytes,
   formatClock,
   formatGeneratedAt,
+  IMPORT_LABEL,
+  importFailNote,
+  importNote,
   indexRowKey,
   installBusyNote,
   installNote,

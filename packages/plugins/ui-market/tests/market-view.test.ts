@@ -17,6 +17,9 @@ import {
   CAPABILITY_HINT,
   droppedNotice,
   formatBytes,
+  IMPORT_LABEL,
+  importFailNote,
+  importNote,
   indexRowKey,
   installBusyNote,
   installNote,
@@ -337,5 +340,34 @@ describe('已装列表', () => {
 
   it('空列表 ⇒ 空数组（由面板给一句"本机还没有装好的包"）', () => {
     expect(buildInstalledRows([])).toEqual([]);
+  });
+
+  it('只有口上包那一行可导入（其余种类行没这个动作；判定在行标记上，渲染层照它画）', () => {
+    const rows = buildInstalledRows([
+      rec({ kind: 'dict-pack', id: 'd.pack', name: '字典' }),
+      rec({ kind: 'kojo-pack', id: 'k.pack', name: '口上' }),
+      rec({ kind: 'template-pack', id: 't.pack', name: '模板' }),
+    ]);
+    // 已装列表按契约种类顺序排：口上包 → 字典包 → 模板包
+    expect(rows.map((r) => [r.rec.kind, r.canImport])).toEqual([
+      ['kojo-pack', true],
+      ['dict-pack', false],
+      ['template-pack', false],
+    ]);
+    expect(IMPORT_LABEL).toBe('导入为我的口上项目');
+  });
+
+  it('导入那两句都是人话，且"已请求"不冒充结果（机器词不上行）', () => {
+    expect(importNote('演示口上包')).toContain('已请求导入「演示口上包」');
+    expect(importNote('演示口上包')).not.toContain('已导入');
+    // 取目录失败也只丢一句人话（原话给出，不静默）：走同一条内联状态行
+    expect(importFailNote('演示口上包', new Error('目录读不动'))).toBe(
+      '「演示口上包」没能开始导入：目录读不动',
+    );
+    for (const s of [importNote('演示口上包'), importFailNote('演示口上包', new Error('x')), IMPORT_LABEL]) {
+      for (const w of ['kind', 'sha256', 'manifest', 'index.json', 'schema', 'importRequested']) {
+        expect(s, w).not.toContain(w);
+      }
+    }
   });
 });

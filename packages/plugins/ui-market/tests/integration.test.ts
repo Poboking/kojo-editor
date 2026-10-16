@@ -5,6 +5,7 @@ import {
   MARKET_CONTENT_DIR,
   MARKET_INDEX_FILE,
   MARKET_MANIFEST_FILE,
+  MARKET_PACKS_DIR,
   MARKET_SCHEMA_VERSION,
   MARKET_SERVICE_KEY,
   MARKET_STAGING_DIR,
@@ -12,6 +13,7 @@ import {
   packContainerName,
   packUnpackedName,
   type DirEntry,
+  type EventBus,
   type FileIO,
   type InstalledPack,
   type Logger,
@@ -30,7 +32,14 @@ import {
 // 这样"卸完了列表与磁盘同时为空"、"装完落点与记账同时到位"钉的是实现，不是自造的假盘。
 import { createMarketService, sha256Hex } from '@kojo/plugin-kojo-market';
 import { createUiMarketPlugin, MarketPanelView } from '../src/index';
-import { loadMarketSnapshot, runInstall, runUninstall, type MarketActionDeps, type MarketSnapshot } from '../src/actions';
+import {
+  loadMarketSnapshot,
+  runImport,
+  runInstall,
+  runUninstall,
+  type MarketActionDeps,
+  type MarketSnapshot,
+} from '../src/actions';
 import { buildGroups, REJECT_TEXT } from '../src/market-view';
 
 const APP_VERSION = '0.4.0-beta.1';
@@ -225,6 +234,26 @@ function captureLog(): { log: Logger; warns: string[] } {
   return { log: { ...quietLog, warn: (m: string) => warns.push(String(m)) }, warns };
 }
 
+/** 记录发出的事件（导入判据：总线收到的是不是**精确载荷**，以及"不该发就不发"） */
+function recordingBus(): { bus: EventBus; emits: Array<{ type: string; payload: unknown }> } {
+  const emits: Array<{ type: string; payload: unknown }> = [];
+  return {
+    emits,
+    bus: {
+      on: () => () => undefined,
+      once: () => () => undefined,
+      emit: (type: string, payload: unknown) => {
+        emits.push({ type, payload });
+      },
+    } as unknown as EventBus,
+  };
+}
+
+/** 动作层依赖的最小构造（装/卸用例不关心总线；导入用例自己给记录版） */
+function depsOf(market: MarketService, log: Logger = quietLog): MarketActionDeps {
+  return { market, bus: recordingBus().bus, log };
+}
+
 /* --------------------------------- 夹具 --------------------------------- */
 
 async function writeSource(fs: MemFS, id = 'demo.pack', kind = 'kojo-pack'): Promise<void> {
@@ -379,10 +408,13 @@ function containerRemote(
 interface FakeCtx {
   ctx: PluginContext;
   slots: Array<{ slot: string; item: unknown }>;
+  /** 本插件经总线发出的事件（导入是"发意图"，判据要看载荷） */
+  emits: Array<{ type: string; payload: unknown }>;
 }
 
 function panelCtx(market: MarketService, io: FileIO, log: Logger): FakeCtx {
   const slots: Array<{ slot: string; item: unknown }> = [];
+  const emits: Array<{ type: string; payload: unknown }> = [];
   const ctx: PluginContext = {
     pluginId: 'ui-market',
     log,
@@ -395,7 +427,14 @@ function panelCtx(market: MarketService, io: FileIO, log: Logger): FakeCtx {
       // 契约签名是 `query(slot)`；替身只服务本面板（不查槽），返回空数组即可
       query: () => [],
     } as never,
-    bus: { on: () => () => undefined, emit: () => undefined, once: () => () => undefined, off: () => undefined },
+    bus: {
+      on: () => () => undefined,
+      emit: (type: string, payload: unknown) => {
+        emits.push({ type, payload });
+      },
+      once: () => () => undefined,
+      off: () => () => undefined,
+    },
     inject: (key: string) => {
       if (key === MARKET_SERVICE_KEY) return market;
       if (key === 'kernel.io') return io;
@@ -405,7 +444,7 @@ function panelCtx(market: MarketService, io: FileIO, log: Logger): FakeCtx {
     tryInject: () => undefined,
     onDispose: () => undefined,
   } as unknown as PluginContext;
-  return { ctx, slots };
+  return { ctx, slots, emits };
 }
 
 /* --------------------------------- 判据 --------------------------------- */
@@ -455,7 +494,7 @@ describe('ui-market 接线', () => {
 describe('面板取数：四条显式态', () => {
   it('列表文件不在位 ⇒ list-missing（一句人话，不是空白屏）', async () => {
     const { io } = makeIo();
-    const snap = await loadMarketSnapshot({ market: makeService(io), log: quietLog });
+    const snap = await loadMarketSnapshot(depsOf(makeService(io)));
     expect(snap.status).toBe('list-missing');
     expect(snap.packs).toEqual([]);
     expect(snap.installed).toEqual([]);
@@ -464,14 +503,14 @@ describe('面板取数：四条显式态', () => {
   it('列表文件在位但 JSON 坏 ⇒ list-broken；packs 为空 ⇒ no-packs', async () => {
     const h = makeIo();
     h.fs.write(join(ROOT, 'index.json'), new TextEncoder().encode('{坏 JSON'));
-    let snap = await loadMarketSnapshot({ market: makeService(h.io), log: quietLog });
+    let snap = await loadMarketSnapshot(depsOf(makeService(h.io)));
     expect(snap.status).toBe('list-broken');
 
     h.fs.write(
       join(ROOT, 'index.json'),
       new TextEncoder().encode(JSON.stringify({ schema: 1, generatedAt: '2026-10-15T00:00:00Z', packs: [] })),
     );
-    snap = await loadMarketSnapshot({ market: makeService(h.io), log: quietLog });
+    snap = await loadMarketSnapshot(depsOf(makeService(h.io)));
     expect(snap.status).toBe('no-packs');
 
     h.fs.write(
@@ -497,7 +536,7 @@ describe('面板取数：四条显式态', () => {
         }),
       ),
     );
-    snap = await loadMarketSnapshot({ market: makeService(h.io), log: quietLog });
+    snap = await loadMarketSnapshot(depsOf(makeService(h.io)));
     expect(snap.status).toBe('ready');
     expect(snap.packs).toHaveLength(1);
   });
@@ -506,7 +545,7 @@ describe('面板取数：四条显式态', () => {
     const h = makeIo();
     const { log, warns } = captureLog();
     h.breakExists(true);
-    const snap = await loadMarketSnapshot({ market: makeService(h.io, log), log });
+    const snap = await loadMarketSnapshot(depsOf(makeService(h.io, log), log));
     expect(snap.status).toBe('list-unreadable');
     expect(warns.length).toBeGreaterThan(0);
   });
@@ -530,7 +569,7 @@ describe('面板卸载：一次确认 + 列表与磁盘同时为空', () => {
     const h = makeIo();
     await writeSource(h.fs);
     const market = counting(makeService(h.io));
-    const deps = { market, log: quietLog };
+    const deps = depsOf(market);
     const rec = await market.installLocalDir(SOURCE);
     const dir = await market.installDir(rec.kind, rec.id, rec.version);
     expect(h.fs.exists(dir)).toBe(true);
@@ -547,7 +586,7 @@ describe('面板卸载：一次确认 + 列表与磁盘同时为空', () => {
     const h = makeIo();
     await writeSource(h.fs);
     const market = counting(makeService(h.io));
-    const deps = { market, log: quietLog };
+    const deps = depsOf(market);
     const rec = await market.installLocalDir(SOURCE);
     const dir = await market.installDir(rec.kind, rec.id, rec.version);
 
@@ -568,7 +607,7 @@ describe('面板卸载：一次确认 + 列表与磁盘同时为空', () => {
     await writeSource(h.fs);
     const { log, warns } = captureLog();
     const market = makeService(h.io, log);
-    const deps = { market, log };
+    const deps = depsOf(market, log);
     const rec = await market.installLocalDir(SOURCE);
     const out = await runUninstall(deps, { ...rec, id: '没装过的包' }, true);
     expect(out.kind).toBe('failed');
@@ -602,7 +641,7 @@ describe('面板装包：注册表容器源（真服务 + 假桥；一行一次�
     const entry = await entryOf(c);
     const calls: Array<'download' | 'extract'> = [];
     const market = makeService(h.io, quietLog, containerRemote(h, () => c, calls));
-    const deps: MarketActionDeps = { market, log: quietLog };
+    const deps: MarketActionDeps = depsOf(market);
 
     const out = await runInstall(deps, entry, 'install');
     expect(out.kind).toBe('done');
@@ -634,7 +673,7 @@ describe('面板装包：注册表容器源（真服务 + 假桥；一行一次�
     let current = await makeContainer('1.0.0');
     const calls: Array<'download' | 'extract'> = [];
     const market = makeService(h.io, quietLog, containerRemote(h, () => current, calls));
-    const deps: MarketActionDeps = { market, log: quietLog };
+    const deps: MarketActionDeps = depsOf(market);
 
     expect((await runInstall(deps, await entryOf(current), 'install')).kind).toBe('done');
     current = await makeContainer('1.0.1');
@@ -656,7 +695,7 @@ describe('面板装包：注册表容器源（真服务 + 假桥；一行一次�
     const upRow = await makeContainer('1.0.1');
     const calls: Array<'download' | 'extract'> = [];
     const market = makeService(h.io, quietLog, containerRemote(h, () => upRow, calls));
-    const deps: MarketActionDeps = { market, log: quietLog };
+    const deps: MarketActionDeps = depsOf(market);
     // 先按目录源装一版 1.0.0（这条路径一直在），再把 1.0.1 那一行摆进列表
     await writeSource(h.fs);
     await market.installLocalDir(SOURCE);
@@ -679,7 +718,7 @@ describe('面板装包：注册表容器源（真服务 + 假桥；一行一次�
     const { log, warns } = captureLog();
     const market = makeService(h.io, log, containerRemote(h, () => c, calls, { failDownload: true }));
 
-    const out = await runInstall({ market, log }, entry, 'install');
+    const out = await runInstall(depsOf(market, log), entry, 'install');
     expect(out.kind).toBe('failed');
     // 作者看到的这一句**逐字等于**表里那句，不是把异常消息甩上去
     expect(out.note).toBe(`「演示口上包」没装成：${REJECT_TEXT['download-failed']}`);
@@ -702,7 +741,7 @@ describe('面板装包：注册表容器源（真服务 + 假桥；一行一次�
     const { log, warns } = captureLog();
     const market = makeService(h.io, log, containerRemote(h, () => c, calls));
 
-    const out = await runInstall({ market, log }, lying, 'install');
+    const out = await runInstall(depsOf(market, log), lying, 'install');
     expect(out.kind).toBe('failed');
     expect(out.note).toBe(`「演示口上包」没装成：${REJECT_TEXT['container-sha256']}`);
     expect(calls, '摘要不符就不该对容器动盘').toEqual(['download']);
@@ -721,7 +760,7 @@ describe('面板装包：注册表容器源（真服务 + 假桥；一行一次�
         throw new Error('桥自己炸了');
       },
     };
-    const out = await runInstall({ market: boom, log: quietLog }, entry, 'install');
+    const out = await runInstall(depsOf(boom), entry, 'install');
     expect(out.kind).toBe('failed');
     expect(out.note).toBe('「演示口上包」没装成：桥自己炸了');
   });
@@ -732,7 +771,7 @@ describe('面板装包：注册表容器源（真服务 + 假桥；一行一次�
     const entry = await entryOf(c);
     const calls: Array<'download' | 'extract'> = [];
     const market = makeService(h.io, quietLog, containerRemote(h, () => c, calls));
-    const deps: MarketActionDeps = { market, log: quietLog };
+    const deps: MarketActionDeps = depsOf(market);
     await runInstall(deps, entry, 'install');
     const snap = await loadMarketSnapshot(deps);
     const rec = snap.installed[0]!;
@@ -782,7 +821,7 @@ const viewEntry = (id: string, version: string, over: Partial<MarketIndexEntry> 
   ...over,
 });
 
-const viewRec = (id: string, version: string): InstalledPack => ({
+const viewRec = (id: string, version: string, over: Partial<InstalledPack> = {}): InstalledPack => ({
   kind: 'kojo-pack',
   id,
   version,
@@ -792,6 +831,7 @@ const viewRec = (id: string, version: string): InstalledPack => ({
   contentDigest: HEX_A,
   installedAt: 1_700_000_000_000,
   files: [],
+  ...over,
 });
 
 const noop = (): void => undefined;
@@ -828,6 +868,7 @@ function renderView(
       onQuery: noop,
       onPull: noop,
       onInstall: noop,
+      onImport: noop,
       onRequestUninstall: noop,
       onConfirmUninstall: noop,
       onCancelUninstall: noop,
@@ -910,6 +951,112 @@ describe('面板安装面的渲染判据（哪一行有按钮）', () => {
     for (const word of ['index.json', 'sha256', 'manifest', 'schema', 'kind', 'minAppVersion', 'id ', 'zip']) {
       expect(html, word).not.toContain(word);
     }
+  });
+});
+
+/* ------------- 已装口上包 → 「导入为我的口上项目」（KM-13 消费侧：只发意图） ------------- */
+
+describe('已装行「导入为我的口上项目」的渲染判据', () => {
+  const rowOf = (html: string, name: string): string =>
+    html.split('<div class="mk-row">').slice(1).find((s) => s.includes(name))!;
+
+  it('只有口上包那一行有导入按钮（字典包 / 模板包不给）；其余按钮照旧', () => {
+    const html = renderView(
+      [],
+      [
+        viewRec('k.pack', '1.0.0', { name: '演示口上' }),
+        viewRec('d.pack', '1.0.0', { kind: 'dict-pack', name: '演示字典' }),
+        viewRec('t.pack', '1.0.0', { kind: 'template-pack', name: '演示模板' }),
+      ],
+    );
+    expect(buttonsOf(html).filter((b) => b === '导入为我的口上项目')).toEqual(['导入为我的口上项目']);
+    expect(rowOf(html, '演示口上')).toContain('导入为我的口上项目');
+    expect(rowOf(html, '演示字典')).not.toContain('导入为我的口上项目');
+    expect(rowOf(html, '演示模板')).not.toContain('导入为我的口上项目');
+    // 导入是加在既有行上的第七个动作，不是替换：卸载按钮仍在每一行上
+    expect(buttonsOf(html).filter((b) => b === '卸载')).toHaveLength(3);
+  });
+
+  it('装 / 更新进行中 ⇒ 与其它动作一样禁用（闲时不禁用；不新增 busy 文案）', () => {
+    const fresh = renderView([], [viewRec('k.pack', '1.0.0')]);
+    expect(buttonsOf(fresh)).toContain('导入为我的口上项目');
+    const busy = renderView([], [viewRec('k.pack', '1.0.0')], {
+      installing: 'kojo-pack/other@1.0.0',
+      note: '正在安装「别的包」…',
+    });
+    const bs = buttonsOf(busy);
+    expect(bs).toContain('导入为我的口上项目（禁用）');
+    expect(bs.filter((b) => b === '导入为我的口上项目')).toEqual([]);
+    // 同一件事不在两处显示：按钮文字不写"导入中…"（进度只住状态行）
+    expect(bs.filter((b) => /中…/.test(b))).toEqual([]);
+  });
+});
+
+describe('导入请求的行为判据（`runImport`：取目录 → 发意图）', () => {
+  it('点下去：contentDir 按该行三元组调用、总线收到逐字冻结的载荷、状态行是那句人话', async () => {
+    const h = makeIo();
+    await writeSource(h.fs);
+    const market = makeService(h.io);
+    const rec = await market.installLocalDir(SOURCE);
+    const seen: Array<[string, string, string]> = [];
+    const counting: MarketService = {
+      ...market,
+      async contentDir(kind, id, version) {
+        seen.push([kind, id, version]);
+        return market.contentDir(kind, id, version);
+      },
+    };
+    const { bus, emits } = recordingBus();
+    const out = await runImport({ market: counting, bus, log: quietLog }, rec);
+
+    expect(out.kind).toBe('done');
+    expect(seen).toEqual([['kojo-pack', 'demo.pack', '1.0.0']]);
+    expect(emits).toHaveLength(1);
+    expect(emits[0]!.type).toBe('workspace.importRequested');
+    // 载荷 = 两侧冻结的接缝（adapter 按 `source` 认发起方并做署名映射）：逐字相等
+    expect(emits[0]!.payload).toEqual({
+      sourceDir: join(ROOT, MARKET_PACKS_DIR, 'kojo-pack', 'demo.pack', '1.0.0', MARKET_CONTENT_DIR),
+      suggestedName: '演示口上包',
+      source: 'market',
+    });
+    // 字段名也不许夹带别的键（接缝改名 = adapter 那边静默接不上）
+    expect(Object.keys(emits[0]!.payload as Record<string, unknown>).sort()).toEqual([
+      'source',
+      'sourceDir',
+      'suggestedName',
+    ]);
+    // 发出去的是服务派生的内容目录本身（里面真有包内容），不是面板自己拼的路径
+    expect(h.fs.exists((emits[0]!.payload as { sourceDir: string }).sourceDir)).toBe(true);
+    // 作者面那一句：说"已请求"（不当成"已导入"），也不含机器词
+    expect(out.note).toBe('已请求导入「演示口上包」，请在弹出的窗口里选择要导入到的项目');
+    for (const w of ['kind', 'id', 'sha256', 'manifest', 'index.json', 'schema', 'importRequested']) {
+      expect(out.note, w).not.toContain(w);
+    }
+  });
+
+  it('contentDir 取不动 ⇒ 一句人话的 mk-note、**一个事件都不发**、机器面出声（不弹窗）', async () => {
+    const h = makeIo();
+    await writeSource(h.fs);
+    const market = makeService(h.io);
+    const rec = await market.installLocalDir(SOURCE);
+    const { log, warns } = captureLog();
+    const { bus, emits } = recordingBus();
+    const boom: MarketService = {
+      ...market,
+      async contentDir(): Promise<string> {
+        throw new Error('目录读不动');
+      },
+    };
+    const out = await runImport({ market: boom, bus, log }, rec);
+
+    expect(out.kind).toBe('failed');
+    expect(out.note).toBe('「演示口上包」没能开始导入：目录读不动');
+    expect(emits).toEqual([]);
+    expect(warns.some((w) => /市场导入请求没有发出/.test(w))).toBe(true);
+    // 错误只进既有那一条内联状态行（mk-note），不弹窗：静态渲染里就是这一句
+    const html = renderView([], [rec], { note: out.note });
+    expect(html).toContain('mk-note');
+    expect(html).toContain('没能开始导入');
   });
 });
 

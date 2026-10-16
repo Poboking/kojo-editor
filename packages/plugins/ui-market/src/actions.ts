@@ -12,6 +12,7 @@
 
 import {
   MarketError,
+  type EventBus,
   type InstalledPack,
   type Logger,
   type MarketIndexEntry,
@@ -19,6 +20,8 @@ import {
   type MarketService,
 } from '@kojo/plugin-api';
 import {
+  importFailNote,
+  importNote,
   installNote,
   refreshNote,
   rejectNote,
@@ -29,6 +32,12 @@ import {
 
 export interface MarketActionDeps {
   market: MarketService;
+  /**
+   * 发起方总线：导入是**发意图**（`workspace.importRequested`）而不是面板自己开门——
+   * "导入成什么形态、问哪些字段"由工作区消费方（adapter）解释，面板只把
+   * "这个已装包的内容目录 + 建议名"交出去（跨层零游戏知识，照壳层文件树那条入口）。
+   */
+  bus: EventBus;
   log: Logger;
 }
 
@@ -199,5 +208,36 @@ export async function runInstall(
     const message = err instanceof Error ? err.message : String(err);
     deps.log.warn(`市场装包没有成功（${code}）：${message}`);
     return { kind: 'failed', note: rejectNote(entry.name, err) };
+  }
+}
+
+export type ImportOutcome =
+  | { readonly kind: 'done'; readonly note: string }
+  | { readonly kind: 'failed'; readonly note: string };
+
+/**
+ * 「导入为我的口上项目」：把已装包的内容目录经 `workspace.importRequested` 交给
+ * 工作区消费方（adapter 弹导入向导 → 作者选目标项目 → 内核字节级复制）。
+ *
+ * 载荷**逐字冻结**（两侧接缝）：`source: 'market'` 一个字都不许改——消费方按它
+ * 认发起方并做署名映射；`sourceDir` 一律由服务 `contentDir()` 派生（面板不摸盘、
+ * 不自己拼 `packs/...` 路径），`suggestedName` 取记账里的包名。
+ *
+ * 结果/失败都只回一句内联状态行的文案（HK-4），不弹窗；失败不出声才怪。
+ */
+export async function runImport(deps: MarketActionDeps, rec: InstalledPack): Promise<ImportOutcome> {
+  try {
+    const sourceDir = await deps.market.contentDir(rec.kind, rec.id, rec.version);
+    deps.bus.emit('workspace.importRequested', {
+      sourceDir,
+      suggestedName: rec.name,
+      source: 'market',
+    });
+    return { kind: 'done', note: importNote(rec.name) };
+  } catch (err: unknown) {
+    const code = err instanceof MarketError ? err.code : 'unknown';
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log.warn(`市场导入请求没有发出（${code}）：${message}`);
+    return { kind: 'failed', note: importFailNote(rec.name, err) };
   }
 }
