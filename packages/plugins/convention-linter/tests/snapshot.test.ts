@@ -218,7 +218,7 @@ describe('分区贡献的存储键与判据（PERF-12c）', () => {
     expect(decodeUnits({ ...blob, key: 7 as unknown as string }, EXPECT, 'g.part')).toBeNull();
   });
 
-  it('旧主快照（v3 同键携带 units）读出来仍能拿到贡献 ⇒ 拆键是 additive', () => {
+  it('旧主快照（v3 同键携带 units）缺省装载仍能拿到贡献 ⇒ 没装端口的装配零改动', () => {
     const legacy: LintCache = {
       erbFingerprint: 'erbfp-1',
       projectResults: { 'g.part': [] },
@@ -226,9 +226,34 @@ describe('分区贡献的存储键与判据（PERF-12c）', () => {
       projectUnits: { 'g.part': units() },
       partitionKeys: { 'g.part': 'k1' },
     };
-    const restored = decodeCache(encodeCache({ cache: legacy, expect: EXPECT }), EXPECT);
-    expect(restored!.projectUnits!['g.part']).toEqual(legacy.projectUnits!['g.part']);
-    expect(restored!.partitionKeys!['g.part']).toBe('k1');
+    const restored = decodeCache(encodeCache({ cache: legacy, expect: EXPECT }), EXPECT)!;
+    expect(restored.projectUnits!['g.part']).toEqual(legacy.projectUnits!['g.part']);
+    expect(restored.partitionKeys!['g.part']).toBe('k1');
+    expect(restored.droppedUnits).toBeUndefined();
+  });
+
+  it('includeUnits:false ⇒ 旧贡献整块跳过并留标记；标记不落盘（改写后不再重复触发）', () => {
+    const legacy: LintCache = {
+      erbFingerprint: 'erbfp-1',
+      projectResults: { 'g.part': [] },
+      buckets: {},
+      projectUnits: { 'g.part': units() },
+      partitionKeys: { 'g.part': 'k1' },
+    };
+    const stored = encodeCache({ cache: legacy, expect: EXPECT });
+    const lean = decodeCache(stored, EXPECT, { includeUnits: false })!;
+    expect(lean.projectUnits).toBeUndefined();
+    // `partitionKeys` 只有百来字节，留在主快照里无妨（装了端口时引擎读的是贡献键自带的 key）
+    expect(lean.partitionKeys).toEqual({ 'g.part': 'k1' });
+    expect(lean.droppedUnits).toBe(true);
+    expect(lean.buckets).toEqual({});
+    // 全局判据仍然要判死 ⇒ 跳过贡献不等于放松判据
+    expect(decodeCache(stored, { ...EXPECT, fingerprint: 'other' }, { includeUnits: false })).toBeNull();
+    // 结构坏掉的 units 在 includeUnits:false 下不再拖垮整份还原（它本来就要被丢掉）
+    expect(decodeCache({ ...stored, units: { 'g.part': 7 } }, EXPECT, { includeUnits: false })).not.toBeNull();
+    // 重写一遍就是瘦版：units 空 ⇒ 下一轮装载不再报 droppedUnits
+    const leanAgain = decodeCache(encodeCache({ cache: lean, expect: EXPECT }), EXPECT, { includeUnits: false })!;
+    expect(leanAgain.droppedUnits).toBeUndefined();
   });
 });
 

@@ -498,5 +498,37 @@ describe('分区贡献独立存储键的懒取与生命周期（PERF-12c）', ()
     await h2.engine.run();
     expect(r2.units).toEqual([B]);
   });
+
+  it('旧形态主快照（贡献还塞在里面）⇒ 零重算轮也立刻改写一次瘦版，下轮不再背 4 MB', async () => {
+    const disk = unitsDisk();
+    // 12b 写在盘上的那份带 projectUnits；装配侧装了端口 ⇒ 装载只解桶与结论、
+    // 贡献整块跳过并留 `droppedUnits` 标记（snapshot.decodeCache 的 includeUnits:false）
+    const leanFromLegacy: LintCache = {
+      erbFingerprint: 'erbfp-1',
+      projectResults: {
+        'g.part': [
+          { ruleId: 'g.part', severity: 'info', message: 'A', filePath: A, line: 1, key: 'g.part|A' },
+          { ruleId: 'g.part', severity: 'info', message: 'B', filePath: B, line: 1, key: 'g.part|B' },
+        ],
+      },
+      buckets: {},
+      droppedUnits: true,
+    };
+    const r2 = makePartitionRule();
+    const h = harness2({ index: makeIndex(), adapterRules: [r2.rule], loadImpl: async () => leanFromLegacy, units: disk });
+    const rep = await h.engine.run();
+    expect(rep.failedRules).toEqual([]);
+    expect(rep.issues.filter((i) => i.ruleId === 'g.part')).toHaveLength(2); // 结论仍来自复用
+    expect(r2.units).toEqual([]); // 旧贡献被丢掉，但绝不拿它凑、也没重算任何东西
+    expect(disk.loads).toEqual([SUGAR]); // 只有真建了计划的那条去懒取；`g.part` 一次都没碰
+    // 本轮一件都没重算 ⇒ 只因 droppedUnits 而改写：主快照从此不带贡献
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0]!.projectUnits).toBeUndefined();
+    expect(h.saves[0]!.partitionKeys).toBeUndefined();
+    // 唯一建了计划的是内置那条（它的结论本来就不在这份旧快照里）；
+    // 本轮走复用的 `g.part` 一条贡献都没写 ⇒ 拆键的意义就在于此
+    expect(disk.saves).toEqual([SUGAR]);
+    expect(h.saves[0]!.projectResults['g.part']).toHaveLength(2); // 结论照常带走
+  });
 });
 

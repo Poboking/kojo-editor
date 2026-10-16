@@ -643,7 +643,11 @@ export class ConventionEngine implements ConventionLinterService {
      * `prune` 的保留集是**当前规则集里所有声明 partition 的 ruleId**——规则改名/换适配器
      * 留下的孤儿键在这里清掉，不是只清"本轮没算的那几条"。
      */
-    if (this.deps.snapshot && expect && (recomputedFiles > 0 || ruleTimings.some((t) => !t.reused))) {
+    if (
+      this.deps.snapshot &&
+      expect &&
+      (recomputedFiles > 0 || ruleTimings.some((t) => !t.reused) || stored?.droppedUnits === true)
+    ) {
       const projectUnits: Record<string, Record<string, LintUnitEntry>> = {};
       const partitionKeys: Record<string, string> = {};
       const unitsByRule = new Map<string, Record<string, LintUnitEntry>>();

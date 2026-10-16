@@ -98,7 +98,8 @@ export function createConventionLinterPlugin(): Plugin {
           try {
             const raw = await storage.get<unknown>(LINT_STORE_KEY);
             if (raw === undefined) return null; // 首次 / 全局判据刚变：正常路径
-            const restored = decodeCache(raw, expect);
+            // 贡献已拆键 ⇒ 主快照里那份旧形态**不解码**（引擎会用 `droppedUnits` 立刻改写一次瘦版）
+            const restored = decodeCache(raw, expect, { includeUnits: false });
             if (restored === null) {
               void storage.delete(LINT_STORE_KEY).catch(() => undefined);
               // 主快照被判死（换项目 / 输入摘要变了）⇒ 拆出去的贡献键同批作废，不留跨项目残留

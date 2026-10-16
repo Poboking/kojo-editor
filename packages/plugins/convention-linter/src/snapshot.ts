@@ -78,6 +78,12 @@ export interface LintCache {
   readonly projectUnits?: Record<string, Record<string, LintUnitEntry>>;
   /** 分区规则的外部输入摘要（ruleId → `partition.key()`）；不等 ⇒ 该规则分区全弃 */
   readonly partitionKeys?: Record<string, string>;
+  /**
+   * 运行期标记（**不落盘**）：这次装载遇到的是 12b 的旧形态（贡献还塞在主快照里）且被
+   * 有意跳过未解码。引擎据此**即使本轮零重算也要重写一次主快照**——否则那句"全命中"
+   * 每轮都要为已经不需要的 4 MB 付读盘 + 走结构的钱，拆键也就白拆了。
+   */
+  readonly droppedUnits?: boolean;
 }
 
 /** 落盘形态（v2）。桶的元组：`[mtime]` = 该文件这次什么都没产出，`[mtime, issues]` = 有结论 */
@@ -256,7 +262,11 @@ function isIssueList(v: unknown): v is ConventionIssue[] {
  * 还原缓存；**全局判据**（格式 / 项目根 / 适配器 / `expectFingerprint`）或结构任一不符 ⇒ null。
  * 整项目层与逐文件层是否可用交给引擎：前者比 `erbFingerprint`，后者比 `mtimeMs`。
  */
-export function decodeCache(raw: unknown, expect: CacheExpect): LintCache | null {
+export function decodeCache(
+  raw: unknown,
+  expect: CacheExpect,
+  opts: { includeUnits?: boolean } = {},
+): LintCache | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const s = raw as Partial<StoredLintCache>;
   if (s.format !== LINT_SNAPSHOT_FORMAT) return null;
@@ -291,19 +301,24 @@ export function decodeCache(raw: unknown, expect: CacheExpect): LintCache | null
   }
 
   const projectUnits: Record<string, Record<string, LintUnitEntry>> = {};
-  if (s.units !== undefined) {
-    if (typeof s.units !== 'object' || s.units === null) return null;
-    for (const [ruleId, byPath] of Object.entries(s.units)) {
-      if (typeof byPath !== 'object' || byPath === null) return null;
-      const out: Record<string, LintUnitEntry> = {};
-      for (const [path, tuple] of Object.entries(byPath as Record<string, unknown>)) {
-        if (!Array.isArray(tuple) || tuple.length !== 2) return null;
-        const mtime = tuple[0];
-        if (mtime !== null && typeof mtime !== 'number') return null;
-        out[path] = { mtimeMs: mtime as number | null, unit: tuple[1] };
+  let droppedUnits = false;
+  if (opts.includeUnits !== false) {
+    if (s.units !== undefined) {
+      if (typeof s.units !== 'object' || s.units === null) return null;
+      for (const [ruleId, byPath] of Object.entries(s.units)) {
+        if (typeof byPath !== 'object' || byPath === null) return null;
+        const out: Record<string, LintUnitEntry> = {};
+        for (const [path, tuple] of Object.entries(byPath as Record<string, unknown>)) {
+          if (!Array.isArray(tuple) || tuple.length !== 2) return null;
+          const mtime = tuple[0];
+          if (mtime !== null && typeof mtime !== 'number') return null;
+          out[path] = { mtimeMs: mtime as number | null, unit: tuple[1] };
+        }
+        projectUnits[ruleId] = out;
       }
-      projectUnits[ruleId] = out;
     }
+  } else if (s.units !== undefined && typeof s.units === 'object' && Object.keys(s.units).length > 0) {
+    droppedUnits = true; // 12b 的旧形态：贡献还塞在主快照里 ⇒ 标记给引擎改写一次（不"修"、只用桶与结论）
   }
   const partitionKeys: Record<string, string> = {};
   if (s.partitionKeys !== undefined) {
@@ -319,5 +334,6 @@ export function decodeCache(raw: unknown, expect: CacheExpect): LintCache | null
     buckets,
     projectUnits: Object.keys(projectUnits).length > 0 ? projectUnits : undefined,
     partitionKeys: Object.keys(partitionKeys).length > 0 ? partitionKeys : undefined,
+    droppedUnits: droppedUnits ? true : undefined,
   };
 }
