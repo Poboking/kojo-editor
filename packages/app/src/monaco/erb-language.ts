@@ -2,6 +2,7 @@ import type * as Monaco from './entry';
 import { erbMonacoExtensions } from '@kojo/plugin-api';
 import { KOJO_SUGAR_THEME_RULES } from './kojo-language';
 import { KOJO_SEMANTIC_THEME_RULES } from './kojo-semantic-tokens';
+import { CJK_WORD_PATTERN } from './word-separators';
 
 /**
  * ERB (EraBasic) 基础语法高亮 —— Monarch 词法定义（v0.1 宽口径版）。
@@ -179,6 +180,8 @@ export function registerErbLanguage(monaco: typeof Monaco): void {
 
   monaco.languages.setLanguageConfiguration(ERB_LANGUAGE_ID, {
     comments: { lineComment: ';' },
+    // 全角标点按词分隔（A3）；双击/Ctrl+方向键另经编辑器选项 wordSeparators，两处同源 word-separators.ts
+    wordPattern: CJK_WORD_PATTERN,
     brackets: [
       ['(', ')'],
       ['[', ']'],

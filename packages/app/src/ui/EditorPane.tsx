@@ -66,7 +66,7 @@ import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTable
 import { applyReferenceEdits, installErbRename } from '../monaco/erb-rename';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
-import { editorOptionsForLineCount } from './editor-options';
+import { CJK_TYPING_BASELINE, editorOptionsForLineCount } from './editor-options';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
 import { clampRange, erbReadOnlyGate, isErbLike } from './lift-preview';
@@ -1037,6 +1037,8 @@ export function EditorPane({
       renderLineHighlight: 'all',
       padding: { top: 6, bottom: 16 },
       scrollbar: { verticalScrollbarSize: 12, horizontalScrollbarSize: 12 },
+      // 中文打字噪声 / 选词基线（A2+A3）：与切文件降级集同源（editor-options.ts）
+      ...CJK_TYPING_BASELINE,
     });
     editorRef.current = ed;
     perf.bootMark('boot.editorInteractive', undefined, '自导航起点 ms；Monaco 实例创建完成（近似：已挂载可输入）');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LARGE_FILE_LINES, editorOptionsForLineCount } from '../src/ui/editor-options';
+import { CJK_TYPING_BASELINE, LARGE_FILE_LINES, editorOptionsForLineCount } from '../src/ui/editor-options';
 
 /**
  * 大文件 Monaco 选项（2026-10-12「内核优化」批）。
@@ -55,5 +55,16 @@ describe('editorOptionsForLineCount（Monaco 大文件降级）', () => {
       renderCharacters: false,
       maxColumn: 72,
     });
+  });
+
+  it('中文基线（A2+A3）与体量无关：两档都关 quick suggest、都带全角分词与 unicode 高亮配置', () => {
+    for (const n of [10, LARGE_FILE_LINES, 100_000]) {
+      expect(editorOptionsForLineCount(n)).toMatchObject(CJK_TYPING_BASELINE);
+    }
+    expect(CJK_TYPING_BASELINE.quickSuggestions).toBe(false);
+    expect(CJK_TYPING_BASELINE.wordSeparators).toContain('，');
+    expect(CJK_TYPING_BASELINE.wordSeparators).toContain('：');
+    expect(CJK_TYPING_BASELINE.unicodeHighlight?.allowedCharacters?.['，']).toBe(true);
+    expect(CJK_TYPING_BASELINE.unicodeHighlight?.ambiguousCharacters).toBe(true);
   });
 });

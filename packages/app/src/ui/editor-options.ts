@@ -20,12 +20,43 @@
  * `editor.updateOptions(...)`。
  */
 import type * as Monaco from '../monaco/entry';
+import { CJK_AMBIGUOUS_WHITELIST, CJK_WORD_SEPARATORS } from '../monaco/word-separators';
 
 /** 大文件阈值（行）：≥ 此行数即降级若干"全文级"Monaco 特性 */
 export const LARGE_FILE_LINES = 5000;
 
 /** 供 `editor.updateOptions` 使用的选项补丁 */
 export type EditorOptionPatch = Monaco.editor.IEditorOptions & Monaco.editor.IGlobalEditorOptions;
+
+/**
+ * 中文语料的打字噪声 / 选词基线（A2+A3，**大小文件两档同值**）：
+ * 既 spread 进 `editorOptionsForLineCount`（切文件路径），也 spread 进 EditorPane 的 create options。
+ *
+ * - `quickSuggestions:false`——两个补全 provider 在任何 token 上下文都无门槛地返回候选
+ *   （`mergeSuggestions` 不做 token 判定），台词行连打必然弹无关列表；而显式触发字符
+ *   （`{` `：` `#` `[`）走 `suggestModel._updateTriggerCharacters`（受
+ *   `suggestOnTriggerCharacters` 而非 quickSuggestions 门控）、Ctrl+Space 走手动 trigger，
+ *   两条路都不受影响（monaco 0.57 `suggest/browser/suggestModel.js` 已核）。
+ * - `unicodeHighlight`——monaco 公开面没有 VS Code 的 `'neverVisible'` 词汇，
+ *   `nonBasicASCII:false` 即等价；歧义字符**保持告警**（西里尔等真同形异义照标），
+ *   常用中文标点由 `allowedLocales`(zh) + `allowedCharacters`(白名单) 双保险排除
+ *   （`UnicodeTextModelHighlighter.computeUnicodeHighlightReason` 实测 null；
+ *   默认 locale 集 `_default` 会把 ，：（）！？； 全标红——这就是本项要灭的噪声）。
+ * - `wordSeparators`——双击 / Ctrl+方向键的分词表（`WordCharacterClassifier` 对
+ *   charCode≥256 走 Map 分支，全角标点真实生效）。
+ */
+export const CJK_TYPING_BASELINE: EditorOptionPatch = {
+  quickSuggestions: false,
+  wordSeparators: CJK_WORD_SEPARATORS,
+  unicodeHighlight: {
+    nonBasicASCII: false,
+    // U+3000 全角空格照旧标形——与保存前的全角空格确认门同一道防线，不是噪声
+    invisibleCharacters: true,
+    ambiguousCharacters: true,
+    allowedLocales: { 'zh-hans': true, 'zh-hant': true },
+    allowedCharacters: CJK_AMBIGUOUS_WHITELIST,
+  },
+};
 
 /**
  * 与文件规模相称的 Monaco 选项（**纯函数**）。
@@ -35,6 +66,7 @@ export type EditorOptionPatch = Monaco.editor.IEditorOptions & Monaco.editor.IGl
 export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch {
   const large = lineCount >= LARGE_FILE_LINES;
   return {
+    ...CJK_TYPING_BASELINE,
     // 光标停留即"整篇找同词"——大文件头号隐性开销
     occurrencesHighlight: large ? 'off' : 'singleFile',
     // 基于词的建议对 ERB / 口上中文文本无意义（补全由自带 provider 提供），

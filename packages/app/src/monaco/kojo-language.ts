@@ -1,6 +1,7 @@
 import type * as Monaco from './entry';
 import type { LineDecoration } from '@kojo/plugin-api';
 import { RESERVED_PRONOUNS, SUGAR_LEXICON_OPERATORS, SUGAR_LEXICON_WORDS, SYSTEM_FUNCTION_ALIASES } from '@kojo/plugin-kojo-sugar';
+import { CJK_WORD_PATTERN } from './word-separators';
 
 /**
  * 语法糖（`.kojo` 表层 DSL）编辑器支持 —— Monarch 词法 + 语言配置。
@@ -172,6 +173,8 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
 
   monaco.languages.setLanguageConfiguration(KOJO_LANGUAGE_ID, {
     comments: { lineComment: ';' },
+    // 全角标点按词分隔（A3）；`：` 触发字在 quickSuggestions 关后靠它走显式触发通道（见 word-separators.ts 头注）
+    wordPattern: CJK_WORD_PATTERN,
     brackets: [
       ['{', '}'],
       ['「', '」'],
