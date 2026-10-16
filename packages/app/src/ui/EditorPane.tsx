@@ -548,10 +548,24 @@ function ensureGlobalProviders(): void {
     // 关着时根本不会问 provider（见 `semantic-color-pref.ts`），这里只留大文件那一道降级闸。
     const semanticDisposer = installSemanticTokensProvider(monaco, {
       resolve: (model) => {
-        const ctx = owningPaneOf(model);
+        // 着色是**纯显示**职责：跟着"此刻屏幕上那份 model"走，派生糖视图同样要上色。
+        // 故这里**不能**用 `owningPaneOf`——它把糖 model 判 null 是为拦 definition/rename/hover
+        // 等"导航"作用在派生行号上，误伤到着色 ⇒ .kojo 预览关键词高亮全灭。
+        // 糖 model 显示的是 `.kojo` 投影：以 `.kojo` 路径派发，让 kojo 语义腿命中这份文本
+        // （`resolveSugarTarget` 只认 `.kojo` 后缀），同时 ERB 语义腿因扩展名不符自然跳过，无冲突。
+        let ctx: PaneCtx | null = null;
+        let isSugarModel = false;
+        for (const c of livePanes.values()) {
+          const ed = c.editorRef.current;
+          if (!ed || ed.getModel() !== model) continue;
+          ctx = c;
+          isSugarModel = c.sugarModelRef.current === model;
+          break;
+        }
         if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
+        const realPath = ctx.filePathRef.current;
+        if (!realPath) return [];
+        const path = isSugarModel ? realPath.replace(/\.[A-Za-z0-9]+$/, '.kojo') : realPath;
         const lineCount = model.getLineCount();
         if (!shouldComputeSemanticTokens(lineCount)) return [];
         return collectSemanticTokenSpans(requireKernel().slots.query('ui.editor.languageService'), {
@@ -1422,7 +1436,13 @@ export function EditorPane({
     );
     sugarModelRef.current = sugarModel;
     sugarOriginalModelRef.current = model;
-    ed.updateOptions({ readOnly: true }); // 糖是派生物，禁止在糖视图上编辑
+    // 糖 model 同样按**行数**落 Monaco 降级选项：主切换（见加载 effect）给真 model 发了
+    // `editorOptionsForLineCount`，这里若只发 `readOnly`，一份几万行的投影会带着全文级特性
+    // （小地图 / 粘性滚动 / 括号对着色 / 整篇找同词）上屏 ⇒ 滚动即卡死。先落选项再挂 model。
+    ed.updateOptions({
+      readOnly: true, // 糖是派生物，禁止在糖视图上编辑
+      ...editorOptionsForLineCount(sugarModel.getLineCount()),
+    });
     ed.setModel(sugarModel);
     setSugarStats(sugarSummary(sugarLines, 0));
     // C1 反向下行批：糖视图挂上 = derivedView 翻转（false→true），立刻透出给面板
