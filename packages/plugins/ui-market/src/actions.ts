@@ -48,6 +48,8 @@ export interface MarketSnapshot {
   /**
    * 已装包占用字节（KM-11 的"占用"读数，口径 = 服务 `installedBytes()`）。
    * 面板**不**自己把 `installed[].files` 加一遍——那是把服务的口径复制到展示层（第二份真相）。
+   * 唯一例外是下方两个乐观更新函数：服务求和就是 `files[].bytes` 之和（同一把尺的复算），
+   * 且乐观结果只是显示先行，权威数字仍由后台重读的那一遍说了算。
    */
   readonly installedBytes: number;
   /** 被剔除条目（形状坏 / 同 id 异 kind 冲突）；`absent`/`invalid` 时为空 */
@@ -102,6 +104,47 @@ function failedSnapshot(pullNote: string): MarketSnapshot {
     endpoint: '',
     pullNote,
   };
+}
+
+/* --------------------- 乐观更新（纯函数、不可变、零 IO） --------------------- */
+
+/** 一条已装记录的声明字节之和——与服务 `installedBytes()` 同一条求和口径的复算 */
+function recBytes(rec: InstalledPack): number {
+  let total = 0;
+  for (const f of rec.files) total += f.bytes;
+  return total;
+}
+
+/**
+ * 卸载成功后的乐观快照：只删精确 `(kind,id,version)` 那条，字节按其 `files[]` 声明之和扣减。
+ *
+ * 乐观只是**显示先行**，机器说了算的纪律不破——后台重读仍是唯一权威，若有漂移由它纠正
+ * （看板 MK-1 判据：行消失 ≤ 目录消失 + 300ms，四路 IPC 全量重读撑不住这个数字）。
+ */
+export function snapshotWithoutInstalled(snap: MarketSnapshot, rec: InstalledPack): MarketSnapshot {
+  const installed = snap.installed.filter(
+    (r) => !(r.kind === rec.kind && r.id === rec.id && r.version === rec.version),
+  );
+  return { ...snap, installed, installedBytes: snap.installedBytes - recBytes(rec) };
+}
+
+/**
+ * 安装成功后的乐观快照：同 `(kind,id,version)` 键**替换**（重装/更新同版本）、否则**追加**；
+ * 字节按替换差值/追加量累加（与 `packUpdateCheck` 的"本机可能同键多条"互不影响：这里只动精确同键那条）。
+ */
+export function snapshotWithInstalled(snap: MarketSnapshot, rec: InstalledPack): MarketSnapshot {
+  let replaced = 0;
+  let found = false;
+  const installed: InstalledPack[] = snap.installed.map((r) => {
+    if (r.kind === rec.kind && r.id === rec.id && r.version === rec.version) {
+      found = true;
+      replaced += recBytes(r);
+      return rec;
+    }
+    return r;
+  });
+  if (!found) installed.push(rec);
+  return { ...snap, installed, installedBytes: snap.installedBytes - replaced + recBytes(rec) };
 }
 
 /** 读一遍面板要的全部事实（零网络；任何一条读不动都成一句人话，不静默、不空白屏） */

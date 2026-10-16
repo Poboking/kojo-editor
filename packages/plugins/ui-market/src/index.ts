@@ -32,7 +32,7 @@
  * 不上主行，只在展开层与日志里出现；拒因只出自 `market-view.REJECT_TEXT` 那一张表。
  */
 
-import { createElement, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   MARKET_SERVICE_KEY,
   PACK_VERSION_RE,
@@ -48,6 +48,8 @@ import {
   runImport,
   runInstall,
   runUninstall,
+  snapshotWithInstalled,
+  snapshotWithoutInstalled,
   type MarketActionDeps,
   type MarketSnapshot,
 } from './actions';
@@ -402,9 +404,27 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
         const [open, setOpen] = useState<string | null>(null);
         // 正在进行的那一次装/更新（同一时刻只允许一条：按钮全禁用，进度只写在状态行一处）
         const [installing, setInstalling] = useState<string | null>(null);
+        // 后台校对的单调序号：只认最新一次发起的读数——装/卸快速连击时，前一次的校对
+        // 可能比后一次晚落，没有这道闸旧事实会倒灌（卸掉的行被"复活"且无后续纠正）
+        const readSeq = useRef(0);
+
+        /**
+         * 装卸成功后的**后台静默校对**：乐观只是显示先行，机器说了算的纪律不破——
+         * 重读仍是唯一权威，若有漂移由它纠正（MK-1 判据：行消失 ≤ 目录消失 + 300ms，
+         * 四路 IPC 全量重读同步等撑不住这个数字，所以才有乐观先行 + 这里异步兜底）。
+         * 读失败不清乐观显示（`list-unreadable` 是"读这件事本身失败"，不是一份可显示的事实；
+         * 「失败不清掉已有列表」与 `refreshIndex` 同一条纪律），只把屏上留着，等下次动作再校。
+         */
+        const reconcile = useCallback((): void => {
+          const seq = ++readSeq.current;
+          void loadMarketSnapshot(deps).then((snap) => {
+            if (readSeq.current === seq && snap.status !== 'list-unreadable') setSnapshot(snap);
+          });
+        }, []);
 
         /** 打开面板：走 TTL（新鲜期内不回源，但数据时间与拉取结果照样显示） */
         const reload = useCallback(async (): Promise<void> => {
+          readSeq.current += 1; // 在途的后台校对不许再落（下面的全量读数比它新）
           setBusy(true);
           const snap = await pullMarketSnapshot(deps, false);
           setSnapshot(snap);
@@ -414,6 +434,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
 
         /** 点「拉取列表」：无视 TTL 硬回源一次（作者刚改了注册表就是要立刻看到） */
         const pull = useCallback(async (): Promise<void> => {
+          readSeq.current += 1; // 同上：硬回源的结果比任何在途校对新
           setBusy(true);
           const snap = await pullMarketSnapshot(deps, true);
           setSnapshot(snap);
@@ -439,21 +460,36 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           setInstalling(null);
           setNote(out.note);
           if (out.kind === 'done') {
-            // 已装列表是这台机器说了算：读一遍，不拿"我以为装上了"去改快照
-            setSnapshot(await loadMarketSnapshot(deps));
+            // 乐观只是显示先行：先把服务记账回来的那条搬上屏，权威数字由后台校对修正
+            setSnapshot(snapshotWithInstalled(snapshot, out.rec));
+            reconcile();
           }
         };
 
+        /**
+         * 卸载这一条。与 `doInstall` 同一条单飞纪律，漏了它会把成功演成失败：
+         * 「确认」按钮的 disabled 只看 `installing`，没有互斥时双击会并发调两次
+         * `uninstall`，第二把抛 `installed-missing`，作者看到的却是"卸载没有成功"——实际早已卸干净。
+         * 「取消」永远可点不动（正在装别的包也不该把作者锁在确认态里）。
+         */
         const doUninstall = async (key: string): Promise<void> => {
+          if (installing !== null) return;
           const rec = snapshot.installed.find((r) => pendingKey(r) === key);
           if (rec === undefined) return;
-          setNote(`正在卸掉「${rec.name}」…`);
-          const out = await runUninstall(deps, rec, pending === key);
-          setPending(null);
-          setNote(out.note);
-          if (out.kind === 'done') {
-            setOpen(null);
-            setSnapshot(await loadMarketSnapshot(deps));
+          setInstalling(pendingKey(rec));
+          try {
+            setNote(`正在卸掉「${rec.name}」…`);
+            const out = await runUninstall(deps, rec, pending === key);
+            setPending(null);
+            setNote(out.note);
+            if (out.kind === 'done') {
+              setOpen(null);
+              // 乐观只是显示先行：行立刻消失（MK-1 判据），权威数字由后台校对修正
+              setSnapshot(snapshotWithoutInstalled(snapshot, rec));
+              reconcile();
+            }
+          } finally {
+            setInstalling(null);
           }
         };
 
