@@ -354,7 +354,12 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
       for (const ref of group.refs) {
         if (!liveRefMatches(open, ref, target.normalizedName)) continue;
         edits.push({
-          resource: monaco.Uri.file(group.path),
+          // resource 必须取自**解析到的那份 live model**（先例：`find-references.ts` 用
+          // `live.uri`、`kojo-rename.ts` 用 `model.uri`）。`Uri.file(group.path)` 用的是索引
+          // 拼写：盘符大小写/分隔符与标签建立时那份不一致时，`Uri.file` 只归一分隔符、
+          // 保留大小写，URI 字符串就与注册表里的 model 对不上 ⇒ WorkspaceEdit 落到一个
+          // 没有 model 的 resource（standalone 直接抛 `model not found`）——已开标签静默漏改。
+          resource: open.uri,
           versionId: undefined,
           textEdit: {
             range: {

@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { EditorLanguageServiceContribution, EditorSymbolLocation } from '@kojo/plugin-api';
-import { collectReferenceLocations, installReferenceProvider } from '../src/monaco/find-references';
+import { collectReferenceLocations, installReferenceProvider, KNOWN_PATHS_LIMIT } from '../src/monaco/find-references';
 
 /* ============================== 纯逻辑：合并与去重 ============================== */
 
@@ -170,5 +170,34 @@ describe('installReferenceProvider', () => {
     const provider = stub.providers[0]!.provider;
     const out = provider.provideReferences!(modelOf('/t/A.ERB', ['x']), AT(1, 1), {} as Monaco.languages.ReferenceContext, {} as Monaco.CancellationToken);
     expect(out).toBeUndefined();
+  });
+
+  it('opener 反查表有 LRU 上限：整会话只增不减 = 无界表 + 换项目后的陈旧路由', () => {
+    const stub = stubMonaco();
+    const navigated: EditorSymbolLocation[] = [];
+    installReferenceProvider(stub.monaco, {
+      resolve: () => Array.from({ length: KNOWN_PATHS_LIMIT + 10 }, (_, i) => ({
+        filePath: `/t/f${String(i).padStart(4, '0')}.ERB`,
+        line: 1,
+      })),
+      navigate: (l) => navigated.push(l),
+      openModelFor: () => undefined, // 全部未打开 ⇒ 全部进反查表
+    });
+    const provider = stub.providers[0]!.provider;
+    const locations = provider.provideReferences!(
+      modelOf('/t/A.ERB', ['CALL ALPHA']),
+      AT(1, 6),
+      {} as Monaco.languages.ReferenceContext,
+      {} as Monaco.CancellationToken,
+    ) as Monaco.languages.Location[];
+    expect(locations).toHaveLength(KNOWN_PATHS_LIMIT + 10);
+    const editor = modelOf('/t/A.ERB', ['x']) as unknown as Monaco.editor.ICodeEditor;
+    const at = { lineNumber: 1, column: 1 };
+    // 最旧的 10 条被淘汰：点击不再被接到（可能属于已切换走的）旧项目的落点
+    expect(stub.opener!.openCodeEditor(editor, locations[0]!.uri, at)).toBe(false);
+    // 队尾的仍在表里：正常路由
+    const last = locations[locations.length - 1]!;
+    expect(stub.opener!.openCodeEditor(editor, last.uri, at)).toBe(true);
+    expect(navigated).toEqual([{ filePath: `/t/f${String(KNOWN_PATHS_LIMIT + 9).padStart(4, '0')}.ERB`, line: 1, column: 1 }]);
   });
 });

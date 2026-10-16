@@ -88,6 +88,8 @@ function clampLine(line: number, lineCount: number): number {
  *
  * 只注册 `ERB_LANGUAGE_ID`：整篇格式化已覆盖两个语言（`installDocumentFormatter`），
  * 这两个新入口的语义保守面是按 ERB 形（逐行纯）论证的，`.kojo` 不搭这班车。
+ * `.kojo` 的区间格式化走 `kojo-format.ts::installRangeFormatter`（一门语言一枚 provider，
+ * 两侧不得同时注册 ERB——否则选区结果由注册表顺序决定，本模块的宿主判据会被绕过）。
  */
 export function installRangeFormatter(
   monaco: typeof Monaco,

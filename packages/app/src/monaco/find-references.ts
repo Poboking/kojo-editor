@@ -70,6 +70,29 @@ export interface ReferenceHandlers {
   openModelFor?(filePath: string): Monaco.editor.ITextModel | undefined;
 }
 
+/** 本模块 opener 反查表容量上限（LRU；见 `rememberPath`） */
+export const KNOWN_PATHS_LIMIT = 256;
+
+/**
+ * `uri → 路径` 反查表，带 **LRU 上限**。
+ *
+ * 为什么必须有上限：这张表只增不减——每次 Shift+F12 都会把**未打开**的引用文件写进去，
+ * 关闭标签、切换项目都不回收（真语料一处符号能牵出上百份文件），整个会话攒下来就是一张
+ * 无界表；更要紧的是换项目后旧项目的 URI 仍在表里，命中同一路径的点击会被**陈旧路由**
+ * 接到上一个项目的落点。Monaco 的 opener 是全局注册、先注册先应答，所以不能靠"留着无害"
+ * 自我安慰：按插入序淘汰最旧的一条（`Map` 保序 ⇒ `keys().next()` 即最旧），
+ * 命中时重新插入让它"续命"，常用条目留在表里。
+ */
+function rememberPath<T>(map: Map<string, T>, key: string, value: T): void {
+  map.delete(key); // 先删后插 ⇒ 最近使用排到队尾
+  map.set(key, value);
+  while (map.size > KNOWN_PATHS_LIMIT) {
+    const oldest = map.keys().next();
+    if (oldest.done === true) break;
+    map.delete(oldest.value);
+  }
+}
+
 /**
  * 为 ERB 方言与 `.kojo` 两种语言 id 注册 ReferenceProvider，并注册**未打开文件**那条
  * 腿的 opener（只认本 provider 发过的 URI——不抢别人的请求，见 `openCodeEditor` 判据）。
@@ -107,7 +130,7 @@ export function installReferenceProvider(
         // 已开文件用真 model 的 uri（Monaco 才能给预览与就地跳）；未开文件发 file URI，
         // 预览物化会失败但树项保留（计数不说谎），点击由下方 opener 兜住
         const uri = live ? live.uri : monaco.Uri.file(location.filePath);
-        if (!live) knownPaths.set(uri.toString(), location.filePath);
+        if (!live) rememberPath(knownPaths, uri.toString(), location.filePath);
         out.push({
           uri,
           range: {
@@ -125,6 +148,7 @@ export function installReferenceProvider(
     openCodeEditor(_source, resource, selectionOrPosition) {
       const path = knownPaths.get(resource.toString());
       if (!path || !selectionOrPosition) return false; // 不是本 provider 发过的 URI：交回其它 handler
+      rememberPath(knownPaths, resource.toString(), path); // LRU：被点中的条目续命
       const landedAt = selectionOrPosition as Partial<Monaco.IRange & Monaco.IPosition>;
       const line = landedAt.lineNumber ?? landedAt.startLineNumber;
       if (line === undefined) return false;

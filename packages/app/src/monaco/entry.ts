@@ -128,7 +128,10 @@ import { installEnterIndenter, installRangeFormatter } from './kojo-format';
 
 // B 档：`.json` 微型 Monarch（不用 languages/features/json 的 400 KB worker feature）
 registerJsonLanguage(monacoApi);
-installRangeFormatter(monacoApi);
-installEnterIndenter(monacoApi);
+// 装配点这两枚 provider 与模块同寿（无宿主判据可依，也不随标签装卸），但**句柄必须留在原地**：
+// 返回值一旦丢弃，重复装配就会挂两枚 provider 且没有任何回收入口。
+// ERB 的区间格式化不在这里——由宿主带闸的 `kojo-format-range.ts` 独家负责（一门语言一枚 provider）。
+const assemblyDisposables = [installRangeFormatter(monacoApi), installEnterIndenter(monacoApi)];
+void assemblyDisposables; // 与模块同寿：不回收，但句柄在此可见（不往 API 面加导出，entry 的类型面必须与 monaco 一致）
 
 export * from 'monaco-editor/editor/editor.api';

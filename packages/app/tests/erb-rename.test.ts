@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import type { ErbReference } from '@kojo/plugin-api';
+import { pathKey, type ErbReference } from '@kojo/plugin-api';
 import {
   applyReferenceEdits,
   installErbRename,
@@ -203,6 +203,19 @@ function modelOf(...lines: string[]): Monaco.editor.ITextModel {
   } as unknown as Monaco.editor.ITextModel;
 }
 
+/**
+ * **已打开标签**的假 model：带 `file:` uri（与真实 `Uri.file` 同形——`\` 归一成 `/`、
+ * 盘符大小写原样保留）。重命名已开文件的 `resource` 必须取自这份 uri（而不是索引拼写），
+ * 见 `erb-rename.ts` 的 `open.uri` 那条注释。
+ */
+function openModelOf(modelPath: string, ...lines: string[]): Monaco.editor.ITextModel {
+  return {
+    uri: { fsPath: modelPath, toString: () => `file:///${modelPath.replace(/\\/g, '/')}` },
+    getLineCount: () => lines.length,
+    getLineContent: (lineNumber: number) => lines[lineNumber - 1] ?? '',
+  } as unknown as Monaco.editor.ITextModel;
+}
+
 const AT = (lineNumber: number, column: number): Monaco.Position =>
   ({ lineNumber, column }) as Monaco.Position;
 
@@ -242,7 +255,7 @@ describe('installErbRename', () => {
   const A = 'C:/p/ERB/a.ERB';
   const B = 'C:/p/ERB/b.ERB';
   const A_REFS = [ref(A, 1, 2, 10), ref(B, 5, 1, 9)];
-  const OPEN_A = modelOf('@M_KOJO_A(1)', 'CALL M_KOJO_A');
+  const OPEN_A = openModelOf(A, '@M_KOJO_A(1)', 'CALL M_KOJO_A');
 
   function installWith(o: ReturnType<typeof handlersOfReal>): { stub: Stub; provider: Monaco.languages.RenameProvider } {
     const stub = stubMonaco();
@@ -285,7 +298,7 @@ describe('installErbRename', () => {
     expect(result && 'rejectReason' in result ? result.rejectReason : '').toContain('1 个文件只读未纳入');
   });
 
-  it('全可写：已打开文件进 WorkspaceEdit（resource = Uri.file）、未打开走 io 通道', async () => {
+  it('全可写：已打开文件进 WorkspaceEdit（resource = live model 的 uri）、未打开走 io 通道', async () => {
     const wired = handlersOfReal({
       refs: A_REFS,
       writable: new Set([A, B]),
@@ -298,10 +311,32 @@ describe('installErbRename', () => {
     const edits = (result?.edits ?? []) as Monaco.languages.IWorkspaceTextEdit[];
     expect(edits).toHaveLength(1); // a.ERB 已打开且 1 处 live 命中
     expect(edits[0]!.resource.toString()).toContain('ERB/a.ERB');
+    expect(edits[0]!.resource.toString()).toBe(OPEN_A.uri.toString()); // 就是那份 live model
     expect(edits[0]!.textEdit).toMatchObject({
       range: { startLineNumber: 1, startColumn: 2, endColumn: 10 },
       text: 'NEW_NAME',
     });
+  });
+
+  it('索引拼写 ≠ 标签建 model 的拼写 ⇒ resource 用解析到的 live uri（不发没人认领的 URI）', async () => {
+    // 索引/搜索面给 `D:\p\ERB\a.ERB`，标签建立时那份是 `d:\p\erb\a.ERB`（盘符与大小写不同）：
+    // 宿主 openModelFor 按 pathKey 找回 live model，但 `Uri.file(索引拼写)` 只归一分隔符、
+    // 保留大小写 ⇒ URI 字符串与注册表里那份**不相等**，编辑发给一个没有 model 的 resource
+    // （standalone 直接抛 `model not found`），开着且脏的标签静默漏改。
+    const INDEX_A = 'D:\\p\\ERB\\a.ERB';
+    const LIVE_A = 'd:\\p\\erb\\A.ERB'; // 同一个文件，另一种写法
+    const openA = openModelOf(LIVE_A, '@M_KOJO_A(1)', 'CALL M_KOJO_A');
+    const wired = handlersOfReal({ refs: [ref(INDEX_A, 1, 2, 10)], writable: new Set([INDEX_A]) });
+    // 真实宿主判据（EditorPane 的 openModelAcrossGroups）：按 pathKey 找回那份 model
+    wired.handlers.openModelFor = (p) => (pathKey(p) === pathKey(LIVE_A) ? openA : undefined);
+    const { provider } = installWith(wired);
+    const result = await provider.provideRenameEdits(modelOf('@M_KOJO_A(1)'), AT(1, 3), 'NEW_NAME', null as never);
+    const edits = (result?.edits ?? []) as Monaco.languages.IWorkspaceTextEdit[];
+    expect(result && 'rejectReason' in result ? result.rejectReason : undefined).toBeUndefined();
+    expect(edits).toHaveLength(1);
+    expect(edits[0]!.resource.toString()).toBe(openA.uri.toString());
+    expect(edits[0]!.resource.toString()).not.toBe(`file:///${INDEX_A.replace(/\\/g, '/')}`);
+    expect(wired.ioCalls).toEqual([]); // 已开的文件不许走盘写通道
   });
 
   it('已打开文件上陈旧引用（live 文本不匹配）剔除出编辑集，不硬写', async () => {

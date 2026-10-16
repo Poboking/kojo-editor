@@ -1,4 +1,5 @@
 import { editor, Uri } from '../monaco/entry';
+import { pathKey } from '@kojo/plugin-api';
 import {
   applyLineEdits,
   compileReplaceMatcher,
@@ -13,9 +14,10 @@ import type { MatchTarget, ReplaceOutcome, ReplaceRequest, SearchOptionsState } 
  * 替换执行器（宿主层装配）：把替换计划落成**两种通道**——与 `erb-rename.ts` 先例同形。
  *
  * - **已打开**：Monaco live model 逐行现匹配 + `applyEdits`（原生脏标记 / 撤销步全套现成）；
- *   model 从 Monaco 全局注册表按 `file:` URI 取——EditorPane 只用 `Uri.file(path)` 建
- *   真文件 model，糖视图 model 是 `inmemory://sugar/` scheme（见 EditorPane），注册表
- *   按路径取永不撞上派生物。
+ *   model 从 Monaco 全局注册表取，**判等口径用全仓统一的 `pathKey`**（见 `pickModelByPathKey`：
+ *   裸 `Uri.file` 精确匹配会让"另一种盘符写法"把开着且脏的标签判成关闭文件，替换就会读盘、
+ *   写盘，绕过 live buffer）——EditorPane 只用 `Uri.file(path)` 建真文件 model，糖视图 model
+ *   是 `inmemory://sugar/` scheme（见 EditorPane），非 `file:` scheme 一律不当命中。
  * - **未打开**：内核 io 读改写（保编码保换行 + 原子写 + 备份，写允许域由内核 io 强制
  *   ——绕开写允许域没有第二条路，铁律 6）。**只读文件逐文件跳过并计数**，汇总明示
  *   「n 个文件只读未改」，不静默丢。
@@ -52,8 +54,41 @@ export interface FileReplaceDeps {
     readText(path: string): Promise<{ text: string }>;
     writeText(path: string, text: string): Promise<void>;
   };
-  /** 已打开文件的 live model 查找（缺省 = Monaco 注册表按 file: URI） */
+  /** 已打开文件的 live model 查找（缺省 = Monaco 注册表：精确 URI → `pathKey` 回落，见 `pickModelByPathKey`） */
   modelFor?: (path: string) => editor.ITextModel | undefined;
+}
+
+/** model 查找只用到 uri 的这两个读数——抽出来才能在没有 Monaco 运行时的 node 里测 */
+export interface UriBearingModel {
+  readonly uri: { readonly scheme: string; readonly fsPath: string };
+}
+
+/**
+ * 全仓路径判等口径（`pathKey`）下的 model 挑选（HK-7 那条纪律的替换执行器侧）。
+ *
+ * 为什么不能只按 `Uri.file(path)` 精确取：`Uri.file` 把 `\` 归一成 `/`，但**保留盘符大小写**，
+ * 而 Monaco 的注册表按 URI 字符串精确匹配。检索索引里的路径写法与标签建立时那份写法
+ * 盘符大小写不同（内核扫盘给的 `D:\...`、会话恢复给的 `d:\...`）时，精确取会判"没开"——
+ * **开着且脏的标签被当成关闭文件**：替换读的是磁盘副本、写盘后与 live buffer 相撞。
+ * 派生 model（糖视图等非 `file:` scheme）不是真文件正文，一律不当命中。
+ */
+export function pickModelByPathKey<T extends UriBearingModel>(
+  models: readonly T[],
+  path: string,
+): T | undefined {
+  const want = pathKey(path);
+  for (const m of models) {
+    // 派生 model（糖视图等）scheme 不是 `file:`，不是真文件正文 ⇒ 不当命中
+    if (m.uri.scheme === 'file' && pathKey(m.uri.fsPath) === want) return m;
+  }
+  return undefined;
+}
+
+/** 缺省通道：Monaco 全局注册表——先按精确 URI 取（同写法时行为不变），再按 `pathKey` 找回另一种写法的那份 live model */
+function defaultModelFor(path: string): editor.ITextModel | undefined {
+  const exact = editor.getModel(Uri.file(path)) as editor.ITextModel | undefined;
+  if (exact) return exact;
+  return pickModelByPathKey(editor.getModels() as readonly editor.ITextModel[], path);
 }
 
 /**
@@ -62,8 +97,7 @@ export interface FileReplaceDeps {
 export function createFileReplaceRunner(
   deps: FileReplaceDeps,
 ): (request: ReplaceRequest) => Promise<ReplaceOutcome> {
-  const modelFor =
-    deps.modelFor ?? ((path: string) => editor.getModel(Uri.file(path)) as editor.ITextModel | undefined);
+  const modelFor = deps.modelFor ?? defaultModelFor;
 
   /** 已打开 model：逐行现匹配 → applyEdits（一次调用 = 一步撤销） */
   const replaceInModel = (
@@ -130,8 +164,10 @@ export function createFileReplaceRunner(
     let readOnlyFiles = 0;
     const errors: string[] = [];
     for (const f of request.files) {
-      if (seen.has(f.path)) continue;
-      seen.add(f.path);
+      // 去重按 `pathKey`：索引里同一文件的两种写法（盘符大小写/分隔符）是一份正文，不是两个
+      const key = pathKey(f.path);
+      if (seen.has(key)) continue;
+      seen.add(key);
       const open = modelFor(f.path);
       if (open !== undefined) {
         try {

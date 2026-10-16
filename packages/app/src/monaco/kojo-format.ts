@@ -128,6 +128,10 @@ function leadingIndent(text: string): string {
  * 为什么不切一段单独喂 `computeFormatEdits`：缩进单位探测与 `@` 原生块状态都是
  * **文档级**判据——片段视角下，块外的行会被当成糖行重排、单位探测会数错多数派。
  * 整篇判定 + 行区间过滤 = 与 `Shift+Alt+F` 逐字同口径，且代价相同（显式命令，一次一篇）。
+ *
+ * **只注册 `.kojo`**：ERB 的区间格式化由 `kojo-format-range.ts`（宿主 resolve 判据的
+ * **带闸版**，同样只注册 ERB）独家负责。两边都注册 ERB 会让同一语言挂两枚 provider，
+ * 选区格式化结果取决于注册表顺序、且带闸版的判据形同虚设——一门语言一枚 provider。
  */
 export function installRangeFormatter(monaco: typeof Monaco): Monaco.IDisposable {
   const provider: Monaco.languages.DocumentRangeFormattingEditProvider = {
@@ -148,7 +152,6 @@ export function installRangeFormatter(monaco: typeof Monaco): Monaco.IDisposable
     },
   };
   const subs = [
-    monaco.languages.registerDocumentRangeFormattingEditProvider(ERB_LANGUAGE_ID, provider),
     monaco.languages.registerDocumentRangeFormattingEditProvider(KOJO_LANGUAGE_ID, provider),
   ];
   return { dispose: () => subs.forEach((s) => s.dispose()) };

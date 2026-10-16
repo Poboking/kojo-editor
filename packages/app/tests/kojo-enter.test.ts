@@ -17,6 +17,7 @@ import { computeFormatEdits, sugarEnterIndentAfter, sugarEnterRulePatterns } fro
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { installEnterIndenter, installRangeFormatter } from '../src/monaco/kojo-format';
+import { installRangeFormatter as installGatedRangeFormatter } from '../src/monaco/kojo-format-range';
 import { LARGE_FILE_LINES } from '../src/ui/editor-options';
 
 interface Recording {
@@ -122,18 +123,41 @@ describe('语言配置（ZH-D4 增量）', () => {
 });
 
 describe('installRangeFormatter · 选一段只重排那一段', () => {
-  it('两个语言 id 各注册一枚；dispose 全回收', () => {
+  it('只给 .kojo 注册一枚；ERB 交带闸版独家负责（一门语言一枚 provider）；dispose 全回收', () => {
     const { monaco, rec, disposed } = stubMonaco();
     installRangeFormatter(monaco).dispose();
-    expect(rec.range.map((r) => r.languageId).sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
-    expect(disposed.sort()).toEqual([`range:${ERB_LANGUAGE_ID}`, `range:${KOJO_LANGUAGE_ID}`].sort());
+    expect(rec.range.map((r) => r.languageId)).toEqual([KOJO_LANGUAGE_ID]);
+    expect(disposed).toEqual([`range:${KOJO_LANGUAGE_ID}`]);
+  });
+
+  it('两模块合装 ⇒ ERB 只挂带闸那一枚区间 provider（一门语言一枚，结果不由注册表顺序决定）', () => {
+    const { monaco, rec } = stubMonaco();
+    installRangeFormatter(monaco); // 装配点（无宿主判据）：只该管 .kojo
+    installGatedRangeFormatter(monaco, { resolve: (m) => ({ text: m.getValue(), dialect: 'erb' }) }); // EditorPane（带判据）：只该管 ERB
+    const erbRange = rec.range.filter((r) => r.languageId === ERB_LANGUAGE_ID);
+    const kojoRange = rec.range.filter((r) => r.languageId === KOJO_LANGUAGE_ID);
+    expect(erbRange).toHaveLength(1);
+    expect(kojoRange).toHaveLength(1);
+    // ERB 那枚必须是带闸版：判据 null ⇒ 不应答（无闸版会直接按整篇算，把宿主判据绕过去）
+    const { monaco: m2, rec: rec2 } = stubMonaco();
+    installRangeFormatter(m2);
+    installGatedRangeFormatter(m2, { resolve: () => null });
+    const gated = rec2.range.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
+    expect(
+      gated.provideDocumentRangeFormattingEdits(
+        asModel(stubModel(['　IF X', 'ENDIF'], ERB_LANGUAGE_ID)),
+        { startLineNumber: 1, endLineNumber: 1 } as Monaco.Range,
+        {} as Monaco.languages.FormattingOptions,
+        {} as Monaco.CancellationToken,
+      ),
+    ).toEqual([]);
   });
 
   it('整篇判据、区间出手：选区外的行一条 edit 都不给；返回一律不带 eol', () => {
     const { monaco, rec } = stubMonaco();
     installRangeFormatter(monaco);
     const model = stubModel(['角色: 12', '　时机 指令 310：', '　　「呀。」'], KOJO_LANGUAGE_ID);
-    const out = rec.range[1]!.provider.provideDocumentRangeFormattingEdits(
+    const out = rec.range[0]!.provider.provideDocumentRangeFormattingEdits(
       asModel(model),
       { startLineNumber: 3, endLineNumber: 3 } as Monaco.Range,
       {} as Monaco.languages.FormattingOptions,
@@ -142,7 +166,7 @@ describe('installRangeFormatter · 选一段只重排那一段', () => {
     expect(out.every((e) => e.eol === undefined)).toBe(true);
     expect(out.map((e) => e.range.startLineNumber)).toEqual([3]);
     // 整篇同判据 ⇒ 选全篇时 line2+3 都给
-    const all = rec.range[1]!.provider.provideDocumentRangeFormattingEdits(
+    const all = rec.range[0]!.provider.provideDocumentRangeFormattingEdits(
       asModel(model),
       { startLineNumber: 1, endLineNumber: 3 } as Monaco.Range,
       {} as Monaco.languages.FormattingOptions,
@@ -155,7 +179,7 @@ describe('installRangeFormatter · 选一段只重排那一段', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { monaco, rec } = stubMonaco();
     installRangeFormatter(monaco);
-    const provider = rec.range[1]!.provider;
+    const provider = rec.range[0]!.provider;
     const foreign = provider.provideDocumentRangeFormattingEdits(
       asModel(stubModel(['x'], 'plaintext')),
       { startLineNumber: 1, endLineNumber: 1 } as Monaco.Range,
