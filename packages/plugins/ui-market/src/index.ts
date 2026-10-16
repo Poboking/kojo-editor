@@ -162,6 +162,11 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
             ? null
             : createElement('div', { className: 'mk-warn' }, appVersionRequirement(e.minAppVersion)),
           e.summary === undefined ? null : createElement('div', { className: 'mk-sub' }, e.summary),
+          // 来源网址只住**子层**（灰色小行），主行纪律不动；刻意不做 `<a>` 链接——
+          // Tauri webview 里外链没接 opener，点了没反应比没有更坏，作者自己复制即可
+          e.sourceUrl === undefined
+            ? null
+            : createElement('div', { className: 'mk-sub' }, `来源 ${e.sourceUrl}`),
         );
       }),
     );

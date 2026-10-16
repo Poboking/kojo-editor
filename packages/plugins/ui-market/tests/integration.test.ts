@@ -1060,3 +1060,28 @@ describe('导入请求的行为判据（`runImport`：取目录 → 发意图）
   });
 });
 
+/* ---------------- 索引行来源网址（KM-16 尾巴：子层可见、不做链接） ---------------- */
+
+describe('索引行的来源网址', () => {
+  it('有 sourceUrl ⇒ 子层多一行「来源 <url>」纯文本；缺省就不占行（主行不动）', () => {
+    const url = 'https://example.test/k.pack';
+    const withUrl = renderView([viewEntry('k.pack', '1.0.0', { sourceUrl: url })], []);
+    expect(withUrl).toContain(`<div class="mk-sub">来源 ${url}</div>`);
+    // 刻意不做 `<a>`：Tauri webview 外链没接 opener，点了没反应比没有更坏
+    expect(withUrl).not.toMatch(/<a[\s>]/);
+
+    const without = renderView([viewEntry('k.pack', '1.0.0')], []);
+    expect(without).not.toContain('来源');
+    expect(without).not.toContain(url);
+  });
+
+  it('摘要与来源可以同屏（各占子层一行），互不顶替', () => {
+    const html = renderView(
+      [viewEntry('k.pack', '1.0.0', { summary: '一句包介绍', sourceUrl: 'https://example.test/k.pack' })],
+      [],
+    );
+    expect(html).toContain('<div class="mk-sub">一句包介绍</div>');
+    expect(html).toContain('<div class="mk-sub">来源 https://example.test/k.pack</div>');
+  });
+});
+
