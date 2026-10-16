@@ -14,9 +14,10 @@ import {
 } from '../src/library-table';
 
 describe('ERATW_LIBRARY_FUNCTIONS · 中文名 → 原生 ERB 名（种子表）', () => {
-  it('表非空、覆盖高频基础库助手（目标 30–80 条，本批为种子）', () => {
-    expect(ERATW_LIBRARY_FUNCTIONS.size).toBeGreaterThanOrEqual(30);
-    expect(ERATW_LIBRARY_FUNCTIONS.size).toBeLessThanOrEqual(80);
+  it('表非空、覆盖高频基础库助手（种子 55 条 + ZH-2① 扩容批；长尾由语料闸量覆盖率）', () => {
+    expect(ERATW_LIBRARY_FUNCTIONS.size).toBeGreaterThanOrEqual(100);
+    // 上限挡"把整库函数塞进表"的失控：本表只收**高频**助手，长尾归语料闸读数
+    expect(ERATW_LIBRARY_FUNCTIONS.size).toBeLessThanOrEqual(200);
   });
 
   it('规范 §3.9 唯一钦定名逐字落地：`心形` → `HPH_PRINT`', () => {

@@ -14,13 +14,15 @@
 
 import { describe, expect, it } from 'vitest';
 import type { KojoLibraryTable, SugarDiagnostic } from '@kojo/plugin-api';
-import { createEratwLibraryTable } from '@kojo/plugin-eratw-adapter';
+import { createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS, FAMILY_ALIASES } from '@kojo/plugin-eratw-adapter';
 import { lowerExpression, type ExprContext } from '../src/expression';
 import {
   isKnownFunctionName,
   lookupFunctionName,
   lowerSystemFunctions,
+  SYSTEM_FUNCTION_ALIASES,
 } from '../src/system-functions';
+import { RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_SUCCESS_PARAM } from '../src/keywords';
 import { stubDict } from './support';
 import type { AliasEntry } from '../src/types';
 
@@ -157,5 +159,38 @@ describe('负测 · 非调用形态与受保护段落一律不误伤', () => {
     lowerSystemFunctions('她的角色文本(1)', stubLibraryTable());
     lowerExpression('她的角色文本(1)', ctx({ libraryTable: stubLibraryTable(), sink }));
     expect(sink.some((d) => d.code === 'function-name-unknown')).toBe(false);
+  });
+});
+
+/* ==================== E. 两张生产表的命名防撞（ZH-2① 扩容批） ==================== */
+
+describe('ERATW_LIBRARY_FUNCTIONS × SYSTEM_FUNCTION_ALIASES · 中文名防撞', () => {
+  const libKeys = [...ERATW_LIBRARY_FUNCTIONS.keys()];
+  const sysKeys = [...SYSTEM_FUNCTION_ALIASES.keys()];
+
+  it('两表中文名键无交集（系统表优先 ⇒ 重名条目恒为死条目，且补全候选撞词）', () => {
+    const dup = libKeys.filter((k) => SYSTEM_FUNCTION_ALIASES.has(k));
+    expect(dup, `重名中文名：${dup.join(' / ')}`).toEqual([]);
+  });
+
+  it('两表中文名键与家族头中文别名表无交集（族名是变量轴，不是函数轴）', () => {
+    const fam = Object.keys(FAMILY_ALIASES);
+    // 既有双角色豁免：`随机` 同时是族头 RAND 的别名与系统函数 RAND 的别名（块关键字判定
+    // 在 `statement-functions.ts` 单独消化，ALS 批已钉），不属本批扩容引入，故不入撞名台账
+    const hit = [...libKeys, ...sysKeys].filter((k) => fam.includes(k) && k !== '随机');
+    expect(hit, `撞族名别名：${hit.join(' / ')}`).toEqual([]);
+  });
+
+  it('两表中文名键不撞保留代词（她 / 你）与命名参数（参数 / 成否）', () => {
+    for (const k of [...libKeys, ...sysKeys]) {
+      expect(RESERVED_PRONOUNS.includes(k), `「${k}」是保留代词`).toBe(false);
+      expect([TIMING_ARGS_PARAM, TIMING_SUCCESS_PARAM].includes(k), `「${k}」是命名参数`).toBe(false);
+    }
+  });
+
+  it('两张生产表的中文名键各自唯一（Map 构造即去重 ⇒ 只可能来自声明重复）', () => {
+    for (const [label, keys] of [['adapter', libKeys], ['sugar', sysKeys]] as const) {
+      expect(new Set(keys).size, `${label} 表中文名键有重复声明`).toBe(keys.length);
+    }
   });
 });
