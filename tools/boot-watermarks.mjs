@@ -188,8 +188,10 @@ async function round(label) {
   console.log(`----- [${label}] 页内 perf 标记 ----`);
   console.log(JSON.stringify(parsed.perf, null, 1));
   console.log(`----- [${label}] 加载期日志（产品自带 log.info，本工具不注入任何探针） ----`);
-  // 过滤词含 `lint breakdown`（PERF-12b 的分区复用读数）；截断长度取 400——壳侧日志单行 170 字符会把行尾字段切没（PITFALLS 86）
-  for (const l of cdp.logs.slice(mark)) if (/自定名表|追加名表|汉化词典|工程加载完成|Project opened|index|索引|lint breakdown|lint reuse|Condition index/.test(l.t)) console.log('   ' + l.t.slice(0, 400));
+  // 过滤词含 `lint breakdown`/`lint reuse`（12b 的分区复用读数）与 `lint units`（12c 的
+  // 懒取/投机候选读数，单独成行——壳侧单行 170 字符，行尾字段会被切没，PITFALLS 86）；
+  // 截断长度取 400。
+  for (const l of cdp.logs.slice(mark)) if (/自定名表|追加名表|汉化词典|工程加载完成|Project opened|index|索引|lint breakdown|lint reuse|lint units|Condition index/.test(l.t)) console.log('   ' + l.t.slice(0, 400));
   return !!(parsed.milestones['水位-校验有结果'] !== undefined && parsed.milestones['Monaco 挂载（自点文件）'] !== undefined);
 }
 
