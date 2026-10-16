@@ -53,6 +53,17 @@ import { loadFormatOnSavePref, saveFormatOnSavePref } from './format-pref';
 // 行上内联注解（B8）：同一份偏好形态，默认关；开关真源在 localStorage，这里只写值 + 发意图
 import { loadCodeLensPref, saveCodeLensPref } from './code-lens-pref';
 import { setNameColorPref, useNameColorPref } from './semantic-color-pref';
+import {
+  FONT_SIZE_DEFAULT,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  FONT_ZOOM_DEFAULT,
+  resetFontZoomPref,
+  stepFontSizePref,
+  stepFontZoomPref,
+  useFontSizePref,
+  useFontZoomPref,
+} from './font-size-pref';
 import { fileWritableArea, writablePillTone } from './file-area';
 import {
   applyMotionPref,
@@ -349,6 +360,10 @@ export function ShellLayout(props: Props): ReactElement {
    */
   const nameColorOn = useNameColorPref();
 
+  // 字号/缩放读数（A1）：真源在 font-size-pref 的 localStorage，这里只拿投影
+  const fontSize = useFontSizePref();
+  const fontZoom = useFontZoomPref();
+
   /**
    * 注册表来源（KM-9 设置页那一行）。
    *
@@ -501,6 +516,11 @@ export function ShellLayout(props: Props): ReactElement {
       },
       // 问题面板（HK-4 · UI-6）：打开底部区并激活「问题」视图（activate 会同时置 visible:true）
       { id: 'workbench.problems', title: '问题面板', keybinding: 'ctrl+shift+m', run: () => dispatch({ type: 'activate', container: 'bottom', key: 'kojo.problems' }) },
+      // 文字缩放（A1）：走 font-size-pref 的档位真源，Monaco 原生 fontZoom contrib
+      // 装载但未自带键位（standalone 无 workbench 绑定），键位由这张命令表给出。
+      { id: 'editor.fontZoomIn', title: '放大文字', keybinding: 'ctrl+=', run: () => stepFontZoomPref(1) },
+      { id: 'editor.fontZoomOut', title: '缩小文字', keybinding: 'ctrl+-', run: () => stepFontZoomPref(-1) },
+      { id: 'editor.fontZoomReset', title: '重置文字缩放', keybinding: 'ctrl+0', run: () => resetFontZoomPref() },
       // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表
       ...(extraCommands ?? []),
     ],
@@ -1415,6 +1435,48 @@ export function ShellLayout(props: Props): ReactElement {
                   默认关 ⇒ 这一行（连同快捷键 Ctrl+Alt+T）就是它的正式入口。 */}
               <div className="settings-group">
                 <div className="settings-group-title">编辑器</div>
+                {/* 字号 / 缩放（A1）：真源与钳制在 font-size-pref.ts，这里只排版。
+                    禁用位 = 已到量程两端，与「没改动⇒按钮不可点」同一房规。 */}
+                <div className="settings-row static">
+                  <span className="settings-stepper">
+                    <button
+                      className="ghost small"
+                      onClick={() => stepFontSizePref(-1)}
+                      disabled={fontSize <= FONT_SIZE_MIN}
+                      title="减小字号"
+                      aria-label="减小字号"
+                    >
+                      −
+                    </button>
+                    <span className="settings-stepper-value">{fontSize} px</span>
+                    <button
+                      className="ghost small"
+                      onClick={() => stepFontSizePref(1)}
+                      disabled={fontSize >= FONT_SIZE_MAX}
+                      title="增大字号"
+                      aria-label="增大字号"
+                    >
+                      ＋
+                    </button>
+                  </span>
+                  <span>
+                    正文字号
+                    <span className="settings-hint">
+                      编辑器里一行字的大小，默认 {FONT_SIZE_DEFAULT}。只改显示、不动文件
+                    </span>
+                  </span>
+                </div>
+                <div className="settings-row static">
+                  <button className="ghost small" onClick={resetFontZoomPref} disabled={fontZoom === FONT_ZOOM_DEFAULT}>
+                    重置缩放
+                  </button>
+                  <span>
+                    文字缩放（当前 {100 + fontZoom * 10}%）
+                    <span className="settings-hint">
+                      Ctrl+= 放大一档、Ctrl+- 缩小一档（每档 10%）、Ctrl+0 复原；缩放叠在字号上，两者都会记住
+                    </span>
+                  </span>
+                </div>
                 <label className="settings-row">
                   <input
                     type="checkbox"

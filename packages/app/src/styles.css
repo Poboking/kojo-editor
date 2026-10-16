@@ -3394,6 +3394,21 @@ button.erb-mode-hint.unlocked:hover {
   flex: 0 0 auto;
   margin-top: 1px;
 }
+/* 字号步进器（A1）：与开关行同栅格，首列换成「− 读数 ＋」；读数定宽防跳动 */
+.settings-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.settings-row.static > .settings-stepper {
+  margin-top: 1px;
+}
+.settings-stepper-value {
+  min-width: 4.5em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
 /* 注册表来源行（KM-9）：唯一可编辑的市场设置就是一个 URL */
 .settings-text {
   flex: 1 1 220px;
