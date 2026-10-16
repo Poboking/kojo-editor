@@ -56,6 +56,12 @@
   /* 抬升面顶边高光（VSCode 精修批）：raised/overlay 面挂一条极淡的 inset 顶亮边，
      是"这块面比后面那块更靠近光源"的最省笔墨的暗示——磨砂玻璃的 `--glass-edge` 同族思路。 */
   --edge-raise: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  /* 井面（内嵌 / 代码底）的抬升档：井是"凹面"，受光与投影都比 --edge-raise / --shadow-1
+     低半档（刻意不同值——直接复用会把"凹"读成"凸"）。缺省不抬，要抬的消费方写
+     `--well-raise: var(--well-edge), var(--well-shadow);`。 */
+  --well-edge: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --well-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --well-raise: none;
   /* 焦点环柔光：配 `:focus-visible` 的 box-shadow 用（见下），比硬 outline 更高级、不占布局。 */
   --shadow-focus:
     0 0 0 1px var(--focus-ring),
@@ -74,6 +80,9 @@
   --glass-tint: 40 45 51; /* 预合成：alpha .85 落 --bg-2 */
   --glass-tint-raise: 48 54 62; /* 预合成：alpha .85 落 --bg-3（玻璃面上的抬升件用） */
   --glass-edge: rgba(255, 255, 255, 0.07); /* 0.09→0.07：1px 绕一圈，0.09 在面上读成"贴纸白边" */
+  /* 顶缘抬升色的淡出距离：玻璃面的"光从上面来"在多高之内收干净。缺省 96px 是给浮层/模态这种
+     几百高的面；矮面（右键菜单 ~150px）自己覆盖成 56px，否则整面都是渐变、顶边高光读不出来。 */
+  --glass-fade: 96px;
   /* 语义表面分层（VSCode 精修批 2026-10-17）：`--bg` / `--bg-2` / `--bg-3` 是这三档的**实现值**，
      全站数百处规则与实机度量过的对比度都钉在上面，故一律不改；这里只给"新写的规则"一个
      **按角色取面**的入口（值指向既有档），换主题色时一处联动。`sunken` 比 `--bg` 再低半档，
@@ -115,6 +124,12 @@
   --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* 按压反馈档位（效果库 `.u-press-*` 与全站高频可点面共用）：
+     --dur-press 比松开档（--dur-1）快，按下才"跟手"；罩层比 hover(.06) 强一档且中性，
+     不占 --active 的"选中"语义（那枚色已被 .tree-file.active 等表示选中，必须让位）。 */
+  --press-dy: 0.5px;
+  --press-overlay: rgba(255, 255, 255, 0.1);
+  --dur-press: 70ms;
   /* 交互色 token（散落于各面板的 fallback 值收编为唯一来源） */
   --hover: rgba(255, 255, 255, 0.06);
   --active: rgb(var(--accent-rgb) / 0.16);
@@ -138,6 +153,24 @@
   --danger: var(--red);
   --warning: var(--amber);
   --success: var(--green);
+  /* 等宽面按「这块在读什么」分三档，不按组件分（此前：Monaco 走它自己的平台默认栈、
+     `--font-mono` 一份、散装 `Consolas, 'Cascadia Mono', monospace` 八份，三处口径互不相干）。
+     --font-code    编辑器代码面。**真源是 TS**：`ui/code-font.ts` 的 CODE_FONT_STACK 同时喂
+                    Monaco 与下面这一行（`code-font.test.ts` 逐字比对，改一处必改两处）。
+                    拉丁头是 Cascadia 系（比 Consolas 宽 ~9%）⇒ **凡按 em 标了槽位的规则都不许取它**，
+                    那些面一律走 --font-meta。
+     --font-meta    UI 里的标识与读数面（规则 ID / 路径:行 / 计数 / 诊断码 / 键位串）。拉丁头
+                    与 --font-mono 逐字相同（Consolas 打头 ⇒ 3.4em / 9em 这类槽位零位移），
+                    差别只在 CJK 收尾给的是 **UI 黑体**：这些面要么被 ellipsis 截断、要么承载
+                    标签语义（中文角色名、诊断码短名、「按下新键位…」），从不跨行竖向对齐。
+     --font-console 多行成列的流面（时间戳 | 级别 | 中文消息）。CJK 收尾给**等宽**汉字面
+                    （Windows 必装 MS Gothic / Linux Noto Sans Mono CJK SC）：全角 advance
+                    严格 = 2×ASCII，竖着才对得齐、框线不断列。
+     --font-mono    没分档年代的默认档，值不动（约 30 处既有消费方零改动）；新写的规则一律按
+                    角色取上面三档，任何人不许再抄 Consolas 字面量。 */
+  --font-code: 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Era Mono SC', 'Microsoft YaHei UI', 'Microsoft YaHei', SimHei, '黑体', 'Noto Sans SC', monospace;
+  --font-meta: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Microsoft YaHei UI', 'Noto Sans CJK SC', monospace;
+  --font-console: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Noto Sans Mono CJK SC', 'MS Gothic', monospace;
   --font-mono: Consolas, 'Cascadia Mono', 'JetBrains Mono', monospace;
   font-family: 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
 }
@@ -182,10 +215,12 @@ button:hover {
   background: var(--btn-bg-hover);
   border-color: var(--border-strong);
 }
-/* 按下 = 底色回落 + 0.5px 下沉，给"按进去"的实感（替掉旧的 filter brightness，可控且不糊字） */
+/* 按下 = 底色回落 + 0.5px 下沉，给"按进去"的实感（替掉旧的 filter brightness，可控且不糊字）。
+   松开仍走基类那条过渡，只有按下这一程压到 --dur-press —— 去程快、回程缓，才读得出"跟手"。 */
 button:active:not(:disabled) {
   background: var(--btn-bg-active);
-  transform: translateY(0.5px);
+  transform: translateY(var(--press-dy));
+  transition-duration: var(--dur-press);
 }
 button:disabled {
   opacity: 0.5;
@@ -353,8 +388,7 @@ textarea {
   z-index: 1;
   width: 620px;
   max-width: 92vw;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
+  /* 底与边交玻璃主规则（首屏唯一"表演磨砂"的面，不设 alpha 上限，跟旋钮） */
   border-radius: var(--radius-lg);
   padding: 40px;
   display: flex;
@@ -1254,47 +1288,117 @@ textarea {
   inset: 0;
   z-index: var(--z-modal);
 }
+/* 右键菜单：全站最高频的浮层。底与边交玻璃主规则（同 .modal/.toast 一家），这里只给
+   它自己的尺寸 / 内衬 / 入场。矮面把顶缘高光收进 56px——96px 的淡出带会铺满整块菜单，
+   "光从上面来"反而读不出来。 */
 .context-menu {
+  --glass-fade: 56px;
   position: fixed;
   z-index: calc(var(--z-modal) + 1);
   min-width: 230px;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
-  padding: 4px;
-  animation: pop-in var(--dur-1) var(--ease-out);
+  /* 上限 + 视口兜底：长菜单不许顶出屏幕（x 由 JS 夹，y 交这里封顶） */
+  max-width: min(340px, calc(100vw - var(--space-4) * 2));
+  max-height: min(72vh, calc(100vh - var(--space-4) * 2));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 内衬 5 = 同心圆角算式的一项：项圆角 4 + 内衬 5 ≈ 9 ⇒ 容器取 --radius-lg(10) */
+  padding: 5px;
+  border-radius: var(--radius-lg);
+  /* --shadow-1 实测没有切边末环（只有 --shadow-3 有），菜单浮在亮内容上正需要这一圈切边 */
+  box-shadow:
+    var(--shadow-1),
+    0 0 0 1px rgba(0, 0, 0, 0.28);
+  /* 入场只走 opacity：本体带 backdrop-filter，transform 动画每帧都要重采样背后 = 掉帧主因 */
+  animation: fade-in var(--dur-1) var(--ease-out);
 }
 .context-menu button {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
+  min-height: 24px; /* WCAG 2.5.8 兜底；实际项高由 padding + line-height 给（≈27px） */
   border: none;
   background: transparent;
+  /* 菜单项不是实心件：清掉全局 button 的顶边高光，否则每项头上多一条亮线 */
+  box-shadow: none;
   color: var(--fg);
-  padding: 6px 10px;
+  padding: 5px 10px 5px 8px;
   font-size: var(--fs-1);
-  border-radius: var(--radius-sm);
+  line-height: 1.4;
   text-align: left;
+  border-radius: var(--radius-sm);
 }
+/* 悬停：中性竖条 + 微亮（与教程目录栏同一语言）。竖条走 inset box-shadow 而不是 border，
+   不吃布局、也不与上面那条 `border: none` 打架。 */
 .context-menu button:hover {
   background: var(--hover);
-  border-color: transparent;
+  box-shadow: inset 2px 0 0 var(--border-strong);
+  color: var(--fg);
 }
+/* 容器 overflow-y:auto 会裁掉正偏移的焦点环 ⇒ 走内侧 */
+.context-menu button:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+.context-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  background: transparent;
+  box-shadow: none;
+}
+/* 图标 / 勾选列钉死 16px：全项文字左边缘成一条轴（有勾的、没勾的、危险项都在同一列上） */
 .context-menu .check {
-  width: 14px;
-  color: var(--accent);
+  flex: none;
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-text);
+  font-size: var(--fs-0);
+  line-height: 1;
 }
-/* 菜单分组分隔线（导入/编辑动作与查看动作之间） */
+.context-menu button[aria-checked='true'] .check::before {
+  content: '✓';
+}
+/* 菜单分组分隔线（导入/编辑动作与查看动作之间）：两端渐隐，不通栏硬线 */
 .context-menu-sep {
   height: 1px;
-  margin: 3px 8px;
-  background: var(--border);
+  margin: 4px 6px;
+  background: transparent;
+  border-bottom: 1px solid var(--border-subtle);
+  border-image: linear-gradient(90deg, transparent, var(--border) 14%, var(--border) 86%, transparent) 1;
 }
-/* 破坏性动作（删除）：与其余项拉开视觉距离 */
+/* 破坏性动作（删除）：与其余项拉开视觉距离。不只靠颜色——字重 + 图标位一起说，
+   色觉障碍与灰阶截图下同样认得出。 */
 .context-menu button.danger {
   color: var(--danger);
+  font-weight: 500;
+}
+.context-menu button.danger .check {
+  color: var(--danger);
+}
+.context-menu button.danger .check::before {
+  content: '!';
+  font-weight: 700;
+}
+.context-menu button.danger:hover {
+  background: rgba(224, 108, 117, 0.12);
+  box-shadow: inset 2px 0 0 rgba(224, 108, 117, 0.75);
+}
+.context-menu button.danger:active:not(:disabled) {
+  background: rgba(224, 108, 117, 0.2);
+  box-shadow:
+    inset 2px 0 0 var(--danger),
+    inset 0 1px 0 rgba(0, 0, 0, 0.28);
+}
+/* 减弱动效：入场彻底不跑（不吃全局那条 0.01ms 兜底，省一次合成层） */
+:root[data-motion='reduced'] .context-menu {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .context-menu {
+    animation: none;
+  }
 }
 .tree-file {
   width: 100%;
@@ -1446,7 +1550,7 @@ textarea {
 }
 .conv-rule-id {
   flex: 1;
-  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-family: var(--font-meta);
   font-size: var(--fs-1);
 }
 .conv-group-count {
@@ -1489,7 +1593,9 @@ textarea {
   align-self: center;
 }
 .conv-issue-loc {
-  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-family: var(--font-meta);
+  /* 路径:行 是读数 ⇒ 等宽数字，行号位数变化不推后面的字 */
+  font-variant-numeric: tabular-nums;
   font-size: var(--fs-0);
   flex: none;
   max-width: 40%;
@@ -1533,7 +1639,7 @@ textarea {
 }
 .prob-code {
   flex: none;
-  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-family: var(--font-meta);
   font-size: var(--fs-0);
 }
 
@@ -1561,7 +1667,10 @@ textarea {
   flex: none;
   padding: 2px 5px;
   font-size: var(--fs-0);
-  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-family: var(--font-meta);
+  /* 同一族钮上 `Aa`/`.*`（拉丁）与「全词」「全部替换」（汉字）并存：两个 `normal` 行高不同
+     会让一排钮高低不齐，钉死一个值。 */
+  line-height: 1.4;
 }
 /* 开关态：与壳层其它"已开启"控件同色（.on 用 accent 描边 + 淡底） */
 .search-toggle.on {
@@ -1621,7 +1730,11 @@ textarea {
 }
 .search-file-count {
   flex: none;
-  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-family: var(--font-meta);
+  /* 命中计数：钉自己的档位（原来骑在祖先的 11px 上，同值但断了耦合）+ 等宽数字，
+     「9 → 10」不抖行尾 */
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-0);
 }
 .search-match {
   width: 100%;
@@ -1640,7 +1753,9 @@ textarea {
 }
 .search-loc {
   flex: none;
-  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-family: var(--font-meta);
+  /* 行:列 读数（调用层级浮层还复用它放 `↳ 函数名`）：等宽数字 + 汉字走 meta 档的 UI 黑体回退 */
+  font-variant-numeric: tabular-nums;
   font-size: var(--fs-0);
   min-width: 3.4em;
 }
@@ -1872,10 +1987,10 @@ button.erb-mode-hint.unlocked:hover {
   animation: fade-in var(--dur-2) var(--ease-out);
 }
 .modal {
+  /* 钉在校准档：模态正文要脆，旋钮只决定"背后泄漏多少"，不许把正文推到对比度线下 */
+  --glass-alpha: 0.85;
   width: 620px;
   max-width: 92vw;
-  background: var(--surface-overlay);
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 24px 28px;
   box-shadow:
@@ -3402,9 +3517,9 @@ button.erb-mode-hint.unlocked:hover {
   animation: fade-in var(--dur-2) var(--ease-out);
 }
 .picker {
+  /* 命令面板是密集小字 + 压在自家磨砂遮罩上 ⇒ 与 .modal 同一可读面上限 */
+  --glass-alpha: 0.85;
   width: min(640px, 80vw);
-  background: var(--surface-overlay);
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow:
     var(--edge-raise),
@@ -3530,13 +3645,28 @@ button.erb-mode-hint.unlocked:hover {
 /* 可复用毛玻璃面（glass）：磨砂背景 + 半透明着色 + 顶边高光。任意浮层 / 贴顶栏挂上 `.glass`
    即可，透明度随 `--glass-alpha`（设置页旋钮）联动；换底色就地覆盖 `--glass-tint`。
    圆角 / 阴影 / 尺寸留给消费方自己给——本类只负责"面"这一层，好组合。
-   `.overlay-host` 与本类共用同一条规则：它是这套磨砂最主要的消费方。
-   顶上一档 `--glass-tint-raise` 在 96px 内淡出：像从上方被打光，比整面平色更有厚度；
-   两层都用同一个 `--glass-alpha`，所以旋钮走的仍然是整面透明度，不会只淡了高光。 */
+   顶上一档 `--glass-tint-raise` 在 `--glass-fade` 内淡出：像从上方被打光，比整面平色更有厚度；
+   两层都用同一个 `--glass-alpha`，所以旋钮走的仍然是整面透明度，不会只淡了高光。
+   **消费方名单**（下面这条 + 两条回落必须一起改，漏一条就是"老内核上破版"）：
+   `.overlay-host`（向导 / 设置 / 教程 / 操作历史宿主）是主消费方，`.modal`（含键位对话框）、
+   `.picker`（命令面板）、`.toast`、`.floating-panel`（可拖浮窗）、`.welcome-card`、
+   `.context-menu` 同族。可读性面上限：`.modal` / `.picker` / `.toast` / `.floating-panel`
+   各自把 `--glass-alpha` 钉在校准档 .85——它们要么压在亮语法色上、要么承载密集小字，
+   旋钮不该能把它们推到对比度线下（0% 实心档由回落二整条接管）。 */
 .glass,
-.overlay-host {
+.overlay-host,
+.modal,
+.picker,
+.toast,
+.floating-panel,
+.welcome-card,
+.context-menu {
   background:
-    linear-gradient(180deg, rgb(var(--glass-tint-raise) / var(--glass-alpha)) 0, transparent 96px),
+    linear-gradient(
+      180deg,
+      rgb(var(--glass-tint-raise) / var(--glass-alpha)) 0,
+      transparent var(--glass-fade, 96px)
+    ),
     rgb(var(--glass-tint) / var(--glass-alpha));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
@@ -3572,10 +3702,17 @@ button.erb-mode-hint.unlocked:hover {
 .overlay-host:has(.wizard.tutorial) .wizard.tutorial {
   max-height: calc(88vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
 }
-/* 回落一：老内核不支持 backdrop-filter ⇒ 实心，绝不破版（磨砂只是加分项，不是前提） */
+/* 回落一：老内核不支持 backdrop-filter ⇒ 实心，绝不破版（磨砂只是加分项，不是前提）。
+   选择器列表与上面主规则逐条同集，一条不落。 */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass,
-  .overlay-host {
+  .overlay-host,
+  .modal,
+  .picker,
+  .toast,
+  .floating-panel,
+  .welcome-card,
+  .context-menu {
     background: var(--bg-2);
     border-color: var(--border);
   }
@@ -3589,11 +3726,26 @@ button.erb-mode-hint.unlocked:hover {
    回到改动前的不透明面。这既是"不喜欢毛玻璃"的干净出口，也省掉整屏 backdrop-filter 的开销。
    走 --bg-2 而不是新的色调：实心档与磨砂档是"质感"之差，不该同时是"颜色"之差。 */
 :root[data-glass='solid'] .glass,
-:root[data-glass='solid'] .overlay-host {
+:root[data-glass='solid'] .overlay-host,
+:root[data-glass='solid'] .modal,
+:root[data-glass='solid'] .picker,
+:root[data-glass='solid'] .toast,
+:root[data-glass='solid'] .floating-panel,
+:root[data-glass='solid'] .welcome-card,
+:root[data-glass='solid'] .context-menu {
   background: var(--bg-2);
   border-color: var(--border);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+/* 上面那条回落的 `border-color` 是简写、特异性 (0,3,0)，会顺手吃掉两处**语义**描边：
+   toast 的 accent 左条（它表示"这是一条通知"）与浮窗拖拽中的 accent 描边。就地各补一条
+   同特异性的长声明把语义救回来——漏一条就是"拧到实心档，通知条变成灰盒子"。 */
+:root[data-glass='solid'] .toast {
+  border-left-color: var(--accent);
+}
+:root[data-glass='solid'] .floating-panel--dragging {
+  border-color: var(--accent);
 }
 :root[data-glass='solid'] .overlay-backdrop,
 :root[data-glass='solid'] .modal-mask,
@@ -3690,15 +3842,65 @@ button.erb-mode-hint.unlocked:hover {
   cursor: grabbing;
 }
 
-/* 设置 overlay（壳层私有，容器语义；复用 wizard 容器壳） */
-.settings-row {
+/* 设置 overlay（壳层私有，容器语义；复用 wizard 容器壳）
+   三条轴（定义在宿主上、往下继承）：左文字轴 = 带衬 12 + 行 pill 内衬 12；右控件轴是一条
+   独立列；抬头/页脚没有 pill，用 --settings-inset 把自己的内衬对齐到同一条左轴。 */
+.settings-host {
+  --settings-inset: 24px;
+  /* 步进器实测 ≈106px（24+读数48+24+内衬4+边框2），取整到 120 给开关/按钮共用同一条右轴 */
+  --settings-ctl-axis: 120px;
+  /* 560 的窄行里 12px 说明文字只能断成 5 截；660 让说明回到 ~38 汉字一行的可读量程 */
+  --settings-host-w: 660px;
+  --sb: 8px;
+  width: min(var(--settings-host-w), 92vw);
+  /* 高度沿用教程宿主验证过的 88vh 档，另加 780px 上限：2K 屏上不该拉成一块玻璃碑 */
+  max-height: min(88vh, 780px);
+  /* padding 归零：抬头/页脚的分界线要通栏画到边框内缘，带衬改由三段各自负责 */
+  padding: 0;
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-  padding: var(--space-2);
+  flex-direction: column;
+  /* 只有 .settings-body 滚；宿主自己不再滚 ⇒ 双滚动条从根上没了。
+     零新增 backdrop-filter：磨砂面仍由 .overlay-host 那条玻璃主规则供给。 */
+  overflow: hidden;
+}
+.settings-host > .wizard {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 滚动沟常驻：否则滚动条一出现，右轴整列横跳 8px */
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-4);
+}
+.settings-body::-webkit-scrollbar {
+  width: var(--sb);
+  height: var(--sb);
+}
+.settings-body::-webkit-scrollbar-thumb {
+  border-width: 1px;
+}
+/* 两列栅格：文字列吃掉剩余宽度，控件列钉死右轴；align-items:center 让开关/井/按钮对整块
+   文字垂直居中，替掉原来三处 margin-top:1px/2px 的手调补偿。DOM 顺序仍是"控件在前"，
+   靠显式列号搬到右轴。 */
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(var(--settings-ctl-axis), auto);
+  column-gap: var(--space-4);
+  row-gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   font-size: var(--fs-2);
+  line-height: 1.5;
   cursor: pointer;
   transition: background-color var(--dur-1) var(--ease-out);
 }
@@ -3706,50 +3908,100 @@ button.erb-mode-hint.unlocked:hover {
   background: var(--hover);
 }
 .settings-row input[type='checkbox'] {
-  margin-top: 2px;
   accent-color: var(--accent);
 }
-/* 拨动开关（VSCode 精修批：替裸 checkbox）：首列定宽、与标题首行对齐，不随行内容伸缩 */
-.settings-row > .switch {
-  flex: none;
-  margin-top: 1px;
+/* 控件列：开关 / 步进器 / 裸按钮一律搬到第 2 列右端，彼此右边缘只差 justify-self 的 0px
+   ——就是那条轴。min-height 兜 WCAG 2.5.8 的 24×24。 */
+.settings-row > .switch,
+.settings-row > .settings-stepper,
+.settings-row > .theme-segment,
+.settings-row > button {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  min-height: 24px;
 }
-.settings-row > span {
+/* 文字列（标签 + 说明两行）。控件侧那三个都是 <span>（.switch / .settings-stepper /
+   .theme-segment），必须显式排除：否则下面那条 column 方向会串改进步进器——那正是本批修掉的
+   既有 bug：「− 读数 ＋」在设置页里一直竖着堆（0,1,1 > 0,1,0）。 */
+.settings-row > span:not(.switch):not(.settings-stepper):not(.theme-segment) {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
+/* 只有文字没有控件的行（生效地址 / 回执）跨满两列，长 URL 才吃得到整行宽度 */
+.settings-row > span:only-child {
+  grid-column: 1 / -1;
 }
 .settings-hint {
   color: var(--fg-dim);
   font-size: var(--fs-1);
+  line-height: 1.6;
+  text-wrap: pretty;
 }
-/* 设置页头（VSCode 精修批）：标题 + 一条发丝底边，把"页头"与"可滚动的设置体"分开。
-   选择器带 `.wizard` 前缀以压过共用的 `.wizard h3`（0,1,1）——设置头要的是 fs-5 大字重。 */
+/* 抬头带：flex:none 永不滚走；左轴与行文字同轴；accent 短竖标复用教程浮层 h3 的身份语言；
+   底边用 border-image 渐隐发丝线（不支持的引擎落回实色 --border，不留白）。
+   选择器带 `.wizard` 前缀以压过共用的 `.wizard h3`（0,1,1）。 */
 .wizard .settings-title {
-  margin: 0 0 var(--space-3);
-  padding-bottom: var(--space-2);
+  position: relative;
+  flex: none;
+  margin: 0;
+  padding: var(--space-4) var(--settings-inset) var(--space-2);
   font-size: var(--fs-5);
   font-weight: 600;
+  line-height: 1.3;
   letter-spacing: -0.01em;
-  border-bottom: 1px solid var(--border-subtle);
+  text-wrap: balance;
+  border-bottom: 1px solid var(--border);
+  border-image: linear-gradient(90deg, var(--border), var(--border) 40%, transparent 94%) 1;
 }
-/* 设置分组标题：靠"缩进 + 更小的字号 + 一条分隔"分层，不靠加粗大字号抢视线 */
+.wizard .settings-title::before {
+  content: '';
+  position: absolute;
+  left: var(--space-4);
+  top: 0.9em;
+  width: 3px;
+  height: 1em;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+}
+/* 组是节奏容器：行距一律由 gap 给，行自己不再带 margin；组间 = body gap + 发丝线 + 本条 padding */
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
 .settings-group + .settings-group {
-  margin-top: var(--space-3);
   padding-top: var(--space-3);
   border-top: 1px solid var(--border-subtle);
 }
+/* 组标题的锚点感靠"记号 + 一条向右淡出的规则线"，不靠把字号喊大（那会抢正文视线）。
+   text-transform: uppercase 对 CJK 是空转，删掉，用字距 + 字重撑。 */
 .settings-group-title {
-  color: var(--fg-dim);
-  font-size: var(--fs-1);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin-bottom: var(--space-2);
+  padding: 0 var(--space-3);
+  color: var(--fg);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.16em;
 }
-/* 从属项：缩进一级，视觉上明确"它属于上面那一项" */
+.settings-group-title::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border-subtle), transparent 88%);
+}
+/* 从属项：缩进一级 + 一道 2px 左侧从属线，视觉上明确"它属于上面那一项" */
 .settings-row.nested {
-  margin-left: var(--space-4);
+  margin-left: var(--space-3);
+  border-left: 2px solid var(--border-subtle);
+  padding-left: var(--space-2);
 }
 /* 控件当前不起作用（居中限宽要先开写作模式）——整行降透明度，
    且输入框本身 disabled，点了不会有反馈，与"能点但没效果"区别开 */
@@ -3763,28 +4015,26 @@ button.erb-mode-hint.unlocked:hover {
 .settings-row.off input[type='checkbox'] {
   cursor: not-allowed;
 }
-/* 非开关型条目（重置布局）：与开关行同栅格，但首列放按钮而非复选框 */
+/* 非开关型条目（重置布局 / 步进器行）：与开关行同栅格，但控件列放按钮 */
 .settings-row.static {
-  align-items: flex-start;
   cursor: default;
 }
 .settings-row.static:hover {
   background: none;
 }
-.settings-row.static > button {
-  flex: 0 0 auto;
-  margin-top: 1px;
-}
-/* 字号步进器（A1；VSCode 精修批：从松散幽灵按钮升级成一个内聚控件）：sunken 井 + 边框，
-   内含「− 读数 ＋」三格；读数定宽防跳动。首列与开关行同栅格。 */
+/* 字号 / 透明度步进器（A1）：sunken 井 + 边框，内含「− 读数 ＋」三格；读数定宽防跳动。
+   flex-direction 这条是**修 bug**：`.settings-row > span` 的 column 方向特异性更高，
+   一直把它压成竖排（0,1,1 > 0,1,0）。顶边高光让它从井里"抬"起来一点。 */
 .settings-stepper {
   display: inline-flex;
+  flex-direction: row;
   align-items: center;
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
+  box-shadow: var(--edge-raise);
 }
 .settings-stepper > button {
   width: 24px;
@@ -3802,8 +4052,9 @@ button.erb-mode-hint.unlocked:hover {
   background: var(--hover);
   color: var(--fg);
 }
-.settings-row.static > .settings-stepper {
-  margin-top: 1px;
+/* 井内的按钮：1px 外描边会被井边与右轴裁成断线，焦点环走内侧 */
+.settings-stepper > button:focus-visible {
+  outline-offset: -1px;
 }
 .settings-stepper-value {
   min-width: 4em;
@@ -3844,32 +4095,51 @@ button.erb-mode-hint.unlocked:hover {
 }
 /* 注册表来源行（KM-9）：唯一可编辑的市场设置就是一个 URL */
 .settings-text {
-  flex: 1 1 220px;
   min-width: 0;
-  padding: 3px 6px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg);
+  background: var(--surface-sunken);
   color: var(--fg);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-meta);
   font-size: var(--fs-1);
+  outline: none;
 }
 .settings-text:focus {
-  outline: none;
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px var(--focus-glow);
+  box-shadow: var(--shadow-focus);
 }
 .settings-text:disabled {
   opacity: 0.55;
 }
-/* 页脚：单一一行、primary 靠右（全站模态房规） */
+/* 带输入框的行改用流式：标签 + 右侧动作在第一行，输入框独占第二行、两端对齐到两条轴 */
+.settings-row.has-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.settings-row.has-field > span:not(.switch):not(.settings-stepper) {
+  order: 1;
+  flex: 1 1 auto;
+}
+.settings-row.has-field > button {
+  order: 2;
+  flex: none;
+}
+.settings-row.has-field > .settings-text {
+  order: 3;
+  flex: 1 1 100%;
+}
+/* 页脚带：flex:none 永不滚走；右内衬 = 左轴 24 + 滚动沟 8，于是「完成」的右边缘与开关/井/按钮
+   钉在同一条轴上。分界线通栏（与抬头同构），不再吃 body 的 padding。 */
 .settings-footer {
+  flex: none;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: var(--space-2);
-  margin-top: var(--space-4);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--border);
+  padding: var(--space-3) calc(var(--settings-inset) + var(--sb)) var(--space-3) var(--settings-inset);
+  border-top: 1px solid var(--border-subtle);
 }
 /* 更新 / 关于组（REL-2）：状态行三态色调沿用语义色 token；外链行复用 settings-row 栅格 */
 .settings-hint.is-ok {
@@ -3878,7 +4148,12 @@ button.erb-mode-hint.unlocked:hover {
 .settings-hint.is-err {
   color: var(--danger);
 }
+/* 外链行是三件套（头像 / 文字 / 箭头），天然走流式而不是两列栅格；
+   箭头那条 margin-left:auto 已把右边缘推到轴上 */
 .settings-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   color: inherit;
   text-decoration: none;
 }
@@ -3894,6 +4169,12 @@ button.erb-mode-hint.unlocked:hover {
   border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   background: var(--bg-3);
+}
+/* 极窄窗（92vw 以下）：控件列的地板降到 88px，先让文字列吃回宽度 */
+@media (max-width: 620px) {
+  .settings-row {
+    grid-template-columns: minmax(0, 1fr) minmax(88px, auto);
+  }
 }
 .wizard-error {
   color: var(--red);
@@ -3963,10 +4244,9 @@ button.primary .hint {
 .tutorial-lead {
   margin: 0;
   padding-bottom: var(--space-3);
-  /* 渐隐发丝线：右端淡出，比通栏实线更轻，读起来像杂志导语的分隔。
-     先声明实色底、再叠 border-image——不支持的引擎自然回落到那条实线，不留白。 */
-  border-bottom: 1px solid var(--border);
-  border-image: linear-gradient(90deg, var(--border), var(--border) 40%, transparent 92%) 1;
+  /* 渐隐发丝线交效果库 `.u-hairline-fade` 一族供给（本条即其消费方）；这里只写"这条线怎么淡"：
+     左端起实、四成处仍实、92% 淡出——杂志导语的分隔，右端不留硬头。 */
+  --hair-grad: linear-gradient(90deg, var(--border), var(--border) 40%, transparent 92%);
   color: var(--fg-dim);
   font-size: var(--fs-2);
   line-height: 1.7;
@@ -3995,9 +4275,9 @@ button.primary .hint {
   /* spy 把当前条目滚进视野时平滑；减弱动效下被全局那条压成瞬移 */
   scroll-behavior: smooth;
   padding: 0 var(--space-2) var(--space-2) 0;
-  border-right: 1px solid var(--border);
-  /* 上端淡出：分界线从第一条目起画，不在"目录"标签上方就撞一条硬线 */
-  border-image: linear-gradient(180deg, transparent, var(--border) 6%, var(--border) 94%, transparent) 1;
+  /* 竖边（发丝线本体交效果库）：上端淡出——分界线从第一条目起画，不在"目录"标签上方就撞一条硬线 */
+  --hair-edge: 0 1px 0 0;
+  --hair-grad: linear-gradient(180deg, transparent, var(--border) 6%, var(--border) 94%, transparent);
 }
 .tutorial-toc-label {
   padding: 0 var(--space-2) var(--space-2);
@@ -4099,10 +4379,9 @@ button.primary .hint {
     overflow-y: hidden;
     scroll-behavior: auto;
     padding: 0 0 var(--space-2);
-    /* 塌成横带后分隔线改水平，之前那条 border-image 是竖向渐变、这里必须换掉 */
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    border-image: linear-gradient(90deg, transparent, var(--border) 6%, var(--border) 94%, transparent) 1;
+    /* 塌成横带后分隔线改水平（右宽归 0 = 原来的 border-right: none），渐变方向也要跟着换回来 */
+    --hair-edge: 0 0 1px 0;
+    --hair-grad: linear-gradient(90deg, transparent, var(--border) 6%, var(--border) 94%, transparent);
     margin-bottom: var(--space-3);
   }
   .tutorial-toc-label {
@@ -4149,8 +4428,9 @@ button.primary .hint {
 .tutorial-section + .tutorial-section {
   margin-top: calc(var(--space-4) * 2);
   padding-top: calc(var(--space-4) * 1.5);
-  border-top: 1px solid var(--border);
-  border-image: linear-gradient(90deg, transparent, var(--border) 10%, var(--border) 90%, transparent) 1;
+  /* 两端渐隐（发丝线交库）：比通栏实线更轻，十八节的长文里不喧宾 */
+  --hair-edge: 1px 0 0 0;
+  --hair-grad: linear-gradient(90deg, transparent, var(--border) 10%, var(--border) 90%, transparent);
 }
 /* 正文：文档阅读的行高与段距（13px / 1.85）。CJK 没有词间空隙，行高要靠得上 1.8 才不糊；
    字距 +0.01em 让 13px 的汉字肩膀松开一点。pretty 折行避免行尾孤字，弱引擎直接忽略。 */
@@ -4166,30 +4446,12 @@ button.primary .hint {
 .wizard.tutorial strong {
   font-weight: 600;
 }
-/* 行内代码芯片：正文 / 表格 / 说明行同一套。全局那条 code 是给 UI 控件用的 12px 死值，
-   文档行里要跟着正文字号缩放，所以按 em 重给；边框 + --bg-3 底让芯片在磨砂面上也站得住。
-   块级代码是 pre.tutorial-code > code（祖先不在这个 :is 列表里），两套互不命中。 */
-.wizard.tutorial :is(p, td, th, .tutorial-caption) code {
-  background: var(--bg-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: 0.06em 0.34em;
-  font-size: 0.9em;
-  color: var(--fg);
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-  /* keep-all：芯片是"一个记号"，CJK 之间不许断行——`角色：12` 被拆成"角 / 色：12"两截
-     （每截各带一圈边框）是文档里最难看的一种断法；放不下时由 anywhere 兜底。 */
-  word-break: keep-all;
-  overflow-wrap: anywhere;
-}
-/* 说明行（样例行文 / 表注）：左侧一根短标 + 弱化字色，做成"注"的口径——
-   它是元信息，不该和正文抢同一种排法 */
+/* 行内代码芯片的配方在效果库末条（`.u-chip` + 本选择器并档）：文档行里要跟着正文字号缩放，
+   全局那条 `code` 是给 UI 控件用的 12px 死值，两处互不命中。 */
+/* 说明行（样例行文 / 表注）："注"的口径（左短标 + 弱化字色）由库的 `.u-note` 供给，
+   这里只给它在文档流里的位置与字号档。 */
 .tutorial-caption {
   margin: 0 0 var(--space-1);
-  padding-left: var(--space-2);
-  border-left: 2px solid var(--border);
-  color: var(--fg-dim);
   font-size: var(--fs-1);
   line-height: 1.6;
 }
@@ -4208,42 +4470,28 @@ button.primary .hint {
    拉出整整两屏；320px 大约 14 行，够读完一段、又始终在同屏见到对面那块。 */
 .tutorial-code {
   margin: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  /* 一线顶边高光 + 极淡投影：代码块从磨砂卡片上"浮"起一点，比纯平贴更有质感（内敛，不抢眼） */
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.03),
-    0 1px 2px rgba(0, 0, 0, 0.18);
-  padding: var(--space-2) var(--space-3) var(--space-3);
+  /* 井面（底 / 边 / 圆角 / 内衬）交效果库 `.u-well`：这里只写"这口井怎么抬、内衬多少"。
+     一线顶边高光 + 极淡投影让代码块从磨砂卡片上"浮"起一点，比纯平贴更有质感（内敛不抢眼）。 */
+  --well-pad-t: var(--space-2);
+  --well-pad-i: var(--space-3);
+  --well-pad-b: var(--space-3);
+  --well-raise: var(--well-edge), var(--well-shadow);
   max-height: 320px;
   overflow: auto;
   overscroll-behavior: contain;
   overflow-wrap: break-word;
   white-space: pre-wrap;
-  font-family: var(--font-mono);
+  /* 教程里的代码块就是"你在编辑器里写的那份"⇒ 取编辑器面（与 Monaco 同一条栈），
+     左边看着像源、右边看着像产物，对照关系靠字面本身也说了一遍 */
+  font-family: var(--font-code);
   font-size: var(--fs-1);
   line-height: 1.6;
   tab-size: 2;
 }
-/* 围栏的语言标签：块自己说"我是哪一侧"。贴住滚动区顶吸住，长块滚多远也知道在读什么。
-   负 margin 把标签推到 padding 边、贴住内圈边框，做成块的一条"标题行"而不是飘着的字。 */
+/* 围栏的语言标签：吸顶行的一切力学（sticky / 负 margin / 实底 / 顶圆角）都在库的
+   `.u-well-head::before` 里，这里只剩"这块是什么"的一句话。 */
 .tutorial-code::before {
   content: 'kojo 口上';
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: block;
-  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-3)) var(--space-1);
-  padding: 2px var(--space-3);
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  color: var(--fg-dim);
-  font-size: var(--fs-0);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  line-height: 1.5;
 }
 .tutorial-pair > .tutorial-code:last-child::before {
   content: '编译产物';
@@ -4303,11 +4551,9 @@ button.primary .hint {
 .tutorial-table-scroll {
   overflow: auto;
   overscroll-behavior: contain;
-  /* 与代码块同一档封顶：语法全表一张能到七八十行，不封顶时"表头是谁、这行是哪一列"滚一眼就丢 */
+  /* 与代码块同一档封顶：语法全表一张能到七八十行，不封顶时"表头是谁、这行是哪一列"滚一眼就丢。
+     底 / 边 / 圆角由库的 `.u-well` 供给（井面缺省=无内衬、不抬，正是这张表要的样子）。 */
   max-height: 460px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
 }
 /* 目录跳转把焦点交给整节（tabIndex=-1，不进 Tab 序列）：这不是键盘落点，
    给整节套一圈描边反而像选错了东西 */
@@ -4330,19 +4576,15 @@ button.primary .hint {
   border-bottom: 1px solid var(--border);
 }
 .tutorial-table thead th {
-  /* 吸顶表头：横滚 + 竖滚都在同一个容器里，滚到第 50 行还得知道"写法 / 编译成 / 说明"分别是谁。
-     底色必须实（走 --bg-2），半透明会让滚过来的行透出字影。 */
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  /* 吸顶 + 实底由库的 `.u-sticky-top` 供给（末条规则）：横滚竖滚都在同一容器里，滚到第 50 行
+     还得知道"写法 / 编译成 / 说明"分别是谁；底色必须实，半透明会让滚过来的行透出字影。 */
   color: var(--fg-dim);
   font-weight: 600;
   letter-spacing: 0.02em;
   white-space: nowrap;
-  background: var(--bg-2);
 }
 .tutorial-table thead th:first-child {
-  border-top-left-radius: var(--radius-md);
+  border-top-left-radius: var(--well-radius, var(--radius-md));
 }
 .tutorial-table thead th:last-child {
   border-top-right-radius: var(--radius-md);
@@ -4363,9 +4605,9 @@ button.primary .hint {
   flex: none;
   margin-top: var(--space-3);
   padding-top: var(--space-3);
-  /* 脚部与正文之间也走两端渐隐的发丝线，与导语分隔同一套语言 */
-  border-top: 1px solid var(--border);
-  border-image: linear-gradient(90deg, transparent, var(--border) 15%, var(--border) 85%, transparent) 1;
+  /* 脚部与正文之间也走两端渐隐的发丝线（库供），与导语分隔同一套语言 */
+  --hair-edge: 1px 0 0 0;
+  --hair-grad: linear-gradient(90deg, transparent, var(--border) 15%, var(--border) 85%, transparent);
 }
 .sb-idx.err {
   color: var(--red);
@@ -4393,11 +4635,12 @@ button.primary .hint {
   max-width: 400px;
 }
 .toast {
+  /* toast 背后**没有**暗化遮罩，可以直压亮语法色 ⇒ alpha 钉死在校准档，不跟旋钮 */
+  --glass-alpha: 0.85;
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  background: var(--surface-overlay);
-  border: 1px solid var(--border);
+  /* 只给左条：其余三边 1px 交玻璃主规则（本条在后，长声明压得住那条简写） */
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-lg);
   padding: 10px 12px;
@@ -5223,11 +5466,11 @@ button.primary .hint {
 /* --------------------- 浮动面板（2026-10-14 UI 浮动批：非模态可移动浮窗） --------------------- */
 
 .floating-panel {
+  /* 可拖浮窗压在任意编辑器内容上、无遮罩压暗 ⇒ 与 toast 同一可读面上限 */
+  --glass-alpha: 0.85;
   position: fixed;
   display: flex;
   flex-direction: column;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
   /* 置顶但低于模态：模态打开时浮窗让位 */
@@ -5776,7 +6019,7 @@ button.primary .hint {
 }
 /* 角色/家族的一组里混着多条规则 ⇒ 条目行补一枚规则标识（等宽、弱化，不抢正文） */
 .conv-issue-rule {
-  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-family: var(--font-meta);
   font-size: var(--fs-0);
   flex: none;
   max-width: 220px;
@@ -6267,7 +6510,11 @@ button.resume-session {
   flex: none;
   min-width: 9em;
   text-align: right;
-  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-family: var(--font-meta);
+  /* 键位串含数字键 ⇒ 等宽数字保右对齐列不抖；捕获态写的是中文「按下新键位…（Esc 取消）」，
+     旧栈在 9em 槽位里混汉字全靠运气。字号原来骑在祖先上，钉成同值档位断开耦合。 */
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-1);
   color: var(--fg-dim);
 }
 .keybindings-notice {
@@ -6599,13 +6846,17 @@ button.resume-session {
 .u-ripple::after {
   content: '';
   position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 200px;
-  height: 200px;
-  margin: -100px 0 0 -100px;
+  /* 原点槽位缺省=面心（纯 CSS 拿不到指针点）；要按真实点击点起波，由调用方写 --rx/--ry 覆盖，
+     不接线也照常工作。直径跟面宽走（旧的 200px 定值在窄钮上会溢出、在宽钮上盖不满）。 */
+  left: var(--rx, 50%);
+  top: var(--ry, 50%);
+  width: 100%;
+  aspect-ratio: 1;
+  translate: -50% -50%;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 60%);
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0) 66%);
+  /* 收缩量留在 `transform` 上（`u-ripple` 关键帧动的就是这一条）：写成独立的 `scale:` 属性
+     会和关键帧各乘各的，波峰永远停在 0 */
   transform: scale(0);
   opacity: 0;
   pointer-events: none;
@@ -7043,4 +7294,192 @@ button.resume-session {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: u-spin 700ms linear infinite;
+}
+
+/* ---- 按压反馈三档（2026-10-17 统一批）：一档一语义，全部不吃布局、disabled 零反馈 ----
+   为什么分三档而不是一个 .u-press 走天下（既有那条 scale(0.97) 保留给芯片/大按钮）：
+   ① 密集行（树行 / 标签页 / 菜单项）不能缩放——一行 24px，缩 3% 就是字面抖动；
+   ② 24×24 的小控件不能缩放——`min-height: 24px` 的 WCAG 可点区会被缩掉；
+   ③ `.tree-file.active` / `.editor-tab.active` 用 box-shadow 当选中指示条，按压档一律不碰
+      box-shadow，否则按下去指示条闪没。
+   罩层用 `background-image`（不是 background-color）：既压得过实心选中底，又不与
+   `--hover` / `--active` 的底色语义抢同一条声明。 */
+:is(.u-press-flat, .u-press-tint, .u-press-sink) {
+  -webkit-tap-highlight-color: transparent;
+}
+/* 一档 · 罩层：密集行与标签（不动颜色、不动指示条） */
+.u-press-flat:active:not(:disabled):not([aria-disabled='true']):not(.off):not(.static) {
+  background-image: linear-gradient(var(--press-overlay), var(--press-overlay));
+  transition-duration: var(--dur-press);
+}
+/* 着色档：只给"本身透明、无选中语义"的小控件（步进器 / 关闭钮 / 工具条 toggle） */
+.u-press-tint:active:not(:disabled):not([aria-disabled='true']):not(.off) {
+  background-color: var(--active);
+  transition-duration: var(--dur-press);
+}
+/* 位移档：纯 translate，可点区尺寸不变（button 基类已自带，这条给非 button 的实心件） */
+.u-press-sink:active:not(:disabled):not([aria-disabled='true']):not(.off) {
+  transform: translateY(var(--press-dy));
+  transition-duration: var(--dur-press);
+}
+/* 与 `.u-focus-glow` 共存：那条给的是焦点环 box-shadow，按压时不能把它替换掉，
+   所以这里"环 + 内凹"两条一起列（特异性 (0,3,1) 高于 .u-focus-glow:focus-visible (0,2,0)）。 */
+.u-focus-glow:active:not(:disabled):focus-visible {
+  box-shadow:
+    var(--shadow-focus),
+    inset 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+/* ---- 全站接入段（零 TSX 改动；新面自己挂上面的工具类，别在这里加名字） ----
+   已有底色或半透明底的高频行面：树行 / 标签页 / 菜单项 / 目录项 / 设置行。
+   `.off` / `.static` 被排除——那两类是"点了没反应"的行，给它按压反馈等于骗人。 */
+:is(
+    .tree-file,
+    .tree-group-btn,
+    .tree-package,
+    .tree-dir,
+    .panel-tab,
+    .editor-tab,
+    .context-menu button,
+    .tutorial-toc-item,
+    .settings-row
+  ):active:not(:disabled):not(.off):not(.static) {
+  background-image: linear-gradient(var(--press-overlay), var(--press-overlay));
+  transition-duration: var(--dur-press);
+}
+/* 24×24 的透明小控件：走 --active 着色（(0,4,0) 压过 button:active 的实测底色 (0,2,1)） */
+:is(.settings-stepper > button, .panel-close, .editor-tab .tab-close):active:not(:disabled) {
+  background-color: var(--active);
+  transition-duration: var(--dur-press);
+}
+/* 减弱动效：位移归零、涟漪停在无，但**必须留下静态换色**——按下去完全没反应是不可接受的。
+   两条（应用内开关 / 系统偏好）各写一份：全局那条压时规则只管 duration，管不到 transform。 */
+:root[data-motion='reduced'] :is(.u-press-sink, .u-ripple):active:not(:disabled):not(.off) {
+  animation: none;
+  transform: none;
+  background-image: linear-gradient(var(--press-overlay), var(--press-overlay));
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.u-press-sink, .u-ripple):active:not(:disabled):not(.off) {
+    animation: none;
+    transform: none;
+    background-image: linear-gradient(var(--press-overlay), var(--press-overlay));
+  }
+}
+
+/* ---- 效果原语 · 收编批（2026-10-17，教程浮层反哺）----
+   上一批在教程里写实的五种手法（渐隐发丝线 / 井面 / 井面吸顶标签 / 行内芯片 / 注行）其实是
+   全站通用的视觉语言，散在一次性选择器里等于没做。三条纪律照库头：段内零 animation/transition
+   ⇒ 天然不吃动效开关；只写 border/shadow/background/颜色字距 ⇒ 不吃布局；每条都给**实色回落**
+   或 var() 缺省 ⇒ 老内核与槽位取空都不破版。
+   槽位（--hair-* / --well-* / --head-* / --chip-* / --note-*）只在本段被**读取**、由消费方
+   **写入**：同元素上不出现"库压消费方"的特异度之争，DOM 也不必为了挂工具类改结构。
+   既有消费方按 `.glass, .overlay-host` 的先例逗号并进同一条规则；新消费方直接挂类。 */
+
+/* 渐隐发丝线：一条 1px 实色底 + 渐变淡出的边。哪条边写 `--hair-edge`（缺省=下边），
+   怎么淡写 `--hair-grad`。方向伴生类自带 `--hair-edge`，与 `.u-hairline-fade` 二选一。
+   注意与既有 `.u-hairline-top/-bottom` **不并档**：那两条是 `--border-subtle` 的实色细线，
+   本族是 `--border` 的渐隐线，换了就整体掉一档色。 */
+.u-hairline-fade,
+.u-hairline-fade-top,
+.u-hairline-fade-right,
+.u-hairline-fade-bottom,
+.u-hairline-fade-left,
+.tutorial-lead,
+.tutorial-toc,
+.tutorial-section + .tutorial-section,
+.wizard.tutorial .wizard-actions {
+  border-style: solid;
+  border-width: var(--hair-edge, 0 0 1px 0);
+  border-color: var(--hair-color, var(--border));
+  border-image: var(
+      --hair-grad,
+      linear-gradient(90deg, transparent, var(--border) 12%, var(--border) 88%, transparent)
+    )
+    1;
+}
+.u-hairline-fade-top {
+  --hair-edge: 1px 0 0 0;
+}
+.u-hairline-fade-right {
+  --hair-edge: 0 1px 0 0;
+}
+.u-hairline-fade-bottom {
+  --hair-edge: 0 0 1px 0;
+}
+.u-hairline-fade-left {
+  --hair-edge: 0 0 0 1px;
+}
+
+/* 井面：内嵌区 / 代码块 / 表滚动区共用的那一块底。缺省不抬、无内衬；内衬写进 `--well-pad-*`，
+   好让下面的吸顶标签行从同一处取负 margin（两者永远贴得准，不会各自漂移）。
+   `--well-bg` 缺省 `--surface`(=--bg)，与收编前逐值相同；要更深的井就写 `--well-bg:
+   var(--surface-sunken)`——那是 #191d22，比 --bg 暗半档，属**刻意的视觉变更**，不在收编范围内。 */
+.u-well,
+.u-well-head,
+.tutorial-code,
+.tutorial-table-scroll {
+  background: var(--well-bg, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--well-radius, var(--radius-md));
+  box-shadow: var(--well-raise);
+  padding: var(--well-pad-t, 0) var(--well-pad-i, 0) var(--well-pad-b, 0);
+}
+
+/* 井面吸顶标签行：块自己说"我是哪一侧"，滚多远都在顶部。文案由消费方的
+   `::before { content: … }` 给——库不代发文案，也不与消费方抢 content 的特异度。 */
+.u-well-head::before,
+.tutorial-code::before {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: block;
+  margin:
+    calc(-1 * var(--well-pad-t, var(--space-2))) calc(-1 * var(--well-pad-i, var(--space-3)))
+    var(--space-1);
+  padding: 2px var(--well-pad-i, var(--space-3));
+  background: var(--head-bg, var(--surface-raised));
+  border-bottom: 1px solid var(--border);
+  border-radius:
+    var(--well-radius, var(--radius-md)) var(--well-radius, var(--radius-md)) 0 0;
+  color: var(--head-fg, var(--fg-dim));
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+}
+
+/* 贴顶吸住 + 实底：吸顶件必须不透明，否则滚过来的行会从字影里透出来。
+   层级不同的消费方写 `--sticky-z`（条件矩阵那族是 2）。 */
+.u-sticky-top,
+.tutorial-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: var(--sticky-z, 1);
+  background: var(--sticky-bg, var(--surface-raised));
+}
+
+/* 行内代码芯片：跟着正文字号缩放（em 而不是死像素），跨行时边框整份复制。
+   keep-all 挡 CJK 拦腰断（`角色：12` 拆成"角 / 色：12"两截是文档里最难看的断法），
+   anywhere 兜底放不下的长拉丁记号。块级代码是 pre>code，祖先不在这个 :is 列表里，两套互不命中。 */
+.u-chip,
+.wizard.tutorial :is(p, td, th, .tutorial-caption) code {
+  background: var(--chip-bg, var(--surface-overlay));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0.06em 0.34em;
+  font-size: 0.9em;
+  color: var(--chip-fg, var(--fg));
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+/* 注行：左短标 + 弱化字色——它是元信息，不该和正文抢同一种排法 */
+.u-note,
+.tutorial-caption {
+  padding-left: var(--note-pad, var(--space-2));
+  border-left: 2px solid var(--note-bar, var(--border));
+  color: var(--note-fg, var(--fg-dim));
 }

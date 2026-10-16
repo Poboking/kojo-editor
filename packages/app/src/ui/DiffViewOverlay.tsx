@@ -7,6 +7,7 @@ import {
   subscribeDiff,
   type DiffViewState,
 } from './diff-view';
+import { CODE_FONT_BASELINE } from './code-font'; // 比对面与主编辑器同一张字面（全站唯一一条栈）
 
 /**
  * 通用 diff 视图 overlay（2026-10-15 比对/历史批）。
@@ -98,6 +99,8 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
           diffAlgorithm: 'advanced',
           renderIndicators: true,
           automaticLayout: true,
+          // 编程字体：与主编辑器同一份真源（createDiffEditor 也吃 IEditorOptions 这些键）
+          ...CODE_FONT_BASELINE,
         });
         diffEditor.setModel({ original: modelA, modified: modelB });
         editor = {

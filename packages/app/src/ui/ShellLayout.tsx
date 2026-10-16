@@ -1434,12 +1434,14 @@ export function ShellLayout(props: Props): ReactElement {
       ) : null}
       {settingsOpen ? (
         <div className="overlay-backdrop" onMouseDown={() => setSettingsOpen(false)}>
-          <div className="overlay-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
             <div className="wizard">
               <h3 className="settings-title">设置</h3>
 
+              {/* 三段带：抬头与页脚 flex:none 永不滚走，只有这一列在滚（样式见 .settings-body） */}
+              <div className="settings-body">
               <div className="settings-group">
-                <div className="settings-group-title">视图</div>
+                <div role="heading" aria-level={4} className="settings-group-title">视图</div>
                 <label className="settings-row">
                   <Switch
                     checked={layout.zen}
@@ -1473,7 +1475,7 @@ export function ShellLayout(props: Props): ReactElement {
 
               {/* 动效（UI-5）：应用内的降噪开关，独立于系统级 prefers-reduced-motion */}
               <div className="settings-group">
-                <div className="settings-group-title">外观</div>
+                <div role="heading" aria-level={4} className="settings-group-title">外观</div>
                 {/* 主题（2026-10-17 主题系统）：分段单选，缺省深色。翻档即写 data-theme、
                     全场 token 当场重算（与动效/毛玻璃同款即时生效），只改显示、不动文件。 */}
                 <div className="settings-row static">
@@ -1520,7 +1522,7 @@ export function ShellLayout(props: Props): ReactElement {
                 </label>
                 {/* 毛玻璃透明度（glass-pref.ts）：与字号步进器同款排版（− 读数 ＋）。透明度越高，
                     浮层与教程目录越通透；调到 0% 即实心档，撤掉磨砂回到不透明面。只改显示、不动文件。 */}
-                <div className="settings-row static">
+                <div className="settings-row static" role="group" aria-label="毛玻璃透明度">
                   <span className="settings-stepper">
                     <button
                       className="ghost small"
@@ -1557,7 +1559,7 @@ export function ShellLayout(props: Props): ReactElement {
                   管辖清单只有 `SEALED_PANEL_IDS` 上那两个 id——「.kojo 预览」已交付为常态功能，
                   2026-10-14 起不在其内（它的开关常驻下面那个「编辑器」组，不随本总闸收起）。 */}
               <div className="settings-group">
-                <div className="settings-group-title">封存功能</div>
+                <div role="heading" aria-level={4} className="settings-group-title">封存功能</div>
                 <label className="settings-row">
                   <Switch checked={!sealed} onChange={(c) => setSealed(!c)} label="显示已封存功能" />
                   <span>
@@ -1572,10 +1574,10 @@ export function ShellLayout(props: Props): ReactElement {
               {/* 「编辑器」组不再随总闸收起：这一组里的 .kojo 预览是已交付的常态功能，
                   默认关 ⇒ 这一行（连同快捷键 Ctrl+Alt+T）就是它的正式入口。 */}
               <div className="settings-group">
-                <div className="settings-group-title">编辑器</div>
+                <div role="heading" aria-level={4} className="settings-group-title">编辑器</div>
                 {/* 字号 / 缩放（A1）：真源与钳制在 font-size-pref.ts，这里只排版。
                     禁用位 = 已到量程两端，与「没改动⇒按钮不可点」同一房规。 */}
-                <div className="settings-row static">
+                <div className="settings-row static" role="group" aria-label="正文字号">
                   <span className="settings-stepper">
                     <button
                       className="ghost small"
@@ -1688,7 +1690,7 @@ export function ShellLayout(props: Props): ReactElement {
               {/* 直连模式开关：仍经封存总闸控制——封存态不渲染（本功能尚未交付为常态） */}
               {!sealed ? (
                 <div className="settings-group">
-                  <div className="settings-group-title">游戏目录写入</div>
+                  <div role="heading" aria-level={4} className="settings-group-title">游戏目录写入</div>
                   <label className="settings-row">
                     <Switch checked={directMode} onChange={setDirectMode} label="直连模式（就地编辑游戏目录）" />
                     <span>
@@ -1711,7 +1713,7 @@ export function ShellLayout(props: Props): ReactElement {
                 const canSave = row.canEdit && !isDraftNoop(marketEndpointDraft, row.address);
                 return (
                   <div className="settings-group">
-                    <div className="settings-group-title">口上市场</div>
+                    <div role="heading" aria-level={4} className="settings-group-title">口上市场</div>
 
                     {/* 生效地址是**读数**，不是占位符：默认态也把那串地址摊开给人看（可复制、长串折行）。
                         不加 `<a>`、不冒充链接——这不是"点出去看看"的东西，是"我现在用的是哪一个"。
@@ -1729,7 +1731,7 @@ export function ShellLayout(props: Props): ReactElement {
                     </div>
 
                     {/* 草稿行：填的是"改成别的地址"，不是当前值的复读机；Tab 顺序 = 草稿框 → 保存 → 恢复默认 */}
-                    <div className={`settings-row static${row.canEdit ? '' : ' off'}`}>
+                    <div className={`settings-row static has-field${row.canEdit ? '' : ' off'}`}>
                       <input
                         className="settings-text"
                         type="url"
@@ -1789,7 +1791,7 @@ export function ShellLayout(props: Props): ReactElement {
               })()}
 
               <div className="settings-group">
-                <div className="settings-group-title">布局</div>
+                <div role="heading" aria-level={4} className="settings-group-title">布局</div>
                 <div className="settings-row static">
                   <button className="ghost small" onClick={doReset}>
                     重置布局
@@ -1805,7 +1807,7 @@ export function ShellLayout(props: Props): ReactElement {
                   当前仓库尚未发布过 release，check() 现阶段必然 404——失败态是常态路径，
                   必须可见可重试（见 runUpdateCheck 的 try-catch），绝不让按钮抛未捕获异常。 */}
               <div className="settings-group">
-                <div className="settings-group-title">更新</div>
+                <div role="heading" aria-level={4} className="settings-group-title">更新</div>
                 <div className="settings-row static">
                   <button
                     className="ghost small"
@@ -1848,7 +1850,7 @@ export function ShellLayout(props: Props): ReactElement {
                   项目未装 opener/shell 插件，WebView2 会把新窗口请求交给系统默认浏览器，
                   不为这事新增 Rust 依赖（最小改动面）。头像直接引 GitHub 头像端点。 */}
               <div className="settings-group">
-                <div className="settings-group-title">关于</div>
+                <div role="heading" aria-level={4} className="settings-group-title">关于</div>
                 <a
                   className="settings-row settings-link"
                   href="https://github.com/Poboking"
@@ -1880,6 +1882,7 @@ export function ShellLayout(props: Props): ReactElement {
                   </span>
                   <Icon name="popout" size={12} className="settings-link-icon" />
                 </a>
+              </div>
               </div>
 
               {/* 单一页脚行，且沿用全站模态房规：primary 恒等于推荐项、排在最右 */}

@@ -92,6 +92,7 @@ import { installImplementationProvider } from '../monaco/erb-implementation';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { CJK_TYPING_BASELINE, FIND_BASELINE, editorOptionsForLineCount } from './editor-options';
+import { CODE_FONT_BASELINE } from './code-font'; // 编程字体单一真源（与 styles.css 的 --font-code 逐字同一条栈）
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
@@ -1951,6 +1952,9 @@ export function EditorPane({
       renderLineHighlight: 'all',
       padding: { top: 6, bottom: 16 },
       scrollbar: { verticalScrollbarSize: 12, horizontalScrollbarSize: 12 },
+      // 编程字体（单一真源）：**只走 create 路径**，不进体量降级集——字体与体量两轴正交，
+      // updateOptions 只覆写发过去的键，创建时钉一次就贯穿切文件
+      ...CODE_FONT_BASELINE,
       // 中文打字噪声 / 选词基线（A2+A3）：与切文件降级集同源（editor-options.ts）
       ...CJK_TYPING_BASELINE,
       // find 体验基线（A7）：create 与切文件两条路径都要带上，吞一条就是档位漂移

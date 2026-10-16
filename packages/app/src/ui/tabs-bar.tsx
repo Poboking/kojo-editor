@@ -214,9 +214,9 @@ export function TabBar({
       {menu ? (
         <>
           <div className="context-menu-backdrop" onMouseDown={() => setMenu(null)} />
-          <div className="context-menu" style={{ left: menu.x, top: menu.y }} role="menu">
+          <div className="context-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-orientation="vertical">
             {tabMenuItemsFor(menu.path !== null && pinnedPaths.has(menu.path)).map((item, i) => (
-              <div key={item.id}>
+              <div key={item.id} role="none">
                 {item.dividerBefore && i > 0 ? <div className="context-menu-sep" role="separator" /> : null}
                 <button role="menuitem" onClick={() => runMenuAction(item.id)}>
                   <span className="check" />

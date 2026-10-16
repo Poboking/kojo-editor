@@ -1379,7 +1379,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       {menu ? (
         <>
           <div className="context-menu-backdrop" onMouseDown={() => setMenu(null)} />
-          <div className="context-menu" style={{ left: menu.x, top: menu.y }} role="menu">
+          <div className="context-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-orientation="vertical">
             {menu.scope.kind === 'root' || menu.scope.kind === 'group' ? (
               <button
                 role="menuitem"
@@ -1399,7 +1399,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
               </button>
             ) : (
               menuItemsFor(menu.scope.kind, menuCapability).map((item, i) => (
-                <div key={item.id}>
+                <div key={item.id} role="none">
                   {item.dividerBefore && i > 0 ? <div className="context-menu-sep" role="separator" /> : null}
                   <button
                     role="menuitem"
