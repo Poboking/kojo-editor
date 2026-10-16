@@ -558,6 +558,20 @@ export class ConventionEngine implements ConventionLinterService {
         ` ｜ 逐文件重算 ${recomputedFiles} 个文件` +
         ` ｜ 规则外：装载 ${tLoad - startedAt}ms · 预取 ${tPrefetch - tLoad}ms · 装配 ${Date.now() - tPrefetch}ms`,
     );
+    // 复用总闸单独成行：breakdown 那行很长，壳侧日志单行截断会把行尾吃掉（PITFALLS 86）
+    {
+      const reusedRules = ruleTimings.filter((t) => t.reused).length;
+      let crossReused = 0;
+      let crossTotal = 0;
+      for (const t of ruleTimings) {
+        crossReused += t.cross?.reused ?? 0;
+        crossTotal += t.cross?.total ?? 0;
+      }
+      this.deps.log.info(
+        `  lint reuse: 整条复用 ${reusedRules}/${ruleTimings.length} · 分区 ${crossReused}/${crossTotal} · 逐文件重算 ${recomputedFiles}` +
+          ` · 装载 ${tLoad - startedAt}ms 预取 ${tPrefetch - tLoad}ms 装配 ${Date.now() - tPrefetch}ms`,
+      );
+    }
     // 记下本轮 mtime ⇒ 下一轮的投机预取候选（判据变了会自动失效为"全量候选"）
     this.lastRun = expect && index.fileMtimes
       ? { fingerprint: expect.fingerprint, mtimes: new Map(index.fileMtimes) }
