@@ -49,6 +49,7 @@ import {
 } from './font-size-pref';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { setJumpProbe } from './jump-to-state';
+import { takeRecoveredContent } from './recovery-store';
 import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
 import {
   collectSemanticTokenSpans,
@@ -260,6 +261,14 @@ function baseNameOf(path: string): string {
   return splitPath(path).base;
 }
 
+/** autosave 快照句柄吐出的一条脏内容（退出/崩溃守护批；只增不改——旧消费方零影响） */
+export interface EditorSnapshotRecord {
+  path: string;
+  text: string;
+  encoding: string;
+  eol: string;
+}
+
 /**
  * 编辑器动作句柄（P3 多标签批）：宿主（App）经 `registerActions` 取得，
  * 供「保存并关闭」「全部保存」等标签级流程调用。
@@ -271,6 +280,8 @@ export interface EditorPaneActions {
   savePath: (path: string) => Promise<boolean>;
   /** 保存全部脏标签（逐一走保存接管链；needs-choice 的后台标签跳过并通知） */
   saveAll: () => Promise<boolean>;
+  /** 全部脏标签的内容快照（autosave 兜底用：O(脏数) 取值，不切标签不落盘） */
+  snapshots: () => EditorSnapshotRecord[];
 }
 
 /** 单个打开文件的 model 记录（多标签：model 随标签存续，切换不销毁） */
@@ -444,6 +455,21 @@ export function EditorPane({
     if (!entry || base === undefined) return false;
     return entry.model.getAlternativeVersionId() !== base;
   }, []);
+
+  /**
+   * 全部脏标签的内容快照（autosave 兜底句柄，退出/崩溃守护批）：逐 model 读
+   * getValue + 打开时的编码/EOL。脏 ⇒ model 必在 entriesRef（脏只可能来自
+   * model 监听），所以这里天然是"脏集合真相源"，不需要宿主另传 dirtyPaths。
+   */
+  const snapshots = useCallback((): EditorSnapshotRecord[] => {
+    const out: EditorSnapshotRecord[] = [];
+    for (const [path, entry] of [...entriesRef.current]) {
+      if (entry.model.isDisposed()) continue;
+      if (!computeDirty(path)) continue;
+      out.push({ path, text: entry.model.getValue(), encoding: entry.encoding, eol: entry.eol });
+    }
+    return out;
+  }, [computeDirty]);
 
   /**
    * 取"当前文件"的**真 model**（装饰 / 保存 / 编辑落点 / 定位的统一入口）。
@@ -1014,9 +1040,9 @@ export function EditorPane({
 
   // 动作句柄注册（宿主标签流程：保存并关闭 / 全部保存）
   useEffect(() => {
-    registerActions?.({ save: () => save(), savePath: (p) => savePath(p), saveAll });
+    registerActions?.({ save: () => save(), savePath: (p) => savePath(p), saveAll, snapshots });
     return () => registerActions?.(null);
-  }, [save, savePath, saveAll, registerActions]);
+  }, [save, savePath, saveAll, snapshots, registerActions]);
 
   // 卸载时清空状态栏编辑器信息
   useEffect(() => () => onStatusInfo?.(null), [onStatusInfo]);
@@ -1592,7 +1618,13 @@ export function EditorPane({
         // 探针：切文件一次性成本 = 读盘 + 建 model（+ 下方 apply 段）
         const stopRead = perf.start('switch.readText');
         try {
-          const tf = await kernel.io.readText(filePath);
+          // 崩溃恢复注入（退出/崩溃守护批）：该路径有恢复快照 → 不读盘，直接以快照
+          // 内容建 model，基线版本号钉在 0（初始版本号从 1 起数，永不相等）⇒ model
+          // 一生出来就是"未保存脏"。恢复**永不自动写游戏目录**：存不存由用户决定。
+          const recovered = takeRecoveredContent(filePath);
+          const tf = recovered
+            ? { text: recovered.text, encoding: recovered.encoding, eol: recovered.eol }
+            : await kernel.io.readText(filePath);
           stopRead();
           if (cancelled) return;
           const tModel = performance.now();
@@ -1618,6 +1650,9 @@ export function EditorPane({
           entry = { model, listener, encoding: tf.encoding, eol: tf.eol.toUpperCase() };
           entriesRef.current.set(filePath, entry);
           baseVersionRef.current.set(filePath, model.getAlternativeVersionId());
+          // 恢复件特例：基线钉 0（≠ 任何真实版本号）——内容本身就是"未保存"，即使
+          // 用户一路撤销回快照原样，脏标记也不消失（对盘而言它确实没保存过）
+          if (recovered) baseVersionRef.current.set(filePath, 0);
         } catch (e: unknown) {
           stopRead(); // 幂等：读盘失败时补记一次采样（正常路径已记过则跳过）
           if (!cancelled) setError(e instanceof Error ? e.message : String(e));

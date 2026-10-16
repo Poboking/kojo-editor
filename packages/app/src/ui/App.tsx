@@ -10,9 +10,26 @@ import {
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, FileStat, GameProject, RecentProject } from '@kojo/plugin-api';
-import { isPathUnder } from '@kojo/plugin-api';
+import { isPathUnder, join } from '@kojo/plugin-api';
 import { removeRecentOptimistic } from './WelcomeView';
 import { invoke, isTauri } from '../bridge/invoke';
+import { tauriBridge } from '../bridge/tauri-bridge';
+import {
+  AutosaveJournal,
+  HEARTBEAT_INTERVAL_MS,
+  SNAPSHOT_DEBOUNCE_MS,
+  type JournalIo,
+} from './autosave-journal';
+import {
+  SESSION_FLUSH_DEBOUNCE_MS,
+  emptySessionRecord,
+  loadSessionRecord,
+  saveSessionRecord,
+  sessionProjectOf,
+  upsertSessionProject,
+  type SessionRecord,
+} from './session-store';
+import { clearRecoveredContents, recoveredPaths, setRecoveredContents } from './recovery-store';
 import { bootstrapKernel } from '../bootstrap';
 import { perf } from '../perf';
 import { revealTargetOf, type RevealTarget } from '../monaco/reveal-position';
@@ -70,6 +87,34 @@ import type { EditorPaneActions } from './EditorPane';
 const loadProjectView = (): Promise<{ default: typeof import('./ProjectView')['ProjectView'] }> =>
   import('./ProjectView').then((m) => ({ default: m.ProjectView }));
 const ProjectView = lazy(loadProjectView);
+
+/**
+ * journal IO 适配（退出/崩溃守护批）：Tauri bridge 直写 appData——appData 在 Rust
+ * 写允许域内恒可写，**不经 kernel io**（那条链 assertWritable 游戏路径 + 触发备份
+ * 轮换，都不是快照该走的路）。只在 Tauri 壳被调用（engine 仅在 isTauri() 下装配）。
+ */
+const journalIo: JournalIo = {
+  readTextFile: async (p) => {
+    try {
+      if (!(await tauriBridge.exists(p))) return undefined;
+      return new TextDecoder().decode(await tauriBridge.readFileBytes(p));
+    } catch {
+      return undefined; // 读不动按缺失算：恢复决策宁可保守降级，不让兜底数据炸启动
+    }
+  },
+  writeTextFile: async (p, text) => {
+    const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+    if (i > 0) await tauriBridge.ensureDir(p.slice(0, i));
+    await tauriBridge.writeFileBytes(p, new TextEncoder().encode(text));
+  },
+  removeFile: async (p) => {
+    try {
+      await tauriBridge.removeFile(p);
+    } catch {
+      // 幂等清理：文件不在/删不掉都不值得出声（下次快照会覆盖出一致状态）
+    }
+  },
+};
 
 /** 项目视图 chunk 装载期间的骨架（与内联引导层同构；idle 预取命中时基本见不到） */
 function ProjectViewSkeleton(): ReactElement {
@@ -137,6 +182,21 @@ export function App(): ReactElement {
   const registerActions = useCallback((a: EditorPaneActions | null) => {
     actionsRef.current = a;
   }, []);
+
+  /* --------- 退出/崩溃守护（2026-10-16）：autosave 引擎 + 会话记录 + 恢复 --------- */
+
+  /** 崩溃恢复待决（非 null = 欢迎页横幅：上次异常退出且有快照） */
+  const [crashRecovery, setCrashRecovery] = useState<{ root: string; files: number } | null>(null);
+  /** 欢迎页「继续上次会话」的目标根（最近一次打开的项目；随会话落盘更新） */
+  const [resumeRoot, setResumeRoot] = useState<string | null>(null);
+  /** 会话标签集的内存权威（落盘数据的投影；开项目时从它恢复） */
+  const sessionRecordRef = useRef<SessionRecord>(emptySessionRecord());
+  /** 会话落盘的防抖计时器 */
+  const sessionFlushTimerRef = useRef<number | null>(null);
+  /** autosave 引擎（仅 Tauri 壳装配；浏览器壳恒 null，全部相关链路自然空转） */
+  const autosaveRef = useRef<AutosaveJournal | null>(null);
+  /** 恢复意图：欢迎页点了「恢复」→ 下一次 openProject 把恢复件合并进标签集 */
+  const pendingRecoverRef = useRef(false);
   /** 文件树刷新句柄（B6 拖入复制落地后失效目标目录；ProjectView 注册，形态照 actionsRef） */
   const treeRefreshRef = useRef<(() => void) | null>(null);
   const registerTreeRefresh = useCallback((refresh: () => void) => {
@@ -160,6 +220,32 @@ export function App(): ReactElement {
         if (disposed) return;
         setKernel(k);
         setRecent(await k.project.recent());
+        // 会话记录读回（退出/崩溃守护批）：欢迎页「继续上次会话」+ 开项目恢复标签集。
+        // 读不到就算了——会话数据是锦上添花，绝不挡启动
+        try {
+          const rec = await loadSessionRecord(k.storage.global());
+          sessionRecordRef.current = rec;
+          setResumeRoot(rec.lastRoot);
+        } catch {
+          // 静默：空记录即无会话可恢复
+        }
+        // 崩溃探测（退出/崩溃守护批）：journal 非空 + 心跳超龄/缺失 = 上次不正常退出。
+        // 探测结果只决定欢迎页横幅与恢复内容注入，**永不自动写游戏目录**
+        if (isTauri()) {
+          try {
+            const dir = join(await tauriBridge.appDataDir(), 'autosave');
+            await tauriBridge.ensureDir(dir);
+            const engine = new AutosaveJournal(journalIo, dir);
+            autosaveRef.current = engine;
+            const found = await engine.readForRecovery();
+            if (found && found.manifest.root) {
+              setRecoveredContents(found.records);
+              setCrashRecovery({ root: found.manifest.root, files: found.records.length });
+            }
+          } catch {
+            // autosave 通道坏了不挡启动：编辑照常，只是这次没有崩溃兜底
+          }
+        }
         setPhase('welcome');
       })
       .catch((e: unknown) => {
@@ -374,9 +460,30 @@ export function App(): ReactElement {
     setReveal(null);
   }, []);
 
+  /**
+   * 会话标签集装回（退出/崩溃守护批）：换项目（欢迎页首开 / 切回 / 重启后重开）时
+   * 按根目录恢复。恢复件（崩溃快照）追加在尾部、激活落第一个恢复件——用户第一眼
+   * 看到的就是没保存成的那份。pinned 与 tabs 取交集（记录可能比盘上事实旧）。
+   * 无记录且无恢复件 = 保持空，绝不凭空造标签。
+   */
+  const restoreSessionTabs = useCallback((dir: string, recovered: readonly string[]) => {
+    const rec = sessionProjectOf(sessionRecordRef.current, dir);
+    const tabs = [...(rec?.tabs ?? [])];
+    for (const p of recovered) if (!tabs.includes(p)) tabs.push(p);
+    if (tabs.length === 0) return;
+    const pinned = new Set((rec?.pinned ?? []).filter((p) => tabs.includes(p)));
+    const active = recovered[0] ?? (rec?.active && tabs.includes(rec.active) ? rec.active : tabs[0] ?? null);
+    setOpenTabs(tabs);
+    setActiveFile(active);
+    setPinnedPaths(pinned);
+  }, []);
+
   const openProject = useCallback(
     async (dir: string, opts?: { keepView?: boolean }) => {
       if (!kernel) return;
+      // 崩溃恢复意图只对"下一次开项目"生效一次（打开失败也不悬挂到更晚的打开）
+      const wantRecovery = pendingRecoverRef.current;
+      pendingRecoverRef.current = false;
       // 重载项目（同目录重开）不切回欢迎页：避免「项目被关掉」的错觉
       if (!opts?.keepView) setPhase('opening');
       setError(null);
@@ -390,9 +497,13 @@ export function App(): ReactElement {
         const p = await kernel.project.open(dir);
         setProject(p);
         // 换项目（欢迎页首开 / 拖入新目录）：旧项目的整套 UI 态整体带走；
-        // 同目录 reload 靠 keepView 保住标签，只清激活与定位（原行为）
-        if (project?.rootDir !== dir) resetProjectUiState();
-        else {
+        // 同目录 reload 靠 keepView 保住标签，只清激活与定位（原行为）。
+        // 换项目即恢复该项目的会话标签集（退出/崩溃守护批）：重启后重开、同会话
+        // 切回、崩溃恢复合并，走的是同一条路
+        if (project?.rootDir !== dir) {
+          resetProjectUiState();
+          restoreSessionTabs(dir, wantRecovery ? recoveredPaths() : []);
+        } else {
           setActiveFile(null);
           setReveal(null);
         }
@@ -446,7 +557,7 @@ export function App(): ReactElement {
         setIndexing(false);
       }
     },
-    [kernel, notify, project, resetProjectUiState],
+    [kernel, notify, project, resetProjectUiState, restoreSessionTabs],
   );
 
   /**
@@ -597,6 +708,36 @@ export function App(): ReactElement {
   }, []);
   const rootDirRef = useRef<string | null>(null);
   rootDirRef.current = project?.rootDir ?? null;
+
+  /* -------- autosave（退出/崩溃守护批）：崩溃兜底快照，Tauri 壳专属 -------- */
+
+  // 快照触发器 = dirtyPaths 变化（防抖落盘）；真相源 = EditorPane 的快照句柄
+  //（脏 ⇒ model 必在内存，句柄天然覆盖后台标签）。浏览器壳引擎未装配，整段空转。
+  useEffect(() => {
+    const engine = autosaveRef.current;
+    if (!engine) return;
+    if (dirtyPaths.size === 0) {
+      // 脏清空（保存完 / 标签关完 / 关项目）→ journal 清空。本会话没写过快照时
+      // 是 no-op——绝不误伤上一会话留在盘上的崩溃证据
+      void engine.clear().catch(() => undefined);
+      return;
+    }
+    const t = window.setTimeout(() => {
+      const records = actionsRef.current?.snapshots() ?? [];
+      void engine.snapshot(rootDirRef.current, records).catch(() => undefined);
+    }, SNAPSHOT_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [dirtyPaths]);
+
+  // 心跳：脏周期内定期刷（崩溃判定的时间锚）。干净会话不刷——绝不制造"疑似崩溃"证据
+  useEffect(() => {
+    const engine = autosaveRef.current;
+    if (!engine || dirtyPaths.size === 0) return;
+    const id = window.setInterval(() => {
+      void engine.heartbeat().catch(() => undefined);
+    }, HEARTBEAT_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [dirtyPaths]);
 
   // 从资源管理器拖文件/文件夹进窗口（Rust `kojo:drag-drop` → 这里落地）。
   // 打开语义：只读链路，路径只喂既有打开入口（文件夹是项目入口；文件只在项目态开标签）。
@@ -824,6 +965,32 @@ export function App(): ReactElement {
   const pinnedRef = useRef(pinnedPaths);
   pinnedRef.current = pinnedPaths;
 
+  // 会话标签集落盘（退出/崩溃守护批）：debounce 600ms，写 kernel 全局存储。
+  // 关项目不清记录（重启后「继续上次会话」靠它）；欢迎页（project null）不写——
+  // lastRoot 只指向最近一次打开过的项目。恢复用的读值经 ref 取最新，不吃陈旧闭包。
+  useEffect(() => {
+    if (!kernel || !project) return;
+    const root = project.rootDir;
+    if (sessionFlushTimerRef.current !== null) window.clearTimeout(sessionFlushTimerRef.current);
+    sessionFlushTimerRef.current = window.setTimeout(() => {
+      sessionFlushTimerRef.current = null;
+      const next = upsertSessionProject(sessionRecordRef.current, root, {
+        tabs: openTabsRef.current,
+        active: activeFileRef.current,
+        pinned: [...pinnedRef.current],
+      });
+      sessionRecordRef.current = next;
+      setResumeRoot(next.lastRoot);
+      void saveSessionRecord(kernel.storage.global(), next).catch(() => undefined);
+    }, SESSION_FLUSH_DEBOUNCE_MS);
+    return () => {
+      if (sessionFlushTimerRef.current !== null) {
+        window.clearTimeout(sessionFlushTimerRef.current);
+        sessionFlushTimerRef.current = null;
+      }
+    };
+  }, [kernel, project, openTabs, activeFile, pinnedPaths]);
+
   /** 固定 / 取消固定标签（C2）：pinned 会话态 + 顺序重排（固定区在前，见 applyPin） */
   const toggleTabPin = useCallback((path: string) => {
     const wasPinned = pinnedRef.current.has(path);
@@ -1015,6 +1182,14 @@ export function App(): ReactElement {
       }
       const exitAfter = exitAfterCloseRef.current;
       exitAfterCloseRef.current = false;
+      // 脏内容已在此处分流（保存成功 或 用户明确丢弃）→ journal 强制清空：
+      // 退出关窗的竞态里，autosave effect 的 clear 可能赶不上窗口消亡，这里显式收口
+      //（'discard' 尤其重要：用户说了不要，崩溃恢复就绝不能再把它端回来）
+      try {
+        await autosaveRef.current?.discard();
+      } catch {
+        // 清理失败不影响退出/关项目
+      }
       await closeProject();
       if (exitAfter && isTauri()) {
         // 退出通道 = 放行原生 close：置放行标志后主动 close()，守卫对这次请求不拦
@@ -1031,6 +1206,30 @@ export function App(): ReactElement {
   const requestReauth = useCallback(() => {
     if (project) setPendingApproval(project);
   }, [project]);
+
+  /* --------- 欢迎页的两个会话入口（退出/崩溃守护批） --------- */
+
+  /** 崩溃恢复：开上次的项目 + 把快照内容装回 model 当未保存脏内容（存不存用户定） */
+  const recoverCrash = useCallback(() => {
+    const c = crashRecovery;
+    if (!c || !c.root) return;
+    setCrashRecovery(null);
+    pendingRecoverRef.current = true;
+    void openProject(c.root);
+  }, [crashRecovery, openProject]);
+
+  /** 崩溃恢复的"丢弃"：内存恢复件清掉 + journal 强制清空（用户说了不要） */
+  const discardCrash = useCallback(() => {
+    setCrashRecovery(null);
+    clearRecoveredContents();
+    void autosaveRef.current?.discard().catch(() => undefined);
+  }, []);
+
+  /** 继续上次会话：目标根 = 最近一次打开的项目（标签集由 openProject 的会话恢复装回） */
+  const resumeSession = useCallback(() => {
+    if (!resumeRoot) return;
+    void openProject(resumeRoot);
+  }, [resumeRoot, openProject]);
 
   const body =
     phase === 'project' && kernel && project ? (
@@ -1078,6 +1277,11 @@ export function App(): ReactElement {
         onRemoveRecent={removeRecentEntry}
         onClearRecent={clearRecentEntries}
         statPath={statPath}
+        resumeRoot={resumeRoot}
+        onResumeSession={resumeSession}
+        crashRecovery={crashRecovery}
+        onRecoverCrash={recoverCrash}
+        onDiscardCrash={discardCrash}
       />
     );
 

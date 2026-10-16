@@ -21,6 +21,13 @@ interface Props {
   onClearRecent: () => void;
   /** 失效探测（A4）；resolve undefined = 探测不可用（浏览器壳等），行内不标记 */
   statPath: (path: string) => Promise<FileStat | null | undefined>;
+  /** 最近一次打开的项目根（null = 无会话可继续）；退出/崩溃守护批 */
+  resumeRoot: string | null;
+  onResumeSession: () => void;
+  /** 崩溃恢复待决（null = 无）；root 为空串时不给恢复入口（没有可回去的项目根） */
+  crashRecovery: { root: string; files: number } | null;
+  onRecoverCrash: () => void;
+  onDiscardCrash: () => void;
 }
 
 /**
@@ -63,6 +70,11 @@ export function WelcomeView({
   onRemoveRecent,
   onClearRecent,
   statPath,
+  resumeRoot,
+  onResumeSession,
+  crashRecovery,
+  onRecoverCrash,
+  onDiscardCrash,
 }: Props): ReactElement {
   // 失效标记（A4）：逐条异步 stat，null = 目录不存在 → 行内灰态标记（仍可点、仍可移除）。
   // 结果按 pathKey+lastOpenedAt 缓存，recent 变化只补扫缓存缺失的键——不每帧重扫。
@@ -115,6 +127,36 @@ export function WelcomeView({
             <button className="primary big" onClick={onOpenDirectory} disabled={phase === 'opening'}>
               {phase === 'opening' ? '正在打开…' : '打开文件夹…'}
             </button>
+
+            {/* 崩溃恢复横幅（退出/崩溃守护批）：克制的一行事由 + 两个动作。 */}
+            {/* 恢复永不自动写盘——内容只装回编辑器当未保存修改，存不存由用户决定 */}
+            {crashRecovery && crashRecovery.root ? (
+              <div className="notice crash-recovery" role="alert">
+                <p>
+                  上次异常退出，{crashRecovery.files} 个文件的未保存内容已自动保留。
+                </p>
+                <div className="crash-recovery-actions">
+                  <button className="primary" onClick={onRecoverCrash} disabled={phase === 'opening'}>
+                    恢复并打开
+                  </button>
+                  <button className="ghost" onClick={onDiscardCrash} disabled={phase === 'opening'}>
+                    丢弃
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* 继续上次会话：只在无崩溃横幅时出现（恢复本身就是回到那个会话） */}
+            {!crashRecovery && resumeRoot ? (
+              <button
+                className="ghost big resume-session"
+                onClick={onResumeSession}
+                disabled={phase === 'opening'}
+                title={resumeRoot}
+              >
+                继续上次会话
+              </button>
+            ) : null}
 
             {recent.length > 0 ? (
               <div className="recent">

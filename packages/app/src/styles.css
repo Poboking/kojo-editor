@@ -5532,3 +5532,24 @@ button.primary .hint {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ==================== 退出/崩溃守护（guard，2026-10-16） ==================== */
+/* 欢迎页两个入口：崩溃恢复横幅 + 继续上次会话。色温沿用 .notice.warn 的琥珀系 */
+/* ——"有事要处理"而不是"出错了"；版式对齐既有 .notice，不另起炉灶。 */
+
+.crash-recovery {
+  background: rgba(209, 154, 102, 0.1);
+  border-color: rgba(209, 154, 102, 0.4);
+}
+.crash-recovery p {
+  margin: 0 0 8px;
+}
+.crash-recovery-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* 「继续上次会话」：与主按钮同宽度的次级大按钮，视觉上明确是第二条路而非装饰 */
+button.resume-session {
+  width: 100%;
+}
