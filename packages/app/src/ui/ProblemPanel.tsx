@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react';
+import { diagnosticDisplay } from '@kojo/plugin-api';
 import { snapshot, subscribe, type EditorProblem } from './problem-store';
 
 /**
@@ -74,22 +75,31 @@ export function ProblemPanel({ onReveal }: { onReveal: (path: string, line: numb
 
       {shown.length > 0 ? (
         <ul className="prob-list">
-          {shown.map((it, i) => (
-            <li key={`${it.path}:${it.line}:${it.severity}:${i}`} className="prob-item">
-              <button
-                className="conv-issue-btn"
-                title={`${it.path}:${it.line}`}
-                onClick={() => onReveal(it.path, it.line)}
-              >
-                <span className="conv-dot" style={{ backgroundColor: SEVERITY_COLOR[it.severity] }} />
-                <span className="conv-issue-loc dim">
-                  {shortPath(it.path)}:{it.line}
-                </span>
-                <span className="conv-issue-msg">{it.message}</span>
-                {it.code ? <code className="prob-code dim">{it.code}</code> : null}
-              </button>
-            </li>
-          ))}
+          {shown.map((it, i) => {
+            // ZH-D2：码位第一眼给**中文短名**，原码逐字留在悬停 title——真源在契约层
+            // （`plugin-api/diagnostic-copy.ts`），本面板**不自带映射**（两处口径必分叉）。
+            const code = it.code ? diagnosticDisplay(it.code) : null;
+            return (
+              <li key={`${it.path}:${it.line}:${it.severity}:${i}`} className="prob-item">
+                <button
+                  className="conv-issue-btn"
+                  title={`${it.path}:${it.line}`}
+                  onClick={() => onReveal(it.path, it.line)}
+                >
+                  <span className="conv-dot" style={{ backgroundColor: SEVERITY_COLOR[it.severity] }} />
+                  <span className="conv-issue-loc dim">
+                    {shortPath(it.path)}:{it.line}
+                  </span>
+                  <span className="conv-issue-msg">{it.message}</span>
+                  {code ? (
+                    <code className="prob-code dim" title={code.title}>
+                      {code.name}
+                    </code>
+                  ) : null}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
 

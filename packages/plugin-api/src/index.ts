@@ -516,3 +516,16 @@ export type {
 } from './slots';
 export type { EditorInlayHint, EditorInlayHintRequest, EditorInlayHintResult } from './slots';
 export { MODEL_TOKEN_CLASS, locateIdentifier, modelLineAt, splitModelLines, unicodeTokenAt } from './semantic-locate';
+
+/* ---- 诊断码中文显示名（ZH-D2 独占追加区块；勿在他处重排） ---- */
+export {
+  DIAGNOSTIC_LABELS,
+  DIAGNOSTIC_CODE_EXCLUSIONS,
+  SUGAR_DIAGNOSTIC_CODES,
+  NATIVE_STRUCTURE_CODES,
+  NATIVE_EXPR_CODES,
+  diagnosticDisplay,
+  type DiagnosticCodeKey,
+  type DiagnosticDisplay,
+  type DiagnosticLabel,
+} from './diagnostic-copy';

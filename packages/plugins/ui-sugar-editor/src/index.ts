@@ -34,7 +34,12 @@ import type {
   SugarTranspileService,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownCommands, WellKnownServices } from '@kojo/plugin-api';
+import {
+  KernelServices,
+  WellKnownCommands,
+  WellKnownServices,
+  diagnosticDisplay,
+} from '@kojo/plugin-api';
 import {
   buildVerdictRows,
   degradeText,
@@ -234,8 +239,12 @@ export function createUiSugarEditorPlugin(): Plugin {
             : createElement(
                 'div',
                 { className: 'sv-list' },
-                ...rows.slice(0, DIAG_CAP).map((r) =>
-                  createElement(
+                ...rows.slice(0, DIAG_CAP).map((r) => {
+                  // ZH-D2：芯片第一眼给**中文短名**，原码逐字留在芯片自身的悬停 title
+                  // （报障要能贴码）。真源 = 契约层 `plugin-api/diagnostic-copy.ts`，
+                  // 本面板**不自带映射**——两处各抄一份迟早分叉。
+                  const disp = diagnosticDisplay(r.code);
+                  return createElement(
                     'div',
                     {
                       key: r.key,
@@ -245,10 +254,10 @@ export function createUiSugarEditorPlugin(): Plugin {
                     },
                     createElement('span', { className: 'sv-sev' }, sevLabel(r.severity)),
                     createElement('span', { className: 'sv-loc dim' }, r.line === null ? '—' : `L${r.line}:${r.column ?? 1}`),
-                    createElement('span', { className: 'sv-code dim' }, r.code),
+                    createElement('span', { className: 'sv-code dim', title: disp.title }, disp.name),
                     createElement('span', { className: 'sv-msg' }, r.message),
-                  ),
-                ),
+                  );
+                }),
                 rows.length > DIAG_CAP
                   ? createElement('div', { className: 'dim sv-hint' }, `其余 ${rows.length - DIAG_CAP} 条未显示`)
                   : null,
