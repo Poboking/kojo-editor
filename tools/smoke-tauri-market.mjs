@@ -17,8 +17,14 @@
  *   i  面板屏上给出「已拉取」人话 + 数据时间行 + 条目数（不是静默成功）
  *   j  盘上那份的坏条目会重新报进 dropped（镜像不洗盘）——只在注册表当前有坏条目时才判，
  *      现在没有 ⇒ 明确 SKIP（不假装绿）
+ *   k  **真装一个包再卸掉**：面板点「安装」⇒ 真下载 + 真解压 + 真落盘 + 真记账 ⇒
+ *      屏上「已安装」+ 盘上逐条目对平 + 记账容器核对码对平 ⇒ 点「卸载」确认 ⇒ 目录消失、零残壳。
+ *      容器落在 github.com（本机直连必超时）⇒ **不带代理时这一项报 SKIP 并打印复跑命令**，不算过。
  *
  * 用法：node tools/smoke-tauri-market.mjs [游戏目录]
+ *   k 项要真出网取容器 ⇒ 复跑口径：`HTTPS_PROXY=http://127.0.0.1:7890 node tools/smoke-tauri-market.mjs`
+ *   （代理只走**进程环境**：Rust 两条市场命令的签名里都没有 proxy 参数，也不许加——受众绝大部分没有代理。
+ *   父进程 env 会透传给 `pnpm tauri dev`，reqwest 的 system-proxy 读的就是这几个变量。）
  *   目录优先级 = 位置参数 > KOJO_SMOKE_PROJECT > KOJO_CORPUS_DIR > 按内容自动发现（tools/corpus.mjs）。
  *   **为什么要点开一个项目**：壳只在 `phase==='project'` 时渲染 ShellLayout（工具条 / 副侧栏 / 面板），
  *   没有项目就没有面板可点（`packages/app/src/ui/App.tsx` 的 body 分支）——这不是本工具的选择，是壳的形态。
@@ -207,6 +213,13 @@ async function main() {
   let indexPath = null;
   let indexBackup = null; // Buffer | null（null = 本机原本没有这份）
   let indexSeen = false;
+  /* 装包那一项会落 `packs/` 与记账 ⇒ 跑完必须回到跑前状态（重复跑同结果） */
+  const K_TARGET = { kind: 'kojo-pack', id: 'demo.era-tw', version: '1.0.1' };
+  const K_CONTAINER_SHA = 'bf0bfd9f321666ba60ee6f12a03cfd64f709658121c300f4b09454d40dc7aef2';
+  let kTargetDir = null;
+  let kRecordsPath = null;
+  let kRecordsBackup = null;
+  let kTargetExistedBefore = false;
 
   try {
     let wsUrl = null;
@@ -261,6 +274,11 @@ async function main() {
     indexBackup = fs.existsSync(indexPath) ? fs.readFileSync(indexPath) : null;
     indexSeen = indexBackup !== null;
     console.log(`[market-smoke] appDataDir=${appData} index=${path.basename(indexPath)} 备份=${indexBackup ? `${indexBackup.length} B` : '本机原本没有'}`);
+    kTargetDir = path.join(appData, 'market', 'packs', K_TARGET.kind, K_TARGET.id, K_TARGET.version);
+    kRecordsPath = path.join(appData, 'store', 'kojo-market', 'installed.json');
+    kRecordsBackup = fs.existsSync(kRecordsPath) ? fs.readFileSync(kRecordsPath) : null;
+    kTargetExistedBefore = fs.existsSync(kTargetDir);
+    console.log(`[market-smoke] 安装态备份：目标包${kTargetExistedBefore ? '已在本机（跑完不动它）' : '原本没有'} · 记账${kRecordsBackup ? ` ${kRecordsBackup.length} B` : '原本没有'}`);
 
     /* -------- f1) 白名单外的 URL 经真 IPC 也被拒 -------- */
     for (const bad of ['http://poboking.github.io/kojo-market/index.json', 'https://evil.example.com/index.json']) {
@@ -374,6 +392,125 @@ async function main() {
       /* -------- j) 坏条目 ⇒ dropped 出声（注册表当前没有坏条目时明确 SKIP） -------- */
       if (panel.dropped === '') S('j', '坏条目进 dropped 并出声', '线上注册表当前没有坏条目（本地服务侧的判据见 kernel/tests/integration-market.test.ts）');
       else P('j', '坏条目进 dropped 并出声', panel.dropped.slice(0, 120));
+
+      /* -------- k) 真装一个包再卸掉：真下载 + 真解压 + 真落盘 + 真记账 -------- */
+      const kClick = await waitFor(
+        cdp,
+        `(() => {
+          const row = [...document.querySelectorAll('.panel-market .mk-group .mk-row')]
+            .find((r) => r.innerText.includes('版本 ${K_TARGET.version}'));
+          if (!row) return 'no-registry-row';
+          const b = [...row.querySelectorAll('button')].find((e) => /安装|更新/.test(e.textContent));
+          if (!b) return 'no-action-button';
+          if (b.disabled) return null;
+          b.click();
+          return 'clicked';
+        })()`,
+        60000,
+      );
+      if (kClick !== 'clicked') {
+        F('k', '真装一个包再卸掉', `注册表行上点不动安装：${kClick}`);
+      } else {
+        const kOutcome = await waitFor(
+          cdp,
+          `(() => {
+            const note = document.querySelector('.panel-market .mk-note')?.innerText ?? '';
+            if (/已装上/.test(note)) return { ok: true, note };
+            if (/没有成功|失败|超时|拒绝|不是同一份|要求更新版本|下载/.test(note)) return { ok: false, note };
+            return null;
+          })()`,
+          180000,
+        );
+        const kHow = '复跑：HTTPS_PROXY=http://127.0.0.1:7890 node tools/smoke-tauri-market.mjs';
+        if (!kOutcome.ok) {
+          // 容器落在 github.com（本机直连必超时）⇒ 没带代理是"没验过"，不是"过了"
+          if (/超时|下载|没有成功|连接|网络/.test(kOutcome.note)) S('k', '真装一个包再卸掉', `未验证：安装没成功（${kOutcome.note}）；${kHow}`);
+          else F('k', '真装一个包再卸掉', `安装被拒（${kOutcome.note}）`);
+        } else {
+          const kProbs = [];
+          // 落点里**只有 `files/**`**（`pack.json` 只当校验锚、不搬进落点）⇒
+          // 逐文件事实取记账那一份，再逐条与注册表那一行对平、与盘上字节对平。
+          let kRec = null;
+          try {
+            const raw = JSON.parse(fs.readFileSync(kRecordsPath, 'utf8'));
+            const arr = Array.isArray(raw) ? raw : (raw?.packs ?? raw?.installed ?? []);
+            kRec = arr.find(
+              (r) => r?.id === K_TARGET.id && r?.kind === K_TARGET.kind && r?.version === K_TARGET.version,
+            ) ?? null;
+            if (kRec === null) kProbs.push('记账里没有这一条');
+          } catch (e) { kProbs.push(`记账读不出：${String(e).slice(0, 80)}`); }
+
+          const kDeclared = kRec !== null && Array.isArray(kRec.files) ? kRec.files : [];
+          if (kRec !== null) {
+            if (kRec.containerSha256 !== K_CONTAINER_SHA) {
+              kProbs.push(`记账容器核对码 ${kRec.containerSha256 ?? '（没有）'} ≠ 注册表钉的那份`);
+            }
+            // 与注册表那一行对平（fileCount / unpackedBytes 的权威值由索引锚 sha 保证）
+            const kWant = ANCHOR_PACKS.find((a) => a[1] === K_TARGET.id && a[2] === K_TARGET.version);
+            if (kWant !== undefined) {
+              if (kDeclared.length !== kWant[3]) kProbs.push(`文件数 ${kDeclared.length} ≠ 注册表 ${kWant[3]}`);
+              const total = kDeclared.reduce((s, f) => s + Number(f?.bytes ?? -1), 0);
+              if (total !== kWant[4]) kProbs.push(`解压总字节 ${total} ≠ 注册表 ${kWant[4]}`);
+            }
+            for (const f of kDeclared) {
+              const p = path.join(kTargetDir, ...String(f.path).split('/'));
+              if (!fs.existsSync(p)) { kProbs.push(`落点缺 ${f.path}`); continue; }
+              const buf = fs.readFileSync(p);
+              if (buf.length !== f.bytes) kProbs.push(`${f.path} 字节 ${buf.length}≠记账 ${f.bytes}`);
+              // 工具里算 sha256 是**取证**（node:crypto），不是产品判定路径——产品侧唯一实现点在 kojo-market/src/digest.ts
+              if (sha256(buf) !== f.sha256) kProbs.push(`${f.path} sha256 与记账不符`);
+            }
+          }
+          const kStagingDir = path.resolve(kTargetDir, '..', '..', '..', '.staging');
+          const kLeft = fs.existsSync(kStagingDir) ? fs.readdirSync(kStagingDir).length : 0;
+          if (kLeft !== 0) kProbs.push(`暂存区有 ${kLeft} 条残壳`);
+
+          const kRowSel = `[...document.querySelectorAll('.panel-market .mk-list .mk-row')].find((r) => r.innerText.includes('版本 ${K_TARGET.version}'))`;
+          const kReq = await waitFor(
+            cdp,
+            `(() => {
+              const row = ${kRowSel};
+              if (!row) return 'no-installed-row';
+              const b = [...row.querySelectorAll('button')].find((e) => e.textContent.trim() === '卸载');
+              if (!b) return 'no-uninstall-button';
+              if (b.disabled) return null;
+              b.click();
+              return 'requested';
+            })()`,
+            60000,
+          );
+          const kConf = kReq !== 'requested'
+            ? kReq
+            : await waitFor(
+                cdp,
+                `(() => {
+                  const row = ${kRowSel};
+                  if (!row) return 'row-gone';
+                  const b = [...row.querySelectorAll('button')].find((e) => e.textContent.trim() === '确认');
+                  if (!b) return 'no-confirm-button';
+                  if (b.disabled) return null;
+                  b.click();
+                  return 'confirmed';
+                })()`,
+                60000,
+              );
+          if (kConf !== 'confirmed' && kConf !== 'row-gone') kProbs.push(`卸载没走完：${kConf}`);
+          await sleep(800);
+          if (fs.existsSync(kTargetDir)) kProbs.push('卸载后目录还在');
+          const kRowGone = await cdp.evalJs(`[...document.querySelectorAll('.panel-market .mk-list .mk-row')].some((r) => r.innerText.includes('版本 ${K_TARGET.version}')) ? 'still-listed' : 'gone'`);
+          if (kRowGone !== 'gone') kProbs.push('屏上那条还在');
+
+          if (kProbs.length === 0) {
+            P(
+              'k',
+              '真装一个包再卸掉（真下载+解压+落盘+记账+卸载）',
+              `${K_TARGET.id} v${K_TARGET.version}：屏上「${kOutcome.note}」；盘上 ${kDeclared.length} 个条目逐条对平（${kDeclared.map((f) => `${f.path}:${f.bytes}B`).join(' ')}）；记账容器核对码=${K_CONTAINER_SHA.slice(0, 12)}…；卸载后目录与行都已消失、暂存区零残壳`,
+            );
+          } else {
+            F('k', '真装一个包再卸掉（真下载+解压+落盘+记账+卸载）', kProbs.join('；'));
+          }
+        }
+      }
     }
   } catch (e) {
     rec('!!', '未捕获异常', 'FAIL', String(e).slice(0, 500));
@@ -386,6 +523,29 @@ async function main() {
         console.log(`[market-smoke] index.json 已还原（原本${indexSeen ? '有' : '没有'}）`);
       }
     } catch (e) { console.log('[market-smoke] 还原失败:', String(e)); }
+    // 装包那一项会落 `packs/` + 记账 ⇒ 回到跑前状态，重复跑同结果
+    try {
+      if (kTargetDir !== null && !kTargetExistedBefore && fs.existsSync(kTargetDir)) {
+        fs.rmSync(kTargetDir, { recursive: true, force: true });
+        console.log(`[market-smoke] 落点 ${path.relative(process.cwd(), kTargetDir)} 已清除（跑前本没有）`);
+      }
+    } catch (e) { console.log('[market-smoke] 落点清除失败:', String(e)); }
+    try {
+      if (kRecordsPath !== null) {
+        if (kRecordsBackup === null) { if (fs.existsSync(kRecordsPath)) fs.rmSync(kRecordsPath); }
+        else fs.writeFileSync(kRecordsPath, kRecordsBackup);
+        console.log(`[market-smoke] 记账已还原（原本${kRecordsBackup ? ` ${kRecordsBackup.length} B` : '没有'}）`);
+      }
+    } catch (e) { console.log('[market-smoke] 记账还原失败:', String(e)); }
+    try {
+      if (kTargetDir !== null) {
+        const staging = path.resolve(kTargetDir, '..', '..', '..', '.staging');
+        if (fs.existsSync(staging)) {
+          const left = fs.readdirSync(staging);
+          if (left.length > 0) { fs.rmSync(staging, { recursive: true, force: true }); console.log(`[market-smoke] 暂存区残壳 ${left.length} 条已清`); }
+        }
+      }
+    } catch (e) { console.log('[market-smoke] 暂存区清除失败:', String(e)); }
     restoreStore();
   }
 
