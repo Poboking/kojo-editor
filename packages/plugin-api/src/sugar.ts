@@ -1312,6 +1312,18 @@ export type SugarDiagnosticCode =
    * （作者写的名字原样写进 ERB），只是不再静默。**严重度 = warning 起步**（不猜、不纠）。
    */
   | 'function-name-unknown'
+  /**
+   * ZH-D1：**表外名 + 表内唯一高置信近名**（`function-name-unknown` 的升档分支）。
+   * 分级判据（阈值与"为什么不一刀切升 error"的语料读数同源，实现处
+   * `kojo-sugar/src/system-functions.ts::suggestFunctionName`）：
+   * 命中表外名**且**两张函数表里恰有**一个**近名（单字之差且两侧都 ≥ 3 字，或"写短了"
+   * 的前缀形）⇒ **error**，文案给出那唯一一改法；近名 ≥ 2 个（歧义）或一个都没有
+   * （纯未知）⇒ 仍是 `function-name-unknown` **warning**，一律不升档。
+   * 为什么这么分：真实语料里表外中文名几乎全是项目自定义 `@函数` 的合法写法（一刀切
+   * 升 error 会让一屏文件红到编译不动）；升档分支 fail-closed——存在 error 级诊断即
+   * 拒绝产字节 / 拒绝写盘（`compileToBytes` / `planSave`），绝不产出半成品。
+   */
+  | 'function-name-typo'
   /** 规范 §3.5：`X 不在 a 到 b` 的 `X` 含 `+`/`-`/函数调用——会整体求值两次（含 `随机(...)` 时会掷两次）；提示先赋临时变量。 */
   | 'notin-complex-operand'
   /* --- 原生直通（规范 §3.10） --- */

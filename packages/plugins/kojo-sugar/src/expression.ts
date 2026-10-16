@@ -21,7 +21,7 @@
 
 import type { AliasValue, KojoLibraryTable, SugarDiagnostic, SugarPosition } from '@kojo/plugin-api';
 import { operatorTable, NOTIN_KEYWORDS, RESERVED_PRONOUNS, argPositionToken, VARIADIC_ARG_NUMERIC, VARIADIC_ARG_STRING } from './keywords';
-import { isKnownFunctionName, lowerSystemFunctions } from './system-functions';
+import { isKnownFunctionName, lowerSystemFunctions, suggestFunctionName } from './system-functions';
 import { resolveEngineGlobal } from './engine-globals';
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import { CJK } from './lexer';
@@ -36,8 +36,9 @@ export interface ExprContext {
   /**
    * 基础库 / 常用函数名表（adapter 提供；游戏知识；ZH-F1）。
    * 本层把**中文函数名调用形态**降为原生 ERB 函数名（系统函数表优先，本表次之）；
-   * 缺省 = 该适配器未声明 → 未收录的中文调用形态**原样保留**并报
-   * `function-name-unknown`（**warning**，fail-visible）。
+   * 缺省 = 该适配器未声明 → 未收录的中文调用形态**原样保留**并**分级**报诊断
+   * （ZH-D1：表内有唯一高置信近名 ⇒ `function-name-typo` **error**；纯未知 ⇒
+   * `function-name-unknown` **warning**。判据见 `system-functions.ts::suggestFunctionName`）。
    */
   libraryTable?: KojoLibraryTable;
   /** 诊断收集器 */
@@ -816,17 +817,33 @@ function lowerPronounsAndAttributes(code: string, ctx: ExprContext): string {
           }
         }
       }
-      // 函数调用形态（后随 `(`）——原样保留；但**中文函数名**若系统表与 adapter 表
-      // 都不认，则报 `function-name-unknown`（**warning**，fail-visible，不猜、不纠，
-      // 产物逐字节照原样）。系统表命中的名字已在 step 0 降为原生名，不会走到这里。
+      // 函数调用形态（后随 `(`）——名字**原样保留**，但两表皆不认的**中文函数名**分级诊断
+      // （ZH-D1，判据与语料读数见 `system-functions.ts::suggestFunctionName`）：
+      // · 表内有唯一高置信近名 ⇒ `function-name-typo` **error**：作者照文案改一个词就能过，
+      //   且 error 存在即拒绝产字节 / 拒绝写盘（`compileToBytes` / `planSave` 的 fail-closed
+      //   闸），半成品进不了游戏；
+      // · 无近名 / 近名歧义 ⇒ `function-name-unknown` **warning**（fail-visible，不猜、不纠，
+      //   产物逐字节照原样）——真语料里表外中文名绝大多数是基础库/自定义 `@函数` 的合法写法，
+      //   一刀切升 error 会让 158 个文件红到编译不动（读数见 `suggestFunctionName` 头注）。
+      // 系统表命中的名字已在 step 0 降为原生名，不会走到这里。
       if (code[end] === '(') {
         if (CJK.test(ident) && !isKnownFunctionName(ident, ctx.libraryTable)) {
-          ctx.report({
-            code: 'function-name-unknown',
-            severity: 'warning',
-            message: `「${ident}」是中文函数名调用形态，但既不在系统函数表、也不在当前工程的基础库函数表里——该调用已原样写进产物（引擎多半取不到此函数）。若确认是自定义函数，请改为原生函数名，或确认该名已收录。`,
-            loc: ctx.loc,
-          });
+          const near = suggestFunctionName(ident, ctx.libraryTable);
+          if (near) {
+            ctx.report({
+              code: 'function-name-typo',
+              severity: 'error',
+              message: `「${ident}(…)」既不在系统函数表、也不在当前工程的基础库函数表里，而两张表里只有一个相近名「${near.name}」（原生名 ${near.engineName}）——这多半是把「${near.name}」拼错了。该行已原样进产物、且本文件已被拒绝编译（不写盘、不导字节）：请改成「${near.name}(…)」；若这确实是本项目的自定义函数，请直接用它的原生函数名书写。`,
+              loc: ctx.loc,
+            });
+          } else {
+            ctx.report({
+              code: 'function-name-unknown',
+              severity: 'warning',
+              message: `「${ident}」是中文函数名调用形态，但既不在系统函数表、也不在当前工程的基础库函数表里——该调用已原样写进产物（引擎多半取不到此函数）。若确认是自定义函数，请改为原生函数名，或确认该名已收录。`,
+              loc: ctx.loc,
+            });
+          }
         }
         out += ident;
         i = end;
@@ -999,7 +1016,7 @@ export function resolveBitSlotName(
       ctx.report({
         code: 'bit-name-unknown',
         severity: 'error',
-        message: `位槽里的「${name}」既是变量引用「${variableRef ?? ''}」位表里的位名、又是可解析的变量 / 引擎全局——位名解析存在**歧义**，拒绝猜测。请改用数字位号，或把该变量名别名化以消歧。`,
+        message: `位槽里的「${name}」既是变量引用「${variableRef ?? ''}」位表里的位名、又是可解析的变量 / 引擎全局——位名解析有歧义，拒绝猜测。请改用数字位号，或把该变量名别名化以消歧。`,
         loc: ctx.loc,
       });
       return name;

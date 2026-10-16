@@ -31,8 +31,10 @@ import { isIdentPart, isIdentStart } from './identifier-chars';
  * 上表是**跨游戏语言层**的系统函数；游戏**基础库**里的助手 / 宏（`HPH_PRINT` /
  * `TEXTR` / `ASK_YN` …）不属语言层，住 adapter 的 `KojoLibraryTable`（经
  * `game.adapter` 槽位按 `adapterId` 注入）。本模块的扫描**先查系统表、再查 adapter
- * 表**（系统表优先）；两表都不认的**中文函数名调用形态**原样保留，由 `expression.ts`
- * 报 `function-name-unknown`（**warning**，fail-visible，不猜、不纠）。
+ * 表**（系统表优先）；两表都不认的**中文函数名调用形态**原样保留，由 `expression.ts` 分级
+ * 报诊断（ZH-D1）：表内有**唯一**高置信近名 ⇒ `function-name-typo`（**error**，fail-closed
+ * 拒绝产字节）；纯未知 ⇒ `function-name-unknown`（**warning**，fail-visible，不猜、不纠）。
+ * 分级判据与语料读数见 `suggestFunctionName`。
  */
 
 /** 中文名 → 原生 ERB 函数名（单一真源） */
@@ -145,6 +147,110 @@ export function lookupFunctionName(name: string, libraryTable?: KojoLibraryTable
 export function isKnownFunctionName(name: string, libraryTable?: KojoLibraryTable): boolean {
   return lookupFunctionName(name, libraryTable) !== undefined;
 }
+
+/* ==================== ZH-D1 · 表外名的**分级**判据（拼错不再静默进产物） ==================== */
+
+/** 升 error 档的近名判据阈值（**测试逐条钉住这三个数**：改数=改判据，必须连同语料读数一起复核） */
+export const TYPO_EDIT_DISTANCE = 1;
+export const TYPO_MIN_NAME_LEN = 3;
+export const TYPO_MAX_TAIL_LEN = 2;
+
+/** 表外名查到的唯一近名：中文名 + 其原生 ERB 名（文案要给"唯一那一个改法"） */
+export interface FunctionNameCandidate {
+  readonly name: string;
+  readonly engineName: string;
+}
+
+/**
+ * **为什么这么分**（数据口径，不是口味）：只读普查真语料 `個人口上` 2,285 份 `.ERB`
+ * （复跑口径 = `tests/unknown-name-tier.corpus.test.ts`，与 `lowerSystemFunctions` 同一个扫描
+ * 语义；eraTW 4.980 画蛇添足版 2026-10-16 实测）——中文函数名**调用形态**共 1,396 处，
+ * 补名表前**全部**落在两张表外（324 个不同名 / 263 个文件），按基础库收录判据补 13 条恒等条目后
+ * 仍有 **526 处 / 311 个名 / 158 个文件**在表外：表外名里绝大多数是基础库与项目自定义 `@函数`
+ * 直接用中文/日文写就的合法名（`SHOW_上半身内衣` 11 · `画像一斉表示` 12 · `WITH_恋人` 8…）。
+ * ⇒ 把 `function-name-unknown` 一刀切升 error = 全语料新增 **526~1,396** 条 error、
+ * 158~263 个文件（6.9%~11.5%）一打开就红到编译不动 ⇒ 产品坏掉。
+ * ⇒ 只升"表外名**且**表内有**唯一**高置信近名"这一档：同一张盘新增 error 恰 **0** 处
+ * （真实语料是能跑通的代码，里面没有拼错名 ⇒ 0 是**零误伤**的证据，不是零抓力；抓力由
+ * `tests/unknown-name-tier.test.ts` 的合成拼错名钉）。两条"判据一放宽就冒误伤"的实测：
+ * 短名（两字）也当近邻 ⇒ 10 处（`随意`↔`随机`、`随便`↔`随机`、`参数`↔`参数消息甲`）；
+ * 恒等条目也当候选 ⇒ 13 处（`SHOW_上半身内衣`↔`SHOW_下半身内衣` 等双生真函数）。
+ * ⇒ 于是判据带两条限制：**两侧都 ≥ 3 字** + **候选只取别名条目**。
+ *
+ * 两条近名形状（阈值见上面三个常量）：
+ * 1. **单字之差**：编辑距离恰为 `TYPO_EDIT_DISTANCE`，且两侧名字都 ≥ `TYPO_MIN_NAME_LEN` 字；
+ * 2. **写短了**：表内名以作者写的名字开头，作者名 ≥ `TYPO_MIN_NAME_LEN` 字、缺的尾巴
+ *    ≤ `TYPO_MAX_TAIL_LEN` 字（`彩虹打印` → `彩虹打印行`）。**反方向不单独认**：作者名更长
+ *    只多出 1 字时由形状 1 接住（同属"单字之差"），多出 ≥ 2 字视为**另一个**自定义函数。
+ *
+ * 候选池还有一条**形状限制**：只有**别名条目**（`中文名 ≠ 原生名`）当候选。表里的**恒等条目**
+ * （基础库里函数名本身就是中文/日文，见 `eratw-adapter/src/library-table.ts` 的 ZH-D1 收录批）
+ * 的近邻**更可能是另一个真实函数**——语料实测成对存在的"一字之差双生函数"就有
+ * `脱衣处理`↔`脱衣処理`、`挿入不可`↔`插入不可`、`SHOW_下半身内衣`↔`SHOW_上半身内衣`、
+ * `金額表示`↔`金额表示`、`SOURCE_快Ｍ`↔`SOURCE_快Ｖ`，把它们判成拼错会直接打死能跑通的口上；
+ * 而**别名**的近邻只可能是"作者想写某个中文糖形但写错了"，正是本批要抓的形态。
+ *
+ * 近名 ≥ 2 个 ⇒ **不升档**（歧义不猜，与 `bit-name-unknown` 同一口径）；查不到候选 ⇒ 纯未知，
+ * 维持 `function-name-unknown` warning（行上波浪线可见，一键动作见跨文件请求）。
+ *
+ * 候选池来自 `KojoLibraryTable.names?.()`（**可选**枚举能力）：本文件声明了 `函数` 块时
+ * codegen 会换成 per-file 合并表，那张表**同样必须**透传 `names()`（见
+ * `codegen.ts::mergeUserFunctionLibrary` 的注），否则"拼错名"的升档会在那些文件里静默失效。
+ */
+export function suggestFunctionName(
+  name: string,
+  libraryTable?: KojoLibraryTable,
+): FunctionNameCandidate | undefined {
+  if (name.length < TYPO_MIN_NAME_LEN) return undefined;
+  const hits: string[] = [];
+  for (const key of candidatePool(libraryTable)) {
+    if (key === name) continue;
+    if (!isNearTypoName(name, key)) continue;
+    hits.push(key);
+    if (hits.length > 1) return undefined; // 歧义 ⇒ 不猜、不升档
+  }
+  if (hits.length === 0) return undefined;
+  const only = hits[0]!;
+  const engineName = lookupFunctionName(only, libraryTable);
+  return engineName === undefined ? undefined : { name: only, engineName };
+}
+
+/** 候选池 = 系统函数表键 + adapter 基础库表键（系统表优先，重名不重复计） */
+function candidatePool(libraryTable?: KojoLibraryTable): readonly string[] {
+  const pool: string[] = [...SYSTEM_FUNCTION_ALIASES.keys()];
+  const seen = new Set(pool);
+  for (const key of libraryTable?.names?.() ?? []) if (!seen.has(key)) pool.push(key);
+  // **只有别名条目当候选**（`中文名 ≠ 原生名`）；恒等条目（盘上函数名本身就是中文/日文）剔除
+  // ——判据与理由见 `suggestFunctionName` 头注的形状限制。
+  return pool.filter((key) => {
+    const native = SYSTEM_FUNCTION_ALIASES.get(key) ?? libraryTable?.lookupByName(key);
+    return native !== undefined && native !== key;
+  });
+}
+
+/** 唯一近名判据本体（两条形状见 `suggestFunctionName` 头注；不认第三条形） */
+function isNearTypoName(written: string, listed: string): boolean {
+  if (listed.startsWith(written)) return listed.length - written.length <= TYPO_MAX_TAIL_LEN;
+  if (Math.min(written.length, listed.length) < TYPO_MIN_NAME_LEN) return false;
+  return editDistance(written, listed) === TYPO_EDIT_DISTANCE;
+}
+
+/** 码点级 Levenshtein（短名专用；先按长度差剪枝，超过 1 即可提前收工） */
+function editDistance(a: string, b: string): number {
+  const A = [...a];
+  const B = [...b];
+  if (Math.abs(A.length - B.length) > TYPO_EDIT_DISTANCE) return TYPO_EDIT_DISTANCE + 1;
+  let prev = Array.from({ length: A.length + 1 }, (_, i) => i);
+  for (let j = 1; j <= B.length; j++) {
+    const cur = [j];
+    for (let i = 1; i <= A.length; i++) {
+      cur[i] = Math.min(prev[i]! + 1, cur[i - 1]! + 1, prev[i - 1]! + (A[i - 1] === B[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[A.length]!;
+}
+
 
 /**
  * 把表达式文本里的**调用形态**中文函数名替换为 ERB 函数名。

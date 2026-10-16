@@ -1917,6 +1917,13 @@ function mergeUserFunctionLibrary(
     lookupByFunction(functionName) {
       return base?.lookupByFunction?.(functionName);
     },
+    /**
+     * 枚举面**必须给**（ZH-D1）：`suggestFunctionName`（拼错名升 error 档的判据）靠 `names()`
+     * 取候选池。缺了这一项，**凡是声明了 `函数` 块的文件**都会把整张基础库表连同本文件自己
+     * 的函数名一起从候选池里掉出去 ⇒ 拼错名静默退回 warning（能力按文件随机失效，最难查）。
+     * 作者名在前（本文件自己写的函数最容易被打错字），基础库名其次。
+     */
+    names: () => [...fns.keys(), ...(base?.names?.() ?? [])],
   };
 }
 
