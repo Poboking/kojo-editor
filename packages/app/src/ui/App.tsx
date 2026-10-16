@@ -9,16 +9,17 @@ import {
   type ReactElement,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { ErbIndex, ErbParserService, GameProject, RecentProject } from '@kojo/plugin-api';
+import type { ErbIndex, ErbParserService, FileStat, GameProject, RecentProject } from '@kojo/plugin-api';
+import { removeRecentOptimistic } from './WelcomeView';
 import { invoke, isTauri } from '../bridge/invoke';
 import { bootstrapKernel } from '../bootstrap';
 import { perf } from '../perf';
 import { revealTargetOf, type RevealTarget } from '../monaco/reveal-position';
 import {
-  PROJECT_GATE_MESSAGE,
+  NOT_READY_MESSAGE,
   dropHintText,
   nextDropOverlay,
-  processDroppedFiles,
+  routeDroppedPaths,
   subscribeDragDrop,
   type DropOverlayState,
 } from './drag-drop';
@@ -254,6 +255,15 @@ export function App(): ReactElement {
     kernel.bus.emit('editor.activeFileChanged', { filePath: activeFile });
   }, [kernel, activeFile]);
 
+  /** 旧项目的一套 UI 态整体带走：切项目与关项目共用，防旧标签/脏态/待确认残留到下一拍 */
+  const resetProjectUiState = useCallback(() => {
+    setActiveFile(null);
+    setOpenTabs([]);
+    setDirtyPaths(new Set());
+    setPendingClose(null);
+    setReveal(null);
+  }, []);
+
   const openProject = useCallback(
     async (dir: string, opts?: { keepView?: boolean }) => {
       if (!kernel) return;
@@ -269,8 +279,13 @@ export function App(): ReactElement {
       try {
         const p = await kernel.project.open(dir);
         setProject(p);
-        setActiveFile(null);
-        setReveal(null);
+        // 换项目（欢迎页首开 / 拖入新目录）：旧项目的整套 UI 态整体带走；
+        // 同目录 reload 靠 keepView 保住标签，只清激活与定位（原行为）
+        if (project?.rootDir !== dir) resetProjectUiState();
+        else {
+          setActiveFile(null);
+          setReveal(null);
+        }
         setIndex(null);
         setPhase('project');
         setRecent(await kernel.project.recent());
@@ -331,23 +346,61 @@ export function App(): ReactElement {
         setError(msg);
         // 打开失败必须显式可见：只落在 welcome 错误区容易被误读成「项目读不了」而无从下手
         notify({ kind: 'error', message: `打开项目失败：${msg}` });
-        setPhase('welcome');
+        // 内核 open() 失败不会关掉还活着的旧项目——留在项目态，别把用户踢回欢迎页
+        setPhase(kernel.project.current() !== null ? 'project' : 'welcome');
       } finally {
         unMismatch();
         setIndexing(false);
       }
     },
-    [kernel, notify],
+    [kernel, notify, project, resetProjectUiState],
   );
 
   const chooseAndOpen = useCallback(async () => {
     try {
-      const dir = await invoke<string | null>('choose_directory', { title: '选择游戏目录' });
+      // 泛化主入口（A2）：对话框不再预设「游戏目录」——选任意文件夹，适配器自动识别
+      const dir = await invoke<string | null>('choose_directory', { title: '打开文件夹（自动识别游戏）' });
       if (dir) await openProject(dir);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [openProject]);
+
+  /** 欢迎页最近列表「移除」：乐观更新先行，失败回滚并人话通知（存储是权威，UI 只是投影） */
+  const removeRecentEntry = useCallback(
+    (dir: string) => {
+      if (!kernel) return;
+      const snapshot = recent;
+      setRecent(removeRecentOptimistic(snapshot, dir));
+      void kernel.project.removeRecent(dir).catch((e: unknown) => {
+        setRecent(snapshot);
+        const msg = e instanceof Error ? e.message : String(e);
+        notify({ kind: 'error', message: `从最近列表移除失败：${msg}` });
+      });
+    },
+    [kernel, recent, notify],
+  );
+
+  /** 欢迎页最近列表「清除全部」：直接清（欢迎页数据丢了可重开项目自动找回，不值得弹框） */
+  const clearRecentEntries = useCallback(() => {
+    if (!kernel) return;
+    const snapshot = recent;
+    setRecent([]);
+    void kernel.project.clearRecent().then(
+      () => notify({ kind: 'info', message: '已清除全部最近打开记录' }),
+      (e: unknown) => {
+        setRecent(snapshot);
+        const msg = e instanceof Error ? e.message : String(e);
+        notify({ kind: 'error', message: `清除最近列表失败：${msg}` });
+      },
+    );
+  }, [kernel, recent, notify]);
+
+  /** 欢迎页失效标记的探测通道；内核未就绪时不会被取用（列表只在 kernelReady 后渲染） */
+  const statPath = useCallback(
+    (p: string): Promise<FileStat | null> => (kernel ? kernel.io.stat(p) : Promise.resolve(null)),
+    [kernel],
+  );
 
   const commitOpenFile = useCallback((path: string, line?: number, column?: number) => {
     setOpenTabs((prev) => (prev.includes(path) ? prev : [...prev, path]));
@@ -372,10 +425,15 @@ export function App(): ReactElement {
 
   const phaseRef = useRef<AppPhase>(phase);
   phaseRef.current = phase;
+  // 拖放落地要用、但不值得整依赖进订阅 effect 的快照（脏标签集合 / 当前项目根）
+  const dirtyRef = useRef(dirtyPaths);
+  dirtyRef.current = dirtyPaths;
+  const rootDirRef = useRef<string | null>(null);
+  rootDirRef.current = project?.rootDir ?? null;
 
-  // 从资源管理器拖文件进窗口即打开（Rust `kojo:drag-drop` → 这里落地）。
+  // 从资源管理器拖文件/文件夹进窗口即打开（Rust `kojo:drag-drop` → 这里落地）。
   // 只读链路：路径只喂既有打开入口，写权限仍由写允许域既有分野决定。
-  // 未打开项目时不接（拖了也只回一句人话）——文件树、写域等都还没有归属。
+  // 文件夹是项目入口（欢迎页与项目态同权，对标 VSCode）；文件只在项目态开标签。
   useEffect(() => {
     if (!kernel) return;
     const io = kernel.io;
@@ -390,15 +448,25 @@ export function App(): ReactElement {
       onLeave: () => overlay('leave'),
       onDrop: (paths) => {
         overlay('drop');
-        if (phaseRef.current !== 'project') {
-          notify({ kind: 'info', message: PROJECT_GATE_MESSAGE });
+        const ph = phaseRef.current;
+        if (ph !== 'welcome' && ph !== 'project') {
+          // opening/boot：项目还没就绪，拖什么先都接不住——说一句，不静默
+          notify({ kind: 'info', message: NOT_READY_MESSAGE });
           return;
         }
-        void processDroppedFiles({
+        void routeDroppedPaths({
           io,
           paths,
+          projectOpen: ph === 'project',
+          hasUnsavedChanges: dirtyRef.current.size > 0,
+          currentProjectDir: rootDirRef.current,
           openFile: (p) => requestOpenFile(p),
-          notifyRejections: (message) => notify({ kind: 'info', message }),
+          openProject: (dir) => void openProject(dir),
+          reloadProject: () => {
+            const cur = rootDirRef.current;
+            if (cur) void openProject(cur, { keepView: true });
+          },
+          notify: (message) => notify({ kind: 'info', message }),
         });
       },
     })
@@ -413,7 +481,7 @@ export function App(): ReactElement {
       disposed = true;
       unlisten?.();
     };
-  }, [kernel, notify, requestOpenFile]);
+  }, [kernel, notify, requestOpenFile, openProject]);
 
   /** 关闭标签（无确认路径；model 回收由 EditorPane 的 openPaths effect 落地） */
   const doCloseTab = useCallback(
@@ -493,11 +561,7 @@ export function App(): ReactElement {
     }
     setProject(null);
     setIndex(null);
-    setActiveFile(null);
-    setOpenTabs([]);
-    setDirtyPaths(new Set());
-    setPendingClose(null);
-    setReveal(null);
+    resetProjectUiState();
     setPendingApproval(null);
     setWritable(null);
     setIndexError(null);
@@ -505,7 +569,7 @@ export function App(): ReactElement {
     resetSearch();
     setPhase('welcome');
     setRecent(await kernel.project.recent());
-  }, [kernel]);
+  }, [kernel, resetProjectUiState]);
 
   const decideApproval = useCallback(
     async (allow: boolean) => {
@@ -571,6 +635,9 @@ export function App(): ReactElement {
         kernelReady={kernel !== null}
         onOpenDirectory={chooseAndOpen}
         onOpenRecent={openProject}
+        onRemoveRecent={removeRecentEntry}
+        onClearRecent={clearRecentEntries}
+        statPath={statPath}
       />
     );
 

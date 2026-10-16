@@ -3,11 +3,11 @@ import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { isTauri } from '../bridge/invoke';
 
 /**
- * 从系统资源管理器拖文件进窗口即打开（drag-drop 批）。
+ * 从系统资源管理器拖文件/文件夹进窗口即打开（drag-drop 批）。
  *
  * 链路：Rust 侧 `kojo:drag-drop` 事件（src-tauri/src/lib.rs）→ `subscribeDragDrop`
- * → 宿主落地 `processDroppedFiles`。**全程只读**——路径只喂给既有的打开入口
- * （requestOpenFile），编辑权限仍由写允许域既有分野决定，这里零写通道。
+ * → 宿主落地 `routeDroppedPaths`。**全程只读**——路径只喂给既有的打开入口
+ * （开标签 / 开项目），编辑权限仍由写允许域既有分野决定，这里零写通道。
  */
 
 /**
@@ -29,10 +29,17 @@ export function dropHintText(): string {
 
 /** 拒绝理由（面向零基础作者的中文人话，不出现内部词） */
 export const UNKNOWN_FILE_REASON = '这类文件本软件打不开';
+/** 文件落地面里目录仍不给开（stat 落地处剔下时给的理由） */
 export const DIRECTORY_REASON = '拖进来要是文件，不是文件夹';
 export const UNREADABLE_REASON = '找不到这个文件，或当前读不了它';
-/** 未打开游戏项目时的落地拒绝文案（宿主在 phase ≠ 项目态时使用） */
-export const PROJECT_GATE_MESSAGE = '拖进来的文件没有打开：请先在欢迎页选好游戏目录，再把文件拖进来。';
+/** 未打开项目时拖文件的拒绝理由：逐文件进聚合通知（宿主不再单独弹 gate） */
+export const PROJECT_GATE_MESSAGE = '没打开游戏项目之前，文件拖不进来：请先在欢迎页选好游戏目录。';
+/** 一次拖了多个文件夹：第一个生效，其余进聚合通知 */
+export const ONE_DIRECTORY_REASON = '文件夹一次只打开一个，其余先忽略';
+/** 项目态拖入新文件夹但有脏标签：拒切，一句话说清，不静默也不弹多余确认框 */
+export const DIRTY_SWITCH_REASON = '还有没保存的修改，先保存或关掉再换项目';
+/** opening/boot 态拖入：项目还没就绪，什么都接不住——说一句，不静默 */
+export const NOT_READY_MESSAGE = '正在准备界面，等就绪后再拖一次就能打开了。';
 
 export interface RejectedDrop {
   readonly path: string;
@@ -57,7 +64,7 @@ function extensionOf(name: string): string {
 
 /**
  * 按扩展名把拖入路径分成"可开 / 被拒"两组，各自保持拖入顺序。
- * 只管扩展名这一层：目录判定字符串层面做不了，由 `processDroppedFiles` 的 stat 落地。
+ * 只管扩展名这一层：目录判定字符串层面做不了，由 stat 落地（见 `splitByStat`）。
  */
 export function classifyDrop(rawPaths: readonly string[]): ClassifiedDrop {
   const files: string[] = [];
@@ -93,7 +100,82 @@ export function nextDropOverlay(current: DropOverlayState, event: DropOverlayEve
 
 export function formatRejections(rejected: readonly RejectedDrop[]): string {
   const parts = rejected.map((r) => `${fileNameOf(r.path)}（${r.reason}）`);
-  return `这些文件没能打开：${parts.join('；')}`;
+  return `这些没能打开：${parts.join('；')}`;
+}
+
+/** stat 三态拆分的结果（各组都保持拖入顺序） */
+export interface DroppedPathsByKind {
+  readonly directories: string[];
+  readonly files: string[];
+  /** stat 拿不到：失踪 / 无权限——不管在哪个 phase 都不许静默丢弃 */
+  readonly unreadable: string[];
+}
+
+/**
+ * 逐路径 stat 分三态。目录判定只有文件系统说了算（字符串层面做不了），
+ * 所以 stat 在扩展名分类**之前**：文件夹不管叫什么名字都是项目入口。
+ */
+export async function splitByStat(
+  paths: readonly string[],
+  io: Pick<FileIO, 'stat'>,
+): Promise<DroppedPathsByKind> {
+  const directories: string[] = [];
+  const files: string[] = [];
+  const unreadable: string[] = [];
+  for (const p of paths) {
+    const st = await io.stat(p);
+    if (st === null) unreadable.push(p);
+    else if (st.isDirectory) directories.push(p);
+    else files.push(p);
+  }
+  return { directories, files, unreadable };
+}
+
+export interface DropRouting {
+  /** 只需要 stat：落地处用它分三态，绝不给写通道留位置 */
+  readonly io: Pick<FileIO, 'stat'>;
+  readonly paths: readonly string[];
+  /** 已打开项目（phase = project）：文件开标签、目录可切换/重载 */
+  readonly projectOpen: boolean;
+  /** 项目态下有没有脏标签（true = 拒绝切到别的项目，给一句人话不静默） */
+  readonly hasUnsavedChanges: boolean;
+  /** 当前项目根目录（null = 未开）；拖入同一个目录视作重载 */
+  readonly currentProjectDir: string | null;
+  readonly openFile: (path: string) => void;
+  readonly openProject: (dir: string) => void;
+  readonly reloadProject: () => void;
+  readonly notify: (message: string) => void;
+}
+
+/**
+ * drop 落地总路由（宿主调用）：
+ * - 文件夹是项目入口（欢迎页与项目态同权，对标 VSCode）：第一个生效，其余进聚合通知；
+ * - 项目态换目录但有脏标签 → 拒切并说人话；拖入当前目录 → 重载；
+ * - 文件只在项目态开标签；欢迎页拖文件逐个给 gate 理由；
+ * - 所有拒绝聚合成**一条**人话通知，绝不静默丢弃。
+ */
+export async function routeDroppedPaths(r: DropRouting): Promise<void> {
+  const split = await splitByStat(r.paths, r.io);
+  const rejected: RejectedDrop[] = split.unreadable.map((p) => ({ path: p, reason: UNREADABLE_REASON }));
+  for (const [i, dir] of split.directories.entries()) {
+    if (i > 0) {
+      rejected.push({ path: dir, reason: ONE_DIRECTORY_REASON });
+      continue;
+    }
+    if (r.projectOpen && r.currentProjectDir === dir) r.reloadProject();
+    else if (r.projectOpen && r.hasUnsavedChanges) rejected.push({ path: dir, reason: DIRTY_SWITCH_REASON });
+    else r.openProject(dir);
+  }
+  if (split.files.length > 0) {
+    if (r.projectOpen) {
+      const { files, rejected: badExt } = classifyDrop(split.files);
+      for (const f of files) r.openFile(f);
+      rejected.push(...badExt);
+    } else {
+      for (const f of split.files) rejected.push({ path: f, reason: PROJECT_GATE_MESSAGE });
+    }
+  }
+  if (rejected.length > 0) r.notify(formatRejections(rejected));
 }
 
 export interface DroppedFileLanding {
@@ -105,20 +187,21 @@ export interface DroppedFileLanding {
 }
 
 /**
- * drop 落地（宿主调用）：扩展名分类 → 逐个 stat 剔掉目录与失踪项 → 可开的按拖入顺序
- * 逐个开标签；被拒的聚合成一条人话通知，不静默丢弃。
+ * 文件落地面（stat 三态剔掉目录与失踪项 → 可开的按拖入顺序逐个开标签；
+ * 被拒聚合成一条人话通知，不静默丢弃）。宿主主链路已改走 `routeDroppedPaths`
+ * （文件夹即项目入口）；这里保留纯文件的落地面，供只读语义自证复用。
  */
 export async function processDroppedFiles(landing: DroppedFileLanding): Promise<void> {
   const { io, paths, openFile, notifyRejections } = landing;
-  const { files, rejected } = classifyDrop(paths);
-  const all: RejectedDrop[] = [...rejected];
-  for (const f of files) {
-    const st = await io.stat(f);
-    if (st === null) all.push({ path: f, reason: UNREADABLE_REASON });
-    else if (st.isDirectory) all.push({ path: f, reason: DIRECTORY_REASON });
-    else openFile(f);
-  }
-  if (all.length > 0) notifyRejections(formatRejections(all));
+  const split = await splitByStat(paths, io);
+  const rejected: RejectedDrop[] = [
+    ...split.directories.map((p) => ({ path: p, reason: DIRECTORY_REASON })),
+    ...split.unreadable.map((p) => ({ path: p, reason: UNREADABLE_REASON })),
+  ];
+  const { files, rejected: badExt } = classifyDrop(split.files);
+  rejected.push(...badExt);
+  for (const f of files) openFile(f);
+  if (rejected.length > 0) notifyRejections(formatRejections(rejected));
 }
 
 /** Rust `DRAG_DROP_EVENT` 的事件名（与 src-tauri/src/lib.rs 的常量成对） */

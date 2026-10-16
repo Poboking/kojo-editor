@@ -272,6 +272,20 @@ textarea {
   font-size: var(--fs-2);
   color: var(--fg-dim);
 }
+/* 标题行：左标题右「清除全部」（与 h3 同基线，避免两行错位） */
+.recent-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.recent-head .recent-clear {
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+  padding: 2px 0;
+}
+.recent-head .recent-clear:hover {
+  color: var(--accent-text);
+}
 .recent ul {
   list-style: none;
   margin: 0;
@@ -281,18 +295,56 @@ textarea {
 }
 .recent li {
   border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
-.recent li button {
-  width: 100%;
+.recent li .link {
+  flex: 1;
+  min-width: 0;
   display: flex;
   gap: 10px;
   justify-content: space-between;
+  align-items: center;
   padding: 7px 0;
 }
 .recent-dir {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.recent-meta {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* 行内失效标记（A4）：灰 chip，不抢眼——行仍可点（重试）也可移除 */
+.recent-missing {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 8px;
+  line-height: 1.7;
+}
+.recent li.missing .recent-dir {
+  color: var(--fg-dim);
+}
+/* 行尾「移除」：常显但弱化（hover 才转危险色）；真 button，键盘可达走全局 :focus-visible */
+.recent-remove {
+  flex: none;
+  background: none;
+  border-color: transparent;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+}
+.recent-remove:hover {
+  color: var(--danger);
+  border-color: var(--border);
+  background: var(--hover);
 }
 .recent-adapter {
   color: var(--fg-dim);
