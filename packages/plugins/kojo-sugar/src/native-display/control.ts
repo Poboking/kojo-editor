@@ -300,7 +300,6 @@ function renderPreprocessor(body: string): string | null {
   if (PRE_TOKEN_ONLY.has(name)) {
     return payload.length === 0 ? `${PRE_W} ${name}` : `${PRE_W} ${name} ${payload}`;
   }
-  void input;
   return null;
 }
 
@@ -325,7 +324,7 @@ export function renderControlLine(input: NativeDisplayInput): string | null {
 }
 
 function renderBody(body: string, input: NativeDisplayInput): string | null {
-  if (body.startsWith('#')) return renderPreprocessor(body, input);
+  if (body.startsWith('#')) return renderPreprocessor(body);
   if (body.startsWith('$')) return renderLabel(body);
   const m = HEAD_RE.exec(body);
   if (!m) return null;
