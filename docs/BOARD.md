@@ -73,3 +73,9 @@
 | ID | 任务（现象 / 已实测事实 / 判据） | 认领 |
 |---|---|---|
 | PERF-12 | **派生快照未命中的那一次，才是「进项目还要十几秒」的剩余头号成本**（归口：性能 / erb-parser + convention-lint + condition-extractor；由 PERF-9 规模读数与真壳两态实测合出来，不是猜）。已实测的两块：①未命中轮 `read+parse 6,889ms` + `refs scan 7,388ms（rescan 2,325）`——快照没捡到就整棵重读重扫，命中轮这两项是 **0ms / 0ms（rescan 0）**；②「改一棵」的重扫**不随盘收敛**：比值 0.315→0.289、斜率 ≈0.91 ⇒ 每棵约 **1.2ms 的 O(N) 固定税**，其中**校验段唯一破 1**（1.540→1.809），机理线索＝跨文件规则 **0/7 复用**（整包重算）。⇒ 动作顺序：先做「受控作废」把①复现成可复跑用例（现在归因未定：`SNAPSHOT_VERSION` 仍是 5、语料 mtime 未变、市场冒烟不碰快照），再切校验段跨文件规则的复用面；`walk 233ms · snapshot get 471ms` 这类地板暂不动。**判据**：①作废后首开的 `read+parse` 与 `refs scan` 各给出「按 mtime/size 分段复用」后的新数（目标 ≤ 命中轮 ×3；现状是从 0ms 涨到 6.9s / 7.4s）；②「改一棵 ÷ 全量」比值随盘**下降**而不是持平；③跨文件规则复用数 >0 且给出正确性等价证据（同输入同输出，**不许**靠跳过规则省时间）；④**不许**缩盘、不许放宽 `boot-watermarks` 等待上限、不许把计时断言改成恒真。复跑：`node tools/boot-watermarks.mjs`（空闲机两态各一轮）＋ `KOJO_PERF_HEAVY=1` 量例盘 | 认领：本机 2026-10-16，组长拆两线并行下发——**12a** 快照段（`b/perf12a/1016-snapshot-reuse`，独占真壳）／**12b** 校验段跨文件规则复用（`b/perf12b/1016-lint-reuse`，禁起壳）；组长集中落地 |
+
+## T. 数据安全批遗留（lead 2026-10-16 收口时记录）
+
+| ID | 任务（现象 / 复现 / 期望 vs 实际） | 认领 |
+|---|---|---|
+| SAFE-1 | **切项目路径不清场确认：旧项目有脏时点 recent/拖入新目录，脏 model 随 EditorPane 卸载 dispose 静默丢**（guard 批收口时发现，master 既有行为）：复现＝开项目改文件不存 → 欢迎页点另一 recent（或拖入新目录）→ `App.openProject` 直接换根，无任何确认；对照＝同场景走 `requestCloseProject` 有脏确认、拖入路径有 `hasUnsavedChanges` 提示，唯 recent 点击/chooseAndOpen 无。期望＝openProject 换根前加与 requestCloseProject 同款三选一确认；实际＝静默丢。注意：autosave journal 在切项目时随 dirty 清空而 clear，兜不住这个口 | 待认领 |
