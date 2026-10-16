@@ -29,12 +29,17 @@ import { decodeReadFilesFrame } from './read-files-frame';
 /**
  * `FileEncoding` → WHATWG 编码标签。`utf-8-bom` 走 `utf-8`：TextDecoder 默认剥前导 BOM，
  * 与 Rust `encoding_rs::UTF_8.decode` 同语义——encoding_rs 实现的正是这份标准，
- * 所以五个标签在两侧是同一套解码规则（含非法字节替换为 U+FFFD 的不严格口径）。
+ * 所以这些标签在两侧是同一套解码规则（含非法字节替换为 U+FFFD 的不严格口径）。
+ * gbk / gb18030 / big5 同样是 WHATWG Encoding Standard 的一等标签（Chromium 与
+ * encoding_rs 各自实现的正是这张表；编码方向经 `encode_string` 走 Rust encoding_rs）。
  */
 export const DECODE_LABEL: Record<FileEncoding, string> = {
   'utf-8': 'utf-8',
   'utf-8-bom': 'utf-8',
   shift_jis: 'shift_jis',
+  gbk: 'gbk',
+  gb18030: 'gb18030',
+  big5: 'big5',
   'utf-16le': 'utf-16le',
   'utf-16be': 'utf-16be',
 };

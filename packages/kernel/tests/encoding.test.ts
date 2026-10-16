@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
 import type { FileEncoding } from '@kojo/plugin-api';
-import { applyEol, decodeWithProbe, detectEol, isValidUtf8, normalizeEol, probeEncoding } from '../src/encoding';
+import { applyEol, decodeWithProbe, detectEol, isValidUtf8, joinPreserveEol, normalizeEol, probeEncoding, reconstructEol, splitPreserveEol, withUtf16Bom } from '../src/encoding';
 
 const enc = new TextEncoder();
 
@@ -79,6 +79,10 @@ describe('decodeWithProbe 与旧路径对拍（编码+文本全等）', () => {
     },
     { name: '残缺多字节序列（fatal 校验必须判失败 ⇒ 兜底）', bytes: new Uint8Array([0xe3, 0x81]) },
     { name: '高位字节孤例（0xFF，两条路径都走兜底）', bytes: new Uint8Array([0x41, 0xff, 0x42]) },
+    { name: 'GBK 中文（三族评分判 gbk）', bytes: new Uint8Array(iconv.encode('口上测试，简体中文\n', 'gbk')) },
+    { name: 'GBK 中文 CRLF 混少数派 LF（评分同上，文本一致）', bytes: new Uint8Array(iconv.encode('口上测试，简体中文\r\n第二行\n', 'gbk')) },
+    { name: 'Big5 中文（三族评分判 big5）', bytes: new Uint8Array(iconv.encode('口上測試\n', 'big5')) },
+    { name: 'GB18030 扩展字节（四字节区：gbk 族解不干净 ⇒ 评分裁决，两路径仍全等）', bytes: new Uint8Array(iconv.encode('𠀀𠀁\n', 'gb18030')) },
   ];
 
   for (const c of cases) {
@@ -126,5 +130,99 @@ describe('换行处理', () => {
   it('往返：混合换行归一化后再按 crlf 还原是纯 crlf', () => {
     const mixed = 'x\r\ny\nz\r\n';
     expect(applyEol(normalizeEol(mixed), 'crlf')).toBe('x\r\ny\r\nz\r\n');
+  });
+});
+
+describe('逐行换行保真原语（splitPreserveEol / joinPreserveEol / reconstructEol）', () => {
+  it('splitPreserveEol：\\r\\n 当一个分隔符、孤立 \\r 与 \\n 各一个；join 逐字节还原', () => {
+    for (const raw of ['a\r\nb\nc', 'a\rb\rc', 'a\n', '', 'a', 'x\r\ny\nz\r\n', '尾无换行\r\n末']) {
+      const map = splitPreserveEol(raw);
+      expect(map.parts.length).toBe(map.terms.length + 1);
+      expect(joinPreserveEol(map)).toBe(raw); // 逐字节不变式
+      expect(normalizeEol(raw).split('\n')).toEqual(map.parts); // 内部表示一致性
+    }
+  });
+
+  it('reconstructEol：零改动 ⇒ 逐字节还原原文（含混合 CRLF/LF/CR）', () => {
+    const raw = 'a\r\nb\r\nc\n'; // 多数派 crlf + 一个少数派 lf
+    const map = splitPreserveEol(raw);
+    expect(reconstructEol(map, normalizeEol(raw), detectEol(raw))).toBe(raw);
+    const crOnly = 'a\rb\rc';
+    const m2 = splitPreserveEol(crOnly);
+    expect(reconstructEol(m2, normalizeEol(crOnly), 'lf')).toBe(crOnly);
+  });
+
+  it('reconstructEol：改一行 ⇒ 未改动行保留原换行，改动行邻接处用默认（3 个 LF 不被翻成 CRLF）', () => {
+    // 多数派 CRLF，第 3 行（下标 3）是手写 LF
+    const raw = 'l1\r\nl2\r\nl3\nl4\r\nl5';
+    const map = splitPreserveEol(raw);
+    // 用户只改了第 0 行内容，其余原样
+    const edited = normalizeEol(raw).replace('l1', 'L1');
+    const out = reconstructEol(map, edited, 'crlf');
+    // 未改动的第 3 行分隔符仍是 \n（不被静默翻成 \r\n）
+    expect(out).toBe('L1\r\nl2\r\nl3\nl4\r\nl5');
+    // 第 0 行被改：其邻接分隔符用默认 crlf（原也是 crlf，无差）
+  });
+
+  it('reconstructEol：中间插入一行 ⇒ 前缀/后缀原换行都保留，仅新增行用默认', () => {
+    const raw = 'a\rb\nc\rd'; // CR/LF 混合
+    const map = splitPreserveEol(raw);
+    const edited = 'a\nNEW\nb\nc\rd'; // 在第 0、1 行间插入 NEW（模型内部表示 \n）
+    const out = reconstructEol(map, edited, 'crlf');
+    // a→NEW 之间是新边界（默认 crlf），NEW→b 是新边界（默认 crlf），
+    // b→c（原 \n）、c→d（原 \r）未改动 ⇒ 保留
+    expect(out).toBe('a\r\nNEW\r\nb\nc\rd');
+  });
+
+  it('reconstructEol：emoji / 代理对不影响按 \\n 的行对齐（UTF-16 偏移陷阱回归）', () => {
+    // 😀 = 代理对（2 个 code unit）；旧实现若按 code unit 计偏移会错位
+    const raw = '😀\r\n你好\r\n🎉\n尾';
+    const map = splitPreserveEol(raw);
+    expect(reconstructEol(map, normalizeEol(raw), 'crlf')).toBe(raw);
+    const edited = normalizeEol(raw).replace('你好', '你呀');
+    expect(reconstructEol(map, edited, 'crlf')).toBe('😀\r\n你呀\r\n🎉\n尾');
+  });
+});
+
+describe('withUtf16Bom：写回补 BOM（编码探针只对带 BOM 的 UTF-16 判为 utf-16le/be）', () => {
+  it('utf-16le / utf-16be：剥 BOM 的正文补回前导 U+FEFF', () => {
+    expect(withUtf16Bom('AB', 'utf-16le')).toBe('\uFEFFAB');
+    expect(withUtf16Bom('AB', 'utf-16be')).toBe('\uFEFFAB');
+  });
+  it('已含 BOM 不重复加', () => {
+    expect(withUtf16Bom('\uFEFFAB', 'utf-16le')).toBe('\uFEFFAB');
+  });
+  it('其它编码原样返回（BOM 交由 utf-8-bom 的 encode 分支处理）', () => {
+    expect(withUtf16Bom('AB', 'utf-8')).toBe('AB');
+    expect(withUtf16Bom('AB', 'utf-8-bom')).toBe('AB');
+    expect(withUtf16Bom('AB', 'shift_jis')).toBe('AB');
+  });
+});
+
+describe('GBK/Big5 探测（2026-10-17 编码标签批：契约缺口已补，不再误标 shift_jis）', () => {
+  // eraTW 生态常见 GBK/GB18030/Big5 非 BOM 中文文件。此前 FileEncoding 不含这些标签，
+  // probeEncoding 只能兜底判 shift_jis，一次"编辑+保存"就把中文字节重编码毁掉。
+  // 现在三族评分（GBK/Big5 严格无损 + 字符类别分数严格胜出才上位）把它们判对；
+  // 日文 Shift-JIS 由假名独有证据（+2/字）守住，纯高位垃圾字节仍落旧兜底 shift_jis。
+  const gbkBytes = new Uint8Array(iconv.encode('口上测试，简体中文\n', 'gbk'));
+  const big5Bytes = new Uint8Array(iconv.encode('口上測試\n', 'big5'));
+  it('无 BOM GBK 中文判为 gbk，解码文本正确', () => {
+    expect(probeEncoding(gbkBytes)).toBe('gbk');
+    const d = decodeWithProbe(gbkBytes);
+    expect(d.encoding).toBe('gbk');
+    expect(d.text).toBe('口上测试，简体中文\n');
+  });
+  it('无 BOM Big5 中文判为 big5，解码文本正确', () => {
+    expect(probeEncoding(big5Bytes)).toBe('big5');
+    const d = decodeWithProbe(big5Bytes);
+    expect(d.encoding).toBe('big5');
+    expect(d.text).toBe('口上測試\n');
+  });
+  it('日文 Shift-JIS 不被 gbk 抢走（假名是独有证据）', () => {
+    const sjis = new Uint8Array(iconv.encode('@K\nPRINTFORML 「こんにちは、世界。」\r\n', 'shift_jis'));
+    expect(probeEncoding(sjis)).toBe('shift_jis');
+  });
+  it('三族零分的垃圾字节仍兜底 shift_jis（维持旧行为）', () => {
+    expect(probeEncoding(new Uint8Array([0x41, 0xff, 0x42]))).toBe('shift_jis');
   });
 });

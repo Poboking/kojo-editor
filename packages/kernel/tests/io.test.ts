@@ -322,3 +322,110 @@ describe('FileIOService · writeBytes 的缓存刷新（保编码不变量）', 
     expect((await io.readText(f)).encoding).toBe('utf-8');
   });
 });
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
+ * 字节保真（byte-fidelity）—— 口上编辑器的头号卖点：
+ * "保存绝不改动用户没碰的字节"。覆盖混合 CRLF/LF、孤立 CR、GBK、有效 SJIS、
+ * UTF-16LE（含 BOM）、emoji 代理对偏移，全部走 **FileIOServiceImpl.readText→writeText**
+ * 真实读写管线（node 桥 = iconv/TextEncoder，与桌面壳 Rust encoding_rs 同 WHATWG 口径）。
+ */
+describe('FileIOService · 字节保真：未改动行保留原换行 / 零改动逐字节直写', () => {
+  const dir = () => path.join(tmpDir, 'game');
+  beforeEach(() => io.setWritableRoots([dir()]));
+
+  it('混合 CRLF+LF：改一行，少数派 LF 行不被静默翻成 CRLF', async () => {
+    const f = path.join(dir(), 'mixed.ERB');
+    const original = Buffer.from('a\r\nb\r\nc\nd\r\n', 'utf8'); // 多数派 crlf，c 行是手写 lf
+    await writeRaw(f, original);
+
+    const tf = await io.readText(f);
+    expect(tf.eol).toBe('crlf'); // 多数派判据
+    await io.writeText(f, tf.text.replace('a', 'A')); // 只改第 0 行
+
+    const bytes = await fs.readFile(f);
+    expect(bytes.toString('utf8')).toBe('A\r\nb\r\nc\nd\r\n'); // c 行的 \n 保住了
+    expect(bytesEqual(bytes, Buffer.from('A\r\nb\r\nc\r\nd\r\n', 'utf8'))).toBe(false); // 旧行为会这样
+  });
+
+  it('孤立 CR（旧 Mac）：零改动保存逐字节还原（不再被整文件重写）', async () => {
+    const f = path.join(dir(), 'cr.ERB');
+    const original = Buffer.from('a\rb\rc', 'utf8'); // detectEol 这里返回 lf，旧实现整文件按 lf 重写
+    await writeRaw(f, original);
+    const tf = await io.readText(f);
+    await io.writeText(f, tf.text); // 零改动
+    expect(bytesEqual(await fs.readFile(f), original)).toBe(true);
+  });
+
+  it('孤立 CR（旧 Mac）：改一行时未改动行的 CR 仍保留', async () => {
+    const f = path.join(dir(), 'cr2.ERB');
+    await writeRaw(f, Buffer.from('a\rb\rc', 'utf8'));
+    const tf = await io.readText(f);
+    await io.writeText(f, tf.text.replace('a', 'A'));
+    const bytes = await fs.readFile(f);
+    expect(bytes.toString('utf8')).toBe('A\nb\rc'); // b→c 的 CR 保住，被改行邻接用默认 lf
+  });
+
+  it('GBK 中文：零改动保存逐字节直写（旧管线会被 Shift-JIS 解码再编码毁字节）', async () => {
+    const f = path.join(dir(), 'gbk.ERB');
+    const original = Buffer.from(iconv.encode('口上测试，简体中文\r\n第二行\n', 'gbk'));
+    await writeRaw(f, original);
+    // 现行 probeEncoding 会把无 BOM GBK 判成 shift_jis（编码标签缺口，见回执）——
+    // 但"零改动快道"用原文**字节**直写，绕开解码→重编码，逐字节一致：
+    const tf = await io.readText(f);
+    await io.writeText(f, tf.text); // 零改动
+    expect(bytesEqual(await fs.readFile(f), original)).toBe(true);
+  });
+
+  it('有效 Shift-JIS：改一行时未改动行保换行、编码往返字节一致', async () => {
+    const f = path.join(dir(), 'sjis.ERB');
+    const original = Buffer.from(iconv.encode('こんにちは\r\nせかい\nさよなら\r\n', 'shift_jis'));
+    await writeRaw(f, original);
+    const tf = await io.readText(f);
+    expect(tf.encoding).toBe('shift_jis');
+    await io.writeText(f, tf.text.replace('こんにちは', 'おはよう')); // 只改第 0 行
+    const decoded = iconv.decode(await fs.readFile(f), 'shift_jis');
+    expect(decoded).toBe('おはよう\r\nせかい\nさよなら\r\n'); // せかい 行的 \n 保住
+  });
+
+  it('UTF-16LE：零改动逐字节还原（含 BOM），改一行时桥 encode 补回 BOM', async () => {
+    const f = path.join(dir(), 'u16.ERB');
+    const original = Buffer.from(iconv.encode('\uFEFFPRINTL 世界\r\n', 'utf-16le'));
+    await writeRaw(f, original);
+    const tf = await io.readText(f);
+    expect(tf.encoding).toBe('utf-16le');
+
+    // (a) 零改动 → 逐字节直写（含 BOM 原样）
+    await io.writeText(f, tf.text);
+    expect(bytesEqual(await fs.readFile(f), original)).toBe(true);
+
+    // (b) 改内容 → 走重编码，withUtf16Bom 补回前导 BOM（否则桥的 UTF_16LE.encode 无 BOM）
+    await io.writeText(f, tf.text + 'PRINTL 追加\r\n');
+    const afterEdit = await fs.readFile(f);
+    expect([afterEdit[0], afterEdit[1]]).toEqual([0xff, 0xfe]); // BOM 在位
+    // 端点回读仍是合法 utf-16le 且 BOM 不进入正文
+    const reread = await io.readText(f);
+    expect(reread.encoding).toBe('utf-16le');
+    expect(reread.text).toContain('追加');
+    expect(reread.text).not.toContain('\uFEFF');
+  });
+
+  it('emoji / 代理对：偏移不影响按行对齐（零改动字节一致，改行不错位）', async () => {
+    const f = path.join(dir(), 'emoji.ERB');
+    // 😀 与 🎉 各占两个 UTF-16 code unit；若按 code unit 计偏移会错位毁行
+    const original = Buffer.from('😀\r\n你好\r\n🎉\r\n尾\n', 'utf8'); // 多数派 crlf，尾行是手写 lf
+    await writeRaw(f, original);
+    const tf = await io.readText(f);
+    await io.writeText(f, tf.text); // 零改动
+    expect(bytesEqual(await fs.readFile(f), original)).toBe(true);
+
+    await io.writeText(f, tf.text.replace('你好', '你呀')); // 只改第 1 行
+    // 😀 行的 \r\n、🎉 行的 \r\n、尾行的 \n（均非改动行邻接）全部保住，内容不错位
+    expect((await fs.readFile(f)).toString('utf8')).toBe('😀\r\n你呀\r\n🎉\r\n尾\n');
+  });
+});

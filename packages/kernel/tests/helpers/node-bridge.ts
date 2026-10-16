@@ -37,6 +37,9 @@ const DECODE_LABEL: Record<FileEncoding, string> = {
   'utf-8': 'utf-8',
   'utf-8-bom': 'utf-8',
   shift_jis: 'shift_jis',
+  gbk: 'gbk',
+  gb18030: 'gb18030',
+  big5: 'big5',
   'utf-16le': 'utf-16le',
   'utf-16be': 'utf-16be',
 };
@@ -312,8 +315,9 @@ export class NodeBridge implements PlatformBridge {
   }
 
   async encode(text: string, encoding: FileEncoding): Promise<Uint8Array> {
-    if (encoding === 'shift_jis') {
-      return new Uint8Array(iconv.encode(text, 'shift_jis'));
+    // 多字节 CJK 族（iconv-lite 与 encoding_rs/TextDecoder 同为 WHATWG/微软代码页口径）
+    if (encoding === 'shift_jis' || encoding === 'gbk' || encoding === 'gb18030' || encoding === 'big5') {
+      return new Uint8Array(iconv.encode(text, encoding));
     }
     if (encoding === 'utf-16le') {
       return new Uint8Array(iconv.encode(text, 'utf-16le'));

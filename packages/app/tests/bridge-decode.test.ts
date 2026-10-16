@@ -11,7 +11,7 @@ import type { FileEncoding } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import { DECODE_LABEL, tauriBridge } from '../src/bridge/tauri-bridge';
 
-const ALL: FileEncoding[] = ['utf-8', 'utf-8-bom', 'utf-16le', 'utf-16be', 'shift_jis'];
+const ALL: FileEncoding[] = ['utf-8', 'utf-8-bom', 'utf-16le', 'utf-16be', 'shift_jis', 'gbk', 'gb18030', 'big5'];
 
 describe('桌面桥解码（客户端 TextDecoder）', () => {
   it('标签表覆盖 FileEncoding 全部取值，且每个标签都能构造 TextDecoder', () => {
@@ -37,6 +37,13 @@ describe('桌面桥解码（客户端 TextDecoder）', () => {
   it('shift_jis 解全角/半角混排（含 0xA1-0xDF 半角 kana 区与制表符）', async () => {
     const bytes = new Uint8Array([0x82, 0xb1, 0x82, 0xf1, 0x82, 0xa2, 0x82, 0x94, 0x09, 0xa1, 0xb3, 0xdf]);
     expect(await tauriBridge.decode(bytes, 'shift_jis')).toBe('こんいｔ\t｡ｳﾟ');
+  });
+
+  it('gbk / gb18030 / big5 中文解码（2026-10-17 编码标签批；WHATWG 标签，与 encoding_rs 同表）', async () => {
+    // C4E3 BAC3 = 你好（GBK/GB18030）；A741 A66E = 你好（Big5）
+    expect(await tauriBridge.decode(new Uint8Array([0xc4, 0xe3, 0xba, 0xc3]), 'gbk')).toBe('你好');
+    expect(await tauriBridge.decode(new Uint8Array([0xc4, 0xe3, 0xba, 0xc3]), 'gb18030')).toBe('你好');
+    expect(await tauriBridge.decode(new Uint8Array([0xa7, 0x41, 0xa6, 0x6e]), 'big5')).toBe('你好');
   });
 
   /**

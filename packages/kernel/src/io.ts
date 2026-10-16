@@ -13,7 +13,18 @@ import type {
   WriteTextOptions,
 } from '@kojo/plugin-api';
 import { WriteNotAllowedError } from '@kojo/plugin-api';
-import { applyEol, decodeWithProbe, detectEol, normalizeEol, probeEncoding } from './encoding';
+import {
+  applyEol,
+  decodeWithProbe,
+  detectEol,
+  joinPreserveEol,
+  normalizeEol,
+  probeEncoding,
+  reconstructEol,
+  splitPreserveEol,
+  withUtf16Bom,
+  type EolMap,
+} from './encoding';
 import { basename, isPathUnder, join, pathKey } from '@kojo/plugin-api';
 import { TrashManager } from './trash';
 
@@ -55,6 +66,22 @@ const STAT_CHUNK_SIZE = 512;
  */
 const TEXT_CACHE_MAX_FILES = 4096;
 const TEXT_CACHE_MAX_CHARS = 128 * 1024 * 1024;
+
+/**
+ * 原文换行指纹缓存上限（{@link EolMap}）：只为"保换行逐行还原"服务。
+ * 尺子取字符数（parts 拼接长度），与文本缓存同数量级但留更紧——指纹可即时重算，
+ * 丢几热的代价只是"下一次无关保存少认几行原换行"，不是数据损坏。
+ */
+const EOLMAP_CACHE_MAX_FILES = 8192;
+const EOLMAP_CACHE_MAX_CHARS = 96 * 1024 * 1024;
+
+/**
+ * 原文**字节**快照上限（零改动保存的逐字节直写快道）：字节比文本大，留最小的量级，
+ * 只用来兜住"GBK/SJIS 等未被编码表覆盖的文件在零改动保存时被解码→重编码毁字节"这一最坏形状。
+ * 超尺从队首削；丢了就退回逐行还原（真 UTF-8/SJIS 文件仍字节级一致）。
+ */
+const RAW_BYTES_CACHE_MAX_FILES = 1024;
+const RAW_BYTES_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 
 interface TextCacheEntry {
   /** 校验判据（与批量 stat 的值同源）：mtime+size 皆非空且全等才命中 */
@@ -119,6 +146,18 @@ export class FileIOServiceImpl implements FileIO {
   private appWritableRoots: string[] = [];
   private readonly encodingCache = new Map<string, FileEncoding>();
   private readonly eolCache = new Map<string, 'crlf' | 'lf'>();
+  /**
+   * 原文逐行换行指纹（内部结构；不改 readText/writeText 对外签名）——
+   * 让"保换行"写回时**未改动的行保留其原始换行**，只有创建/改动行采用多数派。
+   */
+  private readonly eolMapCache = new Map<string, EolMap>();
+  private eolMapChars = 0;
+  /**
+   * 原文**字节**快照（零改动保存的逐字节直写快道）：模型文本与原文逐行全等 ⇒
+   * 直接把当初读到的字节原样落盘，绕开"解码→重编码"（GBK 等未覆盖编码毁字节的根因）。
+   */
+  private readonly rawBytesCache = new Map<string, Uint8Array>();
+  private rawBytesTotal = 0;
   /** 回收站（2026-10-16 undo 批）：removeDir/removeFile 的落点从"直接删"改为"移入" */
   private readonly trash: TrashManager;
   /**
@@ -167,8 +206,11 @@ export class FileIOServiceImpl implements FileIO {
     const { text: raw, encoding } = decodeWithProbe(bytes);
     const eol = detectEol(raw);
     const text = normalizeEol(raw);
-    this.encodingCache.set(pathKey(path), encoding);
-    this.eolCache.set(pathKey(path), eol);
+    const key = pathKey(path);
+    this.encodingCache.set(key, encoding);
+    this.eolCache.set(key, eol);
+    this.putEolMap(key, raw);
+    this.putRawBytes(key, bytes);
     const st = await statCall;
     return { path, text, encoding, eol, mtimeMs: st?.mtimeMs ?? null };
   }
@@ -238,10 +280,13 @@ export class FileIOServiceImpl implements FileIO {
         };
         out[i] = tf;
         this.textCacheMisses++;
-        // 与 readText 同口径的编码/EOL 缓存（写回 preserve 的判据）
-        this.encodingCache.set(pathKey(path), encoding);
-        this.eolCache.set(pathKey(path), eol);
-        this.putTextCache(pathKey(path), { mtimeMs: r.mtimeMs, size: r.size ?? r.data.length, file: tf });
+        // 与 readText 同口径的编码/EOL/换行指纹/字节快照缓存（写回 preserve 的判据）
+        const key = pathKey(path);
+        this.encodingCache.set(key, encoding);
+        this.eolCache.set(key, eol);
+        this.putEolMap(key, raw);
+        this.putRawBytes(key, r.data);
+        this.putTextCache(key, { mtimeMs: r.mtimeMs, size: r.size ?? r.data.length, file: tf });
       }
     }
     return out;
@@ -265,13 +310,77 @@ export class FileIOServiceImpl implements FileIO {
     }
   }
 
-  /** 失效某 path 的文本缓存（写路径调用：刚写完再批量读必须看到新内容） */
+  /** 入缓存换行指纹（FIFO：重读=重新入队尾；超尺从队首削）。raw = 原文（未归一化）。 */
+  private putEolMap(key: string, raw: string): void {
+    const map = splitPreserveEol(raw);
+    const len = raw.length;
+    const prev = this.eolMapCache.get(key);
+    if (prev) {
+      this.eolMapCache.delete(key);
+      this.eolMapChars -= this.eolMapLen(prev);
+    }
+    this.eolMapCache.set(key, map);
+    this.eolMapChars += len;
+    while (this.eolMapCache.size > EOLMAP_CACHE_MAX_FILES || this.eolMapChars > EOLMAP_CACHE_MAX_CHARS) {
+      const oldest = this.eolMapCache.keys().next().value;
+      if (oldest === undefined) break;
+      const evicted = this.eolMapCache.get(oldest);
+      this.eolMapCache.delete(oldest);
+      if (evicted) this.eolMapChars -= this.eolMapLen(evicted);
+    }
+  }
+
+  private eolMapLen(map: EolMap): number {
+    // parts 总长 + terms 每段一 code unit（近似原文件字符数，作 FIFO 尺子）
+    let n = 0;
+    for (const p of map.parts) n += p.length;
+    for (const t of map.terms) n += t.length;
+    return n;
+  }
+
+  /** 入缓存原文字节快照（零改动直写快道）；FIFO 超尺从队首削 */
+  private putRawBytes(key: string, bytes: Uint8Array): void {
+    const prev = this.rawBytesCache.get(key);
+    if (prev) {
+      this.rawBytesCache.delete(key);
+      this.rawBytesTotal -= prev.length;
+    }
+    this.rawBytesCache.set(key, bytes);
+    this.rawBytesTotal += bytes.length;
+    while (
+      this.rawBytesCache.size > RAW_BYTES_CACHE_MAX_FILES ||
+      this.rawBytesTotal > RAW_BYTES_CACHE_MAX_BYTES
+    ) {
+      const oldest = this.rawBytesCache.keys().next().value;
+      if (oldest === undefined) break;
+      const evicted = this.rawBytesCache.get(oldest);
+      this.rawBytesCache.delete(oldest);
+      if (evicted) this.rawBytesTotal -= evicted.length;
+    }
+  }
+
+  /**
+   * 失效某 path 的**全部**内容相关缓存（文本/换行指纹/字节快照）——写路径调用：
+   * 刚写完（或外部字节改动）后再读必须是新真相。writeText / writeBytes / restoreBackup
+   * 在盘上落下新内容后会即时用新内容回填指纹与快照，removeFile / copyFile 只清不回填。
+   */
   private invalidateTextCache(path: string): void {
     const key = pathKey(path);
     const existing = this.textCache.get(key);
-    if (!existing) return;
-    this.textCache.delete(key);
-    this.textCacheChars -= existing.file.text.length;
+    if (existing) {
+      this.textCache.delete(key);
+      this.textCacheChars -= existing.file.text.length;
+    }
+    const prevMap = this.eolMapCache.get(key);
+    if (prevMap) {
+      this.eolMapCache.delete(key);
+      this.eolMapChars -= this.eolMapLen(prevMap);
+    }
+    const prevBytes = this.rawBytesCache.get(key);
+    if (prevBytes) {
+      this.rawBytesCache.delete(key);
+      this.rawBytesTotal -= prevBytes.length;
+    }
   }
 
   readBytes(path: string): Promise<Uint8Array> {
@@ -332,26 +441,65 @@ export class FileIOServiceImpl implements FileIO {
       await this.backup(path);
     }
 
-    const body = applyEol(normalizeEol(text), eol);
-    const bytes = await this.bridge.encode(body, encoding);
+    // "保换行"模式：调用方未显式指定 eol（缺省或 'preserve'）⇒ 逐行保留原文换行。
+    // 显式 eol（save-handler 回滚路径）⇒ 尊重用户整段统一意图，走 applyEol。
+    const preserveEol = opts?.eol === undefined || opts.eol === 'preserve';
+    // "保编码"同理：显式换编码（如导入/转码）时绝不走"逐字节直写原样"的快道。
+    const preserveEncoding = opts?.encoding === undefined || opts.encoding === 'preserve';
+    const eolMap = preserveEol ? this.eolMapCache.get(key) : undefined;
+
+    // 零改动快道：保编码 + 模型文本逐行全等于原文 ⇒ 直接落回当初读到的原始字节，
+    // 彻底绕开"解码→重编码"。这是 GBK/Big5 等编码表尚未覆盖的文件在
+    // "零次编辑却毁字节"这一最坏形状下的唯一在范围内的防线（编码标签缺失需改契约，见回执）。
+    const origBytes = eolMap && preserveEncoding ? this.rawBytesCache.get(key) : undefined;
+    if (eolMap && origBytes && this.isUnmodifiedAgainst(eolMap, text)) {
+      await this.bridge.writeFileBytes(path, origBytes);
+      this.encodingCache.set(key, encoding);
+      this.eolCache.set(key, eol);
+      // 先按"盘上已变"清三类缓存，再用同一份原文回填指纹/快照（局部引用仍有效）；
+      // 文本缓存判据 mtime 过期，留空待批量读重读——刚写完再批量读必须看到新内容。
+      this.invalidateTextCache(path);
+      this.putEolMap(key, joinPreserveEol(eolMap));
+      this.putRawBytes(key, origBytes);
+      return;
+    }
+
+    // 逐行还原：未改动行保留原换行，改动/新增行采用多数派 `eol`。
+    const body = eolMap ? reconstructEol(eolMap, text, eol) : applyEol(normalizeEol(text), eol);
+    // UTF-16：解码剥了 BOM、桥的 encode 产出无 BOM ⇒ 写回前补回，保字节往返。
+    const bytes = await this.bridge.encode(withUtf16Bom(body, encoding), encoding);
     await this.bridge.writeFileBytes(path, bytes);
     this.encodingCache.set(key, encoding);
     this.eolCache.set(key, eol);
-    // 会话文本缓存跟着失效：刚写完再批量读必须看到新内容（缓存判据的 mtime 已过期）
+    // 先清三类缓存（文本判据过期），再用刚落盘的内容回填指纹/快照，
+    // 供下一次 preserve 保存继续逐行保真（局部 body/bytes 仍是盘上新真相）。
     this.invalidateTextCache(path);
+    this.putEolMap(key, body);
+    this.putRawBytes(key, bytes);
+  }
+
+  /** 模型文本（按 `\n` 规范化）是否与原文指纹的各行**逐行全等**（零改动判据） */
+  private isUnmodifiedAgainst(map: EolMap, text: string): boolean {
+    const lines = normalizeEol(text).split('\n');
+    if (lines.length !== map.parts.length) return false;
+    for (let i = 0; i < lines.length; i++) if (lines[i] !== map.parts[i]) return false;
+    return true;
   }
 
   async writeBytes(path: string, data: Uint8Array): Promise<void> {
     this.assertWritable(path);
     await this.bridge.writeFileBytes(path, data);
-    // 编码/EOL 缓存跟着盘上新真相走（与 restoreBackup 同口径，2026-10-16 修复批）：
+    // 编码/EOL/换行指纹/字节快照跟着盘上新真相走（与 restoreBackup 同口径，2026-10-16 修复批）：
     // 字节级写入可以换编码/换行（导入、外部同步），缓存若不刷新，
-    // 下一次 writeText 的 preserve 会按旧编码写回——「保编码」不变量被打破。
-    // textCache 只失效不回填（批量读路径自会重读）。
+    // 下一次 writeText 的 preserve 会按旧编码/旧换行写回——「保编码 / 保换行」不变量被打破。
+    const key = pathKey(path);
     const { text: raw, encoding } = decodeWithProbe(data);
-    this.encodingCache.set(pathKey(path), encoding);
-    this.eolCache.set(pathKey(path), detectEol(raw));
+    // 先失效（invalidate 现会连带清掉旧的指纹/快照），再按新盘上真相回填
     this.invalidateTextCache(path);
+    this.encodingCache.set(key, encoding);
+    this.eolCache.set(key, detectEol(raw));
+    this.putEolMap(key, raw);
+    this.putRawBytes(key, data);
   }
 
   private async probeOnDisk(path: string): Promise<FileEncoding | null> {
@@ -544,11 +692,14 @@ export class FileIOServiceImpl implements FileIO {
     const bytes = await this.bridge.readFileBytes(src);
     await this.backup(path); // 写前自动备份：恢复不吃掉现状（与 writeText 同款时序）
     await this.bridge.writeFileBytes(path, bytes); // 字节级 + 平台原子写：零转码
-    // 编码/EOL 缓存跟着版本走：否则下一次 writeText 的 preserve 会用"恢复前那一版"的编码
+    // 编码/EOL/换行指纹/字节快照跟着版本走：否则下一次 writeText 的 preserve 会用"恢复前那一版"的编码/换行
+    const key = pathKey(path);
     const { text: raw, encoding } = decodeWithProbe(bytes);
-    this.encodingCache.set(pathKey(path), encoding);
-    this.eolCache.set(pathKey(path), detectEol(raw));
-    this.invalidateTextCache(path); // 会话文本缓存同 writeText：恢复后批量读必须是新版
+    this.invalidateTextCache(path); // 会话文本缓存同 writeText：恢复后批量读必须是新版（先清再按新版回填）
+    this.encodingCache.set(key, encoding);
+    this.eolCache.set(key, detectEol(raw));
+    this.putEolMap(key, raw);
+    this.putRawBytes(key, bytes);
     this.log?.info(`Backup restored: ${src} -> ${path}`);
   }
 

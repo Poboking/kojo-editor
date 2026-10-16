@@ -2,8 +2,21 @@ import type { FileChangeKind } from './events';
 import type { Unsubscribe } from './base';
 import type { MarketDownloadProgress } from './market';
 
-/** 内核支持的文本编码（内部统一 UTF-8 表示，读写时按文件探测/保持） */
-export type FileEncoding = 'utf-8' | 'utf-8-bom' | 'shift_jis' | 'utf-16le' | 'utf-16be';
+/**
+ * 内核支持的文本编码（内部统一 UTF-8 表示，读写时按文件探测/保持）。
+ * `gbk` / `gb18030` / `big5` = 简中 / 大字符集简中 / 繁中传统编码（2026-10-17 编码标签批）；
+ * 探测只会产出 `gbk` 与 `big5`（gb18030 是 GBK 严格超集、字节级兼容，无法从内容
+ * 稳定区分，由调用方显式指名）。
+ */
+export type FileEncoding =
+  | 'utf-8'
+  | 'utf-8-bom'
+  | 'shift_jis'
+  | 'gbk'
+  | 'gb18030'
+  | 'big5'
+  | 'utf-16le'
+  | 'utf-16be';
 
 export interface DirEntry {
   name: string;

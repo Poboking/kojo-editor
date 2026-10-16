@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
 import type { FileEncoding } from '@kojo/plugin-api';
 import { applyEol, detectEol, normalizeEol, probeEncoding } from '../src/encoding';
+import { FileIOServiceImpl } from '../src/io';
 import { createKernel } from '../src/kernel';
 import { NodeBridge } from './helpers/node-bridge';
 import { MemoryStorageBackend } from './helpers/memory-storage';
@@ -87,6 +88,18 @@ describe('编码往返：合成变体（BOM 有无 / CRLF / LF / Shift-JIS）', 
       encoding: 'shift_jis',
       eol: 'crlf',
     },
+    {
+      name: 'GBK + CRLF（简中：三族评分判 gbk，decode→encode 字节级往返）',
+      bytes: new Uint8Array(iconv.encode('@M_KOJO_K1\r\nPRINTL 你好，世界\r\n好感度：%CFLAG:2%\r\n', 'gbk')),
+      encoding: 'gbk',
+      eol: 'crlf',
+    },
+    {
+      name: 'Big5 + LF（繁中：三族评分判 big5，decode→encode 字节级往返）',
+      bytes: new Uint8Array(iconv.encode('@M_KOJO_K1\nPRINTL 口上測試\n繁體中文\n', 'big5')),
+      encoding: 'big5',
+      eol: 'lf',
+    },
   ];
 
   for (const c of cases) {
@@ -99,16 +112,103 @@ describe('编码往返：合成变体（BOM 有无 / CRLF / LF / Shift-JIS）', 
     });
   }
 
-  it('混行归一化：多数派换行还原（少数派行被归一 —— kernel io 现行语义）', async () => {
-    // crlf 2 : lf 1 → 多数派 crlf，孤立 lf 被归一为 crlf
-    const mixed = enc.encode('a\r\nb\r\nc\n');
-    const r = await roundtrip(bridge, mixed);
-    expect(r.eol).toBe('crlf');
-    expect(bytesEqual(r.out, enc.encode('a\r\nb\r\nc\r\n'))).toBe(true);
+  it('混行保真：io.writeText 保留少数派 LF 行（改一行不翻其换行）—— kernel io 现行语义', async () => {
+    // 多数派 crlf + 一个手写 lf。旧的"归一到单一 eol 再全量重写"会把 lf 行静默翻成 crlf，
+    // 违反"保存不动用户没碰的字节"。现行 io 走 readText→writeText 逐行还原：
+    const appData = await bridge.appDataDir();
+    const f = nodeJoin(appData, 'mixed.ERB');
+    const svc = new FileIOServiceImpl(bridge);
+    svc.setWritableRoots([appData]);
+    await bridge.writeFileBytes(f, enc.encode('a\r\nb\r\nc\nd\r\n'));
+    const tf = await svc.readText(f);
+    expect(tf.eol).toBe('crlf'); // 多数派仍判 crlf（新增/改动行的默认）
+    await svc.writeText(f, tf.text.replace('a', 'A')); // 只改第 0 行
+    const out = await bridge.readFileBytes(f);
+    expect(new TextDecoder('utf-8').decode(out)).toBe('A\r\nb\r\nc\nd\r\n'); // c 行的 lf 保住
+    // 对照：低层 applyEol 原语（roundtrip helper 走的那条）仍会归一——它不代表 io.writeText
+    expect(bytesEqual(await roundtripOf('a\r\nb\r\nc\nd\r\n'), enc.encode('a\r\nb\r\nc\r\nd\r\n'))).toBe(true);
   });
+
+  /** 低层 applyEol 往返（编码+多数派换行），仅用于对照原语行为 */
+  async function roundtripOf(text: string): Promise<Uint8Array> {
+    const bytes = enc.encode(text);
+    const r = await roundtrip(bridge, bytes);
+    return r.out;
+  }
 });
 
 const hasCorpus = Boolean(SMOKE_DIR) && existsSync(SMOKE_DIR!);
+
+/**
+ * 编辑后重编码（2026-10-17 编码标签批）：探测判对 gbk/big5 之后，
+ * **改动一次再保存**也必须编码回原编码字节——旧管线（判成 shift_jis）会把简中/繁中
+ * 按 SJIS 解码再重编码，一次保存当场毁文件。零改动快道（逐字节直写）同步钉住仍生效。
+ */
+describe('编码编辑后往返：GBK/Big5 改动一行 ⇒ 重编码回原编码字节', () => {
+  const appData = mkdtempSync(nodeJoin(tmpdir(), 'kojo-enc-edit-'));
+  const bridge = new NodeBridge(appData);
+  const svc = new FileIOServiceImpl(bridge);
+  svc.setWritableRoots([appData]);
+
+  async function afterEditRoundtrip(
+    file: string,
+    label: 'gbk' | 'big5',
+    text: string,
+    find: string,
+    repl: string,
+    expectedHex?: string,
+  ): Promise<void> {
+    const f = nodeJoin(appData, file);
+    const original = Buffer.from(iconv.encode(text, label));
+    await bridge.writeFileBytes(f, original);
+
+    const tf = await svc.readText(f);
+    expect(tf.encoding).toBe(label);
+
+    // 零改动：逐字节直写快道仍优先（字节与原文全等）
+    await svc.writeText(f, tf.text);
+    expect(Buffer.compare(readFileSync(f), original)).toBe(0);
+
+    // 改一行：preserve 走探测出的编码重编码，逐字节等于按同一编码编出的期望
+    await svc.writeText(f, tf.text.replace(find, repl));
+    const expected = Buffer.from(iconv.encode(text.replace(find, repl), label));
+    const out = readFileSync(f);
+    expect(out.equals(expected)).toBe(true);
+    if (expectedHex) expect(out.toString('hex')).toBe(expectedHex);
+  }
+
+  it('GBK：编辑后落盘 = GBK 字节（第三行 = b5dac8fdd0d0）', async () => {
+    await afterEditRoundtrip(
+      'edit-gbk.ERB',
+      'gbk',
+      '口上测试，简体中文\r\n第二行\r\n',
+      '第二行',
+      '第三行',
+      Buffer.concat([
+        Buffer.from(iconv.encode('口上测试，简体中文', 'gbk')),
+        Buffer.from('\r\n', 'latin1'),
+        Buffer.from(iconv.encode('第三行', 'gbk')),
+        Buffer.from('\r\n', 'latin1'),
+      ]).toString('hex'),
+    );
+  });
+
+  it('Big5：编辑后落盘 = Big5 字节（繁體中文→中文測試 = a4a4a4e5b4fab8d5）', async () => {
+    await afterEditRoundtrip(
+      'edit-big5.ERB',
+      'big5',
+      '口上測試\r\n繁體中文\r\n',
+      '繁體中文',
+      '中文測試',
+      Buffer.concat([
+        Buffer.from(iconv.encode('口上測試', 'big5')),
+        Buffer.from('\r\n', 'latin1'),
+        Buffer.from(iconv.encode('中文測試', 'big5')),
+        Buffer.from('\r\n', 'latin1'),
+      ]).toString('hex'),
+    );
+  });
+});
 
 describe.skipIf(!hasCorpus)('编码往返：真实语料全量 golden（KOJO_SMOKE_PROJECT）', () => {
   it(
