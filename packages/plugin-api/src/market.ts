@@ -92,9 +92,12 @@ export function packStagingNames(id: string, version: string): string[] {
 
 /**
  * 默认注册表端点（GitHub Pages 上注册表仓的 `index.json`）。
- * 作者**可以覆盖**成自建镜像 / 内测源（`MarketService.setEndpoint`）——
- * 但**没有"代理"这一项**：受众绝大部分没有代理客户端，跟随系统 / 进程环境即可，
- * 做一个代理输入框等于把"没配好就一片红"的成本摊到所有人头上。
+ * 作者**可以覆盖**端点（`MarketService.setEndpoint`，内测源同理），但**只有主机落在
+ * 平台放行列表内才真正可用**——当前放行 = GitHub 系主机 + 一级子域 `*.github.io`
+ * （唯一真源在平台侧 `market.rs` 的 `host_in_allowlist`，此处只如实转述、不复制名单）；
+ * 索引条目 `zip.url` 的容器下载主机同受此限。另**没有"代理"这一项**：受众绝大部分
+ * 没有代理客户端，跟随系统 / 进程环境即可，做一个代理输入框等于把"没配好就一片红"
+ * 的成本摊到所有人头上。
  */
 export const MARKET_DEFAULT_INDEX_URL = 'https://poboking.github.io/kojo-market/index.json';
 
@@ -302,7 +305,9 @@ export interface MarketService {
   /** 生效端点（用户覆盖优先，否则 `MARKET_DEFAULT_INDEX_URL`） */
   endpoint(): Promise<string>;
   /**
-   * 覆盖注册表端点（作者自建镜像 / 内测源）；空串 = 恢复默认。
+   * 覆盖注册表端点（内测源 / 镜像）；空串 = 恢复默认。
+   * **自定义主机仅当落在平台放行列表内才真正可用**（当前 = GitHub 系主机 +
+   * 一级子域 `*.github.io`；唯一真源在平台侧 `market.rs`，此处不复制名单）。
    * @throws MarketError `endpoint-invalid` 形态不合格（只核形态：**可信主机的唯一真源在平台侧**）
    */
   setEndpoint(url: string): Promise<void>;

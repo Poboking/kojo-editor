@@ -9,7 +9,8 @@
  * **这里没有代理输入框，也没有代理开关**（刻意）：
  * 受众绝大部分没有代理客户端，跟随系统 / 进程环境即可；而 JS 能递进来的代理等于
  * "任意代理能对白名单 URL 回任意字节、还能把请求转去内网"（SSRF），前一名 agent 已按洞收掉。
- * 因此本行的全部可编辑项 = 一个 URL。
+ * 因此本行的全部可编辑项 = 一个 URL。现实约束：主机白名单在平台侧（当前仅放行
+ * GitHub 系主机与 *.github.io 一级子域），形态过了、保存能成 ≠ 拉取能通。
  */
 
 import { MARKET_DEFAULT_INDEX_URL, MarketError, endpointProblem, type MarketService } from '@kojo/plugin-api';
@@ -175,7 +176,7 @@ export async function applyEndpointEdit(
         after,
         plan.kind === 'reset'
           ? `已恢复默认注册表地址（下次打开市场面板生效）`
-          : `已改用自建地址（下次打开市场面板生效）`,
+          : `已改用自建地址（仅放行 GitHub 系主机；下次打开市场面板生效）`,
       );
     }
   }

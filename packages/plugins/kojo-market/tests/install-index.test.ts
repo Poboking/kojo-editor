@@ -467,11 +467,12 @@ describe('installFromIndex 的编排顺序', () => {
     const h = await boot({
       files: tree,
       manifest: await manifestOf(tree),
-      downloadThrows: 'market_download 拒绝（主机不在白名单内：evil.example.com）',
+      downloadThrows:
+        'market_download 拒绝（主机 evil.example.com 不在平台放行列表（当前仅放行 GitHub 系主机与 *.github.io 一级子域镜像））',
     });
     const err = await codeOf(h.svc.installFromIndex(h.entry));
     expect(err.code).toBe('download-failed');
-    expect(err.message).toContain('主机不在白名单内：evil.example.com');
+    expect(err.message).toContain('主机 evil.example.com 不在平台放行列表');
     expect(stagedLeftovers(h.root)).toEqual([]);
   });
 });

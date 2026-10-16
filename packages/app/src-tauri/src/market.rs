@@ -147,7 +147,9 @@ pub(crate) fn url_problem(url: &reqwest::Url) -> Option<String> {
         return Some(format!("URL 带非默认端口 {port}：{url}"));
     }
     if !host_in_allowlist(host) {
-        return Some(format!("主机不在白名单内：{host}"));
+        return Some(format!(
+            "主机 {host} 不在平台放行列表（当前仅放行 GitHub 系主机与 *.github.io 一级子域镜像）"
+        ));
     }
     None
 }

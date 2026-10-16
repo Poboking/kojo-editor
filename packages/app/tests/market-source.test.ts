@@ -135,7 +135,7 @@ describe('设置页那一行的显示口径（生效地址显式化 / 保存可�
   it('classifyNote 三态互斥：成功=ok、失败=err、无改动与读取中=dim（判据只住这一处）', () => {
     expect(classifyNote('')).toBe('dim');
     expect(classifyNote('没有改动')).toBe('dim');
-    expect(classifyNote('已改用自建地址（下次打开市场面板生效）')).toBe('ok');
+    expect(classifyNote('已改用自建地址（仅放行 GitHub 系主机；下次打开市场面板生效）')).toBe('ok');
     expect(classifyNote('已恢复默认注册表地址（下次打开市场面板生效）')).toBe('ok');
     expect(classifyNote('没有保存：协议必须是 https')).toBe('err');
     expect(classifyNote(NO_SERVICE_VIEW.note)).toBe('err');
@@ -182,7 +182,7 @@ describe('设置页那一行的显示口径（生效地址显式化 / 保存可�
   });
 
   it('sourceRowUi 覆盖态 ⇒ 摊开自建地址本身 + 给出恢复默认入口', () => {
-    const row = sourceRowUi({ effective: MIRROR, overridden: true, note: '已改用自建地址（下次打开市场面板生效）' });
+    const row = sourceRowUi({ effective: MIRROR, overridden: true, note: '已改用自建地址（仅放行 GitHub 系主机；下次打开市场面板生效）' });
     expect(row.canEdit).toBe(true);
     expect(row.showReset).toBe(true);
     expect(row.address).toBe(MIRROR);

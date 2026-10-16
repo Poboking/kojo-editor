@@ -160,7 +160,7 @@ fn redirect_gate_rejects_hop_outside_allowlist_and_hops_over_cap() {
 
     let first = hops(&["https://github.com/a/releases/download/t/a.zip"]);
     let problem = redirect_problem(&first, &url("https://evil.io/a.zip")).unwrap();
-    assert!(problem.contains("不在白名单内"), "白名单外一跳没被拒：{problem}");
+    assert!(problem.contains("不在平台放行列表"), "白名单外一跳没被拒：{problem}");
 
     // 中途跳到 pages 之外的主机同样拒（每一跳重核，不是只核首尾）
     let chain = hops(&[
