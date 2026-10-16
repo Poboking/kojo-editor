@@ -836,12 +836,12 @@ const viewRec = (id: string, version: string, over: Partial<InstalledPack> = {})
 
 const noop = (): void => undefined;
 
-/** 静态渲染一版面（`overrides` 想改哪个状态就改哪个） */
-function renderView(
+/** 一版面的 props（`renderView` 拿它渲染；点击判据直接拿渲染树用） */
+function viewProps(
   packs: MarketIndexEntry[],
   installed: InstalledPack[],
   overrides: Partial<Parameters<typeof MarketPanelView>[0]> = {},
-): string {
+): Parameters<typeof MarketPanelView>[0] {
   const snapshot: MarketSnapshot = {
     status: 'ready',
     packs,
@@ -855,27 +855,54 @@ function renderView(
     endpoint: '',
     pullNote: '',
   };
-  return renderToStaticMarkup(
-    createElement(MarketPanelView, {
-      snapshot,
-      appVersion: APP_VERSION,
-      query: '',
-      busy: false,
-      note: '',
-      pending: null,
-      open: null,
-      installing: null,
-      onQuery: noop,
-      onPull: noop,
-      onInstall: noop,
-      onImport: noop,
-      onRequestUninstall: noop,
-      onConfirmUninstall: noop,
-      onCancelUninstall: noop,
-      onToggleDetail: noop,
-      ...overrides,
-    }),
-  );
+  return {
+    snapshot,
+    appVersion: APP_VERSION,
+    query: '',
+    busy: false,
+    note: '',
+    pending: null,
+    open: null,
+    installing: null,
+    onQuery: noop,
+    onPull: noop,
+    onInstall: noop,
+    onImport: noop,
+    onRequestUninstall: noop,
+    onConfirmUninstall: noop,
+    onCancelUninstall: noop,
+    onToggleDetail: noop,
+    ...overrides,
+  };
+}
+
+/** 静态渲染一版面（`overrides` 想改哪个状态就改哪个） */
+function renderView(
+  packs: MarketIndexEntry[],
+  installed: InstalledPack[],
+  overrides: Partial<Parameters<typeof MarketPanelView>[0]> = {},
+): string {
+  return renderToStaticMarkup(createElement(MarketPanelView, viewProps(packs, installed, overrides)));
+}
+
+/**
+ * 在渲染树里找标签为 `label` 的那枚按钮元素。node 环境没有 DOM 事件，
+ * 但 React 元素就是普通对象：找到它、**真的调用它的 onClick**——
+ * "这一行点下去会接到哪个回调"因此不必靠猜 JSX。
+ */
+function findButton(node: unknown, label: string): { props: { onClick: () => void } } | null {
+  if (node === null || typeof node !== 'object') return null;
+  const el = node as { type?: unknown; props?: { children?: unknown; onClick?: unknown } };
+  if (el.type === 'button' && el.props?.children === label && typeof el.props.onClick === 'function') {
+    return el as { props: { onClick: () => void } };
+  }
+  const children = el.props?.children;
+  const list = Array.isArray(children) ? children : children === undefined ? [] : [children];
+  for (const c of list) {
+    const hit = findButton(c, label);
+    if (hit !== null) return hit;
+  }
+  return null;
 }
 
 /** 屏上的按钮（标签 + 是否禁用）：动作判据只看这个，不去猜 JSX */
@@ -975,6 +1002,17 @@ describe('已装行「导入为我的口上项目」的渲染判据', () => {
     expect(rowOf(html, '演示模板')).not.toContain('导入为我的口上项目');
     // 导入是加在既有行上的第七个动作，不是替换：卸载按钮仍在每一行上
     expect(buttonsOf(html).filter((b) => b === '卸载')).toHaveLength(3);
+  });
+
+  it('真点下去 ⇒ 回调收到的正是这一行自己的记账（同一屏两行不串）', () => {
+    const kojo = viewRec('k.pack', '1.0.0', { name: '演示口上' });
+    const dict = viewRec('d.pack', '1.0.0', { kind: 'dict-pack', name: '演示字典' });
+    const got: InstalledPack[] = [];
+    const tree = MarketPanelView(viewProps([], [kojo, dict], { onImport: (r) => got.push(r) }));
+    const btn = findButton(tree, '导入为我的口上项目');
+    expect(btn).not.toBeNull();
+    btn!.props.onClick();
+    expect(got).toEqual([kojo]);
   });
 
   it('装 / 更新进行中 ⇒ 与其它动作一样禁用（闲时不禁用；不新增 busy 文案）', () => {
