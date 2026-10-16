@@ -39,9 +39,14 @@ import {
   diffSnapshot,
   encodeEntries,
   mergeEntries,
+  nameSetDigest,
   pruneSnapshotKeys,
+  refsAreReusable,
+  salvageSnapshot,
+  snapshotKeyCandidatesFor,
   snapshotKeyFor,
   type IndexSnapshot,
+  type SalvagedSnapshot,
   type SnapshotEntry,
 } from './snapshot';
 
@@ -206,6 +211,8 @@ export function createErbParserPlugin(): Plugin {
 
         // 快照：只在项目响应式路径启用（service.buildIndex 的显式调用 = 强制重建）
         let snapshot: IndexSnapshot | null = null;
+        /** 逐条目 salvage 的产出（非 null = 这一轮的数据来自"作废面"而非当前键的完好快照） */
+        let salvaged: SalvagedSnapshot | null = null;
         const snapStartedAt = Date.now();
         let snapGetMs = 0;
         let snapCoerceMs = 0;
@@ -219,14 +226,37 @@ export function createErbParserPlugin(): Plugin {
             const getStartedAt = Date.now();
             const raw = await storage.get<unknown>(key);
             snapGetMs = Date.now() - getStartedAt;
-            if (raw === undefined) {
-              snapshot = null; // 首次打开 / 无快照 → 全量（正常路径）
-            } else {
+            if (raw !== undefined) {
               const coerceStartedAt = Date.now();
               snapshot = coerceSnapshot(raw, currentRoot);
               snapCoerceMs = Date.now() - coerceStartedAt;
-              if (snapshot === null) {
-                // fail-closed：版本/结构/项目根任一不符 → 删除 + 全量重建，绝不"修"快照
+            }
+            // 当前键没捡到 / 整体不可用 ⇒ **不是"全树重读"的信号**，而是"逐条目 salvage"的信号：
+            // 版本换代（键里嵌着版本，换代后新键必然不存在）、rootDir 写法不符、单条目损坏，
+            // 都只该作废**那几条**条目，而不是 2,325 条各自完好、mtime+size 相符的条目。
+            // 候选键顺序与成本见 `snapshotKeyCandidatesFor`（当前键已试过，这里跳过）。
+            if (snapshot === null) {
+              // 候选键第 0 位就是当前键（先就地 salvage：单条目损坏只该重读那一条，不该连坐整棵树），
+              // 其余是换代/写法变体的旧键（键里嵌着版本 ⇒ 换代后新键必然不存在，数据躺在旧键那份里）
+              for (const candidate of snapshotKeyCandidatesFor(currentRoot)) {
+                const cStartedAt = Date.now();
+                const craw = candidate === key ? raw : await storage.get<unknown>(candidate);
+                snapGetMs += Date.now() - cStartedAt;
+                if (craw === undefined) continue;
+                const s = salvageSnapshot(craw, { rootDir: currentRoot, key: candidate, knownPaths: allFiles });
+                if (s === null) continue;
+                if (Object.keys(s.entries).length === 0) {
+                  // 认得这份数据、但一条都读不懂 ⇒ 与"整体弃用"同判：删掉它，别让它反复占读盘时间
+                  ctx.log.warn(`Index snapshot candidate unusable (no salvageable entry): ${candidate}`);
+                  void storage.delete(candidate).catch(() => undefined);
+                  continue;
+                }
+                salvaged = s;
+                snapshot = s;
+                break;
+              }
+              if (snapshot === null && raw !== undefined) {
+                // fail-closed 的老规矩：当前键这份连一条都认不出来 → 删除 + 全量重建，绝不"修"快照
                 ctx.log.warn('Index snapshot unusable (version/structure/root mismatch); rebuilding from scratch');
                 void storage.delete(key).catch(() => undefined);
               }
@@ -234,9 +264,14 @@ export function createErbParserPlugin(): Plugin {
           } catch (err) {
             ctx.log.warn(`Index snapshot read failed; rebuilding from scratch: ${String(err)}`);
             snapshot = null;
+            salvaged = null;
           }
         }
         const snapMs = Date.now() - snapStartedAt;
+        /** 换代/损坏/salvage 之后必须把数据**改写回当前键**：否则 salvage 每轮都重付一次读旧键的钱，
+         *  而且旧键随后会被 prune 收走 ⇒ 下一轮直接全冷（这是"作废不连坐"能站住的闭环条件） */
+        const needsRewrite = salvaged !== null;
+        const salvagedSkipped = salvaged?.skipped ?? 0;
 
         const diff = snapshot ? diffSnapshot(snapshot, allFiles, stats) : { reusable: [], stale: allFiles };
 
@@ -306,6 +341,8 @@ export function createErbParserPlugin(): Plugin {
         }
         const { files, byName } = aggregateIndex(ordered);
         const aggMs = Date.now() - aggStartedAt;
+        /** 当前名录摘要（refs 溯源判据，见 `snapshot.nameSetDigest`）；随新扫出的 refs 一起落盘 */
+        const namesFp = nameSetDigest(byName.keys());
 
         /* ---------------- 反向引用扫描（H2 批，判据 = 全局 byName ⇒ 必须排在聚合后） ----------------
          * 只对 **stale 文件**重扫；复用文件直接取快照里的 refs（热构建零额外读盘）。
@@ -317,11 +354,26 @@ export function createErbParserPlugin(): Plugin {
          * 是惰性属性）。消费方只有 find-references / rename 这类按需动作，而聚合要建
          * 全部引用点对象（合成 2,000 文件口径 900k 点 ≈ 170ms + 同量对象）——
          * 热开项目不该替一次可能不发生的查询买单。stale 文件的**扫描**照旧（本轮新读的
-         * 文件本来就要扫，且快照落盘需要它们的 refs 一并挂回）。 */
+         * 文件本来就要扫，且快照落盘需要它们的 refs 一并挂回）。
+         *
+         * 2026-10-16 PERF-12a：**salvage 轮加一道溯源补正**。存量 refs 是在**当时的名录**下扫出来的，
+         * "文件正文没变"只保证记号没变、不保证名录没变——旁处新增一个 `@函数` 会让未变文件的
+         * 存量 refs 少一条边。走 salvage（换代 / 条目损坏 / rootDir 写法不符）这一轮里，
+         * 溯源位对不上（或旧版本根本没有）的复用条目**就地重扫**，与"全量重扫"逐条目同形；
+         * 热路径（当前键完好命中）零改动——那道洞是 v4 就有的既有形状，本批不顺手改口径。
+         * 重扫结果连同**当前名录摘要**一起挂回条目落盘 ⇒ 下一轮自动可信，只补正这一次。 */
         const refsStartedAt = Date.now();
         const hasName = (upper: string): boolean => byName.has(upper);
         const refsByPath = new Map<string, FileRefs>();
-        const refsToScan = diff.stale.filter((path) => fresh.has(path));
+        const freshToScan = diff.stale.filter((path) => fresh.has(path));
+        const provenanceToScan: string[] = [];
+        if (salvaged !== null) {
+          for (const path of diff.reusable) {
+            const e = snapshot?.entries[path];
+            if (e !== undefined && !refsAreReusable(e, namesFp)) provenanceToScan.push(path);
+          }
+        }
+        const refsToScan = provenanceToScan.length > 0 ? [...freshToScan, ...provenanceToScan] : freshToScan;
         for (let base = 0; base < refsToScan.length; base += READ_BATCH) {
           const chunk = refsToScan.slice(base, base + READ_BATCH);
           const texts = await io.readTexts(chunk);
@@ -345,6 +397,7 @@ export function createErbParserPlugin(): Plugin {
          * 复用条目的 refs 就地汇入（快照元组别名，零拷贝）；构建结果自持缓存，
          * 后续查询零成本。判据（`hasName` = 聚合后的全局名字表）与冷建逐位同源，
          * 因此"冷建 vs 快照"两条路径的 bySymbol 逐字节一致（references.test 钉死）。
+         * salvage 轮里溯源补正过的文件已经在上面扫过、已在 `refsByPath` 里，不再覆盖。
          */
         let referencesBuilt: ErbReferenceIndex | null = null;
         const referencesBuild = (): ErbReferenceIndex => {
@@ -352,6 +405,7 @@ export function createErbParserPlugin(): Plugin {
           const t0 = Date.now();
           let fromSnapshot = 0;
           for (const path of diff.reusable) {
+            if (refsByPath.has(path)) continue;
             const reused = snapshot?.entries[path];
             if (reused?.refs !== undefined) {
               refsByPath.set(path, reused.refs);
@@ -384,26 +438,31 @@ export function createErbParserPlugin(): Plugin {
             `(get ${snapGetMs}ms, coerce ${snapCoerceMs}ms) · read+parse ${parseMs}ms · aggregate ${aggMs}ms · ` +
             `refs scan ${refsScanMs}ms (rescan ${refsToScan.length}, aggregate deferred) · ` +
             `mtime 来源 walk顺带 ${metaByPath.size} / 兜底逐文件 ${needStat.length} · ` +
-            `reused ${diff.reusable.length}/${allFiles.length}`,
+            `reused ${diff.reusable.length}/${allFiles.length} · ` +
+            `salvage ${salvaged === null ? 0 : Object.keys(salvaged.entries).length}/${allFiles.length}` +
+            `(丢 ${salvagedSkipped}, 溯源补正 ${provenanceToScan.length}, 旧形态 ${salvaged?.legacy === true ? 1 : 0})`,
         );
 
         // 落盘快照（异步，不阻塞广播；失败只告警——它只是缓存，不是数据）
         const snapshotDirty =
-          fresh.size > 0 || (snapshot !== null && Object.keys(snapshot.entries).length !== allFiles.length);
+          needsRewrite ||
+          fresh.size > 0 ||
+          (snapshot !== null && Object.keys(snapshot.entries).length !== allFiles.length);
         if (useSnapshot && currentRoot && gen === generation) {
           const key = snapshotKeyFor(currentRoot);
           if (snapshotDirty) {
             // refs 挂在条目上一起落盘：热复用时反向索引不花一次读盘（挂接纯函数，见 snapshot.attachRefs）。
-            // refsByPath 现在只含 stale 文件（PERF-7 惰性聚合），恰好是需要挂接的那批；
-            // 复用条目自带快照 refs、原样留用（attachRefs 对没有新 refs 的条目零触碰）。
-            const entries = attachRefs(mergeEntries(snapshot, allFiles, fresh), refsByPath);
+            // refsByPath 现在只含 stale 文件（PERF-7 惰性聚合）+ salvage 轮的溯源补正批，
+            // 恰好是需要挂接的那批；复用条目自带快照 refs、原样留用（attachRefs 对没有新 refs 的条目零触碰）。
+            // 挂上新流水的条目同时记下**当前名录摘要**：下一轮"正文没变、名录变了"就靠它对号入座。
+            const entries = attachRefs(mergeEntries(snapshot, allFiles, fresh), refsByPath, namesFp);
             const saveStartedAt = Date.now();
             void storage
               .set(key, {
                 version: SNAPSHOT_VERSION,
                 rootDir: currentRoot,
                 savedAt: Date.now(),
-                // 盘上用 v5 紧凑元组（剥可派生字段 + 位置化），加载时由 decodeEntries 还原
+                // 盘上用 v7 紧凑元组（剥可派生字段 + 位置化 + refs 名录摘要位），加载时由 decodeEntries 还原
                 entries: encodeEntries(entries),
               })
               .then(() => {

@@ -68,8 +68,42 @@ import type { FileRefs, RefRun } from './references';
  * `$` 标签转定义的数据面）。条目追加第 9 位 `labels`（`[名, 行, 所属函数定义行]` 元组，
  * **恒在**——v4 收 refs 位的同款先例；内存里无标签 = 缺省不挂，与解析器同形）。
  * v5 快照没有 labels ⇒ 版本 bump ⇒ fail-closed 整体弃用、一次冷重建（此后照常热）。
+ *
+ * **v6 → v7**（2026-10-16 PERF-12a「作废后分段复用」批）：**不靠 bump 省时间，靠"作废不再连坐"**。
+ * 此前"整体弃用"的粒度是**整份快照**：版本不符 / rootDir 写法不符 / 任一条目结构不符
+ * ⇒ 2,325 条各自完好、元组相符的条目一起作废 ⇒ 全树重读重扫（真语料实测 read+parse 6.9 s
+ * ＋ refs scan 7.4 s）。本批把作废粒度打到**逐条目**：
+ * - 条目追加第 10 位 `refsNamesFp`＝该条 refs **是在哪张名字表下扫出来的**摘要。
+ *   反向引用的判据是全局 `byName`，"文件没变"只保证正文没变、**不保证名录没变**——
+ *   旁处新增一个 `@函数` 会让所有未变文件的存量 refs 少一条边（v4 起就有这个洞，
+ *   此前无人记账）。有了溯源位，复用条目的 refs 只在"摘要与当前名录相符"时才续用，
+ *   不符则标为可疑、由**首次消费**（find-references / rename）重扫补正，开项目不付这笔钱；
+ * - **v6 条目照常复用**：v6 与 v7 的前 9 位逐字同义（本批没动解析口径），只缺第 10 位
+ *   ⇒ 见 `SALVAGEABLE_VERSIONS` 的准入纪律；缺溯源位 = 可疑 = 结构续用、refs 待补正；
+ * - **单条损坏不再连坐**：`salvageSnapshot` 逐条目校验，坏几条只重读那几条；
+ * - **rootDir 只是写法不同（大小写/斜杠方向/尾分隔符）不再连坐**：见 `sameProjectRoot`。
+ * 版本 bump 仍然 bump（键换代 ⇒ 升级后第一轮走 salvage，此后走热）。
  */
-export const SNAPSHOT_VERSION = 6;
+export const SNAPSHOT_VERSION = 7;
+
+/**
+ * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
+ *
+ * 准入纪律（加进这张表之前必须逐条自答，答"是"才准进）：
+ * 1. 旧条目的**已有各位含义与当前完全相同**（解析器口径没变、位置没挪）；
+ * 2. 新旧差异只能是**新条目多了位**（旧 payload 缺位 ⇒ 该位按"未知"处理，绝不猜值）；
+ * 3. 缺位的"未知"必须落在**保守侧**：要么触发一次重扫，要么判该文件过期，不许静默当真。
+ *
+ * - `7`：同形（10 位）。
+ * - `6`：前 9 位逐字同义，缺第 10 位 `refsNamesFp` ⇒ 条目结构可续用、其 refs 标为可疑。
+ *
+ * **不在表里的版本（含 ≤5）一条都不复用**：v5 及更早的条目缺 `labels`（v6 新增），
+ * 那是解析结果本体少了字段，复用＝索引缺数据，只能整体重读。
+ */
+const SALVAGEABLE_VERSIONS: ReadonlyMap<number, { readonly arity: number; readonly hasRefsFp: boolean }> = new Map([
+  [7, { arity: 10, hasRefsFp: true }],
+  [6, { arity: 9, hasRefsFp: false }],
+]);
 
 /** 单个文件的快照条目 */
 export interface SnapshotEntry {
@@ -90,6 +124,14 @@ export interface SnapshotEntry {
    * **零拷贝**：direct 别名盘上元组的第 7 位（RefTuple 与 RefRun 同形，decode 已逐条验过）。
    */
   readonly refs?: FileRefs;
+  /**
+   * 这份 `refs` 是在**哪张名录**下扫出来的摘要（`nameSetDigest(index.byName.keys())`）。
+   * 反向引用的判据是全局 `byName`，"文件 mtime+size 没变"只保证正文没变，不保证名录没变：
+   * 别处新增/删除一个 `@函数` 会让未变文件的存量 refs 少边或多边。
+   * 复用条件 = `refsNamesFp === 当前名录摘要`；`undefined` = 溯源未知（v6 及更早的盘上条目）
+   * ⇒ 一律判可疑，由首次消费重扫补正（开项目不付这笔钱）。
+   */
+  readonly refsNamesFp?: number;
 }
 
 /** 索引快照（按项目根一份） */
@@ -107,13 +149,63 @@ export interface IndexSnapshot {
  * 存储域 key 必须是安全段（`[A-Za-z0-9_][A-Za-z0-9._-]{0,119}`），而项目根是
  * 任意文件系统路径，故只存**哈希**；真实 rootDir 记录在快照值里，加载时校验。
  */
-export function snapshotKeyFor(rootDir: string): string {
+export function snapshotKeyFor(rootDir: string, version: number = SNAPSHOT_VERSION): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < rootDir.length; i++) {
     h ^= rootDir.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
-  return `index-v${SNAPSHOT_VERSION}-${(h >>> 0).toString(16).padStart(8, '0')}`;
+  return `index-v${version}-${(h >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+/**
+ * 项目根的**同一性**判据（大小写 / 斜杠方向 / 尾分隔符都不算换项目）。
+ *
+ * 旧口径拿 `rootDir` 字符串逐字比 ⇒ "同一份盘、写法不同"（用户从 `D:\game\eratw`
+ * 与 `D:/Game/eratw/` 两个入口各开过一次）会被判成两个项目 ⇒ 整份快照作废。
+ * 只归一化**写法**，不归一化**位置**：盘符变了、目录挪了 ⇒ 依然不同项目
+ * （条目键是绝对路径，跨项目尾巴撞上也不该由这份快照来答，见 `salvageSnapshot` 的头注）。
+ */
+export function projectRootKey(rootDir: string): string {
+  return rootDir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+/** 同一项目根（写法无关） */
+export function sameProjectRoot(a: string, b: string): boolean {
+  return projectRootKey(a) === projectRootKey(b);
+}
+
+/**
+ * 加载时依次试探的存储键（**纯函数**）：当前版本键在前，其余按 `SALVAGEABLE_VERSIONS`
+ * 准入的版本 × rootDir 的写法变体排在后面。
+ *
+ * 键里嵌了版本 ⇒ 升级后新键必然不存在（实测 `snapshot get 6ms`＝没捡到），
+ * 上一版那份 19 MB 的完好条目就此白白作废。这一列候选键把"换代"从"全树重读"
+ * 变成"读旧键一次 + 逐条目复用"。写法变体只生成有限几种（原样 / 正斜杠 / 反斜杠 /
+ * 去尾分隔符 / 小写），不做全库扫。
+ */
+export function snapshotKeyCandidatesFor(rootDir: string): string[] {
+  const variants: string[] = [];
+  const push = (v: string): void => {
+    if (v.length > 0 && !variants.includes(v)) variants.push(v);
+  };
+  const fwd = rootDir.replace(/\\/g, '/');
+  const back = rootDir.replace(/\//g, '\\');
+  for (const base of [rootDir, fwd, back]) {
+    push(base);
+    push(base.replace(/\/+$/, ''));
+    push(base.replace(/\\+$/, ''));
+    push(base.toLowerCase());
+  }
+  const out: string[] = [];
+  const add = (k: string): void => {
+    if (!out.includes(k)) out.push(k);
+  };
+  add(snapshotKeyFor(rootDir));
+  for (const version of SALVAGEABLE_VERSIONS.keys()) {
+    for (const v of variants) add(snapshotKeyFor(v, version));
+  }
+  return out;
 }
 
 /* ---------------------------------------------------------------------------
@@ -130,8 +222,9 @@ type DimTuple = [string, string, number];
 type RefTuple = [string, number, number, 0 | 1 | 2];
 /** `[标签名, 行, 所属函数定义行]`（v6 起；无标签 = 空数组） */
 type LabelTuple = [string, number, number];
-/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水, 标签]` */
-type EntryTuple = [number | null, number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[], RefTuple[], LabelTuple[]];
+/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水, 标签, refs 名录摘要]`
+ * 第 10 位 v7 起才有；v6 的盘上元组是前 9 位（`salvageSnapshot` 按版本表处理） */
+type EntryTuple = [number | null, number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[], RefTuple[], LabelTuple[], number | null];
 
 const FLAG_EXPRESSION = 1;
 
@@ -174,6 +267,8 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       raw[1] === e.size &&
       raw[2] === e.textLength &&
       raw[7] === (e.refs as unknown) &&
+      raw.length === 10 &&
+      raw[9] === (e.refsNamesFp ?? null) &&
       // functions/dims 仍是 accessor = 惰性外壳未被消费方动过 ⇒ 元组即真相
       Object.getOwnPropertyDescriptor(e.file, 'functions')?.get !== undefined &&
       Object.getOwnPropertyDescriptor(e.file, 'dims')?.get !== undefined
@@ -202,18 +297,14 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       dims,
       refs,
       labels,
+      e.refsNamesFp ?? null,
     ];
   }
   return out;
 }
 
-function isEntryTuple(t: unknown): t is EntryTuple {
-  if (!Array.isArray(t) || t.length !== 9) return false;
-  if (t[0] !== null && typeof t[0] !== 'number') return false;
-  if (t[1] !== null && typeof t[1] !== 'number') return false;
-  return typeof t[2] === 'number' && typeof t[3] === 'number' && (t[4] === 0 || t[4] === 1) &&
-    Array.isArray(t[5]) && Array.isArray(t[6]) && Array.isArray(t[7]) && Array.isArray(t[8]);
-}
+/** 当前版本条目元组的元数（v7 = 10；第 10 位 = refs 名录摘要） */
+const CURRENT_ARITY = 10;
 
 function isRefTuple(t: unknown): t is RefTuple {
   return (
@@ -234,6 +325,36 @@ function isFunctionTuple(t: unknown): t is FunctionTuple {
   return (t[3] as unknown[]).every(
     (p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && (p[1] === 0 || p[1] === 1),
   );
+}
+
+/**
+ * **逐条目**结构校验（`arity` 由版本表给：v7 = 10、v6 = 9）。
+ * 通过 ⇒ 归一成 10 位元组（v6 缺的第 10 位补 `null` = 溯源未知，**不猜值**）；不通过 ⇒ null。
+ * 校验是急的：函数/声明/引用/标签每一位都查完才返回（懒还原不打折 fail-closed）。
+ */
+function validateEntryTuple(t: unknown, arity: number): EntryTuple | null {
+  if (!Array.isArray(t) || t.length !== arity) return null;
+  if (t[0] !== null && typeof t[0] !== 'number') return null;
+  if (t[1] !== null && typeof t[1] !== 'number') return null;
+  if (typeof t[2] !== 'number' || typeof t[3] !== 'number') return null;
+  if (t[4] !== 0 && t[4] !== 1) return null;
+  if (!Array.isArray(t[5]) || !Array.isArray(t[6]) || !Array.isArray(t[7]) || !Array.isArray(t[8])) return null;
+  if (arity === CURRENT_ARITY && t[9] !== null && typeof t[9] !== 'number') return null;
+  const fns = t[5] as unknown[];
+  const dims = t[6] as unknown[];
+  const refs = t[7] as unknown[];
+  const labels = t[8] as unknown[];
+  if (!fns.every(isFunctionTuple)) return null;
+  if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
+    return null;
+  }
+  if (!refs.every(isRefTuple)) return null;
+  if (!labels.every(isLabelTuple)) return null;
+  // 当前形态**原样返回**（不复制）：`encodeEntries` 的落盘快路径靠"元组还是盘上那个对象"来免重建，
+  // 复制一下就让 100k 级条目全走重建路径了；旧形态才补第 10 位（null = 溯源未知，不猜值）
+  const arr = t as unknown[];
+  const normalized: unknown[] = arity === CURRENT_ARITY ? arr : [...arr, null];
+  return normalized as unknown as EntryTuple;
 }
 
 function toFunction(path: string, [name, startLine, endLine, params, flags, doc]: FunctionTuple): ErbFunction {
@@ -276,10 +397,26 @@ function lazyFile(path: string, tuple: EntryTuple): ErbFile {
   return file;
 }
 
+/** 校验过的元组 → 内存条目（键即路径 ⇒ 回填 `file.path` / `function.filePath`） */
+function entryFromTuple(path: string, tuple: EntryTuple): SnapshotEntry {
+  const refsNamesFp = tuple[9];
+  return {
+    mtimeMs: tuple[0],
+    size: tuple[1],
+    textLength: tuple[2],
+    file: lazyFile(path, tuple),
+    refs: tuple[7] as unknown as FileRefs, // 同形零拷贝（见 SnapshotEntry.refs 注）
+    // 溯源未知（v6 补的 null）⇒ **不留这个键**：与"条目本来没这个字段"同形，
+    // 也让 round-trip 判据（decodeEntries(encodeEntries(x))toEqual x）不被 null 撑歪
+    ...(typeof refsNamesFp === 'number' ? { refsNamesFp } : {}),
+  };
+}
+
 /**
- * 还原盘上元组为内存条目；结构任一不符 ⇒ null（整体弃用，全量重建）。
- * 键即路径 ⇒ 回填 `file.path` 与 `function.filePath`；`normalizedName` 按 scanner 的
- * 唯一定义（`name.toUpperCase()`）回填（惰性，在 `toFunction` / `aggregateIndex` 里）。
+ * 还原盘上元组为内存条目（**当前版本**形态，10 位）；结构任一不符 ⇒ null（整体弃用）。
+ *
+ * 走这里的只有"当前键 + 当前版本"那份快照；旧版本 / 部分损坏的盘上数据由
+ * `salvageSnapshot` 逐条目处理（PERF-12a）。
  *
  * **校验急、还原懒**：每个函数元组 / 声明元组 / 引用元组在 decode 时逐条查完
  * （fail-closed 不打折），查过之后对象构造才推迟。
@@ -288,23 +425,99 @@ export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | nul
   if (typeof raw !== 'object' || raw === null) return null;
   const out: Record<string, SnapshotEntry> = {};
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!isEntryTuple(value)) return null;
-    const [mtimeMs, size, textLength, , , fns, dims, refs, labels] = value;
-    if (!fns.every(isFunctionTuple)) return null;
-    if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
-      return null;
-    }
-    if (!refs.every(isRefTuple)) return null;
-    if (!labels.every(isLabelTuple)) return null;
-    out[path] = {
-      mtimeMs,
-      size,
-      textLength,
-      file: lazyFile(path, value),
-      refs: refs as unknown as FileRefs, // 同形零拷贝（见 SnapshotEntry.refs 注）
-    };
+    const tuple = validateEntryTuple(value, CURRENT_ARITY);
+    if (tuple === null) return null;
+    out[path] = entryFromTuple(path, tuple);
   }
   return out;
+}
+
+/** 路径的**对号入座**键（写法无关：斜杠方向 + 大小写 + 尾分隔符） */
+function pathKey(p: string): string {
+  return p.replace(/\\/g, '/').toLowerCase();
+}
+
+/**
+ * 逐条目 salvage（**纯函数**，PERF-12a 的"作废不连坐"）：结构不符的条目**只丢那一条**，
+ * 其余原样还原成可复用条目。
+ *
+ * `keyToPath`（本次 walkDir 的路径表，按 `pathKey` 索引）负责把条目键**对号入座**到
+ * 本轮真正在盘上的那串写法——rootDir 换了写法（`\` vs `/`、大小写）时条目键也跟着换写法，
+ * 不归位就一条都认不出、白 salvage 一场。归位发生在建懒外壳**之前**，
+ * 所以 `file.path` / `function.filePath` 用的就是本轮的写法（下游按路径比对才不串）。
+ *
+ * 与 `decodeEntries` 的分工不是"松一档"而是**换了粒度**：`decodeEntries` 的 fail-closed
+ * 说的是"这份数据的形状不是我认识的那份 ⇒ 一条都不信"，那由**信封版本**（`salvageSnapshot`
+ * 的版本表）决定；进了版本表之后，单条目结构不符只是"这一条我读不懂" ⇒ 那一条判过期、
+ * 由调用方重读该文件——重读的结果是真值，不存在"复用错数据"的可能。
+ */
+export function salvageEntries(
+  raw: unknown,
+  arity: number,
+  keyToPath?: ReadonlyMap<string, string>,
+): { entries: Record<string, SnapshotEntry>; skipped: number } | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const out: Record<string, SnapshotEntry> = {};
+  let skipped = 0;
+  for (const [stored, value] of Object.entries(raw as Record<string, unknown>)) {
+    const tuple = validateEntryTuple(value, arity);
+    if (tuple === null) {
+      skipped++;
+      continue;
+    }
+    const path = keyToPath?.get(pathKey(stored)) ?? stored;
+    out[path] = entryFromTuple(path, tuple);
+  }
+  return { entries: out, skipped };
+}
+
+/** salvage 的产出（`salvageSnapshot` 的返回） */
+export interface SalvagedSnapshot extends IndexSnapshot {
+  /** 结构不符被丢弃、需要重读重扫的条目数 */
+  readonly skipped: number;
+  /** 来自**旧版本**盘上形态（条目缺 refs 名录摘要 ⇒ 其 refs 一律标为可疑） */
+  readonly legacy: boolean;
+  /** 装载用的键（供"换代后必须改写回当前键"的判定） */
+  readonly key: string;
+}
+
+/**
+ * 把**任意候选键**上的盘上数据 salvage 成可用快照（**纯函数**，不碰存储）。
+ *
+ * 判据顺序（任一步不过 ⇒ null ⇒ 该键整体 unusable，绝不全盘当真）：
+ * 1. `version` 必须在 `SALVAGEABLE_VERSIONS` 里（准入纪律见那张表的头注）——
+ *    不在表里 = 条目字段含义不可证 = **一条都不复用**（≤v5 缺 `labels` 就是这种）；
+ * 2. `rootDir` 必须是同一项目根（写法无关，见 `sameProjectRoot`）——
+ *    盘符变了 / 目录挪了 ⇒ 不是同一项目 ⇒ 不复用（条目键是绝对路径，跨项目不许对号入座）；
+ * 3. `savedAt` 必须是有限数；
+ * 4. 条目逐条校验，坏几条丢几条（`skipped`）。
+ */
+export function salvageSnapshot(
+  raw: unknown,
+  opts: { readonly rootDir: string; readonly key: string; readonly knownPaths?: readonly string[] },
+): SalvagedSnapshot | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const shape = SALVAGEABLE_VERSIONS.get(r.version as number);
+  if (shape === undefined) return null;
+  if (typeof r.rootDir !== 'string' || !sameProjectRoot(r.rootDir, opts.rootDir)) return null;
+  if (typeof r.savedAt !== 'number' || !Number.isFinite(r.savedAt)) return null;
+  let keyToPath: Map<string, string> | undefined;
+  if (opts.knownPaths !== undefined) {
+    keyToPath = new Map();
+    for (const p of opts.knownPaths) keyToPath.set(pathKey(p), p);
+  }
+  const salvaged = salvageEntries(r.entries, shape.arity, keyToPath);
+  if (salvaged === null) return null;
+  return {
+    version: SNAPSHOT_VERSION,
+    rootDir: opts.rootDir,
+    savedAt: r.savedAt,
+    entries: salvaged.entries,
+    skipped: salvaged.skipped,
+    legacy: !shape.hasRefsFp,
+    key: opts.key,
+  };
 }
 
 /**
@@ -428,17 +641,62 @@ export function diffSnapshot(
   return { reusable, stale };
 }
 
-/** 校验未知数据是否为**本项目**的 v5 快照；任一不符返回 null（整体弃用） */
+/** 校验未知数据是否为**本项目**的当前版本快照；任一不符返回 null（整体弃用） */
 export function coerceSnapshot(raw: unknown, rootDir: string): IndexSnapshot | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
   if (r.version !== SNAPSHOT_VERSION) return null;
-  if (r.rootDir !== rootDir) return null;
+  // 同一项目根的**写法变体**（大小写 / 斜杠方向 / 尾分隔符）不算换项目（PERF-12a）；
+  // 盘符变了、目录挪了依然判不同项目 ⇒ 不复用
+  if (typeof r.rootDir !== 'string' || !sameProjectRoot(r.rootDir, rootDir)) return null;
   if (typeof r.savedAt !== 'number' || !Number.isFinite(r.savedAt)) return null;
-  // 条目结构（元组长度 / 类型 / 形参与注释位）由 decodeEntries 逐条校验，不符 ⇒ 整体弃用
+  // 条目结构（元组长度 / 类型 / 形参与注释位 / refs 名录摘要位）由 decodeEntries 逐条校验，不符 ⇒ 整体弃用
   const entries = decodeEntries(r.entries);
   if (entries === null) return null;
   return { version: SNAPSHOT_VERSION, rootDir, savedAt: r.savedAt, entries };
+}
+
+/* ---------------------------------------------------------------------------
+ * 名录摘要（refs 溯源判据，PERF-12a）
+ * ------------------------------------------------------------------------- */
+
+/**
+ * 名字表摘要（**顺序无关**的 48 位整型指纹，可直接进 JSON、可用 `number` 逐位比）。
+ *
+ * 为什么需要它：反向引用"哪些记号算引用"的判据是全局 `byName`，而快照复用只按
+ * mtime+size 判"正文没变"。旁处新增一个 `@函数` 时，未变文件的正文没动、**它的 refs 却缺边**
+ * （v4 起就有这个洞，此前无人记账）——所以每条 refs 都要记下"我是在哪张名录下扫出来的"。
+ * 摘要只服务这一等比，不参与任何解析语义。
+ *
+ * 双通道累加（加法和 ⊕ 旋转后异或）+ 条数掺进种子：单条 32 位太薄；
+ * 两条独立通道合成一个 48 位值（`< 2^53` ⇒ JSON 往返逐位精确，不必退化成字符串）。
+ */
+export function nameSetDigest(names: Iterable<string>): number {
+  let sum = 0x811c9dc5;
+  let xor = 0x01000193;
+  let count = 0;
+  for (const name of names) {
+    count++;
+    let h = (0x811c9dc5 ^ name.length) >>> 0;
+    for (let i = 0; i < name.length; i++) {
+      h ^= name.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    h >>>= 0;
+    sum = (sum + h) >>> 0;
+    xor = (xor ^ (((h << 7) | (h >>> 25)) >>> 0)) >>> 0;
+  }
+  sum = (sum + Math.imul(count, 0x9e3779b1)) >>> 0;
+  xor = (xor ^ Math.imul(count ^ 0x5bf03635, 0x85ebca6b)) >>> 0;
+  return sum * 0x10000 + (xor >>> 16);
+}
+
+/**
+ * 存量 refs 能不能直接续用：条目记下的名录摘要 === 当前名录摘要。
+ * 不等（含 `undefined`＝溯源未知，v6 及更早的盘上条目）⇒ 判可疑，由消费侧重扫补正。
+ */
+export function refsAreReusable(entry: SnapshotEntry, currentDigest: number): boolean {
+  return entry.refs !== undefined && entry.refsNamesFp === currentDigest;
 }
 
 /**
@@ -469,15 +727,20 @@ export function mergeEntries(
  * 为什么单独一步而不是并进 `mergeEntries`：`refs` 要等**全项目 `byName` 建好**才能扫
  * （判据是全局名字表），而 `mergeEntries` 发生在解析段。挂接是纯函数重建条目对象，
  * 不原地改——`SnapshotEntry` 的 readonly 纪律不破。
+ *
+ * `refsNamesFp`（PERF-12a）只跟着**这次真的挂上去的**那批 refs 走：谁被挂上新流水，
+ * 谁才配有"我是在这张名录下扫的"这条溯源；没有新流水的条目零触碰（原样的 refs +
+ * 原样的溯源位留在一起，不能被别人的名录摘要冒充）。
  */
 export function attachRefs(
   entries: Record<string, SnapshotEntry>,
   refsByPath: ReadonlyMap<string, FileRefs>,
+  refsNamesFp?: number,
 ): Record<string, SnapshotEntry> {
   const out: Record<string, SnapshotEntry> = {};
   for (const [path, e] of Object.entries(entries)) {
     const refs = refsByPath.get(path);
-    out[path] = refs === undefined ? e : { ...e, refs };
+    out[path] = refs === undefined ? e : { ...e, refs, ...(refsNamesFp === undefined ? {} : { refsNamesFp }) };
   }
   return out;
 }

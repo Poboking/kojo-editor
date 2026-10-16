@@ -40,8 +40,16 @@ export {
   coerceSnapshot,
   diffSnapshot,
   mergeEntries,
+  nameSetDigest,
+  projectRootKey,
+  refsAreReusable,
+  sameProjectRoot,
+  salvageEntries,
+  salvageSnapshot,
+  snapshotKeyCandidatesFor,
   snapshotKeyFor,
   type IndexSnapshot,
+  type SalvagedSnapshot,
   type SnapshotEntry,
 } from './snapshot';
 
