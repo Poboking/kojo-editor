@@ -615,15 +615,39 @@ fn extract_into<R: Read + std::io::Seek>(
     })
 }
 
+/// 把解压这段纯 CPU + 磁盘的活挪到**阻塞线程池**上跑（形态照 `lib.rs` 的 `search_text`）。
+///
+/// 为什么必须是 `async` + `spawn_blocking`：`extract_into` 两遍扫中央目录 + 逐条 64 KB
+/// 落盘，限额是 5000 条目 / 128 MiB。同步命令跑在主线程上 ⇒ 大包解压期间**整个 WebView
+/// 冻住**（今天注册表包只有 1 文件 / 471 B 量不出来，属结构性隐患，不是"不存在"）。
+///
+/// **语义一点没改**：闸与落点决定权仍留在命令内（`market_extract` 先 `staging_dir` +
+/// `ensure_write_allowed` 再把路径交下来，本函数只碰暂存子树），失败清扫、两遍核闸、
+/// 逐条目字节上限全部沿用 `extract_staging`（下面那条判据钉的是"逐字段同果"）。
+pub(crate) async fn extract_staging_off_thread(
+    staging: PathBuf,
+    staging_name: String,
+    target_name: String,
+    limits: StagingLimits,
+) -> Result<MarketExtractResultDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_staging(&staging, &staging_name, &target_name, &limits)
+    })
+    .await
+    .map_err(|e| format!("market_extract: 解压线程失败：{e}"))?
+}
+
 #[tauri::command]
-pub(crate) fn market_extract(
+pub(crate) async fn market_extract(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
     staging_name: String,
     target_name: String,
     limits: StagingLimits,
 ) -> Result<MarketExtractResultDto, String> {
+    // 写允许域第二道闸**留在命令内、与落盘同命令**（铁律 6 的形态），且仍在移交之前：
+    // 越权连阻塞线程池都上不去，一个字节都不会被解出来。
     let staging = staging_dir(&app)?;
     ensure_write_allowed(&app, &state, &staging, "market_staging")?;
-    extract_staging(&staging, &staging_name, &target_name, &limits)
+    extract_staging_off_thread(staging, staging_name, target_name, limits).await
 }

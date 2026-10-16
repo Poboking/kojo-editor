@@ -12,9 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::market::{
     advance_byte_cap, container_name_problem, content_length_problem, download_to_staging,
-    entry_type_problem, extract_staging, fetch_text, host_in_allowlist, market_fetch_text,
-    redirect_problem, staging_component_problem, url_problem, utf8_text, DownloadOptions,
-    StagingLimits,
+    entry_type_problem, extract_staging, extract_staging_off_thread, fetch_text, host_in_allowlist,
+    market_fetch_text, redirect_problem, staging_component_problem, url_problem, utf8_text,
+    DownloadOptions, StagingLimits,
 };
 
 /// 限额字面照契约常量（`plugin-api/market.ts`）；Rust 侧不写死，测试里显式传入。
@@ -469,6 +469,68 @@ fn extract_rejects_tampered_payload_and_removes_partial_output() {
     );
     assert!(!staging.dir().join("out").exists(), "校验失败仍留着半截解压内容");
     assert_only_container(&staging, "a.zip");
+}
+
+/// PERF-10 ③：`market_extract` 改成 `async` + `spawn_blocking` 之后的两条判据。
+///
+/// 结构证据（为什么必须改）：`extract_into` 两遍扫中央目录 + 逐条 64 KB 落盘，限额
+/// 5000 条目 / 128 MiB，而同步命令跑在主线程上 ⇒ 大包期间整个 WebView 冻住
+/// （今天注册表包 1 文件 / 471 B 量不出来，是结构性隐患而不是"不存在"）。
+/// `spawn_blocking` 的闭包要求 `'static + Send`，编译器直接把关 —— 这条改动的形态
+/// 与同文件 `market_download` / `market_fetch_text`（都是 `async fn`）对齐。
+///
+/// 这里**不测异步本身**（那要 AppHandle），测的是"换成异步没换掉任何解压语义"：
+/// 1. off-thread 形态与同步形态**逐字段同果**（条目表、总字节、落盘字节）；
+/// 2. 容器名字面闸照样在**一个字节都没写出去**之前拒，且拒因文本逐字不变
+///    （闸在命令内、与落盘同命令那条纪律，挪线程不许把它挪到线程里去）。
+#[test]
+fn extract_off_thread_matches_sync_and_keeps_the_name_gate() {
+    let staging = Staging::new("off-thread");
+    let payload: Vec<u8> = (0..4096usize).map(|i| (i % 251) as u8).collect();
+    let bytes = build_zip(&[
+        ("pack.json", b"{\"schema\":1}".as_slice()),
+        ("files/a.bin", payload.as_slice()),
+        ("files/deep/b.bin", payload.as_slice()),
+    ]);
+    write_container(&staging, "a.zip", &bytes);
+
+    let sync = extract_staging(staging.dir(), "a.zip", "sync-out", &LIMITS).unwrap();
+    let off = tauri::async_runtime::block_on(extract_staging_off_thread(
+        staging.dir().to_path_buf(),
+        "a.zip".to_string(),
+        "off-out".to_string(),
+        LIMITS,
+    ))
+    .expect("off-thread 形态必须与同步形态同样成功");
+
+    let pair = |r: &crate::market::MarketExtractResultDto| -> Vec<(String, u64)> {
+        r.entries
+            .iter()
+            .map(|e| (e.path.clone(), e.bytes))
+            .collect()
+    };
+    assert_eq!(pair(&sync), pair(&off), "条目表逐字段不一致：异步换了语义");
+    assert_eq!(sync.total_bytes, off.total_bytes, "总字节不一致");
+    assert_eq!(off.entries.len(), 3);
+    for dir in ["sync-out", "off-out"] {
+        assert_eq!(std::fs::read(staging.dir().join(dir).join("files/a.bin")).unwrap(), payload);
+        assert_eq!(
+            std::fs::read(staging.dir().join(dir).join("files/deep/b.bin")).unwrap(),
+            payload,
+            "{dir}：深路径的父目录没建出来"
+        );
+    }
+
+    // 容器名字面闸：拒在动盘之前，且拒因前缀逐字照旧（`market_extract:`）
+    let err = tauri::async_runtime::block_on(extract_staging_off_thread(
+        staging.dir().to_path_buf(),
+        "../evil.zip".to_string(),
+        "evil-out".to_string(),
+        LIMITS,
+    ))
+    .expect_err("非法容器名必须拒");
+    assert!(err.starts_with("market_extract:"), "拒因前缀变了：{err}");
+    assert!(!staging.dir().join("evil-out").exists(), "被拒的调用留下了目标目录");
 }
 
 #[test]

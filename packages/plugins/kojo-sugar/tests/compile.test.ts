@@ -86,6 +86,9 @@ function makeFs(io: HarnessOptions = {}) {
       if (!b) throw new Error(`not found: ${p}`);
       return b;
     },
+    // 契约 additive（2026-10-16 市场与导入 IO 批）：批量读 = 逐条读 + 失败位 null
+    readBytesMany: async (paths: readonly string[]): Promise<Array<Uint8Array | null>> =>
+      Promise.all(paths.map(async (p) => api.readBytes(p).catch(() => null))),
     writeText: async (p: string, text: string, _opts?: WriteTextOptions): Promise<void> => {
       guard(p);
       files[p] = new TextEncoder().encode(text);
@@ -121,6 +124,8 @@ function makeFs(io: HarnessOptions = {}) {
     addAppWritableRoot: () => {},
     appDataDir: async () => '/appdata',
     rename: async () => { throw new Error('rename is not wired in this fake'); },
+    // 契约 additive（2026-10-16 市场与导入 IO 批）：本夹具不提供服务端复制 ⇒ 走到即红
+    copyFile: async () => { throw new Error('copyFile is not wired in this fake'); },
     removeDir: async () => { throw new Error('removeDir is not wired in this fake'); },
     chooseWorkspaceRoot: async () => {
       throw new Error('chooseWorkspaceRoot is not supported by this fake');

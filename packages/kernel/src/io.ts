@@ -272,6 +272,36 @@ export class FileIOServiceImpl implements FileIO {
     return this.bridge.readFileBytes(path);
   }
 
+  /**
+   * 批量读原始字节（2026-10-16 市场与导入 IO 批）：按 `READ_BATCH_SIZE` 分批走
+   * `readFilesRaw`（一批一趟 IPC，Tauri 侧二进制帧）。
+   *
+   * **刻意不进会话文本缓存**（与 `readTexts` 的差别）：本方法的用途是"把刚落盘的那一份
+   * 字节读回来算校验锚"，缓存会让锚变成上一版的锚；口径与 `readBytes` 一致 = 每次真读盘。
+   * 逐文件失败位为 `null` 并出声（批量语义不整批抛；失败条件与 `readBytes` 抛错一致）。
+   */
+  async readBytesMany(paths: readonly string[]): Promise<Array<Uint8Array | null>> {
+    const out: Array<Uint8Array | null> = new Array<Uint8Array | null>(paths.length).fill(null);
+    for (let start = 0; start < paths.length; start += READ_BATCH_SIZE) {
+      const idx: number[] = [];
+      const chunk: string[] = [];
+      for (let k = start; k < Math.min(start + READ_BATCH_SIZE, paths.length); k++) {
+        idx.push(k);
+        chunk.push(paths[k]!);
+      }
+      const reads = await this.bridge.readFilesRaw(chunk);
+      for (let k = 0; k < idx.length; k++) {
+        const r: RawFileRead | undefined = reads[k];
+        if (!r || r.status !== 'ok') {
+          this.log?.warn(`readBytesMany: 读失败（${r?.status ?? 'missing-entry'}）：${chunk[k]!}`);
+          continue;
+        }
+        out[idx[k]!] = r.data;
+      }
+    }
+    return out;
+  }
+
   /* ------------------------------ 写 ------------------------------ */
 
   async writeText(path: string, text: string, opts?: WriteTextOptions): Promise<void> {
@@ -526,6 +556,21 @@ export class FileIOServiceImpl implements FileIO {
     this.assertWritable(from);
     this.assertWritable(to);
     await this.bridge.rename(from, to);
+  }
+
+  /**
+   * 服务端复制：**只对 `to` 断言**（见契约 `FileIO.copyFile`）。
+   *
+   * 读侧不过闸是**刻意的**，不是漏闸：`from` 恒在只读的游戏目录里，而"读"从来
+   * 不受写允许域约束；把 `rename` 的两端断言照抄过来会误拒整条导入链路。
+   * 写侧与 `writeBytes` 同闸同罚（`WriteNotAllowedError`），平台侧还有第二道闸。
+   * 本方法不新增任何"域外写"能力 ⇒ 铁律 6 的唯一法定通道仍然只有 `exportFile`。
+   */
+  async copyFile(from: string, to: string): Promise<void> {
+    this.assertWritable(to);
+    await this.bridge.copyFile(from, to);
+    // 落盘内容换了：会话文本缓存必须失效（口径与 writeBytes 逐字相同）
+    this.invalidateTextCache(to);
   }
 
   async removeDir(path: string): Promise<void> {

@@ -10,7 +10,7 @@ import type {
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { WORKSPACE_MANIFEST_FILE, dirname, isAbsolute, isPathUnder, join } from '@kojo/plugin-api';
+import { WORKSPACE_MANIFEST_FILE, isAbsolute, isPathUnder, join } from '@kojo/plugin-api';
 
 /**
  * 作者工作区服务实现（内核 `kernel.workspaces`）。
@@ -418,10 +418,13 @@ export class WorkspaceServiceImpl implements WorkspaceService {
       targets.push({ from: e.path, to: this.resolveIn(projectId, join(input.dirName, rel)) });
     }
 
+    // 每文件**一趟**服务端复制：字节不过 JS、父目录由平台侧顺手建（见契约 `FileIO.copyFile`）。
+    // 旧形态是 `ensureDir` + `readBytes` + `writeBytes` 三趟串行往返，且写侧字节还要
+    // base64 过界；导入是"用户点一次就付一次钱"的面，N 个文件就是 3N 次 IPC。
+    // 闸的口径没变：`to` 恒由 `resolveIn` 落在项目目录（常驻可写根）内，越权照样
+    // `WriteNotAllowedError`；`from` 是只读源，读不受写允许域约束（这正是导入的常态）。
     for (const t of targets) {
-      await this.deps.io.ensureDir(dirname(t.to));
-      const bytes = await this.deps.io.readBytes(t.from);
-      await this.deps.io.writeBytes(t.to, bytes);
+      await this.deps.io.copyFile(t.from, t.to);
     }
 
     const artifact: WorkspaceArtifact = {

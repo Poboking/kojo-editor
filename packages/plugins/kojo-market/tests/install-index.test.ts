@@ -68,6 +68,17 @@ function fakeIo(root: string): FileIO {
     async readBytes(p: string): Promise<Uint8Array> {
       return new Uint8Array(readFileSync(p));
     },
+    // 装包搬运按批读回（2026-10-16 市场与导入 IO 批）：语义 = 内核契约的批量读，
+    // 逐文件失败位为 null 而不整批抛（与真桥的 readFilesRaw 三态同口径）
+    async readBytesMany(paths: readonly string[]): Promise<Array<Uint8Array | null>> {
+      return paths.map((p) => {
+        try {
+          return new Uint8Array(readFileSync(p));
+        } catch {
+          return null;
+        }
+      });
+    },
     async writeBytes(p: string, data: Uint8Array): Promise<void> {
       mkdirSync(nodeJoin(p, '..'), { recursive: true });
       writeFileSync(p, data);

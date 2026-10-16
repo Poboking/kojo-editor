@@ -199,6 +199,19 @@ describe('市场装卸（真内核）', () => {
       WriteNotAllowedError,
     );
     await expect(h.io.removeDir(join(h.appData, 'elsewhere'))).rejects.toBeInstanceOf(WriteNotAllowedError);
+    // `copyFile` 的闸语义**与 rename 不同**（PERF-10 ①）：**只对 to 断言**。
+    // `from` 侧不过闸是刻意的——读本来就不受写允许域约束，照 rename 抄成两端断言
+    // 会把「从只读目录复制进允许域」这条正常链路误拒；`to` 侧与 `writeBytes` 同闸同罚，
+    // 故本原语**不构成第二条绕开写允许域的通道**（法定那条仍只有 `exportFile`，对话框即授权）。
+    const foreign = join(h.appData, 'elsewhere');
+    mkdirSync(foreign, { recursive: true });
+    writeFileSync(nodeJoin(foreign, 'a.bin'), '只读源', 'utf8');
+    await h.io.copyFile(join(foreign, 'a.bin'), join(h.market, 'b.bin'));
+    expect(readFileSync(nodeJoin(h.market, 'b.bin'), 'utf8')).toBe('只读源');
+    await expect(
+      h.io.copyFile(join(h.market, 'b.bin'), join(foreign, 'c.bin')),
+    ).rejects.toBeInstanceOf(WriteNotAllowedError);
+    expect(existsSync(nodeJoin(foreign, 'c.bin'))).toBe(false);
   });
 
   it('装成功：落点逐字节 = 原包（Shift-JIS + BOM + 二进制样本，证明没转码）', async () => {

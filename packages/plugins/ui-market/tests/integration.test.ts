@@ -144,6 +144,11 @@ function makeIo(): CountingIo {
       if (b === undefined) throw new Error(`not found: ${p}`);
       return b;
     },
+    async readBytesMany(paths) {
+      // 装包搬运的批量读（2026-10-16 市场与导入 IO 批）：一批一条命令、逐文件失败位 null
+      calls.push(`readBytesMany:${paths.length}`);
+      return paths.map((p) => fs.files.get(p) ?? null);
+    },
     async writeText(p, text) {
       // 装卸链路一律字节级（契约纪律）；这里只为凑齐 FileIO 的面，走到即红
       throw new Error(`面板/市场不该走文本写盘：${p}（${text.length} 字）`);
@@ -193,6 +198,10 @@ function makeIo(): CountingIo {
     async rename(from, to) {
       calls.push(`rename:${from}→${to}`);
       fs.move(from, to);
+    },
+    async copyFile() {
+      // 契约 additive（2026-10-16 市场与导入 IO 批）：面板与市场这条线不用服务端复制 ⇒ 走到即红
+      throw new Error('面板/市场不该走服务端复制');
     },
     async removeDir(p) {
       calls.push(`removeDir:${p}`);

@@ -124,6 +124,23 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * 装包搬运的分批大小（2026-10-16 市场与导入 IO 批）。
+ *
+ * 与内核批量读的读批同量级（`kernel/src/io.ts` 的 `READ_BATCH_SIZE = 64`）：本数只决定
+ * "一批几趟压成一条批量命令"，**不改任何逐文件的判定顺序**。取 64 而不是"整包一批"：
+ * 上限是 5000 条目 / 128 MiB（契约 `MARKET_MAX_FILE_ENTRIES` / `MARKET_MAX_UNPACKED_BYTES`），
+ * 一次全读进 JS 等于把包体上限当堆上限用，而解帧的同步段也随时线性涨。
+ */
+const COMMIT_CHUNK_SIZE = 64;
+
+/** 按批切片（保持原序；批内顺序 = 清单顺序 ⇒ 拒因先后与逐文件形态一致） */
+function* chunked<T>(items: readonly T[], size: number): Generator<readonly T[]> {
+  for (let start = 0; start < items.length; start += size) {
+    yield items.slice(start, start + size);
+  }
+}
+
 /** 存储域里的记录形状核（被人手改过也不崩，坏条目丢弃并出声） */
 function isInstalledPack(v: unknown): v is InstalledPack {
   if (typeof v !== 'object' || v === null) return false;
@@ -425,44 +442,61 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     await quietRemove(staging); // 上次崩在这里的残壳
     await quietRemove(stale);
     try {
-      for (const f of manifest.files) {
-        let bytes: Uint8Array;
-        try {
-          bytes = await io.readBytes(join(sourceDir, f.path));
-        } catch (err) {
-          throw new MarketError(
-            'source-unreadable',
-            `清单声明的文件在源目录里读不到：${f.path} —— ${String(err)}`,
-            f.path,
-          );
+      // 源侧：一批一趟读回字节（`readBytesMany`），逐个核字节数后写进暂存区。
+      // `ensureDir(dirname(dst))` 那一趟删了：平台的写命令本来就 `create_dir_all` 父目录，
+      // 而写允许域的判定对象是**落点文件本身**（`writeBytes` 已断言）——目录那趟从未参与判闸，
+      // 却让每文件多付一次往返（旧形态合计 4N 趟读写）。
+      for (const chunk of chunked(manifest.files, COMMIT_CHUNK_SIZE)) {
+        const got = await io.readBytesMany(chunk.map((f) => join(sourceDir, f.path)));
+        for (let k = 0; k < chunk.length; k++) {
+          const f = chunk[k]!;
+          const bytes = got[k] ?? null;
+          if (bytes === null) {
+            // 批量语义下失败位是 null（契约：不整批抛）；拒因与旧形态同一条码、同一句人话，
+            // 底层为什么读不动由内核 io 的 warn 出声（此处不再逐文件重试一趟单读）
+            throw new MarketError(
+              'source-unreadable',
+              `清单声明的文件在源目录里读不到：${f.path} —— 批量读回该位为失败`,
+              f.path,
+            );
+          }
+          if (bytes.length !== f.bytes) {
+            throw new MarketError(
+              'entry-bytes',
+              `字节数对不上清单：${f.path} 声明 ${f.bytes}B，实读 ${bytes.length}B`,
+              f.path,
+            );
+          }
+          await io.writeBytes(join(staging, f.path), bytes);
         }
-        if (bytes.length !== f.bytes) {
-          throw new MarketError(
-            'entry-bytes',
-            `字节数对不上清单：${f.path} 声明 ${f.bytes}B，实读 ${bytes.length}B`,
-            f.path,
-          );
-        }
-        const dst = join(staging, f.path);
-        await io.ensureDir(dirname(dst));
-        await io.writeBytes(dst, bytes);
       }
-      for (const f of manifest.files) {
-        const bytes = await io.readBytes(join(staging, f.path));
-        if (bytes.length !== f.bytes) {
-          throw new MarketError(
-            'entry-bytes',
-            `暂存区里的字节数和清单不符：${f.path} 声明 ${f.bytes}B，实读 ${bytes.length}B`,
-            f.path,
-          );
-        }
-        const hex = await sha256Hex(bytes);
-        if (hex !== f.sha256) {
-          throw new MarketError(
-            'entry-sha256',
-            `校验锚不符（包内容与 pack.json 说的不是同一份东西）：${f.path} 期望 ${f.sha256}，实算 ${hex}`,
-            f.path,
-          );
+      // 暂存区读回算锚：哈希**必须**来自落盘那一份（源侧哈希会让"写的"与"核的"是两个东西）。
+      // 这条读回是故意的，压趟只压"每文件一趟"的形态，不压"读谁"的语义。
+      for (const chunk of chunked(manifest.files, COMMIT_CHUNK_SIZE)) {
+        const got = await io.readBytesMany(chunk.map((f) => join(staging, f.path)));
+        for (let k = 0; k < chunk.length; k++) {
+          const f = chunk[k]!;
+          const bytes = got[k] ?? null;
+          if (bytes === null) {
+            // 刚写回来的东西读不到 = 盘上出事，不是清单不符 ⇒ 抛普通错，
+            // 由下面那条 catch 汇成 `install-move-failed`（与旧形态里 readBytes 抛错的落点一致）
+            throw new Error(`暂存区的文件读不回来：${f.path}`);
+          }
+          if (bytes.length !== f.bytes) {
+            throw new MarketError(
+              'entry-bytes',
+              `暂存区里的字节数和清单不符：${f.path} 声明 ${f.bytes}B，实读 ${bytes.length}B`,
+              f.path,
+            );
+          }
+          const hex = await sha256Hex(bytes);
+          if (hex !== f.sha256) {
+            throw new MarketError(
+              'entry-sha256',
+              `校验锚不符（包内容与 pack.json 说的不是同一份东西）：${f.path} 期望 ${f.sha256}，实算 ${hex}`,
+              f.path,
+            );
+          }
         }
       }
 

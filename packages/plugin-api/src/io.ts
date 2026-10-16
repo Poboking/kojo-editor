@@ -65,6 +65,21 @@ export interface FileIO {
   readTexts(paths: readonly string[]): Promise<Array<TextFile | null>>;
   readBytes(path: string): Promise<Uint8Array>;
   /**
+   * **批量**读原始字节（2026-10-16 市场与导入 IO 批；additive）。
+   *
+   * 语义与 `readBytes` 对齐（**字节级、零转码**、读侧不受写允许域约束），差异同
+   * `readTexts` 那三条：
+   * - 内部按批走平台批量原语（每批一次 IPC，Tauri 侧二进制帧、无 base64 膨胀）；
+   * - 逐文件失败**不抛整批**：失败位为 `null`（失败条件与 `readBytes` 抛错一致）；
+   * - **不经任何缓存**——与 `readBytes` 同口径，每次真读盘。
+   *   （这里读的是"刚落盘的那一份字节"，缓存会让校验锚变成"上一版的锚"，
+   *   市场装包的逐文件复核要的就是新鲜字节。）
+   *
+   * 返回数组与入参一一对应（含重复路径）。批量帧有一次性解帧成本，
+   * 单文件请用 `readBytes`。
+   */
+  readBytesMany(paths: readonly string[]): Promise<Array<Uint8Array | null>>;
+  /**
    * 写文本。
    * @throws WriteNotAllowedError 当路径不在可写白名单内
    */
@@ -162,6 +177,30 @@ export interface FileIO {
    * 而 `from` 越权意味着在搬别人的东西。
    */
   rename(from: string, to: string): Promise<void>;
+  /**
+   * **服务端复制**（2026-10-16 市场与导入 IO 批；additive）：字节全程**不过 JS**，
+   * 由平台侧一次搬完（Tauri = 一条 `copy_file` 命令，既不出字节也不建目录的往返）。
+   *
+   * 闸的语义**与 `rename` 不同，而且必须不同**：
+   * - **只对 `to` 断言** `assertWritable`（写侧照 `writeBytes` 同闸）；
+   * - **`from` 不过闸**——读路径本来就不受写允许域约束（整个游戏目录可读、不可写），
+   *   而"从只读目录复制进作者工作区"正是本原语的主要用途。**照 `rename` 抄成两端断言，
+   *   会把导入这条正常链路误拒**（`from` 恒在只读域内）。
+   *
+   * **这不是第二条绕开写允许域的通道**（铁律 6 的法定域外写通道只有 `exportFile`，
+   * 它的授权来自系统对话框的显式选择）：本方法的 `to` 是一个**普通路径参数**，
+   * 因此**必须**落在可写允许域内，否则 `WriteNotAllowedError`。
+   * 换句话说本原语只省往返，**一个字节都不多写**：目标侧的判定与 `writeBytes` 逐字相同，
+   * 平台侧另有第二道闸（Rust `copy_file` 的 `ensure_write_allowed(.., "copy_dst")`）。
+   *
+   * 其余口径：字节级（零转码，与 `readBytes`+`writeBytes` 同结果）；平台侧顺带
+   * 创建 `to` 的父目录（故调用方**不必**先 `ensureDir`——那会让每文件多出一趟往返）；
+   * `to` 已存在则被覆盖（与 `writeBytes` 的原子写同为"后写为准"，不做备份——
+   * 备份是 `writeText` 那条编辑链路的事，搬运链路不背）。
+   *
+   * @throws WriteNotAllowedError 当 `to` 不在可写白名单内（`from` 不参与判定）
+   */
+  copyFile(from: string, to: string): Promise<void>;
   /**
    * 递归删除目录（透传平台桥 `removeDir`；不存在时幂等成功）。
    * 同样先过 `assertWritable`——删是比写更狠的盘上动作。

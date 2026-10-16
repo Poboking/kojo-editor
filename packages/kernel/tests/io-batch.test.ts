@@ -234,3 +234,78 @@ describe('FileIOService · readTexts（批量路径 + 会话缓存）', () => {
     expect(dbg.hits + dbg.misses).toBe(2); // 计数如实：一次未命中也要看得见
   });
 });
+
+/**
+ * `readBytesMany`（2026-10-16 市场与导入 IO 批，PERF-10 ② 的底座）。
+ *
+ * 与 `readTexts` 同一套"按批一趟"的形态，但**两条口径刻意不同**：
+ * - 零转码（字节级），市场装包的校验锚算的就是这份字节；
+ * - **不进会话缓存**——装包的锚必须来自"刚落盘那一份"，缓存会把锚变成上一版的锚。
+ */
+describe('FileIOService · readBytesMany（批量字节读）', () => {
+  it('IPC 形状：150 条 = 3 趟 readFilesRaw（64/64/22），单文件读零趟；逐位与 readBytes 等字节', async () => {
+    const dir = path.join(tmpDir, 'raw1');
+    const files: string[] = [];
+    for (let i = 0; i < 150; i++) {
+      const f = path.join(dir, `f${String(i).padStart(3, '0')}.bin`);
+      // 非 UTF-8 字节：批量路径必须与单读一样原样返回（转码即毁包）
+      await writeRaw(f, Buffer.from([0x82, 0xb1, i & 0xff, 0x00, 0xff]));
+      files.push(f);
+    }
+    const bridge = countingBridge();
+    const io = new FileIOServiceImpl(bridge);
+
+    const batch = await io.readBytesMany(files);
+    expect(batch).toHaveLength(150);
+    expect(bridge.stats.readFilesRaw).toBe(3); // ceil(150/64)
+    expect(bridge.stats.readFileBytes).toBe(0);
+    expect(bridge.stats.statFiles).toBe(0); // 不判缓存 ⇒ 不 stat
+
+    const single = await Promise.all(files.map((p) => io.readBytes(p)));
+    expect(batch.map((b) => Array.from(b ?? []))).toEqual(single.map((b) => Array.from(b)));
+  });
+
+  it('重复路径逐位对应（一一对应是契约，不是集合）', async () => {
+    const f = path.join(tmpDir, 'raw2', 'dup.bin');
+    await writeRaw(f, Buffer.from([1, 2, 3]));
+    const io = new FileIOServiceImpl(countingBridge());
+    const out = await io.readBytesMany([f, f, f]);
+    expect(out.map((b) => Array.from(b ?? []))).toEqual([[1, 2, 3], [1, 2, 3], [1, 2, 3]]);
+  });
+
+  it('不进缓存：连着读两遍就是两趟真读盘（与 readTexts 的命中行为相反）', async () => {
+    const f = path.join(tmpDir, 'raw3', 'a.bin');
+    await writeRaw(f, Buffer.from([9]));
+    const bridge = countingBridge();
+    const io = new FileIOServiceImpl(bridge);
+
+    await io.readBytesMany([f]);
+    await io.readBytesMany([f]);
+    expect(bridge.stats.readFilesRaw).toBe(2);
+    expect(bridge.stats.statFiles).toBe(0);
+    expect(io.debugCaches().text.files).toBe(0); // 一个字节都没进文本缓存
+  });
+
+  it('失败位 null 且与 readBytes 抛错的失败条件一致（不整批抛）', async () => {
+    const dir = path.join(tmpDir, 'raw4');
+    const ok = path.join(dir, 'ok.bin');
+    const missing = path.join(dir, 'gone.bin');
+    await writeRaw(ok, Buffer.from([7, 7]));
+    const io = new FileIOServiceImpl(countingBridge());
+
+    const out = await io.readBytesMany([missing, ok]);
+    expect(out[0]).toBeNull();
+    expect(Array.from(out[1]!)).toEqual([7, 7]);
+    await expect(io.readBytes(missing)).rejects.toThrow();
+  });
+
+  it('读侧不受写允许域约束：一个可写根都没批也能批量读（市场源目录常在域外）', async () => {
+    const f = path.join(tmpDir, 'raw5', 'a.bin');
+    await writeRaw(f, Buffer.from([1]));
+    const io = new FileIOServiceImpl(countingBridge());
+    io.setWritableRoots([]);
+    expect(io.isWritable(f)).toBe(false);
+    const out = await io.readBytesMany([f]);
+    expect(Array.from(out[0]!)).toEqual([1]);
+  });
+});
