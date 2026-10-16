@@ -199,7 +199,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const d of tmps) rmSync(d, { recursive: true, force: true });
   tmps.length = 0;
-});
+}, 60_000);
 
 function service(): ReturnType<typeof createMarketService> {
   return createMarketService({

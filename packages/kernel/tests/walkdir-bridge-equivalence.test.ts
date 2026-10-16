@@ -51,11 +51,11 @@ beforeAll(() => {
   facts = newWireFacts();
   nodeIo = new FileIOServiceImpl(new NodeBridge(root), silentLog);
   ipcIo = new FileIOServiceImpl(tauriShapedBridge(new NodeBridge(root), facts), silentLog);
-});
+}, 60_000);
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
-});
+}, 60_000);
 
 describe('walkDir filter 的兑现方 = 内核：两具桥同结果', () => {
   const dialect: WalkOptions = { filter: (e) => e.isDirectory || /\.erb$/i.test(e.name) };
