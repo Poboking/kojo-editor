@@ -466,21 +466,42 @@ async function main() {
           if (kLeft !== 0) kProbs.push(`暂存区有 ${kLeft} 条残壳`);
 
           const kRowSel = `[...document.querySelectorAll('.panel-market .mk-list .mk-row')].find((r) => r.innerText.includes('版本 ${K_TARGET.version}'))`;
-          const kReq = await waitFor(
-            cdp,
-            `(() => {
+          /**
+           * **自己写循环，不用 `waitFor`**（1016 验收实测踩到）：`waitFor` 认「表达式返回真值」为就绪，
+           * 而这枚探针就绪前返回的是字符串 `'no-installed-row'`——字符串是**真值** ⇒ 第一次就"等到"，
+           * 60s 的等待形同虚设，把「滞后几秒才出现」读成「永远不出现」。
+           * 现在按 500ms 一轮真等到「点得动的卸载按钮」，并把**等了多少毫秒**记进读数
+           * （这条数就是 MK-1 的量化靶：装成功后卸载入口多久可见）。
+           */
+          let kReq = 'no-installed-row';
+          const kWaitedAt = Date.now();
+          for (;;) {
+            kReq = await cdp.evalJs(`(() => {
               const row = ${kRowSel};
               if (!row) return 'no-installed-row';
               const b = [...row.querySelectorAll('button')].find((e) => e.textContent.trim() === '卸载');
               if (!b) return 'no-uninstall-button';
-              if (b.disabled) return null;
+              if (b.disabled) return 'uninstall-disabled';
               b.click();
               return 'requested';
-            })()`,
-            60000,
-          );
+            })()`);
+            if (kReq === 'requested' || Date.now() - kWaitedAt > 60000) break;
+            await sleep(500);
+          }
+          const kRowWaitMs = Date.now() - kWaitedAt;
+          if (kReq === 'requested') {
+            /**
+             * 3s 这条线是**组长 2026-10-16 现定的**，不是产品承诺：装完到「已装」行出现要走一次
+             * `installed()` 重取 + 面板重绘，实测 **1178ms**（同轮复跑 1209ms）——那属正常的异步滞后。
+             * 判红只留给"刷新根本没接上"的形态（>3s 或压根不可点）。毫秒数**每次进 PASS 读数**，
+             * 别把这条改成静默通过：它就是 MK-1 要看的那个数。
+             */
+            if (kRowWaitMs > 3000) kProbs.push(`卸载入口在装成功后 ${kRowWaitMs}ms 才可点（>3s ⇒ 装后刷新链没接上的形态）`);
+          } else {
+            kProbs.push(`卸载入口 60s 内不可点：${kReq}`);
+          }
           const kConf = kReq !== 'requested'
-            ? kReq
+            ? 'skipped(卸载入口不可点，见上条读数)'
             : await waitFor(
                 cdp,
                 `(() => {
@@ -494,17 +515,38 @@ async function main() {
                 })()`,
                 60000,
               );
-          if (kConf !== 'confirmed' && kConf !== 'row-gone') kProbs.push(`卸载没走完：${kConf}`);
-          await sleep(800);
-          if (fs.existsSync(kTargetDir)) kProbs.push('卸载后目录还在');
-          const kRowGone = await cdp.evalJs(`[...document.querySelectorAll('.panel-market .mk-list .mk-row')].some((r) => r.innerText.includes('版本 ${K_TARGET.version}')) ? 'still-listed' : 'gone'`);
-          if (kRowGone !== 'gone') kProbs.push('屏上那条还在');
+          if (!kConf.startsWith('skipped') && kConf !== 'confirmed' && kConf !== 'row-gone') kProbs.push(`卸载没走完：${kConf}`);
+          /**
+           * 卸载确认之后**带耗时地等**（旧探针 `sleep(800)` 后一次性判读 ⇒ 把「慢一点」读成「没做完」，
+           * 与上面那条 `waitFor` 真值陷阱是同一类探针自害）。目录消失与屏上行消失各记一个毫秒数。
+           */
+          let kDirMs = -1;
+          let kRowMs = -1;
+          if (kConf === 'confirmed' || kConf === 'row-gone') {
+            const tUn = Date.now();
+            for (;;) {
+              if (!fs.existsSync(kTargetDir)) { kDirMs = Date.now() - tUn; break; }
+              if (Date.now() - tUn > 20000) break;
+              await sleep(120);
+            }
+            if (kDirMs < 0) kProbs.push('卸载确认后 20s 落点目录仍在');
+            const tRow = Date.now();
+            for (;;) {
+              const listed = await cdp.evalJs(
+                `[...document.querySelectorAll('.panel-market .mk-list .mk-row')].some((r) => r.innerText.includes('版本 ${K_TARGET.version}'))`,
+              );
+              if (!listed) { kRowMs = Date.now() - tRow; break; }
+              if (Date.now() - tRow > 20000) break;
+              await sleep(200);
+            }
+            if (kRowMs < 0) kProbs.push('卸载确认后 20s 屏上那条还在');
+          }
 
           if (kProbs.length === 0) {
             P(
               'k',
               '真装一个包再卸掉（真下载+解压+落盘+记账+卸载）',
-              `${K_TARGET.id} v${K_TARGET.version}：屏上「${kOutcome.note}」；盘上 ${kDeclared.length} 个条目逐条对平（${kDeclared.map((f) => `${f.path}:${f.bytes}B`).join(' ')}）；记账容器核对码=${K_CONTAINER_SHA.slice(0, 12)}…；卸载后目录与行都已消失、暂存区零残壳`,
+              `${K_TARGET.id} v${K_TARGET.version}：屏上「${kOutcome.note}」；盘上 ${kDeclared.length} 个条目逐条对平（${kDeclared.map((f) => `${f.path}:${f.bytes}B`).join(' ')}）；记账容器核对码=${K_CONTAINER_SHA.slice(0, 12)}…；卸载入口=${kRowWaitMs}ms 可点、目录消失=${kDirMs}ms、行消失=${kRowMs}ms；暂存区零残壳`,
             );
           } else {
             F('k', '真装一个包再卸掉（真下载+解压+落盘+记账+卸载）', kProbs.join('；'));
