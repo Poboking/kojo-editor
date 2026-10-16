@@ -24,8 +24,8 @@
  * 故不发 `file.changed`（谁改盘谁发）。`sugar.preview` 自身亦只读、不发事件。
  */
 
-import { createElement, useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import type {
   FileIO,
   Plugin,
@@ -35,6 +35,8 @@ import type {
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices, pathKey } from '@kojo/plugin-api';
 import {
+  DIAG_WINDOW_INITIAL,
+  ROW_WINDOW_INITIAL,
   archiveStatus,
   buildArchiveOptions,
   buildDiagnosticRows,
@@ -42,7 +44,11 @@ import {
   countLines,
   createLiveTextPool,
   degradeText,
+  diagWindowSize,
   isKojoFile,
+  nextDiagWindow,
+  nextRowWindow,
+  rowWindowSize,
   summarize,
   type ArchiveOption,
   type ArchiveStatus,
@@ -52,10 +58,54 @@ import {
   type PreviewSummary,
 } from './panel-logic';
 
-/** 逐行映射渲染上限（防 DOM 爆炸；超大文件下超出部分显式计数） */
-const ROW_CAP = 400;
-/** 诊断渲染上限 */
-const DIAG_CAP = 100;
+/* ------------------------------ 渲染窗口哨兵 ------------------------------ */
+
+/**
+ * 「显示更多」哨兵（逐行映射 / 诊断两个列表共用）。
+ *
+ * 进入滚动视口即自动追加下一窗（IntersectionObserver——列表所在面板自带滚动裁剪，
+ * 浏览器按可见矩形判相交，不必手动传 root）；观察器不可用（SSR / 测试 / 旧环境）
+ * 时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在无 DOM lib 下，
+ * `IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定回调 ref 拿真实节点，
+ * 避免每次渲染重挂 observer。
+ */
+type IntersectionObserverLike = new (
+  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
+) => { observe(target: object): void; disconnect(): void };
+
+/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
+const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
+
+function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
+  const anchor = useRef<unknown>(null);
+  const setAnchor = useCallback((node: unknown): void => {
+    anchor.current = node;
+  }, []);
+  /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
+  const onMoreRef = useRef(onMore);
+  onMoreRef.current = onMore;
+  useEffect(() => {
+    const el = anchor.current as object | null;
+    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
+    if (!el || !IO) return;
+    const io = new IO((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return createElement(
+    'button',
+    {
+      ref: setAnchor,
+      className: 'ghost small dim pv-more-btn',
+      style: MORE_BTN_STYLE,
+      title: '滚到此处会自动加载下一批；也可直接点击',
+      onClick: () => onMore(),
+    },
+    `显示更多（还剩 ${remaining}）`,
+  );
+}
 
 /** 高亮行的最小节点形状（插件 tsconfig 无 DOM lib ⇒ 自备；scrollIntoView 跟随用） */
 type FollowNode = { scrollIntoView?(arg: { block: string }): void };
@@ -97,6 +147,24 @@ export function createUiSugarPreviewPlugin(): Plugin {
         const [cursorLine, setCursorLine] = useState<number | null>(null);
         /** 当前高亮行的节点（scrollIntoView 跟随；无匹配 / 未渲染到 = null，静默跳过） */
         const cursorRowRef = useRef<FollowNode | null>(null);
+        /** 渲染窗口（行数；undefined = 初始窗口——旧实现硬截 400 行 / 100 条且其余不可达） */
+        const [rowWindow, setRowWindow] = useState<number | undefined>(undefined);
+        const [diagWindow, setDiagWindow] = useState<number | undefined>(undefined);
+
+        const growRows = useCallback((total: number): void => {
+          setRowWindow((prev) => {
+            const next = nextRowWindow(prev, total);
+            if (next === (prev ?? ROW_WINDOW_INITIAL)) return prev; // 无变化不重渲
+            return next;
+          });
+        }, []);
+        const growDiag = useCallback((total: number): void => {
+          setDiagWindow((prev) => {
+            const next = nextDiagWindow(prev, total);
+            if (next === (prev ?? DIAG_WINDOW_INITIAL)) return prev;
+            return next;
+          });
+        }, []);
 
         // 当前文件（宿主广播）——换文件即重置全部状态
         useEffect(() => {
@@ -104,6 +172,8 @@ export function createUiSugarPreviewPlugin(): Plugin {
             setFilePath(p.filePath);
             setSource(null);
             setResult(null);
+            setRowWindow(undefined);
+            setDiagWindow(undefined);
             setError(null);
             setNonce(0);
             // 高亮随旧文件一起清掉：新文件的位点稍后才到（读盘 + 转译），
@@ -196,6 +266,8 @@ export function createUiSugarPreviewPlugin(): Plugin {
             .then((tf) => {
               if (cancelled) return;
               // 读盘只是首开窗口期的兜底；文本到手后与 live 路径同一条预览链、同一档文案
+              setRowWindow(undefined); // 新一批映射行 = 新窗口（刷新后从初始窗口看起）
+              setDiagWindow(undefined);
               setDegrade('previewing');
               return previewFor(tf.text);
             })
@@ -286,8 +358,15 @@ export function createUiSugarPreviewPlugin(): Plugin {
         return shell([
           summaryBox(summary, arch),
           arch.hint ? createElement('div', { className: 'dim pv-hint' }, arch.hint) : null,
-          diagBox(diagRows, reveal),
-          rowsBox(rows, reveal, cursorLine, cursorRowRef),
+          createElement(DiagSection, { diags: diagRows, limit: diagWindow, onGrow: growDiag, onReveal: reveal }),
+          createElement(RowsSection, {
+            rows,
+            limit: rowWindow,
+            onGrow: growRows,
+            onReveal: reveal,
+            cursorLine,
+            cursorRef: cursorRowRef,
+          }),
         ]);
       }
 
@@ -334,26 +413,37 @@ function chip(label: string, value: string, cls?: 'bad' | 'warn'): ReactNode {
   );
 }
 
-/** 诊断区（error/warning/info；点击跳转源行） */
-function diagBox(diags: readonly DiagnosticRow[], reveal: (line: number) => void): ReactNode {
+/** 诊断区（窗口化渲染；模块级组件 ⇒ 可独立 SSR 单测 DOM 行数上界） */
+export interface DiagSectionProps {
+  readonly diags: readonly DiagnosticRow[];
+  /** 当前渲染窗口行数（undefined = 初始窗口） */
+  readonly limit: number | undefined;
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextDiagWindow 计算） */
+  readonly onGrow: (total: number) => void;
+  /** 点击诊断行 = 定位源行意图（宿主消费） */
+  readonly onReveal: (line: number) => void;
+}
+
+export function DiagSection(props: DiagSectionProps): ReactElement {
+  const { diags } = props;
   if (diags.length === 0) {
     return createElement('div', { className: 'pv-section' },
       createElement('div', { className: 'pv-section-head' }, '诊断'),
       createElement('div', { className: 'dim pv-hint' }, '无诊断'),
     );
   }
-  const shown = diags.slice(0, DIAG_CAP);
+  const win = diagWindowSize(diags.length, props.limit);
   return createElement(
     'div',
     { className: 'pv-section' },
     createElement('div', { className: 'pv-section-head' }, `诊断（${diags.length}）`),
-    ...shown.map((d) =>
+    ...diags.slice(0, win).map((d) =>
       createElement(
         'div',
         {
           key: d.key,
           className: `pv-diag ${d.severity}`,
-          onClick: d.line !== null ? () => reveal(d.line as number) : undefined,
+          onClick: d.line !== null ? () => props.onReveal(d.line as number) : undefined,
           title: d.line !== null ? '点击定位到源行' : '文件级诊断',
         },
         createElement('span', { className: 'pv-diag-sev' }, sevLabel(d.severity)),
@@ -361,20 +451,34 @@ function diagBox(diags: readonly DiagnosticRow[], reveal: (line: number) => void
         createElement('span', { className: 'pv-diag-msg' }, d.message),
       ),
     ),
-    diags.length > DIAG_CAP
-      ? createElement('div', { className: 'dim pv-hint' }, `其余 ${diags.length - DIAG_CAP} 条未显示`)
+    diags.length > win
+      ? createElement(MoreRow, {
+          key: 'more',
+          remaining: diags.length - win,
+          onMore: () => props.onGrow(diags.length),
+        })
       : null,
   );
 }
 
-/** 逐行映射区（C1 反向下行：`cursorLine` = 光标所在源行，高亮 + nearest 跟随） */
-function rowsBox(
-  rows: readonly PreviewRow[],
-  reveal: (line: number) => void,
-  cursorLine: number | null,
-  cursorRef: { current: FollowNode | null },
-): ReactNode {
-  const shown = rows.slice(0, ROW_CAP);
+/** 逐行映射区（窗口化渲染；模块级组件 ⇒ 可独立 SSR 单测 DOM 行数上界） */
+export interface RowsSectionProps {
+  readonly rows: readonly PreviewRow[];
+  /** 当前渲染窗口行数（undefined = 初始窗口） */
+  readonly limit: number | undefined;
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextRowWindow 计算） */
+  readonly onGrow: (total: number) => void;
+  /** 点击行 = 定位到该源行意图（宿主消费） */
+  readonly onReveal: (line: number) => void;
+  /** C1 反向下行：光标所在源行（null = 无位点 / 派生视图，不高亮） */
+  readonly cursorLine?: number | null;
+  /** 高亮行节点回执（面板侧 scrollIntoView 跟随用；缺省 = 不跟随） */
+  readonly cursorRef?: { current: FollowNode | null };
+}
+
+export function RowsSection(props: RowsSectionProps): ReactElement {
+  const { rows } = props;
+  const win = rowWindowSize(rows.length, props.limit);
   return createElement(
     'div',
     { className: 'pv-section' },
@@ -382,15 +486,16 @@ function rowsBox(
     createElement(
       'div',
       { className: 'pv-rows' },
-      ...shown.map((r) => {
-        const isCur = cursorLine !== null && r.sourceLine === cursorLine;
+      ...rows.slice(0, win).map((r) => {
+        // C1 反向下行：光标所在源行高亮（+ nearest 跟随）
+        const isCur = props.cursorLine != null && r.sourceLine === props.cursorLine;
         return createElement(
           'div',
           {
             key: r.key,
             className: `pv-row${r.blank ? ' blank' : ''}${isCur ? ' cur' : ''}`,
-            ref: isCur ? cursorRef : undefined,
-            onClick: () => reveal(r.sourceLine),
+            ref: isCur ? props.cursorRef : undefined,
+            onClick: () => props.onReveal(r.sourceLine),
             title: '点击定位到该源行',
           },
           createElement('span', { className: 'pv-line-no dim' }, String(r.sourceLine)),
@@ -404,8 +509,12 @@ function rowsBox(
             : null,
         );
       }),
-      rows.length > ROW_CAP
-        ? createElement('div', { className: 'dim pv-hint' }, `其余 ${rows.length - ROW_CAP} 行未显示`)
+      rows.length > win
+        ? createElement(MoreRow, {
+            key: 'more',
+            remaining: rows.length - win,
+            onMore: () => props.onGrow(rows.length),
+          })
         : null,
     ),
   );

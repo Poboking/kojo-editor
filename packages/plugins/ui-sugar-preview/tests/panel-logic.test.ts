@@ -30,7 +30,11 @@ import type {
 import { createSugarPreviewService, createSugarTranspileService } from '@kojo/plugin-kojo-sugar';
 import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
 import {
+  DIAG_WINDOW_INITIAL,
+  DIAG_WINDOW_STEP,
   FULLWIDTH_SPACE,
+  ROW_WINDOW_INITIAL,
+  ROW_WINDOW_STEP,
   ZERO_REACH,
   archiveStatus,
   blockLabel,
@@ -41,14 +45,18 @@ import {
   countLines,
   createLiveTextPool,
   degradeText,
+  diagWindowSize,
   foldReachability,
   formatSize,
   fullwidthSpaceLines,
   generatedLabel,
   hasBlocks,
   isKojoFile,
+  nextDiagWindow,
+  nextRowWindow,
   reachabilityClass,
   reachabilityLabel,
+  rowWindowSize,
   summarize,
   type DiagnosticRow,
   type PreviewDegrade,
@@ -532,5 +540,40 @@ describe('C2 / 缓冲真相池（live-first / disk-fallback 的选择判据）',
     const pool = createLiveTextPool();
     expect(pool.textFor(null)).toBeNull();
     expect(pool.textFor(undefined)).toBeNull();
+  });
+});
+describe('渲染窗口（触底增窗）', () => {
+  it('初窗 ≤ INITIAL；小列表整体可见（逐行映射 / 诊断各一口径）', () => {
+    expect(rowWindowSize(10_000, undefined)).toBe(ROW_WINDOW_INITIAL);
+    expect(rowWindowSize(30, undefined)).toBe(30);
+    expect(diagWindowSize(10_000, undefined)).toBe(DIAG_WINDOW_INITIAL);
+    expect(diagWindowSize(5, undefined)).toBe(5);
+  });
+
+  it('每步 +STEP、单调不减、终值钉在 total（两个列表口径一致）', () => {
+    const walk = (next: (cur: number | undefined, total: number) => number, step: number): number => {
+      let cur: number | undefined = undefined;
+      let prev: number | undefined = undefined;
+      for (let i = 0; i < 500 && cur !== 10_000; i++) {
+        cur = next(cur, 10_000);
+        // 步长上界只从第二个窗口起算（首窗 = INITIAL + STEP，下方已单独钉住）
+        if (prev !== undefined) {
+          expect(cur).toBeGreaterThanOrEqual(prev);
+          expect(cur - prev).toBeLessThanOrEqual(step);
+        }
+        prev = cur;
+      }
+      return cur!;
+    };
+    expect(nextRowWindow(undefined, 10_000)).toBe(ROW_WINDOW_INITIAL + ROW_WINDOW_STEP);
+    expect(nextDiagWindow(undefined, 10_000)).toBe(DIAG_WINDOW_INITIAL + DIAG_WINDOW_STEP);
+    expect(walk(nextRowWindow, ROW_WINDOW_STEP)).toBe(10_000);
+    expect(walk(nextDiagWindow, DIAG_WINDOW_STEP)).toBe(10_000);
+  });
+
+  it('已有窗口（limit）优先于 INITIAL，但被 total 钉住', () => {
+    expect(rowWindowSize(10_000, ROW_WINDOW_INITIAL + ROW_WINDOW_STEP)).toBe(ROW_WINDOW_INITIAL + ROW_WINDOW_STEP);
+    expect(rowWindowSize(100, 999)).toBe(100);
+    expect(diagWindowSize(100, 999)).toBe(100);
   });
 });

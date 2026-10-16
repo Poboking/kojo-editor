@@ -783,3 +783,36 @@ export function locateNoticeFor(result: FunctionReplay, locate: LocateRequest): 
     hasRows: reading.matchedRows > 0,
   };
 }
+
+/* ------------------------------ 谓词渲染窗口 ------------------------------ */
+
+/**
+ * 谓词列表的渲染窗口（触底增窗）。
+ *
+ * 旧实现硬截 300 条 + 一句「其余 N 条未显示」——第 301 条起不可达。窗口化后
+ * INITIAL 是首帧 DOM 上界，滚动触底或点击「显示更多」按 STEP 增长，全量可达。
+ * 取值：单函数谓词通常 <100（面板头注口径）⇒ INITIAL=120 常见函数零哨兵、
+ * 一窗看完；步长 240 按 1:2 节奏，大可判定函数两三步入底。
+ */
+export const PRED_WINDOW_INITIAL = 120;
+export const PRED_WINDOW_STEP = 240;
+
+/**
+ * 当前窗口应渲染的行数（纯函数）：[0, min(total, max(limit ?? INITIAL, mustInclude))]。
+ *
+ * `mustInclude` 是「跳转来的那一条必须看得见」的覆盖口径（G1「跳到命中状态」）：
+ * 位点落在初始窗口之外时，窗口撑大到盖住它那一条——旧实现第 300 条之后本就
+ * 不在屏上，窗口化不许把这条既有承诺弄丢。0 = 无需覆盖。
+ */
+export function predWindowSize(total: number, limit: number | undefined, mustInclude = 0): number {
+  return Math.min(total, Math.max(limit ?? PRED_WINDOW_INITIAL, mustInclude));
+}
+
+/**
+ * 窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))。
+ * 单调不减、单步增量 ≤ STEP、终值 = total——「显示更多」与触底自动加载共用。
+ */
+export function nextPredWindow(current: number | undefined, total: number): number {
+  const base = current ?? PRED_WINDOW_INITIAL;
+  return Math.min(total, Math.max(PRED_WINDOW_INITIAL, base + PRED_WINDOW_STEP));
+}

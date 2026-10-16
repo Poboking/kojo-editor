@@ -25,8 +25,8 @@
  *   - 零游戏知识：本插件不认得任何游戏术语，变量字典/分野模板全在 adapter。
  */
 
-import { createElement, useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import type {
   FileIO,
   OpJournal,
@@ -45,11 +45,14 @@ import {
   pathKey,
 } from '@kojo/plugin-api';
 import {
+  DIAG_WINDOW_INITIAL,
   buildVerdictRows,
   createLiveTextPool,
   degradeText,
+  diagWindowSize,
   diagnosticDecorations,
   isKojoFile,
+  nextDiagWindow,
   summarize,
   type VerdictDegrade,
   type VerdictRow,
@@ -59,8 +62,107 @@ import { NEW_KOJO_OVERLAY_ID, createNewKojoWizard } from './new-file-wizard';
 import { createNewFileFlow } from './new-file-flow';
 import { performSugarSave } from './save-handler';
 
-/** 诊断渲染上限（防 DOM 爆炸；超出显式计数） */
-const DIAG_CAP = 200;
+/* ------------------------------ 诊断窗口 ------------------------------ */
+
+/**
+ * 「显示更多」哨兵（诊断列表触底器）。
+ *
+ * 进入滚动视口即自动追加下一窗（IntersectionObserver——列表所在面板自带滚动裁剪，
+ * 浏览器按可见矩形判相交，不必手动传 root）；观察器不可用（SSR / 测试 / 旧环境）
+ * 时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在无 DOM lib 下，
+ * `IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定回调 ref 拿真实节点，
+ * 避免每次渲染重挂 observer。
+ */
+type IntersectionObserverLike = new (
+  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
+) => { observe(target: object): void; disconnect(): void };
+
+/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
+const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
+
+function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
+  const anchor = useRef<unknown>(null);
+  const setAnchor = useCallback((node: unknown): void => {
+    anchor.current = node;
+  }, []);
+  /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
+  const onMoreRef = useRef(onMore);
+  onMoreRef.current = onMore;
+  useEffect(() => {
+    const el = anchor.current as object | null;
+    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
+    if (!el || !IO) return;
+    const io = new IO((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return createElement(
+    'button',
+    {
+      ref: setAnchor,
+      className: 'ghost small dim sv-more-btn',
+      style: MORE_BTN_STYLE,
+      title: '滚到此处会自动加载下一批；也可直接点击',
+      onClick: () => onMore(),
+    },
+    `显示更多（还剩 ${remaining}）`,
+  );
+}
+
+/** 诊断列表（窗口化渲染；模块级组件 ⇒ 可独立 SSR 单测 DOM 行数上界） */
+export interface VerdictDiagListProps {
+  readonly rows: readonly VerdictRow[];
+  /** 当前渲染窗口行数（undefined = 初始窗口） */
+  readonly limit: number | undefined;
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextDiagWindow 计算） */
+  readonly onGrow: (total: number) => void;
+  /** 点击诊断行 = 定位源行意图（宿主消费） */
+  readonly onReveal: (line: number) => void;
+  /** C1 反向下行：光标所在源行（null = 无位点/派生视图，不高亮） */
+  readonly cursorLine?: number | null;
+  /** 高亮行节点回执（面板侧 scrollIntoView 跟随用；缺省 = 不跟随） */
+  readonly cursorRef?: { current: FollowNode | null };
+}
+
+export function VerdictDiagList(props: VerdictDiagListProps): ReactElement {
+  const { rows } = props;
+  const win = diagWindowSize(rows.length, props.limit);
+  return createElement(
+    'div',
+    { className: 'sv-list' },
+    ...rows.slice(0, win).map((r) => {
+      // ZH-D2：芯片第一眼给**中文短名**，原码逐字留在芯片自身的悬停 title
+      // （报障要能贴码）。真源 = 契约层 `plugin-api/diagnostic-copy.ts`，
+      // 本面板**不自带映射**——两处各抄一份迟早分叉。
+      const disp = diagnosticDisplay(r.code);
+      // C1 反向下行：光标所在源行的诊断高亮（文件级诊断 r.line = null 不参与比对）
+      const isCur = props.cursorLine != null && r.line === props.cursorLine;
+      return createElement(
+        'div',
+        {
+          key: r.key,
+          className: `sv-row ${r.severity}${isCur ? ' cur' : ''}`,
+          ref: isCur ? props.cursorRef : undefined,
+          onClick: r.line !== null ? () => props.onReveal(r.line as number) : undefined,
+          title: r.line !== null ? '点击定位到源行' : '文件级诊断',
+        },
+        createElement('span', { className: 'sv-sev' }, sevLabel(r.severity)),
+        createElement('span', { className: 'sv-loc dim' }, r.line === null ? '—' : `L${r.line}:${r.column ?? 1}`),
+        createElement('span', { className: 'sv-code dim', title: disp.title }, disp.name),
+        createElement('span', { className: 'sv-msg' }, r.message),
+      );
+    }),
+    rows.length > win
+      ? createElement(MoreRow, {
+          key: 'more',
+          remaining: rows.length - win,
+          onMore: () => props.onGrow(rows.length),
+        })
+      : null,
+  );
+}
 
 /** 高亮行的最小节点形状（插件 tsconfig 无 DOM lib ⇒ 自备；scrollIntoView 跟随用） */
 type FollowNode = { scrollIntoView?(arg: { block: string }): void };
@@ -152,6 +254,17 @@ export function createUiSugarEditorPlugin(): Plugin {
         const [cursorLine, setCursorLine] = useState<number | null>(null);
         /** 当前高亮行的节点（scrollIntoView 跟随；无匹配 / 未渲染到 = null，静默跳过） */
         const cursorRowRef = useRef<FollowNode | null>(null);
+        /** 诊断渲染窗口（行数；undefined = 初始窗口——旧实现硬截 200 且第 201 条起不可达） */
+        const [diagWindow, setDiagWindow] = useState<number | undefined>(undefined);
+
+        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；计算在 panel-logic 可单测） */
+        const growDiag = useCallback((total: number): void => {
+          setDiagWindow((prev) => {
+            const next = nextDiagWindow(prev, total);
+            if (next === (prev ?? DIAG_WINDOW_INITIAL)) return prev; // 无变化不重渲
+            return next;
+          });
+        }, []);
 
         // 当前文件（宿主广播）——换文件即重置
         useEffect(() => {
@@ -159,6 +272,7 @@ export function createUiSugarEditorPlugin(): Plugin {
             setFilePath(p.filePath);
             setSummary(null);
             setRows([]);
+            setDiagWindow(undefined);
             setError(null);
             setNonce(0);
             // 高亮随旧文件一起清掉：新文件的位点稍后才到（读盘 + 转译），
@@ -233,6 +347,7 @@ export function createUiSugarEditorPlugin(): Plugin {
             .then((tf) => {
               if (cancelled) return;
               compute(tf.text);
+              setDiagWindow(undefined); // 新一批诊断 = 新窗口（刷新后从初始窗口看起）
             })
             .catch((err: unknown) => {
               if (cancelled) return;
@@ -314,35 +429,14 @@ export function createUiSugarEditorPlugin(): Plugin {
         const list =
           rows.length === 0
             ? createElement('div', { className: 'sv-empty dim' }, '无诊断 ✅')
-            : createElement(
-                'div',
-                { className: 'sv-list' },
-                ...rows.slice(0, DIAG_CAP).map((r) => {
-                  // ZH-D2：芯片第一眼给**中文短名**，原码逐字留在芯片自身的悬停 title
-                  // （报障要能贴码）。真源 = 契约层 `plugin-api/diagnostic-copy.ts`，
-                  // 本面板**不自带映射**——两处各抄一份迟早分叉。
-                  const disp = diagnosticDisplay(r.code);
-                  // C1 反向下行：光标所在源行的诊断高亮（文件级诊断 r.line = null 不参与比对）
-                  const isCur = cursorLine !== null && r.line === cursorLine;
-                  return createElement(
-                    'div',
-                    {
-                      key: r.key,
-                      className: `sv-row ${r.severity}${isCur ? ' cur' : ''}`,
-                      ref: isCur ? cursorRowRef : undefined,
-                      onClick: r.line !== null ? () => reveal(r.line as number) : undefined,
-                      title: r.line !== null ? '点击定位到源行' : '文件级诊断',
-                    },
-                    createElement('span', { className: 'sv-sev' }, sevLabel(r.severity)),
-                    createElement('span', { className: 'sv-loc dim' }, r.line === null ? '—' : `L${r.line}:${r.column ?? 1}`),
-                    createElement('span', { className: 'sv-code dim', title: disp.title }, disp.name),
-                    createElement('span', { className: 'sv-msg' }, r.message),
-                  );
-                }),
-                rows.length > DIAG_CAP
-                  ? createElement('div', { className: 'dim sv-hint' }, `其余 ${rows.length - DIAG_CAP} 条未显示`)
-                  : null,
-              );
+            : createElement(VerdictDiagList, {
+                rows,
+                limit: diagWindow,
+                onGrow: growDiag,
+                onReveal: reveal,
+                cursorLine,
+                cursorRef: cursorRowRef,
+              });
 
         return shell([statusBox, meta, list]);
       }

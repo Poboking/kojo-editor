@@ -210,3 +210,30 @@ export function degradeText(d: VerdictDegrade): string {
       return '读取失败';
   }
 }
+
+/* ============================== 诊断渲染窗口 ============================== */
+
+/**
+ * 诊断列表的渲染窗口（触底增窗）。
+ *
+ * 旧实现硬截 200 条 + 一句「其余 N 条未显示」——第 201 条起不可达。窗口化后
+ * INITIAL 是首帧 DOM 上界，滚动触底或点击「显示更多」按 STEP 增长，全量可达。
+ * 取值：诊断行单行 ~20px，典型 .kojo 文件诊断 <50 条 ⇒ INITIAL=80 一窗盖住
+ * 绝大多数文件，且步长按 1:2 节奏（与函数树的面窗口同比例）。
+ */
+export const DIAG_WINDOW_INITIAL = 80;
+export const DIAG_WINDOW_STEP = 160;
+
+/** 当前窗口应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
+export function diagWindowSize(total: number, limit: number | undefined): number {
+  return Math.min(total, limit ?? DIAG_WINDOW_INITIAL);
+}
+
+/**
+ * 窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))。
+ * 单调不减、单步增量 ≤ STEP、终值 = total——「显示更多」与触底自动加载共用。
+ */
+export function nextDiagWindow(current: number | undefined, total: number): number {
+  const base = current ?? DIAG_WINDOW_INITIAL;
+  return Math.min(total, Math.max(DIAG_WINDOW_INITIAL, base + DIAG_WINDOW_STEP));
+}

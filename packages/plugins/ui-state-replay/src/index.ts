@@ -29,7 +29,7 @@
  * 分支折叠区汇总"本结果含 N 个假设参数"。空值 = 未提供（unknown）语义不变。
  */
 
-import { createElement, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import type {
   BranchChainOutcome,
   ConditionExtractorService,
@@ -38,6 +38,7 @@ import type {
   GameProject,
   KojoCallSlot,
   Plugin,
+  PredicateReplay,
   ProjectService,
   ReplayStateView,
   SlotRegistry,
@@ -51,6 +52,7 @@ import {
   DEFAULT_SCENE_ID,
   MAX_SCENES,
   MAX_SCENE_NAME,
+  PRED_WINDOW_INITIAL,
   applyScene,
   captureSceneSlots,
   classifySlotValue,
@@ -61,7 +63,9 @@ import {
   groupUnknowns,
   locateNoticeFor,
   newSceneId,
+  nextPredWindow,
   parseCallContextText,
+  predWindowSize,
   removeScene,
   sanitizeScenes,
   sceneSlotsToContextText,
@@ -77,8 +81,6 @@ import {
 const SUGGEST_LIMIT = 50;
 /** 本面板的贡献 id（`ui.panel` 注册与"浮起自己"那条意图共用一个真源） */
 const PANEL_ID = 'state-replay';
-/** 谓词渲染上限（防 DOM 爆炸；单函数谓词通常 <100） */
-const PRED_RENDER_CAP = 300;
 /**
  * 场景预设的存储键——`ctx.storage` 的域 = 本插件 id（`ui-state-replay`），
  * 不与其他插件共用域（内核按 pluginId 隔离）。
@@ -112,6 +114,130 @@ interface ScrollHost {
 
 /** 假设值标记的内联样式（插件内自持，不改 app 样式表；虚线 = 与手输确定值视觉可区分） */
 const ASSUME_STYLE = { color: 'var(--amber, #d19a66)', borderColor: 'var(--amber, #d19a66)', borderStyle: 'dashed' } as const;
+
+/* ------------------------------ 谓词窗口 ------------------------------ */
+
+/**
+ * 「显示更多」哨兵（谓词列表触底器）。
+ *
+ * 进入滚动视口即自动追加下一窗（IntersectionObserver——结果区所在面板自带滚动裁剪，
+ * 浏览器按可见矩形判相交，不必手动传 root）；观察器不可用（SSR / 测试 / 旧环境）
+ * 时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在无 DOM lib 下，
+ * `IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定回调 ref 拿真实节点，
+ * 避免每次渲染重挂 observer。
+ */
+type IntersectionObserverLike = new (
+  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
+) => { observe(target: object): void; disconnect(): void };
+
+/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
+const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
+
+function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
+  const anchor = useRef<unknown>(null);
+  const setAnchor = useCallback((node: unknown): void => {
+    anchor.current = node;
+  }, []);
+  /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
+  const onMoreRef = useRef(onMore);
+  onMoreRef.current = onMore;
+  useEffect(() => {
+    const el = anchor.current as object | null;
+    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
+    if (!el || !IO) return;
+    const io = new IO((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return createElement(
+    'button',
+    {
+      ref: setAnchor,
+      className: 'ghost small dim rp-more-btn',
+      style: MORE_BTN_STYLE,
+      title: '滚到此处会自动加载下一批；也可直接点击',
+      onClick: () => onMore(),
+    },
+    `显示更多（还剩 ${remaining}）`,
+  );
+}
+
+/** 谓词列表（窗口化渲染；模块级组件 ⇒ 可独立 SSR 单测 DOM 行数上界） */
+export interface PredicateListProps {
+  readonly predicates: readonly PredicateReplay[];
+  readonly filePath: string;
+  /** 跳转来源标记（与旧行为逐字一致：命中函数名） */
+  readonly normalizedName: string;
+  /** 假设影响标记（与 predicates 同序——`summarizeAssumptions` 的 affected） */
+  readonly assumed: readonly boolean[];
+  /**
+   * 「就是这一行」的位点（G1；null = 本次不是跳转来的）。
+   * 有它时窗口至少盖住那一行——跳转来的那一条必须看得见（见 predWindowSize）。
+   */
+  readonly atLine: number | null;
+  /** 当前渲染窗口行数（undefined = 初始窗口） */
+  readonly limit: number | undefined;
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextPredWindow 计算） */
+  readonly onGrow: (total: number) => void;
+  readonly emitReveal: EmitReveal;
+}
+
+export function PredicateList(props: PredicateListProps): ReactElement {
+  const { predicates, atLine } = props;
+  // 窗口至少盖住「就是这一行」（findIndex 未命中返回 -1 ⇒ mustInclude = 0）
+  const mustInclude = atLine !== null ? predicates.findIndex((p) => p.line === atLine) + 1 : 0;
+  const win = predWindowSize(predicates.length, props.limit, mustInclude);
+  return createElement(
+    'ul',
+    { className: 'rp-preds' },
+    ...predicates.slice(0, win).map((p, i) => {
+      const cls =
+        p.outcome.kind === 'true' ? 'rp-outcome hit' : p.outcome.kind === 'false' ? 'rp-outcome miss' : 'rp-outcome unk';
+      const isAt = atLine !== null && p.line === atLine;
+      return createElement(
+        'li',
+        { key: `${p.line}:${i}` },
+        createElement(
+          'button',
+          {
+            className: `rp-pred-btn${isAt ? ' rp-locate-row' : ''}`,
+            ...(isAt ? { 'data-locate': '1' } : {}),
+            title: `${props.filePath}:${p.line}${p.outcome.kind === 'unknown' ? ` — ${p.outcome.unknown.message}` : ''}`,
+            onClick: () => props.emitReveal(props.filePath, p.line, props.normalizedName),
+          },
+          createElement('span', { className: 'rp-kind' }, p.kind),
+          createElement('span', { className: cls }, OUTCOME_LABEL[p.outcome.kind] ?? '?'),
+          props.assumed[i]
+            ? createElement(
+                'span',
+                {
+                  className: 'rp-badge assume',
+                  style: ASSUME_STYLE,
+                  title: '该谓词读取了默认场景的假设参数（未手改的预填 0）——结论建立在假设之上',
+                },
+                '基于假设',
+              )
+            : null,
+          createElement('span', { className: 'rp-pred-text' }, p.text),
+          createElement('span', { className: 'rp-line dim' }, `:${p.line}`),
+        ),
+      );
+    }),
+    predicates.length > win
+      ? createElement(
+          'li',
+          { className: 'rp-more' },
+          createElement(MoreRow, {
+            key: 'more',
+            remaining: predicates.length - win,
+            onMore: () => props.onGrow(predicates.length),
+          }),
+        )
+      : null,
+  );
+}
 
 function branchRow(
   chain: BranchChainOutcome,
@@ -174,8 +300,11 @@ function renderReplayPreview(opts: {
   renderIcon?: (name: string, size?: number) => unknown;
   /** 「就是这一行」的横幅（G1；null = 本次不是从编辑器跳进来的，呈现与旧行为逐字一致） */
   notice?: LocateNotice | null;
+  /** 谓词渲染窗口（undefined = 初始窗口）与触底增窗回调（窗口状态归面板壳层持有） */
+  predLimit: number | undefined;
+  onGrowPreds: (total: number) => void;
 }): ReturnType<typeof createElement> {
-  const { result, assumedSlots, emitReveal, renderIcon, notice } = opts;
+  const { result, assumedSlots, emitReveal, renderIcon, notice, predLimit, onGrowPreds } = opts;
   const conf = CONFIDENCE_BADGE[result.confidence];
   const unknowns = groupUnknowns(result);
   const impact = summarizeAssumptions(result, assumedSlots);
@@ -262,46 +391,16 @@ function renderReplayPreview(opts: {
           ),
         )
       : null,
-    createElement(
-      'ul',
-      { className: 'rp-preds' },
-      ...result.predicates.slice(0, PRED_RENDER_CAP).map((p, i) => {
-        const cls =
-          p.outcome.kind === 'true' ? 'rp-outcome hit' : p.outcome.kind === 'false' ? 'rp-outcome miss' : 'rp-outcome unk';
-        const isAt = atLine !== null && p.line === atLine;
-        return createElement(
-          'li',
-          { key: `${p.line}:${i}` },
-          createElement(
-            'button',
-            {
-              className: `rp-pred-btn${isAt ? ' rp-locate-row' : ''}`,
-              ...(isAt ? { 'data-locate': '1' } : {}),
-              title: `${result.filePath}:${p.line}${p.outcome.kind === 'unknown' ? ` — ${p.outcome.unknown.message}` : ''}`,
-              onClick: () => emitReveal(result.filePath, p.line, result.normalizedName),
-            },
-            createElement('span', { className: 'rp-kind' }, p.kind),
-            createElement('span', { className: cls }, OUTCOME_LABEL[p.outcome.kind] ?? '?'),
-            impact.affected[i]
-              ? createElement(
-                  'span',
-                  {
-                    className: 'rp-badge assume',
-                    style: ASSUME_STYLE,
-                    title: '该谓词读取了默认场景的假设参数（未手改的预填 0）——结论建立在假设之上',
-                  },
-                  '基于假设',
-                )
-              : null,
-            createElement('span', { className: 'rp-pred-text' }, p.text),
-            createElement('span', { className: 'rp-line dim' }, `:${p.line}`),
-          ),
-        );
-      }),
-      result.predicates.length > PRED_RENDER_CAP
-        ? createElement('li', { className: 'rp-more dim' }, `其余 ${result.predicates.length - PRED_RENDER_CAP} 条未显示`)
-        : null,
-    ),
+    createElement(PredicateList, {
+      predicates: result.predicates,
+      filePath: result.filePath,
+      normalizedName: result.normalizedName,
+      assumed: impact.affected,
+      atLine,
+      limit: predLimit,
+      onGrow: onGrowPreds,
+      emitReveal,
+    }),
   );
 }
 
@@ -473,6 +572,17 @@ export function createUiStateReplayPlugin(): Plugin {
         const [pendingNote, setPendingNote] = useState<string | null>(null);
         const [replayBusy, setReplayBusy] = useState(false);
         const [replayError, setReplayError] = useState<string | null>(null);
+        /** 谓词渲染窗口（行数；undefined = 初始窗口——旧实现硬截 300 且第 301 条起不可达） */
+        const [predWindow, setPredWindow] = useState<number | undefined>(undefined);
+
+        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；计算在 panel-logic 可单测） */
+        const growPreds = useCallback((total: number): void => {
+          setPredWindow((prev) => {
+            const next = nextPredWindow(prev, total);
+            if (next === (prev ?? PRED_WINDOW_INITIAL)) return prev; // 无变化不重渲
+            return next;
+          });
+        }, []);
         /** 视图代际（换档/换角色时使在途 createView 作废） */
         const viewGenRef = useRef(0);
         /** 结果区容器（`locate` 到位后把对应那一条滚进视野） */
@@ -660,6 +770,7 @@ export function createUiStateReplayPlugin(): Plugin {
               setResult(r);
               setResultAssumed(assumedAtRun);
               setResultLocate(locate);
+              setPredWindow(undefined); // 新一批谓词 = 新窗口（每次回放从初始窗口看起）
             })
             .catch((err: unknown) => {
               setReplayError(err instanceof Error ? err.message : String(err));
@@ -969,12 +1080,15 @@ export function createUiStateReplayPlugin(): Plugin {
               emitReveal,
               renderIcon: props.renderIcon,
               notice,
+              predLimit: predWindow,
+              onGrowPreds: growPreds,
             }),
           );
         }
 
         // 滚到"就是这一行"那一条：只在结果与位点同批时做一次，找不到就作罢
-        // （谓词渲染有上限，第 300 条之后的条目本就不在屏上——不为此再扩渲染面）。
+        // （谓词窗口至少盖住位点那一条——见 PredicateList 的 mustInclude；
+        //  来源对不上的位点本来就不该有高亮行）。
         // 为什么这里要 `as unknown as`：本包的 typecheck 跑在**无 DOM lib** 的 root 配置下
         // （root `tsc` 与 app 那套都算数），DOM 成员在那一侧是不可见的类型名；
         // 用到的能力只有"按选择器找一个能滚的东西"，就按这最小形状声明，不 import DOM 类型。

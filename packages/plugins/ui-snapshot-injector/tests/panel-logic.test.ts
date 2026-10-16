@@ -12,14 +12,21 @@ import type {
   VariableSchema,
 } from '@kojo/plugin-api';
 import {
+  CELL_WINDOW_INITIAL,
+  CELL_WINDOW_STEP,
+  VAR_WINDOW_INITIAL,
+  VAR_WINDOW_STEP,
   buildOverrides,
   cellLabel,
+  cellWindowSize,
   charaLabel,
   dedupePending,
   diffRows,
   editKey,
   listScopes,
   listVars,
+  nextCellWindow,
+  nextVarWindow,
   panelPhase,
   parseCellIndex,
   parseCellInput,
@@ -28,6 +35,7 @@ import {
   scopeLabel,
   supersededCount,
   varLabel,
+  varWindowSize,
   type PendingEdit,
 } from '../src/panel-logic';
 
@@ -368,5 +376,41 @@ describe('runInjectFlow：注入/重解析全链选档归属守卫', () => {
     await runInjectFlow(dropped, { path: 'A.sav', overrides: {} as ArchiveOverrides, stillSelected: () => false }, hooks2);
     expect(hooks2.onFailed).not.toHaveBeenCalled();
     expect(hooks2.onDropped).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('渲染窗口（触底增窗）', () => {
+  it('初窗 ≤ INITIAL；小目录整体可见（变量目录 / 单元列表各一口径）', () => {
+    expect(varWindowSize(10_000, undefined)).toBe(VAR_WINDOW_INITIAL);
+    expect(varWindowSize(30, undefined)).toBe(30);
+    expect(cellWindowSize(10_000, undefined)).toBe(CELL_WINDOW_INITIAL);
+    expect(cellWindowSize(12, undefined)).toBe(12);
+  });
+
+  it('每步 +STEP、单调不减、终值钉在 total（两个列表口径一致）', () => {
+    const walk = (next: (cur: number | undefined, total: number) => number, step: number): number => {
+      let cur: number | undefined = undefined;
+      let prev: number | undefined = undefined;
+      for (let i = 0; i < 500 && cur !== 10_000; i++) {
+        cur = next(cur, 10_000);
+        // 步长上界只从第二个窗口起算（首窗 = INITIAL + STEP，下方已单独钉住）
+        if (prev !== undefined) {
+          expect(cur).toBeGreaterThanOrEqual(prev);
+          expect(cur - prev).toBeLessThanOrEqual(step);
+        }
+        prev = cur;
+      }
+      return cur!;
+    };
+    expect(nextVarWindow(undefined, 10_000)).toBe(VAR_WINDOW_INITIAL + VAR_WINDOW_STEP);
+    expect(nextCellWindow(undefined, 10_000)).toBe(CELL_WINDOW_INITIAL + CELL_WINDOW_STEP);
+    expect(walk(nextVarWindow, VAR_WINDOW_STEP)).toBe(10_000);
+    expect(walk(nextCellWindow, CELL_WINDOW_STEP)).toBe(10_000);
+  });
+
+  it('已有窗口（limit）优先于 INITIAL，但被 total 钉住', () => {
+    expect(varWindowSize(10_000, VAR_WINDOW_INITIAL + VAR_WINDOW_STEP)).toBe(VAR_WINDOW_INITIAL + VAR_WINDOW_STEP);
+    expect(varWindowSize(100, 999)).toBe(100);
+    expect(cellWindowSize(100, 999)).toBe(100);
   });
 });

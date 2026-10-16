@@ -388,3 +388,45 @@ export function isKojoFile(path: string | null | undefined): boolean {
   if (!path) return false;
   return path.toLowerCase().endsWith('.kojo');
 }
+
+/* ============================== 渲染窗口 ============================== */
+
+/**
+ * 逐行映射区的窗口（触底增窗）。
+ *
+ * 旧实现硬截 400 行 + 一句「其余 N 行未显示」——第 401 行起不可达。窗口化后
+ * INITIAL 是首帧 DOM 上界，滚动触底或点击「显示更多」按 STEP 增长，全量可达。
+ * 取值：逐行映射单行 ~19px（等宽小字），INITIAL=120 ≈ 两屏余；步长按 1:2 节奏
+ * （与函数树的面窗口同比例），大文件两三步入底。
+ */
+export const ROW_WINDOW_INITIAL = 120;
+export const ROW_WINDOW_STEP = 240;
+
+/** 逐行映射窗口当前应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
+export function rowWindowSize(total: number, limit: number | undefined): number {
+  return Math.min(total, limit ?? ROW_WINDOW_INITIAL);
+}
+
+/** 逐行映射窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))——单调不减、终值 = total */
+export function nextRowWindow(current: number | undefined, total: number): number {
+  const base = current ?? ROW_WINDOW_INITIAL;
+  return Math.min(total, Math.max(ROW_WINDOW_INITIAL, base + ROW_WINDOW_STEP));
+}
+
+/**
+ * 诊断区的窗口（触底增窗）。旧实现硬截 100 条且其余不可达；取值口径：
+ * 诊断行单行 ~20px，典型文件诊断个位数 ⇒ INITIAL=60 基本没有哨兵；STEP=120 留一份快进档。
+ */
+export const DIAG_WINDOW_INITIAL = 60;
+export const DIAG_WINDOW_STEP = 120;
+
+/** 诊断窗口当前应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
+export function diagWindowSize(total: number, limit: number | undefined): number {
+  return Math.min(total, limit ?? DIAG_WINDOW_INITIAL);
+}
+
+/** 诊断窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))——单调不减、终值 = total */
+export function nextDiagWindow(current: number | undefined, total: number): number {
+  const base = current ?? DIAG_WINDOW_INITIAL;
+  return Math.min(total, Math.max(DIAG_WINDOW_INITIAL, base + DIAG_WINDOW_STEP));
+}

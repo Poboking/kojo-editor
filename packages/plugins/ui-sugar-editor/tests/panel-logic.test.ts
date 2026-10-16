@@ -11,12 +11,16 @@
 import { describe, expect, it } from 'vitest';
 import type { SugarDiagnostic, SugarSeverity } from '@kojo/plugin-api';
 import {
+  DIAG_WINDOW_INITIAL,
+  DIAG_WINDOW_STEP,
   buildVerdictRows,
   countBySeverity,
   createLiveTextPool,
   degradeText,
+  diagWindowSize,
   diagnosticDecorations,
   isKojoFile,
+  nextDiagWindow,
   summarize,
   verdictLabel,
   verdictStatus,
@@ -199,5 +203,34 @@ describe('C2 / 缓冲真相池（live-first / disk-fallback 的选择判据）',
     const pool = createLiveTextPool();
     expect(pool.textFor(null)).toBeNull();
     expect(pool.textFor(undefined)).toBeNull();
+  });
+});
+
+describe('诊断渲染窗口（触底增窗）', () => {
+  it('初窗 ≤ INITIAL；小列表（≤ INITIAL）整体可见', () => {
+    expect(diagWindowSize(10_000, undefined)).toBe(DIAG_WINDOW_INITIAL);
+    expect(diagWindowSize(30, undefined)).toBe(30);
+  });
+
+  it('每步 +STEP、单调不减、终值钉在 total（全量可达）', () => {
+    expect(nextDiagWindow(undefined, 10_000)).toBe(DIAG_WINDOW_INITIAL + DIAG_WINDOW_STEP);
+    let cur: number | undefined = undefined;
+    let prev: number | undefined = undefined;
+    for (let i = 0; i < 500 && cur !== 10_000; i++) {
+      cur = nextDiagWindow(cur, 10_000);
+      // 步长上界只从第二个窗口起算（首窗 = INITIAL + STEP，上方已单独钉住）
+      if (prev !== undefined) {
+        expect(cur).toBeGreaterThanOrEqual(prev);
+        expect(cur - prev).toBeLessThanOrEqual(DIAG_WINDOW_STEP);
+      }
+      prev = cur;
+    }
+    expect(cur).toBe(10_000);
+    expect(nextDiagWindow(cur, 10_000)).toBe(10_000); // 到顶后不再增长
+  });
+
+  it('已有窗口（limit）优先于 INITIAL，但被 total 钉住', () => {
+    expect(diagWindowSize(10_000, DIAG_WINDOW_INITIAL + DIAG_WINDOW_STEP)).toBe(DIAG_WINDOW_INITIAL + DIAG_WINDOW_STEP);
+    expect(diagWindowSize(100, 240)).toBe(100);
   });
 });

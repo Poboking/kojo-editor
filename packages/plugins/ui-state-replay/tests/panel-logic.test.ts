@@ -11,6 +11,8 @@ import type { ConditionExpr, FunctionReplay } from '@kojo/plugin-api';
 import {
   DEFAULT_SCENE_ID,
   MAX_SCENES,
+  PRED_WINDOW_INITIAL,
+  PRED_WINDOW_STEP,
   applyScene,
   captureSceneSlots,
   classifySlotValue,
@@ -21,7 +23,9 @@ import {
   exprArgSlots,
   groupUnknowns,
   newSceneId,
+  nextPredWindow,
   parseCallContextText,
+  predWindowSize,
   removeScene,
   sanitizeScenes,
   sceneSlotsToContextText,
@@ -435,5 +439,36 @@ describe('upsertSceneByName / removeScene / newSceneId', () => {
     const id = newSceneId(['scene-dup'], () => seq[i++]!);
     expect(id).toBe('scene-u3');
     expect(newSceneId([], () => 'x')).toBe('scene-x');
+  });
+});
+
+describe('谓词渲染窗口（触底增窗）', () => {
+  it('初窗 ≤ INITIAL；常见函数（<INITIAL 谓词）零哨兵', () => {
+    expect(predWindowSize(10_000, undefined)).toBe(PRED_WINDOW_INITIAL);
+    expect(predWindowSize(90, undefined)).toBe(90);
+  });
+
+  it('每步 +STEP、单调不减、终值钉在 total（全量可达）', () => {
+    expect(nextPredWindow(undefined, 10_000)).toBe(PRED_WINDOW_INITIAL + PRED_WINDOW_STEP);
+    let cur: number | undefined = undefined;
+    let prev: number | undefined = undefined;
+    for (let i = 0; i < 500 && cur !== 10_000; i++) {
+      cur = nextPredWindow(cur, 10_000);
+      // 步长上界只从第二个窗口起算（首窗 = INITIAL + STEP，上方已单独钉住）
+      if (prev !== undefined) {
+        expect(cur).toBeGreaterThanOrEqual(prev);
+        expect(cur - prev).toBeLessThanOrEqual(PRED_WINDOW_STEP);
+      }
+      prev = cur;
+    }
+    expect(cur).toBe(10_000);
+    expect(nextPredWindow(cur, 10_000)).toBe(10_000); // 到顶后不再增长
+  });
+
+  it('mustInclude：位点行在窗口外时把窗口撑到盖住它（"就是这一行"必须看得见）', () => {
+    expect(predWindowSize(5_000, undefined, 250)).toBe(250); // 初始窗口之外 → 撑大
+    expect(predWindowSize(5_000, PRED_WINDOW_INITIAL + PRED_WINDOW_STEP, 0)).toBe(PRED_WINDOW_INITIAL + PRED_WINDOW_STEP);
+    expect(predWindowSize(200, undefined, 250)).toBe(200); // 覆盖也被 total 钉住
+    expect(predWindowSize(5_000, 300, 100)).toBe(300); // 覆盖行在窗口内 → 不动
   });
 });

@@ -18,7 +18,7 @@
  *   - 变量语义标签（可选）来自当前 game adapter 的 variableSchema（槽位查询透传）。
  */
 
-import { createElement, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import type {
   Plugin,
   ProjectService,
@@ -32,13 +32,18 @@ import type {
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
+  CELL_WINDOW_INITIAL,
+  VAR_WINDOW_INITIAL,
   buildOverrides,
   cellLabel,
+  cellWindowSize,
   dedupePending,
   runInjectFlow,
   diffRows,
   listScopes,
   listVars,
+  nextCellWindow,
+  nextVarWindow,
   panelPhase,
   parseCellIndex,
   parseCellInput,
@@ -46,13 +51,169 @@ import {
   scopeLabel,
   supersededCount,
   varLabel,
+  varWindowSize,
   type PendingEdit,
   type ScopeKind,
   type VarRow,
 } from './panel-logic';
 
-/** 数组单元编辑列表的渲染上限（超大数组防 DOM 爆炸；过滤后仍受此限） */
-const CELL_ROWS_CAP = 120;
+/* ------------------------------ 渲染窗口 ------------------------------ */
+
+/**
+ * 「显示更多」哨兵（变量目录 / 单元列表共用）。进入滚动视口即自动追加下一窗
+ * （IntersectionObserver——`.inj-vars` / `.inj-cells` 两个容器自带 overflow-y: auto，
+ * 浏览器按可见矩形判相交，不必手动传 root）；观察器不可用（SSR / 测试 / 旧环境）
+ * 时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在无 DOM lib 下，
+ * `IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定回调 ref 拿真实节点，
+ * 避免每次渲染重挂 observer。
+ */
+type IntersectionObserverLike = new (
+  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
+) => { observe(target: object): void; disconnect(): void };
+
+/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
+const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
+
+function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
+  const anchor = useRef<unknown>(null);
+  const setAnchor = useCallback((node: unknown): void => {
+    anchor.current = node;
+  }, []);
+  /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
+  const onMoreRef = useRef(onMore);
+  onMoreRef.current = onMore;
+  useEffect(() => {
+    const el = anchor.current as object | null;
+    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
+    if (!el || !IO) return;
+    const io = new IO((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return createElement(
+    'button',
+    {
+      ref: setAnchor,
+      className: 'ghost small dim inj-more-btn',
+      style: MORE_BTN_STYLE,
+      title: '滚到此处会自动加载下一批；也可直接点击',
+      onClick: () => onMore(),
+    },
+    `显示更多（还剩 ${remaining}）`,
+  );
+}
+
+/** 变量目录（窗口化渲染；模块级组件 ⇒ 可独立 SSR 单测 DOM 行数上界） */
+export interface VarListProps {
+  /** 已过滤（过滤语义在面板层，组件只渲染窗口） */
+  readonly rows: readonly VarRow[];
+  readonly selectedKey: string | null;
+  /** 变量语义标签查询（适配器 variableSchema 透传；undefined = 无标签，照常渲染） */
+  readonly schema: VariableSchema | undefined;
+  /** 当前渲染窗口行数（undefined = 初始窗口） */
+  readonly limit: number | undefined;
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextVarWindow 计算） */
+  readonly onGrow: (total: number) => void;
+  /** 选中变量（选中 / 清空编辑草稿语义留在面板层） */
+  readonly onSelect: (key: string) => void;
+}
+
+export function VarList(props: VarListProps): ReactElement {
+  const { rows } = props;
+  const win = varWindowSize(rows.length, props.limit);
+  return createElement(
+    'div',
+    { className: 'inj-vars' },
+    ...rows.slice(0, win).map((r) => {
+      const label = varLabel(props.schema, r.key);
+      return createElement(
+        'button',
+        {
+          key: r.key,
+          className: `inj-var-row${props.selectedKey === r.key ? ' active' : ''}${r.kind === 'other' ? ' disabled' : ''}`,
+          disabled: r.kind === 'other',
+          title: r.cellsTruncated ? '该数组未能完整读取，无法改写' : r.preview,
+          onClick: () => props.onSelect(r.key),
+        },
+        createElement('span', { className: 'inj-var-key' }, r.key),
+        label ? createElement('span', { className: 'inj-var-label' }, label) : null,
+        createElement('span', { className: 'inj-var-preview dim' }, r.preview),
+        r.cellsTruncated ? createElement('span', { className: 'inj-warn' }, '未完整读取') : null,
+      );
+    }),
+    rows.length > win
+      ? createElement(MoreRow, {
+          key: 'more',
+          remaining: rows.length - win,
+          onMore: () => props.onGrow(rows.length),
+        })
+      : null,
+    rows.length === 0 ? createElement('div', { className: 'dim inj-empty' }, '该作用域没有变量') : null,
+  );
+}
+
+/** 数组单元编辑行（窗口化渲染；模块级组件 ⇒ 可独立 SSR 单测 DOM 行数上界） */
+export interface CellRowsProps {
+  readonly cells: ReadonlyArray<{ index: number[]; value: number | string }>;
+  /** 单元语义标签查询的变量键（适配器 variableSchema 透传） */
+  readonly varKey: string;
+  readonly schema: VariableSchema | undefined;
+  /** 草稿（键 = 下标 join(',')；状态归面板层，保证换变量即清） */
+  readonly drafts: Readonly<Record<string, string>>;
+  /** 当前渲染窗口行数（undefined = 初始窗口） */
+  readonly limit: number | undefined;
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextCellWindow 计算） */
+  readonly onGrow: (total: number) => void;
+  readonly onDraft: (cellKey: string, value: string) => void;
+  /** 「加入清单」（parse 校验 / 入清单语义留在面板层） */
+  readonly onSubmit: (index: number[], draft: string, oldValue: number | string) => void;
+}
+
+export function CellRows(props: CellRowsProps): ReactElement {
+  const { cells } = props;
+  const win = cellWindowSize(cells.length, props.limit);
+  return createElement(
+    'div',
+    { className: 'inj-cells' },
+    ...cells.slice(0, win).map((c) => {
+      const ik = c.index.join(',');
+      const draft = props.drafts[ik] ?? '';
+      const changed = draft.trim() !== '' && draft !== String(c.value);
+      const cellLbl = cellLabel(props.schema, props.varKey, c.index);
+      return createElement(
+        'div',
+        { key: ik, className: 'inj-cell-row' },
+        createElement('span', { className: 'inj-cell-index' }, `[${ik}]`),
+        cellLbl ? createElement('span', { className: 'inj-var-label' }, cellLbl) : null,
+        createElement('span', { className: 'inj-cell-old' }, String(c.value)),
+        createElement('input', {
+          className: 'inj-input inj-cell-input',
+          value: draft,
+          placeholder: '新值',
+          onChange: (e: { target: { value: string } }) => props.onDraft(ik, e.target.value),
+        }),
+        createElement(
+          'button',
+          {
+            className: 'ghost small',
+            disabled: !changed,
+            onClick: () => props.onSubmit(c.index, draft, c.value),
+          },
+          changed ? '加入清单' : '—',
+        ),
+      );
+    }),
+    cells.length > win
+      ? createElement(MoreRow, {
+          key: 'more',
+          remaining: cells.length - win,
+          onMore: () => props.onGrow(cells.length),
+        })
+      : null,
+  );
+}
 
 export function createUiSnapshotInjectorPlugin(): Plugin {
   return {
@@ -103,6 +264,25 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
         const [injectError, setInjectError] = useState<string | null>(null);
         const [result, setResult] = useState<SnapshotInjectionResult | null>(null);
         const [armed, setArmed] = useState(false);
+        /** 渲染窗口（行数；undefined = 初始窗口——旧实现是变量列表硬截 200 / 单元列表硬截 120） */
+        const [varWindow, setVarWindow] = useState<number | undefined>(undefined);
+        const [cellWindow, setCellWindow] = useState<number | undefined>(undefined);
+
+        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；计算在 panel-logic 可单测） */
+        const growVars = useCallback((total: number): void => {
+          setVarWindow((prev) => {
+            const next = nextVarWindow(prev, total);
+            if (next === (prev ?? VAR_WINDOW_INITIAL)) return prev; // 无变化不重渲
+            return next;
+          });
+        }, []);
+        const growCells = useCallback((total: number): void => {
+          setCellWindow((prev) => {
+            const next = nextCellWindow(prev, total);
+            if (next === (prev ?? CELL_WINDOW_INITIAL)) return prev;
+            return next;
+          });
+        }, []);
 
         /** 选档路径镜像（异步回包的归属守卫判据，见 runInjectFlow 注释） */
         const pathRef = useRef(path);
@@ -130,6 +310,8 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
           setInjectError(null);
           setArmed(false);
           setScope({ kind: 'top' });
+          setVarWindow(undefined); // 换档 = 新变量树，窗口回到初始
+          setCellWindow(undefined);
           if (!path) return;
           setLoading(true);
           let cancelled = false;
@@ -201,6 +383,23 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
             oldValue,
             newValue: parsed.value,
           });
+        };
+
+        /** 单元行「加入清单」：提交后清掉该格草稿（与旧行为一致：解析失败也清） */
+        const submitCellFromRow = (index: number[], draft: string, oldValue: number | string): void => {
+          submitCell(index, draft, oldValue);
+          const next = { ...cellDrafts };
+          delete next[index.join(',')];
+          setCellDrafts(next);
+        };
+
+        /** 选中变量行：选中 + 清空编辑草稿与单元窗口（换变量即开新窗口） */
+        const selectVar = (key: string): void => {
+          setSelectedKey(key);
+          setEditError(null);
+          setScalarDraft('');
+          setCellDrafts({});
+          setCellWindow(undefined);
         };
 
         const submitNewCell = (): void => {
@@ -315,6 +514,8 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
             const v = e.target.value;
             setSelectedKey(null);
             setEditError(null);
+            setVarWindow(undefined); // 换作用域 = 新变量目录，窗口回到初始
+            setCellWindow(undefined);
             if (v === 'top') setScope({ kind: 'top' });
             else if (v === 'em') setScope({ kind: 'em' });
             else setScope({ kind: 'char', blockIndex: Number(v.slice(5)) });
@@ -325,31 +526,15 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
               scopeLabel(archive, s))),
         );
 
-        // 变量目录
-        const varList = createElement('div', { className: 'inj-vars' },
-          ...filtered.slice(0, 200).map((r) => {
-            const label = varLabel(varSchema, r.key);
-            return createElement('button', {
-              key: r.key,
-              className: `inj-var-row${selectedKey === r.key ? ' active' : ''}${r.kind === 'other' ? ' disabled' : ''}`,
-              disabled: r.kind === 'other',
-              title: r.cellsTruncated ? '该数组未能完整读取，无法改写' : r.preview,
-              onClick: () => {
-                setSelectedKey(r.key);
-                setEditError(null);
-                setScalarDraft('');
-                setCellDrafts({});
-              },
-            },
-              createElement('span', { className: 'inj-var-key' }, r.key),
-              label ? createElement('span', { className: 'inj-var-label' }, label) : null,
-              createElement('span', { className: 'inj-var-preview dim' }, r.preview),
-              r.cellsTruncated ? createElement('span', { className: 'inj-warn' }, '未完整读取') : null,
-            );
-          }),
-          filtered.length > 200 ? createElement('div', { className: 'dim inj-more' }, `其余 ${filtered.length - 200} 个变量未显示（可用过滤）`) : null,
-          filtered.length === 0 ? createElement('div', { className: 'dim inj-empty' }, '该作用域没有变量') : null,
-        );
+        // 变量目录（窗口化渲染：初窗 ≤ INITIAL，触底 / 点击「显示更多」按 STEP 追加）
+        const varList = createElement(VarList, {
+          rows: filtered,
+          selectedKey,
+          schema: varSchema,
+          limit: varWindow,
+          onGrow: growVars,
+          onSelect: selectVar,
+        });
 
         // 编辑区
         let editor: ReturnType<typeof createElement> | null = null;
@@ -374,41 +559,22 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
           );
         } else if (selected && selected.kind === 'array' && selected.cells) {
           const isInt = selected.type.startsWith('int-array');
-          const cellRows = selected.cells.slice(0, CELL_ROWS_CAP).map((c) => {
-            const ik = c.index.join(',');
-            const draft = cellDrafts[ik] ?? '';
-            const changed = draft.trim() !== '' && draft !== String(c.value);
-            const cellLbl = cellLabel(varSchema, selected.key, c.index);
-            return createElement('div', { key: ik, className: 'inj-cell-row' },
-              createElement('span', { className: 'inj-cell-index' }, `[${ik}]`),
-              cellLbl ? createElement('span', { className: 'inj-var-label' }, cellLbl) : null,
-              createElement('span', { className: 'inj-cell-old' }, String(c.value)),
-              createElement('input', {
-                className: 'inj-input inj-cell-input',
-                value: draft,
-                placeholder: '新值',
-                onChange: (e: { target: { value: string } }) => setCellDrafts({ ...cellDrafts, [ik]: e.target.value }),
-              }),
-              createElement('button', {
-                className: 'ghost small',
-                disabled: !changed,
-                onClick: () => {
-                  submitCell(c.index, draft, c.value);
-                  const next = { ...cellDrafts };
-                  delete next[ik];
-                  setCellDrafts(next);
-                },
-              }, changed ? '加入清单' : '—'),
-            );
-          });
           const arrLabel = varLabel(varSchema, selected.key);
           editor = createElement('div', { className: 'inj-editor' },
             createElement('div', { className: 'inj-editor-head' },
               createElement('span', { className: 'inj-var-key' }, selected.key),
               arrLabel ? createElement('span', { className: 'inj-var-label' }, arrLabel) : null,
-              createElement('span', { className: 'dim' },
-                ` ${selected.cells.length} 个非空单元${selected.cells.length > CELL_ROWS_CAP ? `（显示前 ${CELL_ROWS_CAP}）` : ''}`)),
-            createElement('div', { className: 'inj-cells' }, ...cellRows),
+              createElement('span', { className: 'dim' }, ` ${selected.cells.length} 个非空单元`)),
+            createElement(CellRows, {
+              cells: selected.cells,
+              varKey: selected.key,
+              schema: varSchema,
+              drafts: cellDrafts,
+              limit: cellWindow,
+              onGrow: growCells,
+              onDraft: (ik: string, v: string) => setCellDrafts({ ...cellDrafts, [ik]: v }),
+              onSubmit: submitCellFromRow,
+            }),
             createElement('div', { className: 'inj-editor-row inj-new-cell' },
               createElement('input', {
                 className: 'inj-input inj-cell-index-input',

@@ -372,3 +372,48 @@ export async function runInjectFlow(deps: InjectFlowDeps, args: InjectFlowArgs, 
     hooks.onFailed(err instanceof Error ? err.message : String(err));
   }
 }
+
+/* ------------------------------ 渲染窗口 ------------------------------ */
+
+/**
+ * 变量目录的渲染窗口（触底增窗）。
+ *
+ * 旧实现硬截 200 行 + 一句「其余 N 个变量未显示」——第 201 个起不可达。窗口化后
+ * INITIAL 是首帧 DOM 上界，滚动触底或点击「显示更多」按 STEP 增长，全量可达。
+ * 取值：变量行单行 ~18px、列表容器可视 ~14 行 ⇒ INITIAL=80 已是数屏余量；
+ * 步长 160 按 1:2 节奏（与函数树的面窗口同比例）。
+ */
+export const VAR_WINDOW_INITIAL = 80;
+export const VAR_WINDOW_STEP = 160;
+
+/** 变量目录窗口当前应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
+export function varWindowSize(total: number, limit: number | undefined): number {
+  return Math.min(total, limit ?? VAR_WINDOW_INITIAL);
+}
+
+/** 变量目录窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))——单调不减、终值 = total */
+export function nextVarWindow(current: number | undefined, total: number): number {
+  const base = current ?? VAR_WINDOW_INITIAL;
+  return Math.min(total, Math.max(VAR_WINDOW_INITIAL, base + VAR_WINDOW_STEP));
+}
+
+/**
+ * 数组单元编辑列表的渲染窗口（触底增窗）。
+ *
+ * 旧实现硬截 120 行（表头写「显示前 120」）——第 121 个非空单元起不可达。取值：
+ * 单元行单行 ~22px、编辑区容器可视 ~9 行 ⇒ INITIAL=60 已盖住常见小数组；
+ * 大数组（数百上千非空单元）按 STEP=120 快进。
+ */
+export const CELL_WINDOW_INITIAL = 60;
+export const CELL_WINDOW_STEP = 120;
+
+/** 单元列表窗口当前应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
+export function cellWindowSize(total: number, limit: number | undefined): number {
+  return Math.min(total, limit ?? CELL_WINDOW_INITIAL);
+}
+
+/** 单元列表窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))——单调不减、终值 = total */
+export function nextCellWindow(current: number | undefined, total: number): number {
+  const base = current ?? CELL_WINDOW_INITIAL;
+  return Math.min(total, Math.max(CELL_WINDOW_INITIAL, base + CELL_WINDOW_STEP));
+}

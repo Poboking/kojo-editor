@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import type {
   ConventionIssue,
   ConventionLinterService,
@@ -14,6 +14,7 @@ import type {
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { charaDirOwners, type OwnershipDeps } from './ownership';
 import { buildGroupView, GROUP_MODE_LABEL, GROUP_MODES, type GroupMode } from './view';
+import { ISSUE_WINDOW_INITIAL, issueWindowSize, nextIssueWindow } from './panel-logic';
 
 /**
  * 约定校验结果面板（`ui.panel` 槽贡献）。
@@ -40,12 +41,124 @@ const SEVERITY_COLOR: Record<ConventionIssue['severity'], string> = {
   info: '#7f9cc0',
 };
 
-/** 单规则最多渲染条数（避免上万行 DOM 拖垮面板） */
-const RENDER_CAP = 300;
-
 function shortPath(p: string): string {
   const parts = p.split(/[\\/]/);
   return parts.slice(-2).join('/');
+}
+
+/* ------------------------------ 条目窗口 ------------------------------ */
+
+/**
+ * 「显示更多」哨兵（组内条目列表的触底器）。
+ *
+ * 进入滚动视口即自动追加下一窗（IntersectionObserver——组列表容器 `.conv-issues`
+ * 自带 overflow: auto，浏览器按可见矩形判相交，不必手动传 root）；观察器不可用
+ * （SSR / 测试 / 旧环境）时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在
+ * 无 DOM lib 下，`IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定
+ * 回调 ref 拿真实节点，避免每次渲染重挂 observer。
+ */
+type IntersectionObserverLike = new (
+  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
+) => { observe(target: object): void; disconnect(): void };
+
+/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
+const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
+
+function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
+  const anchor = useRef<unknown>(null);
+  const setAnchor = useCallback((node: unknown): void => {
+    anchor.current = node;
+  }, []);
+  /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
+  const onMoreRef = useRef(onMore);
+  onMoreRef.current = onMore;
+  useEffect(() => {
+    const el = anchor.current as object | null;
+    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
+    if (!el || !IO) return;
+    const io = new IO((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return createElement(
+    'button',
+    {
+      ref: setAnchor,
+      className: 'ghost small dim conv-more-btn',
+      style: MORE_BTN_STYLE,
+      title: '滚到此处会自动加载下一批；也可直接点击',
+      onClick: () => onMore(),
+    },
+    `显示更多（还剩 ${remaining}）`,
+  );
+}
+
+/** 组内条目列表（窗口化渲染；模块级组件 ⇒ 可独立 SSR 单测 DOM 行数上界） */
+export interface IssueListProps {
+  /** 条目来源组（窗口按组键定位） */
+  readonly groupKey: string;
+  readonly issues: readonly ConventionIssue[];
+  /** 组头已示总数（窗口逼近它时哨兵消失的判据） */
+  readonly count: number;
+  /** 角色/家族视角里条目行要带规则标识（一组里混着多条规则）；规则视角不需要 */
+  readonly showRuleTag: boolean;
+  /** 该组当前渲染窗口行数（undefined = 初始窗口） */
+  readonly limit: number | undefined;
+  /** 触底 / 点击「显示更多」→ 扩大该组窗口（新值由 nextIssueWindow 计算） */
+  readonly onGrow: (groupKey: string, total: number) => void;
+  /** 点击条目 = 跳转意图（宿主消费） */
+  readonly onOpen: (issue: ConventionIssue) => void;
+}
+
+export function IssueList(props: IssueListProps): ReactElement {
+  const { issues, count } = props;
+  const win = issueWindowSize(count, props.limit);
+  return createElement(
+    'ul',
+    { className: 'conv-issues' },
+    ...issues.slice(0, win).map((issue, i) =>
+      createElement(
+        'li',
+        { key: issue.key ?? `${props.groupKey}-${i}`, className: 'conv-issue' },
+        createElement(
+          'button',
+          {
+            className: `conv-issue-btn sev-${issue.severity}`,
+            title: issue.message,
+            onClick: () => props.onOpen(issue),
+          },
+          createElement('span', {
+            className: 'conv-dot',
+            style: { backgroundColor: SEVERITY_COLOR[issue.severity] },
+          }),
+          createElement(
+            'span',
+            { className: 'conv-issue-loc dim' },
+            issue.filePath ? `${shortPath(issue.filePath)}:${issue.line ?? 0}` : '（无定位）',
+          ),
+          // 角色/家族的一组里混着多条规则 ⇒ 条目行得说出它是哪条规则的事；
+          // 规则视角那一带已经在组头上给过，不重复显示。
+          props.showRuleTag
+            ? createElement('span', { className: 'conv-issue-rule dim' }, issue.ruleId)
+            : null,
+          createElement('span', { className: 'conv-issue-msg' }, issue.message),
+        ),
+      ),
+    ),
+    count > win
+      ? createElement(
+          'li',
+          { className: 'conv-more' },
+          createElement(MoreRow, {
+            key: 'more',
+            remaining: count - win,
+            onMore: () => props.onGrow(props.groupKey, count),
+          }),
+        )
+      : null,
+  );
 }
 
 export function createUiConventionReportPlugin(): Plugin {
@@ -85,9 +198,22 @@ export function createUiConventionReportPlugin(): Plugin {
         const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
         const [running, setRunning] = useState(false);
         const [expanded, setExpanded] = useState<Set<string>>(new Set());
-        const [showAll, setShowAll] = useState<Set<string>>(new Set());
+        /** 各组已扩张的渲染窗口（行数；缺省 = ISSUE_WINDOW_INITIAL——旧实现每组硬截 300 条） */
+        const [groupWindows, setGroupWindows] = useState<Map<string, number>>(new Map());
         /** 分组视角：默认「按规则看」（= 本批之前的视图） */
         const [mode, setMode] = useState<GroupMode>('rule');
+
+        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；计算在 panel-logic 可单测） */
+        const growGroup = useCallback((groupKey: string, total: number): void => {
+          setGroupWindows((prev) => {
+            const cur = prev.get(groupKey);
+            const next = nextIssueWindow(cur, total);
+            if (next === (cur ?? ISSUE_WINDOW_INITIAL)) return prev; // 无变化不重渲
+            const m = new Map(prev);
+            m.set(groupKey, next);
+            return m;
+          });
+        }, []);
 
         /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
         const ic = (name: string, size: number, fallback: string): ReactNode =>
@@ -222,7 +348,6 @@ export function createUiConventionReportPlugin(): Plugin {
                 { className: 'conv-groups' },
                 ...view.groups.map((group) => {
                   const isOpen = expanded.has(group.key);
-                  const cap = showAll.has(group.key) ? group.count : RENDER_CAP;
                   return createElement(
                     'li',
                     { key: group.key, className: 'conv-group' },
@@ -235,50 +360,15 @@ export function createUiConventionReportPlugin(): Plugin {
                     ),
                     createElement('div', { className: 'conv-rule-desc dim' }, group.desc),
                     isOpen
-                      ? createElement(
-                          'ul',
-                          { className: 'conv-issues' },
-                          ...group.issues.slice(0, cap).map((issue, i) =>
-                            createElement(
-                              'li',
-                              { key: issue.key ?? `${group.key}-${i}`, className: 'conv-issue' },
-                              createElement(
-                                'button',
-                                {
-                                  className: `conv-issue-btn sev-${issue.severity}`,
-                                  title: issue.message,
-                                  onClick: () => open(issue, group.title),
-                                },
-                                createElement('span', {
-                                  className: 'conv-dot',
-                                  style: { backgroundColor: SEVERITY_COLOR[issue.severity] },
-                                }),
-                                createElement(
-                                  'span',
-                                  { className: 'conv-issue-loc dim' },
-                                  issue.filePath ? `${shortPath(issue.filePath)}:${issue.line ?? 0}` : '（无定位）',
-                                ),
-                                // 角色/家族的一组里混着多条规则 ⇒ 条目行得说出它是哪条规则的事；
-                                // 规则视角那一带已经在组头上给过，不重复显示。
-                                group.showRuleTag
-                                  ? createElement('span', { className: 'conv-issue-rule dim' }, issue.ruleId)
-                                  : null,
-                                createElement('span', { className: 'conv-issue-msg' }, issue.message),
-                              ),
-                            ),
-                          ),
-                          group.count > cap
-                            ? createElement(
-                                'li',
-                                { className: 'conv-more' },
-                                createElement(
-                                  'button',
-                                  { className: 'ghost small', onClick: () => toggle(setShowAll, group.key) },
-                                  `显示全部 ${group.count} 条`,
-                                ),
-                              )
-                            : null,
-                        )
+                      ? createElement(IssueList, {
+                          groupKey: group.key,
+                          issues: group.issues,
+                          count: group.count,
+                          showRuleTag: group.showRuleTag,
+                          limit: groupWindows.get(group.key),
+                          onGrow: growGroup,
+                          onOpen: (issue: ConventionIssue) => open(issue, group.title),
+                        })
                       : null,
                   );
                 }),
