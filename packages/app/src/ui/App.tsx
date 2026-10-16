@@ -10,6 +10,7 @@ import {
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, FileStat, GameProject, RecentProject } from '@kojo/plugin-api';
+import { isPathUnder } from '@kojo/plugin-api';
 import { removeRecentOptimistic } from './WelcomeView';
 import { invoke, isTauri } from '../bridge/invoke';
 import { bootstrapKernel } from '../bootstrap';
@@ -17,10 +18,15 @@ import { perf } from '../perf';
 import { revealTargetOf, type RevealTarget } from '../monaco/reveal-position';
 import {
   NOT_READY_MESSAGE,
+  clearDropHover,
+  copyDroppedFiles,
+  dropTargetDirAt,
   dropHintText,
   nextDropOverlay,
+  planDropAt,
   routeDroppedPaths,
   subscribeDragDrop,
+  updateDropHover,
   type DropOverlayState,
 } from './drag-drop';
 import { useNotify } from './NotificationCenter';
@@ -104,6 +110,11 @@ export function App(): ReactElement {
   const actionsRef = useRef<EditorPaneActions | null>(null);
   const registerActions = useCallback((a: EditorPaneActions | null) => {
     actionsRef.current = a;
+  }, []);
+  /** 文件树刷新句柄（B6 拖入复制落地后失效目标目录；ProjectView 注册，形态照 actionsRef） */
+  const treeRefreshRef = useRef<(() => void) | null>(null);
+  const registerTreeRefresh = useCallback((refresh: () => void) => {
+    treeRefreshRef.current = refresh;
   }, []);
   const onDirtyChange = useCallback((path: string, dirty: boolean) => {
     setDirtyPaths((prev) => {
@@ -471,9 +482,10 @@ export function App(): ReactElement {
   const rootDirRef = useRef<string | null>(null);
   rootDirRef.current = project?.rootDir ?? null;
 
-  // 从资源管理器拖文件/文件夹进窗口即打开（Rust `kojo:drag-drop` → 这里落地）。
-  // 只读链路：路径只喂既有打开入口，写权限仍由写允许域既有分野决定。
-  // 文件夹是项目入口（欢迎页与项目态同权，对标 VSCode）；文件只在项目态开标签。
+  // 从资源管理器拖文件/文件夹进窗口（Rust `kojo:drag-drop` → 这里落地）。
+  // 打开语义：只读链路，路径只喂既有打开入口（文件夹是项目入口；文件只在项目态开标签）。
+  // 复制语义（B6）：drop 坐标命中树内目录行/包节点（data-drop-dir）→ 复制进该目录——
+  // 唯一写通道 kernel.io.copyFile（只对 to 过闸）；isWritable 预检 + 防覆盖查重都在它前面。
   useEffect(() => {
     if (!kernel) return;
     const io = kernel.io;
@@ -483,16 +495,39 @@ export function App(): ReactElement {
       setDropHint((s) => nextDropOverlay(s, { type }));
     };
     void subscribeDragDrop({
-      onEnter: () => overlay('enter'),
-      onOver: () => overlay('over'),
-      onLeave: () => overlay('leave'),
-      onDrop: (paths) => {
+      onEnter: (x, y) => {
+        overlay('enter');
+        updateDropHover(x, y);
+      },
+      onOver: (x, y) => {
+        overlay('over');
+        updateDropHover(x, y);
+      },
+      onLeave: () => {
+        overlay('leave');
+        clearDropHover();
+      },
+      onDrop: (paths, x, y) => {
         overlay('drop');
+        clearDropHover();
         const ph = phaseRef.current;
         if (ph !== 'welcome' && ph !== 'project') {
           // opening/boot：项目还没就绪，拖什么先都接不住——说一句，不静默
           notify({ kind: 'info', message: NOT_READY_MESSAGE });
           return;
+        }
+        if (ph === 'project' && x !== null && y !== null) {
+          const plan = planDropAt(dropTargetDirAt(x, y));
+          if (plan.kind === 'copy') {
+            void copyDroppedFiles({
+              io,
+              paths,
+              targetDir: plan.targetDir,
+              notify: (message) => notify({ kind: 'info', message }),
+              onLanded: () => treeRefreshRef.current?.(),
+            });
+            return;
+          }
         }
         void routeDroppedPaths({
           io,
@@ -586,6 +621,80 @@ export function App(): ReactElement {
   const saveAll = useCallback(async (): Promise<boolean> => {
     return actionsRef.current ? actionsRef.current.saveAll() : false;
   }, []);
+
+  /* -------------- 文件树编辑的标签收尾（B1；状态单源在此——树侧只发意图） -------------- */
+
+  /** 标签/激活文件的最新值快照（回调经 ref 闭包下发，不能吃陈旧闭包） */
+  const openTabsRef = useRef(openTabs);
+  openTabsRef.current = openTabs;
+  const activeFileRef = useRef(activeFile);
+  activeFileRef.current = activeFile;
+
+  /**
+   * 删除/重命名的守门：涉及**打开中且有未保存修改**的文件就拦下，给一句人话。
+   * 目录同样拦——脏文件在被删目录之下时，"删目录"会把它一起带走（递归删除是大刀）。
+   */
+  const guardFileOp = useCallback(
+    (paths: readonly string[]): string | null => {
+      for (const target of paths) {
+        for (const p of dirtyPaths) {
+          if (p === target || isPathUnder(target, p)) {
+            const name = p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
+            return `文件「${name}」有未保存修改，请先保存或关闭它，再进行删除/重命名。`;
+          }
+        }
+      }
+      return null;
+    },
+    [dirtyPaths],
+  );
+
+  /**
+   * 盘上操作落地后的标签收尾：被删的关标签（只可能是干净标签——脏的已被守门拦下）、
+   * 被改名的换路径；激活文件随之切换到邻居或换新路径。
+   */
+  const onFilesGone = useCallback(
+    (deleted: readonly string[], renamed: ReadonlyArray<{ from: string; to: string }>) => {
+      const del = [...deleted];
+      setOpenTabs((prev) => {
+        let next = prev.filter((p) => !del.some((d) => p === d || isPathUnder(d, p)));
+        for (const r of renamed) next = next.map((t) => (t === r.from ? r.to : t));
+        return next;
+      });
+      setDirtyPaths((prev) => {
+        let next: Set<string> | null = null;
+        for (const d of del) {
+          for (const p of prev) {
+            if (p === d || isPathUnder(d, p)) {
+              next ??= new Set(prev);
+              next.delete(p);
+            }
+          }
+        }
+        // 改名的脏标签不该出现（守门拦了），但真发生时也不能留出悬空旧路径
+        for (const r of renamed) {
+          if (prev.has(r.from)) {
+            next ??= new Set(prev);
+            next.delete(r.from);
+            next.add(r.to);
+          }
+        }
+        return next ?? prev;
+      });
+      const cur = activeFileRef.current;
+      if (cur === null) return;
+      if (del.some((d) => cur === d || isPathUnder(d, cur))) {
+        const tabs = openTabsRef.current.filter((p) => !del.some((d) => p === d || isPathUnder(d, p)));
+        const i = openTabsRef.current.indexOf(cur);
+        setActiveFile(tabs.length > 0 ? (tabs[Math.min(Math.max(i, 0), tabs.length - 1)] ?? null) : null);
+        setReveal(null);
+        return;
+      }
+      const moved = renamed.find((r) => r.from === cur);
+      if (moved) setActiveFile(moved.to);
+    },
+    [],
+  );
 
   const closeProject = useCallback(async () => {
     if (!kernel) return;
@@ -697,6 +806,9 @@ export function App(): ReactElement {
           onReload={() => void openProject(project.rootDir, { keepView: true })}
           writable={writable ?? false}
           onReauth={requestReauth}
+          guardFileOp={guardFileOp}
+          onFilesGone={onFilesGone}
+          registerTreeRefresh={registerTreeRefresh}
         />
       </Suspense>
     ) : (

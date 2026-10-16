@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  COPY_DIR_UNSUPPORTED_REASON,
+  COPY_READONLY_REASON,
   DIRECTORY_REASON,
   DRAG_DROP_EVENT_NAME,
   DIRTY_SWITCH_REASON,
@@ -10,8 +12,12 @@ import {
   UNREADABLE_REASON,
   UNKNOWN_FILE_REASON,
   classifyDrop,
+  copyDroppedFiles,
+  copyExistsReason,
+  dropTargetDirFrom,
   formatRejections,
   nextDropOverlay,
+  planDropAt,
   processDroppedFiles,
   routeDroppedPaths,
   splitByStat,
@@ -394,5 +400,208 @@ describe('subscribeDragDrop 的浏览器降级', () => {
     });
     expect(typeof un).toBe('function');
     un();
+  });
+});
+
+/* -------------------- B6：拖文件到树内目录 = 复制进项目 -------------------- */
+
+describe('planDropAt：drop 点 → 计划', () => {
+  it('命中目录行 = 复制进该目录', () => {
+    expect(planDropAt('D:\\proj\\pkg')).toEqual({ kind: 'copy', targetDir: 'D:\\proj\\pkg' });
+  });
+  it('未命中（树外/文件行/欢迎页）= 维持 A1 打开语义', () => {
+    expect(planDropAt(null)).toEqual({ kind: 'open' });
+  });
+});
+
+describe('dropTargetDirFrom：向上找最近的目录落点（纯 closest 判定）', () => {
+  /** node 环境没有 DOM：用最小替身模拟 elementFromPoint 命中链 */
+  const fakeEl = (self: Record<string, unknown> | null, parent: Record<string, unknown> | null) => ({
+    closest(selectors: string): unknown {
+      if (self && selectors in self) return self;
+      if (parent && selectors in parent) return parent;
+      return null;
+    },
+  });
+
+  it('命中的是行内 span，向上爬到挂了 data-drop-dir 的祖先', () => {
+    const dirRow = { '[data-drop-dir]': true, dataset: { dropDir: 'D:\\proj\\pkg' } };
+    const span = fakeEl({ className: 'tree-dir-name' }, dirRow);
+    expect(dropTargetDirFrom(span)).toBe('D:\\proj\\pkg');
+  });
+
+  it('命中的就是目录行本体：直接返回', () => {
+    const btn = fakeEl({ '[data-drop-dir]': true, dataset: { dropDir: 'C:\\game\\kou' } }, null);
+    expect(dropTargetDirFrom(btn)).toBe('C:\\game\\kou');
+  });
+
+  it('文件行 / 树外空白：没有目录祖先 → null（落点交给打开语义）', () => {
+    const fileRow = { dataset: {} };
+    expect(dropTargetDirFrom(fakeEl({ className: 'tree-file' }, fileRow))).toBeNull();
+    expect(dropTargetDirFrom(null)).toBeNull();
+  });
+});
+
+/** 复制链路的假 io：stat（三态拆分）/ statFiles（查重）/ copyFile / isWritable 各司其职 */
+function copyIo(opts: {
+  dirs?: string[];
+  missing?: string[];
+  existingTargets?: string[];
+  writable?: boolean;
+  copyError?: string;
+} = {}) {
+  const dirs = new Set(opts.dirs ?? []);
+  const missing = new Set(opts.missing ?? []);
+  const existing = new Set(opts.existingTargets ?? []);
+  const stat = vi.fn(async (p: string) => {
+    if (missing.has(p)) return null;
+    return { size: 1, mtimeMs: 0, isDirectory: dirs.has(p) };
+  });
+  const statFiles = vi.fn(async (ps: string[]) =>
+    ps.map((p) => ({ path: p, exists: existing.has(p), mtimeMs: null, size: null })),
+  );
+  const copyFile = vi.fn(async (from: string, to: string) => {
+    if (opts.copyError) throw new Error(opts.copyError);
+    existing.add(to);
+  });
+  const isWritable = vi.fn(() => opts.writable ?? true);
+  return { io: { stat, statFiles, copyFile, isWritable }, copyFile, statFiles, isWritable };
+}
+
+describe('copyDroppedFiles：拖文件到目录 = 复制进项目', () => {
+  it('多文件复制成功：逐个 copyFile 到 joinPath 的落点，聚合一句「已复制 N 个」，onLanded 一次', async () => {
+    const f = copyIo();
+    const notes: string[] = [];
+    let landed = 0;
+    await copyDroppedFiles({
+      io: f.io,
+      paths: ['C:\\别处\\README.md', 'D:\\素材\\立绘.png'],
+      targetDir: 'D:\\proj\\pkg',
+      notify: (m) => notes.push(m),
+      onLanded: () => {
+        landed += 1;
+      },
+    });
+    // README/图片这类非方言扩展名也照拷——复制不看白名单，打开才看
+    expect(f.copyFile).toHaveBeenCalledTimes(2);
+    expect(f.copyFile).toHaveBeenCalledWith('C:\\别处\\README.md', 'D:\\proj\\pkg/README.md');
+    expect(f.copyFile).toHaveBeenCalledWith('D:\\素材\\立绘.png', 'D:\\proj\\pkg/立绘.png');
+    expect(landed).toBe(1);
+    expect(notes).toEqual(['已复制 2 个文件到「pkg」']);
+  });
+
+  it('目录拖进来不复制（递归复制是新功能）：人话拒绝，不静默也不当复制', async () => {
+    const f = copyIo({ dirs: ['D:\\一个文件夹'] });
+    const notes: string[] = [];
+    await copyDroppedFiles({
+      io: f.io,
+      paths: ['D:\\一个文件夹'],
+      targetDir: 'D:\\proj\\pkg',
+      notify: (m) => notes.push(m),
+      onLanded: () => {},
+    });
+    expect(f.copyFile).not.toHaveBeenCalled();
+    expect(notes[0]).toContain(COPY_DIR_UNSUPPORTED_REASON);
+    expect(notes[0]).toContain('一个文件夹');
+  });
+
+  it('只读区预检在先：isWritable 为假 → copyFile 一次都不碰，整批人话拒绝，零绕闸', async () => {
+    const f = copyIo({ writable: false });
+    const notes: string[] = [];
+    let landed = 0;
+    await copyDroppedFiles({
+      io: f.io,
+      paths: ['C:\\别处\\a.erm', 'C:\\别处\\b.md'],
+      targetDir: 'D:\\proj\\pkg',
+      notify: (m) => notes.push(m),
+      onLanded: () => {
+        landed += 1;
+      },
+    });
+    expect(f.isWritable).toHaveBeenCalledWith('D:\\proj\\pkg');
+    expect(f.copyFile).not.toHaveBeenCalled();
+    expect(landed).toBe(0);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain(COPY_READONLY_REASON);
+    expect(notes[0]).toContain('a.erm');
+    expect(notes[0]).toContain('b.md');
+  });
+
+  it('防覆盖：目标已有同名文件 → 拒绝且不覆盖，其余照拷（部分成功聚合反馈）', async () => {
+    const f = copyIo({ existingTargets: ['D:\\proj\\pkg/README.md'] });
+    const notes: string[] = [];
+    let landed = 0;
+    await copyDroppedFiles({
+      io: f.io,
+      paths: ['C:\\别处\\README.md', 'C:\\别处\\新事件.erm'],
+      targetDir: 'D:\\proj\\pkg',
+      notify: (m) => notes.push(m),
+      onLanded: () => {
+        landed += 1;
+      },
+    });
+    expect(f.copyFile).toHaveBeenCalledTimes(1);
+    expect(f.copyFile).toHaveBeenCalledWith('C:\\别处\\新事件.erm', 'D:\\proj\\pkg/新事件.erm');
+    expect(landed).toBe(1);
+    expect(notes).toHaveLength(2); // 成功一句 + 失败清单一条，各说各话
+    expect(notes[0]).toBe('已复制 1 个文件到「pkg」');
+    expect(notes[1]).toContain(copyExistsReason('README.md'));
+  });
+
+  it('失踪/无权限的拖入项不静默：进失败清单给 UNREADABLE 理由', async () => {
+    const f = copyIo({ missing: ['gone.md'] });
+    const notes: string[] = [];
+    await copyDroppedFiles({
+      io: f.io,
+      paths: ['gone.md', 'ok.md'],
+      targetDir: 'D:\\proj\\pkg',
+      notify: (m) => notes.push(m),
+      onLanded: () => {},
+    });
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toBe('已复制 1 个文件到「pkg」');
+    expect(notes[1]).toContain(UNREADABLE_REASON);
+  });
+
+  it('copyFile 抛错（盘侧失败）：进失败清单带原因，绝不静默', async () => {
+    const f = copyIo({ copyError: 'device unreachable' });
+    const notes: string[] = [];
+    await copyDroppedFiles({
+      io: f.io,
+      paths: ['C:\\别处\\a.md'],
+      targetDir: 'D:\\proj\\pkg',
+      notify: (m) => notes.push(m),
+      onLanded: () => {},
+    });
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('复制失败');
+    expect(notes[0]).toContain('device unreachable');
+  });
+
+  it('全军覆没（只有被拒项）：不报成功、onLanded 不触发', async () => {
+    const f = copyIo({ dirs: ['D:\\文件夹'], missing: ['gone.md'] });
+    const notes: string[] = [];
+    let landed = 0;
+    await copyDroppedFiles({
+      io: f.io,
+      paths: ['D:\\文件夹', 'gone.md'],
+      targetDir: 'D:\\proj\\pkg',
+      notify: (m) => notes.push(m),
+      onLanded: () => {
+        landed += 1;
+      },
+    });
+    expect(f.copyFile).not.toHaveBeenCalled();
+    expect(landed).toBe(0);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain(COPY_DIR_UNSUPPORTED_REASON);
+    expect(notes[0]).toContain(UNREADABLE_REASON);
+  });
+
+  it('文案纪律：只读拒绝是「批准」口径的人话，不出现白名单/域等内部词', () => {
+    expect(COPY_READONLY_REASON).toContain('只读');
+    expect(COPY_READONLY_REASON).not.toMatch(/白名单|writable|域|断言/);
+    expect(copyExistsReason('x.md')).toContain('没有复制');
+    expect(copyExistsReason('x.md')).not.toMatch(/stat|exists|白名单/);
   });
 });

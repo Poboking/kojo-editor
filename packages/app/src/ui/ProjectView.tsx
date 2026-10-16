@@ -8,6 +8,7 @@ import { ProblemPanel } from './ProblemPanel';
 import { SearchPanel } from './SearchPanel';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
 import { FileTree } from './FileTree';
+import { revealInExplorer } from './reveal-explorer';
 import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
 import { Icon } from './icons';
 import type { ShellCommandSpec } from './commands';
@@ -49,6 +50,19 @@ interface Props {
   writable: boolean;
   /** 重授权入口（徽章点击 / 通知 action 共用） */
   onReauth: () => void;
+  /**
+   * 文件树编辑的脏标签守门（B1）：删除/重命名前由树侧询问宿主——标签状态单源在 App，
+   * 这里只做透传接线（与 onOpenFile 同形）。
+   */
+  guardFileOp?: (paths: readonly string[]) => string | null;
+  /** 盘上操作落地后宿主收尾（关干净标签/改标签路径）；同上只透传 */
+  onFilesGone?: (deleted: readonly string[], renamed: ReadonlyArray<{ from: string; to: string }>) => void;
+  /**
+   * 树刷新句柄注册（B6 拖入复制）：宿主把 OS 文件复制进树的某个目录后，用它失效
+   * 目标目录的列举缓存——file.changed 事件被 affectsKojoTree 按口上域过滤、监视还有
+   * 去抖延迟，落文件的那次重列等不起，这里给一条直通车。形态照 registerActions。
+   */
+  registerTreeRefresh?: (refresh: () => void) => void;
 }
 
 /** 标签显示名：路径末段（完整路径留 title 悬浮提示） */
@@ -95,6 +109,9 @@ export function ProjectView({
   onReload,
   writable,
   onReauth,
+  guardFileOp,
+  onFilesGone,
+  registerTreeRefresh,
 }: Props): ReactElement {
   const [editorStatus, setEditorStatus] = useState<EditorStatusInfo | null>(null);
   /** 壳层通知（G1：命令按下去必须有回应——兑现不了就说一句人话，不灰掉不说话） */
@@ -236,6 +253,11 @@ export function ProjectView({
   /** 递增即失效信号（FileTree 只认"变化"；用布尔会把连续两次外部改动合并掉） */
   const [treeNonce, setTreeNonce] = useState(0);
 
+  // B6：树刷新直通车（宿主拖入复制落地后失效目标目录；句柄只注册一次）
+  useEffect(() => {
+    registerTreeRefresh?.(() => setTreeNonce((n) => n + 1));
+  }, [registerTreeRefresh]);
+
   useEffect(() => {
     // 合批窗口：一次外部写入常炸出多条事件（原子写临时文件 + rename、连写几份档）。
     // 内核去抖已经按文件合过一轮（§5.84），这里合的是"整棵树的目录重列"这一层。
@@ -251,8 +273,8 @@ export function ProjectView({
     };
   }, [kernel, project]);
 
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss };
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer };
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
       const a = fileTreeArgsRef.current;
@@ -265,6 +287,10 @@ export function ProjectView({
           listDir={a.listDir}
           walkDir={a.walkDir}
           onImportPackage={a.importPackage}
+          io={a.io}
+          guardFileOp={a.guardFileOp}
+          onFilesGone={a.onFilesGone}
+          onRevealInExplorer={a.onRevealInExplorer}
           refreshNonce={a.treeNonce}
           gloss={a.gloss}
         />

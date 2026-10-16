@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
-import type { DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
+import type { DirEntry, ErbIndex, FileIO, GameProject, WalkOptions } from '@kojo/plugin-api';
 import { isErbDialectPath } from '@kojo/plugin-api';
 import {
   collapseAll,
@@ -10,6 +10,21 @@ import {
   type RevealGroup,
   type RevealResult,
 } from './file-tree-reveal';
+import {
+  deleteConfirmText,
+  fsLocatePlanOf,
+  isUnderPath,
+  joinPath,
+  locatePlanOf,
+  menuItemsFor,
+  parentDir,
+  relativeToRoot,
+  validateEntryName,
+  type LocatePlan,
+  type MenuCapability,
+  type MenuItemId,
+  type MenuItemSpec,
+} from './file-tree-ops';
 import { Icon } from './icons';
 
 interface Props {
@@ -30,6 +45,30 @@ interface Props {
   walkDir?: (path: string, opts?: WalkOptions) => Promise<DirEntry[]>;
   /** 导入作者包为工作区项目（口上项目批 P-F；缺省 → 不显示导入菜单项） */
   onImportPackage?: (pkg: { dir: string; label: string }) => void;
+  /**
+   * 内核文件 IO（文件树编辑批 B1/B2）：新建 / 重命名 / 删除的落地面。
+   * 缺省 → 这三类菜单项**整组不显示**（没有能力的动作灰着不说话 = 违反铁律 4）。
+   * 写允许域由 io.isWritable 预检——不可行的位置给一句人话，绝不绕闸也绝不静默失败。
+   */
+  io?: FileIO;
+  /**
+   * 「在资源管理器中显示」（B3 的 UI 侧预留；桌面壳才有这能力）。
+   * 缺省 → 菜单项不显示（浏览器壳没有这能力，灰着不说话 = 违反铁律 4）。
+   */
+  onRevealInExplorer?: (path: string) => void;
+  /**
+   * 脏标签守门（删除/重命名前先问宿主）：返回第一份拦下操作的**人话理由**；null = 放行。
+   *
+   * 落法理由（welcome 批先例）：openTabs / dirtyPaths 的状态单源在宿主（App），
+   * 所以"这份文件现在能不能动"也由宿主裁决——树只发意图，不持有标签状态的影子副本。
+   * 宿主同时拦「精确命中」与「打开中的脏文件位于被删/改名目录之下」两种形态。
+   */
+  guardFileOp?: (paths: readonly string[]) => string | null;
+  /**
+   * 盘上操作成功后通知宿主收尾：关掉被删文件的干净标签、改写被重命名文件的标签路径。
+   * 与 guardFileOp 同理落在宿主——标签列表是它的 state，树侧只报告事实（谁没了/搬去哪）。
+   */
+  onFilesGone?: (deleted: readonly string[], renamed: ReadonlyArray<{ from: string; to: string }>) => void;
   /**
    * 目录缓存失效信号（HK-5，2026-10-13）：宿主在口上域发生外部改动时递增。
    * 值本身没有意义，**变化**才是事件——用 nonce 而不是布尔，是因为连续两次改动
@@ -110,11 +149,60 @@ export function dirsToRelist(
   return [...out];
 }
 
-/** 右键菜单作用域：单个角色 / 整棵树根 / 单个作者包（导入口径，P-F） */
+/** 右键菜单作用域：单个角色 / 整棵树根 / 单个作者包（导入口径，P-F）/ 单个目录 / 单个文件 */
 type MenuScope =
   | { kind: 'group'; group: Group }
   | { kind: 'root' }
-  | { kind: 'package'; dir: string; label: string };
+  | { kind: 'package'; dir: string; label: string }
+  | { kind: 'dir'; path: string }
+  | { kind: 'file'; path: string };
+
+/**
+ * 行内编辑态（B1/B2）：重命名与新建共用一个输入框。
+ *
+ * - `create`：在 `dir` 里新建；dir 的列举必须已展开（调用侧先开层），输入行插在该层最上；
+ * - `rename`：把 path 那一行改画成输入框（同 VSCode；Esc 取消 / Enter 确认 / 失焦取消）。
+ */
+type EditState =
+  | { mode: 'create'; kind: 'file' | 'dir'; dir: string }
+  | { mode: 'rename'; path: string; isDir: boolean };
+
+/** 行内编辑输入框（模块级 ⇒ SSR 单测可用；受控值在宿主，Esc/Enter/失焦三个出口都从这里出） */
+function EditRow(props: {
+  value: string;
+  placeholder: string;
+  onChange: (v: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}): ReactElement {
+  const ref = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    // 同 VSCode：出现即聚焦并全选（输入新名直接覆盖旧名）
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+  return (
+    <input
+      ref={ref}
+      className="tree-edit-input"
+      value={props.value}
+      placeholder={props.placeholder}
+      onChange={(e) => props.onChange(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          props.onCommit();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          props.onCancel();
+        }
+      }}
+      onBlur={props.onCancel}
+    />
+  );
+}
 
 /** 角色目录前缀（长前缀优先，避免嵌套目录误归属） */
 function ownerOf(
@@ -293,21 +381,35 @@ export interface FileRowsProps {
   readonly limit: number;
   readonly activeFile: string | null;
   readonly onOpenFile: (path: string) => void;
+  /**
+   * 行内重命名（B1）：与 path 匹配的那行改画输入框（node 由宿主造好塞进来，
+   * FileRows 保持无知——它不认识编辑态，只知道"这一行换成这个元素"）。
+   * 缺省 → 无编辑，旧行为。
+   */
+  readonly edit?: { readonly path: string; readonly node: ReactElement } | null;
+  /** 文件行右键（B1；缺省 → 文件行无右键，旧行为） */
+  readonly onFileContext?: (e: ReactMouseEvent, path: string) => void;
 }
 
-export function FileRows({ files, limit, activeFile, onOpenFile }: FileRowsProps): ReactElement {
+export function FileRows({ files, limit, activeFile, onOpenFile, edit, onFileContext }: FileRowsProps): ReactElement {
   const rows = limit >= files.length ? files : files.slice(0, Math.max(0, limit));
   return (
     <>
       {rows.map((f) => (
         <li key={f}>
-          <button
-            className={`tree-file ${f === activeFile ? 'active' : ''}`}
-            title={f}
-            onClick={() => onOpenFile(f)}
-          >
-            {baseName(f)}
-          </button>
+          {edit && edit.path === f ? (
+            edit.node
+          ) : (
+            <button
+              className={`tree-file ${f === activeFile ? 'active' : ''}`}
+              title={f}
+              data-locate={f}
+              onClick={() => onOpenFile(f)}
+              onContextMenu={onFileContext ? (e) => onFileContext(e, f) : undefined}
+            >
+              {baseName(f)}
+            </button>
+          )}
         </li>
       ))}
     </>
@@ -336,10 +438,19 @@ export function FileRows({ files, limit, activeFile, onOpenFile }: FileRowsProps
  * （不闪空白）。此前 `dirCache` 没有任何失效通道 ⇒ 外面丢进一个文件，树里不出现，
  * 除非重开项目——实机线在 §5.87 里把这条明记为"留给能做 GUI 的那一批"。
  */
-export function FileTree({ project, index, activeFile, onOpenFile, listDir, walkDir, onImportPackage, refreshNonce, gloss }: Props): ReactElement {
+export function FileTree({ project, index, activeFile, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss }: Props): ReactElement {
   /** 名称显示对照（缺省 = 恒等，保持旧行为） */
   const glossOf = gloss ?? ((n: string): string => n);
   const [filter, setFilter] = useState('');
+  /**
+   * 视图切换（B5）：口上树（角色 → 作者包 → 口上文件的语义分组）⇄ 整个游戏目录（文件系统视图）。
+   *
+   * - 浏览现场，**不持久化**：切走再切回，语义视图的展开态（opened / pkgFolder / subOpen）原样保留；
+   * - 文件系统视图**复用**同一套 dirRows / subOpen / dirCache——dirCache 按绝对路径键控，
+   *   两视图天然共享同一份目录缓存（包的真实文件夹视图与这里就是同一批目录）；
+   * - 收起文件系统视图时其在 subOpen 里的展开态**保留**：现场即现场，切回来还开着。
+   */
+  const [view, setView] = useState<'kojo' | 'fs'>('kojo');
   /** 过滤走 deferred：输入框每击键即时响应，全量过滤 + 重渲染只对落定值跑 */
   const deferredFilter = useDeferredValue(filter);
   const [opened, setOpened] = useState<Set<string>>(new Set());
@@ -353,6 +464,13 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   const [menu, setMenu] = useState<{ x: number; y: number; scope: MenuScope } | null>(null);
   /** 批量展开/收起后的一句可读数（反馈 6：没有反馈的批量动作＝用户读成"点了没反应"） */
   const [revealNote, setRevealNote] = useState<string | null>(null);
+  /** 行内编辑（新建 / 重命名；B1/B2） */
+  const [edit, setEdit] = useState<EditState | null>(null);
+  const [editValue, setEditValue] = useState('');
+  /** B4 定位请求（manual = 用户按了按钮，可以在过滤态里清词重试） */
+  const [locateReq, setLocateReq] = useState<{ file: string; manual: boolean } | null>(null);
+  /** 树滚动容器（定位时在其内找 data-locate 行；scrollIntoView 用 nearest 不拽容器） */
+  const treeBodyRef = useRef<HTMLUListElement | null>(null);
 
   /* ---------------- 即时化：索引未就绪时用 walk 快照先出树（2026-10-16 树即时批） ---------------- */
 
@@ -490,6 +608,16 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     if (willOpen) ensureDir(dir);
   };
 
+  /**
+   * 进入文件系统视图（B5）时惰性取项目根的第一层：根 = `project.rootDir`
+   * （GameProject 契约的项目根字段，口上目录们与其他一切都在它之下）。
+   * 失败（浏览器壳无桌面壳权限等）走 dirRows 既有 error 态口径——「目录读取失败（需要桌面壳权限）」。
+   */
+  useEffect(() => {
+    if (view === 'fs') ensureDir(project.rootDir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, project.rootDir, listDir]);
+
   /** 收集作用域内全部作者包（根散文件无包目录，不在真实文件夹视图范围） */
   const collectPackages = (scope: MenuScope): Array<{ key: string; dir: string; group: string }> => {
     const gs = scope.kind === 'group' ? [scope.group] : groups;
@@ -561,6 +689,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
    */
   const relistShown = (): void => {
     for (const dir of dirsToRelist(subOpen, pkgFolder, collectPackages({ kind: 'root' }))) fetchDir(dir);
+    // 文件系统视图（B5）：根层始终显示，一并重列
+    if (view === 'fs') fetchDir(project.rootDir);
   };
 
   const lastNonce = useRef(refreshNonce);
@@ -575,6 +705,342 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     e.preventDefault();
     e.stopPropagation();
     setMenu({ x: Math.min(e.clientX, window.innerWidth - 260), y: e.clientY, scope });
+  };
+
+  /* ---------------- 文件/目录编辑（B1/B2 文件树编辑批） ---------------- */
+
+  /** 轻反馈（复用 revealNote 同款形态——一句话状态行，不建 toast 基建） */
+  const note = (msg: string): void => setRevealNote(msg);
+  const noteErr = (err: unknown, action: string): void => {
+    const msg = err instanceof Error ? err.message : String(err);
+    // 越权写（WriteNotAllowedError）的消息是英文内部术语：换成人话，其余原样带出
+    setRevealNote(String(err instanceof Error && err.name === 'WriteNotAllowedError')
+      ? '这个位置在只读范围内，不能在这里修改文件。要先在「只读」徽章那里批准写权限。'
+      : `${action}失败：${msg}`);
+  };
+
+  /** 把某个目录的父层「打开到可见」：新建/重命名的输入行必须落在已展开的那一层 */
+  const openLayerOf = (dir: string): void => {
+    // 是某个作者包目录 → 打开包的真实文件夹视图（新建的文件 immediate 可见处就在这）
+    for (const g of groups) {
+      for (const s of g.subs) {
+        if (s.label !== null && pkey(pkgDirOf(g, s.label)) === pkey(dir)) {
+          setOpened((prev) => new Set(prev).add(g.label));
+          setPkgFolder((prev) => new Set(prev).add(`${g.label}::${s.label}`));
+          ensureDir(dir);
+          return;
+        }
+      }
+    }
+    // 否则按子目录展开（父包视图由调用点保证已开——能右键到它就说明开着）
+    setSubOpen((prev) => new Set(prev).add(dir));
+    ensureDir(dir);
+  };
+
+  const beginCreate = (kind: 'file' | 'dir', dir: string): void => {
+    // 过滤态强制全展开、且真实文件夹视图被隐藏（isFolder 要求非过滤）——编辑需要看到那层，清词最自解释
+    if (deferredFilter) setFilter('');
+    openLayerOf(dir);
+    setEdit({ mode: 'create', kind, dir });
+    setEditValue('');
+  };
+
+  const beginRename = (path: string, isDir: boolean): void => {
+    if (isDir && deferredFilter) setFilter('');
+    setEdit({ mode: 'rename', path, isDir });
+    setEditValue(baseName(path));
+  };
+
+  /** dirCache 剪枝：整目录没了/搬走了，其下所有缓存条目一并退场（防重建后捞出幽灵子树） */
+  const pruneCacheUnder = (dir: string): void => {
+    setDirCache((m) => {
+      const next = new Map(m);
+      let changed = false;
+      for (const k of next.keys()) {
+        if (isUnderPath(dir, k)) {
+          next.delete(k);
+          changed = true;
+        }
+      }
+      return changed ? next : m;
+    });
+  };
+
+  /** 重命名目录后 subOpen 里的旧前缀跟着搬（展开态是作者的现场，搬目录不算丢现场） */
+  const remapSubOpen = (fromDir: string, toDir: string): void => {
+    setSubOpen((prev) => {
+      const next = new Set<string>();
+      for (const k of prev) next.add(isUnderPath(fromDir, k) ? joinPath(toDir, k.slice(fromDir.replace(/[\\/]+$/, '').length + 1)) : k);
+      return next;
+    });
+  };
+
+  /** 操作涉及哪些目录就重列哪些（重命名要重列 from 与 to 两个父目录；不全树重挂） */
+  const refetchDirs = (dirs: readonly string[]): void => {
+    const seen = new Set<string>();
+    for (const d of dirs) {
+      if (!d || seen.has(pkey(d))) continue;
+      seen.add(pkey(d));
+      fetchDir(d);
+    }
+  };
+
+  const commitEdit = (): void => {
+    const e = edit;
+    if (!e) return;
+    const name = editValue.trim();
+    const invalid = validateEntryName(name);
+    if (invalid) {
+      // 名字不合法：留在编辑态让用户改，说清错在哪（不闪退不静默）
+      note(invalid);
+      return;
+    }
+    if (e.mode === 'create') {
+      const target = joinPath(e.dir, name);
+      // 预检第一道闸（kernel.isWritable）：可行才试——说人话在先，而不是等异常再说英文
+      if (io && !io.isWritable(e.dir)) {
+        setEdit(null);
+        note('这个位置在只读范围内，不能在这里新建。要先在「只读」徽章那里批准写权限。');
+        return;
+      }
+      const doing =
+        e.kind === 'file'
+          ? io!.writeBytes(target, new Uint8Array()) // 新建空文件走既有写链路（备份=空文件无旧版可备）
+          : io!.ensureDir(target);
+      void doing.then(
+        () => {
+          setEdit(null);
+          // 只重列落点目录；新文件立刻可见处 = 包的真实文件夹视图（openLayerOf 已打开）
+          refetchDirs([e.dir]);
+          note(`已新建${e.kind === 'file' ? '文件' : '文件夹'}「${name}」`);
+        },
+        (err: unknown) => noteErr(err, '新建'),
+      );
+      return;
+    }
+    // rename
+    const parent = parentDir(e.path);
+    const to = joinPath(parent, name);
+    if (pkey(to) === pkey(e.path)) {
+      setEdit(null);
+      return; // 名字没变：等于取消
+    }
+    const blocked = guardFileOp?.([e.path]) ?? null;
+    if (blocked) {
+      setEdit(null);
+      note(blocked);
+      return;
+    }
+    if (io && (!io.isWritable(e.path) || !io.isWritable(to))) {
+      setEdit(null);
+      note('这个位置在只读范围内，不能重命名。要先在「只读」徽章那里批准写权限。');
+      return;
+    }
+    void io!.rename(e.path, to).then(
+      () => {
+        setEdit(null);
+        refetchDirs([parent]);
+        if (e.isDir) {
+          pruneCacheUnder(e.path);
+          remapSubOpen(e.path, to);
+          // 旧目录下的展开视图缓存一并退场；组/包的展开键是标签，不随路径变，不用动
+        }
+        onFilesGone?.([], [{ from: e.path, to }]);
+        note(`已重命名为「${name}」`);
+      },
+      (err: unknown) => noteErr(err, '重命名'),
+    );
+  };
+
+  const cancelEdit = (): void => setEdit(null);
+
+  /** 删除（文件/目录同一入口）：守门 → 量级确认 → 落地 → 只重列受影响目录 */
+  const doDelete = (path: string, isDir: boolean): void => {
+    const blocked = guardFileOp?.([path]) ?? null;
+    if (blocked) {
+      note(blocked);
+      return;
+    }
+    if (io && !io.isWritable(path)) {
+      note('这个位置在只读范围内，不能删除。要先在「只读」徽章那里批准写权限。');
+      return;
+    }
+    const proceed = (fileCount?: number): void => {
+      // 递归删除是把大刀：文案必须让用户看清刀多大（N 现算失败退化为无数字，警示语保留）
+      if (!window.confirm(deleteConfirmText({ name: baseName(path), isDir, fileCount }))) return;
+      const doing = isDir ? io!.removeDir(path) : io!.removeFile(path);
+      void doing.then(
+        () => {
+          refetchDirs([parentDir(path)]);
+          if (isDir) pruneCacheUnder(path);
+          onFilesGone?.([path], []);
+          note(`已删除${isDir ? '文件夹' : '文件'}「${baseName(path)}」`);
+        },
+        (err: unknown) => noteErr(err, '删除'),
+      );
+    };
+    if (isDir && walkDir) {
+      // N 现算：失败（浏览器壳无 io / 目录不可读）退化为无数字文案，不阻断
+      void walkDir(path, { includeFiles: true, includeDirs: false })
+        .then((entries) => proceed(entries.filter((x) => !x.isDirectory).length))
+        .catch(() => proceed(undefined));
+    } else {
+      proceed(undefined);
+    }
+  };
+
+  const copyText = (text: string, doneNote: string): void => {
+    const clip = navigator.clipboard;
+    if (!clip) {
+      note('复制失败：当前环境没有可用的剪贴板');
+      return;
+    }
+    void clip.writeText(text).then(
+      () => note(doneNote),
+      () => note('复制失败：剪贴板不可用'),
+    );
+  };
+
+  const scopePathOf = (scope: MenuScope): string => {
+    switch (scope.kind) {
+      case 'file':
+        return scope.path;
+      case 'dir':
+        return scope.path;
+      case 'package':
+        return scope.dir;
+      default:
+        return '';
+    }
+  };
+
+  const runMenuAction = (id: MenuItemId, scope: MenuScope): void => {
+    setMenu(null);
+    const path = scopePathOf(scope);
+    switch (id) {
+      case 'open':
+        if (scope.kind === 'file') onOpenFile(scope.path);
+        break;
+      case 'copy-path':
+        if (path) copyText(path, '已复制完整路径');
+        break;
+      case 'copy-rel-path':
+        if (scope.kind === 'file') copyText(relativeToRoot(scope.path, project.rootDir), '已复制相对路径');
+        break;
+      case 'reveal':
+        if (path) onRevealInExplorer?.(path);
+        break;
+      case 'new-file':
+        if (path) beginCreate('file', path);
+        break;
+      case 'new-dir':
+        if (path) beginCreate('dir', path);
+        break;
+      case 'rename':
+        if (path) beginRename(path, scope.kind === 'dir' || scope.kind === 'package');
+        break;
+      case 'delete':
+        if (path) doDelete(path, scope.kind === 'dir' || scope.kind === 'package');
+        break;
+      case 'import':
+        if (scope.kind === 'package') onImportPackage?.({ dir: scope.dir, label: scope.label });
+        break;
+    }
+  };
+
+  const menuCapability: MenuCapability = {
+    hasIo: io !== undefined,
+    canReveal: onRevealInExplorer !== undefined,
+    canImport: onImportPackage !== undefined,
+  };
+
+  /* ---------------- B4：定位当前文件 ---------------- */
+
+  /** 自动定位：activeFile 变化时展开到所在组/包并滚到那一行（首次挂载不算"变化"） */
+  const firstActiveRef = useRef(true);
+  useEffect(() => {
+    if (firstActiveRef.current) {
+      firstActiveRef.current = false;
+      return;
+    }
+    if (activeFile) setLocateReq({ file: activeFile, manual: false });
+  }, [activeFile]);
+
+  /**
+   * 在树体内找 data-locate 行并滚到刚好可见。比对走归一键（pkey）：
+   * 文件系统视图的行路径来自磁盘列举（DirEntry.path），与 activeFile 的写法可能差个
+   * 分隔符/大小写——按字面比对会漏滚，归一后 Windows 两种写法都命中。
+   */
+  const scrollLocate = (targetPath: string): void => {
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const body = treeBodyRef.current;
+        if (!body) return;
+        const key = pkey(targetPath);
+        for (const el of body.querySelectorAll<HTMLElement>('button[data-locate]')) {
+          if (pkey(el.dataset.locate ?? '') === key) {
+            el.scrollIntoView({ block: 'nearest' });
+            break;
+          }
+        }
+      }),
+    );
+  };
+
+  useEffect(() => {
+    if (!locateReq) return;
+    if (view === 'fs') {
+      // 文件系统视图：locatePlanOf 是语义树口径，不适用——退化为「从根到 activeFile 逐级展开」。
+      // 目录列举是异步的：父层清单没回来时先不清请求也不硬滚（dirCache 变化会重跑本 effect），
+      // 回来后行已挂载，两拍 rAF 再滚（nearest 只滚到刚好可见，不拽容器乱跳）。
+      const dirs = fsLocatePlanOf(project.rootDir, locateReq.file);
+      if (!dirs) {
+        setLocateReq(null); // 不在项目根下：安静放弃，不报错
+        return;
+      }
+      for (const d of dirs) {
+        setSubOpen((prev) => new Set(prev).add(d));
+        ensureDir(d);
+      }
+      const parent = dirs[dirs.length - 1] ?? project.rootDir;
+      const st = dirCache.get(parent);
+      if (st === undefined || st === 'loading') return; // 等列举回来
+      if (st === 'error') {
+        setLocateReq(null); // 列不动就不硬撑（失败行已在树上自解释）
+        return;
+      }
+      scrollLocate(locateReq.file);
+      setLocateReq(null);
+      return;
+    }
+    if (deferredFilter) {
+      // 过滤态：结果被渲染窗口截断、强制全展开也不是用户的现场——自动定位安静放弃；
+      // 手动定位等过滤词清空（deferred 追上）后由本 effect 重跑。
+      return;
+    }
+    const plan: LocatePlan | null = locatePlanOf(groups, locateReq.file, (prefix, label) =>
+      joinPath(prefix, label),
+    );
+    if (!plan) return; // 未归属 / 不在索引里：安静放弃，不报错
+    setOpened((prev) => new Set(prev).add(plan.groupLabel));
+    if (plan.pkg) {
+      setPkgFolder((prev) => new Set(prev).add(plan.pkg!.key));
+      ensureDir(plan.pkg!.dir);
+    }
+    // DOM 提交后再滚：两拍 rAF 保证新展开的行已挂载
+    scrollLocate(plan.targetPath);
+    setLocateReq(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locateReq, groups, deferredFilter, view, dirCache]);
+
+  /** 手动定位（工具条按钮）：滚走了想找回来；过滤态先清词再定位 */
+  const locateActive = (): void => {
+    if (!activeFile) {
+      note('当前没有打开的文件，无处可定位');
+      return;
+    }
+    if (filter) setFilter('');
+    setLocateReq({ file: activeFile, manual: true });
   };
 
   /**
@@ -610,22 +1076,73 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     const dirs = visible.filter((d) => d.isDirectory).sort(byName);
     const files = visible.filter((d) => !d.isDirectory).sort(byName);
     const pad = { paddingLeft: `${depth * 14}px` };
+    /** 该层正在新建（输入行插在本层最上）；与 rename 行共用 EditRow */
+    const creatingHere = edit?.mode === 'create' && edit.dir === dir ? edit : null;
     return [
-      ...dirs.map((d) => (
-        <li key={d.path}>
-          <button className="tree-dir" style={pad} title={d.path} onClick={() => toggleSub(d.path)}>
-            <span className="caret">
-              <Icon name={subOpen.has(d.path) ? 'chevron-down' : 'chevron-right'} size={12} />
-            </span>
-            <span className="tree-dir-name">{glossOf(d.name)}</span>
-          </button>
-          {subOpen.has(d.path) ? (
-            <ul className="tree-files nested">{dirRows(d.path, depth + 1, skip)}</ul>
-          ) : null}
-        </li>
-      )),
-      ...files.map((d) =>
-        BINARY_EXT.test(d.name) ? (
+      ...(creatingHere
+        ? [
+            <li key={`${dir}::create`} style={pad}>
+              <EditRow
+                value={editValue}
+                placeholder={creatingHere.kind === 'file' ? '新文件名' : '新文件夹名'}
+                onChange={setEditValue}
+                onCommit={commitEdit}
+                onCancel={cancelEdit}
+              />
+            </li>,
+          ]
+        : []),
+      ...dirs.map((d) => {
+        const renaming = edit?.mode === 'rename' && edit.isDir && edit.path === d.path;
+        return (
+          <li key={d.path}>
+            {renaming ? (
+              <div style={pad}>
+                <EditRow
+                  value={editValue}
+                  placeholder="新名称"
+                  onChange={setEditValue}
+                  onCommit={commitEdit}
+                  onCancel={cancelEdit}
+                />
+              </div>
+            ) : (
+              <button
+                className="tree-dir"
+                style={pad}
+                title={d.path}
+                data-drop-dir={d.path}
+                onClick={() => toggleSub(d.path)}
+                onContextMenu={(e) => openMenu(e, { kind: 'dir', path: d.path })}
+              >
+                <span className="caret">
+                  <Icon name={subOpen.has(d.path) ? 'chevron-down' : 'chevron-right'} size={12} />
+                </span>
+                <span className="tree-dir-name">{glossOf(d.name)}</span>
+              </button>
+            )}
+            {subOpen.has(d.path) ? (
+              <ul className="tree-files nested">{dirRows(d.path, depth + 1, skip)}</ul>
+            ) : null}
+          </li>
+        );
+      }),
+      ...files.map((d) => {
+        const renaming = edit?.mode === 'rename' && !edit.isDir && edit.path === d.path;
+        if (renaming) {
+          return (
+            <li key={d.path} style={pad}>
+              <EditRow
+                value={editValue}
+                placeholder="新名称"
+                onChange={setEditValue}
+                onCommit={commitEdit}
+                onCancel={cancelEdit}
+              />
+            </li>
+          );
+        }
+        return BINARY_EXT.test(d.name) ? (
           <li key={d.path} className="tree-extra" style={pad} title={`${d.path}（压缩包/资源，不在编辑器内打开）`}>
             <span className="tree-extra-name">{glossOf(d.name)}</span>
           </li>
@@ -634,18 +1151,39 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
             <button
               className={`tree-file ${d.path === activeFile ? 'active' : ''} ${erbExt(d.name) ? '' : 'tree-extra-file'}`}
               title={erbExt(d.name) ? d.path : `${d.path}（附加文件，不在口上索引内）`}
+              data-locate={d.path}
               onClick={() => onOpenFile(d.path)}
+              onContextMenu={(e) => openMenu(e, { kind: 'file', path: d.path })}
             >
               {glossOf(d.name)}
             </button>
           </li>
-        ),
-      ),
+        );
+      }),
     ];
   };
 
   /** 包层已平铺的 ERB 路径集（子目录渲染时去重用） */
   const erbKeysOf = (s: PackageGroup): Set<string> => new Set(s.files.map(pkey));
+
+  /** 平铺 ERB 行的行内重命名（FileRows 是无知组件：编辑节点在这里造好塞进去） */
+  const fileEdit =
+    edit && edit.mode === 'rename' && !edit.isDir
+      ? {
+          path: edit.path,
+          node: (
+            <EditRow
+              value={editValue}
+              placeholder="新名称"
+              onChange={setEditValue}
+              onCommit={commitEdit}
+              onCancel={cancelEdit}
+            />
+          ),
+        }
+      : null;
+  /** 平铺 ERB 行右键（B1：文件行也有菜单了） */
+  const onFileContext = (e: ReactMouseEvent, path: string): void => openMenu(e, { kind: 'file', path });
 
   if (!index && snapPaths === null) {
     // 索引未就绪且快照未到：占位自解释。
@@ -656,22 +1194,53 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   }
 
   return (
-    <div className="file-tree" onContextMenu={(e) => openMenu(e, { kind: 'root' })}>
-      <input
-        className="tree-filter"
-        placeholder={`过滤 ${groups.length} 个角色目录…`}
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-      />
+    <div
+      className="file-tree"
+      onContextMenu={view === 'kojo' ? (e) => openMenu(e, { kind: 'root' }) : undefined}
+    >
+      {/* 文件系统视图不放过滤框：按名过滤要递归走全树，与惰性加载天然打架（没展开的层根本没数据）
+          ——与其给一个「看着在、但只滤已展开层」的鬼状态，不如不显示；找文件用「定位当前文件」。 */}
+      {view === 'kojo' ? (
+        <input
+          className="tree-filter"
+          placeholder={`过滤 ${groups.length} 个角色目录…`}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+      ) : null}
       <div className="tree-actions">
+        {listDir ? (
+          <button
+            className="ghost small"
+            title={
+              view === 'kojo'
+                ? '切换到整个游戏目录（文件系统视图：项目根下的真实路径，可新建/重命名/删除）'
+                : '切换回口上树（角色 → 作者包 → 口上文件）'
+            }
+            onClick={() => setView((v) => (v === 'kojo' ? 'fs' : 'kojo'))}
+          >
+            {view === 'kojo' ? '全部文件' : '口上视图'}
+          </button>
+        ) : null}
+        {view === 'kojo' ? (
+          <>
+            <button
+              className="ghost small"
+              onClick={() => applyReveal(visible, expandAll(revealTargets(visible), revealStateOf()))}
+            >
+              展开全部
+            </button>
+            <button className="ghost small" onClick={() => applyReveal(visible, collapseAll())}>
+              折叠全部
+            </button>
+          </>
+        ) : null}
         <button
           className="ghost small"
-          onClick={() => applyReveal(visible, expandAll(revealTargets(visible), revealStateOf()))}
+          title="在树中找到当前打开的文件（有过滤词时先清除再定位）"
+          onClick={locateActive}
         >
-          展开全部
-        </button>
-        <button className="ghost small" onClick={() => applyReveal(visible, collapseAll())}>
-          折叠全部
+          定位当前文件
         </button>
         <button
           className="ghost small"
@@ -686,7 +1255,18 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
           {revealNote}
         </p>
       ) : null}
-      <ul className="tree-groups">
+      <ul className="tree-groups" ref={treeBodyRef}>
+        {view === 'fs' ? (
+          // 文件系统视图（B5）：根 = project.rootDir，第一层内容直接铺开，可继续递归展开。
+          // 复用 dirRows（惰性加载 / 二进制标记 / gloss / B1 右键菜单全在）；根层还没取到时给一句
+          // 「读取目录…」，失败走 dirRows 既有 error 态（需要桌面壳权限），绝不点了没反应。
+          dirCache.has(project.rootDir) ? (
+            dirRows(project.rootDir, 0, new Set())
+          ) : (
+            <li className="tree-note">读取目录…</li>
+          )
+        ) : (
+          <>
         {visible.map((g) => {
           const isOpen = opened.has(g.label) || deferredFilter.length > 0;
           return (
@@ -694,6 +1274,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
               <button
                 className="tree-group-btn"
                 title={`${g.label}（右键查看更多）`}
+                data-drop-dir={g.prefix || undefined}
                 onClick={() => toggleGroup(g.label)}
                 onContextMenu={(e) => openMenu(e, { kind: 'group', group: g })}
               >
@@ -715,6 +1296,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                           limit={renderLimitOf(g, s)}
                           activeFile={activeFile}
                           onOpenFile={onOpenFile}
+                          edit={fileEdit}
+                          onFileContext={onFileContext}
                         />
                       );
                     }
@@ -722,25 +1305,37 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                     const pkgKey = `${g.label}::${label}`;
                     const pkgDir = pkgDirOf(g, label);
                     const isFolder = pkgFolder.has(pkgKey) && deferredFilter.length === 0;
+                    const renamingPkg = edit?.mode === 'rename' && edit.isDir && edit.path === pkgDir;
                     return (
                       <li key={label} className="tree-package-node">
-                        <button
-                          className="tree-package"
-                          title={pkgDir}
-                          onClick={() => togglePkgFolder(pkgKey, pkgDir)}
-                          onContextMenu={(e) => {
-                            // 包节点右键 = 导入口径（P-F）；无导入能力时仅阻止冒泡
-                            e.preventDefault();
-                            e.stopPropagation();
-                            if (onImportPackage) openMenu(e, { kind: 'package', dir: pkgDir, label });
-                          }}
-                        >
-                          <span className="caret">
-                            <Icon name={isFolder ? 'chevron-down' : 'chevron-right'} size={12} />
-                          </span>
-                          <span className="tree-package-name">{glossOf(s.label)}</span>
-                          <span className="group-count">{s.files.length}</span>
-                        </button>
+                        {renamingPkg ? (
+                          <EditRow
+                            value={editValue}
+                            placeholder="新名称"
+                            onChange={setEditValue}
+                            onCommit={commitEdit}
+                            onCancel={cancelEdit}
+                          />
+                        ) : (
+                          <button
+                            className="tree-package"
+                            title={pkgDir}
+                            data-drop-dir={pkgDir}
+                            onClick={() => togglePkgFolder(pkgKey, pkgDir)}
+                            onContextMenu={(e) => {
+                              // 包节点右键 = 导入（P-F）+ 目录编辑（B1）；无任何能力时仅阻止冒泡
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openMenu(e, { kind: 'package', dir: pkgDir, label });
+                            }}
+                          >
+                            <span className="caret">
+                              <Icon name={isFolder ? 'chevron-down' : 'chevron-right'} size={12} />
+                            </span>
+                            <span className="tree-package-name">{glossOf(s.label)}</span>
+                            <span className="group-count">{s.files.length}</span>
+                          </button>
+                        )}
                         {/* 追加式：真实文件夹内容在上、ERB 列表原地不动（无动画、不卸载） */}
                         {isFolder ? (
                           <ul className="tree-files nested pkg-real">{dirRows(pkgDir, 0, erbKeysOf(s))}</ul>
@@ -751,6 +1346,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                             limit={renderLimitOf(g, s)}
                             activeFile={activeFile}
                             onOpenFile={onOpenFile}
+                            edit={fileEdit}
+                            onFileContext={onFileContext}
                           />
                         </ul>
                       </li>
@@ -768,6 +1365,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
             </button>
           </li>
         ) : null}
+          </>
+        )}
       </ul>
       {plan && plan.hidden > 0 ? (
         <p className="tree-reveal-note dim" role="status">
@@ -778,19 +1377,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
         <>
           <div className="context-menu-backdrop" onMouseDown={() => setMenu(null)} />
           <div className="context-menu" style={{ left: menu.x, top: menu.y }} role="menu">
-            {menu.scope.kind === 'package' ? (
-              <button
-                role="menuitem"
-                onClick={() => {
-                  const scope = menu.scope;
-                  setMenu(null);
-                  if (scope.kind === 'package') onImportPackage?.({ dir: scope.dir, label: scope.label });
-                }}
-              >
-                <span className="check" />
-                导入为我的口上项目
-              </button>
-            ) : (
+            {menu.scope.kind === 'root' || menu.scope.kind === 'group' ? (
               <button
                 role="menuitem"
                 onClick={() => {
@@ -807,6 +1394,20 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                   ? revealMenuLabel(revealTargets(visible), revealStateOf())
                   : '显示所有文件和文件夹'}
               </button>
+            ) : (
+              menuItemsFor(menu.scope.kind, menuCapability).map((item, i) => (
+                <div key={item.id}>
+                  {item.dividerBefore && i > 0 ? <div className="context-menu-sep" role="separator" /> : null}
+                  <button
+                    role="menuitem"
+                    className={item.id === 'delete' ? 'danger' : undefined}
+                    onClick={() => runMenuAction(item.id, menu.scope)}
+                  >
+                    <span className="check" />
+                    {item.label}
+                  </button>
+                </div>
+              ))
             )}
           </div>
         </>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { CharaInfo, DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
+import type { CharaInfo, DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {
   FILTER_WINDOW_INITIAL,
   FILTER_WINDOW_STEP,
@@ -371,6 +371,49 @@ describe('FileRows · 过滤态 DOM 行树上界（SSR 真实产出的行数）'
   });
 });
 
+/* ============ 文件树编辑批（B1/B2/B4）：文件行右键 / 行内重命名 / data-locate ============ */
+
+describe('FileRows · 文件行右键与行内重命名（B1）', () => {
+  const files = ['C:/koa/001/M_KOJO_K1.ERB', 'C:/koa/001/M_KOJO_K2.ERB'];
+  const base = {
+    files,
+    limit: 10,
+    activeFile: null,
+    onOpenFile: () => {},
+  };
+
+  it('缺省（无 edit / 无 onFileContext）：旧行为逐字不变', () => {
+    const html = renderToStaticMarkup(h(FileRows, base));
+    expect(html.match(/<button class="tree-file/g)).toHaveLength(2);
+    expect(html).not.toContain('tree-edit-input');
+    expect(html).not.toContain('oncontextmenu');
+  });
+
+  it('文件行挂 data-locate（B4 定位的查询锚），值 = 完整路径', () => {
+    const html = renderToStaticMarkup(h(FileRows, base));
+    expect(html).toContain('data-locate="C:/koa/001/M_KOJO_K1.ERB"');
+  });
+
+  it('onFileContext / edit 缺省时旧行为逐字不变（SSR 不序列化事件处理器，行为面以 DOM 形状为准）', () => {
+    const html = renderToStaticMarkup(h(FileRows, base));
+    expect(html).not.toContain('tree-edit-input');
+    expect(html.match(/<button class="tree-file/g)?.length).toBe(2);
+  });
+
+  it('edit.path 命中的那一行换画输入框（同名只此一行，其余行照常）', () => {
+    const html = renderToStaticMarkup(
+      h(FileRows, {
+        ...base,
+        edit: { path: files[0]!, node: h('input', { className: 'tree-edit-input' }) },
+      }),
+    );
+    expect(html.match(/tree-edit-input/g)).toHaveLength(1);
+    expect(html.match(/<button class="tree-file/g)).toHaveLength(1);
+    expect(html).toContain('data-locate="C:/koa/001/M_KOJO_K2.ERB"');
+    expect(html).not.toContain('data-locate="C:/koa/001/M_KOJO_K1.ERB"'); // 编辑中的行不是按钮
+  });
+});
+
 /* ============ 冷开占位文案（PERF-6 即时化批） ============ */
 
 describe('FileTree · 索引未就绪时的占位自解释（SSR）', () => {
@@ -390,5 +433,37 @@ describe('FileTree · 索引未就绪时的占位自解释（SSR）', () => {
 
   it('占位期不渲染树（没有半棵空树、也没有过滤框）', () => {
     expect(render(async () => [])).not.toContain('tree-filter');
+  });
+});
+
+/* ============ 文件系统视图切换入口（B5） ============ */
+
+describe('FileTree · 文件系统视图切换入口（B5，SSR 默认态）', () => {
+  const project = {
+    charaIndex: new Map(),
+    kojoPaths: ['C:/koa'],
+    rootDir: 'C:/game',
+  } as unknown as GameProject;
+  const index = { files: new Map(), byName: new Map() } as unknown as ErbIndex;
+  const render = (listDir?: (p: string) => Promise<DirEntry[]>): string =>
+    renderToStaticMarkup(
+      h(FileTree, { project, index, activeFile: null, onOpenFile: () => {}, listDir }),
+    );
+
+  it('有 listDir（桌面壳）：工具条出现「全部文件」切换入口，默认口上视图（按钮文案 = 去向）', () => {
+    const html = render(async () => []);
+    expect(html).toContain('全部文件');
+    expect(html).not.toContain('>口上视图<'); // 还没切过去，按钮不该已经反过来
+    expect(html).not.toContain('读取目录…'); // fs 根层不该被预先拉取（惰性，切过去才取）
+  });
+
+  it('无 listDir（浏览器壳）：入口整颗不显示——没有能力的按钮灰着都不给，点了没反应更不行', () => {
+    expect(render(undefined)).not.toContain('全部文件');
+  });
+
+  it('默认仍是口上树：过滤框在、fs 根层不在（切换态是浏览现场，不改变默认视图）', () => {
+    const html = render(async () => []);
+    expect(html).toContain('tree-filter');
+    expect(html).not.toContain('C:/game'); // 项目根路径不出现在默认口上视图里
   });
 });

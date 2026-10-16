@@ -970,6 +970,13 @@ textarea {
   background: var(--hover);
   border-color: transparent;
 }
+/* B6：OS 拖文件悬停在目录/包行上。Tauri 拦截了 CSS hover 事件，高亮由 Rust 侧
+   Over 坐标命中（drag-drop.updateDropHover）加类驱动——over 每秒刷屏几十次，
+   故只描边 + 一层底色，不搞过渡动画（类是直接挂 DOM 的，React 重挂也不闪）。 */
+.kojo-drop-hover {
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 .tree-dir-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1001,6 +1008,20 @@ textarea {
 .tree-extra-file {
   font-family: var(--font-mono);
   font-size: var(--fs-1);
+}
+/* 行内编辑输入框（新建/重命名，同 VSCode 行为） */
+.tree-edit-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  padding: 1px 6px;
+  font-size: var(--fs-2);
+  font-family: inherit;
+}
+.tree-edit-input:focus {
+  outline: none;
 }
 
 /* 右键菜单（壳层轻量实现） */
@@ -1040,6 +1061,16 @@ textarea {
 .context-menu .check {
   width: 14px;
   color: var(--accent);
+}
+/* 菜单分组分隔线（导入/编辑动作与查看动作之间） */
+.context-menu-sep {
+  height: 1px;
+  margin: 3px 8px;
+  background: var(--border);
+}
+/* 破坏性动作（删除）：与其余项拉开视觉距离 */
+.context-menu button.danger {
+  color: var(--danger);
 }
 .tree-file {
   width: 100%;

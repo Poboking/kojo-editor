@@ -1,6 +1,7 @@
 import type { FileIO } from '@kojo/plugin-api';
 import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { isTauri } from '../bridge/invoke';
+import { joinPath } from './file-tree-ops';
 
 /**
  * 从系统资源管理器拖文件/文件夹进窗口即打开（drag-drop 批）。
@@ -8,6 +9,11 @@ import { isTauri } from '../bridge/invoke';
  * 链路：Rust 侧 `kojo:drag-drop` 事件（src-tauri/src/lib.rs）→ `subscribeDragDrop`
  * → 宿主落地 `routeDroppedPaths`。**全程只读**——路径只喂给既有的打开入口
  * （开标签 / 开项目），编辑权限仍由写允许域既有分野决定，这里零写通道。
+ *
+ * B6 扩展（拖文件进树 = 复制进项目）：Rust 侧自本批起透传光标坐标（webview 客户区
+ * 物理像素），drop 落点命中目录行/包节点（`data-drop-dir` 属性）时改走
+ * `copyDroppedFiles` 复制链路（唯一写通道 = `kernel.io.copyFile`，只对 to 过闸）；
+ * 未命中任何目录 → 原样走打开语义（A1 行为零变化）。
  */
 
 /**
@@ -210,37 +216,195 @@ export const DRAG_DROP_EVENT_NAME = 'kojo:drag-drop';
 export type DragDropPhase = 'enter' | 'over' | 'leave' | 'drop';
 
 export interface DragDropHandlers {
-  onEnter(): void;
-  onOver(): void;
+  /** enter/over 携带光标坐标（webview 客户区物理像素；B6 拖悬高亮的命入口） */
+  onEnter(x: number, y: number): void;
+  onOver(x: number, y: number): void;
   onLeave(): void;
-  onDrop(paths: string[]): void;
+  onDrop(paths: string[], x: number | null, y: number | null): void;
 }
 
 /**
  * 订阅 OS 文件拖放（形态照 `tauri-bridge.watchDirs`：动态 import + isTauri 守卫 +
  * 返回取消订阅）。浏览器开发壳没有这个平台能力 ⇒ 静默返回空取消函数，绝不抛——
  * 拖放是增强项，不该让网页壳报错。
+ *
+ * 坐标字段（B6）是 additive：老版本 Rust 不发 x/y，这里按可缺省读——
+ * 缺了就把 null 交给宿主（宿主在坐标缺失时退回打开语义，不炸）。
  */
 export async function subscribeDragDrop(handlers: DragDropHandlers): Promise<() => void> {
   if (!isTauri()) return () => {};
   const { listen } = await import('@tauri-apps/api/event');
-  type Payload = { phase: DragDropPhase; paths: string[] };
+  type Payload = { phase: DragDropPhase; paths: string[]; x?: number; y?: number };
   const unlisten = await listen<Payload>(DRAG_DROP_EVENT_NAME, (e) => {
-    const { phase, paths } = e.payload;
+    const { phase, paths, x, y } = e.payload;
     switch (phase) {
       case 'enter':
-        handlers.onEnter();
+        handlers.onEnter(x ?? 0, y ?? 0);
         break;
       case 'over':
-        handlers.onOver();
+        handlers.onOver(x ?? 0, y ?? 0);
         break;
       case 'leave':
         handlers.onLeave();
         break;
       case 'drop':
-        handlers.onDrop(paths);
+        handlers.onDrop(paths, x ?? null, y ?? null);
         break;
     }
   });
   return () => unlisten();
+}
+
+/* ------------------- B6：拖文件到树内目录 = 复制进项目 ------------------- */
+
+/** 拖入目录（文件夹）到目录行上：递归复制是新功能，本批只接文件——说人话，不静默 */
+export const COPY_DIR_UNSUPPORTED_REASON = '文件夹暂不支持复制进项目，请拖文件';
+/** 目标目录在只读区（写允许域之外）：预检拦截的统一口径（照 B1 文案风格） */
+export const COPY_READONLY_REASON = '这个目录在只读区，文件放不进来。要先在「只读」徽章那里批准写权限。';
+/** 目标已有同名文件：默认拒绝（不许静默覆盖——覆盖是数据毁灭），想覆盖请先删/改名 */
+export function copyExistsReason(name: string): string {
+  return `目标目录里已有同名文件「${name}」，为防覆盖没有复制`;
+}
+
+/** drop 落点计划（纯函数的输出形态）：命中目录行 = 复制；否则维持 A1 打开语义 */
+export type DropAtPlan = { readonly kind: 'copy'; readonly targetDir: string } | { readonly kind: 'open' };
+
+/**
+ * drop 点 → 计划（纯函数，可单测）：`hitDir` 由 {@link dropTargetDirAt} 按坐标命中，
+ * 这里只做决策。命中 → 复制进该目录；未命中（树外/文件行/欢迎页）→ 打开语义。
+ */
+export function planDropAt(hitDir: string | null): DropAtPlan {
+  return hitDir ? { kind: 'copy', targetDir: hitDir } : { kind: 'open' };
+}
+
+/**
+ * 命中判定（纯函数，可单测）：从 `elementFromPoint` 命中的最深元素**向上**找最近的
+ * `[data-drop-dir]` 祖先——目录行可能只有 20px 高，命中其内层 span / 子行都算数。
+ * 形态取 `Element` 的最小面（closest + dataset），node 单测可用替身。
+ */
+export function dropTargetDirFrom(el: { closest(selectors: string): unknown } | null): string | null {
+  const hit = el?.closest('[data-drop-dir]') as { dataset?: { dropDir?: string } } | null | undefined;
+  const dir = hit?.dataset?.dropDir;
+  return dir ? dir : null;
+}
+
+/** Rust 坐标（webview 客户区物理像素）→ elementFromPoint 要的 CSS 像素 */
+function cssPoint(x: number, y: number): [number, number] {
+  const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  return [x / dpr, y / dpr];
+}
+
+/**
+ * 物理像素 → CSS 像素并命中（DOM 适配层）：Rust 透传的坐标是 webview 客户区
+ * **物理像素**（wry webview2 `ScreenToClient` 口径），`elementFromPoint` 吃 CSS 像素
+ * ——除以 `devicePixelRatio` 兑换。node 测试环境没有 DOM，测试走 `dropTargetDirFrom`。
+ */
+export function dropTargetDirAt(x: number, y: number): string | null {
+  if (typeof document === 'undefined') return null;
+  const [cx, cy] = cssPoint(x, y);
+  return dropTargetDirFrom(document.elementFromPoint(cx, cy));
+}
+
+/** 拖悬命中目录行的样式类（styles.css 同名规则；克制的描边 + 一层底色） */
+export const DROP_HOVER_CLASS = 'kojo-drop-hover';
+
+let hoverEl: Element | null = null;
+
+/**
+ * 拖悬高亮（Over 坐标驱动）：命中目录行加类、离开摘类。React 状态这里**刻意不用**
+ * ——over 每秒刷屏几十次，直接操作 DOM 类既不重渲染也不打架（命中元素被 React
+ * 重挂也只是类丢一次，下一个 over 事件立刻补上）。无命中 = 清掉旧高亮。
+ */
+export function updateDropHover(x: number, y: number): void {
+  if (typeof document === 'undefined') return;
+  const [cx, cy] = cssPoint(x, y);
+  const el = document.elementFromPoint(cx, cy);
+  const target = el?.closest('[data-drop-dir]') ?? null;
+  if (hoverEl === target) return;
+  hoverEl?.classList.remove(DROP_HOVER_CLASS);
+  target?.classList.add(DROP_HOVER_CLASS);
+  hoverEl = target;
+}
+
+/** 拖悬高亮收尾（leave/drop 必调；元素可能已被重挂，摘类尽力而为即可） */
+export function clearDropHover(): void {
+  hoverEl?.classList.remove(DROP_HOVER_CLASS);
+  hoverEl = null;
+}
+
+export interface DropCopyInput {
+  /** 复制链路需要的最小 io 面：stat（三态拆分）/ statFiles（防覆盖预检）/ copyFile / isWritable */
+  readonly io: Pick<FileIO, 'stat' | 'statFiles' | 'copyFile' | 'isWritable'>;
+  readonly paths: readonly string[];
+  /** drop 命中的目标目录（`data-drop-dir` 的值，绝对路径） */
+  readonly targetDir: string;
+  readonly notify: (message: string) => void;
+  /** 至少一个文件落了地 → 失效目标目录（宿主 bump 树刷新 nonce） */
+  readonly onLanded: () => void;
+}
+
+/** 复制失败聚合的前缀（与 formatRejections 的「打开」分家：动词不同不算复读） */
+function formatCopyRejections(rejected: readonly RejectedDrop[]): string {
+  const parts = rejected.map((r) => `${fileNameOf(r.path)}（${r.reason}）`);
+  return `这些没能复制：${parts.join('；')}`;
+}
+
+/**
+ * 拖文件到树内目录的复制落地（B6）。纪律：
+ *
+ * - **只复制文件**：目录递归复制是新功能，拖目录进来给一句人话，绝不静默；
+ * - **预检在先，零绕闸**：目标目录不可写（只读游戏区）→ 全部文件人话拒绝，
+ *   `copyFile` 一次都不碰（写允许域只对 to 断言，from 是读取源不受限）；
+ * - **默认拒绝覆盖**：`copyFile` 是后写为准（会覆盖同名目标），这里先 `statFiles`
+ *   查重，同名一律拒绝并说人话——覆盖是数据毁灭，宁可让用户手动改名；
+ * - 多文件逐个复制，聚合反馈：成功一句（「已复制 N 个文件到 X」）、失败一条清单
+ *   （照 formatRejections 形态）；部分成功时两条各说各话，绝不静默丢弃。
+ */
+export async function copyDroppedFiles(input: DropCopyInput): Promise<void> {
+  const { io, paths, targetDir, notify, onLanded } = input;
+  const split = await splitByStat(paths, io);
+  const rejected: RejectedDrop[] = [
+    ...split.directories.map((p) => ({ path: p, reason: COPY_DIR_UNSUPPORTED_REASON })),
+    ...split.unreadable.map((p) => ({ path: p, reason: UNREADABLE_REASON })),
+  ];
+  const files = split.files;
+  if (files.length === 0) {
+    if (rejected.length > 0) notify(formatCopyRejections(rejected));
+    return;
+  }
+
+  // 预检第一道闸（kernel.isWritable）：不可行就整批人话拒绝，copyFile 一次都不碰
+  if (!io.isWritable(targetDir)) {
+    for (const f of files) rejected.push({ path: f, reason: COPY_READONLY_REASON });
+    notify(formatCopyRejections(rejected));
+    return;
+  }
+
+  // 防覆盖预检：statFiles 一趟查重（copyFile 是"后写为准"，查重必须在它前面）
+  const targets = files.map((f) => joinPath(targetDir, fileNameOf(f)));
+  const stats = await io.statFiles(targets);
+  const copyPairs: Array<{ from: string; to: string }> = [];
+  for (const [i, f] of files.entries()) {
+    const name = fileNameOf(f);
+    if (stats[i]?.exists) rejected.push({ path: f, reason: copyExistsReason(name) });
+    else copyPairs.push({ from: f, to: targets[i]! });
+  }
+
+  let copied = 0;
+  for (const { from, to } of copyPairs) {
+    try {
+      await io.copyFile(from, to);
+      copied += 1;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      rejected.push({ path: from, reason: `复制失败：${msg}` });
+    }
+  }
+
+  if (copied > 0) {
+    onLanded();
+    const dirName = fileNameOf(targetDir.replace(/[\\/]+$/, ''));
+    notify(`已复制 ${copied} 个文件到「${dirName}」`);
+  }
+  if (rejected.length > 0) notify(formatCopyRejections(rejected));
 }
