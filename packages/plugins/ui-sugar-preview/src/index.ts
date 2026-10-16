@@ -12,16 +12,18 @@
  *     本插件只做**呈现**，绝不自建转译或模拟器；
  *   - 逐行映射 / 诊断 / 全角空格 / 可达性计数等纯逻辑在 `panel-logic.ts`
  *     （零 React，可单测）；
- *   - 当前文件来自宿主事件 `editor.activeFileChanged`（不持有宿主引用）；
+ *   - 当前文件来自宿主事件 `editor.activeFileChanged`；**文本真相**来自宿主事件
+ *     `editor.documentChanged`（C2：编辑器缓冲 = 当前可编译真相，读盘只是没收到
+ *     广播前的兜底）——两者都只是订阅，不持有宿主引用；
  *   - 跳转复用宿主既有通道 `editor.revealLocation`（与校验面板 / 函数树同款）。
  *
- * 事件纪律：本插件**只消费** `editor.activeFileChanged`，**只发**导航意图
- * `editor.revealLocation`（用户点击行 → 请宿主定位）。它**不读盘不写盘**
- * 之外——只读（`kernel.io.readText`）当前文件，绝不改盘，故不发 `file.changed`
- * （谁改盘谁发）。`sugar.preview` 自身亦只读、不发事件，故此处无变更源。
+ * 事件纪律：本插件**只消费** `editor.activeFileChanged` / `editor.documentChanged`，
+ * **只发**导航意图 `editor.revealLocation`（用户点击行 → 请宿主定位）。它**不写盘**
+ * 之外——读盘（`kernel.io.readText`）只在缓冲真相还没广播到的窗口期兜底，绝不改盘，
+ * 故不发 `file.changed`（谁改盘谁发）。`sugar.preview` 自身亦只读、不发事件。
  */
 
-import { createElement, useEffect, useState } from 'react';
+import { createElement, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
   FileIO,
@@ -30,13 +32,14 @@ import type {
   SugarPreviewResult,
   SugarPreviewService,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, pathKey } from '@kojo/plugin-api';
 import {
   archiveStatus,
   buildArchiveOptions,
   buildDiagnosticRows,
   buildPreviewRows,
   countLines,
+  createLiveTextPool,
   degradeText,
   isKojoFile,
   summarize,
@@ -79,6 +82,10 @@ export function createUiSugarPreviewPlugin(): Plugin {
         const [degrade, setDegrade] = useState<PreviewDegrade>('no-project');
         const [error, setError] = useState<string | null>(null);
         const [nonce, setNonce] = useState(0);
+        /** 编辑器缓冲真相（C2）：per-path 最新广播文本；读盘降级为"还没收到广播前"的兜底 */
+        const liveRef = useRef(createLiveTextPool());
+        /** 当前文件的真相更新序号（广播命中当前文件时 +1，驱动重算） */
+        const [liveTick, setLiveTick] = useState(0);
 
         // 当前文件（宿主广播）——换文件即重置全部状态
         useEffect(() => {
@@ -93,39 +100,70 @@ export function createUiSugarPreviewPlugin(): Plugin {
           return un;
         }, []);
 
+        // 缓冲真相广播（C2）：记入 per-path 池；命中的是当前文件即触发重算——
+        // 未保存的编辑同样进预览（与编辑器波浪线同源）。宿主已防抖/去重，收到即算，
+        // 不叠加第二层；糖视图是派生文本、宿主不发，这里无需自备防御。
+        useEffect(() => {
+          const un = ctx.bus.on('editor.documentChanged', (ev) => {
+            liveRef.current.apply(ev.filePath, ev.text);
+            if (filePath !== null && pathKey(ev.filePath) === pathKey(filePath)) setLiveTick((n) => n + 1);
+          });
+          return un;
+        }, [filePath]);
+
         // 归档浏览器选中档 → 预填（UI 插件间零直接依赖，走内核事件）
         useEffect(() => {
           const un = ctx.bus.on('kojo.snapshotSelected', (p) => setArchivePath(p.path));
           return un;
         }, []);
 
-        // 读文件 → 预览（只读；换文件 / 换档 / 手动刷新都走这里）
+        // 取"当前真相"（C2）：编辑器缓冲广播优先（live），还没收到广播的窗口期退回读盘
+        // （disk）；换文件 / 换档 / 手动刷新 / 缓冲更新都走这里——面板与波浪线不再分叉。
         useEffect(() => {
           const path = filePath;
           if (!path || !isKojoFile(path)) return;
           let cancelled = false;
-          setDegrade('reading');
           setError(null);
+          // source 与 result 成对落地（逐行映射取两者的行号对齐，错位中间帧会画错标签）
+          const previewFor = async (text: string): Promise<void> => {
+            try {
+              // 角色号由 `sugar.preview` 从产物骨架反推（`.kojo` 声明 `角色:` 即可），
+              // 面板只需给出存档路径——不在 UI 层复制这条推导逻辑。
+              const r = await previewSvc.preview({
+                source: text,
+                filePath: path,
+                ...(archivePath ? { archivePath } : {}),
+              });
+              if (cancelled || !r) return;
+              setSource(text);
+              setResult(r);
+              setDegrade('previewing');
+            } catch (err: unknown) {
+              if (cancelled) return;
+              setError(err instanceof Error ? err.message : String(err));
+              setDegrade('preview-error');
+            }
+          };
+          const live = liveRef.current.textFor(path);
+          if (live !== null) {
+            // 有缓冲真相：直接预览，不等读盘（转译有共享缓存，收到即算）
+            setDegrade('previewing');
+            void previewFor(live);
+            return () => {
+              cancelled = true;
+            };
+          }
+          setDegrade('reading');
           void io
             .readText(path)
             .then((tf) => {
               if (cancelled) return;
-              setSource(tf.text);
+              // 读盘只是首开窗口期的兜底；文本到手后与 live 路径同一条预览链、同一档文案
               setDegrade('previewing');
-              // 角色号由 `sugar.preview` 从产物骨架反推（`.kojo` 声明 `角色:` 即可），
-              // 面板只需给出存档路径——不在 UI 层复制这条推导逻辑。
-              return previewSvc.preview({
-                source: tf.text,
-                filePath: path,
-                ...(archivePath ? { archivePath } : {}),
-              });
-            })
-            .then((r) => {
-              if (cancelled || !r) return;
-              setResult(r);
-              setDegrade('previewing');
+              return previewFor(tf.text);
             })
             .catch((err: unknown) => {
+              // 读盘失败（previewFor 自带 catch：预览失败报 'preview-error'，不会漏到这里）
               if (cancelled) return;
               setError(err instanceof Error ? err.message : String(err));
               setDegrade('read-error');
@@ -133,7 +171,7 @@ export function createUiSugarPreviewPlugin(): Plugin {
           return () => {
             cancelled = true;
           };
-        }, [filePath, nonce, archivePath]);
+        }, [filePath, nonce, archivePath, liveTick]);
 
         /** 点击定位：请求宿主打开并滚动到该行（同文件时仅滚动） */
         const reveal = (line: number): void => {
@@ -163,7 +201,12 @@ export function createUiSugarPreviewPlugin(): Plugin {
           ),
           createElement(
             'button',
-            { className: 'ghost small', onClick: () => setNonce((n) => n + 1), disabled: !isKojoFile(filePath) },
+            {
+              className: 'ghost small',
+              onClick: () => setNonce((n) => n + 1),
+              disabled: !isKojoFile(filePath),
+              title: '按当前真相重算（未保存的编辑也算数——与编辑器波浪线同源）',
+            },
             '刷新',
           ),
         );

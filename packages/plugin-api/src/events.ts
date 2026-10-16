@@ -102,6 +102,24 @@ export interface KernelEventMap {
    */
   'editor.activeFileChanged': { filePath: string | null };
   /**
+   * 编辑器文档真相变更（C2，2026-10-16 面板真相统一批）：宿主在"这个文件当前的
+   * **可编译真相**"变化时广播。`text` = 编辑器**缓冲区**的当前文本，不是盘上那份——
+   * 未保存编辑时波浪线与面板数字必须看到同一份文本，否则两屏真相分叉。
+   *
+   * 消费方契约：拿同一 `filePath` 的**最新一条**当权威文本；磁盘读取降级为
+   * "还没收到广播前"（首开窗口期）的兜底，**不是**第二真源。
+   * `dirty = true` 表示缓冲与盘上不同步（保存后文本没变则不再广播——真相没变；
+   * 消费方别拿"没收到 dirty=false"当异常）。
+   *
+   * 通用、游戏无关。**内核/宿主专属**：文件真相的真源在编辑器缓冲，插件伪造本事件
+   * = 谎报文件内容（消费方会拿伪造文本当权威去转译/校验），与 `editor.codeLens.set`
+   * 同档，见下方 `KERNEL_ONLY_EVENT_NAMES`。
+   *
+   * 宿主侧抑制约定（消费方不必自备防御）：糖视图（derived 只读内存 model）激活时
+   * **不发**——派生文本不是文件真相（行号对不上）；切回原码后立即补发一条。
+   */
+  'editor.documentChanged': { filePath: string; text: string; dirty: boolean };
+  /**
    * 升糖预览意图（2026-10-12 升糖重定位批）：请求宿主在编辑器内**就地**显示
    * 某段原生 ERB 的语法糖写法（折叠原文区间 + 打字机透镜），**纯前端、不写盘**。
    *
@@ -350,6 +368,10 @@ const KERNEL_ONLY_EVENT_NAMES = [
   // 编辑器动作（查找/替换/格式化/重命名/引用）落在作者笔下的内容与编辑器会话上，
   // 与「全部修复」同档：宿主编辑器一侧落地，插件没有 emit 的理由（R8）。
   'editor.action.request',
+  // 文档真相 = "这个文件当前的可编译真相"（编辑器缓冲文本）。宿主状态真源在编辑器缓冲，
+  // 插件伪造 = 谎报文件内容（消费方会拿伪造文本当权威去转译/校验）——与
+  // `editor.codeLens.set` 同档：白名单即信任面，不放开 emit（C2）。
+  'editor.documentChanged',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核事件名（= 插件可 emit 的集合；供 kernel `scopedBus` 执法使用） */

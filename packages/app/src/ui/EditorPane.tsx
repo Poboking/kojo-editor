@@ -87,6 +87,7 @@ import { SaveWarningDialog } from './SaveWarningDialog';
 import { CJK_TYPING_BASELINE, editorOptionsForLineCount } from './editor-options';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
+import { createDocumentBroadcaster } from './document-broadcast';
 import {
   clampSlice,
   extractViewSlice,
@@ -1057,6 +1058,38 @@ export function EditorPane({
   }, [computeDirty]);
 
   /**
+   * 文档真相广播（C2，2026-10-16 面板真相统一批）：编辑器缓冲区 = "这个文件当前的
+   * 可编译真相"。防抖 / 去重 / 抑制 derived 的判据全在 `document-broadcast`（纯逻辑
+   * 可单测），这里只提供两条宿主事实：往内核总线发 `editor.documentChanged`；
+   * 糖视图挂载中（derived 只读 model，文本不是文件真相）为抑制态。
+   */
+  const documentBroadcaster = useMemo(
+    () =>
+      createDocumentBroadcaster({
+        emit: (payload) => kernel.bus.emit('editor.documentChanged', payload),
+        // 谓词在**落地时刻**求值：排程后、落地前用户可能刚切进/切出糖视图
+        suppressed: () => sugarModelRef.current !== null,
+      }),
+    [kernel],
+  );
+  // 卸载（含 kernel 更换重建）清掉在途排程：旧广播器的定时器不该再落地
+  useEffect(() => () => documentBroadcaster.dispose(), [documentBroadcaster]);
+
+  /**
+   * 现取指定文件的**缓冲真相**（广播载荷的读取入口）。绑定 `entriesRef` 里的真
+   * model——糖视图期间它仍指向原文 model（糖 model 从不进 entriesRef，见其 ref 注）；
+   * 标签已关 / model 已替换 → null = 本次广播作废（不拿残影当真相）。
+   */
+  const readDocumentTruth = useCallback(
+    (path: string): { text: string; dirty: boolean } | null => {
+      const entry = entriesRef.current.get(path);
+      if (!entry || entry.model.isDisposed()) return null;
+      return { text: entry.model.getValue(), dirty: computeDirty(path) };
+    },
+    [computeDirty],
+  );
+
+  /**
    * 取"当前文件"的**真 model**（装饰 / 保存 / 编辑落点 / 定位的统一入口）。
    *
    * 糖视图激活时 `ed.getModel()` 是那份**只读糖 model**——对它做脏判定、挂波浪线、落编辑
@@ -1240,6 +1273,11 @@ export function EditorPane({
     const entry = entriesRef.current.get(path);
     clearSugarView(); // 先把上一次的糖 model 撤下（幂等）
     if (!ed || !entry) return;
+    // C2：糖视图让位 / 撤下的这一拍，编辑器真理回到原文缓冲——立即补发一条。
+    // 这是"切文件/加载完成即有真相"与"切回原码后补一发"的共同落点（本函数被开关
+    // 切换 / 解锁 / 直连 / 换文件全部入口调用）；糖视图正要挂上时同样发的是**原文**
+    // 真相（派生文本永不外发，挂载后由 broadcaster 的抑制谓词兜住）。
+    documentBroadcaster.flush(path, () => readDocumentTruth(path));
     // 可用门（ADR-0005）：只对**游戏目录里、本次未解锁**的 ERB 生效。
     // `.kojo` 与**工作区内 ERB**（作者自己的创作源文件，恒可编辑）都不放预览——
     // 预览靠"整份文件换成只读 model"工作，可编辑的原文必须始终看得见。
@@ -1302,7 +1340,7 @@ export function EditorPane({
     ed.updateOptions({ readOnly: true }); // 糖是派生物，禁止在糖视图上编辑
     ed.setModel(sugarModel);
     setSugarStats(sugarSummary(sugarLines, 0));
-  }, [kernel, clearSugarView]);
+  }, [kernel, clearSugarView, documentBroadcaster, readDocumentTruth]);
 
   // 开关变化：记住偏好（下次启动仍是你的选择）+ 就地重算视图
   useEffect(() => {
@@ -1546,6 +1584,9 @@ export function EditorPane({
         onDirtyChangeRef.current?.(path, false);
         if (isActive && ed && vs) ed.restoreViewState(vs);
         if (refreshMarkersRef.current) refreshMarkersRef.current(live.model, path);
+        // C2：外部改动重载 / 冲突解决后立即补发新真相（活动文件才发；面板不该吃到
+        // 旧盘文本的残影。后台标签切回来时会经 applySugarView 补发）
+        if (isActive) documentBroadcaster.flush(path, () => readDocumentTruth(path));
         if (isActive) {
           setDirty(false);
           setStatus('已从磁盘重新加载（文件在外部被修改）');
@@ -1566,7 +1607,7 @@ export function EditorPane({
         action: { label: '重新加载（放弃我的修改）', run: applyReload },
       });
     },
-    [kernel, notify, computeDirty],
+    [kernel, notify, computeDirty, documentBroadcaster, readDocumentTruth],
   );
 
   // 外部写盘 → 重载对应 model（B1 修复）：宿主只**消费** `file.changed`，不认识"升糖"
@@ -1968,6 +2009,9 @@ export function EditorPane({
               if (filePathRef.current === filePath) {
                 setDirty(d);
                 scheduleMarkers();
+                // C2：活动文件缓冲变化 → 防抖广播"当前真相"（糖视图激活时广播器自行抑制；
+                // 程序性整篇改写——fix-all / 重命名批量 / 保存前整理——同样走这条通道）
+                documentBroadcaster.schedule(filePath, () => readDocumentTruth(filePath));
               }
             } finally {
               perf.record('input.handler', performance.now() - t0);
@@ -2028,7 +2072,7 @@ export function EditorPane({
     return () => {
       cancelled = true;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearSugarView, applySugarView]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, onStatusInfo, computeDirty, scheduleMarkers, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth]);
 
   /* ------------------- 只读锁：编辑意图 → 询问 → 解锁 ------------------- */
 

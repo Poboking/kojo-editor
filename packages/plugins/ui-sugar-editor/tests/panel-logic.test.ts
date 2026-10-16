@@ -13,6 +13,7 @@ import type { SugarDiagnostic, SugarSeverity } from '@kojo/plugin-api';
 import {
   buildVerdictRows,
   countBySeverity,
+  createLiveTextPool,
   degradeText,
   diagnosticDecorations,
   isKojoFile,
@@ -154,5 +155,49 @@ describe('S6 / 降级文案', () => {
     for (const d of ['no-project', 'not-kojo', 'reading', 'read-error'] as const) {
       expect(degradeText(d).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('C2 / 缓冲真相池（live-first / disk-fallback 的选择判据）', () => {
+  it('未收到广播 → textFor 为 null（调用方退回读盘兜底）', () => {
+    const pool = createLiveTextPool();
+    expect(pool.textFor('/proj/x.kojo')).toBeNull();
+  });
+
+  it('收到广播 → 以广播为准（读盘不再是真源）', () => {
+    const pool = createLiveTextPool();
+    pool.apply('/proj/x.kojo', '未保存的编辑');
+    expect(pool.textFor('/proj/x.kojo')).toBe('未保存的编辑');
+  });
+
+  it('同一 path 新广播覆盖旧（拿最新一条当权威）', () => {
+    const pool = createLiveTextPool();
+    pool.apply('/proj/x.kojo', 'v1');
+    pool.apply('/proj/x.kojo', 'v2');
+    expect(pool.textFor('/proj/x.kojo')).toBe('v2');
+  });
+
+  it('path 不匹配不误用：别的文件的广播不喂给当前文件', () => {
+    const pool = createLiveTextPool();
+    pool.apply('/proj/other.kojo', 'other');
+    expect(pool.textFor('/proj/x.kojo')).toBeNull();
+  });
+
+  it('path 判等走 pathKey 归一（Windows 分隔符/大小写不同也命中同一文件）', () => {
+    const pool = createLiveTextPool();
+    pool.apply('C:\\Proj\\X.kojo', 't');
+    expect(pool.textFor('c:/proj/x.kojo')).toBe('t');
+  });
+
+  it('空文本也是真相（清空全文的编辑必须如实下发，不与"没收到"混淆）', () => {
+    const pool = createLiveTextPool();
+    pool.apply('/proj/x.kojo', '');
+    expect(pool.textFor('/proj/x.kojo')).toBe('');
+  });
+
+  it('null / undefined 路径安全取空（换文件瞬时无活动文件的窗口期）', () => {
+    const pool = createLiveTextPool();
+    expect(pool.textFor(null)).toBeNull();
+    expect(pool.textFor(undefined)).toBeNull();
   });
 });

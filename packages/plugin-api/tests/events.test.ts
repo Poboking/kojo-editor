@@ -52,6 +52,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     expect([...KERNEL_EVENT_NAMES]).not.toContain('project.writableApprovalMismatch');
     // BUG-5：监视状态同属"安全保证"类事件——插件不得伪造"外部改动会自动重载"
     expect([...KERNEL_EVENT_NAMES]).not.toContain('file.watchState');
+    // C2：文档真相的真源在编辑器缓冲——插件伪造 = 谎报文件内容（消费方拿它当权威转译/校验）
+    expect([...KERNEL_EVENT_NAMES]).not.toContain('editor.documentChanged');
   });
 
   it('白名单无重复（Set 语义自证：长度 = 快照清单长度）', () => {

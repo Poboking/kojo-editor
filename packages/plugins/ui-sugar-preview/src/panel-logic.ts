@@ -24,7 +24,7 @@ import type {
   SugarPreviewMessageBlock,
   SugarPreviewResult,
 } from '@kojo/plugin-api';
-import { FULLWIDTH_SPACE, fullwidthSpaceLines } from '@kojo/plugin-api';
+import { FULLWIDTH_SPACE, fullwidthSpaceLines, pathKey } from '@kojo/plugin-api';
 
 /* ============================== 全角空格（规范 §8） ============================== */
 
@@ -322,6 +322,40 @@ export function archiveStatus(result: SugarPreviewResult | null): ArchiveStatus 
   }
   const who = a.characterName ? `${a.characterName} #${a.characterNo}` : `#${a.characterNo}`;
   return { connected: true, who, hint: '' };
+}
+
+/* ============================== 缓冲真相池（C2） ============================== */
+
+/**
+ * 编辑器**缓冲真相**池（C2，2026-10-16 面板真相统一批）：消费宿主广播
+ * `editor.documentChanged` 的最新文本，**按文件**各留一条。
+ *
+ * 语义（与契约注释同一口径）：
+ * - 同一 path 的新广播**覆盖旧**——它就是"这个文件此刻的可编译真相"；
+ * - `textFor()` 返回 null = 还没收到该文件的广播（首开窗口期）→ 调用方退回
+ *   `io.readText` 读盘兜底；返回非空 = 以广播为准，**不得**再读盘（否则又成分叉）；
+ * - path 判等走 `pathKey()` 归一：事件路径平台原样，裸字符串比会在 Windows 上
+ *   静默判不上（HK-7 同款坑）；
+ * - 只进不删、条数 = 会话内收到过广播的文件数（面板场景就一两份文件，不设上限）。
+ */
+export interface LiveTextPool {
+  /** 记一条广播（同 path 覆盖旧值） */
+  apply(filePath: string, text: string): void;
+  /** 该文件的最新真相；未收到过广播返回 null（调用方走读盘兜底） */
+  textFor(filePath: string | null | undefined): string | null;
+}
+
+export function createLiveTextPool(): LiveTextPool {
+  const byKey = new Map<string, string>();
+  return {
+    apply(filePath: string, text: string): void {
+      byKey.set(pathKey(filePath), text);
+    },
+    textFor(filePath: string | null | undefined): string | null {
+      if (filePath === null || filePath === undefined) return null;
+      return byKey.get(pathKey(filePath)) ?? null;
+    },
+  };
 }
 
 /* ============================== 降级 / 文件判定 ============================== */

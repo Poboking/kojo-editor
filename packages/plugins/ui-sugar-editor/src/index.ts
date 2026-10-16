@@ -17,12 +17,14 @@
  *   - 装饰与判定都是**纯函数**（不读盘不写盘不发事件）——`decorate()` 拿到的
  *     就是宿主给的 `{path, text}`，转译器无 IO；面板的读盘走内核 io（只读）；
  *   - 判定/装饰归类在 `panel-logic.ts`（零 React，可单测）；
- *   - 当前文件来自宿主事件 `editor.activeFileChanged`（不持有宿主引用）；
+ *   - 当前文件来自宿主事件 `editor.activeFileChanged`；判定用的**文本真相**来自
+ *     宿主事件 `editor.documentChanged`（C2：编辑器缓冲 = 当前可编译真相，读盘只是
+ *     还没收到广播前的兜底）——两者都只是订阅，不持有宿主引用；
  *   - 跳转复用宿主既有通道 `editor.revealLocation`；
  *   - 零游戏知识：本插件不认得任何游戏术语，变量字典/分野模板全在 adapter。
  */
 
-import { createElement, useEffect, useState } from 'react';
+import { createElement, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
   FileIO,
@@ -39,9 +41,11 @@ import {
   WellKnownCommands,
   WellKnownServices,
   diagnosticDisplay,
+  pathKey,
 } from '@kojo/plugin-api';
 import {
   buildVerdictRows,
+  createLiveTextPool,
   degradeText,
   diagnosticDecorations,
   isKojoFile,
@@ -133,6 +137,10 @@ export function createUiSugarEditorPlugin(): Plugin {
         const [rows, setRows] = useState<readonly VerdictRow[]>([]);
         const [error, setError] = useState<string | null>(null);
         const [nonce, setNonce] = useState(0);
+        /** 编辑器缓冲真相（C2）：per-path 最新广播文本；读盘降级为"还没收到广播前"的兜底 */
+        const liveRef = useRef(createLiveTextPool());
+        /** 当前文件的真相更新序号（广播命中当前文件时 +1，驱动重算） */
+        const [liveTick, setLiveTick] = useState(0);
 
         // 当前文件（宿主广播）——换文件即重置
         useEffect(() => {
@@ -147,21 +155,47 @@ export function createUiSugarEditorPlugin(): Plugin {
           return un;
         }, []);
 
-        // 读文件（只读）→ 转译 → 判定；换文件 / 手动刷新都走这里
+        // 缓冲真相广播（C2）：记入 per-path 池；命中的是当前文件即触发重算——
+        // 面板数字从此与波浪线吃**同一份**文本（宿主已防抖/去重，收到即算，
+        // 不叠加第二层；糖视图是派生文本、宿主不发，这里无需自备防御）。
+        useEffect(() => {
+          const un = ctx.bus.on('editor.documentChanged', (ev) => {
+            liveRef.current.apply(ev.filePath, ev.text);
+            if (filePath !== null && pathKey(ev.filePath) === pathKey(filePath)) setLiveTick((n) => n + 1);
+          });
+          return un;
+        }, [filePath]);
+
+        // 取"当前真相"：编辑器缓冲广播优先（live），还没收到广播的窗口期退回读盘（disk）；
+        // 换文件 / 手动刷新 / 缓冲更新都走这里。转译有共享缓存，此处按收即算。
         useEffect(() => {
           const path = filePath;
           if (!path || !isKojoFile(path)) return;
           let cancelled = false;
-          setDegrade('reading');
           setError(null);
+          const compute = (text: string): void => {
+            const r = sugar.transpile(text, { filePath: path });
+            const mapped = r.sourceMap.filter((e) => e.sourceLine !== null).length;
+            setSummary(summarize(text, r.erb, mapped, r.diagnostics));
+            setRows(buildVerdictRows(r.diagnostics));
+          };
+          const live = liveRef.current.textFor(path);
+          if (live !== null) {
+            // 有缓冲真相：直接用它转译出判定（summary + rows），不等读盘
+            try {
+              compute(live);
+            } catch (err: unknown) {
+              setError(err instanceof Error ? err.message : String(err));
+              setDegrade('read-error');
+            }
+            return;
+          }
+          setDegrade('reading');
           void io
             .readText(path)
             .then((tf) => {
               if (cancelled) return;
-              const r = sugar.transpile(tf.text, { filePath: path });
-              const mapped = r.sourceMap.filter((e) => e.sourceLine !== null).length;
-              setSummary(summarize(tf.text, r.erb, mapped, r.diagnostics));
-              setRows(buildVerdictRows(r.diagnostics));
+              compute(tf.text);
             })
             .catch((err: unknown) => {
               if (cancelled) return;
@@ -171,7 +205,7 @@ export function createUiSugarEditorPlugin(): Plugin {
           return () => {
             cancelled = true;
           };
-        }, [filePath, nonce]);
+        }, [filePath, nonce, liveTick]);
 
         /** 点击定位：请求宿主打开并滚动到该行 */
         const reveal = (line: number): void => {
@@ -189,7 +223,12 @@ export function createUiSugarEditorPlugin(): Plugin {
               createElement('span', { className: 'dim' }, '.kojo 校验（转译诊断；只读）'),
               createElement(
                 'button',
-                { className: 'ghost small', onClick: () => setNonce((n) => n + 1), disabled: !isKojoFile(filePath) },
+                {
+                  className: 'ghost small',
+                  onClick: () => setNonce((n) => n + 1),
+                  disabled: !isKojoFile(filePath),
+                  title: '按当前真相重算（未保存的编辑也算数——与编辑器波浪线同源）',
+                },
                 '刷新',
               ),
             ),
@@ -199,7 +238,9 @@ export function createUiSugarEditorPlugin(): Plugin {
         if (!isKojoFile(filePath)) {
           return shell([createElement('div', { className: 'sv-empty dim' }, degradeText(degrade))]);
         }
-        if (degrade === 'reading') {
+        // 读取中只在**还没有结果**时占屏：命中缓冲真相是同步算完的，degrade 标签可能
+        // 仍停在 'reading' 上——有 summary 就必须让判定上屏（否则面板永远停在读取中）。
+        if (degrade === 'reading' && summary === null) {
           return shell([createElement('div', { className: 'sv-empty dim' }, degradeText(degrade))]);
         }
         if (error) {
