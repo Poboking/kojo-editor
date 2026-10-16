@@ -45,7 +45,12 @@ const INFO_TTL_MS = 6000;
 export function NotificationCenter({ children }: { children: ReactNode }): ReactElement {
   const [notices, setNotices] = useState<Notice[]>([]);
   const seqRef = useRef(0);
-  const timersRef = useRef<number[]>([]);
+  /**
+   * noticeId → 该条 info 的自动消失计时器（nit：原来是一条数组，只增不减）。
+   * 表与"屏上还挂着的 info"同步收敛 —— 见下面那个 effect：条目不论以哪种方式离开屏幕
+   * （时间到、用户关闭、被同屏上限淘汰）都立刻清掉它那条计时，表因此有界。
+   */
+  const timersRef = useRef(new Map<number, number>());
 
   const dismiss = useCallback((id: number) => {
     setNotices((list) => list.filter((n) => n.id !== id));
@@ -56,16 +61,27 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
       const id = ++seqRef.current;
       setNotices((list) => pushNotice(list, { ...input, id }));
       if (input.kind === 'info') {
-        timersRef.current.push(window.setTimeout(() => dismiss(id), INFO_TTL_MS));
+        timersRef.current.set(id, window.setTimeout(() => dismiss(id), INFO_TTL_MS));
       }
     },
     [dismiss],
   );
 
+  // 计时表跟着屏上的通知收敛（不在屏上的 ⇒ clearTimeout + 从表里删）
+  useEffect(() => {
+    const alive = new Set(notices.map((n) => n.id));
+    for (const [id, timer] of [...timersRef.current]) {
+      if (alive.has(id)) continue;
+      window.clearTimeout(timer);
+      timersRef.current.delete(id);
+    }
+  }, [notices]);
+
   useEffect(() => {
     const timers = timersRef.current;
     return () => {
-      for (const t of timers) window.clearTimeout(t);
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
     };
   }, []);
 

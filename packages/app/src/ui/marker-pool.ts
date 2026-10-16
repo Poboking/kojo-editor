@@ -17,7 +17,9 @@
  *    服务，worker 复现不了）**异步就地**——照样脱离同步轮，只是 CPU 仍在本线程。
  *    "哪些 kind 只能就地"不是靠猜：那张表就是 `compute-tasks.ts`，读得到就说得清。
  *
- * 2. **陈旧即丢**：异步结果落地前必须确认 `model.getVersionId()` 还是发起那一次的。
+ * 2. **陈旧即丢**：异步结果落地前必须确认"还是发起那一份 model"——版本号**和**世代号
+ *    都对上才算（`#F6`：新 model 的版本号从 1 重新数，只比版本号会让关→重开的在途结果
+ *    以 `1 === 1` 蒙混过关，把旧装饰发布进新 model 并写进缓存 = 缓存投毒）。
  *    打字期间版本一直在涨，迟到的旧结果一旦上屏就是"波浪线指着已经改掉的行"——
  *    那是假缺陷农场，比没有波浪线糟得多。丢弃计入 `stats().discarded`，不静默。
  *
@@ -51,7 +53,11 @@ export interface MarkerRunnerDeps {
   contributors: () => readonly MarkerContributor[];
   /** 当前项目（传给就地装饰器；同时是缓存判据的来源） */
   project: () => GameProject | null;
-  /** 该路径当前 model 的版本号；model 已 dispose / 标签已关 → undefined */
+  /**
+   * 该路径当前 model 的版本号；model 已 dispose / 标签已关 → undefined。
+   * **版本号不认 model**：新 model 从 1 重新数，所以它还要求宿主在关标签时调用
+   * `dropPath`（世代号由此递增，见实现处的 #F6 注释）。
+   */
   versionOf: (path: string) => number | undefined;
   /** 发布一份**整档**装饰（宿主：Monaco markers + problem-store 全量替换） */
   publish: (path: string, decorations: LineDecoration[]) => void;
@@ -146,6 +152,33 @@ export function createMarkerRunner(deps: MarkerRunnerDeps): {
 
   const record = (name: string, ms: number, note?: string): void => deps.record?.(name, ms, note);
 
+  /* ---------------- model 世代（#F6：close→reopen 的同版本号竞态） ----------------
+   *
+   * `versionOf` 给的是 Monaco 的 model 内版本，**换一份 model 就从 1 重新数**。
+   * 于是这条竞态能过陈旧闸：发起异步刷新（版本 1）→ 关标签（在途结果还在跑）
+   * → 立刻重开同一文件（新 model，版本又是 1）→ 结果回来 `1 === 1` 通过 →
+   * 把**上一份内容**的装饰发布进新 model，还按版本 1 写进缓存（此后命中零重算 = 缓存投毒）。
+   *
+   * 版本号那把尺子分辨不出"同版本号的两份 model"，所以再加一把**与 model 身份绑定**的世代号：
+   * 只在"这份 model 不再是那一份"时推进 —— `dropPath`（宿主关标签必调）与 `clear`
+   * （换项目 / 重装，整体推进）。异步结果落地时两把尺子都必须对上，任一不符即丢弃：
+   * 宁可多算一轮，绝不让陈旧装饰上屏。发布形状不变（仍是一次整档替换，owner 键控）。
+   */
+  const modelGen = new Map<string, number>();
+  /** 世代表软上限：到顶就整体作废一次（只会让在途结果多被丢弃，方向安全） */
+  const MODEL_GEN_SOFT_CAP = 4096;
+  /** 整体作废的基线（clear / 裁剪时推进，让所有在途捕获同时失配） */
+  let modelGenBase = 0;
+  const genOf = (path: string): number => modelGenBase + (modelGen.get(path) ?? 0);
+  const invalidateAllModels = (): void => {
+    modelGenBase += 1;
+    modelGen.clear();
+  };
+  const advanceGen = (path: string): void => {
+    modelGen.set(path, (modelGen.get(path) ?? 0) + 1);
+    if (modelGen.size > MODEL_GEN_SOFT_CAP) invalidateAllModels();
+  };
+
   const cacheKey = (projectKey: string, path: string, versionId: number, signature: string): string =>
     `${projectKey}\u0000${path}\u0000${versionId}\u0000${signature}`;
 
@@ -224,6 +257,8 @@ export function createMarkerRunner(deps: MarkerRunnerDeps): {
     refresh(path: string, readText: () => string): void {
       const versionId = deps.versionOf(path);
       if (versionId === undefined) return; // 标签已关 / model 已 dispose：什么都不做
+      // 发起时刻的 model 世代（与 versionId 一起构成"哪一份 model"的身份）
+      const generation = genOf(path);
 
       const contributors = deps.contributors();
       const project = deps.project();
@@ -272,10 +307,17 @@ export function createMarkerRunner(deps: MarkerRunnerDeps): {
           runOffloaded(deferred, payload, project),
         )
         .then((deferredResults) => {
-          // **陈旧即丢**：发起后版本又涨了（打字 / 重载）→ 这份结果已经不对应任何可见内容
-          if (deps.versionOf(path) !== versionId) {
+          // **陈旧即丢**：发起后版本又涨了（打字 / 重载）**或 model 已换过一份**
+          // （关标签→重开，版本号会从 1 重新数 ⇒ 单比版本号会 `1 === 1` 放行旧内容）
+          // → 这份结果已经不对应任何可见内容，既不许上屏也不许进缓存
+          const nowVersion = deps.versionOf(path);
+          if (nowVersion !== versionId || genOf(path) !== generation) {
             counters.discarded++;
-            record('markers.stale', 0, `${path} · 丢弃版本 ${versionId}（现为 ${deps.versionOf(path) ?? 'gone'}）`);
+            record(
+              'markers.stale',
+              0,
+              `${path} · 丢弃版本 ${versionId}（现为 ${nowVersion ?? 'gone'}，世代 ${generation}→${genOf(path)}）`,
+            );
             return;
           }
           const full: PerSource = new Map(results);
@@ -294,12 +336,16 @@ export function createMarkerRunner(deps: MarkerRunnerDeps): {
     },
 
     dropPath(path: string): void {
+      // 关标签 = 这一份 model 到此为止：推进世代，让它在途的异步结果一律作废（#F6）
+      advanceGen(path);
       for (const key of [...cache.keys()]) if (key.includes(`\u0000${path}\u0000`)) cache.delete(key);
       counters.cached = cache.size;
     },
 
     clear(): void {
       cache.clear();
+      // 整体作废（换项目 / 重装）：推进基线，所有路径的在途结果一起失配
+      invalidateAllModels();
       counters.cached = 0;
     },
 

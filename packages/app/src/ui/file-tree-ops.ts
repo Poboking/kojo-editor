@@ -71,6 +71,12 @@ export function menuItemsFor(scope: MenuScopeKind, cap: MenuCapability): MenuIte
 /* ------------------------------ 名称校验 ------------------------------ */
 
 /**
+ * Windows 保留设备名（Win32 文件名判据，与扩展名组合同样保留：`CON.txt` 也建不出来）。
+ * PRN / AUX / CLOCK$ 一并拦下——盘上真抛出来的是一串英文错误，正是这道门要替作者挡掉的。
+ */
+const RESERVED_DEVICE_NAME = /^(con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+/**
  * 新建 / 重命名的文件名合法性（纯函数）。返回**人话错误说明**，null = 合法。
  *
  * 锚的是 Windows 文件名的硬约束（Rust/NTFS 侧会拒绝的字符与形态）——
@@ -83,6 +89,8 @@ export function validateEntryName(rawName: string): string | null {
   if (/[\\/]/.test(name)) return '名称里不能有斜杠（/ 或 \\）';
   if (/[<>:"|?*\u0000-\u001f]/.test(name)) return '名称里不能有这些字符：< > : " | ? *';
   if (/[. ]$/.test(name)) return '名称结尾不能是空格或点';
+  if (RESERVED_DEVICE_NAME.test(name))
+    return `「${name}」是系统保留的设备名称，换一个（如 CON / NUL / AUX / COM1 / LPT1 这类）`;
   return null;
 }
 

@@ -336,6 +336,72 @@ describe('marker-pool · 陈旧丢弃', () => {
     expect(h.runner.stats().discarded).toBe(1);
   });
 
+  /* -------- #F6：版本号不认 model —— close→reopen 的同版本号竞态 -------- */
+
+  it('#F6 关标签→立刻重开（新 model 版本又是 1）：在途结果不许上屏、更不许进缓存', async () => {
+    const light = contributor('light', { make: () => [{ line: 1, severity: 'info', message: 'light' }] });
+    const heavy = contributor('heavy', { offloadKind: 'x.heavy' });
+    const h = harness({
+      contributors: [light, heavy],
+      workerKinds: ['x.heavy'],
+      tasks: { 'x.heavy': () => [{ line: 9, severity: 'error', message: '上一份 model 的装饰' }] },
+    });
+    h.versions.set('/a.erb', 1);
+    h.runner.refresh('/a.erb', () => TEXT); // 发起：版本 1，重的那一路进在途
+    h.runner.dropPath('/a.erb'); // 关标签：丢这一条缓存（宿主 close 必调）
+    h.versions.delete('/a.erb'); // model dispose
+    h.versions.set('/a.erb', 1); // 重开：新 model 的版本号又数回 1 ⇒ 只比版本号就会 `1 === 1` 放行
+    h.published.length = 0;
+    await h.settle();
+    expect(h.published).toHaveLength(0); // 陈旧装饰不许进新 model
+    expect(h.runner.stats().discarded).toBe(1);
+    expect(h.runner.stats().cached).toBe(0); // 也不许按版本 1 写进缓存（缓存投毒）
+
+    // 防护不许过头：重开后自己发起的那一轮照常上屏并写缓存
+    h.runner.refresh('/a.erb', () => TEXT);
+    await h.settle();
+    expect(h.published.length).toBeGreaterThan(0);
+    expect(h.published.at(-1)!.decorations).toHaveLength(2);
+    expect(h.runner.stats().discarded).toBe(1);
+    expect(h.runner.stats().cached).toBe(1);
+  });
+
+  it('#F6 版本号回退（换了 model 却没调 dropPath）：同样按陈旧丢弃', async () => {
+    const heavy = contributor('heavy', { offloadKind: 'x.heavy' });
+    const h = harness({
+      contributors: [heavy],
+      workerKinds: ['x.heavy'],
+      tasks: { 'x.heavy': () => [{ line: 9, severity: 'error', message: '回退前的旧内容' }] },
+    });
+    h.versions.set('/a.erb', 5);
+    h.runner.refresh('/a.erb', () => TEXT); // 版本 5 在途
+    h.versions.set('/a.erb', 1); // 新 model 从 1 重新数（这条路上没有 dropPath）
+    await h.settle();
+    expect(h.published).toHaveLength(0);
+    expect(h.runner.stats().discarded).toBe(1);
+    expect(h.runner.stats().cached).toBe(0);
+    // 新 model 这一轮正常发布（不是"永远发不出去"）
+    h.runner.refresh('/a.erb', () => TEXT);
+    await h.settle();
+    expect(h.published).toHaveLength(1);
+    expect(h.runner.stats().discarded).toBe(1);
+  });
+
+  it('#F6 clear（换项目 / 重装）：所有路径的在途结果一起作废，即使版本号没变', async () => {
+    const heavy = contributor('heavy', { offloadKind: 'x.heavy' });
+    const h = harness({
+      contributors: [heavy],
+      workerKinds: ['x.heavy'],
+      tasks: { 'x.heavy': () => [{ line: 9, severity: 'error', message: '旧项目的装饰' }] },
+    });
+    h.runner.refresh('/a.erb', () => TEXT); // 版本 7 在途
+    h.runner.clear();
+    await h.settle();
+    expect(h.published).toHaveLength(0);
+    expect(h.runner.stats().discarded).toBe(1);
+    expect(h.runner.stats().cached).toBe(0);
+  });
+
   it('连发多次：在途那一次跑完后只补最新那一次，过期等待者各按自己的版本作废', async () => {
     const heavy = contributor('heavy', { offloadKind: 'x.heavy' });
     let runs = 0;

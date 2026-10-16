@@ -110,6 +110,44 @@ describe('validateEntryName · 新建/重命名的文件名合法性', () => {
     expect(validateEntryName('abc.')).not.toBeNull();
     expect(validateEntryName(' abc ')).toBeNull(); // trim 归正后合法——顺手修正是更好的 UX
   });
+
+  it('F9 · Windows 保留设备名在闸门就拦下（大小写无关、带扩展名同样保留）', () => {
+    for (const bad of [
+      'CON',
+      'con',
+      'CoN.ERB',
+      'NUL',
+      'nul.erb',
+      'AUX',
+      'PRN',
+      'COM1',
+      'com9.ERB',
+      'LPT1',
+      'lpt9.txt',
+      'CLOCK$',
+    ]) {
+      const msg = validateEntryName(bad);
+      expect(msg, bad).not.toBeNull();
+      // 闸门存在的全部理由：不许把盘上那串英文原样甩给作者
+      expect(msg).not.toMatch(/EINVAL|No such file|os error|writable|domain|model/i);
+    }
+  });
+
+  it('F9 · 长得像设备名的合法名字不许误伤', () => {
+    for (const ok of [
+      'CONFIG.ERB',
+      'console.erb',
+      'CON1.ERB',
+      'COM10.ERB',
+      'LPT10.ERB',
+      'NULL.ERB',
+      'NULU.erb',
+      'AUX2.erb',
+      'PRNLIST.erb',
+    ]) {
+      expect(validateEntryName(ok), ok).toBeNull();
+    }
+  });
 });
 
 /* ------------------------------ 路径小工具 ------------------------------ */

@@ -117,6 +117,33 @@ const TREE_REFRESH_WINDOW_MS = 400;
 const NO_SEARCH_SCOPES: SearchScopeCatalog = { items: [], notices: [] };
 
 /**
+ * 两份状态读数是否等价（纯数据逐字段比；缺省与 null/'' 视为同值）。
+ * `sel`/`autosavedAt` 是可选字段，上报方有时带有时不带 ⇒ 按"缺省即空"归一后再比，
+ * 否则 `{...} vs {..., sel: undefined}` 这种同一读数会被判成两次变化。
+ */
+function isSameEditorStatus(a: EditorStatusInfo | null, b: EditorStatusInfo | null): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return (
+    a.encoding === b.encoding &&
+    a.eol === b.eol &&
+    a.lines === b.lines &&
+    (a.autosavedAt ?? null) === (b.autosavedAt ?? null) &&
+    (a.sel ?? '') === (b.sel ?? '')
+  );
+}
+
+/**
+ * 一组编辑器的**恒定身份回调集**（见 ProjectView 内的 `callbacksFor`）。
+ * `register` 只在宿主传了 `registerActions` 时才接线（缺省仍是 undefined，零改动语义）。
+ */
+interface GroupCallbacks {
+  readonly onStatusInfo: (info: EditorStatusInfo | null) => void;
+  readonly onFocused: () => void;
+  readonly register: (actions: EditorPaneActions | null) => void;
+}
+
+/**
  * 项目视图（UI 重设计批 P1；P3 多标签）：壳层 = 五区布局（ShellLayout），
  * 编辑器区内容 = 标签栏 + 只读横幅 + 编辑器/空态。
  *
@@ -174,13 +201,48 @@ export function ProjectView({
   useEffect(() => {
     setEditorStatus(statusByGroupRef.current.get(activeGroupId) ?? null);
   }, [activeGroupId]);
-  const handleStatusInfo = useCallback(
-    (gid: string, info: EditorStatusInfo | null) => {
-      statusByGroupRef.current.set(gid, info);
-      if (gid === activeGroupIdRef.current) setEditorStatus(info);
-    },
-    [],
-  );
+  /**
+   * 状态上报的**腰带**（用户反馈修复 · 渲染环父侧那一半）：
+   * `EditorStatusInfo` 是纯数据（字符串 + 数字），逐字段相等就是"状态没变"——
+   * 不再写 ref、不再 setState，壳层不因此重渲染。
+   * 判据不全（新字段漏比）会退化成"每次都算变了"，只是腰带变松，不影响正确性。
+   */
+  const handleStatusInfo = useCallback((gid: string, info: EditorStatusInfo | null) => {
+    const prev = statusByGroupRef.current.get(gid) ?? null;
+    if (isSameEditorStatus(prev, info)) return;
+    statusByGroupRef.current.set(gid, info);
+    if (gid === activeGroupIdRef.current) setEditorStatus(info);
+  }, []);
+  /**
+   * **每组一条恒定身份的上报/回调**（渲染环的父侧根因，与上面的内容相等是同一件事的两半）。
+   *
+   * 这些回调原本写成 render 里的内联箭头（`(info) => handleStatusInfo(g.id, info)`）：
+   * 每次渲染都是新函数 ⇒ 子侧 `useEffect(..., [onStatusInfo])` 每帧重跑，而它的 cleanup
+   * 正是 `onStatusInfo(null)` —— 上报 null ⇒ 父侧 setState ⇒ 再渲染 ⇒ 环自己咬住自己。
+   * 按组 id 缓存（读 ref 拿最新的宿主回调，闭包不过时），组关了就回收，表有界。
+   */
+  const registerActionsRef = useRef(registerActions);
+  registerActionsRef.current = registerActions;
+  const onActivateGroupRef = useRef(onActivateGroup);
+  onActivateGroupRef.current = onActivateGroup;
+  const groupCbRef = useRef(new Map<string, GroupCallbacks>());
+  const callbacksFor = useCallback((gid: string): GroupCallbacks => {
+    let cb = groupCbRef.current.get(gid);
+    if (!cb) {
+      cb = {
+        onStatusInfo: (info) => handleStatusInfo(gid, info),
+        onFocused: () => onActivateGroupRef.current(gid),
+        register: (actions) => registerActionsRef.current?.(gid, actions),
+      };
+      groupCbRef.current.set(gid, cb);
+    }
+    return cb;
+  }, [handleStatusInfo]);
+  // 组关闭后回收其回调（Map 与组数同界；组 id 由宿主分配）
+  useEffect(() => {
+    const alive = new Set(groups.map((g) => g.id));
+    for (const id of [...groupCbRef.current.keys()]) if (!alive.has(id)) groupCbRef.current.delete(id);
+  }, [groups]);
   /** 壳层通知（G1：命令按下去必须有回应——兑现不了就说一句人话，不灰掉不说话） */
   const notify = useNotify();
   /** 壳层工作台 API（空态动作按钮：快速打开 / 命令面板 / 新建口上文件） */
@@ -381,6 +443,16 @@ export function ProjectView({
   /** 递增即失效信号（FileTree 只认"变化"；用布尔会把连续两次外部改动合并掉） */
   const [treeNonce, setTreeNonce] = useState(0);
 
+  /**
+   * 外部改动 → 树重列的**判据根集**（S2-6）= 口上域 ∪ 会话级附加根。
+   * 与监视根同源：监视已经覆盖附加根（D1），过滤却不认它 = 事件到了却被丢掉。
+   * 只去字面重复（附加根常落在口上域之内）；路径口径的比较交给 `affectsKojoTree` 自己。
+   */
+  const treeWatchRoots = useMemo(
+    () => [...new Set([...project.kojoPaths, ...(extraRoots ?? [])])],
+    [project.kojoPaths, extraRoots],
+  );
+
   // B6：树刷新直通车（宿主拖入复制落地后失效目标目录；句柄只注册一次）
   useEffect(() => {
     registerTreeRefresh?.(() => setTreeNonce((n) => n + 1));
@@ -391,15 +463,17 @@ export function ProjectView({
     // 内核去抖已经按文件合过一轮（§5.84），这里合的是"整棵树的目录重列"这一层。
     const coalescer = createEventCoalescer(() => setTreeNonce((n) => n + 1), TREE_REFRESH_WINDOW_MS);
     const un = kernel.bus.on('file.changed', (ev) => {
-      // 首动作零 IO：监视根是整个项目目录，游戏写存档、写图片缓存同样投递事件，
-      // 而树只列举口上域——分野判错就是每次外部写入都白重列一遍（§5.87 立的纪律）。
-      if (affectsKojoTree(ev.path, project.kojoPaths)) coalescer.push();
+      // 首动作零 IO：监视根是口上域 **+ 会话级附加根（D1）**，游戏写存档、写图片缓存同样投递事件，
+      // 而树只列举这些根——分野判错就是每次外部写入都白重列一遍（§5.87 立的纪律）。
+      // 判据的根集合必须与监视的根集合同口径：只给 kojoPaths 会让附加根下的
+      // 外部新建/删除一直不上树，直到用户手动刷新（S2-6 实机反馈）。
+      if (affectsKojoTree(ev.path, treeWatchRoots)) coalescer.push();
     });
     return () => {
       un();
       coalescer.dispose();
     };
-  }, [kernel, project]);
+  }, [kernel, treeWatchRoots]);
 
   const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], onAddExtraRoot: undefined as (() => void) | undefined });
   fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], onAddExtraRoot };
@@ -589,24 +663,35 @@ export function ProjectView({
     window.addEventListener('pointerup', up);
   }, []);
 
+  /**
+   * 一组编辑器的正文（SPLIT-1）。
+   *
+   * 刻意写成**函数**而不是内联组件：内联组件类型每次 render 都是新的 ⇒ React 整棵子树
+   * 卸载重挂（与本文件 `fileTreeComponent` 那条教训同源）。
+   * EditorPane 的三条回调走 `callbacksFor` 拿恒定身份（渲染环腰带，见其注释）。
+   */
   const renderGroupBody = useCallback(
-    (g: EditorGroupState, focused: boolean): ReactElement =>
-      g.active ? (
-        <EditorPane
-          kernel={kernel}
-          groupId={g.id}
-          filePath={g.active}
-          openPaths={g.tabs}
-          revealLine={focused ? reveal?.line : undefined}
-          revealColumn={focused ? reveal?.column : undefined}
-          revealNonce={focused ? reveal?.nonce : undefined}
-          onDirtyChange={onDirtyChange}
-          registerActions={registerActions ? (a) => registerActions(g.id, a) : undefined}
-          onReauth={onReauth}
-          onStatusInfo={(info) => handleStatusInfo(g.id, info)}
-          onFocused={focused ? undefined : () => onActivateGroup(g.id)}
-        />
-      ) : (
+    (g: EditorGroupState, focused: boolean): ReactElement => {
+      if (g.active) {
+        const cb = callbacksFor(g.id);
+        return (
+          <EditorPane
+            kernel={kernel}
+            groupId={g.id}
+            filePath={g.active}
+            openPaths={g.tabs}
+            revealLine={focused ? reveal?.line : undefined}
+            revealColumn={focused ? reveal?.column : undefined}
+            revealNonce={focused ? reveal?.nonce : undefined}
+            onDirtyChange={onDirtyChange}
+            registerActions={registerActions ? cb.register : undefined}
+            onReauth={onReauth}
+            onStatusInfo={cb.onStatusInfo}
+            onFocused={focused ? undefined : cb.onFocused}
+          />
+        );
+      }
+      return (
         <div className="empty-state">
           <p>没有打开的文件</p>
           <div className="empty-actions">
@@ -629,8 +714,9 @@ export function ProjectView({
             项目已索引 {fileCount} 个 ERB 文件、{fnCount} 个函数定义（口上域全量）
           </p>
         </div>
-      ),
-    [kernel, reveal, onDirtyChange, registerActions, onReauth, handleStatusInfo, onActivateGroup, workbench, fileCount, fnCount],
+      );
+    },
+    [kernel, reveal, onDirtyChange, registerActions, onReauth, callbacksFor, workbench, fileCount, fnCount],
   );
 
   return (

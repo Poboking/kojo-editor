@@ -130,3 +130,76 @@ describe('C2 / document-broadcast flush', () => {
     expect(sent).toHaveLength(1);
   });
 });
+
+/* ---------------- S2-3：去重台账存的是整份文本 ⇒ 必须有界 ---------------- */
+
+describe('S2-3 / 去重台账有界（LRU + forget）', () => {
+  it('超过容量的最旧条目被淘汰：台账不随"开过的标签数 × 全文体积"无限长', () => {
+    vi.useFakeTimers();
+    const { sent, emit } = collect();
+    const b = createDocumentBroadcaster({ emit, delayMs: 10, maxEntries: 2 });
+    b.schedule('a.kojo', () => ({ text: 'ta', dirty: true }));
+    vi.advanceTimersByTime(10);
+    b.schedule('b.kojo', () => ({ text: 'tb', dirty: true }));
+    vi.advanceTimersByTime(10);
+    b.schedule('c.kojo', () => ({ text: 'tc', dirty: true })); // 挤掉最旧的 a.kojo
+    vi.advanceTimersByTime(10);
+    expect(sent).toHaveLength(3);
+    expect(sent.at(-1)!.filePath).toBe('c.kojo');
+
+    sent.length = 0;
+    b.schedule('a.kojo', () => ({ text: 'ta', dirty: true })); // 同文本，但台账里已经没有它了
+    vi.advanceTimersByTime(10);
+    expect(sent).toHaveLength(1); // 淘汰的代价 = 多广播一条（方向安全），绝不是无限驻留
+  });
+
+  it('LRU 读写都 touch：反复用的那条不会先被淘汰', () => {
+    vi.useFakeTimers();
+    const { sent, emit } = collect();
+    const b = createDocumentBroadcaster({ emit, delayMs: 10, maxEntries: 2 });
+    b.flush('a.kojo', () => ({ text: 'ta', dirty: false }));
+    b.flush('b.kojo', () => ({ text: 'tb', dirty: false }));
+    b.schedule('a.kojo', () => ({ text: 'ta', dirty: false })); // 命中台账被去重，同时把 a 顶到最新
+    vi.advanceTimersByTime(10);
+    expect(sent).toHaveLength(2);
+    b.flush('c.kojo', () => ({ text: 'tc', dirty: false })); // 这次淘汰的是 b
+    b.schedule('a.kojo', () => ({ text: 'ta', dirty: false }));
+    vi.advanceTimersByTime(10);
+    expect(sent).toHaveLength(3); // a 仍在台账 ⇒ 不重发；只发了 c 那条
+    expect(sent.at(-1)!.filePath).toBe('c.kojo');
+  });
+
+  it('forget（关标签）摘掉这条台账：重开同一文件的第一拍必须重新广播真相', () => {
+    vi.useFakeTimers();
+    const { sent, emit } = collect();
+    const b = createDocumentBroadcaster({ emit, delayMs: 10 });
+    b.flush('C:\\p\\x.kojo', () => ({ text: 't', dirty: false }));
+    b.forget('c:/p/x.kojo'); // 平台写法不同也要摘得掉（pathKey 归一，与去重同一把尺子）
+    b.schedule('C:\\p\\x.kojo', () => ({ text: 't', dirty: false })); // 同文本：没 forget 会被去重掉
+    vi.advanceTimersByTime(10);
+    expect(sent).toHaveLength(2);
+  });
+
+  it('forget 掉的这条若有在途排程，一并作废（不给已关闭的标签发真相）', () => {
+    vi.useFakeTimers();
+    const { sent, emit } = collect();
+    const b = createDocumentBroadcaster({ emit, delayMs: 10 });
+    b.schedule('p.kojo', () => ({ text: 't', dirty: true }));
+    b.forget('p.kojo');
+    vi.advanceTimersByTime(100);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('dispose 释出去重台账（面板寿命结束时不留整份文本）', () => {
+    vi.useFakeTimers();
+    const { emit: _emit, sent } = collect();
+    const b = createDocumentBroadcaster({ emit: _emit, delayMs: 10 });
+    b.flush('p.kojo', () => ({ text: 't', dirty: false }));
+    b.dispose();
+    expect(sent).toHaveLength(1);
+    // dispose 后台账已空：同一文本再走防抖通道不会被"已经发过"吞掉
+    b.schedule('p.kojo', () => ({ text: 't', dirty: false }));
+    vi.advanceTimersByTime(10);
+    expect(sent).toHaveLength(2);
+  });
+});
