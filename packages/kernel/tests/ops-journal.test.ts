@@ -151,6 +151,12 @@ describe('abort · 半批回滚（失败路径）', () => {
     expect(await fs.readFile(f, 'utf-8')).toBe('Before');
     await expect(fs.access(created)).rejects.toThrow();
     expect(await ops.list()).toHaveLength(0); // abort 即撤销，无痕
+    expect(ops.maintenanceReport()).toMatchObject({
+      openOrphanDocs: 0,
+      rollbackFailedDocs: 0,
+      unreadableDocs: 0,
+      orphanSnapshotDirs: 0,
+    });
   });
 
   it('record 一个"存在但读不动"的文件 → 上抛（绝不降级成新建，否则 undo 会删掉它）', async () => {
@@ -165,5 +171,147 @@ describe('abort · 半批回滚（失败路径）', () => {
     const ops2 = new OpsJournalImpl({ bridge: broken, io, log: noopLog });
     const id = await ops2.begin('t', 't');
     await expect(ops2.record(id, f)).rejects.toThrow(/EIO/);
+  });
+});
+
+describe('undo · 不许删掉操作前就存在的目录', () => {
+  it('新建文件的父目录是本 op 之前就存在的 ⇒ 撤销只删文件，目录留着', async () => {
+    const dir = path.join(tmpDir, 'ws', 'pre-existing');
+    await fs.mkdir(dir, { recursive: true });
+    const f = path.join(dir, 'new.txt');
+
+    const id = await ops.begin('t', '父目录已存在');
+    await ops.record(id, f); // record 时文件不存在 = 操作内新建；但父目录**已存在**
+    await io.writeText(f, '内容', { encoding: 'utf-8' });
+    await ops.commit(id);
+
+    await ops.undo(id);
+    await expect(fs.access(f)).rejects.toThrow(); // 文件按语义删除
+    const st = await fs.stat(dir); // 关键：之前就存在的空目录不能被撤销删掉
+    expect(st.isDirectory()).toBe(true);
+  });
+
+  it('父目录链是本 op 创建的 ⇒ 撤销后空壳清干净（深→浅全清）', async () => {
+    const f = path.join(tmpDir, 'ws', 'x', 'y', 'z', 'new.txt');
+    const id = await ops.begin('t', '整条链新建');
+    await ops.record(id, f);
+    await io.writeText(f, '内容', { encoding: 'utf-8' });
+    await ops.commit(id);
+    expect((await fs.stat(path.join(tmpDir, 'ws', 'x'))).isDirectory()).toBe(true);
+
+    await ops.undo(id);
+    for (const d of ['z', 'y', 'x']) {
+      await expect(fs.access(path.join(tmpDir, 'ws', d))).rejects.toThrow();
+    }
+    expect((await fs.stat(path.join(tmpDir, 'ws'))).isDirectory()).toBe(true); // 工作区根本身不动
+  });
+
+  it('旧形态文档（无 createdDirs）⇒ 宁可留空壳也不猜着删', async () => {
+    const dir = path.join(tmpDir, 'ws', 'legacy');
+    await fs.mkdir(dir, { recursive: true });
+    const f = path.join(dir, 'new.txt');
+    const id = await ops.begin('t', 'legacy');
+    await ops.record(id, f);
+    await io.writeText(f, '内容', { encoding: 'utf-8' });
+    await ops.commit(id);
+
+    // 手工抹掉文档里的 createdDirs（模拟旧版本落盘的历史）
+    const docPath = path.join(appData, 'ops', `${id}.json`);
+    const doc = JSON.parse(await fs.readFile(docPath, 'utf-8'));
+    for (const e of doc.entries) delete e.createdDirs;
+    await fs.writeFile(docPath, JSON.stringify(doc));
+
+    await ops.undo(id);
+    await expect(fs.access(f)).rejects.toThrow(); // 文件仍按语义删除
+    expect((await fs.stat(dir)).isDirectory()).toBe(true); // 但目录不再被删
+  });
+});
+
+describe('维护提示 · 残留不静默（铁律 #4）', () => {
+  const ORPHAN_ID = 'op-20260101-000000-000-abcdef';
+  const BAD_DOC_ID = 'op-20260101-000001-000-badbad';
+
+  it('崩溃残留的 open 文档 + 孤儿快照目录 + 不可读文档：不进历史，但计数并出声', async () => {
+    // 实例 A 开了个头就"崩"（文档留在 open 态，快照目录也建了）
+    const f = wsPath('crash.txt');
+    await fs.writeFile(f, '原样');
+    const id = await ops.begin('t', '崩溃批');
+    await ops.record(id, f);
+
+    // 实例 B（等价于重启后的新内核）看不到 A 的内存态
+    const bridgeB = new NodeBridge(appData);
+    const warns: string[] = [];
+    const logB = { debug() {}, info() {}, warn: (m: string) => warns.push(m), error() {} };
+    const opsB = new OpsJournalImpl({ bridge: bridgeB, io, log: logB });
+
+    // 孤儿快照目录：有目录没文档
+    await fs.mkdir(path.join(appData, 'ops', ORPHAN_ID), { recursive: true });
+    await fs.writeFile(path.join(appData, 'ops', ORPHAN_ID, '0.before'), '无人认领');
+    // 不可读文档：名字合法、内容不是合法 op 文档
+    await fs.writeFile(path.join(appData, 'ops', `${BAD_DOC_ID}.json`), '{ 这不是 JSON');
+    // 名字不合法 / 后缀不合法：无视，不崩
+    await fs.writeFile(path.join(appData, 'ops', 'op-9999.json'), '名字不合法');
+    await fs.writeFile(path.join(appData, 'ops', 'README.txt'), '与本机制无关');
+
+    const list = await opsB.list();
+    expect(list).toHaveLength(0); // open 残留不列（半批回滚比不回滚更险）
+    expect(opsB.maintenanceReport()).toMatchObject({
+      openOrphanDocs: 1,
+      rollbackFailedDocs: 0,
+      unreadableDocs: 1,
+      orphanSnapshotDirs: 1,
+    });
+    expect(warns.some((w) => w.includes('维护提示'))).toBe(true);
+    expect(warns.some((w) => w.includes('不可读'))).toBe(true);
+    // 巡检不崩：还能再来一次，计数稳定
+    expect(await opsB.list()).toHaveLength(0);
+    expect(opsB.maintenanceReport().openOrphanDocs).toBe(1);
+  });
+
+  it('abort 回滚半途失败 ⇒ 快照保留 + 文档留痕 + 上抛（不销毁唯一救命数据）', async () => {
+    const gameDir = path.join(tmpDir, 'game');
+    const gameFile = path.join(gameDir, 'sav.dat'); // 名字与存档格式无关，只是"白名单内的一份用户文件"
+    await fs.mkdir(gameDir, { recursive: true });
+    await fs.writeFile(gameFile, '受保护');
+    io.setWritableRoots([gameDir]);
+
+    const warns: string[] = [];
+    const spy = new OpsJournalImpl({
+      bridge: new NodeBridge(appData),
+      io,
+      log: { debug() {}, info() {}, warn: (m: string) => warns.push(m), error() {} },
+    });
+    const id = await spy.begin('inject', '注入');
+    await spy.record(id, gameFile);
+    await io.writeBytes(gameFile, new TextEncoder().encode('被改写'));
+    // 授权被收回 ⇒ 回滚的写回必过闸、必失败
+    io.setWritableRoots([]);
+    await expect(spy.abort(id)).rejects.toThrow(/Write not allowed/);
+
+    // 快照目录与文档仍在（可人工救），且维护提示点名
+    const snapDir = path.join(appData, 'ops', id);
+    expect((await fs.stat(snapDir)).isDirectory()).toBe(true);
+    const doc = JSON.parse(await fs.readFile(path.join(appData, 'ops', `${id}.json`), 'utf-8'));
+    expect(doc.status).toBe('open');
+    expect(String(doc.rollbackError)).toMatch(/Write not allowed/);
+    expect(await spy.list()).toHaveLength(0);
+    expect(spy.maintenanceReport()).toMatchObject({ openOrphanDocs: 1, rollbackFailedDocs: 1 });
+    expect(warns.some((w) => w.includes('快照与文档已保留'))).toBe(true);
+
+    // 留痕文档不假装能 undo（open 态直接拒），但快照确实还在
+    io.setWritableRoots([gameDir]);
+    await expect(spy.undo(id)).rejects.toThrow(/仍在进行中/);
+    expect((await fs.readFile(path.join(snapDir, '0.before'))).toString()).toContain('受保护');
+  });
+
+  it('abort 成功不留痕：快照目录与文档一并清掉', async () => {
+    const f = wsPath('clean.txt');
+    await fs.writeFile(f, '原样');
+    const id = await ops.begin('t', '正常批');
+    await ops.record(id, f);
+    await io.writeText(f, '改了', { encoding: 'utf-8' });
+    await ops.abort(id);
+    await expect(fs.access(path.join(appData, 'ops', id))).rejects.toThrow();
+    await expect(fs.access(path.join(appData, 'ops', `${id}.json`))).rejects.toThrow();
   });
 });
