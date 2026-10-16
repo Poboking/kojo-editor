@@ -279,7 +279,12 @@ describe('ShellLayout 接线（Ctrl+T 的三条腿）', () => {
 
   it('命令注册表里有 `workbench.workspaceSymbols` 且绑 `ctrl+t`（命令面板与快捷键同一真源）', () => {
     expect(src).toContain("id: 'workbench.workspaceSymbols'");
-    expect(src).toContain("keybinding: 'ctrl+t'");
+    // d13db29 起键位走集中注册表：ShellLayout 只保留 `effectiveKeybindingOf` 间接引用，
+    // 默认键字面量（`keys: 'ctrl+t'`）单源住在 keybindings.ts——两处一起钉住。
+    expect(src).toContain("keybinding: effectiveKeybindingOf('workbench.workspaceSymbols')");
+    const kb = readFileSync(path.resolve(import.meta.dirname, '../src/ui/keybindings.ts'), 'utf8');
+    expect(kb).toContain("id: 'workbench.workspaceSymbols'");
+    expect(kb).toContain("keys: 'ctrl+t'");
   });
 
   it('符号面板打开时算进 `picker` 层（Esc 优先级 picker > overlay > zen 不许漏它）', () => {
