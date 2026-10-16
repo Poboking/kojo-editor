@@ -438,9 +438,13 @@ export function createErbParserPlugin(): Plugin {
             `(get ${snapGetMs}ms, coerce ${snapCoerceMs}ms) · read+parse ${parseMs}ms · aggregate ${aggMs}ms · ` +
             `refs scan ${refsScanMs}ms (rescan ${refsToScan.length}, aggregate deferred) · ` +
             `mtime 来源 walk顺带 ${metaByPath.size} / 兜底逐文件 ${needStat.length} · ` +
-            `reused ${diff.reusable.length}/${allFiles.length} · ` +
-            `salvage ${salvaged === null ? 0 : Object.keys(salvaged.entries).length}/${allFiles.length}` +
-            `(丢 ${salvagedSkipped}, 溯源补正 ${provenanceToScan.length}, 旧形态 ${salvaged?.legacy === true ? 1 : 0})`,
+            `reused ${diff.reusable.length}/${allFiles.length}`,
+        );
+        /** salvage 单独一行：壳侧日志按 170 字符截断，把作废面的读数挤到第二行才看得见 */
+        ctx.log.info(
+          `  index salvage: ${salvaged === null ? 0 : Object.keys(salvaged.entries).length}/${allFiles.length} ` +
+            `(丢 ${salvagedSkipped}, 溯源补正 ${provenanceToScan.length}, 旧形态 ${salvaged?.legacy === true ? 1 : 0}, ` +
+            `键 ${salvaged === null ? '-' : salvaged.key})`,
         );
 
         // 落盘快照（异步，不阻塞广播；失败只告警——它只是缓存，不是数据）

@@ -195,7 +195,7 @@ function dumpIndex(idx: ErbIndex): string {
   });
 }
 
-/** 从本轮 `index breakdown` 读数行取字段（插件自己打的数，不靠人复述） */
+/** 从本轮读数行取字段（插件自己打的数，不靠人复述；breakdown 与 salvage 两行一起看） */
 function readBreakdown(logs: readonly string[]): {
   reused: number;
   total: number;
@@ -205,12 +205,11 @@ function readBreakdown(logs: readonly string[]): {
   legacy: number;
   refsRescan: number;
 } {
-  const line = logs.find((m) => m.includes('index breakdown'));
-  if (!line) throw new Error(`插件未打出 breakdown 读数行：${logs.join(' | ').slice(0, 300)}`);
-  const reused = /reused (\d+)\/(\d+)/.exec(line);
-  const salv = /salvage (\d+)\/\d+\(丢 (\d+), 溯源补正 (\d+), 旧形态 (\d+)\)/.exec(line);
-  const refs = /refs scan \d+ms \(rescan (\d+)/.exec(line);
-  if (!reused || !salv || !refs) throw new Error(`breakdown 读数形状不符：${line}`);
+  const text = logs.join('\n');
+  const reused = /reused (\d+)\/(\d+)/.exec(text);
+  const salv = /index salvage: (\d+)\/\d+ \(丢 (\d+), 溯源补正 (\d+), 旧形态 (\d+)/.exec(text);
+  const refs = /refs scan \d+ms \(rescan (\d+)/.exec(text);
+  if (!reused || !salv || !refs) throw new Error(`读数行形状不符：${text.slice(0, 400)}`);
   return {
     reused: Number(reused[1]),
     total: Number(reused[2]),
