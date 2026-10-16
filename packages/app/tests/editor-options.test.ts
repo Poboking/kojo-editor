@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   CJK_TYPING_BASELINE,
+  FIND_BASELINE,
   HUGE_FILE_LINES,
   LARGE_FILE_LINES,
   editorOptionsForLineCount,
@@ -149,5 +152,43 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
       expect(keys, repr(n)).not.toContain('fontSize');
       expect(keys, repr(n)).not.toContain('zoomLevel');
     }
+  });
+});
+
+/**
+ * find 体验基线（A7，2026-10-20）。
+ *
+ * 断言钉三件事：① 只用 vendor **实测存在**的字段（`loopAtEnd` / `seedSearchStringFromGlobalClipboard`
+ * 在 monaco 0.57 都**不存在**——循环查找真名 `loop`；剪贴板播种是 findController 内部态、无公开配置）；
+ * ② 大小文件两条 `editorOptionsForLineCount` 路径都不吞 find；③ create 路径 spread 同一常量
+ * （静态取证：读源码查 spread 在场——两条写选项的路径少一条就是档位漂移）。
+ */
+describe('find 体验基线（A7）', () => {
+  it('字段集合 = 0.57 实测在册：seedSearchStringFromSelection + loop，没有编造的字段', () => {
+    expect(FIND_BASELINE.find).toEqual({ seedSearchStringFromSelection: 'always', loop: true });
+  });
+
+  it('切文件路径（editorOptionsForLineCount）两档都带 find，档位降级不关循环/播种', () => {
+    for (const n of [10, LARGE_FILE_LINES, 100_000]) {
+      expect(editorOptionsForLineCount(n).find).toEqual(FIND_BASELINE.find);
+    }
+  });
+
+  it('create 路径 spread 同一份基线（EditorPane.tsx 静态取证）', () => {
+    const src = readFileSync(fileURLToPath(new URL('../src/ui/EditorPane.tsx', import.meta.url)), 'utf8');
+    expect(src).toContain('...FIND_BASELINE,');
+    expect(src).toContain('...CJK_TYPING_BASELINE,');
+  });
+
+  it('vendor 实测（取证）：「选中即搜 + 循环」是 monaco 0.57 的内建缺省——loopAtEnd 这名字根本不存在', () => {
+    const vendor = readFileSync(
+      fileURLToPath(new URL('../node_modules/monaco-editor/esm/vs/editor/common/config/editorOptions.js', import.meta.url)),
+      'utf8',
+    );
+    // EditorFind 的 defaults 段：seed 缺省 'always'（Ctrl+F 带选区预填=内建），loop 缺省 true
+    expect(vendor).toContain("seedSearchStringFromSelection: 'always'");
+    expect(/class EditorFind[\s\S]*?loop: true,/.test(vendor)).toBe(true);
+    // 不存在的名字若哪天混进 vendor（升级漂移），本测试先响——FIND_BASELINE 就得不重写
+    expect(vendor).not.toContain('loopAtEnd');
   });
 });

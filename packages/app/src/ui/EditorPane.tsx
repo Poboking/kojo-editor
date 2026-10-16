@@ -84,7 +84,7 @@ import { installKojoRename } from '../monaco/kojo-rename';
 import { installImplementationProvider } from '../monaco/erb-implementation';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
-import { CJK_TYPING_BASELINE, editorOptionsForLineCount } from './editor-options';
+import { CJK_TYPING_BASELINE, FIND_BASELINE, editorOptionsForLineCount } from './editor-options';
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath } from './external-change';
@@ -1868,6 +1868,8 @@ export function EditorPane({
       scrollbar: { verticalScrollbarSize: 12, horizontalScrollbarSize: 12 },
       // 中文打字噪声 / 选词基线（A2+A3）：与切文件降级集同源（editor-options.ts）
       ...CJK_TYPING_BASELINE,
+      // find 体验基线（A7）：create 与切文件两条路径都要带上，吞一条就是档位漂移
+      ...FIND_BASELINE,
     });
     editorRef.current = ed;
     if (!bootEditorMarked) {
@@ -1892,6 +1894,20 @@ export function EditorPane({
     ensureGlobalProviders();
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveRef.current();
+    });
+    // A7「在选定内容中查找」：选中即把文本灌进 find widget 并把搜索域钉在选区。
+    // 实测（vendor 取证）：action `editor.actions.findWithArgs` 由 findController 的
+    // `StartFindWithArgsAction` 注册（standalone 包含），args 形态
+    // `{ searchString, findInSelection, ... }`，`findInSelection: true` 走 `updateSearchScope`
+    // 把当前非空选区变 searchScope。键位 Ctrl+Alt+F：核过 keybindings.ts 无占用
+    // （Ctrl+Shift+F 是全库检索、Ctrl+F/Ctrl+H 是 Monaco 内建，均避让）。
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => {
+      const model = ed.getModel();
+      const selection = ed.getSelection();
+      if (!model || !selection || selection.isEmpty()) return;
+      const action = ed.getAction('editor.actions.findWithArgs');
+      if (!action) return;
+      void action.run({ searchString: model.getValueInRange(selection), findInSelection: true });
     });
     // 偏好落盘只在设置页，生效走 Monaco 配置项：开 ⇒ 逐 model 挂上着色器，关 ⇒ 卸掉，
     // 不用重开文件（standalone 的 DocumentSemanticTokensFeature 自己监听这条配置）。

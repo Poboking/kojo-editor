@@ -153,11 +153,29 @@ export function editorProfileTierForLineCount(lineCount: number): EditorProfileT
 }
 
 /**
- * 与文件规模相称的 Monaco 选项（**纯函数**）= 中文基线 + 公共补丁 + 档位表全量。
+ * find 体验基线（A7，**所有档位同值**）：spread 口径与 `CJK_TYPING_BASELINE` 逐字同款
+ * （`editorOptionsForLineCount` 切文件路径 + EditorPane 的 create options 都要带上，缺一吞一档）。
+ *
+ * vendor 实测（monaco 0.57 `IEditorFindOptions` + `EditorFind.validate` 白名单）：
+ * `loopAtEnd` 不存在（循环查找真名是 `loop`，缺省已 true）；
+ * `seedSearchStringFromGlobalClipboard` 非公开配置。
+ * 「选中即搜」是 `seedSearchStringFromSelection !== 'never'` 的内建行为（缺省 'always'），
+ * 这里显式钉住防档位漂移。
+ */
+export const FIND_BASELINE: EditorOptionPatch = {
+  find: {
+    seedSearchStringFromSelection: 'always',
+    loop: true,
+  },
+};
+
+/**
+ * 与文件规模相称的 Monaco 选项（**纯函数**）= 中文基线 + find 基线 + 公共补丁 + 档位表全量。
  */
 export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch {
   return {
     ...CJK_TYPING_BASELINE,
+    ...FIND_BASELINE,
     ...COMMON_OPTIONS,
     ...TIER_OPTIONS[editorProfileTierForLineCount(lineCount)],
   };
