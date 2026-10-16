@@ -2,59 +2,180 @@
    薄荷暗色主题（参考 Qoder 薄荷暗色：深墨绿底 + 薄荷/青绿高光）
    ----------------------------------------------------------------------------
    机制同 `light.css`：`:root[data-theme='mint-dark']` 只重定义 token 值，全场换装。
-   ⚠ 当前是 Phase 0 地基的**功能种子**（证明翻转 live）。完整薄荷调色、逐色 WCAG 对比度自证
-   （正文 ≥4.5、UI ≥3，尤其薄荷白字压 accent 那一档）、残留白值与 amber/red/green 语义 wash 的
-   局部覆盖，由「薄荷暗色子 agent」补全。
-   需覆盖的 token 全集见 light.css 顶部注释（同一张清单）。
+   身份：大面积是沉稳墨绿（#0f1713 一族），薄荷 #35d0a0 只出现在 accent/选中/高亮点缀——
+   "活体绿"的气质靠描边绿灰、投影墨绿、wash 青绿这三条暗线维持，不靠把界面染绿。
+
+   关键标定（2026-10 实算，WCAG 相对亮度法）：
+   - 主按钮文字走**墨绿深色 `--on-accent: #072118`**（不是白）：薄荷档 `--accent-strong`
+     必须够亮才有"薄荷"身份（#12a37a），白字压它只有 3.21:1；墨绿字压三态 5.28 / 6.59 / 4.75。
+     因此 styles.css 里两处硬编码白字（.wizard-actions .primary / button.primary .hint）
+     在本文件末尾按选择器收口，不改 styles.css。
+   - 语义绿从 #4fc08d 移向叶绿豆沙 #62c776：与薄荷青绿拉开色相距离，避免"成功色"与
+     "accent/选中色"同相难分。
+   - 底部另有残留白/黑硬值的 `[data-theme='mint-dark']` 局部覆盖（遮罩、sheen/ripple、
+     欢迎页极光紫斑、语义 wash 在更深底上的 alpha 补偿）。
+   需覆盖的 token 全集见 light.css 顶部注释（同一张清单），本块逐项给齐。
    ============================================================================ */
 
 :root[data-theme='mint-dark'] {
-  /* 表面：深墨绿梯度（比纯蓝灰更暖一档，眼睛在长文写作里更松） */
+  /* 表面：深墨绿梯度 sunken < bg < bg-2 < bg-3，逐级抬亮（相对亮度 0.005/0.008/0.013/0.020） */
   --bg: #0f1713;
-  --bg-2: #14211b;
-  --bg-3: #1a2a22;
-  --surface-sunken: #0b120e;
+  --bg-2: #15201a;
+  --bg-3: #1c2a23;
+  --surface-sunken: #0a110c;
   --surface: var(--bg);
   --surface-raised: var(--bg-2);
   --surface-overlay: var(--bg-3);
 
-  /* 描边：绿灰 */
-  --border: #2a3d34;
-  --border-subtle: #213029;
-  --border-strong: #3a5548;
+  /* 描边：绿灰三档（发丝线按层次取，不套文字对比判据；strong 档压 bg 2.40:1 属"看得见边界"档） */
+  --border: #2b3f35;
+  --border-subtle: #203028;
+  --border-strong: #3d5a4b;
 
-  /* 文字：微带绿的白 */
-  --fg: #d7e8de;
-  --fg-dim: #85a593;
+  /* 文字：微绿白。fg 压四档面 14.47 / 13.30 / 11.87 / 15.18；fg-dim 压 bg-2 6.45（侧栏）、
+     压 bg-3 5.76、压 btn-hover 4.64 —— 全过 AA 且仍读得出"弱一档" */
+  --fg: #d9e9df;
+  --fg-dim: #88a896;
 
-  /* accent：薄荷 / 青绿 */
+  /* accent 填充上的文字/滑块：墨绿深色（见头部标定；白字在亮薄荷底上只有 3.21:1，弃） */
+  --on-accent: #072118;
+
+  /* accent：薄荷 / 青绿。accent 当文字压 bg 9.27、压 bg-3 7.6（本就达标，链接档再提亮） */
   --accent: #35d0a0;
   --accent-rgb: 53 208 160;
-  --accent-strong: #12a37a;
-  --accent-text: #57e0b4;
-  --accent-dim: rgb(53 208 160 / 0.22);
+  --accent-strong: #12a37a; /* 墨绿字 5.28:1 */
+  --accent-strong-hover: #16b789; /* 提亮反馈，墨绿字 6.59:1 */
+  --accent-strong-active: #0f9a74; /* 压深一档，墨绿字 4.75:1（再深就掉下 4.5，故 active 收着压） */
+  --accent-text: #55dcb0; /* 文字档：压 bg 10.63 / 压 bg-3 8.72 / 压 sunken 11.15 */
+  --accent-dim: rgb(var(--accent-rgb) / 0.22);
 
-  /* 交互底：薄荷淡底 */
-  --hover: rgba(53, 208, 160, 0.08);
-  --hover-soft: rgba(53, 208, 160, 0.05);
-  --hover-strong: rgba(53, 208, 160, 0.14);
-  --active: rgba(53, 208, 160, 0.18);
-  --sel-bg: rgba(53, 208, 160, 0.32);
+  /* 交互底：wash 一律从白墨换成青绿墨——深色主题里这是身份线；alpha 较默认白档微补
+     （薄荷 wash 比纯白更"融"墨绿底，同可见度需要多给一点） */
+  --hover: rgba(53, 208, 160, 0.09);
+  --hover-soft: rgba(53, 208, 160, 0.055);
+  --hover-strong: rgba(53, 208, 160, 0.15);
+  --active: rgb(var(--accent-rgb) / 0.16); /* fg 压合成底 9.63 / fg-dim 4.67 */
+  --sel-bg: rgb(var(--accent-rgb) / 0.32); /* 选区合成 #245f4b，fg 压它 5.7+ */
 
-  --btn-bg-hover: #234a3b;
-  --btn-bg-active: #1a3a2e;
-  --accent-strong-hover: #17b688;
-  --accent-strong-active: #0f8a66;
+  /* 按钮三态：底 = bg-3 抬亮/压暗的绿灰；hover 更亮、active 落回井底 */
+  --btn-bg-hover: #243b31; /* fg 9.55 / fg-dim 4.64 */
+  --btn-bg-active: #182420; /* fg 12.71 */
 
+  /* 滚动条：thumb 走薄荷淡底，轨道透明（暗档里青绿 thumb 比白 thumb 更不"贴纸"） */
   --scroll-thumb: rgba(53, 208, 160, 0.16);
   --scroll-thumb-hover: rgba(53, 208, 160, 0.3);
   --scroll-thumb-active: rgba(53, 208, 160, 0.42);
 
-  /* 玻璃 tint = 本主题 bg-2/bg-3 三元组 */
-  --glass-tint: 20 33 27;
-  --glass-tint-raise: 26 42 34;
-  --glass-edge: rgba(180, 255, 220, 0.1);
+  /* 语义色：绿移叶绿豆沙拉开与薄荷 accent 的色相距离；红/琥珀在更深底上微提饱和防"发闷"。
+     压 bg：green 8.64 / red 5.70 / amber 7.40（--danger/--warning/--success 经 var(--…) 自动跟随） */
+  --green: #62c776;
+  --red: #e2707a;
+  --amber: #d8a269;
 
-  --focus-ring: #35d0a0;
-  --focus-glow: rgba(53, 208, 160, 0.32);
+  /* 焦点环：比 accent 再亮一档的青绿（压 bg 10.21，UI 判据 3:1 的三倍余量） */
+  --focus-ring: #45d9ab;
+  --focus-glow: rgba(53, 208, 160, 0.35);
+
+  /* 阴影：暗档保留较重的投影，但黑里掺墨绿（rgb(3 12 8)）——纯黑投影在绿底上会读成
+     "脏灰边"，墨绿投影则读成"深度"。shadow-3 末层切边环同样绿化并稍加重（暗底浮层需要明确边界） */
+  --shadow-1:
+    0 1px 2px rgb(3 12 8 / 0.4),
+    0 6px 20px rgb(3 12 8 / 0.55);
+  --shadow-2:
+    0 2px 5px rgb(3 12 8 / 0.42),
+    0 12px 36px rgb(3 12 8 / 0.6);
+  --shadow-3:
+    0 2px 6px rgb(3 12 8 / 0.45),
+    0 16px 48px rgb(3 12 8 / 0.65),
+    0 0 0 1px rgb(3 12 8 / 0.3);
+  /* 抬升面顶边高光：白→淡青绿白（在绿灰面上纯白读成冷贴条，青白才像同一块玉石受光） */
+  --edge-raise: inset 0 1px 0 rgba(205, 255, 232, 0.05);
+  --shadow-focus:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 4px var(--focus-glow);
+
+  /* 玻璃：tint 三元组 = 本档 bg-2/bg-3 预合成（较面值微抬 ~3 级，补偿遮罩暗化后 alpha .85
+     的合成落点）；edge 淡青绿白；saturate 1.25→1.2——绿底本身有彩度，泄漏边缘更少彩噪；
+     blur/alpha 沿用设计常量，旋钮语义不动 */
+  --glass-tint: 24 36 29;
+  --glass-tint-raise: 32 48 40;
+  --glass-edge: rgba(186, 255, 224, 0.075);
+  --glass-alpha: 0.85;
+  --glass-saturate: 1.2;
+  --glass-blur: 16px;
+}
+
+/* ----------------------------------------------------------------------------
+   残留硬值收口（styles.css 里绕不开 token 的白/黑/紫字面量，按选择器覆盖）
+   -------------------------------------------------------------------------- */
+
+/* 向导主按钮硬编码 #fff：随 --on-accent 走墨绿字 */
+:root[data-theme='mint-dark'] .wizard-actions .primary {
+  color: var(--on-accent);
+}
+/* 主按钮里的快捷键芯片：原样式是"白字+白边+黑底"（为蓝底设计）；薄荷底上换成墨绿三件套 */
+:root[data-theme='mint-dark'] button.primary .hint {
+  color: var(--on-accent);
+  border-color: rgba(7, 33, 24, 0.35);
+  background: rgba(7, 33, 24, 0.14);
+}
+/* 开关滑块 = --on-accent（墨绿），在未选中的绿灰轨道上只有 2.23:1——补一圈淡青白细环，
+   任何轨道底色下滑块都"浮"得起来（环压 sunken 14.28 / 压轨道 5.68） */
+:root[data-theme='mint-dark'] .switch-thumb {
+  box-shadow:
+    0 1px 2px rgba(2, 10, 6, 0.5),
+    0 0 0 1px rgba(191, 232, 210, 0.4);
+}
+/* 遮罩：纯黑径向 + 蓝黑底（rgba(8,10,13)）在墨绿底上读成"蓝雾"；整体绿化 */
+:root[data-theme='mint-dark'] .modal-mask,
+:root[data-theme='mint-dark'] .overlay-backdrop {
+  background:
+    radial-gradient(130% 105% at 50% -5%, rgba(2, 10, 6, 0.3), rgba(2, 10, 6, 0.58)),
+    rgba(6, 12, 9, 0.4);
+}
+:root[data-theme='mint-dark'] .picker-backdrop {
+  background: rgba(6, 12, 9, 0.38);
+}
+/* （老内核 @supports 回落与 data-glass='solid' 回落两条纯黑遮罩规则特异性均低于上面的
+   `:root[data-theme] .xxx` 作用域规则且在本文件之前载入，绿化自动覆盖到位，无需另写） */
+/* 欢迎页极光：第二团紫斑（rgba(124,92,255)）与薄荷世界观冲突 → 换冰青斑，
+   与首团 accent 光斑同族不同调，保留"两团光"的纵深构图 */
+:root[data-theme='mint-dark'] .welcome::before {
+  background:
+    radial-gradient(36% 40% at 30% 32%, rgb(var(--accent-rgb) / 0.16), transparent 62%),
+    radial-gradient(32% 38% at 72% 68%, rgba(56, 168, 196, 0.13), transparent 64%);
+}
+/* 高光扫过/按压涟漪：纯白在亮薄荷按钮上会"爆"，降饱和改冷薄荷白 */
+:root[data-theme='mint-dark'] .u-sheen::before {
+  background: linear-gradient(100deg, transparent, rgba(226, 255, 241, 0.16), transparent);
+}
+:root[data-theme='mint-dark'] .u-ripple::after {
+  background: radial-gradient(circle, rgba(214, 255, 236, 0.3) 0%, rgba(214, 255, 236, 0) 60%);
+}
+/* 语义 wash 在更深墨绿底上会被"吸进去"：alpha 各补 ~0.02（wash 是承载色，非装饰） */
+:root[data-theme='mint-dark'] .notice.warn,
+:root[data-theme='mint-dark'] .crash-recovery {
+  background: rgba(216, 162, 105, 0.12);
+  border-color: rgba(216, 162, 105, 0.45);
+}
+:root[data-theme='mint-dark'] .notice.error,
+:root[data-theme='mint-dark'] .conv-failed {
+  background: rgba(226, 112, 122, 0.12);
+  border-color: rgba(226, 112, 122, 0.55);
+}
+:root[data-theme='mint-dark'] .ro-banner {
+  background: rgba(216, 162, 105, 0.16);
+}
+/* "可写✓"绿牌：原 wash 是旧语义绿 rgba(79,192,141)——太薄荷，换成新叶绿豆沙同族 */
+:root[data-theme='mint-dark'] .sb-writable.ok {
+  background: rgba(98, 199, 118, 0.12);
+  border-color: rgba(98, 199, 118, 0.4);
+}
+/* 快捷键编辑器横幅/错误：同款硬编码绿红，收进本档语义族 */
+:root[data-theme='mint-dark'] .kd-banner.ok {
+  background: rgba(98, 199, 118, 0.14);
+  color: #7fd28e; /* 压 bg-2 9.18:1 */
+}
+:root[data-theme='mint-dark'] .kd-error {
+  color: var(--red);
 }

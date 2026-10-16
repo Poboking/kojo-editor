@@ -5,9 +5,16 @@
    一切经 `var(--…)` 取色，翻 token 即全场换装（同 `--glass-alpha`/`data-glass` 的生效哲学）。
    本文件由 main.tsx 在 styles.css 之后引入，特异性 `:root[data-theme=…]` 稳压基础 `:root`。
 
-   ⚠ 当前是 Phase 0 地基的**功能种子**（证明翻转 live + 默认可读）。完整浅色调色、逐色 WCAG
-   对比度自证（正文 ≥4.5、UI ≥3）、以及残留白值（`.u-sheen`/`.u-ripple` 高亮、个别 0.32 边框）
-   的 `[data-theme='light']` 局部覆盖，由「浅色主题子 agent」补全。
+   调色身份：**冷灰白表面梯度**（#f6f8fa → #eaeef2 → #dde3ea，绝不跑成暖纸黄），
+   深蓝 accent（#0a5cc2 一族）承担品牌与主按钮——主按钮在浅色主题保持**深蓝字底 + 白字**，
+   这是浅色下唯一稳过 4.5:1 的主按钮形态，全站 CTA 因此零特例。
+
+   ⚠ 锚定不变量（改了必须同步 `index.html` 引导层的同值硬编码，否则 splash→app 闪色）：
+     --bg #f6f8fa · --fg #1f2328 · --fg-dim #59636e · --bg-3 #dde3ea · --accent #0a5cc2
+   对比度档（WCAG 相对亮度实算，正文 ≥4.5 / UI ≥3）：
+     fg/bg 14.8 · fg-dim/bg 5.7 · fg-dim/bg-2 5.2 · fg-dim/bg-3 4.7 · fg/sunken 12.5
+     白/accent-strong 6.3（hover 5.7 · active 7.7） · accent 作文字压 bg 5.9
+     green 6.2 / red 6.1 / amber 5.6（压 --bg；最差的 bg-3 档仍 ≥4.6）
    需覆盖的 token 全集（缺一则那处仍是深色值）：
      表面：--bg --bg-2 --bg-3 --surface-sunken --surface --surface-raised --surface-overlay
      描边：--border --border-subtle --border-strong
@@ -22,64 +29,186 @@
    ============================================================================ */
 
 :root[data-theme='light'] {
-  /* 表面：蓝灰身份的浅色梯度（编辑器最浅 → 侧栏/浮层逐级加深，方向与深色相反） */
+  /* 表面：蓝灰身份的浅色梯度（编辑器最浅 → 侧栏/浮层逐级加深，方向与深色相反）。
+     深色靠"更亮"分层，浅色靠"更沉"分层——同一条梯度哲学翻转。 */
   --bg: #f6f8fa;
   --bg-2: #eaeef2;
   --bg-3: #dde3ea;
-  --surface-sunken: #e7ebf0;
+  --surface-sunken: #dfe6ed; /* 输入井/内嵌区/版本胶囊：比 --bg-2 再沉一档（fg-dim 压它 4.9:1 过线） */
   --surface: var(--bg);
   --surface-raised: var(--bg-2);
   --surface-overlay: var(--bg-3);
 
-  /* 描边：浅色下靠"更深的灰线"分层，不是更亮的线 */
+  /* 描边：浅色下靠"更深的灰线"分层，不是更亮的线（三档均为装饰性 hairline，不套文字判据） */
   --border: #d0d7de;
   --border-subtle: #e1e6eb;
-  --border-strong: #b6bec7;
+  --border-strong: #aeb8c2;
 
-  /* 文字：深墨字压浅底 */
+  /* 文字：深墨字压浅底（14.8:1 / 5.7:1，全档 AAA~AA） */
   --fg: #1f2328;
   --fg-dim: #59636e;
+  /* accent 填充上的字/滑块：浅色档主按钮刻意保持深蓝实心 ⇒ 仍走白（开关滑块压
+     --border-strong 浅灰轨，白块 + 深色接触影，可辨）。 */
+  --on-accent: #ffffff;
 
-  /* accent：深色档在浅底上对比不足，浅色主题走更饱和的蓝（白字按钮仍成立） */
+  /* accent：浅底上纯 #0a5cc2 深蓝——作文字 5.9:1、作描边远超 3:1；
+     主按钮保持深底白字（--on-accent 仍为 #fff），三态实算 6.3 / 5.7 / 7.7 全过 4.5。 */
   --accent: #0a5cc2;
   --accent-rgb: 10 92 194;
-  --accent-strong: #0a5cc2;
-  --accent-text: #0550ae;
+  --accent-strong: #0a5cc2; /* 白字 6.32:1 */
+  --accent-strong-hover: #0f63ce; /* 提亮一档给"亮起来"的反馈；白字 5.68:1 仍在 AA 内 */
+  --accent-strong-active: #0850aa; /* 按下沉一档；白字 7.67:1 */
+  --accent-text: #0550ae; /* 链接/code 文字档：压 bg 7.1、压 bg-3 5.9 */
+  --accent-dim: rgb(10 92 194 / 0.2); /* 深一档蓝 ⇒ wash 比深色档收 0.02，浅底上不糊成一块 */
 
-  /* 交互底：浅色下的"提亮"其实是压暗（黑墨淡底），深色靠白墨——语义反转全在这几个 token */
+  /* 选中/激活：accent 淡底，--fg 压着仍 11:1 */
+  --active: rgb(10 92 194 / 0.14);
+  --sel-bg: rgb(10 92 194 / 0.28); /* 文本选区：压深一档更透，fg 在选区上 9.6:1 */
+
+  /* 交互底：浅色下的"提亮"其实是压暗（墨蓝淡底）；深色靠白墨——语义反转全在这几个 token */
   --hover: rgba(9, 30, 66, 0.08);
-  --hover-soft: rgba(9, 30, 66, 0.05);
-  --hover-strong: rgba(9, 30, 66, 0.14);
-  --active: rgba(10, 92, 194, 0.16);
-  --sel-bg: rgba(10, 92, 194, 0.25);
+  --hover-soft: rgba(9, 30, 66, 0.045);
+  --hover-strong: rgba(9, 30, 66, 0.13);
 
-  /* 按钮/主按钮：浅底按钮悬停压深一档 */
-  --btn-bg-hover: #d3d9e0;
-  --btn-bg-active: #c7ced6;
+  /* 按钮：base 是 --surface-overlay(#dde3ea)，hover/active 逐级沉下去（浅底上的"亮一档"=沉一档） */
+  --btn-bg-hover: #d2d9e0;
+  --btn-bg-active: #c6ced6;
 
-  /* 滚动条 thumb 走深墨 */
-  --scroll-thumb: rgba(9, 30, 66, 0.18);
-  --scroll-thumb-hover: rgba(9, 30, 66, 0.3);
-  --scroll-thumb-active: rgba(9, 30, 66, 0.42);
+  /* 语义：深色档（#4fc08d/#e06c75/#d19a66）压浅底全部 2~3:1 直接失效，浅色走沉着的深语义 */
+  --green: #0e6b2c; /* 压 bg 6.2 · bg-2 5.7 · bg-3 5.2（全档 ≥4.5） */
+  --red: #b4232e; /* 压 bg 6.1 · bg-2 5.6 · bg-3 5.1 */
+  --amber: #8a5a04; /* 压 bg 5.6 · bg-2 5.1 · bg-3 4.6——保住琥珀身份的下沉极限，再亮就破 4.5 */
 
-  /* 阴影：浅色主题的投影要更淡、更贴地（纯黑 0.45 在白底过重） */
+  /* 滚动条 thumb 走墨蓝淡底（track 透明，直接落在表面上） */
+  --scroll-thumb: rgba(9, 30, 66, 0.2);
+  --scroll-thumb-hover: rgba(9, 30, 66, 0.32);
+  --scroll-thumb-active: rgba(9, 30, 66, 0.45);
+
+  /* 阴影：浅色主题的投影要更淡、更贴地——纯黑 0.45~0.55 在白底上会读成"污渍"。
+     色相带一点蓝（35,48,64 而非纯黑），既贴 kojo 蓝灰身份，又比中性灰更"干净"。 */
   --shadow-1:
-    0 1px 2px rgba(31, 35, 40, 0.12),
-    0 6px 16px rgba(31, 35, 40, 0.12);
+    0 1px 2px rgba(35, 48, 64, 0.14),
+    0 6px 16px rgba(35, 48, 64, 0.12);
   --shadow-2:
-    0 2px 5px rgba(31, 35, 40, 0.12),
-    0 12px 30px rgba(31, 35, 40, 0.16);
+    0 2px 5px rgba(35, 48, 64, 0.12),
+    0 12px 30px rgba(35, 48, 64, 0.16);
   --shadow-3:
-    0 2px 6px rgba(31, 35, 40, 0.14),
-    0 16px 44px rgba(31, 35, 40, 0.2),
-    0 0 0 1px rgba(31, 35, 40, 0.08);
-  --edge-raise: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    0 2px 6px rgba(35, 48, 64, 0.12),
+    0 16px 44px rgba(35, 48, 64, 0.2),
+    0 0 0 1px rgba(35, 48, 64, 0.08); /* 末层 1px 切边环保留：浅色下它比深色更需要（白面板对白场景） */
+  /* 顶边高光：浅色下仍走白——bg-3 的按钮/卡片面（#dde3ea）离纯白还有 3 档，
+     1px 内白线读作"斜切边受光"；纯白面上的白线自动隐身，零副作用。
+     （不用"顶部更深 inset"方案：那会把抬升面画成凹陷井，语义和 --surface-sunken 打架。） */
+  --edge-raise: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  --shadow-focus:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 4px var(--focus-glow);
 
-  /* 玻璃 tint 走浅底三元组（默认档仍保留适度通透） */
-  --glass-tint: 234 238 242;
-  --glass-tint-raise: 221 227 234;
-  --glass-edge: rgba(255, 255, 255, 0.55);
-
+  /* 焦点环：比 accent 更亮一档的键盘专用蓝（压 bg 4.9:1，UI 判据 ≥3 稳过） */
   --focus-ring: #0969da;
-  --focus-glow: rgba(9, 105, 218, 0.3);
+  --focus-glow: rgba(9, 105, 218, 0.32);
+
+  /* 玻璃：tint = 预合成标定——alpha 0.85 压在浅色遮罩上，合成结果落回 chrome 自己的
+     bg-2/bg-3 色域（拧透明度只改泄漏量、不改色相，与深色档同一哲学）。
+     tint-raise 走**更亮**的白（浅色下"从上方被打光"= 更亮，与深色档方向相反）。
+     --glass-alpha 默认抬到 0.9：半透明白磨砂在浅底上最容易"发灰"，实心一档保住文字脆度
+     （真源仍是 glass-pref 旋钮的内联值，用户可拧回；此处只是主题自带的缺省意图）。
+     saturate 1.25→1.15：浅色泄漏的是灰蓝不是色噪，低饱和更干净；blur 常量不动。 */
+  --glass-tint: 246 249 251;
+  --glass-tint-raise: 251 253 255;
+  --glass-alpha: 0.9;
+  --glass-saturate: 1.15;
+  --glass-blur: 16px;
+  /* 玻璃边缘：浅色下白色"厚度边"会融进白面板——切边靠沉色 hairline（白物体在白场景里
+     靠深色边缘 + 投影分离，这是浅色主题与深色主题在 rim 上的语义反转）。 */
+  --glass-edge: rgba(35, 48, 64, 0.22);
+
+  /* —— 插件独占区的深色 fallback token 收口 ——
+     styles.css 里 `.editor-crumb` / `.oh-detail` 一族用 `var(--panel-bg, #232834)` 等
+     **带深色兜底的局部变量**（全仓仅此三处消费、无人定义真值）。在 light 档把真值补上，
+     即可零选择器翻转这些"深色孤岛"，也不与任何既有 token 重名。 */
+  --panel-bg: var(--bg-2);
+  --hover-bg: var(--bg-3);
+  --text: var(--fg);
+  --text-dim: var(--fg-dim);
+}
+
+/* ============================================================================
+   残漏收口：styles.css 里绕不过 token 的字面值，用 `[data-theme='light']` 高
+   特异性规则就地修正（0,3,0 稳压基础 0,1,0；同分则靠 light.css 后置赢层叠）。
+   ============================================================================ */
+
+/* 遮罩三兄弟：纯黑压暗在浅色主题下像"拉了道闸"——换成冷板岩（slate）dim，
+   顶部浅、边缘深的径向纵深保留；浮层（≈bg-2 的亮面）+ 投影依旧一眼分离。 */
+:root[data-theme='light'] .overlay-backdrop,
+:root[data-theme='light'] .modal-mask {
+  background:
+    radial-gradient(130% 105% at 50% -5%, rgba(45, 60, 80, 0.22), rgba(28, 38, 52, 0.4)),
+    rgba(40, 52, 68, 0.24);
+}
+:root[data-theme='light'] .picker-backdrop {
+  background: rgba(40, 52, 68, 0.2); /* picker 面板自带 shadow-2 + 更亮描边，dim 比 modal 轻一档 */
+}
+/* 实心档（data-glass='solid'）的遮罩现值也是字面黑——(0,4,0) 稳压 styles.css 的 (0,3,0) */
+:root[data-theme='light'][data-glass='solid'] .overlay-backdrop,
+:root[data-theme='light'][data-glass='solid'] .modal-mask,
+:root[data-theme='light'][data-glass='solid'] .picker-backdrop {
+  background: rgba(35, 48, 64, 0.4);
+}
+/* 老内核无 backdrop-filter 回落（正常走不到，兜底一致性） */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-theme='light'] .overlay-backdrop,
+  :root[data-theme='light'] .modal-mask,
+  :root[data-theme='light'] .picker-backdrop {
+    background: rgba(35, 48, 64, 0.45);
+  }
+}
+
+/* 高光扫过：主按钮在浅色档仍是深蓝实心（#0a5cc2 比深色档的 #2e6fd1 更沉），
+   白扫同族成立但发暗——提亮一档让"贵"的那一笔仍看得见。 */
+:root[data-theme='light'] .u-sheen::before {
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+}
+/* 按压涟漪：同理压在深蓝实心 CTAs 上，白涟漪保留、略提饱和 */
+:root[data-theme='light'] .u-ripple::after {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.42) 0%, rgba(255, 255, 255, 0) 60%);
+}
+/* `button.primary .hint` 的 rgba(255,255,255,.32) 描边与 rgba(0,0,0,.22) 井底：
+   **刻意不翻**——它压在 --accent-strong 深蓝实心（浅色档同样是深底）上，白字蓝底成立。 */
+
+/* 样例代码块的内嵌高光：rgba(255,255,255,.03) 在白面上彻底隐身（白上抹白）。
+   浅色下把 bevel 反相：一道极淡的**顶部内暗线**读作"嵌在卡里的井"（与浅色主题里
+   代码块惯例的凹陷语义一致），接触阴影同时沉一档补足分量。 */
+:root[data-theme='light'] .tutorial-code {
+  box-shadow:
+    inset 0 1px 0 rgba(35, 48, 64, 0.06),
+    0 1px 2px rgba(35, 48, 64, 0.1);
+}
+
+/* 部署/历史面板的深色专属文字色（#7ad39a/#e57373/#e8b86a/#9aa4b2 是为深底调的，
+   压浅面全部 2~3:1 失效）——收口到本主题的深语义三件套（bg 为玻璃面板 ≈ bg-2 档，逐一复核过）。 */
+:root[data-theme='light'] .kd-banner.ok {
+  background: rgb(14 107 44 / 0.1); /* 深语义同族的淡 wash，绿字压它 4.98:1 */
+  color: var(--green);
+}
+:root[data-theme='light'] .kd-error {
+  color: var(--red);
+}
+:root[data-theme='light'] .dd-modified .dd-path {
+  color: var(--amber);
+}
+:root[data-theme='light'] .dd-workspace-only .dd-path,
+:root[data-theme='light'] .dd-game-only .dd-path {
+  color: var(--fg-dim);
+}
+
+/* notice 洗色：深色档的 #d19a66/#e06c75 wash 与浅色语义色相脱节（字是 #8a5a04、
+   边是暖 tan），把 wash/边框一并收到同一支深语义色上，色相不再两张皮。 */
+:root[data-theme='light'] .notice.warn {
+  background: rgb(138 90 4 / 0.1);
+  border-color: rgb(138 90 4 / 0.38);
+}
+:root[data-theme='light'] .notice.error {
+  background: rgb(180 35 46 / 0.08);
+  border-color: rgb(180 35 46 / 0.38);
 }

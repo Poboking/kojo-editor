@@ -7,7 +7,7 @@
     <!-- 主题早应用（主题系统 2026-10-17）：React 挂载前就把保存过的主题落到 <html data-theme>，
          免得浅色/薄荷用户先闪一下深色。真源与归一口径同 `ui/theme-pref.ts`（读不到/非法 ⇒ dark）。
          dark 是缺省档，此时下面的引导底色 #1e2227 仍与 styles.css 的 --bg 相等——smoke-tauri-dom 断言①
-         钉的那条不变量不被破坏。 */
+         钉的那条不变量不被破坏。 -->
     <script>
       (function () {
         try {
@@ -26,7 +26,7 @@
          钉住「内联底色 == 挂载后计算底色」，两处漂移即红。深色、零外链资源（dev 下 styles.css
          由 JS 注入，这里等不了它）。React 首次提交后由 App.tsx 移除 #boot-splash。
          ⚠ 浅色/薄荷引导底色见下方 [data-theme] 覆盖——必须与各 themes/*.css 的 --bg / --fg 现值
-         一致；主题子 agent 若改某档 --bg/--fg，请同步改这里对应那两行。 */
+         一致；主题子 agent 若改某档 --bg/--fg，请同步改这里对应那两行。 -->
     <style>
       html,
       body {

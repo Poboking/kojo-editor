@@ -6716,3 +6716,331 @@ button.resume-session {
   transform: translateX(-100%);
   animation: u-shimmer 1.4s var(--ease-in-out) infinite;
 }
+
+/* ============================================================================
+   面板效果推广（用户反馈组批 2026-10-18 · 独占区块：**只追加、不重排、不改语义**）
+   ----------------------------------------------------------------------------
+   把上方「可复用效果库」的效果原语**内联推广**到各插件面板的既有类上（markup 零改动，
+   故不挂 .u-* 工具类，而是逐面板选择器复刻同一份手感）。四条纪律：
+   ① 卡片行（mk-row / ab-row）= `.u-lift` 手感：悬停 translateY(-1px) + `--shadow-1`
+      分层阴影 + 弹簧缓动；按下回落。选中态保留既有 accent 左导轨，只叠极淡 accent 底。
+   ② 密集列表/树行（nav / kp / inj / pv / sv / rp / conv / cm-detail）= 「轻移」：
+      悬停 translateX(2px)，读作"这行拿得起来"；当前行（.cur）刻意不移，指认稳定。
+   ③ chrome 分层：工具条 / 粘性分区标题 / 状态条挂 `--edge-raise` 顶边高光，与内容面
+      拉开一档；仪表簇（计数/徽章）上 `font-variant-numeric: tabular-nums` 与语义色淡底。
+   ④ 只用既有 token（shadow / edge-raise / accent / red / amber / green /
+      radius / dur / ease / hover 一族），零新字面量；动效降级全交给文件上方
+      `:root[data-motion='reduced']` 全局压平，本块不另写抑制。
+   同名选择器一律靠"块在文件最末 ⇒ 后来者胜"叠加，不覆盖各面板区块的原有语义属性。
+   ============================================================================ */
+
+/* ---------- A. 口上市场（mk-*）：行卡抬起来 + chrome 分层 + 仪表簇 ---------- */
+.mk-row {
+  /* 顶替原 .mk-row 的 transition 清单（同特异性、后来者胜），补 transform/box-shadow 档 */
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-spring);
+}
+.mk-row:hover {
+  /* 既有 hover 提亮（background-image/border-color accent-dim）不动，只叠"抬起来" */
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-1);
+}
+.mk-row:active {
+  transform: translateY(0);
+}
+/* 展开态：左导轨语义保留，叠一层极淡 accent 底（比 --accent-dim 再轻一档） */
+.mk-row.open {
+  background-color: color-mix(in srgb, var(--accent) 7%, var(--bg-2));
+}
+.mk-row.open:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    var(--shadow-1);
+}
+/* 工具条与粘性标题：顶边高光把 chrome 从列表里拔出来；标题另垫一档浮影，
+   滚动时行卡从标题**底下**钻过去的层次一读就明 */
+.mk-toolbar {
+  box-shadow: var(--edge-raise);
+}
+.mk-grouptitle {
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-1);
+}
+/* 仪表区三档语义：底色随色条走极淡同族 tint（静息 --bg-2 的替代，读起来更像仪表） */
+.mk-status {
+  background: color-mix(in srgb, var(--amber) 8%, var(--bg-2));
+}
+.mk-note {
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
+}
+.mk-flash .mk-warn {
+  background: color-mix(in srgb, var(--red) 8%, var(--bg-2));
+}
+.mk-badge {
+  box-shadow: var(--edge-raise);
+}
+/* 空态：给一个 sunken 井底，虚线框不再只是"一块空白套边框" */
+.mk-empty {
+  background: color-mix(in srgb, var(--surface-sunken) 55%, transparent);
+}
+
+/* ---------- B. 卡片行的同款手感：归档浏览器（ab-*） ---------- */
+.ab-row {
+  transition:
+    transform var(--dur-2) var(--ease-spring),
+    box-shadow var(--dur-2) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+.ab-row:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-1);
+  border-color: var(--border-strong);
+}
+.ab-row:active {
+  transform: translateY(0);
+}
+.ab-row.open {
+  background-color: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+/* 展开态悬停不夺既有 accent 描边语义（.ab-row:hover 的 border-strong 让位回去） */
+.ab-row.open:hover {
+  border-color: var(--accent);
+}
+.ab-row-btn {
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+
+/* ---------- C. 树 / 列表行的「轻移」：口上导航、我的口上项目 ---------- */
+/* 一行一移比一行一抬更配密集树：位移 2px、时长 --dur-1，安静得像指针在推纸 */
+.nav-family-btn,
+.nav-face-btn,
+.nav-func-btn,
+.nav-hit-btn {
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    transform var(--dur-1) var(--ease-out);
+}
+.nav-family-btn:hover,
+.nav-face-btn:hover,
+.nav-func-btn:hover,
+.nav-hit-btn:hover {
+  transform: translateX(2px);
+}
+.nav-count {
+  font-variant-numeric: tabular-nums;
+}
+.kp-project-btn,
+.kp-artifact-btn,
+.kp-dir-btn,
+.kp-file-btn,
+.kp-tutorial-btn {
+  /* 顶替原清单（bg only），补 color/transform；hover 淡底与 .kp-file-btn 的 accent 提亮原样保留 */
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    transform var(--dur-1) var(--ease-out);
+}
+.kp-project-btn:hover,
+.kp-artifact-btn:hover,
+.kp-dir-btn:hover,
+.kp-file-btn:hover,
+.kp-tutorial-btn:hover {
+  transform: translateX(2px);
+}
+.kp-notice,
+.kp-status {
+  box-shadow: var(--edge-raise);
+}
+/* busy = 活体状态：呼吸柔光只在这一档出现（.u-breathe 同款关键帧，减弱动效下停终态） */
+.kp-status.busy {
+  animation: u-glow-breathe 2.8s var(--ease-in-out) infinite;
+}
+
+/* ---------- D. 状态回放（rp-*）：行轻移 + 结果导轨 + 徽章 tint ---------- */
+.rp-suggest-btn,
+.rp-branch-btn {
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    transform var(--dur-1) var(--ease-out);
+}
+.rp-suggest-btn:hover,
+.rp-branch-btn:hover {
+  transform: translateX(2px);
+}
+.rp-pred-btn {
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+/* 谓词行悬停给左缘 2px 导轨（.mk-row.open / .pv-row.cur 的同一记号族），行高零变化 */
+.rp-pred-btn:hover {
+  box-shadow: inset 2px 0 0 var(--border-strong);
+}
+.rp-branches,
+.rp-locate {
+  box-shadow: var(--edge-raise);
+}
+/* 置信徽章：从"描边字"升成"淡底仪表片"，色相沿用既有三档 */
+.rp-badge.conf-exact {
+  background: color-mix(in srgb, var(--green) 9%, transparent);
+}
+.rp-badge.conf-partial {
+  background: color-mix(in srgb, var(--amber) 9%, transparent);
+}
+.rp-badge.conf-unknown {
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+}
+.rp-count,
+.rp-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- E. 条件矩阵（cm-*）：格钮的微交互 + 行头随行亮 ---------- */
+.cm-cell {
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out),
+    opacity var(--dur-1) var(--ease-out),
+    transform var(--dur-1) var(--ease-out);
+}
+/* 空格悬停：浮出一层底、淡出恢复到可读——"这里可以按"的安静邀请 */
+.cm-cell:not(.on):hover {
+  background: var(--hover-soft);
+}
+.cm-cell.off:hover {
+  opacity: 0.6;
+}
+/* 实心格悬停：一圈 accent 柔光（.u-glow 的减幅版）；.sel 白环与光共存不互斥 */
+.cm-cell.on:hover {
+  box-shadow: 0 0 10px -3px var(--focus-glow);
+}
+.cm-cell.on.sel:hover {
+  box-shadow:
+    inset 0 0 0 1px var(--fg),
+    0 0 10px -3px var(--focus-glow);
+}
+/* 按下：整格缩一档的"咔哒"（顶掉全局 button:active 的 0.5px 下沉，方钮缩放更对位） */
+.cm-cell:active:not(:disabled) {
+  transform: scale(0.88);
+}
+/* 宽表扫描辅助：悬停任意行，粘性行头同步提亮——视线在右半场也有锚点 */
+.cm-table tbody tr:hover .cm-rowhead {
+  background: var(--bg-3);
+}
+.cm-group-th {
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+.cm-detail-btn {
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.cm-detail-btn:hover {
+  box-shadow: inset 2px 0 0 var(--border-strong);
+}
+
+/* ---------- F. 注入器 / 糖预览 / 糖判定 / 升糖：行轻移 + 严重度导轨 + 判读面 ---------- */
+.inj-var-row,
+.pv-row,
+.pv-diag,
+.sv-row,
+.lift-row,
+.lift-reason-row,
+.conv-group-btn,
+.conv-issue-btn {
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out),
+    transform var(--dur-1) var(--ease-out);
+}
+.inj-var-row:hover,
+.pv-row:hover,
+.sv-row:hover,
+.conv-issue-btn:hover,
+.conv-group-btn:hover {
+  transform: translateX(2px);
+}
+/* 光标源行（.cur）保持不动：它是"指认"，跟着指针晃会动摇指认的确定性 */
+.pv-row.cur:hover,
+.sv-row.cur:hover {
+  transform: none;
+}
+/* 注入器选中变量：accent 左导轨，与 .inj-var-row.active 的既有底色叠成"条 + 底" */
+.inj-var-row.active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.pv-diag.error:hover,
+.sv-row.error:hover {
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+.pv-diag.warning:hover,
+.sv-row.warning:hover {
+  box-shadow: inset 2px 0 0 var(--warning);
+}
+/* 计数芯片/判定条：tint 用 currentColor 派生——色相仍由既有规则分派，零新增语义 */
+.pv-chip.bad,
+.pv-chip.warn,
+.lift-warn {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.sv-verdict {
+  box-shadow: var(--edge-raise);
+}
+.sv-verdict.ok {
+  background: color-mix(in srgb, var(--green) 5%, transparent);
+}
+.sv-verdict.warning {
+  background: color-mix(in srgb, var(--amber) 6%, transparent);
+}
+.sv-verdict.error {
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+}
+.sv-count {
+  font-variant-numeric: tabular-nums;
+}
+.inj-editor,
+.inj-pending,
+.conv-failed {
+  box-shadow: var(--edge-raise);
+}
+.conv-group-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- G. 错误带统一成"警示条"：六面板的 *-error 同一身份 ---------- */
+.rp-error,
+.sv-error,
+.inj-error,
+.lift-error,
+.ab-error,
+.cm-error {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+/* ---------- H. 树加载态：文字提示前挂一枚 .spinner 同款单色环 ---------- */
+/* 唯一的既有加载钩子（.tree-loading）；::before 即插即用，markup 零改动 */
+.tree-loading::before {
+  content: '';
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: var(--space-2);
+  vertical-align: -0.125em;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: u-spin 700ms linear infinite;
+}
