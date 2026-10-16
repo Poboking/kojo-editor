@@ -111,10 +111,16 @@ if (MODE === 'to-legacy') {
   fs.writeFileSync(file7, JSON.stringify({ ...payload, entries }));
   console.log(`[inv] damage：改坏 ${n}/${paths.length} 条（其余原样，期望只重读这 ${n} 棵）`);
 } else if (MODE === 'retarget') {
-  // 同一个根的另一种写法：rootDir 与条目键一起换反斜杠 ⇒ 键换、rootDir 换、数据一字未动
-  const backRoot = ROOT.replace(/\//g, '\\');
+  // 同一个根的**另一种写法**：rootDir 与条目键一起换斜杠方向 ⇒ 键换、rootDir 换、数据一字未动。
+  // 真壳的 rootDir 常是反斜杠形态，所以变体必须"往反方向换"，否则换完全等于是同一个键。
+  const altSep = ROOT.includes('\\') ? '/' : '\\';
+  const backRoot = ROOT.replace(/[\\/]/g, altSep);
+  if (keyFor(backRoot, 7) === v7key) {
+    console.error('[inv] retarget：换完写法与当前键相同（无变体可造），什么都不改');
+    process.exit(2);
+  }
   const out = {};
-  for (const p of paths) out[p.replace(/\//g, '\\')] = entries[p];
+  for (const p of paths) out[p.replace(/[\\/]/g, altSep)] = entries[p];
   const backKey = keyFor(backRoot, 7);
   fs.writeFileSync(path.join(SCOPE_DIR, `${backKey}.json`), JSON.stringify({ ...payload, rootDir: backRoot, entries: out }));
   fs.rmSync(file7);
