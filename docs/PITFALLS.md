@@ -135,3 +135,5 @@
 84. **快照键里嵌着版本 ⇒「未命中」的第一读其实是「键没找到」**：`snapshotKeyFor` 形如 `index-v7-<fp>`，换代后新键必然空手（`snapshot get` 只花 6ms 就报 0 命中），旧键那份完好数据整份白丢、连坐全树重读（PERF-12a 真语料实测真·冷 17,093ms 索引可用）。判「快照失效」要先把「键不存在」与「条目不可用」分开量；复用走候选键装载 + 逐条目 salvage（准入表 `SALVAGEABLE_VERSIONS`，表外版本一条都不复用）。
 85. **量「改 N 棵 ⇒ 只重读 N 棵」必须关掉会话文本缓存**：内核 io 的 (mtime,size) 文本缓存会把重读计数抹成 0，看着像零读盘；真差集证据要关缓存并统计**不同路径数**（PERF-12a 合成 12 棵盘：坏 3 + 摸 2 ⇒ 真读 5 棵、复用 7）。
 86. **壳侧日志单行 170 字符截断**：往既有 breakdown 行尾追加新字段会看不见（读不到＝没打）；新增读数（如 `index salvage: reused … salvaged …`）**必须单独成行**。
+87. **`git add a b c` 里混一个不存在的路径 ⇒ 整批静默不入库**（只报一行 `pathspec ... did not match`，前面几条全数落空）：150 轮上限掐断后封存现场时中招，四条只进了最后一条。多 agent 接管必做：add 后 `git status --short` 复核，剩余未入库的**逐文件**再 add，别信一条 add 命令。
+88. **CI-1 分池后单跑计时类用例会报「No test files found, exiting with code 1」**：默认 `vitest.config.ts`（功能池）把 20 个墙钟文件列进 exclude，`rescan-scale.perf` / `*-perf.test.ts` 一类只在 `vitest.perf.config.ts`（串行池）里。正解＝`node node_modules/vitest/vitest.mjs run --config vitest.perf.config.ts <file>`；这条不是「用例没了」，也别拿 rc=1 当产品回退（全量口径＝两池相加，见 STATE §一）。
