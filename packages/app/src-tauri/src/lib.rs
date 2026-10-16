@@ -23,6 +23,10 @@ use serde::{Deserialize, Serialize};
 /// 塞进本文件会把既有 IO 正文淹掉（照 `search_tests` 的分文件先例）。
 mod market;
 
+/// OS 外壳原语（在系统资源管理器中显示）：只读、无写盘副作用，独立成文件
+/// 照 `market` 同形态。
+mod shell;
+
 /* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
 //
 // JS 层 kernel io 的 writablePaths 白名单是第一道闸；本层是第二道闸：
@@ -1054,28 +1058,44 @@ struct DragDropPayload {
     phase: &'static str,
     /// 仅 drop 携带路径；其余 phase 恒为空数组（理由见 `map_drag_drop`）
     paths: Vec<String>,
+    /// 光标坐标（B6）：enter/over/drop 携带，leave 为 None（None 时整个字段不序列化，
+    /// 老前端少读一个字段不炸——向后兼容口径）。语义见 `map_drag_drop`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    y: Option<f64>,
 }
 
 /// Tauri 拖放事件 → 转发载荷（纯函数，可单测）。
 /// `drop` 之外的 phase 刻意丢掉路径：enter/over 每秒刷屏几十次，
 /// 前端只用它们亮/灭覆盖提示，转发路径只会白撑 IPC 载荷。
+/// 坐标（B6）例外地三个相位都透传：over 的坐标是"拖悬高亮哪个目录行"的命入口——
+/// 每秒几十次也只是两个 f64，比前端自己起一套坐标系便宜得多。
+///
+/// 坐标语义（wry webview2 `ScreenToClient` 兑换过）：**webview 客户区物理像素**；
+/// 前端除以 `devicePixelRatio` 即 `elementFromPoint` 要的 CSS 像素。
 fn map_drag_drop(event: tauri::DragDropEvent) -> Option<DragDropPayload> {
     use tauri::DragDropEvent as D;
-    let (phase, paths) = match event {
-        D::Enter { .. } => ("enter", Vec::new()),
-        D::Over { .. } => ("over", Vec::new()),
-        D::Drop { paths, .. } => (
-            "drop",
-            paths
+    let (phase, paths, pos) = match event {
+        D::Enter { position, .. } => ("enter", Vec::new(), Some(position)),
+        D::Over { position } => ("over", Vec::new(), Some(position)),
+        D::Drop { paths, position } => {
+            let paths = paths
                 .iter()
                 .map(|p| p.to_string_lossy().into_owned())
-                .collect(),
-        ),
-        D::Leave => ("leave", Vec::new()),
+                .collect();
+            ("drop", paths, Some(position))
+        }
+        D::Leave => ("leave", Vec::new(), None),
         // #[non_exhaustive]：上游将来新增 phase 时不冒充已知状态——宁可不提示也不给错的
         _ => return None,
     };
-    Some(DragDropPayload { phase, paths })
+    Some(DragDropPayload {
+        phase,
+        paths,
+        x: pos.map(|p| p.x),
+        y: pos.map(|p| p.y),
+    })
 }
 
 /* -------------------- 全文检索（通用 IO 原语，零游戏知识） -------------------- */
@@ -1725,7 +1745,8 @@ pub fn run() {
             cancel_search,
             market::market_download,
             market::market_fetch_text,
-            market::market_extract
+            market::market_extract,
+            shell::show_in_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1741,6 +1762,10 @@ mod search_tests;
 /// 市场 IO 原语的判据（白名单逐跳 / 暂存名字面 / 解压闸 / 真实容器对平）同理由独立成文件。
 #[cfg(test)]
 mod market_tests;
+
+/// OS 外壳原语的判据（路径 → 各平台命令 argv 的纯构造）独立成文件。
+#[cfg(test)]
+mod shell_tests;
 
 #[cfg(test)]
 mod write_domain_tests {
@@ -2596,6 +2621,9 @@ mod drag_drop_tests {
         .unwrap();
         assert_eq!(dropped.phase, "drop");
         assert_eq!(dropped.paths, vec![p.to_string_lossy().to_string()]);
+        // B6：drop 同时携带光标坐标（前端按坐标命中目录行）
+        assert_eq!(dropped.x, Some(1.0));
+        assert_eq!(dropped.y, Some(2.0));
 
         for (ev, want) in [
             (
@@ -2611,6 +2639,14 @@ mod drag_drop_tests {
             let got = map_drag_drop(ev).unwrap();
             assert_eq!(got.phase, want);
             assert!(got.paths.is_empty(), "{want} 相位不该带路径");
+            // enter/over 带坐标（over 的拖悬高亮命入口）；leave 坐标与路径一并无
+            if want == "leave" {
+                assert_eq!(got.x, None);
+                assert_eq!(got.y, None);
+            } else {
+                assert_eq!(got.x, Some(1.0));
+                assert_eq!(got.y, Some(2.0));
+            }
         }
     }
 
@@ -2623,7 +2659,14 @@ mod drag_drop_tests {
         .unwrap();
         assert_eq!(
             serde_json::to_value(&payload).unwrap(),
-            json!({ "phase": "drop", "paths": ["a b.erm"] })
+            json!({ "phase": "drop", "paths": ["a b.erm"], "x": 1.0, "y": 2.0 })
         );
+    }
+
+    #[test]
+    fn leave_json_omits_coordinates() {
+        // B6 向后兼容口径：None 坐标整个字段不序列化——老前端少读一个字段不炸
+        let payload = map_drag_drop(DragDropEvent::Leave).unwrap();
+        assert_eq!(serde_json::to_value(&payload).unwrap(), json!({ "phase": "leave", "paths": [] }));
     }
 }
