@@ -45,6 +45,13 @@ import {
   SHOW_FILE_HISTORY_COMMAND_ID,
 } from './file-history';
 import { createFileHistoryOverlay } from './FileHistoryOverlay';
+import {
+  CALL_HIERARCHY_COMMAND_ID,
+  CALL_HIERARCHY_OVERLAY_ID,
+  setCallHierarchyState,
+} from './call-hierarchy';
+import { createCallHierarchyOverlay } from './CallHierarchyOverlay';
+import { readJumpProbe } from './jump-to-state';
 import type { EditorPaneActions } from './EditorPane';
 
 /**
@@ -224,11 +231,74 @@ export function App(): ReactElement {
         });
       },
     });
+    // 调用层级（批 E，2026-10-16）：宿主自建只读查询面板（Monaco standalone 无
+    // CallHierarchy API，取证见 PITFALLS §83）。判定与收集全在
+    // `monaco/erb-call-hierarchy.ts`（复用 erb.parser 反向索引与 functionAt 通道），
+    // 这里只做两件接线：命令面板入口 + overlay 注册。位点现取 `readJumpProbe()`
+    // （G1 既有探针——`EditorCommandContext` 没有光标行，不为此扩宿主管道）；
+    // 跳转落既有 `editor.revealLocation`，与转到定义同一条通道。
+    const parser = (): ErbParserService | undefined => kernel.services.tryGet<ErbParserService>('erb.parser');
+    const unRegCallHierarchy = kernel.slots.register('ui.overlay', {
+      id: CALL_HIERARCHY_OVERLAY_ID,
+      order: 42,
+      component: createCallHierarchyOverlay({
+        currentIndex: () => {
+          try {
+            return parser()?.currentIndex() ?? null;
+          } catch {
+            return null;
+          }
+        },
+        functionAt: (path, line) => {
+          try {
+            const service = parser();
+            // 三态：通道不存在（服务/方法缺席）⇒ null（数据层退化到索引自扫）；
+            // 在场则它的 undefined 是权威的"不在此函数内"
+            return service?.functionAt ? service.functionAt(path, line) : null;
+          } catch {
+            return null;
+          }
+        },
+        reveal: (path, line, column) =>
+          kernel.bus.emit('editor.revealLocation', {
+            filePath: path,
+            line,
+            ...(column !== undefined ? { column } : {}),
+            source: '调用层级',
+          }),
+        close: () =>
+          kernel.bus.emit('ui.overlay.close', { id: CALL_HIERARCHY_OVERLAY_ID, source: 'host:call-hierarchy' }),
+      }),
+    });
+    const unRegCallHierarchyCommand = kernel.slots.register('editor.command', {
+      id: CALL_HIERARCHY_COMMAND_ID,
+      title: '查看当前函数的调用层级（谁调用它 / 它调用谁）',
+      when: (ctx) => Boolean(ctx.activeFile),
+      run: () => {
+        const probe = readJumpProbe();
+        if (!probe) {
+          setCallHierarchyState({
+            kind: 'rejected',
+            reason: '编辑器还没准备好——先打开一份文件，把光标放到函数体里，再运行本命令。',
+          });
+        } else if (probe.derivedView) {
+          setCallHierarchyState({
+            kind: 'rejected',
+            reason: '现在屏幕上的是派生视图（行号不属于原文）——切回原代码再查看调用层级。',
+          });
+        } else {
+          setCallHierarchyState({ kind: 'request', request: { filePath: probe.path, line: probe.line } });
+        }
+        kernel.bus.emit('ui.overlay.open', { id: CALL_HIERARCHY_OVERLAY_ID, source: 'host:call-hierarchy' });
+      },
+    });
     return () => {
       unBind();
       unReg();
       unRegHistory();
       unRegHistoryCommand();
+      unRegCallHierarchy();
+      unRegCallHierarchyCommand();
     };
   }, [kernel]);
 
