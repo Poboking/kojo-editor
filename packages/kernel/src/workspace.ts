@@ -140,6 +140,9 @@ export class WorkspaceServiceImpl implements WorkspaceService {
    * 才能做对的动作，如删除——删错目录是静默失败：不存在 → 幂等成功 → 项目还在）。
    */
   private async locateProjectDir(projectId: string): Promise<string> {
+    // 段级校验先行（2026-10-16 修复批）：join 会归一化折叠 '..'，
+    // '../../backup' 类 id 能把写闸外的备份域整目录删掉——删错目录是静默失败。
+    assertSegment(projectId, 'project id');
     const cached = this.dirById.get(projectId);
     if (cached !== undefined) return cached;
     // 名单要重读一次：本会话刚经对话框授权的根不在 init 那份里
@@ -338,7 +341,9 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     // 走 locateProjectDir：外部根里的项目若未 `list()` 过，`projectDir()` 会回落默认根，
     // 而删一个不存在的目录是**幂等成功**（静默失败：项目看着被删了，其实还在原处）
     const dir = await this.locateProjectDir(projectId);
-    await this.deps.bridge.removeDir(dir);
+    // 删除必须过 io 写闸（双闸第一道，2026-10-16 修复批）：直调 bridge.removeDir
+    // 绕开 assertWritable——常驻根被收回或路径出域时照样删盘。
+    await this.deps.io.removeDir(dir);
     this.dirById.delete(projectId);
     this.deps.log.info(`Workspace project removed: ${projectId}`);
   }
@@ -423,8 +428,23 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     // base64 过界；导入是"用户点一次就付一次钱"的面，N 个文件就是 3N 次 IPC。
     // 闸的口径没变：`to` 恒由 `resolveIn` 落在项目目录（常驻可写根）内，越权照样
     // `WriteNotAllowedError`；`from` 是只读源，读不受写允许域约束（这正是导入的常态）。
-    for (const t of targets) {
-      await this.deps.io.copyFile(t.from, t.to);
+    // 复制中途失败不留半成品（2026-10-16 修复批，rebase 合入 PERF-10b④ 的 copyFile 形态）：
+    // 已建目录整体清掉、manifest 未登记，重试不再撞 already exists；
+    // 清理自身失败要出声（不吞），真因必须原样上抛不被顶替。
+    try {
+      for (const t of targets) {
+        await this.deps.io.copyFile(t.from, t.to);
+      }
+    } catch (err) {
+      const artifactDir = join(this.projectDir(projectId), input.dirName);
+      try {
+        await this.deps.io.removeDir(artifactDir);
+      } catch (cleanupErr) {
+        this.deps.log.warn(
+          `importDirectory: 清理半成品制品目录失败（保留现场）：${artifactDir} — ${String(cleanupErr)}`,
+        );
+      }
+      throw err;
     }
 
     const artifact: WorkspaceArtifact = {
@@ -447,7 +467,12 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     const idx = project.artifacts.findIndex((a) => a.id === artifactId);
     if (idx < 0) throw new Error(`Artifact not found: ${artifactId}`);
     const artifact = project.artifacts[idx]!;
-    await this.deps.bridge.removeDir(join(this.projectDir(projectId), artifact.dirName));
+    // manifest 里的 dirName 是持久化数据（可能被手改/损坏）：join 会归一化折叠 '..'，
+    // '../../backup' 类值能把写闸外的备份域整目录删掉——删除前强制单层段复验；
+    // 同根内的段级跳跃（../neighbor）写闸拦不住，只有段校验能拦（2026-10-16 修复批）。
+    assertSegment(artifact.dirName, 'artifact directory name');
+    // 删除必须过 io 写闸（与 remove 同口径）。
+    await this.deps.io.removeDir(join(this.projectDir(projectId), artifact.dirName));
     project.artifacts.splice(idx, 1);
     project.updatedAt = Date.now();
     await this.writeManifest(project);

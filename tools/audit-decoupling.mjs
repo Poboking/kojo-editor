@@ -150,8 +150,14 @@ for (const proot of PLUGIN_ROOTS) {
     const lines = text.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      // B: 不得 import @kojo/kernel
-      if (/from\s+['"]@kojo\/kernel['"]|import\(['"]@kojo\/kernel['"]\)/.test(line)) {
+      // B: 不得 import @kojo/kernel——三种形态全拦：命名导入（from）、副作用导入
+      //（`import '@kojo/kernel'`，2026-10-16 修复批补上：无 from 无调用，插件可零引用
+      // 拉起内核而静默过闸）、动态导入。引号只认 ' 与 "，注释里的反引号提及不误伤。
+      if (
+        /from\s+['"]@kojo\/kernel['"]|import\s+['"]@kojo\/kernel['"]|import\(['"]@kojo\/kernel['"]\)/.test(
+          line,
+        )
+      ) {
         violations.push({ rule: 'B(插件禁依赖内核)', file: r, line: i + 1, text: line.trim().slice(0, 120) });
       }
       // C: 不得 import 其它插件包（测试除外——集成测试属宿主层面）

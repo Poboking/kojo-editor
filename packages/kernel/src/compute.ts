@@ -127,6 +127,12 @@ export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
     const priority: ComputePriority = opts.priority ?? 'background';
     const sliceMs = opts.sliceMs ?? DEFAULT_SLICE_MS;
     const label = opts.label ?? ANON;
+    // 非有限的 concurrency 会让 Math.max(1, Math.floor(NaN)) 得 NaN → 步长 0 →
+    // 静默产出全 undefined 数组且 stat 被污染。内核不静默：显式抛错；
+    // 校验放在 statFor 之前——被拒的运行不留 stat 条目（2026-10-16 修复批）。
+    if (opts.concurrency !== undefined && !Number.isFinite(opts.concurrency)) {
+      throw new Error(`Invalid concurrency: ${String(opts.concurrency)} (must be a finite number)`);
+    }
     const stat = statFor(label, priority);
     const startedAt = now();
     const window = Math.max(1, Math.floor(opts.concurrency ?? 1));

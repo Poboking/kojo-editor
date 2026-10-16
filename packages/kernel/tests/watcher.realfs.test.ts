@@ -95,4 +95,20 @@ describe('FileWatcherServiceImpl × 真实 fs.watch', () => {
 
     watcher.stop();
   });
+
+  it('删除文件 → unlink（node 桥的 kind 与契约三态对齐，不再恒 change）', async () => {
+    const { watcher, changes } = makeReal();
+    await watcher.start([dir]);
+    const target = nodePath.join(dir, 'deleted.ERB');
+    await writeFile(target, '; 先建再删\n', 'utf8');
+    await expect
+      .poll(() => changes.length, { timeout: 4000, message: '建立事件未投递' })
+      .toBeGreaterThanOrEqual(1);
+    await rm(target);
+    // 同一路径的**末态** kind（与内核去抖「最后观测到的类别」同口径）
+    await expect
+      .poll(() => changes.filter((c) => c.path === target).pop()?.kind, { timeout: 4000 })
+      .toBe('unlink');
+    watcher.stop();
+  });
 });

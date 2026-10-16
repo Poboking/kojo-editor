@@ -259,3 +259,29 @@ describe('stats', () => {
     expect(pool.stats().tasks[0]!.priority).toBe('background');
   });
 });
+
+describe('runSliced · 非有限 concurrency 不静默', () => {
+  it('NaN / ±Infinity 显式抛错（修复前 NaN 静默产出全 undefined 数组）', async () => {
+    const pool = createComputePool();
+    await expect(
+      pool.runSliced([1, 2, 3], { concurrency: Number.NaN }, (n) => n),
+    ).rejects.toThrow(/concurrency/);
+    await expect(
+      pool.runSliced([1, 2, 3], { concurrency: Number.POSITIVE_INFINITY }, (n) => n),
+    ).rejects.toThrow(/concurrency/);
+    await expect(
+      pool.runSliced([1, 2, 3], { concurrency: Number.NEGATIVE_INFINITY }, (n) => n),
+    ).rejects.toThrow(/concurrency/);
+  });
+
+  it('参数校验先于统计登记：被拒的运行不留 NaN 污染的 stat', async () => {
+    const pool = createComputePool();
+    await expect(
+      pool.runSliced([1], { concurrency: Number.NaN, label: 'poison' }, (n) => n),
+    ).rejects.toThrow(/concurrency/);
+    expect(pool.stats().tasks.find((t) => t.label === 'poison')).toBeUndefined();
+    // 后续正常任务不受污染
+    await expect(pool.runSliced([1, 2], { label: 'clean' }, (n) => n)).resolves.toEqual([1, 2]);
+    expect(pool.stats().tasks.find((t) => t.label === 'clean')!.items).toBe(2);
+  });
+});

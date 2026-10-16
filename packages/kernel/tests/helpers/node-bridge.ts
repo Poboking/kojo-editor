@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import * as nodePath from 'node:path';
 import iconv from 'iconv-lite';
 import type {
@@ -234,8 +234,13 @@ export class NodeBridge implements PlatformBridge {
           if (!filename) return;
           // 与 Rust 侧 is_atomic_write_temp 同口径：本桥自己的原子写产物不算内容变更
           if (isAtomicWriteTemp(filename.toString())) return;
-          const kind: FileChangeKind = eventType === 'rename' ? 'change' : 'change';
-          onEvent(kind, nodePath.join(p, filename.toString()));
+          // kind 真实化（2026-10-16 修复批）：rename 且目标已消失 = 删除 → 'unlink'
+          //（与 Rust 宿主 normalize_event_kind 的 Remove/RenameFrom → unlink 同口径）。
+          // 其余保守报 'change'：node 的 rename 事件区分不出"新建"，不发明 add 判定。
+          const full = nodePath.join(p, filename.toString());
+          const kind: FileChangeKind =
+            eventType === 'rename' && !existsSync(full) ? 'unlink' : 'change';
+          onEvent(kind, full);
         });
         w.on('error', (err) => onReport?.({ type: 'error', reason: String(err) }));
         watchers.push(w);

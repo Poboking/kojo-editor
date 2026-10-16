@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { WORKSPACE_MANIFEST_FILE, WriteNotAllowedError, type PlatformBridge } from '@kojo/plugin-api';
 import { FileIOServiceImpl } from '../src/io';
 import { WorkspaceServiceImpl } from '../src/workspace';
@@ -401,5 +401,139 @@ describe('WorkspaceService · 多根落点（自选项目位置）', () => {
     });
     expect(() => dead.roots()).toThrow(/unavailable/);
     expect(() => dead.rootDir()).toThrow(/unavailable/);
+  });
+});
+
+/**
+ * 删除路径的双闸复验（2026-10-16 修复批）。
+ *
+ * 修复前：remove / removeArtifact 直调 `bridge.removeDir`，绕过 io.removeDir 的
+ * assertWritable 写闸；且 removeArtifact 不复验 manifest 里的 artifact.dirName——
+ * join 会归一化折叠 '..'，被篡改的 dirName（如 '../../backup'）能把写闸外的
+ * 备份域整目录删掉（Rust 第二道闸的判定域含整个 appDataDir，同样不拦）。
+ */
+describe('WorkspaceService · 删除路径：写闸 + dirName 复验', () => {
+  it('remove 走 io 写闸：常驻可写根被清空后拒绝删除，目录原样在盘上', async () => {
+    const p = await ws.create({ name: '将删' });
+    io.setAppWritableRoots([]); // 连常驻根一起收回：此刻任何删除都必须被第一道闸拦下
+    await expect(ws.remove(p.id)).rejects.toThrow(WriteNotAllowedError);
+    expect(await io.exists(ws.projectDir(p.id))).toBe(true);
+  });
+
+  it('removeArtifact 走 io 写闸：同上，制品目录原样在盘上', async () => {
+    const p = await ws.create({ name: '作品' });
+    const art = await ws.createArtifact(p.id, { name: '包', dirName: 'pkg', files: { 'a.txt': 'x' } });
+    io.setAppWritableRoots([]);
+    await expect(ws.removeArtifact(p.id, art.id)).rejects.toThrow(WriteNotAllowedError);
+    expect(await io.exists(path.join(ws.projectDir(p.id), 'pkg', 'a.txt'))).toBe(true);
+  });
+
+  it('remove 拒绝逃逸段的项目 id：不把 <appData>/backup 当项目目录删光', async () => {
+    // 诱饵：<appData>/backup 里有 workspace.json（locateProjectDir 的存在性探测会命中）
+    const backupDir = path.join(appData, 'backup');
+    await fs.mkdir(path.join(backupDir, 'bucket'), { recursive: true });
+    await fs.writeFile(path.join(backupDir, 'bucket', 'v1.bak'), 'precious', 'utf8');
+    await fs.writeFile(path.join(backupDir, WORKSPACE_MANIFEST_FILE), '{}', 'utf8');
+    await expect(ws.remove(path.join('..', '..', 'backup'))).rejects.toThrow(/Invalid project id/);
+    expect(await io.exists(path.join(backupDir, 'bucket', 'v1.bak'))).toBe(true);
+  });
+
+  it('removeArtifact 复验 manifest 的 dirName：../../backup 类篡改被段校验拒绝，备份全存活', async () => {
+    const p = await ws.create({ name: '作品' });
+    const art = await ws.createArtifact(p.id, { name: '包', dirName: 'pkg', files: { 'a.txt': 'x' } });
+    const backupDir = path.join(appData, 'backup');
+    await fs.mkdir(path.join(backupDir, 'bucket'), { recursive: true });
+    await fs.writeFile(path.join(backupDir, 'bucket', 'v1.bak'), 'precious', 'utf8');
+    // 手改 manifest 模拟被篡改的 dirName（join 会折叠 '..'——正是要防的形态）
+    const manifestPath = path.join(ws.projectDir(p.id), WORKSPACE_MANIFEST_FILE);
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+      artifacts: Array<{ dirName: string }>;
+    };
+    manifest.artifacts[0]!.dirName = path.join('..', '..', 'backup');
+    await fs.writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+    await expect(ws.removeArtifact(p.id, art.id)).rejects.toThrow(/Invalid artifact directory name/);
+    expect(await io.exists(path.join(backupDir, 'bucket', 'v1.bak'))).toBe(true);
+    // 盘上合规的制品目录不被顺手波及
+    expect(await io.exists(path.join(ws.projectDir(p.id), 'pkg', 'a.txt'))).toBe(true);
+  });
+
+  it('removeArtifact 复验 dirName：同根内的段级跳跃（../邻居）写闸拦不住，段校验必须拦', async () => {
+    const p = await ws.create({ name: '作品' });
+    const art = await ws.createArtifact(p.id, { name: '包', dirName: 'pkg', files: { 'a.txt': 'x' } });
+    // 邻居目录在同一常驻可写根内 ⇒ 纯写闸放行；只有段校验能拦
+    const neighbor = path.join(ws.rootDir(), 'neighbor');
+    await fs.mkdir(neighbor, { recursive: true });
+    await fs.writeFile(path.join(neighbor, 'keep.txt'), 'keep', 'utf8');
+    const manifestPath = path.join(ws.projectDir(p.id), WORKSPACE_MANIFEST_FILE);
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+      artifacts: Array<{ dirName: string }>;
+    };
+    manifest.artifacts[0]!.dirName = path.join('..', 'neighbor');
+    await fs.writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+    await expect(ws.removeArtifact(p.id, art.id)).rejects.toThrow(/Invalid artifact directory name/);
+    expect(await io.exists(path.join(neighbor, 'keep.txt'))).toBe(true);
+    // 摘除登记必须发生在删除成功之后（删除被拒 ⇒ manifest 原样）
+    expect((await ws.get(p.id))!.artifacts).toHaveLength(1);
+  });
+});
+
+describe('WorkspaceService · importDirectory 半成品清理', () => {
+  async function makeImportSrc(): Promise<string> {
+    const src = path.join(tmpDir, 'import-src');
+    await fs.mkdir(path.join(src, 'sub'), { recursive: true });
+    await fs.writeFile(path.join(src, 'a.txt'), 'A', 'utf8');
+    await fs.writeFile(path.join(src, 'sub', 'b.txt'), 'B', 'utf8');
+    return src;
+  }
+
+  it('复制中途失败：半成品目录被清理，manifest 未登记，重试不再撞 already exists', async () => {
+    const src = await makeImportSrc();
+    const p = await ws.create({ name: '作品' });
+    const original = io.copyFile.bind(io);
+    let calls = 0;
+    // rebase 适配（PERF-10b④）：导入复制已改走一趟 copyFile，失败注入点同步换到 copyFile
+    vi.spyOn(io, 'copyFile').mockImplementation(async (from, to) => {
+      calls += 1;
+      if (calls === 2) throw new Error('模拟第二份写入失败');
+      return original(from, to);
+    });
+    await expect(
+      ws.importDirectory(p.id, { name: '导入', dirName: 'pkg', sourceDir: src }),
+    ).rejects.toThrow(/第二份写入失败/);
+    vi.restoreAllMocks();
+    // 半成品目录已被清理（修复前留在盘上，dirName 永久卡死）
+    expect(await io.exists(path.join(ws.projectDir(p.id), 'pkg'))).toBe(false);
+    expect((await ws.get(p.id))!.artifacts).toHaveLength(0);
+    // 重试 = 全新导入，成功
+    const art = await ws.importDirectory(p.id, { name: '导入', dirName: 'pkg', sourceDir: src });
+    expect(art.dirName).toBe('pkg');
+    expect(await fs.readFile(path.join(ws.projectDir(p.id), 'pkg', 'sub', 'b.txt'), 'utf8')).toBe('B');
+  });
+
+  it('清理自身失败：原错误如实上抛，清理失败出声（不吞）', async () => {
+    const src = await makeImportSrc();
+    const p = await ws.create({ name: '作品' });
+    const original = io.copyFile.bind(io);
+    let calls = 0;
+    // rebase 适配（PERF-10b④）：失败注入点从 writeBytes 换到 copyFile
+    vi.spyOn(io, 'copyFile').mockImplementation(async (from, to) => {
+      calls += 1;
+      if (calls === 2) throw new Error('boom-write');
+      return original(from, to);
+    });
+    vi.spyOn(io, 'removeDir').mockImplementation(async () => {
+      throw new Error('boom-cleanup');
+    });
+    const warns: string[] = [];
+    const wsSpy = new WorkspaceServiceImpl({
+      bridge: new NodeBridge(appData),
+      io,
+      log: { ...noopLog, warn: (m: string) => warns.push(m) },
+    });
+    await wsSpy.init();
+    await expect(
+      wsSpy.importDirectory(p.id, { name: '导入', dirName: 'pkg', sourceDir: src }),
+    ).rejects.toThrow(/boom-write/); // 真因保留，不被清理错误顶替
+    expect(warns.some((m) => m.includes('pkg') && m.includes('清理'))).toBe(true);
   });
 });

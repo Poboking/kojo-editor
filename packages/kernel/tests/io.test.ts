@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
-import { WriteNotAllowedError, type PlatformBridge } from '@kojo/plugin-api';
+import { WriteNotAllowedError, pathKey, type PlatformBridge } from '@kojo/plugin-api';
 import { FileIOServiceImpl } from '../src/io';
 import { NodeBridge } from './helpers/node-bridge';
 
@@ -247,5 +247,25 @@ describe('FileIOService · 导出（唯一法定绕闸通道，§5.97）', () =>
     const src = path.join(tmpDir, 'game', '某包');
     expect(svc.isWritable(src)).toBe(false);
     await expect(svc.exportFile('某包.zip', new Uint8Array([1]))).resolves.toBe('D:/发布/某包.zip');
+  });
+});
+
+describe('FileIOService · writeBytes 的缓存刷新（保编码不变量）', () => {
+  it('字节覆盖后 encodingCache/eolCache 跟随盘上新真相：preserve 不再按旧编码写回', async () => {
+    const kojo = path.join(tmpDir, 'game', 'ERB');
+    io.setWritableRoots([kojo]);
+    const f = path.join(kojo, 'a.ERB');
+    // 先按 Shift-JIS + CRLF 建档：两个缓存都记为 shift_jis / crlf
+    await io.writeText(f, 'こんにちは', { encoding: 'shift_jis', eol: 'crlf' });
+    expect(io.debugCaches().encoding.get(pathKey(f))).toBe('shift_jis');
+    expect(io.debugCaches().eol.get(pathKey(f))).toBe('crlf');
+    // 字节级覆盖（导入 / 外部同步的写路径）：盘上真相变成 UTF-8 + LF
+    await io.writeBytes(f, new TextEncoder().encode('こんにちは\n'));
+    expect(io.debugCaches().encoding.get(pathKey(f))).toBe('utf-8');
+    expect(io.debugCaches().eol.get(pathKey(f))).toBe('lf');
+    // 端到端后果：随后的 preserve 写回必须是 utf-8
+    //（修复前按陈旧缓存转回 Shift-JIS，这正是「保编码」不变量被打破的形状）
+    await io.writeText(f, 'こんにちは\n', { encoding: 'preserve', eol: 'preserve' });
+    expect((await io.readText(f)).encoding).toBe('utf-8');
   });
 });

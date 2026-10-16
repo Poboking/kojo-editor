@@ -338,6 +338,13 @@ export class FileIOServiceImpl implements FileIO {
   async writeBytes(path: string, data: Uint8Array): Promise<void> {
     this.assertWritable(path);
     await this.bridge.writeFileBytes(path, data);
+    // 编码/EOL 缓存跟着盘上新真相走（与 restoreBackup 同口径，2026-10-16 修复批）：
+    // 字节级写入可以换编码/换行（导入、外部同步），缓存若不刷新，
+    // 下一次 writeText 的 preserve 会按旧编码写回——「保编码」不变量被打破。
+    // textCache 只失效不回填（批量读路径自会重读）。
+    const { text: raw, encoding } = decodeWithProbe(data);
+    this.encodingCache.set(pathKey(path), encoding);
+    this.eolCache.set(pathKey(path), detectEol(raw));
     this.invalidateTextCache(path);
   }
 
