@@ -23,6 +23,8 @@
  *    （2026-10-12 实测：214 包里真声明 54 / 仅模板 66 —— 混算会把 25% 报成 55%。）
  */
 
+import { MARKET_MANIFEST_FILE, dirname, join } from '@kojo/plugin-api';
+
 /** 抽取到的字段（带出处，供 UI 呈现原文） */
 export interface AttributionField {
   value: string;
@@ -289,6 +291,76 @@ export async function readPackageAttribution(deps: {
   }
 
   return { author, updated, license, readmeFiles };
+}
+
+/* ---------------------- 市场包署名（KM-13 导入兜底 / KM-14 模板 meta） ---------------------- */
+
+/**
+ * 市场包 `pack.json` 的署名投影。
+ *
+ * 为什么另开这条读取路：市场包正文（`files/`）里通常**没有 README**——署名只住在其
+ * 上一级的 `pack.json`（市场契约的清单，注册表 CI 逐文件核过），比从散文里抽更可信。
+ * 本投影**只取两个已声明字段**（`author` / `license`），宁缺勿滥：
+ * 形状不是对象 / 两个字段都取不到 ⇒ `null`；缺一个就只带一个。
+ */
+export interface PackAuthorship {
+  /** `author` 字段原文（已 trim；空串 = 缺字段 / 类型不对） */
+  author: string;
+  /** `license` 字段原文（已 trim；空串 = 缺字段 / 类型不对） */
+  license: string;
+  /** `author` 字段首次出现的 1 基行号（出处要可核验；扫不到 = 1） */
+  authorLine: number;
+}
+
+/** `"key"` 首次出现的 1 基行号（`pack.json` 常只有一行 ⇒ 扫不到回落 1，不猜更大数） */
+function lineOfKey(text: string, key: string): number {
+  const re = new RegExp(`"${key}"\\s*:`);
+  const lines = text.split(/\r\n?|\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (re.test(lines[i]!)) return i + 1;
+  }
+  return 1;
+}
+
+/** 解析 `pack.json` 正文 → 署名投影（纯函数；解析不出 ⇒ `null`，调用方回退） */
+export function parsePackAuthorship(text: string): PackAuthorship | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  const author = str(record.author);
+  const license = str(record.license);
+  if (author.length === 0 && license.length === 0) return null;
+  return { author, license, authorLine: lineOfKey(text, 'author') };
+}
+
+/**
+ * 市场包 contentDir（`…/<kind>/<id>/<version>/files`）→ 上一级 `pack.json` 的绝对路径。
+ * 落点形态由市场契约唯一派生（本模块不自己拼第二份目录约定），纯函数、可单测。
+ */
+export function packManifestPathOf(contentDir: string): string {
+  return join(dirname(contentDir), MARKET_MANIFEST_FILE);
+}
+
+/**
+ * best-effort 读市场包的 `pack.json` 署名（内容目录的**上一级**）。
+ * 读不到 / 解析失败 ⇒ `null`——调用方回退（导入/建项目**绝不**因署名缺失被阻断）。
+ */
+export async function readPackAuthorship(deps: {
+  io: { readText(path: string): Promise<{ text: string }> };
+  contentDir: string;
+}): Promise<PackAuthorship | null> {
+  try {
+    const tf = await deps.io.readText(packManifestPathOf(deps.contentDir));
+    return parsePackAuthorship(tf.text);
+  } catch {
+    return null;
+  }
 }
 
 /* ------------------------------ 呈现文案 ------------------------------ */

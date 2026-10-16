@@ -31,7 +31,13 @@ import { createPackageActions } from './package-actions';
 import { resolveNewItemPath, type NewItemKind } from './new-item';
 import { workspaceChangeOf } from './watch-scope';
 import type { KojoCompiler } from './artifact';
-import { NEW_KOJO_PROJECT_OVERLAY_ID, createNewKojoProjectWizard, readRequestToken } from './new-project-wizard';
+import {
+  NEW_KOJO_PROJECT_OVERLAY_ID,
+  createNewKojoProjectWizard,
+  listMarketTemplates,
+  readRequestToken,
+  type KojoTemplateEntry,
+} from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID, createDeployKojoWizard } from './deploy-wizard';
 import { DEPLOY_DIFF_OVERLAY_ID, createDeployDiffOverlay } from './deploy-diff-panel';
@@ -638,6 +644,16 @@ export function createEratwAdapterPlugin(): Plugin {
             ctx.bus.emit('ui.overlay.close', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' });
             // 意图随窗口关闭作废（创建路径在 close 之前已把关联号带进广播）
             projectRequestToken = null;
+          },
+          // 模板来源（KM-14）：已装 `template-pack` 投影成下拉条目（懒取市场，市场缺席 ⇒ []）。
+          // 取目录 / 列包失败一律按"没有模板包"处理——模板是锦上添花，不挡向导的默认内置骨架。
+          listTemplates: async (): Promise<readonly KojoTemplateEntry[]> => {
+            try {
+              return await listMarketTemplates(tryMarket());
+            } catch (err) {
+              ctx.log.warn(`市场模板包列表获取失败（新建向导按无模板包处理）：${String(err)}`);
+              return [];
+            }
           },
           onCreated: invalidateWs,
           created: ({ projectId }) => emitProjectCreated(projectId, projectRequestToken ?? undefined),

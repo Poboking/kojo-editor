@@ -17,15 +17,31 @@
  * 脚手架内容（中文命名 / 8 核心面空壳 / README 模板）是 eraTW 口上组织知识，
  * 住在 adapter 的 `scaffold.ts`（纯函数可单测）。**不生成四件套文件**——
  * 登记/配色/开关是函数级产物，属作者后续创作。
+ *
+ * 模板来源（KM-14）：默认走内置脚手架（上面那条链路）；也可以选一个**已安装的市场
+ * 模板包**（`kind === 'template-pack'`）——那时产物文件不再由脚手架生成，而是把模板包
+ * 的 contentDir 经 `workspaces.importDirectory` **字节级复制**成制品（目录名规则 / 预览 /
+ * 消毒 / 位置自选 / 许可下拉全部不变）。市场缺席 / 无模板包 ⇒ 灰字说明 + 保持默认内置
+ * （功能不隐藏，也不说黑话）。
  */
 
-import { createElement as h, useMemo, useState } from 'react';
-import type { CharaInfo, FileIO, ProjectService, WorkspaceService } from '@kojo/plugin-api';
+import { createElement as h, useEffect, useMemo, useState } from 'react';
+import type { CharaInfo, FileIO, MarketService, ProjectService, WorkspaceService } from '@kojo/plugin-api';
 import { CORE_FACES, scaffoldDirName, scaffoldKojoProject, sanitizeSegment } from './scaffold';
 import { LICENSE_CHOICES, licenseProducesFile, type LicenseKind } from './licenses';
+import { readPackAuthorship, type PackAuthorship } from './attribution';
 
 /** overlay 贡献 id（面板按钮发 `ui.overlay.open` 时引用） */
 export const NEW_KOJO_PROJECT_OVERLAY_ID = 'eratw.newKojoProject';
+
+/** 模板来源条目（`deps.listTemplates` 的返回形状；装配侧对已装 `template-pack` 记录的投影） */
+export interface KojoTemplateEntry {
+  id: string;
+  version: string;
+  name: string;
+  /** 模板包 contentDir（`workspaces.importDirectory` 的源目录） */
+  sourceDir: string;
+}
 
 export interface NewKojoProjectWizardDeps {
   workspaces: WorkspaceService;
@@ -33,6 +49,11 @@ export interface NewKojoProjectWizardDeps {
   io: FileIO;
   /** 游戏项目（角色表来源；无打开项目时向导显式不可用） */
   project: ProjectService;
+  /**
+   * 列出已装的市场模板包（KM-14；**可选**——组装方没接市场时向导与历史逐字一致）。
+   * 返回空数组 ⇒ 向导显示灰字「（尚未安装模板包）」并保持默认内置骨架。
+   */
+  listTemplates?: () => Promise<readonly KojoTemplateEntry[]>;
   /** 关闭自身（经内核事件，向导不持有宿主引用） */
   close(): void;
   /** 创建成功后回调（面板刷新：目录缓存失效 + 项目列表重拉） */
@@ -140,6 +161,100 @@ const LOCATION_HELP =
   '新建的作品文件夹放在哪里。默认放在软件自己的数据目录里；' +
   '也可以选一个你自己认得的文件夹（例如你的作品库），选好后软件会把那里当作可写的作品目录。';
 
+/* ---------------- 模板来源（KM-14：纯函数半边，可单测） ---------------- */
+
+/** 「模板来源」下拉的哨兵值：内置骨架（市场包 id 受 `PACK_ID_RE` 约束，空串撞不上） */
+const BUILTIN_TEMPLATE_VALUE = '';
+
+/** 无模板包时那条灰字说明的选项值（disabled，选不中；只为把"这个功能在哪"说清楚） */
+const NO_TEMPLATE_VALUE = '__no-template-pack__';
+
+/** 模板包身份键：`<id>@<version>`（下拉值与制品 meta 的 `template` 字段同一来源） */
+export function templateKey(t: Pick<KojoTemplateEntry, 'id' | 'version'>): string {
+  return `${t.id}@${t.version}`;
+}
+
+/** 「模板来源」下拉选项 */
+export interface TemplateSourceChoice {
+  value: string;
+  label: string;
+  /** 灰字说明项（不可选） */
+  disabled?: boolean;
+}
+
+/**
+ * 已装市场包 → 模板下拉条目（KM-14；市场缺席 ⇒ `[]`）。
+ * 只认 `kind === 'template-pack'`——口上包 / 字典包不是模板，混进来就是把两类东西说成一样。
+ * 单列成函数是为了可单测：组件在 node 测试环境渲不出来，投影规则在这里被直测；
+ * 失败**向上抛**（由装配侧收口成"按没有模板包处理 + 记日志"，这里不吞错）。
+ */
+export async function listMarketTemplates(market: MarketService | null): Promise<KojoTemplateEntry[]> {
+  if (market === null) return [];
+  const out: KojoTemplateEntry[] = [];
+  for (const rec of await market.installed()) {
+    if (rec.kind !== 'template-pack') continue;
+    out.push({
+      id: rec.id,
+      version: rec.version,
+      name: rec.name,
+      sourceDir: await market.contentDir(rec.kind, rec.id, rec.version),
+    });
+  }
+  return out;
+}
+
+/**
+ * 「模板来源」下拉选项（KM-14；纯函数）。
+ * 内置骨架恒在首位且默认选中；无模板包时**不隐藏整个功能**——追加一条灰字说明，
+ * 作者看得见"这里还能有别的东西"，也不用听黑话。
+ */
+export function templateSourceChoices(templates: readonly KojoTemplateEntry[]): TemplateSourceChoice[] {
+  const builtin: TemplateSourceChoice = {
+    value: BUILTIN_TEMPLATE_VALUE,
+    label: '内置骨架（中文命名 + 8 个核心面空壳）',
+  };
+  if (templates.length === 0) {
+    return [builtin, { value: NO_TEMPLATE_VALUE, label: '（尚未安装模板包）', disabled: true }];
+  }
+  return [builtin, ...templates.map((t) => ({ value: templateKey(t), label: `${t.name} v${t.version}` }))];
+}
+
+/**
+ * 落点预览里"模板模式"那句话（KM-14；纯函数）。
+ * `fileCount === null` = 还没数出来 / 模板目录读不动——那就如实说"以导入结果为准"，
+ * **不许**把内置脚手架的"将生成 N 个文件"照搬过来（那是另一份产物）。
+ */
+export function templatePreviewLine(template: KojoTemplateEntry, fileCount: number | null): string {
+  const base = `将导入模板「${template.name} v${template.version}」`;
+  return fileCount === null
+    ? `${base}的全部文件（内容原样复制；数量以导入结果为准）`
+    : `${base}的 ${fileCount} 个文件（内容原样复制，不再生成内置骨架）`;
+}
+
+/**
+ * 模板模式下的 `workspaces.importDirectory` 入参（KM-14；纯函数，供测试直取）。
+ *
+ * - 目录名与内置分支**同一条规则**（`scaffoldDirName`；预览 / 消毒逐字不动）；
+ * - `meta` = 内置分支那三样（charaNo / charaName / scriptNo）+ `template: '<id>@<version>'`，
+ *   模板包署名（`pack.json` 的 author / license）读得到就一并带上（读不到不写占位）。
+ */
+export function buildTemplateImportInput(
+  template: KojoTemplateEntry,
+  form: { workName: string; charaName: string; version: string; charaNo: number; scriptNo: number },
+  pack: PackAuthorship | null,
+): { name: string; dirName: string; sourceDir: string; meta: Record<string, unknown> } {
+  const dirName = scaffoldDirName({ workName: form.workName, charaName: form.charaName, version: form.version });
+  const meta: Record<string, unknown> = {
+    charaNo: form.charaNo,
+    charaName: form.charaName,
+    scriptNo: form.scriptNo,
+    template: templateKey(template),
+  };
+  if (pack !== null && pack.author.length > 0) meta.templateAuthor = pack.author;
+  if (pack !== null && pack.license.length > 0) meta.templateLicense = pack.license;
+  return { name: dirName, dirName, sourceDir: template.sourceDir, meta };
+}
+
 /** 「自选…」按钮的对话框标题 */
 const LOCATION_DIALOG_TITLE = '选择新建作品的位置…';
 
@@ -166,6 +281,59 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       if (!gameProject) return [];
       return [...gameProject.charaIndex.values()].sort((a, b) => a.no - b.no);
     }, [gameProject]);
+
+    /* ---------- 模板来源（KM-14；hooks 必须在无项目早退之前） ---------- */
+
+    // 已装模板包：null = 还没拿到（或接线方没给 listTemplates）；[] = 拿到了但没有
+    const [templates, setTemplates] = useState<readonly KojoTemplateEntry[] | null>(null);
+    const [templateValue, setTemplateValue] = useState<string>(BUILTIN_TEMPLATE_VALUE);
+    // 模板落点要复制几个文件：null = 还没数出来 / 目录读不动（预览如实说"以导入结果为准"）
+    const [templateFileCount, setTemplateFileCount] = useState<number | null>(null);
+
+    // 拉取已装模板包：失败按"没装"处理——模板来源是锦上添花，绝不挡住建项目
+    useEffect(() => {
+      const list = deps.listTemplates;
+      if (list === undefined) return;
+      let cancelled = false;
+      void list().then(
+        (entries) => {
+          if (!cancelled) setTemplates([...entries]);
+        },
+        () => {
+          if (!cancelled) setTemplates([]);
+        },
+      );
+      return () => {
+        cancelled = true;
+      };
+    }, [deps]);
+
+    const selectedTemplate = useMemo(
+      () => (templates === null ? null : (templates.find((t) => templateKey(t) === templateValue) ?? null)),
+      [templates, templateValue],
+    );
+
+    // 数模板文件：与 `importDirectory` 同一条枚举口径（walkDir(includeFiles) 里跳过目录），
+    // 让"将导入 N 个文件"这句话数与产物一致
+    useEffect(() => {
+      if (selectedTemplate === null) {
+        setTemplateFileCount(null);
+        return;
+      }
+      let cancelled = false;
+      setTemplateFileCount(null);
+      void deps.io.walkDir(selectedTemplate.sourceDir, { includeFiles: true }).then(
+        (entries) => {
+          if (!cancelled) setTemplateFileCount(entries.filter((e) => !e.isDirectory).length);
+        },
+        () => {
+          if (!cancelled) setTemplateFileCount(null);
+        },
+      );
+      return () => {
+        cancelled = true;
+      };
+    }, [deps, selectedTemplate]);
 
     /* ---------- 无游戏项目：显式降级（角色表无处可取，不猜） ---------- */
     if (!gameProject) {
@@ -201,6 +369,26 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       setBusy(true);
       setError(null);
       try {
+        if (selectedTemplate !== null) {
+          // 模板模式（KM-14）：产物 = 模板包 contentDir 的字节级复制；
+          // 包署名先从 pack.json 读（读不到也不挡创建，importDirectory 会如实报源目录问题）
+          const pack = await readPackAuthorship({ io: deps.io, contentDir: selectedTemplate.sourceDir });
+          const wsProject = await deps.workspaces.create(
+            buildCreateInput({ workName, authorName, version }, chosenRoot),
+          );
+          await deps.workspaces.importDirectory(
+            wsProject.id,
+            buildTemplateImportInput(
+              selectedTemplate,
+              { workName, charaName: chara.name, version, charaNo: chara.no, scriptNo },
+              pack,
+            ),
+          );
+          deps.onCreated();
+          deps.created({ projectId: wsProject.id });
+          deps.close();
+          return;
+        }
         const result = scaffoldKojoProject({
           workName,
           authorName,
@@ -289,6 +477,20 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           h('option', { value: '' }, charas.length > 0 ? '选择角色…' : '（游戏项目无角色表）'),
           charas.map((c) => h('option', { key: c.no, value: String(c.no) }, charaOptionLabel(c)))),
 
+      // 模板来源（KM-14）：接线方给了 listTemplates 才出现这行（没接市场 ⇒ 与历史逐字一致）。
+      // 无模板包时不是把功能藏起来，而是给一条灰字说明——作者看得见"这里还能有别的东西"。
+      deps.listTemplates !== undefined
+        ? h('div', { className: 'wizard-field' },
+            h('span', { className: 'wizard-label' }, '模板来源'),
+            h('select', {
+              value: templateValue,
+              onChange: (e: { target: { value: string } }) => setTemplateValue(e.target.value),
+            },
+              templateSourceChoices(templates ?? []).map((c) =>
+                h('option', { key: c.value, value: c.value, disabled: c.disabled === true }, c.label))),
+            h('div', { className: 'wizard-hint dim' }, '默认用内置骨架；装了模板包，也可以直接从模板开始。'))
+        : null,
+
       // 剧本号（1-10）
       h('label', { className: 'wizard-field' },
         h('span', { className: 'wizard-label' }, '剧本号'),
@@ -330,7 +532,9 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           h('code', null, dirNamePreview || '—')),
         h('div', { className: 'dim' },
           dirNamePreview
-            ? `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳（.kojo，可写 .kojo 也可写原生 ERB）${licenseProducesFile(license) ? ' + LICENSE' : ''}；不含四件套，也不含活函数`
+            ? (selectedTemplate !== null
+              ? templatePreviewLine(selectedTemplate, templateFileCount)
+              : `将生成 ${fileCount} 个文件：中文 README + ${CORE_FACES.length} 个核心面空壳（.kojo，可写 .kojo 也可写原生 ERB）${licenseProducesFile(license) ? ' + LICENSE' : ''}；不含四件套，也不含活函数`)
             : '作品名 / 版本 / 角色名不得为空或仅含非法字符')),
         // 后果提前说到选它的那一刻，而不是等作者点「部署」才吃一个拒绝（看板 HK-9）。
         // class 用既有的 `.wizard-warn`（amber）——部署/导入/新建文件三家向导同一口径，
