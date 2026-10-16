@@ -325,27 +325,22 @@ describe.skipIf(!SMOKE)('真实语料：族归属来源分层（ALS-R1）+ 生�
     }
   }, 300_000);
 
-  it('R2：生效族九张的判表外逐族给出，`SOURCE` 入库后**实际 warn 面恰 3 条**', async () => {
+  it('R2：判表外的盘无关不变量 + transpile 层 guard 回归（SOURCE 恒 0、NOWEX/TEQUIP 种子恒在）', async () => {
     const r = await readings();
-    const perFamily = [...r.unlistedByFamily.entries()].filter(([, n]) => n > 0).sort();
-    // 只有 `NOWEX`（动态索引 i×2 + 汉化写法 COUNT×1）与 `TEQUIP`（真阳性）有残余，其余七张全 0
-    expect(perFamily, `判表外逐族：${JSON.stringify(perFamily)}`).toEqual(
-      r.expected !== undefined && r.expected.unlisted === 3
-        ? [
-            ['NOWEX', 2],
-            ['TEQUIP', 1],
-          ]
-        : [
-            ['NOWEX', 3],
-            ['TEQUIP', 1],
-          ],
-    );
-    // 本批必须守住的不变数：`NOWEX:i`×2（第 5 类）+ `TEQUIP:震动棒`×1（第 4 类真阳性）
-    expect([...r.warnItems.entries()].sort(), `实际 warn：${[...r.warnItems.keys()].join(' ')}`).toEqual([
-      ['NOWEX:i', 2],
-      ['TEQUIP:震动棒', 1],
-    ]);
+    const heads = new Set([...r.unlistedByFamily.entries()].filter(([, n]) => n > 0).map(([f]) => f));
+    // 本测真正守的是「生产放行 guard 不退化」，故只钉与盘内容无关的逻辑不变量：
+    // 1) SOURCE 一旦入库，判表外恒 0（入库漏了 / guard 退化才会让 SOURCE 名漏进判表外）。
     expect(r.sourceUnlisted, 'SOURCE 入库后判表外 = 0（表内名一个都没被误判）').toBe(0);
+    // 2) 两颗种子恒在判表外：NOWEX（动态索引 i + 汉化 COUNT）与 TEQUIP（真阳性震动棒）。
+    expect(heads.has('NOWEX'), `NOWEX 种子缺位：判表外族头=${[...heads].join(',')}`).toBe(true);
+    expect(heads.has('TEQUIP'), `TEQUIP 种子缺位：判表外族头=${[...heads].join(',')}`).toBe(true);
+    expect(heads.has('SOURCE'), 'SOURCE 不该出现在判表外').toBe(false);
+    // 3) warn 面（已剔除引擎全局）恒含 `NOWEX:i` 与 `TEQUIP:震动棒` 两颗 warn（含，非等于——
+    //    粗指纹「CSV份数-ALS份数」认盘：sub-mod 盘把 CFLAG 自定义名 `眠姦口上有` 挂 `FLAG:` 前缀
+    //    引用 ⇒ FLAG 判表外合法增多，代码判其未列是**正确行为**、非回归，故不钉逐族精确总数）。
+    expect([...r.warnItems.keys()], `实际 warn：${[...r.warnItems.keys()].join(' ')}`).toEqual(
+      expect.arrayContaining(['NOWEX:i', 'TEQUIP:震动棒']),
+    );
     if (r.expected) {
       expect(r.sourceRefs, 'SOURCE:具名 二段引用处数').toBe(r.expected.sourceRefs);
       expect(r.sourceTruncated, '被扫描器在 `:` 处截断的 `SOURCE:LOCAL:(LOCAL:1)` 形态处数').toBe(
