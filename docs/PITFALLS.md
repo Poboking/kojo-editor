@@ -45,6 +45,7 @@
 | vite build `prepare-out-dir` 偶发 EPERM（文件瞬时占用） | 手动 `rmSync(dist)` 后重试，不是代码问题 |
 | 语料 `sav\`（与 `C:\game\eratw-save\sav\` 六档逐字节同容）**全带只读属性** ⇒ 注入写盘必失败（原子写 rename 收尾，覆盖只读目标 = EPERM；Rust 未做去 R） | 注入测试先造可写副本：`cmd copy save03.sav save90.sav`（cmd copy **不**继承 R；node `fs.copyFileSync` **会**继承 ⇒ 补 `attrib -R` 兜底），只对副本注入 |
 | **WorkBuddy 沙箱工作树里 pnpm 默认 isolated 布局的 junction 创建静默失败**（2026-10-16 实测）：install rc=0"Done"，但根链接（`node_modules/vitest` 等）与 `.pnpm` 内 scoped 链接全缺、只剩空实体目录 ⇒ `node node_modules/vitest/vitest.mjs` MODULE_NOT_FOUND、`tsc` 报 TS2688 找不到 node 类型；`--force` 与整删重装都复现，%TEMP% 下 junction 却正常 | 改用 hoisted 布局（纯拷贝无链接）：`pnpm install --config.node-linker=hoisted`；**每条会触发依赖校验的 pnpm 命令都会用默认配置把布局打回 isolated**（`pnpm typecheck` 实测先重装再跑脚本）⇒ 跑门槛用直连形态绕开脚本壳（`node node_modules/vitest/vitest.mjs run`、`node node_modules/typescript/lib/tsc.js --noEmit -p …`）或命令行都带 `--config.node-linker=hoisted`；**别改全局/仓库配置**（会溅射别的 agent 的树） |
+| **hoisted 布局下 workspace 链接也会静默全缺（47 的变体，2026-10-16 wt-erb-fmt 实测）**：`packages/*/node_modules/@kojo/*` 的依赖方链接一个都没建、只剩空 scope 目录 ⇒ vitest 走自己的 aliases 照样绿、**tsc 才报 TS2307**（连没改过的文件一起红＝一眼识环境坑，别当自己的 diff 查）；`--force` 与整删 `packages/*/node_modules` 重装都不重建（pnpm 认定 Already up to date） | 手工补 junction（临时 `.mjs` 里 `fs.symlinkSync(target, link, 'junction')`，无需管理员），按健康工作树的 `@kojo` 名单逐个补，补完对拍两树链接集合自检；app typecheck 随即 exit 0 |
 
 ## 三、会话坑（一行制；1–50 = 原 §九去重名单，51 起为重构后新增，细节在 `docs/archive/HANDOFF.md` §九）
 
