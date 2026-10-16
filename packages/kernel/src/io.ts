@@ -390,6 +390,32 @@ export class FileIOServiceImpl implements FileIO {
     return this.bridge.stat(path);
   }
 
+  /**
+   * 批量 stat（PERF-10b）：**透传平台桥现成的 `statFiles` 命令**，按 `STAT_CHUNK_SIZE` 分块
+   * （与 `readTexts` 校验会话缓存用的是同一条桥命令、同一份分块常量 ⇒ 没有第二套批量形态）。
+   *
+   * 判定与 `exists`/`stat` 同源（桥侧同一道 `metadata`/`stat` 调用），本层不改判据、不加缓存：
+   * "在不在位"是每次真问盘一次的答案，缓存它 = 造出第二份真相。
+   * 桥少回某一项（契约上不该发生）⇒ 该位按"取不到"给出 `exists:false` 并**出声**，绝不静默补位。
+   */
+  async statFiles(paths: readonly string[]): Promise<BatchFileStat[]> {
+    const out: BatchFileStat[] = [];
+    for (let start = 0; start < paths.length; start += STAT_CHUNK_SIZE) {
+      const chunk = paths.slice(start, start + STAT_CHUNK_SIZE);
+      const got = await this.bridge.statFiles(chunk);
+      for (let k = 0; k < chunk.length; k++) {
+        const st = got[k];
+        if (st === undefined) {
+          this.log?.warn(`statFiles: 桥未返回第 ${k} 项（按"取不到"处理）：${chunk[k]!}`);
+          out.push({ path: chunk[k]!, exists: false, mtimeMs: null, size: null });
+          continue;
+        }
+        out.push(st);
+      }
+    }
+    return out;
+  }
+
   /* --------------------------- 写白名单 --------------------------- */
 
   setWritableRoots(roots: string[]): void {

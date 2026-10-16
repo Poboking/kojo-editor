@@ -119,6 +119,8 @@ function makeFs(io: HarnessOptions = {}) {
     exists: async (p: string): Promise<boolean> => p in files,
     stat: async (p: string): Promise<FileStat | null> =>
       p in files ? { size: files[p]!.length, mtimeMs: 1, isDirectory: false } : null,
+    // 契约 additive（2026-10-16 PERF-10b 批量 stat）：本夹具不核落点 ⇒ 走到即红
+    statFiles: async () => { throw new Error('statFiles is not wired in this fake'); },
     setWritableRoots: () => {},
     setAppWritableRoots: () => {},
     addAppWritableRoot: () => {},

@@ -172,6 +172,16 @@ function makeIo(): CountingIo {
       if (broken && p === join(ROOT, 'index.json')) throw new Error('EIO: 目录读不动');
       return fs.exists(p);
     },
+    // 批量 stat（PERF-10b：`installed()` 一趟核完全部落点）：判定与本夹具的 `exists` 同源
+    async statFiles(paths) {
+      calls.push(`statFiles:${paths.length}`);
+      return paths.map((p) => {
+        const b = fs.files.get(p);
+        if (b !== undefined) return { path: p, exists: true, mtimeMs: 1, size: b.length };
+        if (fs.dirs.has(p)) return { path: p, exists: true, mtimeMs: 1, size: 0 };
+        return { path: p, exists: false, mtimeMs: null, size: null };
+      });
+    },
     async stat(p) {
       const b = fs.files.get(p);
       return b === undefined ? null : { size: b.length, mtimeMs: 1, isDirectory: false };

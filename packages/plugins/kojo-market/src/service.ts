@@ -214,8 +214,19 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     | { readonly kind: 'invalid'; readonly reason: string; readonly detail: string }
     | { readonly kind: 'parsed'; readonly index: MarketIndex; readonly dropped: readonly string[] };
 
+  /**
+   * 一次刷新周期内共享的「索引读」槽（PERF-10b）。
+   *
+   * **生命周期 = 一次 `refreshIndex()` 调用之内**（局部变量，随调用结束一起消失），
+   * 全仓没有第二个持有者，也就没有"跨调用留一份索引在内存里"这种东西。
+   */
+  interface IndexReadSlot {
+    /** 本周期已经读到的那一份；`undefined` = 还没读过 */
+    memo?: Promise<ParsedIndex>;
+  }
+
   /** 索引文件的原始读结果（**不出声**——出声口径在 `readIndexState()`，装前查重不该把"没有索引"当错误报） */
-  async function parseIndexFile(): Promise<ParsedIndex> {
+  async function readIndexFileOnce(): Promise<ParsedIndex> {
     if (!(await io.exists(indexPath))) return { kind: 'absent' };
     let rawJson: unknown;
     try {
@@ -236,6 +247,23 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       };
     }
     return { kind: 'parsed', index, dropped };
+  }
+
+  /**
+   * 读索引文件；给了 `slot` ⇒ **同一个刷新周期内只真读盘一次**，后来的读点复用那一份
+   * （PERF-10b 要压掉的就是"一次刷新的多个分支各自 `exists`+`readText`+`JSON.parse`+查重 一遍"）。
+   *
+   * ⚠ **这不是缓存，也绝不许做成缓存**：`readIndexState` 同时是索引的**失效判据**来源
+   * （契约 `MarketService.index()` 的三态就是"盘上这一份现在到底是什么样"）。
+   * - **读到旧值的唯一情形**：同一个 `refreshIndex()` 调用内部、且这中间**没有发生过写盘**
+   *   ——此时几个读点要的就是同一个事实，合并是刻意的（`writeText` 之后本槽立刻作废，见下）；
+   * - **跨周期每次重读**：`index()`、装前查重（`findIdKindClash`）都不带 `slot`，
+   *   两次 `refreshIndex()` 之间也不共享任何东西 ⇒ 外部改了 `index.json` 下一次一定读得到。
+   */
+  async function parseIndexFile(slot?: IndexReadSlot): Promise<ParsedIndex> {
+    if (slot === undefined) return readIndexFileOnce();
+    if (slot.memo === undefined) slot.memo = readIndexFileOnce();
+    return slot.memo;
   }
 
   async function readFetchedAt(): Promise<number | null> {
@@ -270,8 +298,8 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
   }
 
   /** 三态判别联 + 出声（缺 / 坏 / 可用；可用时把被剔除条目一并带出） */
-  async function readIndexState(): Promise<MarketIndexState> {
-    const parsed = await parseIndexFile();
+  async function readIndexState(slot?: IndexReadSlot): Promise<MarketIndexState> {
+    const parsed = await parseIndexFile(slot);
     if (parsed.kind === 'absent') {
       log.warn(`注册表索引不在位（本机还没拉过）：${indexPath}`);
       return { state: 'absent' };
@@ -296,17 +324,20 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
   }
 
   async function refreshIndex(opts?: { force?: boolean }): Promise<MarketIndexRefresh> {
+    // 一次刷新的**读盘合并槽**：下面这些分支各自要盘上那份状态时只真读一次（PERF-10b）。
+    // 它是本函数的局部量 ⇒ 出了这一次调用就作废，两次刷新之间不共享任何东西。
+    const slot: IndexReadSlot = {};
     const url = await effectiveEndpoint();
     const problem = endpointProblem(url);
     if (problem !== null) {
       const reason = `注册表地址不合法：${problem}`;
       log.warn(`${reason} —— ${url}`);
-      return { state: 'failed', reason, detail: url, index: await readIndexState() };
+      return { state: 'failed', reason, detail: url, index: await readIndexState(slot) };
     }
     const previous = await readFetchedAt();
     if (opts?.force !== true && previous !== null && now() - previous < MARKET_INDEX_TTL_MS) {
       // TTL 窗口内**不回源**（开一次面板打一次 1.6 KB 也是打，但每次点开都打就没必要）
-      return { state: 'cached', fetchedAt: previous, index: await readIndexState() };
+      return { state: 'cached', fetchedAt: previous, index: await readIndexState(slot) };
     }
     let fetched: RemoteText;
     try {
@@ -318,7 +349,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     } catch (err) {
       const reason = `从注册表拉列表没有成功：${errMessage(err)}`;
       log.warn(`${reason} —— ${url}`);
-      return { state: 'failed', reason, detail: url, index: await readIndexState() };
+      return { state: 'failed', reason, detail: url, index: await readIndexState(slot) };
     }
     let rawJson: unknown;
     try {
@@ -326,13 +357,13 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     } catch (err) {
       const reason = `注册表回来的内容不是合法 JSON：${errMessage(err)}`;
       log.warn(`${reason} —— ${url}`);
-      return { state: 'failed', reason, detail: url, index: await readIndexState() };
+      return { state: 'failed', reason, detail: url, index: await readIndexState(slot) };
     }
     const checked = parseIndex(rawJson);
     if (checked.index === null) {
       const reason = '注册表回来的列表形状不受支持（本机这份原样未动）';
       log.warn(`${reason} —— ${url}`);
-      return { state: 'failed', reason, detail: url, index: await readIndexState() };
+      return { state: 'failed', reason, detail: url, index: await readIndexState(slot) };
     }
     // 校验通过**才**覆盖：失败的刷新永远不许把好用的旧列表换成坏文件。
     // 写的是**原文**（一字不改的镜像）⇒ 坏条目留在盘上、每次读都重新报进 `dropped`，
@@ -343,13 +374,16 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     } catch (err) {
       const reason = `列表落盘失败：${errMessage(err)}`;
       log.warn(`${reason} —— ${indexPath}`);
-      return { state: 'failed', reason, detail: indexPath, index: await readIndexState() };
+      return { state: 'failed', reason, detail: indexPath, index: await readIndexState(slot) };
     }
+    // 盘上刚换过一份 ⇒ 合并槽里那份立刻作废，下面这一次读**必须回盘**读到刚写的那一份
+    // （不然"刷新成功却返回刷新前的旧列表"就是本次合并唯一可能引进的错，钉死在这里）。
+    slot.memo = undefined;
     await storage.set(FETCHED_AT_KEY, stamped);
     log.info(
       `注册表列表已更新（${checked.index.packs.length} 个包 / ${fetched.bytes} 字节）：${url}`,
     );
-    return { state: 'refreshed', fetchedAt: stamped, index: await readIndexState() };
+    return { state: 'refreshed', fetchedAt: stamped, index: await readIndexState(slot) };
   }
 
   /**
@@ -650,7 +684,11 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       return deps.root;
     },
 
-    index: readIndexState,
+    /**
+     * 契约面**不接受任何入参**（`MarketService.index()`）：不直接写 `readIndexState` 是为了
+     * 不让"外来的第一个实参"意外变成一个刷新作用域（带 slot 就会复用那一次读，而契约要的是每次现读）。
+     */
+    index: (): Promise<MarketIndexState> => readIndexState(),
 
     refreshIndex,
 
@@ -674,11 +712,17 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
 
     async installed(): Promise<InstalledPack[]> {
       const list = await readRecords();
+      // 落点**不存字段**（契约 A3）：按派生路径核，记账里没有第二份真相。
+      // 趟数形态（PERF-10b）：旧写法是 N 条记录 = N 趟串行 `await io.exists`，
+      // 现在 N 条 = **一趟**批量 stat（内核侧按 512 分块走平台现成的 `statFiles` 命令，
+      // 判定与 `exists` 同源：同一个 metadata/stat 调用、取不到一律 `exists:false`，不猜、不补位）。
+      const dirs = list.map((r) => dirOf(r.kind, r.id, r.version));
+      const stats = dirs.length === 0 ? [] : await io.statFiles(dirs);
       const alive: InstalledPack[] = [];
       const lost: string[] = [];
-      for (const r of list) {
-        // 落点**不存字段**（契约 A3）：按派生路径核，记账里没有第二份真相
-        if (await io.exists(dirOf(r.kind, r.id, r.version))) alive.push(r);
+      for (let i = 0; i < list.length; i++) {
+        const r = list[i]!;
+        if (stats[i]?.exists === true) alive.push(r);
         else lost.push(`${r.kind}/${r.id} v${r.version}`);
       }
       if (lost.length > 0) {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as nodeJoin } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -13,6 +13,7 @@ import {
   packStagingNames,
   packUnpackedName,
   type FileIO,
+  type BatchFileStat,
   type InstalledPack,
   type Logger,
   type MarketIndexEntry,
@@ -98,6 +99,18 @@ function fakeIo(root: string): FileIO {
           return false;
         }
       }
+    },
+    // 批量 stat（PERF-10b：`installed()` 核落点用这一条，不再逐条 exists）：
+    // 判定与上面的 `exists` 同源同口径（同一次 fs 访问，取不到 ⇒ exists:false + null 数值，不猜）
+    async statFiles(paths: readonly string[]): Promise<BatchFileStat[]> {
+      return paths.map((p) => {
+        try {
+          const st = statSync(p);
+          return { path: p, exists: true, mtimeMs: st.mtimeMs, size: st.size };
+        } catch {
+          return { path: p, exists: false, mtimeMs: null, size: null };
+        }
+      });
     },
     async listDir(p: string) {
       return readdirSync(p, { withFileTypes: true }).map((d) => ({

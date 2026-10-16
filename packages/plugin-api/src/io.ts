@@ -1,4 +1,4 @@
-import type { DirEntry, FileEncoding, FileStat, WalkOptions } from './platform';
+import type { BatchFileStat, DirEntry, FileEncoding, FileStat, WalkOptions } from './platform';
 
 export type EolStyle = 'crlf' | 'lf';
 
@@ -103,6 +103,20 @@ export interface FileIO {
   walkDir(path: string, opts?: WalkOptions): Promise<DirEntry[]>;
   exists(path: string): Promise<boolean>;
   stat(path: string): Promise<FileStat | null>;
+  /**
+   * **批量** stat（2026-10-16 批量 IO 批交付在平台桥 `PlatformBridge.statFiles`；
+   * 本方法是它在 `FileIO` 面上的透传，PERF-10b 追加）。
+   *
+   * 语义与 `exists`/`stat` 逐字对齐，差异只有一条：**N 个路径一趟**（内核按固定分块走
+   * 桥的批量命令），不再"逐条 await"。判定量级不变——目录同样在判定面内（`exists` 本来
+   * 就答目录在不在位），只是往返次数从 N 变成 1。
+   *
+   * - 返回数组与入参**一一对应**（含重复路径）；取不到/不存在 ⇒ `exists:false` + null 数值
+   *   （判据不猜，绝不拿 0 兜底）；
+   * - 只读操作：**不受写允许域约束**（与 `exists`/`stat` 同口径，游戏目录里的东西照样核得到）；
+   * - 单路径请继续用 `exists`/`stat`——批量命令有一次性序列化成本，一条不值得。
+   */
+  statFiles(paths: readonly string[]): Promise<BatchFileStat[]>;
   /** 声明可写根（由项目打开流程调用；替换而非追加） */
   setWritableRoots(roots: string[]): void;
   /**
