@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Kernel } from '@kojo/kernel';
-import { isUnderAnyRoot, workspaceRootsOf } from '../src/ui/workspace-roots';
+import { isUnderAnyRoot, planAddExtraRoot, workspaceRootsOf } from '../src/ui/workspace-roots';
 
 /**
  * 工作区**全部**根的读取与判定（2026-10-14 新建项目自选位置批）。
@@ -81,5 +81,33 @@ describe('isUnderAnyRoot', () => {
   it('POSIX 根不折叠大小写（判定风格以根为准，别把 Linux 路径当 Windows 比）', () => {
     expect(isUnderAnyRoot(['/home/dev/workspaces'], '/home/dev/WorkSpaces/p1/a.ERB')).toBe(false);
     expect(isUnderAnyRoot(['/home/dev/workspaces'], '/home/dev/workspaces/p1/a.ERB')).toBe(true);
+  });
+});
+
+/* ------------------------------ D1：会话级附加根的去重计划 ------------------------------ */
+
+describe('planAddExtraRoot · 添加文件夹到工作区的计划', () => {
+  it('新文件夹：追加到列表尾部，无需出声', () => {
+    const plan = planAddExtraRoot(['D:/作品'], 'E:/借阅');
+    expect(plan.roots).toEqual(['D:/作品', 'E:/借阅']);
+    expect(plan.note).toBeNull();
+  });
+
+  it('重复加（pathKey 归一判等：分隔符/大小写写法差异不算新根）：原样返回 + 一句人话', () => {
+    const plan = planAddExtraRoot(['D:/作品'], 'd:\\作品\\');
+    expect(plan.roots).toEqual(['D:/作品']);
+    expect(plan.note).toContain('已经在工作区里');
+  });
+
+  it('选了项目根本身：拒绝 + 说清为什么（它本来就在树里、也在检索里）', () => {
+    const plan = planAddExtraRoot([], 'C:/GAME', 'C:/game');
+    expect(plan.roots).toEqual([]);
+    expect(plan.note).toContain('当前项目所在的位置');
+  });
+
+  it('空列表加第一个根：直接成', () => {
+    const plan = planAddExtraRoot([], 'E:/借阅');
+    expect(plan.roots).toEqual(['E:/借阅']);
+    expect(plan.note).toBeNull();
   });
 });

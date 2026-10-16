@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deleteConfirmText,
   fsLocatePlanOf,
+  fsLocatePlanOfRoots,
   isUnderPath,
   joinPath,
   locatePlanOf,
@@ -260,5 +261,47 @@ describe('fsLocatePlanOf · 文件系统视图的定位（从根到目标逐级�
   it('根尾随分隔符不产生空段；前缀巧合不算（/game 不含 /game2）', () => {
     expect(fsLocatePlanOf('C:/game/', 'C:/game/a.ERB')).toEqual([]);
     expect(fsLocatePlanOf('C:/game', 'C:/game2/sub/a.ERB')).toBeNull();
+  });
+});
+
+/* ------------------------------ D1：多根文件系统视图的定位 ------------------------------ */
+
+describe('fsLocatePlanOfRoots · 多根 fs 视图的定位（归属到根 + 从该根展开）', () => {
+  const roots = ['C:/game', 'D:/参考资料'];
+
+  it('附加根内的文件：归属到附加根，祖先从附加根起算', () => {
+    expect(fsLocatePlanOfRoots(roots, 'D:/参考资料/ERB/a.ERB')).toEqual({
+      root: 'D:/参考资料',
+      dirs: ['D:/参考资料/ERB'],
+    });
+  });
+
+  it('项目根内的文件：归属到项目根（附加根是并列的另一棵，不抢）', () => {
+    expect(fsLocatePlanOfRoots(roots, 'C:/game/ERB/kojo/a.ERB')).toEqual({
+      root: 'C:/game',
+      dirs: ['C:/game/ERB', 'C:/game/ERB/kojo'],
+    });
+  });
+
+  it('附加根嵌在项目根之下时取最长前缀（子目录树归附加根，不被项目根吞掉）', () => {
+    const nested = ['C:/game', 'C:/game/参考'];
+    expect(fsLocatePlanOfRoots(nested, 'C:/game/参考/笔记/a.ERB')).toEqual({
+      root: 'C:/game/参考',
+      dirs: ['C:/game/参考/笔记'],
+    });
+    // 附加根之外的文件仍归项目根
+    expect(fsLocatePlanOfRoots(nested, 'C:/game/ERB/a.ERB')?.root).toBe('C:/game');
+  });
+
+  it('都不包含 / 文件就是某个根自身：null——调用侧安静放弃', () => {
+    expect(fsLocatePlanOfRoots(roots, 'E:/elsewhere/a.ERB')).toBeNull();
+    expect(fsLocatePlanOfRoots(roots, 'C:/game')).toBeNull();
+  });
+
+  it('根层直挂文件：root 给出、dirs 为空（无需展开，等根层列举回来即可滚）', () => {
+    expect(fsLocatePlanOfRoots(roots, 'D:/参考资料/README.txt')).toEqual({
+      root: 'D:/参考资料',
+      dirs: [],
+    });
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-api';
 import { WellKnownCommands } from '@kojo/plugin-api';
@@ -16,6 +16,8 @@ import { collectSearchScopes, type SearchScopeCatalog } from './search-scope';
 import { workspaceRootsOf } from './workspace-roots';
 import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
+import { TabBar } from './tabs-bar';
+import type { BatchCloseMode } from './tabs-ops';
 
 interface Props {
   kernel: Kernel;
@@ -29,14 +31,20 @@ interface Props {
   openTabs: readonly string[];
   /** 各标签脏态（标签栏脏点，见 `.tab-dirty`） */
   dirtyPaths: ReadonlySet<string>;
+  /** 固定标签集合（C2；会话态——与 openTabs 同生命周期，真源在宿主 App） */
+  pinnedPaths: ReadonlySet<string>;
   reveal: RevealTarget | null;
   onOpenFile: (path: string) => void;
   /** 激活标签（点击标签 = 打开/切换；不丢内容） */
   onActivateTab: (path: string) => void;
   /** 请求关闭标签（脏标签由宿主弹确认） */
   onRequestCloseTab: (path: string) => void;
-  /** 拖拽重排标签：把 path 移动到 toIndex（删除后插入语义） */
+  /** 拖拽重排标签：把 path 移动到 toIndex（删除后插入语义；跨固定区分界自动改固定态） */
   onReorderTab: (path: string, toIndex: number) => void;
+  /** 固定 / 取消固定标签（C2；顺序重排真源在宿主） */
+  onTogglePin: (path: string) => void;
+  /** 批量关闭（C1）：关闭其他 / 右侧 / 全部——计划与逐个确认链都在宿主，这里只发意图 */
+  onBatchCloseTab: (mode: BatchCloseMode, anchor: string) => void;
   /** 全部保存（Ctrl+Shift+S 壳层命令落地处） */
   onSaveAll: () => Promise<boolean>;
   /** 编辑器脏状态上抛（按路径；宿主维护 dirtyPaths） */
@@ -63,12 +71,13 @@ interface Props {
    * 去抖延迟，落文件的那次重列等不起，这里给一条直通车。形态照 registerActions。
    */
   registerTreeRefresh?: (refresh: () => void) => void;
-}
-
-/** 标签显示名：路径末段（完整路径留 title 悬浮提示） */
-function tabName(path: string): string {
-  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-  return i >= 0 ? path.slice(i + 1) : path;
+  /**
+   * 会话级附加根（D1，对标 VSCode Add Folder to Workspace）：真源在宿主 App
+   * （关项目即清），这里只透传给文件树（fs 视图多根并列）与检索面板（并入检索根）。
+   */
+  extraRoots?: readonly string[];
+  /** 「添加文件夹…」入口（对话框与去重都在宿主 App，这里只发意图） */
+  onAddExtraRoot?: () => void;
 }
 
 /**
@@ -97,11 +106,14 @@ export function ProjectView({
   activeFile,
   openTabs,
   dirtyPaths,
+  pinnedPaths,
   reveal,
   onOpenFile,
   onActivateTab,
   onRequestCloseTab,
   onReorderTab,
+  onTogglePin,
+  onBatchCloseTab,
   onSaveAll,
   onDirtyChange,
   registerActions,
@@ -112,6 +124,8 @@ export function ProjectView({
   guardFileOp,
   onFilesGone,
   registerTreeRefresh,
+  extraRoots,
+  onAddExtraRoot,
 }: Props): ReactElement {
   const [editorStatus, setEditorStatus] = useState<EditorStatusInfo | null>(null);
   /** 壳层通知（G1：命令按下去必须有回应——兑现不了就说一句人话，不灰掉不说话） */
@@ -273,8 +287,8 @@ export function ProjectView({
     };
   }, [kernel, project]);
 
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer };
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], onAddExtraRoot: undefined as (() => void) | undefined });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], onAddExtraRoot };
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
       const a = fileTreeArgsRef.current;
@@ -293,6 +307,8 @@ export function ProjectView({
           onRevealInExplorer={a.onRevealInExplorer}
           refreshNonce={a.treeNonce}
           gloss={a.gloss}
+          extraRoots={a.extraRoots}
+          onAddFolder={a.onAddExtraRoot}
         />
       );
     };
@@ -333,14 +349,15 @@ export function ProjectView({
   /**
    * 侧栏「搜索」视图的稳定组件身份（同 problemComponent 的 ref 闭包写法）。
    *
-   * 检索根 = **项目根 ∪ 作者工作区全部根**：工作区自 2026-10-14 起不再是一个目录
-   * （默认根 + 对话框自选根），只搜项目根会把作者自己写的口上文件整批漏掉。
+   * 检索根 = **项目根 ∪ 会话级附加根（D1）∪ 作者工作区全部根**：工作区自 2026-10-14 起
+   * 不再是一个目录（默认根 + 对话框自选根），只搜项目根会把作者自己写的口上文件整批漏掉；
+   * 附加根同理——加进来就是为了"这部分也要能搜到"，漏掉等于没加。
    * 跳转仍走既有 `editor.revealLocation`（与问题面板同一条通道）。
    */
   const searchArgsRef = useRef({ kernel, roots: [] as string[], scopes: NO_SEARCH_SCOPES });
   searchArgsRef.current = {
     kernel,
-    roots: [...new Set([project.rootDir, ...workspaceRootsOf(kernel)])],
+    roots: [...new Set([project.rootDir, ...(extraRoots ?? []), ...workspaceRootsOf(kernel)])],
     scopes: searchScopes,
   };
   const searchComponent = useMemo(() => {
@@ -402,46 +419,22 @@ export function ProjectView({
     [fileTreeComponent, problemComponent, searchComponent],
   );
 
-  /* ---------------- 标签栏：拖拽重排 + 滚轮横滚 + 活动标签滚入视口 ---------------- */
+  /* ---------------- 标签栏（C1/C2/C3）：渲染与交互在 TabBar，宿主只接回调 ---------------- */
 
-  /** 标签拖拽的自定义 MIME（只在标签条内部流转，防外部拖入误触发） */
-  const TAB_DRAG_MIME = 'application/x-kojo-tab-move';
-  const tabsRef = useRef<HTMLDivElement | null>(null);
-  const [tabDropAt, setTabDropAt] = useState<{ path: string; before: boolean } | null>(null);
-
-  // 活动标签保持可见（标签多到溢出时，点击树中文件也能定位到对应标签）
-  useEffect(() => {
-    tabsRef.current
-      ?.querySelector('.editor-tab.active')
-      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [activeFile, openTabs.length]);
-
-  const onTabDragStart = (e: ReactDragEvent, p: string): void => {
-    e.dataTransfer.setData(TAB_DRAG_MIME, p);
-    e.dataTransfer.setData('text/plain', p);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-  const onTabDragOver = (e: ReactDragEvent, p: string): void => {
-    if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const r = e.currentTarget.getBoundingClientRect();
-    setTabDropAt({ path: p, before: e.clientX < r.left + r.width / 2 });
-  };
-  const onTabDrop = (e: ReactDragEvent, p: string): void => {
-    const dragPath = e.dataTransfer.getData(TAB_DRAG_MIME);
-    setTabDropAt(null);
-    if (!dragPath || dragPath === p) return;
-    e.preventDefault();
-    const from = openTabs.indexOf(dragPath);
-    let to = openTabs.indexOf(p);
-    if (from < 0 || to < 0) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    if (e.clientX >= r.left + r.width / 2) to++;
-    if (from < to) to--;
-    if (from !== to) onReorderTab(dragPath, to);
-  };
-  const onTabDragEnd = (): void => setTabDropAt(null);
+  /**
+   * 「全部保存」显性按钮的落地面（C3）：无脏标签时按下去也要有响（铁律 4）——
+   * 回一句人话而不是沉默；有脏时走既有 saveAll，成功也给一句轻反馈
+   * （失败方 EditorPane 的保存链路已显式报错，这里不重复）。
+   */
+  const handleSaveAllClick = useCallback(() => {
+    if (dirtyPaths.size === 0) {
+      notify({ kind: 'info', message: '没有未保存的修改' });
+      return;
+    }
+    void onSaveAll().then((ok) => {
+      if (ok) notify({ kind: 'info', message: '已保存全部修改' });
+    });
+  }, [dirtyPaths, onSaveAll, notify]);
 
   return (
     <ShellLayout
@@ -461,60 +454,21 @@ export function ProjectView({
       extraCommands={extraCommands}
       onRegisterWorkbench={setWorkbench}
     >
-      {/* 标签栏（P3：中键/关闭钮；脏点；拖拽重排；滚轮横滚；溢出隐藏滚动条） */}
+      {/* 标签栏（C1 右键菜单 / C2 固定标签 / C3 全部保存入口；渲染细节在 TabBar） */}
       {openTabs.length > 0 ? (
-        <div
-          ref={tabsRef}
-          className="editor-tabs"
-          role="tablist"
-          onWheel={(e) => {
-            // 垂直滚轮转横向滚动（现代编辑器的无感横滚；滚动条隐藏后这是主要滚动途径）
-            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-              e.currentTarget.scrollLeft += e.deltaY;
-            }
-          }}
-        >
-          {openTabs.map((p) => (
-            <div
-              key={p}
-              role="tab"
-              aria-selected={p === activeFile}
-              className={`editor-tab ${p === activeFile ? 'active' : ''} ${
-                tabDropAt?.path === p ? (tabDropAt.before ? 'drop-before' : 'drop-after') : ''
-              }`}
-              title={p}
-              draggable
-              onDragStart={(e) => onTabDragStart(e, p)}
-              onDragOver={(e) => onTabDragOver(e, p)}
-              onDrop={(e) => onTabDrop(e, p)}
-              onDragEnd={onTabDragEnd}
-              onClick={() => onActivateTab(p)}
-              onAuxClick={(e) => {
-                if (e.button === 1) {
-                  e.preventDefault();
-                  onRequestCloseTab(p);
-                }
-              }}
-            >
-              <span className="tab-label">{tabName(p)}</span>
-              {dirtyPaths.has(p) ? (
-                <span className="tab-dirty" title="未保存">
-                  <Icon name="circle-filled" size={9} />
-                </span>
-              ) : null}
-              <button
-                className="tab-close"
-                title="关闭标签 (Ctrl+W)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRequestCloseTab(p);
-                }}
-              >
-                <Icon name="close" size={13} />
-              </button>
-            </div>
-          ))}
-        </div>
+        <TabBar
+          openTabs={openTabs}
+          activeFile={activeFile}
+          dirtyPaths={dirtyPaths}
+          pinnedPaths={pinnedPaths}
+          onActivateTab={onActivateTab}
+          onRequestCloseTab={onRequestCloseTab}
+          onReorderTab={onReorderTab}
+          onTogglePin={onTogglePin}
+          onBatchCloseTab={onBatchCloseTab}
+          onSaveAllClick={handleSaveAllClick}
+          hasDirty={dirtyPaths.size > 0}
+        />
       ) : null}
       {/* 只读横幅（P0 实机反馈修复）：重授权入口常驻可见可点 */}
       {!writable ? (

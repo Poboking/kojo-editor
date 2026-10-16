@@ -12,7 +12,7 @@ import {
 } from './file-tree-reveal';
 import {
   deleteConfirmText,
-  fsLocatePlanOf,
+  fsLocatePlanOfRoots,
   isUnderPath,
   joinPath,
   locatePlanOf,
@@ -80,6 +80,14 @@ interface Props {
    * 渲染为「日文（中文）」。**只改显示文本**——title / path / key 一律用原名。
    */
   gloss?: (name: string) => string;
+  /**
+   * 会话级附加根（D1，对标 VSCode Add Folder to Workspace）：fs 视图根层与项目根
+   * 并列显示的额外根。缺省 → fs 视图维持单根（零视觉扰动）；非空 → 根层每根一个
+   * 分组头（复用 subOpen 折叠 + dirCache 惰性列举）。
+   */
+  extraRoots?: readonly string[];
+  /** 「添加文件夹…」入口（对话框与去重都在宿主 App；缺省 → 按钮不显示） */
+  onAddFolder?: () => void;
 }
 
 /** 作者包子目录（角色目录下的一层子文件夹 = 作者版本号包目录） */
@@ -438,7 +446,7 @@ export function FileRows({ files, limit, activeFile, onOpenFile, edit, onFileCon
  * （不闪空白）。此前 `dirCache` 没有任何失效通道 ⇒ 外面丢进一个文件，树里不出现，
  * 除非重开项目——实机线在 §5.87 里把这条明记为"留给能做 GUI 的那一批"。
  */
-export function FileTree({ project, index, activeFile, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss }: Props): ReactElement {
+export function FileTree({ project, index, activeFile, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder }: Props): ReactElement {
   /** 名称显示对照（缺省 = 恒等，保持旧行为） */
   const glossOf = gloss ?? ((n: string): string => n);
   const [filter, setFilter] = useState('');
@@ -609,14 +617,25 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   };
 
   /**
+   * fs 视图的根层清单（D1 会话级附加根）：项目根恒在首位，附加根按加入顺序并列。
+   * 只有**一个**根时维持 B5 原形态（根层直接铺开、无分组头），零视觉扰动。
+   */
+  const fsRoots = useMemo<string[]>(
+    () => [project.rootDir, ...(extraRoots ?? [])],
+    [project.rootDir, extraRoots],
+  );
+  const multiRootFs = fsRoots.length > 1;
+
+  /**
    * 进入文件系统视图（B5）时惰性取项目根的第一层：根 = `project.rootDir`
    * （GameProject 契约的项目根字段，口上目录们与其他一切都在它之下）。
    * 失败（浏览器壳无桌面壳权限等）走 dirRows 既有 error 态口径——「目录读取失败（需要桌面壳权限）」。
+   * 多根形态（D1）：根头默认**折叠**，展开（toggleSub）时才取——不为看不见的东西打 IO。
    */
   useEffect(() => {
-    if (view === 'fs') ensureDir(project.rootDir);
+    if (view === 'fs' && !multiRootFs) ensureDir(project.rootDir);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, project.rootDir, listDir]);
+  }, [view, project.rootDir, listDir, multiRootFs]);
 
   /** 收集作用域内全部作者包（根散文件无包目录，不在真实文件夹视图范围） */
   const collectPackages = (scope: MenuScope): Array<{ key: string; dir: string; group: string }> => {
@@ -689,8 +708,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
    */
   const relistShown = (): void => {
     for (const dir of dirsToRelist(subOpen, pkgFolder, collectPackages({ kind: 'root' }))) fetchDir(dir);
-    // 文件系统视图（B5）：根层始终显示，一并重列
-    if (view === 'fs') fetchDir(project.rootDir);
+    // 文件系统视图（B5/D1）：根层全部根一并重列（多根时折叠着的也会被取到顶层——手动
+    // 重读是显式动作，宁可多取一层也不留"按了刷新还有根没重列"的疑心）
+    if (view === 'fs') for (const r of fsRoots) fetchDir(r);
   };
 
   const lastNonce = useRef(refreshNonce);
@@ -990,19 +1010,25 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   useEffect(() => {
     if (!locateReq) return;
     if (view === 'fs') {
-      // 文件系统视图：locatePlanOf 是语义树口径，不适用——退化为「从根到 activeFile 逐级展开」。
+      // 文件系统视图：locatePlanOf 是语义树口径，不适用——退化为「从所属根到 activeFile
+      // 逐级展开」（D1：fsRoots 逐根算归属，附加根内的文件同样定位得到）。
       // 目录列举是异步的：父层清单没回来时先不清请求也不硬滚（dirCache 变化会重跑本 effect），
       // 回来后行已挂载，两拍 rAF 再滚（nearest 只滚到刚好可见，不拽容器乱跳）。
-      const dirs = fsLocatePlanOf(project.rootDir, locateReq.file);
-      if (!dirs) {
-        setLocateReq(null); // 不在项目根下：安静放弃，不报错
+      const plan = fsLocatePlanOfRoots(fsRoots, locateReq.file);
+      if (!plan) {
+        setLocateReq(null); // 不在任何根下：安静放弃，不报错
         return;
       }
-      for (const d of dirs) {
+      if (multiRootFs) {
+        // 多根形态：先把所属根的分组头打开（单根形态没有分组头，根层本来就铺开）
+        setSubOpen((prev) => new Set(prev).add(plan.root));
+        ensureDir(plan.root);
+      }
+      for (const d of plan.dirs) {
         setSubOpen((prev) => new Set(prev).add(d));
         ensureDir(d);
       }
-      const parent = dirs[dirs.length - 1] ?? project.rootDir;
+      const parent = plan.dirs[plan.dirs.length - 1] ?? plan.root;
       const st = dirCache.get(parent);
       if (st === undefined || st === 'loading') return; // 等列举回来
       if (st === 'error') {
@@ -1214,12 +1240,21 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
             className="ghost small"
             title={
               view === 'kojo'
-                ? '切换到整个游戏目录（文件系统视图：项目根下的真实路径，可新建/重命名/删除）'
+                ? '切换到文件系统视图（项目根与添加进来的文件夹的真实路径，可新建/重命名/删除）'
                 : '切换回口上树（角色 → 作者包 → 口上文件）'
             }
             onClick={() => setView((v) => (v === 'kojo' ? 'fs' : 'kojo'))}
           >
             {view === 'kojo' ? '全部文件' : '口上视图'}
+          </button>
+        ) : null}
+        {onAddFolder ? (
+          <button
+            className="ghost small"
+            title="把一个文件夹加进工作区（在「全部文件」视图浏览、搜索也能搜到；只对本次会话有效，重开项目后清除）"
+            onClick={onAddFolder}
+          >
+            添加文件夹…
           </button>
         ) : null}
         {view === 'kojo' ? (
@@ -1257,10 +1292,38 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       ) : null}
       <ul className="tree-groups" ref={treeBodyRef}>
         {view === 'fs' ? (
-          // 文件系统视图（B5）：根 = project.rootDir，第一层内容直接铺开，可继续递归展开。
-          // 复用 dirRows（惰性加载 / 二进制标记 / gloss / B1 右键菜单全在）；根层还没取到时给一句
-          // 「读取目录…」，失败走 dirRows 既有 error 态（需要桌面壳权限），绝不点了没反应。
-          dirCache.has(project.rootDir) ? (
+          // 文件系统视图（B5/D1）：单根 = project.rootDir 第一层直接铺开（原形态，零扰动）；
+          // 有附加根 = 每根一个可折叠分组头并列（复用 subOpen 折叠 + dirCache 惰性列举，
+          // 展开哪层取哪层）。内容行复用 dirRows（惰性加载 / 二进制标记 / gloss / B1 右键
+          // 菜单全在）；失败走 dirRows 既有 error 态（需要桌面壳权限），绝不点了没反应。
+          multiRootFs ? (
+            fsRoots.map((root) => {
+              const isOpen = subOpen.has(root);
+              return (
+                <li key={root} className="tree-group">
+                  <button
+                    className="tree-group-btn"
+                    title={`${root}${root === project.rootDir ? '（项目根）' : '（本次会话添加的文件夹，重开项目后不再显示）'}`}
+                    onClick={() => toggleSub(root)}
+                  >
+                    <span className="caret">
+                      <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+                    </span>
+                    <span className="group-label">{baseName(root)}</span>
+                  </button>
+                  {isOpen ? (
+                    <ul className="tree-files">
+                      {dirCache.has(root) ? (
+                        dirRows(root, 0, new Set())
+                      ) : (
+                        <li className="tree-note">读取目录…</li>
+                      )}
+                    </ul>
+                  ) : null}
+                </li>
+              );
+            })
+          ) : dirCache.has(project.rootDir) ? (
             dirRows(project.rootDir, 0, new Set())
           ) : (
             <li className="tree-note">读取目录…</li>

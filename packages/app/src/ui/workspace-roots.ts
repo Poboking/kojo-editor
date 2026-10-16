@@ -14,7 +14,7 @@
  */
 
 import type { Kernel } from '@kojo/kernel';
-import { isPathUnder } from '@kojo/plugin-api';
+import { isPathUnder, pathKey } from '@kojo/plugin-api';
 
 /** 全部工作区根（服务不可用 = 空列表，不抛） */
 export function workspaceRootsOf(kernel: Pick<Kernel, 'workspaces'>): string[] {
@@ -31,4 +31,36 @@ export function workspaceRootsOf(kernel: Pick<Kernel, 'workspaces'>): string[] {
  */
 export function isUnderAnyRoot(roots: readonly string[], p: string): boolean {
   return roots.some((root) => isPathUnder(root, p));
+}
+
+/* ------------------------------ 会话级附加根（D1，对标 VSCode Add Folder to Workspace） ------------------------------ */
+
+/**
+ * 「添加文件夹到工作区」的计划（纯函数，可单测）。
+ *
+ * 会话级附加根 = 只活在当前项目会话里的**浏览/检索/监视**根（不持久化、不进写允许域），
+ * 与上面的**作者作品落点根**（`workspaces.roots()`）语义不同、互不替代。
+ *
+ * 判等一律走 `pathKey`（折叠分隔符与大小写）：同一目录的两种写法不算两个根。
+ */
+export interface AddExtraRootPlan {
+  /** 计划落定后的附加根列表（拒绝时原样返回，绝不半改） */
+  readonly roots: readonly string[];
+  /** 拒绝时的一句人话（null = 添加成功，无需出声） */
+  readonly note: string | null;
+}
+
+export function planAddExtraRoot(
+  existing: readonly string[],
+  dir: string,
+  projectRoot?: string,
+): AddExtraRootPlan {
+  const k = pathKey(dir);
+  if (projectRoot !== undefined && pathKey(projectRoot) === k) {
+    return { roots: [...existing], note: '这个文件夹就是当前项目所在的位置，不用再加进工作区。' };
+  }
+  if (existing.some((r) => pathKey(r) === k)) {
+    return { roots: [...existing], note: '这个文件夹已经在工作区里了，不用重复添加。' };
+  }
+  return { roots: [...existing, dir], note: null };
 }

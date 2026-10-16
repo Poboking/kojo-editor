@@ -733,22 +733,59 @@ textarea {
   color: var(--fg-dim);
 }
 
-/* ------------------------------ editor tabs (P3) ------------------------------ */
+/* ------------------------------ editor tabs (P3; C1/C2/C3) ------------------------------ */
 
+/* 标签条外框（C3）：滚动区（.editor-tabs）+ 右端恒在的「全部保存」按钮分属两层——
+   按钮不能住进滚动区（滚走了就看不见 = 入口消失，违反铁律 4），所以框线挂在外框 */
+.editor-tabs-bar {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
 /* 标签条底色比编辑器区亮半档，活动标签落回编辑器底色形成"接通"感；
    滚动条隐藏（滚轮横滚 + 活动标签自动滚入视口替代，现代编辑器无感方案） */
 .editor-tabs {
   display: flex;
   align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
   scrollbar-width: none;
-  flex: none;
 }
 .editor-tabs::-webkit-scrollbar {
   display: none;
+}
+/* 「全部保存」显性入口（C3；Ctrl+Shift+S 的命令面板之外的那只手）：
+   恒在——无脏标签弱化（.idle）但不消失，按下去由宿主回一句人话 */
+.editor-tabs-bar .tab-save-all {
+  flex: none;
+  width: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    opacity var(--dur-1) var(--ease-out);
+}
+.editor-tabs-bar .tab-save-all:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg);
+}
+.editor-tabs-bar .tab-save-all.idle {
+  opacity: 0.45;
+}
+.editor-tabs-bar .tab-save-all.idle:hover {
+  opacity: 1;
 }
 .editor-tab {
   display: flex;
@@ -790,6 +827,21 @@ textarea {
   font-size: var(--fs-0);
   display: inline-flex;
   align-items: center;
+}
+/* 固定标签（C2）：左缘竖标（VSCode 同款语义）+ 关闭钮不渲染（防误关，见 TabBar） */
+.editor-tab .tab-pin {
+  flex: none;
+  width: 3px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0.85;
+}
+.editor-tab.pinned {
+  padding-left: 8px;
+}
+.editor-tab.pinned .tab-label {
+  color: var(--fg);
 }
 /* 关闭按钮平时隐去（活动标签除外），悬停浮出——标签条更安静 */
 .editor-tab .tab-close {

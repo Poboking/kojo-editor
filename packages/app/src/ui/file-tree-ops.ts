@@ -213,3 +213,31 @@ export function fsLocatePlanOf(rootDir: string, activeFile: string): string[] | 
   }
   return dirs;
 }
+
+/** 多根文件系统视图（D1）的定位计划：包含根 + 从该根到目标的祖先链 */
+export interface FsLocatePlanRoots {
+  /** 目标文件所属的根（多根嵌套时取最长前缀，避免误归属到外层根） */
+  readonly root: string;
+  /** 需要展开的祖先目录（绝对路径，由浅到深、不含根自身） */
+  readonly dirs: readonly string[];
+}
+
+/**
+ * 多根文件系统视图的定位（纯函数，可单测；D1 会话级附加根批）。
+ *
+ * 与 `fsLocatePlanOf` 同一套祖先算法，多出来的只有一步「目标归哪个根」：
+ * 落在多个根内时取**归一后最长前缀**的根（附加根在项目根之下时，才能定位进附加根
+ * 而不是被项目根抢先）。都不包含 / 命中的是根本身 → `null`，调用侧安静放弃。
+ */
+export function fsLocatePlanOfRoots(
+  roots: readonly string[],
+  activeFile: string,
+): FsLocatePlanRoots | null {
+  const norm = (p: string): string => p.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
+  const hit = roots
+    .filter((r) => isUnderPath(r, activeFile))
+    .sort((a, b) => norm(b).length - norm(a).length)[0];
+  if (hit === undefined) return null;
+  const dirs = fsLocatePlanOf(hit, activeFile);
+  return dirs === null ? null : { root: hit, dirs };
+}

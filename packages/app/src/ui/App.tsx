@@ -35,10 +35,17 @@ import { UnsavedFilesConfirmDialog } from './UnsavedFilesConfirmDialog';
 import { installWindowCloseGuard } from './window-close-guard';
 import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
-import { workspaceRootsOf } from './workspace-roots';
+import { workspaceRootsOf, planAddExtraRoot } from './workspace-roots';
 import { resetSearch } from './search-store';
 import { bindDiffView, DIFF_VIEW_OVERLAY_ID } from './diff-view';
 import { createDiffViewOverlay } from './DiffViewOverlay';
+import {
+  applyPin,
+  batchCloseEmptyReason,
+  planBatchClose,
+  planReorder,
+  type BatchCloseMode,
+} from './tabs-ops';
 import {
   FILE_HISTORY_OVERLAY_ID,
   setFileHistoryTarget,
@@ -94,6 +101,18 @@ export function App(): ReactElement {
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   /** 各标签脏态集合（EditorPane 按路径逐个上报；标签栏脏点 + 关闭确认用） */
   const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set());
+  /**
+   * 固定标签集合（C2）。会话态：标签列表本身不持久化，pin 不必走得更远——
+   * 与 openTabs 同生命周期，关项目 / 切项目随 resetProjectUiState 一起清。
+   * openTabs 维持「固定区在前」的不变量（applyPin / planReorder 落地），渲染层不再排序。
+   */
+  const [pinnedPaths, setPinnedPaths] = useState<ReadonlySet<string>>(new Set());
+  /**
+   * 会话级附加根（D1，对标 VSCode Add Folder to Workspace）：作者临时挂进来的浏览/
+   * 检索/监视根。**不持久化**、不进写允许域（附加根默认只读——写仍走既有批准域），
+   * 与 openTabs 同属项目会话态：关项目 / 切项目随 resetProjectUiState 一起清。
+   */
+  const [extraRoots, setExtraRoots] = useState<readonly string[]>([]);
   /** 待确认的脏标签关闭（非 null = 弹确认框） */
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   /** 待确认的关项目/关窗（非 null = 弹全项目未保存确认；深审 A2） */
@@ -349,6 +368,8 @@ export function App(): ReactElement {
     setActiveFile(null);
     setOpenTabs([]);
     setDirtyPaths(new Set());
+    setPinnedPaths(new Set()); // pin 是标签态的一部分，随标签一起清（C2）
+    setExtraRoots([]); // 会话级附加根是项目会话的一部分（D1）：换项目即清，绝不带进下一个
     setPendingClose(null);
     setReveal(null);
   }, []);
@@ -389,26 +410,9 @@ export function App(): ReactElement {
           }
         }
 
-        // BUG-5：起文件监视（Rust notify → 内核去抖 → `file.changed`）。
-        // 根 = 项目根 ∪ 适配器其余根 ∪ **作者工作区全部根**：存档目录可能在项目根外
-        // （本机就有独立的 sav 库），而工作区在 `%APPDATA%` 下、与项目根毫无包含关系。
-        // 嵌套根由内核折叠。监视状态经 `file.watchState` 呈现，不在此处吞掉。
-        //
-        // 工作区**全部根**必须一起监视（HK-5 批补上，理由不是"整齐"而是**防数据丢失**）：
-        // 作者工作区是可写的权威区，`.kojo` 就住在这里。若不监视，作者在记事本里改了
-        // 一个正被编辑器打开的工作区文件，回到编辑器按 Ctrl+S 就会**静默覆盖**那份外部
-        // 改动——正是 §5.36/§5.84 那条「谁改盘谁发事件、宿主据此重载」要根治的形状，
-        // 而这条链路此前只覆盖游戏目录那半边。
-        // 之所以是"全部根"而不是默认根：作品可以落在作者自选的项目位置（目录对话框授权）
-        // 里，那些目录与 `%APPDATA%` 下的默认根毫无包含关系，漏掉就等于没监视。
-        // 服务在没有平台数据目录的环境（浏览器开发壳）会抛，`workspaceRootsOf` 吞成空列表：
-        // 那种环境本来也没有真实文件系统可监视，不能因为它把整个开项目流程带崩。
-        await kernel.fileWatch.start([
-          p.rootDir,
-          ...p.kojoPaths,
-          ...(p.savDir ? [p.savDir] : []),
-          ...workspaceRootsOf(kernel),
-        ]);
+        // BUG-5：起文件监视。根集合 = 项目根 ∪ 口上域 ∪ 存档目录 ∪ 会话级附加根（D1）
+        //        ∪ 作者工作区全部根——组装与启动收在下方的专用 effect 里（extraRoots
+        //        变化 = 换根，与首开共用同一条路），这里只负责把项目挂上状态。
 
         // 可写路径批准（首次打开必须由用户显式确认；未批准 = 只读浏览）；
         // 批准记录与新提议不一致（approvalMismatch）同样重弹确认（F1/F2 修复）
@@ -444,6 +448,48 @@ export function App(): ReactElement {
     },
     [kernel, notify, project, resetProjectUiState],
   );
+
+  /**
+   * 文件监视的根集合收口（D1）：**首开与"加了文件夹"共用同一条路**。
+   *
+   * 契约取舍：`fileWatch.start(roots)` 没有动态加根（plugin-api 的 FileWatchController
+   * 只有 start/stop/state），但 `start` 的语义本就是「用新的一组根替换旧的」（内核
+   * watcher 自带 teardown + 嵌套根折叠）——所以"加根" = 用**完整根集合**再 start 一次，
+   * 不需要先 stop。代价是附加根一变就重挂全部句柄：会话里加根是低频动作（一次对话
+   * 至多几次），而动态加根要动内核契约，违背本段纪律。
+   */
+  useEffect(() => {
+    if (!kernel || !project) return;
+    void kernel.fileWatch.start([
+      project.rootDir,
+      ...project.kojoPaths,
+      ...(project.savDir ? [project.savDir] : []),
+      ...extraRoots,
+      // 服务在没有平台数据目录的环境（浏览器开发壳）会抛，workspaceRootsOf 吞成空列表
+      ...workspaceRootsOf(kernel),
+    ]);
+  }, [kernel, project, extraRoots]);
+
+  /**
+   * 「添加文件夹到工作区」（D1）：系统目录对话框 → 去重计划 → 落会话态。
+   * 取消 / 空结果安静返回；重复加与选了项目根本身都给一句人话（planAddExtraRoot）；
+   * 对话框本身失败也得出声（绝不点了没反应）。
+   */
+  const addExtraRoot = useCallback(async () => {
+    if (!kernel || !project) return;
+    try {
+      const dir = await invoke<string | null>('choose_directory', {
+        title: '选择要添加到工作区的文件夹',
+      });
+      if (!dir) return; // 用户取消：安静返回，不是故障
+      const plan = planAddExtraRoot(extraRoots, dir, project.rootDir);
+      setExtraRoots(plan.roots);
+      if (plan.note) notify({ kind: 'info', message: plan.note });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      notify({ kind: 'error', message: `添加文件夹失败：${msg}` });
+    }
+  }, [kernel, project, extraRoots, notify]);
 
   const chooseAndOpen = useCallback(async () => {
     try {
@@ -628,25 +674,88 @@ export function App(): ReactElement {
     };
   }, [kernel, notify, requestOpenFile, openProject]);
 
+  /**
+   * 批量关闭队列（C1）：**尚未关闭**的剩余待关标签（null = 没有进行中的批量关闭）。
+   * 推进器 advanceBatch 消费它；脏标签停在原地等单标签确认，用户取消即清空。
+   */
+  const batchQueueRef = useRef<readonly string[] | null>(null);
+
+  /**
+   * 一次关掉多张干净标签（C1 批量关闭的地基）：全部走**功能性更新**——
+   * 同步循环里连关多张也不吃陈旧闭包（旧 doCloseTab 的"过滤+赋值"写法连关两张
+   * 会互相覆盖）。激活收尾用快照 ref 一次算清：关的标签里有活动文件 →
+   * 落到原视角下的右侧邻居（末尾则左侧）；空 → 编辑器区回空态。
+   */
+  const closeManySync = useCallback((paths: readonly string[]) => {
+    if (paths.length === 0) return;
+    const gone = new Set(paths);
+    setOpenTabs((prev) => (prev.some((p) => gone.has(p)) ? prev.filter((p) => !gone.has(p)) : prev));
+    setDirtyPaths((prev) => {
+      let n: Set<string> | null = null;
+      for (const p of prev) {
+        if (gone.has(p)) {
+          n ??= new Set(prev);
+          n.delete(p);
+        }
+      }
+      return n ?? prev;
+    });
+    setPinnedPaths((prev) => {
+      let n: Set<string> | null = null;
+      for (const p of prev) {
+        if (gone.has(p)) {
+          n ??= new Set(prev);
+          n.delete(p);
+        }
+      }
+      return n ?? prev;
+    });
+    const tabs = openTabsRef.current;
+    const cur = activeFileRef.current;
+    if (cur !== null && gone.has(cur)) {
+      const i = tabs.indexOf(cur);
+      const remaining = tabs.filter((p) => !gone.has(p));
+      const removedBefore = tabs.slice(0, i).filter((p) => gone.has(p)).length;
+      const j = Math.min(i - removedBefore, remaining.length - 1);
+      setActiveFile(remaining.length > 0 ? (remaining[j] ?? null) : null);
+      setReveal(null);
+    }
+  }, []);
+
+  /**
+   * 批量关闭推进器：关掉队列开头的干净标签直到遇见脏的（弹一次确认，停在原地，
+   * 确认结果经 decideClose 续跑或中止）。队列里的目标可能已被其他途径关掉
+   * （如确认期间用户手动关了别的）——跳过不再在打开列表里的，不误关。
+   */
+  const advanceBatch = useCallback(() => {
+    for (;;) {
+      const queue = batchQueueRef.current;
+      if (!queue || queue.length === 0) {
+        batchQueueRef.current = null;
+        return;
+      }
+      const tabs = openTabsRef.current;
+      const idx = queue.findIndex((p) => tabs.includes(p));
+      if (idx < 0) {
+        batchQueueRef.current = null;
+        return;
+      }
+      const next = queue[idx]!;
+      batchQueueRef.current = queue.slice(idx + 1);
+      if (dirtyRef.current.has(next)) {
+        setPendingClose(next); // 停在原地等确认（铁律：绝不静默丢弃脏修改）
+        return;
+      }
+      closeManySync([next]);
+    }
+  }, [closeManySync]);
+
   /** 关闭标签（无确认路径；model 回收由 EditorPane 的 openPaths effect 落地） */
   const doCloseTab = useCallback(
     (path: string) => {
-      const i = openTabs.indexOf(path);
-      const next = openTabs.filter((p) => p !== path);
-      setOpenTabs(next);
-      setDirtyPaths((prev) => {
-        if (!prev.has(path)) return prev;
-        const n = new Set(prev);
-        n.delete(path);
-        return n;
-      });
-      if (path === activeFile) {
-        // 激活邻居标签（优先右侧，末尾则左侧）；空 → 编辑器区回空态
-        setActiveFile(next.length > 0 ? (next[Math.min(i, next.length - 1)] ?? null) : null);
-        setReveal(null);
-      }
+      closeManySync([path]);
     },
-    [openTabs, activeFile],
+    [closeManySync],
   );
 
   /** 关闭标签入口：脏标签先弹确认（绝不静默丢弃，审阅 M4 精神在多标签下的延续） */
@@ -665,26 +774,38 @@ export function App(): ReactElement {
     async (action: 'save-then-go' | 'discard' | 'cancel') => {
       const path = pendingClose;
       setPendingClose(null);
-      if (!path || action === 'cancel') return;
+      if (!path || action === 'cancel') {
+        // 取消即中止剩余的批量关闭（停在原地，已关的不回滚——VSCode 同款）；单标签关闭无队列，no-op
+        batchQueueRef.current = null;
+        return;
+      }
       if (action === 'save-then-go') {
         const ok = actionsRef.current ? await actionsRef.current.savePath(path) : false;
         if (!ok) return; // 保存失败：标签保留（错误已显示在编辑器状态栏/通知）
       }
       doCloseTab(path);
+      advanceBatch(); // 批量关闭中：继续推进队列（无队列时 no-op）
     },
-    [pendingClose, doCloseTab],
+    [pendingClose, doCloseTab, advanceBatch],
   );
 
-  /** 拖拽重排标签（删除后插入语义：toIndex 以移除 path 之后的数组为基准） */
+  /**
+   * 拖拽重排标签（C2；删除后插入语义：toIndex 以移除 path 之后的数组为基准）。
+   * 跨固定区分界的拖放自动改固定态（planReorder：非固定拖进固定区 = pin，
+   * 固定拖出 = unpin——落点指示画哪标签落哪，所见即所得）。
+   */
   const reorderTab = useCallback((path: string, toIndex: number) => {
-    setOpenTabs((prev) => {
-      const from = prev.indexOf(path);
-      if (from < 0) return prev;
-      const next = [...prev];
-      next.splice(from, 1);
-      next.splice(Math.max(0, Math.min(toIndex, next.length)), 0, path);
-      return next;
-    });
+    const plan = planReorder(openTabsRef.current, path, toIndex, pinnedRef.current);
+    setOpenTabs([...plan.order]);
+    const pc = plan.pinChange;
+    if (pc) {
+      setPinnedPaths((prev) => {
+        const next = new Set(prev);
+        if (pc.pin) next.add(pc.path);
+        else next.delete(pc.path);
+        return next;
+      });
+    }
   }, []);
 
   /** 全部保存（Ctrl+Shift+S；壳层命令经 ProjectView 注入） */
@@ -699,6 +820,45 @@ export function App(): ReactElement {
   openTabsRef.current = openTabs;
   const activeFileRef = useRef(activeFile);
   activeFileRef.current = activeFile;
+  /** 固定标签的最新值快照（批量关闭计划 / 拖拽重排都要读当下值，同上） */
+  const pinnedRef = useRef(pinnedPaths);
+  pinnedRef.current = pinnedPaths;
+
+  /** 固定 / 取消固定标签（C2）：pinned 会话态 + 顺序重排（固定区在前，见 applyPin） */
+  const toggleTabPin = useCallback((path: string) => {
+    const wasPinned = pinnedRef.current.has(path);
+    const nextPinned = new Set(pinnedRef.current);
+    if (wasPinned) nextPinned.delete(path);
+    else nextPinned.add(path);
+    pinnedRef.current = nextPinned; // 同一拍内的连续操作读得到最新值
+    setPinnedPaths(nextPinned);
+    setOpenTabs((tabs) => applyPin(tabs, path, !wasPinned, nextPinned));
+  }, []);
+
+  /**
+   * 批量关闭入口（C1）：纯函数出计划（pinned 豁免），逐个走既有 requestCloseTab
+   * 单标签确认链——脏的弹一次确认，取消即中止剩余（已关的不回滚）。
+   * 计划为空也要有响（铁律 4）：按 batchCloseEmptyReason 回一句人话。
+   */
+  const runBatchClose = useCallback(
+    (mode: BatchCloseMode, anchor: string) => {
+      const tabs = openTabsRef.current;
+      const plan = planBatchClose(mode, tabs, anchor, pinnedRef.current);
+      if (plan.toClose.length === 0) {
+        notify({ kind: 'info', message: batchCloseEmptyReason(mode, tabs, anchor, pinnedRef.current) });
+        return;
+      }
+      const first = plan.toClose[0];
+      if (!first) return;
+      batchQueueRef.current = plan.toClose.slice(1);
+      if (dirtyRef.current.has(first)) setPendingClose(first);
+      else {
+        closeManySync([first]);
+        advanceBatch();
+      }
+    },
+    [closeManySync, advanceBatch, notify],
+  );
 
   /**
    * 删除/重命名的守门：涉及**打开中且有未保存修改**的文件就拦下，给一句人话。
@@ -742,6 +902,26 @@ export function App(): ReactElement {
           }
         }
         // 改名的脏标签不该出现（守门拦了），但真发生时也不能留出悬空旧路径
+        for (const r of renamed) {
+          if (prev.has(r.from)) {
+            next ??= new Set(prev);
+            next.delete(r.from);
+            next.add(r.to);
+          }
+        }
+        return next ?? prev;
+      });
+      // 固定标签随标签收尾同步（C2）：被删的退出固定、被改名的换新路径——不留悬空 pin
+      setPinnedPaths((prev) => {
+        let next: Set<string> | null = null;
+        for (const d of del) {
+          for (const p of prev) {
+            if (p === d || isPathUnder(d, p)) {
+              next ??= new Set(prev);
+              next.delete(p);
+            }
+          }
+        }
         for (const r of renamed) {
           if (prev.has(r.from)) {
             next ??= new Set(prev);
@@ -864,11 +1044,14 @@ export function App(): ReactElement {
           activeFile={activeFile}
           openTabs={openTabs}
           dirtyPaths={dirtyPaths}
+          pinnedPaths={pinnedPaths}
           reveal={reveal}
           onOpenFile={openFile}
           onActivateTab={requestOpenFile}
           onRequestCloseTab={requestCloseTab}
           onReorderTab={reorderTab}
+          onTogglePin={toggleTabPin}
+          onBatchCloseTab={runBatchClose}
           onSaveAll={saveAll}
           onDirtyChange={onDirtyChange}
           registerActions={registerActions}
@@ -879,6 +1062,8 @@ export function App(): ReactElement {
           guardFileOp={guardFileOp}
           onFilesGone={onFilesGone}
           registerTreeRefresh={registerTreeRefresh}
+          extraRoots={extraRoots}
+          onAddExtraRoot={() => void addExtraRoot()}
         />
       </Suspense>
     ) : (
