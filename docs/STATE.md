@@ -6,7 +6,7 @@
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **4238 passed / 50 skipped（4288）**；252 文件过 / 17 跳（269）（2026-10-16 本机实测于口上市场批树〔= origin/master `fec189c` + 34 提交，落地后即 master〕；市场面新增：服务 `kojo-market` / 面板 `ui-market` / 消费侧三接线（口上包→导入向导、模板包→新建向导、字典包→adapter 追加轮次））。⚠ 此前并发恒红的三条挂钟闸（`file-tree` 微基准 / `marker-hotpath` ×2 / `workspace-symbols`）已确认为负载形，见 PITFALLS 72 |
+| 全量测试 | **4262 passed / 50 skipped（4312）**；254 文件过 / 17 跳（271）（2026-10-16 本机实测于 1016 计数器面批树〔= origin/master `d751d72` + 2 提交：契约 `14b412c` + 实现批，落地后即 master〕；本批新增 24 条〔计数器值域表 84 条 + `timing-counter-unknown` fail-closed 22 条 · face-templates `indexKind` 断言 · 术语守卫豁免名单不过期断言〕）。⚠ 此前并发恒红的三条挂钟闸（`file-tree` 微基准 / `marker-hotpath` ×2 / `workspace-symbols`）已确认为负载形，见 PITFALLS 72 |
 | 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | **3591 passed / 1 skipped / ⚠ 1 failed（3593）**；221 文件过 / 1 挂（222）。失败 = `sugar-projection.corpus.test.ts` 台词行覆盖 **62.5%（`339a0ca`）/ 69.7%（本批后）**，门槛 99% —— **由 `ff1b8ae`（P-1R 手段 3「函数级 all-or-nothing」）引入，非本批**（`12ed541` 同用例 99.2%）；本批另跑 `integration-plugins` 3/3 过（2026-10-16 本机实测，语料在位 `C:\game\eratw-画蛇添足版eratw4.980`） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（19 插件；A–D 四项全绿） |

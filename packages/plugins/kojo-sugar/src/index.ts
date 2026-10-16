@@ -25,6 +25,7 @@ import type {
   ErbParserService,
   FileIO,
   GameProject,
+  KojoCounterTable,
   KojoFaceTable,
   KojoInstructionTable,
   KojoLibraryTable,
@@ -128,10 +129,11 @@ export function createKojoSugarPlugin(): Plugin {
       };
 
       /**
-       * 当前适配器的**变量字典 / 分野表 / 指令表 / 函数名表**（一次槽位扫出四件）。
+       * 当前适配器的**变量字典 / 分野表 / 指令表 / 函数名表 / 数值增减族表 / 计数器值域表**
+       * （一次槽位扫出六件）。
        *
        * 每次调用都**重查**（适配器可能在项目切换后重建 schema/表，正是代际判据
-       * 的来源）——但只做一次 `slots.query` + 一次逐字段首命中；四张表全齐且
+       * 的来源）——但只做一次 `slots.query` + 一次逐字段首命中；六件全齐且
        * 对象引用未变 ⇒ 视为同一代际，转译器/字典实例（含共享缓存）整体复用。
        */
       interface AdapterView {
@@ -143,6 +145,7 @@ export function createKojoSugarPlugin(): Plugin {
         readonly instructionTable: KojoInstructionTable | undefined;
         readonly libraryTable: KojoLibraryTable | undefined;
         readonly mutatorTable: KojoMutatorTable | undefined;
+        readonly counterTable: KojoCounterTable | undefined;
       }
 
       const emptyView = (): AdapterView => ({
@@ -154,6 +157,7 @@ export function createKojoSugarPlugin(): Plugin {
         instructionTable: undefined,
         libraryTable: undefined,
         mutatorTable: undefined,
+        counterTable: undefined,
       });
 
       const viewOf = (): AdapterView => {
@@ -168,6 +172,7 @@ export function createKojoSugarPlugin(): Plugin {
           instructionTable: KojoInstructionTable | undefined;
           libraryTable: KojoLibraryTable | undefined;
           mutatorTable: KojoMutatorTable | undefined;
+          counterTable: KojoCounterTable | undefined;
         } = {
           adapterId: current.adapterId,
           projectRoot: current.rootDir,
@@ -177,6 +182,7 @@ export function createKojoSugarPlugin(): Plugin {
           instructionTable: undefined,
           libraryTable: undefined,
           mutatorTable: undefined,
+          counterTable: undefined,
         };
         for (const contribution of slots.query('game.adapter')) {
           if (contribution.adapter.gameId !== current.adapterId) continue;
@@ -186,12 +192,13 @@ export function createKojoSugarPlugin(): Plugin {
           v.instructionTable ??= contribution.adapter.kojoInstructionTable;
           v.libraryTable ??= contribution.adapter.kojoLibraryTable;
           v.mutatorTable ??= contribution.adapter.kojoMutatorTable;
+          v.counterTable ??= contribution.adapter.kojoCounterTable;
         }
         return v;
       };
 
       /**
-       * 代际判据：项目根 + adapterId + 非 ERB 输入摘要 + 五张表的**对象引用**。
+       * 代际判据：项目根 + adapterId + 非 ERB 输入摘要 + 六张表的**对象引用**。
        * 表对象换代（新对象）或项目换代 ⇒ 全新转译器实例（空缓存）；
        * 引用全同 ⇒ 同一代际（产物只依赖这些对象的内容，纯函数语义下结果可复用）。
        * **前提**：表以"整体换代"变更（eratw-adapter 每次 loadProject 重建 schema，
@@ -205,7 +212,8 @@ export function createKojoSugarPlugin(): Plugin {
         a.faceTable === b.faceTable &&
         a.instructionTable === b.instructionTable &&
         a.libraryTable === b.libraryTable &&
-        a.mutatorTable === b.mutatorTable;
+        a.mutatorTable === b.mutatorTable &&
+        a.counterTable === b.counterTable;
 
       interface ResolvedAdapter {
         readonly view: AdapterView;
@@ -238,7 +246,7 @@ export function createKojoSugarPlugin(): Plugin {
       const libraryTableOf = (): KojoLibraryTable | undefined => resolveAdapter().view.libraryTable;
 
       /**
-       * 统一的转译器构造（字典 + 分野表 + 指令表 + 函数名表同源注入；保证各路径行为一致）。
+       * 统一的转译器构造（字典 + 分野/指令/函数名/增减族/计数器表同源注入；保证各路径行为一致）。
        *
        * **按代际 memo**（L2 批）：同代际内返回**同一实例**——既省去每次调用的
        * 槽位查询 + `makeLookup` 闭包构造 + 服务装配，也让该实例的**共享结果缓存**
@@ -247,7 +255,7 @@ export function createKojoSugarPlugin(): Plugin {
       const makeTranspiler = (
         deps?: Omit<
           Parameters<typeof createSugarTranspileService>[0],
-          'dictionary' | 'faceTable' | 'instructionTable' | 'libraryTable' | 'mutatorTable'
+          'dictionary' | 'faceTable' | 'instructionTable' | 'libraryTable' | 'mutatorTable' | 'counterTable'
         >,
       ): SugarTranspileService => {
         const r = resolveAdapter();
@@ -257,6 +265,7 @@ export function createKojoSugarPlugin(): Plugin {
           instructionTable: r.view.instructionTable,
           libraryTable: r.view.libraryTable,
           mutatorTable: r.view.mutatorTable,
+          counterTable: r.view.counterTable,
         };
         if (deps === undefined) return (r.base ??= createSugarTranspileService({ ...tables, log: ctx.log }));
         return (r.ioBound ??= createSugarTranspileService({ ...tables, ...deps }));

@@ -25,6 +25,7 @@ import type {
   IfBlock,
   IfExpr,
   Interpolation,
+  KojoCounterTable,
   KojoFaceTable,
   KojoFaceTemplate,
   KojoInstructionTable,
@@ -254,6 +255,13 @@ export interface CodegenOptions {
    * （不降糖、报既有码 `unknown-identifier`，绝不猜）。
    */
   mutatorTable?: KojoMutatorTable;
+  /**
+   * 计数器值域表（adapter 提供；游戏知识；1016 批）。
+   * `时机 计数器 <中文名>：` 的中文名经本表查编号再拼函数名；纯数字令牌**不查表、逐字节
+   * 直通**（旧文档零变化）。缺省（未提供表）/ 未登记名一律 **fail-closed**
+   * （报 `timing-counter-unknown`，不猜编号、不产半成品）。
+   */
+  counterTable?: KojoCounterTable;
   sink: DiagnosticSink;
   options: SugarTranspileOptions;
   /**
@@ -347,6 +355,7 @@ export function codegen(
       instructionTable: opts.instructionTable,
       libraryTable,
       mutatorTable: opts.mutatorTable,
+      counterTable: opts.counterTable,
       userFunctions,
       sink: opts.sink,
     });
@@ -570,6 +579,8 @@ interface TimingEmitContext {
   libraryTable?: KojoLibraryTable;
   /** 数值增减族表（adapter；1016 批：`增减 族:对象:槽 ± n` → `CALL <engine>(…)`，未登记族 fail-closed） */
   mutatorTable?: KojoMutatorTable;
+  /** 计数器值域表（adapter；1016 批：`时机 计数器 <中文名>：` 名 → 编号，缺省/查不到 fail-closed） */
+  counterTable?: KojoCounterTable;
   /** 本文件声明的用户函数（B4 批；供正文调用降糖与插值判型） */
   userFunctions: ReadonlyMap<string, UserFunctionInfo>;
   sink: DiagnosticSink;
@@ -783,9 +794,11 @@ interface FaceResolution {
   paramIndex: boolean;
   /**
    * `{i}` 槽的取值口径（adapter 声明；缺省 `'command'`）。`'literal'` = 令牌原样
-   * 透传、**不查指令名表**（尾部是运行期形态名的面，如 `图像`）。
+   * 透传、**不查指令名表**（尾部是运行期形态名的面，如 `图像`）；`'counter'` = 纯数字
+   * 令牌直通、中文名经**计数器值域表**（`counterTable`）换算，查不到 fail-closed
+   * （1016 批：`时机 计数器 <中文名>：`）。
    */
-  indexKind: 'command' | 'literal';
+  indexKind: 'command' | 'literal' | 'counter';
   /** 成否函数模板（写了 `成否:` 时生成） */
   success?: { template: string; paramIndex: boolean };
   /**
@@ -984,9 +997,10 @@ interface IndexResolution {
 }
 
 /**
- * 时机编号解析（HK-11②）——**数字路径不查表**（旧写法 `时机 指令 310：` 逐字节不破，
- * 也不新增诊断）；**中文名路径**经 adapter 指令表查编号，**查不到 fail-closed**
- * （报 `timing-instruction-unknown`，措辞含「未命名指令（编号 N）」，绝不猜、
+ * 时机编号解析（HK-11②；1016 批补计数器面）——**数字路径不查表**（旧写法
+ * `时机 指令 310：` / `时机 计数器 20：` 逐字节不破，也不新增诊断）；**中文名路径**
+ * 经 adapter 表查编号（指令面 → 指令表；计数器面 → 计数器值域表），**查不到 fail-closed**
+ * （分别报 `timing-instruction-unknown` / `timing-counter-unknown`，绝不猜、
  * 不产半成品——规范 §5.3 精神）。
  *
  * 例外：面声明了 `indexKind: 'literal'`（如 `图像`）时，令牌是**运行期形态名**
@@ -1000,6 +1014,24 @@ function resolveTimingIndex(
   const name = timing.indexName;
   if (name === undefined) return { ok: true, index: timing.index };
   if (face.indexKind === 'literal') return { ok: true, index: name };
+
+  if (face.indexKind === 'counter') {
+    const table = ctx.counterTable;
+    const no = table?.lookupByName(name);
+    if (no === undefined) {
+      const missing = table === undefined || !table.hasTable;
+      ctx.sink.report({
+        code: 'timing-counter-unknown',
+        severity: 'error',
+        message: missing
+          ? `无法解析计数器名「${name}」：当前适配器未提供计数器表，名不能换算成编号。为避免拼出指向错误函数的产物，已停止编译本时机——请改用数字编号（\`时机 计数器 20：\`）。`
+          : `未登记的计数器：「${name}」不在编辑器收录的计数器表里，无法换算成编号。为避免拼出指向错误函数的产物，已停止编译本时机——请改用数字编号（\`时机 计数器 20：\`）。`,
+        loc: timing.loc.start,
+      });
+      return { ok: false };
+    }
+    return { ok: true, index: String(no) };
+  }
 
   const no = ctx.instructionTable?.lookupByName(name);
   if (no === undefined) {

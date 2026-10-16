@@ -15,6 +15,7 @@ import type {
 } from '@kojo/plugin-api';
 import { KernelServices, MARKET_SERVICE_KEY, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
 import { ERATW } from './constants';
+import { createEratwCounterTable, ERATW_COUNTER_ENTRIES } from './counter-table';
 import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
 import { createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS } from './library-table';
 import { createEratwMutatorTable, ERATW_MUTATOR_FAMILIES } from './mutator-table';
@@ -433,6 +434,9 @@ export function createEratwAdapterPlugin(): Plugin {
         // 数值增减族表（1016 批）——同样纯数据、无 IO（手工维护的静态表）：
         // 糖层把 `增减 族:对象:槽 ± n` 降为 `CALL <engine>(…)`，参数序由本表声明。
         kojoMutatorTable: createEratwMutatorTable(ERATW_MUTATOR_FAMILIES),
+        // 计数器值域表（1016 批）——同样纯数据、无 IO（手工维护的静态表）：
+        // 糖层把 `时机 计数器 <中文名>：` 的名换算成编号（纯数字令牌直通、不查表）。
+        kojoCounterTable: createEratwCounterTable(ERATW_COUNTER_ENTRIES),
         // 日文名 → 中文名对照词典（只加显示备注，不改任何实际目录/文件名）
         nameGlossary: ERATW_NAME_GLOSSARY,
 

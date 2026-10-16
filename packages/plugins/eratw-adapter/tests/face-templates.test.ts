@@ -42,6 +42,10 @@ describe('KojoFaceTable · 分野模板（规范 §3.2 / 附录 C）', () => {
     }
   });
 
+  it('`计数器` 面声明 `indexKind: \'counter\'`（1016 批：`{i}` 位挂计数器值域表）', () => {
+    expect(table.faces['计数器']!.indexKind).toBe('counter');
+  });
+
   it('P-6 绝顶子面补糖三条无参面全部登记，模板逐字符合语料', () => {
     const expectSubFaces: Record<string, string> = {
       // 恶作剧子面（`KOJO_MESSAGE.ERB:328-332` 的 `CFLAG:恶作剧` 分支）→ B2

@@ -1259,6 +1259,14 @@ export type SugarDiagnosticCode =
    * 该值保留原文（不被换成猜来的编号）并报本码——不新增码、不另开口径。
    */
   | 'timing-instruction-unknown'
+  /**
+   * 1016 批（计数器面登记）：`时机 <计数器面> <中文名>：` 的中文名不在 adapter 的
+   * 计数器值域表（`KojoCounterTable`；数据源 = 引擎登记的计数器定义集合）里，
+   * 或该适配器未提供计数器表（缺省 / `hasTable=false`）。**fail-closed**：
+   * 绝不猜编号、不产半成品——报错措辞含「未登记的计数器」或「未提供计数器表」，
+   * 请改用数字编号（数字路径不查表、不受影响）。
+   */
+  | 'timing-counter-unknown'
   /** HK-12：自定指令块缺 `编号:` 且 adapter 未声明编号可用段（`customComRange`）；fail-closed 不产半成品。 */
   | 'custom-command-no-range'
   /** HK-12：自定指令编号自动分配失败（`customComRange` 段已被占满）；需显式写 `编号:` 或腾出空位。 */

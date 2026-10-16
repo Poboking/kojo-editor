@@ -77,8 +77,11 @@ export function createEratwFaceTable(): KojoFaceTable {
 
       // 附录 C #6：计数器 `KOJO_MESSAGE_SEND_COUNTER` 转交；
       // 实测形态 `M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}`；MESSAGECHECK 在 `_K{n}` 前（引擎 :1153）
+      // 1016 批：`{n}` 位挂**值域表**（`kojoCounterTable`）——糖层 `时机 计数器 <中文名>：` 的名
+      // 由适配器表换算成编号；纯数字令牌直通不查表。故这里 `indexKind: 'counter'`。
       计数器: {
         template: 'M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}',
+        indexKind: 'counter',
         messageCheck: { template: 'M_KOJO{t}_MESSAGE_COUNTER_MESSAGECHECK_K{n}_{i}' },
       },
 

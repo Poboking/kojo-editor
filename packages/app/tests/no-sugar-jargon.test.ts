@@ -8,7 +8,7 @@
  * 范围：`packages/app/src` 与 `packages/plugins/<插件>/src` 下的 `.ts` / `.tsx`（测试不在范围内）。
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -171,6 +171,20 @@ function sourceFiles(): string[] {
 const lineOf = (text: string, index: number): number => text.slice(0, index).split('\n').length;
 const rel = (abs: string): string => path.relative(ROOT, abs).replaceAll('\\', '/');
 
+/**
+ * 数据文件豁免（**窄名单，一条一理由**）：**语料原文照录的游戏数据**允许出现这些字。
+ * 为什么不是"把字改掉"：如计数器名表里 `糖强夺` 是 eraTW 语料注释行的逐字原文——
+ * 作者用什么名，表里就得是什么名；改一个字 = 查不到。守卫拦的是**杜撰术语**
+ * （糖族的自造词），不是游戏数据本身。豁免文件内仍可能被未来的杜撰术语混入，
+ * 那是可接受的窄代价（名单只增审阅过的数据文件）。
+ */
+const LITERAL_EXEMPT: ReadonlyMap<string, string> = new Map([
+  [
+    'packages/plugins/eratw-adapter/src/counter-table.ts',
+    'eraTW 语料注释行逐字照录的计数器名（含「糖强夺」条目；改字 = 作者查不到）',
+  ],
+]);
+
 /** 命中的术语按长到短报，免得一处只报出「糖」 */
 function matchedTerms(s: string): string[] {
   return [...BANNED].sort((a, b) => b.length - a.length).filter((t) => s.includes(t));
@@ -183,9 +197,16 @@ describe('用户可见文案不含「糖」一族术语', () => {
     expect(files.length).toBeGreaterThan(100);
   });
 
+  it('豁免名单不过期（每条例外路径都真实存在）', () => {
+    for (const p of LITERAL_EXEMPT.keys()) {
+      expect(existsSync(path.join(ROOT, p)), `豁免路径不存在：${p}`).toBe(true);
+    }
+  });
+
   it('字符串字面量里没有这些术语', () => {
     const hits: string[] = [];
     for (const f of files) {
+      if (LITERAL_EXEMPT.has(rel(f))) continue;
       const src = readFileSync(f, 'utf8');
       const masked = maskNonStrings(src);
       for (const m of masked.matchAll(LITERAL_RE)) {

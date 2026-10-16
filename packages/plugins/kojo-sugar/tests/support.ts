@@ -8,13 +8,15 @@
  */
 
 import {
+  ERATW_COUNTER_ENTRIES,
   ERATW_MUTATOR_FAMILIES,
+  createEratwCounterTable,
   createEratwFaceTable,
   createEratwInstructionTable,
   createEratwMutatorTable,
   parseTrainCsv,
 } from '@kojo/plugin-eratw-adapter';
-import type { KojoFaceTable, KojoInstructionTable, KojoMutatorTable } from '@kojo/plugin-api';
+import type { KojoCounterTable, KojoFaceTable, KojoInstructionTable, KojoMutatorTable } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '../src/types';
 
 /** 测试用最小字典（覆盖 golden 用到的 胆怯 / 恋慕 / 思慕 / 好感度 / 心情 + 原生族名） */
@@ -97,4 +99,18 @@ export function stubMutatorTable(): KojoMutatorTable {
   return createEratwMutatorTable(ERATW_MUTATOR_FAMILIES);
 }
 
-export { createEratwFaceTable, createEratwInstructionTable, createEratwMutatorTable, parseTrainCsv };
+/**
+ * 测试用计数器值域表 = eraTW adapter 的真实表（`ERATW_COUNTER_ENTRIES`）。
+ * 与 `stubFaceTable` / `stubMutatorTable` 同惯例：断言贴近生产，换适配器只换表。
+ */
+export function stubCounterTable(): KojoCounterTable {
+  return createEratwCounterTable(ERATW_COUNTER_ENTRIES);
+}
+
+export {
+  createEratwCounterTable,
+  createEratwFaceTable,
+  createEratwInstructionTable,
+  createEratwMutatorTable,
+  parseTrainCsv,
+};

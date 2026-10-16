@@ -221,6 +221,7 @@ describe.skipIf(!SMOKE_DIR)('发版验证样例 · release-check.kojo', () => {
       'CALL CHANGE_CFLAG(2, TARGET, 100)', // 数值增减（1016 批；族 CFLAG → 槽在前）`+=`
       'CALL CHANGE_CFLAG(2, TARGET, -100)', // 数值增减（1016 批）`-=` 取负
       'CALL BUFF_BASE(MASTER, BASE_体力, 300)', // 数值增减（1016 批；族 BASE 对象在前；英文别名 `adjust`）
+      '@M_KOJO_发版检查_MESSAGE_COUNTER_K145_2', // 计数器名路径（1016 批）：`偷看` 经计数器值域表换算成编号 2
     ];
     for (const needle of mustContain) {
       expect(result.erb, `产物缺少 ${needle}`).toContain(needle);

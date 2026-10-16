@@ -15,6 +15,7 @@ import type {
   AliasDecl,
   ConstDecl,
   FileIO,
+  KojoCounterTable,
   KojoFaceTable,
   KojoInstructionTable,
   KojoLibraryTable,
@@ -332,6 +333,13 @@ export interface CreateSugarServiceOptions {
    */
   mutatorTable?: KojoMutatorTable;
   /**
+   * 计数器值域表（adapter 提供；游戏知识；1016 批）。
+   * **缺省 = 该适配器未声明** → `时机 计数器 <中文名>：` 的名换算不成编号，
+   * 报 `timing-counter-unknown`（error，fail-closed；不猜编号、不产半成品）。
+   * 纯数字令牌（`时机 计数器 20：`）不查表、逐字节直通。
+   */
+  counterTable?: KojoCounterTable;
+  /**
    * 编译落盘所需的内核文件 IO（S3 批）。
    * **缺省 = 本服务不支持 `compileToFile`**（调用即抛错，绝不静默假装成功）——
    * 纯转译（`parse`/`transpile`/`sourceOf`）不需要它，故可选。
@@ -359,6 +367,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
   const instructionTable = opts.instructionTable;
   const libraryTable = opts.libraryTable;
   const mutatorTable = opts.mutatorTable;
+  const counterTable = opts.counterTable;
   const cache = new TranspileResultCache({
     maxBuckets: opts.cache?.maxBuckets ?? CACHE_DEFAULTS.maxBuckets,
     maxEntriesPerBucket: opts.cache?.maxEntriesPerBucket ?? CACHE_DEFAULTS.maxEntriesPerBucket,
@@ -435,6 +444,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       instructionTable,
       libraryTable,
       mutatorTable,
+      counterTable,
       sink,
       options,
       // 列级映射（S6）：与源文本同一次切分出的逻辑行视图（含折行段）——
