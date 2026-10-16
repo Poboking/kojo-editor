@@ -69,6 +69,9 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'workbench.fixAll', title: '一键修复当前文件', category: '工作台', keys: 'ctrl+shift+y', rebindable: true },
   { id: 'workbench.toggleSugarView', title: '切换 .kojo 预览', category: '工作台', keys: 'ctrl+alt+t', rebindable: true },
   { id: 'workbench.jumpToState', title: '看这一行的状态', category: '工作台', keys: 'ctrl+alt+s', rebindable: true },
+  // ---- 分屏（SPLIT-1 编辑器组批） ----
+  { id: 'workbench.splitEditor', title: '向右拆分编辑器', category: '工作台', keys: 'ctrl+\\', rebindable: true },
+  { id: 'workbench.closeEditorGroup', title: '关闭编辑器组', category: '工作台', rebindable: true, note: '仅分屏时生效；单组不可关' },
   // ---- 编辑器动作（命令面板入口；不带缺省键位 = 不劫持 Monaco 内建键） ----
   { id: 'editor.action.find', title: '查找', category: '编辑器', rebindable: true, note: '编辑器内 Ctrl+F 为 Monaco 内建' },
   { id: 'editor.action.replace', title: '替换', category: '编辑器', rebindable: true, note: '编辑器内 Ctrl+H 为 Monaco 内建' },

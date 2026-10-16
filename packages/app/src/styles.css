@@ -5679,3 +5679,66 @@ button.resume-session {
   padding: 3px 8px;
   margin: 4px 0;
 }
+
+/* ==== 编辑器组（SPLIT-1 分屏批）：多组并排，每组自带标签条；组间分隔条可拖 ==== */
+.editor-groups {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-group {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-width: 200px;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border, rgba(128, 128, 128, 0.2));
+}
+
+.editor-group:last-child {
+  border-right: none;
+}
+
+.editor-group-head {
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.editor-group-head .editor-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.editor-group-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.editor-group-close:hover {
+  opacity: 1;
+  background: rgba(128, 128, 128, 0.15);
+}
+
+.editor-divider {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.editor-divider:hover,
+.editor-divider:active {
+  background: rgba(128, 128, 128, 0.35);
+}

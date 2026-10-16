@@ -64,6 +64,18 @@ import {
   planReorder,
   type BatchCloseMode,
 } from './tabs-ops';
+// 编辑器组态（SPLIT-1 分屏）：纯逻辑单源，App 是唯一状态所有者
+import {
+  activeGroupOf,
+  closeTabsInGroup,
+  initialEditorGroups,
+  activateTab as activateTabInGroupState,
+  openInActiveGroup,
+  setActiveGroup as setFocusedGroup,
+  splitActiveRight,
+  closeGroup as closeEditorGroup,
+  type EditorGroupsState,
+} from './editor-groups';
 import {
   FILE_HISTORY_OVERLAY_ID,
   setFileHistoryTarget,
@@ -146,9 +158,17 @@ export function App(): ReactElement {
   const [project, setProject] = useState<GameProject | null>(null);
   const [index, setIndex] = useState<ErbIndex | null>(null);
   const [indexing, setIndexing] = useState(false);
-  const [activeFile, setActiveFile] = useState<string | null>(null);
-  /** 打开的标签页（P3 多标签；顺序即标签栏顺序） */
-  const [openTabs, setOpenTabs] = useState<string[]>([]);
+  /**
+   * 编辑器组态（SPLIT-1 分屏）：**真源**。`activeFile` / `openTabs` 是焦点组的投影
+   * （下方派生），既有单组语义（命令、检索面板、会话记录）全部读投影、写走组操作。
+   */
+  const [editorGroups, setEditorGroups] = useState<EditorGroupsState>(initialEditorGroups);
+  const activeGroup = activeGroupOf(editorGroups);
+  const activeFile = activeGroup.active;
+  const openTabs = activeGroup.tabs;
+  /** 组态快照（回调经 ref 读最新值，不吃陈旧闭包——同 openTabsRef 纪律） */
+  const editorGroupsRef = useRef(editorGroups);
+  editorGroupsRef.current = editorGroups;
   /** 各标签脏态集合（EditorPane 按路径逐个上报；标签栏脏点 + 关闭确认用） */
   const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set());
   /**
@@ -184,10 +204,11 @@ export function App(): ReactElement {
   const [dropHint, setDropHint] = useState<DropOverlayState>('hidden');
   /** 通知中心（入口层 Provider 装配，App 自身也可发通知） */
   const notify = useNotify();
-  /** 编辑器动作句柄（保存/保存指定/全部保存；EditorPane 注册） */
-  const actionsRef = useRef<EditorPaneActions | null>(null);
-  const registerActions = useCallback((a: EditorPaneActions | null) => {
-    actionsRef.current = a;
+  /** 编辑器动作句柄（保存/保存指定/全部保存；EditorPane 按组注册——SPLIT-1 跨组归集） */
+  const actionsByGroupRef = useRef(new Map<string, EditorPaneActions>());
+  const registerActions = useCallback((groupId: string, a: EditorPaneActions | null) => {
+    if (a) actionsByGroupRef.current.set(groupId, a);
+    else actionsByGroupRef.current.delete(groupId);
   }, []);
 
   /* --------- 退出/崩溃守护（2026-10-16）：autosave 引擎 + 会话记录 + 恢复 --------- */
@@ -505,8 +526,7 @@ export function App(): ReactElement {
 
   /** 旧项目的一套 UI 态整体带走：切项目与关项目共用，防旧标签/脏态/待确认残留到下一拍 */
   const resetProjectUiState = useCallback(() => {
-    setActiveFile(null);
-    setOpenTabs([]);
+    setEditorGroups(initialEditorGroups()); // 组态整体重置为单组空栈（SPLIT-1：分屏不跨项目存活）
     setDirtyPaths(new Set());
     setPinnedPaths(new Set()); // pin 是标签态的一部分，随标签一起清（C2）
     setExtraRoots([]); // 会话级附加根是项目会话的一部分（D1）：换项目即清，绝不带进下一个
@@ -527,8 +547,10 @@ export function App(): ReactElement {
     if (tabs.length === 0) return;
     const pinned = new Set((rec?.pinned ?? []).filter((p) => tabs.includes(p)));
     const active = recovered[0] ?? (rec?.active && tabs.includes(rec.active) ? rec.active : tabs[0] ?? null);
-    setOpenTabs(tabs);
-    setActiveFile(active);
+    setEditorGroups((prev) => ({
+      ...prev,
+      groups: prev.groups.map((g) => (g.id === prev.activeGroupId ? { ...g, tabs, active } : g)),
+    }));
     setPinnedPaths(pinned);
   }, []);
 
@@ -567,7 +589,12 @@ export function App(): ReactElement {
           resetProjectUiState();
           restoreSessionTabs(dir, wantRecovery ? recoveredPaths() : []);
         } else {
-          setActiveFile(null);
+          // 同目录重开：标签保住（keepView），激活与定位清掉——清的是**每组**的激活
+          // （多组都还在，激活态一并回空态，与单组时代语义一致）
+          setEditorGroups((prev) => ({
+            ...prev,
+            groups: prev.groups.map((g) => ({ ...g, active: null })),
+          }));
           setReveal(null);
         }
         setIndex(null);
@@ -712,8 +739,7 @@ export function App(): ReactElement {
   );
 
   const commitOpenFile = useCallback((path: string, line?: number, column?: number) => {
-    setOpenTabs((prev) => (prev.includes(path) ? prev : [...prev, path]));
-    setActiveFile(path);
+    setEditorGroups((prev) => openInActiveGroup(prev, path)); // SPLIT-1：开进焦点组
     setReveal(line ? revealTargetOf({ line, column }, Date.now()) : null);
   }, []);
 
@@ -783,7 +809,8 @@ export function App(): ReactElement {
       return;
     }
     const t = window.setTimeout(() => {
-      const records = actionsRef.current?.snapshots() ?? [];
+      // SPLIT-1：跨组归集——每组的动作句柄各自吐自己标签的快照
+      const records = [...actionsByGroupRef.current.values()].flatMap((a) => a.snapshots());
       void engine.snapshot(rootDirRef.current, records).catch(() => undefined);
     }, SNAPSHOT_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
@@ -882,45 +909,40 @@ export function App(): ReactElement {
   const batchQueueRef = useRef<readonly string[] | null>(null);
 
   /**
-   * 一次关掉多张干净标签（C1 批量关闭的地基）：全部走**功能性更新**——
-   * 同步循环里连关多张也不吃陈旧闭包（旧 doCloseTab 的"过滤+赋值"写法连关两张
-   * 会互相覆盖）。激活收尾用快照 ref 一次算清：关的标签里有活动文件 →
-   * 落到原视角下的右侧邻居（末尾则左侧）；空 → 编辑器区回空态。
+   * 一次关掉多张干净标签（C1 批量关闭的地基；SPLIT-1 起落在**焦点组**内）：
+   * 组态纯函数一次算清（过滤 + 组内激活落右邻/左邻 + 组空即收），激活变化才清定位。
+   * 脏态/固定态的连带清理有**跨组门**：路径还被别的组引用着就保留（另一组还开着，
+   * 脏点与 pin 不能端走）。
    */
   const closeManySync = useCallback((paths: readonly string[]) => {
     if (paths.length === 0) return;
-    const gone = new Set(paths);
-    setOpenTabs((prev) => (prev.some((p) => gone.has(p)) ? prev.filter((p) => !gone.has(p)) : prev));
-    setDirtyPaths((prev) => {
+    const prev = editorGroupsRef.current;
+    const next = closeTabsInGroup(prev, prev.activeGroupId, paths);
+    if (activeGroupOf(prev).active !== activeGroupOf(next).active) setReveal(null);
+    setEditorGroups(next);
+    const stillOpen = (p: string): boolean => next.groups.some((g) => g.tabs.includes(p));
+    const gone = new Set(paths.filter((p) => !stillOpen(p)));
+    if (gone.size === 0) return;
+    setDirtyPaths((prevSet) => {
       let n: Set<string> | null = null;
-      for (const p of prev) {
+      for (const p of prevSet) {
         if (gone.has(p)) {
-          n ??= new Set(prev);
+          n ??= new Set(prevSet);
           n.delete(p);
         }
       }
-      return n ?? prev;
+      return n ?? prevSet;
     });
-    setPinnedPaths((prev) => {
+    setPinnedPaths((prevSet) => {
       let n: Set<string> | null = null;
-      for (const p of prev) {
+      for (const p of prevSet) {
         if (gone.has(p)) {
-          n ??= new Set(prev);
+          n ??= new Set(prevSet);
           n.delete(p);
         }
       }
-      return n ?? prev;
+      return n ?? prevSet;
     });
-    const tabs = openTabsRef.current;
-    const cur = activeFileRef.current;
-    if (cur !== null && gone.has(cur)) {
-      const i = tabs.indexOf(cur);
-      const remaining = tabs.filter((p) => !gone.has(p));
-      const removedBefore = tabs.slice(0, i).filter((p) => gone.has(p)).length;
-      const j = Math.min(i - removedBefore, remaining.length - 1);
-      setActiveFile(remaining.length > 0 ? (remaining[j] ?? null) : null);
-      setReveal(null);
-    }
   }, []);
 
   /**
@@ -959,6 +981,82 @@ export function App(): ReactElement {
     [closeManySync],
   );
 
+  /* ------------- 编辑器组交互入口（SPLIT-1 分屏；真源仍是本组件的组态） ------------- */
+
+  /** 点某组的编辑器区域 = 焦点切到该组 */
+  const activateGroup = useCallback((groupId: string) => {
+    setEditorGroups((prev) => setFocusedGroup(prev, groupId));
+  }, []);
+
+  /** 点某组的标签 = 切到该组并激活该标签（activateTab 纯函数一并处理焦点转移） */
+  const activateTabInGroup = useCallback((groupId: string, path: string) => {
+    setEditorGroups((prev) => activateTabInGroupState(prev, groupId, path));
+  }, []);
+
+  /** 组内关标签：干净即关在该组；脏的先聚焦该组再走既有单标签确认链 */
+  const closeTabInGroup = useCallback(
+    (groupId: string, path: string) => {
+      if (dirtyPaths.has(path)) {
+        setEditorGroups((prev) => setFocusedGroup(prev, groupId));
+        setPendingClose(path);
+        return;
+      }
+      const prev = editorGroupsRef.current;
+      const next = closeTabsInGroup(prev, groupId, [path]);
+      if (activeGroupOf(prev).active !== activeGroupOf(next).active) setReveal(null);
+      setEditorGroups(next);
+      // 跨组门：路径还被别的组引用着就保留脏态/固定态（closeManySync 同款口径）
+      if (next.groups.some((g) => g.tabs.includes(path))) return;
+      setDirtyPaths((prevSet) => {
+        if (!prevSet.has(path)) return prevSet;
+        const n = new Set(prevSet);
+        n.delete(path);
+        return n;
+      });
+      setPinnedPaths((prevSet) => {
+        if (!prevSet.has(path)) return prevSet;
+        const n = new Set(prevSet);
+        n.delete(path);
+        return n;
+      });
+    },
+    [dirtyPaths],
+  );
+
+  /** 组内批量关闭：先聚焦该组，计划与确认链照旧走焦点组 */
+  const batchCloseInGroup = useCallback(
+    (groupId: string, mode: BatchCloseMode, anchor: string) => {
+      const prev = editorGroupsRef.current;
+      const g = prev.groups.find((x) => x.id === groupId);
+      if (!g) return;
+      if (prev.activeGroupId !== groupId) setEditorGroups(setFocusedGroup(prev, groupId));
+      const plan = planBatchClose(mode, g.tabs, anchor, pinnedRef.current);
+      if (plan.toClose.length === 0) {
+        notify({ kind: 'info', message: batchCloseEmptyReason(mode, g.tabs, anchor, pinnedRef.current) });
+        return;
+      }
+      const first = plan.toClose[0];
+      if (!first) return;
+      batchQueueRef.current = plan.toClose.slice(1);
+      if (dirtyRef.current.has(first)) setPendingClose(first);
+      else {
+        closeManySync([first]);
+        advanceBatch();
+      }
+    },
+    [closeManySync, advanceBatch, notify],
+  );
+
+  /** 向右拆分（VSCode 同款：新组携带焦点组激活标签，焦点跟到新组） */
+  const splitEditor = useCallback(() => {
+    setEditorGroups((prev) => splitActiveRight(prev));
+  }, []);
+
+  /** 关组（唯一组不关——纯函数里已是原样返回；组内标签随组消失） */
+  const closeGroupById = useCallback((groupId: string) => {
+    setEditorGroups((prev) => closeEditorGroup(prev, groupId));
+  }, []);
+
   /** 关闭标签入口：脏标签先弹确认（绝不静默丢弃，审阅 M4 精神在多标签下的延续） */
   const requestCloseTab = useCallback(
     (path: string) => {
@@ -981,7 +1079,14 @@ export function App(): ReactElement {
         return;
       }
       if (action === 'save-then-go') {
-        const ok = actionsRef.current ? await actionsRef.current.savePath(path) : false;
+        // SPLIT-1：路径可能开在任一组——逐组问，谁持有谁保存（不含该路径的组返回 false）
+        let ok = false;
+        for (const a of actionsByGroupRef.current.values()) {
+          if (await a.savePath(path)) {
+            ok = true;
+            break;
+          }
+        }
         if (!ok) return; // 保存失败：标签保留（错误已显示在编辑器状态栏/通知）
       }
       doCloseTab(path);
@@ -995,9 +1100,14 @@ export function App(): ReactElement {
    * 跨固定区分界的拖放自动改固定态（planReorder：非固定拖进固定区 = pin，
    * 固定拖出 = unpin——落点指示画哪标签落哪，所见即所得）。
    */
-  const reorderTab = useCallback((path: string, toIndex: number) => {
-    const plan = planReorder(openTabsRef.current, path, toIndex, pinnedRef.current);
-    setOpenTabs([...plan.order]);
+  const reorderTabInGroup = useCallback((groupId: string, path: string, toIndex: number) => {
+    const g = editorGroupsRef.current.groups.find((x) => x.id === groupId);
+    if (!g) return;
+    const plan = planReorder(g.tabs, path, toIndex, pinnedRef.current);
+    setEditorGroups((prev) => ({
+      ...prev,
+      groups: prev.groups.map((x) => (x.id === groupId ? { ...x, tabs: plan.order } : x)),
+    }));
     const pc = plan.pinChange;
     if (pc) {
       setPinnedPaths((prev) => {
@@ -1008,10 +1118,18 @@ export function App(): ReactElement {
       });
     }
   }, []);
+  /** 焦点组重排（检索面板等单组消费方的旧签名） */
+  const reorderTab = useCallback(
+    (path: string, toIndex: number) => reorderTabInGroup(editorGroupsRef.current.activeGroupId, path, toIndex),
+    [reorderTabInGroup],
+  );
 
-  /** 全部保存（Ctrl+Shift+S；壳层命令经 ProjectView 注入） */
+  /** 全部保存（Ctrl+Shift+S；壳层命令经 ProjectView 注入；SPLIT-1 起跨组逐组保存） */
   const saveAll = useCallback(async (): Promise<boolean> => {
-    return actionsRef.current ? actionsRef.current.saveAll() : false;
+    for (const a of actionsByGroupRef.current.values()) {
+      if (!(await a.saveAll())) return false;
+    }
+    return true;
   }, []);
 
   /* -------------- 文件树编辑的标签收尾（B1；状态单源在此——树侧只发意图） -------------- */
@@ -1052,15 +1170,25 @@ export function App(): ReactElement {
   }, [kernel, project, openTabs, activeFile, pinnedPaths]);
 
   /** 固定 / 取消固定标签（C2）：pinned 会话态 + 顺序重排（固定区在前，见 applyPin） */
-  const toggleTabPin = useCallback((path: string) => {
+  const togglePinInGroup = useCallback((groupId: string, path: string) => {
     const wasPinned = pinnedRef.current.has(path);
     const nextPinned = new Set(pinnedRef.current);
     if (wasPinned) nextPinned.delete(path);
     else nextPinned.add(path);
     pinnedRef.current = nextPinned; // 同一拍内的连续操作读得到最新值
     setPinnedPaths(nextPinned);
-    setOpenTabs((tabs) => applyPin(tabs, path, !wasPinned, nextPinned));
+    setEditorGroups((prev) => ({
+      ...prev,
+      groups: prev.groups.map((g) =>
+        g.id === groupId ? { ...g, tabs: applyPin(g.tabs, path, !wasPinned, nextPinned) } : g,
+      ),
+    }));
   }, []);
+  /** 焦点组固定（检索面板等单组消费方的旧签名） */
+  const toggleTabPin = useCallback(
+    (path: string) => togglePinInGroup(editorGroupsRef.current.activeGroupId, path),
+    [togglePinInGroup],
+  );
 
   /**
    * 批量关闭入口（C1）：纯函数出计划（pinned 豁免），逐个走既有 requestCloseTab
@@ -1113,11 +1241,24 @@ export function App(): ReactElement {
   const onFilesGone = useCallback(
     (deleted: readonly string[], renamed: ReadonlyArray<{ from: string; to: string }>) => {
       const del = [...deleted];
-      setOpenTabs((prev) => {
-        let next = prev.filter((p) => !del.some((d) => p === d || isPathUnder(d, p)));
-        for (const r of renamed) next = next.map((t) => (t === r.from ? r.to : t));
-        return next;
-      });
+      // SPLIT-1：盘上事实变了，**每一组**里开着的这份都得收尾（先按组关删、再全组换名）
+      const prevGroups = editorGroupsRef.current;
+      let nextGroups = prevGroups;
+      for (const g of prevGroups.groups) {
+        const gone = new Set(g.tabs.filter((p) => del.some((d) => p === d || isPathUnder(d, p))));
+        if (gone.size > 0) nextGroups = closeTabsInGroup(nextGroups, g.id, [...gone]);
+      }
+      const renameMap = new Map(renamed.map((r) => [r.from, r.to] as const));
+      nextGroups = {
+        ...nextGroups,
+        groups: nextGroups.groups.map((g) => ({
+          ...g,
+          tabs: g.tabs.map((t) => renameMap.get(t) ?? t),
+          active: g.active ? (renameMap.get(g.active) ?? g.active) : null,
+        })),
+      };
+      if (activeGroupOf(prevGroups).active !== activeGroupOf(nextGroups).active) setReveal(null);
+      setEditorGroups(nextGroups);
       setDirtyPaths((prev) => {
         let next: Set<string> | null = null;
         for (const d of del) {
@@ -1158,17 +1299,6 @@ export function App(): ReactElement {
         }
         return next ?? prev;
       });
-      const cur = activeFileRef.current;
-      if (cur === null) return;
-      if (del.some((d) => cur === d || isPathUnder(d, cur))) {
-        const tabs = openTabsRef.current.filter((p) => !del.some((d) => p === d || isPathUnder(d, p)));
-        const i = openTabsRef.current.indexOf(cur);
-        setActiveFile(tabs.length > 0 ? (tabs[Math.min(Math.max(i, 0), tabs.length - 1)] ?? null) : null);
-        setReveal(null);
-        return;
-      }
-      const moved = renamed.find((r) => r.from === cur);
-      if (moved) setActiveFile(moved.to);
     },
     [],
   );
@@ -1237,7 +1367,7 @@ export function App(): ReactElement {
       setPendingProjectClose(null);
       if (!paths || action === 'cancel') return;
       if (action === 'save-then-close') {
-        const ok = actionsRef.current ? await actionsRef.current.saveAll() : false;
+        const ok = await saveAll();
         if (!ok) return; // 保存失败：留在项目里（错误已显示在编辑器状态栏/通知），绝不静默丢
       }
       const exitAfter = exitAfterCloseRef.current;
@@ -1328,6 +1458,8 @@ export function App(): ReactElement {
           indexError={indexError}
           activeFile={activeFile}
           openTabs={openTabs}
+          groups={editorGroups.groups}
+          activeGroupId={editorGroups.activeGroupId}
           dirtyPaths={dirtyPaths}
           pinnedPaths={pinnedPaths}
           reveal={reveal}
@@ -1337,6 +1469,14 @@ export function App(): ReactElement {
           onReorderTab={reorderTab}
           onTogglePin={toggleTabPin}
           onBatchCloseTab={runBatchClose}
+          onActivateGroup={activateGroup}
+          onActivateTabInGroup={activateTabInGroup}
+          onRequestCloseTabInGroup={closeTabInGroup}
+          onReorderTabInGroup={reorderTabInGroup}
+          onTogglePinInGroup={togglePinInGroup}
+          onBatchCloseTabInGroup={batchCloseInGroup}
+          onSplitEditor={splitEditor}
+          onCloseGroup={closeGroupById}
           onSaveAll={saveAll}
           onDirtyChange={onDirtyChange}
           registerActions={registerActions}

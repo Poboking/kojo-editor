@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-api';
 import { WellKnownCommands } from '@kojo/plugin-api';
@@ -21,6 +21,7 @@ import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
 import { TabBar } from './tabs-bar';
 import type { BatchCloseMode } from './tabs-ops';
+import type { EditorGroupState } from './editor-groups';
 
 interface Props {
   kernel: Kernel;
@@ -30,8 +31,30 @@ interface Props {
   /** 索引构建失败原因（P0 实机反馈：两个树同时空必须能自解释，不能静默） */
   indexError: string | null;
   activeFile: string | null;
-  /** 打开的标签页（P3 多标签；顺序即标签栏顺序） */
+  /** 打开的标签页（P3 多标签；顺序即标签栏顺序）——**焦点组**的投影（命令/检索面板消费） */
   openTabs: readonly string[];
+  /**
+   * 编辑器组态（SPLIT-1 分屏批）：真源在宿主 App，这里按组渲染「标签条 + 编辑器」。
+   * `activeFile` / `openTabs` 是焦点组的投影，供命令与检索面板等单组消费方使用。
+   */
+  groups: readonly EditorGroupState[];
+  activeGroupId: string;
+  /** 焦点组切换（点击某组编辑器区域） */
+  onActivateGroup: (groupId: string) => void;
+  /** 组内激活标签（点击非焦点组的标签 = 切到该组并激活） */
+  onActivateTabInGroup: (groupId: string, path: string) => void;
+  /** 组内请求关闭标签（脏标签由宿主弹确认；非焦点组先聚焦再走确认链） */
+  onRequestCloseTabInGroup: (groupId: string, path: string) => void;
+  /** 组内拖拽重排标签 */
+  onReorderTabInGroup: (groupId: string, path: string, toIndex: number) => void;
+  /** 组内固定 / 取消固定标签 */
+  onTogglePinInGroup: (groupId: string, path: string) => void;
+  /** 组内批量关闭（先聚焦该组再走既有确认链） */
+  onBatchCloseTabInGroup: (groupId: string, mode: BatchCloseMode, anchor: string) => void;
+  /** 向右拆分（从焦点组，VSCode 同款携带激活标签） */
+  onSplitEditor: () => void;
+  /** 关闭指定组（组内标签全部随组消失；单组不可关） */
+  onCloseGroup: (groupId: string) => void;
   /** 各标签脏态（标签栏脏点，见 `.tab-dirty`） */
   dirtyPaths: ReadonlySet<string>;
   /** 固定标签集合（C2；会话态——与 openTabs 同生命周期，真源在宿主 App） */
@@ -52,8 +75,8 @@ interface Props {
   onSaveAll: () => Promise<boolean>;
   /** 编辑器脏状态上抛（按路径；宿主维护 dirtyPaths） */
   onDirtyChange?: (path: string, dirty: boolean) => void;
-  /** 编辑器动作句柄注册（宿主"保存并关闭 / 全部保存"流程用） */
-  registerActions?: (actions: EditorPaneActions | null) => void;
+  /** 编辑器动作句柄注册（按组；宿主"保存并关闭 / 全部保存"流程跨组归集） */
+  registerActions?: (groupId: string, actions: EditorPaneActions | null) => void;
   onClose: () => void;
   /** 重载项目（索引失败/状态过期时重开同目录，不切欢迎页） */
   onReload: () => void;
@@ -108,6 +131,16 @@ export function ProjectView({
   indexError,
   activeFile,
   openTabs,
+  groups,
+  activeGroupId,
+  onActivateGroup,
+  onActivateTabInGroup,
+  onRequestCloseTabInGroup,
+  onReorderTabInGroup,
+  onTogglePinInGroup,
+  onBatchCloseTabInGroup,
+  onSplitEditor,
+  onCloseGroup,
   dirtyPaths,
   pinnedPaths,
   reveal,
@@ -131,6 +164,23 @@ export function ProjectView({
   onAddExtraRoot,
 }: Props): ReactElement {
   const [editorStatus, setEditorStatus] = useState<EditorStatusInfo | null>(null);
+  /**
+   * 每组各自的状态上抛（SPLIT-1）：状态栏显示**焦点组**的编码/EOL/行数——
+   * 各组把状态写进 ref 表，焦点切换时取焦点组那份。
+   */
+  const statusByGroupRef = useRef(new Map<string, EditorStatusInfo | null>());
+  const activeGroupIdRef = useRef(activeGroupId);
+  activeGroupIdRef.current = activeGroupId;
+  useEffect(() => {
+    setEditorStatus(statusByGroupRef.current.get(activeGroupId) ?? null);
+  }, [activeGroupId]);
+  const handleStatusInfo = useCallback(
+    (gid: string, info: EditorStatusInfo | null) => {
+      statusByGroupRef.current.set(gid, info);
+      if (gid === activeGroupIdRef.current) setEditorStatus(info);
+    },
+    [],
+  );
   /** 壳层通知（G1：命令按下去必须有回应——兑现不了就说一句人话，不灰掉不说话） */
   const notify = useNotify();
   /** 壳层工作台 API（空态动作按钮：快速打开 / 命令面板 / 新建口上文件） */
@@ -217,6 +267,20 @@ export function ProjectView({
           });
         },
       },
+      // 分屏（SPLIT-1 编辑器组批）：向右拆分 = 从焦点组复制激活标签开新组；关组只关焦点组。
+      // 关组刻意不带缺省键位（面板入口即可）——Ctrl+W 已经是关标签，误按代价高。
+      {
+        id: 'workbench.splitEditor',
+        title: '向右拆分编辑器',
+        keybinding: effectiveKeybindingOf('workbench.splitEditor'),
+        run: () => onSplitEditor(),
+      },
+      {
+        id: 'workbench.closeEditorGroup',
+        title: '关闭编辑器组',
+        keybinding: effectiveKeybindingOf('workbench.closeEditorGroup'),
+        run: () => onCloseGroup(activeGroupIdRef.current),
+      },
       /* ---- 编辑器动作（R8 命令面板补齐批）：壳层发意图，EditorPane 落 Monaco 动作 ----
        * **刻意不带缺省键位**：编辑器内这些动作 Monaco 已有内建键（Ctrl+F / Ctrl+H /
        * Shift+Alt+F / F2 / Shift+F12），宿主命令不抢键（注册表带键会在编辑器聚焦时
@@ -263,7 +327,7 @@ export function ProjectView({
       },
     ],
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
-    [onRequestCloseTab, onSaveAll, kernel, notify, kbVersion],
+    [onRequestCloseTab, onSaveAll, onSplitEditor, onCloseGroup, kernel, notify, kbVersion],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →
@@ -496,6 +560,79 @@ export function ProjectView({
     });
   }, [dirtyPaths, onSaveAll, notify]);
 
+  /**
+   * 分隔条拖拽（SPLIT-1）：调宽左右两组。直接改相邻两组的 DOM flex（v1——
+   * 比例不落盘、新开的组回到均分；布局真源仍是 CSS，这里只做会话内微调）。
+   * 最小组宽 200px，防拖没了。
+   */
+  const groupRefs = useRef(new Map<string, HTMLDivElement | null>());
+  const startDividerDrag = useCallback((e: ReactPointerEvent, leftId: string, rightId: string) => {
+    e.preventDefault();
+    const left = groupRefs.current.get(leftId);
+    const right = groupRefs.current.get(rightId);
+    const container = left?.parentElement;
+    if (!left || !right || !container) return;
+    const total = container.clientWidth;
+    const leftW = left.clientWidth;
+    const startX = e.clientX;
+    const move = (ev: PointerEvent): void => {
+      const dx = ev.clientX - startX;
+      const nl = Math.max(200, Math.min(leftW + dx, total - 200));
+      left.style.flex = '0 0 ' + nl + 'px';
+      right.style.flex = '1 1 0%';
+    };
+    const up = (): void => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }, []);
+
+  const renderGroupBody = useCallback(
+    (g: EditorGroupState, focused: boolean): ReactElement =>
+      g.active ? (
+        <EditorPane
+          kernel={kernel}
+          groupId={g.id}
+          filePath={g.active}
+          openPaths={g.tabs}
+          revealLine={focused ? reveal?.line : undefined}
+          revealColumn={focused ? reveal?.column : undefined}
+          revealNonce={focused ? reveal?.nonce : undefined}
+          onDirtyChange={onDirtyChange}
+          registerActions={registerActions ? (a) => registerActions(g.id, a) : undefined}
+          onReauth={onReauth}
+          onStatusInfo={(info) => handleStatusInfo(g.id, info)}
+          onFocused={focused ? undefined : () => onActivateGroup(g.id)}
+        />
+      ) : (
+        <div className="empty-state">
+          <p>没有打开的文件</p>
+          <div className="empty-actions">
+            <button className="primary small" onClick={() => workbench?.openQuickOpen()}>
+              打开文件… <span className="hint">Ctrl+P</span>
+            </button>
+            {workbench?.hasCommand(WellKnownCommands.NewKojoFile) ? (
+              <button
+                className="ghost small"
+                onClick={() => workbench.runCommand(WellKnownCommands.NewKojoFile)}
+              >
+                新建口上文件 <span className="hint">Ctrl+N</span>
+              </button>
+            ) : null}
+            <button className="ghost small" onClick={() => workbench?.openPalette()}>
+              命令面板 <span className="hint">Ctrl+Shift+P</span>
+            </button>
+          </div>
+          <p className="dim">
+            项目已索引 {fileCount} 个 ERB 文件、{fnCount} 个函数定义（口上域全量）
+          </p>
+        </div>
+      ),
+    [kernel, reveal, onDirtyChange, registerActions, onReauth, handleStatusInfo, onActivateGroup, workbench, fileCount, fnCount],
+  );
+
   return (
     <ShellLayout
       kernel={kernel}
@@ -514,23 +651,7 @@ export function ProjectView({
       extraCommands={extraCommands}
       onRegisterWorkbench={setWorkbench}
     >
-      {/* 标签栏（C1 右键菜单 / C2 固定标签 / C3 全部保存入口；渲染细节在 TabBar） */}
-      {openTabs.length > 0 ? (
-        <TabBar
-          openTabs={openTabs}
-          activeFile={activeFile}
-          dirtyPaths={dirtyPaths}
-          pinnedPaths={pinnedPaths}
-          onActivateTab={onActivateTab}
-          onRequestCloseTab={onRequestCloseTab}
-          onReorderTab={onReorderTab}
-          onTogglePin={onTogglePin}
-          onBatchCloseTab={onBatchCloseTab}
-          onSaveAllClick={handleSaveAllClick}
-          hasDirty={dirtyPaths.size > 0}
-        />
-      ) : null}
-      {/* 只读横幅（P0 实机反馈修复）：重授权入口常驻可见可点 */}
+      {/* 只读横幅（P0 实机反馈修复）：项目级一条，重授权入口常驻可见可点 */}
       {!writable ? (
         <div className="ro-banner">
           <span>当前为只读：写权限未批准，保存不可用。修改仍可浏览与复制。</span>
@@ -539,44 +660,60 @@ export function ProjectView({
           </button>
         </div>
       ) : null}
-      <div className="editor-body">
-        {activeFile ? (
-          <EditorPane
-            kernel={kernel}
-            filePath={activeFile}
-            openPaths={openTabs}
-            revealLine={reveal?.line}
-            revealColumn={reveal?.column}
-            revealNonce={reveal?.nonce}
-            onDirtyChange={onDirtyChange}
-            registerActions={registerActions}
-            onReauth={onReauth}
-            onStatusInfo={setEditorStatus}
-          />
-        ) : (
-          <div className="empty-state">
-            <p>没有打开的文件</p>
-            <div className="empty-actions">
-              <button className="primary small" onClick={() => workbench?.openQuickOpen()}>
-                打开文件… <span className="hint">Ctrl+P</span>
-              </button>
-              {workbench?.hasCommand(WellKnownCommands.NewKojoFile) ? (
-                <button
-                  className="ghost small"
-                  onClick={() => workbench.runCommand(WellKnownCommands.NewKojoFile)}
-                >
-                  新建口上文件 <span className="hint">Ctrl+N</span>
-                </button>
+      {/* 编辑器组（SPLIT-1）：每组 = 标签条 + 编辑器/空态；组间分隔条可拖调宽 */}
+      <div className="editor-groups">
+        {groups.map((g, i) => {
+          const focused = g.id === activeGroupId;
+          return (
+            <Fragment key={g.id}>
+              {i > 0 ? (
+                <div
+                  className="editor-divider"
+                  role="separator"
+                  aria-orientation="vertical"
+                  onPointerDown={(e) => {
+                    const left = groups[i - 1];
+                    if (left) startDividerDrag(e, left.id, g.id);
+                  }}
+                />
               ) : null}
-              <button className="ghost small" onClick={() => workbench?.openPalette()}>
-                命令面板 <span className="hint">Ctrl+Shift+P</span>
-              </button>
-            </div>
-            <p className="dim">
-              项目已索引 {fileCount} 个 ERB 文件、{fnCount} 个函数定义（口上域全量）
-            </p>
-          </div>
-        )}
+              <div
+                ref={(el) => {
+                  groupRefs.current.set(g.id, el);
+                }}
+                className={focused ? 'editor-group focused' : 'editor-group'}
+              >
+                <div className="editor-group-head">
+                  {g.tabs.length > 0 ? (
+                    <TabBar
+                      openTabs={g.tabs}
+                      activeFile={g.active}
+                      dirtyPaths={dirtyPaths}
+                      pinnedPaths={pinnedPaths}
+                      onActivateTab={(p) => onActivateTabInGroup(g.id, p)}
+                      onRequestCloseTab={(p) => onRequestCloseTabInGroup(g.id, p)}
+                      onReorderTab={(p, to) => onReorderTabInGroup(g.id, p, to)}
+                      onTogglePin={(p) => onTogglePinInGroup(g.id, p)}
+                      onBatchCloseTab={(mode, anchor) => onBatchCloseTabInGroup(g.id, mode, anchor)}
+                      onSaveAllClick={handleSaveAllClick}
+                      hasDirty={dirtyPaths.size > 0}
+                    />
+                  ) : null}
+                  {groups.length > 1 ? (
+                    <button
+                      className="editor-group-close"
+                      title="关闭此编辑器组"
+                      onClick={() => onCloseGroup(g.id)}
+                    >
+                      <Icon name="close" size={13} />
+                    </button>
+                  ) : null}
+                </div>
+                <div className="editor-body">{renderGroupBody(g, focused)}</div>
+              </div>
+            </Fragment>
+          );
+        })}
       </div>
     </ShellLayout>
   );
