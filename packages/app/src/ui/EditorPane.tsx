@@ -61,6 +61,7 @@ import {
 } from '../monaco/kojo-signature';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
+import { applyReferenceEdits, installErbRename } from '../monaco/erb-rename';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { editorOptionsForLineCount } from './editor-options';
@@ -1278,6 +1279,41 @@ export function EditorPane({
     const completionDisposer = installKojoCompletion(monaco, () => editorTables(kernel));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
     const erbCompletionDisposer = installErbCompletion(monaco, () => editorTables(kernel));
+    // ERB 函数重命名（F2，2026-10-16）：判定与编辑收集全在解析器索引（`erb.parser`），
+    // 宿主只注入 monaco 拿不到的东西——活动标签判据（同 codeAction 逐字同款）、写权限
+    // （`kernel.io.isWritable`，与保存同源口径）、已开标签表、未打开文件的 io 落盘通道。
+    const erbRenameDisposer = installErbRename(monaco, {
+      canAnswer: (model) => {
+        const path = filePathRef.current;
+        return !!path && !sugarModelRef.current && model === editorRef.current?.getModel();
+      },
+      currentIndex: () => {
+        try {
+          return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+        } catch {
+          return null;
+        }
+      },
+      referencesTo: (name) => {
+        try {
+          const parser = kernel.services.tryGet<ErbParserService>('erb.parser');
+          return parser?.referencesTo ? parser.referencesTo(name) : null;
+        } catch {
+          return null;
+        }
+      },
+      isWritable: (path) => kernel.io.isWritable(path),
+      openModelFor: (filePath) => {
+        const key = matchOpenedPath(entriesRef.current.keys(), filePath);
+        return key ? entriesRef.current.get(key)?.model : undefined;
+      },
+      applyToClosedFile: async (filePath, refs, newName, normalizedName) => {
+        const { text } = await kernel.io.readText(filePath);
+        const next = applyReferenceEdits(text, refs, newName, normalizedName);
+        if (next.text !== text) await kernel.io.writeText(filePath, next.text);
+        return { applied: next.applied, stale: next.stale };
+      },
+    });
     // 文档格式化（E1，`Shift+Alt+F`）：规则全在插件（`computeFormatEdits` 纯函数），宿主只做
     // 协议翻译。应答判据与 codeAction / 转到定义逐字同款：只认**当前活动标签的真 model**——
     // 糖视图挂着只读派生 model，格式化它改的不是真文件，所以一律不应答。
@@ -1332,6 +1368,7 @@ export function EditorPane({
       formatterDisposer.dispose();
       codeLensDisposer.dispose();
       erbCompletionDisposer.dispose();
+      erbRenameDisposer.dispose();
       completionDisposer.dispose();
       semanticDisposer.dispose();
       foldingDisposer.dispose();
