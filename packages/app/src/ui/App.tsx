@@ -30,6 +30,7 @@ import {
   type SessionRecord,
 } from './session-store';
 import { clearRecoveredContents, recoveredPaths, setRecoveredContents } from './recovery-store';
+import { planProjectSwitch, resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
 import { bootstrapKernel } from '../bootstrap';
 import { perf } from '../perf';
 import { revealTargetOf, type RevealTarget } from '../monaco/reveal-position';
@@ -166,6 +167,8 @@ export function App(): ReactElement {
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   /** 待确认的关项目/关窗（非 null = 弹全项目未保存确认；深审 A2） */
   const [pendingProjectClose, setPendingProjectClose] = useState<ReadonlySet<string> | null>(null);
+  /** 待确认的切项目（SAFE-1）：非 null = 弹同款全项目确认，目标根暂存到决策回调 */
+  const [pendingProjectSwitch, setPendingProjectSwitch] = useState<{ dir: string; paths: ReadonlySet<string> } | null>(null);
   /** Alt+F4 批准后：关项目完成即退出应用（窗口关闭意图延续，不走二次确认） */
   const exitAfterCloseRef = useRef(false);
   /** 关窗放行标志：确认框批准 + 关项目完成后置位，守卫对主动 close() 不拦（退出通道） */
@@ -216,6 +219,10 @@ export function App(): ReactElement {
       return next;
     });
   }, []);
+
+  /** 脏标签集合的最新值快照（openProject 换根守卫 / 拖放落地 / 关窗守卫共用，不吃陈旧闭包） */
+  const dirtyRef = useRef(dirtyPaths);
+  dirtyRef.current = dirtyPaths;
 
   useEffect(() => {
     let disposed = false;
@@ -526,8 +533,17 @@ export function App(): ReactElement {
   }, []);
 
   const openProject = useCallback(
-    async (dir: string, opts?: { keepView?: boolean }) => {
+    async (dir: string, opts?: { keepView?: boolean; skipDirtyConfirm?: boolean }) => {
       if (!kernel) return;
+      // SAFE-1（2026-10-16）：换根开项目前先过脏确认——旧项目有未保存修改时，
+      // recent 点击 / chooseAndOpen / 拖入新目录三条路收在这同一个决策口
+      // （与 requestCloseProject 同款三选一），绝不随 EditorPane 卸载静默 dispose。
+      // 确认回调续跑时带 skipDirtyConfirm 直进，不再二次弹框。
+      const plan = planProjectSwitch(project?.rootDir ?? null, dir, dirtyRef.current, opts);
+      if (plan.kind === 'confirm') {
+        setPendingProjectSwitch({ dir, paths: plan.paths });
+        return;
+      }
       // 崩溃恢复意图只对"下一次开项目"生效一次（打开失败也不悬挂到更晚的打开）
       const wantRecovery = pendingRecoverRef.current;
       pendingRecoverRef.current = false;
@@ -718,9 +734,6 @@ export function App(): ReactElement {
 
   const phaseRef = useRef<AppPhase>(phase);
   phaseRef.current = phase;
-  // 拖放落地要用、但不值得整依赖进订阅 effect 的快照（脏标签集合 / 当前项目根）
-  const dirtyRef = useRef(dirtyPaths);
-  dirtyRef.current = dirtyPaths;
 
   // Alt+F4 / 关窗守卫（深审 A2）：Tauri 的 onCloseRequested 不 preventDefault 就直接
   // 关窗（EditorPane 卸载 dispose 全部 model，脏修改静默丢失）。一律先拦下再分流：
@@ -837,7 +850,7 @@ export function App(): ReactElement {
           io,
           paths,
           projectOpen: ph === 'project',
-          hasUnsavedChanges: dirtyRef.current.size > 0,
+          // SAFE-1：项目态换目录的脏确认收口在 openProject 换根守卫（不再这里拒切）
           currentProjectDir: rootDirRef.current,
           openFile: (p) => requestOpenFile(p),
           openProject: (dir) => void openProject(dir),
@@ -1249,6 +1262,32 @@ export function App(): ReactElement {
     [pendingProjectClose, closeProject],
   );
 
+  /**
+   * 切项目确认的落地（SAFE-1）：三选一与 decideProjectClose 同款分流——
+   * 取消 / 保存失败留在原地；保存成功与明确丢弃都先走 journal 强制 discard
+   * （刚存完的陈旧快照、用户明确不要的内容，都不能再被崩溃恢复端回来），
+   * 再带 skipDirtyConfirm 续跑 openProject。
+   */
+  const decideProjectSwitch = useCallback(
+    async (action: 'save-then-close' | 'discard' | 'cancel') => {
+      const pending = pendingProjectSwitch;
+      setPendingProjectSwitch(null);
+      if (!pending) return;
+      // 对话框的动作字面量与关项目共用一套（save-then-close），归一到切换语义
+      const decision: ProjectSwitchDecision = action === 'save-then-close' ? 'save-then-go' : action;
+      const saveOk =
+        decision === 'save-then-go' ? (actionsRef.current ? await actionsRef.current.saveAll() : false) : true;
+      if (resolveProjectSwitch(decision, saveOk).kind === 'stay') return;
+      try {
+        await autosaveRef.current?.discard();
+      } catch {
+        // 清理失败不拦切项目（与 decideProjectClose 同口径）
+      }
+      await openProject(pending.dir, { skipDirtyConfirm: true });
+    },
+    [pendingProjectSwitch, openProject],
+  );
+
   /** 重授权入口（定稿 Q9：状态栏徽章点击 + 通知 action 两者都留） */
   const requestReauth = useCallback(() => {
     if (project) setPendingApproval(project);
@@ -1344,6 +1383,9 @@ export function App(): ReactElement {
       ) : null}
       {pendingProjectClose ? (
         <UnsavedFilesConfirmDialog paths={pendingProjectClose} onDecide={decideProjectClose} />
+      ) : null}
+      {pendingProjectSwitch ? (
+        <UnsavedFilesConfirmDialog context="switch" paths={pendingProjectSwitch.paths} onDecide={decideProjectSwitch} />
       ) : null}
     </>
   );

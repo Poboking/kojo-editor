@@ -42,8 +42,6 @@ export const UNREADABLE_REASON = '找不到这个文件，或当前读不了它'
 export const PROJECT_GATE_MESSAGE = '没打开游戏项目之前，文件拖不进来：请先在欢迎页选好游戏目录。';
 /** 一次拖了多个文件夹：第一个生效，其余进聚合通知 */
 export const ONE_DIRECTORY_REASON = '文件夹一次只打开一个，其余先忽略';
-/** 项目态拖入新文件夹但有脏标签：拒切，一句话说清，不静默也不弹多余确认框 */
-export const DIRTY_SWITCH_REASON = '还有没保存的修改，先保存或关掉再换项目';
 /** opening/boot 态拖入：项目还没就绪，什么都接不住——说一句，不静默 */
 export const NOT_READY_MESSAGE = '正在准备界面，等就绪后再拖一次就能打开了。';
 
@@ -143,8 +141,6 @@ export interface DropRouting {
   readonly paths: readonly string[];
   /** 已打开项目（phase = project）：文件开标签、目录可切换/重载 */
   readonly projectOpen: boolean;
-  /** 项目态下有没有脏标签（true = 拒绝切到别的项目，给一句人话不静默） */
-  readonly hasUnsavedChanges: boolean;
   /** 当前项目根目录（null = 未开）；拖入同一个目录视作重载 */
   readonly currentProjectDir: string | null;
   readonly openFile: (path: string) => void;
@@ -156,7 +152,8 @@ export interface DropRouting {
 /**
  * drop 落地总路由（宿主调用）：
  * - 文件夹是项目入口（欢迎页与项目态同权，对标 VSCode）：第一个生效，其余进聚合通知；
- * - 项目态换目录但有脏标签 → 拒切并说人话；拖入当前目录 → 重载；
+ * - 项目态换目录 → 交给宿主 openProject（SAFE-1 起换根脏确认收口在它的守卫里，
+ *   与 recent 点击 / chooseAndOpen 同一条决策链）；拖入当前目录 → 重载；
  * - 文件只在项目态开标签；欢迎页拖文件逐个给 gate 理由；
  * - 所有拒绝聚合成**一条**人话通知，绝不静默丢弃。
  */
@@ -169,7 +166,6 @@ export async function routeDroppedPaths(r: DropRouting): Promise<void> {
       continue;
     }
     if (r.projectOpen && r.currentProjectDir === dir) r.reloadProject();
-    else if (r.projectOpen && r.hasUnsavedChanges) rejected.push({ path: dir, reason: DIRTY_SWITCH_REASON });
     else r.openProject(dir);
   }
   if (split.files.length > 0) {

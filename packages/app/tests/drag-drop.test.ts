@@ -4,7 +4,6 @@ import {
   COPY_READONLY_REASON,
   DIRECTORY_REASON,
   DRAG_DROP_EVENT_NAME,
-  DIRTY_SWITCH_REASON,
   NOT_READY_MESSAGE,
   ONE_DIRECTORY_REASON,
   OPENABLE_EXT,
@@ -162,7 +161,6 @@ describe('routeDroppedPaths：文件夹即项目入口', () => {
       io: f.io,
       paths: [],
       projectOpen: false,
-      hasUnsavedChanges: false,
       currentProjectDir: null,
       openFile: (p) => f.calls.push(`open:${p}`),
       openProject: (d) => f.calls.push(`openProject:${d}`),
@@ -215,20 +213,16 @@ describe('routeDroppedPaths：文件夹即项目入口', () => {
     expect(f.calls).toEqual(['stat:D:\\新项目', 'openProject:D:\\新项目']);
   });
 
-  it('项目态有脏标签拖新目录 → 拒切并给一句人话，不静默也不弹确认', async () => {
+  it('项目态有脏标签拖新目录 → 交给宿主 openProject（脏确认收口在换根守卫）', async () => {
     const f = fakeIo({ dirs: ['D:\\新项目'] });
     await routeDroppedPaths(
       routingOf(f, {
         paths: ['D:\\新项目'],
         projectOpen: true,
         currentProjectDir: 'D:\\旧项目',
-        hasUnsavedChanges: true,
       }),
     );
-    expect(f.calls.some((c) => c.startsWith('openProject:') || c === 'reload')).toBe(false);
-    const notices = noticesOf(f.calls);
-    expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain(DIRTY_SWITCH_REASON);
+    expect(f.calls).toEqual(['stat:D:\\新项目', 'openProject:D:\\新项目']);
   });
 
   it('项目态拖当前目录 → 重载（keepView 语义），脏标签也不拦', async () => {
@@ -238,7 +232,6 @@ describe('routeDroppedPaths：文件夹即项目入口', () => {
         paths: ['D:\\旧项目'],
         projectOpen: true,
         currentProjectDir: 'D:\\旧项目',
-        hasUnsavedChanges: true,
       }),
     );
     expect(f.calls).toEqual(['stat:D:\\旧项目', 'reload']);

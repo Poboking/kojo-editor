@@ -77,4 +77,3 @@
 
 | ID | 任务（现象 / 复现 / 期望 vs 实际） | 认领 |
 |---|---|---|
-| SAFE-1 | **切项目路径不清场确认：旧项目有脏时点 recent/拖入新目录，脏 model 随 EditorPane 卸载 dispose 静默丢**（guard 批收口时发现，master 既有行为）：复现＝开项目改文件不存 → 欢迎页点另一 recent（或拖入新目录）→ `App.openProject` 直接换根，无任何确认；对照＝同场景走 `requestCloseProject` 有脏确认、拖入路径有 `hasUnsavedChanges` 提示，唯 recent 点击/chooseAndOpen 无。期望＝openProject 换根前加与 requestCloseProject 同款三选一确认；实际＝静默丢。注意：autosave journal 在切项目时随 dirty 清空而 clear，兜不住这个口 | 待认领 |
