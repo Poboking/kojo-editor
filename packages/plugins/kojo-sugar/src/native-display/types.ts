@@ -84,3 +84,93 @@ export function countVerbatimNativeLines(
   }
   return { count: lines.length, lines };
 }
+
+/**
+ * 源行是否**计入红线面积**：空行、`;` 注释、`[SKIPSTART]` / `[SKIPEND]` 不计。
+ *
+ * 为什么单列一条：红线量 = 「未被投影接管、且作者真的得读它」的源行数。
+ * 空行与注释不是"没中文化的 ERB"，把它们算进去只会让读数虚高、掩盖真问题；
+ * `[SKIP]` 区连引擎都不执行，更不是要读的东西。
+ */
+export function isCountableErBLine(source: string): boolean {
+  const t = source.trim();
+  if (t.length === 0) return false;
+  if (t.startsWith(';')) return false;
+  return t !== '[SKIPSTART]' && t !== '[SKIPEND]';
+}
+
+/** 投影段的最小结构（避开对 `@kojo/plugin-api` 段类型的依赖；字段与 `SugarProjectSegment` 同名同义） */
+export interface VerbatimSegmentShape {
+  /** 源区间起点（1 基，含） */
+  readonly fromLine: number;
+  /** 源区间终点（1 基，含） */
+  readonly toLine: number;
+  /** 该段的糖写法（多行，`\n` 分隔） */
+  readonly sugarText: string;
+}
+
+/** 红线读数（面积拆分，便于逐线追责） */
+export interface VerbatimMeasurement {
+  /** 红线总行数（= 未被接管 + 段内逐字透传） */
+  readonly count: number;
+  /** 未被任何段接管的源行数（今天的主要面积：宿主原样透传） */
+  readonly uncovered: number;
+  /** 被段接管、但糖文本与源行逐字相同的行数（1:1 对齐的段才可比） */
+  readonly echoed: number;
+  /** 计入面积的源行总数（分母：非空、非注释、非 `[SKIP]` 标记） */
+  readonly total: number;
+  /** 明细（1 基行号 + 原文，便于报红格式「屏上原样文案」） */
+  readonly hits: ReadonlyArray<{ line: number; text: string }>;
+}
+
+/**
+ * **段感知**的红线尺子（系列唯一实现；宿主与测试都走这里，禁自己数）。
+ *
+ * 面积定义：
+ * - `uncovered`：源行不在任何投影段区间内 ⇒ 上屏就是它自己 ⇒ 一整行 ERB；
+ * - `echoed`：段内糖文本与源行**行数 1:1 对齐**（段区间源行数 == 糖行数）时逐行比对，
+ *   相同即"接管了但什么都没改"；非 1:1 的段无法对齐比较，不参与本项（**不猜**）。
+ *
+ * 分母 `total` 只算**作者真得读的行**：空行、`;` 注释、`[SKIPSTART]`/`[SKIPEND]` 不计。
+ */
+export function measureVerbatimNativeLines(
+  sourceLines: readonly string[],
+  segments: readonly VerbatimSegmentShape[],
+): VerbatimMeasurement {
+  const covered = new Set<number>();
+  for (const seg of segments) {
+    for (let ln = seg.fromLine; ln <= seg.toLine; ln++) covered.add(ln);
+  }
+
+  const hits: { line: number; text: string }[] = [];
+  let uncovered = 0;
+  let echoed = 0;
+  let total = 0;
+
+  for (let i = 0; i < sourceLines.length; i++) {
+    const src = sourceLines[i] ?? '';
+    if (!isCountableErBLine(src)) continue;
+    total++;
+    if (!covered.has(i + 1)) {
+      uncovered++;
+      hits.push({ line: i + 1, text: src.trim() });
+    }
+  }
+
+  for (const seg of segments) {
+    const srcCount = seg.toLine - seg.fromLine + 1;
+    const sugarLines = seg.sugarText.split('\n');
+    if (sugarLines.length !== srcCount) continue; // 非 1:1 ⇒ 无法对齐，不猜
+    for (let k = 0; k < srcCount; k++) {
+      const src = sourceLines[seg.fromLine - 1 + k] ?? '';
+      if (!isCountableErBLine(src)) continue;
+      if (isVerbatimNativeLine(sugarLines[k] ?? '', src)) {
+        echoed++;
+        hits.push({ line: seg.fromLine + k, text: src.trim() });
+      }
+    }
+  }
+
+  hits.sort((a, b) => a.line - b.line);
+  return { count: uncovered + echoed, uncovered, echoed, total, hits };
+}
