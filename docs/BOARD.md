@@ -77,3 +77,9 @@
 
 | ID | 任务（现象 / 复现 / 期望 vs 实际） | 认领 |
 |---|---|---|
+
+## U. safe2 落地对照新发现（lead 2026-10-16）
+
+| ID | 任务（现象 / 复现 / 期望 vs 实际） | 认领 |
+|---|---|---|
+| LS-KB1 | **`workspace-symbols` 计时池红：LS-R8 键位注册表重构后断言形态失配**（`packages/app/tests/workspace-symbols.test.ts`「命令注册表里有 `workbench.workspaceSymbols` 且绑 `ctrl+t`」）。现象：断言源码含 `keybinding: 'ctrl+t' 字面量，LS-R8（`d13db29` 集中键位注册表）改了注册形态 ⇒ 逐字复现于纯基线游离检出对照（与 safe2 批无关）。期望＝断言对齐新注册表真源（读 LS-R8 后的注册结构改判据，不许删断言凑绿）；实际＝恒红。归口：LS/键位线 | 待认领 |
