@@ -122,8 +122,13 @@ import 'monaco-editor/editor/common/standaloneStrings.js';
 
 import * as monacoApi from 'monaco-editor/editor/editor.api';
 import { registerJsonLanguage } from './json-language';
+// ZH-D4 回车缩进（on-type 兜底层）与区间格式化：provider 自带语言闸（认不出 id 就沉默），
+// 注册面留在装配点一次性完成；整篇格式化的接线仍在 EditorPane（宿主 resolve 判据不变）。
+import { installEnterIndenter, installRangeFormatter } from './kojo-format';
 
 // B 档：`.json` 微型 Monarch（不用 languages/features/json 的 400 KB worker feature）
 registerJsonLanguage(monacoApi);
+installRangeFormatter(monacoApi);
+installEnterIndenter(monacoApi);
 
 export * from 'monaco-editor/editor/editor.api';

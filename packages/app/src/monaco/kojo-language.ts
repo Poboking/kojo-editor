@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
 import type { LineDecoration } from '@kojo/plugin-api';
-import { RESERVED_PRONOUNS, SUGAR_LEXICON_OPERATORS, SUGAR_LEXICON_WORDS, SYSTEM_FUNCTION_ALIASES } from '@kojo/plugin-kojo-sugar';
+import { RESERVED_PRONOUNS, SUGAR_LEXICON_OPERATORS, SUGAR_LEXICON_WORDS, SYSTEM_FUNCTION_ALIASES, sugarEnterRulePatterns } from '@kojo/plugin-kojo-sugar';
 import { CJK_WORD_PATTERN } from './word-separators';
 
 /**
@@ -171,10 +171,22 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
     },
   } as Monaco.languages.IMonarchLanguage);
 
+  // ZH-D4 回车层级：正则族由 `kojo-sugar` 从关键字表**派生**（本文件零词形硬编码）。
+  const enterPatterns = sugarEnterRulePatterns();
   monaco.languages.setLanguageConfiguration(KOJO_LANGUAGE_ID, {
     comments: { lineComment: ';' },
     // 全角标点按词分隔（A3）；`：` 触发字在 quickSuggestions 关后靠它走显式触发通道（见 word-separators.ts 头注）
     wordPattern: CJK_WORD_PATTERN,
+    // 块头行回车 ⇒ 新行 +1 级（`beforeText` 匹配"光标以左整行"⇒ 天然只在冒号后回车触发）；
+    // 精确判型另见 `kojo-format.ts` 的 on-type 兜底层。
+    onEnterRules: enterPatterns.indentOnEnter.map((beforeText) => ({
+      beforeText,
+      action: { indentAction: monaco.languages.IndentAction.Indent },
+    })),
+    indentationRules: {
+      increaseIndentPattern: enterPatterns.increaseIndentPattern,
+      decreaseIndentPattern: enterPatterns.decreaseIndentPattern,
+    },
     brackets: [
       ['{', '}'],
       ['「', '」'],

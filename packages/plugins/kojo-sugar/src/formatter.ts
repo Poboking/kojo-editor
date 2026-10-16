@@ -68,10 +68,10 @@ export interface FormatEdit {
   readonly text: string;
 }
 
-/** 一个缩进层级 = 4 个半角空格（`indentLevel` 的折算基：`ceil(空格数 / 4)`） */
-const SPACE_UNIT = '    ';
-/** 一个缩进层级 = 1 个 TAB */
-const TAB_UNIT = '\t';
+/** 一个缩进层级 = 4 个半角空格（`indentLevel` 的折算基：`ceil(空格数 / 4)`；`enter.ts` 的回车追加单位与它同源） */
+export const SPACE_UNIT = '    ';
+/** 一个缩进层级 = 1 个 TAB（同上） */
+export const TAB_UNIT = '\t';
 
 /**
  * 不做行内注释剥离、也不进缩进探测的行类。

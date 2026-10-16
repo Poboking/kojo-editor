@@ -946,6 +946,13 @@ export { STATEMENT_FUNCTIONS } from './statement-functions';
 // （规范 §5.5 的 `{t}` / `{n}` / `{i}` 求值只此一份实现），宿主侧不得另拼字符串。
 // additive 纯再导出：`codegen.ts` 本体零改动、旧消费方零改动。
 export { buildFunctionName } from './codegen';
+
+// ZH-D4 回车层级（纯判型 + 由词表派生的回车正则族；宿主 Monaco 只做协议翻译）
+export {
+  sugarEnterIndentAfter,
+  sugarEnterRulePatterns,
+  type SugarEnterRulePatterns,
+} from './enter';
 // E16：裸引擎全局白名单（`SELECTCOM`/`PREVCOM`/…；判据与实测计数在模块头注）
 export { ENGINE_GLOBAL_IDENTIFIERS, resolveEngineGlobal } from './engine-globals';
 export {
