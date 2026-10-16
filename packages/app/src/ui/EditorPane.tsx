@@ -63,7 +63,7 @@ import {
 } from './font-size-pref';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { setJumpProbe } from './jump-to-state';
-import { takeRecoveredContent } from './recovery-store';
+import { dropRecoveredContent, peekRecoveredContent } from './recovery-store';
 import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
 import {
   collectSemanticTokenSpans,
@@ -2203,7 +2203,13 @@ export function EditorPane({
           // 一生出来就是"未保存脏"。恢复**永不自动写游戏目录**：存不存由用户决定。
           // （SPLIT-1：model 经进程级池取——同文件另一组已开则直接共享同一份；
           //   恢复注入只在"全池首次打开"生效，快照语义本就是重启后第一次。）
-          const recovered = takeRecoveredContent(filePath);
+          // **竞态修复（"app ate my work"批）**：快照只 **peek 不消费**——消费一律推迟到
+          // 提交闸之后（!cancelled 且条目落进 entriesRef 且基线已由池钉住）。旧的"取即删"
+          // 让快速切换（cancelled 生效）后的重跑拿到 null → 按读盘语义补基线 → 恢复内容
+          // 被洗成"干净"：autosave 不存、退出无提示丢弃、外部 file.changed 直接覆盖。
+          // 基线钉 0 由**池在建 model 的那一刻**落在记录上（fromRecovery），不依赖闭包里的
+          // `recovered` 撑过 await。
+          const recovered = peekRecoveredContent(filePath);
           const pooled = await editorModelPool.acquire(
             kernel,
             filePath,
@@ -2212,7 +2218,13 @@ export function EditorPane({
               : undefined,
           );
           stopRead();
-          if (cancelled) return;
+          if (cancelled) {
+            // 引用计数对称回收：这次 acquire 不提交就必须 release（refcount-leak 修复——
+            // 快速 Ctrl+P 每次竞态都会留下一份没人认领的 model/引用，整个会话不释放）。
+            // 快照未消费（peek 语义），下一轮重跑照常能以恢复内容重建。
+            editorModelPool.release(filePath);
+            return;
+          }
           const model = pooled.model;
           // 逐 model 脏监听（BUG-4：版本号 O(1) 比较；后台标签的编辑同样上报）；
           // 每组各挂各的监听（共享 model 的另一组由它自己的监听上报）
@@ -2238,10 +2250,17 @@ export function EditorPane({
           });
           entry = { model, listener, encoding: pooled.encoding, eol: pooled.eol };
           entriesRef.current.set(filePath, entry);
-          editorModelPool.setBaseline(filePath, model.getAlternativeVersionId());
-          // 恢复件特例：基线钉 0（≠ 任何真实版本号）——内容本身就是"未保存"，即使
-          // 用户一路撤销回快照原样，脏标记也不消失（对盘而言它确实没保存过）
-          if (recovered) editorModelPool.setBaseline(filePath, 0);
+          // 已保存基线只在**本条目首次落进池记录**时按当前版本号落定；池里已有基线就不碰——
+          // 恢复件的 0 钉（池建 model 时落的：内容本身就是"未保存"，撤销回快照原样脏标也不消失）
+          // 与另一组未保存的保存点都属文件级真相，无条件重设等于"第二组一打开就把第一组的
+          // 未保存内容洗成干净"（本批竞态的另一半成因）。
+          if (editorModelPool.baseline(filePath) === undefined) {
+            editorModelPool.setBaseline(filePath, model.getAlternativeVersionId());
+          }
+          // 提交成功（条目已入、基线已钉）⇒ 此刻才允许消费恢复快照；内容从此活在共享 model 里，
+          // 由 autosave/用户保存接管后续。本轮没真用上快照（池里已是读盘 model）就**不消费**——
+          // 留给下一次全池首开。
+          if (recovered && pooled.fromRecovery) dropRecoveredContent(filePath);
         } catch (e: unknown) {
           stopRead(); // 幂等：读盘失败时补记一次采样（正常路径已记过则跳过）
           if (!cancelled) setError(e instanceof Error ? e.message : String(e));

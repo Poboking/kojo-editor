@@ -28,6 +28,21 @@ export function takeRecoveredContent(path: string): RecoveredFileContent | null 
   return v;
 }
 
+/**
+ * 非消费读取（2026-10 恢复注入竞态批）：注入方在**提交闸之前**只能用这颗——
+ * "取即删"发生在 await 前，快速切换（cancelled）后的重跑会领到 null，
+ * 恢复内容随即被按读盘语义洗成"干净"（app ate my work 主案发现场）。
+ * 消费时机由 `dropRecoveredContent` 决定；池侧基线钉 0 兜住"重跑复用已建 model"的分岔。
+ */
+export function peekRecoveredContent(path: string): RecoveredFileContent | null {
+  return store.get(path) ?? null;
+}
+
+/** 提交后消费（与 `peekRecoveredContent` 配对）：快照内容确实已落进 model 并钉好基线才删 */
+export function dropRecoveredContent(path: string): void {
+  store.delete(path);
+}
+
 /** 尚未领走的恢复路径（恢复合并进标签集用；不消费） */
 export function recoveredPaths(): string[] {
   return [...store.keys()];

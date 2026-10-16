@@ -1073,10 +1073,22 @@ export function App(): ReactElement {
     setEditorGroups((prev) => splitActiveRight(prev));
   }, []);
 
-  /** 关组（唯一组不关——纯函数里已是原样返回；组内标签随组消失） */
+  /**
+   * 关组（唯一组不关——closeGroup 纯函数里已原样返回）。
+   * 关门前必须先过脏门：组内若有任何脏标签，走逐标签确认批量关闭（脏的弹确认、
+   * 干净的即关，全空后整组由 closeTabsInGroup 自动回收）——直接 closeEditorGroup
+   * 会静默 dispose 组内脏 model（与关窗守卫同一「绝不静默丢修改」铁律）。
+   * 无脏时维持原语义整组直接收（含固定标签，无数据可丢）。
+   */
   const closeGroupById = useCallback((groupId: string) => {
-    setEditorGroups((prev) => closeEditorGroup(prev, groupId));
-  }, []);
+    const prev = editorGroupsRef.current;
+    const g = prev.groups.find((x) => x.id === groupId);
+    if (g && g.tabs.some((p) => dirtyRef.current.has(p))) {
+      batchCloseInGroup(groupId, 'all', g.active ?? g.tabs[0]!);
+      return;
+    }
+    setEditorGroups(closeEditorGroup(prev, groupId));
+  }, [batchCloseInGroup]);
 
   /** 关闭标签入口：脏标签先弹确认（绝不静默丢弃，审阅 M4 精神在多标签下的延续） */
   const requestCloseTab = useCallback(
@@ -1405,9 +1417,16 @@ export function App(): ReactElement {
       if (exitAfter && isTauri()) {
         // 退出通道 = 放行原生 close：置放行标志后主动 close()，守卫对这次请求不拦
         //（@tauri-apps/api v2 核心无 process 模块；capabilities 已加 core:window:allow-close）
+        // 用 finally 复位：若 close() 未真正终结进程（末窗策略拦截 / 异常返回），
+        // 标志会一直为 true ⇒ 关窗守卫对本会话剩余时间永久失效、脏修改再无提示。
+        // close() 成功终结进程时 finally 不再执行，无副作用。
         windowCloseApprovedRef.current = true;
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        await getCurrentWindow().close();
+        try {
+          const { getCurrentWindow } = await import('@tauri-apps/api/window');
+          await getCurrentWindow().close();
+        } finally {
+          windowCloseApprovedRef.current = false;
+        }
       }
     },
     [pendingProjectClose, closeProject],

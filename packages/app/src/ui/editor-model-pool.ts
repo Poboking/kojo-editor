@@ -28,6 +28,8 @@ export interface PooledModelEntry {
   readonly model: Monaco.editor.ITextModel;
   readonly encoding: string;
   readonly eol: string;
+  /** 这份 model 的初稿来自恢复快照（而非读盘）——调用方据此决定**提交后**才消费快照 */
+  readonly fromRecovery: boolean;
 }
 
 export interface PoolDeps {
@@ -40,6 +42,12 @@ export interface PoolDeps {
 interface PoolRecord {
   entry?: PooledModelEntry;
   refs: number;
+  /**
+   * 正在等待 `loading` 落地的 acquire 数（含**尚未把自身引用挂上**的）。
+   * refs 归零但 pending>0 ⇒ 记录不许 dispose/回收：等待者的引用会在其 settle
+   * 续体里挂上，提前拆记录会把那份 model 变成"已 dispose 却仍被返回"的孤儿。
+   */
+  pending: number;
   loading?: Promise<PooledModelEntry>;
   /** 已保存基线版本号（BUG-4）；随文件存续，最后一份引用释放时一并清掉 */
   baseline?: number;
@@ -59,7 +67,7 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
   const recordOf = (path: string): PoolRecord => {
     let rec = pool.get(path);
     if (!rec) {
-      rec = { refs: 0 };
+      rec = { refs: 0, pending: 0 };
       pool.set(path, rec);
     }
     return rec!;
@@ -69,15 +77,20 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
     async acquire(kernel, path, opts) {
       const rec = recordOf(path);
       // 恢复件特例优先于一切：只要调用方带了恢复内容且 model 还没建，就以恢复内容建
-      // （model 已在池里 = 已在别处打开，恢复注入不再适用——快照语义是"重启后第一次打开"）
+      // （model 已在池里 = 已在别处打开，恢复注入不再适用——快照语义本就是"重启后第一次"）。
+      // **基线钉 0 落在建 model 的这一刻、落在池记录上**：恢复件的"未保存脏"不许依赖调用方
+      // 局部变量撑过 await——切换 effect 的提交闸（cancelled 判）在 await 之后，重跑时局部
+      // `recovered` 可能已是 null，届时若基线仍待调用方后补，恢复内容就会被当"干净"吞掉。
       if (!rec.entry && !rec.loading && opts?.text !== undefined) {
         const model = deps.createModel(path, opts.text);
         const entry: PooledModelEntry = {
           model,
           encoding: opts.encoding ?? 'utf-8',
           eol: (opts.eol ?? 'LF').toUpperCase(),
+          fromRecovery: true,
         };
         rec.entry = entry;
+        rec.baseline = 0;
         rec.refs += 1;
         return entry;
       }
@@ -87,31 +100,48 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
       }
       if (!rec.loading) {
         rec.loading = (async () => {
-          const tf = opts?.text
+          const fromRecovery = opts?.text !== undefined;
+          const tf = opts?.text !== undefined
             ? { text: opts.text, encoding: opts.encoding ?? 'utf-8', eol: opts.eol ?? 'LF' }
             : await deps.readText(kernel, path);
           const model = deps.createModel(path, tf.text);
-          return { model, encoding: tf.encoding, eol: tf.eol.toUpperCase() } satisfies PooledModelEntry;
+          return { model, encoding: tf.encoding, eol: tf.eol.toUpperCase(), fromRecovery } satisfies PooledModelEntry;
         })();
-        // 失败不悬挂：读盘失败时清掉 loading，引用为零则整条回收（下次 acquire 重来）
-        rec.loading.catch(() => {
-          const cur = pool.get(path);
-          if (cur && cur.refs === 0 && cur.loading) {
-            cur.loading = undefined;
-            pool.delete(path);
-          }
-        });
       }
-      const entry = await rec.loading;
-      rec.entry = entry;
-      rec.refs += 1;
-      return entry;
+      const loading = rec.loading;
+      rec.pending += 1;
+      // settle 走 then-配对而非 try/await：让"等待者销账（pending −1）+ 引用挂账（refs +1）"
+      // 在**同一个续体**内完成，先于任何调用方续体（cancelled ⇒ release）执行 ⇒
+      // release 永远拆不掉"还有等待者正在 attach"的记录。
+      const settled = await loading.then(
+        (entry) => ({ ok: true as const, entry }),
+        (err: unknown) => ({ ok: false as const, err }),
+      );
+      const cur = pool.get(path);
+      if (cur) cur.pending -= 1;
+      if (!settled.ok) {
+        // 失败不悬挂：清掉本次 loading；引用与等待者都归零则整条回收（下次 acquire 重来）
+        if (cur && cur.loading === loading) cur.loading = undefined;
+        if (!cur || (cur.refs === 0 && cur.pending === 0)) pool.delete(path);
+        throw settled.err;
+      }
+      // 等待期间 pending 计数钉住记录不被回收 ⇒ cur 必在；共担同一 loading 的
+      // 等待者写入的是同一个 entry（幂等）。
+      const target = cur ?? recordOf(path);
+      if (!target.entry) target.entry = settled.entry;
+      target.refs += 1;
+      return target.entry;
     },
 
     release(path) {
       const rec = pool.get(path);
       if (!rec || rec.refs === 0) return 0;
       rec.refs -= 1;
+      if (rec.refs === 0 && rec.pending > 0) {
+        // model 还没真正 dispose（有等待中的 acquire 即将 attach）⇒ 对外视同仍有引用，
+        // 调用方别做"最后一份引用"的终局清理（清 problems / 报不脏）。
+        return 1;
+      }
       if (rec.refs === 0) {
         if (rec.entry) rec.entry.model.dispose();
         pool.delete(path); // 基线随文件存续，最后一份引用释放时一并清掉
