@@ -910,11 +910,6 @@ textarea {
   width: 100%;
   margin-bottom: 6px;
 }
-.tree-actions {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 6px;
-}
 /* 批量展开/收起的一句可读数（UI 反馈 6）。类名不叫 .tree-note——上游已把它用作「空目录」行。 */
 .tree-reveal-note {
   margin: 0 0 6px;

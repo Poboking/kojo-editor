@@ -526,15 +526,15 @@ async function main() {
     console.log('[smoke] project stats:', stats);
 
     /* -------- b) 域内写：编辑 + 保存 + 落盘 + 备份 -------- */
-    // 展开全部（重试式：等 FileTree 真正渲染后点击；随后断言文件出现）
+    // 展开所有角色组露出文件行（工具条六按钮已撤，「展开全部」不再存在）：组默认全折叠，
+    // 首轮把每个组头点一次即全开；一旦见到 .tree-file 就返回 true 停手，不再点（避免 toggle 开合）。
     try {
       await waitFor(
         cdp,
         `(() => {
-          const btns = [...document.querySelectorAll('.tree-actions button')];
-          const b = btns.find((e) => e.textContent.includes('展开全部'));
-          if (b) b.click();
-          return document.querySelectorAll('.tree-file').length > 0;
+          if (document.querySelectorAll('.tree-file').length > 0) return true;
+          document.querySelectorAll('.tree-group-btn').forEach((b) => b.click());
+          return false;
         })()`,
         30000,
       );

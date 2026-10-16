@@ -1,5 +1,5 @@
 import type { FileIO } from '@kojo/plugin-api';
-import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
+import { ERB_DIALECT_EXTENSIONS, basename } from '@kojo/plugin-api';
 import { isTauri } from '../bridge/invoke';
 import { joinPath } from './file-tree-ops';
 
@@ -44,6 +44,43 @@ export const PROJECT_GATE_MESSAGE = '没打开游戏项目之前，文件拖不�
 export const ONE_DIRECTORY_REASON = '文件夹一次只打开一个，其余先忽略';
 /** opening/boot 态拖入：项目还没就绪，什么都接不住——说一句，不静默 */
 export const NOT_READY_MESSAGE = '正在准备界面，等就绪后再拖一次就能打开了。';
+
+/* ------- 检测失败的人话化（ProjectDetectionError 绝不让内部术语上屏，铁律 4） ------- */
+
+/**
+ * 判定是否 `ProjectDetectionError`：只认 `name`（跨 realm 稳），不做 message 字符串匹配
+ * ——message 是内核给开发者的英文原文，用户面绝不能透传（"No registered game adapter…"）。
+ */
+export function isProjectDetectionError(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { name?: unknown }).name === 'ProjectDetectionError';
+}
+
+/** 检测失败的人话（其它入口：欢迎页对话框 / recent 点击）——只报错，不引导。
+ *  壳层零游戏名词（铁律 1）：支持哪些游戏是适配器的事，这里不点名，只说"不认识"。 */
+export function notGameDirMessage(dir: string): string {
+  return `「${basename(dir)}」不是可识别的游戏目录。`;
+}
+
+/** 拖拽这条路径检测失败：顺势引导去「导入项目」向导的人话 */
+export function dragDropImportHintMessage(dir: string): string {
+  return `「${basename(dir)}」不是游戏目录——已打开「导入项目」向导，可作为口上项目导入。`;
+}
+
+/**
+ * `workspace.importRequested` 载荷（口径对齐 eratw-adapter 的 kojo.importKojoProject 命令）：
+ * 末段名做预填建议；根目录（`/`、`C:\`）没有末段 → 不带 suggestedName 键，
+ * 绝不让空串混进事件载荷，由导入向导按自己的回退链取名。
+ */
+export function importRequestedPayload(
+  dir: string,
+): { sourceDir: string; suggestedName?: string; source: string } {
+  const suggestedName = basename(dir);
+  return {
+    sourceDir: dir,
+    ...(suggestedName.length > 0 ? { suggestedName } : {}),
+    source: 'drag-drop',
+  };
+}
 
 export interface RejectedDrop {
   readonly path: string;

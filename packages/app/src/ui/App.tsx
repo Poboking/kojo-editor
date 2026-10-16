@@ -38,9 +38,13 @@ import {
   NOT_READY_MESSAGE,
   clearDropHover,
   copyDroppedFiles,
+  dragDropImportHintMessage,
   dropTargetDirAt,
   dropHintText,
+  importRequestedPayload,
+  isProjectDetectionError,
   nextDropOverlay,
+  notGameDirMessage,
   planDropAt,
   routeDroppedPaths,
   subscribeDragDrop,
@@ -555,7 +559,10 @@ export function App(): ReactElement {
   }, []);
 
   const openProject = useCallback(
-    async (dir: string, opts?: { keepView?: boolean; skipDirtyConfirm?: boolean }) => {
+    async (
+      dir: string,
+      opts?: { keepView?: boolean; skipDirtyConfirm?: boolean; routeDetectionFailToImport?: boolean },
+    ) => {
       if (!kernel) return;
       // SAFE-1（2026-10-16）：换根开项目前先过脏确认——旧项目有未保存修改时，
       // recent 点击 / chooseAndOpen / 拖入新目录三条路收在这同一个决策口
@@ -636,10 +643,23 @@ export function App(): ReactElement {
           notify({ kind: 'error', message: `口上域索引构建失败：${msg}` });
         }
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        // 打开失败必须显式可见：只落在 welcome 错误区容易被误读成「项目读不了」而无从下手
-        notify({ kind: 'error', message: `打开项目失败：${msg}` });
+        if (isProjectDetectionError(e)) {
+          // 检测失败（拖进来 / 打开的目录不是可识别的游戏目录）：内部英文术语绝不上屏。
+          // 拖拽这条路径顺势引导去「导入项目」向导（emit 意图，adapter 消费后弹窗，
+          // 用户选目标/改名才真正字节复制，不静默写盘）；其它入口只做人话化报错。
+          const toImport = opts?.routeDetectionFailToImport === true;
+          notify({
+            kind: toImport ? 'info' : 'error',
+            message: toImport ? dragDropImportHintMessage(dir) : notGameDirMessage(dir),
+          });
+          if (toImport) kernel.bus.emit('workspace.importRequested', importRequestedPayload(dir));
+          setError(null);
+        } else {
+          const msg = e instanceof Error ? e.message : String(e);
+          setError(msg);
+          // 打开失败必须显式可见：只落在 welcome 错误区容易被误读成「项目读不了」而无从下手
+          notify({ kind: 'error', message: `打开项目失败：${msg}` });
+        }
         // 内核 open() 失败不会关掉还活着的旧项目——留在项目态，别把用户踢回欢迎页
         setPhase(kernel.project.current() !== null ? 'project' : 'welcome');
       } finally {
@@ -880,7 +900,8 @@ export function App(): ReactElement {
           // SAFE-1：项目态换目录的脏确认收口在 openProject 换根守卫（不再这里拒切）
           currentProjectDir: rootDirRef.current,
           openFile: (p) => requestOpenFile(p),
-          openProject: (dir) => void openProject(dir),
+          // 拖拽路径：检测失败顺势引导去「导入项目」向导（其它入口不开这个 opt，只人话化报错）
+          openProject: (dir) => void openProject(dir, { routeDetectionFailToImport: true }),
           reloadProject: () => {
             const cur = rootDirRef.current;
             if (cur) void openProject(cur, { keepView: true });

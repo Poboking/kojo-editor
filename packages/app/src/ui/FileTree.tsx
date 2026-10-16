@@ -2,8 +2,6 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent
 import type { DirEntry, ErbIndex, FileIO, GameProject, WalkOptions } from '@kojo/plugin-api';
 import { isErbDialectPath } from '@kojo/plugin-api';
 import {
-  collapseAll,
-  expandAll,
   packageKey,
   revealMenuLabel,
   toggleReveal,
@@ -1059,16 +1057,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locateReq, groups, deferredFilter, view, dirCache]);
 
-  /** 手动定位（工具条按钮）：滚走了想找回来；过滤态先清词再定位 */
-  const locateActive = (): void => {
-    if (!activeFile) {
-      note('当前没有打开的文件，无处可定位');
-      return;
-    }
-    if (filter) setFilter('');
-    setLocateReq({ file: activeFile, manual: true });
-  };
-
   /**
    * 该包本次渲染的行数（PERF-6 过滤窗口）。
    * 非过滤态 `plan === null` ⇒ 全量（改动前行为）；过滤态按 `filterRenderPlan` 的预算切。
@@ -1225,7 +1213,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       onContextMenu={view === 'kojo' ? (e) => openMenu(e, { kind: 'root' }) : undefined}
     >
       {/* 文件系统视图不放过滤框：按名过滤要递归走全树，与惰性加载天然打架（没展开的层根本没数据）
-          ——与其给一个「看着在、但只滤已展开层」的鬼状态，不如不显示；找文件用「定位当前文件」。 */}
+          ——与其给一个「看着在、但只滤已展开层」的鬼状态，不如不显示；找文件靠打开文件时的自动定位。 */}
       {view === 'kojo' ? (
         <input
           className="tree-filter"
@@ -1234,57 +1222,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
           onChange={(e) => setFilter(e.target.value)}
         />
       ) : null}
-      <div className="tree-actions">
-        {listDir ? (
-          <button
-            className="ghost small"
-            title={
-              view === 'kojo'
-                ? '切换到文件系统视图（项目根与添加进来的文件夹的真实路径，可新建/重命名/删除）'
-                : '切换回口上树（角色 → 作者包 → 口上文件）'
-            }
-            onClick={() => setView((v) => (v === 'kojo' ? 'fs' : 'kojo'))}
-          >
-            {view === 'kojo' ? '全部文件' : '口上视图'}
-          </button>
-        ) : null}
-        {onAddFolder ? (
-          <button
-            className="ghost small"
-            title="把一个文件夹加进工作区（在「全部文件」视图浏览、搜索也能搜到；只对本次会话有效，重开项目后清除）"
-            onClick={onAddFolder}
-          >
-            添加文件夹…
-          </button>
-        ) : null}
-        {view === 'kojo' ? (
-          <>
-            <button
-              className="ghost small"
-              onClick={() => applyReveal(visible, expandAll(revealTargets(visible), revealStateOf()))}
-            >
-              展开全部
-            </button>
-            <button className="ghost small" onClick={() => applyReveal(visible, collapseAll())}>
-              折叠全部
-            </button>
-          </>
-        ) : null}
-        <button
-          className="ghost small"
-          title="在树中找到当前打开的文件（有过滤词时先清除再定位）"
-          onClick={locateActive}
-        >
-          定位当前文件
-        </button>
-        <button
-          className="ghost small"
-          title="重新读取已展开的目录（外部新增/删除的文件没自动出现时用；监视不可用时这是唯一入口）"
-          onClick={relistShown}
-        >
-          重新读取
-        </button>
-      </div>
+      {/* 顶部工具条已撤（用户反馈批）：视图切换 / 添加文件夹 / 展开折叠 / 定位 / 重读六个按钮
+          全部退场——能力仍在（view 机器、extraRoots、applyReveal、relistShown 自动刷新、
+          右键菜单「显示所有文件和文件夹」），只是不再占一条横向按钮带。 */}
       {revealNote ? (
         <p className="tree-reveal-note dim" role="status">
           {revealNote}

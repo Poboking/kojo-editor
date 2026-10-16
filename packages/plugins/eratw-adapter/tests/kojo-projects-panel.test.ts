@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   DirEntry,
   FileIO,
@@ -12,11 +12,13 @@ import { createEratwAdapterPlugin } from '../src/plugin';
 import {
   artifactDir,
   clampTutorialHeight,
+  createKojoProjectsPanel,
   factsFromMeta,
   looseProjectDirs,
   packageFacts,
   sortDirEntries,
   TUTORIALS_MIN_H,
+  type KojoProjectsPanelDeps,
 } from '../src/kojo-projects-panel';
 import type { PackageAttribution } from '../src/attribution';
 import { NEW_KOJO_PROJECT_OVERLAY_ID } from '../src/new-project-wizard';
@@ -333,5 +335,109 @@ describe('口上项目向导注册（P-C 新建 / P-F 导入 / P-E 部署）', (
     // 工作区之外（游戏目录那半边）同样安静
     expect(() => fire('file.changed', { path: '/game/ERB/口上/x.ERB', kind: 'add' })).not.toThrow();
     expect(emits.length).toBe(before);
+  });
+});
+
+/* ------------------------------ 工具条渲染分支（用户反馈批） ------------------------------ */
+
+/**
+ * 面板是纯 `createElement` 造的函数组件，本组断言只关心「dep 在不在 → 按钮在不在」这条
+ * 渲染分支，不关心副作用与状态迁移；于是把三个 hook 换成平凡 shim，直接调用组件函数拿
+ * 元素树来走。**刻意不引 react-dom**：本包只把 react 当 peerDep，为一条分支断言多背一个
+ * 渲染器 devDep 不值当（`vi.mock` 被提升到文件顶，但其余用例既不渲染也不碰 hook）。
+ */
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return {
+    ...actual,
+    useState: (init: unknown): [unknown, () => void] => [
+      typeof init === 'function' ? (init as () => unknown)() : init,
+      () => {},
+    ],
+    useRef: (init: unknown): { current: unknown } => ({ current: init }),
+    useEffect: (): void => {},
+  };
+});
+
+/** 元素树里的一枚按钮（type === 'button' 的节点 + 其纯文本） */
+interface FakeButton {
+  className: string;
+  title: string;
+  text: string;
+}
+
+/** 走元素树摘出所有 button 节点（含 className / title / 文本） */
+function buttonsOf(node: unknown, out: FakeButton[] = []): FakeButton[] {
+  if (node === null || node === undefined || typeof node === 'boolean') return out;
+  if (Array.isArray(node)) {
+    for (const c of node) buttonsOf(c, out);
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+  const el = node as { type?: unknown; props?: Record<string, unknown> };
+  const children = el.props?.children;
+  if (el.type === 'button') {
+    out.push({
+      className: String(el.props?.className ?? ''),
+      title: String(el.props?.title ?? ''),
+      text: textOf(children),
+    });
+    return out;
+  }
+  buttonsOf(children, out);
+  return out;
+}
+
+/** 元素树的纯文本投影（图标缺省 → 回退字形也在文本里，故只按"含"判定） */
+function textOf(node: unknown): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  return textOf((node as { props?: { children?: unknown } }).props?.children);
+}
+
+function panelDeps(over: Partial<KojoProjectsPanelDeps> = {}): KojoProjectsPanelDeps {
+  return {
+    subscribe: () => () => {},
+    projects: () => [],
+    loading: () => false,
+    error: () => null,
+    refresh: () => {},
+    projectDir: (id) => `/appdata/workspaces/${id}`,
+    dirState: () => undefined,
+    ensureDir: () => {},
+    reveal: () => {},
+    openTutorial: () => {},
+    status: () => null,
+    dismissStatus: () => {},
+    exportArtifact: () => {},
+    deployArtifact: () => {},
+    compareArtifact: () => {},
+    attribution: () => undefined,
+    ensureAttribution: () => {},
+    createItem: async () => ({ ok: false, reason: 'not used' }),
+    ...over,
+  };
+}
+
+const renderPanel = (deps: KojoProjectsPanelDeps): unknown => createKojoProjectsPanel(deps)({});
+
+describe('面板工具条 · 「导入项目」按钮（dep 存在才画）', () => {
+  it('注入 openImportWizard：按钮渲染在「新建」旁，风格与既有两枚一致（ghost small + 有 title）', () => {
+    const btns = buttonsOf(renderPanel(panelDeps({ openNewWizard: () => {}, openImportWizard: () => {} })));
+    const imp = btns.find((b) => b.text.includes('导入项目'));
+    expect(imp).toBeTruthy();
+    expect(imp!.className).toBe('ghost small');
+    expect(imp!.title.length).toBeGreaterThan(0); // 图标+短词的按钮必须自带人话提示
+    // 顺序：新建 → 导入项目 → 刷新（导入挨着新建，不插到刷新之后）
+    const at = (word: string): number => btns.findIndex((b) => b.text.includes(word));
+    expect(at('新建')).toBeLessThan(at('导入项目'));
+    expect(at('导入项目')).toBeLessThan(btns.length - 1);
+  });
+
+  it('缺省 openImportWizard：整颗不画——没有能力的入口不灰着占位（与 openNewWizard 同款口径）', () => {
+    const btns = buttonsOf(renderPanel(panelDeps({ openNewWizard: () => {} })));
+    expect(btns.some((b) => b.text.includes('导入项目'))).toBe(false);
+    expect(btns.some((b) => b.text.includes('新建'))).toBe(true); // 对照组：新建照画
   });
 });

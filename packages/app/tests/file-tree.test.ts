@@ -436,9 +436,9 @@ describe('FileTree · 索引未就绪时的占位自解释（SSR）', () => {
   });
 });
 
-/* ============ 文件系统视图切换入口（B5） ============ */
+/* ============ 文件系统视图（B5）：工具条已撤后的默认态 ============ */
 
-describe('FileTree · 文件系统视图切换入口（B5，SSR 默认态）', () => {
+describe('FileTree · 文件系统视图（B5，工具条撤除后 SSR 默认态）', () => {
   const project = {
     charaIndex: new Map(),
     kojoPaths: ['C:/koa'],
@@ -450,15 +450,17 @@ describe('FileTree · 文件系统视图切换入口（B5，SSR 默认态）', (
       h(FileTree, { project, index, activeFile: null, onOpenFile: () => {}, listDir }),
     );
 
-  it('有 listDir（桌面壳）：工具条出现「全部文件」切换入口，默认口上视图（按钮文案 = 去向）', () => {
+  it('有 listDir（桌面壳）：不再渲染顶部按钮带，默认口上视图且 fs 根层不被预取（惰性不变）', () => {
     const html = render(async () => []);
-    expect(html).toContain('全部文件');
-    expect(html).not.toContain('>口上视图<'); // 还没切过去，按钮不该已经反过来
+    expect(html).not.toContain('tree-actions'); // 六个按钮整条撤了
+    expect(html).not.toContain('全部文件'); // 视图切换入口随之退场（view 机器仍在，暂无 UI 入口）
     expect(html).not.toContain('读取目录…'); // fs 根层不该被预先拉取（惰性，切过去才取）
   });
 
-  it('无 listDir（浏览器壳）：入口整颗不显示——没有能力的按钮灰着都不给，点了没反应更不行', () => {
-    expect(render(undefined)).not.toContain('全部文件');
+  it('无 listDir（浏览器壳）：同样一颗按钮都不给——没有能力的东西不该以灰态出现', () => {
+    const html = render(undefined);
+    expect(html).not.toContain('tree-actions');
+    expect(html).not.toContain('全部文件');
   });
 
   it('默认仍是口上树：过滤框在、fs 根层不在（切换态是浏览现场，不改变默认视图）', () => {

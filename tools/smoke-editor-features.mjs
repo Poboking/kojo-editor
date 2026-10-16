@@ -369,7 +369,7 @@ async function visibleLines(cdp) {
   })()`);
 }
 
-/** 打开文件树里 title 含文件名（basename）的文件（要求已"展开全部"）。
+/** 打开文件树里 title 含文件名（basename）的文件（要求所属角色组已展开、行已在树上）。
  *  非方言文件（如 .kojo）的行 title 带「（附加文件，不在口上索引内）」后缀 ⇒ 用 includes 匹配。 */
 async function openFileByTitle(cdp, absPath) {
   const name = path.basename(absPath);
@@ -587,14 +587,14 @@ async function main() {
     if (projDir !== PROJ_DIR) throw new Error(`项目未打开：tb-project=${projDir}`);
     P('a0', '打开合成项目', `工具栏项目标签 rootDir=${projDir}`);
 
-    /* 4) 展开文件树 */
+    /* 4) 展开文件树（工具条六按钮已撤）：组默认全折叠，首轮把每个组头点一次即全开，
+          见到 .tree-file 即停手（不再点，避免 toggle 开合）。后续按包名找 .tree-package 才有的放矢。 */
     await waitFor(
       cdp,
       `(() => {
-        const btns = [...document.querySelectorAll('.tree-actions button')];
-        const b = btns.find((e) => e.textContent.includes('展开全部'));
-        if (b) b.click();
-        return document.querySelectorAll('.tree-file').length > 0;
+        if (document.querySelectorAll('.tree-file').length > 0) return true;
+        document.querySelectorAll('.tree-group-btn').forEach((b) => b.click());
+        return false;
       })()`,
       60000,
     );
@@ -704,8 +704,8 @@ async function main() {
         cdp.evalJs(
           `Boolean([...document.querySelectorAll('.tree-file')].find((b) => (b.title || '').includes(${JSON.stringify(kojoBase)})))`,
         );
-      // 「展开全部」可能已把包置为真实文件夹态；再点一次反而是**收起** ⇒
-      // 带检测地点：见到行就停，最多点三次（奇偶性兜底），每点后等惰性 listDir 回来。
+      // 组展开后包未必处于真实文件夹态；点包标题行会切换（进/出）⇒ 带检测地点：
+      // 见到行就停，最多点三次（奇偶性兜底），每点后等惰性 listDir 回来。
       let seen = await hasKojo();
       for (let i = 0; i < 3 && !seen; i++) {
         const toggled = await cdp.evalJs(`(() => {

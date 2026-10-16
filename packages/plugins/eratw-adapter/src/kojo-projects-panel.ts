@@ -49,6 +49,14 @@ export interface KojoProjectsPanelDeps {
   reveal(absPath: string): void;
   /** 打开「新建口上项目」向导（P-C；缺省 → 不显示新建按钮） */
   openNewWizard?(): void;
+  /**
+   * 打开「导入口上项目」向导（用户反馈批）：系统目录对话框选定文件夹 → 走**既有**
+   * 的 `workspace.importRequested` 通道，导入向导自动开门。与命令面板
+   * `kojo.importKojoProject` 同一具身体（`plugin.ts` 的 `pickAndRequestImport`），
+   * 只有来源标记不同。缺省 → 按钮不显示（与 `openNewWizard` 同款克制口径：
+   * 没有能力的入口不灰着占位）。
+   */
+  openImportWizard?(): void;
   /** 打开内置教程（E6；浮层内容见 `tutorial-content.ts`） */
   openTutorial(which: TutorialId): void;
   /** 包操作反馈条内容（P-D；null → 状态条不渲染） */
@@ -579,6 +587,20 @@ export function createKojoProjectsPanel(
               ' 新建',
             )
           : null,
+        // 导入 = 复用命令面板那条 `kojo.importKojoProject`（选目录 → 既有导入向导），
+        // 不是第二套机制；缺省 dep 就整颗不画（没有能力的入口不灰着占位）。
+        deps.openImportWizard
+          ? h(
+              'button',
+              {
+                className: 'ghost small',
+                title: '从文件夹导入既有的口上项目（选定作者包目录后打开导入向导）',
+                onClick: () => deps.openImportWizard!(),
+              },
+              ic('module', 12, '▣'),
+              ' 导入项目',
+            )
+          : null,
         h('button', { className: 'ghost small', title: '刷新项目列表', onClick: () => deps.refresh() }, ic('refresh', 13, '⟳')),
       ),
     );
@@ -598,7 +620,7 @@ export function createKojoProjectsPanel(
         h('div', { className: 'kp-empty dim' }, loading ? '正在读取工作区…' : '还没有口上项目'),
         loading
           ? null
-          : h('div', { className: 'kp-empty dim' }, '可在此新建作品，或从文件树导入既有作者包'),
+          : h('div', { className: 'kp-empty dim' }, '可在此新建作品，或用工具条的「导入项目」把既有作者包接进来'),
       );
     } else {
       body = h(

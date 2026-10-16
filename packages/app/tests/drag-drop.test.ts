@@ -13,9 +13,13 @@ import {
   classifyDrop,
   copyDroppedFiles,
   copyExistsReason,
+  dragDropImportHintMessage,
   dropTargetDirFrom,
   formatRejections,
+  importRequestedPayload,
+  isProjectDetectionError,
   nextDropOverlay,
+  notGameDirMessage,
   planDropAt,
   processDroppedFiles,
   routeDroppedPaths,
@@ -596,5 +600,59 @@ describe('copyDroppedFiles：拖文件到目录 = 复制进项目', () => {
     expect(COPY_READONLY_REASON).not.toMatch(/白名单|writable|域|断言/);
     expect(copyExistsReason('x.md')).toContain('没有复制');
     expect(copyExistsReason('x.md')).not.toMatch(/stat|exists|白名单/);
+  });
+});
+
+/* -------------- 检测失败的人话化 + 拖拽顺势引导去导入项目 -------------- */
+
+describe('isProjectDetectionError：只认 name（跨 realm 稳），不做 message 匹配', () => {
+  it('name === ProjectDetectionError 命中，即使 message 是英文原文', () => {
+    const e = new Error('No registered game adapter recognized the directory: X (candidates: eratw)');
+    e.name = 'ProjectDetectionError';
+    expect(isProjectDetectionError(e)).toBe(true);
+  });
+
+  it('普通错误 / null / 字符串 / 恰好 message 含该词但 name 不对 → 一律 false', () => {
+    expect(isProjectDetectionError(new Error('boom'))).toBe(false);
+    expect(isProjectDetectionError(null)).toBe(false);
+    expect(isProjectDetectionError(undefined)).toBe(false);
+    expect(isProjectDetectionError('ProjectDetectionError')).toBe(false);
+    const trap = new Error('ProjectDetectionError');
+    expect(isProjectDetectionError(trap)).toBe(false);
+  });
+});
+
+describe('检测失败文案：内部英文术语绝不上屏，取目录末段做人话', () => {
+  const dir = 'C:\\Users\\123\\Desktop\\蛙蛙投稿';
+
+  it('其它入口（对话框/recent）：只人话化报错，含末段名，无内部术语、不点名具体游戏（壳层零游戏名词）', () => {
+    const msg = notGameDirMessage(dir);
+    expect(msg).toContain('蛙蛙投稿');
+    expect(msg).toContain('游戏目录');
+    expect(msg).not.toMatch(/No registered game adapter|candidates|adapter|ProjectDetectionError/i);
+    expect(msg).not.toMatch(/eratw|eraK|eraSQN|eraNAS/i);
+  });
+
+  it('拖拽路径：引导去「导入项目」向导的人话，含末段名，无内部术语', () => {
+    const msg = dragDropImportHintMessage(dir);
+    expect(msg).toContain('蛙蛙投稿');
+    expect(msg).toContain('导入项目');
+    expect(msg).not.toMatch(/No registered game adapter|candidates|adapter|ProjectDetectionError/);
+  });
+});
+
+describe('importRequestedPayload：口径对齐 kojo.importKojoProject 命令', () => {
+  it('普通目录：sourceDir 原样 + suggestedName 取末段 + source=drag-drop', () => {
+    expect(importRequestedPayload('C:\\Users\\123\\Desktop\\蛙蛙投稿')).toEqual({
+      sourceDir: 'C:\\Users\\123\\Desktop\\蛙蛙投稿',
+      suggestedName: '蛙蛙投稿',
+      source: 'drag-drop',
+    });
+  });
+
+  it('根目录（无末段）：不带 suggestedName 键，绝不让空串混进载荷', () => {
+    const payload = importRequestedPayload('C:\\');
+    expect(payload).toEqual({ sourceDir: 'C:\\', source: 'drag-drop' });
+    expect('suggestedName' in payload).toBe(false);
   });
 });
