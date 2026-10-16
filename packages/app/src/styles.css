@@ -1471,6 +1471,33 @@ textarea {
   border-radius: 2px;
 }
 
+/* 替换行（R7 搜索替换批）：与检索行同构；「全部替换」复用 .search-toggle 尺寸 */
+.search-replace-summary {
+  color: var(--accent-text);
+}
+.search-match-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+.search-match-row .search-match {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.search-replace-one {
+  flex: none;
+  align-self: center;
+  padding: 1px 6px;
+  font-size: var(--fs-0);
+  opacity: 0;
+}
+/* 悬停/键盘聚焦该行时显形：hover 覆盖鼠标，focus-within 覆盖 Tab 导航（UI-4 键盘可达） */
+.search-match-row:hover .search-replace-one,
+.search-match-row:focus-within .search-replace-one {
+  opacity: 1;
+}
+
 /* ------------------------------ editor ------------------------------ */
 
 .editor-pane {

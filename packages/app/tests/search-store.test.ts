@@ -2,17 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchRequest, SearchResult } from '../src/bridge/search';
 import {
   clearSearchResult,
+  requestReplaceFocus,
   requestSearchFocus,
   resetSearch,
+  runReplace,
   runSearch,
   setExtensionText,
   setQuery,
+  setReplaceRunner,
+  setReplaceText,
   setSearchCanceller,
   setSearchRunner,
   snapshot,
   stopSearch,
   subscribe,
   toggleOption,
+  type ReplaceOutcome,
+  type ReplaceRunner,
   type SearchRunner,
 } from '../src/ui/search-store';
 
@@ -228,5 +234,104 @@ describe('search-store', () => {
     expect(snapshot().options.caseSensitive).toBe(false);
     expect(snapshot().phase).toBe('idle');
     expect(snapshot().focusNonce).toBe(nonce);
+  });
+});
+
+describe('search-store 替换状态机（R7 搜索替换批）', () => {
+  beforeEach(() => {
+    resetSearch();
+    setSearchRunner(null);
+    setReplaceRunner(null);
+  });
+  afterEach(() => {
+    setSearchRunner(null);
+    setReplaceRunner(null);
+    resetSearch();
+  });
+
+  const outcome = (over: Partial<ReplaceOutcome> = {}): ReplaceOutcome => ({
+    applied: 0,
+    filesChanged: 0,
+    stale: 0,
+    readOnlyFiles: 0,
+    errors: [],
+    ...over,
+  });
+
+  it('没有完成态结果时拒绝并明示', async () => {
+    const runner = vi.fn<ReplaceRunner>();
+    setReplaceRunner(runner);
+    setQuery('abc');
+    const o = await runReplace({ kind: 'all' });
+    expect(o).toBeNull();
+    expect(runner).not.toHaveBeenCalled();
+    expect(snapshot().replaceSummary).toContain('没有可替换的检索结果');
+  });
+
+  it('截断/被停止的结果拒绝全部替换（对看不见的命中动手 = 替换面失真）', async () => {
+    setSearchRunner(async () => result({ truncated: true, totalMatches: 1 }));
+    setQuery('abc');
+    await runSearch(ROOTS);
+    const runner = vi.fn<ReplaceRunner>();
+    setReplaceRunner(runner);
+    const o = await runReplace({ kind: 'all' });
+    expect(o).toBeNull();
+    expect(runner).not.toHaveBeenCalled();
+    expect(snapshot().replaceSummary).toContain('结果不完整');
+  });
+
+  it('成功路径：请求体带条件快照与结果文件，返回读数、汇总上屏', async () => {
+    setSearchRunner(async () =>
+      result({ totalMatches: 2, files: [{ path: 'C:\\game\\a.erb', matches: [] }] }),
+    );
+    setQuery('口上');
+    toggleOption('wholeWord');
+    setReplaceText('新词');
+    await runSearch(ROOTS);
+    let seenReq: unknown = null;
+    setReplaceRunner(async (req) => {
+      seenReq = req;
+      return outcome({ applied: 3, filesChanged: 1 });
+    });
+    const o = await runReplace({ kind: 'all' });
+    expect(o).toEqual({ applied: 3, filesChanged: 1, stale: 0, readOnlyFiles: 0, errors: [] });
+    expect(snapshot().replaceRunning).toBe(false);
+    expect(snapshot().replaceSummary).toContain('已替换 3 处');
+    const req = seenReq as Parameters<ReplaceRunner>[0];
+    expect(req.query).toBe('口上');
+    expect(req.options.wholeWord).toBe(true);
+    expect(req.replaceText).toBe('新词');
+    expect(req.files).toEqual([{ path: 'C:\\game\\a.erb', matches: [] }]);
+  });
+
+  it('在途锁：替换中重复发起直接忽略', async () => {
+    setSearchRunner(async () => result({ totalMatches: 1 }));
+    setQuery('abc');
+    await runSearch(ROOTS);
+    const d = deferred<ReplaceOutcome>();
+    setReplaceRunner(() => d.promise);
+    const first = runReplace({ kind: 'all' });
+    const second = await runReplace({ kind: 'all' });
+    expect(second).toBeNull();
+    d.resolve(outcome());
+    expect(await first).toEqual(outcome());
+  });
+
+  it('执行者抛错：失败原因上屏，在途态解除', async () => {
+    setSearchRunner(async () => result({ totalMatches: 1 }));
+    setQuery('abc');
+    await runSearch(ROOTS);
+    setReplaceRunner(async () => {
+      throw new Error('写允许域拒绝');
+    });
+    await runReplace({ kind: 'all' });
+    expect(snapshot().replaceSummary).toContain('替换失败');
+    expect(snapshot().replaceRunning).toBe(false);
+  });
+
+  it('替换框焦点请求：命令入口命中即自增', () => {
+    const before = snapshot().replaceFocusNonce;
+    requestReplaceFocus();
+    expect(snapshot().replaceFocusNonce).toBe(before + 1);
   });
 });

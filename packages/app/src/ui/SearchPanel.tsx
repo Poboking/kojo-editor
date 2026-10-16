@@ -2,10 +2,13 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { SearchMatch } from '../bridge/search';
 import {
   clearSearchResult,
+  requestReplaceFocus,
+  runReplace,
   runSearch,
   setExtensionText,
-  setSearchScope,
   setQuery,
+  setReplaceText,
+  setSearchScope,
   snapshot,
   stopSearch,
   subscribe,
@@ -99,6 +102,7 @@ export function SearchPanel({
 }: SearchPanelProps): ReactElement {
   const s = useSearchState();
   const inputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
 
   // 挂载即聚焦；快捷键/命令再次命中（focusNonce 变化）也重新聚焦并全选——
   // 这是"Ctrl+Shift+F 就该能直接打字"的那一步（面板可能早就开着）。
@@ -108,6 +112,17 @@ export function SearchPanel({
     el.focus();
     el.select();
   }, [s.focusNonce]);
+
+  // 「在文件中替换」命令命中（replaceFocusNonce 变化）：聚焦替换框并全选。
+  // 同时把焦点请求传播给检索框的 effect 链路之外——替换框与检索框互斥聚焦，
+  // 后到的请求赢（两个 nonce 都可能连续自增，最后渲染出的焦点即用户要的落点）。
+  useEffect(() => {
+    if (s.replaceFocusNonce === 0) return; // 初始态不抢焦点（首次聚焦是检索框的）
+    const el = replaceInputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [s.replaceFocusNonce]);
 
   const result = s.result;
   const { rows, hidden } = result
@@ -122,6 +137,20 @@ export function SearchPanel({
     const scope = findSearchScope(scopes, s.scopeKey);
     const narrowing = narrowRoots(roots, scope);
     void runSearch(narrowing.roots, describeAppliedScope(scope, narrowing));
+  };
+
+  /** 全部替换 → 盘上事实变了 ⇒ 用同一组条件重跑检索，结果行/计数当场说新真相 */
+  const replaceAll = (): void => {
+    void runReplace({ kind: 'all' }).then((o) => {
+      if (o !== null && o.applied > 0) start();
+    });
+  };
+
+  /** 单条替换：只落这一处；改了盘上事实同样重跑检索 */
+  const replaceOne = (path: string, match: SearchMatch): void => {
+    void runReplace({ kind: 'one', target: { path, line: match.line, column: match.column } }).then((o) => {
+      if (o !== null && o.applied > 0) start();
+    });
   };
 
   return (
@@ -152,6 +181,35 @@ export function SearchPanel({
             {t.label}
           </button>
         ))}
+      </div>
+
+      {/* 替换行（R7 搜索替换批）：VSCode 同构——检索行下一条替换输入行，Enter = 全部替换。
+          空替换串 = 删除命中（合法操作，不拦截）。$1 引用捕获组，$& = 整个命中。 */}
+      <div className="search-bar">
+        <input
+          ref={replaceInputRef}
+          className="search-input"
+          placeholder="替换为…（空 = 删除；$1 引用捕获组）"
+          title="支持 $1–$99 引用正则捕获组；$& = 整个命中；$$ = 字面 $。回车 = 全部替换。"
+          value={s.replaceText}
+          onChange={(e) => setReplaceText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              replaceAll();
+            }
+          }}
+        />
+        <button
+          className="search-toggle"
+          title="全部替换：结果里的每个文件都按当前文本逐处替换"
+          disabled={
+            result === null || s.replaceRunning || result.truncated || result.cancelled || s.phase !== 'done'
+          }
+          onClick={replaceAll}
+        >
+          全部替换
+        </button>
       </div>
 
       <div className="search-ext-row">
@@ -237,6 +295,11 @@ export function SearchPanel({
           <div className={`search-status ${result.cancelled ? 'search-stopped' : ''}`}>
             {searchSummaryText(result)}
           </div>
+          {s.replaceSummary !== null ? (
+            <div className="search-status search-replace-summary" title={s.replaceSummary}>
+              {s.replaceSummary}
+            </div>
+          ) : null}
           {s.appliedScope !== null && result.filesScanned === 0 ? (
             <div className="search-status search-scope-empty">
               {scopeEmptyText(s.appliedScope, result.skipped.filtered)}
@@ -263,15 +326,26 @@ export function SearchPanel({
                 <span className="search-file-count dim">{row.count}</span>
               </div>
             ) : (
-              <button
-                key={`m:${row.path}:${i}`}
-                className="search-match"
-                title={`${row.path}:${row.match.line}`}
-                onClick={() => onReveal(row.path, row.match.line, row.match.column)}
-              >
-                <span className="search-loc dim">{matchLocationLabel(row.match)}</span>
-                <MatchPreview match={row.match} />
-              </button>
+              // 单条命中行：主按钮跳转；行尾一枚替换钮（hover/focus-within 显形，
+              // 键盘可达——Tab 到它即可替换当前这条，与 VSCode 的行内替换钮同构）
+              <div key={`m:${row.path}:${i}`} className="search-match-row">
+                <button
+                  className="search-match"
+                  title={`${row.path}:${row.match.line}`}
+                  onClick={() => onReveal(row.path, row.match.line, row.match.column)}
+                >
+                  <span className="search-loc dim">{matchLocationLabel(row.match)}</span>
+                  <MatchPreview match={row.match} />
+                </button>
+                <button
+                  className="search-replace-one"
+                  title="替换这一处（文本已变化时会跳过并说明）"
+                  disabled={s.replaceRunning}
+                  onClick={() => replaceOne(row.path, row.match)}
+                >
+                  替换
+                </button>
+              </div>
             ),
           )}
         </div>

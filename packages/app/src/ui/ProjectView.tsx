@@ -13,6 +13,8 @@ import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLa
 import { Icon } from './icons';
 import type { ShellCommandSpec } from './commands';
 import { collectSearchScopes, type SearchScopeCatalog } from './search-scope';
+import { createFileReplaceRunner } from './search-replace-exec';
+import { setReplaceRunner } from './search-store';
 import { workspaceRootsOf } from './workspace-roots';
 import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
@@ -345,6 +347,16 @@ export function ProjectView({
     () => collectSearchScopes(kernel.slots.query('search.scope'), project),
     [kernel, project],
   );
+
+  /**
+   * 替换执行器装配（R7 搜索替换批）：内核 io 通道（读改写保编码 + 原子写 + 备份，
+   * 写允许域由内核强制）+ Monaco live model 通道，随 kernel 生命周期装卸。
+   * 未装配时搜索面板的替换入口会被状态机锁住并明示（不静默）。
+   */
+  useEffect(() => {
+    setReplaceRunner(createFileReplaceRunner({ io: kernel.io }));
+    return () => setReplaceRunner(null);
+  }, [kernel]);
 
   /**
    * 侧栏「搜索」视图的稳定组件身份（同 problemComponent 的 ref 闭包写法）。

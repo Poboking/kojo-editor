@@ -1,4 +1,5 @@
 import type { SearchMatch, SearchProgress, SearchResult } from '../bridge/search';
+import type { ReplaceOutcome } from './search-store';
 
 /**
  * 全文检索面板的**纯逻辑**（无 React、无 IPC）：扩展名过滤的双向换算、命中行预览切分、
@@ -109,4 +110,24 @@ export function searchProgressText(p: SearchProgress): string {
   return p.totalFiles > 0
     ? `检索中… 已扫描 ${p.filesScanned}/${p.totalFiles} 个文件 · 命中 ${p.matchCount}`
     : `检索中… 已扫描 ${p.filesScanned} 个文件 · 命中 ${p.matchCount}`;
+}
+
+/**
+ * 替换汇总文案（R7 搜索替换批）。逐文件跳过的只读文件、文本已变化而跳过的命中、
+ * 写失败的文件——每一类都要上屏（铁律 4：不静默），作者替换完第一眼就该知道
+ * 「改了什么、有什么没改成」。
+ */
+export function replaceSummaryText(o: ReplaceOutcome): string {
+  if (o.applied === 0 && o.stale === 0 && o.readOnlyFiles === 0 && o.errors.length === 0) {
+    return '没有需要替换的命中（文本可能已是新值）';
+  }
+  const parts: string[] = [];
+  if (o.applied > 0) {
+    parts.push(o.filesChanged > 1 ? `已替换 ${o.applied} 处（${o.filesChanged} 个文件）` : `已替换 ${o.applied} 处`);
+  }
+  if (o.stale > 0) parts.push(`${o.stale} 处文本已变化，跳过`);
+  if (o.readOnlyFiles > 0) parts.push(`${o.readOnlyFiles} 个文件只读未改`);
+  if (o.errors.length > 0) parts.push(...o.errors.slice(0, 3));
+  if (o.errors.length > 3) parts.push(`另有 ${o.errors.length - 3} 个文件写入失败`);
+  return parts.join(' · ');
 }

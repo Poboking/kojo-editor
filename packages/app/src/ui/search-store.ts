@@ -1,11 +1,12 @@
 import {
   cancelSearch,
   searchInFiles,
+  type SearchMatch,
   type SearchProgress,
   type SearchRequest,
   type SearchResult,
 } from '../bridge/search';
-import { DEFAULT_EXTENSION_TEXT, isValidSearchQuery, parseExtensions } from './search-query';
+import { DEFAULT_EXTENSION_TEXT, isValidSearchQuery, parseExtensions, replaceSummaryText } from './search-query';
 import { scopeUnreachableText, type AppliedSearchScope } from './search-scope';
 
 /**
@@ -52,6 +53,14 @@ export interface SearchState {
    * 屏幕上的"只扫了这些"必须说结果的实话，而不是说选择器现在的样子）。
    */
   appliedScope: AppliedSearchScope | null;
+  /** 替换内容（`$1` 等捕获组引用在落地时展开；**允许为空** = 删除命中，与 VSCode 同语义） */
+  replaceText: string;
+  /** 替换框焦点请求计数（「在文件中替换」命令入口命中时自增，面板据此聚焦替换框） */
+  replaceFocusNonce: number;
+  /** 替换在途（替换是写盘操作：在途时替换入口一律锁住，不许并发写） */
+  replaceRunning: boolean;
+  /** 最近一次替换的汇总（纯展示；`null` = 没替换过 / 已随结果清空） */
+  replaceSummary: string | null;
 }
 
 /** 检索执行者（注入 seam：缺省 = Tauri 桥；单测注入假实现） */
@@ -59,6 +68,37 @@ export type SearchRunner = (
   request: SearchRequest,
   onProgress: (p: SearchProgress) => void,
 ) => Promise<SearchResult>;
+
+/** 单条替换的目标：检索结果里那一处命中（1 基行列，与 `SearchMatch` 同口径） */
+export interface MatchTarget {
+  readonly path: string;
+  readonly line: number;
+  readonly column: number;
+}
+
+/** 替换模式：全部替换 = 结果里每个文件逐个落；单条 = 只落点中的那一处 */
+export type ReplaceMode = { readonly kind: 'all' } | { readonly kind: 'one'; readonly target: MatchTarget };
+
+/** 替换落点读数（执行器如实回报；stale = 文本已变化而跳过的处数） */
+export interface ReplaceOutcome {
+  readonly applied: number;
+  readonly filesChanged: number;
+  readonly stale: number;
+  readonly readOnlyFiles: number;
+  readonly errors: readonly string[];
+}
+
+/** 替换执行者（注入 seam：缺省 = `createFileReplaceRunner` 装配的内核 io + Monaco 通道） */
+export type ReplaceRunner = (request: ReplaceRequest) => Promise<ReplaceOutcome>;
+
+/** 发给执行者的请求：条件快照 + 结果文件清单（执行者现场重匹配，不信任行列） */
+export interface ReplaceRequest {
+  readonly query: string;
+  readonly options: SearchOptionsState;
+  readonly replaceText: string;
+  readonly mode: ReplaceMode;
+  readonly files: readonly { readonly path: string; readonly matches: readonly SearchMatch[] }[];
+}
 
 const INITIAL: SearchState = {
   query: '',
@@ -72,11 +112,16 @@ const INITIAL: SearchState = {
   focusNonce: 0,
   scopeKey: '',
   appliedScope: null,
+  replaceText: '',
+  replaceFocusNonce: 0,
+  replaceRunning: false,
+  replaceSummary: null,
 };
 
 let state: SearchState = INITIAL;
 let runner: SearchRunner = searchInFiles;
 let canceller: (searchId: number) => Promise<void> = cancelSearch;
+let replaceRunner: ReplaceRunner | null = null;
 let nextId = 1;
 
 const listeners = new Set<() => void>();
@@ -111,8 +156,22 @@ export function setSearchCanceller(next: ((searchId: number) => Promise<void>) |
   canceller = next ?? cancelSearch;
 }
 
+/** 注入替换执行者（宿主装配点：内核 io + Monaco 通道；传 null = 未装配，替换入口锁住） */
+export function setReplaceRunner(next: ReplaceRunner | null): void {
+  replaceRunner = next;
+}
+
 export function setQuery(query: string): void {
   set({ query });
+}
+
+export function setReplaceText(text: string): void {
+  set({ replaceText: text });
+}
+
+/** 「在文件中替换」命令入口：打开搜索视图后请求替换框聚焦 */
+export function requestReplaceFocus(): void {
+  set({ replaceFocusNonce: state.replaceFocusNonce + 1 });
 }
 
 export function setExtensionText(text: string): void {
@@ -140,7 +199,7 @@ export function requestSearchFocus(): void {
 /** 清空结果与错误（保留查询条件与开关——"清空结果"不是"重置面板"） */
 export function clearSearchResult(): void {
   if (state.phase === 'running') return;
-  set({ result: null, error: null, phase: 'idle', progress: null, appliedScope: null });
+  set({ result: null, error: null, phase: 'idle', progress: null, appliedScope: null, replaceSummary: null });
 }
 
 /**
@@ -208,6 +267,55 @@ export async function runSearch(
 }
 
 /**
+ * 发起一次替换（R7 搜索替换批）。写盘操作的前置闸全部就地明示，不静默：
+ *
+ * - 执行者未装配 / 没有完成态结果 / 已在替换中 ⇒ 拒绝（各自给一条汇总文案）；
+ * - 结果**不完整**（截断 / 被取消）⇒ 拒绝全部替换——对看不见的命中动手 = 替换面
+ *   与屏幕上说的不是同一件事，宁可让作者先缩小范围（铁律 4）；
+ * - 单条替换不做截断闸：那条命中就在屏幕上，截断与否与它无关。
+ *
+ * 落地后的刷新联动由面板负责（替换改变了盘上事实 ⇒ 用同一组条件重跑一次检索，
+ * 结果行 / 计数当场说新真相；打开的标签是 Monaco live model，原生更新，无需另刷）。
+ * 返回本次落点读数（前置闸拦下 = `null`，面板据此决定要不要刷新结果）。
+ */
+export async function runReplace(mode: ReplaceMode): Promise<ReplaceOutcome | null> {
+  if (state.replaceRunning) return null;
+  if (state.phase !== 'done' || state.result === null) {
+    set({ replaceSummary: '没有可替换的检索结果' });
+    return null;
+  }
+  if (replaceRunner === null) {
+    set({ replaceSummary: '替换能力未装配（宿主层缺内核 io 通道）' });
+    return null;
+  }
+  if (mode.kind === 'all' && (state.result.truncated || state.result.cancelled)) {
+    set({
+      replaceSummary: '结果不完整（已截断或被停止）——全部替换拒绝执行，请先缩小检索范围',
+    });
+    return null;
+  }
+  const request: ReplaceRequest = {
+    query: state.query,
+    options: { ...state.options },
+    replaceText: state.replaceText,
+    mode,
+    files: state.result.files,
+  };
+  set({ replaceRunning: true, replaceSummary: null });
+  try {
+    const o = await replaceRunner(request);
+    set({ replaceRunning: false, replaceSummary: replaceSummaryText(o) });
+    return o;
+  } catch (e: unknown) {
+    set({
+      replaceRunning: false,
+      replaceSummary: `替换失败：${e instanceof Error ? e.message : String(e)}`,
+    });
+    return null;
+  }
+}
+
+/**
  * 请求停止当前检索：只发取消意图，**状态仍留 running** 直到后端如实回一份
  * `cancelled: true` 的结果——提前改成 done 会让界面说"搜完了"，而实际是被截断的。
  */
@@ -223,6 +331,6 @@ export async function stopSearch(): Promise<void> {
 
 /** 整体回到初始态（项目关闭时调：检索根没了，旧结果留着只会误导） */
 export function resetSearch(): void {
-  state = { ...INITIAL, focusNonce: state.focusNonce };
+  state = { ...INITIAL, focusNonce: state.focusNonce, replaceFocusNonce: state.replaceFocusNonce };
   notify();
 }
