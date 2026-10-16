@@ -19,6 +19,10 @@
  *
  * 断言纪律：只钉**比值 / 单调 / 极松绝对护栏**，绝不钉死绝对毫秒——
  * 同一份代码在同机不同负载下 median 实测能差 2–4 倍（下面记录的读数就是多次实测的区间）。
+ * **跨腿比较再加两条**：①四条腿必须**同一窗口交替采样**（`measureTogether`）——跨窗口的中位数
+ * 不可比（CI 两次假红 38.9 vs 45.5、24.0 vs 24.6 ms，真实差仅 ~6%）；②比值断言留**宽松系数**
+ * （整腿 / 引用腿 ≥0.7）——同窗 min 在满负载全量里也翻过（实测 0.915），median 同窗最稳
+ * （实测 ≥1.03），系数是给噪声的余量不是给回退的（丢一条腿 ≈0.2，照样碰线；PITFALLS #72）。
  *
  * ## 读数结论（本机 2026-10-16 多次实测，量级为准）
  *
@@ -50,6 +54,8 @@ import { scanFileRefs } from '../src/references';
 interface Latency {
   readonly median: number;
   readonly p95: number;
+  /** 地板：跨腿比较只用它——负载只能把读数抬高、抬不低（但必须是同一窗口采的样，见 `measureTogether`） */
+  readonly min: number;
   readonly runs: number;
 }
 
@@ -59,6 +65,11 @@ function quantile(sorted: readonly number[], p: number): number {
   return sorted[i]!;
 }
 
+const stats = (ds: number[], runs: number): Latency => {
+  ds.sort((a, b) => a - b);
+  return { median: quantile(ds, 0.5), p95: quantile(ds, 0.95), min: ds[0] ?? 0, runs };
+};
+
 function measure(runs: number, fn: () => void): Latency {
   const ds: number[] = [];
   for (let i = 0; i < runs; i++) {
@@ -66,11 +77,33 @@ function measure(runs: number, fn: () => void): Latency {
     fn();
     ds.push(performance.now() - t0);
   }
-  ds.sort((a, b) => a - b);
-  return { median: quantile(ds, 0.5), p95: quantile(ds, 0.95), runs };
+  return stats(ds, runs);
 }
 
-const fmt = (l: Latency): string => `median ${l.median.toFixed(2)} ms / p95 ${l.p95.toFixed(2)} ms（n=${l.runs}）`;
+/**
+ * 多条腿**同一窗口交替采样**（每轮各测一次，轮内顺序逐轮反转）——跨腿断言的前置条件。
+ *
+ * 为什么不能各测各的：先后两个测量窗口在 CI 共享 CPU 上不可比——2026-10-16 CI 两次假红
+ * （整腿与引用腿的中位数两次互换高低：38.9 vs 45.5、24.0 vs 24.6 ms）就是跨窗口的代价，
+ * 而两者的真实差只有 ~6%（本机安静读数 21.8 vs 20.6 ms）。同窗口交替后，两条腿的样本均匀
+ * 铺满同一段负载曲线，窗口内漂移与轮内顺序偏差都被摊掉；比较统计量取**中位数**——同窗
+ * min 在满负载全量里也翻过一次（0.915），median 是全部实测里唯一没翻过的量（≥1.03）。
+ */
+function measureTogether(runs: number, fns: readonly (() => void)[]): Latency[] {
+  const buckets: number[][] = fns.map(() => []);
+  const idx = fns.map((_, f) => f);
+  for (let i = 0; i < runs; i++) {
+    for (const f of i % 2 === 0 ? idx : [...idx].reverse()) {
+      const t0 = performance.now();
+      fns[f]!();
+      buckets[f]!.push(performance.now() - t0);
+    }
+  }
+  return buckets.map((ds) => stats(ds, runs));
+}
+
+const fmt = (l: Latency): string =>
+  `median ${l.median.toFixed(2)} / min ${l.min.toFixed(2)} / p95 ${l.p95.toFixed(2)} ms（n=${l.runs}）`;
 
 /** 重档开关（默认关，理由见文件头「两档运行」） */
 const HEAVY = process.env.KOJO_PERF_HEAVY === '1';
@@ -117,15 +150,13 @@ const HAS_NAME = (upper: string): boolean => INDEX.byName.has(upper);
 
 describe('B6 着色代价 · ERB 腿 · 5,000 行（降级档上限，常跑）', () => {
   const text = erbText(GATE_LINES);
-  let cold = 0;
-  let steady: Latency = { median: 0, p95: 0, runs: 0 };
 
   it('整篇重算：首算 + 稳态延迟与 span 产出量', () => {
     // 首算 = 本进程第一次走这条码（JIT 冷 + 正则首次编译）；稳态 = 其后 n 次
     const t0 = performance.now();
     const first = erbSemanticTokens(text, INDEX);
-    cold = performance.now() - t0;
-    steady = measure(40, () => erbSemanticTokens(text, INDEX));
+    const cold = performance.now() - t0;
+    const steady = measure(40, () => erbSemanticTokens(text, INDEX));
     console.log(
       `[B6 erb] ${GATE_LINES} 行（${(text.length / 1048576).toFixed(2)} MiB UTF-16 单元）：` +
         `首算 ${cold.toFixed(2)} ms；稳态 ${fmt(steady)}；产出 ${first.length} 条 span`,
@@ -138,21 +169,31 @@ describe('B6 着色代价 · ERB 腿 · 5,000 行（降级档上限，常跑）'
   });
 
   it('开销归因：贵在**引用腿**，不在着色层（比值判据，负载中立）', () => {
-    const onlyParse = measure(40, () => parseErbText(text));
-    const onlyRefs = measure(40, () => scanFileRefs(text, HAS_NAME));
-    const onlyFold = measure(40, () => erbFoldingRanges(text));
+    // 四条腿同一窗口交替采样（理由见 `measureTogether`）；断言全部落在 **min（地板）** 上——
+    // 这三条只在「少了整条腿 / 长出第二次全文扫描」这类结构变化时才会翻，负载翻不动它。
+    const legs = measureTogether(40, [
+      () => erbSemanticTokens(text, INDEX),
+      () => scanFileRefs(text, HAS_NAME),
+      () => parseErbText(text),
+      () => erbFoldingRanges(text),
+    ]);
+    const full = legs[0]!;
+    const onlyRefs = legs[1]!;
+    const onlyParse = legs[2]!;
+    const onlyFold = legs[3]!;
     console.log(
-      `[B6 erb·归因] ${GATE_LINES} 行单次：parseErbText ${fmt(onlyParse)}｜scanFileRefs ${fmt(onlyRefs)}｜` +
-        `erbFoldingRanges（常开对照）${fmt(onlyFold)}｜着色整腿 ${fmt(steady)}`,
+      `[B6 erb·归因] ${GATE_LINES} 行单次（同窗口交替，n=40）：parseErbText ${fmt(onlyParse)}｜scanFileRefs ${fmt(onlyRefs)}｜` +
+        `erbFoldingRanges（常开对照）${fmt(onlyFold)}｜着色整腿 ${fmt(full)}`,
     );
     // 三条结论都要能被断言钉住，否则下一个人只会重新猜一遍：
     // 1) 引用腿是主项（`codeViewOf` 逐字符刷白 + 每记号一次 Map 查，比声明腿贵一个数量级）；
-    // 2) 整腿 ≥ 引用腿（着色层不可能比它所包含的那段便宜，反之说明漏测）；
+    // 2) 整腿 ≥ 引用腿 ×0.7（着色层不可能比它所包含的那段便宜，反之说明漏测）——0.7 是
+    //    共享 CPU 噪声的余量：丢 / 砍半整条引用腿是 ~0.2 / 0.5，结构变化才碰线，噪声碰不到；
     // 3) 整腿 < 引用腿 ×2 + 声明腿 ⇒ 着色自己没长出第二次全文扫描（长了就该并表）。
     //    ⇒ 将来要提速只改 `scanFileRefs`，查找引用 / 重命名一起受益；不在着色层加缓存。
     expect(onlyRefs.median).toBeGreaterThan(onlyParse.median * 5);
-    expect(steady.median).toBeGreaterThanOrEqual(onlyRefs.median);
-    expect(steady.median).toBeLessThan(onlyRefs.median * 2 + onlyParse.median);
+    expect(full.median).toBeGreaterThan(onlyRefs.median * 0.7);
+    expect(full.median).toBeLessThan(onlyRefs.median * 2 + onlyParse.median);
   });
 });
 
