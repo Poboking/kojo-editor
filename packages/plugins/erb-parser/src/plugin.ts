@@ -26,7 +26,7 @@ import { checkControlFlowStructure } from './structure';
 import { buildStructureFixes } from './structure-fix';
 import { erbDocumentSymbols } from './document-symbols';
 import { erbFoldingRanges } from './folding';
-import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from './references';
+import { buildReferenceIndex, erbReferenceDecorations, referencesOf, scanFileRefs, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt } from './symbols';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
@@ -529,6 +529,35 @@ export function createErbParserPlugin(): Plugin {
         offloadKind: STRUCTURE_DECORATIONS_TASK,
         decorate(file): LineDecoration[] {
           return erbStructureDecorations({ path: file.path, text: file.text });
+        },
+      });
+
+      /* ---------------- 未定义 CALL 目标波浪线（T3，2026-10-16 语言服务批） ----------------
+
+       同一枚槽的第二个贡献。判据（"CALL 直系族名字槽里的裸标识符在不在项目里"）只有
+       `ErbIndex.byName` 说了算，而它是本包私产——放宿主或别的插件都得抄第二份口径
+       （`references.ts` 的 `erbReferenceDecorations` 是单一真源，与反向索引共用同一条
+       可见行遍历、同一张 CALL 族表、同一个记号字符集；漂移的表现是"引用面板说没有、
+       波浪线却红"）。
+
+       **刻意不声明 `offloadKind`、同步主线程执行**：判据要读 `index`（项目态），搬进
+       worker 就得复制索引——取舍与 `.kojo` 转译同款（项目态硬搬造假错）。扫描是单遍
+       线性（实测装饰热路径量级见交付读数），与结构波浪线的"先例：纯函数 + offloadKind"
+       不同之处只在数据来源，不在成本形状。
+
+       fail-open：索引未建（未开项目 / 还在建）⇒ **一条不报**——"全红"比"没有提示"
+       糟得多（错标比不标危险）；索引几秒后建好，波浪线随之而来。FORM 动态拼接 /
+       CALLFORM 全族 / 字符串 / 注释 / `[SKIPSTART]` 区 / `$` 标签全部不报（判据层，
+       见 `scanUndefinedCallTargets`），这里只补索引缺席这一态。
+       */
+      ctx.slots.register('ui.editor.decorator', {
+        id: 'erb-reference',
+        title: 'ERB 未定义调用目标波浪线',
+        order: 21,
+        decorate(file): LineDecoration[] {
+          const idx = index;
+          if (!idx) return []; // fail-open：索引未建零误报
+          return erbReferenceDecorations({ path: file.path, text: file.text }, (upper) => idx.byName.has(upper));
         },
       });
 
