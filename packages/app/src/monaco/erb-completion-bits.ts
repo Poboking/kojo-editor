@@ -49,8 +49,13 @@ export interface ErbBitHoverHit {
 
 const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
 
-/** 从 `open` 处的 `(` 找出配对的 `)`（跳过字符串字面量；未闭合 → -1） */
-function matchingParen(text: string, open: number): number {
+/**
+ * 从 `open` 处的 `(` 找出配对的 `)`（跳过字符串字面量；未闭合 → -1）。
+ *
+ * 导出（T6 补全上下文门复用）：括号 / 字符串扫描的**单一真源**——补全位置语义各处
+ * 共用这一份，禁止抄第二份（抄两份必然漂移）。
+ */
+export function matchingParen(text: string, open: number): number {
   let depth = 0;
   let i = open;
   while (i < text.length) {
@@ -71,8 +76,11 @@ function matchingParen(text: string, open: number): number {
   return -1;
 }
 
-/** `[from, to)` 内**顶层**（括号 / 方括号深度 0）的第一个逗号；无 → -1 */
-function topLevelComma(text: string, from: number, to: number): number {
+/**
+ * `[from, to)` 内**顶层**（括号 / 方括号深度 0）的第一个逗号；无 → -1。
+ * 导出（T6 补全上下文门复用，理由同 `matchingParen`）。
+ */
+export function topLevelComma(text: string, from: number, to: number): number {
   let depth = 0;
   let i = from;
   while (i < to) {

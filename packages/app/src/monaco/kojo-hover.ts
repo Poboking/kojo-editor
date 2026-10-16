@@ -1,5 +1,10 @@
 import type * as Monaco from './entry';
-import type { KojoInstructionTable, KojoLibraryTable, VariableSchema } from '@kojo/plugin-api';
+import type {
+  ErbIndex,
+  KojoInstructionTable,
+  KojoLibraryTable,
+  VariableSchema,
+} from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
 import { erbBitHoverName } from './erb-completion-bits';
@@ -33,6 +38,12 @@ export interface HoverTables {
    * 的位号反查成中文位名（`VariableInfo.bits`）。缺席 = 不做位名反查（不猜）。
    */
   readonly variableSchema?: VariableSchema;
+  /**
+   * ERB 函数索引通道（additive 可选）——宿主装配时注入，数据来自 `erb.parser` 服务的
+   * `currentIndex()`（**每次悬停现取**：索引随项目开闭重建，缓存会带来上一个项目的脏索引，
+   * 与 `getTables` 同款纪律）。通道缺席 / 索引未建 / 求值抛错 ⇒ 本路不产结果（不猜）。
+   */
+  readonly erbIndex?: () => ErbIndex | null | undefined;
 }
 
 /** 一次解析的产物：显示中文名 + 类别 + 命中的列区间（1 基，供 hover 高亮） */
@@ -41,6 +52,11 @@ export interface HoverHit {
   readonly kind: string;
   readonly startColumn: number;
   readonly endColumn: number;
+  /**
+   * 附加正文行（additive 可选）——命中带可读正文（如 ERB 函数的 docComment / 形参签名 /
+   * 定义位置）时逐行给出；每行渲染为独立的 markdown 块。缺省 = 只显示名字行。
+   */
+  readonly lines?: readonly string[];
 }
 
 const isRefChar = (ch: string): boolean => /[A-Za-z0-9_:]/.test(ch);
@@ -134,7 +150,62 @@ export function resolveHoverName(lineText: string, column: number, tables: Hover
     return { name: bit.name, kind: `位号 · ${bit.bit}`, startColumn: bit.startColumn, endColumn: bit.endColumn };
   }
 
+  // 5) ERB 函数定义（宿主注入 `erbIndex` 通道）：光标词 ∈ `ErbIndex.byName`（归一化大写名）
+  //    ⇒ docComment（多行正文）+ 形参签名 + 定义位置。定义行与调用点同词同命中——查表只认词，
+  //    不认语法位。通道缺席 / 索引未建 / 词不在索引 ⇒ 本路不产结果（不猜）。
+  const erbFn = resolveErbFunctionHover(lineText, col0, tables.erbIndex);
+  if (erbFn !== undefined) return erbFn;
+
   return undefined;
+}
+
+/**
+ * ERB 函数路（**纯函数**）：光标词在 `ErbIndex.byName` 里 ⇒ 产出带正文的命中。
+ *
+ * - 名词查表用**归一化大写**（Emuera 函数名大小写不敏感，与 `byName` 键同口径）；
+ * - 正文 = docComment（有则按行拆开）+ 形参签名（参数取自同一索引的 `files` 全量定义，
+ *   文件不在索引 ⇒ 只省签名这一行，不猜）+ 定义位置（`文件路径:行号`）；
+ * - 同名多处定义：显示首条的正文与位置，并追加一行注明剩余处数（重名事实不藏）。
+ */
+function resolveErbFunctionHover(
+  lineText: string,
+  col0: number,
+  getIndex: (() => ErbIndex | null | undefined) | undefined,
+): HoverHit | undefined {
+  if (typeof getIndex !== 'function') return undefined;
+  let index: ErbIndex | null | undefined;
+  try {
+    index = getIndex();
+  } catch {
+    return undefined;
+  }
+  if (!index) return undefined;
+  const span = spanAround(lineText, col0, isIdentChar);
+  if (!span) return undefined;
+  const token = lineText.slice(span.start, span.end);
+  const defs = index.byName.get(token.toUpperCase());
+  if (!defs || defs.length === 0) return undefined;
+
+  const def = defs[0]!;
+  const lines: string[] = [];
+  if (def.docComment !== undefined && def.docComment.length > 0) {
+    lines.push(...def.docComment.split('\n').filter((l) => l.trim().length > 0));
+  }
+  const file = index.files.get(def.filePath);
+  const fn = file?.functions.find((f) => f.normalizedName === def.normalizedName && f.startLine === def.startLine);
+  if (fn && fn.params.length > 0) {
+    lines.push(`\`${def.name}(${fn.params.map((p) => p.name).join(', ')})\``);
+  }
+  lines.push(`定义于 \`${def.filePath}:${def.startLine}\``);
+  if (defs.length > 1) lines.push(`另有 ${defs.length - 1} 处同名定义`);
+
+  return {
+    name: def.name,
+    kind: 'ERB 函数',
+    startColumn: span.start + 1,
+    endColumn: span.end + 1,
+    lines,
+  };
 }
 
 /**
@@ -148,6 +219,8 @@ export function installHover(monaco: typeof Monaco, getTables: () => HoverTables
     provideHover(model, position) {
       const hit = resolveHoverName(model.getLineContent(position.lineNumber), position.column, getTables());
       if (!hit) return undefined;
+      const contents = [{ value: `**${hit.name}**（${hit.kind}）` }];
+      for (const line of hit.lines ?? []) contents.push({ value: line });
       return {
         range: {
           startLineNumber: position.lineNumber,
@@ -155,7 +228,7 @@ export function installHover(monaco: typeof Monaco, getTables: () => HoverTables
           startColumn: hit.startColumn,
           endColumn: hit.endColumn,
         },
-        contents: [{ value: `**${hit.name}**（${hit.kind}）` }],
+        contents,
       };
     },
   };

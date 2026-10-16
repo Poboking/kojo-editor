@@ -35,6 +35,29 @@ export const ERB_DIRECTIVES = [
 export const ERB_LANGUAGE_ID = 'kojo-erb';
 
 /**
+ * 合并基底词表与 adapter 词表（**纯函数**，两表进、合并词表出）：
+ * - 并集按**大小写不敏感**去重（Emuera 关键字大小写不敏感；先出现者保留原样——基底在前，
+ *   英文指令保持基底写法，adapter 同名异写不产生重复项）；
+ * - 产物**排序确定**（按 UTF-16 码元比较），同一输入恒得同一顺序；
+ * - `extra` 缺席（adapter 表缺席 / 未提供枚举能力）⇒ 返回基底的确定性排序拷贝。
+ */
+export function mergeDirectiveWords(
+  base: readonly string[],
+  extra: readonly string[] | undefined | null,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const word of extra ? [...base, ...extra] : base) {
+    if (word.length === 0) continue;
+    const key = word.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(word);
+  }
+  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
  * `comment` token 的主题规则（默认注释色）。
  *
  * 提到这里是为了**单一真源**：`kojo-dark` 主题要用它，避免各处各抄一份色值。
@@ -45,23 +68,15 @@ export const ERB_COMMENT_THEME_RULE: Monaco.editor.ITokenThemeRule = {
   fontStyle: 'italic',
 };
 
-export function registerErbLanguage(monaco: typeof Monaco): void {
-  if (monaco.languages.getLanguages().some((l) => l.id === ERB_LANGUAGE_ID)) return;
-
-  // 扩展名映射取自契约层单一真源（`plugin-api/erb-ext`，FT-2 收口）：
-  // 索引收哪些方言 ⇔ 高亮覆盖哪些方言，一条清单管两头。大小写两种写法由
-  // `erbMonacoExtensions` 现算派生（Monaco 按字面量匹配，盘上 `X.ERB`/`X.ERH` 都得命中），
-  // 不是第二处手抄。`.ERH` 自本批起进映射——声明文件同样是 `#DIM`/`#DEFINE` 的 ERB 语法。
-  monaco.languages.register({
-    id: ERB_LANGUAGE_ID,
-    extensions: erbMonacoExtensions(),
-    aliases: ['ERB', 'EraBasic'],
-  });
-
-  monaco.languages.setMonarchTokensProvider(ERB_LANGUAGE_ID, {
+/**
+ * Monarch 词法定义构建器（`directives` 词表参数化——基底与 adapter 派生词表共用同一份
+ * tokenizer 骨架，只换词表，别处零分叉）。
+ */
+function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLanguage {
+  return {
     ignoreCase: false,
     defaultToken: '',
-    directives: ERB_DIRECTIVES,
+    directives: [...directives],
     tokenizer: {
       root: [
         // 行首注释（Emuera 语义：行首 ; 整行注释）
@@ -92,8 +107,17 @@ export function registerErbLanguage(monaco: typeof Monaco): void {
             },
           },
         ],
-        // 日文/中文全角标识符（变量名、参数名）
-        [/[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]+/, 'identifier'],
+        // 日文/中文全角标识符（变量名、参数名）；命中词表（adapter 派生的指令名，含中日文
+        // 名）同样出 keyword——词表派生自 adapter 时非 ASCII 名才有着落
+        [
+          /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]+/,
+          {
+            cases: {
+              '@directives': 'keyword',
+              '@default': 'identifier',
+            },
+          },
+        ],
       ],
       str: [
         [/[^"%\\]+/, 'string'],
@@ -110,7 +134,48 @@ export function registerErbLanguage(monaco: typeof Monaco): void {
         [/[^%]+/, 'variable'],
       ],
     },
-  } as Monaco.languages.IMonarchLanguage);
+  };
+}
+
+/**
+ * 当前 Monarch tokens provider 的句柄（`setMonarchTokensProvider` 的返回值）。
+ *
+ * **重设纪律**：重设前先 dispose 旧的（Monaco 的 TokenizationRegistry 对"句柄已过期"
+ * 的 dispose 是守卫过的——旧句柄在新 provider 就位后 dispose 是安全空操作，但先 dispose
+ * 再 set 语义最干净）；项目切换 / EditorPane 卸载必须回到基底词表（`setErbDirectiveWords`
+ * 传 `null`），**不得残留上一项目的词表**——与 hover 的"表随项目现取"同一纪律。
+ */
+let monarchDisposable: Monaco.IDisposable | null = null;
+
+/**
+ * 重设 ERB 的 Monarch directive 词表（宿主装配点调用）。
+ *
+ * `words` = 合并后的词表（`mergeDirectiveWords(ERB_DIRECTIVES, adapterNames)`）；
+ * `null` / 缺省 = 回基底 `ERB_DIRECTIVES`（项目关闭 / 卸载）。同一份 tokenizer 骨架，
+ * 只换词表；重设时 dispose 旧 provider。
+ */
+export function setErbDirectiveWords(monaco: typeof Monaco, words?: readonly string[] | null): void {
+  monarchDisposable?.dispose();
+  monarchDisposable = monaco.languages.setMonarchTokensProvider(
+    ERB_LANGUAGE_ID,
+    erbMonarch(words ?? ERB_DIRECTIVES),
+  );
+}
+
+export function registerErbLanguage(monaco: typeof Monaco): void {
+  if (monaco.languages.getLanguages().some((l) => l.id === ERB_LANGUAGE_ID)) return;
+
+  // 扩展名映射取自契约层单一真源（`plugin-api/erb-ext`，FT-2 收口）：
+  // 索引收哪些方言 ⇔ 高亮覆盖哪些方言，一条清单管两头。大小写两种写法由
+  // `erbMonacoExtensions` 现算派生（Monaco 按字面量匹配，盘上 `X.ERB`/`X.ERH` 都得命中），
+  // 不是第二处手抄。`.ERH` 自本批起进映射——声明文件同样是 `#DIM`/`#DEFINE` 的 ERB 语法。
+  monaco.languages.register({
+    id: ERB_LANGUAGE_ID,
+    extensions: erbMonacoExtensions(),
+    aliases: ['ERB', 'EraBasic'],
+  });
+
+  monarchDisposable = monaco.languages.setMonarchTokensProvider(ERB_LANGUAGE_ID, erbMonarch(ERB_DIRECTIVES));
 
   monaco.languages.setLanguageConfiguration(ERB_LANGUAGE_ID, {
     comments: { lineComment: ';' },

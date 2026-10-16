@@ -15,9 +15,9 @@ import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
 import { makeLookup } from '@kojo/plugin-kojo-sugar';
-import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
+import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords, registerErbLanguage, setErbDirectiveWords } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
-import { installHover } from '../monaco/kojo-hover';
+import { installHover, type HoverTables } from '../monaco/kojo-hover';
 import {
   PROVIDED_CODE_ACTION_KINDS,
   actionDiagnostics,
@@ -123,7 +123,7 @@ function languageFor(filePath: string): string {
  * 另附 `erbFunctionNames`（**非** adapter 表）——项目内全部函数名（EC-3 函数名补全预置），
  * 由 `erb-parser` 的 `ErbIndex` 派生并按整项目指纹记忆化（见 `erb-function-names-for`）。
  */
-function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables & SignatureTables {
+function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables & SignatureTables & HoverTables {
   const project = kernel.project.current();
   if (!project) return {};
   for (const contribution of kernel.slots.query('game.adapter')) {
@@ -139,6 +139,15 @@ function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables & 
       // B5 签名帮助要的槽语义表（同一枚 adapter 贡献，运行时现取；缺席 = 不产签名）
       ...(adapter.kojoCallProtocol ? { callProtocol: adapter.kojoCallProtocol } : {}),
       erbFunctionNames: erbFunctionNamesFor(kernel),
+      // ERB 函数悬停通道：erb.parser 的当前索引**每次现取**（索引随项目开闭重建，不缓存脏表）。
+      // 解析器缺席 / 索引在途只让该路无结果（退化可见），绝不抛进悬停 seam。
+      erbIndex: () => {
+        try {
+          return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+        } catch {
+          return null;
+        }
+      },
     };
   }
   return {};
@@ -1419,6 +1428,25 @@ export function EditorPane({
     apply(loadCodeLensPref());
     const un = kernel.bus.on('editor.codeLens.set', ({ on }) => apply(on));
     return un;
+  }, [kernel]);
+
+  // Monarch directive 词表同源化（T5）：adapter 指令表可用时，词表 = 基底 `ERB_DIRECTIVES`
+  // ∪ `instructionTable.names()`（合并去重排序见 `mergeDirectiveWords` 纯函数）；表缺席 ⇒ 基底。
+  // **项目切换不残留上一项目的词表**：`project.closed` / 卸载一律回基底（与 hover 的
+  // "表随项目现取"同一纪律）；重设时 dispose 旧 provider（`setErbDirectiveWords` 内置）。
+  useEffect(() => {
+    const applyForCurrentAdapter = (): void => {
+      const names = editorTables(kernel).instructionTable?.names?.() ?? null;
+      setErbDirectiveWords(monaco, names === null ? null : mergeDirectiveWords(ERB_DIRECTIVES, names));
+    };
+    applyForCurrentAdapter();
+    const offOpened = kernel.bus.on('project.opened', () => applyForCurrentAdapter());
+    const offClosed = kernel.bus.on('project.closed', () => setErbDirectiveWords(monaco, null));
+    return () => {
+      offOpened();
+      offClosed();
+      setErbDirectiveWords(monaco, null);
+    };
   }, [kernel]);
 
   // 标签关闭 → model 回收（不在 openPaths 中的一律 dispose；绝不泄漏）

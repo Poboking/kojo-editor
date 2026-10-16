@@ -8,6 +8,7 @@ import type {
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID } from './erb-language';
 import { erbBitCompletionItems } from './erb-completion-bits';
+import { erbCompletionGate, type ErbCompletionGate } from './erb-completion-context';
 import { erbFunctionCompletionItems } from './erb-completion-functions';
 import { erbLabelCompletionItems } from './erb-completion-labels';
 import { erbSystemFunctionCompletionItems } from './erb-completion-system-functions';
@@ -337,6 +338,24 @@ function missingRequirement(
   return value === undefined || value === null ? key : undefined;
 }
 
+/**
+ * 位置门的候选过滤器（T6）：门是**过滤**不是重排——各 source 的既有排序语义不动。
+ * - `'call-target'`：只留**函数名形态**的候选（kind = Function / Method，按 kind 而非
+ *   source 名单判——新 source 出函数名候选即自动进门，扩展点结构不破坏）；
+ * - 其余门类：不过滤（维持现行为）。
+ */
+function gateFilter(
+  gate: ErbCompletionGate,
+  monaco: typeof Monaco,
+): ((item: Monaco.languages.CompletionItem) => boolean) | undefined {
+  if (gate !== 'call-target') return undefined;
+  const fnKinds = new Set<number>([monaco.languages.CompletionItemKind.Function, monaco.languages.CompletionItemKind.Method]);
+  return (item) => {
+    const kind = typeof item.kind === 'number' ? item.kind : undefined;
+    return kind !== undefined && fnKinds.has(kind);
+  };
+}
+
 /** 依次问各 source，按 label 去重（先注册者胜），再按排名键排序并写回 `sortText` */
 function mergeSuggestions(
   sources: readonly ErbCompletionSource[],
@@ -344,6 +363,7 @@ function mergeSuggestions(
   prefix: string,
   reported: Set<string>,
   onDegrade: ErbCompletionDegradeReporter | undefined,
+  keep: ((item: Monaco.languages.CompletionItem) => boolean) | undefined,
 ): Monaco.languages.CompletionItem[] {
   const byLabel = new Map<string, Monaco.languages.CompletionItem>();
   for (const source of sources) {
@@ -366,6 +386,8 @@ function mergeSuggestions(
       }
       continue;
     }
+    // 位置门在**去重前**逐 source 过滤：keyword 形态的候选不得占掉函数名候选的先注册位
+    if (keep !== undefined) items = items.filter(keep);
     for (const item of items) {
       const label = labelText(item.label);
       if (!byLabel.has(label)) byLabel.set(label, item);
@@ -399,8 +421,12 @@ export function installErbCompletion(
   return monaco.languages.registerCompletionItemProvider(ERB_LANGUAGE_ID, {
     triggerCharacters: ['#', '['],
     provideCompletionItems(model, position) {
-      const range = erbTokenRange(model, position);
       const line = model.getLineContent(position.lineNumber);
+      // 位置门（T6）：字符串 / FORM 串内不给代码补全；CALL 系名字位只给函数名候选；
+      // 其余位置维持现行为。判定先于 range（串内零候选，不劳各 source 出货一遍）。
+      const gate = erbCompletionGate(line, position.column);
+      if (gate === 'in-string') return { suggestions: [] };
+      const range = erbTokenRange(model, position);
       const prefix = line.slice(range.startColumn - 1, range.endColumn - 1);
       const suggestions = mergeSuggestions(
         ERB_COMPLETION_SOURCES,
@@ -408,6 +434,7 @@ export function installErbCompletion(
         prefix,
         reported,
         onDegrade,
+        gateFilter(gate, monaco),
       );
       return { suggestions };
     },
