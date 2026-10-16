@@ -81,6 +81,10 @@ export interface FileIO {
    */
   ensureDir(path: string): Promise<void>;
   listDir(path: string): Promise<DirEntry[]>;
+  /**
+   * 递归遍历。`opts.filter` 由**本层兑现**（内核实现），且**只筛输出条目、不剪枝**
+   * ——谓词跨进程必丢，故桥侧永远收不到它（口径与理由见 `WalkOptions.filter`）。
+   */
   walkDir(path: string, opts?: WalkOptions): Promise<DirEntry[]>;
   exists(path: string): Promise<boolean>;
   stat(path: string): Promise<FileStat | null>;

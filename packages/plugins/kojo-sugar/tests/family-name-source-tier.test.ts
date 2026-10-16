@@ -58,7 +58,7 @@ const ERH_FILES: Record<string, string> = {
 
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
-/** 内存 io：只实现字典要用的三个方法（`walkDir` 缺位 = 不喂 `.ERH` 的那条对照路） */
+/** 内存 io：只实现字典要用的四个方法（`walkDir` 缺位 = 不喂 `.ERH` 的那条对照路） */
 const memIo = (): FileIO => {
   const entry = (path: string, isDirectory = false): DirEntry => ({
     name: path.split('/').pop() ?? path,
@@ -80,6 +80,23 @@ const memIo = (): FileIO => {
       eol: 'lf' as const,
       mtimeMs: null,
     }),
+    /** FileIO 契约的批量读（字典的两条读循环走这里）：夹具缺文件 = null 失败位，不整批抛 */
+    readTexts: async (paths: readonly string[]) =>
+      Promise.all(
+        paths.map(async (p) => {
+          try {
+            return {
+              path: p,
+              text: text(p),
+              encoding: 'utf-8' as const,
+              eol: 'lf' as const,
+              mtimeMs: null,
+            };
+          } catch {
+            return null;
+          }
+        }),
+      ),
     walkDir: async (dir: string, opts?: { filter?: (e: DirEntry) => boolean }) => {
       const all = Object.keys(ERH_FILES).map((n) => entry(`${ERB_DIR}/${n.split('/').pop() ?? n}`));
       return opts?.filter ? all.filter(opts.filter) : all;

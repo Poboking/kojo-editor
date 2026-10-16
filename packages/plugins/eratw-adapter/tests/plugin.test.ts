@@ -31,6 +31,15 @@ function fakeIO(tree: Tree): FileIO {
       if (typeof text !== 'string') throw new Error(`not a file: ${p}`);
       return { path: p, text, encoding: 'utf-8', eol: 'lf', mtimeMs: null };
     },
+    /** 批量读（FileIO 契约成员；字典的两条读循环走这里）：失败位 = null，不整批抛 */
+    async readTexts(ps: readonly string[]) {
+      return ps.map((p) => {
+        const text = tree[p];
+        return typeof text === 'string'
+          ? { path: p, text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: null }
+          : null;
+      });
+    },
   } as unknown as FileIO;
 }
 

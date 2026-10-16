@@ -53,6 +53,7 @@ function ioFor(dropAls: boolean, withErh: boolean): FileIO {
       return dropAls ? entries.filter((e) => !(!e.isDirectory && /\.als$/i.test(e.name))) : entries;
     },
     readText: (path: string) => inner.readText(path),
+    readTexts: (paths: readonly string[]) => inner.readTexts(paths),
   };
   if (withErh) io.walkDir = (dir: string, opts?: WalkOptions) => inner.walkDir(dir, opts);
   return io as unknown as FileIO;

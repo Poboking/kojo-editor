@@ -330,8 +330,26 @@ export class FileIOServiceImpl implements FileIO {
     return this.bridge.listDir(path);
   }
 
-  walkDir(path: string, opts?: WalkOptions): Promise<DirEntry[]> {
-    return this.bridge.walkDir(path, opts);
+  /**
+   * 递归遍历 + **本层唯一兑现的 `filter`**（2026-10-16 桥分叉批）。
+   *
+   * `filter` 是一个 JS 闭包，而平台桥可能跨进程：桌面壳的 `walkDir` =
+   * `invoke('walk_dir', { path, opts })`，参数过一次 JSON 序列化，函数值**整键消失**
+   * （Rust 的 `WalkOptionsDto` 本来也只有四个可序列化字段）。此前这里把 opts 原样转给桥，
+   * 于是「类型说 filter 有、桥根本不认」：node 测试桥自己递归并兑现 filter ⇒ 测试全绿，
+   * 生产里整棵 ERB 根 4,519 份文件全回来，再逐份串行读盘 = 开项目 24.4 秒
+   * （守门：`packages/plugins/eratw-adapter/tests/variable-schema.walkdir-ipc.test.ts`）。
+   *
+   * 修法只有一条站得住：**谓词由内核兑现，桥一律不经眼**（只有一份实现，
+   * 桥分叉在构造上不可能，不必逐桥对拍）。代价是语义收窄为
+   * **「只筛输出条目，不剪枝」**——枚举先于筛选，剪掉子树已无从谈起（要限深请用 `maxDepth`）。
+   * 全仓三处调用方的谓词都写成 `e.isDirectory || …`（本就不剪枝），语义零变化。
+   */
+  async walkDir(path: string, opts?: WalkOptions): Promise<DirEntry[]> {
+    const { filter, ...enumeration } = opts ?? {};
+    if (filter === undefined) return this.bridge.walkDir(path, opts);
+    const entries = await this.bridge.walkDir(path, enumeration);
+    return entries.filter(filter);
   }
 
   exists(path: string): Promise<boolean> {

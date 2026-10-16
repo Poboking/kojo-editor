@@ -91,6 +91,9 @@ describe('loadEratwVariableSchema：erbDir（作者自定名表）接线', () =>
           ? Object.keys(CSV).map((name) => ({ name, path: `/game/CSV/${name}`, isDirectory: false }))
           : [],
       readText: async (path: string) => ({ text: files[path] ?? CSV[path.replace('/game/CSV/', '')] ?? '', path }),
+      // FileIO 契约的批量读（字典的两条读循环走这里；失败位 = null，不整批抛）
+      readTexts: async (paths: readonly string[]) =>
+        paths.map((p) => ({ text: files[p] ?? CSV[p.replace('/game/CSV/', '')] ?? '', path: p })),
       walkDir: async () => {
         calls.walkDir++;
         return Object.keys(files).map((p) => ({ name: p.split('/').pop() as string, path: p, isDirectory: false }));
@@ -113,7 +116,11 @@ describe('loadEratwVariableSchema：erbDir（作者自定名表）接线', () =>
       index: 'K15C_SETTING_DISABLE_HATE_DIALOG',
     });
     // 一张 io 里连 walkDir 都没有（旧消费方 / 旧夹具形态）也必须照常工作
-    const noWalk = { listDir: io.listDir, readText: io.readText } as unknown as FileIO;
+    const noWalk = {
+      listDir: io.listDir,
+      readText: io.readText,
+      readTexts: io.readTexts,
+    } as unknown as FileIO;
     const same = await loadEratwVariableSchema({ io: noWalk, csvDir: '/game/CSV', log: silentLog });
     expect(same.inputDigest).toBe(base.inputDigest);
   });
@@ -183,6 +190,7 @@ describe('loadEratwVariableSchema：erbDir（作者自定名表）接线', () =>
     const io = {
       listDir: inner.listDir,
       readText: inner.readText,
+      readTexts: inner.readTexts,
       walkDir: async () => {
         throw new Error('目录不存在');
       },

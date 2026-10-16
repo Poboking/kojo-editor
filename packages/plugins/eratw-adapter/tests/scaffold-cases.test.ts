@@ -336,6 +336,9 @@ describe('脚手架案例溯源守卫（fixtures/scaffold ↔ FACE_CASES ↔ 空
       listDir: async (dir: string) =>
         Object.keys(realCsvLines).map((name) => ({ name, path: `${dir}/${name}`, isDirectory: false })),
       readText: async (path: string) => ({ text: realCsvLines[path.split('/').pop()!] ?? '', path }),
+      // FileIO 契约的批量读（字典的两条读循环走这里）
+      readTexts: async (paths: readonly string[]) =>
+        paths.map((p) => ({ text: realCsvLines[p.split('/').pop()!] ?? '', path: p })),
     } as unknown as FileIO;
     const schema = await loadEratwVariableSchema({ io, csvDir: '/game/CSV', log: silentLog });
     return {

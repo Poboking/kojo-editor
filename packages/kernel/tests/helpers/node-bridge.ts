@@ -142,6 +142,15 @@ export class NodeBridge implements PlatformBridge {
     }
   }
 
+  /**
+   * 递归遍历——**只枚举，不兑现 `filter`**（2026-10-16 桥分叉批）。
+   *
+   * 旧实现自己递归时顺手应用了 `opts.filter`（含"目录判 false ⇒ 剪子树"），
+   * 而跨进程的 Tauri 桥**做不到**（闭包过不了 JSON）⇒ 测试口径与生产口径分叉，
+   * 生产里整棵 ERB 根被当成筛过的结果逐份串行读，开项目多花 24.4 秒。
+   * 现在谓词只在内核 `FileIOServiceImpl.walkDir` 兑现一次，本桥与真壳同形：
+   * 收到的 opts 里已经没有 `filter`。
+   */
   async walkDir(root: string, opts?: WalkOptions): Promise<DirEntry[]> {
     const out: DirEntry[] = [];
     const maxDepth = opts?.maxDepth ?? Number.POSITIVE_INFINITY;
@@ -153,7 +162,6 @@ export class NodeBridge implements PlatformBridge {
       if (depth > maxDepth) return;
       const entries = await this.listDir(dir);
       for (const entry of entries) {
-        if (opts?.filter && !opts.filter(entry)) continue;
         if (entry.isDirectory) {
           if (includeDirs) out.push(entry);
           await walk(entry.path, depth + 1);

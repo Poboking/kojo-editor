@@ -195,9 +195,10 @@ export function buildFileGroups(
 /**
  * 冷开快照：对口上根各做**一次** `walkDir`，拿全部方言文件路径。
  *
- * 过滤谓词与 erb-parser 的索引 walk **逐字同款**——特别含 `e.isDirectory ||`：
- * `walkDir` 的 filter 对目录返回 false 会连整棵子树一起剪掉（PITFALLS §58 的静默少收），
- * 写成纯扩展名筛就只剩根层。返回结果只留文件侧（目录条目排除）。
+ * 过滤谓词与 erb-parser 的索引 walk **逐字同款**。口径（2026-10-16 桥分叉批改）：
+ * `filter` 由**内核**兑现、**只筛输出条目、不剪枝**（谓词是闭包，跨进程桥收不到它，
+ * 剪枝在构造上不可能）⇒ `e.isDirectory ||` 只是把目录侧交回默认口径（本调用 `includeDirs:false`，
+ * 目录条目本就不出现），真正的文件侧筛在下面那行**再判一次**——读盘集合的规模不委托给桥。
  */
 export async function walkDialectPaths(
   walkDir: (path: string, opts?: WalkOptions) => Promise<DirEntry[]>,

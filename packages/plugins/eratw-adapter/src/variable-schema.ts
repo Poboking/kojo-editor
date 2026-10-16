@@ -401,19 +401,30 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
     return t;
   };
 
-  /** 一轮加载：读文件 → 并入表 → 记摘要。单文件读失败只 warn 跳过（不静默：日志可见） */
+  /**
+   * 一轮加载：**一次批量读** → 按序并入表 → 记摘要。
+   *
+   * 2026-10-16 桥分叉批把这里的逐文件 `await io.readText()` 换掉：串行 await-in-loop 下
+   * 每份文件 = 两趟 IPC 往返，52 份名称表就烧掉 715ms（真语料实测）。
+   * `readTexts` 一次 `read_files_raw` 批带回 N 份，失败位是 `null`（契约：不整批抛），
+   * 与旧的"单文件读失败只 warn 跳过"同一可见口径——**不静默**。
+   * 并入顺序 = 入参顺序 ⇒「首个定义优先」的裁决与摘要顺序逐字不变。
+   */
   const runPass = async (files: readonly NameTableFile[], source: NameTableSource): Promise<void> => {
-    for (const f of files) {
-      try {
-        const tf = await io.readText(f.path);
-        const merged = mergeVariableTable(tableOf(f.variableName), tf.text, source);
-        digestParts.push(stableHash(`${f.path}\u0000${tf.text}`));
-        if (source === 'append') {
-          appendedNames += merged.addedName;
-          appendedIndexes += merged.addedIndex;
-        }
-      } catch (err) {
-        log.warn(`变量表读取失败（跳过）：${f.path} — ${String(err)}`);
+    if (files.length === 0) return;
+    const texts = await io.readTexts(files.map((f) => f.path));
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i]!;
+      const tf = texts[i];
+      if (tf === null || tf === undefined) {
+        log.warn(`变量表读取失败（跳过）：${f.path}`);
+        continue;
+      }
+      const merged = mergeVariableTable(tableOf(f.variableName), tf.text, source);
+      digestParts.push(stableHash(`${f.path}\u0000${tf.text}`));
+      if (source === 'append') {
+        appendedNames += merged.addedName;
+        appendedIndexes += merged.addedIndex;
       }
     }
   };
@@ -477,37 +488,46 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
    */
   const erhConsts = new Map<string, number>();
   if (erbDir !== undefined) {
-    let erhFiles: Awaited<ReturnType<FileIO['walkDir']>> = [];
+    /** 实际要读的 `.ERH` 路径（排序后 = 摘要与"首个定义优先"的裁决序） */
+    let erhPaths: string[] = [];
     try {
-      // `filter` 返回 false 会**连目录一起剪掉**（见 `WalkOptions`）⇒ 目录一律放行，扩展名筛在文件侧；
-      // 判扩展名一律问契约层单一真源（FT-2 收口），本包不再抄第二份 `.erh` 字面量
+      // `filter` 由内核兑现且**只筛输出条目、不剪枝**（见 `WalkOptions`；2026-10-16 桥分叉批）⇒
+      // 目录侧无需放行以外的技巧，但**本层不信任回来的都是 `.ERH`**：读盘前自己再按扩展名筛一遍
+      // （读集合的规模是本函数的性能与安全边界，不能委托给一具可能跨进程的桥）。
+      // 判扩展名一律问契约层单一真源（FT-2 收口），本包不再抄第二份 `.erh` 字面量。
       const found = await io.walkDir(erbDir, {
         filter: (e) => e.isDirectory || isErbDeclarationPath(e.name),
       });
       // 确定性顺序：首个定义优先的裁决不该随目录枚举顺序漂移（引擎按路径排序装载）
-      erhFiles = found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+      erhPaths = found
+        .filter((e) => !e.isDirectory && isErbDeclarationPath(e.name))
+        .map((e) => e.path)
+        .sort(comparePaths);
     } catch (err) {
       log.warn(`自定名表扫描失败（跳过，具名索引回落名称表）：${erbDir} — ${String(err)}`);
     }
+    // 一次批量读替掉逐份 `await readText`：真语料上这里是 24.4 秒（4,519 份串行 IPC 往返）
+    const erhTexts = erhPaths.length > 0 ? await io.readTexts(erhPaths) : [];
     let skippedDup = 0;
-    for (const f of erhFiles) {
-      try {
-        const tf = await io.readText(f.path);
-        digestParts.push(stableHash(`${f.path}\u0000${tf.text}`));
-        for (const [name, value] of parseErhConsts(tf.text)) {
-          if (erhConsts.has(name)) {
-            skippedDup++;
-            continue;
-          }
-          erhConsts.set(name, value);
+    for (let i = 0; i < erhPaths.length; i++) {
+      const path = erhPaths[i]!;
+      const tf = erhTexts[i];
+      if (tf === null || tf === undefined) {
+        log.warn(`自定名表读取失败（跳过）：${path}`);
+        continue;
+      }
+      digestParts.push(stableHash(`${path}\u0000${tf.text}`));
+      for (const [name, value] of parseErhConsts(tf.text)) {
+        if (erhConsts.has(name)) {
+          skippedDup++;
+          continue;
         }
-      } catch (err) {
-        log.warn(`自定名表读取失败（跳过）：${f.path} — ${String(err)}`);
+        erhConsts.set(name, value);
       }
     }
-    if (erhFiles.length > 0) {
+    if (erhPaths.length > 0) {
       log.info(
-        `自定名表（*.ERH 具名常量）：${erhFiles.length} 份，收录 ${erhConsts.size} 个名字` +
+        `自定名表（*.ERH 具名常量）：${erhPaths.length} 份，收录 ${erhConsts.size} 个名字` +
           (skippedDup > 0 ? `（重名 ${skippedDup} 处按首个定义优先跳过）` : ''),
       );
     }

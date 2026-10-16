@@ -76,6 +76,9 @@ describe('loadEratwVariableSchema', () => {
         text: files[path] ?? files[path.replace('/game/CSV/', '')] ?? '',
         path,
       }),
+      // FileIO 契约的批量读（字典的两条读循环走这里）
+      readTexts: async (paths: readonly string[]) =>
+        paths.map((p) => ({ text: files[p] ?? files[p.replace('/game/CSV/', '')] ?? '', path: p })),
     } as unknown as FileIO;
   }
 
@@ -318,18 +321,22 @@ describe('loadEratwVariableSchema：`CSV/*.als` 进字典（P-10③ 具名核对
 
   function pairIo(entries: [string, string][], opts: { dropAls?: boolean; fail?: string[] } = {}): FileIO {
     const text = new Map(entries);
+    const readOne = async (path: string) => {
+      if (opts.fail?.some((f) => path.endsWith(f))) throw new Error(`模拟读取失败：${path}`);
+      const body = text.get(path.replace(/^.*\//, ''));
+      if (body === undefined) throw new Error(`没有这个文件：${path}`);
+      return { path, text: body };
+    };
     return {
       listDir: async () =>
         entries
           .filter(([name]) => !(opts.dropAls && /\.als$/i.test(name)))
           .map(([name]) => ({ name, path: `/game/CSV/${name}`, isDirectory: false }))
           .concat({ name: 'Chara', path: '/game/CSV/Chara', isDirectory: true }),
-      readText: async (path: string) => {
-        if (opts.fail?.some((f) => path.endsWith(f))) throw new Error(`模拟读取失败：${path}`);
-        const body = text.get(path.replace(/^.*\//, ''));
-        if (body === undefined) throw new Error(`没有这个文件：${path}`);
-        return { path, text: body };
-      },
+      readText: readOne,
+      /** FileIO 契约的批量读：单文件失败 = null 失败位（与 `readText` 抛错同条件），不整批抛 */
+      readTexts: async (paths: readonly string[]) =>
+        Promise.all(paths.map(async (p) => await readOne(p).catch(() => null))),
     } as unknown as FileIO;
   }
 

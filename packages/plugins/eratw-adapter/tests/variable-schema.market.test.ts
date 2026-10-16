@@ -54,6 +54,10 @@ function treeIo(tree: Tree, opts: IoOpts = {}): FileIO {
       if (typeof text !== 'string') throw new Error(`not a file: ${path}`);
       return { path, text };
     },
+    /** FileIO 契约的批量读（字典的两条读循环走这里）：非文件 = null 失败位，不整批抛 */
+    async readTexts(paths: readonly string[]) {
+      return paths.map((p) => (typeof tree[p] === 'string' ? { path: p, text: tree[p] as string } : null));
+    },
   } as unknown as FileIO;
 }
 

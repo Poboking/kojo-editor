@@ -163,7 +163,18 @@ export interface WalkOptions {
   maxDepth?: number;
   includeFiles?: boolean;
   includeDirs?: boolean;
-  /** 返回 false 时跳过该条目（目录被跳过则整棵子树跳过） */
+  /**
+   * 输出条目谓词——**只筛返回集合，不剪枝**（2026-10-16 桥分叉批改口径）。
+   *
+   * 兑现方 = 内核 `FileIO.walkDir`（`kernel/src/io.ts`），**平台桥不得实现它**：
+   * 本字段是 JS 闭包，跨进程桥（`invoke('walk_dir')`）过一次 JSON 就整键消失，
+   * 宿主 DTO 里根本没有这一项。让桥各自实现 = 若干份真相，实测代价是
+   * 「node 桥兑现 filter ⇒ 测试全绿；Tauri 桥静默丢弃 ⇒ 生产把整棵树读进内存再逐份串行读盘」。
+   * 因此本层的枚举**先于**筛选，剪掉一棵子树在构造上不可能——需要限深请用 `maxDepth`。
+   *
+   * 旧语义「对目录返回 `false` ⇒ 连整棵子树一起剪掉」废止。既有调用方全部写成
+   * `e => e.isDirectory || 判定(e.name)`（本就不依赖剪枝），结果集逐字不变。
+   */
   filter?: (entry: DirEntry) => boolean;
   /**
    * true ⇒ 每个**文件**条目顺带填 `mtimeMs` / `size`（见 `DirEntry`）。
@@ -226,7 +237,14 @@ export interface PlatformBridge {
   ensureDir(path: string): Promise<void>;
   /** 非递归列目录；路径不存在时返回空数组 */
   listDir(path: string): Promise<DirEntry[]>;
-  /** 递归遍历；路径不存在时返回空数组 */
+  /**
+   * 递归遍历；路径不存在时返回空数组。
+   *
+   * 桥**只负责枚举**：收到的 `opts` 里保证没有 `filter`（谓词由内核 `FileIO.walkDir` 兑现，
+   * 见 `WalkOptions.filter`）。跨进程实现只需映射 `maxDepth` / `includeFiles` /
+   * `includeDirs` / `withMetadata` 四个可序列化字段，**不要**为本字段发明线格式——
+   * 那会造出第二份筛选真相。
+   */
   walkDir(path: string, opts?: WalkOptions): Promise<DirEntry[]>;
   exists(path: string): Promise<boolean>;
   stat(path: string): Promise<FileStat | null>;

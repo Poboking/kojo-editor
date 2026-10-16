@@ -35,6 +35,7 @@ function realIo(dropAls: boolean): FileIO {
       return dropAls ? entries.filter((e) => !(e.isDirectory === false && /\.als$/i.test(e.name))) : entries;
     },
     readText: (path: string) => inner.readText(path),
+    readTexts: (paths: readonly string[]) => inner.readTexts(paths),
   } as unknown as FileIO;
 }
 

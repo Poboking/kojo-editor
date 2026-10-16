@@ -24,6 +24,8 @@ function fakeIo(files: Record<string, string>): FileIO {
       { name: 'CFLAG.csv', path: '/game/CSV/CFLAG.csv', isDirectory: false },
     ],
     readText: async (path: string) => ({ text: files[path] ?? '', path }),
+    // FileIO 契约的批量读（字典的两条读循环走这里）
+    readTexts: async (paths: readonly string[]) => paths.map((p) => ({ text: files[p] ?? '', path: p })),
   } as unknown as FileIO;
 }
 

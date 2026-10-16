@@ -43,6 +43,7 @@ function ioFor(erh: boolean): FileIO {
   const io: Partial<FileIO> = {
     listDir: (dir: string) => inner.listDir(dir),
     readText: (path: string) => inner.readText(path),
+    readTexts: (paths: readonly string[]) => inner.readTexts(paths),
   };
   if (erh) io.walkDir = (dir: string, opts?: WalkOptions) => inner.walkDir(dir, opts);
   return io as unknown as FileIO;

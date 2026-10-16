@@ -161,8 +161,9 @@ describe('buildFileGroups · 索引路径与冷开 walk 快照共用同一构建
 type WalkTree = Record<string, 'DIR' | string>;
 
 /**
- * 伪 `walkDir`：**与真实实现同构**——filter 对目录返回 false 时剪整棵子树
- * （PITFALLS §58：写成纯扩展名筛就只剩根层且不报错）。
+ * 伪 `walkDir`：**与真实实现同构**——整棵树照常枚举，`filter` 只筛输出条目、**不剪枝**
+ * （2026-10-16 桥分叉批：谓词改由内核 `FileIO.walkDir` 一处兑现，闭包不再跨进程，
+ * 旧口径「目录判 false ⇒ 剪掉整棵子树」随之废止；见契约 `WalkOptions.filter`）。
  */
 function fakeWalkDir(tree: WalkTree, calls: string[] = []) {
   return async (root: string, opts?: WalkOptions): Promise<DirEntry[]> => {
@@ -180,13 +181,10 @@ function fakeWalkDir(tree: WalkTree, calls: string[] = []) {
         const path = `${prefix}${name}`;
         const isDirectory = tree[path] === 'DIR' || rest.includes('/');
         const entry: DirEntry = { name, path, isDirectory };
-        if (opts?.filter && !opts.filter(entry)) continue; // 目录 → 剪子树
-        if (isDirectory) {
-          if (opts?.includeDirs) out.push(entry);
-          visit(path);
-        } else if (opts?.includeFiles !== false) {
-          out.push(entry);
-        }
+        // 子孙一律递归（剪枝已不是本契约的能力）；筛的只是"这条进不进输出"
+        if (isDirectory) visit(path);
+        if (opts?.filter && !opts.filter(entry)) continue;
+        if (isDirectory ? opts?.includeDirs === true : opts?.includeFiles !== false) out.push(entry);
       }
     };
     visit(root);
@@ -203,7 +201,7 @@ describe('walkDialectPaths · 冷开快照（索引未就绪时先出树）', ()
     [`${ROOT}/001 A/少女之梦/M_KOJO_MESSAGE_COM_K1_1.ERB`]: '',
     [`${ROOT}/001 A/少女之梦/readme.txt`]: '', // 非方言：不收
     [`${ROOT}/001 A/少女之梦/裏`]: 'DIR',
-    [`${ROOT}/001 A/少女之梦/裏/M_KOJO_MESSAGE_COM_K1_2.erb`]: '', // 深度 3 的方言文件（剪枝回归守卫）
+    [`${ROOT}/001 A/少女之梦/裏/M_KOJO_MESSAGE_COM_K1_2.erb`]: '', // 深度 3 的方言文件（深层不筛掉的守卫）
     [`${ROOT}/001 A/少女之梦/裏/note.md`]: '',
     [`${ROOT}/001 A/包A`]: 'DIR',
     [`${ROOT}/001 A/包A/M_KOJO_COMMAND_K1_1.ERH`]: '', // 方言扩展名命中
@@ -211,7 +209,7 @@ describe('walkDialectPaths · 冷开快照（索引未就绪时先出树）', ()
     [`${ROOT}/011 B/x.ERB`]: '',
   };
 
-  it('只收方言文件、深度不限（filter 对目录放行——剪枝即静默少收的守卫）', async () => {
+  it('只收方言文件、深度不限（目录一律放行 + 深层不筛掉——旧「静默少收」形的守卫）', async () => {
     const paths = await walkDialectPaths(fakeWalkDir(tree), [ROOT]);
     expect(paths.sort()).toEqual(
       [

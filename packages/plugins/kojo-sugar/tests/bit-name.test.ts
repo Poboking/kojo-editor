@@ -280,14 +280,18 @@ describe('位名 · 真实 adapter 集成（`loadEratwVariableSchema` + `makeLoo
       path,
       isDirectory: false,
     });
+    const readOne = async (path: string) => {
+      const key = path.replace(/^M:\/game\/CSV\//, '');
+      const body = CSV_FILES[key];
+      if (body === undefined) throw new Error(`夹具没有这个文件：${path}`);
+      return { path, text: body, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: null };
+    };
     return {
       listDir: async (dir: string) => Object.keys(CSV_FILES).map((n) => entry(`${dir}/${n}`)),
-      readText: async (path: string) => {
-        const key = path.replace(/^M:\/game\/CSV\//, '');
-        const body = CSV_FILES[key];
-        if (body === undefined) throw new Error(`夹具没有这个文件：${path}`);
-        return { path, text: body, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: null };
-      },
+      readText: readOne,
+      /** FileIO 契约的批量读（字典的两条读循环走这里）：失败位 = null，不整批抛 */
+      readTexts: async (paths: readonly string[]) =>
+        Promise.all(paths.map(async (p) => await readOne(p).catch(() => null))),
       walkDir: async () => [],
     } as unknown as FileIO;
   };
