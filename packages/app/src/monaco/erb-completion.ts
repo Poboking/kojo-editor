@@ -1,11 +1,16 @@
 import type * as Monaco from './entry';
 import type {
   ErbIndex,
+  KojoCallProtocol,
+  KojoCallSlot,
   KojoInstructionTable,
   KojoLibraryTable,
+  VariableInfo,
   VariableSchema,
 } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
+import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
+import { describeCallSignature, slotParameterLabel } from './kojo-signature';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID } from './erb-language';
 import { erbBitCompletionItems } from './erb-completion-bits';
 import { erbCompletionGate, type ErbCompletionGate } from './erb-completion-context';
@@ -33,6 +38,8 @@ import { ERB_SNIPPET_SOURCE } from './erb-completion-snippets';
  *
  * 纯逻辑与 Monaco 绑定分离：`ErbCompletionSource.provide` 可单测（只依赖 ctx 里的
  * `model` / `position` / `range` / `tables`），`installErbCompletion` 只做协议翻译。
+ * 二段式供给同 kojo 侧（C-2 批）：详情延到 `resolveCompletionItem` 回表算，
+ * 括号调用形态候选按 `callProtocol` 插成带 tabstop 的 snippet。
  */
 export interface ErbCompletionTables {
   /** 变量字典（`makeLookup(adapter.variableSchema)` 产物）；缺席 = 不做变量补全 */
@@ -48,6 +55,14 @@ export interface ErbCompletionTables {
    * 缺席 / 解析器缺席 / 索引未构建 ⇒ 空数组（**无候选**，不猜）。同步取用（补全 provider 是同步 API）。
    */
   readonly erbFunctionNames?: () => readonly string[];
+  /**
+   * 调用协议表（adapter `kojoCallProtocol`；**additive** 可选字段，与 `SignatureTables` 同一张表）。
+   *
+   * 只服务两件事：①`resolve` 阶段给函数类候选补**调用签名**详情；②把**括号调用形态**的候选
+   * （`insertText` 恰为 `名字(`，即 `erb-system-functions` 一路）插成带 tabstop 的 snippet。
+   * 缺席 / 不认这个函数 ⇒ 无签名、无片段（退化纯文本，**不猜形参**）。
+   */
+  readonly callProtocol?: KojoCallProtocol;
 }
 
 /** 一次补全请求的上下文（`range` = 替换区间，由装配点按当前词算出，各 source 共用） */
@@ -88,6 +103,269 @@ export interface ErbCompletionDegrade {
 
 /** 降级回调（`installErbCompletion` 可选第三参注入；便于测试直接断言，不依赖真 Monaco） */
 export type ErbCompletionDegradeReporter = (degrade: ErbCompletionDegrade) => void;
+
+/* ============================== resolve 反查：候选身份 → 数据出处 ============================== */
+
+/**
+ * 一条候选的**出处**（provide 时登记、resolve 时按对象身份取回）。与 kojo 侧同构、**各自一套**
+ * （两条 seam 不互相 import：语言不同、表不同、失效判据不同，合并只会在将来互相绊住）。
+ *
+ * 反查键用**对象身份**而不是往候选上挂私有字段：Monaco 的 suggest 模型把我们返回的那个
+ * 对象原样存进 `CompletionItem.completion`，`resolve` 时同一引用交回（standalone 无跨进程
+ * 序列化，身份可靠），随后 `Object.assign(this.completion, 解析结果)` 只会合并协议字段。
+ * `WeakMap` 键随弹层销毁回收，无界增长为零。
+ */
+export interface ErbCompletionProvenance {
+  readonly sourceId: string;
+  /** 候选 label 原文（= 回各张表的主键） */
+  readonly label: string;
+  /** **本次 provide 的表快照**（resolve 不重取：项目若在弹层存续期切换，两张表拼出的中文名是假信息） */
+  readonly tables: ErbCompletionTables;
+}
+
+/** 候选身份 → 出处 的登记表（每次装配一枚） */
+export interface ErbCompletionProvenanceStore {
+  register(item: Monaco.languages.CompletionItem, provenance: ErbCompletionProvenance): void;
+  lookup(item: Monaco.languages.CompletionItem): ErbCompletionProvenance | undefined;
+}
+
+export function createErbCompletionProvenanceStore(): ErbCompletionProvenanceStore {
+  const byItem = new WeakMap<object, ErbCompletionProvenance>();
+  // 候选按契约是对象，仍经 `unknown` 守一道：外部追加的 source 不受我们的类型管，
+  // 而 `WeakMap` 对非对象键会抛——宁可静默不登记，也不让补全链崩。
+  const keyOf = (item: Monaco.languages.CompletionItem): object | undefined => {
+    const value: unknown = item;
+    return typeof value === 'object' && value !== null ? value : undefined;
+  };
+  return {
+    register(item, provenance) {
+      const key = keyOf(item);
+      if (key !== undefined) byItem.set(key, provenance);
+    },
+    lookup(item) {
+      const key = keyOf(item);
+      return key === undefined ? undefined : byItem.get(key);
+    },
+  };
+}
+
+/** `resolve` 阶段的懒填充产物（只动 Monaco 认的 `detail` / `documentation`） */
+export interface ErbCompletionResolution {
+  readonly detail?: string;
+  readonly documentation?: { readonly value: string };
+}
+
+/* ============================== 调用协议 → snippet / 签名 ============================== */
+
+/** snippet 控制字符（`\` / `$` / `}`）转义——槽含义原文可能带它们 */
+export function escapeSnippetText(text: string): string {
+  return text.replace(/[\\$}]/g, (ch) => `\\${ch}`);
+}
+
+/**
+ * 形参槽 → 带 tabstop 的调用片段（**纯函数**）。
+ * `slots === undefined`（协议缺席 / 不认 / 抛错）⇒ `undefined` ⇒ 调用方保持纯文本（**不猜形参**）；
+ * `slots` 为空数组是协议明确声明"无槽"这一**事实** ⇒ 给 `名字()`。
+ */
+export function buildCallSnippetText(
+  name: string,
+  slots: readonly KojoCallSlot[] | undefined,
+): string | undefined {
+  if (slots === undefined) return undefined;
+  if (slots.length === 0) return `${name}()`;
+  const stops = slots.map((slot, i) => {
+    const placeholder = escapeSnippetText(slotParameterLabel(slot).replace(/\s+/g, ' ').trim());
+    return `\${${String(i + 1)}:${placeholder}}`;
+  });
+  return `${name}(${stops.join(', ')})`;
+}
+
+/** 依次用这几个键回协议表取槽（命中仍来自表本身）；全不认 / 表缺席 ⇒ `undefined` */
+export function slotsForCallee(
+  protocol: KojoCallProtocol | undefined,
+  keys: readonly (string | undefined)[],
+): readonly KojoCallSlot[] | undefined {
+  if (protocol === undefined) return undefined;
+  for (const key of keys) {
+    if (key === undefined || key.length === 0) continue;
+    try {
+      const slots = protocol.slotsFor(key);
+      // 空数组（协议声明"无槽"）是**命中**：`if (slots)` 只对 `null` / `undefined`（不认）落空
+      if (slots) return slots;
+    } catch (e: unknown) {
+      console.warn(`[erb-completion] 调用协议对 '${key}' 求槽抛错：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return undefined;
+}
+
+/** 签名详情行；取不到槽 ⇒ `undefined`（不进文档） */
+function signatureLine(
+  display: string,
+  keys: readonly (string | undefined)[],
+  protocol: KojoCallProtocol | undefined,
+): string | undefined {
+  const slots = slotsForCallee(protocol, keys);
+  if (slots === undefined) return undefined;
+  return `调用签名 \`${describeCallSignature(display, slots, 0).label}\``;
+}
+
+/**
+ * 只有**括号调用形态**（`insertText` 恰为 `名字(`）才改写成 snippet —— ERB 侧即
+ * `erb-system-functions` 一路（`GETBIT(` 这类表达式里的引擎原语）。
+ *
+ * `erb-functions` 一路**刻意不做**：它的候选落在 `@名字` 定义位与 `CALL 名字` 调用位，
+ * 那里跟的是**逗号实参**而非括号，插 `名字(…)` 会产非法形态（槽再多也不改插入形态——
+ * 把签名写进详情，让作者自己填，才是这条 seam 认得的部分）。
+ */
+const ERB_CALL_FORM_SOURCE_IDS: ReadonlySet<string> = new Set(['erb-system-functions']);
+
+/** 候选区间的**归一形态**（`{insert,replace}` 双区间取 `replace`；缺席 ⇒ `undefined`） */
+export function candidateRange(range: Monaco.languages.CompletionItem['range'] | undefined): Monaco.IRange | undefined {
+  if (range === undefined) return undefined;
+  return 'insert' in range ? range.replace : range;
+}
+
+/** 区间右端紧邻的字符（判"作者已自己写了左括号"）；入参是行文本而非 model ⇒ 整轮补全按行记忆化取一次 */
+export function charAfterRange(lineText: string, range: Monaco.IRange | undefined): string | undefined {
+  if (range === undefined) return undefined;
+  const ch = lineText.slice(range.endColumn - 1, range.endColumn);
+  return ch.length > 0 ? ch : undefined;
+}
+
+/** 取 Monaco 的 `InsertAsSnippet` 枚举值（**不硬编码数字**）；桩 monaco 没这枚枚举 ⇒ `undefined` ⇒ 整条退化纯文本 */
+function insertAsSnippetRule(monaco: typeof Monaco): Monaco.languages.CompletionItemInsertTextRule | undefined {
+  const rules = monaco.languages.CompletionItemInsertTextRule as unknown as Record<string, unknown> | undefined;
+  const value = rules?.InsertAsSnippet;
+  return typeof value === 'number' ? (value as Monaco.languages.CompletionItemInsertTextRule) : undefined;
+}
+
+/** 调用形态候选 → snippet（原地改；不改写即完全保持今天的纯文本插入） */
+export function applyCallSnippet(
+  monaco: typeof Monaco,
+  item: Monaco.languages.CompletionItem,
+  provenance: ErbCompletionProvenance,
+  charAfterRangeValue: string | undefined,
+): boolean {
+  if (!ERB_CALL_FORM_SOURCE_IDS.has(provenance.sourceId)) return false;
+  const insertText = typeof item.insertText === 'string' ? item.insertText : undefined;
+  if (insertText === undefined || insertText !== `${provenance.label}(`) return false;
+  if (charAfterRangeValue === '(') return false;
+  const rule = insertAsSnippetRule(monaco);
+  if (rule === undefined) return false;
+  const snippet = buildCallSnippetText(
+    provenance.label,
+    slotsForCallee(provenance.tables.callProtocol, [provenance.label]),
+  );
+  if (snippet === undefined) return false;
+  item.insertText = snippet;
+  item.insertTextRules = rule;
+  return true;
+}
+
+/* ============================== resolve：按出处回表填详情 ============================== */
+
+/** `VariableInfo.source` → 名表面可读说法（契约层跨游戏术语） */
+const VARIABLE_SOURCE_LABEL: Readonly<Record<string, string>> = {
+  primary: '主名表',
+  append: '追加名表',
+  const: '具名常量',
+};
+
+/** 候选 `detail`（`族` / `族:编号`，由 `erb-variables` 写入）里的族头 */
+function familyFromDetail(detail: string | undefined): string | undefined {
+  if (detail === undefined) return undefined;
+  const head = detail.split(':')[0];
+  return head !== undefined && head.length > 0 ? head : undefined;
+}
+
+function entriesOf(schema: VariableSchema | undefined, family: string): readonly VariableInfo[] | undefined {
+  const enumerate = schema?.names;
+  if (typeof enumerate !== 'function') return undefined;
+  try {
+    return enumerate(family);
+  } catch {
+    return undefined;
+  }
+}
+
+function bitsLine(bits: VariableInfo['bits']): string | undefined {
+  if (bits === undefined || bits.length === 0) return undefined;
+  const shown = bits.slice(0, 12).map((b) => `${String(b.bit)} ${b.label}`).join('、');
+  return `位表 ${shown}${bits.length > 12 ? ' …' : ''}（共 ${String(bits.length)} 项）`;
+}
+
+/** 变量名候选的详情：编号 / 说明 / 名表来源 / 位表（全来自 `variableSchema`，一条查不到就不写） */
+function variableDetail(label: string, detail: string | undefined, tables: ErbCompletionTables): ErbCompletionResolution | undefined {
+  const family = familyFromDetail(detail) ?? tables.dictionary?.resolveFamily?.(label);
+  if (family === undefined) return undefined;
+  const entry = entriesOf(tables.variableSchema, family)?.find((e) => e.name === label);
+  if (entry === undefined) return undefined;
+  const facts: string[] = [];
+  const index: number | string | undefined = entry.index ?? entry.resolvedIndex;
+  if (index !== undefined) facts.push(`编号 \`${String(index)}\``);
+  if (entry.description !== undefined && entry.description.length > 0) facts.push(entry.description);
+  const tier = entry.source === undefined ? undefined : VARIABLE_SOURCE_LABEL[entry.source];
+  if (tier !== undefined) facts.push(`来源 ${tier}`);
+  const bits = bitsLine(entry.bits);
+  if (bits !== undefined) facts.push(bits);
+  if (facts.length === 0) return undefined;
+  return { documentation: { value: [`**${label}** · \`${family}\` 索引名`, ...facts].join('\n\n') } };
+}
+
+/** 项目函数候选的详情：中文名（库表反查面）+ 调用签名（协议）；两张表都不认 ⇒ 无详情 */
+function functionDetail(label: string, tables: ErbCompletionTables): ErbCompletionResolution | undefined {
+  const facts: string[] = [];
+  let cn: string | undefined;
+  try {
+    cn = tables.libraryTable?.lookupByFunction?.(label);
+  } catch {
+    cn = undefined;
+  }
+  if (cn !== undefined && cn.length > 0) facts.push(`中文名 ${cn}`);
+  const sig = signatureLine(label, [label], tables.callProtocol);
+  if (sig !== undefined) facts.push(sig);
+  if (facts.length === 0) return undefined;
+  return { documentation: { value: [`**${label}** · 项目函数`, ...facts].join('\n\n') } };
+}
+
+/** 系统函数候选的详情：中文名（语言层反向表）+ 调用签名 */
+function systemFunctionDetail(label: string, tables: ErbCompletionTables): ErbCompletionResolution | undefined {
+  const cn = SYSTEM_FUNCTION_REVERSE.get(label);
+  if (cn === undefined) return undefined;
+  const facts = [signatureLine(label, [label], tables.callProtocol)].filter((s): s is string => s !== undefined);
+  return { documentation: { value: [`**${label}** ↔ ${cn}`, ...facts].join('\n\n') } };
+}
+
+/**
+ * `resolveCompletionItem` 的**纯**内核（可单测）：按出处回表算详情。
+ *
+ * 不产详情的三种情形一律返回 `undefined`（候选原样交回，**不抛、不编**）：本装配点不认的
+ * source id（后来追加的 source ⇒ 让它自己声明详情）、表缺席、表里查不到这条事实。
+ * `erb-directives` / `erb-labels` 走 `undefined` 分支——前者的中文说法**不在任何注入的表里**
+ * （app 不得硬编码 ERB 词表），后者是本文件标签、本就无表可查。
+ */
+export function resolveErbCompletionDetail(
+  item: Monaco.languages.CompletionItem,
+  provenance: ErbCompletionProvenance,
+): ErbCompletionResolution | undefined {
+  const tables = provenance.tables;
+  try {
+    switch (provenance.sourceId) {
+      case 'erb-variables':
+        return variableDetail(provenance.label, typeof item.detail === 'string' ? item.detail : undefined, tables);
+      case 'erb-functions':
+        return functionDetail(provenance.label, tables);
+      case 'erb-system-functions':
+        return systemFunctionDetail(provenance.label, tables);
+      default:
+        return undefined;
+    }
+  } catch (e: unknown) {
+    console.warn(`[erb-completion] resolve '${provenance.sourceId}' 抛错：${e instanceof Error ? e.message : String(e)}`);
+    return undefined;
+  }
+}
 
 /* ============================== 行首 / 行中判定 ============================== */
 
@@ -344,6 +622,7 @@ function missingRequirement(
 }
 
 /**
+/**
  * 位置门的候选过滤器（T6）：门是**过滤**不是重排——各 source 的既有排序语义不动。
  * - `'call-target'`：只留**函数名形态**的候选（kind = Function / Method，按 kind 而非
  *   source 名单判——新 source 出函数名候选即自动进门，扩展点结构不破坏）；
@@ -361,7 +640,12 @@ function gateFilter(
   };
 }
 
-/** 依次问各 source，按 label 去重（先注册者胜），再按排名键排序并写回 `sortText` */
+/**
+ * 依次问各 source，按 label 去重（先注册者胜），再按排名键排序并写回 `sortText`。
+ *
+ * `provenance`（**可选末参，additive**）：对**最终交出去的那个对象引用**登记出处——
+ * `{...item, sortText}` 造的是新对象，登记原对象会让 resolve 的反查必然落空。
+ */
 function mergeSuggestions(
   sources: readonly ErbCompletionSource[],
   ctx: ErbCompletionSourceContext,
@@ -369,8 +653,9 @@ function mergeSuggestions(
   reported: Set<string>,
   onDegrade: ErbCompletionDegradeReporter | undefined,
   keep: ((item: Monaco.languages.CompletionItem) => boolean) | undefined,
+  provenance?: ErbCompletionProvenanceStore,
 ): Monaco.languages.CompletionItem[] {
-  const byLabel = new Map<string, Monaco.languages.CompletionItem>();
+  const byLabel = new Map<string, { item: Monaco.languages.CompletionItem; sourceId: string }>();
   for (const source of sources) {
     // 依赖表缺席：跳过该来源（零候选）+ 发一次可见信号（不静默）
     const missing = missingRequirement(source, ctx.tables);
@@ -395,13 +680,17 @@ function mergeSuggestions(
     if (keep !== undefined) items = items.filter(keep);
     for (const item of items) {
       const label = labelText(item.label);
-      if (!byLabel.has(label)) byLabel.set(label, item);
+      if (!byLabel.has(label)) byLabel.set(label, { item, sourceId: source.id });
     }
   }
   return [...byLabel.values()]
-    .map((item) => ({ item, key: rankKey(item, prefix) }))
+    .map((entry) => ({ entry, key: rankKey(entry.item, prefix) }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-    .map(({ item, key }) => ({ ...item, sortText: key }));
+    .map(({ entry, key }) => {
+      const final: Monaco.languages.CompletionItem = { ...entry.item, sortText: key };
+      provenance?.register(final, { sourceId: entry.sourceId, label: labelText(entry.item.label), tables: ctx.tables });
+      return final;
+    });
 }
 
 /* ============================== 装配点 ============================== */
@@ -416,6 +705,10 @@ function mergeSuggestions(
  * （或求值抛错）被跳过时**首次**回调一次；去重表随本句柄创建（**不做模块级全局去重**，
  * 否则第二次 install 会吞掉信号 ⇒ 三态不可复跑）。不传 `onDegrade` 时降级仍以一行
  * `console.warn` 可见。
+ *
+ * 与 kojo 侧同构地补上"完整"两件事（全部收口在本装配点，宿主零改动）：
+ * `resolveCompletionItem` 懒填详情（候选对象身份 → 出处走 `WeakMap` 反查），以及
+ * **括号调用形态**候选按 `callProtocol` 插成带 tabstop 的 snippet。取不到槽 ⇒ 纯文本照旧。
  */
 export function installErbCompletion(
   monaco: typeof Monaco,
@@ -423,6 +716,7 @@ export function installErbCompletion(
   onDegrade?: ErbCompletionDegradeReporter,
 ): Monaco.IDisposable {
   const reported = new Set<string>();
+  const provenance = createErbCompletionProvenanceStore();
   return monaco.languages.registerCompletionItemProvider(ERB_LANGUAGE_ID, {
     triggerCharacters: ['#', '['],
     provideCompletionItems(model, position) {
@@ -433,15 +727,41 @@ export function installErbCompletion(
       if (gate === 'in-string') return { suggestions: [] };
       const range = erbTokenRange(model, position);
       const prefix = line.slice(range.startColumn - 1, range.endColumn - 1);
+      const tables = getTables();
       const suggestions = mergeSuggestions(
         ERB_COMPLETION_SOURCES,
-        { monaco, model, position, range, tables: getTables() },
+        { monaco, model, position, range, tables },
         prefix,
         reported,
         onDegrade,
         gateFilter(gate, monaco),
+        provenance,
       );
+      // 调用形态候选 → snippet：只有 `erb-system-functions` 一路可能命中 ⇒ 先按 source id 过滤，
+      // 再按行号记忆化取行文本（候选就在光标行，`line` 已取过 ⇒ 常态一次也不额外取）
+      let lineAt = position.lineNumber;
+      let lineText = line;
+      for (const item of suggestions) {
+        const hit = provenance.lookup(item);
+        if (hit === undefined || !ERB_CALL_FORM_SOURCE_IDS.has(hit.sourceId)) continue;
+        const box = candidateRange(item.range);
+        if (box === undefined) continue;
+        if (box.endLineNumber !== lineAt) {
+          lineAt = box.endLineNumber;
+          lineText = model.getLineContent(lineAt);
+        }
+        applyCallSnippet(monaco, item, hit, charAfterRange(lineText, box));
+      }
       return { suggestions };
+    },
+    resolveCompletionItem(item) {
+      const hit = provenance.lookup(item);
+      if (hit === undefined) return item; // 不是本装配点产出的候选 ⇒ 原样交回（不猜）
+      const resolved = resolveErbCompletionDetail(item, hit);
+      if (resolved === undefined) return item;
+      if (resolved.detail !== undefined && item.detail === undefined) item.detail = resolved.detail;
+      if (resolved.documentation !== undefined) item.documentation = resolved.documentation;
+      return item;
     },
   });
 }

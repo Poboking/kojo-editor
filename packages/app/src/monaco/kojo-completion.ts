@@ -1,8 +1,11 @@
 import type * as Monaco from './entry';
 import type {
+  KojoCallProtocol,
+  KojoCallSlot,
   KojoFaceTable,
   KojoInstructionTable,
   KojoLibraryTable,
+  VariableInfo,
   VariableSchema,
 } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
@@ -10,7 +13,9 @@ import {
   RESERVED_PRONOUNS,
   SUGAR_KEYWORD_ROLE_LABEL,
   SUGAR_LEXICON_OPERATORS,
+  SYSTEM_FUNCTION_ALIASES,
 } from '@kojo/plugin-kojo-sugar';
+import { describeCallSignature, slotParameterLabel } from './kojo-signature';
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
 import { variableCompletionItems } from './kojo-completion-variables';
 import { faceCompletionItems } from './kojo-completion-faces';
@@ -35,6 +40,11 @@ import { KOJO_SNIPPET_SOURCE } from './kojo-completion-snippets';
  *
  * 纯逻辑与 Monaco 绑定分离：`CompletionSource.provide` 可单测（只依赖 ctx 里的
  * `model` / `position` / `range` / `tables`），`installKojoCompletion` 只做协议翻译。
+ *
+ * 二段式供给（C-2 批补齐"完整"）：provide 只给 label / kind / 一行 detail；**中文名·说明·取值域·
+ * 调用签名**等到 `resolveCompletionItem` 才回表算（候选对象身份 → 出处走 `WeakMap` 反查，见
+ * {@link createCompletionProvenanceStore}）。同时**调用形态**候选按 `callProtocol` 的形参槽插成
+ * 带 tabstop 的 snippet（取不到槽 ⇒ 纯文本照旧，见 {@link buildCallSnippetText}）。
  */
 export interface CompletionTables {
   /** 变量字典（`makeLookup(adapter.variableSchema)` 产物）；缺席 = 不做变量补全 */
@@ -51,6 +61,14 @@ export interface CompletionTables {
   readonly instructionTable?: KojoInstructionTable;
   /** 基础库函数名表（adapter `kojoLibraryTable`）；缺席 = 不做库函数名补全 */
   readonly libraryTable?: KojoLibraryTable;
+  /**
+   * 调用协议表（adapter `kojoCallProtocol`；**additive** 可选字段，与 `SignatureTables` 同一张表）。
+   *
+   * 只服务两件事：①`resolve` 阶段给函数类候选补**调用签名**详情；②把**调用形态**候选
+   * （`insertText` 恰为 `名字(`）插成带 tabstop 的 snippet。缺席 / `slotsFor` 不认这个函数
+   * ⇒ 既不给签名也不改片段（退化成纯文本，**不猜形参**）。
+   */
+  readonly callProtocol?: KojoCallProtocol;
 }
 
 /** 一次补全请求的上下文（`range` = 替换区间，由装配点按当前词算出，各 source 共用） */
@@ -89,6 +107,361 @@ export interface CompletionDegrade {
 
 /** 降级回调（`installKojoCompletion` 可选第三参注入；便于测试直接断言，不依赖真 Monaco） */
 export type CompletionDegradeReporter = (degrade: CompletionDegrade) => void;
+
+/* ============================== resolve 反查：候选身份 → 数据出处 ============================== */
+
+/**
+ * 一条候选的**出处**（provide 时登记、resolve 时按对象身份取回）。
+ *
+ * 为什么不往 `CompletionItem` 上挂自定义字段：Monaco 会把候选对象在 suggest 模型 / 渲染器 /
+ * `resolve` 之间传来传去并按**公开协议**读写（`vs/editor/contrib/suggest/browser/suggest.js`
+ * 的 `CompletionItem` 持 `this.completion = 我们返回的那个对象`），私有字段既进不了序列化、
+ * 也会被下一轮 `Object.assign(this.completion, 解析结果)` 搅在一起。`WeakMap` 以**对象身份**
+ * 为键：provide 与 resolve 拿到的是同一个引用（standalone 无跨进程序列化，身份可靠），
+ * 弹层销毁 ⇒ 键失去引用 ⇒ 元数据自动回收，**不产生无界增长**。
+ */
+export interface CompletionProvenance {
+  /** 产出该候选的 source id（resolve 按它分派；不认识的 id ⇒ 不加详情） */
+  readonly sourceId: string;
+  /** 候选 label **原文**（= 回各张表的主键） */
+  readonly label: string;
+  /**
+   * **本次 provide 拿到的表快照**（不在 resolve 时重跑 `getTables()`）：弹层存续期间项目
+   * 若切换，详情必须与候选同源——两张表拼出来的"中文名"是假信息。
+   */
+  readonly tables: CompletionTables;
+}
+
+/** 候选身份 → 出处 的登记表（每次装配一枚，随句柄创建 / 回收） */
+export interface CompletionProvenanceStore {
+  register(item: Monaco.languages.CompletionItem, provenance: CompletionProvenance): void;
+  lookup(item: Monaco.languages.CompletionItem): CompletionProvenance | undefined;
+}
+
+/** 建一枚 `WeakMap` 反查表（纯结构、可单测）。候选按契约是对象，仍走 `unknown` 守一道——
+ *  外部 source 追加进来的东西不受我们类型管，`WeakMap` 对非对象键会抛，这里宁可静默不登记。 */
+export function createCompletionProvenanceStore(): CompletionProvenanceStore {
+  const byItem = new WeakMap<object, CompletionProvenance>();
+  const keyOf = (item: Monaco.languages.CompletionItem): object | undefined => {
+    const value: unknown = item;
+    return typeof value === 'object' && value !== null ? value : undefined;
+  };
+  return {
+    register(item, provenance) {
+      const key = keyOf(item);
+      if (key !== undefined) byItem.set(key, provenance);
+    },
+    lookup(item) {
+      const key = keyOf(item);
+      return key === undefined ? undefined : byItem.get(key);
+    },
+  };
+}
+
+/** `resolve` 阶段的懒填充产物（只允许动 Monaco 认的两个字段，其余零污染） */
+export interface CompletionResolution {
+  readonly detail?: string;
+  readonly documentation?: { readonly value: string };
+}
+
+/* ============================== 调用协议 → snippet / 签名（复用 kojo-signature 的取槽口径） ============================== */
+
+/** snippet 语法里的控制字符（`\` / `$` / `}`）——槽含义原文可能带它们，须转义后才进占位文本 */
+export function escapeSnippetText(text: string): string {
+  return text.replace(/[\\$}]/g, (ch) => `\\${ch}`);
+}
+
+/**
+ * 形参槽 → 带 tabstop 的调用片段（**纯函数**）。
+ *
+ * `slots === undefined`（协议缺席 / 不认这个函数 / 求槽抛错）⇒ `undefined` ⇒ 调用方**保持纯文本插入**
+ * （退化判据只有一条：拿不到槽就不猜形参）。`slots` 为空数组是**协议明确声明"此函数无槽"**，
+ * 与"不认"是两种事实 ⇒ 给 `名字()`，让作者一次到位。
+ */
+export function buildCallSnippetText(
+  name: string,
+  slots: readonly KojoCallSlot[] | undefined,
+): string | undefined {
+  if (slots === undefined) return undefined;
+  if (slots.length === 0) return `${name}()`;
+  const stops = slots.map((slot, i) => {
+    const placeholder = escapeSnippetText(slotParameterLabel(slot).replace(/\s+/g, ' ').trim());
+    return `\${${String(i + 1)}:${placeholder}}`;
+  });
+  return `${name}(${stops.join(', ')})`;
+}
+
+/**
+ * 依次用这几个键回调用协议表取槽（**纯函数**；同一张表的两种命名面：原生名优先、表层名兜底——
+ * 命中仍来自表本身，不是猜）。表缺席 / 全不认 / 每个键都抛 ⇒ `undefined`。
+ */
+export function slotsForCallee(
+  protocol: KojoCallProtocol | undefined,
+  keys: readonly (string | undefined)[],
+): readonly KojoCallSlot[] | undefined {
+  if (protocol === undefined) return undefined;
+  for (const key of keys) {
+    if (key === undefined || key.length === 0) continue;
+    try {
+      const slots = protocol.slotsFor(key);
+      // 空数组（协议声明"无槽"）是**命中**：`if (slots)` 只对 `null` / `undefined`（不认）落空
+      if (slots) return slots;
+    } catch (e: unknown) {
+      console.warn(`[kojo-completion] 调用协议对 '${key}' 求槽抛错：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return undefined;
+}
+
+/** 一条候选的查表键（表层名 ↔ 原生名两张面的回表键，取不到就只用表层名） */
+function calleeKeys(label: string, tables: CompletionTables): readonly (string | undefined)[] {
+  let native: string | undefined;
+  try {
+    native = tables.libraryTable?.lookupByName(label) ?? SYSTEM_FUNCTION_ALIASES.get(label);
+  } catch {
+    native = undefined; // 表抛错 ⇒ 只按表层名问协议，绝不让补全链崩
+  }
+  return native === undefined ? [label] : [native, label];
+}
+
+/** 签名详情行（`调用签名 \`名字(ARG:0 含义)\``）；取不到槽 ⇒ `undefined`（不进文档，不猜） */
+function signatureLine(
+  display: string,
+  keys: readonly (string | undefined)[],
+  protocol: KojoCallProtocol | undefined,
+): string | undefined {
+  const slots = slotsForCallee(protocol, keys);
+  if (slots === undefined) return undefined;
+  return `调用签名 \`${describeCallSignature(display, slots, 0).label}\``;
+}
+
+/**
+ * 哪些 source 的候选是**调用形态**（`insertText` 恰为 `名字(`）⇒ 才允许改写成 snippet。
+ * 变量 / 指令名 / 关键字 / 命名参数一律排除（它们插的不是调用）。
+ */
+const CALL_FORM_SOURCE_IDS: ReadonlySet<string> = new Set(['kojo-lexicon', 'kojo-library']);
+
+/**
+ * 候选替换区间的**归一形态**：Monaco 允许 `{insert, replace}` 双区间，取 `replace`；
+ * 缺席（外部 source 没给）⇒ `undefined`。
+ */
+export function candidateRange(range: Monaco.languages.CompletionItem['range'] | undefined): Monaco.IRange | undefined {
+  if (range === undefined) return undefined;
+  return 'insert' in range ? range.replace : range;
+}
+
+/** 区间右端**紧邻**的那个字符（无 ⇒ `undefined`）。入参是行文本而不是 model：整轮补全只按行号取样一次 */
+export function charAfterRange(lineText: string, range: Monaco.IRange | undefined): string | undefined {
+  if (range === undefined) return undefined;
+  const ch = lineText.slice(range.endColumn - 1, range.endColumn);
+  return ch.length > 0 ? ch : undefined;
+}
+
+/**
+ * 取 Monaco 的 `InsertAsSnippet` 枚举值（**不硬编码数字**）：桩 monaco 可能没这枚枚举
+ * ⇒ 返回 `undefined`，调用方整条退化成纯文本插入。
+ */
+function insertAsSnippetRule(monaco: typeof Monaco): Monaco.languages.CompletionItemInsertTextRule | undefined {
+  const rules = monaco.languages.CompletionItemInsertTextRule as unknown as Record<string, unknown> | undefined;
+  const value = rules?.InsertAsSnippet;
+  return typeof value === 'number' ? (value as Monaco.languages.CompletionItemInsertTextRule) : undefined;
+}
+
+/**
+ * 把一条**调用形态**候选改写成带 tabstop 的 snippet（**原地**改 `insertText` / `insertTextRules`；
+ * 纯判定 + 纯文本生成见 {@link buildCallSnippetText}）。返回是否改写。
+ *
+ * 不改写的情形（全部**退化成今天的纯文本**，一条不猜）：非调用形态 source / `insertText` 不是
+ * `名字(` / 替换区间右端**紧跟一个 `(`**（作者已经自己开了括号，再插一片段等于给他多一对）/
+ * 协议缺席或不认这个函数 / 桩 monaco 拿不到 `CompletionItemInsertTextRule` 枚举。
+ */
+export function applyCallSnippet(
+  monaco: typeof Monaco,
+  item: Monaco.languages.CompletionItem,
+  provenance: CompletionProvenance,
+  charAfter: string | undefined,
+): boolean {
+  if (!CALL_FORM_SOURCE_IDS.has(provenance.sourceId)) return false;
+  const insertText = typeof item.insertText === 'string' ? item.insertText : undefined;
+  if (insertText === undefined || insertText !== `${provenance.label}(`) return false;
+  if (charAfter === '(') return false;
+  const rule = insertAsSnippetRule(monaco);
+  if (rule === undefined) return false;
+  const snippet = buildCallSnippetText(
+    provenance.label,
+    slotsForCallee(provenance.tables.callProtocol, calleeKeys(provenance.label, provenance.tables)),
+  );
+  if (snippet === undefined) return false;
+  item.insertText = snippet;
+  item.insertTextRules = rule;
+  return true;
+}
+
+/* ============================== resolve：按出处回表填详情（懒、可缺表、不抛） ============================== */
+
+/** `VariableInfo.source` → 作者可读的名表面（契约层的跨游戏术语，非游戏知识） */
+const VARIABLE_SOURCE_LABEL: Readonly<Record<string, string>> = {
+  primary: '主名表',
+  append: '追加名表',
+  const: '具名常量',
+};
+
+/** `KojoFaceTemplate.indexKind` → 编号槽取值口径的可读说法 */
+const INDEX_KIND_LABEL: Readonly<Record<string, string>> = {
+  command: '按指令名表换算',
+  literal: '原样透传（字面名）',
+  counter: '按计数器名表换算',
+};
+
+/** 候选 `detail`（`族` / `族:编号`，由变量 source 写入）里的族头 */
+function familyFromDetail(detail: string | undefined): string | undefined {
+  if (detail === undefined) return undefined;
+  const head = detail.split(':')[0];
+  return head !== undefined && head.length > 0 ? head : undefined;
+}
+
+/** 取某族的枚举条目（无枚举能力 / 抛错 ⇒ `undefined`，不猜） */
+function entriesOf(schema: VariableSchema | undefined, family: string): readonly VariableInfo[] | undefined {
+  const enumerate = schema?.names;
+  if (typeof enumerate !== 'function') return undefined;
+  try {
+    return enumerate(family);
+  } catch {
+    return undefined;
+  }
+}
+
+/** 位表摘要（条数多时截断；条名为 adapter 原文） */
+function bitsLine(bits: VariableInfo['bits']): string | undefined {
+  if (bits === undefined || bits.length === 0) return undefined;
+  const shown = bits.slice(0, 12).map((b) => `${String(b.bit)} ${b.label}`).join('、');
+  return `位表 ${shown}${bits.length > 12 ? ' …' : ''}（共 ${String(bits.length)} 项）`;
+}
+
+/** 变量 / 属性候选的详情：族、编号、说明、名表来源、位表、原生引用 */
+function variableDetail(label: string, detail: string | undefined, tables: CompletionTables): CompletionResolution | undefined {
+  const family = familyFromDetail(detail) ?? tables.dictionary?.resolveFamily?.(label);
+  if (family === undefined) return undefined;
+  const entry = entriesOf(tables.variableSchema, family)?.find((e) => e.name === label);
+  const facts: string[] = [];
+  if (entry !== undefined) {
+    const index: number | string | undefined = entry.index ?? entry.resolvedIndex;
+    if (index !== undefined) facts.push(`编号 \`${String(index)}\``);
+    if (entry.description !== undefined && entry.description.length > 0) facts.push(entry.description);
+    const tier = entry.source === undefined ? undefined : VARIABLE_SOURCE_LABEL[entry.source];
+    if (tier !== undefined) facts.push(`来源 ${tier}`);
+    const bits = bitsLine(entry.bits);
+    if (bits !== undefined) facts.push(bits);
+  }
+  const native = tables.dictionary?.resolve?.(label);
+  if (native !== undefined && native.length > 0 && native !== label) facts.push(`原生引用 \`${native}\``);
+  if (facts.length === 0) return undefined; // 表里一条事实都没有 ⇒ 不编话术（不猜）
+  return { documentation: { value: [`**${label}** · 变量 \`${family}\``, ...facts].join('\n\n') } };
+}
+
+/** 时机分野候选的详情：模板 / 编号口径 / 成否与 MESSAGECHECK 模板 / 各段取值域 */
+function faceDetail(label: string, faceTable: KojoFaceTable | undefined): CompletionResolution | undefined {
+  const tpl = faceTable?.faces[label];
+  if (tpl === undefined) return undefined;
+  const facts: string[] = [`函数名模板 \`${tpl.template}\``];
+  if (tpl.indexKind !== undefined) {
+    facts.push(`编号槽 ${INDEX_KIND_LABEL[tpl.indexKind] ?? tpl.indexKind}`);
+  }
+  if (tpl.autoIndex === true) facts.push('省略编号时按本文件最小未用号自动分配');
+  const successTpl = tpl.success?.template;
+  if (successTpl !== undefined) facts.push(`成否模板 \`${successTpl}\``);
+  const messageCheckTpl = tpl.messageCheck?.template;
+  if (messageCheckTpl !== undefined) facts.push(`隐藏判定模板 \`${messageCheckTpl}\``);
+  const segments = tpl.segments;
+  if (segments !== undefined) {
+    for (const name of Object.keys(segments)) {
+      const values = segments[name];
+      const keys = values === undefined ? [] : Object.keys(values);
+      if (keys.length > 0) {
+        facts.push(`段 \`${name}\` 取值 ${keys.slice(0, 12).join('、')}${keys.length > 12 ? ' …' : ''}`);
+      }
+    }
+  }
+  return { documentation: { value: [`**${label}** · 时机分野`, ...facts].join('\n\n') } };
+}
+
+/** 中文指令名候选的详情：编号 + 编号反查 + 两种写法 */
+function instructionDetail(label: string, table: KojoInstructionTable | undefined): CompletionResolution | undefined {
+  if (table === undefined || table.hasTable === false) return undefined;
+  let no: number | undefined;
+  try {
+    no = table.lookupByName(label);
+  } catch {
+    return undefined;
+  }
+  if (no === undefined) return undefined;
+  const facts: string[] = [`编号 \`${String(no)}\``];
+  try {
+    const back = table.lookupByNo(no);
+    if (back !== undefined && back.length > 0) facts.push(`编号反查 \`${back}\``);
+  } catch {
+    /* 反查面抛错 ⇒ 只给已取到的编号，不编造 */
+  }
+  facts.push(`写法 \`时机 指令 ${label}：\`／\`是 ${label}\``);
+  return { documentation: { value: [`**${label}** · 指令名`, ...facts].join('\n\n') } };
+}
+
+/** 库函数候选的详情：原生名 + 调用签名（表不认这个函数 ⇒ 只给原生名） */
+function libraryDetail(label: string, tables: CompletionTables): CompletionResolution | undefined {
+  let native: string | undefined;
+  try {
+    native = tables.libraryTable?.lookupByName(label);
+  } catch {
+    return undefined;
+  }
+  if (native === undefined) return undefined;
+  const facts = [`原生名 \`${native}\``, signatureLine(label, [native, label], tables.callProtocol)].filter(
+    (s): s is string => s !== undefined,
+  );
+  return { documentation: { value: [`**${label}** · 库函数`, ...facts].join('\n\n') } };
+}
+
+/** 词表候选的详情：只有**系统函数**有可回表的事实（原生名 + 签名）；关键字 / 代词 / 运算符不编话术 */
+function lexiconDetail(label: string, tables: CompletionTables): CompletionResolution | undefined {
+  const native = SYSTEM_FUNCTION_ALIASES.get(label);
+  if (native === undefined) return undefined;
+  const facts = [
+    `原生名 \`${native}\``,
+    signatureLine(label, [native, label], tables.callProtocol),
+    '插入形态为调用形：`名字(`',
+  ].filter((s): s is string => s !== undefined);
+  return { documentation: { value: [`**${label}** · 系统函数`, ...facts].join('\n\n') } };
+}
+
+/**
+ * `resolveCompletionItem` 的**纯**内核：按出处回表算详情（`kojo-completion.ts` 之外的 source
+ * 一律不认 ⇒ `undefined`，**不猜它想要什么**）。任何回表异常都在本函数内消化成"无详情"。
+ */
+export function resolveCompletionDetail(
+  item: Monaco.languages.CompletionItem,
+  provenance: CompletionProvenance,
+): CompletionResolution | undefined {
+  const tables = provenance.tables;
+  try {
+    switch (provenance.sourceId) {
+      case 'kojo-variable':
+        return variableDetail(provenance.label, typeof item.detail === 'string' ? item.detail : undefined, tables);
+      case 'kojo-face':
+        return faceDetail(provenance.label, tables.faceTable);
+      case 'kojo-instruction':
+        return instructionDetail(provenance.label, tables.instructionTable);
+      case 'kojo-library':
+        return libraryDetail(provenance.label, tables);
+      case 'kojo-lexicon':
+        return lexiconDetail(provenance.label, tables);
+      default:
+        return undefined;
+    }
+  } catch (e: unknown) {
+    console.warn(`[kojo-completion] resolve '${provenance.sourceId}' 抛错：${e instanceof Error ? e.message : String(e)}`);
+    return undefined;
+  }
+}
 
 /* ============================== 文件层：别名声明扫描 ============================== */
 
@@ -343,15 +716,23 @@ function missingRequirement(
   return value === undefined || value === null ? key : undefined;
 }
 
-/** 依次问各 source，按 label 去重（先注册者胜），再按排名键排序并写回 `sortText` */
+/**
+ * 依次问各 source，按 label 去重（先注册者胜），再按排名键排序并写回 `sortText`。
+ *
+ * `provenance`（**可选末参，additive**）：登记「最终交给 Monaco 的那个对象 → 出处」。登记必须
+ * 在 `sortText` 重写**之后**、对**返回出去的那个引用**做——`{...item, sortText}` 造的是新对象，
+ * 若登记的是 source 手里的原对象，resolve 拿到的就是这个副本，反查必然落空（这是本 seam
+ * 唯一一处身份陷阱，故把它钉在注释里）。
+ */
 function mergeSuggestions(
   sources: readonly CompletionSource[],
   ctx: CompletionSourceContext,
   prefix: string,
   reported: Set<string>,
   onDegrade: CompletionDegradeReporter | undefined,
+  provenance?: CompletionProvenanceStore,
 ): Monaco.languages.CompletionItem[] {
-  const byLabel = new Map<string, Monaco.languages.CompletionItem>();
+  const byLabel = new Map<string, { item: Monaco.languages.CompletionItem; sourceId: string }>();
   for (const source of sources) {
     // 依赖表缺席：跳过该来源（零候选）+ 发一次可见信号（不静默）
     const missing = missingRequirement(source, ctx.tables);
@@ -374,13 +755,17 @@ function mergeSuggestions(
     }
     for (const item of items) {
       const label = labelText(item.label);
-      if (!byLabel.has(label)) byLabel.set(label, item);
+      if (!byLabel.has(label)) byLabel.set(label, { item, sourceId: source.id });
     }
   }
   return [...byLabel.values()]
-    .map((item) => ({ item, key: rankKey(item, prefix) }))
+    .map((entry) => ({ entry, key: rankKey(entry.item, prefix) }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-    .map(({ item, key }) => ({ ...item, sortText: key }));
+    .map(({ entry, key }) => {
+      const final: Monaco.languages.CompletionItem = { ...entry.item, sortText: key };
+      provenance?.register(final, { sourceId: entry.sourceId, label: labelText(entry.item.label), tables: ctx.tables });
+      return final;
+    });
 }
 
 /* ============================== 装配点 ============================== */
@@ -393,6 +778,13 @@ function mergeSuggestions(
  * `onDegrade`（**可选第三参，additive**——旧调用方零改动）：某来源因依赖表缺席（或求值抛错）
  * 被跳过时**首次**回调一次；去重表随本句柄创建（**不做模块级全局去重**，否则第二次 install
  * 会吞掉信号 ⇒ 三态不可复跑）。不传 `onDegrade` 时降级仍以一行 `console.warn` 可见。
+ *
+ * 两件事在本装配点内完成，宿主零改动（`EditorPane` 早就不加参数地调它）：
+ * - **`resolveCompletionItem`（二次详情，懒填充）**：provide 只给 label / kind / 一行 detail，
+ *   中文名、说明、取值域、签名等到 Monaco 询问时才回表算（`CompletionProvenanceStore` 按
+ *   **对象身份**反查出处）。表缺席 / 反查落底 ⇒ 原样返回候选，**不抛、不编**。
+ * - **调用形态候选 → snippet**：`insertText` 恰为 `名字(` 且调用协议认得这个函数时，插成
+ *   `名字(${1:ARG:0 槽含义}, ${2:…})`；取不到槽一律保持今天的纯文本插入（**不猜形参**）。
  */
 export function installKojoCompletion(
   monaco: typeof Monaco,
@@ -400,6 +792,7 @@ export function installKojoCompletion(
   onDegrade?: CompletionDegradeReporter,
 ): Monaco.IDisposable {
   const reported = new Set<string>();
+  const provenance = createCompletionProvenanceStore();
   return monaco.languages.registerCompletionItemProvider(KOJO_LANGUAGE_ID, {
     triggerCharacters: ['{', '：'],
     provideCompletionItems(model, position) {
@@ -410,14 +803,40 @@ export function installKojoCompletion(
         startColumn: word.startColumn,
         endColumn: word.endColumn,
       };
+      const tables = getTables();
       const suggestions = mergeSuggestions(
         KOJO_COMPLETION_SOURCES,
-        { monaco, model, position, range, tables: getTables() },
+        { monaco, model, position, range, tables },
         word.word,
         reported,
         onDegrade,
+        provenance,
       );
+      // 调用形态候选 → snippet：**先按 source id 过滤**（只有词表系统函数 / 库函数两路可能命中），
+      // 再按行号记忆化取行文本（同一行只取一次，不给 1000 条候选各取一遍）
+      let lineAt = -1;
+      let lineText = '';
+      for (const item of suggestions) {
+        const hit = provenance.lookup(item);
+        if (hit === undefined || !CALL_FORM_SOURCE_IDS.has(hit.sourceId)) continue;
+        const box = candidateRange(item.range);
+        if (box === undefined) continue;
+        if (box.endLineNumber !== lineAt) {
+          lineAt = box.endLineNumber;
+          lineText = model.getLineContent(lineAt);
+        }
+        applyCallSnippet(monaco, item, hit, charAfterRange(lineText, box));
+      }
       return { suggestions };
+    },
+    resolveCompletionItem(item) {
+      const hit = provenance.lookup(item);
+      if (hit === undefined) return item; // 不是本装配点产出的候选 ⇒ 原样交回（不猜）
+      const resolved = resolveCompletionDetail(item, hit);
+      if (resolved === undefined) return item;
+      if (resolved.detail !== undefined && item.detail === undefined) item.detail = resolved.detail;
+      if (resolved.documentation !== undefined) item.documentation = resolved.documentation;
+      return item;
     },
   });
 }
