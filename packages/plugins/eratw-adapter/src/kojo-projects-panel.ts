@@ -781,6 +781,16 @@ export function createKojoProjectsPanel(
         ic('book', 14, '▤'),
         h('span', { className: 'kp-tutorial-name' }, '口上教程'),
       ),
+      h(
+        'button',
+        {
+          className: 'kp-tutorial-btn',
+          title: '现行全部写法的对照表：每种写法编译成什么、哪些值不填、写错时的提示原文（两份教程的附录）',
+          onClick: () => deps.openTutorial('reference'),
+        },
+        ic('structure', 14, '▦'),
+        h('span', { className: 'kp-tutorial-name' }, 'kojo 语法全表'),
+      ),
     );
 
     return h('div', { className: 'panel-kojo-projects', ref: rootRef }, notice, toolbar, body, splitter, tutorials, statusBar, menu);

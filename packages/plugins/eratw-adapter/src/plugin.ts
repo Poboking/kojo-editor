@@ -45,6 +45,7 @@ import { DEPLOY_DIFF_OVERLAY_ID, createDeployDiffOverlay } from './deploy-diff-p
 import type { PendingCompare } from './deploy-diff';
 import {
   KOJO_TUTORIAL_OVERLAY_ID,
+  REFERENCE_TUTORIAL_OVERLAY_ID,
   SUGAR_TUTORIAL_OVERLAY_ID,
   createTutorialOverlay,
 } from './tutorial-overlay';
@@ -663,10 +664,15 @@ export function createEratwAdapterPlugin(): Plugin {
             ctx.bus.emit('editor.revealLocation', { filePath: absPath, source: 'eratw-adapter' }),
           openNewWizard: () =>
             ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' }),
-          // 教程入口（E6）：两个 overlay 常驻注册（见下方），这里只发打开意图
+          // 教程入口（E6；TUT-2 加全表）：三个 overlay 常驻注册（见下方），这里只发打开意图
           openTutorial: (which) =>
             ctx.bus.emit('ui.overlay.open', {
-              id: which === 'sugar' ? SUGAR_TUTORIAL_OVERLAY_ID : KOJO_TUTORIAL_OVERLAY_ID,
+              id:
+                which === 'sugar'
+                  ? SUGAR_TUTORIAL_OVERLAY_ID
+                  : which === 'kojo'
+                    ? KOJO_TUTORIAL_OVERLAY_ID
+                    : REFERENCE_TUTORIAL_OVERLAY_ID,
               source: 'eratw-adapter',
             }),
           status: () => actions.status(),
@@ -775,7 +781,12 @@ export function createEratwAdapterPlugin(): Plugin {
         }),
       });
 
-      /* ---- 内置教程（E6）：语法糖 + 口上；入口在「我的口上项目」面板底部 ---- */
+      /* ---- 内置教程（E6）：语法糖 + 口上 + 语法全表附录；入口在「我的口上项目」面板底部 ---- */
+
+      /** 脚部「查语法全表」：overlay 是单槽位，直接发打开意图即替换当前这本 */
+      const openReferenceOverlay = (): void => {
+        ctx.bus.emit('ui.overlay.open', { id: REFERENCE_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' });
+      };
 
       ctx.slots.register('ui.overlay', {
         id: SUGAR_TUTORIAL_OVERLAY_ID,
@@ -785,6 +796,7 @@ export function createEratwAdapterPlugin(): Plugin {
           tutorial: TUTORIALS.sugar,
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: SUGAR_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' }),
+          openReference: openReferenceOverlay,
         }),
       });
 
@@ -796,6 +808,18 @@ export function createEratwAdapterPlugin(): Plugin {
           tutorial: TUTORIALS.kojo,
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: KOJO_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' }),
+          openReference: openReferenceOverlay,
+        }),
+      });
+
+      ctx.slots.register('ui.overlay', {
+        id: REFERENCE_TUTORIAL_OVERLAY_ID,
+        order: 32,
+        size: 'wide',
+        component: createTutorialOverlay({
+          tutorial: TUTORIALS.reference,
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: REFERENCE_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' }),
         }),
       });
 

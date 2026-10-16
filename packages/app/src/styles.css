@@ -3465,6 +3465,9 @@ button.primary .hint {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* 目录跳转的平滑滚动写在样式里（插件包不碰 DOM 属性）：减弱动效下面那条规则
+     把它压成瞬移，跳转本身不受影响 */
+  scroll-behavior: smooth;
   /* 样例区按容器宽度断行（.tutorial-sample 用 cqw 突破正文列）——
      查询容器挂在滚动体上，cqw 天然扣掉滚动条与宿主 padding */
   container-type: inline-size;
@@ -3474,6 +3477,45 @@ button.primary .hint {
   max-width: 680px;
   margin: 0 auto;
   padding-right: var(--space-1);
+}
+/* 目录：贴在滚动体顶部的一条横向胶囊带。十九节的长文没有目录，只能靠拖滚动条找；
+   单行横滚比竖排列表省高度，也不跟正文列抢宽度 */
+.tutorial-toc {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  padding: var(--space-1) 0 var(--space-2);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+/* 横滚条走全局那套（`scrollbar-width` 会让 Chromium 换回原生浅色条，别加） */
+.tutorial-toc::-webkit-scrollbar,
+.tutorial-table-scroll::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.tutorial-toc-item {
+  flex: none;
+  padding: 2px var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tutorial-toc-item:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.tutorial-toc-item[aria-current='true'] {
+  color: var(--accent);
+  border-color: var(--accent-dim);
 }
 /* 节标题（①…⑩）：层级靠字号 + 节间分隔线拉开。 */
 .tutorial-section h4 {
@@ -3559,6 +3601,50 @@ button.primary .hint {
   .tutorial-arrow::before {
     content: '↓ ';
   }
+}
+/* 对照表（语法全表附录）：表比散文更吃宽度，与样例同一套"突破正文列"的算法。
+   列不随窗口压扁——窄到放不下时整张表横向滚动，因为压扁会把「写法」列折成竖排 */
+.tutorial-table-block {
+  --table-w: min(100cqw - 2 * var(--space-2), 1000px);
+  width: var(--table-w);
+  margin-block: var(--space-4);
+  margin-inline: calc((100% - var(--table-w)) / 2);
+}
+.tutorial-table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+/* 目录跳转把焦点交给整节（tabIndex=-1，不进 Tab 序列）：这不是键盘落点，
+   给整节套一圈描边反而像选错了东西 */
+.tutorial-section:focus {
+  outline: none;
+}
+.tutorial-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-1);
+  line-height: 1.55;
+}
+.tutorial-table th,
+.tutorial-table td {
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.tutorial-table thead th {
+  color: var(--fg-dim);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tutorial-table tbody tr:last-child td {
+  border-bottom: none;
+}
+/* 斑马一行：七八十行的长表没有横向引导，眼睛会从「写法」滑到隔壁列去 */
+.tutorial-table tbody tr:nth-child(even) {
+  background: var(--bg-2);
 }
 .wizard.tutorial .wizard-actions {
   flex: none;
@@ -4659,6 +4745,8 @@ button.primary .hint {
   animation-duration: 0.01ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
+  /* 教程目录跳转也瞬移（平滑滚动写在 .tutorial-body 里，不走 JS） */
+  scroll-behavior: auto !important;
 }
 
 /* ===================== b/hist/1015 独占区块：通用 diff 视图 ===================== */

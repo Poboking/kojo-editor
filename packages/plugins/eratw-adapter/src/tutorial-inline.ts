@@ -57,3 +57,10 @@ export function parseTutorialInline(src: string): TutorialInlineNode[] {
   flushText();
   return nodes;
 }
+
+/** 读成纯文本：目录条目与 title 提示里不该带标记字面，也不该塞元素 */
+export function tutorialInlinePlain(src: string): string {
+  const flat = (nodes: TutorialInlineNode[]): string =>
+    nodes.map((n) => (n.kind === 'strong' ? flat(n.children) : n.text)).join('');
+  return flat(parseTutorialInline(src));
+}

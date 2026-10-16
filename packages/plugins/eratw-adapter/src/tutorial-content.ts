@@ -35,9 +35,10 @@
  *   也不提及未实现的功能。
  */
 
-/** 教程 id（入口与 overlay 常量按它二选一） */
-export type TutorialId = 'sugar' | 'kojo';
+import { REFERENCE_TUTORIAL } from './tutorial-reference';
 
+/** 教程 id（入口与 overlay 常量按它三选一；`reference` = 语法全表附录） */
+export type TutorialId = 'sugar' | 'kojo' | 'reference';
 /** 一条样例：作者写的（kojo）+（可选）它编译成的 ERB（erb） */
 export interface TutorialSample {
   /** 样例说明（缺省 = 无说明） */
@@ -48,11 +49,28 @@ export interface TutorialSample {
   erb?: string;
 }
 
-/** 一节：标题 + 若干段说明（一段一个点、保持短句）+ 0–3 条样例 */
+/**
+ * 一张对照表（附录「语法全表」用）：列名 + 等长行。
+ * 单元文本与段落同一套行内标记（`**粗体**` / 反引号代码），渲染时同样解析。
+ */
+export interface TutorialTable {
+  /** 表上方一句话（可省） */
+  note?: string;
+  /** 列名 */
+  columns: string[];
+  /** 行：每行长度必须等于 `columns` 长度（由测试钉住） */
+  rows: string[][];
+}
+
+/**
+ * 一节：标题 + 若干段说明（一段一个点、保持短句）+ 0–3 条样例 + 0 张以上对照表。
+ * 散文节 `paragraphs` 非空；全表节可以只有表（`paragraphs` 留空）。
+ */
 export interface TutorialSection {
   heading: string;
   paragraphs: string[];
   samples?: TutorialSample[];
+  tables?: TutorialTable[];
 }
 
 export interface Tutorial {
@@ -891,8 +909,9 @@ export const KOJO_TUTORIAL: Tutorial = {
   ],
 };
 
-/** 两个教程的集合（入口按 id 取用） */
+/** 三本教程的集合（入口按 id 取用；`reference` = TUT-2 语法全表附录） */
 export const TUTORIALS: Record<TutorialId, Tutorial> = {
   sugar: SUGAR_TUTORIAL,
   kojo: KOJO_TUTORIAL,
+  reference: REFERENCE_TUTORIAL,
 };
