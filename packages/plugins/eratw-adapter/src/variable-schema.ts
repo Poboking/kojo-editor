@@ -8,6 +8,9 @@
  *   汉化 / 魔改版在同名 `.als` 里给同一编号补**别名**（`TCVAR.als:145 = 泥酔`，而
  *   `TCVAR.csv:145 = 烂醉`；`ex.als:1 = Ｖ绝顶`，而 `ex.csv:1 = Ｖ絶頂`）。作者写口上时
  *   抄的是游戏界面显示的 `.als` 名 ⇒ 不读 `.als`，这些具名索引在字典里天然查无。
+ * - **市场字典包追加名表**（KM-15，第三轮）：已装字典包（`kind === 'dict-pack'`）的
+ *   `files/` 目录（`LoadVariableSchemaOptions.marketAppendDirs`）——里面**一律按追加名表**
+ *   并入（主表仍只认游戏 CSV 目录，见下"市场字典包"一节）。
  * - **作者自定名表**（FT-1）：整棵 ERB 子树内 `*.ERH` 的具名常量声明（`#DIM CONST NAME = 1101` /
  *   `#DEFINE NAME 0`）——口上作者自定义的符号名不住在 CSV 里，只住在 `.ERH`；引擎把它们
  *   当**全局变量**装（`IdentifierDictionary.cs:436-444`，键只有名字），`族头:NAME` 走的是
@@ -26,9 +29,9 @@
  * - 同时建立**名称 → 编号**反向表（`lookup('TALENT', '恋慕')` 双向可用）；
  * - 同一编号/名称的**首个定义优先**（与引擎 CSV 加载顺序语义一致）。
  *
- * 追加名表（`*.als`）的**合并口径 = 只并集、不覆盖**：
- * 先按目录扫全部 `.csv` 建表，再把 `.als` **逐个并入同一张表**，沿用同一条
- * "首个定义优先" ⇒ ①`byIndex` 里 CSV 已定义的编号**逐字不变**（`.als` 只补 CSV
+ * 追加名表（`*.als`）与**市场字典包**（KM-15，第三轮）的**合并口径 = 只并集、不覆盖**：
+ * 先按目录扫全部 `.csv` 建表，再把 `.als` 与市场名表**逐个并入同一张表**，沿用同一条
+ * "首个定义优先" ⇒ ①`byIndex` 里 CSV 已定义的编号**逐字不变**（追加层只补 CSV
  * 没有的编号）；②`byName` 只**新增**名称键（同名的既有编号不改）。
  * 为什么不能让 `.als` 覆盖 `.csv`：`byIndex` 是悬停描述与**降糖产物**
  * （`nameAt(族, 编号) → 名称`）的唯一来源，改一个编号的名称 = 改所有人已有产物的
@@ -37,7 +40,8 @@
  * 撞名时打印"保留旧值"），本并不另立标准。
  *
  * **来源层（ALS-R1）**：三层数据源在条目上如实标注（契约字段 `VariableInfo.source`）——
- * `.csv` → `'primary'`、`.als` → `'append'`、`.ERH` 具名常量 → `'const'`，
+ * `.csv` → `'primary'`、`.als`（与市场字典包名表，KM-15）→ `'append'`、
+ * `.ERH` 具名常量 → `'const'`，
  * 按"键第一次落地"的那一轮记源（与"首个定义优先"同一裁决）。本包只**标源**、
  * 不裁决归属：族归属如何分层由消费方（`kojo-sugar` 的 `resolveFamily`）决定，
  * 收录判定（拼错名核对）仍三层都算。
@@ -228,14 +232,28 @@ export interface LoadVariableSchemaOptions {
    * （含既有 `*.als` 语料自证）字典与摘要逐字不变。
    */
   erbDir?: string;
+  /**
+   * 市场字典包（`kind === 'dict-pack'`）的 contentDir 列表（KM-15；additive）。
+   *
+   * 轮序：游戏主表（`csvDir/*.csv`）→ 游戏追加名表（`csvDir/*.als`）→ 本列表
+   * （目录间与文件间**按路径排序**：先定义优先的裁决不许随枚举顺序漂）。
+   * 每个目录里的名表文件（仍只收 `.csv` / `.als` 两种，变量名 = 去扩展名大写）
+   * **一律以 `source: 'append'` 并入**——市场包没有"主表"语义：改一个主表编号的
+   * 名称 = 改所有人已有产物的字面（`byIndex` 是悬停描述与降糖产物的唯一来源）。
+   * 缺省 / 空数组 = 不读市场，与历史行为逐字一致（零新增输出）。
+   */
+  marketAppendDirs?: readonly string[];
   log: Logger;
 }
 
-/** 名称表文件：`{变量名}.csv` = 主表 / `{变量名}.als` = 追加名表 */
+/** 名称表文件：`{变量名}.csv` = 主表 / `{变量名}.als` = 追加名表（市场字典包同轮收两种） */
 interface NameTableFile {
   variableName: string;
   path: string;
 }
+
+/** 字符串路径序（确定性：目录与文件两级的"先定义优先"裁决都不许随枚举顺序漂） */
+const comparePaths = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** `.ERH` 声明行的前置关键字（Emuera `UserDefinedVariableData.Create` 认的关键词集） */
 const ERH_DECL_KEYWORDS = new Set([
@@ -337,10 +355,12 @@ function withBits(info: VariableInfo): VariableInfo {
 
 /**
  * 加载 eraTW 变量字典：扫描 `CSV/` 根目录的全部 `*.csv` 名称表**与** `*.als` 追加名表
- * （文件名去掉扩展名后大写即变量名；子目录不进入——Chara 子目录是角色数据，不是变量表）。
+ * （文件名去掉扩展名后大写即变量名；子目录不进入——Chara 子目录是角色数据，不是变量表），
+ * 再把市场字典包目录（`marketAppendDirs`，KM-15）里的名表**同轮并入**。
  *
- * 两轮顺序 = 裁决顺序：先把全部 `.csv` 建成主表，再把 `.als` 按同表键**并入**
- * （首个定义优先 ⇒ 主表的编号名称逐字不变，追加名表只贡献新名称 / 主表缺的编号）。
+ * 三轮顺序 = 裁决顺序：先把全部 `.csv` 建成主表，再把游戏 `.als` 并入，
+ * 最后并市场字典包名表（目录间与文件间按路径排序）——同一条"首个定义优先"
+ * ⇒ 主表的编号名称逐字不变，追加层只贡献新名称 / 主表缺的编号。
  */
 export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): Promise<VariableSchema> {
   const { io, csvDir, chsMapPath, erbDir, log } = opts;
@@ -403,6 +423,41 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
   if (appendFiles.length > 0) {
     log.info(
       `追加名表（*.als）：${appendFiles.length} 份，并入 ${appendedNames} 个新名称 / ${appendedIndexes} 个新编号（主表已有的编号名称不改写）`,
+    );
+  }
+
+  /**
+   * 第三轮：市场字典包（KM-15）。目录与文件**都先按路径排序**再并入（`runPass` 逐文件
+   * 读并入 `digestParts` ⇒ 字典换了指纹就变），故"先定义优先"的裁决与市场安装顺序 /
+   * 目录枚举顺序无关。全部按 `'append'` 记源：主表仍只认游戏 CSV 目录。
+   * 目录不可读 / 文件读失败一律 warn 跳过（不静默），其余输入照常。
+   */
+  const marketAppendNamesStart = appendedNames;
+  const marketAppendIndexesStart = appendedIndexes;
+  const marketDirs = [...(opts.marketAppendDirs ?? [])].sort(comparePaths);
+  const marketFiles: NameTableFile[] = [];
+  for (const dir of marketDirs) {
+    let dirEntries: Awaited<ReturnType<FileIO['listDir']>>;
+    try {
+      dirEntries = await io.listDir(dir);
+    } catch (err) {
+      log.warn(`变量字典：市场字典包目录不可读（跳过）：${dir} — ${String(err)}`);
+      continue;
+    }
+    for (const e of dirEntries) {
+      if (e.isDirectory) continue;
+      const m = /\.(csv|als)$/i.exec(e.name);
+      if (m === null) continue;
+      const variableName = e.name.slice(0, e.name.length - m[0].length).toUpperCase();
+      if (variableName.length > 0) marketFiles.push({ variableName, path: e.path });
+    }
+  }
+  marketFiles.sort((a, b) => comparePaths(a.path, b.path));
+  await runPass(marketFiles, 'append');
+  if (marketFiles.length > 0) {
+    log.info(
+      `市场字典包追加名表：${marketDirs.length} 个目录 / ${marketFiles.length} 份，并入 ` +
+        `${appendedNames - marketAppendNamesStart} 个新名称 / ${appendedIndexes - marketAppendIndexesStart} 个新编号（主表已有的编号名称不改写）`,
     );
   }
 

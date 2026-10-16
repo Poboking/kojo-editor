@@ -4,6 +4,7 @@ import type {
   GameAdapter,
   GameProject,
   KojoInstructionTable,
+  MarketService,
   Plugin,
   ProjectService,
   SugarTranspileService,
@@ -12,7 +13,7 @@ import type {
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
+import { KernelServices, MARKET_SERVICE_KEY, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
 import { createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS } from './library-table';
@@ -284,6 +285,23 @@ export function createEratwAdapterPlugin(): Plugin {
         return sugar.compileToBytes(source, undefined, label);
       };
 
+      /**
+       * 市场服务（**惰性取**；KM-14 模板包 / KM-15 字典包共用）。
+       *
+       * `kojo-market` 可能比本插件晚激活 ⇒ 一律在"用到的那一刻"`tryInject`，
+       * 与 `compileKojo` 同款理由。缺席 / 取出失败 ⇒ `null`（调用方按"没有市场"降级，
+       * 绝不让项目加载或向导挂掉）。
+       */
+      const tryMarket = (): MarketService | null => {
+        try {
+          return ctx.tryInject<MarketService>(MARKET_SERVICE_KEY) ?? null;
+        } catch (err) {
+          // 测试壳等未实现 tryInject 的上下文：与"市场缺席"同义，照常出声
+          ctx.log.warn(`市场服务获取失败（按未安装处理）：${String(err)}`);
+          return null;
+        }
+      };
+
       const actions = createPackageActions({ io, log: ctx.log, notify: notifyWs, compileKojo });
       ctx.onDispose(() => actions.dispose());
 
@@ -499,12 +517,29 @@ export function createEratwAdapterPlugin(): Plugin {
           }
 
           // ---- 3. 变量字典（CFLAG/Talent/… 名称表；条件抽取的语义标注来源） ----
+          // 市场字典包（KM-15）：第三轮追加名表。市场缺席 / 读取失败 / 无字典包 ⇒ 空列表，
+          // 与今天行为逐字一致（字典零新增轮、日志零新增）；项目加载不因市场出声而挂。
+          const marketAppendDirs: string[] = [];
+          try {
+            const market = tryMarket();
+            if (market !== null) {
+              for (const rec of await market.installed()) {
+                if (rec.kind !== 'dict-pack') continue;
+                marketAppendDirs.push(await market.contentDir(rec.kind, rec.id, rec.version));
+              }
+            }
+          } catch (err) {
+            marketAppendDirs.length = 0;
+            ctx.log.warn(`市场字典包目录收集失败（本次不并入市场名表，字典照常加载）：${String(err)}`);
+          }
           currentSchema = await loadEratwVariableSchema({
             io,
             csvDir: join(rootDir, ...ERATW.csvDir),
             chsMapPath: join(rootDir, ...ERATW.chsNameMap),
             // 作者自定名表（FT-1）：引擎从整个 ERB 根递归装 `.ERH`（`Process.cs:221`）
             erbDir: join(rootDir, ...ERATW.erbDir),
+            // 市场字典包追加名表（KM-15；空 = 连这个键都不带，与历史逐字一致）
+            ...(marketAppendDirs.length > 0 ? { marketAppendDirs } : {}),
             log: ctx.log,
           });
 
