@@ -20,6 +20,11 @@
  *   k  **真装一个包再卸掉**：面板点「安装」⇒ 真下载 + 真解压 + 真落盘 + 真记账 ⇒
  *      屏上「已安装」+ 盘上逐条目对平 + 记账容器核对码对平 ⇒ 点「卸载」确认 ⇒ 目录消失、零残壳。
  *      容器落在 github.com（本机直连必超时）⇒ **不带代理时这一项报 SKIP 并打印复跑命令**，不算过。
+ *      **MK-1 的三个毫秒数**（每次跑都进读数，PASS/FAIL/SKIP 都带）：
+ *      ① 装成 → 「已装」行出现且卸载点得动；② 卸载确认 → 落点目录消失；③ 卸载确认 → 屏上那一行消失。
+ *      ②③ 同基线同轮取样 ⇒ 判据「③ ≤ ② + 300ms」直接可比；取样一律走 `pollUntil`/`pollWhere`
+ *      的**显式值**轮询（教训①：`waitFor` 认"返回真值"为就绪，而"还没好"返回的是字符串——字符串是真值；
+ *      教训②：动作后固定 `sleep` 一次性判读会把"慢一点"读成"没做完"）。
  *
  * 用法：node tools/smoke-tauri-market.mjs [游戏目录]
  *   k 项要真出网取容器 ⇒ 复跑口径：`HTTPS_PROXY=http://127.0.0.1:7890 node tools/smoke-tauri-market.mjs`
@@ -123,14 +128,64 @@ const P = (id, name, detail) => rec(id, name, 'PASS', detail);
 const F = (id, name, detail) => rec(id, name, 'FAIL', detail);
 const S = (id, name, detail) => rec(id, name, 'SKIP', detail);
 
+/**
+ * 布尔型就绪等待：`expr` 必须自己返回 **true**（返回值不是 `true` 一律继续等）。
+ *
+ * ⚠ 教训（看板 MK-1，探针自害①）：本仓过去把"返回一个字符串表示还没好"的表达式交给
+ * 这种等待——字符串是**真值**，于是第一次轮询就"等到"了，60s 的等待形同虚设，
+ * 把「滞后 1.2s」读成「永远不出现」。**要判"取到某个值"，用下面的 `pollUntil`，别用这里。**
+ */
 async function waitFor(cdp, expr, timeoutMs = 60000, intervalMs = 700) {
   const started = Date.now();
   let last;
   while (Date.now() - started < timeoutMs) {
-    try { last = await cdp.evalJs(expr, 15000); if (last) return last; } catch (e) { last = String(e); }
+    try { last = await cdp.evalJs(expr, 15000); if (last === true) return last; } catch (e) { last = String(e); }
     await sleep(intervalMs);
   }
   throw new Error(`waitFor timeout (${timeoutMs}ms): ${expr} last=${JSON.stringify(last)}`);
+}
+
+/**
+ * **带耗时的显式值轮询**（MK-1 判据的取样形态）：
+ * 只认 `values` 里列出的那几个返回值（逐字 `===` 比，不做真值判断），命中即返回，
+ * 超时**不抛**而是带着 `timedOut` 与**毫秒数**回来——因为看板要的正是"多久出现/消失"这个数，
+ * 抛异常就等于把最该上读数的那个数丢掉了。
+ *
+ * 判"有没有出现/消失"一律走这里，别再拿 `waitFor` 接一个返回字符串的表达式（教训①），
+ * 也别在动作之后固定 `sleep` 一次性判读（教训②：那会把"慢一点"读成"没做完"）。
+ */
+async function pollUntil(cdp, expr, values, { timeoutMs = 60000, intervalMs = 400, settle = 0 } = {}) {
+  const t0 = Date.now();
+  let last = null;
+  for (;;) {
+    try { last = await cdp.evalJs(expr, 15000); } catch (e) { last = `eval-error:${String(e).slice(0, 60)}`; }
+    if (values.some((v) => v === last)) {
+      const ms = Date.now() - t0;
+      // `settle` > 0 ⇒ 命中后再等这么久复核一次：中间隔了网络动作的等待，
+      // 必须确认它**没有回退**（"行消失 120ms"随后被旧读数倒灌复活，就是看板那条 3.7s 的另一半成因）
+      if (settle > 0) {
+        await sleep(settle);
+        let again = null;
+        try { again = await cdp.evalJs(expr, 15000); } catch { again = null; }
+        if (!values.some((v) => v === again)) { last = again; continue; }
+      }
+      return { value: last, ms, timedOut: false };
+    }
+    if (Date.now() - t0 >= timeoutMs) return { value: last, ms: Date.now() - t0, timedOut: true };
+    await sleep(intervalMs);
+  }
+}
+
+/** 表达式版：命中条件由 `predicate(返回值)` 决定（对象一类没法逐字列举时用这条；仍然是显式判定，不认裸真值） */
+async function pollWhere(cdp, expr, predicate, { timeoutMs = 60000, intervalMs = 400 } = {}) {
+  const t0 = Date.now();
+  let last = null;
+  for (;;) {
+    try { last = await cdp.evalJs(expr, 15000); } catch (e) { last = `eval-error:${String(e).slice(0, 60)}`; }
+    if (predicate(last)) return { value: last, ms: Date.now() - t0, timedOut: false };
+    if (Date.now() - t0 >= timeoutMs) return { value: last, ms: Date.now() - t0, timedOut: true };
+    await sleep(intervalMs);
+  }
 }
 
 const INV = `(cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args ?? {})`;
@@ -328,21 +383,24 @@ async function main() {
     await waitFor(cdp, `!!document.querySelector('.panel-market')`, 30000);
 
     // 面板首帧 busy=true（拉取期文案是「拉取中…」且按钮禁用）⇒ 禁用态继续等，别把文案窗口当成"没有按钮"
-    const pullClicked = await waitFor(
+    const pullClicked = await pollUntil(
       cdp,
       `(() => {
         const b = [...document.querySelectorAll('.panel-market .mk-toolbar button')].find((e) => e.textContent.includes('拉取'));
         if (!b) return 'no-pull-button';
-        if (b.disabled) return null;
+        if (b.disabled) return 'pull-disabled';
         b.click();
         return 'clicked';
       })()`,
-      60000,
+      ['clicked'],
+      { timeoutMs: 60000 },
     );
-    if (pullClicked !== 'clicked') throw new Error(`拉取列表 click failed: ${pullClicked}`);
+    if (pullClicked.value !== 'clicked') throw new Error(`拉取列表 click failed: ${pullClicked.value}（等了 ${pullClicked.ms}ms）`);
 
-    // 等屏上出现「已拉取注册表列表」（刷新成功的那句人话），顺带把面板状态读回来
-    const panel = await waitFor(
+    // 等屏上出现「已拉取注册表列表」（刷新成功的那句人话），顺带把面板状态读回来。
+    // 对象返回值没法逐字列举 ⇒ 走 `pollWhere` 的显式谓词（就绪前返回 `null`，判定认"对象且带 note"，
+    // 不是"非空即真"）。
+    const panelPoll = await pollWhere(
       cdp,
       `(() => {
         const note = document.querySelector('.panel-market .mk-note')?.innerText ?? '';
@@ -352,8 +410,11 @@ async function main() {
         const rows = document.querySelectorAll('.panel-market .mk-row').length;
         return /已拉取注册表列表/.test(note) ? { note, time, status, dropped, rows } : null;
       })()`,
-      60000,
+      (v) => v !== null && typeof v === 'object' && typeof v.note === 'string',
+      { timeoutMs: 60000 },
     );
+    if (panelPoll.timedOut) throw new Error(`面板没给出「已拉取注册表列表」（等了 ${panelPoll.ms}ms）`);
+    const panel = panelPoll.value;
 
     /* -------- g) 落盘 + schema 合规 + 条目逐字对平 -------- */
     if (!fs.existsSync(indexPath)) F('g', '面板拉取 ⇒ index.json 落盘', `文件不在位：${indexPath}`);
@@ -393,8 +454,26 @@ async function main() {
       if (panel.dropped === '') S('j', '坏条目进 dropped 并出声', '线上注册表当前没有坏条目（本地服务侧的判据见 kernel/tests/integration-market.test.ts）');
       else P('j', '坏条目进 dropped 并出声', panel.dropped.slice(0, 120));
 
-      /* -------- k) 真装一个包再卸掉：真下载 + 真解压 + 真落盘 + 真记账 -------- */
-      const kClick = await waitFor(
+      /* -------- k) 真装一个包再卸掉：真下载 + 真解压 + 真落盘 + 真记账 + 即时失效 -------- */
+      /**
+       * 三个毫秒数**每一次跑都上读数**（看板 MK-1 的量化靶）：
+       * ① 装成那句人话 → 「已装」行出现且卸载点得动；② 卸载确认 → 落点目录消失；
+       * ③ 卸载确认 → 屏上那一行消失。② 与 ③ 共用同一条基线（按下「确认」的那一刻）、
+       * 在同一段循环里一起取 ⇒ "行消失 ≤ 目录消失 + 300ms" 是**同一轮内**可比的两之数，
+       * 不是两次采样的近似。取不到的那个写「未取」，不改写成 SKIP 蒙过去。
+       */
+      const kHow = '复跑：HTTPS_PROXY=http://127.0.0.1:7890 node tools/smoke-tauri-market.mjs';
+      let kRowMs = null;
+      let kDirMs = null;
+      let kGoneMs = null;
+      const fmtMs = (n) => (n === null ? '未取' : `${n}ms`);
+      const kRead = () => `三个毫秒数：①行出现=${fmtMs(kRowMs)} ②目录消失=${fmtMs(kDirMs)} ③行消失=${fmtMs(kGoneMs)}`;
+      const kRowSel = `[...document.querySelectorAll('.panel-market .mk-list .mk-row')].find((r) => r.innerText.includes('版本 ${K_TARGET.version}'))`;
+      const kRowStateExpr = `(() => (${kRowSel} ? 'listed' : 'gone'))()`;
+      const kName = '真装一个包再卸掉（真下载+解压+落盘+记账+卸载+即时失效）';
+
+      /* 1) 注册表行上点「安装」（显式值轮询：只认 'clicked'） */
+      const kClick = await pollUntil(
         cdp,
         `(() => {
           const row = [...document.querySelectorAll('.panel-market .mk-group .mk-row')]
@@ -402,30 +481,35 @@ async function main() {
           if (!row) return 'no-registry-row';
           const b = [...row.querySelectorAll('button')].find((e) => /安装|更新/.test(e.textContent));
           if (!b) return 'no-action-button';
-          if (b.disabled) return null;
+          if (b.disabled) return 'install-disabled';
           b.click();
           return 'clicked';
         })()`,
-        60000,
+        ['clicked'],
+        { timeoutMs: 60000, intervalMs: 300 },
       );
-      if (kClick !== 'clicked') {
-        F('k', '真装一个包再卸掉', `注册表行上点不动安装：${kClick}`);
+      if (kClick.value !== 'clicked') {
+        F('k', kName, `注册表行上点不动安装：${String(kClick.value)}（等了 ${kClick.ms}ms）；${kRead()}`);
       } else {
-        const kOutcome = await waitFor(
+        /* 2) 等装成那句人话（对象返回值 ⇒ 显式谓词，仍然是带耗时的轮询） */
+        const kOutcome = await pollWhere(
           cdp,
           `(() => {
             const note = document.querySelector('.panel-market .mk-note')?.innerText ?? '';
-            if (/已装上/.test(note)) return { ok: true, note };
-            if (/没有成功|失败|超时|拒绝|不是同一份|要求更新版本|下载/.test(note)) return { ok: false, note };
+            if (/已装上|已把「.+」更新到版本/.test(note)) return { ok: true, note };
+            if (/没装成|没有成功|没能|失败|超时|拒绝|不是同一份|要求更新版本/.test(note)) return { ok: false, note };
             return null;
           })()`,
-          180000,
+          (v) => v !== null && typeof v === 'object' && typeof v.ok === 'boolean',
+          { timeoutMs: 180000, intervalMs: 300 },
         );
-        const kHow = '复跑：HTTPS_PROXY=http://127.0.0.1:7890 node tools/smoke-tauri-market.mjs';
-        if (!kOutcome.ok) {
+        if (kOutcome.timedOut) {
+          S('k', kName, `未验证：180s 内安装没有给出结果句（多半是没出网取不到容器）；${kHow}；${kRead()}`);
+        } else if (kOutcome.value.ok !== true) {
+          const note = kOutcome.value.note;
           // 容器落在 github.com（本机直连必超时）⇒ 没带代理是"没验过"，不是"过了"
-          if (/超时|下载|没有成功|连接|网络/.test(kOutcome.note)) S('k', '真装一个包再卸掉', `未验证：安装没成功（${kOutcome.note}）；${kHow}`);
-          else F('k', '真装一个包再卸掉', `安装被拒（${kOutcome.note}）`);
+          if (/超时|没能|没有成功|连接|网络/.test(note)) S('k', kName, `未验证：安装没成功（${note}）；${kHow}；${kRead()}`);
+          else F('k', kName, `安装被拒（${note}）；${kRead()}`);
         } else {
           const kProbs = [];
           // 落点里**只有 `files/**`**（`pack.json` 只当校验锚、不搬进落点）⇒
@@ -465,18 +549,10 @@ async function main() {
           const kLeft = fs.existsSync(kStagingDir) ? fs.readdirSync(kStagingDir).length : 0;
           if (kLeft !== 0) kProbs.push(`暂存区有 ${kLeft} 条残壳`);
 
-          const kRowSel = `[...document.querySelectorAll('.panel-market .mk-list .mk-row')].find((r) => r.innerText.includes('版本 ${K_TARGET.version}'))`;
-          /**
-           * **自己写循环，不用 `waitFor`**（1016 验收实测踩到）：`waitFor` 认「表达式返回真值」为就绪，
-           * 而这枚探针就绪前返回的是字符串 `'no-installed-row'`——字符串是**真值** ⇒ 第一次就"等到"，
-           * 60s 的等待形同虚设，把「滞后几秒才出现」读成「永远不出现」。
-           * 现在按 500ms 一轮真等到「点得动的卸载按钮」，并把**等了多少毫秒**记进读数
-           * （这条数就是 MK-1 的量化靶：装成功后卸载入口多久可见）。
-           */
-          let kReq = 'no-installed-row';
-          const kWaitedAt = Date.now();
-          for (;;) {
-            kReq = await cdp.evalJs(`(() => {
+          /* 3) ①「已装」行出现：从"装成那句上屏"这一刻起，100ms 一轮真等到卸载按钮点得动 */
+          const kRowPoll = await pollUntil(
+            cdp,
+            `(() => {
               const row = ${kRowSel};
               if (!row) return 'no-installed-row';
               const b = [...row.querySelectorAll('button')].find((e) => e.textContent.trim() === '卸载');
@@ -484,73 +560,79 @@ async function main() {
               if (b.disabled) return 'uninstall-disabled';
               b.click();
               return 'requested';
-            })()`);
-            if (kReq === 'requested' || Date.now() - kWaitedAt > 60000) break;
-            await sleep(500);
-          }
-          const kRowWaitMs = Date.now() - kWaitedAt;
-          if (kReq === 'requested') {
+            })()`,
+            ['requested'],
+            { timeoutMs: 60000, intervalMs: 100 },
+          );
+          kRowMs = kRowPoll.ms;
+          if (kRowPoll.timedOut) {
+            kProbs.push(`装成后 ${kRowMs}ms 卸载入口仍不可点：${String(kRowPoll.value)}`);
+          } else if (kRowMs > 3000) {
             /**
-             * 3s 这条线是**组长 2026-10-16 现定的**，不是产品承诺：装完到「已装」行出现要走一次
-             * `installed()` 重取 + 面板重绘，实测 **1178ms**（同轮复跑 1209ms）——那属正常的异步滞后。
-             * 判红只留给"刷新根本没接上"的形态（>3s 或压根不可点）。毫秒数**每次进 PASS 读数**，
-             * 别把这条改成静默通过：它就是 MK-1 要看的那个数。
+             * 3s 这条线是**组长 2026-10-16 现定的**，不是产品承诺；即时失效（MK-1）之后
+             * 这一数应当落在"一次重绘"的量级，>3s 就是"刷新链没接上"的形态 ⇒ 判红。
              */
-            if (kRowWaitMs > 3000) kProbs.push(`卸载入口在装成功后 ${kRowWaitMs}ms 才可点（>3s ⇒ 装后刷新链没接上的形态）`);
+            kProbs.push(`卸载入口在装成功后 ${kRowMs}ms 才可点（>3s ⇒ 装后即时失效没接上）`);
           } else {
-            kProbs.push(`卸载入口 60s 内不可点：${kReq}`);
+            // 出现后 1.2s 内复核这一行还在：乐观先行又被在途旧读数盖掉的形态，正是本项要抓的另一种滞后
+            const kStill = await pollUntil(cdp, kRowStateExpr, ['listed'], { timeoutMs: 1200, intervalMs: 200 });
+            if (kStill.timedOut) kProbs.push('卸载点后这一行在 1.2s 内又不见了（显示回跳，读数不可信）');
           }
-          const kConf = kReq !== 'requested'
-            ? 'skipped(卸载入口不可点，见上条读数)'
-            : await waitFor(
+
+          /* 4) 确认卸载（显式值轮询；就绪前返回的字符串不再被当成"等到了"） */
+          const kConf = kRowPoll.timedOut
+            ? { value: 'skipped(卸载入口不可点，见上条读数)', ms: 0, timedOut: true }
+            : await pollUntil(
                 cdp,
                 `(() => {
                   const row = ${kRowSel};
                   if (!row) return 'row-gone';
                   const b = [...row.querySelectorAll('button')].find((e) => e.textContent.trim() === '确认');
                   if (!b) return 'no-confirm-button';
-                  if (b.disabled) return null;
+                  if (b.disabled) return 'confirm-disabled';
                   b.click();
                   return 'confirmed';
                 })()`,
-                60000,
+                ['confirmed', 'row-gone'],
+                { timeoutMs: 60000, intervalMs: 100 },
               );
-          if (!kConf.startsWith('skipped') && kConf !== 'confirmed' && kConf !== 'row-gone') kProbs.push(`卸载没走完：${kConf}`);
-          /**
-           * 卸载确认之后**带耗时地等**（旧探针 `sleep(800)` 后一次性判读 ⇒ 把「慢一点」读成「没做完」，
-           * 与上面那条 `waitFor` 真值陷阱是同一类探针自害）。目录消失与屏上行消失各记一个毫秒数。
-           */
-          let kDirMs = -1;
-          let kRowMs = -1;
-          if (kConf === 'confirmed' || kConf === 'row-gone') {
-            const tUn = Date.now();
-            for (;;) {
-              if (!fs.existsSync(kTargetDir)) { kDirMs = Date.now() - tUn; break; }
-              if (Date.now() - tUn > 20000) break;
-              await sleep(120);
-            }
-            if (kDirMs < 0) kProbs.push('卸载确认后 20s 落点目录仍在');
-            const tRow = Date.now();
-            for (;;) {
-              const listed = await cdp.evalJs(
-                `[...document.querySelectorAll('.panel-market .mk-list .mk-row')].some((r) => r.innerText.includes('版本 ${K_TARGET.version}'))`,
-              );
-              if (!listed) { kRowMs = Date.now() - tRow; break; }
-              if (Date.now() - tRow > 20000) break;
-              await sleep(200);
-            }
-            if (kRowMs < 0) kProbs.push('卸载确认后 20s 屏上那条还在');
+          if (!String(kConf.value).startsWith('skipped') && kConf.value !== 'confirmed' && kConf.value !== 'row-gone') {
+            kProbs.push(`卸载没走完：${String(kConf.value)}（等了 ${kConf.ms}ms）`);
           }
 
-          if (kProbs.length === 0) {
-            P(
-              'k',
-              '真装一个包再卸掉（真下载+解压+落盘+记账+卸载）',
-              `${K_TARGET.id} v${K_TARGET.version}：屏上「${kOutcome.note}」；盘上 ${kDeclared.length} 个条目逐条对平（${kDeclared.map((f) => `${f.path}:${f.bytes}B`).join(' ')}）；记账容器核对码=${K_CONTAINER_SHA.slice(0, 12)}…；卸载入口=${kRowWaitMs}ms 可点、目录消失=${kDirMs}ms、行消失=${kRowMs}ms；暂存区零残壳`,
-            );
-          } else {
-            F('k', '真装一个包再卸掉（真下载+解压+落盘+记账+卸载）', kProbs.join('；'));
+          /* 5) ②与③同基线、同一段循环里取 ⇒ 判据"行消失 ≤ 目录消失 +300ms"在同一轮内可比 */
+          if (kConf.value === 'confirmed' || kConf.value === 'row-gone') {
+            const tUn = Date.now();
+            for (;;) {
+              if (kDirMs === null && !fs.existsSync(kTargetDir)) kDirMs = Date.now() - tUn;
+              if (kGoneMs === null) {
+                let state = null;
+                try { state = await cdp.evalJs(kRowStateExpr, 15000); } catch { state = null; }
+                if (state === 'gone') kGoneMs = Date.now() - tUn;
+              }
+              if (kDirMs !== null && kGoneMs !== null) break;
+              if (Date.now() - tUn > 30000) break;
+              await sleep(80);
+            }
+            if (kDirMs === null) kProbs.push('卸载确认后 30s 落点目录仍在（盘上没卸掉，这是功能断裂不是滞后）');
+            if (kGoneMs === null) kProbs.push(`卸载确认后 30s 屏上那条还在（目录消失=${fmtMs(kDirMs)} 时它仍挂着）`);
+            if (kDirMs !== null && kGoneMs !== null && kGoneMs > kDirMs + 300) {
+              kProbs.push(`屏上那条比盘上晚 ${kGoneMs - kDirMs}ms 消失（判据：行消失 ≤ 目录消失 +300ms）`);
+            }
+            if (kGoneMs !== null) {
+              // 不许"消失后又复活"：面板被在途旧读数倒灌就是这个形态
+              await sleep(400);
+              let back = 'gone';
+              try { back = await cdp.evalJs(kRowStateExpr, 15000); } catch { back = 'gone'; }
+              if (back === 'listed') kProbs.push(`屏上那条消失 ${kGoneMs}ms 后又复活（旧读数倒灌）`);
+            }
           }
+
+          const kFact = `${K_TARGET.id} v${K_TARGET.version}：盘上 ${kDeclared.length} 个条目逐条对平（${kDeclared.map((f) => `${f.path}:${f.bytes}B`).join(' ')}）；记账容器核对码=${K_CONTAINER_SHA.slice(0, 12)}…；暂存区残壳 ${kLeft} 条`;
+          const kScreen = `屏上「${kOutcome.value.note}」`;
+          const kDelta = kDirMs !== null && kGoneMs !== null ? `${kGoneMs - kDirMs}ms` : '未取';
+          if (kProbs.length === 0) P('k', kName, `${kFact}；${kScreen}；${kRead()}；行消失-目录消失=${kDelta}（判据 ≤300ms）`);
+          else F('k', kName, `${kProbs.join('；')}｜${kFact}｜${kScreen}｜${kRead()}`);
         }
       }
     }
