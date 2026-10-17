@@ -19,9 +19,13 @@
  *   `<p><k>日文</k><v>中文</v></p>`；引擎 `SYSTEM.ERB` 经 `MAP_FROMXML` 装为
  *   `CSV_MAP`，游戏 UI 的名称汉化就靠它）——**叠加在名称表之上**：索引级名称
  *   `信頼度` → `信赖度`；词典查不到则回落名称表原文（**绝不猜**）。
+ *   同一份词典另有**公开查询面** `slotCn(族头, 原名) → 中文名 | undefined`（ZH-N 批），
+ *   供预览 / 升糖侧把"日文槽名"换成中文——查不到 `undefined`，**不回落原文冒充命中**。
  *
  * 家族级名称（`lookup('CFLAG')` 无索引）：游戏目录**没有**机读的「家族→中文」表，
- * 故取适配器内置策展常量 `FAMILY_LABELS`（取值口径见其注释）。
+ * 故取适配器内置策展常量 `FAMILY_LABELS`（取值口径见其注释）；族头可写的中文别名
+ * 见 `FAMILY_ALIASES`，其**全覆盖闸的分母**是 `ENGINE_FAMILIES`（引擎族全集，
+ * 漏族即报红；不登记的族必须在 `FAMILY_ALIAS_EXCLUSIONS` 留名给理由）。
  *
  * 解析策略（宽容）：
  * - 跳过 `;` 开头注释行与空行；行首非数字的不收录；
@@ -162,7 +166,112 @@ export const FAMILY_LABELS: Record<string, string> = {
   TIME: '时间',
   DAY: '日期',
   TRAIN: '技能',
+  // —— ZH-N 批（名表汉化扩面）：引擎全集里此前**无显示名**的族，逐条补齐 ——
+  RELATION: '关系',
+  GOTJUEL: '取得宝珠',
+  DOWNBASE: '基础上降',
+  CUP: '参数上升',
+  CDOWN: '参数下降',
+  ISASSI: '助手',
+  NO: '角色编号',
+  NAME: '真名',
+  CALLNAME: '称呼',
+  NICKNAME: '昵称',
+  MASTERNAME: '主人名',
+  CDFLAG: '角色详细标志',
+  MONEY: '金钱',
+  UP: '上升',
+  DOWN: '下降',
+  PALAMLV: '参数等级',
+  EXPLV: '经验等级',
+  EJAC: '射精次数',
+  SAVESTR: '存档字符串',
+  TSTR: '临时字符串',
+  CONF: '设置',
+  MFLAG: '怪物标志',
+  CHARVAR: '角色自定变量',
 };
+
+/**
+ * **引擎族全集**（策展常量）—— 家族头中文别名「全覆盖闸」的**分母**。
+ *
+ * 为什么另立一张表：`FAMILY_LABELS` 是**显示名**表，历史上被闸门当成分母 ⇒
+ * 一个族只要没进策展表就**静默漏**（本批以前：`FAMILY_LABELS` 22 族之外的引擎具名族
+ * 既不在显示名表、也不在别名表，闸门看不见）。本表把分母换成"引擎到底有哪些族"，
+ * 于是**漏一个族必须报红**（`tests/family-alias.test.ts`）。
+ *
+ * 权威来源：`state-replay/src/var-model.ts` 的引擎级变量模型（依 `VariableCode.cs`
+ * 与真实存档实测）。**不跨插件 import**（架构铁律 2：插件只依赖 `@kojo/plugin-api`）
+ * ⇒ 族名以本表形态复制进 adapter（游戏/引擎知识归 adapter，架构铁律 3）。
+ *
+ * **全集边界（有意为之，不是遗漏）**：只收"作者会在条件 / 引用里写成表头"的**具名族**。
+ * 以下三类**不在**本表，故闸门也不管它们——
+ * - 通用字母数组 `A`–`Z` / `TA` / `TB` / `DA`–`DE` / `DITEMTYPE`：无固定语义，作者不会
+ *   用中文表头去写它们；
+ * - 执行上下文量 `TARGET` / `ASSI` / `MASTER` / `PLAYER` / `RESULT` / `COUNT` /
+ *   `SELECTCOM` / `PREVCOM` / `NEXTCOM` / `ASSIPLAY` / `BOUGHT` / `PBAND` / `ITEMSALES` /
+ *   `RANDDATA` / `NOITEM` / `LOSEBASE`：值是"当前场景的编号 / 返回值"，不是可枚举的名表；
+ * - 语言层 `LOCAL` / `LOCALS` / `ARG` / `ARGS` / `LOCALSS` 与 `SAVEDATA_TEXT` / `MONEYLABEL`
+ *   等 CALC 串：由糖的语言层与语句关键字轴消化（`PALAM` 即"轴撞词 ⇒ 进排除台账"的一例）。
+ *
+ * 引擎标识符大小写不敏感（`emuera.config:1 IGNORE CASE:YES`）⇒ 本表一律大写。
+ */
+export const ENGINE_FAMILIES: readonly string[] = Object.freeze([
+  // —— 角色 1D 整数数组（引用 `X:i` → `X[TARGET,i]`）——
+  'BASE',
+  'MAXBASE',
+  'ABL',
+  'TALENT',
+  'EXP',
+  'MARK',
+  'PALAM',
+  'SOURCE',
+  'EX',
+  'CFLAG',
+  'JUEL',
+  'RELATION',
+  'EQUIP',
+  'TEQUIP',
+  'STAIN',
+  'GOTJUEL',
+  'NOWEX',
+  'DOWNBASE',
+  'CUP',
+  'CDOWN',
+  'TCVAR',
+  // —— 角色标量（整型 / 字符串）与角色 2D 整数数组 ——
+  'ISASSI',
+  'NO',
+  'NAME',
+  'CALLNAME',
+  'NICKNAME',
+  'MASTERNAME',
+  'CSTR',
+  'CDFLAG',
+  // —— 全局 1D 整数数组（`X` 等价 `X:0`）——
+  'DAY',
+  'MONEY',
+  'ITEM',
+  'FLAG',
+  'TFLAG',
+  'UP',
+  'DOWN',
+  'PALAMLV',
+  'EXPLV',
+  'EJAC',
+  'TIME',
+  // —— 字符串族 ——
+  'STR',
+  'SAVESTR',
+  'TSTR',
+  // —— 游戏侧名表族（`CSV/CONF.csv` / `CSV/MFLAG.csv` / `CSV/CHARVAR.csv`）——
+  'CONF',
+  'MFLAG',
+  'CHARVAR',
+  // —— 引擎伪变量族（可写在条件位，作者同样按中文表头读）——
+  'TRAIN',
+  'RAND',
+]);
 
 /**
  * 家族头的**作者可写中文别名** —— 与 `FAMILY_LABELS`（家族**显示名**）**不同轴**的独立策展常量。
@@ -199,6 +308,11 @@ const aliasTable = (entries: Record<string, string>): Readonly<Record<string, st
  *
  * 另：`FLAG` / `TFLAG` 保持 D2 绰号（「标记」/「时标」）——**不做显示名整表合并**：两张表
  * 各自策展（「全局标志」/「临时标志」不是别名），本批只是新增条目恰好与显示名同形。
+ *
+ * **ZH-N 批（名表汉化扩面）**：分母从 `FAMILY_LABELS` 换成 `ENGINE_FAMILIES`（引擎族全集），
+ * 于是"没进表的族"从静默漏变成报红。新增 23 条沿用同一套四条口径：显示名原样采纳、
+ * 一形不配两族、长别名与短别名可同登（写侧按标识符整段匹配）、撞关键字 / 语义无据的族
+ * **不进表而进 `FAMILY_ALIAS_EXCLUSIONS` 台账**。
  */
 export const FAMILY_ALIASES: Readonly<Record<string, string>> = aliasTable({
   // —— D2 批原样（既有 4 条，一字不动）——
@@ -226,6 +340,30 @@ export const FAMILY_ALIASES: Readonly<Record<string, string>> = aliasTable({
   时间: 'TIME',
   日期: 'DAY',
   技能: 'TRAIN',
+  // —— ZH-N 批新增 23 条（顺序 = `ENGINE_FAMILIES` 声明序；`PALAM` / `EX` 见排除台账）——
+  关系: 'RELATION',
+  取得宝珠: 'GOTJUEL',
+  基础上降: 'DOWNBASE',
+  参数上升: 'CUP',
+  参数下降: 'CDOWN',
+  助手: 'ISASSI',
+  角色编号: 'NO',
+  真名: 'NAME',
+  称呼: 'CALLNAME',
+  昵称: 'NICKNAME',
+  主人名: 'MASTERNAME',
+  角色详细标志: 'CDFLAG',
+  金钱: 'MONEY',
+  上升: 'UP',
+  下降: 'DOWN',
+  参数等级: 'PALAMLV',
+  经验等级: 'EXPLV',
+  射精次数: 'EJAC',
+  存档字符串: 'SAVESTR',
+  临时字符串: 'TSTR',
+  设置: 'CONF',
+  怪物标志: 'MFLAG',
+  角色自定变量: 'CHARVAR',
 });
 
 /** `FAMILY_ALIASES` 的反向表（族头 → 中文别名；键统一大写 ⇒ 引擎大小写不敏感） */
@@ -237,13 +375,18 @@ export const FAMILY_ALIASES_REVERSE: Readonly<Record<string, string>> = aliasTab
 
 /**
  * `FAMILY_ALIASES` 的**排除名单**（家族 → 一行理由）：暂不登记的族在此留名，不留白——
- * 全覆盖闸（`tests/family-alias.test.ts`）要求 `FAMILY_LABELS` 每族**要么有别名、要么在此名单
- * 且有理由**，防"悄悄没登记"（增删条目时两张台账对账）。
+ * 全覆盖闸（`tests/family-alias.test.ts`）要求 `ENGINE_FAMILIES`（引擎族全集）**每族
+ * 要么有别名、要么在此名单
+ * 且有理由**，防"悄悄没登记"（增删条目时三张台账对账）。
+ *
+ * 两类理由各有其位：**①撞语言关键字**（作者写了会两义）；**②中文表头形无实证**
+ * （宁缺毋滥——猜一个显示名 = 造一个作者不会写、读者也不认的假词）。
  *
  * 同由 `aliasTable` 造（无原型）：本台账键 = 引擎族头（ASCII 大写），不装作者输入。
  */
 export const FAMILY_ALIAS_EXCLUSIONS: Readonly<Record<string, string>> = aliasTable({
   PALAM: '「参数」是语法层关键字（时机命名参数声明 `参数: ARG`，规范 §3.2）：同词再作族头别名 = 一形两义，宁缺',
+  EX: '中文表头形无实证（本仓语料 / 名表未覆盖该族语义）⇒ 不猜别名；待名表在位后按 CSV 表头补登',
 });
 
 /**
@@ -265,6 +408,52 @@ export function parseChsMap(xml: string): Map<string, string> {
     if (!map.has(k)) map.set(k, v);
   }
   return map;
+}
+
+/**
+ * 槽位名的**词形归一**（JP→CN 词典两侧同一函数 ⇒ "存进去什么形状、查回来就按什么形状"）：
+ * 去 UTF-8 BOM + 去首尾空白。**不做大小写折叠、不做全半角折叠**——本词典的键是**显示词**
+ * （日文/中文，无大小写概念），任何折叠都是在"猜等价"。
+ */
+const normalizeSlotKey = (text: string): string =>
+  (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text).trim();
+
+/**
+ * **JP→CN 槽名词典**（不可变包装）——把 `parseChsMap` 的解析产物升级成一个**可查的公开通道**。
+ *
+ * 以前这张 Map 只喂 `lookup()` 的 `description`（悬停），所以"中文槽名 → 引擎原名"这条路
+ * **在字典外根本不存在** ⇒ 消费方（升糖 / 预览）拿不到。本包装只做三件事：
+ * ①冻结一份**私有 Map**（外部拿不到引用，改不动）；②查询前 `normalizeSlotKey`；
+ * ③查不到 ⇒ `undefined`（**绝不返回原文冒充命中**，与 `familyAlias` 同一条红线）。
+ *
+ * 导出为接口 + 工厂（不依赖 `FileIO` 即可单测，也可被装配代码直接复用）。
+ */
+export interface ChsSlotDictionary {
+  /** 词典在位条目数（0 = 无词典 ⇒ 所有查询恒 `undefined`） */
+  readonly size: number;
+  /** 日文原名 → 中文名；查不到 ⇒ `undefined`（不猜、不回原文） */
+  cnForJp(jpName: string): string | undefined;
+}
+
+/** 由词条（`parseChsMap` 的产物或任意键值对）造只读词典；**同名取首条**（与词典装载一致） */
+export function createChsSlotDictionary(
+  entries: Iterable<readonly [string, string]>,
+): ChsSlotDictionary {
+  const table = new Map<string, string>();
+  for (const [jp, cn] of entries) {
+    const k = normalizeSlotKey(jp);
+    const v = normalizeSlotKey(cn);
+    if (k.length === 0 || v.length === 0) continue;
+    if (!table.has(k)) table.set(k, v);
+  }
+  return {
+    get size(): number {
+      return table.size;
+    },
+    cnForJp(jpName: string): string | undefined {
+      return table.get(normalizeSlotKey(jpName));
+    },
+  };
 }
 
 export interface LoadVariableSchemaOptions {
@@ -591,6 +780,12 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
       log.warn(`变量名汉化词典读取失败（跳过，名称回落原文）：${chsMapPath} — ${String(err)}`);
     }
   }
+  /**
+   * ZH-N 批：同一份词典的**可查通道**（只读包装，喂契约的 `slotCn`）。
+   * `jpToCn` 继续只管 `lookup()` 的 `description`（既有读数一条不改）；本包装是**新增面**，
+   * 词典缺席 / 读失败 ⇒ 空词典 ⇒ 所有查询恒 `undefined`（回落口径与描述轴一致：不猜）。
+   */
+  const chsSlots = createChsSlotDictionary(jpToCn);
 
   log.info(`变量字典：${tables.size} 张名称表（${[...tables.keys()].join(', ')}）`);
 
@@ -696,6 +891,21 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
      */
     familyAliasReverse(family: string): string | undefined {
       return FAMILY_ALIASES_REVERSE[family.toUpperCase()];
+    },
+    /**
+     * 槽位名的 JP→CN 汉化查询（ZH-N；契约 `VariableSchema.slotCn` 的 eraTW 实现）。
+     *
+     * 数据源 = 游戏自带名词典（`plugins/tw_csv_chs.xml`，与 `description` 轴**同一份**，
+     * 装载顺序也同一）。**查不到 ⇒ `undefined`**：绝不把原文返回冒充命中——那会让调用方
+     * 以为"这一行已经是中文"，正好掩盖了"词典缺这一条"。
+     *
+     * **第一参数当前不参与裁决**：本词典是**扁平**的"显示词 → 显示词"表，键侧没有族维度
+     * （引擎 `MAP_FROMXML` 装成一张 `CSV_MAP` 就是这个形状）。留该参数是为了①让消费方按
+     * 族传值而无需先猜哪族有词，②给未来"分族词典"留出**零改动**的落点。**不做**任何
+     * "查不到就换个族 / 换个写法再猜一次"的兜底。
+     */
+    slotCn(_engineFamilyUpper: string, jpName: string): string | undefined {
+      return chsSlots.cnForJp(jpName);
     },
   };
 }

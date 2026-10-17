@@ -31,6 +31,15 @@ export { EMPTY_LIBRARY_TABLE, createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS }
 // D2 批：家族头中文别名表（additive；糖层的写侧/投影侧消费走契约方法 `familyAlias` /
 // `familyAliasReverse`，此处导出纯数据表供**测试**零漂移引用真表，杜绝手抄镜像副本）
 export { FAMILY_ALIASES, FAMILY_ALIASES_REVERSE } from './variable-schema';
+// ZH-N 批：引擎族全集（全覆盖闸分母）+ 显示名表 + 排除台账 + JP→CN 槽名只读词典
+// （additive；消费走契约方法 `slotCn`，此处导出纯数据/工厂供测试零漂移引用真表）
+export {
+  ENGINE_FAMILIES,
+  FAMILY_ALIAS_EXCLUSIONS,
+  FAMILY_LABELS,
+  createChsSlotDictionary,
+  type ChsSlotDictionary,
+} from './variable-schema';
 // 1016 批：数值增减族表（additive；族头 → 目标函数 + 参数序，同形 seam：adapter 建表、糖层只查）
 export { EMPTY_MUTATOR_TABLE, createEratwMutatorTable, ERATW_MUTATOR_FAMILIES } from './mutator-table';
 // 1016 批：计数器值域表（additive；编号 ↔ 中文名，同形 seam：adapter 建表、糖层只查）

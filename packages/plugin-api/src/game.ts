@@ -195,6 +195,27 @@ export interface VariableSchema {
    * 旧实现零改动仍通过编译。
    */
   familyAliasReverse?(family: string): string | undefined;
+  /**
+   * 槽位名的**原文 → 中文名**查询（**可选能力**，additive；契约字段名中性，语义由各
+   * adapter 自行解释）。
+   *
+   * 用途：全中文阅读面上，族头有中文别名（`familyAlias`）只解决了"这一行开头"，
+   * **槽位名本身**（如 `现在:噴乳` 里的 `噴乳`）仍是引擎原文逐字直通 ⇒ 读者看到的还是
+   * 日文。本方法把游戏自带的汉化名词典做成一个**可查通道**，供预览 / 升糖侧问
+   * "这个槽名有没有中文写法"。与 `lookup()` 的 `description` 用**同一份词典**，
+   * 但那条只进悬停、进不了渲染。
+   *
+   * 形状：`engineFamilyUpper` = 引擎族头（大写；供实现按族取词，实现**可以忽略**该参数
+   * ——例如词典本身就是扁平的"显示词 → 显示词"表）；`jpName` = 槽位**原文**。
+   *
+   * 缺省（实现未提供本方法）= **没有中文可写**。查询结果三态必须分清：
+   * - 有登记 → 中文名；
+   * - 查不到 → `undefined`（**绝不返回原文冒充命中**：那会把"词典缺这一条"伪装成
+   *   "这行已经是中文"，正是要根除的 fail-open）；
+   * - 消费方拿到 `undefined` 时原样保留，不做任何猜测（与 `familyAlias` 同一条红线）。
+   * 旧实现零改动仍通过编译、行为与今天逐字相同。
+   */
+  slotCn?(engineFamilyUpper: string, jpName: string): string | undefined;
 }
 
 /**
