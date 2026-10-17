@@ -61,9 +61,33 @@ describe('snapshotFileName / contentHashOf（路径 → 安全文件名）', () 
     expect(snapshotFileName('C:/other/事件.erb')).not.toBe(snapshotFileName('C:/game/事件.erb'));
   });
 
-  it('文件名形态：snap- + 8 位 hex + .txt（无任何路径分隔/保留字符问题）', () => {
-    expect(snapshotFileName(A)).toMatch(/^snap-[0-9a-f]{8}\.txt$/);
-    expect(contentHashOf('x')).toMatch(/^[0-9a-f]{8}$/);
+  it('文件名形态：snap- + 16 位 hex + .txt（无任何路径分隔/保留字符问题）', () => {
+    expect(snapshotFileName(A)).toMatch(/^snap-[0-9a-f]{16}\.txt$/);
+    expect(contentHashOf('x')).toMatch(/^[0-9a-f]{16}$/);
+  });
+});
+
+describe('contentHashOf 64 位判据（哈希拓宽回归）', () => {
+  it('确定性：同一输入反复调用输出逐字一致（零随机零时钟）', () => {
+    const once = contentHashOf('C:\\Game\\ERB\\事件.ERB');
+    expect(contentHashOf('C:\\Game\\ERB\\事件.ERB')).toBe(once);
+    expect(contentHashOf('C:\\Game\\ERB\\事件.ERB')).toBe(once);
+  });
+
+  it('pathKey 语义保持：Windows 大小写/分隔符两写法折叠成同一 64 位判据（折叠住在 snapshotFileName 的 pathKey 预处理，contentHashOf 本身只管确定性散列）', () => {
+    expect(snapshotFileName('C:\\Game\\ERB\\事件.ERB')).toBe(snapshotFileName('c:/game/erb/事件.erb'));
+  });
+
+  it('合成路径集 distinct 计数断言：64 位判据零碰撞（不同路径绝不共用一份快照）', () => {
+    const paths: string[] = [];
+    // 事故形态本体：同目录前缀全同、差异只在短后缀的数千文件（32 位下 ~0.06% 生日碰撞）
+    for (let i = 0; i < 4000; i++) paths.push(`C:\\Game\\ERB\\事件_${i}.ERB`);
+    for (let i = 0; i < 1000; i++) paths.push(`C:/Game/ERB/kei_${i}.erb`);
+    // 单字符名 / 多层级 / 非 ASCII 名
+    for (const c of 'abcdefghijklmnopqrstuvwxyz0123456789') paths.push(`C:\\Game\\ERB\\${c}.ERB`);
+    for (let i = 0; i < 500; i++) paths.push(`D:\\口上\\K${i}\\事件\\#${i}.ERB`);
+    expect(new Set(paths.map(contentHashOf)).size).toBe(paths.length);
+    expect(new Set(paths.map(snapshotFileName)).size).toBe(paths.length);
   });
 });
 

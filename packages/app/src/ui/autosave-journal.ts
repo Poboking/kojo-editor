@@ -77,14 +77,33 @@ export interface JournalIo {
 
 /* ------------------------------ 纯函数 ------------------------------ */
 
-/** FNV-1a 32bit → 8 位 hex：路径 → 安全文件名（无目录分隔/保留字符问题） */
-export function contentHashOf(path: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < path.length; i++) {
-    h ^= path.charCodeAt(i);
+/** FNV-1a 32bit 单 lane（offset-basis 与遍历方向可换——两条独立 lane 的拼法见 `contentHashOf`） */
+function fnv1a32(s: string, basis: number, reverse: boolean): number {
+  let h = basis >>> 0;
+  const n = s.length;
+  for (let i = 0; i < n; i++) {
+    h ^= s.charCodeAt(reverse ? n - 1 - i : i);
     h = Math.imul(h, 0x01000193);
   }
-  return (h >>> 0).toString(16).padStart(8, '0');
+  return h >>> 0;
+}
+
+/**
+ * 路径 → 64 位判据 → 16 位 hex（快照文件名喂的是 `pathKey` 归一形）。
+ *
+ * 为什么必须是 64 位：32 位单 lane 在数千文件的同目录语料下生日碰撞 ~0.06%——碰撞的
+ * 两条路径共用同一份 `snap-<hash>.txt`，崩溃恢复会把 B 的内容装回 A 的 buffer，而纯文本
+ * 快照没有属主信息可校验，串档是静默的。判据 = 两条**独立** FNV-1a 32 位 lane 拼接：
+ * - lane1 正序、标准 offset-basis `0x811c9dc5`；
+ * - lane2 逆序、basis 取 FNV-1a 64 位 offset-basis 的低 32 位 `0x84222325`——同目录文件的
+ *   前缀全同、差异集中在短后缀，逆序让差异**先**进 lane2，两条 lane 对这一真实事故形态
+ *   天然解耦；组合空间 64 位，数千文件规模碰撞概率 ~1e-12。
+ * 纯函数、零随机零时钟：同一输入恒得同一输出（确定性可测）。
+ */
+export function contentHashOf(path: string): string {
+  const hi = fnv1a32(path, 0x811c9dc5, false);
+  const lo = fnv1a32(path, 0x84222325, true);
+  return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
 
 /** 快照文件名：hash 喂 pathKey 归一形（Windows 大小写/分隔符折叠——同一文件两种写法共用一份快照） */
