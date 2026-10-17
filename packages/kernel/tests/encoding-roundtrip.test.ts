@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join as nodeJoin } from 'node:path';
+import { join as nodeJoin, sep as nodeSep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
 import type { FileEncoding } from '@kojo/plugin-api';
@@ -261,9 +261,20 @@ describe.skipIf(!hasCorpus)('编码往返：真实语料全量 golden（KOJO_SMO
       }
 
       expect(files.length).toBeGreaterThan(0);
-      // 基线：口上域全过、0 字节差异。钉值随语料换版重校（2026-10-16：sub-modding 4.980-260326-SANYOUSEI 盘
-      // = 口上 2,294 / 工程 4,394 文件，字节差异 0；旧盘「汉化整合版」为 2,285）。
-      expect(kojoTotal).toBe(2294);
+      // 盘无关不变量（替代旧逐盘常数 2,285 → 2,294：那张校准盘会不在位 ⇒ 常数钉值必假红，见 `899a71b` 同族处置）。
+      // 本测真正守的是「编码/换行往返逐字节等值」，份数只是"扫到的是一张真 eraTW 盘、且口上域归类没坏"的哨兵。
+      expect(kojoTotal, `口上域命中 ${kojoTotal}，低于任何一张 eraTW 盘的口上域规模 ⇒ 归类或扫描根坏了`).toBeGreaterThanOrEqual(
+        1000,
+      );
+      // 自洽：按 root 单独枚举求和 === 上面 startsWith 归类计数（守分隔符/大小写归一与「根不重叠」两条隐含假设）
+      const perRoot = project.kojoPaths.map((root) => {
+        const native = root.replaceAll('/', nodeSep);
+        return existsSync(native) ? walkErb(native).length : 0;
+      });
+      expect(
+        perRoot.reduce((a, b) => a + b, 0),
+        `逐 root 枚举 ${perRoot.join('+')} ≠ 归类计数 ${kojoTotal}：口上根重叠或路径归一化不一致`,
+      ).toBe(kojoTotal);
       expect(diffs).toEqual([]);
 
       await kernel.stop();
