@@ -22,7 +22,7 @@ export interface EditorBoxProps {
   readonly setCellDrafts: (drafts: Record<string, string>) => void;
   readonly cellWindow: number | undefined;
   readonly growCells: (total: number) => void;
-  readonly submitCellFromRow: (index: number[], draft: string, oldValue: number | string) => void;
+  readonly submitCellFromRow: (index: readonly number[], draft: string, oldValue: number | string) => void;
   readonly newIndexDraft: string;
   readonly setNewIndexDraft: (value: string) => void;
   readonly newValueDraft: string;

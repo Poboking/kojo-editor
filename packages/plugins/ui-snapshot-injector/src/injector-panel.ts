@@ -8,7 +8,7 @@
  * `editor-box`、`pending-box`；纯逻辑（目录 / diff / overrides / 窗口）在 `panel-logic.ts`。
  */
 
-import { createElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   PluginContext,
   ProjectService,
@@ -27,16 +27,14 @@ import {
   buildOverrides,
   dedupePending,
   runInjectFlow,
-  listScopes,
   listVars,
   parseCellIndex,
   parseCellInput,
   parseScalarInput,
-  scopeLabel,
+  scopeOptions,
   supersededCount,
   type PendingEdit,
   type ScopeKind,
-  type VarRow,
 } from './panel-logic';
 import { VarList } from './var-list';
 import { renderToolbar, renderPhaseBox } from './panel-frame';
@@ -152,11 +150,21 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     }, [path]);
 
     const varSchema = schemaLookup();
-    const rowsInScope = archive ? listVars(archive, scope) : [];
-    const filtered = varFilter.trim()
-      ? rowsInScope.filter((r) => r.key.toLowerCase().includes(varFilter.trim().toLowerCase()))
-      : rowsInScope;
-    const selected: VarRow | null = selectedKey ? filtered.find((r) => r.key === selectedKey) ?? null : null;
+    // ---- 三处每帧重算的账单收进记忆化（PS-7；面板里除注入外全是只读路径） ----
+    // 变量目录：旧实现每次渲染都 `listVars` ——一个角色块几百个变量、数组变量的单元表
+    // 逐帧重建（改前还逐格深拷贝）。档案实例与作用域对象都不变 ⇒ 复用上一次结果。
+    const rowsInScope = useMemo(() => (archive ? listVars(archive, scope) : []), [archive, scope]);
+    const needle = varFilter.trim().toLowerCase();
+    const filtered = useMemo(
+      () => (needle ? rowsInScope.filter((r) => r.key.toLowerCase().includes(needle)) : rowsInScope),
+      [rowsInScope, needle],
+    );
+    const selected = useMemo(() => (selectedKey ? filtered.find((r) => r.key === selectedKey) ?? null : null), [
+      filtered,
+      selectedKey,
+    ]);
+    // 作用域下拉的标签（一次线性扫描；见 panel-logic 的 scopeOptions）
+    const scopeOpts = useMemo(() => (archive ? scopeOptions(archive) : []), [archive]);
 
     const addPending = (e: PendingEdit): void => {
       setEditError(null);
@@ -183,7 +191,7 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       setScalarDraft('');
     };
 
-    const submitCell = (index: number[], draft: string, oldValue: number | string | null): void => {
+    const submitCell = (index: readonly number[], draft: string, oldValue: number | string | null): void => {
       if (!selected || selected.kind !== 'array') return;
       const isInt = selected.type.startsWith('int-array');
       const parsed = parseCellInput(isInt, draft);
@@ -195,14 +203,15 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
         scope,
         key: selected.key,
         kind: 'cell',
-        index,
+        // 清单是可变数据：到这里才拷贝一次（渲染路径上的单元表全程引用深解析结果，零拷贝）
+        index: [...index],
         oldValue,
         newValue: parsed.value,
       });
     };
 
     /** 单元行「加入清单」：提交后清掉该格草稿（与旧行为一致：解析失败也清） */
-    const submitCellFromRow = (index: number[], draft: string, oldValue: number | string): void => {
+    const submitCellFromRow = (index: readonly number[], draft: string, oldValue: number | string): void => {
       submitCell(index, draft, oldValue);
       const next = { ...cellDrafts };
       delete next[index.join(',')];
@@ -291,11 +300,11 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     if (phaseBox) return phaseBox;
     // panelPhase 判为 ready 即必有解析结果（`hasArchive: archive !== null` 就是同一份
     // 状态，`!hasArchive` 已在 'error' 分支返回 ⇒ 运行时到不了这里）。这一行留着的
-    // 理由是**类型收窄**：下面 `listScopes(archive)` / `scopeLabel(archive, s)` 要非空
-    // 形，去掉它就得换 `archive!`（把可判定的守卫换成不可判定的断言，不划算）。
+    // 理由是**类型收窄**：下面 `renderEditor` 的选中行与作用域下拉的渲染都要非空形，
+    // 去掉它就得换 `archive!`（把可判定的守卫换成不可判定的断言，不划算）。
     if (!archive) return null;
 
-    // 作用域下拉
+    // 作用域下拉（选项与标签取自 `scopeOpts`：一次算好，不再逐帧重扫角色块）
     const scopeSel = createElement('select', {
       className: 'inj-select',
       value: scope.kind === 'char' ? `char:${scope.blockIndex}` : scope.kind,
@@ -310,9 +319,7 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
         else setScope({ kind: 'char', blockIndex: Number(v.slice(5)) });
       },
     },
-      ...listScopes(archive).map((s) =>
-        createElement('option', { key: scopeLabel(archive, s), value: s.kind === 'char' ? `char:${s.blockIndex}` : s.kind },
-          scopeLabel(archive, s))),
+      ...scopeOpts.map((o) => createElement('option', { key: o.value, value: o.value }, o.label)),
     );
 
     // 变量目录（窗口化渲染：初窗 ≤ INITIAL，触底 / 点击「显示更多」按 STEP 追加）

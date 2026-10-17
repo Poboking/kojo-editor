@@ -21,8 +21,8 @@ import {
   moreRowLabel,
   shortPath,
 } from '@kojo/plugin-api';
-import type { AssumedSlot, LocateNotice } from './panel-logic';
-import { groupUnknowns, predWindowSize, summarizeAssumptions } from './panel-logic';
+import type { AssumedSlot, LocateNotice, ReplayAnalysis } from './panel-logic';
+import { analyzeReplay, predWindowSize } from './panel-logic';
 /** 置信度徽章样式 */
 const CONFIDENCE_BADGE: Record<FunctionReplay['confidence'], { label: string; className: string }> = {
   exact: { label: '确定', className: 'rp-badge conf-exact' },
@@ -218,11 +218,17 @@ export function renderReplayPreview(opts: {
   /** 谓词渲染窗口（undefined = 初始窗口）与触底增窗回调（窗口状态归面板壳层持有） */
   predLimit: number | undefined;
   onGrowPreds: (total: number) => void;
+  /**
+   * 面板算好的只读统计（PS-7：`analyzeReplay` 的记忆化产物）。
+   * 给了就直接用；没给（如单测与别的调用方）就地算——呈现结果逐字相同。
+   */
+  analysis?: ReplayAnalysis | null;
 }): ReturnType<typeof createElement> {
   const { result, assumedSlots, emitReveal, renderIcon, notice, predLimit, onGrowPreds } = opts;
   const conf = CONFIDENCE_BADGE[result.confidence];
-  const unknowns = groupUnknowns(result);
-  const impact = summarizeAssumptions(result, assumedSlots);
+  const analysis = opts.analysis ?? analyzeReplay(result, assumedSlots);
+  const unknowns = analysis.unknowns;
+  const impact = analysis.impact;
   /** 高亮只给**对得上来源**的那一次（对不上时不许画出假的"就是这一行"） */
   const atLine = notice && notice.hasRows ? notice.line : null;
 

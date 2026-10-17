@@ -30,7 +30,7 @@
  * 分支折叠区汇总"本结果含 N 个假设参数"。空值 = 未提供（unknown）语义不变。
  */
 
-import { createElement, useCallback, useEffect, useRef, useState } from 'react';
+import { createElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ConditionExtractorService,
   FunctionReplay,
@@ -48,6 +48,7 @@ import type { AssumedSlot, LocateRequest, ReplayScene, SlotOrigin } from './pane
 import {
   DEFAULT_SCENE_ID,
   PRED_WINDOW,
+  analyzeReplay,
   classifySlotValue,
   collectAssumedSlots,
   defaultScene,
@@ -57,7 +58,7 @@ import {
   sanitizeScenes,
   sceneSuggestionName,
   slotKey,
-  suggestFunctions,
+  suggestFunctionNames,
   toCallContext,
 } from './panel-logic';
 import { ASSUME_STYLE, renderReplayPreview, type EmitReveal } from './preview';
@@ -370,11 +371,19 @@ export function createUiStateReplayPlugin(): Plugin {
             : null;
 
         // ---- 函数名提示（条件索引中的名字；子串过滤） ----
+        // PS-7 两处收口：①**逐键打字走 deferred**（口径同导航面板：输入框即时响应，
+        // 三万个名字的扫描只对已落定的查询值跑）；②**不再摊平名字表**——旧写法每次渲染
+        // 先 `[...byFunction.keys()]` 摊一个 3.1 万串的数组（`STATE.md` §二的真语料读数），
+        // 摊平那一步与查询无关，每敲一个字符付一次。迭代器 + 记忆化把两者都省掉。
         const condIndex = extractor.currentIndex();
-        const suggestions =
-          condIndex && fnQuery.trim().length >= 2 && !condIndex.byFunction.has(fnQuery.trim().toUpperCase())
-            ? suggestFunctions([...condIndex.byFunction.keys()], fnQuery, SUGGEST_LIMIT)
-            : [];
+        const deferredFnQuery = useDeferredValue(fnQuery);
+        const suggestions = useMemo(() => {
+          if (!condIndex) return [];
+          const q = deferredFnQuery.trim();
+          if (q.length < 2) return [];
+          if (condIndex.byFunction.has(q.toUpperCase())) return []; // 整名已存在：不给提示
+          return suggestFunctionNames(condIndex.byFunction.keys(), q, SUGGEST_LIMIT);
+        }, [condIndex, deferredFnQuery]);
 
         // ---- 选档/选角色 ----
         const archiveSelect = createElement(
@@ -568,12 +577,30 @@ export function createUiStateReplayPlugin(): Plugin {
 
         // ---- 结果渲染（预览层：状态 → 分支 / 文本预览；实现见 renderReplayPreview） ----
         // 跳转来的那一次（G1）多带一条"这一行"的横幅，并把对应条目滚进视野。
-        const notice = result && resultLocate ? locateNoticeFor(result, resultLocate) : null;
-        let resultBody: ReturnType<typeof createElement> | null = null;
-        if (result) {
-          const emitReveal: EmitReveal = (filePath, line, source) =>
-            ctx.bus.emit('editor.revealLocation', { filePath, line, source: source ?? 'ui-state-replay' });
-          resultBody = createElement(
+        //
+        // PS-7 三格记忆化（**都在组件顶部无条件调用**，早退分支之后不许放 hook）：
+        // - `notice`：`locateNoticeFor` 每次返回新对象 ⇒ 不记忆它，下面那块 memo 每帧都会被顶掉；
+        // - `analysis`：3,732 条谓词的 `groupUnknowns` + 逐条递归 `exprArgSlots` 的
+        //   `summarizeAssumptions`，只依赖「回放结果 × 假设槽」两件 state；
+        // - `resultBody`：整棵谓词行元素树——逐键打字 / 宿主重渲时既不该重算统计、
+        //   也不该把 `predLimit` 行节点重新挂一遍（旧实现每帧重建）。
+        const notice = useMemo(
+          () => (result && resultLocate ? locateNoticeFor(result, resultLocate) : null),
+          [result, resultLocate],
+        );
+        const analysis = useMemo(
+          () => (result ? analyzeReplay(result, resultAssumed) : null),
+          [result, resultAssumed],
+        );
+        const emitReveal = useCallback<EmitReveal>(
+          (filePath, line, source) =>
+            ctx.bus.emit('editor.revealLocation', { filePath, line, source: source ?? 'ui-state-replay' }),
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+          [],
+        );
+        const resultBody: ReturnType<typeof createElement> | null = useMemo(() => {
+          if (!result || !analysis) return null;
+          return createElement(
             'div',
             { ref: resultWrapRef },
             renderReplayPreview({
@@ -584,9 +611,11 @@ export function createUiStateReplayPlugin(): Plugin {
               notice,
               predLimit: predWindow,
               onGrowPreds: growPreds,
+              analysis,
             }),
           );
-        }
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [result, analysis, notice, predWindow, props.renderIcon, emitReveal, growPreds]);
 
         // 滚到"就是这一行"那一条：只在结果与位点同批时做一次，找不到就作罢
         // （谓词窗口至少盖住位点那一条——见 PredicateList 的 mustInclude；

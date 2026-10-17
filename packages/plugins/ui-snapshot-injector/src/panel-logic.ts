@@ -9,6 +9,7 @@
  */
 
 import type {
+  ArchiveArrayCell,
   ArchiveArrayVariable,
   ArchiveCellPatch,
   ArchiveCharacterBlock,
@@ -91,10 +92,16 @@ export interface VarRow {
   preview: string;
   /** scalar 时：当前值 */
   scalarValue?: number | string;
-  /** array 时：非空单元（编辑器数据源；可能被 maxCells 截断的档不可注入） */
-  cells?: ReadonlyArray<{ index: number[]; value: number | string }>;
-  /** array 时：声明维度长度（新单元下标校验用） */
-  saveLen?: number[];
+  /**
+   * array 时：非空单元（编辑器数据源；可能被 maxCells 截断的档不可注入）。
+   *
+   * **引用深解析结果、不是拷贝**（PS-7）：这一列只被读（渲染、按下标找旧值），
+   * 而写侧要的补丁数组在 `applyEdit` 里另建。老实现每行 `cells.map(c => ({index:[...c.index]}))`
+   * 是把「几千个单元 × 每次渲染」的拷贝算在交互路径上——一个 `CHARA:40:100` 就是 4,000 次数组展开。
+   */
+  cells?: readonly ArchiveArrayCell[];
+  /** array 时：声明维度长度（新单元下标校验用；同为引用，零拷贝） */
+  saveLen?: readonly number[];
   /** array 时：cells 不完整（引擎会拒绝该变量注入；目录行显式标记） */
   cellsTruncated?: boolean;
 }
@@ -125,8 +132,9 @@ function toRow(v: ArchiveVariable): VarRow {
     type: arr.type,
     kind: 'array',
     preview: `${arr.nonEmpty} 个非空单元 / ${arr.saveLen.join('×')}`,
-    cells: arr.cells.map((c) => ({ index: [...c.index], value: c.value })),
-    saveLen: [...arr.saveLen],
+    // 引用而非拷贝：目录行与单元编辑器都只读这两列（写侧补丁在 applyEdit 另建数组）
+    cells: arr.cells,
+    saveLen: arr.saveLen,
     cellsTruncated: arr.cellsTruncated === true,
   };
 }
@@ -165,6 +173,32 @@ export function listScopes(archive: SnapshotArchive): ScopeKind[] {
   if (archive.fileType === 'global') out.push({ kind: 'top' });
   else out.push({ kind: 'top' });
   if (archive.fileType === 'normal' || archive.fileType === 'global') out.push({ kind: 'em' });
+  return out;
+}
+
+/** 作用域下拉的一项（`value` = `<option>` 的值，`label` = 作者看到的那句） */
+export interface ScopeOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * 作用域下拉的数据：**一趟线性扫描**出全部选项与标签（PS-7）。
+ *
+ * 旧实现在每次渲染里对每个选项调**两次** `scopeLabel`，每次调用都
+ * `archive.chars.find(...)` 再让 `charaLabel` 扫一遍该块的变量表
+ * ⇒ 每帧 O(块数² × 每块变量数)（角色多的档一次渲染几万次变量名比较，逐键打字都陪着）。
+ * `value` 与顺序与 `listScopes` + 面板那条拼接**逐字同构**（判据不另立一套）。
+ */
+export function scopeOptions(archive: SnapshotArchive): ScopeOption[] {
+  const out: ScopeOption[] = [];
+  if (archive.fileType === 'normal' || archive.fileType === 'charvar') {
+    for (const b of archive.chars ?? []) out.push({ value: `char:${b.index}`, label: charaLabel(b) });
+  }
+  out.push({ value: 'top', label: archive.fileType === 'global' ? '全局变量区' : '主变量区' });
+  if (archive.fileType === 'normal' || archive.fileType === 'global') {
+    out.push({ value: 'em', label: 'EM 扩展区' });
+  }
   return out;
 }
 

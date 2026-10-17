@@ -51,14 +51,14 @@ import {
   cellKeysOfFunction,
   clampDetailHeight,
   clampRowheadWidth,
-  computeViewportWindow,
   createMatrixMemo,
   DETAIL_MIN_H,
   faceLabel,
   functionRangeAt,
   instructionNoOfSlot,
-  MATRIX_OVERSCAN,
-  MATRIX_ROW_H,
+  planMatrixWindow,
+  rowHeightChanged,
+  rowScrollTop,
   ROWHEAD_MIN_W,
   type CharacterIndex,
   type ColumnDesc,
@@ -69,6 +69,7 @@ import {
   type MatrixCell,
   type MatrixCellFunction,
   type MatrixColumnGroup,
+  type MatrixLayout,
   type MatrixRow,
 } from './matrix-logic';
 import { MatrixRowView, type RevealTarget } from './row-view';
@@ -77,13 +78,17 @@ import { renderDetail } from './detail-pane';
 import { createMatrixStore } from './matrix-store';
 import { createAdapterServices } from './adapter-services';
 import { measureColSnap, toggleHandles } from './col-resize';
-import type {
-  ColResizePointer,
-  ColSnap,
-  GridKeyEvent,
-  ScrollBox,
-  ScrollEvent,
-  SplitterPointer,
+import {
+  createSizeWatcher,
+  getFrameScheduler,
+  isFramePending,
+  type ColResizePointer,
+  type ColSnap,
+  type FrameHandle,
+  type FrameScheduler,
+  type GridKeyEvent,
+  type ScrollBox,
+  type SplitterPointer,
 } from './dom-shims';
 
 /** 矩阵行渲染上限（防 DOM 爆炸；过滤后仍受此限）——**仅全量（非视口化）路径** */
@@ -158,14 +163,37 @@ export function createUiConditionMatrixPlugin(): Plugin {
 
         /** 视口化开关（宿主下传；缺省 / false = 改动前的全量渲染路径，逐字不变） */
         const virtualize = props.uiPrefs?.panelVirtualize === true;
-        /** 滚动位置（视口化路径驱动窗口；全量路径恒为 0，不参与渲染） */
+        /** 滚动位置（视口化路径驱动窗口；全量路径恒为 0，不参与渲染）——**按帧合并**后才落到这里 */
         const [scrollTop, setScrollTop] = useState(0);
         /** 滚动容器可视高（视口化路径算窗口用；首帧未量到 → 0，仅画 overscan 行） */
         const [viewportH, setViewportH] = useState(0);
+        /**
+         * **实测**行高（px；null = 还没量到 ⇒ `planMatrixWindow` 回退 `MATRIX_ROW_H`）。
+         *
+         * PS-7 的正确性修复：字号 / 缩放偏好一改，行就比 22px 高，占位块按 22 算会把
+         * 「滚到哪一行」和「画出哪一行」彻底错开。真源是首行的 rect 高，不是常量。
+         */
+        const [measuredRowH, setMeasuredRowH] = useState<number | null>(null);
         /** 跨窗口键盘导航待聚焦的格子（渲染出该格后由 effect 落焦点，绝不聚焦不存在的节点） */
         const pendingFocus = useRef<{ r: number; c: number } | null>(null);
+        /** 上面那笔挂账的**渲染信号**（effect 只在有账时跑，不再每帧空转一次 querySelector） */
+        const [focusPending, setFocusPending] = useState(false);
         /** 当前（过滤后）行数——键盘导航判上界用 */
         const rowCountRef = useRef(0);
+        /** 滚动位置的最新读数（rAF 那帧才抬 state：一帧多次 scroll 事件只重算一次窗口） */
+        const scrollTopRef = useRef(0);
+        const scrollFrameRef = useRef<FrameHandle>(null);
+        /** 尺寸观察器的重量帧（与滚动帧各自一条句柄，卸载时都撤） */
+        const geometryFrameRef = useRef<FrameHandle>(null);
+        /** 逐帧调度器（跨渲染持有同一份；卸载时把排上的帧撤干净） */
+        const frameRef = useRef<FrameScheduler | null>(null);
+        /** 组件是否已卸载（rAF 回调可能比组件活得久；StrictMode 重挂载时由 setup 相位复位） */
+        const unmountedRef = useRef(false);
+        /**
+         * 本帧算出的视口化布局（行高真源）。键盘跨窗跳转要按**同一把尺**把目标行顶到视口上沿，
+         * 自己再乘一个常量就是第二套口径（PS-7 修的就是这第二套）。渲染期镜像，null = 还没布局。
+         */
+        const layoutRef = useRef<MatrixLayout | null>(null);
 
         /** 点击格子：发跳转意图 + 落选中态（稳定引用 → 行 memo 生效） */
         const onCell = useCallback((rowKey: string, columnKey: string, target: RevealTarget | null): void => {
@@ -214,9 +242,14 @@ export function createUiConditionMatrixPlugin(): Plugin {
           const box = scrollRef.current;
           if (!box) return;
           e.preventDefault();
-          box.scrollTop = tr * MATRIX_ROW_H;
+          // 目标行的落点由**同一把尺**算：优先用本帧布局（窗口与占位就是按它排的）；
+          // 首帧还没布局过时按实测行高现算一次——两处都不许自己乘一个常量。
+          const layout = layoutRef.current ?? planMatrixWindow(0, 0, rowCountRef.current, measuredRowH);
+          box.scrollTop = rowScrollTop(layout, tr);
+          scrollTopRef.current = box.scrollTop;
           setScrollTop(box.scrollTop);
           pendingFocus.current = { r: tr, c: tc };
+          setFocusPending(true);
         };
 
         const onSplitDown = (e: SplitterPointer): void => {
@@ -309,6 +342,49 @@ export function createUiConditionMatrixPlugin(): Plugin {
           });
         };
 
+        // 视口化路径：一次读数 = 可视高 + **真实行高**（首行 rect 高）。
+        // 行高不取常量：字号 / 缩放偏好一改，22px 就成了假尺子，占位块与真实行错位
+        // ——滚到第 100 行、画出来的是第 109 行（PS-7 的头号正确性修复）。
+        const readGeometry = (): void => {
+          const box = scrollRef.current;
+          if (!box) return;
+          const h = box.clientHeight;
+          setViewportH((prev) => (prev === h ? prev : h));
+          const row = box.querySelector('tbody tr:not(.cm-spacer)');
+          if (!row) return;
+          const rh = row.getBoundingClientRect().height;
+          // 亚像素抖动不值得一次全表重渲：超过 0.5px 才算"行高变了"（判据在 matrix-logic）
+          setMeasuredRowH((prev) => (rowHeightChanged(prev, rh) ? rh : prev));
+        };
+
+        /** 排一帧重量（同一帧里多次触发只读一次） */
+        const scheduleGeometry = (): void => {
+          if (isFramePending(geometryFrameRef.current)) return;
+          const frame = (frameRef.current ??= getFrameScheduler());
+          geometryFrameRef.current = frame.request(() => {
+            geometryFrameRef.current = null;
+            if (unmountedRef.current) return;
+            readGeometry();
+          });
+        };
+
+        // 视口化路径：滚动**按帧合并**——原生 scroll 事件每帧可来多次，每次抬一次 state
+        // 就是每帧多次全窗口重算。滚动条本身由浏览器画，窗口只须在下一帧跟上。
+        const onScroll = (): void => {
+          const box = scrollRef.current;
+          if (!box) return;
+          scrollTopRef.current = box.scrollTop;
+          if (isFramePending(scrollFrameRef.current)) return;
+          const frame = (frameRef.current ??= getFrameScheduler());
+          scrollFrameRef.current = frame.request(() => {
+            scrollFrameRef.current = null;
+            if (unmountedRef.current) return;
+            const next = scrollTopRef.current;
+            setScrollTop((prev) => (prev === next ? prev : next));
+            readGeometry();
+          });
+        };
+
         useEffect(() => {
           const cb = (): void => force((n) => n + 1);
           store.listeners.add(cb);
@@ -317,40 +393,68 @@ export function createUiConditionMatrixPlugin(): Plugin {
           };
         }, []);
 
-        // 视口化路径：滚动即同步位置并重量可视高（分栏拖动会改变网格区高度）
-        const onScroll = (e: ScrollEvent): void => {
-          const box = e.currentTarget;
-          setScrollTop(box.scrollTop);
-          setViewportH((prev) => (prev === box.clientHeight ? prev : box.clientHeight));
-        };
-
-        // 视口化路径：量滚动容器可视高（首帧为 0 → 只画 overscan 行，量到后下一帧补全）。
-        // 每帧重量：分栏拖动 / 面板改尺寸都会改网格区高度，窗口须随之收放。
+        // 视口化路径：可视高与行高都交给尺寸观察器（分栏拖动 / 面板改尺寸 / 字号 / 缩放一改就重量）。
+        // 观察两处：滚动容器（可视高）与 `<tbody>`（行高一变，表体总高必变）。
+        // `selectedNo` 进依赖是挂载时机：网格只在选中角色后才出现，那一拍 `scrollRef` 才有节点可挂。
         useEffect(() => {
           if (!virtualize) return;
-          const h = scrollRef.current?.clientHeight ?? 0;
-          setViewportH((prev) => (prev === h ? prev : h));
-        });
+          const box = scrollRef.current;
+          if (!box) return;
+          let cancelled = false;
+          const watcher = createSizeWatcher(() => {
+            if (!cancelled) scheduleGeometry();
+          });
+          if (watcher) {
+            watcher.observe(box);
+            const body = box.querySelector('tbody');
+            if (body) watcher.observe(body);
+          }
+          scheduleGeometry(); // 首帧先量一次（观察器只报"变化"，不报初值）
+          return () => {
+            cancelled = true;
+            watcher?.disconnect();
+          };
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [virtualize, selectedNo]);
+
+        // 卸载后不要再抬 state（观察器 / rAF 的回调都可能比组件活得久）
+        useEffect(() => {
+          unmountedRef.current = false; // StrictMode 的"卸载再挂载"要复位
+          return () => {
+            unmountedRef.current = true;
+            const frame = frameRef.current ?? getFrameScheduler();
+            for (const handle of [scrollFrameRef.current, geometryFrameRef.current]) {
+              if (isFramePending(handle)) frame.cancel(handle);
+            }
+            scrollFrameRef.current = null;
+            geometryFrameRef.current = null;
+          };
+        }, []);
 
         // 视口化路径：切换角色 / 改过滤后回到顶部——否则旧滚动位置可能落到新内容的窗口之外
         useEffect(() => {
           if (!virtualize) return;
           const box = scrollRef.current;
           if (box && box.scrollTop !== 0) box.scrollTop = 0;
+          scrollTopRef.current = 0;
           setScrollTop(0);
         }, [virtualize, selectedNo, deferredFilter]);
 
         // 视口化路径：跨窗口键盘导航——目标行滚进视野并重渲后，把焦点落到它的格子上
-        // （未渲染出该格前一直挂账，绝不聚焦不存在的节点）
+        // （有账才查，无账零成本；账本 `focusPending` 是 state ⇒ 重渲到目标行出现为止）
         useEffect(() => {
+          if (!focusPending) return;
           const pf = pendingFocus.current;
-          if (!pf) return;
-          const cell = scrollRef.current?.querySelector(`.cm-cell[data-r="${pf.r}"][data-c="${pf.c}"]`);
-          if (cell) {
-            cell.focus();
-            pendingFocus.current = null;
+          if (!pf) {
+            setFocusPending(false);
+            return;
           }
-        });
+          const cell = scrollRef.current?.querySelector(`.cm-cell[data-r="${pf.r}"][data-c="${pf.c}"]`);
+          if (!cell) return; // 还没渲染出这一格：继续挂账，绝不聚焦不存在的节点
+          cell.focus();
+          pendingFocus.current = null;
+          setFocusPending(false);
+        }, [focusPending, scrollTop, viewportH, measuredRowH]);
 
         /* --------- C1 反向下行：光标位点 → 矩阵高亮（判据全在 matrix-logic 的纯函数） --------- */
 
@@ -423,6 +527,17 @@ export function createUiConditionMatrixPlugin(): Plugin {
           cells: ReadonlyMap<string, string>;
         } | null>(null);
 
+        /** 角色下拉的手工记忆化仓（键 = 角色索引实例 + 角色名字典；见下方构建处） */
+        const charasCacheRef = useRef<{
+          idx: CharacterIndex;
+          charaIndex: unknown;
+          count: number;
+          options: ReactNode[];
+        } | null>(null);
+
+        /** 过滤后行清单的手工记忆化仓（键 = 矩阵 + 过滤词；滚动帧不再重扫几千行） */
+        const rowsFilterRef = useRef<{ matrix: ConditionMatrix; needle: string; rows: MatrixRow[] } | null>(null);
+
         // 失败态优先：显示原因 + 重试（不静默停在占位）。可见文案给**中文原因**，
         // 原始错误串留在悬停 title 里——技术信息不丢，但不是甩给作者的第一眼。
         if (store.loadError) {
@@ -464,14 +579,35 @@ export function createUiConditionMatrixPlugin(): Plugin {
           );
         }
 
-        const charas = [...idx.entries.values()].sort((a, b) => a.no - b.no);
         const entry = selectedNo === null ? null : idx.entries.get(selectedNo) ?? null;
 
-        /** 角色下拉标签：`K{no} {name}` / `K{no}` 再缀函数数 */
-        const charaLabel = (no: number, count: number): string => {
-          const info = current.charaIndex.get(no);
-          return `${info ? `K${no} ${info.name}` : `K${no}`}（${count}）`;
-        };
+        /**
+         * 角色下拉的**记忆化**产物（PS-7）：角色索引实例与角色名字典都不变时，
+         * 排序与 ~250 枚 `<option>` 一次构建、逐帧复用。
+         *
+         * 此前每帧都 `[...entries.values()].sort()` + 重建整串 option——滚动按帧重渲时
+         * 这笔开销与矩阵内容毫无关系（键入过滤词也要陪葬）。手工记忆而非 `useMemo`：
+         * 它在早退分支之后，hook 不能放那儿（同 `cursorCellsRef` 的口径）。
+         */
+        const charasCache = charasCacheRef.current;
+        let charasMemo = charasCache;
+        if (!charasMemo || charasMemo.idx !== idx || charasMemo.charaIndex !== current.charaIndex) {
+          const charas = [...idx.entries.values()].sort((a, b) => a.no - b.no);
+          /** 角色下拉标签：`K{no} {name}` / `K{no}` 再缀函数数 */
+          const labelOf = (no: number, count: number): string => {
+            const info = current.charaIndex.get(no);
+            return `${info ? `K${no} ${info.name}` : `K${no}`}（${count}）`;
+          };
+          charasMemo = {
+            idx,
+            charaIndex: current.charaIndex,
+            count: charas.length,
+            options: charas.map((c) =>
+              createElement('option', { key: c.no, value: String(c.no) }, labelOf(c.no, c.functions.length)),
+            ),
+          };
+          charasCacheRef.current = charasMemo;
+        }
 
         const charaSelect = createElement(
           'select',
@@ -484,10 +620,8 @@ export function createUiConditionMatrixPlugin(): Plugin {
               setSelected(null);
             },
           },
-          createElement('option', { key: '', value: '' }, `选择角色（${charas.length}）`),
-          ...charas.map((c) =>
-            createElement('option', { key: c.no, value: String(c.no) }, charaLabel(c.no, c.functions.length)),
-          ),
+          createElement('option', { key: '', value: '' }, `选择角色（${charasMemo.count}）`),
+          ...charasMemo.options,
         );
 
         const filterInput = createElement('input', {
@@ -519,7 +653,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const status = createElement(
           'div',
           { className: 'cm-status dim' },
-          `${idx.totalFunctions} 函数 · ${charas.length} 角色` +
+          `${idx.totalFunctions} 函数 · ${charasMemo.count} 角色` +
             (idx.hasFamilyIndex ? ` · 未归属 ${idx.orphanCount}` : ' · 适配器未提供家族规则'),
         );
 
@@ -562,11 +696,20 @@ export function createUiConditionMatrixPlugin(): Plugin {
           grid = createElement('div', { className: 'cm-empty dim' }, '该角色尚未抽取到状态条件（无状态依赖）');
         } else {
           const needle = deferredFilter.trim().toLowerCase();
-          const rows = needle
-            ? matrix.rows.filter(
-                (r) => r.key.toLowerCase().includes(needle) || (r.label ?? '').toLowerCase().includes(needle),
-              )
-            : matrix.rows;
+          // 过滤清单记忆化（PS-7）：矩阵与过滤词都不变 ⇒ 复用上一次结果，
+          // 滚动帧（每帧一次重渲）不再逐帧扫几千行、也不再产出新数组（行 memo 据此保持稳定）。
+          const rowsCache = rowsFilterRef.current;
+          let rows: MatrixRow[];
+          if (rowsCache && rowsCache.matrix === matrix && rowsCache.needle === needle) {
+            rows = rowsCache.rows;
+          } else {
+            rows = needle
+              ? matrix.rows.filter(
+                  (r) => r.key.toLowerCase().includes(needle) || (r.label ?? '').toLowerCase().includes(needle),
+                )
+              : [...matrix.rows];
+            rowsFilterRef.current = { matrix, needle, rows };
+          }
           const groups = matrix.groups;
           // 键盘导航上界：当前（过滤后）行数——跨窗口纵向移动时判「是否越过末行」
           rowCountRef.current = rows.length;
@@ -590,7 +733,10 @@ export function createUiConditionMatrixPlugin(): Plugin {
           if (virtualize) {
             // 视口化：只渲染可见窗口（+上下 overscan），两段占位还原完整滚动高度——
             // 全部行都可浏览、可键盘到达，不再受 400 行上限约束。
-            const win = computeViewportWindow(scrollTop, viewportH, MATRIX_ROW_H, rows.length, MATRIX_OVERSCAN);
+            // 行高走**实测值**（`planMatrixWindow` 内部收敛），窗口 / 占位 / 键盘跳转共用同一把尺。
+            const layout = planMatrixWindow(scrollTop, viewportH, rows.length, measuredRowH);
+            layoutRef.current = layout;
+            const win = layout.win;
             body = createElement(
               'tbody',
               { key: 'bd' },
@@ -610,6 +756,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
               spacerRow(win.bottomPad, 'pad-bottom', colCount + 1),
             );
           } else {
+            layoutRef.current = null; // 全量路径没有窗口可言：清掉别让键盘拿旧尺子
             const shown = rows.slice(0, ROW_RENDER_CAP);
             body = createElement(
               'tbody',
@@ -636,9 +783,11 @@ export function createUiConditionMatrixPlugin(): Plugin {
             }
           }
 
-          // 网格区 CSS 变量：行高常量唯一真源（视口化路径用）+ 首列拖拽宽度（HK-25，拖过才设）
+          // 网格区 CSS 变量：行高常量唯一真源（视口化路径用）+ 首列拖拽宽度（HK-25，拖过才设）。
+          // 这里的"真源"是**实测**行高（`layoutRef` 那次算出来的同一个值）——写常量就等于
+          // 让 CSS 钉一个尺子、窗口数学按另一个尺子算，正是 PS-7 之前的错位。
           const gridStyle: Record<string, string> = {};
-          if (virtualize) gridStyle['--cm-row-h'] = `${MATRIX_ROW_H}px`;
+          if (virtualize && layoutRef.current) gridStyle['--cm-row-h'] = `${layoutRef.current.rowHeight}px`;
           // 定宽接管期由 `<colgroup>` 第 0 个 col 承接首列宽 ⇒ 不再设 var（设了会按继承失效整棵子树）。
           // 未接管（无有效快照）时仍走 var：这是「换角色后仍保留拖过的宽度」的唯一通道。
           if (rowheadW !== null && activeSnap === null) gridStyle['--cm-rowhead-w'] = `${rowheadW}px`;
