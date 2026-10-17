@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { CJK_AMBIGUOUS_WHITELIST, CJK_WORD_PATTERN, CJK_WORD_SEPARATORS } from '../src/monaco/word-separators';
-import { CJK_TYPING_BASELINE, editorOptionsForLineCount } from '../src/ui/editor-options';
+import { CJK_TYPING_BASELINE, editorOptionsForLineCount, quickSuggestionsFor } from '../src/ui/editor-options';
 import type * as Monaco from '../src/monaco/entry';
 
 /**
@@ -137,11 +137,14 @@ describe('unicodeHighlight（中文标点零标红 + 同形异义告警保留）
 });
 
 describe('quickSuggestions 形态（纯函数配置面）', () => {
-  it('大小文件两档都是 quickSuggestions:false——候选弹窗只留触发字与手动 Ctrl+Space', () => {
-    expect(CJK_TYPING_BASELINE.quickSuggestions).toBe(false);
+  it('所有档位都是代码位快建议、注释/字符串关；只读整条关', () => {
+    const codeSuggestions = { other: true, comments: false, strings: false };
+    expect(CJK_TYPING_BASELINE.quickSuggestions).toEqual(codeSuggestions);
     for (const n of [10, 500, 100_000]) {
-      expect(editorOptionsForLineCount(n).quickSuggestions).toBe(false);
+      expect(editorOptionsForLineCount(n).quickSuggestions).toEqual(codeSuggestions);
       expect(editorOptionsForLineCount(n).wordSeparators).toBe(CJK_WORD_SEPARATORS);
     }
+    expect(quickSuggestionsFor(false)).toEqual(codeSuggestions);
+    expect(quickSuggestionsFor(true)).toBe(false);
   });
 });

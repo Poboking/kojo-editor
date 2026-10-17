@@ -30,14 +30,30 @@ export type EditorProfileTier = 'small' | 'large' | 'huge';
 export type EditorOptionPatch = Monaco.editor.IEditorOptions & Monaco.editor.IGlobalEditorOptions;
 
 /**
+ * 全局快建议（QSUG-1，2026-10-18 用户点名）：**代码位边打字边弹**，注释 / 字符串不弹。
+ *
+ * 与 VSCode 默认口径对齐：`other:true`，`comments:false`，`strings:false`。
+ * 台词 / 旁白不是 Monaco 的语法概念（`.kojo` 里它们是 `text` / `heartText` 行），
+ * 由 `.kojo` 装配的 `locate` 门为零候选（`kojo-suggest-gate.ts`）——不在 Monaco 选项里
+ * 靠字符猜。只读 / 糖预览由宿主把 `quickSuggestions` 整条关掉（`EditorPane` 的
+ * `applyEditabilityAndSuggest`），因为 provider 拿不到 editor 的可写状态。
+ *
+ * `wordBasedSuggestions` 仍为 `off`：那一路给的是文档词，不是上下文补全，中文正文里
+ * 只会把台词词当候选混进来。
+ */
+export const QUICK_SUGGESTIONS = { other: true, comments: false, strings: false } as const;
+
+/** 只读编辑器整条关掉快建议；可写编辑器用 {@link QUICK_SUGGESTIONS}（纯函数，可单测） */
+export function quickSuggestionsFor(readOnly: boolean): EditorOptionPatch['quickSuggestions'] {
+  return readOnly ? false : QUICK_SUGGESTIONS;
+}
+
+/**
  * 中文语料的打字噪声 / 选词基线（A2+A3，**所有档位同值**）：
  * 既 spread 进 `editorOptionsForLineCount`（切文件路径），也 spread 进 EditorPane 的 create options。
  *
- * - `quickSuggestions:false`——两个补全 provider 在任何 token 上下文都无门槛地返回候选
- *   （`mergeSuggestions` 不做 token 判定），台词行连打必然弹无关列表；而显式触发字符
- *   （`{` `：` `#` `[`）走 `suggestModel._updateTriggerCharacters`（受
- *   `suggestOnTriggerCharacters` 而非 quickSuggestions 门控）、Ctrl+Space 走手动 trigger，
- *   两条路都不受影响（monaco 0.57 `suggest/browser/suggestModel.js` 已核）。
+ * - `quickSuggestions`——代码位开、注释 / 字符串关（见 {@link QUICK_SUGGESTIONS}）；
+ *   `.kojo` 台词 / 旁白 / 注释由装配侧代码门清零，不靠 Monaco 分词猜。
  * - `unicodeHighlight`——monaco 公开面没有 VS Code 的 `'neverVisible'` 词汇，
  *   `nonBasicASCII:false` 即等价；歧义字符**保持告警**（西里尔等真同形异义照标），
  *   常用中文标点由 `allowedLocales`(zh) + `allowedCharacters`(白名单) 双保险排除
@@ -47,7 +63,7 @@ export type EditorOptionPatch = Monaco.editor.IEditorOptions & Monaco.editor.IGl
  *   charCode≥256 走 Map 分支，全角标点真实生效）。
  */
 export const CJK_TYPING_BASELINE: EditorOptionPatch = {
-  quickSuggestions: false,
+  quickSuggestions: QUICK_SUGGESTIONS,
   wordSeparators: CJK_WORD_SEPARATORS,
   unicodeHighlight: {
     nonBasicASCII: false,

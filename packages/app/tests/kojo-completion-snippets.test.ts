@@ -162,9 +162,9 @@ describe('kojo-snippet source · 块头模板', () => {
   });
 
   it('系统函数调用模板：`获取标记` → `获取标记($1)$0` + InsertAsSnippet', () => {
-    // col 2（行首 token 内）而非 col 1：col 1 是"光标前无内容"的空位，K2 位置门词表不供
-    // （该位只有 R4 块头模板的场子）；系统函数模板在行首 token 内照常出货。
-    const items = provide(provider, '获取标记', '获取标记', 2);
+    // QSUG-1：裸 `获取标记` 行在糖词法里是文本行（台词/旁白），快建议门已整轮清零；
+    // 系统函数只在表达式位出货，故用赋值行（行首裸函数名本来不是合法调用形态）。
+    const items = provide(provider, '如果 获取标记', '获取标记', 8);
     const fn = items.find((i) => labelText(i.label) === '获取标记');
     expect(fn!.insertText).toBe('获取标记($1)$0');
     expect(fn!.insertTextRules).toBe(4);

@@ -135,11 +135,11 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
     for (const n of ALL_TIERS_SAMPLES) {
       const o = editorOptionsForLineCount(n);
       expect(o, repr(n)).toMatchObject(CJK_TYPING_BASELINE);
-      expect(o.quickSuggestions, repr(n)).toBe(false);
+      expect(o.quickSuggestions, repr(n)).toEqual({ other: true, comments: false, strings: false });
       expect(o.wordSeparators, repr(n)).toBe(CJK_TYPING_BASELINE.wordSeparators);
       expect(o.unicodeHighlight, repr(n)).toEqual(CJK_TYPING_BASELINE.unicodeHighlight);
     }
-    expect(CJK_TYPING_BASELINE.quickSuggestions).toBe(false);
+    expect(CJK_TYPING_BASELINE.quickSuggestions).toEqual({ other: true, comments: false, strings: false });
     expect(CJK_TYPING_BASELINE.wordSeparators).toContain('，');
     expect(CJK_TYPING_BASELINE.wordSeparators).toContain('：');
     expect(CJK_TYPING_BASELINE.unicodeHighlight?.allowedCharacters?.['，']).toBe(true);

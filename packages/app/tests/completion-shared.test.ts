@@ -570,12 +570,13 @@ describe('COMPL-SHARED ⑦ · 全角分隔的声明名经装配路径进候选',
     expect(items.find((i) => i.label === '上限值')?.detail).toBe('常量（本文件）');
   });
 
-  it('反例：注释行里的全角形态声明仍不进候选（以解析器为准）', () => {
+  it('反例：注释行里既不进假声明，也不整轮出货（QSUG-1 注释行清零）', () => {
     const { monaco, registered } = stubMonaco();
     installKojoCompletion(monaco, () => ({}));
     const at = labels(provide(registered[0]!.provider, ';　别名　假声明 = 角色 1\n', 1));
     expect(at).not.toContain('假声明');
-    expect(at.length).toBeGreaterThan(0);
+    // QSUG-1：注释行由 `kojo-suggest-gate` 整轮置空（快建议 / 手动补全同门）
+    expect(at).toHaveLength(0);
   });
 });
 

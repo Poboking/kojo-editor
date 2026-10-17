@@ -10,6 +10,7 @@ import {
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
 import { ERB_COMPLETION_ASSEMBLY, resolveErbCompletionDetail } from './erb-completion';
 import { kojoNativeZoneAt } from './kojo-native-zone';
+import { kojoCodePositionAt } from './kojo-suggest-gate';
 import { variableCompletionItems } from './kojo-completion-variables';
 import { faceCompletionItems } from './kojo-completion-faces';
 import {
@@ -565,6 +566,10 @@ export const KOJO_COMPLETION_ASSEMBLY: CompletionAssembly = {
     return kojoNativeZoneAt(model, position.lineNumber) ? ERB_COMPLETION_ASSEMBLY : undefined;
   },
   locate(_monaco, model, position) {
+    // QSUG-1：`quickSuggestions` 全局打开后每次键入都会走到这里。台词 / 旁白 / 注释行
+    // 整轮零候选（判据在 kojo-suggest-gate.ts；不在 Monaco 选项里靠字符白名单猜）。
+    const line = lineAt(model, position.lineNumber);
+    if (!kojoCodePositionAt(line, position.column)) return undefined;
     return { range: kojoCompletionRange(model, position), prefix: model.getWordUntilPosition(position).word };
   },
   resolveDetail(item, provenance) {

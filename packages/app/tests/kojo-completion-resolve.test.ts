@@ -289,11 +289,12 @@ describe('C-2 · 反查登记表（WeakMap 按对象身份，不挂私有字段�
     expect(i).toContain('310');
     expect(i).toContain('编号反查');
 
-    const l = docValue(resolveItem(provider, pick(provide(provider, LIB_CN, 5), LIB_CN))) ?? '';
+    // QSUG-1：行首裸标识符是文本行（会被当旁白打印），库函数 / 系统函数只在表达式位出货
+    const l = docValue(resolveItem(provider, pick(provide(provider, `她的心情 = ${LIB_CN}`, 12), LIB_CN))) ?? '';
     expect(l).toContain('HPH_PRINT');
     expect(l).toContain(`调用签名 \`${LIB_CN}(ARG:0 事件子参数, ARGS:1 文本)\``);
 
-    const s = docValue(resolveItem(provider, pick(provide(provider, '获取标记', 5), '获取标记'))) ?? '';
+    const s = docValue(resolveItem(provider, pick(provide(provider, '如果 获取标记', 8), '获取标记'))) ?? '';
     expect(s).toContain('原生名 `GETBIT`');
   });
 });
@@ -366,14 +367,14 @@ describe('C-2 · 函数候选插成带 tabstop 的 snippet', () => {
 
   it(`协议认得 ⇒ \`${LIB_CN}(\` 改写成 \`${LIB_CN}(\${1:ARG:0 事件子参数}, \${2:ARGS:1 文本})\` + InsertAsSnippet`, () => {
     const { provider } = withProtocol();
-    const item = pick(provide(provider, LIB_CN, 5), LIB_CN);
+    const item = pick(provide(provider, `她的心情 = ${LIB_CN}`, 12), LIB_CN);
     expect(item.insertText).toBe(`${LIB_CN}(\${1:ARG:0 事件子参数}, \${2:ARGS:1 文本})`);
     expect(item.insertTextRules).toBe(4);
   });
 
   it('协议声明"零槽"（空数组）⇒ `名字()`：这是事实，不是猜', () => {
     const { provider } = withProtocol();
-    const item = pick(provide(provider, '无槽', 3), '无槽');
+    const item = pick(provide(provider, '她的心情 = 无槽', 10), '无槽');
     expect(item.insertText).toBe('无槽()');
     expect(item.insertTextRules).toBe(4);
   });
@@ -381,7 +382,7 @@ describe('C-2 · 函数候选插成带 tabstop 的 snippet', () => {
   it('退化一：callProtocol 缺席 ⇒ 纯文本 `名字(`、不带 insertTextRules', () => {
     const { monaco, registered } = stubMonaco();
     installKojoCompletion(monaco, () => ({ ...FULL, callProtocol: undefined }));
-    const item = pick(provide(registered[0]!.provider, LIB_CN, 5), LIB_CN);
+    const item = pick(provide(registered[0]!.provider, `她的心情 = ${LIB_CN}`, 12), LIB_CN);
     expect(item.insertText).toBe(`${LIB_CN}(`);
     expect(item.insertTextRules).toBeUndefined();
   });
@@ -389,7 +390,7 @@ describe('C-2 · 函数候选插成带 tabstop 的 snippet', () => {
   it('退化二：协议不认这个函数（slotsFor → null）⇒ 纯文本', () => {
     const { monaco, registered } = stubMonaco();
     installKojoCompletion(monaco, () => ({ ...FULL, callProtocol: { slotsFor: () => null } }));
-    const item = pick(provide(registered[0]!.provider, LIB_CN, 5), LIB_CN);
+    const item = pick(provide(registered[0]!.provider, `她的心情 = ${LIB_CN}`, 12), LIB_CN);
     expect(item.insertText).toBe(`${LIB_CN}(`);
     expect(item.insertTextRules).toBeUndefined();
   });
@@ -397,7 +398,7 @@ describe('C-2 · 函数候选插成带 tabstop 的 snippet', () => {
   it('退化三：协议求槽抛错 ⇒ 纯文本且不崩（整轮候选照常出货）', () => {
     const { monaco, registered } = stubMonaco();
     installKojoCompletion(monaco, () => FULL);
-    const items = provide(registered[0]!.provider, '坏表', 3);
+    const items = provide(registered[0]!.provider, '她的心情 = 坏表', 10);
     const item = pick(items, '坏表');
     expect(item.insertText).toBe('坏表(');
     expect(item.insertTextRules).toBeUndefined();
@@ -407,7 +408,7 @@ describe('C-2 · 函数候选插成带 tabstop 的 snippet', () => {
   it('退化四：桩 monaco 拿不到 InsertAsSnippet 枚举 ⇒ 不改写（不硬编码数字）', () => {
     const { monaco, registered } = stubMonaco({ insertTextRule: false });
     installKojoCompletion(monaco, () => FULL);
-    const item = pick(provide(registered[0]!.provider, LIB_CN, 5), LIB_CN);
+    const item = pick(provide(registered[0]!.provider, `她的心情 = ${LIB_CN}`, 12), LIB_CN);
     expect(item.insertText).toBe(`${LIB_CN}(`);
     expect(item.insertTextRules).toBeUndefined();
   });
@@ -415,7 +416,7 @@ describe('C-2 · 函数候选插成带 tabstop 的 snippet', () => {
   it('作者已经自己写了左括号 ⇒ 不 snippet 化；insertText 收回纯名字（否则落字 `名字((` 非法）', () => {
     const { provider } = withProtocol();
     // 光标停在名字与作者已写的 `(` **之间**：候选替换区间右端紧邻的就是那个 `(`
-    const item = pick(provide(provider, `${LIB_CN}(`, 5), LIB_CN);
+    const item = pick(provide(provider, `她的心情 = ${LIB_CN}(`, 12), LIB_CN);
     // 接受候选 = 纯名字填入（作者那枚 `(` 原地保留）⇒ 落字 `${LIB_CN}(`；旧形态叠成 `${LIB_CN}((`
     expect(item.insertText).toBe(LIB_CN);
     expect(item.insertTextRules).toBeUndefined();

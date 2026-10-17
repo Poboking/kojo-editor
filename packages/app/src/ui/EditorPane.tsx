@@ -32,7 +32,7 @@ import {
 } from './save-coordinator';
 import { loadFormatOnSavePref } from './format-pref';
 import { applyNameColorPref, subscribeNameColorPref } from './semantic-color-pref';
-import { loadSuggestDelayPref } from './suggest-pref';
+import { loadSuggestDelayPref, subscribeSuggestDelayPref } from './suggest-pref';
 import {
   applyFontSizePref,
   applyFontZoomPref,
@@ -53,7 +53,13 @@ import {
 } from './breadcrumb-path';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
-import { CJK_TYPING_BASELINE, FIND_BASELINE, LARGE_FILE_LINES, editorOptionsForLineCount } from './editor-options';
+import {
+  CJK_TYPING_BASELINE,
+  FIND_BASELINE,
+  LARGE_FILE_LINES,
+  editorOptionsForLineCount,
+  quickSuggestionsFor,
+} from './editor-options';
 import { CODE_FONT_BASELINE } from './code-font'; // 编程字体单一真源（与 styles.css 的 --font-code 逐字同一条栈）
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
@@ -123,6 +129,21 @@ registerKojoLanguage(monaco);
 const MARKER_OWNER = 'kojo-decorators';
 /** 编辑停顿多久后重算装饰（避免每击键跑一遍转译） */
 const MARKER_DEBOUNCE_MS = 250;
+
+/**
+ * 只读态与快建议**同拍**落 Monaco 选项。
+ *
+ * `readOnly` 只拦编辑，不拦 suggest；provider 又拿不到 editor 的可写状态 ⇒ 只读文件 /
+ * 糖预览若不在这里把 `quickSuggestions` 关掉，全局快建议照样会弹。延迟与设置页同源
+ * （`loadSuggestDelayPref`），保证「补全弹出延迟」对 Monaco 快建议与宿主主动触发同时生效。
+ */
+function applyEditabilityAndSuggest(ed: Monaco.editor.IStandaloneCodeEditor, readOnly: boolean): void {
+  ed.updateOptions({
+    readOnly,
+    quickSuggestions: quickSuggestionsFor(readOnly),
+    quickSuggestionsDelay: loadSuggestDelayPref(),
+  });
+}
 
 /**
  * 就近征询**保存接管者**（槽 `ui.editor.saveHandler`，2026-10-12 批）：返回
@@ -652,7 +673,7 @@ export function EditorPane({
           // 按当前文件重算 readOnly（解锁 / 直连 / 工作区口径与切换标签 effect 一致）
           const path = filePathRef.current;
           const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
-          ed.updateOptions({ readOnly: erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }) });
+          applyEditabilityAndSuggest(ed, erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }));
           sugarModel.dispose();
         } else {
           return; // 无处可还原：保留挂载、不 dispose，至少不白屏
@@ -755,6 +776,9 @@ export function EditorPane({
     ed.updateOptions({
       readOnly: true, // 糖是派生物，禁止在糖视图上编辑
       ...editorOptionsForLineCount(sugarModel.getLineCount()),
+      // 预览是派生只读 model：快建议整条关掉（provider 拿不到 editor 的可写状态）
+      quickSuggestions: false,
+      quickSuggestionsDelay: loadSuggestDelayPref(),
     });
     ed.setModel(sugarModel);
     setSugarStats(sugarSummary(sugarLines, 0));
@@ -775,7 +799,7 @@ export function EditorPane({
     const p = filePathRef.current;
     if (!ed || !p) return;
     const canEdit = unlockedPathsRef.current.has(p) || directEditable(p);
-    ed.updateOptions({ readOnly: erbReadOnlyGate(p, { inWorkspace: inWorkspace(p), canEdit }) });
+    applyEditabilityAndSuggest(ed, erbReadOnlyGate(p, { inWorkspace: inWorkspace(p), canEdit }));
     applySugarView();
   }, [directMode, kernel, applySugarView]);
 
@@ -1330,6 +1354,8 @@ export function EditorPane({
       ...CODE_FONT_BASELINE,
       // 中文打字噪声 / 选词基线（A2+A3）：与切文件降级集同源（editor-options.ts）
       ...CJK_TYPING_BASELINE,
+      // 快建议延迟与设置页同源；只读 / 预览的关闭由切文件与糖视图两处 updateOptions 覆盖
+      quickSuggestionsDelay: loadSuggestDelayPref(),
       // find 体验基线（A7）：create 与切文件两条路径都要带上，吞一条就是档位漂移
       ...FIND_BASELINE,
     });
@@ -1380,6 +1406,11 @@ export function EditorPane({
       applyFontZoomPref(monaco.editor.EditorZoom);
     });
     const fontZoomSync = monaco.editor.EditorZoom.onDidChangeZoomLevel((level) => setFontZoomPref(level));
+    // 补全弹出延迟（QSUG-1）：同一份偏好既喂宿主观察者（每次排程现读），也喂 Monaco 的
+    // quickSuggestionsDelay；设置页一改立即重发，不用重开文件。
+    const suggestDelayUnsub = subscribeSuggestDelayPref(() => {
+      ed.updateOptions({ quickSuggestionsDelay: loadSuggestDelayPref() });
+    });
     // 焦点上抛（SPLIT-1）：编辑器聚焦 ⇒ 宿主把焦点组切到本组（点哪组哪组成为焦点组）
     const focusDisposer = ed.onDidFocusEditorText(() => {
       setPaneFocused(paneId); // 模块级焦点随编辑器焦点走（跳转探针读"最后聚焦的实例"）
@@ -1470,6 +1501,7 @@ export function EditorPane({
       nameColorUnsub();
       fontSizeUnsub();
       fontZoomSync.dispose();
+      suggestDelayUnsub();
       focusDisposer.dispose();
       crumbCursorSub.dispose();
       crumbModelSub.dispose();
@@ -1684,9 +1716,13 @@ export function EditorPane({
       // 下渲染一帧（大文件降级清单见 editor-options.ts）。
       const allowEdit = unlockedPathsRef.current.has(filePath) || directEditable(filePath);
       setUnlocked(allowEdit);
+      const readOnly = erbReadOnlyGate(filePath, { inWorkspace: inWorkspace(filePath), canEdit: allowEdit });
       ed.updateOptions({
-        readOnly: erbReadOnlyGate(filePath, { inWorkspace: inWorkspace(filePath), canEdit: allowEdit }),
+        readOnly,
         ...editorOptionsForLineCount(entry.model.getLineCount()),
+        // 体量档位也会带 quickSuggestions（代码位开）；只读必须在这里整条盖掉
+        quickSuggestions: quickSuggestionsFor(readOnly),
+        quickSuggestionsDelay: loadSuggestDelayPref(),
       });
       ed.setModel(entry.model);
       const vs = viewStatesRef.current.get(filePath);
@@ -1729,7 +1765,7 @@ export function EditorPane({
       // （ADR-0005 给糖组的适配项——别把写保护铁律的代价转嫁到正常操作上）。
       // 回锁时若直连开门仍应保持可编辑（直连是独立的可编辑来源）。
       const canEdit = allowEdit || directEditable(path);
-      ed.updateOptions({ readOnly: erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }) });
+      applyEditabilityAndSuggest(ed, erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }));
       // 解锁 → 糖视图必须让位（原文要看得见）；回锁 → 重新生成糖视图
       applySugarView();
     },
