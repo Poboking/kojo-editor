@@ -7596,3 +7596,521 @@ button.resume-session {
   background: var(--accent);
   transition: width var(--dur-2) var(--ease-out);
 }
+
+/* ===== 设置浮层左导航栏（b/kbset/1017 批次独占追加区块：settings-nav-*） ===== */
+/* 外壳改「左导航栏 + 右分节面板」后浮层要更宽更高：尺寸一律走 CSS 变量（不散字面量）。
+   这条 .settings-host 只覆盖宽度 / 高度 / 定位，不改动上方既有 .settings-* 规则本体。 */
+.settings-host {
+  --settings-host-w: 920px;
+  --settings-host-max-w: 94vw;
+  --settings-host-max-h: 780px;
+  --settings-nav-w: 184px;
+  position: relative;
+  width: min(var(--settings-host-w), var(--settings-host-max-w));
+  max-height: min(88vh, var(--settings-host-max-h));
+}
+/* 抬头之下、页脚之上的两列区：只在这一层分栏，抬头 / 页脚仍通栏、永不滚走。 */
+.settings-nav-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+/* 左导航栏：竖排、独立滚动、右侧一条发丝线与正文分开（口径同学教程目录栏 .tutorial-toc）。
+   实心底更稳，这里不需要磨砂——面板内容不从它底下滚过。 */
+.settings-nav-bar {
+  flex: 0 0 var(--settings-nav-w);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-right: 1px solid var(--border-subtle);
+}
+/* 导航项：真实 <button>（role=tab）。选中态三重冗余——底色 --active + 左侧 2px accent 竖标
+   + 文字转 --fg 且加粗，浅色主题下不靠颜色也能分辨（本仓 UI-4 房规）。 */
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+.settings-nav-item:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.settings-nav-item.on {
+  color: var(--fg);
+  background: var(--active);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+/* 焦点环一律走 box-shadow（不吃布局宽度）；条目贴栏边，全局那圈外描边会被栏宽裁掉，故收内侧。 */
+.settings-nav-item:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.settings-nav-icon {
+  flex: none;
+}
+.settings-nav-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 右面板：整块浮层里唯一的滚动列（切节靠 React key 重建，滚动位置天然归零）。 */
+.settings-nav-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.settings-nav-panel:focus-visible {
+  outline: none;
+}
+/* 面板内的 .settings-body 只负责排版（带衬 / 组间发丝线沿用既有规则），
+   滚动交给外层面板 ⇒ 撤掉它自己的 overflow 与滚动沟，避免嵌套双滚动条。 */
+.settings-nav-panel .settings-body {
+  flex: none;
+  overflow: visible;
+  scrollbar-gutter: auto;
+}
+/* 右上 ✕：与遮罩点击 / 页脚「完成」同一 onClose；纯图标按钮，靠 aria-label 说身份。 */
+.settings-nav-close {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
+}
+.settings-nav-close:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.settings-nav-close:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* ===== 快捷键设置页（b/kbset/1017 批次独占追加区块：kb-*） ===== */
+/* 版式借参考图（搜索 / 全部恢复默认 / 命令·按键绑定·操作 三列 / kbd 芯片 / 行尾图标钮），
+   观感同族照既有 class 抄：芯片= .picker-hint、分段= .theme-segment（页面里直接复用其 class）、
+   分组标题= .settings-group-title 的"字距撑不喊字号"、图标钮= .settings-stepper>button 形状。
+   三列用 grid 且表头与单元格共用同一条 --kb-cols 轴 ⇒ 竖向严格对齐（对齐感就来自这里）。 */
+.kb-page {
+  /* 命令吃掉剩余宽；按键绑定右对齐、给足芯片量程；操作钉死宽度不随内容抖 */
+  --kb-cols: minmax(0, 1fr) minmax(0, 208px) 88px;
+  --kb-gap: var(--space-3);
+  display: flex;
+  flex-direction: column;
+}
+.kb-intro {
+  margin: 0 0 var(--space-3);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+/* ---------------- 工具条：搜索 · 范围 · 全部恢复默认 ---------------- */
+.kb-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.kb-search {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+.kb-search:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.kb-search-icon {
+  flex: none;
+  color: var(--fg-dim);
+}
+.kb-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 命中区：原生 input 实测只有 18px 高，WCAG 2.5.8 要 24×24 ⇒ 自己撑到那一档 */
+  min-height: 24px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-1);
+  outline: none;
+}
+.kb-search-input::-webkit-search-cancel-button {
+  display: none; /* 清除改由自绘的 ✕ 承担，避免两套出口 */
+}
+.kb-search-input::placeholder {
+  color: var(--fg-dim);
+}
+.kb-search-clear {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
+}
+.kb-search-clear:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.kb-search-clear:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+/* 范围分段：直接复用 .theme-segment / .theme-seg-btn 的观感（不造第二种分段控件），
+   这里只负责在工具条里靠右排布 */
+.kb-scope {
+  flex: none;
+}
+.kb-resetall {
+  flex: none;
+  margin-left: auto;
+}
+.kb-count {
+  margin: var(--space-2) 0 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+}
+.kb-resetnote {
+  margin: var(--space-1) 0 0;
+  color: var(--success);
+  font-size: var(--fs-0);
+}
+
+/* ---------------- 表格：三列 + 吸顶表头 + 分类分组 ---------------- */
+.kb-table {
+  margin-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+}
+/* 表头吸顶：滚动收在外壳 .settings-nav-panel 这一层，故 sticky 相对它；
+   z-index 压住行的 hover 底；下缘发丝线用 box-shadow（不加会抖布局的 border） */
+.kb-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: var(--kb-cols);
+  column-gap: var(--kb-gap);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+.kb-th {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.kb-th-keys {
+  text-align: right;
+}
+.kb-th-act {
+  text-align: right;
+}
+
+/* 分组行：字距 + 弱化色撑出锚点感，不靠把字号喊大（口径同 .settings-group-title） */
+.kb-group {
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  border-top: 1px solid var(--border-subtle);
+}
+.kb-head + .kb-group {
+  border-top: none;
+}
+.kb-group-label {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.16em;
+}
+
+/* 命令行：三列 grid；左缘 2px 竖标走 ::before（绝对定位，不占布局宽度） */
+.kb-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--kb-cols);
+  column-gap: var(--kb-gap);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.kb-row:hover {
+  background: var(--hover-soft);
+}
+.kb-row:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.kb-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: var(--space-1);
+  bottom: var(--space-1);
+  width: 2px;
+  border-radius: var(--radius-xs);
+  background: transparent;
+}
+/* 被改过 = accent；被作者关掉（解绑）= dim —— 两件事画成两个样，不混为一谈 */
+.kb-overridden::before {
+  background: var(--accent);
+}
+.kb-unbound::before {
+  background: var(--fg-dim);
+}
+.kb-capturing {
+  background: var(--accent-dim);
+}
+.kb-capturing::before {
+  background: var(--accent);
+}
+
+/* 命令列：标题一行 + 备注一行（fs-1 / dim） */
+.kb-cell-cmd {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kb-title {
+  color: var(--fg);
+  font-size: var(--fs-2);
+  overflow-wrap: anywhere;
+}
+.kb-note {
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  overflow-wrap: anywhere;
+}
+
+/* 按键绑定列：右对齐，芯片观感照 .picker-hint（--font-meta / fs-1 / tabular-nums / 底部 2px 描边） */
+.kb-cell-keys {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.kb-chip {
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--hover-soft);
+  white-space: nowrap;
+}
+.kb-chip-sep {
+  color: var(--fg-dim);
+}
+.kb-dash {
+  color: var(--fg-dim);
+}
+.kb-keys-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  /* 单字符芯片（如和弦第二步的「Z」）实测只有 22px 宽 ⇒ 补到 24 的命中区下限 */
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.kb-keys-btn:hover {
+  background: var(--hover);
+}
+.kb-keys-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.kb-keys-static {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 24px;
+}
+/* 不可改键：芯片文字**不许**转 `--fg-dim`。实测量过 —— `--fg-dim` 压芯片底只有 4.17:1，
+   12px 属正文级、不达 WCAG AA 的 4.5:1，而键位串正是作者要低头读清的信息，不是装饰。
+   "读得出但不给点"改由**去掉底的填充与描边强调**表达（渲染成 span ⇒ 本就没有 hover）。 */
+.kb-locked .kb-chip {
+  border-color: var(--border-subtle);
+  background: none;
+}
+
+/* 捕获态药丸：accent 描边 + 柔光 + 极轻呼吸（reduced 下完全静止） */
+.kb-capture {
+  color: var(--accent-text);
+  font-size: var(--fs-1);
+  padding: 2px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-focus);
+  white-space: nowrap;
+  /* 呼吸节奏：`--dur-3`(320ms) 一轮 = 每秒闪三次，那是告警不是"在等你按键"；
+     且谷底 0.6 会把 `--accent-text` 的对比压穿。乘到 ~1.4s 一轮、谷底收到 0.78。 */
+  animation: kb-breathe calc(var(--dur-3) * 4.5) var(--ease-in-out) infinite;
+}
+@keyframes kb-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.78;
+  }
+}
+/* 落定后芯片的一次 scale-in 入场 */
+.kb-flashed .kb-chip {
+  animation: kb-chip-in var(--dur-3) var(--ease-spring);
+}
+@keyframes kb-chip-in {
+  from {
+    transform: scale(0.82);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* 操作列：图标钮平时 dim、hover 才亮（移除钮 hover 转红），命中区 24×24 */
+.kb-cell-act {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  min-height: 24px;
+}
+.kb-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
+}
+.kb-icon-btn:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.kb-icon-btn-danger:hover {
+  color: var(--red);
+}
+.kb-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* 撞键提示：就地长在行下方（grid 跨满三列），琥珀描边/文字，不用全局 toast 盖过去 */
+.kb-conflict {
+  grid-column: 1 / -1;
+  margin-top: var(--space-1);
+  color: var(--amber);
+  font-size: var(--fs-0);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--amber);
+  border-radius: var(--radius-sm);
+}
+
+/* 空态：搜空了给可见退路，不留一片空白 */
+.kb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) 0;
+  text-align: center;
+}
+.kb-empty-title {
+  color: var(--fg);
+  font-size: var(--fs-4);
+}
+.kb-empty-hint {
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+
+/* 动效可关：呼吸/入场在 reduced 下一律静止（全局压平之外的显式兜底，骚扰动画不留残留） */
+:root[data-motion='reduced'] .kb-capture,
+:root[data-motion='reduced'] .kb-flashed .kb-chip {
+  animation: none;
+}

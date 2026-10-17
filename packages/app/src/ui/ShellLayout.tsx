@@ -93,7 +93,6 @@ import {
   type ShellCommandSpec,
 } from './commands';
 import { CommandPalette, QuickOpen, WorkspaceSymbols } from './Palette';
-import { KeybindingsDialog } from './KeybindingsDialog';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
 import {
   collectWorkspaceSymbols,
@@ -104,7 +103,7 @@ import { PanelBody, StatusbarItem } from './PanelHost';
 import { ProblemsStatusItem } from './ProblemPanel';
 import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
-import { SettingsPanel } from './SettingsPanel';
+import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
 
 /**
  * 壳层五区布局（2026-10-11 UI 重设计批 P1；定稿 §二）。
@@ -275,8 +274,9 @@ export function ShellLayout(props: Props): ReactElement {
   pickerRef.current = paletteOpen || quickOpen || symbolsOpen;
   // 设置 overlay（P4；壳层私有——设置项全是容器语义，不经 ui.overlay 槽）
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // 键盘快捷键对话框（R8）：命令入口 + 未来设置页链接共用这一态
-  const [keybindingsOpen, setKeybindingsOpen] = useState(false);
+  // 打开设置时定位到哪一节：「打开设置」恒回 general（不记住上次在哪节），
+  // 「打开键盘快捷键」直达快捷键节。SettingsPanel 每次开浮层都重新挂载 ⇒ 该值即初始选中节。
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>('general');
   const settingsRef = useRef(settingsOpen);
   settingsRef.current = settingsOpen;
   /**
@@ -534,7 +534,7 @@ export function ShellLayout(props: Props): ReactElement {
       // 键位注册表里登记为不可改；此处不带 keybinding，避免全局处理器重复消费。
       { id: 'layout.toggleZen', title: '切换写作模式', run: () => dispatch({ type: 'toggleZen' }) },
       { id: 'layout.reset', title: '重置布局', run: () => doResetRef.current() },
-      { id: 'layout.openSettings', title: '打开设置', run: () => setSettingsOpen(true) },
+      { id: 'layout.openSettings', title: '打开设置', run: () => { setSettingsSection('general'); setSettingsOpen(true); } },
       { id: 'workbench.commandPalette', title: '命令面板', keybinding: effectiveKeybindingOf('workbench.commandPalette'), run: () => setPaletteOpen(true) },
       { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: effectiveKeybindingOf('workbench.quickOpen'), run: () => setQuickOpen(true) },
       // 工作区符号（D2 · Ctrl+T）：按名字找函数定义并跳过去（候选来自
@@ -566,8 +566,8 @@ export function ShellLayout(props: Props): ReactElement {
           dispatch({ type: 'activate', container: 'sidebar', key: 'panel:kojo.search' });
         },
       },
-      // 键盘快捷键（R8）：一张可查、可显示、可改的键位表（改键覆盖即刻生效）。
-      { id: 'workbench.keybindings', title: '打开键盘快捷键', run: () => setKeybindingsOpen(true) },
+      // 键盘快捷键（b/kbset/1017）：不再是独立对话框，改为「打开设置并定位到快捷键节」。
+      { id: 'workbench.keybindings', title: '打开键盘快捷键', run: () => { setSettingsSection('keybindings'); setSettingsOpen(true); } },
       // 问题面板（HK-4 · UI-6）：打开底部区并激活「问题」视图（activate 会同时置 visible:true）
       { id: 'workbench.problems', title: '问题面板', keybinding: effectiveKeybindingOf('workbench.problems'), run: () => dispatch({ type: 'activate', container: 'bottom', key: 'kojo.problems' }) },
       // 文字缩放（A1）：走 font-size-pref 的档位真源，Monaco 原生 fontZoom contrib
@@ -1124,7 +1124,7 @@ export function ShellLayout(props: Props): ReactElement {
           <Icon name={v.icon ?? v.title.slice(0, 1)} size={22} />
         </button>
       ))}
-      <button className="ab-item" title="设置" onClick={() => setSettingsOpen(true)}>
+      <button className="ab-item" title="设置" onClick={() => { setSettingsSection('general'); setSettingsOpen(true); }}>
         <Icon name="settings" size={22} />
       </button>
     </nav>
@@ -1395,9 +1395,6 @@ export function ShellLayout(props: Props): ReactElement {
           onClose={() => setSymbolsOpen(false)}
         />
       ) : null}
-      {keybindingsOpen ? (
-        <KeybindingsDialog commands={registry} onClose={() => setKeybindingsOpen(false)} />
-      ) : null}
       {overlayContribution ? (
         <div className="overlay-backdrop" onMouseDown={() => setActiveOverlay(null)}>
           <div
@@ -1413,6 +1410,8 @@ export function ShellLayout(props: Props): ReactElement {
       {settingsOpen ? (
         <SettingsPanel
           onClose={() => setSettingsOpen(false)}
+          initialSection={settingsSection}
+          commands={registry}
           zen={layout.zen}
           zenLimitWidth={layout.zenLimitWidth}
           dispatch={dispatch}

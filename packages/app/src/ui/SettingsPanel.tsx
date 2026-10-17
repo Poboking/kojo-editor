@@ -1,4 +1,4 @@
-import { type ReactElement } from 'react';
+import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react';
 import { MARKET_DEFAULT_INDEX_URL } from '@kojo/plugin-api';
 import type { LayoutAction } from './layout';
 import { setSealed } from './sealed';
@@ -30,8 +30,11 @@ import {
   type MarketSourceView,
 } from './market-source';
 import { isUpdateBusy, type UpdatePhase, type UpdateStatusTone } from './update-check';
-import { Icon } from './icons';
+import { Icon, type IconName } from './icons';
 import { Switch } from './Switch';
+import { nextRovingIndex } from './shell-keys';
+import { KeybindingsPage } from './KeybindingsPage';
+import type { CommandEntry } from './commands';
 
 /** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
 const THEME_LABELS: Record<ThemePref, string> = {
@@ -47,10 +50,25 @@ const THEME_LABELS: Record<ThemePref, string> = {
  * effect）全部留在常驻的 `ShellLayout` 里——本组件是条件挂载的浮层，把状态搬进来就等于
  * 改动偏好的读写时机（铁律级别的行为差异）。写偏好、发意图事件同样走 `ShellLayout` 的
  * 既有回调，本组件只负责排版。
+ *
+ * 唯一的例外是「看哪一节」的导航选中态（`active`）：它不落盘、不影响任何偏好，允许作为
+ * 本组件内部的 `useState`。Esc 关窗仍由 `ShellLayout` 的全局键盘（`resolveEscLayer` 的
+ * settings 层）承接，本组件不自建监听。
  */
 export interface SettingsPanelProps {
-  /** 关闭浮层：遮罩点击与页脚「完成」共用这一个入口（开关真源仍是壳层的 settingsOpen） */
+  /** 关闭浮层：遮罩点击、右上 ✕ 与页脚「完成」共用这一个入口（开关真源仍是壳层的 settingsOpen） */
   onClose: () => void;
+  /**
+   * 打开时定位到哪一节（缺省 `general`）。纯呈现层参数：只决定导航栏初始选中项，
+   * 不读写任何偏好。快捷键页上线后壳层可传 `'keybindings'` 直达那一节。
+   */
+  initialSection?: SettingsSectionId;
+
+  /**
+   * 统一命令注册表（壳层命令 + 插件贡献）。只有「快捷键」一节消费它——
+   * 那一页的行数据全部由 `buildKeybindingRows(commands)` 现算，本页不含键位判据。
+   */
+  commands: readonly CommandEntry[];
 
   /* ---- 视图 / 布局带 ---- */
   /** 写作模式（禅态）：切换与退出都派发 layout reducer，本组件不另存一份 */
@@ -100,54 +118,77 @@ export interface SettingsPanelProps {
 }
 
 /**
- * 设置浮层（壳层私有，不经 `ui.overlay` 槽——设置项全是容器与显示语义）。
- *
- * 三段带（抬头 / 滚动区 / 页脚）与九组条目的文案、class、结构逐行照搬自 `ShellLayout`，
- * 本文件不含任何状态与副作用：它是纯呈现层，偏好读写时机仍由壳层那批 always-mounted 的
- * effect 决定。
+ * 设置浮层的节 id（左导航栏一项 = 一节）。`keybindings` 先写进联合类型占位：
+ * 快捷键页由下一批（b/kbset）追加，届时往 `SETTINGS_SECTIONS` 里加一条即可，
+ * 联合类型与外壳零改动。
  */
-export function SettingsPanel({
-  onClose,
-  zen,
-  zenLimitWidth,
-  dispatch,
-  onResetLayout,
-  themePref,
-  motionPref,
-  commitMotionPref,
-  panelVirtualize,
-  glassTransparency,
-  sealed,
-  nameColorOn,
-  fontSize,
-  fontZoom,
-  sugarViewOn,
-  applySugarViewPref,
-  formatOnSave,
-  commitFormatOnSave,
-  codeLensOn,
-  commitCodeLens,
-  autosaveMode,
-  directMode,
-  marketSource,
-  marketEndpointDraft,
-  setMarketEndpointDraft,
-  saveMarketEndpoint,
-  resetMarketEndpoint,
-  appVersion,
-  updatePhase,
-  updateStatusLine,
-  runUpdateCheck,
-  installUpdate,
-}: SettingsPanelProps): ReactElement {
-  return (
-    <div className="overlay-backdrop" onMouseDown={() => onClose()}>
-      <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="wizard">
-          <h3 className="settings-title">设置</h3>
+export type SettingsSectionId = 'general' | 'appearance' | 'editor' | 'market' | 'about' | 'keybindings';
 
-          {/* 三段带：抬头与页脚 flex:none 永不滚走，只有这一列在滚（样式见 .settings-body） */}
-          <div className="settings-body">
+/**
+ * 一节 = 导航栏一项 + 右面板内容。`render` 无参：它闭包捕获 `SETTINGS_SECTIONS` 的 props 形参，
+ * 所以九组条目的读写表达式与搬运前逐字一致。返回 `null` 表示这一节当前没有可显示内容 ⇒
+ * 导航栏不显示这一项（本仓房规：不给一个点了没反应的入口）。
+ */
+export interface SettingsSection {
+  id: SettingsSectionId;
+  label: string;
+  icon: IconName;
+  render: () => ReactElement | null;
+}
+
+/**
+ * 节的清单（模块级导出常量 = 下一批的扩展点）。
+ *
+ * 形态是「props 进、`SettingsSection[]` 出」的工厂：这样 `render()` 保持无参（闭包捕获 props），
+ * 而九组条目的 JSX 与 class 逐字照搬自原 `SettingsPanel` 主体，只是从「一条长滚动列」拆挂到各自
+ * 的节下。**追加一节 = 在数组里加一个对象字面量**（`id` / `label` / `icon` / `render`），
+ * 导航栏、roving tabindex、空节隐藏、切节滚回顶部全部自动跟上。
+ *
+ * 数组顺序 = 导航栏自上而下的顺序。
+ */
+export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[] = (props) => {
+  const {
+    commands,
+    zen,
+    zenLimitWidth,
+    dispatch,
+    onResetLayout,
+    themePref,
+    motionPref,
+    commitMotionPref,
+    panelVirtualize,
+    glassTransparency,
+    sealed,
+    nameColorOn,
+    fontSize,
+    fontZoom,
+    sugarViewOn,
+    applySugarViewPref,
+    formatOnSave,
+    commitFormatOnSave,
+    codeLensOn,
+    commitCodeLens,
+    autosaveMode,
+    directMode,
+    marketSource,
+    marketEndpointDraft,
+    setMarketEndpointDraft,
+    saveMarketEndpoint,
+    resetMarketEndpoint,
+    appVersion,
+    updatePhase,
+    updateStatusLine,
+    runUpdateCheck,
+    installUpdate,
+  } = props;
+
+  return [
+    {
+      id: 'general',
+      label: '通用',
+      icon: 'layout-sidebar-left',
+      render: () => (
+        <>
           <div className="settings-group">
             <div role="heading" aria-level={4} className="settings-group-title">视图</div>
             <label className="settings-row">
@@ -181,87 +222,6 @@ export function SettingsPanel({
             </label>
           </div>
 
-          {/* 动效（UI-5）：应用内的降噪开关，独立于系统级 prefers-reduced-motion */}
-          <div className="settings-group">
-            <div role="heading" aria-level={4} className="settings-group-title">外观</div>
-            {/* 主题（2026-10-17 主题系统）：分段单选，缺省深色。翻档即写 data-theme、
-                全场 token 当场重算（与动效/毛玻璃同款即时生效），只改显示、不动文件。 */}
-            <div className="settings-row static">
-              <span className="theme-segment" role="radiogroup" aria-label="主题">
-                {THEME_IDS.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    role="radio"
-                    aria-checked={themePref === id}
-                    className={`theme-seg-btn${themePref === id ? ' on' : ''}`}
-                    onClick={() => setThemePref(id)}
-                  >
-                    {THEME_LABELS[id]}
-                  </button>
-                ))}
-              </span>
-              <span>
-                主题
-                <span className="settings-hint">深色为缺省（蓝灰），另有浅色、薄荷暗色；一翻即全场生效，只改显示、不动文件</span>
-              </span>
-            </div>
-            <label className="settings-row">
-              <Switch
-                checked={motionPref === 'reduced'}
-                onChange={(c) => commitMotionPref(c ? 'reduced' : 'full')}
-                label="减弱动效"
-              />
-              <span>
-                减弱动效
-                <span className="settings-hint">收起面板过渡与入场动画，界面切换更干脆。系统级「减弱动效」设置仍会照常生效</span>
-              </span>
-            </label>
-            {/* 面板渲染偏好（panel-prefs.ts，2026-10-14 面板偏好批）：与「减弱动效」同组、
-                一直可见（不随封存总闸收起——它是稳定可用的渲染选项，不是试用中的功能）。 */}
-            <label className="settings-row">
-              <Switch checked={panelVirtualize} onChange={setPanelVirtualize} label="长列表视口化" />
-              <span>
-                长列表视口化
-                <span className="settings-hint">
-                  只渲染屏幕上看得到的行（滚出即撤、滚入即建）：大角色首次打开不再有一次性卡顿。关掉则一次全渲染。
-                </span>
-              </span>
-            </label>
-            {/* 毛玻璃透明度（glass-pref.ts）：与字号步进器同款排版（− 读数 ＋）。透明度越高，
-                浮层与教程目录越通透；调到 0% 即实心档，撤掉磨砂回到不透明面。只改显示、不动文件。 */}
-            <div className="settings-row static" role="group" aria-label="毛玻璃透明度">
-              <span className="settings-stepper">
-                <button
-                  className="ghost small"
-                  onClick={() => stepGlassTransparencyPref(-1)}
-                  disabled={glassTransparency <= GLASS_TRANSPARENCY_MIN}
-                  title="更实心"
-                  aria-label="降低毛玻璃透明度"
-                >
-                  −
-                </button>
-                <span className="settings-stepper-value">{glassTransparency}%</span>
-                <button
-                  className="ghost small"
-                  onClick={() => stepGlassTransparencyPref(1)}
-                  disabled={glassTransparency >= GLASS_TRANSPARENCY_MAX}
-                  title="更通透"
-                  aria-label="提高毛玻璃透明度"
-                >
-                  ＋
-                </button>
-              </span>
-              <span>
-                毛玻璃透明度
-                <span className="settings-hint">
-                  浮层与教程目录的磨砂通透程度，默认 {GLASS_TRANSPARENCY_DEFAULT}%（每档 {GLASS_TRANSPARENCY_STEP}%）。
-                  调到 0% 即实心、关掉磨砂。只改显示、不动文件
-                </span>
-              </span>
-            </div>
-          </div>
-
           {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：两只暂不投入的面板整体封存，
               设置页只留这一个总开关；勾选 = 临时恢复（代码未删，随时可以再关）。
               管辖清单只有 `SEALED_PANEL_IDS` 上那两个 id——「.kojo 预览」已交付为常态功能，
@@ -279,6 +239,114 @@ export function SettingsPanel({
             </label>
           </div>
 
+          <div className="settings-group">
+            <div role="heading" aria-level={4} className="settings-group-title">布局</div>
+            <div className="settings-row static">
+              <button className="ghost small" onClick={onResetLayout}>
+                重置布局
+              </button>
+              <span>
+                恢复默认的面板位置、尺寸与显隐
+                <span className="settings-hint">不影响任何文件内容</span>
+              </span>
+            </div>
+          </div>
+        </>
+      ),
+    },
+    {
+      id: 'appearance',
+      label: '外观',
+      icon: 'preview',
+      render: () => (
+        /* 动效（UI-5）：应用内的降噪开关，独立于系统级 prefers-reduced-motion */
+        <div className="settings-group">
+          <div role="heading" aria-level={4} className="settings-group-title">外观</div>
+          {/* 主题（2026-10-17 主题系统）：分段单选，缺省深色。翻档即写 data-theme、
+              全场 token 当场重算（与动效/毛玻璃同款即时生效），只改显示、不动文件。 */}
+          <div className="settings-row static">
+            <span className="theme-segment" role="radiogroup" aria-label="主题">
+              {THEME_IDS.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={themePref === id}
+                  className={`theme-seg-btn${themePref === id ? ' on' : ''}`}
+                  onClick={() => setThemePref(id)}
+                >
+                  {THEME_LABELS[id]}
+                </button>
+              ))}
+            </span>
+            <span>
+              主题
+              <span className="settings-hint">深色为缺省（蓝灰），另有浅色、薄荷暗色；一翻即全场生效，只改显示、不动文件</span>
+            </span>
+          </div>
+          <label className="settings-row">
+            <Switch
+              checked={motionPref === 'reduced'}
+              onChange={(c) => commitMotionPref(c ? 'reduced' : 'full')}
+              label="减弱动效"
+            />
+            <span>
+              减弱动效
+              <span className="settings-hint">收起面板过渡与入场动画，界面切换更干脆。系统级「减弱动效」设置仍会照常生效</span>
+            </span>
+          </label>
+          {/* 面板渲染偏好（panel-prefs.ts，2026-10-14 面板偏好批）：与「减弱动效」同组、
+              一直可见（不随封存总闸收起——它是稳定可用的渲染选项，不是试用中的功能）。 */}
+          <label className="settings-row">
+            <Switch checked={panelVirtualize} onChange={setPanelVirtualize} label="长列表视口化" />
+            <span>
+              长列表视口化
+              <span className="settings-hint">
+                只渲染屏幕上看得到的行（滚出即撤、滚入即建）：大角色首次打开不再有一次性卡顿。关掉则一次全渲染。
+              </span>
+            </span>
+          </label>
+          {/* 毛玻璃透明度（glass-pref.ts）：与字号步进器同款排版（− 读数 ＋）。透明度越高，
+              浮层与教程目录越通透；调到 0% 即实心档，撤掉磨砂回到不透明面。只改显示、不动文件。 */}
+          <div className="settings-row static" role="group" aria-label="毛玻璃透明度">
+            <span className="settings-stepper">
+              <button
+                className="ghost small"
+                onClick={() => stepGlassTransparencyPref(-1)}
+                disabled={glassTransparency <= GLASS_TRANSPARENCY_MIN}
+                title="更实心"
+                aria-label="降低毛玻璃透明度"
+              >
+                −
+              </button>
+              <span className="settings-stepper-value">{glassTransparency}%</span>
+              <button
+                className="ghost small"
+                onClick={() => stepGlassTransparencyPref(1)}
+                disabled={glassTransparency >= GLASS_TRANSPARENCY_MAX}
+                title="更通透"
+                aria-label="提高毛玻璃透明度"
+              >
+                ＋
+              </button>
+            </span>
+            <span>
+              毛玻璃透明度
+              <span className="settings-hint">
+                浮层与教程目录的磨砂通透程度，默认 {GLASS_TRANSPARENCY_DEFAULT}%（每档 {GLASS_TRANSPARENCY_STEP}%）。
+                调到 0% 即实心、关掉磨砂。只改显示、不动文件
+              </span>
+            </span>
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'editor',
+      label: '编辑器',
+      icon: 'code',
+      render: () => (
+        <>
           {/* 「编辑器」组不再随总闸收起：这一组里的 .kojo 预览是已交付的常态功能，
               默认关 ⇒ 这一行（连同快捷键 Ctrl+Alt+T）就是它的正式入口。 */}
           <div className="settings-group">
@@ -410,99 +478,98 @@ export function SettingsPanel({
               </label>
             </div>
           ) : null}
-
-          {/* 口上市场：注册表来源（KM-9）。**只有一个可编辑项**——代理既不做输入框也不做开关
-              （受众大多没有代理客户端；且 JS 递进来的代理等于把白名单作废，见 market-source.ts）。
-              这一组的每条判据（能不能保存、显示哪句话、三态着色）都住在 `market-source.ts`；
-              这里只做排版。派生量算不出来就得重复调纯函数，所以整组包在一个本地作用域里——
-              上面的 state 块不属于本行的改动范围，故用 IIFE 把 `row`/`canSave` 关在这段内。 */}
-          {(() => {
-            const row = sourceRowUi(marketSource);
-            const canSave = row.canEdit && !isDraftNoop(marketEndpointDraft, row.address);
-            return (
-              <div className="settings-group">
-                <div role="heading" aria-level={4} className="settings-group-title">口上市场</div>
-
-                {/* 生效地址是**读数**，不是占位符：默认态也把那串地址摊开给人看（可复制、长串折行）。
-                    不加 `<a>`、不冒充链接——这不是"点出去看看"的东西，是"我现在用的是哪一个"。
-                    折行与收缩这两条只能就地写：样式表此刻由另一条线在改，本行不越界（见 §分工边界）。 */}
-                <div className="settings-row static">
-                  <span style={{ minWidth: 0 }}>
-                    包列表来源
-                    <span className={hintClassFor(row.statusTone)}>{row.statusText}</span>
-                    {row.address !== '' ? (
-                      <span className="settings-hint" style={{ overflowWrap: 'anywhere' }} title={row.address}>
-                        {row.address}
-                      </span>
-                    ) : null}
-                  </span>
-                </div>
-
-                {/* 草稿行：填的是"改成别的地址"，不是当前值的复读机；Tab 顺序 = 草稿框 → 保存 → 恢复默认 */}
-                <div className={`settings-row static has-field${row.canEdit ? '' : ' off'}`}>
-                  <input
-                    className="settings-text"
-                    type="url"
-                    value={marketEndpointDraft}
-                    placeholder={MARKET_DEFAULT_INDEX_URL}
-                    spellCheck={false}
-                    aria-label="改成别的包列表地址"
-                    disabled={!row.canEdit}
-                    onChange={(e) => setMarketEndpointDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && canSave) void saveMarketEndpoint();
-                    }}
-                  />
-                  <span>
-                    改成别的地址
-                    <span className="settings-hint">
-                      填一个新地址再点「保存」；不填就什么都不改。下载走系统网络设置，这里没有开关
-                    </span>
-                  </span>
-                  {/* 没改动 ⇒ 按钮本身不可点：禁用态就是"没什么可保存"最直白的表达，不用点完才知道 */}
-                  <button
-                    className="ghost small"
-                    disabled={!canSave}
-                    onClick={() => void saveMarketEndpoint()}
-                  >
-                    保存
-                  </button>
-                  {/* 覆盖态才出现的显式退路：点它 = 走既有 reset 通路回到默认，作者不必再猜"清空再保存" */}
-                  {row.showReset ? (
-                    <button
-                      className="ghost small"
-                      onClick={() => void resetMarketEndpoint()}
-                    >
-                      恢复默认
-                    </button>
-                  ) : null}
-                </div>
-
-                {/* 回执独立成行、三态着色：成功、无改动、失败一眼能分，不再淹在说明文字的尾巴里 */}
-                {row.note !== '' ? (
-                  <div className="settings-row static">
-                    <span className={hintClassFor(row.noteTone)} role="status">
-                      {row.note}
-                    </span>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })()}
-
+        </>
+      ),
+    },
+    {
+      id: 'market',
+      label: '口上市场',
+      icon: 'module',
+      render: () => {
+        /* 口上市场：注册表来源（KM-9）。**只有一个可编辑项**——代理既不做输入框也不做开关
+           （受众大多没有代理客户端；且 JS 递进来的代理等于把白名单作废，见 market-source.ts）。
+           这一组的每条判据（能不能保存、显示哪句话、三态着色）都住在 `market-source.ts`；
+           这里只做排版。派生量算不出来就得重复调纯函数，所以整组包在 `render` 这一个本地
+           作用域里（原主体的 IIFE 换成 render 函数体，判据逐字不变）。 */
+        const row = sourceRowUi(marketSource);
+        const canSave = row.canEdit && !isDraftNoop(marketEndpointDraft, row.address);
+        return (
           <div className="settings-group">
-            <div role="heading" aria-level={4} className="settings-group-title">布局</div>
+            <div role="heading" aria-level={4} className="settings-group-title">口上市场</div>
+
+            {/* 生效地址是**读数**，不是占位符：默认态也把那串地址摊开给人看（可复制、长串折行）。
+                不加 `<a>`、不冒充链接——这不是"点出去看看"的东西，是"我现在用的是哪一个"。
+                折行与收缩这两条只能就地写：样式表此刻由另一条线在改，本行不越界（见 §分工边界）。 */}
             <div className="settings-row static">
-              <button className="ghost small" onClick={onResetLayout}>
-                重置布局
-              </button>
-              <span>
-                恢复默认的面板位置、尺寸与显隐
-                <span className="settings-hint">不影响任何文件内容</span>
+              <span style={{ minWidth: 0 }}>
+                包列表来源
+                <span className={hintClassFor(row.statusTone)}>{row.statusText}</span>
+                {row.address !== '' ? (
+                  <span className="settings-hint" style={{ overflowWrap: 'anywhere' }} title={row.address}>
+                    {row.address}
+                  </span>
+                ) : null}
               </span>
             </div>
-          </div>
 
+            {/* 草稿行：填的是"改成别的地址"，不是当前值的复读机；Tab 顺序 = 草稿框 → 保存 → 恢复默认 */}
+            <div className={`settings-row static has-field${row.canEdit ? '' : ' off'}`}>
+              <input
+                className="settings-text"
+                type="url"
+                value={marketEndpointDraft}
+                placeholder={MARKET_DEFAULT_INDEX_URL}
+                spellCheck={false}
+                aria-label="改成别的包列表地址"
+                disabled={!row.canEdit}
+                onChange={(e) => setMarketEndpointDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && canSave) void saveMarketEndpoint();
+                }}
+              />
+              <span>
+                改成别的地址
+                <span className="settings-hint">
+                  填一个新地址再点「保存」；不填就什么都不改。下载走系统网络设置，这里没有开关
+                </span>
+              </span>
+              {/* 没改动 ⇒ 按钮本身不可点：禁用态就是"没什么可保存"最直白的表达，不用点完才知道 */}
+              <button
+                className="ghost small"
+                disabled={!canSave}
+                onClick={() => void saveMarketEndpoint()}
+              >
+                保存
+              </button>
+              {/* 覆盖态才出现的显式退路：点它 = 走既有 reset 通路回到默认，作者不必再猜"清空再保存" */}
+              {row.showReset ? (
+                <button
+                  className="ghost small"
+                  onClick={() => void resetMarketEndpoint()}
+                >
+                  恢复默认
+                </button>
+              ) : null}
+            </div>
+
+            {/* 回执独立成行、三态着色：成功、无改动、失败一眼能分，不再淹在说明文字的尾巴里 */}
+            {row.note !== '' ? (
+              <div className="settings-row static">
+                <span className={hintClassFor(row.noteTone)} role="status">
+                  {row.note}
+                </span>
+              </div>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      id: 'about',
+      label: '关于',
+      icon: 'info',
+      render: () => (
+        <>
           {/* 检查更新（REL-1 收尾 · REL-2）：状态机在 update-check.ts，行内三态而非弹窗。
               当前仓库尚未发布过 release，check() 现阶段必然 404——失败态是常态路径，
               必须可见可重试（见 runUpdateCheck 的 try-catch），绝不让按钮抛未捕获异常。 */}
@@ -583,6 +650,127 @@ export function SettingsPanel({
               <Icon name="popout" size={12} className="settings-link-icon" />
             </a>
           </div>
+        </>
+      ),
+    },
+    {
+      id: 'keybindings',
+      label: '快捷键',
+      icon: 'keyboard',
+      render: () => <KeybindingsPage commands={commands} />,
+    },
+  ];
+};
+
+/** 右面板（tabpanel）的稳定 id：导航栏每项 aria-controls 指过来 */
+const SETTINGS_PANEL_ID = 'settings-nav-panel';
+const tabIdOf = (id: SettingsSectionId): string => `settings-nav-tab-${id}`;
+
+/**
+ * 设置浮层（壳层私有，不经 `ui.overlay` 槽——设置项全是容器与显示语义）。
+ *
+ * 外壳形态（b/kbset/1017）：抬头「设置」+ 左分类导航栏 + 右分节面板 + 页脚。九组条目的
+ * 文案、class、DOM 结构逐行照搬自原长滚动列，只是拆挂到 `SETTINGS_SECTIONS` 各自的节下。
+ * 本文件除「看哪一节」的 `active` 外不含任何状态与副作用：偏好读写时机仍由壳层那批
+ * always-mounted 的 effect 决定，Esc 关窗仍由壳层全局键盘承接。
+ */
+export function SettingsPanel(props: SettingsPanelProps): ReactElement {
+  const { onClose, initialSection = 'general' } = props;
+  const navRef = useRef<HTMLDivElement>(null);
+  /** 唯一允许的内部状态：当前看哪一节（不落盘、不影响任何偏好） */
+  const [active, setActive] = useState<SettingsSectionId>(initialSection);
+
+  /* 先算一次 render：既用于「空节不显示」的判据，也作为右面板内容——避免调用两次。 */
+  const visible = SETTINGS_SECTIONS(props)
+    .map((sec) => ({ sec, el: sec.render() }))
+    .filter((r): r is { sec: SettingsSection; el: ReactElement } => r.el !== null);
+
+  const rawIndex = visible.findIndex((r) => r.sec.id === active);
+  const activeIndex = rawIndex >= 0 ? rawIndex : 0;
+  const activeEntry = visible[activeIndex];
+
+  if (!activeEntry) {
+    // 理论上到不了这里（general 一节恒有内容 ⇒ visible 恒非空）；防御性渲染一个可关闭的空壳，绝不白屏。
+    return (
+      <div className="overlay-backdrop" onMouseDown={() => onClose()}>
+        <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="wizard">
+            <h3 className="settings-title">设置</h3>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* 方向键漫游：↑↓（及 ←→）在栏内移动焦点并即时切节（roving tabindex，口径同活动栏 / 标签条）。
+     Enter/Space 由 <button> 原生激活，Tab 原样让位——nextRovingIndex 对非漫游键返回 null。 */
+  const onNavKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
+    const next = nextRovingIndex(index, visible.length, e.key);
+    if (next === null) return;
+    e.preventDefault();
+    const entry = visible[next];
+    if (!entry) return;
+    setActive(entry.sec.id);
+    const tabs = navRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    tabs?.[next]?.focus();
+  };
+
+  return (
+    <div className="overlay-backdrop" onMouseDown={() => onClose()}>
+      <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
+        {/* 右上 ✕：与遮罩点击、页脚「完成」同一个 onClose 入口；Esc 仍走壳层全局键盘（modal 栈） */}
+        <button
+          type="button"
+          className="settings-nav-close"
+          aria-label="关闭设置"
+          onClick={() => onClose()}
+        >
+          <Icon name="close" size={16} />
+        </button>
+
+        <div className="wizard">
+          <h3 className="settings-title">设置</h3>
+
+          {/* 左导航栏 + 右分节面板：抬头/页脚 flex:none 永不滚走，只有面板这一列在滚 */}
+          <div className="settings-nav-split">
+            <div
+              className="settings-nav-bar"
+              role="tablist"
+              aria-label="设置分类"
+              aria-orientation="vertical"
+              ref={navRef}
+            >
+              {visible.map((r, i) => (
+                <button
+                  key={r.sec.id}
+                  type="button"
+                  role="tab"
+                  id={tabIdOf(r.sec.id)}
+                  aria-selected={i === activeIndex}
+                  aria-controls={SETTINGS_PANEL_ID}
+                  tabIndex={i === activeIndex ? 0 : -1}
+                  className={`settings-nav-item${i === activeIndex ? ' on' : ''}`}
+                  onClick={() => setActive(r.sec.id)}
+                  onKeyDown={(e) => onNavKeyDown(e, i)}
+                >
+                  <Icon name={r.sec.icon} size={16} className="settings-nav-icon" />
+                  <span className="settings-nav-label">{r.sec.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* key={节 id} ⇒ 切节时面板整块重建，滚动位置天然归零（每节各自独立滚动，
+                不共享一条滚到一半的滚动条），无需额外 effect。 */}
+            <div
+              className="settings-nav-panel"
+              id={SETTINGS_PANEL_ID}
+              role="tabpanel"
+              aria-labelledby={tabIdOf(activeEntry.sec.id)}
+              tabIndex={0}
+              key={activeEntry.sec.id}
+            >
+              <div className="settings-body">{activeEntry.el}</div>
+            </div>
           </div>
 
           {/* 单一页脚行，且沿用全站模态房规：primary 恒等于推荐项、排在最右 */}
