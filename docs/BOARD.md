@@ -88,5 +88,4 @@
 
 | ID | 任务 | 关键判据 / 已实测事实 | 认领 |
 |---|---|---|---|
-| ZH-P | **投影集成 + RETURN 行归零**：`project.ts` 的 `native()` 全部接 `localizeNativeLine`，认不出走显式兜底；函数尾 / 包装三联里的 `RETURN …` **永不上屏** | 只准动 `project.ts`（+ 其测试）；红线判据＝本文件产出的糖文本零整行原样 ERB；`RETURN` 吸收判据从「紧随 ENDIF」扩到「函数体内任何单独成行的 RETURN」，吸收 = 只读视图不显示，磁盘一字不动；既有闭环测试（投影→转译零 error）不许回退 | 认领：zhpp 2026-10-17 |
 | ZH-L | **编辑器可见面**：高亮/补全/悬停认得上述所有中文形；`kojo-language.ts` 停止重抄 `CONT_MARKS`/`NOTIN_MARKS`（改 import 词表真源，`~`/`⏎` 必须着色）；糖视图里 `.ERB` 记号着色分级，让「残留英文」一眼可辨 | 只准动 `packages/app/src/monaco/*` + `packages/app/tests/*`；词表单一真源，宿主零硬编码中文词形；Monaco 功能级判据（补全真弹 / 高亮真出）不许只给体积读数 | 认领：zhl 2026-10-17 |
