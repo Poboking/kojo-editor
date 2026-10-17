@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { FamilyMatch } from '@kojo/plugin-api';
-import { FaceList } from '../../plugins/ui-kojo-navigator/src/index';
+import { FaceList } from '../../plugins/ui-kojo-navigator/src/face-list';
 import {
   FACE_WINDOW_INITIAL,
   FACE_WINDOW_STEP,

@@ -11,9 +11,9 @@
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { navLoadErrorCopy } from '../src/index';
+import { navLoadErrorCopy } from '../src/panel-copy';
 
-const SRC = path.resolve(import.meta.dirname, '..', 'src', 'index.ts');
+const SRC = path.resolve(import.meta.dirname, '..', 'src', 'navigator-panel.ts');
 const srcText = (): string => readFileSync(SRC, 'utf8');
 
 /** 形似内部错误串的样本（路径 + 英文栈式片段——正是绝不该当第一眼甩出去的东西） */

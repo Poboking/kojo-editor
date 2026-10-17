@@ -12,7 +12,8 @@
 import { describe, expect, it } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { CellRows, VarList } from '../../plugins/ui-snapshot-injector/src/index';
+import { CellRows } from '../../plugins/ui-snapshot-injector/src/cell-rows';
+import { VarList } from '../../plugins/ui-snapshot-injector/src/var-list';
 import {
   CELL_WINDOW_INITIAL,
   CELL_WINDOW_STEP,
