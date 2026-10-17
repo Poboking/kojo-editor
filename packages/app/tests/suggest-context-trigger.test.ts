@@ -51,6 +51,10 @@ interface StubEnv {
   derivedView: boolean;
   /** `editor.trigger` 抛错（模拟动作缺席 / 命令面炸） */
   throwOnTrigger: boolean;
+  /** 旧 host 的静态防抖窗口（缺省 0） */
+  debounceMs: number;
+  /** 新 host 的现取防抖窗口（给了就优先于静态值） */
+  getDebounceMs?: () => number;
 }
 
 interface StubEditor {
@@ -68,8 +72,8 @@ interface StubEditor {
   undo(line: string, column: number): void;
   /** 纯移动光标（reason=Explicit=3：点击 / 方向键） */
   moveTo(column: number): void;
-  /** 等 debounce 跑完（debounceMs=0 ⇒ 一拍宏任务即可） */
-  settle(): Promise<void>;
+  /** 等 debounce 跑完（缺省等一拍宏任务；可加长以验证非零延迟） */
+  settle(ms?: number): Promise<void>;
   dispose(): void;
 }
 
@@ -87,6 +91,8 @@ function stubEditor(init: Partial<StubState> & Partial<StubEnv> = {}): StubEdito
     path: init.path ?? (init.languageId === ERB_LANGUAGE_ID ? '/x/a.ERB' : '/x/a.kojo'),
     derivedView: init.derivedView ?? false,
     throwOnTrigger: init.throwOnTrigger ?? false,
+    debounceMs: init.debounceMs ?? 0,
+    getDebounceMs: init.getDebounceMs,
   };
   const state: StubState = {
     languageId: init.languageId ?? KOJO_LANGUAGE_ID,
@@ -200,8 +206,8 @@ function stubEditor(init: Partial<StubState> & Partial<StubEnv> = {}): StubEdito
       state.column = column;
       fireCursor(3, 'mouse'); // CursorChangeReason.Explicit = 3
     },
-    async settle() {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+    async settle(ms = 5) {
+      await new Promise((resolve) => setTimeout(resolve, ms));
     },
     dispose() {
       handle.dispose();
@@ -210,7 +216,8 @@ function stubEditor(init: Partial<StubState> & Partial<StubEnv> = {}): StubEdito
   const handle = installSuggestContextTrigger(api.editor, {
     getPath: () => env.path,
     isDerivedView: () => env.derivedView,
-    debounceMs: 0,
+    debounceMs: env.debounceMs,
+    ...(env.getDebounceMs === undefined ? {} : { getDebounceMs: env.getDebounceMs }),
   });
   return api;
 }
@@ -321,8 +328,8 @@ describe('CTX-SUGGEST · 不弹的落点（判据本身不认）', () => {
     expect(fired(s)).toBe(0);
   });
 
-  it('`.erb` 的 `@` 不在 `.kojo` 里算名字位（语言闸生效）', async () => {
-    const s = stubEditor({ languageId: KOJO_LANGUAGE_ID, line: '' });
+  it('`.kojo` 行中的 `@` 不是原生块起点（只有行首 `@` 才算，§3.10）', async () => {
+    const s = stubEditor({ languageId: KOJO_LANGUAGE_ID, line: '文本' });
     s.type('@');
     await s.settle();
     expect(fired(s)).toBe(0);
@@ -447,7 +454,8 @@ describe('CTX-SUGGEST · 抑制条件逐条', () => {
     expect(shouldTriggerContextSuggest({ ...base, derivedView: true })).toBe(false);
     expect(shouldTriggerContextSuggest({ ...base, hasPath: false })).toBe(false);
     expect(shouldTriggerContextSuggest({ ...base, languageId: 'plaintext' })).toBe(false);
-    expect(shouldTriggerContextSuggest({ ...base, typedChar: '本' })).toBe(false);
+    // SUGGEST-2B：gate ⑦ 只要求"刚敲下一枚字符"——名字字符落在名字位同样算（不再看字符白名单）
+    expect(shouldTriggerContextSuggest({ ...base, typedChar: '本' })).toBe(true);
     expect(shouldTriggerContextSuggest({ ...base, typedChar: null })).toBe(false);
   });
 });
@@ -548,7 +556,7 @@ describe('CTX-SUGGEST · 批①③⑤⑥ 新探针：打字当拍直弹', () => 
     expect(fired(call)).toBe(0);
   });
 
-  it('纯闸门对拍：新探针命中 ⇒ true；台词 / 非位槽 ⇒ false', () => {
+  it('纯闸门对拍：探针命中 ⇒ true；台词 / 非位槽 ⇒ false', () => {
     const base = {
       languageId: KOJO_LANGUAGE_ID,
       line: '',
@@ -574,5 +582,276 @@ describe('CTX-SUGGEST · 批①③⑤⑥ 新探针：打字当拍直弹', () => 
     expect(shouldTriggerContextSuggest({ ...erb, line: 'JUMP ', column: 6, typedChar: ' ' })).toBe(true);
     expect(shouldTriggerContextSuggest({ ...erb, line: 'GETBIT(HOLD,)', column: 13, typedChar: ',' })).toBe(true);
     expect(shouldTriggerContextSuggest({ ...erb, line: 'CALL FOO,', column: 10, typedChar: ',' })).toBe(false);
+  });
+});
+
+/* ============================== SUGGEST-2B · 停手即弹（任意单字符） ============================== */
+
+describe('CTX-SUGGEST · 名字槽内继续打字 / 过滤到零后恢复', () => {
+  it('名字槽里继续打任意字符（widget 未开）⇒ 每个新位置都排程触发', async () => {
+    const s = stubEditor({ line: '时机' });
+    s.type(' ');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+    // 真壳里 widget 开着时由 gate ⑥ 挡住；这里模拟"上一轮已被过滤到零、widget 自动关闭"。
+    s.type('本');
+    await s.settle();
+    expect(fired(s)).toBe(2);
+    s.type('番');
+    await s.settle();
+    expect(fired(s)).toBe(3);
+  });
+
+  it('过滤到零 ⇒ Monaco 关掉 widget ⇒ 再打名字字符重开一轮（gate ⑥ 只看当下状态）', async () => {
+    const s = stubEditor({ line: '时机' });
+    s.type(' ');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+    s.state.suggestState = 1; // widget 开着：Monaco 自己边打字边过滤，宿主不许重置选择
+    s.type('本');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+    s.state.suggestState = 0; // 过滤到零 ⇒ 自动关闭
+    s.type('番');
+    await s.settle();
+    expect(fired(s)).toBe(2);
+  });
+
+  it('widget 已开（含 Loading 态）时任意字符都不重弹', async () => {
+    const s = stubEditor({ line: '时机 ', suggestState: 2 });
+    s.type('本');
+    await s.settle();
+    expect(fired(s)).toBe(0);
+  });
+
+  it('删除 / 粘贴 / 撤销仍然撤拍（不因放松 gate ⑦ 而变多）', async () => {
+    const s = stubEditor({ line: '时机 ', column: 4 });
+    s.backspace();
+    await s.settle();
+    s.insertMany('本番');
+    await s.settle();
+    s.undo('时机 ', 4);
+    await s.settle();
+    expect(fired(s)).toBe(0);
+  });
+});
+
+describe('CTX-SUGGEST · 放松 gate ⑦ 后台词 / 普通文本零骚扰（逐列证明）', () => {
+  /** 典型台词 / 旁白（`.kojo` 表层）与普通命令行（`.erb`）：没有任何名字位探针该认的锚 */
+  const KOJO_ORDINARY = ['「今天也来训练了？」', '她微微一笑，转过身去。', '旁白：天气真好', '这是她的书'];
+  const ERB_ORDINARY = ['PRINTL 你好', 'PRINTFORMDW 「她笑了」', '; 注释：随便写', 'ENDIF', 'RETURN 1'];
+
+  it('`.kojo` 普通行：任意列上六枚探针全不认（弹了没货的位置从一开始就不在名单里）', () => {
+    for (const line of KOJO_ORDINARY) {
+      for (let column = 1; column <= line.length + 1; column++) {
+        expect(KOJO_NAME_SLOTS.some((probe) => probe(line, column) !== null), `${line}@${column}`).toBe(false);
+      }
+    }
+  });
+
+  it('`.erb` 普通行：任意列上四枚探针全不认', () => {
+    for (const line of ERB_ORDINARY) {
+      for (let column = 1; column <= line.length + 1; column++) {
+        expect(ERB_NAME_SLOTS.some((probe) => probe(line, column) !== null), `${line}@${column}`).toBe(false);
+      }
+    }
+  });
+
+  it('纯闸门逐列对拍：普通行任意位置 + 任意字符都 false（gate ⑩ 兜底，不靠字符白名单）', () => {
+    const base = {
+      typedChar: '好' as string | null,
+      hasPath: true,
+      readOnly: false,
+      derivedView: false,
+      focused: true,
+      multiCursor: false,
+      selectionActive: false,
+      widgetVisible: false,
+    };
+    for (const line of KOJO_ORDINARY) {
+      for (let column = 1; column <= line.length + 1; column++) {
+        expect(
+          shouldTriggerContextSuggest({ ...base, languageId: KOJO_LANGUAGE_ID, line, column }),
+          `${line}@${column}`,
+        ).toBe(false);
+      }
+    }
+    for (const line of ERB_ORDINARY) {
+      for (let column = 1; column <= line.length + 1; column++) {
+        expect(
+          shouldTriggerContextSuggest({ ...base, languageId: ERB_LANGUAGE_ID, line, column }),
+          `${line}@${column}`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('观察者层：台词行 / 普通文本里打任意字符 ⇒ 0 次触发', async () => {
+    const kojo = stubEditor({ line: '「今天也来训练了？」', column: 4 });
+    kojo.type('也');
+    await kojo.settle();
+    expect(fired(kojo)).toBe(0);
+
+    const erb = stubEditor({ languageId: ERB_LANGUAGE_ID, line: 'PRINTL 你好', column: 4 });
+    erb.type('你');
+    await erb.settle();
+    expect(fired(erb)).toBe(0);
+  });
+});
+
+/* ============================== SUGGEST-2B · 可调延迟 ============================== */
+
+describe('CTX-SUGGEST · 可调防抖（getDebounceMs 每次现取）', () => {
+  it('默认 0ms：击键当拍不评估（同拍事件合并），下一拍才弹', async () => {
+    const s = stubEditor({ line: '时机' });
+    s.type(' ');
+    expect(fired(s)).toBe(0); // 宁晚一拍，也不在内容事件里同步弹（widget 状态尚未落定）
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('40ms 延迟：窗口内不弹，过窗才弹；改回 0 ⇒ 下一次击键立即生效（假时钟，钉边界）', async () => {
+    vi.useFakeTimers();
+    try {
+      let delay = 40;
+      const s = stubEditor({ line: '时机', getDebounceMs: () => delay });
+      s.type(' ');
+      await vi.advanceTimersByTimeAsync(39);
+      expect(fired(s)).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fired(s)).toBe(1);
+
+      delay = 0; // 设置页拨回「立即」：不需要重装观察者
+      s.type('本');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fired(s)).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('旧 host（只有静态 debounceMs）行为零改动：30ms 窗口照旧生效', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = stubEditor({ line: '时机', debounceMs: 30 });
+      s.type(' ');
+      await vi.advanceTimersByTimeAsync(29);
+      expect(fired(s)).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fired(s)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('同时给静态值与 getter ⇒ getter 优先（每次现取）', async () => {
+    const s = stubEditor({ line: '时机', debounceMs: 500, getDebounceMs: () => 0 });
+    s.type(' ');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('脏值静默夹取：负值 / NaN ⇒ 0（立即），超大值 ⇒ 钳到 2000', async () => {
+    const negative = stubEditor({ line: '时机', getDebounceMs: () => -50 });
+    negative.type(' ');
+    await negative.settle();
+    expect(fired(negative)).toBe(1);
+
+    const nan = stubEditor({ line: '时机', getDebounceMs: () => Number.NaN });
+    nan.type(' ');
+    await nan.settle();
+    expect(fired(nan)).toBe(1);
+
+    vi.useFakeTimers();
+    try {
+      const huge = stubEditor({ line: '时机', getDebounceMs: () => 99999 });
+      huge.type(' ');
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(fired(huge)).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fired(huge)).toBe(1);
+      huge.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('getter 抛错 ⇒ 回落静态 0，不把异常抛进 Monaco 事件链', async () => {
+    const s = stubEditor({
+      line: '时机',
+      getDebounceMs: () => {
+        throw new Error('偏好源炸了');
+      },
+    });
+    s.type(' ');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('延迟窗口内卸载 ⇒ 定时器清掉，不再触发', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = stubEditor({ line: '时机', getDebounceMs: () => 200 });
+      s.type(' ');
+      s.dispose();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(fired(s)).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/* ============================== SUGGEST-2A · 原生区触发接线（gate ⑩ + nativeSlot） ============================== */
+
+describe('CTX-SUGGEST · .kojo 原生区名字位 ⇒ 主动弹', () => {
+  it('原生直通行 `GOTO ` ⇒ 空格当拍触发（纯原生槽，糖探针不认）', async () => {
+    const s = stubEditor({ line: 'GOTO' });
+    s.type(' ');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('行首 `@` = 原生块起点 ⇒ 当场触发', async () => {
+    const s = stubEditor({ line: '' });
+    s.type('@');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('原生 `CALL` 未跟空白 ⇒ 不提前弹空候选；空格当拍才弹一次', async () => {
+    const s = stubEditor({ line: '' });
+    for (const ch of ['C', 'A', 'L', 'L']) {
+      s.type(ch);
+      await s.settle();
+    }
+    expect(fired(s)).toBe(0); // 宽门 call-target 命中，但 erb-functions 的槽还不在
+    s.type(' ');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('糖行 `调用 ` 仍由糖探针触发（原生槽接线不抢糖位）', async () => {
+    const s = stubEditor({ line: '调用' });
+    s.type(' ');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('纯闸门：nativeSlot=true 能过 ⑩；false 时 `CALL ` 不算糖册名字位', () => {
+    const base = {
+      hasPath: true,
+      readOnly: false,
+      derivedView: false,
+      focused: true,
+      multiCursor: false,
+      selectionActive: false,
+      widgetVisible: false,
+      typedChar: ' ' as string | null,
+    };
+    // `GOTO ` 是纯原生槽：糖册探针不认，只有 nativeSlot 这一票能放行
+    const atGoto = { ...base, languageId: KOJO_LANGUAGE_ID, line: 'GOTO ', column: 6 };
+    expect(shouldTriggerContextSuggest({ ...atGoto, nativeSlot: true })).toBe(true);
+    expect(shouldTriggerContextSuggest({ ...atGoto, nativeSlot: false })).toBe(false);
   });
 });

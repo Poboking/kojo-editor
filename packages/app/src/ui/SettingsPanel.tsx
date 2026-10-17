@@ -5,6 +5,7 @@ import { setSealed } from './sealed';
 import { setDirectMode } from './direct-mode';
 import { setPanelVirtualize } from './panel-prefs';
 import { setNameColorPref } from './semantic-color-pref';
+import { SUGGEST_DELAY_MAX, SUGGEST_DELAY_MIN, SUGGEST_DELAY_STEP } from './suggest-pref';
 import { AUTOSAVE_IDLE_MS, setAutosavePref, type AutosaveMode } from './autosave-pref';
 import {
   FONT_SIZE_DEFAULT,
@@ -93,6 +94,10 @@ export interface SettingsPanelProps {
   nameColorOn: boolean;
   fontSize: number;
   fontZoom: number;
+  /** 补全弹出延迟读数（ms，0 = 立即）；真源是 `suggest-pref.ts` 的 localStorage */
+  suggestDelay: number;
+  /** 写补全弹出延迟（壳层落 `saveSuggestDelayPref`；订阅表把新值推回本页） */
+  commitSuggestDelay: (ms: number) => void;
   sugarViewOn: boolean;
   applySugarViewPref: (on: boolean) => void;
   formatOnSave: boolean;
@@ -163,6 +168,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     nameColorOn,
     fontSize,
     fontZoom,
+    suggestDelay,
+    commitSuggestDelay,
     sugarViewOn,
     applySugarViewPref,
     formatOnSave,
@@ -391,6 +398,40 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 文字缩放（当前 {100 + fontZoom * 10}%）
                 <span className="settings-hint">
                   Ctrl+= 放大一档、Ctrl+- 缩小一档（每档 10%）、Ctrl+0 复原；缩放叠在字号上，两者都会记住
+                </span>
+              </span>
+            </div>
+            {/* 补全弹出延迟（SUGGEST-2B）：真源与钳制在 suggest-pref.ts，这里只排版。
+                − / ＋ 每档 100ms；0 显示「立即」= 打字即弹（默认，保持旧体感）。
+                观察者每次排程现读 ⇒ 改完下一次击键即生效，不用重开文件。 */}
+            <div className="settings-row static" role="group" aria-label="补全弹出延迟">
+              <span className="settings-stepper">
+                <button
+                  className="ghost small"
+                  onClick={() => commitSuggestDelay(suggestDelay - SUGGEST_DELAY_STEP)}
+                  disabled={suggestDelay <= SUGGEST_DELAY_MIN}
+                  title="更快弹出"
+                  aria-label="减少补全弹出延迟"
+                >
+                  −
+                </button>
+                <span className="settings-stepper-value">
+                  {suggestDelay === SUGGEST_DELAY_MIN ? '立即' : `${suggestDelay} ms`}
+                </span>
+                <button
+                  className="ghost small"
+                  onClick={() => commitSuggestDelay(suggestDelay + SUGGEST_DELAY_STEP)}
+                  disabled={suggestDelay >= SUGGEST_DELAY_MAX}
+                  title="更慢弹出"
+                  aria-label="增加补全弹出延迟"
+                >
+                  ＋
+                </button>
+              </span>
+              <span>
+                补全弹出延迟
+                <span className="settings-hint">
+                  停手后多久弹出候选；0 = 打字即弹；只改补全时机、不动文件
                 </span>
               </span>
             </div>

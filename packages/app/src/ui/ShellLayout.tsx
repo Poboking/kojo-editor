@@ -52,6 +52,7 @@ import { loadFormatOnSavePref, saveFormatOnSavePref } from './format-pref';
 // 行上内联注解（B8）：同一份偏好形态，默认关；开关真源在 localStorage，这里只写值 + 发意图
 import { loadCodeLensPref, saveCodeLensPref } from './code-lens-pref';
 import { useNameColorPref } from './semantic-color-pref';
+import { saveSuggestDelayPref, useSuggestDelayPref } from './suggest-pref';
 import {
   resetFontZoomPref,
   stepFontZoomPref,
@@ -405,6 +406,17 @@ export function ShellLayout(props: Props): ReactElement {
    * **不需要重开文件**（与 `useDirectMode` 同一条通路，只是订阅方是编辑器而不是壳层）。
    */
   const nameColorOn = useNameColorPref();
+
+  /**
+   * 「补全弹出延迟」读数（SUGGEST-2B，2026-10-18；设置页里的那一项，默认 0 = 立刻弹）。
+   *
+   * 真源是 `suggest-pref.ts` 的 localStorage + 订阅表，这里只拿投影；写下去的下一刻，
+   * `EditorPane` 里观察者的 `getDebounceMs` 现读就会拿到新值 ⇒ **改完下一次击键即生效**。
+   */
+  const suggestDelay = useSuggestDelayPref();
+  const commitSuggestDelay = useCallback((ms: number) => {
+    saveSuggestDelayPref(ms);
+  }, []);
 
   // 字号/缩放读数（A1）：真源在 font-size-pref 的 localStorage，这里只拿投影
   const fontSize = useFontSizePref();
@@ -1588,6 +1600,8 @@ export function ShellLayout(props: Props): ReactElement {
           nameColorOn={nameColorOn}
           fontSize={fontSize}
           fontZoom={fontZoom}
+          suggestDelay={suggestDelay}
+          commitSuggestDelay={commitSuggestDelay}
           sugarViewOn={sugarViewOn}
           applySugarViewPref={applySugarViewPref}
           formatOnSave={formatOnSave}

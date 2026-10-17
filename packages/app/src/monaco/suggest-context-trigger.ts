@@ -10,9 +10,16 @@ import { caseValueSlotAt, timingNumberSlotAt } from './kojo-completion-instructi
 import { timingFaceSlot, timingNamedParamValueSlot } from './kojo-completion-faces';
 import { kojoFunctionNameSlot } from './kojo-completion-functions';
 import { kojoVariableNameSlot } from './kojo-completion-variables';
+import { kojoNativeSlotAt } from './kojo-native-zone';
 
 /**
  * CTX-SUGGEST · 「光标刚落到名字位 ⇒ 主动弹一次补全」的**宿主侧观察者**。
+ *
+ * SUGGEST-2B（2026-10-18）起触发权从"只认打开名字槽的那几枚字符"放宽为**任意单字符纯插入**：
+ * 名字槽里继续打字（widget 被过滤到零后自动关闭）也会重开一轮；落点仍然只由 gate ⑩ 的
+ * 候选源探针决定（台词行 / 普通文本 / 字符串 / 注释里的任意字符都不弹）。防骚扰的第一道
+ * 闸从"字符白名单"换成 gate ⑥（widget 已开 ⇒ 不重触发，否则会把候选选择重置回第一条）。
+ * 防抖窗口改为**每次排程现取**（`host.getDebounceMs`），设置页改延迟下一次击键即生效。
  *
  * ## 为什么要有这一条路（而不是把 quickSuggestions 打开）
  *
@@ -33,11 +40,15 @@ import { kojoVariableNameSlot } from './kojo-completion-variables';
  * ## 为什么不会骚扰作者
  *
  * 触发权只交给**"刚敲下的一枚字符"**：观察者只认"单字符纯插入"的内容事件（删除 / 粘贴 /
- * 撤销重做 / `setValue` 全不算），且该字符必须能把光标**推进**一个名字槽
- * （{@link isSlotOpeningChar}：空白 / `@` / 逗号 / 半角冒号 / `的`）。纯移动光标（点击、方向键、撤销、跳行）
- * 根本没有内容事件，`CursorChangeReason` 落在 Explicit/Undo/Redo/Paste/ContentFlush 时也一律
- * 撤销已排程的那一拍 ⇒ 不会"一点就到处弹窗"。名字位判据又只覆盖行首关键字之后的那一位，
- * 台词行、注释、字符串里的空白什么都打不开。
+ * 撤销重做 / `setValue` 全不算），纯移动光标（点击、方向键、撤销、跳行）根本没有内容事件，
+ * `CursorChangeReason` 落在 Explicit/Undo/Redo/Paste/ContentFlush 时也一律撤销已排程的那一拍
+ * ⇒ 不会"一点就到处弹窗"。
+ *
+ * 字符本身不再设白名单（SUGGEST-2B：名字槽里继续打字也要能重开一轮），**位置**仍是唯一判据：
+ * gate ⑩ 只认候选源自己认的名字位（行首关键字之后 / `{` 插值里 / ERB 的 `CALL`·`GOTO` 等），
+ * 台词行、普通文本、字符串、注释里的任意字符都过不了。真正防"重弹重置选择"的是 gate ⑥：
+ * 补全 widget 已开（`SuggestController.model.state !== 0`，含供应商还在取词的 Loading 态）
+ * 一律不重触发，Monaco 自己边打字边过滤。
  */
 
 /* ============================== 常量（Monaco 侧数值一律附来源） ============================== */
@@ -50,9 +61,15 @@ export const SUGGEST_ACTION_ID = 'editor.action.triggerSuggest';
 
 /**
  * 防抖窗口缺省值 = **0**：同拍的内容事件 + 光标事件合并成一次评估即可，任何额外延迟都会被
- * 作者看成"补全慢半拍"。（可调：`host.debounceMs`。）
+ * 作者看成"补全慢半拍"。（可调：`host.getDebounceMs` 每次排程现取 / 旧 host 的 `host.debounceMs`。）
  */
 export const DEFAULT_CONTEXT_TRIGGER_DEBOUNCE_MS = 0;
+
+/**
+ * 观察者侧的硬上限（毫秒）：设置页只让作者调到 0–1000，这里再夹一道 2000——手改 localStorage
+ * 或未来接别的偏好源时，不会造出一个几十分钟后才响的定时器。**静默夹取，不抛**。
+ */
+export const CONTEXT_TRIGGER_DEBOUNCE_MAX_MS = 2000;
 
 /**
  * `CursorChangeReason` 的**数值**（monaco 0.57 公开枚举，`esm/vs/editor/editor.api.d.ts:3082`；
@@ -113,7 +130,11 @@ function nameSlotProbesOf(languageId: string): readonly NameSlotProbe[] | null {
 }
 
 /**
- * 「刚敲下这一枚字符」才可能**进入**名字槽的字符集：
+ * 「这一枚字符能把光标**推进**一个新名字槽」的字符集。
+ *
+ * SUGGEST-2B 起**不再参与触发判定**（gate ⑦ 已放宽为任意单字符插入，落点由 gate ⑩ 决定）；
+ * 保留为字符语义的单一说明面，并钉住"哪些字符会打开槽"这条既有契约（单测逐枚断言）。
+ *
  * - 空白（半角 / 全角 / 制表；走 `kojo-completion-position` 的 `isBlank` 单源，口径 = lexer）
  *   ⇒ `时机 |` / `是 |` / `调用 |` / `函数 |` / `时机 本番 |` / `CALL |` / `GOTO |`；
  * - `@` ⇒ ERB 定义位（行首 `@|` 就是函数名槽）；
@@ -129,8 +150,9 @@ function nameSlotProbesOf(languageId: string): readonly NameSlotProbe[] | null {
  *   "已开只重过滤不重取词"这条路无从恢复 ⇒ 必须由宿主重触发一轮。探针⑩
  *   （`kojoVariableNameSlot`）只在 `{她的` 这类名字位命中，台词里的 `的` 不弹。
  *
- * **名字字符本身不算**：widget 已经开着时 Monaco 自己边打字边过滤，宿主再 trigger 一次只会
- * 把候选选择重置回第一条（体感 = "我刚打的字被吞了"）。
+ * **名字字符本身不"打开"槽**——但 SUGGEST-2B 之后它们照样会排程一次评估：widget 已被
+ * 过滤到零而自动关闭时，继续打名字字符就是作者要的"恢复候选"；widget 还开着时由 gate ⑥
+ * 兜住，不会把候选选择重置回第一条（体感 = "我刚打的字被吞了"）。
  */
 export function isSlotOpeningChar(ch: string): boolean {
   return isBlank(ch) || ch === '@' || ch === ',' || ch === '，' || ch === ':' || ch === '的';
@@ -153,7 +175,7 @@ export interface SuggestOpenContext {
   readonly line: string;
   /** Monaco 的 1 基列 */
   readonly column: number;
-  /** 刚敲下的那一枚字符（不是"单字符纯插入"⇒ `null`） */
+  /** 刚敲下的那一枚字符（不是"单字符纯插入"⇒ `null`）；字符本身不限，位置由 gate ⑩ 决定 */
   readonly typedChar: string | null;
   /** 有打开的文件（空编辑器一律不弹） */
   readonly hasPath: boolean;
@@ -169,12 +191,17 @@ export interface SuggestOpenContext {
   readonly selectionActive: boolean;
   /** 补全 widget 已可见 / 正在跑（重弹 = 重置选择） */
   readonly widgetVisible: boolean;
+  /**
+   * `.kojo` 原生区名字位（`@` 块 / 全大写直通行 / `$标签`；SUGGEST-2A 的路由判据在这里
+   * 只多算一枚"值得弹"的位置）。可选：非 `.kojo` / 旧调用方不传 ⇒ `undefined` = 不加分。
+   */
+  readonly nativeSlot?: boolean;
 }
 
 /**
  * 主动触发的**全部闸门**（纯函数；观察者只负责把 Monaco 事件折成 {@link SuggestOpenContext}）。
  * 顺序即抑制条件的编号，逐条可测：
- * ①无文件 ②只读 ③派生视图 ④无焦点 ⑤多光标/有选区 ⑥widget 已开 ⑦不是"刚敲进槽的那枚字符"
+ * ①无文件 ②只读 ③派生视图 ④无焦点 ⑤多光标/有选区 ⑥widget 已开 ⑦不是"刚敲下的一枚字符"
  * ⑧这门语言没有名字位判据 ⑨串/注释内 ⑩候选源自己不信这一位。
  */
 export function shouldTriggerContextSuggest(c: SuggestOpenContext): boolean {
@@ -184,12 +211,14 @@ export function shouldTriggerContextSuggest(c: SuggestOpenContext): boolean {
   if (!c.focused) return false; // ④
   if (c.multiCursor || c.selectionActive) return false; // ⑤
   if (c.widgetVisible) return false; // ⑥
-  const ch = c.typedChar;
-  if (ch === null || !isSlotOpeningChar(ch)) return false; // ⑦
+  if (c.typedChar === null) return false; // ⑦ 任意单字符都行（SUGGEST-2B）；位置交给 ⑩
   const probes = nameSlotProbesOf(c.languageId); // ⑧
   if (probes === null) return false;
   if (isNonCodePosition(c.languageId, c.line, c.column)) return false; // ⑨
-  return probes.some((probe) => probe(c.line, c.column) !== null); // ⑩
+  // ⑩ 候选源自己认的位置：糖册的名字位探针，或 `.kojo` 原生区里 ERB 门认可的名字位
+  //（`CALL ` / `#D` / `CFLAG:` / `GOTO ` / `SETBIT …,`——判据在 `kojo-native-zone.ts`，
+  // 不在这里另抄一份 ERB 位置门）。
+  return (c.nativeSlot ?? false) || probes.some((probe) => probe(c.line, c.column) !== null);
 }
 
 /** 位置签名（含语言 + 路径 + 行 + 列 + 光标前文）：同一签名只弹一次，重复事件与往返移动都吞掉 */
@@ -208,8 +237,33 @@ export interface SuggestContextTriggerHost {
   getPath: () => string | undefined;
   /** 糖预览等**派生视图**（显示的 model 是投影 ⇒ 行号与位置都不属真文件） */
   isDerivedView: () => boolean;
-  /** 防抖窗口（缺省 {@link DEFAULT_CONTEXT_TRIGGER_DEBOUNCE_MS} = 0，仅合并同拍事件） */
+  /**
+   * 防抖窗口**现取值**（SUGGEST-2B）：每次排程都调一次 ⇒ 设置页改完延迟，下一次击键即生效。
+   * 返回值夹到 0–{@link CONTEXT_TRIGGER_DEBOUNCE_MAX_MS}；抛错 / 非有限数回静态值。
+   */
+  getDebounceMs?: () => number;
+  /**
+   * 静态防抖窗口（旧 host 的接线面，缺省 {@link DEFAULT_CONTEXT_TRIGGER_DEBOUNCE_MS} = 0）。
+   * 同时给了 `getDebounceMs` 时以 getter 为准（每次现取）；没有 getter 的旧 host 行为零改动。
+   */
   debounceMs?: number;
+}
+
+/**
+ * 本次排程的防抖窗口：getter 优先、逐次现取；任何脏值（NaN / 负数 / 超大 / 抛错）都静默回落
+ * 到"静态值或默认 0"再夹到 0–2000。**绝不把异常抛进 Monaco 的事件派发链**。
+ */
+function readDebounceMs(host: SuggestContextTriggerHost): number {
+  let raw: unknown = host.debounceMs ?? DEFAULT_CONTEXT_TRIGGER_DEBOUNCE_MS;
+  if (typeof host.getDebounceMs === 'function') {
+    try {
+      raw = host.getDebounceMs();
+    } catch {
+      /* 偏好读取器坏掉 ⇒ 沿用静态窗口 */
+    }
+  }
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return DEFAULT_CONTEXT_TRIGGER_DEBOUNCE_MS;
+  return Math.min(CONTEXT_TRIGGER_DEBOUNCE_MAX_MS, Math.max(0, raw));
 }
 
 /** `SuggestController` 的结构面（只读 `model.state`；其余一概不碰） */
@@ -265,7 +319,6 @@ export function installSuggestContextTrigger(
   editor: Monaco.editor.IStandaloneCodeEditor,
   host: SuggestContextTriggerHost,
 ): Monaco.IDisposable {
-  const debounceMs = host.debounceMs ?? DEFAULT_CONTEXT_TRIGGER_DEBOUNCE_MS;
   /** 刚敲下的那一枚字符；一次评估后清空 ⇒ "一次打字只弹一次" */
   let typedChar: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -315,6 +368,8 @@ export function installSuggestContextTrigger(
           ? selections.some((s) => !!s && !s.isEmpty())
           : !!primary && !primary.isEmpty(),
       widgetVisible: isSuggestWidgetVisible(editor),
+      // 只有 `.kojo` 需要多问一次原生区（跨装配路由的位置面）；其余语言不付这笔扫描
+      nativeSlot: languageId === KOJO_LANGUAGE_ID ? kojoNativeSlotAt(model, position) : false,
     });
     if (!ok) return;
     // 动作走 `editor.trigger` → 命令面（vendor `codeEditorWidget.js:781` 起：`default:` 分支
@@ -342,13 +397,16 @@ export function installSuggestContextTrigger(
   const schedule = (): void => {
     if (disposed) return;
     cancelTimer();
+    // 每次排程现取：设置页改变延迟后，**下一次击键**就按新值走（不是安装时定死）
+    const delayMs = readDebounceMs(host);
     timer = setTimeout(() => {
       timer = null;
       evaluate();
-    }, debounceMs);
+    }, delayMs);
   };
 
-  // 打字腿：只认"单字符纯插入"，其余（删除 / 粘贴 / 撤销重做 / setValue）撤掉待发的一拍
+  // 打字腿：只认"单字符纯插入"（任意字符都可排程），其余（删除 / 粘贴 / 撤销重做 / setValue）
+  // 撤掉待发的一拍。落点由 evaluate 里的 gate ⑩ 决定 ⇒ 台词行 / 普通文本不会因此多弹。
   const contentSub = editor.onDidChangeModelContent((e) => {
     if (disposed) return;
     if (e.isUndoing === true || e.isRedoing === true) {
@@ -358,7 +416,7 @@ export function installSuggestContextTrigger(
     }
     const inserted = singleInsertedChar(e);
     typedChar = inserted;
-    if (inserted !== null && isSlotOpeningChar(inserted)) schedule();
+    if (inserted !== null) schedule();
     else cancelTimer();
   });
 
@@ -371,7 +429,7 @@ export function installSuggestContextTrigger(
       cancelTimer();
       return;
     }
-    if (typedChar !== null && isSlotOpeningChar(typedChar)) schedule();
+    if (typedChar !== null) schedule();
   });
 
   // 换 model = 换文件：位置签名作废（否则"上一份文件同一点弹过"会吞掉这一份的第一次）

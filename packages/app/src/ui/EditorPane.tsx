@@ -32,6 +32,7 @@ import {
 } from './save-coordinator';
 import { loadFormatOnSavePref } from './format-pref';
 import { applyNameColorPref, subscribeNameColorPref } from './semantic-color-pref';
+import { loadSuggestDelayPref } from './suggest-pref';
 import {
   applyFontSizePref,
   applyFontZoomPref,
@@ -1456,9 +1457,12 @@ export function EditorPane({
     // 上下文主动触发补全（1017）：`quickSuggestions` 全档为 `false`（中文打字噪声基线，
     // `editor-options.ts`），打字本身不会自动弹；本观察者在"刚敲下一枚把光标推进名字位的
     // 字符"时代按一次 Ctrl+Space。**每编辑器实例一枚**（SPLIT1 分屏互不串），随卸载释放。
+    // 延迟偏好**每次排程现读**（SUGGEST-2B）：设置页改完下一次击键即生效，不需要重开文件；
+    // 卸载由 `contextSuggestSub.dispose()` 一并清掉未响的那一拍定时器。
     const contextSuggestSub = installSuggestContextTrigger(ed, {
       getPath: () => filePathRef.current,
       isDerivedView: () => sugarModelRef.current !== null,
+      getDebounceMs: () => loadSuggestDelayPref(),
     });
     const flushViewOnUnload = (): void => flushViewStates();
     window.addEventListener('beforeunload', flushViewOnUnload);
