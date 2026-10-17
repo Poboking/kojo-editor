@@ -249,6 +249,14 @@ export interface EditorLiftPreviewItem {
   readonly title: string;
   /** 可选人读说明（中文；不暴露内部术语） */
   readonly reason?: string;
+  /**
+   * native 兜底段标记（additive，2026-10-17 全中文化系列 ZH-P 批）。
+   *
+   * `true` = 该段不是"工具认得出的糖"，而是**显式兜底显示**（`未识别语句 · <原文>`，
+   * 契约口径住 `SugarProjectSegment.nativeOnly`）。宿主愿意给兜底段不同的读感时用这
+   * 一位区分，缺省 = 真糖段（旧消费方零改动）。
+   */
+  readonly nativeOnly?: boolean;
 }
 
 export interface EditorLiftPreviewContribution extends ContributionBase {

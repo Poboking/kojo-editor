@@ -53,11 +53,16 @@ describe('红线尺子 · 判据本身', () => {
   });
 
   it('分母只算作者真得读的行；未接管的行逐条可追（报红要能给「屏上原样文案」）', () => {
-    const m = measure('\n;说明\nCALL X\n\nTFLAG:193 = 1');
+    const src = ['', ';说明', 'CALL X', '', 'TFLAG:193 = 1'];
+    // 空段 = 什么都不接管 ⇒ 分母金额与报红明细直接钉尺子口径（不借投影的世界育人）
+    const m = measureVerbatimNativeLines(src, []);
     expect(m.total).toBe(2);
     expect(m.count).toBe(2);
-    expect(m.hitTexts).toEqual(['CALL X', 'TFLAG:193 = 1']);
+    expect(m.uncovered).toBe(2);
+    expect(m.hits.map((h) => h.text)).toEqual(['CALL X', 'TFLAG:193 = 1']);
     expect(m.hits.map((h) => h.line)).toEqual([3, 5]);
+    // 合流后同一份源在投影下归零（`CALL` → `调用 …`、赋值行走 ZH-S pass）——分母照常计数、命中消失
+    expect(measure('\n;说明\nCALL X\n\nTFLAG:193 = 1')).toMatchObject({ total: 2, count: 0 });
   });
 
   it('台词段整段被糖替换 ⇒ 0 行原样 ERB（尺子不误报已被接管的行）', () => {
@@ -148,19 +153,27 @@ const BASELINE = {
 } as const;
 
 describe('红线尺子 · 真实语料形态分账（六线的共同靶）', () => {
-  it('改前基线：18 / 33 行整行原样 ERB，且逐行可对账', () => {
+  it('归零验收（全中系列合流后）：同一份语料形态，红线从 18/33 到 0/33', () => {
     const m = measure(REALISTIC_ERB);
+    // 分母（真实语料形态的可读行）没变——变的是每一行都被接管且不再是原样 ERB
     expect(m.total).toBe(BASELINE.total);
-    expect(m.count).toBe(BASELINE.count);
-    expect(m.uncovered).toBe(BASELINE.uncovered);
-    expect(m.echoed).toBe(BASELINE.echoed);
-    expect(m.hitTexts).toEqual([...BASELINE.hits]);
+    expect(m.count).toBe(0);
+    expect(m.uncovered).toBe(0);
+    expect(m.echoed).toBe(0);
+    expect(m.hits).toEqual([]);
   });
 
   it('成因分账可见（不静默）：other / unsupported-control-flow / data-or-skip 三类都有数', () => {
-    const byReason = new Map(measure(REALISTIC_ERB).stats.nativeByReason.map((x) => [x.reason, x.count]));
-    expect((byReason.get('other') ?? 0) + (byReason.get('unsupported-control-flow') ?? 0) + (byReason.get('data-or-skip') ?? 0))
-      .toBe(BASELINE.count);
+    const { stats } = measure(REALISTIC_ERB);
+    const byReason = new Map(stats.nativeByReason.map((x) => [x.reason, x.count]));
+    // 改前 18 行原样上屏；合流后 `RETURN 2`（SIF 早退）被 ZH-P 吸收 ⇒ native 分账 17。
+    // 每一类都要有数（任何一类被吞掉都算静默违约）：
+    expect(byReason.get('other') ?? 0).toBeGreaterThan(0);
+    expect(byReason.get('unsupported-control-flow') ?? 0).toBeGreaterThan(0);
+    expect(byReason.get('data-or-skip') ?? 0).toBeGreaterThan(0);
+    expect(
+      (byReason.get('other') ?? 0) + (byReason.get('unsupported-control-flow') ?? 0) + (byReason.get('data-or-skip') ?? 0),
+    ).toBe(17);
   });
 
   /**

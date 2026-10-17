@@ -395,12 +395,12 @@ describe('E13-B 投影 · 段级吸收', () => {
     // 函数头照常反解成「时机 …：」（旧实现连它一起抹掉）
     expect(text).toContain('时机 绝顶：');
     // 机器码一行都没被吞、也没被改写：`LOCAL` 行的**值**在拼接产物里仍逐字可认
-    // （停用态没被悄悄翻成启用态——1016 批立的红线）。ZH-P 起原生行不再原样上屏，
-    // 兜底形是 `未识别语句 · <原文>`，值仍回显在兜底行里。
-    const composed = composeLikeHost(mixedOff, r.segments);
-    expect(composed.split('\n').filter((l) => /LOCAL\s*=/.test(l))).toEqual([
-      '未识别语句 · LOCAL = 1',
-      '未识别语句 · LOCAL = 0',
+    // （停用态没被悄悄翻成启用态——1016 批立的红线）。合流注：`LOCAL = …` 走 ZH-S pass
+    // 接管成 `局部 = …`（语言层槽位中文名）；机器码原行整行不再上屏，但值与顺序不缺。
+    const composed = composeLikeHost(mixedOff, r.segments).split('\n');
+    expect(composed.filter((l) => /局部 = |未识别语句 · LOCAL\s*=/.test(l))).toEqual([
+      '局部 = 1',
+      '局部 = 0',
     ]);
     // 不再是零糖段
     expect(r.segments.length).toBeGreaterThan(0);
@@ -440,8 +440,11 @@ describe('E13-B 投影 · 段级吸收', () => {
     // 两条段的台词都还在糖里（旧实现这里 `segs=0`，两行台词一起陪葬）
     expect(text).toContain('「甲」');
     expect(text).toContain('「乙」');
-    // 撤折叠≠吞内容：`CALL` 那行仍以原生形态出现在拼接产物里（没被折掉、也没被删）
-    expect(composeLikeHost(src, r.segments)).toContain('CALL SOMEThing');
+    // 撤折叠≠吞内容：`CALL` 那行仍以 native 段出现在拼接产物里（没被折掉、也没被删）。
+    // 合流注：命中 ZH-S → `调用 SOMEThing`；机器码整行原样(--=红线)在任何形态下都不许上屏。
+    const composed = composeLikeHost(src, r.segments).split('\n');
+    expect(composed).toContain('调用 SOMEThing');
+    expect(composed.every((l) => l !== 'CALL SOMEThing')).toBe(true);
     expect(codesOf(composeLikeHost(src, r.segments)).filter((c) => c.startsWith('section-'))).toEqual([]);
   });
 

@@ -121,6 +121,7 @@ export function createUiSugarLiftPlugin(): Plugin {
           sugarText: s.sugarText,
           title: s.fromLine === s.toLine ? `第 ${s.fromLine} 行` : `第 ${s.fromLine}–${s.toLine} 行`,
           reason: '.kojo 投影：只读显示，不改动原文件',
+          nativeOnly: s.nativeOnly, // 兜底段标记原样透传（additive；真糖段 = undefined）
         }));
       };
 

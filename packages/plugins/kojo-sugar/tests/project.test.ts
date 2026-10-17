@@ -163,9 +163,10 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
   it('无换行变体的空体 → 原样保留（既不输出也不换行，没有可显示的东西）', () => {
     const r = project(['PRINT', 'PRINTD', 'PRINTFORM', 'PRINTFORMD '].join('\n'));
     expect(sugarSegs(r.segments)).toHaveLength(0);
-    // 没读懂的 4 行仍以兜底形显式上屏（nativeOnly 段），不再是一整行原样 ERB
+    // 不投影的 4 行以 native 段显式上屏，不再是一整行原样 ERB。pass 已活的合流注：
+    // 裸 `PRINT` 命中 ZH-S 词表 → `片段打印`；其余三行表外 → 兜底形。
     expect(nativeOnlySegs(r.segments).map((s) => s.sugarText.split('\n'))).toEqual([
-      ['未识别语句 · PRINT', '未识别语句 · PRINTD', '未识别语句 · PRINTFORM', '未识别语句 · PRINTFORMD'],
+      ['片段打印', '未识别语句 · PRINTD', '未识别语句 · PRINTFORM', '未识别语句 · PRINTFORMD'],
     ]);
     expect(reasonsOf(r)['unsupported-print-variant']).toBe(4);
   });
@@ -328,15 +329,15 @@ describe('糖投影 · `SIF 条件` + 下一行 → 「如果 …：」+ 正文�
     expect(segLines(r.segments[0]!)).toEqual(['如果 她的好感度 >= 500：', '\t「近一点也没关系哦」 续']);
   });
 
-  it('正文是机器码（RETURN）时：块头照样成段，正文不在函数内 → 兜底形显式上屏（仍未被猜掉）', () => {
+  it('正文是机器码（RETURN）时：块头照样成段，正文不在函数内 → 不吸收、native 口径照样显示', () => {
     const r = project(['SIF A == 1', 'RETURN 1', 'PRINTFORMW 乙'].join('\n'));
     expect(sugarSegs(r.segments).map((s) => [s.fromLine, s.toLine])).toEqual([
       [1, 1],
       [3, 3],
     ]);
     expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['如果 A == 1：']);
-    // `RETURN 1` 不在函数体内（第 0 列没有 `@` 头）→ 不算骨架，但同样不原样上屏
-    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText)).toEqual(['未识别语句 · RETURN 1']);
+    // `RETURN 1` 不在函数体内（第 0 列没有 `@` 头）→ 不算骨架（不被吸收）；pass 命中 → `返回 1`
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText)).toEqual(['返回 1']);
   });
 
   it('判据 2：`SIF 条件:命令` 冒号形态整行不动（与变量索引冒号不可分，语料 0 例也不猜）', () => {
@@ -777,7 +778,7 @@ describe('糖投影 · 注释与分段', () => {
     ]);
     // native 行现在自带兜底段（红线），但它照样**切断**真糖段
     expect(nativeOnlySegs(r.segments).map((s) => [s.fromLine, s.toLine])).toEqual([[2, 2]]);
-    expect(nativeOnlySegs(r.segments)[0]!.sugarText).toBe('未识别语句 · SETCOLOR 0');
+    expect(nativeOnlySegs(r.segments)[0]!.sugarText).toBe('着色 0');
   });
 });
 
@@ -1084,7 +1085,9 @@ describe('糖投影 · 着色块不跨函数边界 / 不跨停用区', () => {
       'RESETCOLOR',
     ].join('\n');
     const r = project(src);
-    for (const s of r.segments) expect(s.sugarText).not.toContain('着色');
+    // 配对证据只有一种：块头形 `着色 0xFF8080：`。跨区配不上 ⇒ 哪个段里都不许有它。
+    // 未配对的行级显示 `着色 0xFF8080`（ZH-S pass 形，行仍在 nativeOnly 段里）不算配对。
+    for (const s of r.segments) expect(s.sugarText).not.toContain('着色 0xFF8080：');
   });
 });
 

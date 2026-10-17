@@ -307,9 +307,12 @@ describe('W5 / 形态 3：行内三元 —— 两侧同一个拆段核', () => {
     expect(dedent(c.roundTrip.generatedText)).toBe(src);
   });
 
-  it('负向钉：三段拆不出 → 显示整行不动、建议给明确理由（两侧都不猜）', () => {
+  it('负向钉：三段拆不出 → 显示不拆段、建议给明确理由（两侧都不猜）', () => {
     const broken = `PRINTFORML 前半 ${B} A ? x ${B} 后半`; // 缺 `#`（假分支）
-    expect(liftProject(projDeps(), { source: broken }).segments).toHaveLength(0);
+    const { segments } = liftProject(projDeps(), { source: broken });
+    // 显示侧：拆段候选 = 0（nativeOnly 兜底段不是拆段——它的义务是"必非原样"，归红线尺子的账）
+    expect(segments.filter((s) => s.nativeOnly !== true)).toHaveLength(0);
+    expect(segments.every((s) => s.nativeOnly === true)).toBe(true);
     const r = lift(broken);
     expect(r.candidates).toHaveLength(0);
     expect(answeredAt(r, 1)).toBe(true);
@@ -459,7 +462,10 @@ describe('W5 / 不变量：displayable ⇒ 候选 ∥ 明确拒绝理由', () =>
     for (const src of probes) {
       const r = lift(src);
       const { segments } = liftProject(projDeps(), { source: src });
-      for (const seg of segments) {
+      // 本不变量的账本 = **真糖段**（工具认得出、有唯一糖形的行）。nativeOnly 兜底段不是糖
+      // ——那是"工具没读懂"的显式事实陈述（ZH-P additive 契约），建议侧对它没有义务，
+      // 它的义务在红线尺子的账上（兜底形必非原样）。
+      for (const seg of segments.filter((s) => s.nativeOnly !== true)) {
         for (let line = seg.fromLine; line <= seg.toLine; line++) {
           // 收束行（ENDIF 等）不产出可见行，但仍是"被糖覆盖"→ 建议侧同样必须答过
           displayed++;

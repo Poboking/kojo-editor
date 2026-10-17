@@ -359,21 +359,26 @@ describe('`.erb` / 整文件糖视图供给（只用于看，零写盘）', () =
     '#DIM X',
   ].join('\n');
 
-  it('一个连续段：控制流 + 台词 + 注释透传 + 反糖；`@`/`#DIM` 切断', () => {
+  it('真糖段一个连续段：控制流 + 台词 + 注释透传 + 反糖；`@`/`#DIM` 切断并自带 nativeOnly 兜底段', () => {
     const k = boot({ [ERB_PATH]: enc(ERB_FULL) });
     const items = previewsOf(k)[0]!.provideLiftProject!({
       path: ERB_PATH,
       text: ERB_FULL,
       project: null,
     });
-    expect(items).toHaveLength(1);
+    // ① 1–5 真糖段；② 6–7 = `@FUNC`/`#DIM` 的 nativeOnly 兜底段（ZH-P 批：native 行显式上屏）
+    expect(items).toHaveLength(2);
     expect(`${items[0]!.fromLine}-${items[0]!.toLine}`).toBe('1-5');
+    expect(items[0]!.nativeOnly).toBeUndefined(); // 真糖段不带兜底标记（additive 契约）
     expect(items[0]!.sugarText.split('\n')).toEqual([
       '; 分节标记',
       '如果 TALENT:TARGET:恋慕：',
       '\t「{你}，今天也来训练了？」',
       '\t她别开了脸。 续',
     ]);
+    // 兜底段标记从 `SugarProjectSegment` 原样透传到 UI 供给项（宿主可区分"没读懂"的段）
+    expect(`${items[1]!.fromLine}-${items[1]!.toLine}`).toBe('6-7');
+    expect(items[1]!.nativeOnly).toBe(true);
   });
 
   it('`.kojo` 不供给投影（它本身就是糖）', () => {

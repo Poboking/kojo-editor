@@ -4,10 +4,10 @@
  * 本文件只测两件事，且两条都是**本文件红线**（口径住 `../src/native-display/types.ts`）：
  *
  * 1. **native 行的本地化接线**：project.ts 里每一个 `native()` 落点都过 `localizeNativeLine`
- *    ——全 pass 认不出 → 显式兜底 `未识别语句 · <原文>`，且**必须成段**（nativeOnly 段）
- *    才到得了屏幕；pass 命中 → 中文形。发生在基座上的当前事实：`control.ts` / `statement.ts`
- *    两个 pass 还是桩（恒返 `null`）⇒ 本文件天生就走在「全 pass 返 null」路径上——
- *    判据照旧成立（这正是 ZH-P 对"pass 全空"形态的要求：兜底段照样把红线压到 0）。
+ *    ——pass 命中 → 中文显示形；全 pass 认不出 → 显式兜底 `未识别语句 · <原文>`，且**必须成段**
+ *    （nativeOnly 段）才到得了屏幕。（合流注：ZH-S / ZH-C 两线的 pass 已在 master 全量，`CALL` /
+ *    `SETCOLOR` 等常见行命中中文形；本文件钉「认不出」用两条 pass 结构上就生拒的标杆——`@` 函数头。
+ *    判据不为合流打折：命中文形与兜底形**同样**不得与源行逐字相等。）
  * 2. **函数骨架 `RETURN` 永不上屏**：函数体内单独成行的 `RETURN …` 一律吸收（只读视图
  *    不显示，磁盘一字不动）；`RETURNF <值>` 显示 `返回 <值>`；MESSAGECHECK 数字返回
  *    （`隐藏情景（数字返回 1）：`）信息量更大 → **先于**骨架判定、不被吃。
@@ -71,13 +71,15 @@ function composeLikeHost(source: string, segments: ReadonlyArray<SugarProjectSeg
 
 describe('native 兜底段 · 出现与拼接口径', () => {
   it('认不出的行 → 单独 nativeOnly 段，兜底形 = `未识别语句 · <原文>`（恒非原样回显）', () => {
-    const r = project('CALL M_KOJO_K101_HELPER');
+    // `@` 头两条 pass 结构上都生拒（control / statement 都不认领函数头）⇒ 稳定的"全 pass miss"靶
+    const src = '@M_KOJO_K101_PLAIN_HEAD';
+    const r = project(src);
     expect(nativeSegs(r.segments)).toHaveLength(1);
     const seg = nativeSegs(r.segments)[0]!;
     expect(seg.fromLine).toBe(1);
     expect(seg.toLine).toBe(1);
-    expect(seg.sugarText).toBe('未识别语句 · CALL M_KOJO_K101_HELPER');
-    expect(isVerbatimNativeLine(seg.sugarText, 'CALL M_KOJO_K101_HELPER')).toBe(false);
+    expect(seg.sugarText).toBe('未识别语句 · @M_KOJO_K101_PLAIN_HEAD');
+    expect(isVerbatimNativeLine(seg.sugarText, src)).toBe(false);
   });
 
   it('真糖段一个 `nativeOnly` 字段都不带（additive 契约：旧消费方零改动、不靠文本猜第二份口径）', () => {
@@ -101,12 +103,13 @@ describe('native 兜底段 · 出现与拼接口径', () => {
     }
   });
 
-  it('多行连续兜底 → 一段多行呈现；兜底行与周围真糖段同一把缩进尺（`ctx.indentAt` + 缩进补正）', () => {
-    // `SIF A` 的管辖行缩进 +1（批 H 同一口径作用在兜底行上）→ 兜底行比第一行深一级，
-    // 段内再按最小层归一：第一行顶格、被管辖的行深一级——与它周围的糖文读感一致。
+  it('多行连续 native → 一段多行呈现；行与周围真糖段同一把缩进尺（`ctx.indentAt` + 缩进补正）', () => {
+    // `SIF A` 的管辖行缩进 +1（批 H 同一口径作用在 native 行上）→ 段内按最小层归一：
+    // 第一行带外层缩进、第二行顶格——与它周围的糖文读感一致。
+    // pass 已活的合流注：`CALL` 命中 ZH-S 中文形，但行仍属 native 段（接线的分野不变）。
     const r = project(['SIF A', '\tCALL AAA_FN', '\tCALL BBB_FN'].join('\n'));
     expect(nativeSegs(r.segments).map((s) => s.sugarText.split('\n'))).toEqual([
-      ['\t未识别语句 · CALL AAA_FN', '未识别语句 · CALL BBB_FN'],
+      ['\t调用 AAA_FN', '调用 BBB_FN'],
     ]);
   });
 
@@ -122,7 +125,7 @@ describe('native 兜底段 · 出现与拼接口径', () => {
     const lines = seg.sugarText.split('\n');
     expect(lines).toHaveLength(3);
     for (let i = 0; i < 3; i++) {
-      expect(isVerbatimNativeLine(lines[i]!, split(src)[i])).toBe(false);
+      expect(isVerbatimNativeLine(lines[i]!, split(src)[i] ?? '')).toBe(false);
     }
   });
 });
@@ -209,9 +212,10 @@ describe('RETURN 吸收 · 函数体内任何单独成行的 RETURN 永不上屏
     expect(composeLikeHost(src, r2.segments).join('\n')).not.toContain('RETURN 1');
   });
 
-  it('函数体外的 `RETURN`（文件头区 / 无 `@` 头）不是骨架 → 兜底形显示', () => {
+  it('函数体外的 `RETURN`（文件头区 / 无 `@` 头）不是骨架 → 不吸收，native 口径照样显示', () => {
+    // 不算骨架 ⇒ 不进吸收表；native 行照常成段上屏。pass 已活的合流注：命中 ZH-S → `返回 1`。
     const r = project(['PRINTFORMW 「甲」', 'RETURN 1'].join('\n'));
-    expect(nativeSegs(r.segments).map((s) => s.sugarText)).toEqual(['未识别语句 · RETURN 1']);
+    expect(nativeSegs(r.segments).map((s) => s.sugarText)).toEqual(['返回 1']);
   });
 
   it('包装三联的 `RETURN`（原口径的两处吸收点）→ 与骨架一致照旧不显示', () => {
@@ -221,12 +225,13 @@ describe('RETURN 吸收 · 函数体内任何单独成行的 RETURN 永不上屏
     expect(composeLikeHost(src, r.segments).join('\n')).not.toContain('CALL A_1');
   });
 
-  it('`[SKIPSTART]` 停用区里的 `RETURN` 不吸收——整片区域走兜底口径，"这段是停用的"可见如故', () => {
+  it('`[SKIPSTART]` 停用区里的 `RETURN` 不吸收——区里的内容与标记都照常可见，"这段是停用的"如故', () => {
     const src = ['[SKIPSTART]', 'RETURN 1', '[SKIPEND]', 'RETURN 2'].join('\n');
     const r = project(src);
     const doc = composeLikeHost(src, r.segments);
-    expect(doc.join('\n')).toContain('未识别语句 · RETURN 1');
-    expect(doc.join('\n')).not.toContain('\nRETURN 2');
+    expect(doc.join('\n')).toContain('未识别语句 · [SKIPSTART]'); // 停用标记显式可见（两条 pass 都生拒 `[` 头）
+    expect(doc.join('\n')).toContain('返回 1'); // 区内的 RETURN 不被吸收，照常上屏（pass 命中 → `返回 1`）
+    expect(doc.join('\n')).not.toContain('\nRETURN 2'); // 任何形态下整行原样 ERB 都不许出现
   });
 
   it('行尾注释剥离后再判：`RETURN 1 ; 说明` 与裸 `RETURN` 同样吸收', () => {
@@ -238,13 +243,13 @@ describe('RETURN 吸收 · 函数体内任何单独成行的 RETURN 永不上屏
     expect(composeLikeHost(bareSrc, bare.segments).join('\n')).not.toContain('RETURN');
   });
 
-  it('冒号连写（`SIF A: RETURN`）不属"单独成行"→ 不在本表，但兜底形使其不再原样上屏', () => {
+  it('冒号连写（`SIF A: RETURN`）不属"单独成行"→ 不进吸收表，native 口径使它不再原样上屏', () => {
     const src = ['@M_FN', 'SIF A: RETURN', 'PRINTFORMW 「乙」'].join('\n');
     const r = project(src);
     const doc = composeLikeHost(src, r.segments);
-    // 整行逐字等号的判据：删去兜底形，源行本身一行不许出现
+    // 整行逐字等号的判据：源行本身一行不许出现；pass 已活的合流注：控制 pass 命中 → `如果 A 则 RETURN`
     expect(doc.every((l) => l !== 'SIF A: RETURN')).toBe(true);
-    expect(doc.join('\n')).toContain('未识别语句 · SIF A: RETURN');
+    expect(doc.join('\n')).toContain('如果 A 则 RETURN');
   });
 
   it('`RETURNF <值>` 是作者写的返回值 → 显示 `返回 <值>`；裸 `RETURNF` → `返回`；行尾注释剥离', () => {
