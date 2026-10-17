@@ -1,13 +1,6 @@
-# PITFALLS.md — 环境坑与探针纪律（写盘 / 探针 / 多 agent 前后扫一眼）
-
-> 来源：原 HANDOFF §七/§八/§九（已冻结进 `docs/archive/HANDOFF.md`，细节可去那查原文）。
-> **新坑追加 = 一行**，写进对应小节；**不再往 archive 写任何东西**。
-
-## 一、安全模型（写文件功能必读）
-
-- 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
-- **双闸并存**：kernel io 白名单（第一道）+ Rust 宿主写允许域（第二道：项目根整体 + appDataDir，`project.opened` 注册 / `project.closed` 清除），语义**以更严者为准**；
-- 写回**保编码保换行**（首读探测缓存：utf-8-bom / utf-8 / shift_jis / utf-16；eol 多数派）；原子写（临时文件 + rename）+ 自动备份 `{appData}/backup/{hash}/`（保留 20 版）；
+93. **多 agent 并发往 `packages/plugin-api/src/index.ts` 尾部追加导出区块会互相顶掉**：本轮 16 agent 并行的实测一次"写炸头"（文件头 doc 注释与首个 export 被覆盖），靠事后读回才发现。纪律：barrel 只允许**文件最末尾**追加自己的一小块、绝不重排/删除他人区块，追加后立刻读回比对；分工时先给每个契约文件指定唯一属主（本轮 W4/W13 各自区块并存是正确形态）。
+94. **测试里自造 trash 条目 id 的毫秒段必须补足 3 位（p3）**：`TRASH_ID_RE` 与 `io.timestamp()` 都认 `\d{3}`，用 `String(ms).padStart(2,'0')` 那类写法会 10% 概率撞上 `TRASH_ID_RE` 失配，`listTrash`/`purge` 同时跳过 ⇒ 表现为"purge 返回 0"的**随机红**（本轮实测 100/1000 触发）。正解＝毫秒段 `padStart(3,'0')`，别用两位补位改 id 形状。
+�保留 20 版）；
 - UI「只读浏览」永远可用（未批准 = 不可写，不阻塞浏览）；
 - **常驻可写根**：作者工作区根经 `io.setAppWritableRoots` 登记，不受 `setWritableRoots([])` 收回影响——工作区恒可写独立于游戏目录授权周期；
 - **导出是唯一法定绕闸通道**（`exportFile`，§5.97 起独任）：落点**刻意**不过写允许域（导出的意义就是落到域外），授权来自系统对话框的显式选择；对话框 + 写盘绑在同一 Rust 命令内，JS 只传文件名与字节 ⇒ 无越权面。取消返回 `null`（正常路径不算失败）。四条断言钉在 `kernel/tests/io.test.ts`；
