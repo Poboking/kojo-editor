@@ -46,9 +46,9 @@ import {
   KOJO_TUTORIAL_OVERLAY_ID,
   REFERENCE_TUTORIAL_OVERLAY_ID,
   SUGAR_TUTORIAL_OVERLAY_ID,
-  createTutorialOverlay,
-} from './tutorial-overlay';
-import { TUTORIALS, type TutorialId } from './tutorial-content';
+  createLazyTutorialOverlay,
+} from './tutorial-lazy';
+import type { TutorialId } from './tutorial-content';
 import type { PendingDeploy } from './deploy';
 import { charaSearchScopeOptions } from './search-scope';
 
@@ -819,12 +819,18 @@ export function createEratwAdapterPlugin(): Plugin {
         ctx.bus.emit('ui.overlay.open', { id: REFERENCE_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' });
       };
 
+      /**
+       * 三个教程浮层（PS-10 首屏批）：贡献照旧在此刻注册——id / order / size 一字不动，
+       * 面板顺序与 `ui.tutorial.open` 映射的语义完全不变；只有**正文**换成懒装载壳，
+       * 浮层真被打开那一刻才 `import()` 那 223 KB 文案（开机默认不开教程 ⇒ 欢迎页不该
+       * 为它付解析与求值的钱）。
+       */
       ctx.slots.register('ui.overlay', {
         id: SUGAR_TUTORIAL_OVERLAY_ID,
         order: 30,
         size: 'wide',
-        component: createTutorialOverlay({
-          tutorial: TUTORIALS.sugar,
+        component: createLazyTutorialOverlay({
+          tutorial: 'sugar',
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: SUGAR_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' }),
           openReference: openReferenceOverlay,
@@ -835,8 +841,8 @@ export function createEratwAdapterPlugin(): Plugin {
         id: KOJO_TUTORIAL_OVERLAY_ID,
         order: 31,
         size: 'wide',
-        component: createTutorialOverlay({
-          tutorial: TUTORIALS.kojo,
+        component: createLazyTutorialOverlay({
+          tutorial: 'kojo',
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: KOJO_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' }),
           openReference: openReferenceOverlay,
@@ -847,10 +853,13 @@ export function createEratwAdapterPlugin(): Plugin {
         id: REFERENCE_TUTORIAL_OVERLAY_ID,
         order: 32,
         size: 'wide',
-        component: createTutorialOverlay({
-          tutorial: TUTORIALS.reference,
+        component: createLazyTutorialOverlay({
+          tutorial: 'reference',
           close: () =>
-            ctx.bus.emit('ui.overlay.close', { id: REFERENCE_TUTORIAL_OVERLAY_ID, source: 'eratw-adapter' }),
+            ctx.bus.emit('ui.overlay.close', {
+              id: REFERENCE_TUTORIAL_OVERLAY_ID,
+              source: 'eratw-adapter',
+            }),
         }),
       });
 
