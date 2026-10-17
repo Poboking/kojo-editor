@@ -2,7 +2,7 @@ import { mkdirSync, promises as fs, renameSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { pathKey } from '@kojo/plugin-api';
+import { pathKey, WriteNotAllowedError } from '@kojo/plugin-api';
 import { FileIOServiceImpl, TrashManager, TRASH_ID_RE, TRASH_KEEP_DAYS, trashEntryTimeMs } from '../src';
 import { NodeBridge } from './helpers/node-bridge';
 
@@ -122,7 +122,7 @@ describe('io.removeDir / removeFile · 移入回收站', () => {
     const f = path.join(tmpDir, 'outside', 'y.ERB');
     await fs.mkdir(path.dirname(f), { recursive: true });
     await fs.writeFile(f, '域外');
-    await expect(io.removeFile(f)).rejects.toThrow(/Write not allowed/);
+    await expect(io.removeFile(f)).rejects.toThrow(WriteNotAllowedError);
     const entries = await new TrashManager(new NodeBridge(appData), noopLog).list();
     expect(entries).toHaveLength(0);
     expect(await fs.readFile(f, 'utf-8')).toBe('域外');
@@ -276,7 +276,7 @@ describe('io.listTrash / io.restoreFromTrash · 往返字节一致', () => {
     const [entry] = await io.listTrash();
 
     io.setAppWritableRoots([]); // 授权收回（项目关闭的形态）
-    await expect(io.restoreFromTrash(entry!.id)).rejects.toThrow(/Write not allowed/);
+    await expect(io.restoreFromTrash(entry!.id)).rejects.toThrow(WriteNotAllowedError);
     await expect(fs.access(f)).rejects.toThrow(); // 一个字节都没搬
     expect((await io.listTrash()).map((e) => e.id)).toEqual([entry!.id]); // 条目还在，授权回来可以再试
 

@@ -55,7 +55,7 @@ describe('WorkspaceService · 项目 CRUD', () => {
   });
 
   it('空项目名拒绝', async () => {
-    await expect(ws.create({ name: '  ' })).rejects.toThrow(/empty/);
+    await expect(ws.create({ name: '  ' })).rejects.toThrow(/项目名不能为空/);
   });
 
   it('update 改名 + 刷新 updatedAt', async () => {
@@ -112,7 +112,7 @@ describe('WorkspaceService · 制品与文件', () => {
     const p = await ws.create({ name: '作品' });
     await ws.createArtifact(p.id, { name: 'a', dirName: 'pkg', files: {} });
     await expect(ws.createArtifact(p.id, { name: 'b', dirName: 'pkg', files: {} })).rejects.toThrow(
-      /already exists/,
+      /这个制品目录已经存在/,
     );
     await expect(ws.createArtifact(p.id, { name: 'c', dirName: 'a/b', files: {} })).rejects.toThrow();
     await expect(ws.createArtifact(p.id, { name: 'd', dirName: '..', files: {} })).rejects.toThrow();
@@ -132,16 +132,16 @@ describe('WorkspaceService · 制品与文件', () => {
 
   it('writeText/readText 越界（.. 逃逸、绝对路径）拒绝', async () => {
     const p = await ws.create({ name: '作品' });
-    await expect(ws.writeText(p.id, '../evil.txt', 'x')).rejects.toThrow(/escapes/);
-    await expect(ws.readText(p.id, 'sub/../../evil.txt')).rejects.toThrow(/escapes/);
-    await expect(ws.writeText(p.id, 'C:/abs/evil.txt', 'x')).rejects.toThrow(/Absolute/);
+    await expect(ws.writeText(p.id, '../evil.txt', 'x')).rejects.toThrow(/越出了当前项目目录/);
+    await expect(ws.readText(p.id, 'sub/../../evil.txt')).rejects.toThrow(/越出了当前项目目录/);
+    await expect(ws.writeText(p.id, 'C:/abs/evil.txt', 'x')).rejects.toThrow(/不接受绝对路径/);
   });
 
   it('制品文件路径越界：写前校验抛错且不登记半成品', async () => {
     const p = await ws.create({ name: '作品' });
     await expect(
       ws.createArtifact(p.id, { name: '坏包', dirName: 'pkg', files: { '../escape.txt': 'x' } }),
-    ).rejects.toThrow(/escapes/);
+    ).rejects.toThrow(/越出了制品目录/);
     expect((await ws.get(p.id))!.artifacts).toHaveLength(0);
   });
 });
@@ -193,14 +193,14 @@ describe('WorkspaceService · 导入外部目录（P-F）', () => {
     await ws.createArtifact(p.id, { name: '既有', dirName: '已有包', files: {} });
     await expect(
       ws.importDirectory(p.id, { name: '导入', dirName: '已有包', sourceDir: src }),
-    ).rejects.toThrow(/already exists/);
+    ).rejects.toThrow(/这个制品目录已经存在/);
   });
 
   it('源目录不存在拒绝', async () => {
     const p = await ws.create({ name: '作品' });
     await expect(
       ws.importDirectory(p.id, { name: '导入', dirName: 'pkg', sourceDir: path.join(tmpDir, '不存在') }),
-    ).rejects.toThrow(/does not exist/);
+    ).rejects.toThrow(/源目录不存在/);
   });
 
   it('dirName 非法（含分隔符 / 点段）拒绝', async () => {
@@ -383,7 +383,7 @@ describe('WorkspaceService · 多根落点（自选项目位置）', () => {
     const p = await ws2.create({ name: '外部', rootDir: extraRoot });
     await expect(
       ws2.writeText(p.id, path.join('..', '..', 'evil.txt').replace(/\\/g, '/'), 'x'),
-    ).rejects.toThrow(/escapes/);
+    ).rejects.toThrow(/越出了当前项目目录/);
     await expect(io2.writeText(path.join(tmpDir, 'somewhere-else', 'x.txt'), 'no')).rejects.toThrow(
       WriteNotAllowedError,
     );
@@ -434,7 +434,7 @@ describe('WorkspaceService · 删除路径：写闸 + dirName 复验', () => {
     await fs.mkdir(path.join(backupDir, 'bucket'), { recursive: true });
     await fs.writeFile(path.join(backupDir, 'bucket', 'v1.bak'), 'precious', 'utf8');
     await fs.writeFile(path.join(backupDir, WORKSPACE_MANIFEST_FILE), '{}', 'utf8');
-    await expect(ws.remove(path.join('..', '..', 'backup'))).rejects.toThrow(/Invalid project id/);
+    await expect(ws.remove(path.join('..', '..', 'backup'))).rejects.toThrow(/项目名不合法/);
     expect(await io.exists(path.join(backupDir, 'bucket', 'v1.bak'))).toBe(true);
   });
 
@@ -451,7 +451,7 @@ describe('WorkspaceService · 删除路径：写闸 + dirName 复验', () => {
     };
     manifest.artifacts[0]!.dirName = path.join('..', '..', 'backup');
     await fs.writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
-    await expect(ws.removeArtifact(p.id, art.id)).rejects.toThrow(/Invalid artifact directory name/);
+    await expect(ws.removeArtifact(p.id, art.id)).rejects.toThrow(/制品目录名不合法/);
     expect(await io.exists(path.join(backupDir, 'bucket', 'v1.bak'))).toBe(true);
     // 盘上合规的制品目录不被顺手波及
     expect(await io.exists(path.join(ws.projectDir(p.id), 'pkg', 'a.txt'))).toBe(true);
@@ -470,7 +470,7 @@ describe('WorkspaceService · 删除路径：写闸 + dirName 复验', () => {
     };
     manifest.artifacts[0]!.dirName = path.join('..', 'neighbor');
     await fs.writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
-    await expect(ws.removeArtifact(p.id, art.id)).rejects.toThrow(/Invalid artifact directory name/);
+    await expect(ws.removeArtifact(p.id, art.id)).rejects.toThrow(/制品目录名不合法/);
     expect(await io.exists(path.join(neighbor, 'keep.txt'))).toBe(true);
     // 摘除登记必须发生在删除成功之后（删除被拒 ⇒ manifest 原样）
     expect((await ws.get(p.id))!.artifacts).toHaveLength(1);

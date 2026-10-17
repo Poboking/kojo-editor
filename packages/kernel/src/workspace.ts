@@ -54,7 +54,7 @@ function assertSegment(value: string, what: string): void {
     /[\\/]/.test(value) ||
     value === WORKSPACE_MANIFEST_FILE
   ) {
-    throw new Error(`Invalid ${what}: '${value}' (must be a single directory segment)`);
+    throw new Error(`${what}不合法：「${value}」只能是一个目录名（不能带路径分隔符、不能是空名或系统占用名）。`);
   }
 }
 
@@ -132,7 +132,7 @@ export class WorkspaceServiceImpl implements WorkspaceService {
   }
 
   projectDir(projectId: string): string {
-    assertSegment(projectId, 'project id');
+    assertSegment(projectId, '项目名');
     const known = this.dirById.get(projectId);
     if (known !== undefined) return known;
     return join(this.requireRoot(), projectId);
@@ -145,7 +145,7 @@ export class WorkspaceServiceImpl implements WorkspaceService {
   private async locateProjectDir(projectId: string): Promise<string> {
     // 段级校验先行（2026-10-16 修复批）：join 会归一化折叠 '..'，
     // '../../backup' 类 id 能把写闸外的备份域整目录删掉——删错目录是静默失败。
-    assertSegment(projectId, 'project id');
+    assertSegment(projectId, '项目名');
     const cached = this.dirById.get(projectId);
     if (cached !== undefined) return cached;
     // 名单要重读一次：本会话刚经对话框授权的根不在 init 那份里
@@ -172,12 +172,12 @@ export class WorkspaceServiceImpl implements WorkspaceService {
   /** 相对路径 → 项目内绝对路径（拒绝对路径与一切 `..` 段；isPathUnder 兜底） */
   private resolveIn(projectId: string, relPath: string): string {
     const base = this.projectDir(projectId);
-    if (isAbsolute(relPath)) throw new Error(`Absolute path not allowed here: ${relPath}`);
+    if (isAbsolute(relPath)) throw new Error(`这个位置不接受绝对路径：${relPath}`);
     if (relPath.split(/[\\/]/).includes('..')) {
-      throw new Error(`Path escapes the project directory: ${relPath}`);
+      throw new Error(`路径越出了当前项目目录：${relPath}`);
     }
     const target = join(base, relPath);
-    if (!isPathUnder(base, target)) throw new Error(`Path escapes the project directory: ${relPath}`);
+    if (!isPathUnder(base, target)) throw new Error(`路径越出了当前项目目录：${relPath}`);
     return target;
   }
 
@@ -295,7 +295,7 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     rootDir?: string;
   }): Promise<WorkspaceProject> {
     const name = input.name.trim();
-    if (name.length === 0) throw new Error('Project name must not be empty');
+    if (name.length === 0) throw new Error('项目名不能为空。');
     let root = this.requireRoot();
     if (input.rootDir !== undefined) {
       // 落点只能命中**已授权的根**（默认根 / 对话框自选根）。这里刻意不做
@@ -333,10 +333,10 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     patch: { name?: string; meta?: Record<string, unknown> },
   ): Promise<WorkspaceProject> {
     const project = await this.readManifest(projectId);
-    if (!project) throw new Error(`Workspace project not found: ${projectId}`);
+    if (!project) throw new Error(`找不到这个工作区项目：${projectId}`);
     if (patch.name !== undefined) {
       const name = patch.name.trim();
-      if (name.length === 0) throw new Error('Project name must not be empty');
+      if (name.length === 0) throw new Error('项目名不能为空。');
       project.name = name;
     }
     if (patch.meta !== undefined) project.meta = patch.meta;
@@ -358,17 +358,17 @@ export class WorkspaceServiceImpl implements WorkspaceService {
 
   async createArtifact(projectId: string, input: WorkspaceArtifactInput): Promise<WorkspaceArtifact> {
     const project = await this.readManifest(projectId);
-    if (!project) throw new Error(`Workspace project not found: ${projectId}`);
+    if (!project) throw new Error(`找不到这个工作区项目：${projectId}`);
     const name = input.name.trim();
-    if (name.length === 0) throw new Error('Artifact name must not be empty');
-    assertSegment(input.dirName, 'artifact directory name');
+    if (name.length === 0) throw new Error('制品名不能为空。');
+    assertSegment(input.dirName, '制品目录名');
 
     // 冲突判定以 manifest 登记为准（空文件集的制品不落目录，磁盘判定会漏）
     if (
       project.artifacts.some((a) => a.dirName === input.dirName) ||
       (await this.deps.io.exists(join(this.projectDir(projectId), input.dirName)))
     ) {
-      throw new Error(`Artifact directory already exists: ${input.dirName}`);
+      throw new Error(`这个制品目录已经存在：${input.dirName}（换一个名字，或先删掉旧的）。`);
     }
 
     // 先落全部文件（任一越界在写前校验阶段就抛，不产半成品目录登记）。
@@ -376,7 +376,7 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     const entries = Object.entries(input.files);
     const targets = entries.map(([rel]) => {
       if (isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) {
-        throw new Error(`Path escapes the artifact directory: ${rel}`);
+        throw new Error(`路径越出了制品目录：${rel}`);
       }
       return this.resolveIn(projectId, join(input.dirName, rel));
     });
@@ -421,22 +421,22 @@ export class WorkspaceServiceImpl implements WorkspaceService {
 
   async importDirectory(projectId: string, input: WorkspaceImportInput): Promise<WorkspaceArtifact> {
     const project = await this.readManifest(projectId);
-    if (!project) throw new Error(`Workspace project not found: ${projectId}`);
+    if (!project) throw new Error(`找不到这个工作区项目：${projectId}`);
     const name = input.name.trim();
-    if (name.length === 0) throw new Error('Artifact name must not be empty');
-    assertSegment(input.dirName, 'artifact directory name');
+    if (name.length === 0) throw new Error('制品名不能为空。');
+    assertSegment(input.dirName, '制品目录名');
 
     // 冲突判定以 manifest 登记为准（与 createArtifact 同口径；不覆盖既有包）
     if (
       project.artifacts.some((a) => a.dirName === input.dirName) ||
       (await this.deps.io.exists(join(this.projectDir(projectId), input.dirName)))
     ) {
-      throw new Error(`Artifact directory already exists: ${input.dirName}`);
+      throw new Error(`这个制品目录已经存在：${input.dirName}（换一个名字，或先删掉旧的）。`);
     }
 
     const sourceStat = await this.deps.io.stat(input.sourceDir);
     if (!sourceStat || !sourceStat.isDirectory) {
-      throw new Error(`Source directory does not exist: ${input.sourceDir}`);
+      throw new Error(`要复制的源目录不存在：${input.sourceDir}`);
     }
 
     // 枚举源目录文件（只读，不改动源）；**字节级**复制保持原编码（一次转码毁半库）
@@ -447,7 +447,7 @@ export class WorkspaceServiceImpl implements WorkspaceService {
       const rel = e.path.slice(input.sourceDir.length).replace(/^[\\/]+/, '');
       // 纵深防御：拒绝一切逃逸段（walkDir 输出结构安全，但不信任输入侧）
       if (rel.split(/[\\/]/).includes('..')) {
-        throw new Error(`Path escapes the source directory: ${rel}`);
+        throw new Error(`路径越出了源目录：${rel}`);
       }
       targets.push({ from: e.path, to: this.resolveIn(projectId, join(input.dirName, rel)) });
     }
@@ -492,14 +492,14 @@ export class WorkspaceServiceImpl implements WorkspaceService {
 
   async removeArtifact(projectId: string, artifactId: string): Promise<void> {
     const project = await this.readManifest(projectId);
-    if (!project) throw new Error(`Workspace project not found: ${projectId}`);
+    if (!project) throw new Error(`找不到这个工作区项目：${projectId}`);
     const idx = project.artifacts.findIndex((a) => a.id === artifactId);
-    if (idx < 0) throw new Error(`Artifact not found: ${artifactId}`);
+    if (idx < 0) throw new Error(`找不到这个制品：${artifactId}`);
     const artifact = project.artifacts[idx]!;
     // manifest 里的 dirName 是持久化数据（可能被手改/损坏）：join 会归一化折叠 '..'，
     // '../../backup' 类值能把写闸外的备份域整目录删掉——删除前强制单层段复验；
     // 同根内的段级跳跃（../neighbor）写闸拦不住，只有段校验能拦（2026-10-16 修复批）。
-    assertSegment(artifact.dirName, 'artifact directory name');
+    assertSegment(artifact.dirName, '制品目录名');
     // 删除必须过 io 写闸（与 remove 同口径）。
     await this.deps.io.removeDir(join(this.projectDir(projectId), artifact.dirName));
     project.artifacts.splice(idx, 1);

@@ -16,7 +16,7 @@ import type {
   SugarLiftService,
   SugarTranspileService,
 } from '@kojo/plugin-api';
-import { WellKnownServices, readReplayDeterminability } from '@kojo/plugin-api';
+import { WellKnownServices, readReplayDeterminability, WriteNotAllowedError } from '@kojo/plugin-api';
 import { createKernel, type Kernel } from '../src/kernel';
 import { NodeBridge } from './helpers/node-bridge';
 import { MemoryStorageBackend } from './helpers/memory-storage';
@@ -441,7 +441,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(writer).toBeTruthy();
 
       // 9.1 第一道闸：测试未批准任何 writablePaths → 真实档路径显式拒绝（不静默）
-      await expect(writer.inject(save03e!.path, {})).rejects.toThrow(/not allowed/i);
+      await expect(writer.inject(save03e!.path, {})).rejects.toThrow(WriteNotAllowedError);
 
       // 9.2 副本端到端：save00 字节复制到 appData 临时域并放行，标量注入 → 回读验证
       kernel.io.setWritableRoots([appData]);
@@ -507,7 +507,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       // 10.2 第一道闸：未批准 appData 之外 → 真实游戏目录内目标显式拒绝（不静默）
       const realTarget = nodeJoin(SMOKE_DIR!, 'ERB', '口上・メッセージ関連', '個人口上', 'M_KOJO_K49_指令.ERB');
       kernel.io.setWritableRoots([]);
-      await expect(sugar.compileToFile(kojoSource, realTarget)).rejects.toThrow(/not allowed/i);
+      await expect(sugar.compileToFile(kojoSource, realTarget)).rejects.toThrow(WriteNotAllowedError);
 
       // 10.3 副本端到端：appData 临时域编译落盘 → BOM/LF/末尾换行 + 回读一致 + 目录自动创建
       kernel.io.setWritableRoots([appData]);

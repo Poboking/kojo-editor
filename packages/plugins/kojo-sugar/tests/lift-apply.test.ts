@@ -98,7 +98,7 @@ function makeIO(opts: {
     },
     writeBytes: async (p, data) => {
       if (!isWritable(p)) {
-        throw Object.assign(new Error(`Write not allowed outside declared writable roots: ${p}`), {
+        throw Object.assign(new Error(`这个位置在只读范围内，不能写入：${p}`), {
           name: 'WriteNotAllowedError',
         });
       }
@@ -161,7 +161,7 @@ function makeIO(opts: {
       const e = requireTrash(id);
       // 恢复是一次写盘 ⇒ 第一道闸一条不少（io.ts :310 口径，错误形态与本夹具 writeBytes 同款）
       if (!isWritable(e.originalPath)) {
-        throw Object.assign(new Error(`Write not allowed outside declared writable roots: ${e.originalPath}`), {
+        throw Object.assign(new Error(`这个位置在只读范围内，不能写入：${e.originalPath}`), {
           name: 'WriteNotAllowedError',
         });
       }

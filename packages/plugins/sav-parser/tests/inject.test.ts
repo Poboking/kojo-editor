@@ -55,7 +55,7 @@ function makeHarness(opts: {
     },
     writeBytes: async (p, data) => {
       if (!isWritable(p)) {
-        throw Object.assign(new Error(`Write not allowed outside writable roots: ${p}`), {
+        throw Object.assign(new Error(`这个位置在只读范围内，不能写入：${p}`), {
           name: 'WriteNotAllowedError',
         });
       }
@@ -287,9 +287,12 @@ describe('SnapshotSourceEngine.inject', () => {
     const data = makeArchiveFile(spec());
     const h = makeHarness({ files: { '/g/sav/save00.sav': data }, writable: () => false });
 
-    await expect(
-      h.engine.inject('/g/sav/save00.sav', { chars: new Map([[0, new Map([['NO', 5]])]]) }),
-    ).rejects.toThrow(/not allowed/i);
+    // 判的是「拒绝沿原路抛出」这条语义 ⇒ 认错误类名，不认文案
+    const err = await h
+      .engine.inject('/g/sav/save00.sav', { chars: new Map([[0, new Map([['NO', 5]])]]) })
+      .catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe('WriteNotAllowedError');
     expect(h.backups).toHaveLength(1);
     expect(h.written).toHaveLength(0);
   });

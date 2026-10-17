@@ -349,7 +349,7 @@ export class WriteNotAllowedError extends Error {
     public readonly path: string,
     public readonly writableRoots: readonly string[],
   ) {
-    super(`Write not allowed outside declared writable roots: ${path}`);
+    super(`这个位置在只读范围内，不能写入：${path}（要写就先在「只读」徽章处批准该目录）。`);
     this.name = 'WriteNotAllowedError';
   }
 }

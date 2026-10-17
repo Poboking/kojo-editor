@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
+import { WriteNotAllowedError } from '@kojo/plugin-api';
 import { FileIOServiceImpl, OpsJournalImpl, OP_ID_RE, OP_SNAPSHOT_RETENTION_MAX } from '../src';
 import { NodeBridge } from './helpers/node-bridge';
 
@@ -126,7 +127,7 @@ describe('undo · 字节级回滚', () => {
     await ops.commit(id);
     // 项目关闭 → setWritableRoots([]) 收回授权；undo 的回滚写回必须拒绝
     io.setWritableRoots([]);
-    await expect(ops.undo(id)).rejects.toThrow(/Write not allowed/);
+    await expect(ops.undo(id)).rejects.toThrow(WriteNotAllowedError);
     expect(await fs.readFile(gameFile, 'utf-8')).toBe('被改写'); // 未动
     // 重新授权后同一操作可正常回滚
     io.setWritableRoots([path.join(tmpDir, 'game')]);
@@ -286,14 +287,15 @@ describe('维护提示 · 残留不静默（铁律 #4）', () => {
     await io.writeBytes(gameFile, new TextEncoder().encode('被改写'));
     // 授权被收回 ⇒ 回滚的写回必过闸、必失败
     io.setWritableRoots([]);
-    await expect(spy.abort(id)).rejects.toThrow(/Write not allowed/);
+    await expect(spy.abort(id)).rejects.toThrow(WriteNotAllowedError);
 
     // 快照目录与文档仍在（可人工救），且维护提示点名
     const snapDir = path.join(appData, 'ops', id);
     expect((await fs.stat(snapDir)).isDirectory()).toBe(true);
     const doc = JSON.parse(await fs.readFile(path.join(appData, 'ops', `${id}.json`), 'utf-8'));
     expect(doc.status).toBe('open');
-    expect(String(doc.rollbackError)).toMatch(/Write not allowed/);
+    // 序列化后的文档只剩文本，错误类拿不到 ⇒ 只能按句子判（判的是「拒因是只读闸」这条语义）
+    expect(String(doc.rollbackError)).toMatch(/只读范围内，不能写入/);
     expect(await spy.list()).toHaveLength(0);
     expect(spy.maintenanceReport()).toMatchObject({ openOrphanDocs: 1, rollbackFailedDocs: 1 });
     expect(warns.some((w) => w.includes('快照与文档已保留'))).toBe(true);
