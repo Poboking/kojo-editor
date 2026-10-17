@@ -2,6 +2,8 @@ import type * as Monaco from './entry';
 import type { KojoFaceTable, KojoIndexKind, KojoIndexTables } from '@kojo/plugin-api';
 import { kojoIndexCandidates } from '@kojo/plugin-api';
 import { TIMING_NAMED_PARAMS } from '@kojo/plugin-kojo-sugar';
+import { lineRange } from './completion-range';
+import { insideStringOrComment } from './kojo-completion-position';
 
 /**
  * KC-3 · `.kojo` **编号槽**的正向补全（`kojoIndexCompletionItems`，IX-1 起按面分流）。
@@ -55,31 +57,6 @@ export interface IndexSlotTables extends KojoIndexTables {
 const NAMED_PARAM_KEYS: ReadonlySet<string> = new Set(
   TIMING_NAMED_PARAMS.flatMap((p) => (p.alias === undefined ? [p.name] : [p.name, p.alias])),
 );
-
-/** 行内替换区间（1 基列；覆盖光标处的令牌 / 空插入点） */
-function lineRange(position: Monaco.Position, start: number, end: number): Monaco.IRange {
-  return {
-    startLineNumber: position.lineNumber,
-    endLineNumber: position.lineNumber,
-    startColumn: start + 1,
-    endColumn: end + 1,
-  };
-}
-
-/**
- * 光标是否落在行内**字符串 / 注释**里（与 `kojo-sugar` 的 `inlineCommentIndex` 同口径：
- * 引号配平后第一个 `;` 起至行尾）。字符串内 / 注释内不给候选（那些位置不是编号）。
- */
-function insideStringOrComment(line: string, col0: number): boolean {
-  let inString = false;
-  const stop = Math.min(col0, line.length);
-  for (let i = 0; i < stop; i++) {
-    const ch = line[i]!;
-    if (ch === '"') inString = !inString;
-    else if (!inString && ch === ';') return true;
-  }
-  return inString;
-}
 
 /** 一段替换区间（0 基列下标，`end` 不含） */
 interface Slot {

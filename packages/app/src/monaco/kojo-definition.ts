@@ -1,12 +1,12 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import type {
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
   EditorSymbolLocation,
 } from '@kojo/plugin-api';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
-import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
 
 /**
  * 转到定义的**宿主接线**（2026-10-15 语言服务批；D4 Peek 就地预览同文件改写；
@@ -50,7 +50,7 @@ export function collectDefinitionLocations(
       result = contribution.provide(request);
     } catch (e: unknown) {
       console.warn(
-        `[kojo-definition] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+        `[kojo-definition] '${contribution.id}' provide 抛错：${errorText(e)}`,
       );
       continue;
     }
@@ -218,14 +218,14 @@ export function createDefinitionModelResolver(
     try {
       return handlers.openModelFor?.(filePath);
     } catch (e: unknown) {
-      console.warn(`[${label}] openModelFor('${filePath}') 抛错：${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[${label}] openModelFor('${filePath}') 抛错：${errorText(e)}`);
       return undefined;
     }
   };
 }
 
 /** 光标处的**来源区间**（Peek 列表与 `Ctrl+Click` 悬停预览用它标出"从哪跳的"） */
-export function originRangeOf(model: Monaco.editor.ITextModel, position: Monaco.Position): Monaco.IRange {
+function originRangeOf(model: Monaco.editor.ITextModel, position: Monaco.Position): Monaco.IRange {
   const word = model.getWordAtPosition(position);
   return {
     startLineNumber: position.lineNumber,
@@ -255,7 +255,7 @@ export function provideLocations(
     locations = handlers.resolve(model, position);
   } catch (e: unknown) {
     // 宿主自己的 resolve（查槽 + 组请求）出错也不能让 F12 崩掉编辑器
-    console.warn(`[${label}] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[${label}] resolve 抛错：${errorText(e)}`);
     return undefined;
   }
   const plan = planDefinitionJump(locations, findModel);
@@ -351,13 +351,10 @@ export function installDefinitionProvider(
     },
   };
   const opener = registerLocationOpener(monaco, handlers);
-  const subs = [
-    monaco.languages.registerDefinitionProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerDefinitionProvider(KOJO_LANGUAGE_ID, provider),
-  ];
+  const dialectSubs = registerForKojoDialects(monaco, (m, id) => m.languages.registerDefinitionProvider(id, provider));
   return {
     dispose: () => {
-      subs.forEach((s) => s.dispose());
+      dialectSubs.dispose();
       opener.dispose();
     },
   };

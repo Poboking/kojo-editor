@@ -10,7 +10,7 @@
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
-import { isErbDialectPath } from '@kojo/plugin-api';
+import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
 import {
   packageKey,
   revealMenuLabel,
@@ -374,7 +374,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   /** 轻反馈（复用 revealNote 同款形态——一句话状态行，不建 toast 基建） */
   const note = (msg: string): void => setRevealNote(msg);
   const noteErr = (err: unknown, action: string): void => {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorText(err);
     // 越权写（WriteNotAllowedError）的消息是英文内部术语：换成人话，其余原样带出
     setRevealNote(String(err instanceof Error && err.name === 'WriteNotAllowedError')
       ? '这个位置在只读范围内，不能在这里修改文件。要先在「只读」徽章那里批准写权限。'

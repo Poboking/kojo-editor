@@ -1,12 +1,12 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import type {
   EditorInlayHint,
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
 } from '@kojo/plugin-api';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
-import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
 
 /**
  * 行内提示的**宿主接线**（LS-R6，2026-10-16 语言服务批）：`ui.editor.languageService`
@@ -59,7 +59,7 @@ export function collectInlayHints(
       result = contribution.provide(request);
     } catch (e: unknown) {
       console.warn(
-        `[kojo-inlay-hints] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+        `[kojo-inlay-hints] '${contribution.id}' provide 抛错：${errorText(e)}`,
       );
       continue;
     }
@@ -126,15 +126,11 @@ export function installInlayHintsProvider(monaco: typeof Monaco, handlers: Inlay
         hints = handlers.resolve(model);
       } catch (e: unknown) {
         // 提示是只读呈现面：出错就"没有提示"，绝不把编辑器的输入链带崩
-        console.warn(`[kojo-inlay-hints] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-inlay-hints] resolve 抛错：${errorText(e)}`);
         return { hints: [], dispose: () => undefined };
       }
       return { hints: toMonacoInlayHints(monaco, model, hints), dispose: () => undefined };
     },
   };
-  const subs = [
-    monaco.languages.registerInlayHintsProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerInlayHintsProvider(KOJO_LANGUAGE_ID, provider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return registerForKojoDialects(monaco, (m, id) => m.languages.registerInlayHintsProvider(id, provider));
 }

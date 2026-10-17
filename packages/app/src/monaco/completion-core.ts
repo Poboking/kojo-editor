@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import type {
   KojoCallProtocol,
   KojoCallSlot,
@@ -312,7 +313,7 @@ export function mergeSuggestions(
       items = source.provide(ctx);
     } catch (e: unknown) {
       // source 由外部追加：单个抛错不拖垮整条补全链（退化可见，其余 source 照常出候选）
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorText(e);
       console.warn(`${opts.tag} source '${source.id}' provide 抛错：${msg}`);
       // 抛错即视为缺：带 `requires` 的来源按该键报一次降级
       if (source.requires !== undefined) reportDegrade(opts, source.id, source.requires, `求值抛错（${msg}）`);
@@ -386,7 +387,7 @@ export function slotsForCallee(
       // 空数组（协议声明"无槽"）是**命中**：`if (slots)` 只对 `null` / `undefined`（不认）落空
       if (slots) return slots;
     } catch (e: unknown) {
-      console.warn(`${tag} 调用协议对 '${key}' 求槽抛错：${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`${tag} 调用协议对 '${key}' 求槽抛错：${errorText(e)}`);
     }
   }
   return undefined;
@@ -748,7 +749,7 @@ export function createCompletionProvider(
       try {
         resolved = assembly.resolveDetail(item, hit);
       } catch (e: unknown) {
-        console.warn(`${tag} resolve '${hit.sourceId}' 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`${tag} resolve '${hit.sourceId}' 抛错：${errorText(e)}`);
         return item;
       }
       if (resolved === undefined) return item;

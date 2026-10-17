@@ -16,6 +16,7 @@
  */
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
+import { errorText } from '@kojo/plugin-api';
 import type {
   EditorDocumentSymbol,
   EditorTextEdit,
@@ -87,6 +88,20 @@ import {
 const CODE_ACTION_COMMAND = 'kojo.codeAction.run';
 
 /**
+ * `erb.parser` 的**软取**索引（唯一一份）：解析器缺席 / 索引在途一律给 `null`——
+ * `tryGet` 与 `currentIndex` 两步都包在 try 里，调用方据此让**那一路无结果**
+ * （退化可见），绝不把抛错送进悬停 / 补全 / 重命名 / 签名任何一条 seam。
+ * 索引**每次现取**，不缓存（索引随项目开闭重建，缓存会把上一个项目的索引带过来）。
+ */
+function erbParserIndex(kernel: Kernel): ErbIndex | null {
+  try {
+    return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 编辑器只读消费的适配器表（悬停 ZH-F2 + `.kojo` / `.erb` 两个补全 seam 共用）——按当前项目
  * `adapterId` 精确匹配 `game.adapter` 槽位贡献，**运行时**现取（适配器随项目开闭重建，
  * 缓存会把上一个项目的表带过来）。**单一数据源**：kojo 与 erb 两个 seam 共用它，不各建一份。
@@ -117,15 +132,8 @@ function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables & 
       // B5 签名帮助要的槽语义表（同一枚 adapter 贡献，运行时现取；缺席 = 不产签名）
       ...(adapter.kojoCallProtocol ? { callProtocol: adapter.kojoCallProtocol } : {}),
       erbFunctionNames: erbFunctionNamesFor(kernel),
-      // ERB 函数悬停通道：erb.parser 的当前索引**每次现取**（索引随项目开闭重建，不缓存脏表）。
-      // 解析器缺席 / 索引在途只让该路无结果（退化可见），绝不抛进悬停 seam。
-      erbIndex: () => {
-        try {
-          return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-        } catch {
-          return null;
-        }
-      },
+      // ERB 函数悬停通道：erb.parser 的当前索引**每次现取**（软取判据见 `erbParserIndex`）。
+      erbIndex: () => erbParserIndex(kernel),
     };
   }
   return {};
@@ -144,13 +152,7 @@ const erbFnMemoByKernel = new WeakMap<Kernel, () => readonly string[]>();
 function erbFunctionNamesFor(kernel: Kernel): () => readonly string[] {
   let fn = erbFnMemoByKernel.get(kernel);
   if (!fn) {
-    fn = memoizedErbFunctionNames(() => {
-      try {
-        return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-      } catch {
-        return null;
-      }
-    });
+    fn = memoizedErbFunctionNames(() => erbParserIndex(kernel));
     erbFnMemoByKernel.set(kernel, fn);
   }
   return fn;
@@ -186,6 +188,20 @@ export function applyTextEdits(
   ed.executeEdits('kojo.codeAction', ops);
   ed.pushUndoStop();
   return true;
+}
+
+/**
+ * 每条能力腿共用的**开口**：由 model 反查归属实例，再读它的真路径。
+ * 返回 `null` = 这份 model 不挂在任何活动标签上，或那个标签还没有路径
+ * （糖视图挂的是只读派生 model，行号属于派生物 ⇒ 一律不应答，与 codeAction 同判据）。
+ *
+ * **兜底值留在各调用点**：各能力"不应答"的形状本来就不一样（`[]` / `null` /
+ * `{ hints: [] … }` / `{ actions: [] … }`），把它们折成一个是行为改动，不是去重。
+ */
+function owningPanePathOf(model: Monaco.editor.ITextModel): string | null {
+  const ctx = owningPaneOf(model);
+  if (!ctx) return null;
+  return ctx.filePathRef.current || null;
 }
 
 let globalsInstalled = false;
@@ -290,13 +306,11 @@ export function ensureGlobalProviders(): void {
       model: Monaco.editor.ITextModel,
       position: Monaco.Position,
     ): DefinitionLocation[] => {
-      const ctx = owningPaneOf(model);
       // 与 codeAction 同一判据（见上方 provideCodeActions）：只应答当前活动标签的真 model。
       // 糖视图下 `ed.getModel()` 是只读糖 model——它的行号对应糖文本，拿它去问 ERB 行号
       // 会得到"派生物里的位置"，所以一律不供，避免把作者跳到错行。
-      if (!ctx) return [];
-      const path = ctx.filePathRef.current;
-      if (!path) return [];
+      const path = owningPanePathOf(model);
+      if (path === null) return [];
       return collectDefinitionLocations(requireKernel().slots.query('ui.editor.languageService'), {
         kind: 'definition',
         path,
@@ -334,10 +348,8 @@ export function ensureGlobalProviders(): void {
     // 所以它必须在糖视图之外只认真 model：糖 model 的行号属于派生物，贴出来是错的层次。
     const symbolsDisposer = installDocumentSymbolProvider(monaco, {
       resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
+        const path = owningPanePathOf(model);
+        if (path === null) return [];
         return collectDocumentSymbols(requireKernel().slots.query('ui.editor.languageService'), {
           kind: 'documentSymbol',
           path,
@@ -356,14 +368,12 @@ export function ensureGlobalProviders(): void {
     // 转到定义同判据一律不应答。
     const signatureDisposer = installSignatureHelp(monaco, {
       resolve: (model, position) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return null;
-        const path = ctx.filePathRef.current;
-        if (!path) return null;
+        const path = owningPanePathOf(model);
+        if (path === null) return null;
         const protocol = editorTables(requireKernel()).callProtocol;
         return resolveSignatureInText(model.getValue(), position.lineNumber, position.column, protocol, (callee) => {
           try {
-            const index = requireKernel().services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+            const index = erbParserIndex(requireKernel());
             if (!index) return null;
             const defs = index.byName.get(callee.toUpperCase());
             const ref = defs?.[0];
@@ -382,10 +392,8 @@ export function ensureGlobalProviders(): void {
     // 应答判据与大纲逐字同款：糖 model 的行号属于派生物，折叠它会把作者折进不存在的位置。
     const foldingDisposer = installFoldingRangeProvider(monaco, {
       resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
+        const path = owningPanePathOf(model);
+        if (path === null) return [];
         return collectFoldingRanges(requireKernel().slots.query('ui.editor.languageService'), {
           kind: 'foldingRange',
           path,
@@ -478,13 +486,7 @@ export function ensureGlobalProviders(): void {
       const ctx = owningPaneOf(model);
       return !!ctx && !!ctx.filePathRef.current;
     };
-    const currentIndexErb = (): ErbIndex | null => {
-      try {
-        return requireKernel().services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-      } catch {
-        return null;
-      }
-    };
+    const currentIndexErb = (): ErbIndex | null => erbParserIndex(requireKernel());
     const referencesToErb = (name: string): readonly ErbReference[] | null => {
       try {
         const parser = requireKernel().services.tryGet<ErbParserService>('erb.parser');
@@ -534,10 +536,8 @@ export function ensureGlobalProviders(): void {
     let tallySourcePath = '';
     const referenceSearchDisposer = installReferenceProvider(monaco, {
       resolve: (model, position) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
+        const path = owningPanePathOf(model);
+        if (path === null) return [];
         tallySourcePath = path;
         return collectReferenceLocations(requireKernel().slots.query('ui.editor.languageService'), {
           kind: 'references',
@@ -616,7 +616,7 @@ export function ensureGlobalProviders(): void {
             });
           } catch (e: unknown) {
             console.warn(
-              `[kojo-rename] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+              `[kojo-rename] '${contribution.id}' provide 抛错：${errorText(e)}`,
             );
             continue;
           }
@@ -632,10 +632,8 @@ export function ensureGlobalProviders(): void {
     // 糖视图挂着只读派生 model，格式化它改的不是真文件，所以一律不应答。
     const formatResolve: FormatHandlers = {
       resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return null;
-        const path = ctx.filePathRef.current;
-        if (!path) return null;
+        const path = owningPanePathOf(model);
+        if (path === null) return null;
         const dialect = dialectForLanguage(model.getLanguageId());
         return dialect === null ? null : { text: model.getValue(), dialect };
       },
@@ -653,10 +651,8 @@ export function ensureGlobalProviders(): void {
     // 落地（关掉时 Monaco 根本不发请求，省掉一次整篇解析）。
     const codeLensDisposer = installCodeLensProvider(monaco, {
       resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
+        const path = owningPanePathOf(model);
+        if (path === null) return [];
         const lineCount = model.getLineCount();
         // 大文件档：先于请求判掉（一次开口就是整篇文档的解析，实测读数见宿主模块头注）
         if (!codeLensAffordable(lineCount)) return [];
@@ -689,10 +685,8 @@ export function ensureGlobalProviders(): void {
     // `monaco/kojo-inlay-hints.ts` 与 `plugins/erb-parser/src/inlay-hints.ts` 头注。
     const inlayHintsDisposer = installInlayHintsProvider(monaco, {
       resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
+        const path = owningPanePathOf(model);
+        if (path === null) return [];
         const lineCount = model.getLineCount();
         if (!inlayHintsAffordable(lineCount)) return [];
         return collectInlayHints(requireKernel().slots.query('ui.editor.languageService'), {

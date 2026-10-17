@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import type { KojoCallProtocol, KojoCallSlot } from '@kojo/plugin-api';
-import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
+import { errorText } from '@kojo/plugin-api';
 
 /**
  * 签名帮助（B5，形参槽语义）——`Ctrl+Shift+Space` / 打字触发的参数提示。
@@ -387,16 +387,12 @@ export function installSignatureHelp(monaco: typeof Monaco, handlers: SignatureH
       try {
         hit = handlers.resolve(model, position);
       } catch (e: unknown) {
-        console.warn(`[kojo-signature] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-signature] resolve 抛错：${errorText(e)}`);
         return undefined;
       }
       if (!hit) return undefined;
       return { value: toMonacoSignatureHelp(hit), dispose: () => undefined };
     },
   };
-  const subs = [
-    monaco.languages.registerSignatureHelpProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerSignatureHelpProvider(KOJO_LANGUAGE_ID, provider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return registerForKojoDialects(monaco, (m, id) => m.languages.registerSignatureHelpProvider(id, provider));
 }

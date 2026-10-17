@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import {
   computeFormatEdits,
   sugarEnterIndentAfter,
@@ -7,6 +8,7 @@ import {
 } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
 
 /**
  * 文档格式化的**宿主接线**（E1，`Shift+Alt+F`）。
@@ -90,7 +92,7 @@ export function installDocumentFormatter(
       try {
         request = handlers.resolve(model);
       } catch (e: unknown) {
-        console.warn(`[kojo-format] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-format] resolve 抛错：${errorText(e)}`);
         return [];
       }
       if (!request) return [];
@@ -99,17 +101,15 @@ export function installDocumentFormatter(
         edits = computeFormatEdits(request.text, request.dialect);
       } catch (e: unknown) {
         // 规则层出错就"这次不格式化"，不能让命令本身炸掉编辑器
-        console.warn(`[kojo-format] computeFormatEdits 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-format] computeFormatEdits 抛错：${errorText(e)}`);
         return [];
       }
       return toTextEdits(model, edits);
     },
   };
-  const subs = [
-    monaco.languages.registerDocumentFormattingEditProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerDocumentFormattingEditProvider(KOJO_LANGUAGE_ID, provider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return registerForKojoDialects(monaco, (m, id) =>
+    m.languages.registerDocumentFormattingEditProvider(id, provider),
+  );
 }
 
 /* ============================ ZH-D4：区间格式化 / 回车缩进 ============================ */
@@ -145,7 +145,7 @@ export function installRangeFormatter(monaco: typeof Monaco): Monaco.IDisposable
       try {
         edits = computeFormatEdits(model.getValue(), dialect);
       } catch (e: unknown) {
-        console.warn(`[kojo-format] 区间格式化抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-format] 区间格式化抛错：${errorText(e)}`);
         return [];
       }
       return toTextEdits(model, edits.filter((edit) => edit.line >= lo && edit.line <= hi));

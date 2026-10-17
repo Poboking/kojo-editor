@@ -4,6 +4,7 @@ import {
   TIMING_NAMED_PARAMS,
   type SugarLexiconWord,
 } from '@kojo/plugin-kojo-sugar';
+import { escapeSnippetText } from './completion-core';
 import type { CompletionSource } from './kojo-completion';
 
 /**
@@ -31,12 +32,11 @@ import type { CompletionSource } from './kojo-completion';
  */
 
 /**
- * Monaco snippet 语法转义：`\` / `$` / `}` 前加反斜杠。
- * `第 1 步先转反斜杠`是硬顺序——先转 `$`/`}` 会把新引入的 `\` 再次翻倍。
+ * Monaco snippet 语法转义单源 = `completion-core.escapeSnippetText`（`\` / `$` / `}` 前加反斜杠，
+ * 单遍扫描 ⇒ 无"先转哪个"的顺序问题）。此处只**沿用旧导出名**，不再抄第二份实现——
+ * `kojo-completion.ts` / `erb-completion.ts` 两个旧导出面与 `buildCallSnippetText` 用的就是这一份。
  */
-export function escapeSnippetText(text: string): string {
-  return text.replace(/([\\$}])/g, '\\$1');
-}
+export { escapeSnippetText };
 
 /** 按 `KeywordId` 取中文主形词形（单一真源 = SUGAR_LEXICON_WORDS；查不到 = null，不猜） */
 function wordOf(id: string): string | null {

@@ -1,6 +1,7 @@
 import type * as Monaco from './entry';
 import type { KojoFaceTable } from '@kojo/plugin-api';
 import { TIMING_ARG_TOKENS, TIMING_NAMED_PARAMS, argTokenCnLabel, type TimingNamedParamSpec } from '@kojo/plugin-kojo-sugar';
+import { lineRange } from './completion-range';
 
 /**
  * 语法糖（`.kojo`）补全 · **时机块头**——沿用单一 `kojo-face` source：
@@ -37,16 +38,6 @@ const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 
 /** 命名参数**键**候选的 detail（宿主 UI 文案；键名一律取自 kojo-sugar 键表，非硬编码） */
 const KEY_DETAIL = '时机命名参数';
-
-/** 行内替换区间（覆盖光标处那段令牌 / 空插入点） */
-function lineRange(position: Monaco.Position, startIdx: number, endIdx: number): Monaco.IRange {
-  return {
-    startLineNumber: position.lineNumber,
-    endLineNumber: position.lineNumber,
-    startColumn: startIdx + 1,
-    endColumn: endIdx + 1,
-  };
-}
 
 /** 分野令牌之后的尾段令牌（按空白切分；尾冒号标记命名参数键） */
 interface TailToken {

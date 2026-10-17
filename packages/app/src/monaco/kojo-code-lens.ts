@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import type {
   EditorCodeLens,
   EditorLanguageServiceContribution,
@@ -6,8 +7,7 @@ import type {
   EditorSymbolLocation,
 } from '@kojo/plugin-api';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
-import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
 
 /**
  * 行上内联注解的**宿主接线**（B8，2026-10-16 行内注解批）：`ui.editor.languageService`
@@ -130,7 +130,7 @@ export function collectCodeLenses(
       result = contribution.provide(request);
     } catch (e: unknown) {
       console.warn(
-        `[kojo-code-lens] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+        `[kojo-code-lens] '${contribution.id}' provide 抛错：${errorText(e)}`,
       );
       continue;
     }
@@ -227,19 +227,16 @@ export function installCodeLensProvider(monaco: typeof Monaco, handlers: CodeLen
         lenses = handlers.resolve(model);
       } catch (e: unknown) {
         // 注解是只读呈现面：出错就"没有注解"，绝不把编辑器的输入链带崩
-        console.warn(`[kojo-code-lens] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-code-lens] resolve 抛错：${errorText(e)}`);
         return { lenses: [], dispose: () => undefined };
       }
       return { lenses: toMonacoCodeLenses(model, lenses), dispose: () => undefined };
     },
   };
-  const subs = [
-    monaco.languages.registerCodeLensProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerCodeLensProvider(KOJO_LANGUAGE_ID, provider),
-  ];
+  const dialectSubs = registerForKojoDialects(monaco, (m, id) => m.languages.registerCodeLensProvider(id, provider));
   return {
     dispose: () => {
-      subs.forEach((s) => s.dispose());
+      dialectSubs.dispose();
       command.dispose();
     },
   };

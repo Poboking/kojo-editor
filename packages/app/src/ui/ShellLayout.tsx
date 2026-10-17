@@ -15,7 +15,7 @@ import {
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { EditorCommandContext, EditorWorkspaceSymbol, MarketService, UIPanelContribution } from '@kojo/plugin-api';
-import { MARKET_SERVICE_KEY } from '@kojo/plugin-api';
+import {errorText,  MARKET_SERVICE_KEY } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import {
@@ -662,7 +662,7 @@ export function ShellLayout(props: Props): ReactElement {
           void cmd.run(commandCtxRef.current);
           return true;
         } catch (e: unknown) {
-          console.warn(`[ShellLayout] 命令 '${id}' 执行失败：${e instanceof Error ? e.message : String(e)}`);
+          console.warn(`[ShellLayout] 命令 '${id}' 执行失败：${errorText(e)}`);
           return false;
         }
       },
@@ -976,7 +976,7 @@ export function ShellLayout(props: Props): ReactElement {
         if (cmd.when && !cmd.when(commandCtx)) return;
         void cmd.run(commandCtx);
       } catch (e: unknown) {
-        console.warn(`[ShellLayout] 工具栏命令 '${commandId}' 执行失败：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[ShellLayout] 工具栏命令 '${commandId}' 执行失败：${errorText(e)}`);
       }
     },
     [registry, commandCtx],

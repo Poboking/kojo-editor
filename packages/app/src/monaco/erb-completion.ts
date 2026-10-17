@@ -9,6 +9,7 @@ import { erbLabelCompletionItems } from './erb-completion-labels';
 import { erbSystemFunctionCompletionItems } from './erb-completion-system-functions';
 import { erbVariableCompletionItems } from './erb-completion-variables';
 import { ERB_SNIPPET_SOURCE } from './erb-completion-snippets';
+import { errorText } from '@kojo/plugin-api';
 import {
   applyCallSnippet,
   buildCallSnippetText,
@@ -155,7 +156,7 @@ export function resolveErbCompletionDetail(
         return undefined;
     }
   } catch (e: unknown) {
-    console.warn(`${ERB_LOG_TAG} resolve '${provenance.sourceId}' 抛错：${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`${ERB_LOG_TAG} resolve '${provenance.sourceId}' 抛错：${errorText(e)}`);
     return undefined;
   }
 }
@@ -449,7 +450,7 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
     try {
       return resolveErbCompletionDetail(item, provenance);
     } catch (e: unknown) {
-      console.warn(`[erb-completion] resolve '${provenance.sourceId}' 抛错：${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[erb-completion] resolve '${provenance.sourceId}' 抛错：${errorText(e)}`);
       return undefined;
     }
   },

@@ -4,8 +4,7 @@ import {
   provideLocations,
   type DefinitionHandlers,
 } from './kojo-definition';
-import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
 
 /**
  * 跳到实现（R3 残项 2026-10-16；W9 落点 span 批 2026-10-17 收口）——`Ctrl+F12` / Peek Implementation。
@@ -63,9 +62,5 @@ export function installImplementationProvider(
       return provideLocations(handlers, findModel, model, position, label);
     },
   };
-  const subs = [
-    monaco.languages.registerImplementationProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerImplementationProvider(KOJO_LANGUAGE_ID, provider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return registerForKojoDialects(monaco, (m, id) => m.languages.registerImplementationProvider(id, provider));
 }

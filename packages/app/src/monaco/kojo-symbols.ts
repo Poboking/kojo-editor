@@ -1,12 +1,12 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import type {
   EditorDocumentSymbol,
   EditorDocumentSymbolKind,
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
 } from '@kojo/plugin-api';
-import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
 
 /**
  * 文档大纲的**宿主接线**（B3，2026-10-15 编辑器特性批）。
@@ -53,7 +53,7 @@ export function collectDocumentSymbols(
       result = contribution.provide(request);
     } catch (e: unknown) {
       console.warn(
-        `[kojo-symbols] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+        `[kojo-symbols] '${contribution.id}' provide 抛错：${errorText(e)}`,
       );
       continue;
     }
@@ -136,15 +136,11 @@ export function installDocumentSymbolProvider(
         symbols = handlers.resolve(model);
       } catch (e: unknown) {
         // 大纲是只读呈现面：出错就"没有大纲"，绝不把编辑器带崩
-        console.warn(`[kojo-symbols] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-symbols] resolve 抛错：${errorText(e)}`);
         return [];
       }
       return toMonacoDocumentSymbols(monaco, model, symbols);
     },
   };
-  const subs = [
-    monaco.languages.registerDocumentSymbolProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerDocumentSymbolProvider(KOJO_LANGUAGE_ID, provider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return registerForKojoDialects(monaco, (m, id) => m.languages.registerDocumentSymbolProvider(id, provider));
 }

@@ -1,11 +1,11 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import type {
   EditorFoldingRange,
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
 } from '@kojo/plugin-api';
-import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
 
 /**
  * 折叠区间的**宿主接线**（D3，2026-10-15 折叠/面包屑批）。
@@ -35,7 +35,7 @@ export function collectFoldingRanges(
       result = contribution.provide(request);
     } catch (e: unknown) {
       console.warn(
-        `[kojo-folding] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+        `[kojo-folding] '${contribution.id}' provide 抛错：${errorText(e)}`,
       );
       continue;
     }
@@ -101,15 +101,11 @@ export function installFoldingRangeProvider(
         ranges = handlers.resolve(model);
       } catch (e: unknown) {
         // 折叠是只读呈现面：出错就"没有折叠"，绝不把编辑器带崩
-        console.warn(`[kojo-folding] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-folding] resolve 抛错：${errorText(e)}`);
         return [];
       }
       return toMonacoFoldingRanges(model, ranges);
     },
   };
-  const subs = [
-    monaco.languages.registerFoldingRangeProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerFoldingRangeProvider(KOJO_LANGUAGE_ID, provider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return registerForKojoDialects(monaco, (m, id) => m.languages.registerFoldingRangeProvider(id, provider));
 }

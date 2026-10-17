@@ -1,5 +1,6 @@
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { FileIO } from '@kojo/plugin-api';
+import { errorText } from '@kojo/plugin-api';
 import {
   clearDiff,
   closeDiffPane,
@@ -63,7 +64,7 @@ async function resolveSide(side: { text?: string; path?: string }, io: FileIO): 
       ]);
       return { kind: 'ok', text: tf.text, bytes };
     } catch (err) {
-      return { kind: 'error', message: `${side.path} 读取失败：${err instanceof Error ? err.message : String(err)}` };
+      return { kind: 'error', message: `${side.path} 读取失败：${errorText(err)}` };
     }
   }
   return { kind: 'error', message: '该侧没有可显示的内容' };

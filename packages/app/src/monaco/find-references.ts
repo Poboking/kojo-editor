@@ -1,11 +1,11 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import type {
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
   EditorSymbolLocation,
 } from '@kojo/plugin-api';
-import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
 import {
   explainReferenceCounts,
@@ -91,7 +91,7 @@ function mergeContributions(
       result = contribution.provide(request);
     } catch (e: unknown) {
       console.warn(
-        `[find-references] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+        `[find-references] '${contribution.id}' provide 抛错：${errorText(e)}`,
       );
       continue;
     }
@@ -205,7 +205,7 @@ export function installReferenceProvider(
       return handlers.openModelFor?.(filePath);
     } catch (e: unknown) {
       console.warn(
-        `[find-references] openModelFor('${filePath}') 抛错：${e instanceof Error ? e.message : String(e)}`,
+        `[find-references] openModelFor('${filePath}') 抛错：${errorText(e)}`,
       );
       return undefined;
     }
@@ -217,7 +217,7 @@ export function installReferenceProvider(
         locations = handlers.resolve(model, position);
       } catch (e: unknown) {
         // 宿主自己的 resolve（查槽 + 组请求）出错也不能让 Shift+F12 崩掉编辑器
-        console.warn(`[find-references] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[find-references] resolve 抛错：${errorText(e)}`);
         return undefined;
       }
       const out: Monaco.languages.Location[] = [];
@@ -226,7 +226,7 @@ export function installReferenceProvider(
       try {
         handlers.onTally?.(tally, explainReferenceCounts(tally));
       } catch (e: unknown) {
-        console.warn(`[find-references] onTally 抛错（不影响列表交付）：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[find-references] onTally 抛错（不影响列表交付）：${errorText(e)}`);
       }
       for (const location of locations) {
         const live = findModel(location.filePath);
@@ -289,13 +289,10 @@ export function installReferenceProvider(
       return true;
     },
   });
-  const subs = [
-    monaco.languages.registerReferenceProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerReferenceProvider(KOJO_LANGUAGE_ID, provider),
-  ];
+  const dialectSubs = registerForKojoDialects(monaco, (m, id) => m.languages.registerReferenceProvider(id, provider));
   return {
     dispose: () => {
-      subs.forEach((s) => s.dispose());
+      dialectSubs.dispose();
       opener.dispose();
     },
   };

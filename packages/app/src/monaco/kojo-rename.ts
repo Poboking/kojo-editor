@@ -1,7 +1,8 @@
 import type * as Monaco from './entry';
 import type { EditorRenameEdit } from '@kojo/plugin-api';
-import { normalize, unicodeTokenAt } from '@kojo/plugin-api';
+import {errorText,  normalize, unicodeTokenAt } from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { reject } from './rename-rejection';
 import { isKojoSourcePath } from '../ui/reference-utils';
 
 /**
@@ -45,10 +46,6 @@ export interface KojoRenameHandlers {
     position: Monaco.Position,
     newName: string,
   ): { edits: readonly EditorRenameEdit[]; oldName?: string; rejectReason?: string };
-}
-
-function reject(reason: string): Monaco.languages.WorkspaceEdit & Monaco.languages.Rejection {
-  return { edits: [], rejectReason: reason };
 }
 
 /** 请求 model 的盘上路径（桩 model / 派生 model 可能没有路径信息 ⇒ 空串，不猜） */
@@ -135,8 +132,8 @@ export function installKojoRename(monaco: typeof Monaco, handlers: KojoRenameHan
         }
         return { edits: verified };
       } catch (e: unknown) {
-        console.warn(`[kojo-rename] 落地失败：${e instanceof Error ? e.message : String(e)}`);
-        return reject(`重命名落地失败：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-rename] 落地失败：${errorText(e)}`);
+        return reject(`重命名落地失败：${errorText(e)}`);
       }
     },
   };

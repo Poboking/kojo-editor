@@ -10,7 +10,7 @@ import {
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, FileStat, GameProject, RecentProject } from '@kojo/plugin-api';
-import { join } from '@kojo/plugin-api';
+import {errorText,  join } from '@kojo/plugin-api';
 import { removeRecentOptimistic } from './WelcomeView';
 import { invoke, isTauri } from '../bridge/invoke';
 import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
@@ -273,7 +273,7 @@ export function App(): ReactElement {
       })
       .catch((e: unknown) => {
         if (disposed) return;
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorText(e));
         setPhase('welcome');
       });
     return () => {
@@ -365,7 +365,7 @@ export function App(): ReactElement {
     if (!kernel) return;
     const un = kernel.bus.on('ui.openExternal', (ev) => {
       void openExternal(ev.url).catch((e: unknown) => {
-        notify({ kind: 'error', message: `外链打开被拒：${e instanceof Error ? e.message : String(e)}` });
+        notify({ kind: 'error', message: `外链打开被拒：${errorText(e)}` });
       });
     });
     return un;
@@ -465,7 +465,7 @@ export function App(): ReactElement {
           try {
             await invoke('register_write_domain', { root: dir });
           } catch (e: unknown) {
-            setError(`写允许域注册失败（将只允许 appDataDir 写入）: ${e instanceof Error ? e.message : String(e)}`);
+            setError(`写允许域注册失败（将只允许 appDataDir 写入）: ${errorText(e)}`);
           }
         }
 
@@ -489,7 +489,7 @@ export function App(): ReactElement {
           const idx = await parser.ensureIndex();
           setIndex(idx);
         } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = errorText(e);
           setIndexError(msg);
           notify({ kind: 'error', message: `口上域索引构建失败：${msg}` });
         }
@@ -506,7 +506,7 @@ export function App(): ReactElement {
           if (toImport) kernel.bus.emit('workspace.importRequested', importRequestedPayload(dir));
           setError(null);
         } else {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = errorText(e);
           setError(msg);
           // 打开失败必须显式可见：只落在 welcome 错误区容易被误读成「项目读不了」而无从下手
           notify({ kind: 'error', message: `打开项目失败：${msg}` });
@@ -558,7 +558,7 @@ export function App(): ReactElement {
       setExtraRoots(plan.roots);
       if (plan.note) notify({ kind: 'info', message: plan.note });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorText(e);
       notify({ kind: 'error', message: `添加文件夹失败：${msg}` });
     }
   }, [kernel, project, extraRoots, notify]);
@@ -569,7 +569,7 @@ export function App(): ReactElement {
       const dir = await invoke<string | null>('choose_directory', { title: '打开文件夹（自动识别游戏）' });
       if (dir) await openProject(dir);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     }
   }, [openProject]);
 
@@ -581,7 +581,7 @@ export function App(): ReactElement {
       setRecent(removeRecentOptimistic(snapshot, dir));
       void kernel.project.removeRecent(dir).catch((e: unknown) => {
         setRecent(snapshot);
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = errorText(e);
         notify({ kind: 'error', message: `从最近列表移除失败：${msg}` });
       });
     },
@@ -597,7 +597,7 @@ export function App(): ReactElement {
       () => notify({ kind: 'info', message: '已清除全部最近打开记录' }),
       (e: unknown) => {
         setRecent(snapshot);
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = errorText(e);
         notify({ kind: 'error', message: `清除最近列表失败：${msg}` });
       },
     );
@@ -1089,7 +1089,7 @@ export function App(): ReactElement {
       try {
         await invoke('clear_write_domain');
       } catch (e: unknown) {
-        setError(`写允许域清除失败: ${e instanceof Error ? e.message : String(e)}`);
+        setError(`写允许域清除失败: ${errorText(e)}`);
       }
     }
     setProject(null);
@@ -1119,7 +1119,7 @@ export function App(): ReactElement {
       } catch (e: unknown) {
         // 授权失败必须显式可见（P0 实机反馈）：否则对话框一关、徽章仍是「只读」，
         // 用户以为点了没反应（=「无法重新选择权限」）
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = errorText(e);
         setError(msg);
         setWritable(false);
         notify({ kind: 'error', message: `写权限授权失败：${msg}` });

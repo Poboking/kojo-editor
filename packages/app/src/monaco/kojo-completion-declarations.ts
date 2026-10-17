@@ -1,6 +1,7 @@
 import type * as Monaco from './entry';
 import { createSugarTranspileService } from '@kojo/plugin-kojo-sugar';
 import type { CompletionDeclaration, CompletionDeclarationScanner } from './completion-core';
+import { errorText } from '@kojo/plugin-api';
 
 /**
  * COMPL-SHARED · `.kojo` **文件级声明名**（`别名` / `常量`）——判据只此一份，来自解析器。
@@ -48,7 +49,7 @@ const defaultScanner: CompletionDeclarationScanner = (text, filePath) => {
     }
     return out;
   } catch (e: unknown) {
-    console.warn(`[kojo-completion] 声明名解析抛错，该路零候选（不猜）：${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[kojo-completion] 声明名解析抛错，该路零候选（不猜）：${errorText(e)}`);
     return [];
   }
 };
@@ -106,7 +107,7 @@ export function kojoDeclarationsOf(
   } catch (e: unknown) {
     // 注入的扫描器抛错 ⇒ 该路零候选 + 一行可见降级（**不抛、不猜**，也**不缓存失败**：
     // 解析器随后就位时下一击键自然恢复）
-    console.warn(`[kojo-completion] 声明名扫描抛错，该路零候选（不猜）：${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[kojo-completion] 声明名扫描抛错，该路零候选（不猜）：${errorText(e)}`);
     return [];
   }
   DECL_CACHE.set(model, { versionId, text, declarations });

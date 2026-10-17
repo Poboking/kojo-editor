@@ -646,3 +646,6 @@ export type { ContentEquality, ContentSide } from './content-equality';
 export { kojoIndexCandidates, kojoIndexNameOf, resolveKojoIndexName } from './index-slot';
 export type { KojoIndexCandidate, KojoIndexResolution, KojoIndexTables } from './index-slot';
 export type { KojoIndexKind } from './game';
+
+/* ---- 错误摘要（FE-REF ⑨ 独占追加区块；勿在他处重排） ---- */
+export { errorText } from './errors';

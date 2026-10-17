@@ -10,9 +10,8 @@ import type {
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
 import { erbBitHoverName } from './erb-completion-bits';
-import { ERB_LANGUAGE_ID } from './erb-language';
 import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from './kojo-hover-native';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { registerForKojoDialects } from './register-dialects';
 
 /**
  * 悬停**中文名**（ZH-F2，显示线第二面）—— 把光标下的**原生记号**显示其中文名。
@@ -272,9 +271,5 @@ export function installHover(monaco: typeof Monaco, getTables: () => HoverTables
       };
     },
   };
-  const subs = [
-    monaco.languages.registerHoverProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerHoverProvider(KOJO_LANGUAGE_ID, provider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return registerForKojoDialects(monaco, (m, id) => m.languages.registerHoverProvider(id, provider));
 }

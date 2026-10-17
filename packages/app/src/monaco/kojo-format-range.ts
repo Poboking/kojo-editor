@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
 import { computeFormatEdits, type FormatEdit } from '@kojo/plugin-kojo-sugar';
-import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
+import {errorText,  FULLWIDTH_SPACE } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import {
   toTextEdits,
@@ -62,7 +62,7 @@ function resolveSafely(handlers: FormatHandlers, model: Monaco.editor.ITextModel
   try {
     return handlers.resolve(model);
   } catch (e: unknown) {
-    console.warn(`[kojo-format-range] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[kojo-format-range] resolve 抛错：${errorText(e)}`);
     return null;
   }
 }
@@ -71,7 +71,7 @@ function computeSafely(request: FormatRequest, startLine: number, endLine: numbe
   try {
     return formatRangeEdits(request, startLine, endLine);
   } catch (e: unknown) {
-    console.warn(`[kojo-format-range] computeFormatEdits 抛错：${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[kojo-format-range] computeFormatEdits 抛错：${errorText(e)}`);
     return [];
   }
 }

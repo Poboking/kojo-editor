@@ -5,6 +5,7 @@ import type {
   ErbScopeStamp,
 } from '@kojo/plugin-api';
 import {
+  errorText,
   CANDIDATE_BUDGETS,
   SCOPED_QUERY_FACTOR,
   candidateBudget,
@@ -203,7 +204,7 @@ export function collectWorkspaceSymbols(
       });
     } catch (e: unknown) {
       console.warn(
-        `[workspace-symbols] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+        `[workspace-symbols] '${contribution.id}' provide 抛错：${errorText(e)}`,
       );
       continue;
     }

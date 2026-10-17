@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import {
   RESERVED_PRONOUNS,
   SUGAR_KEYWORD_ROLE_LABEL,
@@ -152,7 +153,7 @@ export function resolveCompletionDetail(
         return undefined;
     }
   } catch (e: unknown) {
-    console.warn(`${KOJO_LOG_TAG} resolve '${provenance.sourceId}' 抛错：${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`${KOJO_LOG_TAG} resolve '${provenance.sourceId}' 抛错：${errorText(e)}`);
     return undefined;
   }
 }
@@ -417,7 +418,7 @@ export const KOJO_COMPLETION_ASSEMBLY: CompletionAssembly = {
     try {
       return resolveCompletionDetail(item, provenance);
     } catch (e: unknown) {
-      console.warn(`[kojo-completion] resolve '${provenance.sourceId}' 抛错：${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[kojo-completion] resolve '${provenance.sourceId}' 抛错：${errorText(e)}`);
       return undefined;
     }
   },

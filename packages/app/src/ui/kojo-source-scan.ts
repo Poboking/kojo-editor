@@ -3,6 +3,7 @@ import type { EditorLanguageServiceContribution, EditorSymbolLocation } from '@k
 import type { KojoReferenceProbe, KojoSourceFile } from '../monaco/erb-rename';
 import { isKojoSourcePath } from './reference-utils';
 import { workspaceRootsOf } from './workspace-roots';
+import { errorText } from '@kojo/plugin-api';
 
 /**
  * F2 改名跨语言腿的**宿主取数侧**（W8 XLANG-RENAME 接线批，2026-12-28）。
@@ -55,7 +56,7 @@ export async function listKojoSourceTexts(kernel: Kernel): Promise<readonly Kojo
       });
     } catch (e: unknown) {
       throw new KojoSourceEnumerateError(
-        `.kojo 源枚举失败（${root}）：${e instanceof Error ? e.message : String(e)}`,
+        `.kojo 源枚举失败（${root}）：${errorText(e)}`,
       );
     }
     for (const e of entries) if (!e.isDirectory && isKojoSourcePath(e.name)) paths.push(e.path);
@@ -65,7 +66,7 @@ export async function listKojoSourceTexts(kernel: Kernel): Promise<readonly Kojo
   try {
     texts = await kernel.io.readTexts(paths);
   } catch (e: unknown) {
-    throw new KojoSourceEnumerateError(`.kojo 源批量读失败：${e instanceof Error ? e.message : String(e)}`);
+    throw new KojoSourceEnumerateError(`.kojo 源批量读失败：${errorText(e)}`);
   }
   const out: KojoSourceFile[] = [];
   const unreadable: string[] = [];
@@ -108,7 +109,7 @@ export function kojoReferencesViaSlot(
       });
     } catch (e: unknown) {
       throw new Error(
-        `引用判读抛错（'${contribution.id}'）：${e instanceof Error ? e.message : String(e)}`,
+        `引用判读抛错（'${contribution.id}'）：${errorText(e)}`,
       );
     }
     if (!result || result.kind !== 'references') continue;

@@ -12,7 +12,7 @@ import type {
   WatchCallback,
   WatchReportCallback,
 } from '@kojo/plugin-api';
-import { DECODE_LABEL } from '@kojo/plugin-api';
+import {errorText,  DECODE_LABEL } from '@kojo/plugin-api';
 import { base64ToBytes, bytesToBase64, invoke, isTauri } from './invoke';
 import { decodeReadFilesFrame } from './read-files-frame';
 
@@ -129,7 +129,7 @@ export const tauriBridge: PlatformBridge = {
       });
     } catch (err) {
       // 监视器建不起来（平台层直接失败）：先报告再抛——内核据此显式降级
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = errorText(err);
       onReport?.({ type: 'started', watched: [], failures: paths.map((p) => ({ root: p, reason })) });
       unChanged();
       unError();

@@ -1,4 +1,4 @@
-import { pathKey } from '@kojo/plugin-api';
+import {errorText,  pathKey } from '@kojo/plugin-api';
 import type * as MonacoRuntime from '../monaco/entry';
 import {
   applyLineEdits,
@@ -208,7 +208,7 @@ export function createFileReplaceRunner(
     try {
       m = compileReplaceMatcher(request.query, opts);
     } catch (e: unknown) {
-      return outcome({ errors: [`检索词不是有效正则：${e instanceof Error ? e.message : String(e)}`] });
+      return outcome({ errors: [`检索词不是有效正则：${errorText(e)}`] });
     }
     if (m === null) return outcome({ errors: ['检索词为空，未替换'] });
 
@@ -234,7 +234,7 @@ export function createFileReplaceRunner(
             filesChanged++;
           }
         } catch (e: unknown) {
-          errors.push(`${f.path}：${e instanceof Error ? e.message : String(e)}`);
+          errors.push(`${f.path}：${errorText(e)}`);
         }
         continue;
       }
@@ -254,7 +254,7 @@ export function createFileReplaceRunner(
         }
       } catch (e: unknown) {
         // 写允许域 / io 故障：逐文件可见，不中断其余文件（铁律 4：不静默）
-        errors.push(`${f.path}：${e instanceof Error ? e.message : String(e)}`);
+        errors.push(`${f.path}：${errorText(e)}`);
       }
     }
     if (readOnlyFiles > 0) errors.push(readOnlyFilesNotice(readOnlyFiles, '替换'));
@@ -276,7 +276,7 @@ export function createFileReplaceRunner(
           errors.push(residualOutsideScopeNotice(residual, residualFiles.size, request.query));
         }
       } catch (e: unknown) {
-        errors.push(`引用判据核对失败（不影响本次替换结果）：${e instanceof Error ? e.message : String(e)}`);
+        errors.push(`引用判据核对失败（不影响本次替换结果）：${errorText(e)}`);
       }
     }
     return outcome({ applied, filesChanged, readOnlyFiles, errors });
@@ -328,7 +328,7 @@ export function createFileReplaceRunner(
         await deps.io.writeText(target.path, lines.join('\n'));
         return outcome({ applied: 1, filesChanged: 1 });
       } catch (e: unknown) {
-        return outcome({ errors: [`${target.path}：${e instanceof Error ? e.message : String(e)}`] });
+        return outcome({ errors: [`${target.path}：${errorText(e)}`] });
       }
     }
   };

@@ -8,7 +8,7 @@ import type {
   EditorSaveHandlerContribution,
   EditorSaveWarning,
 } from '@kojo/plugin-api';
-import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
+import {errorText,  FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
@@ -136,7 +136,7 @@ function pickSaveHandler(kernel: Kernel, path: string): EditorSaveHandlerContrib
       // 记录后仍降级为缺省保存，避免单个坏贡献阻断整条保存链路。
       console.warn(
         `[EditorPane] save handler '${contribution.id}' matches('${path}') 抛错：${
-          e instanceof Error ? e.message : String(e)
+          errorText(e)
         }`,
       );
     }
@@ -711,7 +711,7 @@ export function EditorPane({
         // 能力出错要"退化可见"：记录后继续，糖视图少一段好过整份消失
         console.warn(
           `[EditorPane] liftPreview '${contribution.id}' provideLiftProject 抛错：${
-            e instanceof Error ? e.message : String(e)
+            errorText(e)
           }`,
         );
       }
@@ -923,7 +923,7 @@ export function EditorPane({
               if (isActive) setError('只读：写权限未批准');
               return { path, status: 'failed', message: '写入路径不在已批准范围内', needsReauth: true };
             }
-            const msg = e instanceof Error ? e.message : String(e);
+            const msg = errorText(e);
             if (isActive) setError(msg);
             else if (!quiet) notify({ kind: 'error', message: `保存「${path}」失败：${msg}` });
             return { path, status: 'failed', message: msg };
@@ -1002,7 +1002,7 @@ export function EditorPane({
       } catch (e: unknown) {
         notify({
           kind: 'error',
-          message: `重新加载「${path}」失败：${e instanceof Error ? e.message : String(e)}`,
+          message: `重新加载「${path}」失败：${errorText(e)}`,
         });
         return;
       }
@@ -1412,7 +1412,7 @@ export function EditorPane({
         apply(toCrumbs(symbolChainAt(symbols, cursor.line)));
       } catch (e: unknown) {
         // 面包屑是只读呈现面：出错就"没链"，绝不把光标处理链带崩
-        console.warn(`[breadcrumb] 刷新抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[breadcrumb] 刷新抛错：${errorText(e)}`);
         apply([]);
       }
     };
@@ -1632,7 +1632,7 @@ export function EditorPane({
           if (recovered && pooled.fromRecovery) dropRecoveredContent(filePath);
         } catch (e: unknown) {
           stopRead(); // 幂等：读盘失败时补记一次采样（正常路径已记过则跳过）
-          if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+          if (!cancelled) setError(errorText(e));
           return;
         }
       }

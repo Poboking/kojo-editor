@@ -1,6 +1,7 @@
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { OpEntryView, OpJournal, OpRecord } from '@kojo/plugin-api';
 import { formatOpTime, opKindLabel, opStatusLabel } from './ops-history';
+import { errorText } from '@kojo/plugin-api';
 import {
   TIMELINE_ACCOUNT_LABEL,
   TRASH_HOLD_OPS_OWNER,
@@ -89,7 +90,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
           });
         })
         .catch((err: unknown) => {
-          if (alive) setState({ kind: 'error', reason: err instanceof Error ? err.message : String(err) });
+          if (alive) setState({ kind: 'error', reason: errorText(err) });
         });
     };
 
@@ -145,7 +146,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
           setEntries((prev) => new Map(prev).set(id, []));
           setFeedback({
             tone: 'err',
-            text: `文件清单读取失败：${err instanceof Error ? err.message : String(err)}`,
+            text: `文件清单读取失败：${errorText(err)}`,
           });
         }
       }
@@ -161,7 +162,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
           `已撤销「${rec === undefined ? item.id : opKindLabel(rec.kind)}」。游戏目录中的文件会按外部改动口径自动重载；工作区里的文件（如 .kojo 源）请重新打开该标签查看回滚后的内容。`,
         );
       } catch (err: unknown) {
-        report('err', err instanceof Error ? err.message : String(err));
+        report('err', errorText(err));
       } finally {
         setBusy(false);
         setPending(null);
@@ -179,7 +180,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
         await io.purgeTrash([item.id]);
         report('ok', `已彻底删除 ${item.title}——这一次是真删，没有回头路。`);
       } catch (err: unknown) {
-        report('err', err instanceof Error ? err.message : String(err));
+        report('err', errorText(err));
       } finally {
         setBusy(false);
         setPending(null);
@@ -197,7 +198,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
         const back = await io.restoreFromTrash(item.id);
         report('ok', `已放回原位：${back}。原位若站着东西，它已先被让进写前备份账（同一条时间线看得见）。`);
       } catch (err: unknown) {
-        report('err', err instanceof Error ? err.message : String(err));
+        report('err', errorText(err));
       } finally {
         setBusy(false);
         setPending(null);

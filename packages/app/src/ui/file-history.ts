@@ -1,5 +1,5 @@
 import type { BackupVersion, FileIO, OpEntryView, OpJournal, OpRecord, TrashEntry } from '@kojo/plugin-api';
-import { basename, isPathUnder, join, pathKey } from '@kojo/plugin-api';
+import {errorText,  basename, isPathUnder, join, pathKey } from '@kojo/plugin-api';
 import { AUTOSAVE_DIR_NAME, readAutosaveView, type AutosaveSnapshotInfo } from './autosave-journal';
 import { opKindLabel } from './ops-history';
 import { peekRecoveredContent } from './recovery-store';
@@ -507,7 +507,7 @@ export interface FileTimelineBundle extends FileTimeline {
  * Error 取 message：`Error: xxx` 这种前缀在面板上是噪音，原话才是用户能行动的东西。
  */
 const readFailNote = (account: string, err: unknown): string =>
-  `${account}读不到：${err instanceof Error ? err.message : String(err)}`;
+  `${account}读不到：${errorText(err)}`;
 
 /* ---------------- 回收站引用登记的**归属合并**（会话软保护的单源） ---------------- */
 

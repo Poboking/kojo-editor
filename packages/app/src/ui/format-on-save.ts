@@ -1,4 +1,5 @@
 import { formatText, type FormatDialect, type FormatEdit } from '@kojo/plugin-kojo-sugar';
+import { errorText } from '@kojo/plugin-api';
 
 /**
  * 保存时格式化（E2）——**纯函数**：内存文本进，(新文本 + edits) 出。
@@ -54,7 +55,7 @@ export function applyFormatOnSave(
   try {
     result = format(text, dialect);
   } catch (e: unknown) {
-    console.warn(`[format-on-save] 整理失败，按原文保存：${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[format-on-save] 整理失败，按原文保存：${errorText(e)}`);
     return UNCHANGED(text);
   }
   if (result.edits.length === 0) return UNCHANGED(text);

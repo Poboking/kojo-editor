@@ -6,9 +6,8 @@ import type {
   EditorSemanticTokenSpan,
   EditorSemanticTokenType,
 } from '@kojo/plugin-api';
-import { EDITOR_SEMANTIC_TOKEN_MODIFIERS, EDITOR_SEMANTIC_TOKEN_TYPES } from '@kojo/plugin-api';
-import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
+import {errorText,  EDITOR_SEMANTIC_TOKEN_MODIFIERS, EDITOR_SEMANTIC_TOKEN_TYPES } from '@kojo/plugin-api';
+import { registerForKojoDialects } from './register-dialects';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
 
 /**
@@ -129,7 +128,7 @@ export function collectSemanticTokenSpans(
       result = contribution.provide(request);
     } catch (e: unknown) {
       console.warn(
-        `[kojo-semantic-tokens] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
+        `[kojo-semantic-tokens] '${contribution.id}' provide 抛错：${errorText(e)}`,
       );
       continue;
     }
@@ -291,7 +290,7 @@ export function installSemanticTokensProvider(
       try {
         spans = handlers.resolve(model);
       } catch (e: unknown) {
-        console.warn(`[kojo-semantic-tokens] resolve 抛错：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[kojo-semantic-tokens] resolve 抛错：${errorText(e)}`);
         return { data: new Uint32Array(0) };
       }
       const normalized = normalizeSemanticSpans(spans, {
@@ -309,9 +308,7 @@ export function installSemanticTokensProvider(
     },
     releaseDocumentSemanticTokens: () => undefined,
   };
-  const subs = [
-    monaco.languages.registerDocumentSemanticTokensProvider(ERB_LANGUAGE_ID, provider),
-    monaco.languages.registerDocumentSemanticTokensProvider(KOJO_LANGUAGE_ID, provider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return registerForKojoDialects(monaco, (m, id) =>
+    m.languages.registerDocumentSemanticTokensProvider(id, provider),
+  );
 }

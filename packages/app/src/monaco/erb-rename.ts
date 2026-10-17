@@ -2,6 +2,8 @@ import type * as Monaco from './entry';
 import type { EditorSymbolLocation, ErbIndex, ErbReference, ErbReferenceKind } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
+import { reject } from './rename-rejection';
+import { errorText } from '@kojo/plugin-api';
 import {
   erbOccurrences,
   findNameTokenPositions,
@@ -371,7 +373,7 @@ async function collectKojoLeg(
         if (!filePath) continue;
         candidates.set(filePath, model.getValue());
       } catch (e: unknown) {
-        console.warn(`[erb-rename] 已开 .kojo 标签枚举失败：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[erb-rename] 已开 .kojo 标签枚举失败：${errorText(e)}`);
       }
     }
   }
@@ -389,7 +391,7 @@ async function collectKojoLeg(
         occurrences: [],
         unprovable: [
           {
-            label: `宿主 .kojo 源枚举抛错（${e instanceof Error ? e.message : String(e)}）——未打开的 .kojo 源无从查证`,
+            label: `宿主 .kojo 源枚举抛错（${errorText(e)}）——未打开的 .kojo 源无从查证`,
           },
         ],
       };
@@ -413,7 +415,7 @@ async function collectKojoLeg(
       // 判读抛错 ≠ 判官答"这些记号不是函数引用"（那必须是**正常返回空集**）。
       // 抛错就是没判 ⇒ 静默不收这批 = 只改 .erb、下次保存被冲掉 ⇒ 同样整批拒绝。
       unprovable.push({
-        label: unprovableFileLabel(filePath, positions.length, `判读抛错：${e instanceof Error ? e.message : String(e)}`),
+        label: unprovableFileLabel(filePath, positions.length, `判读抛错：${errorText(e)}`),
       });
       continue;
     }
@@ -425,10 +427,6 @@ async function collectKojoLeg(
     }
   }
   return { occurrences, unprovable };
-}
-
-function reject(reason: string): Monaco.languages.WorkspaceEdit & Monaco.languages.Rejection {
-  return { edits: [], rejectReason: reason };
 }
 
 /** live model 上的现文本验证：该列区间现在是不是这个名字（大小写不敏感；越界 = 不匹配） */
@@ -497,8 +495,8 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
       try {
         return await provideEdits(model, position, newName);
       } catch (e: unknown) {
-        console.warn(`[erb-rename] 落地失败：${e instanceof Error ? e.message : String(e)}`);
-        return reject(`重命名落地失败：${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[erb-rename] 落地失败：${errorText(e)}`);
+        return reject(`重命名落地失败：${errorText(e)}`);
       }
     },
   };
@@ -561,7 +559,7 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
           }
         } catch (e: unknown) {
           // 写允许域 / io 故障：这一份没落（rewriteClosedFile 只在有实改时写），其余继续
-          writeFailures.push(`'${group.path}'：${e instanceof Error ? e.message : String(e)}`);
+          writeFailures.push(`'${group.path}'：${errorText(e)}`);
         }
         continue;
       }

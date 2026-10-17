@@ -6,6 +6,7 @@ import {
   type SearchRequest,
   type SearchResult,
 } from '../bridge/search';
+import { errorText } from '@kojo/plugin-api';
 import { DEFAULT_EXTENSION_TEXT, isValidSearchQuery, parseExtensions, replaceSummaryText } from './search-query';
 import { scopeUnreachableText, type AppliedSearchScope } from './search-scope';
 
@@ -258,7 +259,7 @@ export async function runSearch(
     if (state.searchId !== searchId) return;
     set({
       phase: 'error',
-      error: e instanceof Error ? e.message : String(e),
+      error: errorText(e),
       result: null,
       progress: null,
       appliedScope: null,
@@ -309,7 +310,7 @@ export async function runReplace(mode: ReplaceMode): Promise<ReplaceOutcome | nu
   } catch (e: unknown) {
     set({
       replaceRunning: false,
-      replaceSummary: `替换失败：${e instanceof Error ? e.message : String(e)}`,
+      replaceSummary: `替换失败：${errorText(e)}`,
     });
     return null;
   }
@@ -325,7 +326,7 @@ export async function stopSearch(): Promise<void> {
   try {
     await canceller(id);
   } catch (e: unknown) {
-    set({ error: e instanceof Error ? e.message : String(e) });
+    set({ error: errorText(e) });
   }
 }
 

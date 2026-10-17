@@ -4,7 +4,7 @@ import type {
   SearchScopeContribution,
   SearchScopeOption,
 } from '@kojo/plugin-api';
-import { filterByScope, isPathUnder, pathKey } from '@kojo/plugin-api';
+import {errorText,  filterByScope, isPathUnder, pathKey } from '@kojo/plugin-api';
 import { isUnderAnyRoot } from './workspace-roots';
 
 /**
@@ -66,7 +66,7 @@ export function collectSearchScopes(
     try {
       options = contribution.provide(project);
     } catch (e: unknown) {
-      notices.push(`范围提供方「${owner}」没能给出候选：${e instanceof Error ? e.message : String(e)}`);
+      notices.push(`范围提供方「${owner}」没能给出候选：${errorText(e)}`);
       continue;
     }
     const seen = new Set<string>();
@@ -145,7 +145,7 @@ export function setActiveScope(scope: ErbScopeStamp | null): void {
     try {
       cb(activeScope);
     } catch (e: unknown) {
-      console.warn(`[search-scope] 范围订阅者抛错：${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[search-scope] 范围订阅者抛错：${errorText(e)}`);
     }
   }
 }

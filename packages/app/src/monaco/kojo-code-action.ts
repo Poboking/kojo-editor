@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import { errorText } from '@kojo/plugin-api';
 import type {
   EditorCodeAction,
   EditorCodeActionContribution,
@@ -237,7 +238,7 @@ export function collectCodeActions(
     } catch (e: unknown) {
       console.warn(
         `[kojo-code-action] '${contribution.id}' provideActions 抛错：${
-          e instanceof Error ? e.message : String(e)
+          errorText(e)
         }`,
       );
       continue;

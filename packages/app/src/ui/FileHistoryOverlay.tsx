@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { FileIO } from '@kojo/plugin-api';
-import { basename } from '@kojo/plugin-api';
+import {errorText,  basename } from '@kojo/plugin-api';
 import {
   TIMELINE_ACCOUNT_LABEL,
   TRASH_HOLD_FILE_OWNER,
@@ -96,7 +96,7 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
         })
         .catch((err: unknown) => {
           if (alive)
-            setState({ kind: 'error', reason: err instanceof Error ? err.message : String(err) });
+            setState({ kind: 'error', reason: errorText(err) });
         });
       // 退场只撤回**本屏**的引用登记：另一屏（操作历史）正展示的条目不该被这一屏的卸载放行去清扫
       return () => {
@@ -176,7 +176,7 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
         }
       } catch (err: unknown) {
         // 只读的游戏目录拒绝 = WriteNotAllowedError——原因整条呈现（不静默），失败态常驻
-        report('err', err instanceof Error ? err.message : String(err));
+        report('err', errorText(err));
       } finally {
         setBusy(false);
         setPending(null);
@@ -191,7 +191,7 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
         await deps.io.purgeTrash([action.id]);
         report('ok', `已彻底删除「${item.title}」——这一次是真删，回收站里没有回头路。`);
       } catch (err: unknown) {
-        report('err', err instanceof Error ? err.message : String(err));
+        report('err', errorText(err));
       } finally {
         setBusy(false);
         setPending(null);

@@ -1,5 +1,5 @@
 import type { FileIO } from '@kojo/plugin-api';
-import { ERB_DIALECT_EXTENSIONS, basename } from '@kojo/plugin-api';
+import {errorText,  ERB_DIALECT_EXTENSIONS, basename } from '@kojo/plugin-api';
 import { isTauri } from '../bridge/invoke';
 import { joinPath } from './file-tree-ops';
 
@@ -429,7 +429,7 @@ export async function copyDroppedFiles(input: DropCopyInput): Promise<void> {
       await io.copyFile(from, to);
       copied += 1;
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorText(e);
       rejected.push({ path: from, reason: `复制失败：${msg}` });
     }
   }
