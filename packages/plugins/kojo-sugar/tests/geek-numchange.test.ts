@@ -227,7 +227,8 @@ describe('1016 增减行 · 手写 `CALL` 行与投影钉子', () => {
 
   it('投影：手写 `CALL CHANGE_CFLAG(…)` 仍按既有口径原样保留（不改字节、不产生糖段）', () => {
     const r = liftProject(projDeps(), { source: 'CALL CHANGE_CFLAG(2, TARGET, 100)' });
-    expect(r.segments).toHaveLength(0);
+    // ZH-P 起机房里多出的兜底段（nativeOnly）不参与这一口径
+    expect(r.segments.filter((s) => s.nativeOnly !== true)).toHaveLength(0);
     expect(r.stats.nativeByReason.find((x) => x.reason === 'other')?.count).toBe(1);
   });
 });

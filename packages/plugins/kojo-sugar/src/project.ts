@@ -830,8 +830,13 @@ function makeNativeRec(lines: string[], ctx: ProjContext, deps: LiftDeps): Nativ
     const content = contentOf(raw);
     const indent = ctx.indentAt(ln, raw);
     const localized = localizeNativeLine({ content, indent, lookup });
-    const text =
-      localized ?? (content.length === 0 ? UNRECOGNIZED_PREFIX.trimEnd() : `${UNRECOGNIZED_PREFIX}${content}`);
+    // 空内容行（停用区里的空行是唯一到达这里的形态）没有"语句"可标——兜底前缀
+    // 单独一行是纯噪声，还让宿主把 N 行空行折成 N 行"未识别语句"。保持隐身，
+    // 让宿主照常回显空行（空行在尺子 `isVerbatimNativeLine` 里天生不算红线）。
+    if (localized === null && content.length === 0) {
+      return { line: ln, kind: 'native', text: '', indent, visible: false, reason };
+    }
+    const text = localized ?? `${UNRECOGNIZED_PREFIX}${content}`;
     return { line: ln, kind: 'native', text, indent, visible: true, reason };
   };
 }
@@ -945,7 +950,10 @@ function buildSegments(recs: LineRec[]): SugarProjectSegment[] {
   };
   const flushNative = (): void => {
     if (nativeRun.length === 0) return;
-    out.push(toSegment(nativeRun, true));
+    // 兜底段只在**至少一行可见**时成段：全空行的 native 段（停用区里的空行）没有
+    // "没读懂的语句"可标，成段只会让宿主把 N 行原文折成 0 行 ViewZone——不折，
+    // 让这些空行留在段外（宿主照常回显，显示与原文件逐行一致）。
+    if (nativeRun.some((r) => r.visible)) out.push(toSegment(nativeRun, true));
     nativeRun = [];
   };
 
@@ -963,15 +971,22 @@ function buildSegments(recs: LineRec[]): SugarProjectSegment[] {
   return out;
 }
 
-/** 一段记录 → 段（缩进以段内最小层为基准，故至少首行无前导空白） */
-function toSegment(run: LineRec[]): SugarProjectSegment {
+/**
+ * 一段记录 → 段（缩进以段内最小层为基准，故至少首行无前导空白）。
+ *
+ * `nativeOnly`（全中系列 additive 契约，`plugin-api` `SugarProjectSegment/nativeOnly`）：
+ * 本段是否全部由 native 行构成。只有 native 段会带 `true`——**必须**写进产物：
+ * 契约不变量已改为"相邻段可以无间隔行"，消费方不能再靠"两段之间必有原文行"推断覆盖，
+ * 要区分"真糖段"与"工具没读懂的兜底段"只有这个字段（不许按文本猜第二份口径）。
+ */
+function toSegment(run: LineRec[], nativeOnly: boolean): SugarProjectSegment {
   const visible = run.filter((r) => r.visible);
   const base = visible.reduce((m, r) => Math.min(m, r.indent), Number.POSITIVE_INFINITY);
   const baseIndent = Number.isFinite(base) ? base : 0;
   const text = visible
     .map((r) => '\t'.repeat(Math.max(0, r.indent - baseIndent)) + r.text)
     .join('\n');
-  return {
+  const segment: SugarProjectSegment = {
     fromLine: run[0]!.line,
     toLine: run[run.length - 1]!.line,
     sugarText: text,
@@ -980,6 +995,8 @@ function toSegment(run: LineRec[]): SugarProjectSegment {
     // 直接数记录条数会让宿主的 ViewZone 高度少一行。
     lineCount: visible.reduce((n, r) => n + (r.text.length === 0 ? 1 : r.text.split('\n').length), 0),
   };
+  if (nativeOnly) segment.nativeOnly = true;
+  return segment;
 }
 
 /* ============================== 函数骨架合并 ============================== */

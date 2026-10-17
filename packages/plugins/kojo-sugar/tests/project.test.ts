@@ -37,6 +37,16 @@ const nativeCount = (r: { stats: { nativeByReason: Array<{ reason: string; count
 /** 便捷：段文本按行展开（去空尾） */
 const segLines = (s: SugarProjectSegment): string[] => s.sugarText.split('\n');
 
+/**
+ * 真糖段（全中系列 2026-10-17 起 native 行必产出 `nativeOnly` 兜底段——那是"工具没读懂"
+ * 的显式显示形，红线判据靠它在屏上零整行原样 ERB）。数糖、数位置都只数真糖段。
+ */
+const sugarSegs = (segments: SugarProjectSegment[]): SugarProjectSegment[] =>
+  segments.filter((s) => s.nativeOnly !== true);
+/** 兜底段（全部由 native 行构成） */
+const nativeOnlySegs = (segments: SugarProjectSegment[]): SugarProjectSegment[] =>
+  segments.filter((s) => s.nativeOnly === true);
+
 describe('糖投影 · 台词行', () => {
   it('四个有糖形态变体 → 糖文本行（L 后缀补「续」）', () => {
     const r = project(
@@ -93,8 +103,8 @@ describe('糖投影 · 台词行', () => {
     // 批 F 后 `PRINTL` 已有显示口径（见「输出家族全覆盖」组），表外的按钮类仍原样；
     // 行内条件的降级见「批 G」组。
     const r = project(['PRINTL 非 FORM 系', 'PRINTBUTTON "x", 1'].join('\n'));
-    expect(r.segments).toHaveLength(1);
-    expect(segLines(r.segments[0]!)).toEqual(['非 FORM 系 续']);
+    expect(sugarSegs(r.segments)).toHaveLength(1); // 兜底段多了，真糖段还是那一段
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['非 FORM 系 续']);
     expect(r.stats.nativeLines).toBe(1);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['unsupported-print-variant']).toBe(1);
@@ -152,7 +162,11 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
 
   it('无换行变体的空体 → 原样保留（既不输出也不换行，没有可显示的东西）', () => {
     const r = project(['PRINT', 'PRINTD', 'PRINTFORM', 'PRINTFORMD '].join('\n'));
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
+    // 没读懂的 4 行仍以兜底形显式上屏（nativeOnly 段），不再是一整行原样 ERB
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText.split('\n'))).toEqual([
+      ['未识别语句 · PRINT', '未识别语句 · PRINTD', '未识别语句 · PRINTFORM', '未识别语句 · PRINTFORMD'],
+    ]);
     expect(reasonsOf(r)['unsupported-print-variant']).toBe(4);
   });
 
@@ -172,7 +186,8 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
 
   it('指令后紧跟 `;` → 原样保留（那是注释，不是要打印的字）', () => {
     const r = project('PRINTFORMW ;这是注释');
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText)).toEqual(['未识别语句 · PRINTFORMW ;这是注释']);
     expect(reasonsOf(r)['unsupported-print-variant']).toBe(1);
   });
 
@@ -182,7 +197,7 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
         '\n',
       ),
     );
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
     expect(reasonsOf(r)['unsupported-print-variant']).toBe(6);
   });
 
@@ -196,7 +211,7 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
 
   it('结构判据仍优先：PRINTDATA 数据表体内的 `PRINTL` 不投影', () => {
     const r = project(['PRINTDATAL', 'PRINTL 这是数据不是显示语句', 'ENDDATA'].join('\n'));
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
     expect(reasonsOf(r)['data-or-skip']).toBe(1);
     expect(reasonsOf(r)['unsupported-control-flow']).toBe(2);
   });
@@ -277,7 +292,7 @@ describe('糖投影 · 行内条件 `\\@cond?A#B\\@` → `{cond ? "A" : "B"}`（
         'PRINTFORML 正常一行',
       ].join('\n'),
     );
-    expect(r.segments.map((s) => s.fromLine)).toEqual([4]);
+    expect(sugarSegs(r.segments).map((s) => s.fromLine)).toEqual([4]);
     expect(r.stats.nativeByReason.find((x) => x.reason === 'inline-condition')?.count).toBe(3);
   });
 
@@ -313,57 +328,59 @@ describe('糖投影 · `SIF 条件` + 下一行 → 「如果 …：」+ 正文�
     expect(segLines(r.segments[0]!)).toEqual(['如果 她的好感度 >= 500：', '\t「近一点也没关系哦」 续']);
   });
 
-  it('正文是机器码（RETURN）时：块头照样成段，正文留原代码', () => {
+  it('正文是机器码（RETURN）时：块头照样成段，正文不在函数内 → 兜底形显式上屏（仍未被猜掉）', () => {
     const r = project(['SIF A == 1', 'RETURN 1', 'PRINTFORMW 乙'].join('\n'));
-    expect(r.segments.map((s) => [s.fromLine, s.toLine])).toEqual([
+    expect(sugarSegs(r.segments).map((s) => [s.fromLine, s.toLine])).toEqual([
       [1, 1],
       [3, 3],
     ]);
-    expect(segLines(r.segments[0]!)).toEqual(['如果 A == 1：']);
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['如果 A == 1：']);
+    // `RETURN 1` 不在函数体内（第 0 列没有 `@` 头）→ 不算骨架，但同样不原样上屏
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText)).toEqual(['未识别语句 · RETURN 1']);
   });
 
   it('判据 2：`SIF 条件:命令` 冒号形态整行不动（与变量索引冒号不可分，语料 0 例也不猜）', () => {
     const r = project('SIF !RAND:2: PRINTFORMW 甲');
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
     expect(r.stats.nativeByReason.find((x) => x.reason === 'unsupported-control-flow')?.count).toBe(1);
     // 对照：索引冒号不是命令 → 照投影
     const ok = project(['SIF TALENT:LOCAL:恋人', 'PRINTFORMW 乙'].join('\n'));
-    expect(segLines(ok.segments[0]!)).toEqual(['如果 TALENT:LOCAL:恋人：', '\t乙']);
+    expect(segLines(sugarSegs(ok.segments)[0]!)).toEqual(['如果 TALENT:LOCAL:恋人：', '\t乙']);
   });
 
   it('判据 3：正文是开块语句 / 闭合行 / 函数头 / 又一条 SIF → 该行不动', () => {
     const opener = project(['SIF A', 'IF B', 'PRINTFORMW 甲', 'ENDIF'].join('\n'));
     // 第 1 行的正文是开块语句 → 整行不动；段从第 2 行（真正的 `IF`）开始
-    expect(opener.segments[0]!.fromLine).toBe(2);
-    expect(segLines(opener.segments[0]!)).toEqual(['如果 B：', '\t甲']);
+    expect(sugarSegs(opener.segments)[0]!.fromLine).toBe(2);
+    expect(segLines(sugarSegs(opener.segments)[0]!)).toEqual(['如果 B：', '\t甲']);
 
     const chained = project(['SIF A', 'SIF B', 'PRINTFORMW 甲'].join('\n'));
     // 第一条 SIF 的正文是 SIF → 不动；第二条的正文是输出行 → 照投影
-    expect(chained.segments.map((s) => s.fromLine)).toEqual([2]);
-    expect(segLines(chained.segments[0]!)).toEqual(['如果 B：', '\t甲']);
+    expect(sugarSegs(chained.segments).map((s) => s.fromLine)).toEqual([2]);
+    expect(segLines(sugarSegs(chained.segments)[0]!)).toEqual(['如果 B：', '\t甲']);
 
     // `ENDIF` 自身会被投影成"只藏不显"的空段（批 D 契约），所以判据要问"SIF 行有没有被糖覆盖"
     const closer = project(['SIF A', 'ENDIF'].join('\n'));
-    expect(closer.segments.every((s) => s.fromLine > 1)).toBe(true);
+    expect(sugarSegs(closer.segments).every((s) => s.fromLine > 1)).toBe(true);
 
     const branch = project(['IF A', 'PRINTFORMW 甲', 'SIF B', 'ELSE', 'PRINTFORMW 乙', 'ENDIF'].join('\n'));
     // `SIF B` 的正文是 `ELSE`（属于上面的 IF 链，不是被条件管的语句）→ 整行不动
-    expect(branch.segments.map((s) => s.fromLine)).toEqual([1, 4]);
-    expect(segLines(branch.segments[1]!)).toEqual(['否则：', '\t乙']);
+    expect(sugarSegs(branch.segments).map((s) => s.fromLine)).toEqual([1, 4]);
+    expect(segLines(sugarSegs(branch.segments)[1]!)).toEqual(['否则：', '\t乙']);
 
     const head = project(['SIF A', '@FUNC'].join('\n'));
-    expect(head.segments).toHaveLength(0);
+    expect(sugarSegs(head.segments)).toHaveLength(0);
   });
 
-  it('判据 4：停用区与数据表体内的 SIF 不动', () => {
+  it('判据 4：停用区与数据表体内的 SIF 不动（兜底段不是糖段——停用区的行一个都不变成糖）', () => {
     const skip = project(['[SKIPSTART]', 'SIF A', 'PRINTFORMW 甲', '[SKIPEND]'].join('\n'));
-    expect(skip.segments.every((s) => s.fromLine > 2)).toBe(true);
+    expect(skip.segments.every((s) => s.nativeOnly === true)).toBe(true);
 
     const data = project(['PRINTDATAL', 'SIF A', 'DATAFORM 甲', 'ENDDATA'].join('\n'));
-    // SIF 在表体里也不发糖（表体行是"数据"不是语句），段只能来自表外的后续行
+    // SIF 在表体里也不发糖（表体行是"数据"不是语句），真糖段只能来自表外的后续行
     const later = project(['PRINTDATAL', 'SIF A', 'DATAFORM 甲', 'ENDDATA', 'PRINTFORMW 乙'].join('\n'));
-    expect(data.segments.every((s) => s.fromLine !== 2)).toBe(true);
-    expect(later.segments.map((s) => s.fromLine)).toEqual([5]);
+    expect(sugarSegs(data.segments)).toHaveLength(0);
+    expect(sugarSegs(later.segments).map((s) => s.fromLine)).toEqual([5]);
   });
 
   it('块头在块内时按结构深度呈现（与 IF 一致）', () => {
@@ -420,20 +437,20 @@ describe('糖投影 · 函数头反解成分野时机（批 I）', () => {
 
   it('分野表缺席 → 一个头都不标，且**计入成因不静默**', () => {
     const r = project(['@M_KOJO_MESSAGE_COM_K1_310', 'PRINTFORMW 甲'].join('\n'));
-    expect(r.segments.map((s) => s.fromLine)).toEqual([2]); // 只有正文成段
+    expect(sugarSegs(r.segments).map((s) => s.fromLine)).toEqual([2]); // 只有正文成真糖段
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['other']).toBe(1);
   });
 
   it('表里没有的名字（辅助函数 / 工具函数）留原代码，不硬凑标签', () => {
     const r = withFaces(['@AUTO_AEGI', 'PRINTFORMW 甲', '@KOJO_ACTIVE_INFO', 'PRINTFORMW 乙'].join('\n'));
-    expect(r.segments.map((s) => s.fromLine)).toEqual([2, 4]);
+    expect(sugarSegs(r.segments).map((s) => s.fromLine)).toEqual([2, 4]);
     expect(r.stats.nativeByReason.find((x) => x.reason === 'other')?.count).toBe(2);
   });
 
   it('MESSAGECHECK 四件套**不冒充指令**（段取值不匹配 → 整头不动）', () => {
     const r = withFaces('@M_KOJO_MESSAGE_MESSAGECHECK_COM_K1_310\nPRINTFORMW 甲');
-    expect(r.segments.map((s) => s.fromLine)).toEqual([2]);
+    expect(sugarSegs(r.segments).map((s) => s.fromLine)).toEqual([2]);
   });
 
   it('包装三联的 `@A_1` 已被骨架吸收 → 不会多出一条"时机"', () => {
@@ -446,12 +463,12 @@ describe('糖投影 · 函数头反解成分野时机（批 I）', () => {
     expect(r.segments[0]!.toLine).toBe(5); // `_1` 那一个头被吸收进区间
   });
 
-  it('不变量：标了的头计入 projected，未标的计入 native', () => {
+  it('不变量：标了的头计入 projected，未标的计入 native；函数体内的 `RETURN` 骨架吸收（红线 2）', () => {
     const { stats } = withFaces('@M_KOJO_MESSAGE_COM_K1_310\nPRINTFORMW 甲\n@AUTO_AEGI\nRETURN 1');
     expect(stats.totalLines).toBe(4);
     expect(stats.projectedLines + stats.passthroughLines + stats.nativeLines).toBe(4);
-    expect(stats.projectedLines).toBe(2); // 头 + 台词
-    expect(stats.nativeLines).toBe(2); // @AUTO_AEGI + RETURN
+    expect(stats.projectedLines).toBe(3); // 头 + 台词 + 被吸收的 RETURN（账要平，不静默）
+    expect(stats.nativeLines).toBe(1); // @AUTO_AEGI
   });
 });
 
@@ -478,7 +495,8 @@ describe('糖投影 · MESSAGECHECK 数字返回协议（P-8，纯显示）', ()
     const r = withFaces(
       ['@M_KOJO_MESSAGE_MESSAGECHECK_COM_K1_310', 'RETURN 1', 'RETURN 2', 'RETURN 3'].join('\n'),
     );
-    expect(segLines(r.segments[0]!)).toEqual([
+    // 数字返回**不被骨架吸收吃掉**（ZH-P 位置约束：MECHECK 注记先于 RETURN 吸收判定）
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual([
       '隐藏情景（数字返回 1）：',
       '隐藏口上（数字返回 2）：',
       '隐藏情景 · 隐藏口上（数字返回 3）：',
@@ -489,7 +507,7 @@ describe('糖投影 · MESSAGECHECK 数字返回协议（P-8，纯显示）', ()
     const r = withFaces(
       ['@M_KOJO_MESSAGE_MESSAGECHECK_COM_K1_310', 'SETBIT RESULT, 0', 'SETBIT RESULT, 1'].join('\n'),
     );
-    expect(segLines(r.segments[0]!)).toEqual(['隐藏情景：', '隐藏口上：']);
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['隐藏情景：', '隐藏口上：']);
   });
 
   it('真实 K30 形（IF/ELSE 包着数字返回）：注记随缩进，条件仍在 IF 上（不伪造）', () => {
@@ -503,27 +521,28 @@ describe('糖投影 · MESSAGECHECK 数字返回协议（P-8，纯显示）', ()
         'ENDIF',
       ].join('\n'),
     );
-    const seg = r.segments.find((s) => s.fromLine === 2)!;
+    const seg = r.segments.find((s) => s.fromLine === 2 && s.nativeOnly !== true)!;
     expect(segLines(seg)).toEqual(['如果 TFLAG:193：', '\t隐藏情景（数字返回 1）：', '否则：']);
-    // `RETURN 0`（不置位 = 两者都显示）无对应糖子句 → 保持原生；函数头也未标 → 原生
-    expect(reasonsOf(r)['other']).toBe(2);
+    // `RETURN 0`（不置位 = 两者都显示）无对应糖子句 → 不伪造注记，但也不原样上屏：
+    // 它是函数骨架 → 被 RETURN 吸收（红线 2）；函数头也未标 → 兜底一行（不静默）
+    expect(reasonsOf(r)['other']).toBe(1);
   });
 
   it('负自证：非协议行一律保持不动（值不置位 / 位号未声明 / 非协议目标 / 无数值 / 体外）', () => {
     const r = withFaces(
       [
         '@M_KOJO_MESSAGE_MESSAGECHECK_COM_K1_310', // 体内
-        'RETURN 0', // 值不置任何已声明位
-        'SETBIT RESULT, 5', // 位号未声明
-        'SETBIT LOCAL, 0', // 非 MESSAGECHECK 目标
-        'RETURN RESULT', // 非数字返回
+        'RETURN 0', // 值不置任何已声明位 → 骨架吸收（不显示）
+        'SETBIT RESULT, 5', // 位号未声明 → 兜底显示
+        'SETBIT LOCAL, 0', // 非 MESSAGECHECK 目标 → 兜底显示
+        'RETURN RESULT', // 非数字返回 → 同样是骨架 → 吸收（不显示）
         '@M_KOJO_MESSAGE_COM_K1_310', // 切出 MESSAGECHECK 作用域（此头可标）
-        'RETURN 1', // 非 MECHECK 体内
+        'RETURN 1', // MECHECK 体外 → 骨架吸收（不显示）
       ].join('\n'),
     );
-    // 只有可标的普通函数头投影；五条 RETURN/SETBIT 全部保留原生
-    expect(segLines(r.segments[0]!)).toEqual(['时机 指令 310：']);
-    expect(reasonsOf(r)['other']).toBe(6); // 头 + 5 条
+    // 只有可标的普通函数头投影；两条 SETBIT 走兜底段，三条 RETURN 骨架吸收（红线 2）
+    expect(sugarSegs(r.segments).map((s) => s.sugarText).join('\n')).toContain('时机 指令 310：');
+    expect(reasonsOf(r)['other']).toBe(3); // 头 + 2 条 SETBIT
   });
 });
 
@@ -566,7 +585,7 @@ describe('糖投影 · 角色状态赋值行反糖（批 J）', () => {
   it('口径边界：**只有左值是角色状态**才算状态变化行（右值单独可读不_project_）', () => {
     // `LOCAL = CFLAG:TARGET:1088` 是取数不是改状态，读者不卡在它上面；守门尺子的分母
     // 同样只数角色作用域族——**判据与尺子必须同源**，否则读数会骗人。
-    expect(withDict('LOCAL = CFLAG:TARGET:1088').segments).toHaveLength(0);
+    expect(sugarSegs(withDict('LOCAL = CFLAG:TARGET:1088').segments)).toHaveLength(0);
     const r = withDict('CFLAG:TARGET:1088 = LOCAL');
     expect(segLines(r.segments[0]!)).toEqual(['她的好感度 = LOCAL']);
   });
@@ -578,7 +597,7 @@ describe('糖投影 · 角色状态赋值行反糖（批 J）', () => {
     expect(segLines(a.segments[0]!)).toEqual(['角色1的好感度 += 50']);
     for (const src of ['CFLAG:1:好感度 += 50', 'CFLAG:ARG:1088 = 1']) {
       const r = withDict(src);
-      expect(r.segments).toHaveLength(0);
+      expect(sugarSegs(r.segments)).toHaveLength(0);
       expect(r.stats.nativeByReason.find((x) => x.reason === 'other')?.count).toBe(1);
     }
   });
@@ -600,7 +619,7 @@ describe('糖投影 · 角色状态赋值行反糖（批 J）', () => {
 
   it('反糖一个字都没改动的赋值 → 留原代码（半中不日的行既没信息也不是他能写的）', () => {
     const r = withDict(['LOCAL = 1', 'TFLAG:192 = 0', 'RESULT = 3'].join('\n'));
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
   });
 
   it('比较运算不当成赋值（`A =<> B` / `A = = B` 一类形态不动）', () => {
@@ -611,7 +630,7 @@ describe('糖投影 · 角色状态赋值行反糖（批 J）', () => {
 
   it('非角色族（`FLAG`/`GLOBAL`）不进这条路', () => {
     const r = withDict(['FLAG:12 = 1', 'GLOBAL:好感度 = 3'].join('\n'));
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
   });
 
   it('不变量：投影掉的赋值计入 projected，未动的计入 native', () => {
@@ -670,13 +689,13 @@ describe('糖投影 · 演出行 `CALL HPH_PRINT` → 心形（批 K，规范 §
         '\n',
       ),
     );
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
     expect(r.stats.nativeLines).toBe(4);
   });
 
   it('不是 `@"…"` 格式串（裸字符串 / 引号套引号）→ 不动：展开规则不同，不猜', () => {
     const r = project(['CALL HPH_PRINT,"文本","L"', 'CALL HPH_PRINT,@"说"引号"吧","W"'].join('\n'));
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
   });
 
   it('块体内的演出行按结构深度缩进（与台词同一通道）', () => {
@@ -685,7 +704,7 @@ describe('糖投影 · 演出行 `CALL HPH_PRINT` → 心形（批 K，规范 §
   });
 
   it('派生调用式（`CALLFORM` 等）不在表内 → 不动（只认语料实证过的两种形态）', () => {
-    expect(project('CALLFORM HPH_PRINT,@"文本","W"').segments).toHaveLength(0);
+    expect(sugarSegs(project('CALLFORM HPH_PRINT,@"文本","W"').segments)).toHaveLength(0);
   });
 
   it('不变量：投影掉的演出行计入 projected，未动的计入 native', () => {
@@ -752,11 +771,13 @@ describe('糖投影 · 注释与分段', () => {
   it('原生行切断段；纯注释段不成段', () => {
     const src = ['PRINTFORMW 甲', 'SETCOLOR 0', ';仅注释', 'PRINTFORMW 乙'].join('\n');
     const r = project(src);
-    expect(r.segments).toHaveLength(2);
-    expect(r.segments.map((s) => [s.fromLine, s.toLine])).toEqual([
+    expect(sugarSegs(r.segments).map((s) => [s.fromLine, s.toLine])).toEqual([
       [1, 1],
       [3, 4], // 句首注释被吸收进后一段
     ]);
+    // native 行现在自带兜底段（红线），但它照样**切断**真糖段
+    expect(nativeOnlySegs(r.segments).map((s) => [s.fromLine, s.toLine])).toEqual([[2, 2]]);
+    expect(nativeOnlySegs(r.segments)[0]!.sugarText).toBe('未识别语句 · SETCOLOR 0');
   });
 });
 
@@ -768,21 +789,24 @@ describe('糖投影 · 原生直通（fail-visible）', () => {
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['unsupported-control-flow']).toBe(5);
     // 循环体内的台词行仍能单独投影
-    expect(r.segments.map((s) => s.fromLine)).toEqual([3]);
+    expect(sugarSegs(r.segments).map((s) => s.fromLine)).toEqual([3]);
   });
 
   it('PRINTDATA 数据表体内的 PRINTFORM* 不映射（判据来自结构）', () => {
     const src = ['PRINTDATAL', 'PRINTFORML 这是数据不是显示语句', 'ENDDATA'].join('\n');
     const r = project(src);
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['data-or-skip']).toBe(1);
   });
 
-  it('[SKIPSTART] 区内的 PRINTFORM* 不映射', () => {
+  it('[SKIPSTART] 区内的 PRINTFORM* 不映射（兜底段≠糖段）', () => {
     const src = ['[SKIPSTART]', 'PRINTFORML 停用代码', '[SKIPEND]', 'PRINTFORML 正常'].join('\n');
     const r = project(src);
-    expect(r.segments.map((s) => [s.fromLine, s.toLine])).toEqual([[4, 4]]);
+    expect(sugarSegs(r.segments).map((s) => [s.fromLine, s.toLine])).toEqual([[4, 4]]);
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText.split('\n'))).toEqual([
+      ['未识别语句 · [SKIPSTART]', '未识别语句 · PRINTFORML 停用代码', '未识别语句 · [SKIPEND]'],
+    ]);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['data-or-skip']).toBe(3);
   });
@@ -790,7 +814,7 @@ describe('糖投影 · 原生直通（fail-visible）', () => {
   it('赋值 / @ / # / $ 行原样保留', () => {
     const src = ['@FUNC', '#DIM X', '$LABEL', 'X = 1', 'PRINTFORML 甲'].join('\n');
     const r = project(src);
-    expect(r.segments.map((s) => s.fromLine)).toEqual([5]);
+    expect(sugarSegs(r.segments).map((s) => s.fromLine)).toEqual([5]);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['other']).toBe(4);
   });
@@ -802,15 +826,15 @@ describe('糖投影 · 降级与边界', () => {
       source: ['IF A', 'PRINTFORML 甲', 'ENDIF'].join('\n'),
     });
     // 无结构信息 → 控制流行不在糖覆盖判定内，原样保留；台词行仍投影
-    expect(r.segments.map((s) => [s.fromLine, s.toLine])).toEqual([[2, 2]]);
-    expect(segLines(r.segments[0]!)).toEqual(['甲 续']);
+    expect(sugarSegs(r.segments).map((s) => [s.fromLine, s.toLine])).toEqual([[2, 2]]);
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['甲 续']);
   });
 
   it('IF 表达式缺失 → 该行原样保留，其余行不受影响', () => {
     const src = ['IF', 'PRINTFORML 甲', 'ENDIF'].join('\n');
     const r = project(src);
     // IF 无表达式 → 不猜；体内台词行照常投影（段延伸到收束行 ENDIF）
-    expect(r.segments.map((s) => [s.fromLine, s.toLine])).toEqual([[2, 3]]);
+    expect(sugarSegs(r.segments).map((s) => [s.fromLine, s.toLine])).toEqual([[2, 3]]);
   });
 
   it('输入非字符串 → 抛错', () => {
@@ -994,8 +1018,8 @@ describe('糖投影 · `SETCOLOR`/`RESETCOLOR` → 「着色 …：」块', () =
 
   it('**配不上就不发糖**（真实语料 SETCOLOR 远多于 RESETCOLOR——猜边界会把代码藏起来）', () => {
     const r = project('SETCOLOR 0xFF8080\nPRINTFORMDW 甲。');
-    expect(r.segments).toHaveLength(1); // 只有台词行成段
-    expect(segLines(r.segments[0]!)).toEqual(['甲。']);
+    expect(sugarSegs(r.segments)).toHaveLength(1); // 只有台词行成真糖段（SETCOLOR 行走兜底段）
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['甲。']);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['other']).toBe(1); // SETCOLOR 原样保留
   });
@@ -1012,7 +1036,7 @@ describe('糖投影 · `SETCOLOR`/`RESETCOLOR` → 「着色 …：」块', () =
     // SETCOLOR 在深度 0、RESETCOLOR 在深度 1 → 不配对 → SETCOLOR 原样保留
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['other']).toBe(2); // SETCOLOR + RESETCOLOR 都原样
-    expect(segLines(r.segments[0]!)).toEqual(['如果 A：', '\t甲。']);
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['如果 A：', '\t甲。']);
   });
 
   it('嵌套着色：体内 +1 层逐级叠加', () => {
@@ -1046,9 +1070,9 @@ describe('糖投影 · 着色块不跨函数边界 / 不跨停用区', () => {
     // SETCOLOR / RESETCOLOR 都原样保留（不配对），两句台词各自成段
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['other']).toBe(4); // @FUNC_A / SETCOLOR / @FUNC_B / RESETCOLOR
-    expect(r.segments.map((s) => s.fromLine)).toEqual([3, 6]);
+    expect(sugarSegs(r.segments).map((s) => s.fromLine)).toEqual([3, 6]);
     // 关键：没有出现「着色 …：」块头
-    for (const s of r.segments) expect(s.sugarText).not.toContain('着色');
+    for (const s of sugarSegs(r.segments)) expect(s.sugarText).not.toContain('着色');
   });
 
   it('**不跨停用区**：`[SKIPSTART]` 打断配对推断', () => {
@@ -1086,10 +1110,10 @@ describe('糖投影 · 函数骨架合并（包装三联 + 記入チェック信
 
   it('包装三联吸收、`@A` 保留；信封拆掉后正文**减一层缩进**', () => {
     const r = project(SKELETON);
-    // 段从第 2 行起（第 1 行 @A 是原生行，切断段），一直消化到第 13 行
-    expect(r.segments).toHaveLength(1);
-    expect(`${r.segments[0]!.fromLine}-${r.segments[0]!.toLine}`).toBe('2-13');
-    expect(segLines(r.segments[0]!)).toEqual([
+    // 段从第 2 行起（第 1 行 @A 是原生行 → 兜底段，切断真糖段），一直消化到第 13 行
+    expect(sugarSegs(r.segments)).toHaveLength(1);
+    expect(`${sugarSegs(r.segments)[0]!.fromLine}-${sugarSegs(r.segments)[0]!.toLine}`).toBe('2-13');
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual([
       ';-------------------------------------------------',
       ';記入チェック（=0, 非表示、1, 表示）',
       ';-------------------------------------------------',
@@ -1118,14 +1142,14 @@ describe('糖投影 · 函数骨架合并（包装三联 + 記入チェック信
       'RETURN 1',
     ].join('\n');
     const r = project(src);
-    expect(segLines(r.segments[0]!)).toEqual(['如果 FLAG:1：', '\t甲。']);
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['如果 FLAG:1：', '\t甲。']);
   });
 
   it('**配不上就不动**：`LOCAL = 1` 之后不是 `IF LOCAL`', () => {
     const src = ['@F_1', 'LOCAL = 1', 'LOCAL:1 = 1', 'IF LOCAL', 'PRINTFORMDW 甲。', 'ENDIF'].join('\n');
     const r = project(src);
     // LOCAL = 1 与 LOCAL:1 = 1 原样保留（后者挡住"紧邻"判据）
-    expect(segLines(r.segments[0]!)).toEqual(['如果 LOCAL：', '\t甲。']);
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['如果 LOCAL：', '\t甲。']);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     // 三行原生：`@F_1` / `LOCAL = 1` / `LOCAL:1 = 1`（后者挡住"紧邻"判据）
     expect(reasons['other']).toBe(3);
@@ -1135,15 +1159,15 @@ describe('糖投影 · 函数骨架合并（包装三联 + 記入チェック信
     const src = ['PRINTFORMDW 前面', 'LOCAL = 1', 'IF LOCAL', 'PRINTFORMDW 甲。', 'ENDIF'].join('\n');
     const r = project(src);
     // 信封未被识别 → `IF LOCAL` 照常投影、正文保持一层缩进（`LOCAL = 1` 仍是原生行，把段切开）
-    expect(r.segments).toHaveLength(2);
-    expect(segLines(r.segments[0]!)).toEqual(['前面']);
-    expect(segLines(r.segments[1]!)).toEqual(['如果 LOCAL：', '\t甲。']);
+    expect(sugarSegs(r.segments)).toHaveLength(2);
+    expect(segLines(sugarSegs(r.segments)[0]!)).toEqual(['前面']);
+    expect(segLines(sugarSegs(r.segments)[1]!)).toEqual(['如果 LOCAL：', '\t甲。']);
   });
 
   it('`IF LOCAL` 带缩进（不在函数体最外层）→ 不合并', () => {
     const src = ['@F_1', 'LOCAL = 1', '    IF LOCAL', 'PRINTFORMDW 甲。', '    ENDIF'].join('\n');
     const r = project(src);
-    const all = r.segments.map((s) => s.sugarText).join('\n');
+    const all = sugarSegs(r.segments).map((s) => s.sugarText).join('\n');
     // 不合并的证据：`如果 LOCAL：` 仍在，且正文仍缩一层（合并了的话这两行都会消失）
     expect(all).toBe('如果 LOCAL：\n\t甲。');
   });
@@ -1152,7 +1176,7 @@ describe('糖投影 · 函数骨架合并（包装三联 + 記入チェック信
     const src = ['@A', 'CALL A_1', ';注释打断', 'RETURN 1', '@A_1', 'PRINTFORMDW 甲。'].join('\n');
     const r = project(src);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
-    expect(reasons['other']).toBe(4); // @A / CALL / @A_1 / ... 都原样
+    expect(reasons['other']).toBe(3); // @A / CALL / @A_1 原样（`RETURN 1` 是骨架 → 红线 2 吸收）
   });
 });
 
@@ -1204,18 +1228,22 @@ describe('糖投影 · 数据表块（批 N；不借用糖关键字，只给结�
     const r = project(
       ['PRINTDATA', '\tDATALIST', '\t\tDATAFORM 甲组', '\tENDLIST', '\tDATAFORM 乙组', 'ENDDATA'].join('\n'),
     );
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
   });
 
   it('块内混入别的语句（`PRINTL`）→ 块头与候选一起保留原代码，不出现"半投影"的块', () => {
     const r = project(['PRINTDATA', '\tDATAFORM 一条', '\tPRINTL 混进来的', 'ENDDATA'].join('\n'));
-    expect(r.segments.every((s) => !s.sugarText.includes('数据表'))).toBe(true);
-    expect(r.segments.every((s) => !s.sugarText.includes('一条'))).toBe(true);
+    expect(sugarSegs(r.segments).every((s) => !s.sugarText.includes('数据表'))).toBe(true);
+    // 候选词只在兜底回显行里出现（兜底形 = `未识别语句 · <原文>`），不再以糖候选的身份上屏
+    expect(sugarSegs(r.segments).every((s) => !s.sugarText.includes('一条'))).toBe(true);
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText).join('\n')).toContain(
+      '未识别语句 · DATAFORM 一条',
+    );
   });
 
   it('没有配对 `ENDDATA` → 不动（结构异常不猜）', () => {
     const r = project(['PRINTDATA', '\tDATAFORM 一条', '\tDATAFORM 二条'].join('\n'));
-    expect(r.segments).toHaveLength(0);
+    expect(sugarSegs(r.segments)).toHaveLength(0);
   });
 
   it('`DATA` 也是条目指令（真实语料实测存在）→ 同样进候选清单', () => {
@@ -1254,7 +1282,9 @@ describe('糖投影 · 数据表块（批 N；不借用糖关键字，只给结�
 
   it('块外的 `DATAFORM` 不动——本批判据来自**结构**（在块内），不是行首正则', () => {
     const r = project(['DATAFORM 游离的', 'PRINTL 一句'].join('\n'));
-    expect(r.segments.every((s) => !s.sugarText.includes('游离的'))).toBe(true);
+    expect(sugarSegs(r.segments).every((s) => !s.sugarText.includes('游离的'))).toBe(true);
+    // 但不再是一整行原样 ERB：兜底形显式上屏
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText)).toContain('未识别语句 · DATAFORM 游离的');
   });
 
   it('口径不静默：数据表块的四行都必须落进三类计数之一', () => {

@@ -94,7 +94,8 @@ describe('B5 结算行 · 手写 `EXP:` 行不受影响', () => {
 
   it('投影：手写 `EXP:` 行仍按既有口径原样保留（不改字节、不产生糖段）', () => {
     const r = liftProject(projDeps(), { source: 'EXP:自慰経験 += 1' });
-    expect(r.segments).toHaveLength(0);
+    // ZH-P 起机房里多出的兜底段（nativeOnly）不参与这一口径
+    expect(r.segments.filter((s) => s.nativeOnly !== true)).toHaveLength(0);
     expect(r.stats.nativeByReason.find((x) => x.reason === 'other')?.count).toBe(1);
   });
 });

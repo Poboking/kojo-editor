@@ -341,8 +341,9 @@ describe('§3.2 参数: · AST 承载与下游', () => {
     // E13-1 起 `{i}` 的委托后缀 `_1` 一律剥除，桩与正文的标签同形——那正是糖
     // `时机 事件 1：` 一次生成这两个函数的现实。
     const bad = liftProject(deps, { source: wrapper('CALL M_KOJO_EVENT_K12_1_1', '@M_KOJO_EVENT_K12_1_1(ARG,ARG:1)') });
-    // 桩没被合并 ⇒ 两个函数头各自成段（合并版只有 1 段，见上面的 `ok`）
-    expect(bad.segments).toHaveLength(2);
+    // 桩没被合并 ⇒ 两个函数头各自成段（合并版只有 1 段，见上面的 `ok`）；
+    // ZH-P 起机房里多出的兜底段（nativeOnly）不参与这一口径
+    expect(bad.segments.filter((s) => s.nativeOnly !== true)).toHaveLength(2);
     const badText = bad.segments.map((s) => s.sugarText).join('\n');
     expect(badText.match(/时机 事件 1：/g)).toHaveLength(2);
   });

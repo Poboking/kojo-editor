@@ -394,10 +394,14 @@ describe('E13-B 投影 · 段级吸收', () => {
     expect(text).toContain('「乙」');
     // 函数头照常反解成「时机 …：」（旧实现连它一起抹掉）
     expect(text).toContain('时机 绝顶：');
-    // 机器码一行都没被吞、也没被改写：`LOCAL` 行在拼接产物里**逐字还是源里那两行**
-    // （停用态没被悄悄翻成启用态——1016 批立的红线）
+    // 机器码一行都没被吞、也没被改写：`LOCAL` 行的**值**在拼接产物里仍逐字可认
+    // （停用态没被悄悄翻成启用态——1016 批立的红线）。ZH-P 起原生行不再原样上屏，
+    // 兜底形是 `未识别语句 · <原文>`，值仍回显在兜底行里。
     const composed = composeLikeHost(mixedOff, r.segments);
-    expect(composed.split('\n').filter((l) => /LOCAL\s*=/.test(l))).toEqual(['LOCAL = 1', 'LOCAL = 0']);
+    expect(composed.split('\n').filter((l) => /LOCAL\s*=/.test(l))).toEqual([
+      '未识别语句 · LOCAL = 1',
+      '未识别语句 · LOCAL = 0',
+    ]);
     // 不再是零糖段
     expect(r.segments.length).toBeGreaterThan(0);
     expect(r.stats.projectedLines).toBeGreaterThan(0);
@@ -492,9 +496,15 @@ describe('E13-C 投影标签 · `_1` 委托尾与家族段', () => {
       'PRINTFORMW 乙',
     ].join('\n');
     expect(segText(two).join('\n').match(/口上: 少女之梦/g)).toHaveLength(1);
-    // 源里已有 `口上:` 声明 ⇒ 一个都不补（重复声明会撞规范 §3.1 的"最后一条生效"）
+    // 源里已有 `口上:` 声明 ⇒ 一个都不补（重复声明会撞规范 §3.1 的"最后一条生效"）。
+    // 源里那行声明本身现在以兜底形显式上屏，判据只看**真糖段**（nativeOnly 段不是工具发的）
     const declared = ['口上: 少女之梦', '@M_KOJO_少女之梦_EVENT_K12_2', 'PRINTFORMW 甲'].join('\n');
-    expect(segText(declared).join('\n')).not.toContain('口上:');
+    expect(
+      project(declared)
+        .segments.filter((s) => s.nativeOnly !== true)
+        .map((s) => s.sugarText)
+        .join('\n'),
+    ).not.toContain('口上:');
   });
 });
 
