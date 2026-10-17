@@ -60,7 +60,7 @@ export { WriteNotAllowedError } from './io';
 export type { BackupVersion, EolStyle, FileIO, TextFile, WriteTextOptions } from './io';
 
 /* ---- 批操作 journal（1016 undo 批独占追加区块；勿在他处重排） ---- */
-export type { OpEntryView, OpJournal, OpRecord } from './journal';
+export type { OpEntryView, OpJournal, OpsMaintenance, OpRecord } from './journal';
 
 export {
   MARKET_SCHEMA_VERSION,

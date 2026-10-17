@@ -12,10 +12,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::market::{
     advance_byte_cap, cap_download_limits, cap_fetch_limits, cap_staging_limits,
-    container_name_problem, content_length_problem, download_to_staging, entry_type_problem,
-    extract_staging, extract_staging_off_thread, fetch_text, host_in_allowlist, market_fetch_text,
-    redirect_problem, staging_component_problem, url_problem, utf8_text, DownloadOptions,
-    StagingLimits,
+    container_name_problem, content_length_problem, declared_entries_problem, declared_entry_count,
+    download_to_staging, entry_type_problem, extract_staging, extract_staging_off_thread,
+    fetch_text, host_in_allowlist, market_fetch_text, redirect_problem, staging_component_problem,
+    url_problem, utf8_text, DeclaredEntries, DownloadOptions, StagingLimits,
 };
 
 /// 限额字面照契约常量（`plugin-api/market.ts`）；Rust 侧不写死，测试里显式传入。
@@ -96,6 +96,65 @@ fn zip_with_symlink(link_name: &str, target: &str) -> Vec<u8> {
 
 fn write_container(staging: &Staging, name: &str, bytes: &[u8]) {
     std::fs::write(staging.dir().join(name), bytes).unwrap();
+}
+
+/* -------------------- 造容器（F7 预检：EOCD 声明值） -------------------- */
+
+/// 一个合法容器的尾注必是 EOCD32（22 字节、无注释）——两个夹具构造器都靠这条前提改写字段。
+const EOCD_TAIL: usize = 22;
+
+fn assert_eocd_tail(zip: &[u8]) {
+    assert!(zip.len() >= EOCD_TAIL, "夹具太短，容不下 22 字节 EOCD32");
+    assert_eq!(
+        &zip[zip.len() - EOCD_TAIL..][..4],
+        b"PK\x05\x06".as_slice(),
+        "夹具尾注必须是 EOCD32（本测试只改写它的条目数字段）"
+    );
+}
+
+/// 只把 EOCD32 的两个条目数字段（u16@8 / u16@10）改成 `count`，其余字节逐字不动。
+/// ⇒ 真条目数还是夹具那几条，但**声明值**说了算的是解析成本（zip crate 就按它迭代）。
+fn patch_declared_count(zip: &[u8], count: u16) -> Vec<u8> {
+    assert_eocd_tail(zip);
+    assert_ne!(count, 0xFFFF, "写满哨兵会走 zip64 分支，用 zip64_claimed() 造");
+    let mut out = zip.to_vec();
+    let base = out.len() - EOCD_TAIL;
+    out[base + 8..base + 10].copy_from_slice(&count.to_le_bytes());
+    out[base + 10..base + 12].copy_from_slice(&count.to_le_bytes());
+    out
+}
+
+/// 把尾注换成"zip64 声明 `claimed` 个条目"的形态：原 zip64 记录 + locator + EOCD32
+/// （条目数字段写满哨兵）。中央目录与条目字节一概不动 ⇒ 量到的正是**预检读的那段头**。
+fn zip64_claimed(zip: &[u8], claimed: u64) -> Vec<u8> {
+    assert_eocd_tail(zip);
+    let mut out = zip[..zip.len() - EOCD_TAIL].to_vec();
+    let record_at = out.len() as u64;
+    out.extend_from_slice(b"PK\x06\x06");
+    out.extend_from_slice(&44u64.to_le_bytes()); // record_size = 头 12 字节之后还剩 44
+    out.extend_from_slice(&[0u8; 4]); // version made by / version needed
+    out.extend_from_slice(&0u32.to_le_bytes()); // disk number
+    out.extend_from_slice(&0u32.to_le_bytes()); // disk with central directory
+    out.extend_from_slice(&claimed.to_le_bytes()); // 本盘条目数
+    out.extend_from_slice(&claimed.to_le_bytes()); // 全目录条目数
+    out.extend_from_slice(&0u64.to_le_bytes()); // CD size（预检不读）
+    out.extend_from_slice(&0u64.to_le_bytes()); // CD offset（预检不读）
+    out.extend_from_slice(b"PK\x06\x07");
+    out.extend_from_slice(&0u32.to_le_bytes()); // disk with CD
+    out.extend_from_slice(&record_at.to_le_bytes()); // zip64 EOCD 记录的绝对偏移
+    out.extend_from_slice(&1u32.to_le_bytes()); // 总盘数
+    out.extend_from_slice(b"PK\x05\x06");
+    out.extend_from_slice(&[0u8; 4]); // disk number / disk with CD
+    out.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    out.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes()); // CD size（预检不读）
+    out.extend_from_slice(&0u32.to_le_bytes()); // CD offset（预检不读）
+    out.extend_from_slice(&0u16.to_le_bytes()); // 注释长度 = 0
+    out
+}
+
+fn open_in(staging: &Staging, name: &str) -> std::fs::File {
+    std::fs::File::open(staging.dir().join(name)).unwrap()
 }
 
 /// 暂存目录里除了合法容器不能有别的东西（"失败不留半成品"判据）。
@@ -802,6 +861,102 @@ fn extract_rejects_missing_container_and_bad_target_name() {
     assert!(err.contains("打开容器失败"), "错误不可诊断：{err}");
     let err = extract_staging(staging.dir(), "a.zip", "../out", &LIMITS).unwrap_err();
     assert!(err.contains("名字只允许"), "越界目标名被放行：{err}");
+}
+
+/* ------------------- F7：解析中央目录之前的条目数预检 ------------------- */
+
+/// 预检读的是** EOCD 头的声明值 **，不是"解析出来的条目数"——三态各钉一条：
+/// 真容器的声明值、被改大的声明值（zip32）、尾部形态不认识 ⇒ `Unknown`。
+/// 纯函数闸再钉边界（`== ceiling` 放行、`+1` 拒、`Unknown` 永不拒）。
+#[test]
+fn precheck_reads_declared_count_from_eocd_header_only() {
+    let staging = Staging::new("f7-read");
+    let honest = build_zip(&[
+        ("pack.json", b"{}".as_slice()),
+        ("files/a.txt", b"x".as_slice()),
+        ("files/b.txt", b"y".as_slice()),
+    ]);
+    write_container(&staging, "honest.zip", &honest);
+    assert_eq!(declared_entry_count(&mut open_in(&staging, "honest.zip")), DeclaredEntries::Count(3));
+
+    // zip32 字段被改大（真条目仍是 3 条）：预检量的正是"解析要花多少"，声明值说了算
+    write_container(&staging, "lying.zip", &patch_declared_count(&honest, 60_000));
+    assert_eq!(declared_entry_count(&mut open_in(&staging, "lying.zip")), DeclaredEntries::Count(60_000));
+
+    // zip64 分支：哨兵写满 ⇒ 真值从 locator 指向的 zip64 记录读（可超过 u16 的 65535）
+    write_container(&staging, "zip64.zip", &zip64_claimed(&honest, 200_001));
+    assert_eq!(
+        declared_entry_count(&mut open_in(&staging, "zip64.zip")),
+        DeclaredEntries::Count(200_001)
+    );
+
+    // 形态不认识（连 EOCD 都没有）⇒ Unknown：预检**绝不**据此拒绝，判定权交回 zip crate
+    write_container(&staging, "not-a-zip.bin", b"not a zip: no EOCD anywhere");
+    assert_eq!(declared_entry_count(&mut open_in(&staging, "not-a-zip.bin")), DeclaredEntries::Unknown);
+
+    // 上界口径（Rust 侧硬顶常量 = 200_000，测试里显式传等价的小数钉边界）
+    assert_eq!(declared_entries_problem(DeclaredEntries::Count(5), 5), None);
+    assert_eq!(declared_entries_problem(DeclaredEntries::Count(0), 0), None);
+    let err = declared_entries_problem(DeclaredEntries::Count(6), 5).expect("超一条就该拒");
+    assert!(err.starts_with("entries-limit："), "拒绝码字面必须与 extract_into 的同一条：{err}");
+    assert_eq!(declared_entries_problem(DeclaredEntries::Unknown, 0), None);
+}
+
+/// **端到端**：失控声明的容器在"解析中央目录 / 写第一个字节"之前就被拒，
+/// 且暂存区不留残壳。上界 = 硬顶与调用方限额的较小者（只降不升，同 `cap_staging_limits`），
+/// 所以两条各自都能单独触发提前拒。
+#[test]
+fn extract_rejects_over_ceiling_declaration_before_any_parsing() {
+    // ① zip64 声明 200_001 > 硬顶 200_000：即便调用方把限额放到硬顶也照样提前拒
+    let staging = Staging::new("f7-e2e-ceiling");
+    write_container(
+        &staging,
+        "a.zip",
+        &zip64_claimed(&build_zip(&[("pack.json", b"{}".as_slice())]), 200_001),
+    );
+    let at_ceiling = StagingLimits {
+        max_entries: 200_000,
+        ..LIMITS
+    };
+    let err = extract_staging(staging.dir(), "a.zip", "out", &at_ceiling).unwrap_err();
+    assert!(err.starts_with("market_extract: entries-limit："), "拒因前缀/码不符：{err}");
+    assert!(err.contains("未解析条目"), "这是解析后那条闸的口径，预检没生效：{err}");
+    assert!(err.contains("200001"), "拒因没给出声明值：{err}");
+    assert!(!staging.dir().join("out").exists(), "预检留下了目标目录");
+    assert_only_container(&staging, "a.zip");
+
+    // ② 合法容器 + 调用方限额 1：预检直接给出与 `archive.len()` 闸同一条结论（更早、更省）
+    let small = Staging::new("f7-e2e-caller");
+    write_container(
+        &small,
+        "a.zip",
+        &build_zip(&[("pack.json", b"{}".as_slice()), ("files/a.txt", b"x".as_slice())]),
+    );
+    let err = extract_staging(
+        small.dir(),
+        "a.zip",
+        "out",
+        &StagingLimits {
+            max_entries: 1,
+            ..LIMITS
+        },
+    )
+    .unwrap_err();
+    assert!(err.contains("entries-limit"), "条目数上限没生效：{err}");
+    assert!(err.contains("未解析条目"), "该由预检提前拒：{err}");
+    assert_only_container(&small, "a.zip");
+}
+
+/// 零行为回归：预检**只多不少**——声明值在上界内、形态不认识的容器一律放行到原有链路，
+/// 判词仍由 `ZipArchive::new` 给（错误字面没被预检劫持）。
+#[test]
+fn precheck_never_hijacks_archives_it_cannot_read() {
+    let staging = Staging::new("f7-fallthrough");
+    write_container(&staging, "a.zip", b"plain bytes without any EOCD signature");
+    let err = extract_staging(staging.dir(), "a.zip", "out", &LIMITS).unwrap_err();
+    assert!(err.contains("容器不可读"), "该由 zip crate 自己拒，错误字面却变了：{err}");
+    assert!(!err.contains("entries-limit"), "Unknown 被误当成超限");
+    assert_only_container(&staging, "a.zip");
 }
 
 /* ------------------------- 跨实现对平（真实容器） ------------------------- */

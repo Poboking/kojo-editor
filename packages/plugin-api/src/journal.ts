@@ -45,6 +45,15 @@ export interface OpJournal {
    * "操作时刻"的字节快照，磁盘侧回滚整段回、不猜测性合并。
    */
   undo(opId: string): Promise<string>;
+  /**
+   * 最近一次 `list()` 巡检得到的目录维护状态（崩溃残留 / 回滚失败留痕 / 孤儿快照目录）。
+   *
+   * **additive 且可选**：旧实现没有这个方法（消费方一律 `journal.maintenanceReport?.()`），
+   * 旧消费方零改动。语义是"观测"不是"历史"——这里的残留**不进 `list()`、不响应 `undo()`**，
+   * 所以面板/日志必须自己把它显出来（铁律 4：崩溃残留不许静默）。
+   * 数值只在 `list()` 巡检时刷新；没巡检过就是全零。
+   */
+  maintenanceReport?(): OpsMaintenance;
 }
 
 /** 历史列表条目（展示面） */
@@ -70,4 +79,25 @@ export interface OpEntryView {
   /** 快照时刻探测出的编码 / 换行（展示面；回滚按字节恢复，不依赖这两项） */
   encoding: FileEncoding | null;
   eol: EolStyle | null;
+}
+
+/**
+ * ops 目录的维护状态（`list()` 巡检时刷新；铁律 #4——残留必须看得见）。
+ *
+ * 它**不是**一条可 undo 的操作：崩溃残留 / 回滚失败保留的 open 态文档不进 `list()`，
+ * 只经 `maintenanceReport()` 与内核日志呈现，供状态面板一类的观测面把它们报成数字。
+ */
+export interface OpsMaintenance {
+  /** 崩溃残留 / 回滚失败保留的 open 态操作文档（不列历史、不响应 undo） */
+  openOrphanDocs: number;
+  /** 其中 abort 回滚失败、快照被刻意保留待人工处置的文档数 */
+  rollbackFailedDocs: number;
+  /** 读不出或形态不对的操作文档 */
+  unreadableDocs: number;
+  /** 没有对应可提交文档的快照目录（op-&lt;id&gt; 残留，占盘） */
+  orphanSnapshotDirs: number;
+  /** 清理残留时 removeDir/removeFile 失败的次数（盘上仍在，下次巡检仍会计数） */
+  cleanupFailures: number;
+  /** 本次巡检时间戳 */
+  checkedAt: number;
 }

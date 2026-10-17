@@ -12,7 +12,7 @@
 //! - **限额由 TS 从契约常量传入**（`plugin-api/market.ts`），本层不写死第二份真相；
 //!   只有下载侧的超时/体积默认值是本地常量（TS 未传时的唯一兜底口径）。
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek as _, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -638,11 +638,149 @@ pub(crate) async fn market_fetch_text(
     .await
 }
 
+/* ------------------------ 中央目录条目数预检（F7） ------------------------ */
+//
+// `ZipArchive::new` **先把整个中央目录解析进内存**（zip-4.6.1 `read.rs:691` 按 EOCD 声明的
+// 条目数逐条建 `ZipFileData`），之后 `extract_into` 才拿 `archive.len()` 去比限额。
+// 于是硬顶夹住的是"允许解出的量"，不是"为拒绝而付出的代价"：一个条目数失控的容器，
+// RAM + 解析先花完，才被第一道限额拒掉。本段自己只读文件尾 `22 + 65535`（EOCD 窗口）
+// 与 zip64 记录 56 字节，拿**EOCD 头的声明值**在"一次条目解析都不做"的前提下先拒。
+//
+// 为什么这条预检既不误判也不放过：zip crate 解析中央目录时**恰好**迭代 EOCD 声明的条目数
+// （同上），声明值以下的条目才是它看得见的全部内容 ⇒ 声明值是"解析成本"的上界。
+// 声明值偏高（撒谎/失控）⇒ 这里提前给出与稍后**同一条结论**；声明值偏低 ⇒ crate 只会解得更少、
+// 成本更小，`extract_into` 的 `archive.len()` 闸照旧。两条都不成立时（尾部形态不认识）
+// ⇒ **绝不据此拒绝**，判定权原样交回 `ZipArchive::new`（零行为回归）。
+//
+// 上界口径：`MARKET_HARD_MAX_ENTRIES`（Rust 侧编译期常量、JS 放宽不了）；调用方限额只许把它
+// 继续往下压（与 `cap_staging_limits` 同一条"只降不升"）。
+
+/// EOCD（zip32）：`PK\x05\x06`，定长 22 字节 + 最长 65535 注释 ⇒ 只需回看文件尾这一段。
+const EOCD32_SIGNATURE: [u8; 4] = *b"PK\x05\x06";
+const EOCD32_LEN: usize = 22;
+const EOCD32_MAX_SCAN: u64 = (EOCD32_LEN + 0xFFFF) as u64;
+/// zip32 EOCD 内的字段偏移：本盘条目数 u16@8、全目录条目数 u16@10、注释长度 u16@20。
+const EOCD32_DISK_ENTRIES: usize = 8;
+const EOCD32_TOTAL_ENTRIES: usize = 10;
+const EOCD32_COMMENT_LEN: usize = 20;
+/// zip32 条目数字段写满 ⇒ 真值在 zip64 记录里（crate 同口径的 `may_be_zip64`）。
+const ZIP32_COUNT_SENTINEL: u16 = 0xFFFF;
+/// zip64：locator `PK\x06\x07` 定长 20 字节、紧贴 EOCD 之前；记录 `PK\x06\x06`。
+const EOCD64_LOCATOR_SIGNATURE: [u8; 4] = *b"PK\x06\x07";
+const EOCD64_LOCATOR_LEN: u64 = 20;
+/// locator 内 zip64 EOCD 记录的绝对偏移（u64@8）。
+const EOCD64_LOCATOR_RECORD_OFFSET: usize = 8;
+const EOCD64_SIGNATURE: [u8; 4] = *b"PK\x06\x06";
+/// zip64 EOCD 记录头部（sig4 + record_size8 + ver2 + ver2 + disk4 + disk_cd4 + 条目数8+8）。
+const EOCD64_HEADER_LEN: u64 = 56;
+const EOCD64_DISK_ENTRIES: usize = 24;
+const EOCD64_TOTAL_ENTRIES: usize = 32;
+
+/// 从 EOCD 头读到的声明条目数（**不解析任何中央目录条目**）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeclaredEntries {
+    /// EOCD（含 zip64 记录）声明的条目数（取"本盘/全目录"两者的较大值）
+    Count(u64),
+    /// 尾部形态不认识（没有 EOCD / 签名是注释里的假字节 / zip64 记录读不出）
+    /// ⇒ 预检放行，判定交回 `ZipArchive::new`
+    Unknown,
+}
+
+fn le_u16(bytes: &[u8], at: usize) -> Option<u16> {
+    let raw = <[u8; 2]>::try_from(bytes.get(at..at + 2)?).ok()?;
+    Some(u16::from_le_bytes(raw))
+}
+
+fn le_u64(bytes: &[u8], at: usize) -> Option<u64> {
+    let raw = <[u8; 8]>::try_from(bytes.get(at..at + 8)?).ok()?;
+    Some(u64::from_le_bytes(raw))
+}
+
+/// 只读文件尾的 EOCD / zip64 记录拿声明条目数；任何不确定 ⇒ `Unknown`（不据此拒绝）。
+pub(crate) fn declared_entry_count(file: &mut std::fs::File) -> DeclaredEntries {
+    let unknown = DeclaredEntries::Unknown;
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if len < EOCD32_LEN as u64 {
+        return unknown;
+    }
+    let win = len.min(EOCD32_MAX_SCAN) as usize;
+    let tail_start = len - win as u64;
+    let mut tail = vec![0u8; win];
+    if file.seek(SeekFrom::Start(tail_start)).is_err() || file.read_exact(&mut tail).is_err() {
+        return unknown;
+    }
+    // 从后往前找签名，并要求注释长度不越过文件末尾（口径照 crate：容忍"注释后还有垃圾"）。
+    // 假签名（注释里恰好这四个字节）会因条目数/长度读不出或后续定位失败而落到 Unknown。
+    let Some(eocd_at) = (0..=win - EOCD32_LEN).rev().find(|i| tail[*i..*i + 4] == EOCD32_SIGNATURE)
+    else {
+        return unknown;
+    };
+    let Some(comment_len) = le_u16(&tail, eocd_at + EOCD32_COMMENT_LEN) else {
+        return unknown;
+    };
+    if eocd_at + EOCD32_LEN + comment_len as usize > win {
+        return unknown;
+    }
+    let (Some(disk), Some(total)) = (
+        le_u16(&tail, eocd_at + EOCD32_DISK_ENTRIES),
+        le_u16(&tail, eocd_at + EOCD32_TOTAL_ENTRIES),
+    ) else {
+        return unknown;
+    };
+    if disk < ZIP32_COUNT_SENTINEL && total < ZIP32_COUNT_SENTINEL {
+        return DeclaredEntries::Count(u64::from(disk.max(total)));
+    }
+    // zip64：locator 紧贴 EOCD 之前，记录偏移写在 locator 里（u64）
+    let eocd_abs = tail_start + eocd_at as u64;
+    if eocd_abs < EOCD64_LOCATOR_LEN {
+        return unknown;
+    }
+    let mut locator = [0u8; EOCD64_LOCATOR_LEN as usize];
+    if file.seek(SeekFrom::Start(eocd_abs - EOCD64_LOCATOR_LEN)).is_err()
+        || file.read_exact(&mut locator).is_err()
+        || locator[..4] != EOCD64_LOCATOR_SIGNATURE
+    {
+        return unknown;
+    }
+    let Some(record_at) = le_u64(&locator, EOCD64_LOCATOR_RECORD_OFFSET) else {
+        return unknown;
+    };
+    let mut header = [0u8; EOCD64_HEADER_LEN as usize];
+    if file.seek(SeekFrom::Start(record_at)).is_err()
+        || file.read_exact(&mut header).is_err()
+        || header[..4] != EOCD64_SIGNATURE
+    {
+        return unknown;
+    }
+    let (Some(disk64), Some(total64)) = (
+        le_u64(&header, EOCD64_DISK_ENTRIES),
+        le_u64(&header, EOCD64_TOTAL_ENTRIES),
+    ) else {
+        return unknown;
+    };
+    DeclaredEntries::Count(disk64.max(total64))
+}
+
+/// 预检闸（纯函数）：声明条目数超过上界 ⇒ 拒因（拒绝码字面与 `extract_into` 的同一条）。
+/// `Unknown` 一律放行——预检只在**确有把握**时提前拒。
+pub(crate) fn declared_entries_problem(
+    declared: DeclaredEntries,
+    ceiling: usize,
+) -> Option<String> {
+    match declared {
+        DeclaredEntries::Count(n) if n > ceiling as u64 => Some(format!(
+            "entries-limit：容器声明条目数 {n} 超过上限 {ceiling}（读中央目录头即拒绝，未解析条目、未写一个字节）"
+        )),
+        _ => None,
+    }
+}
+
 /* ---------------------------- 解压（限流闸） ---------------------------- */
 
 /// 解 `<staging_dir>/<staging_name>` 到 `<staging_dir>/<target_name>/`（全程留在暂存子树）。
 ///
-/// 两遍走：**先全量核中央目录**（路径 / 类型 / 条目数 / 声明总字节）——任一违例就在写第一个
+/// 预检在最前：**条目数先按 EOCD 头夹上界**（F7，见上段），一次解析都不做就拒掉失控声明；
+/// 两遍走：**再全量核中央目录**（路径 / 类型 / 条目数 / 声明总字节）——任一违例就在写第一个
 /// 字节之前放弃；**再边读边核**累计真实字节（声明值可以撒谎，真字节不能）。
 /// 任何失败 ⇒ 删掉已解出的全部内容并返回明确错误（不留半成品）。
 pub(crate) fn extract_staging(
@@ -659,8 +797,15 @@ pub(crate) fn extract_staging(
     }
     let archive_path = staging_dir.join(staging_name);
     let target = staging_dir.join(target_name);
-    let file = std::fs::File::open(&archive_path)
+    let mut file = std::fs::File::open(&archive_path)
         .map_err(|e| format!("打开容器失败 {}: {e}", archive_path.display()))?;
+    // F7 预检（见上段口径）：条目数先从 EOCD 头读出来夹上界，**解析一个条目都不做**就拒。
+    if let Some(problem) = declared_entries_problem(
+        declared_entry_count(&mut file),
+        limits.max_entries.min(MARKET_HARD_MAX_ENTRIES),
+    ) {
+        return Err(format!("market_extract: {problem}（容器 {}）", archive_path.display()));
+    }
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| format!("容器不可读 {}: {e}", archive_path.display()))?;
 

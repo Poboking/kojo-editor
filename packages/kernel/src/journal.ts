@@ -6,6 +6,7 @@ import type {
   OpEntryView,
   OpJournal,
   OpRecord,
+  OpsMaintenance,
   PlatformBridge,
 } from '@kojo/plugin-api';
 import { join, pathKey } from '@kojo/plugin-api';
@@ -41,24 +42,11 @@ export const OP_ID_RE = /^op-\d{8}-\d{6}-\d{3}-[a-z0-9]{6}$/;
 const MAX_DIR_ANCESTORS = 64;
 
 /**
- * journal 目录维护状态（`list()` 巡检时刷新；铁律 #4——残留必须看得见）。
- * 不进 `OpJournal` 契约（那是给插件的历史面），只经 `OpsJournalImpl.maintenanceReport()`
- * 与内核日志呈现，避免契约消费方误把它当可 undo 的操作。
+ * journal 目录维护状态的契约类型住在 `@kojo/plugin-api/journal.ts`（契约 = 唯一真相源）；
+ * 内核这里只做原位 re-export，让 `kernel/journal` 的老引用点零改动。
+ * 语义见契约文档：残留**不进 `list()`、不响应 `undo()`**，只在 `maintenanceReport()` 里报数。
  */
-export interface OpsMaintenance {
-  /** 崩溃残留 / 回滚失败保留的 open 态操作文档（不列历史、不响应 undo） */
-  openOrphanDocs: number;
-  /** 其中 abort 回滚失败、快照被刻意保留待人工处置的文档数 */
-  rollbackFailedDocs: number;
-  /** 读不出或形态不对的操作文档 */
-  unreadableDocs: number;
-  /** 没有对应可提交文档的快照目录（op-&lt;id&gt; 残留，占盘） */
-  orphanSnapshotDirs: number;
-  /** 清理残留时 removeDir/removeFile 失败的次数（盘上仍在，下次巡检仍会计数） */
-  cleanupFailures: number;
-  /** 本次巡检时间戳 */
-  checkedAt: number;
-}
+export type { OpsMaintenance } from '@kojo/plugin-api';
 
 interface JournalEntryRec {
   path: string;
