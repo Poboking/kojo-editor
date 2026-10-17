@@ -1,0 +1,390 @@
+/**
+ * 面板的**渲染树**（`ui-market` 呈现层，从 `index.ts` 迁出）：零状态、零 IO——
+ * 给一份事实与几个回调就画得出来。带状态的组件在 node 环境里跑不了 effect（拿不到数据），
+ * 也就点不动；分家之后"这一行到底给不给按钮"可以被静态渲染直接检。
+ *
+ * DOM 契约（`.panel-market` / `.mk-*` 类名与层级）与文案纪律原样在这一层的文件头里。
+ */
+
+import { createElement, type ReactNode } from 'react';
+import { type InstalledPack } from '@kojo/plugin-api';
+import type { MarketSnapshot } from './actions';
+import {
+  ACTION_LABEL,
+  appVersionRequirement,
+  buildGroups,
+  buildInstalledRows,
+  CAPABILITY_HINT,
+  CLEAR_LABEL,
+  dataTimeLine,
+  droppedNotice,
+  filterEmptyPhrase,
+  formatBytes,
+  groupCountPhrase,
+  IMPORT_LABEL,
+  indexRowKey,
+  installedCountPhrase,
+  pendingKey,
+  PUBLISH_LABEL,
+  statusText,
+  updatePhrase,
+  type PackRow,
+} from './market-view';
+/**
+ * 面板的**渲染树**（零状态、零 IO：给一份事实与几个回调就画得出来）。
+ *
+ * 与带状态的 `MarketPanel` 分家的理由与本包的既有纪律同源（"把意图落成函数，
+ * 组件只负责把点击接到它们上面"）：**"这一行到底给不给按钮"是安装面的判据**，
+ * 而带状态的组件在 node 环境里跑不了 effect（拿不到数据），也就点不动。
+ * 分家之后这一层可以被静态渲染直接检：`updatable` 行真有「更新」、`ahead` 行真没有按钮。
+ *
+ * 文案纪律在这一层同样成立：机器词只出现在已装条目的展开层（`mk-detail`）。
+ */
+export interface MarketPanelViewProps {
+  readonly snapshot: MarketSnapshot;
+  /** 装配层注入的当前应用版本（面板源码不写版本号） */
+  readonly appVersion: string;
+  readonly query: string;
+  /** 读列表进行中（首帧即 true ⇒ 状态行还不画，但数据时间行照旧常驻） */
+  readonly busy: boolean;
+  /** 内联状态行那一句：装 / 卸的进行中、结果与拒因全写在这一处，不弹窗 */
+  readonly note: string;
+  /**
+   * 状态行附带的**可点外链**（现为发布终局的 PR 页面）：非空 ⇒ 状态行下多一枚
+   * 「在浏览器打开发布请求」（仍走 `ui.openExternal`，闸在 Rust）。带字的那句
+   * 仍旧只有 `.mk-note` 一处——这枚按钮只负责"URL 可以点"，不重复内容。
+   */
+  readonly noteLink?: string | null;
+  /**
+   * 当前进度读数（0–100 的整数；null/undefined = 此刻没有可画的进度）。
+   * **带字的进度句仍只住 `.mk-note` 一处**（同一件事不在两处显示的纪律不动），
+   * 这根 hairline 是无文字的视觉读数，`aria-valuenow` 给读屏。
+   */
+  readonly progress?: number | null;
+  /** 待确认卸载的那一条（同一时刻只允许一条） */
+  readonly pending: string | null;
+  /** 展开的已装条目（机器面） */
+  readonly open: string | null;
+  /**
+   * 正在进行装/更新的那一行；非空 ⇒ 所有动作按钮禁用（同一时刻只搬一次）。
+   * 禁用**只改 `disabled`，不改按钮文字**：进度那一句只住 `.mk-note` 一处。
+   */
+  readonly installing: string | null;
+  /** 发布进行中（选 zip → 预校验 → 上传的全程；与装/更新互斥，同一时刻只做一件事） */
+  readonly publishing: boolean;
+  onQuery(q: string): void;
+  /** 清空过滤（工具条上那枚「清除」；过滤态下它是空态那句话的唯一出路，不另设弹窗） */
+  onClearQuery(): void;
+  onPull(): void;
+  /** 工具条「发布包…」：选 zip（对话框即授权）→ 服务编排（预校验 + 上传） */
+  onPublish(): void;
+  onInstall(row: PackRow): void;
+  /** 已装的口上包行：把这一条经 `workspace.importRequested` 交给工作区消费方 */
+  onImport(rec: InstalledPack): void;
+  /** 索引行来源网址：把 URL 经 `ui.openExternal` 交给壳层（闸在 Rust，本层只发意图） */
+  onOpenSource(url: string): void;
+  onRequestUninstall(key: string): void;
+  onConfirmUninstall(key: string): void;
+  onCancelUninstall(): void;
+  onToggleDetail(key: string): void;
+}
+
+/**
+ * 一版面的 DOM 契约（样式由 app 侧 `mk-*` 区块实现，本层只负责产出这些类名与层级）：
+ *
+ * ```text
+ * .panel-market                 根：列布局，外层不滚
+ * ├─ .mk-toolbar                flex:none —— 搜索框 / 清除 / 拉取（永不随列表滚走）
+ * ├─ .mk-flash                  状态簇（role=status）：.mk-status .mk-time .mk-note(aria-live)
+ * │                                        .mk-progress(无文字进度) .mk-note-link .mk-warn .mk-hint
+ * └─ .mk-body                   flex:1 自滚 —— 只有列表随滚动移动
+ *     ├─ .mk-grouptitle + span.mk-count → .mk-list → .mk-row × n（已装）
+ *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row × n（索引）
+ *         .mk-row > .mk-main > .mk-head[ span.mk-name | span.mk-badge? | div.mk-actions ]
+ *                            + .mk-facts[ span.mk-meta × n ]
+ *                  ＋ 行级附属：.mk-warn（版本要求）/ .mk-sub（摘要）/ button.mk-sub.mk-link（来源，可点）/ .mk-detail（展开层）
+ * ```
+ *
+ * 四条结构性口径：
+ * 1. **两排，不是一排挤到底**——第一排只有名字、徽章与动作（动作钉右端），第二排才是次要事实；
+ *    把动作丢进同一个 wrap 容器末尾会让名字吃掉剩余宽度、把动作挤到第三排（窄侧栏密度事故）；
+ * 2. **状态与列表分家**——工具条、状态、数据时间、说明住在滚动区之外，
+ *    列表长到几十条时作者仍然看得见"这是哪一刻的数据"；
+ * 3. **按钮 children 永远是纯字符串**（图标一律不上按钮）：动作判据按标签找按钮、并把 `onClick` 真的调一次；
+ * 4. **类名是跨包契约**——本层只产出这些类名与层级，一切视觉（颜色 / 圆角 / 滚动 / 焦点环）住 app 侧 `mk-*` 区块。
+ */
+export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
+  const { snapshot } = p;
+  // 已装清单**原样**交给视图层：三态由契约的 `packUpdateCheck` 从这份清单算。
+  // 这一层再拼一份"已装键集"就是第二份真相（`buildGroups` 的签名拦的就是这个）。
+  const groups = buildGroups(snapshot.packs, p.appVersion, p.query, snapshot.installed);
+  const rows = buildInstalledRows(snapshot.installed);
+  const line = statusText(snapshot.status, snapshot.reason);
+  const time = dataTimeLine(snapshot);
+  const droppedLine = droppedNotice(snapshot.dropped);
+  // 过滤态：能力面说明讲的是"这面板能干什么"，与作者此刻正在找的这几条无关 ⇒ 让位不占行；
+  // 空态 / 错误态那几句照给——它们说的正是这一屏此刻的事实。
+  const filtering = p.query !== '';
+  // 占用读数取服务 `installedBytes()`（契约里那条唯一口径），面板不自己把 files 加一遍
+  const installedCount = installedCountPhrase(rows.length, snapshot.installedBytes);
+  // 同一屏动作纪律：装/更新/发布任一进行中 ⇒ 全部动作按钮禁用（同一时刻只做一件事）；
+  // 进度仍只写 `.mk-note` 一处，按钮文字不变
+  const acting = p.installing !== null || p.publishing;
+
+  /**
+   * 徽章的语义色档：`updatable` = 有新版可拿（amber，"有事可做"）；`latest` = 已装妥
+   * （green，"无事"）；`ahead` / 比较失败 = 中性灰（不该催任何动作）。带字那句仍由
+   * `updatePhrase` 单源给出——这里只决定同一句读起来是喜是警，不写第二份话术。
+   */
+  const badgeTone = (row: PackRow): string => {
+    const s = row.update?.state;
+    return s === 'updatable' ? ' mk-badge-warn' : s === 'latest' ? ' mk-badge-ok' : '';
+  };
+
+  /** 次要事实（版本 / 体积 / 作者 / 许可…）一律退到第二排 */
+  const meta = (text: string): ReactNode => createElement('span', { className: 'mk-meta' }, text);
+  /** 动作按钮的统一形状：`ghost small` + 进行中禁用；**文字永远不变**（进度只住 `.mk-note` 一处） */
+  const btn = (label: string, onClick: () => void, disabled: boolean): ReactNode =>
+    createElement('button', { className: 'ghost small', disabled, onClick }, label);
+  /** 这一行的全部动作都住这里（名字那一排的右端；`.mk-main` 里不再有裸按钮） */
+  const actions = (...buttons: ReactNode[]): ReactNode =>
+    createElement('div', { className: 'mk-actions' }, ...buttons);
+  /**
+   * 第一排 = 名字 + 徽章 + 动作（动作钉右端）；第二排 = 次要事实。
+   * 分两排而不是把动作丢在同一个 wrap 容器末尾：后者会让"名字吃掉剩余宽度"把动作簇
+   * 挤到第三排，一张卡从两行变四行——窄侧栏里这就是密度事故。
+   */
+  const main = (name: string, badge: ReactNode, acts: ReactNode, facts: ReactNode[]): ReactNode =>
+    createElement(
+      'div',
+      { className: 'mk-main' },
+      createElement(
+        'div',
+        { className: 'mk-head' },
+        createElement('span', { className: 'mk-name', title: name }, name),
+        badge,
+        acts,
+      ),
+      createElement('div', { className: 'mk-facts' }, ...facts),
+    );
+
+  const indexSection = (g: ReturnType<typeof buildGroups>[number]): ReactNode =>
+    createElement(
+      'section',
+      { className: 'mk-group', key: g.kind },
+      createElement(
+        'h4',
+        { className: 'mk-grouptitle' },
+        g.label,
+        createElement('span', { className: 'mk-count' }, groupCountPhrase(g.rows.length)),
+      ),
+      ...g.rows.map((row) => {
+        const e = row.entry;
+        const phrase = updatePhrase(row);
+        const sourceUrl = e.sourceUrl;
+        return createElement(
+          'div',
+          { className: 'mk-row', key: indexRowKey(e) },
+          main(
+            e.name,
+            phrase === '' ? null : createElement('span', { className: `mk-badge${badgeTone(row)}` }, phrase),
+            // `action === 'none'` ⇒ 这一行没有可点动作（已装最新 / 本机更高 / 版本要求不够），
+            // 行上那句 `mk-badge` 或 `mk-warn` 就是它的说明（动作簇仍占右端位，行与行不错位）
+            actions(
+              row.action === 'none'
+                ? null
+                : btn(ACTION_LABEL[row.action], () => p.onInstall(row), acting),
+            ),
+            [
+              meta(`版本 ${e.version}`),
+              meta(`${formatBytes(e.unpackedBytes)} · ${e.fileCount} 个文件`),
+              meta(`作者 ${e.author}`),
+              meta(`许可 ${e.license}`),
+            ],
+          ),
+          row.appOk
+            ? null
+            : createElement('div', { className: 'mk-warn' }, appVersionRequirement(e.minAppVersion)),
+          e.summary === undefined ? null : createElement('div', { className: 'mk-sub' }, e.summary),
+          // 来源网址住**子层**（灰色小行），主行纪律不动；已接 `ui.openExternal` 外链原语
+          // ——button 语义、`mk-sub` 观感不变，只发意图：闸（https + 主机白名单）在 Rust，
+          // 本层不复制白名单、不摸平台（插件够不着）
+          sourceUrl === undefined
+            ? null
+            : createElement(
+                'button',
+                {
+                  className: 'mk-sub mk-link',
+                  type: 'button',
+                  title: `在浏览器打开 ${sourceUrl}`,
+                  onClick: () => p.onOpenSource(sourceUrl),
+                },
+                `来源 ${sourceUrl}`,
+              ),
+        );
+      }),
+    );
+
+  return createElement(
+    'div',
+    { className: 'panel-market' },
+    createElement(
+      'div',
+      { className: 'mk-toolbar' },
+      createElement('input', {
+        className: 'mk-search',
+        type: 'search',
+        placeholder: '按包名或作者过滤',
+        'aria-label': '按包名或作者过滤',
+        value: p.query,
+        onInput: (event: { currentTarget: { value: string } }) => p.onQuery(event.currentTarget.value),
+      }),
+      // 只在过滤态出现：这一枚就是空态那句话唯一的出路（点了清空查询，不弹窗）
+      filtering
+        ? createElement(
+            'button',
+            { className: 'ghost small mk-clear', onClick: () => p.onClearQuery() },
+            CLEAR_LABEL,
+          )
+        : null,
+      createElement(
+        'button',
+        { className: 'ghost small', disabled: p.busy || acting, onClick: () => p.onPull() },
+        p.busy ? '拉取中…' : '拉取列表',
+      ),
+      // 发布包…：选 zip（对话框即授权）→ 服务编排（本地预校验 → 原样上传），
+      // 结果与进度照旧只住状态行一处（`onPublish` 的实现在带状态的 MarketPanel 里）
+      createElement(
+        'button',
+        { className: 'ghost small', disabled: p.busy || acting, onClick: () => p.onPublish() },
+        PUBLISH_LABEL,
+      ),
+    ),
+    // 状态簇在滚动区之外：列表再长，"这一次到底拉没拉成"也不会被滚出视野
+    createElement(
+      'div',
+      { className: 'mk-flash', role: 'status' },
+      line === '' || p.busy ? null : createElement('div', { className: 'mk-status' }, line),
+      // 数据时间与拉取结果**不受 busy 遮掩**：失败态必须一直在屏上（不许"加载中"常驻顶掉它）
+      time === '' ? null : createElement('div', { className: 'mk-time' }, time),
+      // 装 / 卸的进行中与结果全写在这一处（`aria-live` 让读屏跟得上；不弹窗）
+      p.note === '' ? null : createElement('div', { className: 'mk-note', 'aria-live': 'polite' }, p.note),
+      // 无文字的 hairline 进度条：带字的进度句仍只住 `.mk-note` 一处，这里只给"还剩多少"的形
+      p.progress == null
+        ? null
+        : createElement(
+            'div',
+            {
+              className: 'mk-progress',
+              role: 'progressbar',
+              'aria-valuemin': 0,
+              'aria-valuemax': 100,
+              'aria-valuenow': Math.round(p.progress),
+            },
+            createElement('div', {
+              className: 'mk-progress-fill',
+              style: { width: `${Math.min(100, Math.max(0, p.progress))}%` },
+            }),
+          ),
+      // 发布终局的可点外链（PR 页面）：URL 本身已在 note 那一句里，这枚按钮只补"可以点"
+      p.noteLink == null || p.noteLink === ''
+        ? null
+        : createElement(
+            'button',
+            {
+              className: 'mk-sub mk-link mk-note-link',
+              type: 'button',
+              title: `在浏览器打开 ${p.noteLink}`,
+              onClick: () => p.onOpenSource(p.noteLink!),
+            },
+            '在浏览器打开发布请求',
+          ),
+      droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
+      filtering ? null : createElement('div', { className: 'mk-hint' }, CAPABILITY_HINT),
+    ),
+    createElement(
+      'div',
+      { className: 'mk-body' },
+      createElement(
+        'h4',
+        { className: 'mk-grouptitle' },
+        '已安装',
+        installedCount === '' ? null : createElement('span', { className: 'mk-count' }, installedCount),
+      ),
+      rows.length === 0
+        ? createElement('div', { className: 'mk-empty' }, '本机还没有装好的包')
+        : createElement(
+            'div',
+            { className: 'mk-list' },
+            ...rows.map((r) => {
+              const key = pendingKey(r.rec);
+              const expanded = p.open === key;
+              const confirming = p.pending === key;
+              return createElement(
+                'div',
+                { className: expanded ? 'mk-row open' : 'mk-row', key },
+                main(
+                  r.rec.name,
+                  null,
+                  actions(
+                    // 展开切换是这一行的第一个动作：`aria-expanded` 给读屏（行本身是 div，不是按钮语义）
+                    createElement(
+                      'button',
+                      {
+                        className: 'ghost small',
+                        'aria-expanded': expanded,
+                        onClick: () => p.onToggleDetail(key),
+                      },
+                      expanded ? '收起' : '详情',
+                    ),
+                    // 只有口上包能导入成口上项目（判定在 `buildInstalledRows` 的行标记上）；
+                    // 同一屏动作纪律：装/更新进行中一律禁用，进度仍只写状态行一处
+                    r.canImport
+                      ? btn(IMPORT_LABEL, () => p.onImport(r.rec), acting)
+                      : null,
+                    confirming
+                      ? createElement(
+                          'span',
+                          {
+                            className: 'mk-confirm',
+                            // 簇内按 Esc 就取消（焦点在簇里的按钮上，事件冒泡到这一层）；
+                            // 刻意不注册全局键，也不碰 shell-keys——离开这一簇键盘照常走
+                            onKeyDown: (event: { key: string }) => {
+                              if (event.key === 'Escape') p.onCancelUninstall();
+                            },
+                          },
+                          '确认卸载？',
+                          btn('确认', () => p.onConfirmUninstall(key), acting),
+                          // 取消永远可点：正在装别的包也不该把作者锁在确认态里
+                          btn('取消', () => p.onCancelUninstall(), false),
+                        )
+                      : btn('卸载', () => p.onRequestUninstall(key), acting),
+                  ),
+                  [
+                    meta(`版本 ${r.rec.version}`),
+                    meta(r.kindLabel),
+                    meta(`来源 ${r.sourceLabel}`),
+                    meta(`作者 ${r.rec.author}`),
+                    meta(`许可 ${r.rec.license}`),
+                  ],
+                ),
+                // 展开层 = 机器面：核对码 / 种类 / id 照旧给全（主行不放机器词）
+                expanded
+                  ? createElement(
+                      'div',
+                      { className: 'mk-detail' },
+                      createElement('div', null, `核对码 ${r.digestPrefix}`),
+                      createElement('div', null, `文件 ${r.rec.files.length} 个`),
+                      createElement('div', null, `id ${r.rec.id} · kind ${r.rec.kind}`),
+                    )
+                  : null,
+              );
+            }),
+          ),
+      snapshot.status === 'ready' && groups.length === 0
+        ? createElement('div', { className: 'mk-empty' }, filterEmptyPhrase(p.query))
+        : null,
+      ...groups.map((g) => indexSection(g)),
+    ),
+  );
+}

@@ -31,7 +31,8 @@ import {
 // 测试面（audit C 对测试豁免）：拿**真**市场服务实现跑面板的取数/装卸判据，
 // 这样"卸完了列表与磁盘同时为空"、"装完落点与记账同时到位"钉的是实现，不是自造的假盘。
 import { createMarketService, sha256Hex } from '@kojo/plugin-kojo-market';
-import { createUiMarketPlugin, MarketPanelView } from '../src/index';
+import { createUiMarketPlugin } from '../src/index';
+import { MarketPanelView } from '../src/market-panel-view';
 import {
   loadMarketSnapshot,
   pullMarketOutcome,

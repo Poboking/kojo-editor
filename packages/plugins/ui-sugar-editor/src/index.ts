@@ -29,10 +29,18 @@
  *     dispose 一次退净），面板不持有宿主引用、也不自带第二份事件拷贝；
  *   - 跳转复用宿主既有通道 `editor.revealLocation`；
  *   - 零游戏知识：本插件不认得任何游戏术语，变量字典/分野模板全在 adapter。
+ *
+ * 模块布局（2026-10-17 拆分批；本文件只剩**装配注册**与**守卫钉住的诊断列表**）：
+ *   `decorations.ts` 波浪线翻译核 + 任务 kind · `verdict-panel.ts` 判定面板组件 ·
+ *   `new-file-wiring.ts` 新建流程的总线挂卸 · `new-file-flow.ts` 落盘编排 ·
+ *   `new-file-wizard.ts` 向导组件 · `save-handler.ts` 保存链路 · `panel-logic.ts` 判定归类 ·
+ *   `kojo-quickfix.ts` 快速修复判据（`.kojo` 后缀与写允许域两道闸按该文件头注留在本文件）。
+ *   「显示更多」哨兵与诊断列表（`MoreRow` / `VerdictDiagList` / `sevLabel`）留在本文件：
+ *   app 侧静态守卫 `packages/app/tests/diagnostic-copy.test.ts` 钉的就是这段源码文本。
  */
 
-import { createElement, useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactElement, ReactNode } from 'react';
+import { createElement, useEffect, useRef } from 'react';
+import type { ReactElement } from 'react';
 import type {
   FileIO,
   LineDecoration,
@@ -51,28 +59,20 @@ import {
   diagnosticDisplay,
 } from '@kojo/plugin-api';
 import {
-  DIAG_WINDOW,
   MORE_ROW_STYLE,
   MORE_ROW_TITLE,
   attachGrowSentinel,
-  buildVerdictRows,
-  createPanelTruthController,
-  degradeForActiveFile,
-  degradeText,
   diagWindowSize,
-  diagnosticDecorations,
-  growWindow,
   isKojoFile,
   moreRowLabel,
-  summarize,
-  type VerdictDegrade,
   type VerdictRow,
-  type VerdictSummary,
 } from './panel-logic';
+import { SUGAR_DECORATIONS_TASK, createSugarDecorations } from './decorations';
 import { NEW_KOJO_OVERLAY_ID, createNewKojoWizard } from './new-file-wizard';
-import { createNewFileFlow } from './new-file-flow';
+import { wireNewKojoFileFlow } from './new-file-wiring';
 import { performSugarSave } from './save-handler';
 import { buildSugarQuickFixes } from './kojo-quickfix';
+import { createVerdictPanel } from './verdict-panel';
 
 /* ------------------------------ 诊断窗口 ------------------------------ */
 
@@ -160,7 +160,7 @@ export function VerdictDiagList(props: VerdictDiagListProps): ReactElement {
 }
 
 /** 高亮行的最小节点形状（插件 tsconfig 无 DOM lib ⇒ 自备；scrollIntoView 跟随用） */
-type FollowNode = { scrollIntoView?(arg: { block: string }): void };
+export type FollowNode = { scrollIntoView?(arg: { block: string }): void };
 
 export function createUiSugarEditorPlugin(): Plugin {
   return {
@@ -187,35 +187,9 @@ export function createUiSugarEditorPlugin(): Plugin {
 
       /* -------------------- 贡献 1：编辑器波浪线（纯函数） -------------------- */
 
-      /**
-       * 任务 kind（2026-10-16 装饰热路径批）：`.kojo` 全量转译 + 诊断成形。
-       *
-       * **它天生搬不进 worker**：转译器要吃当前项目适配器注入的字典 / 时机分野模板 /
-       * 指令名表（游戏知识，`loadProject` 时才成形），worker 侧复现不了那份注入；
-       * 少了注入，`unknown-identifier` / `timing-face-unknown` 会凭空多出一批假错。
-       * 所以这张 kind **不进**装配层的 worker 表——宿主据此走"异步就地"那一档：
-       * 照样请出同步装饰轮（主线程只装配）、照样吃 `runLatest` 背压与版本校验，
-       * 只是 CPU 仍在宿主线程上。声明 `offloadKind` 而不是留空，是为了让
-       * "切回未改动标签零重算"的缓存对这三路同样生效。
-       */
-      const SUGAR_DECORATIONS_TASK = 'sugar.diagnostics';
-
-      /**
-       * `.kojo` 源文本 → 面上的波浪线（**唯一一份翻译**：decorator 贡献与下面 quickfix 的
-       * 自证都走这里）。之所以提出来而不是各写一遍：自证的对照组必须与面上那份**逐字段同源**，
-       * 两处各拼一遍 `transpile + diagnosticDecorations` 就是同一份判据的两个副本
-       * （本仓同类事故口径，见 ui-sugar-lift 的 FT-2 收口注）。
-       */
-      function kojoDecorations(path: string, source: string): LineDecoration[] {
-        if (!isKojoFile(path)) return [];
-        try {
-          return diagnosticDecorations(sugar.transpile(source, { filePath: path }).diagnostics);
-        } catch {
-          // 转译器自身异常：绝不在编辑器里炸（宿主本就会隔离装饰器异常，这里
-          // 显式兜底，让"这一文件无波浪线"而非"整个装饰链断掉"）。
-          return [];
-        }
-      }
+      // 翻译核与任务 kind 已迁出到 `decorations.ts`（quickfix 自证吃的还是这同一份）；
+      // 本文件只剩注册。
+      const kojoDecorations = createSugarDecorations(sugar);
 
       ctx.slots.register('ui.editor.decorator', {
         id: 'sugar-diagnostics',
@@ -283,188 +257,10 @@ export function createUiSugarEditorPlugin(): Plugin {
       });
 
       /* -------------------- 贡献 3：糖判定面板 -------------------- */
-      function VerdictPanel(): unknown {
-        const [filePath, setFilePath] = useState<string | null>(null);
-        const [degrade, setDegrade] = useState<VerdictDegrade>('no-project');
-        const [summary, setSummary] = useState<VerdictSummary | null>(null);
-        const [rows, setRows] = useState<readonly VerdictRow[]>([]);
-        const [error, setError] = useState<string | null>(null);
-        const [nonce, setNonce] = useState(0);
-        /**
-         * 真相三事件（activeFileChanged / documentChanged / cursorMoved）的订阅
-         * 生命周期核（W4）：attach 一次订齐三条、dispose 一次退净三条；缓冲真相
-         * 池（C2）与"命中当前文件 / 非派生视图"判据都住在核内，面板只拿裁决结果。
-         */
-        const truthRef = useRef(createPanelTruthController(ctx.bus));
-        /** 当前文件的真相更新序号（广播命中当前文件时 +1，驱动重算） */
-        const [liveTick, setLiveTick] = useState(0);
-        /**
-         * C1 反向下行：光标行（只在「光标就在面板显示的这一份文件里、且不是派生视图」时非 null）。
-         * 派生视图的行号不属于这份文件——宁可清高亮，也不指错行。
-         */
-        const [cursorLine, setCursorLine] = useState<number | null>(null);
-        /** 当前高亮行的节点（scrollIntoView 跟随；无匹配 / 未渲染到 = null，静默跳过） */
-        const cursorRowRef = useRef<FollowNode | null>(null);
-        /** 诊断渲染窗口（行数；undefined = 初始窗口——旧实现硬截 200 且第 201 条起不可达） */
-        const [diagWindow, setDiagWindow] = useState<number | undefined>(undefined);
 
-        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；算术住共享核，与预览面板同窗） */
-        const growDiag = useCallback((total: number): void => {
-          setDiagWindow((prev) => growWindow(prev, total, DIAG_WINDOW)); // 无增长原样返回 prev ⇒ 跳过重渲
-        }, []);
-
-        // 真相三事件：挂载即订齐、卸载即退净（换文件即重置全部状态；高亮随旧文件
-        // 一起清掉——新文件的位点稍后才到，中间这一拍若留着旧行号会"指错行"）。
-        // 缓冲真相广播（C2）命中当前文件即 +1 tick 驱动重算——面板数字从此与
-        // 波浪线吃**同一份**文本（宿主已防抖/去重，收到即算，不叠加第二层）。
-        useEffect(
-          () =>
-            truthRef.current.attach({
-              onActiveFile: (filePath) => {
-                setFilePath(filePath);
-                setSummary(null);
-                setRows([]);
-                setDiagWindow(undefined);
-                setError(null);
-                setNonce(0);
-                setCursorLine(null);
-                setDegrade(degradeForActiveFile(filePath));
-              },
-              onLiveText: () => setLiveTick((n) => n + 1),
-              onCursorLine: (line) => setCursorLine(line),
-            }),
-          [],
-        );
-
-        // 跟随：光标行换人时滚一次（nearest——已在视野内就不动）。行未渲染 / 无匹配行 → 静默跳过。
-        useEffect(() => {
-          if (cursorLine === null) return;
-          cursorRowRef.current?.scrollIntoView?.({ block: 'nearest' });
-        }, [cursorLine]);
-
-        // 取"当前真相"：编辑器缓冲广播优先（live），还没收到广播的窗口期退回读盘（disk）；
-        // 换文件 / 手动刷新 / 缓冲更新都走这里。转译有共享缓存，此处按收即算。
-        useEffect(() => {
-          const path = filePath;
-          if (!path || !isKojoFile(path)) return;
-          let cancelled = false;
-          setError(null);
-          const compute = (text: string): void => {
-            const r = sugar.transpile(text, { filePath: path });
-            const mapped = r.sourceMap.filter((e) => e.sourceLine !== null).length;
-            setSummary(summarize(text, r.erb, mapped, r.diagnostics));
-            setRows(buildVerdictRows(r.diagnostics));
-          };
-          const live = truthRef.current.pool.textFor(path);
-          if (live !== null) {
-            // 有缓冲真相：直接用它转译出判定（summary + rows），不等读盘
-            try {
-              compute(live);
-            } catch (err: unknown) {
-              setError(err instanceof Error ? err.message : String(err));
-              setDegrade('read-error');
-            }
-            return;
-          }
-          setDegrade('reading');
-          void io
-            .readText(path)
-            .then((tf) => {
-              if (cancelled) return;
-              compute(tf.text);
-              setDiagWindow(undefined); // 新一批诊断 = 新窗口（刷新后从初始窗口看起）
-            })
-            .catch((err: unknown) => {
-              if (cancelled) return;
-              setError(err instanceof Error ? err.message : String(err));
-              setDegrade('read-error');
-            });
-          return () => {
-            cancelled = true;
-          };
-        }, [filePath, nonce, liveTick]);
-
-        /** 点击定位：请求宿主打开并滚动到该行 */
-        const reveal = (line: number): void => {
-          if (!filePath) return;
-          ctx.bus.emit('editor.revealLocation', { filePath, line });
-        };
-
-        const shell = (children: ReactNode[]): ReactNode =>
-          createElement(
-            'div',
-            { className: 'panel-sugar-verdict' },
-            createElement(
-              'div',
-              { className: 'sv-toolbar' },
-              createElement('span', { className: 'dim' }, '.kojo 校验（转译诊断；只读）'),
-              createElement(
-                'button',
-                {
-                  className: 'ghost small',
-                  onClick: () => setNonce((n) => n + 1),
-                  disabled: !isKojoFile(filePath),
-                  title: '按当前真相重算（未保存的编辑也算数——与编辑器波浪线同源）',
-                },
-                '刷新',
-              ),
-            ),
-            ...children,
-          );
-
-        if (!isKojoFile(filePath)) {
-          return shell([createElement('div', { className: 'sv-empty dim' }, degradeText(degrade))]);
-        }
-        // 读取中只在**还没有结果**时占屏：命中缓冲真相是同步算完的，degrade 标签可能
-        // 仍停在 'reading' 上——有 summary 就必须让判定上屏（否则面板永远停在读取中）。
-        if (degrade === 'reading' && summary === null) {
-          return shell([createElement('div', { className: 'sv-empty dim' }, degradeText(degrade))]);
-        }
-        if (error) {
-          return shell([
-            createElement('div', { className: 'sv-error' }, `${degradeText(degrade)}：${error}`),
-            createElement(
-              'div',
-              { className: 'sv-actions' },
-              createElement('button', { className: 'ghost small', onClick: () => setNonce((n) => n + 1) }, '重试'),
-            ),
-          ]);
-        }
-        if (!summary) {
-          return shell([createElement('div', { className: 'sv-empty dim' }, degradeText('reading'))]);
-        }
-
-        const statusBox = createElement(
-          'div',
-          { className: `sv-verdict ${summary.status}` },
-          createElement('span', { className: 'sv-verdict-badge' }, summary.label),
-          createElement('span', { className: 'sv-counts' },
-            createElement('span', { className: 'sv-count err' }, `错误 ${summary.counts.error}`),
-            createElement('span', { className: 'sv-count warn' }, `警告 ${summary.counts.warning}`),
-            createElement('span', { className: 'sv-count info' }, `提示 ${summary.counts.info}`),
-          ),
-        );
-
-        const meta = createElement(
-          'div',
-          { className: 'sv-meta dim' },
-          `源行 ${summary.sourceLines} · 产物行 ${summary.generatedLines} · 已映射 ${summary.mappedLines} 行`,
-        );
-
-        const list =
-          rows.length === 0
-            ? createElement('div', { className: 'sv-empty dim' }, '无诊断 ✅')
-            : createElement(VerdictDiagList, {
-                rows,
-                limit: diagWindow,
-                onGrow: growDiag,
-                onReveal: reveal,
-                cursorLine,
-                cursorRef: cursorRowRef,
-              });
-
-        return shell([statusBox, meta, list]);
-      }
+      // 面板组件（状态、取真相、判定分档与渲染）已迁出到 `verdict-panel.ts`；本文件只留
+      // 注册与诊断列表——诊断列表受 app 侧 diagnostic-copy 静态守卫钉在本文件，故由这里递进去。
+      const VerdictPanel = createVerdictPanel({ ctx, sugar, io, diagList: VerdictDiagList });
 
       ctx.slots.register('ui.panel', {
         id: 'sugar-verdict',
@@ -518,32 +314,9 @@ export function createUiSugarEditorPlugin(): Plugin {
       // 向导知识来源：角色经 kernel.project，命名/分野经 game.adapter 槽的分野
       // 模板表（fail-closed：模板缺省则向导显式不可用，不猜命名）。
       // 落盘编排（工作区落点 / 另存 / 交给新建项目向导）住在 `new-file-flow.ts`。
-      const revealPath = (path: string): void =>
-        ctx.bus.emit('editor.revealLocation', { filePath: path, source: 'ui-sugar-editor' });
-
-      const flow = createNewFileFlow({
-        io,
-        workspaces,
-        log: ctx.log,
-        reveal: revealPath,
-        // 跨插件请人开门：发语义意图（不是对方的 overlay id——那个字符串一进契约层
-        // 就把游戏词写进了 plugin-api），关联号随意图走
-        openProjectWizard: (token) =>
-          ctx.bus.emit('workspace.newProjectRequested', {
-            requestToken: token,
-            source: 'ui-sugar-editor',
-          }),
-        reopenWizard: () =>
-          ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_OVERLAY_ID, source: 'ui-sugar-editor' }),
-      });
-      ctx.onDispose(() => flow.dispose());
-
-      // 新建项目向导建完项目 → 兑现那份被"跳去建项目"打断的口上文件（反馈 3 a1）
-      ctx.onDispose(
-        ctx.bus.on('workspace.projectCreated', (ev) => {
-          void flow.onProjectCreated(ev.projectId, ev.requestToken);
-        }),
-      );
+      // 总线接线（reveal 意图 / 跨插件请人开门 / 建完项目兑现 + 卸载退净）住在
+      // `new-file-wiring.ts`；本文件只留三张注册表。
+      const { flow, revealPath } = wireNewKojoFileFlow({ ctx, io, workspaces });
 
       ctx.slots.register('ui.overlay', {
         id: NEW_KOJO_OVERLAY_ID,
