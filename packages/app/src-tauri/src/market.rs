@@ -487,6 +487,9 @@ fn entry_path_problem(name: &str, max_depth: usize) -> Option<&'static str> {
     if name.as_bytes()[0].is_ascii_alphabetic() && name.get(1..2) == Some(":") {
         return Some("path-drive");
     }
+    if name.contains(':') {
+        return Some("path-drive");
+    }
     if name.contains('\\') {
         return Some("path-backslash");
     }
@@ -500,6 +503,9 @@ fn entry_path_problem(name: &str, max_depth: usize) -> Option<&'static str> {
     }
     if segments.contains(&"..") {
         return Some("path-dotdot");
+    }
+    if segments.iter().any(|s| s.ends_with('.') || s.ends_with(' ')) {
+        return Some("path-windows-unsafe");
     }
     if segments.len() > max_depth {
         return Some("path-depth");
@@ -797,47 +803,6 @@ pub(crate) fn container_name_problem(name: &str) -> Option<String> {
 /// 条目路径闸：与契约 `packEntryPathProblem` 同口径的**顺序与拒绝码字面**，
 /// 两层的错误因此能逐字对上（前缀 `files/` 不在此判定——根 `pack.json` 也是合法条目，
 /// 内容口径归 TS）。合法返回 `None`。
-fn entry_path_problem(name: &str, max_depth: usize) -> Option<&'static str> {
-    if name.is_empty() {
-        return Some("path-empty-segment");
-    }
-    // 冒号 anywhere：`C:` 盘符（首字母+冒号）之外的 `foo:stream` 是 NTFS 备用数据流
-    // （ADS）注入面——落盘时 `foo` 是宿主文件、`:stream` 是藏进去的第二份数据，
-    // 路径闸看不见它、`entry-duplicate` 也拦不住（两个不同条目名）。一律拒。
-    // 复用 `path-drive` 码：正是要把"任何 Windows 保留冒号语义"归一类，错误仍逐字可示人。
-    if name.as_bytes()[0].is_ascii_alphabetic() && name.get(1..2) == Some(":") {
-        return Some("path-drive");
-    }
-    if name.contains(':') {
-        return Some("path-drive");
-    }
-    if name.contains('\\') {
-        return Some("path-backslash");
-    }
-    if name.starts_with('/') {
-        return Some("path-absolute");
-    }
-    let segments: Vec<&str> = name.split('/').collect();
-    // 空段含尾斜杠 ⇒ 目录条目（名字以 `/` 结尾）在这里被拒：本容器只准落普通文件。
-    if segments.iter().any(|s| s.is_empty() || *s == ".") {
-        return Some("path-empty-segment");
-    }
-    if segments.contains(&"..") {
-        return Some("path-dotdot");
-    }
-    // Windows 静默改名面：任一段尾随 `.` 或空格在落盘时被资源管理器/文件系统悄悄剥掉
-    // （`a.txt.` → `a.txt`），清单与实际落盘从此不平。逐段核尾，非空段一视同仁。
-    if segments
-        .iter()
-        .any(|s| s.ends_with('.') || s.ends_with(' '))
-    {
-        return Some("path-windows-unsafe");
-    }
-    if segments.len() > max_depth {
-        return Some("path-depth");
-    }
-    None
-}
 
 /// 条目类型闸：只准普通文件。符号链接 / FIFO / socket / 块设备 / 字符设备一律拒。
 /// DOS 来源的条目（注册表容器就是 `node:zlib` 自写、`version_made_by=0`）没有 unix 权限位

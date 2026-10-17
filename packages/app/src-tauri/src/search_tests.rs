@@ -7,6 +7,7 @@
 //! 整段不依赖 Tauri 运行时——`run_search` 的进度回调是注入的，所以"并行检索"这条路
 //! 本身也在单测覆盖之内（真语料基准见文件末尾的 `#[ignore]` 用例）。
 
+use super::decode_for_search;
 use crate::{
     build_matcher, byte_prefilter, decode_policy, decode_with_policy, is_utf16_bom_hit, looks_binary,
     preview_window, run_search, scan_text, utf16_len, SearchFileDto, SearchMatchDto,

@@ -1739,6 +1739,16 @@ fn decode_legacy_family(bytes: &[u8]) -> Cow<'_, str> {
 /// 代价：无 BOM 的 utf-16 会按兜底族解成乱码，且因含 NUL 被计入 `skipped.binary`
 /// （可见、可数，不是静默漏报）。
 /// 解码失败不阻断（与 `decode_bytes` 同口径：替换字符只出声，只读检索不该硬失败）。
+/// UTF-16 BOM 判定（上游三族批的调用点仍需要它）：BOM 存在才认 utf-16，无 BOM 不猜。
+fn utf16_bom_encoding(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        Some(encoding_rs::UTF_16LE)
+    } else if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        Some(encoding_rs::UTF_16BE)
+    } else {
+        None
+    }
+}
 fn decode_for_search(bytes: &[u8]) -> Cow<'_, str> {
     if let Some(enc) = utf16_bom_encoding(bytes) {
         let (text, _, had_errors) = enc.decode(bytes);
