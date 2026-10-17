@@ -226,6 +226,8 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
             cases: {
               '@contMarks': 'sugar.cont',
               '@englishAliases': 'sugar.keyword.alias',
+              // 运算符组的 ASCII 形（`不在` 的别名 `notin`）也要落档——此前漏 cases 会掉 identifier
+              '@operators': 'sugar.operator',
               '@erbFamilyHeads': 'keyword.erb.family',
               '@erbCommands': 'keyword.erb',
               '@default': 'identifier',

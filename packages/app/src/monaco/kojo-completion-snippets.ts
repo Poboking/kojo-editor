@@ -57,8 +57,10 @@ function namedParamChoice(): string {
 interface BlockSnippetSpec {
   /** 词表 KeywordId（词形从词表派生，不手抄） */
   readonly id: string;
-  /** 以词形替换后的 snippet 正文；`w` = 该关键字的中文主形 */
-  readonly build: (w: string) => string;
+  /** 以词形替换后的 snippet 正文；`w` = 该关键字的中文主形。返回 `null` = 模板**内嵌**
+   *  的他键词形（`如果`→`否则` / `当`→`是`/`否则`）在词表查无 ⇒ 与条目级同一纪律
+   *  （"查不到 = 不抄词形兜底"，整条跳过——ZH-L 词表守卫把兜底字面量按抄本计红）。 */
+  readonly build: (w: string) => string | null;
   /** 面板说明（中文） */
   readonly detail: string;
 }
@@ -73,10 +75,28 @@ const BLOCK_SNIPPET_SPECS: readonly BlockSnippetSpec[] = [
     build: (w) => `${w} \${1:分野} \${2:编号} ${namedParamChoice()}\n${INDENT}$4\n$0`,
     detail: '时机块模板：分野 · 编号 · 命名参数',
   },
-  { id: 'block.if', build: (w) => `${w} \${1:条件}：\n${INDENT}$2\n${wordOf('block.else') ?? '否则'}\n${INDENT}$3$0`, detail: '条件块模板：含否则分支' },
+  {
+    id: 'block.if',
+    // 内嵌的"否则"词形也从词表查（`wordOf`）；查无 ⇒ 返回 null ⇒ 整条跳过（不抄词形兜底）
+    build: (w) => {
+      const els = wordOf('block.else');
+      if (els === null) return null;
+      return `${w} \${1:条件}：\n${INDENT}$2\n${els}\n${INDENT}$3$0`;
+    },
+    detail: '条件块模板：含否则分支',
+  },
   { id: 'block.elif', build: (w) => `${w} \${1:条件}：`, detail: '否则如果分支头' },
   { id: 'block.else', build: (w) => `${w}：`, detail: '否则分支头' },
-  { id: 'block.when', build: (w) => `${w} \${1:表达式}：\n${INDENT}${wordOf('block.is') ?? '是'} \${2:值}：\n${INDENT}${INDENT}$3\n${INDENT}${wordOf('block.else') ?? '否则'}：\n${INDENT}${INDENT}$4$0`, detail: '分派块模板：是/否则分支' },
+  {
+    id: 'block.when',
+    build: (w) => {
+      const is = wordOf('block.is');
+      const els = wordOf('block.else');
+      if (is === null || els === null) return null;
+      return `${w} \${1:表达式}：\n${INDENT}${is} \${2:值}：\n${INDENT}${INDENT}$3\n${INDENT}${els}：\n${INDENT}${INDENT}$4$0`;
+    },
+    detail: '分派块模板：是/否则分支',
+  },
   { id: 'block.is', build: (w) => `${w} \${1:值}：`, detail: '当分支头' },
   { id: 'block.section', build: (w) => `${w} \${1:条件}：\n${INDENT}$2$0`, detail: '段块模板：多信封分段' },
   { id: 'block.random', build: (w) => `${w}：\n${INDENT}\${1:「……」}\n${INDENT}\${2:「……」}$0`, detail: '随机块模板：等概率候选' },
@@ -96,7 +116,9 @@ const BLOCK_SNIPPETS: readonly { label: string; insertText: string; detail: stri
   (spec) => {
     const w = wordOf(spec.id);
     if (w === null) return []; // 词表查无此 id 的中文主形 ⇒ 不造词形（不猜）
-    return [{ label: w, insertText: spec.build(w), detail: `${spec.detail}` }];
+    const insertText = spec.build(w);
+    if (insertText === null) return []; // 模板内嵌他键词形查无 ⇒ 整条跳过（同上，不猜）
+    return [{ label: w, insertText: insertText, detail: `${spec.detail}` }];
   },
 );
 
