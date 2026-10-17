@@ -123,11 +123,39 @@ describe('runSliced（保序分片）', () => {
     expect(st.yields).toBe(2); // 3 个窗口之间有 2 次让路
   });
 
-  it('concurrency 超出项数时退化为单窗（不空转）', async () => {
+  it('concurrency 超出项数时退化为单窗（末项后不空让）', async () => {
     const pool = createComputePool();
     const out = await pool.runSliced([1, 2], { sliceMs: 0, concurrency: 16, label: 'one' }, (n) => n);
     expect(out).toEqual([1, 2]);
-    expect(pool.stats().tasks.find((t) => t.label === 'one')!.yields).toBe(0);
+    // PS-2⑥：同步项从"整窗跑完才查预算"改为**逐项查**——sliceMs=0 的让路规则与
+    // window=1 档逐字一致（项间都让、末项不空让）。单窗不变，只是窗内现在也会让。
+    const st = pool.stats().tasks.find((t) => t.label === 'one')!;
+    expect(st.yields).toBe(1);
+    expect(st.items).toBe(2);
+  });
+
+  it('PS-2⑥：同步扫描项按项查预算（旧局整窗 ~100ms 一口气跑完才检查）', async () => {
+    const pool = createComputePool();
+    const out = await pool.runSliced(
+      [1, 2, 3, 4, 5, 6, 7],
+      { sliceMs: 0, concurrency: 3, label: 'syncwin' },
+      (n) => n * 10,
+    );
+    expect(out).toEqual([10, 20, 30, 40, 50, 60, 70]); // 逐项切窗不许动保序
+    const st = pool.stats().tasks.find((t) => t.label === 'syncwin')!;
+    expect(st.items).toBe(7);
+    expect(st.yields).toBe(6); // 7 项之间 6 次让路（与 window=1 档同规则）
+  });
+
+  it('PS-2⑥：同步项 + 预算充裕 ⇒ 单窗一口气跑完（不无故让路）', async () => {
+    const pool = createComputePool();
+    const out = await pool.runSliced(
+      [1, 2, 3, 4, 5, 6],
+      { sliceMs: 100_000, concurrency: 3, label: 'syncrich' },
+      (n) => n,
+    );
+    expect(out).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(pool.stats().tasks.find((t) => t.label === 'syncrich')!.yields).toBe(0);
   });
 });
 
