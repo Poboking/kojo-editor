@@ -71,188 +71,26 @@ import {
   type MatrixColumnGroup,
   type MatrixRow,
 } from './matrix-logic';
+import { MatrixRowView, type RevealTarget } from './row-view';
+import { buildColgroup, renderGridHead, spacerRow } from './grid-parts';
+import { renderDetail } from './detail-pane';
+import { createMatrixStore } from './matrix-store';
+import { createAdapterServices } from './adapter-services';
+import { measureColSnap, toggleHandles } from './col-resize';
+import type {
+  ColResizePointer,
+  ColSnap,
+  GridKeyEvent,
+  ScrollBox,
+  ScrollEvent,
+  SplitterPointer,
+} from './dom-shims';
 
 /** 矩阵行渲染上限（防 DOM 爆炸；过滤后仍受此限）——**仅全量（非视口化）路径** */
 const ROW_RENDER_CAP = 400;
 
 /** 光标没命中任何格时的空集合（常量身份：无命中路径零分配，行 memo 也据此跳过） */
 const NO_CURSOR_CELLS: ReadonlyMap<string, string> = new Map<string, string>();
-
-/** 按「行号升序、同号按路径」排序（详情展示 / 取最早贡献函数） */
-function orderByLine(fns: readonly MatrixCellFunction[]): MatrixCellFunction[] {
-  return [...fns].sort((a, b) => a.startLine - b.startLine || a.filePath.localeCompare(b.filePath));
-}
-
-/** 单元格工具提示：其贡献函数的比较合并去重（无比较或无响应 → '无'） */
-function cellComparisons(cell: MatrixCell): string {
-  const seen = new Set<string>();
-  for (const f of cell.functions) for (const c of f.comparisons) seen.add(c);
-  return seen.size > 0 ? [...seen].join('、') : '无';
-}
-
-/** 跳转意图载荷（`editor.revealLocation` 消费） */
-interface RevealTarget {
-  readonly filePath: string;
-  readonly line: number;
-  readonly source: string;
-}
-
-/** 分隔线指针事件的最小形状（React 合成事件满足它；插件 tsconfig 无 DOM lib） */
-type SplitterPointer = {
-  pointerId: number;
-  clientY: number;
-  preventDefault(): void;
-  currentTarget: { setPointerCapture(pointerId: number): void };
-};
-
-/** 首列列宽拖拽指针事件的最小形状（水平方向，读 clientX；事件在 .cm-scroll 上委派 ⇒ 读 target） */
-type ColResizePointer = {
-  pointerId: number;
-  clientX: number;
-  target: { closest?: (selector: string) => unknown } | null;
-  preventDefault(): void;
-  currentTarget: { setPointerCapture(pointerId: number): void };
-};
-
-/** 网格键盘事件的最小形状 */
-type GridKeyEvent = {
-  key: string;
-  target: unknown;
-  preventDefault(): void;
-};
-
-/** 元素几何最小形状（量列宽用；插件 tsconfig 无 DOM lib ⇒ 自备） */
-type Rect = { left: number; right: number; width: number };
-/** 首列列宽拖拽：已快照的列宽 + 表宽（`key` = 快照时的 matrixKey，换角色 / 依赖版本即失效） */
-type ColSnap = { key: string; widths: number[]; tableW: number };
-
-/** 滚动容器的最小形状（视口化路径读滚动位置 / 可视高、按属性选择器聚焦格子；
- *  首列列宽拖拽另需量列边界（querySelector / querySelectorAll）） */
-type ScrollBox = {
-  scrollTop: number;
-  clientHeight: number;
-  querySelector(sel: string): {
-    focus(): void;
-    getBoundingClientRect(): Rect;
-    /** C1 反向联动：光标高亮格的最小滚动跟随（真 DOM 必然有；测试替身可不给） */
-    scrollIntoView?(arg: { block: string }): void;
-  } | null;
-  querySelectorAll(sel: string): ArrayLike<{
-    getBoundingClientRect(): Rect;
-    classList: { add(c: string): void; remove(c: string): void };
-  }>;
-};
-
-/** 滚动事件的最小形状 */
-type ScrollEvent = {
-  currentTarget: { scrollTop: number; clientHeight: number };
-};
-
-/* --------------------------- 行视图（memo：选中/折叠只重渲受影响行） --------------------------- */
-
-interface MatrixRowViewProps {
-  readonly row: MatrixRow;
-  readonly groups: readonly MatrixColumnGroup[];
-  readonly foldedFaces: ReadonlySet<string>;
-  /** 本行含选中格则为其列键，否则 null（非选中行传同一原始值，memo 得以整表跳过重渲） */
-  readonly selectedColumn: string | null;
-  /** 本行含「光标所在函数」贡献的格则为其列键，否则 null（C1 反向联动；与 selectedColumn 同款 memo 口径） */
-  readonly cursorColumn: string | null;
-  readonly rowIndex: number;
-  readonly onCell: (rowKey: string, columnKey: string, target: RevealTarget | null) => void;
-}
-
-/**
- * 单行渲染（`memo`）：选中态只在「选中行 ↔ 取消选中行」两行间变化，其余行 props 不变 → 跳过重渲。
- * 格子带 `data-r`/`data-c`（渲染序索引）供网格方向键导航定位。
- */
-const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): ReactNode {
-  const { row, groups, foldedFaces, selectedColumn, cursorColumn, rowIndex, onCell } = props;
-  const cells: ReactNode[] = [];
-  let c = 0;
-  for (const group of groups) {
-    const folded = foldedFaces.has(group.face);
-    for (const col of group.columns) {
-      if (folded) {
-        // 折叠组：占位格**保留同形 DOM**（td + button），只给按钮加 `.cm-hid`（visibility:hidden）。
-        // 实测（10224 格 / 276 列）：卡顿主因有两份——①浏览器样式重算，其中「改动 td 的 class」
-        // 一份就占 ~583ms、「只动 button 的 class」仅 ~134ms；②`table-layout:auto` 的整表重排
-        // （清空 subth 标签 / `display:none` 改内容尺寸都会触发，~1.8s）。故：td **不改 class**、
-        // 按钮只加 `.cm-hid`（visibility 不改布局、保留盒子）、表头 subth 标签照常渲染
-        // （由既有 `.cm-subth.folded{opacity:.3}` 弱化）——全流程只改非布局属性 ⇒ 只重绘不重排。
-        // 折叠格不给 data-r/data-c（沿用「折叠组不参与方向键导航」的原口径）。
-        cells.push(
-          createElement(
-            'td',
-            { key: col.key },
-            createElement('button', { className: 'cm-cell off cm-hid', 'aria-hidden': 'true' }, '·'),
-          ),
-        );
-        continue;
-      }
-      const cell = row.cells[col.key];
-      const dataC = c++;
-      if (!cell || !cell.present) {
-        // 空白格：这个时机还没有针对该状态写过的反应（点击不导航）
-        cells.push(
-          createElement(
-            'td',
-            { key: col.key },
-            createElement(
-              'button',
-              { className: 'cm-cell off', title: '无', 'data-r': rowIndex, 'data-c': dataC },
-              '·',
-            ),
-          ),
-        );
-        continue;
-      }
-      const isSel = selectedColumn === col.key;
-      // C1 反向联动：光标所在函数贡献的格描一圈亮环（.cur；与 .sel 的白色内环互不覆盖）
-      const isCur = cursorColumn === col.key;
-      cells.push(
-        createElement(
-          'td',
-          { key: col.key },
-          createElement(
-            'button',
-            {
-              className: 'cm-cell on' + (isSel ? ' sel' : '') + (isCur ? ' cur' : ''),
-              title: cellComparisons(cell),
-              'data-r': rowIndex,
-              'data-c': dataC,
-              onClick: () => {
-                const earliest = orderByLine(cell.functions)[0];
-                onCell(
-                  row.key,
-                  col.key,
-                  earliest
-                    ? { filePath: earliest.filePath, line: earliest.startLine, source: earliest.name }
-                    : null,
-                );
-              },
-            },
-            String(cell.count),
-          ),
-        ),
-      );
-    }
-  }
-  return createElement(
-    'tr',
-    null,
-    createElement(
-      'th',
-      { className: 'cm-rowhead', title: row.key },
-      createElement('span', { className: 'cm-row-name' }, row.label ?? row.key),
-      row.label ? createElement('span', { className: 'cm-row-key dim' }, row.key) : null,
-      // 列宽拖拽把手（HK-25）：**整列**每一行的行头右缘都放一枚，使「状态 \ 时机」列
-      // 在任意行都能拉伸（不再只有表头角格可抓）。事件由 .cm-scroll 委派，此处不挂 handler。
-      createElement('div', { className: 'cm-corner-resize', 'aria-hidden': 'true' }),
-    ),
-    ...cells,
-  );
-});
 
 export function createUiConditionMatrixPlugin(): Plugin {
   return {
@@ -270,131 +108,11 @@ export function createUiConditionMatrixPlugin(): Plugin {
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
 
-      /** 当前激活适配器的家族规则（多适配器共存时按 adapterId 精确匹配） */
-      const currentFamilyIndex = (): FamilyIndexRule | null => {
-        const current: GameProject | null = project.current();
-        if (!current) return null;
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId === current.adapterId && contribution.adapter.functionFamilyIndex) {
-            return contribution.adapter.functionFamilyIndex;
-          }
-        }
-        return null;
-      };
+      // ---- 适配器查询面（家族规则 / 变量字典 / 指令表 / 标签）：见 ./adapter-services.ts ----
+      const services = createAdapterServices({ project, slots, conditionExtractor });
 
-      /** 当前适配器的变量语义字典（按 adapterId 精确匹配；与注入器同通道） */
-      const schemaLookup = (): VariableSchema | undefined => {
-        const current = project.current();
-        if (!current) return undefined;
-        for (const c of slots.query('game.adapter')) {
-          if (c.adapter.gameId !== current.adapterId) continue;
-          return c.adapter.variableSchema;
-        }
-        return undefined;
-      };
-
-      /** 当前适配器的指令表（编号 ↔ 中文名；按 adapterId 精确匹配；缺省 → undefined） */
-      const instructionTable = (): KojoInstructionTable | undefined => {
-        const current = project.current();
-        if (!current) return undefined;
-        for (const c of slots.query('game.adapter')) {
-          if (c.adapter.gameId !== current.adapterId) continue;
-          return c.adapter.kojoInstructionTable;
-        }
-        return undefined;
-      };
-
-      /** 当前适配器的面 → 中文标签（与家族规则同源；缺省 → 消费方原样显示 token） */
-      const faceLabels = (): Readonly<Record<string, string>> | undefined => currentFamilyIndex()?.faceLabels;
-
-      /** 状态键标签：按首个 ':' 切出变量名与首下标，查变量字典 */
-      const labelOf = (key: string): string | null => {
-        const schema = schemaLookup();
-        if (!schema) return null;
-        const i = key.indexOf(':');
-        const name = i < 0 ? key : key.slice(0, i);
-        const firstIndex = i < 0 ? undefined : key.slice(i + 1).split(':')[0];
-        return schema.lookup(name, firstIndex)?.description ?? null;
-      };
-
-      /** 单函数状态依赖（抽取索引未含该函数时为空数组） */
-      const depsOf = (normalizedName: string): StateDependency[] =>
-        conditionExtractor.functionConditions(normalizedName)?.dependencies ?? [];
-
-      // ---- 状态（React 外部源；面板组件读取并订阅） ----
-      let characterIndex: CharacterIndex | null = null;
-      let indexReady = false;
-      /** 上一次建索引所用的索引实例（去重判据：同一实例不重复全量遍历） */
-      let lastBuiltIndex: ErbIndex | null = null;
-      /** 抽取索引代次：每次重建索引 / 条件索引就绪即 +1——矩阵记忆化的失效判据 */
-      let depsEpoch = 0;
-      /** 矩阵结果记忆化（按「角色 × 依赖版本 × 适配器」缓存，杜绝选择/过滤时整表重算） */
-      const matrixMemo = createMatrixMemo();
-      /** 索引/建表失败原因（必须可见 + 可重试，不静默停在占位） */
-      let loadError: string | null = null;
-      const listeners = new Set<() => void>();
-
-      const notify = (): void => {
-        for (const cb of [...listeners]) {
-          try {
-            cb();
-          } catch (err) {
-            ctx.log.warn(`Condition matrix listener threw: ${String(err)}`);
-          }
-        }
-      };
-
-      const rebuild = (index: ErbIndex | null): void => {
-        // 去重：`project.opened` 与 `kojo.functionChanged` 会双双触发 refresh，
-        // 两者拿到同一索引实例——同一实例不重复全量遍历（一次扫描即全量重算）。
-        if (lastBuiltIndex === index) return;
-        lastBuiltIndex = index;
-        depsEpoch++;
-        if (!index || !project.current()) {
-          characterIndex = null;
-          indexReady = index !== null;
-        } else {
-          characterIndex = buildCharacterIndex(index, currentFamilyIndex());
-          indexReady = true;
-        }
-        loadError = null;
-        notify();
-      };
-
-      /** 等待索引就绪并重建（项目刚打开时索引可能在途） */
-      const refresh = (): void => {
-        if (!project.current()) {
-          rebuild(null);
-          return;
-        }
-        loadError = null;
-        notify();
-        void parser
-          .ensureIndex()
-          .then((index) => rebuild(index))
-          .catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            loadError = msg;
-            indexReady = false;
-            ctx.log.error(`Condition matrix load failed: ${msg}`);
-            notify();
-          });
-      };
-
-      ctx.onDispose(ctx.bus.on('kojo.functionChanged', () => refresh()));
-      ctx.onDispose(ctx.bus.on('project.opened', () => refresh()));
-      ctx.onDispose(ctx.bus.on('project.closed', () => rebuild(null)));
-      // 条件抽取索引就绪后重绘（填色依赖 functionConditions；立即回调一次，无副作用）
-      // 代次 +1：抽取索引可能已更新，矩阵缓存须失效重算
-      ctx.onDispose(
-        conditionExtractor.subscribe(() => {
-          depsEpoch++;
-          notify();
-        }),
-      );
-
-      // 激活时已有现成索引（插件晚于项目打开加载）→ 立即构建
-      if (project.current()) refresh();
+      // ---- 外部状态源（索引重建 / 抽取代次 / 矩阵记忆化 / 事件订阅）：见 ./matrix-store.ts ----
+      const store = createMatrixStore(ctx, { parser, project, conditionExtractor, services });
 
       /* ------------------------------ 面板组件 ------------------------------ */
 
@@ -530,48 +248,13 @@ export function createUiConditionMatrixPlugin(): Plugin {
         // 首列（「状态 \ 时机」）列宽拖拽（HK-25 / HK-27·28）：与详情分隔线同范式（pointer 捕获 + 钳制）。
         // 把手遍布**整列**（表头角格 + 每一行的行头），故事件挂在 .cm-scroll 上**委派**：
         // 行组件不为拖拽持有 handler ⇒ `memo` 不被破坏；命中与否只看 target 落在不落在把手上。
-        /** 拖拽中把**整列**把手的边界线点亮（直接改 DOM 类，不走 React：理由见 onColDown 注释） */
-        const toggleHandles = (on: boolean): void => {
-          const handles = scrollRef.current?.querySelectorAll('.cm-corner-resize');
-          if (!handles) return;
-          for (let i = 0; i < handles.length; i++) {
-            if (on) handles[i]!.classList.add('cm-on');
-            else handles[i]!.classList.remove('cm-on');
-          }
-        };
-
-        /** 量当前自然列宽 + 表宽：相邻列（第二行子表头）左缘之差。整列按表宽归一 ⇒ 接管瞬间零漂移 */
-        const measureColSnap = (key: string): ColSnap | null => {
-          const box = scrollRef.current;
-          const table = box?.querySelector('.cm-table');
-          const subths = box?.querySelectorAll('.cm-subth');
-          if (!table || !subths || subths.length === 0) return null;
-          const tRect = table.getBoundingClientRect();
-          const widths: number[] = [];
-          let prevLeft = tRect.left;
-          for (let i = 0; i < subths.length; i++) {
-            const left = subths[i]!.getBoundingClientRect().left;
-            widths.push(left - prevLeft);
-            prevLeft = left;
-          }
-          widths.push(tRect.right - prevLeft);
-          // 相邻列左缘之差的和与表宽有亚像素差（折叠边框重叠）：整列同比缩放对齐，
-          // 使「快照列宽之和 === 表宽」严格成立 ⇒ 切定宽那一帧不会自己长胖 / 收窄。
-          const sum = widths.reduce((a, b) => a + b, 0);
-          if (sum > 0 && Math.abs(sum - tRect.width) > 0.5) {
-            const k = tRect.width / sum;
-            for (let i = 0; i < widths.length; i++) widths[i] = widths[i]! * k;
-          }
-          return { key, widths, tableW: tRect.width };
-        };
-
         const onColDown = (e: ColResizePointer): void => {
           if (!e.target?.closest?.('.cm-corner-resize')) return;
           e.preventDefault();
           // 快照列宽；仅在失效时重量（快照有效 = 已经在定宽模式里，再量会量到定宽本身）
           const cached = colSnapRef.current;
           if (!cached || cached.key !== matrixKey) {
-            const snap = measureColSnap(matrixKey);
+            const snap = measureColSnap(scrollRef.current, matrixKey);
             if (!snap) return; // 量不到就不接管：保持原行为，绝不半途而废
             colSnapRef.current = snap;
             setColSnap(snap);
@@ -586,7 +269,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           // 拖拽高亮：直接给**把手自己**加类，不走 React state。早先写的是 `.cm-scroll.col-resizing`
           // ——后代选择器 ⇒ 一次类切换就让整棵 6.5k 格子子树失效重算（CDP 实测那一记 ~450ms 长帧的
           // 头号嫌疑）；改挂到 37 枚把手上后失效面只剩 37 个元素，且拖拽起止不再触发 React 重渲。
-          toggleHandles(true);
+          toggleHandles(scrollRef.current, true);
           // 指针捕获：拖快了指头滑出命中区也不丢事件
           e.currentTarget.setPointerCapture(e.pointerId);
         };
@@ -610,7 +293,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           // 落库：commit 回 React state，由 `<colgroup>` 第 0 个 col 承接；定宽模式**保留**到换角色
           // （matrixKey 变）为止 ⇒ 松手不再触发「1 万节点样式失效 + 整表重排」那一下。
           if (lastColW.current !== null) setRowheadW(lastColW.current);
-          toggleHandles(false);
+          toggleHandles(scrollRef.current, false);
         };
 
         /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
@@ -628,9 +311,9 @@ export function createUiConditionMatrixPlugin(): Plugin {
 
         useEffect(() => {
           const cb = (): void => force((n) => n + 1);
-          listeners.add(cb);
+          store.listeners.add(cb);
           return () => {
-            listeners.delete(cb);
+            store.listeners.delete(cb);
           };
         }, []);
 
@@ -718,7 +401,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           }
           return file ? functionRangeAt(file.functions, cursorSight) : null;
           // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [cursorSight, depsEpoch]);
+        }, [cursorSight, store.depsEpoch]);
 
         /**
          * 光标高亮格的滚动跟随：只在**命中函数换人**时滚一次（nearest——已在视野内就不动）。
@@ -742,16 +425,16 @@ export function createUiConditionMatrixPlugin(): Plugin {
 
         // 失败态优先：显示原因 + 重试（不静默停在占位）。可见文案给**中文原因**，
         // 原始错误串留在悬停 title 里——技术信息不丢，但不是甩给作者的第一眼。
-        if (loadError) {
+        if (store.loadError) {
           return createElement(
             'div',
             { className: 'panel-condition-matrix' },
             createElement(
               'div',
-              { className: 'cm-error', title: loadError },
+              { className: 'cm-error', title: store.loadError },
               '条件矩阵加载失败：口上函数索引构建出错（悬停查看原始错误）',
             ),
-            createElement('button', { className: 'small', onClick: () => refresh() }, '重试'),
+            createElement('button', { className: 'small', onClick: () => store.refresh() }, '重试'),
           );
         }
 
@@ -764,7 +447,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           );
         }
 
-        const idx = characterIndex;
+        const idx = store.characterIndex;
         if (idx && !idx.hasFamilyIndex) {
           return createElement(
             'div',
@@ -773,7 +456,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           );
         }
 
-        if (!indexReady || !idx) {
+        if (!store.indexReady || !idx) {
           return createElement(
             'div',
             { className: 'panel-condition-matrix' },
@@ -841,20 +524,22 @@ export function createUiConditionMatrixPlugin(): Plugin {
         );
 
         // 指令承载面 → 每指令一列（按面分组、UI 可折叠）；非指令面整面成列。
-        const instructionFaces = new Set(currentFamilyIndex()?.instructionFaces ?? []);
+        const instructionFaces = new Set(services.currentFamilyIndex()?.instructionFaces ?? []);
         const columnOf = (fn: FaceFunction): ColumnDesc => {
           if (!instructionFaces.has(fn.face)) return { key: fn.face, instructionNo: null };
           const no = instructionNoOfSlot(fn.match.slot);
           if (no === null) return { key: fn.face, instructionNo: null };
-          const name = instructionTable()?.lookupByNo(no);
+          const name = services.instructionTable()?.lookupByNo(no);
           // 表里查不到名字时给**可读中文兜底**（「指令 310」，与「时机 指令 310：」同词序）：
           // 裸 `#310` 是查表记号，作者读到的是又一个要背的格式。
           return { key: `${fn.face}#${no}`, instructionNo: no, label: name ?? `指令 ${no}` };
         };
         // 记忆化：选择 / 过滤 / 折叠 / 无关刷新都不重算矩阵，仅「角色 × 依赖版本 × 适配器」变化才重建
-        const matrixKey = `${entry?.no}|${depsEpoch}|${current.adapterId}`;
+        const matrixKey = `${entry?.no}|${store.depsEpoch}|${current.adapterId}`;
         const matrix = entry
-          ? matrixMemo.resolve(matrixKey, () => buildMatrix(entry, depsOf, labelOf, faceLabels(), columnOf))
+          ? store.matrixMemo.resolve(matrixKey, () =>
+              buildMatrix(entry, services.depsOf, services.labelOf, services.faceLabels(), columnOf),
+            )
           : null;
 
         // 光标命中函数贡献的格子（行键 → 列键；高亮只落在确实由它贡献的格上，判据在 matrix-logic）。
@@ -886,79 +571,19 @@ export function createUiConditionMatrixPlugin(): Plugin {
           // 键盘导航上界：当前（过滤后）行数——跨窗口纵向移动时判「是否越过末行」
           rowCountRef.current = rows.length;
 
-          // 两行表头：第一行 = 大时机类（可点折叠，跨该组子列）；第二行 = 子列头。
-          // 折叠组仍渲染占位格（空白）以维持列对齐，只是不渲染其内容。
-          const head = createElement(
-            'thead',
-            { key: 'hd' },
-            createElement(
-              'tr',
-              null,
-              createElement(
-                'th',
-                { className: 'cm-corner', rowSpan: 2, ref: cornerRef },
-                '状态 \\ 时机',
-                // 首列列宽拖拽把手（HK-25）：右缘一枚竖条，静息隐形、悬停 / 拖拽中亮起；
-                // 角格 sticky ⇒ 纵向滚动时随表头常驻，横向滚动时首列钉在 left:0 不漂移。
-                // 事件在 .cm-scroll 上委派（见 onColDown），此处只放标记。
-                createElement('div', {
-                  className: 'cm-corner-resize',
-                  role: 'separator',
-                  'aria-orientation': 'vertical',
-                  'aria-label': '拖动调整状态列宽',
-                  title: '拖动调整状态列宽',
-                }),
-              ),
-              ...matrix.groups.map((group) => {
-                const folded = foldedFaces.has(group.face);
-                return createElement(
-                  'th',
-                  {
-                    key: group.face,
-                    className: 'cm-group-th' + (folded ? ' folded' : ''),
-                    colSpan: group.columns.length,
-                    title: group.face,
-                    onClick: () => toggleFace(group.face),
-                  },
-                  createElement('span', { className: 'cm-fold', 'aria-hidden': 'true' }, ic(folded ? 'chevron-right' : 'chevron-down', 12, folded ? '▸' : '▾')),
-                  group.label,
-                );
-              }),
-            ),
-            createElement(
-              'tr',
-              null,
-              ...matrix.groups.flatMap((group) => {
-                const folded = foldedFaces.has(group.face);
-                // 非指令的单列组：第二行留空（避免与第一行重复）。
-                // 折叠**不再清空标签**——清空会让该列固有宽度塌陷、逼 `table-layout:auto` 重排全表
-                // （实测折叠一次卡 ~1.8s + 整列闪白）；改由 `.cm-subth.folded{opacity:.3}` 弱化。
-                const blank = group.columns.length === 1 && group.columns[0]?.instructionNo === null;
-                return group.columns.map((col) =>
-                  createElement(
-                    'th',
-                    { key: col.key, className: 'cm-subth' + (folded ? ' folded' : ''), title: col.key },
-                    blank ? null : col.label,
-                  ),
-                );
-              }),
-            ),
-          );
+          const head = renderGridHead({
+            groups: matrix.groups,
+            foldedFaces,
+            onToggleFace: toggleFace,
+            ic,
+            cornerRef,
+          });
 
           const colCount = matrix.columns.length;
           // 首列列宽拖拽接管判据：快照的 matrixKey 须与当前一致（换角色 / 依赖版本即失效）且列数吻合。
           // 有效 ⇒ 表切 `table-layout: fixed` + `<colgroup>`（见 .cm-scroll.col-pinned）。
           const activeSnap =
             colSnap && colSnap.key === matrixKey && colSnap.widths.length === colCount + 1 ? colSnap : null;
-          /** 占位块：单个 td 跨全部列、钉死高度撑出滚动条（视口化路径专用） */
-          const spacer = (h: number, key: string): ReactNode =>
-            h > 0
-              ? createElement(
-                  'tr',
-                  { key, className: 'cm-spacer', 'aria-hidden': 'true', style: { height: h } },
-                  createElement('td', { colSpan: colCount + 1, style: { height: h } }),
-                )
-              : null;
 
           let body: ReactNode;
           let moreNotice: ReactNode = null;
@@ -969,7 +594,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
             body = createElement(
               'tbody',
               { key: 'bd' },
-              spacer(win.topPad, 'pad-top'),
+              spacerRow(win.topPad, 'pad-top', colCount + 1),
               ...rows.slice(win.start, win.end).map((row, i) =>
                 createElement(MatrixRowView, {
                   key: row.key,
@@ -982,7 +607,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   onCell,
                 }),
               ),
-              spacer(win.bottomPad, 'pad-bottom'),
+              spacerRow(win.bottomPad, 'pad-bottom', colCount + 1),
             );
           } else {
             const shown = rows.slice(0, ROW_RENDER_CAP);
@@ -1018,21 +643,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           // 未接管（无有效快照）时仍走 var：这是「换角色后仍保留拖过的宽度」的唯一通道。
           if (rowheadW !== null && activeSnap === null) gridStyle['--cm-rowhead-w'] = `${rowheadW}px`;
 
-          // 定宽接管：每列一条 `<col>`（第 0 条 = 首列，宽度跟 rowheadW；其余为快照的自然列宽）
-          const colgroup = activeSnap
-            ? createElement(
-                'colgroup',
-                { key: 'cg' },
-                createElement('col', {
-                  key: 'col-0',
-                  ref: colRef,
-                  style: { width: `${rowheadW ?? activeSnap.widths[0]}px` },
-                }),
-                ...activeSnap
-                  .widths.slice(1)
-                  .map((w, i) => createElement('col', { key: `col-${i + 1}`, style: { width: `${w}px` } })),
-              )
-            : null;
+          const colgroup = buildColgroup(activeSnap, rowheadW, colRef);
           // 接管期的**显式表宽**：没有它，定宽布局下浏览器会忽略 `<col>` 宽（首列拖了不动）。
           // 值 = 快照表宽 + (首列当前宽 - 首列原始宽) ⇒ 只动首列，其余列几何逐字不变。
           const colW0 = activeSnap ? rowheadW ?? activeSnap.widths[0]! : 0;
@@ -1061,70 +672,15 @@ export function createUiConditionMatrixPlugin(): Plugin {
           );
         }
 
-        // ---- 详情 ----
-        // 拖过分隔线后按拖拽高度固定（inline height+maxHeight 覆盖样式默认的 max-height），未拖过走样式默认
-        const detailProps = {
-          className: 'cm-detail',
-          ref: detailRef,
-          style: detailH === null ? undefined : { height: detailH, maxHeight: detailH },
-        };
-        let detail: ReactNode;
-        const selRow = selected && matrix ? matrix.rows.find((r) => r.key === selected.rowKey) ?? null : null;
-        const selCell = selRow && selected ? selRow.cells[selected.columnKey] : undefined;
-        /** 选中列的显示名（列标签；找不到则回退面标签） */
-        const selColumn = selected && matrix ? matrix.columns.find((c) => c.key === selected.columnKey) ?? null : null;
-        const selColumnLabel = selColumn ? selColumn.label : selected ? faceLabel(selected.columnKey, faceLabels()) : '';
-        if (selRow && selCell && selCell.present) {
-          const fns = orderByLine(selCell.functions);
-          detail = createElement(
-            'div',
-            detailProps,
-            createElement(
-              'div',
-              { className: 'cm-detail-head' },
-              createElement('span', { className: 'cm-detail-key' }, selRow.label ?? selRow.key),
-              createElement(
-                'span',
-                { className: 'dim' },
-                ` · ${selColumnLabel} · ${selCell.count} 处响应`,
-              ),
-            ),
-            createElement(
-              'ul',
-              { className: 'cm-detail-list' },
-              ...fns.map((f, i) =>
-                createElement(
-                  'li',
-                  { key: `${f.filePath}:${f.startLine}:${i}` },
-                  createElement(
-                    'button',
-                    {
-                      className: 'cm-detail-btn',
-                      title: `${f.filePath}:${f.startLine}`,
-                      onClick: () =>
-                        ctx.bus.emit('editor.revealLocation', {
-                          filePath: f.filePath,
-                          line: f.startLine,
-                          source: f.name,
-                        }),
-                    },
-                    createElement('span', { className: 'cm-detail-name' }, f.name),
-                    f.comparisons.length > 0
-                      ? createElement('span', { className: 'cm-detail-comps dim' }, f.comparisons.join('、'))
-                      : null,
-                    createElement('span', { className: 'cm-detail-loc dim' }, `${shortPath(f.filePath)}:${f.startLine}`),
-                  ),
-                ),
-              ),
-            ),
-          );
-        } else {
-          detail = createElement(
-            'div',
-            detailProps,
-            createElement('div', { className: 'cm-empty dim' }, '点击一个已填色的格子，查看其对应的口上函数'),
-          );
-        }
+        // ---- 详情（选中格 → 详情区；呈现件见 ./detail-pane.ts）----
+        const detail = renderDetail({
+          matrix,
+          selected,
+          faceLabels: () => services.faceLabels(),
+          detailH,
+          detailRef,
+          emitReveal: (target) => ctx.bus.emit('editor.revealLocation', target),
+        });
 
         // 网格区 ↔ 详情区的拖拽分隔线（HK-14）：只在网格有内容时显形（无内容可拉伸时克制不出），
         // 静息一条细线，悬停 / 拖拽中亮起（与壳层 .resizer / .kp-splitter 同族）；键盘不接。

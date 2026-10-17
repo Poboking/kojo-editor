@@ -2,7 +2,7 @@
  * 状态回放面板 · 谓词列表（PredicateList）的窗口化 DOM 行数上界证据（2026-10-16 窗口批）。
  *
  * 为什么住 app 侧：react-dom（SSR）只有 app 包依赖；断言对象是 ui-state-replay 插件的
- * `PredicateList`（相对导入其 src——与 vitest alias 同源）。
+ * `PredicateList`（相对导入其 `src/preview`——与 vitest alias 同源）。
  *
  * 口径（照 face-list-render.test.ts）：初开 ≤ PRED_WINDOW_INITIAL / 触底每步 +STEP /
  * 窗口 ≥ total 哨兵消失（旧实现硬截 300 + 「其余 N 条未显示」——那 N 条不可达）。
@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { PredicateReplay } from '@kojo/plugin-api';
-import { PredicateList } from '../../plugins/ui-state-replay/src/index';
+import { PredicateList } from '../../plugins/ui-state-replay/src/preview';
 import { PRED_WINDOW_INITIAL, PRED_WINDOW_STEP } from '../../plugins/ui-state-replay/src/panel-logic';
 
 function pred(line: number): PredicateReplay {
