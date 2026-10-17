@@ -118,3 +118,57 @@ describe('model 池 · 已保存基线', () => {
     expect(h.pool.baseline('ghost.erb')).toBeUndefined();
   });
 });
+
+/**
+ * ZH-F3：三方合并要有 base **文本**（版本号判得了"有没有变"，判不了"变在哪一行"）。
+ * 生命周期必须与记录一致——关掉的 tab 跟着释放，不许在池外留副本。
+ */
+describe('model 池 · 磁盘文本快照（三方合并的 base）', () => {
+  it('读盘首开：base = 盘上那份文本', async () => {
+    const h = harness({ 'a.erb': '盘上原文' });
+    await h.pool.acquire({} as never, 'a.erb');
+    expect(h.pool.savedBase('a.erb')).toBe('盘上原文');
+  });
+
+  it('恢复件首开：盘上真相未知 ⇒ base 留空（调用方据此退回两方语义）', async () => {
+    const h = harness({ 'a.erb': '盘上原文' });
+    const e = await h.pool.acquire({} as never, 'a.erb', { text: '恢复的未保存稿' });
+    expect(e.fromRecovery).toBe(true);
+    expect(h.pool.savedBase('a.erb')).toBeUndefined();
+  });
+
+  it('保存成功推进 base；最后一份引用释放后与记录一起清掉', async () => {
+    const h = harness({ 'a.erb': 'v1' });
+    await h.pool.acquire({} as never, 'a.erb');
+    await h.pool.acquire({} as never, 'a.erb');
+    h.pool.setSavedBase('a.erb', 'v2');
+    expect(h.pool.savedBase('a.erb')).toBe('v2');
+    expect(h.pool.release('a.erb')).toBe(1);
+    expect(h.pool.savedBase('a.erb')).toBe('v2');
+    expect(h.pool.release('a.erb')).toBe(0);
+    expect(h.pool.savedBase('a.erb')).toBeUndefined();
+  });
+
+  it('关标签后重开：base 随新一次读盘重建（不拿陈年快照做三方）', async () => {
+    const files = { 'a.erb': 'v1' };
+    const h = harness(files);
+    await h.pool.acquire({} as never, 'a.erb');
+    h.pool.release('a.erb');
+    files['a.erb'] = 'v2';
+    await h.pool.acquire({} as never, 'a.erb');
+    expect(h.pool.savedBase('a.erb')).toBe('v2');
+  });
+
+  it('并发首开只读一次盘：base 落定一次、两方共享同一条记录', async () => {
+    const h = harness({ 'a.erb': 'x' });
+    await Promise.all([h.pool.acquire({} as never, 'a.erb'), h.pool.acquire({} as never, 'a.erb')]);
+    expect(h.pool.savedBase('a.erb')).toBe('x');
+    expect(h.deps.readText).toHaveBeenCalledTimes(1);
+  });
+
+  it('setSavedBase 对不在池里的路径 no-op（不复活已回收的记录，也就不会泄漏）', () => {
+    const h = harness({});
+    h.pool.setSavedBase('ghost.erb', 'x');
+    expect(h.pool.savedBase('ghost.erb')).toBeUndefined();
+  });
+});

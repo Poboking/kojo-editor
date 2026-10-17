@@ -1544,6 +1544,7 @@ export function EditorPane({
   const markSaved = useCallback(
     (path: string, entry: ModelEntry) => {
       editorModelPool.setBaseline(path, entry.model.getAlternativeVersionId());
+      editorModelPool.setSavedBase(path, entry.model.getValue());
       onDirtyChangeRef.current?.(path, false);
       if (filePathRef.current === path) setDirty(false);
       // 落盘成功 = 外部冲突已被用户表达处置、连败计数销账（A6 护栏与"只报一次"的复位点）
@@ -1764,7 +1765,8 @@ export function EditorPane({
       }
       // 读盘期间 model 可能已被关闭/替换（标签关闭竞态）→ 放弃
       if (entriesRef.current.get(path) !== entry) return;
-      const decision = decideExternalChange(entry.model.getValue(), text, computeDirty(path));
+      const memoryText = entry.model.getValue();
+      const decision = decideExternalChange(memoryText, text, computeDirty(path), editorModelPool.savedBase(path));
       if (decision === 'noop') {
         // 点击重跑时盘已等于 model（如用户手工撤销回同内容）：冲突即已了结，销账放行自动保存
         if (forced) externalConflictRef.current.delete(path);
@@ -1788,6 +1790,7 @@ export function EditorPane({
         }
         const version = live.model.getAlternativeVersionId();
         editorModelPool.setBaseline(path, version);
+        editorModelPool.setSavedBase(path, text);
         onDirtyChangeRef.current?.(path, false);
         if (isActive && ed && vs) ed.restoreViewState(vs);
         if (refreshMarkersRef.current) refreshMarkersRef.current(live.model, path);
@@ -1804,6 +1807,21 @@ export function EditorPane({
         applyReload();
         return;
       }
+      if (typeof decision === 'object' && decision.kind === 'merge') {
+        const live = entriesRef.current.get(path);
+        // 合并窗口内又敲了字 ⇒ 这次不合，等下一个 file.changed（别拿过期 memoryText 覆盖新输入）
+        if (!live || live.model.isDisposed() || live.model.getValue() !== memoryText) return;
+        externalConflictRef.current.delete(path);
+        editorModelPool.setSavedBase(path, text);
+        live.model.setValue(decision.text); // 版本号变了 ⇒ 监听如实上报"仍未保存"
+        if (filePathRef.current === path) setStatus('已合并磁盘改动与你的未保存改动（还没写入磁盘）');
+        notify({
+          kind: 'info',
+          message: `已把磁盘上对「${path}」的修改和你的未保存修改合并到编辑器里，两边都保住了——内容还没写入磁盘，看过再保存。`,
+        });
+        return;
+      }
+      const clashCount = typeof decision === 'object' ? decision.conflicts.length : 0;
       // conflict：外部改动未决期间自动保存必须让路（A6 护栏；处置点 = 重新加载 / 保存成功 / 关标签）
       // 防旧文本覆盖（数据丢失）：action **不闭包本次读到的 text**——点击时经 ref 置一次性强制
       // 意图并重跑 reloadFromDisk 现读盘；点击前若又有第二次外部写入，应用的也是那一刻的真相
@@ -1814,7 +1832,10 @@ export function EditorPane({
       if (!conflictPending) {
         notify({
           kind: 'error',
-          message: `「${path}」已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容。`,
+          message:
+            clashCount > 0
+              ? `磁盘上对「${path}」的修改和你的未保存修改有 ${clashCount} 处撞到了一起——软件没有替你取舍，编辑器里仍是你的内容；现在保存会覆盖磁盘上的新内容。`
+              : `「${path}」已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容。`,
           action: {
             label: '重新加载（放弃我的修改）',
             run: () => {

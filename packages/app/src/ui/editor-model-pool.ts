@@ -8,7 +8,9 @@
  * model（一处编辑、两栏同显——本来就是同一份内存）。
  *
  * 「已保存基线」版本号（BUG-4 的 O(1) 脏判定）也随池走：它属于**文件**而不
- * 属于某一组——A 组保存之后 B 组必须立刻显示干净，反之亦然。
+ * 属于某一组——A 组保存之后 B 组必须立刻显示干净，反之亦然。同一份生命周期上
+ * 还挂一份**磁盘文本快照**（`savedBase`，ZH-F3 三方合并的 base）：版本号判得了
+ * "有没有变"，判不了"变在哪一行"，所以做三方必须另存文本。
  *
  * 工厂形态（`createEditorModelPool`）把 monaco / 内核 io 全部注入，纯逻辑
  * 闭环可单测；`editorModelPool` 是 EditorPane 用的真身单例。
@@ -48,9 +50,16 @@ interface PoolRecord {
    * 续体里挂上，提前拆记录会把那份 model 变成"已 dispose 却仍被返回"的孤儿。
    */
   pending: number;
-  loading?: Promise<PooledModelEntry>;
+  loading?: Promise<{ entry: PooledModelEntry; diskText?: string }>;
   /** 已保存基线版本号（BUG-4）；随文件存续，最后一份引用释放时一并清掉 */
   baseline?: number;
+  /**
+   * 最后一次与磁盘对齐的**文本**快照（ZH-F3 三方合并的 base）。
+   * 版本号那份（`baseline`）只能判脏，判不了"改在哪"，所以这里另存文本；
+   * 生命周期与 `baseline` 完全一致（随记录回收一起释放，不留悬空副本）。
+   * 缺省 = 没有 base（恢复件首开：盘上真相此刻未知）⇒ 调用方必须退回两方语义。
+   */
+  savedBase?: string;
 }
 
 export interface EditorModelPool {
@@ -60,6 +69,10 @@ export interface EditorModelPool {
   refCount: (path: string) => number;
   baseline: (path: string) => number | undefined;
   setBaseline: (path: string, version: number) => void;
+  /** 三方合并用的磁盘文本快照；undefined = 无 base（不许拿空串冒充） */
+  savedBase: (path: string) => string | undefined;
+  /** 保存成功 / 自动合并落地后推进 base；路径不在池里则 no-op（同 `setBaseline` 口径） */
+  setSavedBase: (path: string, text: string) => void;
 }
 
 export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
@@ -105,7 +118,11 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
             ? { text: opts.text, encoding: opts.encoding ?? 'utf-8', eol: opts.eol ?? 'LF' }
             : await deps.readText(kernel, path);
           const model = deps.createModel(path, tf.text);
-          return { model, encoding: tf.encoding, eol: tf.eol.toUpperCase(), fromRecovery } satisfies PooledModelEntry;
+          // 读盘得来的那份文本就是"与磁盘对齐的 base"；恢复件不是（它是未保存的初稿）
+          return {
+            entry: { model, encoding: tf.encoding, eol: tf.eol.toUpperCase(), fromRecovery } satisfies PooledModelEntry,
+            diskText: fromRecovery ? undefined : tf.text,
+          };
         })();
       }
       const loading = rec.loading;
@@ -114,7 +131,7 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
       // 在**同一个续体**内完成，先于任何调用方续体（cancelled ⇒ release）执行 ⇒
       // release 永远拆不掉"还有等待者正在 attach"的记录。
       const settled = await loading.then(
-        (entry) => ({ ok: true as const, entry }),
+        (value) => ({ ok: true as const, value }),
         (err: unknown) => ({ ok: false as const, err }),
       );
       const cur = pool.get(path);
@@ -128,7 +145,10 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
       // 等待期间 pending 计数钉住记录不被回收 ⇒ cur 必在；共担同一 loading 的
       // 等待者写入的是同一个 entry（幂等）。
       const target = cur ?? recordOf(path);
-      if (!target.entry) target.entry = settled.entry;
+      if (!target.entry) target.entry = settled.value.entry;
+      if (target.savedBase === undefined && settled.value.diskText !== undefined) {
+        target.savedBase = settled.value.diskText;
+      }
       target.refs += 1;
       return target.entry;
     },
@@ -160,6 +180,15 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
     setBaseline(path, version) {
       const rec = pool.get(path);
       if (rec) rec.baseline = version;
+    },
+
+    savedBase(path) {
+      return pool.get(path)?.savedBase;
+    },
+
+    setSavedBase(path, text) {
+      const rec = pool.get(path);
+      if (rec) rec.savedBase = text;
     },
   };
 }
