@@ -21,6 +21,7 @@
 
 import type {
   CacheExpect,
+  ComputePool,
   ConventionCheckContext,
   ConventionIssue,
   ConventionLinterService,
@@ -64,22 +65,72 @@ interface PartitionPlan {
   unitsTotal: number;
 }
 
-/** 限并发执行（结果写进调用方的 Map；装配仍按 walk 顺序取 ⇒ 输出与完成顺序无关） */
+/**
+ * 让路片预算（ZH-F4）：一轮校验连续占住主线程这么久就交还一次事件循环。
+ *
+ * 为什么必须是 **macrotask**：`mapLimit` 里每个 `await` 拿到的多是**已 resolve** 的 promise
+ * （本轮正文已被批量预取），而微任务链永不交还事件循环 ⇒ 改造前实测（600 棵）整轮 751 ms
+ * **一次探针都跑不到**，最长一次占用 = 整轮时长——作者那边就是"界面冻住、按键全排队"。
+ *
+ * 判据取**时长**而非"每 N 个文件"：文件大小与机器速度都在几百倍范围内漂，数文件等于拿一个
+ * 假设去定卡顿。装了内核计算池（生产装配一律装）时这个数由池子执行，缺池才用本地兜底。
+ */
+const LINT_SLICE_BUDGET_MS = 8;
+
+/** 交还事件循环一次（`setTimeout` 而非微任务：微任务不产生能让输入事件插进来的空隙） */
+const yieldToEventLoop = (): Promise<void> =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+/**
+ * 限并发执行（结果写进调用方的 Map；装配仍按 walk 顺序取 ⇒ 输出与完成顺序无关）。
+ * 每个 worker 按 `LINT_SLICE_BUDGET_MS` 让路；只改调度节奏，不改判定与产出顺序。
+ */
 async function mapLimit<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   if (items.length === 0) return;
   let cursor = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    let sliceStart = Date.now();
     for (;;) {
       const i = cursor++;
       if (i >= items.length) return;
       await fn(items[i]!);
+      if (Date.now() - sliceStart >= LINT_SLICE_BUDGET_MS) {
+        await yieldToEventLoop();
+        sliceStart = Date.now();
+      }
     }
   });
   await Promise.all(workers);
 }
 
+/** 逐文件循环的调度（生产 = 内核计算池的 `runSliced`；缺池时用上面的本地兜底） */
+function makeFileRunner(compute?: ComputePool): (items: readonly ErbFile[], fn: (file: ErbFile) => Promise<void>) => Promise<void> {
+  if (!compute) return (items, fn) => mapLimit(items, LINT_FILE_CONCURRENCY, fn);
+  return (items, fn) =>
+    compute
+      .runSliced(items, {
+        concurrency: LINT_FILE_CONCURRENCY,
+        sliceMs: LINT_SLICE_BUDGET_MS,
+        priority: 'background',
+        label: 'convention.lint',
+      }, async (file) => {
+        await fn(file);
+      })
+      .then(() => undefined);
+}
+
 export interface ConventionEngineDeps {
   log: Logger;
+  /**
+   * 内核计算池（服务键 `kernel.compute`；ZH-F4，additive 可选）。
+   *
+   * 给出时逐文件/分区循环由池子按 `sliceMs` 分片并**在片间让出主线程**，同时吃
+   * `priority: 'background'` 的仲裁（波浪线 / 补全这类交互档在跑时校验主动让路）。
+   * 缺省（纯单测 / 无内核装配）⇒ 退化为本地限并发循环，让路口径同一条。
+   */
+  compute?: ComputePool;
   /** 当前打开的项目（未打开时 null） */
   getProject(): GameProject | null;
   /** 当前已构建的索引（未就绪时 null） */
@@ -185,7 +236,15 @@ export class ConventionEngine implements ConventionLinterService {
    */
   private hotCache: { expectFingerprint: string; cache: LintCache } | null = null;
 
-  constructor(private readonly deps: ConventionEngineDeps) {}
+  constructor(private readonly deps: ConventionEngineDeps) {
+    this.runFiles = makeFileRunner(deps.compute);
+  }
+
+  /** 逐文件循环的调度（池子或本地兜底，构造时定一次；见 `ConventionEngineDeps.compute`） */
+  private readonly runFiles: (
+    items: readonly ErbFile[],
+    fn: (file: ErbFile) => Promise<void>,
+  ) => Promise<void>;
 
   rules(): readonly ConventionRule[] {
     return [...this.builtinRules, ...this.deps.getAdapterRules()];
@@ -521,7 +580,7 @@ export class ConventionEngine implements ConventionLinterService {
       const fresh = new Map<string, LintFileBucket>();
       const stale = staleByRule.get(rule.id)!;
       let ruleFailed = false;
-      await mapLimit(stale, LINT_FILE_CONCURRENCY, async (file) => {
+      await this.runFiles(stale, async (file) => {
         try {
           const produced = (await rule.checkFile!(checkCtx, file)) ?? [];
           fresh.set(file.path, { mtimeMs: index.fileMtimes?.get(file.path) ?? null, issues: produced });
@@ -714,7 +773,7 @@ export class ConventionEngine implements ConventionLinterService {
     const partition = rule.partition!;
     const fresh = new Map<string, unknown>();
     let failedUnits = 0;
-    await mapLimit(stale, LINT_FILE_CONCURRENCY, async (file) => {
+    await this.runFiles(stale, async (file) => {
       const mtime = ctx.index.fileMtimes?.get(file.path) ?? null;
       try {
         const produced = await partition.fileUnit(ctx, file);

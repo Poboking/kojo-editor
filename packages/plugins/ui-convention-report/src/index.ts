@@ -15,6 +15,16 @@ import { diagnosticDisplay, KernelServices, WellKnownServices } from '@kojo/plug
 import { charaDirOwners, type OwnershipDeps } from './ownership';
 import { buildGroupView, GROUP_MODE_LABEL, GROUP_MODES, type GroupMode } from './view';
 import { ISSUE_WINDOW_INITIAL, issueWindowSize, nextIssueWindow } from './panel-logic';
+import {
+  LINT_PROJECT_COMMAND_CATEGORY,
+  LINT_PROJECT_COMMAND_ID,
+  LINT_PROJECT_COMMAND_TITLE,
+  createLintRunStore,
+  driveLintRun,
+  lintRunBrief,
+  lintRunText,
+  type LintRunState,
+} from './lint-run';
 
 /**
  * 约定校验结果面板（`ui.panel` 槽贡献）。
@@ -194,9 +204,41 @@ export function createUiConventionReportPlugin(): Plugin {
         dirOwners: charaDirOwners(current?.charaIndex ?? null),
       });
 
+      /**
+       * 一次运行的读数仓（命令面板那条命令与面板「重新校验」按钮**共用同一份**）。
+       * 覆盖文件数取引擎真正走过的那份清单 = 索引的 `files`，不在这里另数一遍目录。
+       */
+      const runStore = createLintRunStore();
+      const coveredFileCount = (): number => parser.currentIndex()?.files.size ?? 0;
+      const runProjectLint = (): Promise<void> =>
+        driveLintRun({ linter, store: runStore, coveredFiles: coveredFileCount });
+      // 自动那一路（存盘后引擎自己重跑）也得把读数刷新：只认按钮/命令的话，
+      // 面板会一直挂着"上一次手动校验"的数字。
+      ctx.onDispose(
+        linter.subscribe((r) => {
+          if (r) runStore.finish(r, coveredFileCount());
+        }),
+      );
+
+      /** 校验中的那一档要有活读数：只有running时才挂表（跑完就停，不留常驻定时器） */
+      function useLintRun(): { state: LintRunState; now: number } {
+        const [state, setState] = useState<LintRunState>(() => runStore.get());
+        const [now, setNow] = useState(() => Date.now());
+        useEffect(() => runStore.subscribe(setState), []);
+        useEffect(() => {
+          if (state.phase !== 'running') return;
+          setNow(Date.now());
+          const t = setInterval(() => setNow(Date.now()), 400);
+          return () => {
+            clearInterval(t);
+          };
+        }, [state.phase]);
+        return { state, now };
+      }
+
       function ConventionPanel(props: UIPanelProps): unknown {
         const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
-        const [running, setRunning] = useState(false);
+        const run = useLintRun();
         const [expanded, setExpanded] = useState<Set<string>>(new Set());
         /** 各组已扩张的渲染窗口（行数；缺省 = ISSUE_WINDOW_INITIAL——旧实现每组硬截 300 条） */
         const [groupWindows, setGroupWindows] = useState<Map<string, number>>(new Map());
@@ -242,10 +284,11 @@ export function createUiConventionReportPlugin(): Plugin {
           });
         }, [mode, report, rulesById]);
 
+        const running = run.state.phase === 'running';
+
+        /** 手动重跑 = 强制真算；与命令面板那条命令同一条通道（`driveLintRun`） */
         const rerun = (): void => {
-          setRunning(true);
-          // 手动重跑 = 强制真算（结果快照只服务于开项目级联的自动那一路）
-          void linter.run({ force: true }).finally(() => setRunning(false));
+          void runProjectLint();
         };
 
         const toggle = (setter: typeof setExpanded, id: string): void => {
@@ -267,11 +310,21 @@ export function createUiConventionReportPlugin(): Plugin {
           });
         };
 
+        /**
+         * 本轮读数：查了多少个文件 / 用了多久 / 几处问题（跑坏时就是那句原因）。
+         * 命令面板那条命令没有打开任何面板，这行 + 状态栏那枚就是它的回响。
+         */
+        const runLine =
+          run.state.phase === 'idle'
+            ? null
+            : createElement('div', { className: 'conv-runline dim' }, lintRunText(run.state, run.now));
+
         if (!report) {
           return createElement(
             'div',
             { className: 'panel-convention-report' },
             createElement('div', { className: 'conv-empty dim' }, '尚未运行（打开项目后自动校验）'),
+            runLine,
           );
         }
 
@@ -281,7 +334,7 @@ export function createUiConventionReportPlugin(): Plugin {
           createElement('span', { className: 'conv-count', style: { color: SEVERITY_COLOR.error } }, `错误 ${report.counts.error}`),
           createElement('span', { className: 'conv-count', style: { color: SEVERITY_COLOR.warning } }, `警告 ${report.counts.warning}`),
           createElement('span', { className: 'conv-count', style: { color: SEVERITY_COLOR.info } }, `提示 ${report.counts.info}`),
-          createElement('span', { className: 'dim conv-meta' }, `${report.ruleCount} 规则 · ${report.durationMs}ms`),
+          createElement('span', { className: 'dim conv-meta' }, `${report.ruleCount} 条规则`),
         );
 
         const toolbar = createElement(
@@ -378,6 +431,7 @@ export function createUiConventionReportPlugin(): Plugin {
           'div',
           { className: 'panel-convention-report' },
           header,
+          runLine,
           toolbar,
           summary,
           failed,
@@ -414,11 +468,30 @@ export function createUiConventionReportPlugin(): Plugin {
       function StatusCounts(props: UIPanelProps): unknown {
         const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
         useEffect(() => linter.subscribe(setReport), []);
+        /** 在途/失败的这一句只在这里出现一次：状态栏常驻，面板可能压根没打开 */
+        const run = useLintRun();
+        const brief = lintRunBrief(run.state, run.now);
+        const title = run.state.phase === 'failed' ? `这轮校验没跑完：${run.state.errorText}` : STATUSBAR_TITLE;
 
         /** 图标桥：同 ConventionPanel（状态栏小件亦经 props.renderIcon 注入，缺省回退字形） */
         const ic = (name: string, size: number, fallback: string): ReactNode =>
           (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
-        if (!report) return createElement('span', { className: 'dim', title: STATUSBAR_TITLE }, '校验 —');
+        const briefNode = brief
+          ? createElement(
+              'span',
+              {
+                className: 'sb-diag-item',
+                ...(run.state.phase === 'failed' ? { style: { color: SEVERITY_COLOR.error } } : {}),
+              },
+              brief,
+            )
+          : null;
+        if (!report)
+          return createElement(
+            'span',
+            { className: 'dim', title },
+            briefNode ?? '校验 —',
+          );
         const c = report.counts;
         const item = (icon: string, glyph: string, n: number, critical: boolean): ReactNode =>
           createElement(
@@ -432,7 +505,8 @@ export function createUiConventionReportPlugin(): Plugin {
           );
         return createElement(
           'span',
-          { className: 'sb-diag', title: STATUSBAR_TITLE },
+          { className: 'sb-diag', title },
+          briefNode,
           item('close', '✕', c.error, true),
           item('warning', '⚠', c.warning, false),
           item('info', 'ℹ', c.info, false),
@@ -454,6 +528,21 @@ export function createUiConventionReportPlugin(): Plugin {
         // UI 重设计批 P1：诊断列表迁底部区（Problems 形态，定稿 §四/§6.3）
         location: 'bottom',
         component: ConventionPanel,
+      });
+
+      /* --------------------------- 全项目校验的命令面板入口 --------------------------- */
+
+      /**
+       * 判据**不在这里**：这条命令只做"叫引擎跑一轮 + 把读数送到既有面上"，
+       * 遍历与转译全在 `convention-linter`（`driveLintRun` → `linter.run`，与面板按钮同一条通道）。
+       * 刻意不写 `when`：没开项目时也按得下去，读数行会如实说"查了 0 个文件"——
+       * 灰在面板里不说话才是本仓禁止的形态。
+       */
+      ctx.slots.register('editor.command', {
+        id: LINT_PROJECT_COMMAND_ID,
+        title: LINT_PROJECT_COMMAND_TITLE,
+        category: LINT_PROJECT_COMMAND_CATEGORY,
+        run: () => runProjectLint(),
       });
     },
   };

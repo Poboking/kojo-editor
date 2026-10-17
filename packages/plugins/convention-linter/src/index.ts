@@ -13,6 +13,7 @@
 
 import type {
   CacheExpect,
+  ComputePool,
   ConventionLinterService,
   ConventionRule,
   ErbParserService,
@@ -22,7 +23,7 @@ import type {
   ProjectService,
   SlotRegistry,
 } from '@kojo/plugin-api';
-import { WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { ConventionEngine } from './engine';
 import {
   buildConventionIssueView,
@@ -57,6 +58,9 @@ export function createConventionLinterPlugin(): Plugin {
       const io = ctx.inject<FileIO>(IO);
       const project = ctx.inject<ProjectService>(PROJECT);
       const slots = ctx.inject<SlotRegistry>(SLOTS);
+      // 计算池是"怎么调度"而不是"要不要跑"：内核恒供（`kernel.ts` 起手就 provide），
+      // 最小假上下文里没有 ⇒ 引擎自带的本地限并发兜底照常判对，只是少一档仲裁。
+      const compute = ctx.tryInject<ComputePool>(KernelServices.Compute);
       const parser = ctx.inject<ErbParserService>(WellKnownServices.ErbParser);
       /** 本插件命名空间的存储域：校验结果快照的落点（`{appData}/store/convention-linter/`） */
       const storage = ctx.storage;
@@ -181,6 +185,9 @@ export function createConventionLinterPlugin(): Plugin {
 
       const engine = new ConventionEngine({
         log: ctx.log,
+        // 逐文件/分区循环交给内核计算池分片让路（ZH-F4）：一轮全项目校验是 background 档，
+        // 不许连续占住主线程把打字与波浪线挤到几百毫秒之后
+        compute,
         getProject: () => project.current(),
         getIndex: () => parser.currentIndex(),
         readFile: async (path: string) => (await io.readText(path)).text,
