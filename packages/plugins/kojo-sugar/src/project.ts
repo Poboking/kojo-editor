@@ -1964,7 +1964,16 @@ function segmentsToSugar(family: string, segs: string[], dict: DictionaryLookup)
   if (CHAR_NUMBERED_FAMILIES.has(f)) {
     if (segs.length !== 1) return undefined;
     const no = segs[0]!;
-    if (ROLE_NO_RE.test(no)) return `角色${no}的名字`;
+    if (ROLE_NO_RE.test(no)) {
+      // D2 全表闸收口（ZH-N 扩面后新增）：该族查得到中文别名时走别名形 `{真名：5}`，
+      // 不再落通用形 `{角色5的名字}`——通用形分不出 NAME 与 CALLNAME（原全是
+      // `角色N的名字`，真名/称呼同形），而别名表是本系全中文化的单一真源；
+      // 查不到别名的族维持原通用形（不猜）。与 `reverseFamilyAliases` 产物同形
+      // （`${alias}：${no}`，全角冒号对齐写侧糖面）。
+      const alias = dict.familyAliasReverse?.(f);
+      if (typeof alias === 'string' && alias.length > 0) return `${alias}：${no}`;
+      return `角色${no}的名字`;
+    }
     const possessive = SCOPE_ALIAS.get(no.toUpperCase());
     return possessive === '她的' ? '她' : possessive === '你的' ? '你' : undefined;
   }
