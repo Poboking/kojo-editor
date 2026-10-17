@@ -1,15 +1,17 @@
 //! 全文检索原语的判据（同目录模块：`lib.rs` 的 `#[cfg(test)] mod search_tests;` 挂载）。
 //!
-//! 覆盖：三个开关的合成、编码探测口径、命中行切分（行号 / 列号 / 预览窗口偏移）、
-//! 跳过的三类计数、上限截断与取消、并行输出与单线程逐字一致。
+//! 覆盖：三个开关的合成、解码判据（共享常量表的 Rust 解释者，与 TS 内核逐字对拍）、
+//! 命中行切分（行号 / 列号 / 预览窗口偏移）、跳过的三类计数、上限截断与取消、
+//! 并行输出与单线程逐字一致。
 //!
 //! 整段不依赖 Tauri 运行时——`run_search` 的进度回调是注入的，所以"并行检索"这条路
 //! 本身也在单测覆盖之内（真语料基准见文件末尾的 `#[ignore]` 用例）。
 
 use crate::{
-    build_matcher, byte_prefilter, decode_for_search, looks_binary, preview_window, run_search,
-    scan_text, utf16_len, SearchFileDto, SearchMatchDto, SearchOptionsDto, SearchProgressPayload,
-    SearchRequestDto, SearchResultDto, ELLIPSIS_UNIT, SEARCH_PER_FILE_CAP,
+    build_matcher, byte_prefilter, decode_policy, decode_with_policy, is_utf16_bom_hit, looks_binary,
+    preview_window, run_search, scan_text, utf16_len, SearchFileDto, SearchMatchDto,
+    SearchOptionsDto, SearchProgressPayload, SearchRequestDto, SearchResultDto, ELLIPSIS_UNIT,
+    SEARCH_PER_FILE_CAP,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -100,20 +102,80 @@ fn byte_prefilter_only_holds_for_ascii_case_sensitive_literal() {
     assert!(byte_prefilter("", false, true).is_none());
 }
 
-/* ---------------------------- 编码口径 ---------------------------- */
+/* ---------------------------- 解码判据（共享常量表） ---------------------------- */
 
+/// 内嵌表本体可校验：解析 + 校验通过，且形状与 TS 侧 `DECODE_PROBE_POLICY` 约定一致
+/// （TS 侧对拍钉在 `packages/kernel/tests/encoding-decode-policy.test.ts`——两份测试读的是
+/// **同一个 JSON 文件**，表漂一个字节必有一边红）。
 #[test]
-fn decode_follows_probe_encoding_order() {
-    // utf-8-bom：BOM 必须剥掉（否则首个命中行的预览带一个不可见字符）
-    assert_eq!(decode_for_search(&[0xEF, 0xBB, 0xBF, b'a', b'b']), "ab");
-    // 合法 utf-8 直通
-    assert_eq!(decode_for_search("口上".as_bytes()), "口上");
-    // shift_jis（非法 utf-8 ⇒ 兜底那一支）
-    let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("口上");
-    assert_eq!(decode_for_search(&sjis), "口上");
-    // utf-16 两个端序（只认 BOM 那一支，与内核 probeEncoding 一致）
-    assert_eq!(decode_for_search(&[0xFF, 0xFE, b'a', 0x00]), "a");
-    assert_eq!(decode_for_search(&[0xFE, 0xFF, 0x00, b'a']), "a");
+fn embedded_policy_table_is_the_shared_one() {
+    let p = decode_policy().expect("内嵌策略表应能解析并通过校验");
+    assert_eq!(p.version, 1);
+    assert_eq!(p.fallback_encoding, "shift_jis");
+    assert_eq!(
+        p.bom_rules
+            .iter()
+            .map(|r| (r.bom.clone(), r.encoding.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (vec![0xEF, 0xBB, 0xBF], "utf-8-bom".to_string()),
+            (vec![0xFF, 0xFE], "utf-16le".to_string()),
+            (vec![0xFE, 0xFF], "utf-16be".to_string()),
+        ]
+    );
+}
+
+/// 与 `packages/kernel/tests/encoding-decode-policy.test.ts` 的 GOLDEN 表**逐字同源**：
+/// 同一组字节样本、同一组期望文本（UTF-16 只认 BOM 那一支的代价照旧——无 BOM 的 utf-16
+/// 按 shift_jis 解成乱码并因含 NUL 计入 skipped.binary，可见可数）。
+/// 旧 `decode_for_search` 的分叉桶（UTF-8 BOM + 非法尾随 ⇒ 整份含 BOM 落 SJIS）已被表判序
+/// **消除**；`EF BB BF FF FE 41` 正是 §5.90 对照探针实测的唯一分叉——`utf8_decode_whatwg`
+/// 按 TextDecoder 的"逐错误事件一个 U+FFFD"口径解码，两侧现在逐字相同。
+#[test]
+fn policy_table_decodes_golden_samples() {
+    let p = decode_policy().unwrap();
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        // UTF-8 BOM，正文合法（BOM 剥掉）
+        (vec![0xEF, 0xBB, 0xBF, b'a', b'b'], "ab"),
+        // 裸 BOM
+        (vec![0xEF, 0xBB, 0xBF], ""),
+        // UTF-8 BOM + 流尾截断序列 ⇒ 一个 U+FFFD（与 TextDecoder 同）
+        (vec![0xEF, 0xBB, 0xBF, 0xE3, 0x81], "\u{FFFD}"),
+        // UTF-8 BOM + 非法字节连跑 ⇒ 逐错误两个 U+FFFD（encoding_rs 旧口径会给一个——分叉已消除）
+        (vec![0xEF, 0xBB, 0xBF, 0xFF, 0xFE, b'A'], "\u{FFFD}\u{FFFD}A"),
+        // UTF-8 序列中途非法：E0 要求续字节 A0-BF，80 违例 ⇒ 逐错误三个 U+FFFD（与 TextDecoder 同）
+        (vec![0xEF, 0xBB, 0xBF, 0xE0, 0x80, 0x80], "\u{FFFD}\u{FFFD}\u{FFFD}"),
+        // 无 BOM 合法 UTF-8
+        ("日本".as_bytes().to_vec(), "日本"),
+        // UTF-16 LE / BE（BOM 剥掉）
+        (vec![0xFF, 0xFE, b'a', 0x00], "a"),
+        (vec![0xFE, 0xFF, 0x00, b'a'], "a"),
+        // UTF-16 BE 代理对
+        (vec![0xFE, 0xFF, 0xD8, 0x3D, 0xDE, 0x00], "\u{1F600}"),
+        // UTF-16 LE 奇数尾字节 ⇒ 一个 U+FFFD
+        (vec![0xFF, 0xFE, b'a'], "\u{FFFD}"),
+        // Shift-JIS（非法 UTF-8 ⇒ 兜底那一支）
+        (vec![0x82, 0xA0, 0x82, 0xA2, 0x82, 0xA4], "あいう"),
+        // Shift-JIS 中孤立非法字节
+        (vec![b'A', 0xFF, b'B'], "A\u{FFFD}B"),
+        // Shift-JIS 引导字节截断在流尾
+        (vec![0x82], "\u{FFFD}"),
+    ];
+    for (bytes, want) in cases {
+        let got = decode_with_policy(&bytes, p).expect("策略解码不该硬失败");
+        assert_eq!(got.as_ref(), want, "样本 {:02X?}", bytes);
+    }
+}
+
+/// utf-16 二进制豁免同样只读表（BOM 判序 = 唯一一处）：
+/// 旧实现自带一份 `utf16_bom_encoding` if 链——已删，此测试钉"表是唯一判据"。
+#[test]
+fn utf16_binary_exemption_reads_the_same_table() {
+    let p = decode_policy().unwrap();
+    assert!(is_utf16_bom_hit(&[0xFF, 0xFE, b'a', 0x00], p));
+    assert!(is_utf16_bom_hit(&[0xFE, 0xFF, 0x00, b'a'], p));
+    assert!(!is_utf16_bom_hit(&[0xEF, 0xBB, 0xBF, b'a'], p));
+    assert!(!is_utf16_bom_hit(b"plain", p));
 }
 
 /// 三族评分（2026-10-17 编码标签批）——**与内核 `encoding.test.ts` 的 GBK/Big5 用例逐条同判据**：

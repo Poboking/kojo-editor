@@ -1,5 +1,8 @@
-//! 市场 IO 原语的判据。四组：URL 白名单（含逐跳重定向）、暂存名字面、解压安全闸、
-//! 与注册表真实容器的跨实现对平。
+//! 市场 IO 原语的判据。五组：URL 白名单（含逐跳重定向）、暂存名字面、解压安全闸、
+//! 与注册表真实容器的跨实现对平，以及 **W14 往返对拍的 Rust 半边**（`zip_roundtrip_*` 那六条：
+//! 与 TS 侧 `packages/plugin-api/tests/zip-roundtrip.test.ts` 读**同一张共享表**
+//! `plugin-api/fixtures/zip-roundtrip/contract.json` 与**同一只夹具** `container.zip`，
+//! 命名闸/限额闸逐项、逐条目名逐码、正常往返逐字节、篡改逐码）。
 //!
 //! 对平用的容器字节**逐字取自线上注册表资产**（`tests/fixtures/*.zip`；注册表侧是
 //! `node:zlib` 自写容器，不是 `zip` 命令产物），所以这条链路在开发机离线可复跑。
@@ -12,10 +15,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::market::{
     advance_byte_cap, cap_download_limits, cap_fetch_limits, cap_staging_limits,
-    container_name_problem, content_length_problem, declared_entries_problem, declared_entry_count,
-    download_to_staging, entry_type_problem, extract_staging, extract_staging_off_thread,
-    fetch_text, host_in_allowlist, market_fetch_text, redirect_problem, staging_component_problem,
-    url_problem, utf8_text, DeclaredEntries, DownloadOptions, StagingLimits,
+use crate::market::{
+    advance_byte_cap, cap_download_limits, cap_fetch_limits, cap_staging_limits,
+    central_directory, container_name_problem, content_length_problem, declared_entries_problem,
+    declared_entry_count, download_to_staging, entry_contract_problem, entry_type_problem,
+    extract_staging, extract_staging_off_thread, fetch_text, host_in_allowlist, market_fetch_text,
+    redirect_problem, staging_component_problem, url_problem, utf8_text, zip_roundtrip_contract,
+    DeclaredEntries, DownloadOptions, StagingLimits, ZIP_FLAG_UTF8, ZIP_ROUNDTRIP_CONTRACT_JSON,
+};
 };
 
 /// 限额字面照契约常量（`plugin-api/market.ts`）；Rust 侧不写死，测试里显式传入。
@@ -1208,4 +1215,445 @@ fn progress_due_throttles_by_bytes_or_interval() {
     assert!(!progress_due(1, Some(Duration::from_millis(99))), "时间未到且新增不足不该发");
     // 零新增永远不发（收尾补发的重复调用被压掉）
     assert!(!progress_due(0, Some(Duration::from_secs(10))), "零新增不该发");
+}
+
+/* ================= W14 往返对拍 · Rust 半边（同一张表、同一只容器） ================= */
+
+/* ---------------- 共享 fixture ---------------- */
+
+/// 共享表体 = 内嵌给生产路径用的**同一份字节**（`market.rs` 的 `include_str!`）。
+/// TS 半边 `packages/plugin-api/tests/zip-roundtrip.test.ts` 读的是磁盘上那个 JSON 文件；
+/// 这里读的是编译期内嵌的那一份 ⇒ "表漂一字节"要么两侧同时红，要么本层解析当场失败。
+fn contract_table() -> &'static serde_json::Value {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<serde_json::Value> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        serde_json::from_str(ZIP_ROUNDTRIP_CONTRACT_JSON).expect("共享表必须是合法 JSON")
+    })
+}
+
+/// 共享容器夹具（由 TS 侧 `buildZip` 真造出来并钉进仓库的那只；两侧读同一个文件）。
+/// 刻意走**文件系统**而不是 `include_bytes!`：夹具被 `KOJO_ZIP_FIXTURE_UPDATE=1` 重写后，
+/// 本用例必须立刻看到新字节，而不是拿到一份编译期固化的旧副本。
+fn roundtrip_container_bytes() -> Vec<u8> {
+    // `CARGO_MANIFEST_DIR` 是 `packages/app/src-tauri`（`include_str!` 那个相对路径以
+    // `src/` 为原点，两者差一层 ⇒ 这里少一个 `..` 就会指到仓库外面去）
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugin-api/fixtures/zip-roundtrip/container.zip");
+    std::fs::read(&path).unwrap_or_else(|e| panic!("读往返夹具失败 {}: {e}", path.display()))
+}
+
+/// 表里的三个限额 → 本层入参形状（对拍**按表跑**，不用本文件顶上那组字面 `LIMITS`）
+fn table_limits() -> StagingLimits {
+    let t = contract_table();
+    StagingLimits {
+        max_entries: t["limits"]["maxEntries"].as_u64().unwrap() as usize,
+        max_depth: t["limits"]["maxDepth"].as_u64().unwrap() as usize,
+        max_unpacked_bytes: t["limits"]["maxUnpackedBytes"].as_u64().unwrap(),
+    }
+}
+
+/* ---------------- 头部布局（与 TS 侧 zip-roundtrip.test.ts:88-94 同一份） ---------------- */
+
+const LOCAL_FLAGS: usize = 6;
+const LOCAL_NAME: usize = 30;
+const CENTRAL_FLAGS: usize = 8;
+const CENTRAL_NAME: usize = 46;
+const EOCD_SIZE_AT: usize = 22;
+const EOCD_TOTAL_ENTRIES: usize = 10;
+
+fn put_u16(bytes: &mut [u8], at: usize, value: u16) {
+    bytes[at..at + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn hex_u32(s: &str) -> u32 {
+    u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or_else(|e| panic!("表里 CRC {s:?} 不是十六进制: {e}"))
+}
+
+fn from_base64(s: &str) -> Vec<u8> {
+    use base64::Engine as _;
+    base64::prelude::BASE64_STANDARD
+        .decode(s)
+        .unwrap_or_else(|e| panic!("表里内容不是合法 base64: {e}"))
+}
+
+/// 拒绝码 = 冒号前那一段（**码是契约，冒号后面那句话各层自己写**；与 TS 侧 `codeOf` 同一口径，
+/// `{:?}` 调试引号那种语言差异不进契约）。命令自报出处那一段（`market_extract: `）先摘掉——
+/// 那是"哪条命令说的"，不是契约码。
+fn code_of(problem: &str) -> &str {
+    let body = problem
+        .strip_prefix("market_extract: ")
+        .unwrap_or(problem);
+    let ascii = body.find(':').unwrap_or(body.len());
+    let full = body.find('：').unwrap_or(body.len());
+    &body[..ascii.min(full)]
+}
+
+/// 解包**必须失败**的那一类用例：`MarketExtractResultDto` 没有 Debug ⇒ `expect_err` 用不上，
+/// 而"解开了"这条失败必须报得出来（解了几条、什么形状），别让它静默变成一条类型错误。
+fn expect_extract_err(
+    staging_dir: &Path,
+    container: &str,
+    target: &str,
+    limits: &StagingLimits,
+    tag: &str,
+) -> String {
+    match extract_staging(staging_dir, container, target, limits) {
+        Ok(ok) => panic!(
+            "{tag}: 本该被拒，却解出了 {} 条目 / {} 字节",
+            ok.entries.len(),
+            ok.total_bytes
+        ),
+        Err(e) => e,
+    }
+}
+
+/// 按表做一次**长度不变**的篡改（本地头与中央目录同步改 ⇒ 夹具这才是一只"像真的"坏包，
+/// 而不是一眼就能靠"头不互指"打发的畸形包）。判据与 TS 侧 `tamper` 逐字同形。
+fn tamper(bytes: &[u8], case_of: &serde_json::Value) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    // 篡改前先用自己的中央目录原语定位（两侧同一份布局：偏移由读器给出，不靠猜）
+    let container = central_directory(&mut std::io::Cursor::new(bytes.to_vec()))
+        .expect("篡改前的夹具必须能被中央目录原语读出");
+    let hit = |name: &str| -> crate::market::RawEntry {
+        let hits: Vec<crate::market::RawEntry> = container
+            .entries
+            .iter()
+            .filter(|e| e.name == name)
+            .cloned()
+            .collect();
+        assert_eq!(hits.len(), 1, "篡改目标 {name:?} 命中 {} 条", hits.len());
+        hits[0].clone()
+    };
+    if let Some(r) = case_of.get("rename") {
+        let from = r["from"].as_str().expect("rename.from 必须是字符串");
+        let to = r["to"].as_str().expect("rename.to 必须是字符串");
+        let (from_b, to_b) = (from.as_bytes(), to.as_bytes());
+        assert_eq!(from_b.len(), to_b.len(), "篡改必须保持字节长度不变：{from:?} → {to:?}");
+        let entry = hit(from);
+        let at_local = entry.local_offset as usize + LOCAL_NAME;
+        let at_central = entry.central_offset as usize + CENTRAL_NAME;
+        out[at_local..at_local + to_b.len()].copy_from_slice(to_b);
+        out[at_central..at_central + to_b.len()].copy_from_slice(to_b);
+    }
+    if let Some(name) = case_of.get("clearUtf8FlagOf").and_then(|v| v.as_str()) {
+        let entry = hit(name);
+        let cleared = entry.flags & !ZIP_FLAG_UTF8;
+        put_u16(&mut out, entry.central_offset as usize + CENTRAL_FLAGS, cleared);
+        put_u16(&mut out, entry.local_offset as usize + LOCAL_FLAGS, cleared);
+    }
+    if let Some(n) = case_of
+        .get("setEocdTotalEntryCount")
+        .and_then(|v| v.as_u64())
+    {
+        let at = out.len() - EOCD_SIZE_AT + EOCD_TOTAL_ENTRIES;
+        put_u16(&mut out, at, n as u16);
+    }
+    out
+}
+
+/* ---------------- 1. 命名闸读的就是那张表 ---------------- */
+
+/// **命名判据只许一份**：本层生产路径用的长度上限 / 字符集字面 / 后缀 / 纯点名，
+/// 逐项等于共享表的 `containerNameRule`；`containerNames` 每条**同判且拒因文案逐字**相等
+/// （TS 半边比的是整句，这里比冒号前那一段）。表里改一个数而实现不改 ⇒ 这条红；
+/// 实现里私藏一个数而表不改 ⇒ 同样红（因为实现读的是表，不是字面量）。
+#[test]
+fn zip_roundtrip_name_gates_read_the_shared_table() {
+    let table = contract_table();
+    let policy = zip_roundtrip_contract().expect("内嵌共享表必须能解析并通过校验");
+    let rule = &table["containerNameRule"];
+    assert_eq!(policy.container_name_rule.charset, rule["charset"].as_str().unwrap());
+    assert_eq!(
+        policy.container_name_rule.max_bytes,
+        rule["maxBytes"].as_u64().unwrap() as usize
+    );
+    assert_eq!(policy.container_name_rule.suffix, rule["suffix"].as_str().unwrap());
+    assert_eq!(
+        policy.container_name_rule.reject_pure_dots,
+        rule["rejectPureDots"].as_bool().unwrap()
+    );
+    // 限额三个数：本层入参天花板 = 表；且 = 本文件其余用例一直在传的那组字面
+    // （否则"对拍过了"用的是另一套没人走的限额）
+    let ceiling = &table["limits"];
+    assert_eq!(policy.limits.max_entries, ceiling["maxEntries"].as_u64().unwrap() as usize);
+    assert_eq!(policy.limits.max_depth, ceiling["maxDepth"].as_u64().unwrap() as usize);
+    assert_eq!(
+        policy.limits.max_unpacked_bytes,
+        ceiling["maxUnpackedBytes"].as_u64().unwrap()
+    );
+    assert_eq!(LIMITS, table_limits(), "本文件顶部的 LIMITS 与共享表漂了");
+
+    let cases = table["containerNames"].as_array().unwrap();
+    assert!(cases.len() > 10, "命名用例不许跑在空表上：{}", cases.len());
+    for case_of in cases {
+        let name = case_of["name"].as_str().unwrap();
+        let got = container_name_problem(name);
+        assert_eq!(
+            got.is_none(),
+            case_of["ok"].as_bool().unwrap(),
+            "{name:?} 的本侧判定与表漂了：{:?}",
+            got
+        );
+        if let Some(reason) = case_of["reason"].as_str() {
+            let text = got.unwrap_or_default();
+            assert_eq!(code_of(&text), reason, "{name:?} 的拒因文案与表不符：{text}");
+        }
+    }
+    // 长度上限真的来自表（把数硬编码进实现的话，这两条会跟着字面量走而不是跟着表走）
+    let max = policy.container_name_rule.max_bytes;
+    let suffix = policy.container_name_rule.suffix.len();
+    assert!(container_name_problem(&format!("{}.zip", "a".repeat(max - suffix))).is_none());
+    assert!(container_name_problem(&format!("{}.zip", "a".repeat(max - suffix + 1))).is_some());
+    // 暂存名（无后缀那一段）走同一条闸：表里的字符集字面就是它实现的字节类
+    assert!(staging_component_problem(&"a".repeat(max)).is_none());
+    assert!(staging_component_problem(&format!("{}A", "a".repeat(max - 1))).is_some());
+}
+
+/// `entryNames` 逐条同码（**判定顺序一并钉住**：`C:\…` 报盘符不报反斜杠、
+/// `files\<NUL>` 报编码不报反斜杠）。TS 半边是 `zipEntryContractProblem`，本侧是
+/// `entry_contract_problem`，两侧读的都是表里同一批名字与同一个 `maxDepth`。
+#[test]
+fn zip_roundtrip_entry_name_cases_match_the_table_code_for_code() {
+    let table = contract_table();
+    let depth = table["limits"]["maxDepth"].as_u64().unwrap() as usize;
+    let cases = table["entryNames"].as_array().unwrap();
+    assert!(cases.len() > 15, "条目名用例不许跑在空表上：{}", cases.len());
+    for case_of in cases {
+        let name = case_of["name"].as_str().unwrap();
+        let raw = name.as_bytes().to_vec();
+        let want = case_of["code"].as_str();
+        let got = entry_contract_problem(name, &raw, Some(ZIP_FLAG_UTF8), depth);
+        assert_eq!(got, want, "{name:?} 的拒绝码与表不符");
+    }
+    // 编码那一族光看字符串判不出来的形态：原始字节非法 UTF-8（CP437 日文假名段）
+    // 与"非 ASCII 却没置 bit 11"——两条都是解包侧独有的洞，写侧看不见自己写的字节。
+    let sjis: Vec<u8> = vec![0x82, 0xA0, 0x82, 0xA2];
+    let lossy = String::from_utf8_lossy(&sjis).into_owned();
+    assert_eq!(
+        entry_contract_problem(&lossy, &sjis, Some(ZIP_FLAG_UTF8), depth),
+        Some("entry-name-encoding")
+    );
+    let cjk = "files/说明.txt".as_bytes().to_vec();
+    assert_eq!(entry_contract_problem("files/说明.txt", &cjk, Some(0), depth), Some("entry-name-encoding"), "bit 11 缺失时 CP437 解码那条洞被放行");
+    assert_eq!(
+        entry_contract_problem("files/ascii.txt", b"files/ascii.txt".to_vec().as_slice(), Some(0), depth),
+        None,
+        "纯 ASCII 名字没 bit 11 是合法的（CP437 与 UTF-8 对 ASCII 同解），不许误拒"
+    );
+}
+
+/* ---------------- 2. 正常往返：逐条目 + 逐字节 ---------------- */
+
+/// TS `buildZip` 产出的那只容器，本层解包器必须**读出同一名、同一 CRC、同一大小，
+/// 并逐字节还原内容**。期望值全部来自共享表（名字 / 名字字节数 / CRC / 字节数 / base64 内容），
+/// 条目顺序也按表核（写侧按入参顺序落中央目录，顺序漂了说明两侧读的根本不是同一份布局）。
+#[test]
+fn zip_roundtrip_golden_container_restores_every_entry_byte_for_byte() {
+    let table = contract_table();
+    let golden = &table["golden"];
+    assert_eq!(golden["contract"].as_str(), Some("extractable"), "夹具必须是契约档产物");
+    let want_entries = golden["entries"].as_array().unwrap();
+    let count = golden["entryCount"].as_u64().unwrap() as usize;
+    assert_eq!(want_entries.len(), count);
+    let bytes = roundtrip_container_bytes();
+
+    // 第一层：中央目录原语（不经 `zip` 读器 ⇒ 条数、原始名字、bit、互指关系都是容器本身的事实）
+    let container = central_directory(&mut std::io::Cursor::new(bytes.clone()))
+        .expect("TS 打出来的包，本层中央目录原语必须读得动");
+    assert!(!container.zip64);
+    assert_eq!(container.declared_entries, count as u64);
+    assert_eq!(container.entries.len(), count, "条目数不平（读器会静默去重，这里数的是真条数）");
+    assert_eq!(container.total_unpacked_bytes, golden["totalUnpackedBytes"].as_u64().unwrap());
+    for (i, entry) in container.entries.iter().enumerate() {
+        let want = &want_entries[i];
+        let name = want["name"].as_str().unwrap();
+        assert_eq!(entry.name, name, "第 {i} 条名字往返不符");
+        assert_eq!(entry.raw_name.len(), want["nameBytes"].as_u64().unwrap() as usize, "{name}: 原始名字字节数不符");
+        assert_eq!(entry.crc32, hex_u32(want["crc"].as_str().unwrap()), "{name}: CRC 不符");
+        assert_eq!(entry.uncompressed_size, want["bytes"].as_u64().unwrap() as u32, "{name}: 声明字节不符");
+        assert_ne!(entry.flags & ZIP_FLAG_UTF8, 0, "{name}: 写侧没置 bit 11");
+        assert!(entry.local_matches_central, "{name}: 本地头与中央目录不互指");
+    }
+
+    // 第二层：走**生产链路**解一遍（`extract_staging` 含两遍闸 + 真落盘），限额来自表
+    let staging = Staging::new("roundtrip-golden");
+    write_container(&staging, "container.zip", &bytes);
+    let got = extract_staging(staging.dir(), "container.zip", "out", &table_limits())
+        .unwrap_or_else(|e| panic!("契约档容器解不开（TS 打的包本层不认识）: {e}"));
+    assert_eq!(got.entries.len(), count);
+    assert_eq!(got.total_bytes, container.total_unpacked_bytes);
+    for want in want_entries {
+        let name = want["name"].as_str().unwrap();
+        let body = from_base64(want["contentBase64"].as_str().unwrap());
+        assert_eq!(body.len(), want["bytes"].as_u64().unwrap() as usize, "{name}: 表自证不平");
+        let row = got
+            .entries
+            .iter()
+            .find(|e| e.path == name)
+            .unwrap_or_else(|| panic!("{name} 没被解出来：{:?}", got.entries.iter().map(|e| &e.path).collect::<Vec<_>>()));
+        assert_eq!(row.bytes as usize, body.len(), "{name}: 落盘字节与表不符");
+        assert_eq!(
+            std::fs::read(staging.dir().join("out").join(name)).unwrap_or_else(|e| panic!("{name} 落盘失败: {e}")),
+            body,
+            "{name}: 内容逐字节往返不符"
+        );
+    }
+    // 中文条目名落盘后**还叫那个名字**（bit 11 的口径一路管到 Windows 文件名）
+    assert!(staging.dir().join("out").join("files/说明.txt").is_file());
+}
+
+/* ---------------- 3. 非 ASCII 条目名：两侧对 bit 11 的口径一致 ---------------- */
+
+/// 作者工作区的真实形态（根 = 中文目录名、段里带日文与全角标点，见 eratw-adapter 的导出链）。
+/// 这一条量三件事：①本层造出来的非 ASCII 容器**置了 bit 11**（与写侧同一口径）；
+/// ②名字与内容逐字节回来；③把 bit 11 摘掉（`zip` 读器会按 CP437 解码名字、路径闸照样放行）
+/// ⇒ 必须拒在动盘之前，且拒到 `entry-name-encoding` 那一个码上与 TS 侧一致。
+#[test]
+fn zip_roundtrip_cjk_names_keep_the_utf8_flag_on_both_sides() {
+    let root = "东方口上-灵梦 v1.0";
+    let body = "@A\n口上・メッセージ関連\n";
+    let names: Vec<String> = vec![
+        format!("{root}/README.md"),
+        format!("{root}/ERB/口上・メッセージ関連/事件.ERB"),
+        format!("{root}/CSV/Chara/Chara1 测试角色.csv"),
+        "说明/データ.ERH".to_string(),
+    ];
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for n in &names {
+        writer.start_file(n.as_str(), deflated()).unwrap();
+        std::io::Write::write_all(&mut writer, body.as_bytes()).unwrap();
+    }
+    let bytes = writer.finish().unwrap().into_inner();
+
+    let container = central_directory(&mut std::io::Cursor::new(bytes.clone()))
+        .expect("非 ASCII 条目名的容器必须读得动");
+    assert_eq!(
+        container.entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
+        names,
+        "条目名往返不符（含顺序）"
+    );
+    for entry in &container.entries {
+        assert!(entry.raw_name.iter().any(|b| *b >= 0x80), "{}: 夹具本该是非 ASCII 名字", entry.name);
+        assert_ne!(entry.flags & ZIP_FLAG_UTF8, 0, "{}: 非 ASCII 名字必须置 bit 11", entry.name);
+        assert!(entry.local_matches_central, "{}: 本地头与中央目录不互指", entry.name);
+    }
+
+    let staging = Staging::new("roundtrip-cjk");
+    write_container(&staging, "a.zip", &bytes);
+    let got = extract_staging(staging.dir(), "a.zip", "out", &table_limits())
+        .unwrap_or_else(|e| panic!("中文/日文条目名的包解不开: {e}"));
+    assert_eq!(got.entries.len(), names.len());
+    assert_eq!(got.total_bytes, (body.len() * names.len()) as u64);
+    for n in &names {
+        assert_eq!(
+            std::fs::read(staging.dir().join("out").join(n)).unwrap_or_else(|e| panic!("{n} 落盘失败: {e}")),
+            body.as_bytes(),
+            "{n}: 内容逐字节往返不符"
+        );
+    }
+
+    // 摘掉全部条目的 bit 11 ⇒ 与 TS 侧同一个码、且一个字节都不许多写
+    let mut stripped = bytes.clone();
+    for entry in &container.entries {
+        let cleared = entry.flags & !ZIP_FLAG_UTF8;
+        put_u16(&mut stripped, entry.central_offset as usize + CENTRAL_FLAGS, cleared);
+        put_u16(&mut stripped, entry.local_offset as usize + LOCAL_FLAGS, cleared);
+    }
+    let bad = Staging::new("roundtrip-cjk-stripped");
+    write_container(&bad, "a.zip", &stripped);
+    let err = expect_extract_err(
+        bad.dir(),
+        "a.zip",
+        "out",
+        &table_limits(),
+        "非 ASCII 名字缺 bit 11 的容器（否则落盘是 CP437 乱码名）",
+    );
+    assert_eq!(code_of(&err), "entry-name-encoding", "拒因不符：{err}");
+    assert!(!bad.dir().join("out").exists(), "被拒的容器留下了目标目录");
+    assert_only_container(&bad, "a.zip");
+    // ASCII-only 条目名缺 bit 11 不受这一条管（两种解码对 ASCII 同解）
+    let ascii_only = build_zip(&[("pack.json", b"{\"schema\":1}".as_slice())]);
+    let good = Staging::new("roundtrip-ascii");
+    write_container(&good, "a.zip", &ascii_only);
+    assert!(extract_staging(good.dir(), "a.zip", "out", &table_limits()).is_ok());
+}
+
+/* ---------------- 4. 篡改负例：两侧同一个码，且拒在动盘之前 ---------------- */
+
+/// 表里每一只篡改容器（改名 / 摘 bit 11 / ZIP64 哨兵）都必须：本层拒、**码与表逐字**、
+/// 长度不变（`container-structure` 那一族除外，它靠的是畸形而不是长度）、
+/// 暂存区里除了容器**一个字节都不许多出来**（zip-slip 的判据是"没越界写"，不是"报错了"）。
+#[test]
+fn zip_roundtrip_tampers_reject_with_the_table_code_and_write_nothing() {
+    let table = contract_table();
+    let limits = table_limits();
+    let pinned = roundtrip_container_bytes();
+    let count = table["golden"]["entryCount"].as_u64().unwrap() as usize;
+    let cases = table["tampers"].as_array().unwrap();
+    assert!(cases.len() >= 7, "篡改用例不许跑在空表上：{}", cases.len());
+    for case_of in cases {
+        let id = case_of["id"].as_str().unwrap();
+        let want_code = case_of["code"].as_str().unwrap();
+        let bad = tamper(&pinned, case_of);
+        if case_of.get("setEocdTotalEntryCount").is_none() {
+            assert_eq!(bad.len(), pinned.len(), "{id}: 篡改改了字节长度");
+        }
+        // 中央目录原语自己数出的条数才是真条数（`zip` 读器按名字建索引会静默去重）
+        let mut cursor = std::io::Cursor::new(bad.clone());
+        match central_directory(&mut cursor) {
+            Ok(c) if !c.zip64 => assert_eq!(c.entries.len(), count, "{id}: 中央目录条数漂了"),
+            Ok(c) => assert_eq!(c.declared_entries, 65535, "{id}: ZIP64 哨兵形态不符"),
+            Err(e) => panic!("{id}: 篡改后连中央目录都读不动：{e}"),
+        }
+        let staging = Staging::new(&format!("roundtrip-tamper-{}", id.replace('-', "_")));
+        write_container(&staging, "a.zip", &bad);
+        let err = expect_extract_err(staging.dir(), "a.zip", "out", &limits, id);
+        assert_eq!(code_of(&err), want_code, "{id}: 拒绝码与表不符（完整错误：{err}）");
+        assert!(!staging.dir().join("out").exists(), "{id}: 拒了却留下了目标目录");
+        assert!(!staging.dir().join("escape.txt").exists(), "{id}: 写到了暂存目录之外");
+        assert_only_container(&staging, "a.zip");
+    }
+}
+
+/* ---------------- 5. 限额闸：数字来自表，入参只许收紧 ---------------- */
+
+/// ①表里那个条数在闸内、少一条即 `entries-limit`；②解压总字节同理 → `bytes-limit`；
+/// ③**入参宽于表**（JS 想把上限调大）一律拒——三个数由表说话，不由调用方说话。
+#[test]
+fn zip_roundtrip_limit_gates_come_from_the_table() {
+    let bytes = roundtrip_container_bytes();
+    let table = contract_table();
+    let count = table["golden"]["entryCount"].as_u64().unwrap() as usize;
+    let total = table["golden"]["totalUnpackedBytes"].as_u64().unwrap();
+    let limits = table_limits();
+    let staging = Staging::new("roundtrip-limits");
+    write_container(&staging, "a.zip", &bytes);
+
+    assert!(extract_staging(staging.dir(), "a.zip", "ok", &limits).is_ok());
+    for (tag, tight, want_code) in [
+        ("entries", StagingLimits { max_entries: count - 1, ..limits }, "entries-limit"),
+        ("bytes", StagingLimits { max_unpacked_bytes: total - 1, ..limits }, "bytes-limit"),
+    ] {
+        let err = expect_extract_err(staging.dir(), "a.zip", &format!("over-{tag}"), &tight, tag);
+        assert_eq!(code_of(&err), want_code, "{tag}: 拒因不符：{err}");
+        assert!(!staging.dir().join(format!("over-{tag}")).exists(), "{tag}: 超限仍留下了目录");
+    }
+    // 入参放宽那一侧：三个数各 +1 都得被天花板拦下（错误串自带两个数，可诊断）
+    let loose_entries = StagingLimits { max_entries: limits.max_entries + 1, ..limits };
+    let loose_depth = StagingLimits { max_depth: limits.max_depth + 1, ..limits };
+    let loose_bytes = StagingLimits {
+        max_unpacked_bytes: limits.max_unpacked_bytes + 1,
+        ..limits
+    };
+    for (tag, loose, want_code) in [
+        ("宽条目数", loose_entries, "entries-limit"),
+        ("宽深度", loose_depth, "path-depth"),
+        ("宽字节", loose_bytes, "bytes-limit"),
+    ] {
+        let err = expect_extract_err(staging.dir(), "a.zip", "loose", &loose, tag);
+        assert_eq!(code_of(&err), want_code, "{tag}: 拒因不符：{err}");
+        assert!(err.contains("平台上限"), "{tag}: 错误里没给出天花板值：{err}");
+        assert!(!staging.dir().join("loose").exists(), "{tag}: 拒了却留下了目录");
+    }
 }

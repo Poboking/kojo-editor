@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use notify::event::{EventKind, ModifyKind, RenameMode};
@@ -1015,7 +1015,7 @@ fn app_data_dir(app: tauri::AppHandle) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/* ------------------------------ 编解码 ------------------------------ */
+/* ------------------------------ 编码（写向 + 检索读判据） ------------------------------ */
 
 fn encoding_for(name: &str) -> Result<&'static encoding_rs::Encoding, String> {
     Ok(match name {
@@ -1032,23 +1032,190 @@ fn encoding_for(name: &str) -> Result<&'static encoding_rs::Encoding, String> {
     })
 }
 
-/// 字节 → 字符串（BOM 由 encoding_rs decode 自动剥离）。
-/// **读路径已不再调用它**（2026-10-13 §5.90 实机复测：每读一个文件为此多跑一趟 IPC，整份字节
-/// base64 送回 Rust 只解码一次）。命令保留注册——它是"客户端 TextDecoder vs encoding_rs"
-/// 等价性验证的对照物（两者实现同一份 WHATWG Encoding 标准）。
-/// 注意：Shift-JIS 等非严格解码遇无法映射字节会替换为 U+FFFD（`had_errors`
-/// 当前未上抛——只读浏览不宜硬阻塞；写回时由 `encode_string` 的
-/// had_errors 检查兜底，U+FFFD 无法再编码 → 拒绝保存，损坏不落盘）。
-#[tauri::command]
-fn decode_bytes(data: String, encoding: String) -> Result<String, String> {
-    let bytes = B64.decode(data).map_err(|e| e.to_string())?;
-    let enc = encoding_for(&encoding)?;
-    let (text, _actual, had_errors) = enc.decode(&bytes);
-    if had_errors {
-        // 显式记录（stderr），不静默；文本仍返回供只读浏览
-        eprintln!("[decode_bytes] {encoding}: replacement chars present (input not fully valid)");
+// `decode_bytes` 命令（Rust encoding_rs 对照探针）已删除（W12 ENC-SRC，2026-10-16 判据合一）。
+// 它当年对照的是"客户端 TextDecoder vs encoding_rs 逐字等价性"（§5.90 实机复测：真实语料
+// 114 文件 + 16 合成例，唯一分叉 = 非法字节连跑在 utf-8 标签下的替换字符数）。判序与
+// fatal/替换策略合一进共享常量表 `plugin-api/src/decode-probe-policy.json` 后，检索侧由
+// `utf8_decode_whatwg` 与 TextDecoder 逐字节对齐，对照物不再存在 ⇒ 旁路连同命令一并拆除。
+
+/* -------- 解码判据共享常量表（W12 ENC-SRC：TS 内核与本宿主共读同一份，不许有第二份 if 链） -------- */
+
+/// 表体 = `packages/plugin-api/src/decode-probe-policy.json`（**编译期内嵌**，不是运行期可丢的外部文件）。
+/// TS 侧镜像常量 `DECODE_PROBE_POLICY` 与本文件的逐字对拍钉在
+/// `packages/kernel/tests/encoding-decode-policy.test.ts`；Rust 消费本表钉在
+/// `search_tests.rs::policy_table_decodes_golden_samples`（同一组字节样本 + 同一组期望文本）。
+const DECODE_PROBE_POLICY_JSON: &str =
+    include_str!("../../../plugin-api/src/decode-probe-policy.json");
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+struct DecodeBomRuleDto {
+    /// BOM 字节前缀（判序第一环）
+    bom: Vec<u8>,
+    /// 命中后的编码名（`FileEncoding` 取值；经 `encoding_for` 查解码器）
+    encoding: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+struct DecodeProbePolicyDto {
+    /// 策略形状的版本闸：v1 = "BOM 判序 → UTF-8 严格（fatal）→ fallback 不严格（U+FFFD 替换）"
+    version: u32,
+    bom_rules: Vec<DecodeBomRuleDto>,
+    fallback_encoding: String,
+}
+
+impl DecodeProbePolicyDto {
+    /// 机械校验（不静默）：版本、条目非空、BOM 非空、每个编码名都能落到解码器。
+    fn validate(&self) -> Result<(), String> {
+        if self.version != 1 {
+            return Err(format!("解码策略版本不受支持：{}（本宿主只实现 v1 形状）", self.version));
+        }
+        if self.bom_rules.is_empty() {
+            return Err("解码策略缺 BOM 判序条目".to_string());
+        }
+        for r in &self.bom_rules {
+            if r.bom.is_empty() {
+                return Err("解码策略的 BOM 条目为空串".to_string());
+            }
+            encoding_for(&r.encoding)?;
+        }
+        encoding_for(&self.fallback_encoding)?;
+        Ok(())
     }
-    Ok(text.into_owned())
+
+    /// 判序第一环：按表序逐条做 BOM 前缀匹配（第一条命中即短路）。
+    fn bom_rule_for(&self, bytes: &[u8]) -> Option<&DecodeBomRuleDto> {
+        self.bom_rules.iter().find(|r| bytes.starts_with(&r.bom))
+    }
+}
+
+/// 内嵌表的惰性解析 + 校验（失败 = 检索命令显式报错，不静默降级）。
+fn decode_policy() -> Result<&'static DecodeProbePolicyDto, String> {
+    static POLICY: OnceLock<DecodeProbePolicyDto> = OnceLock::new();
+    static FAILED: OnceLock<String> = OnceLock::new();
+    if let Some(e) = FAILED.get() {
+        return Err(e.clone());
+    }
+    if let Some(p) = POLICY.get() {
+        return Ok(p);
+    }
+    let parsed: DecodeProbePolicyDto = serde_json::from_str(DECODE_PROBE_POLICY_JSON)
+        .map_err(|e| format!("内嵌解码策略表解析失败：{e}"))?;
+    parsed.validate().map_err(|e| format!("内嵌解码策略表非法：{e}"))?;
+    Ok(POLICY.get_or_init(|| parsed))
+}
+
+/// WHATWG Encoding Standard 的 UTF-8 decode（不严格口径），**逐错误事件一个 U+FFFD**：
+/// - 非法引导字节 / 序列中途遇到非法后续字节 ⇒ 一个 U+FFFD，游标只前进一个字节（失败字节重进状态机）；
+/// - 合法前缀在流尾截断 ⇒ 整个未完成序列只出一个 U+FFFD。
+///
+/// 为什么宿主不直接用 `encoding_rs::UTF_8.decode`：它把**连跑的非法字节段**合并成一个 U+FFFD，
+/// 而浏览器 TextDecoder 按上面规则逐错误给（§5.90 对照探针实测的唯一分叉）。检索命中的行文本
+/// 要与编辑器读出逐字相同，这一支就必须按 TextDecoder 的口径实现。合法输入与
+/// `String::from_utf8` 逐字一致（先整体校验直通，非法才走本函数）。
+fn utf8_decode_whatwg(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b < 0x80 {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        // (序列总长, 第二个字节的合法区间下界, 上界)；None = 非法引导字节
+        let spec = match b {
+            0xC2..=0xDF => Some((2usize, 0x80u8, 0xBF)),
+            0xE0 => Some((3, 0xA0, 0xBF)),
+            0xE1..=0xEC | 0xEE..=0xEF => Some((3, 0x80, 0xBF)),
+            0xED => Some((3, 0x80, 0x9F)), // 代理区排除（WTF-8 拒绝，与 std 同口径）
+            0xF0 => Some((4, 0x90, 0xBF)), // 过短编码排除
+            0xF1..=0xF3 => Some((4, 0x80, 0xBF)),
+            0xF4 => Some((4, 0x80, 0x8F)), // 超过 U+10FFFF 排除
+            _ => None,
+        };
+        let Some((len, lo, hi)) = spec else {
+            out.push('\u{FFFD}');
+            i += 1;
+            continue;
+        };
+        let mut j = i + 1;
+        let mut status = 0u8; // 0=OK 推进中；1=非法续字节；2=流尾截断
+        while j < i + len {
+            if j >= bytes.len() {
+                status = 2;
+                break;
+            }
+            let c = bytes[j];
+            let ok = if j == i + 1 { c >= lo && c <= hi } else { (0x80..=0xBF).contains(&c) };
+            if !ok {
+                status = 1;
+                break;
+            }
+            j += 1;
+        }
+        match status {
+            0 => {
+                // 序列完整且合法：按 str 直落（from_utf8 不可能失败——上面按表逐字节核过）
+                out.push_str(std::str::from_utf8(&bytes[i..i + len]).unwrap_or("\u{FFFD}"));
+                i += len;
+            }
+            1 => {
+                // 序列中途非法：一个替换字符，游标只进一个字节（失败字节下一轮重进状态机）
+                out.push('\u{FFFD}');
+                i += 1;
+            }
+            _ => {
+                // 流尾截断：整个未完成缓冲只出一个替换字符
+                out.push('\u{FFFD}');
+                i = bytes.len();
+            }
+        }
+    }
+    out
+}
+
+/// 字节 → 文本，判据 = `policy`（TS 内核 `decodeWithProbe` 的另一名解释者，逐条同形）：
+/// BOM 命中 ⇒ 该编码不严格解码（BOM 由解码器按标准剥掉）；否则 UTF-8 严格校验直通
+/// （零拷贝借用语义保留）；再否则 fallback 编码不严格解码（U+FFFD 替换，不硬失败——
+/// 只读检索不该因单个坏文件报错）。
+/// 与 TS 侧的逐字一致性由对拍测试钉死；替换字符出现时出声（不静默），文本照旧返回。
+fn decode_with_policy<'a>(bytes: &'a [u8], policy: &DecodeProbePolicyDto) -> Result<Cow<'a, str>, String> {
+    if let Some(rule) = policy.bom_rule_for(bytes) {
+        return Ok(match rule.encoding.as_str() {
+            // utf-8 家族：不严格支必须与 TextDecoder 逐错误等量 ⇒ 自带 WHATWG 解释器
+            "utf-8" | "utf-8-bom" => {
+                let body = bytes.strip_prefix(rule.bom.as_slice()).unwrap_or(bytes);
+                match std::str::from_utf8(body) {
+                    Ok(s) => Cow::Borrowed(s),
+                    Err(_) => {
+                        eprintln!("[search] {}：非法 UTF-8 序列已按 WHATWG 口径替换为 U+FFFD", rule.encoding);
+                        Cow::Owned(utf8_decode_whatwg(body))
+                    }
+                }
+            }
+            other => {
+                let enc = encoding_for(other)?;
+                let (text, _actual, had_errors) = enc.decode(bytes);
+                if had_errors {
+                    eprintln!("[search] {other}：解码出现替换字符（输入非法或不完整）");
+                }
+                Cow::Owned(text.into_owned())
+            }
+        });
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(s) => Ok(Cow::Borrowed(s)),
+        Err(_) => {
+            let enc = encoding_for(&policy.fallback_encoding)?;
+            let (text, _, had_errors) = enc.decode(bytes);
+            if had_errors {
+                eprintln!("[search] {}：解码出现替换字符", policy.fallback_encoding);
+            }
+            Ok(Cow::Owned(text.into_owned()))
+        }
+    }
 }
 
 /// 字符串 → 字节；`utf-8-bom` 显式加 BOM。
@@ -1508,18 +1675,15 @@ fn byte_prefilter(query: &str, is_regex: bool, case_sensitive: bool) -> Option<r
     regex::bytes::Regex::new(&regex::escape(query)).ok()
 }
 
-/// utf-16 BOM → 对应编码（FF FE = LE / FE FF = BE）
-fn utf16_bom_encoding(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
-    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
-        Some(encoding_rs::UTF_16LE)
-    } else if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
-        Some(encoding_rs::UTF_16BE)
-    } else {
-        None
-    }
+/// 二进制判定：utf-16 的 NUL 是编码产物（不是二进制信号），故策略表里 utf-16 系 BOM
+/// 命中的那支不算。判序仍然只读 `decode_policy()` 那一张表——检索不再自带第二份 BOM 判据。
+fn is_utf16_bom_hit(bytes: &[u8], policy: &DecodeProbePolicyDto) -> bool {
+    policy
+        .bom_rule_for(bytes)
+        .map(|r| r.encoding.starts_with("utf-16"))
+        .unwrap_or(false)
 }
 
-/// 二进制判定：utf-16 的 NUL 是编码产物（不是二进制信号），故带 BOM 的那支不算。
 fn looks_binary(bytes: &[u8], utf16ish: bool) -> bool {
     !utf16ish && bytes[..bytes.len().min(SEARCH_SNIFF_BYTES)].contains(&0)
 }
@@ -1633,6 +1797,7 @@ fn scan_file(
     matcher: &Regex,
     prefilter: Option<&regex::bytes::Regex>,
     cap: usize,
+    policy: &DecodeProbePolicyDto,
 ) -> FileOutcome {
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
@@ -1648,7 +1813,7 @@ fn scan_file(
     // 二进制判定放在预筛**之前**：`skipped.binary` 得是"这批候选里的二进制文件数"，
     // 与查询词无关；反过来（先预筛）会让这个数字随查询漂——同一个目录换个词，
     // 界面上的"跳过 N 个二进制文件"就变，那种读数没法信。
-    let utf16ish = utf16_bom_encoding(&bytes).is_some();
+    let utf16ish = is_utf16_bom_hit(&bytes, policy);
     if looks_binary(&bytes, utf16ish) {
         return FileOutcome::Binary;
     }
@@ -1660,7 +1825,14 @@ fn scan_file(
             }
         }
     }
-    let text = decode_for_search(&bytes);
+    let text = match decode_with_policy(&bytes, policy) {
+        Ok(t) => t,
+        Err(e) => {
+            // 表已在 run_search 入口整体校验过，走到这里 = 解释器与表脱节：可见、可数，不静默
+            eprintln!("[search] 解码失败（计入 skipped.unreadable）：{}：{e}", path.display());
+            return FileOutcome::Unreadable;
+        }
+    };
     let (hits, clipped) = scan_text(&text, matcher, cap);
     if hits.is_empty() {
         FileOutcome::Miss
@@ -1767,6 +1939,9 @@ fn run_search(
     if req.query.is_empty() {
         return Err("检索词为空".to_string());
     }
+    // 解码判据 = 编译期内嵌的共享常量表（W12 ENC-SRC）；坏表在这里就显式报错终止检索，
+    // 绝不静默换一套判据（那正是"搜索结果与编辑器正文对不上"的成因）。
+    let policy = decode_policy()?;
     let o = &req.options;
     let is_regex = o.is_regex.unwrap_or(false);
     let case_sensitive = o.case_sensitive.unwrap_or(false);
@@ -1824,7 +1999,7 @@ fn run_search(
                         break;
                     }
                     let cap = SEARCH_PER_FILE_CAP.min(remaining);
-                    match scan_file(&files[i], &matcher, prefilter.as_ref(), cap) {
+                    match scan_file(&files[i], &matcher, prefilter.as_ref(), cap, policy) {
                         FileOutcome::Hits(hits, clipped) => {
                             if clipped {
                                 overflow.store(true, Ordering::Relaxed);
@@ -2010,7 +2185,6 @@ pub fn run() {
             app_data_dir,
             register_write_domain,
             clear_write_domain,
-            decode_bytes,
             encode_string,
             start_watch,
             stop_watch,
