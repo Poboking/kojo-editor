@@ -18,7 +18,9 @@
  *   `宝珠`/`取得宝珠`、`标志`族系）各回各头，互不切词；
  * - 负自证：**未登记**的名字 / 族头一律 `undefined`（不猜）；`FAMILY_LABELS` 显示名**不做**
  *   整表别名合并（`全局标志` 不是别名）；
- * - 全覆盖闸（分母 = 全集）+ 全集自身的一致性（无重复族、显示名表不许越出全集）。
+ * - 全覆盖闸（分母 = 全集）+ 全集自身的一致性（无重复族、显示名表不许越出全集）；
+ * - **JP→CN 槽名词典**（ZH-N 批后半）：`slotCn` 契约接线（在线装词典 / 无词典两种装配态）+
+ *   `createChsSlotDictionary` 单元自证（命中 / 查不到 `undefined` 不猜 / 词形归一 / 首条优先）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -29,7 +31,9 @@ import {
   FAMILY_ALIASES_REVERSE,
   FAMILY_ALIAS_EXCLUSIONS,
   FAMILY_LABELS,
+  createChsSlotDictionary,
   loadEratwVariableSchema,
+  parseChsMap,
 } from '../src/variable-schema';
 
 const silentLog: Logger = {
@@ -278,5 +282,88 @@ describe('家族头中文别名（D2 起步 + 全量批 + ZH-N 扩面）× adapt
         expect(FAMILY_ALIASES[label], `${family} 的显示名不许同时是别名`).toBeUndefined();
       }
     }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* ZH-N 批后半：JP→CN 槽名词典（契约 `slotCn` + 工厂 `createChsSlotDictionary`） */
+/* -------------------------------------------------------------------------- */
+
+describe('JP→CN 槽名词典 × adapter', () => {
+  /**
+   * 词典 fixture（对齐真 `tw_csv_chs.xml` 形态：`<p><k>日文</k><v>中文</v></p>`）。
+   * 覆盖要点：正常词条 ×2 / 同名重条（首条优先）/ 空键 / 空值 / 两侧夹空白 / 文件头 BOM。
+   */
+  const XML =
+    '\uFEFF<map>' +
+    '<p><k>信頼度</k><v>信赖度</v></p>' +
+    '<p><k>信頼度</k><v>重名第二条（不许翻出来——同名取首条）</v></p>' +
+    '<p><k>噴乳</k><v>喷乳</v></p>' +
+    '<p><k></k><v>空键不收</v></p>' +
+    '<p><k>空值别收</k><v></v></p>' +
+    '<p><k>  触典  </k><v>  触值  </v></p>' +
+    '</map>';
+
+  it('命中：登记词 → 中文名（首条优先 · 空词条剔除 · size 对账）', () => {
+    // parseChsMap 收：信頼度 / 噴乳 / 空值别收（空键跳过；同名取首条）= 4 条
+    const parsed = parseChsMap(XML);
+    expect(parsed.size).toBe(4);
+    // 造只读词典时再剔除空值 ⇒ size 3；包装层不再改内容
+    const d = createChsSlotDictionary(parsed);
+    expect(d.size).toBe(3);
+    expect(d.cnForJp('信頼度')).toBe('信赖度');
+    expect(d.cnForJp('噴乳')).toBe('喷乳');
+    expect(d.cnForJp('触典')).toBe('触值');
+  });
+
+  it('查不到：undefined，绝不回原文冒充命中（shutdown fail-open 的红线）', () => {
+    const d = createChsSlotDictionary([['信頼度', '信赖度']]);
+    expect(d.cnForJp('不在词典')).toBeUndefined();
+    expect(d.cnForJp('信赖度')).toBeUndefined(); // 反方向（CN→JP）不是本词典面，不猜
+    expect(d.cnForJp('')).toBeUndefined();
+    // 空词典（词典缺席 / 读失败 ⇒ 与描述轴同一回落口径）：有问必 undefined
+    const empty = createChsSlotDictionary([]);
+    expect(empty.size).toBe(0);
+    expect(empty.cnForJp('噴乳')).toBeUndefined();
+  });
+
+  it('词形归一只做 BOM / 去空白；大小写、全半角都不折叠（折叠 = 猜等价）', () => {
+    const d = createChsSlotDictionary(parseChsMap(XML));
+    expect(d.cnForJp('\uFEFF信頼度')).toBe('信赖度'); // 词典进口 BOM（文件头）照常命中
+    expect(d.cnForJp('  噴乳\uFEFF')).toBe('喷乳'); // 查询侧同一条归一
+    // 中文显示词没有大小写概念；全半角工程实测常见（ex.csv: Ｖ絶頂）——都不折叠，逐字为界
+    const halfWidth = createChsSlotDictionary([['Ｖ絶頂', 'Ｖ绝顶']]);
+    expect(halfWidth.cnForJp('Ｖ絶頂')).toBe('Ｖ绝顶');
+    expect(halfWidth.cnForJp('V絶頂')).toBeUndefined();
+  });
+
+  it('契约接线：schema.slotCn 与 description 轴同一词典、同一装载（在线装词典的装配态）', async () => {
+    const s = await loadEratwVariableSchema({
+      io: fakeIo({
+        '/game/CSV/CFLAG.csv': '2,好感度\n4,信頼度\n',
+        '/plugins/tw_csv_chs.xml': XML,
+      }),
+      csvDir: '/game/CSV',
+      chsMapPath: '/plugins/tw_csv_chs.xml',
+      log: silentLog,
+    });
+    expect(s.slotCn!('CFLAG', '信頼度')).toBe('信赖度');
+    expect(s.slotCn!('NOWEX', '噴乳')).toBe('喷乳');
+    // 第一参数（族头）当前**不参与裁决**：词典是引擎 MAP_FROMXML 装出的**一张扁平表**，
+    // 键侧无族维度 ⇒ 换个族问同一个词，答案不变（这不是歧义，是词典形状本身）。
+    expect(s.slotCn!('NOTAFAMILY', '信頼度')).toBe('信赖度');
+    // 词典没有的词 / 中文已然的词：undefined（不猜）——`好感度` 由主表得名，词典无此键
+    expect(s.slotCn!('CFLAG', '好感度')).toBeUndefined();
+    expect(s.slotCn!('CFLAG', '不在词典')).toBeUndefined();
+    // 旧 description 路径**零改动**：悬停仍走「词典查名 → 原文回落」，本包新增面不碰它
+    expect(s.lookup('CFLAG', 2)?.description).toBe('好感度');
+    expect(s.lookup('CFLAG', 4)?.description).toBe('信赖度');
+  });
+
+  it('契约缺省：不装词典 ⇒ slotCn 恒 undefined（悬停回落原文的既有口径逐字不变）', async () => {
+    const s = await schema();
+    expect(s.slotCn!('CFLAG', '好感度')).toBeUndefined();
+    expect(s.slotCn!('CFLAG', '不在词典的假名')).toBeUndefined();
+    expect(s.lookup('CFLAG', 2)?.description).toBe('好感度');
   });
 });
