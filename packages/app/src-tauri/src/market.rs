@@ -59,6 +59,11 @@ const MARKET_DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
 const MARKET_DEFAULT_MAX_FETCH_BYTES: u64 = 256 * 1024;
 const MARKET_USER_AGENT: &str = "kojo-editor-market";
 
+/// 下载落盘的缓冲块（1 MiB）。网络流是"一块一写"：reqwest 的 chunk 通常几十 KB，
+/// 128 MiB 的包 ⇒ ~2,000 次 `WriteFile`，每次一个内核往返（PS-1 §7）。
+/// 垫一层缓冲后按整块落盘；体积双闸与"改名前必 flush"都不受影响。
+const DOWNLOAD_WRITE_CHUNK: usize = 1024 * 1024;
+
 /* ----------------------- 编译期硬顶（不可被 JS 放宽） ----------------------- */
 //
 // 上面三个默认值只在"JS 没传"时兜底；一旦 JS 传了 `max_bytes` / 解压限额，本层过去
@@ -970,8 +975,9 @@ fn ensure_tls_provider() {
 /// 体积双闸走 `guarded_send` / `stream_capped`（**与取文本同一份判定**），
 /// 超限**中止并删掉半截文件**。
 ///
-/// `on_progress` 给了就按 [`progress_due`] 节流回报进度（**写盘后**才报——报的是"真落了盘"
-/// 的量；收尾补一发让 UI 落在终值，重复调用由节流判定压掉）；没给则全程零回调。
+/// `on_progress` 给了就按 [`progress_due`] 节流回报进度（**交给写入缓冲之后**才报；
+/// 收尾那一次在 flush 之后 ⇒ 落盘失败不会带着一个"成功"的进度数字返回）。
+/// 发不发、怎么节流由调用方闭包决定（取文本用不上进度，走上面的无回调委托）。
 /// 总数取终态响应的 `Content-Length`（`guarded_send` 已核 ≤ 体积上限），缺失如实回 `None`。
 pub(crate) async fn download_to_staging(
     staging_dir: &Path,
@@ -1004,31 +1010,52 @@ pub(crate) async fn download_to_staging(
         }
     };
 
-    std::fs::create_dir_all(staging_dir)
-        .map_err(|e| format!("创建暂存目录失败 {}: {e}", staging_dir.display()))?;
-
+    // 建目录 + 建临时句柄是两次同步文件系统调用，旧写法直接在 tokio 工作线程上做
+    // （慢盘 / 网络盘上会把那条线程的事件循环占住）⇒ 挪到阻塞线程池（PS-1 §7）。
+    // 顺序不变：容器名闸与 `guarded_send`（URL / 体积双闸）都在这之前 ⇒ 依旧是"闸在前、写盘在后"。
+    let dir_owned = staging_dir.to_path_buf();
+    let name_owned = staging_name.to_string();
+    let (tmp, file) = tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir_owned)
+            .map_err(|e| format!("创建暂存目录失败 {}: {e}", dir_owned.display()))?;
+        // tmp 名带 pid + 进程内序号（`write_file_bytes` 同款）：pid 只隔开跨进程，
+        // 同一暂存名的并发下载若共用临时名会互踩——一方落盘另一方字节。
+        let tmp = dir_owned.join(format!(
+            ".{name_owned}.{}.kojo-dl-tmp",
+            tmp_unique_id()
+        ));
+        let file = std::fs::File::create(&tmp)
+            .map_err(|e| format!("创建暂存文件失败 {}: {e}", tmp.display()))?;
+        Ok::<(PathBuf, std::fs::File), String>((tmp, file))
+    })
+    .await
+    .map_err(|e| format!("market_download: 暂存准备线程失败：{e}"))??;
     let target = staging_dir.join(staging_name);
-    // tmp 名带 pid + 进程内序号（`write_file_bytes` 同款）：pid 只隔开跨进程，
-    // 同一暂存名的并发下载若共用临时名会互踩——一方落盘另一方字节。
-    let tmp = staging_dir.join(format!(
-        ".{staging_name}.{}.kojo-dl-tmp",
-        tmp_unique_id()
-    ));
-    let mut file = match std::fs::File::create(&tmp) {
-        Ok(f) => f,
-        Err(e) => return Err(format!("创建暂存文件失败 {}: {e}", tmp.display())),
-    };
-    let total = match stream_capped_report(response, opts.max_bytes, &mut file, &mut report).await {
+    // 网络块与写盘调用一比一地对着干（128 MB ÷ 缺省 chunk ⇒ ~2,000 次 `WriteFile`）：
+    // 中间垫一层缓冲，落盘按整块走（PS-1 §7）。缓冲不改变判据——体积上限仍在
+    // `stream_capped_report` 里**逐块**核，改名之前一定 flush，flush 失败连半成品一起删。
+    let mut sink = std::io::BufWriter::with_capacity(DOWNLOAD_WRITE_CHUNK, file);
+    let total = match stream_capped_report(response, opts.max_bytes, &mut sink, &mut report).await {
         Ok(n) => n,
         Err(e) => {
-            let _ = std::fs::remove_file(&tmp); // 半截容器不许留在暂存区
+            // 缓冲里的半截先丢弃（不 flush），句柄先关再删：半截容器不许留在暂存区
+            let file = sink.into_inner();
+            drop(file);
+            let _ = std::fs::remove_file(&tmp);
             return Err(e);
         }
     };
+    if let Err(e) = sink.flush() {
+        let file = sink.into_inner();
+        drop(file);
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("写响应体失败: {e}"));
+    }
+    let file = sink.into_inner();
+    drop(file);
     if total > 0 {
         report(total);
     }
-    drop(file);
     if let Err(e) = std::fs::rename(&tmp, &target) {
         let _ = std::fs::remove_file(&tmp);
         return Err(format!("暂存改名失败 {} → {}: {e}", tmp.display(), target.display()));

@@ -8,7 +8,7 @@
 //! 二进制数据经 base64 字符串跨 IPC（确定性强；口上文件体量下开销可忽略）。
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -60,6 +60,12 @@ struct WriteDomainState {
     project_root: Mutex<Option<PathBuf>>,
     extra_roots: Mutex<Vec<PathBuf>>,
     approved_roots: Mutex<Vec<PathBuf>>,
+    /// **允许域根的规范化备忘录**（PS-1 加速层，2026-10-18）。
+    /// 键 = 注册表里的原始写法，值 = `canonicalize_deep` 的成功结果。
+    /// 命中只在该原始路径**此刻仍是目录**时才采信，否则作废重算 ⇒
+    /// 判定结果与"每次写都重新 canonicalize 一遍根"逐字相同（含根解析失败的错误文案），
+    /// 省掉的只是重复的系统调用与两份 Vec 克隆。被任何根变更点整体清空。
+    canon_roots: Mutex<HashMap<PathBuf, PathBuf>>,
 }
 
 /// 规范化路径：找到最深的已存在祖先做 canonicalize（解析 `..` 与符号链接），
@@ -300,30 +306,30 @@ fn record_approved_root(
     Ok(())
 }
 
-/// 纯逻辑判定（可单测，不依赖 Tauri 类型）：
-/// `project_root` = 当前注册的项目根（可为 None），`app_data_dir` 常驻允许，
-/// `extra_roots` = 用户经对话框自选并常驻授权的项目位置根。
-fn ensure_in_write_domain(
+/// 允许域判定的**唯一实现**：`resolve_root` 只换"根怎么规范化"这一步（每次直算 / 走备忘录），
+/// 判序、包含关系与三条文案（目标解析失败 / 根解析失败 / 域外拒绝）都只有一份 ⇒
+/// 加速层不可能把判定改形。入参用引用（`Option<&Path>` / `&[PathBuf]`）：判定过程不再构造
+/// `Vec<PathBuf>`（原先每次写都要克隆一遍全部根）。
+fn ensure_in_domain_with<R>(
     project_root: Option<&Path>,
     app_data_dir: &Path,
     extra_roots: &[PathBuf],
     path: &Path,
     op: &str,
-) -> Result<(), String> {
+    mut resolve_root: R,
+) -> Result<(), String>
+where
+    R: FnMut(&Path) -> Result<PathBuf, String>,
+{
     let canon_target = canonicalize_deep(path)
         .map_err(|e| format!("写允许域（{op}）：路径解析失败 {path_display}: {e}", path_display = path.display()))?;
-    let mut roots: Vec<PathBuf> = vec![app_data_dir.to_path_buf()];
+    let mut roots: Vec<&Path> = vec![app_data_dir];
     if let Some(r) = project_root {
-        roots.push(r.to_path_buf());
+        roots.push(r);
     }
-    roots.extend(extra_roots.iter().cloned());
-    for root in &roots {
-        let canon_root = canonicalize_deep(root).map_err(|e| {
-            format!(
-                "写允许域（{op}）：允许域根目录解析失败 {}: {e}",
-                root.display()
-            )
-        })?;
+    roots.extend(extra_roots.iter().map(|p| p.as_path()));
+    for root in roots {
+        let canon_root = resolve_root(root)?;
         if is_within(&canon_target, &canon_root) {
             return Ok(());
         }
@@ -334,7 +340,59 @@ fn ensure_in_write_domain(
     ))
 }
 
-/// 命令侧包装：取 appDataDir + 当前注册的项目根 + 常驻授权根，执行判定。
+/// 允许域根解析失败的文案（**只有一份**：直算与备忘录两条路共用 ⇒ 逐字相同）。
+fn root_unresolved_message(op: &str, root: &Path, reason: &str) -> String {
+    format!(
+        "写允许域（{op}）：允许域根目录解析失败 {}: {reason}",
+        root.display()
+    )
+}
+
+/// 纯逻辑判定（**判序参照**，可单测、不依赖 Tauri 类型）：
+/// `project_root` = 当前注册的项目根（可为 None），`app_data_dir` 常驻允许，
+/// `extra_roots` = 用户经对话框自选并常驻授权的项目位置根。
+/// 生产路径走 `ensure_write_allowed`（备忘录版）；这一支是"**每个根每次都直算**"的参照实现，
+/// 与生产共用同一个 `ensure_in_domain_with` ⇒ 判序不可能分叉，`write_domain_tests` 就靠它
+/// 钉"缓存版与直算版逐字同判定"（含三条错误文案）。
+#[cfg(test)]
+fn ensure_in_write_domain(
+    project_root: Option<&Path>,
+    app_data_dir: &Path,
+    extra_roots: &[PathBuf],
+    path: &Path,
+    op: &str,
+) -> Result<(), String> {
+    ensure_in_domain_with(project_root, app_data_dir, extra_roots, path, op, |root| {
+        canonicalize_deep(root).map_err(|e| root_unresolved_message(op, root, &e.to_string()))
+    })
+}
+
+/// 备忘录版根规范化：命中且该原始写法**此刻仍是一个目录** ⇒ 采信缓存；
+/// 未命中 / 已不是目录（被删、换卷、改成文件）⇒ 作废重算。失败**不进缓存**，
+/// 下次仍按实时结果重算 ⇒ 错误文案与直算逐字一致（判定的三条分支一条都没少）。
+fn canonical_root_cached(
+    memo: &mut HashMap<PathBuf, PathBuf>,
+    root: &Path,
+    op: &str,
+) -> Result<PathBuf, String> {
+    if let Some(hit) = memo.get(root) {
+        if root.is_dir() {
+            return Ok(hit.clone());
+        }
+        memo.remove(root);
+    }
+    let canon = canonicalize_deep(root).map_err(|e| root_unresolved_message(op, root, &e.to_string()))?;
+    if root.is_dir() {
+        memo.insert(root.to_path_buf(), canon.clone());
+    }
+    Ok(canon)
+}
+
+/// 命令侧包装：取 appDataDir + 当前注册的项目根 + 常驻授权根，执行判定（走备忘录）。
+///
+/// 锁序固定为 `project_root → extra_roots → canon_roots`，且前两份**不克隆**
+/// （原先每次写克隆两个 Vec）；仓里其它地方从不嵌套持有这三把锁 ⇒ 无死锁面。
+/// 判定过程只在"备忘录未命中"时才碰文件系统。
 fn ensure_write_allowed(
     app: &tauri::AppHandle,
     state: &WriteDomainState,
@@ -346,17 +404,29 @@ fn ensure_write_allowed(
         .path()
         .app_data_dir()
         .map_err(|e| format!("app_data_dir: {e}"))?;
-    let root = state
+    let project = state
         .project_root
         .lock()
-        .map_err(|_| "write domain state poisoned".to_string())?
-        .clone();
+        .map_err(|_| "write domain state poisoned".to_string())?;
     let extras = state
         .extra_roots
         .lock()
-        .map_err(|_| "write domain state poisoned".to_string())?
-        .clone();
-    ensure_in_write_domain(root.as_deref(), &app_dir, &extras, path, op)
+        .map_err(|_| "write domain state poisoned".to_string())?;
+    let mut memo = state
+        .canon_roots
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?;
+    ensure_in_domain_with(project.as_deref(), &app_dir, &extras, path, op, |root| {
+        canonical_root_cached(&mut memo, root, op)
+    })
+}
+
+/// 允许域任何一处变更（项目根注册 / 清除 / 常驻根增减）⇒ 备忘录整体作废。
+/// 判定的正确性不依赖这一句（命中还要求原路径仍是目录），但它把陈旧窗口压到零。
+fn invalidate_canon_roots(state: &WriteDomainState) {
+    if let Ok(mut memo) = state.canon_roots.lock() {
+        memo.clear();
+    }
 }
 
 /// project.opened：前端注册项目根目录（允许域 = 项目根 + appDataDir）。
@@ -407,6 +477,9 @@ fn register_write_domain(
         .lock()
         .map_err(|_| "write domain state poisoned".to_string())?;
     *guard = Some(PathBuf::from(root));
+    drop(guard);
+    // 允许域变了 ⇒ 规范化备忘录整体作废（见 `canonical_root_cached`）
+    invalidate_canon_roots(&state);
     Ok(())
 }
 
@@ -418,6 +491,8 @@ fn clear_write_domain(state: tauri::State<'_, WriteDomainState>) -> Result<(), S
         .lock()
         .map_err(|_| "write domain state poisoned".to_string())?;
     *guard = None;
+    drop(guard);
+    invalidate_canon_roots(&state);
     Ok(())
 }
 
@@ -437,7 +512,7 @@ struct DirEntryDto {
     size: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct FileStatDto {
     size: u64,
@@ -466,10 +541,28 @@ fn mtime_ms_of(t: Option<std::time::SystemTime>) -> f64 {
 
 /* ---------------------------- 文件原语 ---------------------------- */
 
+/// **同步命令 = 在 IPC handler 线程（WebView 主线程）内联执行**：一次 512 份 .erb ≈ 21 MB 的
+/// 批量读、一份 2.35 MB 的编码转换，都会把整个界面冻在那一段时间里（`market.rs` 的
+/// `extract_staging_off_thread` 记着同一条 hazard，`search_text` 是仓里已有的解法先例）。
+/// PS-1 把这条形态推广到其余纯 IO / 纯 CPU 命令：命令体改 `async`，活挪到阻塞线程池，
+/// **判定与授权仍留在命令内、与写盘同命令**（铁律 6 的形态不变）。
+/// 前端一律 `await invoke(...)`，载荷形状逐字不变 ⇒ JS 侧零改动。
+async fn run_blocking<T: Send + 'static>(
+    op: &str,
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("{op}：宿主线程池失败：{e}"))?
+}
+
 #[tauri::command]
-fn read_file_bytes(path: String) -> Result<String, String> {
-    let bytes = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
-    Ok(B64.encode(bytes))
+async fn read_file_bytes(path: String) -> Result<String, String> {
+    run_blocking("read_file_bytes", move || {
+        let bytes = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
+        Ok(B64.encode(bytes))
+    })
+    .await
 }
 
 /// 同一件事，但**响应以二进制过界**：Tauri 把 `ipc::Response` 的 body 原样送到前端，
@@ -477,9 +570,12 @@ fn read_file_bytes(path: String) -> Result<String, String> {
 /// 开项目热路径每轮要读两份 10 MB 级快照（IMPLEMENTATION-LOG §5.91 实机读数）。
 /// `read_file_bytes` 保留：它仍是 smoke 脚本与"两条通道逐字节对照"探针的参照物。
 #[tauri::command]
-fn read_file_bytes_raw(path: String) -> Result<tauri::ipc::Response, String> {
-    let bytes = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
-    Ok(tauri::ipc::Response::new(bytes))
+async fn read_file_bytes_raw(path: String) -> Result<tauri::ipc::Response, String> {
+    run_blocking("read_file_bytes_raw", move || {
+        let bytes = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
+        Ok(tauri::ipc::Response::new(bytes))
+    })
+    .await
 }
 
 /// 原子写临时名的唯一段：`{pid}-{进程内单调序号}`。
@@ -523,16 +619,23 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
 }
 
 /// 原子写：同目录临时文件 + rename。写允许域第二道闸（M3）：目标路径必须在允许域内。
+/// 闸口（含路径解析）留在命令内、与写盘同命令；真正落盘的一段上阻塞线程池。
 #[tauri::command]
-fn write_file_bytes(
+async fn write_file_bytes(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
     path: String,
     data: String,
 ) -> Result<(), String> {
-    ensure_write_allowed(&app, &state, Path::new(&path), "write")?;
-    let bytes = B64.decode(data).map_err(|e| format!("base64 decode: {e}"))?;
-    atomic_write(Path::new(&path), &bytes).map_err(|e| e.to_string())
+    let target = Path::new(&path);
+    ensure_write_allowed(&app, &state, target, "write")?;
+    let target = target.to_path_buf();
+    // base64 解码与落盘同属"量随文件走"的活 ⇒ 一起挪走（解码也在阻塞线程上做）
+    run_blocking("write_file_bytes", move || {
+        let bytes = B64.decode(data).map_err(|e| format!("base64 decode: {e}"))?;
+        atomic_write(&target, &bytes).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -613,20 +716,36 @@ fn walk_dir(path: String, opts: Option<WalkOptionsDto>) -> Result<Vec<DirEntryDt
     Ok(out)
 }
 
-#[tauri::command]
-fn path_exists(path: String) -> bool {
-    Path::new(&path).exists()
+/// 存在性判定的同步核心（命令侧只是它的 async 壳；测试直接打这一层）。
+fn path_exists_at(path: &str) -> bool {
+    Path::new(path).exists()
 }
 
 #[tauri::command]
-fn stat_file(path: String) -> Option<FileStatDto> {
-    let md = std::fs::metadata(&path).ok()?;
+async fn path_exists(path: String) -> Result<bool, String> {
+    // 一次 `exists()` 就是一次 CreateFile 往返：热路径上（逐文件判在不在盘）几百次
+    // 串在主线程 ⇒ 一并挪到阻塞线程池。
+    // 失败**如实报错**而不是回 `false`——把"宿主线程池炸了"伪装成"文件不存在"
+    // 会让上层据此走"新建"分支，那是数据层面的错（铁律 4）。
+    run_blocking("path_exists", move || Ok(path_exists_at(&path)))
+        .await
+}
+
+/// 单文件元数据的同步核心：与 `stat_files` / `walk_dir(withMetadata)` 共用 `mtime_ms_of`。
+fn stat_file_at(path: &str) -> Option<FileStatDto> {
+    let md = std::fs::metadata(path).ok()?;
     let mtime_ms = mtime_ms_of(md.modified().ok());
     Some(FileStatDto {
         size: md.len(),
         mtime_ms,
         is_directory: md.is_dir(),
     })
+}
+
+#[tauri::command]
+async fn stat_file(path: String) -> Result<Option<FileStatDto>, String> {
+    // "取不到元数据"仍是既有的 `null`（前端按 null 退避），只有线程池本身炸了才报错
+    run_blocking("stat_file", move || Ok(stat_file_at(&path))).await
 }
 
 /* --------------------- 批量读（二进制帧，2026-10-16 批量 IO 批） --------------------- */
@@ -670,75 +789,126 @@ struct RawFileRead {
     data: Vec<u8>,
 }
 
-/// 读一个文件（含元数据）。读不到的**分类如实**：NotFound 与其它 IO 错误分开报，
-/// 让调用方能区分"文件没了"与"读不动"（都不可静默）。
+/// 读失败的分类（NotFound 与其它 IO 错误分开报，让调用方能区分"文件没了"与"读不动"——
+/// 两类都不可静默）。三态口径与改造前逐字相同。
+fn read_failure(path: &str, e: &std::io::Error) -> RawFileRead {
+    RawFileRead {
+        path: path.to_string(),
+        status: if e.kind() == std::io::ErrorKind::NotFound {
+            FRAME_STATUS_NOT_FOUND
+        } else {
+            FRAME_STATUS_READ_ERROR
+        },
+        mtime_ms: 0,
+        size: 0,
+        data: Vec::new(),
+    }
+}
+
+/// `File::open` 之后允许预分配的上限（防一个谎报体积的文件把整批的内存一次吃掉；
+/// 真实语料最大单文件 2.35 MB，上限只是兜底不是判据）。
+const READ_PREALLOC_MAX: u64 = 64 * 1024 * 1024;
+
+/// 读一个文件（含元数据）：**开一次句柄，元数据从同一个句柄取**。
+/// 旧实现是 `fs::read` + `fs::metadata` ⇒ 每个文件两次"打开—查询—关闭"，
+/// 一次冷开 6,855 个路径就是白多 6,855 趟元数据往返（PS-1 §4）。
+/// 读不到时的分类、mtime 取值口径与旧实现逐字一致（`mtime_ms_i64` 未动）。
 fn read_one_file(path: &str) -> RawFileRead {
-    match std::fs::read(path) {
-        Ok(data) => {
-            // 元数据取不到不致命（退化为 0；缓存判据要求 stat 两侧都有值才命中，不会误中）
-            let (mtime_ms, size) = match std::fs::metadata(path) {
-                Ok(md) => (mtime_ms_i64(md.modified().ok()), md.len()),
-                Err(_) => (0, data.len() as u64),
-            };
-            RawFileRead {
-                path: path.to_string(),
-                status: FRAME_STATUS_OK,
-                mtime_ms,
-                size,
-                data,
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => return read_failure(path, &e),
+    };
+    // 元数据取不到不致命（退化为 0 + 实读字节数；缓存判据要求 stat 两侧都有值才命中，不会误中）
+    let hinted = file.metadata().ok();
+    let mtime_ms = hinted
+        .as_ref()
+        .map(|md| mtime_ms_i64(md.modified().ok()))
+        .unwrap_or(0);
+    let prealloc = hinted
+        .as_ref()
+        .map(|md| md.len())
+        .unwrap_or(0)
+        .min(READ_PREALLOC_MAX) as usize;
+    let mut data: Vec<u8> = Vec::with_capacity(prealloc);
+    if let Err(e) = std::io::Read::read_to_end(&mut file, &mut data) {
+        return read_failure(path, &e);
+    }
+    let size = match hinted {
+        // 同一句柄的 size 与实读字节数同源于一次打开；metadata 取不到时如实回实读长度
+        Some(md) if md.is_file() => md.len(),
+        _ => data.len() as u64,
+    };
+    RawFileRead {
+        path: path.to_string(),
+        status: FRAME_STATUS_OK,
+        mtime_ms,
+        size,
+        data,
+    }
+}
+
+/// 并行映射（PS-1）：**按下标领取、按下标回位** ⇒ 输出顺序恒等于入参顺序，
+/// 并行只影响内部完成次序。`len <= 1` 不铺线程；worker 数 = `min(len, threads)`。
+/// 某个 worker 崩了 ⇒ 它那一段结果缺席（与 `read_files_frame` 改造前的既有口径逐字相同：
+/// 整批不失败、缺的条目由调用方按"数量对不上"自行退避）。
+fn fan_out<T, F>(len: usize, threads: usize, f: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(usize) -> T + Sync + Send,
+{
+    if len == 0 {
+        return Vec::new();
+    }
+    if len <= 1 {
+        return vec![f(0)];
+    }
+    let next = AtomicUsize::new(0);
+    let workers = len.min(threads);
+    let mut collected: Vec<(usize, T)> = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            let next = &next;
+            let f = &f;
+            handles.push(scope.spawn(move || {
+                let mut local: Vec<(usize, T)> = Vec::new();
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= len {
+                        break;
+                    }
+                    local.push((i, f(i)));
+                }
+                local
+            }));
+        }
+        let mut merged: Vec<(usize, T)> = Vec::with_capacity(len);
+        for h in handles {
+            if let Ok(mut local) = h.join() {
+                merged.append(&mut local);
             }
         }
-        Err(e) => RawFileRead {
-            path: path.to_string(),
-            status: if e.kind() == std::io::ErrorKind::NotFound {
-                FRAME_STATUS_NOT_FOUND
-            } else {
-                FRAME_STATUS_READ_ERROR
-            },
-            mtime_ms: 0,
-            size: 0,
-            data: Vec::new(),
-        },
-    }
+        merged
+    });
+    collected.sort_by_key(|(i, _)| *i);
+    collected.into_iter().map(|(_, v)| v).collect()
+}
+
+/// 帧字节数（定长头 + 每项 32 字节元信息 + 两段变长内容）：**先算准再一次分配**。
+/// 旧实现从 `Vec::new()` 起写 21 MB ⇒ ~25 次 realloc、累计 ~40 MB memcpy（PS-1 §5）。
+fn frame_capacity(results: &[RawFileRead]) -> usize {
+    4usize
+        + results.iter().map(|r| {
+            4 + r.path.len() + 4 + 8 + 8 + 8 + r.data.len()
+        }).sum::<usize>()
 }
 
 /// 批量读并编码成帧（并行读、按下标回位；`len<=1` 不铺线程）。
 /// 纯函数面独立出来是为了可单测（帧一旦漂，前端解帧器静默错位——比读失败更坏）。
 fn read_files_frame(paths: &[String]) -> Vec<u8> {
-    let results: Vec<RawFileRead> = if paths.len() <= 1 {
-        paths.iter().map(|p| read_one_file(p)).collect()
-    } else {
-        let next = AtomicUsize::new(0);
-        let workers = paths.len().min(BATCH_READ_THREADS);
-        let mut collected: Vec<(usize, RawFileRead)> = std::thread::scope(|scope| {
-            let mut handles = Vec::new();
-            for _ in 0..workers {
-                let next = &next;
-                handles.push(scope.spawn(move || {
-                    let mut local: Vec<(usize, RawFileRead)> = Vec::new();
-                    loop {
-                        let i = next.fetch_add(1, Ordering::Relaxed);
-                        if i >= paths.len() {
-                            break;
-                        }
-                        local.push((i, read_one_file(&paths[i])));
-                    }
-                    local
-                }));
-            }
-            let mut merged: Vec<(usize, RawFileRead)> = Vec::new();
-            for h in handles {
-                if let Ok(mut local) = h.join() {
-                    merged.append(&mut local);
-                }
-            }
-            merged
-        });
-        collected.sort_by_key(|(i, _)| *i);
-        collected.into_iter().map(|(_, r)| r).collect()
-    };
+    let results: Vec<RawFileRead> =
+        fan_out(paths.len(), BATCH_READ_THREADS, |i| read_one_file(&paths[i]));
 
-    let mut out: Vec<u8> = Vec::new();
+    let mut out: Vec<u8> = Vec::with_capacity(frame_capacity(&results));
     out.extend_from_slice(&(results.len() as u32).to_le_bytes());
     for r in &results {
         let path_bytes = r.path.as_bytes();
@@ -755,12 +925,16 @@ fn read_files_frame(paths: &[String]) -> Vec<u8> {
 
 /// 批量读：一次 IPC 带回多文件原始字节 + 元数据（`ipc::Response` 二进制过界，无 base64 膨胀）。
 /// 逐文件失败不改整批的成败（status 三态在帧里），故本命令无 Result 错误面。
+/// 但**整批的读盘 + 组帧曾是 21 MB 级的主线程内联活** ⇒ 上阻塞线程池（PS-1 §1）。
 #[tauri::command]
-fn read_files_raw(paths: Vec<String>) -> tauri::ipc::Response {
-    tauri::ipc::Response::new(read_files_frame(&paths))
+async fn read_files_raw(paths: Vec<String>) -> Result<tauri::ipc::Response, String> {
+    run_blocking("read_files_raw", move || {
+        Ok(tauri::ipc::Response::new(read_files_frame(&paths)))
+    })
+    .await
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct BatchStatDto {
     path: String,
@@ -770,27 +944,33 @@ struct BatchStatDto {
     size: Option<u64>,
 }
 
-/// 批量 stat（小载荷，JSON 形态）：与 `stat_file` 共用 `mtime_ms_of`（判据同源不漂）。
-/// 逐文件失败 ⇒ `exists:false`，不抛整批（与 `read_files_raw` 同口径）。
-#[tauri::command]
-fn stat_files(paths: Vec<String>) -> Vec<BatchStatDto> {
-    paths
-        .iter()
-        .map(|p| match std::fs::metadata(p) {
+/// 批量 stat 的同步核心：**逐项一次 `fs::metadata` 串行跑在调用线程上**
+/// （6,855 个路径 = 14 趟 × 512）⇒ 复用批量读那套 `fan_out` 铺 8 路（PS-1 §2）。
+/// 输出顺序 = 入参顺序（`fan_out` 按下标回位），与旧实现逐字同形。
+fn stat_files_of(paths: &[String]) -> Vec<BatchStatDto> {
+    fan_out(paths.len(), BATCH_READ_THREADS, |i| {
+        match std::fs::metadata(&paths[i]) {
             Ok(md) => BatchStatDto {
-                path: p.clone(),
+                path: paths[i].clone(),
                 exists: true,
                 mtime_ms: Some(mtime_ms_of(md.modified().ok())),
                 size: Some(md.len()),
             },
             Err(_) => BatchStatDto {
-                path: p.clone(),
+                path: paths[i].clone(),
                 exists: false,
                 mtime_ms: None,
                 size: None,
             },
-        })
-        .collect()
+        }
+    })
+}
+
+/// 批量 stat（小载荷，JSON 形态）：与 `stat_file` 共用 `mtime_ms_of`（判据同源不漂）。
+/// 逐文件失败 ⇒ `exists:false`，不抛整批（与 `read_files_raw` 同口径）。
+#[tauri::command]
+async fn stat_files(paths: Vec<String>) -> Result<Vec<BatchStatDto>, String> {
+    run_blocking("stat_files", move || Ok(stat_files_of(&paths))).await
 }
 
 #[tauri::command]
@@ -1211,8 +1391,9 @@ fn utf8_decode_whatwg(bytes: &[u8]) -> String {
 
 /// 字节 → 文本，判据 = `policy`（TS 内核 `decodeWithProbe` 的另一名解释者，逐条同形）：
 /// BOM 命中 ⇒ 该编码不严格解码（BOM 由解码器按标准剥掉）；否则 UTF-8 严格校验直通
-/// （零拷贝借用语义保留）；再否则 fallback 编码不严格解码（U+FFFD 替换，不硬失败——
-/// 只读检索不该因单个坏文件报错）。
+/// （零拷贝借用语义保留）；再否则**三族裁决**（shift_jis / gbk / big5，与内核
+/// `decodeWithProbe` → `probeLegacyCjk` 同判序；表里 `fallbackEncoding` 就是裁决的基准族
+/// shift_jis ⇒ 三族零分时逐字节等价于旧的单族兜底）。
 /// 与 TS 侧的逐字一致性由对拍测试钉死；替换字符出现时出声（不静默），文本照旧返回。
 fn decode_with_policy<'a>(bytes: &'a [u8], policy: &DecodeProbePolicyDto) -> Result<Cow<'a, str>, String> {
     if let Some(rule) = policy.bom_rule_for(bytes) {
@@ -1241,6 +1422,15 @@ fn decode_with_policy<'a>(bytes: &'a [u8], policy: &DecodeProbePolicyDto) -> Res
     match std::str::from_utf8(bytes) {
         Ok(s) => Ok(Cow::Borrowed(s)),
         Err(_) => {
+            // PS-1 §6：这里曾是"按表单族（shift_jis）解一遍"，与内核的三族裁决脱节
+            // —— 裁决那一份（`decode_legacy_family`）当时是死代码。GBK/Big5 的中文正文
+            // 因此在检索预览里是 SJIS 乱码、且中文查询词匹配不上，而编辑器打开同一份
+            // 字节看到的是裁决后的文本。现在两条判序合成一条。
+            if policy.fallback_encoding == "shift_jis" {
+                return Ok(decode_legacy_family(bytes));
+            }
+            // 表被改成别的兜底族时**不**悄悄套用三族裁决（裁决的基准族是 shift_jis）：
+            // 按表原样解码，让"表说了算"这条不褪色。
             let enc = encoding_for(&policy.fallback_encoding)?;
             let (text, _, had_errors) = enc.decode(bytes);
             if had_errors {
@@ -1251,16 +1441,19 @@ fn decode_with_policy<'a>(bytes: &'a [u8], policy: &DecodeProbePolicyDto) -> Res
     }
 }
 
-/// 字符串 → 字节；`utf-8-bom` 显式加 BOM。
+/// 字符串 → 字节的同步核心（`utf-8-bom` 显式加 BOM）。
 /// 审阅 M2 修复（2026-10-10）：encoding_rs 对不可映射字符默认输出 HTML
 /// numeric entity（`&#NNNN;`），静默写入即数据损坏（引擎读为字面乱码）。
 /// 有 had_errors 一律拒绝并报错，由调用方提示"内容含该编码无法表示的字符"。
-#[tauri::command]
-fn encode_string(text: String, encoding: String) -> Result<String, String> {
-    let buf: Vec<u8> = match encoding.as_str() {
+///
+/// 这一支是**整篇转码**（一份 2.35 MB / 52,601 行的口上按 shift_jis 编一遍不是零成本），
+/// 曾与命令同体跑在 IPC handler 线程上 ⇒ 拆成同步核心 + async 壳（PS-1 §1）。
+fn encode_string_of(text: String, encoding: &str) -> Result<Vec<u8>, String> {
+    Ok(match encoding {
         "utf-8" => text.into_bytes(),
         "utf-8-bom" => {
-            let mut v = vec![0xEF, 0xBB, 0xBF];
+            let mut v = Vec::with_capacity(3 + text.len());
+            v.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
             v.extend_from_slice(text.as_bytes());
             v
         }
@@ -1274,8 +1467,15 @@ fn encode_string(text: String, encoding: String) -> Result<String, String> {
             }
             encoded.into_owned()
         }
-    };
-    Ok(B64.encode(buf))
+    })
+}
+
+#[tauri::command]
+async fn encode_string(text: String, encoding: String) -> Result<String, String> {
+    run_blocking("encode_string", move || {
+        encode_string_of(text, &encoding).map(|buf| B64.encode(buf))
+    })
+    .await
 }
 
 /* ---------------------------- 文件监视（BUG-5） ---------------------------- */
@@ -1569,7 +1769,7 @@ struct SearchRequestDto {
     options: SearchOptionsDto,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 struct SearchMatchDto {
     /// 1 基行号
@@ -1639,10 +1839,18 @@ const ELLIPSIS_UNIT: u16 = 0x2026;
 
 /// 命中行 → 预览窗口。超长行以命中为中心开窗；两端截断时加省略号（计入窗口）。
 /// 返回 (窗口单元, 命中起点, 命中终点)，偏移**相对返回的窗口**。
-fn preview_window(units: &[u16], start: usize, end: usize, cap: usize) -> (Vec<u16>, u32, u32) {
+///
+/// **不截断时返回借用切片**（PS-1 §3）：命中行绝大多数本来就短于 240 单元，
+/// 旧口径为每个命中先 `to_vec()` 复制整行单元、再 `String::from_utf16_lossy` 复制一遍。
+fn preview_window<'a>(
+    units: &'a [u16],
+    start: usize,
+    end: usize,
+    cap: usize,
+) -> (Cow<'a, [u16]>, u32, u32) {
     let total = units.len();
     if total <= cap {
-        return (units.to_vec(), start as u32, end as u32);
+        return (Cow::Borrowed(units), start as u32, end as u32);
     }
     // 命中比窗口还长时，窗口至少装得下整段命中（宁可超一截预览，不可把命中切没）
     let hit_len = end.saturating_sub(start);
@@ -1662,7 +1870,7 @@ fn preview_window(units: &[u16], start: usize, end: usize, cap: usize) -> (Vec<u
     }
     let lead = if head_trim { 1 } else { 0 };
     (
-        out,
+        Cow::Owned(out),
         (lead + start - from) as u32,
         (lead + end - from) as u32,
     )
@@ -1696,16 +1904,36 @@ fn build_matcher(
     Regex::new(&pattern).map_err(|e| format!("正则无效：{e}"))
 }
 
-/// 字节级预筛：只在"字面量 + 纯 ASCII + 大小写敏感"时成立——
-/// 此时命中必然在原始字节里原样出现（utf-8 / shift_jis 对 ASCII 段逐字节相同），
-/// 字节里没有就不必解码（utf-16 由调用方先排除）。
-/// 大小写不敏感不做预筛：Unicode 简单大小写折叠（如 U+212A KELVIN ↔ 'k'）会让
+/// 字节级预筛的产物：匹配器 + 一条"这份预筛对哪些文件成立"的强度标记（PS-1 §3）。
+struct BytePrefilter {
+    re: regex::bytes::Regex,
+    /// true ⇒ 查询是纯 ASCII 字面量：**所有** ASCII 兼容族（utf-8 / shift_jis / gbk / big5）
+    /// 都把它逐字节透传，字节里没有就等于文本里没有（legacy 族的双字节尾字节可能撞出
+    /// 误报，但误报只是多做一次解码，不漏报）。
+    ascii_safe: bool,
+}
+
+/// 字面量 + 大小写敏感 ⇒ 可以在原始字节上先过一遍筛。
+///
+/// **口径放宽（PS-1 §3）**：旧实现只认"查询纯 ASCII"，而本产品缺省查询是中文
+/// （`口上` 一类），于是 12,657 个候选文件**一个都预筛不掉**，全部解码 + 全文匹配。
+/// 现在多一条成立通道：**整份字节本身是合法 UTF-8** 时，解码不改一个字节
+/// （BOM 也只是剥前缀、命中文本仍在剩余字节里），字面量要命中就必然以同一串 UTF-8
+/// 字节原样出现 ⇒ 非 ASCII 查询对 99.5% 的语料（utf-8 + utf-8-bom 6,690 + 5,907 份）同样能预筛。
+/// 遗留族（shift_jis/gbk/big5，字节形不同）只在 `ascii_safe` 那条通道下被筛，否则照常解码匹配。
+///
+/// 大小写不敏感一律不预筛：Unicode 简单大小写折叠（如 U+212A KELVIN ↔ 'k'）会让
 /// "字节里有"与"文本里能匹配"不再等价——省下的解码不值一次漏报。
-fn byte_prefilter(query: &str, is_regex: bool, case_sensitive: bool) -> Option<regex::bytes::Regex> {
-    if is_regex || !case_sensitive || query.is_empty() || !query.is_ascii() {
+fn byte_prefilter(query: &str, is_regex: bool, case_sensitive: bool) -> Option<BytePrefilter> {
+    if is_regex || !case_sensitive || query.is_empty() {
         return None;
     }
-    regex::bytes::Regex::new(&regex::escape(query)).ok()
+    regex::bytes::Regex::new(&regex::escape(query))
+        .ok()
+        .map(|re| BytePrefilter {
+            ascii_safe: query.is_ascii(),
+            re,
+        })
 }
 
 /// 二进制判定：utf-16 的 NUL 是编码产物（不是二进制信号），故策略表里 utf-16 系 BOM
@@ -1749,9 +1977,14 @@ fn cjk_family_score(text: &str, is_sjis: bool) -> i32 {
 /// gbk / big5 必须**全文件零替换字符**且分数**严格大于**当前最好者才上位；
 /// 顺序 sjis → gbk → big5（平局归先者），三族零分 ⇒ 兜底 shift_jis（与旧口径逐字节一致）。
 /// 检索预览与编辑器必须对同一份字节给出同一文本，两套探测会让结果与正文对不上。
+///
+/// **这一支现在是活路径**（PS-1 §6）：它曾只被 `search_tests` 引用（`decode_with_policy`
+/// 的兜底只按表单族 shift_jis 解码），于是 GBK/Big5 正文在检索预览里是 SJIS 乱码、
+/// 且中文查询词根本匹配不上——而编辑器打开同一份字节看到的是裁决后的文本。
+/// 三族零分/含替换字符时照旧出声（铁律 4）。
 fn decode_legacy_family(bytes: &[u8]) -> Cow<'_, str> {
     let (sjis, _, _) = encoding_rs::SHIFT_JIS.decode(bytes);
-    let mut best = (cjk_family_score(&sjis, true), Cow::Owned(sjis.into_owned()));
+    let mut best: (i32, Cow<str>) = (cjk_family_score(&sjis, true), Cow::Owned(sjis.into_owned()));
     for enc in [encoding_rs::GBK, encoding_rs::BIG5] {
         let (text, _, had_errors) = enc.decode(bytes);
         if had_errors {
@@ -1762,42 +1995,43 @@ fn decode_legacy_family(bytes: &[u8]) -> Cow<'_, str> {
             best = (score, Cow::Owned(text.into_owned()));
         }
     }
+    if best.1.contains('\u{FFFD}') {
+        eprintln!("[search] 三族裁决后仍有非法字节（按替换字符呈现，不硬失败）");
+    }
     best.1
 }
 
-/// 字节 → 检索用文本。探测口径与内核 `probeEncoding` **逐条一致**
-/// （BOM → UTF-8 严格校验 → 三族评分 shift_jis/gbk/big5 → shift_jis 兜底；utf-16 只认 BOM 那一支）：
-/// 命中行的预览必须与编辑器打开同一文件看到的文本相同，两套探测会让"搜索结果"
-/// 与"点进去看到的正文"对不上——那比漏几个文件更坏。
-/// 代价：无 BOM 的 utf-16 会按兜底族解成乱码，且因含 NUL 被计入 `skipped.binary`
-/// （可见、可数，不是静默漏报）。
-/// 解码失败不阻断（与 `decode_bytes` 同口径：替换字符只出声，只读检索不该硬失败）。
-/// UTF-16 BOM 判定（上游三族批的调用点仍需要它）：BOM 存在才认 utf-16，无 BOM 不猜。
-fn utf16_bom_encoding(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
-    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
-        Some(encoding_rs::UTF_16LE)
-    } else if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
-        Some(encoding_rs::UTF_16BE)
-    } else {
-        None
-    }
-}
+/// 字节 → 检索用文本的**判序参照壳**（PS-1 §6）。
+///
+/// 曾经这里自带一份 BOM if 链（`utf16_bom_encoding`）+ 一份 UTF-8 校验 + 三族裁决，
+/// 而活路径（`scan_file` → `decode_with_policy`）只按表单族 shift_jis 兜底 ⇒ 两套探测
+/// 对同一份字节给出不同文本：检索预览与编辑器正文对不上，GBK/Big5 的中文查询词还整份
+/// 匹配不上。现在三族裁决（`decode_legacy_family`）已接进 `decode_with_policy` 这条活路，
+/// 那份自带的 BOM if 链随之删除；本壳只是把"表 + 裁决"这条**唯一判序**以最少的参数
+/// 暴露给判据 ⇒ `search_tests` 里钉 GBK/Big5 不被强扭成 shift_jis 的用例，钉的是活行为。
+/// 探测口径与内核 `probeEncoding` / `decodeWithProbe` 逐条一致：
+/// BOM（表逐条）→ UTF-8 严格校验 → 三族评分 shift_jis/gbk/big5 → shift_jis 兜底。
+/// 代价照旧：无 BOM 的 utf-16 会按兜底族解成乱码，且因含 NUL 被计入 `skipped.binary`
+/// （可见、可数，不是静默漏报）。解码不硬失败（只读检索不该因单个坏文件报错），但出声。
+#[cfg(test)]
 fn decode_for_search(bytes: &[u8]) -> Cow<'_, str> {
-    if let Some(enc) = utf16_bom_encoding(bytes) {
-        let (text, _, had_errors) = enc.decode(bytes);
-        if had_errors {
-            eprintln!("[search] utf-16 解码出现替换字符（输入非法或不完整）");
+    match decode_policy().and_then(|p| decode_with_policy(bytes, p)) {
+        Ok(text) => text,
+        Err(e) => {
+            // 表坏 = 宿主与表脱节：出声，并按同一份"UTF-8 严格 → 三族裁决"降级，
+            // 绝不悄悄换一套 BOM 判据（那正是"结果与正文对不上"的成因）
+            eprintln!("[search] 内嵌解码策略表不可用，按 UTF-8/三族同一判序降级：{e}");
+            match std::str::from_utf8(bytes) {
+                Ok(s) => Cow::Borrowed(s),
+                Err(_) => decode_legacy_family(bytes),
+            }
         }
-        return Cow::Owned(text.into_owned());
-    }
-    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    match std::str::from_utf8(body) {
-        Ok(s) => Cow::Borrowed(s),
-        Err(_) => decode_legacy_family(bytes),
     }
 }
 
-/// 一份文本 → 命中（受 `cap` 限制）。返回 (命中, 是否因上限截断)。
+/// 一份文本 → 命中（受 `cap` 限制），**逐行**匹配的正则口径：
+/// grep 语义（`^`/`$` 落在行首行尾、跨行模式不参与），与"点开能看到行号"的呈现一致。
+/// 返回 (命中, 是否因上限截断)。
 ///
 /// 截断判定 = **真的又出现了一个装不下的命中**（不是"恰好装满就算截断"）：
 /// 恰好装满时结果其实是完整的，报截断会让作者去调上限，白折腾。
@@ -1818,13 +2052,98 @@ fn scan_text(text: &str, matcher: &Regex, cap: usize) -> (Vec<SearchMatchDto>, b
             out.push(SearchMatchDto {
                 line: idx as u32 + 1,
                 column: start as u32 + 1,
-                preview: String::from_utf16_lossy(&win),
+                preview: String::from_utf16_lossy(win.as_ref()),
                 start: ws,
                 end: we,
             });
         }
     }
     (out, false)
+}
+
+/// **字面量单趟快道**（PS-1 §3）：整个文本只建**一次** `find_iter`，
+/// 行号 / UTF-16 列靠增量计数；旧口径逐行建迭代器（真语料一轮 4.4M 次构造），
+/// 且每个命中都从头重走一遍行前缀去算列。
+///
+/// **准入条件由调用方保证**：`is_regex == false` 且查询串内不含 `\n`/`\r`。
+/// 满足时本函数与 [`scan_text`] **逐字同产出**（对拍钉在
+/// `scan_text_flat_matches_line_by_line`）：
+/// - 字面量 pattern 里没有 `^`/`$`，锚点语义无从改变（正则查询因此**不走**这条，
+///   整篇扫会把 `^` 缩成"仅文件首"、把 CRLF 文件的 `$` 落到 `\r` 之后）；
+/// - 不含换行的字面量不可能跨行命中；`\b`（全词开关）在行边界两侧同判——
+///   `\n`/`\r` 都是非词字符，与"行首/行尾"给出的边界一致。
+fn scan_text_flat(text: &str, matcher: &Regex, cap: usize) -> (Vec<SearchMatchDto>, bool) {
+    let cap = cap.max(1);
+    let mut out: Vec<SearchMatchDto> = Vec::new();
+    // 行游标：当前行的字节范围是 line_start..line_end（line_end 指向 '\n' 或文本尾）
+    let mut line_no: u32 = 1;
+    let mut line_start = 0usize;
+    let mut line_end = text.find('\n').unwrap_or(text.len());
+    // 列游标：col_units = line_start..col_pos 的 UTF-16 单元数（只往前走，不回扫行前缀）
+    let mut col_pos = 0usize;
+    let mut col_units = 0usize;
+    // 预览开窗要整行的 UTF-16 单元：同一行的多个命中共用一份
+    let mut units_of_line_start = usize::MAX;
+    let mut units: Vec<u16> = Vec::new();
+
+    for m in matcher.find_iter(text) {
+        let (ms, me) = (m.start(), m.end());
+        if ms >= line_end {
+            // 命中落在后面的行里 ⇒ 一行一行推进（每行一次 memchr，总代价 = 扫过文本一次）
+            let mut p = line_end + 1;
+            loop {
+                line_no += 1;
+                let next = text[p..].find('\n').map(|k| p + k).unwrap_or(text.len());
+                line_start = p;
+                line_end = next;
+                if ms < line_end || line_end >= text.len() {
+                    break;
+                }
+                p = line_end + 1;
+            }
+            col_pos = line_start;
+            col_units = 0;
+        }
+        if ms > col_pos {
+            col_units += utf16_len(&text[col_pos..ms]);
+            col_pos = ms;
+        }
+        if out.len() >= cap {
+            return (out, true);
+        }
+        let raw = &text[line_start..line_end];
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        let start = col_units;
+        let end = col_units + utf16_len(&text[ms..me]);
+        if units_of_line_start != line_start {
+            units = utf16_units(line);
+            units_of_line_start = line_start;
+        }
+        let (win, ws, we) = preview_window(&units, start, end, SEARCH_PREVIEW_UNITS);
+        out.push(SearchMatchDto {
+            line: line_no,
+            column: start as u32 + 1,
+            preview: String::from_utf16_lossy(win.as_ref()),
+            start: ws,
+            end: we,
+        });
+        debug_assert!(me <= line_end, "字面量命中不该跨过换行");
+    }
+    (out, false)
+}
+
+/// 两条扫描路径的分流点（口径见 [`scan_text_flat`] 的准入条件）。
+fn scan_hits(
+    text: &str,
+    matcher: &Regex,
+    cap: usize,
+    literal_single_pass: bool,
+) -> (Vec<SearchMatchDto>, bool) {
+    if literal_single_pass {
+        scan_text_flat(text, matcher, cap)
+    } else {
+        scan_text(text, matcher, cap)
+    }
 }
 
 enum FileOutcome {
@@ -1835,18 +2154,29 @@ enum FileOutcome {
     Unreadable,
 }
 
+/// 检索单个文件。
+///
+/// `size_hint` = **遍历时顺路拿到的字节数**（PS-1 §4）：`collect_files` 已经在 walkdir
+/// 的枚举结果上取过一次元数据，旧口径这里再 `fs::metadata` 一遍 ⇒ 12,657 个候选文件
+/// 白多 12,657 趟元数据往返。取不到（遍历失败 / 跨平台差异）⇒ 退回逐文件 stat，
+/// 判定与计数分档（超大 / 读失败）逐字不变。
 fn scan_file(
     path: &Path,
+    size_hint: Option<u64>,
     matcher: &Regex,
-    prefilter: Option<&regex::bytes::Regex>,
+    prefilter: Option<&BytePrefilter>,
     cap: usize,
     policy: &DecodeProbePolicyDto,
+    literal_single_pass: bool,
 ) -> FileOutcome {
-    let meta = match std::fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => return FileOutcome::Unreadable,
+    let len = match size_hint {
+        Some(n) => n,
+        None => match std::fs::metadata(path) {
+            Ok(m) => m.len(),
+            Err(_) => return FileOutcome::Unreadable,
+        },
     };
-    if meta.len() > SEARCH_MAX_FILE_BYTES {
+    if len > SEARCH_MAX_FILE_BYTES {
         return FileOutcome::TooLarge;
     }
     let bytes = match std::fs::read(path) {
@@ -1860,10 +2190,13 @@ fn scan_file(
     if looks_binary(&bytes, utf16ish) {
         return FileOutcome::Binary;
     }
-    // 字节级预筛：不命中的文件整个跳过解码（utf-16 的字节被 0 隔开，预筛对它不成立）
+    // 字节级预筛：不命中的文件整个跳过解码。成立条件两条（口径见 `byte_prefilter`）：
+    // ASCII 字面量对所有 ASCII 兼容族成立，或**这份字节本身就是合法 UTF-8**
+    // （解码不改字节 ⇒ 字面量命中必然以同一串字节出现）。utf-16 的字节被 0 隔开，预筛对它不成立。
     if !utf16ish {
         if let Some(pre) = prefilter {
-            if !pre.is_match(&bytes) {
+            let applies = pre.ascii_safe || std::str::from_utf8(&bytes).is_ok();
+            if applies && !pre.re.is_match(&bytes) {
                 return FileOutcome::Miss;
             }
         }
@@ -1876,7 +2209,7 @@ fn scan_file(
             return FileOutcome::Unreadable;
         }
     };
-    let (hits, clipped) = scan_text(&text, matcher, cap);
+    let (hits, clipped) = scan_hits(&text, matcher, cap, literal_single_pass);
     if hits.is_empty() {
         FileOutcome::Miss
     } else {
@@ -1895,6 +2228,10 @@ fn is_hidden_entry(e: &walkdir::DirEntry) -> bool {
 
 /// 收集候选文件（去重 + 路径升序 ⇒ 并行合并后输出顺序与线程数无关）。
 ///
+/// 排序口径**逐字不变**（小写整路径的升序、稳定序、按同键去重），但**每条路径只算一次
+/// 小写键**（PS-1 §3）：旧实现把 `to_string_lossy().to_lowercase()` 写在比较器里，
+/// 12,657 条路径的排序要 ~35 万次 String 分配（比较器被调 O(N log N) 次，每趟两次）。
+///
 /// 遍历失败**计数 + 出声**（前若干条打 stderr，其余只计数）：walkdir 逐个条目返回 Result，
 /// 一个读不到 metadata 的条目（超长路径 / 权限 / 句柄）若被 filter 掉就再无声息——
 /// 那正是"搜不到某个文件却没有任何说法"的形状。计数汇入 `skipped.unreadable`。
@@ -1903,8 +2240,8 @@ fn collect_files(
     extensions: &[String],
     filtered: &mut u32,
     walk_errors: &mut u32,
-) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = Vec::new();
+) -> Vec<SearchFile> {
+    let mut out: Vec<(String, PathBuf, Option<u64>)> = Vec::new();
     let mut reported = 0usize;
     for root in roots {
         let walker = walkdir::WalkDir::new(root)
@@ -1937,16 +2274,27 @@ fn collect_files(
                     continue;
                 }
             }
-            out.push(p.to_path_buf());
+            let path = p.to_path_buf();
+            // 顺路把体积带走：Windows 上这是枚举结果里的现成信息，不再额外系统调用
+            // （`walk_dir(withMetadata)` 同一条前提）。取不到 ⇒ None ⇒ 扫描时退回 stat。
+            let size = entry.metadata().ok().filter(|m| m.is_file()).map(|m| m.len());
+            let key = path.to_string_lossy().to_lowercase();
+            out.push((key, path, size));
         }
     }
-    out.sort_by(|a, b| {
-        a.to_string_lossy()
-            .to_lowercase()
-            .cmp(&b.to_string_lossy().to_lowercase())
-    });
-    out.dedup_by(|a, b| a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase());
-    out
+    // 稳定排序 ⇒ 同键（同一个目录的两种写法）保持遍历先后，与旧实现同形
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.dedup_by(|a, b| a.0 == b.0);
+    out.into_iter()
+        .map(|(_, path, size)| SearchFile { path, size })
+        .collect()
+}
+
+/// 检索候选文件：路径 + **遍历顺路拿到的体积**（`None` = 没拿到，扫描时补一次 stat）。
+/// 带着体积走是为了让 `scan_file` 省掉"每个候选文件再 metadata 一遍"（PS-1 §4）。
+struct SearchFile {
+    path: PathBuf,
+    size: Option<u64>,
 }
 
 #[derive(Default)]
@@ -1991,6 +2339,8 @@ fn run_search(
     let whole_word = o.whole_word.unwrap_or(false);
     let matcher = build_matcher(&req.query, is_regex, case_sensitive, whole_word)?;
     let prefilter = byte_prefilter(&req.query, is_regex, case_sensitive);
+    // 字面量单趟快道的准入（口径与"为什么等价"见 `scan_text_flat`）：正则查询一律走逐行原口径
+    let literal_single_pass = !is_regex && !req.query.contains(['\n', '\r']);
     let max_results = o.max_results.unwrap_or(2000).clamp(1, SEARCH_HARD_CAP);
     let threads = o
         .threads
@@ -2042,14 +2392,22 @@ fn run_search(
                         break;
                     }
                     let cap = SEARCH_PER_FILE_CAP.min(remaining);
-                    match scan_file(&files[i], &matcher, prefilter.as_ref(), cap, policy) {
+                    match scan_file(
+                        &files[i].path,
+                        files[i].size,
+                        &matcher,
+                        prefilter.as_ref(),
+                        cap,
+                        policy,
+                        literal_single_pass,
+                    ) {
                         FileOutcome::Hits(hits, clipped) => {
                             if clipped {
                                 overflow.store(true, Ordering::Relaxed);
                             }
                             hits_total.fetch_add(hits.len() as u64, Ordering::Relaxed);
                             local.push(SearchFileDto {
-                                path: files[i].to_string_lossy().into_owned(),
+                                path: files[i].path.to_string_lossy().into_owned(),
                                 matches: hits,
                             });
                         }
@@ -2264,10 +2622,11 @@ mod shell_tests;
 #[cfg(test)]
 mod write_domain_tests {
     use super::{
-        canonicalize_deep, ensure_in_write_domain, is_root_approved, is_same_path, is_within,
-        push_approved_root, push_extra_root, read_approved_roots, read_workspace_roots,
-        write_approved_roots, write_workspace_roots,
+        canonical_root_cached, canonicalize_deep, ensure_in_domain_with, ensure_in_write_domain,
+        is_root_approved, is_same_path, is_within, push_approved_root, push_extra_root,
+        read_approved_roots, read_workspace_roots, write_approved_roots, write_workspace_roots,
     };
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2581,6 +2940,89 @@ mod write_domain_tests {
         write_approved_roots(&appdata, &[a.clone()]).unwrap();
         assert_eq!(read_approved_roots(&appdata).len(), 1);
     }
+
+    /* -------- 允许域根的规范化备忘录（PS-1 §8：安全闸的加速层） -------- */
+
+    /// 备忘录与"每个根每次直算"的参照实现必须**逐字同判定**：
+    /// 放行同放行、域外拒绝同拒绝、错误串同串（这一条是"只快不改"的全部承诺）。
+    #[test]
+    fn canon_root_memo_agrees_with_direct_resolution() {
+        let base = temp_root("memo");
+        let project = mkdir(&base.join("project"));
+        let appdata = mkdir(&base.join("appdata"));
+        let sibling = mkdir(&base.join("sibling"));
+        let chosen = mkdir(&base.join("chosen"));
+        let extras = vec![chosen.clone()];
+        let targets = [
+            project.join("包").join("事件.ERB"), // 项目根内（含新建待落盘的深层）
+            appdata.join("store.json"),          // 常驻允许
+            sibling.join("evil.erb"),            // 域外
+            project.join("..").join("sibling").join("evil.erb"), // .. 穿越
+            chosen.join("新项目").join("a.erb"),  // 自选常驻根的子目录
+            base.join("nowhere").join("b.erb"),  // 整条不存在的深层
+        ];
+        let mut memo: HashMap<PathBuf, PathBuf> = HashMap::new();
+        for t in &targets {
+            let direct = ensure_in_write_domain(Some(&project), &appdata, &extras, t, "write");
+            let cached = ensure_in_domain_with(
+                Some(&project),
+                &appdata,
+                &extras,
+                t,
+                "write",
+                |root| canonical_root_cached(&mut memo, root, "write"),
+            );
+            match (direct, cached) {
+                (Ok(()), Ok(())) => {}
+                (Err(a), Err(b)) => assert_eq!(a, b, "错误文案漂：{a} / {b}"),
+                (a, b) => panic!("判定不同形：直算={a:?} 备忘录={b:?}（目标 {}）", t.display()),
+            }
+        }
+        assert!(memo.len() >= 2, "跑了一整轮却没缓存住根：{memo:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 缓存条目只在"该原始写法**此刻仍是一个目录**"时采信：把它删了 / 换成文件 ⇒ 作废重算。
+    /// 陈旧规范化是这一层唯一的放宽风险（根被换指向别处），这一条把口子钉死。
+    /// 另一半：解析**失败**的根不许进缓存（否则一次故障会永久改掉判定文案），
+    /// 且两条路径的错误串逐字相同 —— "根解析失败"那支文案的钉子在这里。
+    #[test]
+    fn canon_root_memo_refuses_stale_and_failed_entries() {
+        let base = temp_root("memostale");
+        let root = mkdir(&base.join("root"));
+        let appdata = mkdir(&base.join("appdata"));
+        let target = mkdir(&base.join("elsewhere")).join("x.erb");
+        let mut memo: HashMap<PathBuf, PathBuf> = HashMap::new();
+        let first = canonical_root_cached(&mut memo, &root, "write");
+        assert!(first.is_ok() && memo.contains_key(&root), "首次该算成并存下缓存");
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::write(&root, "i am a file now").unwrap();
+        let again = canonical_root_cached(&mut memo, &root, "write");
+        assert_eq!(
+            again.as_ref().unwrap(),
+            &canonicalize_deep(&root).unwrap(),
+            "原始写法不再是目录 ⇒ 不许采信缓存里那份，重算结果必须与直算逐字相同"
+        );
+
+        // 指向一个连祖先都不存在的根（未挂载的盘）：失败不缓存，且与直算同形同文案
+        let gone = PathBuf::from(r"Z:\kojo-no-such-drive\root");
+        let mut memo2: HashMap<PathBuf, PathBuf> = HashMap::new();
+        let direct = ensure_in_write_domain(None, &appdata, &[gone.clone()], &target, "write");
+        let cached = ensure_in_domain_with(None, &appdata, &[gone.clone()], &target, "write", |r| {
+            canonical_root_cached(&mut memo2, r, "write")
+        });
+        assert!(direct.is_err(), "夹具：这条根解析不动时判定必须失败");
+        assert_eq!(
+            cached.unwrap_err(),
+            direct.unwrap_err(),
+            "'允许域根目录解析失败' 这一支两条路径文案不一致"
+        );
+        assert!(
+            !memo2.contains_key(&gone),
+            "解析失败的根不许进缓存：{memo2:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 #[cfg(test)]
@@ -2783,7 +3225,7 @@ mod watch_runtime_tests {
 
 #[cfg(test)]
 mod io_primitives_tests {
-    use crate::{list_dir, stat_file, walk_dir, WalkOptionsDto};
+    use crate::{list_dir, stat_file_at, walk_dir, WalkOptionsDto};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2822,7 +3264,7 @@ mod io_primitives_tests {
                 assert!(e.mtime_ms.is_none(), "目录条目不带元数据 ⇒ 调用方退化回 stat");
                 continue;
             }
-            let st = stat_file(e.path.clone()).expect("stat_file 应成功");
+            let st = stat_file_at(&e.path).expect("stat_file 应成功");
             assert_eq!(e.mtime_ms, Some(st.mtime_ms), "mtime 必须逐位同值：{}", e.path);
             assert_eq!(e.size, Some(st.size), "size 必须逐位同值：{}", e.path);
             files += 1;
@@ -3031,7 +3473,10 @@ mod batch_io_tests {
     //! 帧是 Rust 与 JS 解帧器（`packages/app/src/bridge/read-files-frame.ts`）之间的
     //! **逐字节契约**：字段一漂，前端不是报错而是静默错位（读到的"内容"错位成别的字段），
     //! 所以这里自带一份解帧器做**往返对拍**——两份解码独立写、以帧格式为唯一真源。
-    use super::{read_files_frame, stat_files, FRAME_STATUS_NOT_FOUND, FRAME_STATUS_OK, FRAME_STATUS_READ_ERROR};
+    use super::{
+        read_files_frame, stat_files_of, BATCH_READ_THREADS, FRAME_STATUS_NOT_FOUND,
+        FRAME_STATUS_OK, FRAME_STATUS_READ_ERROR,
+    };
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -3093,7 +3538,7 @@ mod batch_io_tests {
         assert_eq!(decoded[1].1, FRAME_STATUS_OK);
         assert_eq!(decoded[0].4, "@A\nPRINTL 甲\n".as_bytes());
         assert_eq!(decoded[1].4, "@B\n".as_bytes());
-        let st = super::stat_file(paths[0].clone()).unwrap();
+        let st = super::stat_file_at(&paths[0]).unwrap();
         assert_eq!(decoded[0].2, st.mtime_ms as i64, "mtime 必须与 stat_file 逐位同值");
         assert_eq!(decoded[0].3, st.size);
         let _ = std::fs::remove_dir_all(&dir);
@@ -3170,6 +3615,36 @@ mod batch_io_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 预分配容量（PS-1 §5）按字段算死 ⇒ 这条同时钉住两头：算少了 = 一帧几十 MB 要
+    /// realloc 二十几轮（预分配白做），算多了 = 帧尾挂零字节（前端解帧器直接报
+    /// "帧尾部有多余字节"）。`decode_frame` 内部已断言后者，这里把总长也逐字节对平。
+    #[test]
+    fn frame_length_is_exactly_the_sum_of_its_fields() {
+        let dir = temp_dir("framesize");
+        let files = [
+            (dir.join("a.ERB"), "@A\nPRINTL 甲\n"),
+            (dir.join("事件·測試.ERB"), ""),
+            (dir.join("c.ERB"), "x"),
+            (dir.join("missing.ERB"), ""),
+        ];
+        let mut paths: Vec<String> = Vec::new();
+        for (i, (p, body)) in files.iter().enumerate() {
+            if i != 3 {
+                std::fs::write(p, body).unwrap();
+            }
+            paths.push(p.to_string_lossy().into_owned());
+        }
+        let frame = read_files_frame(&paths);
+        let decoded = decode_frame(&frame);
+        let expect: usize = 4
+            + decoded
+                .iter()
+                .map(|(p, _, _, _, d)| 4 + p.len() + 4 + 8 + 8 + 8 + d.len())
+                .sum::<usize>();
+        assert_eq!(frame.len(), expect, "帧长与字段和不符 ⇒ 容量算式漂了");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// stat_files：存在项与 stat_file 同源同值；缺项 exists=false + null 数值
     #[test]
     fn stat_files_matches_stat_file_and_reports_missing() {
@@ -3177,11 +3652,11 @@ mod batch_io_tests {
         let f = dir.join("s.ERB");
         std::fs::write(&f, "hello").unwrap();
         let missing = dir.join("gone.ERB");
-        let out = stat_files(vec![
+        let out = stat_files_of(&[
             f.to_string_lossy().to_string(),
             missing.to_string_lossy().to_string(),
         ]);
-        let st = super::stat_file(f.to_string_lossy().to_string()).unwrap();
+        let st = super::stat_file_at(&f.to_string_lossy().to_string()).unwrap();
         assert!(out[0].exists);
         assert_eq!(out[0].size, Some(st.size));
         assert_eq!(out[0].mtime_ms, Some(st.mtime_ms));
@@ -3191,6 +3666,187 @@ mod batch_io_tests {
         // JSON 形态：camelCase 键 + 缺项为 null（前端按 null 判"不可用"）
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"mtimeMs\":null"), "缺项应为 null：{json}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 批量 stat 铺并行之后**仍必须按入参顺序回位**（前端按下标认领，顺序漂 = 把 A 的
+    /// 体积记到 B 头上）；条目数跨过 worker 数 ⇒ 真走并行分支（PS-1 §2 的回归锚）。
+    #[test]
+    fn stat_files_keeps_input_order_beyond_the_worker_count() {
+        let dir = temp_dir("statorder");
+        let mut paths: Vec<String> = Vec::new();
+        for i in 0..(BATCH_READ_THREADS * 3) {
+            let p = dir.join(format!("f{i:03}.ERB"));
+            // 一半存在、一半不存在：两类都要按位回位
+            if i % 2 == 0 {
+                std::fs::write(&p, format!("{i}")).unwrap();
+            }
+            paths.push(p.to_string_lossy().into_owned());
+        }
+        let out = stat_files_of(&paths);
+        assert_eq!(out.len(), paths.len());
+        for (i, item) in out.iter().enumerate() {
+            assert_eq!(item.path, paths[i], "第 {i} 项路径漂了");
+            assert_eq!(item.exists, i % 2 == 0, "第 {i} 项存在性漂了");
+            if i % 2 == 0 {
+                // 内容是十进制序号本身 ⇒ 长度 = 该序号的字符数
+                assert_eq!(
+                    item.size,
+                    Some(i.to_string().len() as u64),
+                    "第 {i} 项体积漂了：{item:?}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 批量读同理：并行铺开后条目数与顺序都不许动（帧里连 path 一起按位回位）。
+    #[test]
+    fn read_files_frame_keeps_input_order_and_count_across_threads() {
+        let dir = temp_dir("frameorder");
+        let mut paths: Vec<String> = Vec::new();
+        for i in 0..(BATCH_READ_THREADS * 3) {
+            let p = dir.join(format!("r{i:03}.ERB"));
+            if i % 3 != 1 {
+                std::fs::write(&p, format!("body-{i}\n")).unwrap();
+            }
+            paths.push(p.to_string_lossy().into_owned());
+        }
+        let decoded = decode_frame(&read_files_frame(&paths));
+        assert_eq!(decoded.len(), paths.len(), "帧内条目数必须等于入参数");
+        for (i, (path, status, _, size, data)) in decoded.iter().enumerate() {
+            assert_eq!(path, &paths[i], "第 {i} 项路径漂了");
+            if i % 3 == 1 {
+                assert_eq!(*status, FRAME_STATUS_NOT_FOUND, "第 {i} 项应是不存在");
+                assert_eq!(*size, 0);
+                assert!(data.is_empty());
+            } else {
+                assert_eq!(*status, FRAME_STATUS_OK);
+                assert_eq!(data.as_slice(), format!("body-{i}\n").as_bytes());
+                assert_eq!(*size, data.len() as u64, "size 与实读字节数同源");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+}
+
+#[cfg(test)]
+mod async_command_tests {
+    //! **async 壳 ⇔ 同步核心 逐字同结果**（PS-1 §1 的回归锚）。
+    //!
+    //! 把同步命令改成 `async` + `spawn_blocking` 的全部风险都在"过界形态漂了"：
+    //! 前端一律 `await invoke(...)`，成功载荷的字节/形状一变就是静默错位（帧解歪、
+    //! `null` 变 `undefined`、base64 多个前缀……）。`market_tests` 早有先例用
+    //! `tauri::async_runtime::block_on` 直接驱动 async 命令体，这里同一形态打没有
+    //! `State` 参数的几条；要 `State` 的写侧命令只能靠"闸的判定核心对平 + 编译期"，
+    //! 命令级端到端属真壳判据（本批未跑真壳，见交付说明）。
+    use super::{
+        encode_string, path_exists, read_file_bytes, read_file_bytes_raw, read_files_raw,
+        stat_file, stat_file_at, stat_files, stat_files_of, B64,
+    };
+    use base64::Engine as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tauri::ipc::{IpcResponse, InvokeResponseBody};
+
+    /// 二进制响应取回裸字节（非 Raw 形态即判为漂）
+    fn raw_body(resp: tauri::ipc::Response) -> Vec<u8> {
+        match resp.body().expect("响应体应可取回") {
+            InvokeResponseBody::Raw(bytes) => bytes,
+            InvokeResponseBody::Json(text) => panic!("二进制命令不该回 JSON：{text}"),
+        }
+    }
+
+    /// 本模块自带一份最小解帧器（`batch_io_tests` 那份是模块私有的）：
+    /// 只解判据要用的字段，帧格式一变就在这里先炸。
+    fn frame_entries(frame: &[u8]) -> Vec<(String, u32, Vec<u8>)> {
+        let u32_at = |off: usize| u32::from_le_bytes(frame[off..off + 4].try_into().unwrap());
+        let mut off = 0usize;
+        let count = u32_at(off) as usize;
+        off += 4;
+        let mut out = Vec::new();
+        for _ in 0..count {
+            let plen = u32_at(off) as usize;
+            off += 4;
+            let path = String::from_utf8(frame[off..off + plen].to_vec()).unwrap();
+            off += plen;
+            let status = u32_at(off);
+            off += 4;
+            off += 8; // mtimeMs
+            off += 8; // size
+            let dlen = u64::from_le_bytes(frame[off..off + 8].try_into().unwrap()) as usize;
+            off += 8;
+            out.push((path, status, frame[off..off + dlen].to_vec()));
+            off += dlen;
+        }
+        assert_eq!(off, frame.len(), "帧尾不应有多余字节");
+        out
+    }
+
+    #[test]
+    fn async_wrappers_match_their_sync_cores_field_by_field() {
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("kojo-async-cmd-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.ERB");
+        std::fs::write(&f, "hello\n").unwrap();
+        let p = f.to_string_lossy().to_string();
+        let gone = dir.join("nope.ERB").to_string_lossy().to_string();
+
+        // read_file_bytes：base64 文本过界，还原后逐字节等于盘上内容
+        let b64 = tauri::async_runtime::block_on(read_file_bytes(p.clone())).unwrap();
+        assert_eq!(B64.decode(&b64).unwrap(), b"hello\n");
+
+        // read_file_bytes_raw：二进制过界，一个前缀都不许多
+        let resp = tauri::async_runtime::block_on(read_file_bytes_raw(p.clone())).unwrap();
+        assert_eq!(raw_body(resp), b"hello\n");
+        assert!(
+            tauri::async_runtime::block_on(read_file_bytes_raw(gone.clone())).is_err(),
+            "读不到的文件必须报错，不许回一个空 body"
+        );
+
+        // path_exists / stat_file：形态与旧口径同（缺文件 ⇒ false / null，而不是 Err）
+        assert!(tauri::async_runtime::block_on(path_exists(p.clone())).unwrap());
+        assert!(!tauri::async_runtime::block_on(path_exists(gone.clone())).unwrap());
+        let st = tauri::async_runtime::block_on(stat_file(p.clone()))
+            .unwrap()
+            .expect("stat_file 该有值");
+        assert_eq!(st.size, 6);
+        assert_eq!(st, stat_file_at(&p).expect("async 壳与同步核心不同形"));
+        assert!(tauri::async_runtime::block_on(stat_file(gone.clone()))
+            .unwrap()
+            .is_none());
+
+        // stat_files：与 stat_file 同源同值（并行化不许让 mtime 判据漂）
+        let batch = tauri::async_runtime::block_on(stat_files(vec![p.clone(), gone.clone()]))
+            .unwrap();
+        assert_eq!(batch, stat_files_of(&[p.clone(), gone.clone()]));
+        assert_eq!(batch[0].mtime_ms, Some(st.mtime_ms));
+        assert!(!batch[1].exists);
+
+        // read_files_raw：帧逐字节对平（前端解帧器按同一份格式读）
+        let frame =
+            tauri::async_runtime::block_on(read_files_raw(vec![p.clone(), gone.clone()])).unwrap();
+        let decoded = frame_entries(&raw_body(frame));
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].0, p);
+        assert_eq!(decoded[0].1, super::FRAME_STATUS_OK);
+        assert_eq!(decoded[0].2, b"hello\n");
+        assert_eq!(decoded[1].1, super::FRAME_STATUS_NOT_FOUND);
+
+        // encode_string：非 UTF-8 族转码照旧；不可映射字符照旧**拒绝**（M2 数据损坏闸）
+        let sjis =
+            tauri::async_runtime::block_on(encode_string("あ".to_string(), "shift_jis".to_string()))
+                .unwrap();
+        assert_eq!(B64.decode(&sjis).unwrap(), vec![0x82, 0xA0]);
+        let err = tauri::async_runtime::block_on(encode_string(
+            "你好".to_string(),
+            "shift_jis".to_string(),
+        ))
+        .expect_err("不可映射字符必须被拒，不许悄悄写成 HTML 实体");
+        assert!(err.contains("无法表示的字符"), "拒因不符：{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
