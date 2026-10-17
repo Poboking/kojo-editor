@@ -6,11 +6,13 @@
  * 覆盖：(a) provider 确为 **ERB 语言**注册（kojo 语言不得被本模块注册）、且只注册一个；
  * (b) `erb-directives` source 行首给 `#DIM` 之类、行中不给（判定经 `isLineHeadContext` 可单测）；
  * (c) 空 tables 不崩且无非表候选；`memoizedErbFunctionNames` 按指纹失效。
+ * 本批扩：门白名单终态（名字位只出本路候选）、行中跳转词单源、adapter 指令词并入、
+ * `erb-families` / `erb-declared` 两个新源的端到端出货。
  */
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import type { ErbFunctionRef, ErbIndex, VariableSchema } from '@kojo/plugin-api';
+import type { ErbFunctionRef, ErbIndex, KojoInstructionTable, VariableSchema } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
@@ -22,6 +24,8 @@ import {
   type ErbCompletionDegrade,
   type ErbCompletionTables,
 } from '../src/monaco/erb-completion';
+import type { ErbFileFactsProvider } from '../src/monaco/completion-core';
+import { erbFactsPathOf } from '../src/monaco/erb-completion-declared';
 
 interface Registered {
   languageId: string;
@@ -33,7 +37,7 @@ function stubMonaco(): { monaco: typeof Monaco; registered: Registered[] } {
   const registered: Registered[] = [];
   const monaco = {
     languages: {
-      CompletionItemKind: { Variable: 1, Keyword: 2, Operator: 3, Function: 4, Field: 5, Reference: 6 },
+      CompletionItemKind: { Variable: 1, Keyword: 2, Operator: 3, Function: 4, Field: 5, Reference: 6, EnumMember: 7 },
       registerCompletionItemProvider: (
         languageId: string,
         provider: Monaco.languages.CompletionItemProvider,
@@ -129,7 +133,7 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
     dispose.dispose();
   });
 
-  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，R4 骨架 + EC-1..EC-5 + D7 七个 source 全在册', () => {
+  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，骨架最前 + 九个 source 全在册（两名位源追加末尾）', () => {
     expect(Array.isArray(ERB_COMPLETION_SOURCES)).toBe(true);
     expect(ERB_COMPLETION_SOURCES.map((s) => s.id)).toEqual([
       'erb-snippet',
@@ -139,6 +143,8 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
       'erb-labels',
       'erb-system-functions',
       'erb-bits',
+      'erb-families',
+      'erb-declared',
     ]);
   });
 });
@@ -175,13 +181,10 @@ describe('EC-1 · 行首 / 行中判定（纯函数）', () => {
 });
 
 describe('EC-1 · 全角缩进行的行首候选（端到端）', () => {
-  it('`　#DIM`（U+3000 缩进）仍出行首专属候选（#DIM / [SKIPSTART]）', () => {
+  it('`　#DIM`（U+3000 缩进）仍出 `#DIM` 行首候选（`#` 记号位按全记号前缀收窄）', () => {
     const { monaco, registered } = stubMonaco();
     installErbCompletion(monaco, () => ({}));
     const items = provide(registered[0]!.provider, '\u3000#DIM', 6);
-    const ls = items.map((i) => labelText(i.label));
-    expect(ls).toContain('#DIM');
-    expect(ls).toContain('[SKIPSTART]');
     expect(items.find((i) => labelText(i.label) === '#DIM')!.detail).toBe('预处理指令');
   });
 });
@@ -192,13 +195,20 @@ describe('EC-1 · erb-directives source 出货', () => {
   const provider = registered[0]!.provider;
   const labels = (items: readonly Monaco.languages.CompletionItem[]): string[] => items.map((i) => labelText(i.label));
 
-  it('行首：给 `#DIM`（预处理指令）、`[SKIPSTART]`（指令行）、`PRINTFORM`（指令表）/ `IF`（R4 骨架胜出）', () => {
+  it('`#D` 记号位：按**全记号前缀**收窄 ⇒ 只出 `#DIM` 系（`PRINTFORM` / `[SKIPSTART]` / `GETBIT` 不在 `#` 位抢候选）', () => {
     const items = provide(provider, HEAD, 3);
     expect(items.find((i) => labelText(i.label) === '#DIM')!.detail).toBe('预处理指令');
-    expect(items.find((i) => labelText(i.label) === '[SKIPSTART]')!.detail).toBe('指令行');
-    expect(items.find((i) => labelText(i.label) === 'PRINTFORM')!.detail).toBe('指令');
-    // 行首 `IF` 与 erb-snippet 骨架同 label，去重先注册者胜 ⇒ 只留骨架（R4 设计意图）
-    expect(items.find((i) => labelText(i.label) === 'IF')!.detail).toBe('条件块骨架');
+    const ls = items.map((i) => labelText(i.label));
+    expect(ls).not.toContain('PRINTFORM');
+    expect(ls).not.toContain('[SKIPSTART]');
+    expect(ls).not.toContain('GETBIT');
+  });
+
+  it('各行首形态在各自记号位出货：`PR` ⇒ `PRINTFORM`（指令）/ `[SKIP` ⇒ `[SKIPSTART]`（指令行）/ `I` ⇒ `IF` 骨架先注册者胜', () => {
+    expect(provide(provider, 'PR', 3).find((i) => labelText(i.label) === 'PRINTFORM')!.detail).toBe('指令');
+    expect(provide(provider, '[SKIP', 6).find((i) => labelText(i.label) === '[SKIPSTART]')!.detail).toBe('指令行');
+    // 裸行首 `IF` 与 erb-snippet 骨架同 label，去重先注册者胜 ⇒ 只留骨架（R4 设计意图）
+    expect(provide(provider, 'I', 2).find((i) => labelText(i.label) === 'IF')!.detail).toBe('条件块骨架');
   });
 
   it('行首：`#DIM` 前缀精确命中置顶（替换区间覆盖 `#`，插入即补全）', () => {
@@ -431,5 +441,189 @@ describe('SH-4 · 依赖表 / 提供者缺席 = 降级不静默（三态可复�
     expect(byId.get('erb-directives')).toBeUndefined();
     expect(byId.get('erb-labels')).toBeUndefined();
     expect(byId.get('erb-system-functions')).toBeUndefined();
+    // 两名位新源刻意无 requires：erbFileFacts 缺席是"宿主未注入通道"的正常态，零候选即正确语义
+    expect(byId.get('erb-families')).toBeUndefined();
+    expect(byId.get('erb-declared')).toBeUndefined();
+  });
+});
+
+/* ============================== 装配收口（门白名单终态 / 行中跳转词 / adapter 指令词 / 两个新源） ============================== */
+
+/** 位表桩：裸族头 `HOLD` 有位表（`8 处女`）——`fakeSchema`（lookup 恒 undefined）即"无位表"负例 */
+function fakeBitsSchema(): VariableSchema {
+  return {
+    version: 'bits',
+    lookup: (name: string, index?: string) =>
+      name === 'HOLD' && index === undefined ? { bits: [{ bit: 8, label: '处女' }] } : undefined,
+    names: () => [],
+  } as unknown as VariableSchema;
+}
+
+/** 事实通道桩：只有 `path` 这个文件已索引（其余路径 `undefined` = 未索引，零候选不回退） */
+function fakeFacts(dims: readonly string[] | undefined, path: string): ErbFileFactsProvider {
+  return {
+    dimsOf: (p: string) => (p === path ? dims : undefined),
+    labelsAt: () => undefined,
+  };
+}
+
+/** 带 `uri` 的 model（`erbFactsPathOf` 的取路径面；其余口径同 `modelOf`） */
+function modelOfPath(text: string, fsPath: string): Monaco.editor.ITextModel {
+  return { ...(modelOf(text) as unknown as Record<string, unknown>), uri: { fsPath } } as unknown as Monaco.editor.ITextModel;
+}
+
+/** 走 provider 取一轮候选（指定 model；与 `provide` 同口径） */
+function provideOn(
+  provider: Monaco.languages.CompletionItemProvider,
+  model: Monaco.editor.ITextModel,
+  column: number,
+): Monaco.languages.CompletionItem[] {
+  const out = provider.provideCompletionItems(
+    model,
+    { lineNumber: 1, column } as Monaco.Position,
+    {} as Monaco.languages.CompletionContext,
+    {} as Monaco.CancellationToken,
+  ) as unknown as Monaco.languages.CompletionList;
+  return out.suggestions;
+}
+
+describe('装配收口 · 门白名单终态（名字位只出本路候选）', () => {
+  const FNS: readonly string[] = ['GET_ITEM', 'OTHER_FN'];
+
+  it('`CALL GET|` / `CALL |`：只出 erb-functions（系统函数 `GETBIT` / `RAND` 被门滤掉）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ erbFunctionNames: () => FNS }));
+    const provider = registered[0]!.provider;
+    const get = provide(provider, 'CALL GET', 9);
+    expect(get.map((i) => labelText(i.label))).toEqual(['GET_ITEM']);
+    expect(get[0]!.kind).toBe(monaco.languages.CompletionItemKind.Function);
+    const all = provide(provider, 'CALL ', 6);
+    expect(all.map((i) => labelText(i.label)).sort()).toEqual([...FNS].sort());
+    expect(all.some((i) => ['GETBIT', 'RAND'].includes(labelText(i.label)))).toBe(false);
+  });
+
+  it('`@foo|`：只出 erb-functions（行中关键字 / 系统函数不得混入）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ erbFunctionNames: () => FNS }));
+    expect(provide(registered[0]!.provider, '@GET', 5).map((i) => labelText(i.label))).toEqual(['GET_ITEM']);
+  });
+
+  it('`JUMP |` / `GOTO $LO|`：只出 Reference 标签（函数名 / 系统函数 / 关键字全被门滤掉）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ erbFunctionNames: () => FNS }));
+    const provider = registered[0]!.provider;
+    const jump = provide(provider, 'JUMP \n$LOOP_TOP\n\tGOTO $LO', 6, 1);
+    expect(jump.map((i) => labelText(i.label))).toEqual(['LOOP_TOP']);
+    for (const item of jump) expect(item.kind).toBe(monaco.languages.CompletionItemKind.Reference);
+    const goto = provide(provider, 'JUMP \n$LOOP_TOP\n\tGOTO $LO', 10, 3);
+    expect(goto.map((i) => labelText(i.label))).toEqual(['LOOP_TOP']);
+  });
+
+  it('`#DI|` / `[SKIP|`：只出指令类候选（`GETBIT` 不在 `#` / `[` 记号位出现）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const provider = registered[0]!.provider;
+    const hash = provide(provider, '#DI', 4);
+    expect(hash.map((i) => labelText(i.label))).toContain('#DIM');
+    expect(hash.some((i) => labelText(i.label) === 'GETBIT')).toBe(false);
+    expect(hash.every((i) => i.kind === monaco.languages.CompletionItemKind.Keyword)).toBe(true);
+    expect(hash.every((i) => i.detail === '预处理指令')).toBe(true);
+    const bracket = provide(provider, '[SKIP', 6);
+    expect(bracket.map((i) => labelText(i.label))).toContain('[SKIPSTART]');
+    expect(bracket.every((i) => i.detail === '指令行')).toBe(true);
+    expect(bracket.some((i) => labelText(i.label) === 'GETBIT')).toBe(false);
+  });
+
+  it('`CFLAG:TARGET:好|`：只出 erb-variables（kind Field，其余源全被门滤掉）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ variableSchema: fakeSchema() }));
+    const items = provide(registered[0]!.provider, 'CFLAG:TARGET:好', 15);
+    expect(items.map((i) => labelText(i.label))).toEqual(['好感度']);
+    expect(items[0]!.kind).toBe(monaco.languages.CompletionItemKind.Field);
+  });
+
+  it('`GETBIT(HOLD, |)`：带位表 ⇒ 只出 erb-bits；无位表 ⇒ 该位零候选', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ variableSchema: fakeBitsSchema() }));
+    // 光标在第二实参坑内（`'GETBIT(HOLD, )'` 列 13 = 逗号后空白之后、`(` 之前）
+    const items = provide(registered[0]!.provider, 'GETBIT(HOLD, )', 13);
+    expect(items.map((i) => labelText(i.label))).toEqual(['8 处女']);
+    expect(items[0]!.kind).toBe(monaco.languages.CompletionItemKind.EnumMember);
+    expect(items[0]!.insertText).toBe('8');
+
+    const { monaco: m2, registered: r2 } = stubMonaco();
+    installErbCompletion(m2, () => ({ variableSchema: fakeSchema() }));
+    expect(provide(r2[0]!.provider, 'GETBIT(HOLD, )', 13)).toEqual([]);
+  });
+
+  it('行中 `SIF X : G|`：行中关键字含 `GOTO` / `TRYGOTO`（跳转词从 ERB_JUMP_KEYWORDS 单源展开的净效果）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const labels = provide(registered[0]!.provider, 'SIF X : G', 10).map((i) => labelText(i.label));
+    expect(labels).toContain('GOTO');
+    expect(labels).toContain('TRYGOTO');
+  });
+
+  it('行中 `PRINTFORML CF|`：erb-families 出 `CFLAG`（族头源接入装配）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const hit = provide(registered[0]!.provider, 'PRINTFORML CF', 14).find((i) => labelText(i.label) === 'CFLAG');
+    expect(hit).toBeDefined();
+    expect(hit!.detail).toBe('引擎族头');
+    expect(hit!.kind).toBe(monaco.languages.CompletionItemKind.Variable);
+  });
+
+  it('行首桩 instructionTable.names() 增词：候选出现该词（detail=指令）；大小写异写不产重复项', () => {
+    const { monaco, registered } = stubMonaco();
+    const instructionTable = { names: () => ['自定指令甲', 'printform'] } as unknown as KojoInstructionTable;
+    installErbCompletion(monaco, () => ({ instructionTable }));
+    const items = provide(registered[0]!.provider, '', 1);
+    const hit = items.find((i) => labelText(i.label) === '自定指令甲');
+    expect(hit).toBeDefined();
+    expect(hit!.detail).toBe('指令');
+    expect(items.filter((i) => labelText(i.label).toUpperCase() === 'PRINTFORM')).toHaveLength(1);
+  });
+
+  it('adapter 指令表缺席 / `names` 抛错：只用静态表，seam 不崩', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({
+      instructionTable: {
+        names: () => {
+          throw new Error('instruction table absent');
+        },
+      } as unknown as KojoInstructionTable,
+    }));
+    expect(provide(registered[0]!.provider, '#DI', 4).map((i) => labelText(i.label))).toContain('#DIM');
+  });
+});
+
+describe('装配收口 · erb-declared（`#DIM` 声明名，解析器事实通道）', () => {
+  const PATH = 'C:/proj/x.ERB';
+
+  it('桩 facts 出 `#DIM` 名：行中 `IF CNT|` 弹声明名（前缀命中档置顶，detail 中文、kind Variable）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ erbFileFacts: fakeFacts(['CNT_A', 'CNT_B'], PATH) }));
+    const items = provideOn(registered[0]!.provider, modelOfPath('IF CNT', PATH), 7);
+    expect(items.slice(0, 2).map((i) => labelText(i.label))).toEqual(['CNT_A', 'CNT_B']);
+    const hit = items.find((i) => labelText(i.label) === 'CNT_A')!;
+    expect(hit.detail).toBe('#DIM 声明（本文件）');
+    expect(hit.kind).toBe(monaco.languages.CompletionItemKind.Variable);
+  });
+
+  it('未索引（dimsOf → undefined）⇒ 零候选不回退；前缀精确优先（`IF CNT_A|` 置顶）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ erbFileFacts: fakeFacts(['CNT_A'], PATH) }));
+    const provider = registered[0]!.provider;
+    const other = provideOn(provider, modelOfPath('IF CNT', 'C:/proj/other.ERB'), 7);
+    expect(other.some((i) => labelText(i.label) === 'CNT_A')).toBe(false);
+    // `'IF CNT_A'` 列 9 = 名尾之后（前缀 `CNT_A` 精确命中 ⇒ 排名档 0 置顶）
+    expect(labelText(provideOn(provider, modelOfPath('IF CNT_A', PATH), 9)[0]!.label)).toBe('CNT_A');
+  });
+
+  it('erbFactsPathOf：fsPath 回落 path 回落空串（桩 model 防御）', () => {
+    expect(erbFactsPathOf({} as Monaco.editor.ITextModel)).toBe('');
+    expect(erbFactsPathOf({ uri: { fsPath: 'C:/a.ERB' } } as unknown as Monaco.editor.ITextModel)).toBe('C:/a.ERB');
+    expect(erbFactsPathOf({ uri: { path: '/p/b' } } as unknown as Monaco.editor.ITextModel)).toBe('/p/b');
+    expect(erbFactsPathOf({ uri: { fsPath: '', path: '/p/c' } } as unknown as Monaco.editor.ITextModel)).toBe('/p/c');
   });
 });

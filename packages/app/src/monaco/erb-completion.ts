@@ -1,9 +1,11 @@
 import type * as Monaco from './entry';
 import type { ErbIndex } from '@kojo/plugin-api';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
-import { ERB_DIRECTIVES, ERB_LANGUAGE_ID } from './erb-language';
+import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords } from './erb-language';
 import { erbBitCompletionItems } from './erb-completion-bits';
-import { erbCompletionGate, type ErbCompletionGate } from './erb-completion-context';
+import { erbCompletionGate, ERB_GATE_SOURCE_WHITELIST, ERB_JUMP_KEYWORDS } from './erb-completion-context';
+import { erbDeclaredCompletionItems } from './erb-completion-declared';
+import { erbFamilyCompletionItems } from './erb-completion-families';
 import { erbFunctionCompletionItems, erbFunctionNameSlot } from './erb-completion-functions';
 import { erbLabelCompletionItems } from './erb-completion-labels';
 import { erbSystemFunctionCompletionItems } from './erb-completion-system-functions';
@@ -45,16 +47,21 @@ import {
  *
  * 1. **候选源集合** `ERB_COMPLETION_SOURCES`（可扩展数组，新增能力 = 追加一项）；
  * 2. **位置判定**：{@link erbTokenRange}（记号级替换区间）、{@link isLineHeadContext}（行首 / 行中分野）、
- *    {@link erbCompletionGate}（字符串 / 调用名位门）与门过滤器 {@link erbGateFilter}；
+ *    {@link erbCompletionGate}（八态位置门 v2：串内置空、名字位收窄）与**按候选源白名单**的
+ *    keep 滤器（数据 = `ERB_GATE_SOURCE_WHITELIST`，位置侧单源；`default` 不过滤）；
  * 3. **回表口径**：`resolveErbCompletionDetail`（变量 / 项目函数 / 系统函数三条路）与
  *    **括号调用形态**名单（只有 `erb-system-functions` 一路插 `名字(`）。
  *
  * 数据源两层（与 `.kojo` 同纪律：**不猜**）：
  * - **语言层**（跨游戏、与项目无关）：`erb-directives` —— 指令 / 预处理指令 / 指令行，词表
- *   **派生**自 `erb-language.ts` 的单一真源 `ERB_DIRECTIVES`；
+ *   **派生**自 `erb-language.ts` 的单一真源 `ERB_DIRECTIVES`；adapter 指令名经
+ *   `mergeDirectiveWords` 并入（与 Monarch 高亮刷新**同一个合并件**，大小写不敏感去重）；
+ *   行首候选按**全记号前缀**（含吞并的 `#` / `[`）收窄；
  * - **adapter / 项目层**：`CompletionTables`（与 `.kojo` 同一张表，宿主只读不解释）——
- *   函数名（`erbFunctionNames`）由宿主按 `ErbIndex.fingerprint` 记忆化后注入，
- *   同一份表现在**也被 `.kojo` 消费**（跨语言候选打通）。
+ *   函数名（`erbFunctionNames`）由宿主按 `ErbIndex.fingerprint` 记忆化后注入，同一份表
+ *   现在**也被 `.kojo` 消费**（跨语言候选打通）；变量族头 = `ENGINE_VARIABLE_FAMILIES`
+ *   （`erb-families`）；`#DIM` 声明名走 `erbFileFacts` 解析器通道（`erb-declared`，
+ *   未索引零候选不回退）。
  *
  * 纯逻辑与 Monaco 绑定分离：`CompletionSource.provide` 可单测（只依赖 ctx 里的
  * `model` / `position` / `range` / `tables`），装配点只做协议翻译。
@@ -195,24 +202,20 @@ export function isLineHeadContext(model: Monaco.editor.ITextModel, position: Mon
 }
 
 /**
- * 位置门的候选过滤器（T6）：门是**过滤**不是重排——各 source 的既有排序语义不动。
- * - `'call-target'`：只留**函数名形态**的候选（kind = Function / Method，按 kind 而非
- *   source 名单判——新 source 出函数名候选即自动进门，扩展点结构不破坏）；
- * - 其余门类：不过滤（维持现行为）。
+ * 位置门的候选过滤器（T6 · v2）：门是**过滤**不是重排——各 source 的既有排序语义不动。
+ * 口径 = **按候选源白名单**（数据 = `ERB_GATE_SOURCE_WHITELIST`，位置侧单源）：名字位
+ * （`call-target` / `def-slot` / …）只留该位认的 source。旧口径按候选 **kind** 过滤
+ * （`Function` / `Method`）分不开「同 kind 不同源」——系统函数与项目函数同为 `Function`，
+ * 旧口径在 `CALL` / `@` / `#` / `[` / `JUMP` 位漏进整张系统函数表（缺陷 2 的根因）。
+ * `default` / `in-string` 不设名单（`in-string` 由 {@link ERB_COMPLETION_ASSEMBLY.locate}
+ * 整轮置空）。
  */
-export function erbGateFilter(
-  gate: ErbCompletionGate,
-  monaco: typeof Monaco,
-): ((item: Monaco.languages.CompletionItem) => boolean) | undefined {
-  if (gate !== 'call-target') return undefined;
-  const fnKinds = new Set<number>([
-    monaco.languages.CompletionItemKind.Function,
-    monaco.languages.CompletionItemKind.Method,
-  ]);
-  return (item) => {
-    const kind = typeof item.kind === 'number' ? item.kind : undefined;
-    return kind !== undefined && fnKinds.has(kind);
-  };
+function gateKeepFor(
+  gate: ReturnType<typeof erbCompletionGate>,
+): ((item: Monaco.languages.CompletionItem, sourceId: string) => boolean) | undefined {
+  const allowed = ERB_GATE_SOURCE_WHITELIST[gate];
+  if (allowed === undefined) return undefined;
+  return (_item, sourceId) => allowed.has(sourceId);
 }
 
 /* ============================== 语言层 source ============================== */
@@ -230,7 +233,9 @@ const ERB_BRACKET_DIRECTIVES = ['[SKIPSTART]', '[SKIPEND]'];
 
 /**
  * 「行中」可出现的**关键字子集**（可出现在表达式 / 实参里）：控制流分支与闭合、循环、
- * 调用 / 跳转、`PRINT*` 家族。`PRINT*` 从 `ERB_DIRECTIVES` **派生**（单一真源，不手抄）。
+ * 调用 / 跳转、`PRINT*` 家族。`PRINT*` 从 `ERB_DIRECTIVES` **派生**（单一真源，不手抄）；
+ * 跳转家族从 {@link ERB_JUMP_KEYWORDS} **单源展开**（与位置门 / 标签位判据同一份清单
+ * ——手写的 `'JUMP'` / `'TRYJUMP'` 两个字面量此前漏收了 `GOTO` / `TRYGOTO`，行中补不到）。
  */
 const ERB_MIDLINE_KEYWORDS: readonly string[] = [
   'IF', 'ELSEIF', 'ELSE', 'ENDIF', 'SIF',
@@ -238,24 +243,36 @@ const ERB_MIDLINE_KEYWORDS: readonly string[] = [
   'SELECTCASE', 'CASE', 'CASEELSE', 'ENDSELECT',
   'RETURN', 'BREAK', 'CONTINUE',
   'CALL', 'CALLF', 'CALLL', 'CALLFORM', 'CALLFORML', 'CALLFORMF',
-  'JUMP', 'TRYCALL', 'TRYCALLFORM', 'TRYCALLFORMF', 'TRYJUMP', 'TRYCCALLFORM',
+  ...ERB_JUMP_KEYWORDS,
+  'TRYCALL', 'TRYCALLFORM', 'TRYCALLFORMF', 'TRYCCALLFORM',
   ...ERB_DIRECTIVES.filter((d) => d.startsWith('PRINT')),
 ];
 
 /**
- * 指令 / 关键字补全：**行首**给 `ERB_DIRECTIVES` 全表 + 预处理指令 + 区间标记行；
- * **行中**只给表达式 / 实参可出现的关键字子集（`#DIM` 这类必须行首的不出现）。
+ * 指令 / 关键字补全：**行首**给 `ERB_DIRECTIVES` + adapter 指令名 + 预处理指令 + 区间标记行
+ * （按全记号前缀收窄）；**行中**只给表达式 / 实参可出现的关键字子集（`#DIM` 这类必须行首的不出现）。
  *
- * 词表来自 `erb-language.ts` 的 `ERB_DIRECTIVES`（高亮与补全**同一份清单**，不另抄）。
+ * 词表来自 `erb-language.ts` 的 `ERB_DIRECTIVES`（高亮与补全**同一份清单**，不另抄）；
+ * adapter 指令名（`instructionTable.names()`，可选能力）经 `mergeDirectiveWords` 并入
+ * ——与 Monarch 高亮刷新**同一个合并件、同一大小写不敏感去重口径**，detail 同为 `指令`；
+ * 表 / `names` / 求值任一缺席或抛错 ⇒ 只用静态表（**别让 seam 崩**）。
+ *
+ * 行首再按**全记号前缀**过滤（前缀 = `erbTokenRange` 的替换区间文本，含吞并的 `#` / `[`）：
+ * 打 `#DI` 只弹 `#DIM*`、打 `[SKIP` 只弹 `[SKIPSTART]`、打 `PR` 只弹 `PRINT*`——字表里的
+ * `GETBIT` 这类指令词不再在 `#` / `[` 记号位抢候选（位置门白名单只保证"只问 erb-directives"，
+ * 字表内收窄是本源的责任；各行首源与其余名字位源同法）。空前缀（裸行首 / Ctrl+Space）不过滤。
+ * 行中分支**不动**（子集本就窄，既有钉住行为不重排）。
  */
 const DIRECTIVES_SOURCE: ErbCompletionSource = {
   id: 'erb-directives',
-  provide({ monaco, model, position, range }): Monaco.languages.CompletionItem[] {
+  provide({ monaco, model, position, range, tables }): Monaco.languages.CompletionItem[] {
     const items: Monaco.languages.CompletionItem[] = [];
     const seen = new Set<string>();
+    // 大小写不敏感去重（Emuera 关键字大小写不敏感；与 mergeDirectiveWords 同口径）
     const push = (label: string, detail: string): void => {
-      if (seen.has(label)) return;
-      seen.add(label);
+      const key = label.toUpperCase();
+      if (seen.has(key)) return;
+      seen.add(key);
       items.push({
         label,
         kind: monaco.languages.CompletionItemKind.Keyword,
@@ -266,9 +283,19 @@ const DIRECTIVES_SOURCE: ErbCompletionSource = {
       });
     };
     if (isLineHeadContext(model, position)) {
-      for (const d of ERB_DIRECTIVES) push(d, '指令');
-      for (const d of ERB_PREPROCESSOR_DIRECTIVES) push(d, '预处理指令');
-      for (const d of ERB_BRACKET_DIRECTIVES) push(d, '指令行');
+      // 与 `locate` 的 prefix 同式（同区间、同切片）：全记号含 `#` / `[`
+      const prefix = model.getLineContent(position.lineNumber).slice(range.startColumn - 1, range.endColumn - 1).toUpperCase();
+      const hit = (label: string): boolean => prefix.length === 0 || label.toUpperCase().startsWith(prefix);
+      let adapterNames: readonly string[] | undefined;
+      try {
+        const raw = tables.instructionTable?.names?.();
+        adapterNames = Array.isArray(raw) ? raw : undefined;
+      } catch {
+        adapterNames = undefined; // 表求值抛错 ⇒ 只用静态表（不崩整轮，不静默丢弃其余源候选）
+      }
+      for (const d of mergeDirectiveWords(ERB_DIRECTIVES, adapterNames)) if (hit(d)) push(d, '指令');
+      for (const d of ERB_PREPROCESSOR_DIRECTIVES) if (hit(d)) push(d, '预处理指令');
+      for (const d of ERB_BRACKET_DIRECTIVES) if (hit(d)) push(d, '指令行');
     } else {
       for (const k of ERB_MIDLINE_KEYWORDS) push(k, '关键字');
     }
@@ -306,13 +333,14 @@ const FUNCTIONS_SOURCE: ErbCompletionSource = {
 };
 
 /**
- * `$标签` 补全（EC-4）：仅 `GOTO` / `JUMP` 后出货本文件标签（无模块系统 ⇒ 跨文件不做）。
- * 标签来自当前 model 全文（纯函数内部扫，不读盘、不查索引）。
+ * `$标签` 补全（EC-4）：仅 `GOTO` / `JUMP`（跳转家族）后出货本文件标签（无模块系统 ⇒ 跨文件不做）。
+ * 第 4 参 = 解析器事实通道 `tables.erbFileFacts`（labels 模块同批扩了可选第 4 参：
+ * `labelsAt(path, line)` —— 未索引时模块内自行回落全文口径，本层只传参、不替它定回退策略）。
  */
 const LABELS_SOURCE: ErbCompletionSource = {
   id: 'erb-labels',
-  provide({ monaco, model, position }): Monaco.languages.CompletionItem[] {
-    return erbLabelCompletionItems(monaco, model, position);
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return erbLabelCompletionItems(monaco, model, position, tables.erbFileFacts);
   },
 };
 
@@ -342,11 +370,37 @@ const BITS_SOURCE: ErbCompletionSource = {
 };
 
 /**
+ * 变量**族头**补全（ERB-FAMILY）：裸标识符名位弹 `ENGINE_VARIABLE_FAMILIES`（写 `CF` 弹 `CFLAG`）。
+ * 纯函数住在 `erb-completion-families.ts`（名字位判据 `erbDeclaredNameSlot` 与 `erb-declared` 单源共享）。
+ * 无通道依赖：位置不符 / 前缀无族命中 ⇒ 零候选，不猜。
+ */
+const FAMILIES_SOURCE: ErbCompletionSource = {
+  id: 'erb-families',
+  provide({ monaco, model, position }): Monaco.languages.CompletionItem[] {
+    return erbFamilyCompletionItems(monaco, model, position);
+  },
+};
+
+/**
+ * `#DIM` 声明名补全（EC-DECL）：唯一数据来源 = `erbFileFacts` 解析器通道（内核索引事实）。
+ * 刻意**不挂 `requires`**：`erbFileFacts` 缺席是"宿主未注入通道"的正常态（不是 adapter 表
+ * 缺席），挂上会让每轮补全都报一次降级信号；通道缺席 / 未索引 ⇒ 零候选即正确语义（不回退）。
+ */
+const DECLARED_SOURCE: ErbCompletionSource = {
+  id: 'erb-declared',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return erbDeclaredCompletionItems(monaco, model, position, tables.erbFileFacts);
+  },
+};
+
+/**
  * 全部补全来源（**稳定扩展点**）。各 source **独立文件 + 各自纯函数**，此处只做一行接线；
  * 装配点与排序/去重口径零改动（实现在 `completion-core.ts`，与 `.kojo` 共用一份）。
  *
  * `erb-snippet`（R4）注册在**最前**：行首位置的块骨架与 `erb-directives` 的同名纯文本
  * 项按 label 去重（先注册者胜）⇒ 行首只留骨架、行中纯文本照旧（见 snippet 模块头注）。
+ * 名字位两个新源（`erb-families` / `erb-declared`）**追加在末尾**：先注册者胜语义不动，
+ * 同 label 与既有源相撞时老源胜。
  */
 export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
   ERB_SNIPPET_SOURCE,
@@ -356,6 +410,8 @@ export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
   LABELS_SOURCE,
   SYSTEM_FUNCTIONS_SOURCE,
   BITS_SOURCE,
+  FAMILIES_SOURCE,
+  DECLARED_SOURCE,
 ];
 
 /* ============================== 记忆化：函数名 provider（EC-3 预置） ============================== */
@@ -399,10 +455,11 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
   triggerCharacters: ['#', '['],
   sources: ERB_COMPLETION_SOURCES,
   callForm: { sourceIds: ERB_CALL_FORM_SOURCE_IDS },
-  locate(monaco, model, position) {
+  locate(_monaco, model, position) {
     const line = model.getLineContent(position.lineNumber);
-    // 位置门（T6）：字符串 / FORM 串内不给代码补全；CALL 系名字位只给函数名候选；
-    // 其余位置维持现行为。判定先于 range（串内零候选，不劳各 source 出货一遍）。
+    // 位置门（T6 · v2）：串内 / 注释内不给代码补全；其余门类按**候选源白名单**过滤
+    // （数据 = `ERB_GATE_SOURCE_WHITELIST`，位置侧单源；`default` 不过滤）。判定先于
+    // range（串内零候选，不劳各 source 出货一遍）。
     const gate = erbCompletionGate(line, position.column);
     if (gate === 'in-string') return undefined;
     const range = erbTokenRange(model, position);
@@ -410,7 +467,7 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
     return {
       range,
       prefix,
-      keep: erbGateFilter(gate, monaco),
+      keep: gateKeepFor(gate),
       seed: { lineNumber: position.lineNumber, text: line },
     };
   },

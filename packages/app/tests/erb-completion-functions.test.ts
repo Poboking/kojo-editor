@@ -4,12 +4,15 @@
  * 合成名字表（无需语料）：覆盖定义位 / 调用位命中、非该位置与名字表缺省一律 `[]`（不抛）、
  * 前缀过滤（大小写不敏感）、排序（前缀精确优先）、替换范围只覆盖名字段、`detail` 带来源文件，
  * 以及 **10 万条合成名字的基准**（冷建索引 + 热调用各量一次，热调用断言上限）。
+ *
+ * 本批口径：跳转家族（`JUMP` / `GOTO` / `TRYJUMP` / `TRYGOTO`）的目标位是**标签位**——本源
+ * 零候选（归 `erb-labels` + 门 `label-target`）；旧 pin「JUMP 位出函数名」有意变更。
  */
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import { erbFunctionCompletionItems } from '../src/monaco/erb-completion-functions';
-import { ERB_CALL_STATEMENTS } from '../src/monaco/erb-completion-context';
+import { ERB_CALL_STATEMENTS, ERB_JUMP_KEYWORDS } from '../src/monaco/erb-completion-context';
 
 /** 合成 Monaco：本纯函数只用到 CompletionItemKind.Function */
 const monaco = { languages: { CompletionItemKind: { Function: 1 } } } as unknown as typeof Monaco;
@@ -77,20 +80,26 @@ describe('EC-3 函数名补全 · 定义位（行首 @<前缀>）', () => {
   });
 });
 
-describe('EC-3 函数名补全 · 调用位（CALL / JUMP / FORM）', () => {
+describe('EC-3 函数名补全 · 调用位（CALL / FORM）', () => {
   it('`CALL <前缀>` → 命中；替换范围覆盖名字段', () => {
     const items = at('CALL M_KOJO_MESSAGE_', NAMES);
     expect(labels(items)).toEqual(['M_KOJO_MESSAGE_COM_K1_30', 'M_KOJO_MESSAGE_SP']);
     expect(items[0]?.range).toEqual({ startLineNumber: 1, endLineNumber: 1, startColumn: 6, endColumn: 21 });
   });
 
-  it('`TRYCALLFORM` / `JUMP` 之后的命名槽同样弹候选', () => {
+  it('`TRYCALLFORM` / `CALLFORM` 之后的命名槽同样弹候选', () => {
     expect(labels(at('TRYCALLFORM M_KOJO_EVENT', NAMES))).toEqual(['M_KOJO_EVENT_K1']);
-    expect(labels(at('JUMP CALL_', NAMES))).toEqual(['CALL_HELPER']);
     expect(labels(at('CALLFORM M_KOJO_MESSAGE_', NAMES))).toEqual([
       'M_KOJO_MESSAGE_COM_K1_30',
       'M_KOJO_MESSAGE_SP',
     ]);
+  });
+
+  it('`JUMP` / `GOTO` 家族位**不出**函数名（标签位归 `erb-labels` + 门 `label-target`）', () => {
+    expect(at('JUMP CALL_', NAMES)).toEqual([]);
+    expect(at('GOTO CALL_', NAMES)).toEqual([]);
+    expect(at('TRYJUMP CALL_', NAMES)).toEqual([]);
+    expect(at('TRYGOTO CALL_', NAMES)).toEqual([]);
   });
 
   it('FORM 关键字的名字槽可含 `%…%` 段：刚越过插值仍给候选（空前缀 = 全量）', () => {
@@ -106,11 +115,16 @@ describe('EC-3 函数名补全 · 调用位（CALL / JUMP / FORM）', () => {
     expect(at('TRYCALLFORM M_KOJO%X|%_M', NAMES)).toEqual([]);
   });
 
-  it('调用位清单 = 位置门的**同一张表**（`ERB_CALL_STATEMENTS` 每一句的名字位都出货）', () => {
+  it('调用位清单 = 位置门的**同一张表**：`func` / `form` 槽出货，`label` 槽归标签源（本源零候选）', () => {
     expect(ERB_CALL_STATEMENTS.length).toBeGreaterThan(0);
     for (const s of ERB_CALL_STATEMENTS) {
-      expect(labels(at(`${s.kw} M_KOJO_EVENT`, NAMES))).toEqual(['M_KOJO_EVENT_K1']);
+      const items = at(`${s.kw} M_KOJO_EVENT`, NAMES);
+      if (s.slot === 'label') expect(items).toEqual([]);
+      else expect(labels(items)).toEqual(['M_KOJO_EVENT_K1']);
     }
+    // 标签家族与解析器实名对齐（JUMP_FAMILY）：清单 `label` 槽集合 = ERB_JUMP_KEYWORDS
+    const labelKws = ERB_CALL_STATEMENTS.filter((s) => s.slot === 'label').map((s) => s.kw);
+    expect([...labelKws].sort()).toEqual([...ERB_JUMP_KEYWORDS].sort());
   });
 
   it('空白类走 `BLANK_CLASS_STR` 单源：全角缩进 + 全角分隔的调用位照样认（旧 `[ \t]` 不认）', () => {
