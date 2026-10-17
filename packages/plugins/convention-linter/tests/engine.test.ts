@@ -10,8 +10,20 @@ import type {
   Logger,
 } from '@kojo/plugin-api';
 import { parseErbText } from '@kojo/plugin-erb-parser';
+import { createSugarTranspileService } from '@kojo/plugin-kojo-sugar';
+import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
 import { ConventionEngine } from '../src/engine';
 import type { LintCache } from '../src/snapshot';
+import {
+  CONT_INSIDE_QUOTES_RULE_ID,
+  MULTIPLE_CHOICE_BLOCKS_RULE_ID,
+  READONLY_ALIAS_ASSIGN_RULE_ID,
+  SUGAR_LINT_RULE_IDS,
+  SUGAR_STATIC_CONVENTIONS_RULE_ID,
+  setSugarTranspileProvider,
+  sugarLintIssuesFrom,
+  sugarLintRuleIdOf,
+} from '../src/rules/sugar-conventions';
 
 const silentLog: Logger = {
   debug: () => {},
@@ -281,7 +293,7 @@ describe('ConventionEngine', () => {
   });
 });
 
-/* ========================= 语法糖侧静态约定（规范 §8 子集） ========================= */
+/* ========================= 语法糖侧约定（判据 = 转译器，W2 去重批） ========================= */
 
 /** 造一个只含一个 `.kojo` 文件的索引 + 文本表 */
 function kojoHarness(text: string): Harness {
@@ -293,31 +305,60 @@ function kojoHarness(text: string): Harness {
   });
 }
 
-describe('内置规则：语法糖侧静态约定（sugar.static-conventions）', () => {
+/**
+ * 糖规则的判据本体（转译器）。`sugar.static-conventions` 只做诊断投影 ⇒
+ * 这里的期望值一律**当场由转译器算**，断言的是"面板拿到的就是转译器说的那一条"，
+ * 不再对着本文件里抄一份中文文案（那正是 RULE-DEDUP 要拆掉的第二套判据）。
+ * 分野表取 eraTW 真实模板：没有它整块时机 fail-closed，代码生成期的
+ * `readonly-alias-assignment` 根本走不到（测试文件豁免插件交叉 import 纪律）。
+ */
+const sugar = createSugarTranspileService({ faceTable: createEratwFaceTable() });
+const sugarPath = '/p/kojo/test.kojo';
+
+/** 转译器对这棵源文件的认领码诊断（期望侧独立算一遍） */
+function transpilerIssues(src: string): ConventionIssue[] {
+  return sugarLintIssuesFrom(sugar.transpile(src, { filePath: sugarPath }).diagnostics, sugarPath);
+}
+
+/** 面板侧的糖约定条目（按码过滤后与期望对拍） */
+function panelSugarIssues(rep: Awaited<ReturnType<ConventionEngine['run']>>, code: string): ConventionIssue[] {
+  return rep.issues.filter((i) => i.ruleId === sugarLintRuleIdOf(code));
+}
+
+describe('内置规则：语法糖侧约定（sugar.static-conventions = 转译器诊断投影）', () => {
   it('规则已注册，且只对 .kojo 生效（.ERB 不参与）', async () => {
     const erb = harness({
       index: makeIndex({ '/p/a.ERB': '@A\nPRINTFORMW 「……」 续\n' }),
     });
     const rep = await erb.engine.run();
     expect(rep.issues.filter((i) => i.ruleId.startsWith('sugar.'))).toHaveLength(0);
+    expect(rep.failedRules).toEqual([]); // 没有糖源文件 ⇒ 服务通道没接线也不算失败（无事可做）
   });
 
-  it('§3.3：`续` 写在引号内 → error', async () => {
-    const { engine } = kojoHarness('角色: 12\n时机 指令 310：\n    「……续」\n');
+  it('§3.3：`续` 写在引号内 → 面板条目逐条等于转译器诊断', async () => {
+    const src = '角色: 12\n时机 指令 310：\n    「……续」\n';
+    setSugarTranspileProvider(() => sugar);
+    const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    const hit = rep.issues.filter((i) => i.ruleId === 'sugar.cont-inside-quotes');
-    expect(hit).toHaveLength(1);
-    expect(hit[0]!.severity).toBe('error');
-    expect(hit[0]!.message).toContain('引号内');
+    const hit = panelSugarIssues(rep, 'cont-inside-quotes');
+    expect(hit.length).toBeGreaterThan(0);
+    expect(hit.map((i) => `${i.severity}|${i.line}|${i.message}`)).toEqual(
+      transpilerIssues(src)
+        .filter((i) => i.ruleId === CONT_INSIDE_QUOTES_RULE_ID)
+        .map((i) => `${i.severity}|${i.line}|${i.message}`),
+    );
   });
 
-  it('§3.3：`续` 写在引号外（正确写法）→ 无告警', async () => {
-    const { engine } = kojoHarness('角色: 12\n时机 指令 310：\n    「……」 续\n');
+  it('§3.3：`续` 写在引号外（正确写法）→ 与转译器同为无告警', async () => {
+    const src = '角色: 12\n时机 指令 310：\n    「……」 续\n';
+    setSugarTranspileProvider(() => sugar);
+    const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    expect(rep.issues.filter((i) => i.ruleId === 'sugar.cont-inside-quotes')).toHaveLength(0);
+    expect(panelSugarIssues(rep, 'cont-inside-quotes')).toEqual([]);
+    expect(transpilerIssues(src)).toEqual([]); // 期望侧也确实是空（防空对空之外的口径漂移）
   });
 
-  it('§3.7：同一时机两个「选项」块 → error', async () => {
+  it('§3.7：同一时机两个「选项」块 → 一条 choice-multiple 投影', async () => {
     const src =
       '角色: 12\n' +
       '时机 指令 310：\n' +
@@ -327,11 +368,13 @@ describe('内置规则：语法糖侧静态约定（sugar.static-conventions）'
       '    选项：\n' +
       '        「乙」：\n' +
       '            「……」\n';
+    setSugarTranspileProvider(() => sugar);
     const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    const hit = rep.issues.filter((i) => i.ruleId === 'sugar.multiple-choice-blocks');
+    const hit = panelSugarIssues(rep, 'choice-multiple');
     expect(hit).toHaveLength(1);
-    expect(hit[0]!.message).toContain('每个时机只允许一个');
+    expect(hit[0]!.ruleId).toBe(MULTIPLE_CHOICE_BLOCKS_RULE_ID);
+    expect(hit[0]!.message).toBe(transpilerIssues(src).find((i) => i.ruleId === MULTIPLE_CHOICE_BLOCKS_RULE_ID)!.message);
   });
 
   it('§3.7：两个时机各一个「选项」块 → 无告警（跨时机不算）', async () => {
@@ -345,33 +388,37 @@ describe('内置规则：语法糖侧静态约定（sugar.static-conventions）'
       '    选项：\n' +
       '        「乙」：\n' +
       '            「……」\n';
+    setSugarTranspileProvider(() => sugar);
     const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    expect(rep.issues.filter((i) => i.ruleId === 'sugar.multiple-choice-blocks')).toHaveLength(0);
+    expect(panelSugarIssues(rep, 'choice-multiple')).toHaveLength(0);
   });
 
-  it('§3.5：表达式 `如果` 缺「否则」→ error', async () => {
+  it('§3.5：表达式 `如果` 缺「否则」→ 投影一致', async () => {
     const src =
       '角色: 12\n' +
       '时机 指令 310：\n' +
       '    她的心情 = 如果 她的好感度 >= 500：\n' +
       '        "热情"\n';
+    setSugarTranspileProvider(() => sugar);
     const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    const hit = rep.issues.filter((i) => i.ruleId === 'sugar.expr-missing-else');
+    const hit = panelSugarIssues(rep, 'expr-missing-else');
     expect(hit).toHaveLength(1);
-    expect(hit[0]!.message).toContain('如果');
+    expect(hit[0]!.message).toBe(transpilerIssues(src)[0]!.message);
+    expect(hit[0]!.line).toBe(transpilerIssues(src)[0]!.line);
   });
 
-  it('§3.6：表达式 `当` 缺「否则」→ error', async () => {
+  it('§3.6：表达式 `当` 缺「否则」→ 投影一致', async () => {
     const src =
       '角色: 12\n' +
       '时机 指令 310：\n' +
       '    她的心情 = 当 她的好感度：\n' +
       '        是 0 到 99 -> 0\n';
+    setSugarTranspileProvider(() => sugar);
     const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    expect(rep.issues.filter((i) => i.ruleId === 'sugar.expr-missing-else')).toHaveLength(1);
+    expect(panelSugarIssues(rep, 'expr-missing-else')).toHaveLength(1);
   });
 
   it('§3.5：表达式 `如果` 带「否则」→ 无告警', async () => {
@@ -382,44 +429,50 @@ describe('内置规则：语法糖侧静态约定（sugar.static-conventions）'
       '        "热情"\n' +
       '    否则：\n' +
       '        "冷淡"\n';
+    setSugarTranspileProvider(() => sugar);
     const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    expect(rep.issues.filter((i) => i.ruleId === 'sugar.expr-missing-else')).toHaveLength(0);
+    expect(panelSugarIssues(rep, 'expr-missing-else')).toHaveLength(0);
   });
 
-  it('§5.0：只读别名（字面量）作赋值左值 → error', async () => {
-    const src =
-      '角色: 12\n' +
-      '别名 基准 = 500\n' +
-      '时机 指令 310：\n' +
-      '    基准 = 600\n';
+  it('§5.0：只读别名（字面量）作赋值左值 → 投影一致', async () => {
+    const src = '角色: 12\n别名 基准 = 500\n时机 指令 310：\n    基准 = 600\n';
+    setSugarTranspileProvider(() => sugar);
     const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    const hit = rep.issues.filter((i) => i.ruleId === 'sugar.readonly-alias-assign');
+    const hit = panelSugarIssues(rep, 'readonly-alias-assignment');
     expect(hit).toHaveLength(1);
-    expect(hit[0]!.message).toContain('只读别名');
+    expect(hit[0]!.ruleId).toBe(READONLY_ALIAS_ASSIGN_RULE_ID);
+    expect(hit[0]!.message).toBe(
+      transpilerIssues(src).find((i) => i.ruleId === READONLY_ALIAS_ASSIGN_RULE_ID)!.message,
+    );
   });
 
   it('§5.0：只读别名作右值 → 无告警', async () => {
-    const src =
-      '角色: 12\n' +
-      '别名 基准 = 500\n' +
-      '时机 指令 310：\n' +
-      '    她的好感度 = 基准\n';
+    const src = '角色: 12\n别名 基准 = 500\n时机 指令 310：\n    她的好感度 = 基准\n';
+    setSugarTranspileProvider(() => sugar);
     const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    expect(rep.issues.filter((i) => i.ruleId === 'sugar.readonly-alias-assign')).toHaveLength(0);
+    expect(panelSugarIssues(rep, 'readonly-alias-assignment')).toHaveLength(0);
   });
 
-  it('原生直通行 / @ 块内的同名文本不参与判定', async () => {
-    const src =
-      '角色: 12\n' +
-      '@M_FUNC\n' +
-      'PRINTFORMW 「……」续」\n' +
-      'GETVAR 续\n';
+  it('原生直通块（`@`）里的同名文本不参与判定（分区口径跟随转译器）', async () => {
+    const src = '角色: 12\n@M_FUNC\nPRINTFORMW 「……」续」\nGETVAR 续\n';
+    setSugarTranspileProvider(() => sugar);
     const { engine } = kojoHarness(src);
     const rep = await engine.run();
-    expect(rep.issues.filter((i) => i.ruleId.startsWith('sugar.'))).toHaveLength(0);
+    expect(rep.issues.filter((i) => SUGAR_LINT_RULE_IDS.includes(i.ruleId))).toEqual([]);
+  });
+
+  it('服务缺席 ⇒ 本轮没有结论（failedRules 带原因），不伪造"没问题"', async () => {
+    setSugarTranspileProvider(() => null);
+    const { engine } = kojoHarness('角色: 12\n时机 指令 310：\n    「……续」\n');
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId.startsWith('sugar.'))).toEqual([]);
+    const failed = rep.failedRules.find((f) => f.ruleId === SUGAR_STATIC_CONVENTIONS_RULE_ID);
+    expect(failed).toBeDefined();
+    expect(failed!.error).toContain('sugar.transpile 服务缺席');
+    setSugarTranspileProvider(null);
   });
 });
 

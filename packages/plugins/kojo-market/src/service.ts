@@ -90,6 +90,13 @@ import {
 import { contentDigestOf, sha256Hex } from './digest';
 import { packContainerProblem, parseIndex, parseManifest, type ContainerFacts } from './manifest';
 
+/**
+ * 清单变更通知的形状：**从契约 `MarketService` 的订阅面反推**，本文件不复制字段表。
+ * （契约里那个具名类型没进 `plugin-api` 的出口清单，而出口清单本批不在可改面内；
+ * 自己再写一遍 `{change,kind,id,version}` 就是第二份真相——反推写法让它跟着契约漂。）
+ */
+type MarketInstalledChange = Parameters<Parameters<MarketService['onInstalledChanged']>[0]>[0];
+
 /** `ctx.storage`（域 = 本插件 id）里存已装清单的键 */
 const INSTALLED_KEY = 'installed';
 /** 注册表端点覆盖值（缺省 = 没有覆盖 = 用 `MARKET_DEFAULT_INDEX_URL`） */
@@ -171,6 +178,40 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
   const stagingRoot = join(deps.root, MARKET_STAGING_DIR);
   const dirOf = (kind: PackKind, id: string, version: string): string =>
     join(packsRoot, kind, id, version);
+
+  /**
+   * 已装清单变更的订阅者（MK-1 即时失效）。
+   *
+   * 通知的形状**从契约 `MarketService` 的订阅面反推**（`Parameters<…>`），本文件不另写
+   * 一份字段表——契约的 `MarketInstalledChange` 没进 `plugin-api` 的出口清单（`index.ts`
+   * 不在本批可改面内），而复制一份字段表正是全仓拦了两轮的那种第二份真相。
+   *
+   * 只有这一个数组：通知的**发出时机**由 `notifyInstalledChanged` 一处决定
+   * （记账写完、Promise 落回调用方之前），装/卸的两条路径都只调它 ⇒
+   * "什么时候该重取"不存在第二份口径（消费者也就不用自己猜时序）。
+   */
+  const installedListeners = new Set<(change: MarketInstalledChange) => void>();
+
+  /**
+   * 同步广播一次清单变更。**逐个隔离监听器抛错**（与内核总线同一条口径）：
+   * 消费者自己的 bug 不许把一次**已经成功**的装卸倒过来变成失败——那等于作者看见
+   * "没装上"而盘上明明有（本条正是 MK-1 要消灭的那类错位）。抛错必须出声（`log.warn`）。
+   */
+  function notifyInstalledChanged(
+    change: MarketInstalledChange['change'],
+    kind: PackKind,
+    id: string,
+    version: string,
+  ): void {
+    const event: MarketInstalledChange = { change, kind, id, version };
+    for (const listener of [...installedListeners]) {
+      try {
+        listener(event);
+      } catch (err: unknown) {
+        log.warn(`已装清单变更的通知有一个消费者抛错（不影响本次装卸的结果）：${errMessage(err)}`);
+      }
+    }
+  }
 
   async function readRecords(): Promise<InstalledPack[]> {
     const raw = await storage.get<unknown>(INSTALLED_KEY);
@@ -361,7 +402,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     if (problem !== null) {
       const reason = `注册表地址不合法：${problem}`;
       log.warn(`${reason} —— ${url}`);
-      return { state: 'failed', reason, detail: url, index: await readIndexState(slot) };
+      return { state: 'failed', stage: 'check', reason, detail: url, index: await readIndexState(slot) };
     }
     const previous = await readFetchedAt();
     if (opts?.force !== true && previous !== null && now() - previous < MARKET_INDEX_TTL_MS) {
@@ -378,7 +419,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     } catch (err) {
       const reason = `从注册表拉列表没有成功：${errMessage(err)}`;
       log.warn(`${reason} —— ${url}`);
-      return { state: 'failed', reason, detail: url, index: await readIndexState(slot) };
+      return { state: 'failed', stage: 'check', reason, detail: url, index: await readIndexState(slot) };
     }
     let rawJson: unknown;
     try {
@@ -386,13 +427,13 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     } catch (err) {
       const reason = `注册表回来的内容不是合法 JSON：${errMessage(err)}`;
       log.warn(`${reason} —— ${url}`);
-      return { state: 'failed', reason, detail: url, index: await readIndexState(slot) };
+      return { state: 'failed', stage: 'check', reason, detail: url, index: await readIndexState(slot) };
     }
     const checked = parseIndex(rawJson);
     if (checked.index === null) {
       const reason = '注册表回来的列表形状不受支持（本机这份原样未动）';
       log.warn(`${reason} —— ${url}`);
-      return { state: 'failed', reason, detail: url, index: await readIndexState(slot) };
+      return { state: 'failed', stage: 'check', reason, detail: url, index: await readIndexState(slot) };
     }
     // 校验通过**才**覆盖：失败的刷新永远不许把好用的旧列表换成坏文件。
     // 写的是**原文**（一字不改的镜像）⇒ 坏条目留在盘上、每次读都重新报进 `dropped`，
@@ -403,7 +444,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     } catch (err) {
       const reason = `列表落盘失败：${errMessage(err)}`;
       log.warn(`${reason} —— ${indexPath}`);
-      return { state: 'failed', reason, detail: indexPath, index: await readIndexState(slot) };
+      return { state: 'failed', stage: 'check', reason, detail: indexPath, index: await readIndexState(slot) };
     }
     // 盘上刚换过一份 ⇒ 合并槽里那份立刻作废，下面这一次读**必须回盘**读到刚写的那一份
     // （不然"刷新成功却返回刷新前的旧列表"就是本次合并唯一可能引进的错，钉死在这里）。
@@ -605,6 +646,10 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     rest.push(record);
     await writeRecords(rest);
     log.info(`装好了 ${record.kind}/${record.id} v${record.version}（${record.files.length} 个文件）→ ${target}`);
+    // MK-1：记账写完**立刻**出声（就在 Promise 落回调用方之前）——目录源的 `installLocalDir`
+    // 与容器源的 `installFromIndex` 共用这条唯一搬运路径 ⇒ 通知点也只有一处。
+    // 失败路径走不到这一行（上面任一 `throw` 都不落地，也就一声不出）。
+    notifyInstalledChanged('installed', record.kind, record.id, record.version);
     return record;
   }
 
@@ -788,6 +833,23 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       } else {
         log.warn(`卸掉了 ${kind}/${id} v${version}（目录本来就不在位，只清了清单条目）`);
       }
+      // MK-1：清单与盘都清完了 ⇒ 立刻作废消费者的显示（上面那条 `installed-missing` 的
+      // 早退路径不到这里：什么都没动，自然不该有一次重取）。
+      notifyInstalledChanged('uninstalled', kind, id, version);
+    },
+
+    /**
+     * 订阅已装清单变更（契约面）。退订句柄幂等：重复调用只摘一次，摘掉后不再收。
+     *
+     * ⚠ `verifiedRecords()` 的**自愈**（目录丢失 ⇒ 清单剔除并写回）刻意**不**走这里：
+     * 自愈发生在"有人来读"的那一刻，从读路径里再发一次通知 = 通知又触发一次读（自激环）。
+     * 消费者的这一次读数本身就是最新真相，不需要再被通知一次。
+     */
+    onInstalledChanged(listener: (change: MarketInstalledChange) => void): () => void {
+      installedListeners.add(listener);
+      return (): void => {
+        installedListeners.delete(listener);
+      };
     },
 
     async isInstalled(kind: PackKind, id: string, version: string): Promise<boolean> {

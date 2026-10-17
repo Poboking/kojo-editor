@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DirEntry, FileIO, FileStat, Logger, SugarCompiledBytes } from '@kojo/plugin-api';
+import {
+  buildZip,
+  inflateZipEntry,
+  readZipContainer,
+  verifyZipRoundtrip,
+  zipContainerContractProblem,
+  ZIP_FLAG_UTF8,
+} from '@kojo/plugin-api';
 import { STATUS_OK_DISMISS_MS, buildPackageZip, createPackageActions } from '../src/package-actions';
 import type { KojoCompiler } from '../src/artifact';
 import type { DeployTargetOk, PendingDeploy } from '../src/deploy';
@@ -354,5 +362,114 @@ describe('部署到游戏目录（P-E）', () => {
     expect(actions.status()?.kind).toBe('ok');
     await actions.deployArtifact(PKG, TARGET);
     expect(actions.status()?.text).toContain('已部署');
+  });
+});
+
+/**
+ * **W14 往返契约在导出链路上生效**（规则单源见 `plugin-api/fixtures/zip-roundtrip/contract.json`）。
+ *
+ * 三条各钉一件事：
+ * 1. 导出的字节确实是**平台解包器认识**的容器（过解包侧的闸，且逐条目读回内容一致）；
+ * 2. 违反契约的工作区（大小写重名 = Windows 上同一文件）必须**拒在弹框之前**，
+ *    失败态带的是解包侧那套拒绝码，不是本层自造的一句话；
+ * 3. 导出链路的**唯一写盘通道是 `exportFile`**（对话框即授权，落点由平台决定）——
+ *    任何一条 `writeBytes` / `ensureDir` / `rename` 被调用都算越权，测试直接炸。
+ */
+describe('导出链路的往返契约（W14）', () => {
+  const enc = new TextEncoder();
+
+  /** 只有读能力的 io 替身：任何写原语被调用即红（导出没有、也不该有第二条写路径） */
+  function readOnlyIo(files: Record<string, string>): FileIO {
+    return {
+      walkDir: async () =>
+        Object.entries(files).map(
+          ([rel, _]): DirEntry => ({ name: rel, path: `${SRC}/${rel}`, isDirectory: false }),
+        ),
+      readBytes: async (p: string) => {
+        const rel = p.slice(SRC.length + 1);
+        if (!(rel in files)) throw new Error(`没有这个文件：${p}`);
+        return enc.encode(files[rel]);
+      },
+      writeBytes: async () => {
+        throw new Error('导出链路不许直接写盘：落点只能由 exportFile 的对话框决定');
+      },
+      writeText: async () => {
+        throw new Error('导出链路不许直接写盘：落点只能由 exportFile 的对话框决定');
+      },
+      ensureDir: async () => {
+        throw new Error('导出链路不许建目录：落点只能由 exportFile 的对话框决定');
+      },
+      rename: async () => {
+        throw new Error('导出链路不许搬运：落点只能由 exportFile 的对话框决定');
+      },
+    } as unknown as FileIO;
+  }
+
+  it('导出的字节是平台解包器认识的容器（逐条目读回内容与字节全平）', async () => {
+    const io = readOnlyIo({ '事件.kojo': '如果 A：\n', '说明.txt': '原样', '子目录/备注.md': '# 备注' });
+    const { fileName, bytes } = await buildPackageZip(io, SRC, fakeCompile);
+    expect(fileName).toBe(`${NAME}.zip`);
+    const container = readZipContainer(bytes);
+    expect(zipContainerContractProblem(container)).toBeNull();
+    expect(container.entries.map((e) => e.name)).toEqual([
+      `${NAME}/事件.ERB`,
+      `${NAME}/说明.txt`,
+      `${NAME}/子目录/备注.md`,
+    ]);
+    const back: Uint8Array[] = [];
+    for (const entry of container.entries) {
+      expect(entry.flags & ZIP_FLAG_UTF8).toBe(ZIP_FLAG_UTF8);
+      back.push(await inflateZipEntry(entry));
+    }
+    expect(new TextDecoder().decode(back[0]!)).toContain('; from 事件.kojo');
+    expect(new TextDecoder().decode(back[2]!)).toBe('# 备注');
+    // 自证与产品链路同一条判据：通过 = null
+    expect(
+      await verifyZipRoundtrip(
+        bytes,
+        container.entries.map((e, i) => ({ name: e.name, data: back[i]! })),
+      ),
+    ).toBeNull();
+  });
+
+  it('大小写重名的工作区（Windows 上是同一个文件）→ 拒在弹框之前，两层都拦', async () => {
+    vi.useFakeTimers();
+    let dialogOpened = false;
+    const { actions } = setup(
+      {
+        ...readOnlyIo({ 'A.ERB': 'x\n', 'a.ERB': 'y\n' }),
+        exportFile: async () => {
+          dialogOpened = true;
+          return 'D:/不该被调用.zip';
+        },
+      },
+      fakeCompile,
+    );
+    actions.exportArtifact(SRC, NAME);
+    await settle(actions);
+    expect(dialogOpened).toBe(false);
+    expect(actions.status()?.kind).toBe('err');
+    // 先响的是**制品计划层**（`artifact.ts` 的"产物名冲突"，用作者的語言说"请改名后再导出"）；
+    // ZIP 契约层的 `entry-duplicate` 是第二道网（判据见 plugin-api 的 zip-roundtrip 测试）：
+    // 任何绕过计划层的调用者打的包照样过不了平台解包器的闸。
+    expect(actions.status()!.text).toMatch(/产物名冲突|entry-duplicate/);
+  });
+
+  it('绕过制品计划层直接打 ZIP 时，第二道网确实接得住（entry-duplicate 出自契约层）', async () => {
+    await expect(
+      buildZip(
+        [
+          { name: `${NAME}/A.ERB`, data: enc.encode('x\n') },
+          { name: `${NAME}/a.ERB`, data: enc.encode('y\n') },
+        ],
+        { contract: 'extractable' },
+      ),
+    ).rejects.toThrow(/^entry-duplicate：/);
+  });
+
+  it('超深的工作区目录 → path-depth 同样拒在弹框之前', async () => {
+    const deep = Array.from({ length: 14 }, (_v, i) => `d${i}`).join('/');
+    const io = { ...readOnlyIo({ [`${deep}/事件.kojo`]: '如果 A：\n' }) } as unknown as FileIO;
+    await expect(buildPackageZip(io, SRC, fakeCompile)).rejects.toThrow(/^path-depth：/);
   });
 });

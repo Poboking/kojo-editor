@@ -37,6 +37,14 @@
  *   `opaque` 即跳过信号。**缺席时降级**（`degraded: true`），结构判据不受影响。
  *
  * 三条依赖都做成**注入**，单测可以用替身精确驱动各条路径，不必启动内核。
+ *
+ * ## 识别口径住在 `sugar-ident.ts`（W5 并一）
+ *
+ * "哪些 PRINT 形态 / 条件形态 / 三元 / 空行 / 代词 / 别名可认"由**一张表**回答，
+ * 本模块与 `project.ts` 都从它派生；两侧各自的用途差异是表上的标志位
+ * （`writable` = 本模块允许试着组装并自证，`displayable` = 投影允许显示），
+ * **不存在第二份规则表**。不变量：`displayable ⇒ 有候选 or 明确拒绝理由`
+ * （`tests/sugar-ident-invariants.test.ts` 逐条钉死）。
  */
 
 import type {
@@ -57,6 +65,38 @@ import type {
 } from '@kojo/plugin-api';
 import { liftProject } from './project';
 import type { DictionaryLookup } from './types';
+import { PRONOUN_REVERSE } from './expression';
+import {
+  PRINT_FAMILY_RE,
+  PRINT_VARIANTS,
+  aliasCandidates,
+  blankLineSugar,
+  caseValuesToSugar,
+  closeWordOf,
+  closesCategory,
+  collectVarRefs,
+  CONTROL_SHAPES,
+  controlHeadText,
+  isBranchKind,
+  isSugarCloseKind,
+  contentOf,
+  contMark,
+  hasCommandColon,
+  hasInlineCondition,
+  indentLevelOf,
+  inlineConditionsToSugar,
+  isCloseKind,
+  trimTrailingSpace,
+  leadingWord,
+  NON_BODY_LINE_KINDS,
+  pairOf,
+  singleIfSugar,
+  splitSourceLines,
+  unsupportedInBlock,
+  writableControl,
+  writablePrint,
+  type PrintVariant,
+} from './sugar-ident';
 
 /* ============================== 依赖 ============================== */
 
@@ -122,7 +162,9 @@ export function liftSuggest(deps: LiftDeps, request: SugarLiftRequest): SugarLif
   // 块级识别（自顶向下；块区间被消费后其内部不再单独产出候选——避免嵌套重复建议）
   const consumed = new Set<number>();
   liftBlocks(ctx, candidates, skipped, consumed);
-  // 行级识别：文本消息行（跳过已被块候选覆盖的行）
+  // 单行条件识别：`SIF 条件` + 紧随的那一条语句 → `如果 … 则 …`（W5 与投影同口径）
+  liftSingleIfs(ctx, candidates, skipped, consumed);
+  // 行级识别：文本消息行（跳过已被块 / 单行条件覆盖的行）
   liftPrintLines(ctx, candidates, skipped, consumed);
   // 文件级识别：重复变量引用 → 别名建议
   liftAliases(ctx, candidates, skipped, consumed);
@@ -150,105 +192,56 @@ interface LiftContext {
   request: SugarLiftRequest;
 }
 
-/* ============================== 行工具 ============================== */
-
-/** 切源行（去行尾换行；EOL 归一为 `\n`） */
-function splitSourceLines(source: string): string[] {
-  const src = source.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const lines = src.split('\n');
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-  return lines;
-}
-
-/** 行缩进（TAB 数 + 空格按层级折算；与 lexer 的 `indentLevel` 同口径） */
-function indentOf(line: string): number {
-  const m = /^[ \t\u3000]*/.exec(line);
-  const prefix = m ? m[0] : '';
-  let tabs = 0;
-  let spaces = 0;
-  for (const ch of prefix) {
-    if (ch === '\t') tabs++;
-    else if (ch === '\u3000') spaces += 2;
-    else if (ch === ' ') spaces += 1;
-  }
-  return tabs + (spaces > 0 ? Math.ceil(spaces / 4) : 0);
-}
-
-/** 去行首缩进 + 行尾空白 */
-function contentOf(line: string): string {
-  return line.replace(/^[ \t\u3000]*/, '').replace(/[ \t\u3000]+$/, '');
-}
-
-/** 是否空行 */
-function isBlank(line: string): boolean {
-  return contentOf(line).length === 0;
-}
-
-/** 是否注释行（`;` 起） */
-function isComment(line: string): boolean {
-  return contentOf(line).startsWith(';');
-}
-
-/* ============================== PRINT 家族 ============================== */
+/* ================== 行工具 / 文本体逆向（识别核见 sugar-ident.ts） ================== */
 
 /**
- * PRINT 家族变体解析。
- *
- * 只认**四个有糖形态的变体**（规范 §5.1 的产物集）：
- * `PRINTFORMW` / `PRINTFORML` / `PRINTFORMDW` / `PRINTFORMDL`。
- *
- * 其余一律跳过（`unsupported-print-variant`）——因为糖**没有**对应写法：
- * - `PRINTFORM` / `PRINTFORMD`（无 `L/W` 后缀）= 不换行不等待（§3.3 能力边界）；
- * - `PRINTL` / `PRINT` / `PRINTD` 系 = 非 FORM（不做变量插值展开）；
- * - `PRINTS*` / `PRINTDATA*` 系 = 直通形态。
+ * "哪些形态可认"不住在本文件——**唯一的一张表**在 `sugar-ident.ts`，本模块与
+ * `project.ts` 都从它派生（W5 LIFT-PROJ-ALIGN）。这里只留**写回口径**特有的东西：
+ * 自证壳、块组装，以及"表上说可写回"之后的糖片段组装。
  */
-interface PrintVariant {
-  speechByColor: boolean; // 是否带 D（忽略 SETCOLOR = 旁白色）
-  wait: boolean; // 是否等待（W = 等待）
-}
 
-const PRINT_VARIANTS: ReadonlyMap<string, PrintVariant> = new Map([
-  ['PRINTFORMW', { speechByColor: false, wait: true }],
-  ['PRINTFORML', { speechByColor: false, wait: false }],
-  ['PRINTFORMDW', { speechByColor: true, wait: true }],
-  ['PRINTFORMDL', { speechByColor: true, wait: false }],
-]);
-
-/** 匹配 `PRINTFORM*` 家族行（含被识别为"变体但无糖形态"者，用于区分跳过原因） */
-const PRINT_FAMILY_RE = /^(PRINT[A-Z]*)\s([\s\S]*)$/;
-
-/** 该行是否 PRINT 家族（任意变体） */
-function isPrintFamily(text: string): boolean {
-  return PRINT_FAMILY_RE.test(text);
-}
-
-/* ============================== 文本体逆向 ============================== */
+/** 行缩进层级（= 识别核的 `indentLevelOf`；保留本文件的旧名以免全文改名） */
+const indentOf = indentLevelOf;
 
 /**
  * 文本体逆组装（原生 ERB 文本 → 糖文本）。
  *
- * 实测结论（设计稿 §3）：S2 的转译器对以下**原生记号原样透传**，因此逆向时
- * **不需要**改写它们，只需按糖语法处理"引号 / `续`"两处：
- * - `%…%`（字符串族插值）→ 原样保留即能 round-trip（`PRINTFORMW 「%CALLNAME:MASTER%」`
- *   ← 糖 `「%CALLNAME:MASTER%」`）；
- * - `{…}`（数值插值）→ 同上；
- * - `\@条件?真#假\@`（行内条件）→ 糖里必须写成 `{条件 ? "真" : "假"}` 才等价
- *   （糖转译会把 `{}` 条件降回 `\@…\@`）——**本批不逆向行内条件**（见 `hasInlineCondition`）。
+ * 实测结论（设计稿 §3）：转译器对以下**原生记号原样透传**，故逆向时**不需要**改写它们，
+ * 只需按糖语法处理"引号 / `续`"两处：
+ * - `{…}`（数值插值）→ 原样保留即能 round-trip；
+ * - `%…%`（字符串族插值）→ 原样保留也能 round-trip（`PRINTFORMW 「%CALLNAME:MASTER%」`
+ *   ← 糖 `「%CALLNAME:MASTER%」`）；**代词**是这类里唯一值得反糖的一支：
+ *   `%CALLNAME:TARGET%` / `%CALLNAME:MASTER%` → `{她}` / `{你}`——正向 `PRONOUN_MAP`
+ *   的产物**恰是**这两个串，而 `codegen.classifyInterpolation` 对已是 `%…%` 的降糖结果
+ *   **原样透传**（不再包一层定界符）⇒ 逆向恒等（识别核的 `PRONOUN_WRITABLE`）；
+ * - `\@条件?真#假\@`（行内三元）→ `{条件 ? "真" : "假"}`（糖转译把 `{}` 条件降回
+ *   `\@…\@`）——**W5 起写回侧也做这一类**，判据与投影共用识别核那把尺子，
+ *   三段拆不出来就整行不动。
+ *
+ * **属性反糖**（`{CFLAG:TARGET:1088}` → `{她的好感度}`）**不在这里做**：降糖会把定界符
+ * 从 `%…%` 换成 `{…}` ⇒ 逐字节不等 ⇒ 只显不写（识别核的 `ATTRIBUTE_WRITABLE`）。
+ * 同理**族头中文化**（`NOWEX:` → `现在：`）与**函数名中文反显**也只显不写
+ * （`NAME_ALIAS_WRITABLE`）——它们的产物是英文原文，写回等于篡改条件。
  */
 function toSugarText(erbBody: string): string {
-  return erbBody;
+  let out = erbBody;
+  for (const [form, pronoun] of PRONOUN_REVERSE) {
+    if (out.includes(form)) out = out.split(form).join('{' + pronoun + '}');
+  }
+  return out;
 }
 
 /**
- * 行内条件 `\@…\@` 检测（**v1 不逆向**）。
+ * 文本体 → 糖文本（代词反糖 + 行内三元逆向）。
  *
- * 理由：糖的行内条件是 `{条件 ? "A" : "B"}`，把 `\@…\@` 逆向成糖需要在
- * "分支片段 ↔ 糖片段"之间做双向映射（分支里可能又有 `%..%` / `{}`），
- * 风险高于收益，且不影响 round-trip 判据（只是少一类候选 → 漏报，可接受）。
- * 含行内条件的行**整体跳过**（`not-covered`）。
+ * `undefined` = 行内含 `\@` 但三段拆不出来（不成对 / 缺 `#` / 空条件）→ 整行不动。
  */
-function hasInlineCondition(text: string): boolean {
-  return text.includes('\\@') || text.includes('@\\');
+function liftTextBody(erbBody: string): string | undefined {
+  if (!hasInlineCondition(erbBody)) return toSugarText(erbBody);
+  return inlineConditionsToSugar(erbBody, {
+    outer: toSugarText,
+    cond: (c) => c, // 条件段原样透传（属性 / 族头 / 函数名反糖只显不写）
+  });
 }
 
 /* ============================== round-trip 自证 ============================== */
@@ -488,12 +481,16 @@ function envelopeDepth(stmts: readonly ControlFlowStatement[]): number {
   return 0;
 }
 
-/** 找与 `open` 配对的结束行（深度回到 `open.depth` 的闭合语句） */
+/**
+ * 找与 `open` 配对的结束行（深度回到 `open.depth` 的闭合语句）。
+ *
+ * 闭合关键词由识别核的 `CONTROL_SHAPES` 给出（`closeWordOf`），本模块不再抄一份
+ * `{ IF: 'ENDIF', SELECTCASE: 'ENDSELECT' }`——那是投影侧结构栈的同族知识。
+ */
 function findClose(stmts: readonly ControlFlowStatement[], openIdx: number): number {
   const open = stmts[openIdx]!;
-  const closes: Record<string, string> = { IF: 'ENDIF', SELECTCASE: 'ENDSELECT' };
-  const want = closes[open.kind];
-  if (!want) return -1;
+  const want = closeWordOf(open.kind);
+  if (want === undefined) return -1;
   for (let i = openIdx + 1; i < stmts.length; i++) {
     const s = stmts[i]!;
     if (s.kind === want && s.depth === open.depth) return i;
@@ -501,17 +498,17 @@ function findClose(stmts: readonly ControlFlowStatement[], openIdx: number): num
   return -1;
 }
 
-/** `/^([A-Za-z_]+)/` 取行首指令词 */
-function leadingWord(text: string): string {
-  const m = /^([A-Za-z_]+)/.exec(text);
-  return m ? m[1]!.toUpperCase() : '';
-}
-
 /**
  * 结构级跳过判据（在组装糖片段**之前**先筛掉"不可能升糖"的区间）。
  *
  * 顺序即优先级：先排除"含糖未覆盖的控制流"，再排除标签/宏/注释干扰，
  * 最后才是 round-trip（那是**最后一道**，不是唯一一道）。
+ *
+ * "糖未覆盖的控制流"这份名单**不再在本文件抄写**——由识别核的 `CONTROL_SHAPES` 的 role
+ * 派生（`unsupportedInBlock`：糖只覆盖 `IF` / `SELECTCASE` 两族的块头 + 分支 + 收束行，
+ * 循环 / TRY 系 / 数据表 / `SIF` 一律未覆盖）。投影侧的结构栈与这里同源，
+ * 新增一族关键字只改表一处（旧写法要同步 `lift.UNSUPPORTED_FLOW` 与 `project.SUGAR_CONTROL`
+ * 两份名单——正是本批要消灭的税）。
  */
 function structuralSkip(
   ctx: LiftContext,
@@ -521,7 +518,7 @@ function structuralSkip(
   // 1) 糖未覆盖的控制流 / 标签 / 宏 / 注释
   for (const s of ctx.statements) {
     if (s.line < fromLine || s.line > toLine) continue;
-    if (UNSUPPORTED_FLOW.has(s.kind)) {
+    if (unsupportedInBlock(s.kind)) {
       return {
         reason: 'unsupported-control-flow',
         message: `第 ${s.line} 行的 ${s.kind} 不在 .kojo 的覆盖范围内（.kojo v1 不做循环与 TRY 系），整块保留为原生写法。`,
@@ -545,35 +542,6 @@ function structuralSkip(
   }
   return null;
 }
-
-/** 糖未覆盖的控制流（规范 §7：循环、TRY 系、数据表都不做糖） */
-const UNSUPPORTED_FLOW: ReadonlySet<string> = new Set([
-  'SIF',
-  'FOR',
-  'NEXT',
-  'WHILE',
-  'WEND',
-  'REPEAT',
-  'REND',
-  'DO',
-  'LOOP',
-  'TRYCGOTO',
-  'TRYCJUMP',
-  'TRYCCALL',
-  'TRYCCALLFORM',
-  'TRYCALLLIST',
-  'PRINTDATA',
-  'PRINTDATAL',
-  'PRINTDATAW',
-  'PRINTDATAK',
-  'PRINTDATAD',
-  'DATALIST',
-  'STRDATA',
-  'NOSKIP',
-  'CATCH',
-  'ENDCATCH',
-  'ENDFUNC',
-]);
 
 /** 记录一次块级跳过，并**同时**把该区间标记为已消费 */
 function skipBlock(
@@ -669,15 +637,6 @@ function tryLiftIf(
   markConsumed(consumed, fromLine, toLine);
 }
 
-/** 块内是否有更深的块（嵌套），供 `buildIfSugar` 递归时判定（保留供将来启发式用） */
-function hasNestedBlockInside(stmts: readonly ControlFlowStatement[], openIdx: number, closeIdx: number): boolean {
-  const open = stmts[openIdx]!;
-  for (let i = openIdx + 1; i < closeIdx; i++) {
-    if (stmts[i]!.depth > open.depth) return true;
-  }
-  return false;
-}
-
 /**
  * 组装 `如果 / 否则如果 / 否则` 糖片段（缩进按糖语义，一级 = 4 空格）。
  *
@@ -713,13 +672,16 @@ function buildIfSugar(
     const bodyEnd = b + 1 < branchHeads.length ? branchHeads[b + 1]!.stmt.line - 1 : close.line - 1;
 
     if (head.kind === 'else') {
-      out.push('否则：');
+      const elseHead = controlHeadText('ELSE', '');
+      if (elseHead === undefined) return null; // 表里没有这一族 → 整块不猜
+      out.push(elseHead);
     } else {
       const cond = head.stmt.expression;
       if (cond.trim().length === 0) return null;
       if (!isParsableCondition(ctx, cond)) return null;
-      const keyword = head.kind === 'if' ? '如果' : '否则如果';
-      out.push(`${keyword} ${cond}：`);
+      const text = controlHeadText(head.kind === 'if' ? 'IF' : 'ELSEIF', cond);
+      if (text === undefined) return null; // 块头给不出文本（表里没有 / 表达式空）→ 整块不猜
+      out.push(text);
     }
 
     const body = renderSugarBody(ctx, bodyStart, bodyEnd, byLine);
@@ -910,7 +872,7 @@ function buildRandomSugar(
   if (cases.length !== count) return null;
   cases.sort((a, b) => a.value - b.value);
 
-  const out: string[] = ['随机：'];
+  const out: string[] = ['随机：']; // `随机` 是糖的关键字（不是控制流块头），故仍是本地串
   for (const c of cases) {
     const body = renderSugarBody(ctx, c.bodyStart, c.bodyEnd, byLine);
     if (body === null || body.length === 0) return null;
@@ -940,80 +902,30 @@ function buildWhenSugar(
   }
   if (heads.length === 0) return null;
 
-  const out: string[] = [`当 ${subject}：`];
+  const selectHead = controlHeadText('SELECTCASE', subject);
+  if (selectHead === undefined) return null;
+  const out: string[] = [selectHead];
   for (let h = 0; h < heads.length; h++) {
     const head = heads[h]!;
     const bodyStart = head.stmt.line + 1;
     const bodyEnd = h + 1 < heads.length ? heads[h + 1]!.stmt.line - 1 : close.line - 1;
 
     if (head.isElse) {
-      out.push('\t否则：');
+      const elseHead = controlHeadText('CASEELSE', '');
+      if (elseHead === undefined) return null;
+      out.push(`\t${elseHead}`);
     } else {
-      const sugarValues = renderCaseValuesSugar(head.stmt.expression);
+      const sugarValues = caseValuesToSugar(head.stmt.expression);
       if (sugarValues === null) return null;
-      out.push(`\t是 ${sugarValues}：`);
+      const caseHead = controlHeadText('CASE', sugarValues);
+      if (caseHead === undefined) return null;
+      out.push(`\t${caseHead}`);
     }
     const body = renderSugarBody(ctx, bodyStart, bodyEnd, byLine);
     if (body === null || body.length === 0) return null;
     for (const line of body) out.push(`\t\t${line}`);
   }
   return out.join('\n');
-}
-
-/**
- * `CASE a TO b, c` → 糖 `a 到 b, c`（规范 §3.6）。
- *
- * 反向映射只做 `TO` → `到`；值本身原样（`lowerExpression` 会把 `到` 降回 `TO`，
- * 且 round-trip 会验证一致性）。含函数调用/复杂表达式的值原样保留，
- * 由 round-trip 决定是否成立。
- */
-function renderCaseValuesSugar(erbCase: string): string | null {
-  const parts = splitTopLevel(erbCase);
-  const out: string[] = [];
-  for (const p of parts) {
-    const t = p.trim();
-    if (t.length === 0) return null;
-    const m = /^([\s\S]+?)\s+TO\s+([\s\S]+)$/.exec(t);
-    if (m) out.push(`${m[1]!.trim()} 到 ${m[2]!.trim()}`);
-    else out.push(t);
-  }
-  return out.join(', ');
-}
-
-/** 顶层逗号切分（括号 / 引号感知） */
-function splitTopLevel(s: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let inStr = false;
-  let cur = '';
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]!;
-    if (inStr) {
-      cur += c;
-      if (c === '\\' && i + 1 < s.length) {
-        cur += s[i + 1]!;
-        i++;
-        continue;
-      }
-      if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') {
-      inStr = true;
-      cur += c;
-      continue;
-    }
-    if (c === '(') depth++;
-    if (c === ')') depth--;
-    if (c === ',' && depth === 0) {
-      out.push(cur);
-      cur = '';
-      continue;
-    }
-    cur += c;
-  }
-  out.push(cur);
-  return out;
 }
 
 /* ============================== 块体渲染 ============================== */
@@ -1073,6 +985,7 @@ function renderSugarBody(
     }
 
     // 其它逻辑语句：原样（糖原生直通 / 赋值降糖皆能还原）
+    // 非 PRINT 的原样直行车仍含行内条件 → 保守不动（糖的三元只在文本体里有意义）
     if (hasInlineCondition(content)) return null;
     out.push(content);
     i++;
@@ -1097,26 +1010,47 @@ function buildWhenSugarFromIdx(
 /**
  * PRINT 家族行 → 糖文本行（§5.1 的**逆**算法）。
  *
- * 逆向逻辑（与 `codegen.printLine` 严格互逆）：
- * - **空文本体**（`空行`）→ `空行`（不等待）/ `空行 等待`（等待）：空行没有可着色的内容，
- *   故不看 `D` 归属——等待由 `W` 决定（`PRINTFORML` → `空行`、`PRINTFORMDW` → `空行 等待`）；
- *   表外形态（`PRINTFORMW` / `PRINTFORMDL` 空体）自证会被拦下（产不出原变体），退回跳过。
- * - 有文本体：`wait=false`（`L` 后缀）→ 行尾加 ` 续`；
- * - `sortByColor`（`D` 后缀）→ 糖里**不额外标注**：糖按"无引号 = 旁白 = 默认色"
- *   自动选 `D`，故旁白文本天然还原为 `D` 系；台词文本（`「` 起）还原为非 `D` 系。
+ * **判据不在本文件**：形态表在识别核（`PRINT_VARIANTS`），"写回侧认不认"是表上的
+ * `writablePrint()`。返回 `null` 的两支由调用方各给一条**显式**跳过理由：
+ * - 表里没有 / 非 FORM / 不换行 → `unsupported-print-variant`；
+ * - 形态可写、但行内三元三段拆不出来 → `not-covered`。
  *
- * 于是"不该有 D 却有 D"（`PRINTFORMDW 「台词」`）或"该有 D 却没有"
- * （`PRINTFORMW 旁白`）这类**原生手写不一致**会**自动被 round-trip 拦下**
- * ——这正是自证的价值：逆向逻辑本身不必穷举所有边界。
+ * 逆向逻辑（与 `codegen.printLine` 严格互逆）：
+ * - **空文本体**（打空行）→ `空行`（不等待）/ `空行 等待`（等待）：空行没有可着色的内容，
+ *   故不看 `D` 归属——等待由 `W` 决定（`PRINTFORML` → `空行`、`PRINTFORMDW` → `空行 等待`）；
+ *   表外形态（`PRINTFORMW` / `PRINTFORMDL` 空体）自证会被拦下（产不出原变体），退回跳过；
+ * - 有文本体：`liftTextBody`（代词反糖 + 行内三元逆向），`L` 后缀（`newline && !wait`）补 ` 续`；
+ * - `sortByColor`（`D` 后缀）→ 糖里**不额外标注**：糖按"无引号 = 旁白 = 默认色"自动选 `D`，
+ *   故旁白文本天然还原为 `D` 系；台词文本（`「` 起）还原为非 `D` 系。
+ *
+ * 于是"不该有 D 却有 D"（`PRINTFORMDW 「台词」`）或"该有 D 却没有"（`PRINTFORMW 旁白`）
+ * 这类**原生手写不一致**会**自动被 round-trip 拦下**——这正是自证的价值：
+ * 逆向逻辑本身不必穷举所有边界。
  */
 function printLineToSugar(word: string, body: string): string | null {
   const variant = PRINT_VARIANTS.get(word);
-  if (!variant) return null;
-  const text = body.replace(/[ \t\u3000]+$/, '');
-  if (hasInlineCondition(text)) return null;
-  if (text.length === 0) return variant.wait ? '空行 等待' : '空行';
-  const sugarBody = toSugarText(text);
-  return variant.wait ? sugarBody : `${sugarBody} 续`;
+  if (variant === undefined || !writablePrint(variant)) return null;
+  const text = trimTrailingSpace(body);
+  if (text.length === 0) return blankLineSugar(variant.wait);
+  const sugarBody = liftTextBody(text);
+  if (sugarBody === undefined) return null;
+  return sugarBody + contMark(variant);
+}
+
+/**
+ * 「这一行的输出变体为什么写不回」——**由表里的字段派生**，不是第二份规则。
+ *
+ * 投影侧把 `PRINTL` / `PRINTW` / `PRINTDL` / `PRINTDW` 投影成文本行（`displayable`），
+ * 建议侧对它们必须给出**可核对的**拒绝理由（不变量：`displayable ⇒ 候选 or 明确理由`）。
+ */
+function printRejectMessage(lineNo: number, word: string, variant: PrintVariant | undefined): string {
+  if (variant === undefined) {
+    return `第 ${lineNo} 行的 ${word} 不在 .kojo 认得的输出形态表里（.kojo 的文本行恒产出 PRINTFORMW/L/DW/DL）。`;
+  }
+  const why = variant.form
+    ? '它不换行（是拼句片段），.kojo 没有"续"以外的节奏标记'
+    : '它不是 FORM 系（不做插值展开），换成 .kojo 文本行会改变打印语义';
+  return `第 ${lineNo} 行的 ${word} 没有对应的 .kojo 写法——${why}。`;
 }
 
 /* ============================== 行级识别 ============================== */
@@ -1135,38 +1069,27 @@ function liftPrintLines(
     if (content.length === 0 || content.startsWith(';')) continue;
 
     const pm = PRINT_FAMILY_RE.exec(content);
-    if (!pm) {
-      // 全大写 PRINT 家族之外的指令（PRINTBUTTON 等）→ 记 not-covered（不静默）
-      if (/^PRINT[A-Z]*\b/.test(content)) {
-        skipped.push({
-          fromLine: lineNo,
-          toLine: lineNo,
-          reason: 'unsupported-print-variant',
-          message: `第 ${lineNo} 行的 ${leadingWord(content)} 没有对应的 .kojo 写法（.kojo 恒产出 PRINTFORM{W/L/DW/DL}）。`,
-        });
-      }
-      continue;
-    }
+    if (pm === null) continue;
 
     const word = pm[1]!;
-    const body = pm[2]!;
-    if (!PRINT_VARIANTS.has(word)) {
+    const variant = PRINT_VARIANTS.get(word);
+    if (variant === undefined || !writablePrint(variant)) {
       skipped.push({
         fromLine: lineNo,
         toLine: lineNo,
         reason: 'unsupported-print-variant',
-        message: `第 ${lineNo} 行的 ${word} 没有对应的 .kojo 写法（不换行 / 非 FORM 系不在 .kojo 的覆盖范围内）。`,
+        message: printRejectMessage(lineNo, word, variant),
       });
       continue;
     }
 
-    const sugar = printLineToSugar(word, body);
+    const sugar = printLineToSugar(word, pm[2]!);
     if (sugar === null) {
       skipped.push({
         fromLine: lineNo,
         toLine: lineNo,
         reason: 'not-covered',
-        message: `第 ${lineNo} 行含行内条件 \\@…\\@，本版不做这类转换。`,
+        message: `第 ${lineNo} 行的行内条件拆不出「条件 / 真支 / 假支」三段（反斜杠 at 不成对 / 缺 # / 空条件），不做这类转换。`,
       });
       continue;
     }
@@ -1200,23 +1123,156 @@ function liftPrintLines(
   }
 }
 
-/* ============================== 别名提示 ============================== */
-
-/** 触发"值得起别名"提示的最小重复次数（引入一行声明至少要省出 3 处才划算） */
-const ALIAS_MIN_OCCURRENCES = 3;
+/* ========================= 单行条件识别（`SIF`） ========================= */
 
 /**
- * 变量引用形态：`FAMILY:SEG` / `FAMILY:SEG:SEG`（如 `CFLAG:TARGET:1088`）。
+ * `SIF 条件` + 紧随的那**一条**语句 → 糖的 `如果 <条件> 则 <语句>`
+ * （规范 §3.5 的单行形态；产物 = `SIF` + 恰好一条语句、**不**产 `ENDIF`）。
  *
- * 规则：`FAMILY` 后跟**至少一段** `:…`；段内容不含空白 / `%` / `{}` / 引号。
- * 因段内可能含中文（`TALENT:TARGET:胆怯`），故按"非分隔符"字符集而非 `\w`。
+ * ## 为什么这一支本来就该在建议侧
+ *
+ * 投影侧批 H 已经把 `SIF` 认成 `如果 …：` 块头，建议侧却把 `SIF` 整族当"糖未覆盖"——
+ * 同一行 ERB 一边显示成糖、一边 💡 一个候选都不出。W5 并一之后两侧都从
+ * `CONTROL_SHAPES` 的 `SIF` 条目派生：`role = 'single-line-head'`
+ * ⇒ `writableControl() === 'single-line'`。用途差异仍显式存在（显示成块头 + 缩进正文、
+ * 写回成一行 `则`），但它是**表上的一个标志位**，不是第二份规则表。
+ *
+ * ## 写回判据（每条都能给出可核对的理由，不做无谓转译）
+ *
+ * 1. 条件非空、且不含"冒号 + 指令"形态（与投影 `planSif` **同一个** `hasCommandColon`）；
+ * 2. 条件可解析（`parseCondition` 缺席时降级放行，由 round-trip 兜底）；
+ * 3. 正文行存在、不是结构性行（`@` / `#` / `$` / `[` 起）、不是任何控制流行
+ *    （开块 / 闭合 / 分支 / 另一条 `SIF` —— 与投影侧 `NON_BODY_LINE_KINDS` 同一条判据）；
+ * 4. **正文行必须比 `SIF` 行深一级**：糖的单行条件恒把正文缩进一级
+ *    （`codegen.emitSingleIfStatement` → `emitBody(indent + 1)`），源里平级时"逐字节一致"
+ *    **可证明不成立** ⇒ 直接给理由、省一次转译（真实语料的 `SIF` 正文恰恰多是平级写法）。
+ *
+ * 剩下的一切交给 round-trip：正文那句能不能糖化（PRINT 变体 / 原生直通）由
+ * `renderSugarBody` 与自证共同裁定，本函数不猜。
  */
-const VAR_REF_RE = /\b([A-Z][A-Z0-9_]*)((?::[^\s:%「」(){}]+)+)/g;
+function liftSingleIfs(
+  ctx: LiftContext,
+  candidates: SugarLiftCandidate[],
+  skipped: SugarLiftSkip[],
+  consumed: Set<number>,
+): void {
+  const byLine = new Map<number, ControlFlowStatement>();
+  for (const s of ctx.statements) if (!byLine.has(s.line)) byLine.set(s.line, s);
+
+  for (const st of ctx.statements) {
+    if (writableControl(st.kind) !== 'single-line') continue;
+    if (consumed.has(st.line)) continue;
+    const fromLine = st.line;
+    const cond = st.expression.trim();
+    if (cond.length === 0 || hasCommandColon(cond)) {
+      skipped.push({
+        fromLine,
+        toLine: fromLine,
+        reason: 'not-covered',
+        message: `第 ${fromLine} 行的 SIF 给不出一个干净的条件（为空，或"冒号 + 指令"形态与变量索引冒号不可分），整行保留为原生写法。`,
+      });
+      continue;
+    }
+    if (!isParsableCondition(ctx, cond)) {
+      skipped.push({
+        fromLine,
+        toLine: fromLine,
+        reason: 'unparsable-condition',
+        message: `第 ${fromLine} 行的 SIF 条件无法解析，无法回写成 .kojo 的条件。`,
+      });
+      continue;
+    }
+
+    // 正文 = 向下第一个非空非注释行
+    let bodyLine = 0;
+    for (let ln = fromLine + 1; ln <= ctx.lines.length; ln++) {
+      const c = contentOf(ctx.lines[ln - 1] ?? '');
+      if (c.length === 0 || c.startsWith(';')) continue;
+      bodyLine = ln;
+      break;
+    }
+    const bodyContent = bodyLine === 0 ? '' : contentOf(ctx.lines[bodyLine - 1] ?? '');
+    const bodyStmt = bodyLine === 0 ? undefined : byLine.get(bodyLine);
+    if (
+      bodyLine === 0 ||
+      /^[@#$[]/.test(bodyContent) ||
+      (bodyStmt !== undefined && (NON_BODY_LINE_KINDS.has(bodyStmt.kind) || pairOf(bodyStmt.kind) !== null || isCloseKind(bodyStmt.kind)))
+    ) {
+      skipped.push({
+        fromLine,
+        toLine: fromLine,
+        reason: 'not-covered',
+        message: `第 ${fromLine} 行的 SIF 管的不是"紧随其后的那一条语句"（缺正文 / 正文是开块、闭合或分支行），整行保留为原生写法。`,
+      });
+      continue;
+    }
+    if (indentLevelOf(ctx.lines[bodyLine - 1] ?? '') !== indentLevelOf(ctx.lines[fromLine - 1] ?? '') + 1) {
+      skipped.push({
+        fromLine,
+        toLine: bodyLine,
+        reason: 'roundtrip-mismatch',
+        message:
+          `第 ${fromLine}–${bodyLine} 行是 SIF + 正文，但正文与 SIF **同级缩进**：.kojo 的单行条件恒把正文缩进一级，` +
+          `转译回来的文本必然与原文本不一致（差一字即不算，宁可漏报），故保留原生写法。`,
+      });
+      markConsumed(consumed, fromLine, fromLine);
+      continue;
+    }
+
+    const stmt = renderSugarBody(ctx, bodyLine, bodyLine, byLine);
+    if (stmt === null || stmt.length !== 1) {
+      skipped.push({
+        fromLine,
+        toLine: bodyLine,
+        reason: 'mixed-domain-line',
+        message: `第 ${fromLine}–${bodyLine} 行的 SIF 正文无法构成一行 .kojo 语句（注释 / 空行 / 块打断）。`,
+      });
+      markConsumed(consumed, fromLine, fromLine);
+      continue;
+    }
+
+    const sugar = singleIfSugar(cond, stmt[0]!);
+    const original = ctx.lines.slice(fromLine - 1, bodyLine).join('\n');
+    const verdict = verifyRoundTrip(ctx, sugar, original);
+    if (!verdict.ok) {
+      skipped.push({
+        fromLine,
+        toLine: bodyLine,
+        reason: verdict.diag.length > 0 ? 'transpile-error' : 'roundtrip-mismatch',
+        message:
+          verdict.diag.length > 0
+            ? `第 ${fromLine}–${bodyLine} 行生成的 .kojo 文本未通过转译（${verdict.diag[0]!.message}）。`
+            : `第 ${fromLine}–${bodyLine} 行看起来像 SIF，但转译回来的文本与原文本不一致（差一字即不算，宁可漏报）。`,
+      });
+      markConsumed(consumed, fromLine, fromLine);
+      continue;
+    }
+
+    candidates.push({
+      kind: 'if-block',
+      fromLine,
+      toLine: bodyLine,
+      sugarSource: sugar,
+      confidence: 'verified',
+      narrationColor: verdict.narrationColor,
+      roundTrip: { verified: true, originalText: original, generatedText: verdict.generatedText },
+      reason: `第 ${fromLine}–${bodyLine} 行是 SIF 单行条件，可改写为「如果 … 则 …」一行（不产 ENDIF，缩进即范围）。`,
+    });
+    markConsumed(consumed, fromLine, bodyLine);
+  }
+}
+
+/* ============================== 别名提示 ============================== */
 
 /**
  * 重复变量引用 → `别名` **只作为提示（不做候选）**（规范 §3.1 / §5.0）。
  *
- * ## 为什么这一类默认不出候选（S5 实测定案）
+ * ## 判据住在识别核，不住在本文件
+ *
+ * 扫描（`collectVarRefs` / `aliasCandidates`）与"别名能不能写回"（`ALIAS_WRITABLE = false`）
+ * 都在 `sugar-ident.ts`；本函数只做**显式记账**（不静默）。
+ *
+ * ## 为什么这一类恒不出候选（S5 实测定案，W5 提升为表上的标志位）
  *
  * `别名` 与其它三类糖在机制上根本不同：它是**糖源码层的预处理**（§5.0 第 0 步
  * ——先把裸标识符换成目标，再降糖）。而原生 ERB 里出现的引用**没有一种是糖层
@@ -1224,18 +1280,18 @@ const VAR_REF_RE = /\b([A-Z][A-Z0-9_]*)((?::[^\s:%「」(){}]+)+)/g;
  *
  * | 原生形态 | 糖层行为 | 能否靠别名还原 |
  * | --- | --- | --- |
- * | `%CFLAG:TARGET:1088%` | 原样透传 | ✗ 别名改不到 `%…%` 内部 |
- * | `CFLAG:TARGET:1088`（行首大写指令行） | 原样透传（§3.10 直通） | ✗ 直通行不做别名替换 |
- * | 赋值左值 `CFLAG:TARGET:1088 = 1` | 透传 | ✗ 同上 |
+ * | `%CFLAG:TARGET:1088%` | 原样透传 | 否——别名改不到 `%…%` 内部 |
+ * | `CFLAG:TARGET:1088`（行首大写指令行） | 原样透传（§3.10 直通） | 否——直通行不做别名替换 |
+ * | 赋值左值 `CFLAG:TARGET:1088 = 1` | 透传 | 否——同上 |
  *
  * 也就是说：**在原生 ERB 这一侧，"别名"没有任何可验证的落点**——把引用改成
  * 别名之后，糖转译产出的 ERB 与原来必然不同（因为糖层原本就没碰过那个引用）。
  * 规范 §5.0 描述的是**作者手写糖源码**时的体验（作者写 `今天已触发`，工具帮
  * 他展开），不是"从原生 ERB 反推别名"。
  *
- * 故 S5 对本类的处理是：**照常扫描并报告**（"这里重复了 N 次，写糖时值得起
- * 个别名"），但一律记 `not-covered`、**不产出候选**——宁可漏报，不可错报。
- * 这条边界登记在 `docs/IMPLEMENTATION-LOG.md` §5.31 与设计稿 §6。
+ * 故处理是：**照常扫描并报告**（"这里重复了 N 次，写糖时值得起个别名"），但一律记
+ * `not-covered`、**不产出候选**——宁可漏报，不可错报。投影侧同样不显示它
+ * （`ALIAS_DISPLAYABLE = false`：别名是文件级声明，不是"这一行的糖写法"）。
  */
 function liftAliases(
   ctx: LiftContext,
@@ -1244,39 +1300,19 @@ function liftAliases(
   consumed: Set<number>,
 ): void {
   void candidates; // 本类恒不出候选——保留参数以统一调用形态
-  const counts = new Map<string, number[]>();
-  for (let i = 0; i < ctx.lines.length; i++) {
-    const lineNo = i + 1;
-    const raw = ctx.lines[i]!;
-    const content = contentOf(raw);
-    if (content.length === 0 || content.startsWith(';')) continue;
-    if (content.startsWith('@') || content.startsWith('#')) continue;
-    for (const m of content.matchAll(VAR_REF_RE)) {
-      const ref = `${m[1]}${m[2]}`;
-      const list = counts.get(ref);
-      if (list) list.push(lineNo);
-      else counts.set(ref, [lineNo]);
-    }
-  }
-
-  // 取出现最多者（同分按首次出现行升序，保证确定性）
-  const ranked = [...counts.entries()]
-    .filter(([, ls]) => ls.length >= ALIAS_MIN_OCCURRENCES)
-    .sort((a, b) => b[1].length - a[1].length || a[1][0]! - b[1][0]!);
-
-  for (const [ref, occurrences] of ranked) {
+  void consumed;
+  for (const [ref, occurrences] of aliasCandidates(collectVarRefs(ctx.lines))) {
     skipped.push({
       fromLine: occurrences[0]!,
       toLine: occurrences[occurrences.length - 1]!,
       reason: 'not-covered',
       message:
         `变量 ${ref} 在本文件中出现 ${occurrences.length} 次，写 .kojo 时值得起个别名；` +
-        `但它在本文件里全是**原生 ERB 形态**（\`%…%\` 插值 / 全大写直通行），` +
+        `但它在本文件里全是**原生 ERB 形态**（百分号插值 / 全大写直通行），` +
         `.kojo 的别名替换不介入这些位置，无法自证「改了别名产物一字不变」——` +
         `按「宁可漏报」不做候选。`,
     });
   }
-  void consumed;
 }
 
 /* ============================== 片段工具 ============================== */
@@ -1310,21 +1346,21 @@ function builtinScanControlFlow(text: string): ControlFlowStatement[] {
   const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   const out: ControlFlowStatement[] = [];
   const stack: string[] = [];
-  const opens: Record<string, string> = { IF: 'if', SELECTCASE: 'select' };
-  const branches: Record<string, string> = { ELSEIF: 'if', ELSE: 'if', CASE: 'select', CASEELSE: 'select' };
-  const closes: Record<string, string> = { ENDIF: 'if', ENDSELECT: 'select' };
+  // 三份本地表（opens / branches / closes）删掉——**由识别核的表派生**：
+  // 块开词 = 有 `closeWord` 的那两族，分支续行 = role `branch`，收束行 = role `sugar-close`。
+  const opens = new Set([...CONTROL_SHAPES.values()].filter((c) => c.closeWord !== undefined).map((c) => c.kind));
   for (let i = 0; i < lines.length; i++) {
     const c = contentOf(lines[i]!);
     if (c.length === 0 || c.startsWith(';') || c.startsWith('@') || c.startsWith('#')) continue;
     const w = leadingWord(c);
     const rest = c.slice(w.length).trim();
-    if (opens[w] !== undefined) {
+    if (opens.has(w)) {
       out.push({ kind: w, expression: rest, depth: stack.length, line: i + 1 });
-      stack.push(opens[w]!);
-    } else if (branches[w] !== undefined) {
+      stack.push(pairOf(w)!);
+    } else if (isBranchKind(w)) {
       out.push({ kind: w, expression: rest, depth: Math.max(0, stack.length - 1), line: i + 1 });
-    } else if (closes[w] !== undefined) {
-      const at = stack.lastIndexOf(closes[w]!);
+    } else if (isSugarCloseKind(w)) {
+      const at = stack.lastIndexOf(closesCategory(w) ?? '');
       const depth = at >= 0 ? at : stack.length;
       out.push({ kind: w, expression: '', depth, line: i + 1 });
       if (at >= 0) stack.length = at;

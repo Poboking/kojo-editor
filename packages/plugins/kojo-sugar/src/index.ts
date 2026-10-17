@@ -21,6 +21,8 @@ import type {
   ConditionExpr,
   ConditionExtractorService,
   ControlFlowStatement,
+  EditorLanguageServiceRequest,
+  EditorLanguageServiceResult,
   ErbIndex,
   ErbParserService,
   FileIO,
@@ -51,6 +53,15 @@ import { kojoDocumentSymbols } from './document-symbols';
 import { kojoFoldingRanges } from './folding';
 import { kojoSemanticTokens } from './semantic-tokens';
 import { kojoReferencesAt, planKojoRename } from './rename';
+import {
+  KOJO_LANGSVC_IDS,
+  kojoCodeLens,
+  kojoInlayHint,
+  kojoWorkspaceSymbol,
+  type KojoLangSvcDeps,
+  type KojoWorkspaceSymbolDeps,
+} from './langsvc';
+import { createKojoFunctionCatalog, type KojoFunctionCatalog } from './kojo-function-catalog';
 import type { DictionaryLookup } from './types';
 
 export function createKojoSugarPlugin(): Plugin {
@@ -88,18 +99,26 @@ export function createKojoSugarPlugin(): Plugin {
       };
 
       /**
-       * `erb.parser` 的 `scanControlFlow`（S5 批，软取）——提升建议的**结构**判据。
+       * `erb.parser` 服务本体（**软取**，三处消费者共用一个口子）。
        *
-       * 软取的理由同上：结构扫描缺席只该让提升建议退化为"内置最小扫描"，
-       * 不该让整个 kojo-sugar 静默 inactive。
+       * 软取理由与 `scanFlowOf` 逐字相同：解析器未激活只该让"依赖索引/结构判据的那几条腿"
+       * 退化，不该让整个 kojo-sugar 静默 inactive。收成一处是因为消费者已经长到三个
+       * （结构扫描、项目索引、产物解析），三份 `try/inject` 迟早有一份漏掉错误分支。
        */
-      const scanFlowOf = (): ((text: string) => ControlFlowStatement[]) | undefined => {
+      const erbParserServiceOf = (): ErbParserService | undefined => {
         try {
-          const parser = ctx.inject<ErbParserService>(WellKnownServices.ErbParser);
-          return (text: string) => parser.scanControlFlow(text);
+          return ctx.inject<ErbParserService>(WellKnownServices.ErbParser);
         } catch {
           return undefined;
         }
+      };
+
+      /**
+       * `erb.parser` 的 `scanControlFlow`（S5 批，软取）——提升建议的**结构**判据。
+       */
+      const scanFlowOf = (): ((text: string) => ControlFlowStatement[]) | undefined => {
+        const parser = erbParserServiceOf();
+        return parser ? (text: string) => parser.scanControlFlow(text) : undefined;
       };
 
       /**
@@ -108,13 +127,7 @@ export function createKojoSugarPlugin(): Plugin {
        * 索引反查（同一份 `byName`，不新造表）。软取理由同 `scanFlowOf`：索引缺席
        * 只该让"跳到别处"这条路失效，不该让整个 kojo-sugar 静默 inactive。
        */
-      const erbIndexOf = (): ErbIndex | null => {
-        try {
-          return ctx.inject<ErbParserService>(WellKnownServices.ErbParser).currentIndex();
-        } catch {
-          return null;
-        }
-      };
+      const erbIndexOf = (): ErbIndex | null => erbParserServiceOf()?.currentIndex() ?? null;
 
       /**
        * `condition.extractor` 的 `parseExpression`（S5 批，软取）——提升建议的
@@ -379,6 +392,127 @@ export function createKojoSugarPlugin(): Plugin {
 
       ctx.provide(WellKnownServices.SugarLiftApply, liftApplyService);
 
+      /* ---------------- W6 能力面通道（2026-10-17 PARITY-EXT 批） ----------------
+
+       下面三枚 `.kojo` 应答（`workspaceSymbol` / `codeLens` / `inlayHint`）**不自己判**：
+       判据在 `erb-parser`（反向索引、形参表、名字名录），本包只把坐标从产物折回源。
+       通道就是那枚公共槽——`askLanguageService` 把整枚请求原样问给槽上的其余应答方，
+       于是"被谁调用"这类口径全仓仍只有一份（抄第二份的代价见 `langsvc.ts` 头注的表格）。
+       走槽而不是 import 别的插件：解耦审计 C 项的明文路径（插件间只经契约类型 + 内核服务交互）。
+       */
+
+      /**
+       * 问一次槽（**本包自己那三枚先摘掉**——留着就是自问自答，递归到栈爆）。
+       * 单枚贡献抛错只丢它一家（与宿主 `collectCodeLenses` / `collectInlayHints` 的
+       * 隔离口径逐字相同：能力出错退化可见，不许把整条链带没）。
+       */
+      const askLanguageService = (request: EditorLanguageServiceRequest): EditorLanguageServiceResult[] => {
+        const out: EditorLanguageServiceResult[] = [];
+        for (const contribution of slots.query('ui.editor.languageService')) {
+          if (KOJO_LANGSVC_IDS.has(contribution.id)) continue;
+          try {
+            const result = contribution.provide(request);
+            if (result) out.push(result);
+          } catch (e: unknown) {
+            ctx.log.warn(
+              `[kojo-langsvc] '${contribution.id}' 应答抛错（已跳过）：${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
+        return out;
+      };
+
+      /** 三枚应答共用的依赖（转译与列级折回都走 `sugar.transpile` 的现役代际实例） */
+      const langSvcDeps: KojoLangSvcDeps = {
+        transpile: (source, options) => service.transpile(source, options),
+        sourceColumnOf: (result, generatedLine, generatedColumn) =>
+          service.sourceColumnOf(result, generatedLine, generatedColumn),
+        ask: askLanguageService,
+      };
+
+      /**
+       * `.kojo` 函数名录（产物路径 → 源路径 + 源行）：`workspaceSymbol` 那条腿的坐标源。
+       *
+       * 绑定条件苛刻是故意的——"什么是函数定义"的判据主人是解析器，拿不到它的
+       * `parseText` 就**根本不建名录**（宁可不答，也不在糖包里养第二份方言解析）。
+       */
+      let catalog: KojoFunctionCatalog | null = null;
+      let catalogParser: ErbParserService | null = null;
+      const catalogOf = (): KojoFunctionCatalog | null => {
+        const parser = erbParserServiceOf();
+        if (!parser) return null;
+        if (catalog !== null && catalogParser === parser) return catalog;
+        catalogParser = parser;
+        return (catalog = createKojoFunctionCatalog({
+          io,
+          transpile: (source, options) => service.transpile(source, options),
+          parseProduct: (text, path) => parser.parseText(text, path),
+          log: ctx.log,
+        }));
+      };
+
+      /** 名录的检索根 = 索引的根（同一份 `project.kojoPaths`，不另立一套覆盖面） */
+      const catalogRoots = (): string[] => {
+        const current: GameProject | null = project.current();
+        return current ? [...current.kojoPaths] : [];
+      };
+
+      // 刷新排队：同一时刻只跑一轮，期间来的信号并成"结束后再跑一轮"（文件监视一拍能来十几条）
+      let catalogBusy = false;
+      let catalogQueued = false;
+      const refreshCatalog = (): void => {
+        if (project.current() === null) return; // 没开项目就没事可办（也别把未就绪当就绪）
+        if (catalogBusy) {
+          catalogQueued = true;
+          return;
+        }
+        const target = catalogOf();
+        if (!target) return; // 判据主人缺席 ⇒ 不建名录（`catalogReady()` 那侧如实答 undefined）
+        catalogBusy = true;
+        const roots = catalogRoots();
+        void target
+          .refresh(roots)
+          .catch((e: unknown) => {
+            ctx.log.warn(`[kojo-langsvc] .kojo 名录刷新失败：${e instanceof Error ? e.message : String(e)}`);
+          })
+          .finally(() => {
+            catalogBusy = false;
+            if (catalogQueued) {
+              catalogQueued = false;
+              refreshCatalog();
+            }
+          });
+      };
+
+      const wsDeps: KojoWorkspaceSymbolDeps = {
+        ...langSvcDeps,
+        // 未开项目 = 连"该不该有一份名录"都还没定 ⇒ 不答（与 erb 的"索引缺席"同一区分）
+        catalogReady: () => project.current() !== null && (catalogOf()?.stats().ready ?? false),
+        locate: (productPath, name) => catalogOf()?.locate(productPath, name) ?? null,
+      };
+
+      ctx.onDispose(
+        ctx.bus.on('project.opened', () => {
+          catalog?.reset();
+          refreshCatalog();
+        }),
+      );
+      ctx.onDispose(
+        ctx.bus.on('project.closed', () => {
+          catalog?.reset();
+        }),
+      );
+      // 源文件变脏 ⇒ 那一份的 `size`+`mtime` 复用判据作废，下一轮只重算它（其余整份复用）
+      ctx.onDispose(
+        ctx.bus.on('file.changed', (ev) => {
+          if (resolveSugarTarget(ev.path) === null) return;
+          catalog?.invalidate(ev.path);
+          refreshCatalog();
+        }),
+      );
+      // 索引重建完成（产物的增删改名都在这条上）⇒ 名录跟着走一轮
+      ctx.onDispose(ctx.bus.on('kojo.functionChanged', () => refreshCatalog()));
+
       /* ---------------- 转到定义（2026-10-15 语言服务批） ----------------
 
        由 kojo-sugar 应答 `.kojo`：判据是**糖语义**（`.kojo` 里的名字指向编译产物
@@ -532,6 +666,62 @@ export function createKojoSugarPlugin(): Plugin {
             })),
             oldName: plan.oldName,
           };
+        },
+      });
+
+      /* ---------------- 工作区符号（D2 的 `.kojo` 那一腿，W6 批） ----------------
+
+       同一枚槽的**第九个**判别成员由本包答的方式很特别：本包**不做任何匹配**。
+       请求原样问给槽上的其余应答方（今天就是 `erb-workspace-symbols` 那一份 `byName`
+       投影），拿到候选后只做一件事——命中项的定义点若正好是某个 `.kojo` 的**编译产物**，
+       把 `filePath`/`line` 换成那份源文件的对应位置（坐标来自本包的 `.kojo` 名录）。
+       于是匹配口径、排序桶、`limit` 预算、结果形状**全部与 ERB 逐字同一份实现**，
+       而 `Ctrl+T` 打出来的那条候选点开的是作者能改的那份文件，不是一份生成物。
+       证不了源位置的那一条不重定基（它仍以产物路径出现在 ERB 那条线的结果里 ⇒
+       没有任何东西被吞掉）。名录未就绪 / 判据主人缺席 ⇒ `undefined`（不答 ≠ 没有）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-workspace-symbols',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'workspaceSymbol') return undefined;
+          return kojoWorkspaceSymbol(request, wsDeps);
+        },
+      });
+
+      /* ---------------- 行上内联注解（B8 的 `.kojo` 那一腿，W6 批） ----------------
+
+       「这一处定义被谁用到」的判据全在 `erb-parser/usage-lens.ts` + 项目反向索引，
+       本包既没有那份索引也不该有第二份口径。做法：把 `.kojo` 转译成产物（缓存命中即
+       零成本——同一份文本刚被波浪线那一路转译过），拿**产物坐标**去问 ERB 那条线，
+       再把每条注解的行折回源行（`@` 函数头是纯生成行，走"向下取最近一条有源行、
+       越过下一个 `@` 就放弃"那条与转到定义同款的保守路）。
+       折不回 ⇒ **整条丢弃**：把产物第 5,000 行的话说成源第 4,999 行 = 错标比不标危险。
+       三道体量/条数/密度降级**不归这里**，一律在宿主（`app/src/monaco/kojo-code-lens.ts`）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-code-lens',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'codeLens') return undefined;
+          return kojoCodeLens(request, langSvcDeps);
+        },
+      });
+
+      /* ---------------- 实参位行内提示（LS-R6 的 `.kojo` 那一腿，W6 批） ----------------
+
+       同上，只多一维：提示钉在"某个实参的首字符之前"，所以**行列一起折**——列必须走
+       S6 列级映射（`sourceColumnOf`）且落回同一个源行，否则整条不说（契约 `SugarColumnRun`
+       的"绝不记录猜出来的列"）。因此 `.kojo` 里有提示的是**产物行与源行逐码元同源**那些
+       调用位（原生直通 / `调用` 直译那几形），降糖改写区如实留白。
+       被调方形参表仍然只有 `ErbIndex` 说得清——本包一条都不判。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-inlay-hints',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'inlayHint') return undefined;
+          return kojoInlayHint(request, langSvcDeps);
         },
       });
     },

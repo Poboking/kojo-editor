@@ -33,21 +33,25 @@ import type {
   SugarPreviewResult,
   SugarPreviewService,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices, pathKey } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
-  DIAG_WINDOW_INITIAL,
-  ROW_WINDOW_INITIAL,
+  DIAG_WINDOW,
+  ROW_WINDOW,
+  MORE_ROW_STYLE,
+  MORE_ROW_TITLE,
   archiveStatus,
+  attachGrowSentinel,
   buildArchiveOptions,
   buildDiagnosticRows,
   buildPreviewRows,
   countLines,
-  createLiveTextPool,
+  createPanelTruthController,
+  degradeForActiveFile,
   degradeText,
   diagWindowSize,
+  growWindow,
   isKojoFile,
-  nextDiagWindow,
-  nextRowWindow,
+  moreRowLabel,
   rowWindowSize,
   summarize,
   type ArchiveOption,
@@ -63,47 +67,29 @@ import {
 /**
  * 「显示更多」哨兵（逐行映射 / 诊断两个列表共用）。
  *
- * 进入滚动视口即自动追加下一窗（IntersectionObserver——列表所在面板自带滚动裁剪，
- * 浏览器按可见矩形判相交，不必手动传 root）；观察器不可用（SSR / 测试 / 旧环境）
- * 时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在无 DOM lib 下，
- * `IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定回调 ref 拿真实节点，
- * 避免每次渲染重挂 observer。
+ * W4 起观察器行为、title/文案/样式全部住在契约层 `sugar-panels`
+ * （`attachGrowSentinel` / `moreRowLabel` / `MORE_ROW_STYLE`——曾与判定面板
+ * 各抄一份）；本壳只余"把核装进 React"的最小胶水，无任何分支。
+ * 观察器不可用（SSR / 测试 / 旧环境）时核返回空退订 ⇒ 退化为纯点击按钮，功能不丢。
  */
-type IntersectionObserverLike = new (
-  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
-) => { observe(target: object): void; disconnect(): void };
-
-/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
-const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
-
 function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
   const anchor = useRef<unknown>(null);
-  const setAnchor = useCallback((node: unknown): void => {
-    anchor.current = node;
-  }, []);
   /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
   const onMoreRef = useRef(onMore);
   onMoreRef.current = onMore;
-  useEffect(() => {
-    const el = anchor.current as object | null;
-    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
-    if (!el || !IO) return;
-    const io = new IO((entries) => {
-      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
+  useEffect(() => attachGrowSentinel(anchor.current, () => onMoreRef.current()), []);
   return createElement(
     'button',
     {
-      ref: setAnchor,
+      ref: (node: unknown): void => {
+        anchor.current = node;
+      },
       className: 'ghost small dim pv-more-btn',
-      style: MORE_BTN_STYLE,
-      title: '滚到此处会自动加载下一批；也可直接点击',
+      style: MORE_ROW_STYLE,
+      title: MORE_ROW_TITLE,
       onClick: () => onMore(),
     },
-    `显示更多（还剩 ${remaining}）`,
+    moreRowLabel(remaining),
   );
 }
 
@@ -136,12 +122,16 @@ export function createUiSugarPreviewPlugin(): Plugin {
         const [degrade, setDegrade] = useState<PreviewDegrade>('no-project');
         const [error, setError] = useState<string | null>(null);
         const [nonce, setNonce] = useState(0);
-        /** 编辑器缓冲真相（C2）：per-path 最新广播文本；读盘降级为"还没收到广播前"的兜底 */
-        const liveRef = useRef(createLiveTextPool());
+        /**
+         * 真相三事件（activeFileChanged / documentChanged / cursorMoved）的订阅
+         * 生命周期核（W4）：attach 一次订齐三条、dispose 一次退净三条；缓冲真相
+         * 池（C2）与"命中当前文件 / 非派生视图"判据都住在核内，面板只拿裁决结果。
+         */
+        const truthRef = useRef(createPanelTruthController(ctx.bus));
         /** 当前文件的真相更新序号（广播命中当前文件时 +1，驱动重算） */
         const [liveTick, setLiveTick] = useState(0);
         /**
-         * C1 反向下行：光标行（只在「光标就在面板显示的这一份文件里、且不是派生视图」时非 null）。
+         * C1 反向下行：光标行（核已裁决——不在面板当前文件 / 派生视图 = null）。
          * 派生视图的行号不属于这份文件——宁可清高亮，也不指错行。
          */
         const [cursorLine, setCursorLine] = useState<number | null>(null);
@@ -152,65 +142,35 @@ export function createUiSugarPreviewPlugin(): Plugin {
         const [diagWindow, setDiagWindow] = useState<number | undefined>(undefined);
 
         const growRows = useCallback((total: number): void => {
-          setRowWindow((prev) => {
-            const next = nextRowWindow(prev, total);
-            if (next === (prev ?? ROW_WINDOW_INITIAL)) return prev; // 无变化不重渲
-            return next;
-          });
+          setRowWindow((prev) => growWindow(prev, total, ROW_WINDOW));
         }, []);
         const growDiag = useCallback((total: number): void => {
-          setDiagWindow((prev) => {
-            const next = nextDiagWindow(prev, total);
-            if (next === (prev ?? DIAG_WINDOW_INITIAL)) return prev;
-            return next;
-          });
+          setDiagWindow((prev) => growWindow(prev, total, DIAG_WINDOW));
         }, []);
 
-        // 当前文件（宿主广播）——换文件即重置全部状态
-        useEffect(() => {
-          const un = ctx.bus.on('editor.activeFileChanged', (p) => {
-            setFilePath(p.filePath);
-            setSource(null);
-            setResult(null);
-            setRowWindow(undefined);
-            setDiagWindow(undefined);
-            setError(null);
-            setNonce(0);
-            // 高亮随旧文件一起清掉：新文件的位点稍后才到（读盘 + 转译），
-            // 中间这一拍若留着旧行号，就会在新文件里"指错行"
-            setCursorLine(null);
-            setDegrade(p.filePath ? (isKojoFile(p.filePath) ? 'reading' : 'not-kojo') : 'no-project');
-          });
-          return un;
-        }, []);
-
-        // 缓冲真相广播（C2）：记入 per-path 池；命中的是当前文件即触发重算——
-        // 未保存的编辑同样进预览（与编辑器波浪线同源）。宿主已防抖/去重，收到即算，
-        // 不叠加第二层；糖视图是派生文本、宿主不发，这里无需自备防御。
-        useEffect(() => {
-          const un = ctx.bus.on('editor.documentChanged', (ev) => {
-            liveRef.current.apply(ev.filePath, ev.text);
-            if (filePath !== null && pathKey(ev.filePath) === pathKey(filePath)) setLiveTick((n) => n + 1);
-          });
-          return un;
-        }, [filePath]);
-
-        // C1 反向下行：光标位点跟过来。文件判等走 pathKey（大小写 / 分隔符）；
-        // 别的文件 / 派生视图 / 无打开文件 → 清高亮（"没有"，不是错误，静默）
-        useEffect(() => {
-          const un = ctx.bus.on('editor.cursorMoved', (p) => {
-            const here =
-              !p.derivedView &&
-              filePath !== null &&
-              p.filePath !== null &&
-              pathKey(p.filePath) === pathKey(filePath);
-            setCursorLine((prev) => {
-              const next = here ? p.line : null;
-              return prev === next ? prev : next; // 同一行上的列级移动不重渲
-            });
-          });
-          return un;
-        }, [filePath]);
+        // 真相三事件：挂载即订齐、卸载即退净（换文件即重置全部状态；高亮随旧文件
+        // 一起清掉——新文件的位点稍后才到，中间这一拍若留着旧行号会"指错行"）
+        useEffect(
+          () =>
+            truthRef.current.attach({
+              onActiveFile: (filePath) => {
+                setFilePath(filePath);
+                setSource(null);
+                setResult(null);
+                setRowWindow(undefined);
+                setDiagWindow(undefined);
+                setError(null);
+                setNonce(0);
+                setCursorLine(null);
+                setDegrade(degradeForActiveFile(filePath));
+              },
+              // 缓冲真相广播（C2）：命中当前文件即触发重算——未保存的编辑同样进
+              // 预览（与编辑器波浪线同源）。宿主已防抖/去重，收到即算，不叠加第二层。
+              onLiveText: () => setLiveTick((n) => n + 1),
+              onCursorLine: (line) => setCursorLine(line),
+            }),
+          [],
+        );
 
         // 跟随：光标行换人时滚一次（nearest——已在视野内就不动）。行未渲染 / 行号无匹配 → 静默跳过。
         useEffect(() => {
@@ -251,7 +211,7 @@ export function createUiSugarPreviewPlugin(): Plugin {
               setDegrade('preview-error');
             }
           };
-          const live = liveRef.current.textFor(path);
+          const live = truthRef.current.pool.textFor(path);
           if (live !== null) {
             // 有缓冲真相：直接预览，不等读盘（转译有共享缓存，收到即算）
             setDegrade('previewing');

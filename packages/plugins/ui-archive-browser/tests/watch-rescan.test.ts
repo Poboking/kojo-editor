@@ -5,15 +5,17 @@
  * - 存档目录被外部改动才会重扫，目录外的路径**首动作就 return**（零 IO）；
  * - 重扫一律经 `kernel.compute` 的 `runLatest` 且**用同一个 key** ⇒ "多次改动 → 一次重扫"
  *   由池的单飞 + 尾缘合并保证（**合并语义本身是内核的，已由 `kernel/tests/compute*.test.ts` 守**，
- *   本测试不重做它的实现，只验本插件有没有把活儿交给对的地方）。
+ *   本测试不重做它的实现，只验本插件有没有把活儿交给对的地方）；
+ * - W13：面板**只**依赖归档读取单源 `archive.reader`（替身对其它服务键一律抛错 ⇒
+ *   绿色本身就是"没有第二条读取链路"的证据）。
  *
  * 计算池用零调度直跑替身：审计 B 项禁止插件测试 import `@kojo/kernel`
  * （先例与理由见 `erb-parser/tests/support.ts` 头注）。
  */
 
 import { describe, expect, it } from 'vitest';
-import type { ComputePool, GameProject, PluginContext } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import type { ArchiveReaderService, ComputePool, GameProject, PluginContext } from '@kojo/plugin-api';
+import { ArchiveServices, KernelServices } from '@kojo/plugin-api';
 import { createUiArchiveBrowserPlugin } from '../src/index';
 
 const noop = (): void => {};
@@ -41,16 +43,26 @@ function makeHarness(savDir?: string) {
   };
 
   const state = { scanCalls: 0, runs: [] as string[] };
-  const snapshots = {
+  /** 归档读取单源替身（面板唯一的读取入口） */
+  const reader = {
     current: () => null,
     async scan() {
       state.scanCalls++;
-      return { dir: savDir ?? '', scanned: [], failed: [], totalBytes: 0, finishedAt: 1 } as never;
+      return { dir: savDir ?? '', entries: [], scannedAt: 0, durationMs: 0 };
     },
-    async parse() {
+    async parse(): Promise<never> {
       throw new Error('本测试不深解析');
     },
-  };
+    async parseEntry(): Promise<never> {
+      throw new Error('本测试不深解析');
+    },
+    async readEntry(): Promise<never> {
+      throw new Error('本测试不取条目字节');
+    },
+    async extractEntry(): Promise<never> {
+      throw new Error('本测试不落盘');
+    },
+  } as unknown as ArchiveReaderService;
 
   const project = { rootDir: 'C:/Game/proj', ...(savDir ? { savDir } : {}) } as GameProject;
   /** 零调度直跑替身：立即执行 fn，但把 key 记下来（本测试要看的就是"交给谁、用哪个 key"） */
@@ -67,7 +79,7 @@ function makeHarness(savDir?: string) {
     log,
     bus,
     inject: (key: string) => {
-      if (key === WellKnownServices.SnapshotSource) return snapshots;
+      if (key === ArchiveServices.Reader) return reader;
       if (key === KernelServices.Project) return { current: () => project };
       if (key === KernelServices.Compute) return compute;
       throw new Error(`本测试的插件不该依赖服务 ${key}`);

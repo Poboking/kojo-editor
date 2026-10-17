@@ -1,10 +1,10 @@
 /**
  * @kojo/plugin-ui-kojo-navigator
  *
- * 口上函数树导航面板（`ui.panel` 槽贡献；v0.2 第二批，HANDOFF §六）。
+ * 函数树面板（`ui.panel` 槽贡献）：角色 → 家族 → 面 → 函数 四级导航。
  *
- * 三维导航：角色 → 家族 → 面 → 函数。数据全来自既有契约：
- *   - `erb.parser`：函数索引（响应式，`kojo.functionChanged` 驱动重建）；
+ * 数据面（判据都住在提供方/服务，本插件零裁决）：
+ *   - `erb.parser` 服务的 `currentIndex()` → `ErbIndex`（建树与搜索的唯一来源）；
  *   - `game.adapter` 槽位查询 + `project.adapterId` 过滤 → `functionFamilyIndex`
  *     （**不 import 适配器包**——解耦铁律，多游戏共存天然正确）；
  *   - `project.charaIndex`：角色显示名。
@@ -28,6 +28,7 @@ import type {
   ConditionExtractorService,
   ErbParserService,
   ErbIndex,
+  ErbScopeStamp,
   FamilyIndexRule,
   GameProject,
   Plugin,
@@ -36,7 +37,7 @@ import type {
   StateDependency,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { CANDIDATE_BUDGETS, KernelServices, NAV_SCOPE_EVENT, WellKnownServices } from '@kojo/plugin-api';
 import {
   FACE_WINDOW_INITIAL,
   buildNavigatorTree,
@@ -50,12 +51,25 @@ import {
   type SearchHit,
 } from './tree';
 
-/** 搜索结果上限 */
-const SEARCH_LIMIT = 200;
+/** 搜索结果上限（档位表在契约层：与全文检索 / `Ctrl+T` / `Ctrl+P` 同读一张预算表） */
+const SEARCH_LIMIT = CANDIDATE_BUDGETS.providerQuery;
 /** 搜索最少输入长度 */
 const MIN_QUERY = 2;
 /** 每行最多显示的条件标签数（其余折叠为 +n） */
 const COND_BADGE_CAP = 2;
+
+/**
+ * 宿主广播的"只看"范围载荷（`NAV_SCOPE_EVENT`；形状 = 契约的 `ErbScopeStamp`）。
+ * 内核总线对自定义事件不做类型校验 ⇒ 这里**必须**自己收窄，畸形载荷按"不限"处理
+ * （宁可多扫一轮，也不要把一棵树画成空白——空白会被读成"这个项目没有函数"）。
+ */
+function toScopeStamp(payload: unknown): ErbScopeStamp | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const raw = payload as { key?: unknown; roots?: unknown };
+  if (typeof raw.key !== 'string' || !Array.isArray(raw.roots)) return null;
+  const roots = raw.roots.filter((r): r is string => typeof r === 'string' && r !== '');
+  return roots.length > 0 ? { key: raw.key, roots } : null;
+}
 
 /* ------------------------------ 面行窗口 ------------------------------ */
 
@@ -203,6 +217,32 @@ export function navLoadErrorCopy(loadError: string): { readonly text: string; re
   };
 }
 
+/**
+ * 状态行的范围后缀（W7 NAV-SCOPE）：**"只看"生效了就必须看得见，没生效也不装作生效过**。
+ *
+ * 读数说"扫了多少个文件"而不是"共多少函数"——这条通道与全文检索共用同一个戳，
+ * 两边的数字必须能对上，而"文件数"是唯一能直接对上的那一项。
+ */
+export function navigatorScopeSuffix(tree: NavigatorTree): string {
+  if (tree.scopeKey === '') return '';
+  return ` · 只看范围内 ${tree.filesScanned} 个文件`;
+}
+
+/** 状态行的悬停读数：范围 + 角色归属用的是哪条判据（判据切换不许静默，铁律 4） */
+export function navigatorScopeTitle(tree: NavigatorTree): string {
+  const scopeLine =
+    tree.scopeKey === ''
+      ? '范围：不限（全项目函数）'
+      : `范围：只看所选位置（已扫 ${tree.filesScanned} 个文件；范围外的文件没有看）`;
+  const attributionLine =
+    tree.attribution === 'dir'
+      ? '角色归属：按角色目录（与检索范围同一条判据）'
+      : tree.attribution === 'name'
+        ? '角色归属：按函数名（提供方没有给出角色目录）'
+        : '角色归属：不可用（既没有角色目录也没有家族规则）';
+  return `${scopeLine}\n${attributionLine}`;
+}
+
 export function createUiKojoNavigatorPlugin(): Plugin {
   return {
     id: 'ui-kojo-navigator',
@@ -240,6 +280,13 @@ export function createUiKojoNavigatorPlugin(): Plugin {
       let indexReady = false;
       /** 上一次建树所用的索引实例（去重判据：同一实例不重复建树，见 `shouldRebuildIndex`） */
       let lastBuiltIndex: ErbIndex | null = null;
+      /**
+       * 当前"只看"范围（宿主经 `NAV_SCOPE_EVENT` 广播的那一份，插件不持有判据）。
+       * 上一次建树所用的范围 key——与索引实例**并列**的去重位：范围变了必须重扫，
+       * 索引没变也不算"已经建过"（这正是 C3 批留下的那条断线：选择器只喂了全文检索）。
+       */
+      let scope: ErbScopeStamp | null = null;
+      let lastBuiltScopeKey = '';
       /** 索引/建树失败原因（2026-10-11 实机反馈）：此前只在 catch 里 log.warn，
        *  面板永久停在「打开项目后自动构建函数索引…」占位，用户既不知失败也无从重试 */
       let loadError: string | null = null;
@@ -259,13 +306,18 @@ export function createUiKojoNavigatorPlugin(): Plugin {
         // 去重（2026-10-12 内核优化批）：`project.opened` 与 `kojo.functionChanged` 会
         // 双双触发 refresh，两者拿到的是同一个索引实例——同一实例不重复建树
         // （`buildNavigatorTree` 在 95k 函数上是近秒级开销，白跑第二遍纯属浪费）。
-        if (!shouldRebuildIndex(lastBuiltIndex, index)) return;
+        // 但**范围变化抵消这条去重**：同一份索引换个范围就是另一棵树。
+        const scopeKey = scope?.key ?? '';
+        if (!shouldRebuildIndex(lastBuiltIndex, index) && lastBuiltScopeKey === scopeKey) return;
         lastBuiltIndex = index;
+        lastBuiltScopeKey = scopeKey;
         if (!index || !project.current()) {
           tree = null;
           indexReady = index !== null;
         } else {
-          tree = buildNavigatorTree(index, currentFamilyIndex(), project.current()!.charaIndex);
+          tree = buildNavigatorTree(index, currentFamilyIndex(), project.current()!.charaIndex, {
+            scope,
+          });
           indexReady = true;
         }
         loadError = null;
@@ -303,6 +355,21 @@ export function createUiKojoNavigatorPlugin(): Plugin {
       ctx.onDispose(ctx.bus.on('kojo.functionChanged', () => refresh()));
       ctx.onDispose(ctx.bus.on('project.opened', () => refresh()));
       ctx.onDispose(ctx.bus.on('project.closed', () => rebuild(null)));
+      /**
+       * 「只看」范围（W7 NAV-SCOPE）：宿主那条选择器的**同一份**戳广播到这里。
+       * 索引实例没变也要重扫——范围换了，树就该换（旧行为是这里根本不读选择器，
+       * 于是选定范围后全文检索只扫一处、函数树仍扫全量十万条）。
+       */
+      ctx.onDispose(
+        ctx.bus.on(NAV_SCOPE_EVENT, (payload: unknown) => {
+          scope = toScopeStamp(payload);
+          const current = project.current();
+          if (!current) return;
+          const idx = parser.currentIndex();
+          if (idx) rebuild(idx);
+          else refresh();
+        }),
+      );
 
       // 激活时已有现成索引（插件晚于项目打开加载）→ 立即构建
       if (project.current()) refresh();
@@ -386,10 +453,12 @@ export function createUiKojoNavigatorPlugin(): Plugin {
         const hits: SearchHit[] = useMemo(() => {
           if (!indexReady || deferredQuery.trim().length < MIN_QUERY) return [];
           // 索引不变时 deferredQuery 驱动；parser.currentIndex() 在面板生命周期内稳定。
-          // 结果按（索引实例 × 查询串）记忆（searchFunctionsCached）——无关重渲染
+          // 结果按（索引实例 × 查询串 × 范围 × 归属表）记忆（searchFunctionsCached）——无关重渲染
           // （徽章刷新 / 面板宿主重渲）不再重跑 99k 扫描。
           const idx = parser.currentIndex();
-          return idx ? searchFunctionsCached(idx, deferredQuery, currentFamilyIndex(), SEARCH_LIMIT) : [];
+          return idx
+            ? searchFunctionsCached(idx, deferredQuery, currentFamilyIndex(), SEARCH_LIMIT, { scope })
+            : [];
           // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [deferredQuery, indexReady, treeNow]);
 
@@ -477,9 +546,10 @@ export function createUiKojoNavigatorPlugin(): Plugin {
         const statusBar = treeNow
           ? createElement(
               'div',
-              { className: 'nav-status dim' },
+              { className: 'nav-status dim', title: navigatorScopeTitle(treeNow) },
               `${treeNow.totalFunctions} 函数 · ${treeNow.charas.length} 角色` +
-                (treeNow.hasFamilyIndex ? ` · 未归属 ${treeNow.orphanCount}` : ' · 适配器未提供家族规则'),
+                (treeNow.hasFamilyIndex ? ` · 未归属 ${treeNow.orphanCount}` : ' · 适配器未提供家族规则') +
+                navigatorScopeSuffix(treeNow),
             )
           : null;
 
@@ -648,3 +718,15 @@ export function createUiKojoNavigatorPlugin(): Plugin {
     },
   };
 }
+
+/* ---- W7 NAV-SCOPE 独占追加区块（文件末尾；勿在他处重排）：宿主侧四通道对拍测试需要建树/搜索入口 ---- */
+export {
+  buildNavigatorTree,
+  searchFunctions,
+  charaOwnersOf,
+  ownerNoOfPath,
+  type CharaOwner,
+  type NavigatorBuildOptions,
+  type NavigatorTree,
+  type SearchHit,
+} from './tree';

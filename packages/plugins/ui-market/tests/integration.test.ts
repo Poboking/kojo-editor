@@ -222,6 +222,18 @@ function makeIo(): CountingIo {
     async removeFile() {
       throw new Error('面板/市场不该走单文件删除');
     },
+    // 契约 additive（W11 回收站可见批）：卸载走 `removeDir` 一条路，回收站的面板化归文件历史线
+    // ⇒ 市场这条线不读、不恢复、不清，四个口一律"走到即红"（不是静默兜空值）
+    async listTrash() {
+      throw new Error('面板/市场不该读回收站');
+    },
+    async restoreFromTrash() {
+      throw new Error('面板/市场不该从回收站恢复');
+    },
+    async purgeTrash() {
+      throw new Error('面板/市场不该彻底删除回收站条目');
+    },
+    holdTrash: () => undefined,
   };
   return {
     io,

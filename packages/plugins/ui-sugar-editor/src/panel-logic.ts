@@ -5,15 +5,36 @@
  * 本模块只做**判定归类 + 装饰翻译**——即"给定诊断列表，得出判定状态与波浪线条目"。
  * 放在本文件而非 `index.ts`：判定与列区间翻译是可复用、可逐条断言的核心，不该
  * 埋在 React 组件里（与 ui-sugar-preview 的 `panel-logic.ts` 同规矩）。
+ *
+ * W4 PANEL-DEDUP（2026-10-18 面板去重批）：行池 / `.kojo` 判定 / 降级文案 /
+ * 诊断行成形 / 渲染窗口 / 触底哨兵核**曾与 preview 逐字各抄一份**，现已上收
+ * `@kojo/plugin-api/sugar-panels`（唯一实现）；本文件保留原有导出名做薄转发，
+ * `index.ts` 的 import 面零改动。新增真相事件请只改契约层一处。
  */
 
-import type { LineDecoration, SugarDiagnostic, SugarSeverity } from '@kojo/plugin-api';
-import { pathKey } from '@kojo/plugin-api';
+import type { LineDecoration, SugarDiagnostic } from '@kojo/plugin-api';
+import { buildPanelDiagnosticRows } from '@kojo/plugin-api';
+import type { PanelDegrade, PanelDiagnosticRow } from '@kojo/plugin-api';
 
-/** 是否 `.kojo` 糖源文件（判定面板与波浪线只作用于糖源；原生 `.ERB` 不适用） */
-export function isKojoFile(path: string | null | undefined): boolean {
-  return typeof path === 'string' && /\.kojo$/i.test(path);
-}
+/* ---- 共享核薄转发（W4：唯一实现在 @kojo/plugin-api/sugar-panels，勿在此复刻） ---- */
+export {
+  MORE_ROW_STYLE,
+  MORE_ROW_TITLE,
+  attachGrowSentinel,
+  createLiveTextPool,
+  createPanelTruthController,
+  degradeForActiveFile,
+  degradeText,
+  DIAG_WINDOW,
+  DIAG_WINDOW_INITIAL,
+  DIAG_WINDOW_STEP,
+  growWindow,
+  isKojoFile,
+  moreRowLabel,
+  diagWindowSize,
+  nextDiagWindow,
+} from '@kojo/plugin-api';
+export type { LiveTextPool, PanelTruthController, PanelTruthHandlers } from '@kojo/plugin-api';
 
 /* ============================== 判定状态 ============================== */
 
@@ -57,43 +78,15 @@ export function verdictLabel(status: VerdictStatus): string {
 
 /* ============================== 逐条判定行 ============================== */
 
-export interface VerdictRow {
-  /** 稳定键（React 渲染用；诊断无天然 id，故用序号） */
-  readonly key: string;
-  readonly severity: SugarSeverity;
-  readonly code: string;
-  /** 1 基行号；文件级诊断为 null */
-  readonly line: number | null;
-  /** 1 基列号；无位置时为 null */
-  readonly column: number | null;
-  readonly message: string;
-}
-
 /**
- * 诊断 → 判定行（按"有位置的在前、位置升序"排序；文件级诊断殿后）。
- * 排序是**稳定**的：同位置按原始顺序，保证 UI 不抖动。
+ * 判定行 = 共享诊断行（形状逐字相同；W4 起同源同口径：有位置的在前、
+ * (行,列) 升序、文件级殿后、同位置保序——与 preview 面板同屏必同序）。
  */
+export type VerdictRow = PanelDiagnosticRow;
+
+/** 诊断 → 判定行（实现住在契约层 `sugar-panels`，此处仅保留原导出名） */
 export function buildVerdictRows(diagnostics: readonly SugarDiagnostic[]): VerdictRow[] {
-  const rows: VerdictRow[] = diagnostics.map((d, i) => ({
-    key: `${d.code}|${d.loc?.line ?? 0}|${d.loc?.column ?? 0}|${i}`,
-    severity: d.severity,
-    code: d.code,
-    line: d.loc?.line ?? null,
-    column: d.loc?.column ?? null,
-    message: d.message,
-  }));
-  return rows
-    .map((r, i) => ({ r, i }))
-    .sort((a, b) => {
-      const al = a.r.line ?? Number.MAX_SAFE_INTEGER;
-      const bl = b.r.line ?? Number.MAX_SAFE_INTEGER;
-      if (al !== bl) return al - bl;
-      const ac = a.r.column ?? Number.MAX_SAFE_INTEGER;
-      const bc = b.r.column ?? Number.MAX_SAFE_INTEGER;
-      if (ac !== bc) return ac - bc;
-      return a.i - b.i;
-    })
-    .map((x) => x.r);
+  return buildPanelDiagnosticRows(diagnostics);
 }
 
 /* ============================== 波浪线翻译 ============================== */
@@ -156,84 +149,7 @@ export function summarize(
   };
 }
 
-/* ============================== 缓冲真相池（C2） ============================== */
-
-/**
- * 编辑器**缓冲真相**池（C2，2026-10-16 面板真相统一批）：消费宿主广播
- * `editor.documentChanged` 的最新文本，**按文件**各留一条。
- *
- * 语义（与契约注释同一口径）：
- * - 同一 path 的新广播**覆盖旧**——它就是"这个文件此刻的可编译真相"；
- * - `textFor()` 返回 null = 还没收到该文件的广播（首开窗口期）→ 调用方退回
- *   `io.readText` 读盘兜底；返回非空 = 以广播为准，**不得**再读盘（否则又成分叉）；
- * - path 判等走 `pathKey()` 归一：事件路径平台原样，裸字符串比会在 Windows 上
- *   静默判不上（HK-7 同款坑）；
- * - 只进不删、条数 = 会话内收到过广播的文件数（面板场景就一两份文件，不设上限）。
- *
- * 放在本文件（而非 React 组件里）："广播里有没有这个文件的真相"是文本源选择的
- * 核心判据，可逐条断言（与同文件其余纯逻辑同规矩）。
- */
-export interface LiveTextPool {
-  /** 记一条广播（同 path 覆盖旧值） */
-  apply(filePath: string, text: string): void;
-  /** 该文件的最新真相；未收到过广播返回 null（调用方走读盘兜底） */
-  textFor(filePath: string | null | undefined): string | null;
-}
-
-export function createLiveTextPool(): LiveTextPool {
-  const byKey = new Map<string, string>();
-  return {
-    apply(filePath: string, text: string): void {
-      byKey.set(pathKey(filePath), text);
-    },
-    textFor(filePath: string | null | undefined): string | null {
-      if (filePath === null || filePath === undefined) return null;
-      return byKey.get(pathKey(filePath)) ?? null;
-    },
-  };
-}
-
 /* ============================== 降级态 ============================== */
 
-/** 面板降级原因（能力/项目缺席要"退化可见"，不静默） */
-export type VerdictDegrade = 'no-project' | 'not-kojo' | 'reading' | 'read-error';
-
-export function degradeText(d: VerdictDegrade): string {
-  switch (d) {
-    case 'no-project':
-      return '未打开 .kojo 文件（从左侧选一份开始编辑）';
-    case 'not-kojo':
-      return '当前文件不是 .kojo（校验只对 .kojo 文件生效）';
-    case 'reading':
-      return '读取中…';
-    case 'read-error':
-      return '读取失败';
-  }
-}
-
-/* ============================== 诊断渲染窗口 ============================== */
-
-/**
- * 诊断列表的渲染窗口（触底增窗）。
- *
- * 旧实现硬截 200 条 + 一句「其余 N 条未显示」——第 201 条起不可达。窗口化后
- * INITIAL 是首帧 DOM 上界，滚动触底或点击「显示更多」按 STEP 增长，全量可达。
- * 取值：诊断行单行 ~20px，典型 .kojo 文件诊断 <50 条 ⇒ INITIAL=80 一窗盖住
- * 绝大多数文件，且步长按 1:2 节奏（与函数树的面窗口同比例）。
- */
-export const DIAG_WINDOW_INITIAL = 80;
-export const DIAG_WINDOW_STEP = 160;
-
-/** 当前窗口应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
-export function diagWindowSize(total: number, limit: number | undefined): number {
-  return Math.min(total, limit ?? DIAG_WINDOW_INITIAL);
-}
-
-/**
- * 窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))。
- * 单调不减、单步增量 ≤ STEP、终值 = total——「显示更多」与触底自动加载共用。
- */
-export function nextDiagWindow(current: number | undefined, total: number): number {
-  const base = current ?? DIAG_WINDOW_INITIAL;
-  return Math.min(total, Math.max(DIAG_WINDOW_INITIAL, base + DIAG_WINDOW_STEP));
-}
+/** 面板降级原因：W4 起与 preview 共用契约层闭集（文案单一真源 = `degradeText`） */
+export type VerdictDegrade = PanelDegrade;

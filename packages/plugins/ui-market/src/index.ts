@@ -57,6 +57,11 @@ import {
   type MarketSnapshot,
 } from './actions';
 import {
+  acceptReread,
+  attachMarketInvalidation,
+  type MarketInvalidationHandle,
+} from './reconcile';
+import {
   ACTION_LABEL,
   appVersionRequirement,
   buildGroups,
@@ -426,18 +431,44 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
         const readSeq = useRef(0);
 
         /**
-         * 装卸成功后的**后台静默校对**：乐观只是显示先行，机器说了算的纪律不破——
-         * 重读仍是唯一权威，若有漂移由它纠正（MK-1 判据：行消失 ≤ 目录消失 + 300ms，
-         * 四路 IPC 全量重读同步等撑不住这个数字，所以才有乐观先行 + 这里异步兜底）。
-         * 读失败不清乐观显示（`list-unreadable` 是"读这件事本身失败"，不是一份可显示的事实；
-         * 「失败不清掉已有列表」与 `refreshIndex` 同一条纪律），只把屏上留着，等下次动作再校。
+         * 装卸成功后的**即时重取**（MK-1 的"重取"那一半，触发点在服务的清单变更通知上）。
+         *
+         * 乐观只是显示先行，机器说了算的纪律不破——重读仍是唯一权威，若有漂移由它纠正
+         * （判据：卸载确认后行消失 ≤ 目录消失 + 300ms；四路 IPC 全量重读同步等撑不住这个数字，
+         * 所以才有"乐观立刻 + 通知驱动单飞重取兜底"这一对）。
+         *
+         * 单飞由 `attachMarketInvalidation` 保证：连点装卸 ⇒ 串行若干趟、任意时刻至多一趟在跑，
+         * 每一次请求都由"它之后开始的那一趟"兑现（旧读数既不会并发插队，也不会倒灌）。
+         * 订阅挂在 effect 上，退订挂在卸载上：关掉的面板不该继续替它重取。
          */
-        const reconcile = useCallback((): void => {
-          const seq = ++readSeq.current;
-          void loadMarketSnapshot(deps).then((snap) => {
-            if (readSeq.current === seq && snap.status !== 'list-unreadable') setSnapshot(snap);
+        const invalidationRef = useRef<MarketInvalidationHandle | null>(null);
+        // 最近一次**开始**的重取令牌：`read` 负责抬它，`onSnapshot` 负责用它判落不落屏
+        // （抬令牌与落屏分成两处，是 `attachMarketInvalidation` 的口径——落屏点只许有一个）
+        const revalidateSeqRef = useRef(0);
+        if (invalidationRef.current === null) {
+          invalidationRef.current = attachMarketInvalidation({
+            market: deps.market,
+            read: (): Promise<MarketSnapshot> => {
+              revalidateSeqRef.current = ++readSeq.current; // 这一趟比任何在途读数新 ⇒ 旧的一手一律作废
+              return loadMarketSnapshot(deps);
+            },
+            onSnapshot: (snap: MarketSnapshot): void => {
+              // 落不落屏只看这一条判据（`acceptReread`）：读失败不清屏上那份事实
+              if (
+                acceptReread({ stale: readSeq.current !== revalidateSeqRef.current, status: snap.status })
+              ) {
+                setSnapshot(snap);
+              }
+            },
+            onError: (err: unknown): void => {
+              deps.log.warn(`市场已装清单的重取没有成功：${err instanceof Error ? err.message : String(err)}`);
+            },
           });
+        }
+        const revalidateInstalled = useCallback((): Promise<MarketSnapshot> => {
+          return invalidationRef.current!.revalidate();
         }, []);
+        useEffect(() => () => invalidationRef.current!.dispose(), []);
 
         /**
          * 打开面板：**stale-while-revalidate** 两段式——
@@ -456,7 +487,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           const remote = ++readSeq.current;
           void pullMarketOutcome(deps, false).then((out) => {
             if (readSeq.current !== remote) return; // 序号被抬走 ⇒ 旧读数不倒灌
-            // 服务整体炸了（list-unreadable）不清掉刚上屏的本地事实（与 reconcile 同一条纪律），但要出声
+            // 服务整体炸了（list-unreadable）不清掉刚上屏的本地事实（与 `acceptReread` 同一条纪律），但要出声
             if (out.snap.status !== 'list-unreadable') setSnapshot(out.snap);
             // cached = 一切正常 ⇒ 静默（正常面板不该有废话）；refreshed / failed 才出声
             if (out.state !== 'cached') setNote(out.snap.pullNote);
@@ -498,9 +529,14 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           setInstalling(null);
           setNote(out.note);
           if (out.kind === 'done') {
-            // 乐观只是显示先行：先把服务记账回来的那条搬上屏，权威数字由后台校对修正
-            setSnapshot(snapshotWithInstalled(snapshot, out.rec));
-            reconcile();
+            // 乐观只是显示先行：行立刻出现（MK-1 判据），权威数字由通知驱动的那一趟重取修正。
+            // **函数式**更新：拿闭包里那份 `snapshot` 拼会盖掉同窗口内已经落地的重读结果
+            // （服务在 Promise 落回之前就已经广播了，那一趟可能比这里先落地）。
+            setSnapshot((prev) => snapshotWithInstalled(prev, out.rec));
+          } else {
+            // 失败**不发通知**（服务只在清单真的变过时出声）⇒ 这里主动核一趟：
+            // 搬进落点成功而记账失败那一类，屏上"没装"与盘上"有目录"就是两份真相，必须当场对齐。
+            void revalidateInstalled();
           }
         };
 
@@ -522,9 +558,13 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
             setNote(out.note);
             if (out.kind === 'done') {
               setOpen(null);
-              // 乐观只是显示先行：行立刻消失（MK-1 判据），权威数字由后台校对修正
-              setSnapshot(snapshotWithoutInstalled(snapshot, rec));
-              reconcile();
+              // 乐观只是显示先行：行立刻消失（MK-1 判据），权威数字由通知驱动的那一趟重取修正；
+              // 函数式更新的理由同 `doInstall`——别拿闭包里那份旧快照去盖已经落地的新读数。
+              setSnapshot((prev) => snapshotWithoutInstalled(prev, rec));
+            } else {
+              // 同 `doInstall`：失败不出声于服务（清单没变过），但"目录已删 / 记账还在"这类
+              // 半趟只有重读能判 ⇒ 主动核一趟，屏上不留着一条作者点不动的僵尸行。
+              void revalidateInstalled();
             }
           } finally {
             setInstalling(null);

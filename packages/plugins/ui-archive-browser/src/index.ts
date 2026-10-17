@@ -3,31 +3,43 @@
  *
  * 归档浏览器面板（`ui.panel` 槽贡献；v0.2 第十三批，实施记录 §5.19（docs/IMPLEMENTATION-LOG.md））。
  *
- * 消费 `snapshot.source` 的扫描结果，列出存档档位（备注摘要 / 角色数 / 文件大小 /
- * 修改时间），点击某档展开**角色区摘要**（前 N 个角色名 + 总数，不全量渲染），
- * 并广播 `kojo.snapshotSelected`（内核事件，任意插件可响应）。
+ * 消费归档**读取单源**（`archive.reader`，实现 = 归档解析插件）的扫描结果，列出存档档位
+ * （备注摘要 / 角色数 / 文件大小 / 修改时间），点击某档展开**角色区摘要**（前 N 个角色名 +
+ * 总数，不全量渲染），并可把该档**取出**到两个合法落点之一（工作区 / 另存对话框），
+ * 同时广播 `kojo.snapshotSelected`（内核事件，任意插件可响应）。
  *
  * 分层（"一切皆插件"）：
- *   - 解析在 sav-parser（`snapshot.source`），本插件只做**呈现 + 意图**；
- *   - 纯逻辑（格式化 / 列表规约 / 角色摘要）在 `panel-logic.ts`（零 React 可单测）；
+ *   - 解析与落盘在读取单源（`archive.reader`），本插件只做**呈现 + 意图**；
+ *   - 纯逻辑（列表规约 / 角色摘要 / 时间戳）在 `panel-logic.ts`（零 React 可单测），
+ *     字节格式化与路径解析**引用契约那份**（`plugin-api/archive.ts`），本插件不写第二份；
  *   - 刷新为**显式按钮**（BUG-5 之后目录监视已接 Rust notify，外部增删归档会经
  *     `file.changed` 自动重扫；按钮保留作 `partial` / `unavailable` 降级态的兜底）。
+ *
+ * W13 收口（ARCHIVE-READ）：面板**只**接一个读取入口 `archive.reader`（不再直接依赖
+ * `snapshot.source`），字节格式化与路径解析也都改为引用契约那一份实现——面板里不许有
+ * 第二份 `formatBytes` / 第二套分隔符拼接。新增的"取出档位"能力同样**不自己写盘**：
+ * 意图只带 `kind` + `entryPath` 两个字段，落点（常驻可写根内的固定子目录，或系统对话框
+ * 选定的位置）由读取单源按契约决定，面板拿不到任何目标路径参数（架构铁律 6）。
  */
 
 import { createElement, useEffect, useState, type ReactNode } from 'react';
 import type {
+  ArchiveExtractOutcome,
+  ArchiveReaderService,
   CharaInfo,
   ComputePool,
   GameProject,
   Plugin,
   ProjectService,
-  SnapshotSourceService,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices, isPathUnder } from '@kojo/plugin-api';
+import { archiveEntryLabel, ArchiveServices, KernelServices, isPathUnder } from '@kojo/plugin-api';
 import {
   buildArchiveList,
   summarizeCharacters,
+  extractRequest,
+  extractOutcomeText,
+  EXTRACT_LABELS,
   type ArchiveListResult,
   type ArchiveRow,
   type CharacterSummary,
@@ -52,18 +64,20 @@ interface DetailState {
   busy: boolean;
 }
 
-function shortPath(p: string): string {
-  const parts = p.split(/[\\/]/);
-  return parts.slice(-2).join('/');
+/** 单档取出状态（落盘意图的结果；缓存到路径，失败也如实留着） */
+interface ExtractState {
+  busy: boolean;
+  outcome: ArchiveExtractOutcome | null;
+  error: string | null;
 }
 
 export function createUiArchiveBrowserPlugin(): Plugin {
   return {
     id: 'ui-archive-browser',
-    version: '0.2.0',
-    requires: [WellKnownServices.SnapshotSource, KernelServices.Project, KernelServices.Compute],
+    version: '0.3.0',
+    requires: [ArchiveServices.Reader, KernelServices.Project, KernelServices.Compute],
     activate(ctx) {
-      const snapshots = ctx.inject<SnapshotSourceService>(WellKnownServices.SnapshotSource);
+      const reader = ctx.inject<ArchiveReaderService>(ArchiveServices.Reader);
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const compute = ctx.inject<ComputePool>(KernelServices.Compute);
 
@@ -71,6 +85,8 @@ export function createUiArchiveBrowserPlugin(): Plugin {
       let list: ArchiveListResult = { rows: [], failed: [], degrade: 'no-project' };
       /** 单档角色区摘要缓存（key = 归档路径） */
       const details = new Map<string, DetailState>();
+      /** 单档取出结果缓存（key = 归档路径 + 落点形态） */
+      const extracts = new Map<string, ExtractState>();
       const listeners = new Set<() => void>();
       const notify = (): void => {
         for (const cb of [...listeners]) {
@@ -88,14 +104,15 @@ export function createUiArchiveBrowserPlugin(): Plugin {
         if (!current) {
           list = buildArchiveList({ project: null, scanning: false, scan: null });
           details.clear();
+          extracts.clear();
           notify();
           return Promise.resolve();
         }
-        list = buildArchiveList({ project: current, scanning: true, scan: snapshots.current() });
+        list = buildArchiveList({ project: current, scanning: true, scan: reader.current() });
         notify();
         // 2026-10-16 代际守卫：扫描回包落地前校验项目归属——旧项目的扫描结果
         // 不得配新项目的表头落回（project.opened 触发的 refresh 同样受守卫保护）。
-        return snapshots
+        return reader
           .scan()
           .then((scan) => {
             if (project.current() !== current) return;
@@ -128,8 +145,8 @@ export function createUiArchiveBrowserPlugin(): Plugin {
         const state: DetailState = { summary: null, error: null, busy: true };
         details.set(row.path, state);
         notify();
-        void snapshots
-          .parse(row.path, { keepArrayCells: false, maxCellsPerArray: 0 })
+        void reader
+          .parseEntry(row.path, { keepArrayCells: false, maxCellsPerArray: 0 })
           .then((archive) => {
             state.summary = summarizeCharacters(archive.chars, charaIndex, CHARA_SUMMARY_CAP);
             state.busy = false;
@@ -138,6 +155,36 @@ export function createUiArchiveBrowserPlugin(): Plugin {
           .catch((err: unknown) => {
             state.error = err instanceof Error ? err.message : String(err);
             state.busy = false;
+            notify();
+          });
+      };
+
+      /**
+       * 取出一个档位（唯一入口 = 读取单源的 `extractEntry`）。
+       *
+       * 两个按钮对应契约的**两种合法落点**，面板侧只有 `kind` 可传：
+       * - `workspace`：常驻可写根（作者工作区）内的固定子目录；
+       * - `dialog`：`exportFile` 法定通道（系统对话框选落点，取消不是错误）。
+       * 没有"目标目录"这一栏——域外写只能由用户在对话框里显式授权（架构铁律 6）。
+       */
+      const extract = (row: ArchiveRow, kind: 'workspace' | 'dialog'): void => {
+        const key = `${row.path}#${kind}`;
+        const existing = extracts.get(key);
+        if (existing?.busy) return;
+        const state: ExtractState = { busy: true, outcome: null, error: null };
+        extracts.set(key, state);
+        notify();
+        void reader
+          .extractEntry(extractRequest(row.path, kind))
+          .then((outcome) => {
+            state.busy = false;
+            state.outcome = outcome;
+            notify();
+          })
+          .catch((err: unknown) => {
+            state.busy = false;
+            state.error = err instanceof Error ? err.message : String(err);
+            ctx.log.warn(`Archive extract failed (${row.path} / ${kind}): ${String(err)}`);
             notify();
           });
       };
@@ -197,7 +244,59 @@ export function createUiArchiveBrowserPlugin(): Plugin {
           if (projectNow) loadDetail(row, projectNow.charaIndex);
         };
 
-        /** 档位行（点击展开角色区摘要） */
+        /**
+         * 取出条目的动作区（两种合法落点各一个按钮；**没有路径输入**）。
+         * 结果与拒绝理由都留在面板上（不静默），落点文本原样显示——用户要看得见东西落在哪。
+         */
+        const renderExtract = (row: ArchiveRow): ReturnType<typeof createElement> => {
+          const stateOf = (kind: 'workspace' | 'dialog'): ExtractState | undefined =>
+            extracts.get(`${row.path}#${kind}`);
+          const outcomeLine = (kind: 'workspace' | 'dialog'): ReturnType<typeof createElement> | null => {
+            const st = stateOf(kind);
+            if (!st) return null;
+            if (st.busy) return createElement('div', { className: 'ab-status dim' }, '取出中…');
+            if (st.error) return createElement('div', { className: 'ab-error' }, `取出失败：${st.error}`);
+            const o = st.outcome;
+            if (!o) return null;
+            return createElement(
+              'div',
+              { className: 'ab-status dim', title: o.landing },
+              extractOutcomeText(o),
+            );
+          };
+          return createElement(
+            'div',
+            { className: 'ab-detail' },
+            createElement(
+              'div',
+              { className: 'ab-chara-row' },
+              createElement(
+                'button',
+                {
+                  className: 'ghost small',
+                  disabled: stateOf('workspace')?.busy === true,
+                  onClick: () => extract(row, 'workspace'),
+                  title: '写入作者工作区（常驻可写根）内的归档取出目录',
+                },
+                EXTRACT_LABELS.workspace,
+              ),
+              createElement(
+                'button',
+                {
+                  className: 'ghost small',
+                  disabled: stateOf('dialog')?.busy === true,
+                  onClick: () => extract(row, 'dialog'),
+                  title: '由系统对话框选定落点（对话框即授权）',
+                },
+                EXTRACT_LABELS.dialog,
+              ),
+            ),
+            outcomeLine('workspace'),
+            outcomeLine('dialog'),
+          );
+        };
+
+        /** 档位行（点击展开角色区摘要 + 取出动作） */
         const renderRow = (row: ArchiveRow): ReturnType<typeof createElement> => {
           const isOpen = expanded === row.path;
           const detail = details.get(row.path);
@@ -255,6 +354,7 @@ export function createUiArchiveBrowserPlugin(): Plugin {
               mes,
             ),
             body,
+            isOpen && !row.failed ? renderExtract(row) : null,
           );
         };
 
@@ -275,7 +375,7 @@ export function createUiArchiveBrowserPlugin(): Plugin {
         const statusText =
           degrade === null
             ? `已列 ${list.rows.length} 档${list.failed.length > 0 ? `（${list.failed.length} 档解析失败）` : ''}` +
-              ` · ${shortPath(projectNow.savDir ?? '')}`
+              ` · ${archiveEntryLabel(projectNow.savDir ?? '')}`
             : DEGRADE_TEXT[degrade] ?? '';
 
         const emptyState = createElement(
@@ -309,7 +409,8 @@ export function createUiArchiveBrowserPlugin(): Plugin {
           createElement(
             'div',
             { className: 'ab-hint dim' },
-            '点击档位查看角色区摘要（只列前若干角色 + 总数）；存档目录被外部改动会自动重扫，「刷新」是手动兜底',
+            '点击档位查看角色区摘要（只列前若干角色 + 总数）；存档目录被外部改动会自动重扫，「刷新」是手动兜底；' +
+              '「取出」只落两个合法位置——作者工作区，或你在系统对话框里亲手选的地方',
           ),
         );
       }

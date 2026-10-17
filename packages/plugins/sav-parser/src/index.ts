@@ -12,23 +12,33 @@
  *
  * 响应式：订阅 `project.opened` 自动扫描存档目录（浅解析列档，不阻塞事件）；
  * `project.closed` 清空。深解析由消费者按需调用 `parse(path)`。
+ *
+ * W13 ARCHIVE-READ：本插件同时是**归档读取单源**（`archive.reader`）的归属地——
+ * 列条目 / 取一个条目的字节 / 解析一个条目 / 把一个条目落到合法落点四个动作一条链，
+ * 消费方面板不再自写落盘与路径拼接。读侧与 `snapshot.source` 共用同一个引擎实例，
+ * 落点只有契约里的两种形态（常驻可写根内 / `exportFile` 法定通道）。
  */
 
-import type { FileIO, OpJournal, Plugin, ProjectService } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import type { FileIO, OpJournal, Plugin, ProjectService, WorkspaceService } from '@kojo/plugin-api';
+import { ArchiveServices, KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { SnapshotSourceEngine } from './engine';
+import { ArchiveReaderEngine } from './archive-reader';
 
 export function createSavParserPlugin(): Plugin {
   return {
     id: 'sav-parser',
     version: '0.3.0',
-    provides: [WellKnownServices.SnapshotSource, WellKnownServices.SnapshotWriter],
+    provides: [WellKnownServices.SnapshotSource, WellKnownServices.SnapshotWriter, ArchiveServices.Reader],
     requires: [KernelServices.IO, KernelServices.Project],
+    // 软依赖：工作区服务缺席时读侧照常工作，只有"落到常驻可写根"这条落点如实拒绝
+    optionalRequires: [KernelServices.Workspaces],
     activate(ctx) {
       const io = ctx.inject<FileIO>(KernelServices.IO);
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       // 批操作 journal（2026-10-16 undo 批，additive 可选）：缺席 = 注入行为退回原样
       const journal = ctx.tryInject<OpJournal>(KernelServices.Ops);
+      // 作者工作区 = 常驻可写根（不受项目开闭清空）；缺席时由读取器转成可读拒绝
+      const workspaces = ctx.tryInject<WorkspaceService>(KernelServices.Workspaces);
 
       const engine = new SnapshotSourceEngine({
         log: ctx.log,
@@ -41,9 +51,21 @@ export function createSavParserPlugin(): Plugin {
         journal: journal ?? undefined,
       });
 
-      // 读写职责分离：只读消费者依赖 snapshot.source；注入面板依赖 snapshot.writer
+      // 归档读取单源：包裹**同一个**引擎（列档/解析判据不另起一份）
+      const reader = new ArchiveReaderEngine({
+        log: ctx.log,
+        source: engine,
+        io,
+        workspaceRoot: () => {
+          if (!workspaces) throw new Error('kernel.workspaces 服务不可用');
+          return workspaces.rootDir();
+        },
+      });
+
+      // 读写职责分离：只读消费者依赖 snapshot.source / archive.reader；注入面板依赖 snapshot.writer
       ctx.provide(WellKnownServices.SnapshotSource, engine);
       ctx.provide(WellKnownServices.SnapshotWriter, engine);
+      ctx.provide(ArchiveServices.Reader, reader);
 
       const scanSafely = (): void => {
         void engine.scan().catch((err: unknown) => {
@@ -62,6 +84,7 @@ export function createSavParserPlugin(): Plugin {
 }
 
 export { SnapshotSourceEngine, type SnapshotEngineDeps } from './engine';
+export { ArchiveReaderEngine, type ArchiveReaderDeps } from './archive-reader';
 export { parseArchive, FORMAT_VERSION, MAGIC_GZIP, MAGIC_RAW } from './parse';
 export { ByteReader, ArchiveParseError } from './binary';
 export { gunzipBytes } from './gunzip';

@@ -281,7 +281,17 @@ describe('安装面单一真源守门（KM-10..12）', () => {
     expect(scan([/'\.staging'/, /'packs'/, /'\.zip'/], [UI_MARKET_SRC])).toEqual([]);
     expect(codeMatchCount(readFileSync(CONTRACT_MARKET, 'utf8'), /^export function packContainerName\(/m), '容器名派生处数').toBe(1);
     const rs = readFileSync(RUST_MARKET_RS, 'utf8');
-    expect(codeMatchCount(rs, /ends_with\(ZIP_SUFFIX\)/), '容器名后缀闸处数').toBe(1);
+    // 容器名后缀闸的**单源形态**（W14 之后）：这道闸不再持有本地常量，而是读编译期内嵌的
+    // 共享表（`plugin-api/fixtures/zip-roundtrip/contract.json`）——判因此从"本地那个
+    // `ZIP_SUFFIX` 被用了一次"变成"表里那一次 `ends_with(rule.suffix.as_str())`"。
+    // 三条计数一条都不放宽：表读第二次、退回本地字面量、留一份 `".zip"` 硬编码，都当场红。
+    expect(
+      rs,
+      '后缀闸必须读内嵌共享表（include_str! 的那份 contract.json）',
+    ).toContain('include_str!("../../../plugin-api/fixtures/zip-roundtrip/contract.json")');
+    expect(codeMatchCount(rs, /ends_with\(rule\.suffix\.as_str\(\)\)/), '容器名后缀闸处数（读共享表那一次）').toBe(1);
+    expect(codeMatchCount(rs, /ZIP_SUFFIX/), 'Rust 侧不许再留本地后缀常量').toBe(0);
+    expect(codeMatchCount(rs, /"\.zip"/), 'Rust 侧不许再写死后缀字面量').toBe(0);
     expect(codeMatchCount(rs, /container_name_problem\s*\(/), '定义 1 + 下载与解压各 1').toBe(3);
   });
 
@@ -301,5 +311,72 @@ describe('安装面单一真源守门（KM-10..12）', () => {
     ).toEqual([]);
     expect(codeMatchCount(readFileSync(CONTRACT_MARKET, 'utf8'), /^export function packUpdateCheck\(/m), '三态判定定义处数').toBe(1);
     expect(scan([/PackUpdateState|packUpdateCheck/], [nodeJoin(ROOT, 'packages', 'kernel')], true)).toEqual([]);
+  });
+});
+
+/* ---------------- 2026-10-17 MK-1：即时失效 + 两套更新语义并一 的机器闸 ---------------- */
+
+const APP_UPDATE_CHECK = nodeJoin(ROOT, 'packages', 'app', 'src', 'ui', 'update-check.ts');
+const UI_MARKET_RECONCILE = nodeJoin(ROOT, 'packages', 'plugins', 'ui-market', 'src', 'reconcile.ts');
+const UI_MARKET_PANEL = nodeJoin(ROOT, 'packages', 'plugins', 'ui-market', 'src', 'index.ts');
+const UI_MARKET_VIEW = nodeJoin(UI_MARKET_SRC, 'market-view.ts');
+
+describe('更新语义与即时失效的单一真源守门（MK-1）', () => {
+  it('关系判定只有一条实现链：updateRelationOf 只住契约，宿主侧只接 compareVersions 不许自己数点号', () => {
+    expect(scan([/^export function updateRelationOf\(/m], ALL)).toEqual([ONLY_COMPARE_SOURCE]);
+    const app = readFileSync(APP_UPDATE_CHECK, 'utf8');
+    expect(app, '宿主侧要用契约那把尺').toContain('compareVersions');
+    expect(codeMatchCount(app, /split\(\s*['"]\.\s*['"]\s*\)/), '宿主侧自己数点号的处数').toBe(0);
+    expect(scan([/compareVersions|updateRelationOf/], [UI_MARKET_SRC], true)).toEqual([]);
+  });
+
+  it('失败话术只有两处生成点（契约 + 宿主复刻），面板零处：面板只显示 failure.note', () => {
+    expect(scan([/^export function makeUpdateFailure\(/m], ALL)).toEqual([ONLY_COMPARE_SOURCE]);
+    // 扫描面 = **更新链路那几个文件**（别的插件里"重新保存即可重试"那种话不算第二套更新话术）
+    const withRetry = scan(
+      [/可重试/],
+      [
+        CONTRACT_MARKET,
+        APP_UPDATE_CHECK,
+        UI_MARKET_SRC,
+        nodeJoin(ROOT, 'packages', 'plugins', 'kojo-market', 'src'),
+      ],
+      true,
+    )
+      .map((s) => String(s).split(':')[0])
+      .sort();
+    expect(withRetry).toEqual([
+      'packages/app/src/ui/update-check.ts',
+      'packages/plugin-api/src/market.ts',
+    ]);
+    expect(readFileSync(UI_MARKET_VIEW, 'utf8')).toContain('failure?.note');
+  });
+
+  it('清单变更只有一个发出点、一个订阅面：装卸两条路共用同一条通知，面板不自己定时轮询', () => {
+    const svc = readFileSync(KOJO_MARKET_SERVICE, 'utf8');
+    expect(codeMatchCount(svc, /notifyInstalledChanged\s*\(/), '通知调用点处数').toBe(3);
+    const missAt = svc.indexOf("'installed-missing'");
+    const notifyAt = svc.indexOf("notifyInstalledChanged('uninstalled'");
+    expect(missAt).toBeGreaterThan(-1);
+    expect(notifyAt).toBeGreaterThan(missAt);
+    expect(
+      scan([/onInstalledChanged/], [UI_MARKET_SRC], true)
+        .map((s) => String(s).split(':')[0])
+        .sort(),
+    ).toEqual(['packages/plugins/ui-market/src/reconcile.ts']);
+    expect(scan([/onInstalledChanged/], [nodeJoin(ROOT, 'packages', 'app', 'src')], true)).toEqual([]);
+    for (const f of [UI_MARKET_PANEL, UI_MARKET_RECONCILE]) {
+      expect(codeMatchCount(readFileSync(f, 'utf8'), /setTimeout\(|setInterval\(/), rel(f)).toBe(0);
+    }
+  });
+
+  it('市场取数纪律不动：仍然只读盘上那份 index.json（不新增第二条远程路、不碰 latest）', () => {
+    expect(scan([/releases\/latest/], MARKET_CODE_SURFACE, true)).toEqual([]);
+    expect(scan([/marketDownload\b|marketExtract\b/], PROD_SURFACE).map(rel).sort()).toEqual([
+      'packages/app/src/bridge/tauri-bridge.ts',
+      'packages/kernel/src/remote.ts',
+      'packages/plugin-api/src/platform.ts',
+      'packages/plugins/kojo-market/src/service.ts',
+    ]);
   });
 });

@@ -595,6 +595,10 @@ describe('S4 装配：服务键与服务集合', () => {
       // 本包还注册一枚 `ui.editor.languageService` 贡献（转到定义，2026-10-15）——
       // 上下文里得有个槽注册表；本用例断言的是服务面，故注册侧不记录。
       slots: { register: () => () => undefined },
+      // W6（2026-10-17）起本包在激活时挂四条事件（名录随项目/文件走），
+      // 断言的仍是服务面 ⇒ 事件与回收都记账不校验。
+      bus: { on: () => () => undefined, once: () => () => undefined, emit: () => undefined },
+      onDispose: () => undefined,
     };
     createKojoSugarPlugin().activate(ctx as never);
     expect(provided.has('sugar.transpile')).toBe(true);

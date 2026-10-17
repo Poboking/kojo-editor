@@ -1,466 +1,356 @@
 /**
- * 引擎内置·通用规则：语法糖侧可静态判定的约定（规范 §8「lint 规则」子集）。
+ * 引擎内置·通用规则：语法糖侧约定 = **转译器诊断的投影**（RULE-DEDUP 批）。
  *
- * **零游戏知识**——只做 `.kojo` 表层文本的结构扫描（缩进/关键字/引号/插值），
- * 不依赖任何游戏字典或适配器，任何符合表层规范的项目都适用，因此住在引擎插件自身。
+ * ## 这一条为什么不再自己扫文本
  *
- * 覆盖规范 §8 中"糖文本行里新增"的可静态判定项（实现为纯文本扫描，不依赖
- * kojo-sugar 插件的转译器——避免插件交叉依赖，且这些判据在**未编译**的源文本上
- * 就能确定）：
- *   1. `续`（不等待标记）写在引号内 —— 规范 §3.3（标记必须在引号/句号之外）
- *   2. 同一时机出现多个 `选项` 块 —— 规范 §3.7（每时机只允许一个，且不嵌套）
- *   3. 表达式 `如果` / `当` 缺 `否则` —— 规范 §3.5 / §3.6（左值会存在未赋值路径）
- *   4. 只读别名（字面量 / 角色）作赋值左值 —— 规范 §5.0（只读别名不可写）
+ * 本文件此前用纯文本扫描重做了 `kojo-sugar` 转译器已有的 4 条判据
+ * （`cont-inside-quotes` / `choice-multiple` / `expr-missing-else` /
+ * `readonly-alias-assignment`），并在头注自承"保守近似、宁可漏报"。两套判据各跑各的后果
+ * 是可观察的错账：同一行糖问题在 `.kojo` 波浪线上是转译器的码/严重级/列位，在校验面板
+ * 是这份近似的码/固定 error/行首 ⇒ 计数与等级两边对不上，中文文案也抄了两份。
  *
- * 设计取舍：这些判据只做**保守**的静态近似——宁可漏报（交由转译器的精确诊断），
- * 不可误报。缩进用空格数近似层级（制表符按 4 空格折算），与转译器的配对规则一致。
+ * 现在**判据只有一处**：转译器（服务键 `sugar.transpile`）。本规则只做三件事——
+ * ① 从转译器诊断里挑出属于"糖侧写法约定"的那几条码；② 把 `SugarDiagnostic` 投影成
+ * `ConventionIssue`（`ruleId` = `sugar.<转译器码>`，`severity` / `message` / `line`
+ * **逐字取自诊断**——零二次判断、零复制文案，中文单源仍是 `diagnostic-copy.ts`）；
+ * ③ 把结论按文件喂进引擎的分区缓存。
+ *
+ * ## 缺席就 fail-open，但绝不静默
+ *
+ * - 项目里没有 `.kojo`（本规则无事可做）⇒ 正常零产出，不制造噪声；
+ * - 有 `.kojo` 却拿不到转译服务（插件未激活 / 装配未接线）⇒ **本规则本轮没有结论**：
+ *   `partition.key()` 抛 `SugarTranspileUnavailableError`，引擎按既有通道把它记进
+ *   `report.failedRules`（可见、带原因、区分两种缺席），既不猜也不伪造"没问题"。
+ *
+ * ## 缓存口径（PERF-12b / PERF-13，不许回退）
+ *
+ * 判定只依赖**单文件正文** ⇒ 继续走分区：引擎按 `ErbIndex.fileMtimes` 逐文件复用贡献，
+ * 每轮只重算 mtime 变过的那些 `.kojo`；转译本身又复用转译服务自己的 `(source, filePath)`
+ * 共享缓存（波浪线 / 预览 / 保存链与本规则同一条结果）。于是"改一棵"既不会重读全库正文，
+ * 也不会把同一份 `.kojo` 再算一遍。转译器换代（字典 / 分野表）由 `expect.fingerprint`
+ * 里的 `project.inputDigest` 把守；`key()` 另加 `adapterId` + 服务实例序号两道门
+ * （任一不符 ⇒ 该规则分区整条作废重算，绝不拿旧贡献配新转译器）。
  */
 
-import type { ConventionIssue, ConventionRule } from '@kojo/plugin-api';
+import type {
+  ConventionCheckContext,
+  ConventionIssue,
+  ConventionRule,
+  SugarDiagnostic,
+  SugarDiagnosticCode,
+  SugarTranspileService,
+} from '@kojo/plugin-api';
+import { isKojoFile } from '@kojo/plugin-api';
 
-/* ============================== 共享扫描工具 ============================== */
+/* ====================== 判据子集：本规则认领的转译器码（唯一清单） ====================== */
 
-/** 逻辑行：原文 + 1 基行号 + 缩进（制表符折算 4 空格） */
-interface ScanLine {
-  readonly text: string;
-  readonly raw: string;
-  readonly line: number;
-  readonly indent: number;
+/**
+ * 糖侧「约定」子集 = 转译器诊断码里面向作者写法的那四条（规范 §8 lint 清单）。
+ * 其余码（缩进 / 插值 / 时机命名……）属编辑器诊断面，不进校验面板——两边各管各的账，
+ * 但**同一份判据**（都出自转译器），不会再出现两个严重级。
+ */
+export const SUGAR_LINT_DIAGNOSTIC_CODES = [
+  'cont-inside-quotes',
+  'choice-multiple',
+  'expr-missing-else',
+  'readonly-alias-assignment',
+] as const satisfies readonly SugarDiagnosticCode[];
+
+export type SugarLintDiagnosticCode = (typeof SUGAR_LINT_DIAGNOSTIC_CODES)[number];
+
+/** 糖族面板 ruleId 的前缀（唯一一份；逆运算见 {@link sugarFamilyCodeOf}） */
+export const SUGAR_RULE_ID_PREFIX = 'sugar.';
+
+/**
+ * 转译器码 → 面板规则 id 的**唯一**命名空间加法（码本体原样来自转译器）。
+ *
+ * 2026-10-19 起这个前缀还是**波浪线归属的判据**（`diagnostics.ts` 靠它认出"这一族的面上行
+ * 由 `ui-sugar-editor#sugar-diagnostics` 发布"）⇒ 前缀与它的逆运算 `sugarFamilyCodeOf`
+ * 必须成对住在这里，别处再拼一次 `'sugar.'` 就是第三把尺子。
+ */
+export function sugarLintRuleIdOf(code: string): string {
+  return `${SUGAR_RULE_ID_PREFIX}${code}`;
 }
 
-const TAB_WIDTH = 4;
+/** 这条面板规则 id 属不属于糖族（只看前缀，不查码表：转译器新增码时不必两头改） */
+export function isSugarFamilyRuleId(ruleId: string): boolean {
+  return ruleId.startsWith(SUGAR_RULE_ID_PREFIX);
+}
 
-function indentOf(raw: string): number {
-  let n = 0;
-  for (const ch of raw) {
-    if (ch === ' ') n += 1;
-    else if (ch === '\t') n += TAB_WIDTH;
-    else break;
+/**
+ * 糖族面板 ruleId → **转译器码本名**（`sugarLintRuleIdOf` 的逆运算，唯一一份）。
+ * 面上那条波浪线的 `code` 就是这个本名（发布方 `ui-sugar-editor` 不认得面板前缀），
+ * 于是"💡 认领的就是画上那一条"仍然逐字成立（身份键 = 严重级 + 行 + 消息 + 码）。
+ */
+export function sugarFamilyCodeOf(ruleId: string): string {
+  return isSugarFamilyRuleId(ruleId) ? ruleId.slice(SUGAR_RULE_ID_PREFIX.length) : ruleId;
+}
+
+const SUGAR_LINT_CODE_SET: ReadonlySet<string> = new Set<string>(SUGAR_LINT_DIAGNOSTIC_CODES);
+
+/** 本规则可能产出的全部子 ruleId（= 面板组描述登记清单；单一来源，别再抄一份） */
+export const SUGAR_LINT_RULE_IDS: readonly string[] = SUGAR_LINT_DIAGNOSTIC_CODES.map(sugarLintRuleIdOf);
+
+/** 子 ruleId 常量（保留 `index.ts` 既有 re-export 面；值一律由码表推导） */
+export const CONT_INSIDE_QUOTES_RULE_ID = sugarLintRuleIdOf('cont-inside-quotes');
+export const MULTIPLE_CHOICE_BLOCKS_RULE_ID = sugarLintRuleIdOf('choice-multiple');
+export const EXPR_MISSING_ELSE_RULE_ID = sugarLintRuleIdOf('expr-missing-else');
+export const READONLY_ALIAS_ASSIGN_RULE_ID = sugarLintRuleIdOf('readonly-alias-assignment');
+
+/* ============================== 转译服务的取用通道 ============================== */
+
+/**
+ * 转译服务提供者（装配点接线用）。三态约定（**两种缺席要能分辨**）：
+ * - 返回服务对象 ⇒ 正常；
+ * - 返回 `null` ⇒ 已接线但这一轮拿不到实例（kojo-sugar 未激活 / 适配器无转译能力）；
+ * - 返回 `undefined` ⇒ 通道本身是空的（装配未接线，属我们的接线漏了）。
+ */
+export type SugarTranspileProvider = () => SugarTranspileService | null | undefined;
+
+/**
+ * 转译服务缺席（且本轮确有 `.kojo` 要判）——**不等于**"没查出问题"。
+ * 引擎把消息原样收进 `report.failedRules` ⇒ 面板/日志可见，不静默。
+ */
+export class SugarTranspileUnavailableError extends Error {
+  /** 可读原因（两种缺席形态分别成文；就是 `failedRules.error` 的正文） */
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'SugarTranspileUnavailableError';
+    this.reason = reason;
+  }
+}
+
+/** 装配未接线（宿主没给本规则服务通道） */
+const NOT_WIRED_REASON =
+  'sugar.transpile 服务未接线（装配点缺 `setSugarTranspileProvider`）：本轮 `.kojo` 约定判定已跳过——未报问题不等于没有问题';
+
+/** 已接线但取不到服务实例 */
+const NO_SERVICE_REASON =
+  'sugar.transpile 服务缺席（kojo-sugar 未激活 / 当前适配器无转译能力）：本轮 `.kojo` 约定判定已跳过——未报问题不等于没有问题';
+
+let defaultProvider: SugarTranspileProvider | null = null;
+
+/**
+ * 装配点接线（宿主 `activate` 里一行）：把 `sugar.transpile` 的取用通道交给内置规则。
+ *
+ * 之所以给**惰性 getter**而不是服务实例：装配顺序不该被本规则绑死（kojo-sugar 可以晚于
+ * 本插件激活），且服务对象在 kojo-sugar 内部按适配器代际复用——取用时才反映当前代际。
+ * 传 `null` = 解除接线（测试复位用）。
+ */
+export function setSugarTranspileProvider(provider: SugarTranspileProvider | null): void {
+  defaultProvider = provider;
+}
+
+/** 默认通道当前是否已接线（自证 / 装配体检用；不改变任何行为） */
+export function sugarTranspileProviderWired(): boolean {
+  return defaultProvider !== null;
+}
+
+type ServiceResolution = { readonly service: SugarTranspileService } | { readonly unavailable: string };
+
+function resolveService(provider: SugarTranspileProvider | null): ServiceResolution {
+  if (provider === null) return { unavailable: NOT_WIRED_REASON };
+  const service = provider();
+  // `undefined` = 通道空（未接线）；`null` = 接了线但这一轮没有实例 —— 两种原因分开成文
+  if (service === undefined) return { unavailable: NOT_WIRED_REASON };
+  if (service === null) return { unavailable: NO_SERVICE_REASON };
+  return { service };
+}
+
+/** 服务必须是有的（本轮确有 `.kojo`）——拿不到就抛，让缺席进 `failedRules` */
+function requireService(provider: SugarTranspileProvider | null): SugarTranspileService {
+  const got = resolveService(provider);
+  if ('unavailable' in got) throw new SugarTranspileUnavailableError(got.unavailable);
+  return got.service;
+}
+
+/* ============================== 服务代际门（分区判据） ============================== */
+
+/**
+ * 服务实例序号（`WeakMap` 赋值）：只把"换了一枚服务对象"折进分区判据。
+ * 服务**内容**（字典 / 分野表）换代不在这里体现——那一门由 `expect.fingerprint`
+ * 里的 `project.inputDigest` 把守（见文件头注）。
+ */
+const serviceOrdinal = new WeakMap<object, number>();
+let serviceCounter = 0;
+
+function serviceGeneration(service: SugarTranspileService): number {
+  const key = service as unknown as object;
+  let n = serviceOrdinal.get(key);
+  if (n === undefined) {
+    n = ++serviceCounter;
+    serviceOrdinal.set(key, n);
   }
   return n;
 }
 
-/** `;` 起为行注释；`//` 亦然（表层规范同时接受）；返回去掉注释后的正文原样 */
-function stripLineComment(raw: string): string {
-  // 简单实现：引号外的首个 `;` 或 `//` 截断。引号内不视为注释。
-  let inQuote = false;
-  let quoteChar = '';
-  for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i]!;
-    if (inQuote) {
-      if (ch === quoteChar) inQuote = false;
-      continue;
-    }
-    if (ch === '「' || ch === '『' || ch === '“' || ch === '"') {
-      inQuote = true;
-      quoteChar = ch === '「' ? '」' : ch === '『' ? '』' : ch === '“' ? '”' : '"';
-      continue;
-    }
-    if (ch === ';') return raw.slice(0, i);
-    if (ch === '/' && raw[i + 1] === '/') return raw.slice(0, i);
-  }
-  return raw;
+/* ============================== 诊断 → ConventionIssue 投影 ============================== */
+
+// 糖源判定**用契约那一枚** `plugin-api/sugar-panels#isKojoFile`（波浪线归属问的就是
+// "这一棵是不是 `.kojo`"，本层再写一份正则 = 同一件事两把尺：发布方改大小写口径这里就漏报）。
+
+/** 这条转译器诊断是否属于本规则认领的"糖侧约定" */
+export function isSugarLintDiagnostic(diag: SugarDiagnostic): boolean {
+  return SUGAR_LINT_CODE_SET.has(diag.code);
 }
 
-function scanLines(source: string): ScanLine[] {
-  const rawLines = source.split(/\r\n|\n|\r/);
-  const out: ScanLine[] = [];
-  for (let i = 0; i < rawLines.length; i++) {
-    const raw = rawLines[i]!;
-    out.push({
-      text: stripLineComment(raw).trim(),
-      raw,
-      line: i + 1,
-      indent: indentOf(raw),
-    });
+/**
+ * 一条转译器诊断 → 一条面板条目。
+ * `severity` / `message` / `line` 逐字来自诊断；`key` 带列位，保证同一行的多条诊断
+ * 不会被引擎的去重合并成一条（转译器对同一行可以报多次，如多处引号内的 `续`）。
+ */
+export function sugarDiagnosticToIssue(diag: SugarDiagnostic, filePath: string): ConventionIssue {
+  const ruleId = sugarLintRuleIdOf(diag.code);
+  const line = diag.loc?.line;
+  const column = diag.loc?.column;
+  return {
+    ruleId,
+    severity: diag.severity,
+    message: diag.message,
+    filePath,
+    ...(line === undefined ? {} : { line }),
+    key: `${ruleId}|${filePath}|${line ?? 0}|${column ?? 0}`,
+  };
+}
+
+/** 从一次转译结果里挑出本规则认领的诊断（顺序 = 转译器产出顺序，不重排） */
+export function sugarLintIssuesFrom(
+  diagnostics: readonly SugarDiagnostic[],
+  filePath: string,
+): ConventionIssue[] {
+  const out: ConventionIssue[] = [];
+  for (const d of diagnostics) {
+    if (isSugarLintDiagnostic(d)) out.push(sugarDiagnosticToIssue(d, filePath));
   }
   return out;
 }
 
-/** 是否是块头行（去掉行尾注释后以全角/半角冒号收尾，且冒号后仅空白） */
-function endsWithBlockColon(text: string): boolean {
-  return /[:：]\s*$/.test(text);
-}
-
-/** 是否是原生直通行（全大写指令 / `$标签`）——糖规则一律跳过 */
-function isRawLine(text: string): boolean {
-  if (text.length === 0) return false;
-  if (text.startsWith('$')) return true;
-  // 全大写指令：首词全部由 A-Z / 数字 / 下划线 组成且至少一个字母
-  const first = text.split(/\s+/)[0] ?? '';
-  return /^[A-Z][A-Z0-9_]*$/.test(first);
-}
-
-/** 是否是执行块（`@` 起）——糖规则跳过整块 */
-function isRawBlockStart(text: string): boolean {
-  return text.startsWith('@');
-}
-
-/** 从行文本里剥掉块头冒号（末尾） */
-function stripBlockColon(text: string): string {
-  return text.replace(/[:：]\s*$/, '').trim();
-}
-
-/* ============================== 规则 1：`续` 写在引号内（§3.3） ============================== */
-
-export const CONT_INSIDE_QUOTES_RULE_ID = 'sugar.cont-inside-quotes';
-
-/** `续` 的隐藏别名（规范 §3.3） */
-const CONT_MARKS = ['续', '~', '⏎', 'cont', 'continue'] as const;
-
 /**
- * 判据：一行文本里，若某个引号对的**内部**恰好以 `续`/`~`/`cont` 等标记收尾，
- * 即判为"续标记写在引号内"。标记写在引号外是正确写法（§3.3）。
+ * 一棵 `.kojo` 的糖侧约定判定：读正文（引擎轮内记忆化）→ 转译（服务共享缓存）→ 投影。
+ * 返回 `undefined` = **本文件本轮没有结论**（只有一种来源：读盘失败，与改造前的
+ * "warn + 跳过"口径逐字同形）。
  *
- * 保守：只在标记紧贴右引号（忽略尾随空白）时判定，避免把台词里的"续"当误报。
+ * **转译抛错一律外抛**（不咽）：契约承诺转译器自身异常会落成 `internal` 诊断而不是抛错，
+ * 真抛出 = 服务实现异常 ⇒ 让引擎把整条规则判为"本轮没有结论"（`failedRules`），
+ * 绝不把它伪装成"这棵树没问题"。
  */
-function checkContInsideQuotes(lines: ScanLine[], filePath: string): ConventionIssue[] {
-  const issues: ConventionIssue[] = [];
-  for (const ln of lines) {
-    const text = ln.text;
-    if (text.length === 0 || isRawLine(text) || isRawBlockStart(text) || text.startsWith(';')) {
-      continue;
-    }
-    // 收集引号对（「」/｢｣/『』/“”/"")
-    const pairs: { open: string; close: string }[] = [
-      { open: '「', close: '」' },
-      { open: '｢', close: '｣' },
-      { open: '『', close: '』' },
-      { open: '“', close: '”' },
-    ];
-    for (const { open, close } of pairs) {
-      let i = text.indexOf(open);
-      while (i >= 0) {
-        const j = text.indexOf(close, i + 1);
-        if (j < 0) break;
-        const inner = text.slice(i + 1, j);
-        const trimmed = inner.replace(/\s+$/u, '');
-        for (const mark of CONT_MARKS) {
-          if (trimmed.endsWith(mark) && trimmed.length > mark.length) {
-            issues.push({
-              ruleId: CONT_INSIDE_QUOTES_RULE_ID,
-              severity: 'error',
-              message: `「续」标记写在了引号内（\`…${mark}${close}\`）：不等待标记必须在引号之外（规范 §3.3）。正确写法：\`${open}…${close} ${mark}\``,
-              filePath,
-              line: ln.line,
-              key: `${CONT_INSIDE_QUOTES_RULE_ID}|${filePath}|${ln.line}|${i}`,
-            });
-            break;
-          }
-        }
-        i = text.indexOf(open, j + 1);
-      }
-    }
+async function transpileFileIssues(
+  ctx: ConventionCheckContext,
+  service: SugarTranspileService,
+  path: string,
+): Promise<ConventionIssue[] | undefined> {
+  const text = await readKojoText(ctx, path);
+  if (text === undefined) return undefined;
+  const result = service.transpile(text, { filePath: path });
+  return sugarLintIssuesFrom(result.diagnostics, path);
+}
+
+/** 读正文（与改造前同口径：读盘失败只 warn 跳过 = 本文件本轮没有结论） */
+async function readKojoText(ctx: ConventionCheckContext, path: string): Promise<string | undefined> {
+  try {
+    return await ctx.readFile(path);
+  } catch (err) {
+    ctx.log.warn(`sugar conventions: 读取 ${path} 失败，跳过：${String(err)}`);
+    return undefined;
   }
-  return issues;
 }
 
-/* ============================== 规则 2：每时机多个 `选项` 块（§3.7） ============================== */
-
-export const MULTIPLE_CHOICE_BLOCKS_RULE_ID = 'sugar.multiple-choice-blocks';
-
-/** 是否是 `选项` / `choice` 块头 */
-function isChoiceHead(text: string): boolean {
-  if (!endsWithBlockColon(text)) return false;
-  const body = stripBlockColon(text);
-  return body === '选项' || body === 'choice';
-}
-
-/** 是否是时机块头（`时机 …：` / `timing …：`）——只统计时机体内 */
-function isTimingHead(text: string): boolean {
-  if (!endsWithBlockColon(text)) return false;
-  const body = stripBlockColon(text);
-  return /^(时机|timing)(\s|$)/.test(body);
-}
-
-/**
- * 判据：在同一时机块体内（缩进深于时机头），出现 ≥2 个 `选项` 块头即报错。
- * 嵌套 `选项` 块会同时体现为 ≥2，故一并覆盖（规范 §3.7 两者都禁）。
- */
-function checkMultipleChoiceBlocks(lines: ScanLine[], filePath: string): ConventionIssue[] {
-  const issues: ConventionIssue[] = [];
-  let timingIndent = -1;
-  let choiceCount = 0;
-  let firstChoiceLine = 0;
-
-  const flush = (): void => {
-    if (choiceCount > 1) {
-      issues.push({
-        ruleId: MULTIPLE_CHOICE_BLOCKS_RULE_ID,
-        severity: 'error',
-        message: `同一时机内出现 ${choiceCount} 个「选项」块：每个时机只允许一个，且不允许嵌套（规范 §3.7；多个 INPUTS 共用引擎约定的 RESULTS）。多轮选择请用原生直通 \`$标签\`+\`GOTO\`，或拆成两个时机。首个「选项」在第 ${firstChoiceLine} 行。`,
-        filePath,
-        line: firstChoiceLine,
-        key: `${MULTIPLE_CHOICE_BLOCKS_RULE_ID}|${filePath}|${firstChoiceLine}`,
-      });
-    }
-    choiceCount = 0;
-    firstChoiceLine = 0;
-  };
-
-  for (const ln of lines) {
-    if (ln.text.length === 0) continue;
-    if (timingIndent >= 0 && ln.indent <= timingIndent) {
-      flush();
-      timingIndent = -1;
-    }
-    if (isTimingHead(ln.text)) {
-      flush();
-      timingIndent = ln.indent;
-      continue;
-    }
-    if (timingIndent >= 0 && ln.indent > timingIndent && isChoiceHead(ln.text)) {
-      if (choiceCount === 0) firstChoiceLine = ln.line;
-      choiceCount++;
-    }
+function hasKojoFile(ctx: ConventionCheckContext): boolean {
+  for (const path of ctx.index.files.keys()) {
+    if (isKojoFile(path)) return true;
   }
-  flush();
-  return issues;
-}
-
-/* ===================== 规则 3：表达式 如果 / 当 缺 否则（§3.5 / §3.6） ===================== */
-
-export const EXPR_MISSING_ELSE_RULE_ID = 'sugar.expr-missing-else';
-
-/** 表达式 `如果` 头：行首是 `左值 =`，右侧以 `如果`/`if` 开头，行尾块头冒号 */
-function isExprIfHead(text: string): boolean {
-  if (!endsWithBlockColon(text)) return false;
-  const body = stripBlockColon(text);
-  const eq = body.indexOf('=');
-  if (eq < 0) return false;
-  const rhs = body.slice(eq + 1).trim();
-  return /^(如果|if)(\s|$)/.test(rhs);
-}
-
-/** 表达式 `当` 头：行首是 `左值 =`，右侧以 `当`/`when` 开头，行尾块头冒号 */
-function isExprWhenHead(text: string): boolean {
-  if (!endsWithBlockColon(text)) return false;
-  const body = stripBlockColon(text);
-  const eq = body.indexOf('=');
-  if (eq < 0) return false;
-  const rhs = body.slice(eq + 1).trim();
-  return /^(当|when)(\s|$)/.test(rhs);
-}
-
-/**
- * 判据：表达式 `如果` / `当` 的块体内（缩进更深）未出现 `否则` 分支即报错。
- * 表达式形态必须有 `否则`，否则左值存在未赋值路径（§3.5 / §3.6）。
- *
- * `当` 的 `否则` 分支形如 `否则 -> 值`；`如果` 的形如 `否则：`。两者都含 `否则`/`else`。
- */
-function checkExprMissingElse(lines: ScanLine[], filePath: string): ConventionIssue[] {
-  const issues: ConventionIssue[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const ln = lines[i]!;
-    const kind = isExprIfHead(ln.text) ? '如果' : isExprWhenHead(ln.text) ? '当' : null;
-    if (!kind) continue;
-    // 从下一行起扫块体：
-    //   - `如果` 的 `否则` 分支头与块头**同级**（缩进相同）；
-    //   - `当` 的 `否则 -> 值` 分支在块体内（缩进更深）。
-    // 故接受"缩进 ≥ 块头"的 `否则`，遇到更浅的行则结束本块。
-    let hasElse = false;
-    for (let j = i + 1; j < lines.length; j++) {
-      const sub = lines[j]!;
-      if (sub.text.length === 0) continue;
-      if (sub.indent < ln.indent) break;
-      if (/^(否则|else)(\s|[:：]|->|$)/.test(sub.text)) {
-        hasElse = true;
-        break;
-      }
-      // 同级但不是 `否则`（新的语句 / 新块头）→ 本表达式块已结束
-      if (sub.indent === ln.indent) break;
-    }
-    if (!hasElse) {
-      issues.push({
-        ruleId: EXPR_MISSING_ELSE_RULE_ID,
-        severity: 'error',
-        message: `表达式「${kind}」缺少「否则」分支：目标变量在有的路径上不会被赋值（规范 §3.5 / §3.6）。请补上「否则」。`,
-        filePath,
-        line: ln.line,
-        key: `${EXPR_MISSING_ELSE_RULE_ID}|${filePath}|${ln.line}`,
-      });
-    }
-  }
-  return issues;
-}
-
-/* ============== 规则 4：只读别名作赋值左值（§5.0 + §3.1） ============== */
-
-export const READONLY_ALIAS_ASSIGN_RULE_ID = 'sugar.readonly-alias-assign';
-
-/** `别名 X = 目标` 声明（规范 §3.1） */
-interface AliasEntry {
-  readonly name: string;
-  readonly readonlyAlias: boolean;
-  readonly line: number;
-}
-
-/** 判断别名右值是否只读：字面量（数字 / 引号字符串）或 `角色` 引用（§5.0） */
-function isReadonlyAliasTarget(target: string): boolean {
-  const t = target.trim();
-  if (/^-?\d+$/.test(t)) return true; // 数字字面量
-  if (/^".*"$/.test(t)) return true; // 字符串字面量
-  if (/^「.*」$/.test(t)) return true; // 全角引号字符串
-  if (/^角色[:：]/.test(t)) return true; // 角色引用
-  if (/^character[:：]/i.test(t)) return true;
-  // 条件表达式（B3：`条件 ? "真" : "假"`）——上面的字面量/角色形态已先行返回，
-  // 到这里还含 `?` 的右值必是条件形态，归只读（与契约 `isReadonlyAlias` 对齐）。
-  if (/[?？]/.test(t)) return true;
   return false;
 }
 
-/** 解析 `别名 X = 目标` 行 */
-function parseAliasDecl(text: string, line: number): AliasEntry | null {
-  const m = /^(别名|alias)\s+(.+)$/.exec(text);
-  if (!m) return null;
-  const rest = m[2]!;
-  const eq = rest.indexOf('=');
-  if (eq < 0) return null;
-  const name = rest.slice(0, eq).trim();
-  const target = rest.slice(eq + 1).trim();
-  if (name.length === 0 || target.length === 0) return null;
-  return { name, readonlyAlias: isReadonlyAliasTarget(target), line };
-}
+/* ============================== 规则装配 ============================== */
 
-/** 赋值左值：`左值 = …`（排除 `==` 比较、`别名` 声明行、头部声明） */
-function assignTarget(text: string): string | null {
-  if (/^(别名|alias)\s/.test(text)) return null;
-  // 头部声明 `词: 值`（词与冒号间无空白）不是赋值
-  if (/^[^:：\s=]+\s*[:：]/.test(text) && !/^[^:：\s=]+\s*=/.test(text)) return null;
-  // `左值 = …`，左值不含空白（连续表达式/比较用 `==` 区分）
-  const m = /^([^\s=<>!]+)\s*=(?!=)/.exec(text);
-  return m ? m[1]! : null;
-}
+/** 分区判据前缀（代际门 = 前缀 + 服务实例序号 + adapterId） */
+const PARTITION_KEY_PREFIX = 'sugar.transpile#';
+/** 分区判据里"这轮压根没有 `.kojo`"的固定值（不需要服务，也就不受转译器代际门影响） */
+const NO_KOJO_KEY = `${PARTITION_KEY_PREFIX}no-kojo`;
 
 /**
- * 判据：把同一文件内的只读别名（字面量 / 角色）当作赋值左值即报错（规范 §5.0）。
- * 只读别名可作**右值**参与运算，但不可作左值写入。
- *
- * 说明：这是保守的**文本级**近似——只比对同一文件内声明的别名名。
+ * 造一条糖侧约定规则（**依赖注入形态**：装配点把 `sugar.transpile` 的取用通道传进来）。
+ * 导出的 `sugarStaticConventionsRule` = 本工厂 + 模块级惰性默认通道，为的是既有
+ * `engine.ts` 静态内置清单零改动；装配点要显式注入也走这里。
  */
-function checkReadonlyAliasAssign(lines: ScanLine[], filePath: string): ConventionIssue[] {
-  const issues: ConventionIssue[] = [];
-  // 第一遍：收集只读别名（同一文件内）
-  const readonlyNames = new Map<string, AliasEntry>();
-  const allNames = new Set<string>();
-  for (const ln of lines) {
-    if (ln.text.length === 0 || isRawLine(ln.text) || isRawBlockStart(ln.text)) continue;
-    const decl = parseAliasDecl(ln.text, ln.line);
-    if (!decl) continue;
-    allNames.add(decl.name);
-    if (decl.readonlyAlias) readonlyNames.set(decl.name, decl);
-  }
-  if (readonlyNames.size === 0) return issues;
-
-  // 第二遍：找用只读别名作左值的赋值行
-  for (const ln of lines) {
-    if (ln.text.length === 0 || isRawLine(ln.text) || isRawBlockStart(ln.text)) continue;
-    const target = assignTarget(ln.text);
-    if (!target) continue;
-    const decl = readonlyNames.get(target);
-    if (!decl) continue;
-    issues.push({
-      ruleId: READONLY_ALIAS_ASSIGN_RULE_ID,
-      severity: 'error',
-      message: `只读别名「${target}」被用作赋值左值：它绑定的是${
-        /^-?\d+$/.test(decl.name) ? '字面量' : '字面量/角色'
-      }，不可写入（规范 §5.0）。只读别名只能作右值；需要可写请绑定变量（如 \`别名 ${target} = CFLAG:TARGET:…\`）。`,
-      filePath,
-      line: ln.line,
-      key: `${READONLY_ALIAS_ASSIGN_RULE_ID}|${filePath}|${ln.line}`,
-    });
-  }
-  return issues;
+export function createSugarStaticConventionsRule(
+  provider: SugarTranspileProvider | null,
+): ConventionRule {
+  return {
+    id: SUGAR_STATIC_CONVENTIONS_RULE_ID,
+    description:
+      '.kojo 语言约定（判据 = `sugar.transpile` 的转译器诊断，本规则只做投影、不做第二套判断）：' +
+      '「续」写在引号内、一个时机多个「选项」/「菜单」块、表达式「如果」/「当」缺「否则」、只读别名作赋值左值',
+    severity: 'error',
+    source: '判据实现 = kojo-sugar 转译器；文案单源 = plugin-api/src/diagnostic-copy.ts（规范 §8）',
+    partition: {
+      async key(ctx): Promise<string> {
+        if (!hasKojoFile(ctx)) return NO_KOJO_KEY;
+        // 有糖源文件却拿不到服务 ⇒ 抛错：引擎把原因记进 failedRules（本轮该规则没有结论）
+        const service = requireService(provider);
+        return `${PARTITION_KEY_PREFIX}${serviceGeneration(service)}@${ctx.project.adapterId || ''}`;
+      },
+      async fileUnit(ctx, file): Promise<ConventionIssue[] | null | undefined> {
+        const path = file.path;
+        if (!isKojoFile(path)) return null; // 不是糖源 ⇒ "没扫，结论是不适用"（可缓存）
+        // 缺席 ⇒ 抛（与 `key()` 同一份原因文本）。引擎的分区路径正常情况下走不到这里：
+        // `key()` 先抛 ⇒ 整条规则本轮没有结论；这里抛是给非分区调用方兜底，绝不静默。
+        const service = requireService(provider);
+        return await transpileFileIssues(ctx, service, path);
+      },
+      combine(_ctx, entries): ConventionIssue[] {
+        const issues: ConventionIssue[] = [];
+        for (const e of entries) {
+          if (Array.isArray(e.unit)) issues.push(...(e.unit as ConventionIssue[]));
+        }
+        return issues;
+      },
+      isUnit(v): boolean {
+        if (v === null) return true;
+        if (!Array.isArray(v)) return false;
+        return v.every(
+          (i) =>
+            typeof i === 'object' &&
+            i !== null &&
+            typeof (i as ConventionIssue).ruleId === 'string' &&
+            typeof (i as ConventionIssue).message === 'string' &&
+            typeof (i as ConventionIssue).severity === 'string' &&
+            isSugarFamilyRuleId((i as ConventionIssue).ruleId) &&
+            // 盘上旧形态（本规则曾经的文本扫描产物，子 ruleId 是自造名）一律判死重算：
+            // 现在的子 ruleId 只能是转译器码投影出来的那几个
+            SUGAR_LINT_CODE_SET.has(sugarFamilyCodeOf((i as ConventionIssue).ruleId)),
+        );
+      },
+    },
+    async check(ctx): Promise<ConventionIssue[]> {
+      // 分区路径不调用它（引擎的 `check` 对拍基准 + 判据不全时的兜底路径）
+      if (!hasKojoFile(ctx)) return [];
+      const service = requireService(provider);
+      const issues: ConventionIssue[] = [];
+      for (const file of ctx.index.files.values()) {
+        const path = file.path;
+        if (!isKojoFile(path)) continue;
+        const produced = await transpileFileIssues(ctx, service, path);
+        if (produced) issues.push(...produced);
+      }
+      return issues;
+    },
+  };
 }
 
 /* ============================== 规则导出 ============================== */
 
-/** 单文件四项扫描（`check` 与 `partition.fileUnit` 共用同一份实现 ⇒ 两路产出天然同形） */
-function scanFileConventions(text: string, path: string): ConventionIssue[] {
-  const lines = scanLines(text);
-  return [
-    ...checkContInsideQuotes(lines, path),
-    ...checkMultipleChoiceBlocks(lines, path),
-    ...checkExprMissingElse(lines, path),
-    ...checkReadonlyAliasAssign(lines, path),
-  ];
-}
-
-/**
- * 合并成一条引擎规则（单一 `check`，内部跑四项扫描后再统一返回）。
- *
- * 之所以合成一条而不是四条：引擎的 `ruleCount` 进报告与 UI，四项都是"糖侧静态约定"，
- * 归为一条语义单元（`sugar.static-conventions`）更贴合"一条约定一块"的报告口径；
- * 每条 issue 仍带各自细分的 `ruleId`，UI 可按 `ruleId` 再分组。
- */
+/** 合成一条引擎规则的 id（四项判据同属"糖侧写法约定"，报告口径归为一条语义单元；issue 各带子 ruleId） */
 export const SUGAR_STATIC_CONVENTIONS_RULE_ID = 'sugar.static-conventions';
 
 /**
- * 分区复用（PERF-12b）：这四项判据**逐条都只看单文件正文**，跨文件部分是假象——
- * 合成一条 `'project'` 规则后它吃了整项目指纹，"改一棵"就重扫全库 `.kojo` 正文
- * （真语料实测这条是校验段的大头）。分区口径与旧 `check` 逐条一致：
- * - 非 `.kojo` 文件 ⇒ 单元 `null`（"没扫，结论是不适用"，可缓存）；
- * - 读盘失败 ⇒ `undefined`（本轮无结论，不入缓存 ⇒ 下轮重试——与旧代码
- *   `try/catch + warn + continue` 的跳过语义**完全同形**，不算规则失败）；
- * - 产出 = 该文件的 issue 数组，`combine` 按 walk 序拼接（旧 check 也按 walk 序）。
+ * 内置规则单例（`engine.ts` 静态清单消费的那一枚）。
+ * 服务经模块级**惰性默认通道**取用 ⇒ 装配点一行 `setSugarTranspileProvider`、插件间零 import。
+ * 通道为 `null`（未接线）时 provider 返回 `undefined` ⇒ 原因文本区分"未接线 / 服务缺席"。
  */
-export const sugarStaticConventionsRule: ConventionRule = {
-  id: SUGAR_STATIC_CONVENTIONS_RULE_ID,
-  description:
-    '.kojo 侧静态约定（规范 §8 子集）：`续` 标记写在引号内、每时机多个「选项」块、表达式 `如果`/`当` 缺「否则」、只读别名作赋值左值',
-  severity: 'error',
-  source: 'docs/SYNTAX-SUGAR-SURFACE-SPEC.md §3.3 / §3.7 / §3.5 / §3.6 / §5.0 / §8',
-  partition: {
-    async fileUnit(ctx, file): Promise<ConventionIssue[] | null | undefined> {
-      const path = file.path;
-      if (!/\.kojo$/i.test(path)) return null;
-      let text: string;
-      try {
-        text = await ctx.readFile(path);
-      } catch (err) {
-        ctx.log.warn(`sugar conventions: 读取 ${path} 失败，跳过：${String(err)}`);
-        return undefined;
-      }
-      return scanFileConventions(text, path);
-    },
-    combine(_ctx, entries): ConventionIssue[] {
-      const issues: ConventionIssue[] = [];
-      for (const e of entries) {
-        const unit = e.unit;
-        if (Array.isArray(unit)) issues.push(...unit);
-      }
-      return issues;
-    },
-    isUnit(v): boolean {
-      if (v === null) return true;
-      if (!Array.isArray(v)) return false;
-      return v.every(
-        (i) =>
-          typeof i === 'object' &&
-          i !== null &&
-          typeof (i as ConventionIssue).ruleId === 'string' &&
-          typeof (i as ConventionIssue).message === 'string' &&
-          typeof (i as ConventionIssue).severity === 'string',
-      );
-    },
-  },
-  async check(ctx): Promise<ConventionIssue[]> {
-    const issues: ConventionIssue[] = [];
-    for (const file of ctx.index.files.values()) {
-      const path = file.path;
-      // 仅糖源文件参与（`.kojo`）——原生 `.ERB` 不适用这些约定
-      if (!/\.kojo$/i.test(path)) continue;
-      let text: string;
-      try {
-        text = await ctx.readFile(path);
-      } catch (err) {
-        // 读失败不静默：记日志并跳过该文件（引擎会把整条规则的抛错计入 failedRules，
-        // 但这里是单文件级失败，跳过比让整条规则失败更符合"不伪造结果"的本意）
-        ctx.log.warn(`sugar conventions: 读取 ${path} 失败，跳过：${String(err)}`);
-        continue;
-      }
-      issues.push(...scanFileConventions(text, path));
-    }
-    return issues;
-  },
-};
+export const sugarStaticConventionsRule: ConventionRule = createSugarStaticConventionsRule(
+  () => (defaultProvider === null ? undefined : defaultProvider()),
+);

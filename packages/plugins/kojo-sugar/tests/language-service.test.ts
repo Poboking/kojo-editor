@@ -112,7 +112,7 @@ describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
     return hit.contribution as unknown as SymbolsContribution;
   };
 
-  it('六枚贡献各管一个判别成员（`kojo-definition` / `kojo-symbols` / `kojo-folding` / `kojo-semantic-tokens` / `kojo-references` / `kojo-rename`）', () => {
+  it('九枚贡献各管一个判别成员（W6 补齐 `workspaceSymbol` / `codeLens` / `inlayHint` 三员）', () => {
     const { slots } = activate();
     expect(
       slots
@@ -120,12 +120,15 @@ describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
         .map((s) => s.contribution.id)
         .sort(),
     ).toEqual([
+      'kojo-code-lens',
       'kojo-definition',
       'kojo-folding',
+      'kojo-inlay-hints',
       'kojo-references',
       'kojo-rename',
       'kojo-semantic-tokens',
       'kojo-symbols',
+      'kojo-workspace-symbols',
     ]);
   });
 

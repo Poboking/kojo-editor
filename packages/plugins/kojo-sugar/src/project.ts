@@ -79,6 +79,28 @@ import { isIdentPart, isIdentStart } from './identifier-chars';
 import { stripInlineComment } from './lexer';
 import { buildFaceNameIndex, stripParams } from './faces-reverse';
 import type { FaceNameIndex } from './faces-reverse';
+// 形态识别**一张表**（W5 LIFT-PROJ-ALIGN）：本文件不再自带 PRINT / 控制流 / 空行 /
+// 行内三元 / `SIF` 的判据——那些与 `lift.ts`（写回口径）是同一族知识，抄两份必分叉。
+import {
+  NON_BODY_LINE_KINDS,
+  PRINTDATA_OPEN,
+  PRINT_FAMILY_RE,
+  PRINT_VARIANTS,
+  blankLineSugar,
+  bodyIsComment,
+  contentOf,
+  controlHeadMaker,
+  contMark,
+  hasCommandColon,
+  hasInlineCondition,
+  indentLevelOf,
+  inlineConditionsToSugar,
+  isCloseKind,
+  needsExpression,
+  pairOf,
+  splitSourceLines,
+  trimTrailingSpace,
+} from './sugar-ident';
 
 /* ============================== 规则表（封闭） ============================== */
 
@@ -108,76 +130,28 @@ const CHAR_SCOPED_FAMILIES: ReadonlySet<string> = new Set([
   'TCVAR',
 ]);
 
-/**
- * PRINT 家族的**显示口径表**（批 F，2026-10-12）。
- *
- * 三个判据都由**指令名本身**决定，一条都不猜：
- *
- * - `form`：是否展开 FORM 记号（只有 `PRINTFORM*` 展开）。**非 FORM 行不做可读化**
- *   ——`%…%` / `{…}` / `\@…\@` 在它们里面是被打印的字面字符。
- * - `newline`：是否产生一行（`L` / `W` 后缀）。只有 `newline` 的行，空体才是"打空行"。
- *   `PRINT` / `PRINTD` / `PRINTFORM` / `PRINTFORMD` 无后缀 = **不换行**（拼句片段），
- *   空体时什么都不输出 → 不投影为空行。
- * - `wait`：**有文本体**时 `W` 等待玩家 → 糖不加标记；`L` 不等待 → 行尾 `续`（规范 §3.3）。
- *   后缀 `续` 的判据 = `newline && !wait`（无换行的片段不能谎称"续行"）。**空体**（打空行）
- *   不看 `D` 归属、只看 `wait`：不等待 → `空行`；等待 → `空行 等待`。
- *
- * `D` 后缀（默认色 / 旁白）不单独标注：糖按引号自动判定作者色（规范 §1.3、§3.3）。
- *
- * **表外的 PRINT 变体不投影**（`PRINTBUTTON` / `PRINTLC` / `PRINTS` / `PRINTPLAIN*` /
- * `PRINTV` / `PRINTFORMK*`…）：按钮与排版类指令的输出不是"读者要读的文本"，
- * 投影成台词会误导；真实语料合计 <400 行，收益远低于风险。
- * （`PRINTDATA` 系是**块开词**，由控制流分支先截获，走 `unsupported-control-flow`。）
- */
-interface PrintVariant {
-  readonly newline: boolean;
-  readonly wait: boolean;
-  readonly form: boolean;
-}
-const PRINT_VARIANTS: ReadonlyMap<string, PrintVariant> = new Map<string, PrintVariant>([
-  ['PRINTFORMW', { newline: true, wait: true, form: true }],
-  ['PRINTFORML', { newline: true, wait: false, form: true }],
-  ['PRINTFORMDW', { newline: true, wait: true, form: true }],
-  ['PRINTFORMDL', { newline: true, wait: false, form: true }],
-  ['PRINTFORM', { newline: false, wait: false, form: true }],
-  ['PRINTFORMD', { newline: false, wait: false, form: true }],
-  ['PRINTL', { newline: true, wait: false, form: false }],
-  ['PRINTW', { newline: true, wait: true, form: false }],
-  ['PRINTDL', { newline: true, wait: false, form: false }],
-  ['PRINTDW', { newline: true, wait: true, form: false }],
-  ['PRINT', { newline: false, wait: false, form: false }],
-  ['PRINTD', { newline: false, wait: false, form: false }],
-]);
-
-/** 匹配 PRINT 家族行：`(关键字) (文本体)` */
-const PRINT_FAMILY_RE = /^(PRINT[A-Z]*)\s?([\s\S]*)$/;
-
-/** 糖覆盖的控制流关键字 → 糖块头（`null` = 缩进收束，不产出可见行） */
-type ControlSugarMaker = (expr: string) => string | null;
-const SUGAR_CONTROL: ReadonlyMap<string, ControlSugarMaker> = new Map<string, ControlSugarMaker>([
-  ['IF', (e) => `如果 ${e}：`],
-  ['ELSEIF', (e) => `否则如果 ${e}：`],
-  ['ELSE', () => '否则：'],
-  ['ENDIF', () => null],
-  ['SELECTCASE', (e) => `当 ${e}：`],
-  ['CASE', (e) => `是 ${e}：`],
-  ['CASEELSE', () => '否则：'],
-  ['ENDSELECT', () => null],
-]);
+/* ============================== 控制流：识别核派生的块头记录 ============================== */
 
 /**
  * 控制流行 → 块头记录（`如果 …：` / `当 …：` / 收束行）。
  *
  * **单一口径**：主循环与 CR-1 的「段折叠回退」（`unfoldSectionEnvelope`）都调这一个函数——
  * 回退一条 `IF LOCAL && 条件` 时若另抄一份判据，两份规则迟早分叉（本项目已多次踩过）。
+ *
+ * 但**文本本身**不住这里：它来自识别核的 `CONTROL_SHAPES`（`controlHeadMaker`），
+ * 与建议侧（`lift.ts` 组装糖片段时）用的是同一张表——历史上这里是 `SUGAR_CONTROL`、
+ * 那里是散落在 `buildIfSugar` / `buildWhenSugar` 里的模板串，加一族关键字要改两处。
+ *
  * 返回 `undefined` = 该 `kind` 没有糖块头形态（调用方自行决定留原代码）。
+ * `SIF` 走**不到**这里：它的显示判据是"管辖恰好一条语句"（`planSif` 专管，判据不满足
+ * 就整行不动），所以 `controlHeadMaker` 对 `single-line-head` 一律返回 `undefined`。
  */
 function controlHeadRec(
   ln: number,
   st: ControlFlowStatement,
   deps: LiftDeps,
 ): LineRec | undefined {
-  const mk = SUGAR_CONTROL.get(st.kind);
+  const mk = controlHeadMaker(st.kind);
   if (mk === undefined) return undefined;
   const expr = st.expression.trim();
   // 需要表达式的块头若表达式为空 → 不猜，原样保留
@@ -192,60 +166,6 @@ function controlHeadRec(
     reason: null,
   };
 }
-
-/** 开块语句 → 配对类别（与 `erb-parser/scanner.ts` 同口径；用于重建"包着这一行的块种类"） */
-const OPEN_PAIR: Readonly<Record<string, string>> = {
-  IF: 'if',
-  SELECTCASE: 'select',
-  FOR: 'for',
-  WHILE: 'while',
-  REPEAT: 'repeat',
-  DO: 'do',
-  DATALIST: 'list',
-  STRDATA: 'data',
-  NOSKIP: 'noskip',
-};
-const PRINTDATA_OPEN: ReadonlySet<string> = new Set([
-  'PRINTDATA',
-  'PRINTDATAL',
-  'PRINTDATAW',
-  'PRINTDATAK',
-  'PRINTDATAKL',
-  'PRINTDATAKW',
-  'PRINTDATAD',
-  'PRINTDATADL',
-  'PRINTDATADW',
-]);
-const TRY_CATCH_OPEN: ReadonlySet<string> = new Set([
-  'TRYCGOTO',
-  'TRYCJUMP',
-  'TRYCCALL',
-  'TRYCGOTOFORM',
-  'TRYCJUMPFORM',
-  'TRYCCALLFORM',
-]);
-const TRY_LIST_OPEN: ReadonlySet<string> = new Set(['TRYCALLLIST', 'TRYGOTOLIST', 'TRYJUMPLIST']);
-
-const CLOSE_KINDS: ReadonlySet<string> = new Set([
-  'ENDIF',
-  'ENDSELECT',
-  'NEXT',
-  'WEND',
-  'REND',
-  'LOOP',
-  'ENDDATA',
-  'ENDLIST',
-  'ENDNOSKIP',
-  'ENDCATCH',
-  'ENDFUNC',
-]);
-
-/**
- * 不能当 `SIF` 正文的行（批 H 判据 3）：连写的另一条 `SIF`，以及**分支续行**
- * （`ELSE` / `CASE` 属于它上面那条链，不是"被条件管的一条语句"）。
- * 开块与闭合行另有判据（`pairOf` / `CLOSE_KINDS`）。
- */
-const NON_BODY_LINE_KINDS: ReadonlySet<string> = new Set(['SIF', 'ELSE', 'ELSEIF', 'CASE', 'CASEELSE']);
 
 /* ============== P-8：MESSAGECHECK 数字返回协议投影（纯显示） ============== */
 
@@ -533,13 +453,13 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
       }
       const dataEntry = data.entryAt.get(ln);
       if (dataEntry !== undefined) {
-        const body = dataEntry.replace(/[ \t　]+$/, '');
+        const body = trimTrailingSpace(dataEntry);
         if (body.length === 0) {
           recs.push(native(ln, 'data-or-skip')); // 空条目：没有可显示的东西
           continue;
         }
         const text = hasInlineCondition(body)
-          ? inlineConditionsToSugar(body, deps)
+          ? projectInlineConditionsToSugar(body, deps)
           : readableText(body, deps);
         if (text === undefined) {
           recs.push(native(ln, 'inline-condition'));
@@ -611,10 +531,10 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
           recs.push(native(ln, 'data-or-skip'));
           continue;
         }
-        const body = pm[2]!.replace(/[ \t\u3000]+$/, '');
+        const body = trimTrailingSpace(pm[2]!);
         // 指令后紧跟 `;` → 这里是**注释**而不是要打印的字（Emuera 的 `;` 在任意位置起效）。
         // 一行给不出"空行 + 注释"两行显示 → 原样保留（语料 1 行，判据为不误导而设）。
-        if (body.startsWith(';')) {
+        if (bodyIsComment(body)) {
           recs.push(native(ln, 'unsupported-print-variant'));
           continue;
         }
@@ -644,7 +564,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
           recs.push({
             line: ln,
             kind: 'speech',
-            text: variant.wait ? '空行 等待' : '空行',
+            text: blankLineSugar(variant.wait),
             indent: ctx.indentAt(ln, raw),
             visible: true,
             reason: null,
@@ -658,7 +578,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
           text = body;
         } else {
           text = hasInlineCondition(body)
-            ? inlineConditionsToSugar(body, deps)
+            ? projectInlineConditionsToSugar(body, deps)
             : readableText(body, deps);
         }
         if (text === undefined) {
@@ -668,7 +588,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         recs.push({
           line: ln,
           kind: 'speech',
-          text: variant.newline && !variant.wait ? `${text} 续` : text,
+          text: `${text}${contMark(variant)}`,
           indent: ctx.indentAt(ln, raw),
           visible: true,
           reason: null,
@@ -1356,7 +1276,7 @@ function planSif(lines: string[], ctx: ProjContext): SifPlan {
     if (body > total || bodyContent.length === 0) continue;
     if (/^[@#$[]/.test(bodyContent)) continue;
     const bst = ctx.stmtAt(body);
-    if (bst && (NON_BODY_LINE_KINDS.has(bst.kind) || pairOf(bst.kind) !== null || CLOSE_KINDS.has(bst.kind))) {
+    if (bst && (NON_BODY_LINE_KINDS.has(bst.kind) || pairOf(bst.kind) !== null || isCloseKind(bst.kind))) {
       continue;
     }
 
@@ -1368,17 +1288,6 @@ function planSif(lines: string[], ctx: ProjContext): SifPlan {
     headAt,
     bumpAt: (line) => (line >= 1 && line <= total ? (bump[line] ?? 0) : 0),
   };
-}
-
-/**
- * 表达式里出现"冒号 + 指令关键字" = 这是 `SIF 条件:命令` 的冒号形态（语料 0 例）。
- * 与变量索引冒号（`TALENT:LOCAL:恋人`）的区别只在右侧是不是指令——判据取"是就整行不动"，
- * 因为这里没有第三条路可走（要分清就得完整解析表达式）。
- */
-function hasCommandColon(expr: string): boolean {
-  return /[:：] *(PRINT|CALL|RETURN|GOTO|GOSUB|SETCOLOR|RESETCOLOR|CLEARLINE|FORCEWAIT|WAIT|INPUT|TRY|HIDE|SHOW|REDRAW|BREAK|RESTART|CATCH|IF|ELSE|SELECTCASE|CASE|END|NEXT|WEND|REND|LOOP|DO|WHILE|FOR)\b/.test(
-    expr,
-  );
 }
 
 /* ============================== 函数体缩进（批 I） ============================== */
@@ -1630,7 +1539,7 @@ function buildContext(lines: string[], statements: ControlFlowStatement[]): Proj
       enclosing[ln] = [...stack]; // 开块行自身不算在自己体内
       const pair = pairOf(st.kind);
       if (pair) stack.push(pair);
-      else if (CLOSE_KINDS.has(st.kind)) stack.pop();
+      else if (isCloseKind(st.kind)) stack.pop();
       si++;
     }
     if (enclosing[ln] === undefined) enclosing[ln] = [...stack];
@@ -1650,39 +1559,7 @@ function buildContext(lines: string[], statements: ControlFlowStatement[]): Proj
     },
   };
 }
-
-function pairOf(kind: string): string | null {
-  if (OPEN_PAIR[kind] !== undefined) return OPEN_PAIR[kind]!;
-  if (PRINTDATA_OPEN.has(kind)) return 'data';
-  if (TRY_CATCH_OPEN.has(kind)) return 'try';
-  if (TRY_LIST_OPEN.has(kind)) return 'funclist';
-  return null;
-}
-
-/** 需要表达式的块头（表达式缺失时宁可不映射） */
-function needsExpression(kind: string): boolean {
-  return (
-    kind === 'IF' ||
-    kind === 'ELSEIF' ||
-    kind === 'SELECTCASE' ||
-    kind === 'CASE'
-  );
-}
-
 /* ============================== 行工具 ============================== */
-
-function splitSourceLines(source: string): string[] {
-  const src = source.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const lines = src.split('\n');
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-  return lines;
-}
-
-/** 去行首缩进 + 行尾空白 */
-function contentOf(line: string): string {
-  return line.replace(/^[ \t\u3000]*/, '').replace(/[ \t\u3000]+$/, '');
-}
-
 /**
  * `@` 函数范围（P-1R 函数级 all-or-nothing 的判定单位；1 基闭区间）。
  *
@@ -1701,81 +1578,6 @@ function functionRanges(lines: string[]): Array<[number, number]> {
   return out;
 }
 
-/** 原文缩进层（TAB 数 + 空格按 4 折算；与 lexer 的 indentLevel 同口径） */
-function indentLevelOf(line: string): number {
-  const m = /^[ \t\u3000]*/.exec(line);
-  const prefix = m ? m[0] : '';
-  let tabs = 0;
-  let spaces = 0;
-  for (const ch of prefix) {
-    if (ch === '\t') tabs++;
-    else if (ch === '\u3000') spaces += 2;
-    else if (ch === ' ') spaces += 1;
-  }
-  return tabs + (spaces > 0 ? Math.ceil(spaces / 4) : 0);
-}
-
-/** 行内条件 `\@…\@` 检测（只对 FORM 行有语义：非 FORM 行里的 `\@` 是字面字符） */
-function hasInlineCondition(text: string): boolean {
-  return text.includes('\\@') || text.includes('@\\');
-}
-
-/**
- * 行内条件 `\@cond?A#B\@` → 糖三元 `{cond ? "A" : "B"}`（批 G，规范 §3.4）。
- *
- * 真实语料实测（2,285 文件、`\@` 出现行 8,582）：**7,997 行恰有两个 `\@`**（一支 span），
- * 且首个 span 几乎全部**同时含 `?` 与 `#`**（三元形态）。判据因此取最紧的形态，
- * 任一条不满足就**整行放弃**（返回 `undefined` → 保留原生）——把条件猜错显示成"读者以为
- * 看懂了"，比留一行原代码危险得多：
- *
- * 1. `\@` 个数为**偶数**（成对；语料里 `\@×3` / `\@×5` 共 18 行是断串，不猜）；
- * 2. span 内**同时**有 `?` 与 `#`（省略假分支的 `{cond ? "A"}` 形态语料里没有）；
- * 3. 条件段非空。
- *
- * 三段各自的处置（都不造读者写不出来的假语法）：
- * - **条件**走表达式反糖（与控制流同一个 `reverseExprAttributes`：词级替换、双引号内不碰）；
- * - **纯字面分支**加双引号（糖的分支字面量写法）；空分支 → `""`；
- * - 分支含 `%` / `"` / `{` / `}` 时**原样照抄**——规范 §3.4 明确"嵌套插值不出现"，
- *   给变量引用套引号是把它当字面量，给它反糖又会产生嵌套 `{…}`，两头都错；
- * - **体外文本**照旧走 `readableText`（代词 / 属性反糖）。
- */
-function inlineConditionsToSugar(body: string, deps: LiftDeps): string | undefined {
-  const parts = body.split('\\@');
-  if ((parts.length - 1) % 2 !== 0) return undefined;
-  let out = '';
-  for (let i = 0; i < parts.length; i++) {
-    if (i % 2 === 0) {
-      out += readableText(parts[i]!, deps);
-      continue;
-    }
-    const sugar = inlineSpanToSugar(parts[i]!, deps);
-    if (sugar === undefined) return undefined;
-    out += sugar;
-  }
-  return out;
-}
-
-/** 单支 `\@…\@` 之间的内容 → `{cond ? "A" : "B"}`；判据不满足返回 `undefined` */
-function inlineSpanToSugar(span: string, deps: LiftDeps): string | undefined {
-  const q = span.indexOf('?');
-  if (q < 0) return undefined;
-  const after = span.slice(q + 1);
-  const h = after.indexOf('#');
-  if (h < 0) return undefined;
-  const cond = span.slice(0, q).trim();
-  if (cond.length === 0) return undefined;
-  const a = branchText(after.slice(0, h));
-  const b = branchText(after.slice(h + 1));
-  return `{${reverseExprAttributes(cond, deps)} ? ${a} : ${b}}`;
-}
-
-/** 分支呈现：空 → `""`；含 FORM 记号或引号 → 原样；纯字面 → 加引号 */
-function branchText(raw: string): string {
-  const t = raw.trim();
-  if (t.length === 0) return '""';
-  return /[%"{}]/.test(t) ? t : `"${t}"`;
-}
-
 /**
  * 文本体**可读化**：把原生记号反糖成糖的主形。
  *
@@ -1789,6 +1591,20 @@ function branchText(raw: string): string {
  *
  * `%…%` 是**有界记号**（自带首尾 `%`），故纯文本替换不会切到相邻变量引用。
  */
+/**
+ * 行内三元 → 糖（**显示**通道）：拆段与成对判据在识别核（与建议侧同一把尺子），
+ * 这里只喂显示用的词表——体外走 `readableText`（代词 / 属性反糖），条件段走
+ * `reverseExprAttributes`（词级反糖 + 函数名中文反显）。**这些反糖只显不写**：
+ * 属性反糖会把定界符从 `%…%` 换成 `{…}`、函数名中文反显的产物是英文原文，
+ * 写回侧一律不接（判据见 `sugar-ident` 的 `ATTRIBUTE_WRITABLE` / `NAME_ALIAS_WRITABLE`）。
+ */
+function projectInlineConditionsToSugar(body: string, deps: LiftDeps): string | undefined {
+  return inlineConditionsToSugar(body, {
+    outer: (t) => readableText(t, deps),
+    cond: (c) => reverseExprAttributes(c, deps),
+  });
+}
+
 function readableText(text: string, deps: LiftDeps): string {
   let out = text;
   for (const [form, pronoun] of PRONOUN_REVERSE) {

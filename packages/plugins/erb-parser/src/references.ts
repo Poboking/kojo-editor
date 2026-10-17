@@ -336,6 +336,11 @@ export function referencesOf(index: ErbIndex, name: string): ErbReference[] {
  * 判据与 rename 完全同源：光标词整串在 `bySymbol` 里有记录才给（未收录 = 空数组，
  * **不猜**）；查询单一真源是 `referencesOf`，本函数只补"光标 → 名字"这一步
  * （`symbolTokenAt`，与 `definitionTargetsAt` 同一把尺子）。
+ *
+ * **分类随位置走**（W8 XLANG-RENAME，2026-10-17）：`kind` 原样带进契约位置
+ * （`EditorSymbolLocation.kind` 是 additive 可选成员，旧消费方看不见它照常工作）。
+ * 这是"F12 的 N 处 / 「被调用」M 处 / code-lens 的 K 处"三套计数唯一的分类真源——
+ * 分类死在本模块、面板各数各的，差值就永远没人能解释。
  */
 export function erbReferenceLocationsAt(
   index: ErbIndex,
@@ -354,5 +359,28 @@ export function erbReferenceLocationsAt(
     filePath: ref.filePath,
     line: ref.line,
     column: ref.column,
+    kind: ref.kind,
   }));
+}
+
+/**
+ * 光标处记号的**分类计数**（面板 / 状态栏读数，**纯函数**）。
+ *
+ * 与 `erbReferenceLocationsAt` 同一个 `referencesOf` 真源、同一次遍历——
+ * 消费方（宿主台账 `ui/reference-utils.ts` 的 tally）要的"定义 a / 调用 b / 提及 c"
+ * 在这里算，不在任何面板里再扫一遍 `bySymbol`（那正是 W8 要收口的第二判据）。
+ */
+export function erbReferenceKindCounts(
+  index: ErbIndex,
+  normalizedName: string,
+): { definition: number; call: number; mention: number; total: number } {
+  let definition = 0;
+  let call = 0;
+  let mention = 0;
+  for (const ref of referencesOf(index, normalizedName)) {
+    if (ref.kind === 'definition') definition++;
+    else if (ref.kind === 'call') call++;
+    else mention++;
+  }
+  return { definition, call, mention, total: definition + call + mention };
 }

@@ -94,11 +94,13 @@ describe('S5 / print-message —— 文本消息行升糖', () => {
     expect(hasCandidates(r)).toBe(true);
   });
 
-  it('正例：PRINTFORMW 台词（「」起）→ 糖文本行（自证通过）', () => {
+  it('正例：PRINTFORMW 台词（「」起）→ 糖文本行（自证通过；W5 起代词也反糖）', () => {
     const r = lift('PRINTFORMW 「你好，%CALLNAME:MASTER%。」');
     expect(r.candidates).toHaveLength(1);
     expect(r.candidates[0]!.kind).toBe('print-message');
-    expect(r.candidates[0]!.sugarSource).toBe('「你好，%CALLNAME:MASTER%。」');
+    // W5 LIFT-PROJ-ALIGN：代词反糖**两侧同口径**（`{你}` 的降糖恒等于 `%CALLNAME:MASTER%`
+    // ⇒ 下面这条候选照样通过逐字节自证）。投影早就这么显示，建议侧第一次跟上。
+    expect(r.candidates[0]!.sugarSource).toBe('「你好，{你}。」');
     expect(r.candidates[0]!.roundTrip.verified).toBe(true);
   });
 
@@ -160,10 +162,32 @@ describe('S5 / print-message —— 文本消息行升糖', () => {
     expect(r.skipped[0]!.reason).toBe('unsupported-print-variant');
   });
 
-  it('跳过：含行内条件 \\@…\\@ 的行（本版不逆向行内条件）', () => {
-    const r = lift('PRINTFORMW 她\\@ CFLAG:2 >= 50 ? "很高兴" # "很平静" \\@地看着你。');
-    expect(r.candidates).toHaveLength(0);
-    expect(r.skipped.map((s) => s.reason)).toContain('not-covered');
+  it('正例：行内三元逆向成糖三元（自证通过；与投影同一把拆段尺子）', () => {
+    const src = 'PRINTFORMW 她\\@CFLAG:2 >= 50?很高兴#很平静\\@看着你。';
+    const r = lift(src);
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c.kind).toBe('print-message');
+    expect(c.sugarSource).toBe('她{CFLAG:2 >= 50 ? "很高兴" : "很平静"}看着你。');
+    expect(c.roundTrip.verified).toBe(true);
+    // 逆向出来的糖**转回去一字不差**（这才是"写回侧也做这一类"的合法性来源）
+    // generatedText 带自证壳的基准缩进：绝对缩进不可比、相对缩进才可比（与 lift 的比对同口径）
+    expect(c.roundTrip.generatedText.replace(/^	/, '')).toBe(src);
+  });
+
+  it('跳过：行内三元拆不出三段 / 逆向回去少一个空格 → 显式拒绝（不静默）', () => {
+    // 这条原生写法在分支两侧多打了空格、条件里也带空白，糖三元降回去是紧凑形态 ⇒
+    // 判据核照样拆得出三段（有 `?` 有 `#`、条件非空），但 round-trip 逐字节不一致 ⇒ 拒绝。
+    const spaced = 'PRINTFORMW 她\\@ CFLAG:2 >= 50 ? "很高兴" # "很平静" \\@地看着你。';
+    const broken = 'PRINTFORMW 她\\@CFLAG:2 >= 50?高兴\\@看着你。'; // 缺 `#`（假分支）
+    for (const [src, reasons] of [
+      [spaced, ['roundtrip-mismatch']],
+      [broken, ['not-covered']],
+    ] as const) {
+      const r = lift(src);
+      expect(r.candidates).toHaveLength(0);
+      for (const want of reasons) expect(r.skipped.map((x) => x.reason)).toContain(want);
+    }
   });
 
   it('跳过：注释行与空行不产出任何东西（也不记跳过）', () => {
@@ -573,7 +597,7 @@ describe('S5 / 集成 —— fixtures', () => {
     expect(r.candidates.some((c) => c.sugarSource.includes('如果 LOCAL：'))).toBe(false);
     // 台词行独立升糖（`PRINTFORMW 「你好，…」` 无 D → 原生自洽）
     const print = r.candidates.find((c) => c.kind === 'print-message');
-    expect(print?.sugarSource).toBe('「你好，%CALLNAME:MASTER%。」');
+    expect(print?.sugarSource).toBe('「你好，{你}。」'); // W5：代词两侧同口径
   });
 
   it('mini-game 真实 ERB：函数声明 / 骨架注释行不产出候选（宏与注释干扰）', () => {

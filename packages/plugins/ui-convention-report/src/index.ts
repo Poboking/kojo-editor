@@ -11,7 +11,7 @@ import type {
   SlotRegistry,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { diagnosticDisplay, KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { charaDirOwners, type OwnershipDeps } from './ownership';
 import { buildGroupView, GROUP_MODE_LABEL, GROUP_MODES, type GroupMode } from './view';
 import { ISSUE_WINDOW_INITIAL, issueWindowSize, nextIssueWindow } from './panel-logic';
@@ -236,7 +236,7 @@ export function createUiConventionReportPlugin(): Plugin {
         const view = useMemo(() => {
           const current = project.current();
           return buildGroupView(mode, report?.issues ?? [], {
-            ruleDescription: (id) => rulesById.get(id)?.description ?? id,
+            ruleDescription: (id) => rulesById.get(id)?.description ?? diagnosticDisplay(id).name,
             ownership: ownershipDeps(current),
             charaIndex: current?.charaIndex ?? null,
           });
@@ -401,6 +401,16 @@ export function createUiConventionReportPlugin(): Plugin {
       // 同排的「可写」胶囊，而它是**项目级常态计数**，不是用户此刻要对的东西。
       // 严重度的语义在底部面板里逐条呈现；状态栏只该在"有 error"时唤醒读者
       // （error 一律是全项目 0 条，因为约定校验的 error 是真事故）。数字用等宽数位防抖。
+      /**
+       * 这枚小件数的是什么（2026-10-19 自造重叠清账批，判据②）：**项目级**约定计数——
+       * 整份 `report.counts`，含**没在编辑器里打开**的文件与**没有文件归属**的整项目结论。
+       * 它天生不等于同排那枚「问题 n」（后者只数**已打开文件**面上正画着的波浪线，
+       * 且还含 ERB 结构 / 表达式 / `.kojo` 转译这几家自己的账），两本数各自说清口径、
+       * 不许留两个裸数字（对账恒等式见 `convention-linter/src/index.ts` 的 DIAG-LINK 注）。
+       */
+      const STATUSBAR_TITLE =
+        '项目级约定计数，含未打开文件与整项目结论 ≠ 状态栏「问题」· Ctrl+J 切换底部区查看明细';
+
       function StatusCounts(props: UIPanelProps): unknown {
         const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
         useEffect(() => linter.subscribe(setReport), []);
@@ -408,7 +418,7 @@ export function createUiConventionReportPlugin(): Plugin {
         /** 图标桥：同 ConventionPanel（状态栏小件亦经 props.renderIcon 注入，缺省回退字形） */
         const ic = (name: string, size: number, fallback: string): ReactNode =>
           (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
-        if (!report) return createElement('span', { className: 'dim' }, '校验 —');
+        if (!report) return createElement('span', { className: 'dim', title: STATUSBAR_TITLE }, '校验 —');
         const c = report.counts;
         const item = (icon: string, glyph: string, n: number, critical: boolean): ReactNode =>
           createElement(
@@ -422,7 +432,7 @@ export function createUiConventionReportPlugin(): Plugin {
           );
         return createElement(
           'span',
-          { className: 'sb-diag', title: '约定校验计数（Ctrl+J 切换底部区查看明细）' },
+          { className: 'sb-diag', title: STATUSBAR_TITLE },
           item('close', '✕', c.error, true),
           item('warning', '⚠', c.warning, false),
           item('info', 'ℹ', c.info, false),

@@ -27,6 +27,7 @@ import type {
   Logger,
   Plugin,
   SugarPreviewService,
+  TrashEntry,
   UIPanelContribution,
 } from '@kojo/plugin-api';
 import { WellKnownServices } from '@kojo/plugin-api';
@@ -43,6 +44,18 @@ const PATH = '/proj/口上/x.kojo';
 
 /** 伪内核 io（内存 FS；与 lift 集成测试同款） */
 function makeIO(files: Record<string, Uint8Array>) {
+  // W11 回收站**如实可用**假桩（内存条目表；口径照 io.ts :293/:310/:324/:330 原文）：
+  // listTrash 返回空清单/筛选清单；restore/purge 对未知或形态不合的 id **按契约文本拒绝**；
+  // holdTrash 是会话内软保护（整替语义、纯内存、不落盘、拦不住显式 purge）。
+  const trashStore = new Map<string, TrashEntry>();
+  const trashPayload = new Map<string, Uint8Array>();
+  const heldTrash = new Set<string>();
+  const requireTrash = (id: string): TrashEntry => {
+    if (!/^\d+-[0-9a-f]{8}$/.test(id)) throw new Error(`回收站条目 id 形态不合（应 <ts>-<hash8>）：${id}`);
+    const e = trashStore.get(id);
+    if (!e) throw new Error(`回收站条目不存在或已被清理：${id}`);
+    return e;
+  };
   const io: FileIO = {
     readText: async (p) => {
       const b = files[p];
@@ -111,6 +124,51 @@ function makeIO(files: Record<string, Uint8Array>) {
     },
     exportFile: async () => {
       throw new Error('exportFile is not supported by this fake');
+    },
+    // 契约 additive（W11 回收站可见批）：如实可用内存桩（判据注释见方法体）
+    listTrash: async (opts?: { forPath?: string }): Promise<TrashEntry[]> =>
+      [...trashStore.values()]
+        .filter((e) => {
+          const fp = opts?.forPath;
+          // 相关性简化为前缀判（真实 pathKey 判据住内核）：原路径就是它，或它住在被删目录里
+          return fp === undefined || e.originalPath === fp || fp.startsWith(`${e.originalPath}/`);
+        })
+        .sort((a, b) => b.deletedAtMs - a.deletedAtMs),
+    restoreFromTrash: async (id: string): Promise<string> => {
+      const e = requireTrash(id);
+      if (e.kind === 'dir') throw new Error(`回收站条目 ${id} 是整目录：本夹具不建模子树载荷，拒绝恢复`);
+      const bytes = trashPayload.get(id);
+      if (!bytes) throw new Error(`回收站条目 ${id} 在本夹具无载荷字节，拒绝恢复`);
+      files[e.originalPath] = bytes;
+      trashStore.delete(id);
+      trashPayload.delete(id); // 条目用掉即消失——回收站不是第二份历史账
+      return e.originalPath;
+    },
+    purgeTrash: async (ids?: readonly string[]): Promise<number> => {
+      if (ids === undefined) {
+        // 自动清理口径：只动已超保留期的条目，且跳过本会话被 holdTrash 引用的那些
+        let n = 0;
+        const now = Date.now();
+        for (const [id, e] of [...trashStore]) {
+          if (e.expiresAtMs <= now && !heldTrash.has(id)) {
+            trashStore.delete(id);
+            trashPayload.delete(id);
+            n++;
+          }
+        }
+        return n;
+      }
+      // 显式「彻底删除」：命中即删、不看保留期也不看 hold；任一 id 不合形态/不在 ⇒ 抛，不静默跳过
+      for (const id of ids) requireTrash(id);
+      for (const id of ids) {
+        trashStore.delete(id);
+        trashPayload.delete(id);
+      }
+      return ids.length;
+    },
+    holdTrash: (ids: readonly string[]): void => {
+      heldTrash.clear(); // 整替（照 setWritableRoots 的替换口径）
+      for (const id of ids) heldTrash.add(id);
     },
   };
   return io;

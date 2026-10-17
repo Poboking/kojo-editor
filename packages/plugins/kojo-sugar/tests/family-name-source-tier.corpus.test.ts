@@ -12,7 +12,9 @@
  *    `ERB/DIM.ERH` 的 CFLAG 等）。
  * 2. **R1 不回退**：追加名表带来的新命中（460 / 642 / 0）与 `.ERH` 的**具名→编号换算**
  *    （92 / 93 / 84）一条不少——分层只关掉"常量宣称族归属"，不关掉换算与拼错名核对。
- * 3. **R2 生效族九张的 warn 面恰 3 条**（`NOWEX:i`×2 + `TEQUIP:震动棒`×1），
+ * 3. **R2 生效族九张的 warn 面按盘指纹钉死**（历史三盘为 `NOWEX:i`×2 + `TEQUIP:震动棒`×1 恰 3 条；
+ *    2026-10-27 挂 33-19/SANYOUSEI 盘重校：另有 `FLAG:眠姦口上有`×2 + `FLAG:時間停止口上有`×2
+ *    真阳性，逐族与 warn 读数见 `EXPECT_BY_FINGERPRINT`），
  *    `SOURCE` 入库后三盘**一条都没多**（它的 6 处 `SOURCE:LOCAL:(LOCAL:1)` 是
  *    扫描器把三段作用域写法截成二段的老口径产物，生产判据一律放行）。
  *
@@ -132,18 +134,73 @@ interface DriveExpect {
   sourceRefs: number;
   /** 九张生效族的判表外处数（含被裸引擎全局放行掉的） */
   unlisted: number;
+  /** 判表外逐族读数（本盘实测钉值；换盘重校时连本字段一起改） */
+  unlistedPerFamily: Array<readonly [string, number]>;
+  /** 实际 warn 面逐条读数（过引擎全局放行后作者真会看到的） */
+  warnItems: Array<readonly [string, number]>;
   /** 截断形态（`SOURCE:LOCAL:(LOCAL:1)`）处数——旧口径会把它计成判表外 */
   sourceTruncated: number;
   maxbaseRefs: number;
 }
 
 const EXPECT_BY_FINGERPRINT: Record<string, DriveExpect> = {
-  // 画蛇添足版 4.980
-  '33-19': { alsNew: 460, constConv: 92, sourceRefs: 1793, unlisted: 4, sourceTruncated: 6, maxbaseRefs: 823 },
+  // 画蛇添足版 4.980；2026-10-27 挂盘重校（sub-modding 4.980-260326-SANYOUSEI，口上 2,294，同指纹 33-19）：
+  // 盘上多出的露米娅「春告げの庭 v0.3」把 CFLAG 名写进 FLAG 头（刻印取得.ERB:31-32、爱抚指令.ERB:72-73
+  // `FLAG:眠姦口上有`/`FLAG:時間停止口上有` 各×2）——该名只住 CFLAG.csv/CFLAG.als，FLAG 主表、追加表、
+  // 全盘 .ERH CONST 均查无 ⇒ 第 4 类真阳性 4 处，判表外 4→8。
+  '33-19': {
+    alsNew: 460,
+    constConv: 92,
+    sourceRefs: 1793,
+    unlisted: 8,
+    unlistedPerFamily: [
+      ['FLAG', 4],
+      ['NOWEX', 3],
+      ['TEQUIP', 1],
+    ],
+    warnItems: [
+      ['FLAG:時間停止口上有', 2],
+      ['FLAG:眠姦口上有', 2],
+      ['NOWEX:i', 2],
+      ['TEQUIP:震动棒', 1],
+    ],
+    sourceTruncated: 6,
+    maxbaseRefs: 823,
+  },
   // 魔王改版
-  '38-20': { alsNew: 642, constConv: 93, sourceRefs: 1805, unlisted: 4, sourceTruncated: 6, maxbaseRefs: 823 },
+  '38-20': {
+    alsNew: 642,
+    constConv: 93,
+    sourceRefs: 1805,
+    unlisted: 4,
+    unlistedPerFamily: [
+      ['NOWEX', 3],
+      ['TEQUIP', 1],
+    ],
+    warnItems: [
+      ['NOWEX:i', 2],
+      ['TEQUIP:震动棒', 1],
+    ],
+    sourceTruncated: 6,
+    maxbaseRefs: 823,
+  },
   // 原生官方版 4.842（无追加名表）
-  '25-0': { alsNew: 0, constConv: 84, sourceRefs: 825, unlisted: 3, sourceTruncated: 0, maxbaseRefs: 525 },
+  '25-0': {
+    alsNew: 0,
+    constConv: 84,
+    sourceRefs: 825,
+    unlisted: 3,
+    unlistedPerFamily: [
+      ['NOWEX', 2],
+      ['TEQUIP', 1],
+    ],
+    warnItems: [
+      ['NOWEX:i', 2],
+      ['TEQUIP:震动棒', 1],
+    ],
+    sourceTruncated: 0,
+    maxbaseRefs: 525,
+  },
 };
 
 interface CorpusReadings {

@@ -61,8 +61,23 @@ const idx = indexOf([
 
 describe('workspaceSymbolsInIndex · 查询口径', () => {
   it('空 / 全空白查询不给全表（十万条不许整份递回去）', () => {
-    expect(workspaceSymbolsInIndex(idx, '')).toEqual({ symbols: [], totalMatched: 0 });
-    expect(workspaceSymbolsInIndex(idx, '   ')).toEqual({ symbols: [], totalMatched: 0 });
+    expect(workspaceSymbolsInIndex(idx, '')).toEqual({ symbols: [], totalMatched: 0, scope: null });
+    expect(workspaceSymbolsInIndex(idx, '   ')).toEqual({ symbols: [], totalMatched: 0, scope: null });
+  });
+
+  it('范围戳（W7 NAV-SCOPE）：范围外的定义不进产出、**也不进命中总数**（挡掉的不许报成溢出）', () => {
+    const all = workspaceSymbolsInIndex(idx, 'alpha');
+    expect(all.totalMatched).toBe(2);
+    expect(all.scope).toBeNull();
+    const scopedOut = workspaceSymbolsInIndex(idx, 'alpha', undefined, { key: 'k20', roots: ['C:\\proj\\chara20'] });
+    expect(scopedOut.symbols).toEqual([]);
+    expect(scopedOut.totalMatched).toBe(0);
+    expect(scopedOut.scope?.key).toBe('k20'); // 实际生效的戳原样回显给宿主
+    const scopedIn = workspaceSymbolsInIndex(idx, 'alpha', undefined, { key: 'k10', roots: ['C:\\proj\\chara10'] });
+    expect(scopedIn.totalMatched).toBe(2);
+    // 盖在索引上的派生视图戳与显式参数走同一条 `pathInScope`
+    const stamped: ErbIndex = { ...idx, scope: { key: 'k20', roots: ['C:\\proj\\chara20'] } };
+    expect(workspaceSymbolsInIndex(stamped, 'alpha').totalMatched).toBe(0);
   });
 
   it('大小写不敏感：小写查询命中原生大写名（Emuera 名字口径）', () => {

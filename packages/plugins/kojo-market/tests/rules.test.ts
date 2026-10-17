@@ -412,7 +412,21 @@ describe('packUpdateCheck：索引条目 vs 已装集', () => {
     expect(packUpdateCheck(entryRow, [installed('1.0.0', 'b'.repeat(64))])?.sameContainer).toBeNull();
   });
 
-  it('版本号形如非法 ⇒ 不给判定（不猜大小）', () => {
-    expect(packUpdateCheck({ ...entryRow, version: '1.0' as string }, [installed('1.0.0')])).toBeNull();
+  /**
+   * MK-1 语义并一：版本形读不出**不再静默 `null`**（`null` 那个口径会把"比不了"演成
+   * "本机没装过"，面板于是给一个「安装」按钮去覆盖一份谁也没核对过的东西）。
+   * 现在是一条显式 `failed`，`stage` 与宿主自更新那条链路同一档、那一句也从同一张表来。
+   */
+  it('版本号形如非法 ⇒ 显式 `failed`（不猜大小，也不演成"没装过"）', () => {
+    const c = packUpdateCheck({ ...entryRow, version: '1.0' as string }, [installed('1.0.0')]);
+    expect(c?.state).toBe('failed');
+    expect(c?.failure?.stage).toBe('check');
+    expect(c?.failure?.reason).toContain('版本号');
+    expect(c?.failure?.note).toContain('没有检查成功，可重试');
+    expect(c?.sameContainer).toBeNull();
+    // 三态里没有一条带 failure（"比出来了"就不该留着失败态的那句话）
+    expect(packUpdateCheck(entryRow, [installed('1.0.0')])?.failure).toBeNull();
+    expect(packUpdateCheck(entryRow, [installed('2.0.0')])?.failure).toBeNull();
+    expect(packUpdateCheck(entryRow, [installed('1.0.1')])?.failure).toBeNull();
   });
 });

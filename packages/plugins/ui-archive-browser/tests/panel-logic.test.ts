@@ -14,9 +14,9 @@ import type {
   SnapshotArchiveEntry,
   SnapshotScanResult,
 } from '@kojo/plugin-api';
+import { formatBytes } from '@kojo/plugin-api';
 import {
   buildArchiveList,
-  formatBytes,
   formatTimestamp,
   summarizeCharacters,
   summarizeText,

@@ -81,6 +81,19 @@ const IO = 'kernel.io';
  * 2026-10-14 起口径**含 `.ERH`**（引擎预载白名单认它是脚本文件，实测口上根内 31 份、
  * 内容只有 `#DIM` / `#DIMS`）：索引文件数随之增加，而函数树不变——声明文件 0 个 `@` 定义，
  * 这条不变量由 `tests/erh-index.corpus.test.ts` 在真语料上钉死。
+ *
+ * 2026-10-17 W6 复核（`.kojo` 能力面拉平批）——本别名就是**全包唯一的方言谓词**：
+ * - 索引遍历、波浪线、八类语言服务应答一律走它，仓库里不存在第二个"这文件算不算方言"的
+ *   写法（`references.ts` / `offload.ts` / `ui-sugar-lift` 同样 import 契约层那一个）；
+ * - **族内没有正当请求被挡**：`.erb` / `.erm` / `.erh` 的大小写形态逐个都答，由
+ *   `tests/dialect-gate.test.ts` 按 `ERB_DIALECT_EXTENSIONS` **派生**逐个钉（清单不抄进
+ *   测试，扩展族时那条自动跟上）；
+ * - 拒 `.kojo` 是**对的**，不是缺口：本包交出的行号是方言原文的行号，`.kojo` 缓冲区那些行
+ *   是派生文本。缺的是 `.kojo` 自己那一腿的应答方，已落在糖线
+ *   （`kojo-sugar/src/langsvc.ts`：拿产物问本包，再把坐标折回源——判据仍只有这里一份）；
+ * - `.erd` 是契约里明写的**留位未接线**（`ERB_ENGINE_RESERVED_EXTENSIONS`：基线盘仅 1 份
+ *   且在索引根之外）。接线动作 = 并入 `ERB_DECLARATION_EXTENSIONS` 后复跑语料自证，
+ *   归 ERB 方言覆盖线，不在本批顺手扩（没有第二份盘可证之前不做没根据的工作）。
  */
 const isDialect = isErbDialectPath;
 

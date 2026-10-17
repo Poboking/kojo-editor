@@ -4,9 +4,16 @@
  * 三维导航（HANDOFF §6.2）：
  *   角色（K{no}）→ 家族（FamilyMatch.family，'' = 初始家族）→ 面（face，语义排序）→ 函数（slot 排序）。
  *
- * 归属规则：
- *   - `FamilyMatch.characterNo` 是唯一归属依据；无法归属的函数进 `orphans`
- *     （占位符残留 KX / 与口上无关的通用函数 / 适配器未提供家族规则时的全部函数）。
+ * 归属规则（W7 NAV-SCOPE 批：一条，不是两条）：
+ *   - **有范围目录时按目录**：`owners`（= 检索范围提供方给出的"这个范围住哪些位置"）
+ *     是归属的唯一判据，判定走契约层 `pathInScope`——与全文检索、`Ctrl+T`、`Ctrl+P`
+ *     同一条尺子。此前这里另有一份**按函数名**推角色的判据（`FamilyMatch.characterNo`），
+ *     于是选定"只看某个范围"后搜索面板只扫该目录、函数树仍扫全量十万函数，
+ *     两处对"谁属于谁"还给出不一致的答案。现在名字判据只供**家族/面/槽位**的结构，
+ *     不再供角色归属。
+ *   - 提供方**没给**目录（无适配器 / 契约字段缺失）⇒ 退回名字形态，但**状态行明写**
+ *     「角色归属：按名字（无角色目录）」（`NavigatorTree.attribution`）——两份判据
+ *     不许在同一棵树里同时生效（按目录有值的函数一律按目录），也不许静默切换。
  *   - orphans **只计数**不展开（全项目 99k 函数里非口上域占大头，渲染会拖垮面板）；
  *     定位它们用面板顶部的搜索框（搜索覆盖全部函数，含 orphans）。
  */
@@ -15,11 +22,31 @@ import type {
   CharaInfo,
   ErbFunction,
   ErbIndex,
+  ErbScopeStamp,
   FamilyIndexRule,
   FamilyMatch,
 } from '@kojo/plugin-api';
+import { CANDIDATE_BUDGETS, candidateBudget, candidateRank, pathInScope } from '@kojo/plugin-api';
 
 /* ------------------------------ 数据形状 ------------------------------ */
+
+/**
+ * 「未识别家族归属」的 null-object 哨兵（有意保留，不是历史事故）：
+ * 挡下游 `node.match.xxx` 裸读 NPE。**冻结 + 单一引用**——所有空归属节点共用它，
+ * `toStrictEqual` / 引用比较 / 渲染 memo 才不会各拿各的"长得一样的新对象"。
+ */
+export const NO_FAMILY_MATCH: FamilyMatch = Object.freeze({
+  kind: 'ok',
+  prefix: '',
+  family: '',
+  characterNo: null,
+  selector: 0,
+  face: '',
+  sub: '',
+  isMessageCheck: false,
+  slot: '',
+  isPlaceholder: false,
+});
 
 /** 叶子：单个函数定义 */
 export interface FunctionNode {
@@ -28,8 +55,8 @@ export interface FunctionNode {
   readonly filePath: string;
   readonly startLine: number;
   readonly endLine: number;
-  /** 家族解析结果（null = 未匹配口上命名） */
-  readonly match: FamilyMatch | null;
+  /** 家族解析结果（未匹配口上命名 ⇒ `NO_FAMILY_MATCH` 哨兵，恒非 null；null-object 口径） */
+  readonly match: FamilyMatch;
   /** 函数上方紧邻的作者注释块（悬停提示用；见 ErbFunction.docComment） */
   readonly docComment?: string;
 }
@@ -69,6 +96,65 @@ export interface NavigatorTree {
   readonly hasFamilyIndex: boolean;
   /** 全部函数总数（状态栏显示） */
   readonly totalFunctions: number;
+  /**
+   * 本轮角色归属**用的是哪一条判据**（状态行原样转述；铁律 4：两种判据不许同时生效，
+   * 也不许静默切换）。`'dir'` = 按提供方给的角色目录（缺省、唯一正解）；
+   * `'name'` = 目录一条腿没数据可用，退回按函数名（少见，必须看得见）；`'none'` = 全没有。
+   */
+  readonly attribution: 'dir' | 'name' | 'none';
+  /** 本轮生效的"只看"范围 key（`''` = 不限；与全文检索 / `Ctrl+T` / `Ctrl+P` 同一个戳） */
+  readonly scopeKey: string;
+  /** 本轮**实际进入建树**的文件数（范围外的一条没扫——状态行的"扫了多少"说得出真话） */
+  readonly filesScanned: number;
+}
+
+/* ------------------------------ 范围与归属（判据单源） ------------------------------ */
+
+/** 一个角色的口上目录（`roots` = 提供方给的位置集合，宿主与本插件都不解释其含义） */
+export interface CharaOwner {
+  readonly no: number;
+  readonly roots: readonly string[];
+}
+
+/**
+ * 角色清单 → 归属目录表（**投影**，不是判据：判据只有契约层 `pathInScope` 那一条，
+ * 与全文检索范围用的是同一个字段、同一个谓词 ⇒ 角色归属只剩一份）。
+ * 没有口上目录的角色不产条目——文件树那侧本来也看不见它。
+ */
+export function charaOwnersOf(charaIndex: ReadonlyMap<number, CharaInfo>): CharaOwner[] {
+  const out: CharaOwner[] = [];
+  for (const info of charaIndex.values()) {
+    const dir = info.kojoDir;
+    if (typeof dir !== 'string' || dir === '') continue;
+    out.push({ no: info.no, roots: [dir] });
+  }
+  return out;
+}
+
+/**
+ * 文件路径 → 归属角色号（找不到 ⇒ `null`；一条判据、一处实现）。
+ *
+ * **取最更深的那一条**：角色目录可能互相嵌套（作者把一个角色的分支放进另一个角色的目录里），
+ * `startsWith` 谁都能匹上——按匹配到的根长度取胜者，才是"这文件住在谁家里"的答案。
+ * 判据本身仍是契约层的 `pathInScope`，这里只比"哪一条更具体"。
+ */
+export function ownerNoOfPath(filePath: string, owners: readonly CharaOwner[]): number | null {
+  let best: { no: number; depth: number } | null = null;
+  for (const owner of owners) {
+    for (const root of owner.roots) {
+      if (!pathInScope(filePath, [root])) continue;
+      if (best === null || root.length > best.depth) best = { no: owner.no, depth: root.length };
+    }
+  }
+  return best?.no ?? null;
+}
+
+/** 建树与搜索的一次性输入（additive：不传 ⇒ 与改动前逐字一致的形态仍由调用方决定） */
+export interface NavigatorBuildOptions {
+  /** 角色归属目录表（缺省 = 由 `charaIndex` 投影；空 ⇒ 名字判据兜底，见文件头） */
+  readonly owners?: readonly CharaOwner[];
+  /** 当前"只看"范围戳（`null` / `roots` 空 ⇒ 全量） */
+  readonly scope?: ErbScopeStamp | null;
 }
 
 /* ------------------------------ 面语义排序 ------------------------------ */
@@ -176,40 +262,53 @@ function charaLabel(no: number, charaIndex: ReadonlyMap<number, CharaInfo>): { l
  * 从索引构建导航树。
  * 单次全量遍历（99k 函数实测 < 1s），每次 `kojo.functionChanged` 重建一次
  * （同一索引实例重复调用由 `shouldRebuildIndex` 在调用方去重）。
+ *
+ * **范围先于遍历**（W7 NAV-SCOPE）：`options.scope` 落在哪个目录，建树就只走哪些文件——
+ * 选定"只看某处"后函数树不再扫全量十万条（此前它压根不读选择器）。
+ * 角色归属同一条判据：`pathInScope`（契约层），角色目录来自提供方给的泛型事实。
  */
 export function buildNavigatorTree(
   index: ErbIndex,
   familyIndex: FamilyIndexRule | null,
   charaIndex: ReadonlyMap<number, CharaInfo>,
+  options: NavigatorBuildOptions = {},
 ): NavigatorTree {
+  const owners = options.owners ?? charaOwnersOf(charaIndex);
+  const byDir = owners.length > 0;
+  const scopeRoots = options.scope?.roots ?? [];
   // 角色号 → (家族 → (面 → 函数[]))
   const acc = new Map<number, Map<string, Map<string, FunctionNode[]>>>();
   let orphanCount = 0;
   let totalFunctions = 0;
+  let filesScanned = 0;
 
   for (const file of index.files.values()) {
+    if (!pathInScope(file.path, scopeRoots)) continue;
+    filesScanned++;
+    const ownerNo = byDir ? ownerNoOfPath(file.path, owners) : null;
     for (const fn of file.functions) {
       totalFunctions++;
-      // 用归一化名解析（Emuera 语义大小写不敏感；正则按大写设计）；附文件路径供
-      // 适配器把占位符形态对齐到文件编号（additive：无家族规则的适配器忽略该参）
+      // 家族/面/槽位的结构仍来自适配器规则（那**不是**角色归属——归属只有一条判据）；
+      // 附文件路径供适配器把占位符形态对齐到文件编号（additive：无家族规则的适配器忽略该参）
       const match = familyIndex ? familyIndex.match(fn.normalizedName, fn.filePath) : null;
-      if (!match || match.characterNo === null) {
+      const characterNo = byDir ? ownerNo : match?.characterNo ?? null;
+      if (characterNo === null) {
         orphanCount++;
         continue;
       }
-      let byFamily = acc.get(match.characterNo);
+      let byFamily = acc.get(characterNo);
       if (!byFamily) {
         byFamily = new Map();
-        acc.set(match.characterNo, byFamily);
+        acc.set(characterNo, byFamily);
       }
-      const family = match.family;
+      const family = match?.family ?? '';
       let byFace = byFamily.get(family);
       if (!byFace) {
         byFace = new Map();
         byFamily.set(family, byFace);
       }
-      // declare 形态单独成面（「家族声明」），与功能面分开
-      const face = match.kind === 'declare' ? 'declare' : match.face;
+      // declare 形态单独成面（「家族声明」），与功能面分开；规则没认出的进「其它」
+      const face = match ? (match.kind === 'declare' ? 'declare' : match.face) : '';
       const list = byFace.get(face);
       if (list) list.push(makeNode(fn, match));
       else byFace.set(face, [makeNode(fn, match)]);
@@ -236,7 +335,15 @@ export function buildNavigatorTree(
       return { no, label, name, families, functionCount };
     });
 
-  return { charas, orphanCount, hasFamilyIndex: familyIndex !== null, totalFunctions };
+  return {
+    charas,
+    orphanCount,
+    hasFamilyIndex: familyIndex !== null,
+    totalFunctions,
+    attribution: byDir ? 'dir' : familyIndex !== null ? 'name' : 'none',
+    scopeKey: options.scope?.key ?? '',
+    filesScanned,
+  };
 }
 
 function makeNode(
@@ -248,7 +355,7 @@ function makeNode(
     endLine: number;
     docComment?: string;
   },
-  match: FamilyMatch,
+  match: FamilyMatch | null,
 ): FunctionNode {
   return {
     name: fn.name,
@@ -256,7 +363,8 @@ function makeNode(
     filePath: fn.filePath,
     startLine: fn.startLine,
     endLine: fn.endLine,
-    match,
+    // 空 match 哨兵：null-object 兜底（旧行为，规格钉死——见 search-perf.test.ts :190）
+    match: match ?? NO_FAMILY_MATCH,
     ...(fn.docComment !== undefined ? { docComment: fn.docComment } : {}),
   };
 }
@@ -293,6 +401,11 @@ export interface SearchHit {
  * 函数名子串搜索（大小写不敏感；覆盖全部函数含 orphans）。
  * 返回按「文件、行」排序的前 `limit` 条。
  *
+ * **排序轴的分工**（W7 NAV-SCOPE，说清以免被读成"漏了一条没统一"）：相关性分桶是
+ * 契约层 `candidateRank` 一份（全文检索候选 / `Ctrl+T` / `Ctrl+P` 三处都用它排）；
+ * 这条列表**刻意不按相关性排**——面板把命中按「同一文件里从上往下」呈现，读者顺着行号
+ * 走查，相关性插队会打碎那个阅读序。两者共用的是**预算档位**与**范围判据**，不是比较器。
+ *
  * 性能口径（UX 感知批，2026-10-16）：99k 函数集上这是**纯扫描**（每击键走一次），
  * 所以三段拆开、把最贵的部分压到最小：
  *   1) 轻量收集：只存函数引用，命中到 `limit*3` 即早停（保持旧实现的超采截断语义）；
@@ -300,29 +413,38 @@ export interface SearchHit {
  *   3) 物化：只对最终 ≤limit 条做家族解析（正则）+ 建 Node 对象。
  *      旧实现在超采阶段就对最多 `limit*3` 条各跑一次 `familyIndex.match`——这里省掉 2/3。
  * 面板侧另有 `searchFunctionsCached`（按查询串记忆）与 `useDeferredValue`（击键折叠）。
+ *
+ * `options.scope`（W7 NAV-SCOPE）：**范围外的文件一条不扫**——搜索覆盖全量这件事
+ * 只在"不限范围"时才成立；选定范围后这里与全文检索、`Ctrl+T`、`Ctrl+P` 看的是同一堆文件。
  */
 export function searchFunctions(
   index: ErbIndex,
   query: string,
   familyIndex: FamilyIndexRule | null,
-  limit = 200,
+  limit: number = CANDIDATE_BUDGETS.providerQuery,
+  options: NavigatorBuildOptions = {},
 ): SearchHit[] {
+  const cap = candidateBudget('providerQuery', limit);
   const q = query.trim().toUpperCase();
   if (q.length < 2) return [];
-  const cap = limit * 3;
+  const owners = options.owners ?? [];
+  const byDir = owners.length > 0;
+  const scopeRoots = options.scope?.roots ?? [];
   const picked: ErbFunction[] = [];
   outer: for (const file of index.files.values()) {
+    if (!pathInScope(file.path, scopeRoots)) continue;
     for (const fn of file.functions) {
       if (!fn.normalizedName.includes(q)) continue;
       picked.push(fn);
-      if (picked.length >= cap) break outer; // 超采后截断排序（保持结果大致确定性）
+      if (picked.length >= cap * 3) break outer; // 超采后截断排序（保持结果大致确定性）
     }
   }
   picked.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.startLine - b.startLine);
   const hits: SearchHit[] = [];
-  for (const fn of picked.slice(0, limit)) {
+  for (const fn of picked.slice(0, cap)) {
     const match = familyIndex ? familyIndex.match(fn.normalizedName, fn.filePath) : null;
-    hits.push({ node: makeNode(fn, match ?? emptyMatch()), charaNo: match?.characterNo ?? null });
+    const charaNo = byDir ? ownerNoOfPath(fn.filePath, owners) : match?.characterNo ?? null;
+    hits.push({ node: makeNode(fn, match), charaNo });
   }
   return hits;
 }
@@ -337,24 +459,27 @@ export function searchFunctions(
 const SEARCH_MEMO_CAP = 8;
 const searchMemo = new WeakMap<
   ErbIndex,
-  { fi: FamilyIndexRule | null; limit: number; hits: Map<string, SearchHit[]> }
+  { fi: FamilyIndexRule | null; limit: number; owners: readonly CharaOwner[] | undefined; scopeKey: string; hits: Map<string, SearchHit[]> }
 >();
 
 export function searchFunctionsCached(
   index: ErbIndex,
   query: string,
   familyIndex: FamilyIndexRule | null,
-  limit = 200,
+  limit: number = CANDIDATE_BUDGETS.providerQuery,
+  options: NavigatorBuildOptions = {},
 ): SearchHit[] {
+  const owners = options.owners;
+  const scopeKey = options.scope?.key ?? '';
   let slot = searchMemo.get(index);
-  if (!slot || slot.fi !== familyIndex || slot.limit !== limit) {
-    slot = { fi: familyIndex, limit, hits: new Map() };
+  if (!slot || slot.fi !== familyIndex || slot.limit !== limit || slot.owners !== owners || slot.scopeKey !== scopeKey) {
+    slot = { fi: familyIndex, limit, owners, scopeKey, hits: new Map() };
     searchMemo.set(index, slot);
   }
   const key = query.trim().toUpperCase(); // 与 searchFunctions 的归一化同口径（大小写不敏感）
   const hit = slot.hits.get(key);
   if (hit) return hit;
-  const res = searchFunctions(index, query, familyIndex, limit);
+  const res = searchFunctions(index, query, familyIndex, limit, options);
   if (slot.hits.size >= SEARCH_MEMO_CAP) {
     const oldest = slot.hits.keys().next().value;
     if (oldest !== undefined) slot.hits.delete(oldest);
@@ -390,17 +515,7 @@ export function nextFaceWindow(current: number | undefined, total: number): numb
   return Math.min(total, Math.max(FACE_WINDOW_INITIAL, base + FACE_WINDOW_STEP));
 }
 
-function emptyMatch(): FamilyMatch {
-  return {
-    kind: 'ok',
-    prefix: '',
-    family: '',
-    characterNo: null,
-    selector: 0,
-    face: '',
-    sub: '',
-    isMessageCheck: false,
-    slot: '',
-    isPlaceholder: false,
-  };
-}
+/**
+ * 面渲染窗口（旧名「窗口口径」）
+ */
+

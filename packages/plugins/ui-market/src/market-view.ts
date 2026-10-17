@@ -310,6 +310,9 @@ export function installNote(action: InstallAction, name: string, version: string
 /**
  * 已装条目旁边的状态短语（**只说事实，不催动作**：更新永远要作者亲手点，面板不自动覆盖）。
  * 同版本但容器核对码不同 ⇒ 明说"重装会以注册表那份覆盖"，因为那是作者下一步会问的事。
+ *
+ * `failed` 那一态那句话**由契约生成**（`update.failure.note`，见 `makeUpdateFailure`）——
+ * 面板不自己拼第二份失败话术，否则设置页上"编辑器更新"与"包更新"两段失败又会两种说法（MK-1）。
  */
 export function updatePhrase(row: PackRow): string {
   const u = row.update;
@@ -322,13 +325,19 @@ export function updatePhrase(row: PackRow): string {
     case 'latest':
       if (u.sameContainer === false) return '已安装（注册表那份与本机这份内容不同，重装会覆盖）';
       return '已安装';
+    case 'failed':
+      // 那句失败话**由契约生成**（`makeUpdateFailure` 一处）；面板只显示。
+      // 兜底那句刻意不模仿那张表：`failure` 在 `failed` 态恒在（契约不变量），
+      // 真到兜底就是契约违约——它只保证"仍然看得见"，不参与话术口径（防这里长出第三份话术表）。
+      return u.failure?.note ?? '这一条的更新检查读不出（本机那份没被动过）';
   }
 }
 
-/** 这一行该不该给按钮（版本要求不满足 ⇒ 不给，行上另有那句提示） */
+/** 这一行该不该给按钮（版本要求不满足 / 比较本身失败 ⇒ 不给，行上另有那一句提示） */
 export function rowAction(appOk: boolean, update: PackUpdateCheck | null): PackRowAction {
   if (!appOk) return 'none';
   if (update === null) return 'install';
+  // `'failed'` 也归"不给按钮"：比较判据本身读不出时，「安装」等于拿一份没人核对过的版本关系去覆盖本机
   return update.state === 'updatable' ? 'update' : 'none';
 }
 

@@ -25,6 +25,12 @@ import type {
 import { WellKnownServices } from '@kojo/plugin-api';
 import { ConventionEngine } from './engine';
 import {
+  buildConventionIssueView,
+  conventionCodeActionsForFile,
+  conventionDecorationsForFile,
+} from './diagnostics';
+import { conventionIssueFixes } from './fixes';
+import {
   LINT_STORE_KEY,
   LINT_UNITS_KEY_PREFIX,
   decodeCache,
@@ -208,6 +214,76 @@ export function createConventionLinterPlugin(): Plugin {
 
       ctx.provide(WellKnownServices.ConventionLinter, service);
 
+      /* ---------------- 诊断面接线（DIAG-LINK，2026-10-18） ----------------
+
+       报告过去只有面板在读：项目级校验（含 `erb.duplicate-function`）在 Monaco **零波浪线**、
+       不进问题面板、`Ctrl+.` 捞不到、`workbench.fixAll` 碰不到，状态栏「问题 n」与面板的
+       convention-counts 是两本互不对账的数。这里把**同一份 issues** 折进两个既有槽：
+       `ui.editor.decorator`（波浪线 + 面板行）与 `ui.editor.codeAction`（💡 / `Ctrl+.`）。
+
+       **不新建第二套事件**：视图只由引擎既有订阅（`ConventionLinterService.subscribe`，
+       立即以当前值回调一次）重算——`report` 变了装饰就跟着变，面板/命令/CI 读的还是同一条广播。
+
+       **两本数怎么对账（判据②，`tests/diagnostics.test.ts` 有闸）**：本层的恒等式是
+       `report.counts 之和 = 面上本层红线数 + 归别家画的糖族条 + 无文件归属的整项目结论 + 有文件但无行号的结论`
+       （前两项一一对应：一条**归本层画**的 issue 恰好一条装饰，绝不多画也不折叠；"归别家"那一项
+       是 `.kojo` 上的糖族——线由 `ui-sugar-editor#sugar-diagnostics` 对着实时转译产物画，
+       本层只记账不再发第二条，见 `diagnostics.ts` 的归属注）。后两项**天生进不了波浪线**，
+       而状态栏「问题 n」还另含 ①未打开的文件（marker 只发给活着的 model）②别的装饰贡献方
+       （`.kojo` 糖诊断 / ERB 结构 / 表达式）自己的账——所以两数**不可能相等**，等的只是上面
+       这条可核算的恒等式。差额口径必须在 UI 上说清（不许各说各话）：
+       `ui.statusbar#convention-counts` 的 tooltip 写明"项目级约定计数，含未打开文件与整项目
+       结论 ≠ 状态栏『问题』"，宿主那枚「问题」小件同时写明它数的是"已打开文件的波浪线"
+       （两处均已落地，2026-10-19 清账批）。
+
+       **刻意不声明 `offloadKind`**：本装饰器吃的是**插件内的报告态**（`view`），搬进 worker
+       就得把整份报告复制过去（第二个真源）。`decorate` 因此只是一次 `Map` 取表（O(1)、零 CPU
+       压力），留在同步装饰轮里恰好与它的成本形状相配（与 `erb-reference` 同一取舍）。
+       */
+      let view = buildConventionIssueView([]);
+      ctx.onDispose(
+        service.subscribe((report) => {
+          view = buildConventionIssueView(report?.issues ?? []);
+        }),
+      );
+
+      ctx.onDispose(
+        ctx.slots.register('ui.editor.decorator', {
+          id: 'convention-issues',
+          title: '约定校验波浪线',
+          order: 22,
+          decorate: (file) => conventionDecorationsForFile(view, file.path),
+        }),
+      );
+
+      /* ---------------- 💡 约定问题的一键修复 ----------------
+
+       动作**只在有可证明改法时**才出：`issue.edits`（契约 additive 字段）优先，其次是
+       `fixes.ts` 的兜底供给方；两者都空 ⇒ 一条动作都不给（波浪线照旧在，绝不给一个
+       改不动眼前红线的 quickfix——那比没有更糟）。
+       `diagnostics` 逐条原样交出**与装饰面同一身份键**的那条 `LineDecoration`（B9）：
+       聚合视图与 `Ctrl+.` 说的因此是同一次问题，Monaco 的排序优先 / 应用高亮 / `hasAutoFix`
+       才认得出"这个修复消解的就是这条红线"。
+       只对**能写**的路径供（同 `erb-structure-fix` 的门槛）：游戏目录默认只读，
+       Monaco 的 `executeEdits` 却照样能改缓冲 ⇒ 不挡就会造出"只读文件被改脏"的怪态。
+       */
+      ctx.onDispose(
+        ctx.slots.register('ui.editor.codeAction', {
+          id: 'convention-quickfix',
+          order: 31,
+          provideActions: (file) =>
+            conventionCodeActionsForFile(view, {
+              path: file.path,
+              text: file.text,
+              ...(file.line !== undefined ? { line: file.line } : {}),
+              ...(file.scope !== undefined ? { scope: file.scope } : {}),
+              ...(file.diagnostics !== undefined ? { diagnostics: file.diagnostics } : {}),
+              writable: io.isWritable(file.path),
+              fixResolver: conventionIssueFixes,
+            }),
+        }),
+      );
+
       // ---- 自动运行：索引重建完成即校验（串行化，避免叠加运行） ----
       let running = false;
       let queued = false;
@@ -246,10 +322,30 @@ export function createConventionLinterPlugin(): Plugin {
 }
 
 export { ConventionEngine, type ConventionEngineDeps } from './engine';
+export {
+  buildConventionIssueView,
+  conventionCodeActionsForFile,
+  conventionDecorationsForFile,
+  conventionIssueDecoration,
+  conventionIssueKey,
+  conventionSeverityToDecoration,
+  conventionSquiggleOwnedElsewhere,
+  conventionSurfaceDecoration,
+  foldIssueEdit,
+  toIssueLines,
+  type ConventionCodeActionRequest,
+  type ConventionFileBucket,
+  type ConventionIssueFixResolver,
+  type ConventionIssueView,
+} from './diagnostics';
+export { conventionIssueFixes } from './fixes';
 export { duplicateFunctionRule, DUPLICATE_FUNCTION_RULE_ID } from './rules/duplicate-function';
 export {
   sugarStaticConventionsRule,
   SUGAR_STATIC_CONVENTIONS_RULE_ID,
+  SUGAR_RULE_ID_PREFIX,
+  isSugarFamilyRuleId,
+  sugarFamilyCodeOf,
   CONT_INSIDE_QUOTES_RULE_ID,
   MULTIPLE_CHOICE_BLOCKS_RULE_ID,
   EXPR_MISSING_ELSE_RULE_ID,

@@ -147,9 +147,11 @@ describe('显式态判定', () => {
     expect(refreshNote({ state: 'refreshed', index: ok([entry()]), fetchedAt: 1 })).toContain('1 个包');
     expect(refreshNote({ state: 'refreshed', index: { state: 'absent' }, fetchedAt: 1 })).toContain('读不出内容');
     expect(refreshNote({ state: 'cached', index: ok([]), fetchedAt: 1_700_000_000_000 })).toContain('没有回源');
-    const failed = refreshNote({ state: 'failed', reason: '域名不在允许清单', index: ok([entry()]) });
+    const failed = refreshNote({ state: 'failed', stage: 'check', reason: '域名不在允许清单', index: ok([entry()]) });
     expect(failed).toContain('还是本机已有的那份');
-    expect(refreshNote({ state: 'failed', reason: 'r', index: { state: 'absent' } })).toContain('还没有可用的列表');
+    expect(refreshNote({ state: 'failed', stage: 'check', reason: 'r', index: { state: 'absent' } })).toContain(
+      '还没有可用的列表',
+    );
   });
 
   it('dropped 非空必须出声，一条没丢不占行', () => {

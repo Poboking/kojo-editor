@@ -16,7 +16,14 @@
  * 部署正相反——落点在游戏目录内，**写白名单这道闸必须过**（详见 `deploy.ts`）。
  */
 
-import { basename, buildZip, type FileIO, type Logger, type ZipEntry } from '@kojo/plugin-api';
+import {
+  basename,
+  buildZip,
+  type FileIO,
+  type Logger,
+  verifyZipRoundtrip,
+  type ZipEntry,
+} from '@kojo/plugin-api';
 import {
   planArtifacts,
   readPackageSources,
@@ -54,6 +61,13 @@ export interface PackageActionsDeps {
  *
  * 包内根 = 源目录名，于是作者解压出来就是一个文件夹，与 README 里
  * 「把本包整个文件夹放入游戏目录」的说法对得上。
+ *
+ * 两条往返契约（W14，规则见 `@kojo/plugin-api` 的 `zip.ts` 与共享表
+ * `plugin-api/fixtures/zip-roundtrip/contract.json`）都在这里生效，**都在弹对话框之前**：
+ * 1. `contract: 'extractable'`：条目名与规模先过一遍平台解包器的闸（无目录条目、
+ *    深度/条目数/总字节不超限额、无重名含大小写折叠）——违例在写第一个字节前抛；
+ * 2. `verifyZipRoundtrip`：把打好的字节读回来逐条目核名字 / 字节数 / CRC / 内容，
+ *    导出链路因此第一次有了"我写出去的东西确实能被读回来"的验证回路。
  */
 export async function buildPackageZip(
   io: FileIO,
@@ -72,7 +86,10 @@ export async function buildPackageZip(
     name: `${root}/${e.relPath}`,
     data: e.bytes,
   }));
-  return { fileName: `${root}.zip`, bytes: await buildZip(entries), plan };
+  const bytes = await buildZip(entries, { contract: 'extractable' });
+  const problem = await verifyZipRoundtrip(bytes, entries);
+  if (problem !== null) throw new Error(`导出的包没能通过往返自证：${problem}`);
+  return { fileName: `${root}.zip`, bytes, plan };
 }
 
 export interface PackageActions {

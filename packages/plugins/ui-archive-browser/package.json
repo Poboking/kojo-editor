@@ -2,7 +2,7 @@
   "name": "@kojo/plugin-ui-archive-browser",
   "version": "0.2.0",
   "private": true,
-  "description": "Archive browser panel (ui.panel contribution): lists archive slots from the snapshot.source scan (saveMes summary, character count, size, mtime), expands a capped character-area summary per slot and emits the kernel event kojo.snapshotSelected. Pure presentation - parsing lives in the sav-parser plugin.",
+  "description": "Archive browser panel (ui.panel contribution): lists archive slots from the archive read single source (archive.reader, implemented by the sav-parser plugin), expands a capped character-area summary per slot, offers the two legal extract landings (persistent workspace root / save-dialog channel), and emits the kernel event kojo.snapshotSelected. Pure presentation - parsing and disk writes live in the reader.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

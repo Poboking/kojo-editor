@@ -1,21 +1,28 @@
 /**
  * 归档浏览器纯逻辑（零 React；可单测）。
  *
- * - `buildArchiveList`：把 `snapshot.source` 的扫描结果规约为可渲染行 + **显式降级原因**
- *   （无项目 / 无归档目录 / 未发现归档 / 扫描失败——一律不静默）；
+ * - `buildArchiveList`：把归档读取单源（`archive.reader`）的扫描结果规约为可渲染行 +
+ *   **显式降级原因**（无项目 / 无归档目录 / 未发现归档 / 扫描失败——一律不静默）；
  * - `summarizeCharacters`：角色区摘要（前 N 个角色名 + 总数；**绝不全量渲染**）；
- * - `formatBytes` / `formatTimestamp` / `summarizeText`：展示格式化。
+ * - `formatTimestamp` / `summarizeText`：展示格式化。
+ *
+ * **W13 收口**：字节格式化（`formatBytes`）与条目路径解析（`archiveEntryLabel` /
+ * `archiveEntryFileName`）**不在本模块**——它们只住在契约 `plugin-api/archive.ts` 一处，
+ * 本模块只是引用者（面板自写一份 = 与内核 paths 通道并存的第二判据）。
  *
  * 术语：archive（归档）统称；本模块不出现任何游戏名词。
  */
 
 import type {
   ArchiveCharacterBlock,
+  ArchiveExtractOutcome,
+  ArchiveExtractRequest,
   CharaInfo,
   GameProject,
   SnapshotArchiveEntry,
   SnapshotScanResult,
 } from '@kojo/plugin-api';
+import { formatBytes } from '@kojo/plugin-api';
 
 /** 备注摘要长度上限（档位列表一行内可读） */
 export const SAVE_MES_MAX = 40;
@@ -107,20 +114,6 @@ export function buildArchiveList(opts: {
   return { rows, failed, degrade: null };
 }
 
-/** 字节数人类可读（B / KB / MB / GB；非法输入 → '—'） */
-export function formatBytes(n: number): string {
-  if (!Number.isFinite(n) || n < 0) return '—';
-  if (n < 1024) return `${n} B`;
-  const units = ['KB', 'MB', 'GB'];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(1)} ${units[i]!}`;
-}
-
 /** 时间戳（本地时区 YYYY-MM-DD HH:mm；缺省 → '—'） */
 export function formatTimestamp(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms)) return '—';
@@ -171,4 +164,35 @@ export function summarizeCharacters(
     }
   }
   return { names, shown: names.length, total: all.length };
+}
+
+/* --------------------------- 取出意图（落盘的唯一出口） --------------------------- */
+
+/** 两种合法落点的按钮文案（一份口径，面板与测试同引这里） */
+export const EXTRACT_LABELS: Record<'workspace' | 'dialog', string> = {
+  workspace: '取出到工作区',
+  dialog: '另存为…',
+};
+
+/**
+ * 面板侧的取出意图 → 契约请求。
+ *
+ * **刻意只产出 `kind` + `entryPath` 两个字段**：这里没有、也不许有"目标目录"这一项
+ * （架构铁律 6：新增"写到域外"的能力不得开放任意目标路径参数）。落点由
+ * 归档读取单源（`archive.reader`）按契约规则决定——工作区固定子目录，或系统对话框。
+ * 单独成函数就是为了这条形状可被零 React 单测钉死（面板是 `createElement`，
+ * 本包 devDeps 只有 react 没有 react-dom，点不了按钮；先例见 ui-sugar-editor 的
+ * `new-file-flow` 测试头注）。
+ */
+export function extractRequest(entryPath: string, kind: 'workspace' | 'dialog'): ArchiveExtractRequest {
+  return kind === 'workspace' ? { kind: 'workspace', entryPath } : { kind: 'dialog', entryPath };
+}
+
+/**
+ * 取出结果的一行人话（落点 / 字节 / 取消三种形态都在这里，别在组件里再拼一份）。
+ * 字节格式化引用契约那份 `formatBytes`。
+ */
+export function extractOutcomeText(outcome: ArchiveExtractOutcome): string {
+  if (outcome.cancelled) return '已取消（未写任何字节）';
+  return `已取出 ${formatBytes(outcome.bytes)} → ${outcome.landing}`;
 }

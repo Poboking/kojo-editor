@@ -1,26 +1,32 @@
 /**
  * @kojo/plugin-ui-sugar-editor
  *
- * 语法糖**编辑体验**（v0.3 批 S6 + 2026-10-12 保存接线批）：三处贡献，都只做
+ * 语法糖**编辑体验**（v0.3 批 S6 + 2026-10-12 保存接线批 + 2026-10-19 W3 快速修复批）：
+ * 四处贡献，都只做
  * **呈现/翻译/编排**，语义全在 `kojo-sugar` 的 `sugar.transpile`（纯函数）——
  *
  *   1. `ui.editor.decorator`（id `sugar-diagnostics`）：对当前 `.kojo` 源转译，
  *      把诊断翻成**行级装饰**（带列区间）→ 宿主（app 壳）消费为 Monaco markers，
  *      即规范 §8「危险波浪线」；
- *   2. `ui.editor.saveHandler`（id `sugar-save`，2026-10-12 批）：接管 `.kojo`
+ *   2. `ui.editor.codeAction`（id `sugar-quickfix`，2026-10-19 W3 批）：把**可自动修**的那几条
+ *      转译诊断落成 `kind:'quickfix'` 动作（自带 `edits` + 原样回递的那条波浪线）——判据闭集
+ *      与"代回转译器自证"都在 `kojo-quickfix.ts`；只改 model、不写盘；
+ *   3. `ui.editor.saveHandler`（id `sugar-save`，2026-10-12 批）：接管 `.kojo`
  *      保存——保存源文件 + 经 `planSave`/`compileToFile` 编译产物（逻辑见
  *      `save-handler.ts`）；宿主零 `.kojo` 知识，缺失时退化为缺省保存；
- *   3. `ui.panel`（id `sugar-verdict`，标题「糖判定」）：当前 `.kojo` 文件的
+ *   4. `ui.panel`（id `sugar-verdict`，标题「糖判定」）：当前 `.kojo` 文件的
  *      **编译判定**——可编译 / 有警告 / 不可编译 + 逐条诊断（点击 → 定位源行）。
  *
  * 分层与解耦（对应 ARCHITECTURE.md §4 与 DSH 哲学）：
  *   - 装饰与判定都是**纯函数**（不读盘不写盘不发事件）——`decorate()` 拿到的
  *     就是宿主给的 `{path, text}`，转译器无 IO；面板的读盘走内核 io（只读）；
  *   - 判定/装饰归类在 `panel-logic.ts`（零 React，可单测）；
+ *   - 快速修复的判据闭集与自证归类在 `kojo-quickfix.ts`（零 React、零 IO，可单测）；
  *   - 当前文件 / 文本真相 / 光标位点分别来自宿主事件 `editor.activeFileChanged` /
  *     `editor.documentChanged`（C2：编辑器缓冲 = 当前可编译真相，读盘只是还没收到
  *     广播前的兜底）/ `editor.cursorMoved`（C1 反向下行：光标动、诊断高亮跟）——
- *     三者都只是订阅，不持有宿主引用；
+ *     W4 起三条订阅住共享核 `createPanelTruthController`（attach 一次订齐、
+ *     dispose 一次退净），面板不持有宿主引用、也不自带第二份事件拷贝；
  *   - 跳转复用宿主既有通道 `editor.revealLocation`；
  *   - 零游戏知识：本插件不认得任何游戏术语，变量字典/分野模板全在 adapter。
  */
@@ -29,6 +35,7 @@ import { createElement, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import type {
   FileIO,
+  LineDecoration,
   OpJournal,
   Plugin,
   ProjectService,
@@ -42,17 +49,21 @@ import {
   WellKnownCommands,
   WellKnownServices,
   diagnosticDisplay,
-  pathKey,
 } from '@kojo/plugin-api';
 import {
-  DIAG_WINDOW_INITIAL,
+  DIAG_WINDOW,
+  MORE_ROW_STYLE,
+  MORE_ROW_TITLE,
+  attachGrowSentinel,
   buildVerdictRows,
-  createLiveTextPool,
+  createPanelTruthController,
+  degradeForActiveFile,
   degradeText,
   diagWindowSize,
   diagnosticDecorations,
+  growWindow,
   isKojoFile,
-  nextDiagWindow,
+  moreRowLabel,
   summarize,
   type VerdictDegrade,
   type VerdictRow,
@@ -61,53 +72,37 @@ import {
 import { NEW_KOJO_OVERLAY_ID, createNewKojoWizard } from './new-file-wizard';
 import { createNewFileFlow } from './new-file-flow';
 import { performSugarSave } from './save-handler';
+import { buildSugarQuickFixes } from './kojo-quickfix';
 
 /* ------------------------------ 诊断窗口 ------------------------------ */
 
 /**
  * 「显示更多」哨兵（诊断列表触底器）。
  *
- * 进入滚动视口即自动追加下一窗（IntersectionObserver——列表所在面板自带滚动裁剪，
- * 浏览器按可见矩形判相交，不必手动传 root）；观察器不可用（SSR / 测试 / 旧环境）
- * 时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在无 DOM lib 下，
- * `IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定回调 ref 拿真实节点，
- * 避免每次渲染重挂 observer。
+ * W4 起观察器行为、title/文案/样式全部住在契约层 `sugar-panels`
+ * （`attachGrowSentinel` / `moreRowLabel` / `MORE_ROW_STYLE`——本面板曾自带
+ * 第二份拷贝，现与预览面板同壳同核）；这里只余"把核装进 React"的最小胶水，
+ * 无任何分支。观察器不可用（SSR / 测试 / 旧环境）时核返回空退订 ⇒ 退化为
+ * 纯点击按钮，功能不丢。className 保持 `sv-more-btn`（视觉口径不漂）。
  */
-type IntersectionObserverLike = new (
-  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
-) => { observe(target: object): void; disconnect(): void };
-
-/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
-const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
-
 function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
   const anchor = useRef<unknown>(null);
-  const setAnchor = useCallback((node: unknown): void => {
-    anchor.current = node;
-  }, []);
   /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
   const onMoreRef = useRef(onMore);
   onMoreRef.current = onMore;
-  useEffect(() => {
-    const el = anchor.current as object | null;
-    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
-    if (!el || !IO) return;
-    const io = new IO((entries) => {
-      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
+  useEffect(() => attachGrowSentinel(anchor.current, () => onMoreRef.current()), []);
   return createElement(
     'button',
     {
-      ref: setAnchor,
+      ref: (node: unknown): void => {
+        anchor.current = node;
+      },
       className: 'ghost small dim sv-more-btn',
-      style: MORE_BTN_STYLE,
-      title: '滚到此处会自动加载下一批；也可直接点击',
+      style: MORE_ROW_STYLE,
+      title: MORE_ROW_TITLE,
       onClick: () => onMore(),
     },
-    `显示更多（还剩 ${remaining}）`,
+    moreRowLabel(remaining),
   );
 }
 
@@ -116,7 +111,7 @@ export interface VerdictDiagListProps {
   readonly rows: readonly VerdictRow[];
   /** 当前渲染窗口行数（undefined = 初始窗口） */
   readonly limit: number | undefined;
-  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextDiagWindow 计算） */
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 growWindow(prev, total, DIAG_WINDOW) 计算） */
   readonly onGrow: (total: number) => void;
   /** 点击诊断行 = 定位源行意图（宿主消费） */
   readonly onReveal: (line: number) => void;
@@ -205,21 +200,64 @@ export function createUiSugarEditorPlugin(): Plugin {
        */
       const SUGAR_DECORATIONS_TASK = 'sugar.diagnostics';
 
+      /**
+       * `.kojo` 源文本 → 面上的波浪线（**唯一一份翻译**：decorator 贡献与下面 quickfix 的
+       * 自证都走这里）。之所以提出来而不是各写一遍：自证的对照组必须与面上那份**逐字段同源**，
+       * 两处各拼一遍 `transpile + diagnosticDecorations` 就是同一份判据的两个副本
+       * （本仓同类事故口径，见 ui-sugar-lift 的 FT-2 收口注）。
+       */
+      function kojoDecorations(path: string, source: string): LineDecoration[] {
+        if (!isKojoFile(path)) return [];
+        try {
+          return diagnosticDecorations(sugar.transpile(source, { filePath: path }).diagnostics);
+        } catch {
+          // 转译器自身异常：绝不在编辑器里炸（宿主本就会隔离装饰器异常，这里
+          // 显式兜底，让"这一文件无波浪线"而非"整个装饰链断掉"）。
+          return [];
+        }
+      }
+
       ctx.slots.register('ui.editor.decorator', {
         id: 'sugar-diagnostics',
         title: '.kojo 诊断波浪线',
         order: 10,
         offloadKind: SUGAR_DECORATIONS_TASK,
-        decorate(file): ReturnType<typeof diagnosticDecorations> {
-          if (!isKojoFile(file.path)) return [];
-          try {
-            const r = sugar.transpile(file.text, { filePath: file.path });
-            return diagnosticDecorations(r.diagnostics);
-          } catch {
-            // 转译器自身异常：绝不在编辑器里炸（宿主本就会隔离装饰器异常，这里
-            // 显式兜底，让"这一文件无波浪线"而非"整个装饰链断掉"）。
-            return [];
-          }
+        decorate(file): LineDecoration[] {
+          return kojoDecorations(file.path, file.text);
+        },
+      });
+
+      /* -------------------- 贡献 1b：波浪线的快速修复（W3） -------------------- */
+
+      /**
+       * `Ctrl+.` 与「全部修复」此前在 `.kojo` 上**恒为 0 个可修项**：面上唯一的 codeAction
+       * 供方是 `ui-sugar-lift`，它给的是 `kind:'refactor'`（改写法不是消诊断），而宿主
+       * `kojo-fix-all.ts` 把 refactor 排除在"唯一解"判据外。本贡献补的就是 `kind:'quickfix'`
+       * 那一格，并把**宿主递进来的那条 LineDecoration 原样**填进 `diagnostics`（B9）。
+       *
+       * 收敛的码是闭集、且每条动作都经过"代回转译器再跑一遍波浪线"的自证——判据与理由
+       * 全在 `kojo-quickfix.ts` 头注。这里只接线：**零写盘**（产物是 `EditorTextEdit`，
+       * 落盘仍由作者 Ctrl+S 走贡献 2 的保存链路）。
+       */
+      ctx.slots.register('ui.editor.codeAction', {
+        id: 'sugar-quickfix',
+        order: 20,
+        provideActions: ({ path, text, diagnostics }) => {
+          // 两道闸都在接线层，判据本体不认识它们：
+          // ① 只对 `.kojo` 供（本插件的波浪线只作用于糖源）；
+          // ② **只给能写的文件**改写动作（`kernel.io.isWritable`，与保存按钮同源口径）——
+          //    与 `erb-structure-fix`、`convention-linter` 同一条保守纪律：Monaco 的
+          //    `executeEdits` 不看写权限，不挡就会给一份"改脏了却存不下去"的只读缓冲。
+          //    作者工作区是**常驻可写根**（铁律 5），故正常写作路径不受本闸影响；
+          //    会话内解锁（轴二）那一份插件看不见 ⇒ 依旧不给（刻意保守，与那两家同判）。
+          if (!isKojoFile(path) || !io.isWritable(path)) return [];
+          return buildSugarQuickFixes({
+            text,
+            // 宿主没给波浪线（旧宿主 / 该区间本来没红线）就一条不产：不凭空造 quickfix
+            diagnostics: diagnostics ?? [],
+            decorate: (source) => kojoDecorations(path, source),
+            onDegrade: (reason) => ctx.log.warn(`sugar-quickfix（${path}）：${reason}`),
+          });
         },
       });
 
@@ -243,8 +281,12 @@ export function createUiSugarEditorPlugin(): Plugin {
         const [rows, setRows] = useState<readonly VerdictRow[]>([]);
         const [error, setError] = useState<string | null>(null);
         const [nonce, setNonce] = useState(0);
-        /** 编辑器缓冲真相（C2）：per-path 最新广播文本；读盘降级为"还没收到广播前"的兜底 */
-        const liveRef = useRef(createLiveTextPool());
+        /**
+         * 真相三事件（activeFileChanged / documentChanged / cursorMoved）的订阅
+         * 生命周期核（W4）：attach 一次订齐三条、dispose 一次退净三条；缓冲真相
+         * 池（C2）与"命中当前文件 / 非派生视图"判据都住在核内，面板只拿裁决结果。
+         */
+        const truthRef = useRef(createPanelTruthController(ctx.bus));
         /** 当前文件的真相更新序号（广播命中当前文件时 +1，驱动重算） */
         const [liveTick, setLiveTick] = useState(0);
         /**
@@ -257,59 +299,33 @@ export function createUiSugarEditorPlugin(): Plugin {
         /** 诊断渲染窗口（行数；undefined = 初始窗口——旧实现硬截 200 且第 201 条起不可达） */
         const [diagWindow, setDiagWindow] = useState<number | undefined>(undefined);
 
-        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；计算在 panel-logic 可单测） */
+        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；算术住共享核，与预览面板同窗） */
         const growDiag = useCallback((total: number): void => {
-          setDiagWindow((prev) => {
-            const next = nextDiagWindow(prev, total);
-            if (next === (prev ?? DIAG_WINDOW_INITIAL)) return prev; // 无变化不重渲
-            return next;
-          });
+          setDiagWindow((prev) => growWindow(prev, total, DIAG_WINDOW)); // 无增长原样返回 prev ⇒ 跳过重渲
         }, []);
 
-        // 当前文件（宿主广播）——换文件即重置
-        useEffect(() => {
-          const un = ctx.bus.on('editor.activeFileChanged', (p) => {
-            setFilePath(p.filePath);
-            setSummary(null);
-            setRows([]);
-            setDiagWindow(undefined);
-            setError(null);
-            setNonce(0);
-            // 高亮随旧文件一起清掉：新文件的位点稍后才到（读盘 + 转译），
-            // 中间这一拍若留着旧行号，就会在新文件里"指错行"
-            setCursorLine(null);
-            setDegrade(p.filePath ? (isKojoFile(p.filePath) ? 'reading' : 'not-kojo') : 'no-project');
-          });
-          return un;
-        }, []);
-
-        // 缓冲真相广播（C2）：记入 per-path 池；命中的是当前文件即触发重算——
-        // 面板数字从此与波浪线吃**同一份**文本（宿主已防抖/去重，收到即算，
-        // 不叠加第二层；糖视图是派生文本、宿主不发，这里无需自备防御）。
-        useEffect(() => {
-          const un = ctx.bus.on('editor.documentChanged', (ev) => {
-            liveRef.current.apply(ev.filePath, ev.text);
-            if (filePath !== null && pathKey(ev.filePath) === pathKey(filePath)) setLiveTick((n) => n + 1);
-          });
-          return un;
-        }, [filePath]);
-
-        // C1 反向下行：光标位点跟过来。文件判等走 pathKey（大小写 / 分隔符）；
-        // 别的文件 / 派生视图 / 无打开文件 → 清高亮（"没有"，不是错误，静默）
-        useEffect(() => {
-          const un = ctx.bus.on('editor.cursorMoved', (p) => {
-            const here =
-              !p.derivedView &&
-              filePath !== null &&
-              p.filePath !== null &&
-              pathKey(p.filePath) === pathKey(filePath);
-            setCursorLine((prev) => {
-              const next = here ? p.line : null;
-              return prev === next ? prev : next; // 同一行上的列级移动不重渲
-            });
-          });
-          return un;
-        }, [filePath]);
+        // 真相三事件：挂载即订齐、卸载即退净（换文件即重置全部状态；高亮随旧文件
+        // 一起清掉——新文件的位点稍后才到，中间这一拍若留着旧行号会"指错行"）。
+        // 缓冲真相广播（C2）命中当前文件即 +1 tick 驱动重算——面板数字从此与
+        // 波浪线吃**同一份**文本（宿主已防抖/去重，收到即算，不叠加第二层）。
+        useEffect(
+          () =>
+            truthRef.current.attach({
+              onActiveFile: (filePath) => {
+                setFilePath(filePath);
+                setSummary(null);
+                setRows([]);
+                setDiagWindow(undefined);
+                setError(null);
+                setNonce(0);
+                setCursorLine(null);
+                setDegrade(degradeForActiveFile(filePath));
+              },
+              onLiveText: () => setLiveTick((n) => n + 1),
+              onCursorLine: (line) => setCursorLine(line),
+            }),
+          [],
+        );
 
         // 跟随：光标行换人时滚一次（nearest——已在视野内就不动）。行未渲染 / 无匹配行 → 静默跳过。
         useEffect(() => {
@@ -330,7 +346,7 @@ export function createUiSugarEditorPlugin(): Plugin {
             setSummary(summarize(text, r.erb, mapped, r.diagnostics));
             setRows(buildVerdictRows(r.diagnostics));
           };
-          const live = liveRef.current.textFor(path);
+          const live = truthRef.current.pool.textFor(path);
           if (live !== null) {
             // 有缓冲真相：直接用它转译出判定（summary + rows），不等读盘
             try {

@@ -11,6 +11,11 @@
  * **本模块不含任何游戏知识**：一切语义（什么是糖行、什么是消息块）由
  * `@kojo/plugin-api` 的类型承载，此处只做**排序 / 过滤 / 格式化 / 计数**。
  *
+ * W4 PANEL-DEDUP（2026-10-18 面板去重批）：行池 / `.kojo` 判定 / 降级文案 /
+ * 诊断行成形 / 诊断窗口 / 真相三事件订阅 / 触底哨兵核**曾与 ui-sugar-editor
+ * 的 `panel-logic.ts` 逐字各抄一份**（诊断窗口甚至一边 80 一边 60），现已上收
+ * `@kojo/plugin-api/sugar-panels`（唯一实现）；本文件保留原有导出名做薄转发。
+ *
  * 边界（S4 数据层已知边界，见 `kojo-sugar/src/preview.ts` 头注）：三向映射里
  * 「产物行 ↔ 消息块」的坐标同源性由装配方保证；本模块只消费其输出，
  * **不替它做坐标判断**，故无回放数据时 `messageBlocks` 为空数组是合法输入。
@@ -24,7 +29,33 @@ import type {
   SugarPreviewMessageBlock,
   SugarPreviewResult,
 } from '@kojo/plugin-api';
-import { FULLWIDTH_SPACE, fullwidthSpaceLines, pathKey } from '@kojo/plugin-api';
+import { FULLWIDTH_SPACE, buildPanelDiagnosticRows, fullwidthSpaceLines } from '@kojo/plugin-api';
+import type { PanelDegrade, PanelDiagnosticRow } from '@kojo/plugin-api';
+
+/* ---- 共享核薄转发（W4：唯一实现在 @kojo/plugin-api/sugar-panels，勿在此复刻） ---- */
+export {
+  attachGrowSentinel,
+  createLiveTextPool,
+  createPanelTruthController,
+  degradeForActiveFile,
+  degradeText,
+  DIAG_WINDOW,
+  DIAG_WINDOW_INITIAL,
+  DIAG_WINDOW_STEP,
+  diagWindowSize,
+  growWindow,
+  isKojoFile,
+  MORE_ROW_STYLE,
+  MORE_ROW_TITLE,
+  moreRowLabel,
+  nextDiagWindow,
+  nextRowWindow,
+  ROW_WINDOW,
+  rowWindowSize,
+  ROW_WINDOW_INITIAL,
+  ROW_WINDOW_STEP,
+} from '@kojo/plugin-api';
+export type { LiveTextPool, PanelTruthController, PanelTruthHandlers } from '@kojo/plugin-api';
 
 /* ============================== 全角空格（规范 §8） ============================== */
 
@@ -40,33 +71,18 @@ export { FULLWIDTH_SPACE, fullwidthSpaceLines };
 
 /* ============================== 诊断行 ============================== */
 
-/** 诊断列表行（渲染数据源；保持上游顺序，不做重排） */
-export interface DiagnosticRow {
-  key: string;
-  severity: 'error' | 'warning' | 'info';
-  code: string;
-  message: string;
-  /** 1 基行号；**文件级诊断（无位置）为 null** */
-  line: number | null;
-  /** 1 基列号；无位置为 null */
-  column: number | null;
-}
+/** 诊断列表行（= 共享诊断行；W4 起与判定面板**同键同序**：有位置的在前、
+ *  (行,列) 升序、文件级殿后、同位置保序——同屏两份列表不再各排各的） */
+export type DiagnosticRow = PanelDiagnosticRow;
 
 /** 是否可跳转定位（有源位置） */
 export function canJump(d: DiagnosticRow): boolean {
   return d.line !== null;
 }
 
-/** 诊断 → 列表行（`key` 含序号，避免同码同位置重复诊断互相顶掉） */
+/** 诊断 → 列表行（实现住在契约层 `sugar-panels`，此处仅保留原导出名） */
 export function buildDiagnosticRows(diags: readonly SugarDiagnostic[] | undefined): DiagnosticRow[] {
-  return (diags ?? []).map((d, i) => ({
-    key: `${d.code}|${d.loc?.line ?? 0}|${d.loc?.column ?? 0}|${i}`,
-    severity: d.severity,
-    code: d.code,
-    message: d.message,
-    line: d.loc?.line ?? null,
-    column: d.loc?.column ?? null,
-  }));
+  return buildPanelDiagnosticRows(diags);
 }
 
 /* ============================== 可达性折叠 ============================== */
@@ -324,109 +340,11 @@ export function archiveStatus(result: SugarPreviewResult | null): ArchiveStatus 
   return { connected: true, who, hint: '' };
 }
 
-/* ============================== 缓冲真相池（C2） ============================== */
-
-/**
- * 编辑器**缓冲真相**池（C2，2026-10-16 面板真相统一批）：消费宿主广播
- * `editor.documentChanged` 的最新文本，**按文件**各留一条。
- *
- * 语义（与契约注释同一口径）：
- * - 同一 path 的新广播**覆盖旧**——它就是"这个文件此刻的可编译真相"；
- * - `textFor()` 返回 null = 还没收到该文件的广播（首开窗口期）→ 调用方退回
- *   `io.readText` 读盘兜底；返回非空 = 以广播为准，**不得**再读盘（否则又成分叉）；
- * - path 判等走 `pathKey()` 归一：事件路径平台原样，裸字符串比会在 Windows 上
- *   静默判不上（HK-7 同款坑）；
- * - 只进不删、条数 = 会话内收到过广播的文件数（面板场景就一两份文件，不设上限）。
- */
-export interface LiveTextPool {
-  /** 记一条广播（同 path 覆盖旧值） */
-  apply(filePath: string, text: string): void;
-  /** 该文件的最新真相；未收到过广播返回 null（调用方走读盘兜底） */
-  textFor(filePath: string | null | undefined): string | null;
-}
-
-export function createLiveTextPool(): LiveTextPool {
-  const byKey = new Map<string, string>();
-  return {
-    apply(filePath: string, text: string): void {
-      byKey.set(pathKey(filePath), text);
-    },
-    textFor(filePath: string | null | undefined): string | null {
-      if (filePath === null || filePath === undefined) return null;
-      return byKey.get(pathKey(filePath)) ?? null;
-    },
-  };
-}
-
 /* ============================== 降级 / 文件判定 ============================== */
 
-export type PreviewDegrade =
-  | 'no-project'
-  | 'no-file'
-  | 'not-kojo'
-  | 'reading'
-  | 'previewing'
-  | 'read-error'
-  | 'preview-error';
-
-const DEGRADE_TEXT: Record<PreviewDegrade, string> = {
-  'no-project': '打开项目并选择一个 .kojo 文件后可用',
-  'no-file': '打开一个 .kojo 文件后可用',
-  'not-kojo': '当前文件不是 .kojo（转译检查只对 .kojo 文件有意义）',
-  reading: '读取源文件中…',
-  previewing: '生成预览中…',
-  'read-error': '读取源文件失败',
-  'preview-error': '预览生成失败',
-};
-
-export function degradeText(d: PreviewDegrade): string {
-  return DEGRADE_TEXT[d];
-}
-
-/** 是否 `.kojo` 表层语法源文件（大小写不敏感；与编译器入口口径一致） */
-export function isKojoFile(path: string | null | undefined): boolean {
-  if (!path) return false;
-  return path.toLowerCase().endsWith('.kojo');
-}
+/** 降级闭集 = 契约层共享闭集（W4 起两面板同一真源；preview 曾自有的 7 键已上收） */
+export type PreviewDegrade = PanelDegrade;
 
 /* ============================== 渲染窗口 ============================== */
-
-/**
- * 逐行映射区的窗口（触底增窗）。
- *
- * 旧实现硬截 400 行 + 一句「其余 N 行未显示」——第 401 行起不可达。窗口化后
- * INITIAL 是首帧 DOM 上界，滚动触底或点击「显示更多」按 STEP 增长，全量可达。
- * 取值：逐行映射单行 ~19px（等宽小字），INITIAL=120 ≈ 两屏余；步长按 1:2 节奏
- * （与函数树的面窗口同比例），大文件两三步入底。
- */
-export const ROW_WINDOW_INITIAL = 120;
-export const ROW_WINDOW_STEP = 240;
-
-/** 逐行映射窗口当前应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
-export function rowWindowSize(total: number, limit: number | undefined): number {
-  return Math.min(total, limit ?? ROW_WINDOW_INITIAL);
-}
-
-/** 逐行映射窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))——单调不减、终值 = total */
-export function nextRowWindow(current: number | undefined, total: number): number {
-  const base = current ?? ROW_WINDOW_INITIAL;
-  return Math.min(total, Math.max(ROW_WINDOW_INITIAL, base + ROW_WINDOW_STEP));
-}
-
-/**
- * 诊断区的窗口（触底增窗）。旧实现硬截 100 条且其余不可达；取值口径：
- * 诊断行单行 ~20px，典型文件诊断个位数 ⇒ INITIAL=60 基本没有哨兵；STEP=120 留一份快进档。
- */
-export const DIAG_WINDOW_INITIAL = 60;
-export const DIAG_WINDOW_STEP = 120;
-
-/** 诊断窗口当前应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
-export function diagWindowSize(total: number, limit: number | undefined): number {
-  return Math.min(total, limit ?? DIAG_WINDOW_INITIAL);
-}
-
-/** 诊断窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))——单调不减、终值 = total */
-export function nextDiagWindow(current: number | undefined, total: number): number {
-  const base = current ?? DIAG_WINDOW_INITIAL;
-  return Math.min(total, Math.max(DIAG_WINDOW_INITIAL, base + DIAG_WINDOW_STEP));
-}
+// W4 起窗口参数 / 纯函数全部住在契约层（`DIAG_WINDOW` 80/160 与判定面板同值、
+// `ROW_WINDOW` 120/240 为逐行映射唯一口径），本文件只薄转发（见文件头 export 块）。

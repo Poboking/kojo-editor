@@ -1,5 +1,5 @@
-import type { ErbFile, ErbFunction, ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
-import { symbolTokenAt } from '@kojo/plugin-api';
+import type { EnclosingMode, ErbFile, ErbFunction, ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
+import { enclosingAt, enclosingChainAt, symbolTokenAt } from '@kojo/plugin-api';
 import { parseErbText } from './scanner';
 
 /**
@@ -11,27 +11,40 @@ import { parseErbText } from './scanner';
  *
  * 两条口径都刻意**复用 `ErbIndex` 既有结构**（不新造第二张表——第二张表就是漂移源）：
  * - 包围反查走 `files[path].functions` 的 `startLine/endLine`（`endLine` 由 scanner
- *   收紧成"下一个定义前一行"，故区间**互不重叠**）；
+ *   收紧成"下一个定义前一行"，故区间**互不重叠**）；判据本身**不在这里写**
+ *   （W7 NAV-SCOPE：单源 `plugin-api/semantic-locate.ts` 的 `enclosingAt`）；
  * - 引用反查走 `byName`（"未定义函数"的判据 = `byName` 缺失，不另立标准）。
  */
 
 /**
  * 包围该行的函数定义（1 基行号）。找不到 → `undefined`。
  *
+ * **归属判据不在本文件**：区间包含与平局折法单源于 `@kojo/plugin-api` 的
+ * `enclosingAt`（W7 NAV-SCOPE 批：同一行此前有四份判据四个答案，见该文件头注）。
+ * 本模块只做**索引通道**的接线——按路径取文件、将 `mode` 原样传下去。
+ *
  * 边界（逐条有测试）：
  * - `line` 非有限数 / 小于 1 → `undefined`（**不夹取**：把过期行号静默夹到附近，
  *   会把"位置失效"伪装成"命中旁边那个函数"，比不给答案更危险）；
  * - 行号超过文件行数 / 文件不在索引里 / 空文件（无 `@`）→ `undefined`；
  * - 一行落在两个区间上（理论上不发生——区间互不重叠）时取 `startLine` **较大**者
- *   （最近的 enclosing 定义），保留为防御性口径。
+ *   （最近的 enclosing 定义，即 `innermost` 模式），保留为防御性口径。
+ *
+ * `mode` 是**显式模式参数**而不是第二份实现：大纲/跳状态/调用层级要最内层（缺省），
+ * "这一行属于哪个外层块"那类消费者传 `outermost`。
  */
-export function functionAt(index: ErbIndex, path: string, line: number): ErbFunction | undefined {
+export function functionAt(
+  index: ErbIndex,
+  path: string,
+  line: number,
+  mode: EnclosingMode = 'innermost',
+): ErbFunction | undefined {
   if (!Number.isFinite(line)) return undefined;
   const n = Math.trunc(line);
   if (n < 1) return undefined;
-  const file = index.files.get(path);
+  const file = index?.files?.get(path);
   if (!file) return undefined;
-  return functionInFile(file, n);
+  return functionInFile(file, n, mode);
 }
 
 /**
@@ -39,14 +52,21 @@ export function functionAt(index: ErbIndex, path: string, line: number): ErbFunc
  * 起同时服务标签导航——`definitionTargetsAt` 的输入是**缓冲区文本**（脏缓冲也要给
  * 正确答案），包围判定对"索引里的那份"与"刚 parse 出来的这份"必须是同一条逻辑）。
  */
-export function functionInFile(file: ErbFile, line: number): ErbFunction | undefined {
-  let hit: ErbFunction | undefined;
-  for (const fn of file.functions) {
-    if (fn.startLine <= line && line <= fn.endLine && (hit === undefined || fn.startLine > hit.startLine)) {
-      hit = fn;
-    }
-  }
-  return hit;
+export function functionInFile(
+  file: ErbFile,
+  line: number,
+  mode: EnclosingMode = 'innermost',
+): ErbFunction | undefined {
+  return enclosingAt(file?.functions ?? [], line, mode);
+}
+
+/**
+ * 归属**链**（外→内）：一次解析结果里包住该行的全部函数定义。
+ * 面包屑与吸顶那类"要完整链"的消费者从这里取，别再去扫 `file.functions`
+ * （扫一遍就是第五份判据）。
+ */
+export function functionChainInFile(file: ErbFile, line: number): ErbFunction[] {
+  return enclosingChainAt(file?.functions ?? [], line);
 }
 
 /** 跳转系语句：行首关键字后的**第一个记号**是标签目标（`*CALLFORM` 与变量世界不在此列） */

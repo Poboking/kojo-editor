@@ -8,7 +8,14 @@
 import { describe, expect, it } from 'vitest';
 import type { ErbIndex, ErbParserService, FileIO, Plugin, PluginContext, Unsubscribe } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { buildReferenceIndex, erbReferenceLocationsAt, referencesOf, scanFileRefs, type FileRefs } from '../src/references';
+import {
+  buildReferenceIndex,
+  erbReferenceKindCounts,
+  erbReferenceLocationsAt,
+  referencesOf,
+  scanFileRefs,
+  type FileRefs,
+} from '../src/references';
 import { makeComputeStub } from './support';
 
 const dict = (names: readonly string[]) => {
@@ -331,15 +338,27 @@ describe('erbReferenceLocationsAt · find-references 数据面', () => {
     },
   } as unknown as ErbIndex;
 
-  it('光标词整串命中 ⇒ 引用点全集（文件:行:列，含定义点）', () => {
+  it('光标词整串命中 ⇒ 引用点全集（文件:行:列，含定义点；**分类随位置穿槽** W8④）', () => {
     expect(erbReferenceLocationsAt(index, 'CALL ALPHA\n', 1, 6)).toEqual([
-      { filePath: '/t/A.ERB', line: 1, column: 2 },
-      { filePath: '/t/B.ERB', line: 2, column: 7 },
+      { filePath: '/t/A.ERB', line: 1, column: 2, kind: 'definition' },
+      { filePath: '/t/B.ERB', line: 2, column: 7, kind: 'call' },
     ]);
   });
 
   it('小写引用按归一口径命中（与 referencesTo 同一把尺子）', () => {
     expect(erbReferenceLocationsAt(index, 'call alpha()', 1, 6)).toHaveLength(2);
+  });
+
+  it('分类计数与位置表同一真源：F12 的 N 与「被调用」的 M 之差 = 定义 + 提及（W8④）', () => {
+    const counts = erbReferenceKindCounts(index, 'ALPHA');
+    expect(counts).toEqual({ definition: 1, call: 1, mention: 0, total: 2 });
+    expect(counts.total).toBe(erbReferenceLocationsAt(index, 'CALL ALPHA\n', 1, 6).length);
+    expect(erbReferenceKindCounts(index, 'NO_SUCH_NAME')).toEqual({
+      definition: 0,
+      call: 0,
+      mention: 0,
+      total: 0,
+    });
   });
 
   it('光标无词 / 记号不在索引 / 行越界 ⇒ 空数组（不猜）', () => {
