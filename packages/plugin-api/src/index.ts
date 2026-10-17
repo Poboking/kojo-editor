@@ -649,3 +649,6 @@ export type { KojoIndexKind } from './game';
 
 /* ---- 错误摘要（FE-REF ⑨ 独占追加区块；勿在他处重排） ---- */
 export { errorText } from './errors';
+
+/* ---- 「发布口上」草案契约（用户反馈 4 批；独占追加区块，勿在他处重排） ---- */
+export type { MarketPackDraft, MarketPackDraftFile, MarketPublishPackOpts } from './market';

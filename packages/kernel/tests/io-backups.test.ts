@@ -94,7 +94,9 @@ describe('listBackups · 列举口径', () => {
     await fs.writeFile(path.join(foreign, 'owner.json'), JSON.stringify({ v: 1, pathKey: 'foreign-key-not-ours' }));
     await fs.writeFile(path.join(foreign, '20200101-000000-000.bak'), 'B 的旧版');
     const list = await io.listBackups(f);
-    expect(list.every((v) => !v.path.includes('-2'))).toBe(true);
+    // 只看桶目录名：版本文件名的时间段（如 20:06:32 = `-200632`）本身就可能含 "-2"，
+    // 对整条路径 includes('-2') 会在某些时刻把正常桶误判成外来桶。
+    expect(list.every((v) => path.basename(path.dirname(v.path)) !== `${backupBucketName(f)}-2`)).toBe(true);
     // 历史旧桶（无 owner.json）按现通配放行：升级不炸旧数据
     const legacy = path.join(appData, 'backup', `${backupBucketName(f)}-3`);
     await fs.mkdir(legacy, { recursive: true });

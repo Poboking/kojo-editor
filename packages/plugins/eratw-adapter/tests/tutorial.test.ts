@@ -243,6 +243,15 @@ function collectNodes(node: unknown, className: string, out: Elt[] = []): Elt[] 
 const renderOverlay = (t: Tutorial): Elt =>
   (createTutorialOverlay({ tutorial: t, close: () => {} }) as () => Elt)();
 
+/** 恰好一个某类节点：数量不对直接失败，返回的那个已定型（免得到处 `[0]` 再断言非空） */
+function onlyNode(node: unknown, className: string, label: string): Elt {
+  const found = collectNodes(node, className);
+  expect(found, `${label} 应有且仅有一个 .${className}`).toHaveLength(1);
+  const first = found[0];
+  if (first === undefined) throw new Error(`${label} 缺 .${className}`);
+  return first;
+}
+
 describe('节标题圈码记号拆分（splitHeadingMarker）', () => {
   it('拆出起首圈码 + 其余标题', () => {
     expect(splitHeadingMarker('① 先分清：你写的这份')).toEqual({ marker: '①', text: '先分清：你写的这份' });
@@ -296,5 +305,158 @@ describe('教程浮层结构（2026-10-17 文档式重排）', () => {
     sections.forEach((sec, i) => {
       expect(sec.props?.id).toBe(`tu-sugar-s${i}`);
     });
+  });
+
+  /**
+   * 2026-10-18 反馈 7 回归：目录栏与正文列是 `.tutorial-main` 下的**兄弟列**，被点的目录项
+   * 向上 closest('.tutorial-body') 恒为 null（旧实现），点击目录永远不滚。这里用最小假 DOM
+   * （只实现用到的成员）调用渲染树里真实的 onClick，钉住"经共同父容器找正文列"这条路。
+   */
+  it('点目录项经 .tutorial-main 找到兄弟正文列并滚到对应节（反馈 7 回归）', () => {
+    const item = collectNodes(renderOverlay(SUGAR_TUTORIAL), 'tutorial-toc-item')[2];
+    expect(item, '第 3 条目录项缺失').toBeDefined();
+    const scrollTops: number[] = [];
+    const focuses: unknown[] = [];
+    const section = {
+      getBoundingClientRect: () => ({ top: 420 }),
+      focus: (opts: unknown) => focuses.push(opts),
+    };
+    const body = {
+      scrollTop: 150,
+      getBoundingClientRect: () => ({ top: 60 }),
+      querySelector: (sel: string) => (sel === '#tu-sugar-s2' ? section : null),
+      scrollTo: (init: { top: number }) => scrollTops.push(init.top),
+    };
+    const main = { querySelector: (sel: string) => (sel === '.tutorial-body' ? body : null) };
+    // 真实 DOM 里目录项只可能命中 .tutorial-main；旧实现找 .tutorial-body 会拿到 null
+    const dirItem = { closest: (sel: string) => (sel === '.tutorial-main' ? main : null) };
+    (item?.props?.onClick as (e: unknown) => void)({ currentTarget: dirItem });
+    expect(scrollTops).toEqual([150 + (420 - 60) - 10]);
+    expect(focuses).toEqual([{ preventScroll: true }]);
+  });
+
+  /**
+   * 2026-10-18 反馈 2 的隐蔽路径：spy 旧实现用 `scrollIntoView({block:'nearest'})` 把当前条目
+   * 滚进目录视野，而它会连同**所有**可滚祖先一起滚——宿主一旦可滚就把抬头顶出视野。
+   * 这里钉住"只按 offsetTop 滚目录列表自身"、并且折叠态（条目全隐藏）完全不滚。
+   */
+  it('scroll-spy 只滚目录列表自身、折叠态不滚（反馈 2 回归）', () => {
+    const runSpy = (collapsed: boolean): number[] => {
+      const scrolls: number[] = [];
+      const list = {
+        scrollTop: 0,
+        // 折叠态列表 display:none ⇒ 真实 DOM 的 clientHeight 就是 0
+        clientHeight: collapsed ? 0 : 100,
+        scrollTo: (init: { top: number }) => scrolls.push(init.top),
+      };
+      const items = Array.from({ length: SUGAR_TUTORIAL.sections.length }, (_, i) => ({
+        offsetTop: i * 60,
+        offsetHeight: 28,
+        setAttribute: () => {},
+        removeAttribute: () => {},
+        scrollIntoView: () => {
+          throw new Error('目录滚动不得用 scrollIntoView（会顺带滚可滚祖先，顶掉抬头）');
+        },
+      }));
+      const toc = {
+        getAttribute: (name: string) =>
+          name === 'data-collapsed' ? String(collapsed) : name === 'data-active' ? '0' : null,
+        setAttribute: () => {},
+        querySelectorAll: () => items,
+        querySelector: (sel: string) => (sel === '.tutorial-toc-list' ? list : null),
+      };
+      const main = { querySelector: (sel: string) => (sel === '.tutorial-toc' ? toc : null) };
+      const body = {
+        scrollTop: 0,
+        clientHeight: 100,
+        scrollHeight: 1000,
+        getBoundingClientRect: () => ({ top: 0 }),
+        closest: (sel: string) => (sel === '.tutorial-main' ? main : null),
+        // 前 3 节已越过 SPY_TOP_OFFSET ⇒ 当前节 = 2；第 3 条在列表视口（0..100）之外
+        querySelector: (sel: string) => {
+          const m = /^#tu-sugar-s(\d+)$/u.exec(sel);
+          return m ? { getBoundingClientRect: () => ({ top: Number(m[1]) < 3 ? 10 : 500 }) } : null;
+        },
+      };
+      const onScroll = collectNodes(renderOverlay(SUGAR_TUTORIAL), 'tutorial-body')[0]?.props?.onScroll as
+        | ((e: unknown) => void)
+        | undefined;
+      onScroll?.({ currentTarget: body });
+      return scrolls;
+    };
+    // items[2] = 2*60..2*60+28，视口 0..100 ⇒ 滚到 148-100=48
+    expect(runSpy(false)).toEqual([48]);
+    expect(runSpy(true)).toEqual([]);
+  });
+});
+
+describe('教程浮层抬头（反馈 2）', () => {
+  it('抬头右侧有常驻「×」关闭按钮（aria-label / title = 关闭教程），点击即关', () => {
+    let closed = 0;
+    const tree = (createTutorialOverlay({ tutorial: SUGAR_TUTORIAL, close: () => (closed += 1) }) as () => Elt)();
+    const closer = onlyNode(tree, 'tutorial-close', SUGAR_TUTORIAL.title);
+    expect(closer.props?.['aria-label']).toBe('关闭教程');
+    expect(closer.props?.title).toBe('关闭教程');
+    (closer.props?.onClick as () => void)();
+    expect(closed).toBe(1);
+  });
+});
+
+describe('目录折叠（反馈 6）', () => {
+  const ALL = [SUGAR_TUTORIAL, KOJO_TUTORIAL, TUTORIALS.reference];
+
+  it('目录是「标题行 + 条目列表」两级，标题行保留原 .tutorial-toc-label 并带折叠按钮', () => {
+    for (const t of ALL) {
+      const tree = renderOverlay(t);
+      const nav = onlyNode(tree, 'tutorial-toc', t.title);
+      expect(nav.props?.['data-collapsed'], t.title).toBe('false');
+      onlyNode(tree, 'tutorial-toc-head', t.title);
+      onlyNode(tree, 'tutorial-toc-label', t.title);
+      const list = onlyNode(tree, 'tutorial-toc-list', t.title);
+      expect(list.props?.id, t.title).toBe(`tu-${t.id}-toc-list`);
+      const toggle = onlyNode(tree, 'tutorial-toc-toggle', t.title);
+      expect(toggle.props?.['aria-expanded'], t.title).toBe('true');
+      expect(toggle.props?.['aria-controls'], t.title).toBe(`tu-${t.id}-toc-list`);
+      expect(toggle.props?.['aria-label'], t.title).toBe('收起目录');
+      expect(toggle.props?.title, t.title).toBe('收起目录');
+    }
+  });
+
+  it('点折叠按钮只切 DOM 属性：nav data-collapsed + 按钮 aria-expanded / 名称（组件无 hook）', () => {
+    const tree = renderOverlay(SUGAR_TUTORIAL);
+    const toggle = onlyNode(tree, 'tutorial-toc-toggle', SUGAR_TUTORIAL.title);
+    const navAttrs: Record<string, string> = { 'data-collapsed': 'false' };
+    const btnAttrs: Record<string, string> = {
+      'aria-expanded': 'true',
+      'aria-label': '收起目录',
+      title: '收起目录',
+    };
+    const nav = {
+      getAttribute: (name: string) => navAttrs[name] ?? null,
+      setAttribute: (name: string, value: string) => {
+        navAttrs[name] = value;
+      },
+      // 展开时会把当前条目滚回目录列表视野；这里不提供列表 ⇒ 只验属性切换
+      querySelector: () => null,
+    };
+    const btn = {
+      closest: (sel: string) => (sel === '.tutorial-toc' ? nav : null),
+      setAttribute: (name: string, value: string) => {
+        btnAttrs[name] = value;
+      },
+    };
+    const click = toggle.props?.onClick as (e: unknown) => void;
+
+    click({ currentTarget: btn });
+    expect(navAttrs['data-collapsed']).toBe('true');
+    expect(btnAttrs['aria-expanded']).toBe('false');
+    expect(btnAttrs['aria-label']).toBe('展开目录');
+    expect(btnAttrs.title).toBe('展开目录');
+
+    click({ currentTarget: btn });
+    expect(navAttrs['data-collapsed']).toBe('false');
+    expect(btnAttrs['aria-expanded']).toBe('true');
+    expect(btnAttrs['aria-label']).toBe('收起目录');
+    expect(btnAttrs.title).toBe('收起目录');
   });
 });

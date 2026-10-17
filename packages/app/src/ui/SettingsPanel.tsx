@@ -484,7 +484,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     {
       id: 'market',
       label: '口上市场',
-      icon: 'module',
+      // 与活动栏的市场入口同一枚图标（店面，用户反馈 3）；book 是教程入口的，不是市场的
+      icon: 'store',
       render: () => {
         /* 口上市场：注册表来源（KM-9）。**只有一个可编辑项**——代理既不做输入框也不做开关
            （受众大多没有代理客户端；且 JS 递进来的代理等于把白名单作废，见 market-source.ts）。

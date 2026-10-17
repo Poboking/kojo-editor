@@ -24,6 +24,7 @@ import type { PackageAttribution } from '../src/attribution';
 import { NEW_KOJO_PROJECT_OVERLAY_ID } from '../src/new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID } from '../src/import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID } from '../src/deploy-wizard';
+import { PUBLISH_KOJO_OVERLAY_ID } from '../src/publish-wizard';
 import {
   KOJO_TUTORIAL_OVERLAY_ID,
   REFERENCE_TUTORIAL_OVERLAY_ID,
@@ -275,27 +276,29 @@ describe('「我的口上项目」面板注册（P-B）', () => {
   });
 });
 
-describe('口上项目向导注册（P-C 新建 / P-F 导入 / P-E 部署）', () => {
-  it('注册六个 ui.overlay：新建 + 导入 + 部署 + 两份教程 + 语法全表附录，id 与各引用常量一致', () => {
+describe('口上项目向导注册（P-C 新建 / P-F 导入 / P-E 部署 / 发布口上）', () => {
+  it('注册七个 ui.overlay：新建 + 导入 + 部署 + 发布 + 两份教程 + 语法全表附录，id 与各引用常量一致', () => {
     const { overlays } = activateWithPanel();
     const ids = overlays.map((o) => o.id);
     expect(ids).toContain(NEW_KOJO_PROJECT_OVERLAY_ID);
     expect(ids).toContain(IMPORT_KOJO_OVERLAY_ID);
     expect(ids).toContain(DEPLOY_KOJO_OVERLAY_ID);
+    expect(ids).toContain(PUBLISH_KOJO_OVERLAY_ID);
     expect(ids).toContain(SUGAR_TUTORIAL_OVERLAY_ID);
     expect(ids).toContain(KOJO_TUTORIAL_OVERLAY_ID);
     expect(ids).toContain(REFERENCE_TUTORIAL_OVERLAY_ID);
-    expect(overlays).toHaveLength(6);
+    expect(overlays).toHaveLength(7);
     for (const o of overlays) expect(typeof o.component).toBe('function');
   });
 
-  it('三本教程标 size: wide（E9 宽版）；向导浮层维持缺省宽度档（旧行为不变）', () => {
+  it('三本教程 + 发布口上向导标 size: wide（E9 宽版）；其余向导浮层维持缺省宽度档', () => {
     const { overlays } = activateWithPanel();
     for (const o of overlays) {
       const isWide =
         o.id === SUGAR_TUTORIAL_OVERLAY_ID ||
         o.id === KOJO_TUTORIAL_OVERLAY_ID ||
-        o.id === REFERENCE_TUTORIAL_OVERLAY_ID;
+        o.id === REFERENCE_TUTORIAL_OVERLAY_ID ||
+        o.id === PUBLISH_KOJO_OVERLAY_ID;
       expect(o.size).toBe(isWide ? 'wide' : undefined);
     }
   });

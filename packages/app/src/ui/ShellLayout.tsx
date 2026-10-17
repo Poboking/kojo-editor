@@ -104,6 +104,9 @@ import { ProblemsStatusItem } from './ProblemPanel';
 import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
 import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
+// 全屏自定义顶栏（用户反馈第 2 条）：只在 Tauri 全屏时出现，非全屏/浏览器 dev 返回 null
+import { WindowChrome } from './WindowChrome';
+import { toggleFullscreen } from './window-fullscreen';
 
 /**
  * 壳层五区布局（2026-10-11 UI 重设计批 P1；定稿 §二）。
@@ -533,6 +536,9 @@ export function ShellLayout(props: Props): ReactElement {
       // Ctrl+K Z 和弦是全局键盘处理器的特例分支（注册表单键表达不了），键位在
       // 键位注册表里登记为不可改；此处不带 keybinding，避免全局处理器重复消费。
       { id: 'layout.toggleZen', title: '切换写作模式', run: () => dispatch({ type: 'toggleZen' }) },
+      // 全屏（用户反馈第 2 条）：F11 已由全局键盘分支处理，此处**不带 keybinding**，
+      // 免得和可改键系统重复触发；命令面板里仍可搜到并执行。
+      { id: 'layout.toggleFullscreen', title: '切换全屏', category: '工作台', run: () => { void toggleFullscreen(); } },
       { id: 'layout.reset', title: '重置布局', run: () => doResetRef.current() },
       { id: 'layout.openSettings', title: '打开设置', run: () => { setSettingsSection('general'); setSettingsOpen(true); } },
       { id: 'workbench.commandPalette', title: '命令面板', keybinding: effectiveKeybindingOf('workbench.commandPalette'), run: () => setPaletteOpen(true) },
@@ -731,6 +737,12 @@ export function ShellLayout(props: Props): ReactElement {
       if (e.key === 'F1') {
         e.preventDefault();
         setPaletteOpen(true);
+        return;
+      }
+      // 全屏切换（用户反馈第 2 条）：F11 落在合成门之后，输入法合成期不会走到这里
+      if (e.key === 'F11') {
+        e.preventDefault();
+        void toggleFullscreen();
         return;
       }
       // 注册表 keybinding 匹配
@@ -1453,6 +1465,7 @@ export function ShellLayout(props: Props): ReactElement {
   if (layout.zen) {
     return (
       <div className="shell zen">
+        <WindowChrome title="kojo-editor" />
         <div className="zen-editor">
           <div className={`zen-editor-inner ${layout.zenLimitWidth ? '' : 'no-limit'}`}>{children}</div>
         </div>
@@ -1466,6 +1479,7 @@ export function ShellLayout(props: Props): ReactElement {
 
   return (
     <div className="shell">
+      <WindowChrome title="kojo-editor" />
       {toolbar}
       <div className="shell-main">
         {activityBar}

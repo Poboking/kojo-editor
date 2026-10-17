@@ -41,6 +41,7 @@ import {
 } from './new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } from './import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID, createDeployKojoWizard } from './deploy-wizard';
+import { PUBLISH_KOJO_OVERLAY_ID, createPublishKojoWizard } from './publish-wizard';
 import {
   KOJO_TUTORIAL_OVERLAY_ID,
   REFERENCE_TUTORIAL_OVERLAY_ID,
@@ -373,6 +374,20 @@ export function createEratwAdapterPlugin(): Plugin {
             ...(ev.source !== undefined ? { source: ev.source } : {}),
           };
           ctx.bus.emit('ui.overlay.open', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eratw-adapter' });
+        }),
+      );
+
+      /* ---- 发布口上请求（用户反馈 4 批）：市场面板发语义意图，本插件解释为发布向导 ---- */
+
+      /**
+       * 市场面板只递「作者要发布」这一个意图——载荷里没有项目 / 包 / 许可，那些是
+       * 本插件从工作区**现读**的事实（overlay 组件无 props，打开时不带 payload）。
+       * 与 `workspace.importRequested` 同款分工：发起方不需要知道本插件把模态叫什么、
+       * 要问哪些字段。
+       */
+      ctx.onDispose(
+        ctx.bus.on('market.publishRequested', () => {
+          ctx.bus.emit('ui.overlay.open', { id: PUBLISH_KOJO_OVERLAY_ID, source: 'eratw-adapter' });
         }),
       );
 
@@ -746,6 +761,27 @@ export function createEratwAdapterPlugin(): Plugin {
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: DEPLOY_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
           deploy: (pkg, target) => actions.deployArtifact(pkg, target),
+        }),
+      });
+
+      /* ---- 发布口上向导（用户反馈 4 批）：工作区项目/包 → 许可 → 打包上传 ---- */
+
+      ctx.slots.register('ui.overlay', {
+        id: PUBLISH_KOJO_OVERLAY_ID,
+        // 向导族 20-40：新建 20 / 导入 21 / 部署 22 / 发布 23
+        order: 23,
+        // 五段引导 + 字段说明比单页向导长，按宽版承载（同教程浮层的度量档）
+        size: 'wide',
+        component: createPublishKojoWizard({
+          workspaces,
+          io,
+          compileKojo,
+          // 市场服务惰性取：`kojo-market` 可能晚激活 / 被停用（同 compileKojo 的理由）
+          market: tryMarket,
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: PUBLISH_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
+          // 外链只发意图：宿主落地（闸的唯一执法点在 Rust，插件不开窗）
+          openExternal: (url) => ctx.bus.emit('ui.openExternal', { url }),
         }),
       });
 

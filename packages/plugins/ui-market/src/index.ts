@@ -5,7 +5,7 @@
  *
  * ## 本批能力面（刻意**很小**，别自己加）
  *
- * 只做这七件完整的事，不留空壳：
+ * 只做这八件完整的事，不留空壳：
  * 1. 索引浏览（按种类分组 + 名称/作者过滤 + 版本/体积/文件数/作者/许可/版本要求）；
  * 2. 安装面动作：没装过的行给「安装」，`packUpdateCheck` 判为 `updatable` 的行给「更新」，
  *    `latest` / `ahead` / 版本要求不够的行**不给按钮**，只在行上说清本机是哪一版；
@@ -17,8 +17,9 @@
  * 7. 已装的口上包行给「导入为我的口上项目」：面板只发意图
  *    （`workspace.importRequested`，载荷 `source: 'market'` 逐字冻结），
  *    向导与落地都住工作区消费方——面板不弹自己的窗、不摸盘（目录取 `contentDir()`）。
- * 8. 「发布包…」（MK-PUB 发布通道批）：工具条入口 → 选 zip（`chooseFile` 对话框即授权）
- *    → 服务编排（本地预校验零出网 → 原样字节上传）→ 进度与结果只住状态行一处。
+ * 8. 「发布口上…」（用户反馈 4 改名批）：工具条入口只发一条意图
+ *    （`market.publishRequested`，载荷 `source: 'ui-market'`）。项目选择 / 许可 / 打包 / 上传
+ *    全在拥有口上项目模型的适配器的发布向导里——面板不选文件、不摸盘、不持发布状态机。
  *
  * 装与卸的结果、以及被拒的原因，一律只有**一处内联状态行**（`mk-status` / `mk-note`），不弹窗。
  * "该给哪个动作"不在本面板判定：三态出自契约的 `packUpdateCheck`，装得上去不去出自服务；
@@ -42,15 +43,13 @@
  *
  * 模块布局（本文件只做装配：校验 appVersion + 注入服务 + 注册贡献，不含状态机与渲染）：
  * `market-panel.ts` 带状态面板 · `market-panel-view.ts` 渲染树 · `market-view.ts` 行判据与文案
- * · `actions.ts` 取数 / 装 / 卸 / 发布通道 · `reconcile.ts` 已装清单的单飞重取。
+ * · `actions.ts` 取数 / 装 / 卸 / 导入 / 发布意图 · `reconcile.ts` 已装清单的单飞重取。
  */
 
 import {
-  KernelServices,
   MARKET_SERVICE_KEY,
   PACK_VERSION_RE,
   coreVersion,
-  type FileIO,
   type MarketService,
   type Plugin,
 } from '@kojo/plugin-api';
@@ -80,21 +79,19 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
     activate(ctx): void {
       const deps: MarketActionDeps = {
         market: ctx.inject<MarketService>(MARKET_SERVICE_KEY),
-        // 导入请求经总线发意图（面板不弹自己的窗：向导与落地都住工作区消费方）
+        // 导入 / 发布都经总线发意图（面板不弹自己的窗：向导与落地都住消费方）
         bus: ctx.bus,
         log: ctx.log,
       };
-      // 文件选择原语（发布用）：kernel.io 是内核预定义服务恒在位；chooseFile 本身
-      // 是 additive 可选——缺席（Node 壳）由 runPublish 给一句人话，这里不判
-      const io = ctx.inject<FileIO>(KernelServices.IO);
 
       // 带状态的面板已迁出到 `market-panel.ts`；这里只做装配（贡献对象那条 `component: MarketPanel` 不动）。
-      const MarketPanel = createMarketPanel(deps, io, av);
+      const MarketPanel = createMarketPanel(deps, av);
 
       ctx.slots.register('ui.panel', {
         id: 'market',
         title: '口上市场',
-        icon: 'book',
+        // 店面图标（用户反馈 3）：市场不是一本书——教程入口的 book 不动
+        icon: 'store',
         order: 85,
         // 主侧栏独占视图（对标 VSCode 扩展视图：入口住活动栏，点开落在左栏）。
         // 刻意**不写** `defaultActive:false`：那个字段还会把视图贬到活动栏底部低频组

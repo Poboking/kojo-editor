@@ -5,26 +5,24 @@
  * 分层：`market-panel-view.ts` 只管画（零状态）· `actions.ts` 取数与装卸（零 React）·
  * `reconcile.ts` 单飞重取 · 本模块把三者接起来。
  *
- * 为什么是工厂而不是 props：`deps`（服务 / 总线 / 日志）、`io`（发布选文件那一下）、
- * `av`（装配层注入的 appVersion）都在 `activate` 那一刻定下来，
- * 面板既不该也不被允许自己去注入服务——`ui.panel` 的贡献对象因此一个字都不用改。
+ * 为什么是工厂而不是 props：`deps`（服务 / 总线 / 日志）与 `av`（装配层注入的 appVersion）
+ * 都在 `activate` 那一刻定下来，面板既不该也不被允许自己去注入服务——
+ * `ui.panel` 的贡献对象因此一个字都不用改。
  */
 
 import { createElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  type FileIO,
   type InstalledPack,
   type MarketDownloadProgress,
-  type MarketPublishProgress,
   type UIPanelProps,
 } from '@kojo/plugin-api';
 import {
   loadMarketSnapshot,
   pullMarketOutcome,
   pullMarketSnapshot,
+  requestPublish,
   runImport,
   runInstall,
-  runPublish,
   runUninstall,
   snapshotWithInstalled,
   snapshotWithoutInstalled,
@@ -41,14 +39,12 @@ import {
   installBusyNote,
   installProgressNote,
   pendingKey,
-  publishProgressNote,
   type PackRow,
 } from './market-view';
 import { MarketPanelView } from './market-panel-view';
 
 export function createMarketPanel(
   deps: MarketActionDeps,
-  io: FileIO,
   av: string,
 ): (props: UIPanelProps) => ReactNode {
   function MarketPanel(props: UIPanelProps): ReactNode {
@@ -73,11 +69,7 @@ export function createMarketPanel(
     const [open, setOpen] = useState<string | null>(null);
     // 正在进行的那一次装/更新（同一时刻只允许一条：按钮全禁用，进度只写在状态行一处）
     const [installing, setInstalling] = useState<string | null>(null);
-    // 发布进行中（选 zip → 预校验 → 上传的全程；与装/更新互斥，同一时刻只做一件事）
-    const [publishing, setPublishing] = useState(false);
-    // 发布终局的可点外链（PR 页面）：任何新动作开始时清掉——旧链接只属于旧的那件事
-    const [noteLink, setNoteLink] = useState<string | null>(null);
-    // 装/更新或发布的进度读数（0–100 的整数；null = 此刻没有可画的进度。
+    // 装/更新进度读数（0–100 的整数；null = 此刻没有可画的进度。
     // 带字的进度句仍只写 note 一处，这根条只是同一事实的视觉面）
     const [progress, setProgress] = useState<number | null>(null);
     // 后台校对的单调序号：只认最新一次发起的读数——装/卸快速连击时，前一次的校对
@@ -173,7 +165,6 @@ export function createMarketPanel(
       if (action === 'none' || installing !== null) return;
       const key = indexRowKey(row.entry);
       setInstalling(key);
-      setNoteLink(null);
       setNote(installBusyNote(action, row.entry.name));
       // 进度接进同一条状态行（Rust 侧已节流，这里不重复闸）。回调只在下载段发：
       // 解压/搬运阶段停在最后一条读数是**如实**的（那两段快，不发假进度）。
@@ -213,7 +204,6 @@ export function createMarketPanel(
       const rec = snapshot.installed.find((r) => pendingKey(r) === key);
       if (rec === undefined) return;
       setInstalling(pendingKey(rec));
-      setNoteLink(null);
       try {
         setNote(`正在卸掉「${rec.name}」…`);
         const out = await runUninstall(deps, rec, pending === key);
@@ -241,35 +231,19 @@ export function createMarketPanel(
      */
     const doImport = async (rec: InstalledPack): Promise<void> => {
       if (installing !== null) return;
-      setNoteLink(null);
       const out = await runImport(deps, rec);
       setNote(out.note);
     };
 
     /**
-     * 「发布包…」（MK-PUB）：runPublish 全程接管选 zip → 预校验 → 上传，
-     * 本层只负责互斥（与装/更新同一时刻只做一件事）与把进度接进状态行
-     * （Rust 侧已节流，这里不重复闸）。取消不是失败，note 照实说「本机没动」。
-     * 选框打开前先给一句"要发生什么"（预校验是本地快段，第一帧进度之前不该是空白屏）；
-     * 成功终局把 PR 页面接成可点外链（`ui.openExternal`，闸在 Rust）。
+     * 「发布口上…」：面板只做一件事——发意图（`market.publishRequested`）。
+     * 选哪个口上项目、许可、打包与上传，全在拥有口上项目模型的适配器的发布向导里；
+     * 本层不选文件、不持发布状态、不写状态行（向导自己开门，结果也由它呈现）。
+     * 同一时刻只做一件事：装/更新进行中不响应（按钮此时已禁用）。
      */
-    const doPublish = async (): Promise<void> => {
-      if (publishing || installing !== null) return;
-      setPublishing(true);
-      setNoteLink(null);
-      setNote('发布开始：先在弹出的窗口里选择要发布的 zip，本地预校验通过后原样上传');
-      try {
-        const onProgress = (p: MarketPublishProgress): void => {
-          setNote(publishProgressNote(p));
-          setProgress(p.totalBytes > 0 ? Math.min(100, Math.floor((p.sentBytes / p.totalBytes) * 100)) : null);
-        };
-        const out = await runPublish(deps, io, onProgress);
-        setNote(out.note);
-        if (out.kind === 'done' && out.prUrl != null) setNoteLink(out.prUrl);
-      } finally {
-        setPublishing(false);
-        setProgress(null);
-      }
+    const doPublish = (): void => {
+      if (installing !== null) return;
+      requestPublish(deps);
     };
 
     // 状态与回调住这一层；怎么画、哪一行给不给按钮全在 `MarketPanelView`（可静态渲染判据）
@@ -279,16 +253,14 @@ export function createMarketPanel(
       query,
       busy,
       note,
-      noteLink,
       progress,
       pending,
       open,
       installing,
-      publishing,
       onQuery: setQuery,
       onClearQuery: () => setQuery(''),
       onPull: () => void pull(),
-      onPublish: () => void doPublish(),
+      onPublish: () => doPublish(),
       onInstall: (row: PackRow) => void doInstall(row),
       onImport: (rec: InstalledPack) => void doImport(rec),
       // 来源网址可点：只发意图（`ui.openExternal`），壳层调 Rust 原语落地——

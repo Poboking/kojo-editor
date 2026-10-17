@@ -3689,11 +3689,16 @@ button.erb-mode-hint.unlocked:hover {
    「目录 + 正文列 + 样例/表突破」。用 :has 精确命中教程宿主，不动共享的 .overlay-host-wide
    （部署 diff 等宽版浮层照旧 920；它自己另有 .kd-host 覆盖）。:has 不可用时退回 920，只是
    正文列窄些、不破版。
-   overflow:hidden 是这套两列布局的前提：滚动只发生在栏内部（目录栏、正文列、代码块、表），
-   宿主自己不再滚——否则正文高度算差 1px 就会长出第二条滚动条，两条滚轮互相抢。
-   max-height 从 80vh 抬到 88vh：长文阅读吃的就是纵向视野。 */
+   max-height 从 80vh 抬到 88vh：长文阅读吃的就是纵向视野（见下一条教程宿主规则）。 */
 .overlay-host-wide:has(.wizard.tutorial) {
   width: min(1160px, 94vw);
+}
+/* 教程宿主不参与滚动（2026-10-18 反馈 2）：不论宽版与否，:has 一命中教程就锁死 overflow。
+   窗口最大化 / zen 下宿主一旦自己可滚，正文里任何"把东西滚进视野"的动作都可能顺带把宿主
+   滚一点，抬头（标题 + 导语 + 顶部圆角/边框）就被裁掉——屏上读作"最上边的白色方框没了"。
+   滚动只发生在内部栏（目录列表 / 正文列 / 代码块 / 表），两条滚轮互不抢；
+   max-height 与内层 `.wizard.tutorial` 的算式同源。 */
+.overlay-host:has(.wizard.tutorial) {
   max-height: 88vh;
   overflow: hidden;
 }
@@ -4220,6 +4225,17 @@ button.primary .hint {
 .tutorial-head {
   flex: none;
 }
+/* 抬头行：标题占满、右侧常驻小号「×」（反馈 2：窗口最大化 / zen 下顶部也始终有可操作框架）。
+   行高不变——按钮 24px 与 h3 首行同高，呼吸仍由 h3 自己的下边距给。 */
+.tutorial-head-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.tutorial-head-row h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .wizard.tutorial h3 {
   position: relative;
   padding-left: var(--space-3);
@@ -4240,6 +4256,44 @@ button.primary .hint {
   height: 1em;
   border-radius: var(--radius-xs);
   background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+}
+/* 浮层内两枚图标按钮（抬头「×」/ 目录折叠角标）：同一个 ghost 语言——透明底、无边框，
+   悬停淡底提亮。24×24 命中 WCAG 2.5.8；focus-visible 用内侧环，贴边也不被宿主裁掉。 */
+.tutorial-close,
+.tutorial-toc-toggle {
+  flex: none;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  color: var(--fg-dim);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
+}
+.tutorial-close {
+  font-size: var(--fs-4);
+}
+.tutorial-toc-toggle {
+  font-size: var(--fs-4);
+}
+.tutorial-close:hover,
+.tutorial-toc-toggle:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.tutorial-close:focus-visible,
+.tutorial-toc-toggle:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -1px;
 }
 .tutorial-lead {
   margin: 0;
@@ -4266,26 +4320,73 @@ button.primary .hint {
 /* 目录栏：竖排、独立滚动、右侧一条发丝线与正文分开。磨砂在这里不需要——目录是正文的兄弟列、
    内容不从它底下滚过，实心底更稳、也省一层 backdrop-filter（磨砂留给遮罩与浮层卡片那两处）。
    224px 是"⑱ + 一圈中文短标题"不折行的实测宽度；overscroll-behavior 让目录滚到尽头时
-   不把惯性传给正文列（长文里"翻目录翻到正文飞走"是最典型的烦躁来源）。 */
+   不把惯性传给正文列（长文里"翻目录翻到正文飞走"是最典型的烦躁来源）。
+   2026-10-18（反馈 6）：栏内分两级——标题行固定，条目列表自己滚；折叠按钮因此
+   任何阅读位置都够得着，scroll-spy 也永远只滚条目那一层。 */
 .tutorial-toc {
   flex: 0 0 224px;
   min-width: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  /* spy 把当前条目滚进视野时平滑；减弱动效下被全局那条压成瞬移 */
-  scroll-behavior: smooth;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 0 var(--space-2) var(--space-2) 0;
+  /* 展开 224 ↔ 收起 44 的宽度过渡；减弱动效下被全局那条压成瞬移 */
+  transition:
+    flex-basis var(--dur-2) var(--ease-out),
+    padding-right var(--dur-2) var(--ease-out);
   /* 竖边（发丝线本体交效果库）：上端淡出——分界线从第一条目起画，不在"目录"标签上方就撞一条硬线 */
   --hair-edge: 0 1px 0 0;
   --hair-grad: linear-gradient(180deg, transparent, var(--border) 6%, var(--border) 94%, transparent);
 }
-.tutorial-toc-label {
-  padding: 0 var(--space-2) var(--space-2);
+/* 目录标题行：原「目录」标签 + 折叠按钮。行下那条发丝线从原标签规则挪到这里。 */
+.tutorial-toc-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 0 var(--space-2) var(--space-2);
   margin-bottom: var(--space-2);
   border-bottom: 1px solid var(--border);
+}
+.tutorial-toc-label {
   color: var(--fg-dim);
   font-size: var(--fs-0);
   letter-spacing: 0.12em;
+}
+/* 条目列表：目录栏里唯一滚动的一层。position:relative 让条目 offsetTop 以本层为零点——
+   scroll-spy 手算滚动量，不用 scrollIntoView（它会顺带滚所有可滚祖先，顶掉抬头）。 */
+.tutorial-toc-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* spy 把当前条目滚进视野时平滑；减弱动效下被全局那条压成瞬移 */
+  scroll-behavior: smooth;
+}
+/* 收起态（反馈 6）：窄轨只留折叠按钮。目录项 display:none 而不是 width:0——
+   收起的栏不承载可点条目，读屏与 Tab 也不再撞见看不见的按钮。 */
+.tutorial-toc[data-collapsed='true'] {
+  flex-basis: 44px;
+  padding-right: 0;
+}
+.tutorial-toc[data-collapsed='true'] .tutorial-toc-label,
+.tutorial-toc[data-collapsed='true'] .tutorial-toc-list {
+  display: none;
+}
+.tutorial-toc[data-collapsed='true'] .tutorial-toc-head {
+  justify-content: center;
+  padding: 0 0 var(--space-2);
+  margin-bottom: 0;
+  border-bottom-color: transparent; /* 标签没了，横线横在窄轨上只剩噪音 */
+}
+.tutorial-toc-toggle-glyph {
+  display: block;
+  transition: transform var(--dur-2) var(--ease-out);
+}
+.tutorial-toc[data-collapsed='true'] .tutorial-toc-toggle-glyph {
+  transform: rotate(180deg); /* ‹ 翻成 › = 点它展开 */
 }
 /* 目录项：竖排行 = [圈码记号 | 标题]。当前节由 scroll-spy 挂 aria-current：左侧 accent 竖条 +
    淡底 + 亮字；悬停给一条中性竖条 + 微亮，与"当前节"的 accent 竖条区分开。文字走 --accent-text
@@ -4365,7 +4466,8 @@ button.primary .hint {
   border-width: 1px;
 }
 /* 窄窗（宿主 ≈94vw；窗宽到 680 时两列挤不下）：目录栏塌回顶部横滚胶囊带、正文占满宽——
-   与既有"窄窗样例回落上下堆叠"同一套降级思路，不破版。 */
+   与既有"窄窗样例回落上下堆叠"同一套降级思路，不破版。折叠在横带里没有意义（一收就只剩
+   一个按钮、整条目录藏掉更难用）⇒ 该断点下强制展开：标题行（含折叠按钮）藏起，列表恢复横带。 */
 @media (max-width: 680px) {
   .tutorial-main {
     flex-direction: column;
@@ -4373,19 +4475,32 @@ button.primary .hint {
   }
   .tutorial-toc {
     flex: none;
-    display: flex;
-    gap: var(--space-1);
-    overflow-x: auto;
-    overflow-y: hidden;
-    scroll-behavior: auto;
+    display: block;
+    overflow: visible;
     padding: 0 0 var(--space-2);
+    transition: none;
     /* 塌成横带后分隔线改水平（右宽归 0 = 原来的 border-right: none），渐变方向也要跟着换回来 */
     --hair-edge: 0 0 1px 0;
     --hair-grad: linear-gradient(90deg, transparent, var(--border) 6%, var(--border) 94%, transparent);
     margin-bottom: var(--space-3);
   }
-  .tutorial-toc-label {
+  .tutorial-toc-head {
     display: none;
+  }
+  /* 折叠态在窄窗一律不生效（data-collapsed 可能停在 true）：覆盖收起态的宽与隐藏规则 */
+  .tutorial-toc[data-collapsed='true'] {
+    flex-basis: auto;
+    padding: 0 0 var(--space-2);
+  }
+  .tutorial-toc[data-collapsed='true'] .tutorial-toc-list {
+    display: flex;
+  }
+  .tutorial-toc-list {
+    display: flex;
+    gap: var(--space-1);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-behavior: auto;
   }
   .tutorial-toc-item {
     flex: none;
@@ -4962,10 +5077,16 @@ button.primary .hint {
 
 /* 教程入口（E6）：常驻面板底部，不进树的滚动区——写不动时抬头就能找到。
    高度可用上方分割线（.kp-splitter）上下拉伸（E9）；min-height 兜住内容，
-   拖到极限也不裁掉两个入口。 */
+   拖到极限也不裁掉两个入口。
+   2026-10-18（反馈 1）：行按钮 hover 有 translateX(2px)，而行是 width:100%——水平溢出的
+   2px 会让 overflow-x 随 overflow-y:auto 变成 auto，水平滚动条出现 / 消失又改变可用高度，
+   悬停就在"丢失 → 恢复"之间无限上下抖。这里两件事一起做：水平方向永不滚（裁剪掉任何残余
+   溢出），并给行留 2px 右内衬——位移后的行正好收进这 2px，圆角与淡底不被裁，行高不动。 */
 .kp-tutorials {
   flex: none;
   overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
   min-height: max-content;
 }
 /* 树体 ←→ 教程区的拖拽分割线（E9）：静息一条细线，悬停 / 拖拽中亮起（与壳层 .resizer 同族）。

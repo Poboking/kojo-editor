@@ -320,6 +320,19 @@ export interface KernelEventMap {
    */
   'workspace.projectCreated': { projectId: string; requestToken?: string; source?: string };
   /**
+   * 「发布口上」意图（用户反馈 4 批）：市场面板只表达「作者要把自己的口上作品发到市场」，
+   * **怎么发一概不解释**——项目选择 / 包内容转译 / 许可与分发选项 / 打包与上传，
+   * 全部由拥有口上项目模型的消费方（适配器）按自己的领域知识落地。分工与
+   * `workspace.importRequested` 同款：发起方只递意图，消费方决定开哪扇门、问哪些字段。
+   *
+   * 通用、游戏无关：事件名与载荷里没有任何游戏词，`source` 只标「谁点的」。
+   * 载荷**刻意不携带项目 / 包 / 许可**：那些是消费方从自己的工作区现读的事实；
+   * 让发起方隔空指定「发哪个项目」，等于把别人的模型抄进自己的界面（第二份真相，
+   * 而且发起方一升级就得跟着改）。同理它也不叫某个 overlay id——模态名叫什么
+   * 是消费方的私事，字面量一旦进契约，插件层就长出了本不该有的知识。
+   */
+  'market.publishRequested': { source?: string };
+  /**
    * 「全部修复」意图（E3，2026-10-16 批量快速修复批）：请求宿主把**当前文档**里
    * 每一条"只有唯一改法"的问题一次补好。
    *
@@ -398,6 +411,9 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'workspace.importRequested',
   'workspace.newProjectRequested',
   'workspace.projectCreated',
+  // 用户反馈 4 批：市场面板只表达「作者要发布」，项目选择/打包/许可/上传由拥有
+  // 口上项目模型的适配器解释（同 workspace.importRequested 的分工）
+  'market.publishRequested',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核/宿主专属事件：插件可 `on`、不可 `emit`（安全语义事件由内核垄断发出）。 */

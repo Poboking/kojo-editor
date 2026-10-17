@@ -13,7 +13,7 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     expect(KERNEL_EVENT_CLASSIFICATION_GUARD).toBe(true);
   });
 
-  it('白名单 = 插件可 emit 的 21 个内核事件（快照守门）', () => {
+  it('白名单 = 插件可 emit 的 22 个内核事件（快照守门）', () => {
     expect([...KERNEL_EVENT_NAMES].sort()).toEqual(
       [
         'file.changed',
@@ -42,6 +42,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
         // 2026-10-13 反馈 3 批：请开新建项目向导（意图）+ 项目已创建（兑现）
         'workspace.newProjectRequested',
         'workspace.projectCreated',
+        // 用户反馈 4 批：「发布口上」意图（市场面板只表达"要发布"，打包/许可/上传由适配器解释）
+        'market.publishRequested',
       ].sort(),
     );
   });
@@ -65,7 +67,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     // 2026-10-14 UI 浮动批新增 ui.panel.float（面板浮动意图）⇒ 18 → 19。
     // 2026-10-15 比对/历史批新增 ui.diffView.open（通用 diff 视图意图）⇒ 19 → 20。
     // 2026-10-16 市场外链批新增 ui.openExternal（外链打开意图）⇒ 20 → 21。
+    // 用户反馈 4 批新增 market.publishRequested（「发布口上」意图，市场面板 → 适配器）⇒ 21 → 22。
     // 计数以本行结论为准（漏项的话编译期 guard 会红）。
-    expect(KERNEL_EVENT_NAMES.size).toBe(21);
+    expect(KERNEL_EVENT_NAMES.size).toBe(22);
   });
 });

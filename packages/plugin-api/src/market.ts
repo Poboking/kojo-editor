@@ -492,6 +492,33 @@ export interface MarketService {
       readonly onProgress?: (p: MarketPublishProgress) => void;
     },
   ): Promise<MarketPublishOutcome>;
+  /**
+   * 从**作者工作区现打一个口上包**并发布（用户反馈 4 批；additive 可选）。
+   *
+   * 与 `publish(zipPath)` 的分工：
+   * - `publish(zipPath)` 收的是作者**已经打好**的容器（路径来自系统对话框，对话框即授权）；
+   * - 本条收的是**包内容草案**（`MarketPackDraft`）——服务负责补 `pack.json`、逐文件
+   *   算 sha256、打 zip，并把容器写进**自家暂存区**（编辑器自己的可写域），
+   *   再走**与 `publish(zipPath) 完全同一条**预校验与上传链路。
+   *
+   * 因此：**不新增第二份校验**（清单校验仍是 `parseManifest` / `packFilesProblem`），
+   * **不开第二条上传通道**（仍走平台侧那一条发布原语），也**没有任何"写到域外"**
+   * 的能力（zip 落在市场暂存区，铁律 6 与它无关）。
+   *
+   * 草案里的文件路径只承诺「相对 `files/` 的 posix 路径」——服务补前缀后仍由既有
+   * 路径闸判定；文件数 / 总字节 / 单条目字节数同理由既有预校验拒（拒因码与安装面
+   * 逐字一致，UI 按同一张码表呈现）。临时容器在成功与失败路径上都会被删除，
+   * 失败不留残壳。
+   *
+   * **可选（`?`）**：既有第三方实现 / 测试假服务不必补这一条；缺席 = 本服务不支持
+   * 从工作区直接发布，消费方（发布向导）必须**显式说明**并保留"选 zip 发布"的旧路径，
+   * 不许静默失败。
+   *
+   * @throws MarketError 预校验会抛的**全部清单类码**（见 `installFromIndex` 与
+   *   `packFilesProblem`），以及 `endpoint-invalid`；平台侧故障抛普通 Error 带人话
+   *   （"当前平台没有发布能力" 也走这一档，由 `publish` 统一给出）。
+   */
+  publishPack?(draft: MarketPackDraft, opts?: MarketPublishPackOpts): Promise<MarketPublishOutcome>;
   uninstall(kind: PackKind, id: string, version: string): Promise<void>;
   isInstalled(kind: PackKind, id: string, version: string): Promise<boolean>;
   /**
@@ -934,4 +961,65 @@ export function packUpdateCheck(
         ? best.containerSha256 === entry.zip.sha256
         : null,
   };
+}
+
+/* ------------------- 「发布口上」：从作者工作区现打的口上包（用户反馈 4 批） ------------------- */
+
+/**
+ * 草案里的一个内容文件（**字节已经读好在内存里**，服务不解码、不转码）。
+ *
+ * `path` 是**相对包内 `files/` 的 posix 路径**（`/` 分隔），不得以 `files/` 开头——
+ * 前缀由服务统一补，调用方自带前缀只会拼出 `files/files/…` 这种第二层目录。
+ * 形态（绝对路径 / 反斜杠 / `..` / 空段 / 尾随点空格 / 深度）仍由契约的既有
+ * 路径闸 `packEntryPathProblem` 判，本类型只是把"调用方该给什么"说清楚。
+ */
+export interface MarketPackDraftFile {
+  /** 相对包内 files/ 的 posix 路径（不得以 files/ 开头，由服务补前缀） */
+  readonly path: string;
+  readonly bytes: Uint8Array;
+}
+
+/**
+ * 「发布口上」的**包内容草案**（作者面字段齐全，内容字节就位；不含任何落点）。
+ *
+ * 这是"编辑器替作者现打一个包"的输入形状：项目选择、`.kojo` → `.ERB` 转译、
+ * 许可选项这些**领域知识归消费方**（适配器），本类型只冻结市场侧需要的字段，
+ * 于是市场服务不需要知道"口上"是什么（铁律 1）。
+ *
+ * 字段与 `PackManifest` 一一对应（少 `schema` / `files`——那两样由服务生成）：
+ * - `license` 是**作者面许可名原样字符串**（如 `MIT`、`LTOL · 时限开放许可`）；
+ *   市场不解释它的法律含义，只如实写进 `pack.json.license`；
+ * - `redistribute` 必须是 `true` 才可能发布：`parseManifest` 对 `false` 一律以
+ *   `redistribute-denied` 拒（市场收录的前提就是允许二次分发）；
+ * - `minAppVersion` 缺省 = 服务注入的 `appVersion` 的核心三段（`x.y.z`）——
+ *   调用方不写版本号，版本真源只在应用清单里（插件源码不写死版本）。
+ */
+export interface MarketPackDraft {
+  readonly kind: PackKind;
+  readonly id: string;
+  readonly version: string;
+  readonly name: string;
+  readonly author: string;
+  /** 作者面许可名（写进 pack.json.license；原样字符串） */
+  readonly license: string;
+  /** 市场收录要求 true；false 会被既有 parseManifest 以 redistribute-denied 拒 */
+  readonly redistribute: boolean;
+  /** 缺省 = 服务注入的 appVersion 的核心三段（x.y.z） */
+  readonly minAppVersion?: string;
+  readonly summary?: string;
+  readonly sourceUrl?: string;
+  readonly gameId?: string;
+  readonly files: readonly MarketPackDraftFile[];
+}
+
+/**
+ * `MarketService.publishPack` 的可调项。
+ *
+ * `endpoint` 与 `onProgress` 的语义**逐字沿用** `publish(zipPath)` 的同名字段
+ * （同一条上传链路只此一份口径）：端点默认 `MARKET_DEFAULT_PUBLISH_URL`，主机不落
+ * 平台放行表 ⇒ 拒；进度是平台侧节流后的读数，本层不加工。
+ */
+export interface MarketPublishPackOpts {
+  readonly endpoint?: string;
+  readonly onProgress?: (p: MarketPublishProgress) => void;
 }

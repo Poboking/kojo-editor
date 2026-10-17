@@ -7,6 +7,9 @@ import './styles.css';
 // 才能压过基础 `:root`。缺省 dark 无对应文件块（基础 :root 即深色），light/mint 各自翻 token。
 import './themes/light.css';
 import './themes/mint-dark.css';
+// 口上市场面板的条目排版层（用户反馈 5）：在 styles.css 与主题之后加载，
+// 同特异性后来者胜 ⇒ 只叠加市场条目的排版，不改写既有 .mk-* 基础语义。
+import './market.css';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('#root not found');

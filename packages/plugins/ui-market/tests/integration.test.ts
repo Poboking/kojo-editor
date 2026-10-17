@@ -36,13 +36,14 @@ import { MarketPanelView } from '../src/market-panel-view';
 import {
   loadMarketSnapshot,
   pullMarketOutcome,
+  requestPublish,
   runImport,
   runInstall,
   runUninstall,
   type MarketActionDeps,
   type MarketSnapshot,
 } from '../src/actions';
-import { buildGroups, REJECT_TEXT } from '../src/market-view';
+import { buildGroups, PUBLISH_LABEL, REJECT_TEXT } from '../src/market-view';
 
 const APP_VERSION = '0.4.0-beta.1';
 const ROOT = '/appdata/market';
@@ -955,7 +956,6 @@ function viewProps(
     pending: null,
     open: null,
     installing: null,
-    publishing: false,
     onQuery: noop,
     onClearQuery: noop,
     onPull: noop,
@@ -1301,6 +1301,48 @@ describe('面板结构分层（工具条 / 状态簇 / 自滚列表）', () => {
     expect(html).toContain('<button class="ghost small">拉取列表</button>');
   });
 
+  it('工具条分两组：搜索组（输入 + 清除）与动作组（拉取列表 + 发布口上…），窄侧栏可整组折行', () => {
+    const tree = MarketPanelView(viewProps(packs2, installed1, { query: 'a.pack' }));
+    const toolbar = byClass(tree, 'mk-toolbar')[0]!;
+    const groups = kids(toolbar).filter(isEl);
+    expect(groups.map((g) => g.props.className)).toEqual(['mk-search-wrap', 'mk-toolbar-actions']);
+    // 搜索组：输入框 + 过滤态才出现的清除（两件是一组，不让清除被动作组挤走）
+    expect(byClass(groups[0]!, 'mk-search')).toHaveLength(1);
+    expect(byClass(groups[0]!, 'mk-clear')).toHaveLength(1);
+    // 动作组：拉取在前、发布口上在后；发布那枚带自己的类（accent 描边，样式在 app 侧）
+    const acts = buttonEls(groups[1]!);
+    expect(acts.map((b) => b.props.children)).toEqual(['拉取列表', PUBLISH_LABEL]);
+    expect((buttonEl(groups[1]!, PUBLISH_LABEL)!.props.className as string).split(/\s+/)).toContain(
+      'mk-publish',
+    );
+  });
+
+  it('索引行的第二排事实顺序固定：版本 → 体积/文件数 → 作者 → 许可（分隔由样式层给）', () => {
+    const tree = MarketPanelView(viewProps([viewEntry('k.pack', '1.0.0')], []));
+    const facts = byClass(tree, 'mk-facts')[0]!;
+    expect(kids(facts).map((f) => (f as El).props.children)).toEqual([
+      '版本 1.0.0',
+      '20 B · 1 个文件',
+      '作者 某人',
+      '许可 CC-BY-NC 4.0',
+    ]);
+  });
+
+  it('过滤态的「清除」住在搜索组里：动作组始终只有拉取 + 发布两枚（四个控件不抢一条排）', () => {
+    const idle = byClass(MarketPanelView(viewProps(packs2, installed1)), 'mk-toolbar-actions')[0]!;
+    const filtered = byClass(
+      MarketPanelView(viewProps(packs2, installed1, { query: 'a.pack' })),
+      'mk-toolbar-actions',
+    )[0]!;
+    expect(buttonEls(idle).map((b) => b.props.children)).toEqual(['拉取列表', PUBLISH_LABEL]);
+    expect(buttonEls(filtered).map((b) => b.props.children)).toEqual(['拉取列表', PUBLISH_LABEL]);
+    const searchWrap = byClass(
+      MarketPanelView(viewProps(packs2, installed1, { query: 'a.pack' })),
+      'mk-search-wrap',
+    )[0]!;
+    expect(byClass(searchWrap, 'mk-clear')).toHaveLength(1);
+  });
+
   it('行的层级：一张卡两排——第一排名字 + 动作（.mk-head），第二排事实（.mk-facts），行本身不是 button', () => {
     const tree = MarketPanelView(viewProps(packs2, installed1));
     const rows = byClass(tree, 'mk-row');
@@ -1413,9 +1455,9 @@ describe('面板结构分层（工具条 / 状态簇 / 自滚列表）', () => {
   });
 });
 
-/* ------------- 进度条与发布外链（仪表区的无文字进度 + 状态行可点外链） ------------- */
+/* ------------- 进度条（装/更新仪表区的无文字进度） ------------- */
 
-describe('mk-progress 与 mk-note-link', () => {
+describe('mk-progress', () => {
   it('progress 非空 ⇒ mk-progress 出现且 aria-valuenow / fill 宽度如实；null ⇒ 不占行', () => {
     const withBar = renderView([], [], { progress: 42, note: '正在安装「示例 a.pack」…' });
     expect(withBar).toMatch(/class="mk-progress"[^>]*aria-valuenow="42"/);
@@ -1424,22 +1466,78 @@ describe('mk-progress 与 mk-note-link', () => {
     expect(withBar).not.toMatch(/mk-progress-fill"><[^/]/);
     expect(renderView([], [])).not.toContain('mk-progress');
   });
+});
 
-  it('noteLink 非空 ⇒ 状态行下多一枚可点外链（走 onOpenSource）；缺省 ⇒ 不占行', () => {
-    const url = 'https://github.com/example/registry/pull/7';
-    const got: string[] = [];
-    const tree = MarketPanelView(
-      viewProps([], [], {
-        note: `已提交发布请求，等待注册表收录：${url}`,
-        noteLink: url,
-        onOpenSource: (u) => got.push(u),
-      }),
-    );
-    const btn = buttonEl(tree, '在浏览器打开发布请求');
+/* ------------- 发布入口（用户反馈 4：工具条按钮只发意图，不再选 zip / 上传） ------------- */
+
+describe('「发布口上…」入口', () => {
+  it('工具条上有「发布口上…」；点下去真的调到 onPublish（不做选文件那一步）', () => {
+    const clicks: string[] = [];
+    const tree = MarketPanelView(viewProps([], [], { onPublish: () => clicks.push('publish') }));
+    const btn = buttonEl(tree, PUBLISH_LABEL);
     expect(btn).not.toBeNull();
     (btn!.props.onClick as () => void)();
-    expect(got).toEqual([url]);
-    expect(renderView([], [], { note: '已装上「示例 a.pack」（版本 1.0.0）' })).not.toContain('mk-note-link');
+    expect(clicks).toEqual(['publish']);
+    // 旧通道的"选 zip / 上传"元素一个都不在：发布引导住适配器的发布向导
+    expect(renderView([], [])).not.toContain('选择要发布的包容器');
+  });
+
+  it('点发布按钮 ⇒ 总线收到 market.publishRequested（载荷逐字冻结，不碰市场服务）', () => {
+    const emits: Array<{ type: string; payload: unknown }> = [];
+    const deps: MarketActionDeps = {
+      market: {} as never, // 发布意图不调服务：项目选择 / 打包 / 许可 / 上传都在适配器
+      bus: {
+        on: () => () => undefined,
+        once: () => () => undefined,
+        emit: (type: string, payload: unknown) => {
+          emits.push({ type, payload });
+        },
+      } as unknown as EventBus,
+      log: quietLog,
+    };
+    // 视图的发布入口 = 带状态面板里那一条同一接线（MarketPanel 的 onPublish ⇒ requestPublish）
+    const tree = MarketPanelView(viewProps([], [], { onPublish: () => requestPublish(deps) }));
+    (buttonEl(tree, PUBLISH_LABEL)!.props.onClick as () => void)();
+    expect(emits).toEqual([{ type: 'market.publishRequested', payload: { source: 'ui-market' } }]);
+  });
+
+  it('装/更新进行中或列表读取中 ⇒ 发布按钮禁用（发布本身不占"忙"位）', () => {
+    expect(buttonsOf(renderView([], []))).toContain(PUBLISH_LABEL);
+    expect(buttonsOf(renderView([], [], { busy: true }))).toContain(`${PUBLISH_LABEL}（禁用）`);
+    expect(
+      buttonsOf(renderView([], [], { installing: 'kojo-pack/other@1.0.0', note: '正在安装「别的包」…' })),
+    ).toContain(`${PUBLISH_LABEL}（禁用）`);
+  });
+
+  it('列表缺失 / 读失败也不拦发布：发布只依赖"此刻有没有在装包"', () => {
+    const props = viewProps([], []);
+    const html = renderToStaticMarkup(
+      createElement(MarketPanelView, {
+        ...props,
+        snapshot: { ...props.snapshot, status: 'list-missing' as const },
+      }),
+    );
+    expect(buttonsOf(html)).toContain(PUBLISH_LABEL);
+  });
+
+  it('入口不持状态：连点两次就发两条意图（不吞第二次，也不留自己的发布中态）', () => {
+    const emits: string[] = [];
+    const deps: MarketActionDeps = {
+      market: {} as never,
+      bus: {
+        on: () => () => undefined,
+        once: () => () => undefined,
+        emit: (type: string) => {
+          emits.push(type);
+        },
+      } as unknown as EventBus,
+      log: quietLog,
+    };
+    const tree = MarketPanelView(viewProps([], [], { onPublish: () => requestPublish(deps) }));
+    const click = buttonEl(tree, PUBLISH_LABEL)!.props.onClick as () => void;
+    click();
+    click();
+    expect(emits).toEqual(['market.publishRequested', 'market.publishRequested']);
   });
 });
 

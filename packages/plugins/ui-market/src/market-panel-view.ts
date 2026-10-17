@@ -50,12 +50,6 @@ export interface MarketPanelViewProps {
   /** 内联状态行那一句：装 / 卸的进行中、结果与拒因全写在这一处，不弹窗 */
   readonly note: string;
   /**
-   * 状态行附带的**可点外链**（现为发布终局的 PR 页面）：非空 ⇒ 状态行下多一枚
-   * 「在浏览器打开发布请求」（仍走 `ui.openExternal`，闸在 Rust）。带字的那句
-   * 仍旧只有 `.mk-note` 一处——这枚按钮只负责"URL 可以点"，不重复内容。
-   */
-  readonly noteLink?: string | null;
-  /**
    * 当前进度读数（0–100 的整数；null/undefined = 此刻没有可画的进度）。
    * **带字的进度句仍只住 `.mk-note` 一处**（同一件事不在两处显示的纪律不动），
    * 这根 hairline 是无文字的视觉读数，`aria-valuenow` 给读屏。
@@ -70,13 +64,11 @@ export interface MarketPanelViewProps {
    * 禁用**只改 `disabled`，不改按钮文字**：进度那一句只住 `.mk-note` 一处。
    */
   readonly installing: string | null;
-  /** 发布进行中（选 zip → 预校验 → 上传的全程；与装/更新互斥，同一时刻只做一件事） */
-  readonly publishing: boolean;
   onQuery(q: string): void;
   /** 清空过滤（工具条上那枚「清除」；过滤态下它是空态那句话的唯一出路，不另设弹窗） */
   onClearQuery(): void;
   onPull(): void;
-  /** 工具条「发布包…」：选 zip（对话框即授权）→ 服务编排（预校验 + 上传） */
+  /** 工具条「发布口上…」：只发意图，打开发布口上引导（向导住拥有口上项目模型的适配器） */
   onPublish(): void;
   onInstall(row: PackRow): void;
   /** 已装的口上包行：把这一条经 `workspace.importRequested` 交给工作区消费方 */
@@ -94,9 +86,9 @@ export interface MarketPanelViewProps {
  *
  * ```text
  * .panel-market                 根：列布局，外层不滚
- * ├─ .mk-toolbar                flex:none —— 搜索框 / 清除 / 拉取（永不随列表滚走）
+ * ├─ .mk-toolbar                flex:none —— 搜索组（.mk-search-wrap：输入 + 清除）/ 动作组（.mk-toolbar-actions：拉取 + 发布口上）
  * ├─ .mk-flash                  状态簇（role=status）：.mk-status .mk-time .mk-note(aria-live)
- * │                                        .mk-progress(无文字进度) .mk-note-link .mk-warn .mk-hint
+ * │                                        .mk-progress(无文字进度) .mk-warn .mk-hint
  * └─ .mk-body                   flex:1 自滚 —— 只有列表随滚动移动
  *     ├─ .mk-grouptitle + span.mk-count → .mk-list → .mk-row × n（已装）
  *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row × n（索引）
@@ -127,9 +119,10 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const filtering = p.query !== '';
   // 占用读数取服务 `installedBytes()`（契约里那条唯一口径），面板不自己把 files 加一遍
   const installedCount = installedCountPhrase(rows.length, snapshot.installedBytes);
-  // 同一屏动作纪律：装/更新/发布任一进行中 ⇒ 全部动作按钮禁用（同一时刻只做一件事）；
-  // 进度仍只写 `.mk-note` 一处，按钮文字不变
-  const acting = p.installing !== null || p.publishing;
+  // 同一屏动作纪律：装/更新进行中 ⇒ 全部动作按钮禁用（同一时刻只做一件事）；
+  // 进度仍只写 `.mk-note` 一处，按钮文字不变。发布入口只发意图、不占互斥的"忙"位：
+  // 向导由消费方开门，本面板此刻没有进行中的发布状态可画。
+  const acting = p.installing !== null;
 
   /**
    * 徽章的语义色档：`updatable` = 有新版可拿（amber，"有事可做"）；`latest` = 已装妥
@@ -231,33 +224,43 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
     createElement(
       'div',
       { className: 'mk-toolbar' },
-      createElement('input', {
-        className: 'mk-search',
-        type: 'search',
-        placeholder: '按包名或作者过滤',
-        'aria-label': '按包名或作者过滤',
-        value: p.query,
-        onInput: (event: { currentTarget: { value: string } }) => p.onQuery(event.currentTarget.value),
-      }),
-      // 只在过滤态出现：这一枚就是空态那句话唯一的出路（点了清空查询，不弹窗）
-      filtering
-        ? createElement(
-            'button',
-            { className: 'ghost small mk-clear', onClick: () => p.onClearQuery() },
-            CLEAR_LABEL,
-          )
-        : null,
+      // 搜索组：输入吃掉剩余宽度（窄侧栏里动作组整体折到下一行，而不是把搜索框压成一条缝）
       createElement(
-        'button',
-        { className: 'ghost small', disabled: p.busy || acting, onClick: () => p.onPull() },
-        p.busy ? '拉取中…' : '拉取列表',
+        'div',
+        { className: 'mk-search-wrap' },
+        createElement('input', {
+          className: 'mk-search',
+          type: 'search',
+          placeholder: '按包名或作者过滤',
+          'aria-label': '按包名或作者过滤',
+          value: p.query,
+          onInput: (event: { currentTarget: { value: string } }) => p.onQuery(event.currentTarget.value),
+        }),
+        // 只在过滤态出现：这一枚就是空态那句话唯一的出路（点了清空查询，不弹窗）
+        filtering
+          ? createElement(
+              'button',
+              { className: 'ghost small mk-clear', onClick: () => p.onClearQuery() },
+              CLEAR_LABEL,
+            )
+          : null,
       ),
-      // 发布包…：选 zip（对话框即授权）→ 服务编排（本地预校验 → 原样上传），
-      // 结果与进度照旧只住状态行一处（`onPublish` 的实现在带状态的 MarketPanel 里）
+      // 动作组：拉取 + 发布口上。窄宽度下整组换行仍靠右（不与搜索框抢宽度）
       createElement(
-        'button',
-        { className: 'ghost small', disabled: p.busy || acting, onClick: () => p.onPublish() },
-        PUBLISH_LABEL,
+        'div',
+        { className: 'mk-toolbar-actions' },
+        createElement(
+          'button',
+          { className: 'ghost small', disabled: p.busy || acting, onClick: () => p.onPull() },
+          p.busy ? '拉取中…' : '拉取列表',
+        ),
+        // 发布口上…：只发意图（`market.publishRequested`），向导住拥有口上项目模型的适配器；
+        // 本面板不选文件、不持发布状态，结果也由向导呈现
+        createElement(
+          'button',
+          { className: 'ghost small mk-publish', disabled: p.busy || acting, onClick: () => p.onPublish() },
+          PUBLISH_LABEL,
+        ),
       ),
     ),
     // 状态簇在滚动区之外：列表再长，"这一次到底拉没拉成"也不会被滚出视野
@@ -286,19 +289,7 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
               style: { width: `${Math.min(100, Math.max(0, p.progress))}%` },
             }),
           ),
-      // 发布终局的可点外链（PR 页面）：URL 本身已在 note 那一句里，这枚按钮只补"可以点"
-      p.noteLink == null || p.noteLink === ''
-        ? null
-        : createElement(
-            'button',
-            {
-              className: 'mk-sub mk-link mk-note-link',
-              type: 'button',
-              title: `在浏览器打开 ${p.noteLink}`,
-              onClick: () => p.onOpenSource(p.noteLink!),
-            },
-            '在浏览器打开发布请求',
-          ),
+      // 被剔除条目的说明：只在这里出声（红色留给"注册表那边的问题"）
       droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
       filtering ? null : createElement('div', { className: 'mk-hint' }, CAPABILITY_HINT),
     ),

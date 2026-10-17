@@ -13,23 +13,18 @@
 import {
   MarketError,
   type EventBus,
-  type FileIO,
   type InstalledPack,
   type Logger,
   type MarketDownloadProgress,
   type MarketIndexEntry,
   type MarketIndexRefresh,
   type MarketIndexState,
-  type MarketPublishProgress,
   type MarketService,
 } from '@kojo/plugin-api';
 import {
   importFailNote,
   importNote,
   installNote,
-  publishFailNote,
-  publishOutcomeNote,
-  PUBLISH_CANCEL_NOTE,
   refreshNote,
   rejectNote,
   resolveStatus,
@@ -311,58 +306,15 @@ export async function runImport(deps: MarketActionDeps, rec: InstalledPack): Pro
   }
 }
 
-export type PublishOutcome =
-  | { readonly kind: 'cancel'; readonly note: string }
-  | {
-      readonly kind: 'done';
-      readonly note: string;
-      /** ok 裁决的 PR 页面（面板接成可点外链）；rejected 裁决没有这个字段 */
-      readonly prUrl?: string;
-    }
-  | { readonly kind: 'failed'; readonly note: string };
-
 /**
- * 「发布包…」整条通道（MK-PUB）：**选 zip（对话框即授权）→ 服务编排**——
- * 本地预校验（零出网，与安装同一条校验路径）→ 原样字节上传（进度经 `onProgress` 透传）。
+ * 「发布口上…」：面板只表达**一个意图**（`market.publishRequested`）。
  *
- * 文件选择原语以参数递进来（`FileIO.chooseFile` 是 additive 可选，发布通道批新增）：
- * 缺席 = 平台没有对话框能力（Node 壳），一句人话收场，不静默。
- * 取消 ≠ 失败：单独一档（作者按了 Esc 不该看到红色的"没有成功"）。
- * 结果/拒因照旧只有一句内联状态行（HK-4），机器细节走 `log.warn`。
+ * 为什么不再在这里选 zip / 预校验 / 上传：发布要回答的是"发布哪一个口上项目、以什么许可、
+ * 打包成什么"——这些问题的答案只在**拥有口上项目模型的那一方**手里（adapter 的发布向导）。
+ * 面板若先弹一个选文件的框，等于逼作者把项目手工打成 zip，顺序也反了（先问项目再打包）。
+ * 因此市场面板到此为止：发意图、不持状态、不摸盘。向导的打开与结果由消费方负责，
+ * 载荷 `source: 'ui-market'` 只用于让消费方认得发起方。
  */
-export async function runPublish(
-  deps: MarketActionDeps,
-  io: Pick<FileIO, 'chooseFile'> | undefined,
-  onProgress?: (p: MarketPublishProgress) => void,
-): Promise<PublishOutcome> {
-  const choose = io?.chooseFile;
-  if (choose === undefined) {
-    return { kind: 'failed', note: '这个平台没有文件选择能力（发布需要桌面壳），本机没动' };
-  }
-  let zipPath: string | null;
-  try {
-    zipPath = await choose.call(io, {
-      title: '选择要发布的包容器（zip）',
-      filters: [{ name: '市场包容器', extensions: ['zip'] }],
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    deps.log.warn(`发布文件选择没有成功：${message}`);
-    return { kind: 'failed', note: `没能打开文件选择：${message}` };
-  }
-  if (zipPath === null) return { kind: 'cancel', note: PUBLISH_CANCEL_NOTE };
-  try {
-    const outcome = await deps.market.publish(zipPath, { onProgress });
-    return {
-      kind: 'done',
-      note: publishOutcomeNote(outcome),
-      // PR 页面随终局带回：面板把它接成"在浏览器打开"的外链（rejected 裁决没有 URL）
-      ...(outcome.ok ? { prUrl: outcome.prUrl } : {}),
-    };
-  } catch (err: unknown) {
-    const code = err instanceof MarketError ? err.code : 'unknown';
-    const message = err instanceof Error ? err.message : String(err);
-    deps.log.warn(`市场发布没有成功（${code}）：${message}`);
-    return { kind: 'failed', note: publishFailNote(err) };
-  }
+export function requestPublish(deps: MarketActionDeps): void {
+  deps.bus.emit('market.publishRequested', { source: 'ui-market' });
 }

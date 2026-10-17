@@ -1,0 +1,107 @@
+/*
+ * 全屏自定义顶栏（用户反馈第 2 条：全屏化时最上方无窗口标题栏）。
+ *
+ * 只在 Tauri 全屏时由 WindowChrome 渲染；非全屏保留系统原生标题栏，不重复出现。
+ * 布局口径：`.shell` 的第一个 flex 子元素 + `flex: none` 占位（不是 position:fixed），
+ * 因此不遮挡编辑器/状态栏，也不参与 `.toolbar` 的滚动。
+ * 颜色只用既有 token（主题切换自动跟随），不写死 hex。
+ *
+ * 注意：本文件可能在 styles.css 之前进 bundle（WindowChrome 在 App 依赖图里更早被求值），
+ * 故按钮规则统一带 `.window-chrome` 前缀抬高特异性，稳定压过全局 `button` / `button:hover`。
+ */
+
+.window-chrome {
+  position: relative;
+  z-index: var(--z-toolbar);
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding-left: var(--space-3);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 应用名左侧那条细 accent 标：安静的"这是本应用"的锚点 */
+.window-chrome-mark {
+  flex: none;
+  width: 3px;
+  height: 12px;
+  margin-right: var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+}
+
+.window-chrome-title {
+  flex: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* 中间整段空区：拖动由 data-tauri-drag-region 提供（Tauri drag.js），这里只负责占宽 */
+.window-chrome-drag {
+  flex: 1;
+  align-self: stretch;
+  min-width: var(--space-4);
+}
+
+.window-chrome-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+}
+
+/* 窗口按钮：44px 宽（Windows 标题栏的尺度），贴边、无描边、无圆角 */
+.window-chrome .window-chrome-btn {
+  width: 44px;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: var(--fs-2);
+  line-height: 1;
+  cursor: default;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+
+.window-chrome .window-chrome-btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.window-chrome .window-chrome-btn:active {
+  background: var(--hover-strong);
+  color: var(--fg);
+  /* 标题栏按钮不参与全局按钮的 0.5px 下沉 */
+  transform: none;
+}
+
+/* 关闭钮：hover 红底白字（token 取色，不写死 hex） */
+.window-chrome .window-chrome-btn.window-chrome-close:hover,
+.window-chrome .window-chrome-btn.window-chrome-close:active {
+  background: var(--red);
+  color: var(--on-accent);
+}
+
+/* 系统偏好减弱动效时这颗顶栏不做任何过渡（应用内开关由全局 data-motion 规则压平） */
+@media (prefers-reduced-motion: reduce) {
+  .window-chrome .window-chrome-btn {
+    transition: none;
+  }
+}

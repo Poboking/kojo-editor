@@ -32,9 +32,7 @@ import {
   matchesQuery,
   pendingKey,
   platformFailNote,
-  publishFailNote,
-  publishOutcomeNote,
-  publishProgressNote,
+  PUBLISH_LABEL,
   REJECT_TEXT,
   refreshNote,
   rejectNote,
@@ -469,76 +467,11 @@ describe('组标题的计数与过滤短语（结构层的纯逻辑）', () => {
   });
 });
 
-describe('发布面（MK-PUB 消费侧）', () => {
-  it('publishProgressNote：真百分比向下取整、封顶 100、总字节 0 给 0%（只许少说不许超卖）', () => {
-    expect(publishProgressNote({ sentBytes: 0, totalBytes: 95_000_000 })).toBe(
-      '正在上传包容器… 0%（本地预校验已通过）',
-    );
-    expect(publishProgressNote({ sentBytes: 47_500_000, totalBytes: 95_000_000 })).toContain('50%');
-    // 47,999,999 / 95,000,000 = 50.526…% → 向下取整 50
-    expect(publishProgressNote({ sentBytes: 47_999_999, totalBytes: 95_000_000 })).toContain('50%');
-    expect(publishProgressNote({ sentBytes: 96_000_000, totalBytes: 95_000_000 })).toContain('100%');
-    // 超发帧（不该出现，但纪律是封顶）与零总字节都给 100 / 0，不 NaN
-    expect(publishProgressNote({ sentBytes: 100_500_000, totalBytes: 95_000_000 })).toContain('100%');
-    expect(publishProgressNote({ sentBytes: 0, totalBytes: 0 })).toContain('0%');
-  });
-
-  it('publishOutcomeNote：ok 出 PR 链接，认识的档位（structure-only）才补那句承诺', () => {
-    const note = publishOutcomeNote({
-      ok: true,
-      prUrl: 'https://github.com/example/registry/pull/7',
-      verified: 'structure-only',
-      status: 200,
-      finalUrl: 'https://github.com/example/registry/pull/7',
-    });
-    expect(note).toContain('https://github.com/example/registry/pull/7');
-    expect(note).toContain('结构校验');
-    // 后端没说档位（verified 缺省）⇒ 少说一句，不把没承诺的演成承诺
-    const bare = publishOutcomeNote({
-      ok: true,
-      prUrl: 'https://example.test/pr/9',
-      status: 200,
-      finalUrl: 'https://example.test/pr/9',
-    });
-    expect(bare).toContain('https://example.test/pr/9');
-    expect(bare).not.toContain('结构校验');
-  });
-
-  it('publishOutcomeNote：rejected 用后端给的人话；message 缺失给拒因码兜底（不静默）', () => {
-    expect(
-      publishOutcomeNote({
-        ok: false,
-        rejected: { code: 'digest-mismatch', message: '包内容和清单对不上' },
-        status: 422,
-        finalUrl: 'https://example.test/pr/9',
-      }),
-    ).toBe('这个包发布被拒：包内容和清单对不上');
-    expect(
-      publishOutcomeNote({
-        ok: false,
-        rejected: { code: 'manifest-invalid', message: '' },
-        status: 422,
-        finalUrl: 'https://example.test/pr/9',
-      }),
-    ).toContain('manifest-invalid');
-  });
-
-  it('publishFailNote：MarketError 认得出平台模式换 PLATFORM_FAIL_TEXT 那句；认不出原话上屏', () => {
-    // 服务侧超限原话含「超过发布上限」⇒ 命中「超过上限」针，换 CF 边缘那套具体人话
-    const overLimit = publishFailNote(
-      new MarketError('bytes-limit', '包体 100 字节超过发布上限 95_000_000（CF 免费档…）'),
-    );
-    expect(overLimit).toBe(
-      `发布没有成功：${platformFailNote('包体 100 字节超过发布上限 95_000_000（CF 免费档…）')}`,
-    );
-    // 认不出平台模式 ⇒ 预校验原话本就是作者面人话，包上前缀直接上屏
-    expect(publishFailNote(new MarketError('endpoint-invalid', '发布地址不合法：说了算'))).toBe(
-      '发布没有成功：发布地址不合法：说了算',
-    );
-  });
-
-  it('publishFailNote：普通 Error 原样上屏——编排层已统一包「发布没有成功：」前缀，不叠两层', () => {
-    expect(publishFailNote(new Error('发布没有成功：断网'))).toBe('发布没有成功：断网');
-    expect(publishFailNote('设备令牌没拿到（无法发布）')).toBe('设备令牌没拿到（无法发布）');
+describe('发布入口（用户反馈 4：入口只表达"作者要发布"）', () => {
+  it('PUBLISH_LABEL 是「发布口上…」：发布语义 + 省略号（下一步还有引导）', () => {
+    expect(PUBLISH_LABEL).toBe('发布口上…');
+    // 机器词与旧名都不上按钮
+    expect(PUBLISH_LABEL).not.toContain('发布包');
+    expect(PUBLISH_LABEL).not.toContain('zip');
   });
 });

@@ -56,15 +56,19 @@ import {
   MARKET_MAX_PATH_DEPTH,
   MARKET_MAX_UNPACKED_BYTES,
   MARKET_PACKS_DIR,
+  MARKET_SCHEMA_VERSION,
   MARKET_STAGING_DIR,
   MarketError,
   SHA256_HEX_RE,
+  buildZip,
+  coreVersion,
   dirname,
   endpointProblem,
   join,
   marketDownloadTimeoutMs,
   marketPublishTimeoutMs,
   packContainerName,
+  packEntryPathProblem,
   packIdKindConflicts,
   packStagingName,
   packStagingNames,
@@ -78,10 +82,13 @@ import {
   type MarketIndexEntry,
   type MarketIndexRefresh,
   type MarketIndexState,
+  type MarketPackDraft,
   type MarketPublishManifestSummary,
   type MarketPublishOutcome,
+  type MarketPublishPackOpts,
   type MarketPublishProgress,
   type MarketService,
+  type PackFileEntry,
   type PackKind,
   type PackManifest,
   type PackRef,
@@ -92,8 +99,9 @@ import {
   type RemoteService,
   type RemoteText,
   type ScopedStorage,
+  type ZipEntry,
 } from '@kojo/plugin-api';
-import { contentDigestOf, sha256Hex } from './digest';
+import { contentDigestOf, sha256Hex, utf8Bytes } from './digest';
 import { packContainerProblem, parseIndex, parseManifest, type ContainerFacts } from './manifest';
 
 /**
@@ -905,6 +913,134 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     }
   }
 
+  /* --------------- 「发布口上」：从作者工作区草案现打包（用户反馈 4 批） --------------- */
+
+  /**
+   * 草案临时容器的序号。
+   *
+   * 临时名**不掺 id / version**：那两样此刻还没过校验（可能带任意字符），拿来做文件名
+   * 等于先让一个未验证的字符串参与路径拼接；名字只用 `[a-z0-9._-]` 的安全字符，
+   * 唯一性靠时间戳 + 序号。它与 `PUBLISH_PREVIEW_CONTAINER` 不同名 ⇒ 预校验复制那一步
+   * 不会覆盖草案容器本身。
+   */
+  let publishDraftSeq = 0;
+
+  /** 删一个**文件**（`quietRemove` 只管目录）：清理失败只出声，绝不盖住主错误 */
+  async function quietRemoveFile(path: string): Promise<void> {
+    try {
+      if (await io.exists(path)) await io.removeFile(path);
+    } catch (err) {
+      log.warn(`清理草案容器失败（不影响本次结果）：${path} —— ${errMessage(err)}`);
+    }
+  }
+
+  /**
+   * 草案 → `PackManifest`（**逐文件 sha256 在这里算**，字节就是调用方交上来的那一份）。
+   *
+   * 字段装配与 `parseManifest` 的必填面一一对应；`minAppVersion` 缺省取
+   * `coreVersion(deps.appVersion)`（`0.4.0-beta.1` → `0.4.0`，与安装面同一条口径）。
+   * 本函数不做**任何拒绝判定**——形状合不合法由随后 `previewForPublish` 里的
+   * `parseManifest` / `packFilesProblem` 说了算（唯一一份校验）。
+   */
+  async function manifestOfDraft(draft: MarketPackDraft): Promise<PackManifest> {
+    const files: PackFileEntry[] = [];
+    for (const f of draft.files) {
+      files.push({
+        // 前缀在这里补一次（调用方只给相对 files/ 的路径）
+        path: `${MARKET_CONTENT_DIR}/${f.path}`,
+        bytes: f.bytes.length,
+        sha256: await sha256Hex(f.bytes),
+      });
+    }
+    const manifest: PackManifest = {
+      schema: MARKET_SCHEMA_VERSION,
+      kind: draft.kind,
+      id: draft.id,
+      version: draft.version,
+      name: draft.name,
+      author: draft.author,
+      license: draft.license,
+      redistribute: draft.redistribute,
+      minAppVersion: draft.minAppVersion ?? coreVersion(deps.appVersion),
+      files,
+    };
+    // 可选字段"有才给"：缺省不写空串（空串是"作者填了空"，与"没这一项"不是一回事）
+    if (draft.summary !== undefined) manifest.summary = draft.summary;
+    if (draft.sourceUrl !== undefined) manifest.sourceUrl = draft.sourceUrl;
+    if (draft.gameId !== undefined) manifest.gameId = draft.gameId;
+    return manifest;
+  }
+
+  /**
+   * **从工作区草案现打包并发布**（契约 `MarketService.publishPack`）。
+   *
+   * 流程：草案路径形态轻检（防拼出会让解包端歧义的条目）→ 逐文件 sha256 + `pack.json`
+   * → `buildZip`（`contract: 'extractable'`，违例在写第一个字节前抛）→ 写进自家暂存区
+   * 的唯一临时名 → **调用既有的 `publish(zipPath)`**（预校验 / 令牌 / 上传一条链路，
+   * 一个环节都不重写）→ `finally` 删临时容器（成功失败都不留残壳）。
+   *
+   * 关于那一步"轻检"：判据就是契约的 `packEntryPathProblem` 本身（先补 `files/` 前缀
+   * 再判），**不是第二套校验**——真正的权威拒绝仍发生在 `previewForPublish` 里的
+   * `parseManifest`（同一个函数、同一张码表）。在这里先拦一道，只是因为条目名一旦
+   * 长得像 `..`，`buildZip` 会在压缩前抛**普通 Error**（没有市场拒因码），
+   * 而作者面需要的是与安装面同一句人话、同一个码。
+   *
+   * 0 个文件的草案直接拒：`packFilesProblem([])` 合法（空数组不违规），空包能一路
+   * 上传到后端才被发现"发出去没有内容"，那不叫校验、叫浪费作者流量。
+   */
+  async function publishPack(
+    draft: MarketPackDraft,
+    opts?: MarketPublishPackOpts,
+  ): Promise<MarketPublishOutcome> {
+    if (draft.files.length === 0) {
+      throw new MarketError(
+        'content-missing',
+        `「${draft.name}」里一个文件都没有，发出去也没有内容——先往包里写口上文件再发布`,
+        draft.id,
+      );
+    }
+    const seen = new Set<string>();
+    for (const f of draft.files) {
+      if (f.path === MARKET_CONTENT_DIR || f.path.startsWith(`${MARKET_CONTENT_DIR}/`)) {
+        throw new MarketError(
+          'path-prefix',
+          `文件路径不要以 ${MARKET_CONTENT_DIR}/ 开头（服务会自动补前缀）：${f.path}`,
+          f.path,
+        );
+      }
+      const problem = packEntryPathProblem(`${MARKET_CONTENT_DIR}/${f.path}`);
+      if (problem !== null) {
+        throw new MarketError(
+          problem,
+          `这个包里有个文件路径不合法（${problem}）：${f.path}`,
+          f.path,
+        );
+      }
+      if (seen.has(f.path)) {
+        throw new MarketError('entry-duplicate', `同一个路径在包里出现了两次：${f.path}`, f.path);
+      }
+      seen.add(f.path);
+    }
+
+    const manifest = await manifestOfDraft(draft);
+    // 容器结构：根 `pack.json` + 全部内容条目（顺序 = 草案顺序，便于作者对照）
+    const entries: ZipEntry[] = [
+      { name: MARKET_MANIFEST_FILE, data: utf8Bytes(JSON.stringify(manifest, null, 2)) },
+      ...draft.files.map((f) => ({ name: `${MARKET_CONTENT_DIR}/${f.path}`, data: f.bytes })),
+    ];
+    const zip = await buildZip(entries, { contract: 'extractable', date: now() });
+
+    const containerName = `publish-draft-${now()}-${publishDraftSeq++}.zip`;
+    const containerPath = join(stagingRoot, containerName);
+    await io.writeBytes(containerPath, zip);
+    try {
+      // 预校验 / 令牌 / 上传只有 `publish` 那一条 —— 本函数只负责"把包打出来"
+      return await publish(containerPath, opts);
+    } finally {
+      await quietRemoveFile(containerPath);
+    }
+  }
+
   return {
     async rootDir(): Promise<string> {
       return deps.root;
@@ -945,6 +1081,8 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     installFromIndex,
 
     publish,
+
+    publishPack,
 
     async installedBytes(): Promise<number> {
       // 口径：**核验在位**的各包 files 声明字节之和。`pack.json` 的 `files[]` 只列 `files/`
