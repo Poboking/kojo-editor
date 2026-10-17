@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { FAMILY_ALIASES_REVERSE } from '@kojo/plugin-eratw-adapter';
 import { renderStatementLine } from '../src/native-display/statement';
 import { isVerbatimNativeLine } from '../src/native-display/types';
 import type { NativeDisplayInput, NativeDisplayLookup } from '../src/native-display/types';
@@ -17,21 +18,36 @@ import { localizeNativeLine } from '../src/native-display/passes';
 
 /* ==================== 桩名表（游戏层知识只活在这里，pass 本体零硬编码） ==================== */
 
-const FAMILIES: Record<string, string> = {
-  TFLAG: '时标',
-  CFLAG: '标志',
-  CALLNAME: '称谓',
-  EX: '部位',
-  NOWEX: '现在经验',
+/**
+ * ZH-N 接线批（判据 6「桩与真表口径冲突 ⇒ 以真表为准」）：
+ * - 别名 = adapter **真表** `FAMILY_ALIASES_REVERSE`（零漂移；旧桩的 `标志/称谓/部位/现在经验`
+ *   全是与真表分叉的假别名，已废）；
+ * - `slotCn` = 真通道两段的**镜像**（具名走扁平词典；纯数字走 `族头:编号` 名称表，
+ *   表名与中文值逐条取自真盘实测：CFLAG 2=好感度→好感度（词典自映射）、TFLAG 193=SELECTCOM的分岐、
+ *   ABL 1=Ｖ絶頂→Ｖ感觉；`EX` 无别名 ⇒ `EX:1` 在真链路上根本不会问槽名，旧桩「部位:1（胸）」
+ *   是双份口径，已改）。查不到一律 `undefined`（与真实现同 fail-closed）。
+ */
+const CHS: Record<string, string> = {
+  噴乳: '喷乳',
+  信頼度: '信赖度',
+  好感度: '好感度',
+  Ｖ感覚: 'Ｖ感觉',
+  "SELECTCOM的分岐": "SELECTCOM的分岐",
 };
-const SLOTS: Record<string, string> = {
-  'CFLAG:1088': '好感度',
-  'NOWEX:5': '胸部',
-  'EX:1': '胸',
+const NUMERIC_NAMES: Record<string, string> = {
+  'CFLAG:2': '好感度',
+  'TFLAG:193': 'SELECTCOM的分岐',
+  'ABL:1': 'Ｖ感覚',
 };
 const DICT: NativeDisplayLookup = {
-  familyAlias: (f) => FAMILIES[f],
-  slotCn: (f, i) => SLOTS[`${f}:${i}`],
+  familyAlias: (f) => FAMILY_ALIASES_REVERSE[f],
+  slotCn: (f, i) => {
+    const direct = CHS[i];
+    if (direct !== undefined) return direct;
+    if (!/^\d+$/.test(i)) return undefined;
+    const jp = NUMERIC_NAMES[`${f}:${i}`];
+    return jp === undefined ? undefined : CHS[jp];
+  },
 };
 
 const render = (content: string, lookup?: NativeDisplayLookup): string | null =>
@@ -42,19 +58,19 @@ const render = (content: string, lookup?: NativeDisplayLookup): string | null =>
 type Case = readonly [line: string, lookup: NativeDisplayLookup | undefined, expected: string];
 
 const CASES: readonly Case[] = [
-  /* —— 赋值：游戏族头经别名 —— */
-  ['TFLAG:193 = 1', DICT, '时标:193 = 1'],
-  ['TFLAG:193 += 1', DICT, '时标:193 += 1'],
-  ['TFLAG:193 -= 2', DICT, '时标:193 -= 2'],
-  ['TFLAG:193 *= 2', DICT, '时标:193 *= 2'],
-  ['TFLAG:193 /= 2', DICT, '时标:193 /= 2'],
-  ['TFLAG:193 =1', DICT, '时标:193 = 1'],
-  ['tflag:193 = 1', DICT, '时标:193 = 1'],
-  ['CFLAG[1088] = 1', DICT, '标志[1088]（好感度） = 1'],
-  ['CFLAG:1088 = 2', DICT, '标志:1088（好感度） = 2'],
-  ['NOWEX:5 = 3', DICT, '现在经验:5（胸部） = 3'],
-  ['EX:1 = 2', DICT, '部位:1（胸） = 2'],
-  ['CALLNAME:13 = "灵梦"', DICT, '称谓:13 = "灵梦"'],
+  /* —— 赋值：游戏族头经别名（真表 `FAMILY_ALIASES_REVERSE`；193 编号命中真名称表换算） —— */
+  ['TFLAG:193 = 1', DICT, '时标:193（SELECTCOM的分岐） = 1'],
+  ['TFLAG:193 += 1', DICT, '时标:193（SELECTCOM的分岐） += 1'],
+  ['TFLAG:193 -= 2', DICT, '时标:193（SELECTCOM的分岐） -= 2'],
+  ['TFLAG:193 *= 2', DICT, '时标:193（SELECTCOM的分岐） *= 2'],
+  ['TFLAG:193 /= 2', DICT, '时标:193（SELECTCOM的分岐） /= 2'],
+  ['TFLAG:193 =1', DICT, '时标:193（SELECTCOM的分岐） = 1'],
+  ['tflag:193 = 1', DICT, '时标:193（SELECTCOM的分岐） = 1'],
+  ['CFLAG[2] = 1', DICT, '角色标志[2]（好感度） = 1'],
+  ['CFLAG:2 = 2', DICT, '角色标志:2（好感度） = 2'],
+  ['NOWEX:噴乳 = 3', DICT, '现在:噴乳（喷乳） = 3'],
+  ['ABL:1 = 2', DICT, '能力:1（Ｖ感觉） = 2'],
+  ['CALLNAME:13 = "灵梦"', DICT, '称呼:13 = "灵梦"'],
 
   /* —— 赋值：查不到别名也必须给中文形（`赋值` 动词兜底） —— */
   ['XYZFLAG:5 = 1', DICT, '赋值 XYZFLAG:5 = 1'],
@@ -98,7 +114,7 @@ const CASES: readonly Case[] = [
   /* —— 位原语 —— */
   ['SETBIT LOCAL, 3', undefined, '置位 局部 第3位'],
   ['SETBIT TFLAG:1, 3', DICT, '置位 时标:1 第3位'],
-  ['CLEARBIT EX:1, 2', DICT, '清位 部位:1（胸） 第2位'],
+  ['CLEARBIT EX:1, 2', DICT, '清位 EX:1 第2位'], // `EX` 在排除台账（真表无别名）⇒ 族头不替换，仍给中文动词语
   ['INVERTBIT LOCAL:2, 0, 1', undefined, '翻位 局部:2 第0，1位'],
   ['SETBIT XYZ, 1', DICT, '置位 XYZ 第1位'],
 

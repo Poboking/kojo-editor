@@ -1099,6 +1099,11 @@ export function makeLookup(schema: VariableSchema): DictionaryLookup {
     ...(schema.familyAliasReverse
       ? { familyAliasReverse: (family: string) => schema.familyAliasReverse!(family) }
       : {}),
+    // 槽位原名→中文名（ZH-N 接线批）：同样**逐字转发** adapter 的 `VariableSchema.slotCn`
+    // （词典与编号换算都住 adapter，本包零解释）；adapter 未提供 ⇒ 不挂（投影不标注记，不猜）。
+    ...(schema.slotCn
+      ? { slotCn: (family: string, jpName: string) => schema.slotCn!(family, jpName) }
+      : {}),
   };
 }
 

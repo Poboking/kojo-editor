@@ -100,6 +100,18 @@ export interface DictionaryLookup {
    * `unknown-identifier`（**行为与今天逐字相同**）。
    */
   bitIndexOf?(variableName: string, bitLabel: string): number | undefined;
+  /**
+   * **槽位原名 → 中文名**（**可选能力**；ZH-N 接线批）：契约
+   * `VariableSchema.slotCn` 的**逐字转发**——表（游戏汉化词典 + 名称表编号换算）只住
+   * adapter，本包零解释、零第二份。
+   *
+   * 用途：native 行显示形给槽位补中文注记（`NOWEX:噴乳` → `现在:噴乳（喷乳）`，
+   * `native-display/statement.ts` 消费）。
+   *
+   * 缺省（字典不支持 / adapter 未提供）= **不标注记**：槽位保持原名（**不猜**，
+   * 与 `familyAliasReverse` 同一条红线）。
+   */
+  slotCn?(engineFamilyUpper: string, jpName: string): string | undefined;
 }
 
 /**

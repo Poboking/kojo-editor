@@ -366,4 +366,38 @@ describe('JP→CN 槽名词典 × adapter', () => {
     expect(s.slotCn!('CFLAG', '不在词典的假名')).toBeUndefined();
     expect(s.lookup('CFLAG', 2)?.description).toBe('好感度');
   });
+
+  it('编号通道（批 F 口径）：纯数字索引 → 主表原名 → 同一份词典；每一步查不到 ⇒ undefined（不猜）', async () => {
+    // fixture 名字对取自真盘形态：CFLAG.csv 的 `2` 位原名 信頼度、词典 `信頼度→信赖度`
+    const s = await loadEratwVariableSchema({
+      io: fakeIo({
+        '/game/CSV/CFLAG.csv': '2,信頼度\n4,好感度\n',
+        '/plugins/tw_csv_chs.xml': XML,
+      }),
+      csvDir: '/game/CSV',
+      chsMapPath: '/plugins/tw_csv_chs.xml',
+      log: silentLog,
+    });
+    // 编号 → byIndex 原名（信頼度）→ 词典 → 中文（与具名直查同一份词典、同一条首条优先）
+    expect(s.slotCn!('CFLAG', '2')).toBe('信赖度');
+    // 原名在位但**词典缺这一条** ⇒ undefined——绝不把原名（好感度）冒充命中
+    expect(s.slotCn!('CFLAG', '4')).toBeUndefined();
+    // 该族无名称表 / 编号不在表 ⇒ undefined（不换个族再猜）
+    expect(s.slotCn!('NOWEX', '2')).toBeUndefined();
+    expect(s.slotCn!('CFLAG', '999')).toBeUndefined();
+    // 非数字查不到 ⇒ 不触发编号通道（原名直查未中就是未中）
+    expect(s.slotCn!('CFLAG', '不在词典')).toBeUndefined();
+    // 具名直查的既有裁决零改动：词典命中优先、族头仍不参与名侧
+    expect(s.slotCn!('NOTAFAMILY', '信頼度')).toBe('信赖度');
+  });
+
+  it('编号通道 fail-closed 对照：词典缺席时数字与具名一律 undefined（名称表在位也不产中文名）', async () => {
+    const s = await loadEratwVariableSchema({
+      io: fakeIo({ '/game/CSV/CFLAG.csv': '2,信頼度\n' }),
+      csvDir: '/game/CSV',
+      log: silentLog,
+    });
+    expect(s.slotCn!('CFLAG', '2')).toBeUndefined();
+    expect(s.slotCn!('CFLAG', '信頼度')).toBeUndefined();
+  });
 });

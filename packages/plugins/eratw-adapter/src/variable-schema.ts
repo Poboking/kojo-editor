@@ -899,13 +899,23 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
      * 装载顺序也同一）。**查不到 ⇒ `undefined`**：绝不把原文返回冒充命中——那会让调用方
      * 以为"这一行已经是中文"，正好掩盖了"词典缺这一条"。
      *
-     * **第一参数当前不参与裁决**：本词典是**扁平**的"显示词 → 显示词"表，键侧没有族维度
-     * （引擎 `MAP_FROMXML` 装成一张 `CSV_MAP` 就是这个形状）。留该参数是为了①让消费方按
-     * 族传值而无需先猜哪族有词，②给未来"分族词典"留出**零改动**的落点。**不做**任何
-     * "查不到就换个族 / 换个写法再猜一次"的兜底。
+     * 两段裁决（批 F 口径「数字索引也能查到槽位中文名」的唯一合法实现——编号→原名
+     * 只住在名称表，糖层拿不到，也**不许**自己拼第二份）：
+     * 1. **原名直查**：`jpName` 是显示词（`噴乳`）⇒ 扁平词典直查，族头不参与裁决
+     *    （本词典键侧无族维度，引擎 `MAP_FROMXML` 装出的就是一张平表）；
+     * 2. **编号换算**：`jpName` 是纯数字且词典直查未中 ⇒ 取 `engineFamilyUpper` 的
+     *    名称表 `byIndex`（**首个定义优先**的 CSV/`.als`/字典包合并表）得原名，再过同一
+     *    词典；该族无表 / 编号不在表 / 原名不在词典 ⇒ `undefined`（**不猜**，退化由
+     *    消费方计数）。
+     * **不做**任何"查不到就换个族 / 换个写法再猜一次"的兜底。
      */
-    slotCn(_engineFamilyUpper: string, jpName: string): string | undefined {
-      return chsSlots.cnForJp(jpName);
+    slotCn(engineFamilyUpper: string, jpName: string): string | undefined {
+      const direct = chsSlots.cnForJp(jpName);
+      if (direct !== undefined) return direct;
+      const idx = normalizeSlotKey(jpName);
+      if (!/^\d+$/.test(idx)) return undefined;
+      const jp = tables.get(engineFamilyUpper.toUpperCase())?.byIndex.get(idx);
+      return jp === undefined ? undefined : chsSlots.cnForJp(jp);
     },
   };
 }

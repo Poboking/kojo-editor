@@ -846,8 +846,9 @@ function makeNativeRec(lines: string[], ctx: ProjContext, deps: LiftDeps): Nativ
  *
  * - `familyAlias`：与投影别处同一个真源（`dictionary().familyAliasReverse`，表住 adapter），
  *   **不抄第二份族名表**；字典缺席 / 不支持反向 = 整个 lookup 缺席（pass 只做语言层替换）。
- * - `slotCn`：槽位原名 → 中文名那条通道**还没进 `LiftDeps`**（ZH-N 线的 `plugin-api` 扩展），
- *   这里如实给"查不到"——查不到就原样保留，**绝不猜**。
+ * - `slotCn`：同为**逐字转发**（`dictionary().slotCn` = 契约 `VariableSchema.slotCn`，
+ *   汉化词典与编号换算都住 adapter，本包零解释、零缓存）。字典未提供 = 查不到 = 槽位
+ *   保持原名，**绝不猜**（与旧装配——通道缺席——行为逐字相同）。
  */
 function nativeDisplayLookup(deps: LiftDeps): NativeDisplayLookup | undefined {
   const dict = deps.dictionary?.();
@@ -855,7 +856,7 @@ function nativeDisplayLookup(deps: LiftDeps): NativeDisplayLookup | undefined {
   const reverse = dict.familyAliasReverse.bind(dict);
   return {
     familyAlias: (engineFamilyUpper) => reverse(engineFamilyUpper),
-    slotCn: () => undefined,
+    slotCn: (engineFamilyUpper, indexName) => dict.slotCn?.(engineFamilyUpper, indexName),
   };
 }
 
