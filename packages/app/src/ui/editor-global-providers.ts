@@ -20,13 +20,19 @@ import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import { errorText, pathKey } from '@kojo/plugin-api';
 import type {
+  EditorCodeAction,
   EditorDocumentSymbol,
+  EditorFoldingRange,
+  EditorInlayHint,
+  EditorCodeLens,
   EditorTextEdit,
   ErbFile,
   ErbIndex,
   ErbParserService,
   ErbReference,
   GameAdapter,
+  GameProject,
+  LineDecoration,
 } from '@kojo/plugin-api';
 import * as monaco from '../monaco/entry';
 import { makeLookup } from '@kojo/plugin-kojo-sugar';
@@ -52,8 +58,10 @@ import {
   installInlayHintsProvider,
 } from '../monaco/kojo-inlay-hints';
 import { revealLocationOf } from '../monaco/reveal-position';
-import { dialectForLanguage, installDocumentFormatter, type FormatHandlers } from '../monaco/kojo-format';
-import { installRangeFormatter } from '../monaco/kojo-format-range';
+// 大文档档位线的**单一真源**（本模块只引用、不再抄数字，同 codeLens / 着色 / 面包屑各批）
+import { LARGE_FILE_LINES } from './editor-options';
+import { dialectForLanguage, installDocumentFormatter, type FormatRequest } from '../monaco/kojo-format';
+import { installRangeFormatter, type RangeFormatHandlers } from '../monaco/kojo-format-range';
 // W8 XLANG-RENAME 的宿主侧：闭文件落盘的唯一通道（`ClosedFileIo`）与跨语言腿的取数
 // （枚举 + 读文 + 问槽，判读零宿主知识；根口径与检索面板同源）
 import { type ClosedFileIo } from './reference-utils';
@@ -68,6 +76,8 @@ import {
   shouldComputeSemanticTokens,
 } from '../monaco/kojo-semantic-tokens';
 import {
+  SIGNATURE_LOOKBACK_LINES,
+  type ResolvedSignature,
   type SignatureTables,
   installSignatureHelp,
   resolveSignatureInText,
@@ -332,6 +342,389 @@ function owningPanePathOf(model: Monaco.editor.ITextModel): string | null {
   return ctx.filePathRef.current || null;
 }
 
+/* ========================================================================================
+ * PS-4（2026-10-18 性能批）· 大文档 provider 缝的三件机制
+ *
+ * 尺子 = 真实语料之最那篇 **52,601 行 / 2.35 MB** 的 ERB（`docs/STATE.md` §二另记 99 万行级盘）。
+ * 这一族 provider 的每一次请求都要把**整篇文档**抄成一份 JS 字符串再交给插件，而 Monaco 又在
+ * **停笔 / 每次滚动 / 每次光标移动 / 每次波浪线刷新**后重新问一遍 ⇒ "整篇复制"是一等缺陷。
+ *
+ * 三条机制，各自对标 VSCode 消掉这一类成本的那一个机制：
+ * ① **档位让路**（`editor.largeFileOptimizations` 所在的位置）：`foldingRangesFor` 按
+ *    `LARGE_FILE_LINES` 这一条既有档位线判在**请求之前**，档外一次都不扫；让路不许静默，
+ *    由 `warnSeamDegradedOnce` 逐文件报一次（与 `ui-sugar-lift` 的 `warnLargeOnce` 同纪律）。
+ * ② **版本记忆化**（tsserver 单文件增量失效所在的位置：内容没变就绝不重算）：
+ *    `memoizedDocument` 按 `(真路径, alternativeVersionId, 项目引用, 贡献方条数)` 认文档，
+ *    四项任一项变即重算。每一项都有必然性——少一项就是一次"把上一个项目 / 别份文件的
+ *    解析结果搬到这一份上"的事故（`editorTables` 那条"索引每次现取"纪律在本批的等价物）。
+ * ③ **区间窗口**（LSP 的 `textDocument/*` 都带 range 的那个形状）：签名帮助只取光标行往上
+ *    `SIGNATURE_LOOKBACK_LINES` 行那一段，on-type 格式化只取触发行那一行
+ *    （`monaco/kojo-format-range.ts` 的 `resolveRange` 那条腿）。
+ *
+ * 档位线一律**引用** `editor-options.ts` 的 `LARGE_FILE_LINES`，本模块不写第二个数字。
+ * ==================================================================================== */
+
+/**
+ * 四条「整篇文档一次解析」腿各自的记忆化（`WeakMap` 以 model 为键：标签关掉、model 释放之后
+ * 条目自然可回收，不需要额外的清理时机）。`let` 而不是 `const`：整套注册拆毁时
+ * （`teardownGlobalProviders`）换一张新的，绝不让上一个 kernel 的解析结果活到下一次挂载。
+ */
+let foldingMemo = new WeakMap<Monaco.editor.ITextModel, DocumentMemoEntry<EditorFoldingRange[]>>();
+let inlayHintsMemo = new WeakMap<Monaco.editor.ITextModel, DocumentMemoEntry<EditorInlayHint[]>>();
+let codeLensesMemo = new WeakMap<Monaco.editor.ITextModel, DocumentMemoEntry<EditorCodeLens[]>>();
+let codeActionsMemo = new WeakMap<Monaco.editor.ITextModel, CodeActionsMemoEntry>();
+
+/** 一条「整篇文档一次解析」腿的记忆化键（四项缺一即可能把别的项目 / 别份文件的结论搬过来） */
+interface DocumentMemoKey {
+  readonly path: string;
+  readonly versionId: number;
+  readonly project: GameProject | null;
+  readonly contributions: number;
+}
+
+interface DocumentMemoEntry<V> extends DocumentMemoKey {
+  readonly value: V;
+}
+
+/**
+ * 折叠这一族的档位判据（与 `codeLensAffordable` / `inlayHintsAffordable` /
+ * `shouldComputeSemanticTokens` **同一条线、同一个理由**）：一次开口就是整篇文档的字符串
+ * 拷贝 + 两遍线性扫描（`erb-parser` 的 `parseErbText` + `scanControlFlow`），而 Monaco 的
+ * folding 控制器在每次内容变化后都重新问一遍（vendor `folding.js:72` 的 `min: 200` 自适应
+ * 防抖 + `:215` 的 `onDidChangeModelContent → triggerFoldingModelChanged`）。
+ *
+ * 与 VSCode 的差别要说清：那边折叠跑在 extension host 进程里、还有 `FoldingLimitReporter`
+ * 把"这一处折不了"说给用户；本项目 provider 全在渲染主线程，只能按体量让路——而让路
+ * **不许静默**（铁律 4），档外由 `warnSeamDegradedOnce` 逐文件报一次。
+ * 判据留在**缝上**（不在 `monaco/kojo-folding.ts`）：那一层只做协议翻译，插件侧
+ * `erb-parser/src/plugin.ts` 的 `erb-folding` 又明确写了"不按 lineCount 降级"——
+ * 档位是宿主的产品判据，本批只在接线处立闸，不动任何供方口径。
+ */
+export function foldingAffordable(lineCount: number): boolean {
+  return Number.isFinite(lineCount) && lineCount < LARGE_FILE_LINES;
+}
+
+/** 降级告警的去重表（每 (能力, 文件) 一次；超阈值整体清，与 `ui-sugar-lift` 同一手法） */
+let degradedSeams = new Set<string>();
+
+function warnSeamDegradedOnce(capability: string, path: string): void {
+  const key = `${capability}\u0000${path}`;
+  if (degradedSeams.has(key)) return;
+  if (degradedSeams.size > 200) degradedSeams = new Set();
+  degradedSeams.add(key);
+  console.warn(
+    `[editor-providers] ${capability}在这次请求里让了路（${path}）：文件行数超过 ${LARGE_FILE_LINES} 行档，全文级解析省着来`,
+  );
+}
+
+/**
+ * 一次请求的文档身份（记忆化的键）。`versionId` 取 `getAlternativeVersionId()`——与撤销栈
+ * 同步的那个号：同一份内容必得同一个号，内容与号一一对得上（面包屑树那份缓存同口径）。
+ */
+function documentMemoKey(
+  model: Monaco.editor.ITextModel,
+  path: string,
+  kernel: Kernel,
+  contributions: number,
+): DocumentMemoKey {
+  return {
+    path,
+    versionId: model.getAlternativeVersionId(),
+    project: kernel.project.current(),
+    contributions,
+  };
+}
+
+function sameDocumentKey(a: DocumentMemoKey, b: DocumentMemoKey): boolean {
+  return a.path === b.path &&
+    a.versionId === b.versionId &&
+    a.project === b.project &&
+    a.contributions === b.contributions;
+}
+
+/** 记忆化本体：键合就交回缓存，否则算一次并记下（`compute` 里只许做纯取数） */
+function memoizedDocument<V>(
+  store: WeakMap<Monaco.editor.ITextModel, DocumentMemoEntry<V>>,
+  model: Monaco.editor.ITextModel,
+  key: DocumentMemoKey,
+  compute: () => V,
+): V {
+  const hit = store.get(model);
+  if (hit && sameDocumentKey(hit, key)) return hit.value;
+  const value = compute();
+  store.set(model, { ...key, value });
+  return value;
+}
+
+/**
+ * 折叠范围（PS-4 的①+②）：档位判在取文之前，档内按版本记忆化。
+ *
+ * 记忆化不改变任何判据：同一份 (文档, 项目, 贡献方) 的同一次问，答案本来就应当逐字相同
+ * （供方是纯函数）。省掉的是 Monaco 在停笔 / 换 model / 改配置后重复问的那几次整篇拷贝。
+ */
+export function foldingRangesFor(
+  model: Monaco.editor.ITextModel,
+  path: string,
+  kernel: Kernel,
+): EditorFoldingRange[] {
+  const lineCount = model.getLineCount();
+  if (!foldingAffordable(lineCount)) {
+    warnSeamDegradedOnce('折叠', path);
+    return [];
+  }
+  const contributions = kernel.slots.query('ui.editor.languageService');
+  return memoizedDocument(foldingMemo, model, documentMemoKey(model, path, kernel, contributions.length), () =>
+    collectFoldingRanges(contributions, {
+      kind: 'foldingRange',
+      path,
+      text: model.getValue(),
+      project: kernel.project.current(),
+      lineCount,
+    }),
+  );
+}
+
+/**
+ * 行内提示（PS-4 的②+③）：档内问一次记一次。
+ *
+ * 为什么不按 Monaco 给的区间**取文**：供方 `visibleCodeLines` 带 `[SKIPSTART]…[SKIPEND]`
+ * 的跨行状态，从窗口中间起算会把屏蔽区里的行当代码行 ⇒ 凭空多出提示（错标比不标危险）。
+ * 区间这一侧本批改的是**交回**：`toMonacoInlayHints` 只交回这一段（见该模块头注），
+ * 每次滚动不再为全篇每条提示重建装饰器。
+ */
+export function inlayHintsFor(
+  model: Monaco.editor.ITextModel,
+  path: string,
+  kernel: Kernel,
+): EditorInlayHint[] {
+  const lineCount = model.getLineCount();
+  if (!inlayHintsAffordable(lineCount)) return [];
+  const contributions = kernel.slots.query('ui.editor.languageService');
+  return memoizedDocument(inlayHintsMemo, model, documentMemoKey(model, path, kernel, contributions.length), () =>
+    collectInlayHints(contributions, {
+      kind: 'inlayHint',
+      path,
+      text: model.getValue(),
+      project: kernel.project.current(),
+      lineCount,
+    }),
+  );
+}
+
+/**
+ * 行上注解（PS-4 的②）：判据与档位照旧全在接线处，只把"同一篇没改过第二次"的那几次
+ * 整篇拷贝挡掉（Monaco 在 model 切换 / 配置变化 / 注册表变化后也会重新问一遍）。
+ */
+export function codeLensesFor(
+  model: Monaco.editor.ITextModel,
+  path: string,
+  kernel: Kernel,
+): EditorCodeLens[] {
+  const lineCount = model.getLineCount();
+  if (!codeLensAffordable(lineCount)) return [];
+  const contributions = kernel.slots.query('ui.editor.languageService');
+  return memoizedDocument(codeLensesMemo, model, documentMemoKey(model, path, kernel, contributions.length), () => {
+    const lenses = collectCodeLenses(contributions, {
+      kind: 'codeLens',
+      path,
+      text: model.getValue(),
+      project: kernel.project.current(),
+      lineCount,
+    });
+    // 产出预算：**全有或全无**（缺席携带语义，不许用来表示"额度用完了"）
+    return withinCodeLensBudget(lenses.length, lineCount) ? lenses : [];
+  });
+}
+
+/**
+ * 签名帮助（PS-4 的③）：**只取光标行往上那一段窗口**，整篇一次都不 copy。
+ *
+ * 等价性可证：`findCallSiteAt` 的向上收行有硬上限（`SIGNATURE_LOOKBACK_LINES`），
+ * 窗口给的就是"上限那么多行 + 光标行"，它读到的行集合与整篇视角逐字相同；
+ * 窗口更短只可能是文档本来就到顶（第一行往上没有了）。
+ * 行号按窗口内坐标递进去（`resolveSignatureInText` 的 `lineNumber` 是**它拿到的那段文本**的行号）。
+ */
+export function signatureHelpAt(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  kernel: Kernel,
+): ResolvedSignature | null {
+  if (!Number.isFinite(position.lineNumber) || position.lineNumber < 1) return null;
+  if (position.lineNumber > model.getLineCount()) return null;
+  const protocol = editorTables(kernel).callProtocol;
+  const from = Math.max(1, position.lineNumber - SIGNATURE_LOOKBACK_LINES);
+  const windowText = model.getValueInRange({
+    startLineNumber: from,
+    startColumn: 1,
+    endLineNumber: position.lineNumber,
+    endColumn: model.getLineMaxColumn(position.lineNumber),
+  });
+  return resolveSignatureInText(windowText, position.lineNumber - from + 1, position.column, protocol, (callee) => {
+    try {
+      const index = erbParserIndex(kernel);
+      if (!index) return null;
+      const defs = index.byName.get(callee.toUpperCase());
+      const ref = defs?.[0];
+      if (!ref) return null;
+      const file = index.files.get(ref.filePath);
+      const fn = file?.functions.find((f) => f.startLine === ref.startLine);
+      return fn ? fn.params : null;
+    } catch {
+      return null;
+    }
+  });
+}
+
+/**
+ * on-type / 选区格式化那条**窗口取文腿**（PS-4 的③）：只把要算的那几行交给规则层。
+ *
+ * 判据全在 `monaco/kojo-format-range.ts`（等价性钉子在那边与 `tests/ps4-provider-seams.test.ts`，
+ * 单价差在 `tests/ps4-provider-seams.perf.test.ts`）。
+ * 交回 `null` = 这次不适用 ⇒ 调用方自动退回整篇那条腿：
+ * 糖视图的派生 model（行号不属于真文件）、认不出方言的语言、以及**`.kojo`**——后者的缩进单位
+ * 探测与 `@` 原生块状态是文档级判据，窗口视角会数错（见 `kojo-format.ts` 区间格式化头注）。
+ */
+export function formatRequestWindowFor(
+  model: Monaco.editor.ITextModel,
+  startLine: number,
+  endLine: number,
+): FormatRequest | null {
+  const path = owningPanePathOf(model);
+  if (path === null) return null;
+  const dialect = dialectForLanguage(model.getLanguageId());
+  if (dialect !== 'erb') return null;
+  const lineCount = model.getLineCount();
+  const from = Math.min(Math.max(1, Math.trunc(startLine) || 1), lineCount);
+  const to = Math.min(Math.max(from, Math.trunc(endLine) || from), lineCount);
+  return {
+    dialect,
+    text: model.getValueInRange({
+      startLineNumber: from,
+      startColumn: 1,
+      endLineNumber: to,
+      endColumn: model.getLineMaxColumn(to),
+    }),
+  };
+}
+
+/** 💡 一次请求里登记过的动作（缓存命中时要把 id → 动作重新挂回反查表，命令才执行得了） */
+interface CodeActionRegistration {
+  readonly actionId: string;
+  readonly action: EditorCodeAction;
+}
+
+/** 💡 那条腿的缓存键：文档身份四项 + 这一次的行 + 面上这几条波浪线的身份 */
+interface CodeActionsMemoKey extends DocumentMemoKey {
+  readonly line: number;
+  readonly markers: string;
+}
+
+interface CodeActionsMemoEntry extends CodeActionsMemoKey {
+  readonly actions: Monaco.languages.CodeAction[];
+  readonly registrations: readonly CodeActionRegistration[];
+}
+
+/**
+ * 波浪线身份串（💡 记忆化键的一部分）。
+ *
+ * 逐条取 `severity | 行 | 列 | 码 | 消息`——与 `kojo-code-action.ts` 的 `diagnosticKey`
+ * 同一族字段（消息必须在内：两条同行同码不同消息的诊断在贡献方那里是两个问题）。
+ * 单价 = O(本次请求区间内的 marker 条数)：standalone 已按请求区间求交
+ * （vendor `standaloneLanguages.js:416`），所以它是"这一行的那几条"，不是全篇的波浪线。
+ */
+function markersDigest(diagnostics: readonly LineDecoration[]): string {
+  return diagnostics
+    .map((d) => `${d.severity}\u0001${d.line}\u0001${d.code ?? ''}\u0001${d.message}`)
+    .join('\u0002');
+}
+
+/**
+ * 💡 快速修复这一条腿（PS-4 的①②③里最便宜的那一种做法：**先判该不该问，再取文**）。
+ *
+ * 两道闸：
+ * - **零波浪线 + ERB 方言 ⇒ 一条都不问**：这一族贡献方全部按"面上画着的那条红线"应答
+ *   （`erb-structure-fix` 按 `code` + 行精确匹配、`convention-quickfix` 按 `diagnosticKey`
+ *   求交，空诊断集必然空结果），而判据之前那次 `getValue()` 与插件里那次整篇
+ *   `split('\n')` + 结构体检（`structure-fix.ts` 的 `buildStructureFixes`）是白付的。
+ *   这一档**不减能力**：没有可修的红线时，改前改后都是零条动作。
+ *   `.kojo` 不走这道闸——「改为语法糖写法」那条动作**天生不依赖诊断**
+ *   （`ui-sugar-lift` 的 `rewrite-action` 只认行号），挡掉它就是把 💡 里的动作弄没了。
+ *   ⚠ 将来若给 ERB 加**不依赖波浪线**的动作（重构族），这道闸要按语言/类别放行，别照抄本行。
+ * - **同一篇没改过 + 同一行 + 同一组波浪线 ⇒ 结果照抄**：Monaco 的 💡 在每次光标移动
+ *   与每次 marker 重发布后都会重新问（vendor `codeActionModel.js:30-31,44`，防抖 250ms），
+ *   两次问之间文本没动过，答案必然逐字相同。缓存命中时把 `id → 动作` **重新挂回**
+ *   `pendingActionsRef`，所以反查表被超阈值整体清理过也照样执行得了。
+ *
+ * **这条腿为什么不立 `LARGE_FILE_LINES` 那道档位闸**：折叠 / 注解 / 行内提示那三条是
+ * "锦上添花"（没了我少看一点，面上还说得过去），而 💡 是**红线旁边唯一的出口**——
+ * 大文件恰恰是最需要修结构的地方，按行数让路就是把作者的修复按钮按体量没收，
+ * 而 Monaco 的动作列表没有列表头可以写"文件太大，这次不给"（codeLens 那条
+ * "缺席携带语义 ⇒ 宁可整篇不给"的纪律在这里反过来成立：这里的缺席就是"没法修"）。
+ * 于是这一族的"该不该付这一刀"由**有没有波浪线**判，而不是由行数判：
+ * 实测同一篇 52,601 行的文档，零波浪线时改前白付中位 85–275 ms（本机两轮，满载更慢）、
+ * 改后 0.002 ms（`tests/ps4-provider-seams.perf.test.ts`），有波浪线时那一次请求本来就该付。
+ */
+export function provideCodeActionsFor(
+  model: Monaco.editor.ITextModel,
+  range: Monaco.Range | undefined,
+  context: Monaco.languages.CodeActionContext,
+  ctx: PaneCtx,
+  kernel: Kernel,
+): Monaco.languages.CodeActionList {
+  const path = ctx.filePathRef.current;
+  if (!path) return { actions: [], dispose: () => undefined };
+  const diagnostics = markersToDecorations(monaco, context.markers ?? []);
+  if (diagnostics.length === 0 && model.getLanguageId() === ERB_LANGUAGE_ID) {
+    return { actions: [], dispose: () => undefined };
+  }
+  const pending = ctx.pendingActionsRef.current;
+  // 超阈值整体清理（长期运行不至于无限增长）；id 单调递增，绝不复用
+  if (pending.size > 500) pending.clear();
+  const contributions = kernel.slots.query('ui.editor.codeAction');
+  const line = range?.startLineNumber;
+  const key: CodeActionsMemoKey = {
+    ...documentMemoKey(model, path, kernel, contributions.length),
+    line: line ?? 0,
+    markers: markersDigest(diagnostics),
+  };
+  const hit = codeActionsMemo.get(model);
+  if (
+    hit &&
+    sameDocumentKey(hit, key) &&
+    hit.line === key.line &&
+    hit.markers === key.markers
+  ) {
+    for (const { actionId, action } of hit.registrations) pending.set(actionId, action);
+    return { actions: hit.actions, dispose: () => undefined };
+  }
+  const registrations: CodeActionRegistration[] = [];
+  const actions = collectCodeActions(
+    contributions,
+    {
+      path,
+      text: model.getValue(),
+      project: kernel.project.current(),
+      lineCount: model.getLineCount(),
+      ...(line !== undefined ? { line } : {}),
+      // B9：本次请求对应的**当前波浪线**（Monaco 的 standalone 包装层已按区间求交填好
+      // `context.markers`）⇒ 贡献方按 `code` 精确应答，零 marker = 这个区间本来就没红线
+      diagnostics,
+    },
+    {
+      register: (contributionId, action) => {
+        const actionId = `${ctx.paneId}:${contributionId}#${++ctx.actionSeqRef.current}`;
+        pending.set(actionId, action);
+        registrations.push({ actionId, action });
+        return actionId;
+      },
+      markerDataFor: (action) => actionDiagnostics(monaco, model, action),
+    },
+    CODE_ACTION_COMMAND,
+  );
+  codeActionsMemo.set(model, { ...key, actions, registrations });
+  return { actions, dispose: () => undefined };
+}
+
 let globalsInstalled = false;
 const globalDisposers: Monaco.IDisposable[] = [];
 /** Monarch 词表等模块级资源的实例引用计数（最后一个实例退场才清） */
@@ -392,34 +785,9 @@ export function ensureGlobalProviders(): void {
           if (!ctx || !ctx.filePathRef.current) {
             return { actions: [], dispose: () => undefined };
           }
-          const path = ctx.filePathRef.current;
-          const pending = ctx.pendingActionsRef.current;
-          // 超阈值整体清理（长期运行不至于无限增长）；id 单调递增，绝不复用
-          if (pending.size > 500) pending.clear();
-          const actions = collectCodeActions(
-            requireKernel().slots.query('ui.editor.codeAction'),
-            {
-              path,
-              text: model.getValue(),
-              project: requireKernel().project.current(),
-              lineCount: model.getLineCount(),
-              ...(range?.startLineNumber !== undefined ? { line: range.startLineNumber } : {}),
-              // 本次请求对应的**当前波浪线**（B9）：Monaco 的 standalone 包装层已按
-              // 区间求交填好 `context.markers` ⇒ 贡献方按 `code` 精确应答，
-              // 零 marker = 这个区间本来就没红线 ⇒ 不该有 quickfix
-              diagnostics: markersToDecorations(monaco, context.markers ?? []),
-            },
-            {
-              register: (contributionId, action) => {
-                const actionId = `${ctx.paneId}:${contributionId}#${++ctx.actionSeqRef.current}`;
-                pending.set(actionId, action);
-                return actionId;
-              },
-              markerDataFor: (action) => actionDiagnostics(monaco, model, action),
-            },
-            CODE_ACTION_COMMAND,
-          );
-          return { actions, dispose: () => undefined };
+          // PS-4：两道闸（零波浪线的方言请求不问供方 / 同一篇同一行同一组波浪线照抄上次）
+          // 与取数全在 `provideCodeActionsFor`（判据与等价性钉子见那里 + `tests/ps4-*.test.ts`）
+          return provideCodeActionsFor(model, range, context, ctx, requireKernel());
         },
       },
       // B9：类别声明走 metadata（Monaco 用它决定 `Ctrl+.` 这条 only=quickfix 的
@@ -506,37 +874,21 @@ export function ensureGlobalProviders(): void {
       resolve: (model, position) => {
         const path = owningPanePathOf(model);
         if (path === null) return null;
-        const protocol = editorTables(requireKernel()).callProtocol;
-        return resolveSignatureInText(model.getValue(), position.lineNumber, position.column, protocol, (callee) => {
-          try {
-            const index = erbParserIndex(requireKernel());
-            if (!index) return null;
-            const defs = index.byName.get(callee.toUpperCase());
-            const ref = defs?.[0];
-            if (!ref) return null;
-            const file = index.files.get(ref.filePath);
-            const fn = file?.functions.find((f) => f.startLine === ref.startLine);
-            return fn ? fn.params : null;
-          } catch {
-            return null;
-          }
-        });
+        // PS-4：只取光标行往上那一段窗口（`SIGNATURE_LOOKBACK_LINES` 是供方自己的向上上限，
+        // 窗口给的就是它读得到的那些行）——整篇文本一次都不 copy。判据见 `signatureHelpAt`。
+        return signatureHelpAt(model, position, requireKernel());
       },
     }));
     // 折叠范围（D3）：同一枚 `ui.editor.languageService` 槽的第三个判别成员。ERB 原文不缩进，
     // Monaco 的缩进折叠在其上几乎无效——注册供给器后 `foldingStrategy: auto` 自动改走这里。
     // 应答判据与大纲逐字同款：糖 model 的行号属于派生物，折叠它会把作者折进不存在的位置。
+    // PS-4：档位（≥ `LARGE_FILE_LINES` 让路并报一次）+ 版本记忆化都判在取文之前，
+    // 让"停笔 → Monaco 重问一遍"不再等于"整篇再 copy 再扫一遍"（判据见 `foldingRangesFor`）。
     globalDisposers.push(installFoldingRangeProvider(monaco, {
       resolve: (model) => {
         const path = owningPanePathOf(model);
         if (path === null) return [];
-        return collectFoldingRanges(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'foldingRange',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount: model.getLineCount(),
-        });
+        return foldingRangesFor(model, path, requireKernel());
       },
     }));
 
@@ -766,16 +1118,19 @@ export function ensureGlobalProviders(): void {
     // 文档格式化（E1，`Shift+Alt+F`）：规则全在插件（`computeFormatEdits` 纯函数），宿主只做
     // 协议翻译。应答判据与 codeAction / 转到定义逐字同款：只认**当前活动标签的真 model**——
     // 糖视图挂着只读派生 model，格式化它改的不是真文件，所以一律不应答。
-    const formatResolve: FormatHandlers = {
+    const formatResolve: RangeFormatHandlers = {
       resolve: (model) => {
         const path = owningPanePathOf(model);
         if (path === null) return null;
         const dialect = dialectForLanguage(model.getLanguageId());
         return dialect === null ? null : { text: model.getValue(), dialect };
       },
+      resolveRange: (model, startLine, endLine) => formatRequestWindowFor(model, startLine, endLine),
     };
     globalDisposers.push(installDocumentFormatter(monaco, formatResolve));
-    // 选区格式化 + 打字规范化（T13）：同一份 resolve、同一份规则核心，只多一层行裁剪（ERB 语言）
+    // 选区格式化 + 打字规范化（T13）：同一份 resolve、同一份规则核心，只多一层行裁剪（ERB 语言）。
+    // PS-4：再挂一条**窗口取文腿**（`formatRequestWindowFor`）——一次 `;` 击键只为触发行那一行
+    // 取文，不再 copy 整篇；`.kojo` 与糖视图一律退回整篇那条腿（判据见 `RangeFormatHandlers`）。
     globalDisposers.push(installRangeFormatter(monaco, formatResolve));
     // 行上内联注解（B8，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第五个判别成员。
     // 宿主在这里做的事只有四件：认活动标签的**真** model、把体量/预算两档降级判掉、问槽、
@@ -789,18 +1144,9 @@ export function ensureGlobalProviders(): void {
       resolve: (model) => {
         const path = owningPanePathOf(model);
         if (path === null) return [];
-        const lineCount = model.getLineCount();
-        // 大文件档：先于请求判掉（一次开口就是整篇文档的解析，实测读数见宿主模块头注）
-        if (!codeLensAffordable(lineCount)) return [];
-        const lenses = collectCodeLenses(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'codeLens',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount,
-        });
-        // 产出预算：**全有或全无**（缺席携带语义，不许用来表示"额度用完了"）
-        return withinCodeLensBudget(lenses.length, lineCount) ? lenses : [];
+        // PS-4：档位与产出预算照旧，只把"同一篇没改过又被问到"那几次整篇拷贝挡掉
+        // （Monaco 在换 model / 改配置 / 注册表变化后都会重新问一遍整篇）
+        return codeLensesFor(model, path, requireKernel());
       },
       navigate: (target) => {
         // W9 判据①：注解的落点区间原样穿过命令参数到达这里，载荷仍由同一个出口构造
@@ -819,19 +1165,13 @@ export function ensureGlobalProviders(): void {
     // 50ms/次，档线与 stickyScroll / 面包屑 / codeLens 同一条）。提示说什么（实参落
     // 哪个形参槽）全在 erb-parser（`erb-inlay-hints`），宿主零判据——取舍见
     // `monaco/kojo-inlay-hints.ts` 与 `plugins/erb-parser/src/inlay-hints.ts` 头注。
+    // PS-4：这条腿按版本记忆化（Monaco **每次滚动**都重新问，缺省防抖低到 25ms），
+    // 交回时只给 Monaco 点名的那一段区间（见 `toMonacoInlayHints` 的 `range`）。
     globalDisposers.push(installInlayHintsProvider(monaco, {
       resolve: (model) => {
         const path = owningPanePathOf(model);
         if (path === null) return [];
-        const lineCount = model.getLineCount();
-        if (!inlayHintsAffordable(lineCount)) return [];
-        return collectInlayHints(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'inlayHint',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount,
-        });
+        return inlayHintsFor(model, path, requireKernel());
       },
     }));
   } catch (e: unknown) {
@@ -866,6 +1206,14 @@ function teardownGlobalProviders(reason: string): void {
     globalDisposers.length = 0;
     globalsInstalled = false;
     lastWordsKey = '__unset__';
+    // PS-4：四条腿的记忆化换新的（弱表没有 clear；换一张就是把上一整套全丢掉）。
+    // 记忆化的键已经带项目引用，但"整套注册被拆毁"意味着下一个 kernel 可能接替，
+    // 这里把"绝不把上一个项目的解析结果带过去"做成机制而不是指望键够聪明。
+    foldingMemo = new WeakMap();
+    inlayHintsMemo = new WeakMap();
+    codeLensesMemo = new WeakMap();
+    codeActionsMemo = new WeakMap();
+    degradedSeams = new Set();
   }
 }
 
