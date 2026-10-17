@@ -233,7 +233,8 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     files.set(P1, { text: SRC1_TOUCHED, mtimeMs: 300 }); // 只改 P1
     openProject(bus);
     await waitIndexed();
-    expect(readsOf()).toBe(3); // 首次 2 + 本次只重读 P1（解析段）；P1 引用重扫走会话缓存、P2 复用快照——零额外读
+    expect(readsOf()).toBe(3); // 首次 2 + 本次只重读 P1（解析段）。P1 引用重扫与 P2 的溯源补扫（PS-3）
+    //                              都命中 mtime/size 不变的会话文本缓存 ⇒ 磁盘一趟都不多付。
 
     const idx = service.currentIndex()!;
     expect(idx.files.get(P1)!.functions.map((f) => f.normalizedName)).toEqual(['FOO_A', 'FOO_B', 'FOO_C']);

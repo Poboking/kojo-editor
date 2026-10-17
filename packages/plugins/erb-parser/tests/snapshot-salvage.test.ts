@@ -24,7 +24,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DirEntry, ErbIndex, ErbParserService, FileIO, FileStat, GameProject, ScopedStorage } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { nameSetDigest, SNAPSHOT_VERSION, projectRootKey, refsAreReusable, sameProjectRoot, salvageEntries, salvageSnapshot, snapshotKeyCandidatesFor, snapshotKeyFor, encodeEntries, type SnapshotEntry } from '../src/snapshot';
+import { nameSetDigest, SNAPSHOT_VERSION, coerceSnapshot, countEntries, projectRootKey, refsAreReusable, sameProjectRoot, salvageEntries, salvageSnapshot, snapshotKeyCandidatesFor, snapshotKeyFor, encodeEntries, verifiedNamesDigest, type SnapshotEntry } from '../src/snapshot';
 import { makeComputeStub } from './support';
 
 const ROOT = 'D:/proj/eratw';
@@ -509,12 +509,14 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
   });
 
   /**
-   * **既有形状的钉子**（不是本批的功劳，也不许本批顺手改口径）：
-   * 热路径（当前键完好命中）不做溯源补正 ⇒ "旁处新增一个函数"时未变文件的存量 refs 仍缺边。
-   * 这道洞 v4 起就在，补它要拿开项目段的一次全树重扫（真语料 ~7.4 s）换，属另一批的取舍；
-   * 本批只保证 **salvage 轮**与全量重扫逐条目等价，并把这条差异钉成用例，别让它假装不存在。
+   * PS-3 修洞批：热路径（当前键完好命中）的溯源巡检**已接通**——这条用例正是"改前会红"的证物。
+   * 旧口径（本用例的前身"热路径不补扫（既有口径）"）只在 salvage 轮巡检：热轮名录变了仍续用
+   * 存量 refs ⇒ find-references 对未变文件**静默缺边**（下例的 `P3 → CALL FOO_C`），
+   * 且落盘是一份混着两代摘要的快照 ⇒ 下一轮 salvage 再付整树重扫。
+   * 新口径：名录摘要一变，"溯源位跟不上"的复用条目当轮就地重扫并与新摘要一起记账；
+   * 信封位（`namesFp`）让"名录没变"的轮次退回一次数比较（第三轮读数钉住）。
    */
-  it('热路径不补扫（既有口径）：名录变了仍复用存量 refs ⇒ 与 salvage 轮的差在这里', async () => {
+  it('热路径溯源巡检（PS-3）：名录变了 ⇒ 未变文件补扫缺边、与全量重建六项逐字相同；下一轮信封命中零补扫', async () => {
     const files = new Map<string, FakeFile>([
       [P1, { text: SRC1, mtimeMs: 100 }],
       [P2, { text: SRC2, mtimeMs: 200 }],
@@ -529,10 +531,33 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     openProject(second.bus);
     await second.waitIndexed();
     const r = readBreakdown(logs);
-    expect(r.salvaged).toBe(0); // 没作废 ⇒ 走的就是改动前那条热路径
+    expect(r.salvaged).toBe(0); // 没作废 ⇒ 走的就是旧口径"零改动"的那条热路径
     expect(r.reused).toBe(2);
-    expect(r.provenance).toBe(0); // ← 补正只在 salvage 轮发生（既有口径）
-    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 1 }); // 只重读 P1 一棵
+    expect(r.provenance).toBe(2); // P2/P3 溯源位跟不上新名录 ⇒ 全部就地补扫（改前：0）
+    expect(r.refsRescan).toBe(3); // 补扫的 2 棵 + 新解析的 P1
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 4, files: 3 }); // 解析段 P1 + 引用段 3 棵（改前：2 趟 1 棵）
+
+    // 正确性主判据：P3 正文没变、名录变了——`CALL FOO_C` 这条边必须在（改前这里缺边）
+    const idx2 = second.service.currentIndex()!;
+    expect(idx2.references!.bySymbol.get('FOO_C')!.map((x) => x.filePath)).toEqual([P1, P3]);
+    const cold = await rebuildFromScratch(files);
+    expect(dumpIndex(idx2)).toBe(dumpIndex(cold.idx)); // 六项逐字：热轮增量 = 全量重建
+
+    // 闭环：信封摘要已随这轮落盘 ⇒ 第三轮纯热、一次读盘都不付、补正归零
+    await waitFor(() => {
+      const p = diskOf(seeded.map, v7key) as Payload & { namesFp?: number | null };
+      return p.namesFp === nameSetDigest(idx2.byName.keys());
+    });
+    const mark3 = seeded.fs.log.length;
+    const logs3: string[] = [];
+    const third = activate(seeded.fs.io, seeded.storage, logs3);
+    openProject(third.bus);
+    await third.waitIndexed();
+    const r3 = readBreakdown(logs3);
+    expect(r3.provenance).toBe(0); // 信封命中 ⇒ 连逐条目巡检都不走
+    expect(r3.refsRescan).toBe(0);
+    expect(segOf(seeded.fs.log, mark3)).toEqual({ passes: 0, files: 0 });
+    expect(dumpIndex(third.service.currentIndex()!)).toBe(dumpIndex(cold.idx));
   });
 
   it('salvage 轮落盘的条目带上名录摘要（下一轮才认得出"名录没变"）', async () => {
@@ -649,5 +674,33 @@ describe('PERF-12a salvage 判据（纯函数）', () => {
     expect(refsAreReusable({ ...e, refs: [], refsNamesFp: fp + 1 }, fp)).toBe(false);
     expect(refsAreReusable({ ...e, refs: [] }, fp)).toBe(false); // 溯源未知
     expect(refsAreReusable({ ...e, refsNamesFp: fp }, fp)).toBe(false); // 没有 refs 谈不上复用
+  });
+
+  it('verifiedNamesDigest / countEntries（PS-3 信封判据，纯函数）', () => {
+    const fp = nameSetDigest(['FOO']);
+    const stamped = { '/a.ERB': { ...entryOf('/a.ERB', []), refs: [], refsNamesFp: fp } as unknown as SnapshotEntry };
+    expect(verifiedNamesDigest(stamped, fp)).toBe(fp); // 全体条目记账相符 ⇒ 信封可写摘要
+    expect(verifiedNamesDigest(stamped, fp + 1)).toBeNull(); // 摘要换了 ⇒ 谁都不许信
+    const mixed = {
+      ...stamped,
+      '/b.ERB': { ...entryOf('/b.ERB', []), refs: [] } as unknown as SnapshotEntry, // 溯源未知
+    };
+    expect(verifiedNamesDigest(mixed, fp)).toBeNull(); // 一条没记账 ⇒ 整封作废（不部分当真）
+    expect(verifiedNamesDigest({}, fp)).toBe(fp); // 空快照"全体相符"平凡真（下一轮无巡检可做）
+    expect(countEntries(mixed)).toBe(2);
+    expect(countEntries({})).toBe(0);
+  });
+
+  it('coerce / salvage 搬运信封摘要：只认数，缺位/坏值 ⇒ 不留键（逐条目巡检兜底，不猜）', () => {
+    const entries = encodeEntries({ [P1]: entryOf(P1, []) });
+    const base = { version: SNAPSHOT_VERSION, rootDir: ROOT, savedAt: 1, entries };
+    const fp = nameSetDigest(['FOO']);
+    expect(coerceSnapshot({ ...base, namesFp: fp }, ROOT)!.namesFp).toBe(fp);
+    expect(coerceSnapshot(base, ROOT)!.namesFp).toBeUndefined(); // 旧盘没这一位 = 未知
+    expect('namesFp' in coerceSnapshot(base, ROOT)!).toBe(false);
+    expect(coerceSnapshot({ ...base, namesFp: 'x' }, ROOT)!.namesFp).toBeUndefined(); // 坏值不当真
+    const s = salvageSnapshot({ ...base, namesFp: fp }, { rootDir: ROOT, key: v7key })!;
+    expect(s.namesFp).toBe(fp);
+    expect(salvageSnapshot(base, { rootDir: ROOT, key: v7key })!.namesFp).toBeUndefined();
   });
 });

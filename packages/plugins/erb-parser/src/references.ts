@@ -59,26 +59,37 @@ function normalizeEol(text: string): string {
  * 等长是为了保住列坐标（引用点要能回指原文位置）；PRINT 字符串里的 `;` 不当注释
  * （与 `sliceExpression` 同一口径）。未闭合引号按"到行尾都是字符串"处理——
  * 那种文本引擎本来就编译不过，刷白是安全方向。
+ *
+ * PS-3 提速批：①无 `"` 且无 `;` 的行逐字符刷白是恒等变换——快路径原样返回，
+ * 不分配（真实语料多数行既无串也无行内注释）；②慢路径按段 `slice` 拼接 +
+ * 整段空格 `repeat`，替代旧实现的逐字符 `+=`（412 万行的热路径）。
+ * **产出的字符串逐字符不变**——`references.test.ts` 的引号/注释/落单引号用例
+ * 与语料朴素对拍共同钉死。
  */
 function codeViewOf(line: string): string {
+  if (line.indexOf('"') === -1 && line.indexOf(';') === -1) return line;
   let out = '';
+  let seg = 0; // 下一段"原文"的起点（此前各段已并入 out）
   let inStr = false;
   for (let i = 0; i < line.length; i++) {
-    const c = line[i]!;
+    const c = line.charCodeAt(i);
     if (inStr) {
-      if (c === '"') inStr = false;
-      out += ' ';
+      if (c === 34 /* " */) {
+        out += ' '.repeat(i - seg + 1); // 串体 + 闭引号整体刷白
+        seg = i + 1;
+        inStr = false;
+      }
       continue;
     }
-    if (c === '"') {
+    if (c === 34 /* " */) {
+      out += line.slice(seg, i) + ' ';
+      seg = i + 1;
       inStr = true;
-      out += ' ';
-      continue;
+    } else if (c === 59 /* ; */) {
+      return out + line.slice(seg, i) + ' '.repeat(line.length - i);
     }
-    if (c === ';') return out + ' '.repeat(line.length - i);
-    out += c;
   }
-  return out;
+  return inStr ? out + ' '.repeat(line.length - seg) : out + line.slice(seg);
 }
 
 /**
@@ -91,14 +102,64 @@ function codeViewOf(line: string): string {
  * 字符集**字面量只住在 `plugin-api/semantic-locate` 的 `MODEL_TOKEN_CLASS`**：着色落点
  * （`locateIdentifier`）与本条反向索引回答的是同一个事实——"什么字符算一个记号"。
  * 两处各写一遍就是第二判据，漂移表现是"引用面板说有引用、着色却不亮"（反之亦然）。
+ *
+ * PS-3 提速批：遍历从"每行一次 `RegExp.exec` 循环"换成 `forEachToken` 的
+ * `charCodeAt` 走位（ASCII 判据内联、其余码点仍回退到**同一个** `MODEL_TOKEN_CLASS`
+ * 组装的单字符谓词——尺子没换，只是不再为每个记号分配 match 数组）。
+ * 与旧 exec 的等价性由 `references.test.ts`（含 CJK / 全角 / 成员冒号 / 大小写用例）
+ * 与语料朴素对拍（朴素版是第三种独立实现）共同钉死。
  */
-const TOKEN_RE = new RegExp(`${MODEL_TOKEN_CLASS}+`, 'gu');
+const IDENT_ONE = new RegExp(MODEL_TOKEN_CLASS, 'u');
+
+/** 半/全角冒号的码元（成员访问判据：`FLAG:NAME` 里 NAME 引用的是 FLAG 的成员，不是函数） */
+const COLON_HALF = 0x3a;
+const COLON_FULL = 0xff1a;
+
+/**
+ * `i` 处码元是否为记号字符；返回**占用的码元数**（0 = 非记号）。
+ * ASCII（`[A-Za-z0-9_]`）走内联快路径；**代理对**（增平面字母/数字）以两个码元
+ * 为一个整体问 `IDENT_ONE`——与 `TOKEN_RE` 在 `/u` 模式下的走位逐字符一致；
+ * 落单代理项在 `/u` 下永不落进记号类，这里同样判非记号。
+ */
+function tokenCharLen(s: string, i: number, code: number): 0 | 1 | 2 {
+  if (code < 0x80) {
+    return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 95 ? 1 : 0;
+  }
+  if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
+    const low = s.charCodeAt(i + 1);
+    if (low >= 0xdc00 && low <= 0xdfff) return IDENT_ONE.test(s.slice(i, i + 2)) ? 2 : 0;
+  }
+  return IDENT_ONE.test(s[i]!) ? 1 : 0;
+}
+
+/**
+ * 逐记号遍历（`scanFileRefs` / `scanUndefinedCallTargets` 共用，单一真源）：
+ * 对每段连续记号回调 `(start, end)`（UTF-16 半开区间，与旧 `TOKEN_RE.exec` 的
+ * `m.index` / `m.index + m[0].length` 同位）；回调返回 `false` 中止遍历
+ * （对应旧循环的 `break`）。
+ */
+function forEachToken(s: string, visit: (start: number, end: number) => boolean | void): void {
+  const n = s.length;
+  let i = 0;
+  while (i < n) {
+    const len = tokenCharLen(s, i, s.charCodeAt(i));
+    if (len === 0) {
+      i++;
+      continue;
+    }
+    const start = i;
+    i += len;
+    while (i < n) {
+      const next = tokenCharLen(s, i, s.charCodeAt(i));
+      if (next === 0) break;
+      i += next;
+    }
+    if (visit(start, i) === false) return;
+  }
+}
 
 /** 定义名截断（与 `parseFunctionDefinition` 同一组终止符，**含逗号形的 `,`**；名字在这里只按解析器口径取） */
 const DEF_STOP = new Set(['(', ',', ' ', '\t', ';']);
-
-/** 变量成员访问的分隔冒号（半/全角）：`FLAG:NAME` 里 NAME 引用的是 FLAG 的成员，不是函数 */
-const isMemberColon = (c: string | undefined): boolean => c === ':' || c === '：';
 
 /**
  * 一条**可见代码行**的形状（`visibleCodeLines` 的产出；列坐标与原文逐位对齐）。
@@ -156,11 +217,18 @@ export function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
       continue;
     }
 
-    // 行首是 CALL 直系族 ⇒ 关键字之后的**第一个记号**是引擎"按名调用"的名字槽位
-    const lead = /^[A-Za-z_]+/.exec(trimmed);
-    const isCallLine = lead !== null && CALL_FAMILY.has(lead[0]!.toUpperCase());
+    // 行首是 CALL 直系族 ⇒ 关键字之后的**第一个记号**是引擎"按名调用"的名字槽位。
+    // PS-3：行首 `[A-Za-z_]+` 走位改 charCodeAt（旧版每行一次 `/^[A-Za-z_]+/.exec`，
+    // 412 万行累计是最大单项正则开销；匹配范围与判据逐字符不变）。
+    let leadLen = 0;
+    while (leadLen < trimmed.length) {
+      const c = trimmed.charCodeAt(leadLen);
+      if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95) leadLen++;
+      else break;
+    }
+    const isCallLine = leadLen > 0 && CALL_FAMILY.has(trimmed.slice(0, leadLen).toUpperCase());
     // 名字槽起点（行内 0 基偏移）= 缩进 + 关键字长度；缩进只算行首空白（trailing 会干扰差值）
-    const keywordEnd = isCallLine ? raw.length - raw.trimStart().length + lead![0]!.length : -1;
+    const keywordEnd = isCallLine ? raw.length - raw.trimStart().length + leadLen : -1;
     let codeCache: string | undefined;
     yield {
       line: i + 1,
@@ -209,19 +277,18 @@ export function scanFileRefs(text: string, hasName: (normalizedName: string) => 
     let slotTaken = !isCallLine; // 非调用行没有槽位概念，全部走 mention
 
     const code = codeView();
-    TOKEN_RE.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = TOKEN_RE.exec(code)) !== null) {
-      const run = m[0]!;
-      const inSlot = !slotTaken && m.index >= keywordEnd;
+    forEachToken(code, (start, end) => {
+      const inSlot = !slotTaken && start >= keywordEnd;
       if (inSlot) slotTaken = true; // 槽位记号无论命不命中名字都被消耗
       // 变量成员访问整体不算函数引用：`CFLAG:ALPHA` 两段都是变量世界（基名紧邻冒号，
       // 如 `ALPHA:CFLAG` 的 ALPHA，即便撞上函数名也不算提及）。
-      if (isMemberColon(code[m.index - 1]) || isMemberColon(code[m.index + run.length])) continue;
-      const upper = normalizedUpper(run);
-      if (!hasName(upper)) continue;
-      out.push([upper, line, m.index + 1, (inSlot ? KIND_CALL : KIND_MENTION) as 0 | 1 | 2]);
-    }
+      const before = start > 0 ? code.charCodeAt(start - 1) : -1;
+      const after = end < code.length ? code.charCodeAt(end) : -1;
+      if (before === COLON_HALF || before === COLON_FULL || after === COLON_HALF || after === COLON_FULL) return;
+      const upper = normalizedUpper(code.slice(start, end));
+      if (!hasName(upper)) return;
+      out.push([upper, line, start + 1, (inSlot ? KIND_CALL : KIND_MENTION) as 0 | 1 | 2]);
+    });
   }
   return out;
 }
@@ -243,7 +310,7 @@ export interface UndefinedCallTarget {
  * 数据出；单遍线性扫描，不做二次全文件解析）。
  *
  * `hasName` 与 `scanFileRefs` 同一判据（调用方拿 `ErbIndex.byName` 提供）；
- * 行可见性与记号字符集与它**逐字共用**（`visibleCodeLines` / `TOKEN_RE`，单一真源）。
+ * 行可见性与记号字符集与它**逐字共用**（`visibleCodeLines` / `forEachToken`，单一真源）。
  * fail-open 全在判据里，一条都不报（**不猜**；错标比不标危险）：
  * - FORM 动态拼接：关键字与记号之间出现 `(`、`"`、`{`、`%` 等任何非空白字符；
  * - 成员访问占槽（`CALL FLAG:X`——变量世界，与 `scanFileRefs` 同判据不向后顺延）；
@@ -256,18 +323,18 @@ export function scanUndefinedCallTargets(text: string, hasName: (upper: string) 
   for (const { line, raw, isCallLine, keywordEnd, codeView } of visibleCodeLines(text)) {
     if (!isCallLine) continue;
     const code = codeView();
-    TOKEN_RE.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = TOKEN_RE.exec(code)) !== null) {
-      if (m.index < keywordEnd) continue; // 关键字自身
+    forEachToken(code, (start, end) => {
+      if (start < keywordEnd) return; // 关键字自身
       // 槽位 = 关键字后的第一个记号；与关键字之间只许空白 ⇒ 裸标识符
-      if (!/^[\t \u3000]*$/.test(raw.slice(keywordEnd, m.index))) break;
-      const run = m[0]!;
+      if (!/^[\t \u3000]*$/.test(raw.slice(keywordEnd, start))) return false;
+      const run = code.slice(start, end);
       // 成员访问占槽：整槽不算函数名，也不向后顺延
-      if (isMemberColon(code[m.index - 1]) || isMemberColon(code[m.index + run.length])) break;
-      if (!hasName(normalizedUpper(run))) out.push({ line, column: m.index + 1, name: run });
-      break; // 一行至多一个名字槽
-    }
+      const before = start > 0 ? code.charCodeAt(start - 1) : -1;
+      const after = end < code.length ? code.charCodeAt(end) : -1;
+      if (before === COLON_HALF || before === COLON_FULL || after === COLON_HALF || after === COLON_FULL) return false;
+      if (!hasName(normalizedUpper(run))) out.push({ line, column: start + 1, name: run });
+      return false; // 一行至多一个名字槽
+    });
   }
   return out;
 }

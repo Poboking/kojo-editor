@@ -37,6 +37,7 @@ import {
   aggregateIndex,
   attachRefs,
   coerceSnapshot,
+  countEntries,
   diffSnapshot,
   encodeEntries,
   mergeEntries,
@@ -46,6 +47,7 @@ import {
   salvageSnapshot,
   snapshotKeyCandidatesFor,
   snapshotKeyFor,
+  verifiedNamesDigest,
   type IndexSnapshot,
   type SalvagedSnapshot,
   type SnapshotEntry,
@@ -99,7 +101,13 @@ const isDialect = isErbDialectPath;
 
 /** 索引三段（walk 之外）的窗口并发度：stat 轻、parse 重 */
 const STAT_CONCURRENCY = 32;
-const PARSE_CONCURRENCY = 12;
+/**
+ * 解析窗口的并发度 = **计算池容量上限**（宿主装配 `min(4, cores−1)` 个 worker 槽，
+ * 见 `app/src/bootstrap.ts`）。旧值 12 是池出现前"内联轮转"时代的数字：对 4 槽池
+ * 它只是让 8 份载荷提前结构化克隆进队列排着——多付 12× 克隆/驻留、零吞吐增益；
+ * 内联回退（无通道）时 CPU 在单线程上本来也串。PS-3 对齐到池顶。
+ */
+const PARSE_CONCURRENCY = 4;
 /** 片预算：半个 60fps 帧（与计算池默认一致） */
 const SLICE_MS = 8;
 /**
@@ -107,6 +115,9 @@ const SLICE_MS = 8;
  * （≈ 一帧 4MB 级 IPC 载荷），解析段/引用段的读盘就此从"每文件两趟 IPC"变成"每批一趟"。
  */
 const READ_BATCH = 64;
+
+/** 一趟批量读的产出形态（失败位 null，与逐文件 readText 抛错同语义面） */
+type BatchTexts = Awaited<ReturnType<FileIO['readTexts']>>;
 
 export function createErbParserPlugin(): Plugin {
   return {
@@ -259,7 +270,7 @@ export function createErbParserPlugin(): Plugin {
                 if (craw === undefined) continue;
                 const s = salvageSnapshot(craw, { rootDir: currentRoot, key: candidate, knownPaths: allFiles });
                 if (s === null) continue;
-                if (Object.keys(s.entries).length === 0) {
+                if (countEntries(s.entries) === 0) {
                   // 认得这份数据、但一条都读不懂 ⇒ 与"整体弃用"同判：删掉它，别让它反复占读盘时间
                   ctx.log.warn(`Index snapshot candidate unusable (no salvageable entry): ${candidate}`);
                   void storage.delete(candidate).catch(() => undefined);
@@ -289,18 +300,38 @@ export function createErbParserPlugin(): Plugin {
 
         const diff = snapshot ? diffSnapshot(snapshot, allFiles, stats) : { reusable: [], stale: allFiles };
 
+        /**
+         * PS-3 双缓冲：第 N+1 批的 `io.readTexts` 在第 N 批**处理前**就发出，让 37 趟
+         * 串行往返里"读盘/IPC"与"解析/扫描 CPU"两两重叠（旧形态 await 读 → await 处理
+         * 轮班，磁盘与 CPU 从不同时干活）。失败语义不变：整批 rejection 照旧向上传播
+         * （晚一拍、在下一轮 await 处），逐位失败仍走 null 位的既有告警路径。
+         */
+        async function readBatchesPipelined(
+          paths: readonly string[],
+          process: (chunk: readonly string[], texts: BatchTexts) => Promise<void>,
+        ): Promise<void> {
+          let pending: Promise<BatchTexts> | null =
+            paths.length > 0 ? io.readTexts(paths.slice(0, READ_BATCH)) : null;
+          for (let base = 0; base < paths.length; base += READ_BATCH) {
+            const chunk = paths.slice(base, base + READ_BATCH);
+            const texts = await pending!; // eslint 无关：循环结构保证首轮已置
+            const nextBase = base + READ_BATCH;
+            pending = nextBase < paths.length ? io.readTexts(paths.slice(nextBase, nextBase + READ_BATCH)) : null;
+            await process(chunk, texts);
+          }
+        }
+
         const parseStartedAt = Date.now();
         const fresh = new Map<string, SnapshotEntry>();
         /**
          * 批量读 + 分片解析（2026-10-16 批量 IO 批）：每 READ_BATCH 个文件一次 IPC
          * （原：每个文件 readText = 2 趟 IPC，2285 个文件 ≈ 4,570 趟）。
-         * 读批在批内铺、**片调度/优先级语义原样保留**（批内仍走 runSliced：
-         * PARSE_CONCURRENCY / SLICE_MS / background 档一字未动）；
+         * PS-3 起读批走 `readBatchesPipelined` 双缓冲（批 N+1 的读盘与批 N 的 CPU 重叠）；
+         * **片调度/优先级语义原样保留**（批内仍走 runSliced：
+         * PARSE_CONCURRENCY（PS-3 对齐池容量）/ SLICE_MS / background 档见常量注）；
          * 读失败位（null）与旧 readText 抛错同语义：记警告、不留结果。
          */
-        for (let base = 0; base < diff.stale.length; base += READ_BATCH) {
-          const chunk = diff.stale.slice(base, base + READ_BATCH);
-          const texts = await io.readTexts(chunk);
+        await readBatchesPipelined(diff.stale, async (chunk, texts) => {
           await compute.runSliced(
             chunk,
             { concurrency: PARSE_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.parse' },
@@ -327,7 +358,7 @@ export function createErbParserPlugin(): Plugin {
               }
             },
           );
-        }
+        });
         const parseMs = Date.now() - parseStartedAt;
 
         // 合并：按本次 walk 顺序取数（快照只换"来源"，byName 聚合顺序与全量重建逐位一致）
@@ -372,25 +403,29 @@ export function createErbParserPlugin(): Plugin {
          *
          * 2026-10-16 PERF-12a：**salvage 轮加一道溯源补正**。存量 refs 是在**当时的名录**下扫出来的，
          * "文件正文没变"只保证记号没变、不保证名录没变——旁处新增一个 `@函数` 会让未变文件的
-         * 存量 refs 少一条边。走 salvage（换代 / 条目损坏 / rootDir 写法不符）这一轮里，
-         * 溯源位对不上（或旧版本根本没有）的复用条目**就地重扫**，与"全量重扫"逐条目同形；
-         * 热路径（当前键完好命中）零改动——那道洞是 v4 就有的既有形状，本批不顺手改口径。
-         * 重扫结果连同**当前名录摘要**一起挂回条目落盘 ⇒ 下一轮自动可信，只补正这一次。 */
+         * 存量 refs 少一条边。
+         * PS-3（本批）把这道洞**补到逐条目闭合**：巡检不再只在 salvage 轮发生——热路径名录变了
+         * 同样就地重扫"溯源位对不上/未知"的复用条目（这是**正确性**判据，不是性能旋钮：
+         * 改前热轮落盘的是一份"1 条新摘要 + 2,324 条旧摘要"的混账快照，find-references 静默缺边、
+         * 下一轮 salvage 再付整树 7.4 s）。信封级 `namesFp`（见 `snapshot.verifiedNamesDigest`）
+         * 让"名录没变"这一常见情形退化成一次数比较、整段巡检都不走；变了也只扫差集
+         * （摘要跟不上的复用条目），且扫过的条目连同新摘要一起记账 ⇒ **下一轮自动可信**。
+         * 代价说清楚：新增/改名一个函数的那一轮开项目，引用段要重读重扫全树未变文件
+         * （真语料实测见交付读数；此后轮次照常热）。 */
         const refsStartedAt = Date.now();
         const hasName = (upper: string): boolean => byName.has(upper);
         const refsByPath = new Map<string, FileRefs>();
         const freshToScan = diff.stale.filter((path) => fresh.has(path));
         const provenanceToScan: string[] = [];
-        if (salvaged !== null) {
+        if (snapshot !== null && snapshot.namesFp !== namesFp) {
+          // 信封摘要与当前名录不符（含旧盘无信封位）⇒ 逐条目巡检；相符 ⇒ 全体条目已可信，跳过
           for (const path of diff.reusable) {
-            const e = snapshot?.entries[path];
+            const e = snapshot.entries[path];
             if (e !== undefined && !refsAreReusable(e, namesFp)) provenanceToScan.push(path);
           }
         }
         const refsToScan = provenanceToScan.length > 0 ? [...freshToScan, ...provenanceToScan] : freshToScan;
-        for (let base = 0; base < refsToScan.length; base += READ_BATCH) {
-          const chunk = refsToScan.slice(base, base + READ_BATCH);
-          const texts = await io.readTexts(chunk);
+        await readBatchesPipelined(refsToScan, async (chunk, texts) => {
           await compute.runSliced(
             chunk,
             { concurrency: STAT_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.refs' },
@@ -403,7 +438,7 @@ export function createErbParserPlugin(): Plugin {
               refsByPath.set(path, scanFileRefs(tf.text, hasName));
             },
           );
-        }
+        });
         const refsScanMs = Date.now() - refsStartedAt;
 
         /**
@@ -456,7 +491,7 @@ export function createErbParserPlugin(): Plugin {
         );
         /** salvage 单独一行：壳侧日志按 170 字符截断，把作废面的读数挤到第二行才看得见 */
         ctx.log.info(
-          `  index salvage: ${salvaged === null ? 0 : Object.keys(salvaged.entries).length}/${allFiles.length} ` +
+          `  index salvage: ${salvaged === null ? 0 : countEntries(salvaged.entries)}/${allFiles.length} ` +
             `(丢 ${salvagedSkipped}, 溯源补正 ${provenanceToScan.length}, 旧形态 ${salvaged?.legacy === true ? 1 : 0}, ` +
             `键 ${salvaged === null ? '-' : salvaged.key})`,
         );
@@ -465,27 +500,31 @@ export function createErbParserPlugin(): Plugin {
         const snapshotDirty =
           needsRewrite ||
           fresh.size > 0 ||
-          (snapshot !== null && Object.keys(snapshot.entries).length !== allFiles.length);
+          (snapshot !== null && countEntries(snapshot.entries) !== allFiles.length);
         if (useSnapshot && currentRoot && gen === generation) {
           const key = snapshotKeyFor(currentRoot);
           if (snapshotDirty) {
             // refs 挂在条目上一起落盘：热复用时反向索引不花一次读盘（挂接纯函数，见 snapshot.attachRefs）。
-            // refsByPath 现在只含 stale 文件（PERF-7 惰性聚合）+ salvage 轮的溯源补正批，
-            // 恰好是需要挂接的那批；复用条目自带快照 refs、原样留用（attachRefs 对没有新 refs 的条目零触碰）。
+            // refsByPath 现在只含 stale 文件（PERF-7 惰性聚合）+ 溯源巡检补扫的复用条目（PS-3：
+            // 热轮与 salvage 轮同判据），恰好是需要挂接的那批；未复扫条目自带快照 refs、原样留用。
             // 挂上新流水的条目同时记下**当前名录摘要**：下一轮"正文没变、名录变了"就靠它对号入座。
             const entries = attachRefs(mergeEntries(snapshot, allFiles, fresh), refsByPath, namesFp);
+            // 信封摘要（PS-3）：全体条目都记了当前账才写数，否则写 null（下轮退回逐条目巡检）
+            const envelopeFp = verifiedNamesDigest(entries, namesFp);
+            const entryCount = countEntries(entries);
             const saveStartedAt = Date.now();
             void storage
               .set(key, {
                 version: SNAPSHOT_VERSION,
                 rootDir: currentRoot,
                 savedAt: Date.now(),
+                namesFp: envelopeFp,
                 // 盘上用 v7 紧凑元组（剥可派生字段 + 位置化 + refs 名录摘要位），加载时由 decodeEntries 还原
                 entries: encodeEntries(entries),
               })
               .then(() => {
                 ctx.log.info(
-                  `Index snapshot saved (${Object.keys(entries).length} entries, key ${key}, ` +
+                  `Index snapshot saved (${entryCount} entries, key ${key}, ` +
                     `${Date.now() - saveStartedAt}ms)`,
                 );
                 pruneStaleSnapshots();
