@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react';
-import { diagnosticDisplay } from '@kojo/plugin-api';
+import { diagnosticDisplay, shortPath } from '@kojo/plugin-api';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import { snapshot, subscribe, type EditorProblem } from './problem-store';
 
@@ -36,12 +36,6 @@ const SEVERITY_COLOR: Record<EditorProblem['severity'], string> = {
 
 /** 单列表最多渲染条数（与约定面板 `RENDER_CAP` 同精神：避免上万行 DOM 拖垮面板） */
 const RENDER_CAP = 300;
-
-/** 短路径口径（与 `ui-convention-report` 一致）：取末两段 */
-function shortPath(p: string): string {
-  const parts = p.split(/[\\/]/);
-  return parts.slice(-2).join('/');
-}
 
 function useProblems(): readonly EditorProblem[] {
   const [items, setItems] = useState<readonly EditorProblem[]>(() => snapshot());

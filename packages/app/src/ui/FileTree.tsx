@@ -16,6 +16,7 @@ import {
   locatePlanOf,
   menuItemsFor,
   parentDir,
+  pkey,
   relativeToRoot,
   validateEntryName,
   type LocatePlan,
@@ -107,11 +108,6 @@ type DirState = DirEntry[] | 'loading' | 'error';
 
 /** 压缩包 / 图片等二进制附件：只展示不可打开（打开只会给 Monaco 喂一堆乱码） */
 const BINARY_EXT = /\.(7z|zip|rar|png|jpe?g|gif|bmp|ico|webp|mp3|ogg|wav|ttf|otf|dll|exe)$/i;
-
-/** 路径归一键（Windows 大小写不敏感；同一文件在两处只出现一次） */
-function pkey(p: string): string {
-  return p.replace(/[\\/]+/g, '/').toLowerCase();
-}
 
 /** ERB 方言扩展名：口径直接问契约层的单一真源（`plugin-api/erb-ext`，FT-2 收口），
  *  不再靠注释与人肉对齐。嵌套目录里的方言文件走普通文件行样式，非方言才标「不在索引内」。
@@ -325,9 +321,9 @@ export const FILTER_WINDOW_INITIAL = 120;
 /** 每次「继续显示后续命中」追加的文件行数 */
 export const FILTER_WINDOW_STEP = 240;
 
-/** 包行键（组标签 + 包标签；根散文件 = 空串）——渲染计划与渲染侧共用这一份口径 */
+/** 包行键（组标签 + 包标签；根散文件 = 空串）——口径真源在 `file-tree-reveal.packageKey` */
 function rowKeyOf(groupLabel: string, subLabel: string | null): string {
-  return `${groupLabel}::${subLabel ?? ''}`;
+  return packageKey(groupLabel, subLabel ?? '');
 }
 
 /** 过滤态渲染计划（见 `filterRenderPlan`） */
@@ -641,7 +637,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     for (const g of gs) {
       for (const s of g.subs) {
         if (s.label === null) continue;
-        out.push({ key: `${g.label}::${s.label}`, dir: pkgDirOf(g, s.label), group: g.label });
+        out.push({ key: packageKey(g.label, s.label), dir: pkgDirOf(g, s.label), group: g.label });
       }
     }
     return out;
@@ -742,8 +738,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     for (const g of groups) {
       for (const s of g.subs) {
         if (s.label !== null && pkey(pkgDirOf(g, s.label)) === pkey(dir)) {
+          const key = packageKey(g.label, s.label);
           setOpened((prev) => new Set(prev).add(g.label));
-          setPkgFolder((prev) => new Set(prev).add(`${g.label}::${s.label}`));
+          setPkgFolder((prev) => new Set(prev).add(key));
           ensureDir(dir);
           return;
         }
@@ -1304,7 +1301,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                       );
                     }
                     const label = s.label;
-                    const pkgKey = `${g.label}::${label}`;
+                    const pkgKey = packageKey(g.label, label);
                     const pkgDir = pkgDirOf(g, label);
                     const isFolder = pkgFolder.has(pkgKey) && deferredFilter.length === 0;
                     const renamingPkg = edit?.mode === 'rename' && edit.isDir && edit.path === pkgDir;

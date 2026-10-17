@@ -1,3 +1,4 @@
+import { shortPath } from '@kojo/plugin-api';
 import type { SearchMatch, SearchProgress, SearchResult } from '../bridge/search';
 import type { ReplaceOutcome } from './search-store';
 
@@ -39,10 +40,10 @@ export function isValidSearchQuery(query: string): boolean {
   return query.trim() !== '';
 }
 
-/** 短路径（与问题面板同口径）：取末两段——检索结果面板窄，末两段是唯一的区分点 */
+/** 短路径（口径真源 = `plugin-api/paths.shortPath`，与问题面板、四块插件面板同一条）：
+ *  取末两段——检索结果面板窄，末两段是唯一的区分点。名字保留检索层的叫法，实现不再抄第二份。 */
 export function shortSearchPath(path: string): string {
-  const parts = path.split(/[\\/]/);
-  return parts.slice(-2).join('/');
+  return shortPath(path);
 }
 
 /**

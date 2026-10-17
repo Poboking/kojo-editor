@@ -96,8 +96,10 @@ export function validateEntryName(rawName: string): string | null {
 
 /* ------------------------------ 路径小工具 ------------------------------ */
 
-/** 路径归一键（与 FileTree.pkey 同口径：分隔符折叠 + 小写；独立实现以免组件依赖倒挂） */
-function pkey(p: string): string {
+/** 路径归一键（分隔符折叠 + 小写；Windows 大小写不敏感，同一文件在两处只出现一次）。
+ *  与契约层 `pathKey` 不同口径：那条按平台分派（POSIX 保留大小写），本条**恒小写**，
+ *  是文件树自己的判等口径，故不复用、也不许再抄第二份 ⇒ 定义只此一处，组件侧 import。 */
+export function pkey(p: string): string {
   return p.replace(/[\\/]+/g, '/').toLowerCase();
 }
 

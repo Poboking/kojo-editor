@@ -34,7 +34,8 @@ export interface RevealResult {
   readonly feedback: string;
 }
 
-/** 包键：与 FileTree 里 `${g.label}::${label}` 同形（改这里必须同时改那边） */
+/** 包键唯一真源：`FileTree` 的渲染计划、展开集合读写与定位计划全部走这里（FE-REF 收口，
+ *  此前组件里有三处手写同形模板、注释还得叮嘱"改这里必须同时改那边"） */
 export function packageKey(groupLabel: string, pkgLabel: string): string {
   return `${groupLabel}::${pkgLabel}`;
 }
