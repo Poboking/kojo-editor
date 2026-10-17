@@ -255,13 +255,22 @@ export function countLines(text: string): number {
   return text.endsWith('\n') ? n - 1 : n;
 }
 
+/**
+ * 概要条的数字。
+ *
+ * `precomputed`（2026-10-18 性能批，可选）：面板把行表 / 诊断表 **memo 化**在同一拍算好了，
+ * 概要再自己 `buildPreviewRows` + `buildDiagnosticRows` 一遍就是**每次预览把 O(源行数) 干两趟**
+ * （大 `.kojo` 下这是击键路径上最贵的纯重复）。传了就直接用同一批对象——
+ * **不传时行为与改前逐字相同**（旧调用点、旧用例零改动）。
+ */
 export function summarize(
   result: SugarPreviewResult | null,
   source: string,
   withReachability = true,
+  precomputed?: { readonly rows: readonly PreviewRow[]; readonly diags: readonly DiagnosticRow[] },
 ): PreviewSummary {
-  const rows = buildPreviewRows(result, source, withReachability);
-  const diags = buildDiagnosticRows(result?.transpile.diagnostics);
+  const rows = precomputed?.rows ?? buildPreviewRows(result, source, withReachability);
+  const diags = precomputed?.diags ?? buildDiagnosticRows(result?.transpile.diagnostics);
   let blocks = 0;
   let unreachableBlocks = 0;
   let unknownBlocks = 0;

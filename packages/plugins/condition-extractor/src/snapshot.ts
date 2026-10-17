@@ -143,15 +143,53 @@ function emptyStats(): FileStats {
 }
 
 /**
+ * 字典标签的**内容键**（拼接形，取代 `JSON.stringify`）。
+ *
+ * 口径与改前逐字一致：只看 `[name, index, resolvedIndex, description]` 四个字段
+ * （`source` / `bits` 不参与判等 ⇒ 首份定义胜出，这是既有行为，一条没动）。
+ * 分隔符取 `\u0000`：变量名与描述里都不可能出现 NUL（CSV / `.ERH` 文本域），
+ * 而"缺字段"用 `\u0001` 单独占位——`index: 0`、`index: '0'`、`index: undefined`
+ * 三种形态必须落到三个不同的键上，否则两条不同的槽位会共用一个字典条目（还原后互相盖描述）。
+ *
+ * 为什么换掉 `JSON.stringify`：真实语料 164,910 条依赖 ⇒ **每条**在落盘时都要建一次这个键，
+ * 1016 批实测 123ms，同口径拼接 89ms。
+ */
+/** 拼接键的三个占位前缀：缺字段 / 数字 / 字符串各占一格（`0` 与 `'0'` 与"没有"互不相吞） */
+const SLOT_NONE = '\u0001';
+const SLOT_NUM = '\u0002n';
+const SLOT_STR = '\u0002s';
+
+/** 一个可选字段的键位（模块级函数：164,910 次调用绝不该每条依赖现造一个闭包） */
+function slotOf(v: number | string | undefined | null): string {
+  if (v === undefined || v === null) return SLOT_NONE;
+  return typeof v === 'number' ? `${SLOT_NUM}${v}` : `${SLOT_STR}${v}`;
+}
+
+function schemaKey(s: VariableInfo): string {
+  return `${s.name}\u0000${slotOf(s.index)}\u0000${slotOf(s.resolvedIndex)}\u0000${slotOf(s.description)}`;
+}
+
+/**
+ * **本模块自己算出 key 的**依赖对象（`lazyConditions` 还原路径）。
+ *
+ * `encodeBuckets` 的派生前提守门对它们**必然成立**——`key` 就是上一行 `dependencyKey(...)`
+ * 现算出来的，再验一遍是把 164,910 次字符串拼接花在"确认自己刚写的赋值"上。
+ * 新抽取（`extract.ts` 产出）的依赖不在集合内 ⇒ 守门照常一条不漏（口径不变）。
+ */
+const keyDerivedOnDecode = new WeakSet<StateDependency>();
+
+/**
  * 把按文件桶编成盘上形态。
  *
  * 入口是**桶**而不是 `ConditionIndex`：桶自带逐文件统计——`stats.functions` 数的是"扫过的函数"
  * （含没有谓词的），而 `byFunction` 只收有谓词的，事后从索引反推不回来。
  * 顺序 = 传入的迭代顺序（引擎按本次 walk 顺序构造）⇒ 与全量重建同序。
  *
- * @throws 若某条依赖的 `key` 不再等于 `dependencyKey(name, indices)`——派生前提破了就**宁可不缓存**
+ * @throws 若某条**新抽取**依赖的 `key` 不再等于 `dependencyKey(name, indices)`——派生前提破了就**宁可不缓存**
  *   （调用方是 fire-and-forget 的 `save`，异常会变成一条 warn 日志），也绝不留下一个
  *   "还原出的 key 与算出来的不一样"的快照。真实语料实测 164,910 条依赖 0 例外。
+ *   唯一豁免：本模块 `lazyConditions` 还原出来的依赖（`key` 是它自己上一行现算的，
+ *   再验一遍纯属自我确认；见 `keyDerivedOnDecode`）。
  */
 export function encodeBuckets(args: {
   buckets: ReadonlyMap<string, FileBucket>;
@@ -160,17 +198,26 @@ export function encodeBuckets(args: {
 }): StoredConditionIndex {
   const schemas: (VariableInfo | null)[] = [];
   const schemaIdx = new Map<string, number>();
+  /**
+   * 身份快道：适配器 `lookup()` 每次现造对象 ⇒ 新抽取的依赖走内容键；
+   * 而**复用的桶**（热路径的绝大多数：改 3 棵 / 2,325 棵）还原出的 `schema` 是同一个对象，
+   * 身份一眼命中，连键都不建。去重口径仍是"内容判等"，产出与改前逐字相同。
+   */
+  const schemaIdentity = new Map<VariableInfo, number>();
   const names: string[] = [];
   const nameSlot = new Map<string, number>();
 
   const indexOfSchema = (s: VariableInfo): number => {
-    const id = JSON.stringify([s.name, s.index ?? null, s.resolvedIndex ?? null, s.description ?? null]);
+    const byIdentity = schemaIdentity.get(s);
+    if (byIdentity !== undefined) return byIdentity;
+    const id = schemaKey(s);
     let i = schemaIdx.get(id);
     if (i === undefined) {
       i = schemas.length;
       schemas.push(s);
       schemaIdx.set(id, i);
     }
+    schemaIdentity.set(s, i);
     return i;
   };
   const indexOfName = (n: string): number => {
@@ -191,7 +238,7 @@ export function encodeBuckets(args: {
       c.predicateCount,
       c.unparsedCount,
       c.dependencies.map((d): DependencyTuple => {
-        if (d.key !== dependencyKey({ name: d.name, indices: d.indices })) {
+        if (!keyDerivedOnDecode.has(d) && d.key !== dependencyKey({ name: d.name, indices: d.indices })) {
           throw new Error(
             `StateDependency.key 不再是 dependencyKey(name, indices) 的派生值：` +
               `${path} / ${c.normalizedName} key=${d.key} name=${d.name} ⇒ 停止缓存抽取快照`,
@@ -304,6 +351,8 @@ function lazyConditions(
           firstLine,
         };
         if (sIdx >= 0) dep.schema = schemas[sIdx] as VariableInfo;
+        // key 就是上一行现算的 ⇒ 登记给 `encodeBuckets` 的守门看（见 `keyDerivedOnDecode`）
+        keyDerivedOnDecode.add(dep);
         return dep;
       });
       // 读一次建对象，随后换成普通值属性（再次读写零开销；`toEqual` 深比照常走通）

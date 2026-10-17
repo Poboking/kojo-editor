@@ -28,6 +28,33 @@ import { InlineManager } from './inline';
 import { createFunctionOverlay, type OverlayPosition, type OverlayReader } from './locals';
 import { createStateView, type SchemaLookup } from './state-view';
 
+/**
+ * 函数体行文本缓存上限（2026-10-18 性能批）。
+ *
+ * 这是**第四份**正文常驻（内核 io 的会话文本缓存里已经有一份，`kernel/src/io.ts` 上限
+ * 4,096 文件 / 128M 字符），所以这里只该留"当前正在回放的少数几棵"，不该留全树：
+ * 判定面板/回放面一旦走完 99,228 个函数，无上限的旧形态会把 ~144 MB 正文再抄一份常驻。
+ * 逐出不是错误——下次问到该文件会重新经 `readFileText` 取（内核那层通常仍命中，零 IPC）。
+ * 形状照 `io.ts:313-317`：重读=重新入队尾，超尺从队首削，尺子＝条数 + 字符数。
+ */
+const LINE_CACHE_MAX_FILES = 64;
+const LINE_CACHE_MAX_CHARS = 4 * 1024 * 1024;
+
+/**
+ * 回放视图上限（`createView` 的记忆）。
+ *
+ * 视图 = 168 个角色块的变量索引（一次性全建），击键重算纯属浪费：解析产物被 sav-parser
+ * 那侧的记忆钉成**同一个对象**后，只要身份没变，同一个 (档, 角色) 的视图必然逐字同。
+ * 判据因此就是"archive 对象身份相等"——重解析（mtime/size 变了）即作废，不需要第二把尺。
+ */
+const VIEW_CACHE_MAX = 4;
+
+/** 视图记忆条目：archive 身份就是失效判据 */
+interface ViewEntry {
+  readonly archive: SnapshotArchive;
+  readonly view: ReplayStateView;
+}
+
 export interface StateReplayEngineDeps {
   log: Logger;
   /** 解析档案（`snapshot.source.parse`） */
@@ -43,6 +70,13 @@ export interface StateReplayEngineDeps {
    * 经适配器协议注入）。缺省 / 返回 undefined → 保持 unknown('call-context')。
    */
   getCallContextResolver?(): ReplayCallContextResolver | undefined;
+  /**
+   * 文本缓存上限（2026-10-18 性能批；可选，缺省＝上面两个常数）。
+   * `maxFiles` / `maxChars` 给 `Infinity` = 不设限（A/B 对照用：改前形态就是无上限）。
+   */
+  lineCacheCaps?: { maxFiles?: number; maxChars?: number };
+  /** 回放视图上限（可选；0 = 关闭视图记忆，每次 `createView` 重建索引） */
+  viewCacheMax?: number;
 }
 
 /** 谓词明细 → 回放结果（纯函数；测试可直用）。
@@ -105,32 +139,97 @@ export function replayPredicates(
 export class StateReplayEngine implements StateReplayService {
   /** 内联管理器（analyze 缓存；resetCaches 时清空） */
   private readonly inline: InlineManager;
-  /** 函数体行文本缓存（path → lines；resetCaches 时清空） */
+  /**
+   * 函数体行文本缓存（path → lines；插入序＝FIFO 序；`resetCaches` 与超尺逐出都会清）。
+   * 记账尺子＝**行字符总数**（与内核 io 的 `textCacheChars` 同量纲，只是这里存的是行数组）。
+   */
   private readonly lineCache = new Map<string, string[]>();
+  private readonly lineCacheMaxFiles: number;
+  private readonly lineCacheMaxChars: number;
+  private lineCacheChars = 0;
+  /** 回放视图记忆（key = 档路径 + 角色号；失效判据＝archive 对象身份） */
+  private readonly viewCache = new Map<string, ViewEntry>();
+  private readonly viewCacheMax: number;
 
   constructor(private readonly deps: StateReplayEngineDeps) {
+    this.lineCacheMaxFiles = deps.lineCacheCaps?.maxFiles ?? LINE_CACHE_MAX_FILES;
+    this.lineCacheMaxChars = deps.lineCacheCaps?.maxChars ?? LINE_CACHE_MAX_CHARS;
+    this.viewCacheMax = deps.viewCacheMax ?? VIEW_CACHE_MAX;
     this.inline = new InlineManager({
       functionPredicates: (name) => deps.functionPredicates(name),
       readFileLines: async (path) => {
-        let lines = this.lineCache.get(path);
-        if (!lines) {
-          const text = await deps.readFileText(path);
-          lines = text.replace(/\r\n?/g, '\n').split('\n');
-          this.lineCache.set(path, lines);
+        const hit = this.lineCache.get(path);
+        if (hit) {
+          this.lineCache.delete(path); // 重读=重新入队尾
+          this.lineCache.set(path, hit);
+          return hit;
         }
+        const text = await deps.readFileText(path);
+        const lines = text.replace(/\r\n?/g, '\n').split('\n');
+        this.putLines(path, lines);
         return lines;
       },
       log: deps.log,
     });
   }
 
+  /** 文本缓存读数（面板与测试用来自证上限真的在收口，不是挂着好看） */
+  cacheStats(): {
+    readonly files: number;
+    readonly chars: number;
+    readonly maxFiles: number;
+    readonly maxChars: number;
+    readonly views: number;
+  } {
+    return {
+      files: this.lineCache.size,
+      chars: this.lineCacheChars,
+      maxFiles: this.lineCacheMaxFiles,
+      maxChars: this.lineCacheMaxChars,
+      views: this.viewCache.size,
+    };
+  }
+
+  /** 入缓存（FIFO：超尺从队首削；与 `kernel/src/io.ts` 的文本缓存同形状；尺子＝行字符总数） */
+  private putLines(path: string, lines: string[]): void {
+    const sum = (ls: string[]): number => ls.reduce((n, s) => n + s.length, 0);
+    const prev = this.lineCache.get(path);
+    if (prev) {
+      this.lineCache.delete(path);
+      this.lineCacheChars -= sum(prev);
+    }
+    this.lineCache.set(path, lines);
+    this.lineCacheChars += sum(lines);
+    while (
+      this.lineCache.size > this.lineCacheMaxFiles ||
+      this.lineCacheChars > this.lineCacheMaxChars
+    ) {
+      const oldest = this.lineCache.keys().next().value;
+      if (oldest === undefined) break;
+      const evicted = this.lineCache.get(oldest);
+      this.lineCache.delete(oldest);
+      if (evicted) this.lineCacheChars -= evicted.reduce((n, s) => n + s.length, 0);
+    }
+  }
+
   /** 项目切换 / 索引重建时清空缓存（函数体可能已变） */
   resetCaches(): void {
     this.inline.reset();
     this.lineCache.clear();
+    this.lineCacheChars = 0;
+    this.viewCache.clear();
   }
 
+  /**
+   * 建状态视图（带记忆）。
+   *
+   * 失效判据＝**解析产物对象身份**：sav-parser 的深解析记忆把同一 (路径, mtime, size) 的
+   * 档案钉成同一个对象，身份一变（档被改过 / 记忆逐出后重解析）视图即重建。
+   * 抛错口径一字未动：解析失败照旧 warn + 上抛（不静默伪造空视图），角色不在档里由
+   * `createStateView` 抛 `ReplayViewError`，同样每次现抛。
+   */
   async createView(archivePath: string, characterNo: number): Promise<ReplayStateView> {
+    const key = `${archivePath}\u0000${characterNo}`;
     let archive: SnapshotArchive;
     try {
       archive = await this.deps.parseArchive(archivePath);
@@ -138,8 +237,26 @@ export class StateReplayEngine implements StateReplayService {
       this.deps.log.warn(`Replay view parse failed: ${archivePath} — ${String(err)}`);
       throw err; // 显式上抛（不静默伪造空视图）
     }
-    return createStateView({ archive, characterNo, lookup: this.deps.getSchemaLookup() });
+    if (this.viewCacheMax <= 0) {
+      return createStateView({ archive, characterNo, lookup: this.deps.getSchemaLookup() });
+    }
+    const hit = this.viewCache.get(key);
+    if (hit && hit.archive === archive) {
+      this.viewCache.delete(key);
+      this.viewCache.set(key, hit);
+      return hit.view;
+    }
+    const view = createStateView({ archive, characterNo, lookup: this.deps.getSchemaLookup() });
+    this.viewCache.delete(key);
+    this.viewCache.set(key, { archive, view });
+    while (this.viewCache.size > this.viewCacheMax) {
+      const oldest = this.viewCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.viewCache.delete(oldest);
+    }
+    return view;
   }
+
 
   async replayFunction(
     view: ReplayStateView,

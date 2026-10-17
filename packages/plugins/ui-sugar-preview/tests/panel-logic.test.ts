@@ -332,6 +332,39 @@ describe('S4-UI / 概要（summarize）与行数（countLines）', () => {
     expect(s.fullwidthLines).toBe(1);
   });
 
+  it('precomputed 行表/诊断（2026-10-18 性能批）：与概要自己算的那一遍逐字相等', () => {
+    const SRC = ['角色: 1', '时机 初见：', '    「甲。」', '    \u3000乙。'].join('\n');
+    const res = mkResult(
+      [
+        mkLine(1, '角色: 1', [1]),
+        mkLine(2, '时机 初见：', []),
+        mkLine(3, '    「甲。」', [7, 8], [mkBlock(7, 7, 'unreachable')]),
+        mkLine(4, '    \u3000乙。', [9], [mkBlock(9, 9, 'reachable'), mkBlock(10, 10, 'unknown')]),
+      ],
+      {
+        transpile: mkTranspile('a\nb\nc\n', [], [
+          diag('e1', 'error', '错', null),
+          diag('w1', 'warning', '警', { line: 3, column: 1 }),
+        ]),
+        structuralLines: [2, 4],
+      },
+    );
+    for (const withReach of [true, false]) {
+      const own = summarize(res, SRC, withReach);
+      const fed = summarize(res, SRC, withReach, {
+        rows: buildPreviewRows(res, SRC, withReach),
+        diags: buildDiagnosticRows(res.transpile.diagnostics),
+      });
+      expect(fed).toEqual(own); // 面板传预计算件 ⇒ 概要数字一字不变
+    }
+    // 反证：喂另一档可达性口径的行表，块计数确实不同 ⇒ 这条参数不是恒等摆设
+    const mismatch = summarize(res, SRC, true, {
+      rows: buildPreviewRows(res, SRC, false),
+      diags: buildDiagnosticRows(res.transpile.diagnostics),
+    });
+    expect(mismatch.blocks).not.toBe(summarize(res, SRC, true).blocks);
+  });
+
   it('null 结果 → 产物侧计数为 0（但源行数照算）', () => {
     const s = summarize(null, 'a\nb\n');
     expect(s.sourceLines).toBe(2);
