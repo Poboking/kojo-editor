@@ -55,6 +55,7 @@ const BLOCKS: readonly Case[] = [
   ['ENDIF', '如果结束'],
   ['SIF TARGET != 12', '如果 TARGET 不等于 12：'],
   ['SIF A : PRINTFORMW "x"', '如果 A 则 PRINTFORMW "x"'],
+  ['SIF TFLAG:193 : CALL FOO', '如果 时标：193 则 CALL FOO'], // 变形：冒号形 + 语句侧原样（行内英文允许）
   ['SELECTCASE TFLAG:193', '当 时标：193：'],
   ['CASE 1 TO 5', '是 1 到 5：'],
   ['CASE 0, 1, 2', '是 0, 1, 2：'],
@@ -73,8 +74,11 @@ const LOOPS: readonly Case[] = [
   ['WHILE LOCAL < 10', '循环 当 LOCAL 不足 10：'],
   ['WEND', '循环结束'],
   ['REPEAT', '循环 至少一次：'],
+  ['REPEAT LOCAL < 5', '循环 至少一次 当 LOCAL 不足 5：'], // 变形：带条件形（糖层无此语法，显示形必须给出）
+  ['repeat RESULT = 0', '循环 至少一次 当 RESULT 等于 0：'], // 变形：小写 + 条件位裸 `=` 折 `等于`
   ['REND', '循环结束'],
   ['DO', '循环：'],
+  ['do', '循环：'], // 变形：小写
   ['LOOP', '循环结束'],
   ['i + 1', '步进 i 加 1'],
   ['i - 1', '步进 i 减 1'],
@@ -90,8 +94,11 @@ const JUMPS: readonly Case[] = [
   ['JUMP LABEL1', '跳到 LABEL1'],
   ['CALLJUMP 12', '调用跳转 12'],
   ['BREAK', '跳出循环'],
+  ['break ; 中断循环', '跳出循环 ; 中断循环'], // 变形：小写 + 行尾注释
   ['CONTINUE', '跳过本轮'],
+  ['continue', '跳过本轮'], // 变形：小写
   ['RESTART', '重跑本轮'],
+  ['restart', '重跑本轮'], // 变形：小写
   ['CATCH', '出错处理：'],
   ['ENDCATCH', '出错处理结束'],
   ['$招待', '标签 招待'],
@@ -102,14 +109,20 @@ const PREPROCESSOR: readonly Case[] = [
   ['#DIM BEST 10', '声明数组 BEST 大小 10'],
   ['#DIM BEST', '声明数组 BEST'],
   ['#DIMS LOCALS 10', '声明字符串数组 LOCALS 大小 10'],
+  ['#DIMS LOCALS', '声明字符串数组 LOCALS'], // 变形：无规模 ⇒ 只翻类不给假大小
   ['#GLOBAL G 5', '声明全局数组 G 大小 5'],
+  ['#global G 5', '声明全局数组 G 大小 5'], // 变形：小写指令（记号归一大写、义项同一）
   ['#LOCALSIZE LOCAL 10', '声明局部数组规模 LOCAL 大小 10'],
+  ['#LOCALSIZE LOCAL', '声明局部数组规模 LOCAL'], // 变形：无规模
   ['#LOCALSSIZE LOCALS 10', '声明局部字符串规模 LOCALS 大小 10'],
+  ['#localssize LOCALS 10', '声明局部字符串规模 LOCALS 大小 10'], // 变形：小写
   ['#FUNCTION', '声明值函数'],
   ['#FUNCTION GET_TARGET(LOCAL)', '声明值函数 GET_TARGET(LOCAL)'],
   ['#FUNCTIONS', '声明字符串值函数'],
+  ['#FUNCTIONS GET_STR$(LOCAL)', '声明字符串值函数 GET_STR$(LOCAL)'], // 变形：带签名
   ['#SFUNCTION STATIC_A()', '预处理 SFUNCTION STATIC_A()'],
   ['#TESTMEMORY 1', '预处理 TESTMEMORY 1'],
+  ['#TESTMEMORY', '预处理 TESTMEMORY'], // 变形：裸记号
   ['#XFUNCTION', '预处理 XFUNCTION'],
 ];
 
@@ -255,6 +268,9 @@ describe('ZH-C · 表里没有的指令 ⇒ null（宁缺勿猜）', () => {
     'PRINTFORMW 你好',
     'TFLAG:193 = 1',
     'LOCAL = 5',
+    'SHIRO = 1',
+    '!SHIRO', // 假前缀：`!` 不是标识符起点，HEAD_RE 结构上进不来
+    '!SHIRO TARGET = 1',
     'CALL K13_A',
     'DIM A 10',
     '#DEFINE MAX 5',
@@ -278,6 +294,7 @@ describe('ZH-C · 表里没有的指令 ⇒ null（宁缺勿猜）', () => {
     'i + 1 + 2',
     '@BEGIN_MAIN',
     '; 整行注释本来就是给人读的',
+    ';--- 段落分隔线 ---',
     '',
   ];
 
