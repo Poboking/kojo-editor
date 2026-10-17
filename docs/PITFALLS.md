@@ -1,6 +1,13 @@
-93. **多 agent 并发往 `packages/plugin-api/src/index.ts` 尾部追加导出区块会互相顶掉**：本轮 16 agent 并行的实测一次"写炸头"（文件头 doc 注释与首个 export 被覆盖），靠事后读回才发现。纪律：barrel 只允许**文件最末尾**追加自己的一小块、绝不重排/删除他人区块，追加后立刻读回比对；分工时先给每个契约文件指定唯一属主（本轮 W4/W13 各自区块并存是正确形态）。
-94. **测试里自造 trash 条目 id 的毫秒段必须补足 3 位（p3）**：`TRASH_ID_RE` 与 `io.timestamp()` 都认 `\d{3}`，用 `String(ms).padStart(2,'0')` 那类写法会 10% 概率撞上 `TRASH_ID_RE` 失配，`listTrash`/`purge` 同时跳过 ⇒ 表现为"purge 返回 0"的**随机红**（本轮实测 100/1000 触发）。正解＝毫秒段 `padStart(3,'0')`，别用两位补位改 id 形状。
-�保留 20 版）；
+# PITFALLS.md — 环境坑与探针纪律（写盘 / 探针 / 多 agent 前后扫一眼）
+
+> 来源：原 HANDOFF §七/§八/§九（已冻结进 `docs/archive/HANDOFF.md`，细节可去那查原文）。
+> **新坑追加 = 一行**，写进对应小节；**不再往 archive 写任何东西**。
+
+## 一、安全模型（写文件功能必读）
+
+- 写入仅允许 `writablePaths`（用户批准 + 持久化于 kernel 存储域 `_global`），越权抛 `WriteNotAllowedError`；
+- **双闸并存**：kernel io 白名单（第一道）+ Rust 宿主写允许域（第二道：项目根整体 + appDataDir，`project.opened` 注册 / `project.closed` 清除），语义**以更严者为准**；
+- 写回**保编码保换行**（首读探测缓存：utf-8-bom / utf-8 / shift_jis / utf-16；eol 多数派）；原子写（临时文件 + rename）+ 自动备份 `{appData}/backup/{hash}/`（保留 20 版）；
 - UI「只读浏览」永远可用（未批准 = 不可写，不阻塞浏览）；
 - **常驻可写根**：作者工作区根经 `io.setAppWritableRoots` 登记，不受 `setWritableRoots([])` 收回影响——工作区恒可写独立于游戏目录授权周期；
 - **导出是唯一法定绕闸通道**（`exportFile`，§5.97 起独任）：落点**刻意**不过写允许域（导出的意义就是落到域外），授权来自系统对话框的显式选择；对话框 + 写盘绑在同一 Rust 命令内，JS 只传文件名与字节 ⇒ 无越权面。取消返回 `null`（正常路径不算失败）。四条断言钉在 `kernel/tests/io.test.ts`；
@@ -130,6 +137,9 @@
 90. **`lint reuse` 的「装载 Xms」是 await 墙钟，不是计算量**：一次快照装载＝`exists` + `readFileBytes` 两趟 IPC，排在抽取段忙的事件循环后面 ⇒ 1.43MB 的盘（node 侧 read+parse 实测 19.6ms）能在壳侧量到 1,406ms。归因回退时别拿它当成本，体感判据用 `cascade.projectOpened→校验有结果` 的**段间 delta**（PERF-13 就靠这个把 4.5s 钉到预取头上，而不是误判「装载变慢」）。
 91. **引擎实例内的记忆态（`lastRun`、热缓存）在真壳每轮都为零**：水位工具的第二轮是 reload，新页面＝新引擎实例；合成盘同一内核连跑四轮量不到这类回退 ⇒ **凡动「上一轮记忆」的批必须带真壳一轮**（PERF-12b 的 4s 稳态回退就是这么漏掉合成盘闸门的）。
 92. **拆出去的存储键不会自动跟着主快照死**：主快照被判死（格式换代 / 全局判据不符）时贡献键必须同批删，否则换项目留永久孤儿；且 `prune` 的保留集要防在途写被误删（保留集＝本轮真声明了 partition 的规则，写盘串链）。
+93. **多 agent 并发往 `packages/plugin-api/src/index.ts` 尾部追加导出区块会互相顶掉**：本轮 16 agent 并行的实测一次"写炸头"（文件头 doc 注释与首个 export 被覆盖），靠事后读回才发现。纪律：barrel 只允许**文件最末尾**追加自己的一小块、绝不重排/删除他人区块，追加后立刻读回比对；分工时先给每个契约文件指定唯一属主（本轮 W4/W13 各自区块并存是正确形态）。
+94. **测试里自造 trash 条目 id 的毫秒段必须补足 3 位（p3）**：`TRASH_ID_RE` 与 `io.timestamp()` 都认 `\d{3}`，用 `String(ms).padStart(2,'0')` 那类写法会 10% 概率撞上 `TRASH_ID_RE` 失配，`listTrash`/`purge` 同时跳过 ⇒ 表现为"purge 返回 0"的**随机红**（本轮实测 100/1000 触发）。正解＝毫秒段 `padStart(3,'0')`，别用两位补位改 id 形状。
 95. **壳冒烟（dom/ipc）报红先按环境定责，别记到本批头上**：一次异常中断的 `smoke-tauri-ipc.mjs` 会在 %APPDATA%\dev.kojo.editor\`autosave/` 留下崩溃恢复快照（实测 manifest 指向冒烟自建的 `of_new_kojo_api_TEST.ERB`），此后**每次启动都先弹恢复/写权限模态** ⇒ `!document.querySelector(".modal")` 永不成立（15s 超时、只跑到 a 步），`smoke-tauri-dom.mjs` 同时变 `domRendered:false / splashGone:false`。2026-10-17 实测：**同一 store 下 pristine 上游（`1850182`）与重构树以逐字同签名同时失败**；把 `autosave` 挪出后同一棵重构树立刻 dom rc=0。⇒ 两条判据：①任何壳冒烟红，先在同机同 store 对 pristine 基线复跑一遍（本树 `git checkout --detach <基线>` 或 `git worktree add --detach`），同签名即环境账；②挪 `autosave` 前先读 `manifest.json` 确认引用的是冒烟自建的 TEST 文件，是用户作品就停下问。独立另一类红＝**冷树 Rust 从零编译未走完**（cargo 停在 382/422、`hostLaunched:false`），非回归，crate 就绪后同树复跑即过。
 96. **往作者样例（`fixtures/sugar/*.kojo`）写文案要过两把独立的闸，且它们是串联的**：①`packages/app/tests/no-sugar-jargon.test.ts` 的禁词表含裸「糖」一族（语法糖／升糖／降糖／糖判定…）**且扫描面包含 fixtures 与产物 golden**（样例注释会逐字透传进 `.expected.erb` ⇒ 一处措辞红两条）；②`sugar-releasecheck.transpile.test.ts` 的覆盖率闸是「词表 ⇒ 运算符 ⇒ 分野」串联判定，**前面的闸一红就把后面的闸短路**——2026-10-17 RELEASE-1 就是补齐三个词形后才露出运算符闸还缺 `异或`/`假`（上游把表扩到 13 形、样例注释仍写「九个词形」）。⇒ 动样例前先跑这两把闸并**假设修一条会露第二条**；golden 只许 `RELEASE_GOLDEN_WRITE=1` 生成后逐条过目，不许手改期望串。
 97. **计时类判据别拿「次数」当尺子**：让路／分片这种闸的探针次数与池子让路次数都随机器负载漂（同一条用例空闲实测 99 次、满载轮只读到 5 次），拿 `>5` 当阈值就是把机器负载当回归。正解＝**下限只钉形状（改造前恒 0 ⇒ `>0`）＋ 粒度用比值/绝对体感两把尺守**（`blockMs < 整轮×0.6` 与 `<300ms`）。同族旧坑：复合命令的整体 `rc` 由**最后一条**决定，`<test> > log; echo rc=$?; grep … | tail` 会报 rc=0 而日志里写着 `1 failed` ⇒ 判定一律回读日志的 `Tests … failed` 行。
+98. **本机 vitest 4.1.11 默认 `threads` / `forks` 池在 collect 阶段全挂**（2026-10-17 实测：最小 `describe` 复现即 `TypeError: Cannot read properties of undefined (reading 'config')`，node 22.22.2 managed 与 24.21.0 system 同挂，与代码无关）⇒ 本机跑测试一律加 `--pool=vmThreads`（root 与 `vitest.perf.config.ts` 两份配置都能跑）；计时池满载偶发 1 条墙钟红（`snapshot-hot-load.perf` 形），单跑两遍全绿即负载形。CI 与其他机器不受影响 ⇒ **不改仓库池配置**，别为了“默认池跑不起来”去动 `vitest.config.ts`。

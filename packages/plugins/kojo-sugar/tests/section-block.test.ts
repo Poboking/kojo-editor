@@ -460,6 +460,191 @@ describe('E13-B 投影 · 段级吸收', () => {
 });
 
 /* ============================================================================ */
+/* B2. P-1R 段级吸收残余 · 三类混杂形态（K101 絶頂面根函数的三面墙）                    */
+/* ============================================================================ */
+/*                                                                              */
+/* BOARD P-1R 的三面残余，逐一按闭环口径钉死：                                       */
+/* ① 缩进层子段 + `LOCAL:1` 命名槽——第 4 个 0 列纯信封内再套「槽位行 + 裸条件 IF」。   */
+/*    折出的 `若` 与 0 列段信封同层落「时机」顶层 ⇒ 本面闭环做到**转译零 error**        */
+/*    （BOARD 判据原文本体：函数内无任何 native 残留，段拼接即完整糖文）。              */
+/* ② `IF/ELSEIF` 分叉链头——段判据受理的 `IF LOCAL && X` 若是链的一节，折掉链头会让      */
+/*    `ELSEIF` 失去块头（B 态 190 条 indent-mismatch 的来源）。机制 = 判据层不受理       */
+/*    （planSkeleton 的裸 IF 负前瞻）+ R3 撤折双保险。撤折后 `LOCAL = 1` 回原样行，      */
+/*    拼接产物受"逐段缩进重基准"的既有显示近似影响会报 indent-mismatch（「闭环②」        */
+/*    注释同款、非本批引入），故本面闭环口径与「闭环②」一致：`section-*` 结构诊断清零。  */
+/* ③ 段与普通正文同顶层 ⇒ `section-mixed`——R4 把"已经投影成功的正文行"也算混排，         */
+/*    本函数段折叠全部回退。闭环口径同②。                                             */
+/*                                                                              */
+/* 上批（`ff1b8ae`）交付了机制，本文件补钉三面的直接用例 + 负自证。                      */
+
+describe('P-1R 段级吸收残余 · 三类混杂形态（K101）', () => {
+  /** ① K101 第 4 信封形态：3 个 0 列段信封 + 纯信封内嵌 2 个 `LOCAL:1` 槽位子段 */
+  const k101Shape = [
+    '@M_KOJO_MESSAGE_PALAMCNG_B_K12',
+    ';-------------------------------------------------',
+    ';噴乳',
+    'LOCAL = 1',
+    ';-------------------------------------------------',
+    'IF LOCAL && NOWEX:噴乳',
+    '\tPRINTFORMW 「甲」',
+    'ENDIF',
+    ';-------------------------------------------------',
+    ';射精',
+    'LOCAL = 1',
+    ';-------------------------------------------------',
+    'IF LOCAL && NOWEX:射精',
+    '\tPRINTFORMW 「乙」',
+    'ENDIF',
+    ';-------------------------------------------------',
+    ';絶頂分岐（K101 第 4 信封：纯信封内嵌槽位子段）',
+    'LOCAL = 1',
+    ';-------------------------------------------------',
+    'IF LOCAL',
+    '\tLOCAL:1 = 1',
+    '\t;-------------------------------------------------',
+    '\tIF NOWEX:放尿',
+    '\t\tPRINTFORMW 「丙」',
+    '\tENDIF',
+    '\tLOCAL:1 = 1',
+    '\t;-------------------------------------------------',
+    '\tIF TFLAG:193',
+    '\t\tPRINTFORMW 「丁」',
+    '\tENDIF',
+    'ENDIF',
+    'RETURN 1',
+  ].join('\n');
+
+  it('① 正向：纯信封内的槽位子段折成 `若 …：`，与 0 列段信封同层落「时机」顶层', () => {
+    const text = segText(k101Shape).join('\n');
+    expect(text).toContain('若 NOWEX:噴乳：');
+    expect(text).toContain('若 NOWEX:射精：');
+    expect(text).toContain('若 NOWEX:放尿：'); // 缩进层子段折出（B 态一条不折的形态）
+    expect(text).toContain('若 TFLAG:193：'); // 同上
+    // 槽位写法与信封机器码一行都不许留（`LOCAL:1` 残留 = ① 的报红原样）
+    expect(text).not.toMatch(/LOCAL:1|局部:1/);
+    expect(text).not.toContain('IF LOCAL');
+    expect(text).not.toContain('ENDIF');
+  });
+
+  it('① 闭环：投影 → 转译 ⇒ **零 error**（BOARD 判据本体：全折干净 ⇒ 段拼接即完整糖文）', () => {
+    expect(errsOf(segText(k101Shape).join('\n'))).toEqual([]);
+  });
+
+  it('① 折回去长得回信封段（写读同形）', () => {
+    const erb = productOf(segText(k101Shape).join('\n'));
+    expect(erb).toContain('IF LOCAL && NOWEX:噴乳');
+    expect(erb).toContain('IF LOCAL && NOWEX:放尿');
+    expect(erb).toContain('IF LOCAL && TFLAG:193');
+  });
+
+  it('① 负自证：值 0 的槽位（`LOCAL:1 = 0`）不折——"值 0 一律不折"对子段同款生效', () => {
+    const off = [
+      '@M_KOJO_MESSAGE_PALAMCNG_B_K12',
+      'LOCAL = 1',
+      'IF LOCAL',
+      '\tLOCAL:1 = 0',
+      '\tIF NOWEX:放尿',
+      '\t\tPRINTFORMW 「丙」',
+      '\tENDIF',
+      'ENDIF',
+      'RETURN 1',
+    ].join('\n');
+    expect(segText(off).join('\n')).not.toContain('若 ');
+  });
+
+  it('① 负自证：无函数头（片段级）⇒ 槽位子段不折（"上无函数头就不动"底线）', () => {
+    const fragment = ['LOCAL:1 = 1', 'IF NOWEX:放尿', '\tPRINTFORMW 「丙」', 'ENDIF'].join('\n');
+    expect(segText(fragment).join('\n')).not.toContain('若 ');
+  });
+
+  it('① 负自证：槽位与守卫不匹配（`LOCAL:1 = 1` + `IF LOCAL && X`）⇒ 不折（各归其位）', () => {
+    // `IF LOCAL &&` 的守卫是裸 `LOCAL`（0 号槽）；`:1` 槽的信封不受理别的槽的守卫形
+    const mismatched = [
+      '@M_KOJO_MESSAGE_PALAMCNG_B_K12',
+      'LOCAL:1 = 1',
+      'IF LOCAL && NOWEX:放尿',
+      '\tPRINTFORMW 「丙」',
+      'ENDIF',
+      'RETURN 1',
+    ].join('\n');
+    expect(segText(mismatched).join('\n')).not.toContain('若 ');
+  });
+
+  /** ② `IF/ELSEIF` 分叉链头：判据受理的 `IF LOCAL && X` 是链的一节 */
+  const chain = [
+    '@M_KOJO_MESSAGE_PALAMCNG_B_K12',
+    'LOCAL = 1',
+    'IF LOCAL && NOWEX:噴乳',
+    '\tPRINTFORMW 「甲」',
+    'ELSEIF NOWEX:射精',
+    '\tPRINTFORMW 「乙」',
+    'ENDIF',
+    'RETURN 1',
+  ].join('\n');
+
+  it('② 正向：链头折叠被撤（`若` 不出现），链照常投成 `如果 / 否则如果`，台词一行不退', () => {
+    const r = project(chain);
+    const text = r.segments.map((s) => s.sugarText).join('\n');
+    expect(text).not.toContain('若 ');
+    expect(text).toContain('如果 LOCAL && NOWEX:噴乳：');
+    expect(text).toContain('否则如果 NOWEX:射精：');
+    expect(text).toContain('「甲」');
+    expect(text).toContain('「乙」');
+    expect(text).toContain('时机 绝顶：');
+  });
+
+  it('② 闭环：拼接产物无任何 `section-*` 结构诊断（链头撤干净 = 混排不存在）', () => {
+    // indent-mismatch 在此形态下的残留属"逐段缩进重基准"既有显示近似（见 B2 头注），
+    // 与「闭环②」同一口径：结构诊断（写盘路径会拦下的那类）必须清零。
+    const composed = composeLikeHost(chain, project(chain).segments);
+    expect(codesOf(composed).filter((c) => c.startsWith('section-'))).toEqual([]);
+  });
+
+  it('② 负自证（护栏不挡合法折叠）：同款**无** `ELSEIF` ⇒ 照折 `若` 且转译零 error', () => {
+    const clean = [
+      '@M_KOJO_MESSAGE_PALAMCNG_B_K12',
+      'LOCAL = 1',
+      'IF LOCAL && NOWEX:噴乳',
+      '\tPRINTFORMW 「甲」',
+      'ENDIF',
+      'RETURN 1',
+    ].join('\n');
+    const text = segText(clean).join('\n');
+    expect(text).toContain('若 NOWEX:噴乳：');
+    expect(errsOf(text)).toEqual([]);
+  });
+
+  /** ③ 段与普通正文同顶层：R4 把"已投影成功的正文行"也算混排 */
+  const mixed = [
+    '@M_KOJO_MESSAGE_PALAMCNG_B_K12',
+    'LOCAL = 1',
+    'IF LOCAL && NOWEX:噴乳',
+    '\tPRINTFORMW 「甲」',
+    'ENDIF',
+    'IF NOWEX:射精',
+    '\tPRINTFORMW 「乙」',
+    'ENDIF',
+    'RETURN 1',
+  ].join('\n');
+
+  it('③ 正向：可投影的普通正文与段同顶层 ⇒ 本函数段折叠全部回退，台词一行不退', () => {
+    // R4 的关键语义：混排判据看的不是"投不出的行"（旧代理尺子），而是**结构**——
+    // 顶层除了段还有任何可见行（哪怕 `如果 …：` 投影完全成功）就不折。
+    const r = project(mixed);
+    const text = r.segments.map((s) => s.sugarText).join('\n');
+    expect(text).not.toContain('若 ');
+    expect(text).toContain('「甲」');
+    expect(text).toContain('「乙」');
+    expect(text).toContain('时机 绝顶：');
+  });
+
+  it('③ 闭环：拼接产物无任何 `section-*` 结构诊断（R4 的判据本体）', () => {
+    const composed = composeLikeHost(mixed, project(mixed).segments);
+    expect(codesOf(composed).filter((c) => c.startsWith('section-'))).toEqual([]);
+  });
+});
+
+/* ============================================================================ */
 /* C. E13-1：投影标签必须落在词法器认得的形态上                                     */
 /* ============================================================================ */
 
