@@ -25,8 +25,9 @@
          底色 #1e2227 必须与 styles.css 的 --bg 现值一致——由 tools/smoke-tauri-dom.mjs 断言①
          钉住「内联底色 == 挂载后计算底色」，两处漂移即红。深色、零外链资源（dev 下 styles.css
          由 JS 注入，这里等不了它）。React 首次提交后由 App.tsx 移除 #boot-splash。
-         ⚠ 浅色/薄荷引导底色见下方 [data-theme] 覆盖——必须与各 themes/*.css 的 --bg / --fg 现值
-         一致；主题子 agent 若改某档 --bg/--fg，请同步改这里对应那两行。 -->
+         ⚠ 浅色/薄荷引导层取色见下方 [data-theme] 覆盖——三档 × 五面（--bg / --fg / --fg-dim /
+         --bg-3 / --accent）须逐字等于该档主题源现值，清单真源照 themes/light.css 顶部「锚定不变量」。
+         这条散文警告现由 packages/app/tests/boot-sweep-single-source.test.ts 逐字镜像钉住：漂了即红。 -->
     <style>
       html,
       body {
@@ -60,23 +61,23 @@
         font-size: 12px;
         color: #8b949e;
       }
-      .boot-splash-bar {
+      .boot-bar {
         width: 168px;
         height: 3px;
         border-radius: 999px;
         background: #2b3138;
         overflow: hidden;
       }
-      .boot-splash-bar::after {
+      .boot-bar::after {
         content: '';
         display: block;
         width: 42%;
         height: 100%;
         border-radius: inherit;
         background: #4c8bf5;
-        animation: boot-splash-sweep 1.15s ease-in-out infinite;
+        animation: boot-sweep 1.15s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
       }
-      @keyframes boot-splash-sweep {
+      @keyframes boot-sweep {
         0% {
           transform: translateX(-110%);
         }
@@ -85,7 +86,7 @@
         }
       }
       @media (prefers-reduced-motion: reduce) {
-        .boot-splash-bar::after {
+        .boot-bar::after {
           animation: none;
           width: 100%;
           opacity: 0.35;
@@ -103,10 +104,10 @@
       html[data-theme='light'] .boot-splash-tip {
         color: #59636e;
       }
-      html[data-theme='light'] .boot-splash-bar {
+      html[data-theme='light'] .boot-bar {
         background: #dde3ea;
       }
-      html[data-theme='light'] .boot-splash-bar::after {
+      html[data-theme='light'] .boot-bar::after {
         background: #0a5cc2;
       }
       html[data-theme='mint-dark'],
@@ -115,15 +116,15 @@
       }
       html[data-theme='mint-dark'] #boot-splash {
         background: #0f1713;
-        color: #d7e8de;
+        color: #d9e9df;
       }
       html[data-theme='mint-dark'] .boot-splash-tip {
-        color: #85a593;
+        color: #88a896;
       }
-      html[data-theme='mint-dark'] .boot-splash-bar {
-        background: #1a2a22;
+      html[data-theme='mint-dark'] .boot-bar {
+        background: #1c2a23;
       }
-      html[data-theme='mint-dark'] .boot-splash-bar::after {
+      html[data-theme='mint-dark'] .boot-bar::after {
         background: #35d0a0;
       }
     </style>
@@ -133,7 +134,7 @@
       <div class="boot-splash-card">
         <div class="boot-splash-brand">kojo-editor</div>
         <div class="boot-splash-tip">正在启动…</div>
-        <div class="boot-splash-bar"></div>
+        <div class="boot-bar"></div>
       </div>
     </div>
     <!-- L1-0 引导标记（parse 期落盘，main.tsx 收编进 __kojoPerf；口径见 src/perf.ts bootMark）：

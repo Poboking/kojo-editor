@@ -6080,23 +6080,23 @@ button.primary .hint {
   font-size: var(--fs-1);
   color: var(--fg-dim);
 }
-.boot-skeleton-bar {
+.boot-bar {
   width: 168px;
   height: 3px;
   border-radius: var(--radius-pill);
   background: var(--bg-3);
   overflow: hidden;
 }
-.boot-skeleton-bar::after {
+.boot-bar::after {
   content: '';
   display: block;
   width: 42%;
   height: 100%;
   border-radius: inherit;
   background: var(--accent);
-  animation: boot-skeleton-sweep 1.15s var(--ease-out) infinite;
+  animation: boot-sweep 1.15s var(--ease-out) infinite;
 }
-@keyframes boot-skeleton-sweep {
+@keyframes boot-sweep {
   0% {
     transform: translateX(-110%);
   }
@@ -6105,11 +6105,18 @@ button.primary .hint {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .boot-skeleton-bar::after {
+  .boot-bar::after {
     animation: none;
     width: 100%;
     opacity: 0.35;
   }
+}
+/* 应用内「减弱动效」开关（`:root[data-motion='reduced']`）只压 duration / iteration-count、
+   不改 animation-name ⇒ 滑块会停在终态 translateX(320%)，移出轨道、只剩一条空沟。 */
+:root[data-motion='reduced'] .boot-bar::after {
+  animation: none;
+  width: 100%;
+  opacity: 0.35;
 }
 
 /* ---- C3 领域限定检索：检索范围选择器（1016 独占追加区块；勿在他处重排） ---- */
@@ -6831,7 +6838,7 @@ button.resume-session {
     opacity: 1;
   }
 }
-/* 骨架屏扫光：把既有 boot-skeleton-sweep 通用化成任何 `.skeleton` 都能吃的一条 */
+/* 骨架屏扫光：把既有 boot-sweep 通用化成任何 `.skeleton` 都能吃的一条 */
 @keyframes u-shimmer {
   to {
     transform: translateX(100%);

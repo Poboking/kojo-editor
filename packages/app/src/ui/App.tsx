@@ -100,7 +100,7 @@ function ProjectViewSkeleton(): ReactElement {
       <div className="boot-skeleton-card">
         <div className="boot-skeleton-brand">kojo-editor</div>
         <div className="boot-skeleton-tip">正在装载工作区…</div>
-        <div className="boot-skeleton-bar" />
+        <div className="boot-bar" />
       </div>
     </div>
   );
