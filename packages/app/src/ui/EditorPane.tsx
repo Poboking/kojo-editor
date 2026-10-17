@@ -7,48 +7,18 @@ import type {
   EditorSaveChoices,
   EditorSaveHandlerContribution,
   EditorSaveWarning,
-  EditorTextEdit,
-  ErbIndex,
-  ErbParserService,
-  ErbReference,
 } from '@kojo/plugin-api';
 import { FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
-import { makeLookup } from '@kojo/plugin-kojo-sugar';
-import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords, registerErbLanguage, setErbDirectiveWords } from '../monaco/erb-language';
+import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
-import { installHover, type HoverTables } from '../monaco/kojo-hover';
-import {
-  PROVIDED_CODE_ACTION_KINDS,
-  actionDiagnostics,
-  collectCodeActions,
-  markersToDecorations,
-} from '../monaco/kojo-code-action';
-import {
-  codeLensAffordable,
-  collectCodeLenses,
-  installCodeLensProvider,
-  withinCodeLensBudget,
-} from '../monaco/kojo-code-lens';
 import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
-import { collectDefinitionLocations, installDefinitionProvider, type DefinitionLocation } from '../monaco/kojo-definition';
-import {
-  collectInlayHints,
-  inlayHintsAffordable,
-  installInlayHintsProvider,
-} from '../monaco/kojo-inlay-hints';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
-import { clampRevealPosition, revealLocationOf, type RevealTarget } from '../monaco/reveal-position';
-import { dialectForLanguage, installDocumentFormatter, toTextEdits, type FormatHandlers } from '../monaco/kojo-format';
-import { installRangeFormatter } from '../monaco/kojo-format-range';
+import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
+import { dialectForLanguage, toTextEdits } from '../monaco/kojo-format';
 import { applyFormatOnSave } from './format-on-save';
-// W8 XLANG-RENAME 的宿主侧：闭文件落盘的唯一通道（`ClosedFileIo`）与跨语言腿的取数
-// （枚举 + 读文 + 问槽，判读零宿主知识；根口径与检索面板同源）
-import { type ClosedFileIo } from './reference-utils';
-import { kojoReferencesViaSlot, listKojoSourceTexts } from './kojo-source-scan';
-import { setReferenceTally } from './reference-tally-store';
 import { classifySaveRace } from './save-race';
 import { selectionStatusText } from './selection-status';
 import {
@@ -66,15 +36,9 @@ import {
   setFontZoomPref,
   subscribeFontSizePref,
 } from './font-size-pref';
-import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
+import { collectDocumentSymbols } from '../monaco/kojo-symbols';
 import { setJumpProbe } from './jump-to-state';
 import { dropRecoveredContent, peekRecoveredContent } from './recovery-store';
-import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
-import {
-  collectSemanticTokenSpans,
-  installSemanticTokensProvider,
-  shouldComputeSemanticTokens,
-} from '../monaco/kojo-semantic-tokens';
 import {
   crumbsKey,
   crumbsNeedRefresh,
@@ -83,17 +47,6 @@ import {
   type CrumbCursor,
   type CrumbItem,
 } from './breadcrumb-path';
-import {
-  type SignatureTables,
-  installSignatureHelp,
-  resolveSignatureInText,
-} from '../monaco/kojo-signature';
-import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
-import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
-import { createApplyToClosedFile, installErbRename } from '../monaco/erb-rename';
-import { collectReferenceLocations, installReferenceProvider } from '../monaco/find-references';
-import { installKojoRename } from '../monaco/kojo-rename';
-import { installImplementationProvider } from '../monaco/erb-implementation';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { CJK_TYPING_BASELINE, FIND_BASELINE, LARGE_FILE_LINES, editorOptionsForLineCount } from './editor-options';
@@ -135,6 +88,23 @@ import { createMarkerRunner, type MarkerContributor } from './marker-pool';
 // model 池（SPLIT-1 分屏）：纯逻辑工厂 + 真身单例（单例单独成模块，monaco 不进工厂的测试链）
 import { languageFor } from './editor-model-pool';
 import { editorModelPool } from './editor-model-pool-instance';
+// SPLIT-1 拆出的两层（1017 前端重构批）：多实例登记簿（本组件持有 ref，登记时交出同一批 ref 壳）
+// + 全局 provider 的一次性接线（注册门只有一道：globalsInstalled）
+import {
+  registerPane,
+  setGlobalKernel,
+  setPaneFocused,
+  unregisterPane,
+  type ModelEntry,
+} from './editor-pane-registry';
+import {
+  acquireDirectiveWords,
+  applyDirectiveWords,
+  applyTextEdits,
+  disposeGlobalProviders,
+  ensureGlobalProviders,
+  releaseDirectiveWords,
+} from './editor-global-providers';
 // worker 侧有没有这条 kind，判据只有一处：装配层那张两侧共用的任务表
 import { hasWorkerTask } from '../compute-tasks';
 
@@ -147,80 +117,8 @@ registerKojoLanguage(monaco);
 
 /** marker owner（同一 owner 的 markers 每次整体替换；不同 owner 互不干扰） */
 const MARKER_OWNER = 'kojo-decorators';
-/** CodeAction 执行命令 id（宿主统一注册一次；command 参数为 pendingActionsRef 的反查 key） */
-const CODE_ACTION_COMMAND = 'kojo.codeAction.run';
 /** 编辑停顿多久后重算装饰（避免每击键跑一遍转译） */
 const MARKER_DEBOUNCE_MS = 250;
-
-/**
- * 编辑器只读消费的适配器表（悬停 ZH-F2 + `.kojo` / `.erb` 两个补全 seam 共用）——按当前项目
- * `adapterId` 精确匹配 `game.adapter` 槽位贡献，**运行时**现取（适配器随项目开闭重建，
- * 缓存会把上一个项目的表带过来）。**单一数据源**：kojo 与 erb 两个 seam 共用它，不各建一份。
- *
- * 表全在适配器贡献上（游戏知识只住 adapter；宿主只读不解释）：变量字典
- * （`variableSchema` → `makeLookup`，与 kojo-sugar 转译器同一个构造器）、时机分野模板表
- * （`kojoFaceTemplates`，`.kojo` 补全 seam 的 KC-2 前置）、基础库函数名表、指令名表。
- * 缺一即该路不产候选 / 不反查（**不猜**）。
- *
- * 另附 `erbFunctionNames`（**非** adapter 表）——项目内全部函数名（EC-3 函数名补全预置），
- * 由 `erb-parser` 的 `ErbIndex` 派生并按整项目指纹记忆化（见 `erb-function-names-for`）。
- */
-function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables & SignatureTables & HoverTables {
-  const project = kernel.project.current();
-  if (!project) return {};
-  for (const contribution of kernel.slots.query('game.adapter')) {
-    if (contribution.adapter.gameId !== project.adapterId) continue;
-    const adapter = contribution.adapter;
-    return {
-      ...(adapter.variableSchema
-        ? { dictionary: makeLookup(adapter.variableSchema), variableSchema: adapter.variableSchema }
-        : {}),
-      ...(adapter.kojoFaceTemplates ? { faceTable: adapter.kojoFaceTemplates } : {}),
-      ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
-      ...(adapter.kojoInstructionTable ? { instructionTable: adapter.kojoInstructionTable } : {}),
-      // 计数器中文名 → 原生编号的反查（ZH-D3）：与补全/诊断同一枚 adapter，运行时现取
-      ...(adapter.kojoCounterTable ? { counterTable: adapter.kojoCounterTable } : {}),
-      // B5 签名帮助要的槽语义表（同一枚 adapter 贡献，运行时现取；缺席 = 不产签名）
-      ...(adapter.kojoCallProtocol ? { callProtocol: adapter.kojoCallProtocol } : {}),
-      erbFunctionNames: erbFunctionNamesFor(kernel),
-      // ERB 函数悬停通道：erb.parser 的当前索引**每次现取**（索引随项目开闭重建，不缓存脏表）。
-      // 解析器缺席 / 索引在途只让该路无结果（退化可见），绝不抛进悬停 seam。
-      erbIndex: () => {
-        try {
-          return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-        } catch {
-          return null;
-        }
-      },
-    };
-  }
-  return {};
-}
-
-/**
- * 每 kernel 一份的「函数名（已排序）」提供者缓存（`WeakMap`：同一 kernel 跨多次补全请求复用
- * 同一份记忆化闭包，指纹不变即不重排；kernel 随 App 生命周期，弱引用不碍回收）。
- */
-const erbFnMemoByKernel = new WeakMap<Kernel, () => readonly string[]>();
-
-/**
- * 取 `kernel` 对应的记忆化函数名提供者。`erb.parser` **软取**（`services.tryGet` + try/catch）：
- * 解析器缺席 / 索引在途只让此路**无候选**（退化可见），绝不抛到补全 seam。
- */
-function erbFunctionNamesFor(kernel: Kernel): () => readonly string[] {
-  let fn = erbFnMemoByKernel.get(kernel);
-  if (!fn) {
-    fn = memoizedErbFunctionNames(() => {
-      try {
-        return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-      } catch {
-        return null;
-      }
-    });
-    erbFnMemoByKernel.set(kernel, fn);
-  }
-  return fn;
-}
 
 /**
  * 就近征询**保存接管者**（槽 `ui.editor.saveHandler`，2026-10-12 批）：返回
@@ -246,38 +144,6 @@ function pickSaveHandler(kernel: Kernel, path: string): EditorSaveHandlerContrib
   if (matches.length === 0) return undefined;
   matches.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)); // 稳定排序：同 order 保持注册顺序
   return matches[0];
-}
-
-/**
- * 把 💡 动作给出的**行级改写**落成一次 Monaco 编辑（**一次撤销步**，`Ctrl+Z` 可撤回）。
- *
- * 三条纪律：
- * - **降序应用**：从最大行号开始替换，前面的行号才不会因替换而位移（与
- *   `lift-apply.ts` 的倒序替换同源理由）；
- * - **坐标夹取**：贡献方给出的行号可能因"供给与执行之间用户又编辑了"而过期，
- *   夹取而非报错（陈旧行号不该让编辑器崩）；
- * - **单次 `executeEdits`**：多段改写合并成一个撤销步——用户按一次 Ctrl+Z 应当
- *   撤销"这次改写"，而不是被要求按 N 次。
- *
- * 返回是否真的落了一次编辑。
- */
-function applyTextEdits(
-  ed: Monaco.editor.IStandaloneCodeEditor,
-  edits: readonly EditorTextEdit[],
-): boolean {
-  const model = ed.getModel();
-  if (!model || edits.length === 0) return false;
-  const maxLine = model.getLineCount();
-  const ops = edits
-    .map((e) => {
-      const from = Math.min(Math.max(1, Math.trunc(e.fromLine) || 1), maxLine);
-      const to = Math.min(Math.max(from, Math.trunc(e.toLine) || from), maxLine);
-      return { range: new monaco.Range(from, 1, to, model.getLineMaxColumn(to)), text: e.newText };
-    })
-    .sort((a, b) => b.range.startLineNumber - a.range.startLineNumber);
-  ed.executeEdits('kojo.codeAction', ops);
-  ed.pushUndoStop();
-  return true;
 }
 
 /**
@@ -311,631 +177,8 @@ export interface EditorPaneActions {
   snapshots: () => EditorSnapshotRecord[];
 }
 
-/** 单个打开文件的 model 记录（多标签：model 随标签存续，切换不销毁） */
-interface ModelEntry {
-  model: Monaco.editor.ITextModel;
-  listener: Monaco.IDisposable;
-  /** 打开时的编码/EOL（状态栏展示用；保存由内核 io 保编码） */
-  encoding: string;
-  eol: string;
-}
-
-/* ------------------- SPLIT-1：多实例基座（模块级单注册） ------------------- */
-
-/**
- * 每个活着的 EditorPane 实例在模块注册表里的一条档案。全局（`monaco.languages.*` /
- * `registerCommand` / 跳转探针）provider **只注册一份**（standalone Monaco 的 language
- * provider 是全局单表，双实例注册 = 补全候选成对重复），resolve 回调收到 `model` 后经
- * `owningPaneOf` 反查归属实例，再读该实例的 ref——单实例时行为与旧版（闭包直读自身
- * ref）逐字等价。
- */
-interface PaneCtx {
-  paneId: string;
-  editorRef: { current: Monaco.editor.IStandaloneCodeEditor | null };
-  entriesRef: { current: Map<string, ModelEntry> };
-  filePathRef: { current: string };
-  sugarModelRef: { current: Monaco.editor.ITextModel | null };
-  pendingActionsRef: { current: Map<string, EditorCodeAction> };
-  actionSeqRef: { current: number };
-  crumbTreeCacheRef: { current: { path: string; versionId: number; symbols: EditorDocumentSymbol[] } | null };
-}
-
-const livePanes = new Map<string, PaneCtx>();
-let paneSeq = 0;
-/** 最后一次获得焦点的实例（跳转探针读它；编辑器 focus 与实例首挂时刷新） */
-let focusedPaneId: string | null = null;
-let globalsInstalled = false;
-/** 全局 provider 的 kernel 来源（单 kernel 应用；随最新实例刷新，等价旧版闭包捕获） */
-let globalKernel: Kernel | null = null;
-const globalDisposers: Monaco.IDisposable[] = [];
-/** Monarch 词表等模块级资源的实例引用计数（最后一个实例退场才清） */
-let erbWordsUsers = 0;
-let lastWordsKey = '__unset__';
+/** 首个编辑器实例创建只打一次 boot 探针（模块存活期内一次，与实例退场无关） */
 let bootEditorMarked = false;
-
-/**
- * 全局 provider 的**单次注册**（SPLIT-1 多实例基座）：standalone Monaco 的
- * `monaco.languages.*` provider / `registerCommand` / 跳转探针都是模块级单表，
- * 每个实例各注册一份 = 补全候选成对重复、命令解析错组。这里只在首个实例挂载时
- * 注册一次；各 resolve 回调收到 `model` 后经 `owningPaneOf` 反查归属实例再读它的
- * ref——单实例时与旧版（闭包直读自身 ref）逐字等价，多实例时按"model 在哪组编辑器
- * 上活动"分派。最后一个实例退场时整体拆毁（`disposeGlobalProviders`）。
- */
-function ensureGlobalProviders(): void {
-  if (globalsInstalled) return;
-  globalsInstalled = true;
-    // 💡 CodeAction 宿主适配（槽 `ui.editor.codeAction`，P3b）：宿主只做 Monaco 协议
-    // 转换（registerCodeActionProvider），动作产出全在插件（纯函数 provideActions）；
-    // 执行经 registerCommand 落地，command 参数用 id 反查 pendingActionsRef（参数须可
-    // 序列化，且避免闭包捕获过时文本）。
-    const cmdDisposer = monaco.editor.registerCommand(CODE_ACTION_COMMAND, (_accessor, actionId: string) => {
-      const sep = actionId.indexOf(':');
-      // 动作 id 首段 = 归属实例（provideCodeActions 生成时打上的前缀）：反查活实例档案
-      const ctx = sep > 0 ? livePanes.get(actionId.slice(0, sep)) : undefined;
-      const action = ctx?.pendingActionsRef.current.get(actionId);
-      if (!action) return;
-      const ed = ctx?.editorRef.current ?? null;
-      // 有 `edits` 的动作 = **改文本本身**（可撤销）：宿主直接落地，不再走 `run`
-      //（两者语义不同，见 `EditorTextEdit` 契约；💡「改为语法糖写法」走这条）。
-      // 糖视图下 `ed.getModel()` 是只读糖 model：编辑无处可落（applyTextEdits 会改到派生物
-      // 而非原文），直接跳过，避免"改了却不在真文件里"。
-      if (action.edits && action.edits.length > 0 && ed && !ctx?.sugarModelRef.current && ed.getModel()) {
-        if (applyTextEdits(ed, action.edits)) return;
-      }
-      const line = ed?.getPosition()?.lineNumber;
-      void action.run({
-        project: requireKernel().project.current(),
-        activeFile: ctx?.filePathRef.current,
-        ...(line !== undefined ? { line } : {}),
-      });
-    });
-    const providerDisposer = monaco.languages.registerCodeActionProvider(
-      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID],
-      {
-        provideCodeActions: (model, range, context) => {
-          const ctx = owningPaneOf(model);
-          // 只对当前活动标签的 model 供动作（后台 model 的 provider 调用不响应）；
-          // 糖视图下挂的是只读糖 model，不供任何 CodeAction（编辑落点无真文件可依）。
-          if (!ctx || !ctx.filePathRef.current) {
-            return { actions: [], dispose: () => undefined };
-          }
-          const path = ctx.filePathRef.current;
-          const pending = ctx.pendingActionsRef.current;
-          // 超阈值整体清理（长期运行不至于无限增长）；id 单调递增，绝不复用
-          if (pending.size > 500) pending.clear();
-          const actions = collectCodeActions(
-            requireKernel().slots.query('ui.editor.codeAction'),
-            {
-              path,
-              text: model.getValue(),
-              project: requireKernel().project.current(),
-              lineCount: model.getLineCount(),
-              ...(range?.startLineNumber !== undefined ? { line: range.startLineNumber } : {}),
-              // 本次请求对应的**当前波浪线**（B9）：Monaco 的 standalone 包装层已按
-              // 区间求交填好 `context.markers` ⇒ 贡献方按 `code` 精确应答，
-              // 零 marker = 这个区间本来就没红线 ⇒ 不该有 quickfix
-              diagnostics: markersToDecorations(monaco, context.markers ?? []),
-            },
-            {
-              register: (contributionId, action) => {
-                const actionId = `${ctx.paneId}:${contributionId}#${++ctx.actionSeqRef.current}`;
-                pending.set(actionId, action);
-                return actionId;
-              },
-              markerDataFor: (action) => actionDiagnostics(monaco, model, action),
-            },
-            CODE_ACTION_COMMAND,
-          );
-          return { actions, dispose: () => undefined };
-        },
-      },
-      // B9：类别声明走 metadata（Monaco 用它决定 `Ctrl+.` 这条 only=quickfix 的
-      // 显式请求要不要调用本 provider，并写进 `supportedCodeActions` 上下文键）
-      { providedCodeActionKinds: PROVIDED_CODE_ACTION_KINDS },
-    );
-    // 悬停中文名（ZH-F2）：只读显示，光标下的原生记号 → 中文名。表按当前项目 adapterId
-    // **运行时**现取（`editorTables`），查不到即不显示（**不猜**）。与 CodeAction 同款隔离。
-    const hoverDisposer = installHover(monaco, () => editorTables(requireKernel()));
-    // 转到定义（2026-10-15 语言服务批）：宿主只做 Monaco 协议翻译——光标位置进、目标位置出；
-    // "那个名字是什么、定义在哪"全在 `ui.editor.languageService` 槽（ERB 由解析器答、
-    // `.kojo` 由糖线答）。跨文件跳转不新造机制：发 `editor.revealLocation`（宿主既有通道，
-    // App 据此开文件、编辑器据此滚动）——与 codeAction 的"宿主零业务"同一分层。
-    // D4（2026-10-15 Peek 批）追加两条腿：目标在同文件/已开标签时**返回真 LocationLink**
-    // （Monaco 的 `Alt+F12` Peek 与就地跳都以这份返回为数据源），其余情形照旧发事件。
-    // 转到定义与跳到实现**共用这一条取数腿**（W9：`ImplementationHandlers = DefinitionHandlers`，
-    // 两者要的"名字 → 定义位"是同一份数据；写两份就是允许第二条腿自己再算一遍，
-    // 旧 `erb-implementation` 直读 `ErbIndex.byName` 正是这么长出第二份计算的）。
-    const resolveDefinitionTargets = (
-      model: Monaco.editor.ITextModel,
-      position: Monaco.Position,
-    ): DefinitionLocation[] => {
-      const ctx = owningPaneOf(model);
-      // 与 codeAction 同一判据（见上方 provideCodeActions）：只应答当前活动标签的真 model。
-      // 糖视图下 `ed.getModel()` 是只读糖 model——它的行号对应糖文本，拿它去问 ERB 行号
-      // 会得到"派生物里的位置"，所以一律不供，避免把作者跳到错行。
-      if (!ctx) return [];
-      const path = ctx.filePathRef.current;
-      if (!path) return [];
-      return collectDefinitionLocations(requireKernel().slots.query('ui.editor.languageService'), {
-        kind: 'definition',
-        path,
-        text: model.getValue(),
-        line: position.lineNumber,
-        column: position.column,
-        project: requireKernel().project.current(),
-        lineCount: model.getLineCount(),
-      });
-    };
-    const definitionDisposer = installDefinitionProvider(monaco, {
-      resolve: resolveDefinitionTargets,
-      navigate: (location) => {
-        // W9 判据①：载荷一律由 `revealLocationOf` 构造（六条腿同一个出口，列与区间同源）
-        requireKernel().bus.emit(
-          'editor.revealLocation',
-          revealLocationOf(
-            { path: location.filePath, line: location.line, column: location.column, span: location.span },
-            '转到定义',
-          ),
-        );
-      },
-      // D4（Peek 就地预览）两条腿的判据都来自**全部组**的打开表（`openModelAcrossGroups` /
-      // 路径，值 = 那份 model），路径比较一律走 `matchOpenedPath` 的 `pathKey` 口径
-      // （HK-7：平台原样路径与宿主键在 Windows 上分隔符/大小写不一致，裸字符串比会静默判不上）：
-      // - openModelFor：目标文件是否**已经开着**（开着 ⇒ 有 model ⇒ Monaco 能给 Peek 显示）；
-      // - pathForUri：Monaco 的跨 model 跳转请求（opener）反回宿主路径，落回同一条
-      //   `editor.revealLocation` 通道——不新造第二套导航机制。
-      openModelFor: openModelAcrossGroups,
-      pathForUri: pathForUriAcrossGroups,
-    });
-    // 文档大纲（B3）：同一枚 `ui.editor.languageService` 槽的第二个判别成员。宿主照旧只做
-    // 协议翻译——"这篇文档有哪些层"全在插件（ERB 给函数与声明、`.kojo` 给时机/段/分支）。
-    // 这份树同时是**粘性滚动**的贴顶来源（吸顶显示"当前在哪个函数 / 哪个时机块里"），
-    // 所以它必须在糖视图之外只认真 model：糖 model 的行号属于派生物，贴出来是错的层次。
-    const symbolsDisposer = installDocumentSymbolProvider(monaco, {
-      resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
-        return collectDocumentSymbols(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'documentSymbol',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount: model.getLineCount(),
-        });
-      },
-    });
-    // 签名帮助（B5 形参槽语义 + R5 跨行 / ERB 形参签名）：唯一真源两层——
-    // ① adapter 的调用协议表（槽语义）；② 协议不认识时的 ERB 用户函数形参（解析器索引
-    // `erb.parser`，按归一化名查定义取 `params` 原文）。两层都运行时现取（表随项目开闭
-    // 重建，缓存会把上一个项目的表带过来）；都缺席 / 都不认 ⇒ 不应答，**不猜**。
-    // 跨行：`resolveSignatureInText` 从光标行向上收未闭合括号（窗口封顶），最内层括号
-    // 语义与单行同源。糖视图挂的是只读派生 model，它的行列不属于原文 ⇒ 与 codeAction /
-    // 转到定义同判据一律不应答。
-    const signatureDisposer = installSignatureHelp(monaco, {
-      resolve: (model, position) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return null;
-        const path = ctx.filePathRef.current;
-        if (!path) return null;
-        const protocol = editorTables(requireKernel()).callProtocol;
-        return resolveSignatureInText(model.getValue(), position.lineNumber, position.column, protocol, (callee) => {
-          try {
-            const index = requireKernel().services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-            if (!index) return null;
-            const defs = index.byName.get(callee.toUpperCase());
-            const ref = defs?.[0];
-            if (!ref) return null;
-            const file = index.files.get(ref.filePath);
-            const fn = file?.functions.find((f) => f.startLine === ref.startLine);
-            return fn ? fn.params : null;
-          } catch {
-            return null;
-          }
-        });
-      },
-    });
-    // 折叠范围（D3）：同一枚 `ui.editor.languageService` 槽的第三个判别成员。ERB 原文不缩进，
-    // Monaco 的缩进折叠在其上几乎无效——注册供给器后 `foldingStrategy: auto` 自动改走这里。
-    // 应答判据与大纲逐字同款：糖 model 的行号属于派生物，折叠它会把作者折进不存在的位置。
-    const foldingDisposer = installFoldingRangeProvider(monaco, {
-      resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
-        return collectFoldingRanges(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'foldingRange',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount: model.getLineCount(),
-        });
-      },
-    });
-
-    // 结构化着色（B6，作者面叫「名字按用途着色」）：同一枚 `ui.editor.languageService` 槽的
-    // 第六个判别成员。宿主照旧只做协议翻译——"这个名字在这里是定义、形参槽还是引用"
-    // 全在插件（ERB 由解析器答、`.kojo` 由表层 DSL 线答），本层一个 ERB / 糖名词都不认识。
-    // 应答判据与大纲/折叠逐字同款：糖 model 的行号属派生物，着色它就是把颜色画到
-    // 一份不存在的文本上。开关**不在这里判**：Monaco 的 `editor.semanticHighlighting.enabled`
-    // 关着时根本不会问 provider（见 `semantic-color-pref.ts`），这里只留大文件那一道降级闸。
-    const semanticDisposer = installSemanticTokensProvider(monaco, {
-      resolve: (model) => {
-        // 着色是**纯显示**职责：跟着"此刻屏幕上那份 model"走，派生糖视图同样要上色。
-        // 故这里**不能**用 `owningPaneOf`——它把糖 model 判 null 是为拦 definition/rename/hover
-        // 等"导航"作用在派生行号上，误伤到着色 ⇒ .kojo 预览关键词高亮全灭。
-        // 糖 model 显示的是 `.kojo` 投影：以 `.kojo` 路径派发，让 kojo 语义腿命中这份文本
-        // （`resolveSugarTarget` 只认 `.kojo` 后缀），同时 ERB 语义腿因扩展名不符自然跳过，无冲突。
-        let ctx: PaneCtx | null = null;
-        let isSugarModel = false;
-        for (const c of livePanes.values()) {
-          const ed = c.editorRef.current;
-          if (!ed || ed.getModel() !== model) continue;
-          ctx = c;
-          isSugarModel = c.sugarModelRef.current === model;
-          break;
-        }
-        if (!ctx) return [];
-        const realPath = ctx.filePathRef.current;
-        if (!realPath) return [];
-        const path = isSugarModel ? realPath.replace(/\.[A-Za-z0-9]+$/, '.kojo') : realPath;
-        const lineCount = model.getLineCount();
-        if (!shouldComputeSemanticTokens(lineCount)) return [];
-        return collectSemanticTokenSpans(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'semanticToken',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount,
-        });
-      },
-    });
-    /* G1「跳到命中状态」的位点探针（2026-10-16）。
-     *
-     * **按下才取**，不挂常驻监听：这条键一秒可能被按一次，而面包屑一次按键要算一次，
-     * 两者对"最新光标行"的代价口径完全不同。符号树复用面包屑那份缓存（同一棵
-     * documentSymbol 树第二次上岗；缓存判据照旧 = path + model 版本号）。
-     * 派生视图（`.kojo` 糖视图挂的是只读 model）行号不属于这份文件本身，
-     * 一律如实标 `derivedView` 并**不给符号**——不许把作者导到不存在的位置。
-     */
-    setJumpProbe(() => {
-      const ctx = focusedCtx();
-      const ed2 = ctx?.editorRef.current ?? null;
-      const path = ctx?.filePathRef.current ?? '';
-      const model = ed2?.getModel() ?? null;
-      if (!ctx || !ed2 || !path || !model) return null;
-      const line = ed2.getPosition()?.lineNumber ?? 1;
-      if (ctx.sugarModelRef.current) return { path, line, symbols: null, derivedView: true };
-      const versionId = model.getAlternativeVersionId();
-      const cache = ctx.crumbTreeCacheRef.current;
-      let symbols: EditorDocumentSymbol[];
-      if (cache && cache.path === path && cache.versionId === versionId) symbols = cache.symbols;
-      else {
-        symbols = collectDocumentSymbols(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'documentSymbol',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount: model.getLineCount(),
-        });
-        ctx.crumbTreeCacheRef.current = { path, versionId, symbols };
-      }
-      return { path, line, symbols, derivedView: false };
-    });
-    // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
-    const completionDisposer = installKojoCompletion(monaco, () => editorTables(requireKernel()));
-    // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
-    const erbCompletionDisposer = installErbCompletion(monaco, () => editorTables(requireKernel()));
-    // ERB 函数重命名（F2，2026-10-16）：判定与编辑收集全在解析器索引（`erb.parser`），
-    // 宿主只注入 monaco 拿不到的东西——活动标签判据（同 codeAction 逐字同款）、写权限
-    // （`requireKernel().io.isWritable`，与保存同源口径）、已开标签表、未打开文件的 io 落盘通道。
-    // 「查找引用」的 ERB 数据源由下方 `referenceSearchDisposer`（languageService 槽）承担；
-    // 这组 helpers 只喂重命名（ErbReferenceHandlers = 重命名 handlers）。
-    const canAnswerErb = (model: Monaco.editor.ITextModel): boolean => {
-      const ctx = owningPaneOf(model);
-      return !!ctx && !!ctx.filePathRef.current;
-    };
-    const currentIndexErb = (): ErbIndex | null => {
-      try {
-        return requireKernel().services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-      } catch {
-        return null;
-      }
-    };
-    const referencesToErb = (name: string): readonly ErbReference[] | null => {
-      try {
-        const parser = requireKernel().services.tryGet<ErbParserService>('erb.parser');
-        return parser?.referencesTo ? parser.referencesTo(name) : null;
-      } catch {
-        return null;
-      }
-    };
-    /* ---- W8 XLANG-RENAME 的宿主三条腿（接线债在此收口） ----
-     *
-     * - `applyToClosedFile`：**只用** `createApplyToClosedFile`（与搜索面板「全部替换」
-     *   共用 `rewriteClosedFile` 的同一条纪律：先闸写权限 → 现文本验证 → 零改动不写）。
-     *   宿主此前在这里手写了一份 read-modify-write，两份"怎么落盘"必然漂（W8 收口理由），
-     *   而且那份没有 `isWritable` 前置闸。`io` 按调用现取（口径与其余 handlers 逐字同款）。
-     *   **行为不变式**（W8b 取证）：闭文件已落盘时绝不返回 `rejectReason`——standalone 的
-     *   rename 控制器见 `rejectReason` 会丢弃**全部** WorkspaceEdit ⇒ 标签没改、盘上改一半。
-     *   这条纪律住在 `erb-rename.provideEdits` 的最后一道（`landedFiles` 计数），本处只搬运。
-     * - `kojoSources` / `kojoReferences`：取数在 `ui/kojo-source-scan`（枚举 + 读文 + 问槽，
-     *   **零糖语法判读**；失败一律抛 ⇒ `erb-rename` 整批拒绝，绝不只改 `.erb` 半边）。
-     */
-    const renameClosedFileIo: ClosedFileIo = {
-      isWritable: (path) => requireKernel().io.isWritable(path),
-      readText: (path) => requireKernel().io.readText(path),
-      writeText: (path, text) => requireKernel().io.writeText(path, text),
-    };
-    const erbRenameDisposer = installErbRename(monaco, {
-      canAnswer: canAnswerErb,
-      currentIndex: currentIndexErb,
-      referencesTo: referencesToErb,
-      isWritable: (path) => requireKernel().io.isWritable(path),
-      openModelFor: openModelAcrossGroups,
-      applyToClosedFile: createApplyToClosedFile(renameClosedFileIo),
-      kojoSources: () => listKojoSourceTexts(requireKernel()),
-      // 槽表**一次取**：同一次改名里两次 query 可能拿到不同的注册表（项目开闭 / 插件退场），
-      // 那会让"判读"与"枚举"面对的不是同一套供方
-      kojoReferences: (probe) => {
-        const kernel = requireKernel();
-        return kojoReferencesViaSlot(kernel.slots.query('ui.editor.languageService'), kernel, probe);
-      },
-    });
-    // 查找所有引用（R2，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别
-    // 成员。宿主只做协议翻译——认活动标签的真 model（与转到定义逐字同判据）、问槽、
-    // 把"未打开文件"那条腿的点击落回 `editor.revealLocation`（与转到定义同通道）。
-    // 引用什么算、谁在索引外，全在贡献方（ERB 由解析器答、`.kojo` 由糖线答）。
-    // 引用腿的"读数是谁家的"随 `resolve` 记录（Monaco 的 provideReferences 同步问一次、
-    // 同步出一读数 ⇒ 这一变量就是那一次请求的路径，不另开第二条通道）
-    let tallySourcePath = '';
-    const referenceSearchDisposer = installReferenceProvider(monaco, {
-      resolve: (model, position) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
-        tallySourcePath = path;
-        return collectReferenceLocations(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'references',
-          path,
-          text: model.getValue(),
-          line: position.lineNumber,
-          column: position.column,
-          project: requireKernel().project.current(),
-          lineCount: model.getLineCount(),
-        });
-      },
-      navigate: (location) => {
-        // W9 判据①：与转到定义同一个载荷出口
-        requireKernel().bus.emit(
-          'editor.revealLocation',
-          revealLocationOf(
-            { path: location.filePath, line: location.line, column: location.column, span: location.span },
-            '查找引用',
-          ),
-        );
-      },
-      openModelFor: openModelAcrossGroups,
-      // W8 台账读数：F12 的"N 处"与「被调用」面板的入边读数同源（面板读 tally.nonDefinitionCount）。
-      // 这里只**搬运**，一次都不重数——重数就是 W8 要收口的第二判据。
-      onTally: (tally, explanation) => {
-        setReferenceTally({ tally, explanation, path: tallySourcePath });
-      },
-    });
-    // 跳到实现（R3 残项，2026-10-16；W9 收口）：数据源与转到定义**同一个 `kind: 'definition'`
-    // 的取数腿**（上方 `resolveDefinitionTargets`，只问 `ui.editor.languageService` 槽）。
-    // 引擎系统函数不在任何供方的索引里 ⇒ 给不出定义位 = 不应答 = 真话"没有实现"。
-    // 三条腿（同 model 就地跳 / 已开标签 Peek / 未开文件事件通道）整个复用
-    // `planDefinitionJump` / `toDefinitionLinks` / `clampRevealPosition`——宿主一行取数都不做，
-    // `canAnswer` / `currentIndex` 随旧的 byName 直读一起删（那是第二份计算）。
-    const implementationDisposer = installImplementationProvider(monaco, {
-      resolve: resolveDefinitionTargets,
-      navigate: (location) => {
-        // W9 判据①：与转到定义同一个载荷出口
-        requireKernel().bus.emit(
-          'editor.revealLocation',
-          revealLocationOf(
-            { path: location.filePath, line: location.line, column: location.column, span: location.span },
-            '跳到实现',
-          ),
-        );
-      },
-      openModelFor: openModelAcrossGroups,
-      pathForUri: pathForUriAcrossGroups,
-    });
-    // `.kojo` 用户函数改名（R1，2026-10-16）：同一枚槽的第八个判别成员。ERB 方言不归它
-    // 管（全项目改名走上面 `erbRenameDisposer` 的专用通道）；`.kojo` 的判定（可证明引用面
-    // + 整卷复核）全在糖线，宿主只做 Monaco 协议翻译与落地前的现文本验证（模块头注）。
-    const kojoRenameDisposer = installKojoRename(monaco, {
-      canAnswer: (model) => {
-        const ctx = owningPaneOf(model);
-        return !!ctx && !!ctx.filePathRef.current;
-      },
-      resolve: (model, position, newName) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx || !ctx.filePathRef.current) {
-          return { edits: [], rejectReason: '当前视图不参与重命名（请在原文视图内按 F2）' };
-        }
-        const path = ctx.filePathRef.current;
-        for (const contribution of requireKernel().slots.query('ui.editor.languageService')) {
-          let result: ReturnType<typeof contribution.provide>;
-          try {
-            result = contribution.provide({
-              kind: 'rename',
-              path,
-              text: model.getValue(),
-              line: position.lineNumber,
-              column: position.column,
-              newName,
-              project: requireKernel().project.current(),
-              lineCount: model.getLineCount(),
-            });
-          } catch (e: unknown) {
-            console.warn(
-              `[kojo-rename] '${contribution.id}' provide 抛错：${e instanceof Error ? e.message : String(e)}`,
-            );
-            continue;
-          }
-          if (result && result.kind === 'rename') {
-            return { edits: result.edits, ...(result.oldName !== undefined ? { oldName: result.oldName } : {}), ...(result.rejectReason !== undefined ? { rejectReason: result.rejectReason } : {}) };
-          }
-        }
-        return { edits: [], rejectReason: '「.kojo」改名只认本文件「函数」块声明的名字（语言服务未应答这处请求）' };
-      },
-    });
-    // 文档格式化（E1，`Shift+Alt+F`）：规则全在插件（`computeFormatEdits` 纯函数），宿主只做
-    // 协议翻译。应答判据与 codeAction / 转到定义逐字同款：只认**当前活动标签的真 model**——
-    // 糖视图挂着只读派生 model，格式化它改的不是真文件，所以一律不应答。
-    const formatResolve: FormatHandlers = {
-      resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return null;
-        const path = ctx.filePathRef.current;
-        if (!path) return null;
-        const dialect = dialectForLanguage(model.getLanguageId());
-        return dialect === null ? null : { text: model.getValue(), dialect };
-      },
-    };
-    const formatterDisposer = installDocumentFormatter(monaco, formatResolve);
-    // 选区格式化 + 打字规范化（T13）：同一份 resolve、同一份规则核心，只多一层行裁剪（ERB 语言）
-    const rangeFormatterDisposer = installRangeFormatter(monaco, formatResolve);
-    // 行上内联注解（B8，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第五个判别成员。
-    // 宿主在这里做的事只有四件：认活动标签的**真** model、把体量/预算两档降级判掉、问槽、
-    // 把点击落到**既有**的 `editor.revealLocation` 通道（不新造第二套跳转，与转到定义同腿）。
-    // 注解说什么（"被 N 处用到"、何时不说、大数为什么说 `1000+`）全在贡献方，宿主零判定——
-    // 分工与取舍见 `monaco/kojo-code-lens.ts` 与 `plugins/erb-parser/src/usage-lens.ts` 头注。
-    //
-    // **开关不在这儿**：那是 Monaco 的 `codeLens` 编辑器选项，由下面那条独立的偏好 effect
-    // 落地（关掉时 Monaco 根本不发请求，省掉一次整篇解析）。
-    const codeLensDisposer = installCodeLensProvider(monaco, {
-      resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
-        const lineCount = model.getLineCount();
-        // 大文件档：先于请求判掉（一次开口就是整篇文档的解析，实测读数见宿主模块头注）
-        if (!codeLensAffordable(lineCount)) return [];
-        const lenses = collectCodeLenses(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'codeLens',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount,
-        });
-        // 产出预算：**全有或全无**（缺席携带语义，不许用来表示"额度用完了"）
-        return withinCodeLensBudget(lenses.length, lineCount) ? lenses : [];
-      },
-      navigate: (target) => {
-        // W9 判据①：注解的落点区间原样穿过命令参数到达这里，载荷仍由同一个出口构造
-        requireKernel().bus.emit(
-          'editor.revealLocation',
-          revealLocationOf(
-            { path: target.filePath, line: target.line, column: target.column, span: target.span },
-            '行上注解',
-          ),
-        );
-      },
-    });
-    // 行内提示（LS-R6，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别成员。
-    // 应答判据与 codeLens 逐字同款：只认活动标签的真 model（糖视图挂的是只读派生 model，
-    // 它的行列不属于原文），体量档 `inlayHintsAffordable` 判在请求之前（52,602 行实测
-    // 50ms/次，档线与 stickyScroll / 面包屑 / codeLens 同一条）。提示说什么（实参落
-    // 哪个形参槽）全在 erb-parser（`erb-inlay-hints`），宿主零判据——取舍见
-    // `monaco/kojo-inlay-hints.ts` 与 `plugins/erb-parser/src/inlay-hints.ts` 头注。
-    const inlayHintsDisposer = installInlayHintsProvider(monaco, {
-      resolve: (model) => {
-        const ctx = owningPaneOf(model);
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
-        const lineCount = model.getLineCount();
-        if (!inlayHintsAffordable(lineCount)) return [];
-        return collectInlayHints(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'inlayHint',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount,
-        });
-      },
-    });
-
-  globalDisposers.push(
-    cmdDisposer,
-    providerDisposer,
-    hoverDisposer,
-    definitionDisposer,
-    symbolsDisposer,
-    signatureDisposer,
-    foldingDisposer,
-    semanticDisposer,
-    completionDisposer,
-    erbCompletionDisposer,
-    erbRenameDisposer,
-    referenceSearchDisposer,
-    implementationDisposer,
-    kojoRenameDisposer,
-    formatterDisposer,
-    rangeFormatterDisposer,
-    codeLensDisposer,
-    inlayHintsDisposer,
-  );
-}
-
-function disposeGlobalProviders(): void {
-  for (const d of globalDisposers) d.dispose();
-  globalDisposers.length = 0;
-  globalsInstalled = false;
-  lastWordsKey = '__unset__';
-}
-
-function requireKernel(): Kernel {
-  if (!globalKernel) throw new Error('[EditorPane] 全局 provider 在无实例时被调用（不应发生）');
-  return globalKernel;
-}
-
-/** 跨组反查：哪组的活动编辑器正显示这份 model（糖 model 是派生物，无主 → null） */
-function owningPaneOf(model: Monaco.editor.ITextModel): PaneCtx | null {
-  for (const ctx of livePanes.values()) {
-    const ed = ctx.editorRef.current;
-    if (!ed || ed.getModel() !== model) continue;
-    return ctx.sugarModelRef.current === model ? null : ctx;
-  }
-  return null;
-}
-
-function focusedCtx(): PaneCtx | null {
-  const focused = focusedPaneId ? livePanes.get(focusedPaneId) : undefined;
-  return focused ?? livePanes.values().next().value ?? null;
-}
-
-/**
- * 跨组版「目标文件是否已开着」（原单实例版经 `matchOpenedPath` 找回宿主键，HK-7）：
- * 任一组的打开表命中即返回那份共享 model——Peek / 重命名 / 引用的跨文件腿由此看见
- * 另一组开着的文件。
- */
-function openModelAcrossGroups(filePath: string): Monaco.editor.ITextModel | undefined {
-  for (const ctx of livePanes.values()) {
-    const key = matchOpenedPath(ctx.entriesRef.current.keys(), filePath);
-    if (key) return ctx.entriesRef.current.get(key)?.model;
-  }
-  return undefined;
-}
-
-/** 跨组版 URI → 宿主路径（Monaco opener 反查）：遍历全部组的打开表 */
-function pathForUriAcrossGroups(uri: string): string | undefined {
-  for (const ctx of livePanes.values()) {
-    for (const [path, entry] of ctx.entriesRef.current) {
-      if (entry.model.uri.toString() === uri) return path;
-    }
-  }
-  return undefined;
-}
-
 
 /**
  * A10：保存互斥从"组件实例一把全局锁"降为 **per-path 锁**，且提到模块级共享——
@@ -2073,11 +1316,10 @@ export function EditorPane({
       bootEditorMarked = true;
       perf.bootMark('boot.editorInteractive', undefined, '自导航起点 ms；Monaco 实例创建完成（近似：已挂载可输入）');
     }
-    // SPLIT-1：本实例登记进模块注册表——全局 provider 只注册一份（ensureGlobalProviders
-    // 内部有门），各 provider 的 resolve 经 `owningPaneOf(model)` 找归属实例再读它的 ref。
-    const paneId = `pane-${++paneSeq}`;
-    livePanes.set(paneId, {
-      paneId,
+    // SPLIT-1：本实例登记进模块登记簿——交出去的是组件持有的**同一批 ref 壳**（复制 ref 就是
+    // 让 provider 读影子）。全局 provider 只注册一份（ensureGlobalProviders 内部有门），各
+    // provider 的 resolve 经 `owningPaneOf(model)` 找归属实例再读它的 ref。
+    const paneId = registerPane({
       editorRef,
       entriesRef,
       filePathRef,
@@ -2086,8 +1328,7 @@ export function EditorPane({
       actionSeqRef,
       crumbTreeCacheRef,
     });
-    if (focusedPaneId === null) focusedPaneId = paneId; // 首个实例即焦点（与宿主初始焦点组同源）
-    globalKernel = kernel; // 单 kernel 应用：全局 provider 的 kernel 来源随最新实例刷新
+    setGlobalKernel(kernel); // 单 kernel 应用：全局 provider 的 kernel 来源随最新实例刷新
     ensureGlobalProviders();
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveRef.current();
@@ -2119,7 +1360,7 @@ export function EditorPane({
     const fontZoomSync = monaco.editor.EditorZoom.onDidChangeZoomLevel((level) => setFontZoomPref(level));
     // 焦点上抛（SPLIT-1）：编辑器聚焦 ⇒ 宿主把焦点组切到本组（点哪组哪组成为焦点组）
     const focusDisposer = ed.onDidFocusEditorText(() => {
-      focusedPaneId = paneId; // 模块级焦点随编辑器焦点走（跳转探针读"最后聚焦的实例"）
+      setPaneFocused(paneId); // 模块级焦点随编辑器焦点走（跳转探针读"最后聚焦的实例"）
       onFocusedRef.current?.();
     });
     // 面包屑（D1，宿主自绘——standalone Monaco 无面包屑 API，取证见 `breadcrumb-path.ts`）。
@@ -2207,9 +1448,9 @@ export function EditorPane({
       window.removeEventListener('beforeunload', flushViewOnUnload);
       crumbRefreshRef.current = null;
       // SPLIT-1：本实例退册；全局 provider 属于"活实例集合"，最后一个实例退场才拆
-      livePanes.delete(paneId);
-      if (focusedPaneId === paneId) focusedPaneId = livePanes.keys().next().value ?? null;
-      if (livePanes.size === 0) {
+      // （unregisterPane 只退册并回答"是不是最后一个"；拆毁顺序不许动：provider → 跳转探针
+      //  → 问题汇总，且整段都在 clearSugarView / ed.dispose 之前）
+      if (unregisterPane(paneId)) {
         disposeGlobalProviders();
         setJumpProbe(null);
         clearAllProblems(); // 清掉全部文件的问题，防幽灵诊断残留
@@ -2262,33 +1503,21 @@ export function EditorPane({
     return un;
   }, [kernel]);
 
-  // Monarch directive 词表同源化（T5）：adapter 指令表可用时，词表 = 基底 `ERB_DIRECTIVES`
-  // ∪ `instructionTable.names()`（合并去重排序见 `mergeDirectiveWords` 纯函数）；表缺席 ⇒ 基底。
-  // **项目切换不残留上一项目的词表**：`project.closed` / 卸载一律回基底（与 hover 的
-  // "表随项目现取"同一纪律）；重设时 dispose 旧 provider（`setErbDirectiveWords` 内置）。
+  // Monarch directive 词表同源化（T5）：判据（基底 ∪ 当前项目 adapter 的指令表、等值去重、
+  // 回基底）与实例引用计数都住在 `editor-global-providers.ts`——词表喂的是全局那一份 `.erb`
+  // language provider，计数留两处必漂（**项目切换不残留上一项目的词表**：`project.closed` /
+  // 卸载一律回基底，与 hover 的"表随项目现取"同一纪律）。本 effect 只剩实例侧三件事：
+  // 成对计数 + 两个项目事件的触发点。
   useEffect(() => {
-    // SPLIT-1：Monarch 词表是模块级资源（provider 全局一份），按实例数引用计数——
-    // 首个实例挂上、最后一个实例退场才回基底；双实例时事件触发的第二次 apply
-    // 被等值去重挡掉（不重复 dispose/重建 provider）。
-    erbWordsUsers += 1;
-    const applyForCurrentAdapter = (): void => {
-      const names = editorTables(kernel).instructionTable?.names?.() ?? null;
-      const key = names ? names.join('\u0000') : '';
-      if (key === lastWordsKey) return;
-      lastWordsKey = key;
-      setErbDirectiveWords(monaco, names === null ? null : mergeDirectiveWords(ERB_DIRECTIVES, names));
-    };
+    acquireDirectiveWords();
+    const applyForCurrentAdapter = (): void => applyDirectiveWords(kernel);
     applyForCurrentAdapter();
     const offOpened = kernel.bus.on('project.opened', () => applyForCurrentAdapter());
     const offClosed = kernel.bus.on('project.closed', () => applyForCurrentAdapter());
     return () => {
       offOpened();
       offClosed();
-      erbWordsUsers -= 1;
-      if (erbWordsUsers === 0) {
-        setErbDirectiveWords(monaco, null);
-        lastWordsKey = '__unset__';
-      }
+      releaseDirectiveWords();
     };
   }, [kernel]);
 

@@ -1,0 +1,598 @@
+import { type ReactElement } from 'react';
+import { MARKET_DEFAULT_INDEX_URL } from '@kojo/plugin-api';
+import type { LayoutAction } from './layout';
+import { setSealed } from './sealed';
+import { setDirectMode } from './direct-mode';
+import { setPanelVirtualize } from './panel-prefs';
+import { setNameColorPref } from './semantic-color-pref';
+import { AUTOSAVE_IDLE_MS, setAutosavePref, type AutosaveMode } from './autosave-pref';
+import {
+  FONT_SIZE_DEFAULT,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  FONT_ZOOM_DEFAULT,
+  resetFontZoomPref,
+  stepFontSizePref,
+} from './font-size-pref';
+import type { MotionPref } from './motion-pref';
+import {
+  GLASS_TRANSPARENCY_DEFAULT,
+  GLASS_TRANSPARENCY_MAX,
+  GLASS_TRANSPARENCY_MIN,
+  GLASS_TRANSPARENCY_STEP,
+  stepGlassTransparencyPref,
+} from './glass-pref';
+import { THEME_IDS, setThemePref, type ThemePref } from './theme-pref';
+import {
+  hintClassFor,
+  isDraftNoop,
+  sourceRowUi,
+  type MarketSourceView,
+} from './market-source';
+import { isUpdateBusy, type UpdatePhase, type UpdateStatusTone } from './update-check';
+import { Icon } from './icons';
+import { Switch } from './Switch';
+
+/** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
+const THEME_LABELS: Record<ThemePref, string> = {
+  dark: '深色',
+  light: '浅色',
+  'mint-dark': '薄荷',
+};
+
+/**
+ * 设置浮层的入参（2026-10-17 FE-REF 拆分批：随设置页 markup 一起从 `ShellLayout.tsx` 搬出）。
+ *
+ * **这里只有值与回调，没有状态**：设置页各项偏好的镜像值（含「开面板时重读一次」那几个
+ * effect）全部留在常驻的 `ShellLayout` 里——本组件是条件挂载的浮层，把状态搬进来就等于
+ * 改动偏好的读写时机（铁律级别的行为差异）。写偏好、发意图事件同样走 `ShellLayout` 的
+ * 既有回调，本组件只负责排版。
+ */
+export interface SettingsPanelProps {
+  /** 关闭浮层：遮罩点击与页脚「完成」共用这一个入口（开关真源仍是壳层的 settingsOpen） */
+  onClose: () => void;
+
+  /* ---- 视图 / 布局带 ---- */
+  /** 写作模式（禅态）：切换与退出都派发 layout reducer，本组件不另存一份 */
+  zen: boolean;
+  zenLimitWidth: boolean;
+  dispatch: (action: LayoutAction) => void;
+  /** 「重置布局」：清持久化并回落默认编排（真源是壳层的 doReset） */
+  onResetLayout: () => void;
+
+  /* ---- 外观带 ---- */
+  themePref: ThemePref;
+  motionPref: MotionPref;
+  commitMotionPref: (pref: MotionPref) => void;
+  panelVirtualize: boolean;
+  glassTransparency: number;
+
+  /* ---- 封存功能带（总闸读数） ---- */
+  sealed: boolean;
+
+  /* ---- 编辑器带 ---- */
+  nameColorOn: boolean;
+  fontSize: number;
+  fontZoom: number;
+  sugarViewOn: boolean;
+  applySugarViewPref: (on: boolean) => void;
+  formatOnSave: boolean;
+  commitFormatOnSave: (on: boolean) => void;
+  codeLensOn: boolean;
+  commitCodeLens: (on: boolean) => void;
+  autosaveMode: AutosaveMode;
+  directMode: boolean;
+
+  /* ---- 口上市场带 ---- */
+  marketSource: MarketSourceView | null;
+  marketEndpointDraft: string;
+  setMarketEndpointDraft: (value: string) => void;
+  saveMarketEndpoint: () => Promise<void>;
+  /** 「恢复默认」：壳层侧走既有 reset 通路后回写读数与草稿框 */
+  resetMarketEndpoint: () => Promise<void>;
+
+  /* ---- 更新带 ---- */
+  appVersion: string | null;
+  updatePhase: UpdatePhase;
+  updateStatusLine: { text: string; tone: UpdateStatusTone } | null;
+  runUpdateCheck: () => Promise<void>;
+  installUpdate: () => Promise<void>;
+}
+
+/**
+ * 设置浮层（壳层私有，不经 `ui.overlay` 槽——设置项全是容器与显示语义）。
+ *
+ * 三段带（抬头 / 滚动区 / 页脚）与九组条目的文案、class、结构逐行照搬自 `ShellLayout`，
+ * 本文件不含任何状态与副作用：它是纯呈现层，偏好读写时机仍由壳层那批 always-mounted 的
+ * effect 决定。
+ */
+export function SettingsPanel({
+  onClose,
+  zen,
+  zenLimitWidth,
+  dispatch,
+  onResetLayout,
+  themePref,
+  motionPref,
+  commitMotionPref,
+  panelVirtualize,
+  glassTransparency,
+  sealed,
+  nameColorOn,
+  fontSize,
+  fontZoom,
+  sugarViewOn,
+  applySugarViewPref,
+  formatOnSave,
+  commitFormatOnSave,
+  codeLensOn,
+  commitCodeLens,
+  autosaveMode,
+  directMode,
+  marketSource,
+  marketEndpointDraft,
+  setMarketEndpointDraft,
+  saveMarketEndpoint,
+  resetMarketEndpoint,
+  appVersion,
+  updatePhase,
+  updateStatusLine,
+  runUpdateCheck,
+  installUpdate,
+}: SettingsPanelProps): ReactElement {
+  return (
+    <div className="overlay-backdrop" onMouseDown={() => onClose()}>
+      <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="wizard">
+          <h3 className="settings-title">设置</h3>
+
+          {/* 三段带：抬头与页脚 flex:none 永不滚走，只有这一列在滚（样式见 .settings-body） */}
+          <div className="settings-body">
+          <div className="settings-group">
+            <div role="heading" aria-level={4} className="settings-group-title">视图</div>
+            <label className="settings-row">
+              <Switch
+                checked={zen}
+                onChange={(c) => dispatch(c ? { type: 'toggleZen' } : { type: 'exitZen' })}
+                label="写作模式"
+              />
+              <span>
+                写作模式
+                <span className="settings-hint">收起所有面板，只留编辑器。快捷键 Ctrl+K Z，Esc 退出</span>
+              </span>
+            </label>
+            {/* 居中限宽只在写作模式下有意义——非写作模式时它**什么都控制不了**，
+                所以不是"灰着好看"，而是不给一个点了没反应的控件。 */}
+            <label className={`settings-row nested${zen ? '' : ' off'}`}>
+              <Switch
+                checked={zenLimitWidth}
+                disabled={!zen}
+                onChange={(c) => dispatch({ type: 'setZenLimitWidth', value: c })}
+                label="编辑器居中限宽"
+              />
+              <span>
+                编辑器居中限宽
+                <span className="settings-hint">
+                  {zen
+                    ? '按一行正文的舒适宽度收拢；关闭则铺满整个窗口'
+                    : '需要先开启写作模式'}
+                </span>
+              </span>
+            </label>
+          </div>
+
+          {/* 动效（UI-5）：应用内的降噪开关，独立于系统级 prefers-reduced-motion */}
+          <div className="settings-group">
+            <div role="heading" aria-level={4} className="settings-group-title">外观</div>
+            {/* 主题（2026-10-17 主题系统）：分段单选，缺省深色。翻档即写 data-theme、
+                全场 token 当场重算（与动效/毛玻璃同款即时生效），只改显示、不动文件。 */}
+            <div className="settings-row static">
+              <span className="theme-segment" role="radiogroup" aria-label="主题">
+                {THEME_IDS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={themePref === id}
+                    className={`theme-seg-btn${themePref === id ? ' on' : ''}`}
+                    onClick={() => setThemePref(id)}
+                  >
+                    {THEME_LABELS[id]}
+                  </button>
+                ))}
+              </span>
+              <span>
+                主题
+                <span className="settings-hint">深色为缺省（蓝灰），另有浅色、薄荷暗色；一翻即全场生效，只改显示、不动文件</span>
+              </span>
+            </div>
+            <label className="settings-row">
+              <Switch
+                checked={motionPref === 'reduced'}
+                onChange={(c) => commitMotionPref(c ? 'reduced' : 'full')}
+                label="减弱动效"
+              />
+              <span>
+                减弱动效
+                <span className="settings-hint">收起面板过渡与入场动画，界面切换更干脆。系统级「减弱动效」设置仍会照常生效</span>
+              </span>
+            </label>
+            {/* 面板渲染偏好（panel-prefs.ts，2026-10-14 面板偏好批）：与「减弱动效」同组、
+                一直可见（不随封存总闸收起——它是稳定可用的渲染选项，不是试用中的功能）。 */}
+            <label className="settings-row">
+              <Switch checked={panelVirtualize} onChange={setPanelVirtualize} label="长列表视口化" />
+              <span>
+                长列表视口化
+                <span className="settings-hint">
+                  只渲染屏幕上看得到的行（滚出即撤、滚入即建）：大角色首次打开不再有一次性卡顿。关掉则一次全渲染。
+                </span>
+              </span>
+            </label>
+            {/* 毛玻璃透明度（glass-pref.ts）：与字号步进器同款排版（− 读数 ＋）。透明度越高，
+                浮层与教程目录越通透；调到 0% 即实心档，撤掉磨砂回到不透明面。只改显示、不动文件。 */}
+            <div className="settings-row static" role="group" aria-label="毛玻璃透明度">
+              <span className="settings-stepper">
+                <button
+                  className="ghost small"
+                  onClick={() => stepGlassTransparencyPref(-1)}
+                  disabled={glassTransparency <= GLASS_TRANSPARENCY_MIN}
+                  title="更实心"
+                  aria-label="降低毛玻璃透明度"
+                >
+                  −
+                </button>
+                <span className="settings-stepper-value">{glassTransparency}%</span>
+                <button
+                  className="ghost small"
+                  onClick={() => stepGlassTransparencyPref(1)}
+                  disabled={glassTransparency >= GLASS_TRANSPARENCY_MAX}
+                  title="更通透"
+                  aria-label="提高毛玻璃透明度"
+                >
+                  ＋
+                </button>
+              </span>
+              <span>
+                毛玻璃透明度
+                <span className="settings-hint">
+                  浮层与教程目录的磨砂通透程度，默认 {GLASS_TRANSPARENCY_DEFAULT}%（每档 {GLASS_TRANSPARENCY_STEP}%）。
+                  调到 0% 即实心、关掉磨砂。只改显示、不动文件
+                </span>
+              </span>
+            </div>
+          </div>
+
+          {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：两只暂不投入的面板整体封存，
+              设置页只留这一个总开关；勾选 = 临时恢复（代码未删，随时可以再关）。
+              管辖清单只有 `SEALED_PANEL_IDS` 上那两个 id——「.kojo 预览」已交付为常态功能，
+              2026-10-14 起不在其内（它的开关常驻下面那个「编辑器」组，不随本总闸收起）。 */}
+          <div className="settings-group">
+            <div role="heading" aria-level={4} className="settings-group-title">封存功能</div>
+            <label className="settings-row">
+              <Switch checked={!sealed} onChange={(c) => setSealed(!c)} label="显示已封存功能" />
+              <span>
+                显示已封存功能
+                <span className="settings-hint">
+                  .kojo 转译检查 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。
+                </span>
+              </span>
+            </label>
+          </div>
+
+          {/* 「编辑器」组不再随总闸收起：这一组里的 .kojo 预览是已交付的常态功能，
+              默认关 ⇒ 这一行（连同快捷键 Ctrl+Alt+T）就是它的正式入口。 */}
+          <div className="settings-group">
+            <div role="heading" aria-level={4} className="settings-group-title">编辑器</div>
+            {/* 字号 / 缩放（A1）：真源与钳制在 font-size-pref.ts，这里只排版。
+                禁用位 = 已到量程两端，与「没改动⇒按钮不可点」同一房规。 */}
+            <div className="settings-row static" role="group" aria-label="正文字号">
+              <span className="settings-stepper">
+                <button
+                  className="ghost small"
+                  onClick={() => stepFontSizePref(-1)}
+                  disabled={fontSize <= FONT_SIZE_MIN}
+                  title="减小字号"
+                  aria-label="减小字号"
+                >
+                  −
+                </button>
+                <span className="settings-stepper-value">{fontSize} px</span>
+                <button
+                  className="ghost small"
+                  onClick={() => stepFontSizePref(1)}
+                  disabled={fontSize >= FONT_SIZE_MAX}
+                  title="增大字号"
+                  aria-label="增大字号"
+                >
+                  ＋
+                </button>
+              </span>
+              <span>
+                正文字号
+                <span className="settings-hint">
+                  编辑器里一行字的大小，默认 {FONT_SIZE_DEFAULT}。只改显示、不动文件
+                </span>
+              </span>
+            </div>
+            <div className="settings-row static">
+              <button className="ghost small" onClick={resetFontZoomPref} disabled={fontZoom === FONT_ZOOM_DEFAULT}>
+                重置缩放
+              </button>
+              <span>
+                文字缩放（当前 {100 + fontZoom * 10}%）
+                <span className="settings-hint">
+                  Ctrl+= 放大一档、Ctrl+- 缩小一档（每档 10%）、Ctrl+0 复原；缩放叠在字号上，两者都会记住
+                </span>
+              </span>
+            </div>
+            <label className="settings-row">
+              <Switch checked={sugarViewOn} onChange={applySugarViewPref} label=".kojo 预览" />
+              <span>
+                .kojo 预览
+                <span className="settings-hint">
+                  把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
+                  只改显示、不改动文件。默认关；快捷键 Ctrl+Alt+T
+                </span>
+              </span>
+            </label>
+            {/* 保存时整理空白（E2，2026-10-15 格式化批）：手动版是 Shift+Alt+F，本开关
+                只是把同一次整理挂到保存前。默认关的理由写在 `format-pref.ts`：改的正是空白，
+                而语料里的全角空格多数是有意的排版。文案回避内部术语（不上「糖」字）。 */}
+            <label className="settings-row">
+              <Switch checked={formatOnSave} onChange={commitFormatOnSave} label="保存时整理空白" />
+              <span>
+                保存时整理空白
+                <span className="settings-hint">
+                  存盘前把行首与注释里的全角空格折成半角、统一 .kojo 的缩进写法。
+                  台词正文、行尾风格与文件编码都不动；整理是一次可撤销的改动。默认关，
+                  手动整理随时可用 Shift+Alt+F
+                </span>
+              </span>
+            </label>
+            {/* 行上内联注解（B8，2026-10-16）：往正文里插行的能力，默认关的理由写在
+                `code-lens-pref.ts`。文案刻意不上「CodeLens / 反向索引」这类机器词，
+                并且把"没标注 ≠ 没人用"这条最容易读反的口径当场说清（铁律 4：不静默、也不误导）。 */}
+            <label className="settings-row">
+              <Switch checked={codeLensOn} onChange={commitCodeLens} label="标注函数被谁调用" />
+              <span>
+                标注函数被谁调用
+                <span className="settings-hint">
+                  在函数开头那一行的上方写一句「被 N 处用到」，点一下跳到第一处用到它的地方；满项目都在用的系统函数写作「1000+」。
+                  没找到出处的函数不写这一句——那只代表编辑器证明不了，不代表真的没人调用。
+                  太长或函数太密的文件整份不标注。只改显示、不动文件；默认关
+                </span>
+              </span>
+            </label>
+            {/* 结构化着色（B6，2026-10-16）：判据来自解析器而不是正则，宿主只翻译协议。
+                文案按本仓口径去黑话——不写「语义高亮 / semantic token」，写作者看得懂的效果。
+                默认关的理由见 `semantic-color-pref.ts`：它会顶掉作者看惯的词法配色。 */}
+            <label className="settings-row">
+              <Switch checked={nameColorOn} onChange={setNameColorPref} label="定义与调用的名字分色" />
+              <span>
+                定义与调用的名字分色
+                <span className="settings-hint">
+                  同一个函数名，在「它被定义的那一行」与「它被调用的地方」显示成两种颜色；
+                  .kojo 里的函数、别名、常量名字同理。只改显示、不动文件；
+                  超过 5,000 行的文件不生效（与粘性滚动同一档降级）。默认关
+                </span>
+              </span>
+            </label>
+            {/* 自动保存（A6，2026-10-20）：写盘只复用既有 save 一条路（全局互斥 + 写允许域闸门）；
+                默认关的理由 = 游戏目录是部署目标，静默写盘必须是显式选择。护栏见 autosave-pref.decideAutosave。 */}
+            <label className="settings-row">
+              <Switch
+                checked={autosaveMode === 'afterDelay'}
+                onChange={(c) => setAutosavePref(c ? 'afterDelay' : 'off')}
+                label="自动保存"
+              />
+              <span>
+                自动保存
+                <span className="settings-hint">
+                  当前标签停手 {AUTOSAVE_IDLE_MS / 1000} 秒后自动落盘，走的是与 Ctrl+S 完全同一条保存路（同样的写权限闸、保存告警、外部改动确认）。
+                  有未决的保存告警 / 外部改动、或正显示 .kojo 预览时**不会**自动存。默认关
+                </span>
+              </span>
+            </label>
+          </div>
+
+          {/* 直连模式开关：仍经封存总闸控制——封存态不渲染（本功能尚未交付为常态） */}
+          {!sealed ? (
+            <div className="settings-group">
+              <div role="heading" aria-level={4} className="settings-group-title">游戏目录写入</div>
+              <label className="settings-row">
+                <Switch checked={directMode} onChange={setDirectMode} label="直连模式（就地编辑游戏目录）" />
+                <span>
+                  直连模式（就地编辑游戏目录）
+                  <span className="settings-hint">
+                    开启后，游戏目录里已获写权限的 .ERB 视为可直接编辑，不再逐个文件询问。写保护不变：写权限仍只来自你批准的可写目录。
+                  </span>
+                </span>
+              </label>
+            </div>
+          ) : null}
+
+          {/* 口上市场：注册表来源（KM-9）。**只有一个可编辑项**——代理既不做输入框也不做开关
+              （受众大多没有代理客户端；且 JS 递进来的代理等于把白名单作废，见 market-source.ts）。
+              这一组的每条判据（能不能保存、显示哪句话、三态着色）都住在 `market-source.ts`；
+              这里只做排版。派生量算不出来就得重复调纯函数，所以整组包在一个本地作用域里——
+              上面的 state 块不属于本行的改动范围，故用 IIFE 把 `row`/`canSave` 关在这段内。 */}
+          {(() => {
+            const row = sourceRowUi(marketSource);
+            const canSave = row.canEdit && !isDraftNoop(marketEndpointDraft, row.address);
+            return (
+              <div className="settings-group">
+                <div role="heading" aria-level={4} className="settings-group-title">口上市场</div>
+
+                {/* 生效地址是**读数**，不是占位符：默认态也把那串地址摊开给人看（可复制、长串折行）。
+                    不加 `<a>`、不冒充链接——这不是"点出去看看"的东西，是"我现在用的是哪一个"。
+                    折行与收缩这两条只能就地写：样式表此刻由另一条线在改，本行不越界（见 §分工边界）。 */}
+                <div className="settings-row static">
+                  <span style={{ minWidth: 0 }}>
+                    包列表来源
+                    <span className={hintClassFor(row.statusTone)}>{row.statusText}</span>
+                    {row.address !== '' ? (
+                      <span className="settings-hint" style={{ overflowWrap: 'anywhere' }} title={row.address}>
+                        {row.address}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+
+                {/* 草稿行：填的是"改成别的地址"，不是当前值的复读机；Tab 顺序 = 草稿框 → 保存 → 恢复默认 */}
+                <div className={`settings-row static has-field${row.canEdit ? '' : ' off'}`}>
+                  <input
+                    className="settings-text"
+                    type="url"
+                    value={marketEndpointDraft}
+                    placeholder={MARKET_DEFAULT_INDEX_URL}
+                    spellCheck={false}
+                    aria-label="改成别的包列表地址"
+                    disabled={!row.canEdit}
+                    onChange={(e) => setMarketEndpointDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && canSave) void saveMarketEndpoint();
+                    }}
+                  />
+                  <span>
+                    改成别的地址
+                    <span className="settings-hint">
+                      填一个新地址再点「保存」；不填就什么都不改。下载走系统网络设置，这里没有开关
+                    </span>
+                  </span>
+                  {/* 没改动 ⇒ 按钮本身不可点：禁用态就是"没什么可保存"最直白的表达，不用点完才知道 */}
+                  <button
+                    className="ghost small"
+                    disabled={!canSave}
+                    onClick={() => void saveMarketEndpoint()}
+                  >
+                    保存
+                  </button>
+                  {/* 覆盖态才出现的显式退路：点它 = 走既有 reset 通路回到默认，作者不必再猜"清空再保存" */}
+                  {row.showReset ? (
+                    <button
+                      className="ghost small"
+                      onClick={() => void resetMarketEndpoint()}
+                    >
+                      恢复默认
+                    </button>
+                  ) : null}
+                </div>
+
+                {/* 回执独立成行、三态着色：成功、无改动、失败一眼能分，不再淹在说明文字的尾巴里 */}
+                {row.note !== '' ? (
+                  <div className="settings-row static">
+                    <span className={hintClassFor(row.noteTone)} role="status">
+                      {row.note}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })()}
+
+          <div className="settings-group">
+            <div role="heading" aria-level={4} className="settings-group-title">布局</div>
+            <div className="settings-row static">
+              <button className="ghost small" onClick={onResetLayout}>
+                重置布局
+              </button>
+              <span>
+                恢复默认的面板位置、尺寸与显隐
+                <span className="settings-hint">不影响任何文件内容</span>
+              </span>
+            </div>
+          </div>
+
+          {/* 检查更新（REL-1 收尾 · REL-2）：状态机在 update-check.ts，行内三态而非弹窗。
+              当前仓库尚未发布过 release，check() 现阶段必然 404——失败态是常态路径，
+              必须可见可重试（见 runUpdateCheck 的 try-catch），绝不让按钮抛未捕获异常。 */}
+          <div className="settings-group">
+            <div role="heading" aria-level={4} className="settings-group-title">更新</div>
+            <div className="settings-row static">
+              <button
+                className="ghost small"
+                onClick={runUpdateCheck}
+                disabled={isUpdateBusy(updatePhase)}
+              >
+                {updatePhase.kind === 'checking' ? '检查中…' : '检查更新'}
+              </button>
+              <span>
+                当前版本 {appVersion !== null ? `v${appVersion}` : '未知'}
+                {updateStatusLine ? (
+                  <span
+                    className={
+                      updateStatusLine.tone === 'ok'
+                        ? 'settings-hint is-ok'
+                        : updateStatusLine.tone === 'err'
+                          ? 'settings-hint is-err'
+                          : 'settings-hint'
+                    }
+                  >
+                    {updateStatusLine.text}
+                  </span>
+                ) : null}
+              </span>
+            </div>
+            {updatePhase.kind === 'found' ? (
+              <div className="settings-row static">
+                <button className="primary small" onClick={installUpdate}>
+                  下载并安装 v{updatePhase.version}
+                </button>
+                <span>
+                  发现新版本 v{updatePhase.version}
+                  <span className="settings-hint">下载安装完成后，重启应用生效</span>
+                </span>
+              </div>
+            ) : null}
+          </div>
+
+          {/* 关于（REL-2）：开发者联系卡 + 意见反馈。外链用原生 <a target="_blank">——
+              项目未装 opener/shell 插件，WebView2 会把新窗口请求交给系统默认浏览器，
+              不为这事新增 Rust 依赖（最小改动面）。头像直接引 GitHub 头像端点。 */}
+          <div className="settings-group">
+            <div role="heading" aria-level={4} className="settings-group-title">关于</div>
+            <a
+              className="settings-row settings-link"
+              href="https://github.com/Poboking"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <img
+                className="settings-avatar"
+                src="https://github.com/Poboking.png"
+                alt=""
+                width={32}
+                height={32}
+              />
+              <span>
+                Poboking
+                <span className="settings-hint">开发者 · GitHub 主页</span>
+              </span>
+              <Icon name="popout" size={12} className="settings-link-icon" />
+            </a>
+            <a
+              className="settings-row settings-link"
+              href="https://github.com/Poboking/kojo-editor/issues"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <span>
+                意见反馈
+                <span className="settings-hint">问题与建议请到 GitHub Issues 提出</span>
+              </span>
+              <Icon name="popout" size={12} className="settings-link-icon" />
+            </a>
+          </div>
+          </div>
+
+          {/* 单一页脚行，且沿用全站模态房规：primary 恒等于推荐项、排在最右 */}
+          <div className="settings-footer">
+            <button className="primary small" onClick={() => onClose()}>
+              完成
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

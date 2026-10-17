@@ -39,6 +39,7 @@ const editor = read('ui/EditorPane.tsx');
 const shell = read('ui/ShellLayout.tsx');
 const projectView = read('ui/ProjectView.tsx');
 const sugarView = read('ui/sugar-view.ts');
+const settings = read('ui/SettingsPanel.tsx');
 
 /* ---------------- ④ 只读指示只剩一颗 ---------------- */
 
@@ -124,17 +125,21 @@ describe('.kojo 预览的入口不再被封存总闸收起', () => {
   });
 
   it('设置页：封存提示不再把预览说成封存件，且「编辑器」那一组不随总闸收起', () => {
-    const hintLine = shell.split('\n').find((l) => l.includes('归档浏览器：'));
+    // 设置页 markup 于 FE-REF 拆分批从 ShellLayout 挪进 SettingsPanel.tsx（纯搬运，文案与
+    // className 逐字节不变）——守卫跟着换读取路径，三条断言一条不松。
+    const hintLine = settings.split('\n').find((l) => l.includes('归档浏览器：'));
     expect(hintLine).toBeDefined();
     expect(hintLine).not.toContain('预览');
-    const editorGroupStart = shell.indexOf('settings-group-title">编辑器');
+    const editorGroupStart = settings.indexOf('settings-group-title">编辑器');
     expect(editorGroupStart).toBeGreaterThan(-1);
     // 预览开关（VSCode 精修批起走 <Switch onChange={applySugarViewPref}>）必须落在「编辑器」组内，
     // 且组标题到它之间不许出现 `!sealed`——即这一项不随封存总闸收起。抓函数名而非整段调用写法，
     // 免得一改控件形态就误报（真正的守卫是下面那条 `!sealed`）。
-    const applyCall = shell.indexOf('applySugarViewPref', editorGroupStart);
+    const applyCall = settings.indexOf('applySugarViewPref', editorGroupStart);
     expect(applyCall).toBeGreaterThan(-1);
-    expect(shell.slice(editorGroupStart, applyCall)).not.toContain('!sealed');
+    expect(settings.slice(editorGroupStart, applyCall)).not.toContain('!sealed');
+    // 这颗胶囊只准住在壳层：搬走的设置页不许另造第二颗（与 ④ 首条同源，换个方向再钉一次）
+    expect(settings).not.toContain('"sb-writable');
   });
 });
 
