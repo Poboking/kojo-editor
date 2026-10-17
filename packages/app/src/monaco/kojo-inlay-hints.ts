@@ -30,6 +30,10 @@ import { registerForKojoDialects } from './register-dialects';
  * 一致的规则，不是每面各划一档。与 codeLens 不同的是**没有密度/条数档**：行内提示
  * 不插行（行高不变，只把本行余部往右推），"插满行 = 花屏"的前提在这里不成立；
  * Monaco 自己有 `inlayHints.maximumLength`（缺省 43 字符/行）兜单行截断。
+ *
+ * PS-4（2026-10-18 性能批）补两条：① 交回的结果**按 Monaco 给的区间筛**（见
+ * `toMonacoInlayHints` 的 `range`）——每次滚动只重建视口内那几枚装饰器；② 取文与问槽
+ * 由宿主接线按 `versionId` 记忆化（见 `InlayHintHandlers` 头注），内容没变一律不重扫。
  */
 
 /**
@@ -80,12 +84,20 @@ export function collectInlayHints(
  * 行越界**丢弃**不夹取——与 codeLens 同一条理由：把第 5,000 行的话贴到第 4,999 行
  * = 错标比不标危险。列是另一回事：提示钉在"某个实参首字符**之前**"，行是作者正在写
  * 的那一行（行没变只是行尾长了）⇒ 列夹到行尾即可，丢掉反而把"还在说的话"吞了。
- * 种类恒 Parameter（`InlayHintKind` 是运行时枚举，monaco 实例由安装方递进来）。
+ *
+ * `range`（PS-4）= Monaco 这次问的那一段（可视区 ±30 行，`inlayHintsController` 的
+ * `_getHintsRanges()`，且**每段各问一次**）。给了就只交回这一段的提示：老写法把整篇
+ * 提示一次交回去，Monaco 的 `InlayHintsFragments` 不按区间筛（实测 vendor `inlayHints.js`
+ * 的构造函数逐条建 `InlayHintItem`），于是每次滚动都要为**全篇每一条**提示挂一枚装饰器
+ * ——4,999 行的文件上是几百枚视口外装饰器的重建。VSCode 的内置供方本来就是"问哪段答哪段"，
+ * 这一改动是把 provider 拉回它一直在实现的接口形状。
+ * 不给 `range`（老的直接调用方 / 单测）= 整篇照旧交回，行为与本批前逐字一致。
  */
 export function toMonacoInlayHints(
   monaco: typeof Monaco,
   model: Monaco.editor.ITextModel,
   hints: readonly EditorInlayHint[],
+  range?: Monaco.IRange,
 ): Monaco.languages.InlayHint[] {
   const lineCount = model.getLineCount();
   const out: Monaco.languages.InlayHint[] = [];
@@ -93,6 +105,7 @@ export function toMonacoInlayHints(
     if (!Number.isFinite(hint.line) || !Number.isFinite(hint.column)) continue;
     const line = Math.trunc(hint.line);
     if (line < 1 || line > lineCount) continue;
+    if (range !== undefined && (line < range.startLineNumber || line > range.endLineNumber)) continue;
     const column = Math.min(Math.max(1, Math.trunc(hint.column)), model.getLineMaxColumn(line));
     out.push({
       position: { lineNumber: line, column },
@@ -105,7 +118,17 @@ export function toMonacoInlayHints(
   return out;
 }
 
-/** 宿主注入：这篇文档该答什么提示（全部判据——开关 / 糖视图 / 活动标签 / 体量——都在宿主接线） */
+/**
+ * 宿主注入：这篇文档该答什么提示（全部判据——开关 / 糖视图 / 活动标签 / 体量——都在宿主接线）。
+ *
+ * `resolve` 拿到的是**整篇**文本，不是可视区间那一段——这不是漏改：供方
+ * （`erb-parser/src/references.ts` 的 `visibleCodeLines`）带着 `[SKIPSTART]…[SKIPEND]`
+ * 的**跨行状态**，从窗口中间起算会把屏蔽区里的行当代码行 ⇒ 凭空多出提示（错标比不标危险，
+ * 铁律 4）。真要按区间取文，得让区间进入契约请求（`plugin-api` 的
+ * `EditorLanguageServiceRequest` 加一员、由供方自己按自己的状态判起点）——本批记为后续。
+ * 本批把这条腿的**重复**代价消掉：宿主接线按 `versionId` 记忆化，内容没变时一次都不重扫
+ * （Monaco 每次滚动都问，缺省防抖低至 25ms）。
+ */
 export interface InlayHintHandlers {
   resolve(model: Monaco.editor.ITextModel): EditorInlayHint[];
 }
@@ -120,7 +143,7 @@ export interface InlayHintHandlers {
  */
 export function installInlayHintsProvider(monaco: typeof Monaco, handlers: InlayHintHandlers): Monaco.IDisposable {
   const provider: Monaco.languages.InlayHintsProvider = {
-    provideInlayHints(model) {
+    provideInlayHints(model, range) {
       let hints: EditorInlayHint[];
       try {
         hints = handlers.resolve(model);
@@ -129,7 +152,7 @@ export function installInlayHintsProvider(monaco: typeof Monaco, handlers: Inlay
         console.warn(`[kojo-inlay-hints] resolve 抛错：${errorText(e)}`);
         return { hints: [], dispose: () => undefined };
       }
-      return { hints: toMonacoInlayHints(monaco, model, hints), dispose: () => undefined };
+      return { hints: toMonacoInlayHints(monaco, model, hints, range), dispose: () => undefined };
     },
   };
   return registerForKojoDialects(monaco, (m, id) => m.languages.registerInlayHintsProvider(id, provider));
