@@ -4,17 +4,28 @@
  * `tools/smoke-tauri-dom.mjs`（dev 形态）与 `tools/boot-marks.mjs`（release 形态）**共用**这一份，
  * 不再各抄一遍采样函数——原先两处 `collectBoot` 靠注释「改一处必须改两处」维系，迟早漂。
  * 纯逻辑、零副作用（可被 import 而不起壳；被 import 不起壳是本仓 tools 的纪律）。
+ * 底色真源那一路要读 CSS，但只在 `expectedBootBg()` 被调用时才 `readFileSync`——import 仍然零副作用，
+ * 而且本模块只被 `tools/**` 与 `tools/tests/**` import，绝不进 app 产物。
  *
  * ## 两条硬断言的取证口径（BOARD §I L1-0）
  *
- * **①「开机 ≤500ms 内 `#root` 非空 或 body 计算底色已是深色」**
- *  样本 = `index.html` 内联脚本落在 `window.__kojoBootMarks` 的 parse 期读数：
- *  - `htmlParsed`（自导航起点 ms）≤ 500 且 `bgAtParse` 为深色 —— 内联 `<style>` 一解析就生效
- *    且不会退场，所以这条一旦成立就等价于「≤500ms 内屏幕上已不是白」；
+ * **①「开机 ≤500ms 内 `#root` 非空 或 body 计算底色已落到该 `data-theme` 档应有的 `--bg`」**
+ *  样本 = `index.html` 内联脚本落在 `window.__kojoBootMarks` 的 parse 期读数；
+ *  第三方 = `expectedBootBg(档)` 从**源码现读**的 `--bg`（dark 档真源在 `packages/app/src/styles.css`
+ *  的基础 `:root`，light / mint-dark 在 `packages/app/src/themes/<档>.css`）。
+ *  **三方才有线**：内联字面量（parse 期）· 挂载后计算值 · 该档主题源里的 `--bg`——只比前两枚，
+ *  两个手写源同时漂成第三种颜色就抓不到（这条闸的真实身份是跨文件对撞，不是页内自洽）。
+ *  - `htmlParsed`（自导航起点 ms）≤ 500 且 `bgAtParse` == 该档 `--bg` —— 内联 `<style>` 一解析就生效
+ *    且不会退场，所以这条一旦成立就等价于「≤500ms 内屏幕上已不是 WebView 默认白」；
  *  - 或 `t500`（`setTimeout(…, 500)` 的现场采样）里 `rootChildren > 0` —— React 已真挂载。
  *    容差 `ROOT_SAMPLE_GRACE_MS`：定时器在启动高峰会被挤后，取 750ms 上限（超过就是真慢，不是抖动）。
- *  再加两枚钉：**内联底色 == React 挂载后的计算底色**（防「内联那份是第二真相源」）与
+ *  再加两枚钉：**内联底色 == 该档 `--bg` == 挂载后计算底色**（防「内联那份是第二真相源」与同漂）与
  *  `#boot-splash` 已被移除（引导层必须退场，不许盖在界面上）。
+ *  ⚠ 判据里**没有「深色」这件事**：不变量是「屏幕上不是 WebView 默认白」，不是「屏幕上是深色」。
+ *  主题系统（`b051773` 地基 + `a595355` 三主题）之后浅色档 `--bg` = `#f6f8fa`，旧的「亮度 < 96」
+ *  硬编码会把浅色用户的正常开机报成故障（把用户设置当红），故整枚判据改成对撞该档真源。
+ *  底色写法统一走 `sameRgb`：页内 `getComputedStyle` 给 `rgb(30, 34, 39)`、源码写 `#1e2227`，
+ *  它们是同一个颜色，比字符串原文必红。
  *
  * **②「欢迎页可点前不得出现 monaco 请求」**
  *  判定时点 = `boot.welcomeInteractive`（自导航起点 ms）。**两个数据源，优先级写死**：
@@ -36,6 +47,11 @@
  * `src/monaco/reveal-position.ts` 常年挂在 boot 图上，按目录名过滤会假红（实测踩过）。
  */
 
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
+const REPO_ROOT = path.resolve(import.meta.dirname, '..');
+
 /** monaco 请求特征（口径见文件头「匹配面」） */
 export const MONACO_HINT_RE = /monaco-editor|ProjectView|EditorPane|editor\.worker/i;
 
@@ -54,7 +70,8 @@ export const BOOT_MARK_NAMES = [
  * **页内采样函数**：`toString()` 后经 CDP `Runtime.evaluate` 在页面里执行。
  * ⚠ 函数体必须自包含——**禁止引用本模块或调用方的任何外层作用域**。
  * 相比前一批新增 `timeOrigin` / `navType`（Network 域取证要把事件时刻换算到同一时基）
- * 与「可点之后」的 monaco 计数（反空匹配自证）。
+ * 与「可点之后」的 monaco 计数（反空匹配自证）；本批再新增 `dataTheme`（断言①要按**这一档**的
+ * 真源底色来判，档位只有页面自己知道，node 侧读不到）。
  */
 export function collectBoot() {
   var marks = window.__kojoBootMarks || {};
@@ -88,6 +105,8 @@ export function collectBoot() {
     boot: boot,
     welcome: welcome,
     bgNow: getComputedStyle(document.body).backgroundColor,
+    // 档位（index.html 早应用脚本落的属性；缺省按 dark，与 `ui/theme-pref.ts` 的归一口径一致）
+    dataTheme: document.documentElement.getAttribute('data-theme') || 'dark',
     splashGone: !document.getElementById('boot-splash'),
     timeOrigin: performance.timeOrigin,
     now: performance.now(),
@@ -102,18 +121,75 @@ export function collectBoot() {
   });
 }
 
-/** `rgb(r,g,b)` / `rgba(...)` 解析（解析不了或近全透明 → 视为「没有底色」，即白窗形态） */
+/**
+ * 颜色解析：`rgb()/rgba()` **与** `#rgb/#rrggbb` 两种写法都要能吃。
+ * 页内 `getComputedStyle` 交回来的是 `rgb(30, 34, 39)`，而主题源里的真源写的是 `#1e2227`——
+ * 同一个颜色两种写法，所以断言①一律先解析再比三元组，不比字符串原文。
+ * 解析不了返回 null（调用方按「没有底色」处理）。
+ */
 export function parseRgb(s) {
-  const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)$/.exec(String(s ?? ''));
-  if (!m) return null;
-  return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]), a: m[4] === undefined ? 1 : Number(m[4]) };
+  const text = String(s ?? '').trim();
+  const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)$/.exec(text);
+  if (m) return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]), a: m[4] === undefined ? 1 : Number(m[4]) };
+  const h = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(text);
+  if (!h) return null;
+  const hex = h[1].length === 3 ? h[1].replace(/./g, (c) => c + c) : h[1];
+  return {
+    r: parseInt(hex.slice(0, 2), 16),
+    g: parseInt(hex.slice(2, 4), 16),
+    b: parseInt(hex.slice(4, 6), 16),
+    a: 1,
+  };
 }
 
-/** 深色判据：不透明且亮度 < 96（`--bg` #1e2227 亮度 ≈33；WebView 默认白 ≈255） */
-export function isDark(s) {
-  const c = parseRgb(s);
-  if (!c || c.a < 0.5) return false;
-  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b < 96;
+/**
+ * 「同一个颜色」判据：只比 r/g/b 三元组（`#1e2227` 与 `rgb(30, 34, 39)` 同判）。
+ * alpha 只在「不透明」这一侧才有意义 ⇒ 任一侧 alpha < 0.5 直接判不等
+ * （全透明在屏幕上就是 WebView 默认白，不算「底色落到位」）。
+ */
+export function sameRgb(a, b) {
+  const x = parseRgb(a);
+  const y = parseRgb(b);
+  if (!x || !y) return false;
+  if (x.a < 0.5 || y.a < 0.5) return false;
+  return x.r === y.r && x.g === y.g && x.b === y.b;
+}
+
+/** 断言①底色真源所在文件（相对仓库根）：dark 档的基础 token 就住在 `styles.css` 的 `:root` */
+const BOOT_BG_SOURCE_FILES = {
+  dark: 'packages/app/src/styles.css',
+  light: 'packages/app/src/themes/light.css',
+  'mint-dark': 'packages/app/src/themes/mint-dark.css',
+};
+
+/** 档位归一：读不到 / 非法 ⇒ dark（同 `index.html` 早应用脚本与 `ui/theme-pref.ts`，不造第四种归一） */
+const normalizeBgTheme = (theme) => (theme === 'light' || theme === 'mint-dark' ? theme : 'dark');
+
+/**
+ * 断言①的**第三方真源**：该 `data-theme` 档源码里 `--bg` 的字面量原文。
+ * 闸塌了必须响——文件读不到 / `--bg` 抽不到 / 抽出来的值不是可比对的颜色写法，一律抛错，
+ * **绝不静默回落成某个颜色常量**（回落等于把跨文件对撞降级成自我循环，从此再也抓不到漂移）。
+ */
+export function expectedBootBg(theme) {
+  const name = normalizeBgTheme(theme);
+  const rel = BOOT_BG_SOURCE_FILES[name];
+  let css = '';
+  try {
+    css = readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+  } catch (e) {
+    throw new Error(`断言①底色真源读不到：${name} 档应来自 ${rel}（${String(e && e.message ? e.message : e).slice(0, 140)}）`);
+  }
+  // 注释里也写着 `--bg` 这类字面量（各主题文件顶部的「锚定不变量」清单）⇒ 先剥注释再抽声明
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const m = /(?:^|[\s;{])--bg\s*:\s*([^;{}]+);/.exec(stripped);
+  if (!m) throw new Error(`断言①底色真源塌了：${rel} 里抽不到 --bg 声明（${name} 档）`);
+  const value = m[1].trim();
+  if (parseRgb(value) === null) {
+    throw new Error(
+      `断言①底色真源塌了：${rel} 的 --bg = ${JSON.stringify(value)} 不是 rgb()/rgba()/#rgb/#rrggbb 写法（${name} 档），无法与页内计算底色对撞`,
+    );
+  }
+  return value;
 }
 
 /** boot 标记读数格式化（值是自导航起点 ms；缺失显示「未记录」） */
@@ -122,26 +198,32 @@ export function fmtBoot(v) {
 }
 
 /**
- * 断言①＋断言②（时间线回退口径）的**纯判定**：入 = `collectBoot()` 的解析结果。
+ * 断言①＋断言②（时间线回退口径）的**纯判定**：入 = `collectBoot()` 的解析结果 + 该档底色真源。
+ * `expectedBg` 由调用方现读（`expectedBootBg(b.dataTheme)`）——它就是断言①的**第三方**，
+ * 少了这一方只剩「内联 vs 挂载后」两方比对，两个手写源同时漂成第三种颜色便再也抓不到。
  * 全部判据走布尔字段返回，红在哪一条由调用方打印 `why`。
  */
-export function judgeBoot(b) {
+export function judgeBoot(b, expectedBg) {
   const marks = (b && b.marks) || {};
   const t500 = marks.t500 && typeof marks.t500.at === 'number' ? marks.t500 : null;
-  const earlyDark = typeof marks.htmlParsed === 'number' && marks.htmlParsed <= 500 && isDark(marks.bgAtParse);
+  const earlyBgOk = typeof marks.htmlParsed === 'number' && marks.htmlParsed <= 500 && sameRgb(marks.bgAtParse, expectedBg);
   const earlyRoot = t500 !== null && t500.rootChildren > 0 && t500.at <= ROOT_SAMPLE_GRACE_MS;
-  const pinOk = isDark(b.bgNow) && b.bgNow === marks.bgAtParse;
+  // 三方对撞：挂载后 == 该档真源 --bg，且挂载后 == 内联 parse 期读数
+  const pinOk = sameRgb(b.bgNow, expectedBg) && sameRgb(b.bgNow, marks.bgAtParse);
   const splashGone = b.splashGone === true;
   const haveWelcome = typeof b.welcome === 'number';
   return {
-    a1: (earlyDark || earlyRoot) && pinOk,
-    earlyDark,
+    a1: (earlyBgOk || earlyRoot) && pinOk,
+    earlyBgOk,
     earlyRoot,
     pinOk,
     splashGone,
     /** 断言②的时间线口径（回退口径；有 Network 取证时仅作对照） */
     a2Timeline: haveWelcome && b.monacoBeforeCount === 0 && b.monacoTotalCount > 0,
     haveWelcome,
+    /** 打印行靠这两枚自证「我按哪档、按哪个真源底色判的」 */
+    expectedBg,
+    theme: (b && b.dataTheme) || 'dark',
     htmlParsed: marks.htmlParsed,
     bgAtParse: marks.bgAtParse,
     bgNow: b.bgNow,

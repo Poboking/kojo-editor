@@ -2,8 +2,8 @@
  * L1-0 首屏断言判定层的纯逻辑护栏（不依赖桌面壳、不依赖语料）。
  *
  * 为什么要有它：`tools/smoke-tauri-dom.mjs` / `tools/boot-marks.mjs` 的两条硬断言只能在真桌面壳上
- * 跑，而本机一次会话最多起壳一次——判据本身（深色阈值、≤500ms 三分支、时基口径识别、
- * Network 优先/时间线回退、反空匹配自证）必须能在**不起壳**的情况下被复跑钉住，
+ * 跑，而本机一次会话最多起壳一次——判据本身（**该 `data-theme` 档的底色真源对撞**、≤500ms 三分支、
+ * 时基口径识别、Network 优先/时间线回退、反空匹配自证）必须能在**不起壳**的情况下被复跑钉住，
  * 否则改一次口径就要烧一次桌面预算。
  *
  * 另外锁两件最容易出事的事：
@@ -20,22 +20,28 @@ import {
   bootMarkLines,
   collectBoot,
   detectRelMode,
-  isDark,
+  expectedBootBg,
   judgeBoot,
   judgeNetwork,
   parseRgb,
   relTimeOf,
   resolveA2,
+  sameRgb,
   urlKey,
 } from '../boot-probe.mjs';
+
+/** dark 档 `--bg` 的两枚等价写法（页内计算值给 rgb()，源码真源写 hex）——语义用例只用这两枚局部常量 */
+const DARK_RGB = 'rgb(30, 34, 39)';
+const DARK_HEX = '#1e2227';
 
 /** `collectBoot()` 页内读数的最小可用形状（其余字段按用例覆盖） */
 const sample = (over: Record<string, unknown> = {}) =>
   ({
-    marks: { htmlParsed: 120, bgAtParse: 'rgb(30, 34, 39)', t500: { at: 502, rootChildren: 0, bg: 'rgb(30, 34, 39)', splash: true } },
+    marks: { htmlParsed: 120, bgAtParse: DARK_RGB, t500: { at: 502, rootChildren: 0, bg: DARK_RGB, splash: true } },
     boot: { 'boot.welcomeInteractive': { last: 6900, note: '' } },
     welcome: 6900,
-    bgNow: 'rgb(30, 34, 39)',
+    dataTheme: 'dark',
+    bgNow: DARK_RGB,
     splashGone: true,
     timeOrigin: 1_760_000_000_000,
     resourceCount: 40,
@@ -47,17 +53,23 @@ const sample = (over: Record<string, unknown> = {}) =>
     ...over,
   }) as never;
 
-describe('断言①：≤500ms 内非白 + 底色一致钉 + 引导层退场', () => {
-  it('parse 期即深色且挂载后底色一致 → 过', () => {
-    const j = judgeBoot(sample());
+/** 内联 parse 期与挂载后两处底色同取 `bg` 的采样（要打破一致性由用例自己改其中一处） */
+const bgSample = (theme: string, bg: string, htmlParsed = 120) =>
+  sample({ dataTheme: theme, bgNow: bg, marks: { htmlParsed, bgAtParse: bg, t500: { at: 502, rootChildren: 0 } } });
+
+describe('断言①：≤500ms 内底色落到该档真源 --bg + 三方底色钉 + 引导层退场', () => {
+  it('parse 期底色即该档 --bg 且挂载后一致 → 过（并按档自证判据来源）', () => {
+    const j = judgeBoot(sample(), DARK_HEX);
     expect(j.a1).toBe(true);
-    expect(j.earlyDark).toBe(true);
+    expect(j.earlyBgOk).toBe(true);
     expect(j.pinOk).toBe(true);
     expect(j.splashGone).toBe(true);
+    expect(j.theme).toBe('dark');
+    expect(j.expectedBg).toBe(DARK_HEX);
   });
 
   it('内联底色与挂载后计算底色漂移 → 红（防第二真相源）', () => {
-    const j = judgeBoot(sample({ bgNow: 'rgb(255, 255, 255)' }));
+    const j = judgeBoot(sample({ bgNow: 'rgb(255, 255, 255)' }), DARK_RGB);
     expect(j.pinOk).toBe(false);
     expect(j.a1).toBe(false);
   });
@@ -67,40 +79,108 @@ describe('断言①：≤500ms 内非白 + 底色一致钉 + 引导层退场', (
       sample({
         marks: {
           htmlParsed: 900,
-          bgAtParse: 'rgb(30, 34, 39)',
-          t500: { at: ROOT_SAMPLE_GRACE_MS, rootChildren: 1, bg: 'rgb(30, 34, 39)', splash: false },
+          bgAtParse: DARK_RGB,
+          t500: { at: ROOT_SAMPLE_GRACE_MS, rootChildren: 1, bg: DARK_RGB, splash: false },
         },
       }),
+      DARK_RGB,
     );
-    expect(j.earlyDark).toBe(false);
+    expect(j.earlyBgOk).toBe(false);
     expect(j.earlyRoot).toBe(true);
     expect(j.a1).toBe(true);
   });
 
   it('t+500ms 采样晚于容差或 #root 仍空 → 两支皆不成立', () => {
     const late = judgeBoot(
-      sample({ marks: { htmlParsed: 900, bgAtParse: 'rgb(30, 34, 39)', t500: { at: 4000, rootChildren: 3 } } }),
+      sample({ marks: { htmlParsed: 900, bgAtParse: DARK_RGB, t500: { at: 4000, rootChildren: 3 } } }),
+      DARK_RGB,
     );
     expect(late.earlyRoot).toBe(false);
     expect(late.a1).toBe(false);
     const empty = judgeBoot(
-      sample({ marks: { htmlParsed: 900, bgAtParse: 'rgb(30, 34, 39)', t500: { at: 505, rootChildren: 0 } } }),
+      sample({ marks: { htmlParsed: 900, bgAtParse: DARK_RGB, t500: { at: 505, rootChildren: 0 } } }),
+      DARK_RGB,
     );
     expect(empty.earlyRoot).toBe(false);
   });
 
   it('引导层没撤 → splashGone 红（与 a1 分开数，红要红在真原因上）', () => {
-    const j = judgeBoot(sample({ splashGone: false }));
+    const j = judgeBoot(sample({ splashGone: false }), DARK_RGB);
     expect(j.a1).toBe(true);
     expect(j.splashGone).toBe(false);
   });
 
-  it('深色阈值：#1e2227 深、白不深、近全透明不算有底色', () => {
-    expect(isDark('rgb(30, 34, 39)')).toBe(true);
-    expect(isDark('rgb(255, 255, 255)')).toBe(false);
-    expect(isDark('rgba(30, 34, 39, 0.2)')).toBe(false);
-    expect(isDark('transparent')).toBe(false);
+  it('三档开机各自判过：底色 = 该档真源 --bg（浅色档这条 = 本批立项的回归点）', () => {
+    // 页内 getComputedStyle 一律给 rgb()、源码真源一律写 hex ⇒ 两种写法都得判过；
+    // 判据是「与该档真源对撞」，与亮暗无关（浅色 #f6f8fa / 薄荷 #0f1713 同一条路）。
+    const cases: readonly (readonly [string, string, string])[] = [
+      ['dark', DARK_HEX, DARK_RGB],
+      ['light', '#f6f8fa', 'rgb(246, 248, 250)'],
+      ['mint-dark', '#0f1713', 'rgb(15, 23, 19)'],
+    ];
+    for (const [theme, hex, rgb] of cases) {
+      const expected = expectedBootBg(theme);
+      expect(expected, `${theme} 档真源 --bg 现值`).toBe(hex);
+      for (const bg of [hex, rgb]) {
+        const j = judgeBoot(bgSample(theme, bg), expected);
+        expect(j.earlyBgOk, `${theme} 档底色 ${bg} 的 parse 期判据`).toBe(true);
+        expect(j.pinOk, `${theme} 档底色 ${bg} 的三方对撞`).toBe(true);
+        expect(j.a1, `${theme} 档整条断言①`).toBe(true);
+      }
+    }
+    // 浅色底与 WebView 默认白是两个颜色这件事本身也钉住（这条才是断言①真正在防的东西）
+    expect(sameRgb('#f6f8fa', 'rgb(255, 255, 255)')).toBe(false);
+  });
+
+  it('三方才有线：内联与挂载后同漂成第三种颜色（两方仍相等）→ pinOk 红', () => {
+    // 这正是旧「bgNow === bgAtParse」两方比对漏掉的那类同漂
+    const drifted = 'rgb(120, 120, 120)';
+    const j = judgeBoot(bgSample('dark', drifted), DARK_RGB);
+    expect(j.pinOk).toBe(false);
+    expect(j.earlyBgOk).toBe(false);
+    expect(j.a1).toBe(false);
+  });
+
+  it('调用面忘传 expectedBg → 判红而不是判绿（第三方缺席不许静默放行）', () => {
+    const j = judgeBoot(sample()) as { pinOk: boolean; a1: boolean };
+    expect(j.pinOk).toBe(false);
+    expect(j.a1).toBe(false);
+  });
+
+  it('expectedBootBg：三档各读自己源文件里的 --bg 字面量原文', () => {
+    expect(expectedBootBg('dark')).toBe(DARK_HEX);
+    expect(expectedBootBg('light')).toBe('#f6f8fa');
+    expect(expectedBootBg('mint-dark')).toBe('#0f1713');
+  });
+
+  it('expectedBootBg：未知/缺失档折到 dark（照 index.html 早应用脚本与 ui/theme-pref.ts 的归一口径）', () => {
+    for (const raw of ['nope', '', 'Light', 'dark', null, undefined]) {
+      expect(expectedBootBg(raw as never), `${JSON.stringify(raw)} 档`).toBe(DARK_HEX);
+    }
+  });
+
+  it('sameRgb / parseRgb：hex 与 rgb() 同判，分量差或近全透明判不等', () => {
+    expect(sameRgb(DARK_HEX, DARK_RGB)).toBe(true);
+    expect(sameRgb('#1e2227', 'rgb(30, 34, 40)')).toBe(false);
+    expect(sameRgb('#1e2227', 'rgba(30, 34, 39, 0.2)')).toBe(false);
+    expect(sameRgb('rgba(30, 34, 39, 0.2)', DARK_HEX)).toBe(false);
+    expect(sameRgb(DARK_HEX, 'transparent')).toBe(false);
+    expect(sameRgb(DARK_HEX, undefined)).toBe(false);
+    expect(sameRgb('#abc', 'rgb(170, 187, 204)')).toBe(true);
+    expect(parseRgb('#1E2227')).toEqual({ r: 30, g: 34, b: 39, a: 1 });
+    expect(parseRgb(DARK_RGB)).toEqual({ r: 30, g: 34, b: 39, a: 1 });
+    expect(parseRgb('rgba(30, 34, 39, 0.5)')).toEqual({ r: 30, g: 34, b: 39, a: 0.5 });
     expect(parseRgb('nope')).toBeNull();
+    expect(parseRgb('#12345')).toBeNull();
+    expect(parseRgb(undefined)).toBeNull();
+  });
+
+  it('档位读数由页内自报（collectBoot 是注入页面执行的，引用任何 node 侧外层作用域就只在壳里炸）', () => {
+    const src = collectBoot.toString();
+    expect(src).toContain("document.documentElement.getAttribute('data-theme')");
+    // 这两枚是 node 侧真源读取用的；页内那份要是开始引用它们，采样当场 ReferenceError
+    expect(src).not.toContain('expectedBootBg');
+    expect(src).not.toContain('BOOT_BG_SOURCE_FILES');
   });
 });
 
@@ -122,11 +202,11 @@ describe('断言②：可点前不得有 monaco（匹配面 + 反空匹配自证
   });
 
   it('时间线回退口径：可点前零 monaco 且整轮见得到 monaco 才算过', () => {
-    expect(judgeBoot(sample()).a2Timeline).toBe(true);
-    expect(judgeBoot(sample({ monacoBeforeCount: 2, monacoBefore: ['x'] })).a2Timeline).toBe(false);
+    expect(judgeBoot(sample(), DARK_RGB).a2Timeline).toBe(true);
+    expect(judgeBoot(sample({ monacoBeforeCount: 2, monacoBefore: ['x'] }), DARK_RGB).a2Timeline).toBe(false);
     // 整轮一条 monaco 都没有 = 缓冲被截断/匹配面可疑，不许判绿
-    expect(judgeBoot(sample({ monacoTotalCount: 0, monacoTotalSample: [] })).a2Timeline).toBe(false);
-    expect(judgeBoot(sample({ welcome: null })).a2Timeline).toBe(false);
+    expect(judgeBoot(sample({ monacoTotalCount: 0, monacoTotalSample: [] }), DARK_RGB).a2Timeline).toBe(false);
+    expect(judgeBoot(sample({ welcome: null }), DARK_RGB).a2Timeline).toBe(false);
   });
 });
 
@@ -190,23 +270,23 @@ describe('Network 域取证：时基口径与判定', () => {
   });
 
   it('resolveA2：Network 优先；取不到才用时间线，且口径名写进结论', () => {
-    const net = resolveA2(cap(), sample(), judgeBoot(sample()));
+    const net = resolveA2(cap(), sample(), judgeBoot(sample(), DARK_RGB));
     expect(net.ok).toBe(true);
     expect(net.used).toContain('Network');
 
-    const fallback = resolveA2({ ok: false, reason: 'CDP 没连上' } as never, sample(), judgeBoot(sample()));
+    const fallback = resolveA2({ ok: false, reason: 'CDP 没连上' } as never, sample(), judgeBoot(sample(), DARK_RGB));
     expect(fallback.ok).toBe(true);
     expect(fallback.used).toContain('时间线');
     expect(fallback.reason).toContain('monaco');
 
     // 恒真的 Network 读数（可点前 0 条）不许顶掉时间线口径：退回并如实标注
-    const vacuous = resolveA2(cap({ beforeCount: 0 }), sample(), judgeBoot(sample()));
+    const vacuous = resolveA2(cap({ beforeCount: 0 }), sample(), judgeBoot(sample(), DARK_RGB));
     expect(vacuous.used).toContain('时间线');
     expect(vacuous.ok).toBe(true);
 
     // 两条口径同时失效才红
     const bad = sample({ monacoBeforeCount: 4, monacoBefore: ['x'], monacoTotalCount: 4 });
-    expect(resolveA2({ ok: false, reason: 'CDP 没连上' } as never, bad, judgeBoot(bad)).ok).toBe(false);
+    expect(resolveA2({ ok: false, reason: 'CDP 没连上' } as never, bad, judgeBoot(bad, DARK_RGB)).ok).toBe(false);
   });
 });
 

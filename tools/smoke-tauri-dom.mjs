@@ -13,9 +13,14 @@
  *        （欢迎页/内核 bootstrap 状态），排除"窗口起来但白屏"的情况。
  *
  * **L1-0 两条硬断言（2026-10-16 首屏批；取证层 = `tools/boot-probe.mjs`，dev/release 共用）**：
- * ① 开机 ≤500 ms 内 `#root` 非空**或** body 计算底色已是深色——取内联脚本 parse 期样本
- *    （style 一 parse 即生效且不会退场，最迟 ≤500 ms 成立）＋ t+500 ms 采样双支；同时钉
- *    「**内联底色 == React 挂载后的计算底色**」（两处漂移即红）与「#boot-splash 已被移除」。
+ * ① 开机 ≤500 ms 内 `#root` 非空**或** body 计算底色已落到**该 `data-theme` 档应有的 `--bg`**
+ *    ——三方对撞：内联脚本 parse 期样本（style 一 parse 即生效且不会退场，最迟 ≤500 ms 成立）
+ *    ＋ t+500 ms 采样兜底支 ＋ `expectedBootBg(档)` 从源码现读的 `--bg`
+ *    （dark 档真源在 `packages/app/src/styles.css` 基础 `:root`，light / mint-dark 在 `themes/<档>.css`）；
+ *    同时钉「**内联底色 == 该档 `--bg` == React 挂载后的计算底色**」（任一处漂移即红，
+ *    也防两个手写源同时漂成第三种颜色）与「#boot-splash 已被移除」。
+ *    ⚠ 这条判据**不要求深色**：浅色用户开机底色 `#f6f8fa` 是设置不是故障（旧「亮度 < 96」
+ *    硬编码在主题系统落地后必然假红，已于 2026-10-17 改掉）。
  * ② 欢迎页可点（`boot.welcomeInteractive`，自导航起点 ms）**之前**的网络请求不得含 monaco。
  *    **取证优先级写死**：CDP Network 域（`Network.enable` + `Page.reload` 重跑一轮开机，只认本轮
  *    `loaderId` 的事件、以本轮 Document 请求为锚点切分）> 页内资源时间线（回退口径）。
@@ -28,7 +33,7 @@
  *    口径依赖，别调换顺序）。
  *
  * 用法：node tools/smoke-tauri-dom.mjs [监测秒数，默认 100]
- * 退出码：0 = 通过；1 = 失败。
+ * 退出码：0 = 通过；1 = 失败；2 = 前置不满足（端口被占 / 断言①底色真源读不到）。
  * 注意：会短暂弹出应用窗口（结束后自动关闭）。
  */
 import { spawn, spawnSync } from 'node:child_process';
@@ -37,6 +42,7 @@ import * as path from 'node:path';
 import {
   collectBoot,
   judgeBoot,
+  expectedBootBg,
   bootMarkLines,
   captureBootNetwork,
   resolveA2,
@@ -110,7 +116,7 @@ async function cdpEval(wsUrl, expression, timeoutMs = 15000) {
   });
 }
 
-// L1-0 的页内采样 / 深色判据 / Network 域取证 / 断言判定全部下沉到 `tools/boot-probe.mjs`
+// L1-0 的页内采样 / 底色真源对撞 / Network 域取证 / 断言判定全部下沉到 `tools/boot-probe.mjs`
 // （与 release 形态的 `tools/boot-marks.mjs` 共用同一份口径，不再各抄一遍）。
 
 /**
@@ -146,6 +152,18 @@ function killPortOwners(ports) {
   }
   for (const pid of pids) spawnSync(`taskkill /PID ${pid} /T /F`, { shell: true, stdio: 'ignore' });
   return [...pids];
+}
+
+/**
+ * 断言①的**底色真源**在起壳之前先过一遍（三档各现读一次 `--bg`）：真源塌了必须在这里响——
+ * 抛在采样循环里会被当成「boot 采样重试」，抛在后面又会把已起的壳和 1420/9222 端口留成孤儿。
+ * 这一趟只读三个小文件，比白烧一轮 ~100s 桌面预算便宜得多（前置条件由工具自己把关，同上面的端口检查）。
+ */
+try {
+  for (const t of ['dark', 'light', 'mint-dark']) expectedBootBg(t);
+} catch (e) {
+  console.log(`[smoke] 断言①底色真源塌了：${String(e && e.message ? e.message : e)}`);
+  process.exit(2);
 }
 
 console.log('[smoke] launching tauri dev (with CDP 9222) …');
@@ -253,7 +271,8 @@ while (Date.now() - started < WATCH_SECONDS * 1000) {
         const b = JSON.parse(String(raw ?? 'null'));
         checks.bootAttempts += 1;
         if (b && (b.welcome !== null || checks.bootAttempts >= 3)) {
-          const j = judgeBoot(b);
+          // 断言①的第三方真源：按**这一档**（页内 data-theme）源码里的 --bg 判底色，不要求深色
+          const j = judgeBoot(b, expectedBootBg(b.dataTheme));
           checks.boot = b;
           checks.bootWsUrl = page.webSocketDebuggerUrl;
           checks.a1 = j.a1;
@@ -263,9 +282,10 @@ while (Date.now() - started < WATCH_SECONDS * 1000) {
           checks.a2Caliber = '页内资源时间线（回退口径，Network 域未取到）';
           checks.bootChecked = true;
           console.log(
-            `[smoke] L1-0 断言①=${checks.a1}（htmlParsed=${fmtBoot(j.htmlParsed)} 内联bg=${j.bgAtParse} ` +
-              `挂载后bg=${j.bgNow} t500.root=${j.t500Root ?? 'n/a'}；三分支 earlyDark=${j.earlyDark} ` +
-              `earlyRoot=${j.earlyRoot} 底色一致钉=${j.pinOk}）`,
+            `[smoke] L1-0 断言①=${checks.a1}（档位=${j.theme} 该档源码 --bg=${j.expectedBg} ` +
+              `htmlParsed=${fmtBoot(j.htmlParsed)} 内联bg=${j.bgAtParse} ` +
+              `挂载后bg=${j.bgNow} t500.root=${j.t500Root ?? 'n/a'}；三分支 earlyBgOk=${j.earlyBgOk} ` +
+              `earlyRoot=${j.earlyRoot} 三方底色钉=${j.pinOk}）`,
           );
           console.log(
             `[smoke] 断言②时间线口径读数：资源 ${b.resourceCount} 条（可点前 ${b.beforeCount} 条，` +
@@ -297,7 +317,7 @@ if (checks.bootChecked && checks.bootWsUrl) {
   if (!cap.ok) {
     console.log(`[smoke] Network 域取证未成功：${cap.reason}——断言②退回页内资源时间线口径（dev 下缓冲可能数不全）`);
   } else {
-    const a2 = resolveA2(cap, cap.page, judgeBoot(cap.page));
+    const a2 = resolveA2(cap, cap.page, judgeBoot(cap.page, expectedBootBg(cap.page.dataTheme)));
     checks.a2 = a2.ok;
     checks.a2Caliber = a2.used;
     checks.networkMonacoBefore = cap.monacoBeforeCount;
@@ -358,7 +378,8 @@ if (!passed) {
         !checks.cdpUp && 'CDP 9222 未监听',
         !checks.domRendered && 'DOM 未挂载（要求 .welcome + .welcome-card 且无 .notice；rootChildren 见 checks）',
         !checks.bootChecked && '未采到 L1-0 boot 标记（boot.welcomeInteractive 一直未上报）',
-        checks.bootChecked && !checks.a1 && 'L1-0 断言①未过（≤500ms 内既非深色底也未见 #root 非空，或内联底色 != 挂载后计算底色）',
+        checks.bootChecked && !checks.a1 && 'L1-0 断言①未过（≤500ms 内底色未落到该 data-theme 档应有的 --bg、也未见 #root 非空，' +
+          '或 内联底色 / 挂载后计算底色 != 该档源码的 --bg；档位与三方读数见上方打印行）',
         checks.bootChecked && !checks.a2 && `L1-0 断言②未过（口径=${checks.a2Caliber || '未采'}：可点前出现过 monaco 请求，` +
           `或整轮一条 monaco 都没采到=匹配面可疑；Network 域读数 ${checks.networkMonacoBefore ?? 'n/a'}/${checks.networkMonacoTotal ?? 'n/a'} 条，` +
           `时间线读数见上方）`,

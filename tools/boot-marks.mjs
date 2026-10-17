@@ -8,11 +8,13 @@
  * **本工具不改任何 app 代码**：exe 已在位就直接取数，不在位就 exit 2 报前置不满足
  * （C 盘紧张时不许顺手 cargo release 编译——那是别的批次的预算）。
  *
- * 断言口径**单一真源在 `tools/boot-probe.mjs`**（页内采样 / 深色判据 / Network 域取证 / 判定），
+ * 断言口径**单一真源在 `tools/boot-probe.mjs`**（页内采样 / 底色真源对撞 / Network 域取证 / 判定），
  * 两个工具共用；原先这里抄了一份 collectBoot，靠注释「改一处必须改两处」维系，已收敛。
  * 摘要（逐字口径见 boot-probe.mjs 头注）：
- * ① ≤500ms 内 `#root` 非空 **或** body 计算底色已是深色，外加「内联底色 == 挂载后计算底色」
- *    与「#boot-splash 已撤」两枚钉；
+ * ① ≤500ms 内 `#root` 非空 **或** body 计算底色已落到**该 `data-theme` 档源码里的 `--bg`**
+ *    （三档真源由 `expectedBootBg(档)` 现读：dark = `styles.css` 基础 `:root`，light / mint-dark =
+ *    `themes/<档>.css`），外加「内联底色 == 该档 `--bg` == 挂载后计算底色」与「#boot-splash 已撤」两枚钉；
+ *    **判据不要求深色**——浅色档 `#f6f8fa` 是用户设置，旧「亮度 < 96」硬编码必然假红；
  * ② 欢迎页可点（boot.welcomeInteractive）前不得有 monaco 请求——**取证优先 CDP Network 域**
  *    （Network.enable + Page.reload 重跑一轮开机，只认本轮 loaderId 的事件、以本轮 Document
  *    请求为锚点切分；release 形态资源条目本就少，时间线口径通常够用，但两条口径的数都要打出来
@@ -22,7 +24,7 @@
  *
  * 用法：node tools/boot-marks.mjs [--exe <路径>] [--timeout <秒，默认 90>] [--network-wait <秒，默认 60>]
  *      [--no-network] （跳过 Network 域取证轮，只取冷开机读数）
- * 退出码：0 = 读数完成且断言全过；1 = 断言红 / 采样超时；2 = 前置不满足（9222 被占、exe 缺失）。
+ * 退出码：0 = 读数完成且断言全过；1 = 断言红 / 采样超时；2 = 前置不满足（9222 被占、exe 缺失、底色真源读不到）。
  * 注意：会短暂弹应用窗口（结束自动关）。WEBVIEW2_USER_DATA_FOLDER 默认隔离到临时目录
  * （同机可能有另一个同 identifier 实例在跑，不隔离会 0x8007139F 建 WebView2 失败），用完删。
  * 收尸只按本工具 spawn 的进程树 + 本工具占的 9222 端口持有者收，**严禁按名杀 kojo-editor.exe**。
@@ -32,7 +34,7 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { collectBoot, judgeBoot, bootMarkLines, captureBootNetwork, resolveA2, CdpSession } from './boot-probe.mjs';
+import { collectBoot, judgeBoot, expectedBootBg, bootMarkLines, captureBootNetwork, resolveA2, CdpSession } from './boot-probe.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -114,6 +116,14 @@ if (!fs.existsSync(EXE)) {
   );
   process.exit(2);
 }
+// 断言①的底色真源也在起壳前过一遍（三档各现读一次）：塌了要在这里响——抛进下面的采样循环
+// 只会被那个静默 catch 当成「页面/WS 未就绪」，一直转到超时才报个假诊断。
+try {
+  for (const t of ['dark', 'light', 'mint-dark']) expectedBootBg(t);
+} catch (e) {
+  console.log(`[boot-marks] 断言①底色真源塌了：${String(e && e.message ? e.message : e)}`);
+  process.exit(2);
+}
 const exeStat = fs.statSync(EXE);
 console.log(`[boot-marks] 被测产物：${EXE}\n[boot-marks] 构建时间=${exeStat.mtime.toISOString()} 大小=${exeStat.size} B`);
 
@@ -143,7 +153,8 @@ while (Date.now() - started < TIMEOUT_S * 1000 && !exited && result.boot === nul
   try {
     const b = await sampleBoot(wsUrl);
     if (b && typeof b.welcome === 'number') {
-      const j = judgeBoot(b);
+      // 断言①的第三方真源：按页内这一档的源码 --bg 判底色（不要求深色）
+      const j = judgeBoot(b, expectedBootBg(b.dataTheme));
       result.boot = b;
       coldWsUrl = wsUrl;
       result.a1 = j.a1;
@@ -152,9 +163,9 @@ while (Date.now() - started < TIMEOUT_S * 1000 && !exited && result.boot === nul
       result.a2 = j.a2Timeline;
       result.a2Caliber = SKIP_NETWORK ? '页内资源时间线（--no-network，未做 Network 域取证）' : '页内资源时间线（回退口径，Network 域未取到）';
       console.log(
-        `[boot-marks] 断言①=${j.a1}（htmlParsed=${j.htmlParsed?.toFixed(1)} 内联bg=${j.bgAtParse} ` +
-          `挂载后bg=${j.bgNow} t500.root=${j.t500Root ?? 'n/a'}；earlyDark=${j.earlyDark} earlyRoot=${j.earlyRoot} ` +
-          `底色一致钉=${j.pinOk}）引导层已撤=${j.splashGone}`,
+        `[boot-marks] 断言①=${j.a1}（档位=${j.theme} 该档源码 --bg=${j.expectedBg} htmlParsed=${j.htmlParsed?.toFixed(1)} ` +
+          `内联bg=${j.bgAtParse} 挂载后bg=${j.bgNow} t500.root=${j.t500Root ?? 'n/a'}；` +
+          `earlyBgOk=${j.earlyBgOk} earlyRoot=${j.earlyRoot} 三方底色钉=${j.pinOk}）引导层已撤=${j.splashGone}`,
       );
       console.log(
         `[boot-marks] 断言②时间线口径读数：资源 ${b.resourceCount} 条（可点前 ${b.beforeCount} 条，` +
@@ -175,7 +186,7 @@ if (result.boot && !SKIP_NETWORK && coldWsUrl) {
   if (!cap.ok) {
     console.log(`[boot-marks] Network 域取证未成功：${cap.reason}——断言②仍按时间线口径判（已在上方标注）`);
   } else {
-    const a2 = resolveA2(cap, cap.page, judgeBoot(cap.page));
+    const a2 = resolveA2(cap, cap.page, judgeBoot(cap.page, expectedBootBg(cap.page.dataTheme)));
     result.a2 = a2.ok;
     result.a2Caliber = a2.used;
     result.netTotal = cap.total;
@@ -218,7 +229,8 @@ if (!pass) {
     '[boot-marks] 未满足：' +
       [
         result.boot === null && '未采到 boot.welcomeInteractive（超时或进程退出）',
-        result.boot !== null && !result.a1 && '断言①未过（≤500ms 内既非深色底也未见 #root 非空，或内联底色 != 挂载后计算底色）',
+        result.boot !== null && !result.a1 && '断言①未过（≤500ms 内底色未落到该 data-theme 档应有的 --bg、也未见 #root 非空，' +
+          '或 内联底色 / 挂载后计算底色 != 该档源码的 --bg；档位与三方读数见上方打印行）',
         result.boot !== null && !result.a2 && `断言②未过（口径=${result.a2Caliber}：可点前出现过 monaco，或整轮零 monaco=匹配面可疑）`,
         result.boot !== null && !result.splashGone && '引导层 #boot-splash 未被移除',
       ]
