@@ -30,6 +30,36 @@ import { serializePayload } from './serialize';
 import { ArchiveParseError } from './binary';
 import { verifyOverrides, verifyReadbackBytes } from './verify';
 
+/**
+ * 深解析记忆上限（2026-10-18 性能批）。
+ *
+ * 一条深解析档案 = 解压后的正文 + 全部变量/cell 对象，真实档实测 MB 级；
+ * 消费者只有两只面板（`.kojo 转译检查` 的回放腿、归档浏览器），同一轮里问的都是
+ * **同一个路径** ⇒ 上限取 2（切换选档时两侧各留一份），再多就是拿常驻内存换零收益。
+ * 0 = 关闭记忆（逐次读盘 + 解析，2026-10-18 之前的行为，测试用它做 A/B 对照）。
+ */
+const PARSE_MEMO_MAX = 2;
+
+/** 失效判据（仓库口径＝mtime + size，与快照 / 索引逐文件判据同源；**不做内容哈希**——
+ *  IO 路径上的逐文件内容哈希曾在 1016 批被实测量成 24.4s 的账，见 PITFALLS §73） */
+interface ArchiveStamp {
+  readonly mtimeMs: number;
+  readonly size: number;
+}
+
+interface MemoEntry {
+  /** 完整判据（路径 + mtime + size + 解析选项指纹）；与本次不符即作废 */
+  readonly key: string;
+  readonly archive: SnapshotArchive;
+}
+
+/** 解析选项指纹：记忆**必须**按选项分格——`headerOnly` / `keepRaw` / `keepArrayCells` /
+ *  `maxCellsPerArray` 产出的是完全不同的对象，串格会把浅解析当深解析交给消费者 */
+function optionsFingerprint(opts: ArchiveParseOptions | undefined): string {
+  if (!opts) return '';
+  return `k${opts.keepArrayCells === false ? 0 : 1}r${opts.keepRaw === true ? 1 : 0}h${opts.headerOnly === true ? 1 : 0}m${opts.maxCellsPerArray ?? ''}`;
+}
+
 /** 存档文件扩展名过滤 */
 const ARCHIVE_EXT = /\.sav$/i;
 
@@ -56,6 +86,14 @@ export interface SnapshotEngineDeps {
    * 旧内核无 `kernel.ops` 时缺席，行为退回原样。
    */
   journal?: Pick<OpJournal, 'begin' | 'record' | 'commit' | 'abort'>;
+  /**
+   * 深解析记忆上限（2026-10-18 性能批；可选）。
+   *
+   * 缺省 = `PARSE_MEMO_MAX`；`0` = 完全关闭记忆（每次 `parse()` 都读盘 + 解压 + 解析，
+   * 即本批之前的行为）。测试用这条开关在同一实例上做「有记忆 / 无记忆」的 A/B 对照，
+   * 生产装配层不传（走默认）。
+   */
+  parseMemoMax?: number;
 }
 
 async function mapLimit<T, R>(
@@ -86,8 +124,31 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
   private readonly listeners = new Set<(result: SnapshotScanResult | null) => void>();
   /** 代际号：项目切换时作废过期扫描的结果 */
   private generation = 0;
+  /**
+   * 深解析记忆（path → 判据 + 产物）。Map 插入序即 FIFO 序：重击=删除后重新入队尾，
+   * 超尺从队首削（与 `kernel/src/io.ts` 的文本缓存同一形状）。
+   */
+  private readonly memo = new Map<string, MemoEntry>();
+  /** 同判据的并发深解析共享一次（两条面板同时问同一个档 ⇒ 只解压一遍） */
+  private readonly memoFlight = new Map<string, Promise<SnapshotArchive>>();
+  private readonly memoMax: number;
+  /** 记忆读数（命中 / 未命中 / 关闭原因）；面板与测试用来自证"记忆在不在工作" */
+  private memoHits = 0;
+  private memoMisses = 0;
 
-  constructor(private readonly deps: SnapshotEngineDeps) {}
+  constructor(private readonly deps: SnapshotEngineDeps) {
+    this.memoMax = deps.parseMemoMax ?? PARSE_MEMO_MAX;
+  }
+
+  /** 深解析记忆读数（只观察、不改行为；`max` 即生效上限） */
+  parseMemoStats(): { readonly entries: number; readonly hits: number; readonly misses: number; readonly max: number } {
+    return { entries: this.memo.size, hits: this.memoHits, misses: this.memoMisses, max: this.memoMax };
+  }
+
+  /** 逐出全部深解析记忆（下次 `parse` 必重新读盘解析） */
+  clearParseMemo(): void {
+    this.memo.clear();
+  }
 
   current(): SnapshotScanResult | null {
     return this.last;
@@ -110,6 +171,7 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
     this.generation++;
     this.inFlight = null;
     this.last = null;
+    this.memo.clear();
     this.notify();
   }
 
@@ -187,9 +249,81 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
     return result;
   }
 
+  /**
+   * 深解析单个档案（带记忆）。
+   *
+   * **为什么要记忆**（2026-10-18 性能批的头号账）：`.kojo 转译检查` 面板每敲一键都会走
+   * `ui-sugar-preview → sugar.preview → state.replay.createView → 这里`，
+   * 无记忆时等于**每次击键把整档重新读盘 + 解压 + 逐 cell 解析一遍**（真实档 MB 级、
+   * 主线程同步段），而档根本没动。
+   *
+   * **判据＝mtime + size**（仓库既有口径，与抽取快照 / ERB 索引逐文件判据同源）：
+   * 用户在盘上改了存档 ⇒ 下一次解析必然重做（`parse-memo.test.ts` 钉这条）。
+   * 残余风险如实写明：同 mtime 且同 size 的**同值替换**（保留时间戳的拷贝）兜不住——
+   * 这是本仓所有 mtime 判据共同的边界，不为它引入内容哈希（见上方注释）。
+   *
+   * **不静默**（内核规则 4）：读盘 / 解析失败一律原样上抛，与加记忆之前同一条路径；
+   * 拿不到 stat（旧宿主 / 取不到元信息 / 目录）时**退回每次重解析**，绝不拿"没信号"当"没变"。
+   */
   async parse(path: string, opts?: ArchiveParseOptions): Promise<SnapshotArchive> {
+    if (this.memoMax <= 0) return this.parseFresh(path, opts);
+    const stamp = await this.stampOf(path);
+    if (stamp === null) return this.parseFresh(path, opts); // 无判据 ⇒ 不记忆（行为与改前逐字相同）
+
+    const key = `${path}\u0000${stamp.mtimeMs}\u0000${stamp.size}\u0000${optionsFingerprint(opts)}`;
+    const hit = this.memo.get(path);
+    if (hit && hit.key === key) {
+      this.memoHits++;
+      this.memo.delete(path); // 重新入队尾（FIFO：热的那条留在后面）
+      this.memo.set(path, hit);
+      return hit.archive;
+    }
+    this.memoMisses++;
+
+    const flight = this.memoFlight.get(key);
+    if (flight) return flight;
+
+    const task = (async (): Promise<SnapshotArchive> => {
+      const archive = await this.parseFresh(path, opts);
+      this.remember(path, key, archive);
+      return archive;
+    })();
+    this.memoFlight.set(key, task);
+    try {
+      return await task;
+    } finally {
+      if (this.memoFlight.get(key) === task) this.memoFlight.delete(key);
+    }
+  }
+
+  /** 不带记忆的读盘 + 解析（失败原样上抛；`inject` 链路用它之外的独立解析口径，不经这里） */
+  private async parseFresh(path: string, opts?: ArchiveParseOptions): Promise<SnapshotArchive> {
     const bytes = await this.deps.readBytes(path);
     return parseArchive(bytes, path, opts);
+  }
+
+  /** 取 mtime + size 判据；取不到（null / 抛 / 目录 / 非有限数）一律 null = 不记忆 */
+  private async stampOf(path: string): Promise<ArchiveStamp | null> {
+    let st: FileStat | null;
+    try {
+      st = await this.deps.stat(path);
+    } catch (err) {
+      this.deps.log.debug(`Archive parse memo disabled for ${path}: stat failed — ${String(err)}`);
+      return null;
+    }
+    if (!st || st.isDirectory || !Number.isFinite(st.mtimeMs) || !Number.isFinite(st.size)) return null;
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  }
+
+  /** 入记忆（FIFO 超尺从队首削；解析失败不会走到这里 ⇒ 坏档永不入记忆） */
+  private remember(path: string, key: string, archive: SnapshotArchive): void {
+    this.memo.delete(path);
+    this.memo.set(path, { key, archive });
+    while (this.memo.size > this.memoMax) {
+      const oldest = this.memo.keys().next().value;
+      if (oldest === undefined) break;
+      this.memo.delete(oldest);
+    }
   }
 
   /**
@@ -226,6 +360,9 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
       const backupPath = await this.deps.backup(path);
       try {
         await this.deps.writeBytes(path, full);
+        // 自己刚改过盘 ⇒ 这条路径的记忆**已知作废**，逐出（不等 mtime/size 判据生效；
+        // 系统 mtime 粒度粗时判据本身可能同值）
+        this.memo.delete(path);
       } catch (err) {
         this.deps.log.warn(
           `Snapshot inject: write failed for ${path}${backupPath ? ` (backup at ${backupPath})` : ''}: ${String(err)}`,

@@ -27,6 +27,69 @@ import { extractFunctionConditions, extractFunctionPredicates, type SchemaLookup
 import { parseExpression } from './expr';
 import { mergeBuckets, planReuse, type ExtractExpect, type FileBucket, type FileStats } from './snapshot';
 
+/**
+ * 明细 / 正文缓存上限（2026-10-18 性能批）。
+ *
+ * 两条都只在**按需解析路径**（`functionPredicates`）里增长，旧形态只在全量索引重建时整体清空
+ * ⇒ 判定面板走完 99,228 个函数就把「明细 + 整棵正文」各留一份常驻，其中正文是**第三份**
+ * （内核 io 会话缓存已有一份、ERB 索引 walk 期间还有一份），真实语料口径 ~144 MB 级。
+ *
+ * 形状照 `kernel/src/io.ts:313-317`：重读=重新入队尾，超尺从队首削，尺子＝条数 + 字符数。
+ * 逐出永不改变结果——明细是按 (索引位, 盘上正文) 的纯函数，重问只是重算一遍。
+ */
+const DETAIL_CACHE_MAX = 512;
+const TEXT_CACHE_MAX_FILES = 128;
+const TEXT_CACHE_MAX_CHARS = 6 * 1024 * 1024;
+
+/** 函数体正文缓存（FIFO + 字符数上限；与 `kernel/src/io.ts` 的文本缓存同形状） */
+class TextFifoCache {
+  private readonly map = new Map<string, string>();
+  private chars = 0;
+  constructor(
+    private readonly maxFiles: number,
+    private readonly maxChars: number,
+  ) {}
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  get totalChars(): number {
+    return this.chars;
+  }
+
+  get(path: string): string | undefined {
+    const v = this.map.get(path);
+    if (v !== undefined) {
+      this.map.delete(path); // 命中=重新入队尾
+      this.map.set(path, v);
+    }
+    return v;
+  }
+
+  set(path: string, text: string): void {
+    const prev = this.map.get(path);
+    if (prev !== undefined) {
+      this.map.delete(path);
+      this.chars -= prev.length;
+    }
+    this.map.set(path, text);
+    this.chars += text.length;
+    while (this.map.size > this.maxFiles || this.chars > this.maxChars) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      const evicted = this.map.get(oldest);
+      this.map.delete(oldest);
+      if (evicted !== undefined) this.chars -= evicted.length;
+    }
+  }
+
+  clear(): void {
+    this.map.clear();
+    this.chars = 0;
+  }
+}
+
 export interface ConditionEngineDeps {
   log: Logger;
   /** 当前打开的项目（未打开时 null） */
@@ -81,6 +144,15 @@ export interface ConditionEngineDeps {
    * 并**窗口间让出主线程**，否则"开项目后十几秒内打字卡"。
    */
   compute: ComputePool;
+  /**
+   * 按需明细 / 正文缓存上限（2026-10-18 性能批；可选，缺省＝上面三个常数）。
+   * 给 `Infinity` = 不设限（＝本批之前的无上限形态），A/B 对照与量例用。
+   */
+  detailCacheCaps?: {
+    maxDetails?: number;
+    maxFiles?: number;
+    maxChars?: number;
+  };
 }
 
 /**
@@ -113,12 +185,42 @@ export class ConditionEngine implements ConditionExtractorService {
   private last: ConditionIndex | null = null;
   private inFlight: Promise<ConditionIndex> | null = null;
   private readonly listeners = new Set<(index: ConditionIndex | null) => void>();
-  /** 谓词明细缓存（按需解析产物；索引重建时失效——最多缓存被查看过的函数，规模可控） */
+  /**
+   * 谓词明细缓存（按需解析产物；索引重建时失效 + FIFO 超尺逐出）。
+   * 插入序＝FIFO 序：命中即重新入队尾，超 `maxDetails` 从队首削。
+   */
   private readonly detailCache = new Map<string, FunctionPredicates>();
-  /** 明细解析的文件文本缓存（同批多个函数共享文件时避免重复读取；索引重建时失效） */
-  private readonly fileTextCache = new Map<string, string>();
+  private readonly detailCacheMax: number;
+  /** 明细解析的文件正文缓存（同批多个函数共享文件时避免重复读取；索引重建时失效 + 上限逐出） */
+  private readonly fileTextCache: TextFifoCache;
+  private readonly textCacheMaxFiles: number;
+  private readonly textCacheMaxChars: number;
 
-  constructor(private readonly deps: ConditionEngineDeps) {}
+  constructor(private readonly deps: ConditionEngineDeps) {
+    this.detailCacheMax = deps.detailCacheCaps?.maxDetails ?? DETAIL_CACHE_MAX;
+    this.textCacheMaxFiles = deps.detailCacheCaps?.maxFiles ?? TEXT_CACHE_MAX_FILES;
+    this.textCacheMaxChars = deps.detailCacheCaps?.maxChars ?? TEXT_CACHE_MAX_CHARS;
+    this.fileTextCache = new TextFifoCache(this.textCacheMaxFiles, this.textCacheMaxChars);
+  }
+
+  /** 缓存读数（上限是否真在收口；面板自证与量例用） */
+  cacheStats(): {
+    readonly details: number;
+    readonly maxDetails: number;
+    readonly textFiles: number;
+    readonly textChars: number;
+    readonly maxTextFiles: number;
+    readonly maxTextChars: number;
+  } {
+    return {
+      details: this.detailCache.size,
+      maxDetails: this.detailCacheMax,
+      textFiles: this.fileTextCache.size,
+      textChars: this.fileTextCache.totalChars,
+      maxTextFiles: this.textCacheMaxFiles,
+      maxTextChars: this.textCacheMaxChars,
+    };
+  }
 
   currentIndex(): ConditionIndex | null {
     return this.last;
@@ -142,12 +244,17 @@ export class ConditionEngine implements ConditionExtractorService {
 
   /**
    * 按需解析单函数谓词明细（读文件 → 控制流扫描 → 逐条解析）。
-   * 不入全量索引（49 万谓词常驻内存不划算）；结果缓存至下一次索引重建。
+   * 不入全量索引（49 万谓词常驻内存不划算）；结果缓存至下一次索引重建，
+   * 期间超出上限按 FIFO 逐出（逐出只意味着"下次重算"，不改产出）。
    */
   async functionPredicates(normalizedName: string): Promise<FunctionPredicates | null> {
     const key = normalizedName.toUpperCase();
     const cached = this.detailCache.get(key);
-    if (cached) return cached;
+    if (cached) {
+      this.detailCache.delete(key); // 命中=重新入队尾
+      this.detailCache.set(key, cached);
+      return cached;
+    }
 
     const index = this.deps.getIndex();
     if (!index) return null;
@@ -183,6 +290,11 @@ export class ConditionEngine implements ConditionExtractorService {
       { endLine: ref.endLine, lines: sourceLines },
     );
     this.detailCache.set(key, detail);
+    while (this.detailCache.size > this.detailCacheMax) {
+      const oldest = this.detailCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.detailCache.delete(oldest); // 超尺从队首削（正文那条尺子由 TextFifoCache 自己收口）
+    }
     return detail;
   }
 

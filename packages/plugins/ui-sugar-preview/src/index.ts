@@ -260,9 +260,21 @@ export function createUiSugarPreviewPlugin(): Plugin {
           () => buildPreviewRows(result, source ?? '', withReach),
           [result, source, withReach],
         );
+        /**
+         * 诊断行表同属 `result` 的纯派生（2026-10-18 性能批补齐最后一处每帧重算）：
+         * 旧形态在**内容区**里直接 `buildDiagnosticRows(...)`，于是每次 `editor.cursorMoved`
+         * 触发的 render 都要把全篇诊断重建一遍——而行表 / 概要早已 memo 化，只剩这一处漏。
+         * 位置同样是硬约束：必须排在降级态早返回**之前**（React Hooks 不能条件调用），
+         * 入参与内容区那句 `result.transpile.diagnostics` 在"result 非空"时逐字相同。
+         */
+        const diagRows: DiagnosticRow[] = useMemo(
+          () => buildDiagnosticRows(result?.transpile.diagnostics),
+          [result],
+        );
+        // 概要吃**同一批** rows / diagRows（不再自己把行表与诊断表各重建一遍）
         const summary: PreviewSummary = useMemo(
-          () => summarize(result, source ?? '', withReach),
-          [result, source, withReach],
+          () => summarize(result, source ?? '', withReach, { rows, diags: diagRows }),
+          [result, source, withReach, rows, diagRows],
         );
 
         /** 点击定位：请求宿主打开并滚动到该行（同文件时仅滚动） */
@@ -330,9 +342,8 @@ export function createUiSugarPreviewPlugin(): Plugin {
 
         /* ------------------------------ 内容 ------------------------------ */
 
-        // `arch` / `withReach` / `summary` / `rows` 全部取自上方 memo（早返回之前算的那一组）——
+        // `arch` / `withReach` / `summary` / `rows` / `diagRows` 全部取自上方 memo（早返回之前算的那一组）——
         // 走到这里 `source` / `result` 必非空（上面已拦），与 memo 的 `source ?? ''` 同值、结果逐字一致。
-        const diagRows = buildDiagnosticRows(result.transpile.diagnostics);
 
         return shell([
           summaryBox(summary, arch),
