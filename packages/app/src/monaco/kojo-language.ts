@@ -1,6 +1,7 @@
 import type * as Monaco from './entry';
 import type { LineDecoration } from '@kojo/plugin-api';
 import { ENGINE_VARIABLE_FAMILIES, sugarEditorLexicon, SYSTEM_FUNCTION_ALIASES, sugarEnterRulePatterns } from '@kojo/plugin-kojo-sugar';
+import { ERB_DIRECTIVES } from './erb-directives';
 import { CJK_WORD_PATTERN } from './word-separators';
 
 /**
@@ -15,8 +16,10 @@ import { CJK_WORD_PATTERN } from './word-separators';
  * 故**高亮 / 补全 / 悬停与转译器词法永不脱节**——本文件不复制任何词形清单
  * （守卫：`packages/app/tests/kojo-lexicon-single-source.test.ts` 逐文件扫宿主源码，
  * 词表里的中文词形一旦在本层被手抄成字面量就红）。
- * 与 `erb-language.ts` 硬编码 ASCII `ERB_DIRECTIVES` 的取舍不同：`.kojo` 词表是活表，
- * 并行批次随时往表里登记新的中文主形，宿主侧必须**零改动**就认得。
+ * 与手写 ASCII 词表（叶子模块 `erb-directives.ts` 的 `ERB_DIRECTIVES`）的取舍不同：
+ * `.kojo` 词表是活表，并行批次随时往表里登记新的中文主形，宿主侧必须**零改动**就认得；
+ * 而原生直通行的指令档（`ERB_COMMANDS`）恰恰**派生自**那份 ASCII 真源——
+ * 本文件不写任何指令字串，凡出现即手抄（守卫扫描见 `erb-directive-words.test.ts`）。
  *
  * 着色分层（"屏上一眼看出还剩哪一层没中文化"）：档位表见 `KOJO_TOKEN_TIERS`，
  * 判据（每档前景互不相同 + 对比度/色差不得低于既有档位基线）在
@@ -70,21 +73,14 @@ function charClassPattern(words: readonly string[]): RegExp {
  */
 export const ERB_FAMILY_HEADS: readonly string[] = ENGINE_VARIABLE_FAMILIES;
 
-/** 原生直通行里可识别的高频 ERB 指令（高亮口径；不做语义分析；族头已另立一档） */
-const ERB_COMMANDS_BASE = [
-  'PRINT', 'PRINTL', 'PRINTW', 'PRINTV', 'PRINTVL',
-  'PRINTFORM', 'PRINTFORML', 'PRINTFORMS', 'PRINTFORMW', 'PRINTFORMV',
-  'PRINTDATA', 'PRINTDATAL', 'PRINTDATAW', 'PRINTDATAS',
-  'PRINTSINGLE', 'PRINTSINGLEL', 'PRINTSINGLEFORM', 'PRINTSINGLEFORML',
-  'IF', 'ELSEIF', 'ELSE', 'ENDIF', 'SIF',
-  'SELECTCASE', 'CASE', 'CASEELSE', 'ENDSELECT',
-  'FOR', 'NEXT', 'WHILE', 'WEND', 'DO', 'LOOP', 'REPEAT', 'REND', 'BREAK', 'CONTINUE', 'RETURN',
-  'CALL', 'CALLL', 'JUMP', 'CALLFORM', 'TRYCALLFORM', 'TRYCALL', 'TRYJUMP',
-  'DIM', 'DIMS', 'SWAP', 'SETCOLOR', 'RESETCOLOR', 'FONTBOLD', 'FONTITALIC', 'FONTSIZE',
-  'WAIT', 'INPUT', 'INPUTS', 'RAND', 'TIMES', 'BAR', 'BARL', 'DRAWLINE',
-];
+/**
+ * 原生直通行里可识别的高频 ERB 指令（高亮口径；不做语义分析；族头已另立一档）。
+ * **派生自** `erb-directives.ts` 的单一真源（与 `.erb` 高亮/补全同一份清单）：
+ * 叶模块 import 是防环形态——本文件已在 `erb-language → theme → kojo-language` 环上，
+ * 经 `erb-language` 取值会踩 TDZ。族头由 `FAMILY_HEAD_SET` 滤出，另发 `keyword.erb.family`。
+ */
 const FAMILY_HEAD_SET = new Set(ERB_FAMILY_HEADS);
-export const ERB_COMMANDS: readonly string[] = ERB_COMMANDS_BASE.filter((d) => !FAMILY_HEAD_SET.has(d));
+export const ERB_COMMANDS: readonly string[] = ERB_DIRECTIVES.filter((d) => !FAMILY_HEAD_SET.has(d));
 
 /**
  * 中文系统函数名（HK-11①）——从 `kojo-sugar` 的 `SYSTEM_FUNCTION_ALIASES`

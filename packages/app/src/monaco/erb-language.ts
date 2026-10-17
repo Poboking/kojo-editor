@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import { ERB_DIRECTIVES } from './erb-directives';
 import { erbMonacoExtensions } from '@kojo/plugin-api';
 import { defineMonacoThemes } from './theme';
 import { CJK_WORD_PATTERN } from './word-separators';
@@ -8,29 +9,17 @@ import { CJK_WORD_PATTERN } from './word-separators';
  *
  * 依据（逆向文档《词法与表达式》《口上机制深挖》）：
  * - 行首 `;` 注释、`@` 函数定义、`#` 预处理指令、`$` 跳转标签；
- * - 指令表取口上高频子集；变量多段引用（CFLAG:ARG:口上セレクタ）整体高亮；
+ * - 指令表 = 口上高频子集（单一真源 `erb-directives.ts`）；变量多段引用（CFLAG:ARG:口上セレクタ）整体高亮；
  * - FORM 串内 `{表达式}` / `%字符串%` 作为字符串内的第二层（Monarch 嵌套限制，v0.1 简化）。
  */
 
-export const ERB_DIRECTIVES = [
-  'PRINT', 'PRINTL', 'PRINTW', 'PRINTV', 'PRINTVL',
-  'PRINTFORM', 'PRINTFORML', 'PRINTFORMS', 'PRINTFORMW', 'PRINTFORMV',
-  'PRINTDATA', 'PRINTDATAL', 'PRINTDATAW', 'PRINTDATAS',
-  'PRINTSINGLE', 'PRINTSINGLEL', 'PRINTSINGLEFORM', 'PRINTSINGLEFORML',
-  'IF', 'ELSEIF', 'ELSE', 'ENDIF', 'SIF',
-  'SELECTCASE', 'CASE', 'CASEELSE', 'ENDSELECT',
-  'FOR', 'NEXT', 'WHILE', 'WEND', 'DO', 'LOOP', 'REPEAT', 'REND', 'BREAK', 'CONTINUE', 'RETURN',
-  'CALL', 'CALLL', 'JUMP', 'CALLFORM', 'CALLFORML', 'TRYCALLFORM', 'TRYCALLFORMF',
-  'TRYCALL', 'TRYJUMP', 'TRYCCALLFORM', 'CALLF', 'CALLFORMF',
-  'DIM', 'DIMS', 'SWAP',
-  'SETCOLOR', 'RESETCOLOR', 'FONTBOLD', 'FONTITALIC', 'FONTREGULAR', 'FONTSIZE', 'FONTSTYLE',
-  'WAIT', 'WAITANYKEY', 'INPUT', 'INPUTS', 'ONEINPUT', 'TINPUT', 'TINPUTS', 'TWAIT',
-  'STRDATA', 'SAVEDATA', 'LOADDATA', 'DELDATA', 'SAVEGLOBAL', 'LOADGLOBAL',
-  'GETTIME', 'GETMILLISECOND', 'SETBIT', 'CLEARBIT', 'INVERTBIT', 'GETBIT', 'SETCOLORBYNAME',
-  'RANDOMIZE', 'RAND', 'TIMES', 'EXISTCSV', 'BAR', 'BARL', 'DRAWLINE', 'CLEARLINE', 'ALIGNMENT',
-  'ADDCHARA', 'ADDSPCHARA', 'DELCHARA', 'SWAPCHARA', 'PICKUPCHARA', 'GETCHARA', 'CHKCHARA',
-  'EQUIP', 'UNEQUIP', 'EQUIPCHECK', 'CHANGE_CFLAG', 'CFLAG', 'RESETDATA', 'BEGIN', 'EVENTCOM',
-];
+/**
+ * 指令词表单一真源在叶子模块 `erb-directives.ts`（零 import——kojo 侧要同一份清单，
+ * 走本文件会踩 `erb-language → theme → kojo-language` 模块环的 TDZ）。
+ * 此处**原样 re-export**：既有 import 点（`erb-completion` / `editor-global-providers` /
+ * 测试）逐字零改动，引用的是同一数组本体。
+ */
+export { ERB_DIRECTIVES };
 
 export const ERB_LANGUAGE_ID = 'kojo-erb';
 
