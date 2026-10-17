@@ -24,6 +24,7 @@ import {
   type ScopedStorage,
 } from '@kojo/plugin-api';
 import { createMarketService, sha256Hex } from '../src/index';
+import { extractFailureMessage } from '../src/service';
 
 /**
  * `MarketService.publish` 的**编排**判据（注入假壳层）。
@@ -436,25 +437,68 @@ describe('publish 的预校验拒因（零出网：marketPublish 不许被调到
     expect(h.bridge.publishCalls).toHaveLength(0);
   });
 
-  it('容器打不开（解压失败）→ extract-failed', async () => {
+  it('容器打不开（解压失败）→ extract-failed（保持"不是合法的发布容器"语义）', async () => {
     const tree = { 'a.erb': bytesOf('口上 A\r\n') };
     const h = await boot({ files: tree, manifest: await manifestOf(tree), extractThrows: 'bad zip' });
     const err = await codeOf(h.svc.publish(h.chosenZip));
     expect(err.code).toBe('extract-failed');
+    expect(err.message).toBe('这个包打不开（不是合法的发布容器）：bad zip');
     expect(h.bridge.publishCalls).toHaveLength(0);
     expect(stagedLeftovers(h.root)).toEqual([]);
   });
 
-  it('解出目录里没有 pack.json → manifest-missing（与安装同一条 readSourceManifest）', async () => {
+  it('非 UTF-8 条目名（entry-name-encoding）→ extract-failed：指引重压缩/工作区发布，拒因码保留', async () => {
+    const tree = { 'a.erb': bytesOf('口上 A\r\n') };
+    const h = await boot({
+      files: tree,
+      manifest: await manifestOf(tree),
+      extractThrows: 'entry-name-encoding：条目路径非法 "▒▒▒"（容器 C:\\appdata\\market\\.staging\\publish-preview.zip）',
+    });
+    const err = await codeOf(h.svc.publish(h.chosenZip));
+    expect(err.code).toBe('extract-failed');
+    expect(err.message).toContain('文件名不是 UTF-8');
+    expect(err.message).toContain('7-Zip 可加 -mcu=on');
+    expect(err.message).toContain('从工作区发布');
+    // 原始诊断不许被吞：拒因码与解析细节都还在
+    expect(err.message).toContain('entry-name-encoding');
+    expect(err.message).toContain('条目路径非法');
+    expect(h.bridge.publishCalls).toHaveLength(0);
+    expect(stagedLeftovers(h.root)).toEqual([]);
+  });
+
+  it('解出目录里没有 pack.json → manifest-missing：不暴露 .staging，指向工作区发布', async () => {
     const tree = { 'a.erb': bytesOf('口上 A\r\n') };
     const h = await boot({ files: tree, manifest: await manifestOf(tree), noManifestFile: true });
     const err = await codeOf(h.svc.publish(h.chosenZip));
     expect(err.code).toBe('manifest-missing');
+    expect(err.message).toContain('不是市场发布格式');
+    expect(err.message).toContain('pack.json');
+    expect(err.message).toContain('从工作区直接发布');
+    expect(err.message).not.toContain('.staging');
+    // detail 指向作者选定的 zip，而不是内部解压目录
+    expect(err.detail).toBe(h.chosenZip);
     expect(h.bridge.publishCalls).toHaveLength(0);
+    expect(stagedLeftovers(h.root)).toEqual([]);
   });
 
-  it('对平不平：清单声明了容器里没有的条目 → entry-missing', async () => {
+  it('pack.json 在但没有 files/ 目录 → content-missing：不暴露 .staging，说清不是完整容器', async () => {
     const tree = { 'a.erb': bytesOf('口上 A\r\n') };
+    // drop 唯一的文件 ⇒ 假壳层根本不建 files/ 目录
+    const h = await boot({ files: tree, manifest: await manifestOf(tree), drop: 'files/a.erb' });
+    const err = await codeOf(h.svc.publish(h.chosenZip));
+    expect(err.code).toBe('content-missing');
+    expect(err.message).toContain('pack.json 在');
+    expect(err.message).toContain('files/');
+    expect(err.message).toContain('不是完整的市场容器');
+    expect(err.message).toContain('从工作区直接发布');
+    expect(err.message).not.toContain('.staging');
+    expect(err.detail).toBe(h.chosenZip);
+    expect(h.bridge.publishCalls).toHaveLength(0);
+    expect(stagedLeftovers(h.root)).toEqual([]);
+  });
+
+  it('对平不平：清单声明了容器里没有的条目 → entry-missing（files/ 在，少了一个文件）', async () => {
+    const tree = { 'a.erb': bytesOf('口上 A\r\n'), 'b.erb': bytesOf('口上 B\r\n') };
     const h = await boot({ files: tree, manifest: await manifestOf(tree), drop: 'files/a.erb' });
     const err = await codeOf(h.svc.publish(h.chosenZip));
     expect(err.code).toBe('entry-missing');
@@ -476,6 +520,28 @@ describe('publish 的预校验拒因（零出网：marketPublish 不许被调到
     expect(err.code).toBe('endpoint-invalid');
     expect(h.bridge.tokenFetches).toBe(0);
     expect(h.bridge.publishCalls).toHaveLength(0);
+  });
+});
+
+describe('extractFailureMessage · 解压失败的作者面人话（entry-name-encoding 可执行指引）', () => {
+  it('entry-name-encoding → UTF-8 / 7-Zip 指引，原始拒因码与细节保留在末尾', () => {
+    const msg = extractFailureMessage(
+      new Error('entry-name-encoding：条目名不是合法 UTF-8：foo'),
+    );
+    expect(msg).toContain('文件名不是 UTF-8');
+    expect(msg).toContain('7-Zip 可加 -mcu=on');
+    expect(msg).toContain('从工作区发布');
+    expect(msg).toContain('（原始错误：entry-name-encoding');
+  });
+
+  it('其余解压失败 → 保持"这个包打不开（不是合法的发布容器）"，原始错误不吞', () => {
+    expect(extractFailureMessage(new Error('bad zip'))).toBe(
+      '这个包打不开（不是合法的发布容器）：bad zip',
+    );
+    // 平台桥抛的可能是字符串而不是 Error（Tauri invoke 原样抛出）
+    expect(extractFailureMessage('容器不可读 C:\\x.zip: unexpected EOF')).toBe(
+      '这个包打不开（不是合法的发布容器）：容器不可读 C:\\x.zip: unexpected EOF',
+    );
   });
 });
 

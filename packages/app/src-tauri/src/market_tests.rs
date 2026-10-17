@@ -1658,8 +1658,11 @@ fn zip_roundtrip_limit_gates_come_from_the_table() {
 /* ------------------------ 发布（上传）闸与解析 ------------------------ */
 
 use crate::market::{
-    device_token_url, parse_device_token, parse_publish_body, publish_host_in_allowlist,
-    publish_request_url, publish_url_problem, PublishManifestSummary,
+    body_excerpt, device_token_url, digest_hex_problem, parse_device_token, parse_publish_body,
+    publish_host_in_allowlist, publish_length_mismatch_problem, publish_request_url,
+    publish_upload_headers, publish_url_problem, rejection_code_or_http, sha256_stream,
+    PublishManifestSummary, MARKET_ZIP_CONTENT_TYPE, MARKET_ZIP_SHA256_HEADER,
+    PUBLISH_BODY_EXCERPT_CHARS,
 };
 
 fn manifest_summary(id: &str, name: &str) -> PublishManifestSummary {
@@ -1789,6 +1792,222 @@ fn parse_publish_body_honours_outcome_and_rejects_garbage() {
     // message 缺失给空串不炸（code 是主键，message 只是给人话）
     let no_msg = parse_publish_body(br#"{"ok":false,"rejected":{"code":"x"}}"#, 200, "u").unwrap();
     assert_eq!(no_msg.rejected.unwrap().message, "");
+}
+
+/// 响应归一化的表驱动判据（2026-10-18 实测回归）：真实后端用 **HTTP 400 + 裸
+/// `{"rejected":{...}}`** 表达拒绝，旧实现只看 `ok` ⇒ 报"缺 ok"把拒因吞了。
+/// 这里逐形状钉住裁决与兜底：成功 / ok:false / 裸 rejected / 空 code / 顶层 message /
+/// 顶层 error（含对象形态）/ 非 JSON / 2xx 缺 prUrl。
+#[test]
+fn parse_publish_body_normalizes_every_backend_shape() {
+    let final_url = "https://market.362573581.xyz/publish?kind=kojo-pack&id=demo";
+
+    // ① 成功：2xx + ok:true + prUrl（verified 原样搬运，status/finalUrl 语义不变）
+    let ok = parse_publish_body(
+        br#"{"ok":true,"prUrl":"https://github.com/p/pull/7","verified":"structure-only"}"#,
+        201,
+        final_url,
+    )
+    .unwrap();
+    assert!(ok.ok);
+    assert_eq!(ok.pr_url.as_deref(), Some("https://github.com/p/pull/7"));
+    assert!(ok.rejected.is_none());
+    assert_eq!(ok.status, 201);
+    assert_eq!(ok.final_url, final_url);
+    assert_eq!(ok.verified.as_deref(), Some("structure-only"));
+
+    // ② ok:false + rejected：照裁决搬运
+    let rej = parse_publish_body(
+        r#"{"ok":false,"rejected":{"code":"container-invalid","message":"包体缺 pack.json"}}"#
+            .as_bytes(),
+        422,
+        final_url,
+    )
+    .unwrap();
+    assert!(!rej.ok);
+    let r = rej.rejected.expect("ok=false 必须带 rejected");
+    assert_eq!(
+        (r.code.as_str(), r.message.as_str()),
+        ("container-invalid", "包体缺 pack.json")
+    );
+
+    // ③ 裸 rejected（本次后端形状：HTTP 400 + 无 ok）⇒ 拒绝，不是"缺 ok"
+    let bare = parse_publish_body(
+        r#"{"rejected":{"code":"container-digest","message":"包体 sha256 校验值缺失、形态不对或与实际内容不符——请更新编辑器后重新导出上传","detail":"缺 x-market-zip-sha256 头或形态不对"}}"#
+            .as_bytes(),
+        400,
+        final_url,
+    )
+    .unwrap();
+    assert!(!bare.ok, "裸 rejected 必须归一成拒绝");
+    assert_eq!(bare.status, 400);
+    let r = bare.rejected.expect("裸 rejected 必须带 rejected");
+    assert_eq!(r.code, "container-digest");
+    assert_eq!(
+        r.message, "包体 sha256 校验值缺失、形态不对或与实际内容不符——请更新编辑器后重新导出上传",
+        "主 message 不许被 detail 顶掉"
+    );
+
+    // ④ rejected.code 为空 ⇒ 非空兜底（非 2xx 落 http-<status>，2xx 落 unknown）
+    let empty = parse_publish_body(r#"{"rejected":{"code":"","message":"x"}}"#.as_bytes(), 400, final_url)
+        .unwrap();
+    assert_eq!(empty.rejected.unwrap().code, "http-400");
+    let empty_2xx =
+        parse_publish_body(br#"{"ok":false,"rejected":{"code":""}}"#, 200, final_url).unwrap();
+    assert_eq!(empty_2xx.rejected.unwrap().code, "unknown");
+
+    // ⑤ 非 2xx + {message} ⇒ 拒绝，code 兜底 http-<status>
+    let msg = parse_publish_body(r#"{"message":"请求体签名不对"}"#.as_bytes(), 400, final_url)
+        .unwrap();
+    assert!(!msg.ok);
+    let r = msg.rejected.unwrap();
+    assert_eq!((r.code.as_str(), r.message.as_str()), ("http-400", "请求体签名不对"));
+
+    // ⑤b 非 2xx + {error, detail} ⇒ code 取 error，message 空时用 detail 兜底
+    let err_shape = parse_publish_body(
+        r#"{"error":"invalid-container","detail":"zip 头不完整"}"#.as_bytes(),
+        502,
+        final_url,
+    )
+    .unwrap();
+    let r = err_shape.rejected.unwrap();
+    assert_eq!((r.code.as_str(), r.message.as_str()), ("invalid-container", "zip 头不完整"));
+    // error 是对象时取它的 code
+    let err_obj = parse_publish_body(
+        r#"{"error":{"code":"bad-gateway","message":"上游失败"}}"#.as_bytes(),
+        502,
+        final_url,
+    )
+    .unwrap();
+    assert_eq!(err_obj.rejected.unwrap().code, "bad-gateway");
+
+    // ⑥ 非 JSON / HTML：平台错误带状态、finalUrl、正文摘录（去控制字符、截断）
+    let e = parse_publish_body(b"<html>\x00\x07<body>400 Bad Request</body></html>", 400, final_url)
+        .unwrap_err();
+    assert!(e.contains("HTTP 400"), "错误里没有状态：{e}");
+    assert!(e.contains(final_url), "错误里没有 finalUrl：{e}");
+    assert!(e.contains("JSON"), "错误没说是非 JSON：{e}");
+    assert!(e.contains("400 Bad Request"), "错误里没有正文摘录：{e}");
+    assert!(
+        !e.contains('\u{0}') && !e.contains('\u{7}'),
+        "摘录里留了控制字符：{e:?}"
+    );
+    let huge = parse_publish_body(&vec![b'A'; 10_000], 502, final_url).unwrap_err();
+    assert!(
+        huge.len() < 1_000,
+        "非 JSON 错误把整页正文灌出来了：{} 字节",
+        huge.len()
+    );
+
+    // ⑦ 2xx 缺 prUrl ⇒ 明确错误，不演成成功
+    for body in [br#"{"ok":true}"#.as_slice(), br#"{"ok":true,"prUrl":""}"#.as_slice()] {
+        let e = parse_publish_body(body, 200, final_url).unwrap_err();
+        assert!(e.contains("prUrl"), "缺 prUrl 没被明确报错：{e}");
+    }
+}
+
+/// 摘要与头部：**纯函数**判据（白名单不放宽 localhost，所以不起本地 HTTP）。
+/// 1) 流式 SHA-256 与已知向量逐字相同（含跨 64 KiB 块的多轮读取）；
+/// 2) 摘要头就挂 `x-market-zip-sha256`（小写 64 hex）+ `Content-Type: application/zip`；
+/// 3) 形态不对的摘要一律拒（大写 / 短 / 非 hex / 空）。
+#[test]
+fn upload_digest_streams_exact_bytes_and_forms_the_required_headers() {
+    // 已知向量（FIPS 180-2）：SHA-256("abc")
+    let mut abc: &[u8] = b"abc";
+    let (digest, n) = tauri::async_runtime::block_on(sha256_stream(&mut abc)).expect("内存流必须可哈希");
+    assert_eq!(n, 3);
+    assert_eq!(
+        digest,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert!(
+        digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "摘要不是小写 hex：{digest}"
+    );
+
+    // 跨块：100 KiB 全零（>64 KiB 缓冲 ⇒ 至少两轮 read），与 node:crypto 复算值钉住
+    let payload = vec![0u8; 100 * 1024];
+    let mut reader: &[u8] = &payload;
+    let (big, read) = tauri::async_runtime::block_on(sha256_stream(&mut reader)).expect("大流必须可哈希");
+    assert_eq!(read, 100 * 1024, "流式读取丢字节或多字节");
+    assert_eq!(
+        big,
+        "f627ca4c2c322f15db26152df306bd4f983f0146409b81a4341b9b340c365a16",
+        "跨块摘要与已知值不符（分块边界改变了摘要？）"
+    );
+
+    // 头部：两件都要挂上，且摘要头名/值逐字可读
+    let headers = publish_upload_headers(&digest).expect("64 位小写 hex 必须能挂头");
+    assert_eq!(MARKET_ZIP_SHA256_HEADER, "x-market-zip-sha256");
+    assert_eq!(MARKET_ZIP_CONTENT_TYPE, "application/zip");
+    assert_eq!(
+        headers
+            .get(MARKET_ZIP_SHA256_HEADER)
+            .and_then(|v| v.to_str().ok()),
+        Some(digest.as_str())
+    );
+    assert_eq!(
+        headers
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/zip")
+    );
+
+    // 形态闸：大写 / 短 / 长 / 非 hex / 空一律拒（后端只认小写 64 hex）
+    for bad in [
+        String::new(),
+        "abc".to_string(),
+        "A".repeat(64),
+        "g".repeat(64),
+        "a".repeat(63),
+        "a".repeat(65),
+        format!("{digest} "),
+    ] {
+        assert!(
+            publish_upload_headers(&bad).is_err(),
+            "非法摘要被放行：{bad:?}"
+        );
+        assert!(digest_hex_problem(&bad).is_some(), "摘要形态闸漏了：{bad:?}");
+    }
+    assert_eq!(digest_hex_problem(&digest), None);
+}
+
+/// 读前 / 读后长度一致性（纯函数）：三值全等才放行；文件在读取中变长变短都拒。
+#[test]
+fn upload_length_mismatch_is_rejected_and_digest_code_falls_back() {
+    assert_eq!(publish_length_mismatch_problem(10, 10, 10), None);
+    for (expected, hashed, after) in [(10, 9, 10), (10, 10, 11), (10, 12, 10), (0, 0, 1)] {
+        let msg = publish_length_mismatch_problem(expected, hashed, after)
+            .unwrap_or_else(|| panic!("{expected}/{hashed}/{after} 该被拒"));
+        assert!(msg.contains("读取过程中发生了变化"), "拒因不可诊断：{msg}");
+        assert!(msg.contains("请重试"), "拒因没给出行动：{msg}");
+    }
+    // 拒因码兜底：后端给了照搬；空串不许流出去
+    assert_eq!(rejection_code_or_http(Some("container-digest"), 400), "container-digest");
+    assert_eq!(rejection_code_or_http(Some("  "), 400), "http-400");
+    assert_eq!(rejection_code_or_http(None, 422), "http-422");
+    assert_eq!(rejection_code_or_http(None, 200), "unknown");
+}
+
+/// 非 JSON 摘录：控制字符去掉、空白折叠、按字符截断（不输出海量 HTML）。
+#[test]
+fn publish_body_excerpt_is_clean_and_bounded() {
+    let excerpt = body_excerpt(b"<html>\x00\x07\n  <body>400 Bad Request</body></html>");
+    assert!(
+        !excerpt.chars().any(|c| c.is_control()),
+        "摘录里还有控制字符：{excerpt:?}"
+    );
+    assert!(excerpt.starts_with("<html>"), "{excerpt:?}");
+    assert!(excerpt.contains("400 Bad Request"), "{excerpt:?}");
+    assert!(!excerpt.contains("  "), "连续空白没折叠：{excerpt:?}");
+    let long = body_excerpt(&vec![b'x'; 10_000]);
+    assert_eq!(
+        long.chars().count(),
+        PUBLISH_BODY_EXCERPT_CHARS + 1,
+        "长正文没按字符上限截断"
+    );
+    assert!(long.ends_with('…'), "截断没给出省略号：{long:?}");
+    assert_eq!(body_excerpt(b""), "");
 }
 
 #[test]

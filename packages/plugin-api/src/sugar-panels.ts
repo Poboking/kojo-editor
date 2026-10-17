@@ -12,7 +12,7 @@
  */
 
 import type { Unsubscribe } from './base';
-import type { EventBus } from './events';
+import type { AnyEventMap, EventBus } from './events';
 import { pathKey } from './paths';
 import type { SugarDiagnostic, SugarSeverity } from './sugar';
 
@@ -62,6 +62,9 @@ export function createLiveTextPool(): LiveTextPool {
  * `activeFileChanged / documentChanged / cursorMoved` 的订阅 + 退订 +
  * pathKey 命中比对——口径漂移就发生在那两份拷贝之间，故收成一份控制器：
  * - **attach 一次订齐三条，dispose 一次退净三条**（漏一条 = 面板卸载后仍在收广播）；
+ * - **当前文件是状态、走 sticky 回放**（2026-10-18）：`editor.activeFileChanged` 由总线
+ *   保留最后一条，面板挂载晚于文件打开时 attach 当场补发——不再靠"订阅恰好赶在广播前"；
+ *   另两条是通知，按普通订阅；
  * - 广播**一律先进池**（不管命不命中当前文件，切回旧文件时真相还在）；
  * - 命中判据（当前文件相等 + 非派生视图）住在核内，面板只拿**已裁决**的结果：
  *   `onLiveText` 只在命中当前文件时回调；`onCursorLine` 不命中即 null。
@@ -82,16 +85,32 @@ export interface PanelTruthController {
   attach(handlers: PanelTruthHandlers): Unsubscribe;
 }
 
-export function createPanelTruthController(bus: Pick<EventBus, 'on'>): PanelTruthController {
+export function createPanelTruthController(
+  bus: Pick<EventBus, 'on' | 'onSticky'>,
+): PanelTruthController {
   const pool = createLiveTextPool();
   let currentFile: string | null = null;
   return {
     pool,
     attach(handlers): Unsubscribe {
-      const unActive = bus.on('editor.activeFileChanged', (p) => {
+      /**
+       * 当前文件裁决（回放与新广播共用同一个入口——两条来路必须落在同一状态上，
+       * 否则 currentFile 会只在其中一条路上初始化）。
+       */
+      const onActiveFile = (p: AnyEventMap['editor.activeFileChanged']): void => {
         currentFile = p.filePath;
         handlers.onActiveFile(p.filePath);
-      });
+      };
+      /**
+       * `onSticky` 优先（2026-10-18 面板挂载补真相批）：面板在文件**已打开之后**
+       * 才挂载时，`emit` 早已过去——sticky 状态在 attach 这一刻同步补发当前文件，
+       * 首帧就有真相（此前要切一次文件才恢复）。
+       * 没有 `onSticky` 的总线（旧替身 / 极简实现）退回 `on`：能听但无回放，
+       * 行为与引入前逐字一致。
+       */
+      const unActive = bus.onSticky
+        ? bus.onSticky('editor.activeFileChanged', onActiveFile)
+        : bus.on('editor.activeFileChanged', onActiveFile);
       const unDoc = bus.on('editor.documentChanged', (ev) => {
         pool.apply(ev.filePath, ev.text);
         if (currentFile !== null && pathKey(ev.filePath) === pathKey(currentFile)) {

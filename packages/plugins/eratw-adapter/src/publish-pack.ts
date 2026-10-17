@@ -308,7 +308,7 @@ export function publishCapabilityNote(capability: PublishCapability): string {
     case 'no-market':
       return '没有检测到「口上市场」插件：现在无法发布。请先启用「口上市场」，再回到这里重试。';
     case 'no-direct':
-      return '当前「口上市场」版本较旧，还不支持从工作区直接发布。请更新「口上市场」插件，或先导出 zip，再用下面的「已有 zip？直接选择 zip 发布」。';
+      return '当前「口上市场」版本较旧，还不支持从工作区直接发布。请更新「口上市场」插件后再试；只有已经按市场格式打好的 zip（根 pack.json + files/**）才能走下面的「选择市场格式 zip（高级）」。';
     case 'ready':
       return '';
   }

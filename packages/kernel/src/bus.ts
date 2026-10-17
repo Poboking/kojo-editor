@@ -1,5 +1,11 @@
-import { KERNEL_EVENT_NAMES } from '@kojo/plugin-api';
-import type { AnyEventMap, EventBus, KernelEventName, Unsubscribe } from '@kojo/plugin-api';
+import { KERNEL_EVENT_NAMES, STICKY_EVENT_NAMES } from '@kojo/plugin-api';
+import type {
+  AnyEventMap,
+  EventBus,
+  KernelEventName,
+  StickyEventName,
+  Unsubscribe,
+} from '@kojo/plugin-api';
 
 // 事件 emit 权限白名单已归一至契约层（plugin-api/src/events.ts）：与 KernelEventMap
 // 同文件维护 + 编译期分类完整性断言（KERNEL_EVENT_CLASSIFICATION_GUARD）。
@@ -19,6 +25,12 @@ type Handler = (payload: unknown) => void;
  */
 export class TypedEventBus implements EventBus {
   private readonly handlers = new Map<string, Set<Handler>>();
+  /**
+   * sticky 事件的最后一条载荷（白名单见契约层 `STICKY_EVENT_NAMES`）。
+   * 只记白名单事件——它不是"事件回放器"，是**状态**缓存：载荷即当前值、体积小、
+   * 覆盖式更新。`editor.documentChanged` 之类的大文本刻意不收（第二份文档缓存）。
+   */
+  private readonly sticky = new Map<string, unknown>();
 
   constructor(private readonly onHandlerError?: (eventType: string, error: unknown) => void) {}
 
@@ -48,8 +60,29 @@ export class TypedEventBus implements EventBus {
     return un;
   }
 
+  /**
+   * 订阅 + 回放（契约 `EventBus.onSticky`）：先按普通订阅登记，再同步补发该事件
+   * 最后一条载荷（若有）。回放**只发生这一次**——之后的派发全走 `emit`，不存在
+   * 双投递；处理器抛错与普通派发同一待遇（交 onHandlerError，不向订阅方抛）。
+   */
+  onSticky<K extends keyof AnyEventMap>(type: K, handler: (payload: AnyEventMap[K]) => void): Unsubscribe {
+    const key = type as string;
+    const un = this.on(type, handler);
+    if (this.sticky.has(key)) {
+      try {
+        handler(this.sticky.get(key) as AnyEventMap[K]);
+      } catch (err) {
+        this.onHandlerError?.(key, err);
+      }
+    }
+    return un;
+  }
+
   emit<K extends keyof AnyEventMap>(type: K, payload: AnyEventMap[K]): void {
     const key = type as string;
+    // sticky 记账在派发之前、且与"此刻有没有订阅者"无关：面板挂载晚于广播时，
+    // 补收的就是这一条（若先判空就退，晚到的 onSticky 永远读不到当前值）。
+    if (STICKY_EVENT_NAMES.has(key as StickyEventName)) this.sticky.set(key, payload);
     const set = this.handlers.get(key);
     if (!set || set.size === 0) return;
     // 快照迭代：允许 handler 在本轮里订阅/退订（改集合本身不会炸迭代器）。
@@ -130,6 +163,12 @@ export function busScopeSize(bus: EventBus, pluginId: string): number {
 
 /** `scopedBus` 的返回值：EventBus 的超集（既有消费方按 EventBus 用，零改动） */
 export interface ScopedBus extends EventBus {
+  /**
+   * 订阅 + 回放（见契约 `EventBus.onSticky`）：这里由**必选**收窄可选——
+   * 插件拿到的总线一定带它（底座没有时退回 `on`、无回放），消费方无需再判空。
+   * 退订句柄同样进本插件的作用域登记，`disposeScope()` 一并释放。
+   */
+  onSticky<K extends keyof AnyEventMap>(type: K, handler: (payload: AnyEventMap[K]) => void): Unsubscribe;
   /** 释放本插件在本总线上的全部订阅（stopDirect / activate 回滚路径调用） */
   disposeScope(): BusScopeRelease;
   /** 本插件当前登记的订阅句柄数 */
@@ -138,8 +177,9 @@ export interface ScopedBus extends EventBus {
 
 /**
  * 插件视角的总线包装：
- * - `on/once` 原样透传（消费者可订阅任意事件），并把拿到的退订句柄按插件 id 登记，
- *   供 `disposeBusScope` / `disposeScope()` 在停用与激活失败回滚时统一释放；
+ * - `on/once/onSticky` 原样透传（消费者可订阅任意事件），并把拿到的退订句柄按
+ *   插件 id 登记，供 `disposeBusScope` / `disposeScope()` 在停用与激活失败回滚时
+ *   统一释放；
  * - `emit` 强制命名空间纪律：内核事件之外的 emit 必须携带 `插件id:` 前缀，
  *   违反即抛错（把"约定"升格为内核保障，对应 DSH 的事件命名空间约定）。
  */
@@ -153,6 +193,9 @@ export function scopedBus(bus: EventBus, pluginId: string, onViolation?: (messag
   return {
     on: (type, handler) => track(bus.on(type, handler)),
     once: (type, handler) => track(bus.once(type, handler)),
+    // 底座可能是旧替身（没有 onSticky）⇒ 退回 on：能听但无回放，行为与引入前一致。
+    onSticky: (type, handler) =>
+      track(bus.onSticky ? bus.onSticky(type, handler) : bus.on(type, handler)),
     emit: (type, payload) => {
       const t = type as string;
       if (!KERNEL_EVENT_NAMES.has(t as KernelEventName) && !t.startsWith(prefix)) {

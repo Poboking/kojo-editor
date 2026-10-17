@@ -7,7 +7,7 @@ import type {
   WorkspaceService,
 } from '@kojo/plugin-api';
 import { createEratwAdapterPlugin } from '../src/plugin';
-import { PUBLISH_KOJO_OVERLAY_ID } from '../src/publish-wizard';
+import { PUBLISH_KOJO_OVERLAY_ID, ZIP_ENTRY_COPY, ignoredDerivedNote } from '../src/publish-wizard';
 
 /**
  * 「发布口上」向导的**接线判据**（用户反馈 4 批）。
@@ -141,5 +141,42 @@ describe('「发布口上」向导注册（用户反馈 4 批）', () => {
     h.disposeAll();
     h.fire('market.publishRequested', {});
     expect(h.emits.filter((e) => e.type === 'ui.overlay.open')).toHaveLength(1);
+  });
+});
+
+describe('旧 zip 入口文案 · 市场格式语义（普通作品包不在这里发布）', () => {
+  it('按钮与系统对话框标题都点明「市场格式」', () => {
+    expect(ZIP_ENTRY_COPY.button).toBe('选择市场格式 zip（高级）');
+    expect(ZIP_ENTRY_COPY.dialogTitle).toBe('选择要发布的市场格式口上包（zip）');
+  });
+
+  it('hint 说清市场格式 = 根 pack.json + files/**，并指向上面的「发布」从工作区打包', () => {
+    expect(ZIP_ENTRY_COPY.hint).toContain('pack.json');
+    expect(ZIP_ENTRY_COPY.hint).toContain('files/**');
+    expect(ZIP_ENTRY_COPY.hint).toContain('普通作品包 zip 不能在这里直接发布');
+    expect(ZIP_ENTRY_COPY.hint).toContain('「发布」从工作区打包');
+  });
+});
+
+describe('ignoredDerivedNote · 派生产物被跳过时的一行人话（不静默）', () => {
+  it('空数组 → 空串（界面不渲染空行）', () => {
+    expect(ignoredDerivedNote([])).toBe('');
+  });
+
+  it('单个：数量、文件名与判据都在', () => {
+    const note = ignoredDerivedNote([{ relPath: '主口上.ERB', sourceRel: '主口上.kojo' }]);
+    expect(note).toContain('已忽略 1 个');
+    expect(note).toContain('主口上.ERB');
+    expect(note).toContain('以 .kojo 当前编译结果为准');
+  });
+
+  it('多个：数量与文件名逐个列出（编码差异记录同样计入）', () => {
+    const note = ignoredDerivedNote([
+      { relPath: 'a.ERB', sourceRel: 'a.kojo' },
+      { relPath: 'b.ERB', sourceRel: 'b.kojo', reason: 'encoding' },
+    ]);
+    expect(note).toContain('已忽略 2 个');
+    expect(note).toContain('a.ERB');
+    expect(note).toContain('b.ERB');
   });
 });

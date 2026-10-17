@@ -71,6 +71,34 @@ function makeFakeBus() {
 
 const count = (m: Map<string, number>, k: string): number => m.get(k) ?? 0;
 
+/**
+ * 带 `onSticky` 的替身总线：语义对齐契约——只对白名单事件（此处仅
+ * `editor.activeFileChanged`）保留最后一条，订阅时同步回放恰好一次。
+ * 其余事件的 onSticky 等价 on（无回放），与内核 `TypedEventBus` 同口径。
+ */
+function makeStickyFakeBus() {
+  const base = makeFakeBus();
+  // 替身内部只按字符串键记账：把契约的泛型 on 收成"开放签名"再转发
+  const baseOn = base.typed.on as unknown as (type: string, handler: Handler) => () => void;
+  const sticky = new Map<string, unknown>();
+  const bus = {
+    on: baseOn,
+    emit(type: string, payload: unknown): void {
+      if (type === 'editor.activeFileChanged') sticky.set(type, payload);
+      base.typed.emit(type, payload);
+    },
+    onSticky(type: string, handler: Handler): () => void {
+      const un = baseOn(type, handler);
+      if (sticky.has(type)) handler(sticky.get(type) as never);
+      return un;
+    },
+  };
+  const typed = bus as unknown as Pick<EventBus, 'on' | 'onSticky'> & {
+    emit(type: string, payload: unknown): void;
+  };
+  return { typed, attachCount: base.attachCount, releaseCount: base.releaseCount };
+}
+
 function recordHandlers() {
   const seen: Array<{ kind: string; payload: unknown }> = [];
   const handlers: PanelTruthHandlers = {
@@ -164,6 +192,69 @@ describe('W4 / createPanelTruthController：三事件订阅生命周期', () => 
     const b = createPanelTruthController(typed);
     a.pool.apply('/p/x.kojo', 'A');
     expect(b.pool.textFor('/p/x.kojo')).toBeNull();
+  });
+});
+
+/* ============================== sticky 回放（面板挂载晚于文件打开） ============================== */
+
+describe('W4 / createPanelTruthController：当前文件走 sticky 回放', () => {
+  it('先广播后挂载：attach 当场补发当前文件（同步、恰好一条）', () => {
+    const { typed } = makeStickyFakeBus();
+    const c = createPanelTruthController(typed);
+    typed.emit('editor.activeFileChanged', { filePath: '/p/a.kojo' }); // 此时面板还没挂
+    const { seen, handlers } = recordHandlers();
+    c.attach(handlers);
+    expect(seen).toEqual([{ kind: 'active', payload: '/p/a.kojo' }]); // 首帧即知真相
+  });
+
+  it('回放初始化的是 currentFile 本体：不再补播 activeFile，当前文件的真相也进 onLiveText', () => {
+    const { typed } = makeStickyFakeBus();
+    const c = createPanelTruthController(typed);
+    typed.emit('editor.activeFileChanged', { filePath: 'C:\\proj\\A.kojo' });
+    const { seen, handlers } = recordHandlers();
+    c.attach(handlers);
+    seen.length = 0;
+    typed.emit('editor.documentChanged', { filePath: 'c:/proj/a.KOJO', text: 'hit', dirty: true });
+    expect(seen).toEqual([{ kind: 'live', payload: { filePath: 'c:/proj/a.KOJO', text: 'hit' } }]);
+  });
+
+  it('后续广播照常更新（回放不替代订阅）；最后一条是 null 就回放 null（降级文案口径不变）', () => {
+    const { typed } = makeStickyFakeBus();
+    typed.emit('editor.activeFileChanged', { filePath: '/p/a.kojo' });
+    typed.emit('editor.activeFileChanged', { filePath: null }); // 关项目 / 回到欢迎页
+    const c = createPanelTruthController(typed);
+    const { seen, handlers } = recordHandlers();
+    c.attach(handlers);
+    expect(seen).toEqual([{ kind: 'active', payload: null }]);
+    typed.emit('editor.activeFileChanged', { filePath: '/p/b.ERB' });
+    expect(seen).toEqual([
+      { kind: 'active', payload: null },
+      { kind: 'active', payload: '/p/b.ERB' },
+    ]);
+  });
+
+  it('dispose 后不再回调（回放只发生在 attach 那一刻）；退订仍覆盖 activeFile 一条', () => {
+    const { typed, releaseCount } = makeStickyFakeBus();
+    typed.emit('editor.activeFileChanged', { filePath: '/p/a.kojo' });
+    const c = createPanelTruthController(typed);
+    const { seen, handlers } = recordHandlers();
+    const dispose = c.attach(handlers);
+    expect(seen).toHaveLength(1);
+    dispose();
+    expect(count(releaseCount, 'editor.activeFileChanged')).toBe(1);
+    typed.emit('editor.activeFileChanged', { filePath: '/p/b.kojo' });
+    expect(seen).toHaveLength(1);
+  });
+
+  it('没有 onSticky 的旧总线不崩、不回放——行为与引入前逐字一致', () => {
+    const { typed } = makeFakeBus(); // 只有 on / emit
+    typed.emit('editor.activeFileChanged', { filePath: '/p/a.kojo' });
+    const c = createPanelTruthController(typed);
+    const { seen, handlers } = recordHandlers();
+    expect(() => c.attach(handlers)).not.toThrow();
+    expect(seen).toEqual([]); // 无回放（旧口径：错过就是错过）
+    typed.emit('editor.activeFileChanged', { filePath: '/p/b.kojo' });
+    expect(seen).toEqual([{ kind: 'active', payload: '/p/b.kojo' }]);
   });
 });
 

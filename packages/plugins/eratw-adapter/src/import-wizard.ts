@@ -16,7 +16,12 @@ import type { WorkspaceProject, WorkspaceService } from '@kojo/plugin-api';
 import { basename } from '@kojo/plugin-api';
 import { sanitizeSegment } from './scaffold';
 import { glossName } from './name-glossary';
-import { attributionMeta, attributionSummary, type PackageAttribution } from './attribution';
+import {
+  attributionMeta,
+  attributionSummary,
+  type AttributionField,
+  type PackageAttribution,
+} from './attribution';
 
 /** overlay 贡献 id（插件监听 importRequested 后发 `ui.overlay.open` 引用） */
 export const IMPORT_KOJO_OVERLAY_ID = 'eratw.importKojoProject';
@@ -58,6 +63,31 @@ export interface ImportKojoWizardDeps {
 /** 目标项目选择的「新建」哨兵值 */
 const NEW_PROJECT = '__new__';
 
+/**
+ * 导入制品 meta 的署名拼装（纯函数，组件与测试共用）。
+ *
+ * 候选署名**只有用户勾了采用**、且包里没有高置信 author 时才生效；生效方式是把候选
+ * 当作 `author` 交给 `attributionMeta`（下游只认 `originalAuthor` 这个既有键），
+ * `authorCandidate` 本身**不进 meta**——未确认的猜测不落档案。
+ * 高置信 author 永远优先：勾选状态过时也覆盖不了它。
+ */
+export function buildImportMeta(
+  sourceDir: string,
+  attribution: PackageAttribution | null,
+  adoptCandidate: boolean,
+): Record<string, unknown> {
+  const effective =
+    adoptCandidate && attribution !== null && attribution.author === null && attribution.authorCandidate
+      ? { ...attribution, author: attribution.authorCandidate }
+      : attribution;
+  return { importedFrom: sourceDir, ...attributionMeta(effective) };
+}
+
+/** 候选署名的一行提示：值 + 出处（文件 + 1 基行号），请用户核原文后自己决定 */
+export function authorCandidateNotice(field: AttributionField): string {
+  return `可能作者：${field.value}（${field.file} 第 ${field.line} 行，请确认）`;
+}
+
 /** 导入向导 overlay 组件（createElement 风格；壳层 PanelBody 无 props 渲染） */
 export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknown {
   return function ImportKojoWizard(): unknown {
@@ -71,6 +101,8 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
     const [error, setError] = useState<string | null>(null);
     /** 源包署名（T2；null = 尚未读到，不阻断导入） */
     const [sourceAttr, setSourceAttr] = useState<PackageAttribution | null>(null);
+    /** 候选署名采用开关（默认关；只有用户亲手勾选才进制品 meta） */
+    const [adoptCandidate, setAdoptCandidate] = useState(false);
 
     // 源包署名读取：失败不阻断导入（署名是"别丢了原作者"的提醒，不是导入前置条件）
     useEffect(() => {
@@ -80,6 +112,8 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
         return;
       }
       let cancelled = false;
+      // 换了源包先清空：绝不把上一个包的署名（连同候选）挂在新包头上
+      setSourceAttr(null);
       deps
         .loadAttribution(src, pending?.source)
         .then((a) => {
@@ -116,6 +150,7 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
       const suggested = pending.suggestedName ?? basename(pending.sourceDir);
       setPackageName(`${suggested}（导入）`);
       setNewProjectName(suggested);
+      setAdoptCandidate(false); // 换了一个源包：上一次的采用决定作废
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pending?.sourceDir]);
 
@@ -138,6 +173,10 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
           h('button', { className: 'ghost small', onClick: deps.close }, '关闭')));
     }
 
+    // 候选署名（数据层已保证 author 在 ⇒ 候选为 null；这里再收窄一次给渲染用）
+    const authorCandidate =
+      sourceAttr !== null && sourceAttr.author === null ? (sourceAttr.authorCandidate ?? null) : null;
+
     const doImport = async (): Promise<void> => {
       setBusy(true);
       setError(null);
@@ -154,7 +193,8 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
           sourceDir: pending.sourceDir,
           // T2：把抽到的原作者原样带进制品 meta——二次创作最容易丢的就是这个，
           // 而语料里署名写在 README 正文、不在目录名上，丢了就再也找不回来。
-          meta: { importedFrom: pending.sourceDir, ...attributionMeta(sourceAttr) },
+          // 候选署名只在用户勾选「采用此署名」后才合并进来（见 buildImportMeta）。
+          meta: buildImportMeta(pending.sourceDir, sourceAttr, adoptCandidate),
         });
         deps.onImported();
         deps.clearPending();
@@ -187,6 +227,18 @@ export function createImportKojoWizard(deps: ImportKojoWizardDeps): () => unknow
         ? h('div', { className: 'wizard-preview' },
             h('div', null, h('span', { className: 'wizard-label' }, '源包署名'),
               h('span', null, attributionSummary(sourceAttr))),
+            // 候选署名：读数只是猜测，默认不用；勾选后才并入制品 meta
+            authorCandidate !== null
+              ? h('label', { className: 'wizard-field' },
+                  h('span', null,
+                    h('input', {
+                      type: 'checkbox',
+                      checked: adoptCandidate,
+                      onChange: (e: { target: { checked: boolean } }) => setAdoptCandidate(e.target.checked),
+                    }),
+                    ' 采用此署名'),
+                  h('div', { className: 'dim' }, authorCandidateNotice(authorCandidate)))
+              : null,
             h('div', { className: 'dim' },
               '导入后请以自己的署名命名；原作者信息随包保留，不要删。'))
         : null,

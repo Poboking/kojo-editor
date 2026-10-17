@@ -158,6 +158,27 @@ function errMessage(err: unknown): string {
 }
 
 /**
+ * 发布预校验里"解压失败"的作者面人话（纯函数，单测直接钉两种错误串）。
+ *
+ * `entry-name-encoding` 是最常见、也最可执行的一类：Windows 自带压缩 / 7-Zip 默认参数
+ * 不置 UTF-8 标志位（bit 11），条目名会被按 CP437 解成乱码（作者看到的是乱码路径）。
+ * 此时要告诉作者**怎么办**（换支持 UTF-8 文件名的工具重压，或直接走工作区发布），
+ * 而不是只说"打不开"。原始诊断（含拒因码）留在末尾——真正的解析错误一个都不吞。
+ * 其余失败沿用既有"不是合法的发布容器"一句。
+ */
+export function extractFailureMessage(err: unknown): string {
+  const raw = errMessage(err);
+  if (raw.includes('entry-name-encoding')) {
+    return (
+      '这个 zip 的文件名不是 UTF-8（Windows 压缩工具/7-Zip 常见）。' +
+      '请用支持 UTF-8 文件名的工具重新压缩（7-Zip 可加 -mcu=on），或直接在编辑器里从工作区发布。' +
+      `（原始错误：${raw}）`
+    );
+  }
+  return `这个包打不开（不是合法的发布容器）：${raw}`;
+}
+
+/**
  * 装包搬运的分批大小（2026-10-16 市场与导入 IO 批）。
  *
  * 与内核批量读的读批同量级（`kernel/src/io.ts` 的 `READ_BATCH_SIZE = 64`）：本数只决定
@@ -802,6 +823,10 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
    *
    * zip 原文件**一个字节不动**（复制体才被解）；暂存痕迹由调用方的 `finally` 全清
    * （`quietRemoveContainer` 同一条）。拒因全部来自既有清单类码——人话与安装面逐字一致。
+   *
+   * **发布面的两句拒因要面向作者**：`manifest-missing` / `content-missing` 由这里重新包装，
+   * 说"这个 zip 不是市场发布格式"并指向工作区发布，**不许把 `.staging` 内部路径漏给作者**
+   * （作者拿普通作品包 zip 选进来是最常见的误用）。`detail` 也改指作者选定的那个 zip。
    */
   async function previewForPublish(
     zipPath: string,
@@ -830,9 +855,33 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
           { maxEntries: MARKET_MAX_FILE_ENTRIES, maxDepth: MARKET_MAX_PATH_DEPTH, maxUnpackedBytes: MARKET_MAX_UNPACKED_BYTES },
         );
       } catch (err) {
-        throw new MarketError('extract-failed', `这个包打不开（不是合法的发布容器）：${errMessage(err)}`, zipPath);
+        throw new MarketError('extract-failed', extractFailureMessage(err), zipPath);
       }
-      const manifest = await readSourceManifest(unpackedDir);
+      let manifest: PackManifest;
+      try {
+        manifest = await readSourceManifest(unpackedDir);
+      } catch (err) {
+        if (err instanceof MarketError && err.code === 'manifest-missing') {
+          // 作者面重新包装：内部暂存路径不出场，并告诉作者下一步（工作区发布）
+          throw new MarketError(
+            'manifest-missing',
+            '这个 zip 不是市场发布格式：根目录缺少 pack.json。普通作品包请用「发布口上…」从工作区直接发布。',
+            zipPath,
+          );
+        }
+        throw err;
+      }
+      // pack.json 在、files/ 却缺失 = 不是完整的市场容器。只在清单**声明了内容文件**时改判
+      // （此时逐文件对平必然 entry-missing，本判据只是把话说明白，不改变任何成功/失败判定）；
+      // 空清单容器维持原样，交给后面的容器对平。
+      if (manifest.files.length > 0 && !(await io.exists(join(unpackedDir, MARKET_CONTENT_DIR)))) {
+        throw new MarketError(
+          'content-missing',
+          `这个 zip 不是完整的市场容器：pack.json 在，但缺少 ${MARKET_CONTENT_DIR}/ 目录（没有可发布的内容）。` +
+            '普通作品包请用「发布口上…」从工作区直接发布。',
+          zipPath,
+        );
+      }
       const blob = await io.readBytes(containerPath);
       const hex = await sha256Hex(blob);
       const declared: MarketIndexEntry = {

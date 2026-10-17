@@ -72,14 +72,12 @@ describe('planArtifacts', () => {
     expect(plan.passthrough).toBe(2);
   });
 
-  it('命名冲突 → 拒绝，不静默二选一（丢哪个都是事故）', () => {
-    expect(() => planArtifacts([src('事件.ERB', '原生'), src('事件.kojo', '糖')], fakeCompile)).toThrow(/产物名冲突/);
-    // 顺序反过来也要报（谁先到都一样，不能因为 .kojo 先跑就躲过去）
-    expect(() => planArtifacts([src('事件.kojo', '糖'), src('事件.ERB', '原生')], fakeCompile)).toThrow(/产物名冲突/);
+  it('真正落成同一产物名的两个 .kojo 仍拒绝，不静默二选一（丢哪个都是事故）', () => {
+    expect(() => planArtifacts([src('事件.kojo', '糖'), src('事件.KOJO', '糖二版')], fakeCompile)).toThrow(/产物名冲突/);
   });
 
-  it('大小写不同的同名也算冲突（Windows 文件系统上本就是同一个文件）', () => {
-    expect(() => planArtifacts([src('a.Kojo', 'x'), src('A.ERB', 'y')], fakeCompile)).toThrow(/产物名冲突/);
+  it('两个 .kojo 的大小写变体落成同一产物名 → 仍是命名冲突（Windows 上本就是同一个文件）', () => {
+    expect(() => planArtifacts([src('a.Kojo', 'x'), src('A.kojo', 'y')], fakeCompile)).toThrow(/产物名冲突/);
   });
 
   it('转译失败 → 整体拒绝，不产半成品包（半成品比没有更危险）', () => {
@@ -97,7 +95,12 @@ describe('planArtifacts', () => {
   });
 
   it('空目录清单 → 空计划（不抛）', () => {
-    expect(planArtifacts([], fakeCompile)).toEqual({ entries: [], transpiled: 0, passthrough: 0 });
+    expect(planArtifacts([], fakeCompile)).toEqual({
+      entries: [],
+      transpiled: 0,
+      passthrough: 0,
+      ignoredDerived: [],
+    });
   });
 
   it('带 BOM 的 .kojo 不把 BOM 当正文喂给转译器', () => {
@@ -190,5 +193,85 @@ describe('跨文件函数名唯一性（制品级 fail-closed，2026-10-16 T4）
     const other = src('b/问候.kojo', ';@X\n#DIM @X\n$@X\n');
     const plan = planArtifacts([src('a/事件.kojo', '@X\n'), other], fakeCompile);
     expect(plan.transpiled).toBe(2);
+  });
+});
+
+describe('同名 .ERB = 派生产物（2026-10-18 反馈修复批）', () => {
+  /** `.kojo` 走同一替身编译器后的落盘字节（保存过一次的包目录里就是这样一对） */
+  const compiledBytesOf = (rel: string, text: string): Uint8Array => fakeCompile(text, rel).bytes;
+  const kojo = src('主口上.kojo', '如果 A：\n');
+
+  it('与当前编译结果逐字节一致 → 跳过；条目只有编译产物，ignoredDerived 有记录', () => {
+    const erb = { relPath: '主口上.ERB', bytes: compiledBytesOf('主口上.kojo', '如果 A：\n') };
+    const plan = planArtifacts([kojo, erb], fakeCompile);
+    expect(plan.entries.map((e) => e.relPath)).toEqual(['主口上.ERB']);
+    expect(plan.transpiled).toBe(1);
+    expect(plan.passthrough).toBe(0);
+    expect(plan.ignoredDerived).toEqual([{ relPath: '主口上.ERB', sourceRel: '主口上.kojo' }]);
+  });
+
+  it('枚举顺序无关：.ERB 先于 .kojo 出现也照样判定为派生产物', () => {
+    const erb = { relPath: '主口上.ERB', bytes: compiledBytesOf('主口上.kojo', '如果 A：\n') };
+    const plan = planArtifacts([erb, kojo], fakeCompile);
+    expect(plan.entries.map((e) => e.relPath)).toEqual(['主口上.ERB']);
+    expect(plan.passthrough).toBe(0);
+    expect(plan.ignoredDerived).toHaveLength(1);
+  });
+
+  it('仅 BOM / CRLF 差异、规范化文本一致 → 同样跳过，并标注编码差异', () => {
+    const text = new TextDecoder().decode(compiledBytesOf('主口上.kojo', '如果 A：\n'));
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...enc.encode(text.replaceAll('\n', '\r\n'))]);
+    const plan = planArtifacts([kojo, { relPath: '主口上.ERB', bytes }], fakeCompile);
+    expect(plan.passthrough).toBe(0);
+    expect(plan.transpiled).toBe(1);
+    expect(plan.ignoredDerived).toEqual([
+      { relPath: '主口上.ERB', sourceRel: '主口上.kojo', reason: 'encoding' },
+    ]);
+  });
+
+  it('末尾换行不同也算文本差异（只容忍 BOM / 换行风格，不容忍缺行）→ 按过期拒绝', () => {
+    const text = new TextDecoder().decode(compiledBytesOf('主口上.kojo', '如果 A：\n'));
+    const bytes = enc.encode(text.endsWith('\n') ? text.slice(0, -1) : text);
+    expect(() => planArtifacts([kojo, { relPath: '主口上.ERB', bytes }], fakeCompile)).toThrow(/编译产物/);
+  });
+
+  it('内容不同（过期 / 被手改）→ fail-closed；消息指认双方文件并给出两条可执行路径', () => {
+    const msg = msgOf(() => planArtifacts([kojo, src('主口上.ERB', '; 手改过的旧产物\n')], fakeCompile));
+    expect(msg).toContain('主口上.ERB');
+    expect(msg).toContain('主口上.kojo');
+    expect(msg).toContain('过期');
+    expect(msg).toContain('重新保存');
+    expect(msg).toContain('移出包目录');
+    // 这是"过期产物"，不是"两个源抢一个名字"——不要把作者引去改名
+    expect(msg).not.toContain('产物名冲突');
+  });
+
+  it('大小写不同的同名 .ERB（Windows 上同一文件）同样按派生产物判等', () => {
+    const erb = { relPath: '主口上.erb', bytes: compiledBytesOf('主口上.kojo', '如果 A：\n') };
+    const plan = planArtifacts([kojo, erb], fakeCompile);
+    expect(plan.ignoredDerived).toEqual([{ relPath: '主口上.erb', sourceRel: '主口上.kojo' }]);
+  });
+
+  it('不同目录的同名 .ERB 不是派生产物 → 正常原样携带', () => {
+    const plan = planArtifacts([src('a/主口上.kojo', '如果 A：\n'), src('b/主口上.ERB', '; 原生\n')], fakeCompile);
+    expect(plan.entries.map((e) => e.relPath).sort()).toEqual(['a/主口上.ERB', 'b/主口上.ERB']);
+    expect(plan.passthrough).toBe(1);
+    expect(plan.ignoredDerived).toEqual([]);
+  });
+
+  it('只有 .ERB 没有 .kojo → 照常 passthrough（字节引用不变）', () => {
+    const raw = enc.encode('; 原生手写\n');
+    const plan = planArtifacts([{ relPath: '主口上.ERB', bytes: raw }], fakeCompile);
+    expect(plan.entries).toHaveLength(1);
+    expect(plan.entries[0]!.bytes).toBe(raw);
+    expect(plan.passthrough).toBe(1);
+    expect(plan.ignoredDerived).toEqual([]);
+  });
+
+  it('.ERH 不当作派生产物（.kojo 只生成 .ERB）→ 与 .kojo 并存', () => {
+    const plan = planArtifacts([src('主口上.kojo', '如果 A：\n'), src('主口上.ERH', '#DIM X\n')], fakeCompile);
+    expect(plan.entries.map((e) => e.relPath).sort()).toEqual(['主口上.ERB', '主口上.ERH']);
+    expect(plan.passthrough).toBe(1);
+    expect(plan.ignoredDerived).toEqual([]);
   });
 });

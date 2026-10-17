@@ -13,8 +13,9 @@
  * ④ 许可与分发（`LICENSE_CHOICES` 下拉 + 二次分发复选框）
  * ⑤ 内容与发布（打包说明 → 进度 → 终局：PR 链接 / 中文拒因，可改字段重试）
  *
- * 次要入口保留旧流程：「已有 zip？直接选择 zip 发布」→ `io.chooseFile`
- * （系统对话框即授权）+ `market.publish`；取消不报错。
+ * 次要入口保留旧流程：「已有 zip？」→「选择市场格式 zip（高级）」→ `io.chooseFile`
+ * （系统对话框即授权）+ `market.publish`；取消不报错。入口语义必须是**市场格式容器**
+ * （根 `pack.json` + `files/**`）而非普通作品包 zip——后者选进来只会被预校验拒。
  *
  * ## 为什么打包也在这里（而不是让面板去拼）
  *
@@ -39,7 +40,7 @@ import {
   type WorkspaceProject,
   type WorkspaceService,
 } from '@kojo/plugin-api';
-import { planArtifacts, readPackageSources, type KojoCompiler } from './artifact';
+import { planArtifacts, readPackageSources, type IgnoredDerivedArtifact, type KojoCompiler } from './artifact';
 import type { LicenseKind } from './licenses';
 import {
   buildPublishDraft,
@@ -56,6 +57,19 @@ import {
 
 /** overlay 贡献 id（插件监听 `market.publishRequested` 后发 `ui.overlay.open` 引用） */
 export const PUBLISH_KOJO_OVERLAY_ID = 'eratw.publishKojo';
+
+/**
+ * 旧 zip 入口的三句文案（按钮 / 系统对话框标题 / 说明）。
+ *
+ * 语义 = **市场格式容器**（根 `pack.json` + `files/**`），不是普通作品包 zip：
+ * 普通作品包根目录没有 `pack.json`，选进来只会在预校验被拒；把语义写在入口上，
+ * 作者就不会拿错包来试。测试直接钉这三句字面（组件在 node 里没有渲染器）。
+ */
+export const ZIP_ENTRY_COPY = {
+  button: '选择市场格式 zip（高级）',
+  dialogTitle: '选择要发布的市场格式口上包（zip）',
+  hint: '市场格式 = 根 pack.json + files/**；普通作品包 zip 不能在这里直接发布，请用上面的「发布」从工作区打包。',
+} as const;
 
 export interface PublishKojoWizardDeps {
   /** 工作区（项目 / 包 / 项目目录） */
@@ -79,6 +93,18 @@ export interface PublishKojoWizardDeps {
 function outcomeError(outcome: Extract<MarketPublishOutcome, { ok: false }>): string {
   const code = outcome.rejected.code.trim();
   return `市场拒绝了这次发布：${outcome.rejected.message}${code.length > 0 ? `（${code}）` : ''}`;
+}
+
+/**
+ * 「已忽略派生产物」的一行人话（空数组 ⇒ `''`，界面不渲染空行）。
+ *
+ * 包目录里由编辑器保存 `.kojo` 时生成的同名 `.ERB` 不会进制品（以 `.kojo` 当前
+ * 编译结果为准）；跳过是**有意**的，但必须说出来——作者否则会以为文件被丢了。
+ */
+export function ignoredDerivedNote(ignored: readonly IgnoredDerivedArtifact[]): string {
+  if (ignored.length === 0) return '';
+  const names = ignored.map((item) => item.relPath).join('、');
+  return `已忽略 ${ignored.length} 个由 .kojo 生成的同名产物：${names}（以 .kojo 当前编译结果为准）`;
 }
 
 /** 向导 overlay 组件（createElement 风格；壳层 PanelBody 无 props 渲染） */
@@ -107,6 +133,8 @@ export function createPublishKojoWizard(deps: PublishKojoWizardDeps): () => unkn
     const [progress, setProgress] = useState<MarketPublishProgress | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [prUrl, setPrUrl] = useState<string | null>(null);
+    /** 本次发布忽略的派生产物说明（`planArtifacts` 之后才有；null = 没有可说的） */
+    const [derivedNote, setDerivedNote] = useState<string | null>(null);
 
     // 打开即现读工作区（overlay 载荷不带项目——契约：项目选择归拥有模型的这一方）
     useEffect(() => {
@@ -156,6 +184,7 @@ export function createPublishKojoWizard(deps: PublishKojoWizardDeps): () => unkn
       setError(null);
       setPrUrl(null);
       setProgress(null);
+      setDerivedNote(null);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [projectKey, artifactKey]);
 
@@ -226,11 +255,14 @@ export function createPublishKojoWizard(deps: PublishKojoWizardDeps): () => unkn
       setError(null);
       setPrUrl(null);
       setProgress(null);
+      setDerivedNote(null);
       try {
         // 只打选中的这一个包：不读 workspace.json、不碰项目根别的文件
         const absDir = join(deps.workspaces.projectDir(project.id), artifact.dirName);
         const sources = await readPackageSources(deps.io, absDir);
         const plan = planArtifacts(sources, deps.compileKojo);
+        // 被跳过的同名派生 .ERB 必须说出来（不静默：作者要知道那份文件没进包）
+        setDerivedNote(ignoredDerivedNote(plan.ignoredDerived) || null);
         const draft = buildPublishDraft(
           { packId, version, name, author, licenseKind, redistribute, summary },
           draftFilesOf(plan),
@@ -261,9 +293,10 @@ export function createPublishKojoWizard(deps: PublishKojoWizardDeps): () => unkn
       setError(null);
       setPrUrl(null);
       setProgress(null);
+      setDerivedNote(null);
       try {
         const picked = await choose.call(deps.io, {
-          title: '选择要发布的口上包（zip）',
+          title: ZIP_ENTRY_COPY.dialogTitle,
           filters: [{ name: '口上包容器', extensions: ['zip'] }],
         });
         if (picked === null) return;
@@ -394,6 +427,9 @@ export function createPublishKojoWizard(deps: PublishKojoWizardDeps): () => unkn
           '成功后得到一个供审核的 PR。'),
         noArtifacts ? null : h('div', { className: 'wizard-hint dim' }, `包目录：${join(projectDir, artifact.dirName)}`)),
 
+      // 派生产物被有意跳过：一行说明，不让作者以为包里少了文件
+      derivedNote !== null ? h('div', { className: 'wizard-hint dim' }, derivedNote) : null,
+
       // 进度（只有真的在上传时出现；不在读包/预校验阶段造假进度）
       busy && progress !== null ? h('div', { className: 'wizard-hint' }, progressLabel(progress)) : null,
 
@@ -411,7 +447,7 @@ export function createPublishKojoWizard(deps: PublishKojoWizardDeps): () => unkn
 
       error !== null ? h('div', { className: 'wizard-error' }, error) : null,
 
-      // 次要入口：旧流程（已有 zip）
+      // 次要入口：旧流程（已有 zip）——只收**市场格式容器**，普通作品包请走上面的「发布」
       h('div', { className: 'wizard-field' },
         h('span', { className: 'wizard-label' }, '已有 zip？'),
         h('div', null,
@@ -419,9 +455,8 @@ export function createPublishKojoWizard(deps: PublishKojoWizardDeps): () => unkn
             className: 'ghost small',
             disabled: busy || market === null,
             onClick: () => void publishFromZip(),
-          }, '直接选择 zip 发布')),
-        h('div', { className: 'wizard-hint dim' },
-          '系统对话框选定 zip 即授权读取；这条保留给已经按市场格式打好包的旧流程。')),
+          }, ZIP_ENTRY_COPY.button)),
+        h('div', { className: 'wizard-hint dim' }, ZIP_ENTRY_COPY.hint)),
 
       // 动作
       h('div', { className: 'wizard-actions' },

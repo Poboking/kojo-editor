@@ -2,10 +2,13 @@
 //! 以及**不落盘的远程取文本**（注册表索引）。
 //!
 //! 分层（ADR-0003：Rust 只做 IO 原语、零业务逻辑、零游戏知识）：
-//! - **不算任何哈希**：SHA-256 的唯一实现点在 TS（`plugins/kojo-market/src/digest.ts`），
-//!   校验语义属于"判定"，判定不下沉本层；本层只保证"字节落盘"与"解压不越界"。
-//!   （这条过去只有注释担保 ⇒ 现在有机器闸：`kojo-market/tests/single-source.test.ts`
-//!   的扫描面含 `.rs`。）
+//! - **下载 / 解包侧不算任何哈希**：校验语义属于"判定"，判定不下沉本层；本层只保证
+//!   "字节落盘"与"解压不越界"。（这条过去只有注释担保 ⇒ 现在有机器闸：
+//!   `kojo-market/tests/single-source.test.ts` 的扫描面含 `.rs`。）
+//!   **唯一的例外是发布上传的容器摘要**（2026-10-18）：发布后端强制
+//!   `x-market-zip-sha256`（缺头即 400 `container-digest`）。它不是校验锚，而是请求的
+//!   事实字段——"实际被上传的那串 zip 原始字节"的 SHA-256，由**同一个文件句柄**
+//!   （哈希后 `seek(0)` 再上传）算出；下行校验锚仍只住 TS。
 //! - **落点决定权在本层**：命令不接受绝对目标路径，只接受一个受限的暂存名字，
 //!   真实落点由本层拼成 `<appDataDir>/market/.staging/...`（形态照 `export_file`：
 //!   授权绑在命令内，JS 拿不到落点决定权）。正式目录的搬运由 TS 侧 `io.rename` 原子完成。
@@ -30,6 +33,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::{ensure_write_allowed, tmp_unique_id, WriteDomainState};
 
@@ -1263,6 +1267,15 @@ const MARKET_DEFAULT_PUBLISH_ENDPOINT: &str = "https://market.362573581.xyz";
 const MARKET_DEFAULT_MAX_PUBLISH_BYTES: u64 = 95_000_000;
 /// 换设备令牌的兜底超时（小请求；TS 未传时生效）。
 const MARKET_DEVICE_TOKEN_TIMEOUT_MS: u64 = 15_000;
+/// 发布上传的容器摘要头：后端强制要求，缺/形态不对即 400 `container-digest`（实测）。
+/// 值 = **实际上传的那串 zip 原始字节**的 SHA-256，小写 64 位 hex。
+pub(crate) const MARKET_ZIP_SHA256_HEADER: &str = "x-market-zip-sha256";
+/// 上传容器的 Content-Type（后端按容器字节解析；不带会被当成别的正文形态）。
+pub(crate) const MARKET_ZIP_CONTENT_TYPE: &str = "application/zip";
+/// 摘要值形态：64 位小写 hex（大写同样算"形态不对"，后端只认这一种）。
+pub(crate) const MARKET_ZIP_SHA256_HEX_LEN: usize = 64;
+/// 摘要流式计算的块大小（与上传流同量级：95 MB 包也只占一块内存）。
+pub(crate) const MARKET_DIGEST_CHUNK_BYTES: usize = 64 * 1024;
 
 /// 出网闸的宿主判定（下载与发布各一份：放行表不同、判定形态同构）。
 struct HostGate {
@@ -1431,23 +1444,277 @@ pub(crate) fn device_token_url(endpoint: &str) -> Result<reqwest::Url, String> {
     endpoint_url(endpoint, "device-token")
 }
 
+/* --------------- 上传容器摘要（后端强制的 x-market-zip-sha256） --------------- */
+
+/// 字节 → 小写 hex（摘要头的唯一序列化点；纯函数，单测钉形态）。
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+/// 摘要值形态闸（纯函数）：必须恰好 64 位小写 hex（后端只认这一种，大写会被 400 打回）。
+pub(crate) fn digest_hex_problem(digest: &str) -> Option<String> {
+    if digest.len() != MARKET_ZIP_SHA256_HEX_LEN {
+        return Some(format!(
+            "sha256 必须是 {} 位 hex，实际 {} 位",
+            MARKET_ZIP_SHA256_HEX_LEN,
+            digest.len()
+        ));
+    }
+    if !digest
+        .bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Some(format!("sha256 只允许小写 hex（0-9a-f）：{digest:?}"));
+    }
+    None
+}
+
+/// 上传请求的两个头（**纯函数**：不碰网络，单测直接钉值）。`guarded_post` 只负责挂上。
+pub(crate) fn publish_upload_headers(
+    zip_sha256_hex: &str,
+) -> Result<reqwest::header::HeaderMap, String> {
+    if let Some(problem) = digest_hex_problem(zip_sha256_hex) {
+        return Err(format!("包体 sha256 形态不对：{problem}"));
+    }
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::HeaderName::from_static(MARKET_ZIP_SHA256_HEADER),
+        reqwest::header::HeaderValue::from_str(zip_sha256_hex)
+            .map_err(|e| format!("包体 sha256 头构造失败：{e}"))?,
+    );
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static(MARKET_ZIP_CONTENT_TYPE),
+    );
+    Ok(headers)
+}
+
+/// 流式 SHA-256：按 64 KiB 块吃**原始字节**（文件不进内存），返回 (小写 hex, 读到的字节数)。
+/// 泛型只为单测能拿内存 reader 走同一条路径；生产侧传的是 `tokio::fs::File`。
+pub(crate) async fn sha256_stream<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<(String, u64), String> {
+    use tokio::io::AsyncReadExt as _;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; MARKET_DIGEST_CHUNK_BYTES];
+    let mut total: u64 = 0;
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .await
+            .map_err(|e| format!("读取包体字节失败: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        total = total.saturating_add(n as u64);
+    }
+    Ok((hex_lower(hasher.finalize().as_slice()), total))
+}
+
+/// 哈希前后长度一致性闸（纯函数）：预 stat 的长度、实际吃到的字节、哈希后的现长三者必须相等。
+/// 不一致 ⇒ 文件在读取过程中变了，**不带着错误摘要上传**（摘要必须描述实际上传的字节）。
+pub(crate) fn publish_length_mismatch_problem(
+    expected: u64,
+    hashed: u64,
+    after: u64,
+) -> Option<String> {
+    if expected == hashed && expected == after {
+        return None;
+    }
+    Some(format!(
+        "包在读取过程中发生了变化（打开时 {expected} 字节，读到 {hashed} 字节，哈希后 {after} 字节），请重试"
+    ))
+}
+
+/* --------------------------- 发布响应归一化 --------------------------- */
+
+/// 非 JSON 正文的摘录上限（字符数）：错误串只带"能认出来是什么"的一小段，
+/// 不把整页 HTML 灌进界面 / 日志。
+pub(crate) const PUBLISH_BODY_EXCERPT_CHARS: usize = 160;
+
+/// 正文摘录（**纯函数**）：控制字符去掉、连续空白折成一个空格、按字符截断。
+/// 非 UTF-8 字节走 lossy（诊断用，不承担解码语义）。
+pub(crate) fn body_excerpt(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut normalized = String::with_capacity(text.len().min(1024));
+    let mut pending_space = false;
+    for ch in text.chars() {
+        if ch.is_control() || ch.is_whitespace() {
+            pending_space = !normalized.is_empty();
+            continue;
+        }
+        if pending_space {
+            normalized.push(' ');
+            pending_space = false;
+        }
+        normalized.push(ch);
+    }
+    let mut out: String = normalized
+        .chars()
+        .take(PUBLISH_BODY_EXCERPT_CHARS)
+        .collect();
+    if normalized.chars().count() > PUBLISH_BODY_EXCERPT_CHARS {
+        out.push('…');
+    }
+    out
+}
+
+/// 取 JSON 对象里的非空字符串（trim 后为空视同缺失）。
+fn json_text<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// `error` 字段的文本形态：字符串自取；对象取 `code`（没有则 `message`）。
+fn error_field_text(value: &serde_json::Value) -> Option<&str> {
+    match value.get("error")? {
+        serde_json::Value::String(s) => {
+            let t = s.trim();
+            (!t.is_empty()).then_some(t)
+        }
+        e @ serde_json::Value::Object(_) => {
+            json_text(e, "code").or_else(|| json_text(e, "message"))
+        }
+        _ => None,
+    }
+}
+
+/// 非 2xx 的通用错误形状是否"有话可说"（`error` / `message` / `detail` / `code` 任一）。
+fn has_http_error_fields(value: &serde_json::Value) -> bool {
+    value.get("error").is_some()
+        || json_text(value, "message").is_some()
+        || json_text(value, "detail").is_some()
+        || json_text(value, "code").is_some()
+}
+
+/// 拒因码归一（纯函数）：后端给了非空 `code`/`error` 就照搬；没给时 2xx 落 `unknown`、
+/// 非 2xx 落 `http-<status>`——**空串不许流出去**（桥侧按码分支）。
+pub(crate) fn rejection_code_or_http(raw: Option<&str>, status: u16) -> String {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(code) => code.to_string(),
+        None if (200..300).contains(&status) => "unknown".to_string(),
+        None => format!("http-{status}"),
+    }
+}
+
+/// 从 `{rejected:{code,message,detail?}}` 归一（`ok:false` 与"裸 rejected"两条形状共用）。
+fn rejection_from_object(
+    rejected: &serde_json::Value,
+    body: &serde_json::Value,
+    status: u16,
+    final_url: &str,
+) -> MarketPublishResultDto {
+    let detail = json_text(rejected, "detail").or_else(|| json_text(body, "detail"));
+    if let Some(detail) = detail {
+        // Rust 层没有 log 依赖：诊断进 stderr 即可（主 message 不因此丢失）。
+        eprintln!("[market_publish] 服务端拒因诊断（HTTP {status}）：{detail}");
+    }
+    let code = rejection_code_or_http(
+        json_text(rejected, "code").or_else(|| json_text(rejected, "error")),
+        status,
+    );
+    // message 为空时用 detail 兜底；两者都空 ⇒ 空串（code 是主键，桥侧有人话兜底）。
+    let message = json_text(rejected, "message")
+        .or(detail)
+        .unwrap_or_default()
+        .to_string();
+    MarketPublishResultDto {
+        status,
+        final_url: final_url.to_string(),
+        ok: false,
+        pr_url: None,
+        verified: None,
+        rejected: Some(PublishRejectionDto { code, message }),
+    }
+}
+
+/// 从**顶层** `error` / `message` / `detail` 归一（非 2xx 的通用错误形状）。
+fn rejection_from_http_body(
+    body: &serde_json::Value,
+    status: u16,
+    final_url: &str,
+) -> MarketPublishResultDto {
+    let detail = json_text(body, "detail");
+    if let Some(detail) = detail {
+        eprintln!("[market_publish] 服务端拒因诊断（HTTP {status}）：{detail}");
+    }
+    let code = rejection_code_or_http(
+        error_field_text(body).or_else(|| json_text(body, "code")),
+        status,
+    );
+    let message = json_text(body, "message")
+        .or(detail)
+        .or_else(|| error_field_text(body))
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("服务端以 HTTP {status} 拒绝了发布请求"));
+    MarketPublishResultDto {
+        status,
+        final_url: final_url.to_string(),
+        ok: false,
+        pr_url: None,
+        verified: None,
+        rejected: Some(PublishRejectionDto { code, message }),
+    }
+}
+
+/// 非 JSON / 形状不可读时的平台错误（附 HTTP 状态、finalUrl 与正文摘录——铁律 4 要可诊断）。
+fn publish_body_error(prefix: &str, bytes: &[u8], status: u16, final_url: &str) -> String {
+    format!(
+        "{prefix}（HTTP {status}，最终 URL {final_url}，{} 字节）；正文摘录：{}",
+        bytes.len(),
+        body_excerpt(bytes)
+    )
+}
+
 /// 解析发布响应体（**纯函数**）。裁决真源是 body 而非状态码：
-/// `{ok:true, prUrl}` / `{ok:false, rejected:{code,message}}` 两种形状照收
-/// （后端用 4xx 表达 rejected 也兼容）；解析不出 ⇒ 人话错误（铁律 4）。
+/// - 2xx `{ok:true, prUrl, verified?}` ⇒ 成功（prUrl 缺失/空 = 明确错误，绝不演成成功）；
+/// - `{ok:false, rejected:{code,message,detail?}}` ⇒ 拒绝；
+/// - **`ok` 缺失但带 `rejected` 对象** ⇒ 拒绝（2026-10-18 实测的后端形状：HTTP 400 +
+///   裸 `{"rejected":{...}}`；旧实现报"缺 ok"，把真实拒因吞掉了）；
+/// - 非 2xx 且带 `error` / `message` / `detail` ⇒ 拒绝（code 取 `error`/`code`，
+///   否则 `http-<status>`）；
+/// - 非 JSON ⇒ 平台错误（带状态、finalUrl、正文摘录）；解析不出裁决 ⇒ 人话错误（铁律 4）。
 pub(crate) fn parse_publish_body(
     bytes: &[u8],
     status: u16,
     final_url: &str,
 ) -> Result<MarketPublishResultDto, String> {
-    let v: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|e| format!("发布响应不是合法 JSON（HTTP {status}，{} 字节）：{e}", bytes.len()))?;
-    match v.get("ok").and_then(|o| o.as_bool()) {
-        Some(true) => {
+    let v: serde_json::Value = match serde_json::from_slice(bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(publish_body_error(
+                &format!("发布响应不是合法 JSON：{e}"),
+                bytes,
+                status,
+                final_url,
+            ));
+        }
+    };
+
+    match v.get("ok") {
+        Some(serde_json::Value::Bool(true)) => {
             let pr = v
                 .get("prUrl")
                 .and_then(|p| p.as_str())
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| "发布响应 ok=true 却没有可用的 prUrl".to_string())?;
+                .ok_or_else(|| {
+                    publish_body_error(
+                        "发布响应 ok=true 却没有可用的 prUrl",
+                        bytes,
+                        status,
+                        final_url,
+                    )
+                })?;
             // verified：服务端校验深度（如 "structure-only"）——原样搬运，桥侧按契约字面量投影
             let verified = v
                 .get("verified")
@@ -1463,31 +1730,42 @@ pub(crate) fn parse_publish_body(
                 rejected: None,
             })
         }
-        Some(false) => {
-            let rejected = v.get("rejected").ok_or_else(|| {
-                "发布响应 ok=false 却没有 rejected 结构（code/message 无处可读）".to_string()
-            })?;
-            let code = rejected
-                .get("code")
-                .and_then(|c| c.as_str())
-                .ok_or_else(|| "发布响应 rejected 缺 code".to_string())?;
-            let message = rejected
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or_default();
-            Ok(MarketPublishResultDto {
+        Some(serde_json::Value::Bool(false)) => {
+            if let Some(rejected) = v.get("rejected").filter(|r| r.is_object()) {
+                return Ok(rejection_from_object(rejected, &v, status, final_url));
+            }
+            // ok=false 但把话放在顶层 error/message/detail：照拒绝归一，不报"缺 rejected"。
+            if has_http_error_fields(&v) {
+                return Ok(rejection_from_http_body(&v, status, final_url));
+            }
+            Err(publish_body_error(
+                "发布响应 ok=false 却没有 rejected 结构（code/message 无处可读）",
+                bytes,
                 status,
-                final_url: final_url.to_string(),
-                ok: false,
-                pr_url: None,
-                verified: None,
-                rejected: Some(PublishRejectionDto {
-                    code: code.to_string(),
-                    message: message.to_string(),
-                }),
-            })
+                final_url,
+            ))
         }
-        None => Err(format!("发布响应缺 ok 字段（HTTP {status}）")),
+        Some(_) => Err(publish_body_error(
+            "发布响应的 ok 字段不是布尔值",
+            bytes,
+            status,
+            final_url,
+        )),
+        None => {
+            // 本次后端形状：ok 缺失 + 裸 rejected 对象（哪怕配着 4xx）⇒ 拒绝，不是"缺 ok"。
+            if let Some(rejected) = v.get("rejected").filter(|r| r.is_object()) {
+                return Ok(rejection_from_object(rejected, &v, status, final_url));
+            }
+            if !(200..300).contains(&status) && has_http_error_fields(&v) {
+                return Ok(rejection_from_http_body(&v, status, final_url));
+            }
+            Err(publish_body_error(
+                "发布响应缺 ok 字段且没有 rejected 裁决",
+                bytes,
+                status,
+                final_url,
+            ))
+        }
     }
 }
 
@@ -1577,10 +1855,13 @@ fn upload_stream(
 /// 后端的拒绝裁决在响应体里（可能配 4xx），状态码交给 [`parse_publish_body`] 裁决；
 /// `bearer` 以 `Authorization` 头携带（**唯一**的鉴权通道，token 不进 URL——查询串会进日志）。
 /// 出网闸（形态 + 发布白名单 + 逐跳重核 + 终态重核）与下载是同一份形态。
+/// `upload_headers` 由 [`publish_upload_headers`] 从容器摘要构造（`x-market-zip-sha256` +
+/// `Content-Type: application/zip`）：后端缺这个头直接 400，摘要必须是实际上传字节的摘要。
 async fn guarded_post(
     url: &reqwest::Url,
     body: reqwest::Body,
     bearer: &str,
+    upload_headers: &reqwest::header::HeaderMap,
     opts: &DownloadOptions,
 ) -> Result<(u16, reqwest::Url, Vec<u8>), String> {
     if let Some(problem) = publish_url_problem(url) {
@@ -1591,6 +1872,7 @@ async fn guarded_post(
     let response = client
         .post(url.clone())
         .bearer_auth(bearer)
+        .headers(upload_headers.clone())
         .body(body)
         .send()
         .await
@@ -1613,6 +1895,10 @@ async fn guarded_post(
 /// 闸在**出网侧**（发布放行表）与**体积侧**（TS 从契约常量传入）。
 /// 字节**不经 IPC 回 JS**：本层流式读原文件上传（128 MiB 的包体不该过一遍 JS 堆），
 /// 进度按 [`progress_due`] 节流经 Channel 回报。
+///
+/// 摘要与上传**共用同一个文件句柄**：先逐块（64 KiB）算原始字节的 SHA-256（不进内存、
+/// 不报进度——那不是上传进度），核过"打开时 / 读到 / 哈希后"三个长度一致后再 `seek(0)`
+/// 交给 [`upload_stream`]。文件在读取中变化 ⇒ 明确报错，不带着错误摘要上传。
 pub(crate) async fn publish_zip(
     zip_path: &Path,
     endpoint: &str,
@@ -1638,11 +1924,33 @@ pub(crate) async fn publish_zip(
             opts.max_bytes
         ));
     }
-    let file = tokio::fs::File::open(zip_path)
+    let mut file = tokio::fs::File::open(zip_path)
         .await
         .map_err(|e| format!("打开要发布的包失败 {}: {e}", zip_path.display()))?;
+    let (zip_sha256, hashed_bytes) = sha256_stream(&mut file)
+        .await
+        .map_err(|e| format!("计算包体 sha256 失败 {}: {e}", zip_path.display()))?;
+    let after = file
+        .metadata()
+        .await
+        .map_err(|e| format!("读包体状态失败 {}: {e}", zip_path.display()))?
+        .len();
+    if let Some(problem) = publish_length_mismatch_problem(total, hashed_bytes, after) {
+        return Err(format!(
+            "market_publish 拒绝（{problem}）：{}",
+            zip_path.display()
+        ));
+    }
+    {
+        use tokio::io::AsyncSeekExt as _;
+        file.seek(std::io::SeekFrom::Start(0))
+            .await
+            .map_err(|e| format!("包体回绕失败 {}: {e}", zip_path.display()))?;
+    }
+    let headers = publish_upload_headers(&zip_sha256)?;
     let body = reqwest::Body::wrap_stream(upload_stream(file, total, on_progress.cloned()));
-    let (status, final_url, body_bytes) = guarded_post(&url, body, device_token, opts).await?;
+    let (status, final_url, body_bytes) =
+        guarded_post(&url, body, device_token, &headers, opts).await?;
     parse_publish_body(&body_bytes, status, final_url.as_str())
 }
 

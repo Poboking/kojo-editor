@@ -14,8 +14,11 @@ import { describe, expect, it } from 'vitest';
  *    `foldDigest`/`stableHash`/`combineDigests`（那两个是 FNV 折叠，不是校验锚）。
  * 3. **版本比较全仓只许一份实现** —— `compareVersions` 的定义只准住在契约里。
  * 4. **落点目录名只住在契约常量里** —— 插件与内核只准引用常量，不许再写字面量。
- * 5. **宿主层不算任何哈希**（2026-10-15 扩面）—— 扫描面含 `.rs`：Rust 侧出现 SHA-256 / sha2 /
- *    Digest:: / md5 任何一处即红（"哈希只住 TS"过去只有注释担保，现在有机器闸）。
+ * 5. **宿主层只许发布上传摘要这一处哈希**（2026-10-18 修订）—— 扫描面含 `.rs`：
+ *    下行校验锚（`pack.json` 的逐文件 / 整包 sha256）仍只住 TS；宿主的唯一例外是
+ *    发布请求强制的 `x-market-zip-sha256`（必须描述实际上传字节，不能由预览结果代传），
+ *    且该例外必须窄到 `market.rs` 的 `Sha256::new` 一处；`market_tests.rs` 的已知向量
+ *    属测试夹具。其余 SHA-256 / sha2 / Digest:: / md5 出现即红。
  * 6. **出网只有一条路** —— market.rs 里 Client::builder 与 .send() 各恰一处、下载与取文本都经
  *    guarded_send；代理不从 JS 递进来（两个市场命令的签名里都没有 proxy 参数）。
  * 7. **远程面只有一个入口名** —— kernel.remote 的 fetchText：半截改名（桥一个名、服务另一个名）即红，
@@ -26,6 +29,9 @@ const ROOT = nodeResolve(fileURLToPath(new URL('../../../..', import.meta.url)))
 const SELF = nodeJoin(ROOT, 'packages', 'plugins', 'kojo-market', 'tests', 'single-source.test.ts');
 const ONLY_SHA_SOURCE = 'packages/plugins/kojo-market/src/digest.ts';
 const ONLY_COMPARE_SOURCE = 'packages/plugin-api/src/market.ts';
+/** 宿主唯一允许的哈希：发布上传摘要（`market.rs` 一处）+ 其测试向量（`market_tests.rs`） */
+const HOST_DIGEST_SOURCE = 'packages/app/src-tauri/src/market.rs';
+const HOST_DIGEST_TEST_SOURCE = 'packages/app/src-tauri/src/market_tests.rs';
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   if (statSync(dir).isFile()) {
@@ -174,24 +180,38 @@ describe('市场单一真源守门', () => {
     }
     // `target` 目录按名跳过 ⇒ 依赖源码不算违例（否则整棵树都是红的）
     expect(rs.some((p) => p.includes('/target/')), 'target 目录漏进了扫描面').toBe(false);
-    expect(scan([/\bSha256\b/], [nodeJoin(ROOT, 'packages', 'app', 'src-tauri')], true)).toEqual([]);
+    // 哈希扫描面必须真的扫到宿主两处（生产摘要 + 测试向量），不是空闸
+    const hostHits = scan([/\bSha256\b/], [nodeJoin(ROOT, 'packages', 'app', 'src-tauri')], true);
+    const hostFiles = [...new Set(hostHits.map((h) => h.split(':')[0]))].sort();
+    // 测试向量不必出现 `Sha256` 字面；生产摘要所在的 market.rs 必须被扫到
+    expect(hostFiles).toEqual([HOST_DIGEST_SOURCE]);
   });
 
-  it('SHA-256 只住 TS：宿主层出现哈希原语即红（含 .rs）', () => {
+  it('SHA-256 只住 TS（宿主唯一例外：发布上传容器摘要）', () => {
+    const PATTERNS = [
+      /createHash\(\s*['"]sha256['"]\s*\)/,
+      /\.digest\(\s*['"]SHA-256['"]\s*,/,
+      /\bSha256\b/,
+      /\bsha2\b/,
+      /Digest::/,
+      /ring::digest/,
+      /\bmd5\b/i,
+    ];
+    const hits = scan(PATTERNS, ALL).filter(
+      (f) => f !== HOST_DIGEST_SOURCE && f !== HOST_DIGEST_TEST_SOURCE,
+    );
+    expect(hits).toEqual([ONLY_SHA_SOURCE]);
+    // 例外必须窄：宿主只准有一处上传摘要原语，且下行校验锚仍只住 TS
+    const rs = readFileSync(RUST_MARKET_RS, 'utf8');
+    expect(codeMatchCount(rs, /Sha256::new\s*\(/g), '宿主上传摘要原语处数').toBe(1);
+    expect(rs, '上传摘要头').toContain('MARKET_ZIP_SHA256_HEADER');
+    expect(rs).not.toMatch(/ring::digest/);
+    // 除 market.rs / market_tests.rs 外，其他 Rust 源文件一个哈希原语都不许有
     expect(
-      scan(
-        [
-          /createHash\(\s*['"]sha256['"]\s*\)/,
-          /\.digest\(\s*['"]SHA-256['"]\s*,/,
-          /\bSha256\b/,
-          /\bsha2\b/,
-          /Digest::/,
-          /ring::digest/,
-          /\bmd5\b/i,
-        ],
-        ALL,
+      scan(PATTERNS, [RUST_SRC]).filter(
+        (f) => f !== HOST_DIGEST_SOURCE && f !== HOST_DIGEST_TEST_SOURCE,
       ),
-    ).toEqual([ONLY_SHA_SOURCE]);
+    ).toEqual([]);
   });
 
   it('出网只有两条形态（下载 / 发布），闸同一份形态两张表：client 构造与 send 各恰其数', () => {

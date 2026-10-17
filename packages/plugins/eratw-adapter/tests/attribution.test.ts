@@ -190,6 +190,77 @@ describe('parseAttributionText · 规则 2：散文里的「作者」不是标�
   });
 });
 
+/* --------------------------- 标题式候选署名（1018 反馈批） --------------------------- */
+
+/**
+ * 真实语料（`キャノボ風レティ` 的 readme.txt）：
+ * ```
+ * ※作者
+ * 舩 弦五郎
+ * ```
+ * 作者与值不同行，冒号同行那条路抽不到。候选**只是候选**：必须用户在导入向导里
+ * 勾选「采用此署名」才会落制品 meta，`author` 仍保持 null。
+ */
+describe('parseAttributionText · 标题式候选（作者标签独占一行）', () => {
+  it('真实形态：※作者 下一行是名字 → authorCandidate 带文件/行号，author 仍为 null', () => {
+    const text = ['キャノボ風レティ（eraTW用）', '', '※作者', '舩 弦五郎', '', '■更新履歴'].join('\n');
+    const r = parseAttributionText('readme.txt', text);
+    expect(r.author).toBeNull();
+    expect(r.authorCandidate).toEqual({ value: '舩 弦五郎', file: 'readme.txt', line: 4 });
+  });
+
+  it('标签变体与前置装饰：作者 / 原作者 / 作成者 / Author / 尾随冒号都认；最多跳 2 行空行', () => {
+    for (const label of ['作者', '※作者', '* 作者', '＊作者', '原作者', '作成者', 'Author', 'author:']) {
+      const r = parseAttributionText('r.txt', `${label}\n\n\n舩 弦五郎`);
+      expect(r.author, label).toBeNull();
+      expect(r.authorCandidate?.value, label).toBe('舩 弦五郎');
+      expect(r.authorCandidate?.line, label).toBe(4);
+    }
+  });
+
+  it('标题后接散文（句号 / 问号 / 感叹号 / 超长）→ 无候选', () => {
+    for (const value of [
+      'この口上は私が作りました。',
+      'これは誰ですか？',
+      '本当にすごい！',
+      'あ'.repeat(41),
+    ]) {
+      const r = parseAttributionText('r.txt', `※作者\n${value}`);
+      expect(r.authorCandidate, value).toBeNull();
+    }
+  });
+
+  it('含网址 / 尖括号残留 / 路径分隔符 → 无候选（不把整句或路径当人名）', () => {
+    for (const value of ['https://example.com/foo', 'see www.example.com', '＜舩 弦五郎', 'foo\\bar', 'dir/name']) {
+      const r = parseAttributionText('r.txt', `作者\n${value}`);
+      expect(r.authorCandidate, value).toBeNull();
+    }
+  });
+
+  it('模板占位说明词还在 → 无候选（未定 / 作者名・連絡先 / 请填写）', () => {
+    for (const value of ['未定', '＜作者名・連絡先＞', '请填写你的名字']) {
+      expect(parseAttributionText('r.txt', `作者\n${value}`).authorCandidate, value).toBeNull();
+    }
+  });
+
+  it('下一行是另一个标签行或小标题 → 无候选（作者：… / 最终更新：… / 又一个标题 / ※連絡先 / ■…）', () => {
+    for (const value of ['作者：hoge', '最終更新：2023-10-07', '※作者', '※連絡先', '■プロフィール']) {
+      expect(parseAttributionText('r.txt', `作者\n${value}`).authorCandidate, value).toBeNull();
+    }
+  });
+
+  it('空行超过 2 行 / 标签在文件末尾 → 无候选（不往正文深处乱扫）', () => {
+    expect(parseAttributionText('r.txt', '作者\n\n\n\n舩 弦五郎').authorCandidate).toBeNull();
+    expect(parseAttributionText('r.txt', '标题\n※作者').authorCandidate).toBeNull();
+  });
+
+  it('同一文件里冒号同行的高置信 author 仍优先，标题式候选不露面', () => {
+    const r = parseAttributionText('readme.txt', ['※作者', '舩 弦五郎', '作者：holy'].join('\n'));
+    expect(r.author).toEqual({ value: 'holy', file: 'readme.txt', line: 3 });
+    expect(r.authorCandidate).toBeNull();
+  });
+});
+
 describe('parseAttributionText · 更新与版本', () => {
   it('标签日期优先于裸日期（署名区惯例在头部）', () => {
     const text = ['2025-08-14　(※別作者) 一部を修正しました', '最終更新：2023-10-07'].join('\n');
@@ -302,6 +373,58 @@ describe('readPackageAttribution · 编排', () => {
       readmeFiles: ['readme.txt'],
     });
     expect(s).toBe('原作者 holy · 更新 2023-10-07 · 有授权声明文件（ライセンス.txt）');
+  });
+});
+
+/* ---------------------- 许可证模板里的候选署名（模板 ≠ 授权声明） ---------------------- */
+
+describe('readPackageAttribution · 许可证模板作者候选', () => {
+  it('模板里作者真填了（说明已删）→ 候选带出处；license 仍报 template-only', async () => {
+    const io = new FileIOServiceImpl(new NodeBridge(path.join(tmpDir, 'appdata')));
+    await put('ライセンステンプレ.txt', ['; ライセンス', '; 作者：＜舩 弦五郎＞', ';'].join('\n'));
+    const a = await readPackageAttribution({ io, absDir: pkgDir });
+    expect(a.author).toBeNull();
+    expect(a.authorCandidate).toEqual({ value: '舩 弦五郎', file: 'ライセンステンプレ.txt', line: 2 });
+    // 模板仍不是授权声明（规则 3 不动）
+    expect(a.license).toEqual({ kind: 'template-only', file: 'ライセンステンプレ.txt' });
+  });
+
+  it('模板占位说明还在（根本没填过）→ 无候选，license 仍 template-only', async () => {
+    const io = new FileIOServiceImpl(new NodeBridge(path.join(tmpDir, 'appdata')));
+    await put(
+      'ライセンステンプレ.txt',
+      '作者：＜作者名・連絡先＞（“XXスレ目>>123” 等でもOKなので、何か他人と被らないものを）',
+    );
+    const a = await readPackageAttribution({ io, absDir: pkgDir });
+    expect(a.authorCandidate).toBeNull();
+    expect(a.license.kind).toBe('template-only');
+  });
+
+  it('README 标题式候选优先于模板候选（不混成两个证据）', async () => {
+    const io = new FileIOServiceImpl(new NodeBridge(path.join(tmpDir, 'appdata')));
+    await put('readme.txt', ['※作者', '舩 弦五郎'].join('\n'));
+    await put('ライセンステンプレ.txt', '作者：＜另一个人＞');
+    const a = await readPackageAttribution({ io, absDir: pkgDir });
+    expect(a.authorCandidate).toEqual({ value: '舩 弦五郎', file: 'readme.txt', line: 2 });
+  });
+
+  it('README 已有高置信 author → 模板候选不出现（候选只服务未标注）', async () => {
+    const io = new FileIOServiceImpl(new NodeBridge(path.join(tmpDir, 'appdata')));
+    await put('readme.txt', '作者：holy');
+    await put('ライセンステンプレ.txt', '作者：＜舩 弦五郎＞');
+    const a = await readPackageAttribution({ io, absDir: pkgDir });
+    expect(a.author?.value).toBe('holy');
+    expect(a.authorCandidate).toBeNull();
+  });
+
+  it('市场清单补出 author 时，README 候选作废（声明优先于候选）', async () => {
+    const io = new FileIOServiceImpl(new NodeBridge(path.join(tmpDir, 'appdata')));
+    await put('readme.txt', ['※作者', '舩 弦五郎'].join('\n'));
+    const base = await readPackageAttribution({ io, absDir: pkgDir });
+    expect(base.authorCandidate?.value).toBe('舩 弦五郎');
+    const merged = mergePackAuthorship(base, { author: '清单作者', license: '', authorLine: 2 });
+    expect(merged.author?.value).toBe('清单作者');
+    expect(merged.authorCandidate).toBeNull();
   });
 });
 

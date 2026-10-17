@@ -43,6 +43,15 @@ export type LicenseSignal =
 /** 一个作者包的署名 / 授权画像 */
 export interface PackageAttribution {
   author: AttributionField | null;
+  /**
+   * 候选署名（**未确认**，只有导入向导里用户勾了「采用此署名」才允许落制品 meta）。
+   *
+   * 来源只有两条，都要求"像人名"：README 标题式标签（`※作者` / `作者` / `作成者` /
+   * `Author` 单独一行）的下一行；许可证模板里**已填**的 `作者：＜…＞`。
+   * 高置信 `author` 在时恒为 null / 缺省——候选只服务"原作者未标注"的包，
+   * 绝不与真署名同屏抢位。`attributionMeta` **不读**本字段。
+   */
+  authorCandidate?: AttributionField | null;
   /** 更新日期或版本号（任一命中即有；标签优先） */
   updated: AttributionField | null;
   license: LicenseSignal;
@@ -129,6 +138,19 @@ const TEMPLATE_INSTRUCTION =
 /** 作者标签：必须带冒号（语料规则 2 —— `作者は〜です` 这类散文不算） */
 const AUTHOR_LABEL_PATTERN = /(?:原作者|作者|作成者|著者|制作者|Author|author)\s*[:：]\s*(.+)$/;
 
+/**
+ * 标题式作者标签：整行只有标签（允许前置 `※` / `*` / `＊` 与尾随冒号）。
+ *
+ * 真实语料（`キャノボ風レティ` 的 readme.txt）：
+ * ```
+ * ※作者
+ * 舩 弦五郎
+ * ```
+ * 作者与值不同行——冒号同行那条路完全抽不到，于是另开这条**整行标签**的路。
+ * 只认整行，因为「作者」出现在散文句首/句中时（`作者は本口上が…`）不是标签。
+ */
+const AUTHOR_TITLE_PATTERN = /^(?:[※*＊]\s*)?(?:原作者|作者|作成者|著者|制作者|author)\s*[:：]?\s*$/i;
+
 /** 更新日期标签 */
 const UPDATED_LABEL_PATTERN = /(?:最終更新|最后更新|最終更新日|更新日|更新日期|Date|date)\s*[:：]\s*(.+)$/;
 
@@ -172,6 +194,68 @@ function normalizeAuthor(raw: string): string | null {
   return core;
 }
 
+/** 候选值里的句读：出现即说明这行是整句散文，不是人名 */
+const CANDIDATE_SENTENCE_PATTERN = /[。．.？！?!]/;
+
+/** 候选值里的网址 / 路径痕迹（含尖括号残留）；包裹名号的那一对外括号先剥掉再判 */
+const CANDIDATE_NOISE_PATTERN = /:\/\/|www\.|https?:|[<>＜＞\\/／＼]/i;
+
+/** 值行以章节/装饰记号开头 ⇒ 更像另一个小标题（`※連絡先` / `■プロフィール`），不当人名 */
+const CANDIDATE_DECORATION_PATTERN = /^[※*＊■□◆◇●○▼▽▲△#＃]/;
+
+/**
+ * 候选署名判定（标题式下一行 / 模板里填了的 `作者：＜…＞` 共用）。
+ *
+ * 与高置信 `normalizeAuthor` 的分界：这里**不收结论**，只判定"像不像一个人名"——
+ * 1–40 字符；无句号/问号/感叹号（整句散文）；无网址/尖括号/路径分隔符；
+ * 不命中模板待填说明；不是另一个标签行。合格的才进 `authorCandidate`，
+ * 且**必须用户在导入向导里确认**才会落 meta。
+ */
+function normalizeAuthorCandidate(raw: string): string | null {
+  // 句读要在 cleanValue 之前判：cleanValue 会把尾部的 `。` 当排版噪音剥掉，
+  // 而整句散文恰恰靠这个尾巴辨认——剥完再判就漏成"人名"了。
+  if (CANDIDATE_SENTENCE_PATTERN.test(raw.trim())) return null;
+  const v = cleanValue(raw);
+  if (v.length === 0) return null;
+  if (TEMPLATE_INSTRUCTION.test(v)) return null;
+  const core = v.replace(/^[<＜](.*?)[>＞]$/, '$1').trim();
+  if (core.length < 1 || core.length > 40) return null;
+  if (CANDIDATE_SENTENCE_PATTERN.test(core)) return null;
+  if (CANDIDATE_NOISE_PATTERN.test(core)) return null;
+  if (CANDIDATE_DECORATION_PATTERN.test(core)) return null;
+  if (isLabelLine(core)) return null;
+  return core;
+}
+
+/** 这一行本身是标签（作者 / 更新）⇒ 不能拿来当候选值 */
+function isLabelLine(line: string): boolean {
+  return AUTHOR_TITLE_PATTERN.test(line) || AUTHOR_LABEL_PATTERN.test(line) || UPDATED_LABEL_PATTERN.test(line);
+}
+
+/** 标题式标签后最多允许隔几行空行再取值（语料里 1 行居多；再多就不像标签-值结构了） */
+const MAX_TITLE_GAP_LINES = 2;
+
+/**
+ * 标题式标签 → 下一非空行候选（跳过最多 `MAX_TITLE_GAP_LINES` 行空行）。
+ * 下一非空行不合格就**收手**，不继续往下扫——继续扫等于把正文第一句当名字猜。
+ */
+function pickTitleAuthor(lines: string[], labelIndex: number): Candidate | null {
+  let blanks = 0;
+  for (let j = labelIndex + 1; j < lines.length; j++) {
+    const line = cleanLine(lines[j]!);
+    if (line.length === 0) {
+      blanks++;
+      if (blanks > MAX_TITLE_GAP_LINES) return null;
+      continue;
+    }
+    if (isLabelLine(line)) return null;
+    const value = normalizeAuthorCandidate(line);
+    if (value === null) return null;
+    return { value, line: j + 1, rank: 2 };
+  }
+  return null;
+}
+
 /** 单个候选字段（解析中间态） */
 interface Candidate {
   value: string;
@@ -189,10 +273,11 @@ interface Candidate {
 export function parseAttributionText(
   file: string,
   text: string,
-): Pick<PackageAttribution, 'author' | 'updated'> {
+): Pick<PackageAttribution, 'author' | 'updated' | 'authorCandidate'> {
   const lines = text.split(/\r?\n/);
 
   const authorCands: Candidate[] = [];
+  const titleCands: Candidate[] = [];
   const dateCands: Candidate[] = [];
 
   for (let i = 0; i < lines.length; i++) {
@@ -205,6 +290,12 @@ export function parseAttributionText(
     if (am) {
       const v = normalizeAuthor(am[1]!);
       if (v !== null) authorCands.push({ value: v, line: lineNo, rank: 1 });
+    }
+
+    // 标题式（`※作者` 独占一行）：只取下一非空行，串文/长句/标签行一律不猜
+    if (AUTHOR_TITLE_PATTERN.test(line)) {
+      const cand = pickTitleAuthor(lines, i);
+      if (cand) titleCands.push(cand);
     }
 
     const um = UPDATED_LABEL_PATTERN.exec(line);
@@ -228,7 +319,35 @@ export function parseAttributionText(
     return { value: best.value, file, line: best.line };
   };
 
-  return { author: pick(authorCands), updated: pick(dateCands) };
+  const author = pick(authorCands);
+  return {
+    author,
+    updated: pick(dateCands),
+    // 同一文件里真署名优先：高置信 author 在 ⇒ 标题式候选不露面
+    authorCandidate: author !== null ? null : pick(titleCands),
+  };
+}
+
+/**
+ * 许可证模板里的**已填作者**（`作者：＜舩 弦五郎＞`）→ 中置信候选。
+ *
+ * 模板文件仍然**不算**授权声明（`license` 照报 `template-only`），只借它的作者字段：
+ * 语料里 `ライセンステンプレ.txt` 的 `作者：＜…＞` 有真填了名字的（任务给的实测包就是），
+ * 而 README 又可能是标题式——两条证据都在时，README 那条优先。
+ * 判据与高置信作者同源：`TEMPLATE_INSTRUCTION` 还在 = 模板没动过 = 不收；
+ * 值的"像不像人名"再走候选判定（剥尖括号、拒整句/网址/路径）。
+ */
+function parseTemplateAuthorCandidate(file: string, text: string): AttributionField | null {
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = cleanLine(lines[i]!);
+    if (line.length === 0) continue;
+    const m = AUTHOR_LABEL_PATTERN.exec(line);
+    if (!m) continue;
+    const v = normalizeAuthorCandidate(m[1]!);
+    if (v !== null) return { value: v, file, line: i + 1 };
+  }
+  return null;
 }
 
 /* ------------------------------ 包级编排 ------------------------------ */
@@ -280,6 +399,7 @@ export async function readPackageAttribution(deps: {
 
   // 读 readme 候选正文（readme 优先于 changelog：署名通常在 readme 头部）
   let author: AttributionField | null = null;
+  let authorCandidate: AttributionField | null = null;
   let updated: AttributionField | null = null;
   for (const name of readmeFiles.slice(0, MAX_READ_FILES)) {
     const path = files.find((f) => f.name === name)?.path;
@@ -292,11 +412,29 @@ export async function readPackageAttribution(deps: {
     }
     const parsed = parseAttributionText(name, text);
     if (author === null && parsed.author) author = parsed.author;
+    if (authorCandidate === null && parsed.authorCandidate) authorCandidate = parsed.authorCandidate;
     if (updated === null && parsed.updated) updated = parsed.updated;
     if (author !== null && updated !== null) break;
   }
 
-  return { author, updated, license, readmeFiles };
+  // 候选：README 标题式优先；README 没有标题式时才看许可证模板里填没填名字。
+  // 模板只贡献作者字段，`license` 仍报 template-only（模板不等于授权声明）。
+  if (author === null && authorCandidate === null && templateOnly !== null) {
+    const path = files.find((f) => f.name === templateOnly)?.path;
+    if (path) {
+      try {
+        const text = (await deps.io.readText(path)).text.slice(0, MAX_READ_CHARS);
+        authorCandidate = parseTemplateAuthorCandidate(templateOnly, text);
+      } catch {
+        // 模板读不动不影响整体：候选本来就是"有则提示"的
+      }
+    }
+  }
+
+  // 高置信 author 找到后，先前收集的候选一律作废（不变量：author 在 ⇒ 候选为 null）
+  if (author !== null) authorCandidate = null;
+
+  return { author, authorCandidate, updated, license, readmeFiles };
 }
 
 /* ---------------------- 市场包署名（KM-13 导入兜底 / KM-14 模板 meta） ---------------------- */
@@ -379,6 +517,8 @@ export async function readPackAuthorship(deps: {
  *   形态记 `statement` + file `'pack.json'`——`LicenseSignal` 只有形态三态、不判条款，
  *   不为清单声明新增第四态；README 侧已报 `statement` / `template-only` 一律保持
  *   （包内那份文件比清单一行更具体）；
+ * - `authorCandidate`：清单声明了 author 时候选作废（声明的作者是更高置信的证据，
+ *   同一条不变量：`author` 在 ⇒ 候选为 null）；
  * - `updated` / `readmeFiles`：清单没有这两个概念，原样保留。
  * 没有可补的字段 ⇒ 原样返回 `base`（连同引用），调用方可按引用相等判"没改过"。
  */
@@ -386,14 +526,20 @@ export function mergePackAuthorship(base: PackageAttribution, pack: PackAuthorsh
   if (pack === null) return base;
   let author = base.author;
   let license = base.license;
+  let authorCandidate = base.authorCandidate ?? null;
+  let candidateCleared = false;
   if (author === null && pack.author.length > 0) {
     author = { value: pack.author, file: MARKET_MANIFEST_FILE, line: pack.authorLine };
+    if (authorCandidate !== null) {
+      authorCandidate = null;
+      candidateCleared = true;
+    }
   }
   if (license.kind === 'none' && pack.license.length > 0) {
     license = { kind: 'statement', file: MARKET_MANIFEST_FILE };
   }
   if (author === base.author && license === base.license) return base;
-  return { ...base, author, license };
+  return { ...base, author, license, ...(candidateCleared ? { authorCandidate } : {}) };
 }
 
 /**

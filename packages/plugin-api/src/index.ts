@@ -9,7 +9,7 @@
 
 export type { Disposable, Logger, Unsubscribe } from './base';
 
-export { KERNEL_EVENT_NAMES, KERNEL_EVENT_CLASSIFICATION_GUARD } from './events';
+export { KERNEL_EVENT_NAMES, KERNEL_EVENT_CLASSIFICATION_GUARD, STICKY_EVENT_NAMES } from './events';
 export type {
   AnyEventMap,
   CustomEventKey,
@@ -22,6 +22,7 @@ export type {
   KernelEventMap,
   KernelEventName,
   PluginEventMap,
+  StickyEventName,
 } from './events';
 
 export type {

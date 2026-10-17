@@ -21,10 +21,21 @@
  * 4. **fail-closed**：任何一个 `.kojo` 转译失败 → 整个计划抛错，**不产半成品包**。
  *    半成品包比没有包更危险：作者会以为发布成功了。
  *
- * ## 命名冲突必须拒绝
+ * ## 同名 `.ERB` 先认作派生产物（2026-10-18 反馈修复批）
  *
- * 同目录下同时有 `事件.kojo` 与 `事件.ERB` 时，两者都会落到 `事件.ERB` —— 而它们内容
- * 不同，谁说了算？工具不替作者决定，直接报错让他改名。静默挑一个就是丢东西。
+ * 编辑器保存 `.kojo` 时会在旁边生成同名 `.ERB`（与 `resolveSugarTarget` 同源），
+ * 于是"保存过一次"的包目录里必然成对出现——把两者都当源，就得报一个永远无法发布的
+ * "假冲突"。规则（同目录、与编译目标同基名的 `.ERB`）：
+ *
+ * - 与当前 `.kojo` 编译结果**逐字节一致** → 跳过（派生产物不进制品），记入 `ignoredDerived`；
+ * - 仅 BOM / 换行（CRLF）差异、规范化文本一致 → 同样跳过，记录时标注编码差异；
+ * - 文本不同（过期或被手改）→ **fail-closed 抛错**，绝不静默二选一；
+ * - 不同目录 / 不同基名、或只有 `.ERB` 没有 `.kojo` → 正常原样携带（作者手写产物）；
+ * - `.ERH` 不在派生规则内（`.kojo` 只生成 `.ERB`）。
+ *
+ * 判定**不依赖目录枚举顺序**（`.ERB` 可能先于 `.kojo` 出现）：先收集全部 `.kojo`
+ * 的目标并编译，再按原始源顺序回填条目。真正落成同一个产物名的两个 `.kojo`
+ * （如大小写不同）仍然按"命名冲突必须拒绝"处理。
  *
  * ## 跨文件函数名必须唯一（2026-10-16 T4）
  *
@@ -49,6 +60,7 @@
  */
 
 import {
+  compareContent,
   resolveSugarTarget,
   type FileIO,
   type SugarCompiledBytes,
@@ -78,6 +90,19 @@ export interface ArtifactEntry {
   text?: string;
 }
 
+/** 被判定为派生产物而跳过一个同名 `.ERB` 的记录（additive，2026-10-18 反馈修复批） */
+export interface IgnoredDerivedArtifact {
+  /** 被跳过的 `.ERB` 相对路径（保留磁盘上的大小写，`/` 分隔） */
+  relPath: string;
+  /** 生成它的 `.kojo` 源相对路径 */
+  sourceRel: string;
+  /**
+   * 仅在**字节并不完全相同**、靠规范化文本判等才跳过时出现。
+   * `encoding` = 仅 BOM / 换行风格差异，规范化文本一致。
+   */
+  reason?: 'encoding';
+}
+
 /** 计划结果与统计（反馈文案要能说清"转译了几个、原样带了几个"） */
 export interface ArtifactPlan {
   entries: ArtifactEntry[];
@@ -85,6 +110,12 @@ export interface ArtifactPlan {
   transpiled: number;
   /** 字节级原样携带的文件数 */
   passthrough: number;
+  /**
+   * 判定为 `.kojo` 编译产物、因而不进制品的同名 `.ERB`（additive）。
+   * 只有与当前编译结果逐字节一致（或仅 BOM / 换行差异）的才会出现在这里；
+   * 内容对不上 = 过期 / 被手改，直接抛错，不会静默跳过。
+   */
+  ignoredDerived: readonly IgnoredDerivedArtifact[];
 }
 
 /** 把 `.kojo` 源文本编成产物字节 —— 由 `SugarTranspileService.compileToBytes` 提供 */
@@ -140,15 +171,22 @@ function scanFunctionNames(text: string): string[] {
 /**
  * 生成制品计划。
  *
+ * 三步规划（不依赖目录枚举顺序）：
+ * 1. 路径归一 + 逃逸检查，并收集全部 `.kojo` 的编译目标（大小写不敏感键）；
+ * 2. 先编译全部 `.kojo`（fail-closed；`ERB` 先于 `kojo` 出现也不影响判定）；
+ * 3. 按原始源顺序回填条目：`.kojo` 的 claim + 产物条目、命中的同名 `.ERB`
+ *    判等后跳过（或过期抛错）、其余非 `.kojo` 正常 claim + 原样携带。
+ *
  * @param sources 包目录下的全部源文件（相对路径 + 字节）
  * @param compile `.kojo` → 产物字节（注入，便于单测用替身驱动 fail-closed）
- * @throws Error 命名冲突 / 函数名冲突 / 转译失败（消息为中文，直接呈现给作者）
+ * @throws Error 命名冲突 / 派生产物过期 / 函数名冲突 / 转译失败（消息为中文，直接呈现给作者）
  */
 export function planArtifacts(
   sources: readonly ArtifactSource[],
   compile: KojoCompiler,
 ): ArtifactPlan {
   const entries: ArtifactEntry[] = [];
+  const ignoredDerived: IgnoredDerivedArtifact[] = [];
   const taken = new Map<string, string>(); // 归一化名 → 来源路径（报冲突时指认另一方）
   const fnOwners = new Map<string, { rel: string; name: string }>(); // 折叠函数名 → 首个来源
   let transpiled = 0;
@@ -185,14 +223,74 @@ export function planArtifacts(
     }
   };
 
+  /* ---------- 阶段 1：路径归一 + 逃逸检查 + 收集 `.kojo` 目标 ---------- */
+
+  const files: Array<{ rel: string; src: ArtifactSource }> = [];
   for (const src of sources) {
     const rel = toRelPath(src.relPath);
     if (rel.length === 0) continue;
     if (rel.split('/').includes('..')) {
       throw new Error(`路径逃逸包目录：${rel}`);
     }
+    files.push({ rel, src });
+  }
 
+  /** 归一化目标（小写、`/` 分隔）→ `.kojo` 源。`.ERB` 命中这里 = 派生产物候选 */
+  const targets = new Map<string, string>();
+  for (const { rel } of files) {
+    if (!isKojoSource(rel)) continue;
+    const target = resolveSugarTarget(rel);
+    if (target === null) throw new Error(`无法从「${rel}」推导产物文件名。`);
+    // 同一目标被两个 `.kojo` 命中的真冲突留给阶段 3 的 claim 报（此处覆盖无妨）
+    targets.set(toRelPath(target).toLowerCase(), rel);
+  }
+
+  /* ---------- 阶段 2：先编译全部 `.kojo`（顺序 = 源顺序；任一失败整包不产） ---------- */
+
+  const compiled = new Map<string, SugarCompiledBytes>();
+  for (const { rel, src } of files) {
+    if (!isKojoSource(rel)) continue;
+    let result: SugarCompiledBytes;
+    try {
+      result = compile(decodeSource(src.bytes), rel);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`「${rel}」转译失败，未生成制品：${reason}`);
+    }
+    compiled.set(rel, result);
+  }
+
+  /* ---------- 阶段 3：按原始源顺序回填（派生产物在此判等） ---------- */
+
+  for (const { rel, src } of files) {
     if (!isKojoSource(rel)) {
+      // 与某个 `.kojo` 编译目标同路径的文件 = 派生产物候选（不依赖枚举顺序）。
+      // 目标表只含 `.kojo` 推导出的 `.ERB`，不需要另写扩展名正则（单一真源在 resolveSugarTarget）。
+      const derivedFrom = targets.get(rel.toLowerCase());
+      if (derivedFrom !== undefined) {
+        const result = compiled.get(derivedFrom);
+        if (result === undefined) throw new Error(`内部错误：找不到「${derivedFrom}」的编译结果。`);
+        // 字节态与行态从同一次比对派生（BOM 已由 decodeSource 剥掉；行态折叠 CRLF）
+        const equality = compareContent(
+          { bytes: src.bytes, text: decodeSource(src.bytes) },
+          { bytes: result.bytes, text: decodeSource(result.bytes) },
+        );
+        if (equality.bytesEqual === true) {
+          ignoredDerived.push({ relPath: rel, sourceRel: derivedFrom });
+          continue;
+        }
+        if (equality.linesEqual === true) {
+          // 文本一致、只是编码差异（BOM / 换行）——仍是同一份派生产物，跳过并标注
+          ignoredDerived.push({ relPath: rel, sourceRel: derivedFrom, reason: 'encoding' });
+          continue;
+        }
+        // 内容对不上 = 过期或被手改：绝不静默二选一，给出两条可执行路径
+        throw new Error(
+          `「${rel}」是「${derivedFrom}」的编译产物，但内容与当前编译结果不一致（可能过期或被手改）。` +
+            `请重新保存 ${derivedFrom} 刷新产物，或把 ${rel} 改名/移出包目录后再发布。`,
+        );
+      }
+
       claim(rel, rel);
       // 引擎会编译的产物（.ERB/.ERH）也要扫函数名；只解码，字节照旧原样进制品
       if (isErbArtifact(rel)) claimNames(rel, decodeSource(src.bytes));
@@ -205,23 +303,16 @@ export function planArtifacts(
     const target = resolveSugarTarget(rel);
     if (target === null) throw new Error(`无法从「${rel}」推导产物文件名。`);
     const relTarget = toRelPath(target);
-    // 同目录已有 `事件.ERB` 时，它先占了这个名字 → 这里直接报冲突，不静默二选一
     claim(relTarget, rel);
-
-    let compiled: SugarCompiledBytes;
-    try {
-      compiled = compile(decodeSource(src.bytes), rel);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      throw new Error(`「${rel}」转译失败，未生成制品：${reason}`);
-    }
+    const result = compiled.get(rel);
+    if (result === undefined) throw new Error(`内部错误：找不到「${rel}」的编译结果。`);
     // 产物全文里扫函数名（`.kojo` 只活在内存，其函数名与别处的冲突同样要挡）
-    claimNames(rel, compiled.transpile.erb);
-    entries.push({ relPath: relTarget, bytes: compiled.bytes, sourceRel: rel, text: compiled.transpile.erb });
+    claimNames(rel, result.transpile.erb);
+    entries.push({ relPath: relTarget, bytes: result.bytes, sourceRel: rel, text: result.transpile.erb });
     transpiled += 1;
   }
 
-  return { entries, transpiled, passthrough };
+  return { entries, transpiled, passthrough, ignoredDerived };
 }
 
 /**

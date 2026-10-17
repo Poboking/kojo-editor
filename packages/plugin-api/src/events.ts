@@ -485,6 +485,35 @@ export type PluginEventMap = { [K in CustomEventKey]: unknown };
 /** 总线接受的完整事件表 */
 export type AnyEventMap = KernelEventMap & PluginEventMap;
 
+/* ------------------- sticky（可回放最后一条）事件白名单 ------------------- */
+
+/**
+ * **sticky 事件白名单**（2026-10-18 面板挂载补真相批）：这些事件的**最后一条载荷**
+ * 由总线保留，晚到的订阅者经 `EventBus.onSticky` 立即补收一次——「当前值」型事件
+ * 天然可回放，不再要求"订阅恰好赶在广播之前"这种时序巧合。
+ *
+ * 实况：浮动「.kojo 校验」面板挂载晚于文件打开，首帧漏掉 `editor.activeFileChanged`，
+ * 显示 `无打开文件`，要切一次文件才恢复。事件流本身没错，错在把**状态**当**通知**用。
+ *
+ * 收录判据（两条都满足才收）：
+ * - 载荷就是"此刻是什么"（覆盖式更新，回放不会制造幽灵历史）；
+ * - 体积小（常驻总线 = 一份全生命周期缓存，不许变成第二份文档缓存）。
+ * `editor.documentChanged` 刻意**不收**：正文大文本常驻总线就是第二份文档缓存。
+ *
+ * 与 `KERNEL_EVENT_NAMES` 同一条纪律：本表是**唯一真源**，内核 `TypedEventBus`
+ * 按它记 sticky；新增条目必须先过上面两条判据。
+ */
+const STICKY_EVENT_NAMES_ARR = [
+  // 当前编辑的文件（null = 无文件 / 项目关闭）——面板挂载时必须立刻知道
+  'editor.activeFileChanged',
+] as const satisfies readonly (keyof KernelEventMap)[];
+
+/** sticky 事件名（白名单成员；`onSticky` 只对这些事件产生回放） */
+export type StickyEventName = (typeof STICKY_EVENT_NAMES_ARR)[number];
+
+/** sticky 白名单（运行时视图；值 = 可回放最后一条的事件全集） */
+export const STICKY_EVENT_NAMES: ReadonlySet<StickyEventName> = new Set(STICKY_EVENT_NAMES_ARR);
+
 /**
  * 类型化事件总线。
  * - 内核事件享有编译期 payload 校验；
@@ -495,4 +524,20 @@ export interface EventBus {
   on<K extends keyof AnyEventMap>(type: K, handler: (payload: AnyEventMap[K]) => void): Unsubscribe;
   once<K extends keyof AnyEventMap>(type: K, handler: (payload: AnyEventMap[K]) => void): Unsubscribe;
   emit<K extends keyof AnyEventMap>(type: K, payload: AnyEventMap[K]): void;
+  /**
+   * 订阅 **+ 回放**（additive，2026-10-18）：与 `on` 一样订阅后续广播，并立即
+   * （同步，在本调用返回前）拿该事件**最后一条**载荷回调一次。
+   *
+   * 语义边界：
+   * - **只对 `STICKY_EVENT_NAMES` 里的事件回放**，其余事件等价于 `on`（永不回放）；
+   * - 回放恰好一次：订阅那一刻的最后值补一发，之后照常按 `emit` 派发，不重复投递；
+   * - 订阅者从未收到过该事件（总线里没有最后值）⇒ 不回放；
+   * - 退订后不再回调（回放发生在订阅时，退订只掐后续广播）；
+   * - 回放回调抛错与正常派发同一待遇：走总线的 `onHandlerError`，不影响其它订阅者。
+   *
+   * **为什么是 optional**：本方法是对既有 `EventBus` 的 additive 扩展——旧测试替身 /
+   * 极简总线可以没有它，消费方必须退回 `on`（行为与引入前逐字一致），不得因缺席而崩。
+   * 反过来，声明实现了 `EventBus` 并提供本方法的总线，语义必须与本节一致。
+   */
+  onSticky?<K extends keyof AnyEventMap>(type: K, handler: (payload: AnyEventMap[K]) => void): Unsubscribe;
 }
