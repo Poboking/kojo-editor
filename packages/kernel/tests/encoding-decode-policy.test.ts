@@ -41,7 +41,7 @@ describe('解码判据共享常量表（跨语言唯一表体）', () => {
   });
 
   it('DECODE_LABEL 覆盖 FileEncoding 全部取值（两桥共用这张表，无手抄副本）', () => {
-    const all: FileEncoding[] = ['utf-8', 'utf-8-bom', 'shift_jis', 'utf-16le', 'utf-16be'];
+    const all: FileEncoding[] = ['utf-8', 'utf-8-bom', 'shift_jis', 'gbk', 'gb18030', 'big5', 'utf-16le', 'utf-16be'];
     expect(Object.keys(DECODE_LABEL).sort()).toEqual([...all].sort());
     for (const enc of all) expect(() => new TextDecoder(DECODE_LABEL[enc])).not.toThrow();
   });
