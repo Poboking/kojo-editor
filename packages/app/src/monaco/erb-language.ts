@@ -1,7 +1,6 @@
 import type * as Monaco from './entry';
 import { erbMonacoExtensions } from '@kojo/plugin-api';
-import { KOJO_SUGAR_THEME_RULES } from './kojo-language';
-import { KOJO_SEMANTIC_THEME_RULES } from './kojo-semantic-tokens';
+import { defineMonacoThemes } from './theme';
 import { CJK_WORD_PATTERN } from './word-separators';
 
 /**
@@ -57,17 +56,6 @@ export function mergeDirectiveWords(
   }
   return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
-
-/**
- * `comment` token 的主题规则（默认注释色）。
- *
- * 提到这里是为了**单一真源**：`kojo-dark` 主题要用它，避免各处各抄一份色值。
- */
-export const ERB_COMMENT_THEME_RULE: Monaco.editor.ITokenThemeRule = {
-  token: 'comment',
-  foreground: '6a737d',
-  fontStyle: 'italic',
-};
 
 /**
  * Monarch 词法定义构建器（`directives` 词表参数化——基底与 adapter 派生词表共用同一份
@@ -201,25 +189,6 @@ export function registerErbLanguage(monaco: typeof Monaco): void {
     ],
   });
 
-  monaco.editor.defineTheme('kojo-dark', {
-    base: 'vs-dark',
-    inherit: true,
-    rules: [
-      ERB_COMMENT_THEME_RULE,
-      { token: 'keyword', foreground: 'c678dd' },
-      { token: 'keyword.preprocessor', foreground: 'e5c07b' },
-      { token: 'entity.name.function', foreground: '61afef', fontStyle: 'bold' },
-      { token: 'variable', foreground: 'e06c75' },
-      { token: 'string', foreground: '98c379' },
-      { token: 'number', foreground: 'd19a66' },
-      { token: 'label', foreground: '56b6c2' },
-      { token: 'identifier', foreground: 'abb2bf' },
-      { token: 'string.escape', foreground: 'd19a66' },
-      // 语法糖专属 token（`kojo-language.ts` 导出；单一主题，避免二次 defineTheme 覆盖）
-      ...KOJO_SUGAR_THEME_RULES,
-      // 结构化着色类别（B6；`kojo-semantic-tokens.ts` 导出，同一主题，理由同上）
-      ...KOJO_SEMANTIC_THEME_RULES,
-    ],
-    colors: {},
-  });
+  // 主题单一装配点（`theme.ts`）：kojo-dark / kojo-light / kojo-mint-dark 三套一次定义
+  defineMonacoThemes(monaco);
 }

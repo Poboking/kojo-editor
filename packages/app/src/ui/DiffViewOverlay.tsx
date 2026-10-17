@@ -14,6 +14,8 @@ import {
   type DiffRequest,
 } from './diff-view';
 import { CODE_FONT_BASELINE } from './code-font'; // 比对面与主编辑器同一张字面（全站唯一一条栈）
+import { monacoThemeIdFor } from '../monaco/theme';
+import { loadThemePref, useThemePref } from './theme-pref';
 
 /**
  * 通用 diff 视图 overlay（2026-10-15 比对/历史批；W10 第 2 点改多开）。
@@ -80,6 +82,18 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
   return function DiffViewOverlay(): unknown {
     const [, setTick] = useState(0);
     useEffect(() => subscribeDiff(() => setTick((t) => t + 1)), []);
+    // 主题联动（反馈 3）：Monaco 的 `setTheme` 是全局的（主编辑器与 diff 一起换），
+    // 这里订阅同一偏好——overlay 打开期间翻主题同样立刻跟上，创建时也按偏好落初值。
+    const themePref = useThemePref();
+    useEffect(() => {
+      let alive = true;
+      void import('../monaco/entry').then((monaco) => {
+        if (alive) monaco.editor.setTheme(monacoThemeIdFor(themePref));
+      });
+      return () => {
+        alive = false;
+      };
+    }, [themePref]);
     const panes: readonly DiffPane[] = getDiffPanes();
     const active: DiffPane | null = panes.length === 0 ? null : panes[panes.length - 1]!;
 
@@ -148,7 +162,7 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
         const modelA = monaco.editor.createModel(textA, langA);
         const modelB = monaco.editor.createModel(textB, langB);
         const diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
-          theme: 'kojo-dark',
+          theme: monacoThemeIdFor(loadThemePref()),
           readOnly: true,
           originalEditable: false,
           renderSideBySide: true,

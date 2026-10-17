@@ -1,5 +1,11 @@
 /* ============================================================================
-   欢迎页（用户反馈 8 批，2026-10-17）—— VSCode 欢迎页式排版，本仓 token 落地。
+   欢迎页（用户反馈 9 批，2026-10-17 再排）—— 居中单卡，本仓 token 落地。
+
+   为什么不再有标签（用户反馈 2 + 第九批澄清）：VSCode 的欢迎页是"进入工作区后的
+   一个编辑器标签"，所以上方那条标签栏成立；本项目必须先选目录才能进编辑器，
+   一来就摆标签是错位的。现在欢迎页**完全不渲染标签**，卡片在视口内水平 + 垂直居中；
+   关闭 × 贴卡片右上角。原标签视觉抽成可复用件 `tab-chip.tsx`（当前不参与渲染），
+   以后做真正的标签面时直接复用，不再抄第二份配色。
 
    为什么单独一个文件：欢迎页是**无项目态**的整页视图，与有项目时的五区壳层
    （styles.css 的 `.welcome` 旧块）共享的只有 `.welcome` / `.welcome-card` 两个
@@ -7,10 +13,12 @@
    胜"处理（`.welcome-screen .welcome-card` 之于 `.welcome-card`），因此本文件
    不依赖加载顺序——Vite 按模块图注入 CSS，组件 CSS 可能先于 styles.css 落盘。
 
-   版式：顶部一枚可关闭的「欢迎」标签（VSCode 的欢迎标签），主体一张玻璃卡，
-   两栏（左：品牌 / 启动 / 最近；右：教程）。窄窗（<900px）折成单栏。
-   动效一律走全局 `data-motion='reduced'` / `prefers-reduced-motion` 压平规则
-   （styles.css），本文件不另设开关；颜色 100% 取 token，主题可翻。
+   版式：`.welcome-scroll`（flex 列 + overflow:auto）里一枚 `.welcome-stage`
+   以 `margin: auto 0` 上下居中（矮窗时 auto 边距归零、滚动区上内边距给装饰标签
+   留净空，顶部永不被裁）；卡片两栏（左：品牌 / 启动 / 最近；右：教程），
+   窄窗（<900px）折成单栏。动效一律走全局 `data-motion='reduced'` /
+   `prefers-reduced-motion` 压平规则（styles.css），本文件不另设开关；
+   颜色 100% 取 token，主题可翻。
    ============================================================================ */
 
 /* ------------------------------ 页面骨架 ------------------------------ */
@@ -20,7 +28,7 @@
   display: flex;
   flex-direction: column;
   /* 旧 `.welcome` 的 `place-items:center` 会留下 `align-items:center`——在 flex 下
-     会把不设宽度的子项（标签条 / 滚动区）缩成内容宽并水平居中。这里显式拉满。 */
+     会把不设宽度的子项（滚动区）缩成内容宽并水平居中。这里显式拉满。 */
   align-items: stretch;
   justify-content: flex-start;
   position: relative;
@@ -41,90 +49,58 @@
     radial-gradient(42% 40% at 92% 4%, rgb(var(--accent-rgb) / 0.06), transparent 72%);
 }
 
+/* 滚动区兼任居中舞台：卡片用 auto 上下边距在**有空间时**垂直居中，空间不足时
+   边距归零、从顶部开始滚（与 `.welcome-closed` 同款做法，顶部永不被裁）。
+   上下内边距相等 ⇒ 卡片中心 = 视口中心。 */
 .welcome-scroll {
   position: relative;
   z-index: 1;
   flex: 1 1 auto;
   width: 100%;
   min-height: 0;
-  overflow: auto;
-}
-
-/* ------------------------------ 顶部标签条 ------------------------------ */
-
-.welcome-tabbar {
-  position: relative;
-  z-index: 2;
-  flex: none;
-  width: 100%;
-  height: 38px;
   display: flex;
-  align-items: flex-end;
-  padding: 0 10px;
-  background: var(--surface-raised);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-/* 标签 + 关闭钮拼成一块"活动标签"：底色接页面、顶缘一道 accent（VSCode 活动标签语义） */
-.welcome-tab-group {
-  display: flex;
-  align-items: stretch;
-  height: calc(100% - 6px);
-  min-width: 208px;
-  max-width: min(320px, 72vw);
-  background: var(--bg);
-  border: 1px solid var(--border-subtle);
-  border-bottom: none;
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  box-shadow: inset 0 2px 0 var(--accent);
-}
-
-.welcome-tab {
-  flex: 1;
-  min-width: 0;
-  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-1) 0 var(--space-3);
-  color: var(--fg);
-  font-size: var(--fs-2);
+  overflow: auto;
+  padding: 48px 36px;
 }
 
-.welcome-tab-icon {
-  color: var(--accent-text);
-}
-
-.welcome-tab-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 关闭钮：常显但弱化，悬停才亮（标签页的 × 不该比标题更抢眼） */
-.welcome-screen .welcome-tab-close {
+/* 居中单元：宽度即卡片尺寸（min(1120px, 100%)），本身不画任何东西。
+   `flex: none`：列向 flex 里默认 flex-shrink:1 会试图把舞台压矮，卡片内容就会
+   溢出而不是让滚动区出滚——关掉收缩，矮窗才能正常向下滚。 */
+.welcome-stage {
+  position: relative;
   flex: none;
-  width: 28px;
-  height: 24px;
-  align-self: center;
-  margin: 0 var(--space-1) 0 0;
+  width: min(1120px, 100%);
+  margin: auto 0;
+  animation: welcome-rise var(--dur-3) var(--ease-spring);
+}
+
+/* 关闭欢迎页（不是关窗口）：贴卡片右上角，弱化到悬停才亮 */
+.welcome-screen .welcome-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  width: 30px;
+  height: 30px;
   padding: 0;
   display: grid;
   place-items: center;
-  background: none;
+  background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   box-shadow: none;
   color: var(--fg-dim);
-  font-size: var(--fs-1);
 }
 
-.welcome-screen .welcome-tab-close:hover {
+.welcome-screen .welcome-close:hover {
   background: var(--hover-strong);
   border-color: transparent;
   color: var(--fg);
 }
 
-.welcome-screen .welcome-tab-close:active {
+.welcome-screen .welcome-close:active {
   transform: none;
 }
 
@@ -132,20 +108,22 @@
 
 /* 旧 `.welcome-card` 是单列 620px 卡片；这里用更高的特异性重写成两栏玻璃面：
    背景 / 边框 / 磨砂仍由 styles.css 的 `.welcome-card` 玻璃主规则供给，
-   本规则只改布局与尺寸，主题与 `data-glass='solid'` 回落零改动。 */
+   本规则只改布局与尺寸，主题与 `data-glass='solid'` 回落零改动。
+   尺寸由 `.welcome-stage` 决定（卡片铺满舞台），居中 / 滚动也交给舞台；
+   入场动画移去舞台（标签与卡片一起入场），这里撤掉旧 `.welcome-card` 的 overlay-in。 */
 .welcome-screen .welcome-card {
   position: relative;
   z-index: 1;
-  width: min(1120px, calc(100% - 72px));
+  width: 100%;
   max-width: none;
-  margin: 36px auto 56px;
+  margin: 0;
   padding: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.85fr);
   gap: 0;
   border-radius: var(--radius-lg);
   box-shadow: var(--edge-raise), var(--shadow-3);
-  animation: welcome-rise var(--dur-3) var(--ease-spring);
+  animation: none;
 }
 
 @keyframes welcome-rise {
@@ -261,14 +239,14 @@
   font-size: var(--fs-4);
   font-weight: 600;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 1px 0 var(--hover-strong),
     0 8px 24px rgb(var(--accent-rgb) / 0.2);
 }
 
 .welcome-screen .welcome-open:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 1px 0 var(--hover-strong),
     0 10px 28px rgb(var(--accent-rgb) / 0.28);
 }
 
@@ -657,10 +635,17 @@
 /* ------------------------------ 窄窗 ------------------------------ */
 
 @media (max-width: 900px) {
+  /* 窄窗收边距：卡片可用宽 = 视口 - 32px，与旧断点同口径 */
+  .welcome-scroll {
+    padding: 44px 16px;
+  }
+
+  .welcome-stage {
+    width: min(760px, 100%);
+  }
+
   .welcome-screen .welcome-card {
     grid-template-columns: minmax(0, 1fr);
-    width: min(760px, calc(100% - 32px));
-    margin: 24px auto 40px;
   }
 
   .welcome-main {
@@ -680,15 +665,13 @@
 }
 
 @media (max-width: 560px) {
-  .welcome-tabbar {
-    height: 36px;
-    padding: 0 6px;
+  .welcome-scroll {
+    padding: 42px 16px;
   }
 
-  .welcome-tab-group {
-    min-width: 0;
-    width: calc(100% - 20px);
-    max-width: none;
+  .welcome-screen .welcome-close {
+    top: 10px;
+    right: 10px;
   }
 
   .welcome-main {

@@ -52,6 +52,9 @@ import { useNotify } from './NotificationCenter';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { UnsavedFilesConfirmDialog } from './UnsavedFilesConfirmDialog';
 import { installWindowCloseGuard } from './window-close-guard';
+// 常驻窗口框架（用户反馈第 9 条）：窗口永久无原生装饰，标题栏由 App 根部统一提供，
+// 欢迎页 / 项目态 / 禅模式共用；浏览器 dev 里该组件返回 null（不画假按钮）。
+import { WindowChrome } from './WindowChrome';
 import { WelcomeView, type WelcomeTutorialId } from './WelcomeView';
 import { WelcomeOverlayHost } from './WelcomeOverlayHost';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
@@ -1318,22 +1321,28 @@ export function App(): ReactElement {
       </>
     );
 
+  // 窗口框架常驻：标题栏在 App 根部（不在 ShellLayout 里），欢迎页没有项目时也有；
+  // 正文与所有 fixed overlay 收进 `.app-frame-body`（flex:1; min-height:0），
+  // `.welcome` / `.shell` 的 100% 高度由这块确定高度的 flex 舞台承接。
   return (
-    <>
-      {body}
-      {dropHint === 'shown' ? (
-        <div className="drop-hint">{dropHintText()}</div>
-      ) : null}
-      {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
-      {pendingClose ? (
-        <UnsavedConfirmDialog filePath={pendingClose} context="close" onDecide={decideClose} />
-      ) : null}
-      {pendingProjectClose ? (
-        <UnsavedFilesConfirmDialog paths={pendingProjectClose} onDecide={decideProjectClose} />
-      ) : null}
-      {pendingProjectSwitch ? (
-        <UnsavedFilesConfirmDialog context="switch" paths={pendingProjectSwitch.paths} onDecide={decideProjectSwitch} />
-      ) : null}
-    </>
+    <div className="app-frame">
+      <WindowChrome />
+      <div className="app-frame-body">
+        {body}
+        {dropHint === 'shown' ? (
+          <div className="drop-hint">{dropHintText()}</div>
+        ) : null}
+        {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
+        {pendingClose ? (
+          <UnsavedConfirmDialog filePath={pendingClose} context="close" onDecide={decideClose} />
+        ) : null}
+        {pendingProjectClose ? (
+          <UnsavedFilesConfirmDialog paths={pendingProjectClose} onDecide={decideProjectClose} />
+        ) : null}
+        {pendingProjectSwitch ? (
+          <UnsavedFilesConfirmDialog context="switch" paths={pendingProjectSwitch.paths} onDecide={decideProjectSwitch} />
+        ) : null}
+      </div>
+    </div>
   );
 }

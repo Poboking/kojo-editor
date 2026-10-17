@@ -1,0 +1,63 @@
+/* 标签视觉件（欢迎页第九批抽出）——当前无页面渲染，保留给后续标签面复用。
+   颜色全走 token；尺寸与旧欢迎标签一致（34px 高、宽度随内容）。 */
+
+.tab-chip {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--border-subtle);
+  border-bottom: none;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  box-shadow: inset 0 2px 0 var(--border-strong);
+  color: var(--fg-dim);
+  font-size: var(--fs-2);
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.tab-chip.is-active {
+  box-shadow: inset 0 2px 0 var(--accent);
+  color: var(--fg);
+}
+
+.tab-chip-icon {
+  flex: none;
+  color: var(--accent-text);
+}
+
+.tab-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 关闭钮：常显但弱化，悬停才亮（标签上的 × 不该比标题更抢眼） */
+.tab-chip-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-left: var(--space-1);
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+
+.tab-chip-close:hover {
+  background: var(--hover-strong);
+  border-color: transparent;
+  color: var(--fg);
+}
+
+.tab-chip-close:active {
+  transform: none;
+}

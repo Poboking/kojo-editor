@@ -112,8 +112,6 @@ import { ProblemsStatusItem } from './ProblemPanel';
 import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
 import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
-// 全屏自定义顶栏（用户反馈第 2 条）：只在 Tauri 全屏时出现，非全屏/浏览器 dev 返回 null
-import { WindowChrome } from './WindowChrome';
 import { toggleFullscreen } from './window-fullscreen';
 
 /**
@@ -1623,7 +1621,6 @@ export function ShellLayout(props: Props): ReactElement {
   if (layout.zen) {
     return (
       <div className="shell zen">
-        <WindowChrome title="kojo-editor" />
         <div className="zen-editor">
           <div className={`zen-editor-inner ${layout.zenLimitWidth ? '' : 'no-limit'}`}>{children}</div>
         </div>
@@ -1637,7 +1634,6 @@ export function ShellLayout(props: Props): ReactElement {
 
   return (
     <div className="shell">
-      <WindowChrome title="kojo-editor" />
       {toolbar}
       <div className="shell-main">
         {activityBar}

@@ -1,0 +1,537 @@
+import type * as Monaco from './entry';
+import { KOJO_SUGAR_THEME_RULES } from './kojo-language';
+import { KOJO_SEMANTIC_THEME_RULES } from './kojo-semantic-tokens';
+
+/**
+ * Monaco 三套主题（2026-10-17 反馈 3：编辑器配色跟随主题）。
+ *
+ * 主题 id 与 `ui/theme-pref.ts` 的三档**逐字对应**，但本模块不 import 那个 UI 模块——
+ * monaco 层只认识自己的联合类型，避免 UI → monaco → UI 的反向依赖；两边联合类型相同
+ * 由 `tests/monaco-theme.test.ts` 用 `THEME_IDS` 做一一映射断言钉住。
+ *
+ * ## 取色口径
+ * - **dark**：沿用既有 `kojo-dark` 的语法色（ERB 基线 + 糖 + 语义），底色从 vs-dark 的
+ *   `#1e1e1e` 改为 app 的 `--bg` `#1e2227`，编辑器与外壳同底；
+ * - **light**：VS Code Light+ 气质，深蓝/橄榄绿/赭石/紫四族压浅底；不复用任何暗色前景；
+ * - **mint-dark**：与 `themes/mint-dark.css` 的墨绿底 `#0f1713` 协调的冷薄荷族。
+ *
+ * `inherit: false`：三套都写全规则，不从基底主题借色（避免切到 light 时残留 vs-dark 的
+ * 深色 token / 部件色）。dark 的糖与语义规则**对象原样复用**（`kojo-token-tiers.test.ts`
+ * 有同引用断言），light/mint 只按 token 换前景，token 集合因此永远同源。
+ */
+
+export type MonacoThemeId = 'kojo-dark' | 'kojo-light' | 'kojo-mint-dark';
+
+/** 与 `ui/theme-pref.ts` 的 `ThemePref` 逐字同形（不 import，理由见头注） */
+export type MonacoThemePref = 'dark' | 'light' | 'mint-dark';
+
+const THEME_ID_BY_PREF: Readonly<Record<string, MonacoThemeId>> = {
+  dark: 'kojo-dark',
+  light: 'kojo-light',
+  'mint-dark': 'kojo-mint-dark',
+};
+
+/** 偏好 → Monaco 主题 id（未知/脏值回缺省 dark，绝不抛） */
+export function monacoThemeIdFor(pref: MonacoThemePref): MonacoThemeId {
+  return THEME_ID_BY_PREF[pref] ?? 'kojo-dark';
+}
+
+/* ------------------------------ 规则构建 ------------------------------ */
+
+interface BaseRuleSpec {
+  readonly token: string;
+  readonly fontStyle?: 'bold' | 'italic';
+}
+
+/** 词法基线 token（三套主题都必须覆盖；字体样式与既有 kojo-dark 一致） */
+const BASE_RULE_SPECS: readonly BaseRuleSpec[] = [
+  { token: 'comment', fontStyle: 'italic' },
+  { token: 'keyword' },
+  { token: 'keyword.preprocessor' },
+  { token: 'entity.name.function', fontStyle: 'bold' },
+  { token: 'variable' },
+  { token: 'string' },
+  { token: 'number' },
+  { token: 'label' },
+  { token: 'identifier' },
+  { token: 'string.escape' },
+];
+
+function ruleOf(token: string, foreground: string, fontStyle?: string): Monaco.editor.ITokenThemeRule {
+  return fontStyle === undefined ? { token, foreground } : { token, foreground, fontStyle };
+}
+
+function rulesFromPalette(
+  specs: readonly BaseRuleSpec[],
+  palette: Readonly<Record<string, string>>,
+): Monaco.editor.ITokenThemeRule[] {
+  return specs.map((spec) => {
+    const foreground = palette[spec.token];
+    if (foreground === undefined) {
+      throw new Error(`[monaco-theme] 调色板缺少 token「${spec.token}」`);
+    }
+    return ruleOf(spec.token, foreground, spec.fontStyle);
+  });
+}
+
+/**
+ * 把一套既有规则按 token 换前景（字体样式原样保留）。源规则决定 token 集合，
+ * 目标调色板漏一个就当场抛——"少配一档"在模块加载期变红，而不是静默掉色。
+ */
+function retint(
+  source: readonly Monaco.editor.ITokenThemeRule[],
+  palette: Readonly<Record<string, string>>,
+): Monaco.editor.ITokenThemeRule[] {
+  return source.map((rule) => {
+    const foreground = palette[rule.token];
+    if (foreground === undefined) {
+      throw new Error(`[monaco-theme] 调色板缺少 token「${rule.token}」`);
+    }
+    return ruleOf(rule.token, foreground, rule.fontStyle);
+  });
+}
+
+/* ------------------------------ 语法色 ------------------------------ */
+
+/** 既有 dark 词法基线（与改造前 `kojo-dark` 逐字同色，不改观感） */
+const DARK_BASE_PALETTE: Readonly<Record<string, string>> = {
+  comment: '6a737d',
+  keyword: 'c678dd',
+  'keyword.preprocessor': 'e5c07b',
+  'entity.name.function': '61afef',
+  variable: 'e06c75',
+  string: '98c379',
+  number: 'd19a66',
+  label: '56b6c2',
+  identifier: 'abb2bf',
+  'string.escape': 'd19a66',
+};
+
+/** Light+ 气质：深蓝 = 函数/系统函数，橄榄绿 = 台词/字符串，赭石 = 数字/插值，紫 = 关键字 */
+const LIGHT_BASE_PALETTE: Readonly<Record<string, string>> = {
+  comment: '57606a',
+  keyword: '8250df',
+  'keyword.preprocessor': '953800',
+  'entity.name.function': '0550ae',
+  variable: 'b4232e',
+  string: '116329',
+  number: '953800',
+  label: '0a6b73',
+  identifier: '24292f',
+  'string.escape': 'b35900',
+};
+
+const LIGHT_SUGAR_PALETTE: Readonly<Record<string, string>> = {
+  'sugar.keyword': '8250df',
+  'sugar.keyword.alias': '6e6a86',
+  'sugar.system-function': '0550ae',
+  'sugar.operator': '0a6b73',
+  'sugar.cont': '953800',
+  'sugar.pronoun': 'b4232e',
+  'sugar.speech': '116329',
+  'sugar.speech.delimiter': '5b6b7f',
+  'sugar.interp': 'b35900',
+  'sugar.interp.delimiter': 'b35900',
+  'sugar.colon': '5b6b7f',
+  'sugar.slot': '0e6b5c',
+  'keyword.raw': '57606a',
+  'keyword.erb': 'bf3989',
+  'keyword.erb.family': '6639ba',
+};
+
+const LIGHT_SEMANTIC_PALETTE: Readonly<Record<string, string>> = {
+  function: '0550ae',
+  'function.declaration': '0550ae',
+  parameter: 'b35900',
+  'variable.declaration': '953800',
+  'variable.declaration.readonly': '953800',
+};
+
+/** 薄荷暗色：墨绿底上的冷色族（青蓝/薄荷/冷紫/沙金/珊瑚），全部压 #0f1713 ≥ 4.5 */
+const MINT_BASE_PALETTE: Readonly<Record<string, string>> = {
+  comment: '8aa99a',
+  keyword: 'c9a7f5',
+  'keyword.preprocessor': 'e3c08d',
+  'entity.name.function': '7cc7ff',
+  variable: 'ff9ba3',
+  string: '9ccf9a',
+  number: 'f0b98a',
+  label: '74d6d0',
+  identifier: 'd9e9df',
+  'string.escape': 'f0b98a',
+};
+
+const MINT_SUGAR_PALETTE: Readonly<Record<string, string>> = {
+  'sugar.keyword': 'c9a7f5',
+  'sugar.keyword.alias': '9a8fb8',
+  'sugar.system-function': '7cc7ff',
+  'sugar.operator': '74d6d0',
+  'sugar.cont': 'e3c08d',
+  'sugar.pronoun': 'ff9ba3',
+  'sugar.speech': '9ccf9a',
+  'sugar.speech.delimiter': '8fb3c9',
+  'sugar.interp': 'f0b98a',
+  'sugar.interp.delimiter': 'f0b98a',
+  'sugar.colon': '8fb3c9',
+  'sugar.slot': '67dcc0',
+  'keyword.raw': 'a5b8ad',
+  'keyword.erb': 'ff9ccf',
+  'keyword.erb.family': 'bfa0ff',
+};
+
+const MINT_SEMANTIC_PALETTE: Readonly<Record<string, string>> = {
+  function: '7cc7ff',
+  'function.declaration': '7cc7ff',
+  parameter: 'f0b98a',
+  'variable.declaration': 'e3c08d',
+  'variable.declaration.readonly': 'e3c08d',
+};
+
+/**
+ * 规则在**调用时**组装，不在模块顶层：`kojo-semantic-tokens.ts` → `register-dialects`
+ * → `erb-language.ts` → 本文件构成一条既有的装配环，语义规则数组在环跑完前可能是
+ * 未初始化的 TDZ 绑定（顶层展开会直接抛 "is not iterable"）。`defineMonacoThemes`
+ * 由 `registerErbLanguage` 在环收口后调用，届时所有绑定都已就绪。
+ */
+function darkRules(): Monaco.editor.ITokenThemeRule[] {
+  return [
+    ...rulesFromPalette(BASE_RULE_SPECS, DARK_BASE_PALETTE),
+    // 同引用：既有暗色糖/语义规则对象原样并入（tokens 单一真源，测试钉住）
+    ...KOJO_SUGAR_THEME_RULES,
+    ...KOJO_SEMANTIC_THEME_RULES,
+  ];
+}
+
+function lightRules(): Monaco.editor.ITokenThemeRule[] {
+  return [
+    ...rulesFromPalette(BASE_RULE_SPECS, LIGHT_BASE_PALETTE),
+    ...retint(KOJO_SUGAR_THEME_RULES, LIGHT_SUGAR_PALETTE),
+    ...retint(KOJO_SEMANTIC_THEME_RULES, LIGHT_SEMANTIC_PALETTE),
+  ];
+}
+
+function mintRules(): Monaco.editor.ITokenThemeRule[] {
+  return [
+    ...rulesFromPalette(BASE_RULE_SPECS, MINT_BASE_PALETTE),
+    ...retint(KOJO_SUGAR_THEME_RULES, MINT_SUGAR_PALETTE),
+    ...retint(KOJO_SEMANTIC_THEME_RULES, MINT_SEMANTIC_PALETTE),
+  ];
+}
+
+/* ------------------------------ 部件色 ------------------------------ */
+
+/**
+ * 部件色三套同一张键表（值各配各的）：编辑器背景/前景、行号、当前行、选区、光标、
+ * 缩进参考线、括号匹配、浮层（widget/suggest/hover）、查找、缩略图、滚动条、概览尺、
+ * diff 四色与粘性滚动。浅色档全部落在浅色面，不留 vs-dark 的深色块。
+ */
+const KOJO_DARK_COLORS: Readonly<Record<string, string>> = {
+  'editor.background': '#1e2227',
+  'editor.foreground': '#d7dce2',
+  'editorLineNumber.foreground': '#7d8794',
+  'editorLineNumber.activeForeground': '#d7dce2',
+  'editorLineNumber.dimmedForeground': '#4c545e',
+  'editorCursor.foreground': '#6ea8ff',
+  'editor.lineHighlightBackground': '#24292f',
+  'editor.lineHighlightBorder': '#24292f',
+  'editor.selectionBackground': '#4c8bf559',
+  'editor.inactiveSelectionBackground': '#4c8bf529',
+  'editor.selectionHighlightBackground': '#4c8bf53d',
+  'editor.wordHighlightBackground': '#4c8bf52e',
+  'editor.wordHighlightStrongBackground': '#4c8bf55c',
+  'editor.findMatchBackground': '#d19a6666',
+  'editor.findMatchHighlightBackground': '#d19a6638',
+  'editor.findRangeHighlightBackground': '#4c8bf524',
+  'editorIndentGuide.background1': '#2f363d',
+  'editorIndentGuide.activeBackground1': '#4a545f',
+  'editorBracketMatch.background': '#4c8bf529',
+  'editorBracketMatch.border': '#4c8bf5',
+  'editorBracketHighlight.foreground1': '#c678dd',
+  'editorBracketHighlight.foreground2': '#61afef',
+  'editorBracketHighlight.foreground3': '#56b6c2',
+  'editorBracketHighlight.foreground4': '#e5c07b',
+  'editorBracketHighlight.foreground5': '#e06c75',
+  'editorBracketHighlight.foreground6': '#98c379',
+  'editorBracketHighlight.unexpectedBracket.foreground': '#e06c75',
+  'editorWhitespace.foreground': '#3a424b',
+  'editorRuler.foreground': '#2b3138',
+  'editorGutter.background': '#1e2227',
+  'editorOverviewRuler.background': '#1e2227',
+  'editorOverviewRuler.border': '#3a424b',
+  'editorError.foreground': '#e06c75',
+  'editorWarning.foreground': '#d19a66',
+  'editorInfo.foreground': '#6ea8ff',
+  'editorLink.activeForeground': '#6ea8ff',
+  // 全局部件色（find 输入 / 补全列表 / 右键菜单 / 徽章）：不通用的基底默认色会
+  // 在 mint 的绿底上露出一块中性灰——一并对齐到本主题的面上。
+  focusBorder: '#4c8bf5',
+  'input.background': '#2b3138',
+  'input.border': '#4a545f',
+  'input.foreground': '#d7dce2',
+  'input.placeholderForeground': '#8b949e',
+  'list.hoverBackground': '#2b3138',
+  'list.focusBackground': '#2b3138',
+  'list.activeSelectionBackground': '#2b3138',
+  'list.activeSelectionForeground': '#e6edf3',
+  'list.inactiveSelectionBackground': '#24292f',
+  'list.hoverForeground': '#d7dce2',
+  'list.highlightForeground': '#6ea8ff',
+  'list.focusHighlightForeground': '#6ea8ff',
+  'menu.background': '#24292f',
+  'menu.foreground': '#d7dce2',
+  'menu.selectionBackground': '#2b3138',
+  'menu.selectionForeground': '#e6edf3',
+  'menu.border': '#3a424b',
+  'menu.separatorBackground': '#3a424b',
+  'badge.background': '#2e6fd1',
+  'badge.foreground': '#ffffff',
+  'widget.border': '#3a424b',
+  'editorWidget.background': '#24292f',
+  'editorWidget.border': '#3a424b',
+  'editorWidget.foreground': '#d7dce2',
+  'editorSuggestWidget.background': '#24292f',
+  'editorSuggestWidget.border': '#3a424b',
+  'editorSuggestWidget.foreground': '#d7dce2',
+  'editorSuggestWidget.selectedBackground': '#2b3138',
+  'editorSuggestWidget.selectedForeground': '#e6edf3',
+  'editorSuggestWidget.highlightForeground': '#6ea8ff',
+  'editorSuggestWidget.focusHighlightForeground': '#6ea8ff',
+  'editorSuggestWidgetStatus.foreground': '#8b949e',
+  'editorHoverWidget.background': '#24292f',
+  'editorHoverWidget.border': '#3a424b',
+  'editorHoverWidget.foreground': '#d7dce2',
+  'editorHoverWidget.highlightForeground': '#6ea8ff',
+  'editorHoverWidget.statusBarBackground': '#2b3138',
+  'editorStickyScroll.background': '#1e2227',
+  'editorStickyScroll.border': '#2f363d',
+  'editorStickyScrollHover.background': '#24292f',
+  'minimap.background': '#1e2227',
+  'scrollbarSlider.background': '#ffffff1f',
+  'scrollbarSlider.hoverBackground': '#ffffff33',
+  'scrollbarSlider.activeBackground': '#ffffff47',
+  'diffEditor.insertedTextBackground': '#4fc08d2e',
+  'diffEditor.removedTextBackground': '#e06c752e',
+  'diffEditor.insertedLineBackground': '#4fc08d1a',
+  'diffEditor.removedLineBackground': '#e06c751a',
+  'diffEditorGutter.insertedLineBackground': '#4fc08d26',
+  'diffEditorGutter.removedLineBackground': '#e06c7526',
+  'diffEditor.diagonalFill': '#3a424b66',
+  'diffEditor.border': '#3a424b',
+  'diffEditorOverview.insertedForeground': '#4fc08dcc',
+  'diffEditorOverview.removedForeground': '#e06c75cc',
+};
+
+const KOJO_LIGHT_COLORS: Readonly<Record<string, string>> = {
+  'editor.background': '#f6f8fa',
+  'editor.foreground': '#1f2328',
+  'editorLineNumber.foreground': '#6e7781',
+  'editorLineNumber.activeForeground': '#1f2328',
+  'editorLineNumber.dimmedForeground': '#afb8c1',
+  'editorCursor.foreground': '#0550ae',
+  'editor.lineHighlightBackground': '#eaeef2',
+  'editor.lineHighlightBorder': '#eaeef2',
+  'editor.selectionBackground': '#0a5cc248',
+  'editor.inactiveSelectionBackground': '#0a5cc220',
+  'editor.selectionHighlightBackground': '#0a5cc226',
+  'editor.wordHighlightBackground': '#0a5cc21f',
+  'editor.wordHighlightStrongBackground': '#0a5cc23d',
+  'editor.findMatchBackground': '#d4a72c66',
+  'editor.findMatchHighlightBackground': '#d4a72c38',
+  'editor.findRangeHighlightBackground': '#0a5cc21a',
+  'editorIndentGuide.background1': '#d8dee4',
+  'editorIndentGuide.activeBackground1': '#afb8c1',
+  'editorBracketMatch.background': '#0a5cc21f',
+  'editorBracketMatch.border': '#0a5cc2',
+  'editorBracketHighlight.foreground1': '#8250df',
+  'editorBracketHighlight.foreground2': '#0550ae',
+  'editorBracketHighlight.foreground3': '#0a6b73',
+  'editorBracketHighlight.foreground4': '#953800',
+  'editorBracketHighlight.foreground5': '#bf3989',
+  'editorBracketHighlight.foreground6': '#116329',
+  'editorBracketHighlight.unexpectedBracket.foreground': '#b4232e',
+  'editorWhitespace.foreground': '#d0d7de',
+  'editorRuler.foreground': '#e1e6eb',
+  'editorGutter.background': '#f6f8fa',
+  'editorOverviewRuler.background': '#f6f8fa',
+  'editorOverviewRuler.border': '#d0d7de',
+  'editorError.foreground': '#b4232e',
+  'editorWarning.foreground': '#8a5a04',
+  'editorInfo.foreground': '#0550ae',
+  'editorLink.activeForeground': '#0550ae',
+  // 全局部件色（find 输入 / 补全列表 / 右键菜单 / 徽章）：与浅色面同族，不留深色块
+  focusBorder: '#0a5cc2',
+  'input.background': '#ffffff',
+  'input.border': '#d0d7de',
+  'input.foreground': '#1f2328',
+  'input.placeholderForeground': '#6e7781',
+  'list.hoverBackground': '#eaeef2',
+  'list.focusBackground': '#eaeef2',
+  'list.activeSelectionBackground': '#dde3ea',
+  'list.activeSelectionForeground': '#1f2328',
+  'list.inactiveSelectionBackground': '#eaeef2',
+  'list.hoverForeground': '#1f2328',
+  'list.highlightForeground': '#0550ae',
+  'list.focusHighlightForeground': '#0550ae',
+  'menu.background': '#ffffff',
+  'menu.foreground': '#1f2328',
+  'menu.selectionBackground': '#dde3ea',
+  'menu.selectionForeground': '#1f2328',
+  'menu.border': '#d0d7de',
+  'menu.separatorBackground': '#e1e6eb',
+  'badge.background': '#0a5cc2',
+  'badge.foreground': '#ffffff',
+  'widget.border': '#d0d7de',
+  'editorWidget.background': '#ffffff',
+  'editorWidget.border': '#d0d7de',
+  'editorWidget.foreground': '#1f2328',
+  'editorSuggestWidget.background': '#ffffff',
+  'editorSuggestWidget.border': '#d0d7de',
+  'editorSuggestWidget.foreground': '#1f2328',
+  'editorSuggestWidget.selectedBackground': '#dde3ea',
+  'editorSuggestWidget.selectedForeground': '#1f2328',
+  'editorSuggestWidget.highlightForeground': '#0550ae',
+  'editorSuggestWidget.focusHighlightForeground': '#0550ae',
+  'editorSuggestWidgetStatus.foreground': '#57606a',
+  'editorHoverWidget.background': '#ffffff',
+  'editorHoverWidget.border': '#d0d7de',
+  'editorHoverWidget.foreground': '#1f2328',
+  'editorHoverWidget.highlightForeground': '#0550ae',
+  'editorHoverWidget.statusBarBackground': '#eaeef2',
+  'editorStickyScroll.background': '#f6f8fa',
+  'editorStickyScroll.border': '#d8dee4',
+  'editorStickyScrollHover.background': '#eaeef2',
+  'minimap.background': '#f6f8fa',
+  'scrollbarSlider.background': '#091e421f',
+  'scrollbarSlider.hoverBackground': '#091e4233',
+  'scrollbarSlider.activeBackground': '#091e4247',
+  'diffEditor.insertedTextBackground': '#0e6b2c26',
+  'diffEditor.removedTextBackground': '#b4232e26',
+  'diffEditor.insertedLineBackground': '#0e6b2c14',
+  'diffEditor.removedLineBackground': '#b4232e14',
+  'diffEditorGutter.insertedLineBackground': '#0e6b2c1f',
+  'diffEditorGutter.removedLineBackground': '#b4232e1f',
+  'diffEditor.diagonalFill': '#d0d7de66',
+  'diffEditor.border': '#d0d7de',
+  'diffEditorOverview.insertedForeground': '#0e6b2ccc',
+  'diffEditorOverview.removedForeground': '#b4232ecc',
+};
+
+const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
+  'editor.background': '#0f1713',
+  'editor.foreground': '#d9e9df',
+  'editorLineNumber.foreground': '#6f8c7d',
+  'editorLineNumber.activeForeground': '#d9e9df',
+  'editorLineNumber.dimmedForeground': '#3f574a',
+  'editorCursor.foreground': '#45d9ab',
+  'editor.lineHighlightBackground': '#15201a',
+  'editor.lineHighlightBorder': '#15201a',
+  'editor.selectionBackground': '#35d0a052',
+  'editor.inactiveSelectionBackground': '#35d0a024',
+  'editor.selectionHighlightBackground': '#35d0a03d',
+  'editor.wordHighlightBackground': '#35d0a02e',
+  'editor.wordHighlightStrongBackground': '#35d0a05c',
+  'editor.findMatchBackground': '#d8a26966',
+  'editor.findMatchHighlightBackground': '#d8a2693d',
+  'editor.findRangeHighlightBackground': '#35d0a024',
+  'editorIndentGuide.background1': '#243a30',
+  'editorIndentGuide.activeBackground1': '#3d5a4b',
+  'editorBracketMatch.background': '#35d0a029',
+  'editorBracketMatch.border': '#35d0a0',
+  'editorBracketHighlight.foreground1': '#c9a7f5',
+  'editorBracketHighlight.foreground2': '#7cc7ff',
+  'editorBracketHighlight.foreground3': '#74d6d0',
+  'editorBracketHighlight.foreground4': '#e3c08d',
+  'editorBracketHighlight.foreground5': '#ff9ba3',
+  'editorBracketHighlight.foreground6': '#9ccf9a',
+  'editorBracketHighlight.unexpectedBracket.foreground': '#ff9ba3',
+  'editorWhitespace.foreground': '#2b3f35',
+  'editorRuler.foreground': '#203028',
+  'editorGutter.background': '#0f1713',
+  'editorOverviewRuler.background': '#0f1713',
+  'editorOverviewRuler.border': '#2b3f35',
+  'editorError.foreground': '#e2707a',
+  'editorWarning.foreground': '#d8a269',
+  'editorInfo.foreground': '#7cc7ff',
+  'editorLink.activeForeground': '#55dcb0',
+  // 全局部件色（find 输入 / 补全列表 / 右键菜单 / 徽章）：换成墨绿面与薄荷 accent，
+  // 不用 vs-dark 的中性灰（灰块在绿底上像另一套主题的残留）
+  focusBorder: '#45d9ab',
+  'input.background': '#1c2a23',
+  'input.border': '#3d5a4b',
+  'input.foreground': '#d9e9df',
+  'input.placeholderForeground': '#88a896',
+  'list.hoverBackground': '#1c2a23',
+  'list.focusBackground': '#1c2a23',
+  'list.activeSelectionBackground': '#1c2a23',
+  'list.activeSelectionForeground': '#d9e9df',
+  'list.inactiveSelectionBackground': '#15201a',
+  'list.hoverForeground': '#d9e9df',
+  'list.highlightForeground': '#55dcb0',
+  'list.focusHighlightForeground': '#55dcb0',
+  'menu.background': '#15201a',
+  'menu.foreground': '#d9e9df',
+  'menu.selectionBackground': '#1c2a23',
+  'menu.selectionForeground': '#d9e9df',
+  'menu.border': '#2b3f35',
+  'menu.separatorBackground': '#2b3f35',
+  'badge.background': '#12a37a',
+  'badge.foreground': '#072118',
+  'widget.border': '#2b3f35',
+  'editorWidget.background': '#15201a',
+  'editorWidget.border': '#2b3f35',
+  'editorWidget.foreground': '#d9e9df',
+  'editorSuggestWidget.background': '#15201a',
+  'editorSuggestWidget.border': '#2b3f35',
+  'editorSuggestWidget.foreground': '#d9e9df',
+  'editorSuggestWidget.selectedBackground': '#1c2a23',
+  'editorSuggestWidget.selectedForeground': '#d9e9df',
+  'editorSuggestWidget.highlightForeground': '#55dcb0',
+  'editorSuggestWidget.focusHighlightForeground': '#55dcb0',
+  'editorSuggestWidgetStatus.foreground': '#88a896',
+  'editorHoverWidget.background': '#15201a',
+  'editorHoverWidget.border': '#2b3f35',
+  'editorHoverWidget.foreground': '#d9e9df',
+  'editorHoverWidget.highlightForeground': '#55dcb0',
+  'editorHoverWidget.statusBarBackground': '#1c2a23',
+  'editorStickyScroll.background': '#0f1713',
+  'editorStickyScroll.border': '#243a30',
+  'editorStickyScrollHover.background': '#15201a',
+  'minimap.background': '#0f1713',
+  'scrollbarSlider.background': '#35d0a02e',
+  'scrollbarSlider.hoverBackground': '#35d0a04d',
+  'scrollbarSlider.activeBackground': '#35d0a06b',
+  'diffEditor.insertedTextBackground': '#62c77626',
+  'diffEditor.removedTextBackground': '#e2707a26',
+  'diffEditor.insertedLineBackground': '#62c77614',
+  'diffEditor.removedLineBackground': '#e2707a14',
+  'diffEditorGutter.insertedLineBackground': '#62c7761f',
+  'diffEditorGutter.removedLineBackground': '#e2707a1f',
+  'diffEditor.diagonalFill': '#2b3f3566',
+  'diffEditor.border': '#2b3f35',
+  'diffEditorOverview.insertedForeground': '#62c776cc',
+  'diffEditorOverview.removedForeground': '#e2707acc',
+};
+
+/* ------------------------------ 装配 ------------------------------ */
+
+/** 一次性定义三套主题（幂等；`registerErbLanguage` 末尾调用） */
+export function defineMonacoThemes(monaco: typeof Monaco): void {
+  monaco.editor.defineTheme('kojo-dark', {
+    base: 'vs-dark',
+    inherit: false,
+    rules: darkRules(),
+    colors: KOJO_DARK_COLORS,
+  });
+  monaco.editor.defineTheme('kojo-light', {
+    base: 'vs',
+    inherit: false,
+    rules: lightRules(),
+    colors: KOJO_LIGHT_COLORS,
+  });
+  monaco.editor.defineTheme('kojo-mint-dark', {
+    base: 'vs-dark',
+    inherit: false,
+    rules: mintRules(),
+    colors: KOJO_MINT_COLORS,
+  });
+}

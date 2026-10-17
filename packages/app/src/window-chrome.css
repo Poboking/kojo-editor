@@ -1,14 +1,52 @@
 /*
- * 全屏自定义顶栏（用户反馈第 2 条：全屏化时最上方无窗口标题栏）。
+ * 常驻窗口框架（用户反馈第 9 条：任何窗口态都不要 Windows 原生标题栏）。
  *
- * 只在 Tauri 全屏时由 WindowChrome 渲染；非全屏保留系统原生标题栏，不重复出现。
- * 布局口径：`.shell` 的第一个 flex 子元素 + `flex: none` 占位（不是 position:fixed），
- * 因此不遮挡编辑器/状态栏，也不参与 `.toolbar` 的滚动。
- * 颜色只用既有 token（主题切换自动跟随），不写死 hex。
+ * 三块职责：
+ * 1. `.app-frame` / `.app-frame-body` —— App 根部的纵向框架：34px 标题栏 + 撑满的正文。
+ * 2. `.window-chrome` —— 自定义标题栏（启动即常驻；浏览器 dev 由组件返回 null）。
+ * 3. 自绘外框 —— 普通窗口态一圈 1px `--border-strong`，最大化 / 全屏贴边不画。
+ *    外框走 `::after` + inset box-shadow：不占布局、不会被 `overflow` 裁掉，也不和
+ *    标题栏自己的 `--edge-raise` 抢 box-shadow 槽位；`--z-modal + 10` 让它压住
+ *    遮罩边缘（窗口边框始终是"最外面"的那圈铬），`pointer-events: none` 不挡点击。
+ *
+ * 状态源是 `WindowChrome` 写的 `<html data-window-state>`（normal|maximized|fullscreen）；
+ * 浏览器 dev 没有壳、也没有这个属性 ⇒ 既无标题栏也无外框。
+ * 颜色 100% 走既有 token（深浅主题自动跟随），不写死 hex。
  *
  * 注意：本文件可能在 styles.css 之前进 bundle（WindowChrome 在 App 依赖图里更早被求值），
  * 故按钮规则统一带 `.window-chrome` 前缀抬高特异性，稳定压过全局 `button` / `button:hover`。
  */
+
+/* ------------------------------ 应用根框架 ------------------------------ */
+
+.app-frame {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* 正文区：标题栏之外的整块舞台（欢迎页 / 项目壳 / 禅模式都住在里面） */
+.app-frame-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 普通窗口态：一圈 1px 强描边（inset 阴影绘制，不占布局）。最大化 / 全屏贴边不画 */
+:root[data-window-state='normal'] .app-frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: calc(var(--z-modal) + 10);
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+/* ------------------------------ 标题栏 ------------------------------ */
 
 .window-chrome {
   position: relative;

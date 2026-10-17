@@ -161,9 +161,11 @@ function ClosedState({
 }
 
 /**
- * 欢迎页（用户反馈 8 批重做）：无项目时的整页视图，版式对标 VSCode 欢迎页——
- * 顶部一枚可关闭的「欢迎」标签，主体两栏：左侧品牌头 +「启动」+「最近」，
- * 右侧「教程」三张卡片。
+ * 欢迎页（用户反馈 9 批再排）：无项目时的整页视图。与 VSCode 不同，本项目必须先用
+ * 欢迎页选目录，所以没有工作区标签条可挂——单张卡片在视口内水平垂直居中；
+ * 标签视觉保留为**贴在卡片左上缘、向外凸出的装饰性标签**（home +「欢迎」+ ×），
+ * 不再承担 tab / tabpanel 语义。卡片本体两栏：左品牌头 +「启动」+「最近」，
+ * 右「教程」三张卡片。
  *
  * 数据流保持原样：最近列表的读取/写回全部走 App 注入的回调（组件不持有 kernel）；
  * 教程卡片也只把语义 id 交给 App，由 `ui.tutorial.open` 内核事件送进教程提供方。
@@ -241,208 +243,195 @@ export function WelcomeView({
 
   return (
     <div className="welcome welcome-screen">
-      <header className="welcome-tabbar" role="tablist" aria-label="欢迎页标签">
-        <div className="welcome-tab-group">
-          <div
-            className="welcome-tab"
-            role="tab"
-            id="welcome-tab"
-            aria-selected="true"
-            aria-controls="welcome-body"
-            tabIndex={-1}
-          >
-            <Icon name="home" size={14} className="welcome-tab-icon" />
-            <span className="welcome-tab-label">欢迎</span>
-          </div>
-          <button
-            type="button"
-            className="welcome-tab-close"
-            aria-label="关闭欢迎页"
-            title="关闭欢迎页"
-            onClick={onClose}
-          >
-            <Icon name="close" size={12} />
-          </button>
-        </div>
-      </header>
-
       <div className="welcome-scroll">
-        <div className="welcome-card" role="tabpanel" id="welcome-body" aria-labelledby="welcome-tab">
-          <main className="welcome-main">
-            <header className="welcome-brand">
-              <h1>
-                kojo-editor <span className="ver">v{APP_VERSION}</span>
-              </h1>
-              <p className="welcome-tagline">{TAGLINE}</p>
-            </header>
+        <div className="welcome-stage">
+          <div className="welcome-card" role="region" aria-label="欢迎">
+            {/* 关闭钮贴卡片右上角：欢迎页不再模拟标签，× 只负责收起本页（不是关窗口）。 */}
+            <button
+              type="button"
+              className="welcome-close"
+              aria-label="关闭欢迎页"
+              title="关闭欢迎页"
+              onClick={onClose}
+            >
+              <Icon name="close" size={14} />
+            </button>
+            <main className="welcome-main">
+              <header className="welcome-brand">
+                <h1>
+                  kojo-editor <span className="ver">v{APP_VERSION}</span>
+                </h1>
+                <p className="welcome-tagline">{TAGLINE}</p>
+              </header>
 
-            {!tauri ? (
-              <div className="notice warn welcome-notice">
-                当前运行在浏览器环境：文件系统能力不可用。请通过桌面壳启动（<code>pnpm tauri dev</code>）。
-              </div>
-            ) : null}
-
-            {!kernelReady ? (
-              <div className="notice welcome-notice" role="status">
-                内核装配中…
-              </div>
-            ) : null}
-
-            {error ? (
-              <div className="notice error welcome-notice" role="alert">
-                {error}
-              </div>
-            ) : null}
-
-            <section className="welcome-section welcome-start" aria-labelledby="welcome-start-title">
-              <h2 className="welcome-section-title" id="welcome-start-title">
-                启动
-              </h2>
-              <div className="welcome-actions">
-                <button
-                  className="primary big welcome-open u-sheen u-ripple"
-                  onClick={onOpenDirectory}
-                  disabled={!canOpen}
-                >
-                  <Icon name="files" size={16} />
-                  <span>{opening ? '正在打开…' : '打开文件夹…'}</span>
-                </button>
-                {!crashRecovery && resumeRoot ? (
-                  <button
-                    className="ghost welcome-resume"
-                    onClick={onResumeSession}
-                    disabled={!canOpen}
-                    title={resumeRoot}
-                  >
-                    <Icon name="history" size={16} />
-                    <span className="welcome-resume-label">继续上次会话</span>
-                    <span className="welcome-resume-path">{resumeRoot}</span>
-                  </button>
-                ) : null}
-              </div>
-              <p className="welcome-start-hint">
-                {!kernelReady
-                  ? '内核装配完成后即可打开文件夹；打开过的项目会出现在下方「最近」。'
-                  : recent.length > 0
-                    ? '也可以从下方「最近」选择，或把项目文件夹直接拖进窗口。'
-                    : '还没有最近项目——打开过的文件夹会出现在这里，下次一键回来。'}
-              </p>
-            </section>
-
-            {/* 崩溃恢复横幅（退出/崩溃守护批）：克制的一行事由 + 两个动作。 */}
-            {/* 恢复永不自动写盘——内容只装回编辑器当未保存修改，存不存由用户决定 */}
-            {crashRecovery && crashRecovery.root ? (
-              <div className="notice crash-recovery welcome-notice" role="alert">
-                <p>上次异常退出，{crashRecovery.files} 个文件的未保存内容已自动保留。</p>
-                <div className="crash-recovery-actions">
-                  <button className="primary" onClick={onRecoverCrash} disabled={opening}>
-                    恢复并打开
-                  </button>
-                  <button className="ghost" onClick={onDiscardCrash} disabled={opening}>
-                    丢弃
-                  </button>
+              {!tauri ? (
+                <div className="notice warn welcome-notice">
+                  当前运行在浏览器环境：文件系统能力不可用。请通过桌面壳启动（<code>pnpm tauri dev</code>）。
                 </div>
-              </div>
-            ) : null}
+              ) : null}
 
-            <section className="welcome-section welcome-recent" aria-labelledby="welcome-recent-title">
-              <div className="welcome-section-head">
-                <h2 className="welcome-section-title" id="welcome-recent-title">
-                  最近
+              {!kernelReady ? (
+                <div className="notice welcome-notice" role="status">
+                  内核装配中…
+                </div>
+              ) : null}
+
+              {error ? (
+                <div className="notice error welcome-notice" role="alert">
+                  {error}
+                </div>
+              ) : null}
+
+              <section className="welcome-section welcome-start" aria-labelledby="welcome-start-title">
+                <h2 className="welcome-section-title" id="welcome-start-title">
+                  启动
                 </h2>
-                {recent.length > 0 ? (
+                <div className="welcome-actions">
                   <button
-                    className="welcome-clear"
-                    onClick={onClearRecent}
-                    title="清空列表记录，不会删除磁盘上的项目文件"
+                    className="primary big welcome-open u-sheen u-ripple"
+                    onClick={onOpenDirectory}
+                    disabled={!canOpen}
                   >
-                    清除全部
+                    <Icon name="files" size={16} />
+                    <span>{opening ? '正在打开…' : '打开文件夹…'}</span>
                   </button>
-                ) : null}
+                  {!crashRecovery && resumeRoot ? (
+                    <button
+                      className="ghost welcome-resume"
+                      onClick={onResumeSession}
+                      disabled={!canOpen}
+                      title={resumeRoot}
+                    >
+                      <Icon name="history" size={16} />
+                      <span className="welcome-resume-label">继续上次会话</span>
+                      <span className="welcome-resume-path">{resumeRoot}</span>
+                    </button>
+                  ) : null}
+                </div>
+                <p className="welcome-start-hint">
+                  {!kernelReady
+                    ? '内核装配完成后即可打开文件夹；打开过的项目会出现在下方「最近」。'
+                    : recent.length > 0
+                      ? '也可以从下方「最近」选择，或把项目文件夹直接拖进窗口。'
+                      : '还没有最近项目——打开过的文件夹会出现在这里，下次一键回来。'}
+                </p>
+              </section>
+
+              {/* 崩溃恢复横幅（退出/崩溃守护批）：克制的一行事由 + 两个动作。 */}
+              {/* 恢复永不自动写盘——内容只装回编辑器当未保存修改，存不存由用户决定 */}
+              {crashRecovery && crashRecovery.root ? (
+                <div className="notice crash-recovery welcome-notice" role="alert">
+                  <p>上次异常退出，{crashRecovery.files} 个文件的未保存内容已自动保留。</p>
+                  <div className="crash-recovery-actions">
+                    <button className="primary" onClick={onRecoverCrash} disabled={opening}>
+                      恢复并打开
+                    </button>
+                    <button className="ghost" onClick={onDiscardCrash} disabled={opening}>
+                      丢弃
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <section className="welcome-section welcome-recent" aria-labelledby="welcome-recent-title">
+                <div className="welcome-section-head">
+                  <h2 className="welcome-section-title" id="welcome-recent-title">
+                    最近
+                  </h2>
+                  {recent.length > 0 ? (
+                    <button
+                      className="welcome-clear"
+                      onClick={onClearRecent}
+                      title="清空列表记录，不会删除磁盘上的项目文件"
+                    >
+                      清除全部
+                    </button>
+                  ) : null}
+                </div>
+
+                {recent.length === 0 ? (
+                  <p className="welcome-empty">
+                    {kernelReady
+                      ? '还没有打开过项目。打开一个文件夹后，它会出现在这里。'
+                      : '内核装配完成后，这里会列出最近项目。'}
+                  </p>
+                ) : (
+                  <ul className="welcome-recent-list">
+                    {recent.map((r) => {
+                      const missing = recentRowState(statCache.get(recentStatKey(r))) === 'missing';
+                      return (
+                        <li key={r.rootDir} className={`welcome-recent-row${missing ? ' is-missing' : ''}`}>
+                          <button
+                            className="welcome-recent-open"
+                            onClick={() => onOpenRecent(r.rootDir)}
+                            title={missing ? `${r.rootDir}（目录不存在，点击重试）` : r.rootDir}
+                          >
+                            <span className="welcome-recent-path">{r.rootDir}</span>
+                            <span className="welcome-recent-meta">
+                              {missing ? (
+                                <span className="welcome-recent-badge is-missing">目录不存在</span>
+                              ) : null}
+                              <span className="welcome-recent-badge">{r.adapterId}</span>
+                            </span>
+                          </button>
+                          <button
+                            className="welcome-recent-remove"
+                            onClick={() => onRemoveRecent(r.rootDir)}
+                            title={`从列表移除：${r.rootDir}`}
+                          >
+                            移除
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
+
+              <p className="welcome-hint">
+                选一个文件夹打开即可：编辑器会自动识别其中的游戏并选择对应的适配器。打开后 CHARA
+                映射与口上域索引自动构建；游戏目录默认只读，首次保存时才请求对可写目录的权限。
+              </p>
+            </main>
+
+            <aside className="welcome-side" aria-labelledby="welcome-tutorials-title">
+              <div className="welcome-side-head">
+                <h2 className="welcome-side-title" id="welcome-tutorials-title">
+                  <Icon name="book" size={16} />
+                  教程
+                </h2>
+                <span className="welcome-side-note">内置 · 随时可看</span>
               </div>
 
-              {recent.length === 0 ? (
-                <p className="welcome-empty">
-                  {kernelReady
-                    ? '还没有打开过项目。打开一个文件夹后，它会出现在这里。'
-                    : '内核装配完成后，这里会列出最近项目。'}
-                </p>
-              ) : (
-                <ul className="welcome-recent-list">
-                  {recent.map((r) => {
-                    const missing = recentRowState(statCache.get(recentStatKey(r))) === 'missing';
-                    return (
-                      <li key={r.rootDir} className={`welcome-recent-row${missing ? ' is-missing' : ''}`}>
-                        <button
-                          className="welcome-recent-open"
-                          onClick={() => onOpenRecent(r.rootDir)}
-                          title={missing ? `${r.rootDir}（目录不存在，点击重试）` : r.rootDir}
-                        >
-                          <span className="welcome-recent-path">{r.rootDir}</span>
-                          <span className="welcome-recent-meta">
-                            {missing ? (
-                              <span className="welcome-recent-badge is-missing">目录不存在</span>
-                            ) : null}
-                            <span className="welcome-recent-badge">{r.adapterId}</span>
-                          </span>
-                        </button>
-                        <button
-                          className="welcome-recent-remove"
-                          onClick={() => onRemoveRecent(r.rootDir)}
-                          title={`从列表移除：${r.rootDir}`}
-                        >
-                          移除
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </section>
+              <div className="welcome-tutorials">
+                {WELCOME_TUTORIALS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className="welcome-tutorial"
+                    onClick={() => onOpenTutorial(t.id)}
+                    disabled={!tutorialsOpenable}
+                    title={!kernelReady ? '内核装配中…' : opening ? '正在打开项目…' : `打开「${t.title}」`}
+                  >
+                    <span className="welcome-tutorial-icon">
+                      <Icon name={t.icon} size={18} />
+                    </span>
+                    <span className="welcome-tutorial-copy">
+                      <span className="welcome-tutorial-title">{t.title}</span>
+                      <span className="welcome-tutorial-desc">{t.blurb}</span>
+                    </span>
+                    <span className="welcome-tutorial-arrow">
+                      <Icon name="chevron-right" size={14} />
+                    </span>
+                  </button>
+                ))}
+              </div>
 
-            <p className="welcome-hint">
-              选一个文件夹打开即可：编辑器会自动识别其中的游戏并选择对应的适配器。打开后 CHARA
-              映射与口上域索引自动构建；游戏目录默认只读，首次保存时才请求对可写目录的权限。
-            </p>
-          </main>
-
-          <aside className="welcome-side" aria-labelledby="welcome-tutorials-title">
-            <div className="welcome-side-head">
-              <h2 className="welcome-side-title" id="welcome-tutorials-title">
-                <Icon name="book" size={16} />
-                教程
-              </h2>
-              <span className="welcome-side-note">内置 · 随时可看</span>
-            </div>
-
-            <div className="welcome-tutorials">
-              {WELCOME_TUTORIALS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className="welcome-tutorial"
-                  onClick={() => onOpenTutorial(t.id)}
-                  disabled={!tutorialsOpenable}
-                  title={!kernelReady ? '内核装配中…' : opening ? '正在打开项目…' : `打开「${t.title}」`}
-                >
-                  <span className="welcome-tutorial-icon">
-                    <Icon name={t.icon} size={18} />
-                  </span>
-                  <span className="welcome-tutorial-copy">
-                    <span className="welcome-tutorial-title">{t.title}</span>
-                    <span className="welcome-tutorial-desc">{t.blurb}</span>
-                  </span>
-                  <span className="welcome-tutorial-arrow">
-                    <Icon name="chevron-right" size={14} />
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            <p className="welcome-side-foot">
-              教程浮层不依赖已打开的项目：按 <kbd>Esc</kbd> 或点遮罩即可关闭。同一组入口也常驻在「我的口上项目」面板底部。
-            </p>
-          </aside>
+              <p className="welcome-side-foot">
+                教程浮层不依赖已打开的项目：按 <kbd>Esc</kbd> 或点遮罩即可关闭。同一组入口也常驻在「我的口上项目」面板底部。
+              </p>
+            </aside>
+          </div>
         </div>
       </div>
     </div>

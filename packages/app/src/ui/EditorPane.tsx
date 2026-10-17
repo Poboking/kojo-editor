@@ -14,6 +14,8 @@ import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
+import { monacoThemeIdFor } from '../monaco/theme';
+import { loadThemePref, useThemePref } from './theme-pref';
 import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
 import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
@@ -278,6 +280,15 @@ export function EditorPane({
   /** 编辑器状态上抛 ref（重载时读最新，避免把不稳定 prop 拖进回调依赖） */
   const onStatusInfoRef = useRef(onStatusInfo);
   const notify = useNotify();
+  /**
+   * 主题偏好（反馈 3）：dark / light / mint-dark 三档与 `monaco/theme.ts` 的三套主题
+   * 一一对应；偏好一变就把 Monaco 全局主题换过去（同页所有编辑器实例一起换）。
+   * 创建实例时另按 `loadThemePref()` 现取（见下方 `monaco.editor.create`）。
+   */
+  const themePref = useThemePref();
+  useEffect(() => {
+    monaco.editor.setTheme(monacoThemeIdFor(themePref));
+  }, [themePref]);
   /** 装饰重算定时器（编辑停顿去抖） */
   const markerTimerRef = useRef<number | null>(null);
   /** 装饰刷新函数（ref 化，供只注册一次的 model 监听调用） */
@@ -1280,7 +1291,9 @@ export function EditorPane({
     // 缩放在实例创建**之前**播种：EditorZoom 是全局单例，创建时算 fontInfo 就按它缩放
     applyFontZoomPref(monaco.editor.EditorZoom);
     const ed = monaco.editor.create(host, {
-      theme: 'kojo-dark',
+      // 主题随偏好走（反馈 3）：模块顶层 `registerErbLanguage` 已定义三套，
+      // 这里按当前 localStorage 偏好落初值，之后的切换由上面的 useThemePref effect 负责。
+      theme: monacoThemeIdFor(loadThemePref()),
       language: ERB_LANGUAGE_ID,
       automaticLayout: true,
       // 用户反馈 7：原生右键菜单必须留在 light DOM。0.57 的 `useShadowDOM` 缺省 **true**，
