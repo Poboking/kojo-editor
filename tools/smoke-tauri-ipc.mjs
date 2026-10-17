@@ -15,6 +15,9 @@
  *   e appDataDir 写正常
  *
  * 用法：node tools/smoke-tauri-ipc.mjs [游戏目录]
+ *   端口默认按仓库配置（1420）；`KOJO_SMOKE_VITE_PORT=1431` 可换（临时合并配置走 `tauri dev --config`，
+ *   不碰仓库文件；换端口会触发一次 ~30s 的 cargo 重编）。占用检查两个地址族都算，起壳后钉页面 origin
+ *   ——别的树只挂 [::1]:1420 时，localhost 会把壳带到它的 dev server 上（假绿）。
  * 退出码：0 = 全 PASS；1 = 有 FAIL（输出逐项诊断）。
  * 注意：会弹出应用窗口（结束自动关闭）；会临时改写 store/recent-projects.json（结束还原）。
  *
@@ -42,6 +45,7 @@ import * as net from 'node:net';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { resolveCorpusDir, discoverCorpora, corpusHint } from './corpus.mjs';
+import { answerAskDialogs, assertPageOrigin, devTarget, portBusy } from './smoke-lib.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 // 语料路径**按主机而定**（本机只有 C:，QA 机用 D:），且目录名会被反复重排 ⇒ 不写死默认名：
@@ -369,12 +373,13 @@ function storePrecheck() {
 }
 
 /** 预检：等两个端口都空闲（上一轮遗留进程会占用，直接起会互相干扰） */
-async function waitPortsFree(timeoutMs = 60000) {
+async function waitPortsFree(vitePort, timeoutMs = 60000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const busy = (await portOpen(1420)) || (await portOpen(CDP_PORT));
+    // 两个地址族都算占用：只挂 [::1] 的 vite 会让 127.0.0.1 检查放行，localhost 随后把壳带歪
+    const busy = (await portBusy(vitePort)) || (await portBusy(CDP_PORT));
     if (!busy) return;
-    console.log('[smoke] ports busy (1420/9222), waiting for previous run to release …');
+    console.log(`[smoke] ports busy (${vitePort}/${CDP_PORT}), waiting for previous run to release …`);
     await sleep(3000);
   }
   console.log('[smoke] ports still busy after wait; proceeding anyway');
@@ -384,7 +389,14 @@ async function waitPortsFree(timeoutMs = 60000) {
 
 async function main() {
   seedRecent();
-  await waitPortsFree();
+  let dev;
+  try {
+    dev = devTarget(ROOT);
+  } catch (e) {
+    console.error(`❌ ${e.message}`);
+    process.exit(2);
+  }
+  await waitPortsFree(dev.port);
 
   // WebView2 画像：操作者显式给了就照用（并且**不动它**），否则本工具自带一具新鲜隔离画像。
   const ownedWebviewDir = !process.env.WEBVIEW2_USER_DATA_FOLDER;
@@ -394,9 +406,11 @@ async function main() {
       fs.rmSync(webviewDir, { recursive: true, force: true });
     } catch {}
   }
-  console.log('[smoke] launching tauri dev (CDP %d, WebView2 画像 %s%s) …',
+  console.log('[smoke] launching tauri dev (Vite %d%s, CDP %d, WebView2 画像 %s%s) …',
+    dev.port, dev.tauriArgs.length > 0 ? ` 来自 KOJO_SMOKE_VITE_PORT` : '',
     CDP_PORT, webviewDir, ownedWebviewDir ? '，跑完删除' : '，操作者指定，保留');
-  const child = spawn('pnpm --filter @kojo/app tauri dev', {
+  const devCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
+  const child = spawn(devCmd, {
     shell: true,
     cwd: ROOT,
     env: {
@@ -452,7 +466,8 @@ async function main() {
       await sleep(1500);
     }
     if (!cdp) throw new Error('CDP page never became ready');
-    console.log('[smoke] page ready ✓');
+    const pageHref = await assertPageOrigin(cdp, dev.origin);
+    console.log(`[smoke] page ready ✓（${pageHref}）`);
 
     // 探明 IPC 通道
     const bridgeProbe = await cdp.evalJs(`(() => ({
@@ -488,21 +503,26 @@ async function main() {
     if (projDir === GAME_DIR) P('a', '打开真实游戏目录', `工具栏项目标签 rootDir=${projDir}`);
     else F('a', '打开真实游戏目录', `期望 ${GAME_DIR}，实际 ${projDir}`);
 
-    /* -------- 批准写权限（若弹窗） -------- */
-    // 弹窗在 openProject 末尾异步 setState，稍等再判定
+    /* -------- 批准写权限（若弹窗）+ 同屏其它首次引导 -------- */
+    // 弹窗在 openProject 末尾异步 setState，稍等再判定。
+    // 开项目后不止「写权限确认」一种模态：会话恢复带 ERB 标签会先弹「.kojo 预览」首次引导
+    // （上游 2026-10-17 新增）。逐朵按白名单答掉；不认识的模态由 helper 抛错并打出按钮原文
+    // ——不瞎点，免得替作者动用户数据。
     await sleep(2000);
-    const modalShown = await cdp.evalJs(`!!document.querySelector('.modal')`);
-    if (modalShown) {
-      await cdp.evalJs(`(() => {
-        const b = [...document.querySelectorAll('.modal-actions button')].find(
-          (el) => el.textContent.includes('允许写入'));
-        if (b) { b.click(); return 'approved'; }
-        return 'no-allow-button';
-      })()`);
-      await waitFor(cdp, `!document.querySelector('.modal')`, 15000);
-      P('a2', '批准写权限对话框', '点击「允许写入」→ 弹窗关闭');
-    } else {
+    const asks = await answerAskDialogs(cdp, { log: (m) => console.log(`[smoke] ${m}`) });
+    const approved = asks.answered.some((a) => a.button.includes('允许写入'));
+    const others = asks.answered
+      .filter((a) => !a.button.includes('允许写入'))
+      .map((a) => `${a.aria}→${a.button}`);
+    if (approved) {
+      const extra = others.length > 0 ? `（同轮还答掉：${others.join('，')}）` : '';
+      P('a2', '批准写权限对话框', `点击「允许写入」→ 弹窗关闭${extra}`);
+    } else if (asks.modals.length === 0) {
       S('a2', '批准写权限对话框', '未弹出（该目录已有批准记录）');
+    } else if (asks.answered.length > 0) {
+      S('a2', '批准写权限对话框', `未弹出（该目录已有批准记录）；同轮答掉：${others.join('，')}`);
+    } else {
+      F('a2', '批准写权限对话框', '屏上模态里没有可答的白名单按钮');
     }
 
     // 等索引完成（状态栏 `.sb-idx` 不再含省略号：索引中显示「索引构建中…」）
@@ -669,13 +689,24 @@ async function main() {
     const dirty = await cdp.evalJs(`!!document.querySelector('.dirty-dot.on')`);
     if (!dirty) throw new Error('editor not marked dirty after insertText');
     // 点保存
-    await cdp.evalJs(`(() => {
+    const saveClick = await cdp.evalJs(`(() => {
       const b = document.querySelector('.editor-toolbar button.primary.small');
       if (b && !b.disabled) { b.click(); return 'saved-click'; }
-      return 'save-disabled';
+      return b ? 'save-disabled' : 'no-save-button';
     })()`);
-    // 等保存完成（状态显示"已保存"）
-    await waitFor(cdp, `/已保存/.test(document.querySelector('.editor-status')?.innerText ?? '')`, 20000, 500);
+    // 等保存完成（状态显示"已保存"）；超时把「按钮当时点没点动 / 状态行原文 / 有没有模态」
+    // 一起带出来——只留一个 last=false 会让人白跑一轮（实测过一次）。
+    try {
+      await waitFor(cdp, `/已保存/.test(document.querySelector('.editor-status')?.innerText ?? '')`, 20000, 500);
+    } catch (e) {
+      const why = await cdp.evalJs(`(() => ({
+        保存按钮: (() => { const b = document.querySelector('.editor-toolbar button.primary.small'); return b ? { text: b.textContent.trim(), disabled: b.disabled } : null; })(),
+        状态行: document.querySelector('.editor-status')?.innerText ?? null,
+        脏点: !!document.querySelector('.dirty-dot.on'),
+        模态: [...document.querySelectorAll('.modal')].map((m) => m.getAttribute('aria-label')),
+      }))()`);
+      throw new Error(`${e.message}｜点击=${saveClick}｜现场=${JSON.stringify(why)}`);
+    }
 
     const onDisk = fs.existsSync(filePath) ? fs.readFileSync(filePath).toString('utf-8') : '';
     const backupsAfter = listBackups(backupRoot);
@@ -777,6 +808,7 @@ async function main() {
   } finally {
     killTree();
     restoreStore();
+    dev.cleanup();
     if (ownedWebviewDir) await removeDirRetry(webviewDir, 'WebView2 隔离画像');
   }
 

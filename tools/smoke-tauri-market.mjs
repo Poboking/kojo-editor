@@ -36,8 +36,14 @@
  * 退出码：0 = 全 PASS（SKIP 不算失败）；1 = 有 FAIL；2 = 前置条件不满足（语料不在位 / 端口被占）。
  * 会弹出应用窗口（结束自动关闭）；会临时备份/还原 <appData>/market/index.json 与 store 的两个文件。
  *
+ * 端口：默认按仓库配置（`tauri.conf.json` 的 devUrl / `vite.config.ts` 的 port，当前 1420）；
+ *   `KOJO_SMOKE_VITE_PORT=1431` 可换端口——不碰仓库里的配置文件，用临时 JSON 走 `tauri dev --config`
+ *   （换了端口会触发一次 ~30s 的 cargo 重编）。占用检查**两个地址族都试**：别的树的 vite 只挂
+ *   `[::1]:1420` 时，localhost 会把壳带到**别人的 dev server** 上 ⇒ 起壳后先钉页面 origin，不在
+ *   预期地址就不判绿（2026-10-17 实测过的假绿）。
+ *
  * ⚠ 一台机器同一个工作树**只许一个桌面实例**：本工具与 `smoke-tauri-ipc.mjs` 不能同时跑
- *   （Vite 1420 端口互斥，工具开头就检查，占着就 rc=2 明确失败）。
+ *   （Vite 端口互斥，工具开头就检查，占着就 rc=2 明确失败）。
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -47,6 +53,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { resolveCorpusDir, discoverCorpora, corpusHint } from './corpus.mjs';
+import { answerAskDialogs, assertPageOrigin, devTarget, portBusy } from './smoke-lib.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CDP_PORT = 9223;
@@ -237,15 +244,29 @@ async function main() {
   };
 
   const startedAt = Date.now();
-  const busy = (await portOpen(1420)) || (await portOpen(CDP_PORT));
+  let dev;
+  try {
+    dev = devTarget(ROOT);
+  } catch (e) {
+    console.error(`❌ ${e.message}`);
+    restoreStore();
+    process.exit(2);
+  }
+  const busy = (await portBusy(dev.port)) || (await portBusy(CDP_PORT));
   if (busy) {
-    console.error('❌ 1420 或 CDP 端口已被占用（同一工作树只许一个桌面实例）。先关掉在跑的 tauri dev / 其它冒烟再试。');
+    console.error(
+      `❌ ${dev.port} 或 CDP ${CDP_PORT} 已被占用（同一工作树只许一个桌面实例）。\n`
+      + '   注意占用要两个地址族都算：别的树的 vite 只挂 [::1] 时，localhost 会把壳带到它的 dev server 上。\n'
+      + '   先关掉在跑的 tauri dev / 其它冒烟再试；或换端口：KOJO_SMOKE_VITE_PORT=1431 再跑。',
+    );
     restoreStore();
     process.exit(2);
   }
 
-  console.log('[market-smoke] launching tauri dev (CDP %d) …', CDP_PORT);
-  const child = spawn('pnpm --filter @kojo/app tauri dev', {
+  console.log('[market-smoke] launching tauri dev (Vite %d, CDP %d%s) …',
+    dev.port, CDP_PORT, dev.tauriArgs.length > 0 ? '，端口来自 KOJO_SMOKE_VITE_PORT' : '');
+  const devCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
+  const child = spawn(devCmd, {
     shell: true,
     cwd: ROOT,
     env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}` },
@@ -298,7 +319,8 @@ async function main() {
       await sleep(1500);
     }
     if (!cdp) throw new Error('CDP page never became ready');
-    console.log('[market-smoke] page ready ✓');
+    const pageHref = await assertPageOrigin(cdp, dev.origin);
+    console.log(`[market-smoke] page ready ✓（${pageHref}）`);
 
     /* -------- 打开项目（只为拿到壳的面板层；市场链路本身不读游戏目录） -------- */
     await waitFor(cdp, `[...document.querySelectorAll('.recent button.link .recent-dir')].some(e => e.textContent === ${JSON.stringify(gameDir)})`, 40000);
@@ -312,13 +334,11 @@ async function main() {
     if (clicked !== 'clicked') throw new Error(`recent project click failed: ${clicked}`);
     await waitFor(cdp, '!!document.querySelector(".toolbar")', 150000);
     await sleep(1500);
-    if (await cdp.evalJs('!!document.querySelector(".modal")')) {
-      await cdp.evalJs(`(() => {
-        const b = [...document.querySelectorAll('.modal-actions button')].find((e) => e.textContent.includes('允许写入'));
-        if (b) b.click();
-        return b ? 'approved' : 'no-allow-button';
-      })()`);
-      await waitFor(cdp, '!document.querySelector(".modal")', 20000);
+    // 开项目后不止「写权限确认」一种模态：会话恢复里带 ERB 标签会先弹「.kojo 预览」首次引导。
+    // 逐朵按白名单答掉（不认识的模态由 helper 抛错并打出按钮原文——不瞎点）。
+    const askResult = await answerAskDialogs(cdp, { log: (m) => console.log(`[market-smoke] ${m}`) });
+    if (askResult.answered.length > 0) {
+      console.log(`[market-smoke] 模态已清空（${askResult.answered.length} 朵）`);
     }
     // 不等索引跑完（市场链路不吃索引；等了只是白等一趟语料扫描）
     P('p0', '打开项目（拿壳的面板层）', `工具条已渲染：${await cdp.evalJs('document.querySelector(".tb-project")?.title ?? ""')}`);
@@ -668,6 +688,7 @@ async function main() {
       }
     } catch (e) { console.log('[market-smoke] 暂存区清除失败:', String(e)); }
     restoreStore();
+    dev.cleanup();
   }
 
   const failCount = results.filter((r) => r.status === 'FAIL').length;
