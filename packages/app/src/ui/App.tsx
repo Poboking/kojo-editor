@@ -156,6 +156,23 @@ export type AppPhase = 'boot' | 'welcome' | 'opening' | 'project';
 /** 编辑器定位请求（来自校验面板 / 函数树等：内核事件 editor.revealLocation）；真源在 monaco 层 */
 export type { RevealTarget } from '../monaco/reveal-position';
 
+/**
+ * 从脏态 / 固定态集合里剔掉 `gone` 里的全部路径（关标签的连带收尾）。
+ * `closeManySync`（批量）与 `closeTabInGroup`（单张）共用这一份口径：两者都先过
+ * **跨组门**（路径还在别的组里就不许端走），剩下的就是同一件事。
+ * 没命中时返回**同一个引用**——不给 React 制造无谓的重渲染。
+ */
+function omitPaths(prev: ReadonlySet<string>, gone: ReadonlySet<string>): ReadonlySet<string> {
+  let next: Set<string> | null = null;
+  for (const p of prev) {
+    if (gone.has(p)) {
+      next ??= new Set(prev);
+      next.delete(p);
+    }
+  }
+  return next ?? prev;
+}
+
 export function App(): ReactElement {
   const [kernel, setKernel] = useState<Kernel | null>(null);
   const [phase, setPhase] = useState<AppPhase>('boot');
@@ -960,26 +977,8 @@ export function App(): ReactElement {
     const stillOpen = (p: string): boolean => next.groups.some((g) => g.tabs.includes(p));
     const gone = new Set(paths.filter((p) => !stillOpen(p)));
     if (gone.size === 0) return;
-    setDirtyPaths((prevSet) => {
-      let n: Set<string> | null = null;
-      for (const p of prevSet) {
-        if (gone.has(p)) {
-          n ??= new Set(prevSet);
-          n.delete(p);
-        }
-      }
-      return n ?? prevSet;
-    });
-    setPinnedPaths((prevSet) => {
-      let n: Set<string> | null = null;
-      for (const p of prevSet) {
-        if (gone.has(p)) {
-          n ??= new Set(prevSet);
-          n.delete(p);
-        }
-      }
-      return n ?? prevSet;
-    });
+    setDirtyPaths((prevSet) => omitPaths(prevSet, gone));
+    setPinnedPaths((prevSet) => omitPaths(prevSet, gone));
   }, []);
 
   /**
@@ -1044,18 +1043,9 @@ export function App(): ReactElement {
       setEditorGroups(next);
       // 跨组门：路径还被别的组引用着就保留脏态/固定态（closeManySync 同款口径）
       if (next.groups.some((g) => g.tabs.includes(path))) return;
-      setDirtyPaths((prevSet) => {
-        if (!prevSet.has(path)) return prevSet;
-        const n = new Set(prevSet);
-        n.delete(path);
-        return n;
-      });
-      setPinnedPaths((prevSet) => {
-        if (!prevSet.has(path)) return prevSet;
-        const n = new Set(prevSet);
-        n.delete(path);
-        return n;
-      });
+      const gone = new Set([path]);
+      setDirtyPaths((prevSet) => omitPaths(prevSet, gone));
+      setPinnedPaths((prevSet) => omitPaths(prevSet, gone));
     },
     [dirtyPaths],
   );
@@ -1167,11 +1157,6 @@ export function App(): ReactElement {
       });
     }
   }, []);
-  /** 焦点组重排（检索面板等单组消费方的旧签名） */
-  const reorderTab = useCallback(
-    (path: string, toIndex: number) => reorderTabInGroup(editorGroupsRef.current.activeGroupId, path, toIndex),
-    [reorderTabInGroup],
-  );
 
   /** 全部保存（Ctrl+Shift+S；壳层命令经 ProjectView 注入；SPLIT-1 起跨组逐组保存） */
   const saveAll = useCallback(async (): Promise<boolean> => {
@@ -1232,36 +1217,6 @@ export function App(): ReactElement {
       ),
     }));
   }, []);
-  /** 焦点组固定（检索面板等单组消费方的旧签名） */
-  const toggleTabPin = useCallback(
-    (path: string) => togglePinInGroup(editorGroupsRef.current.activeGroupId, path),
-    [togglePinInGroup],
-  );
-
-  /**
-   * 批量关闭入口（C1）：纯函数出计划（pinned 豁免），逐个走既有 requestCloseTab
-   * 单标签确认链——脏的弹一次确认，取消即中止剩余（已关的不回滚）。
-   * 计划为空也要有响（铁律 4）：按 batchCloseEmptyReason 回一句人话。
-   */
-  const runBatchClose = useCallback(
-    (mode: BatchCloseMode, anchor: string) => {
-      const tabs = openTabsRef.current;
-      const plan = planBatchClose(mode, tabs, anchor, pinnedRef.current);
-      if (plan.toClose.length === 0) {
-        notify({ kind: 'info', message: batchCloseEmptyReason(mode, tabs, anchor, pinnedRef.current) });
-        return;
-      }
-      const first = plan.toClose[0];
-      if (!first) return;
-      batchQueueRef.current = plan.toClose.slice(1);
-      if (dirtyRef.current.has(first)) setPendingClose(first);
-      else {
-        closeManySync([first]);
-        advanceBatch();
-      }
-    },
-    [closeManySync, advanceBatch, notify],
-  );
 
   /**
    * 删除/重命名的守门：涉及**打开中且有未保存修改**的文件就拦下，给一句人话。
@@ -1519,11 +1474,7 @@ export function App(): ReactElement {
           pinnedPaths={pinnedPaths}
           reveal={reveal}
           onOpenFile={openFile}
-          onActivateTab={requestOpenFile}
           onRequestCloseTab={requestCloseTab}
-          onReorderTab={reorderTab}
-          onTogglePin={toggleTabPin}
-          onBatchCloseTab={runBatchClose}
           onActivateGroup={activateGroup}
           onActivateTabInGroup={activateTabInGroup}
           onRequestCloseTabInGroup={closeTabInGroup}

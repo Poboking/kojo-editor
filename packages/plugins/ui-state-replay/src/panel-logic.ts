@@ -28,7 +28,7 @@ import type {
   ReplayCallContext,
   ReplayUnknownCode,
 } from '@kojo/plugin-api';
-import { pathKey } from '@kojo/plugin-api';
+import { nextWindow, pathKey, type RenderWindow } from '@kojo/plugin-api';
 
 /** 解析失败的原因（呈现给用户） */
 export type CallContextParseError = 'bad-syntax' | 'bad-slot' | 'bad-value' | 'dup-slot';
@@ -793,9 +793,15 @@ export function locateNoticeFor(result: FunctionReplay, locate: LocateRequest): 
  * INITIAL 是首帧 DOM 上界，滚动触底或点击「显示更多」按 STEP 增长，全量可达。
  * 取值：单函数谓词通常 <100（面板头注口径）⇒ INITIAL=120 常见函数零哨兵、
  * 一窗看完；步长 240 按 1:2 节奏，大可判定函数两三步入底。
+ *
+ * 窗口**数学**住在契约层 `sugar-panels`（`nextWindow`，与两块糖面板同一把尺）；
+ * 本面板只声明**自己的窗口参数**（取值未动：120/240）。
  */
-export const PRED_WINDOW_INITIAL = 120;
-export const PRED_WINDOW_STEP = 240;
+export const PRED_WINDOW: RenderWindow = { initial: 120, step: 240 };
+/** 初始窗口行数（旧导出名，测试与面板都按它钉首帧行数） */
+export const PRED_WINDOW_INITIAL = PRED_WINDOW.initial;
+/** 每次追加的行数（旧导出名） */
+export const PRED_WINDOW_STEP = PRED_WINDOW.step;
 
 /**
  * 当前窗口应渲染的行数（纯函数）：[0, min(total, max(limit ?? INITIAL, mustInclude))]。
@@ -803,6 +809,9 @@ export const PRED_WINDOW_STEP = 240;
  * `mustInclude` 是「跳转来的那一条必须看得见」的覆盖口径（G1「跳到命中状态」）：
  * 位点落在初始窗口之外时，窗口撑大到盖住它那一条——旧实现第 300 条之后本就
  * 不在屏上，窗口化不许把这条既有承诺弄丢。0 = 无需覆盖。
+ *
+ * **这里刻意不走契约的 `windowSize`**：它没有 `mustInclude` 这一维（本面板独有），
+ * 少一个参数就少一处会被将来"顺手统一"掉的行为。
  */
 export function predWindowSize(total: number, limit: number | undefined, mustInclude = 0): number {
   return Math.min(total, Math.max(limit ?? PRED_WINDOW_INITIAL, mustInclude));
@@ -813,6 +822,5 @@ export function predWindowSize(total: number, limit: number | undefined, mustInc
  * 单调不减、单步增量 ≤ STEP、终值 = total——「显示更多」与触底自动加载共用。
  */
 export function nextPredWindow(current: number | undefined, total: number): number {
-  const base = current ?? PRED_WINDOW_INITIAL;
-  return Math.min(total, Math.max(PRED_WINDOW_INITIAL, base + PRED_WINDOW_STEP));
+  return nextWindow(current, total, PRED_WINDOW);
 }

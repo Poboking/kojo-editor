@@ -33,6 +33,12 @@
  *
  * 文案纪律（作者长期口径）：机器词（`kind`/`id`/`manifest`/`index.json`/`sha256`/`schema`）
  * 不上主行，只在展开层与日志里出现；拒因只出自 `market-view.REJECT_TEXT` 那一张表。
+ *
+ * 包根导出面（刻意**很窄**）：`createUiMarketPlugin`（宿主装配，唯一消费方
+ * `packages/app/src/bootstrap.ts`）与 `MarketPanelView`（+ 其 `MarketPanelViewProps`，
+ * SSR 判据测试走相对路径 `../src/index` 拿）。这里曾挂过两份"顺手全量转发"的
+ * barrel（`./actions` 与 `./market-view` 各一整列名字），全仓零消费方——已删
+ * （面板去重后续批）。要新增对外暴露，先找到真实消费方再加，别回来复制这张表。
  */
 
 import { createElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -668,63 +674,3 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
     },
   };
 }
-
-export {
-  loadMarketSnapshot,
-  pullMarketOutcome,
-  pullMarketSnapshot,
-  runImport,
-  runInstall,
-  runPublish,
-  runUninstall,
-  type ImportOutcome,
-  type InstallOutcome,
-  type MarketActionDeps,
-  type MarketPullOutcome,
-  type MarketSnapshot,
-  type PublishOutcome,
-  type UninstallOutcome,
-} from './actions';
-export {
-  ACTION_LABEL,
-  appVersionRequirement,
-  buildGroups,
-  buildInstalledRows,
-  CAPABILITY_HINT,
-  CLEAR_LABEL,
-  dataTimeLine,
-  droppedNotice,
-  filterEmptyPhrase,
-  formatBytes,
-  formatClock,
-  formatGeneratedAt,
-  groupCountPhrase,
-  IMPORT_LABEL,
-  importFailNote,
-  importNote,
-  indexRowKey,
-  installBusyNote,
-  installNote,
-  installedCountPhrase,
-  KIND_LABEL,
-  matchesQuery,
-  platformFailNote,
-  PUBLISH_CANCEL_NOTE,
-  PUBLISH_LABEL,
-  publishFailNote,
-  publishOutcomeNote,
-  publishProgressNote,
-  refreshNote,
-  REJECT_TEXT,
-  rejectNote,
-  resolveStatus,
-  rowAction,
-  STATUS_TEXT,
-  statusText,
-  updatePhrase,
-  type InstallAction,
-  type MarketViewStatus,
-  type PackGroup,
-  type PackRow,
-  type PackRowAction,
-} from './market-view';

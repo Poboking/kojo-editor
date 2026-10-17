@@ -70,16 +70,8 @@ interface Props {
   pinnedPaths: ReadonlySet<string>;
   reveal: RevealTarget | null;
   onOpenFile: (path: string) => void;
-  /** 激活标签（点击标签 = 打开/切换；不丢内容） */
-  onActivateTab: (path: string) => void;
   /** 请求关闭标签（脏标签由宿主弹确认） */
   onRequestCloseTab: (path: string) => void;
-  /** 拖拽重排标签：把 path 移动到 toIndex（删除后插入语义；跨固定区分界自动改固定态） */
-  onReorderTab: (path: string, toIndex: number) => void;
-  /** 固定 / 取消固定标签（C2；顺序重排真源在宿主） */
-  onTogglePin: (path: string) => void;
-  /** 批量关闭（C1）：关闭其他 / 右侧 / 全部——计划与逐个确认链都在宿主，这里只发意图 */
-  onBatchCloseTab: (mode: BatchCloseMode, anchor: string) => void;
   /** 全部保存（Ctrl+Shift+S 壳层命令落地处） */
   onSaveAll: () => Promise<boolean>;
   /** 编辑器脏状态上抛（按路径；宿主维护 dirtyPaths） */
@@ -181,11 +173,7 @@ export function ProjectView({
   pinnedPaths,
   reveal,
   onOpenFile,
-  onActivateTab,
   onRequestCloseTab,
-  onReorderTab,
-  onTogglePin,
-  onBatchCloseTab,
   onSaveAll,
   onDirtyChange,
   registerActions,

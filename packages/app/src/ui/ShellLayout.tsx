@@ -27,7 +27,6 @@ import {
   resetLayout,
   saveLayout,
   type ContainerKey,
-  type LayoutAction,
   type LayoutState,
   type OrganizedPanels,
   type ViewDef,

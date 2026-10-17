@@ -11,7 +11,16 @@ import type {
   SlotRegistry,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { diagnosticDisplay, KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import {
+  attachGrowSentinel,
+  diagnosticDisplay,
+  KernelServices,
+  MORE_ROW_STYLE,
+  MORE_ROW_TITLE,
+  moreRowLabel,
+  shortPath,
+  WellKnownServices,
+} from '@kojo/plugin-api';
 import { charaDirOwners, type OwnershipDeps } from './ownership';
 import { buildGroupView, GROUP_MODE_LABEL, GROUP_MODES, type GroupMode } from './view';
 import { ISSUE_WINDOW_INITIAL, issueWindowSize, nextIssueWindow } from './panel-logic';
@@ -51,29 +60,18 @@ const SEVERITY_COLOR: Record<ConventionIssue['severity'], string> = {
   info: '#7f9cc0',
 };
 
-function shortPath(p: string): string {
-  const parts = p.split(/[\\/]/);
-  return parts.slice(-2).join('/');
-}
-
 /* ------------------------------ 条目窗口 ------------------------------ */
 
 /**
  * 「显示更多」哨兵（组内条目列表的触底器）。
  *
- * 进入滚动视口即自动追加下一窗（IntersectionObserver——组列表容器 `.conv-issues`
- * 自带 overflow: auto，浏览器按可见矩形判相交，不必手动传 root）；观察器不可用
- * （SSR / 测试 / 旧环境）时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在
- * 无 DOM lib 下，`IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定
- * 回调 ref 拿真实节点，避免每次渲染重挂 observer。
+ * 观察器行为核住在契约层 `sugar-panels` 的 `attachGrowSentinel`（进入滚动视口即
+ * 追加下一窗；观察器不可用——SSR / 测试 / 旧环境——时返回空退订 ⇒ 退化为**纯点击
+ * 按钮**，功能不丢）。外观三件套（样式 / 悬停提示 / 「显示更多（还剩 N）」）与其余
+ * 面板同源同值，**className 仍是本面板自己的 `conv-more-btn`**（视觉口径不漂）。
+ * ref 用稳定回调 ref 拿真实节点，避免每次渲染重挂 observer；回调只在**触发时**经
+ * `onMoreRef` 取最新值（observer 只挂一次，捕获旧闭包 = 窗口行为静默改变）。
  */
-type IntersectionObserverLike = new (
-  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
-) => { observe(target: object): void; disconnect(): void };
-
-/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
-const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
-
 function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
   const anchor = useRef<unknown>(null);
   const setAnchor = useCallback((node: unknown): void => {
@@ -82,26 +80,17 @@ function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void 
   /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
   const onMoreRef = useRef(onMore);
   onMoreRef.current = onMore;
-  useEffect(() => {
-    const el = anchor.current as object | null;
-    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
-    if (!el || !IO) return;
-    const io = new IO((entries) => {
-      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
+  useEffect(() => attachGrowSentinel(anchor.current, () => onMoreRef.current()), []);
   return createElement(
     'button',
     {
       ref: setAnchor,
       className: 'ghost small dim conv-more-btn',
-      style: MORE_BTN_STYLE,
-      title: '滚到此处会自动加载下一批；也可直接点击',
+      style: MORE_ROW_STYLE,
+      title: MORE_ROW_TITLE,
       onClick: () => onMore(),
     },
-    `显示更多（还剩 ${remaining}）`,
+    moreRowLabel(remaining),
   );
 }
 

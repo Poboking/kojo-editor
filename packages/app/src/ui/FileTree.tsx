@@ -21,7 +21,6 @@ import {
   type LocatePlan,
   type MenuCapability,
   type MenuItemId,
-  type MenuItemSpec,
 } from './file-tree-ops';
 import { Icon } from './icons';
 
@@ -473,8 +472,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   /** 行内编辑（新建 / 重命名；B1/B2） */
   const [edit, setEdit] = useState<EditState | null>(null);
   const [editValue, setEditValue] = useState('');
-  /** B4 定位请求（manual = 用户按了按钮，可以在过滤态里清词重试） */
-  const [locateReq, setLocateReq] = useState<{ file: string; manual: boolean } | null>(null);
+  /** B4 定位请求（activeFile 变化时的自动定位；落地后由定位 effect 自己清空） */
+  const [locateReq, setLocateReq] = useState<{ file: string } | null>(null);
   /** 树滚动容器（定位时在其内找 data-locate 行；scrollIntoView 用 nearest 不拽容器） */
   const treeBodyRef = useRef<HTMLUListElement | null>(null);
 
@@ -981,7 +980,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       firstActiveRef.current = false;
       return;
     }
-    if (activeFile) setLocateReq({ file: activeFile, manual: false });
+    if (activeFile) setLocateReq({ file: activeFile });
   }, [activeFile]);
 
   /**

@@ -46,13 +46,22 @@ import type {
   StateReplayService,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import {
+  KernelServices,
+  MORE_ROW_STYLE,
+  MORE_ROW_TITLE,
+  WellKnownServices,
+  attachGrowSentinel,
+  growWindow,
+  moreRowLabel,
+  shortPath,
+} from '@kojo/plugin-api';
 import type { AssumedSlot, LocateNotice, LocateRequest, ReplayScene, SceneSlotValue, SlotOrigin } from './panel-logic';
 import {
   DEFAULT_SCENE_ID,
   MAX_SCENES,
   MAX_SCENE_NAME,
-  PRED_WINDOW_INITIAL,
+  PRED_WINDOW,
   applyScene,
   captureSceneSlots,
   classifySlotValue,
@@ -63,7 +72,6 @@ import {
   groupUnknowns,
   locateNoticeFor,
   newSceneId,
-  nextPredWindow,
   parseCallContextText,
   predWindowSize,
   removeScene,
@@ -120,19 +128,13 @@ const ASSUME_STYLE = { color: 'var(--amber, #d19a66)', borderColor: 'var(--amber
 /**
  * 「显示更多」哨兵（谓词列表触底器）。
  *
- * 进入滚动视口即自动追加下一窗（IntersectionObserver——结果区所在面板自带滚动裁剪，
- * 浏览器按可见矩形判相交，不必手动传 root）；观察器不可用（SSR / 测试 / 旧环境）
- * 时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在无 DOM lib 下，
- * `IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定回调 ref 拿真实节点，
- * 避免每次渲染重挂 observer。
+ * 观察器行为核住在契约层 `sugar-panels` 的 `attachGrowSentinel`（进入滚动视口即
+ * 追加下一窗；观察器不可用——SSR / 测试 / 旧环境——时返回空退订 ⇒ 退化为**纯点击
+ * 按钮**，功能不丢）。外观三件套（hint 语言样式 / 悬停提示 / 「显示更多（还剩 N）」）
+ * 与其余面板同源同值，**className 仍是本面板自己的 `rp-more-btn`**（视觉口径不漂）。
+ * ref 用稳定回调 ref 拿真实节点，避免每次渲染重挂 observer；回调只在**触发时**经
+ * `onMoreRef` 取最新值（observer 只挂一次，捕获旧闭包 = 窗口行为静默改变）。
  */
-type IntersectionObserverLike = new (
-  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
-) => { observe(target: object): void; disconnect(): void };
-
-/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
-const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
-
 function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
   const anchor = useRef<unknown>(null);
   const setAnchor = useCallback((node: unknown): void => {
@@ -141,26 +143,17 @@ function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void 
   /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
   const onMoreRef = useRef(onMore);
   onMoreRef.current = onMore;
-  useEffect(() => {
-    const el = anchor.current as object | null;
-    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
-    if (!el || !IO) return;
-    const io = new IO((entries) => {
-      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
+  useEffect(() => attachGrowSentinel(anchor.current, () => onMoreRef.current()), []);
   return createElement(
     'button',
     {
       ref: setAnchor,
       className: 'ghost small dim rp-more-btn',
-      style: MORE_BTN_STYLE,
-      title: '滚到此处会自动加载下一批；也可直接点击',
+      style: MORE_ROW_STYLE,
+      title: MORE_ROW_TITLE,
       onClick: () => onMore(),
     },
-    `显示更多（还剩 ${remaining}）`,
+    moreRowLabel(remaining),
   );
 }
 
@@ -179,7 +172,7 @@ export interface PredicateListProps {
   readonly atLine: number | null;
   /** 当前渲染窗口行数（undefined = 初始窗口） */
   readonly limit: number | undefined;
-  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextPredWindow 计算） */
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 growWindow(prev, total, PRED_WINDOW) 计算） */
   readonly onGrow: (total: number) => void;
   readonly emitReveal: EmitReveal;
 }
@@ -426,11 +419,6 @@ const UNKNOWN_HINT: Record<string, string> = {
   other: '其它',
 };
 
-function shortPath(p: string): string {
-  const parts = p.split(/[\\/]/);
-  return parts.slice(-2).join('/');
-}
-
 export function createUiStateReplayPlugin(): Plugin {
   return {
     id: 'ui-state-replay',
@@ -575,13 +563,9 @@ export function createUiStateReplayPlugin(): Plugin {
         /** 谓词渲染窗口（行数；undefined = 初始窗口——旧实现硬截 300 且第 301 条起不可达） */
         const [predWindow, setPredWindow] = useState<number | undefined>(undefined);
 
-        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；计算在 panel-logic 可单测） */
+        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；算式在契约层 `sugar-panels`） */
         const growPreds = useCallback((total: number): void => {
-          setPredWindow((prev) => {
-            const next = nextPredWindow(prev, total);
-            if (next === (prev ?? PRED_WINDOW_INITIAL)) return prev; // 无变化不重渲
-            return next;
-          });
+          setPredWindow((prev) => growWindow(prev, total, PRED_WINDOW)); // 无增长原样返回 prev ⇒ 跳过重渲
         }, []);
         /** 视图代际（换档/换角色时使在途 createView 作废） */
         const viewGenRef = useRef(0);

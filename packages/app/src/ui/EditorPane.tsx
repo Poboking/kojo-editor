@@ -2483,8 +2483,8 @@ export function EditorPane({
     if (
       !sugarViewAllowed({
         isErbLike: isErbLike(filePath),
-        inWorkspace: filePath !== null && inWorkspace(filePath),
-        unlocked: filePath !== null && (unlockedPathsRef.current.has(filePath) || directEditable(filePath)),
+        inWorkspace: inWorkspace(filePath),
+        unlocked: unlockedPathsRef.current.has(filePath) || directEditable(filePath),
       })
     )
       return;
@@ -2702,9 +2702,9 @@ export function EditorPane({
         <button
           className="primary small"
           onClick={() => void save()}
-          disabled={!dirty || (filePath !== null && !kernel.io.isWritable(filePath))}
+          disabled={!dirty || !kernel.io.isWritable(filePath)}
           title={
-            filePath !== null && !kernel.io.isWritable(filePath)
+            !kernel.io.isWritable(filePath)
               ? '只读：写权限未批准（点击底部状态栏「只读」徽章授权）'
               : undefined
           }

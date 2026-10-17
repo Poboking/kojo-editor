@@ -14,10 +14,12 @@ import type {
   ArchiveCharacterBlock,
   ArchiveOverrides,
   ArchiveVariable,
+  RenderWindow,
   SnapshotArchive,
   SnapshotInjectionResult,
   VariableSchema,
 } from '@kojo/plugin-api';
+import { nextWindow, windowSize } from '@kojo/plugin-api';
 
 // ---------------------------------------------------------------------------
 // 面板阶段与语义标签
@@ -184,8 +186,13 @@ export interface PendingEdit {
   newValue: number | string;
 }
 
-/** 标量 int 的域校验（Int64 守卫的面板侧前置；引擎 serializePayload 仍有最终守卫） */
-export function parseScalarInput(type: 'int' | 'str' | 'xml', raw: string): { ok: true; value: number | string } | { ok: false; error: string } {
+/**
+ * 标量 int 的域校验（Int64 守卫的面板侧前置；引擎 serializePayload 仍有最终守卫）。
+ *
+ * 入参只可能是 `int` / `str` 两档：面板侧 `submitScalar` 把**非 int 的标量一律按 str
+ * 走原样回写**（存档里 `type === 'xml'` 的标量变量也在那条归一里，本函数不认得 xml）。
+ */
+export function parseScalarInput(type: 'int' | 'str', raw: string): { ok: true; value: number | string } | { ok: false; error: string } {
   if (type === 'int') {
     const n = Number(raw);
     if (raw.trim() === '' || !Number.isInteger(n)) return { ok: false, error: '整数变量需要整数（含负号）' };
@@ -376,6 +383,11 @@ export async function runInjectFlow(deps: InjectFlowDeps, args: InjectFlowArgs, 
 /* ------------------------------ 渲染窗口 ------------------------------ */
 
 /**
+ * 窗口**数学**（`windowSize` / `nextWindow`）住在契约层 `sugar-panels`，与两块糖面板
+ * 同一把尺；本文件只声明本面板两处列表的**窗口参数**（取值一字未动）。
+ */
+
+/**
  * 变量目录的渲染窗口（触底增窗）。
  *
  * 旧实现硬截 200 行 + 一句「其余 N 个变量未显示」——第 201 个起不可达。窗口化后
@@ -383,18 +395,20 @@ export async function runInjectFlow(deps: InjectFlowDeps, args: InjectFlowArgs, 
  * 取值：变量行单行 ~18px、列表容器可视 ~14 行 ⇒ INITIAL=80 已是数屏余量；
  * 步长 160 按 1:2 节奏（与函数树的面窗口同比例）。
  */
-export const VAR_WINDOW_INITIAL = 80;
-export const VAR_WINDOW_STEP = 160;
+export const VAR_WINDOW: RenderWindow = { initial: 80, step: 160 };
+/** 变量目录初始窗口行数（旧导出名，测试与面板都按它钉首帧行数） */
+export const VAR_WINDOW_INITIAL = VAR_WINDOW.initial;
+/** 变量目录每次追加的行数（旧导出名） */
+export const VAR_WINDOW_STEP = VAR_WINDOW.step;
 
 /** 变量目录窗口当前应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
 export function varWindowSize(total: number, limit: number | undefined): number {
-  return Math.min(total, limit ?? VAR_WINDOW_INITIAL);
+  return windowSize(total, limit, VAR_WINDOW);
 }
 
 /** 变量目录窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))——单调不减、终值 = total */
 export function nextVarWindow(current: number | undefined, total: number): number {
-  const base = current ?? VAR_WINDOW_INITIAL;
-  return Math.min(total, Math.max(VAR_WINDOW_INITIAL, base + VAR_WINDOW_STEP));
+  return nextWindow(current, total, VAR_WINDOW);
 }
 
 /**
@@ -404,16 +418,18 @@ export function nextVarWindow(current: number | undefined, total: number): numbe
  * 单元行单行 ~22px、编辑区容器可视 ~9 行 ⇒ INITIAL=60 已盖住常见小数组；
  * 大数组（数百上千非空单元）按 STEP=120 快进。
  */
-export const CELL_WINDOW_INITIAL = 60;
-export const CELL_WINDOW_STEP = 120;
+export const CELL_WINDOW: RenderWindow = { initial: 60, step: 120 };
+/** 单元列表初始窗口行数（旧导出名） */
+export const CELL_WINDOW_INITIAL = CELL_WINDOW.initial;
+/** 单元列表每次追加的行数（旧导出名） */
+export const CELL_WINDOW_STEP = CELL_WINDOW.step;
 
 /** 单元列表窗口当前应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
 export function cellWindowSize(total: number, limit: number | undefined): number {
-  return Math.min(total, limit ?? CELL_WINDOW_INITIAL);
+  return windowSize(total, limit, CELL_WINDOW);
 }
 
 /** 单元列表窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP))——单调不减、终值 = total */
 export function nextCellWindow(current: number | undefined, total: number): number {
-  const base = current ?? CELL_WINDOW_INITIAL;
-  return Math.min(total, Math.max(CELL_WINDOW_INITIAL, base + CELL_WINDOW_STEP));
+  return nextWindow(current, total, CELL_WINDOW);
 }

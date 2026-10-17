@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { basename, dirname, extname, isAbsolute, isPathUnder, join, normalize, pathKey, pathStyle } from '../src/paths';
+import { basename, dirname, extname, isAbsolute, isPathUnder, join, normalize, pathKey, pathStyle, shortPath } from '../src/paths';
 
 describe('路径工具 · win32', () => {
   it('风格判定', () => {
@@ -72,5 +72,18 @@ describe('isAbsolute / pathKey', () => {
   it('pathKey 用于缓存键：win32 折叠大小写', () => {
     expect(pathKey('C:\\Game\\A.erb')).toBe(pathKey('c:\\game\\a.ERB'));
     expect(pathKey('/A/File')).toBe('/A/File');
+  });
+});
+
+describe('shortPath（面板行内短显示：末两段，输出统一 / 形态）', () => {
+  it('两种分隔符都切，输出走 POSIX', () => {
+    expect(shortPath('C:\\Game\\Chara\\001\\erl.ERB')).toBe('001/erl.ERB');
+    expect(shortPath('/game/chara/a.ERB')).toBe('chara/a.ERB');
+    expect(shortPath('a.ERB')).toBe('a.ERB');
+  });
+
+  it('不折叠 `..`、不改大小写（短显示不是判等，判等走 pathKey）', () => {
+    expect(shortPath('C:\\Game\\..\\A.erb')).toBe('../A.erb');
+    expect(shortPath('C:\\A\\B.ERB')).toBe('A/B.ERB');
   });
 });

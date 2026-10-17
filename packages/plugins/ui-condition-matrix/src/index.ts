@@ -44,7 +44,7 @@ import type {
   UIPanelProps,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices, pathKey } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, pathKey, shortPath } from '@kojo/plugin-api';
 import {
   buildCharacterIndex,
   buildMatrix,
@@ -77,12 +77,6 @@ const ROW_RENDER_CAP = 400;
 
 /** 光标没命中任何格时的空集合（常量身份：无命中路径零分配，行 memo 也据此跳过） */
 const NO_CURSOR_CELLS: ReadonlyMap<string, string> = new Map<string, string>();
-
-/** 取路径末两段（工具提示/详情里短显示） */
-function shortPath(p: string): string {
-  const parts = p.split(/[\\/]/);
-  return parts.slice(-2).join('/');
-}
 
 /** 按「行号升序、同号按路径」排序（详情展示 / 取最早贡献函数） */
 function orderByLine(fns: readonly MatrixCellFunction[]): MatrixCellFunction[] {

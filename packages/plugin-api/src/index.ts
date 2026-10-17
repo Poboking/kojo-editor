@@ -492,6 +492,7 @@ export {
   extname,
   isPathUnder,
   pathKey,
+  shortPath,
   type PathStyle,
 } from './paths';
 export {

@@ -140,3 +140,20 @@ export function pathKey(p: string): string {
   const n = normalize(p);
   return pathStyle(n) === 'win32' ? n.toLowerCase() : n;
 }
+
+/**
+ * 路径短显示（面板行内的定位文本用）：取**末两段**并以 `/` 连接。
+ *
+ * 判据口径：分隔符按 `[\\/]` 两者都切（输入可能是 Windows 原样路径，也可能是
+ * 归档里 POSIX 形态），输出统一 POSIX 形态——与 `basename` 的差别只在于保留
+ * **父目录那一段**，够作者认出这是哪个角色/家族下的文件。
+ * 纯字符串操作，不折叠 `..`、不改大小写（短显示要的是"看得懂"，不是判等）。
+ *
+ * 为什么住契约：同一段三行实现曾在 `ui-kojo-navigator` / `ui-state-replay` /
+ * `ui-condition-matrix` / `ui-convention-report` 四个面板里逐字各抄一份（W4
+ * PANEL-DEDUP 后续批收口）——上屏文本是用户可见效果，分叉一次就得四个面板逐个核对。
+ */
+export function shortPath(p: string): string {
+  const parts = p.split(/[\\/]/);
+  return parts.slice(-2).join('/');
+}

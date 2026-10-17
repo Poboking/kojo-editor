@@ -3,7 +3,12 @@
  *
  * 面板组件只做状态搬运（订阅报告、展开/收起、窗口增长），窗口的数值口径住在这里；
  * 分组构造在 `view.ts`、归属判据在 `ownership.ts`——三者职责互不重叠。
+ *
+ * 窗口**数学**（`windowSize` / `nextWindow`）住在契约层 `sugar-panels`，与两块糖面板
+ * 同一把尺；本文件只声明本面板的**窗口参数**（取值未动：80/160）。
  */
+
+import { nextWindow, windowSize, type RenderWindow } from '@kojo/plugin-api';
 
 /**
  * 单组条目列表的渲染窗口（触底增窗）。
@@ -13,12 +18,15 @@
  * 滚动触底或点击「显示更多」按 STEP 增长，全量可达且单步增量有界。
  * 取值：条目行单行 ~20px（与函数树行同高），沿用 80 / 160 的 1:2 节奏。
  */
-export const ISSUE_WINDOW_INITIAL = 80;
-export const ISSUE_WINDOW_STEP = 160;
+export const ISSUE_WINDOW: RenderWindow = { initial: 80, step: 160 };
+/** 初始窗口行数（旧导出名，测试与面板都按它钉首帧行数） */
+export const ISSUE_WINDOW_INITIAL = ISSUE_WINDOW.initial;
+/** 每次追加的行数（旧导出名） */
+export const ISSUE_WINDOW_STEP = ISSUE_WINDOW.step;
 
 /** 当前窗口应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
 export function issueWindowSize(total: number, limit: number | undefined): number {
-  return Math.min(total, limit ?? ISSUE_WINDOW_INITIAL);
+  return windowSize(total, limit, ISSUE_WINDOW);
 }
 
 /**
@@ -26,6 +34,5 @@ export function issueWindowSize(total: number, limit: number | undefined): numbe
  * 单调不减、单步增量 ≤ STEP、终值 = total——「显示更多」与触底自动加载共用。
  */
 export function nextIssueWindow(current: number | undefined, total: number): number {
-  const base = current ?? ISSUE_WINDOW_INITIAL;
-  return Math.min(total, Math.max(ISSUE_WINDOW_INITIAL, base + ISSUE_WINDOW_STEP));
+  return nextWindow(current, total, ISSUE_WINDOW);
 }

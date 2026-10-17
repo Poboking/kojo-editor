@@ -30,10 +30,18 @@ import type {
   UIPanelProps,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
-  CELL_WINDOW_INITIAL,
-  VAR_WINDOW_INITIAL,
+  KernelServices,
+  MORE_ROW_STYLE,
+  MORE_ROW_TITLE,
+  WellKnownServices,
+  attachGrowSentinel,
+  growWindow,
+  moreRowLabel,
+} from '@kojo/plugin-api';
+import {
+  CELL_WINDOW,
+  VAR_WINDOW,
   buildOverrides,
   cellLabel,
   cellWindowSize,
@@ -42,8 +50,6 @@ import {
   diffRows,
   listScopes,
   listVars,
-  nextCellWindow,
-  nextVarWindow,
   panelPhase,
   parseCellIndex,
   parseCellInput,
@@ -60,20 +66,14 @@ import {
 /* ------------------------------ 渲染窗口 ------------------------------ */
 
 /**
- * 「显示更多」哨兵（变量目录 / 单元列表共用）。进入滚动视口即自动追加下一窗
- * （IntersectionObserver——`.inj-vars` / `.inj-cells` 两个容器自带 overflow-y: auto，
- * 浏览器按可见矩形判相交，不必手动传 root）；观察器不可用（SSR / 测试 / 旧环境）
- * 时退化为**纯点击按钮**——功能不丢。类型口径：本包编译在无 DOM lib 下，
- * `IntersectionObserver` 与元素一律走最小结构化类型；ref 用稳定回调 ref 拿真实节点，
- * 避免每次渲染重挂 observer。
+ * 「显示更多」哨兵（变量目录 / 单元列表共用）。观察器行为核住在契约层
+ * `sugar-panels` 的 `attachGrowSentinel`（进入滚动视口即自动追加下一窗；
+ * 观察器不可用——SSR / 测试 / 旧环境——时返回空退订 ⇒ 退化为**纯点击按钮**，
+ * 功能不丢）。外观三件套（样式 / 悬停提示 / 「显示更多（还剩 N）」）与其余面板同源
+ * 同值，**className 仍是本面板自己的 `inj-more-btn`**（视觉口径不漂）。
+ * ref 用稳定回调 ref 拿真实节点，避免每次渲染重挂 observer；回调只在**触发时**经
+ * `onMoreRef` 取最新值（observer 只挂一次，捕获旧闭包 = 窗口行为静默改变）。
  */
-type IntersectionObserverLike = new (
-  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
-) => { observe(target: object): void; disconnect(): void };
-
-/** 哨兵外观：既有的 hint 语言（虚线边 + 弱化文字）+ 主题令牌，整行宽、不抢内容 */
-const MORE_BTN_STYLE = { width: '100%', textAlign: 'center', borderStyle: 'dashed' } as const;
-
 function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
   const anchor = useRef<unknown>(null);
   const setAnchor = useCallback((node: unknown): void => {
@@ -82,26 +82,17 @@ function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void 
   /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
   const onMoreRef = useRef(onMore);
   onMoreRef.current = onMore;
-  useEffect(() => {
-    const el = anchor.current as object | null;
-    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
-    if (!el || !IO) return;
-    const io = new IO((entries) => {
-      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
+  useEffect(() => attachGrowSentinel(anchor.current, () => onMoreRef.current()), []);
   return createElement(
     'button',
     {
       ref: setAnchor,
       className: 'ghost small dim inj-more-btn',
-      style: MORE_BTN_STYLE,
-      title: '滚到此处会自动加载下一批；也可直接点击',
+      style: MORE_ROW_STYLE,
+      title: MORE_ROW_TITLE,
       onClick: () => onMore(),
     },
-    `显示更多（还剩 ${remaining}）`,
+    moreRowLabel(remaining),
   );
 }
 
@@ -114,7 +105,7 @@ export interface VarListProps {
   readonly schema: VariableSchema | undefined;
   /** 当前渲染窗口行数（undefined = 初始窗口） */
   readonly limit: number | undefined;
-  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextVarWindow 计算） */
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 growWindow(prev, total, VAR_WINDOW) 计算） */
   readonly onGrow: (total: number) => void;
   /** 选中变量（选中 / 清空编辑草稿语义留在面板层） */
   readonly onSelect: (key: string) => void;
@@ -164,7 +155,7 @@ export interface CellRowsProps {
   readonly drafts: Readonly<Record<string, string>>;
   /** 当前渲染窗口行数（undefined = 初始窗口） */
   readonly limit: number | undefined;
-  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 nextCellWindow 计算） */
+  /** 触底 / 点击「显示更多」→ 追加一窗（新值由 growWindow(prev, total, CELL_WINDOW) 计算） */
   readonly onGrow: (total: number) => void;
   readonly onDraft: (cellKey: string, value: string) => void;
   /** 「加入清单」（parse 校验 / 入清单语义留在面板层） */
@@ -268,20 +259,12 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
         const [varWindow, setVarWindow] = useState<number | undefined>(undefined);
         const [cellWindow, setCellWindow] = useState<number | undefined>(undefined);
 
-        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；计算在 panel-logic 可单测） */
+        /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；算式在契约层 `sugar-panels`） */
         const growVars = useCallback((total: number): void => {
-          setVarWindow((prev) => {
-            const next = nextVarWindow(prev, total);
-            if (next === (prev ?? VAR_WINDOW_INITIAL)) return prev; // 无变化不重渲
-            return next;
-          });
+          setVarWindow((prev) => growWindow(prev, total, VAR_WINDOW)); // 无增长原样返回 prev ⇒ 跳过重渲
         }, []);
         const growCells = useCallback((total: number): void => {
-          setCellWindow((prev) => {
-            const next = nextCellWindow(prev, total);
-            if (next === (prev ?? CELL_WINDOW_INITIAL)) return prev;
-            return next;
-          });
+          setCellWindow((prev) => growWindow(prev, total, CELL_WINDOW)); // 同上：无增长不重渲
         }, []);
 
         /** 选档路径镜像（异步回包的归属守卫判据，见 runInjectFlow 注释） */
@@ -503,7 +486,10 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
           case 'ready':
             break;
         }
-        // panelPhase 判为 ready 即必有解析结果；此处收窄供下方直接引用
+        // panelPhase 判为 ready 即必有解析结果（`hasArchive: archive !== null` 就是同一份
+        // 状态，`!hasArchive` 已在 'error' 分支返回 ⇒ 运行时到不了这里）。这一行留着的
+        // 理由是**类型收窄**：下面 `listScopes(archive)` / `scopeLabel(archive, s)` 要非空
+        // 形，去掉它就得换 `archive!`（把可判定的守卫换成不可判定的断言，不划算）。
         if (!archive) return null;
 
         // 作用域下拉

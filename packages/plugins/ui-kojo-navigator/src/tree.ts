@@ -25,8 +25,16 @@ import type {
   ErbScopeStamp,
   FamilyIndexRule,
   FamilyMatch,
+  RenderWindow,
 } from '@kojo/plugin-api';
-import { CANDIDATE_BUDGETS, candidateBudget, candidateRank, pathInScope } from '@kojo/plugin-api';
+import {
+  CANDIDATE_BUDGETS,
+  candidateBudget,
+  candidateRank,
+  nextWindow,
+  pathInScope,
+  windowSize,
+} from '@kojo/plugin-api';
 
 /* ------------------------------ 数据形状 ------------------------------ */
 
@@ -496,14 +504,19 @@ export function searchFunctionsCached(
  * 旧实现是"每面硬截 300 行 + 其余只给一句提示"——上限存在但不可达（用户点不进去那 300 之外
  * 的第 301 行）。窗口化后 INITIAL 决定**首帧 DOM 上界**，滚动触底自动加窗（STEP/次），
  * 全量可达；步进增长保证浏览器永远不会一次挂一整面（最坏上千行）的行。
+ *
+ * 数学口径住在契约层 `sugar-panels`（`windowSize` / `nextWindow`，与两块糖面板同一把尺）；
+ * 本面板只声明**自己的窗口参数**——取值不变（80/160），首帧行数与旧实现逐字相同。
  */
-export const FACE_WINDOW_INITIAL = 80;
+export const FACE_WINDOW: RenderWindow = { initial: 80, step: 160 };
+/** 初始窗口行数（旧导出名，测试与面板都按它钉首帧行数） */
+export const FACE_WINDOW_INITIAL = FACE_WINDOW.initial;
 /** 触底后每次追加的行数（也是"显示更多"按钮一次的增量） */
-export const FACE_WINDOW_STEP = 160;
+export const FACE_WINDOW_STEP = FACE_WINDOW.step;
 
 /** 当前窗口应渲染的行数（纯函数）：[0, min(total, limit ?? INITIAL)] */
 export function faceWindowSize(total: number, limit: number | undefined): number {
-  return Math.min(total, limit ?? FACE_WINDOW_INITIAL);
+  return windowSize(total, limit, FACE_WINDOW);
 }
 
 /**
@@ -511,8 +524,7 @@ export function faceWindowSize(total: number, limit: number | undefined): number
  * 单调不减、单步增量 ≤ STEP、终值 = total——"显示更多"与 IntersectionObserver 共用。
  */
 export function nextFaceWindow(current: number | undefined, total: number): number {
-  const base = current ?? FACE_WINDOW_INITIAL;
-  return Math.min(total, Math.max(FACE_WINDOW_INITIAL, base + FACE_WINDOW_STEP));
+  return nextWindow(current, total, FACE_WINDOW);
 }
 
 /**

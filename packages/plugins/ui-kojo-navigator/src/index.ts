@@ -37,7 +37,15 @@ import type {
   StateDependency,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { CANDIDATE_BUDGETS, KernelServices, NAV_SCOPE_EVENT, WellKnownServices } from '@kojo/plugin-api';
+import {
+  CANDIDATE_BUDGETS,
+  KernelServices,
+  MORE_ROW_TITLE,
+  NAV_SCOPE_EVENT,
+  WellKnownServices,
+  attachGrowSentinel,
+  shortPath,
+} from '@kojo/plugin-api';
 import {
   FACE_WINDOW_INITIAL,
   buildNavigatorTree,
@@ -76,36 +84,23 @@ function toScopeStamp(payload: unknown): ErbScopeStamp | null {
 /**
  * 「显示更多」哨兵行（面窗口触底器）。
  *
- * 进入滚动视口即自动追加下一窗（IntersectionObserver —— 滚动容器 `.nav-tree` 自带
- * `overflow-y: auto`，浏览器对滚动裁剪后的可见矩形判相交，不必手动传 root）；
- * 观察器不可用（SSR / 测试 / 旧环境）时退化为**纯点击按钮**——功能不丢。
- *
- * 类型口径：本包装在 `lib: ES2022` 下编译（无 DOM lib），`IntersectionObserver` 与
- * 元素一律走最小结构化类型；ref 用**稳定回调 ref**（`useCallback` 空依赖）拿真实节点，
- * 避免每次渲染重挂 observer。
+ * 观察器行为核住在契约层 `sugar-panels` 的 `attachGrowSentinel`（进入滚动视口即
+ * 增窗一次；观察器不可用——SSR / 测试 / 旧环境——时返回空退订 ⇒ 退化为**纯点击
+ * 按钮**，功能不丢）。本面板**自带 markup 与文案**：行壳是 `<li class="nav-more">`
+ * 里的 `<button class="nav-more-btn">`、文案是「显示更多（其余 N 个）」，与谓词/变量
+ * 那三块面板的 `…-more-btn` 按钮语言不同——**视觉口径不许被共享默认值带走**，
+ * 这里只共享行为核（悬停 `title` 四处同文，故走 `MORE_ROW_TITLE`）。
+ * ref 仍用**稳定回调 ref**（`useCallback` 空依赖）拿真实节点，避免每次渲染重挂 observer。
  */
-type IntersectionObserverLike = new (
-  cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void,
-) => { observe(target: object): void; disconnect(): void };
-
 function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void }): ReactElement {
   const anchor = useRef<unknown>(null);
   const setAnchor = useCallback((node: unknown): void => {
     anchor.current = node;
   }, []);
-  /** 最新回调引用（observer 只挂一次，不做重复挂卸） */
+  /** 最新回调引用（observer 只挂一次，不做重复挂卸 ⇒ 回调必须在触发时才取） */
   const onMoreRef = useRef(onMore);
   onMoreRef.current = onMore;
-  useEffect(() => {
-    const el = anchor.current as object | null;
-    const IO = (globalThis as { IntersectionObserver?: IntersectionObserverLike }).IntersectionObserver;
-    if (!el || !IO) return;
-    const io = new IO((entries) => {
-      if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
+  useEffect(() => attachGrowSentinel(anchor.current, () => onMoreRef.current()), []);
   return createElement(
     'li',
     { ref: setAnchor, className: 'nav-more' },
@@ -113,7 +108,7 @@ function MoreRow({ remaining, onMore }: { remaining: number; onMore: () => void 
       'button',
       {
         className: 'nav-more-btn',
-        title: '滚到此处会自动加载下一批；也可直接点击',
+        title: MORE_ROW_TITLE,
         onClick: () => onMore(),
       },
       `显示更多（其余 ${remaining} 个）`,
@@ -176,11 +171,6 @@ function dependencyTitle(d: StateDependency): string {
   const label = d.schema?.description ? `${d.schema.description}（${d.key}）` : d.key;
   const comps = d.comparisons.map((c) => `${c.op} ${c.text}`).join('、');
   return comps.length > 0 ? `${label} ${comps}` : label;
-}
-
-function shortPath(p: string): string {
-  const parts = p.split(/[\\/]/);
-  return parts.slice(-2).join('/');
 }
 
 /** 家族显示名：'' = 初始家族 */
