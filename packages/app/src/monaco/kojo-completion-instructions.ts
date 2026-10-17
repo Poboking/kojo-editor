@@ -1,20 +1,24 @@
 import type * as Monaco from './entry';
-import type { KojoInstructionTable } from '@kojo/plugin-api';
+import type { KojoFaceTable, KojoIndexKind, KojoIndexTables } from '@kojo/plugin-api';
+import { kojoIndexCandidates } from '@kojo/plugin-api';
 import { TIMING_NAMED_PARAMS } from '@kojo/plugin-kojo-sugar';
 
 /**
- * KC-3 · `.kojo` 中文**指令名**的正向补全（`instructionCompletionItems`）。
+ * KC-3 · `.kojo` **编号槽**的正向补全（`kojoIndexCompletionItems`，IX-1 起按面分流）。
  *
- * 两个落点（表口径唯一真源 = adapter 的 `KojoInstructionTable`，宿主零游戏名词）：
- * - `时机 <分野> <编号令牌位>：` 的编号槽 —— 编号可以是**中文指令名**（HK-11②，
- *   `parseTimingHead` 的 `indexName`）；
- * - `当 …： 是 <值…>：` 分支头的值位 —— 裸中文词经同一张表查编号（P-5，
- *   `resolveCaseValueInstructionName`）。
+ * 两个落点：
+ * - `时机 <分野> <编号令牌位>：` 的编号槽 —— 编号可以是**中文指令名**（`indexKind: 'command'`）
+ *   或**中文计数器名**（`'counter'`），`literal` 面则**零候选**（尾部是运行期字符串）；
+ * - `当 …： 是 <值…>：` 分支头的值位 —— 裸中文词经**指令名表**查编号（P-5，恒指令名）。
  *
- * 名字来源 = `table.names?.()`（KC-3 新增的**可选**枚举能力；只有反查面时**零候选**，
- * 降级信号由装配层的 `requires: 'instructionTable'` 发，本模块不另造一套）。
- * `detail` 的编号一律回 `lookupByName` 取——**只用表、不猜**（枚举有而正查无 = 表自相矛盾，
- * 该名直接跳过）。
+ * 分流口径**不在此处自造**：一律调契约纯函数 `kojoIndexCandidates(kind, tables)`
+ * （`packages/plugin-api/src/index-slot.ts`），表选择 / 枚举回号 / `literal` 零候选都在那一份里
+ * ——与转译器 `resolveTimingIndex`、悬停 `kojo-hover-native.ts` **同一真源**，同槽异口径从构造上
+ * 不可能再出现（IX-1 前：悬停认计数器表、补全只出指令名，写下去必被 `timing-counter-unknown` 拦）。
+ *
+ * 名字来源 = 各表的 `names()`（**可选**枚举能力；只有反查面时**零候选**，降级信号由装配层的
+ * `requires: 'instructionTable' | 'counterTable'` 发，本模块不另造一套）。`detail` 的编号一律回
+ * `lookupByName` 取——**只用表、不猜**（枚举有而正查无 = 表自相矛盾，该名直接跳过）。
  *
  * 纯函数：只读模型、不产生编辑、不写盘、不发事件；位置不符 / 表缺省 / 枚举能力缺席一律 `[]`，
  * 绝不抛。Monaco provider 注册刻意不在此处——编排层（`kojo-completion.ts`）负责接进补全基座。
@@ -36,6 +40,15 @@ const COLON_RE = /[：:]/;
 const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 
 /**
+ * 编号槽补全所需的三张表（全部**可选**；缺席 = 该路零候选，与既有纪律一致）。
+ * 形状是契约 `KojoIndexTables` 加一张分野表——分野表用来读出该面的 `indexKind`。
+ */
+export interface IndexSlotTables extends KojoIndexTables {
+  /** 时机分野模板表（adapter `kojoFaceTemplates`）：据面名取 `indexKind` */
+  readonly faceTable?: KojoFaceTable;
+}
+
+/**
  * 命名参数**键**名集（单一真源 = `kojo-sugar` 的 `TIMING_NAMED_PARAMS`，含隐藏英文别名）：
  * 编号槽扫描靠它把 `成否:` / `类型:` / `参数:` 认成键而非编号——否则会把键当成编号名来补。
  */
@@ -55,7 +68,7 @@ function lineRange(position: Monaco.Position, start: number, end: number): Monac
 
 /**
  * 光标是否落在行内**字符串 / 注释**里（与 `kojo-sugar` 的 `inlineCommentIndex` 同口径：
- * 引号配平后第一个 `;` 起至行尾）。字符串内 / 注释内不给候选（那些位置不是指令名）。
+ * 引号配平后第一个 `;` 起至行尾）。字符串内 / 注释内不给候选（那些位置不是编号）。
  */
 function insideStringOrComment(line: string, col0: number): boolean {
   let inString = false;
@@ -74,6 +87,12 @@ interface Slot {
   readonly end: number;
 }
 
+/** 时机块头编号落点：替换区间 + 该块头的**分野名**（选表要它） */
+interface TimingSlot {
+  readonly slot: Slot;
+  readonly face: string;
+}
+
 /**
  * 落点 1：`时机 <分野> <编号令牌位>：` 的**编号槽**。
  *
@@ -81,12 +100,13 @@ interface Slot {
  * `stripBlockColon` 剥掉），编号 = 第一个**非命名参数键**的尾令牌；`成否:` / `类型:` /
  * `参数` 一出现即说明编号位已被跳过（那一处归 `kojo-face` 的 KC-2b）。
  */
-function timingNumberSlot(line: string, col0: number): Slot | null {
+function timingNumberSlot(line: string, col0: number): TimingSlot | null {
   const head = TIMING_HEAD_RE.exec(line);
   if (!head) return null;
   const faceStart = head[0].length;
   let faceEnd = faceStart;
   while (faceEnd < line.length && !FACE_TOKEN_END_RE.test(line[faceEnd]!)) faceEnd++;
+  const face = line.slice(faceStart, faceEnd);
 
   // 分野令牌之后须有**至少一个空白**——否则光标仍在分野令牌内（那一处归 `kojo-face`）。
   let slotStart = faceEnd;
@@ -94,7 +114,9 @@ function timingNumberSlot(line: string, col0: number): Slot | null {
   if (slotStart === faceEnd) return null;
 
   // 行尾插入点（`时机 指令 |`）：光标恰在插入点才给候选。
-  if (slotStart >= line.length) return col0 === slotStart ? { start: slotStart, end: slotStart } : null;
+  if (slotStart >= line.length) {
+    return col0 === slotStart ? { slot: { start: slotStart, end: slotStart }, face } : null;
+  }
 
   let slotEnd = slotStart;
   while (slotEnd < line.length && !WHITESPACE_RE.test(line[slotEnd]!)) slotEnd++;
@@ -107,7 +129,7 @@ function timingNumberSlot(line: string, col0: number): Slot | null {
   // 「编号 + 块头终结冒号」：替换区间**不含**那枚冒号。
   const end = slotStart + trimmed.length;
   if (col0 < slotStart || col0 > end) return null;
-  return { start: slotStart, end };
+  return { slot: { start: slotStart, end }, face };
 }
 
 /**
@@ -161,60 +183,84 @@ function caseValueSlot(line: string, col0: number): Slot | null {
   return { start, end };
 }
 
+/** 编号槽候选的**展示口径**（各表各自的措辞；表本身不产人话） */
+const INDEX_KIND_DETAIL_LABEL: Readonly<Record<KojoIndexKind, string>> = {
+  command: '指令名',
+  counter: '计数器名',
+  literal: '编号槽',
+};
+
+/** 一枚落点 → 候选项（共用装配；`kind` 决定措辞，候选由契约纯函数给） */
+function buildItems(
+  monaco: typeof Monaco,
+  position: Monaco.Position,
+  slot: Slot,
+  line: string,
+  kind: KojoIndexKind,
+  candidates: readonly { readonly name: string; readonly no: number }[],
+): Monaco.languages.CompletionItem[] {
+  const prefix = line.slice(slot.start, position.column - 1);
+  const range = lineRange(position, slot.start, slot.end);
+  const itemKind = monaco.languages.CompletionItemKind.EnumMember;
+  // CJK-primary（规范 §4.1，同 `kojo-face` 的 `valueSetOf` 口径）：表里有中文名 ⇒ 纯 ASCII
+  // 名视作隐藏兼容别名，不进面板。
+  const hasCjk = candidates.some((c) => CJK_RE.test(c.name));
+  const detailLabel = INDEX_KIND_DETAIL_LABEL[kind];
+  const out: Monaco.languages.CompletionItem[] = [];
+  candidates.forEach((c, idx) => {
+    if (hasCjk && !CJK_RE.test(c.name)) return;
+    if (prefix.length > 0 && !c.name.startsWith(prefix)) return;
+    out.push({
+      label: c.name,
+      kind: itemKind,
+      insertText: c.name,
+      filterText: c.name,
+      detail: `${detailLabel} → 编号 ${c.no}`,
+      range,
+      sortText: `${String(idx).padStart(3, '0')}_${c.name}`,
+    });
+  });
+  return out;
+}
+
 /**
- * 产出中文指令名候选（**纯函数**，供补全基座调用）。
+ * 产出编号槽候选（**纯函数**，供补全基座调用）。
  *
  * 行为：仅当光标落在上述两个落点之一时出货，`kind` = `EnumMember`，`insertText` = 名字，
- * `detail` = `指令名 → 编号 N`（编号来自 `lookupByName`），替换范围**只覆盖光标处那个令牌**；
- * 前缀过滤 / 排序（数据源原序，`names()` 返回序）与 CJK-primary（表里有中文名 ⇒ 纯 ASCII
- * 名视作隐藏兼容别名，不进面板，同 `kojo-face` 的 `valueSetOf` 口径）照既有 source 打法。
+ * `detail` = `<表名> → 编号 N`（编号来自 `lookupByName`），替换范围**只覆盖光标处那个令牌**；
+ * 前缀过滤 / 排序（数据源原序，`names()` 返回序）与 CJK-primary 照既有 source 打法。
+ *
+ * `kinds` 声明**本次调用负责哪些面**：`['command']` 的源只出指令名（含 `是` 值位），
+ * `['counter']` 的源只出计数器名（`是` 值位判为指令面，非本源的活 ⇒ `[]`）。两源各自
+ * 声明对应的 `requires` 表键，缺表即跳过 + 一次可见降级信号（**不静默**）。
  */
-export function instructionCompletionItems(
+export function kojoIndexCompletionItems(
   monaco: typeof Monaco,
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
-  table: KojoInstructionTable | undefined,
+  tables: IndexSlotTables,
+  kinds: readonly KojoIndexKind[],
 ): Monaco.languages.CompletionItem[] {
   if (!model || !position) return [];
   if (!Number.isFinite(position.lineNumber) || position.lineNumber < 1) return [];
   if (!Number.isFinite(position.column) || position.column < 1) return [];
-  // fail-closed：表缺席 / 空表 / 未提供枚举能力 ⇒ 零候选（降级信号由 `requires` 机制发）。
-  if (!table || table.hasTable === false) return [];
-  const enumerate = table.names;
-  if (typeof enumerate !== 'function') return [];
 
   const line = model.getLineContent(position.lineNumber);
   const col0 = position.column - 1;
   if (col0 > line.length) return [];
   if (insideStringOrComment(line, col0)) return [];
 
-  const slot = timingNumberSlot(line, col0) ?? caseValueSlot(line, col0);
-  if (slot === null) return [];
+  const timing = timingNumberSlot(line, col0);
+  if (timing !== null) {
+    // 按面的 `indexKind` 选表：缺省 `'command'`（表缺省 / 未登记面照旧走指令名，与契约同口径）。
+    const kind = tables.faceTable?.faces[timing.face]?.indexKind ?? 'command';
+    if (!kinds.includes(kind)) return [];
+    return buildItems(monaco, position, timing.slot, line, kind, kojoIndexCandidates(kind, tables));
+  }
 
-  const prefix = line.slice(slot.start, col0);
-  const range = lineRange(position, slot.start, slot.end);
-  const kind = monaco.languages.CompletionItemKind.EnumMember;
-  const all = [...enumerate()];
-  const hasCjk = all.some((n) => CJK_RE.test(n));
-
-  const out: Monaco.languages.CompletionItem[] = [];
-  const seen = new Set<string>();
-  all.forEach((name, idx) => {
-    if (name.length === 0 || seen.has(name)) return;
-    if (hasCjk && !CJK_RE.test(name)) return;
-    if (prefix.length > 0 && !name.startsWith(prefix)) return;
-    const no = table.lookupByName(name);
-    if (no === undefined) return; // 枚举里有、正查无 = 表自相矛盾 ⇒ 不猜，跳过
-    seen.add(name);
-    out.push({
-      label: name,
-      kind,
-      insertText: name,
-      filterText: name,
-      detail: `指令名 → 编号 ${no}`,
-      range,
-      sortText: `${String(idx).padStart(3, '0')}_${name}`,
-    });
-  });
-  return out;
+  const caseSlot = caseValueSlot(line, col0);
+  if (caseSlot === null) return [];
+  // `是` 值位恒按指令名查（P-5）——计数器面没有这条构造，故只有 command 源认这处。
+  if (!kinds.includes('command')) return [];
+  return buildItems(monaco, position, caseSlot, line, 'command', kojoIndexCandidates('command', tables));
 }

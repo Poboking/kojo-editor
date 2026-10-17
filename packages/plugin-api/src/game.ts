@@ -296,6 +296,15 @@ export interface KojoCallProtocol {
  * 设计取舍（对称性）：与 `KojoCallProtocol` 同形——都是"游戏知识经槽位查询
  * 注入转译/校验层"的可替换 seam，而不把游戏常量塞进契约或通用插件。
  */
+/**
+ * `{i}` 槽的取值口径（IX-1 批具名；与 `KojoFaceTemplate.indexKind` 同域）。
+ *
+ * 具名的理由：分流判据有三个消费者（转译器 `resolveTimingIndex` / 悬停拼名 / 编号槽补全），
+ * 三处各自 `indexKind` 判一遍就会出现"同槽异口径" ⇒ 具名后统一交给
+ * `@kojo/plugin-api` 的 `index-slot.ts` 三枚纯函数（见该模块头注）。
+ */
+export type KojoIndexKind = 'command' | 'literal' | 'counter';
+
 export interface KojoFaceTemplate {
   /**
    * 函数名模板。占位符（与 `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` §5.5 同口径）：
@@ -323,8 +332,9 @@ export interface KojoFaceTemplate {
    * **为什么必须由 adapter 声明**：同一个中文令牌在 `指令` 面是编号查表、在 `图像` 面
    * 是字面名、在 `计数器` 面是另一张**值域名表**；语法层据形态判不出来，只有游戏知识
    * 知道引擎怎么拼这个名。语义中立、零游戏名词——转译器只按本字段决定"查不查表、查哪张表"。
+   * 取值判别一律走 `resolveKojoIndexName` / `kojoIndexCandidates`（IX-1：三消费者单一真源）。
    */
-  readonly indexKind?: 'command' | 'literal' | 'counter';
+  readonly indexKind?: KojoIndexKind;
   /**
    * `{i}` 编号是否允许**省略自动分配**（additive；缺省 = `false`，旧适配器零改动）。
    *
@@ -635,6 +645,13 @@ export interface KojoCounterTable {
   lookupByNumber(no: number): string | undefined;
   /** 名 → 编号（无则 undefined；同名多编号取**首条**） */
   lookupByName(name: string): number | undefined;
+  /**
+   * 中文名的**枚举**（正向补全用；**可选能力**——未提供 = 宿主不产正向候选，**不猜**）。
+   * 与 `KojoInstructionTable.names` 同形同义：返回序即表层候选展示序（实现按数据源原序
+   * 返回；同名多编号已去重）；无表 / 空表 = `[]`。IX-1 批补上——此前本表只有正查/反查
+   * 两路，编号槽补全因此无从枚举计数器名（错表候选的由来）。
+   */
+  names?(): readonly string[];
 }
 
 /**

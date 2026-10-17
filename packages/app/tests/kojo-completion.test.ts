@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type {
+  KojoCounterTable,
   KojoFaceTable,
   KojoInstructionTable,
   KojoLibraryTable,
@@ -212,9 +213,10 @@ const schemaY: VariableSchema = {
   names: (family) => (family === 'CFLAG' ? [{ name: '乙旗', index: 2, resolvedIndex: 2, source: 'primary' }] : []),
 };
 const faceX: KojoFaceTable = { faces: { 初见: { template: 'M_FACE_X' } } };
-// KC-3 / KC-4 两源的表（本 helper 不测它们，但「满表」态须喂上，否则会各首发一次降级）
+// KC-3 / KC-4 / IX-1 三源的表（本 helper 不测它们，但「满表」态须喂上，否则会各首发一次降级）
 const instructionX: KojoInstructionTable = { hasTable: true, lookupByName: () => undefined, lookupByNo: () => undefined };
 const libraryX: KojoLibraryTable = { hasTable: true, lookupByName: () => undefined };
+const counterX: KojoCounterTable = { hasTable: true, lookupByName: () => undefined, lookupByNumber: () => undefined };
 
 /**
  * 在同一**已装配句柄**上连续跑三态（满分 → 缺表 → 切表 → 再缺），断言：
@@ -239,6 +241,7 @@ function threeStatesKojo(
     variableSchema: schemaX,
     faceTable: faceX,
     instructionTable: instructionX,
+    counterTable: counterX,
     libraryTable: libraryX,
     erbFunctionNames: () => [],
   });
@@ -291,6 +294,7 @@ describe('SH-4 · 依赖表缺席 = 降级不静默（三态可复跑）', () =>
     expect(byId.get('kojo-variable')).toBe('variableSchema');
     expect(byId.get('kojo-face')).toBe('faceTable');
     expect(byId.get('kojo-instruction')).toBe('instructionTable');
+    expect(byId.get('kojo-counter')).toBe('counterTable');
     expect(byId.get('kojo-library')).toBe('libraryTable');
     expect(byId.get('kojo-lexicon')).toBeUndefined();
   });

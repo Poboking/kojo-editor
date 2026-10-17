@@ -154,6 +154,9 @@ export function createEratwCounterTable(entries: readonly EratwCounterEntry[]): 
     hasTable: byNumber.size > 0,
     lookupByNumber: (no) => byNumber.get(no),
     lookupByName: (name) => byName.get(name),
+    // IX-1 批：正向枚举（编号槽补全用）。`byName` 的插入序 = 条目原序（编号升序）且已按名去重
+    // ⇒ 返回序即表层候选展示序，与 `lookupByName` 取首条同口径（先出现的名先展示）。
+    names: () => [...byName.keys()],
   };
 }
 

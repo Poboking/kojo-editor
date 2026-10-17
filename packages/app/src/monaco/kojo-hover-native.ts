@@ -6,6 +6,7 @@ import type {
   KojoLibraryTable,
   VariableSchema,
 } from '@kojo/plugin-api';
+import { kojoIndexNameOf, resolveKojoIndexName } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import {
   buildFunctionName,
@@ -143,6 +144,27 @@ function cjkSpanAround(line: string, col0: number): { start: number; end: number
   return { start, end };
 }
 
+/** 数字 / ASCII 词语 run（只服务时机块头**编号位的纯数字令牌**反向查名，见 `resolveNativeHover`） */
+const WORD_RE = /[A-Za-z0-9_]/;
+
+/** 命中光标的最长数字 / ASCII 词 run（口径同 {@link cjkSpanAround}） */
+function wordSpanAround(line: string, col0: number): { start: number; end: number } | null {
+  let start: number;
+  let end: number;
+  if (col0 < line.length && WORD_RE.test(line[col0]!)) {
+    start = col0;
+    end = col0 + 1;
+  } else if (col0 > 0 && WORD_RE.test(line[col0 - 1]!)) {
+    start = col0 - 1;
+    end = col0;
+  } else {
+    return null;
+  }
+  while (start > 0 && WORD_RE.test(line[start - 1]!)) start--;
+  while (end < line.length && WORD_RE.test(line[end]!)) end++;
+  return { start, end };
+}
+
 /** 空白切分词元（`时机 指令 310 类型: 副指令：` → 四枚） */
 function tokenizeFrom(line: string, from: number): HeadToken[] {
   const out: HeadToken[] = [];
@@ -255,19 +277,22 @@ function segmentValues(spec: KojoFaceTemplate, head: TimingHead): Record<string,
   return out;
 }
 
-/** `{i}` 槽的取值（口径同转译器 `resolveTimingIndex`：数字直通 / `literal` 原样 / 名查表；查不到 ⇒ 不拼） */
+/**
+ * `{i}` 槽的取值（IX-1：口径收拢到契约纯函数 `resolveKojoIndexName`——与转译器
+ * `resolveTimingIndex` / 编号槽补全 `kojoIndexCompletionItems` **同一真源**；数字直通 /
+ * `literal` 原样 / 名查表全在那一份里；查不到 ⇒ 不拼）。
+ */
 function resolveIndex(
   spec: KojoFaceTemplate,
   indexText: string | undefined,
   tables: NativeHoverTables,
 ): string | undefined {
   if (indexText === undefined || indexText.length === 0) return undefined;
-  if (/^\d+$/.test(indexText)) return indexText;
-  const kind = spec.indexKind ?? 'command';
-  if (kind === 'literal') return indexText;
-  const no =
-    kind === 'counter' ? tables.counterTable?.lookupByName(indexText) : tables.instructionTable?.lookupByName(indexText);
-  return no === undefined ? undefined : String(no);
+  const probe = resolveKojoIndexName(spec.indexKind, indexText, {
+    instructionTable: tables.instructionTable,
+    counterTable: tables.counterTable,
+  });
+  return probe.ok ? probe.index : undefined;
 }
 
 /**
@@ -342,23 +367,39 @@ function resolveTimingHead(
     );
   }
 
-  // ② 编号位上的中文指令名 / 计数器名 → 原生编号（外加该面的函数名形态）
+  // ② 编号位上的中文指令名 / 计数器名 → 原生编号；纯数字编号 → 反向回中文名（IX-1）
   if (idx === 1 && head.indexText === active.text) {
+    const kind = spec.indexKind ?? 'command';
     const nativeIndex = resolveIndex(spec, active.text, tables);
     if (nativeIndex === undefined) return undefined;
     const rendered = renderFaceName(spec, head, tables, header, 'main');
-    // 名本身就是原生形态（`indexKind: literal` 的运行期形态名）⇒ 换成函数名才有信息量；
-    // 拼不出函数名时这一路不显示（给一个"翻译了个寂寞"的同形词不如不给）。
-    if (nativeIndex === active.text) {
-      if (rendered === undefined) return undefined;
-      return hit(rendered, `时机形态名 · ${active.text}`);
+    // 纯数字编号（`时机 计数器 20：`）：反向查名——作者无从知道 20 是哪条计数器
+    //（`lookupByNumber` / `lookupByNo` 自 1016 起在生产侧零消费）。`literal` 面无反向
+    //（尾部本就是运行期形态名），号未登记 ⇒ 退回旧行为（见下）。
+    if (kind !== 'literal' && /^\d+$/.test(active.text)) {
+      const name = kojoIndexNameOf(kind, Number(active.text), tables);
+      if (name !== undefined) {
+        const label = kind === 'counter' ? '计数器' : '指令';
+        return hit(
+          name,
+          `${label}名 · 编号 ${active.text}`,
+          rendered !== undefined ? [`函数名：${code(rendered)}`] : [],
+        );
+      }
     }
-    const label = (spec.indexKind ?? 'command') === 'counter' ? '计数器' : '指令';
-    return hit(
-      nativeIndex,
-      `原生编号 · ${label}「${active.text}」`,
-      rendered !== undefined ? [`函数名：${code(rendered)}`] : [],
-    );
+    // 中文名被换算成了编号 ⇒ 给编号 + 函数名
+    if (nativeIndex !== active.text) {
+      const label = kind === 'counter' ? '计数器' : '指令';
+      return hit(
+        nativeIndex,
+        `原生编号 · ${label}「${active.text}」`,
+        rendered !== undefined ? [`函数名：${code(rendered)}`] : [],
+      );
+    }
+    // 名本身就是原生形态（`indexKind: literal` 的运行期形态名 / 未登记数字）⇒ 换成函数名才有
+    // 信息量；拼不出函数名时这一路不显示（给一个"翻译了个寂寞"的同形词不如不给）。
+    if (rendered === undefined) return undefined;
+    return hit(rendered, `时机形态名 · ${active.text}`);
   }
 
   // ③ 命名参数**取值** → 原生段文本 / 成否位值（`类型: 副指令` → `SCOM`）
@@ -445,10 +486,18 @@ export function resolveNativeHover(
   if (!Number.isFinite(column) || column < 1) return undefined;
   const col0 = Math.min(column - 1, lineText.length);
   const span = cjkSpanAround(lineText, col0);
-  if (span === null) return undefined;
-  const word = lineText.slice(span.start, span.end);
-
   const head = parseTimingHead(lineText);
+
+  // 非 CJK 光标：只服务时机块头**编号位的纯数字令牌**（IX-1 反向查名——作者写
+  // `时机 计数器 20：` 时告诉他 20 是哪条计数器）。其余非单词位置照旧不猜。
+  if (span === null) {
+    if (head === undefined) return undefined;
+    const wordSpan = wordSpanAround(lineText, col0);
+    if (wordSpan === null) return undefined;
+    return resolveTimingHead(head, wordSpan, lineText.slice(wordSpan.start, wordSpan.end), tables, header);
+  }
+
+  const word = lineText.slice(span.start, span.end);
   if (head !== undefined) {
     const hit = resolveTimingHead(head, span, word, tables, header);
     if (hit !== undefined) return hit;

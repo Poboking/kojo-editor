@@ -2,6 +2,7 @@ import type * as Monaco from './entry';
 import type {
   KojoCallProtocol,
   KojoCallSlot,
+  KojoCounterTable,
   KojoFaceTable,
   KojoInstructionTable,
   KojoLibraryTable,
@@ -79,6 +80,13 @@ export interface CompletionTables {
   readonly faceTable?: KojoFaceTable;
   /** 指令名表（adapter `kojoInstructionTable`）；缺席 = 不做指令名补全 */
   readonly instructionTable?: KojoInstructionTable;
+  /**
+   * 计数器值域表（adapter `kojoCounterTable`）；缺席 = 不做计数器名补全。
+   *
+   * `时机 计数器 <中文名>：` 的编号槽与指令名槽**同一落点、不同表**（按面的
+   * `indexKind` 分流，见 `index-slot` 契约）；两张表各自是独立 source 的 `requires` 键。
+   */
+  readonly counterTable?: KojoCounterTable;
   /** 基础库函数名表（adapter `kojoLibraryTable`）；缺席 = 不做库函数名补全 */
   readonly libraryTable?: KojoLibraryTable;
   /**
@@ -602,6 +610,27 @@ export function instructionDetail(label: string, table: KojoInstructionTable | u
   }
   facts.push(`写法 \`时机 指令 ${label}：\`／\`是 ${label}\``);
   return { documentation: { value: [`**${label}** · 指令名`, ...facts].join('\n\n') } };
+}
+
+/** 中文计数器名候选的详情：编号 + 编号反查 + 两种写法（表不认 ⇒ `undefined`） */
+export function counterDetail(label: string, table: KojoCounterTable | undefined): CompletionResolution | undefined {
+  if (table === undefined || table.hasTable === false) return undefined;
+  let no: number | undefined;
+  try {
+    no = table.lookupByName(label);
+  } catch {
+    return undefined;
+  }
+  if (no === undefined) return undefined;
+  const facts: string[] = [`编号 \`${String(no)}\``];
+  try {
+    const back = table.lookupByNumber(no);
+    if (back !== undefined && back.length > 0) facts.push(`编号反查 \`${back}\``);
+  } catch {
+    /* 反查面抛错 ⇒ 只给已取到的编号，不编造 */
+  }
+  facts.push(`写法 \`时机 计数器 ${label}：\`／\`时机 计数器 ${String(no)}：\``);
+  return { documentation: { value: [`**${label}** · 计数器名`, ...facts].join('\n\n') } };
 }
 
 /** 时机分野候选的详情：模板 / 编号口径 / 成否与 MESSAGECHECK 模板 / 各段取值域 */

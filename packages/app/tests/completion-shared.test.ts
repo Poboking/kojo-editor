@@ -419,6 +419,7 @@ describe('COMPL-SHARED ⑥ · 两册候选源形状一致（并表的可断言�
       'variableSchema',
       'faceTable',
       'instructionTable',
+      'counterTable',
       'libraryTable',
       'callProtocol',
       'erbFunctionNames',

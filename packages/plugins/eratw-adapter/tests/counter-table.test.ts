@@ -117,4 +117,20 @@ describe('createEratwCounterTable · 查询（纯数据，无 IO）', () => {
     expect(EMPTY_COUNTER_TABLE.lookupByName('偷看')).toBeUndefined();
     expect(EMPTY_COUNTER_TABLE.lookupByNumber(2)).toBeUndefined();
   });
+
+  it('`names()` 正向枚举（IX-1）：条目原序去重，与 `lookupByName` 取首条同口径', () => {
+    const names = table.names?.();
+    expect(names).toBeDefined();
+    const expected: string[] = [];
+    const seen = new Set<string>();
+    for (const e of ERATW_COUNTER_ENTRIES) {
+      if (seen.has(e.label)) continue;
+      seen.add(e.label);
+      expected.push(e.label);
+    }
+    expect(names).toEqual(expected);
+    // 展示序首条 = 编号最小者 ⇒ 正查回到同一编号（补全候选序与取首条不打架）
+    expect(table.lookupByName(names![0]!)).toBe(ERATW_COUNTER_ENTRIES[0]!.counter);
+    expect(EMPTY_COUNTER_TABLE.names?.()).toEqual([]);
+  });
 });

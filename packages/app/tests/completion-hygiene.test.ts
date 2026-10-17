@@ -119,6 +119,8 @@ const KOJO_TABLES: CompletionTables = {
         template: 'M_KOJO{t}_MESSAGE_${com}_K{n}_{i}',
         segments: { com: { COM: 'COM', SCOM: 'SCOM' } },
       },
+      // IX-1：计数器面（`indexKind: 'counter'` ⇒ 编号槽由 `kojo-counter` 源按计数器表出货）
+      计数器: { template: 'M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}', indexKind: 'counter' },
     },
     // 成否位协议（键/取值联动的公开面；宿主据 `values` 给 `成否:` 取值候选）
     successFlag: { target: 'TFLAG:192', values: { 游戏判定: 0, 一定成功: 1 } },
@@ -129,6 +131,13 @@ const KOJO_TABLES: CompletionTables = {
     lookupByName: (name: string) => ({ 摸屁股: 310, 告白: 705 } as Record<string, number>)[name],
     lookupByNo: () => undefined,
     names: () => ['摸屁股', '告白'],
+  },
+  // IX-1 计数器值域表（正向枚举 + 反查编号；编号槽补全的候选源）
+  counterTable: {
+    hasTable: true,
+    lookupByName: (name: string) => ({ 偷看: 2, 色っぽい仕草: 20 } as Record<string, number>)[name],
+    lookupByNumber: (no: number) => ({ 2: '偷看', 20: '色っぽい仕草' } as Record<number, string>)[no],
+    names: () => ['偷看', '色っぽい仕草'],
   },
   libraryTable: {
     hasTable: true,
@@ -199,6 +208,8 @@ const KOJO_SCENARIOS: ReadonlyArray<readonly [string, CompletionSourceContext]> 
   ['kojo-face', kojoCtx('时机 指令 310 参数: ', 15)],
   // KC-3 指令名：`时机 <分野> <编号令牌位>` 的编号槽
   ['kojo-instruction', kojoCtx('时机 指令 摸屁股', 8)],
+  // IX-1 计数器名：`时机 <计数器分野> <编号令牌位>` 的编号槽（按面分流到计数器表）
+  ['kojo-counter', kojoCtx('时机 计数器 偷看', 8)],
   // KC-4 库函数名：表达式标识符位（调用形）
   ['kojo-library', kojoCtx('心形(', 3)],
   // COMPL-SHARED：项目函数名（`调用` / `函数` 的名字槽，与 `.erb` 同一份注入表）

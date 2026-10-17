@@ -8,7 +8,7 @@ import {
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
 import { variableCompletionItems } from './kojo-completion-variables';
 import { faceCompletionItems } from './kojo-completion-faces';
-import { instructionCompletionItems } from './kojo-completion-instructions';
+import { kojoIndexCompletionItems } from './kojo-completion-instructions';
 import { libraryCompletionItems } from './kojo-completion-library';
 import { kojoFunctionCompletionItems } from './kojo-completion-functions';
 import { kojoDeclarationsOf } from './kojo-completion-declarations';
@@ -18,6 +18,7 @@ import {
   buildCallSnippetText,
   candidateRange,
   charAfterRange,
+  counterDetail,
   createCompletionProvenanceStore,
   escapeSnippetText,
   faceDetail,
@@ -139,6 +140,8 @@ export function resolveCompletionDetail(
         return faceDetail(label, tables.faceTable);
       case 'kojo-instruction':
         return instructionDetail(label, tables.instructionTable);
+      case 'kojo-counter':
+        return counterDetail(label, tables.counterTable);
       case 'kojo-library':
         return libraryDetail(label, tables, KOJO_LOG_TAG);
       case 'kojo-lexicon':
@@ -313,15 +316,30 @@ const FACE_SOURCE: CompletionSource = {
 };
 
 /**
- * 指令名补全（KC-3）：`时机 <分野> <编号令牌位>：` 与 `当 …： 是 <值…>：` 的 CASE 值位
- * 弹中文指令名候选（`tables.instructionTable.names()` 枚举）。非该位置 / 表缺省 /
- * 无枚举能力 → `[]`。与 KC-2b 的命名参数键**同位置共存**（多 source 各自出货，按 label 去重）。
+ * 编号槽补全 = **两源分流**（IX-1）：`{i}` 槽按面的 `indexKind` 选表，与转译器 / 悬停同一真源。
+ *
+ * - 指令名源（`kojo-instruction`）：`时机 <指令类分野> <编号位>：` 与 `是 <值位>：` 两处弹
+ *   中文指令名候选（`tables.instructionTable.names()` 枚举）；
+ * - 计数器名源（`kojo-counter`）：`时机 <计数器类分野> <编号位>：` 弹中文计数器名候选
+ *   （`tables.counterTable.names()` 枚举）。
+ *
+ * 两源各带自己的 `requires` 表键（缺表 ⇒ 跳过该源 + 一次可见降级信号）；`literal` 面（如
+ * `图像`）由两源一致判为**零候选**（尾部是运行期字符串，列表给不出真值）。同一落点位置判定
+ * 共用（`kojoIndexCompletionItems`），按 `kinds` 过滤"该源认哪些面"。
  */
 const INSTRUCTION_SOURCE: CompletionSource = {
   id: 'kojo-instruction',
   requires: 'instructionTable',
   provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
-    return instructionCompletionItems(monaco, model, position, tables.instructionTable);
+    return kojoIndexCompletionItems(monaco, model, position, tables, ['command']);
+  },
+};
+
+const COUNTER_SOURCE: CompletionSource = {
+  id: 'kojo-counter',
+  requires: 'counterTable',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return kojoIndexCompletionItems(monaco, model, position, tables, ['counter']);
   },
 };
 
@@ -364,6 +382,7 @@ export const KOJO_COMPLETION_SOURCES: CompletionSource[] = [
   VARIABLE_SOURCE,
   FACE_SOURCE,
   INSTRUCTION_SOURCE,
+  COUNTER_SOURCE,
   LIBRARY_SOURCE,
   FUNCTIONS_SOURCE,
 ];

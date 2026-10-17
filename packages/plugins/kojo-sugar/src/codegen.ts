@@ -53,6 +53,8 @@ import type {
   WhenCaseValue,
   WhenExpr,
 } from '@kojo/plugin-api';
+// IX-1：`{i}` 取值口径的契约纯函数（与悬停 / 补全同一枚；本文件不再自写 indexKind 分支）
+import { resolveKojoIndexName } from '@kojo/plugin-api';
 import { lowerExpression, expandTarget, resolveBitSlotName, type ExprContext } from './expression';
 import {
   buildColumnRuns,
@@ -1180,41 +1182,39 @@ function resolveTimingIndex(
     }
     return { ok: true, index: timing.index };
   }
-  if (face.indexKind === 'literal') return { ok: true, index: name };
-
-  if (face.indexKind === 'counter') {
-    const table = ctx.counterTable;
-    const no = table?.lookupByName(name);
-    if (no === undefined) {
-      const missing = table === undefined || !table.hasTable;
-      ctx.sink.report({
-        code: 'timing-counter-unknown',
-        severity: 'error',
-        message: missing
-          ? `无法解析计数器名「${name}」：当前适配器未提供计数器表，名不能换算成编号。为避免拼出指向错误函数的产物，已停止编译本时机——请改用数字编号（\`时机 计数器 20：\`）。`
-          : `未登记的计数器：「${name}」不在编辑器收录的计数器表里，无法换算成编号。为避免拼出指向错误函数的产物，已停止编译本时机——请改用数字编号（\`时机 计数器 20：\`）。`,
-        loc: timing.loc.start,
-      });
-      return { ok: false };
-    }
-    return { ok: true, index: String(no) };
-  }
-
-  const no = ctx.instructionTable?.lookupByName(name);
-  if (no === undefined) {
-    const shown = timing.index ?? name;
+  // IX-1：`{i}` 取值口径（含 `literal` 直通 / 数字直通 / 两张表的分流）**只此一条真源**——
+  // 与悬停拼名（`app/monaco/kojo-hover-native.ts`）和编号槽补全（`app/monaco/kojo-completion-*`）
+  // 调同一枚契约纯函数，三处不再各写一遍 `indexKind` 分支。具体分支语义见表头注。
+  const kind = face.indexKind;
+  const probe = resolveKojoIndexName(kind, name, {
+    instructionTable: ctx.instructionTable,
+    counterTable: ctx.counterTable,
+  });
+  if (probe.ok) return { ok: true, index: probe.index };
+  // 判词仍留在糖层（契约只回 `reason`，不产人话）：两表两成因 ⇒ 两套互斥文案，成因可分辨。
+  if ((kind ?? 'command') === 'counter') {
     ctx.sink.report({
-      code: 'timing-instruction-unknown',
+      code: 'timing-counter-unknown',
       severity: 'error',
       message:
-        `未命名指令（编号 ${shown}）：「${name}」不在当前工程的指令表里（CSV/Train.csv）。` +
-        '为避免拼出指向错误函数的产物，已停止编译本时机——请改用数字编号（`时机 指令 310：`），' +
-        '或让该指令名出现在当前项目的 Train.csv 里（换汉化/魔改包即换表）。',
+        probe.reason === 'no-table'
+          ? `无法解析计数器名「${name}」：当前适配器未提供计数器表，名不能换算成编号。为避免拼出指向错误函数的产物，已停止编译本时机——请改用数字编号（\`时机 计数器 20：\`）。`
+          : `未登记的计数器：「${name}」不在编辑器收录的计数器表里，无法换算成编号。为避免拼出指向错误函数的产物，已停止编译本时机——请改用数字编号（\`时机 计数器 20：\`）。`,
       loc: timing.loc.start,
     });
     return { ok: false };
   }
-  return { ok: true, index: String(no) };
+  const shown = timing.index ?? name;
+  ctx.sink.report({
+    code: 'timing-instruction-unknown',
+    severity: 'error',
+    message:
+      `未命名指令（编号 ${shown}）：「${name}」不在当前工程的指令表里（CSV/Train.csv）。` +
+      '为避免拼出指向错误函数的产物，已停止编译本时机——请改用数字编号（`时机 指令 310：`），' +
+      '或让该指令名出现在当前项目的 Train.csv 里（换汉化/魔改包即换表）。',
+    loc: timing.loc.start,
+  });
+  return { ok: false };
 }
 
 /* ============================== HK-12：自定指令块 → 函数组 ============================== */

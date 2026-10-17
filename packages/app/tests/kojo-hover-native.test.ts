@@ -217,6 +217,21 @@ describe('悬停反查 · 时机块头（分野 → 拼出来的函数名）', (
     expect(at('时机 图像 |特殊服装：')?.name).toBe('M_KOJO_IMAGE_K12_特殊服装');
   });
 
+  it('IX-1 反向查号：纯数字编号悬停回中文名（`时机 计数器 20：` → `色っぽい仕草`）', () => {
+    const hit = at('时机 计数器 |20：');
+    expect(counterTable.lookupByNumber(20)).toBe('色っぽい仕草');
+    expect(hit?.name).toBe('色っぽい仕草');
+    expect(hit?.kind).toBe('计数器名 · 编号 20');
+    expect(hit?.lines).toContain('函数名：`M_KOJO_MESSAGE_COUNTER_K12_20`');
+  });
+
+  it('IX-1 反向查号：指令面同理（`时机 指令 310：` → `亲吻`）', () => {
+    const hit = at('时机 指令 |310：');
+    expect(hit?.name).toBe('亲吻');
+    expect(hit?.kind).toBe('指令名 · 编号 310');
+    expect(hit?.lines).toContain('函数名：`M_KOJO_MESSAGE_COM_K12_310`');
+  });
+
   it('缺角色号 ⇒ 只给模板，绝不给半个函数名', () => {
     const hit = at('时机 |指令 310：', tables, NO_HEADER);
     expect(hit?.name).toBe(faceTable.faces['指令']!.template);
