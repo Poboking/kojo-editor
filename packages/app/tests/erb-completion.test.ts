@@ -133,7 +133,7 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
     dispose.dispose();
   });
 
-  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，骨架最前 + 九个 source 全在册（两名位源追加末尾）', () => {
+  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，骨架最前 + 十个 source 全在册（词源追加末尾）', () => {
     expect(Array.isArray(ERB_COMPLETION_SOURCES)).toBe(true);
     expect(ERB_COMPLETION_SOURCES.map((s) => s.id)).toEqual([
       'erb-snippet',
@@ -145,6 +145,7 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
       'erb-bits',
       'erb-families',
       'erb-declared',
+      'erb-words',
     ]);
   });
 });

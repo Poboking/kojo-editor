@@ -457,6 +457,9 @@ describe('CTX-SUGGEST · 抑制条件逐条', () => {
     // SUGGEST-2B：gate ⑦ 只要求"刚敲下一枚字符"——名字字符落在名字位同样算（不再看字符白名单）
     expect(shouldTriggerContextSuggest({ ...base, typedChar: '本' })).toBe(true);
     expect(shouldTriggerContextSuggest({ ...base, typedChar: null })).toBe(false);
+    // QSUG-2 gate ⑪：设置页关掉「输入时自动弹出补全」⇒ 本观察者也不替作者触发
+    expect(shouldTriggerContextSuggest({ ...base, quickSuggestionsEnabled: false })).toBe(false);
+    expect(shouldTriggerContextSuggest({ ...base, quickSuggestionsEnabled: true })).toBe(true);
   });
 });
 

@@ -28,6 +28,7 @@ import {
 import { kojoIndexCompletionItems } from './kojo-completion-instructions';
 import { libraryCompletionItems } from './kojo-completion-library';
 import { kojoFunctionCompletionItems } from './kojo-completion-functions';
+import { kojoWordCompletionItems } from './kojo-completion-words';
 import { kojoDeclarationsOf } from './kojo-completion-declarations';
 import { KOJO_SNIPPET_SOURCE } from './kojo-completion-snippets';
 import {
@@ -506,6 +507,22 @@ const FUNCTIONS_SOURCE: CompletionSource = {
 };
 
 /**
+ * 文档词源（QSUG-2，**追加在最后**）：当前文件里同前缀的代码词。
+ *
+ * 开关住在 `tables.wordBasedSuggestions`（宿主注入设置页偏好）；缺席 = 不供（测试桩 /
+ * 旧接线零噪声）。位置门见 `kojo-completion-words.ts`：台词 / 旁白 / 注释在 `locate`
+ * 已零候选，这里再挡掉变量插值、函数名槽、时机块头、`是 <值>` 等专有槽。
+ * 放最后 ⇒ 同名候选先注册者胜，中文关键字 / 库函数 / 项目函数不会被词源复读。
+ */
+const WORDS_SOURCE: CompletionSource = {
+  id: 'kojo-words',
+  provide({ monaco, model, position, range, tables }): Monaco.languages.CompletionItem[] {
+    if (tables.wordBasedSuggestions?.() !== true) return [];
+    return kojoWordCompletionItems(monaco, model, position, range);
+  },
+};
+
+/**
  * 全部补全来源（**稳定扩展点**）。后续批次往这里追加 `CompletionSource`，
  * 装配点与排序/去重口径零改动（实现在 `completion-core.ts`，与 `.erb` 共用一份）。
  *
@@ -522,6 +539,7 @@ export const KOJO_COMPLETION_SOURCES: CompletionSource[] = [
   COUNTER_SOURCE,
   LIBRARY_SOURCE,
   FUNCTIONS_SOURCE,
+  WORDS_SOURCE,
 ];
 
 /* ============================== 位置判定 + 装配声明 ============================== */

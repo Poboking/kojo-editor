@@ -137,7 +137,7 @@ describe('unicodeHighlight（中文标点零标红 + 同形异义告警保留）
 });
 
 describe('quickSuggestions 形态（纯函数配置面）', () => {
-  it('所有档位都是代码位快建议、注释/字符串关；只读整条关', () => {
+  it('所有档位都是代码位快建议、注释/字符串关；只读或设置页关 ⇒ 整条关', () => {
     const codeSuggestions = { other: true, comments: false, strings: false };
     expect(CJK_TYPING_BASELINE.quickSuggestions).toEqual(codeSuggestions);
     for (const n of [10, 500, 100_000]) {
@@ -146,5 +146,9 @@ describe('quickSuggestions 形态（纯函数配置面）', () => {
     }
     expect(quickSuggestionsFor(false)).toEqual(codeSuggestions);
     expect(quickSuggestionsFor(true)).toBe(false);
+    // QSUG-2：设置页总开关（第二参）关掉时，可写编辑器也整条关
+    expect(quickSuggestionsFor(false, false)).toBe(false);
+    expect(quickSuggestionsFor(true, false)).toBe(false);
+    expect(quickSuggestionsFor(false, true)).toEqual(codeSuggestions);
   });
 });

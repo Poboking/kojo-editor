@@ -21,21 +21,17 @@ import { kojoNativeSlotAt } from './kojo-native-zone';
  * 闸从"字符白名单"换成 gate ⑥（widget 已开 ⇒ 不重触发，否则会把候选选择重置回第一条）。
  * 防抖窗口改为**每次排程现取**（`host.getDebounceMs`），设置页改延迟下一次击键即生效。
  *
- * ## 为什么要有这一条路（而不是把 quickSuggestions 打开）
+ * ## 为什么还要有这一条路（quickSuggestions 已全局打开之后）
  *
- * `editor-options.ts` 的 `CJK_TYPING_BASELINE` 把 `quickSuggestions` 钉在**所有档位**为 `false`：
- * 中文台词行连打字就会弹一堆无关列表，实测是纯噪声。而 vendor 取证（monaco 0.57
- * `contrib/suggest/browser/suggestModel.js:303`）——`QuickSuggestionsOptions.isAllOff(...)` 时
- * `_doTriggerQuickSuggest` 直接 return ⇒ **"打字自动弹"这条路整条关闭**，只有触发字符
- * （`canShowSuggestOnTriggerCharacters`，`:81-91` 不受该门控）与显式 trigger 还有效。
- * 可两门语言的触发字符合计只有 `{` `：` `#` `[` 四枚，**最高频的落点一个都不在内**
- * （`时机 <分野>`、`是 <指令名>`、`时机 计数器 <名>`、`调用 <函数名>`、`@<函数名>`、`CALL <函数名>`），
- * 而且 `：` 挂在构造**尾部**、分野名要补在它**之前** ⇒ 连唯一相关的落点都指错了。
- * 作者不按 Ctrl+Space 就永远看不到候选，体感就是"这编辑器没补全"。
- *
- * 于是走**唯一不违反上面那条基线**的路：宿主自己判断"光标刚进入一个名字位"，替作者按一下
+ * QSUG-1 起 `quickSuggestions` 在可写代码位是打开的，Monaco 自己会在键入后触发建议。
+ * 但自动触发有前置判据（vendor `suggestModel.js` 的 `LineContext.shouldAutoTrigger`：
+ * 光标处必须有一个**词**，且词尾恰在光标）——`时机 |` / `调用 |` / `是 |` 这类由**空白**
+ * 打开的名字槽，光标处没有词，Monaco 不会弹；两门语言自己的触发字符又只有 `{` `：` `#` `[`
+ * 四枚，覆盖不到这些槽。于是宿主继续在"刚敲下一枚把光标推进名字位"时替作者按一下
  * `editor.action.triggerSuggest`。**只读门、派生视图、串/注释内、widget 已开、同位置重复**
  * 一律抑制；判据一律复用候选源那几枚（见 {@link nameSlotProbesOf}），宿主侧零抄本。
+ * 设置页关掉「输入时自动弹出补全」时本观察者同步沉默（gate ⑪）——"关"必须是真的不弹，
+ * 而不是只关 Monaco 那一半。
  *
  * ## 为什么不会骚扰作者
  *
@@ -196,15 +192,21 @@ export interface SuggestOpenContext {
    * 只多算一枚"值得弹"的位置）。可选：非 `.kojo` / 旧调用方不传 ⇒ `undefined` = 不加分。
    */
   readonly nativeSlot?: boolean;
+  /**
+   * 设置页「输入时自动弹出补全」总开关（QSUG-2）。`false` ⇒ 本观察者也不替作者触发；
+   * 可选：旧调用方不传 = `true`（保持既有行为）。
+   */
+  readonly quickSuggestionsEnabled?: boolean;
 }
 
 /**
  * 主动触发的**全部闸门**（纯函数；观察者只负责把 Monaco 事件折成 {@link SuggestOpenContext}）。
- * 顺序即抑制条件的编号，逐条可测：
+ * ⑪ 总开关**最先判**（关掉时其余判据都不必算），其后 ①–⑩ 按编号顺序，逐条可测：
  * ①无文件 ②只读 ③派生视图 ④无焦点 ⑤多光标/有选区 ⑥widget 已开 ⑦不是"刚敲下的一枚字符"
  * ⑧这门语言没有名字位判据 ⑨串/注释内 ⑩候选源自己不信这一位。
  */
 export function shouldTriggerContextSuggest(c: SuggestOpenContext): boolean {
+  if (c.quickSuggestionsEnabled === false) return false; // ⑪（总开关，先判）
   if (!c.hasPath) return false; // ①
   if (c.readOnly) return false; // ②
   if (c.derivedView) return false; // ③
@@ -247,6 +249,21 @@ export interface SuggestContextTriggerHost {
    * 同时给了 `getDebounceMs` 时以 getter 为准（每次现取）；没有 getter 的旧 host 行为零改动。
    */
   debounceMs?: number;
+  /**
+   * 设置页「输入时自动弹出补全」**现取值**（QSUG-2）：每次评估调一次。缺省 / 抛错 = 开
+   * （旧 host 行为零改动；脏偏好读取不该让补全整条沉默）。
+   */
+  getQuickSuggestionsEnabled?: () => boolean;
+}
+
+/** 读快建议总开关：getter 缺省 / 抛错 / 非布尔值一律按「开」处理 */
+function readQuickSuggestionsEnabled(host: SuggestContextTriggerHost): boolean {
+  if (typeof host.getQuickSuggestionsEnabled !== 'function') return true;
+  try {
+    return host.getQuickSuggestionsEnabled() !== false;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -357,6 +374,7 @@ export function installSuggestContextTrigger(
       languageId,
       line,
       column: position.column,
+      quickSuggestionsEnabled: readQuickSuggestionsEnabled(host),
       typedChar: ch,
       hasPath: path !== '',
       readOnly: isEditorReadOnly(editor),

@@ -94,6 +94,12 @@ export interface SettingsPanelProps {
   nameColorOn: boolean;
   fontSize: number;
   fontZoom: number;
+  /** 输入时自动弹出补全（quickSuggestions）总开关；真源 `suggest-pref.ts`，默认开 */
+  quickSuggestionsOn: boolean;
+  commitQuickSuggestions: (on: boolean) => void;
+  /** 文档词补全（wordBasedSuggestions 语义）总开关；真源 `suggest-pref.ts`，默认开 */
+  wordSuggestionsOn: boolean;
+  commitWordSuggestions: (on: boolean) => void;
   /** 补全弹出延迟读数（ms，0 = 立即）；真源是 `suggest-pref.ts` 的 localStorage */
   suggestDelay: number;
   /** 写补全弹出延迟（壳层落 `saveSuggestDelayPref`；订阅表把新值推回本页） */
@@ -168,6 +174,10 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     nameColorOn,
     fontSize,
     fontZoom,
+    quickSuggestionsOn,
+    commitQuickSuggestions,
+    wordSuggestionsOn,
+    commitWordSuggestions,
     suggestDelay,
     commitSuggestDelay,
     sugarViewOn,
@@ -401,6 +411,37 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 </span>
               </span>
             </div>
+            {/* 快建议 / 文档词两个总开关（QSUG-2）：真源与订阅在 suggest-pref.ts，
+                这里只排版。默认都开（对标 VS Code / IDEA）；台词 / 旁白 / 注释 / 字符串
+                与只读 / 预览不靠这两个开关降噪，位置门各自负责。 */}
+            <label className="settings-row">
+              <Switch
+                checked={quickSuggestionsOn}
+                onChange={commitQuickSuggestions}
+                label="输入时自动弹出补全"
+              />
+              <span>
+                输入时自动弹出补全
+                <span className="settings-hint">
+                  写到代码位就边打边弹；.kojo 的台词 / 旁白 / 注释与 .erb 的注释 / 字符串里不弹，
+                  只读文件与 .kojo 预览始终不弹。默认开
+                </span>
+              </span>
+            </label>
+            <label className="settings-row">
+              <Switch
+                checked={wordSuggestionsOn}
+                onChange={commitWordSuggestions}
+                label="文档词补全"
+              />
+              <span>
+                文档词补全
+                <span className="settings-hint">
+                  除上下文候选外，再从当前文件里补同前缀的词；只在代码位弹，台词 / 旁白 / 注释里不弹。
+                  超过 5,000 行的文件不提供。默认开
+                </span>
+              </span>
+            </label>
             {/* 补全弹出延迟（SUGGEST-2B）：真源与钳制在 suggest-pref.ts，这里只排版。
                 − / ＋ 每档 100ms；0 显示「立即」= 打字即弹（默认，保持旧体感）。
                 观察者每次排程现读 ⇒ 改完下一次击键即生效，不用重开文件。 */}

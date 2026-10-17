@@ -116,6 +116,13 @@ export interface CompletionTables {
    * **绝不在编辑器侧写第二份别名正则**。
    */
   readonly kojoDeclarations?: CompletionDeclarationScanner;
+  /**
+   * 「文档词补全」开关（宿主注入 `loadWordBasedSuggestionsPref`；每次补全现取）。
+   * 缺席 = 不供词（测试桩 / 没接线）；`true` 才让两册的 `*-words` 源出货。
+   * 注意：这是**候选源开关**，不是 Monaco 的 `editor.wordBasedSuggestions`（那一项恒 off，
+   * 内建词 provider 绕不过台词 / 旁白门）。
+   */
+  readonly wordBasedSuggestions?: () => boolean;
 }
 
 /**

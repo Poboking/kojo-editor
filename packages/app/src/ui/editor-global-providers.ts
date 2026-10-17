@@ -89,6 +89,7 @@ import {
   requireKernel,
   type PaneCtx,
 } from './editor-pane-registry';
+import { loadWordBasedSuggestionsPref } from './suggest-pref';
 
 /** CodeAction 执行命令 id（宿主统一注册一次；command 参数为 pendingActionsRef 的反查 key） */
 const CODE_ACTION_COMMAND = 'kojo.codeAction.run';
@@ -199,10 +200,14 @@ function staticTablesFor(
  * 三者都在**求值时**软取（`services.tryGet` + try/catch），索引未建 ⇒ 该路零候选 / 零结果 /
  * `undefined`（退化可见），绝不抛进 seam；每次现取，不缓存上一个项目的脏索引。
  */
-function projectSoftLegs(kernel: Kernel): Pick<CompletionTables, 'erbFunctionNames' | 'erbFileFacts'> & HoverTables {
+function projectSoftLegs(
+  kernel: Kernel,
+): Pick<CompletionTables, 'erbFunctionNames' | 'erbFileFacts' | 'wordBasedSuggestions'> & HoverTables {
   return {
     erbFunctionNames: erbFunctionNamesFor(kernel),
     erbFileFacts: erbFileFactsFor(kernel),
+    // QSUG-2：文档词开关每次补全现取（设置页一翻，下一个候选轮即生效；不用重开文件）
+    wordBasedSuggestions: () => loadWordBasedSuggestionsPref(),
     erbIndex: () => {
       try {
         return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;

@@ -10,6 +10,7 @@ import { erbFunctionCompletionItems, erbFunctionNameSlot } from './erb-completio
 import { erbLabelCompletionItems } from './erb-completion-labels';
 import { erbSystemFunctionCompletionItems } from './erb-completion-system-functions';
 import { erbVariableCompletionItems } from './erb-completion-variables';
+import { erbWordCompletionItems } from './erb-completion-words';
 import { ERB_SNIPPET_SOURCE } from './erb-completion-snippets';
 import { errorText } from '@kojo/plugin-api';
 import { isAllBlank } from './kojo-completion-position';
@@ -394,6 +395,22 @@ const DECLARED_SOURCE: ErbCompletionSource = {
 };
 
 /**
+ * 文档词源（QSUG-2，**追加在最后**）：当前文件里同前缀的代码词。
+ *
+ * 开关住在 `tables.wordBasedSuggestions`（宿主注入设置页偏好）；缺席 = 不供。
+ * 专用名槽（`CALL` 目标 / `@` 定义 / `$` 标签 / 变量末段 / 位号 / 指令记号）由位置门的
+ * `keep` 白名单**整路滤掉**本 source（它不在任何白名单里）⇒ 不会把词混进"只出自己的源"的槽位。
+ * 字符串 / `;` 注释在 `locate` 已整轮零候选。
+ */
+const WORDS_SOURCE: ErbCompletionSource = {
+  id: 'erb-words',
+  provide({ monaco, model, position, range, tables }): Monaco.languages.CompletionItem[] {
+    if (tables.wordBasedSuggestions?.() !== true) return [];
+    return erbWordCompletionItems(monaco, model, position, range);
+  },
+};
+
+/**
  * 全部补全来源（**稳定扩展点**）。各 source **独立文件 + 各自纯函数**，此处只做一行接线；
  * 装配点与排序/去重口径零改动（实现在 `completion-core.ts`，与 `.kojo` 共用一份）。
  *
@@ -412,6 +429,7 @@ export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
   BITS_SOURCE,
   FAMILIES_SOURCE,
   DECLARED_SOURCE,
+  WORDS_SOURCE,
 ];
 
 /* ============================== 记忆化：函数名 provider（EC-3 预置） ============================== */

@@ -52,7 +52,14 @@ import { loadFormatOnSavePref, saveFormatOnSavePref } from './format-pref';
 // 行上内联注解（B8）：同一份偏好形态，默认关；开关真源在 localStorage，这里只写值 + 发意图
 import { loadCodeLensPref, saveCodeLensPref } from './code-lens-pref';
 import { useNameColorPref } from './semantic-color-pref';
-import { saveSuggestDelayPref, useSuggestDelayPref } from './suggest-pref';
+import {
+  saveQuickSuggestionsPref,
+  saveSuggestDelayPref,
+  saveWordBasedSuggestionsPref,
+  useQuickSuggestionsPref,
+  useSuggestDelayPref,
+  useWordBasedSuggestionsPref,
+} from './suggest-pref';
 import {
   resetFontZoomPref,
   stepFontZoomPref,
@@ -416,6 +423,17 @@ export function ShellLayout(props: Props): ReactElement {
   const suggestDelay = useSuggestDelayPref();
   const commitSuggestDelay = useCallback((ms: number) => {
     saveSuggestDelayPref(ms);
+  }, []);
+
+  // 补全两个总开关（QSUG-2）：默认都开；写下去后 EditorPane 的订阅 / 词源的下一次读取
+  // 各自现取，不重开文件。设置页只拿投影。
+  const quickSuggestionsOn = useQuickSuggestionsPref();
+  const commitQuickSuggestions = useCallback((on: boolean) => {
+    saveQuickSuggestionsPref(on);
+  }, []);
+  const wordSuggestionsOn = useWordBasedSuggestionsPref();
+  const commitWordSuggestions = useCallback((on: boolean) => {
+    saveWordBasedSuggestionsPref(on);
   }, []);
 
   // 字号/缩放读数（A1）：真源在 font-size-pref 的 localStorage，这里只拿投影
@@ -1600,6 +1618,10 @@ export function ShellLayout(props: Props): ReactElement {
           nameColorOn={nameColorOn}
           fontSize={fontSize}
           fontZoom={fontZoom}
+          quickSuggestionsOn={quickSuggestionsOn}
+          commitQuickSuggestions={commitQuickSuggestions}
+          wordSuggestionsOn={wordSuggestionsOn}
+          commitWordSuggestions={commitWordSuggestions}
           suggestDelay={suggestDelay}
           commitSuggestDelay={commitSuggestDelay}
           sugarViewOn={sugarViewOn}

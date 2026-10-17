@@ -32,7 +32,12 @@ import {
 } from './save-coordinator';
 import { loadFormatOnSavePref } from './format-pref';
 import { applyNameColorPref, subscribeNameColorPref } from './semantic-color-pref';
-import { loadSuggestDelayPref, subscribeSuggestDelayPref } from './suggest-pref';
+import {
+  loadQuickSuggestionsPref,
+  loadSuggestDelayPref,
+  subscribeQuickSuggestionsPref,
+  subscribeSuggestDelayPref,
+} from './suggest-pref';
 import {
   applyFontSizePref,
   applyFontZoomPref,
@@ -134,13 +139,14 @@ const MARKER_DEBOUNCE_MS = 250;
  * 只读态与快建议**同拍**落 Monaco 选项。
  *
  * `readOnly` 只拦编辑，不拦 suggest；provider 又拿不到 editor 的可写状态 ⇒ 只读文件 /
- * 糖预览若不在这里把 `quickSuggestions` 关掉，全局快建议照样会弹。延迟与设置页同源
- * （`loadSuggestDelayPref`），保证「补全弹出延迟」对 Monaco 快建议与宿主主动触发同时生效。
+ * 糖预览若不在这里把 `quickSuggestions` 关掉，全局快建议照样会弹。可写态下还叠一层
+ * 设置页总开关（`loadQuickSuggestionsPref`）；延迟同源，保证「补全弹出延迟」对 Monaco
+ * 快建议与宿主主动触发同时生效。
  */
 function applyEditabilityAndSuggest(ed: Monaco.editor.IStandaloneCodeEditor, readOnly: boolean): void {
   ed.updateOptions({
     readOnly,
-    quickSuggestions: quickSuggestionsFor(readOnly),
+    quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
     quickSuggestionsDelay: loadSuggestDelayPref(),
   });
 }
@@ -1354,7 +1360,8 @@ export function EditorPane({
       ...CODE_FONT_BASELINE,
       // 中文打字噪声 / 选词基线（A2+A3）：与切文件降级集同源（editor-options.ts）
       ...CJK_TYPING_BASELINE,
-      // 快建议延迟与设置页同源；只读 / 预览的关闭由切文件与糖视图两处 updateOptions 覆盖
+      // 快建议总开关与延迟同源设置页；只读 / 预览的关闭由切文件与糖视图两处 updateOptions 覆盖
+      quickSuggestions: quickSuggestionsFor(false, loadQuickSuggestionsPref()),
       quickSuggestionsDelay: loadSuggestDelayPref(),
       // find 体验基线（A7）：create 与切文件两条路径都要带上，吞一条就是档位漂移
       ...FIND_BASELINE,
@@ -1410,6 +1417,17 @@ export function EditorPane({
     // quickSuggestionsDelay；设置页一改立即重发，不用重开文件。
     const suggestDelayUnsub = subscribeSuggestDelayPref(() => {
       ed.updateOptions({ quickSuggestionsDelay: loadSuggestDelayPref() });
+    });
+    // 快建议总开关（QSUG-2）：关 ⇒ 整条自动弹出停；只读 / 糖预览仍按各自的门强制 false。
+    // 编辑器的 readOnly 选项是唯一可写态真源（糖预览在 setModel 时已置 true）。
+    const quickSuggestionsUnsub = subscribeQuickSuggestionsPref(() => {
+      let readOnly = false;
+      try {
+        readOnly = ed.getOption(monaco.editor.EditorOption.readOnly);
+      } catch {
+        readOnly = false;
+      }
+      ed.updateOptions({ quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()) });
     });
     // 焦点上抛（SPLIT-1）：编辑器聚焦 ⇒ 宿主把焦点组切到本组（点哪组哪组成为焦点组）
     const focusDisposer = ed.onDidFocusEditorText(() => {
@@ -1485,15 +1503,16 @@ export function EditorPane({
     // 活动端（position），Monaco 两条事件都可能先到，重复的那次由广播器去重吞掉（零成本）。
     const cursorSub = ed.onDidChangeCursorPosition(() => publishCursor());
     const cursorSelSub = ed.onDidChangeCursorSelection(() => publishCursor());
-    // 上下文主动触发补全（1017）：`quickSuggestions` 全档为 `false`（中文打字噪声基线，
-    // `editor-options.ts`），打字本身不会自动弹；本观察者在"刚敲下一枚把光标推进名字位的
-    // 字符"时代按一次 Ctrl+Space。**每编辑器实例一枚**（SPLIT1 分屏互不串），随卸载释放。
+    // 上下文主动触发补全（1017）：QSUG-1 打开全局快建议后，本观察者只补一种缺口——
+    // 中文词法下 Monaco 不会把 CJK 当"词"自动触发的那一拍；位置判据与提供者同源。
+    // **每编辑器实例一枚**（SPLIT1 分屏互不串），随卸载释放。
     // 延迟偏好**每次排程现读**（SUGGEST-2B）：设置页改完下一次击键即生效，不需要重开文件；
     // 卸载由 `contextSuggestSub.dispose()` 一并清掉未响的那一拍定时器。
     const contextSuggestSub = installSuggestContextTrigger(ed, {
       getPath: () => filePathRef.current,
       isDerivedView: () => sugarModelRef.current !== null,
       getDebounceMs: () => loadSuggestDelayPref(),
+      getQuickSuggestionsEnabled: () => loadQuickSuggestionsPref(),
     });
     const flushViewOnUnload = (): void => flushViewStates();
     window.addEventListener('beforeunload', flushViewOnUnload);
@@ -1502,6 +1521,7 @@ export function EditorPane({
       fontSizeUnsub();
       fontZoomSync.dispose();
       suggestDelayUnsub();
+      quickSuggestionsUnsub();
       focusDisposer.dispose();
       crumbCursorSub.dispose();
       crumbModelSub.dispose();
@@ -1720,8 +1740,8 @@ export function EditorPane({
       ed.updateOptions({
         readOnly,
         ...editorOptionsForLineCount(entry.model.getLineCount()),
-        // 体量档位也会带 quickSuggestions（代码位开）；只读必须在这里整条盖掉
-        quickSuggestions: quickSuggestionsFor(readOnly),
+        // 体量档位也会带 quickSuggestions（代码位开）；只读 / 设置页关掉必须在这里整条盖掉
+        quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
         quickSuggestionsDelay: loadSuggestDelayPref(),
       });
       ed.setModel(entry.model);

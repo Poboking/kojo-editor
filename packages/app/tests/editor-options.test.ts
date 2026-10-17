@@ -104,7 +104,7 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
     expect(editorOptionsForLineCount(LARGE_FILE_LINES).occurrencesHighlight).toBe('off');
   });
 
-  it('全档共同：关词建议 + 缩进按语料实况钉死（fixtures 清点 tab 488 行 vs 空格 2 行）', () => {
+  it('全档共同：Monaco 内建词建议恒关（文档词走受门 source）+ 缩进按语料实况钉死', () => {
     for (const n of ALL_TIERS_SAMPLES) {
       const o = editorOptionsForLineCount(n);
       expect(o.wordBasedSuggestions, repr(n)).toBe('off');

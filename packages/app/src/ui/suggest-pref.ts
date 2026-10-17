@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 /**
- * 「补全弹出延迟」偏好（SUGGEST-2B，2026-10-18）：零 React 纯逻辑 + 极小 React 钩子，可单测。
+ * 补全偏好（SUGGEST-2B / QSUG-2，2026-10-18）：延迟 + 「输入时自动弹出」+「文档词」三个开关；
+ * 零 React 纯逻辑 + 极小 React 钩子，可单测。
  *
  * 存法照 `semantic-color-pref.ts` / `font-size-pref.ts` 先例 —— localStorage 真源 + 订阅表，
  * **不新造第二套偏好机制**；设置页一翻、编辑器下一次排程就按新值走（观察者每次现取，
@@ -25,6 +26,10 @@ import { useSyncExternalStore } from 'react';
 
 /** 偏好键（localStorage） */
 const PREF_KEY = 'kojo.ui.suggestDelay.v1';
+/** 输入时自动弹出补全（quickSuggestions） */
+const QUICK_KEY = 'kojo.ui.quickSuggestions.v1';
+/** 文档词补全（语义对位 Monaco 的 wordBasedSuggestions，但走语言侧位置门） */
+const WORD_KEY = 'kojo.ui.wordBasedSuggestions.v1';
 
 /** 缺省 = 0ms：保持"打字即弹"的现有体感，设置后才变慢 */
 export const SUGGEST_DELAY_DEFAULT = 0;
@@ -102,4 +107,84 @@ export function subscribeSuggestDelayPref(listener: () => void): () => void {
 /** React 读数（`useSyncExternalStore`：订阅 `subscribeSuggestDelayPref`、快照 `loadSuggestDelayPref`） */
 export function useSuggestDelayPref(): number {
   return useSyncExternalStore(subscribeSuggestDelayPref, loadSuggestDelayPref);
+}
+
+/* ============================== 两枚布尔开关（QSUG-2） ============================== */
+
+/**
+ * 「输入时自动弹出补全」默认**开**：对标 VS Code / IDEA，写到代码位就边打边弹；
+ * 台词 / 旁白 / 注释 / 字符串与只读 / 预览由位置门与编辑器选项各自挡住，不靠关总闸降噪。
+ */
+export const QUICK_SUGGESTIONS_DEFAULT = true;
+
+/** 「文档词补全」默认**开**：当前文件里同前缀的词也进候选（位置门与候选源同一条纪律）。 */
+export const WORD_BASED_SUGGESTIONS_DEFAULT = true;
+
+function loadBooleanPref(key: string, fallback: boolean): boolean {
+  const s = storage();
+  if (!s) return fallback;
+  try {
+    const raw = s.getItem(key);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveBooleanPref(key: string, on: boolean, listeners: Set<() => void>): void {
+  const s = storage();
+  if (s) {
+    try {
+      s.setItem(key, on ? '1' : '0');
+    } catch {
+      /* 隐私模式 / 配额满：只丢掉这一次选择，绝不抛进渲染链 */
+    }
+  }
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listeners: Set<() => void>, listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+const quickListeners = new Set<() => void>();
+const wordListeners = new Set<() => void>();
+
+export function loadQuickSuggestionsPref(): boolean {
+  return loadBooleanPref(QUICK_KEY, QUICK_SUGGESTIONS_DEFAULT);
+}
+
+export function saveQuickSuggestionsPref(on: boolean): void {
+  saveBooleanPref(QUICK_KEY, on, quickListeners);
+}
+
+export function subscribeQuickSuggestionsPref(listener: () => void): () => void {
+  return subscribe(quickListeners, listener);
+}
+
+/** React 读数（设置页开关） */
+export function useQuickSuggestionsPref(): boolean {
+  return useSyncExternalStore(subscribeQuickSuggestionsPref, loadQuickSuggestionsPref);
+}
+
+export function loadWordBasedSuggestionsPref(): boolean {
+  return loadBooleanPref(WORD_KEY, WORD_BASED_SUGGESTIONS_DEFAULT);
+}
+
+export function saveWordBasedSuggestionsPref(on: boolean): void {
+  saveBooleanPref(WORD_KEY, on, wordListeners);
+}
+
+export function subscribeWordBasedSuggestionsPref(listener: () => void): () => void {
+  return subscribe(wordListeners, listener);
+}
+
+/** React 读数（设置页开关） */
+export function useWordBasedSuggestionsPref(): boolean {
+  return useSyncExternalStore(subscribeWordBasedSuggestionsPref, loadWordBasedSuggestionsPref);
 }

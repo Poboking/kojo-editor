@@ -7,14 +7,22 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  QUICK_SUGGESTIONS_DEFAULT,
   SUGGEST_DELAY_DEFAULT,
   SUGGEST_DELAY_MAX,
   SUGGEST_DELAY_MIN,
   SUGGEST_DELAY_STEP,
+  WORD_BASED_SUGGESTIONS_DEFAULT,
   clampSuggestDelay,
+  loadQuickSuggestionsPref,
   loadSuggestDelayPref,
+  loadWordBasedSuggestionsPref,
+  saveQuickSuggestionsPref,
   saveSuggestDelayPref,
+  saveWordBasedSuggestionsPref,
+  subscribeQuickSuggestionsPref,
   subscribeSuggestDelayPref,
+  subscribeWordBasedSuggestionsPref,
 } from '../src/ui/suggest-pref';
 
 const KEY = 'kojo.ui.suggestDelay.v1';
@@ -161,5 +169,74 @@ describe('suggest-pref · 纯钳制函数（NaN 不进 setTimeout）', () => {
     expect(clampSuggestDelay(99999)).toBe(SUGGEST_DELAY_MAX);
     expect(clampSuggestDelay(99.4)).toBe(99);
     expect(clampSuggestDelay(99.5)).toBe(100);
+  });
+});
+
+/* ============================== QSUG-2：两枚布尔开关 ============================== */
+
+const QUICK_KEY = 'kojo.ui.quickSuggestions.v1';
+const WORD_KEY = 'kojo.ui.wordBasedSuggestions.v1';
+
+describe('suggest-pref · 快建议 / 文档词开关', () => {
+  it('默认都开（对标 VS Code / IDEA 的边打边弹）', () => {
+    expect(QUICK_SUGGESTIONS_DEFAULT).toBe(true);
+    expect(WORD_BASED_SUGGESTIONS_DEFAULT).toBe(true);
+    stubWindow(fakeStorage());
+    expect(loadQuickSuggestionsPref()).toBe(true);
+    expect(loadWordBasedSuggestionsPref()).toBe(true);
+  });
+
+  it('没 window / 读抛错 / 坏值 ⇒ 都回默认开（坏偏好不该让补全整条沉默）', () => {
+    stubWindow(undefined);
+    expect(loadQuickSuggestionsPref()).toBe(true);
+    expect(loadWordBasedSuggestionsPref()).toBe(true);
+    for (const junk of ['', 'true', 'yes', '2', 'null']) {
+      stubWindow(fakeStorage({ [QUICK_KEY]: junk, [WORD_KEY]: junk }));
+      expect(loadQuickSuggestionsPref(), junk).toBe(true);
+      expect(loadWordBasedSuggestionsPref(), junk).toBe(true);
+    }
+    const boom = { getItem: () => { throw new Error('blocked'); } } as unknown as Storage;
+    stubWindow(boom);
+    expect(loadQuickSuggestionsPref()).toBe(true);
+    expect(loadWordBasedSuggestionsPref()).toBe(true);
+  });
+
+  it("显式 '0' / '1' 照读；两个开关各存各的键", () => {
+    const storage = fakeStorage({ [QUICK_KEY]: '0', [WORD_KEY]: '1' });
+    stubWindow(storage);
+    expect(loadQuickSuggestionsPref()).toBe(false);
+    expect(loadWordBasedSuggestionsPref()).toBe(true);
+    saveQuickSuggestionsPref(true);
+    saveWordBasedSuggestionsPref(false);
+    expect(storage.getItem(QUICK_KEY)).toBe('1');
+    expect(storage.getItem(WORD_KEY)).toBe('0');
+    expect(loadQuickSuggestionsPref()).toBe(true);
+    expect(loadWordBasedSuggestionsPref()).toBe(false);
+  });
+
+  it('订阅各管各的：写快建议不惊动词订阅者，取消后不再收到', () => {
+    stubWindow(fakeStorage());
+    const quick = vi.fn();
+    const word = vi.fn();
+    const unsubQuick = subscribeQuickSuggestionsPref(quick);
+    subscribeWordBasedSuggestionsPref(word);
+    saveQuickSuggestionsPref(false);
+    expect(quick).toHaveBeenCalledTimes(1);
+    expect(word).toHaveBeenCalledTimes(0);
+    saveWordBasedSuggestionsPref(false);
+    expect(word).toHaveBeenCalledTimes(1);
+    unsubQuick();
+    saveQuickSuggestionsPref(true);
+    expect(quick).toHaveBeenCalledTimes(1);
+    expect(word).toHaveBeenCalledTimes(1);
+  });
+
+  it('setItem 抛错也照样通知（本次选择只在本会话生效）', () => {
+    const boom = { setItem: () => { throw new Error('quota'); } } as unknown as Storage;
+    stubWindow(boom);
+    const listener = vi.fn();
+    subscribeWordBasedSuggestionsPref(listener);
+    expect(() => saveWordBasedSuggestionsPref(true)).not.toThrow();
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

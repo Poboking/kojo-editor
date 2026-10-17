@@ -451,7 +451,15 @@ describe('SH-6 · 满表遍历（读数：不是空跑）', () => {
     expect(erb.length).toBeGreaterThan(20); // 行首全表 + 表达式系统函数 ≥ 20
     const kojoIds = new Set(kojo.map((c) => c.sourceId));
     const erbIds = new Set(erb.map((c) => c.sourceId));
-    for (const s of KOJO_COMPLETION_SOURCES) expect(kojoIds.has(s.id)).toBe(true);
-    for (const s of ERB_COMPLETION_SOURCES) expect(erbIds.has(s.id)).toBe(true);
+    // 文档词源（QSUG-2）在本桩里不注开关（`wordBasedSuggestions` 缺席 = 不供），
+    // 出货另由 `document-words.test.ts` 覆盖；其余 source 每路都必须真出货。
+    for (const s of KOJO_COMPLETION_SOURCES) {
+      if (s.id === 'kojo-words') continue;
+      expect(kojoIds.has(s.id)).toBe(true);
+    }
+    for (const s of ERB_COMPLETION_SOURCES) {
+      if (s.id === 'erb-words') continue;
+      expect(erbIds.has(s.id)).toBe(true);
+    }
   });
 });

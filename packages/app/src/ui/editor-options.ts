@@ -38,14 +38,21 @@ export type EditorOptionPatch = Monaco.editor.IEditorOptions & Monaco.editor.IGl
  * 靠字符猜。只读 / 糖预览由宿主把 `quickSuggestions` 整条关掉（`EditorPane` 的
  * `applyEditabilityAndSuggest`），因为 provider 拿不到 editor 的可写状态。
  *
- * `wordBasedSuggestions` 仍为 `off`：那一路给的是文档词，不是上下文补全，中文正文里
- * 只会把台词词当候选混进来。
+ * `wordBasedSuggestions` 仍为 `off`：Monaco 内建的词 provider 在**任意位置**出货，绕不过
+ * `.kojo` 的台词 / 旁白门。文档词改由语言侧的受门 source 提供（`document-words.ts`），
+ * 开关见 `suggest-pref.ts` 的 `wordBasedSuggestions`。
  */
 export const QUICK_SUGGESTIONS = { other: true, comments: false, strings: false } as const;
 
-/** 只读编辑器整条关掉快建议；可写编辑器用 {@link QUICK_SUGGESTIONS}（纯函数，可单测） */
-export function quickSuggestionsFor(readOnly: boolean): EditorOptionPatch['quickSuggestions'] {
-  return readOnly ? false : QUICK_SUGGESTIONS;
+/**
+ * 只读编辑器整条关掉快建议；可写编辑器按设置页开关给 {@link QUICK_SUGGESTIONS}。
+ * `enabled` 缺省 true（调用方只管只读态时的旧用法零改动）。
+ */
+export function quickSuggestionsFor(
+  readOnly: boolean,
+  enabled = true,
+): EditorOptionPatch['quickSuggestions'] {
+  return readOnly || !enabled ? false : QUICK_SUGGESTIONS;
 }
 
 /**
@@ -77,7 +84,8 @@ export const CJK_TYPING_BASELINE: EditorOptionPatch = {
 
 /** 与体量无关的公共补丁（各档共用，不进档位表） */
 const COMMON_OPTIONS: EditorOptionPatch = {
-  // 基于词的建议对 ERB / 口上中文文本无意义（补全由自带 provider 提供），且默认会扫文档
+  // Monaco 内建词 provider 任意位置都出货（台词行弹词）⇒ 永远关；文档词由
+  // `document-words.ts` 的受门 source 提供，开关在 `suggest-pref.ts`
   wordBasedSuggestions: 'off',
   // 语料缩进实况（fixtures 全量 .ERB/.erb 清点：tab 488 行 vs 空格缩进 2 行且非语料文件）：
   // tab 惯例钉死；关探测后（large/huge）靠这两键兜底，探测开着时（small）仍随文件内容走

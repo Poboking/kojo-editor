@@ -67,6 +67,19 @@ export function isNameChar(ch: string): boolean {
   return NAME_CHAR_RE.test(ch);
 }
 
+/** 文档词补全的逐行切词器（字符集与 {@link isNameChar} 同源；`+` = 连续段，入口重置 `lastIndex`） */
+const NAME_WORD_RE = new RegExp(`${NAME_CHAR_RE.source}+`, 'g');
+
+/** 一行里的全部连续标识符段（供文档词索引；不判语义、不做长度过滤） */
+export function nameWordsOf(line: string): string[] {
+  NAME_WORD_RE.lastIndex = 0;
+  const out: string[] = [];
+  for (let m = NAME_WORD_RE.exec(line); m !== null; m = NAME_WORD_RE.exec(line)) {
+    if (m[0].length > 0) out.push(m[0]);
+  }
+  return out;
+}
+
 export function isCjk(ch: string): boolean {
   return CJK_RE.test(ch);
 }
