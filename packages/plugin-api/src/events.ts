@@ -258,6 +258,15 @@ export interface KernelEventMap {
    */
   'ui.overlay.close': { id: string; source?: string };
   /**
+   * 教程打开意图（用户反馈 8 批，2026-10-17）：请求教程提供方打开某一本内置教程。
+   *
+   * 通用、游戏无关。载荷只给**语义 id**（口上工作流 / 语法 / 语法全表），
+   * 刻意不携带 overlay 贡献 id：发起方（欢迎页等）不该知道提供方那个模态叫什么——
+   * 与 `workspace.newProjectRequested` 同款分工（意图进、映射与落地归消费方）。
+   * 没有教程提供方在场时无人响应，发起方无须关心（与 `ui.overlay.open` 同一模式）。
+   */
+  'ui.tutorial.open': { tutorial: 'kojo' | 'sugar' | 'reference'; source?: string };
+  /**
    * 打开通用 diff 视图意图（2026-10-15 比对/历史批）：请求宿主弹一枚独立模态，
    * 逐行对比发起方给定的两侧内容（宿主用 Monaco 内建 diff 编辑器渲染，行级差异
    * 与并排/内联切换由 Monaco 提供，宿主零 diff 算法零业务判定）。
@@ -405,6 +414,8 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'editor.sugarView.set',
   'ui.overlay.open',
   'ui.overlay.close',
+  // 用户反馈 8 批：教程打开意图（欢迎页只发语义 id，教程提供方映射到自己的 overlay）
+  'ui.tutorial.open',
   'ui.diffView.open',
   'ui.panel.float',
   'ui.openExternal',

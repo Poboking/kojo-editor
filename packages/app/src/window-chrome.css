@@ -20,6 +20,9 @@
   padding-left: var(--space-3);
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
+  /* 顶缘受光：浅色主题下 --bg-2 接近白，只靠一条底边会和编辑器/工具条糊成一片；
+     一道 token 化的 inset 高光让这条 34px 读作「窗口 chrome」而不是另一条白带。 */
+  box-shadow: var(--edge-raise);
   color: var(--fg-dim);
   font-size: var(--fs-1);
   user-select: none;

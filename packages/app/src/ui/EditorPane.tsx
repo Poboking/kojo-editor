@@ -1283,6 +1283,13 @@ export function EditorPane({
       theme: 'kojo-dark',
       language: ERB_LANGUAGE_ID,
       automaticLayout: true,
+      // 用户反馈 7：原生右键菜单必须留在 light DOM。0.57 的 `useShadowDOM` 缺省 **true**，
+      // 菜单会被塞进编辑器内的 open shadow root——document 级样式（context-menu.css 的玻璃
+      // 面、主题 token、data-motion/data-glass 开关）一律进不去，观感无法统一。关掉它之后
+      // 菜单仍是 Monaco 原生那一份（全部动作 + zh-cn NLS + 自带键盘导航），只是挂到编辑器
+      // 容器的 light DOM 里；影响面仅限 context view（右键菜单 / 内联提示菜单），不碰编辑、
+      // worker 与排版。实测见 2026-10-17 反馈批的浏览器冒烟记录（提交信息）。
+      useShadowDOM: false,
       // 缩略图：文本块模式（不逐字符渲染——口上文本为长行文，色块更干净也更省性能）
       minimap: { enabled: true, renderCharacters: false, maxColumn: 72 },
       fontSize: loadFontSizePref(),

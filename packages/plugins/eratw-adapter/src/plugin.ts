@@ -48,9 +48,22 @@ import {
   SUGAR_TUTORIAL_OVERLAY_ID,
   createTutorialOverlay,
 } from './tutorial-overlay';
-import { TUTORIALS } from './tutorial-content';
+import { TUTORIALS, type TutorialId } from './tutorial-content';
 import type { PendingDeploy } from './deploy';
 import { charaSearchScopeOptions } from './search-scope';
+
+/**
+ * 教程语义 id → 本插件注册的 overlay 贡献 id（用户反馈 8 批）。
+ *
+ * 只读映射，两个入口共用同一份：欢迎页的教程卡片走内核事件 `ui.tutorial.open`
+ * （由下方监听器查表），「我的口上项目」面板底部的三个按钮走本包的
+ * `openTutorial` 回调。发起方只认识语义 id，模态叫什么始终是本包的私事。
+ */
+export const TUTORIAL_OVERLAY_BY_ID: Readonly<Record<TutorialId, string>> = {
+  kojo: KOJO_TUTORIAL_OVERLAY_ID,
+  sugar: SUGAR_TUTORIAL_OVERLAY_ID,
+  reference: REFERENCE_TUTORIAL_OVERLAY_ID,
+};
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -669,15 +682,11 @@ export function createEratwAdapterPlugin(): Plugin {
             ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' }),
           // 「导入项目」= 命令面板那条 `kojo.importKojoProject` 的同一具身体，只换来源标记
           openImportWizard: () => pickAndRequestImport('projects-panel'),
-          // 教程入口（E6；TUT-2 加全表）：三个 overlay 常驻注册（见下方），这里只发打开意图
+          // 教程入口（E6；TUT-2 加全表）：三个 overlay 常驻注册（见下方），这里只发打开意图。
+          // 用户反馈 8 批起映射抽成 `TUTORIAL_OVERLAY_BY_ID`，与内核事件监听共用一份。
           openTutorial: (which) =>
             ctx.bus.emit('ui.overlay.open', {
-              id:
-                which === 'sugar'
-                  ? SUGAR_TUTORIAL_OVERLAY_ID
-                  : which === 'kojo'
-                    ? KOJO_TUTORIAL_OVERLAY_ID
-                    : REFERENCE_TUTORIAL_OVERLAY_ID,
+              id: TUTORIAL_OVERLAY_BY_ID[which],
               source: 'eratw-adapter',
             }),
           status: () => actions.status(),
@@ -786,6 +795,24 @@ export function createEratwAdapterPlugin(): Plugin {
       });
 
       /* ---- 内置教程（E6）：语法糖 + 口上 + 语法全表附录；入口在「我的口上项目」面板底部 ---- */
+
+      /**
+       * 教程打开意图（用户反馈 8 批）：欢迎页等发起方只发语义 id（kojo/sugar/reference），
+       * 本插件映射到自己的 overlay 贡献后打开——发起方不知道模态叫什么（与
+       * `market.publishRequested` 同款分工）。退订挂 `ctx.onDispose`：插件停用后，
+       * 总线上的意图不再打开本插件的浮层。
+       */
+      ctx.onDispose(
+        ctx.bus.on('ui.tutorial.open', (ev) => {
+          const overlayId = TUTORIAL_OVERLAY_BY_ID[ev.tutorial];
+          if (!overlayId) {
+            // 载荷由契约强类型化，但总线运行时不校验——未知 id 出声，不静默打开错浮层
+            ctx.log.warn(`未知教程 id：${String(ev.tutorial)}`);
+            return;
+          }
+          ctx.bus.emit('ui.overlay.open', { id: overlayId, source: 'eratw-adapter' });
+        }),
+      );
 
       /** 脚部「查语法全表」：overlay 是单槽位，直接发打开意图即替换当前这本 */
       const openReferenceOverlay = (): void => {

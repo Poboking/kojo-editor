@@ -35,6 +35,7 @@ import { Switch } from './Switch';
 import { nextRovingIndex } from './shell-keys';
 import { KeybindingsPage } from './KeybindingsPage';
 import type { CommandEntry } from './commands';
+import avatarUrl from '../assets/developer-avatar-128.png';
 
 /** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
 const THEME_LABELS: Record<ThemePref, string> = {
@@ -566,6 +567,12 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
       },
     },
     {
+      id: 'keybindings',
+      label: '快捷键',
+      icon: 'keyboard',
+      render: () => <KeybindingsPage commands={commands} />,
+    },
+    {
       id: 'about',
       label: '关于',
       icon: 'info',
@@ -616,7 +623,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
 
           {/* 关于（REL-2）：开发者联系卡 + 意见反馈。外链用原生 <a target="_blank">——
               项目未装 opener/shell 插件，WebView2 会把新窗口请求交给系统默认浏览器，
-              不为这事新增 Rust 依赖（最小改动面）。头像直接引 GitHub 头像端点。 */}
+              不为这事新增 Rust 依赖（最小改动面）。头像走本地打包资源（vite import 进
+              构建产物），断网也能显示。 */}
           <div className="settings-group">
             <div role="heading" aria-level={4} className="settings-group-title">关于</div>
             <a
@@ -627,7 +635,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             >
               <img
                 className="settings-avatar"
-                src="https://github.com/Poboking.png"
+                src={avatarUrl}
                 alt=""
                 width={32}
                 height={32}
@@ -653,12 +661,6 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
           </div>
         </>
       ),
-    },
-    {
-      id: 'keybindings',
-      label: '快捷键',
-      icon: 'keyboard',
-      render: () => <KeybindingsPage commands={commands} />,
     },
   ];
 };

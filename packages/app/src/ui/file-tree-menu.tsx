@@ -1,13 +1,15 @@
 /**
- * 文件树右键菜单（FE-REF ⑤ 自 `FileTree.tsx` 的渲染尾部逐字搬出）。
+ * 文件树右键菜单（用户反馈 7：改用共享 `<ContextMenu>`，行为面不动）。
  *
- * **形态口径不许顺手"优化"**：菜单**就地内联**渲染（没有 portal），所以它跟着
- * `.file-tree` 的层叠上下文走；横向 260px 夹取在宿主的 `openMenu` 里（`Math.min(e.clientX,
- * window.innerWidth - 260)`），改成按菜单实测宽度定位属于行为改动，不在本批范围。
+ * **形态口径不许顺手"优化"**：菜单仍**就地渲染**（共享组件没有 portal），所以它跟着
+ * `.file-tree` 的层叠上下文走；横向 260px 预夹取仍留在宿主的 `openMenu`
+ * （`Math.min(e.clientX, window.innerWidth - 260)`），共享组件再用实测宽度在视口内补夹一次
+ * ——只收窄、不放大，旧语义（不顶出右缘）保持不变。
  * root / group 两个作用域沿用既有实现（可逆的全展开开关），file/dir/package 走
  * `file-tree-ops.menuItemsFor` 的能力表——没有能力的动作**整项不显示**（铁律 4）。
  */
 import { type ReactElement } from 'react';
+import { ContextMenu, type ContextMenuItem } from './context-menu';
 import { menuItemsFor, type MenuCapability, type MenuItemId } from './file-tree-ops';
 import type { MenuScope } from './file-tree-types';
 
@@ -29,41 +31,43 @@ export interface FileTreeContextMenuProps {
 
 export function FileTreeContextMenu(props: FileTreeContextMenuProps): ReactElement {
   const { scope } = props;
+  const items: ContextMenuItem[] =
+    scope.kind === 'root' || scope.kind === 'group'
+      ? [
+          {
+            id: 'toggle-reveal',
+            label: scope.kind === 'root' ? props.revealLabel() : '显示所有文件和文件夹',
+          },
+        ]
+      : menuItemsFor(scope.kind, props.capability).map((item) => ({
+          id: item.id,
+          label: item.label,
+          icon: item.icon,
+          shortcut: item.shortcut,
+          danger: item.id === 'delete',
+          dividerBefore: item.dividerBefore,
+        }));
+
   return (
-    <>
-      <div className="context-menu-backdrop" onMouseDown={props.onDismiss} />
-      <div className="context-menu" style={{ left: props.x, top: props.y }} role="menu" aria-orientation="vertical">
-        {scope.kind === 'root' || scope.kind === 'group' ? (
-          <button
-            role="menuitem"
-            onClick={() => {
-              if (scope.kind === 'root') {
-                props.onDismiss();
-                props.onToggleReveal();
-              } else {
-                props.onRevealScope(scope);
-              }
-            }}
-          >
-            <span className="check" />
-            {scope.kind === 'root' ? props.revealLabel() : '显示所有文件和文件夹'}
-          </button>
-        ) : (
-          menuItemsFor(scope.kind, props.capability).map((item, i) => (
-            <div key={item.id} role="none">
-              {item.dividerBefore && i > 0 ? <div className="context-menu-sep" role="separator" /> : null}
-              <button
-                role="menuitem"
-                className={item.id === 'delete' ? 'danger' : undefined}
-                onClick={() => props.onAction(item.id, scope)}
-              >
-                <span className="check" />
-                {item.label}
-              </button>
-            </div>
-          ))
-        )}
-      </div>
-    </>
+    <ContextMenu
+      x={props.x}
+      y={props.y}
+      items={items}
+      ariaLabel={scope.kind === 'file' || scope.kind === 'dir' ? '文件操作' : '目录操作'}
+      onSelect={(id) => {
+        if (scope.kind === 'root') {
+          // 先关再动：菜单收起后才改展开态（旧实现的顺序，照抄）
+          props.onDismiss();
+          props.onToggleReveal();
+          return;
+        }
+        if (scope.kind === 'group') {
+          props.onRevealScope(scope);
+          return;
+        }
+        props.onAction(id as MenuItemId, scope);
+      }}
+      onDismiss={props.onDismiss}
+    />
   );
 }

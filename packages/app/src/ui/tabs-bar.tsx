@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { ContextMenu, type ContextMenuItem } from './context-menu';
 import { Icon } from './icons';
 import { useNotify } from './NotificationCenter';
 import { tabClassName, tabMenuItemsFor, type BatchCloseMode, type TabDropHint, type TabMenuItemId } from './tabs-ops';
@@ -40,6 +41,7 @@ interface TabBarProps {
  * - **拖拽重排**：落点指示照旧（drop-before / drop-after）；跨固定区分界的处置
  *   （自动改固定态）在宿主的 planReorder 里，这里只报落点；
  * - **右键菜单**：壳层私有轻量实现，形态照 FileTree 的 menu state（backdrop + .context-menu）；
+ *   菜单本体走共享 `<ContextMenu>`（用户反馈 7：与文件树 / 编辑器同一套玻璃观感与键盘操作）
  * - **固定标签**：左缘竖标 + 关闭钮不渲染（防误关；显式关闭走右键菜单「关闭」）。
  */
 export function TabBar({
@@ -212,20 +214,21 @@ export function TabBar({
         <Icon name="archive" size={14} />
       </button>
       {menu ? (
-        <>
-          <div className="context-menu-backdrop" onMouseDown={() => setMenu(null)} />
-          <div className="context-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-orientation="vertical">
-            {tabMenuItemsFor(menu.path !== null && pinnedPaths.has(menu.path)).map((item, i) => (
-              <div key={item.id} role="none">
-                {item.dividerBefore && i > 0 ? <div className="context-menu-sep" role="separator" /> : null}
-                <button role="menuitem" onClick={() => runMenuAction(item.id)}>
-                  <span className="check" />
-                  {item.label}
-                </button>
-              </div>
-            ))}
-          </div>
-        </>
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={tabMenuItemsFor(pinnedPaths.has(menu.path)).map(
+            (item): ContextMenuItem => ({
+              id: item.id,
+              label: item.label,
+              shortcut: item.shortcut,
+              dividerBefore: item.dividerBefore,
+            }),
+          )}
+          ariaLabel="标签操作"
+          onSelect={(id) => runMenuAction(id as TabMenuItemId)}
+          onDismiss={() => setMenu(null)}
+        />
       ) : null}
     </div>
   );

@@ -1,0 +1,716 @@
+/* ============================================================================
+   欢迎页（用户反馈 8 批，2026-10-17）—— VSCode 欢迎页式排版，本仓 token 落地。
+
+   为什么单独一个文件：欢迎页是**无项目态**的整页视图，与有项目时的五区壳层
+   （styles.css 的 `.welcome` 旧块）共享的只有 `.welcome` / `.welcome-card` 两个
+   结构性锚点（冒烟工具按它们判"欢迎页已挂载"）。新旧规则的层叠按"更高特异性
+   胜"处理（`.welcome-screen .welcome-card` 之于 `.welcome-card`），因此本文件
+   不依赖加载顺序——Vite 按模块图注入 CSS，组件 CSS 可能先于 styles.css 落盘。
+
+   版式：顶部一枚可关闭的「欢迎」标签（VSCode 的欢迎标签），主体一张玻璃卡，
+   两栏（左：品牌 / 启动 / 最近；右：教程）。窄窗（<900px）折成单栏。
+   动效一律走全局 `data-motion='reduced'` / `prefers-reduced-motion` 压平规则
+   （styles.css），本文件不另设开关；颜色 100% 取 token，主题可翻。
+   ============================================================================ */
+
+/* ------------------------------ 页面骨架 ------------------------------ */
+
+.welcome.welcome-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* 旧 `.welcome` 的 `place-items:center` 会留下 `align-items:center`——在 flex 下
+     会把不设宽度的子项（标签条 / 滚动区）缩成内容宽并水平居中。这里显式拉满。 */
+  align-items: stretch;
+  justify-content: flex-start;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* 背景氛围（替代旧欢迎页的极光层）：两团极淡的 accent 径向光，静态、不抢内容。
+   旧 `.welcome::before` 的漂移动画不再沿用——VSCode 式的欢迎页以"静"为底。 */
+.welcome.welcome-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 46% at 16% -4%, rgb(var(--accent-rgb) / 0.11), transparent 70%),
+    radial-gradient(42% 40% at 92% 4%, rgb(var(--accent-rgb) / 0.06), transparent 72%);
+}
+
+.welcome-scroll {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ------------------------------ 顶部标签条 ------------------------------ */
+
+.welcome-tabbar {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  width: 100%;
+  height: 38px;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 10px;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* 标签 + 关闭钮拼成一块"活动标签"：底色接页面、顶缘一道 accent（VSCode 活动标签语义） */
+.welcome-tab-group {
+  display: flex;
+  align-items: stretch;
+  height: calc(100% - 6px);
+  min-width: 208px;
+  max-width: min(320px, 72vw);
+  background: var(--bg);
+  border: 1px solid var(--border-subtle);
+  border-bottom: none;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.welcome-tab {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  color: var(--fg);
+  font-size: var(--fs-2);
+}
+
+.welcome-tab-icon {
+  color: var(--accent-text);
+}
+
+.welcome-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 关闭钮：常显但弱化，悬停才亮（标签页的 × 不该比标题更抢眼） */
+.welcome-screen .welcome-tab-close {
+  flex: none;
+  width: 28px;
+  height: 24px;
+  align-self: center;
+  margin: 0 var(--space-1) 0 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+
+.welcome-screen .welcome-tab-close:hover {
+  background: var(--hover-strong);
+  border-color: transparent;
+  color: var(--fg);
+}
+
+.welcome-screen .welcome-tab-close:active {
+  transform: none;
+}
+
+/* ------------------------------ 主体卡（两栏） ------------------------------ */
+
+/* 旧 `.welcome-card` 是单列 620px 卡片；这里用更高的特异性重写成两栏玻璃面：
+   背景 / 边框 / 磨砂仍由 styles.css 的 `.welcome-card` 玻璃主规则供给，
+   本规则只改布局与尺寸，主题与 `data-glass='solid'` 回落零改动。 */
+.welcome-screen .welcome-card {
+  position: relative;
+  z-index: 1;
+  width: min(1120px, calc(100% - 72px));
+  max-width: none;
+  margin: 36px auto 56px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.85fr);
+  gap: 0;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--edge-raise), var(--shadow-3);
+  animation: welcome-rise var(--dur-3) var(--ease-spring);
+}
+
+@keyframes welcome-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.welcome-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  padding: 44px 48px 40px;
+}
+
+.welcome-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: 44px 32px 40px;
+  border-left: 1px solid var(--border-subtle);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  background: linear-gradient(180deg, var(--hover-soft), transparent 42%);
+}
+
+/* ------------------------------ 品牌头 ------------------------------ */
+
+.welcome-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 旧 `.welcome-card h1` 是单列卡片的标题尺度；两栏版按基准 token 重排 */
+.welcome-screen .welcome-brand h1 {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--fs-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+/* 版本胶囊沿用 styles.css 的 `.welcome-card h1 .ver`（同一枚 chip），只补一点间距 */
+.welcome-screen .welcome-brand h1 .ver {
+  letter-spacing: 0;
+}
+
+.welcome-tagline {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-2);
+  line-height: 1.6;
+}
+
+/* ------------------------------ 通知条 ------------------------------ */
+
+.welcome-screen .welcome-notice {
+  margin: 0;
+  font-size: var(--fs-2);
+  line-height: 1.65;
+}
+
+/* ------------------------------ 启动 ------------------------------ */
+
+.welcome-section {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.welcome-section-title {
+  margin: 0;
+  font-size: var(--fs-1);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--fg-dim);
+}
+
+.welcome-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.welcome-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+/* 主 CTA：铺满主栏、图标 + 文案一行（VSCode 的大按钮），悬停抬 1px 并带 accent 投影 */
+.welcome-screen .welcome-open {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 18px;
+  font-size: var(--fs-4);
+  font-weight: 600;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 8px 24px rgb(var(--accent-rgb) / 0.2);
+}
+
+.welcome-screen .welcome-open:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 10px 28px rgb(var(--accent-rgb) / 0.28);
+}
+
+.welcome-screen .welcome-open:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* 继续上次会话：一行里放动作 + 目标路径（路径弱化、可省略，鼠标悬停有完整 title） */
+.welcome-screen .welcome-resume {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  text-align: left;
+  color: var(--fg);
+}
+
+.welcome-resume-label {
+  flex: none;
+  font-size: var(--fs-2);
+}
+
+.welcome-resume-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  text-align: right;
+}
+
+.welcome-start-hint {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+}
+
+/* ------------------------------ 最近 ------------------------------ */
+
+.welcome-screen .welcome-clear {
+  padding: 2px 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+
+.welcome-screen .welcome-clear:hover {
+  background: none;
+  border-color: transparent;
+  color: var(--accent-text);
+}
+
+.welcome-empty {
+  margin: 0;
+  padding: 12px 2px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.7;
+}
+
+.welcome-recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 264px;
+  overflow: auto;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.welcome-recent-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+
+/* 左缘 accent 条：悬停 / 键盘聚焦时生长（与旧欢迎页同一条交互语义） */
+.welcome-recent-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+  transform: scaleY(0);
+  transition: transform var(--dur-2) var(--ease-spring);
+}
+
+.welcome-recent-row:hover,
+.welcome-recent-row:focus-within {
+  background: var(--hover-soft);
+}
+
+.welcome-recent-row:hover::before,
+.welcome-recent-row:focus-within::before {
+  transform: scaleY(1);
+}
+
+/* 行本体是按钮：行负责 hover 底，按钮自身保持透明（不叠加两层 hover 色） */
+.welcome-screen .welcome-recent-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 9px 10px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--fg);
+  text-align: left;
+}
+
+.welcome-screen .welcome-recent-open:hover {
+  background: none;
+  border-color: transparent;
+}
+
+.welcome-recent-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-2);
+}
+
+.welcome-recent-row.is-missing .welcome-recent-path {
+  color: var(--fg-dim);
+}
+
+.welcome-recent-meta {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.welcome-recent-badge {
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 8px;
+  line-height: 1.7;
+  font-size: var(--fs-0);
+  background: var(--surface-sunken);
+}
+
+.welcome-recent-badge.is-missing {
+  color: var(--warning);
+}
+
+.welcome-screen .welcome-recent-remove {
+  flex: none;
+  padding: 3px 8px;
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  border-radius: var(--radius-sm);
+}
+
+.welcome-screen .welcome-recent-remove:hover {
+  color: var(--danger);
+  border-color: var(--border);
+  background: var(--hover);
+}
+
+.welcome-hint {
+  margin: 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.8;
+}
+
+/* ------------------------------ 教程（右栏） ------------------------------ */
+
+.welcome-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.welcome-side-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-2);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.welcome-side-title .icon {
+  color: var(--accent-text);
+}
+
+.welcome-side-note {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+
+.welcome-tutorials {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 卡片：图标章 + 标题/说明 + 箭头。悬停抬升一档、描边转强、箭头右移 2px。 */
+.welcome-screen .welcome-tutorial {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 14px;
+  text-align: left;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--edge-raise);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
+}
+
+.welcome-screen .welcome-tutorial:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-1);
+  transform: translateY(-1px);
+}
+
+.welcome-screen .welcome-tutorial:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.welcome-screen .welcome-tutorial:focus-visible {
+  border-color: var(--accent);
+  background: var(--hover);
+}
+
+.welcome-tutorial-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--accent-text);
+  background: rgb(var(--accent-rgb) / 0.12);
+  border: 1px solid rgb(var(--accent-rgb) / 0.25);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+
+.welcome-screen .welcome-tutorial:hover:not(:disabled) .welcome-tutorial-icon {
+  background: rgb(var(--accent-rgb) / 0.18);
+  border-color: rgb(var(--accent-rgb) / 0.45);
+}
+
+.welcome-tutorial-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.welcome-tutorial-title {
+  font-size: var(--fs-2);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.welcome-tutorial-desc {
+  font-size: var(--fs-1);
+  line-height: 1.55;
+  color: var(--fg-dim);
+}
+
+.welcome-tutorial-arrow {
+  display: inline-flex;
+  color: var(--fg-dim);
+  transition:
+    color var(--dur-1) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
+}
+
+.welcome-screen .welcome-tutorial:hover:not(:disabled) .welcome-tutorial-arrow {
+  color: var(--accent-text);
+  transform: translateX(2px);
+}
+
+.welcome-side-foot {
+  margin: auto 0 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.8;
+}
+
+.welcome-side-foot kbd {
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  color: var(--fg);
+  background: var(--hover-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+  line-height: 1.6;
+}
+
+/* ------------------------------ 关闭后的空态 ------------------------------ */
+
+/* 关闭态占满整页并居中（覆盖骨架的纵向排布）；不留死白，主动作仍是打开文件夹 */
+.welcome.welcome-screen.welcome-closed {
+  align-items: center;
+  justify-content: flex-start;
+  /* 矮窗可滚：卡片的上下 auto 边距在有空间时居中、不够时归零，顶部永远不会被裁掉 */
+  overflow: auto;
+  padding: 32px;
+}
+
+.welcome-closed-card {
+  width: min(560px, 100%);
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 44px 40px;
+  text-align: center;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--edge-raise), var(--shadow-3);
+  animation: welcome-rise var(--dur-3) var(--ease-spring);
+}
+
+.welcome-closed-brand {
+  margin: 0;
+  font-size: var(--fs-5);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.welcome-closed-lead {
+  margin: 0;
+  max-width: 420px;
+  color: var(--fg-dim);
+  font-size: var(--fs-2);
+  line-height: 1.7;
+}
+
+.welcome-closed-card .welcome-notice {
+  width: 100%;
+  text-align: left;
+}
+
+.welcome-closed-actions {
+  width: min(340px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: var(--space-2);
+}
+
+/* ------------------------------ 窄窗 ------------------------------ */
+
+@media (max-width: 900px) {
+  .welcome-screen .welcome-card {
+    grid-template-columns: minmax(0, 1fr);
+    width: min(760px, calc(100% - 32px));
+    margin: 24px auto 40px;
+  }
+
+  .welcome-main {
+    padding: 32px 28px 28px;
+  }
+
+  .welcome-side {
+    padding: 28px;
+    border-left: none;
+    border-top: 1px solid var(--border-subtle);
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  }
+
+  .welcome-side-foot {
+    margin-top: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .welcome-tabbar {
+    height: 36px;
+    padding: 0 6px;
+  }
+
+  .welcome-tab-group {
+    min-width: 0;
+    width: calc(100% - 20px);
+    max-width: none;
+  }
+
+  .welcome-main {
+    padding: 24px 18px;
+    gap: 24px;
+  }
+
+  .welcome-side {
+    padding: 24px 18px;
+  }
+
+  .welcome-screen .welcome-brand h1 {
+    font-size: var(--fs-5);
+  }
+
+  .welcome-screen .welcome-recent-open {
+    flex-wrap: wrap;
+    gap: 2px var(--space-2);
+  }
+
+  .welcome-recent-meta {
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+}

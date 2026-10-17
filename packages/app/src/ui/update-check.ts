@@ -33,6 +33,13 @@
  * 当前仓库是私仓且尚未发布过 release：updater 端点现阶段**必然 404**——
  * 「检查失败」不是异常路径，而是这段时期内的常态路径。状态机把它钉成显式一态，
  * 调用方（ShellLayout）必须 try-catch 并把失败渲染出来，绝不允许未捕获异常。
+ *
+ * ## 弹窗批（用户反馈第 1 条，2026-10-17）
+ *
+ * 进入编辑器 3 秒的静默检查与设置页手动检查落到**同一台状态机**上。`found` 现在携带
+ * updater 的 `Update` 对象里那几项事实（`currentVersion` / `notes` / `date`），并一路带到
+ * downloading / done / failed(install)——新弹窗与设置页共用同一份 phase，安装失败还能从
+ * 该态直接重试。**检查中 / 已最新 / 检查失败都不出弹窗**：`updateDialogPhase` 是唯一判据。
  */
 
 import {
@@ -93,29 +100,169 @@ export function appUpdateRelation(remoteVersion: string, currentVersion: string)
   return c < 0 ? 'updatable' : c > 0 ? 'ahead' : 'latest';
 }
 
-/** 检查更新的会话内状态（不落盘：每次打开设置页从 idle 起算即可） */
+/**
+ * 一次「有新版」的发布信息（来自 updater `Update` 对象的四项事实）。
+ *
+ * `currentVersion` / `notes` / `date` 都是**可选**：调用方读不到就不带（键也不出现），
+ * 弹窗按缺省渲染（不写"vundefined"这种机器味）。`notes` 只清洗格式、不截断——
+ * 显示上限在 `visibleUpdateNoteLines` 那一层处理。
+ */
+export interface UpdateRelease {
+  readonly version: string;
+  readonly currentVersion?: string;
+  readonly notes?: string;
+  readonly date?: string;
+}
+
+/**
+ * 检查更新的会话内状态（不落盘：每次打开设置页从 idle 起算即可）。
+ *
+ * found 之后的四态都携带同一份 `UpdateRelease`：弹窗在下载 / 完成 / 安装失败时仍要写
+ * "vX.Y.Z / 当前 vA.B.C"，失败态的「重试」也要凭它回到 downloading——发布信息不能在中途丢。
+ */
 export type UpdatePhase =
   | { kind: 'idle' }
   | { kind: 'checking' }
   | { kind: 'latest' }
-  | { kind: 'found'; version: string }
-  | { kind: 'downloading'; received: number; total: number | null }
-  | { kind: 'done' }
-  | { kind: 'failed'; stage: UpdateStage; reason?: string; detail?: string };
+  | ({ kind: 'found' } & UpdateRelease)
+  | ({ kind: 'downloading'; received: number; total: number | null } & UpdateRelease)
+  | ({ kind: 'done' } & UpdateRelease)
+  | { kind: 'failed'; stage: 'check'; reason?: string; detail?: string }
+  | { kind: 'failed'; stage: 'install'; reason?: string; detail?: string; release: UpdateRelease };
+
+/**
+ * 弹窗可渲染的那几态（**唯一判据**，ShellLayout 与 UpdateDialog 都读它）。
+ *
+ * 检查失败（stage='check'）刻意不在内：自动检查失败是现阶段的常态路径，绝不弹窗打扰。
+ */
+export type UpdateDialogPhase =
+  | ({ kind: 'found' } & UpdateRelease)
+  | ({ kind: 'downloading'; received: number; total: number | null } & UpdateRelease)
+  | ({ kind: 'done' } & UpdateRelease)
+  | { kind: 'failed'; stage: 'install'; reason?: string; detail?: string; release: UpdateRelease };
+
+/**
+ * `UpdatePhase` → `UpdateDialogPhase | null`。
+ *
+ * idle / checking / latest / failed(check) 一律回 null（「不打扰」这条产品纪律的唯一落点）；
+ * 其余原样返回（对象身份不变，调用方不必拷贝）。
+ */
+export function updateDialogPhase(phase: UpdatePhase): UpdateDialogPhase | null {
+  switch (phase.kind) {
+    case 'found':
+    case 'downloading':
+    case 'done':
+      return phase;
+    case 'failed':
+      return phase.stage === 'install' ? phase : null;
+    default:
+      return null;
+  }
+}
+
+/** 更新说明缺省时的那一句人话（弹窗里不留白、不写"无"） */
+export const UPDATE_NOTES_EMPTY = '这个版本没有附更新说明。';
+
+/** 更新说明最多画多少行（超长说明只截显示，不截状态；见 `visibleUpdateNoteLines`） */
+export const UPDATE_NOTE_LINE_LIMIT = 400;
+
+/**
+ * 更新说明入态前的清洗：`\r\n` / `\r` 统一成 `\n`；**全空白视为没有说明**（键不出现）。
+ * 其余逐字保留——缩进、空行、列表符号都是作者的排版，不在状态层改写。
+ */
+export function normalizeUpdateNotes(notes: string | undefined): string | undefined {
+  if (notes === undefined) return undefined;
+  const text = notes.replace(/\r\n?/g, '\n');
+  return text.trim() === '' ? undefined : text;
+}
+
+/**
+ * 日期入态前的清洗：空串 / 读不出的 RFC 3339 一律当没有（键不出现），
+ * 免得弹窗上挂一个 `Invalid Date` 式的机器残骸。读得出的保留原串（`<time dateTime>` 要用）。
+ */
+export function normalizeUpdateDate(date: string | undefined): string | undefined {
+  if (date === undefined) return undefined;
+  const text = date.trim();
+  if (text === '') return undefined;
+  return Number.isNaN(Date.parse(text)) ? undefined : text;
+}
+
+/**
+ * 纯文本更新说明 → 行数组（弹窗按行渲染）。
+ *
+ * - 空 / 全空白 → `[]`（弹窗改用 `UPDATE_NOTES_EMPTY`）；
+ * - 去掉每行行尾空白与首尾空行（外框留白由 CSS 给），**内部空行保留**（段落分隔是作者意图）；
+ * - 不截行；超长截断由 `visibleUpdateNoteLines` 负责。
+ */
+export function updateNoteLines(notes: string | undefined): readonly string[] {
+  const text = normalizeUpdateNotes(notes);
+  if (text === undefined) return [];
+  const lines = text.split('\n').map((line) => line.replace(/[ \t]+$/u, ''));
+  let start = 0;
+  let end = lines.length;
+  while (start < end && (lines[start] ?? '').trim() === '') start += 1;
+  while (end > start && (lines[end - 1] ?? '').trim() === '') end -= 1;
+  return lines.slice(start, end);
+}
+
+/**
+ * 弹窗真正要画的行 + 截断读数。
+ *
+ * 超长说明（几百行以上的 changelog）全量塞进 DOM 会让一次打开变成明显掉帧；
+ * 这里只截**显示**，`total` 仍报全量，弹窗据此写一句「仅显示前 N 行（共 M 行）」。
+ */
+export function visibleUpdateNoteLines(notes: string | undefined): {
+  readonly lines: readonly string[];
+  readonly total: number;
+  readonly truncated: boolean;
+} {
+  const all = updateNoteLines(notes);
+  const lines = all.slice(0, UPDATE_NOTE_LINE_LIMIT);
+  return { lines, total: all.length, truncated: lines.length < all.length };
+}
+
+/**
+ * RFC 3339 发布日期 → 本地 `YYYY-MM-DD`（读不出回 null，弹窗就不画那一格）。
+ * 只到日：发布时刻对作者没有决策价值，反而把一行元信息挤长。
+ */
+export function formatUpdateDate(date: string | undefined): string | null {
+  const text = normalizeUpdateDate(date);
+  if (text === undefined) return null;
+  const parsed = new Date(text);
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, '0');
+  const d = String(parsed.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/** 弹窗主标题：主语恒是那一版，按态换一个动词（不用全局一个大标题 + 小字解释） */
+export function updateDialogTitle(phase: UpdateDialogPhase): string {
+  switch (phase.kind) {
+    case 'found':
+      return `发现新版本 v${phase.version}`;
+    case 'downloading':
+      return `正在下载 v${phase.version}`;
+    case 'failed':
+      return `更新 v${phase.release.version} 没有装好`;
+    case 'done':
+      return `已安装 v${phase.version}`;
+  }
+}
 
 /**
  * 状态机动作（与 updater 事件一一对应，Progress 只带本次分片长度）。
  *
- * `checkFound` 多带一个**可选** `currentVersion`：装配层给得出本机版本时，"到底更不更新"
- * 由 `appUpdateRelation`（契约那把尺）判；给不出时才退回"相信 updater 那一句"
- * （退回那条不是并一口径，所以调用方应当给——`ShellLayout` 手上就有 `appVersion`）。
+ * `checkFound` 多带一个**可选** `currentVersion`（以及 updater 的 `notes`/`date`）：
+ * 装配层给得出本机版本时，"到底更不更新"由 `appUpdateRelation`（契约那把尺）判；
+ * 给不出时才退回"相信 updater 那一句"（退回那条不是并一口径，所以调用方应当给——
+ * `Update.currentVersion` 本来就有，`ShellLayout` 直接递进来）。
  * `checkFailed` / `installFailed` 同理带可选 `reason`/`detail`：病因由调用方给，
  * 没给就用 `UPDATE_FAILURE_REASON` 那一句常态话术——两种情形都不许变成哑巴态。
  */
 export type UpdateAction =
   | { type: 'checkStart' }
   | { type: 'checkLatest' }
-  | { type: 'checkFound'; version: string; currentVersion?: string }
+  | { type: 'checkFound'; version: string; currentVersion?: string; notes?: string; date?: string }
   | { type: 'checkFailed'; reason?: string; detail?: string }
   | { type: 'installStart'; total: number | null }
   | { type: 'installProgress'; chunk: number }
@@ -126,8 +273,9 @@ export type UpdateAction =
  * 纯状态机：非法迁移一律原样返回当前态（不抛、不造中间态）。
  *
  * `checkStart` 特意允许从**任何**态发起——失败 / 已最新 / 装完之后都还能再查。
- * `installStart` 允许从 found 与 downloading 两态进入：后者是下载开始事件
- * （Started）补报总字节数时用的重入。
+ * `installStart` 允许从 found / downloading / failed(install) 三态进入：downloading 那路
+ * 是下载开始事件（Started）补报总字节数时用的重入；failed(install) 那路是失败弹窗的「重试」
+ * （重试对同一个 Update 再下一次，仍要保留 vX / 当前版本这份发布信息）。
  */
 export function reduceUpdatePhase(phase: UpdatePhase, action: UpdateAction): UpdatePhase {
   switch (action.type) {
@@ -138,45 +286,83 @@ export function reduceUpdatePhase(phase: UpdatePhase, action: UpdateAction): Upd
     case 'checkFound': {
       if (phase.kind !== 'checking' || action.version === '') return phase;
       const current = action.currentVersion;
-      if (current === undefined || current === '') return { kind: 'found', version: action.version };
+      const notes = normalizeUpdateNotes(action.notes);
+      const date = normalizeUpdateDate(action.date);
+      const release: UpdateRelease = {
+        version: action.version,
+        ...(current === undefined || current === '' ? {} : { currentVersion: current }),
+        ...(notes === undefined ? {} : { notes }),
+        ...(date === undefined ? {} : { date }),
+      };
+      if (current === undefined || current === '') {
+        // 本机版本给不出（非 Tauri / getVersion 失败）：退回"相信 updater 那一句"
+        return { kind: 'found', ...release };
+      }
       const relation = appUpdateRelation(action.version, current);
-      if (relation === 'updatable') return { kind: 'found', version: action.version };
+      if (relation === 'updatable') return { kind: 'found', ...release };
       // 远端那版与本机相同、甚至更旧：更新检查给出什么都不能算"可更新"（与包侧同一口径）
       if (relation === 'latest' || relation === 'ahead') return { kind: 'latest' };
-      return {
-        kind: 'failed',
-        stage: 'check',
-        reason: '版本号写法本机读不出，无法判断该不该更新',
-        detail: `更新 ${action.version} / 本机 ${current}`,
-      };
+      return failedCheck(
+        '版本号写法本机读不出，无法判断该不该更新',
+        `更新 ${action.version} / 本机 ${current}`,
+      );
     }
     case 'checkFailed':
-      return phase.kind === 'checking' ? failed('check', action.reason, action.detail) : phase;
+      return phase.kind === 'checking' ? failedCheck(action.reason, action.detail) : phase;
     case 'installStart': {
-      if (phase.kind !== 'found' && phase.kind !== 'downloading') return phase;
-      return {
-        kind: 'downloading',
-        received: phase.kind === 'downloading' ? phase.received : 0,
-        total: action.total,
-      };
+      if (phase.kind === 'found') {
+        return { kind: 'downloading', received: 0, total: action.total, ...releaseOf(phase) };
+      }
+      if (phase.kind === 'downloading') {
+        return { ...phase, total: action.total };
+      }
+      if (phase.kind === 'failed' && phase.stage === 'install') {
+        return { kind: 'downloading', received: 0, total: action.total, ...releaseOf(phase.release) };
+      }
+      return phase;
     }
     case 'installProgress':
       if (phase.kind !== 'downloading' || !(action.chunk > 0)) return phase;
-      return { kind: 'downloading', received: phase.received + action.chunk, total: phase.total };
+      return { ...phase, received: phase.received + action.chunk };
     case 'installDone':
-      return phase.kind === 'downloading' ? { kind: 'done' } : phase;
+      return phase.kind === 'downloading' ? { kind: 'done', ...releaseOf(phase) } : phase;
     case 'installFailed':
-      return phase.kind === 'downloading' ? failed('install', action.reason) : phase;
+      // downloading 是下载中途断；done 是"下载完成事件已到、installer 随后才失败"
+      // （updater 的 Finished 只代表下载完；Windows 上进程会在安装时退出，done 是它能给的最后反馈，
+      //  其它平台上后续 install 失败必须还能落回失败态，否则就把失败粉饰成"已安装"）。
+      return phase.kind === 'downloading' || phase.kind === 'done'
+        ? failedInstall(action.reason, releaseOf(phase))
+        : phase;
   }
 }
 
-/** 失败态的唯一构造点（调用方给的病因优先，没给就落那句常态话术） */
-function failed(stage: UpdateStage, reason?: string, detail?: string): UpdatePhase {
+/** 发布信息原样带走；缺省键不出现（与 found 态的构造口径一致，对象比较才干净） */
+function releaseOf(release: UpdateRelease): UpdateRelease {
+  return {
+    version: release.version,
+    ...(release.currentVersion === undefined ? {} : { currentVersion: release.currentVersion }),
+    ...(release.notes === undefined ? {} : { notes: release.notes }),
+    ...(release.date === undefined ? {} : { date: release.date }),
+  };
+}
+
+/** 失败态（检查段）：没有版本可言，只有病因 */
+function failedCheck(reason?: string, detail?: string): UpdatePhase {
   return {
     kind: 'failed',
-    stage,
+    stage: 'check',
     ...(reason === undefined ? {} : { reason }),
     ...(detail === undefined ? {} : { detail }),
+  };
+}
+
+/** 失败态（安装段）：release 必须带——失败弹窗要写版本，重试也凭它回到 downloading */
+function failedInstall(reason: string | undefined, release: UpdateRelease): UpdatePhase {
+  return {
+    kind: 'failed',
+    stage: 'install',
+    ...(reason === undefined ? {} : { reason }),
+    release,
   };
 }
 
@@ -193,10 +379,21 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * 下载百分比（0–100 整数；总量未知 / 非正值回 null——进度条转不定态）。
+ * 与 `downloadProgressText` 共用这一处算式：文字里的百分数与条宽不许各算各的。
+ */
+export function downloadPercent(received: number, total: number | null): number | null {
+  if (total === null || !(total > 0) || !Number.isFinite(total) || !Number.isFinite(received)) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round((received / total) * 100)));
+}
+
 /** 下载进度行（总量未知时回 null——调用方退化为「正在下载安装…」） */
 export function downloadProgressText(received: number, total: number | null): string | null {
-  if (total === null || total <= 0) return null;
-  const pct = Math.min(100, Math.round((received / total) * 100));
+  const pct = downloadPercent(received, total);
+  if (pct === null || total === null) return null;
   return `已下载 ${formatBytes(received)} / ${formatBytes(total)}（${pct}%）`;
 }
 

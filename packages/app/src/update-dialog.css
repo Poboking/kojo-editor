@@ -1,0 +1,357 @@
+/*
+ * 更新弹窗（用户反馈第 1 条）。
+ *
+ * 面由 `.glass` 提供（styles.css 的磨砂 token + fallback 名单已覆盖 .glass），
+ * 本文件只管「更新面板」自己的骨架：抬头 / 可滚动说明 / 进度 / 页脚动作。
+ *
+ * 两条纪律：
+ * - 颜色只取 token（含 color-mix 的语义洗色），不写字面 hex——主题切换自动跟随；
+ * - 动效尊重 `data-motion='reduced'` 与 `prefers-reduced-motion`（进度条的
+ *   不定态动画在压平后必须仍可见，见文件末尾）。
+ *
+ * 注意：本文件可能先于 styles.css 进 bundle（UpdateDialog 在 App 依赖图里更早求值），
+ * 所以凡与全局 button / 容器规则同名的设置都带 `.update-dialog` 前缀抬高特异性。
+ */
+
+.update-dialog-mask {
+  /* 小屏不贴边：宿主 .modal-mask 是 grid 居中，这里只补安全内边距 */
+  padding: var(--space-4);
+}
+
+.update-dialog {
+  /* 与 .modal 同一口径：承载版本标题与长说明的面钉在玻璃校准档，
+     旋钮（0–60%）只决定背后泄漏多少，不把正文推到对比度线下。 */
+  --glass-alpha: 0.85;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(84vh, 760px);
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-3);
+  outline: none;
+  animation: update-dialog-in var(--dur-3) var(--ease-spring);
+}
+
+/* 顶缘一条极细的 accent 光：把"这是一块浮起来的通知"说清楚，不抢正文 */
+.update-dialog::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+/* 语义态只换顶缘色：失败红、完成绿，其余保持 accent */
+.update-dialog[data-phase='failed']::before {
+  background: linear-gradient(90deg, transparent, var(--danger), transparent);
+}
+.update-dialog[data-phase='done']::before {
+  background: linear-gradient(90deg, transparent, var(--success), transparent);
+}
+
+/* 程序聚焦到面板时给一圈柔光焦点环（不是键盘 Tab 的落点，但读屏/键盘用户看得见位置） */
+.update-dialog:focus-visible {
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-3),
+    var(--shadow-focus);
+}
+
+.update-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: none;
+  padding: var(--space-4) var(--space-3) var(--space-2) var(--space-4);
+}
+
+.update-dialog-title-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.update-dialog-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--fs-5);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  overflow-wrap: anywhere;
+}
+
+.update-dialog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-dialog-meta time {
+  font-family: inherit;
+}
+
+.update-dialog-meta-sep {
+  opacity: 0.7;
+}
+
+/* ✕：28px 可点区，安静到不抢标题；禁用态不在产品路径里（关闭任何态都允许） */
+.update-dialog .update-dialog-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+
+.update-dialog .update-dialog-close:hover {
+  border-color: transparent;
+  background: var(--hover-strong);
+  color: var(--fg);
+}
+
+.update-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-1) var(--space-4) var(--space-4);
+}
+
+.update-dialog-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+
+.update-dialog-section-title {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+/* 说明区：井面（输入/代码底同档），长文只在这里滚，抬头与页脚永不被卷走 */
+.update-dialog-notes {
+  max-height: min(40vh, 340px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  box-shadow: var(--well-raise);
+  color: var(--fg);
+  font-size: var(--fs-2);
+  line-height: 1.8;
+}
+
+/* 滚动区是键盘落点：用 outline（不参与布局），不用 box-shadow——`--well-raise` 缺省是
+   `none`，和 `--shadow-focus` 拼进同一条 box-shadow 会让整条声明失效。 */
+.update-dialog-notes:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* 纯文本按行画：pre-wrap 保留行内缩进，anywhere 兜住超长单行（changelog 里常有） */
+.update-dialog-note-line {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-dialog-note-line.is-blank {
+  min-height: 1.8em;
+}
+
+.update-dialog-notes-empty {
+  margin: 0;
+  padding: var(--space-4) var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-dim);
+  font-size: var(--fs-2);
+  text-align: center;
+}
+
+.update-dialog-notes-more {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+
+.update-dialog-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+
+.update-dialog-progress-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+}
+
+.update-dialog-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
+  transition: width var(--dur-2) var(--ease-in-out);
+}
+
+/* 总量未知（Started 还没报 contentLength）：不定态光带，方向与"正在下载"一致 */
+.update-dialog-progress-track[data-indeterminate='true'] .update-dialog-progress-fill {
+  width: 38%;
+  animation: update-dialog-indeterminate 1.4s var(--ease-in-out) infinite;
+}
+
+.update-dialog-progress-line {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-dialog-done {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.update-dialog-done-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--fs-3);
+  line-height: 1.6;
+}
+
+.update-dialog-done-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--success);
+}
+
+.update-dialog-failure {
+  margin: 0;
+  padding: var(--space-3);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-sm);
+  /* 先给不支持 color-mix 的内核一个 token 回落（老 WebView 也不至于透明无底） */
+  background: var(--surface-sunken);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--fg);
+  font-size: var(--fs-2);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.update-dialog-hint {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.7;
+}
+
+/* 页脚：与正文一条发丝线分开；底色比玻璃面再抬半档（与 .modal-actions 同位不同皮） */
+.update-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+}
+
+.update-dialog-actions button {
+  min-height: 30px;
+  padding: 5px 16px;
+  font-size: var(--fs-2);
+}
+
+@keyframes update-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes update-dialog-indeterminate {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+/* 系统偏好：入场与不定态都停，但不定态仍留一条静态可见的 38% 光带（不是空白轨道） */
+@media (prefers-reduced-motion: reduce) {
+  .update-dialog,
+  .update-dialog-progress-fill {
+    animation: none !important;
+    transition: none !important;
+  }
+  .update-dialog-progress-track[data-indeterminate='true'] .update-dialog-progress-fill {
+    animation: none !important;
+    width: 38%;
+    transform: none;
+  }
+}
+
+/* 应用内开关（motion-pref.ts 写 <html data-motion='reduced'>）：同一条降级。
+   全局规则会把动画时长压成 0.01ms 且只跑一帧——不定态会停在"已移出视野"的位置，
+   所以这里必须显式钉回静态光带，否则进度条看起来是空的。 */
+:root[data-motion='reduced'] .update-dialog,
+:root[data-motion='reduced'] .update-dialog-progress-fill {
+  animation: none !important;
+  transition: none !important;
+}
+
+:root[data-motion='reduced'] .update-dialog-progress-track[data-indeterminate='true'] .update-dialog-progress-fill {
+  animation: none !important;
+  width: 38%;
+  transform: none;
+}

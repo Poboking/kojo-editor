@@ -140,7 +140,7 @@ describe('MK-1 对拍：失败态只有一套说法', () => {
     const failedCheck = reduceUpdatePhase(checking, { type: 'checkFailed' });
     expect(updateStatus(failedCheck)?.text).toContain('可重试');
     expect(updateStatus(failedCheck)?.tone).toBe('err');
-    const downloading: UpdatePhase = { kind: 'downloading', received: 1, total: 2 };
+    const downloading: UpdatePhase = { kind: 'downloading', received: 1, total: 2, version: '0.2.0' };
     const failedInstall = reduceUpdatePhase(downloading, { type: 'installFailed' });
     expect(updateStatus(failedInstall)?.text).toContain('可重试');
     expect(updateStatus(failedInstall)?.tone).toBe('err');

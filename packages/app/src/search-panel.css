@@ -1,0 +1,676 @@
+/* ============================================================================
+   「在文件中搜索」面板 · VSCode 同构重排（2026-10-17 用户反馈 5）
+
+   本文件只服务 `ui/SearchPanel.tsx`，由它 `import`（`styles.css` 一行未改）。
+   两条硬纪律：
+
+   ① **类名一律 `ksp-` 前缀，根上同时带 `.ksp`**。生产构建里组件 CSS 先于
+      `styles.css` 注入（模块求值顺序），所以不能靠顺序压旧 `.search-*` 规则；
+      每条规则至少两个类选择器（`.panel-search.ksp …`），对旧规则的
+      单类 / 双类选择器稳定取胜。旧类名仍挂在元素上（`search-hit` 等），
+      只是视觉全部由这里接管。
+   ② **不写死颜色**。面 / 边 / 字 / 焦点 / 圆角 / 动效全部取 `styles.css` 的 token，
+      浅色与薄荷主题同步生效。
+
+   布局：`.ksp-head`（控制 + 状态）与 `.ksp-results`（结果）两段。单面板侧栏里
+   整页滚动而头部 sticky（结果滚走、条件与读数常驻）；分栏 section / 浮窗里
+   `.panel` 本就是 flex 列，根撑满、结果区自己滚——两种宿主形态同一套规则。
+   ============================================================================ */
+
+/* ------------------------------ 根与两段式布局 ------------------------------ */
+
+.panel-search.ksp {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 控制区 + 状态区：单面板侧栏（`.sidebar-views` 滚动）里粘住；分栏 / 浮窗里
+   祖先 `overflow: hidden` 使它自然失效（此时结果区自己滚，头部分本来就不动）。 */
+.panel-search.ksp > .ksp-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: 2px;
+  padding-bottom: var(--space-1);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.panel-search.ksp > .ksp-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none; /* 旧 .search-rows 的 46vh 上限作废：高度交给布局 */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: var(--space-1) 0 var(--space-2);
+  font-size: var(--fs-1);
+}
+
+/* --------------------------------- 首行 --------------------------------- */
+
+.panel-search.ksp .ksp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* 图标小钮（替换 chevron）：静息无框，hover / 键盘焦点才有面 */
+.panel-search.ksp .ksp-icon-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+}
+.panel-search.ksp .ksp-icon-btn:hover {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--fg);
+}
+.panel-search.ksp .ksp-icon-btn:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+
+/* 输入井：输入框与框内 toggle 共用一层边框；焦点环画在井上（VSCode 同构） */
+.panel-search.ksp .ksp-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 26px;
+  padding: 0 3px 0 7px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.panel-search.ksp .ksp-field:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 1px var(--focus-glow);
+}
+
+.panel-search.ksp .ksp-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  /* 焦点可见性由外层井的 :focus-within 环承担（与 VSCode 搜索框同构）：
+     输入框自己是无框面，再叠一圈 outline 会读成双层边。 */
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-2);
+  line-height: 1.4;
+}
+.panel-search.ksp .ksp-input::placeholder {
+  color: var(--fg-dim);
+  opacity: 1;
+}
+
+/* 框内三枚紧凑 toggle（Aa / 全词 / .*）：不描边、不抢输入文本的宽度 */
+.panel-search.ksp .ksp-toggles {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.panel-search.ksp .ksp-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0 3px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  line-height: 1;
+  letter-spacing: 0;
+}
+.panel-search.ksp .ksp-toggle:hover {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--fg);
+}
+.panel-search.ksp .ksp-toggle:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+/* 开启态：accent 淡底 + 半强度描边 + 文字档色（与壳层其它已开启控件同语言） */
+.panel-search.ksp .ksp-toggle.on,
+.panel-search.ksp .ksp-toggle.on:hover {
+  border-color: rgb(var(--accent-rgb) / 0.55);
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+
+/* 行尾动作：搜索 / 停止（同一坑位，不因状态换宽度） */
+.panel-search.ksp .ksp-go {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+.panel-search.ksp .ksp-go-stop,
+.panel-search.ksp .ksp-go-stop:hover {
+  border: 1px solid var(--border);
+  background: var(--surface-overlay);
+  color: var(--fg);
+  box-shadow: none;
+}
+.panel-search.ksp .ksp-go-stop:hover {
+  border-color: var(--border-strong);
+  background: var(--btn-bg-hover);
+}
+.panel-search.ksp .ksp-go-stop:active:not(:disabled) {
+  background: var(--btn-bg-active);
+}
+.panel-search.ksp .ksp-stop-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-xs);
+  background: currentColor;
+}
+
+/* -------------------------------- 替换行 -------------------------------- */
+
+/* 与检索行同缩进（chevron 位留空），两行左缘对齐；全部替换 = 行尾文字钮 */
+.panel-search.ksp .ksp-twisty-gap {
+  flex: none;
+  width: 22px;
+}
+.panel-search.ksp .ksp-replace-all {
+  flex: none;
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: var(--radius-md);
+  background: var(--surface-overlay);
+  box-shadow: none;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-1);
+}
+.panel-search.ksp .ksp-replace-all:hover {
+  background: var(--btn-bg-hover);
+  border-color: var(--border-strong);
+}
+.panel-search.ksp .ksp-replace-all:active:not(:disabled) {
+  background: var(--btn-bg-active);
+}
+
+/* --------------------------- 选项（类型 / 只看） --------------------------- */
+
+.panel-search.ksp .ksp-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.panel-search.ksp .ksp-options-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-width: 0;
+  min-height: 20px;
+  padding: 0 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  text-align: left;
+}
+.panel-search.ksp .ksp-options-toggle:hover {
+  background: var(--hover-soft);
+  border-color: transparent;
+  color: var(--fg);
+}
+.panel-search.ksp .ksp-options-toggle:active:not(:disabled) {
+  background: var(--hover);
+}
+.panel-search.ksp .ksp-caret {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+}
+.panel-search.ksp .ksp-options-label {
+  flex: none;
+  letter-spacing: 0.02em;
+}
+/* 折叠态摘要 chip：非默认状态才出现，长文本尾部省略（不把行撑破） */
+.panel-search.ksp .ksp-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 14px;
+}
+.panel-search.ksp .ksp-chip-scope {
+  border-color: rgb(var(--accent-rgb) / 0.4);
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+
+.panel-search.ksp .ksp-options-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 2px var(--space-1) 26px;
+}
+.panel-search.ksp .ksp-options-body.ksp-collapsed {
+  display: none;
+}
+.panel-search.ksp .ksp-opt-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--fs-0);
+}
+.panel-search.ksp .ksp-opt-label {
+  flex: none;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.panel-search.ksp .ksp-opt-input,
+.panel-search.ksp .ksp-opt-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  min-height: 22px;
+  padding: 0 5px;
+  background: var(--surface-sunken);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+}
+.panel-search.ksp .ksp-opt-input:focus-visible,
+.panel-search.ksp .ksp-opt-select:focus-visible {
+  border-color: var(--focus-ring);
+}
+
+/* --------------------------------- 状态区 --------------------------------- */
+
+.panel-search.ksp .ksp-status-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.panel-search.ksp .ksp-status {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.panel-search.ksp .ksp-summary-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+/* 命中摘要 = 状态区唯一的主读数：比说明高半档（fs-1 / fg），扫结果时先读到它 */
+.panel-search.ksp .ksp-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--fg);
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.panel-search.ksp .ksp-summary.search-stopped {
+  color: var(--amber);
+}
+.panel-search.ksp .ksp-note {
+  padding: 0 2px;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+.panel-search.ksp .ksp-note-warn {
+  color: var(--amber);
+}
+.panel-search.ksp .ksp-note-replace {
+  color: var(--accent-text);
+}
+.panel-search.ksp .ksp-hint {
+  padding: 0 2px;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+}
+.panel-search.ksp .ksp-clear {
+  flex: none;
+  min-height: 24px;
+  padding: 0 6px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.panel-search.ksp .ksp-clear:hover {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--fg);
+}
+.panel-search.ksp .ksp-clear:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+
+.panel-search.ksp .ksp-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  color: var(--red);
+  font-size: var(--fs-1);
+  line-height: 1.5;
+}
+.panel-search.ksp .ksp-error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 检索中：转圈 + 进度条（总量未知时走不确定条，不假装 0%） */
+.panel-search.ksp .ksp-progress {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--fg-dim);
+}
+.panel-search.ksp .ksp-spinner {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: ksp-spin 0.9s linear infinite;
+}
+.panel-search.ksp .ksp-progress-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.panel-search.ksp .ksp-progress-track {
+  display: block;
+  flex: none;
+  width: 100%;
+  height: 2px;
+  margin-top: 4px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.panel-search.ksp .ksp-progress-bar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur-2) var(--ease-in-out);
+}
+.panel-search.ksp .ksp-progress-bar.indeterminate {
+  width: 35%;
+  animation: ksp-sweep 1.2s var(--ease-in-out) infinite;
+}
+@keyframes ksp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ksp-sweep {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+/* 减弱动效：转圈停成静环、不确定条停成一条低强度实条（与引导层同一处理） */
+@media (prefers-reduced-motion: reduce) {
+  .panel-search.ksp .ksp-spinner {
+    animation: none;
+    border-top-color: var(--border-strong);
+  }
+  .panel-search.ksp .ksp-progress-bar.indeterminate {
+    width: 100%;
+    opacity: 0.35;
+    animation: none;
+  }
+}
+:root[data-motion='reduced'] .panel-search.ksp .ksp-spinner {
+  animation: none;
+  border-top-color: var(--border-strong);
+}
+:root[data-motion='reduced'] .panel-search.ksp .ksp-progress-bar.indeterminate {
+  width: 100%;
+  opacity: 0.35;
+  animation: none;
+}
+
+/* --------------------------------- 结果区 --------------------------------- */
+
+.panel-search.ksp .ksp-group {
+  min-width: 0;
+}
+/* 文件头 = 折叠开关（真 button，键盘可达；aria-expanded 见组件） */
+.panel-search.ksp .search-file {
+  position: static; /* 旧规则把它钉在滚动口顶部，会与 sticky 控制区打架 */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  min-height: 22px;
+  padding: 3px 4px 3px 2px;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg);
+  font-size: var(--fs-1);
+  text-align: left;
+}
+/* 第一块的顶线交给控制区的分隔线，不画双线（特异性高于 hover 规则） */
+.panel-search.ksp .ksp-group:first-child > .search-file {
+  border-top-color: transparent;
+}
+.panel-search.ksp .search-file:hover {
+  background: var(--hover-soft);
+  color: var(--fg);
+}
+.panel-search.ksp .search-file:active:not(:disabled) {
+  background: var(--hover);
+}
+.panel-search.ksp .ksp-file-caret {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-dim);
+}
+.panel-search.ksp .ksp-file-base {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-size: var(--fs-1);
+}
+.panel-search.ksp .ksp-file-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.panel-search.ksp .ksp-file-count {
+  flex: none;
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  /* bg-3 而不是 hover-soft：文件头自身 hover 用的就是 hover-soft，同色会让计数消失 */
+  background: var(--bg-3);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 命中行：主按钮铺满整行；替换钮常驻槽位（显隐只改 opacity，行高不跳） */
+.panel-search.ksp .search-match-row {
+  align-items: stretch;
+  padding-right: 2px;
+  border-radius: var(--radius-sm);
+}
+.panel-search.ksp .search-match-row:hover {
+  background: var(--hover);
+}
+.panel-search.ksp .ksp-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 旧 .search-match 的 width:100% 会让 flex 基准按整行算（替换钮被挤出可视区） */
+  width: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg);
+  font-size: var(--fs-1);
+  text-align: left;
+}
+.panel-search.ksp .ksp-row-main:hover {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg);
+}
+.panel-search.ksp .ksp-row-main:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+/* 行:列 —— 槽宽由组件按本屏最长读数写进 --ksp-gutter（ch 单位随 meta 字体） */
+.panel-search.ksp .ksp-loc {
+  flex: none;
+  min-width: calc(var(--ksp-gutter, 3) * 1ch);
+  padding-right: 2px;
+  text-align: right;
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+}
+.panel-search.ksp .search-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+/* 命中高亮：沿用 accent 淡底（旧规则已是这组值，这里补 1px 内衬与圆角让断字处不发粘连） */
+.panel-search.ksp .search-hit {
+  padding: 0 1px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+
+.panel-search.ksp .ksp-row-replace {
+  flex: none;
+  width: 32px;
+  align-self: center;
+  min-height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  opacity: 0;
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
+}
+/* hover 覆盖鼠标，focus-within 覆盖 Tab 导航（UI-4 键盘可达） */
+.panel-search.ksp .search-match-row:hover .ksp-row-replace,
+.panel-search.ksp .search-match-row:focus-within .ksp-row-replace,
+.panel-search.ksp .ksp-row-replace:focus-visible {
+  opacity: 1;
+}
+.panel-search.ksp .ksp-row-replace:hover {
+  background: var(--hover-strong);
+  border-color: transparent;
+  color: var(--fg);
+}
+
+/* 文件头的可读名（完整末两段路径）：视觉上拆成 文件名 + 目录 两段，这段只给
+   AT 与静态渲染判据，布局零占位 */
+.panel-search.ksp .ksp-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

@@ -52,7 +52,8 @@ import { useNotify } from './NotificationCenter';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { UnsavedFilesConfirmDialog } from './UnsavedFilesConfirmDialog';
 import { installWindowCloseGuard } from './window-close-guard';
-import { WelcomeView } from './WelcomeView';
+import { WelcomeView, type WelcomeTutorialId } from './WelcomeView';
+import { WelcomeOverlayHost } from './WelcomeOverlayHost';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { workspaceRootsOf, planAddExtraRoot } from './workspace-roots';
 import { resetSearch } from './search-store';
@@ -131,6 +132,11 @@ function omitPaths(prev: ReadonlySet<string>, gone: ReadonlySet<string>): Readon
 export function App(): ReactElement {
   const [kernel, setKernel] = useState<Kernel | null>(null);
   const [phase, setPhase] = useState<AppPhase>('boot');
+  /**
+   * 欢迎页是否被「×」关掉（用户反馈 8 批；只活在本会话）。关闭不改变 phase：
+   * 有项目时本来就不渲染欢迎页，这里只管无项目分支显示欢迎页还是空态。
+   */
+  const [welcomeClosed, setWelcomeClosed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [project, setProject] = useState<GameProject | null>(null);
   const [index, setIndex] = useState<ErbIndex | null>(null);
@@ -1231,6 +1237,18 @@ export function App(): ReactElement {
     void openProject(resumeRoot);
   }, [resumeRoot, openProject]);
 
+  /**
+   * 欢迎页教程卡片（用户反馈 8 批）：只发语义意图 `ui.tutorial.open`，
+   * 由教程提供方（适配器）映射到自己的 overlay。宿主不认识教程内容，也不在这里
+   * 直接 `ui.overlay.open`（那会把提供方的模态名抄进欢迎页）。
+   */
+  const openWelcomeTutorial = useCallback(
+    (tutorial: WelcomeTutorialId): void => {
+      kernel?.bus.emit('ui.tutorial.open', { tutorial, source: 'welcome' });
+    },
+    [kernel],
+  );
+
   const body =
     phase === 'project' && kernel && project ? (
       <Suspense fallback={<ProjectViewSkeleton />}>
@@ -1272,23 +1290,32 @@ export function App(): ReactElement {
         />
       </Suspense>
     ) : (
-      <WelcomeView
-        phase={phase}
-        error={error}
-        recent={recent}
-        tauri={isTauri()}
-        kernelReady={kernel !== null}
-        onOpenDirectory={chooseAndOpen}
-        onOpenRecent={openProject}
-        onRemoveRecent={removeRecentEntry}
-        onClearRecent={clearRecentEntries}
-        statPath={statPath}
-        resumeRoot={resumeRoot}
-        onResumeSession={resumeSession}
-        crashRecovery={crashRecovery}
-        onRecoverCrash={recoverCrash}
-        onDiscardCrash={discardCrash}
-      />
+      <>
+        <WelcomeView
+          phase={phase}
+          error={error}
+          recent={recent}
+          tauri={isTauri()}
+          kernelReady={kernel !== null}
+          onOpenDirectory={chooseAndOpen}
+          onOpenRecent={openProject}
+          onRemoveRecent={removeRecentEntry}
+          onClearRecent={clearRecentEntries}
+          statPath={statPath}
+          resumeRoot={resumeRoot}
+          onResumeSession={resumeSession}
+          crashRecovery={crashRecovery}
+          onRecoverCrash={recoverCrash}
+          onDiscardCrash={discardCrash}
+          closed={welcomeClosed}
+          onClose={() => setWelcomeClosed(true)}
+          onReopen={() => setWelcomeClosed(false)}
+          onOpenTutorial={openWelcomeTutorial}
+        />
+        {/* 无项目时的 overlay 宿主：教程等模态由插件常驻注册，宿主却只在 ShellLayout 里，
+            这里补上同一份壳（打开/关闭订阅与 ShellLayout 同语义），教程才真的看得见 */}
+        <WelcomeOverlayHost kernel={kernel} />
+      </>
     );
 
   return (

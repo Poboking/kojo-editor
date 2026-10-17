@@ -157,6 +157,8 @@ export type TabMenuItemId =
 export interface TabMenuItemSpec {
   readonly id: TabMenuItemId;
   readonly label: string;
+  /** 右侧快捷键提示（纯展示；Ctrl+W 这一条由壳层命令表真实注册，其余动作没有缺省键位） */
+  readonly shortcut?: string;
   /** 在这一项**之前**画一条分隔线（首项的分隔线由渲染侧吞掉，照 file-tree-ops 口径） */
   readonly dividerBefore?: boolean;
 }
@@ -168,7 +170,7 @@ export interface TabMenuItemSpec {
  */
 export function tabMenuItemsFor(pinned: boolean): TabMenuItemSpec[] {
   return [
-    { id: 'close', label: '关闭' },
+    { id: 'close', label: '关闭', shortcut: 'Ctrl+W' },
     { id: 'close-others', label: '关闭其他标签' },
     { id: 'close-right', label: '关闭右侧标签' },
     { id: 'close-all', label: '关闭全部标签' },

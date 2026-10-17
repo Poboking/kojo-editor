@@ -1,0 +1,304 @@
+/* ============================================================================
+ * 右键菜单（用户反馈 7）——磨砂玻璃 / 紧凑行高 / 三面统一
+ *
+ * 两套 DOM 一份观感：
+ *   1) 自定义菜单（文件树 / 标签页，`ui/context-menu.tsx`）：`.context-menu`；
+ *   2) Monaco 原生菜单（编辑器，0.57 未开 shadow DOM）：`.context-view.monaco-menu-container`。
+ *
+ * 加载顺序不设前提：
+ *   - 自定义菜单的主规则在 styles.css（`.glass` 消费方名单里就有 `.context-menu`），
+ *     本文件的玻璃面用 **`.context-menu.context-menu`** 双类抬一级特异性，谁先谁后都稳；
+ *   - Monaco 在**首次打开菜单时**才把菜单样式表 append 到 <head>（menu.js 的
+ *     `initializeOrUpdateStyleSheet`），天然排在我们后面 ⇒ 它的选择器全部加
+ *     `:root .context-view.monaco-menu-container` 前缀抬特异度，不靠声明顺序碰运气。
+ *
+ * 颜色只用既有 token（`--glass-*` / `--hover*` / `--fg*` / `--border*` / `--danger` …），
+ * 不写死色值；`data-glass='solid'` 与 `prefers-reduced-motion` 各有明确回落。
+ * ========================================================================== */
+
+/* ------------------------------ 一、自定义菜单 ------------------------------ */
+
+/* 玻璃面（与 styles.css 的 .glass 组合同值；这里重钉一次是为了与加载顺序解耦）。
+   圆角 / 外阴影 / 内衬仍走 styles.css 的 `.context-menu` 主线——那是实测校准过的一整套
+   （含 1px 切边环），不在本文件抄第二份，免得两处真源各自漂移。 */
+.context-menu.context-menu {
+  --glass-fade: 56px;
+  background:
+    linear-gradient(
+      180deg,
+      rgb(var(--glass-tint-raise) / var(--glass-alpha)) 0,
+      transparent var(--glass-fade)
+    ),
+    rgb(var(--glass-tint) / var(--glass-alpha));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-edge);
+}
+
+/* 行：比 styles.css 的 5px 上下再紧半档；按下反馈走 --dur-press（跟手） */
+.context-menu.context-menu button {
+  min-height: 26px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  line-height: 1.35;
+  transition:
+    background-color var(--dur-press) var(--ease-out),
+    box-shadow var(--dur-press) var(--ease-out);
+}
+
+/* 文字列吃掉剩余宽度，快捷键才可能被推到右缘 */
+.context-menu .context-menu-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 图标列钉死 16px：有图标的行与没图标的行，文字左边缘仍在同一条轴上 */
+.context-menu .context-menu-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--fg-dim);
+}
+.context-menu button:hover .context-menu-icon,
+.context-menu button:focus-visible .context-menu-icon {
+  color: var(--fg);
+}
+.context-menu button.danger .context-menu-icon {
+  color: var(--danger);
+}
+
+/* 快捷键提示：右对齐、弱化、等宽字（数字与字母不会因字体抖动而左右跳） */
+.context-menu .context-menu-shortcut {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--space-3);
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* 键盘焦点：底色与悬停同档，左缘给 accent 条——"我现在在哪一项"不靠鼠标位置猜 */
+.context-menu.context-menu button:focus-visible {
+  background: var(--hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 按下：比悬停再亮一档 */
+.context-menu.context-menu button:active:not(:disabled) {
+  background: var(--hover-strong);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 危险项在 focus / active 两态保住红语义（styles.css 只写了 hover/active 的旧档） */
+.context-menu.context-menu button.danger:focus-visible {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+.context-menu.context-menu button.danger:active:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+
+/* 指针接管：悬停到**别的**项时，收起键盘焦点那一格的底/环——否则两行同时像"选中"。
+   :has 在本仓不是新依赖（styles.css 的教程宿主已用）；不支持时退回"双高亮"，不破版。 */
+.context-menu:has(button:hover:not(:focus)) button:focus-visible {
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+/* --------------------------- 二、Monaco 原生菜单 --------------------------- */
+/* 0.57 的菜单 DOM（已按 vendor 源码核对，非 shadow DOM）：
+     .context-view.monaco-menu-container          ← 玻璃面挂这里（容器，不随滚动）
+       .context-view-block                        ← 事件挡板（fixed，z-index:-1）
+       .monaco-scrollable-element                 ← 滚动宿主（行内 color/background 用未定义变量，
+         .monaco-menu                              解析失败 ⇒ 对我们透明）
+           .monaco-action-bar.vertical
+             ul.actions-container
+               li.action-item(.focused/.disabled)
+                 a.action-menu-item[role=menuitem]
+                   span.menu-item-check + span.action-label + span.keybinding
+                   （分隔线是 li.action-item > span.action-label.separator）
+   注意 a/li 上有 monaco 的**行内** color / background-color（默认取
+   `var(--vscode-menu-foreground)` 等 workbench 变量，standalone 主题没有这些键 ⇒
+   声明在计算值阶段失效，不会盖掉下面的规则）。 */
+
+/* 玻璃面：容器本身负责圆角 / 切边 / 投影，滚动内容只负责行 */
+:root .context-view.monaco-menu-container {
+  --glass-fade: 56px;
+  color: var(--fg) !important; /* .context-view.fixed 的 all:initial 会把它重置成黑色 */
+  font-family: inherit;
+  font-size: var(--fs-1);
+  background:
+    linear-gradient(
+      180deg,
+      rgb(var(--glass-tint-raise) / var(--glass-alpha)) 0,
+      transparent var(--glass-fade)
+    ),
+    rgb(var(--glass-tint) / var(--glass-alpha));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  animation: fade-in var(--dur-1) var(--ease-out);
+}
+
+/* 滚动宿主：monaco 会写行内 color/background（无效变量另说，有效时必须让位给玻璃） */
+:root .context-view.monaco-menu-container > .monaco-scrollable-element {
+  background: transparent !important;
+  color: inherit !important;
+  border-radius: inherit;
+}
+
+/* 菜单本体：尺寸由我们定（原生 160px 起步太窄，中文动作 + 快捷键放不下） */
+:root .context-view.monaco-menu-container .monaco-menu {
+  min-width: 210px;
+  max-width: min(340px, calc(100vw - var(--space-4) * 2));
+  font-family: inherit;
+  font-size: var(--fs-1);
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+/* 内衬与行高：与自定义菜单同一档（5px 内衬 + 26px 行） */
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical {
+  padding: 5px 0;
+}
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-item > .action-menu-item {
+  height: 26px;
+  margin: 0 5px;
+  border-radius: var(--radius-sm);
+  /* 主题里有 --vscode-menu-foreground 时 monaco 会把它写成**行内** color（如 #f0f0f0），
+     主题一换成浅色就与全站 --fg 脱节——!important 是这里唯一能压过行内的合法手段 */
+  color: var(--fg) !important;
+  transition:
+    background-color var(--dur-press) var(--ease-out),
+    box-shadow var(--dur-press) var(--ease-out);
+}
+
+/* 悬停 / 键盘选中：同一套中性竖条（与自定义菜单同语言）。
+   monaco 在选中时还会写行内 background-color / outline（selection 颜色），一并夺回 */
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-item:not(.disabled) > .action-menu-item:hover,
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-item.focused > .action-menu-item {
+  background-color: var(--hover) !important;
+  box-shadow: inset 2px 0 0 var(--border-strong);
+  color: var(--fg) !important;
+}
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-item.focused > .action-menu-item {
+  outline: 1px solid var(--focus-ring) !important;
+  outline-offset: -1px !important;
+}
+/* 指针接管（同自定义菜单）：悬停到别的行时收起键盘焦点那一格 */
+:root .context-view.monaco-menu-container .monaco-menu:has(.action-item:not(.focused) > .action-menu-item:hover) .action-item.focused > .action-menu-item {
+  background-color: transparent !important;
+  box-shadow: none;
+  outline: none !important;
+}
+
+/* 文字：左侧 1.5em 留给勾选列（原生 absolute 定位的 .menu-item-check），单行省略 */
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-label:not(.separator) {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 10px 0 1.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-1);
+  line-height: 1.35;
+  color: inherit;
+}
+
+/* 勾选列（codicon ✓）：宽度与文字左衬同源，颜色走 accent 文字档 */
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .menu-item-check {
+  width: 1.5em;
+  color: var(--accent-text);
+  font-size: var(--fs-1);
+}
+
+/* 快捷键：右对齐、等宽、弱化（原生是 flex:2 + 1.8em 内衬，会把动作名挤成两截） */
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .keybinding {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 10px;
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  line-height: 1;
+  letter-spacing: 0.02em;
+  opacity: 0.9;
+}
+
+/* 禁用项：弱化但不消失（铁律 4 的菜单侧同款口径；monaco 原生也会保留） */
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-item.disabled > .action-menu-item {
+  color: var(--fg-dim) !important;
+  opacity: 0.5;
+}
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-item.disabled .keybinding {
+  opacity: 0.45;
+}
+
+/* 分隔线：两端渐隐的发丝线（原生变量未定义时 border-color 会落到 currentColor，必须夺回） */
+:root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-item > .action-label.separator {
+  border-bottom: 1px solid transparent !important;
+  border-image: linear-gradient(
+      90deg,
+      transparent,
+      var(--border) 14%,
+      var(--border) 86%,
+      transparent
+    )
+    1 !important;
+  margin: 5px 10px !important;
+  padding: 0 !important;
+}
+
+/* 键盘焦点环：monaco 把所有 :focus 的 outline 清零了，这里只在 focus-visible 时补回 */
+:root .context-view.monaco-menu-container .action-menu-item:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+/* --------------------------- 三、质感开关与动效回落 --------------------------- */
+
+/* 老内核不支持 backdrop-filter ⇒ 实心面，绝不破版（与 styles.css 同一条回落口径） */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .context-menu.context-menu,
+  :root .context-view.monaco-menu-container {
+    background: var(--bg-2);
+    border-color: var(--border);
+  }
+}
+
+/* 设置页「毛玻璃透明度」拧到 0%：撤掉磨砂与半透明（质感开关不跳色，落 --bg-2） */
+:root[data-glass='solid'] .context-menu.context-menu,
+:root[data-glass='solid'] .context-view.monaco-menu-container {
+  background: var(--bg-2);
+  border-color: var(--border);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* 减弱动效：入场彻底不跑（自定义菜单的 animation 在 styles.css，也一并按住） */
+:root[data-motion='reduced'] .context-menu.context-menu,
+:root[data-motion='reduced'] .context-view.monaco-menu-container {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .context-menu.context-menu,
+  :root .context-view.monaco-menu-container {
+    animation: none;
+  }
+}

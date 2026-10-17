@@ -33,6 +33,17 @@
  *   的 import 全部指向这里；`editor.worker` 的 `?worker` import 是 worker 装配，留在 EditorPane。
  */
 
+/* ------------------------- 本地化（必须在一切 monaco 模块之前） ------------------------- */
+
+// 用户反馈 7：原生右键菜单（剪切/复制/粘贴/转到定义/命令面板…）中文化。
+// `nls/lang/zh-cn.js` 是 0.57 自带的**构建产物**（exports `./*` → `./esm/vs/*.js` 可解析），
+// 它只做两件事：写 `globalThis._VSCODE_NLS_MESSAGES` 与 `_VSCODE_NLS_LANGUAGE='zh-cn'`。
+// 位置是硬约束：`localize()` 在**模块顶层**就把文案取成常量（standaloneStrings 的
+// `quickCommandActionLabel` 等），晚于 monaco 模块 import 就来不及——菜单会中英混杂。
+// 本文件是唯一装配点，所以在这里、在下面所有 monaco import 之前落一次即可；worker 不进
+// 这条模块图（`?worker` 由 Vite 单独打包），不受影响。
+import 'monaco-editor/nls/lang/zh-cn.js';
+
 /* ------------------------- A 档：轻量内置语言（保留面） ------------------------- */
 
 import 'monaco-editor/languages/definitions/markdown/register.js';

@@ -13,7 +13,7 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     expect(KERNEL_EVENT_CLASSIFICATION_GUARD).toBe(true);
   });
 
-  it('白名单 = 插件可 emit 的 22 个内核事件（快照守门）', () => {
+  it('白名单 = 插件可 emit 的 23 个内核事件（快照守门）', () => {
     expect([...KERNEL_EVENT_NAMES].sort()).toEqual(
       [
         'file.changed',
@@ -31,6 +31,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
         'editor.sugarView.set',
         'ui.overlay.open',
         'ui.overlay.close',
+        // 用户反馈 8 批：教程打开意图（欢迎页/任意发起方只发语义 id，提供方映射到自己的 overlay）
+        'ui.tutorial.open',
         // 2026-10-15 比对/历史批：通用 diff 视图意图（工作区版 vs 游戏目录版 / 历史版 vs 当前）
         'ui.diffView.open',
         // 2026-10-14 UI 浮动批：请求宿主把某面板弹出为可移动浮窗
@@ -68,7 +70,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     // 2026-10-15 比对/历史批新增 ui.diffView.open（通用 diff 视图意图）⇒ 19 → 20。
     // 2026-10-16 市场外链批新增 ui.openExternal（外链打开意图）⇒ 20 → 21。
     // 用户反馈 4 批新增 market.publishRequested（「发布口上」意图，市场面板 → 适配器）⇒ 21 → 22。
+    // 用户反馈 8 批新增 ui.tutorial.open（教程打开意图，欢迎页 → 教程提供方）⇒ 22 → 23。
     // 计数以本行结论为准（漏项的话编译期 guard 会红）。
-    expect(KERNEL_EVENT_NAMES.size).toBe(22);
+    expect(KERNEL_EVENT_NAMES.size).toBe(23);
   });
 });

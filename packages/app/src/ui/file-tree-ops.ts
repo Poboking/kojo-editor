@@ -25,6 +25,10 @@ export type MenuItemId =
 export interface MenuItemSpec {
   readonly id: MenuItemId;
   readonly label: string;
+  /** 内置图标名（icons.tsx 的词表；可选，纯展示）。动作能力不受有无图标影响。 */
+  readonly icon?: string;
+  /** 右侧快捷键提示（纯展示；本批未给文件树挂键位，字段留给后续批次，避免提示假键位） */
+  readonly shortcut?: string;
   /** 在这一项**之前**画一条分隔线（首项的分隔线由渲染侧吞掉） */
   readonly dividerBefore?: boolean;
 }
@@ -49,22 +53,22 @@ export interface MenuCapability {
 export function menuItemsFor(scope: MenuScopeKind, cap: MenuCapability): MenuItemSpec[] {
   if (scope === 'file') {
     const items: MenuItemSpec[] = [
-      { id: 'open', label: '打开' },
+      { id: 'open', label: '打开', icon: 'code' },
       { id: 'copy-path', label: '复制路径' },
       { id: 'copy-rel-path', label: '复制相对路径' },
     ];
-    if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示', dividerBefore: true });
-    if (cap.hasIo) items.push({ id: 'rename', label: '重命名', dividerBefore: true }, { id: 'delete', label: '删除' });
+    if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout', dividerBefore: true });
+    if (cap.hasIo) items.push({ id: 'rename', label: '重命名', icon: 'edit', dividerBefore: true }, { id: 'delete', label: '删除' });
     return items;
   }
   const items: MenuItemSpec[] = [];
-  if (scope === 'package' && cap.canImport) items.push({ id: 'import', label: '导入为我的口上项目' });
+  if (scope === 'package' && cap.canImport) items.push({ id: 'import', label: '导入为我的口上项目', icon: 'store' });
   if (cap.hasIo) {
     items.push({ id: 'new-file', label: '新建文件', dividerBefore: items.length > 0 }, { id: 'new-dir', label: '新建文件夹' });
   }
   items.push({ id: 'copy-path', label: '复制路径', dividerBefore: items.length > 0 });
-  if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示' });
-  if (cap.hasIo) items.push({ id: 'rename', label: '重命名', dividerBefore: true }, { id: 'delete', label: '删除' });
+  if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout' });
+  if (cap.hasIo) items.push({ id: 'rename', label: '重命名', icon: 'edit', dividerBefore: true }, { id: 'delete', label: '删除' });
   return items;
 }
 
