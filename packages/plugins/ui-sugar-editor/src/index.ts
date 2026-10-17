@@ -256,6 +256,15 @@ export function createUiSugarEditorPlugin(): Plugin {
             // 宿主没给波浪线（旧宿主 / 该区间本来没红线）就一条不产：不凭空造 quickfix
             diagnostics: diagnostics ?? [],
             decorate: (source) => kojoDecorations(path, source),
+            // ZH-F2 登记动作的落点判据：块边界一律问 `sugar.parse`（真解析器），本插件不自己认行。
+            // 抛错（结构严重损坏的文档）⇒ 空表：没有可靠落点就不给动作（与 decorate 的兜底同口径）。
+            topLevelOf: (source) => {
+              try {
+                return sugar.parse(source, { filePath: path }).topLevel;
+              } catch {
+                return [];
+              }
+            },
             onDegrade: (reason) => ctx.log.warn(`sugar-quickfix（${path}）：${reason}`),
           });
         },

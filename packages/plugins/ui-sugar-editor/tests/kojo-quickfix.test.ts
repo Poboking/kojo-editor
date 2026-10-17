@@ -14,6 +14,8 @@ import {
   QUICKFIX_SUGAR_CODES,
   buildSugarQuickFixes,
   decorationKey,
+  functionDeclAnchor,
+  type DocumentBlockLocation,
 } from '../src/kojo-quickfix';
 
 /* ------------------------------ 夹具 ------------------------------ */
@@ -63,8 +65,8 @@ const SRC = ['角色: 1', '时机 初见：', '    你好 50% 吧。', '    她�
 /* ------------------------------ 一、闭集与准入 ------------------------------ */
 
 describe('kojo-quickfix · 判据闭集', () => {
-  it('收敛的码只有两条（要补内容 / 要查字典 / 要挪行的一律不做）', () => {
-    expect(QUICKFIX_SUGAR_CODES).toEqual(['stray-percent', 'function-name-typo']);
+  it('收敛的码只有三条（要补内容 / 要查字典 / 要挪行的一律不做；unknown 走登记动作）', () => {
+    expect(QUICKFIX_SUGAR_CODES).toEqual(['stray-percent', 'function-name-typo', 'function-name-unknown']);
   });
 
   it('宿主没点明波浪线 ⇒ 一条不产（不凭空造 quickfix）', () => {
@@ -294,5 +296,165 @@ describe('kojo-quickfix · 代回转译器的自证', () => {
     // 逐字节比 `JSON.stringify`（`run` 是每次新建的闭包，`toEqual` 按引用比函数会假红）
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
     expect(JSON.stringify(given)).toBe(snapshot);
+  });
+});
+
+/* ------------------------------ 五、登记动作（ZH-F2：一键加入名表） ------------------------------ */
+
+const unknown = (line: number, name: string): LineDecoration => ({
+  line,
+  severity: 'warning',
+  message: `「${name}」是中文函数名调用形态，但既不在系统函数表、也不在当前工程的基础库函数表里——该调用已原样写进产物。`,
+  startColumn: 1,
+  code: 'function-name-unknown',
+});
+
+/** 替身二额外认得 `函数 <名>…：` 声明行（第 0 列）：声明过的关注名不再报（模拟 per-file 名表合并生效） */
+const WATCH = ['呓语未登录', '自定甲', '自定乙', '最大直'];
+
+function fakeWithDecl(source: string): LineDecoration[] {
+  const declared = new Set<string>();
+  const ls = source.split('\n');
+  for (const l of ls) {
+    const m = /^函数 ([^（(：:\s]+)/.exec(l);
+    if (m !== null && WATCH.includes(m[1]!)) declared.add(m[1]!);
+  }
+  const out: LineDecoration[] = [];
+  ls.forEach((l, i) => {
+    const indented = /^\s/.test(l);
+    if (!indented) return;
+    for (const [wrong, right] of TYPO)
+      if (!declared.has(wrong) && l.includes(`${wrong}(`)) out.push(typo(i + 1, wrong, right));
+    for (const w of WATCH) if (!declared.has(w) && l.includes(`${w}(`)) out.push(unknown(i + 1, w));
+  });
+  return out;
+}
+
+const doc = (nodes: readonly (readonly [string, number, number])[]): DocumentBlockLocation[] =>
+  nodes.map(([kind, start, end]) => ({ kind, loc: { start: { line: start }, end: { line: end } } }));
+
+const SRC_UNKNOWN = ['角色: 1', '时机 初见：', '    台词 {呓语未登录(7)}。', ''].join('\n');
+const DOC_UNKNOWN = () => doc([['timingBlock', 2, 3]]);
+
+describe('kojo-quickfix · 登记动作（function-name-unknown → 函数声明）', () => {
+  it('unknown：产一条 quickfix，edits = 在第一个时机块之前插入 `函数 <名>(形参…)：`（形参数取自被诊断那行的调用）', () => {
+    const actions = buildSugarQuickFixes({
+      text: SRC_UNKNOWN,
+      diagnostics: [unknown(3, '呓语未登录')],
+      decorate: fakeWithDecl,
+      topLevelOf: DOC_UNKNOWN,
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]!.kind).toBe('quickfix');
+    expect(actions[0]!.title).toContain('登记');
+    expect(actions[0]!.edits).toEqual([
+      { fromLine: 2, toLine: 2, newText: '函数 呓语未登录(引数1)：\n时机 初见：' },
+    ]);
+  });
+
+  it('实参两个 → 声明两个形参；行内没有配对的括号闭合 → 无参声明（名字登记不受影响）', () => {
+    const text = ['角色: 1', '时机 初见：', '    调用 自定甲(她的, 3)', ''].join('\n');
+    const actions = buildSugarQuickFixes({
+      text,
+      diagnostics: [unknown(3, '自定甲')],
+      decorate: fakeWithDecl,
+      topLevelOf: () => doc([['timingBlock', 2, 3]]),
+    });
+    expect(actions[0]!.edits![0]!.newText).toBe('函数 自定甲(引数1, 引数2)：\n时机 初见：');
+    const broken = ['角色: 1', '时机 初见：', '    调用 自定甲(她的,', '    3)', ''].join('\n');
+    const a2 = buildSugarQuickFixes({
+      text: broken,
+      diagnostics: [unknown(3, '自定甲')],
+      decorate: fakeWithDecl,
+      topLevelOf: () => doc([['timingBlock', 2, 4]]),
+    });
+    expect(a2[0]!.edits![0]!.newText).toBe('函数 自定甲：\n时机 初见：');
+  });
+
+  it('已有「函数」块 ⇒ 落点 = 最后一块之后（声明聚堆）；否则取最早落点（时机 / 自定指令 / 原生 @ 块之前）', () => {
+    const text = ['角色: 1', '函数 开场()：', '    「开始。」', '时机 初见：', '    调用 自定乙(1)', ''].join('\n');
+    const actions = buildSugarQuickFixes({
+      text,
+      diagnostics: [unknown(5, '自定乙')],
+      decorate: fakeWithDecl,
+      topLevelOf: () => doc([['functionBlock', 2, 3], ['timingBlock', 4, 5]]),
+    });
+    expect(actions[0]!.edits).toEqual([{ fromLine: 4, toLine: 4, newText: '函数 自定乙(引数1)：\n时机 初见：' }]);
+    // @ 块会吞掉其后所有行：落点必须在它**之前**（`functionDeclAnchor` 的判据在此钉死）
+    expect(functionDeclAnchor(doc([['rawFunctionBlock', 2, 9]]), 10)).toBe(2);
+    expect(functionDeclAnchor(doc([['timingBlock', 3, 8], ['functionBlock', 4, 5]]), 10)).toBe(3);
+    expect(functionDeclAnchor(doc([]), 10)).toBeNull(); // 没有文档级块 ⇒ 没有可靠落点 ⇒ 不出动作
+  });
+
+  it('接线没给 `topLevelOf` ⇒ 登记动作整类不产（旧调用方逐字保持），行级改写照旧', () => {
+    const text = SRC_UNKNOWN;
+    expect(
+      buildSugarQuickFixes({ text, diagnostics: [unknown(3, '呓语未登录')], decorate: fakeWithDecl }),
+    ).toEqual([]);
+  });
+
+  it('self-check 拒绝"登记了但没登记上"：目标那条只是跟着行号下移 ⇒ 不交付（不混过漂移这一关）', () => {
+    const stubborn = (source: string): LineDecoration[] =>
+      source === SRC_UNKNOWN ? fakeWithDecl(source) : [unknown(4, '呓语未登录')];
+    const actions = buildSugarQuickFixes({
+      text: SRC_UNKNOWN,
+      diagnostics: [unknown(3, '呓语未登录')],
+      decorate: stubborn,
+      topLevelOf: DOC_UNKNOWN,
+    });
+    expect(actions).toEqual([]);
+  });
+
+  it('两条 unknown 同在：登记其中一条，另一条**下移后的波浪线不算新增**（漂移基准）', () => {
+    const text = ['角色: 1', '时机 初见：', '    台词 {呓语未登录(1)}。', '    调用 自定乙(2)', ''].join('\n');
+    const actions = buildSugarQuickFixes({
+      text,
+      diagnostics: [unknown(3, '呓语未登录'), unknown(4, '自定乙')],
+      decorate: fakeWithDecl,
+      topLevelOf: () => doc([['timingBlock', 2, 4]]),
+    });
+    expect(actions).toHaveLength(2);
+    expect(actions.every((a) => a.edits![0]!.fromLine === 2)).toBe(true); // 同锚点：宿主「全部修复」按轮排开
+  });
+
+  it('typo：改近名与登记**两条并存**（"我要的确实是这个名字"那一支），都挂同一条诊断', () => {
+    const text = ['角色: 1', '时机 初见：', '    调用 最大直(1, 2)', ''].join('\n');
+    const d = typo(3, '最大直', '最大值');
+    const actions = buildSugarQuickFixes({
+      text,
+      diagnostics: [d],
+      decorate: fakeWithDecl,
+      topLevelOf: () => doc([['timingBlock', 2, 3]]),
+    });
+    expect(actions.map((a) => a.kind)).toEqual(['quickfix', 'quickfix']);
+    expect(actions.map((a) => a.title).join(' ')).toContain('改成');
+    expect(actions.map((a) => a.title).join(' ')).toContain('登记');
+    const reg = actions.find((a) => a.title.includes('登记'))!;
+    expect(reg.edits![0]!.newText).toBe('函数 最大直(引数1, 引数2)：\n时机 初见：');
+    expect(reg.diagnostics![0]).toBe(d); // 原样回递**同一个对象**（B9 身份键）
+  });
+
+  it('登记动作也走闭集文案闸：对不上措辞（取不到名字）⇒ 不产', () => {
+    const d: LineDecoration = { line: 3, severity: 'warning', message: '这句文案换措辞了。', code: 'function-name-unknown' };
+    expect(
+      buildSugarQuickFixes({
+        text: SRC_UNKNOWN,
+        diagnostics: [d],
+        decorate: fakeWithDecl,
+        topLevelOf: DOC_UNKNOWN,
+      }),
+    ).toEqual([]);
+  });
+
+  it('CRLF 文档：插入块沿用 \\r\\n，锚行原文（含 \\r）整条带走', () => {
+    const text = ['角色: 1', '时机 初见：', '    台词 {呓语未登录(7)}。', ''].join('\r\n');
+    const actions = buildSugarQuickFixes({
+      text,
+      diagnostics: [unknown(3, '呓语未登录')],
+      decorate: (s) => fakeWithDecl(s.replace(/\r\n/g, '\n')),
+      topLevelOf: DOC_UNKNOWN,
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]!.edits![0]!.newText).toBe('函数 呓语未登录(引数1)：\r\n时机 初见：\r');
   });
 });

@@ -364,7 +364,7 @@ describe('W3 / 真转译器：`.kojo` 波浪线换来 quickfix', () => {
     const { diagnostics, out } = provideAll(h, SRC_TYPO, { scope: 'document' });
     const target = diagnostics.find((d) => d.code === 'function-name-typo')!;
     expect(target).toBeDefined();
-    const fixes = out.filter((x) => x.action.kind === 'quickfix');
+    const fixes = out.filter((x) => x.action.kind === 'quickfix' && !x.action.title.includes('登记'));
     expect(fixes).toHaveLength(1);
 
     const fixed = applyEdit(SRC_TYPO, fixes[0]!.action.edits![0]!);
@@ -542,18 +542,24 @@ describe('W3 / 与升糖 refactor 共存：各归各类、不互相顶替', () =
 });
 
 describe('W3 / 纪律：只改 model、不越界、不写盘', () => {
-  it('每条 edits 都是行内整行替换且行号在 [1, 行数] 内', () => {
+  it('每条 edits 行号在 [1, 行数] 内；行级改写是整行替换（不改行数），登记动作恰好多出一行声明', () => {
     const h = boot(SRC_TYPO);
     const { out } = provideAll(h, SRC_TYPO, { scope: 'document' });
     const lineCount = SRC_TYPO.split('\n').length;
     const quick = out.filter((x) => x.action.kind === 'quickfix');
-    expect(quick.length).toBeGreaterThan(0);
+    expect(quick.length).toBeGreaterThan(1); // 改近名 + 登记，两条并存
     for (const { action } of quick) {
       for (const edit of action.edits!) {
         expect(edit.fromLine).toBe(edit.toLine);
         expect(edit.fromLine).toBeGreaterThanOrEqual(1);
         expect(edit.toLine).toBeLessThanOrEqual(lineCount);
-        expect(edit.newText.split('\n')).toHaveLength(1); // 不改行数 ⇒ 行号坐标系不漂移
+        const added = edit.newText.split('\n');
+        if (action.title.includes('登记')) {
+          expect(added[0]).toMatch(/^函数 /); // 插的那行声明在第 0 列、块头形
+          expect(added).toHaveLength(2); // 声明行 + 锚行原文整条带走
+        } else {
+          expect(added).toHaveLength(1); // 行级改写不改行数 ⇒ 行号坐标系不漂移
+        }
       }
     }
   });
@@ -604,6 +610,88 @@ describe('W3 / 纪律：只改 model、不越界、不写盘', () => {
       scope: 'document',
     });
     expect(actions).toEqual([]);
+  });
+});
+
+/* ------------------------------ ZH-F2 · 真转译器：未收录名一键登记进名表 ------------------------------ */
+
+/** 两表皆无、也没有近名的自定义名（判据在真语料表上跑，不在本测试自判） */
+const CUSTOM = '嘎啦咕噜呓语';
+const SRC_UNKNOWN = ['角色: 1', '时机 指令 310：', `    调用 ${CUSTOM}(7)`, ''].join('\n');
+
+describe('ZH-F2 / 真转译器：`function-name-unknown` 换来登记动作，登记后同一条管线归零', () => {
+  const registerActionOf = (h: Harness, source: string) => {
+    const { diagnostics, out } = provideAll(h, source, { scope: 'document' });
+    const target = diagnostics.find((d) => d.code === 'function-name-unknown');
+    const reg = out.find((x) => x.action.kind === 'quickfix' && x.action.title.includes('登记'));
+    return { diagnostics, target, reg };
+  };
+
+  it('登记前 warning 在面上；动作把 `函数 <名>(引数1)：` 插到第一个时机块之前，登记后**真转译**该码消失且无新波浪线', () => {
+    const h = boot(SRC_UNKNOWN);
+    const before = markers(h, SRC_UNKNOWN);
+    expect(before.filter((d) => d.code === 'function-name-unknown')).toHaveLength(1);
+
+    const { target, reg } = registerActionOf(h, SRC_UNKNOWN);
+    expect(target).toBeDefined();
+    expect(reg).toBeDefined();
+    expect(reg!.contributionId).toBe('sugar-quickfix');
+    const edit = reg!.action.edits![0]!;
+    expect(edit.newText).toBe(`函数 ${CUSTOM}(引数1)：\n时机 指令 310：`);
+
+    const fixed = applyEdit(SRC_UNKNOWN, edit);
+    const after = markers(h, fixed);
+    expect(after.some((d) => d.code === 'function-name-unknown')).toBe(false);
+    expect(after.filter((d) => d.severity === 'error')).toHaveLength(0);
+    expect(after.length).toBeLessThanOrEqual(before.length);
+    // 真管线吃了这份名表：调用降到产物名（adapter 模板），不是本地打勾
+    expect(h.sugar.transpile(fixed, { filePath: PATH }).erb).toContain(`M_KOJO_K1_${CUSTOM}(7)`);
+  });
+
+  it('已有「函数」块 ⇒ 声明聚堆插在最后一块之后；登记后同样归零', () => {
+    const source = ['角色: 1', '函数 开场()：', '    返回', '时机 指令 310：', `    调用 ${CUSTOM}(7)`, ''].join('\n');
+    const h = boot(source);
+    expect(markers(h, source).some((d) => d.code === 'function-name-unknown')).toBe(true);
+    const { reg } = registerActionOf(h, source);
+    expect(reg).toBeDefined();
+    expect(reg!.action.edits![0]!.fromLine).toBe(4);
+    const fixed = applyEdit(source, reg!.action.edits![0]!);
+    expect(markers(h, fixed).some((d) => d.code === 'function-name-unknown')).toBe(false);
+  });
+
+  it('typo 那一条也有"我确实要这个名字"支：登记动作落地后 error 级的 `function-name-typo` 消失（该文件恢复可编译）', () => {
+    const h = boot(SRC_TYPO);
+    const { out } = provideAll(h, SRC_TYPO, { scope: 'document' });
+    const reg = out.find((x) => x.action.kind === 'quickfix' && x.action.title.includes('登记'));
+    expect(reg).toBeDefined();
+    expect(reg!.action.edits![0]!.newText).toBe('函数 最大直(引数1, 引数2)：\n时机 指令 310：');
+    const fixed = applyEdit(SRC_TYPO, reg!.action.edits![0]!);
+    const after = markers(h, fixed);
+    expect(after.some((d) => d.code === 'function-name-typo')).toBe(false);
+    expect(after.some((d) => d.code === 'function-name-unknown')).toBe(false);
+  });
+
+  it('登记动作全程零写盘、零事件（与行级改写同一条 model-only 通道）', () => {
+    const h = boot(SRC_UNKNOWN);
+    const before = new Uint8Array(h.files[PATH]!);
+    registerActionOf(h, SRC_UNKNOWN);
+    expect(h.writes).toEqual([]);
+    expect(h.events).toEqual([]);
+    expect(h.files[PATH]).toEqual(before);
+  });
+
+  it('只读文件（写允许域外）不给登记动作——接线层那道写闸覆盖新动作形态', () => {
+    const h = boot(SRC_UNKNOWN, { writable: false });
+    const quick = h.codeActions.find((c) => c.id === 'sugar-quickfix')!;
+    expect(
+      quick.provideActions({
+        path: PATH,
+        text: SRC_UNKNOWN,
+        project: null,
+        diagnostics: markers(h, SRC_UNKNOWN),
+        scope: 'document',
+      }),
+    ).toEqual([]);
   });
 });
 
