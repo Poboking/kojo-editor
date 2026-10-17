@@ -102,6 +102,19 @@ interface LatestSlot {
   next: (() => Promise<unknown>) | null;
 }
 
+/**
+ * 是否为"已挂起"的异步结果（thenable）。`runSliced` 用它区分**同步扫描项**与
+ * **异步 IO 项**：前者并发窗口毫无收益（调用即跑完，整窗预算一次性烧光），
+ * 后者才值得窗口内的并行度（IPC 并行）。只认契约形态，不猜别的。
+ */
+function isThenable(v: unknown): v is Promise<unknown> {
+  return (
+    v !== null &&
+    (typeof v === 'object' || typeof v === 'function') &&
+    typeof (v as { then?: unknown }).then === 'function'
+  );
+}
+
 export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
   const log = opts.log;
   const yieldToMain = createYielder();
@@ -174,12 +187,42 @@ export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
         const end = Math.min(i + window, items.length);
         if (window === 1) {
           out[i] = await fn(items[i]!, i);
+          stat.items++;
         } else {
-          // 窗口内并发（保住 IPC 并行度），窗口间统一让路
-          const done = await Promise.all(items.slice(i, end).map((item, k) => fn(item, i + k)));
-          for (let k = 0; k < done.length; k++) out[i + k] = done[k]!;
+          // 先起窗口首项判形态：**同步扫描项按项查预算**（PS-2⑥——旧局 32 项的同步窗
+          // 要一口气跑完才检查 sliceMs，级联里实测 ~100ms 不间断占死主线程）；
+          // 异步项保持整窗并发发起（IPC 并行度不许被这份改动拿走）。
+          const first = fn(items[i]!, i);
+          if (isThenable(first)) {
+            // 整窗的 Promise 必须与 Promise.all **同一个同步 tick** 挂上订阅——
+            // 先 `await first` 再 all(rest) 会把窗口里"先失败的那几个"漏成 unhandled
+            // rejection（lint 取消路径实测炸出 21 条；纪律同 PITFALLS 的"不吞错也不漂错"）。
+            const started: Array<R | Promise<R>> = new Array(end - i);
+            for (let k = i; k < end; k++) started[k - i] = k === i ? first : fn(items[k]!, k);
+            const done = await Promise.all(started);
+            for (let k = 0; k < done.length; k++) out[i + k] = done[k]!;
+            stat.items += end - i;
+          } else {
+            out[i] = first as R;
+            stat.items++;
+            for (let k = i + 1; k < end; k++) {
+              // 逐项预算闸：超预算（或背景档撞上交互档）就在**项与项之间**让路——
+              // 同步项之间让路不损失任何并行度（它们本就串行执行）。
+              const over = now() - sliceStart >= sliceMs;
+              const must = priority === 'background' ? over || interactiveDepth > 0 : over;
+              if (must) {
+                stat.slices++;
+                stat.yields++;
+                totalYields++;
+                await yieldToMain();
+                sliceStart = now();
+              }
+              const v = fn(items[k]!, k);
+              out[k] = (isThenable(v) ? await v : v) as R;
+              stat.items++;
+            }
+          }
         }
-        stat.items += end - i;
         if (end >= items.length) break;
 
         const overBudget = now() - sliceStart >= sliceMs;

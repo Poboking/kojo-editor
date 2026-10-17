@@ -228,3 +228,57 @@ describe('GBK/Big5 探测（2026-10-17 编码标签批：契约缺口已补，�
     expect(probeEncoding(new Uint8Array([0x41, 0xff, 0x42]))).toBe('shift_jis');
   });
 });
+
+/** PS-2③：分段一次切的新 splitPreserveEol 必须与旧的逐字符实现**逐字等价**（含全部边界形状） */
+describe('splitPreserveEol · 参考实现等价（PS-2 重写守卫）', () => {
+  function referenceSplit(raw: string): { parts: string[]; terms: string[] } {
+    const parts: string[] = [];
+    const terms: string[] = [];
+    let cur = '';
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i];
+      if (c === '\r') {
+        if (raw[i + 1] === '\n') {
+          terms.push('\r\n');
+          i++;
+        } else {
+          terms.push('\r');
+        }
+        parts.push(cur);
+        cur = '';
+      } else if (c === '\n') {
+        terms.push('\n');
+        parts.push(cur);
+        cur = '';
+      } else {
+        cur += c;
+      }
+    }
+    parts.push(cur);
+    return { parts, terms };
+  }
+
+  it('对抗形状全覆盖：空串/纯分隔符/首尾分隔符/连续分隔符/混合三族/代理对', () => {
+    const cases = [
+      '',
+      '\n',
+      '\r',
+      '\r\n',
+      '\n\n\r\r\n\r\n',
+      'a\n',
+      'a\r\nb\rc',
+      '\r\n尾',
+      '😀\r\n你\r呀\n🎉\n',
+      'x'.repeat(5000) + '\r\n' + 'y'.repeat(5000),
+    ];
+    for (const raw of cases) {
+      const got = splitPreserveEol(raw);
+      expect(got).toEqual(referenceSplit(raw));
+      // 不变式：逐字节还原
+      expect(joinPreserveEol(got)).toBe(raw);
+      // 结构不变式：parts = terms + 1，且 parts 内不含任何裸换行字符
+      expect(got.parts.length).toBe(got.terms.length + 1);
+      for (const p of got.parts) expect(p).not.toMatch(/[\r\n]/);
+    }
+  });
+});

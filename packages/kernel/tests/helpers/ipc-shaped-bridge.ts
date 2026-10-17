@@ -46,13 +46,22 @@ export interface WireFacts {
   readonly wireWalkOpts: Array<Record<string, unknown>>;
   /** 逐次单文件读（`read_file_bytes_raw`）的路径 */
   readonly singleReads: string[];
+  /** 逐次 `exists` 的路径（PS-2 存储守卫：合并后一趟都不该有） */
+  readonly existsCalls: string[];
   /** 逐次批量读（`read_files_raw`）的路径与批大小 */
   readonly batchReads: string[];
   readonly batchInvocations: Array<{ readonly size: number }>;
 }
 
 export function newWireFacts(): WireFacts {
-  return { walkOptKeys: [], wireWalkOpts: [], singleReads: [], batchReads: [], batchInvocations: [] };
+  return {
+    walkOptKeys: [],
+    wireWalkOpts: [],
+    singleReads: [],
+    existsCalls: [],
+    batchReads: [],
+    batchInvocations: [],
+  };
 }
 
 /**
@@ -75,6 +84,12 @@ export function tauriShapedBridge(inner: PlatformBridge, facts: WireFacts): Plat
         return async (path: string): Promise<Uint8Array> => {
           facts.singleReads.push(path);
           return target.readFileBytes(path);
+        };
+      }
+      if (prop === 'exists') {
+        return async (path: string): Promise<boolean> => {
+          facts.existsCalls.push(path);
+          return target.exists(path);
         };
       }
       if (prop === 'readFilesRaw') {

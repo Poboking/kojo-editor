@@ -429,3 +429,136 @@ describe('FileIOService · 字节保真：未改动行保留原换行 / 零改�
     expect((await fs.readFile(f)).toString('utf8')).toBe('😀\r\n你呀\r\n🎉\r\n尾\n');
   });
 });
+
+/**
+ * PS-2（性能批）：读入侧的内存税与新鲜度税。
+ * ①只读路径不留指纹/字节快照（游戏目录整体只读 ⇒ 那些副本永远写不回去）；
+ * ②"先只读读入、后批准写、再保存"必须零保真损失（writeText 就地补捞盘上真相）；
+ * ③`peekTexts` 零 IPC 只peek（refs 一轮 37 趟纯排队 stat 的出口）；
+ * ④换项目（`setWritableRoots([])` = project.closed 的内核钩子）清空三类项目态缓存。
+ */
+describe('FileIOService · PS-2 缓存闸 / 懒指纹 / peekTexts / 换项目清空', () => {
+  /** 计数桥（原型覆写；口径同 io-batch） */
+  function countingIo(bridgeAppData = appData): {
+    io: FileIOServiceImpl;
+    stats: { readFilesRaw: number; statFiles: number; readFileBytes: number };
+  } {
+    const inner = new NodeBridge(bridgeAppData);
+    const stats = { readFilesRaw: 0, statFiles: 0, readFileBytes: 0 };
+    const bridge = Object.create(inner) as PlatformBridge & { stats: typeof stats };
+    bridge.stats = stats;
+    const raw = inner.readFilesRaw.bind(inner);
+    const st = inner.statFiles.bind(inner);
+    const rb = inner.readFileBytes.bind(inner);
+    bridge.readFilesRaw = async (p) => { stats.readFilesRaw++; return raw(p); };
+    bridge.statFiles = async (p) => { stats.statFiles++; return st(p); };
+    bridge.readFileBytes = async (p) => { stats.readFileBytes++; return rb(p); };
+    return { io: new FileIOServiceImpl(bridge), stats };
+  }
+
+  it('只读路径读入：不留指纹/字节快照；可写路径照留', async () => {
+    const dir = path.join(tmpDir, 'gate');
+    const f = path.join(dir, 'a.ERB');
+    await writeRaw(f, Buffer.from('@A\r\nPRINTL 一\r\n'));
+    const { io } = countingIo();
+
+    await io.readText(f); // 未批准写根 = 只读
+    expect(io.debugCaches().eolMaps.files).toBe(0);
+    expect(io.debugCaches().rawBytes.files).toBe(0);
+    expect(io.debugCaches().encoding.size).toBe(1); // 编码/EOL 判据仍要（preserve 写回与编辑器都吃它）
+
+    io.setWritableRoots([dir]);
+    await io.readText(f);
+    expect(io.debugCaches().eolMaps.files).toBe(1);
+    expect(io.debugCaches().rawBytes.files).toBe(1);
+
+    await io.readTexts([f]); // 批量路同闸（先清根再批量）
+    io.setWritableRoots([]); // 项目收回 ⇒ 清缓存（④），顺带重置
+    io.setWritableRoots([path.join(tmpDir, 'other')]);
+    await io.readTexts([f]);
+    expect(io.debugCaches().eolMaps.files).toBe(0); // f 此刻在别的根授权下 ⇒ 对 f 仍是只读
+    expect(io.debugCaches().rawBytes.files).toBe(0);
+  });
+
+  it('先只读读入、后批准写、再保存：逐行保真零损失（补捞盘上真相，一趟批量读）', async () => {
+    const dir = path.join(tmpDir, 'lateapprove');
+    const f = path.join(dir, 'mix.ERB');
+    await writeRaw(f, Buffer.from('第一行\r\n第二行\n第三行\r\n')); // 少数派 LF 夹在 CRLF 里
+    const { io, stats } = countingIo();
+
+    const tf = await io.readText(f); // 只读期读入（无指纹存底）
+    io.setWritableRoots([dir]);
+    stats.readFilesRaw = 0;
+    await io.writeText(f, tf.text.replace('第一行', '第一行改'));
+
+    expect(stats.readFilesRaw).toBe(1); // 保存前的一趟补捞（exists+readFileBytes 两趟的旧形状不许回来）
+    // 改动行邻接的换行走多数派（crlf）；**两个未改动行之间**的少数派 `\n` 必须保住
+    // ——没有补捞就没有这张指纹，那将整篇统一成 crlf（旧退化路），这条即"保真不打折"的钉。
+    expect(bytesEqual(await fs.readFile(f), Buffer.from('第一行改\r\n第二行\n第三行\r\n', 'utf8'))).toBe(true);
+  });
+
+  it('peekTexts：命中给缓存、未命中给 null，全程零 IPC（stat 一趟都不付）', async () => {
+    const dir = path.join(tmpDir, 'peek');
+    const a = path.join(dir, 'a.ERB');
+    const b = path.join(dir, 'b.ERB');
+    await writeRaw(a, Buffer.from('@A\n'));
+    await writeRaw(b, Buffer.from('@B\n'));
+    const { io, stats } = countingIo();
+
+    expect(io.peekTexts([a, b])).toEqual([null, null]); // 冷peek：不读盘
+    expect(stats.readFilesRaw).toBe(0);
+    expect(stats.statFiles).toBe(0);
+
+    await io.readTexts([a]); // 只有 a 进缓存
+    const [pa, pb] = io.peekTexts([a, b]);
+    expect(pa?.text).toBe('@A\n');
+    expect(pb).toBeNull();
+    expect(stats.readFilesRaw).toBe(1); // 还是 readTexts 那一趟
+    expect(stats.statFiles).toBe(1); // peek 没有追加任何 stat 趟
+
+    const dbg = io.debugCaches().text;
+    expect(dbg.hits).toBeGreaterThan(0); // peek 计入命中观测面
+  });
+
+  it('换项目清空：setWritableRoots([])（project.closed 钩子）丢弃文本/指纹/字节三类与编码/EOL 判据', async () => {
+    const dirA = path.join(tmpDir, 'projA');
+    const fA = path.join(dirA, 'a.ERB');
+    await writeRaw(fA, Buffer.from('@A\n'));
+    const { io, stats } = countingIo();
+
+    io.setWritableRoots([dirA]);
+    await io.readTexts([fA]);
+    expect(io.debugCaches().text.files).toBe(1);
+    expect(io.debugCaches().eolMaps.files).toBe(1);
+    expect(io.debugCaches().rawBytes.files).toBe(1);
+
+    io.setWritableRoots([]); // = project.close() 的既有动作
+    const dbg = io.debugCaches();
+    expect(dbg.text.files).toBe(0);
+    expect(dbg.eolMaps.files).toBe(0);
+    expect(dbg.rawBytes.files).toBe(0);
+    expect(dbg.encoding.size).toBe(0);
+    expect(dbg.eol.size).toBe(0);
+
+    stats.readFilesRaw = 0;
+    await io.readTexts([fA]); // 新会话视角：必须真读盘，不许吃到 A 的残影
+    expect(stats.readFilesRaw).toBe(1);
+  });
+
+  it('编码/EOL 判据缓存有界（此前无界）：超限按 FIFO 从队首削', async () => {
+    const dir = path.join(tmpDir, 'metacap');
+    const files: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const f = path.join(dir, `f${i}.ERB`);
+      await writeRaw(f, Buffer.from(`@F${i}\n`));
+      files.push(f);
+    }
+    const io = new FileIOServiceImpl(new NodeBridge(appData), undefined, { maxMetaEntries: 3 });
+    await io.readTexts(files);
+    expect(io.debugCaches().encoding.size).toBe(3);
+    expect(io.debugCaches().eol.size).toBe(3);
+    // 队首三个已被挤掉，最后三个留着
+    expect(io.debugCaches().encoding.has(pathKey(files[0]!))).toBe(false);
+    expect(io.debugCaches().encoding.has(pathKey(files[5]!))).toBe(true);
+  });
+});
