@@ -326,8 +326,7 @@ export function codegen(
   // 一贯守规，正因撞上就是崩）。而糖内**全部**引用早已被字面量替换（`常量 X = 1022`
   // ⇒ 表达式里就是 `1022`）⇒ 该声明对糖语义是死重，却是**唯一的引擎全局足迹与全部
   // 撞名面** ⇒ 直接去掉，"用户 × 用户"与"用户 × 语料 `.ERH`"两类撞名构造性消失。
-  // 留一行注释：常量不凭空消失，产物里仍看得到它被展开成了什么。
-  // ⚠ 本行会进产物（进而进 golden），**不许含被 `no-sugar-jargon.test.ts` 封禁的术语**。
+  // 留一行注释：常量不凭空消失，产物里仍看得到它被展开成了什么。本行会进产物（进而进 golden）。
   for (const node of topLevel) {
     if (node.kind !== 'constDecl') continue;
     em.push(0, `; 常量 ${node.name} = ${node.value}（编译期展开为字面量，不占引擎全局名）`, node.loc.start.line);
