@@ -31,6 +31,13 @@
  *
  * 合并顺序 = `kernel.slots.query('ui.editor.decorator')` 给的顺序（宿主传进来的
  * `contributors()` 快照），与改动前"按槽位顺序 push"逐字一致 ⇒ 问题面板的行序不变。
+ *
+ * ## PS-5 加的第四条：**体量越界就整轮不办，并且说出来**
+ *
+ * `sizeOf`（可选，O(1) 读数）+ `markerValidationPaused`（纯判据）+ `pauseChanged`（跨界通知）。
+ * 判据与实测代价都在下面那节常量旁边；**不接 `sizeOf` 时行为与改前逐字一致**。
+ * 通知只在跨界时发一次，且进入暂停时把这一份文件的旧结果撤一次——
+ * 面板继续显示上一份内容的波浪线，等于宣称一个已经不成立的真相（铁律 4）。
  */
 
 import type { ComputePool, EditorDecoratePayload, GameProject, LineDecoration } from '@kojo/plugin-api';
@@ -65,6 +72,20 @@ export interface MarkerRunnerDeps {
   record?: (name: string, ms: number, note?: string) => void;
   /** LRU 容量（完整条目数）；缺省 64 */
   cacheSize?: number;
+  /**
+   * PS-5 校验暂停闸的**体量读数**（可选；不接 = 永不暂停，与接闸前逐字一致）。
+   *
+   * 必须是**不复制文本**的 O(1) 读数（宿主用 `model.getValueLength()` +
+   * `getLineCount()`）：这条腿的作用就是"在取那一份整篇文本之前先决定是否根本不取"，
+   * 拿 `getValue().length` 当判据等于把要省的开销先付一遍。
+   */
+  sizeOf?: (path: string) => DocSize | undefined;
+  /**
+   * 暂停状态**翻转**时通知宿主（可选）。只在跨界时叫一次，不是每次刷新都叫——
+   * 宿主据此把"这一轮没算、为什么没算"说给作者听（铁律 4：降级不许静默）。
+   * 本模块不认识 React，也不写文案：可见性归宿主，判据归这里。
+   */
+  pauseChanged?: (path: string, paused: boolean) => void;
   now?: () => number;
 }
 
@@ -83,10 +104,75 @@ export interface MarkerRunnerStats {
   worker: number;
   /** 当前缓存条目数 */
   cached: number;
+  /** PS-5：因体量越界而**整轮不办**的刷新次数（暂停态的每一次触发都计一次） */
+  paused: number;
 }
 
 /** 一路贡献的结果表（键 = 贡献 id；发布时按 contributors 顺序合并） */
 type PerSource = Map<string, LineDecoration[]>;
+
+/* ───────────────────────── PS-5 校验暂停闸（体量判据） ───────────────────────── */
+
+/** 一份文档的**体量读数**（两者都必须能不复制文本取到） */
+export interface DocSize {
+  readonly units: number;
+  readonly lineCount: number;
+}
+
+/**
+ * 文本长度上限（UTF-16 码元，`model.getValueLength()` 的口径）。
+ *
+ * 尺子取自本机实测（合成盘 = 真语料最大那份的尺度 52,601 行；两路装饰器都是真实现）：
+ * | 规模 | 码元 | structure | expr | 整篇复制 + structured-clone |
+ * |---|---|---|---|---|
+ * | 6,000 行 | 0.10 M | 8.9 ms | 94.5 ms | 0.33 ms |
+ * | 52,601 行 | 0.93 M | 88.5 ms | 689 ms | 1.65 ms |
+ * | 200,000 行 | 3.60 M | 268 ms | 2,508 ms | 7.27 ms |
+ *
+ * 两件事要说清（都跟"以为的账"不一样）：
+ * ① **复制不是主项**：一份 3.6 M 码元的正文复制 + 克隆进 worker 一共 7.3 ms，
+ *    同一轮里装饰计算是 2.8 s。所以这一闸真正省下的是**整轮计算**（worker 也是这台机器的 CPU，
+ *    它排队时波浪线的延迟就是这几秒），复制那两份只是顺带（`readText` 一次都不调 ⇒ 零分配）。
+ * ② 阈值按"最大真实文件一律放行"倒推：真语料最大单文件 2.35 MB（UTF-8 字节），
+ *    而**码元数上限就是字节数**（全 ASCII 时 1 字节 = 1 码元）⇒ 2.35 MB 那份最多 2.35 M 码元。
+ *    取 3,000,000 让它在任何编码密度下都不越界（语料每一份都照常校验），
+ *    越界的只有"比最大真实文件还大一截"那种盘（按 ① 那张表，那一轮已经是秒级计算）。
+ */
+export const MARKER_VALIDATE_MAX_UNITS = 3_000_000;
+
+/**
+ * 行数上限（与码元数**并判**，任一越界即停）。
+ *
+ * 为什么码元数还不够：两路装饰都是**逐行**状态机，代价随行数走（上面那张表：
+ * expr ≈ 13 ms/千行、structure ≈ 1.7 ms/千行，两档规模同斜率），同一份字节数摊到
+ * 更多行就更贵（每行还有行首匹配 + 配对栈 + 结果数组的一格固定开销）。
+ * 200,000 行 = 最大真实文件（52,601 行）的 3.8 倍，那一轮的实测代价 **≈2.8 秒**。
+ */
+export const MARKER_VALIDATE_MAX_LINES = 200_000;
+
+/**
+ * 这一轮该不该**整体不办**（纯函数，判据在此、文案在宿主）。
+ *
+ * 停的是**整轮**（同步档 + 异步档一起），不是某一路：留半档装饰上屏会更糟——面板与
+ * 波浪线各自显示"一部分真相"，读者无法判断眼前这份是全的还是残的。
+ * 省下的是什么（按上面那张实测表）：一轮 0.8–2.8 s 的装饰计算（worker 也跑在同一台机器上，
+ * 它排队 = 波浪线迟到几秒）+ 每停笔一次的**两次整篇文本复制**（`getValue()` 一份、
+ * 进 worker 的 structured-clone 一份，后者在 `markers:${path}` 那条 runLatest 键上还会
+ * 被尾缘合并重复触发）。丢下的是一段时间内的波浪线，所以宿主**必须**把"已暂停"显示出来
+ * （`pauseChanged`），否则就是铁律 4 禁止的静默降级。
+ */
+export function markerValidationPaused(size: DocSize): boolean {
+  return size.units > MARKER_VALIDATE_MAX_UNITS || size.lineCount > MARKER_VALIDATE_MAX_LINES;
+}
+
+/**
+ * 暂停期间的旧结果要不要留在屏上（纯函数；宿主与 runner 共用同一把尺子）。
+ *
+ * 留 = 面板继续宣称"这就是这份文件的问题"，而它对应的是**暂停之前**的内容。
+ * 所以跨界进入暂停时清空一次（清空本身由 `pauseChanged` 同步说明），
+ * 跨界退出时不需要特判：下一次刷新自然重算。
+ */
+export const MARKER_PAUSE_CLEARS_DECORATIONS = true;
 
 /** 就地执行时的载荷（槽契约形状：多一个 `project`，可搬运任务只吃 `{path,text}`） */
 type InlinePayload = Parameters<MarkerContributor['decorate']>[0];
@@ -148,6 +234,7 @@ export function createMarkerRunner(deps: MarkerRunnerDeps): {
     inline: 0,
     worker: 0,
     cached: 0,
+    paused: 0,
   };
 
   const record = (name: string, ms: number, note?: string): void => deps.record?.(name, ms, note);
@@ -181,6 +268,22 @@ export function createMarkerRunner(deps: MarkerRunnerDeps): {
 
   const cacheKey = (projectKey: string, path: string, versionId: number, signature: string): string =>
     `${projectKey}\u0000${path}\u0000${versionId}\u0000${signature}`;
+
+  /* ---------------- PS-5 校验暂停闸（跨界才通知，静默是禁止的） ----------------
+   *
+   * 位置在**缓存查询之前**：命中缓存同样是一次"把整档装饰发布上屏"，暂停态下发它
+   * 就等于"嘴上说停了、手上还在显示"。反之退出暂停不必特判——下一次刷新按正常流程
+   * 重算（缓存里那些条目本来就是暂停前算的，版本判据自会决定复用还是重算）。
+   */
+  const pausedPaths = new Set<string>();
+  const syncPause = (path: string, paused: boolean): void => {
+    if (paused === pausedPaths.has(path)) return;
+    if (paused) {
+      pausedPaths.add(path);
+      if (MARKER_PAUSE_CLEARS_DECORATIONS) deps.publish(path, []); // 旧结果对应旧内容：撤下并说明
+    } else pausedPaths.delete(path);
+    deps.pauseChanged?.(path, paused);
+  };
 
   function cacheGet(key: string): PerSource | undefined {
     const hit = cache.get(key);
@@ -257,6 +360,19 @@ export function createMarkerRunner(deps: MarkerRunnerDeps): {
     refresh(path: string, readText: () => string): void {
       const versionId = deps.versionOf(path);
       if (versionId === undefined) return; // 标签已关 / model 已 dispose：什么都不做
+      // PS-5：体量越界 ⇒ 整轮不办（一次文本都不取、一条贡献都不跑、不进缓存）
+      const size = deps.sizeOf?.(path);
+      if (size !== undefined && markerValidationPaused(size)) {
+        counters.paused++;
+        syncPause(path, true);
+        record(
+          'markers.paused',
+          0,
+          `${path} · ${size.lineCount} 行 / ${size.units} 码元（阈值 ${MARKER_VALIDATE_MAX_LINES} 行 / ${MARKER_VALIDATE_MAX_UNITS} 码元）`,
+        );
+        return;
+      }
+      syncPause(path, false);
       // 发起时刻的 model 世代（与 versionId 一起构成"哪一份 model"的身份）
       const generation = genOf(path);
 
@@ -338,6 +454,8 @@ export function createMarkerRunner(deps: MarkerRunnerDeps): {
     dropPath(path: string): void {
       // 关标签 = 这一份 model 到此为止：推进世代，让它在途的异步结果一律作废（#F6）
       advanceGen(path);
+      // 暂停态随文件一起销账：留着会让"这一份文件已停"的提示粘在别的文件上
+      if (pausedPaths.delete(path)) deps.pauseChanged?.(path, false);
       for (const key of [...cache.keys()]) if (key.includes(`\u0000${path}\u0000`)) cache.delete(key);
       counters.cached = cache.size;
     },
@@ -346,6 +464,10 @@ export function createMarkerRunner(deps: MarkerRunnerDeps): {
       cache.clear();
       // 整体作废（换项目 / 重装）：推进基线，所有路径的在途结果一起失配
       invalidateAllModels();
+      for (const path of [...pausedPaths]) {
+        pausedPaths.delete(path);
+        deps.pauseChanged?.(path, false);
+      }
       counters.cached = 0;
     },
 

@@ -12,6 +12,11 @@
  * 还挂一份**磁盘文本快照**（`savedBase`，ZH-F3 三方合并的 base）：版本号判得了
  * "有没有变"，判不了"变在哪一行"，所以做三方必须另存文本。
  *
+ * **PS-5 给这份正文加了常驻预算**（`SAVED_BASE_MAX_UNITS` 单份 +
+ * `SAVED_BASE_POOL_BUDGET_UNITS` 全池，越界就不留）。留不住不影响脏判定——
+ * 脏只认 `baseline`（版本号），`savedBase` 只服务三方合并；留不住的那一份
+ * 如实退回两方语义（`decideExternalChange` 既有分支，冲突照弹、绝不自动合）。
+ *
  * 工厂形态（`createEditorModelPool`）把 monaco / 内核 io 全部注入，纯逻辑
  * 闭环可单测；`editorModelPool` 是 EditorPane 用的真身单例。
  */
@@ -66,6 +71,40 @@ export interface PooledModelEntry {
   readonly fromRecovery: boolean;
 }
 
+/* ───────────────── PS-5：磁盘基线文本的常驻预算（不再"每标签一份正文"） ───────────────── */
+
+/**
+ * 单份基线文本的长度上限（UTF-16 码元，即 `model.getValue().length` 的口径）。
+ *
+ * 尺子来自真实盘账：最大单文件 52,601 行 / 2.35 MB（UTF-8 字节），CJK 语料折成码元
+ * 约 0.8–1.3 M ⇒ 1.5 M 码元把**语料里每一份文件都留在预算内**，只挡住"比最大真实文件
+ * 还大一截"那种盘（99 万行级）。
+ *
+ * 越界时**不存正文**（`savedBase()` 给 `undefined`）。这不是静默降级：调用方
+ * `decideExternalChange` 对"没有 base"早有既定语义 ⇒ 退回**两方**判定（磁盘变了而我脏
+ * ⇒ 弹通知、给「重新加载」动作，绝不自动合并），比"合并到一个不存在的共同祖先上"更保守。
+ */
+export const SAVED_BASE_MAX_UNITS = 1_500_000;
+
+/**
+ * 全池基线的常驻预算（码元总数；V8 里 CJK 字符串按 2 字节/码元 ⇒ 上限约 12 MB）。
+ *
+ * 超预算按"最久未读写的那一份"开始丢（丢一份 = 那一份退回两方语义，同上，不是静默）。
+ * 改前这里是**无上限**的：N 个标签就是 N 份整篇正文，与 model 里那一份重复存两遍。
+ */
+export const SAVED_BASE_POOL_BUDGET_UNITS = 6_000_000;
+
+/**
+ * 这一份正文值不值得留作三方合并的 base（纯函数；两条判据任一不过即不留）。
+ *
+ * **不受影响的不变式**：脏判定走 `baseline`（model 版本号 O(1) 比较），**从不**读
+ * `savedBase`。所以丢基线既不会把脏的报成"已保存"，也不会把干净的报成"未保存"——
+ * 这条是本次改动唯一的正确性红线，逐条钉在 `tests/ps5-model-memory.test.ts`。
+ */
+export function savedBaseWorthKeeping(units: number, poolUsedUnits: number): boolean {
+  return units <= SAVED_BASE_MAX_UNITS && poolUsedUnits + units <= SAVED_BASE_POOL_BUDGET_UNITS;
+}
+
 export interface PoolDeps {
   /** 读盘（恢复件由调用方先取好，经 `text` 注入，池不认识 recovery-store） */
   readText: (kernel: Kernel, path: string) => Promise<{ text: string; encoding: string; eol: string }>;
@@ -109,6 +148,41 @@ export interface EditorModelPool {
 
 export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
   const pool = new Map<string, PoolRecord>();
+  /**
+   * 基线文本的常驻账（PS-5）：`baseUnits` = 池里现存基线的码元总数；`baseLru` 的插入序
+   * 就是使用序（写入/读到都 touch 到最新端），超预算从最旧端丢。两者与 `pool` 同步：
+   * 记录被回收 ⇒ 两处一起销账（漏一处就是"预算只涨不跌"的假泄漏）。
+   */
+  let baseUnits = 0;
+  const baseLru = new Map<string, true>();
+
+  const dropBase = (path: string): void => {
+    const rec = pool.get(path);
+    if (rec?.savedBase !== undefined) baseUnits -= rec.savedBase.length;
+    if (rec) rec.savedBase = undefined;
+    baseLru.delete(path);
+  };
+
+  /** 立一份新基线（单份越界 ⇒ 直接不留；池预算不够 ⇒ 从最旧端淘汰到放得下，**新写入的那份永远优先保住**） */
+  const storeBase = (path: string, text: string): void => {
+    const rec = pool.get(path);
+    if (!rec) return; // 同 `setSavedBase` 既有口径：不在池里的路径 no-op，绝不复活已回收的记录
+    const replacing = rec.savedBase === undefined ? 0 : rec.savedBase.length;
+    if (replacing > 0) dropBase(path);
+    // 单份越界：这一份就是留不住（它对应"整篇正文比预算还大"），退回两方语义
+    if (text.length > SAVED_BASE_MAX_UNITS) return;
+    // 预算装不下就让最久未读写的那一份先走——正在被写的那一份对应的就是作者此刻的文件
+    while (baseUnits + text.length > SAVED_BASE_POOL_BUDGET_UNITS && baseLru.size > 0) {
+      const oldest = baseLru.keys().next();
+      if (oldest.done) break;
+      dropBase(oldest.value);
+    }
+    if (!savedBaseWorthKeeping(text.length, baseUnits)) return; // 判据不成立就不写（兜底闸门）
+    rec.savedBase = text;
+    baseUnits += text.length;
+    baseLru.set(path, true);
+  };
+
   const recordOf = (path: string): PoolRecord => {
     let rec = pool.get(path);
     if (!rec) {
@@ -171,7 +245,10 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
       if (!settled.ok) {
         // 失败不悬挂：清掉本次 loading；引用与等待者都归零则整条回收（下次 acquire 重来）
         if (cur && cur.loading === loading) cur.loading = undefined;
-        if (!cur || (cur.refs === 0 && cur.pending === 0)) pool.delete(path);
+        if (!cur || (cur.refs === 0 && cur.pending === 0)) {
+          if (cur) dropBase(path);
+          pool.delete(path);
+        }
         throw settled.err;
       }
       // 等待期间 pending 计数钉住记录不被回收 ⇒ cur 必在；共担同一 loading 的
@@ -179,7 +256,7 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
       const target = cur ?? recordOf(path);
       if (!target.entry) target.entry = settled.value.entry;
       if (target.savedBase === undefined && settled.value.diskText !== undefined) {
-        target.savedBase = settled.value.diskText;
+        storeBase(path, settled.value.diskText);
       }
       target.refs += 1;
       return target.entry;
@@ -196,6 +273,7 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
       }
       if (rec.refs === 0) {
         if (rec.entry) rec.entry.model.dispose();
+        dropBase(path); // 基线随文件走：记录回收 ⇒ 常驻预算同批归还（漏还就是"越开越多"的假预算）
         pool.delete(path); // 基线随文件存续，最后一份引用释放时一并清掉
       }
       return rec.refs;
@@ -215,12 +293,17 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
     },
 
     savedBase(path) {
-      return pool.get(path)?.savedBase;
+      const text = pool.get(path)?.savedBase;
+      // 读到即 touch：正在用的文件不该被预算先淘汰（淘汰的代价是那一份退回两方判定）
+      if (text !== undefined) {
+        baseLru.delete(path);
+        baseLru.set(path, true);
+      }
+      return text;
     },
 
     setSavedBase(path, text) {
-      const rec = pool.get(path);
-      if (rec) rec.savedBase = text;
+      storeBase(path, text);
     },
   };
 }

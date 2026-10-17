@@ -7,6 +7,21 @@
  * | `large` | ≥ 5,000（语料 ≥5,000 行占 6.0%，最大单文件 52,601 行） | 关"全文级"开销 |
  * | `huge` | ≥ 50,000（语料有 99 万行级盘） | 装饰性渲染也一并关 |
  *
+ * **档位覆盖面**（PS-5 审计口径）：真实语料只有约 6% 的文件过 5,000 行 ⇒ 绝大多数文件落在
+ * `small`。所以这一族降级的价值不在"平均文件变快"，而在**长尾那一格**：一个 5 万行文件
+ * 卡死一次，作者对整个编辑器的印象就定了。也正因如此，`small` 档不许为了"看着统一"而
+ * 关任何便利特性（PS-5 把小档的键写全，就是为了降级可逆）。
+ *
+ * **审计过但没有做成档位键的三项**（都有硬约束，记在这里免得下一批再猜一遍）：
+ * - find 的 `matchesCount`：vendor 自带 19,999 上限（`find/browser/findModel.js` 的
+ *   `MATCHES_LIMIT`，计数到顶即停并报"20000+"），**没有**可调的公开配置项；而 `find`
+ *   这一族按既有不变式**逐档同值**（见 `tests/editor-options.test.ts` 的 A7 段），
+ *   想按档改 find 必须先改那条不变式——不值得为一条已被 vendor 兜住的开销动它。
+ * - `unicodeHighlight`：同上属**与体量无关的中文基线**（`CJK_TYPING_BASELINE` 每档同在，
+ *   大档关掉会让全角空格/U+3000 防线随文件长度消失，那是安全性回退不是性能收益）。
+ * - `semanticHighlighting`：名字按角色分色（B6）是**用户偏好**，走
+ *   `semantic-color-pref.ts` 单源；档位若覆写它，设置页那一格就会在某些文件上不生效。
+ *
  * 全档不变式：`CJK_TYPING_BASELINE` 每档 spread；降级集永不含 `fontSize` / `zoomLevel`
  * （A1 偏好独立管，走 EditorZoom 单例）。所有键已对 monaco-editor@0.57.0 `monaco.d.ts`
  * 实测核实（IEditorOptions / IGlobalEditorOptions / IGuidesOptions）。
@@ -93,7 +108,13 @@ const COMMON_OPTIONS: EditorOptionPatch = {
   insertSpaces: false,
 };
 
-/** small 档全量（与 EditorPane 的 create options 对齐——切标签往返不产生"半套恢复"） */
+/**
+ * small 档全量（与 EditorPane 的 create options 对齐——切标签往返不产生"半套恢复"）。
+ *
+ * PS-5 起这一档把**每条体量轴上都存在的键**写全（`wordWrap` / `selectionHighlight` /
+ * `links` / `colorDecorators` / `folding`）：`updateOptions` 只覆写发过去的键，
+ * 小档不显式写回 ⇒ 从大文件切回小文件会**卡在大档的关值**（档位漂移）。
+ */
 const TIER_SMALL: EditorOptionPatch = {
   occurrencesHighlight: 'singleFile',
   matchBrackets: 'always',
@@ -116,9 +137,33 @@ const TIER_SMALL: EditorOptionPatch = {
   cursorSmoothCaretAnimation: 'on',
   // 偶尔混排的空格文件跟内容走（探测只扫文件头，代价可忽略）
   detectIndentation: true,
+  // ---- PS-5 补齐的体量轴（每条都是"大档要关 ⇒ 小档必须显式开"，否则切回来卡在关值）----
+  wordWrap: 'on',
+  selectionHighlight: true,
+  links: true,
+  colorDecorators: true,
+  folding: true,
 };
 
-/** large 档全量（huge 在其上再削；同时也是 huge 档的继承基座） */
+/**
+ * large 档全量（huge 在其上再削；同时也是 huge 档的继承基座）。
+ *
+ * PS-5 新增的四条各自关掉一个**全文级**扫描（口径与 VS Code `editor.largeFileOptimizations`
+ * 同一族——那份开关关的就是 selectionHighlight / occurrencesHighlight / folding /
+ * bracketPairColorization / stickyScroll 这一批"随文件长度增长"的功能；我们没那个总开关，
+ * monaco-editor 不导出它，只能自己按档列）：
+ * - `selectionHighlight:false`——每次光标/选区变化都在**整篇**收集同词区间并挂装饰
+ *   （`selectionHighlighter.ts` 走 `getWordAtPosition` + 全文匹配）；口上正文里"同一个词
+ *   出现几百次"是常态，代价随文件长度线性涨；
+ * - `links:false`——本 app 不给 ERB/`.kojo` 注册 documentLink provider，于是 Monaco 走
+ *   **自动链词**那条兜底路（`linkComputer.ts`：无 provider ⇒ `computeAutolinkedWords`
+ *   逐行扫全文找 URL 形态），每次内容变化重扫一遍；
+ * - `colorDecorators:false`——颜色装饰器（`colorExtensionPoint` 那条）对**整篇**逐行找
+ *   `#RRGGBB` 与颜色词，内容一变就重算；语料里的 `#DIM` / `#FUNCTION` 前缀正好是它的
+ *   误命中形态，白扫一遍还什么都不给；
+ * - `folding` 留到 huge 才关（见下）：段折叠是本产品读口上的主要导航手段，5k–50k 档
+ *   一次 provider 调用实测远小于其余几条，不值这一刀。
+ */
 const TIER_LARGE: EditorOptionPatch = {
   // 光标停留即"整篇找同词"——大文件头号隐性开销
   occurrencesHighlight: 'off',
@@ -149,9 +194,30 @@ const TIER_LARGE: EditorOptionPatch = {
   // 击键即格式化（F5）：ERB on-type provider 每次触发都要 getValue 整篇 + 全文档扫描
   //（O(行数)）——大文件每敲一个 `;` 就整篇跑一遍。关掉；要格式化走显式命令/保存动作。
   formatOnType: false,
+  // PS-5：三条全文级扫描关档（机理见文件头注），折叠与小档同开（读口上要靠它）
+  selectionHighlight: false,
+  links: false,
+  colorDecorators: false,
+  folding: true,
+  // 折行到 huge 才关：这一档留着（台词长行 + 5k–50k 行的折行成本仍可接受）
+  wordWrap: 'on',
 };
 
-/** huge 档 = large 档再削掉一切视口级装饰 */
+/**
+ * huge 档 = large 档再削掉一切视口级装饰。
+ *
+ * `wordWrap:'off'`（PS-5 新增，本档最关键的一刀）：折行开着时 Monaco 不能用
+ * `SimpleLinesLayout`（等高 ⇒ 滚动位移与行号互为 O(1) 换算），只能维护
+ * `LinesLayout` 那份**逐可视行高度前缀和**——行数越长数组越长，且每次内容变化 /
+ * 视口宽度变化都要重排。这正是 VS Code 把 `largeFileOptimizations` 的适用条件写成
+ * "for large files **without word wrap**" 的那个前提：折行一开，那批降级就失效。
+ * 99 万行级盘上这一条决定"能不能滚动"，而关折行的代价只是长行要横向滚——
+ * 到这一档的文件本来也不是拿来通读的。
+ *
+ * `folding:false`：折叠区间由 `ui.editor.languageService` 的 foldingRange 贡献方
+ * **按整篇文本**算（ERB 那路 = parseErbText + scanControlFlow 两遍线性扫描），
+ * 每次内容变化重算一遍；50k 行往上不值（要折叠看结构请降到大档或分段打开）。
+ */
 const TIER_HUGE: EditorOptionPatch = {
   ...TIER_LARGE,
   // 99 万行级盘：连视口级的括号配对查找也关（'never' 是 0.57 d.ts 合法值）
@@ -163,6 +229,8 @@ const TIER_HUGE: EditorOptionPatch = {
     indentation: false,
     highlightActiveIndentation: false,
   },
+  wordWrap: 'off',
+  folding: false,
 };
 
 /** 档位差异表（键 = 档名，每档差异一眼可读、可测） */

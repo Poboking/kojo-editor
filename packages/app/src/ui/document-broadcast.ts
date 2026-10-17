@@ -14,7 +14,9 @@
  *   **去重只管防抖通道**；`flush` 是"显式断言当前真相"（切文件/加载/reload/抑制
  *   解除），**不走去重**——面板可能在上次广播之后才挂载，把它去重掉等于让
  *   "换过来即有真相"的承诺永远兑现不了（首开窗口期就此冻结成 Disk 旧文本）；
- *   台账每条存的是**整份文本** ⇒ 必须有界（S2-3）：LRU 上限 + 关标签时 `forget`；
+ *   台账的**容量**必须与标签数无关地有界（S2-3）：LRU 上限 + 关标签时 `forget`。
+ *   PS-5 起台账存的是**指纹**（`TextStamp`）而不是整份文本 —— 旧口径下每条都背着
+ *   一份上次发出的全文，32 条就是"开过的大文件各留一份正文"常驻到面板卸载。
  * - **抑制**：`suppressed()` 为真（糖视图挂的是 derived 只读 model）时丢弃在途排程
  *   且不发——派生文本不是文件真相（行号对不上），发了就是把面板带沟里。谓词在
  *   **落地时刻**求值：排程后、落地前用户可能刚切进糖视图。
@@ -64,26 +66,89 @@ export const DOCUMENT_BROADCAST_DEBOUNCE_MS = 300;
 /**
  * 去重台账的容量上限（S2-3）。
  *
- * 每条 = 该路径上次**已发出**的整份文本；不设限就是"开过多少标签 × 全文体积"常驻到
- * 面板卸载（一整个编辑器组的生命周期里攒下几十份大 ERB 是常态，不是极端场景）。
- * 上限口径照 `view-state-store` 的 MAX_ENTRIES：Map 插入序即使用序，超限淘汰最旧。
+ * 每条 = 该路径上次**已发出**的文本**摘要**（见 `TextStamp`，PS-5 起不再存整份文本）；
+ * 不设限就是"开过多少标签 × 全文体积"常驻到面板卸载（一整个编辑器组的生命周期里攒下
+ * 几十份大 ERB 是常态，不是极端场景）。上限口径照 `view-state-store` 的 MAX_ENTRIES：
+ * Map 插入序即使用序，超限淘汰最旧。
  * 被淘汰的代价只是"下一次同文本白广播一条"（去重失效 = 面板多算一次），
  * 方向安全；而常驻全文的代价是内存，两者不对称，所以要封顶。
+ *
+ * 容量现在只约束**条数**（每条约 200 字节，32 条 ≈ 6 KB）——旧的 32 条是 32 份整篇正文，
+ * 真实语料最大单文件 2.35 MB ⇒ 满载时那是几十 MB 级常驻。
  */
 export const LAST_SENT_MAX_ENTRIES = 32;
+
+/* ───────────────── PS-5：台账存"指纹"而不是整份文本 ───────────────── */
+
+/**
+ * 一份文本的**等值判据**（不是加密哈希，是"两次广播的文本是不是同一份"这一件事的尺子）。
+ *
+ * 三个分量各自堵一类碰撞，缺一个都会留下**静默**漏广播（铁律 4）：
+ * - `length`：任何增删改（除"同长度替换"）当场分开；
+ * - `head` / `tail`（各 64 码元，逐字比）：同长度替换绝大多数落在这两段之外时也能分开，
+ *   而且它们是**零成本**的（切片只在比较时按已有字符串取，不常驻大文本）；
+ * - `hash`：两条 32 位独立滚动和（FNV-1a 与多项式滚动，种子不同 ⇒ 一条数据的两种形态
+ *   不会同时把两条都撞回去），管"中间同长度替换且首尾没动"那一档。
+ *
+ * 三条同时相等而文本不同的概率量级：需要一次同长度编辑**既**不落在首尾 128 码元内、
+ * **又**让两条互相独立的 32 位滚动和同时回到原值（≈2⁻⁶⁴）。一次会话内的比较次数是
+ * 千级，累计误判概率 <10⁻¹⁵，而它换掉的是每标签一份整篇正文的常驻。
+ * 判据方向也仍然安全：判"不同"永远照发（宁可白广播一条）。
+ */
+export interface TextStamp {
+  readonly length: number;
+  readonly hashA: number;
+  readonly hashB: number;
+  readonly head: string;
+  readonly tail: string;
+}
+
+/** 首尾逐字比的取样长度（码元） */
+export const TEXT_STAMP_SAMPLE = 64;
+
+const FNV_OFFSET = 0x811c9dc5;
+const FNV_PRIME = 0x01000193;
+const ROLL_PRIME = 1_000_003;
+
+/** 双路 32 位滚动和（一次线性扫描，无中间分配；`>>> 0` 保证无符号 32 位） */
+export function stampOf(text: string): TextStamp {
+  const n = text.length;
+  let a = FNV_OFFSET;
+  let b = 0x9e3779b9;
+  for (let i = 0; i < n; i++) {
+    const c = text.charCodeAt(i);
+    a = Math.imul(a ^ c, FNV_PRIME) >>> 0;
+    b = (Math.imul(b, ROLL_PRIME) + c + 1) >>> 0;
+  }
+  return {
+    length: n,
+    hashA: a >>> 0,
+    hashB: b >>> 0,
+    head: text.slice(0, TEXT_STAMP_SAMPLE),
+    tail: n <= TEXT_STAMP_SAMPLE ? text : text.slice(n - TEXT_STAMP_SAMPLE),
+  };
+}
+
+/** 两份指纹是否该按"同一份文本"处理（全部分量都相等才算等） */
+export function sameStamp(x: TextStamp | undefined, y: TextStamp): boolean {
+  if (x === undefined) return false;
+  return (
+    x.length === y.length && x.hashA === y.hashA && x.hashB === y.hashB && x.head === y.head && x.tail === y.tail
+  );
+}
 
 export function createDocumentBroadcaster(opts: DocumentBroadcasterOptions): DocumentBroadcaster {
   const delayMs = opts.delayMs ?? DOCUMENT_BROADCAST_DEBOUNCE_MS;
   const maxEntries = Math.max(1, Math.floor(opts.maxEntries ?? LAST_SENT_MAX_ENTRIES));
   let timer: ReturnType<typeof setTimeout> | null = null;
   let pending: { path: string; read: DocumentTruthReader } | null = null;
-  /** pathKey → 上次**已发出**的文本（在途排程不算——没发出去的不能拿去去重；LRU 有界） */
-  const lastSent = new Map<string, string>();
+  /** pathKey → 上次**已发出**文本的指纹（在途排程不算——没发出去的不能拿去去重；LRU 有界） */
+  const lastSent = new Map<string, TextStamp>();
 
   /** 写入并 touch 到最新端，超限从最旧端淘汰（S2-3：台账必须与标签数无关地有界） */
-  const remember = (key: string, text: string): void => {
+  const remember = (key: string, stamp: TextStamp): void => {
     lastSent.delete(key);
-    lastSent.set(key, text);
+    lastSent.set(key, stamp);
     while (lastSent.size > maxEntries) {
       const oldest = lastSent.keys().next();
       if (oldest.done) break;
@@ -102,14 +167,15 @@ export function createDocumentBroadcaster(opts: DocumentBroadcasterOptions): Doc
     const truth = read();
     if (truth === null) return;
     const key = pathKey(path);
-    if (dedupe && lastSent.get(key) === truth.text) {
+    const stamp = stampOf(truth.text);
+    if (dedupe && sameStamp(lastSent.get(key), stamp)) {
       // 同上一条逐字相同：真相没变，不发。但要把这条台账挪到最新端 ——
       // 正在用的标签不该被 LRU 先淘汰（淘汰的代价是多广播一条，方向安全，但也别常发生）
       lastSent.delete(key);
-      lastSent.set(key, truth.text);
+      lastSent.set(key, stamp);
       return;
     }
-    remember(key, truth.text);
+    remember(key, stamp);
     opts.emit({ filePath: path, text: truth.text, dirty: truth.dirty });
   };
 
