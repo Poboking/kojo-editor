@@ -488,16 +488,91 @@ export function clampRowheadWidth(width: number): number {
 /* ------------------------------ 视口化窗口数学 ------------------------------ */
 
 /**
- * 视口化路径的**固定行高**（px）。唯一真源：面板把它落到 `--cm-row-h` 给 CSS，
- * 窗口数学也用它——**绝不在 CSS 里再写一个数字**（那是这类改动的头号 bug 源）。
+ * 视口化路径的**兜底行高**（px）——只在量不到真实行高时使用（SSR / 首帧 / 隐藏态）。
  *
- * 22 = 单元格（20px 方钮）+ 行单元格上下各 1px 内边距；视口化路径把行头压成单行
- * 并钉死行高，内容无法把行撑高。
+ * 22 = 单元格（20px 方钮）+ 行单元格上下各 1px 内边距。
+ *
+ * ⚠ 这个名字过去是**唯一**行高真源，窗口数学与 CSS 变量都由它算，于是字号 / 缩放偏好一改，
+ * 占位块与真实行就错位（滚到第 100 行、画出来的却是第 109 行）。PS-7 起它只是回退值：
+ * 真源是**实测行高**（面板用 ResizeObserver 量首行，经 `resolveRowHeight` 收敛）。
  */
 export const MATRIX_ROW_H = 22;
 
 /** 窗口上下各预留的缓冲行数（滚出即撤、滚入即建；过量只多画几行，不重复计数） */
 export const MATRIX_OVERSCAN = 8;
+
+/** 实测行高合法域（px）：低于下限 = 没布局出来（量到 0），高于上限 = 量到的不是「一行」 */
+export const ROW_H_MIN = 8;
+export const ROW_H_MAX = 200;
+
+/**
+ * 把**实测**行高收敛成窗口数学可用的值（纯函数，单测钉住）。
+ *
+ * `null` / `undefined` / 非有限值 / 低于下限（节点还没布局、面板被隐藏）→ 回落 `fallback`
+ * （= `MATRIX_ROW_H`，改动前行为，宁可不准也不炸）；超过上限（一次量到整块 / tbody）→ 钳到上限。
+ * 不四舍五入到整数：字号缩放后的行高本来就是半像素，取整会把漂移重新请回来。
+ */
+export function resolveRowHeight(measured: number | null | undefined, fallback: number = MATRIX_ROW_H): number {
+  if (measured === null || measured === undefined) return fallback;
+  if (!Number.isFinite(measured) || measured < ROW_H_MIN) return fallback;
+  return Math.min(ROW_H_MAX, measured);
+}
+
+/**
+ * 行高是否已经**偏离兜底值**到必须重画（纯函数，单测钉住）。
+ *
+ * 亚像素抖动（0.3px）不该惊动 React：滚动容器每帧都可能回一个略有差异的读数，
+ * 每记差异都抬一次 state 就等于每帧一次全表重渲。阈值给 0.5px——够抓住字号档位
+ * 带来的整像素变化（行高 22 → 26 必须跟上），又滤掉布局取整的噪声。
+ */
+export function rowHeightChanged(prev: number | null, next: number, threshold = 0.5): boolean {
+  if (prev === null) return true;
+  return Math.abs(prev - next) > threshold;
+}
+
+/** 视口化窗口 + 该行高下每行的几何（一个算式产两样，杜绝窗口与占位各抄一个行高） */
+export interface MatrixLayout {
+  readonly win: ViewportWindow;
+  /** 本次窗口实际采用的行高（实测收敛后的值） */
+  readonly rowHeight: number;
+}
+
+/**
+ * 面板的**唯一**视口化布局入口（纯函数，单测钉住）：收敛实测行高 → 算窗口。
+ *
+ * 存在的理由：窗口起点、占位高、键盘跨窗跳转三处都按同一个行高走，
+ * 少一处传实测值就是「滚到 A 行、画的是 B 行」的错位（PS-7 修的就是这个）。
+ */
+export function planMatrixWindow(
+  scrollTop: number,
+  viewportHeight: number,
+  totalRows: number,
+  measuredRowHeight: number | null | undefined,
+  overscan: number = MATRIX_OVERSCAN,
+): MatrixLayout {
+  const rowHeight = resolveRowHeight(measuredRowHeight);
+  return {
+    win: computeViewportWindow(scrollTop, viewportHeight, rowHeight, totalRows, overscan),
+    rowHeight,
+  };
+}
+
+/** 第 `index` 行内容顶边在滚动内容里的偏移（px）——占位块与真实行必须共用这一条算式 */
+export function rowTopOf(layout: MatrixLayout, index: number): number {
+  return layout.win.topPad + (index - layout.win.start) * layout.rowHeight;
+}
+
+/** 把第 `index` 行滚到视口上沿所需的 scrollTop（键盘跨窗导航用；行高与窗口数学同源） */
+export function rowScrollTop(layout: MatrixLayout, index: number): number {
+  return index * layout.rowHeight;
+}
+
+/** 滚动位置对应的顶行索引（实测行高下的判据：滚动条落在哪一行） */
+export function firstVisibleRow(scrollTop: number, rowHeight: number): number {
+  if (!(rowHeight > 0)) return 0;
+  const scroll = Number.isFinite(scrollTop) && scrollTop > 0 ? scrollTop : 0;
+  return Math.floor(scroll / rowHeight);
+}
 
 /** 视口化窗口：要渲染的行区间 + 上下占位块高度（撑出完整滚动高度） */
 export interface ViewportWindow {

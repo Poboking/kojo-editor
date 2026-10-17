@@ -129,6 +129,18 @@ export function groupUnknowns(replay: FunctionReplay): UnknownGroup[] {
  * 空查询 → 空数组（不刷全量列表——9.5 万名字一次性渲染会拖垮 DOM）。
  */
 export function suggestFunctions(names: readonly string[], query: string, limit = 50): string[] {
+  return suggestFunctionNames(names, query, limit);
+}
+
+/**
+ * 同上，但收 **Iterable**（PS-7：逐键打字路径上不再摊平数组）。
+ *
+ * 条件索引有 9.9 万个函数、其中 3.1 万个含状态依赖。旧写法每次渲染先
+ * `[...condIndex.byFunction.keys()]` 摊一个 3 万串的数组，再对它做子串扫——
+ * 摊平那一步与查询毫无关系（每敲一个字符付一次三万次 push + 一次大数组分配）。
+ * 走迭代器还顺带让"命中 `limit` 就收手"提前结束读取（命中的名字靠前时只读几百个）。
+ */
+export function suggestFunctionNames(names: Iterable<string>, query: string, limit = 50): string[] {
   const q = query.trim().toUpperCase();
   if (q.length < 2) return [];
   const hits: string[] = [];
@@ -139,6 +151,23 @@ export function suggestFunctions(names: readonly string[], query: string, limit 
     }
   }
   return hits;
+}
+
+/**
+ * 一趟回放的**只读统计**（未知原因分组 + 假设影响）。
+ *
+ * 这两个函数原本是预览层每次渲染各算一遍（3,732 条谓词的 `groupUnknowns` +
+ * 每条一次递归 `exprArgSlots` 的 `summarizeAssumptions`）——而它们只依赖
+ * 「回放结果 × 假设槽」两样，逐键打字时压根没变。抽成一个函数就是为了给面板
+ * 一个能记忆的键（`useMemo([result, assumed])`），呈现层拿现成的算式渲染。
+ */
+export interface ReplayAnalysis {
+  readonly unknowns: UnknownGroup[];
+  readonly impact: AssumptionImpact;
+}
+
+export function analyzeReplay(replay: FunctionReplay, assumed: readonly AssumedSlot[]): ReplayAnalysis {
+  return { unknowns: groupUnknowns(replay), impact: summarizeAssumptions(replay, assumed) };
 }
 
 /* ------------------------- 假设值链路（v1.0 收口 C9） ------------------------- */
