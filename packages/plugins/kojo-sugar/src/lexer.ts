@@ -574,8 +574,10 @@ export function classifyLine(line: LogicalLine): LineClass {
     const key = headMatch[1]!;
     const value = headMatch[2]!;
 
-    // P-4 文件头选项 `随机形: 直出`——**不进 `KEYWORDS`**（不是糖块关键字），
-    // 通路与 `口上:` 等头部声明同形（`词: 值`），由 parser 收进文档级开关。
+    // P-4 文件头选项 `随机形: 直出`——判定归本处位置式扫描（先于下方 `lookupKeyword`）。
+    // `随机形` 本体已登记 `KEYWORDS`（head.randomShape，ZH-E 起）：**只为高亮/补全可见**，
+    // 判定路径与登记互不相干——挂进 `HEAD_DECL_KEYS` 反而会改走 headDecl（值语义
+    // 由 parser 的 applyHeadDecl 解释，那边没有这个键），口径说明见 keywords.ts 注释。
     if (key === '随机形') return { kind: 'randomShapeDecl', value: value.trim() };
 
     const kw = lookupKeyword(key);
