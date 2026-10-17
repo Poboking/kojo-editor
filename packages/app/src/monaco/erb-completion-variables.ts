@@ -22,8 +22,8 @@ import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
  */
 const SEGMENT_CHAR_RE = /[^\s,()[\]{}'"+\-*/%<>=!&|^~?:;]/;
 
-/** 一次补全的"名字段"位置（0 基区间 + 光标前已输入前缀 + 族头 + 段式） */
-interface VariableContext {
+/** 一次补全的"名字段"位置（0 基区间 + 光标前已输入前缀 + 族头 + 段式）；探针导出（T6 位置门变量位消费） */
+export interface ErbVariableSlot {
   /** 名字段起点（0 基，含）——替换范围左界 */
   readonly start: number;
   /** 名字段终点（0 基，不含）——替换范围右界 */
@@ -42,7 +42,7 @@ interface VariableContext {
  * 返回 `null` = 该处不是可补全的名字位置（**不猜**：族头内 / 无冒号 / 段数超两种段式 /
  * 空作用域段 / 数字开头一律不认）。
  */
-function parseVariableContext(lineText: string, column: number): VariableContext | null {
+function parseVariableContext(lineText: string, column: number): ErbVariableSlot | null {
   if (!Number.isFinite(column) || column < 1) return null;
   const col0 = Math.min(column - 1, lineText.length);
 
@@ -71,6 +71,17 @@ function parseVariableContext(lineText: string, column: number): VariableContext
   if (/^[0-9]/.test(prefix)) return null;
 
   return { start: tokStart + lastColon + 1, end, prefix, family, scoped: parts.length === 3 };
+}
+
+/**
+ * 光标处的**变量引用末段**探针（T6 位置门 `'variable-slot'` 消费；**纯函数**，可单测）：
+ * `parseVariableContext` 非空且族头 ∈ `ENGINE_VARIABLE_FAMILIES`（与补全候选同一份白名单）⇒
+ * 返回槽描述；否则 `null`（不猜）。门与候选源**共用这一份判据**，不各持一套。
+ */
+export function erbVariableSlotAt(lineText: string, column: number): ErbVariableSlot | null {
+  const context = parseVariableContext(lineText, column);
+  if (context === null) return null;
+  return ENGINE_VARIABLE_FAMILIES.includes(context.family) ? context : null;
 }
 
 /**

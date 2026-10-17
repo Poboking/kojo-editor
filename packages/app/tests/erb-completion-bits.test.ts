@@ -10,6 +10,9 @@
  *     （label 展示位号 + 中文位名、documentation = 中文位名、kind = EnumMember、insertText = 位号），
  *     非位槽（普通函数第二实参 / 第一实参 / 无位表的变量）**不**出候选；
  *     位坑已有内容（含写成变量 `LOCAL`）**不**抢候选；
+ * (b2) 三段式 `族:角色:名`（批⑧）：名字在**末段**（`TALENT:TARGET:性別` / `TCVAR:TARGET:随便`），
+ *     `lookup` 只许收「族 + 单段名」（整段中段名是回归网）；`erbBitSlotOpen`（位置门 / 触发探针）
+ *     与候选门共用同一条空判据；
  * (c) 切项目 / 重建表 → 候选刷新，无跨 install 泄漏（去重表随装配句柄创建，非模块级全局）。
  */
 
@@ -22,7 +25,7 @@ import {
   type ErbCompletionDegrade,
   type ErbCompletionTables,
 } from '../src/monaco/erb-completion';
-import { erbBitCompletionItems, erbBitHoverName, findBitSlot } from '../src/monaco/erb-completion-bits';
+import { erbBitCompletionItems, erbBitHoverName, erbBitSlotOpen, findBitSlot } from '../src/monaco/erb-completion-bits';
 import { resolveHoverName, installHover, type HoverTables } from '../src/monaco/kojo-hover';
 
 /* ============================== 桩 monaco / model / schema ============================== */
@@ -72,6 +75,15 @@ const BITS_CFLAG: ReadonlyArray<{ bit: number; label: string }> = [
   { bit: 2, label: '恋人' },
 ];
 
+/** 三段式桩：`TALENT:TARGET:性別` —— 名字表按**单段**索引（adapter `lookup(name, index)` 语义） */
+const BITS_TALENT: ReadonlyArray<{ bit: number; label: string }> = [
+  { bit: 0, label: '男性' },
+  { bit: 1, label: '女性' },
+];
+
+/** 三段式桩：`TCVAR:TARGET:随便` —— 同单段索引语义 */
+const BITS_TCVAR: ReadonlyArray<{ bit: number; label: string }> = [{ bit: 5, label: '随意' }];
+
 function schemaA(): VariableSchema {
   return {
     version: 'A',
@@ -82,6 +94,15 @@ function schemaA(): VariableSchema {
       if (name === 'TFLAG' && String(index) === '192') {
         return { name: 'TFLAG', index: 192, bits: [{ bit: 1, label: '成功' }] };
       }
+      // 三段式 `族:角色:名`：查的是 ('TALENT', '性別')——中段 `TARGET` 不进表（整段 `TARGET:性別` 必然查不中）
+      if (name === 'TALENT' && String(index) === '性別') {
+        return { name: 'TALENT', index, description: '性別', bits: BITS_TALENT };
+      }
+      if (name === 'TCVAR' && String(index) === '随便') {
+        return { name: 'TCVAR', index, description: '随便', bits: BITS_TCVAR };
+      }
+      // 家族级（裸族头）：无机读名表 ⇒ 只给变量名、无位表（复刻 adapter `lookup` 的缺省分支）
+      if (name === 'CFLAG' && index === undefined) return { name: 'CFLAG' };
       return undefined;
     },
   } as unknown as VariableSchema;
@@ -217,6 +238,83 @@ describe('D7 · 位补全 · 四种原语位槽（有表）', () => {
   });
 });
 
+/* ============================== 三段式 `族:角色:名`（批⑧） ============================== */
+
+describe('D7 · 位补全 · 三段式 `族:角色:名`（名字在末段）', () => {
+  it('`GETBIT(TALENT:TARGET:性別, |)`：中段角色表达式不进表，末段名查中位表', () => {
+    const items = itemsOf('GETBIT(TALENT:TARGET:性別, |)', schemaA());
+    expect(labels(items)).toEqual(['0 男性', '1 女性']);
+    expect(items[0]!.detail).toBe('TALENT:TARGET:性別'); // detail 仍是引用原文（不改写作者输入）
+  });
+
+  it('`SETBIT TCVAR:TARGET:随便, |` 出候选；与两段式对拍逐字一致', () => {
+    const three = itemsOf('SETBIT TCVAR:TARGET:随便, |', schemaA());
+    const two = itemsOf('SETBIT TCVAR:随便, |', schemaA());
+    expect(labels(three)).toEqual(['5 随意']);
+    // 对拍：三段式 ≡ 两段式（候选内容 / 插入文本逐字一致；range 的列号随行文长度不同，不比）
+    expect(labels(three)).toEqual(labels(two));
+    expect(three.map((i) => i.insertText)).toEqual(two.map((i) => i.insertText));
+    expect(labels(itemsOf('GETBIT(TALENT:性別, |)', schemaA()))).toEqual(['0 男性', '1 女性']);
+  });
+
+  it('查表契约（adapter 单段语义）：`lookup` 只收「族 + 单段末段名」；裸族头 ⇒ index 缺省', () => {
+    const calls: Array<[string, number | string | undefined]> = [];
+    const rec = {
+      version: 'rec',
+      lookup: (name: string, index?: number | string): VariableInfo | undefined => {
+        calls.push([name, index]);
+        return schemaA().lookup(name, index);
+      },
+    } as unknown as VariableSchema;
+
+    itemsOf('GETBIT(TALENT:TARGET:性別, |)', rec);
+    expect(calls).toContainEqual(['TALENT', '性別']);
+    // 旧缺陷（整段 `TARGET:性別` 当索引）的回归网：索引永不含冒号
+    expect(calls.every(([, idx]) => idx === undefined || !String(idx).includes(':'))).toBe(true);
+
+    calls.length = 0;
+    expect(itemsOf('SETBIT CFLAG, |', rec)).toEqual([]); // 裸族头：家族级无机读名表 ⇒ 零候选（不猜）
+    expect(calls).toEqual([['CFLAG', undefined]]);
+  });
+});
+
+/* ============================== erbBitSlotOpen（位置门 / 触发探针） ============================== */
+
+describe('D7 · erbBitSlotOpen（位槽且第二实参坑纯空白）', () => {
+  it('位槽 + 空坑 ⇒ true（四种原语；光标可落在坑内任意处，含行尾）', () => {
+    expect(erbBitSlotOpen('GETBIT(CFLAG:1, )', 'GETBIT(CFLAG:1, '.length + 1)).toBe(true);
+    expect(erbBitSlotOpen('SETBIT CFLAG:1, ', 17)).toBe(true);
+    expect(erbBitSlotOpen('CLEARBIT CFLAG:1,\t', 18)).toBe(true);
+    expect(erbBitSlotOpen('INVERTBIT TFLAG:192, ', 22)).toBe(true);
+  });
+
+  it('非位槽 / 坑内有内容（位号或变量）/ 注释行 ⇒ false', () => {
+    expect(erbBitSlotOpen('RAND(1, )', 9)).toBe(false); // 普通函数第二实参不是位
+    expect(erbBitSlotOpen('SETBIT CFLAG:1', 15)).toBe(false); // 无逗号
+    expect(erbBitSlotOpen('SETBIT CFLAG:1, 0', 17)).toBe(false); // 已有位号
+    expect(erbBitSlotOpen('SETBIT CFLAG:1, LOCAL', 17)).toBe(false); // 写成变量
+    expect(erbBitSlotOpen('; SETBIT CFLAG:1, ', 17)).toBe(false); // 注释行
+  });
+
+  it('与候选门同源（同一条空判据）：有位表时 open ⟺ 必出货；非 open ⇒ 恒空', () => {
+    for (const marked of [
+      'GETBIT(CFLAG:1, |)',
+      'SETBIT CFLAG:1, |',
+      'SETBIT CFLAG:1, |0',
+      'SETBIT CFLAG:1, |LOCAL',
+      '; SETBIT CFLAG:1, |',
+      'RAND(1, |)',
+    ]) {
+      const marker = marked.indexOf('|');
+      const line = marked.replace('|', '');
+      expect(itemsOf(marked, schemaA()).length > 0, marked).toBe(erbBitSlotOpen(line, marker + 1));
+    }
+    // 反方向：open 只答「是不是空位槽」，不答「有没有表」——无位表的变量 open=true 但零候选
+    expect(erbBitSlotOpen('SETBIT OTHER:9, ', 16)).toBe(true);
+    expect(itemsOf('SETBIT OTHER:9, |', schemaA())).toEqual([]);
+  });
+});
+
 /* ============================== (c) 切表 / 重建 → 刷新，无泄漏 ============================== */
 
 describe('D7 · 位补全 · 切项目 / 表重建（候选刷新）', () => {
@@ -278,6 +376,14 @@ describe('D7 · 位名悬停（只读、查不到不显示）', () => {
 
   it('`SETBIT TFLAG:192, 1` 位号上 → 「成功」', () => {
     expect(hoverAt('SETBIT TFLAG:192, |1', schemaA())?.name).toBe('成功');
+  });
+
+  it('三段式 `TALENT:TARGET:性別` 位号悬停（与补全共用同一 resolveBits，自动受益）', () => {
+    const hit = hoverAt('GETBIT(TALENT:TARGET:性別, |1)', schemaA());
+    expect(hit?.name).toBe('女性');
+    expect(hit?.kind).toContain('位号');
+    expect(hit?.startColumn).toBe('GETBIT(TALENT:TARGET:性別, '.length + 1);
+    expect(hoverAt('GETBIT(TCVAR:TARGET:随便, |5)', schemaA())?.name).toBe('随意');
   });
 
   it('负例：非位槽 / 表内无该位号 / 位坑是变量 / 无表 一律不显示', () => {

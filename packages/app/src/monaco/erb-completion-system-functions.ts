@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
+import { isAllBlank } from './kojo-completion-position';
 
 /**
  * EC-5 · `.erb`（EraBasic）**系统函数名补全（英文名）**。
@@ -13,9 +14,13 @@ import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
  * 1. **注释行**：行首（含缩进）`;` 起头 = Emuera 整行注释 → `[]`；
  * 2. **字符串内**：光标前该行 `"` 计数为奇 = 光标落在字符串字面量里（含未闭合串端点）→ `[]`；
  * 3. **指令行首**：光标处的词**之前全是空白**（词即本行第一个 token）→ `[]`——该位是
- *    ERB 指令 / `@` 函数定义 / `$` 标签 / `#` 预处理的名字位，不是实参位（`GETBIT` 亦属
- *    指令，行首形态是语句而非表达式）；
- * 4. **非法位置**：`lineNumber` / `column` 非有限或 `< 1` → `[]`。
+ *    ERB 指令 / `@` 函数定义 / `#` 预处理的名字位，不是实参位（`GETBIT` 亦属
+ *    指令，行首形态是语句而非表达式）；空白口径**单源** `kojo-completion-position`
+ *    的 `isAllBlank`（`\t` / 半角空格 / U+3000 全角空格，与 lexer 同集）；
+ * 4. **`$` 紧前**：光标处词的**紧前一枚字符**是 `$` → `[]`——该位是 `$标签` 的名字位
+ *    （行首 `$GET|` 即此形态）；行中 `GOTO $GET|` 由装配层白名单门收口，本模块只做
+ *    本源防守；
+ * 5. **非法位置**：`lineNumber` / `column` 非有限或 `< 1` → `[]`。
  *
  * 命中时的候选形态：`label` = **英文名**（`GETBIT`），`insertText` = 调用形态 `名字(`
  * （作者接着补实参），`kind` = `Function`，`documentation` = `**英文名** ↔ 中文名`
@@ -47,8 +52,10 @@ export function erbSystemFunctionCompletionItems(
   if (quotes % 2 === 1) return [];
 
   const word = model.getWordUntilPosition(position);
-  // 3) 词前全是空白 → 行首指令位（`@` / `$` / `#` / 指令名），不是实参位
-  if (/^[ \t]*$/.test(line.slice(0, word.startColumn - 1))) return [];
+  // 3) 词前全是空白 → 行首指令位（`@` / `#` / 指令名）；空白口径单源 isAllBlank（含 U+3000）
+  if (isAllBlank(line.slice(0, word.startColumn - 1))) return [];
+  // 4) 词紧前是 '$' → `$标签` 名字位（本源防守；行中形态由装配层门收口）
+  if (word.startColumn >= 2 && line[word.startColumn - 2] === '$') return [];
 
   const range: Monaco.IRange = {
     startLineNumber: position.lineNumber,

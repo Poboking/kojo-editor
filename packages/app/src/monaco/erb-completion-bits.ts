@@ -18,6 +18,16 @@ import type { VariableSchema } from '@kojo/plugin-api';
  * 位置判据（严格，**严禁**泛化成「任意逗号后就是位」）：命中时还须满足
  * ①光标落在**该原语的第二实参区间内**；②该区间此刻**为空**（纯空白）——作者一旦写了
  * 内容（含把位号写成变量 `LOCAL`）就**不抢候选**（作者写变量不得被打扰）。
+ * ①+② 合成单一判据 `erbBitSlotOpen`（导出；位置门 / 触发探针消费，签名定死），
+ * 与候选门共用同一条内部空判据——**禁止各写一份**。
+ *
+ * 第一实参的切法（批⑧）：Emuera 变量引用可以是两段式 `族:索引`，也可以是**三段式**
+ * `族:角色:名`（`TALENT:TARGET:性別` / `TCVAR:TARGET:随便`，真语料 78 处）——中段是
+ * **角色 / 作用域表达式**，**名字在末段**；而 adapter 的 `lookup(variableName, index)`
+ * （`eratw-adapter/variable-schema.ts` 名称表分支）只把**单段名**交给 `byIndex` / `byName`
+ * 查表 ⇒ 整段 `TARGET:性別` 当索引必然查不中（这是一批位表全空的根因）。故切法**定死**为：
+ * 族 = 第一个冒号前段，索引 = 最后一个冒号后段（无冒号 = 裸族头，索引缺省）；
+ * 两段式首末冒号同一条 ⇒ 与旧切法逐字等价（零行为变化）。
  *
  * 与既有各 source 同纪律：纯函数 + 薄 Monaco 翻译、只读模型、不产生编辑、不发事件；
  * provider 注册不在本模块——编排层把它接进补全基座（`erb-completion.ts`）与悬停基座
@@ -158,7 +168,28 @@ export function findBitSlot(lineText: string, column: number): ErbBitSlot | null
 }
 
 /**
- * 把第一实参变量引用解析成 `VariableInfo.bits`（**纯函数**；`族:索引` 或裸族名）。
+ * 位槽第二实参区间是否**为空**（纯空白）——位置门（`erbBitSlotOpen`）与候选门
+ * （`erbBitCompletionItems`）共用的**唯一**判据真源（**禁止两处各写**）。
+ */
+function slotRegionBlank(lineText: string, slot: ErbBitSlot): boolean {
+  return lineText.slice(slot.regionStart, slot.regionEnd).trim().length === 0;
+}
+
+/**
+ * `lineText` 上 `column`（1 基列）处是否是一个**待命中的位槽**：落在四种位原语的
+ * 第二实参坑内 **且** 该坑此刻为空（纯空白）。位置门 / 触发探针消费（签名定死）；
+ * 判据与补全候选同源——非空槽 / 内容槽一律 false（作者写了位号或变量就不打扰）。
+ */
+export function erbBitSlotOpen(lineText: string, column: number): boolean {
+  const slot = findBitSlot(lineText, column);
+  return slot !== null && slotRegionBlank(lineText, slot);
+}
+
+/**
+ * 把第一实参变量引用解析成 `VariableInfo.bits`（**纯函数**；段切法见文件头注）。
+ * 族 = 第一个冒号前段；索引 = **最后一个**冒号后段（无冒号 = 裸族头 ⇒ `index` 缺省）。
+ * 依据：adapter `lookup` 按**单段名**查 `byIndex` / `byName`，三段式中段是角色表达式、
+ * 名字在末段；两段式首末冒号同一条 ⇒ 与旧切法逐字等价。
  * 查不到 / 无位表 / 抛错 ⇒ `undefined`（**不猜**，绝不静默造位号）。
  */
 function resolveBits(
@@ -166,9 +197,10 @@ function resolveBits(
   variableRef: string,
 ): ReadonlyArray<{ bit: number; label: string }> | undefined {
   if (variableRef.length === 0) return undefined;
-  const colon = variableRef.indexOf(':');
-  const name = colon < 0 ? variableRef : variableRef.slice(0, colon);
-  const index = colon < 0 ? undefined : variableRef.slice(colon + 1);
+  const first = variableRef.indexOf(':');
+  const last = variableRef.lastIndexOf(':');
+  const name = first < 0 ? variableRef : variableRef.slice(0, first);
+  const index = last < 0 ? undefined : variableRef.slice(last + 1);
   let bits: ReadonlyArray<{ bit: number; label: string }> | undefined;
   try {
     bits = schema.lookup(name, index)?.bits;
@@ -200,7 +232,7 @@ export function erbBitCompletionItems(
   const slot = findBitSlot(line, position.column);
   if (slot === null) return [];
   // 位坑已有内容（作者写了位号 / 写成变量 `LOCAL`）⇒ 不抢候选（不打扰作者写变量）
-  if (line.slice(slot.regionStart, slot.regionEnd).trim().length > 0) return [];
+  if (!slotRegionBlank(line, slot)) return [];
 
   const bits = resolveBits(schema, slot.variableRef);
   if (bits === undefined) return [];

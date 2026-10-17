@@ -4,8 +4,8 @@
  * 不需要语料：词表真源 `SYSTEM_FUNCTION_REVERSE`（`kojo-sugar` 派生）在测试里真实生效。
  * 覆盖：表达式位 `GET` → 命中 `GETBIT`（`insertText` = `GETBIT(`、`kind` = Function、
  * `documentation` = `**英文名** ↔ 中文名`、替换范围 = 已输入词）；同表覆盖（`MATCH` /
- * `GETNUM` / `STRCOUNT` / `RAND` / `SETBIT` 在列）；前缀精确优先；注释行 / 指令行首 /
- * 字符串内 → `[]`；空 model / 非法位置不抛。
+ * `GETNUM` / `STRCOUNT` / `RAND` / `SETBIT` 在列）；前缀精确优先；注释行 / 指令行首（含
+ * U+3000 全角空白缩进）/ 字符串内 / 词紧前 `$` → `[]`；空 model / 非法位置不抛。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -96,6 +96,27 @@ describe('EC-5 · 位置判据不满足 → []', () => {
     expect(at('PRINTFORM|')).toEqual([]);
     expect(at('GET|')).toEqual([]);
     expect(at('  GET|')).toEqual([]);
+  });
+
+  it('全角空格（U+3000）缩进的行首 → []（空白单源 isAllBlank，与 lexer 同集）', () => {
+    expect(at('\u3000\u3000GET|')).toEqual([]);
+    expect(at('\u3000PRINTFORM|')).toEqual([]);
+    expect(at('\u3000\u3000; GET|')).toEqual([]);
+  });
+
+  it('词紧前一枚字符是 `$` → []（`$标签` 名字位）', () => {
+    expect(at('$GET|')).toEqual([]);
+    expect(at('\u3000\u3000$GET|')).toEqual([]);
+    expect(at('$|')).toEqual([]);
+  });
+
+  it('行中 `$` 紧前同为本源防守（上层装配门另有收口，此处不产出亦无害）', () => {
+    expect(at('PRINTFORML $GET|')).toEqual([]);
+    expect(at('PRINTFORML $|')).toEqual([]);
+  });
+
+  it('`$` 不在紧前（已隔空白 / 词内）→ 不受影响', () => {
+    expect(labelsOf(at('PRINTFORML $ GET|'))).toContain('GETBIT');
   });
 
   it('字符串字面量内（光标前 `"` 奇数）→ []', () => {

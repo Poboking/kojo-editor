@@ -150,6 +150,8 @@ const KOJO_TABLES: CompletionTables = {
 const ERB_TABLES: ErbCompletionTables = {
   variableSchema: fakeSchema(),
   erbFunctionNames: () => PROJECT_FNS,
+  // 批⑮：本文件解析事实通道（erb-declared 出货用；labelsAt 缺省 undefined ⇒ erb-labels 走全文回退）
+  erbFileFacts: { dimsOf: () => ['心情'], labelsAt: () => undefined },
 };
 
 /* ============================== 上下文构造（把桩喂给 seam 的 provide） ============================== */
@@ -178,6 +180,12 @@ function erbCtx(text: string, column: number, lineNumber = 1): ErbCompletionSour
   const model = modelOf(text);
   const position = { lineNumber, column } as Monaco.Position;
   const word = model.getWordUntilPosition(position);
+  // 桩 range 对齐真 seam 的口径：生产侧 `ERB_COMPLETION_ASSEMBLY.locate` 传的是
+  // `erbTokenRange`（token 起始列向前吞并 `#` / `[`）。少了这一步，`#D` 位的前缀会被切
+  // 成 `D`，行首源按全记号前缀收窄时 `#DIM*` 被误滤 ⇒ 假红（不是被测代码的问题）。
+  const line = text.split('\n')[lineNumber - 1] ?? '';
+  let startColumn = word.startColumn;
+  while (startColumn > 1 && (line[startColumn - 2] === '#' || line[startColumn - 2] === '[')) startColumn--;
   return {
     monaco: MONACO,
     model,
@@ -185,7 +193,7 @@ function erbCtx(text: string, column: number, lineNumber = 1): ErbCompletionSour
     range: {
       startLineNumber: lineNumber,
       endLineNumber: lineNumber,
-      startColumn: word.startColumn,
+      startColumn,
       endColumn: word.endColumn,
     } as Monaco.IRange,
     tables: ERB_TABLES,
@@ -194,7 +202,7 @@ function erbCtx(text: string, column: number, lineNumber = 1): ErbCompletionSour
 
 /** 每 seam 的遍历场景（每 source 给一个「能出货」的位置） */
 const KOJO_SCENARIOS: ReadonlyArray<readonly [string, CompletionSourceContext]> = [
-  ['kojo-lexicon', kojoCtx('别名 心 = 角色 3\n', 1)],
+  ['kojo-lexicon', kojoCtx('别名 心 = 角色 3\n', 2)],
   // R4 块头模板：行首（token 之前只有空白）才有候选
   ['kojo-snippet', kojoCtx('如果', 1)],
   ['kojo-variable', kojoCtx('{她的好感', 5)],
@@ -225,6 +233,8 @@ const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]
   ['erb-labels', erbCtx('@F\n$TARGET_ONE\n\tGOTO $TA', 10, 3)], // 跳转位
   ['erb-system-functions', erbCtx('IF A', 5)], // 表达式位
   ['erb-bits', erbCtx('SETBIT CFLAG:1, ', 17)], // 位槽（位号 + 中文位名）
+  ['erb-families', erbCtx('PRINTFORML CF', 14)], // 行中族头位（CF → CFLAG）
+  ['erb-declared', erbCtx('PRINTFORML 心', 13)], // 行中裸名位（#DIM 声明名，桩 facts 给 心情）
 ];
 
 interface Collected {
@@ -368,14 +378,14 @@ describe('SH-6 · 零 emoji 守卫（宿主层候选文本）', () => {
 
 describe('SH-6 · kind 语义映射（当前设计意图）', () => {
   it('kojo-lexicon：别名 → Variable；保留代词 / 关键字 → Keyword', () => {
-    const items = kojoSrc('kojo-lexicon').provide(kojoCtx('别名 心 = 角色 3\n', 1));
+    const items = kojoSrc('kojo-lexicon').provide(kojoCtx('别名 心 = 角色 3\n', 2));
     expect(find(items, '心')!.kind).toBe(KIND.Variable); // 本文件别名
     expect(find(items, '她')!.kind).toBe(KIND.Keyword); // 保留代词
     expect(find(items, '如果')!.kind).toBe(KIND.Keyword); // 中文主形关键字
   });
 
   it('kojo-lexicon：运算符 → Operator；系统函数 → Function', () => {
-    const items = kojoSrc('kojo-lexicon').provide(kojoCtx('别名 心 = 角色 3\n', 1));
+    const items = kojoSrc('kojo-lexicon').provide(kojoCtx('别名 心 = 角色 3\n', 2));
     expect(find(items, '等于')!.kind).toBe(KIND.Operator);
     expect(find(items, '不在')!.kind).toBe(KIND.Operator); // NOTIN 归运算符组
     expect(find(items, '获取标记')!.kind).toBe(KIND.Function);

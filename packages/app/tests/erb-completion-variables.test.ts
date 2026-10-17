@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { VariableInfo, VariableSchema } from '@kojo/plugin-api';
-import { erbVariableCompletionItems } from '../src/monaco/erb-completion-variables';
+import { erbVariableCompletionItems, erbVariableSlotAt } from '../src/monaco/erb-completion-variables';
 
 /** 合成族 → 索引名表（CFLAG 主表 4 名；TALENT 一表用于核对族隔离） */
 const NAMES: Record<string, VariableInfo[]> = {
@@ -150,5 +150,33 @@ describe('EC-2 ERB 变量补全 · fail-visible 负例（绝不猜、绝不抛�
     expect(at('CFLAG:TARGET:好', null)).toEqual([]);
     const noNames: VariableSchema = { version: '1', lookup: () => undefined };
     expect(at('CFLAG:好', noNames)).toEqual([]);
+  });
+});
+
+/* ============================== 探针导出（T6 位置门 `variable-slot` 消费；与候选同一份判据） ============================== */
+
+describe('EC-2 探针导出 · erbVariableSlotAt（门与候选源共用一份判据）', () => {
+  it('白名单族 + 名字位 → 槽描述（二段 / 三段）', () => {
+    expect(erbVariableSlotAt('CFLAG:好', 8)).toMatchObject({
+      start: 6,
+      end: 7,
+      prefix: '好',
+      family: 'CFLAG',
+      scoped: false,
+    });
+    expect(erbVariableSlotAt('CFLAG:TARGET:好', 15)).toMatchObject({
+      start: 13,
+      end: 14,
+      prefix: '好',
+      family: 'CFLAG',
+      scoped: true,
+    });
+    expect(erbVariableSlotAt('CFLAG:', 7)).toMatchObject({ start: 6, end: 6, prefix: '', family: 'CFLAG' });
+  });
+
+  it('非白名单族 / 非名字位 → null（与候选的负例同口径）', () => {
+    expect(erbVariableSlotAt('FOO:好', 6)).toBeNull();
+    expect(erbVariableSlotAt('CFLAG', 6)).toBeNull();
+    expect(erbVariableSlotAt('CFL|AG:好', 4)).toBeNull();
   });
 });
