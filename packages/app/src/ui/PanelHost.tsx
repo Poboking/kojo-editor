@@ -22,10 +22,45 @@ type UiPrefs = NonNullable<UIPanelProps['uiPrefs']>;
  * 性能批（2026-10-16）：`PanelBody` / `StatusbarItem` 套 `React.memo`（显式比较器
  * `panelBodyPropsEqual`，可单测）。壳层因 index/dirty/editorStatus 等无关状态重渲时，
  * 挂载中的面板体不再跟着重渲——props 三件套的引用稳定性是前提，见比较器注释。
+ *
+ * PS-6（2026-10-20）把那条前提补全：宿主用可变 ref 桥 props 的面板（内建视图）三件套
+ * 恒稳定 ⇒ memo 变成"永久跳过"，新值送不进去。比较器因此多认一格 `hostVersion`
+ * ——由宿主在桥接内容变化时抬号。memo 依旧挡住无关重渲，但不再挡住真相。
  */
 
 /** 图标桥的唯一实现：贡献方拿到图标名，宿主决定怎么画（模块级常量 ⇒ 引用恒稳定） */
 const renderIcon = (name: string, size?: number): ReactElement => <Icon name={name} size={size} />;
+
+/** 宿主版本闸的记账：`{ 当前计数, 上一次比过的依赖快照 }` */
+export interface HostVersionState {
+  readonly version: number;
+  readonly deps: readonly unknown[];
+}
+
+/**
+ * 版本闸的**判等步**（纯函数，可单测；PS-6 正确性修复的机制本体）。
+ *
+ * 依赖逐项 `Object.is` 比：任一项换了 ⇒ 计数 +1 并换掉快照；全同 ⇒ 原样返回同一格
+ * （⇒ 宿主每渲一次但桥里没换东西时，memo 仍然照旧 bail，不白重渲面板）。
+ *
+ * 为什么要这么一格数字：内建视图把真状态桥在**可变 ref** 上（组件身份必须恒定，
+ * 否则整棵树每帧重挂、展开态全丢），于是 `contribution` / `uiPrefs` / `floating`
+ * 三条对它永远相等 ⇒ `PanelBody` 的 memo 永久跳过 ⇒ 桥后面的新值一次也送不进去。
+ * 见 `panelBodyPropsEqual` 的 `hostVersion` 那条。
+ */
+export function hostVersionStep(prev: HostVersionState, deps: readonly unknown[]): HostVersionState {
+  if (prev.deps.length === deps.length) {
+    let same = true;
+    for (let i = 0; i < deps.length; i++) {
+      if (!Object.is(prev.deps[i], deps[i])) {
+        same = false;
+        break;
+      }
+    }
+    if (same) return prev;
+  }
+  return { version: prev.version + 1, deps };
+}
 
 export interface PanelBodyProps {
   contribution: Pick<UIPanelContribution, 'id' | 'component'>;
@@ -38,20 +73,38 @@ export interface PanelBodyProps {
    * 缺省即 `false` = 全量渲染 = 改动前行为）。宿主不必在此兜默认；语义由契约钉死。
    */
   uiPrefs?: UiPrefs;
+  /**
+   * **宿主版本计数**（PS-6 正确性修复，2026-10-20）：面板把真状态桥接在可变 ref 上时
+   * （内建视图就是这种形态：`component` 身份必须恒定，否则整棵树每次重挂），
+   * 三条既有 props 永远同引用 ⇒ memo 永久 bail ⇒ 桥后面的新值根本送不进去。
+   * 宿主每次改动桥接内容就**抬一次这个数字**，memo 才有地方看见变化。
+   *
+   * 缺省 `0` = 本面板没有桥接态（插件面板的常态：自己订阅内核），行为与改动前逐字一致。
+   * 计数只要求"变化时不同"，不要求连续，也不进贡献方契约（面板本体读不到它）。
+   */
+  hostVersion?: number;
 }
 
 /**
  * `React.memo` 比较器（导出仅为单测；语义 = 浅比较）。
  *
- * 三条 props 的引用契约（ShellLayout 侧已满足，改动时先对照这里）：
+ * 四条 props 的引用契约（ShellLayout / ProjectView 侧已满足，改动时先对照这里）：
  * - `contribution`：逐面板对象恒稳定（`slots.query` 的贡献对象 / builtinViews 的 useMemo
  *   同引用穿过 organizePanels——只排序不过滤拷贝）；
  * - `uiPrefs`：壳层 `useMemo(() => ({ panelVirtualize }), [panelVirtualize])`——
  *   开关不动则同引用（**不可写成每次渲染现建的对象字面量**，那样 memo 必失效）；
- * - `floating`：布尔 / undefined 原始值；`renderIcon` 不在 props 里（本组件内部注入模块常量）。
+ * - `floating`：布尔 / undefined 原始值；`renderIcon` 不在 props 里（本组件内部注入模块常量）；
+ * - `hostVersion`：宿主侧的变化闸（见上面的注释）——**桥接 ref 的面板必须由宿主抬这一格**，
+ *   否则 memo 永久 bail，定位到树（B4）/ 外部改动后重列（HK-5）/ 冷开快照转索引三件事
+ *   全都失灵，直到某次偶然的组件重挂把它们"顺带"修好。
  */
 export function panelBodyPropsEqual(a: PanelBodyProps, b: PanelBodyProps): boolean {
-  return a.contribution === b.contribution && a.floating === b.floating && a.uiPrefs === b.uiPrefs;
+  return (
+    a.contribution === b.contribution &&
+    a.floating === b.floating &&
+    a.uiPrefs === b.uiPrefs &&
+    (a.hostVersion ?? 0) === (b.hostVersion ?? 0)
+  );
 }
 
 function PanelBodyView({ contribution, floating, uiPrefs }: PanelBodyProps): ReactElement {

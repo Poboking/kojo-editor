@@ -10,7 +10,8 @@
 import { type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import type { DirEntry } from '@kojo/plugin-api';
 import { Icon } from './icons';
-import { BINARY_EXT, erbExt, visibleEntries } from './file-tree-model';
+import { BINARY_EXT, erbExt } from './file-tree-model';
+import { pkey } from './file-tree-ops';
 import { EditRow } from './file-tree-rows';
 import type { DirState, EditState, MenuScope } from './file-tree-types';
 
@@ -37,12 +38,38 @@ export interface DirRowsProps {
 }
 
 /**
+ * 一份目录清单的排序结果（PS-6 第 4 项）。
+ *
+ * `localeCompare` 是这批行里最贵的一步：旧实现每次渲染、每一层都要把整份清单重排一遍，
+ * 一次外部改动重列 K 层就是 K 次全排序，而清单内容压根没换。
+ * 键用**条目数组的引用**（`DirEntry[]` 由 `listDir` 一次产出、放进 dirCache 就不再变），
+ * ⇒ 数组身份 = 内容身份；列举换新数组自然就是新的一格，不会捞到旧顺序。
+ * WeakMap ⇒ 目录从缓存里退场时这份排序跟着被回收，不留第二条不衰减的内存。
+ */
+const sortedByEntries = new WeakMap<readonly DirEntry[], { dirs: DirEntry[]; files: DirEntry[] }>();
+
+function sortedDirsAndFiles(entries: readonly DirEntry[]): { dirs: DirEntry[]; files: DirEntry[] } {
+  const hit = sortedByEntries.get(entries);
+  if (hit) return hit;
+  const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name);
+  const out = {
+    dirs: entries.filter((d) => d.isDirectory).sort(byName),
+    files: entries.filter((d) => !d.isDirectory).sort(byName),
+  };
+  sortedByEntries.set(entries, out);
+  return out;
+}
+
+/**
  * 一个目录的真实内容行（递归）。目录可再展开；文件按类型给不同处置。
  *
  * `skip` 只在**包根那一层**生效：那里的 ERB 与包层平铺列表同级重复（同一个东西在
  * 同一个视觉层级出现两遍），所以略过。**嵌套目录必须如实显示自己的 ERB**——
  * 它们住在另一层，不是重复；若一并略过，装了 10 个面文件的子目录会被渲染成空目录，
  * 等于谎报文件系统（实测语料 `灵梦-少女之梦/没写的` 就有 10 个 ERB）。
+ *
+ * 口径与 `visibleEntries` 逐字相同（depth===0 才按 pkey 去重），只是**先去重再排序**
+ * 改成"排好序再按同一把尺滤"——顺序不变、行数不变，省掉的是每帧重排。
  */
 export function DirRows(props: DirRowsProps): ReactElement[] {
   const {
@@ -71,13 +98,14 @@ export function DirRows(props: DirRowsProps): ReactElement[] {
       </li>,
     ];
   }
-  const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name);
-  const visible = visibleEntries(state, depth, skip);
-  if (visible.length === 0) {
+  const sorted = sortedDirsAndFiles(state);
+  // 包根层：与平铺列表同级的 ERB 在这里略过（判据与 `visibleEntries` 同一条）
+  const visibleFiles = depth === 0 ? sorted.files.filter((d) => !skip.has(pkey(d.path))) : sorted.files;
+  if (sorted.dirs.length === 0 && visibleFiles.length === 0) {
     return [<li key={`${dir}::empty`} className="tree-note">（空目录）</li>];
   }
-  const dirs = visible.filter((d) => d.isDirectory).sort(byName);
-  const files = visible.filter((d) => !d.isDirectory).sort(byName);
+  const dirs = sorted.dirs;
+  const files = visibleFiles;
   const pad = { paddingLeft: `${depth * 14}px` };
   /** 该层正在新建（输入行插在本层最上）；与 rename 行共用 EditRow */
   const creatingHere = edit?.mode === 'create' && edit.dir === dir ? edit : null;

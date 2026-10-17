@@ -6,9 +6,9 @@ import {
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
@@ -19,6 +19,8 @@ import {errorText,  MARKET_SERVICE_KEY } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import {
+  beginLiveResize,
+  beginSplitResize,
   defaultLayout,
   loadLayout,
   organizePanels,
@@ -136,6 +138,84 @@ export interface EditorStatusInfo {
 }
 
 /**
+ * 两份状态读数是否等价（纯数据逐字段比；缺省与 null/'' 视为同值）。
+ * `sel`/`autosavedAt` 是可选字段，上报方有时带有时不带 ⇒ 按"缺省即空"归一后再比，
+ * 否则 `{...} vs {..., sel: undefined}` 这种同一读数会被判成两次变化。
+ *
+ * PS-6 起这条判据搬到**壳层状态读数 store** 里（见下），ProjectView 不再自己留一份。
+ */
+export function isSameEditorStatus(a: EditorStatusInfo | null, b: EditorStatusInfo | null): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return (
+    a.encoding === b.encoding &&
+    a.eol === b.eol &&
+    a.lines === b.lines &&
+    (a.autosavedAt ?? null) === (b.autosavedAt ?? null) &&
+    (a.sel ?? '') === (b.sel ?? '')
+  );
+}
+
+/* ---------------- PS-6：编辑器状态读数住在这里，不住在壳层 state 里 ---------------- */
+
+/**
+ * **编辑器状态读数的叶子 store**（PS-6 第 3 项）。
+ *
+ * 旧形态：`EditorPane` 每次光标移动都 `onStatusInfo` ⇒ ProjectView `setEditorStatus` ⇒
+ * ProjectView 重渲 ⇒ ShellLayout 整壳重渲 ⇒ 挂在 children 里的 EditorPane 又拿到新的一次
+ * 元素（三条回调里两条每次现建闭包 ⇒ 它自己也重渲）。**光标一动，全壳跟着抖**，
+ * 而那格读数只是状态栏上的十几个字。
+ *
+ * 新形态：读数写进这个模块级 store，只有订阅它的 `.sb-editor` 小叶子重渲。
+ * 内容相等（`isSameEditorStatus`）连通知都不发。
+ *
+ * 为什么是模块级而不是内核 store：这是**壳层私有的显示量**（与布局 localStorage 同层，
+ * 见本文件头注），零业务知识、不进内核域；生命周期与 ProjectView 同步
+ * （关项目时由 ProjectView 的卸载钩子清成 null，绝不让上一个文件的读数挂在状态栏上）。
+ */
+let editorStatusValue: EditorStatusInfo | null = null;
+const editorStatusListeners = new Set<() => void>();
+
+/** 写读数（内容没变 ⇒ 连通知都不发） */
+export function setShellEditorStatus(info: EditorStatusInfo | null): void {
+  if (isSameEditorStatus(editorStatusValue, info)) return;
+  editorStatusValue = info;
+  for (const notify of [...editorStatusListeners]) notify();
+}
+
+export function getShellEditorStatus(): EditorStatusInfo | null {
+  return editorStatusValue;
+}
+
+export function subscribeShellEditorStatus(listener: () => void): () => void {
+  editorStatusListeners.add(listener);
+  return () => {
+    editorStatusListeners.delete(listener);
+  };
+}
+
+/** 状态栏右区那三格读数（编码·EOL·行数 ／ 选区 ／ 自动保存时刻） */
+function EditorStatusReadout(): ReactElement | null {
+  const status = useSyncExternalStore(subscribeShellEditorStatus, getShellEditorStatus, getShellEditorStatus);
+  if (!status) return null;
+  return (
+    <>
+      <span className="sb-editor">
+        {status.encoding} · {status.eol} · {status.lines} 行
+      </span>
+      {status.sel ? <span className="sb-sel">{status.sel}</span> : null}
+      {/* 自动保存轻指示（A6）：同一条 onStatusInfo 链路带出的读数，不做第二个协议 */}
+      {status.autosavedAt != null ? (
+        <span className="sb-editor" title={`自动保存于 ${new Date(status.autosavedAt).toLocaleTimeString()}`}>
+          自动保存 {new Date(status.autosavedAt).toLocaleTimeString()}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+
+/**
  * 壳层工作台 API（P3：编辑器区空态动作按钮用——壳层持有 picker/命令注册表，
  * 空态在 children 里，需反向取得触发入口）。
  */
@@ -163,8 +243,6 @@ interface Props {
   /** 当前活动文件（状态栏可写胶囊的区域依据；判定与编辑器共用 `file-area.ts` 一把尺子） */
   activeFile?: string | null;
   onReauth: () => void;
-  /** 编辑器状态（编码/EOL/行数；无打开文件时 null） */
-  editorStatus: EditorStatusInfo | null;
   /** 当前文件脏态（状态栏保存态指示） */
   dirty: boolean;
   /** 索引状态（状态栏左区） */
@@ -183,6 +261,16 @@ interface Props {
   extraCommands?: readonly ShellCommandSpec[];
   /** 工作台 API 注册（P3：编辑器区空态动作按钮反向取得 picker/命令入口；卸载时 null） */
   onRegisterWorkbench?: (api: WorkbenchApi | null) => void;
+  /**
+   * 内建视图的**宿主版本闸**（PS-6 正确性修复）：`面板 id → 计数`。
+   *
+   * 这些面板由宿主用可变 ref 桥 props（组件身份必须恒定，否则整棵树每次重挂），
+   * `PanelBody` 的 memo 三条比较项对它们恒相等 ⇒ 桥里换了新 index / activeFile / 失效信号
+   * 也送不进去。宿主每次改桥就抬一次对应那格的数，壳层原样转给 `PanelBody.hostVersion`。
+   *
+   * 表里没有的面板（插件面板）拿 `undefined` ⇒ 比较按 0 走，行为与改动前逐字一致。
+   */
+  panelHostVersions?: Readonly<Record<string, number>>;
 }
 
 /** 视图在活动栏的位置：组成员全为低频（defaultActive:false）→ 底部区（定稿 §四插件状态齿轮位） */
@@ -208,7 +296,6 @@ export function ShellLayout(props: Props): ReactElement {
     writable,
     activeFile,
     onReauth,
-    editorStatus,
     dirty,
     stats,
     commandCtx,
@@ -218,6 +305,7 @@ export function ShellLayout(props: Props): ReactElement {
     onOpenFile,
     extraCommands,
     onRegisterWorkbench,
+    panelHostVersions,
   } = props;
 
   /** 封存总闸（`sealed.ts`；默认封存）：封存态下 `SEALED_PANEL_IDS` 清单里的插件面板整只不进编排 */
@@ -922,28 +1010,63 @@ export function ShellLayout(props: Props): ReactElement {
     };
   }, []);
 
-  /** 尺寸拖拽：mousedown 记录起点与初值，mousemove 换算，mouseup 解绑 */
-  const startDrag = useCallback(
-    (e: ReactMouseEvent, container: ContainerKey, horizontal: boolean, sign: 1 | -1) => {
-      e.preventDefault();
-      const startPos = horizontal ? e.clientX : e.clientY;
-      const startSize = layout[container].size;
-      const onMove = (ev: MouseEvent): void => {
-        const pos = horizontal ? ev.clientX : ev.clientY;
-        dispatch({ type: 'resize', container, size: startSize + sign * (pos - startPos) });
-      };
-      const onUp = (): void => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    },
-    [layout],
-  );
-
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
+
+  /**
+   * 三容器与侧栏分栏节的 DOM 引用（PS-6）：拖拽期要往它们身上写内联样式。
+   * 由渲染处的 ref 回调登记；把手与容器同一次渲染挂载，拖起来一定拿得到。
+   */
+  const shellElsRef = useRef<Partial<Record<ContainerKey, HTMLElement | null>>>({});
+  const sectionElsRef = useRef(new Map<string, HTMLElement>());
+
+  /**
+   * 尺寸拖拽（PS-6 第 2 项）：**拖拽期只写内联样式，松手才 dispatch 一次**。
+   *
+   * 旧形态每次 mousemove 都 `dispatch({type:'resize'})` ⇒ 一个新 `LayoutState` ⇒
+   * 整棵 ShellLayout 重渲染 ⇒ 持久化那条 `useEffect(..., [layout])` 跟着
+   * `JSON.stringify` + 写一次 localStorage。两秒拖拽 ≈ 120 次全壳重渲染 + 120 次写盘，
+   * 而浮窗拖拽早就用"只写 inline、松手 commit"这一招避掉了（见下面 `startFloatDrag`），
+   * 这里照搬同一个口径。换算与钳制的机制住在 `layout.ts` 的 `beginLiveResize`（可单测）。
+   *
+   * 指针侧一并收口（PS-6 第 7 项）：改用 pointer 事件 + `setPointerCapture`，
+   * 并挂 `pointercancel`——旧实现只在 window 的 mouseup 上解绑，
+   * 手在窗口外松开 ⇒ 监听器留着、下一次按下去叠一份。
+   */
+  const startDrag = useCallback(
+    (e: ReactPointerEvent<HTMLElement>, container: ContainerKey, horizontal: boolean, sign: 1 | -1) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const handle = e.currentTarget;
+      const pointerId = e.pointerId;
+      handle.setPointerCapture?.(pointerId);
+      const session = beginLiveResize({
+        target: shellElsRef.current[container] ?? undefined,
+        container,
+        startSize: layoutRef.current[container].size,
+        startPos: horizontal ? e.clientX : e.clientY,
+        sign,
+      });
+      const onMove = (ev: PointerEvent): void => {
+        if (ev.pointerId !== pointerId) return;
+        session.onMove(horizontal ? ev.clientX : ev.clientY);
+      };
+      const onUp = (ev: PointerEvent): void => {
+        if (ev.pointerId !== pointerId) return;
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+        // 松手一次 commit：值就是拖拽期最后写进 inline 的那个数 ⇒ 视觉零 delta，不跳一下
+        const size = session.finish();
+        if (size !== null) dispatch({ type: 'resize', container, size });
+      };
+      window.addEventListener('pointermove', onMove, { passive: true });
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    },
+    [],
+  );
 
   /**
    * 浮窗 DOM 引用（id → 根 `<section>`）。
@@ -1162,8 +1285,15 @@ export function ShellLayout(props: Props): ReactElement {
   const [splitWeights, setSplitWeights] = useState<Record<string, number[]>>({});
   const splitRef = useRef<HTMLDivElement | null>(null);
 
-  /** 分栏把手拖拽：调整第 i / i+1 两个展开面板的权重（总和守恒，带最小权重钳制） */
-  const startSectionDrag = (e: ReactMouseEvent, view: ViewDef, i: number): void => {
+  /**
+   * 分栏把手拖拽（PS-6 第 2 项的另一半）：调整第 i / i+1 两个展开面板的权重
+   * （总和守恒，带最小权重钳制）。
+   *
+   * 与容器尺寸同款口径：**拖拽期只写两节的 `flex-grow`，松手才 `setSplitWeights` 一次**。
+   * 旧实现每次 mousemove 都 setSplitWeights ⇒ 整个 ShellLayout（含编辑器区）重渲染一遍。
+   */
+  const startSectionDrag = (e: ReactPointerEvent<HTMLElement>, view: ViewDef, i: number): void => {
+    if (e.button !== 0) return;
     e.preventDefault();
     const container = splitRef.current;
     if (!container) return;
@@ -1171,26 +1301,37 @@ export function ShellLayout(props: Props): ReactElement {
     if (totalPx <= 0) return;
     const n = view.panels.length;
     const cur = splitWeights[view.key] ?? Array.from({ length: n }, () => 1);
-    const totalW = cur.reduce((a, b) => a + b, 0);
-    const startY = e.clientY;
-    const wA = cur[i] ?? 1;
-    const wB = cur[i + 1] ?? 1;
-    const sum = wA + wB;
-    const MIN_W = 0.4;
-    const onMove = (ev: MouseEvent): void => {
-      const d = ((ev.clientY - startY) / totalPx) * totalW;
-      const newA = Math.min(sum - MIN_W, Math.max(MIN_W, wA + d));
-      const next = [...cur];
-      next[i] = newA;
-      next[i + 1] = sum - newA;
-      setSplitWeights((prev) => ({ ...prev, [view.key]: next }));
+    const handle = e.currentTarget;
+    const pointerId = e.pointerId;
+    handle.setPointerCapture?.(pointerId);
+    const panelA = view.panels[i];
+    const panelB = view.panels[i + 1];
+    const session = beginSplitResize({
+      targets: [
+        panelA ? sectionElsRef.current.get(panelA.id) : undefined,
+        panelB ? sectionElsRef.current.get(panelB.id) : undefined,
+      ],
+      weights: cur,
+      index: i,
+      totalPx,
+      startPos: e.clientY,
+    });
+    const onMove = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      session.onMove(ev.clientY);
     };
-    const onUp = (): void => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+    const onUp = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+      const next = session.finish();
+      if (next !== null) setSplitWeights((prev) => ({ ...prev, [view.key]: next }));
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   };
 
   /* -------------------- UI-4：活动栏 / 标签条方向键漫游（roving tabindex） -------------------- */
@@ -1306,6 +1447,11 @@ export function ShellLayout(props: Props): ReactElement {
           <Fragment key={p.id}>
             <section
               className="sidebar-section"
+              ref={(node) => {
+                // 分栏拖拽要往这两节写内联 flex-grow（PS-6）；折叠节没把手，登记了也不碍事
+                if (node) sectionElsRef.current.set(p.id, node);
+                else sectionElsRef.current.delete(p.id);
+              }}
               style={isCollapsed ? undefined : { flexGrow: weights[i] ?? 1, flexBasis: 0 }}
             >
               <button
@@ -1321,14 +1467,16 @@ export function ShellLayout(props: Props): ReactElement {
                 </span>
                 <span>{p.title}</span>
               </button>
-              {isCollapsed ? null : <PanelBody contribution={p} uiPrefs={uiPrefs} />}
+              {isCollapsed ? null : (
+                <PanelBody contribution={p} uiPrefs={uiPrefs} hostVersion={panelHostVersions?.[p.id]} />
+              )}
             </section>
             {showSplitter ? (
               <div
                 className="resizer resizer-y section-splitter"
                 role="separator"
                 aria-label={`调整 ${p.title} 高度`}
-                onMouseDown={(e) => startSectionDrag(e, activeView, i)}
+                onPointerDown={(e) => startSectionDrag(e, activeView, i)}
               />
             ) : null}
           </Fragment>
@@ -1338,7 +1486,11 @@ export function ShellLayout(props: Props): ReactElement {
   ) : (
     <div className="sidebar-views">
       {activeView && activeView.panels[0] ? (
-        <PanelBody contribution={activeView.panels[0]} uiPrefs={uiPrefs} />
+        <PanelBody
+          contribution={activeView.panels[0]}
+          uiPrefs={uiPrefs}
+          hostVersion={panelHostVersions?.[activeView.panels[0].id]}
+        />
       ) : null}
     </div>
   );
@@ -1463,7 +1615,10 @@ export function ShellLayout(props: Props): ReactElement {
    * 解释性文字也一并迁到这里，别丢信息）。
    * 区域答不出（没打开文件 / 区域外的非 ERB）才回落到项目级 `writable`。
    */
-  const writableArea = fileWritableArea(kernel, activeFile ?? null);
+  // PS-6：memo 在 kernel + activeFile 上——`fileWritableArea` 每次调用都要
+  // `workspaceRootsOf(kernel)`（内核那侧现拼一份根数组），路径没换答案就不会换，
+  // 不该跟着壳层的每一次重渲重算一遍。
+  const writableArea = useMemo(() => fileWritableArea(kernel, activeFile ?? null), [kernel, activeFile]);
   const writablePill = writablePillTone(writableArea, writable);
   const writablePillTitle =
     writableArea === 'workspace'
@@ -1512,12 +1667,9 @@ export function ShellLayout(props: Props): ReactElement {
           .map((s) => (
             <StatusbarItem key={s.id} contribution={s} />
           ))}
-        {editorStatus ? (
-          <span className="sb-editor">
-            {editorStatus.encoding} · {editorStatus.eol} · {editorStatus.lines} 行
-          </span>
-        ) : null}
-        {editorStatus && editorStatus.sel ? <span className="sb-sel">{editorStatus.sel}</span> : null}
+        {/* PS-6：这三格读的是壳层状态 store（见 `setShellEditorStatus`），
+            光标移动只重渲这一枚小叶子，不再掀整壳。没读数 ⇒ 不画（旧口径一致）。 */}
+        <EditorStatusReadout />
         <span className={`sb-dirty ${dirty ? 'on' : ''}`} title={dirty ? '有未保存修改' : '已保存'}>
           {dirty ? (
             <>
@@ -1527,12 +1679,6 @@ export function ShellLayout(props: Props): ReactElement {
             '已保存'
           )}
         </span>
-        {/* 自动保存轻指示（A6）：同一条 onStatusInfo 链路带出的读数，不做第二个协议 */}
-        {editorStatus?.autosavedAt != null ? (
-          <span className="sb-editor" title={`自动保存于 ${new Date(editorStatus.autosavedAt).toLocaleTimeString()}`}>
-            自动保存 {new Date(editorStatus.autosavedAt).toLocaleTimeString()}
-          </span>
-        ) : null}
       </div>
     </footer>
   );
@@ -1641,6 +1787,9 @@ export function ShellLayout(props: Props): ReactElement {
           <>
             <aside
               className={`sidebar ${dropTarget === 'sidebar' ? 'drop-target' : ''}`}
+              ref={(node) => {
+                shellElsRef.current.sidebar = node;
+              }}
               style={{ width: layout.sidebar.size }}
               {...dropProps('sidebar')}
             >
@@ -1650,7 +1799,7 @@ export function ShellLayout(props: Props): ReactElement {
               className="resizer resizer-x"
               role="separator"
               aria-label="调整主侧栏宽度"
-              onMouseDown={(e) => startDrag(e, 'sidebar', true, 1)}
+              onPointerDown={(e) => startDrag(e, 'sidebar', true, 1)}
             />
           </>
         ) : null}
@@ -1661,16 +1810,23 @@ export function ShellLayout(props: Props): ReactElement {
               className="resizer resizer-x"
               role="separator"
               aria-label="调整副侧栏宽度"
-              onMouseDown={(e) => startDrag(e, 'aux', true, -1)}
+              onPointerDown={(e) => startDrag(e, 'aux', true, -1)}
             />
             <aside
               className={`aux ${dropTarget === 'aux' ? 'drop-target' : ''}`}
+              ref={(node) => {
+                shellElsRef.current.aux = node;
+              }}
               style={{ width: layout.aux.size }}
               {...dropProps('aux')}
             >
               {tabStrip('aux', org.aux, layout.aux.active)}
               <div className="container-body">
-                <PanelBody contribution={activeAux} uiPrefs={uiPrefs} />
+                <PanelBody
+                  contribution={activeAux}
+                  uiPrefs={uiPrefs}
+                  hostVersion={panelHostVersions?.[activeAux.id]}
+                />
               </div>
             </aside>
           </>
@@ -1682,16 +1838,23 @@ export function ShellLayout(props: Props): ReactElement {
             className="resizer resizer-y"
             role="separator"
             aria-label="调整底部区高度"
-            onMouseDown={(e) => startDrag(e, 'bottom', false, -1)}
+            onPointerDown={(e) => startDrag(e, 'bottom', false, -1)}
           />
           <section
             className={`bottombar ${dropTarget === 'bottom' ? 'drop-target' : ''}`}
+            ref={(node) => {
+              shellElsRef.current.bottom = node;
+            }}
             style={{ height: layout.bottom.size }}
             {...dropProps('bottom')}
           >
             {tabStrip('bottom', org.bottom, layout.bottom.active)}
             <div className="container-body">
-              <PanelBody contribution={activeBottom} uiPrefs={uiPrefs} />
+              <PanelBody
+                contribution={activeBottom}
+                uiPrefs={uiPrefs}
+                hostVersion={panelHostVersions?.[activeBottom.id]}
+              />
             </div>
           </section>
         </>
@@ -1725,7 +1888,12 @@ export function ShellLayout(props: Props): ReactElement {
               </button>
             </header>
             <div className="floating-panel-body">
-              <PanelBody contribution={p} floating uiPrefs={uiPrefs} />
+              <PanelBody
+                contribution={p}
+                floating
+                uiPrefs={uiPrefs}
+                hostVersion={panelHostVersions?.[p.id]}
+              />
             </div>
             {/* 四角 + 四边缩放把手：默认隐形，hover / 聚焦时显形；光标方向由 fp-<dir> 类给 */}
             {RESIZE_HANDLES.map((dir) => (

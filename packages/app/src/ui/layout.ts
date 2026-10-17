@@ -157,6 +157,108 @@ export function reducer(s: LayoutState, a: LayoutAction): LayoutState {
   }
 }
 
+/* ---------------- PS-6：拖拽期的实时样式会话（零 React） ---------------- */
+
+/**
+ * 拖拽期间要写内联样式的最小元素面。刻意只声明 `style.setProperty`：真实
+ * `HTMLElement` 的 `CSSStyleDeclaration` 满足它，单测传一个对象字面量即可——
+ * 与本仓 `float-drag.ts` 同一套"把 DOM 依赖收成最小面、机制本身可单测"的做法。
+ */
+export interface LiveStyleTarget {
+  readonly style: {
+    setProperty(name: string, value: string): void;
+  };
+}
+
+/** 容器尺寸落在 CSS 上的属性：sidebar/aux 改宽、bottom 改高（与渲染处的 style 同源） */
+export function sizePropOf(container: ContainerKey): 'width' | 'height' {
+  return container === 'bottom' ? 'height' : 'width';
+}
+
+/**
+ * 一次尺寸拖拽的会话：`onMove` 只写内联样式，`finish` 给出松手该 commit 的尺寸。
+ *
+ * **为什么不进 reducer**（PS-6 第 2 项）：`dispatch({type:'resize'})` 每来一次
+ * mousemove 就产出一个新 `LayoutState` ⇒ 整棵 ShellLayout 重渲染，而持久化那条
+ * `useEffect(..., [layout])` 会跟着 `JSON.stringify` + 写一次 localStorage——
+ * 一次两秒的拖拽 ≈ 120 次全壳重渲染 + 120 次写盘。浮窗拖拽早就用"拖拽期只写
+ * inline、松手才 commit"这一招（见 ShellLayout 的 `startFloatDrag`），这里照搬。
+ *
+ * 没拿到元素（理论上不会发生：把手与容器同一次渲染挂载）⇒ 仍只记最新值，
+ * 松手一次性 commit，退化成"拖完跳到位"，不炸也不多写盘。
+ */
+export interface LiveResizeSession {
+  /** 一次指针移动（参数为沿拖拽轴的坐标） */
+  onMove(pos: number): void;
+  /** 松手：需要 commit 的尺寸（钳制后）；一次都没动 ⇒ null（零 commit、零写盘） */
+  finish(): number | null;
+}
+
+export function beginLiveResize(opts: {
+  target: LiveStyleTarget | undefined;
+  container: ContainerKey;
+  startSize: number;
+  startPos: number;
+  sign: 1 | -1;
+}): LiveResizeSession {
+  const prop = sizePropOf(opts.container);
+  let last: number | null = null;
+  return {
+    onMove: (pos: number): void => {
+      const size = clamp(opts.container, opts.startSize + opts.sign * (pos - opts.startPos));
+      last = size;
+      if (opts.target) opts.target.style.setProperty(prop, `${size}px`);
+    },
+    finish: (): number | null => last,
+  };
+}
+
+/** 侧栏分栏的最小权重（与旧实现同值：再小就等于把那一栏拖没了） */
+export const MIN_SPLIT_WEIGHT = 0.4;
+
+/**
+ * 侧栏分栏把手的拖拽会话：与容器尺寸同一招——拖拽期只写两节的 `flex-grow`，
+ * 松手才把新权重 commit 给 React（旧实现每次 mousemove `setSplitWeights` ⇒ 整壳重渲染）。
+ *
+ * 守恒口径与旧实现逐字相同：`totalW` 用**起手时**的权重和、位移按容器高度换算成权重，
+ * 只动被把手夹住的相邻两节，其余权重原样带着走。
+ */
+/** 分栏拖拽会话：与 `LiveResizeSession` 同形，只是产物是整条权重数组 */
+export interface SplitResizeSession {
+  onMove(pos: number): void;
+  /** 松手：要 commit 的新权重；一次都没动 ⇒ null */
+  finish(): number[] | null;
+}
+
+export function beginSplitResize(opts: {
+  targets: readonly (LiveStyleTarget | undefined)[];
+  weights: readonly number[];
+  index: number;
+  totalPx: number;
+  startPos: number;
+}): SplitResizeSession {
+  const cur = [...opts.weights];
+  const totalW = cur.reduce((a, b) => a + b, 0);
+  const wA = cur[opts.index] ?? 1;
+  const wB = cur[opts.index + 1] ?? 1;
+  const sum = wA + wB;
+  let next: number[] | null = null;
+  return {
+    onMove: (pos: number): void => {
+      const d = ((pos - opts.startPos) / opts.totalPx) * totalW;
+      const newA = Math.min(sum - MIN_SPLIT_WEIGHT, Math.max(MIN_SPLIT_WEIGHT, wA + d));
+      next = [...cur];
+      next[opts.index] = newA;
+      next[opts.index + 1] = sum - newA;
+      const a = opts.targets[0];
+      const b = opts.targets[1];
+      if (a) a.style.setProperty('flex-grow', String(newA));
+      if (b) b.style.setProperty('flex-grow', String(sum - newA));
+    },
+    finish: (): number[] | null => next,
+  };
+}
+
 const LAYOUT_KEY = 'kojo.ui.layout.v1';
 
 function orderOf(p: UIPanelContribution): number {
