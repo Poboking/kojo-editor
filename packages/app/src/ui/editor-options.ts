@@ -122,6 +122,9 @@ const TIER_LARGE: EditorOptionPatch = {
   cursorSmoothCaretAnimation: 'off',
   // 语料同质（tab），不值得为探测再扫一遍文件头
   detectIndentation: false,
+  // 击键即格式化（F5）：ERB on-type provider 每次触发都要 getValue 整篇 + 全文档扫描
+  //（O(行数)）——大文件每敲一个 `;` 就整篇跑一遍。关掉；要格式化走显式命令/保存动作。
+  formatOnType: false,
 };
 
 /** huge 档 = large 档再削掉一切视口级装饰 */
