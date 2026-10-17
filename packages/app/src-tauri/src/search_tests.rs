@@ -10,9 +10,9 @@
 use super::decode_for_search;
 use crate::{
     build_matcher, byte_prefilter, decode_policy, decode_with_policy, is_utf16_bom_hit, looks_binary,
-    preview_window, run_search, scan_text, utf16_len, SearchFileDto, SearchMatchDto,
-    SearchOptionsDto, SearchProgressPayload, SearchRequestDto, SearchResultDto, ELLIPSIS_UNIT,
-    SEARCH_PER_FILE_CAP,
+    preview_window, run_search, scan_text, scan_text_flat, scan_hits, utf16_len, SearchFileDto,
+    SearchMatchDto, SearchOptionsDto, SearchProgressPayload, SearchRequestDto, SearchResultDto,
+    ELLIPSIS_UNIT, SEARCH_PER_FILE_CAP,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -91,16 +91,75 @@ fn invalid_regex_is_reported_not_swallowed() {
 
 /* --------------------------- 字节级预筛 --------------------------- */
 
+/// 预筛的成立条件与**作用半径**（PS-1 §3）：
+/// 字面量 + 大小写敏感就建预筛，但非 ASCII 查询只许对"整份字节就是合法 UTF-8"的文件生效
+/// （`ascii_safe` 这条标记就是那个半径）——遗留族（shift_jis/gbk/big5）的字节形与 UTF-8 不同，
+/// 拿 UTF-8 的查询字节去筛它们就会**漏报**，那种省法一律不许。
 #[test]
-fn byte_prefilter_only_holds_for_ascii_case_sensitive_literal() {
-    assert!(byte_prefilter("abc", false, true).is_some());
-    // 正则：可能匹配到字节里没有的原样片段（字符类 / 量词…）⇒ 不做预筛
-    assert!(byte_prefilter("a.c", true, true).is_none());
-    // 大小写不敏感：Unicode 折叠让"字节里有"≠"文本能匹配"⇒ 不做预筛
-    assert!(byte_prefilter("abc", false, false).is_none());
-    // 非 ASCII：shift_jis 与 utf-8 的编码字节不同 ⇒ 不做预筛
-    assert!(byte_prefilter("口上", false, true).is_none());
+fn byte_prefilter_holds_for_case_sensitive_literals_and_reports_its_reach() {
+    let ascii = byte_prefilter("abc", false, true).expect("ASCII 字面量该有预筛");
+    assert!(ascii.ascii_safe, "纯 ASCII 字面量对遗留族也逐字节同形 ⇒ 半径 = 全部文件");
+    assert!(ascii.re.is_match(b"xxABCxx") == false, "大小写敏感的预筛不许折叠大小写");
+
+    let zh = byte_prefilter("口上", false, true).expect("中文查询也该有预筛");
+    assert!(!zh.ascii_safe, "非 ASCII 查询对遗留族不成立 ⇒ 只许筛合法 UTF-8 的文件");
+    assert!(zh.re.is_match("这里有口上这个词".as_bytes()), "UTF-8 字节形要筛得出");
+    assert!(!zh.re.is_match("没有这个词".as_bytes()), "没有就该筛掉");
+    // GBK 的「口上」字节（u8 解不出该词）：预筛按 UTF-8 字节筛它会误杀 ⇒ 半径外，不筛
+    let (gbk_kojou, _, _) = encoding_rs::GBK.encode("口上");
+    assert!(
+        !zh.re.is_match(&gbk_kojou),
+        "夹具：GBK 字节形本就与 UTF-8 不同（这条断言反过来才说明半径标记是必要的）"
+    );
+
+    // 正则 / 大小写不敏感 / 空查询：一条都不预筛
+    assert!(byte_prefilter("a.c", true, true).is_none(), "正则可能匹配到字节里没有的原样片段");
+    assert!(byte_prefilter("abc", false, false).is_none(), "大小写折叠让'字节里有'≠'文本能匹配'");
     assert!(byte_prefilter("", false, true).is_none());
+}
+
+/// **中文查询打到遗留族文件上不许漏**（预筛放宽 + 三族裁决接线两条一起的端到端判据）。
+/// 改造前：预筛只认 ASCII ⇒ 中文查询对 12,657 份全不筛，而兜底只解 shift_jis ⇒
+/// GBK 正文是乱码、查询词匹配不上；两头现在都接对了。
+#[test]
+fn chinese_query_hits_legacy_family_files_and_prefilter_cannot_lose_them() {
+    let dir = temp_dir("legacy-e2e");
+    let line = "口上：你好，世界\n";
+    std::fs::write(dir.join("u8.erb"), line).unwrap();
+    let mut bom = vec![0xEF, 0xBB, 0xBF];
+    bom.extend_from_slice(line.as_bytes());
+    std::fs::write(dir.join("bom.erb"), &bom).unwrap();
+    let (gbk, _, had_err) = encoding_rs::GBK.encode(line);
+    assert!(!had_err, "夹具：GBK 必须严格解得动");
+    std::fs::write(dir.join("gbk.erb"), &gbk[..]).unwrap();
+    // 干扰项：同一目录一份**不含该词**的 UTF-8 ⇒ 该被预筛挡在解码之前（不误报也不漏报）
+    std::fs::write(dir.join("miss.erb"), "无关内容\n第二行\n").unwrap();
+
+    let mut req = request(&dir, "你好"); // request() = 字面量 + 大小写敏感 + 单线程
+    req.options.extensions = Some(vec!["erb".to_string()]);
+    let out = run(&req);
+    let names: Vec<String> = out
+        .files
+        .iter()
+        .map(|f| f.path.rsplit(['\\', '/']).next().unwrap_or("").to_string())
+        .collect();
+    for want in ["u8.erb", "bom.erb", "gbk.erb"] {
+        assert!(names.iter().any(|n| n == want), "{want} 该命中却没了：{names:?}");
+    }
+    assert!(!names.iter().any(|n| n == "miss.erb"), "不含词的文件不该出现：{names:?}");
+    assert_eq!(out.total_matches, 3, "三份各一次命中");
+    for f in &out.files {
+        assert_eq!(f.matches[0].line, 1);
+        assert_eq!(f.matches[0].column, 4, "「口上：」= 3 个单元 ⇒ 1 基列 4：{}", f.path);
+        assert_eq!(
+            f.matches[0].preview,
+            "口上：你好，世界",
+            "检索预览必须与编辑器打开同一份字节看到的文本逐字相同：{}",
+            f.path
+        );
+        assert_eq!(hit_text(&f.matches[0]), "你好");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /* ---------------------------- 解码判据（共享常量表） ---------------------------- */
@@ -254,10 +313,26 @@ fn preview_window_keeps_the_hit_and_reports_window_offsets() {
 
 #[test]
 fn short_lines_are_returned_whole_without_ellipsis() {
-    let (win, start, end) = preview_window(&"abcXYZ".encode_utf16().collect::<Vec<_>>(), 3, 6, 240);
+    let units = "abcXYZ".encode_utf16().collect::<Vec<_>>();
+    let (win, start, end) = preview_window(&units, 3, 6, 240);
     assert_eq!(String::from_utf16_lossy(&win), "abcXYZ");
     assert_eq!((start, end), (3, 6));
     assert_eq!(utf16_len("abcXYZ"), 6);
+}
+
+/// 不截断那一支必须是**借用**（PS-1 §3：命中行绝大多数本来就短于窗口，
+/// 旧口径每个命中先整行复制一遍单元、再 `from_utf16_lossy` 复制一遍文本）。
+#[test]
+fn preview_window_borrows_when_the_line_fits() {
+    let units = "短行".encode_utf16().collect::<Vec<_>>();
+    let (win, _, _) = preview_window(&units, 0, 1, 240);
+    assert!(
+        matches!(win, std::borrow::Cow::Borrowed(_)),
+        "整行装得下就不该复制单元数组"
+    );
+    let long = "x".repeat(400).encode_utf16().collect::<Vec<_>>();
+    let (win2, _, _) = preview_window(&long, 200, 201, 240);
+    assert!(matches!(win2, std::borrow::Cow::Owned(_)), "开窗那支必然是新建的");
 }
 
 #[test]
@@ -269,6 +344,82 @@ fn scan_text_reports_clipping_at_the_cap() {
     let (all, clipped2) = scan_text("x\nx\n", &m, 2);
     assert_eq!(all.len(), 2);
     assert!(!clipped2, "恰好装满不算截断");
+}
+
+/* ------------------- 字面量单趟快道 ≡ 逐行口径（PS-1 §3） ------------------- */
+
+/// **对拍**：字面量查询下，"整篇一次 find_iter + 增量数行/数列"与旧的"逐行 find_iter"
+/// 必须产出**逐字段相同**的命中（行号 / 列号 / 预览 / 窗口偏移 / 截断标记）。
+/// 快道只在该前提下成立 —— 正则查询仍走逐行原口径（锚点语义不许动），故这里覆盖
+/// 大小写敏感 / 不敏感 / 全词三档开关，以及跨行不跨行、`\r\n`、代理对、超长行、
+/// 命中贴着行首行尾、空行、cap 卡边界这些形态。
+#[test]
+fn scan_text_flat_matches_line_by_line_for_literals() {
+    let long = format!("{}NEEDLE{}", "0".repeat(300), "9".repeat(300));
+    // 夹具形态逐条有账：命中贴行首 / 空行 / 同行三命中 + CRLF / BMP 外字符（列按 UTF-16 单元）
+    // / 行中多段 / 命中贴行尾 / 超长行（预览开窗）/ 末行无换行
+    // / **孤立 `\r` 与 U+2028**：本仓的分行判据是 `split('\n')`（不是 `str::lines()`，后者把
+    //   `\r`、U+0085/U+2028/U+2029 也当行终止）⇒ 快道必须跟**慢道**同判据，而不是跟 lines()。
+    //   这两条夹具就是把"分行口径不许顺手换成 lines()"钉在这里。
+    let body = "NEEDLE:甲\n\nNEEDLENEEDLENEEDLE 尾\r\n\u{1F600}NEEDLE\u{1F600}\n\
+                前置很长的一段中文然后NEEDLE然后又一串\n尾NEEDLE\n\
+                甲\rNEEDLE尾\u{2028}NEEDLE\n"
+        .to_string()
+        + &long
+        + "\nNEEDLE";
+    for (query, case_sensitive, whole_word) in [
+        ("NEEDLE", true, false),
+        ("needle", false, false), // 大小写不敏感的字面量
+        ("NEEDLE", true, true),   // 全词：行边界上的 \b 两侧同判
+        ("needle", false, true),
+        ("甲", true, false),
+        ("尾NEEDLE", true, false),
+        ("0NEEDLE", true, false),
+    ] {
+        let m = build_matcher(query, false, case_sensitive, whole_word).unwrap();
+        for cap in [1usize, 2, 5, 500] {
+            let (lines, clip_lines) = scan_text(&body, &m, cap);
+            let (flat, clip_flat) = scan_text_flat(&body, &m, cap);
+            assert_eq!(
+                lines, flat,
+                "查询={query} case={case_sensitive} word={whole_word} cap={cap} 两条扫描产出不同"
+            );
+            assert_eq!(clip_lines, clip_flat, "截断标记不同：{query} cap={cap}");
+            if cap >= 5 {
+                assert!(!lines.is_empty(), "夹具本身该有命中（{query}）");
+            }
+        }
+    }
+    // 分流点：字面量走快道、正则走逐行 —— 两条都必须给出上面的同产出（正则由原实现给）
+    let m = build_matcher("NEEDLE", false, true, false).unwrap();
+    assert_eq!(
+        scan_hits(&body, &m, 500, true).0,
+        scan_hits(&body, &m, 500, false).0,
+        "分流后产出漂了"
+    );
+}
+
+/// 正则口径**没有**被顺手改掉：`^` 仍落在每一行（grep 语义），锚点在 CRLF 上仍
+/// 认剥掉 `\r` 之后的行尾。这两条就是"字面量快道不套到正则上"的理由。
+#[test]
+fn regex_queries_keep_line_anchored_semantics() {
+    let dir = temp_dir("anchor");
+    std::fs::write(dir.join("a.erb"), "K1_x\nK2_y\nK3_z\n").unwrap();
+    std::fs::write(dir.join("crlf.erb"), "abc\r\nabc\r\n").unwrap();
+
+    let mut req = request(&dir, r"^K\d");
+    req.options.is_regex = Some(true);
+    let out = run(&req);
+    assert_eq!(out.total_matches, 3, "^ 必须逐行生效，不是只在文件首生效");
+
+    let mut req2 = request(&dir, r"c$");
+    req2.options.is_regex = Some(true);
+    req2.options.extensions = Some(vec!["erb".to_string()]);
+    let out2 = run(&req2);
+    // ^K\d 三份 + crlf.erb 两行（剥 \r 后行尾是 c）
+    assert_eq!(out2.total_matches, 2, "CRLF 的 $ 要认剥掉 \\r 之后的行尾");
+    assert!(out2.files.iter().all(|f| f.path.ends_with("crlf.erb")));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /* ---------------------------- 端到端 ---------------------------- */
@@ -325,6 +476,27 @@ fn hidden_entries_are_skipped_and_overlapping_roots_dedup() {
     ];
     let out = run(&req);
     assert_eq!(out.files.len(), 1, "隐藏目录跳过 + 重叠根去重");
+    assert_eq!(out.total_matches, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 去重键 = **整条路径的小写形**（Windows 大小写不敏感），口径与改造前逐字相同；
+/// 改造只是把这条键从"每次比较现算"提成"每条路径算一次"。同目录的大小写两种写法
+/// 必须仍然折叠成一次 ⇒ 键算错就会在这里露出来。
+#[test]
+fn case_variant_roots_dedup_on_the_lowered_key() {
+    let dir = temp_dir("casevar");
+    std::fs::write(dir.join("a.erb"), "ABC\n").unwrap();
+    let lower = dir.to_string_lossy().to_lowercase();
+    let upper = dir.to_string_lossy().to_uppercase();
+    if lower == upper {
+        let _ = std::fs::remove_dir_all(&dir);
+        return; // 纯非 ASCII 路径（无大小写可言）⇒ 这条没有可断言的形态
+    }
+    let mut req = request(&dir, "ABC");
+    req.roots = vec![lower, upper];
+    let out = run(&req);
+    assert_eq!(out.files.len(), 1, "同一个目录的两种写法该折叠成一次检索");
     assert_eq!(out.total_matches, 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
