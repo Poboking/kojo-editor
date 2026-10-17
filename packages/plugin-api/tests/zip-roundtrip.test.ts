@@ -412,3 +412,21 @@ describe('buildZip 的契约档', () => {
     readout('导出形态', container, bytes.length, performance.now() - started);
   });
 });
+
+describe('zipEntryContractProblem · Windows 保留设备名（归入既有 entry-name-encoding 码）', () => {
+  it('本体 / 带扩展名变体 / 深层路径里的段 / 大小写不敏感全拒；普通名不误伤', () => {
+    expect(zipEntryContractProblem('CON')).toBe('entry-name-encoding');
+    expect(zipEntryContractProblem('con.txt')).toBe('entry-name-encoding');
+    expect(zipEntryContractProblem('ERB/口上/CON.tar.gz')).toBe('entry-name-encoding');
+    expect(zipEntryContractProblem('COM1')).toBe('entry-name-encoding');
+    expect(zipEntryContractProblem('LPT4.erb')).toBe('entry-name-encoding');
+    expect(zipEntryContractProblem('CONTOUR.erb')).toBeNull();
+    expect(zipEntryContractProblem('ERB/口上/nulless.txt')).toBeNull();
+  });
+
+  it('buildZip 契约档在写第一个字节之前就拒（与既有判据同一条链）', async () => {
+    await expect(
+      buildZip([{ name: 'ERB/CON.txt', data: bytesOf('x') }], { contract: 'extractable' }),
+    ).rejects.toThrow(/^entry-name-encoding：/);
+  });
+});

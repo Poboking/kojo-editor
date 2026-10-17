@@ -122,3 +122,10 @@ describe('createArtifact × journal', () => {
     expect(await ops.list()).toHaveLength(1);
   });
 });
+
+describe('remove · fail-closed 定位', () => {
+  it('任何授权根里都找不到的项目目录 ⇒ 显式拒绝（外部根离线绝不静默成功）', async () => {
+    const { ws } = await makeWorld();
+    await expect(ws.remove('no-such-project')).rejects.toThrow(/not found in any authorized root/);
+  });
+});

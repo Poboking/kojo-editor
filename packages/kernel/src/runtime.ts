@@ -178,8 +178,10 @@ export class PluginRuntime {
     const state = this.states.get(id);
     if (!state) throw new Error(`Unknown plugin '${id}'`);
     if (state.record.status === 'active') return;
-    if (state.record.status === 'error') {
-      // 清除错误让重扫有机会覆盖（原因可能已被修复）
+    if (state.record.status === 'error' || state.record.status === 'stopped') {
+      // 清除错误 / 复活停用让重扫有机会覆盖（原因可能已被修复）。retry 是显式用户意图：
+      // 类头注的「停用彻底可逆」此前没有兑现路径——stopped 对 tryActivateAll 不可见，
+      // retry 是它唯一的复活通道（tryActivateAll 依旧不碰 stopped，不会连带拉起别的停用插件）。
       this.setStatus(id, 'pending');
     }
     await this.tryActivateAll();

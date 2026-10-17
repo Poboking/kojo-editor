@@ -26,7 +26,7 @@
 import type { ArchiveParseOptions, SnapshotArchive, SnapshotScanResult, SnapshotSourceService } from './snapshot';
 import type { FileIO } from './io';
 import { basename, dirname, isPathUnder, join } from './paths';
-import { normalizeEntryName } from './zip';
+import { isWindowsReservedDeviceNameSegment, normalizeEntryName } from './zip';
 
 /** 归档读取服务键（实现 = 归档解析插件；只读消费者依赖本键，不再自己拼链路） */
 export const ArchiveServices = {
@@ -169,6 +169,13 @@ export function assertArchiveEntryName(name: string): string {
       'entry-name',
       name,
       `归档条目必须是单层文件名才能落盘（收到多层名 ${normalized}）`,
+    );
+  }
+  if (isWindowsReservedDeviceNameSegment(normalized)) {
+    throw new ArchiveExtractError(
+      'entry-name',
+      name,
+      `归档条目名是 Windows 保留设备名，无法落盘：${name}`,
     );
   }
   return normalized;

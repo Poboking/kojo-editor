@@ -151,16 +151,32 @@ export class TrashManager {
     const entry = join(root, id);
     await this.bridge.ensureDir(entry);
     const payload = join(entry, 'payload');
+    const manifest: TrashManifest = { v: 1, originalPath: target, deletedAt: Date.now(), kind };
+    // 两阶段提交，**manifest 先行**：先把引用写进账本再搬货。旧序（先 rename 后写 manifest）
+    // 在两步之间崩溃 = 货已离开原位、账上无名 —— 文件从 list/entryOf/restore 全部消失，
+    // 是数据"隐形"丢失。新序的中间态只剩"有账无货"（rename 是原子操作，要么成要么没动），
+    // 源文件原位不动，零丢失窗口；失败路径回滚账本（见下）。
+    const manifestPath = join(entry, 'manifest.json');
+    await this.bridge.writeFileBytes(manifestPath, new TextEncoder().encode(JSON.stringify(manifest, null, 2)));
     try {
       await this.bridge.rename(target, payload);
     } catch (err) {
-      if (!isCrossDevice(err)) throw err;
+      if (!isCrossDevice(err)) {
+        // 账已立、货没进来：回滚账本（条目目录整体撤掉）后把失败如实上抛，
+        // 不留一个"列不出来也删不掉"的半成品条目
+        await this.bridge.removeDir(entry).catch(() => undefined);
+        throw err;
+      }
       this.log?.warn(`回收站：rename 搬运失败（按跨卷回落 copy+delete）：${target} — ${String(err)}`);
-      await this.copyInto(payload, target, kind);
+      try {
+        await this.copyInto(payload, target, kind);
+      } catch (copyErr) {
+        // 复制半途失败：源还在原位，撤账重抛（部分复制的 payload 随条目目录一起清）
+        await this.bridge.removeDir(entry).catch(() => undefined);
+        throw copyErr;
+      }
       await this.deleteSource(target, kind);
     }
-    const manifest: TrashManifest = { v: 1, originalPath: target, deletedAt: Date.now(), kind };
-    await this.bridge.writeFileBytes(join(entry, 'manifest.json'), new TextEncoder().encode(JSON.stringify(manifest, null, 2)));
     // 顺手清超期（尽力而为：清理失败不影响本次移入；跳过被时间线引用的条目）
     // 先 `then(() => undefined)` 把 purge 的计数抹掉：`.catch` 只兜错误，
     // 直接挂会让 sweep 变成 `Promise<void | number>`（字段口径就是 Promise<void>）
@@ -245,6 +261,12 @@ export class TrashManager {
       return null;
     }
     const payload = join(dir, TRASH_PAYLOAD_NAME);
+    // 账对货的核验：payload 不在位（两阶段提交在搬货前崩溃的残留、或人为动过目录）
+    // ⇒ 不列进清单（恢复必败，列出来只会摆一个点不动的按钮）；残留由超期清理收走。
+    if (!(await this.bridge.exists(payload))) {
+      this.log?.warn(`回收站：条目 payload 缺失（跳过，残留待超期清理）：${dir}`);
+      return null;
+    }
     // 年龄按条目名那把尺（与 purge 同源）；名字合形态却日期非法（2 月 30 日那类）
     // 才回落 manifest——**回落的是显示口径，超期判定仍是条目名，宁缺毋滥**
     const atMs = trashEntryTimeMs(id) ?? raw.deletedAt;

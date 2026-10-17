@@ -232,6 +232,27 @@ export function zipContainerNameProblem(name: string): string | null {
 }
 
 /**
+ * Windows 保留设备名（Win32 文件名判据：`CON` 本体与带扩展名变体都建不出来）。
+ * 与 `packages/app/src/ui/file-tree-ops.ts` 的本地建名闸同源同表（那边多拦了历史 DOS 的
+ * `CLOCK$`，现代 Win32 已不保留，本表不收——包侧假阳性会拒掉合法市场包，从严 only 本地）。
+ */
+const WINDOWS_RESERVED_DEVICE_NAMES: ReadonlySet<string> = new Set([
+  'CON', 'PRN', 'AUX', 'NUL',
+  'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+  'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+]);
+
+/**
+ * 条目名段是否命中 Windows 保留设备名（大小写不敏感；`CON` / `CON.txt` / `CON.tar.gz`
+ * 同拒——Win32 取首个点前的主干判保留）。导出给 archive 名字闸复用，第二份表不存在。
+ */
+export function isWindowsReservedDeviceNameSegment(segment: string): boolean {
+  const upper = segment.toUpperCase();
+  const stem = upper.includes('.') ? upper.slice(0, upper.indexOf('.')) : upper;
+  return WINDOWS_RESERVED_DEVICE_NAMES.has(upper) || WINDOWS_RESERVED_DEVICE_NAMES.has(stem);
+}
+
+/**
  * 单个条目名的闸（**容器里原样出现的那个名字**，不做 `\` → `/` 归一：
  * 反斜杠形态本身就是拒绝项 `path-backslash`）。判定顺序与 Rust 逐字一致。
  */
@@ -249,6 +270,10 @@ export function zipEntryContractProblem(
   const segments = name.split('/');
   if (segments.some((s) => s.length === 0 || s === '.')) return 'path-empty-segment';
   if (segments.some((s) => s === '..')) return 'path-dotdot';
+  // Windows 保留设备名段：归入既有 `entry-name-encoding` 码（NUL 同款先例——不是路径段
+  // 问题，是"根本无法成为一个文件名"）。挂点在 dotdot 之后、depth 之前，既有码判定顺序不变；
+  // 共享契约表零改动（无新码）⇒ Rust 侧对拍不受影响（解包器同名缺口记边界外待补）。
+  if (segments.some((s) => isWindowsReservedDeviceNameSegment(s))) return 'entry-name-encoding';
   if (segments.length > maxDepth) return 'path-depth';
   return null;
 }

@@ -402,6 +402,52 @@ describe('io.listTrash · 字段口径（剩余天数不许撒谎）', () => {
   });
 });
 
+/** rename 必败的桥替身（非跨卷失败 ⇒ 走账本回滚路径，不走 copy+delete 回落） */
+class RenameFailingBridge extends NodeBridge {
+  override async rename(_from: string, _to: string): Promise<void> {
+    throw new Error('EIO: 注入的写失败');
+  }
+}
+
+/** 记录「manifest 落盘」与「rename 搬运」先后顺序的桥替身（两阶段提交的序判据） */
+class OrderRecordingBridge extends NodeBridge {
+  readonly calls: string[] = [];
+  override async rename(from: string, to: string): Promise<void> {
+    this.calls.push('rename');
+    return super.rename(from, to);
+  }
+  override async writeFileBytes(p: string, data: Uint8Array): Promise<void> {
+    if (p.endsWith('manifest.json')) this.calls.push('manifest');
+    return super.writeFileBytes(p, data);
+  }
+}
+
+describe('moveIntoTrash · 两阶段提交（manifest 先行，2026-10-17 修复）', () => {
+  it('rename 失败（非跨卷）⇒ 上抛、账本回滚不留半成品条目、源文件原位不动', async () => {
+    const ws = writableDir();
+    const target = path.join(ws, 'gone');
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, 'body.txt'), 'x');
+    const failing = new TrashManager(new RenameFailingBridge(appData), noopLog);
+    await expect(failing.moveIntoTrash(target, 'dir')).rejects.toThrow(/注入的写失败/);
+    expect(await fs.readdir(trashRoot()).catch(() => [])).toEqual([]);
+    expect(await fs.readFile(path.join(target, 'body.txt'), 'utf-8')).toBe('x');
+  });
+
+  it('manifest 先于 rename 落盘：中间崩溃只剩「有账无货」（rename 原子 ⇒ 源不丢）', async () => {
+    const ws = writableDir();
+    const f = path.join(ws, 'f.txt');
+    await fs.writeFile(f, 'x');
+    const bridge = new OrderRecordingBridge(appData);
+    const tm = new TrashManager(bridge, noopLog);
+    await tm.moveIntoTrash(f, 'file');
+    expect(bridge.calls.indexOf('manifest')).toBeGreaterThanOrEqual(0);
+    expect(bridge.calls.indexOf('manifest')).toBeLessThan(bridge.calls.indexOf('rename'));
+    const [entry] = await tm.list();
+    expect(entry?.kind).toBe('file');
+  });
+});
+
 describe('io.purgeTrash / io.holdTrash · 超期清扫不误伤正被引用的条目', () => {
   it('holdTrash 登记过的超期条目跳过；撤回引用后同一趟就清掉', async () => {
     const ws = writableDir();

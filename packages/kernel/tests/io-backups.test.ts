@@ -82,6 +82,26 @@ describe('listBackups · 列举口径', () => {
     expect(await io.listBackups(path.join(tmpDir, 'nope.ERB'))).toEqual([]);
   });
 
+  it('同哈希后缀的外来桶（32 位碰撞防御）不进清单；无属主的历史旧桶照常可见', async () => {
+    const f = writableFile();
+    await fs.mkdir(path.dirname(f), { recursive: true });
+    await fs.writeFile(f, 'A 的现状');
+    await io.writeText(f, 'A v1', { encoding: 'utf-8' });
+    expect((await io.listBackups(f)).length).toBeGreaterThanOrEqual(1);
+    // 手摆一个同哈希后缀的外来桶：属主指向别的 pathKey（fnv1a 碰撞模拟）
+    const foreign = path.join(appData, 'backup', `${backupBucketName(f)}-2`);
+    await fs.mkdir(foreign, { recursive: true });
+    await fs.writeFile(path.join(foreign, 'owner.json'), JSON.stringify({ v: 1, pathKey: 'foreign-key-not-ours' }));
+    await fs.writeFile(path.join(foreign, '20200101-000000-000.bak'), 'B 的旧版');
+    const list = await io.listBackups(f);
+    expect(list.every((v) => !v.path.includes('-2'))).toBe(true);
+    // 历史旧桶（无 owner.json）按现通配放行：升级不炸旧数据
+    const legacy = path.join(appData, 'backup', `${backupBucketName(f)}-3`);
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.writeFile(path.join(legacy, '20200101-000000-000.bak'), '历史旧版');
+    expect((await io.listBackups(f)).map((v) => v.id)).toContain('20200101-000000-000.bak');
+  });
+
   it('多次保存 → 新在前、id 命中版本形态、takenAtMs 可解析、size 如实', async () => {
     const f = writableFile();
     await io.writeText(f, 'v1', { encoding: 'utf-8' });

@@ -38,7 +38,7 @@ export {
   type TrashManifest,
   type TrashRestoreOptions,
 } from './trash';
-export { OpsJournalImpl, OP_ID_RE, type OpsJournalDeps } from './journal';
+export { OpsJournalImpl, OP_ID_RE, OP_SNAPSHOT_RETENTION_MAX, type OpsJournalDeps } from './journal';
 // journal 维护态（崩溃/回滚失败残留）的契约类型：宿主与观测面板经它读数（additive 追加，勿重排上一行）
 export type { OpsMaintenance } from './journal';
 export {

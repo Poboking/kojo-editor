@@ -117,6 +117,9 @@ export function backupBucketName(absPath: string): string {
   return `${basename(absPath).slice(0, 40).replace(/[^A-Za-z0-9._-]/g, '_')}-${backupHashOf(absPath)}`;
 }
 
+/** 备份桶属主清单文件名（桶内固定名；记 pathKey 原文，读侧比对防碰撞串桶） */
+export const BACKUP_OWNER_FILE = 'owner.json';
+
 /**
  * 文件 → 备份桶哈希（身份尺：`pathKey` 折叠大小写与分隔符）。
  * 列举/恢复**按哈希后缀找桶**而不是重拼段名——写侧段名取的是当时的 basename 原样，
@@ -621,27 +624,87 @@ export class FileIOServiceImpl implements FileIO {
 
   /* ------------------------------ 备份 ------------------------------ */
 
-  /** 某文件当前写法下的备份桶目录（写侧：backup() 落点；路径写法归一后唯一） */
-  private async bucketDirFor(path: string): Promise<string> {
-    const appData = await this.bridge.appDataDir();
-    return join(appData, 'backup', backupBucketName(path));
+  /** 桶属主清单的读取态：absent = 历史旧桶（无清单），ok = 可比对，corrupt = 无法证明 */
+  private async bucketOwnerOf(
+    dir: string,
+  ): Promise<{ kind: 'absent' } | { kind: 'ok'; key: string } | { kind: 'corrupt' }> {
+    const file = join(dir, BACKUP_OWNER_FILE);
+    if (!(await this.bridge.exists(file))) return { kind: 'absent' };
+    try {
+      const bytes = await this.bridge.readFileBytes(file);
+      const raw = JSON.parse(new TextDecoder().decode(bytes)) as { v?: unknown; pathKey?: unknown };
+      if (raw.v !== 1 || typeof raw.pathKey !== 'string') throw new Error('owner 字段不合形态');
+      return { kind: 'ok', key: raw.pathKey };
+    } catch (err) {
+      this.log?.warn(`备份桶属主清单损坏：${dir} — ${String(err)}`);
+      return { kind: 'corrupt' };
+    }
   }
 
-  /** 某文件**全部**备份桶目录（读侧：按哈希后缀找，折叠历史写法造成的前缀差异） */
+  /**
+   * 某文件当前写法下的备份桶目录（写侧：backup() 落点）。
+   *
+   * 桶身份 = 32 位 FNV-1a(pathKey)：数千同名文件的语料下存在生日碰撞（~0.06%），
+   * 碰撞的两个文件会算出同一个桶名 ⇒ 不设属主闸，A 的备份会落进 B 的桶、恢复时
+   * 静默串档。属主闸（owner.json 记 pathKey 原文）：桶被别人占着（或清单损坏无法
+   * 证明）⇒ 换下一个副本桶名（`-2`/`-3`），绝不与外来者共桶。
+   */
+  private async bucketDirFor(path: string): Promise<string> {
+    const appData = await this.bridge.appDataDir();
+    const backupRoot = join(appData, 'backup');
+    const key = pathKey(path);
+    for (const suffix of ['', '-2', '-3']) {
+      const dir = join(backupRoot, `${backupBucketName(path)}${suffix}`);
+      const owner = await this.bucketOwnerOf(dir);
+      if (owner.kind === 'absent' || (owner.kind === 'ok' && owner.key === key)) return dir;
+      this.log?.warn(
+        `备份桶 ${dir} 属主${owner.kind === 'corrupt' ? '清单损坏' : '是其他文件'}（32 位哈希碰撞防御），改用副本桶`,
+      );
+    }
+    throw new Error(`备份桶分配失败（连续三个桶名都被其他文件占用）：${path}`);
+  }
+
+  /**
+   * 某文件**全部**备份桶目录（读侧：按桶名段找 + 属主校验，折叠历史写法造成的前缀差异）。
+   * 历史旧桶（无 owner.json）按现通配放行（兼容口径，不炸旧数据）；属主是他人的桶
+   * **绝不**出现在结果里——旧实现按哈希后缀通配，碰撞桶的版本会互相看见、恢复即串档。
+   */
   private async findBucketDirs(path: string): Promise<string[]> {
     const appData = await this.bridge.appDataDir();
     const root = join(appData, 'backup');
-    const suffix = `-${backupHashOf(path)}`;
-    return (await this.bridge.listDir(root))
-      .filter((e) => e.isDirectory && e.name.endsWith(suffix))
-      .map((e) => e.path);
+    const hash = backupHashOf(path);
+    const key = pathKey(path);
+    const out: string[] = [];
+    for (const e of await this.bridge.listDir(root)) {
+      if (!e.isDirectory) continue;
+      // 桶名 = `前缀-<hash8>`，副本桶带 `-N` 尾；末段必须正好是 hash8 或 hash8-N
+      const m = /^(.+)-([0-9a-f]{8})(?:-(\d+))?$/.exec(e.name);
+      if (m === null || m[2] !== hash) continue;
+      const owner = await this.bucketOwnerOf(e.path);
+      if (owner.kind === 'ok' && owner.key !== key) {
+        this.log?.warn(`备份桶 ${e.path} 属主是其他文件（32 位哈希碰撞防御），跳过该桶`);
+        continue;
+      }
+      if (owner.kind === 'corrupt') {
+        this.log?.warn(`备份桶 ${e.path} 属主清单损坏，无法证明属主，跳过该桶`);
+        continue;
+      }
+      out.push(e.path);
+    }
+    return out;
   }
 
   async backup(path: string): Promise<string | null> {
     if (!(await this.bridge.exists(path))) return null;
-    // 目录结构：backup/{sanitized-prefix-hash}/{basename}/{timestamp}.bak
+    // 目录结构：backup/{sanitized-prefix-hash}/{timestamp}.bak
     const dir = await this.bucketDirFor(path);
     await this.bridge.ensureDir(dir);
+    // 属主清单与版本同桶：写侧每次落账（同内容覆写，字节级幂等）；读侧比对防串桶。
+    // 先写属主再写版本——崩溃窗口留下的"有主无版"桶无害，反过来（无主有版）就只能靠通配。
+    await this.bridge.writeFileBytes(
+      join(dir, BACKUP_OWNER_FILE),
+      new TextEncoder().encode(JSON.stringify({ v: 1, pathKey: pathKey(path) })),
+    );
     const target = join(dir, `${timestamp()}.bak`);
     await this.bridge.copyFile(path, target);
     await this.pruneBackups(dir);

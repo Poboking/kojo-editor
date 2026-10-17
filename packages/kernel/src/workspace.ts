@@ -157,7 +157,12 @@ export class WorkspaceServiceImpl implements WorkspaceService {
         return dir;
       }
     }
-    return this.projectDir(projectId);
+    // fail-closed（2026-10-17 修复批）：找不到绝不回落默认根。外部根离线/被收回时，
+    // 回落 + removeDir 的幂等成功 = 「项目看着被删了，其实还在原处」的静默失败；
+    // 目录真被手动删过时这个错误也是如实答案，不是误报。
+    throw new Error(
+      `Project directory not found in any authorized root (root offline or already removed?): ${projectId}`,
+    );
   }
 
   private manifestPath(projectId: string): string {

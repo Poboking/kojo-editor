@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
-import { FileIOServiceImpl, OpsJournalImpl, OP_ID_RE } from '../src';
+import { FileIOServiceImpl, OpsJournalImpl, OP_ID_RE, OP_SNAPSHOT_RETENTION_MAX } from '../src';
 import { NodeBridge } from './helpers/node-bridge';
 
 /**
@@ -313,5 +313,45 @@ describe('维护提示 · 残留不静默（铁律 #4）', () => {
     await ops.abort(id);
     await expect(fs.access(path.join(appData, 'ops', id))).rejects.toThrow();
     await expect(fs.access(path.join(appData, 'ops', `${id}.json`))).rejects.toThrow();
+  });
+});
+
+describe('保留期收口（OP_SNAPSHOT_RETENTION_MAX）', () => {
+  it('超过上限的已完结 op 连文档带快照清掉；被清的 undo 显式拒绝；最新一批照常可撤销', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 22; i++) {
+      await new Promise((r) => setTimeout(r, 2)); // 让 startedAt 互异（同毫秒 tie 会让归属不确定）
+      const f = wsPath(`r${i}.txt`);
+      await fs.writeFile(f, `旧${i}`);
+      const id = await ops.begin('t', `op${i}`);
+      await ops.record(id, f);
+      await fs.writeFile(f, `新${i}`);
+      await ops.commit(id);
+      ids.push(id);
+    }
+    const survivors = new Set((await ops.list()).map((o) => o.id));
+    expect(survivors.size).toBe(OP_SNAPSHOT_RETENTION_MAX);
+    expect(survivors.has(ids[ids.length - 1]!)).toBe(true);
+    const swept = ids.filter((id) => !survivors.has(id));
+    expect(swept.length).toBe(2);
+    for (const id of swept) {
+      await expect(fs.access(path.join(appData, 'ops', id))).rejects.toThrow();
+      await expect(fs.access(path.join(appData, 'ops', `${id}.json`))).rejects.toThrow();
+    }
+    // 新一批照常可撤销（字节级回滚不受保留期影响）
+    await ops.undo(ids[ids.length - 1]!);
+    expect(await fs.readFile(wsPath('r21.txt'), 'utf-8')).toBe('旧21');
+  });
+
+  it('快照目录被清但文档还在（半清残留）⇒ undo 先行核验、显式拒绝，不半途爆炸', async () => {
+    const f = wsPath('guard.txt');
+    await fs.writeFile(f, '旧值');
+    const id = await ops.begin('t', '护栏');
+    await ops.record(id, f);
+    await fs.writeFile(f, '新值');
+    await ops.commit(id);
+    await fs.rm(path.join(appData, 'ops', id), { recursive: true, force: true });
+    await expect(ops.undo(id)).rejects.toThrow(/保留上限清理/);
+    expect(await fs.readFile(f, 'utf-8')).toBe('新值'); // 盘没动
   });
 });

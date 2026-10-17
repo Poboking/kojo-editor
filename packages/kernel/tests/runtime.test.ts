@@ -354,6 +354,25 @@ describe('PluginRuntime · 状态事件与可观测性', () => {
     await runtime.retry('recover');
     expect(runtime.get('recover')?.status).toBe('active');
   });
+
+  it('retry 可复活 stopped 插件（「停用彻底可逆」的兑现路径；真重激活不是记账）', async () => {
+    const { runtime } = makeRuntime();
+    let activated = 0;
+    runtime.register({
+      id: 'revive',
+      version: '1.0.0',
+      activate() {
+        activated++;
+      },
+    });
+    await runtime.tryActivateAll();
+    expect(runtime.get('revive')?.status).toBe('active');
+    await runtime.stop('revive');
+    expect(runtime.get('revive')?.status).toBe('stopped');
+    await runtime.retry('revive');
+    expect(runtime.get('revive')?.status).toBe('active');
+    expect(activated).toBe(2);
+  });
 });
 
 describe('PluginRuntime · 事件命名空间纪律', () => {

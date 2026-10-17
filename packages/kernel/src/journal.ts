@@ -207,6 +207,10 @@ export class OpsJournalImpl implements OpJournal {
     doc.finishedAt = Date.now();
     await this.writeDoc(doc);
     this.open.delete(opId);
+    // 保留期收口（2026-10-17 修复批）：op-<id>/ 字节快照此前永不清理（removeOpArtifacts
+    // 只在 abort 成功与 undo 失败路径调），重编码全库级的快照会永久占满 appData。
+    // undo 依赖快照 ⇒ 只按 startedAt 保留最近 N 个已完结 op，超限连文档带快照整体清掉。
+    await this.sweepSnapshotRetention();
   }
 
   async abort(opId: string): Promise<void> {
@@ -254,6 +258,38 @@ export class OpsJournalImpl implements OpJournal {
     } catch (err) {
       this.cleanupFailures++;
       this.deps.log.warn(`ops journal：清理残留${kind === 'dir' ? '目录' : '文件'}失败（仍在盘上）：${path} — ${String(err)}`);
+    }
+  }
+
+  /**
+   * 保留期清扫：已完结（committed/undone）op 按 `startedAt` 只留最近
+   * {@link OP_SNAPSHOT_RETENTION_MAX} 个，超限的连快照目录带文档整体清掉。三种东西
+   * **绝不**在这里动：在途 op（正在写快照）；open 态残留（崩溃/回滚失败留痕，快照
+   * 是唯一还能救命的东西，模块头注口径）；不可读文档（list() 的维护提示在管）。
+   * 清理失败走 removeQuietly（warn + cleanupFailures 计数），不清账不炸调用方。
+   */
+  private async sweepSnapshotRetention(): Promise<void> {
+    const root = await this.root();
+    const entries = await this.deps.bridge.listDir(root).catch(() => []);
+    const docs: Array<{ id: string; startedAt: number; status: 'open' | 'committed' | 'undone' }> = [];
+    for (const e of entries) {
+      if (e.isDirectory || !e.name.endsWith(OP_DOC_SUFFIX)) continue;
+      const id = e.name.slice(0, -OP_DOC_SUFFIX.length);
+      if (!OP_ID_RE.test(id) || this.open.has(id)) continue;
+      try {
+        const doc = await this.readDoc(id);
+        docs.push({ id, startedAt: doc.startedAt, status: doc.status });
+      } catch {
+        // 不可读文档交给维护提示，不在保留期里动它
+      }
+    }
+    docs.sort((a, b) => b.startedAt - a.startedAt);
+    const expired = docs.slice(OP_SNAPSHOT_RETENTION_MAX).filter((d) => d.status !== 'open');
+    for (const doc of expired) await this.removeOpArtifacts(doc.id);
+    if (expired.length > 0) {
+      this.deps.log.warn(
+        `ops journal：保留期收口，清理超限快照 ${expired.length} 个（上限 ${OP_SNAPSHOT_RETENTION_MAX}，按 startedAt 留最近）`,
+      );
     }
   }
 
@@ -335,6 +371,15 @@ export class OpsJournalImpl implements OpJournal {
     const doc = await this.readDoc(opId);
     if (doc.status === 'open') throw new Error(`操作仍在进行中，不能撤销：${opId}`);
     if (doc.entries.length === 0) throw new Error(`操作没有记录任何文件，无从撤销：${opId}`);
+    // 保留期护栏（2026-10-17 修复批）：要回滚的 `${i}.before` 快照住在 op 的快照目录里，
+    // 目录被按上限清掉后再 undo 会在回滚半途爆炸（半批态）。这里先行核验、显式拒绝——
+    // 不猜、不半撤销；只在确有快照依赖时才拦（纯新建 op 的撤销不读快照，不受保留期约束）。
+    if (
+      doc.entries.some((e) => e.beforePath !== null) &&
+      !(await this.deps.bridge.exists(await this.snapshotDir(opId)))
+    ) {
+      throw new Error(`操作快照已按保留上限清理，无法撤销：${opId}（可从备份时间线恢复需要的版本）`);
+    }
     // 撤销也进历史：先抓"回滚前"快照（此刻盘上=回滚前状态），再逆序回滚
     const undoId = await this.begin(`undo:${doc.kind}`, `撤销：${doc.label}`);
     const undoDoc = this.open.get(undoId)!;
@@ -446,3 +491,10 @@ function errorSummary(err: unknown): string {
   if (err instanceof Error) return `${err.name}: ${err.message}`;
   return String(err);
 }
+
+/**
+ * ops 快照保留上限（按 `startedAt` 计的**已完结** op 数）：超出即连文档带快照目录
+ * 整体清掉。没有这条上限，op-<id>/ 字节快照只增不减——重编码全库级的快照会把
+ * appData 永久占满。open 态残留（崩溃/回滚失败留痕）不参与保留期计数（见 sweep）。
+ */
+export const OP_SNAPSHOT_RETENTION_MAX = 20;
