@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
 import { ERB_DIRECTIVES } from './erb-directives';
+import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { erbMonacoExtensions } from '@kojo/plugin-api';
 import { defineMonacoThemes } from './theme';
 import { CJK_WORD_PATTERN } from './word-separators';
@@ -9,8 +10,14 @@ import { CJK_WORD_PATTERN } from './word-separators';
  *
  * 依据（逆向文档《词法与表达式》《口上机制深挖》）：
  * - 行首 `;` 注释、`@` 函数定义、`#` 预处理指令、`$` 跳转标签；
- * - 指令表 = 口上高频子集（单一真源 `erb-directives.ts`）；变量多段引用（CFLAG:ARG:口上セレクタ）整体高亮；
+ * - 指令表 = 口上高频子集（单一真源 `erb-directives.ts`）；高亮另吃补集
+ *   `erb-highlight-words.ts`（控制流语句 + 引擎内建单行语句，补全不消费）；
+ * - 变量多段引用（CFLAG:ARG:口上セレクタ）整体高亮；
  * - FORM 串内 `{表达式}` / `%字符串%` 作为字符串内的第二层（Monarch 嵌套限制，v0.1 简化）。
+ *
+ * **大小写（2026-10-18 SUGGEST-2C）**：Emuera 关键字大小写不敏感，词表只存一种写法；
+ * `ignoreCase: true` 让 `call` / `If` / `setcolor` 与全大写同档。若哪天关掉它，
+ * `tests/erb-highlight.test.ts` 的三形态逐词发射会整片变红。
  */
 
 /**
@@ -46,15 +53,50 @@ export function mergeDirectiveWords(
   return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
+/** 正则元字符转义（词表 → 单条规则时用；词表外部输入，不假定只含 `\w`） */
+function escapeRegExp(word: string): string {
+  return word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 词表里 ASCII 词形的**整词**规则（**行首/行中都生效，且优先于变量族规则**）。
+ *
+ * 为什么不能只靠下面的 ASCII 兜底 `cases`：`CFLAG` / `EQUIP` / `RAND` / `DOWNBASE`
+ * 既是指令（词表里）又是变量族头（变量规则在兜底之前），只靠 `cases` 会让它们在
+ * **大写形态**下照样吃 `variable` 色。这里把"整词命中词表"提前成一条独立规则；
+ * 末尾 `(?![:\[])` 把「词 + 索引」留给变量规则（`CFLAG:ARG` 仍整段 `variable`）。
+ */
+function standaloneKeywordPattern(words: readonly string[]): RegExp | null {
+  const ascii = words.filter((w) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(w));
+  if (ascii.length === 0) return null;
+  // 长词优先：`TRYCCALLFORM` 不被 `TRYCCALL` 截胡（`\b` 已能挡住，排序是双保险）
+  const body = [...new Set(ascii)]
+    .sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0))
+    .map(escapeRegExp)
+    .join('|');
+  return new RegExp(`\\b(?:${body})\\b(?![\\[:])`);
+}
+
 /**
  * Monarch 词法定义构建器（`directives` 词表参数化——基底与 adapter 派生词表共用同一份
  * tokenizer 骨架，只换词表，别处零分叉）。
+ *
+ * `highlightWords` 是"真正吃 keyword 色的全表"：基底指令 + 高亮补集
+ * （`ERB_HIGHLIGHT_EXTRA_WORDS`，出处见 `erb-highlight-words.ts`）。`directives`
+ * 属性保持**传入原样**——补全面是 monarch 内部实现，不改变 `setErbDirectiveWords`
+ * 的公开语义（测试与宿主都按"传什么就回什么"读）。
  */
 function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLanguage {
+  const highlightWords = mergeDirectiveWords(ERB_DIRECTIVES, [
+    ...directives,
+    ...ERB_HIGHLIGHT_EXTRA_WORDS,
+  ]);
+  const standaloneKeyword = standaloneKeywordPattern(highlightWords);
   return {
-    ignoreCase: false,
+    ignoreCase: true,
     defaultToken: '',
     directives: [...directives],
+    highlightWords,
     tokenizer: {
       root: [
         // 行首注释（Emuera 语义：行首 ; 整行注释）
@@ -69,6 +111,9 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         [/\[SKIPSTART\]|\[SKIPEND\]/, 'keyword.preprocessor'],
         // 字符串（含 FORM 串转义）：v0.1 整体字符串着色；{}/%% 表单式在 v0.2 做二级解析
         [/"/, { token: 'string.quote', bracket: '@open', next: '@str' }],
+        // 整词指令（含高亮补集）：必须排在变量族之前——CFLAG/EQUIP/RAND/DOWNBASE 同时是
+        // 变量族头，只靠后面的 cases 会让大写形态吃 variable 色（SUGGEST-2C 的 second root）
+        ...(standaloneKeyword ? [[standaloneKeyword, 'keyword'] as [RegExp, string]] : []),
         // 变量多段引用：CFLAG:ARG:口上セレクタ / TCVAR:50 / ARG:1 / RESULTS:2 / LOCALS:1
         [/\b(?:CFLAG|CDFLAG|CSTR|TCVAR|TSTR|TFLAG|TALENT|MARK|EXP|BASE|MAXBASE|ABL|TALENT|RELATION|RESULTS|LOCALS|LOCAL|ARGS|ARG|FLAG|DAY|TIME|MONEY|NAME|CALLNAME|MASTER|TARGET|ASSI|NO|RAND|SELECTCOM|TFLAG|PALAM|JUEL|GOTJUEL|UP|DOWN|LOSEBASE|CUP|CDOWN|DOWNBASE|SOURCE|NOWEX|EQUIP|TEQUIP|EX|PALAMLV|STAIN|STAIN_1|STAIN_2)\b(?::[^\s,()\[\]{}'"+\-*/%<>=!&|]+)*/, 'variable'],
         // 数值常量
@@ -81,6 +126,7 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
           {
             cases: {
               '@directives': 'keyword',
+              '@highlightWords': 'keyword',
               '@default': 'identifier',
             },
           },
@@ -92,6 +138,7 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
           {
             cases: {
               '@directives': 'keyword',
+              '@highlightWords': 'keyword',
               '@default': 'identifier',
             },
           },

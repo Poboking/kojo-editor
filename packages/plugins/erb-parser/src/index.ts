@@ -6,6 +6,8 @@
  */
 export { createErbParserPlugin } from './plugin';
 export {
+  ERB_CONTROL_STATEMENTS,
+  classifyControlFlow,
   parseErbText,
   parseFunctionDefinition,
   parseParams,

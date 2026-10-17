@@ -9,6 +9,7 @@ import {
 } from '../src/monaco/kojo-language';
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { SYSTEM_FUNCTION_ALIASES, sugarEditorLexicon } from '@kojo/plugin-kojo-sugar';
+import { compileMonarch, driveLexer, stubMonaco, type Emit, type MonarchAction } from './monarch-harness';
 
 /**
  * ZH-L 档位验收——**功能级判据**，不是体积读数：
@@ -34,51 +35,7 @@ import { SYSTEM_FUNCTION_ALIASES, sugarEditorLexicon } from '@kojo/plugin-kojo-s
 
 const LEX = sugarEditorLexicon();
 
-/* ============================== 假 Monaco（捕获 Monarch def 与主题） ============================== */
-
-interface Captured {
-  readonly registered: string[];
-  readonly monarchs: Map<string, Monaco.languages.IMonarchLanguage>;
-  readonly themes: Map<
-    string,
-    { base: string; inherit: boolean; rules: Monaco.editor.ITokenThemeRule[]; colors: Record<string, string> }
-  >;
-  readonly configs: unknown[];
-}
-
-function stubMonaco(): { monaco: typeof Monaco; captured: Captured } {
-  const captured: Captured = { registered: [], monarchs: new Map(), themes: new Map(), configs: [] };
-  const monaco = {
-    languages: {
-      IndentAction: { None: 0, Indent: 1, IndentOutdent: 2, Outdent: 3 },
-      getLanguages: () => captured.registered.map((id) => ({ id })),
-      register: (data: { id: string }) => {
-        captured.registered.push(data.id);
-      },
-      setMonarchTokensProvider: (id: string, def: Monaco.languages.IMonarchLanguage) => {
-        captured.monarchs.set(id, def);
-        return { dispose: () => undefined };
-      },
-      setLanguageConfiguration: (id: string, config: unknown) => {
-        captured.configs.push({ id, config });
-      },
-    },
-    editor: {
-      defineTheme: (name: string, theme: unknown) => {
-        captured.themes.set(
-          name,
-          theme as {
-            base: string;
-            inherit: boolean;
-            rules: Monaco.editor.ITokenThemeRule[];
-            colors: Record<string, string>;
-          },
-        );
-      },
-    },
-  };
-  return { monaco: monaco as unknown as typeof Monaco, captured };
-}
+/* ============================== 假 Monaco（捕获 Monarch def 与主题；基座见 monarch-harness.ts） ============================== */
 
 const { monaco, captured } = stubMonaco();
 registerKojoLanguage(monaco);
@@ -90,36 +47,12 @@ if (!kojoDark) throw new Error('monaco 桩没捕获到 kojo-dark 主题（erb-la
 
 /* ============================== Monarch 真编译 + 驱动器 ============================== */
 
-interface Rule {
-  regex: RegExp | ((state: string) => RegExp);
-  action: Action;
-  matchOnlyAtLineStart: boolean;
-}
-type Action =
-  | string
-  | { token: string; next?: string }
-  | { test: (id: string, matches: string[], state: string, eos: boolean) => unknown }
-  | Action[];
-interface Lexer {
-  start: string | null;
-  defaultToken: string;
-  tokenPostfix: string;
-  tokenizer: Record<string, Rule[]>;
-}
-interface Emit {
-  readonly text: string;
-  readonly token: string;
-}
+const lexerP = compileMonarch('kojo-sugar', def);
 
-async function monarchLexer(): Promise<Lexer> {
-  // 深层模块无 subpath 类型 ⇒ 变量路径动态 import（cjk-typing 的 monacoInternal 同款；TS 记 any）
-  const sub = 'standalone/common/monarch/monarchCompile.js';
-  const m = (await import(/* @vite-ignore */ `monaco-editor/editor/${sub}`)) as unknown as {
-    compile: (id: string, json: unknown) => Lexer;
-  };
-  return m.compile('kojo-sugar', def);
+/** 根状态驱动（基座见 `monarch-harness.ts`：真编译 + 复刻 `_myTokenize`） */
+async function driveRoot(line: string): Promise<Emit[]> {
+  return driveLexer(await lexerP, line);
 }
-const lexerP: Promise<Lexer> = monarchLexer();
 
 /** 聚合词形 → 应得档位（分类次序 = Monarch `cases` 卫兵的判词次序，同名多档者以先判为准） */
 function expectedTokenFor(word: string): string {
@@ -145,144 +78,6 @@ const ERB_FORMS: { word: string; expect: string }[] = [
   ...[...ERB_FAMILY_HEADS].map((w) => ({ word: w, expect: 'keyword.erb.family' })),
   ...[...ERB_COMMANDS].map((w) => ({ word: w, expect: 'keyword.erb' })),
 ];
-
-/* ------------------------------ 驱动器（复刻 _myTokenize） ------------------------------ */
-
-interface Piece {
-  readonly action: Action;
-  readonly matched: string;
-}
-interface Resolved {
-  readonly tokens: Emit[];
-  readonly next?: string;
-  /** 群组：逐段受理（monarchLexer 的 groupMatching 迭代语义） */
-  readonly pieces?: readonly Piece[];
-}
-
-/**
- * action 解析链（monarchLexer 536-545 + monarchCompile cases test 链的等价复刻）：
- * 向下解 test（cases 卫兵）直到字符串 / {token} / 群组数组。
- * `exec` = 该规则的完整正则匹配数组（群组展开要用子匹配；非群组可 null）。
- */
-function resolveAction(action: Action, matched: string, exec: RegExpExecArray | null): Resolved {
-  let a: unknown = action;
-  for (let hop = 0; hop < 32; hop++) {
-    if (typeof a === 'string') {
-      return a === '' ? { tokens: [] } : { tokens: [{ text: matched, token: a }] };
-    }
-    // 编译产物里群组是 `{ group: [...] }` 对象（monarchCompile L305-308）；数组是原始 def 形态
-    if (Array.isArray(a)) {
-      if (!exec) throw new Error('群组动作需要完整 exec');
-      return { tokens: [], pieces: a.map((sub, i) => ({ action: sub as Action, matched: exec[i + 1] ?? '' })) };
-    }
-    const actionObj = a as {
-      token?: string;
-      next?: string;
-      group?: unknown[];
-      test?: (id: string, matches: string[], state: string, eos: boolean) => unknown;
-    } | null | undefined;
-    if (actionObj === null || actionObj === undefined) return { tokens: [] };
-    if (actionObj.test !== undefined) {
-      a = actionObj.test(matched, exec ?? [matched, matched], '', false);
-      continue;
-    }
-    if (actionObj.group !== undefined) {
-      if (!exec) throw new Error('群组动作需要完整 exec（判据行形态不支持）');
-      const pieces: Piece[] = [];
-      for (let i = 0; i < actionObj.group.length; i++) {
-        pieces.push({ action: actionObj.group[i] as Action, matched: exec[i + 1] ?? '' });
-      }
-      if (exec.length !== pieces.length + 1) {
-        throw new Error(`群组数目与子段不齐：exec.length=${exec.length} pieces=${pieces.length}`);
-      }
-      return { tokens: [], pieces };
-    }
-    const token = actionObj.token ?? '';
-    return token === '' ? { tokens: [] } : { tokens: [{ text: matched, token }], next: actionObj.next };
-  }
-  return { tokens: [] };
-}
-
-/**
- * 根状态驱动器：把一行交给编译产物逐条规则匹配并发射 token。
- * 语义锚点：`String.match`/`exec` 在 `^(?:…)` 锚定正则上等价于"从当前 pos 起步匹配"；
- * 规则列表序 = 匹配优先序；群组逐子段、空子段免发射（monarchLexer 691-694）；逐次推进。
- * 判据行不依赖跨状态深度（未进台词 / 插值 / 围栏态的任务留给真机壳冒烟）。
- */
-async function driveRoot(line: string): Promise<Emit[]> {
-  const lexer = await lexerP;
-  const rules = lexer.tokenizer[lexer.start ?? 'root'];
-  if (!rules) throw new Error(`Monarch def 没有根状态 ${lexer.start ?? 'root'}`);
-  const out: Emit[] = [];
-  // Monaco 屏上真发的是 token 名 + tokenPostfix（编译器按语言 id 默认补 `.kojo-sugar`），
-  // 主题规则按点分段前缀匹配 —— 驱动器同样补上，断言走完整的 `startsWith('sugar.cont.')` 前缀口径
-  const lexerPostfix = lexer.tokenPostfix as unknown as string;
-  const emitInto = (tokens: readonly Emit[]): void => {
-    for (const t of tokens) out.push({ text: t.text, token: t.token === '' ? '' : `${t.token}${lexerPostfix}` });
-  };
-  let pos = 0;
-  let stack: string[] = [lexer.start ?? 'root'];
-  let pending: readonly Piece[] = [];
-  let steps = 0;
-
-  while (pos < line.length) {
-    if (++steps > line.length * 3 + 64) throw new Error(`驱动器无进展：line=${line}`);
-    // 1) 挂起的群组子段优先受理（monarchLexer：groupEntry 先于重新匹配）
-    if (pending.length > 0) {
-      const pieces = pending;
-      pending = [];
-      for (const piece of pieces) {
-        if (piece.matched.length === 0) continue; // 空子段免发射（monarchLexer 691-694 的组数变化判）
-        pos += piece.matched.length;
-        const r = resolveAction(piece.action, piece.matched, null);
-        emitInto(r.tokens);
-        if (r.next) throw new Error('群组子段带 next：判据行形态不支持');
-      }
-      continue;
-    }
-    // 2) 状态内逐条规则试匹配（monarchLexer 504-513：列表序首个命中者生效）
-    const state = stack[stack.length - 1]!;
-    const stateRules: readonly Rule[] = (lexer.tokenizer[state] ?? executeMissing(state)) as readonly Rule[];
-    let matched: string | null = null;
-    let exec: RegExpExecArray | null = null;
-    let action: Action | null = null;
-    for (const rule of stateRules) {
-      if (pos !== 0 && rule.matchOnlyAtLineStart) continue;
-      const re = typeof rule.regex === 'function' ? rule.regex(state) : rule.regex;
-      const m = re.exec(line.slice(pos));
-      if (m) {
-        exec = m;
-        matched = m[0]!;
-        action = rule.action;
-        break;
-      }
-    }
-    // 3) 全无命中 ⇒ 吃一字符、零 token（monarchLexer 516-528 的 defaultToken 分支）
-    if (matched === null || exec === null || action === null) {
-      pos += 1;
-      continue;
-    }
-    pos += matched.length;
-    const r = resolveAction(action, matched, exec);
-    if (r.pieces) {
-      pending = r.pieces;
-      pos -= matched.length; // 群组受理从子段重计（monarchLexer 672 同调）
-      continue;
-    }
-    emitInto(r.tokens);
-    // 4) 状态转移（monarchLexer 589-622 的 next 分支）
-    if (r.next !== undefined) {
-      if (r.next === '@pop') stack.pop();
-      else if (r.next === '@push') stack.push(state);
-      else stack.push(r.next.startsWith('@') ? r.next.slice(1) : r.next);
-    }
-  }
-  return out;
-
-  function executeMissing(state: string): never {
-    throw new Error(`状态 ${state} 在 Monarch def 里没有规则表`);
-  }
-}
 
 /* ============================== 发射覆盖（聚合词表全覆盖·不点名） ============================== */
 
@@ -383,8 +178,8 @@ describe('Monarch 词法逐词发射（聚合词表全覆盖·不点名）', () 
 /** 从 Monarch def 静态收集全部能发出的 token 名（验收"档位 token 有发射点"） */
 function tokenizerTokenNames(): Set<string> {
   const out = new Set<string>();
-  const tokenizer = (def as unknown as { tokenizer: Record<string, readonly [unknown, Action][]> }).tokenizer;
-  const visitAction = (a: Action): void => {
+  const tokenizer = (def as unknown as { tokenizer: Record<string, readonly [unknown, MonarchAction][]> }).tokenizer;
+  const visitAction = (a: MonarchAction): void => {
     if (typeof a === 'string') {
       if (a.length > 0) out.add(a);
       return;
@@ -393,7 +188,7 @@ function tokenizerTokenNames(): Set<string> {
       for (const sub of a) visitAction(sub);
       return;
     }
-    const o = a as { token?: string; cases?: Record<string, Action> };
+    const o = a as { token?: string; cases?: Record<string, MonarchAction> };
     if (o.token !== undefined && o.token.length > 0) out.add(o.token);
     if (o.cases) for (const v of Object.values(o.cases)) visitAction(v);
   };

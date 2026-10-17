@@ -2,6 +2,7 @@ import type * as Monaco from './entry';
 import type { LineDecoration } from '@kojo/plugin-api';
 import { ENGINE_VARIABLE_FAMILIES, sugarEditorLexicon, SYSTEM_FUNCTION_ALIASES, sugarEnterRulePatterns } from '@kojo/plugin-kojo-sugar';
 import { ERB_DIRECTIVES } from './erb-directives';
+import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { CJK_WORD_PATTERN } from './word-separators';
 
 /**
@@ -81,6 +82,18 @@ export const ERB_FAMILY_HEADS: readonly string[] = ENGINE_VARIABLE_FAMILIES;
  */
 const FAMILY_HEAD_SET = new Set(ERB_FAMILY_HEADS);
 export const ERB_COMMANDS: readonly string[] = ERB_DIRECTIVES.filter((d) => !FAMILY_HEAD_SET.has(d));
+
+/**
+ * `.kojo` 原生行**高亮**用的指令表 = `ERB_COMMANDS` + 高亮补集（去族头，补集出处见
+ * `erb-highlight-words.ts`）。为什么不直接扩 `ERB_COMMANDS`：那张表的口径与
+ * `ERB_DIRECTIVES` 逐项同位（既有恒等式测试钉着），补全是另一条消费线；高亮多认
+ * `ENDCATCH` / `NOSKIP` / `SETVAR` 不等于把它们塞进补全候选。行首/行内的大写判定
+ * 不变——小写仍是糖英文别名（本文件 `ignoreCase: false`）。
+ */
+export const ERB_HIGHLIGHT_COMMANDS: readonly string[] = [
+  ...ERB_COMMANDS,
+  ...ERB_HIGHLIGHT_EXTRA_WORDS.filter((w) => !FAMILY_HEAD_SET.has(w)),
+];
 
 /**
  * 中文系统函数名（HK-11①）——从 `kojo-sugar` 的 `SYSTEM_FUNCTION_ALIASES`
@@ -163,7 +176,7 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
     contMarks: CONT_MARKS,
     pronouns: [...PRONOUN_WORDS],
     englishAliases: ALIAS_WORDS,
-    erbCommands: ERB_COMMANDS,
+    erbCommands: ERB_HIGHLIGHT_COMMANDS,
     erbFamilyHeads: ERB_FAMILY_HEADS,
     systemFunctions: SYSTEM_FUNCTION_WORDS,
     tokenizer: {

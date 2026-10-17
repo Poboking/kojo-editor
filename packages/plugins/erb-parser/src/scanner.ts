@@ -418,6 +418,36 @@ const PRINTDATA_OPEN: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 引擎语句词表（**additive**，2026-10-17 高亮补集批）。
+ *
+ * 由上面四张开/分支/闭合表 + TRY 三档 + PRINTDATA 系**派生**——不是另抄一份清单：
+ * 配对表增删一词，本表自动跟随。宿主的 ERB 高亮拿它补 `ERB_DIRECTIVES`（口上高频
+ * 子集）之外的引擎语句（`CATCH` / `ENDCATCH` / `NOSKIP` / `ENDNOSKIP` / `TRYC*` 族 …），
+ * 补全候选**不**消费本表（低频语句不进补全，见 `erb-directives.ts` 的口径）。
+ *
+ * 排序确定（UTF-16 码元序）+ 大小写归一去重，同一引擎表恒得同一顺序。
+ */
+export const ERB_CONTROL_STATEMENTS: readonly string[] = (() => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const word of [
+    ...Object.keys(OPEN_KINDS),
+    ...Object.keys(BRANCH_KINDS),
+    ...Object.keys(CLOSE_KINDS),
+    ...LEAF_KINDS,
+    ...TRY_CATCH_OPEN,
+    ...TRY_LIST_OPEN,
+    ...PRINTDATA_OPEN,
+  ]) {
+    const key = word.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+})();
+
+/**
  * 控制流角色（配对表的唯一出口）。
  *
  * 为什么要把这张表封成函数而不是直接 export 那几个 Record：结构体检（`structure.ts`）与骨架扫描
