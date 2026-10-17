@@ -2,19 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { CharaInfo, DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
+import { FileTree, walkDialectPaths } from '../src/ui/FileTree';
+import { FileRows } from '../src/ui/file-tree-rows';
+import { buildFileGroups, dirsToRelist, kojoOwners, visibleEntries } from '../src/ui/file-tree-model';
 import {
   FILTER_WINDOW_INITIAL,
   FILTER_WINDOW_STEP,
-  FileRows,
-  FileTree,
-  buildFileGroups,
-  dirsToRelist,
   filterRenderPlan,
-  kojoOwners,
   nextFilterWindow,
-  visibleEntries,
-  walkDialectPaths,
-} from '../src/ui/FileTree';
+} from '../src/ui/file-tree-filter-window';
 
 /**
  * 真实文件夹视图的条目筛选（反馈 6/7）。
