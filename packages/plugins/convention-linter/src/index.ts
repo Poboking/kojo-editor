@@ -16,6 +16,7 @@ import type {
   ComputePool,
   ConventionLinterService,
   ConventionRule,
+  ConventionRunOptions,
   ErbParserService,
   FileIO,
   GameProject,
@@ -202,7 +203,7 @@ export function createConventionLinterPlugin(): Plugin {
       });
 
       const service: ConventionLinterService = {
-        async run(opts?: { force?: boolean }) {
+        async run(opts?: ConventionRunOptions) {
           if (project.current()) {
             // 索引可能仍在构建（项目刚打开）——等待在途构建，避免"看不到问题"的假象
             try {
@@ -211,7 +212,7 @@ export function createConventionLinterPlugin(): Plugin {
               ctx.log.warn(`ensureIndex before lint failed: ${String(err)}`);
             }
           }
-          // opts.force（面板「重新校验」）一路传到引擎：显式意图不该被缓存糊住
+          // opts 原样交给引擎：`force`（面板「重新校验」）与 `signal`（ZH-F4b 叫停）都不在这层解释
           return engine.run(opts);
         },
         report: () => engine.report(),

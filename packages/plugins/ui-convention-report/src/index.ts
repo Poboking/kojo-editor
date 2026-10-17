@@ -28,6 +28,9 @@ import {
   LINT_PROJECT_COMMAND_CATEGORY,
   LINT_PROJECT_COMMAND_ID,
   LINT_PROJECT_COMMAND_TITLE,
+  LINT_STOP_COMMAND_CATEGORY,
+  LINT_STOP_COMMAND_ID,
+  LINT_STOP_COMMAND_TITLE,
   createLintRunStore,
   driveLintRun,
   lintRunBrief,
@@ -279,6 +282,14 @@ export function createUiConventionReportPlugin(): Plugin {
         const rerun = (): void => {
           void runProjectLint();
         };
+        /**
+         * 叫停：只按下 `runStore` 手上那一轮的取消位（还是同一个 `store`，没有第二条取数通道）。
+         * 收摊要等**正在算的那一棵**算完，所以按钮按下后仍会"校验中"一小会儿——
+         * 那一轮的结论由引擎说（`report.incomplete`），这里不许自己改成"不完整"。
+         */
+        const stop = (): void => {
+          runStore.cancel();
+        };
 
         const toggle = (setter: typeof setExpanded, id: string): void => {
           setter((prev) => {
@@ -334,6 +345,14 @@ export function createUiConventionReportPlugin(): Plugin {
             { className: 'ghost small', disabled: running, onClick: rerun },
             running ? '校验中…' : '重新校验',
           ),
+          // 只有真在跑才给这一枚（不在跑时按它没对象可停，灰着说话不如不出现）
+          running
+            ? createElement(
+                'button',
+                { className: 'ghost small', onClick: stop, title: '叫停这一轮：已查完的结论留着，这一轮不写进结果缓存' },
+                '叫停',
+              )
+            : null,
           // 分组视角切换（默认「按规则看」）。三个词都是人话，且都是**同一批条目的分组方式**，
           // 不是三套数据 —— 切换不重跑校验、不改条目，只换主语。
           createElement(
@@ -457,10 +476,16 @@ export function createUiConventionReportPlugin(): Plugin {
       function StatusCounts(props: UIPanelProps): unknown {
         const [report, setReport] = useState<ConventionReport | null>(() => linter.report());
         useEffect(() => linter.subscribe(setReport), []);
-        /** 在途/失败的这一句只在这里出现一次：状态栏常驻，面板可能压根没打开 */
+        /** 在途/被叫停/失败的这一句只在这里出现一次：状态栏常驻，面板可能压根没打开 */
         const run = useLintRun();
         const brief = lintRunBrief(run.state, run.now);
-        const title = run.state.phase === 'failed' ? `这轮校验没跑完：${run.state.errorText}` : STATUSBAR_TITLE;
+        const title =
+          run.state.phase === 'failed'
+            ? `这轮校验没跑完：${run.state.errorText}`
+            : run.state.phase === 'stopped'
+              ? lintRunText(run.state, run.now)
+              : STATUSBAR_TITLE;
+        const critical = run.state.phase === 'failed';
 
         /** 图标桥：同 ConventionPanel（状态栏小件亦经 props.renderIcon 注入，缺省回退字形） */
         const ic = (name: string, size: number, fallback: string): ReactNode =>
@@ -470,7 +495,7 @@ export function createUiConventionReportPlugin(): Plugin {
               'span',
               {
                 className: 'sb-diag-item',
-                ...(run.state.phase === 'failed' ? { style: { color: SEVERITY_COLOR.error } } : {}),
+                ...(critical ? { style: { color: SEVERITY_COLOR.error } } : {}),
               },
               brief,
             )
@@ -532,6 +557,20 @@ export function createUiConventionReportPlugin(): Plugin {
         title: LINT_PROJECT_COMMAND_TITLE,
         category: LINT_PROJECT_COMMAND_CATEGORY,
         run: () => runProjectLint(),
+      });
+
+      /**
+       * 叫停那条命令（ZH-F4b）：它**不取任何数**——只按下 `runStore` 手上那一轮的取消位，
+       * 于是面板那枚「叫停」与命令面板这条命令停的必然是同一轮（两条收摊路迟早对不上账）。
+       * 不在跑的时候按它 = 空操作，读数纹丝不动（引擎没起轮，就没有"半轮"可说）。
+       */
+      ctx.slots.register('editor.command', {
+        id: LINT_STOP_COMMAND_ID,
+        title: LINT_STOP_COMMAND_TITLE,
+        category: LINT_STOP_COMMAND_CATEGORY,
+        run: async () => {
+          runStore.cancel();
+        },
       });
     },
   };

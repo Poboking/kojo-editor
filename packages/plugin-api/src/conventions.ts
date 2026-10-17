@@ -10,7 +10,9 @@
  * 关键设计：
  * - 规则是**纯函数**（输入上下文 → 输出问题数组），便于单测与复用；
  * - 上下文只暴露通用能力（项目 / 索引 / 读文件 / 日志）——**零游戏知识**；
- * - 单条规则抛错不中断全局，但**绝不静默**（进入 report.failedRules）。
+ * - 单条规则抛错不中断全局，但**绝不静默**（进入 report.failedRules）；
+ * - 一轮可以被叫停（`run({signal})`），但"这一轮算完了没有"只在**引擎一处**判定
+ *   （报告带 `incomplete` 与否），驱动方与 UI 只搬运那个事实，不各写一套取消口径。
  */
 
 import type { Logger } from './base';
@@ -163,6 +165,16 @@ export interface ConventionRuleFailure {
   error: string;
 }
 
+/**
+ * 一轮校验被叫停时的进度（ZH-F4b）。
+ * 尺子 = **文件判定单元**（一个文件 × 一条只看该文件的规则算一项），只数本轮**计划要现算**的那些
+ * （按 mtime 复用来的结论不在内——它们本来就不用算）。
+ */
+export interface ConventionRunIncomplete {
+  unitsDone: number;
+  unitsTotal: number;
+}
+
 /** 一次校验运行的完整报告 */
 export interface ConventionReport {
   /** 参与运行的适配器 id（无法确定时为 ''） */
@@ -174,10 +186,32 @@ export interface ConventionReport {
   issues: readonly ConventionIssue[];
   /** 按严重度计数 */
   counts: Record<ConventionSeverity, number>;
-  /** 本次参与的规则数 */
+  /** 本次参与的规则数（被叫停的一轮 = 本轮**有完整结论**的规则数） */
   ruleCount: number;
   /** 执行失败的规则 */
   failedRules: readonly ConventionRuleFailure[];
+  /**
+   * 这一轮被叫停（ZH-F4b，additive）：**字段一出现就说明这一轮不完整**——`issues` / `counts` /
+   * `ruleCount` 只覆盖已算完的那部分，没跑到的规则与文件**没有结论**（≠"没问题"）。
+   * 被中断的一轮既不写结果快照、也不覆盖订阅者手里那份完整报告；
+   * 已算完的那些单元留在内存里（下一轮不重算），没算的那棵下一轮必重算。
+   */
+  incomplete?: ConventionRunIncomplete;
+}
+
+/** `ConventionLinterService.run` 的选项（additive 演进，旧调用方零改动） */
+export interface ConventionRunOptions {
+  /**
+   * `true` = 无视结果缓存真重算（面板「重新校验」按钮的语义）；
+   * 缺省允许命中快照——开项目级联里校验实测 3.1 s，而产出仅 307 KB。
+   */
+  force?: boolean;
+  /**
+   * 取消位（ZH-F4b，additive）：引擎**只在文件单元的间隙**看它（正在读盘/正在转译的那一棵
+   * 会算完再收摊），置位后**不再新起任何单元**，并**照常返回**带 `incomplete` 的那半轮——
+   * 不抛错、不写快照。缺省 = 旧行为逐字不变。
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -185,13 +219,8 @@ export interface ConventionReport {
  * 消费者：校验结果面板（订阅）、命令面板（手动重跑）、未来 CI。
  */
 export interface ConventionLinterService {
-  /**
-   * 执行全部规则并返回报告（覆盖缓存并通知订阅者）。
-   *
-   * `force: true` = 无视结果缓存真重算（面板「重新校验」按钮的语义）；
-   * 缺省允许命中快照——开项目级联里校验实测 3.1 s，而产出仅 307 KB。
-   */
-  run(opts?: { force?: boolean }): Promise<ConventionReport>;
+  /** 执行全部规则并返回报告（完整的一轮才覆盖缓存并通知订阅者；见 `ConventionRunOptions`） */
+  run(opts?: ConventionRunOptions): Promise<ConventionReport>;
   /** 最近一次报告（尚未运行时 null） */
   report(): ConventionReport | null;
   /** 订阅报告更新（立即以当前值回调一次，返回退订函数） */

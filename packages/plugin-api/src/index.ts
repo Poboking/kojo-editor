@@ -152,6 +152,8 @@ export type {
   ConventionProjectPartition,
   ConventionProjectUnitEntry,
   ConventionReport,
+  ConventionRunIncomplete,
+  ConventionRunOptions,
   ConventionRule,
   ConventionRuleFailure,
   ConventionRuleScope,

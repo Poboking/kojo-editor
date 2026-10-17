@@ -17,6 +17,11 @@
  *   - 抛错的规则/文件**不进快照**：坏一次不能永久缓存坏结果；
  *   - 声明 `scope:'file'` 却没实现 `checkFile` ⇒ 显式记失败，不静默跳过；
  *   - 文件读取失败 → 记入日志并跳过该规则本次对该文件的判定（不伪造结果）。
+ *
+ * 可中断（ZH-F4b）：取消只有**一种表达**——调度层在取下一个文件单元前掷 `LintCancelled`。
+ * 池子那条路与本地兜底那条路共用这一颗哨兵，所以"收摊"不可能在两处各写各的；
+ * `runOnce` 是唯一接住它的地方，接住后照常装配半轮结论并给报告打上 `incomplete`
+ * （不写快照、不覆盖订阅者那份完整报告）。
  */
 
 import type {
@@ -28,6 +33,7 @@ import type {
   ConventionProjectUnitEntry,
   ConventionReport,
   ConventionRule,
+  ConventionRunOptions,
   ConventionSeverity,
   ErbFile,
   ErbIndex,
@@ -63,6 +69,8 @@ interface PartitionPlan {
   stale: ErbFile[];
   unitsReused: number;
   unitsTotal: number;
+  /** 本轮**真算出结论**的文件贡献数（被叫停的一轮用它凑 `incomplete.unitsDone`） */
+  unitsComputed: number;
 }
 
 /**
@@ -84,15 +92,48 @@ const yieldToEventLoop = (): Promise<void> =>
   });
 
 /**
+ * 取消的唯一表达（ZH-F4b）：一颗哨兵异常。
+ * 掷点在**调度层取下一个单元之前**（见 `makeFileRunner`）⇒ 正在算的那一棵照常算完，
+ * 之后的单元一个都不起；业务回调里的 `try/catch`（规则失败口径）碰不到它。
+ */
+class LintCancelled extends Error {
+  constructor() {
+    super('本轮校验被叫停');
+    this.name = 'LintCancelled';
+  }
+}
+
+/**
+ * 片间取消闸。`signal` 缺席时返回恒不掷哨兵的函数 ⇒ 旧调用（不传取消位）走的分支
+ * 与本批之前逐字相同，只是每次取单元前多读一个布尔。
+ */
+function makeCancelGate(signal?: AbortSignal): () => void {
+  if (!signal) return () => {};
+  return () => {
+    if (signal.aborted) throw new LintCancelled();
+  };
+}
+
+/**
  * 限并发执行（结果写进调用方的 Map；装配仍按 walk 顺序取 ⇒ 输出与完成顺序无关）。
  * 每个 worker 按 `LINT_SLICE_BUDGET_MS` 让路；只改调度节奏，不改判定与产出顺序。
+ *
+ * 收摊用 `allSettled` 而不是 `all`：`all` 会在第一个哨兵那里就把还悬着的 worker 丢成
+ * 游离 promise ⇒ 它们往 `fresh` 里的写入落在装配之后（同一轮两次读数能给出不同结果）。
+ * 等它们把**手上那一棵**算完再抛 ⇒ 已算完的单元一定进这一轮，未起的一定量不进。
  */
-async function mapLimit<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+async function mapLimit<T>(
+  items: readonly T[],
+  limit: number,
+  gate: () => void,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
   if (items.length === 0) return;
   let cursor = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     let sliceStart = Date.now();
     for (;;) {
+      gate();
       const i = cursor++;
       if (i >= items.length) return;
       await fn(items[i]!);
@@ -102,12 +143,16 @@ async function mapLimit<T>(items: readonly T[], limit: number, fn: (item: T) => 
       }
     }
   });
-  await Promise.all(workers);
+  const settled = await Promise.allSettled(workers);
+  const first = settled.find((s) => s.status === 'rejected');
+  if (first) throw (first as PromiseRejectedResult).reason;
 }
 
 /** 逐文件循环的调度（生产 = 内核计算池的 `runSliced`；缺池时用上面的本地兜底） */
-function makeFileRunner(compute?: ComputePool): (items: readonly ErbFile[], fn: (file: ErbFile) => Promise<void>) => Promise<void> {
-  if (!compute) return (items, fn) => mapLimit(items, LINT_FILE_CONCURRENCY, fn);
+type FileLoop = (items: readonly ErbFile[], fn: (file: ErbFile) => Promise<void>) => Promise<void>;
+
+function makeFileRunner(compute: ComputePool | undefined, gate: () => void): FileLoop {
+  if (!compute) return (items, fn) => mapLimit(items, LINT_FILE_CONCURRENCY, gate, fn);
   return (items, fn) =>
     compute
       .runSliced(items, {
@@ -116,6 +161,7 @@ function makeFileRunner(compute?: ComputePool): (items: readonly ErbFile[], fn: 
         priority: 'background',
         label: 'convention.lint',
       }, async (file) => {
+        gate();
         await fn(file);
       })
       .then(() => undefined);
@@ -236,15 +282,7 @@ export class ConventionEngine implements ConventionLinterService {
    */
   private hotCache: { expectFingerprint: string; cache: LintCache } | null = null;
 
-  constructor(private readonly deps: ConventionEngineDeps) {
-    this.runFiles = makeFileRunner(deps.compute);
-  }
-
-  /** 逐文件循环的调度（池子或本地兜底，构造时定一次；见 `ConventionEngineDeps.compute`） */
-  private readonly runFiles: (
-    items: readonly ErbFile[],
-    fn: (file: ErbFile) => Promise<void>,
-  ) => Promise<void>;
+  constructor(private readonly deps: ConventionEngineDeps) {}
 
   rules(): readonly ConventionRule[] {
     return [...this.builtinRules, ...this.deps.getAdapterRules()];
@@ -263,12 +301,16 @@ export class ConventionEngine implements ConventionLinterService {
   }
 
   /**
-   * 执行全部规则并返回报告（覆盖缓存并通知订阅者）。
+   * 执行全部规则并返回报告（**完整的一轮**才覆盖缓存并通知订阅者）。
    *
    * `force` = **一定真重算**：面板「重新校验」按钮是用户的显式意图，
    * 不该被结果缓存糊住（命中与否都由本次运行落盘最新快照）。
+   * `signal` = 叫停这一轮：`run` **照常返回**（不抛）带 `incomplete` 的半轮报告，
+   * 既不落盘也不覆盖 `report()`/订阅者手里那份完整结论。
+   * 在途合流时后来者的取消位不起作用——那一轮是别人起的（面板那侧由 `driveLintRun`
+   * 的"在途不起第二轮"保证同一时刻只有一个取消位）。
    */
-  run(opts?: { force?: boolean }): Promise<ConventionReport> {
+  run(opts: ConventionRunOptions = {}): Promise<ConventionReport> {
     if (this.inFlight) return this.inFlight;
     const p = this.runOnce(opts).finally(() => {
       if (this.inFlight === p) this.inFlight = null;
@@ -277,7 +319,7 @@ export class ConventionEngine implements ConventionLinterService {
     return p;
   }
 
-  private async runOnce(opts?: { force?: boolean }): Promise<ConventionReport> {
+  private async runOnce(opts: ConventionRunOptions): Promise<ConventionReport> {
     const project = this.deps.getProject();
     const index = this.deps.getIndex();
     if (!project || !index) {
@@ -290,7 +332,10 @@ export class ConventionEngine implements ConventionLinterService {
 
     const startedAt = Date.now();
     const rules = this.rules();
-    const force = opts?.force === true;
+    const force = opts.force === true;
+    /** 取消闸：掷点在调度层（池子与本地兜底共用这一颗哨兵，见 `makeFileRunner`） */
+    const gate = makeCancelGate(opts.signal);
+    const runFiles = makeFileRunner(this.deps.compute, gate);
 
     /**
      * 按声明粒度分流。`scope` 缺省 = `'project'`（跨文件语义，只能整项目重算）。
@@ -474,6 +519,7 @@ export class ConventionEngine implements ConventionLinterService {
         stale,
         unitsReused: files.length - stale.length,
         unitsTotal: files.length,
+        unitsComputed: 0,
       });
     }
 
@@ -523,88 +569,129 @@ export class ConventionEngine implements ConventionLinterService {
     await Promise.all([specPromise, prefetchInto(restPaths, 'stale')]);
     const tPrefetch = Date.now();
 
-    for (const rule of projectRules) {
-      const t0 = Date.now();
-      const cached = canReuseProject ? stored!.projectResults[rule.id] : undefined;
-      if (cached) {
-        projectResults[rule.id] = cached;
-        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: cached.length, reused: true });
-        continue;
-      }
-      if (partitionSkipped.has(rule.id)) {
-        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: 0, reused: false });
-        continue;
-      }
-      const plan = partitionPlans.get(rule.id);
-      if (plan) {
-        const outcome = await this.runPartitionedRule(plan, checkCtx, files);
-        if (!outcome.ok) {
-          // 分区/合并不全 ⇒ 整条规则本次**没有结论**（跨文件结论绝不带洞拼造）；不写 projectResults
-          failedRules.push({ ruleId: rule.id, error: outcome.error });
-          ruleTimings.push({
-            ruleId: rule.id,
-            ms: Date.now() - t0,
-            issues: 0,
-            reused: false,
-            cross: { reused: plan.unitsReused, total: plan.unitsTotal },
-          });
-        } else {
-          projectResults[rule.id] = outcome.issues;
-          ruleTimings.push({
-            ruleId: rule.id,
-            ms: Date.now() - t0,
-            issues: outcome.issues.length,
-            reused: false,
-            cross: { reused: plan.unitsReused, total: plan.unitsTotal },
-          });
+    /**
+     * 本轮计划要现算的**文件判定单元**总数（逐文件桶与分区贡献同一把尺；按 mtime 复用来的
+     * 结论不在内）。`incomplete` 的分母必须与分子同一次计划算出来，不能事后编。
+     */
+    const unitsTotal =
+      [...staleByRule.values()].reduce((n, s) => n + s.length, 0) +
+      [...partitionPlans.values()].reduce((n, p) => n + p.stale.length, 0);
+
+    /**
+     * 计算段。被叫停只从这里以 `LintCancelled` 出来，`runOnce` 是唯一接住它的地方。
+     * 逐文件规则的 `fresh` **先登记再算** ⇒ 叫停落在某条规则中途时，那条规则已算完的单元
+     * 仍进得了下面的装配；没算的那些压根不在表里（于是既不进这一轮的结论，也不被记成"没问题"）。
+     */
+    const freshByRule = new Map<string, Map<string, LintFileBucket>>();
+    const fileRuleMs = new Map<string, number>();
+    let unitsDone = 0;
+    let concludedFileRules = 0;
+    let interrupted = false;
+    try {
+      for (const rule of projectRules) {
+        gate(); // 整项目规则是一次长调用 ⇒ 只能在规则之间收摊（文件层的粒度由调度段的闸管）
+        const t0 = Date.now();
+        const cached = canReuseProject ? stored!.projectResults[rule.id] : undefined;
+        if (cached) {
+          projectResults[rule.id] = cached;
+          ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: cached.length, reused: true });
+          continue;
         }
-        continue;
+        if (partitionSkipped.has(rule.id)) {
+          ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: 0, reused: false });
+          continue;
+        }
+        const plan = partitionPlans.get(rule.id);
+        if (plan) {
+          const outcome = await this.runPartitionedRule(plan, checkCtx, files, runFiles);
+          if (!outcome.ok) {
+            // 分区/合并不全 ⇒ 整条规则本次**没有结论**（跨文件结论绝不带洞拼造）；不写 projectResults
+            failedRules.push({ ruleId: rule.id, error: outcome.error });
+            ruleTimings.push({
+              ruleId: rule.id,
+              ms: Date.now() - t0,
+              issues: 0,
+              reused: false,
+              cross: { reused: plan.unitsReused, total: plan.unitsTotal },
+            });
+          } else {
+            projectResults[rule.id] = outcome.issues;
+            ruleTimings.push({
+              ruleId: rule.id,
+              ms: Date.now() - t0,
+              issues: outcome.issues.length,
+              reused: false,
+              cross: { reused: plan.unitsReused, total: plan.unitsTotal },
+            });
+          }
+          continue;
+        }
+        try {
+          const produced = (await rule.check!(checkCtx)) ?? [];
+          projectResults[rule.id] = produced;
+          ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: produced.length, reused: false });
+        } catch (err) {
+          // 抛错的规则**不写 projectResults** ⇒ 下次必然重算它（坏一次不能永久缓存坏结果）
+          failedRules.push({ ruleId: rule.id, error: err instanceof Error ? err.message : String(err) });
+          this.deps.log.warn(`Convention rule '${rule.id}' failed: ${String(err)}`);
+          ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: 0, reused: false });
+        }
       }
-      try {
-        const produced = (await rule.check!(checkCtx)) ?? [];
-        projectResults[rule.id] = produced;
-        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: produced.length, reused: false });
-      } catch (err) {
-        // 抛错的规则**不写 projectResults** ⇒ 下次必然重算它（坏一次不能永久缓存坏结果）
-        failedRules.push({ ruleId: rule.id, error: err instanceof Error ? err.message : String(err) });
-        this.deps.log.warn(`Convention rule '${rule.id}' failed: ${String(err)}`);
-        ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: 0, reused: false });
+
+      for (const rule of runnableFileRules) {
+        const t0 = Date.now();
+        const fresh = new Map<string, LintFileBucket>();
+        freshByRule.set(rule.id, fresh);
+        const stale = staleByRule.get(rule.id)!;
+        let ruleFailed = false;
+        await runFiles(stale, async (file) => {
+          try {
+            const produced = (await rule.checkFile!(checkCtx, file)) ?? [];
+            fresh.set(file.path, { mtimeMs: index.fileMtimes?.get(file.path) ?? null, issues: produced });
+            unitsDone++;
+          } catch (err) {
+            // 抛错的文件**不留桶**：下次重算它，而不是把"这次没结论"当成永久结论
+            ruleFailed = true;
+            this.deps.log.warn(`Convention rule '${rule.id}' failed on ${file.path}: ${String(err)}`);
+          }
+        });
+        if (ruleFailed) {
+          failedRules.push({ ruleId: rule.id, error: `逐文件判定失败 ${stale.length - fresh.size} 个文件（详见日志）` });
+        }
+        fileRuleMs.set(rule.id, Date.now() - t0);
+        concludedFileRules++;
       }
+    } catch (err) {
+      if (!(err instanceof LintCancelled)) throw err; // 别的异常照原样往上抛（口径不在这里改）
+      interrupted = true;
     }
 
+    /**
+     * 装配（**半轮也走同一条路**：桶里只有"有结论的单元"，缺项 = 下一轮必重算那一棵）。
+     * 按 walk 顺序 ⇒ 增量与全量同序（与索引/抽取段同一份纪律）。
+     */
     const buckets: Record<string, Record<string, LintFileBucket>> = {};
     let recomputedFiles = 0;
     for (const rule of runnableFileRules) {
-      const t0 = Date.now();
+      const fresh = freshByRule.get(rule.id) ?? new Map<string, LintFileBucket>();
       const prev = prevByRule.get(rule.id)!;
-      const fresh = new Map<string, LintFileBucket>();
       const stale = staleByRule.get(rule.id)!;
-      let ruleFailed = false;
-      await this.runFiles(stale, async (file) => {
-        try {
-          const produced = (await rule.checkFile!(checkCtx, file)) ?? [];
-          fresh.set(file.path, { mtimeMs: index.fileMtimes?.get(file.path) ?? null, issues: produced });
-        } catch (err) {
-          // 抛错的文件**不留桶**：下次重算它，而不是把"这次没结论"当成永久结论
-          ruleFailed = true;
-          this.deps.log.warn(`Convention rule '${rule.id}' failed on ${file.path}: ${String(err)}`);
-        }
-      });
-      if (ruleFailed) {
-        failedRules.push({ ruleId: rule.id, error: `逐文件判定失败 ${stale.length - fresh.size} 个文件（详见日志）` });
-      }
       recomputedFiles += fresh.size;
-      // 装配按 walk 顺序 ⇒ 增量与全量同序（与索引/抽取段同一份纪律）
       const out: Record<string, LintFileBucket> = {};
       let count = 0;
       for (const file of files) {
         const b = fresh.get(file.path) ?? prev[file.path];
-        if (!b) continue; // 这次没结论（读失败 / 索引换了） ⇒ 不伪造
+        if (!b) continue; // 这次没结论（读失败 / 索引换了 / 这一轮被叫停没排到） ⇒ 不伪造
         out[file.path] = b;
         count += b.issues.length;
       }
       buckets[rule.id] = out;
-      ruleTimings.push({ ruleId: rule.id, ms: Date.now() - t0, issues: count, reused: stale.length === 0 });
+      ruleTimings.push({
+        ruleId: rule.id,
+        ms: fileRuleMs.get(rule.id) ?? 0,
+        issues: count,
+        reused: stale.length === 0,
+      });
     }
 
     // 汇总：整项目结论在前、逐文件结论按 (规则, walk 顺序) 在后，再统一去重 + 排序
@@ -638,6 +725,12 @@ export class ConventionEngine implements ConventionLinterService {
 
     const finishedAt = Date.now();
     const executed = projectRules.length + runnableFileRules.length;
+    /**
+     * 半轮的读数口径：`ruleCount` 只报**有完整结论**的那几条（没跑到的规则既不算参与、
+     * 更不算通过），`incomplete` 的分子分母都取本轮那份计划（含分区贡献）。
+     */
+    const unitsSettled =
+      unitsDone + [...partitionPlans.values()].reduce((n, p) => n + p.unitsComputed, 0);
     const report: ConventionReport = {
       adapterId: project.adapterId,
       startedAt,
@@ -645,14 +738,16 @@ export class ConventionEngine implements ConventionLinterService {
       durationMs: finishedAt - startedAt,
       issues,
       counts,
-      ruleCount: executed,
+      ruleCount: interrupted ? Object.keys(projectResults).length + concludedFileRules : executed,
       failedRules,
+      ...(interrupted ? { incomplete: { unitsDone: unitsSettled, unitsTotal } } : {}),
     };
     this.deps.log.info(
       `Convention lint: ${issues.length} issue(s) ` +
         `(error ${counts.error} / warning ${counts.warning} / info ${counts.info}) ` +
         `in ${report.durationMs}ms across ${executed} rule(s)` +
-        (failedRules.length ? `, ${failedRules.length} rule(s) failed` : ''),
+        (failedRules.length ? `, ${failedRules.length} rule(s) failed` : '') +
+        (interrupted ? `, 被叫停（${unitsSettled}/${unitsTotal} 文件单元，本轮不落盘）` : ''),
     );
     // 规则顺序 = 执行顺序（确定性）；`复用` 标记是"增量到底命中没有"的读数，
     // `分复用 a/b` = 分区规则本轮按 mtime 复用的文件贡献数（PERF-12b 判据读数）
@@ -690,7 +785,12 @@ export class ConventionEngine implements ConventionLinterService {
     this.lastRun = expect && index.fileMtimes
       ? { fingerprint: expect.fingerprint, mtimes: new Map(index.fileMtimes) }
       : null;
-    this.commit(report);
+    /**
+     * 半轮**不覆盖订阅面**：波浪线那一层只看 `issues`，把没扫到的文件画成"没有线"就是
+     * 拿沉默冒充结论（铁律 4）。这一轮的真相只交给叫停它的那一手（`run` 的返回值），
+     * 面上留的还是上一次跑完的那一份——由 `lint-run` 的读数说明白。
+     */
+    if (!interrupted) this.commit(report);
 
     /**
      * 落盘：只在真算过东西时写（全命中再刷一遍是纯浪费）。
@@ -705,7 +805,7 @@ export class ConventionEngine implements ConventionLinterService {
     if (
       this.deps.snapshot &&
       expect &&
-      (recomputedFiles > 0 || ruleTimings.some((t) => !t.reused) || stored?.droppedUnits === true)
+      (interrupted || recomputedFiles > 0 || ruleTimings.some((t) => !t.reused) || stored?.droppedUnits === true)
     ) {
       const projectUnits: Record<string, Record<string, LintUnitEntry>> = {};
       const partitionKeys: Record<string, string> = {};
@@ -745,6 +845,14 @@ export class ConventionEngine implements ConventionLinterService {
         ...(unitsPort ? {} : { projectUnits, partitionKeys }),
       };
       this.hotCache = { expectFingerprint: expect.fingerprint, cache: freshCache };
+      if (interrupted) {
+        /**
+         * 被叫停的一轮**一个字节都不落盘**：下一轮开项目级联会把那半份残影当成真相。
+         * 只留在内存的 `hotCache` 里——已算完的那棵下轮按 mtime 命中，没算的那棵在桶/贡献里
+         * **没有条目** ⇒ 必重算（"缺项 = 重算"本就是这套缓存的纪律，所以半份不会说谎）。
+         */
+        return report;
+      }
       this.deps.snapshot.save(freshCache, expect);
       if (unitsPort) {
         for (const plan of partitionPlans.values()) {
@@ -768,12 +876,13 @@ export class ConventionEngine implements ConventionLinterService {
     plan: PartitionPlan,
     ctx: ConventionCheckContext,
     files: readonly ErbFile[],
+    runFiles: FileLoop,
   ): Promise<{ ok: true; issues: ConventionIssue[] } | { ok: false; error: string }> {
     const { rule, state, stale } = plan;
     const partition = rule.partition!;
     const fresh = new Map<string, unknown>();
     let failedUnits = 0;
-    await this.runFiles(stale, async (file) => {
+    await runFiles(stale, async (file) => {
       const mtime = ctx.index.fileMtimes?.get(file.path) ?? null;
       try {
         const produced = await partition.fileUnit(ctx, file);
@@ -782,6 +891,7 @@ export class ConventionEngine implements ConventionLinterService {
           return;
         }
         fresh.set(file.path, produced);
+        plan.unitsComputed++;
         if (mtime !== null) state.byPath.set(file.path, { mtimeMs: mtime, unit: produced });
         else state.byPath.delete(file.path); // mtime 判据不可得 ⇒ 算了也不缓存（保守）
       } catch (err) {
