@@ -231,10 +231,18 @@ function singleInsertedChar(e: Monaco.editor.IModelContentChangedEvent): string 
   return text;
 }
 
-/** widget 是否已可见（公开面 `hasWidgetFocus` + 贡献点的 `model.state`；两处都拿不到 ⇒ 视为不可见） */
+/**
+ * widget 是否已可见：**只认** `SuggestController.model.state`（`State.Idle = 0`）。
+ *
+ * **不能用 `editor.hasWidgetFocus()`**（2026-10-18 真壳实机抓到的坑）：Monaco 0.57 的该公开面
+ * 是 `CodeEditorWidgetFocusTracker`（vendor `view.js` 的 `hasFocus()`）——跟踪的是"焦点落在
+ * 编辑器容器 / overflow 区"，**打字时恒为 `true`**（真壳实测：无弹窗时 `hasWidgetFocus=true`、
+ * suggest `state=0`）。把它当"弹窗可见"会让观察者**每次击键**都倒在闸门⑥，整条主动触发链
+ * 静默全灭（单测直接构造 `widgetVisible:false`，抓不到这种"封装语义错"）。
+ *
+ * 控制器取不到 ⇒ 视为不可见（宁多弹一次，不整条静默）。
+ */
 function isSuggestWidgetVisible(editor: Monaco.editor.IStandaloneCodeEditor): boolean {
-  const hasWidgetFocus = (editor as { hasWidgetFocus?: () => boolean }).hasWidgetFocus;
-  if (typeof hasWidgetFocus === 'function' && hasWidgetFocus.call(editor)) return true;
   const getContribution = (editor as {
     getContribution?: (id: string) => SuggestControllerLike | null;
   }).getContribution;

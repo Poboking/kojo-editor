@@ -139,7 +139,10 @@ function stubEditor(init: Partial<StubState> & Partial<StubEnv> = {}): StubEdito
     getSelection: selectionOf,
     getSelections: () => Array.from({ length: state.selectionCount }, selectionOf),
     hasTextFocus: () => state.focus,
-    hasWidgetFocus: () => false,
+    // **生产语义**：Monaco 0.57 的 `hasWidgetFocus()` 跟踪的是"焦点在编辑器容器 / overflow 区"
+    // （`view.js` 的 CodeEditorWidgetFocusTracker），**打字时恒为 true**、与补全弹窗是否可见无关。
+    // 桩按真实值返回 ⇒ 旧实现（拿它当"widget 可见"）会在这里全红，回归钉不留假绿。
+    hasWidgetFocus: () => true,
     getRawOptions: () => ({ readOnly: state.readOnly }),
     getContribution: (id: string) =>
       id === 'editor.contrib.suggestController' ? { model: { state: state.suggestState }, dispose: () => undefined } : null,
@@ -216,6 +219,16 @@ function stubEditor(init: Partial<StubState> & Partial<StubEnv> = {}): StubEdito
 const fired = (s: StubEditor) => s.triggers.filter((t) => t.id === SUGGEST_ACTION_ID).length;
 
 describe('CTX-SUGGEST · 打字进名字位 ⇒ 主动弹一次', () => {
+  // 2026-10-18 真壳实机回归钉：Monaco 0.57 的 `hasWidgetFocus()` 是**容器焦点**（打字时恒 true），
+  // 不是"补全弹窗可见"。桩按生产真值返回 ⇒ 谁再把它接回闸门⑥，这组用例立刻全红。
+  it('`hasWidgetFocus` 恒 true（生产语义）不抑制触发——弹窗可见只认 suggest controller state', async () => {
+    const s = stubEditor({ line: '时机' });
+    expect((s.editor as { hasWidgetFocus?: () => boolean }).hasWidgetFocus?.()).toBe(true);
+    s.type(' ');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
   it('`时机` 后半角空格 ⇒ 触发一次 editor.action.triggerSuggest（source 可识别）', async () => {
     const s = stubEditor({ line: '时机' });
     s.type(' ');
