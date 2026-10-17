@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  SESSION_FLUSH_DEBOUNCE_MS,
   SESSION_KEY,
+  createSessionFlushScheduler,
   emptySessionRecord,
   loadSessionRecord,
   sanitizeSessionRecord,
@@ -8,6 +10,7 @@ import {
   sessionProjectKey,
   sessionProjectOf,
   upsertSessionProject,
+  type SessionFlushPayload,
   type SessionKv,
   type SessionRecord,
 } from '../src/ui/session-store';
@@ -126,5 +129,121 @@ describe('loadSessionRecord / saveSessionRecord（JSON 往返）', () => {
 
   it('首次运行（键不存在）→ 空记录', async () => {
     expect(await loadSessionRecord(kv)).toEqual(emptySessionRecord());
+  });
+});
+
+/* ------------ createSessionFlushScheduler（S2 #4：关项目强刷不丢最后一拍） ------------ */
+
+/** 假钟：注入调度器，手动"到点"，时序钉死不靠真实定时器 */
+function fakeClock() {
+  let seq = 0;
+  const queued = new Map<number, () => void>();
+  return {
+    setTimer(cb: () => void): number {
+      const id = ++seq;
+      queued.set(id, cb);
+      return id;
+    },
+    clearTimer(timer: unknown): void {
+      queued.delete(timer as number);
+    },
+    /** 当前仍在排的定时器个数（验证 debounce 合并 / 旧计时器被清） */
+    pending(): number {
+      return queued.size;
+    },
+    /** 让所有在排计时器"到点"（先摘再跑：跑的就是 flushNow 本体，不重复触发） */
+    fireAll(): void {
+      const due = [...queued.values()];
+      queued.clear();
+      for (const cb of due) cb();
+    },
+  };
+}
+
+const payloadOf = (root: string, tabs: string[], active: string | null, pinned: string[]): SessionFlushPayload => ({
+  root,
+  kv: memoryKv(),
+  tabs,
+  active,
+  pinned,
+});
+
+describe('createSessionFlushScheduler（S2 #4 关项目强刷）', () => {
+  it('schedule 后防抖窗口内立即关项目（flushNow）→ 最新一份同步落盘，且只写这一次', () => {
+    const clock = fakeClock();
+    const writes: SessionFlushPayload[] = [];
+    const s = createSessionFlushScheduler({
+      write: (p) => writes.push(p),
+      setTimer: (cb) => clock.setTimer(cb),
+      clearTimer: (t) => clock.clearTimer(t),
+    });
+    s.schedule(payloadOf('C:/p', ['C:/a.ERB'], 'C:/a.ERB', []));
+    s.schedule(payloadOf('C:/p', ['C:/a.ERB', 'C:/b.ERB'], 'C:/b.ERB', ['C:/a.ERB'])); // 窗口内的后续变更
+    s.flushNow(); // 关项目 / 卸载收尾：不等 600ms，同步强制落盘
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.tabs).toEqual(['C:/a.ERB', 'C:/b.ERB']); // 最新集，不是"旧一拍"
+    s.flushNow(); // 幂等：已无待写，再进一次不重复写
+    expect(writes).toHaveLength(1);
+  });
+
+  it('flushNow 落的那一份真的进得了盘：save → load 可恢复该项目标签集', async () => {
+    const clock = fakeClock();
+    const kvDisk = memoryKv();
+    let rec = emptySessionRecord();
+    const s = createSessionFlushScheduler({
+      // 与 App 写面同款：upsert 内存权威 + saveSessionRecord
+      write: (p) => {
+        rec = upsertSessionProject(rec, p.root, p);
+        void saveSessionRecord(p.kv, rec);
+      },
+      setTimer: (cb) => clock.setTimer(cb),
+      clearTimer: (t) => clock.clearTimer(t),
+    });
+    s.schedule(payloadOf('C:/proj', ['C:/a.ERB'], 'C:/a.ERB', []));
+    s.schedule({ ...payloadOf('C:/proj', ['C:/a.ERB', 'C:/b.ERB'], 'C:/b.ERB', ['C:/a.ERB']), kv: kvDisk });
+    s.flushNow();
+    const loaded = await loadSessionRecord(kvDisk);
+    expect(sessionProjectOf(loaded, 'C:/proj')).toEqual({
+      tabs: ['C:/a.ERB', 'C:/b.ERB'],
+      active: 'C:/b.ERB',
+      pinned: ['C:/a.ERB'],
+    });
+    expect(loaded.lastRoot).toBe('C:/proj'); // 首开会话：记录与 lastRoot 都在（不再"整条缺失"）
+  });
+
+  it('稳态保持 debounce：窗口内多次 schedule 不写盘；计时器到点只写最新一份', () => {
+    const clock = fakeClock();
+    const writes: SessionFlushPayload[] = [];
+    const s = createSessionFlushScheduler({
+      write: (p) => writes.push(p),
+      debounceMs: 600,
+      setTimer: (cb) => clock.setTimer(cb),
+      clearTimer: (t) => clock.clearTimer(t),
+    });
+    s.schedule(payloadOf('C:/p', ['C:/a.ERB'], 'C:/a.ERB', []));
+    s.schedule(payloadOf('C:/p', ['C:/a.ERB', 'C:/b.ERB'], 'C:/b.ERB', []));
+    s.schedule(payloadOf('C:/p', ['C:/a.ERB', 'C:/b.ERB', 'C:/c.ERB'], 'C:/c.ERB', []));
+    expect(writes).toHaveLength(0); // 还没到点：一次都不写
+    expect(clock.pending()).toBe(1); // 旧计时器被重置，不叠加
+    clock.fireAll();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.tabs).toEqual(['C:/a.ERB', 'C:/b.ERB', 'C:/c.ERB']);
+    clock.fireAll(); // 到点后又"到点"一次：无待写，不双写
+    expect(writes).toHaveLength(1);
+  });
+
+  it('默认 debounce = SESSION_FLUSH_DEBOUNCE_MS；空标签集快照也照样落（= 删该项目记录）', () => {
+    const clock = fakeClock();
+    const writes: SessionFlushPayload[] = [];
+    const s = createSessionFlushScheduler({
+      write: (p) => writes.push(p),
+      setTimer: (cb) => clock.setTimer(cb),
+      clearTimer: (t) => clock.clearTimer(t),
+    });
+    s.schedule(payloadOf('C:/p', [], null, []));
+    s.flushNow();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.tabs).toEqual([]); // "标签全关再关项目 = 空标签集"口径穿过调度器不丢
+    expect(SESSION_FLUSH_DEBOUNCE_MS).toBe(600);
   });
 });

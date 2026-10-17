@@ -109,3 +109,70 @@ export async function loadSessionRecord(kv: SessionKv): Promise<SessionRecord> {
 export async function saveSessionRecord(kv: SessionKv, rec: SessionRecord): Promise<void> {
   await kv.set(SESSION_KEY, rec);
 }
+
+/* ------------ 防抖落盘调度（S2 #4：关项目强刷不丢最后一拍） ------------ */
+
+/**
+ * 一份待落盘的会话写（调度即快照）：回调 write 所需的全部信息都在这里，
+ * 强刷时**不再回读现场**——关项目那一拍 resetProjectUiState 已把标签态清空，
+ * 现场值只剩"已拆的"，快照才是关项目前最后一份真值。
+ */
+export interface SessionFlushPayload {
+  root: string;
+  kv: SessionKv;
+  tabs: readonly string[];
+  active: string | null;
+  pinned: readonly string[];
+}
+
+export interface SessionFlushScheduler {
+  /** 稳态变更：覆盖待写快照并重置计时器（窗口内只留最新一份，旧定时器作废） */
+  schedule(payload: SessionFlushPayload): void;
+  /**
+   * 强制落盘（关项目 / kernel 更替 / 卸载收尾）：有待写就**同步**执行 write；
+   * 无待写（计时器已到点、或从未排过）即 no-op。pending 先清后写 = 幂等，
+   * 计时器到点与强刷两条路对同一份待写最多写一次，绝不双写。
+   */
+  flushNow(): void;
+}
+
+/**
+ * 会话落盘的防抖调度器（零 React；计时器可注入，node 测试用假钟钉死时序）。
+ * 默认 debounce = SESSION_FLUSH_DEBOUNCE_MS，走宿主 globalThis 计时器。
+ */
+export function createSessionFlushScheduler(deps: {
+  write: (payload: SessionFlushPayload) => void;
+  debounceMs?: number;
+  setTimer?: (cb: () => void, ms: number) => unknown;
+  clearTimer?: (timer: unknown) => void;
+}): SessionFlushScheduler {
+  const debounceMs = deps.debounceMs ?? SESSION_FLUSH_DEBOUNCE_MS;
+  const setTimer = deps.setTimer ?? ((cb, ms) => globalThis.setTimeout(cb, ms));
+  const clearTimer =
+    deps.clearTimer ??
+    ((timer: unknown) => {
+      globalThis.clearTimeout(timer as ReturnType<typeof globalThis.setTimeout>);
+    });
+  let pending: SessionFlushPayload | null = null;
+  let timer: unknown = null;
+  const clearPendingTimer = () => {
+    if (timer === null) return;
+    clearTimer(timer);
+    timer = null;
+  };
+  const flushNow = () => {
+    clearPendingTimer();
+    const payload = pending;
+    if (!payload) return;
+    pending = null; // 先清后写：再进一次的 flushNow（或迟到的计时器）都是 no-op
+    deps.write(payload);
+  };
+  return {
+    schedule(payload) {
+      pending = payload;
+      clearPendingTimer();
+      timer = setTimer(flushNow, debounceMs);
+    },
+    flushNow,
+  };
+}

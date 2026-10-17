@@ -21,12 +21,13 @@ import {
   type JournalIo,
 } from './autosave-journal';
 import {
-  SESSION_FLUSH_DEBOUNCE_MS,
+  createSessionFlushScheduler,
   emptySessionRecord,
   loadSessionRecord,
   saveSessionRecord,
   sessionProjectOf,
   upsertSessionProject,
+  type SessionFlushScheduler,
   type SessionRecord,
 } from './session-store';
 import { clearRecoveredContents, recoveredPaths, setRecoveredContents } from './recovery-store';
@@ -223,8 +224,22 @@ export function App(): ReactElement {
   const [resumeRoot, setResumeRoot] = useState<string | null>(null);
   /** 会话标签集的内存权威（落盘数据的投影；开项目时从它恢复） */
   const sessionRecordRef = useRef<SessionRecord>(emptySessionRecord());
-  /** 会话落盘的防抖计时器 */
-  const sessionFlushTimerRef = useRef<number | null>(null);
+  /**
+   * 会话落盘防抖调度器（S2 #4）：稳态变更只 schedule（600ms 合并写盘），
+   * 关项目 / kernel 更替 / 卸载收尾走 flushNow 同步落盘——防抖窗口里的
+   * 最后一拍不再被清定时器丢掉了。write 面读写内存权威 ref，幂等由调度器保证。
+   */
+  const sessionFlushRef = useRef<SessionFlushScheduler | null>(null);
+  if (sessionFlushRef.current === null) {
+    sessionFlushRef.current = createSessionFlushScheduler({
+      write: (p) => {
+        const next = upsertSessionProject(sessionRecordRef.current, p.root, p);
+        sessionRecordRef.current = next;
+        setResumeRoot(next.lastRoot);
+        void saveSessionRecord(p.kv, next).catch(() => undefined);
+      },
+    });
+  }
   /** autosave 引擎（仅 Tauri 壳装配；浏览器壳恒 null，全部相关链路自然空转） */
   const autosaveRef = useRef<AutosaveJournal | null>(null);
   /** 恢复意图：欢迎页点了「恢复」→ 下一次 openProject 把恢复件合并进标签集 */
@@ -1179,28 +1194,27 @@ export function App(): ReactElement {
   // 会话标签集落盘（退出/崩溃守护批）：debounce 600ms，写 kernel 全局存储。
   // 关项目不清记录（重启后「继续上次会话」靠它）；欢迎页（project null）不写——
   // lastRoot 只指向最近一次打开过的项目。恢复用的读值经 ref 取最新，不吃陈旧闭包。
+  // S2 #4：schedule 即快照（此刻读 ref 拿最新），计时器到点与关项目强刷都只吃快照，
+  // 不再回读被 resetProjectUiState 清空的现场标签态。
   useEffect(() => {
     if (!kernel || !project) return;
-    const root = project.rootDir;
-    if (sessionFlushTimerRef.current !== null) window.clearTimeout(sessionFlushTimerRef.current);
-    sessionFlushTimerRef.current = window.setTimeout(() => {
-      sessionFlushTimerRef.current = null;
-      const next = upsertSessionProject(sessionRecordRef.current, root, {
-        tabs: openTabsRef.current,
-        active: activeFileRef.current,
-        pinned: [...pinnedRef.current],
-      });
-      sessionRecordRef.current = next;
-      setResumeRoot(next.lastRoot);
-      void saveSessionRecord(kernel.storage.global(), next).catch(() => undefined);
-    }, SESSION_FLUSH_DEBOUNCE_MS);
-    return () => {
-      if (sessionFlushTimerRef.current !== null) {
-        window.clearTimeout(sessionFlushTimerRef.current);
-        sessionFlushTimerRef.current = null;
-      }
-    };
+    sessionFlushRef.current?.schedule({
+      root: project.rootDir,
+      kv: kernel.storage.global(),
+      tabs: openTabsRef.current,
+      active: activeFileRef.current,
+      pinned: [...pinnedRef.current],
+    });
   }, [kernel, project, openTabs, activeFile, pinnedPaths]);
+
+  // 项目拆除（project→null / 换项目 / kernel 更替 / 组件卸载）：防抖窗口里还没
+  // 到点的待写必须同步落盘，只清定时器会把最后一拍（首开时甚至整条记录）丢掉。
+  // layout 相保证这步在 commit 内同步发生；无待写时 flushNow 是 no-op，绝不双写。
+  useLayoutEffect(() => {
+    return () => {
+      sessionFlushRef.current?.flushNow();
+    };
+  }, [kernel, project]);
 
   /** 固定 / 取消固定标签（C2）：pinned 会话态 + 顺序重排（固定区在前，见 applyPin） */
   const togglePinInGroup = useCallback((groupId: string, path: string) => {
