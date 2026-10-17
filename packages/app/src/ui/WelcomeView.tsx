@@ -1,6 +1,9 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import type { FileStat, RecentProject } from '@kojo/plugin-api';
 import { pathKey } from '@kojo/plugin-api';
+// 版本号单一真源 = app 包清单（与 `src/bootstrap.ts` 的 `APP_VERSION` 同一条路）：
+// 欢迎页那格不许再抄一份字面量，抬版本只改三处清单（闸见 `tests/app-version.test.ts`）。
+import { version as APP_VERSION } from '../../package.json';
 import type { AppPhase } from './App';
 
 interface Props {
@@ -110,7 +113,7 @@ export function WelcomeView({
     <div className="welcome u-grain">
       <div className="welcome-card stagger">
         <h1>
-          kojo-editor <span className="ver">v0.1</span>
+          kojo-editor <span className="ver">v{APP_VERSION}</span>
         </h1>
         <p className="tagline">{TAGLINE}</p>
 
