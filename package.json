@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev": "pnpm --filter @kojo/app dev",
     "tauri": "pnpm --filter @kojo/app tauri",
+    "tauri:fresh": "node tools/tauri-dev-fresh.mjs",
     "audit:decoupling": "node tools/audit-decoupling.mjs",
     "verify": "node tools/verify.mjs"
   },
