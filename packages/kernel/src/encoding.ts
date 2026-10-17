@@ -1,4 +1,5 @@
-import type { FileEncoding } from '@kojo/plugin-api';
+import type { DecodeBomRule, FileEncoding } from '@kojo/plugin-api';
+import { DECODE_LABEL, DECODE_PROBE_POLICY } from '@kojo/plugin-api';
 
 /**
  * 编码探测与换行处理。
@@ -7,11 +8,30 @@ import type { FileEncoding } from '@kojo/plugin-api';
  * - ERB / CSV 生态极其混杂：Shift-JIS（日文原版）、UTF-8-BOM（汉化版）、UTF-16（罕见）；
  * - 引擎自身 DetectEncoding 存在已知 bug（Process.cs:589 错误回读 CSV 行时误用 ErbDir），
  *   编辑器必须自行做正确探测 + 写回保持，否则一次保存就毁半库文件。
+ *
+ * **判序与 fatal/替换策略只有一份定义**（W12 ENC-SRC）：`DECODE_PROBE_POLICY`
+ * （`@kojo/plugin-api`，表体 = 同目录 `decode-probe-policy.json`）。本文件是它的 TS 解释者；
+ * Rust 检索侧是同一张表的另一个解释者（`src-tauri/src/lib.rs` 的 `decode_with_policy`，
+ * 编译期 `include_str!` 内嵌）。旧局三套解码判据（此处 / Rust `decode_for_search` /
+ * Rust `decode_bytes`）已合一，跨语言对拍见 `encoding-decode-policy.test.ts` 与
+ * `search_tests.rs::policy_table_decodes_golden_samples`。
  */
 
-const BOM_UTF8 = [0xef, 0xbb, 0xbf] as const;
-const BOM_UTF16_LE = [0xff, 0xfe] as const;
-const BOM_UTF16_BE = [0xfe, 0xff] as const;
+/** 判序第一环：BOM 前缀命中（表内顺序即判定顺序，逐条短路） */
+function matchBomRule(bytes: Uint8Array): DecodeBomRule | null {
+  for (const rule of DECODE_PROBE_POLICY.bomRules) {
+    if (bytes.length < rule.bom.length) continue;
+    let hit = true;
+    for (let i = 0; i < rule.bom.length; i++) {
+      if (bytes[i] !== rule.bom[i]) {
+        hit = false;
+        break;
+      }
+    }
+    if (hit) return rule;
+  }
+  return null;
+}
 
 /** UTF-8 严格校验（无 BOM 场景判定 UTF-8 vs Shift-JIS） */
 export function isValidUtf8(bytes: Uint8Array): boolean {
@@ -24,8 +44,7 @@ export function isValidUtf8(bytes: Uint8Array): boolean {
 }
 
 /**
- * 探测编码。
- * 判定顺序：BOM → UTF-8 合法性 → 中日韩三族评分（shift_jis / gbk / big5）→ 兜底 shift_jis。
+ * 探测编码。判定顺序：BOM（策略表逐条）→ UTF-8 合法性 → 中日韩三族评分（shift_jis / gbk / big5）→ 兜底 shift_jis。
  * 纯 ASCII 文件会命中 'utf-8'（等价安全：ASCII 是 UTF-8 子集，也会是 Shift-JIS 子集）。
  *
  * 三族评分（2026-10-17 编码标签批）：GBK/Big5 无 BOM 中文文件的字节序列**大多也是合法
@@ -38,11 +57,8 @@ export function isValidUtf8(bytes: Uint8Array): boolean {
  * 本函数保留给**写路径**（`probeOnDisk`）与其它需要"只要编码判据"的调用方。
  */
 export function probeEncoding(bytes: Uint8Array): FileEncoding {
-  if (bytes.length >= 3 && bytes[0] === BOM_UTF8[0] && bytes[1] === BOM_UTF8[1] && bytes[2] === BOM_UTF8[2]) {
-    return 'utf-8-bom';
-  }
-  if (bytes.length >= 2 && bytes[0] === BOM_UTF16_LE[0] && bytes[1] === BOM_UTF16_LE[1]) return 'utf-16le';
-  if (bytes.length >= 2 && bytes[0] === BOM_UTF16_BE[0] && bytes[1] === BOM_UTF16_BE[1]) return 'utf-16be';
+  const rule = matchBomRule(bytes);
+  if (rule) return rule.encoding;
   if (isValidUtf8(bytes)) return 'utf-8';
   return probeLegacyCjk(bytes).encoding;
 }
@@ -106,28 +122,19 @@ export interface ProbedDecode {
 }
 
 /**
- * 探测 + 解码**一次做完**（2026-10-16 批量 IO 批）。
+ * 探测 + 解码**一次做完**（2026-10-16 批量 IO 批；W12 ENC-SRC 起改为策略表解释者）。
  *
- * 旧路径是双重全量解码：`probeEncoding`（内含 `isValidUtf8` 的 fatal 全文解一遍，
- * 抛错即弃）→ `decode`（再全文解一遍）。对每个文件白烧一遍全量 UTF-8 校验的 CPU
- * ——批量读把这件事的账放大了（一次开项目 ~9,000 个文件）。
- *
- * 判定顺序与 `probeEncoding` **逐条一致**（等价性由对拍测试钉死，两者共用
- * {@link probeLegacyCjk}）：
- * BOM（utf-8-bom / utf-16le / utf-16be，BOM 由 TextDecoder 按 WHATWG 标准剥掉）
+ * 与 `probeEncoding` 逐条同判序（等价性由对拍测试钉死）：
+ * BOM（标签由 `DECODE_LABEL` 派生、顺序由策略表逐条判定，BOM 由 TextDecoder 按 WHATWG
+ * 标准剥掉；非法尾随字节替换为 U+FFFD——不严格口径，与 Rust 侧 WHATWG 对齐解码同文）
  * → 直接以 fatal 模式解 UTF-8（成功 = utf-8，失败的那次尝试就是校验本身，不再重复）
  * → 三族评分（shift_jis / gbk / big5，胜者的解码文本直接复用，不再多解一遍）
- * → 三族零分时兜底 shift_jis（不严格口径，无法映射字节替换为 U+FFFD，与既有行为一致）。
+ * → 三族零分时兜底 shift_jis（不严格口径，与既有行为、Rust 侧同判序一致）。
  */
 export function decodeWithProbe(bytes: Uint8Array): ProbedDecode {
-  if (bytes.length >= 3 && bytes[0] === BOM_UTF8[0] && bytes[1] === BOM_UTF8[1] && bytes[2] === BOM_UTF8[2]) {
-    return { text: new TextDecoder('utf-8').decode(bytes), encoding: 'utf-8-bom' };
-  }
-  if (bytes.length >= 2 && bytes[0] === BOM_UTF16_LE[0] && bytes[1] === BOM_UTF16_LE[1]) {
-    return { text: new TextDecoder('utf-16le').decode(bytes), encoding: 'utf-16le' };
-  }
-  if (bytes.length >= 2 && bytes[0] === BOM_UTF16_BE[0] && bytes[1] === BOM_UTF16_BE[1]) {
-    return { text: new TextDecoder('utf-16be').decode(bytes), encoding: 'utf-16be' };
+  const rule = matchBomRule(bytes);
+  if (rule) {
+    return { text: new TextDecoder(DECODE_LABEL[rule.encoding]).decode(bytes), encoding: rule.encoding };
   }
   try {
     // fatal = 校验与解码合体：成功的那一次输出就是正文，不再有第二遍

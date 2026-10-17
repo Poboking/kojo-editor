@@ -26,7 +26,18 @@ export {
   parseBackupTakenAtMs,
 } from './io';
 // 回收站 + 批操作 journal（2026-10-16 undo 批）：实现类供测试/宿主注入替身
-export { TrashManager, TRASH_DIR_NAME, TRASH_ID_RE, TRASH_KEEP_DAYS, type TrashEntryView, type TrashManifest } from './trash';
+// W11 回收站可见批：条目形态/年龄尺（trashEntryTimeMs）一并对外——时间线要按同一把尺算剩余天数
+export {
+  TrashManager,
+  TRASH_DIR_NAME,
+  TRASH_KEEP_DAYS,
+  TRASH_ID_RE,
+  TRASH_PAYLOAD_NAME,
+  trashEntryTimeMs,
+  type TrashListOptions,
+  type TrashManifest,
+  type TrashRestoreOptions,
+} from './trash';
 export { OpsJournalImpl, OP_ID_RE, type OpsJournalDeps } from './journal';
 // journal 维护态（崩溃/回滚失败残留）的契约类型：宿主与观测面板经它读数（additive 追加，勿重排上一行）
 export type { OpsMaintenance } from './journal';

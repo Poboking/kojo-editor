@@ -1,6 +1,7 @@
 import { existsSync, promises as fs } from 'node:fs';
 import * as nodePath from 'node:path';
 import iconv from 'iconv-lite';
+import { DECODE_LABEL } from '@kojo/plugin-api';
 import type {
   BatchFileStat,
   DirEntry,
@@ -33,16 +34,8 @@ function isAtomicWriteTemp(relativePath: string): boolean {
   return name.startsWith('.') && name.endsWith('.tmp');
 }
 
-const DECODE_LABEL: Record<FileEncoding, string> = {
-  'utf-8': 'utf-8',
-  'utf-8-bom': 'utf-8',
-  shift_jis: 'shift_jis',
-  gbk: 'gbk',
-  gb18030: 'gb18030',
-  big5: 'big5',
-  'utf-16le': 'utf-16le',
-  'utf-16be': 'utf-16be',
-};
+// 解码标签表 = `@kojo/plugin-api` 的 `DECODE_LABEL` 单源（W12 ENC-SRC）：
+// 本桥与 Tauri 桥 import 同一张表，"两桥同形"在构造上成立（PITFALLS 73 教训的解码侧对应物）。
 
 /** 批量原语的并行度（与 Rust 侧 `BATCH_READ_THREADS` 同量级：读并行 8） */
 const BATCH_IO_CONCURRENCY = 8;

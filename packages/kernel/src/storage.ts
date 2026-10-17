@@ -1,5 +1,6 @@
 import type { PlatformBridge, ScopedStorage, StorageService } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
+import { decodeWithProbe } from './encoding';
 
 /**
  * 存储域实现。
@@ -47,7 +48,11 @@ export class FileStorageBackend implements StorageBackend {
     const path = join(await this.scopeDir(scope), `${key}.json`);
     if (!(await this.bridge.exists(path))) return undefined;
     const bytes = await this.bridge.readFileBytes(path);
-    return this.bridge.decode(bytes, 'utf-8');
+    // 单源解码（W12 ENC-SRC）：旧写法是旁路 `bridge.decode(bytes, 'utf-8')`——当年在对照的是
+    // "客户端 TextDecoder vs Rust encoding_rs"逐字等价性（§5.90 实机复测后 Rust 侧对照命令
+    // `decode_bytes` 已删）。判序/替换策略合一进 DECODE_PROBE_POLICY 后，KV 与编辑器走同
+    // 一个 `decodeWithProbe`，对照物不复存在，旁路随之取消。
+    return decodeWithProbe(bytes).text;
   }
 
   async write(scope: string, key: string, data: string): Promise<void> {

@@ -1,15 +1,15 @@
-import type { Logger, PlatformBridge } from '@kojo/plugin-api';
-import { dirname, join, pathKey } from '@kojo/plugin-api';
+import type { Logger, PlatformBridge, TrashEntry } from '@kojo/plugin-api';
+import { dirname, isPathUnder, join, pathKey } from '@kojo/plugin-api';
 import { fnv1a, timestamp } from './io';
 
 /**
- * 回收站条目 id 形态（`<ts>-<hash8>`；列举/恢复只认它，不放宽）。
+ * 回收站条目 id 形态（`<ts>-<hash8>`；列举/恢复/彻底删除只认它，不放宽）。
  * 时间戳段与备份版本文件名同一形态（io.timestamp 的唯一合法产出）。
  */
 export const TRASH_ID_RE = /^\d{8}-\d{6}-\d{3}-[0-9a-f]{8}$/;
 
 /**
- * 内核回收站（2026-10-16 undo 批）。
+ * 内核回收站（2026-10-16 undo 批；W11 回收站可见批补上对外读面与引用保护）。
  *
  * 语义：`io.removeDir` / `io.removeFile` 从"直接删"改为"移入 `{appData}/trash/`"。
  * 条目结构：
@@ -23,6 +23,10 @@ export const TRASH_ID_RE = /^\d{8}-\d{6}-\d{3}-[0-9a-f]{8}$/;
  *   trash 根在 appData 恒可写，不进也不该进用户写允许域的判定面；
  * - 但**谁进 trash 由调用方的闸决定**：`io.removeDir/removeFile` 仍先过
  *   `assertWritable`，回收站不改变写允许域语义（源侧照旧拒绝越权删）；
+ * - **恢复方向一样有闸，而且闸住在调用方**（`FileIOServiceImpl.restoreFromTrash`）：
+ *   把 payload 搬回 `originalPath` 是一次**写盘**，落点完全可能在只读的游戏目录里。
+ *   本类的 `restore` 是**低层原语**（只保证"不覆盖"、不判写允许域），
+ *   它不是对外通道——契约面上暴露的必须是过闸那一个；
  * - 内核自己的管理性删除（备份裁剪、trash 自身的 purge）**绕过**本类直走桥——
  *   管理性删除进回收站会让 trash 自增殖，是明显错位。
  *
@@ -37,6 +41,8 @@ export const TRASH_ID_RE = /^\d{8}-\d{6}-\d{3}-[0-9a-f]{8}$/;
 export const TRASH_DIR_NAME = 'trash';
 /** 条目保留期（天）：purge 自动清理超期条目 */
 export const TRASH_KEEP_DAYS = 30;
+/** 条目内的内容根目录名（契约的 `payloadPath` 就是它；文件条目时 payload 即该文件本体） */
+export const TRASH_PAYLOAD_NAME = 'payload';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface TrashManifest {
@@ -46,12 +52,19 @@ export interface TrashManifest {
   kind: 'dir' | 'file';
 }
 
-export interface TrashEntryView {
-  /** 条目目录名（`<ts>-<hash8>`；restore 用） */
-  id: string;
-  originalPath: string;
-  deletedAt: number;
-  kind: 'dir' | 'file';
+/** `list` 的相关性筛选（见 `isRelatedTo`） */
+export interface TrashListOptions {
+  forPath?: string;
+}
+
+/** `restore` 的覆盖许可（默认 false = 原位有东西就拒绝；见该方法注释） */
+export interface TrashRestoreOptions {
+  /**
+   * true ⇒ 原位站着**同 kind 的东西**时仍然搬回去（调用方已把现状落进别的账）。
+   * 只对 `kind='file'` 生效：目录永远不覆盖——整棵子树没有"一份现状"可以备份，
+   * 覆盖它等于吃掉一整棵目录树，那不是恢复数据而是换个数据。
+   */
+  overwrite?: boolean;
 }
 
 function isCrossDevice(err: unknown): boolean {
@@ -61,7 +74,51 @@ function isCrossDevice(err: unknown): boolean {
   return /EXDEV|cross-device|cross device|os error 18|not same/i.test(msg);
 }
 
+/**
+ * 条目名的时间戳段 → 本地时刻（ms）；形态不合或日期非法 → null（判据不猜）。
+ *
+ * **年龄只认这一把尺**：`purge` 按条目名算超期，"剩余保留天数"也必须按同一把尺算。
+ * manifest 的 `deletedAt` 是另一个时钟（搬运用 `Date.now()`），拿它显示"还剩 3 天"、
+ * 却在下一趟按条目名把人收走 = 给用户一个假承诺。
+ */
+export function trashEntryTimeMs(id: string): number | null {
+  const m = /^(\d{8})-(\d{6})-(\d{3})-/.exec(id);
+  if (!m) return null;
+  const d = new Date(
+    Number(m[1]!.slice(0, 4)),
+    Number(m[1]!.slice(4, 6)) - 1,
+    Number(m[1]!.slice(6, 8)),
+    Number(m[2]!.slice(0, 2)),
+    Number(m[2]!.slice(2, 4)),
+    Number(m[2]!.slice(4, 6)),
+    Number(m[3]),
+  );
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
+}
+
+/**
+ * 相关性判定（`list({forPath})` 的筛子，同删除侧的 `pathKey` 尺）：
+ * 原路径与查询路径**是同一个东西**，或**互为祖先**（文件在被删目录里 / 被删文件在查询目录下）。
+ * 只认这三形，不做模糊匹配——"看着像同一个包"不是判据。
+ */
+function isRelatedTo(originalPath: string, forPath: string): boolean {
+  if (pathKey(originalPath) === pathKey(forPath)) return true;
+  return isPathUnder(originalPath, forPath) || isPathUnder(forPath, originalPath);
+}
+
 export class TrashManager {
+  /**
+   * 本会话被时间线引用的条目 id（`FileIO.holdTrash` 写入，整替语义）。
+   * 只影响**自动清理**（超期清扫）：用户正看着的那一条不能在脚下消失。
+   * 它不落盘、不延长保留期，也**拦不住**显式彻底删除——那是"别抽走"不是"永远留着"。
+   */
+  private readonly held = new Set<string>();
+  /**
+   * 最近一次"顺手超期清扫"的在途 Promise（`moveIntoTrash` 里是尽力而为的异步动作）。
+   * 需要确定性顺序的调用方（测试、以及"删完就想看到清单"的读面）用 `flushSweep` 等它落定。
+   */
+  private sweep: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly bridge: PlatformBridge,
     private readonly log?: Logger,
@@ -69,6 +126,12 @@ export class TrashManager {
 
   private async root(): Promise<string> {
     return join(await this.bridge.appDataDir(), TRASH_DIR_NAME);
+  }
+
+  /** 声明"这些条目正被引用"（整替；空数组 = 撤回全部） */
+  hold(ids: readonly string[]): void {
+    this.held.clear();
+    for (const id of ids) this.held.add(id);
   }
 
   private async entryDir(id: string): Promise<string> {
@@ -98,10 +161,14 @@ export class TrashManager {
     }
     const manifest: TrashManifest = { v: 1, originalPath: target, deletedAt: Date.now(), kind };
     await this.bridge.writeFileBytes(join(entry, 'manifest.json'), new TextEncoder().encode(JSON.stringify(manifest, null, 2)));
-    // 顺手清超期（尽力而为：清理失败不影响本次移入）
-    void this.purge().catch((err: unknown) => {
-      this.log?.warn(`回收站：超期清理失败（不影响本次移入）：${String(err)}`);
-    });
+    // 顺手清超期（尽力而为：清理失败不影响本次移入；跳过被时间线引用的条目）
+    // 先 `then(() => undefined)` 把 purge 的计数抹掉：`.catch` 只兜错误，
+    // 直接挂会让 sweep 变成 `Promise<void | number>`（字段口径就是 Promise<void>）
+    this.sweep = this.purge()
+      .then(() => undefined)
+      .catch((err: unknown) => {
+        this.log?.warn(`回收站：超期清理失败（不影响本次移入）：${String(err)}`);
+      });
   }
 
   /** 跨卷回落：逐文件字节级复制进 payload（保真零转码，与 io.copyFile 同为纯搬运） */
@@ -126,41 +193,112 @@ export class TrashManager {
     else await this.bridge.removeFile(target);
   }
 
-  /** 回收站清单（新在前；manifest 缺失/损坏的条目剔除并出声，不猜） */
-  async list(): Promise<TrashEntryView[]> {
+  /**
+   * 回收站清单（新在前；`opts.forPath` = 只留与该路径相关的条目）。
+   *
+   * 两种"看着像条目、其实用不了"的目录**整条剔除并出声**，不猜也不给半个：
+   * - 目录名不合 id 形态 ⇒ restore / purge 都不认它，列出来只会摆一个点不动的按钮；
+   * - manifest 缺失 / 字段不合 ⇒ 连"它原来在哪"都不知道，恢复无从谈起。
+   */
+  async list(opts?: TrashListOptions): Promise<TrashEntry[]> {
     const root = await this.root();
     const entries = await this.bridge.listDir(root).catch(() => []);
-    const out: TrashEntryView[] = [];
+    const out: TrashEntry[] = [];
     for (const e of entries) {
       if (!e.isDirectory) continue;
-      const manifestPath = join(e.path, 'manifest.json');
-      try {
-        const bytes = await this.bridge.readFileBytes(manifestPath);
-        const raw = JSON.parse(new TextDecoder().decode(bytes)) as Partial<TrashManifest>;
-        if (
-          typeof raw.originalPath !== 'string' ||
-          typeof raw.deletedAt !== 'number' ||
-          (raw.kind !== 'dir' && raw.kind !== 'file')
-        ) {
-          throw new Error('manifest 字段缺失');
-        }
-        out.push({ id: e.name, originalPath: raw.originalPath, deletedAt: raw.deletedAt, kind: raw.kind });
-      } catch (err) {
-        this.log?.warn(`回收站：条目 manifest 不可读（跳过）：${e.path} — ${String(err)}`);
+      if (!TRASH_ID_RE.test(e.name)) {
+        this.log?.warn(`回收站：目录名不合条目形态（跳过，它也无法恢复）：${e.path}`);
+        continue;
       }
+      const view = await this.readEntry(e.name, e.path);
+      if (view === null) continue;
+      if (opts?.forPath !== undefined && !isRelatedTo(view.originalPath, opts.forPath)) continue;
+      out.push(view);
     }
     return out.sort((a, b) => b.id.localeCompare(a.id));
   }
 
-  /** 恢复条目到原路径（原路径已存在时拒绝——回收站不做覆盖） */
-  async restore(id: string): Promise<string> {
+  /** 单条读取（恢复/彻底删除的前置查询；不在位 / 形态不合 / manifest 坏 ⇒ null，不动盘） */
+  async entryOf(id: string): Promise<TrashEntry | null> {
+    if (!TRASH_ID_RE.test(id)) return null;
+    const dir = join(await this.root(), id);
+    if (!(await this.bridge.exists(dir))) return null;
+    return this.readEntry(id, dir);
+  }
+
+  private async readEntry(id: string, dir: string): Promise<TrashEntry | null> {
+    const manifestPath = join(dir, 'manifest.json');
+    let raw: Partial<TrashManifest>;
+    try {
+      const bytes = await this.bridge.readFileBytes(manifestPath);
+      raw = JSON.parse(new TextDecoder().decode(bytes)) as Partial<TrashManifest>;
+    } catch (err) {
+      this.log?.warn(`回收站：条目 manifest 不可读（跳过）：${dir} — ${String(err)}`);
+      return null;
+    }
+    if (
+      typeof raw.originalPath !== 'string' ||
+      typeof raw.deletedAt !== 'number' ||
+      (raw.kind !== 'dir' && raw.kind !== 'file')
+    ) {
+      this.log?.warn(`回收站：条目 manifest 字段缺失（跳过）：${dir}`);
+      return null;
+    }
+    const payload = join(dir, TRASH_PAYLOAD_NAME);
+    // 年龄按条目名那把尺（与 purge 同源）；名字合形态却日期非法（2 月 30 日那类）
+    // 才回落 manifest——**回落的是显示口径，超期判定仍是条目名，宁缺毋滥**
+    const atMs = trashEntryTimeMs(id) ?? raw.deletedAt;
+    return {
+      id,
+      originalPath: raw.originalPath,
+      kind: raw.kind,
+      deletedAtMs: atMs,
+      expiresAtMs: atMs + TRASH_KEEP_DAYS * DAY_MS,
+      bytes: await this.sizeOf(raw.kind, payload),
+      payloadPath: payload,
+    };
+  }
+
+  /**
+   * 条目内容字节数：一趟带元数据的遍历（目录）或一次 stat（文件）。
+   * 任一处取不到 size ⇒ 整条 `null`（"大小未知"），**绝不拿 0 兜底**。
+   */
+  private async sizeOf(kind: 'dir' | 'file', payload: string): Promise<number | null> {
+    if (kind === 'file') {
+      const st = await this.bridge.stat(payload).catch(() => null);
+      return st !== null && !st.isDirectory ? st.size : null;
+    }
+    const files = await this.bridge.walkDir(payload, { includeFiles: true, withMetadata: true }).catch(() => null);
+    if (files === null) return null;
+    let sum = 0;
+    for (const f of files) {
+      if (f.isDirectory) continue;
+      if (typeof f.size !== 'number') return null;
+      sum += f.size;
+    }
+    return sum;
+  }
+
+  /**
+   * 恢复条目到原路径。
+   *
+   * 原位站着东西时的两种结局（闸不在此层，见类头注与 `FileIO.restoreFromTrash`）：
+   * - 默认（`overwrite` 未开）：**拒绝**——回收站不做覆盖；
+   * - `overwrite: true` 且条目是**文件**、原位也是**文件**：搬回去（平台 rename 就地替换）。
+   *   这一形态必须由调用方先把原位那份现状落进别的账（写前备份），否则等于吃掉现状；
+   * - 目录形对目录形 / 目录形对文件：一律拒绝——整棵子树没有"一份现状"可备份。
+   */
+  async restore(id: string, opts?: TrashRestoreOptions): Promise<string> {
     const entry = await this.entryDir(id);
-    const view = (await this.list()).find((v) => v.id === id);
+    const view = await this.entryOf(id);
     if (!view) throw new Error(`回收站条目不存在或已失效：${id}`);
-    const payload = join(entry, 'payload');
+    const payload = join(entry, TRASH_PAYLOAD_NAME);
     if (!(await this.bridge.exists(payload))) throw new Error(`回收站条目内容缺失：${id}`);
-    if (await this.bridge.exists(view.originalPath)) {
-      throw new Error(`原位置已存在，不能恢复（回收站不覆盖）：${view.originalPath}`);
+    const occupant = await this.bridge.stat(view.originalPath);
+    if (occupant !== null) {
+      if (opts?.overwrite !== true || view.kind !== 'file' || occupant.isDirectory) {
+        throw new Error(`原位置已存在，不能恢复（回收站不覆盖）：${view.originalPath}`);
+      }
     }
     // 原父目录可能已随其他操作消失：先补齐
     const parent = dirname(view.originalPath);
@@ -173,33 +311,29 @@ export class TrashManager {
       await this.deleteSource(payload, view.kind);
     }
     await this.bridge.removeDir(entry);
+    this.held.delete(id);
     this.log?.info(`回收站：已恢复 ${id} → ${view.originalPath}`);
     return view.originalPath;
   }
 
-  /** 清理超过保留期的条目（返回清掉的条目数；形态不对的条目不动——判据不猜） */
+  /**
+   * 自动清理：只动**已超保留期**（按条目名那把尺）且**未被本会话引用**（`hold`）的条目。
+   * 形态不对的条目不动（判据不猜）；删除失败保留现场并出声。
+   */
   async purge(now = Date.now()): Promise<number> {
     const root = await this.root();
     const entries = await this.bridge.listDir(root).catch(() => []);
     let purged = 0;
     for (const e of entries) {
       if (!e.isDirectory) continue;
-      const m = /^(\d{8})-(\d{6})-(\d{3})-/.exec(e.name);
-      if (!m) continue;
-      const d = new Date(
-        Number(m[1]!.slice(0, 4)),
-        Number(m[1]!.slice(4, 6)) - 1,
-        Number(m[1]!.slice(6, 8)),
-        Number(m[2]!.slice(0, 2)),
-        Number(m[2]!.slice(2, 4)),
-        Number(m[2]!.slice(4, 6)),
-        Number(m[3]),
-      );
-      if (Number.isNaN(d.getTime())) continue;
-      if (now - d.getTime() > TRASH_KEEP_DAYS * DAY_MS) {
+      if (this.held.has(e.name)) continue; // 时间线正在引用它：这一次不动（显式彻底删除仍可）
+      const atMs = trashEntryTimeMs(e.name);
+      if (atMs === null) continue;
+      if (now - atMs > TRASH_KEEP_DAYS * DAY_MS) {
         try {
           await this.bridge.removeDir(e.path);
           purged++;
+          this.held.delete(e.name);
         } catch (err) {
           this.log?.warn(`回收站：超期条目清理失败（保留现场）：${e.path} — ${String(err)}`);
         }
@@ -207,5 +341,30 @@ export class TrashManager {
     }
     if (purged > 0) this.log?.info(`回收站：清理超期条目 ${purged} 个`);
     return purged;
+  }
+
+  /**
+   * 显式彻底删除（用户对着这一条点了"彻底删除"）：命中即删，
+   * **不看保留期也不看 `hold`**——那句话就是最终答案。
+   *
+   * id 形态不合即抛（`entryDir` 的闸），条目不在位也抛：
+   * "我以为删掉了"和"没删掉"必须是两种能听见的结果，不静默跳过。
+   */
+  async purgeIds(ids: readonly string[]): Promise<number> {
+    let removed = 0;
+    for (const id of ids) {
+      const dir = await this.entryDir(id);
+      if (!(await this.bridge.exists(dir))) throw new Error(`回收站条目不存在或已被清理：${id}`);
+      await this.bridge.removeDir(dir);
+      this.held.delete(id);
+      removed++;
+    }
+    if (removed > 0) this.log?.info(`回收站：彻底删除条目 ${removed} 个`);
+    return removed;
+  }
+
+  /** 等待本会话内"顺手超期清扫"跑完（`moveIntoTrash` 是尽力而为的异步清理；测试与需要确定性顺序的调用方用它） */
+  async flushSweep(): Promise<void> {
+    await this.sweep;
   }
 }

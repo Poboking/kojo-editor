@@ -9,6 +9,7 @@ import type {
   PlatformBridge,
   RawFileRead,
   TextFile,
+  TrashEntry,
   WalkOptions,
   WriteTextOptions,
 } from '@kojo/plugin-api';
@@ -795,6 +796,59 @@ export class FileIOServiceImpl implements FileIO {
     this.assertWritable(path);
     await this.trash.moveIntoTrash(path, 'file');
     this.invalidateTextCache(path);
+  }
+
+  /* ----------------------- 回收站（W11 可见批；全 additive） ----------------------- */
+
+  /** 见契约：把 `{appData}/trash/` 的既有条目读回来（只读，不受写允许域约束） */
+  listTrash(opts?: { forPath?: string }): Promise<TrashEntry[]> {
+    return this.trash.list(opts);
+  }
+
+  /**
+   * 恢复回收站条目到原路径（契约 `FileIO.restoreFromTrash`）。
+   *
+   * 三件事一件都不能少，顺序也不许换：
+   * 1. **第一道闸先行**（`assertWritable(originalPath)`）——恢复是一次写盘，落点可能在
+   *    只读的游戏目录里；越权就可见拒绝，一个字节都不搬；
+   * 2. **现状先落账**——原位若站着**一个文件**而条目也是文件，先把原位那份 `backup()`
+   *    进写前备份账（于是它出现在同一条时间线上，恢复不吃掉现状）；
+   * 3. 搬回原位后刷新编码/EOL 缓存 + 失效会话文本缓存（口径与 `restoreBackup` 逐字相同：
+   *    盘上换了内容，preserve 的判据必须跟着新真相走）。
+   *
+   * 目录形条目撞上"原位已有东西"由低层 `TrashManager.restore` 拒绝（整棵子树没有
+   * 一份现状可以备份，覆盖它不是恢复而是换数据）——错误原话随异常上抛给 UI。
+   */
+  async restoreFromTrash(id: string): Promise<string> {
+    const view = await this.trash.entryOf(id);
+    if (view === null) throw new Error(`回收站条目不存在或已失效：${id}`);
+    this.assertWritable(view.originalPath);
+    const occupant = await this.bridge.stat(view.originalPath);
+    if (occupant !== null && !occupant.isDirectory && view.kind === 'file') {
+      await this.backup(view.originalPath); // 写前备份：恢复不吃掉现状（与 restoreBackup 同款时序）
+    }
+    const restored = await this.trash.restore(id, { overwrite: true });
+    // 编码/EOL 跟着盘上新真相走，会话文本缓存失效（与 restoreBackup / writeBytes 同口径）
+    const bytes = await this.bridge.readFileBytes(restored).catch(() => null);
+    if (bytes !== null) {
+      const { text: raw, encoding } = decodeWithProbe(bytes);
+      this.encodingCache.set(pathKey(restored), encoding);
+      this.eolCache.set(pathKey(restored), detectEol(raw));
+    }
+    this.invalidateTextCache(restored);
+    this.log?.info(`回收站条目已恢复：${id} -> ${restored}`);
+    return restored;
+  }
+
+  /** 见契约：不传 ids = 超期自动清理（跳过被引用的）；传 ids = 用户显式彻底删除 */
+  purgeTrash(ids?: readonly string[]): Promise<number> {
+    if (ids === undefined) return this.trash.purge();
+    return this.trash.purgeIds(ids);
+  }
+
+  /** 见契约：会话内"时间线正在引用这些条目"，自动清理跳过它们（整替语义） */
+  holdTrash(ids: readonly string[]): void {
+    this.trash.hold(ids);
   }
 
   /** 调试/测试辅助：当前缓存状态（含会话文本缓存的命中读数——批量 IO 批的轻量上报面） */

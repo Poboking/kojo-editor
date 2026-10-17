@@ -27,6 +27,9 @@ export const DECODE_LABEL: Record<FileEncoding, string> = {
   'utf-8': 'utf-8',
   'utf-8-bom': 'utf-8',
   shift_jis: 'shift_jis',
+  gbk: 'gbk',
+  gb18030: 'gb18030',
+  big5: 'big5',
   'utf-16le': 'utf-16le',
   'utf-16be': 'utf-16be',
 };

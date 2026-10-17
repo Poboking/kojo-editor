@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
-import type { FileEncoding } from '@kojo/plugin-api';
+import { DECODE_LABEL, type FileEncoding } from '@kojo/plugin-api';
 import { applyEol, decodeWithProbe, detectEol, isValidUtf8, joinPreserveEol, normalizeEol, probeEncoding, reconstructEol, splitPreserveEol, withUtf16Bom } from '../src/encoding';
 
 const enc = new TextEncoder();
@@ -38,16 +38,18 @@ describe('编码探测', () => {
 });
 
 /**
- * `decodeWithProbe`（2026-10-16 批量 IO 批）：一次解码同时得到 {text, encoding}，
- * 替代旧的"probeEncoding（全文 fatal 校验一遍）+ decode（全文再解一遍）"双重全量解码。
+ * `decodeWithProbe`（2026-10-16 批量 IO 批；W12 ENC-SRC 起为 `DECODE_PROBE_POLICY` 的 TS 解释者）：
+ * 一次解码同时得到 {text, encoding}，替代旧的"probeEncoding（全文 fatal 校验一遍）+
+ * decode（全文再解一遍）"双重全量解码。
  *
  * 判据 = **对拍**：同一份字节下，新旧两条路径产出的 `{text, encoding}` 必须全等。
- * 旧路径按现行内核/桥口径复刻：`probeEncoding` → `TextDecoder(标签)`（node 桥与
- * tauri 桥的解码标签同表——utf-8-bom 与 utf-8 同走 'utf-8'）。
+ * 旧路径按现行内核/桥口径复刻：`probeEncoding` → `TextDecoder(DECODE_LABEL[…])`——
+ * 标签表自 W12 起只有 `@kojo/plugin-api` 一份（node 桥与 tauri 桥 import 同一常量，
+ * utf-8-bom 与 utf-8 同走 'utf-8'）。
  */
 describe('decodeWithProbe 与旧路径对拍（编码+文本全等）', () => {
-  /** 旧读路径的解码标签（NodeBridge / tauri-bridge 的 DECODE_LABEL 同表） */
-  const decodeLabel = (e: FileEncoding): string => (e === 'utf-8-bom' ? 'utf-8' : e);
+  /** 旧读路径的解码标签（单源表，两桥同源 import——见 encoding-decode-policy.test.ts） */
+  const decodeLabel = (e: FileEncoding): string => DECODE_LABEL[e];
   const oldPath = (bytes: Uint8Array): { text: string; encoding: FileEncoding } => {
     const encoding = probeEncoding(bytes);
     return { text: new TextDecoder(decodeLabel(encoding)).decode(bytes), encoding };
