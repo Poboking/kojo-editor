@@ -89,3 +89,18 @@
 
 | ID | 任务 | 关键判据 / 已实测事实 | 认领 |
 |---|---|---|---|
+
+## U. 1017 中文化收官后的工程收尾（lead 2026-10-17 立项；用户点名清单）
+
+> 这批不是语言面欠账，是**账面一致性、编辑器动作闭环、CI 盲区**三件事。
+> **判**不立项**一条**：`bootstrap.ts:35` 的「插件运行时动态加载」——19 插件全为编译期内建，作者侧无需求，
+> 换 loader 只引入加载序与信任面（游戏目录整体只读 ⇒ 没有任何合法来源可扫）；**YAGNI，不做**，接口预留注释保持原样。
+
+| ID | 任务（现象 / 复现 / 判据） | 认领 |
+|---|---|---|
+| ZH-F1 | **ENC-1 账面红项**（归口：kernel 语料基线口径）。`packages/kernel/tests/encoding-roundtrip.test.ts:266` 钉 `kojoTotal = 2294`（校准盘 `sub-modding 4.980-260326-SANYOUSEI`，**不在本机位**），本机在位盘（画蛇添足 4.980）实测 **2,285** ⇒ 挂语料全量必真红；BOARD §R 的 ENC-1 行已被并发会话删除，**删行 ≠ 修红**。**判据**：照 `899a71b` 范式——本测真正守的是「编码/换行往返零字节差异」，故 `diffs` 逐字节等值与「口上域全过」照钉，**语料份数换成盘无关不变量**（下限 + 与本次枚举自洽，不钉逐盘常数）；**不许**为凑绿改 io 源码，**也不许**改成另一张盘的逐值硬钉。复跑：`node tools/corpus.mjs --print` rc=0 后挂 `KOJO_SMOKE_PROJECT` 跑该文件 + 全量语料面。 | lead（本机 2026-10-17，本人落笔） |
+| ZH-F2 | **未收录函数名「一键加入名表」**（归口：糖线 + 宿主）。ZH-D1 把拼错的升成 error、把不认识的留 warning（`function-name-unknown`），但**只给建议不给动作**：`suggestFunctionName` 在 `packages/app/src`、`ui-sugar-editor` 零消费方。作者面对一个合法但项目未收录的自定义名，今天只能手抄进 `函数` 声明。**判据**：①一次点击/一条命令即把该名登记进**本项目**的用户函数库来源，登记后同一文件诊断必须从 warning 转为无诊断（走真实转译，不是本地打勾）；②写入只能落**常驻可写根**或法定 `exportFile` 通道，游戏目录零写入；③契约 additive——旧消费方零改动，`audit:decoupling` 四项照绿；④不许把未知名一律静默放行来冒充闭环。**禁改** `packages/app/src/monaco/**`（ZH-F5 单主）。 | lead 派 agent（本机 2026-10-17） |
+| ZH-F3 | **外部改动三方合并**（归口：数据安全 / 宿主 UI）。`packages/app/src/ui/external-change.ts`（95 行）今天只做**两方**提示（盘上 vs 内存），盘上被外部改过而本地也有未保存改动时只能整份取舍。**判据**：①以「最后一次保存的盘上内容」为 base 做三方——可自动合的合、真冲突的逐块标出，base 取不到时**必须退回现有两方语义**（不假装合并）；②任何路径都不许静默丢弃内存或盘上任一份（fail-closed 与 `droppedUnits` 口径不变）；③合并纯函数可单测，测试含「同区双改 = 冲突」与「单侧改 = 自动」两类；④只碰 external-change 与其装配点，**不动** sugar 文件。**禁改** `monaco/**`、`EditorPane.tsx`（ZH-F2 单主）。 | lead 派 agent（本机 2026-10-17） |
+| ZH-F4 | **一键全项目转译校验**（归口：宿主 + 内核服务面）。作者改完一批 `.kojo` 后没有「整项目跑一遍看有没有产不出/产错」的入口，只能逐文件开预览。**判据**：①命令面板一条动作，遍历当前项目文件跑**真转译**（同一条 `sugar.transpile` 服务，不是复刻判据），汇总诊断进既有面板，带文件数/耗时读数；②不许阻塞输入线程（复用 worker/`runLatest` 既有形态，或明确说明为何就地跑）；③大项目要有可中断与进度；④语料小样端到端一条测试（挂 `KOJO_SMOKE_PROJECT`，不在位即 SKIP）。第二批派。 | 待认领（lead 第二批） |
+| ZH-F5 | **计数器补全源**（归口：ZH-L 补全面）。`kojo-completion.ts` 的候选源册有变量/分野/指令名/库函数/系统函数/项目函数，**独缺计数器**——而计数器中文名表已在位（`eratw-adapter/src/counter-table.ts`，84 条值域表装载期建表、查表 O(1)），ZH-D3 悬停也已消费它。**判据**：①追加一个 source（`KOJO_COMPLETION_SOURCES` 可扩展数组，装配零改动）；②缺表 ⇒ 该路零候选 + 一次可见降级信号，**不猜**（既有纪律）；③详情回表口径与悬停同源，不再抄第二份映射；④位置门照 `kojo-completion-position` 判据，字符串/注释内不给。`app/src/monaco/**` 本行单主。 | lead 派 agent（本机 2026-10-17） |
+| ZH-F6 | **CI 少了 Rust 闸**（归口：工程）。`.github/workflows/ci.yml` 只跑 test:unit / test:perf / 双 typecheck / audit，**不含 cargo**——本机基线一直记「Rust 117 绿」，CI 上 Rust 侧破窗无人知（发布判据依赖真壳，破到打 tag 才暴露）。**判据**：①CI 增 job/step 跑 `cargo test --lib`（windows-latest，工具链装稳的写法：`dtolnay/rust-toolchain` 或等价），本地先验一次不误报；②只加闸不改语义、不动现有四步顺序；③若 windows runner 上构建超时不可接受，改成独立 job 并行、不拖慢主验证 job，并在回执给实测挂钟。**禁改** `EditorPane.tsx`。 | lead 派 agent（本机 2026-10-17） |
