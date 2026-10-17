@@ -11,7 +11,7 @@ import { gunzipBytes } from '../src/gunzip';
 import { parseArchive } from '../src/parse';
 import { serializePayload } from '../src/serialize';
 import { assembleArchiveFile, gzipBytes } from '../src/container';
-import { verifyOverrides } from '../src/verify';
+import { verifyOverrides, verifyReadbackBytes } from '../src/verify';
 import { MAGIC_GZIP, makeArchiveFile, simpleCharBlock, W, type ArchiveSpec } from './helpers/synth';
 
 /* ---------------- 测试替身 ---------------- */
@@ -149,7 +149,27 @@ describe('容器组装（container）', () => {
   });
 });
 
-/* ---------------- 回读验证（verifyOverrides） ---------------- */
+/* ---------------- 回读验证（verifyOverrides / verifyReadbackBytes） ---------------- */
+
+describe('verifyReadbackBytes · 回读字节态（W17 判等核）', () => {
+  it('逐字节相同 ⇒ 通过', () => {
+    const data = new Uint8Array([1, 2, 3, 0xfd, 255]);
+    expect(verifyReadbackBytes(data, data.slice())).toEqual({ checked: 1, mismatches: [] });
+  });
+
+  it('值可能碰巧对上、字节已不同 ⇒ 显式报首个差异偏移', () => {
+    const report = verifyReadbackBytes(new Uint8Array([1, 2, 3, 4]), new Uint8Array([1, 2, 9, 4]));
+    expect(report.mismatches).toHaveLength(1);
+    expect(report.mismatches[0]).toContain('回读字节与写入字节不同');
+    expect(report.mismatches[0]).toContain('偏移 2');
+  });
+
+  it('长度不同 ⇒ 差异偏移 = 较短一侧长度', () => {
+    const report = verifyReadbackBytes(new Uint8Array([1, 2]), new Uint8Array([1, 2, 3]));
+    expect(report.mismatches[0]).toContain('写入 2B，落盘 3B');
+    expect(report.mismatches[0]).toContain('偏移 2');
+  });
+});
 
 describe('verifyOverrides', () => {
   it('标量：命中 / 值不符 / 变量缺失 三态', async () => {
@@ -281,7 +301,11 @@ describe('SnapshotSourceEngine.inject', () => {
     await expect(
       h.engine.inject('/g/sav/save00.sav', { chars: new Map([[0, new Map([['NO', 5]])]]) }),
     ).rejects.toThrow(/回读验证失败.*备份/);
-    expect(h.backups).toHaveLength(1);
+    // W17：写回旧档时值级断言之外，字节态也先被抓住（同一份判等核）
+    await expect(
+      h.engine.inject('/g/sav/save00.sav', { chars: new Map([[0, new Map([['NO', 6]])]]) }),
+    ).rejects.toThrow(/回读字节与写入字节不同/);
+    expect(h.backups).toHaveLength(2);
   });
 
   it('journal 在场（2026-10-16 undo 批）：成功路径 begin→record→…→commit，record 先于写盘', async () => {

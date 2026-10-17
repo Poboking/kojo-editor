@@ -623,3 +623,7 @@ export type {
 
 /* ---- 编译闸收口：糖编辑类型走 barrel（additive，勿在他处重排） ---- */
 export type { SugarEdit } from './sugar';
+
+/* ---- 内容判等核（W17 DIFF-EQ 独占追加区块；勿在他处重排） ---- */
+export { compareContent, linesEqualOf, splitContentLines } from './content-equality';
+export type { ContentEquality, ContentSide } from './content-equality';

@@ -3,6 +3,8 @@ import type { FileIO } from '@kojo/plugin-api';
 import {
   clearDiff,
   closeDiffPane,
+  diffEqualityBanner,
+  diffEqualityOf,
   focusDiffPane,
   getDiffPanes,
   languageIdForSide,
@@ -34,7 +36,7 @@ export interface DiffViewDeps {
 /** 一侧的解析结果：文本已就位，或读取失败（失败可见，不静默） */
 type SideResolved =
   | { kind: 'loading' }
-  | { kind: 'ok'; text: string }
+  | { kind: 'ok'; text: string; bytes?: Uint8Array }
   | { kind: 'error'; message: string };
 
 /** 一格两侧的读取快照 */
@@ -47,14 +49,19 @@ const loadingSides: PaneSides = { original: { kind: 'loading' }, modified: { kin
 
 /**
  * 解析一侧内容：`text` 直用；否则按 `path` 经内核 io 现读（读侧无写闸，
- * 游戏目录 / 备份目录同样读得到）。
+ * 游戏目录 / 备份目录同样读得到）。路径侧顺手取原始字节——判等核的**字节态**
+ * 要靠它（行同字节不同 = 编码/换行差异，必须在横幅里说出来）。字节取不到时
+ * 只降级字节态（行态照判），不拿"没取到"冒充"相同"。
  */
 async function resolveSide(side: { text?: string; path?: string }, io: FileIO): Promise<SideResolved> {
   if (typeof side.text === 'string') return { kind: 'ok', text: side.text };
   if (typeof side.path === 'string' && side.path.length > 0) {
     try {
-      const tf = await io.readText(side.path);
-      return { kind: 'ok', text: tf.text };
+      const [tf, bytes] = await Promise.all([
+        io.readText(side.path),
+        io.readBytes(side.path).catch(() => undefined),
+      ]);
+      return { kind: 'ok', text: tf.text, bytes };
     } catch (err) {
       return { kind: 'error', message: `${side.path} 读取失败：${err instanceof Error ? err.message : String(err)}` };
     }
@@ -124,7 +131,8 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
     useEffect(() => {
       if (activeKey === null || activeRequest === null) return;
       if (original.kind !== 'ok' || modified.kind !== 'ok') return;
-      if (original.text === modified.text) return; // 无差异：横幅已讲清，不必建编辑器
+      // 行级无差异就不建编辑器（与横幅同一条判等核：行态从 compareContent 派生）
+      if (diffEqualityOf(original, modified).linesEqual === true) return; // 无差异：横幅已讲清
       const host = containerRef.current;
       if (!host) return;
       let disposed = false;
@@ -224,7 +232,12 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
 
     const { request } = active.state;
     const bothOk = original.kind === 'ok' && modified.kind === 'ok';
-    const identical = bothOk && original.text === modified.text;
+    // 判等只认一条核：字节态 + 行态同源派生（W17；宿主不再各写 if 链）
+    const banner =
+      original.kind === 'ok' && modified.kind === 'ok'
+        ? diffEqualityBanner(diffEqualityOf(original, modified))
+        : null;
+    const identical = banner?.noLineDiff === true;
     const errLine: ReactNode[] = [];
     if (original.kind === 'error') errLine.push(h('p', { key: 'a', className: 'kd-error' }, original.message));
     if (modified.kind === 'error') errLine.push(h('p', { key: 'b', className: 'kd-error' }, modified.message));
@@ -241,7 +254,7 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
         h('span', { className: 'kd-label-arrow' }, '⇄'),
         h('span', { className: 'kd-label' }, request.modified.label),
       ),
-      identical ? h('p', { className: 'kd-banner ok' }, '两侧内容完全一致（无差异）。') : null,
+      banner !== null ? h('p', { className: 'kd-banner ok' }, banner.message) : null,
       !bothOk && errLine.length === 0 ? h('p', { className: 'dim' }, '正在读取两侧内容…') : null,
       errLine,
       bothOk && !identical ? h('div', { ref: containerRef, className: 'kd-editor' }) : null,

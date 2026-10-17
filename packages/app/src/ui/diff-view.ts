@@ -1,4 +1,5 @@
 import type { DiffViewSide, KernelEventMap } from '@kojo/plugin-api';
+import { compareContent, type ContentEquality } from '@kojo/plugin-api';
 import type { Kernel } from '@kojo/kernel';
 import { ERB_LANGUAGE_ID } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../monaco/kojo-language';
@@ -53,6 +54,46 @@ export function languageIdForSide(side: DiffViewSide): string {
   if (/\.kojo$/.test(probe)) return KOJO_LANGUAGE_ID;
   if (/\.(erb|erh)$/.test(probe)) return ERB_LANGUAGE_ID;
   return 'plaintext';
+}
+
+/* ------------------------------ 判等（W17 DIFF-EQ） ------------------------------ */
+
+/** 一侧已解析的内容证据：文本必有（行态）；路径侧还能拿到原始字节（字节态） */
+export interface DiffContentSide {
+  readonly text: string;
+  readonly bytes?: Uint8Array;
+}
+
+/** 两侧内容 → 同一份判等核的两态读数（字节态 + 行态从同一次比对派生） */
+export function diffEqualityOf(a: DiffContentSide, b: DiffContentSide): ContentEquality {
+  return compareContent({ bytes: a.bytes, text: a.text }, { bytes: b.bytes, text: b.text });
+}
+
+export interface DiffEqualityBanner {
+  /** 行级无差异 ⇒ 不必建 diff 编辑器（Monaco 会给出空 diff，白占一整块） */
+  readonly noLineDiff: boolean;
+  readonly message: string;
+}
+
+/**
+ * 「无差异」横幅的**唯一判据**（宿主侧不再各写 if 链）。
+ *
+ * - 行态不同 / 判不了 ⇒ null（交给 Monaco 行级 diff；判不了时不冒充一致）；
+ * - 行态相同、字节态也相同 ⇒ 完全一致；
+ * - 行态相同、字节态不同 ⇒ 行级看不出差异，但**按字节并不相同**（编码 / 换行风格）——
+ *   必须说出来，否则"完全一致"是假话；
+ * - 行态相同、字节态判不了（内联文本侧没有字节）⇒ 只说行级一致。
+ */
+export function diffEqualityBanner(eq: ContentEquality): DiffEqualityBanner | null {
+  if (eq.linesEqual !== true) return null;
+  if (eq.bytesEqual === true) return { noLineDiff: true, message: '两侧内容完全一致（无差异）。' };
+  if (eq.bytesEqual === false) {
+    return {
+      noLineDiff: true,
+      message: '两侧行内容一致，但字节不同（编码或换行风格差异）——按字节看并不相同。',
+    };
+  }
+  return { noLineDiff: true, message: '两侧行内容一致（无差异）。' };
 }
 
 /* ------------------------------ 内核接线 ------------------------------ */

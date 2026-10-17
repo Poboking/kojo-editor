@@ -6,6 +6,8 @@ import {
   bindDiffView,
   clearDiff,
   DIFF_VIEW_OVERLAY_ID,
+  diffEqualityBanner,
+  diffEqualityOf,
   diffPaneKeyOf,
   getDiffPanes,
   getDiffState,
@@ -152,5 +154,44 @@ describe('bindDiffView：意图落地时序', () => {
     fire(payload);
     fire({ ...payload });
     expect(getDiffPanes()).toHaveLength(1);
+  });
+});
+
+describe('diffEqualityBanner · W17 判等核的两态读数', () => {
+  const bytesOf = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+  it('行同字节同 ⇒ 完全一致', () => {
+    const eq = diffEqualityOf({ text: 'a\nb', bytes: bytesOf('a\nb') }, { text: 'a\nb', bytes: bytesOf('a\nb') });
+    expect(diffEqualityBanner(eq)).toEqual({ noLineDiff: true, message: '两侧内容完全一致（无差异）。' });
+  });
+
+  it('负自证：行同字节不同（换行风格/编码）⇒ 不说"完全一致"', () => {
+    const eq = diffEqualityOf(
+      { text: 'a\r\nb', bytes: bytesOf('a\r\nb') },
+      { text: 'a\nb', bytes: bytesOf('a\nb') },
+    );
+    const banner = diffEqualityBanner(eq);
+    expect(banner?.noLineDiff).toBe(true);
+    expect(banner?.message).toContain('字节不同');
+    expect(banner?.message).not.toContain('完全一致');
+  });
+
+  it('负自证：字节同而行不同（缓冲区文本配盘上字节）⇒ 交给行级 diff，不冒充一致', () => {
+    const eq = diffEqualityOf(
+      { text: '编辑中的另一版', bytes: bytesOf('a\nb') },
+      { text: 'a\nb', bytes: bytesOf('a\nb') },
+    );
+    expect(eq.bytesEqual).toBe(true);
+    expect(diffEqualityBanner(eq)).toBeNull();
+  });
+
+  it('行不同 ⇒ null（交给 Monaco 行级 diff）', () => {
+    const eq = diffEqualityOf({ text: 'a', bytes: bytesOf('a') }, { text: 'b', bytes: bytesOf('b') });
+    expect(diffEqualityBanner(eq)).toBeNull();
+  });
+
+  it('内联文本没有字节 ⇒ 只说行级一致（不冒充字节相同）', () => {
+    const eq = diffEqualityOf({ text: 'a' }, { text: 'a' });
+    expect(diffEqualityBanner(eq)).toEqual({ noLineDiff: true, message: '两侧行内容一致（无差异）。' });
   });
 });

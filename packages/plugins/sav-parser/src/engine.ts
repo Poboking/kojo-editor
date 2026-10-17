@@ -28,7 +28,7 @@ import { getFidelity } from './fidelity';
 import { parseArchive } from './parse';
 import { serializePayload } from './serialize';
 import { ArchiveParseError } from './binary';
-import { verifyOverrides } from './verify';
+import { verifyOverrides, verifyReadbackBytes } from './verify';
 
 /** 存档文件扩展名过滤 */
 const ARCHIVE_EXT = /\.sav$/i;
@@ -235,13 +235,16 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
 
       // 回读验证（强制：注入的价值建立在"值确实落盘"上）
       const reread = await this.deps.readBytes(path);
+      // 字节态先判：写出的字节与重读的字节必须逐字节相同（W17 判等核，与文件历史同源）
+      const byteCheck = verifyReadbackBytes(full, reread);
       const reparsed = await parseArchive(reread, path, { keepArrayCells: true });
       const report = verifyOverrides(reparsed, overrides);
-      if (report.mismatches.length > 0) {
+      const mismatches = [...byteCheck.mismatches, ...report.mismatches];
+      if (mismatches.length > 0) {
         throw new ArchiveParseError(
-          `注入回读验证失败（${report.mismatches.length} 项不匹配）` +
+          `注入回读验证失败（${mismatches.length} 项不匹配）` +
             (backupPath ? `——原档已备份于 ${backupPath}` : '（原档无备份）') +
-            `：${report.mismatches.join('；')}`,
+            `：${mismatches.join('；')}`,
           0,
         );
       }

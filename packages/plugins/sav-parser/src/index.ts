@@ -89,4 +89,4 @@ export { parseArchive, FORMAT_VERSION, MAGIC_GZIP, MAGIC_RAW } from './parse';
 export { ByteReader, ArchiveParseError } from './binary';
 export { gunzipBytes } from './gunzip';
 export { gzipBytes, assembleArchiveFile } from './container';
-export { verifyOverrides, type VerifyReport } from './verify';
+export { verifyOverrides, verifyReadbackBytes, type VerifyReport } from './verify';

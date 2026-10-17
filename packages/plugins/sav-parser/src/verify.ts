@@ -16,6 +16,7 @@ import type {
   ArchiveVariable,
   SnapshotArchive,
 } from '@kojo/plugin-api';
+import { compareContent } from '@kojo/plugin-api';
 
 export interface VerifyReport {
   /** 核对过的覆盖条目数（标量 1 条 / 单元补丁逐条计） */
@@ -84,6 +85,27 @@ function checkPatches(
       mismatches.push(`${where}.${key}[${p.index.join(',')}]: 期望 ${String(p.value)}，落盘 ${String(hit.value)}`);
     }
   }
+}
+
+/**
+ * 回读**字节态**断言（W17）：写出的字节与重读的字节必须逐字节相同。
+ *
+ * 与文件历史的行级比对共用 `@kojo/plugin-api` 的 `compareContent`——字节态和行态
+ * 从同一次比对派生，不在两个消费方各写一条 if 链。值级断言（`verifyOverrides`）
+ * 管"值确实落了盘"，本函数管"落盘的确实是刚写的那份字节"：两者缺一不可，
+ * 例如写入被截断/回填旧档时，值可能碰巧对上，字节已经不对。
+ */
+export function verifyReadbackBytes(expected: Uint8Array, actual: Uint8Array): VerifyReport {
+  const eq = compareContent({ bytes: expected }, { bytes: actual });
+  if (eq.bytesEqual === true) return { checked: 1, mismatches: [] };
+  const at = eq.firstByteDiff;
+  return {
+    checked: 1,
+    mismatches: [
+      `回读字节与写入字节不同（写入 ${expected.length}B，落盘 ${actual.length}B` +
+        (at === null ? '）' : `，首个差异在偏移 ${at}）`),
+    ],
+  };
 }
 
 /**
