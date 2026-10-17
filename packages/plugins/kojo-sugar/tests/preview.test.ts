@@ -470,6 +470,39 @@ describe('S4 降级：结构化降级，不抛错', () => {
     expect(res.archive).not.toBeNull();
     expect(res.archive!.characterNo).toBe(12);
   });
+
+  /**
+   * 回归（MED）：旧实现从产物骨架正则反推 `_K(\d+)\b`——`_K58_` 这类"数字后紧跟
+   * 下划线"的函数头因 `\b` 失配 ⇒ `archive: null`（选择器登记函数是 `_K58_1`）。
+   * 现在直接读 `SugarTranspileResult.charNo`（文件头原文），不再猜命名惯例。
+   */
+  it('角色号来自结果上的 `charNo`：`_K58_` 形态也能回放（旧正则失配）', async () => {
+    const src = [
+      '角色: 58',
+      '口上: 破空自制 选择器: 1',
+      '时机 指令 310：',
+      '    「甲」',
+      '',
+    ].join('\n');
+    const seen: number[] = [];
+    const replay: StateReplayService = {
+      createView: async (_archivePath: string, charNo: number): Promise<ReplayStateView> => {
+        seen.push(charNo);
+        return {
+          characterNo: charNo,
+          characterName: '自制',
+          archivePath: 'x',
+          read: () => ({ kind: 'unknown', unknown: { code: 'other', message: '' } }),
+        };
+      },
+      replayFunction: async () => null,
+      replayFunctions: async () => [],
+    };
+    const res = await previewSvc(replay).preview({ source: src, archivePath: 'D:/fake/x.sav' });
+    expect(seen).toEqual([58]);
+    expect(res.archive).not.toBeNull();
+    expect(res.archive!.characterNo).toBe(58);
+  });
 });
 
 /* ============================== 转译 error / 只读纪律 ============================== */

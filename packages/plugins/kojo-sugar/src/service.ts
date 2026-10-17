@@ -426,6 +426,31 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       return { erb: '', sourceMap: [], diagnostics: sink.all() };
     }
 
+    // ---- 角色号守门（fail-closed，先于 codegen）----
+    // 一切引擎函数名都带 `_K{角色号}`：缺号时 codegen 会拼出 `…_K` / `…_K_1` 这种
+    // 残缺名（登记函数甚至整段静默跳过），仅靠产物层撞名检查抓不到。故在出码前
+    // 只要文档里出现"需要角色号才算得出函数名"的内容，就报 error——写盘链路
+    // （planSave / compileToFile）据此整体拒绝，绝不落残缺函数名。
+    const charNo = doc.frontMatter.charNo?.trim();
+    const needsCharNo =
+      doc.topLevel.some(
+        (n) => n.kind === 'timingBlock' || n.kind === 'custom-command' || n.kind === 'functionBlock',
+      ) ||
+      Boolean(doc.frontMatter.color) ||
+      doc.frontMatter.switches.length > 0 ||
+      Boolean(doc.frontMatter.family) ||
+      Boolean(doc.frontMatter.displayName) ||
+      Boolean(doc.frontMatter.description);
+    if (needsCharNo && (charNo === undefined || charNo.length === 0)) {
+      sink.report({
+        code: 'missing-charno',
+        severity: 'error',
+        message:
+          '文件头缺少 `角色:` 编号（或编号为空）——「时机」/「自定指令」/「函数」/「开关」/「口上色」等都按角色号命名函数，缺号只能拼出残缺的函数名。请在文件头第一行写 `角色: <编号>`。',
+        loc: null,
+      });
+    }
+
     const consts = doc.topLevel.filter((n): n is ConstDecl => n.kind === 'constDecl');
     guardConstShadowing(consts, dictionary, sink);
     const aliases = buildAliasTable(doc.frontMatter.aliases, consts);
@@ -452,7 +477,33 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       views: sourceLineViews(source),
     });
 
-    return { erb, sourceMap, diagnostics: sink.all() };
+    // ---- 空产物守门（fail-closed）----
+    // 纯文件头（或只有别名声明）的 `.kojo` 合法但**没有任何可落盘的内容**：
+    // 旧行为会把它写成只有 BOM 的 `.ERB`，覆盖掉目标位置的既有产物。源文件
+    // 非空却零产物 ⇒ 这是"看起来成功了、实际什么都没生成"的静默失败，必须拦下。
+    // 已有 error 时不再补这一条：那些文件本就已被 fail-closed 拦下，空产物是
+    // 预期结果，重复报错只会稀释真正的成因。
+    const hasError = sink.all().some((d) => d.severity === 'error');
+    if (
+      !hasError &&
+      erb.trim().length === 0 &&
+      source.split('\n').some((line) => line.trim().length > 0)
+    ) {
+      sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message:
+          '这份源文件非空，却没有产出任何函数或正文——已拒绝生成空产物（避免用空文件覆盖既有产物）。请补上「时机」块等正文，或确认文件头声明完整。',
+        loc: null,
+      });
+    }
+
+    return {
+      erb,
+      sourceMap,
+      diagnostics: sink.all(),
+      ...(charNo !== undefined && charNo.length > 0 ? { charNo } : {}),
+    };
   }
 
   /**

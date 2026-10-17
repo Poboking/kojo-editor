@@ -714,6 +714,31 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   if (!resolved.ok) return;
   const index = resolved.index;
 
+  // ---- 段块混排检查（E13 批）：**任何字节发射之前**判定 ----
+  //
+  // 两种骨架**不可混排**：段块的产物里**没有**外层那对 `IF LOCAL`/`ENDIF`
+  // （每段自己带 `IF LOCAL && <条件>`），而普通正文靠外层信封守卫。混在一起
+  // 没有唯一可写回的形状 ⇒ 报 `section-mixed` 且**不产半成品**（与既有
+  // fail-closed 口径一致：宁可拒绝，不拼半个函数）。
+  //
+  // 判据必须在第一个 `em.push` 之前：旧实现先推了包装函数（`@…` / `CALL …_1` /
+  // `RETURN RESULT`）再检查，于是产物留下一个调用不存在 `_1` 的半成品——注释
+  // 声称"一个字都不留"，实际留了包装壳。`transpile()` / `preview()` 直接消费
+  // 内存产物，半成品会一路泄到预览与诊断折叠。
+  const sections = timing.body.filter((n) => n.kind === 'sectionBlock');
+  const plain = timing.body.filter((n) => n.kind !== 'sectionBlock' && n.kind !== 'comment');
+  if (sections.length > 0 && plain.length > 0) {
+    ctx.sink.report({
+      code: 'section-mixed',
+      severity: 'error',
+      message:
+        '「若」块不能和别的语句混在同一个「时机」的最外层——「若」的产物没有外层 `IF LOCAL` 信封，混排没有唯一可写回的形状。请把普通语句挪进某一段里，或把段单独放在一个「时机」里。',
+      loc: timing.loc.start,
+    });
+    return;
+  }
+  const sectionMode = sections.length > 0;
+
   const baseName = buildFunctionName(face.template, ctx.familySeg, ctx.charNo, index, face.paramIndex);
 
   // ---- 成否判定函数（规范 §5.5：写了 `成否:` 时生成 SUCCESS 函数）----
@@ -754,27 +779,7 @@ function emitTiming(em: Emitter, timing: TimingBlock, ctx: TimingEmitContext): v
   em.pushGenerated(0, `RETURN RESULT`);
   em.blank();
 
-  // ---- 段块（E13 批）：顶层含 `若` 时改用「逐段信封」骨架 ----
-  //
-  // 两种骨架**不可混排**：段块的产物里**没有**外层那对 `IF LOCAL`/`ENDIF`
-  // （每段自己带 `IF LOCAL && <条件>`），而普通正文靠外层信封守卫。混在一起
-  // 没有唯一可写回的形状 ⇒ 报 `section-mixed` 且**不产半成品**（与既有
-  // fail-closed 口径一致：宁可拒绝，不拼半个函数）。
-  const sections = timing.body.filter((n) => n.kind === 'sectionBlock');
-  const plain = timing.body.filter((n) => n.kind !== 'sectionBlock' && n.kind !== 'comment');
-  if (sections.length > 0 && plain.length > 0) {
-    ctx.sink.report({
-      code: 'section-mixed',
-      severity: 'error',
-      message:
-        '「若」块不能和别的语句混在同一个「时机」的最外层——「若」的产物没有外层 `IF LOCAL` 信封，混排没有唯一可写回的形状。请把普通语句挪进某一段里，或把段单独放在一个「时机」里。',
-      loc: timing.loc.start,
-    });
-    // **判据在发包装头之前**：报错后 return，产物里一个字都不留（"不产半成品"）。
-    return;
-  }
-  const sectionMode = sections.length > 0;
-
+  // ---- 段块（E13 批）：顶层含 `若` 时改用「逐段信封」骨架 ----（混排判据已前置）
   em.pushGenerated(0, `@${baseName}_1${declClause}`);
   const empty = timing.body.length === 0;
   if (!sectionMode) {
@@ -970,9 +975,23 @@ function resolveFace(face: string, timing: TimingBlock, ctx: TimingEmitContext):
   }
 
   const template = applySegments(spec.template, segments);
-  const successTpl = hasSuccessNamed(timing)
-    ? { template: applySegments(spec.success?.template ?? template, segments), paramIndex: true }
-    : undefined;
+  const wantsSuccess = hasSuccessNamed(timing);
+  // `成否:` 只在该面**自带 success 模板**时才有落点。旧实现缺模板时回退到主模板
+  // ⇒ 同一个函数名发两遍（包装 + SUCCESS），引擎撞「重复定义」，诊断还把成因说成
+  // "同一编号写了两遍"。回退是错误的：`成功` 面本身就是 SUCCESS 函数（adapter
+  // 故意把 `success` 留空），再回退就必撞。缺模板 ⇒ **报错且不生成**（fail-closed）。
+  if (wantsSuccess && spec.success === undefined) {
+    ctx.sink.report({
+      code: 'face-table-missing',
+      severity: 'error',
+      message: `时机写了 \`成否:\`，但分野「${key}」没有成否判定函数模板（adapter 未声明 success）——无法生成成否函数。请去掉 \`成否:\`，或改用有该模板的分野。`,
+      loc: timing.loc.start,
+    });
+  }
+  const successTpl =
+    wantsSuccess && spec.success !== undefined
+      ? { template: applySegments(spec.success.template, segments), paramIndex: true }
+      : undefined;
 
   return {
     faceKey: key,
@@ -2407,13 +2426,29 @@ function heartCallAnchored(text: string, speech: boolean, wait: boolean): { line
   return { line: heartCall(text, speech, wait), inner, innerAt: inner.length > 0 ? text.indexOf(inner) : -1 };
 }
 
-/** 剥离台词引号（`「…」` / `｢…｣` / `"…"`）——仅心形使用 */
+/**
+ * 剥离台词引号（`「…」` / `｢…｣` / `"…"`）——仅心形使用。
+ *
+ * 判据不是"首尾都是引号"，而是**首个闭合引号恰好是最后一个字符**：
+ * `「甲」「乙」` 首尾虽然都是引号，但首个 `」` 在中段——它是一行里的**两段**
+ * 文本，剥掉首尾会得到 `甲」「乙`（把两段粘成一段残句）。多段文本原样保留，
+ * `@"…"` 字面量里的内嵌引号不构成转义问题（ERB 只在 `"` 处收尾，而这里
+ * 只把整行包进一对 `@"…"`，内部没有半角 `"`）。
+ */
 function stripQuotesForHeart(text: string): string {
   const t = text.trim();
-  if ((t.startsWith('「') && t.endsWith('」')) || (t.startsWith('｢') && t.endsWith('｣'))) {
-    return t.slice(1, -1);
+  const pairs: readonly (readonly [string, string])[] = [
+    ['「', '」'],
+    ['｢', '｣'],
+    ['"', '"'],
+  ];
+  for (const [open, close] of pairs) {
+    if (!t.startsWith(open)) continue;
+    const closeAt = t.indexOf(close, open.length);
+    // 首个闭合符必须正好收在行尾才是"整段一句台词"；否则是多段文本，原样。
+    if (closeAt === t.length - close.length) return t.slice(open.length, closeAt);
+    return text;
   }
-  if (t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1);
   return text;
 }
 
@@ -2658,7 +2693,10 @@ function stripOuterQuotes(s: string): string {
  */
 function emitChoiceBlock(em: Emitter, node: ChoiceBlock, ctx: BodyContext, indent: number): void {
   node.items.forEach((item, i) => {
-    em.push(indent, `PRINTBUTTON ${JSON.stringify(item.label)}, ${JSON.stringify(String(i + 1))}`, item.loc.start.line);
+    // 标签走 ERB 字面量口径（`erbStringLiteral`）：ERB **没有转义语法**，
+    // `JSON.stringify` 产出的 `\"` 是无法加载的字节。字面量外的编号是纯数字，
+    // 维持既有形态（逐字节不变）。
+    em.push(indent, `PRINTBUTTON ${erbStringLiteral(item.label)}, ${JSON.stringify(String(i + 1))}`, item.loc.start.line);
   });
   em.push(indent, `INPUTS`, null);
   em.push(indent, `SELECTCASE RESULTS`, null);
@@ -2668,6 +2706,9 @@ function emitChoiceBlock(em: Emitter, node: ChoiceBlock, ctx: BodyContext, inden
   });
   em.push(indent, `ENDSELECT`, null);
 }
+
+/** 菜单标签里必须以 ERB 字面量包裹的字符（裸拼会破坏行结构） */
+const MENU_LABEL_UNSAFE_RE = /[;@"\\]/;
 
 /**
  * 菜单块（数字输入菜单形）的产物——**逐字照语料主流写法**。
@@ -2690,8 +2731,26 @@ function emitChoiceBlock(em: Emitter, node: ChoiceBlock, ctx: BodyContext, inden
  * ```
  */
 function emitMenuBlock(em: Emitter, node: MenuBlock, ctx: BodyContext, indent: number): void {
+  // **先整块校验，再发字节**（fail-closed）：标签是*裸*拼进 `PRINTL` 行尾的，
+  // 作者写的 `%CALLNAME:TARGET%` 在显示语句里会被引擎当变量记号展开——菜单
+  // 显示成别人的名字，且无任何诊断。半角 `%` 一律拒绝（既有码 `stray-percent`）。
+  for (const item of node.items) {
+    if (item.label.includes('%')) {
+      ctx.sink.report({
+        code: 'stray-percent',
+        severity: 'error',
+        message: `菜单项标签「${item.label}」含半角 \`%\`——显示语句里它会被引擎当作 \`%…%\` 变量记号（菜单会显示成变量值或被截断）。请改用全角 \`％\` 或删掉。`,
+        loc: item.loc.start,
+      });
+      return;
+    }
+  }
   node.items.forEach((item, i) => {
-    em.push(indent, `PRINTL [${i + 1}] ${item.label}`, item.loc.start.line);
+    // `;` / `@` / `"` / `\` 在裸形态下会破坏这一行（注释起点 / 行首记号 / 字面量
+    // 引号 / 转义假象）；包成 ERB 字面量后按原样显示。普通标签维持裸形态，
+    // 既有产物逐字节不变（golden 里有 `PRINTL [1] 继续` 这类行）。
+    const label = MENU_LABEL_UNSAFE_RE.test(item.label) ? erbStringLiteral(item.label) : item.label;
+    em.push(indent, `PRINTL [${i + 1}] ${label}`, item.loc.start.line);
   });
   em.pushGenerated(indent, `$INPUT_LOOP`);
   em.pushGenerated(indent, `INPUT`);
@@ -2782,12 +2841,15 @@ function emitAskBlock(em: Emitter, node: AskMBlock | AskYNBlock, ctx: BodyContex
   // 头部可选提示行：经 emitBody 发（文本行管线——插值 / 台词色都照常）
   if (node.prompt) emitBody(em, [node.prompt], ctx, indent);
   const opts = node.items.map((item) => {
-    const labelLiteral = JSON.stringify(item.label);
-    if (!usesValue) return form.option.replace('{label}', labelLiteral);
+    const labelLiteral = erbStringLiteral(item.label);
+    if (!usesValue) return form.option.replace('{label}', () => labelLiteral);
     const value = lowerExpression(item.value ?? form.defaultValue ?? '', exprCtx(ctx, item.loc.start));
-    return form.option.replace('{label}', labelLiteral).replace('{value}', value);
+    // 替换串一律用**函数形**：标签里完全可能出现 `$&` / `` $` `` / `$'` / `$1`
+    // （作者写「甲$&乙」很平常），字符串形 `replace` 会把它们当替换模板展开，
+    // 产出 `甲{label}乙` 这类被二次插值的残句。
+    return form.option.replace('{label}', () => labelLiteral).replace('{value}', () => value);
   });
-  em.push(indent, form.call.replace('{options}', opts.join(',')), node.loc.start.line);
+  em.push(indent, form.call.replace('{options}', () => opts.join(',')), node.loc.start.line);
   em.pushGenerated(indent, `SELECTCASE ${form.result}`);
   node.items.forEach((item, i) => {
     em.push(indent + 1, `CASE ${i}`, item.loc.start.line);

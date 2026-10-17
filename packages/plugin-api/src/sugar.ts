@@ -1020,6 +1020,14 @@ export interface SugarTranspileResult {
    * 据此在**写盘前**拒编译（fail-closed）。
    */
   diagnostics: SugarDiagnostic[];
+  /**
+   * 文件头 `角色:` 的编号原文（additive；未声明 / 为空 ⇒ 缺省）。
+   *
+   * 为什么暴露：消费方（预览 / 升糖）需要角色号，但**不许**从产物骨架里用
+   * `_K(\d+)` 这类正则反推——那是游戏侧命名惯例，转译器契约只承诺"文件头声明"。
+   * 本字段只搬运文件头原文（trim 后），不解释语义；非纯数字由读取方自行降级。
+   */
+  charNo?: string;
 }
 
 /* ============================== 编译落盘（S3 批） ============================== */
@@ -1285,6 +1293,13 @@ export type SugarDiagnosticCode =
    */
   | 'function-name-duplicate'
   | 'timing-empty-body' // 时机无正文（占位写法；产出 `LOCAL = 0` 占位，INFO）
+  /**
+   * 文件头缺 `角色:`（或值为空）却写了需要角色号的内容（时机 / 自定指令 / 函数 /
+   * 登记类头部声明 / 口上色）。引擎函数名一律带 `_K{角色号}`，缺号只能拼出残名
+   * （`…_K` / `…_K_1`）——**fail-closed**：error 级，`planSave` / `compileToFile`
+   * 据此拒绝写盘，绝不落一坨残缺函数名。
+   */
+  | 'missing-charno'
   /**
    * HK-11②：`时机 指令 <中文名>：` 的中文名不在 adapter 的指令表
    * （`KojoInstructionTable`；数据源 = 工程 `CSV/Train.csv`）。**fail-closed**：

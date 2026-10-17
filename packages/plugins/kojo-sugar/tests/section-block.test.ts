@@ -31,10 +31,19 @@ import { stubDict, stubFaceTable } from './support';
 /* ================================ 装配夹具 ================================ */
 
 const svc = () => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
+
+/**
+ * 投影片段只含糖正文：宿主文件头的 `角色:` 不在片段里，单测回灌时补一行最小声明。
+ * `角色:` 是必填头声明（函数名带 `_K{n}`）；这里用 12 与 fixture 的 `_K12` 函数头同源。
+ * 片段自己带了头声明（`角色:` / `口上:` 等完整文件）则原样返回。
+ */
+const withCharNo = (src: string): string =>
+  /^[ \t]*角色\s*[:：]/m.test(src) ? src : `角色: 12\n${src}`;
+
 const errsOf = (src: string): SugarDiagnostic[] =>
-  svc().transpile(src).diagnostics.filter((d) => d.severity === 'error');
+  svc().transpile(withCharNo(src)).diagnostics.filter((d) => d.severity === 'error');
 const codesOf = (src: string): string[] => errsOf(src).map((d) => d.code);
-const productOf = (src: string): string => svc().transpile(src).erb;
+const productOf = (src: string): string => svc().transpile(withCharNo(src)).erb;
 
 /** 正文落在 `时机 绝顶：` 的函数体内（stub 表 → `@M_KOJO_MESSAGE_PALAMCNG_B_K12`） */
 const doc = (body: string): string => `角色: 12\n时机 绝顶：\n${body}\n`;

@@ -52,11 +52,43 @@ function splitLines(source: string): string[] {
   return source.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
 }
 
-/** 前导空白宽度（tab 记 1，其余空白按 1 计——与 `lift.ts` 的 `indentOf` 同口径） */
+/**
+ * 前导空白宽度——数的是**层级**（TAB=1、4 空格=1、全角空格每 2 宽按 4 折算），
+ * 与 `lift.ts` / lexer 的 `indentOf` 同口径。
+ *
+ * 不能数**字符**：4 空格缩进的 `.kojo` 会被当成 4 级，写回时压上 4 个 TAB，
+ * 文件从此变成"空格 + TAB 混排、正文整体多缩进 3 级"的样子（所有候选都错位）。
+ */
 function indentOf(line: string): number {
-  let n = 0;
-  while (n < line.length && (line[n] === '\t' || line[n] === ' ')) n++;
-  return n;
+  const m = /^[ \t\u3000]*/.exec(line);
+  const prefix = m ? m[0] : '';
+  let tabs = 0;
+  let spaces = 0;
+  for (const ch of prefix) {
+    if (ch === '\t') tabs++;
+    else if (ch === '\u3000') spaces += 2;
+    else if (ch === ' ') spaces += 1;
+  }
+  return tabs + (spaces > 0 ? Math.ceil(spaces / 4) : 0);
+}
+
+/** 行首空白原文（写回时按**源文件自己的单位**平移，绝不把 space 文件改成 TAB 文件） */
+function leadOf(line: string): string {
+  const m = /^[ \t\u3000]*/.exec(line);
+  return m ? m[0] : '';
+}
+
+/**
+ * 由行首空白推断"一层缩进的写法"（写回平移到多行糖片段时用）：
+ * 纯 TAB → `\t`；纯半角空格且宽为 4 的倍数 → 4 空格；纯全角空格 → 2 个全角
+ * （= 4 宽 = 1 级）；其余（混合 / 奇数宽）→ `null`（保留原片段缩进，仅加基准前缀）。
+ */
+function indentUnitOf(prefix: string): string | null {
+  if (prefix.length === 0) return null;
+  if (/^\t+$/.test(prefix)) return '\t';
+  if (/^ +$/.test(prefix) && prefix.length % 4 === 0) return '    ';
+  if (/^\u3000+$/.test(prefix) && prefix.length % 2 === 0) return '\u3000\u3000';
+  return null;
 }
 
 /** 行内容（去前导空白） */
@@ -121,10 +153,29 @@ function frontMatterInsertIndex(lines: readonly string[]): number {
 
 /* ============================== 应用（纯函数） ============================== */
 
-/** 相对缩进展开：`sugarSource` 首行无前导空白，后续行按基准平移 */
-function indentSugar(sugarSource: string, base: number): string[] {
-  const pad = '\t'.repeat(Math.max(0, base));
-  return sugarSource.split('\n').map((l) => (l.length > 0 ? `${pad}${l}` : l));
+/**
+ * 相对缩进展开：`sugarSource` 首行无前导空白，后续行带相对缩进。
+ *
+ * - `unit !== null`（源行缩进风格可判定）：每一行按"基准层级 + 相对层级"重排，
+ *   一个层级用**源文件自己的单位**（TAB 文件补 TAB、4 空格文件补 4 空格）——
+ *   不会把空格文件写成 TAB 文件；
+ * - `unit === null`（混合/奇数缩进）：只加基准前缀，相对缩进原样保留（不猜单位）。
+ *
+ * `baseLevel` 是**层级**（不是字符数/不是要 repeat 的次数）。
+ */
+function indentSugar(
+  sugarSource: string,
+  basePrefix: string,
+  baseLevel: number,
+  unit: string | null,
+): string[] {
+  return sugarSource.split('\n').map((l) => {
+    if (l.length === 0) return l;
+    if (unit === null) return `${basePrefix}${l}`;
+    const relPrefix = leadOf(l);
+    const level = baseLevel + indentOf(relPrefix);
+    return `${unit.repeat(level)}${l.slice(relPrefix.length)}`;
+  });
 }
 
 /** 候选区间是否落在正文内（1 基闭区间；`alias` 类不参与替换） */
@@ -194,8 +245,22 @@ export function applyLift(request: SugarLiftApplyRequest): SugarLiftApplyPreview
   const out = [...lines];
   for (let i = sorted.length - 1; i >= 0; i--) {
     const c = sorted[i]!;
-    const base = request.indentBase ?? indentOf(lines[c.fromLine - 1] ?? '');
-    const added = indentSugar(c.sugarSource, base);
+    // 基准：显式 `indentBase`（契约：层级/TAB 数）优先；缺省取被替换区首行的**层级**
+    // 与其缩进单位（保持源文件的缩进风格）。
+    const sourceLine = lines[c.fromLine - 1] ?? '';
+    let baseLevel: number;
+    let basePrefix: string;
+    let unit: string | null;
+    if (request.indentBase !== undefined) {
+      baseLevel = Math.max(0, Math.floor(request.indentBase));
+      basePrefix = '\t'.repeat(baseLevel);
+      unit = '\t';
+    } else {
+      basePrefix = leadOf(sourceLine);
+      baseLevel = indentOf(sourceLine);
+      unit = indentUnitOf(basePrefix);
+    }
+    const added = indentSugar(c.sugarSource, basePrefix, baseLevel, unit);
     out.splice(c.fromLine - 1, c.toLine - c.fromLine + 1, ...added);
     hunks[i]!.added = added;
   }

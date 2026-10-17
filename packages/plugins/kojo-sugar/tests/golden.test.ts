@@ -20,12 +20,20 @@ export { stubDict } from './support';
 const dir = new URL('./goldens/', import.meta.url);
 const readRaw = (name: string) => readFileSync(new URL(name, dir), 'utf8').replace(/\r\n/g, '\n');
 
-/** 读 fixture 并剥掉首部 `//` 注释横幅（fixture 约定，不进转译输入） */
-export const readKojo = (name: string) =>
-  readRaw(name)
+/**
+ * 读 fixture 并剥掉首部 `//` 注释横幅（fixture 约定，不进转译输入）。
+ *
+ * 规范 §6.2 的示例是从 `时机` 起抄的**片段**（不含文件头），而 `角色:` 是必填头
+ * 声明——fixture 本身冻结不改，测试衣在缺省时补一行最小 `角色:`，使输入是一份
+ * 完整的 `.kojo`（补头不改变 §6.2 的产物摘录：无 `口上:` 时不产登记函数）。
+ */
+export const readKojo = (name: string) => {
+  const text = readRaw(name)
     .split('\n')
     .filter((l) => !l.startsWith('//'))
     .join('\n');
+  return /^[ \t]*角色\s*[:：]/m.test(text) ? text : `角色: 12\n${text}`;
+};
 
 const service = () => createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
 

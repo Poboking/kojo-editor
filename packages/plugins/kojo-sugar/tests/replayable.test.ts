@@ -39,8 +39,15 @@ const stubDict: DictionaryLookup = {
 };
 
 const GOLDENS = path.resolve(import.meta.dirname, 'goldens');
-/** 剥掉 fixture 顶部的 `//` 注释头（不计入糖源） */
-const stripBanner = (text: string) => text.split('\n').filter((l) => !l.startsWith('//')).join('\n');
+/**
+ * 剥掉 fixture 顶部的 `//` 注释头（不计入糖源）。
+ * 规范 §6.2 的 fixture 是**片段**（从 `时机` 起抄），缺必填的 `角色:` 头声明——
+ * 这里补一行最小声明（不产登记函数，产物摘录不变）。
+ */
+const stripBanner = (text: string) => {
+  const src = text.split('\n').filter((l) => !l.startsWith('//')).join('\n');
+  return /^[ \t]*角色\s*[:：]/m.test(src) ? src : `角色: 12\n${src}`;
+};
 
 const ERB_PATH = '/sugar.ERB';
 

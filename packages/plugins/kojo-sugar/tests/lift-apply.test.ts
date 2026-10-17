@@ -364,6 +364,57 @@ describe('S5-UI / applyLift —— 候选写回源文本', () => {
     const drifted = [{ ...r.candidates[0]!, fromLine: 2, toLine: 2 }];
     expect(() => applyLift({ source, candidates: drifted })).toThrow(/不一致/);
   });
+
+  /**
+   * 回归（HIGH）：`indentOf` 曾数**字符**、`indentSugar` 把它当**层级** repeat TAB——
+   * 4 空格缩进的 `.kojo` 会被压上 4 个 TAB（多缩进 3 级、且空格文件混入 TAB）。
+   * 缩进必须按层级算，且写回沿用**源文件自己的缩进单位**。
+   */
+  describe('缩进：空格文件写回仍是空格（层级 ≠ 字符数）', () => {
+    it('4 空格缩进的单行候选：写回 4 空格，不出现任何 TAB', () => {
+      const source = ['角色: 12', '时机 初见：', '    PRINTFORMW 「甲」', '    PRINTFORMDW 旁白', ''].join('\n');
+      const r = scan(source);
+      expect(r.candidates).toHaveLength(2);
+      const out = applyLift({ source, candidates: r.candidates });
+      expect(out.text).toBe(['角色: 12', '时机 初见：', '    「甲」', '    旁白', ''].join('\n'));
+      expect(out.text).not.toContain('\t');
+      expect(out.hunks.map((h) => h.added)).toEqual([['    「甲」'], ['    旁白']]);
+    });
+
+    it('4 空格缩进的 IF 块：嵌套体按 4 空格单位重排（2 级 = 8 空格）', () => {
+      const source = [
+        '角色: 12',
+        '时机 指令 310：',
+        '    IF FLAG:1',
+        '        PRINTFORMDW 甲。',
+        '    ENDIF',
+        '',
+      ].join('\n');
+      const r = scan(source);
+      const block = r.candidates.find((c) => c.kind === 'if-block');
+      expect(block, '未识别出 IF 块候选').toBeDefined();
+      const out = applyLift({ source, candidates: [block!] });
+      expect(out.text).toBe(
+        ['角色: 12', '时机 指令 310：', '    如果 FLAG:1：', '        甲。', ''].join('\n'),
+      );
+      expect(out.text).not.toContain('\t');
+
+      // 应用后的文件必须仍可编译：层级对不上会在这一步露馅（indent-mismatch / 错位产物）
+      const compiled = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(
+        out.text,
+      );
+      expect(compiled.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+      expect(compiled.erb).toContain('\tIF FLAG:1');
+      expect(compiled.erb).toContain('\t\tPRINTFORMDW 甲。');
+    });
+
+    it('TAB 文件：缺省基准仍是一个 TAB（既有形态逐字节不变）', () => {
+      const source = ['角色: 12', '时机 初见：', '\tPRINTFORMW 「甲」', ''].join('\n');
+      const r = scan(source);
+      const out = applyLift({ source, candidates: r.candidates });
+      expect(out.text).toBe(['角色: 12', '时机 初见：', '\t「甲」', ''].join('\n'));
+    });
+  });
 });
 
 /* ============================== 二、写链路 applyLiftToFile ============================== */

@@ -29,7 +29,7 @@ import {
 import { scanControlFlow } from '@kojo/plugin-erb-parser';
 import { parseExpression } from '@kojo/plugin-condition-extractor';
 import { createSugarTranspileService } from '../src/service';
-import { createSugarLiftService, liftSuggest } from '../src/lift';
+import { characterNoOfErbText, createSugarLiftService, liftSuggest } from '../src/lift';
 import type { LiftDeps } from '../src/lift';
 import type { DictionaryLookup } from '../src/types';
 import { stubFaceTable } from './support';
@@ -639,6 +639,20 @@ describe('S5 / 集成 —— fixtures', () => {
       expect(c.roundTrip.originalText).toBe(original);
       expect(c.roundTrip.generatedText).toBe(original);
     }
+  });
+});
+
+describe('角色号反推（回归：`_K58_` 这类头必须取到 58）', () => {
+  /**
+   * 旧正则 `/_K(\d+)\b/` 在编号后紧跟 `_` 时恒失配（`8` 与 `_` 都是词字符，
+   * 中间没有词边界）——自证壳拿到 0，`初回("…", 1)` 补出的第三参跟着错，
+   * 候选被 `roundtrip-mismatch` 误杀。
+   */
+  it('`_K58` / `_K58_1` / `_K58_310` 都取 58；无编号 → null', () => {
+    expect(characterNoOfErbText('@M_KOJO_ENCOUNTER_K58')).toBe('58');
+    expect(characterNoOfErbText('@M_KOJO_MESSAGE_COM_K58_1')).toBe('58');
+    expect(characterNoOfErbText('@M_KOJO_MESSAGE_COM_K58_310')).toBe('58');
+    expect(characterNoOfErbText('@M_KOJO_ENCOUNTER')).toBeNull();
   });
 });
 

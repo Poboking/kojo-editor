@@ -295,10 +295,24 @@ function resolveCharacterNo(ctx: LiftContext): string {
     return String(ctx.request.characterNo);
   }
   for (const line of ctx.lines) {
-    const m = /_K(\d+)\b/.exec(line);
-    if (m) return m[1]!;
+    const fromLine = characterNoOfErbText(line);
+    if (fromLine !== null) return fromLine;
   }
   return '0';
+}
+
+/**
+ * 从原生 ERB 文本里取角色号（首个 `_K<数字>`）——升糖自证壳（`wrapForVerification`）用。
+ *
+ * **不用 `\b` 收尾**：`_K58_1` / `_K58_310` 里数字与紧随的 `_` 都是词字符，
+ * `\b` 根本不成立——旧正则在"编号后紧跟下划线"的函数头上恒失配，角色号静默回退
+ * 成 `0`；壳里由 `初回("…", 1)` 补出的第三参随之错成 0，自证比对失败、候选被误拒。
+ *
+ * 找不到 → `null`（调用方决定占位口径；本函数不猜）。
+ */
+export function characterNoOfErbText(text: string): string | null {
+  const m = /_K(\d+)/.exec(text);
+  return m ? m[1]! : null;
 }
 
 /**
@@ -350,9 +364,12 @@ function verifyRoundTrip(
     const generated = extractBody(result.erb);
     if (generated === null) continue;
     if (firstGenerated.length === 0) firstGenerated = generated;
-    // 比对前把两侧都"去基准缩进"：原文块可能嵌在任意深度（如 `IF LOCAL` 体内
-    // 为 1 级），而自证壳恒把片段放在 1 级——绝对缩进不可比，**相对缩进才可比**。
-    if (normalizeIndent(generated) === normalizeIndent(originalText)) {
+    // 两侧各按**已知基准**去缩进后比对：壳产物的 `IF LOCAL` 体恒在 1 级；原文块
+    // 的基准是块内首条内容行的层级。不能用"最小缩进"猜基准——那会把整块被统一
+    // 多缩进一级的片段也归一掉（层级漂移被抹平），见 `normalizeIndentAt`。
+    const generatedNorm = normalizeIndentAt(generated, 1);
+    const originalNorm = normalizeIndentAt(originalText, firstContentIndent(originalText));
+    if (generatedNorm !== null && generatedNorm === originalNorm) {
       return { ok: true, generatedText: generated, diag: [], narrationColor: mode };
     }
   }
@@ -360,48 +377,47 @@ function verifyRoundTrip(
 }
 
 /**
- * 去基准缩进（左侧公共缩进）：把每行去掉**最小**缩进量。
+ * 缩进归一（**按已知基准去缩进，再按层级重排**）。
  *
- * 空行不参与最小缩进计算，也不被填充。例：
- * ```
- * \tIF X        →  IF X
- * \t\tPRINTFORMDW →  \tPRINTFORMDW
- * \tENDIF       →  ENDIF
- * ```
- * 这样"深度 1 的原文块"与"壳里深度 1 的生成块"可比。
- */
-/**
- * 缩进归一（**先算层级、再按层级重排**）。
- *
- * ## 为什么不能"按字符剥"
+ * ## 为什么不能"按字符剥"（2026-10-12 回归）
  *
  * 原文缩进可能是 4 空格 / 8 空格 / TAB / 全角空格，而自证壳恒用 TAB。旧实现拿
  * `indentOf`（数的是**层级**：空格 ÷4、全角 ÷2、TAB =1）算出 `min`，却在剥离循环里
  * 按**字符**扣数（空格 1、全角 2、TAB 1）——两把尺子。于是 4 空格缩进的源只剥掉
  * 1 个空格，剩下 3 个空格，与壳产物（已剥干净）判成"不一致"→ 候选被误拒。
- * 实测后果：**凡空格缩进的 `.kojo` 源，💡 升糖候选全部消失**（规范 §6 示例与新建
- * 向导骨架都是 4 空格，等于对大多数糖文件失效）。
  *
- * ## 现在的口径
+ * ## 为什么不能按"最小缩进"定基准（本轮）
  *
- * 相对缩进**保留**（嵌套块仍能被区分），绝对缩进与空白字符种类被抹平——这正是
- * "绝对缩进不可比、相对缩进才可比"的本意。尾随空白**不动**（保持比对严格）。
+ * `min` 会把"整块被统一多缩进一级"的片段也归一掉：候选的 `sugarSource` 契约是
+ * "首行无前导空白"，一旦违反，应用阶段会把基准**叠加两次**（多缩进一级），而
+ * 旧归一化看不见这种层级漂移。现在基准是**已知的**：壳产物 = 1（`IF LOCAL` 体），
+ * 原文块 = 首条内容行的层级。任何一行缩进低于基准（dedent 越界）或首条内容行高于
+ * 基准（整块多缩进）都会落成不一致 ⇒ 候选被拒。
+ *
+ * 相对缩进**保留**（嵌套块仍能被区分），空白字符种类被抹平；尾随空白**不动**
+ * （保持比对严格）。
  */
-function normalizeIndent(text: string): string {
-  const lines = text.split('\n');
-  let min = Infinity;
-  for (const l of lines) {
-    if (l.trim().length === 0) continue;
-    min = Math.min(min, indentOf(l));
+function normalizeIndentAt(text: string, base: number): string | null {
+  const out: string[] = [];
+  for (const l of text.split('\n')) {
+    if (l.trim().length === 0) {
+      out.push('');
+      continue;
+    }
+    const level = indentOf(l) - base;
+    if (level < 0) return null; // 越界回缩：不可能与壳产物一致
+    out.push('\t'.repeat(level) + l.replace(/^[ \t\u3000]*/, ''));
   }
-  if (!Number.isFinite(min)) return text; // 全文空白：原样（无需归一）
-  return lines
-    .map((l) => {
-      if (l.trim().length === 0) return '';
-      const level = Math.max(0, indentOf(l) - min);
-      return '\t'.repeat(level) + l.replace(/^[ \t\u3000]*/, '');
-    })
-    .join('\n');
+  return out.join('\n');
+}
+
+/** 原文块的缩进基准 = 首条内容行的层级（全空白 → 0） */
+function firstContentIndent(text: string): number {
+  for (const l of text.split('\n')) {
+    if (l.trim().length === 0) continue;
+    return indentOf(l);
+  }
+  return 0;
 }
 
 /** 从产物里抽正文区间（`IF LOCAL` 之后到其 `ENDIF` 之前），并把基准缩进降一级 */

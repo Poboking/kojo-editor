@@ -448,18 +448,20 @@ async function resolveArchive(
 }
 
 /**
- * 定位角色号：请求显式给了就用；否则从糖源码 front-matter 的 `角色:` 取。
- * 都拿不到 → null（降级 `no-character`）。
+ * 定位角色号：请求显式给了就用；否则读转译结果上的 `charNo`（文件头 `角色:` 原文，
+ * additive 契约字段）。都拿不到 → null（降级 `no-character`）。
+ *
+ * 不再从产物骨架里正则反推 `_K(\d+)`：那是 adapter 的**命名惯例**，不是转译契约
+ * （游戏无关插件不该知道它），且旧正则在 `_K58_` 这类"数字后紧跟下划线"的头上
+ * 因 `\b` 失配，`archive` 恒为 null。
  */
 function resolveCharacterNo(request: SugarPreviewRequest, transpile: SugarTranspileResult): number | null {
   if (typeof request.characterNo === 'number' && Number.isFinite(request.characterNo)) {
     return request.characterNo;
   }
-  // front-matter 未在 `SugarTranspileResult` 里暴露（结果只含 erb/sourceMap/diagnostics），
-  // 故此处从产物骨架反推：`@M_KOJO_..._K{no}...` 中的 `K{no}`。
-  const m = /^@\S*_K(\d+)\b/m.exec(transpile.erb);
-  if (!m) return null;
-  const n = Number(m[1]);
+  const raw = transpile.charNo?.trim();
+  if (raw === undefined || !/^[0-9]+$/.test(raw)) return null;
+  const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
 
