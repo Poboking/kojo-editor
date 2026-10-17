@@ -77,7 +77,8 @@ import type { FileRefs, RefRun } from './references';
  *   反向引用的判据是全局 `byName`，"文件没变"只保证正文没变、**不保证名录没变**——
  *   旁处新增一个 `@函数` 会让所有未变文件的存量 refs 少一条边（v4 起就有这个洞，
  *   此前无人记账）。有了溯源位，复用条目的 refs 只在"摘要与当前名录相符"时才续用，
- *   不符则标为可疑、由**首次消费**（find-references / rename）重扫补正，开项目不付这笔钱；
+ *   不符则标为可疑、由构建轮的溯源巡检就地重扫补正（PS-3 起热轮同样巡检；信封级 `namesFp`
+ *   位在"全体条目记账相符"时写入，命中"摘要相等"即整段免巡检）；
  * - **v6 条目照常复用**：v6 与 v7 的前 9 位逐字同义（本批没动解析口径），只缺第 10 位
  *   ⇒ 见 `SALVAGEABLE_VERSIONS` 的准入纪律；缺溯源位 = 可疑 = 结构续用、refs 待补正；
  * - **单条损坏不再连坐**：`salvageSnapshot` 逐条目校验，坏几条只重读那几条；
@@ -133,7 +134,8 @@ export interface SnapshotEntry {
    * 反向引用的判据是全局 `byName`，"文件 mtime+size 没变"只保证正文没变，不保证名录没变：
    * 别处新增/删除一个 `@函数` 会让未变文件的存量 refs 少边或多边。
    * 复用条件 = `refsNamesFp === 当前名录摘要`；`undefined` = 溯源未知（v6 及更早的盘上条目）
-   * ⇒ 一律判可疑，由首次消费重扫补正（开项目不付这笔钱）。
+   * ⇒ 一律判可疑，由**构建轮**的溯源巡检就地重扫补正（PS-3：热轮与 salvage 轮同判据；
+   * 补扫结果连新摘要一起落盘 ⇒ 只付这一轮，信封位命中时整段巡检都不走）。
    */
   readonly refsNamesFp?: number;
 }
@@ -145,6 +147,13 @@ export interface IndexSnapshot {
   readonly rootDir: string;
   readonly savedAt: number;
   readonly entries: Readonly<Record<string, SnapshotEntry>>;
+  /**
+   * 信封级**名录摘要**（PS-3）：`nameSetDigest(byName.keys())`，**仅当落盘时每条条目
+   * 的 `refsNamesFp` 都已等于这份摘要**才写入（`verifiedNamesDigest` 判据；否则为 null）。
+   * 于是"信封摘要 === 本轮摘要"是"全部存量 refs 可信"的 O(1) 判据——名录没变时
+   * 连逐条目巡检都不用走。缺失/为 null（旧盘形态或某条补扫失败）⇒ 逐条目巡检兜底。
+   */
+  readonly namesFp?: number | null;
 }
 
 /**
@@ -518,6 +527,9 @@ export function salvageSnapshot(
     rootDir: opts.rootDir,
     savedAt: r.savedAt,
     entries: salvaged.entries,
+    // 信封名录摘要原样带上（只认数；旧盘没这一位 ⇒ 逐条目巡检）。不变量"信封命中 ⇒ 全体条目
+    // 相符"由**写侧**（`verifiedNamesDigest`）保证，salvage 只搬运条目与信封，不新造摘要。
+    ...(typeof r.namesFp === 'number' ? { namesFp: r.namesFp } : {}),
     skipped: salvaged.skipped,
     legacy: !shape.hasRefsFp,
     key: opts.key,
@@ -645,6 +657,26 @@ export function diffSnapshot(
   return { reusable, stale };
 }
 
+/**
+ * 名录摘要**信封位**（PS-3）：全部条目的 `refsNamesFp` 都等于当前摘要才把摘要写进信封，
+ * 否则给 null（含"某条条目溯源未知/补扫失败"的情形）。信封命中"摘要相等"因此**蕴含**
+ * "全部存量 refs 与当前名录相符"——巡检可以整段跳过。判定只看条目自身记的账，
+ * 不看名录本身，所以旧盘（无信封位）只是走慢路（逐条目巡检），不会走错路。
+ */
+export function verifiedNamesDigest(entries: Readonly<Record<string, SnapshotEntry>>, currentDigest: number): number | null {
+  for (const path in entries) {
+    if (entries[path]!.refsNamesFp !== currentDigest) return null;
+  }
+  return currentDigest;
+}
+
+/** 纯计数（不物化 2,325 条键数组；只服务读数行与 dirty 判据） */
+export function countEntries(entries: Readonly<Record<string, SnapshotEntry>>): number {
+  let n = 0;
+  for (const _k in entries) n++;
+  return n;
+}
+
 /** 校验未知数据是否为**本项目**的当前版本快照；任一不符返回 null（整体弃用） */
 export function coerceSnapshot(raw: unknown, rootDir: string): IndexSnapshot | null {
   if (typeof raw !== 'object' || raw === null) return null;
@@ -657,7 +689,14 @@ export function coerceSnapshot(raw: unknown, rootDir: string): IndexSnapshot | n
   // 条目结构（元组长度 / 类型 / 形参与注释位 / refs 名录摘要位）由 decodeEntries 逐条校验，不符 ⇒ 整体弃用
   const entries = decodeEntries(r.entries);
   if (entries === null) return null;
-  return { version: SNAPSHOT_VERSION, rootDir, savedAt: r.savedAt, entries };
+  // 信封名录摘要：只认数（旧盘没这一位 = 未知 ⇒ 调用方走逐条目巡检，不猜）
+  return {
+    version: SNAPSHOT_VERSION,
+    rootDir,
+    savedAt: r.savedAt,
+    entries,
+    ...(typeof r.namesFp === 'number' ? { namesFp: r.namesFp } : {}),
+  };
 }
 
 /* ---------------------------------------------------------------------------
@@ -697,7 +736,7 @@ export function nameSetDigest(names: Iterable<string>): number {
 
 /**
  * 存量 refs 能不能直接续用：条目记下的名录摘要 === 当前名录摘要。
- * 不等（含 `undefined`＝溯源未知，v6 及更早的盘上条目）⇒ 判可疑，由消费侧重扫补正。
+ * 不等（含 `undefined`＝溯源未知，v6 及更早的盘上条目）⇒ 判可疑，由构建轮溯源巡检补扫。
  */
 export function refsAreReusable(entry: SnapshotEntry, currentDigest: number): boolean {
   return entry.refs !== undefined && entry.refsNamesFp === currentDigest;
