@@ -41,6 +41,18 @@ import { describeCallSignature, slotParameterLabel } from './kojo-signature';
  * （`erbFunctionNames`，宿主按 `ErbIndex.fingerprint` 记忆化后注入）两册都消费 ⇒ `.kojo` 里
  * 写 `调用` 也能补到剧本函数名。
  *
+ * ## 跨装配路由（additive）
+ *
+ * `.kojo` 是超集：同一份文档里既有糖行也有原生 ERB 直通（规范 §3.10）。原生行需要 ERB 册
+ * 的全部候选源与位置门，而**不**需要任何糖源。解法不是把两册源合并（那样糖位会混进
+ * `erb-*` 噪声、位置门也会互相打架），而是 {@link CompletionAssembly.route}：装配点在本轮
+ * `locate` **之前**问一次根装配"这一位该交给谁"，拿到被路由装配后就**原样复用**同一条
+ * provider 管线（同一个 `mergeSuggestions` / provenance / 降级去重 / snippet / resolve），
+ * 只把 `locate` / `sources` / `callForm` / 日志前缀换成被路由装配的那一份。
+ * 路由只走**一跳**（不递归）：被路由装配自己的 `route` 不再被追问——两册语言不会互指。
+ * provenance 记下产出该候选的装配（{@link CompletionProvenance.assembly}），
+ * `resolveCompletionItem` 按它分派回表口径（`erb-*` 候选归 ERB resolver）。
+ *
  * ## 分层纪律
  *
  * 本文件零语言名词、零游戏名词、零词表：`ERB` / `kojo` 只出现在文档与类型名里。
@@ -168,7 +180,7 @@ export interface CompletionSource {
 }
 
 /** 装配核**自身**（不是某个候选源）抛错的阶段：位置判定 / 取表 / 合并 / snippet 化 */
-export type CompletionAssemblyStage = 'locate' | 'getTables' | 'merge' | 'snippet';
+export type CompletionAssemblyStage = 'route' | 'locate' | 'getTables' | 'merge' | 'snippet';
 
 /** 装配级抛错的载荷（只在 `failure` 上出现；缺表降级恒不带 ⇒ 旧断言零改动） */
 export interface CompletionAssemblyFailure {
@@ -197,7 +209,7 @@ export interface CompletionDegrade {
   readonly missing?: keyof CompletionTables;
   /** 一句中文说明（含「缺席 / 抛错」「已跳过」「不猜」） */
   readonly reason: string;
-  /** 装配级抛错（`locate` / `getTables` / `merge` / `snippet`）才带；缺表降级恒为 `undefined` */
+  /** 装配级抛错（`route` / `locate` / `getTables` / `merge` / `snippet`）才带；缺表降级恒为 `undefined` */
   readonly failure?: CompletionAssemblyFailure;
 }
 
@@ -225,6 +237,12 @@ export interface CompletionProvenance {
    * 详情必须与候选同源——两张表拼出来的"中文名"是假信息。
    */
   readonly tables: CompletionTables;
+  /**
+   * 产出该候选的装配（additive；跨装配路由时 = 被路由装配，缺省 = provider 的根装配）。
+   * `resolveCompletionItem` 按它分派回表口径——`.kojo` 原生区的 `erb-*` 候选必须回 ERB resolver，
+   * 而糖位候选回糖册。`sourceId` 原样保留（诊断与既有断言零改动）。
+   */
+  readonly assembly?: CompletionAssembly;
 }
 
 /** 候选身份 → 出处 的登记表（每次装配一枚，随句柄创建 / 回收） */
@@ -296,6 +314,11 @@ export interface CompletionMergeOptions {
    */
   readonly keep?: (item: Monaco.languages.CompletionItem, sourceId: string) => boolean;
   readonly provenance?: CompletionProvenanceStore;
+  /**
+   * 本轮实际出货的装配（additive；跨装配路由时 = 被路由装配）。只做一件事：登记进每条候选的
+   * {@link CompletionProvenance.assembly}，让 resolve 分派到正确的回表口径。
+   */
+  readonly assembly?: CompletionAssembly;
   /** 装配级上限（缺省 {@link MAX_ASSEMBLED_SUGGESTIONS}；测试可放宽以验对拍） */
   readonly limit?: number;
 }
@@ -384,6 +407,7 @@ export function mergeSuggestions(
       sourceId: entry.sourceId,
       label: labelText(entry.item.label),
       tables: ctx.tables,
+      ...(opts.assembly !== undefined ? { assembly: opts.assembly } : {}),
     });
     return final;
   });
@@ -748,6 +772,22 @@ export interface CompletionAssembly {
   readonly sources: readonly CompletionSource[];
   readonly callForm: CompletionCallFormPolicy;
   /**
+   * **跨装配路由**（可选；additive）。装配点在本轮 `locate` 之前问一次：返回非 `undefined`
+   * ⇒ 本轮整条管线（`locate` / `sources` / `callForm` / 日志前缀 / resolve 分派）改用被路由
+   * 装配，provenance 照旧记 `sourceId` 并额外记下归属装配。
+   *
+   * `.kojo` 的用法：位置在原生区（`@` 块 / 全大写指令行 / `$标签`）⇒ 返回
+   * `ERB_COMPLETION_ASSEMBLY`；糖位返回 `undefined`（用自己）。**只走一跳**：被路由装配的
+   * `route` 不再被追问（两册语言不互指）。路由只改写"用哪本册"，不改写合并 / 去重 / 排序 /
+   * 降级 / snippet 的任何一行语义——那些仍只有 {@link mergeSuggestions} 与
+   * {@link createCompletionProvider} 这一份实现。
+   */
+  route?(
+    monaco: typeof Monaco,
+    model: Monaco.editor.ITextModel,
+    position: Monaco.Position,
+  ): CompletionAssembly | undefined;
+  /**
    * 位置判定：算替换区间 + 前缀 +（可选）门类过滤；返回 `undefined` = 整轮零候选（如字符串内）。
    * `monaco` 由装配核递进来——判定要读 kind 常量时**不必修**自己去记一枚句柄。
    */
@@ -758,13 +798,16 @@ export interface CompletionAssembly {
 /**
  * 装配一枚补全 provider（两语言共用；`registerCompletionItemProvider` 的唯一调用点在这里）。
  *
- * 三件事一次收口，宿主零改动：
- * ①`provideCompletionItems` = 位置判定 → `mergeSuggestions` → snippet 化（整段有兜底 try/catch：
- *   任一环节抛错都返回 `{ suggestions: [] }`——Monaco 要求的形状，**并在这条路上报一次降级**，
- *   不再让 promise reject 被 Monaco 吞成"补全突然没了"）；
- * ②`resolveCompletionItem` = 对象身份反查出处 → 语言侧回表算详情 → 只合并 `detail` / `documentation`；
+ * 四件事一次收口，宿主零改动：
+ * ①`provideCompletionItems` = **路由** → 位置判定 → `mergeSuggestions` → snippet 化（整段有兜底
+ *   try/catch：任一环节抛错都返回 `{ suggestions: [] }`——Monaco 要求的形状，**并在这条路上报
+ *   一次降级**，不再让 promise reject 被 Monaco 吞成"补全突然没了"）。路由只换"用哪本册"，
+ *   合并 / 去重 / 排序 / 降级 / snippet 一行都不复制；
+ * ②`resolveCompletionItem` = 对象身份反查出处 → **按产出装配**回表算详情 → 只合并
+ *   `detail` / `documentation`；
  * ③降级去重表**每轮装配新建**（= 一次 `provideCompletionItems` 一份 ⇒ "每轮至多一次"成立）。
- *   曾经随句柄创建 ⇒ 首轮之后同一缺键**永久无声**（正是排查时最需要看见的那条信号）。
+ *   曾经随句柄创建 ⇒ 首轮之后同一缺键**永久无声**（正是排查时最需要看见的那条信号）；
+ * ④路由只走**一跳**（被路由装配的 `route` 不再被追问，见 {@link CompletionAssembly.route}）。
  */
 export function createCompletionProvider(
   monaco: typeof Monaco,
@@ -773,20 +816,25 @@ export function createCompletionProvider(
   onDegrade?: CompletionDegradeReporter,
 ): Monaco.languages.CompletionItemProvider {
   const provenance = createCompletionProvenanceStore();
-  const tag = assembly.logTag;
   return {
     triggerCharacters: [...assembly.triggerCharacters],
     provideCompletionItems(model, position) {
       const reported = new Set<string>(); // 一轮一份（见③）：句柄级去重 = 首轮之后永久无声
-      let stage: CompletionAssemblyStage = 'locate';
+      let stage: CompletionAssemblyStage = 'route';
+      // 本轮实际出货的装配：路由命中 = 被路由装配；否则就是 provider 自己的装配
+      let active: CompletionAssembly = assembly;
       try {
-        const location = assembly.locate(monaco, model, position);
+        const routed = assembly.route?.(monaco, model, position);
+        if (routed !== undefined) active = routed;
+        const tag = active.logTag;
+        stage = 'locate';
+        const location = active.locate(monaco, model, position);
         if (location === undefined) return { suggestions: [] };
         stage = 'getTables';
         const tables = getTables();
         stage = 'merge';
         const suggestions = mergeSuggestions(
-          assembly.sources,
+          active.sources,
           { monaco, model, position, range: location.range, tables },
           location.prefix,
           {
@@ -795,17 +843,19 @@ export function createCompletionProvider(
             onDegrade,
             keep: location.keep,
             provenance,
+            assembly: active,
           },
         );
         stage = 'snippet';
-        applyCallSnippets(monaco, suggestions, provenance, model, assembly.callForm, tag, location.seed);
+        applyCallSnippets(monaco, suggestions, provenance, model, active.callForm, tag, location.seed);
         return { suggestions };
       } catch (e: unknown) {
-        // 装配核自己抛错（位置判定 / 取表 / 合并 / snippet）：候选本轮清空，但**信号必须出去**——
-        // 返回 `undefined` / 裸数组都不是 Monaco 要求的形状，promise reject 更会被 Monaco 吞掉。
+        // 装配核自己抛错（路由 / 位置判定 / 取表 / 合并 / snippet）：候选本轮清空，但**信号必须
+        // 出去**——返回 `undefined` / 裸数组都不是 Monaco 要求的形状，promise reject 更会被
+        // Monaco 吞掉。日志前缀取当前装配：路由已发生时说清是哪本册出的问题。
         const msg = e instanceof Error ? e.message : String(e);
         const reason = `装配在 '${stage}' 阶段抛错（${msg}），本轮返回空候选（不猜、不静默：Monaco 吞不掉已 resolve 的空列表）`;
-        console.warn(`${tag} 降级：${reason}`);
+        console.warn(`${active.logTag} 降级：${reason}`);
         onDegrade?.({
           sourceId: COMPLETION_ASSEMBLY_SOURCE_ID,
           reason,
@@ -817,11 +867,13 @@ export function createCompletionProvider(
     resolveCompletionItem(item) {
       const hit = provenance.lookup(item);
       if (hit === undefined) return item; // 不是本装配点产出的候选 ⇒ 原样交回（不猜）
+      // 按**产出装配**分派回表口径（跨装配路由后候选可能来自 ERB 册）；缺省 = provider 根装配
+      const owner = hit.assembly ?? assembly;
       let resolved: CompletionResolution | undefined;
       try {
-        resolved = assembly.resolveDetail(item, hit);
+        resolved = owner.resolveDetail(item, hit);
       } catch (e: unknown) {
-        console.warn(`${tag} resolve '${hit.sourceId}' 抛错：${errorText(e)}`);
+        console.warn(`${owner.logTag} resolve '${hit.sourceId}' 抛错：${errorText(e)}`);
         return item;
       }
       if (resolved === undefined) return item;

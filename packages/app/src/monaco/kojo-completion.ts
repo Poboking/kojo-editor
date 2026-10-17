@@ -8,6 +8,8 @@ import {
   SYSTEM_FUNCTION_ALIASES,
 } from '@kojo/plugin-kojo-sugar';
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
+import { ERB_COMPLETION_ASSEMBLY, resolveErbCompletionDetail } from './erb-completion';
+import { kojoNativeZoneAt } from './kojo-native-zone';
 import { variableCompletionItems } from './kojo-completion-variables';
 import { faceCompletionItems } from './kojo-completion-faces';
 import {
@@ -67,7 +69,8 @@ import {
  * 本文件剩下的都是"只有 `.kojo` 才懂"的三件事：
  *
  * 1. **候选源集合** `KOJO_COMPLETION_SOURCES`（可扩展数组，新增能力 = 追加一项，装配零改动）；
- * 2. **位置判定**：替换区间 = 当前词（{@link kojoCompletionRange}）；
+ * 2. **位置判定**：替换区间 = 当前词（{@link kojoCompletionRange}）；外加**跨装配路由**
+ *    （{@link kojoNativeZoneAt}：原生区整轮交给 `ERB_COMPLETION_ASSEMBLY`，糖位用自己）；
  * 3. **回表口径**：候选出处 → 详情（变量 / 分野 / 指令名 / 库函数 / 系统函数 / 项目函数），
  *    以及"哪些 source 的候选是调用形态、按什么键回协议表取槽"。
  *
@@ -148,6 +151,10 @@ function lexiconDetail(label: string, tables: CompletionTables): CompletionResol
 /**
  * `resolveCompletionItem` 的**纯**内核（可单测）：按出处分派到装配核的共用详情构造器。
  * 不认识的 source id ⇒ `undefined`（后来追加的 source 自己声明详情，**不猜它想要什么**）。
+ *
+ * **跨装配路由**（原生区）：`erb-*` 来源的候选一律转调 ERB 册的 resolver——变量 / 项目函数 /
+ * 系统函数三路的详情措辞只有那一份实现，这里不重抄。装配核在 provider 路径上已按
+ * `provenance.assembly` 直接分派；本分支守住直接调用本函数的消费方（测试 / 未来接线）。
  */
 export function resolveCompletionDetail(
   item: Monaco.languages.CompletionItem,
@@ -155,6 +162,9 @@ export function resolveCompletionDetail(
 ): CompletionResolution | undefined {
   const tables = provenance.tables;
   const label = provenance.label;
+  if (provenance.sourceId.startsWith('erb-')) {
+    return resolveErbCompletionDetail(item, provenance);
+  }
   try {
     switch (provenance.sourceId) {
       case 'kojo-variable':
@@ -529,13 +539,31 @@ export function kojoCompletionRange(model: Monaco.editor.ITextModel, position: M
   };
 }
 
-/** `.kojo` 的装配声明：源集合 + 位置判定 + 回表口径（装配实现零份——吃装配核那一份） */
+/** `.kojo` 的装配声明：源集合 + 位置判定 + 跨装配路由 + 回表口径（装配实现零份——吃装配核那一份） */
 export const KOJO_COMPLETION_ASSEMBLY: CompletionAssembly = {
   languageId: KOJO_LANGUAGE_ID,
   logTag: KOJO_LOG_TAG,
-  triggerCharacters: ['{', '：'],
+  // `{` / `：` 是糖位触发；`#` / `[` 只为原生区（`@` 块里的 `#DIM` / `[SKIPSTART]`）——
+  // 糖位敲 `#` / `[` 时各 source 自身零候选（LEXICON 位置判据不供），不把噪声带进来。
+  triggerCharacters: ['{', '：', '#', '['],
   sources: KOJO_COMPLETION_SOURCES,
   callForm: { sourceIds: CALL_FORM_SOURCE_IDS, keysFor: calleeKeys },
+  /**
+   * 跨装配路由（SUGGEST-2A）：原生区（`@` 块 / 全大写指令行 / `$标签`）整轮交给 ERB 册——
+   * 位置门、候选源、调用形态、resolve 全用 `ERB_COMPLETION_ASSEMBLY` 那一份；糖位返回
+   * `undefined`（用自己）。合并 / 去重 / 排序 / 降级 / snippet 仍只有装配核一条实现。
+   *
+   * 已知边界：`.kojo` 通常不在 ERB 解析器索引里 ⇒ `erbFileFacts.labelsAt` 返回 `undefined`，
+   * `erb-labels` 走**既定**的全文回退（`GOTO` / `JUMP` 可用）；`dimsOf` 返回 `undefined` 则
+   * 按既定语义**零候选不回退**（`#DIM` 声明名在 `.kojo` 上先不要求——不另造一套 .kojo 专用扫描）。
+   *
+   * 派生装配若**替换了 `sources`**（外部扩展 / 测试对拍把候选册换掉），路由让路：这本装配已不是
+   * 本文件声明的糖册，再路由只会把调用方的覆盖整本掀掉（路由选的是"另一本册"，不是"覆盖另一本册"）。
+   */
+  route(this: CompletionAssembly | undefined, _monaco, model, position) {
+    if (this?.sources !== KOJO_COMPLETION_SOURCES) return undefined;
+    return kojoNativeZoneAt(model, position.lineNumber) ? ERB_COMPLETION_ASSEMBLY : undefined;
+  },
   locate(_monaco, model, position) {
     return { range: kojoCompletionRange(model, position), prefix: model.getWordUntilPosition(position).word };
   },
@@ -552,7 +580,10 @@ export const KOJO_COMPLETION_ASSEMBLY: CompletionAssembly = {
 /* ============================== 装配点（转发到装配核） ============================== */
 
 /**
- * 为 `.kojo` 注册**一个**补全 provider（`triggerCharacters` 保守：`{` 与 `：`）。
+ * 为 `.kojo` 注册**一个**补全 provider（`triggerCharacters`：`{` / `：` 是糖位，
+ * `#` / `[` 是原生区标记；其余靠作者主动触发或 Monaco 的词键入）。
+ * 原生区的行由装配声明的 `route` 交给 ERB 册——宿主**不需要**再为 `.kojo` 注册第二个
+ * provider（两个 provider 会在同一位置各弹一套候选，且没有合并/去重的单一出口）。
  * `getTables` 每次补全时才调用（表按当前项目 adapter 实时取，同 hover 纪律）。
  * 返回可释放句柄——宿主在编辑器卸载时 `dispose()`。
  *

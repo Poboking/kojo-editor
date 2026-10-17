@@ -1148,6 +1148,9 @@ export {
   sugarEnterRulePatterns,
   type SugarEnterRulePatterns,
 } from './enter';
+// SUGGEST-2A：行分类单一真源（宿主 `.kojo` 原生区判定用）——判型 / 切行与转译器、回车缩进
+// 同一份实现；宿主不得在 app 层重写原生行正则（additive 纯再导出，旧消费方零改动）。
+export { classifyLine, splitLogicalLines, type LineClass, type LogicalLine } from './lexer';
 // E16：裸引擎全局白名单（`SELECTCOM`/`PREVCOM`/…；判据与实测计数在模块头注）
 export { ENGINE_GLOBAL_IDENTIFIERS, resolveEngineGlobal } from './engine-globals';
 export {
