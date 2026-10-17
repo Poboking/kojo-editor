@@ -2,8 +2,19 @@ import type {
   EditorLanguageServiceContribution,
   EditorWorkspaceSymbol,
   GameProject,
+  ErbScopeStamp,
+} from '@kojo/plugin-api';
+import {
+  CANDIDATE_BUDGETS,
+  SCOPED_QUERY_FACTOR,
+  candidateBudget,
+  candidateRank,
+  filterByScope,
+  pathKey,
+  resolveSugarTarget,
 } from '@kojo/plugin-api';
 import { splitPath } from './path-label';
+import { activeNavScope } from './search-scope';
 
 /**
  * 工作区符号搜索（D2，2026-10-15）的**宿主侧纯逻辑**——对标 VSCode 的 `Ctrl+T`。
@@ -23,22 +34,120 @@ import { splitPath } from './path-label';
  *
  * 为什么是 100 而不是"全部"：语料 99,104 个函数，一屏灌十万行 DOM 会把面板打死；
  * 而**上限不等于丢弃**——被预算挡掉的条数由 `hidden` 原样报给作者在面板里看（铁律 4）。
- * 提供方侧另有一层 `limit`（默认 200）先兜住对象分配，两层各司其职：
+ * 提供方侧另有一层 `limit`（`CANDIDATE_BUDGETS.providerQuery`）先兜住对象分配，两层各司其职：
  * 那层省内存，这层省 DOM。
+ *
+ * 数字本身**不写在这里**：档位表 `CANDIDATE_BUDGETS` 在契约层一处（四通道同读一张表，
+ * 谁是谁的上一档从此有据可查）。
  */
-export const WORKSPACE_SYMBOL_RENDER_LIMIT = 100;
+export const WORKSPACE_SYMBOL_RENDER_LIMIT = CANDIDATE_BUDGETS.render;
 
-/** 一次查询从各应答方合并到的候选（`totalMatched` = 各家命中总数之和，可大于 `symbols.length`） */
+/**
+ * 一次查询从各应答方合并到的候选。
+ *
+ * `totalMatched` = 各家命中总数之和，**减去被糖线并掉的重复报数**（同一函数在源与
+ * 产物里各报一次 = 一个符号），故恒 ≥ `symbols.length`、且可大于它（提供方截断）。
+ */
 export interface WorkspaceSymbolCollection {
   readonly symbols: readonly EditorWorkspaceSymbol[];
   readonly totalMatched: number;
+  /**
+   * 本次合并**实际按哪个范围**收窄（W7 NAV-SCOPE；`null` = 不限）。
+   * 面板据此能说"这轮只看了哪一处"，与全文检索那条 `appliedScope` 同一个形态。
+   */
+  readonly scope?: ErbScopeStamp | null;
+  /**
+   * 因为落在范围外而被丢掉的条数（提供方**没有**按范围过滤时的兜底账；
+   * 0 = 没丢过或提供方已经按同一个戳自己滤过了）。
+   */
+  readonly droppedOutOfScope?: number;
 }
 
-const NO_SYMBOLS: WorkspaceSymbolCollection = { symbols: [], totalMatched: 0 };
+const NO_SYMBOLS: WorkspaceSymbolCollection = { symbols: [], totalMatched: 0, scope: null, droppedOutOfScope: 0 };
 
-/** 去重键（同一处定义被两个应答方同时给出时只留一条；口径与 `collectDefinitionLocations` 一致） */
-function symbolKey(s: EditorWorkspaceSymbol): string {
-  return `${s.name}\u0000${s.filePath}\u0000${s.line}`;
+/**
+ * 带范围时向提供方多要几档（`SCOPED_QUERY_FACTOR`）：宿主这一层的过滤发生在
+ * 提供方**已经按预算截断**之后，仍按原预算问就等于让范围外的那批占掉名额——
+ * 范围内该出现的候选会被静默挤掉，读数上却仍是"没有更多了"。
+ */
+function providerLimitFor(requested: number | undefined, scoped: boolean): number | undefined {
+  if (requested === undefined) return undefined;
+  const base = candidateBudget('providerQuery', requested);
+  return scoped ? Math.min(base * SCOPED_QUERY_FACTOR, CANDIDATE_BUDGETS.ceiling) : base;
+}
+
+/**
+ * 符号的**身份路径**——去重键的坐标系（W6 之后同一函数会从两个坐标系各来一次）。
+ *
+ * 病根：ERB 线说的是**产物**（`M.ERB`），糖线说的是作者能改的**源**（`M.kojo`），
+ * 键里带 `filePath` ⇒ 天然两行。判据只有一条、且住在契约层：`resolveSugarTarget`
+ * （"`.kojo` 源 → 同目录同基名 `.ERB` 产物"的唯一真源，本文件零扩展名正则）。
+ *
+ * - `.kojo` 源 ⇒ 身份 = 它的产物路径；
+ * - 本批里**确有源指向**的产物路径 ⇒ 身份 = 自身（只认本批出现过的源；否则两个
+ *   无关的同名文件会因"长得像产物"被误并）；
+ * - 其余（非方言路径 / 推不出目标）⇒ `null` = 退回旧键，W6 之前的输出逐字不变。
+ */
+function sugarIdentityPath(
+  target: string | null,
+  filePath: string,
+  productKeys: ReadonlySet<string>,
+): string | null {
+  if (target !== null) return pathKey(target);
+  if (productKeys.size === 0) return null; // 本批没有源：连 pathKey 都不付（十万条那一趟）
+  const own = pathKey(filePath);
+  return productKeys.has(own) ? own : null;
+}
+
+interface SymbolDedupe {
+  readonly symbols: readonly EditorWorkspaceSymbol[];
+  /** 被糖线并掉（产物 → 源）的条数：`totalMatched` 必须如实扣回 */
+  readonly sugarMerged: number;
+}
+
+/**
+ * 合并同一符号的两种坐标系（**纯函数**）。
+ *
+ * 优先级：**源胜产物**——`Ctrl+T` 点开的那条要落在作者能改的文件上；先到的那条
+ * 决定可见位置（顺序稳定，不与提供方给的序打架）。键 = `name + 身份路径`，**不含行号**：
+ * 同一函数在源与产物里的行号本来就不同，带行号就永远并不上。
+ *
+ * `sugarMerged` 只数**跨坐标系**并掉的那条：同坐标系的重复（两家给了同一条）沿用
+ * W6 之前的旧口径（只留一条、总数不扣）——那条纪律一变，既有读数全变。
+ */
+function dedupeWorkspaceSymbols(all: readonly EditorWorkspaceSymbol[]): SymbolDedupe {
+  const productKeys = new Set<string>();
+  for (const s of all) {
+    const target = resolveSugarTarget(s.filePath);
+    if (target !== null) productKeys.add(pathKey(target));
+  }
+  const symbols: EditorWorkspaceSymbol[] = [];
+  const seenKey = new Map<string, number>();
+  const keptSource: boolean[] = [];
+  let sugarMerged = 0;
+  for (const s of all) {
+    const target = resolveSugarTarget(s.filePath);
+    const isSource = target !== null;
+    const identity = sugarIdentityPath(target, s.filePath, productKeys);
+    // 两段键（糖身份）/ 三段键（旧口径）形态不同，不会互相撞
+    const key = identity === null ? `${s.name}\u0000${s.filePath}\u0000${s.line}` : `${s.name}\u0000${identity}`;
+    const at = seenKey.get(key);
+    if (at === undefined) {
+      seenKey.set(key, symbols.length);
+      symbols.push(s);
+      keptSource.push(isSource);
+      continue;
+    }
+    if (isSource && !keptSource[at]) {
+      symbols[at] = s; // 产物先到、源后到：源顶掉它，位置不变
+      keptSource[at] = true;
+      sugarMerged += 1;
+    } else if (isSource !== keptSource[at]) {
+      sugarMerged += 1; // 源已在位，这条产物就是被并掉的那条
+    }
+    // 同坐标系重复（两家给了同一条 / 同一文件重名）：只留先到的那条，旧口径
+  }
+  return { symbols, sugarMerged };
 }
 
 /**
@@ -51,6 +160,20 @@ function symbolKey(s: EditorWorkspaceSymbol): string {
  * - 抛错 = 单个应答方故障**不影响其余**（隔离记日志，能力不退化成整条搜索消失）。
  *
  * 空 / 全空白查询不发问：那时要的是"提示作者先打字"，不是十万条名字。
+ *
+ * 合并口径：W6 之后同一函数会从两个坐标系各来一次（ERB 线报产物、糖线报源），去重键
+ * 是**符号身份** `name + 身份路径`（见 `dedupeWorkspaceSymbols`），只留源那一条。
+ *
+ * `scope`（W7 NAV-SCOPE，**additive 可选**）：当前"只看"范围。**不传 ⇒ 读唯一状态源**
+ * `activeNavScope()`——这是"选定范围后 `Ctrl+T` 也只看这一处"的接线方式：调用方
+ * （壳层快捷键，它不该认识范围这个概念）零改动，也不许抄第二份判据。
+ * 显式传 `null` = 本次查询强制不限。
+ *
+ * 两条腿：① 认得范围戳的应答方在**扫描当时**就收窄（`erb-parser` 走 `ErbIndex.scope`，
+ * 少扫就是少扫）；② 宿主再按同一个 `pathInScope` 兜一遍——**不认得的应答方也不漏网**，
+ * 这条通道不必给契约请求成员加字段（`limit` 已经是宿主能给的唯一旋钮：带范围时向
+ * 提供方多要几档，免得范围外那批占掉名额把范围内的候选挤出去）。
+ * 宿主这一遍丢掉的条数如实带在 `droppedOutOfScope` 上——"范围外没扫"必须看得见（铁律 4）。
  */
 export function collectWorkspaceSymbols(
   contributions: readonly EditorLanguageServiceContribution[],
@@ -58,14 +181,17 @@ export function collectWorkspaceSymbols(
     query: string;
     project: GameProject | null;
     limit?: number;
+    scope?: ErbScopeStamp | null;
   },
 ): WorkspaceSymbolCollection {
   const query = args.query.trim();
   if (query.length === 0) return NO_SYMBOLS;
+  const scope = args.scope === undefined ? activeNavScope() : args.scope;
+  const roots = scope?.roots ?? [];
+  const providerLimit = providerLimitFor(args.limit, roots.length > 0);
 
-  const out: EditorWorkspaceSymbol[] = [];
-  const seen = new Set<string>();
-  let totalMatched = 0;
+  const answers: (readonly EditorWorkspaceSymbol[])[] = [];
+  let reportedTotal = 0;
   for (const contribution of contributions) {
     let result: ReturnType<EditorLanguageServiceContribution['provide']>;
     try {
@@ -73,7 +199,7 @@ export function collectWorkspaceSymbols(
         kind: 'workspaceSymbol',
         query: args.query,
         project: args.project,
-        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        ...(providerLimit !== undefined ? { limit: providerLimit } : {}),
       });
     } catch (e: unknown) {
       console.warn(
@@ -82,31 +208,41 @@ export function collectWorkspaceSymbols(
       continue;
     }
     if (!result || result.kind !== 'workspaceSymbol') continue;
-    for (const symbol of result.symbols) {
-      const key = symbolKey(symbol);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(symbol);
-    }
+    answers.push(result.symbols);
     // 提供方没给总数时按"它给了多少就是多少"计（保守：不虚报溢出）
-    totalMatched += result.totalMatched ?? result.symbols.length;
+    reportedTotal += result.totalMatched ?? result.symbols.length;
   }
-  return { symbols: out, totalMatched };
-}
-
-/** 排名桶（小者靠前）：精确名 → 前缀名 → 名含子串 → 只有路径含子串 */
-function symbolRank(lowerName: string, lowerPath: string, q: string): number {
-  if (lowerName === q) return 0;
-  if (lowerName.startsWith(q)) return 1;
-  if (lowerName.includes(q)) return 2;
-  if (lowerPath.includes(q)) return 3;
-  return 4;
+  const deduped = dedupeWorkspaceSymbols(answers.flat());
+  const symbols = filterByScope(deduped.symbols, (s) => s.filePath, roots);
+  return {
+    symbols,
+    // 契约的 `totalMatched` 是"提供方报告的命中总数"，而同一函数在源与产物里各被
+    // 报过一次（两家、两个坐标系）⇒ 并掉的 `sugarMerged` 条要从和小扣回，否则
+    // 面板会报一条永远列不出来的"另有 N 条"（假读数，铁律 4）。
+    // 范围外的那批同理不算命中：把"被范围挡掉"报成"溢出未列出"也是假读数。
+    totalMatched: Math.max(
+      symbols.length,
+      reportedTotal - deduped.sugarMerged - (deduped.symbols.length - symbols.length),
+    ),
+    scope,
+    droppedOutOfScope: deduped.symbols.length - symbols.length,
+  };
 }
 
 /**
- * 排序 + 截断（**纯函数**；照 `filterFileCandidates` 的口径：**名字命中优先于路径命中**）。
+ * 排名桶（小者靠前）：**比较器单源** `candidateRank`（契约层）。
+ * 四通道（全文检索 / 函数树 / `Ctrl+T` / `Ctrl+P`）读同一张桶表 ⇒ 同一个查询
+ * 在任何一处都是同一个顺序；`erb-parser` 提供方侧用的也是这一份。
+ */
+function rankSymbol(symbol: EditorWorkspaceSymbol, q: string): number {
+  return candidateRank(symbol.name, symbol.filePath, q);
+}
+
+/**
+ * 排序 + 截断（**纯函数**；桶序 = 契约层的 `candidateRank` 一份比较器，
+ * 与 `filterFileCandidates` / 函数树搜索 / 全文检索候选**同桶同序**）。
  *
- * - 大小写不敏感（比较前两侧都 `toLowerCase()`；中文函数名不受影响，与原生大写名同一条路）；
+ * - 大小写不敏感（比较前两侧都归一；中文函数名不受影响，与原生大写名同一条路）；
  * - **只排名、不再过滤一次**：候选合不合查询是**应答方**的口径（它可能是子串、也可能是
  *   将来的拼音/模糊命中），宿主拿自己的子串判据二次筛等于抄第二份口径——被偷偷滤掉的那条
  *   就是"明明有却说没有"的成因。认不出的候选排到最后，不删；
@@ -122,14 +258,10 @@ export function pickWorkspaceSymbols(
   const q = query.trim().toLowerCase();
   if (q.length === 0) return { items: [], hidden: 0 };
   const ranked = collected.symbols
-    .map((symbol, i) => ({
-      symbol,
-      i,
-      rank: symbolRank(symbol.name.toLowerCase(), symbol.filePath.toLowerCase(), q),
-    }))
+    .map((symbol, i) => ({ symbol, i, rank: rankSymbol(symbol, q) }))
     // 先按桶、再按入参序（`Array#sort` 在现代引擎稳定，但这里不依赖实现：显式比 `i`）
     .sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.i - b.i));
-  const budget = Number.isFinite(cap) && cap > 0 ? Math.trunc(cap) : WORKSPACE_SYMBOL_RENDER_LIMIT;
+  const budget = candidateBudget('render', cap);
   const items = ranked.slice(0, budget).map((r) => r.symbol);
   return { items, hidden: Math.max(0, collected.totalMatched - items.length) };
 }

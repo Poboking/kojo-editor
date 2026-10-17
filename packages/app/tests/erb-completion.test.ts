@@ -129,7 +129,7 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
     dispose.dispose();
   });
 
-  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，R4 骨架 + EC-1..EC-5 + D7 七个 source 全在册', () => {
+  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，R4 骨架 + EC-1..EC-5 + D7 + 跨语言词形八个 source 全在册', () => {
     expect(Array.isArray(ERB_COMPLETION_SOURCES)).toBe(true);
     expect(ERB_COMPLETION_SOURCES.map((s) => s.id)).toEqual([
       'erb-snippet',
@@ -139,6 +139,8 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
       'erb-labels',
       'erb-system-functions',
       'erb-bits',
+      // COMPL-SHARED：跨语言词形（`.kojo` 写法）在册，源缺席即零候选（可注入、不抄语法扫描）
+      'erb-kojo-forms',
     ]);
   });
 });
@@ -332,7 +334,12 @@ function threeStatesErb(
     degrades.filter((d) => d.sourceId === id && d.missing === key).length;
 
   // 态 A：满表 ⇒ 变量 / 函数名各路出货，零降级信号
-  setTables({ variableSchema: fakeSchema(), erbFunctionNames: () => PROJECT_FNS });
+  // （COMPL-SHARED 的跨语言词形源也要喂上：缺键会各首发一次降级）
+  setTables({
+    variableSchema: fakeSchema(),
+    erbFunctionNames: () => PROJECT_FNS,
+    kojoForms: () => [{ label: '如果', detail: '.kojo 词形' }],
+  });
   expect(has('CFLAG:', 7, '好感度')).toBe(true);
   expect(has('CALL M_KOJO', 11, 'M_KOJO_A')).toBe(true);
   expect(degrades).toEqual([]);
@@ -405,5 +412,7 @@ describe('SH-4 · 依赖表 / 提供者缺席 = 降级不静默（三态可复�
     expect(byId.get('erb-directives')).toBeUndefined();
     expect(byId.get('erb-labels')).toBeUndefined();
     expect(byId.get('erb-system-functions')).toBeUndefined();
+    // COMPL-SHARED：跨语言词形走注入位（缺源 = 该路零候选 + 一次可见降级，不抄语法扫描）
+    expect(byId.get('erb-kojo-forms')).toBe('kojoForms');
   });
 });

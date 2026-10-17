@@ -2,28 +2,35 @@ import type { DiffViewSide, KernelEventMap } from '@kojo/plugin-api';
 import type { Kernel } from '@kojo/kernel';
 import { ERB_LANGUAGE_ID } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../monaco/kojo-language';
+import { diffPaneKeyOf, pushDiff, type DiffRequest } from './diff-core';
 
 /**
- * 通用 diff 视图的宿主状态（2026-10-15 比对/历史批）。
+ * 通用 diff 视图的宿主接线（2026-10-15 比对/历史批；W10 第 2 点改多开栈）。
  *
- * 形态照 `search-store.ts`：模块级单源 + 订阅；组件只读投影，意图经内核事件
- * `ui.diffView.open` 进来（插件发意图、宿主落地）。逻辑（校验/取侧语言/落地）
- * 全部住本文件——零 React、零 Monaco import，node 环境可直接单测。
+ * 形态照 `search-store.ts`：状态单源 + 订阅，组件只读投影，意图经内核事件
+ * `ui.diffView.open` 进来（插件发意图、宿主落地）。
+ *
+ * 本文件只留**校验 / 取侧语言 / 事件落地**三件事；"开着哪几组比对"的状态格子
+ * 住在 `diff-core.ts`（比对栈），所以这里不再有任何单例字段。判等口径按组长
+ * 收窄令**保持原样**，不在本批动。零 React、零 Monaco import，node 可单测。
  */
 
 /** 宿主 overlay 贡献 id（`App.tsx` 接线注册；`ui.overlay.open` 按此找组件） */
 export const DIFF_VIEW_OVERLAY_ID = 'kojo.diffView';
 
-export interface DiffRequest {
-  title: string;
-  original: DiffViewSide;
-  modified: DiffViewSide;
-}
-
-/** diff 视图状态：就绪 / 被拒（拒绝必须可见——铁律「不静默」） */
-export type DiffViewState =
-  | { kind: 'request'; request: DiffRequest }
-  | { kind: 'rejected'; reason: string };
+export type { DiffPane, DiffRequest, DiffStateInput, DiffViewState } from './diff-core';
+export {
+  clearDiff,
+  closeDiffPane,
+  diffPaneKeyOf,
+  focusDiffPane,
+  getDiffPanes,
+  getDiffState,
+  pushDiff,
+  setDiffState,
+  subscribeDiff,
+  topDiffPane,
+} from './diff-core';
 
 /**
  * 校验 diff 请求，返回拒绝原因（null = 合法）。
@@ -48,25 +55,6 @@ export function languageIdForSide(side: DiffViewSide): string {
   return 'plaintext';
 }
 
-/* ------------------------------ 状态单源 ------------------------------ */
-
-let current: DiffViewState | null = null;
-const listeners = new Set<() => void>();
-
-export function getDiffState(): DiffViewState | null {
-  return current;
-}
-
-export function setDiffState(next: DiffViewState | null): void {
-  current = next;
-  for (const cb of [...listeners]) cb();
-}
-
-export function subscribeDiff(cb: () => void): () => void {
-  listeners.add(cb);
-  return () => listeners.delete(cb);
-}
-
 /* ------------------------------ 内核接线 ------------------------------ */
 
 type DiffOpenPayload = KernelEventMap['ui.diffView.open'];
@@ -76,15 +64,19 @@ function toRequest(p: DiffOpenPayload): DiffRequest {
 }
 
 /**
- * 订阅 `ui.diffView.open` → 落状态 → 打开宿主 overlay。
+ * 订阅 `ui.diffView.open` → 入栈一格比对 → 打开宿主 overlay。
  * 返回卸载函数。校验失败**照样开窗**（rejected 态由 overlay 呈现原因）——
  * 拒绝如果只进控制台，用户看到的仍是"点了没反应"。
+ *
+ * 多开：不同内容各占一格（`diffPaneKeyOf` 派生身份），同一对内容重开只把那一格
+ * 置顶刷新；关掉当前这格回到上一格比对。事件形态未变 ⇒ 既有发起方零改动。
  */
 export function bindDiffView(kernel: Kernel): () => void {
   return kernel.bus.on('ui.diffView.open', (p) => {
     const request = toRequest(p);
+    const key = diffPaneKeyOf(request);
     const reason = validateDiffRequest(request);
-    setDiffState(reason !== null ? { kind: 'rejected', reason } : { kind: 'request', request });
+    pushDiff(reason !== null ? { kind: 'rejected', key, reason } : { kind: 'request', key, request });
     kernel.bus.emit('ui.overlay.open', { id: DIFF_VIEW_OVERLAY_ID, source: 'host:diff-view' });
   });
 }

@@ -17,6 +17,7 @@ import type {
   VariableSchema,
 } from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { ERB_COMPLETION_SOURCES } from '../src/monaco/erb-completion';
 import {
   KOJO_COMPLETION_SOURCES,
   installKojoCompletion,
@@ -118,6 +119,13 @@ describe('C-1 · .kojo 补全装配（provider 注册）', () => {
   it('KC-3 / KC-4 已接入扩展点：指令名与库函数名 source 在册', () => {
     expect(KOJO_COMPLETION_SOURCES.some((s) => s.id === 'kojo-instruction')).toBe(true);
     expect(KOJO_COMPLETION_SOURCES.some((s) => s.id === 'kojo-library')).toBe(true);
+  });
+
+  it('COMPL-SHARED 已接入扩展点：项目函数名 source 在册（与 `.erb` 同一份表、同一个 requires 键）', () => {
+    const source = KOJO_COMPLETION_SOURCES.find((s) => s.id === 'kojo-functions');
+    expect(source).toBeDefined();
+    expect(source!.requires).toBe('erbFunctionNames');
+    expect(ERB_COMPLETION_SOURCES.find((s) => s.id === 'erb-functions')!.requires).toBe('erbFunctionNames');
   });
 });
 
@@ -226,7 +234,14 @@ function threeStatesKojo(
     degrades.filter((d) => d.sourceId === id && d.missing === key).length;
 
   // 态 A：满表 ⇒ 变量 / 分野各路出货，零降级信号
-  setTables({ variableSchema: schemaX, faceTable: faceX, instructionTable: instructionX, libraryTable: libraryX });
+  // （COMPL-SHARED 起 `kojo-functions` 也吃表：项目函数名提供者缺席会首发一次降级，故喂上）
+  setTables({
+    variableSchema: schemaX,
+    faceTable: faceX,
+    instructionTable: instructionX,
+    libraryTable: libraryX,
+    erbFunctionNames: () => [],
+  });
   expect(has('{她的', '', 4, '甲旗')).toBe(true);
   expect(has('时机 初', '初', 5, '初见')).toBe(true);
   expect(degrades).toEqual([]);

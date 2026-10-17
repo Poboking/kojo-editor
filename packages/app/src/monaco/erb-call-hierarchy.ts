@@ -1,4 +1,5 @@
-import type { ErbFunction, ErbFunctionRef, ErbIndex, ErbReference } from '@kojo/plugin-api';
+import type { EnclosingMode, ErbFunction, ErbFunctionRef, ErbIndex, ErbReference } from '@kojo/plugin-api';
+import { enclosingAt } from '@kojo/plugin-api';
 
 /**
  * ERB 调用层级（2026-10-16 批 E）——**数据层**：入边 / 出边的收集与所属函数反查。
@@ -19,8 +20,10 @@ import type { ErbFunction, ErbFunctionRef, ErbIndex, ErbReference } from '@kojo/
  *   按被调名分组。只认 `call`（CALL 直系族名字槽，引擎"按名调用"的可证明子集）；
  *   `mention`（表达式函数调用等）**不进**出边——宁可少报不误报，与索引自身的口径同方向。
  * - **所属函数反查**：优先走解析器的 `functionAt` 通道（"行 → 函数"的单一真源，
- *   缺席 = 提供方未实现）；缺席时退化到同一份索引 `files` 的定义区间包含判断
- *   （`ErbFunction.startLine..endLine`，含端点——与大纲面包屑的区间口径一致）。
+ *   缺席 = 提供方未实现）；缺席时退化到同一份索引 `files` 的定义区间包含判断——
+ *   那条尺子**不在本文件写**，与大纲 / 面包屑 / 跳状态读的是契约层同一份
+ *   （`enclosingAt(..., 'innermost')`，W7 NAV-SCOPE 批：此前这里用 `find` 取**第一个**
+ *   区间包含者，是四份判据里唯一按文档序裁决的那一份）。
  *   反查不了（行漂移 / 索引缝）⇒ 跳过该条——**fail-open，宁缺毋错**。
  * - **索引未建 / 名字不在索引** ⇒ 空结果，不猜。
  *
@@ -58,13 +61,15 @@ export type FunctionAtResolver = (path: string, line: number) => ErbFunction | n
  * - `functionAt` 在场：它是"行 → 函数"的单一真源，答 `undefined` 就是权威答案
  *   （契约明确"不在任何函数体内一律 undefined，不夹取"）；答 `null`（通道缺席）或
  *   抛错才退化自扫——两套判据只在"通道根本没接上"时兜底，不叠加制造漂移面。
- * - `functionAt` 缺席（`null`）：退化到同一份索引 `files` 的定义区间包含判断。
+ * - `functionAt` 缺席（`null`）：退化到同一份索引 `files` 上的**同一把尺子**
+ *   （契约层 `enclosingAt`，`mode` 原样透传 ⇒ 兜底与真源不会给出两种答案）。
  */
 export function resolveEnclosingFunction(
   index: ErbIndex,
   functionAt: FunctionAtResolver | null,
   filePath: string,
   line: number,
+  mode: EnclosingMode = 'innermost',
 ): ErbFunction | undefined {
   if (functionAt) {
     try {
@@ -74,9 +79,9 @@ export function resolveEnclosingFunction(
       // 通道抛错 ⇒ 退化到本地区间判断（不把一次查询带崩）
     }
   }
-  const file = index.files.get(filePath);
+  const file = index?.files?.get(filePath);
   if (!file) return undefined;
-  return file.functions.find((f) => f.startLine <= line && line <= f.endLine);
+  return enclosingAt(file.functions, line, mode);
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { EditorDocumentSymbol } from '@kojo/plugin-api';
+import { enclosingChainAt } from '@kojo/plugin-api';
 import { LARGE_FILE_LINES } from './editor-options';
 
 /**
@@ -25,26 +26,17 @@ export interface CrumbItem {
 /**
  * 光标行 → 符号链（外 → 内，1 基闭区间）。
  *
- * 每层取**区间最小**的包含项（ERB 侧是平铺的函数/声明列表、`.kojo` 侧是嵌套树，两种形状
- * 都走这一条判据），然后下钻 `children`。不含该行即断链——**不猜**父级。
- * 区间相同（同层双胞胎）时取文档序第一枚，保证确定性。
+ * **判据不在本文件**（W7 NAV-SCOPE）：区间包含、平局折法、嵌套下行全在契约层的
+ * `enclosingChainAt` 一处——同一行此前有四份尺子（面包屑 / 大纲吸顶 / 跳状态 / 调用层级），
+ * 各给各的答案，没有裁决者。现在四条消费者读同一条，差异只体现在**模式参数**上
+ * （面包屑与吸顶要最内层 ⇒ 链尾；跳状态要"这一行属于哪个函数"⇒ 同一条链上取
+ * 最后一个 `kind === 'function'` 的节点）。
+ *
+ * 与旧口径的一致性（逐条钉在 `tests/breadcrumb-path.test.ts`）：平铺结构与嵌套树走同一条
+ * 判据；不含该行 ⇒ 空链（**不猜**）；同区间双胞胎只留文档序第一枚（确定性）。
  */
 export function symbolChainAt(symbols: readonly EditorDocumentSymbol[], line: number): EditorDocumentSymbol[] {
-  const chain: EditorDocumentSymbol[] = [];
-  let level: readonly EditorDocumentSymbol[] = symbols;
-  for (;;) {
-    let pick: EditorDocumentSymbol | undefined;
-    for (const symbol of level) {
-      if (symbol.startLine <= line && line <= symbol.endLine) {
-        if (!pick || symbol.endLine - symbol.startLine < pick.endLine - pick.startLine) pick = symbol;
-      }
-    }
-    if (pick === undefined) break;
-    chain.push(pick);
-    level = pick.children ?? [];
-    if (level.length === 0) break;
-  }
-  return chain;
+  return enclosingChainAt(symbols, line);
 }
 
 /** 符号链 → 面包屑项（宿主 setState 前的形状收窄；等值判据见 `crumbsKey`） */

@@ -47,6 +47,21 @@ describe('problem-store', () => {
     expect(snapshot()[0]?.code).toBeUndefined();
   });
 
+  it('W9：保留波浪线的列区间（面板跳源靠它，丢了就落回行首）', () => {
+    const withSpan: EditorProblem = {
+      path: 'a.erb',
+      line: 4,
+      severity: 'error',
+      message: '结构不闭合',
+      span: { columnStart: 3, columnEnd: 11 },
+    };
+    setProblems('a.erb', [withSpan]);
+    expect(snapshot()[0]?.span).toEqual({ columnStart: 3, columnEnd: 11 });
+    // 整份替换语义不变：新的没有区间就是真的没有区间（不留旧区间当幽灵）
+    setProblems('a.erb', [mk('a.erb', 4, 'error')]);
+    expect(snapshot()[0]?.span).toBeUndefined();
+  });
+
   it('clearProblems：只清指定路径，其余不动', () => {
     setProblems('a.erb', [mk('a.erb', 1, 'error')]);
     setProblems('b.erb', [mk('b.erb', 1, 'error')]);

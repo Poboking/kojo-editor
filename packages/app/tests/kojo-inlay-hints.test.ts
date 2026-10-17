@@ -48,14 +48,16 @@ const modelWith = (lineCount: number, maxColumn = 40): Monaco.editor.ITextModel 
     getLineMaxColumn: () => maxColumn,
   }) as unknown as Monaco.editor.ITextModel;
 
-/** 桩 monaco：注册面捕获 provider + 运行时枚举（同 erb-rename.test.ts 口径） */
+/** 桩 monaco：注册面捕获 provider + 语言 id（同 erb-rename.test.ts 口径） */
 function stubMonaco() {
   const providers: Monaco.languages.InlayHintsProvider[] = [];
+  const languageIds: string[] = [];
   const subs: Array<{ disposed: boolean }> = [];
   const monaco = {
     languages: {
-      registerInlayHintsProvider: (_lang: string, provider: Monaco.languages.InlayHintsProvider) => {
+      registerInlayHintsProvider: (lang: string, provider: Monaco.languages.InlayHintsProvider) => {
         providers.push(provider);
+        languageIds.push(lang);
         const sub = { disposed: false };
         subs.push(sub);
         return { dispose: () => void (sub.disposed = true) };
@@ -63,7 +65,7 @@ function stubMonaco() {
       InlayHintKind: { Type: 1, Parameter: 2 },
     },
   };
-  return { monaco: monaco as unknown as typeof Monaco, providers, subs };
+  return { monaco: monaco as unknown as typeof Monaco, providers, subs, languageIds };
 }
 
 describe('inlayHintsAffordable · 体量档（判在问供方之前）', () => {
@@ -160,13 +162,14 @@ describe('installInlayHintsProvider · 注册与回收', () => {
     ),
   };
 
-  it('ERB + `.kojo` 两门语言同供方；dispose 成对', () => {
-    const { monaco, subs, providers } = stubMonaco();
+  it('ERB + `.kojo` 两门语言同供方（注册面拉平，W6）；dispose 成对', () => {
+    const { monaco, subs, providers, languageIds } = stubMonaco();
     const disposer = installInlayHintsProvider(monaco, handlers);
-    expect(subs).toHaveLength(2);
+    // 判据全在 `resolve` 里逐次现判 ⇒ 注册面多一门语言零代价，`.kojo` 不必回来改这里
+    expect([...languageIds].sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(providers).toHaveLength(2);
     disposer.dispose();
     expect(subs.every((s) => s.disposed)).toBe(true);
-    void providers;
   });
 
   it('resolve 抛错 ⇒ 空提示 + warn（不把编辑器输入链带崩）', () => {

@@ -1,20 +1,29 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-api';
-import { WellKnownCommands } from '@kojo/plugin-api';
+import { NAV_SCOPE_EVENT, WellKnownCommands } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { ProblemPanel } from './ProblemPanel';
 import { SearchPanel } from './SearchPanel';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
-import { FileTree } from './FileTree';
+import { FileTree, walkDialectPaths } from './FileTree';
 import { revealInExplorer } from './reveal-explorer';
 import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
 import { Icon } from './icons';
 import type { ShellCommandSpec } from './commands';
-import { collectSearchScopes, type SearchScopeCatalog } from './search-scope';
+import {
+  collectSearchScopes,
+  filterPathsByActiveScope,
+  resolveScope,
+  setActiveScope,
+  type SearchScopeCatalog,
+} from './search-scope';
+import { listSourceFiles, mergeCandidatePaths } from './commands';
 import { createFileReplaceRunner } from './search-replace-exec';
-import { setReplaceRunner } from './search-store';
+import { createProjectNameLedger } from './name-ledger';
+import { revealLocationOf } from '../monaco/reveal-position';
+import { setReplaceRunner, snapshot as readSearchState, subscribe as subscribeSearchState } from './search-store';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
 import { workspaceRootsOf } from './workspace-roots';
 import { useNotify } from './NotificationCenter';
@@ -251,6 +260,19 @@ export function ProjectView({
   const activeFileRef = useRef(activeFile);
   activeFileRef.current = activeFile;
 
+  /**
+   * 检索范围候选（C3 领域限定检索批）：**判据不在本层**。宿主只做接线——问槽上
+   * 有哪些提供方、把当前项目递回去、拿回"标签 + 目录"这两样自己不需要理解的泛型事实。
+   * 没有任何提供方（没开项目 / 游戏不给这概念）⇒ 候选空 ⇒ 面板整行不画 = 今天的行为。
+   *
+   * 依赖刻意只到 `project`（不跟 `roots`）：候选是项目的属性，收窄在发请求那一刻才做。
+   * （W7 起这份候选还多喂一处：下面的"只看"接线要按 `key` 找回位置集合。）
+   */
+  const searchScopes = useMemo(
+    () => collectSearchScopes(kernel.slots.query('search.scope'), project),
+    [kernel, project],
+  );
+
   // 统计（v0.1 验收指标：角色数 / 文件数 / 函数数）
   let fileCount = 0;
   let fnCount = 0;
@@ -261,8 +283,69 @@ export function ProjectView({
     }
   }
 
-  // 快速打开候选（P2）：索引全量文件路径（壳层只消费泛型路径列表）
-  const quickOpenFiles = useMemo<string[]>(() => (index ? [...index.files.keys()].sort() : []), [index]);
+  /**
+   * 「只看」范围的**接线**（W7 NAV-SCOPE）：选择器住在搜索面板（它的状态在检索 store 里），
+   * 而这条范围现在要喂**四条**通道——全文检索（面板自己收窄检索根）、函数树（插件，经总线）、
+   * `Ctrl+T`（`collectWorkspaceSymbols` 读同一状态源）、`Ctrl+P`（这里过滤候选清单）。
+   *
+   * 宿主这一层只做两件事：把选择器 `key` 翻成**泛型事实**（`key` + 位置集合），
+   * 写进唯一状态源并广播给插件侧。订阅只认 `scopeKey` 一个字段：检索 store 每敲一个字符
+   * 都 notify，整壳层跟着重渲是白付的钱。
+   */
+  const [scopeKey, setScopeKey] = useState<string>(() => readSearchState().scopeKey);
+  useEffect(
+    () =>
+      subscribeSearchState(() => {
+        const next = readSearchState().scopeKey;
+        setScopeKey((prev) => (prev === next ? prev : next));
+      }),
+    [],
+  );
+  const navScope = useMemo(
+    () => resolveScope(searchScopes.items, scopeKey),
+    [searchScopes, scopeKey],
+  );
+  useEffect(() => {
+    setActiveScope(navScope);
+    // 插件侧消费者（函数树）与宿主侧消费者读同一份戳；事件名是契约常量，两侧不各写字符串
+    kernel.bus.emit(NAV_SCOPE_EVENT, navScope);
+  }, [kernel, navScope]);
+
+  /**
+   * 快速打开的候选（P2 → W7 NAV-SCOPE）。
+   *
+   * 两件事变了形态：**① 不再只有 ERB 索引**——口上域的递归列举把 `.kojo` 这些方言文件
+   * 也带进来（写了半天的糖源文件按 Ctrl+P 搜不到，是"索引即全部"这个假设的账单）；
+   * **② 跟着"只看"走**——选定范围后候选清单就只剩那一处（与另三条通道同一个戳、同一条
+   * `pathInScope`；判据不在宿主里重写）。列举失败 ⇒ 退回索引那份，不炸面板。
+   */
+  const [dialectFiles, setDialectFiles] = useState<readonly string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const walk = kernel.io.walkDir.bind(kernel.io);
+    void walkDialectPaths(walk, project.kojoPaths)
+      .then((files) => {
+        if (alive) setDialectFiles(files);
+      })
+      .catch(() => {
+        // 读不到附加清单不是故障上屏的理由：索引那份照样能开文件，只是少了非 ERB 的那些
+        if (alive) setDialectFiles([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [kernel, project]);
+
+  const quickOpenFiles = useMemo<string[]>(
+    () =>
+      filterPathsByActiveScope(
+        mergeCandidatePaths([index ? [...index.files.keys()] : [], dialectFiles]),
+        (p) => p,
+      ),
+    // navScope 是真实依赖（状态源的读数）：范围换了要重算候选——memo 体只读模块状态，
+    // 不写进依赖就等于把"只看"又变成一个不会失效的旧读数
+    [index, dialectFiles, navScope],
+  );
 
   // 编辑器区壳层命令（P3：关闭标签 / 全部保存——容器语义，零业务知识）。
   // 键位从键位注册表现取（R8）：缺省 + 用户改键覆盖，kbVersion 变化即重建。
@@ -506,6 +589,8 @@ export function ProjectView({
   // 底部「问题」面板（HK-4 · UI-6）的**稳定组件身份**：同 fileTreeComponent 的 ref 闭包写法——
   // 内建视图组件不要每次 render 换新类型（会 remount 丢掉内部 state），用 ref 持有最新 kernel。
   // 跳源行走既有通道 `editor.revealLocation`（宿主 App.tsx 监听并打开文件定位行）。
+  // W9 判据①：载荷一律由 `revealLocationOf` 折出来——面板给的列区间（波浪线那段）
+  // 必须跟到落点，否则"点问题落在行首、同一处按 F12 落在名字那一列"。
   const problemArgsRef = useRef({ kernel });
   problemArgsRef.current = { kernel };
   const problemComponent = useMemo(() => {
@@ -513,8 +598,8 @@ export function ProjectView({
       const a = problemArgsRef.current;
       return (
         <ProblemPanel
-          onReveal={(path, line) =>
-            a.kernel.bus.emit('editor.revealLocation', { filePath: path, line, source: '问题' })
+          onReveal={(path, line, span) =>
+            a.kernel.bus.emit('editor.revealLocation', revealLocationOf({ path, line, span }, '问题'))
           }
         />
       );
@@ -523,24 +608,17 @@ export function ProjectView({
   }, []);
 
   /**
-   * 检索范围候选（C3 领域限定检索批）：**判据不在本层**。宿主只做接线——问槽上
-   * 有哪些提供方、把当前项目递回去、拿回"标签 + 目录"这两样自己不需要理解的泛型事实。
-   * 没有任何提供方（没开项目 / 游戏不给这概念）⇒ 候选空 ⇒ 面板整行不画 = 今天的行为。
-   *
-   * 依赖刻意只到 `project`（不跟 `roots`）：候选是项目的属性，收窄在发请求那一刻才做。
-   */
-  const searchScopes = useMemo(
-    () => collectSearchScopes(kernel.slots.query('search.scope'), project),
-    [kernel, project],
-  );
-
-  /**
    * 替换执行器装配（R7 搜索替换批）：内核 io 通道（读改写保编码 + 原子写 + 备份，
    * 写允许域由内核强制）+ Monaco live model 通道，随 kernel 生命周期装卸。
    * 未装配时搜索面板的替换入口会被状态机锁住并明示（不静默）。
+   * `nameLedger` = F2 改名用的**同一份**出现点台账判据（`.erb` 索引 + `.kojo` 糖源都走
+   * 这两条腿）：不接则「全部替换」只看得到已开标签里的糖源，检索范围外的同名记号
+   * 没人说出来（W8 XLANG-RENAME 的跨通道回执）。
    */
   useEffect(() => {
-    setReplaceRunner(createFileReplaceRunner({ io: kernel.io }));
+    setReplaceRunner(
+      createFileReplaceRunner({ io: kernel.io, nameLedger: createProjectNameLedger(kernel) }),
+    );
     return () => setReplaceRunner(null);
   }, [kernel]);
 
@@ -566,13 +644,10 @@ export function ProjectView({
           roots={a.roots}
           scopes={a.scopes.items}
           scopeNotices={a.scopes.notices}
-          onReveal={(path, line, column) =>
-            a.kernel.bus.emit('editor.revealLocation', {
-              filePath: path,
-              line,
-              column,
-              source: '搜索',
-            })
+          onReveal={(path, line, span) =>
+            // W9 判据①：与问题面板同一个载荷出口（区间折列住在 `revealLocationOf`，
+            // 这里不再自己写一遍"`column` = 区间起点"）
+            a.kernel.bus.emit('editor.revealLocation', revealLocationOf({ path, line, span }, '搜索'))
           }
         />
       );

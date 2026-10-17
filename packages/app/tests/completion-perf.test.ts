@@ -11,9 +11,10 @@
  * - (b) **大文件标签扫描**：~20,000 行 / 400 个 `$标签` 的 `.erb` 文本 → `erbLabelCompletionItems`
  *   在 `GOTO $` 位。冷路径 = `getVersionId` **每次自增**（缓存全失效，每击键重扫全文）；
  *   热路径 = 版本号**不变**（命中 SH-3 的版本记忆化，复用上次数组）。两者差值 = 缓存收益。
- * - (c) **kojo 大文件别名扫描**：~10,000 行 `.kojo` 经 `KOJO_COMPLETION_SOURCES` 走
+ * - (c) **kojo 大文件声明扫描**：~10,000 行 `.kojo` 经 `KOJO_COMPLETION_SOURCES` 走
  *   `installKojoCompletion` 的真实装配点（provider → `mergeSuggestions` 一轮整体延迟；
- *   别名 `别名 X = …` 是**全文件正则扫描**，每次都跑）。
+ *   COMPL-SHARED 起声明名判据 = **解析器**（不再是第二份正则），按 model 版本 / 文本身份记忆化
+ *   ⇒ 同一份文本只解析一次，热路径不替全文解析买单）。
  *
  * 桩 monaco / 桩 model 照抄 `erb-completion.test.ts` 口径；桩 model 额外提供 `getVersionId`。
  */
@@ -255,7 +256,7 @@ describe('SH-3 · (c) kojo 大文件别名扫描（provider → mergeSuggestions
     const { monaco, registered } = stubMonaco();
     installKojoCompletion(monaco, () => ({}));
     expect(registered).toHaveLength(1);
-    expect(KOJO_COMPLETION_SOURCES).toHaveLength(6); // 块头模板 / 词表 / 变量 / 分野 / 指令名 / 库函数名六源一轮
+    expect(KOJO_COMPLETION_SOURCES).toHaveLength(7); // 块头模板 / 词表 / 变量 / 分野 / 指令名 / 库函数名 / 项目函数名七源一轮
 
     const provider = registered[0]!.provider;
     const { text, lineNumber, column } = bigKojoText();
@@ -267,7 +268,7 @@ describe('SH-3 · (c) kojo 大文件别名扫描（provider → mergeSuggestions
       provider.provideCompletionItems(model, pos, {} as Monaco.languages.CompletionContext, token);
     };
 
-    // 别名 source 每次 `model.getValue()` 全文正则 ⇒ 单次与文件体量线性挂钩
+    // 声明 source 每次取全文走解析器（判据单一真源）；文本身份命中记忆化 ⇒ 稳态不重解析
     const out = provider.provideCompletionItems(
       model,
       pos,

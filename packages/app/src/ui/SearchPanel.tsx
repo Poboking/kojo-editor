@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { SearchMatch } from '../bridge/search';
+import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import {
   clearSearchResult,
   requestReplaceFocus,
@@ -91,7 +92,27 @@ export interface SearchPanelProps {
   scopes?: readonly SearchScopeItem[];
   /** 范围提供方侧的可见故障说明（提供方抛错 / 候选非法；空 = 不画） */
   scopeNotices?: readonly string[];
-  onReveal: (path: string, line: number, column: number) => void;
+  /**
+   * 跳源：路径 + 行 + **命中的列区间**（W9 落点 span 批）。
+   * 第 3 位此前是裸 `column`——同一处位置，定义那条腿给的是区间、这条给的是一头，
+   * 落点必然分叉；现在六条发起方统一交区间（缺区间才退化，退化判据在 `reveal-position`）。
+   */
+  onReveal: (path: string, line: number, span?: RevealSpan) => void;
+}
+
+/**
+ * 一条命中 → 落点区间（纯函数，可单测）。
+ *
+ * `column` 是命中在**原行**里的 1 基起点，`start` / `end` 是命中在 `preview` 里的偏移
+ * （预览以命中为中心开窗，命中本身整段在内 ⇒ `end - start` 就是它在原行里的宽度）。
+ * 这里**只算宽度、不夹取**：越界怎么收（终点超过行长 / 起点超过终点）全归
+ * `clampRevealPosition`，第二份夹取必然与编辑器那头漂。
+ */
+export function searchMatchSpan(match: SearchMatch): RevealSpan | undefined {
+  const start = revealSpanOf({ column: match.column });
+  if (!start) return undefined;
+  const width = Math.max(0, Math.trunc(match.end) - Math.trunc(match.start));
+  return { columnStart: start.columnStart, columnEnd: start.columnStart + width };
 }
 
 export function SearchPanel({
@@ -334,7 +355,7 @@ export function SearchPanel({
                 <button
                   className="search-match"
                   title={`${row.path}:${row.match.line}`}
-                  onClick={() => onReveal(row.path, row.match.line, row.match.column)}
+                  onClick={() => onReveal(row.path, row.match.line, searchMatchSpan(row.match))}
                 >
                   <span className="search-loc dim">{matchLocationLabel(row.match)}</span>
                   <MatchPreview match={row.match} />

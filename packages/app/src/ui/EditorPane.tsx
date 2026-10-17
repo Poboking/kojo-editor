@@ -33,17 +33,22 @@ import {
   withinCodeLensBudget,
 } from '../monaco/kojo-code-lens';
 import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
-import { collectDefinitionLocations, installDefinitionProvider } from '../monaco/kojo-definition';
+import { collectDefinitionLocations, installDefinitionProvider, type DefinitionLocation } from '../monaco/kojo-definition';
 import {
   collectInlayHints,
   inlayHintsAffordable,
   installInlayHintsProvider,
 } from '../monaco/kojo-inlay-hints';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
-import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
+import { clampRevealPosition, revealLocationOf, type RevealTarget } from '../monaco/reveal-position';
 import { dialectForLanguage, installDocumentFormatter, toTextEdits, type FormatHandlers } from '../monaco/kojo-format';
 import { installRangeFormatter } from '../monaco/kojo-format-range';
 import { applyFormatOnSave } from './format-on-save';
+// W8 XLANG-RENAME 的宿主侧：闭文件落盘的唯一通道（`ClosedFileIo`）与跨语言腿的取数
+// （枚举 + 读文 + 问槽，判读零宿主知识；根口径与检索面板同源）
+import { type ClosedFileIo } from './reference-utils';
+import { kojoReferencesViaSlot, listKojoSourceTexts } from './kojo-source-scan';
+import { setReferenceTally } from './reference-tally-store';
 import { classifySaveRace } from './save-race';
 import { selectionStatusText } from './selection-status';
 import {
@@ -85,7 +90,7 @@ import {
 } from '../monaco/kojo-signature';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
-import { applyReferenceEdits, installErbRename } from '../monaco/erb-rename';
+import { createApplyToClosedFile, installErbRename } from '../monaco/erb-rename';
 import { collectReferenceLocations, installReferenceProvider } from '../monaco/find-references';
 import { installKojoRename } from '../monaco/kojo-rename';
 import { installImplementationProvider } from '../monaco/erb-implementation';
@@ -437,32 +442,41 @@ function ensureGlobalProviders(): void {
     // App 据此开文件、编辑器据此滚动）——与 codeAction 的"宿主零业务"同一分层。
     // D4（2026-10-15 Peek 批）追加两条腿：目标在同文件/已开标签时**返回真 LocationLink**
     // （Monaco 的 `Alt+F12` Peek 与就地跳都以这份返回为数据源），其余情形照旧发事件。
+    // 转到定义与跳到实现**共用这一条取数腿**（W9：`ImplementationHandlers = DefinitionHandlers`，
+    // 两者要的"名字 → 定义位"是同一份数据；写两份就是允许第二条腿自己再算一遍，
+    // 旧 `erb-implementation` 直读 `ErbIndex.byName` 正是这么长出第二份计算的）。
+    const resolveDefinitionTargets = (
+      model: Monaco.editor.ITextModel,
+      position: Monaco.Position,
+    ): DefinitionLocation[] => {
+      const ctx = owningPaneOf(model);
+      // 与 codeAction 同一判据（见上方 provideCodeActions）：只应答当前活动标签的真 model。
+      // 糖视图下 `ed.getModel()` 是只读糖 model——它的行号对应糖文本，拿它去问 ERB 行号
+      // 会得到"派生物里的位置"，所以一律不供，避免把作者跳到错行。
+      if (!ctx) return [];
+      const path = ctx.filePathRef.current;
+      if (!path) return [];
+      return collectDefinitionLocations(requireKernel().slots.query('ui.editor.languageService'), {
+        kind: 'definition',
+        path,
+        text: model.getValue(),
+        line: position.lineNumber,
+        column: position.column,
+        project: requireKernel().project.current(),
+        lineCount: model.getLineCount(),
+      });
+    };
     const definitionDisposer = installDefinitionProvider(monaco, {
-      resolve: (model, position) => {
-        const ctx = owningPaneOf(model);
-        // 与 codeAction 同一判据（见上方 provideCodeActions）：只应答当前活动标签的真 model。
-        // 糖视图下 `ed.getModel()` 是只读糖 model——它的行号对应糖文本，拿它去问 ERB 行号
-        // 会得到"派生物里的位置"，所以一律不供，避免把作者跳到错行。
-        if (!ctx) return [];
-        const path = ctx.filePathRef.current;
-        if (!path) return [];
-        return collectDefinitionLocations(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'definition',
-          path,
-          text: model.getValue(),
-          line: position.lineNumber,
-          column: position.column,
-          project: requireKernel().project.current(),
-          lineCount: model.getLineCount(),
-        });
-      },
+      resolve: resolveDefinitionTargets,
       navigate: (location) => {
-        requireKernel().bus.emit('editor.revealLocation', {
-          filePath: location.filePath,
-          line: location.line,
-          ...(location.column !== undefined ? { column: location.column } : {}),
-          source: '转到定义',
-        });
+        // W9 判据①：载荷一律由 `revealLocationOf` 构造（六条腿同一个出口，列与区间同源）
+        requireKernel().bus.emit(
+          'editor.revealLocation',
+          revealLocationOf(
+            { path: location.filePath, line: location.line, column: location.column, span: location.span },
+            '转到定义',
+          ),
+        );
       },
       // D4（Peek 就地预览）两条腿的判据都来自**全部组**的打开表（`openModelAcrossGroups` /
       // 路径，值 = 那份 model），路径比较一律走 `matchOpenedPath` 的 `pathKey` 口径
@@ -638,29 +652,52 @@ function ensureGlobalProviders(): void {
         return null;
       }
     };
+    /* ---- W8 XLANG-RENAME 的宿主三条腿（接线债在此收口） ----
+     *
+     * - `applyToClosedFile`：**只用** `createApplyToClosedFile`（与搜索面板「全部替换」
+     *   共用 `rewriteClosedFile` 的同一条纪律：先闸写权限 → 现文本验证 → 零改动不写）。
+     *   宿主此前在这里手写了一份 read-modify-write，两份"怎么落盘"必然漂（W8 收口理由），
+     *   而且那份没有 `isWritable` 前置闸。`io` 按调用现取（口径与其余 handlers 逐字同款）。
+     *   **行为不变式**（W8b 取证）：闭文件已落盘时绝不返回 `rejectReason`——standalone 的
+     *   rename 控制器见 `rejectReason` 会丢弃**全部** WorkspaceEdit ⇒ 标签没改、盘上改一半。
+     *   这条纪律住在 `erb-rename.provideEdits` 的最后一道（`landedFiles` 计数），本处只搬运。
+     * - `kojoSources` / `kojoReferences`：取数在 `ui/kojo-source-scan`（枚举 + 读文 + 问槽，
+     *   **零糖语法判读**；失败一律抛 ⇒ `erb-rename` 整批拒绝，绝不只改 `.erb` 半边）。
+     */
+    const renameClosedFileIo: ClosedFileIo = {
+      isWritable: (path) => requireKernel().io.isWritable(path),
+      readText: (path) => requireKernel().io.readText(path),
+      writeText: (path, text) => requireKernel().io.writeText(path, text),
+    };
     const erbRenameDisposer = installErbRename(monaco, {
       canAnswer: canAnswerErb,
       currentIndex: currentIndexErb,
       referencesTo: referencesToErb,
       isWritable: (path) => requireKernel().io.isWritable(path),
       openModelFor: openModelAcrossGroups,
-      applyToClosedFile: async (filePath, refs, newName, normalizedName) => {
-        const { text } = await requireKernel().io.readText(filePath);
-        const next = applyReferenceEdits(text, refs, newName, normalizedName);
-        if (next.text !== text) await requireKernel().io.writeText(filePath, next.text);
-        return { applied: next.applied, stale: next.stale };
+      applyToClosedFile: createApplyToClosedFile(renameClosedFileIo),
+      kojoSources: () => listKojoSourceTexts(requireKernel()),
+      // 槽表**一次取**：同一次改名里两次 query 可能拿到不同的注册表（项目开闭 / 插件退场），
+      // 那会让"判读"与"枚举"面对的不是同一套供方
+      kojoReferences: (probe) => {
+        const kernel = requireKernel();
+        return kojoReferencesViaSlot(kernel.slots.query('ui.editor.languageService'), kernel, probe);
       },
     });
     // 查找所有引用（R2，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别
     // 成员。宿主只做协议翻译——认活动标签的真 model（与转到定义逐字同判据）、问槽、
     // 把"未打开文件"那条腿的点击落回 `editor.revealLocation`（与转到定义同通道）。
     // 引用什么算、谁在索引外，全在贡献方（ERB 由解析器答、`.kojo` 由糖线答）。
+    // 引用腿的"读数是谁家的"随 `resolve` 记录（Monaco 的 provideReferences 同步问一次、
+    // 同步出一读数 ⇒ 这一变量就是那一次请求的路径，不另开第二条通道）
+    let tallySourcePath = '';
     const referenceSearchDisposer = installReferenceProvider(monaco, {
       resolve: (model, position) => {
         const ctx = owningPaneOf(model);
         if (!ctx) return [];
         const path = ctx.filePathRef.current;
         if (!path) return [];
+        tallySourcePath = path;
         return collectReferenceLocations(requireKernel().slots.query('ui.editor.languageService'), {
           kind: 'references',
           path,
@@ -672,39 +709,39 @@ function ensureGlobalProviders(): void {
         });
       },
       navigate: (location) => {
-        requireKernel().bus.emit('editor.revealLocation', {
-          filePath: location.filePath,
-          line: location.line,
-          ...(location.column !== undefined ? { column: location.column } : {}),
-          source: '查找引用',
-        });
+        // W9 判据①：与转到定义同一个载荷出口
+        requireKernel().bus.emit(
+          'editor.revealLocation',
+          revealLocationOf(
+            { path: location.filePath, line: location.line, column: location.column, span: location.span },
+            '查找引用',
+          ),
+        );
       },
       openModelFor: openModelAcrossGroups,
+      // W8 台账读数：F12 的"N 处"与「被调用」面板的入边读数同源（面板读 tally.nonDefinitionCount）。
+      // 这里只**搬运**，一次都不重数——重数就是 W8 要收口的第二判据。
+      onTally: (tally, explanation) => {
+        setReferenceTally({ tally, explanation, path: tallySourcePath });
+      },
     });
-    // 跳到实现（R3 残项，2026-10-16）：数据源 = `erb.parser` 的 `byName`（本项目用户函数
-    // 的定义位；引擎系统函数不在索引 ⇒ 不应答 = 真话"没有实现"）。三条腿复用转到定义的
-    // 分腿判据与链接构造（`planDefinitionJump` / `toDefinitionLinks`），跨文件落地同一条
-    // `editor.revealLocation` 通道——不新造第二套跳转。取数走服务本体而非 languageService
-    // 槽（同 erb-rename 先例：为转发加联合成员换不来新数据）。
+    // 跳到实现（R3 残项，2026-10-16；W9 收口）：数据源与转到定义**同一个 `kind: 'definition'`
+    // 的取数腿**（上方 `resolveDefinitionTargets`，只问 `ui.editor.languageService` 槽）。
+    // 引擎系统函数不在任何供方的索引里 ⇒ 给不出定义位 = 不应答 = 真话"没有实现"。
+    // 三条腿（同 model 就地跳 / 已开标签 Peek / 未开文件事件通道）整个复用
+    // `planDefinitionJump` / `toDefinitionLinks` / `clampRevealPosition`——宿主一行取数都不做，
+    // `canAnswer` / `currentIndex` 随旧的 byName 直读一起删（那是第二份计算）。
     const implementationDisposer = installImplementationProvider(monaco, {
-      canAnswer: (model) => {
-        const ctx = owningPaneOf(model);
-        return !!ctx && !!ctx.filePathRef.current;
-      },
-      currentIndex: () => {
-        try {
-          return requireKernel().services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-        } catch {
-          return null;
-        }
-      },
+      resolve: resolveDefinitionTargets,
       navigate: (location) => {
-        requireKernel().bus.emit('editor.revealLocation', {
-          filePath: location.filePath,
-          line: location.line,
-          ...(location.column !== undefined ? { column: location.column } : {}),
-          source: '跳到实现',
-        });
+        // W9 判据①：与转到定义同一个载荷出口
+        requireKernel().bus.emit(
+          'editor.revealLocation',
+          revealLocationOf(
+            { path: location.filePath, line: location.line, column: location.column, span: location.span },
+            '跳到实现',
+          ),
+        );
       },
       openModelFor: openModelAcrossGroups,
       pathForUri: pathForUriAcrossGroups,
@@ -793,12 +830,14 @@ function ensureGlobalProviders(): void {
         return withinCodeLensBudget(lenses.length, lineCount) ? lenses : [];
       },
       navigate: (target) => {
-        requireKernel().bus.emit('editor.revealLocation', {
-          filePath: target.filePath,
-          line: target.line,
-          ...(target.column !== undefined ? { column: target.column } : {}),
-          source: '行上注解',
-        });
+        // W9 判据①：注解的落点区间原样穿过命令参数到达这里，载荷仍由同一个出口构造
+        requireKernel().bus.emit(
+          'editor.revealLocation',
+          revealLocationOf(
+            { path: target.filePath, line: target.line, column: target.column, span: target.span },
+            '行上注解',
+          ),
+        );
       },
     });
     // 行内提示（LS-R6，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别成员。
@@ -1222,7 +1261,14 @@ export function EditorPane({
       maxColumn: (lineNumber) => model.getLineMaxColumn(lineNumber),
     });
     ed.revealLineInCenter(position.lineNumber);
-    ed.setPosition(position);
+    // W9：落点是**区间**（起点 + 不含端点），不是光标的单个位置——零宽区间天然等价于
+    // 旧的 `setPosition`，所以没带 span 的老发起方零风险；带了 span 就把那一处选出来。
+    ed.setSelection({
+      startLineNumber: position.lineNumber,
+      startColumn: position.column,
+      endLineNumber: position.lineNumber,
+      endColumn: position.columnEnd,
+    });
     ed.focus();
   }, []);
 
@@ -1269,6 +1315,10 @@ export function EditorPane({
             decorations.map((d) => ({
               path,
               line: d.line,
+              // W9：波浪线本来就带列区间，面板此前没接住 ⇒ 同一个位置两条腿落两个地方
+              ...(d.startColumn !== undefined
+                ? { span: { columnStart: d.startColumn, columnEnd: d.endColumn ?? d.startColumn } }
+                : {}),
               severity: d.severity,
               message: d.message,
               ...(d.code ? { code: d.code } : {}),

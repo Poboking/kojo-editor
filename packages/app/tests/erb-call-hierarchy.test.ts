@@ -26,6 +26,14 @@ import {
   subscribeCallHierarchy,
 } from '../src/ui/call-hierarchy';
 import { createCallHierarchyOverlay } from '../src/ui/CallHierarchyOverlay';
+import {
+  erbOccurrences,
+  explainReferenceCounts,
+  occurrencesFromLocations,
+  tallyReferenceOccurrences,
+  type ReferenceTally,
+} from '../src/ui/reference-utils';
+import { getReferenceTally, referenceTallyFor, setReferenceTally } from '../src/ui/reference-tally-store';
 
 /* ============================== 假索引 ============================== */
 
@@ -215,8 +223,14 @@ describe('调用层级状态单源', () => {
 /* ============================== overlay 静态渲染 ============================== */
 
 describe('CallHierarchyOverlay 渲染', () => {
-  beforeEach(() => setCallHierarchyState(null));
-  afterEach(() => setCallHierarchyState(null));
+  beforeEach(() => {
+    setCallHierarchyState(null);
+    setReferenceTally(null); // 台账读数也是模块级单源：不留上一个用例的读数
+  });
+  afterEach(() => {
+    setCallHierarchyState(null);
+    setReferenceTally(null);
+  });
 
   const index = makeIndex({
     files: [
@@ -250,7 +264,20 @@ describe('CallHierarchyOverlay 渲染', () => {
     return renderToStaticMarkup(createElement(Overlay));
   }
 
-  it('就绪请求 ⇒ 目标函数名 / 入边组与点位 / 出边 / 计数全画出来', () => {
+  /** 把 F12 那一次计算的读数写进单源（与 `EditorPane` 的 `onTally` 逐字同一动作） */
+  function feedTally(normalizedName: string, tally: ReferenceTally, path = FILE_A): void {
+    setReferenceTally({ tally, explanation: explainReferenceCounts(tally), path, normalizedName });
+  }
+
+  /** 面板头的入边处数（`被调用（n 个调用者 · m 处）`；没读数时这一位是「处数未读」） */
+  function incomingCountOf(html: string): number | null {
+    const m = /被调用（\d+ 个调用者 · (\d+) 处）/.exec(html);
+    return m ? Number(m[1]) : null;
+  }
+
+  it('就绪请求 ⇒ 目标函数名 / 入边组与点位 / 出边画出来，入边处数取自台账读数', () => {
+    const tally = tallyReferenceOccurrences(erbOccurrences(index.references!.bySymbol.get('TARGET')!));
+    feedTally('TARGET', tally); // 定义 1 + 调用 2 ⇒ 非定义位 2
     setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 15 } });
     const html = render();
     expect(html).toContain('调用层级');
@@ -261,6 +288,65 @@ describe('CallHierarchyOverlay 渲染', () => {
     expect(html).toContain('1 个目标 · 1 处');
     expect(html).toContain('CALLEE');
     expect(html).toContain('A.ERB:12:1');
+    // 差值那句话也是抄的台账原文（面板不写第二份文案）
+    expect(html).toContain(explainReferenceCounts(tally));
+  });
+
+  it('处数由台账说了算：读数与清单行数不一致时以读数为准（第二把尺子已经删掉）', () => {
+    // 台账里另有两处引用点落在索引缝里（`incomingCalls` fail-open 不收进清单）
+    const refs = [
+      ref('definition', FILE_A, 10, 2),
+      ref('call', FILE_A, 31, 3),
+      ref('call', FILE_A, 33, 5),
+      ref('mention', FILE_B, 7, 4),
+      ref('call', FILE_B, 8, 4),
+    ];
+    const tally = tallyReferenceOccurrences(erbOccurrences(refs));
+    feedTally('TARGET', tally); // 非定义位 4，而清单只能列出 2 处
+    setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 15 } });
+    const html = render();
+    expect(incomingCountOf(html)).toBe(tally.nonDefinitionCount);
+    expect(tally.nonDefinitionCount).toBe(4);
+    expect(html).toContain('A.ERB:31:3'); // 清单仍是面板自己的点位数据，没被读数改写
+    expect(html).toContain(explainReferenceCounts(tally));
+  });
+
+  it('没有台账读数 ⇒ 明说「处数未读」，不拿清单行数冒充', () => {
+    setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 15 } });
+    const html = render();
+    expect(html).toContain('1 个调用者 · 处数未读');
+    expect(incomingCountOf(html)).toBeNull();
+    expect(html).toContain('同一份台账');
+  });
+
+  it('同文件里别名的读数不冒充（`referenceTallyFor` 是唯一匹配判据）', () => {
+    const tally = tallyReferenceOccurrences(erbOccurrences([ref('call', FILE_A, 31, 3)]));
+    feedTally('OTHER_ONE', tally);
+    expect(referenceTallyFor(FILE_A, 'TARGET')).toBeNull();
+    setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 15 } });
+    expect(render()).toContain('1 个调用者 · 处数未读');
+  });
+
+  it('对拍：面板头的处数 = F12 那次计算交来的同一个数', () => {
+    const locations = index
+      .references!.bySymbol.get('TARGET')!
+      .map((r) => ({ filePath: r.filePath, line: r.line, column: r.column, kind: r.kind }));
+    // F12 腿：`installReferenceProvider` 的 onTally 用的正是这条纯计算（位置进台账 → 出读数）
+    const f12Tally = tallyReferenceOccurrences(occurrencesFromLocations(locations));
+    feedTally('TARGET', f12Tally);
+    setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 15 } });
+    expect(incomingCountOf(render())).toBe(f12Tally.nonDefinitionCount);
+    expect(getReferenceTally()?.tally).toBe(f12Tally);
+  });
+
+  it('面板源码里不再有第二把尺子（`incoming.reduce` 已收口）', async () => {
+    const { readFileSync } = await import('node:fs');
+    const code = readFileSync(new URL('../src/ui/CallHierarchyOverlay.tsx', import.meta.url), 'utf8')
+      .split('\n')
+      .filter((line: string) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    expect(code).not.toMatch(/incoming\.reduce/);
+    expect(code).toMatch(/nonDefinitionCount/);
   });
 
   it('拒绝态画进面板（拒绝不许只进控制台）', () => {

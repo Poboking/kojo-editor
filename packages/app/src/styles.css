@@ -5720,6 +5720,74 @@ button.primary .hint {
 .kd-host {
   width: min(1180px, 92vw);
 }
+/* W10 多开栈标签条：单本比对时组件不渲染任何节点 ⇒ 样式侧零占位、零空隙 */
+.kd-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 0 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.kd-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 24px;
+  padding: 0 0 0 var(--space-2);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.kd-tab:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.kd-tab.active {
+  background: var(--active);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+/* 关闭钮：`ghost small` 已给透明底与小尺寸，这里只补差异——24×24 可点区、
+   静息隐去（活动标签 / 悬停 / 键盘聚焦才浮出），与 .editor-tab 关闭钮同口径 */
+.kd-tab .kd-tab-close {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--fs-2);
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+.kd-tab:hover .kd-tab-close,
+.kd-tab.active .kd-tab-close,
+.kd-tab .kd-tab-close:focus-visible {
+  opacity: 1;
+}
+.kd-tab .kd-tab-close:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+/* 复用全局 :focus-visible 口径（1px var(--accent) / offset 1px），显式重述防丢 */
+.kd-tab .kd-tab-close:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
 .kd-labels {
   display: flex;
   align-items: center;

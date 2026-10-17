@@ -4,21 +4,25 @@ import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
   bindDiffView,
+  clearDiff,
   DIFF_VIEW_OVERLAY_ID,
+  diffPaneKeyOf,
+  getDiffPanes,
   getDiffState,
   languageIdForSide,
   setDiffState,
   subscribeDiff,
   validateDiffRequest,
+  closeDiffPane,
   type DiffRequest,
 } from '../src/ui/diff-view';
 
 /**
- * 通用 diff 视图的宿主纯逻辑（2026-10-15 比对/历史批）。
+ * 通用 diff 视图的宿主纯逻辑（2026-10-15 比对/历史批；W10 第 2 点改多开栈）。
  *
- * 判钉三件：无效请求的拒绝原因（不静默）、语言推断的保守口径（不许猜错高亮）、
- * 意图事件 → 状态 + overlay 打开的落地时序。渲染本体（Monaco diff 编辑器）
- * 在浏览器 effect 里动态 import，node 环境不触达。
+ * 判钉四件：无效请求的拒绝原因（不静默）、语言推断的保守口径（不许猜错高亮）、
+ * 意图事件 → **入栈一格** + overlay 打开的落地时序、多开时后开者不顶掉前开者。
+ * 渲染本体（Monaco diff 编辑器）在浏览器 effect 里动态 import，node 环境不触达。
  */
 
 const req = (over: Partial<DiffRequest> = {}): DiffRequest => ({
@@ -58,10 +62,10 @@ describe('languageIdForSide', () => {
   });
 });
 
-describe('diff 状态单源', () => {
-  afterEach(() => setDiffState(null));
+describe('比对状态（经 diff-view 的导出面）', () => {
+  afterEach(() => clearDiff());
 
-  it('set → 订阅者收到；clear → null（关闭后不留旧请求）', () => {
+  it('set → 订阅者收到；null → 栈清空（关闭后不留旧请求）', () => {
     const cb = vi.fn();
     const un = subscribeDiff(cb);
     setDiffState({ kind: 'request', request: req() });
@@ -73,6 +77,14 @@ describe('diff 状态单源', () => {
     setDiffState({ kind: 'request', request: req() });
     expect(cb).toHaveBeenCalledTimes(2); // 此前两次变更已计满；退订后不再被打扰
     setDiffState(null);
+  });
+
+  it('导出面就是栈的导出面：diffPaneKeyOf / getDiffPanes / closeDiffPane 都在', () => {
+    const request = req({ title: '甲' });
+    setDiffState({ kind: 'request', request });
+    expect(getDiffPanes()[0]!.key).toBe(diffPaneKeyOf(request));
+    expect(closeDiffPane(diffPaneKeyOf(request))).toBe(true);
+    expect(getDiffPanes()).toHaveLength(0);
   });
 });
 
@@ -96,22 +108,49 @@ function fakeKernel() {
 }
 
 describe('bindDiffView：意图落地时序', () => {
-  afterEach(() => setDiffState(null));
+  afterEach(() => clearDiff());
 
-  it('合法请求 → 状态就位并转发 ui.overlay.open（组件此刻才读得到状态）', () => {
+  it('合法请求 → 入栈一格并转发 ui.overlay.open（组件此刻才读得到状态）', () => {
     const { kernel, emitted, fire } = fakeKernel();
     const un = bindDiffView(kernel);
     fire({ title: 'A vs B', original: { label: 'a', text: '1' }, modified: { label: 'b', path: 'C:/x.ERB' } });
     expect(getDiffState()).toMatchObject({ kind: 'request' });
+    expect(getDiffPanes()).toHaveLength(1);
     expect(emitted).toEqual([['ui.overlay.open', { id: DIFF_VIEW_OVERLAY_ID, source: 'host:diff-view' }]]);
     un();
   });
 
-  it('无效请求 → 照样开窗但状态是可见的拒绝原因（拒绝不许只进控制台）', () => {
-    const { kernel, emitted, fire } = fakeKernel();
+  it('无效请求 → 照样开窗但那一格是可见的拒绝原因（拒绝不许只进控制台）', () => {
+    const { kernel, fire } = fakeKernel();
     bindDiffView(kernel);
     fire({ title: '坏请求', original: { label: 'a' }, modified: { label: 'b', text: '' } });
     expect(getDiffState()).toMatchObject({ kind: 'rejected' });
-    expect(emitted.length).toBe(1);
+    expect(getDiffPanes()).toHaveLength(1);
+  });
+
+  it('多开：第二枚意图不顶掉第一枚，两格并存；关掉栈顶回到第一枚', () => {
+    const { kernel, emitted, fire } = fakeKernel();
+    bindDiffView(kernel);
+    fire({ title: '第一组', original: { label: 'a', text: '1' }, modified: { label: 'b', text: '2' } });
+    fire({ title: '第二组', original: { label: 'c', text: '3' }, modified: { label: 'd', text: '4' } });
+
+    expect(getDiffPanes()).toHaveLength(2);
+    expect(getDiffState()).toMatchObject({ kind: 'request' });
+    expect((getDiffState() as { request: DiffRequest }).request.title).toBe('第二组');
+    expect(emitted).toHaveLength(2);
+
+    expect(closeDiffPane()).toBe(false); // 还剩第一组 ⇒ 不该收模态
+    expect((getDiffState() as { request: DiffRequest }).request.title).toBe('第一组');
+    expect(closeDiffPane()).toBe(true);
+    expect(getDiffState()).toBeNull();
+  });
+
+  it('同一对内容重复发意图 ⇒ 只有一格（重开是切回来，不是堆一层）', () => {
+    const { kernel, fire } = fakeKernel();
+    bindDiffView(kernel);
+    const payload: OpenPayload = { title: '重复', original: { label: 'a', path: 'C:/x.ERB' }, modified: { label: 'b', path: 'C:/y.ERB' } };
+    fire(payload);
+    fire({ ...payload });
+    expect(getDiffPanes()).toHaveLength(1);
   });
 });

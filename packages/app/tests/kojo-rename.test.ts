@@ -7,7 +7,9 @@
  *     "可不可以改"在编辑期由槽给拒绝理由；
  * (b) 槽的 `rejectReason` 原样透传（monaco 0.57 见理由即丢弃全部编辑只弹 info——全或无）；
  * (c) **落地前现文本验证**：任何一处列区间上的现文本 ≠ `oldName` ⇒ 整次拒绝
- *     （请求与落地之间作者可能已打字，陈旧坐标绝不硬写，部分应用 = 名字分叉）。
+ *     （请求与落地之间作者可能已打字，陈旧坐标绝不硬写，部分应用 = 名字分叉）；
+ * (d) **W8 XLANG-RENAME**：带 `resourcePath` 的编辑只许落在当前文件——越出当前文件
+ *     （`.erb` 或其它 `.kojo` 源）一律拒绝并指路，静默串道 = 改错文件。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -146,5 +148,89 @@ describe('installKojoRename', () => {
       },
     } as unknown as typeof Monaco;
     installKojoRename(monaco, { canAnswer: () => true, resolve: () => ({ edits: stale, oldName: '问候' }) });
+  });
+});
+
+/* ============================== W8：跨文件编辑一律拒绝（两条通道各管一半，不许静默串道） ============================== */
+
+/** 带路径信息的 model 桩（`fsPath` 齐备才能判"编辑落在哪个文件"） */
+function pathedModelOf(filePath: string, ...lines: string[]): Monaco.editor.ITextModel {
+  return {
+    uri: {
+      fsPath: filePath,
+      path: filePath,
+      toString: () => `file:///${filePath.replace(/\\/g, '/')}`,
+    } as Monaco.Uri,
+    getLineCount: () => lines.length,
+    getLineContent: (n: number) => lines[n - 1] ?? '',
+    getLineMaxColumn: (n: number) => (lines[n - 1] ?? '').length + 1,
+  } as unknown as Monaco.editor.ITextModel;
+}
+
+function providerOf(
+  resolve: (model: Monaco.editor.ITextModel, position: Monaco.Position, newName: string) => {
+    edits: readonly EditorRenameEdit[];
+    oldName?: string;
+    rejectReason?: string;
+  },
+): Monaco.languages.RenameProvider {
+  let provider: Monaco.languages.RenameProvider | undefined;
+  const monaco = {
+    languages: {
+      registerRenameProvider: (_id: string, p: Monaco.languages.RenameProvider) => {
+        provider = p;
+        return { dispose: () => undefined };
+      },
+    },
+  } as unknown as typeof Monaco;
+  installKojoRename(monaco, { canAnswer: () => true, resolve });
+  return provider!;
+}
+
+describe('installKojoRename 的落点守门（跨文件一律拒绝）', () => {
+  const SELF = 'C:/t/a.kojo';
+  const SAME_FILE_EDIT: readonly EditorRenameEdit[] = [
+    { line: 1, startColumn: 4, endColumn: 6, newText: '问好', resourcePath: SELF },
+  ];
+
+  it('resourcePath 就是当前文件 ⇒ 照常落地（additive 字段不该收紧既有形态）', async () => {
+    const model = pathedModelOf(SELF, '函数 问候()：');
+    const provider = providerOf(() => ({ edits: SAME_FILE_EDIT, oldName: '问候' }));
+    const r = await provider.provideRenameEdits!(model, AT(1, 5), '问好', {} as Monaco.CancellationToken);
+    expect(r && 'rejectReason' in r ? r.rejectReason : undefined).toBeUndefined();
+    expect(r?.edits).toHaveLength(1);
+  });
+
+  it('resourcePath 落在别处（.erb 或其它 .kojo）⇒ 整次拒绝并指路 F2 的正确入口', async () => {
+    const model = pathedModelOf(SELF, '函数 问候()：');
+    for (const other of ['C:/t/OTHER.ERB', 'C:/t/b.kojo']) {
+      const provider = providerOf(() => ({
+        edits: [{ line: 1, startColumn: 4, endColumn: 6, newText: '问好', resourcePath: other }],
+        oldName: '问候',
+      }));
+      const r = await provider.provideRenameEdits!(model, AT(1, 5), '问好', {} as Monaco.CancellationToken);
+      expect(r?.edits).toEqual([]);
+      const reason = (r && 'rejectReason' in r ? r.rejectReason : '') ?? '';
+      expect(reason).toContain('越出当前文件');
+      expect(reason).toContain(other);
+      expect(reason).toContain(other.toLowerCase().endsWith('.kojo') ? '另一份 .kojo 源' : '另一份方言（.erb）文件');
+    }
+  });
+
+  it('判不出请求文件（桩 model 无路径）⇒ 带 resourcePath 的编辑一律拒绝，不猜落点', async () => {
+    const provider = providerOf(() => ({
+      edits: [{ line: 1, startColumn: 4, endColumn: 6, newText: '问好', resourcePath: SELF }],
+      oldName: '问候',
+    }));
+    const r = await provider.provideRenameEdits!(MODEL, AT(1, 5), '问好', {} as Monaco.CancellationToken);
+    expect(r?.edits).toEqual([]);
+    expect(r && 'rejectReason' in r ? r.rejectReason : '').toContain('越出当前文件');
+  });
+
+  it('不带 resourcePath ⇒ 既有"文件局部改名"形态零改动', async () => {
+    const provider = providerOf(() => ({ edits: [{ line: 1, startColumn: 4, endColumn: 6, newText: '问好' }], oldName: '问候' }));
+    const r = await provider.provideRenameEdits!(MODEL, AT(1, 5), '问好', {} as Monaco.CancellationToken);
+    expect(r && 'rejectReason' in r ? r.rejectReason : undefined).toBeUndefined();
+    expect(r?.edits).toHaveLength(1);
   });
 });

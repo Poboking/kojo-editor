@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { diagnosticDisplay } from '@kojo/plugin-api';
+import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import { snapshot, subscribe, type EditorProblem } from './problem-store';
 
 /**
@@ -10,9 +11,21 @@ import { snapshot, subscribe, type EditorProblem } from './problem-store';
  * 波浪线在此汇总成可展开的列表。每条可点击 → 经宿主回调跳源行（跳转通道由
  * ProjectView 走 `editor.revealLocation` 事件，见其内建视图接线）。
  *
+ * **跳的是"这一处"，不是"这一行"**（W9 落点 span 批）：`onReveal` 的第 3 位就是
+ * 波浪线盖住的列区间，与检索面板、转到定义、G1 回放跳转**同一个形状**；
+ * 区间给不出就整个省略，退化由 `reveal-position` 判一次（面板不许自己补列）。
+ *
  * 视觉与「约定校验」面板同族（复用 `.conv-summary` / `.conv-count` / `.conv-dot`
  * 等约定面板类），只补少量 `.prob-*`。
  */
+
+/**
+ * 一条问题 → 交回宿主的落点区间（纯函数，可单测；判据全在 `revealSpanOf`）。
+ * 坏区间 / 缺区间 ⇒ `undefined` = "只有一行"，与没接线前逐字一致。
+ */
+export function problemRevealSpan(problem: Pick<EditorProblem, 'span'>): RevealSpan | undefined {
+  return revealSpanOf({ span: problem.span });
+}
 
 /** 严重度配色：与 `ui-convention-report`、`.conv-dot` 同口径 */
 const SEVERITY_COLOR: Record<EditorProblem['severity'], string> = {
@@ -36,7 +49,12 @@ function useProblems(): readonly EditorProblem[] {
   return items;
 }
 
-export function ProblemPanel({ onReveal }: { onReveal: (path: string, line: number) => void }): ReactElement {
+export function ProblemPanel({
+  onReveal,
+}: {
+  /** 跳源：路径 + 行 + **能给得出的列区间**（与检索面板、定义、G1 同一条通道同一个形状） */
+  onReveal: (path: string, line: number, span?: RevealSpan) => void;
+}): ReactElement {
   const items = useProblems();
 
   let error = 0;
@@ -84,7 +102,7 @@ export function ProblemPanel({ onReveal }: { onReveal: (path: string, line: numb
                 <button
                   className="conv-issue-btn"
                   title={`${it.path}:${it.line}`}
-                  onClick={() => onReveal(it.path, it.line)}
+                  onClick={() => onReveal(it.path, it.line, problemRevealSpan(it))}
                 >
                   <span className="conv-dot" style={{ backgroundColor: SEVERITY_COLOR[it.severity] }} />
                   <span className="conv-issue-loc dim">
@@ -116,13 +134,21 @@ export function ProblemPanel({ onReveal }: { onReveal: (path: string, line: numb
  * 配色口径与 `ui-convention-report` 的 `StatusCounts` 注释一致：**只给 error 上色**，
  * 其余走 dim——状态栏是项目级常态计数，不该全量铺严重度色（否则视觉重量压过同排控件）。
  * 全为 0 时显示 dim 的「无问题」，不描红。
+ *
+ * **口径必须上屏**（2026-10-19 自造重叠清账批，判据②）：同排那枚「项目级约定计数」数的
+ * 是整份校验报告（含未打开文件与整项目结论），这一枚只数**已打开文件面上正画着的波浪线**
+ * （来自全部装饰贡献方）。两数天生不等、也不该被硬凑成相等，所以各自的 tooltip 说清自己
+ * 数的是什么，不留两个裸数字并排。
  */
+const PROBLEMS_TITLE =
+  '当前已打开文件的波浪线（各诊断贡献方合并；不含未打开文件与整项目结论 ≠ 项目级约定计数）· 问题面板 (Ctrl+Shift+M)';
+
 export function ProblemsStatusItem({ onClick }: { onClick: () => void }): ReactElement {
   const items = useProblems();
 
   if (items.length === 0) {
     return (
-      <button className="sb-problems" title="问题面板 (Ctrl+Shift+M)" onClick={onClick}>
+      <button className="sb-problems" title={PROBLEMS_TITLE} onClick={onClick}>
         <span className="dim">无问题</span>
       </button>
     );
@@ -138,7 +164,7 @@ export function ProblemsStatusItem({ onClick }: { onClick: () => void }): ReactE
   }
 
   return (
-    <button className="sb-problems" title="问题面板 (Ctrl+Shift+M)" onClick={onClick}>
+    <button className="sb-problems" title={PROBLEMS_TITLE} onClick={onClick}>
       <span className="sb-problems-item" style={error > 0 ? { color: SEVERITY_COLOR.error } : undefined}>
         ✕ {error}
       </span>

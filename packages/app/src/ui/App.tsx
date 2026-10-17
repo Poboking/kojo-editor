@@ -34,7 +34,7 @@ import { clearRecoveredContents, recoveredPaths, setRecoveredContents } from './
 import { planProjectSwitch, resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
 import { bootstrapKernel } from '../bootstrap';
 import { perf } from '../perf';
-import { revealTargetOf, type RevealTarget } from '../monaco/reveal-position';
+import { revealTargetOf, type RevealSpan, type RevealTarget } from '../monaco/reveal-position';
 import {
   NOT_READY_MESSAGE,
   clearDropHover,
@@ -513,7 +513,7 @@ export function App(): ReactElement {
   useEffect(() => {
     if (!kernel) return;
     const un = kernel.bus.on('editor.revealLocation', (ev) => {
-      requestOpenFile(ev.filePath, ev.line ?? 1, ev.column);
+      requestOpenFile(ev.filePath, ev.line ?? 1, ev.column, ev.span);
     });
     return () => {
       un();
@@ -773,15 +773,16 @@ export function App(): ReactElement {
     [kernel],
   );
 
-  const commitOpenFile = useCallback((path: string, line?: number, column?: number) => {
+  const commitOpenFile = useCallback((path: string, line?: number, column?: number, span?: RevealSpan) => {
     setEditorGroups((prev) => openInActiveGroup(prev, path)); // SPLIT-1：开进焦点组
-    setReveal(line ? revealTargetOf({ line, column }, Date.now()) : null);
+    // W9：区间一路带到编辑器（退化判据唯一住在 `revealTargetOf`，这里不许再折一次列）
+    setReveal(line ? revealTargetOf({ line, column, span }, Date.now()) : null);
   }, []);
 
   const requestOpenFile = useCallback(
-    (path: string, line?: number, column?: number) => {
+    (path: string, line?: number, column?: number, span?: RevealSpan) => {
       // P3 多标签：切换标签不丢内容（model 留内存），无需未保存确认
-      commitOpenFile(path, line, column);
+      commitOpenFile(path, line, column, span);
     },
     [commitOpenFile],
   );

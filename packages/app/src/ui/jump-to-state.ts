@@ -1,7 +1,9 @@
-import type { EditorDocumentSymbol } from '@kojo/plugin-api';
+import type { EditorDocumentSymbol, KernelEventMap } from '@kojo/plugin-api';
+import { enclosingChainAt } from '@kojo/plugin-api';
+import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 
 /**
- * G1「跳到命中状态」——宿主侧的**纯逻辑**（2026-10-16 批）。
+ * G1「跳到命中状态」——宿主侧的**纯逻辑**（2026-10-16 批；W9 落点 span 批 2026-10-17 并轨）。
  *
  * 作者站在 `@…` 函数体内的某一行上按下列键，宿主只做三件事：
  * 位置 → 中性符号名 → 发意图事件。方向与既有那条通道正好相反
@@ -9,17 +11,25 @@ import type { EditorDocumentSymbol } from '@kojo/plugin-api';
  * 所以这一批**不新建第二套导航**：意图仍是 `kojo.replayFunction`，
  * 只是多带一个"要看的是哪一行"（`locate`，additive 可选成员）。
  *
+ * **本文件是全仓唯一的一条"跳到一个可回放状态"的实现路径**（W9 判据③）：
+ * 面板与编辑器内跳同一个状态都折到这里来（`planJumpToState` 出意图、
+ * `revealSpanOf` / `clampRevealPosition` 出落点），别的模块**不许**再写一份
+ * "位点 → 函数名"或"位点 → 落点"——`tests/jump-to-state.test.ts` 扫源码钉住这一点。
+ *
  * 分层理由（这批的主要设计判断）：
  * - **不给回放服务加位置入口**。`StateReplayService.replayFunction` 天生按函数
  *   工作，判据来自条件索引；让它吃"文件+行"就得再持有一份"行 → 函数"的表，
  *   而那份表已经在解析器的缓冲区解析里（`documentSymbol`）——第二张表就是漂移源。
  * - **宿主不解析 ERB**。"光标在哪一段里"的数据源仍是 `ui.editor.languageService`
  *   槽的 `documentSymbol` 树（与大纲 / 吸顶 / 面包屑同一棵，第三次上岗），宿主只在
- *   这棵**中性符号树**上做"区间包含 + 取最紧一层"的两行折衷（判据与理由见
- *   `functionNameAt`——那里记着为什么不能直接借道面包屑的 `symbolChainAt`）。
+ *   这棵**中性符号树**上做"链上取最内层 function"的一步收窄（判据单源契约层
+ *   `enclosingChainAt`，取层口径见 `functionNameAt`）。
  * - **零装饰**：命中/未命中这套读数回放面板早就有，宿主不再在编辑器里画第二份
  *   （因此与 `marker-pool` 的装饰调度、与 B8 CodeLens 天然无交集）。
  */
+
+/** 契约里那位"位点"（反推真源，不另立形状）：面板与编辑器共用同一种写法 */
+export type ReplayLocate = NonNullable<KernelEventMap['kojo.replayFunction']['locate']>;
 
 /** 命令按下那一刻的位点事实（由 EditorPane 现取，不常驻监听、零闲置成本） */
 export interface JumpProbeResult {
@@ -27,6 +37,13 @@ export interface JumpProbeResult {
   readonly path: string;
   /** 光标行（1 基，模型坐标） */
   readonly line: number;
+  /**
+   * 光标列（1 基）与/或选区（W9，additive 可选：探针给得出就给）。
+   * 面板把这条记录拉到眼前时用的就是它——不给就退化成行首，与 `editor.revealLocation`
+   * 那条腿**同一条退化判据**（`revealSpanOf`），两屏不会再落到两个地方。
+   */
+  readonly column?: number;
+  readonly span?: RevealSpan;
   /** 该文件的符号树（`null` = 语言服务没答出来：未就绪 / 不认这种文件） */
   readonly symbols: readonly EditorDocumentSymbol[] | null;
   /** `true` = 屏幕上显示的是转出来的派生视图，行号不属于这份文件本身 */
@@ -36,7 +53,7 @@ export interface JumpProbeResult {
 /** 一条回放意图（宿主发给 `kojo.replayFunction` 的载荷，不含 source） */
 export interface ReplayIntent {
   readonly functionName: string;
-  readonly locate: { readonly filePath: string; readonly line: number };
+  readonly locate: ReplayLocate;
 }
 
 export type JumpPlan =
@@ -70,41 +87,42 @@ export function planJumpToState(probe: JumpProbeResult | null): JumpPlan {
       message: `第 ${probe.line} 行不在任何一段程序里——把光标挪到某一段的正文中（这一段的名字那一行往下、下一段的名字之前）。`,
     };
   }
-  return { kind: 'replay', intent: { functionName, locate: { filePath: probe.path, line: probe.line } } };
+  // 位点**照原样**交出去（列与区间都折成契约那一份 `span`，退化口径见 `reveal-position`）：
+  // 面板拿它落点、编辑器拿它落点，两条腿在同一个函数里折，所以不可能一个落名字一个落行首。
+  const span = revealSpanOf(probe);
+  return {
+    kind: 'replay',
+    intent: {
+      functionName,
+      locate: {
+        filePath: probe.path,
+        line: probe.line,
+        ...(span !== undefined ? { column: span.columnStart, span } : {}),
+      },
+    },
+  };
 }
 
 /**
- * 光标行所属的函数名（**最紧**的那一层 function；找不到 → `null`）。
+ * 光标行所属的函数名（**最内层的 function 层**；找不到 → `null`）。
  *
- * 为什么不是直接复用面包屑的 `symbolChainAt`（同一棵树的另一位消费者）：
- * 那条判据是"每层只留区间最小的一枚再下钻"，而 ERB 的大纲树是**平铺**的
- * （函数区间与 `#DIM` 单行声明同层并列，见 erb-parser 的 `erbDocumentSymbols`）。
- * 光标正好落在声明行上时，链条里只剩那枚声明、外层函数被同层淘汰掉了 ⇒
- * "这一行不在任何函数里"会是个**假答案**。所以这里自己做一次全树下行：
- * 收集**所有**包住这一行的 function 层，取区间最紧的一枚（同宽取靠后的，
- * 再同取文档序第一枚 = 确定性）。宿主仍然只认契约里的中性 `kind`，零格式知识。
+ * **判据不在本文件**（W7 NAV-SCOPE）：区间包含、平局折法、全树下行与面包屑 / 大纲 /
+ * 调用层级读的是契约层**同一条** `enclosingChainAt`——此前这里是第四份独立实现
+ * （自己扫树 + 自定平局规则），同一行四把尺子各给各的答案，现在差异只剩**取层方式**：
+ * 面包屑要整条链、这里只要链上最后一个 `kind === 'function'` 且名字非空的节点。
+ * "从链上再挑 function 层"而不是"整条链最内层"是刻意的：ERB 的大纲树是**平铺**的
+ * （函数区间与 `#DIM` 单行声明同层并列，见 erb-parser 的 `erbDocumentSymbols`），
+ * 光标落在声明行上时链尾是那枚声明——直接取链尾会给出假答案
+ * "这一行不在任何函数里"（这条坑在 `tests/nav-scope-p0.test.ts` 有负自证）。
+ * 宿主仍然只认契约里的中性 `kind`，零格式知识。
  */
 export function functionNameAt(symbols: readonly EditorDocumentSymbol[], line: number): string | null {
-  const hits: EditorDocumentSymbol[] = [];
-  const walk = (list: readonly EditorDocumentSymbol[]): void => {
-    for (const symbol of list) {
-      if (symbol.startLine > line || line > symbol.endLine) continue;
-      if (symbol.kind === 'function' && symbol.name.trim().length > 0) hits.push(symbol);
-      if (symbol.children) walk(symbol.children);
-    }
-  };
-  walk(symbols);
-  let best: EditorDocumentSymbol | undefined;
-  const span = (s: EditorDocumentSymbol): number => s.endLine - s.startLine;
-  for (const hit of hits) {
-    if (!best) {
-      best = hit;
-      continue;
-    }
-    // 区间更紧者胜；同宽时靠后的定义胜（嵌套同名块少见，取最内层）；再同保持文档序第一枚
-    if (span(hit) < span(best) || (span(hit) === span(best) && hit.startLine > best.startLine)) best = hit;
+  const chain = enclosingChainAt(symbols, line);
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const symbol = chain[i]!;
+    if (symbol.kind === 'function' && symbol.name.trim().length > 0) return symbol.name;
   }
-  return best ? best.name : null;
+  return null;
 }
 
 /** 发意图 / 说人话两个出口由调用方注入（脱离 React 可单测） */

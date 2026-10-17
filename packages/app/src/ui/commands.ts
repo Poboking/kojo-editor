@@ -7,6 +7,7 @@
  */
 
 import type { EditorCommandContext, EditorCommandContribution } from '@kojo/plugin-api';
+import { CANDIDATE_BUDGETS, ERB_DIALECT_EXTENSIONS, candidateBudget, candidateRank } from '@kojo/plugin-api';
 
 /** 归一化后的按键描述 */
 export interface KeyChord {
@@ -136,16 +137,120 @@ function baseNameOf(lowerPath: string): string {
   return lowerPath.slice(Math.max(lowerPath.lastIndexOf('/'), lowerPath.lastIndexOf('\\')) + 1);
 }
 
-/** 快速打开的候选过滤（路径子串匹配；文件名命中优先于目录命中） */
-export function filterFileCandidates(paths: readonly string[], query: string, cap = 50): string[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return paths.slice(0, cap);
-  const nameHit: string[] = [];
-  const pathHit: string[] = [];
-  for (const p of paths) {
-    const lower = p.toLowerCase();
-    if (baseNameOf(lower).includes(q)) nameHit.push(p);
-    else if (lower.includes(q)) pathHit.push(p);
+/**
+ * 快速打开的候选过滤（路径子串匹配；文件名命中优先于目录命中）。
+ *
+ * **排序口径不在本文件**（W7 NAV-SCOPE）：分桶比较器是契约层的 `candidateRank`
+ * ——`Ctrl+P` / `Ctrl+T` / 函数树搜索 / 全文检索候选此前各写一套比较器，同一个查询
+ * 在四个面板里给四种顺序。预算同样不再写裸数字：`CANDIDATE_BUDGETS.quickOpen`
+ * 与其余档位同住一张表（`plugin-api/erb.ts`）。
+ *
+ * 范围收窄**发生在上游的候选清单**（宿主 ProjectView 按 `pathInScope` 过滤），
+ * 这里不再收第二次——两处各滤一遍就是两条会各自演化的口径。
+ */
+export function filterFileCandidates(
+  paths: readonly string[],
+  query: string,
+  cap: number = CANDIDATE_BUDGETS.quickOpen,
+): string[] {
+  if (!Array.isArray(paths)) return [];
+  const candidates = paths.filter((p) => typeof p === 'string');
+  const budget = candidateBudget('quickOpen', cap);
+  const q = query.trim();
+  if (q.length === 0) return candidates.slice(0, budget);
+  const ranked = candidates
+    .map((p, i) => ({ p, i, rank: candidateRank(baseNameOf(p.toLowerCase()), p, q) }))
+    .filter((r) => r.rank < 4)
+    .sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.i - b.i));
+  return ranked.slice(0, budget).map((r) => r.p);
+}
+
+/**
+ * 候选清单合并（**并集、去重、排序**；W7 NAV-SCOPE）。
+ *
+ * `Ctrl+P` 的候选此前只有 ERB 索引那一层（`.kojo` 与别的方言文件根本进不来——
+ * 作者写了半天的糖源文件按 Ctrl+P 搜不到）。合并这一件事留在宿主层：宿主只认
+ * "这是一份路径清单"，**谁生产的路径它不认识**（方言文件由口上域的递归列举与
+ * 语言服务槽的应答方提供，判据住在提供方与 io 层）。
+ */
+export function mergeCandidatePaths(groups: readonly (readonly string[])[]): string[] {
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const p of group) {
+      if (typeof p !== 'string' || p === '') continue;
+      seen.add(p);
+    }
   }
-  return [...nameHit, ...pathHit].slice(0, cap);
+  return [...seen].sort();
+}
+
+/**
+ * 表层 DSL（`.kojo`）源文件后缀。宿主级**编辑器事实**：同一字面量在
+ * `monaco/kojo-language.ts` 注册语言时写了一次（那份是 Monaco 的注册形状，
+ * 不是一份可读清单），这里要的是"哪些后缀算源文件"，故显式声明并挂进下面的清单。
+ */
+export const KOJO_SOURCE_EXTENSION = '.kojo';
+
+/**
+ * 快速打开认得的**源文件**后缀：ERB 方言全集（契约 `ERB_DIALECT_EXTENSIONS`）
+ * 再加表层 DSL 那一份。
+ *
+ * 为什么需要这张表：`Ctrl+P` 的候选以前只来自 ERB 索引，于是 `.kojo`（以及索引
+ * 不认的那些方言文件）**根本进不来**——"索引里有什么"与"工作区里有什么"是两件事，
+ * 把它当一件事用，作者的糖源文件就搜不到。后缀清单住在契约与宿主注册表，
+ * 不在这里发明第三种。
+ */
+export const QUICK_OPEN_SOURCE_EXTENSIONS: readonly string[] = [
+  ...ERB_DIALECT_EXTENSIONS,
+  KOJO_SOURCE_EXTENSION,
+];
+
+/** 路径是否是快速打开认得的源文件（大小写不敏感；无后缀 / 目录段结尾 ⇒ 否） */
+export function isQuickOpenSourcePath(path: string): boolean {
+  if (typeof path !== 'string') return false;
+  const dot = path.lastIndexOf('.');
+  const sep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  if (dot <= sep) return false;
+  return QUICK_OPEN_SOURCE_EXTENSIONS.includes(path.slice(dot).toLowerCase());
+}
+
+/** `listSourceFiles` 需要的最小列举面（注入 seam：真实是 `kernel.io.walkDir`，单测给假的） */
+export type WalkDirLike = (
+  path: string,
+  opts?: {
+    includeFiles?: boolean;
+    includeDirs?: boolean;
+    filter?: (entry: { name: string; isDirectory: boolean }) => boolean;
+  },
+) => Promise<readonly { name: string; path: string; isDirectory: boolean }[]>;
+
+/**
+ * 口上域内的**源文件**清单（`.erb` / `.erm` / `.erh` / `.kojo`）。
+ *
+ * 为什么必须有这一条而不是"用索引的键"：ERB 索引只收解析器认得的那几类文件，
+ * 而快速打开要回答的是"这个工作区里我能打开什么"。两者划等号 ⇒ `.kojo` 与
+ * 索引没吃进去的文件在 `Ctrl+P` 里凭空消失（少扫不是省事的理由，看不见才是事故）。
+ *
+ * 逐根各一次递归列举（与左侧文件树的冷开快照同一形态）；某根读失败**跳过**，
+ * 其余照给——快速打开退化成一份不全的清单是可接受的，整条快捷键失灵不是。
+ */
+export async function listSourceFiles(walkDir: WalkDirLike, roots: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const root of roots) {
+    if (typeof root !== 'string' || root === '') continue;
+    try {
+      const entries = await walkDir(root, {
+        includeFiles: true,
+        includeDirs: false,
+        filter: (e) => e.isDirectory || isQuickOpenSourcePath(e.name),
+      });
+      for (const e of entries) {
+        if (!e.isDirectory && isQuickOpenSourcePath(e.name)) out.push(e.path);
+      }
+    } catch {
+      // 读不到这一个根 ⇒ 少一批候选，不影响别的根（铁律 4 的"可见"由面板的空态承担，
+      // 这里不抛：一次列举失败不该把整条 Ctrl+P 变成异常）
+    }
+  }
+  return out;
 }

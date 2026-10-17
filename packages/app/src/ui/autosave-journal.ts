@@ -28,6 +28,11 @@ export const HEARTBEAT_STALE_MS = 60_000;
 export const SNAPSHOT_DEBOUNCE_MS = 2_000;
 /** 脏周期内心跳刷新周期 */
 export const HEARTBEAT_INTERVAL_MS = 10_000;
+/** 快照目录名（`{appData}/autosave`）——**布局的单一真源在这里**，别处请引它 */
+export const AUTOSAVE_DIR_NAME = 'autosave';
+/** manifest / 心跳的文件名（同上：读面不许自拼字面量） */
+export const AUTOSAVE_MANIFEST_FILE = 'manifest.json';
+export const AUTOSAVE_HEARTBEAT_FILE = 'heartbeat.json';
 
 export interface JournalEntry {
   /** 快照文件名（本目录内平铺） */
@@ -85,6 +90,14 @@ export function contentHashOf(path: string): string {
 /** 快照文件名：hash 喂 pathKey 归一形（Windows 大小写/分隔符折叠——同一文件两种写法共用一份快照） */
 export function snapshotFileName(path: string): string {
   return `snap-${contentHashOf(pathKey(path))}.txt`;
+}
+
+/**
+ * 某路径的快照落点（**读面唯一的拼法**：时间线要预览/写回快照时不许自拼 `snap-` 前缀）。
+ * 与 `snapshotFileName` 同尺：Windows 两种写法折叠成同一个文件，读回来的就是那一份。
+ */
+export function snapshotFilePathOf(dir: string, path: string): string {
+  return join(dir, snapshotFileName(path));
 }
 
 export function emptyManifest(root: string | null): JournalManifest {
@@ -203,7 +216,7 @@ export class AutosaveJournal {
       if (!names.has(file)) await this.io.removeFile(await this.path(file)).catch(() => undefined);
     }
     this.liveFiles = names;
-    await this.io.writeTextFile(await this.path('manifest.json'), serializeManifest(manifest));
+    await this.io.writeTextFile(await this.path(AUTOSAVE_MANIFEST_FILE), serializeManifest(manifest));
     await this.io.writeTextFile(await this.path('heartbeat.json'), JSON.stringify({ t: nowMs }));
     this.hasEntries = records.length > 0;
   }
@@ -226,7 +239,7 @@ export class AutosaveJournal {
   }
 
   private async writeEmpty(): Promise<void> {
-    await this.io.writeTextFile(await this.path('manifest.json'), serializeManifest(emptyManifest(null)));
+    await this.io.writeTextFile(await this.path(AUTOSAVE_MANIFEST_FILE), serializeManifest(emptyManifest(null)));
     await this.io.removeFile(await this.path('heartbeat.json')).catch(() => undefined);
     this.hasEntries = false;
   }
@@ -236,7 +249,7 @@ export class AutosaveJournal {
    * 不改 hasEntries（读回的不是本会话的写入）。
    */
   async readForRecovery(nowMs = Date.now()): Promise<{ manifest: JournalManifest; records: RecoveredRecord[] } | null> {
-    const manifest = parseManifest(await this.io.readTextFile(await this.path('manifest.json')));
+    const manifest = parseManifest(await this.io.readTextFile(await this.path(AUTOSAVE_MANIFEST_FILE)));
     if (!planCrashRecovery(manifest, await this.io.readTextFile(await this.path('heartbeat.json')), nowMs)) {
       return null;
     }
@@ -248,4 +261,62 @@ export class AutosaveJournal {
     }
     return records.length > 0 ? { manifest, records } : null;
   }
+}
+
+/* ---------------------- 只读视图（W11 时间线批） ---------------------- */
+
+/**
+ * 时间线要的**只读**那一面：给一个 `dir`（`{appData}/autosave`）和一条最小读通道，
+ * 把 manifest 里的快照清单读回来——**不建引擎、不改状态、不消费恢复件**。
+ *
+ * 为什么值得单开一个口子而不是"再举一次 AutosaveJournal 实例"：
+ * 崩溃引擎的生命周期属于会话（`hasEntries` / 孤儿回收），历史查看是一次只读旁听，
+ * 两者混在一个实例里会让"看一眼时间线"变成一次可能改动会话状态的动作。
+ * 格式仍只有这一份实现（`parseManifest` / `snapshotFileName` 都住在本模块）。
+ */
+export interface JournalReadIo {
+  /** 缺失返回 undefined（与 `JournalIo.readTextFile` 同口径） */
+  readTextFile(path: string): Promise<string | undefined>;
+}
+
+/** manifest 里的一条快照（`savedAt` = 防抖落盘那一刻；条目没有版本号，路径就是身份） */
+export interface AutosaveSnapshotInfo {
+  path: string;
+  /** 快照文件名（本目录内平铺） */
+  file: string;
+  /** 快照的盘上绝对路径（= `join(dir, file)`，读预览/写回都拿它） */
+  filePath: string;
+  savedAt: number;
+  encoding: string;
+  eol: string;
+}
+
+/** 快照清单 + 是否"疑似上次没善终"（心跳缺失/超龄；横幅口径与启动探测同一个函数） */
+export interface AutosaveView {
+  snapshots: AutosaveSnapshotInfo[];
+  root: string | null;
+  crashSuspected: boolean;
+}
+
+export async function readAutosaveView(io: JournalReadIo, dir: string): Promise<AutosaveView> {
+  const manifest = parseManifest(await io.readTextFile(join(dir, AUTOSAVE_MANIFEST_FILE)));
+  const heartbeatRaw = await io.readTextFile(join(dir, AUTOSAVE_HEARTBEAT_FILE));
+  const snapshots: AutosaveSnapshotInfo[] = [];
+  for (const [path, entry] of Object.entries(manifest.entries)) {
+    snapshots.push({
+      path,
+      file: entry.file,
+      filePath: join(dir, entry.file),
+      savedAt: entry.savedAt,
+      encoding: entry.encoding,
+      eol: entry.eol,
+    });
+  }
+  // 按时刻新在前（与备份/回收站清单同一呈现口径）
+  snapshots.sort((a, b) => b.savedAt - a.savedAt);
+  return {
+    snapshots,
+    root: manifest.root,
+    crashSuspected: planCrashRecovery(manifest, heartbeatRaw, Date.now()),
+  };
 }

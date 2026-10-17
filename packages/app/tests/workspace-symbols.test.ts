@@ -57,6 +57,8 @@ describe('collectWorkspaceSymbols · 问齐与合并', () => {
     expect(collectWorkspaceSymbols([c], { query: '  ', project: null })).toEqual({
       symbols: [],
       totalMatched: 0,
+      scope: null,
+      droppedOutOfScope: 0,
     });
     expect(spy).not.toHaveBeenCalled();
   });
@@ -104,6 +106,95 @@ describe('collectWorkspaceSymbols · 问齐与合并', () => {
     } as unknown as EditorLanguageServiceContribution;
     collectWorkspaceSymbols([c], { query: 'A', project: null, limit: 7 });
     expect(seen[0]).toEqual({ kind: 'workspaceSymbol', query: 'A', project: null, limit: 7 });
+  });
+});
+
+describe('collectWorkspaceSymbols · 糖线合并（同一个函数绝不出两行）', () => {
+  const DIR = 'C:\\game\\個人口上\\chara10';
+  const KOJO = `${DIR}\\M.kojo`;
+  const ERB = `${DIR}\\M.ERB`;
+  const NAME = 'M_KOJO_MESSAGE_COM_K10_挨拶';
+  const erbSays = (symbols: EditorWorkspaceSymbol[], totalMatched = symbols.length) =>
+    contribution('erb', { kind: 'workspaceSymbol', symbols, totalMatched });
+  const sugarSays = (symbols: EditorWorkspaceSymbol[], totalMatched = symbols.length) =>
+    contribution('sugar', { kind: 'workspaceSymbol', symbols, totalMatched });
+
+  it('同一函数：ERB 报产物（.ERB）、糖线报源（.kojo）⇒ 只剩源那一条，先后顺序无关', () => {
+    const erb = erbSays([symbol(NAME, ERB, 12)]);
+    const sugar = sugarSays([symbol(NAME, KOJO, 9)]);
+    for (const order of [
+      [erb, sugar],
+      [sugar, erb],
+    ]) {
+      const got = collectWorkspaceSymbols(order, { query: NAME, project: null });
+      // 只剩一条，且是**作者能改**的那份源（行号也是源行，不是产物行）
+      expect(got.symbols).toEqual([symbol(NAME, KOJO, 9)]);
+    }
+  });
+
+  it('并掉的那条从 totalMatched 扣回：3 家报数 − 1 条并掉 ⇒ 可见 2 条、hidden 0', () => {
+    const erb = erbSays([symbol(NAME, ERB, 12), symbol('M_KOJO_MESSAGE_COM_K10_別', ERB, 40)], 2);
+    const sugar = sugarSays([symbol(NAME, KOJO, 9)], 1);
+    const got = collectWorkspaceSymbols([erb, sugar], { query: 'M_KOJO', project: null });
+    expect(got.symbols.map((s) => s.filePath)).toEqual([KOJO, ERB]);
+    expect(got.totalMatched).toBe(2); // 2 + 1 − 1（被并掉的那条不再入账）
+    const picked = pickWorkspaceSymbols(got, 'M_KOJO');
+    expect(picked.items).toHaveLength(2);
+    expect(picked.hidden).toBe(0); // 不许报"另有 1 条"——那条根本列不出来（假读数）
+  });
+
+  it('同名不同归属 ⇒ 不误并（本批只有这一份产物才算同一个符号）', () => {
+    const other = 'C:\\game\\個人口上\\chara20\\M.ERB';
+    const got = collectWorkspaceSymbols(
+      [
+        erbSays([symbol(NAME, ERB, 12), symbol(NAME, other, 4)], 2),
+        sugarSays([symbol(NAME, KOJO, 9)], 1),
+      ],
+      { query: NAME, project: null },
+    );
+    // chara20 那份没有被任何源指向 ⇒ 照旧自成一行
+    expect(got.symbols.map((s) => s.filePath)).toEqual([KOJO, other]);
+    expect(got.totalMatched).toBe(2); // 3 − 1
+  });
+
+  it('不同目录的两个同名函数（各自都有源）⇒ 两行，各自扣各自的那条', () => {
+    const kojo2 = 'C:\\game\\個人口上\\chara20\\M.kojo';
+    const erb2 = 'C:\\game\\個人口上\\chara20\\M.ERB';
+    const got = collectWorkspaceSymbols(
+      [
+        erbSays([symbol(NAME, ERB, 12), symbol(NAME, erb2, 40)], 2),
+        sugarSays([symbol(NAME, KOJO, 9), symbol(NAME, kojo2, 5)], 2),
+      ],
+      { query: NAME, project: null },
+    );
+    expect(got.symbols.map((s) => s.filePath)).toEqual([KOJO, kojo2]);
+    expect(got.totalMatched).toBe(2); // 4 − 2
+  });
+
+  it('推不出目标的路径（`M.kojo.bak`）退化旧键：不崩、也不与同名产物误并', () => {
+    const bak = `${DIR}\\M.kojo.bak`;
+    const got = collectWorkspaceSymbols(
+      [
+        erbSays([symbol(NAME, ERB, 1)], 1),
+        contribution('bak', { kind: 'workspaceSymbol', symbols: [symbol(NAME, bak, 1)], totalMatched: 1 }),
+      ],
+      { query: NAME, project: null },
+    );
+    expect(got.symbols.map((s) => s.filePath)).toEqual([ERB, bak]);
+    expect(got.totalMatched).toBe(2);
+  });
+
+  it('糖线缺席（整批没有 .kojo 源）⇒ 键仍是旧口径：输出与改前逐字相同', () => {
+    const a = contribution('a', {
+      kind: 'workspaceSymbol',
+      symbols: [symbol('ALPHA', F1, 1), symbol('ALPHA', F1, 9)],
+      totalMatched: 2,
+    });
+    const b = contribution('b', { kind: 'workspaceSymbol', symbols: [symbol('ALPHA', F1, 1)], totalMatched: 1 });
+    const got = collectWorkspaceSymbols([a, b], { query: 'alpha', project: null });
+    // 同文件同名的两条定义照旧并列；跨家重复只留一条、总数照旧 2+1（W6 之前的读数）
+    expect(got.symbols.map((s) => `${s.filePath}#${s.line}`)).toEqual([`${F1}#1`, `${F1}#9`]);
+    expect(got.totalMatched).toBe(3);
   });
 });
 

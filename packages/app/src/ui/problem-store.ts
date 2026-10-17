@@ -11,15 +11,34 @@
  * 标签关闭 / 卸载即清键——避免切走的文件留下「幽灵诊断」。
  */
 
+import type { KernelEventMap } from '@kojo/plugin-api';
+
+/** 落点区间（契约 `editor.revealLocation.span` 反推；面板不自立形状） */
+export type ProblemSpan = NonNullable<KernelEventMap['editor.revealLocation']['span']>;
+
 export interface EditorProblem {
   /** 文件路径（原样保留，跳源行与分组都靠它） */
   path: string;
   /** 1 基行号 */
   line: number;
+  /**
+   * 波浪线盖住的**列区间**（1 基、UTF-16 码元、终点不含）——W9 落点 span 批补上的一环：
+   * 装饰器本来就带 `startColumn` / `endColumn`，此前汇总到面板时被整条丢掉，
+   * 于是"点问题跳过去落在行首、同一个位置按 F12 落在名字那一列"。
+   * 缺席 = 这一条只有行级信息（退化判据唯一，住在 `monaco/reveal-position.ts`，面板不许自算）。
+   */
+  span?: ProblemSpan;
   severity: 'error' | 'warning' | 'info';
   message: string;
   /** 可选诊断码（工具提示 / 过滤用；游戏无关的稳定标识） */
   code?: string;
+  /**
+   * 诊断码的**可读来源标签**（additive，DIAG-LINK 2026-10-18）：`LineDecoration.source`
+   * 原样带到面板行——多来源发布后，同一个 `code` 可能住在几条流水线上，面板要说得出
+   * "这条是谁报的"，而 `code` 是稳定标识、不许带来源限定词（改名即断链）。
+   * 缺省 = 旧行为（面板只显示 `code`）。
+   */
+  source?: string;
 }
 
 /** 严重度排序权重（error 最靠前；越小越先出） */

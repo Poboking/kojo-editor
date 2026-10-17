@@ -105,8 +105,13 @@ function fakeSchema(): VariableSchema {
   } as unknown as VariableSchema;
 }
 
+/** 项目内函数名（同一数组引用：前缀索引按数组身份记忆化；COMPL-SHARED 起两语言共用这一份注入表） */
+const PROJECT_FNS: readonly string[] = ['M_KOJO_A', 'M_KOJO_B'];
+
 const KOJO_TABLES: CompletionTables = {
   variableSchema: fakeSchema(),
+  // COMPL-SHARED：项目函数名（与 `.erb` 同一份注入表）
+  erbFunctionNames: () => PROJECT_FNS,
   faceTable: {
     faces: {
       初见: { template: 'M_KOJO_K{n}_HATSUMI' },
@@ -133,12 +138,11 @@ const KOJO_TABLES: CompletionTables = {
   },
 };
 
-/** 项目内函数名（同一数组引用：EC-3 前缀索引按数组身份记忆化） */
-const PROJECT_FNS: readonly string[] = ['M_KOJO_A', 'M_KOJO_B'];
-
 const ERB_TABLES: ErbCompletionTables = {
   variableSchema: fakeSchema(),
   erbFunctionNames: () => PROJECT_FNS,
+  // COMPL-SHARED：跨语言词形是注入位（宿主未接 ⇒ 生产里该行零候选 + 一次降级；本文件要验出货面）
+  kojoForms: () => [{ label: '如果', detail: '.kojo 词形' }],
 };
 
 /* ============================== 上下文构造（把桩喂给 seam 的 provide） ============================== */
@@ -197,6 +201,8 @@ const KOJO_SCENARIOS: ReadonlyArray<readonly [string, CompletionSourceContext]> 
   ['kojo-instruction', kojoCtx('时机 指令 摸屁股', 8)],
   // KC-4 库函数名：表达式标识符位（调用形）
   ['kojo-library', kojoCtx('心形(', 3)],
+  // COMPL-SHARED：项目函数名（`调用` / `函数` 的名字槽，与 `.erb` 同一份注入表）
+  ['kojo-functions', kojoCtx('调用 M_KOJO', 10)],
 ];
 
 const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]> = [
@@ -210,6 +216,8 @@ const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]
   ['erb-labels', erbCtx('@F\n$TARGET_ONE\n\tGOTO $TA', 10, 3)], // 跳转位
   ['erb-system-functions', erbCtx('IF A', 5)], // 表达式位
   ['erb-bits', erbCtx('SETBIT CFLAG:1, ', 17)], // 位槽（位号 + 中文位名）
+  // COMPL-SHARED：跨语言词形（`.erb` 里补 `.kojo` 写法；词形只从注入位取）
+  ['erb-kojo-forms', erbCtx('IF A', 5)],
 ];
 
 interface Collected {

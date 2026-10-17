@@ -7,7 +7,10 @@
  * (a) 索引未建 ⇒ `resolveRenameLocation` 返回 `undefined`（不报错），名字不认 ⇒ 带理由拒绝；
  * (b) 只读文件剔除计数进 `rejectReason`，且**全或无**——monaco 0.57 的 rename 控制器见到
  *     `rejectReason` 会丢弃全部编辑只弹 info，部分应用 = 静默半套重命名，禁；
- * (c) 已打开文件进 WorkspaceEdit（逐处 live 文本验证，陈旧坐标剔除）、未打开文件走 io 通道。
+ * (c) 已打开文件进 WorkspaceEdit（逐处 live 文本验证，陈旧坐标剔除）、未打开文件走 io 通道；
+ * (d) **W8 XLANG-RENAME**：`.erb` 改名把糖线判为同名的 `.kojo` 记号并进同一批（同一条
+ *     分组闸门与 io 通道）；判据缺席 ⇒ 整批拒绝并点名文件与处数；`.kojo` 只读并进同一个
+ *     只读计数。派生预览 model（`inmemory://sugar/`）不参与。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -15,6 +18,7 @@ import type * as Monaco from 'monaco-editor';
 import { pathKey, type ErbReference } from '@kojo/plugin-api';
 import {
   applyReferenceEdits,
+  createApplyToClosedFile,
   installErbRename,
   planRenameEdits,
   resolveRenameTarget,
@@ -22,6 +26,7 @@ import {
   type ErbRenameHandlers,
 } from '../src/monaco/erb-rename';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
+import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 
 /* ============================== 纯函数：词定位 ============================== */
 
@@ -360,5 +365,336 @@ describe('installErbRename', () => {
     expect(result?.edits).toEqual([]);
     expect(result && 'rejectReason' in result ? result.rejectReason : '').toContain('反向引用索引缺席');
     expect(wired.ioCalls).toEqual([]);
+  });
+});
+
+/* ============================== 跨语言腿（W8 XLANG-RENAME） ============================== */
+
+/**
+ * `.erb` 改名与生成它的 `.kojo` 源并成**一条写通道**（钉四件行为契约）：
+ * ① 糖线判据证明的同名记号进同一批编辑（已开 → WorkspaceEdit、未开 → 同一条 io 通道）；
+ * ② 判读缺席 ⇒ 整批拒绝 + 可读理由（绝不静默只改 `.erb` 那半边，下次保存会被冲掉）；
+ * ③ `.kojo` 只读文件并入**同一个**只读计数（同一次全或无）；
+ * ④ 落盘通道 `createApplyToClosedFile` 的三步纪律（只读先闸 / 现文本验证 / 零改动不写）。
+ */
+
+const K = 'C:/p/kojo/A.kojo';
+const K2 = 'C:/p/kojo/B.kojo';
+
+/** `.kojo` 源 model（真文件 model：scheme = file；糖预览 model 是 inmemory，不参与） */
+function kojoModelOf(filePath: string, ...lines: string[]): Monaco.editor.ITextModel {
+  return {
+    uri: {
+      scheme: 'file',
+      fsPath: filePath,
+      path: filePath,
+      toString: () => `file:///${filePath.replace(/\\/g, '/')}`,
+    },
+    getLanguageId: () => KOJO_LANGUAGE_ID,
+    getValue: () => lines.join('\n'),
+    getLineCount: () => lines.length,
+    getLineContent: (n: number) => lines[n - 1] ?? '',
+  } as unknown as Monaco.editor.ITextModel;
+}
+
+/** 带 `editor.getModels()` 的 monaco 桩（已开 `.kojo` 标签的枚举面） */
+function stubMonacoWithModels(models: Monaco.editor.ITextModel[]) {
+  const registered: { languageId: string; provider: Monaco.languages.RenameProvider }[] = [];
+  const monaco = {
+    languages: {
+      registerRenameProvider: (languageId: string, provider: Monaco.languages.RenameProvider) => {
+        registered.push({ languageId, provider });
+        return { dispose: () => undefined };
+      },
+    },
+    editor: { getModels: () => models },
+    Uri: {
+      file: (p: string) => ({ fsPath: p, scheme: 'file', toString: () => `file:///${p.replace(/\\/g, '/')}` }),
+    },
+  } as unknown as typeof Monaco;
+  return { monaco, provider: () => registered[0]!.provider };
+}
+
+/** 光标命中 `M_KOJO_A` 的 `.erb` 定义 model */
+const ERB_DEF_MODEL = () => modelOf('@M_KOJO_A(1)', 'CALL M_KOJO_A');
+
+function kojoHandlers(opts: {
+  refs: readonly ErbReference[];
+  writable: ReadonlySet<string>;
+  openModels?: ReadonlyMap<string, Monaco.editor.ITextModel>;
+  models?: Monaco.editor.ITextModel[];
+  kojoSources?: (
+    name: string,
+  ) => readonly { filePath: string; text: string }[] | Promise<readonly { filePath: string; text: string }[]>;
+  kojoReferences?: NonNullable<ErbRenameHandlers['kojoReferences']>;
+  applyToClosedFile?: ErbRenameHandlers['applyToClosedFile'];
+}) {
+  const ioCalls: string[] = [];
+  const byName = new Map([['M_KOJO_A', []]]);
+  const handlers: ErbRenameHandlers = {
+    canAnswer: () => true,
+    currentIndex: () => ({ byName, references: { bySymbol: new Map() } }) as unknown as import('@kojo/plugin-api').ErbIndex,
+    referencesTo: () => opts.refs,
+    isWritable: (p) => opts.writable.has(p),
+    openModelFor: (p) => opts.openModels?.get(p),
+    applyToClosedFile:
+      opts.applyToClosedFile ??
+      (async (p) => {
+        ioCalls.push(p);
+        return { applied: 1, stale: 0 };
+      }),
+    ...(opts.kojoSources ? { kojoSources: opts.kojoSources } : {}),
+    ...(opts.kojoReferences ? { kojoReferences: opts.kojoReferences } : {}),
+  };
+  const stub = stubMonacoWithModels(opts.models ?? []);
+  installErbRename(stub.monaco, handlers);
+  return { ioCalls, provider: stub.provider(), handlers };
+}
+
+describe('erb-rename 跨语言腿（.kojo 源）', () => {
+  const A = 'C:/p/ERB/a.ERB';
+  const erbRefs = [ref(A, 1, 2, 10)];
+
+  it('① 糖线证明的 .kojo 记号进同一批编辑（已开标签走 WorkspaceEdit）', async () => {
+    const kojoModel = kojoModelOf(K, '调用 M_KOJO_A()', 'PRINT M_KOJO_A');
+    const { provider } = kojoHandlers({
+      refs: erbRefs,
+      writable: new Set([A, K]),
+      openModels: new Map([[A, ERB_DEF_MODEL()], [K, kojoModel]]),
+      models: [kojoModel],
+      kojoReferences: ({ filePath, text }) => {
+        expect(filePath).toBe(K);
+        expect(text).toContain('M_KOJO_A');
+        return [
+          { filePath, line: 1, column: 4, kind: 'call' },
+          { filePath, line: 2, column: 7, kind: 'mention' },
+        ];
+      },
+    });
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(result && 'rejectReason' in result ? result.rejectReason : undefined).toBeUndefined();
+    const edits = (result?.edits ?? []) as Monaco.languages.IWorkspaceTextEdit[];
+    // 定义处 + .kojo 源两处 = 三处，一次交付
+    expect(edits).toHaveLength(3);
+    const kojoEdits = edits.filter((e) => e.resource.toString().includes('A.kojo'));
+    expect(kojoEdits.map((e) => [e.textEdit.range.startLineNumber, e.textEdit.range.startColumn])).toEqual([
+      [1, 4],
+      [2, 7],
+    ]);
+    expect(kojoEdits.every((e) => e.textEdit.text === 'NEW_A')).toBe(true);
+  });
+
+  it('①b 未打开的 .kojo 源走同一条 io 通道（宿主枚举补齐判读）', async () => {
+    const { ioCalls, provider } = kojoHandlers({
+      refs: erbRefs,
+      writable: new Set([A, K2]),
+      openModels: new Map([[A, ERB_DEF_MODEL()]]),
+      kojoSources: () => [{ filePath: K2, text: '调用 M_KOJO_A()\n' }],
+      kojoReferences: ({ filePath }) => [{ filePath, line: 1, column: 4, kind: 'call' }],
+    });
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(result && 'rejectReason' in result ? result.rejectReason : undefined).toBeUndefined();
+    expect(ioCalls).toEqual([K2]); // 未开标签 ⇒ io 通道（与 .erb 同一入口）
+  });
+
+  it('② 判据缺席 ⇒ 整批拒绝，理由点名 .kojo 文件与处数（不静默改一半）', async () => {
+    const kojoModel = kojoModelOf(K, '调用 M_KOJO_A()', '; 散文里也写 M_KOJO_A');
+    const { ioCalls, provider } = kojoHandlers({
+      refs: erbRefs,
+      writable: new Set([A, K]),
+      openModels: new Map([[A, ERB_DEF_MODEL()]]),
+      models: [kojoModel],
+    });
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(result?.edits).toEqual([]);
+    expect(ioCalls).toEqual([]); // 一份都没落
+    const reason = (result && 'rejectReason' in result ? result.rejectReason : '') ?? '';
+    expect(reason).toContain('.kojo');
+    expect(reason).toContain('2 处');
+    expect(reason).toContain('整次重命名取消');
+  });
+
+  it('②b 糖线判读**抛错**（不是"答没有引用"）⇒ 同样整批拒绝，绝不静默只改 .erb', async () => {
+    const kojoModel = kojoModelOf(K, '调用 M_KOJO_A()', 'PRINT M_KOJO_A');
+    const { ioCalls, provider } = kojoHandlers({
+      refs: erbRefs,
+      writable: new Set([A, K]),
+      openModels: new Map([[A, ERB_DEF_MODEL()]]),
+      models: [kojoModel],
+      kojoReferences: () => {
+        throw new Error('转译器探针未就绪');
+      },
+    });
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(result?.edits).toEqual([]);
+    expect(ioCalls).toEqual([]); // 一份都没落（含 .erb 那半边）
+    const reason = (result && 'rejectReason' in result ? result.rejectReason : '') ?? '';
+    expect(reason).toContain('2 处');
+    expect(reason).toContain('转译器探针未就绪');
+    expect(reason).toContain('整次重命名取消');
+  });
+
+  it('②c 宿主 .kojo 源枚举**抛错**（未打开的糖源看不见）⇒ 无从证明 ⇒ 整批拒绝', async () => {
+    const { ioCalls, provider } = kojoHandlers({
+      refs: erbRefs,
+      writable: new Set([A]),
+      openModels: new Map([[A, ERB_DEF_MODEL()]]),
+      kojoSources: () => {
+        throw new Error('walkDir 取消');
+      },
+      kojoReferences: ({ filePath }) => [{ filePath, line: 1, column: 4, kind: 'call' }],
+    });
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(result?.edits).toEqual([]);
+    expect(ioCalls).toEqual([]);
+    const reason = (result && 'rejectReason' in result ? result.rejectReason : '') ?? '';
+    expect(reason).toContain('walkDir 取消');
+    expect(reason).toContain('.kojo');
+  });
+
+  it('③ .kojo 只读 ⇒ 并入同一个只读计数，整次取消（两种语言一份闸门）', async () => {
+    const kojoModel = kojoModelOf(K, '调用 M_KOJO_A()');
+    const { provider } = kojoHandlers({
+      refs: erbRefs,
+      writable: new Set([A]), // K 只读
+      openModels: new Map([[A, ERB_DEF_MODEL()]]),
+      models: [kojoModel],
+      kojoReferences: ({ filePath }) => [{ filePath, line: 1, column: 4, kind: 'call' }],
+    });
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(result?.edits).toEqual([]);
+    expect(result && 'rejectReason' in result ? result.rejectReason : '').toContain('1 个文件只读未纳入');
+  });
+
+  it('糖线判"不是函数引用"（空集）⇒ .kojo 一侧不动、.erb 一侧照改', async () => {
+    const kojoModel = kojoModelOf(K, '台词旁白：M_KOJO_A 是散文');
+    const { provider } = kojoHandlers({
+      refs: erbRefs,
+      writable: new Set([A, K]),
+      openModels: new Map([[A, ERB_DEF_MODEL()]]),
+      models: [kojoModel],
+      kojoReferences: () => [],
+    });
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(result && 'rejectReason' in result ? result.rejectReason : undefined).toBeUndefined();
+    const edits = (result?.edits ?? []) as Monaco.languages.IWorkspaceTextEdit[];
+    expect(edits).toHaveLength(1);
+    expect(edits[0]!.resource.toString()).toContain('a.ERB');
+  });
+
+  it('派生预览 model（inmemory://sugar/）不参与跨语言腿', async () => {
+    const derived = {
+      ...kojoModelOf(K, '调用 M_KOJO_A()'),
+      uri: { scheme: 'inmemory', fsPath: '', path: '/sugar/A.kojo', toString: () => 'inmemory://sugar/A.kojo' },
+    } as unknown as Monaco.editor.ITextModel;
+    const { provider } = kojoHandlers({
+      refs: erbRefs,
+      writable: new Set([A]),
+      openModels: new Map([[A, ERB_DEF_MODEL()]]),
+      models: [derived],
+    });
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(result && 'rejectReason' in result ? result.rejectReason : undefined).toBeUndefined();
+  });
+});
+
+/* ============================== 全或无的第二道闸：rejectReason 与已落盘永不同时 ============================== */
+
+/**
+ * monaco 0.57 standalone 的 rename 控制器见 `rejectReason` 会**丢弃全部 WorkspaceEdit**
+ * （只弹 info）。于是"盘上已经写了几个闭文件"与"返回 rejectReason"绝不能同时出现——
+ * 同时出现 = 盘上半套 + 标签没改，作者拿到的就是名字分叉的半成品还不自知。
+ * io 失败的两种现场各钉一条：一处都没落 ⇒ 真拒绝；已有落点 ⇒ 不拒绝，交付其余。
+ */
+describe('erb-rename 写入失败的全或无不变式', () => {
+  const A = 'C:/p/ERB/a.ERB';
+  const B = 'C:/p/ERB/b.ERB';
+  const C = 'C:/p/ERB/c.ERB';
+
+  function installWithIo(io: ErbRenameHandlers['applyToClosedFile'], refs: readonly ErbReference[]) {
+    return kojoHandlers({
+      refs,
+      writable: new Set([A, B, C]),
+      openModels: new Map([[A, ERB_DEF_MODEL()]]),
+      applyToClosedFile: io,
+    });
+  }
+
+  it('一处闭文件都没落 ⇒ 带理由拒绝，编辑集清空（不留"标签没改盘上改了一半"）', async () => {
+    const { provider } = installWithIo(
+      async (p) => {
+        throw new Error(`写允许域未批准：${p}`);
+      },
+      [ref(A, 1, 2, 10), ref(B, 5, 1, 9), ref(C, 7, 1, 9)],
+    );
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(result?.edits).toEqual([]); // a.ERB 的 live 编辑一并交出（控制器丢弃 = 全不动）
+    const reason = (result && 'rejectReason' in result ? result.rejectReason : '') ?? '';
+    expect(reason).toContain('整次重命名取消');
+    expect(reason).toContain('写允许域未批准');
+  });
+
+  it('已有闭文件落盘后再失败 ⇒ 绝不返回 rejectReason（拒绝与部分成功不共存）', async () => {
+    let landed = 0;
+    const { provider } = installWithIo(
+      async (p) => {
+        if (p === B) {
+          landed++;
+          return { applied: 1, stale: 0 };
+        }
+        throw new Error(`磁盘写入中断：${p}`);
+      },
+      [ref(A, 1, 2, 10), ref(B, 5, 1, 9), ref(C, 7, 1, 9)],
+    );
+    const result = await provider.provideRenameEdits(ERB_DEF_MODEL(), AT(1, 3), 'NEW_A', null as never);
+    expect(landed).toBe(1); // 盘上确实有改动
+    expect(result && 'rejectReason' in result ? result.rejectReason : undefined).toBeUndefined();
+    const edits = (result?.edits ?? []) as Monaco.languages.IWorkspaceTextEdit[];
+    expect(edits).toHaveLength(1); // 已开标签这一处照常交付 = 把能补的落点补齐
+    expect(edits[0]!.textEdit.text).toBe('NEW_A');
+  });
+});
+
+/* ============================== 闭文件通道（与「全部替换」同源） ============================== */
+
+describe('createApplyToClosedFile', () => {
+  const apply = createApplyToClosedFile;
+
+  it('读 → 现文本验证 → 有实改才写回（陈旧处计 stale）', async () => {
+    const files = new Map<string, string>([['p', 'CALL FOO\nGONE\n']]);
+    const io = {
+      isWritable: () => true,
+      readText: async (p: string) => ({ text: files.get(p)! }),
+      writeText: async (p: string, text: string) => void files.set(p, text),
+    };
+    const out = await apply(io)('p', [{ line: 1, column: 6, endColumn: 9 }, { line: 2, column: 1, endColumn: 4 }], 'BAR', 'FOO');
+    expect(out).toEqual({ applied: 1, stale: 1 });
+    expect(files.get('p')).toBe('CALL BAR\nGONE\n');
+  });
+
+  it('只读文件先被闸门挡下：一次读盘都不发生（不绕写允许域）', async () => {
+    let reads = 0;
+    const io = {
+      isWritable: () => false,
+      readText: async () => {
+        reads++;
+        return { text: '' };
+      },
+      writeText: async () => undefined,
+    };
+    await expect(apply(io)('p', [{ line: 1, column: 1, endColumn: 4 }], 'BAR', 'FOO')).rejects.toThrow(/只读/);
+    expect(reads).toBe(0);
+  });
+
+  it('一处都没改 ⇒ 不写盘（零备份、零脏文件）', async () => {
+    let writes = 0;
+    const io = {
+      isWritable: () => true,
+      readText: async () => ({ text: 'CALL OTHER\n' }),
+      writeText: async () => void writes++,
+    };
+    const out = await apply(io)('p', [{ line: 1, column: 6, endColumn: 9 }], 'BAR', 'FOO');
+    expect(out).toEqual({ applied: 0, stale: 1 });
+    expect(writes).toBe(0);
   });
 });

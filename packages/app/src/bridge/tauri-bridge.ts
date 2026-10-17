@@ -10,6 +10,7 @@ import type {
   WatchCallback,
   WatchReportCallback,
 } from '@kojo/plugin-api';
+import { DECODE_LABEL } from '@kojo/plugin-api';
 import { base64ToBytes, bytesToBase64, invoke, isTauri } from './invoke';
 import { decodeReadFilesFrame } from './read-files-frame';
 
@@ -27,22 +28,13 @@ import { decodeReadFilesFrame } from './read-files-frame';
  */
 
 /**
- * `FileEncoding` → WHATWG 编码标签。`utf-8-bom` 走 `utf-8`：TextDecoder 默认剥前导 BOM，
- * 与 Rust `encoding_rs::UTF_8.decode` 同语义——encoding_rs 实现的正是这份标准，
- * 所以这些标签在两侧是同一套解码规则（含非法字节替换为 U+FFFD 的不严格口径）。
- * gbk / gb18030 / big5 同样是 WHATWG Encoding Standard 的一等标签（Chromium 与
- * encoding_rs 各自实现的正是这张表；编码方向经 `encode_string` 走 Rust encoding_rs）。
+ * `FileEncoding` → WHATWG 编码标签：**单源表在本仓 `@kojo/plugin-api`（`DECODE_LABEL`）**，
+ * 这里只 re-export（历史调用方与 `bridge-decode.test` 仍从本模块取）。`utf-8-bom` 走 `utf-8`：
+ * TextDecoder 默认剥前导 BOM，与 Rust `encoding_rs::UTF_8.decode` 同语义——encoding_rs
+ * 实现的正是这份标准；唯一的实测分叉（非法字节**连跑**按 WHATWG 逐错误字节给 U+FFFD，
+ * encoding_rs 合并成段）在检索侧由 `utf8_decode_whatwg` 消除，可达桶两侧逐字一致。
  */
-export const DECODE_LABEL: Record<FileEncoding, string> = {
-  'utf-8': 'utf-8',
-  'utf-8-bom': 'utf-8',
-  shift_jis: 'shift_jis',
-  gbk: 'gbk',
-  gb18030: 'gb18030',
-  big5: 'big5',
-  'utf-16le': 'utf-16le',
-  'utf-16be': 'utf-16be',
-};
+export { DECODE_LABEL };
 
 export const tauriBridge: PlatformBridge = {
   async readFileBytes(path: string): Promise<Uint8Array> {

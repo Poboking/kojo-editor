@@ -83,6 +83,22 @@ describe('collectDefinitionLocations · 合并与隔离', () => {
     expect(out).toEqual([loc(1), { ...loc(1), column: 3 }, loc(2)]);
   });
 
+  it('W9 合并取区间那一枚：同一处，一条腿给列、一条腿给区间 ⇒ 一份且带区间', () => {
+    const out = collectDefinitionLocations(
+      [
+        contribution('erb', () => ({ kind: 'definition', locations: [{ filePath: 'C:\\p\\b.ERB', line: 7, column: 4 }] })),
+        contribution('sugar', () => ({
+          kind: 'definition',
+          locations: [{ filePath: 'C:\\p\\b.ERB', line: 7, column: 4, span: { columnStart: 4, columnEnd: 11 } }],
+        })),
+      ],
+      REQUEST,
+    );
+    expect(out).toEqual([
+      { filePath: 'C:\\p\\b.ERB', line: 7, column: 4, span: { columnStart: 4, columnEnd: 11 } },
+    ]);
+  });
+
   it('无贡献方 / 全不认 → 空数组', () => {
     expect(collectDefinitionLocations([], REQUEST)).toEqual([]);
     expect(collectDefinitionLocations([contribution('x', () => undefined)], REQUEST)).toEqual([]);
@@ -212,26 +228,46 @@ describe('toDefinitionLinks · 目标 → Monaco LocationLink', () => {
     expect(links[0]!.uri.toString()).toBe(OTHER_URI);
   });
 
-  it('给了列 → 选区从该列起、整行到 `getLineMaxColumn`；没给列 → 行首（不猜列）', () => {
+  it('给了列没给区间 → 选区**零宽**（光标放到那一列；不铺到行尾假装作者要那儿）', () => {
     const withColumn = toDefinitionLinks([{ filePath: CURRENT_PATH, line: 2, column: 6 }], liveModelFor)[0]!;
     expect(withColumn.targetSelectionRange).toEqual({
       startLineNumber: 2,
       startColumn: 6,
       endLineNumber: 2,
-      endColumn: 20,
+      endColumn: 6,
     });
+    // 行级上下文（Peek 列表要显示这一整行）照旧是整行——**列表行**与**落点选区**是两件事
+    expect(withColumn.range).toEqual({ startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 20 });
+  });
+
+  it('给了区间 → 选区就是那一段（这就是"两条腿只有一条带列"的收口处）', () => {
+    const link = toDefinitionLinks(
+      [{ filePath: CURRENT_PATH, line: 2, column: 6, span: { columnStart: 6, columnEnd: 13 } }],
+      liveModelFor,
+    )[0]!;
+    expect(link.targetSelectionRange).toEqual({
+      startLineNumber: 2,
+      startColumn: 6,
+      endLineNumber: 2,
+      endColumn: 13,
+    });
+  });
+
+  it('没给列也没给区间 → 行首零宽（不猜列）', () => {
     const withoutColumn = toDefinitionLinks([{ filePath: CURRENT_PATH, line: 2 }], liveModelFor)[0]!;
-    expect(withoutColumn.targetSelectionRange!.startColumn).toBe(1);
-    expect(withoutColumn.range).toEqual({
+    expect(withoutColumn.targetSelectionRange).toEqual({
       startLineNumber: 2,
       startColumn: 1,
       endLineNumber: 2,
-      endColumn: 20,
+      endColumn: 1,
     });
   });
 
   it('越界行列夹取到模型现实（陈旧目标不该让 Peek 崩，也不该画出不存在的落点）', () => {
-    const links = toDefinitionLinks([{ filePath: CURRENT_PATH, line: 999, column: 999 }], liveModelFor);
+    const links = toDefinitionLinks(
+      [{ filePath: CURRENT_PATH, line: 999, column: 999, span: { columnStart: 999, columnEnd: 9999 } }],
+      liveModelFor,
+    );
     expect(links[0]!.targetSelectionRange).toEqual({
       startLineNumber: 10,
       startColumn: 20,
@@ -279,7 +315,7 @@ describe('installDefinitionProvider · 装配', () => {
       startLineNumber: 5,
       startColumn: 3,
       endLineNumber: 5,
-      endColumn: 20,
+      endColumn: 3,
     });
     // 来源区间用光标下的词（Peek 列表标题与 `Ctrl+Click` 预览标的就是它）
     expect(links[0]!.originSelectionRange).toEqual({
@@ -307,8 +343,7 @@ describe('installDefinitionProvider · 装配', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it('腿③文件没打开：走 `editor.revealLocation` 兜底、返回 undefined（与 D4 之前逐字一致）', () => {
-    const { monaco, registered } = stubMonaco();
+  it('腿③文件没打开：走 `editor.revealLocation` 兜底、返回 undefined（与 D4 之前逐字一致）', () => {    const { monaco, registered } = stubMonaco();
     const navigate = vi.fn();
     installDefinitionProvider(monaco, { resolve: () => [loc(7), loc(8)], navigate });
     const ret = registered[0]!.provider.provideDefinition(sourceModel, position, {} as Monaco.CancellationToken);
@@ -430,6 +465,25 @@ describe('installDefinitionProvider · registerEditorOpener', () => {
     });
     expect(handled).toBe(true);
     expect(navigate).toHaveBeenCalledWith({ filePath: OTHER_PATH, line: 8, column: 4 });
+  });
+
+  it('W9：Monaco 给的落点**带宽度** ⇒ 反手升级成区间（这条腿此前把终点整个丢了）', () => {
+    const navigate = vi.fn();
+    const opener = withOpener(navigate);
+    expect(
+      opener.openCodeEditor(editorWith(sourceModel), uriOf(OTHER_URI), {
+        startLineNumber: 8,
+        startColumn: 4,
+        endLineNumber: 8,
+        endColumn: 12,
+      }),
+    ).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({
+      filePath: OTHER_PATH,
+      line: 8,
+      column: 4,
+      span: { columnStart: 4, columnEnd: 12 },
+    });
   });
 
   it('宿主不认识这个 URI / 没给落点 → false 且不发事件（不猜目标）', () => {

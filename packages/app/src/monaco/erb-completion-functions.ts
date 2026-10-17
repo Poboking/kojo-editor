@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import { projectFunctionCandidates, type CompletionNameSlot } from './completion-core';
 
 /**
  * EC-3 · `.erb` **函数名补全** —— 定义位（行首 `@<前缀>`）与调用位
@@ -6,22 +7,14 @@ import type * as Monaco from './entry';
  * `JUMP` … 之后）弹出项目函数名候选。
  *
  * 名字来源 = 基座传入的 `functionNames`（`ErbIndex.byName` 的键，按 `fingerprint` 记忆化）；
- * 本模块**不读盘、不 import 内核 / 插件**，只做上下文判定 + 过滤 + 出项。
+ * 本模块**不读盘、不 import 内核 / 插件**，只做**本方言的位置判定**：
+ * 哪些列是"名字槽"（`@` 之后 / 调用关键字之后 / FORM 串的插值例外）是 ERB 语法知识，
+ * 归本文件；**槽里怎么出货**（前缀二分索引、大小写归一、千条上限、按数组身份记忆化）
+ * 一律吃 `completion-core.projectFunctionCandidates` 那一份实现——`.kojo` 的
+ * `kojo-completion-functions.ts` 用的是同一份，两语言不再各抄一遍索引。
  * Monaco provider 注册刻意不在此处——编排层负责把本函数接进补全基座。
  *
- * ## 性能做法（硬约束：候选可达 ~10 万条）
- * 「逐条 `startsWith` 全扫」在 10 万条上每击键就是 10 万次调用，与项目体量线性挂钩。
- * 这里改为**前缀区间级**：
- * 1. **按数组身份记忆化前缀索引**（`WeakMap<object, PrefixIndex>`）——基座按 fingerprint
- *    记忆化后反复传**同一个数组引用**，故索引只建一次。索引 = 归一化名（大写）**升序**数组
- *    + 平行条目数组；建一次 `O(n log n)`（合成 10 万条实测冷建 ~100 ms，**按数组身份只建一次**，
- *    均摊到每次补全可忽略）。
- * 2. 单次过滤 = 二分找前缀**下界**，再自下界**连续前扫**到不再命中 ⇒ `O(log n + 命中数)`，
- *    **与总量无关**。合成 10 万条实测单次（前缀命中 100 条）**< 0.1 ms**（见同目录测试）。
- *
  * 前缀匹配**大小写不敏感**（Emuera 函数名大小写不敏感，与 `ErbIndex.normalizedName` 同口径）。
- * 命中集有**条数上限**（`MAX_ITEMS`）——空前缀 / 极短前缀会命中全部候选，逐条造对象既慢又
- * 无意义；上限内的顺序**前缀精确优先，其次按名（归一化升序）**。
  *
  * 纯函数 + 薄 Monaco 翻译（纪律同 `kojo-completion-faces.ts`）：位置不符 / 名字表缺省
  * ⇒ 返回 `[]`，**绝不猜、绝不抛**。
@@ -30,9 +23,6 @@ import type * as Monaco from './entry';
 /** 名字字符集（正向定义；ASCII 词字符 + 假名 + 汉字 + 全角字母数字 + 半角片假名） */
 const NAME_CHAR_RE =
   /[0-9A-Za-z_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff10-\uff19\uff21-\uff3a\uff41-\uff5a\uff66-\uff9f]/;
-
-/** 单次补全的命中上限（防空前缀命中 10 万条时造整表对象；精确/升序保证上限内即先见常用名） */
-const MAX_ITEMS = 1000;
 
 /** 定义位：行首可选空白 + `@`（`@` 之后即函数名） */
 const DEF_RE = /^[ \t]*@/;
@@ -46,16 +36,6 @@ const CALL_RE =
 
 function isNameChar(ch: string | undefined): boolean {
   return ch !== undefined && NAME_CHAR_RE.test(ch);
-}
-
-/** 一次补全的「名字段」位置（0 基区间 + 光标前已输入前缀） */
-interface NameContext {
-  /** 名字段起点（0 基，含）——替换范围左界 */
-  readonly start: number;
-  /** 名字段终点（0 基，不含）——替换范围右界 */
-  readonly end: number;
-  /** 光标前已输入的名字前缀（用于过滤 / 排序） */
-  readonly prefix: string;
 }
 
 /** 名字槽是否**停在**未闭合的 `%…%` / `{…}` 内（严格在插值里 ⇒ 不猜） */
@@ -83,7 +63,7 @@ function parseNameSlot(
   col0: number,
   boundStart: number,
   allowInterp: boolean,
-): NameContext | null {
+): CompletionNameSlot | null {
   if (col0 < boundStart) return null;
 
   let slotEnd = boundStart;
@@ -109,58 +89,20 @@ function parseNameSlot(
   return { start, end, prefix: lineText.slice(start, col0) };
 }
 
-/** 归一化候选条目 */
-interface Candidate {
-  readonly name: string;
-  readonly file?: string;
-}
-
-/** 记忆化的前缀索引：归一化名升序 + 平行条目 */
-interface PrefixIndex {
-  readonly keys: readonly string[];
-  readonly entries: readonly Candidate[];
-}
-
-/** 按数组身份（基座按 fingerprint 记忆化的那个数组）缓存前缀索引 */
-const INDEX_CACHE = new WeakMap<object, PrefixIndex>();
-
-function prefixIndexFor(
-  functionNames: readonly (string | { name: string; file?: string })[],
-): PrefixIndex {
-  const cached = INDEX_CACHE.get(functionNames);
-  if (cached !== undefined) return cached;
-
-  const seen = new Set<string>();
-  const pairs: { key: string; entry: Candidate }[] = [];
-  for (const item of functionNames) {
-    const name = typeof item === 'string' ? item : item.name;
-    if (name.length === 0) continue;
-    const key = name.toUpperCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const file = typeof item === 'string' ? undefined : item.file;
-    pairs.push({ key, entry: file === undefined ? { name } : { name, file } });
+/**
+ * 光标处的 ERB **函数名槽**（定义位 `@…` 或 `CALL` 系调用位；纯函数，可单测）。
+ * 位置不符 ⇒ `null`（不猜）。`FORM` 类关键字后的槽允许 `%…%` / `{…}` 段。
+ */
+export function erbFunctionNameSlot(line: string, column: number): CompletionNameSlot | null {
+  const col0 = Math.min(Math.max(column - 1, 0), line.length);
+  const def = DEF_RE.exec(line);
+  if (def !== null) return parseNameSlot(line, col0, def[0].length, false);
+  const call = CALL_RE.exec(line);
+  if (call !== null) {
+    const allowInterp = call[1]!.toUpperCase().includes('FORM');
+    return parseNameSlot(line, col0, call[0].length, allowInterp);
   }
-  pairs.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-
-  const index: PrefixIndex = {
-    keys: pairs.map((p) => p.key),
-    entries: pairs.map((p) => p.entry),
-  };
-  INDEX_CACHE.set(functionNames, index);
-  return index;
-}
-
-/** 首个小写等于或大于 `target` 的下标（升序数组；`target` 已归一化为大写） */
-function lowerBound(keys: readonly string[], target: string): number {
-  let lo = 0;
-  let hi = keys.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (keys[mid]! < target) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo;
+  return null;
 }
 
 /**
@@ -179,56 +121,13 @@ export function erbFunctionCompletionItems(
   functionNames: readonly (string | { name: string; file?: string })[] | undefined,
 ): Monaco.languages.CompletionItem[] {
   if (!monaco || !model || !position) return [];
-  if (!functionNames || functionNames.length === 0) return [];
-  const lineNumber = position.lineNumber;
-  const column = position.column;
+  const { lineNumber, column } = position;
   if (!Number.isFinite(lineNumber) || lineNumber < 1) return [];
   if (!Number.isFinite(column) || column < 1) return [];
-
-  const line = model.getLineContent(lineNumber);
-  const col0 = Math.min(column - 1, line.length);
-
-  let context: NameContext | null = null;
-  const def = DEF_RE.exec(line);
-  if (def !== null) {
-    context = parseNameSlot(line, col0, def[0].length, false);
-  } else {
-    const call = CALL_RE.exec(line);
-    if (call !== null) {
-      const allowInterp = call[1]!.toUpperCase().includes('FORM');
-      context = parseNameSlot(line, col0, call[0].length, allowInterp);
-    }
-  }
-  if (context === null) return [];
-
-  const index = prefixIndexFor(functionNames);
-  const keys = index.keys;
-  const norm = context.prefix.toUpperCase();
-  const from = lowerBound(keys, norm);
-  if (from >= keys.length || !keys[from]!.startsWith(norm)) return [];
-
-  const range: Monaco.IRange = {
-    startLineNumber: lineNumber,
-    endLineNumber: lineNumber,
-    startColumn: context.start + 1,
-    endColumn: context.end + 1,
-  };
-  const kind = monaco.languages.CompletionItemKind.Function;
-
-  const items: Monaco.languages.CompletionItem[] = [];
-  for (let i = from; i < keys.length && items.length < MAX_ITEMS; i++) {
-    const key = keys[i]!;
-    if (!key.startsWith(norm)) break;
-    const entry = index.entries[i]!;
-    const exact = key === norm;
-    items.push({
-      label: entry.name,
-      kind,
-      insertText: entry.name,
-      range,
-      sortText: `${exact ? '0' : '1'}_${entry.name}`,
-      ...(entry.file !== undefined ? { detail: entry.file } : {}),
-    });
-  }
-  return items;
+  return projectFunctionCandidates(
+    monaco,
+    functionNames,
+    erbFunctionNameSlot(model.getLineContent(lineNumber), column),
+    lineNumber,
+  );
 }

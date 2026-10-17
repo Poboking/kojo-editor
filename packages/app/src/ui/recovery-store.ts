@@ -11,13 +11,25 @@ export interface RecoveredFileContent {
   text: string;
   encoding: string;
   eol: string;
+  /**
+   * 快照落盘那一刻（epoch ms；0 = manifest 里没给，时间线会退回"时刻不明"如实显示）。
+   * W11 时间线批 additive：恢复件要按时刻并进同一条时间线，不能再自报一个"现在"。
+   */
+  savedAt?: number;
 }
 
 let store = new Map<string, RecoveredFileContent>();
 
 /** 启动判定后一次性注入（覆盖式：旧残留清掉） */
-export function setRecoveredContents(entries: ReadonlyArray<{ path: string } & RecoveredFileContent>): void {
-  store = new Map(entries.map((e) => [e.path, { text: e.text, encoding: e.encoding, eol: e.eol }]));
+export function setRecoveredContents(
+  entries: ReadonlyArray<{ path: string; savedAt?: number } & RecoveredFileContent>,
+): void {
+  store = new Map(
+    entries.map((e) => [
+      e.path,
+      { text: e.text, encoding: e.encoding, eol: e.eol, ...(e.savedAt === undefined ? {} : { savedAt: e.savedAt }) },
+    ]),
+  );
 }
 
 /** 取即删：EditorPane 建 model 时领走（领走后内容只活在 model 里，由 autosave/用户保存接管后续） */

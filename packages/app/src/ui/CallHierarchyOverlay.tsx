@@ -12,6 +12,7 @@ import {
   subscribeCallHierarchy,
   type CallHierarchyRequest,
 } from './call-hierarchy';
+import { referenceTallyFor, subscribeReferenceTally } from './reference-tally-store';
 
 /**
  * 调用层级 overlay（2026-10-16 批 E）——「这个函数被谁调用 / 它调用谁」的只读查询面板。
@@ -24,6 +25,13 @@ import {
  * 跳不出 Monaco Peek 的原因（取舍记档案）：Monaco standalone 无 CallHierarchy API
  * （PITFALLS §83），面板形态是审查过的替代而非降级——调用层级天然是"一次看全"
  * 的清单视图，列表比 peek 弹窗承载得多。
+ *
+ * **处数不是这里数的**（W8 收口的第二判据）：面板头的「被调用 · N 处」读
+ * `ui/reference-tally-store` 里 F12 那一次计算的 `tally.nonDefinitionCount`，
+ * 差值解释直接交回 `explainReferenceCounts` 的原文（文案也只有一份真源）。
+ * 本面板自己那份 `incomingCalls` 只用来**列清单**（哪个调用者、哪一处点位），
+ * 组行的「k 处」是"这位调用者名下的点位行数"——列表的形状数据，不是第二把尺子。
+ * 没有读数（这个名字还没按过 F12）就明说"处数未读"，不拿清单长度冒充台账读数。
  */
 
 export interface CallHierarchyDeps {
@@ -77,7 +85,15 @@ function locLabel(path: string, line: number): string {
 export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unknown {
   return function CallHierarchyOverlay(): unknown {
     const [, setTick] = useState(0);
-    useEffect(() => subscribeCallHierarchy(() => setTick((t) => t + 1)), []);
+    // 两路都要订：请求态（谁被查看）+ 台账读数（这个名字被 F12 查过之后数才落地）
+    useEffect(() => {
+      const unsubscribeRequest = subscribeCallHierarchy(() => setTick((t) => t + 1));
+      const unsubscribeTally = subscribeReferenceTally(() => setTick((t) => t + 1));
+      return () => {
+        unsubscribeRequest();
+        unsubscribeTally();
+      };
+    }, []);
     const state = getCallHierarchyState();
 
     const closeBtn = h(
@@ -148,7 +164,10 @@ function renderRequest(request: CallHierarchyRequest, deps: CallHierarchyDeps, c
       sites: g.sites,
     })),
   );
-  const incomingCallCount = incoming.reduce((n, g) => n + g.sites.length, 0);
+  // 入边**处数**只从台账读数取（F12 那一次计算的 `nonDefinitionCount` 投影）；
+  // 清单本身（哪些调用者、哪些点位）仍是本面板的视图数据。
+  const incomingTally = referencesAvailable ? referenceTallyFor(target.filePath, target.normalizedName) : null;
+  const incomingCountText = incomingTally === null ? '处数未读' : `${incomingTally.tally.nonDefinitionCount} 处`;
   const outgoingCallCount = outgoing.reduce((n, g) => n + g.sites.length, 0);
 
   const section = (heading: string, emptyText: string, rows: Row[]): ReactElement[] => {
@@ -190,7 +209,7 @@ function renderRequest(request: CallHierarchyRequest, deps: CallHierarchyDeps, c
       ),
     ),
     ...section(
-      `被调用（${incoming.length} 个调用者 · ${incomingCallCount} 处）`,
+      `被调用（${incoming.length} 个调用者 · ${incomingCountText}）`,
       '索引里没有别的函数调用它。',
       incomingRows,
     ),
@@ -199,6 +218,17 @@ function renderRequest(request: CallHierarchyRequest, deps: CallHierarchyDeps, c
       '函数体内没有 CALL 直系族调用（或目标不在函数索引里）。',
       outgoingRows,
     ),
+    // 差值那句话交回 `explainReferenceCounts` 的原文（文案真源只有一份，面板不另写一份）；
+    // 还没读数就明说"没读过"，不拿清单行数冒充台账读数（宁缺毋错）
+    referencesAvailable
+      ? incomingTally === null
+        ? h(
+            'p',
+            { className: 'dim', key: 'tally' },
+            '「被调用」的处数与 F12 出自同一份台账读数：在这个函数上按一次 F12（查找引用）即可接入；还没读过就留空，不拿清单行数冒充。',
+          )
+        : h('p', { className: 'dim', key: 'tally' }, incomingTally.explanation)
+      : null,
     !referencesAvailable
       ? h('p', { className: 'dim', key: 'no-refs' }, '反向引用索引缺席（解析器未构建 references），出入边不可用。')
       : null,

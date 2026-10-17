@@ -1,13 +1,15 @@
 import type {
+  ErbScopeStamp,
   GameProject,
   SearchScopeContribution,
   SearchScopeOption,
 } from '@kojo/plugin-api';
-import { isPathUnder, pathKey } from '@kojo/plugin-api';
+import { filterByScope, isPathUnder, pathKey } from '@kojo/plugin-api';
 import { isUnderAnyRoot } from './workspace-roots';
 
 /**
- * 检索范围（"只看某个范围内的结果"）的**纯逻辑**（无 React、无 IPC；C3 领域限定检索批）。
+ * 检索范围（"只看某个范围内的结果"）的**纯逻辑 + 一份选择状态**
+ * （无 React、无 IPC；C3 领域限定检索批 → W7 NAV-SCOPE 批）。
  *
  * 分层纪律（本文件存在的全部理由）：**"哪个范围对应哪些目录"是领域判据，住提供方**
  * （提供方注册在 `search.scope` 槽上，本仓当前是 era 系适配器包的 `search-scope.ts`）。
@@ -17,6 +19,11 @@ import { isUnderAnyRoot } from './workspace-roots';
  *
  * 收窄发生在**发请求之前**（少扫就是少扫），不是"全扫一遍再挑"——扫描代价在原生侧，
  * 事后过滤既付了全量读盘的钱，又要宿主认识"结果属于谁"。
+ *
+ * W7 追加的一条纪律：**"现在只看哪一条"这份状态全仓只有一个落点**（本文件的
+ * `activeNavScope` 一节），四条检索通道（全文检索 / 函数树 / `Ctrl+T` / `Ctrl+P`）
+ * 一律读它、一律用同一个 `pathInScope` 判定。状态放在这里而不是各面板各自持有，
+ * 是"选定范围后函数树仍扫全量"那个症状的根治；除此以外本文件仍是纯函数集合。
  */
 
 /** 宿主侧的一条范围候选（`key` = 命名空间化后的稳定标识，检索状态里存的是它） */
@@ -91,6 +98,74 @@ export function findSearchScope(
 ): SearchScopeItem | null {
   if (key === '') return null;
   return items.find((i) => i.key === key) ?? null;
+}
+
+/**
+ * 选择器 `key` → **范围戳**（`ErbScopeStamp`：四通道共读的那一份）。
+ * 陈旧 / 空 key ⇒ `null` = 不限（**不猜**：找不到候选时把范围说成"空"会让整棵树空白，
+ * 作者读到的是"这个项目没有函数"，而不是"选择器过期了"）。
+ */
+export function resolveScope(items: readonly SearchScopeItem[], key: string): ErbScopeStamp | null {
+  const item = findSearchScope(items, key);
+  if (item === null) return null;
+  return { key: item.key, roots: item.roots };
+}
+
+/* ==================== 「只看」的唯一状态源（W7 NAV-SCOPE） ==================== */
+
+/**
+ * 上面几节是**纯函数**（候选摊平、根收窄、文案）；这一节是本文件唯一的模块级状态：
+ * **"现在只看哪一条范围"的落点全仓就这一个**。
+ *
+ * 为什么要状态源而不是"各面板自己读选择器"：C3 批之前这条选择器只被搜索面板在自己
+ * 发请求那一刻用过一次（`narrowRoots`），函数树 / `Ctrl+T` / `Ctrl+P` 根本不读它——
+ * 选定范围后全文检索只扫那一个目录，函数树仍扫全量十万函数，同一句"只看某个角色"
+ * 在四个地方给出四份真相。现在四通道一律 `activeNavScope()` + `pathInScope`（契约层）：
+ * **状态一处、判据一条**，谁再写一份"按名字猜归属"谁就是第四份判据。
+ *
+ * 分层照旧：这里流动的仍是**泛型事实**（key + 位置集合），宿主不理解它对应领域里的什么。
+ * `roots` 为空 ⇒ 等价于不限（见 `ErbIndex.scope` 的理由：空范围读起来像"项目是空的"）。
+ */
+let activeScope: ErbScopeStamp | null = null;
+const activeScopeListeners = new Set<(scope: ErbScopeStamp | null) => void>();
+
+function scopeEquals(a: ErbScopeStamp | null, b: ErbScopeStamp | null): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  if (a.key !== b.key || a.roots.length !== b.roots.length) return false;
+  return a.roots.every((root, i) => root === b.roots[i]);
+}
+
+/** 写入当前"只看"范围（等值不通知——四通道每帧都在读，重复通知就是白重扫十万条） */
+export function setActiveScope(scope: ErbScopeStamp | null): void {
+  const next = scope !== null && scope.roots.length === 0 ? null : scope;
+  if (scopeEquals(activeScope, next)) return;
+  activeScope = next;
+  for (const cb of [...activeScopeListeners]) {
+    try {
+      cb(activeScope);
+    } catch (e: unknown) {
+      console.warn(`[search-scope] 范围订阅者抛错：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+}
+
+/** 读当前"只看"范围（`null` = 不限） */
+export function activeNavScope(): ErbScopeStamp | null {
+  return activeScope;
+}
+
+/** 订阅"只看"范围变化（返回退订函数；面板与插件侧消费方共用这一条） */
+export function subscribeActiveScope(cb: (scope: ErbScopeStamp | null) => void): () => void {
+  activeScopeListeners.add(cb);
+  return () => {
+    activeScopeListeners.delete(cb);
+  };
+}
+
+/** 按当前"只看"范围过滤任意候选（路径取自 `pathOf`；不限范围 ⇒ 原样一份拷贝） */
+export function filterPathsByActiveScope<T>(items: readonly T[], pathOf: (item: T) => string): T[] {
+  return filterByScope(items, pathOf, activeScope?.roots ?? []);
 }
 
 /** 一次收窄的产出：实际检索根 + 落不进现有检索根的那部分范围条目 */
