@@ -93,11 +93,15 @@
 ## U. 1017 中文化收官后的工程收尾（lead 2026-10-17 立项；用户点名清单）
 
 > 这批不是语言面欠账，是**账面一致性、编辑器动作闭环、CI 盲区**三件事。
+> **ZH-F5 让位**：本组 agent 已写完计数器补全源（新源 + 分野门 + `names?()` 契约），窄门 rebase 时撞上上游
+> `ce76371`（IX-1 索引槽口径统一）——对方把同一件事做得更彻底：契约新增 `plugin-api/src/index-slot.ts` 单源
+> （转译 / 悬停 / 补全三消费者只准调它），按面 `indexKind` 让 `kojo-counter` 与 `kojo-instruction` **互斥**，
+> 从构造上消掉同名异号 8 条。故**本组 F5 与顺带的 F5b 一并撤销**（`git rebase --skip` 两笔），计数器面编号槽
+> 混指令名的噪音由 IX-1 收掉；读数与取舍以对方提交信息为准。
 > **判**不立项**一条**：`bootstrap.ts:35` 的「插件运行时动态加载」——19 插件全为编译期内建，作者侧无需求，
 > 换 loader 只引入加载序与信任面（游戏目录整体只读 ⇒ 没有任何合法来源可扫）；**YAGNI，不做**，接口预留注释保持原样。
 
 | ID | 任务（现象 / 复现 / 判据） | 认领 |
 |---|---|---|
 | ZH-F4b | **全项目校验「可中断」未闭合**（ZH-F4 交付后残余，归口：convention-linter + 宿主）。入口/进度/让路已落（`75bd9bb`：`editor.command` 一条命令 + 与面板按钮共用 `driveLintRun` + 引擎逐文件循环进内核计算池 `runSliced({sliceMs:8, priority:'background'})`，满载 600 棵整轮不再冻界面），**但 `ConventionLinterService.run` 没有取消通道**——按了就只能跑完。**判据**：①契约 additive 加取消位（`signal?: AbortSignal` 形态，旧调用方零改动、缺席语义逐字不变）；②中断后**不许**留半轮结论冒充整轮：`report` 要能区分"完整一轮 / 被中断的一轮"，且被中断的轮不得写结果快照（否则下次开项目级联会拿残影当真）；③分区缓存在中断后仍须正确（已算完的那棵不许重算，未算的那棵不许被记成"没问题的"）；④一条中断态单测 + 一条"中断后重跑等价于直接重跑"对拍。 | 待认领（校验线） |
-| ZH-F5b | **计数器面编号槽仍混出指令名**（ZH-F5 交付后残余，归口：补全面）。新源 `kojo-counter` 已按分野门 `faceTable.faces[分野].indexKind==='counter'` 出货，同名 label 也靠注册序胜出；但 KC-3 指令源**不看 `indexKind`** ⇒ 「时机 计数器 」的编号位同时列指令名，KC-2b 还列命名参数键（既有噪音）。**判据**：`kojo-completion-instructions.ts` 的 `timingNumberSlot` 加**同款分野门**（一行判据，复用同一份 `indexKind`，不许在指令源里另写一张分野白名单）；反证一条：计数器面编号位零指令候选、指令面编号位候选数不变。 | 待认领（补全面） |
 | RELEASE-1 | **发版样例覆盖率闸真红**（挂语料才显形，CI 不挂语料 ⇒ 只有本地全量看得见；归口：糖线 / 发版判据）。`packages/kernel/tests/sugar-releasecheck.transpile.test.ts:99` 的词表/分野/运算符覆盖率闸报发版样例没用过 `随机形（head.randomShape）`、`直出（head.randomShapeValue）`、`选择器（head.selector）`——三词由上游 ZH-E 批 `9117823`（表达式中文层补齐）入词表，`fixtures/sugar/release-check.kojo` 与 golden 没跟上（`grep -c` = 0 命中）。**已静态证明先于 ZH-F 收尾批**：该测试文件、`fixtures/sugar/`、`kojo-sugar/src/keywords.ts` 三处 `git diff origin/master..HEAD` 为空。**判据**：把三种写法真写进发版样例并过**真转译**（`RELEASE_GOLDEN_WRITE=1` 生成后人工过目 golden，不许手改期望串）；改完覆盖率闸必须仍报"每条写法都有出处"，产物结构配平与函数名不重复两条底线照绿。**不许**把三个词从覆盖率判据里摘掉来凑绿。 | 待认领（糖线） |
