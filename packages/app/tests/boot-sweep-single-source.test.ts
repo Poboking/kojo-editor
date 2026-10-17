@@ -22,6 +22,11 @@ import { describe, expect, it } from 'vitest';
  * 逐字比对之外，另由「取色镜像」一闸（三档 × 五面，口径照 `themes/light.css` 顶部
  * 「⚠ 锚定不变量」的五格清单）以**跨文件对撞**的方式钉住，漂一枚色即红、一律严格逐字相等；
  * 字号同理会跳（接力瞬间 `--fs-display` / `--fs-1` 两格），故另给两格字号镜像，真源只有基线一档。
+ *
+ * 补一面（2026-10-17）：**排版本身**同样是两处独立手写而先前没钉——卡容器 `index.html` 的
+ * `.boot-splash-card` vs `styles.css` 的 `.boot-skeleton-card`（类名不同，「同名配方」那条抓不到）、
+ * 两行文字各两格 `font-weight` / `letter-spacing` ⇒ 另挂「排版镜像」一条；只比这几格，
+ * `font-size` / `color` 仍归上面两条镜像管，免得同一格两套口径。
  */
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
@@ -350,6 +355,88 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
       'border-radius: inherit;',
       'animation: boot-sweep 1.15s <EASE> infinite;',
     ]);
+  });
+
+  it('排版镜像：卡容器全配方逐字相等 + 两行文字的 font-weight / letter-spacing 同档（钉住 16px / 600 / 0.02em）', () => {
+    const packedTokens = tokenMap(cssSrc(), ':root', 'styles.css');
+
+    /**
+     * 顶层选择器的**全部**声明（token 已还原）。不借道 `recipeOf`：它会滤掉取色那几格，
+     * 而这两条规则本就不取色 ⇒ 一格都不许漏（哪天有人往卡上补 `background` 也得当场红）。
+     */
+    const declsFor = (css: string, selector: string, tokens: Map<string, string>, label: string): Decl[] => {
+      const hits = parseRules(css).filter((r) => r.parent === null && r.prelude === selector);
+      if (hits.length !== 1) throw new Error(`${label}：顶层选择器 ${selector} 应有且只有一条，实得 ${hits.length} 条`);
+      const rule = hits[0];
+      if (!rule) throw new Error(`${label}：取不到 ${selector}`);
+      return declsOf(rule.body, `${label} ${selector}`).map((d) => ({
+        prop: d.prop,
+        value: resolveVars(d.value, tokens, `${label} ${selector} { ${d.prop} }`),
+      }));
+    };
+    const seqOf = (decls: Decl[]): string[] => decls.map((d) => `${d.prop}: ${d.value};`);
+    const cellOf = (decls: Decl[], prop: string): string | undefined => decls.find((d) => d.prop === prop)?.value;
+
+    // ① 卡容器：两类名不同（splash / skeleton），上面「同名配方 .boot-bar」那条覆盖不到 ⇒ 全配方单独钉
+    const cardInline = declsFor(inlineStyle(htmlSrc()), '.boot-splash-card', NO_TOKENS, 'index.html');
+    const cardPacked = declsFor(cssSrc(), '.boot-skeleton-card', packedTokens, 'styles.css');
+    expect(
+      seqOf(cardInline),
+      '卡容器配方漂移：index.html 的 .boot-splash-card（内联字面量） vs styles.css 的 .boot-skeleton-card（token 已还原）',
+    ).toEqual(seqOf(cardPacked));
+
+    // ② 两行文字的排版两格。font-size / color 归「取色镜像」「字号镜像」两条管，这里不重复钉，免得两套口径
+    const TYPE_CELLS = ['font-weight', 'letter-spacing'] as const;
+    const rows = [
+      { label: '品牌标题', inlineSel: '.boot-splash-brand', packedSel: '.boot-skeleton-brand' },
+      { label: '提示文字', inlineSel: '.boot-splash-tip', packedSel: '.boot-skeleton-tip' },
+    ] as const;
+    for (const row of rows) {
+      const inlineDecls = declsFor(inlineStyle(htmlSrc()), row.inlineSel, NO_TOKENS, 'index.html');
+      const packedDecls = declsFor(cssSrc(), row.packedSel, packedTokens, 'styles.css');
+      for (const prop of TYPE_CELLS) {
+        const inlineCell = cellOf(inlineDecls, prop);
+        const packedCell = cellOf(packedDecls, prop);
+        const where = `${row.label}这一行的 ${prop}：index.html 的 ${row.inlineSel} vs styles.css 的 ${row.packedSel}`;
+        // 提示行两侧都不写这两格（`.boot-splash-tip` / `.boot-skeleton-tip` 只有 font-size + color）：
+        // 那是合法现状 ⇒ 不比值、也不替它造实值。单侧缺则必须红，且点名缺在哪一侧（下面 brand 的
+        // 实值那一钉还兜住「brand 两侧一起删掉这两格」，所以整段没有静默放行的缝）。
+        if (inlineCell === undefined && packedCell === undefined) continue;
+        expect(
+          inlineCell !== undefined,
+          `${where} —— 缺在内联层：这一格 styles.css 有（现值 ${packedCell}）、index.html 没有，` +
+            '两份排版不再同构（要加就两侧一起加）',
+        ).toBe(true);
+        expect(
+          packedCell !== undefined,
+          `${where} —— 缺在打包层：这一格 index.html 有（现值 ${inlineCell}）、styles.css 没有，` +
+            '两份排版不再同构（要加就两侧一起加）',
+        ).toBe(true);
+        if (inlineCell === undefined || packedCell === undefined) continue;
+        expect(
+          inlineCell,
+          `${where} 漂移：内联字面量 ${inlineCell} vs 打包层（token 已还原）${packedCell}`,
+        ).toBe(packedCell);
+      }
+    }
+
+    // ③ 钉住实值，防「两边一起漂」。只钉打包层即可：①②已把两侧逐字绑死，内联层被传递性钉住
+    expect(seqOf(cardPacked), '卡容器配方实值（styles.css 的 .boot-skeleton-card）应就是这四格').toEqual([
+      'display: flex;',
+      'flex-direction: column;',
+      'align-items: center;',
+      'gap: 16px;',
+    ]);
+    const brandPacked = declsFor(cssSrc(), '.boot-skeleton-brand', packedTokens, 'styles.css');
+    for (const [prop, want] of [
+      ['font-weight', '600'],
+      ['letter-spacing', '0.02em'],
+    ] as const) {
+      expect(
+        cellOf(brandPacked, prop),
+        `防一起漂：styles.css 的 .boot-skeleton-brand { ${prop} } 真值须为 ${want}（内联层 .boot-splash-brand 靠上面的逐字镜像一起钉死）`,
+      ).toBe(want);
+    }
   });
 
   it('两份减动效（@media prefers-reduced-motion）回落分支的声明也逐字相等', () => {
