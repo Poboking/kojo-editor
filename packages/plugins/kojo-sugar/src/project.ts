@@ -24,7 +24,17 @@
  * | `%CALLNAME:TARGET%` / `%CALLNAME:MASTER%` | `{她}` / `{你}`（**可读化**，见下） |
  * | `\@条件?A#B\@`（FORM 行内的三元输出） | `{条件 ? "A" : "B"}`（糖三元，规范 §3.4） |
  * | `SIF 条件` + 紧随的那一条语句 | `如果 条件：` + 正文 **+1 层缩进**（规范 §3.5；语料 100% 是这种两行形态） |
- * | 其余（循环 / TRY / PRINTDATA / 按钮 …） | **原样保留为 ERB** |
+ * | 函数体内单独成行的 `RETURN …` / 裸 `RETURN` | **不显示**（机器码骨架；磁盘一字不动） |
+ * | 值函数 `RETURNF <值>` / 裸 `RETURNF` | `返回 <值>` / `返回`（`keywords.ts` 的 `inline.return` 词形） |
+ * | 其余（循环 / TRY / PRINTDATA / 按钮 …） | **本地化层给的中文形**；认不出 ⇒ `未识别语句 · <原文>` |
+ *
+ * ## 红线（2026-10-17 全中文化系列，口径住 `native-display/types.ts`）
+ *
+ * > **屏上不许出现一整行原样 ERB。** 行内残留英文记号（引擎函数名、槽位原名）允许。
+ *
+ * 两条接线都在本文件：① 认不出的行走 `localizeNativeLine`，兜底形固定为
+ * `未识别语句 · <原文>` 并且**必须成段**（段外宿主就取原文，隐身等于透传）；
+ * ② `RETURN` 骨架行一律吸收。尺子只有一把：`countVerbatimNativeLines`，命中数必须 0。
  *
  * ## 可读化（本模块与 `lift.ts` 最大的取向差异）
  *
@@ -101,6 +111,8 @@ import {
   splitSourceLines,
   trimTrailingSpace,
 } from './sugar-ident';
+import { localizeNativeLine } from './native-display/passes';
+import type { NativeDisplayLookup } from './native-display/types';
 
 /* ============================== 规则表（封闭） ============================== */
 
@@ -150,11 +162,12 @@ function controlHeadRec(
   ln: number,
   st: ControlFlowStatement,
   deps: LiftDeps,
+  native: NativeRecFactory,
 ): LineRec | undefined {
   const mk = controlHeadMaker(st.kind);
   if (mk === undefined) return undefined;
   const expr = st.expression.trim();
-  // 需要表达式的块头若表达式为空 → 不猜，原样保留
+  // 需要表达式的块头若表达式为空 → 不猜，交给 native 口径（本地化 / 兜底，绝不原样上屏）
   if (needsExpression(st.kind) && expr.length === 0) return native(ln, 'other');
   const text = mk(reverseExprAttributes(expr, deps));
   return {
@@ -308,6 +321,13 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
           .map(messageCheckLiteralFragments);
   const mcBits = mcProto?.bits;
   const mcSetBitRe = mcProto === undefined ? null : buildBitLineRegex(mcProto.setBit ?? 'SETBIT RESULT, {bit}');
+
+  // native 行的显示口径（红线 1）：pass 命中 → 中文形，否则 → `未识别语句 · …` 兜底形。
+  // 一份投影一份工厂（绑 `lines` / `ctx` / `deps`），`buildRecs` 里所有 `native()` 落点共用，
+  // 不存在第二条"这行怎么显示"的路径。
+  const native = makeNativeRec(lines, ctx, deps);
+  // 函数骨架 `RETURN`（红线 2）：函数体内单独成行的 `RETURN …` 一律吸收，`RETURNF …` → `返回 …`。
+  const returns = planReturnLines(lines);
 
   const nativeByReason = new Map<SugarProjectNativeReason, number>();
   // E13-1②：家族 fork 改发文件头 `口上: <家族名>`——只发一次；源里已有 `口上:`
@@ -493,6 +513,34 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         }
       }
 
+      // 函数骨架 `RETURN`（红线 2）：函数体内**单独成行**的 `RETURN …` 一律不上屏。
+      // 位置在 MESSAGECHECK 数字返回**之后**：那里的 `RETURN 1/2/3` 已被读成糖子句
+      // （`隐藏情景（数字返回 1）：`），信息量比"吸收"大，不能被骨架吃掉。
+      if (returns.absorbed.has(ln)) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: '',
+          indent: 0,
+          visible: false,
+          reason: null,
+        });
+        continue;
+      }
+      // `RETURNF <值>` 是作者的返回值、不是机器码 ⇒ 显示成糖的 `返回 …`（可写形同款词）
+      const returnForm = returns.displayAt.get(ln);
+      if (returnForm !== undefined) {
+        recs.push({
+          line: ln,
+          kind: 'control',
+          text: returnForm,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: null,
+        });
+        continue;
+      }
+
       const st = ctx.stmtAt(ln);
       if (st) {
         // `SIF 条件` → 块头「如果 …：」（批 H；它管辖的那一正文行在缩进补正里 +1 层）
@@ -507,7 +555,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
           });
           continue;
         }
-        const cr = controlHeadRec(ln, st, deps);
+        const cr = controlHeadRec(ln, st, deps, native);
         if (cr !== undefined) {
           recs.push(cr);
           continue;
@@ -735,7 +783,7 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
 interface LineRec {
   line: number;
   kind: 'speech' | 'control' | 'passthrough' | 'native';
-  /** 糖显示文本（不含缩进基准）；`control` 收束行为空串 */
+  /** 糖显示文本（不含缩进基准）；`control` 收束行为空串；`native` 行 = 本地化形或兜底形（必非空） */
   text: string;
   /** 缩进层级（糖显示用） */
   indent: number;
@@ -744,34 +792,174 @@ interface LineRec {
   reason: SugarProjectNativeReason | null;
 }
 
-function native(line: number, reason: SugarProjectNativeReason): LineRec {
-  return { line, kind: 'native', text: '', indent: 0, visible: false, reason };
+/**
+ * 「工具没读懂」的兜底前缀（**唯一形状**，红线契约 `native-display/types.ts` 的落法）。
+ *
+ * 三条纪律都钉在这里：
+ * 1. 输出 = 前缀 + 原文 ⇒ **恒与源行逐字不等**（`isVerbatimNativeLine` 的命中数因此可归零）；
+ * 2. 前缀是给作者看的**事实陈述**，不猜语义、不伪装成糖（读不懂就说读不懂）；
+ * 3. 词形固定，别按成因开分支——一开分支就有 N 份"没读懂"的说法，读者学不会。
+ */
+const UNRECOGNIZED_PREFIX = '未识别语句 · ';
+
+/** native 行的记录工厂（一份投影运行绑一份，见 `makeNativeRec`） */
+type NativeRecFactory = (line: number, reason: SugarProjectNativeReason) => LineRec;
+
+/**
+ * 造 native 行记录工厂：认不出 pass ⇒ **显式兜底显示**，绝不静默透传原文。
+ *
+ * 这条链路是全中系列红线在本模块的唯一落点（口径住在 `native-display/`，本文件只做接线）：
+ *
+ * ```
+ * native 行 → localizeNativeLine({ content, indent, lookup })
+ *   ├─ 认得出  → pass 给的中文显示形（行内可残留英文记号）
+ *   └─ 认不出  → `未识别语句 · <原文>`（兜底，同样是一条**要上屏**的可见行）
+ * ```
+ *
+ * `visible: true` 是**必须**的：宿主（`app/src/ui/sugar-view.ts` 的 `composeSugarDoc`）只渲染
+ * 落在糖段区间内的行，段外一律取源文件原文 ⇒ 一条"隐身"的 native 行就是屏上一整行 ERB。
+ * `kind` 仍是 `'native'`（成因口径、`stats` 与 CR-1 回退判据一个字都不动）。
+ *
+ * `content` 取**剥过缩进**的原文（契约 `NativeDisplayInput` 的口径），`indent` 与其余行同一把
+ * 尺子（`ctx.indentAt`），兜底行的缩进因此和它周围的糖文对齐。
+ */
+function makeNativeRec(lines: string[], ctx: ProjContext, deps: LiftDeps): NativeRecFactory {
+  const lookup = nativeDisplayLookup(deps);
+  return (ln, reason) => {
+    const raw = lines[ln - 1] ?? '';
+    const content = contentOf(raw);
+    const indent = ctx.indentAt(ln, raw);
+    const localized = localizeNativeLine({ content, indent, lookup });
+    const text =
+      localized ?? (content.length === 0 ? UNRECOGNIZED_PREFIX.trimEnd() : `${UNRECOGNIZED_PREFIX}${content}`);
+    return { line: ln, kind: 'native', text, indent, visible: true, reason };
+  };
 }
 
 /**
- * 把逐行记录切成**连续可映射段**：只有 `native` 行会切断段。
+ * 把 `LiftDeps` 里**已经存在**的名表通道接成 `NativeDisplayLookup`（pass 的可查询器）。
  *
- * 纯注释/空行的段（不含任何 `speech` / `control`）**不成段**——它们保持可见即可，
- * 折叠成 ViewZone 反而徒增噪声。
+ * - `familyAlias`：与投影别处同一个真源（`dictionary().familyAliasReverse`，表住 adapter），
+ *   **不抄第二份族名表**；字典缺席 / 不支持反向 = 整个 lookup 缺席（pass 只做语言层替换）。
+ * - `slotCn`：槽位原名 → 中文名那条通道**还没进 `LiftDeps`**（ZH-N 线的 `plugin-api` 扩展），
+ *   这里如实给"查不到"——查不到就原样保留，**绝不猜**。
+ */
+function nativeDisplayLookup(deps: LiftDeps): NativeDisplayLookup | undefined {
+  const dict = deps.dictionary?.();
+  if (dict?.familyAliasReverse === undefined) return undefined;
+  const reverse = dict.familyAliasReverse.bind(dict);
+  return {
+    familyAlias: (engineFamilyUpper) => reverse(engineFamilyUpper),
+    slotCn: () => undefined,
+  };
+}
+
+/* ============================== 函数骨架 `RETURN`（红线 2） ============================== */
+
+/** 单独成行的退出语句：`RETURN` / `RETURN 1` / `RETURN RESULT`（`RETURNF` 另有形） */
+const RETURN_LINE_RE = /^RETURN(\s.*)?$/;
+/** 值函数返回：`RETURNF <值>` / 裸 `RETURNF` */
+const RETURNF_LINE_RE = /^RETURNF(?:\s+(.*))?$/;
+
+/** `RETURN` 骨架计划（形状见 `planReturnLines`） */
+interface ReturnPlan {
+  /** 函数体内单独成行的 `RETURN …`：吸收（只读视图不显示，磁盘一字不动） */
+  readonly absorbed: ReadonlySet<number>;
+  /** 函数体内的 `RETURNF …` → 糖的 `返回 <值>` / `返回`（词形 = `keywords.ts` 的 `inline.return`） */
+  readonly displayAt: ReadonlyMap<number, string>;
+}
+
+/**
+ * 函数体内的 `RETURN` 扫平（口径**从"两处吸收"扩到"一律"**）。
+ *
+ * 原实现只在两个地方吃掉 `RETURN`：包装三联的第三行、`ENDIF` 的紧随行——函数体里别处的
+ * 早退（`IF … ENDIF` 之间那几条）全部漏网，变成屏上一整行 ERB。本函数把它扩成**闭集**：
+ *
+ * - **作用域**：只看 `@` 函数体（第 0 列的 `@` 头起、到下一个第 0 列 `@` 头/文件尾）。
+ *   函数外的 `RETURN`（文件头区、`#DIM` 段）不是骨架，仍走 native 口径让读者看见；
+ * - **单独成行**：`codeAt` 已剥行尾注释，`RETURN 1 ;x` 算单独成行；`SIF A:RETURN` 一类
+ *   冒号连写不在本表（那行整体交给本地化层）；
+ * - `[SKIPSTART]` 停用区内的 `RETURN` **不吸收**：整片区域本来就走 `data-or-skip` 口径，
+ *   在这里偷偷吃掉会连"这段是停用的"一起消失；
+ * - `RETURNF <值>` 是**作者写的返回值**（值函数），不是引擎骨架 ⇒ 不吸收，显示成
+ *   `返回 <值>`；裸 `RETURNF` → `返回`。值部分**原文照抄**（不猜表达式）。
+ *
+ * 吸收 = 只读视图里那一行不再出现，**磁盘一份字节都不动**（投影不发事件、不写盘）。
+ */
+function planReturnLines(lines: string[]): ReturnPlan {
+  const absorbed = new Set<number>();
+  const displayAt = new Map<number, string>();
+  let inFunction = false;
+  let inSkip = false;
+  for (let ln = 1; ln <= lines.length; ln++) {
+    const raw = lines[ln - 1] ?? '';
+    const content = contentOf(raw);
+    if (content === '[SKIPSTART]') {
+      inSkip = true;
+      continue;
+    }
+    if (content === '[SKIPEND]') {
+      inSkip = false;
+      continue;
+    }
+    if (inSkip || content.length === 0 || content.startsWith(';')) continue;
+    // 函数头只能在第 0 列（与 `planSkeleton` 的 `funcHeadAbove` 同一把尺子）
+    if (content.startsWith('@') && indentLevelOf(raw) === 0) {
+      inFunction = true;
+      continue;
+    }
+    if (!inFunction) continue;
+    const code = stripInlineComment(content);
+    if (RETURNF_LINE_RE.test(code)) {
+      const value = (RETURNF_LINE_RE.exec(code)?.[1] ?? '').trim();
+      displayAt.set(ln, value.length === 0 ? '返回' : `返回 ${value}`);
+      continue;
+    }
+    if (RETURN_LINE_RE.test(code)) absorbed.add(ln);
+  }
+  return { absorbed, displayAt };
+}
+
+/**
+ * 把逐行记录切成**连续可映射段** + **native 段**两类区间（两类互不重叠、合起来按行号升序）。
+ *
+ * - **可映射段**（`speech` / `control` / `passthrough` 的连续区间）：口径一字未动——
+ *   纯注释/空行的区间**不成段**（它们保持可见即可，折叠成 ViewZone 反而徒增噪声）。
+ * - **native 段**（连续 native 行的区间）：**无条件成段**。
+ *
+ * 为什么 native 行必须自己成段（红线在这里的唯一落点）：宿主按"落在段区间内 → 用段文本，
+ * 否则 → 取源文件那一行"拼装（`app/src/ui/sugar-view.ts` 的 `composeSugarDoc`）。native 行
+ * 过去 `text: ''` + 隐身 ⇒ 屏上就是那一整行 ERB。现在它带着本地化形/兜底形**必须**进段区间，
+ * 否则那条显示形永远到不了屏幕。native 行**仍然切断**可映射段（`buildRecs` 与 CR-1 的
+ * `nativeAt` / R1 回退判据口径不变）。
  */
 function buildSegments(recs: LineRec[]): SugarProjectSegment[] {
   const out: SugarProjectSegment[] = [];
   let run: LineRec[] = [];
+  let nativeRun: LineRec[] = [];
 
-  const flush = (): void => {
+  const flushMapped = (): void => {
     if (run.length === 0) return;
-    const hasMapped = run.some((r) => r.kind === 'speech' || r.kind === 'control');
-    if (hasMapped) {
-      out.push(toSegment(run));
-    }
+    if (run.some((r) => r.kind === 'speech' || r.kind === 'control')) out.push(toSegment(run, false));
     run = [];
+  };
+  const flushNative = (): void => {
+    if (nativeRun.length === 0) return;
+    out.push(toSegment(nativeRun, true));
+    nativeRun = [];
   };
 
   for (const r of recs) {
-    if (r.kind === 'native') flush();
-    else run.push(r);
+    if (r.kind === 'native') {
+      flushMapped();
+      nativeRun.push(r);
+      continue;
+    }
+    flushNative();
+    run.push(r);
   }
-  flush();
+  flushMapped();
+  flushNative();
   return out;
 }
 
