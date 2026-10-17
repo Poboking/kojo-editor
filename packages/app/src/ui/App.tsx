@@ -10,16 +10,12 @@ import {
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, FileStat, GameProject, RecentProject } from '@kojo/plugin-api';
-import { isPathUnder, join } from '@kojo/plugin-api';
+import { join } from '@kojo/plugin-api';
 import { removeRecentOptimistic } from './WelcomeView';
 import { invoke, isTauri } from '../bridge/invoke';
 import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
-import {
-  AutosaveJournal,
-  HEARTBEAT_INTERVAL_MS,
-  SNAPSHOT_DEBOUNCE_MS,
-  type JournalIo,
-} from './autosave-journal';
+import { AutosaveJournal, HEARTBEAT_INTERVAL_MS, SNAPSHOT_DEBOUNCE_MS } from './autosave-journal';
+import { journalIo } from './autosave-journal-io';
 import {
   createSessionFlushScheduler,
   emptySessionRecord,
@@ -60,8 +56,6 @@ import { WelcomeView } from './WelcomeView';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { workspaceRootsOf, planAddExtraRoot } from './workspace-roots';
 import { resetSearch } from './search-store';
-import { bindDiffView, DIFF_VIEW_OVERLAY_ID } from './diff-view';
-import { createDiffViewOverlay } from './DiffViewOverlay';
 import {
   applyPin,
   batchCloseEmptyReason,
@@ -81,23 +75,12 @@ import {
   closeGroup as closeEditorGroup,
   type EditorGroupsState,
 } from './editor-groups';
+import { useShellOverlays } from './shell-overlays';
 import {
-  FILE_HISTORY_OVERLAY_ID,
-  setFileHistoryTarget,
-  SHOW_FILE_HISTORY_COMMAND_ID,
-} from './file-history';
-import { createFileHistoryOverlay } from './FileHistoryOverlay';
-import { OPS_HISTORY_OVERLAY_ID, SHOW_OPS_HISTORY_COMMAND_ID } from './ops-history';
-import { createOpsHistoryOverlay } from './OpsHistoryOverlay';
-import type { OpJournal } from '@kojo/plugin-api';
-import { KernelServices } from '@kojo/plugin-api';
-import {
-  CALL_HIERARCHY_COMMAND_ID,
-  CALL_HIERARCHY_OVERLAY_ID,
-  setCallHierarchyState,
-} from './call-hierarchy';
-import { createCallHierarchyOverlay } from './CallHierarchyOverlay';
-import { readJumpProbe } from './jump-to-state';
+  fileOpGuardMessage,
+  pathGoneByDelete,
+  reconcilePathsAfterDiskChange,
+} from './disk-reconcile';
 import type { EditorPaneActions } from './EditorPane';
 
 /**
@@ -109,34 +92,6 @@ import type { EditorPaneActions } from './EditorPane';
 const loadProjectView = (): Promise<{ default: typeof import('./ProjectView')['ProjectView'] }> =>
   import('./ProjectView').then((m) => ({ default: m.ProjectView }));
 const ProjectView = lazy(loadProjectView);
-
-/**
- * journal IO 适配（退出/崩溃守护批）：Tauri bridge 直写 appData——appData 在 Rust
- * 写允许域内恒可写，**不经 kernel io**（那条链 assertWritable 游戏路径 + 触发备份
- * 轮换，都不是快照该走的路）。只在 Tauri 壳被调用（engine 仅在 isTauri() 下装配）。
- */
-const journalIo: JournalIo = {
-  readTextFile: async (p) => {
-    try {
-      if (!(await tauriBridge.exists(p))) return undefined;
-      return new TextDecoder().decode(await tauriBridge.readFileBytes(p));
-    } catch {
-      return undefined; // 读不动按缺失算：恢复决策宁可保守降级，不让兜底数据炸启动
-    }
-  },
-  writeTextFile: async (p, text) => {
-    const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
-    if (i > 0) await tauriBridge.ensureDir(p.slice(0, i));
-    await tauriBridge.writeFileBytes(p, new TextEncoder().encode(text));
-  },
-  removeFile: async (p) => {
-    try {
-      await tauriBridge.removeFile(p);
-    } catch {
-      // 幂等清理：文件不在/删不掉都不值得出声（下次快照会覆盖出一致状态）
-    }
-  },
-};
 
 /** 项目视图 chunk 装载期间的骨架（与内联引导层同构；idle 预取命中时基本见不到） */
 function ProjectViewSkeleton(): ReactElement {
@@ -363,146 +318,10 @@ export function App(): ReactElement {
     };
   }, [kernel]);
 
-  // 通用 diff 视图（2026-10-15 比对/历史批）：宿主注册 ui.overlay 贡献并订阅
-  // `ui.diffView.open` 意图（插件发意图、宿主落地；与 editor.revealLocation 同款）。
-  // 本地时间线（同批）：命令进（活动文件在 ctx 里）→ 状态单源 → ui.overlay 开窗；
-  // 「对比」发同一枚 diff 意图（F1 视图复用），「恢复」只经 kernel.io 既有写链路。
-  useEffect(() => {
-    if (!kernel) return;
-    const unBind = bindDiffView(kernel);
-    const unReg = kernel.slots.register('ui.overlay', {
-      id: DIFF_VIEW_OVERLAY_ID,
-      order: 40,
-      size: 'wide',
-      component: createDiffViewOverlay({
-        io: kernel.io,
-        close: () =>
-          kernel.bus.emit('ui.overlay.close', { id: DIFF_VIEW_OVERLAY_ID, source: 'host:diff-view' }),
-      }),
-    });
-    const unRegHistory = kernel.slots.register('ui.overlay', {
-      id: FILE_HISTORY_OVERLAY_ID,
-      order: 41,
-      size: 'wide',
-      component: createFileHistoryOverlay({
-        io: kernel.io,
-        requestDiff: (p) => kernel.bus.emit('ui.diffView.open', { ...p, source: 'host:file-history' }),
-        close: () =>
-          kernel.bus.emit('ui.overlay.close', { id: FILE_HISTORY_OVERLAY_ID, source: 'host:file-history' }),
-      }),
-    });
-    const unRegHistoryCommand = kernel.slots.register('editor.command', {
-      id: SHOW_FILE_HISTORY_COMMAND_ID,
-      title: '显示当前文件的历史版本',
-      when: (ctx) => Boolean(ctx.activeFile),
-      run: (ctx) => {
-        if (!ctx.activeFile) return;
-        setFileHistoryTarget(ctx.activeFile);
-        kernel.bus.emit('ui.overlay.open', {
-          id: FILE_HISTORY_OVERLAY_ID,
-          source: 'host:file-history',
-        });
-      },
-    });
-    // 调用层级（批 E，2026-10-16）：宿主自建只读查询面板（Monaco standalone 无
-    // CallHierarchy API，取证见 PITFALLS §83）。判定与收集全在
-    // `monaco/erb-call-hierarchy.ts`（复用 erb.parser 反向索引与 functionAt 通道），
-    // 这里只做两件接线：命令面板入口 + overlay 注册。位点现取 `readJumpProbe()`
-    // （G1 既有探针——`EditorCommandContext` 没有光标行，不为此扩宿主管道）；
-    // 跳转落既有 `editor.revealLocation`，与转到定义同一条通道。
-    const parser = (): ErbParserService | undefined => kernel.services.tryGet<ErbParserService>('erb.parser');
-    const unRegCallHierarchy = kernel.slots.register('ui.overlay', {
-      id: CALL_HIERARCHY_OVERLAY_ID,
-      order: 42,
-      component: createCallHierarchyOverlay({
-        currentIndex: () => {
-          try {
-            return parser()?.currentIndex() ?? null;
-          } catch {
-            return null;
-          }
-        },
-        functionAt: (path, line) => {
-          try {
-            const service = parser();
-            // 三态：通道不存在（服务/方法缺席）⇒ null（数据层退化到索引自扫）；
-            // 在场则它的 undefined 是权威的"不在此函数内"
-            return service?.functionAt ? service.functionAt(path, line) : null;
-          } catch {
-            return null;
-          }
-        },
-        reveal: (path, line, column) =>
-          kernel.bus.emit('editor.revealLocation', {
-            filePath: path,
-            line,
-            ...(column !== undefined ? { column } : {}),
-            source: '调用层级',
-          }),
-        close: () =>
-          kernel.bus.emit('ui.overlay.close', { id: CALL_HIERARCHY_OVERLAY_ID, source: 'host:call-hierarchy' }),
-      }),
-    });
-    const unRegCallHierarchyCommand = kernel.slots.register('editor.command', {
-      id: CALL_HIERARCHY_COMMAND_ID,
-      title: '查看当前函数的调用层级（谁调用它 / 它调用谁）',
-      when: (ctx) => Boolean(ctx.activeFile),
-      run: () => {
-        const probe = readJumpProbe();
-        if (!probe) {
-          setCallHierarchyState({
-            kind: 'rejected',
-            reason: '编辑器还没准备好——先打开一份文件，把光标放到函数体里，再运行本命令。',
-          });
-        } else if (probe.derivedView) {
-          setCallHierarchyState({
-            kind: 'rejected',
-            reason: '现在屏幕上的是派生视图（行号不属于原文）——切回原代码再查看调用层级。',
-          });
-        } else {
-          setCallHierarchyState({ kind: 'request', request: { filePath: probe.path, line: probe.line } });
-        }
-        kernel.bus.emit('ui.overlay.open', { id: CALL_HIERARCHY_OVERLAY_ID, source: 'host:call-hierarchy' });
-      },
-    });
-    // 操作历史（2026-10-16 undo 批）：磁盘侧批操作的撤销面。服务键 additive
-    // （kernel.ops 缺席 = 不注册，命令面板里也不出现——降级零痕迹）。
-    const opsService = kernel.services.tryGet<OpJournal>(KernelServices.Ops);
-    const unRegOps = opsService
-      ? kernel.slots.register('ui.overlay', {
-          id: OPS_HISTORY_OVERLAY_ID,
-          order: 43,
-          size: 'wide',
-          component: createOpsHistoryOverlay({
-            ops: opsService,
-            close: () =>
-              kernel.bus.emit('ui.overlay.close', { id: OPS_HISTORY_OVERLAY_ID, source: 'host:ops-history' }),
-          }),
-        })
-      : undefined;
-    const unRegOpsCommand = opsService
-      ? kernel.slots.register('editor.command', {
-          id: SHOW_OPS_HISTORY_COMMAND_ID,
-          title: '操作历史（脚手架/保存/注入的批回滚）',
-          run: () => {
-            kernel.bus.emit('ui.overlay.open', {
-              id: OPS_HISTORY_OVERLAY_ID,
-              source: 'host:ops-history',
-            });
-          },
-        })
-      : undefined;
-    return () => {
-      unBind();
-      unReg();
-      unRegHistory();
-      unRegHistoryCommand();
-      unRegOps?.();
-      unRegOpsCommand?.();
-      unRegCallHierarchy();
-      unRegCallHierarchyCommand();
-    };
-  }, [kernel]);
+  // 覆盖层 / 命令槽位的主机接线（diff · 文件历史 · 调用层级 · 操作历史）：整段只吃 kernel、
+  // 依赖数组仍是 [kernel]——抽到 shell-overlays.ts 的自定义钩子，在同一位置无条件调用，
+  // React 钩子次序不变。
+  useShellOverlays(kernel);
 
   // BUG-5：监视器自述必须可见。`partial` / `unavailable` 意味着"某些目录的外部改动
   // 不会自动重载"——这正是过去静默失灵的形状（用户以为会自动重载，其实句柄早没了）。
@@ -1221,19 +1040,10 @@ export function App(): ReactElement {
   /**
    * 删除/重命名的守门：涉及**打开中且有未保存修改**的文件就拦下，给一句人话。
    * 目录同样拦——脏文件在被删目录之下时，"删目录"会把它一起带走（递归删除是大刀）。
+   * 判定住在 `disk-reconcile.fileOpGuardMessage`（与测试同一份口径）。
    */
   const guardFileOp = useCallback(
-    (paths: readonly string[]): string | null => {
-      for (const target of paths) {
-        for (const p of dirtyPaths) {
-          if (p === target || isPathUnder(target, p)) {
-            const name = p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
-            return `文件「${name}」有未保存修改，请先保存或关闭它，再进行删除/重命名。`;
-          }
-        }
-      }
-      return null;
-    },
+    (paths: readonly string[]): string | null => fileOpGuardMessage(paths, dirtyPaths),
     [dirtyPaths],
   );
 
@@ -1248,7 +1058,7 @@ export function App(): ReactElement {
       const prevGroups = editorGroupsRef.current;
       let nextGroups = prevGroups;
       for (const g of prevGroups.groups) {
-        const gone = new Set(g.tabs.filter((p) => del.some((d) => p === d || isPathUnder(d, p))));
+        const gone = new Set(g.tabs.filter((p) => pathGoneByDelete(del, p)));
         if (gone.size > 0) nextGroups = closeTabsInGroup(nextGroups, g.id, [...gone]);
       }
       const renameMap = new Map(renamed.map((r) => [r.from, r.to] as const));
@@ -1262,46 +1072,10 @@ export function App(): ReactElement {
       };
       if (activeGroupOf(prevGroups).active !== activeGroupOf(nextGroups).active) setReveal(null);
       setEditorGroups(nextGroups);
-      setDirtyPaths((prev) => {
-        let next: Set<string> | null = null;
-        for (const d of del) {
-          for (const p of prev) {
-            if (p === d || isPathUnder(d, p)) {
-              next ??= new Set(prev);
-              next.delete(p);
-            }
-          }
-        }
-        // 改名的脏标签不该出现（守门拦了），但真发生时也不能留出悬空旧路径
-        for (const r of renamed) {
-          if (prev.has(r.from)) {
-            next ??= new Set(prev);
-            next.delete(r.from);
-            next.add(r.to);
-          }
-        }
-        return next ?? prev;
-      });
-      // 固定标签随标签收尾同步（C2）：被删的退出固定、被改名的换新路径——不留悬空 pin
-      setPinnedPaths((prev) => {
-        let next: Set<string> | null = null;
-        for (const d of del) {
-          for (const p of prev) {
-            if (p === d || isPathUnder(d, p)) {
-              next ??= new Set(prev);
-              next.delete(p);
-            }
-          }
-        }
-        for (const r of renamed) {
-          if (prev.has(r.from)) {
-            next ??= new Set(prev);
-            next.delete(r.from);
-            next.add(r.to);
-          }
-        }
-        return next ?? prev;
-      });
+      // 脏态与固定态收尾同一份口径（被删的含子路径退出、被改名的换新路径）：
+      // 固定标签不留悬空 pin（C2）
+      setDirtyPaths((prev) => reconcilePathsAfterDiskChange(prev, del, renamed));
+      setPinnedPaths((prev) => reconcilePathsAfterDiskChange(prev, del, renamed));
     },
     [],
   );
