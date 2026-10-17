@@ -37,7 +37,7 @@ import type {
 import { fullwidthSpaceLines, isReadonlyAlias, resolveSugarTarget, SugarCompileError } from '@kojo/plugin-api';
 import { buildDoc, type TopNode } from './parser';
 import { codegen } from './codegen';
-import { generatedPositionOf, sourceColumnOfEntry } from './column-map';
+import { generatedPositionOf, sourceColumnOfEntry, sourceMapIndex } from './column-map';
 import { sourceLineViews } from './lexer';
 import { compileToBytes as runCompileToBytes, compileToFile as runCompileToFile } from './compile';
 import type { AliasEntry, AliasTable, DiagnosticSink, DictionaryLookup } from './types';
@@ -528,7 +528,8 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
   }
 
   function sourceOf(result: SugarTranspileResult, generatedLine: number): SugarPosition | null {
-    const entry = result.sourceMap.find((e) => e.generatedLine === generatedLine);
+    // PS-8：`find` 线性扫 → 按结果记忆的 `exact` 索引（同语义：首条匹配）
+    const entry = sourceMapIndex(result).exact.get(generatedLine);
     if (!entry || entry.sourceLine === null) return null;
     return { line: entry.sourceLine, column: entry.span?.start.column ?? 1 };
   }
@@ -539,7 +540,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     generatedLine: number,
     generatedColumn: number,
   ): SugarPosition | null {
-    const entry = result.sourceMap.find((e) => e.generatedLine === generatedLine);
+    const entry = sourceMapIndex(result).exact.get(generatedLine);
     if (!entry) return null;
     return sourceColumnOfEntry(entry, generatedColumn);
   }

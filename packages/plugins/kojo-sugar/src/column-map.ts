@@ -37,6 +37,40 @@ export interface RunSpec {
 /** 空区段（少分配一点数组；也是"该行没有可信列"的统一返回值） */
 export const NO_RUNS: readonly RunSpec[] = [];
 
+/* ============================== 产物行 → 源映射条目索引（PS-8） ============================== */
+
+/**
+ * `sourceMap` 的**按结果对象记忆**的两级索引：
+ * - `exact`：`generatedLine → 首条匹配条目`（与 `Array.prototype.find` 逐字同语义）；
+ * - `ordered`：按 `generatedLine` 升序的稳定拷贝（与 `[...map].sort(...)` 同序）。
+ *
+ * 用途：语言服务每轮（滚动即重请求）会对同一结果问几十~几百次行级查找，
+ * 线性 `find` 在 3,000 行产物上每次 ~2–17 µs；索引一次建、WeakMap 随结果回收。
+ * 结果对象被契约定义为**只读共享**（`service.ts` 缓存那节），故记忆安全。
+ */
+export interface SourceMapIndex {
+  readonly exact: ReadonlyMap<number, SugarSourceMapEntry>;
+  readonly ordered: readonly SugarSourceMapEntry[];
+}
+
+const sourceMapIndexCache = new WeakMap<SugarTranspileResult, SourceMapIndex>();
+
+export function sourceMapIndex(result: SugarTranspileResult): SourceMapIndex {
+  let index = sourceMapIndexCache.get(result);
+  if (index === undefined) {
+    const exact = new Map<number, SugarSourceMapEntry>();
+    for (const entry of result.sourceMap) {
+      if (!exact.has(entry.generatedLine)) exact.set(entry.generatedLine, entry);
+    }
+    index = {
+      exact,
+      ordered: [...result.sourceMap].sort((a, b) => a.generatedLine - b.generatedLine),
+    };
+    sourceMapIndexCache.set(result, index);
+  }
+  return index;
+}
+
 /** 整段逐码元恒等的区段规格（原生直通 / 注释：产物文本 = 源文本切片） */
 export function verbatimSpec(sourceOffset: number, length: number): RunSpec[] {
   return length > 0 ? [{ generatedOffset: 0, length, sourceOffset }] : [];

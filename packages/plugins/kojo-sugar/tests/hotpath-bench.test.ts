@@ -16,9 +16,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { VariableInfo, VariableSchema } from '@kojo/plugin-api';
+import type { VariableInfo, VariableSchema, SugarSourceMapEntry, SugarTranspileResult } from '@kojo/plugin-api';
 import { ENGINE_VARIABLE_FAMILIES, makeLookup } from '../src/index';
 import { createSugarTranspileService } from '../src/service';
+import { CONT_MARKS, blockEndWord, primaryWord } from '../src/keywords';
+import { classifyLine, splitLogicalLines, stripCont } from '../src/lexer';
+import type { DiagnosticSink } from '../src/types';
+import { foldGeneratedLine } from '../src/langsvc';
 import { stubFaceTable } from './support';
 
 /* ============================== 合成 schema（复刻 adapter 的合并语义） ============================== */
@@ -285,5 +289,183 @@ describe('微基准 · resolveFamily（before = 线性扫 / after = 索引+记�
       ).toFixed(2)} µs/op · 重建 ${n} 次共 ${freshMs.toFixed(2)} ms（sink=${sink}）`,
     );
     expect(sink).toBeGreaterThanOrEqual(n * 2); // 两个循环各至少跑满一轮
+  });
+});
+
+/* ============================== PS-8 · 词法动态正则层（词法热路径批） ============================== */
+
+/** 改前口径的逐字镜像：每次调用现建正则（wordTail 词首组 + `stripCont` 两族） */
+const escapeReB = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const PS8_TAIL_WORDS: readonly string[] = [
+  blockEndWord('block.loop'),
+  primaryWord('inline.jump'),
+  primaryWord('inline.functionJump'),
+  primaryWord('inline.label'),
+  primaryWord('inline.loopStep'),
+  primaryWord('inline.dataEntry'),
+  primaryWord('block.when'),
+  primaryWord('inline.loopCount'),
+  primaryWord('inline.engineEcho'),
+];
+const PS8_QUOTE_MARKS: readonly string[] = ['续', 'cont', 'continue'];
+
+/** 一行的"动态建形 + exec"工作量（改前词法每行实际付的账，只取正则层） */
+function legacyRegexLayer(code: string): number {
+  let hits = 0;
+  for (const w of PS8_TAIL_WORDS) {
+    const m = new RegExp(`^${escapeReB(w)}[ \\t\\u3000]+(.+)$`).exec(code);
+    if (m) hits++;
+  }
+  for (const mark of CONT_MARKS) {
+    if (new RegExp(`(?:^|\\s)${escapeReB(mark)}\\s*$`).test(code)) hits++;
+  }
+  for (const mark of PS8_QUOTE_MARKS) {
+    const re = new RegExp(`[「｢][^」｣]*${escapeReB(mark)}[^」｣]*[」｣]`, 'g');
+    if (re.exec(code)) hits++;
+  }
+  return hits;
+}
+
+/** 记忆化后的同一层（本测试自带 Map 记忆 = 生产 `lexer` 同款做法；预建后只剩 exec） */
+function memoRegexLayer(code: string): number {
+  const cache = memoLayerCache;
+  let hits = 0;
+  for (const w of PS8_TAIL_WORDS) {
+    const m = memoGet(cache, `t:${w}`, () => new RegExp(`^${escapeReB(w)}[ \\t\\u3000]+(.+)$`)).exec(code);
+    if (m) hits++;
+  }
+  for (const mark of CONT_MARKS) {
+    if (memoGet(cache, `c:${mark}`, () => new RegExp(`(?:^|\\s)${escapeReB(mark)}\\s*$`)).test(code)) hits++;
+  }
+  for (const mark of PS8_QUOTE_MARKS) {
+    const re = memoGet(cache, `q:${mark}`, () => new RegExp(`[「｢][^」｣]*${escapeReB(mark)}[^」｣]*[」｣]`, 'g'));
+    re.lastIndex = 0;
+    if (re.exec(code)) hits++;
+  }
+  return hits;
+}
+
+const memoLayerCache = new Map<string, RegExp>();
+function memoGet(cache: Map<string, RegExp>, key: string, build: () => RegExp): RegExp {
+  let re = cache.get(key);
+  if (re === undefined) {
+    re = build();
+    cache.set(key, re);
+  }
+  return re;
+}
+
+/** 语料形状的词法行（台词 / 控制 / 原生混合；每行都过改前/记忆两条腿） */
+const PS8_LINES: string[] = [];
+for (let i = 0; i < 1000; i++) {
+  switch (i % 6) {
+    case 0:
+      PS8_LINES.push(`你「今天的表情有点${i % 30}。」`);
+      break;
+    case 1:
+      PS8_LINES.push(`步进 CFLAG:${i % 50} 加 1`);
+      break;
+    case 2:
+      PS8_LINES.push(`跳到 标签${i % 40}`);
+      break;
+    case 3:
+      PS8_LINES.push(`CALL HPH_PRINT(@"方法名", 1) ; 原生直通`);
+      break;
+    case 4:
+      PS8_LINES.push(`「别停……」续`);
+      break;
+    default:
+      PS8_LINES.push(`如果 LOCAL:2 = ${i % 7}：`);
+  }
+}
+
+describe('微基准 · PS-8 词法正则层（before = 每行现建 / after = 记忆化）', () => {
+  it('每行正则层 µs：记忆化方向性硬断言 + 等价（两腿命中数逐行相等）；数字打印在输出', () => {
+    // 等价（确定性，非计时）：同一行两条腿命中数必须逐行相等
+    for (const line of PS8_LINES) expect(memoRegexLayer(line)).toBe(legacyRegexLayer(line));
+    // 预热记忆腿（首轮把全部 pattern 建完）
+    for (const line of PS8_LINES) memoRegexLayer(line);
+    const iterations = 10;
+    const legacyMs = benchMs(() => {
+      for (let r = 0; r < iterations; r++) for (const line of PS8_LINES) legacyRegexLayer(line);
+    });
+    const memoMs = benchMs(() => {
+      for (let r = 0; r < iterations; r++) for (const line of PS8_LINES) memoRegexLayer(line);
+    });
+    const lines = iterations * PS8_LINES.length;
+    // 真实入口对照（after 全词法腿：classifyLine 整行）
+    const logical = splitLogicalLines(PS8_LINES.join('\n'));
+    const sink: DiagnosticSink = { report: () => undefined, all: () => [] };
+    const fullMs = benchMs(() => {
+      for (let r = 0; r < iterations; r++)
+        for (const l of logical) {
+          classifyLine(l);
+          if (l.text.includes('「')) stripCont(l.text, sink, l);
+        }
+    });
+    const perLineLegacy = (legacyMs * 1000) / lines;
+    const perLineMemo = (memoMs * 1000) / lines;
+    const perLineFull = (fullMs * 1000) / lines;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[bench] PS-8 词法正则层：before（每行 12 枚现建+exec）${perLineLegacy.toFixed(3)} µs/行 · after（记忆化 exec）${perLineMemo.toFixed(3)} µs/行（${(perLineLegacy / Math.max(perLineMemo, 1e-6)).toFixed(1)}×）；真实入口对照 classifyLine+stripCont ${perLineFull.toFixed(3)} µs/行（after 全词法）`,
+    );
+    expect(memoMs).toBeLessThan(legacyMs * 0.5); // 记忆化至少砍半（实测应是数量级）
+  });
+});
+
+/* ============================== PS-8 · foldGeneratedLine（每滚动全量扫） ============================== */
+
+/** 改前实现逐字镜像（每次调用全量 split + sort + 线性扫） */
+function legacyFold(result: SugarTranspileResult, generatedLine: number): number | null {
+  const exact = result.sourceMap.find((e) => e.generatedLine === generatedLine);
+  if (exact?.sourceLine != null) return exact.sourceLine;
+  const lines = result.erb.split('\n');
+  const ordered = [...result.sourceMap].sort((a, b) => a.generatedLine - b.generatedLine);
+  for (const entry of ordered) {
+    if (entry.generatedLine <= generatedLine) continue;
+    if (/^@/.test(lines[entry.generatedLine - 1] ?? '')) return null;
+    if (entry.sourceLine !== null) return entry.sourceLine;
+  }
+  return null;
+}
+
+function ps8Product(n: number): { result: SugarTranspileResult; queries: number[] } {
+  const lines: string[] = [];
+  const sourceMap: SugarSourceMapEntry[] = [];
+  for (let g = 1; g <= n; g++) {
+    if (g % 97 === 0) {
+      lines.push(`@GEN_HEAD_${g}`);
+      sourceMap.push({ generatedLine: g, sourceLine: null });
+    } else {
+      lines.push(`\tPRINTFORMW x${g}`);
+      sourceMap.push({ generatedLine: g, sourceLine: g });
+    }
+  }
+  const queries: number[] = [];
+  for (let i = 0; i < 200; i++) queries.push(13 + ((i * 97) % (n - 26))); // 命中体内生成行的下一位
+  return { result: { erb: lines.join('\n'), sourceMap, diagnostics: [] } as unknown as SugarTranspileResult, queries };
+}
+
+describe('微基准 · PS-8 foldGeneratedLine（before = 每次全量 split+sort / after = WeakMap 索引）', () => {
+  it('3,000 行产物 × 200 提示/滚动：µs/条 与整轮 ms 打印在输出；等价先对拍', () => {
+    const { result, queries } = ps8Product(3000);
+    for (const q of queries) expect(foldGeneratedLine(result, q)).toBe(legacyFold(result, q));
+    const rounds = 20;
+    const legacyMs = benchMs(() => {
+      for (let r = 0; r < rounds; r++) for (const q of queries) legacyFold(result, q);
+    });
+    const memoMs = benchMs(() => {
+      for (let r = 0; r < rounds; r++) for (const q of queries) foldGeneratedLine(result, q);
+    });
+    const items = rounds * queries.length;
+    const perItemLegacy = (legacyMs * 1000) / items;
+    const perItemMemo = (memoMs * 1000) / items;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[bench] PS-8 foldGeneratedLine（3,000 行产物、200 条/滚动）：before ${perItemLegacy.toFixed(2)} µs/条（整轮 ${(legacyMs / rounds).toFixed(2)} ms）· after ${perItemMemo.toFixed(3)} µs/条（整轮 ${(memoMs / rounds).toFixed(2)} ms）（${(perItemLegacy / Math.max(perItemMemo, 1e-6)).toFixed(0)}×）`,
+    );
+    expect(memoMs).toBeLessThan(legacyMs * 0.5);
   });
 });

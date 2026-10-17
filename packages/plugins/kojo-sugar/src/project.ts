@@ -237,6 +237,36 @@ function buildBitLineRegex(template: string): RegExp {
   return new RegExp(`^[ \\t]*${before}[ \\t]*(\\d+)[ \\t]*${after}[ \\t]*$`, 'i');
 }
 
+/** `RETURN <数字>` 判别（MESSAGECHECK 数字返回协议；模块级预编译，PS-8） */
+const MESSAGE_CHECK_RETURN_RE = /^RETURN\s+(\d+)\s*$/i;
+
+/**
+ * PS-8：`bits` 表 → 注记所需的**一次性**派生量（每投影算一遍，不再是每个体内行一遍）：
+ * - `sortedBits`：位号去重升序（原 `[...new Set(Object.values(bits))].sort` 每行重建）；
+ * - `clauseByBit`：位号 → 糖子句（首见作用域胜出，与原 `clauseOf` 的
+ *   `Object.entries` 顺序语义逐字一致——首个声明该位的作用域即胜出，哪怕它的子句没定义）。
+ */
+interface MessageCheckNotes {
+  readonly setBitRe: RegExp;
+  readonly sortedBits: readonly number[];
+  readonly clauseByBit: ReadonlyMap<number, string | undefined>;
+}
+
+function prepareMessageCheckNotes(
+  bits: Readonly<Record<string, number>>,
+  setBitRe: RegExp,
+): MessageCheckNotes {
+  const clauseByBit = new Map<number, string | undefined>();
+  for (const [scope, declared] of Object.entries(bits)) {
+    if (!clauseByBit.has(declared)) clauseByBit.set(declared, MESSAGE_CHECK_CLAUSE[scope]);
+  }
+  return {
+    setBitRe,
+    sortedBits: [...new Set(Object.values(bits))].sort((a, b) => a - b),
+    clauseByBit,
+  };
+}
+
 /**
  * P-8：MECHECK 体内一行的注记（`undefined` = 不是协议行 / 还原不出糖子句 → 保持原生）。
  *
@@ -244,26 +274,14 @@ function buildBitLineRegex(template: string): RegExp {
  * 1. `RETURN n`：n 是**位掩码**（引擎读位），逐位映射到糖子句；
  * 2. adapter `setBit` 模板（缺省 `SETBIT RESULT, {bit}`）：n 是**位号**（与糖产物同形）。
  */
-function messageCheckNote(
-  content: string,
-  bits: Readonly<Record<string, number>>,
-  setBitRe: RegExp,
-): string | undefined {
-  // 位号 → 糖子句（adapter `bits.scene/kojo` 反查；未声明的位一律不标）
-  const clauseOf = (bit: number): string | undefined => {
-    for (const [scope, declared] of Object.entries(bits)) {
-      if (declared === bit) return MESSAGE_CHECK_CLAUSE[scope];
-    }
-    return undefined;
-  };
-
-  const ret = /^RETURN\s+(\d+)\s*$/i.exec(content);
+function messageCheckNote(content: string, notes: MessageCheckNotes): string | undefined {
+  const ret = MESSAGE_CHECK_RETURN_RE.exec(content);
   if (ret) {
     const value = Number(ret[1]);
     const names: string[] = [];
-    for (const bit of [...new Set(Object.values(bits))].sort((a, b) => a - b)) {
+    for (const bit of notes.sortedBits) {
       if ((value & (1 << bit)) !== 0) {
-        const clause = clauseOf(bit);
+        const clause = notes.clauseByBit.get(bit);
         if (clause !== undefined) names.push(clause);
       }
     }
@@ -271,9 +289,9 @@ function messageCheckNote(
     return names.length === 0 ? undefined : `${names.join(' · ')}（数字返回 ${value}）：`;
   }
 
-  const sb = setBitRe.exec(content);
+  const sb = notes.setBitRe.exec(content);
   if (sb) {
-    const clause = clauseOf(Number(sb[1]));
+    const clause = notes.clauseByBit.get(Number(sb[1]));
     return clause === undefined ? undefined : `${clause}：`;
   }
   return undefined;
@@ -319,8 +337,11 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
           .map((f) => f.messageCheck?.template)
           .filter((t): t is string => t !== undefined)
           .map(messageCheckLiteralFragments);
-  const mcBits = mcProto?.bits;
-  const mcSetBitRe = mcProto === undefined ? null : buildBitLineRegex(mcProto.setBit ?? 'SETBIT RESULT, {bit}');
+  // PS-8：位号表 / 置位正则**每投影备一次**（改前是每个 MECHECK 体内行重建一遍位表）
+  const mcNotes =
+    mcProto?.bits !== undefined
+      ? prepareMessageCheckNotes(mcProto.bits, buildBitLineRegex(mcProto.setBit ?? 'SETBIT RESULT, {bit}'))
+      : null;
 
   // native 行的显示口径（红线 1）：pass 命中 → 中文形，否则 → `未识别语句 · …` 兜底形。
   // 一份投影一份工厂（绑 `lines` / `ctx` / `deps`），`buildRecs` 里所有 `native()` 落点共用，
@@ -499,8 +520,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
 
       // P-8：MESSAGECHECK 数字返回协议（纯显示）——只在 MECHECK 函数体内生效。
       // 判据：`RETURN n`（位掩码）或 adapter 置位原语（位号）；解不出糖子句 → 保持原生。
-      if (inMessageCheck && mcBits !== undefined && mcSetBitRe !== null) {
-        const note = messageCheckNote(content, mcBits, mcSetBitRe);
+      if (inMessageCheck && mcNotes !== null) {
+        const note = messageCheckNote(content, mcNotes);
         if (note !== undefined) {
           recs.push({
             line: ln,
