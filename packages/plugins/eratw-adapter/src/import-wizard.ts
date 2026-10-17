@@ -19,7 +19,7 @@ import { glossName } from './name-glossary';
 import {
   attributionMeta,
   attributionSummary,
-  type AttributionField,
+  authorCandidateNotice,
   type PackageAttribution,
 } from './attribution';
 
@@ -81,11 +81,6 @@ export function buildImportMeta(
       ? { ...attribution, author: attribution.authorCandidate }
       : attribution;
   return { importedFrom: sourceDir, ...attributionMeta(effective) };
-}
-
-/** 候选署名的一行提示：值 + 出处（文件 + 1 基行号），请用户核原文后自己决定 */
-export function authorCandidateNotice(field: AttributionField): string {
-  return `可能作者：${field.value}（${field.file} 第 ${field.line} 行，请确认）`;
 }
 
 /** 导入向导 overlay 组件（createElement 风格；壳层 PanelBody 无 props 渲染） */

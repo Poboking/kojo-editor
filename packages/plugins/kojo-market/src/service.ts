@@ -74,6 +74,7 @@ import {
   packStagingNames,
   packStaleName,
   packUnpackedName,
+  readZipContainer,
   type FileIO,
   type InstalledPack,
   type Logger,
@@ -88,6 +89,7 @@ import {
   type MarketPublishPackOpts,
   type MarketPublishProgress,
   type MarketService,
+  type MarketZipInspection,
   type PackFileEntry,
   type PackKind,
   type PackManifest,
@@ -101,6 +103,7 @@ import {
   type ScopedStorage,
   type ZipEntry,
 } from '@kojo/plugin-api';
+import { inspectAuthorZip } from './author-zip';
 import { contentDigestOf, sha256Hex, utf8Bytes } from './digest';
 import { packContainerProblem, parseIndex, parseManifest, type ContainerFacts } from './manifest';
 
@@ -809,6 +812,61 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
 
   /* --------------------- 发布面（2026-10-16 发布通道批） --------------------- */
 
+  /**
+   * 预览一个用户选定的 zip（ZIP-1，2026-10-18）：根有 `pack.json` ⇒ 市场容器，原样走
+   * `publish`；否则按普通作品包在**内存里**解出（不落盘、不改源文件），交给发布向导补元数据。
+   *
+   * 这里刻意**不**调用 `previewForPublish` 的严格解包：普通作品包会有中文/日文 CP932 条目名、
+   * 显式目录条目和一层包裹文件夹，严格解包第一条就会以 `entry-name-encoding` 拒。
+   * 宽松读取的路径/限额闸仍复用同一份契约原语（见 `author-zip.ts`）。
+   */
+  async function inspectZip(zipPath: string): Promise<MarketZipInspection> {
+    const stat = await io.stat(zipPath);
+    if (stat === null || stat.isDirectory) {
+      throw new MarketError('source-unreadable', `要发布的 zip 读不到：${zipPath}`, zipPath);
+    }
+    if (stat.size > MARKET_MAX_CONTAINER_UPLOAD_BYTES) {
+      throw new MarketError(
+        'bytes-limit',
+        `这个 zip 有 ${stat.size} 字节，超过发布上限 ${MARKET_MAX_CONTAINER_UPLOAD_BYTES} 字节；请先瘦身。`,
+        zipPath,
+      );
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = await io.readBytes(zipPath);
+    } catch (err) {
+      throw new MarketError('source-unreadable', `这个 zip 读不出来：${errMessage(err)}`, zipPath);
+    }
+    let container: ReturnType<typeof readZipContainer>;
+    try {
+      container = readZipContainer(bytes);
+    } catch (err) {
+      throw new MarketError(
+        'extract-failed',
+        `这个 zip 读不出来（不是完整可读的 zip）：${errMessage(err)}`,
+        zipPath,
+      );
+    }
+    // 根有 pack.json 就按市场容器走原链路（清单校验仍只有 previewForPublish 那一份）
+    if (container.entries.some((e) => e.name.replaceAll('\\', '/') === MARKET_MANIFEST_FILE)) {
+      return { kind: 'market-container', bytes: stat.size };
+    }
+    try {
+      const inspected = await inspectAuthorZip(container);
+      return {
+        kind: 'author-package',
+        files: inspected.files,
+        bytes: stat.size,
+        skipped: inspected.skipped,
+        ...(inspected.strippedRoot === undefined ? {} : { strippedRoot: inspected.strippedRoot }),
+      };
+    } catch (err) {
+      if (err instanceof MarketError) throw err;
+      throw new MarketError('extract-failed', `这个 zip 解不开：${errMessage(err)}`, zipPath);
+    }
+  }
+
   async function readDeviceToken(): Promise<string | null> {
     const v = await storage.get<unknown>(DEVICE_TOKEN_KEY);
     return typeof v === 'string' && v.length > 0 ? v : null;
@@ -865,7 +923,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
           // 作者面重新包装：内部暂存路径不出场，并告诉作者下一步（工作区发布）
           throw new MarketError(
             'manifest-missing',
-            '这个 zip 不是市场发布格式：根目录缺少 pack.json。普通作品包请用「发布口上…」从工作区直接发布。',
+            '这个 zip 不是市场发布格式：根目录缺少 pack.json。如果它是普通作品包，请在发布向导里重新选择它（编辑器会解出内容让你补包信息），或从工作区直接发布。',
             zipPath,
           );
         }
@@ -878,7 +936,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
         throw new MarketError(
           'content-missing',
           `这个 zip 不是完整的市场容器：pack.json 在，但缺少 ${MARKET_CONTENT_DIR}/ 目录（没有可发布的内容）。` +
-            '普通作品包请用「发布口上…」从工作区直接发布。',
+            '普通作品包请在发布向导里重新选择它，或从工作区直接发布。',
           zipPath,
         );
       }
@@ -1130,6 +1188,8 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     installFromIndex,
 
     publish,
+
+    inspectZip,
 
     publishPack,
 

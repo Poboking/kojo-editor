@@ -18,6 +18,7 @@ import {
   MARKET_SCHEMA_VERSION,
   MARKET_STAGING_DIR,
   MarketError,
+  buildZip,
   inflateZipEntry,
   readZipContainer,
   verifyZipRoundtrip,
@@ -465,5 +466,52 @@ describe('publishPack · 临时容器生命周期', () => {
       '发布没有成功：断网',
     );
     expect(readdirSync(nodeJoin(h.root, MARKET_STAGING_DIR))).toEqual([]);
+  });
+});
+
+describe('inspectZip · 普通作品包 zip 的发布预判（ZIP-1）', () => {
+  it('市场容器（根 pack.json）→ 原样走 publish 链路，不把内容读进 JS', async () => {
+    const h = boot();
+    const zip = await buildZip(
+      [{ name: MARKET_MANIFEST_FILE, data: bytesOf('{"schema":1}') }],
+      { contract: 'generic' },
+    );
+    const zipPath = nodeJoin(h.root, 'market-container.zip');
+    writeFileSync(zipPath, zip);
+    const out = await h.svc.inspectZip!(zipPath);
+    expect(out).toEqual({ kind: 'market-container', bytes: zip.length });
+  });
+
+  it('普通作品包 → 解出文件、跳过目录/系统垃圾、剥掉单层包裹目录', async () => {
+    const h = boot();
+    const zip = await buildZip(
+      [
+        { name: 'キャノボ風レティ/', data: new Uint8Array() },
+        { name: 'キャノボ風レティ/readme.txt', data: bytesOf('作者：舩 弦五郎\n') },
+        { name: 'キャノボ風レティ/主口上.ERB', data: bytesOf('PRINT 1\n') },
+        { name: '__MACOSX/._主口上.ERB', data: bytesOf('junk') },
+        { name: 'キャノボ風レティ/.DS_Store', data: bytesOf('junk') },
+      ],
+      { contract: 'generic' },
+    );
+    const zipPath = nodeJoin(h.root, 'author-package.zip');
+    writeFileSync(zipPath, zip);
+    const out = await h.svc.inspectZip!(zipPath);
+    expect(out.kind).toBe('author-package');
+    if (out.kind !== 'author-package') return;
+    expect(out.strippedRoot).toBe('キャノボ風レティ');
+    expect(out.files.map((f) => f.path)).toEqual(['readme.txt', '主口上.ERB']);
+    expect(out.skipped.length).toBe(3);
+    expect(out.bytes).toBe(zip.length);
+  });
+
+  it('普通作品包没有内容 → content-missing（不进入发布阶段）', async () => {
+    const h = boot();
+    const zip = await buildZip([{ name: '__MACOSX/._x', data: bytesOf('junk') }], {
+      contract: 'generic',
+    });
+    const zipPath = nodeJoin(h.root, 'empty.zip');
+    writeFileSync(zipPath, zip);
+    await expect(h.svc.inspectZip!(zipPath)).rejects.toMatchObject({ code: 'content-missing' });
   });
 });

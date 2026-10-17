@@ -652,4 +652,10 @@ export type { KojoIndexKind } from './game';
 export { errorText } from './errors';
 
 /* ---- 「发布口上」草案契约（用户反馈 4 批；独占追加区块，勿在他处重排） ---- */
-export type { MarketPackDraft, MarketPackDraftFile, MarketPublishPackOpts } from './market';
+export type {
+  MarketPackDraft,
+  MarketPackDraftFile,
+  MarketPublishPackOpts,
+  MarketZipFile,
+  MarketZipInspection,
+} from './market';

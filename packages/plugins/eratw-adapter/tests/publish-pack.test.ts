@@ -28,6 +28,8 @@ import {
   readableLicenseKind,
   slugifyProjectId,
   versionProblem,
+  zipBaseName,
+  zipPublishDefaults,
 } from '../src/publish-pack';
 import type { ArtifactEntry, ArtifactPlan } from '../src/artifact';
 
@@ -190,6 +192,65 @@ describe('draftDefaults · 从项目 / 包元数据提取默认值', () => {
     expect(draftDefaults(projectOf(), artifactOf({ meta: { licenseKind: 'not-a-license' } }), 0).licenseKind).toBe(
       'none',
     );
+  });
+});
+
+describe('zipPublishDefaults · 普通作品包 zip 的默认值（ZIP-1）', () => {
+  it('zip 文件名去掉 .zip；单层包裹目录优先当包名', () => {
+    expect(zipBaseName('/tmp/蕾蒂CB風.zip')).toBe('蕾蒂CB風');
+    expect(zipBaseName('C:\\tmp\\LETTY.ZIP')).toBe('LETTY');
+    expect(zipBaseName('/tmp/.zip')).toBe('zip');
+    const d = zipPublishDefaults(
+      '/tmp/Letty CB.zip',
+      { files: [], strippedRoot: 'キャノボ風レティ' },
+      null,
+    );
+    expect(d.name).toBe('キャノボ風レティ');
+  });
+
+  it('id 由 zip 名消毒成合法值；纯日文名退化成 kojo.zip.1 但仍合法', () => {
+    expect(zipPublishDefaults('/tmp/Letty CB.zip', { files: [] }, null).id).toBe(
+      'kojo.zip-letty-cb.1',
+    );
+    expect(zipPublishDefaults('/tmp/キャノボ風レティ.zip', { files: [] }, null).id).toBe('kojo.zip.1');
+  });
+
+  it('版本固定 1.0.0（老 zip 没有可靠版本字段，不猜）；许可只预选空模板', () => {
+    const base = { files: [] };
+    expect(zipPublishDefaults('/tmp/a.zip', base, null)).toMatchObject({
+      version: '1.0.0',
+      summary: '',
+      licenseKind: 'none',
+      author: '',
+    });
+    expect(
+      zipPublishDefaults('/tmp/a.zip', base, {
+        author: null,
+        authorCandidate: null,
+        updated: null,
+        license: { kind: 'template-only', file: 'ライセンステンプレ.txt' },
+        readmeFiles: [],
+      }).licenseKind,
+    ).toBe('template');
+  });
+
+  it('作者只取高置信署名；标题式候选不自动采用', () => {
+    const high = zipPublishDefaults('/tmp/a.zip', { files: [] }, {
+      author: { value: '舩 弦五郎', file: 'readme.txt', line: 2 },
+      authorCandidate: null,
+      updated: null,
+      license: { kind: 'none' },
+      readmeFiles: ['readme.txt'],
+    });
+    expect(high.author).toBe('舩 弦五郎');
+    const candidate = zipPublishDefaults('/tmp/a.zip', { files: [] }, {
+      author: null,
+      authorCandidate: { value: '舩 弦五郎', file: 'readme.txt', line: 2 },
+      updated: null,
+      license: { kind: 'none' },
+      readmeFiles: ['readme.txt'],
+    });
+    expect(candidate.author).toBe('');
   });
 });
 

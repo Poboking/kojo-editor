@@ -519,6 +519,29 @@ export interface MarketService {
    *   （"当前平台没有发布能力" 也走这一档，由 `publish` 统一给出）。
    */
   publishPack?(draft: MarketPackDraft, opts?: MarketPublishPackOpts): Promise<MarketPublishOutcome>;
+  /**
+   * 预览一个用户选定的 zip 是**市场容器**还是**普通作品包**（additive 可选，2026-10-18）。
+   *
+   * 老作者（本编辑器出现之前）的包通常是根目录直接放 `.ERB` / readme 的普通 zip，
+   * 没有 `pack.json`；旧入口只能整包拒。本条把这种 zip 解**到内存**（不落盘、不改源文件），
+   * 交给发布向导补 `name/id/version/author/license` 后用 `publishPack` 现打容器上传。
+   *
+   * 语义边界：
+   * - 根目录有 `pack.json` ⇒ `market-container`（调用方仍走 `publish(zipPath)` 的原链路，
+   *   本条不做市场清单校验，避免出现第二份校验）；
+   * - 没有 `pack.json` ⇒ `author-package`：目录条目与系统垃圾条目被跳过（`skipped` 如实列出），
+   *   条目名支持 UTF-8 与旧 Windows 的 CP932；单层包裹目录会被剥掉（`strippedRoot` 记录）；
+   * - 路径/限额/重名闸与市场容器同源（`normalizeEntryName` / `zipEntryContractProblem` /
+   *   `MARKET_MAX_*`），但**不做**“市场容器只准普通文件条目”那一条——目录条目在这里是正常的；
+   * - 字节只在内存中往返，服务不写暂存区、不修改作者选定的 zip。
+   *
+   * **可选**：既有服务实现与测试桩不必补这一条；缺席时发布向导保留旧的“只收市场格式 zip”
+   * 行为并显式说明，不许静默失败。
+   *
+   * @throws MarketError `source-unreadable` / `bytes-limit` / `extract-failed` /
+   *   `entries-limit` / `path-*` / `entry-duplicate`（消息为人话，直接呈现给作者）
+   */
+  inspectZip?(zipPath: string): Promise<MarketZipInspection>;
   uninstall(kind: PackKind, id: string, version: string): Promise<void>;
   isInstalled(kind: PackKind, id: string, version: string): Promise<boolean>;
   /**
@@ -1023,3 +1046,34 @@ export interface MarketPublishPackOpts {
   readonly endpoint?: string;
   readonly onProgress?: (p: MarketPublishProgress) => void;
 }
+
+/**
+ * 普通作品包 zip 里的一个文件（`inspectZip` 解出；条目名已解码为 UTF-8）。
+ *
+ * `path` 是相对 zip 根的 posix 路径；内容字节**原样**返回——`.ERB` / `.kojo`
+ * 可能是 Shift-JIS 或带 BOM，服务不做任何转码（转译只由适配器按字节处理）。
+ */
+export interface MarketZipFile {
+  readonly path: string;
+  readonly bytes: Uint8Array;
+}
+
+/**
+ * `MarketService.inspectZip` 的判别联（additive，2026-10-18）。
+ *
+ * - `market-container`：根有 `pack.json`，按旧链路原样上传；`bytes` 是 zip 文件大小；
+ * - `author-package`：普通作品包，`files` 已解出，`skipped` 是跳过的目录/系统垃圾条目
+ *   （让“为什么少了一个文件”有答案），`strippedRoot` 是自动剥掉的单层包裹目录名。
+ */
+export type MarketZipInspection =
+  | {
+      readonly kind: 'market-container';
+      readonly bytes: number;
+    }
+  | {
+      readonly kind: 'author-package';
+      readonly files: readonly MarketZipFile[];
+      readonly bytes: number;
+      readonly skipped: readonly string[];
+      readonly strippedRoot?: string;
+    };

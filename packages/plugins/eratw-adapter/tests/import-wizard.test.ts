@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { PackageAttribution } from '../src/attribution';
-import { authorCandidateNotice, buildImportMeta } from '../src/import-wizard';
+import { authorCandidateNotice, type PackageAttribution } from '../src/attribution';
+import { buildImportMeta } from '../src/import-wizard';
 
 /**
  * 导入向导的**候选署名确认**（1018 反馈批）。

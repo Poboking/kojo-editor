@@ -144,17 +144,18 @@ describe('「发布口上」向导注册（用户反馈 4 批）', () => {
   });
 });
 
-describe('旧 zip 入口文案 · 市场格式语义（普通作品包不在这里发布）', () => {
-  it('按钮与系统对话框标题都点明「市场格式」', () => {
-    expect(ZIP_ENTRY_COPY.button).toBe('选择市场格式 zip（高级）');
-    expect(ZIP_ENTRY_COPY.dialogTitle).toBe('选择要发布的市场格式口上包（zip）');
+describe('zip 入口文案 · 市场容器与普通作品包两口通吃', () => {
+  it('按钮不再写「高级/市场格式」，对话标题点明两类 zip', () => {
+    expect(ZIP_ENTRY_COPY.button).toBe('选择 zip 文件…');
+    expect(ZIP_ENTRY_COPY.dialogTitle).toContain('市场容器');
+    expect(ZIP_ENTRY_COPY.dialogTitle).toContain('普通作品包');
   });
 
-  it('hint 说清市场格式 = 根 pack.json + files/**，并指向上面的「发布」从工作区打包', () => {
-    expect(ZIP_ENTRY_COPY.hint).toContain('pack.json');
-    expect(ZIP_ENTRY_COPY.hint).toContain('files/**');
-    expect(ZIP_ENTRY_COPY.hint).toContain('普通作品包 zip 不能在这里直接发布');
-    expect(ZIP_ENTRY_COPY.hint).toContain('「发布」从工作区打包');
+  it('hint 说清：市场容器直接传；普通作品包先解出内容再补包信息', () => {
+    expect(ZIP_ENTRY_COPY.hint).toContain('市场容器直接上传');
+    expect(ZIP_ENTRY_COPY.hint).toContain('普通作品包');
+    expect(ZIP_ENTRY_COPY.hint).toContain('.ERB');
+    expect(ZIP_ENTRY_COPY.hint).toContain('补包信息');
   });
 });
 

@@ -23,7 +23,7 @@
  *    （2026-10-12 实测：214 包里真声明 54 / 仅模板 66 —— 混算会把 25% 报成 55%。）
  */
 
-import { MARKET_MANIFEST_FILE, dirname, join } from '@kojo/plugin-api';
+import { MARKET_MANIFEST_FILE, basename, dirname, join } from '@kojo/plugin-api';
 
 /** 抽取到的字段（带出处，供 UI 呈现原文） */
 export interface AttributionField {
@@ -32,6 +32,11 @@ export interface AttributionField {
   file: string;
   /** 1 基行号 */
   line: number;
+}
+
+/** 候选署名的一行提示：值 + 出处（文件 + 1 基行号），请用户核原文后自己决定 */
+export function authorCandidateNotice(field: AttributionField): string {
+  return `可能作者：${field.value}（${field.file} 第 ${field.line} 行，请确认）`;
 }
 
 /** 授权标注文件的形态（**只报形态，不判条款**） */
@@ -434,6 +439,83 @@ export async function readPackageAttribution(deps: {
   // 高置信 author 找到后，先前收集的候选一律作废（不变量：author 在 ⇒ 候选为 null）
   if (author !== null) authorCandidate = null;
 
+  return { author, authorCandidate, updated, license, readmeFiles };
+}
+
+/** 内存里的一个附属文件（普通作品包 zip 解出后走这里，不落盘） */
+export interface InMemoryAuxFile {
+  readonly path: string;
+  readonly bytes: Uint8Array;
+}
+
+/** 附属文本解码：UTF-8 → Shift-JIS（旧 Windows 日文包）→ UTF-8 lossy 兜底 */
+function decodeAuxText(bytes: Uint8Array): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    // 不是 UTF-8：继续尝试旧 Windows 日文编码
+  }
+  const jp = new TextDecoder('shift_jis').decode(bytes);
+  if (!jp.includes('\uFFFD')) return jp;
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+/**
+ * 与 `readPackageAttribution` **同一条解析链**的内存版：给普通作品包 zip 用。
+ *
+ * 差别只在"文件从哪来"：zip 已经解成字节表，不再经 `io.listDir` / `io.readText`。
+ * 分类 / 授权三态 / 高置信优先 / 候选不落 meta 的口径逐条沿用（不抄第二套规则）。
+ * 文件名取 posix basename；同一 basename 出现在多层目录时取第一份（zip 顺序稳定）。
+ */
+export function readPackageAttributionFromFiles(
+  files: readonly InMemoryAuxFile[],
+): PackageAttribution {
+  const readmeFiles: string[] = [];
+  const licenseFiles: string[] = [];
+  let templateOnly: string | null = null;
+
+  for (const f of files) {
+    const name = basename(f.path);
+    const kind = classifyAuxFile(name);
+    if (kind === 'readme' || kind === 'changelog') readmeFiles.push(name);
+    else if (kind === 'license') licenseFiles.push(name);
+    else if (kind === 'license-template' && templateOnly === null) templateOnly = name;
+  }
+
+  const license: LicenseSignal =
+    licenseFiles.length > 0
+      ? { kind: 'statement', file: licenseFiles[0]! }
+      : templateOnly !== null
+        ? { kind: 'template-only', file: templateOnly }
+        : { kind: 'none' };
+
+  const findByName = (name: string): InMemoryAuxFile | undefined =>
+    files.find((f) => basename(f.path) === name);
+
+  let author: AttributionField | null = null;
+  let authorCandidate: AttributionField | null = null;
+  let updated: AttributionField | null = null;
+  for (const name of readmeFiles.slice(0, MAX_READ_FILES)) {
+    const file = findByName(name);
+    if (!file) continue;
+    const parsed = parseAttributionText(name, decodeAuxText(file.bytes).slice(0, MAX_READ_CHARS));
+    if (author === null && parsed.author) author = parsed.author;
+    if (authorCandidate === null && parsed.authorCandidate) authorCandidate = parsed.authorCandidate;
+    if (updated === null && parsed.updated) updated = parsed.updated;
+    if (author !== null && updated !== null) break;
+  }
+
+  if (author === null && authorCandidate === null && templateOnly !== null) {
+    const file = findByName(templateOnly);
+    if (file) {
+      authorCandidate = parseTemplateAuthorCandidate(
+        templateOnly,
+        decodeAuxText(file.bytes).slice(0, MAX_READ_CHARS),
+      );
+    }
+  }
+
+  if (author !== null) authorCandidate = null;
   return { author, authorCandidate, updated, license, readmeFiles };
 }
 

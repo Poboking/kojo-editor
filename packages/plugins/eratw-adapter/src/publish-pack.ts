@@ -25,14 +25,17 @@ import {
   PACK_ID_RE,
   PACK_VERSION_RE,
   VERSION_SEG_RE,
+  basename,
   coreVersion,
   type MarketPackDraft,
   type MarketPackDraftFile,
   type MarketPublishProgress,
   type MarketService,
+  type MarketZipFile,
   type WorkspaceArtifact,
   type WorkspaceProject,
 } from '@kojo/plugin-api';
+import type { PackageAttribution } from './attribution';
 import type { ArtifactPlan } from './artifact';
 import { LICENSE_CHOICES, type LicenseKind } from './licenses';
 
@@ -212,6 +215,43 @@ export function draftDefaults(
   };
 }
 
+/** 普通作品包 zip 的来源（`inspectZip` 结果里与默认值相关的两部分） */
+export interface ZipPublishSource {
+  readonly files: readonly MarketZipFile[];
+  readonly strippedRoot?: string;
+}
+
+/** zip 文件名去掉 `.zip`（大小写不敏感；只剩扩展名时回退 `zip`） */
+export function zipBaseName(zipPath: string): string {
+  const name = basename(zipPath);
+  const base = name.replace(/\.zip$/i, '').trim();
+  return base.length > 0 ? base : 'zip';
+}
+
+/**
+ * 普通作品包 zip 的发布默认值：
+ * - `name` = 自动剥掉的单层包裹目录名，否则 zip 文件名；
+ * - `id` = `kojo.<slug>.1`（slug 由 `zip-<name>` 消毒；纯日文名会退化成 `zip`，仍合法可改）；
+ * - `version` = `1.0.0`（老 zip 没有可靠版本字段，不猜）；
+ * - `author` = README **高置信**署名（标题式候选不自动采用，留空让作者确认）；
+ * - `licenseKind` = 只有空模板时预选 `template`，其余 `none`（不替作者猜协议）。
+ */
+export function zipPublishDefaults(
+  zipPath: string,
+  source: ZipPublishSource,
+  attribution: PackageAttribution | null,
+): PublishDraftDefaults {
+  const base = source.strippedRoot ?? zipBaseName(zipPath);
+  return {
+    name: base,
+    id: defaultPackId(`zip-${base}`, 0),
+    version: '1.0.0',
+    author: attribution?.author?.value ?? '',
+    summary: '',
+    licenseKind: attribution?.license.kind === 'template-only' ? 'template' : 'none',
+  };
+}
+
 /**
  * 制品计划 → 草案文件（**只换形状，不读盘、不改字节**）。
  *
@@ -308,7 +348,7 @@ export function publishCapabilityNote(capability: PublishCapability): string {
     case 'no-market':
       return '没有检测到「口上市场」插件：现在无法发布。请先启用「口上市场」，再回到这里重试。';
     case 'no-direct':
-      return '当前「口上市场」版本较旧，还不支持从工作区直接发布。请更新「口上市场」插件后再试；只有已经按市场格式打好的 zip（根 pack.json + files/**）才能走下面的「选择市场格式 zip（高级）」。';
+      return '当前「口上市场」版本较旧，还不支持从编辑器直接发布。请更新「口上市场」插件后再试；已经按市场格式打好的 zip（根 pack.json + files/**）仍可走下面的「选择 zip 文件…」。';
     case 'ready':
       return '';
   }

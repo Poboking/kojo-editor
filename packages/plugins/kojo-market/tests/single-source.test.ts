@@ -293,7 +293,8 @@ describe('安装面单一真源守门（KM-10..12）', () => {
     expect(codeMatchCount(svc, /parseManifest\s*\(/), '清单校验调用处数').toBe(1);
     expect(codeMatchCount(svc, /packContainerProblem\s*\(/), '双向对平调用处数（容器安装 1 + 发布预校验 1）').toBe(2);
     expect(codeMatchCount(svc, /'entry-sha256'/), '逐文件锚拒码处数').toBe(1);
-    expect(codeMatchCount(svc, /'source-unreadable'/), '源文件读不到拒码处数（搬运 1 + 发布预校验 1）').toBe(2);
+    // 搬运 1 + 发布预校验 1 + zip 预判 2（stat 读不到 / readBytes 失败）
+    expect(codeMatchCount(svc, /'source-unreadable'/), '源文件读不到拒码处数（搬运 1 + 发布预校验 1 + zip 预判 2）').toBe(4);
     expect(codeMatchCount(svc, /previewForPublish\s*\(/), '发布预校验定义 1 + 编排调用 1').toBe(2);
     expect(scan([/^export function packContainerProblem\(/m], ALL)).toEqual([
       'packages/plugins/kojo-market/src/manifest.ts',

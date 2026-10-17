@@ -14,6 +14,7 @@ import {
   packManifestPathOf,
   parseAttributionText,
   readPackageAttribution,
+  readPackageAttributionFromFiles,
   readSourceAttribution,
   type PackageAttribution,
 } from '../src/attribution';
@@ -589,5 +590,45 @@ describe('readSourceAttribution · 市场来源 pack.json 兜底（KM-13）', ()
     expect(mergePackAuthorship(complete, null)).toBe(complete);
     expect(mergePackAuthorship(complete, { author: '', license: '', authorLine: 1 })).toBe(complete);
     expect(mergePackAuthorship(complete, { author: '别人', license: 'MIT', authorLine: 2 })).toBe(complete);
+  });
+});
+
+describe('readPackageAttributionFromFiles · 普通作品包 zip 的内存版（ZIP-1）', () => {
+  it('UTF-8 readme 的高置信署名与更新日期照抽', () => {
+    const a = readPackageAttributionFromFiles([
+      { path: 'readme.txt', bytes: new TextEncoder().encode('作者：holy\n最終更新：2023-10-07\n') },
+    ]);
+    expect(a.author).toEqual({ value: 'holy', file: 'readme.txt', line: 1 });
+    expect(a.updated?.value).toBe('2023-10-07');
+    expect(a.license).toEqual({ kind: 'none' });
+  });
+
+  it('CP932（Shift-JIS）readme 先解码再抽（老 Windows 日文包）', () => {
+    const a = readPackageAttributionFromFiles([
+      {
+        path: 'readme.txt',
+        bytes: iconv.encode('作者：舩 弦五郎\n', 'shift_jis'),
+      },
+    ]);
+    expect(a.author).toEqual({ value: '舩 弦五郎', file: 'readme.txt', line: 1 });
+  });
+
+  it('许可证文件只报形态；模板里的作者只作候选，不自动成为高置信署名', () => {
+    const a = readPackageAttributionFromFiles([
+      { path: 'LICENSE.txt', bytes: new TextEncoder().encode('MIT License') },
+      { path: 'ライセンステンプレ.txt', bytes: new TextEncoder().encode('作者：＜舩 弦五郎＞\n') },
+    ]);
+    expect(a.license).toEqual({ kind: 'statement', file: 'LICENSE.txt' });
+    expect(a.author).toBeNull();
+    expect(a.authorCandidate?.value).toBe('舩 弦五郎');
+  });
+
+  it('高置信 author 在 ⇒ 候选为 null（同一条不变量）', () => {
+    const a = readPackageAttributionFromFiles([
+      { path: 'readme.txt', bytes: new TextEncoder().encode('作者：holy\n') },
+      { path: 'ライセンステンプレ.txt', bytes: new TextEncoder().encode('作者：＜别的人＞\n') },
+    ]);
+    expect(a.author?.value).toBe('holy');
+    expect(a.authorCandidate).toBeNull();
   });
 });
