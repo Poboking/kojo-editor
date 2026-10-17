@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactElement } from 'react';
-import type { SearchMatch, SearchProgress } from '../bridge/search';
+import type { SearchMatch, SearchProgress, SearchResult } from '../bridge/search';
+import { nextWindow, type RenderWindow } from '@kojo/plugin-api';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import { Icon } from './icons';
 import {
@@ -64,8 +65,21 @@ import '../search-panel.css';
  * 里的 `.search-*` 旧规则**一个字都没改**，本文件先于它注入也能压过它。
  */
 
-/** 最多渲染多少行（与问题面板同精神：上万行 DOM 会拖垮面板） */
-const RENDER_CAP = 300;
+/**
+ * 结果区的渲染窗口（PS-6 第 5 项：把"死顶"换成"可长"）。
+ *
+ * 旧实现 `flattenSearchResults(files, 300)` 是个**够不着的上限**：真实一次全项目检索
+ * 出 2,870 条命中（真语料壳内读数，25 个文件），面板只画 300 行、其余 2,570 条
+ * 一句"未列出"就把作者挡在外面——点不到、也 Tab 不到（内核铁律 4：不许静默）。
+ *
+ * 现在与仓里其余长列表同一把尺（契约层的 `RenderWindow`；文件树过滤窗、状态回放、
+ * 糖预览共用同一套数学）：首帧上界 120 行（**比旧实现的 300 行还轻**），
+ * 末尾那枚「继续显示」是一枚真 `<button>` ⇒ Tab 得到它、Enter 按得动，
+ * 每次 +240 直到全量可达。折叠/分组形态一字未动。
+ */
+const SEARCH_WINDOW: RenderWindow = { initial: 120, step: 240 };
+/** 首帧最多画多少行（导出给测试钉首帧行数） */
+export const SEARCH_WINDOW_INITIAL = SEARCH_WINDOW.initial;
 
 /** 两个列表 props 的缺省值：模块级常量，默认参数每次渲染新建数组会丢掉引用稳定性 */
 const EMPTY_SCOPES: readonly SearchScopeItem[] = [];
@@ -133,7 +147,7 @@ export function splitSearchPath(path: string): SearchPathParts {
   return { base: rel.slice(cut + 1), dir: rel.slice(0, cut) };
 }
 
-/** 一个文件块：文件头（命中总数）+ 该文件下（可能被 RENDER_CAP 截到一半的）命中行 */
+/** 一个文件块：文件头（命中总数）+ 该文件下（可能被渲染窗口截到一半的）命中行 */
 export interface SearchFileGroup {
   readonly path: string;
   /** 后端给的文件级命中总数：截断只裁渲染行，不许把这个数裁小（否则读数撒谎） */
@@ -323,9 +337,17 @@ export function SearchPanel({
   }, [replaceOpen]);
 
   const result = s.result;
+  /**
+   * 窗口挂在**这一份结果**上（与文件树过滤窗同一招）：换一次检索 ⇒ 结果对象换了身份
+   * ⇒ 自动回落到首帧上界，不需要 `useEffect`、也不会出现"旧窗口套到新结果上"的中间帧。
+   */
+  const [resultWin, setResultWin] = useState<{ readonly key: SearchResult; readonly end: number } | null>(null);
+  const windowEnd = resultWin?.key === result ? resultWin.end : SEARCH_WINDOW_INITIAL;
   const { rows, hidden } = result
-    ? flattenSearchResults(result.files, RENDER_CAP)
+    ? flattenSearchResults(result.files, windowEnd)
     : { rows: [], hidden: 0 };
+  /** 这批结果一共多少行（含没画的）：`flattenSearchResults` 的 `hidden` 就是差额 ⇒ 全量可达 */
+  const totalRowCount = rows.length + hidden;
   const groups = groupSearchRows(rows);
   const gutterCh = locationGutterCh(rows);
   const progressPercent = searchProgressPercent(s.progress);
@@ -652,8 +674,9 @@ export function SearchPanel({
                 </div>
               ) : null}
               {hidden > 0 ? (
+                // 读数是"这一屏画了多少"，不是"最多只能给你这么多"（下面结果区末尾那枚按钮才是入口）
                 <div className="search-status dim ksp-note">
-                  仅显示前 {RENDER_CAP} 行（另有 {hidden} 行未列出）
+                  本屏显示前 {rows.length} 行 · 共 {totalRowCount} 行命中
                 </div>
               ) : null}
             </>
@@ -713,6 +736,20 @@ export function SearchPanel({
               </div>
             );
           })}
+          {result !== null && hidden > 0 ? (
+            /* 「继续显示」是一枚真按钮，挂在结果末尾（PS-6 第 5 项）：
+               Tab 顺序就在最后一行之后、Enter 按得动、每按一次多画 STEP 行，
+               按到没有为止 ⇒ 上一批"硬截 300 行"挡在外面的那两千条现在全部可达。 */
+            <button
+              type="button"
+              className="ghost small ksp-more"
+              onClick={() =>
+                setResultWin({ key: result, end: nextWindow(windowEnd, totalRowCount, SEARCH_WINDOW) })
+              }
+            >
+              继续显示后面的命中（还有 {hidden} 行）
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

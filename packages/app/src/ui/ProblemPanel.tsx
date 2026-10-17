@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react';
-import { diagnosticDisplay, shortPath } from '@kojo/plugin-api';
+import { diagnosticDisplay, shortPath, nextWindow, windowSize, type RenderWindow } from '@kojo/plugin-api';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import { snapshot, subscribe, type EditorProblem } from './problem-store';
 
@@ -34,8 +34,20 @@ const SEVERITY_COLOR: Record<EditorProblem['severity'], string> = {
   info: '#7f9cc0',
 };
 
-/** 单列表最多渲染条数（与约定面板 `RENDER_CAP` 同精神：避免上万行 DOM 拖垮面板） */
-const RENDER_CAP = 300;
+/**
+ * 问题列表的渲染窗口（PS-6 第 5 项：把"死顶"换成"可长"）。
+ *
+ * 旧实现硬截 300 条 + 一句「仅显示前 300 条（共 N 条）」——第 301 条**没有任何入口可达**，
+ * 全项目校验一轮报上千条时，作者看到的就是一个到不了的谎（内核铁律 4：不许静默）。
+ * 现在与仓里其余面板同一把尺（`plugin-api` 的 `RenderWindow`，文件树过滤窗、
+ * 状态回放面板、糖预览面板共用）：首帧上界 120 行，点一次哨兵 +240，直到全量可达。
+ *
+ * 哨兵是一枚 `<button>`（不是"滚到底自动加"那种隐形机制）⇒ 键盘 Tab 得到它、
+ * Enter 按得动，结果行的可达性不因为换了窗口化而掉一档（UI-4 那条口径）。
+ */
+const PROBLEM_WINDOW: RenderWindow = { initial: 120, step: 240 };
+/** 首帧最多画多少条（旧导出名沿用，测试与面板按它钉首帧行数） */
+export const PROBLEM_WINDOW_INITIAL = PROBLEM_WINDOW.initial;
 
 function useProblems(): readonly EditorProblem[] {
   const [items, setItems] = useState<readonly EditorProblem[]>(() => snapshot());
@@ -50,6 +62,8 @@ export function ProblemPanel({
   onReveal: (path: string, line: number, span?: RevealSpan) => void;
 }): ReactElement {
   const items = useProblems();
+  /** 本次窗口能盖到第几条（`nextWindow` 的产物；没点过哨兵 = 首帧上界） */
+  const [windowEnd, setWindowEnd] = useState<number>(PROBLEM_WINDOW.initial);
 
   let error = 0;
   let warning = 0;
@@ -65,7 +79,8 @@ export function ProblemPanel({
       ? ({ kind: 'empty' } as const)
       : ({ kind: 'counts', error, warning, info } as const);
 
-  const shown = items.slice(0, RENDER_CAP);
+  const shown = items.slice(0, windowSize(items.length, windowEnd, PROBLEM_WINDOW));
+  const hidden = items.length - shown.length;
 
   return (
     <div className="panel-problems">
@@ -115,8 +130,15 @@ export function ProblemPanel({
         </ul>
       ) : null}
 
-      {items.length > RENDER_CAP ? (
-        <div className="conv-more dim">仅显示前 {RENDER_CAP} 条（共 {items.length} 条）</div>
+      {hidden > 0 ? (
+        // 哨兵在末尾：Tab 得到它、Enter 按得动；点一次多画 STEP 条，直到全量画完
+        <button
+          type="button"
+          className="ghost small conv-more prob-more"
+          onClick={() => setWindowEnd((cur) => nextWindow(cur, items.length, PROBLEM_WINDOW))}
+        >
+          继续显示后面的问题（还有 {hidden} 条，共 {items.length} 条）
+        </button>
       ) : null}
     </div>
   );

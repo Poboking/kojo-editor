@@ -148,21 +148,64 @@ function baseNameOf(lowerPath: string): string {
  * 范围收窄**发生在上游的候选清单**（宿主 ProjectView 按 `pathInScope` 过滤），
  * 这里不再收第二次——两处各滤一遍就是两条会各自演化的口径。
  */
+/**
+ * 候选清单的**归一化缓存**（PS-6 第 6 项）。
+ *
+ * `Ctrl+P` 每敲一个字符都要给每个候选算一次 rank，而 rank 只用到「小写文件名」和
+ * 「原路径」这两样 —— 它们**与查询词无关**。旧实现每击键把 2,325+ 条路径全部
+ * `toLowerCase()` 一遍并新建两份中间数组（真语料口径：一次开面板 = 十几万次字符串分配）。
+ *
+ * 键用清单数组的**引用**：宿主那侧 `quickOpenFiles` 是 `useMemo` 出来的（只看
+ * 索引 / 方言清单 / 范围三样），身份不变 = 内容不变 ⇒ 归一化一次、敲多少下都用它。
+ * `WeakMap` ⇒ 清单换身份（换项目、范围收窄）旧那份跟着回收，不留第二份常驻内存。
+ */
+interface NormalizedCandidate {
+  readonly path: string;
+  readonly lowerBase: string;
+  readonly lowerPath: string;
+}
+const normalizedByList = new WeakMap<readonly string[], NormalizedCandidate[]>();
+
+function normalizedCandidates(paths: readonly string[]): NormalizedCandidate[] {
+  const hit = normalizedByList.get(paths);
+  if (hit) return hit;
+  const built: NormalizedCandidate[] = [];
+  for (const p of paths) {
+    if (typeof p !== 'string') continue;
+    const lowerPath = p.toLowerCase();
+    built.push({ path: p, lowerBase: baseNameOf(lowerPath), lowerPath });
+  }
+  try {
+    normalizedByList.set(paths, built);
+  } catch {
+    // 键不是对象（调用方给了奇怪的东西）⇒ 缓存跳过，判定结果一样，只是这一路不省
+  }
+  return built;
+}
+
 export function filterFileCandidates(
   paths: readonly string[],
   query: string,
   cap: number = CANDIDATE_BUDGETS.quickOpen,
 ): string[] {
   if (!Array.isArray(paths)) return [];
-  const candidates = paths.filter((p) => typeof p === 'string');
   const budget = candidateBudget('quickOpen', cap);
   const q = query.trim();
-  if (q.length === 0) return candidates.slice(0, budget);
-  const ranked = candidates
-    .map((p, i) => ({ p, i, rank: candidateRank(baseNameOf(p.toLowerCase()), p, q) }))
-    .filter((r) => r.rank < 4)
-    .sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.i - b.i));
-  return ranked.slice(0, budget).map((r) => r.p);
+  const candidates = normalizedCandidates(paths);
+  if (q.length === 0) return candidates.slice(0, budget).map((c) => c.path);
+  // 一趟收集（rank 相同保原序：`i` 就是原下标，比较器带上它）
+  const ranked: Array<{ rank: number; i: number; path: string }> = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i] as NormalizedCandidate;
+    // 交给契约的两位都是**已经小写过的**形态：`candidateRank` 内部还要各自
+    // `toLowerCase()` 一次，对已小写的串那是同一对象返回、不再新建字符串。
+    // 判定逐字等价（它比的本来就是两侧的小写形），省下的正是"每击键把 2,325 条
+    // 全路径与小文件名各重造一遍"这笔账。
+    const rank = candidateRank(c.lowerBase, c.lowerPath, q);
+    if (rank < 4) ranked.push({ rank, i, path: c.path });
+  }
+  ranked.sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.i - b.i));
+  return ranked.slice(0, budget).map((r) => r.path);
 }
 
 /**

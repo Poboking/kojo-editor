@@ -133,28 +133,31 @@ function Picker({ placeholder, emptyText, query, onQuery, items, onPick, onClose
           {items.length === 0 ? (
             <div className="picker-empty dim">{emptyText}</div>
           ) : (
-            items.map((it, i) => (
-              <button
-                key={it.key}
-                data-idx={i}
-                className={`picker-item ${i === cursor ? 'active' : ''}`}
-                disabled={it.disabled === true}
-                {...(it.title !== undefined ? { title: it.title } : {})}
-                onMouseEnter={() => setCursor(i)}
-                onClick={() => pick(i)}
-              >
-                <span className="picker-primary">{it.primary}</span>
-                {it.secondaryDir !== undefined ? (
-                  <span className="picker-secondary dim" title={it.secondaryDir}>
-                    {dirLabelParts(it.secondaryDir).head !== '' ? (
-                      <span className="ps-head">{dirLabelParts(it.secondaryDir).head}</span>
-                    ) : null}
-                    <span className="ps-tail">{dirLabelParts(it.secondaryDir).tail}</span>
-                  </span>
-                ) : null}
-                {it.hint ? <span className="picker-hint dim">{it.hint}</span> : null}
-              </button>
-            ))
+            items.map((it, i) => {
+              // 目录标签**一行算一次**（PS-6 第 6 项）：旧写法在同一行里调 `dirLabelParts`
+              // 三遍（判空 + head + tail），一次 Ctrl+P 铺满预算就是几百行 × 三次拆分。
+              const dirLabel = it.secondaryDir !== undefined ? dirLabelParts(it.secondaryDir) : null;
+              return (
+                <button
+                  key={it.key}
+                  data-idx={i}
+                  className={`picker-item ${i === cursor ? 'active' : ''}`}
+                  disabled={it.disabled === true}
+                  {...(it.title !== undefined ? { title: it.title } : {})}
+                  onMouseEnter={() => setCursor(i)}
+                  onClick={() => pick(i)}
+                >
+                  <span className="picker-primary">{it.primary}</span>
+                  {dirLabel !== null && it.secondaryDir !== undefined ? (
+                    <span className="picker-secondary dim" title={it.secondaryDir}>
+                      {dirLabel.head !== '' ? <span className="ps-head">{dirLabel.head}</span> : null}
+                      <span className="ps-tail">{dirLabel.tail}</span>
+                    </span>
+                  ) : null}
+                  {it.hint ? <span className="picker-hint dim">{it.hint}</span> : null}
+                </button>
+              );
+            })
           )}
         </div>
         {footnote ? <div className="picker-note dim">{footnote}</div> : null}

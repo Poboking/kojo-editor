@@ -67,6 +67,16 @@ export async function walkDialectPaths(
 }
 
 /**
+ * CSS 属性选择器的字符串值转义（PS-6 定位那一条）。
+ *
+ * 只做两件事：`\` 翻倍、`"` 前置反斜杠——Windows 路径几乎必带前者，后者是属性值定界符。
+ * 真撞上更冷的字符（换行之类）就点名失败，接着走归一比对那条兜底腿，不会漏定位。
+ */
+export function escapeAttrValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
  * 口上文件树：角色 → 作者包 → 口上文件（默认平铺共存，c087db9 形态）。
  *
  * 作者包**单态 + 追加式展开**（2026-10-12 用户反馈 6/7 重做）：
@@ -216,26 +226,63 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
    */
   const dirReq = useRef<Map<string, number>>(new Map());
 
-  /** 发起一次列举（不看缓存，总是重新取；结果按请求序号认领先后） */
-  const fetchDir = (dir: string): void => {
-    if (!listDir) return;
-    const seq = (dirReq.current.get(dir) ?? 0) + 1;
-    dirReq.current.set(dir, seq);
-    setDirCache((m) =>
+  /** 一次列举落地：若干目录并成**一次** state 更新（PS-6 第 4 项）。
+   *
+   * 旧形态 `relistShown` 对每个正在显示的目录各发一次 `listDir`，每份响应各自
+   * `setDirCache` ⇒ K 个目录 = K 帧全树重渲染，而它们本来属于**同一次失效**。
+   *
+   * 顺带管住缓存体量：`dirCache` 以前只在删除/改名时剪枝，展开过又收起的目录永远留着
+   * （条目数组是实打实的内存）。超出上界时先淘汰"当前没展开"的最旧条目；
+   * 全都在展开着就原样留着——**展开态是作者的现场，缓存不许把它挤成空白**。
+   */
+  const DIR_CACHE_MAX = 400;
+  const applyDirUpdates = (updates: ReadonlyMap<string, DirState>): void => {
+    setDirCache((prev) => {
+      const next = new Map(prev);
+      for (const [dir, state] of updates) next.set(dir, state);
+      if (next.size <= DIR_CACHE_MAX) return next;
+      for (const key of [...next.keys()]) {
+        if (next.size <= DIR_CACHE_MAX) break;
+        if (!subOpen.has(key)) next.delete(key);
+      }
+      return next;
+    });
+  };
+
+  /**
+   * 一批目录一起列、**一次落地**（PS-6）：外部改动重列走的就是这条。
+   *
+   * 序号闸照旧逐目录认领先后（迟到的那份不认领）；某一份失败只把**那一个目录**标成
+   * error，其余照收——一颗失败不许把整批拖成空白（也不静默：DirRows 会画失败行）。
+   */
+  const fetchDirs = (dirs: readonly string[]): void => {
+    if (!listDir || dirs.length === 0) return;
+    const seqs = new Map<string, number>();
+    const loading = new Map<string, DirState>();
+    for (const dir of dirs) {
+      const seq = (dirReq.current.get(dir) ?? 0) + 1;
+      dirReq.current.set(dir, seq);
+      seqs.set(dir, seq);
       // **首次展开**才显示「读取目录…」；失效重列时旧内容原地留着、新结果到了再换。
       // 否则作者每按一次 Ctrl+S（保存也是外部改动的一种），整棵树的展开层就闪一下空白——
       // 这是本批自己引入的风险：以前根本没有第二次列举，现在有了，就不能让它打扰人。
-      m.has(dir) ? m : new Map(m).set(dir, 'loading'),
-    );
-    void listDir(dir)
-      .then((entries) => {
-        if (dirReq.current.get(dir) !== seq) return;
-        setDirCache((m) => new Map(m).set(dir, entries));
-      })
-      .catch(() => {
-        if (dirReq.current.get(dir) !== seq) return;
-        setDirCache((m) => new Map(m).set(dir, 'error'));
+      if (!dirCache.has(dir)) loading.set(dir, 'loading');
+    }
+    if (loading.size > 0) applyDirUpdates(loading);
+    void Promise.allSettled(dirs.map((dir) => listDir(dir))).then((settled) => {
+      const updates = new Map<string, DirState>();
+      settled.forEach((r, i) => {
+        const dir = dirs[i] as string;
+        if (dirReq.current.get(dir) !== seqs.get(dir)) return;
+        updates.set(dir, r.status === 'fulfilled' ? r.value : 'error');
       });
+      if (updates.size > 0) applyDirUpdates(updates);
+    });
+  };
+
+  /** 发起一次列举（不看缓存，总是重新取；结果按请求序号认领先后） */
+  const fetchDir = (dir: string): void => {
+    fetchDirs([dir]);
   };
 
   /** 真实文件夹视图的惰性加载（按绝对路径；已缓存则零请求） */
@@ -349,10 +396,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
    * 自动失效一条都不会到，作者手里必须还有一条不用重开项目的路。
    */
   const relistShown = (): void => {
-    for (const dir of dirsToRelist(subOpen, pkgFolder, collectPackages({ kind: 'root' }))) fetchDir(dir);
+    const dirs = new Set(dirsToRelist(subOpen, pkgFolder, collectPackages({ kind: 'root' })));
     // 文件系统视图（B5/D1）：根层全部根一并重列（多根时折叠着的也会被取到顶层——手动
     // 重读是显式动作，宁可多取一层也不留"按了刷新还有根没重列"的疑心）
-    if (view === 'fs') for (const r of fsRoots) fetchDir(r);
+    if (view === 'fs') for (const r of fsRoots) dirs.add(r);
+    // 一次失效 = 一次请求批 = **一帧**（旧实现每份目录响应各排一帧，K 层展开就是 K 帧全树）
+    fetchDirs([...dirs]);
   };
 
   const lastNonce = useRef(refreshNonce);
@@ -441,11 +490,14 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   /** 操作涉及哪些目录就重列哪些（重命名要重列 from 与 to 两个父目录；不全树重挂） */
   const refetchDirs = (dirs: readonly string[]): void => {
     const seen = new Set<string>();
+    const out: string[] = [];
     for (const d of dirs) {
       if (!d || seen.has(pkey(d))) continue;
       seen.add(pkey(d));
-      fetchDir(d);
+      out.push(d);
     }
+    // 与失效重列同一条批处理腿：改名涉及两层 ⇒ 一次请求批、一帧落地（不是两帧）
+    fetchDirs(out);
   };
 
   const commitEdit = (): void => {
@@ -639,6 +691,18 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       requestAnimationFrame(() => {
         const body = treeBodyRef.current;
         if (!body) return;
+        // 先按字面路径**点名**要那一行（PS-6：旧实现每次都把挂在树上的每一行都摸一遍，
+        // 过滤态一帧挂上千行时，定位一次就是一次全表扫描）。属性值里的 `\` 与 `"` 要转义，
+        // Windows 路径几乎必带 `\`。
+        const direct = body.querySelector<HTMLElement>(
+          `button[data-locate="${escapeAttrValue(targetPath)}"]`,
+        );
+        if (direct) {
+          direct.scrollIntoView({ block: 'nearest' });
+          return;
+        }
+        // 点不到才退回归一比对：磁盘列举的行与 activeFile 的写法可能差个分隔符/大小写
+        // （Windows 两种写法都算同一个文件），这条腿是那种情形的兜底，不是常规路径。
         const key = pkey(targetPath);
         for (const el of body.querySelectorAll<HTMLElement>('button[data-locate]')) {
           if (pkey(el.dataset.locate ?? '') === key) {

@@ -82,7 +82,11 @@ export function TabBar({
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const r = e.currentTarget.getBoundingClientRect();
-    setTabDropAt({ path: p, before: e.clientX < r.left + r.width / 2 });
+    const before = e.clientX < r.left + r.width / 2;
+    // 同一个落点不重复写（PS-6 第 7 项）：旧实现每 mousemove 都 `setTabDropAt({...})`
+    // 塞一个新对象 ⇒ 引用必变 ⇒ 标签条每移一个像素整条重渲一次。
+    // 提示位只在 (path, before) 真变化时才有新意义，其余一律原样留着同一份 state。
+    setTabDropAt((cur) => (cur !== null && cur.path === p && cur.before === before ? cur : { path: p, before }));
   };
   const onTabDrop = (e: ReactDragEvent, p: string): void => {
     const dragPath = e.dataTransfer.getData(TAB_DRAG_MIME);

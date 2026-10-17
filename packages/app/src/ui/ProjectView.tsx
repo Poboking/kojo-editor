@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-api';
 import { NAV_SCOPE_EVENT, WellKnownCommands } from '@kojo/plugin-api';
@@ -9,7 +9,8 @@ import { SearchPanel } from './SearchPanel';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
 import { FileTree, walkDialectPaths } from './FileTree';
 import { revealInExplorer } from './reveal-explorer';
-import { ShellLayout, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
+import { ShellLayout, setShellEditorStatus, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
+import { hostVersionStep, type HostVersionState } from './PanelHost';
 import { Icon } from './icons';
 import type { ShellCommandSpec } from './commands';
 import {
@@ -118,21 +119,29 @@ const TREE_REFRESH_WINDOW_MS = 400;
 const NO_SEARCH_SCOPES: SearchScopeCatalog = { items: [], notices: [] };
 
 /**
- * 两份状态读数是否等价（纯数据逐字段比；缺省与 null/'' 视为同值）。
- * `sel`/`autosavedAt` 是可选字段，上报方有时带有时不带 ⇒ 按"缺省即空"归一后再比，
- * 否则 `{...} vs {..., sel: undefined}` 这种同一读数会被判成两次变化。
+ * 内建视图的**宿主版本闸**（PS-6 正确性修复）。
+ *
+ * `deps` 里任一项变化 ⇒ 返回的数自增；全同 ⇒ 同一个数。壳层把它转给
+ * `PanelBody.hostVersion`，memo 才有地方看见"桥后面的值换了"。
+ * 判等步住在 `PanelHost.hostVersionStep`（纯函数、可单测），这里只负责跨渲染记账。
+ *
+ * 为什么不用 `useMemo` 造个新对象：这三只面板的**组件身份必须恒定**（内联箭头组件 =
+ * 每帧新类型 = 整棵树重挂、展开态全丢——本文件那条老教训），所以"变了"只能一个数字说。
  */
-function isSameEditorStatus(a: EditorStatusInfo | null, b: EditorStatusInfo | null): boolean {
-  if (a === b) return true;
-  if (a === null || b === null) return false;
-  return (
-    a.encoding === b.encoding &&
-    a.eol === b.eol &&
-    a.lines === b.lines &&
-    (a.autosavedAt ?? null) === (b.autosavedAt ?? null) &&
-    (a.sel ?? '') === (b.sel ?? '')
-  );
+function useHostVersion(deps: readonly unknown[]): number {
+  const state = useRef<HostVersionState>({ version: 0, deps });
+  state.current = hostVersionStep(state.current, deps);
+  return state.current.version;
 }
+
+/**
+ * `EditorPane` 的**模块级 memo 包装**（PS-6 第 3 项，改在调用侧）。
+ *
+ * 为什么在这里包而不是去改 `EditorPane.tsx`：那条文件本批由另一条线独写。
+ * 为什么必须是**模块级常量**：在组件里 `memo(EditorPane)` 每帧产一个新类型 ⇒ 立刻重挂，
+ * 比不包还糟。光标移动那类与编辑器 props 无关的壳层重渲，从此停在壳层门口。
+ */
+const EditorPaneMemo = memo(EditorPane);
 
 /**
  * 一组编辑器的**恒定身份回调集**（见 ProjectView 内的 `callbacksFor`）。
@@ -187,29 +196,40 @@ export function ProjectView({
   extraRoots,
   onAddExtraRoot,
 }: Props): ReactElement {
-  const [editorStatus, setEditorStatus] = useState<EditorStatusInfo | null>(null);
   /**
-   * 每组各自的状态上抛（SPLIT-1）：状态栏显示**焦点组**的编码/EOL/行数——
+   * 每组各自的状态上报（SPLIT-1）：状态栏显示**焦点组**的编码/EOL/行数——
    * 各组把状态写进 ref 表，焦点切换时取焦点组那份。
+   *
+   * PS-6：这里**不再有 `editorStatus` state**。读数写进壳层的叶子 store
+   * （`setShellEditorStatus`），只有状态栏那三格小字订阅它。
    */
   const statusByGroupRef = useRef(new Map<string, EditorStatusInfo | null>());
   const activeGroupIdRef = useRef(activeGroupId);
   activeGroupIdRef.current = activeGroupId;
   useEffect(() => {
-    setEditorStatus(statusByGroupRef.current.get(activeGroupId) ?? null);
+    setShellEditorStatus(statusByGroupRef.current.get(activeGroupId) ?? null);
   }, [activeGroupId]);
   /**
-   * 状态上报的**腰带**（用户反馈修复 · 渲染环父侧那一半）：
-   * `EditorStatusInfo` 是纯数据（字符串 + 数字），逐字段相等就是"状态没变"——
-   * 不再写 ref、不再 setState，壳层不因此重渲染。
+   * 状态上报的**腰带**（PS-6 第 3 项：光标移动不再往上抬状态）。
+   *
+   * 旧形态这里 `setEditorStatus(info)` ⇒ ProjectView 重渲 ⇒ ShellLayout 重渲 ⇒
+   * EditorPane 与整棵 children 跟着重算，而代价只换来状态栏一行字变几个数字。
+   * 现在写 store：内容相等连通知都不发（判据在 `isSameEditorStatus`，壳层那侧），
+   * 内容变了也只惊动订阅它的小叶子。
+   *
+   * `EditorStatusInfo` 是纯数据（字符串 + 数字），逐字段相等就是"状态没变"；
    * 判据不全（新字段漏比）会退化成"每次都算变了"，只是腰带变松，不影响正确性。
    */
   const handleStatusInfo = useCallback((gid: string, info: EditorStatusInfo | null) => {
-    const prev = statusByGroupRef.current.get(gid) ?? null;
-    if (isSameEditorStatus(prev, info)) return;
     statusByGroupRef.current.set(gid, info);
-    if (gid === activeGroupIdRef.current) setEditorStatus(info);
+    if (gid === activeGroupIdRef.current) setShellEditorStatus(info);
   }, []);
+  /**
+   * 卸载时清读数（PS-6）：store 是模块级的，活得比一次 `ProjectView` 挂载久。
+   * 不清 ⇒ 关项目回欢迎页、或换一个项目时，上一个文件的「GBK · CRLF · 52,601 行」
+   * 会挂在状态栏上直到下一次上报——那是一条会说谎的读数。
+   */
+  useEffect(() => () => setShellEditorStatus(null), []);
   /**
    * **每组一条恒定身份的上报/回调**（渲染环的父侧根因，与上面的内容相等是同一件事的两半）。
    *
@@ -262,14 +282,36 @@ export function ProjectView({
   );
 
   // 统计（v0.1 验收指标：角色数 / 文件数 / 函数数）
-  let fileCount = 0;
-  let fnCount = 0;
-  if (index) {
-    for (const f of index.files.values()) {
-      fileCount++;
-      fnCount += f.functions.length;
+  // PS-6：这份计数挂在索引对象上，不是挂在渲染次数上——真语料 2,325 个条目，
+  // 以前壳层每渲一次就把整张表再数一遍（状态栏那格读数要的是数字，不是新的遍历）。
+  const stats = useMemo(() => {
+    let fileCount = 0;
+    let fnCount = 0;
+    if (index) {
+      for (const f of index.files.values()) {
+        fileCount++;
+        fnCount += f.functions.length;
+      }
     }
-  }
+    return { fileCount, fnCount };
+  }, [index]);
+  const { fileCount, fnCount } = stats;
+
+  /**
+   * 上抛给 `EditorPane` 的两条回调的**恒定身份包装**（PS-6 第 3 项）。
+   *
+   * `EditorPaneMemo` 只认 props 引用：这两条若是宿主每次渲染现建的闭包，
+   * memo 就等于没包。真源仍是宿主传进来的那两条（经 ref 读最新值，闭包不过时），
+   * 这里只是把"每次新函数"折成"每次同一个函数 + 读最新实现"。
+   */
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
+  const onReauthRef = useRef(onReauth);
+  onReauthRef.current = onReauth;
+  const stableDirtyChange = useCallback((path: string, dirty: boolean) => {
+    onDirtyChangeRef.current?.(path, dirty);
+  }, []);
+  const stableReauth = useCallback(() => onReauthRef.current(), []);
 
   /**
    * 「只看」范围的**接线**（W7 NAV-SCOPE）：选择器住在搜索面板（它的状态在检索 store 里），
@@ -548,6 +590,31 @@ export function ProjectView({
 
   const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], onAddExtraRoot: undefined as (() => void) | undefined });
   fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], onAddExtraRoot };
+  /**
+   * 桥换了内容就得有人告诉 memo（PS-6 正确性修复）。
+   *
+   * `StableFileTree` 的**组件身份恒定**（那是"打开文件不再整树重挂"那批修复的成果，
+   * 不许回退），代价是 `PanelBody` 的三条比较项对它永远相等 ⇒ 旧实现里桥进去的
+   * `index` / `activeFile` / `refreshNonce` 一次都送不到 `FileTree`：
+   * 定位到树（B4）、外部改动后重列（HK-5）、冷开快照转索引三件事全是哑的，
+   * 只有偶然重挂组件时才"看起来好了"。这一格计数就是那句话："桥那边变了"。
+   */
+  const fileTreeVersion = useHostVersion([
+    project,
+    index,
+    activeFile,
+    onOpenFile,
+    listDir,
+    walkDir,
+    importPackage,
+    treeNonce,
+    nameGloss,
+    kernel.io,
+    guardFileOp,
+    onFilesGone,
+    extraRoots,
+    onAddExtraRoot,
+  ]);
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
       const a = fileTreeArgsRef.current;
@@ -581,6 +648,7 @@ export function ProjectView({
   // 必须跟到落点，否则"点问题落在行首、同一处按 F12 落在名字那一列"。
   const problemArgsRef = useRef({ kernel });
   problemArgsRef.current = { kernel };
+  const problemVersion = useHostVersion([kernel]);
   const problemComponent = useMemo(() => {
     const StableProblems = (): ReactElement => {
       const a = problemArgsRef.current;
@@ -619,11 +687,18 @@ export function ProjectView({
    * 跳转仍走既有 `editor.revealLocation`（与问题面板同一条通道）。
    */
   const searchArgsRef = useRef({ kernel, roots: [] as string[], scopes: NO_SEARCH_SCOPES });
+  // 检索根是**活读数**（`workspaceRootsOf` 每次都现取——缓存会把本会话刚自选的那根
+  // 永远排除在外，口径同 `workspace-roots.ts`）。它的量是几根目录，每渲一次重算不要钱；
+  // 真正要省的是"根没变 ⇒ 面板不重渲"，所以进计数的是拼出来的那串键，不是数组引用。
+  const searchRoots = [
+    ...new Set([project.rootDir, ...(extraRoots ?? []), ...workspaceRootsOf(kernel)]),
+  ];
   searchArgsRef.current = {
     kernel,
-    roots: [...new Set([project.rootDir, ...(extraRoots ?? []), ...workspaceRootsOf(kernel)])],
+    roots: searchRoots,
     scopes: searchScopes,
   };
+  const searchVersion = useHostVersion([kernel, searchRoots.join('\n'), searchScopes]);
   const searchComponent = useMemo(() => {
     const StableSearch = (): ReactElement => {
       const a = searchArgsRef.current;
@@ -680,6 +755,16 @@ export function ProjectView({
     [fileTreeComponent, problemComponent, searchComponent],
   );
 
+  /**
+   * 三只内建视图的宿主版本表（PS-6）：`id → 计数`，壳层原样转给对应面板的
+   * `PanelBody.hostVersion`。**表里没有的面板（插件面板）不抬号**——它们自己订阅内核，
+   * 拿 `undefined` 走 0，memo 行为与改动前逐字一致（不让一次切标签变成十只面板陪跑）。
+   */
+  const panelHostVersions = useMemo<Readonly<Record<string, number>>>(
+    () => ({ 'kojo.files': fileTreeVersion, 'kojo.search': searchVersion, 'kojo.problems': problemVersion }),
+    [fileTreeVersion, searchVersion, problemVersion],
+  );
+
   /* ---------------- 标签栏（C1/C2/C3）：渲染与交互在 TabBar，宿主只接回调 ---------------- */
 
   /**
@@ -718,12 +803,18 @@ export function ProjectView({
       left.style.flex = '0 0 ' + nl + 'px';
       right.style.flex = '1 1 0%';
     };
-    const up = (): void => {
+    // 解绑要看住三种收场（PS-6 第 7 项）：pointerup / pointercancel / 指针丢失。
+    // 只认 pointerup 的那版实现里，手在窗口外松开或系统取消手势 ⇒ 监听器一直挂着，
+    // 下一次拖拽就再叠一条，旧闭包还握着上一轮的 DOM 节点。
+    const up = (ev: PointerEvent): void => {
+      if (ev.pointerId !== e.pointerId) return;
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   }, []);
 
   /**
@@ -738,7 +829,7 @@ export function ProjectView({
       if (g.active) {
         const cb = callbacksFor(g.id);
         return (
-          <EditorPane
+          <EditorPaneMemo
             kernel={kernel}
             groupId={g.id}
             filePath={g.active}
@@ -746,9 +837,9 @@ export function ProjectView({
             revealLine={focused ? reveal?.line : undefined}
             revealColumn={focused ? reveal?.column : undefined}
             revealNonce={focused ? reveal?.nonce : undefined}
-            onDirtyChange={onDirtyChange}
+            onDirtyChange={stableDirtyChange}
             registerActions={registerActions ? cb.register : undefined}
-            onReauth={onReauth}
+            onReauth={stableReauth}
             onStatusInfo={cb.onStatusInfo}
             onFocused={focused ? undefined : cb.onFocused}
           />
@@ -779,7 +870,7 @@ export function ProjectView({
         </div>
       );
     },
-    [kernel, reveal, onDirtyChange, registerActions, onReauth, callbacksFor, workbench, fileCount, fnCount],
+    [kernel, reveal, stableDirtyChange, registerActions, stableReauth, callbacksFor, workbench, fileCount, fnCount],
   );
 
   return (
@@ -789,7 +880,6 @@ export function ProjectView({
       writable={writable}
       activeFile={activeFile}
       onReauth={onReauth}
-      editorStatus={editorStatus}
       dirty={activeFile !== null && dirtyPaths.has(activeFile)}
       stats={{ fileCount, fnCount, indexing, indexError }}
       commandCtx={{ project, ...(activeFile ? { activeFile } : {}) }}
@@ -799,6 +889,7 @@ export function ProjectView({
       onOpenFile={onOpenFile}
       extraCommands={extraCommands}
       onRegisterWorkbench={setWorkbench}
+      panelHostVersions={panelHostVersions}
     >
       {/* 只读横幅（P0 实机反馈修复）：项目级一条，重授权入口常驻可见可点 */}
       {!writable ? (
