@@ -51,3 +51,29 @@ jobs:
 
       - name: Decoupling audit
         run: pnpm audit:decoupling
+
+  # Rust 侧（Tauri 宿主 IO 原语）独立并行闸：不塞进 verify 前面拖慢它。
+  # 本机基线 2026-10-17 实测：128 tests（123 passed / 5 ignored）。
+  rust:
+    name: cargo test --lib (tauri host)
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # 缓存走本仓库已验证的形态（release.yml 同一枚 action）：target 目录数 GB 级，
+      # 手写 actions/cache 会把整棵 target 塞进单一 bucket、撞 10GB 配额。
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            packages/app/src-tauri -> target
+
+      # 必须经 node 起 cargo：Git-Bash 直跑有 TMP 环境变量坑（docs/PITFALLS.md），
+      # 且与 AGENTS.md §三 验证矩阵口径一致。
+      - name: cargo test --lib
+        run: node -e "require('child_process').execSync('cargo test --lib',{cwd:'packages/app/src-tauri',stdio:'inherit'})"
