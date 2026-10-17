@@ -21,6 +21,13 @@ export type KeywordId =
   | 'head.narrationColor'
   | 'head.switch'
   | 'head.alias'
+  /* 文件头选项 `随机形: <值>`（P-4）——**只为高亮/补全纳编**：判定归 `lexer.classifyLine`
+     的位置式扫描（`key === '随机形'`），故**不得**进 `HEAD_DECL_KEYS`（口径同 `常量`）。 */
+  | 'head.randomShape'
+  /** `随机形:` 的取值词形（`直出`）——同样只为词表可见，判定归 parser 的取值比较。 */
+  | 'head.randomShapeValue'
+  /** `口上: <家族名> 选择器: <n>` 的行尾选择器词形——判定归 parser 的 `head.family` 行尾正则。 */
+  | 'head.selector'
   /* 文件级常量（7 号批：`常量 <名> = <整数>` → 编译期展开，产物零声明） */
   | 'head.const'
   /* 头部选项（B4-fp：作者私有用户函数命名前缀） */
@@ -50,6 +57,9 @@ export type KeywordId =
   | 'inline.cont'
   | 'inline.heart'
   | 'inline.blank'
+  /* `空行 等待` 的等待标记（规范 §3.3 v1.5）——**只为高亮/补全纳编**：判定归 lexer 的
+     `空行` 判定消费 `WAIT_MARKS`，故**不得**进 `HEAD_DECL_KEYS`（口径同 `常量` / `则`）。 */
+  | 'inline.wait'
   | 'inline.to'
   | 'inline.call'
   | 'inline.return'
@@ -98,6 +108,19 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 但因是 `词: 值` 形且需编辑器高亮/补全，故仍走 `KEYWORDS` + `HEAD_DECL_KEYS`（见下）。
   ['函数前缀', 'head.functionPrefix'],
   ['function-prefix', 'head.functionPrefix'],
+  // 文件头选项 `随机形: <值>`（P-4）与它的取值 `直出`——作者要写的词。
+  // 登记进表**只为让编辑器高亮/补全认得它**（词表单一真源，同 `常量` / `则` / `增减` 的理由）；
+  // 判定仍归 lexer 的位置式扫描（`lexer.classifyLine` 里 `key === '随机形'` 一支，先于本表查询）。
+  // **不得**进 `HEAD_DECL_KEYS`：`随机形:` 走的是自己的 `randomShapeDecl` 通路，挂进头部声明集
+  // 只会让它改走 `headDecl`（值语义由 parser 的 `applyHeadDecl` 解释，那边没有这个键）。
+  // 英文别名不登记：lexer 只认 `随机形` 一个键形（登记一个不生效的别名 = 词表说谎）。
+  ['随机形', 'head.randomShape'],
+  ['直出', 'head.randomShapeValue'],
+  // `口上: <家族名> 选择器: <n>` 的行尾选择器（A1 批）——不是独立语句、也不单独成行，
+  // 由 parser 的 `head.family` 行尾正则消费（`选择器` / `selector` 两词形并列，见 `parser.ts`）。
+  // 登记只为词表可见；**不得**进 `HEAD_DECL_KEYS`——否则裸写一行 `选择器: 2` 会被当头部声明，
+  // 把"嵌在 `口上:` 行尾"这一唯一形态之外的写法误判成合法槽位。
+  ['选择器', 'head.selector'],
   // 块头
   ['时机', 'block.timing'],
   ['timing', 'block.timing'],
@@ -159,6 +182,11 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 归到"行内关键字"一并高亮/补全（与 `心形` 同一处理方式）
   ['空行', 'inline.blank'],
   ['blank', 'inline.blank'],
+  // `空行 等待` 的**等待标记**中文主形（取值词形，见下方 `WAIT_MARKS`）——登记只为高亮/补全，
+  // 判定归 lexer 的 `空行` 判定（消费 `WAIT_MARKS`）。英文形 `wait` **不**登记本表：它是引擎
+  // 指令 `WAIT` 的小写形（ZH-S 线的中文显示面正对着它），进糖词表 = 让高亮/补全把引擎指令名
+  // 当糖关键字挂出来；两条面互不干扰的钉法见 `tests/zh-author-words.test.ts`。
+  ['等待', 'inline.wait'],
   ['到', 'inline.to'],
   ['to', 'inline.to'],
   // 语句位置的用户函数调用（B4 批）——`调用 名字(实参,…)` 独立成行。
@@ -200,7 +228,9 @@ export const CONT_MARKS: readonly string[] = ['续', '~', '⏎', 'cont', 'contin
 /**
  * `空行` 的**等待形**标记（规范 §3.3，v1.5）：空行默认**不等待**（裸 `PRINTFORML`，
  * 对齐语料 20,244 : 10），写了本组标记才落 `PRINTFORMDW`。
- * 不进 `KEYWORDS`（不是独立语法分组；只由 lexer 的 `空行` 判定消费）。
+ * 判定只由 lexer 的 `空行` 位置式扫描消费（`BLANK_LINE_RE` + 本组）；中文主形 `等待`
+ * **另**登记进 `KEYWORDS` 只为词表可见（高亮/补全），英文形 `wait` 不进 `KEYWORDS`
+ * （它是引擎指令 `WAIT` 的小写形，不属糖关键字面）。
  */
 export const WAIT_MARKS: readonly string[] = ['等待', 'wait'];
 
@@ -374,11 +404,19 @@ export const TIMING_ARG_TOKENS: readonly string[] = ['ARG', 'ARG:1', 'ARGS'];
  * 中文运算符 → ERB 运算符。
  *
  * 注意匹配顺序：**长词优先**（`不等于` 先于 `等于`），否则 `不等于` 会被
- * 解析成 `不` + `等于`（错误的 `! =`）。表按长度降序，调用方逐个尝试。
+ * 解析成 `不` + `等于`（错误的 `! =`）。表按长度降序，调用方逐个尝试
+ * （`.sort()` 稳定 ⇒ 同长度保持本字面量的书写序，新增词形别插在中间打乱既有相对序）。
+ *
+ * 逻辑字面量与逻辑词（`真` / `假` / `空` / `异或`）与 `且` / `或` / `非` **同一条通路**：
+ * 中文主形在本表降糖，ASCII 引擎记号（`true` / `false` / `null` / `XOR`）走
+ * `expression.ts::isErbKeyword` 的**原样放行**通道——这就是"双收"的两侧
+ * （别名只影响**输入**，产物恒是引擎记号）。区间词 `到` 不入本表：它是**结构级**词形
+ * （只出现在 `X 不在 a 到 b` 与 `是 a 到 b` 两处，见 `RANGE_MARKS`），与 `不在` 同一口径。
  */
 const OPERATORS: ReadonlyArray<readonly [string, string]> = (
   [
     ['不等于', '!='],
+    ['异或', 'XOR'],
     ['等于', '=='],
     ['超过', '>'],
     ['至少', '>='],
@@ -387,6 +425,9 @@ const OPERATORS: ReadonlyArray<readonly [string, string]> = (
     ['且', '&&'],
     ['或', '||'],
     ['非', '!'],
+    ['真', 'true'],
+    ['假', 'false'],
+    ['空', 'null'],
   ] as ReadonlyArray<readonly [string, string]>
 ).slice().sort((a, b) => b[0].length - a[0].length);
 
