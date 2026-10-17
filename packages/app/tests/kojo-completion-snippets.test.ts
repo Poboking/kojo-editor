@@ -140,7 +140,9 @@ describe('kojo-snippet source · 块头模板', () => {
   });
 
   it('行首门：行中位置的块关键字不出 snippet（交回纯文本词表）', () => {
-    const items = provide(provider, 'X = 1 如果', '如果', 6);
+    // K2 位置门（g）：行中"纯文本照旧"须落在**行首块头锚行**内（`如果 X 如果` 的第二个词位）；
+    // 非锚行的行中位（如 `X = 1 如果`）整表不供——那是 K2 定的位，不是 snippet 门的位。
+    const items = provide(provider, '如果 X 如果', '如果', 8); // 光标在行中第二个 `如果` 之后
     const hit = items.find((i) => labelText(i.label) === '如果');
     expect(hit).toBeDefined();
     expect(hit!.insertTextRules).toBeUndefined(); // 纯文本
@@ -160,7 +162,9 @@ describe('kojo-snippet source · 块头模板', () => {
   });
 
   it('系统函数调用模板：`获取标记` → `获取标记($1)$0` + InsertAsSnippet', () => {
-    const items = provide(provider, '获取标记', '获取标记', 1);
+    // col 2（行首 token 内）而非 col 1：col 1 是"光标前无内容"的空位，K2 位置门词表不供
+    // （该位只有 R4 块头模板的场子）；系统函数模板在行首 token 内照常出货。
+    const items = provide(provider, '获取标记', '获取标记', 2);
     const fn = items.find((i) => labelText(i.label) === '获取标记');
     expect(fn!.insertText).toBe('获取标记($1)$0');
     expect(fn!.insertTextRules).toBe(4);
@@ -211,7 +215,9 @@ describe('kojo-snippet source · 行首空白口径 = 糖源（[ \\t\\u3000]）'
   });
 
   it('反例：空白前还有实际字符 ⇒ 仍是行中位置，只出纯文本关键字（判定语义没被放宽）', () => {
-    const items = provide(provider, 'X　如果', '如果', 3); // 光标前 = `X` + 全角空格
+    // 取位要点同上一用例：行中"纯文本照旧"须落在行首块头锚行内（K2 位置门 g）。
+    // 全角空格直接位于 token 前，但其前有实际字符（`X`）⇒ snippet 的门不放宽、纯文本照常。
+    const items = provide(provider, '如果 X　如果', '如果', 6); // 光标前 = `如果 X` + 全角空格
     const hit = pick(items, '如果');
     expect(hit).toBeDefined();
     expect(hit!.insertTextRules).toBeUndefined();

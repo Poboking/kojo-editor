@@ -4,12 +4,24 @@ import {
   RESERVED_PRONOUNS,
   SUGAR_KEYWORD_ROLE_LABEL,
   SUGAR_LEXICON_OPERATORS,
+  SUGAR_LEXICON_WORDS,
   SYSTEM_FUNCTION_ALIASES,
 } from '@kojo/plugin-kojo-sugar';
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
 import { variableCompletionItems } from './kojo-completion-variables';
 import { faceCompletionItems } from './kojo-completion-faces';
-import { isCjk } from './kojo-completion-position';
+import {
+  col0Of,
+  insideInterpolation,
+  insideStringOrComment,
+  isAllBlank,
+  isCjk,
+  isNameChar,
+  kojoKeywordAnchor,
+  lineAt,
+  timingHeadParts,
+  type KojoKeywordId,
+} from './kojo-completion-position';
 import { kojoIndexCompletionItems } from './kojo-completion-instructions';
 import { libraryCompletionItems } from './kojo-completion-library';
 import { kojoFunctionCompletionItems } from './kojo-completion-functions';
@@ -298,14 +310,84 @@ const STATIC_SUGGESTION_SPECS: readonly StaticSuggestionSpec[] = [
   ),
 ];
 
+/* ============================== 词表 source 的位置判据（POS-LEX：`：` 触发噪声） ============================== */
+
+/**
+ * 判据里要认的两枚块头冒号（**语法终结符，不是词形**——落在正则/字符面，词形守卫只查词表抄本）。
+ * 全角 `：` = 块头收尾（任何行）；全/半角 = 时机块头令牌分隔（与 `kojo-sugar` 的 `parseTimingHead` 同向）。
+ */
+const BLOCK_COLON = '：';
+const TIMING_COLON_RE = /[：:]/;
+
+/**
+ * 行首 block/head 类关键字的 **id 全集**（`role` 分派自 `SUGAR_LEXICON_WORDS`，零手抄词形）
+ * 与由它装配的**行首锚**。
+ *
+ * 锚复用 `kojo-completion-position` 的 {@link kojoKeywordAnchor}——与分野 / 编号 / 函数槽的锚同一条
+ * 构造（空白类含全角、英文隐藏别名经 `i` 一并认、长词在前防前缀遮蔽）。词表若被改空 ⇒ 锚退化为
+ * 永不命中，`g` 判定自然失去这一路（不猜任何默认词形）。
+ */
+const BLOCK_HEAD_KEYWORD_IDS: readonly KojoKeywordId[] = SUGAR_LEXICON_WORDS.filter(
+  (w) => w.role === 'block' || w.role === 'head',
+).map((w) => w.id);
+
+/** 行首 block/head 关键字锚（`行首空白 + 词形 + 空白`）；导出 = 位置判据可单测的那一半 */
+export const KOJO_BLOCK_HEAD_ANCHOR: RegExp = kojoKeywordAnchor(BLOCK_HEAD_KEYWORD_IDS);
+
+/**
+ * 词表 source 的**位置判据**（顺序严格，第一条命中即定）——治「`：` 触发 × 无条件词表 = 纯噪声弹窗」：
+ *
+ * - a) 光标前没有已输入内容（全空白——空行是其特例）⇒ 不供（该位只有 R4 块头模板的场子）；
+ * - b) 字符串 / 行内注释内（{@link insideStringOrComment}）⇒ 不供；
+ * - c) `{…}` 插值内 ⇒ 供（`{她的` 处代词可用）；
+ * - d) 时机块头（{@link timingHeadParts} 非空）且分野令牌后已出现 `：`/`:` ⇒ 不供
+ *      （命名参数区 / 块头收尾之后都归别的源）；
+ * - e) 光标前已出现收尾全角 `：` ⇒ 不供（块冒号已过：`是 1, 2：|`、台词行 `台词：还|`）；
+ * - f) 光标正写本行**行首 token**（向左吃名字字符得 tokenStart，其前全空白）⇒ 供；
+ * - g) 行命中行首 block/head 关键字锚（{@link KOJO_BLOCK_HEAD_ANCHOR}）⇒ 供；
+ * - h) 其余 ⇒ 不供。
+ *
+ * 依据：词表是整张静态表（代词 / 关键字 / 运算符 / 系统函数 / 声明名），自身没有任何上下文概念
+ * ⇒ 位置由本函数**一次判死**；判供则整表照旧（内容与排序口径零改动）。
+ */
+export function kojoLexiconAvailableAt(line: string, col0: number): boolean {
+  const col = Math.min(Math.max(col0, 0), line.length); // 非法列夹进行内：判据落空而不抛
+  // a：空行 / 行首空位——光标之前没有任何已输入内容
+  if (isAllBlank(line.slice(0, col))) return false;
+  // b：字符串 / 注释内（`：` 落在台词引号里也拦得住）
+  if (insideStringOrComment(line, col)) return false;
+  // c：插值内（变量名的地盘，但词表照供）
+  if (insideInterpolation(line, col)) return true;
+  // d：时机块头的分野令牌之后一旦见到 `：`/`:` —— 编号 / 命名参数 / 收尾区全归别的源
+  const head = timingHeadParts(line);
+  if (head !== null && TIMING_COLON_RE.test(line.slice(head.faceEnd, col))) return false;
+  // e：块头收尾的全角冒号一过，本行不再有词表的位
+  if (line.slice(0, col).includes(BLOCK_COLON)) return false;
+  // f：光标正在写本行第一个词（行首 token）⇒ 供
+  let tokenStart = col;
+  while (tokenStart > 0 && isNameChar(line[tokenStart - 1]!)) tokenStart--;
+  if (isAllBlank(line.slice(0, tokenStart))) return true;
+  // g：行首 block/head 关键字锚内（`如果 好感度…` 这类表达式位）⇒ 供；其余（h）不供
+  return KOJO_BLOCK_HEAD_ANCHOR.test(line);
+}
+
 /**
  * 词表 source（原 `kojo-language.ts` 内联补全的 5 组候选，行为逐字等价）：
  * 本文件声明名（`别名` / `常量`）→ 保留代词 → 中文主形关键字 → 中文运算符（含 `不在`）→ 系统函数名。
  * 第 2..5 组走模块级静态规格表；第 1 组随编辑变，判据来自解析器（见 {@link declarationItems}）。
+ *
+ * 位置判据（POS-LEX）：先过 {@link kojoLexiconAvailableAt}（顺序 a–h，见该函数头注）；不供 ⇒
+ * 本路**整表**零候选——词表没有自己的上下文概念，位置由那一位判死（触发字符 `：` 保持不动，
+ * 噪声在这里收）。
  */
 const LEXICON_SOURCE: CompletionSource = {
   id: 'kojo-lexicon',
   provide(ctx): Monaco.languages.CompletionItem[] {
+    // 位置判据：判据不成立 ⇒ 整路静默（不是按组过滤——词表是整张表，供就全供）
+    const line = lineAt(ctx.model, ctx.position.lineNumber);
+    const col0 = col0Of(line, ctx.position.column);
+    if (col0 === null || !kojoLexiconAvailableAt(line, col0)) return [];
+
     const K = ctx.monaco.languages.CompletionItemKind;
     const suggestions: Monaco.languages.CompletionItem[] = declarationItems(ctx);
 

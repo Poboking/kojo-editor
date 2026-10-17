@@ -156,7 +156,8 @@ describe('C-1 · 静态词表 source 产出', () => {
   });
 
   it('系统函数名以 snippet 调用形态插入（R4）：`获取标记` → `获取标记($1)$0`，光标落括号内', () => {
-    const items = provide(provider, SAMPLE, '获');
+    // 位置判据后行首空位（col0=0）词表不供 ⇒ 光标落在行首 token `别名` 内取词表那一路
+    const items = provide(provider, SAMPLE, '获', 2);
     const fn = items.find((i) => labelText(i.label) === '获取标记');
     expect(fn).toBeDefined();
     expect(fn!.insertText).toBe('获取标记($1)$0');
@@ -165,7 +166,8 @@ describe('C-1 · 静态词表 source 产出', () => {
   });
 
   it('本文件 `别名` 名在列（`心`），保留代词 `她` 在列', () => {
-    const items = provide(provider, SAMPLE, '');
+    // 同上：词表合法位 = 行首 token 内（col0=1，tokenStart=0）
+    const items = provide(provider, SAMPLE, '别', 2);
     expect(items.find((i) => labelText(i.label) === '心')!.detail).toBe('别名（本文件）');
     expect(items.find((i) => labelText(i.label) === '她')!.detail).toBe('保留代词');
   });
@@ -185,13 +187,14 @@ describe('C-1 · tables 缺席（fail-visible，不崩不猜）', () => {
   it('空 tables 不崩，且与满 tables 候选逐字一致（静态 source 不消费 adapter 表）', () => {
     const emptyProvider = emptyTables.registered[0]!.provider;
     const fullProvider = withTables.registered[0]!.provider;
-    expect(() => provide(emptyProvider, SAMPLE, '')).not.toThrow();
-    const emptyItems = provide(emptyProvider, SAMPLE, '').map((i) => labelText(i.label));
-    const fullItems = provide(fullProvider, SAMPLE, '').map((i) => labelText(i.label));
+    // 位置取行首 token 内（词表合法位）：行首空位现在只有 R4 模板出货，词表已被位置判据收住
+    expect(() => provide(emptyProvider, SAMPLE, '别', 2)).not.toThrow();
+    const emptyItems = provide(emptyProvider, SAMPLE, '别', 2).map((i) => labelText(i.label));
+    const fullItems = provide(fullProvider, SAMPLE, '别', 2).map((i) => labelText(i.label));
     expect(emptyItems.length).toBeGreaterThan(0);
     expect(fullItems).toEqual(emptyItems);
-    // 静态 source 仅产语言/文件层候选 + R4 行首块头模板：detail 全在固定集合或模板措辞内
-    const details = new Set(provide(emptyProvider, SAMPLE, '').map((i) => i.detail));
+    // 静态 source 仅产语言/文件层候选：detail 全在固定集合内（词表五组 + 声明名）
+    const details = new Set(provide(emptyProvider, SAMPLE, '别', 2).map((i) => i.detail));
     for (const d of details) {
       expect(
         ['别名（本文件）', '保留代词', '运算符', '系统函数', '头部声明', '块关键字', '行内关键字', '别名右值'].includes(d as string) ||
@@ -323,20 +326,24 @@ describe('SH-4 · 依赖表缺席 = 降级不静默（三态可复跑）', () =>
 /**
  * 只取**词表那一路**的候选（不经装配的 label 去重）：行首的 `如果` 会被先注册的 R4 块头模板
  * 盖掉（那是 snippet 源的地盘，属 C3 文件），本批的两处缺陷都在词表源里 ⇒ 直接问那一枚 source。
+ *
+ * `column` 可显式给（POS-LEX 起词表有位置判据：`text` 里的光标位必须落在**合法位**上——
+ * 行首 token 内 / 关键字锚内 / 插值内……，见 `kojoLexiconAvailableAt` 头注）。
  */
-function lexiconItems(text: string, word = ''): Monaco.languages.CompletionItem[] {
+function lexiconItems(text: string, word = '', column = 1 + word.length): Monaco.languages.CompletionItem[] {
   const source = KOJO_COMPLETION_SOURCES.find((s) => s.id === 'kojo-lexicon');
   if (source === undefined) throw new Error('词表 source 不在册');
   const { monaco } = stubMonaco();
   const model = modelOf(text, word);
-  const position = { lineNumber: 1, column: 1 + word.length } as Monaco.Position;
+  const position = { lineNumber: 1, column } as Monaco.Position;
   const ctx = { monaco, model, position, range: kojoCompletionRange(model, position), tables: {} as CompletionTables };
   return source.provide(ctx);
 }
 
 describe('CP-2 · 中文候选的匹配面：filterText = 中文主形原文（显式声明，不留隐式兜底）', () => {
   it('词表四组 + 本文件声明名：每条候选都带字符串 `filterText`，且逐字等于 label 原文', () => {
-    const items = lexiconItems(SAMPLE, '');
+    // POS-LEX 起词表只在合法位出货 ⇒ 取行首 token `别名` 内（col0=2，tokenStart=0）
+    const items = lexiconItems(SAMPLE, '别名');
     expect(items.length).toBeGreaterThan(0);
     for (const item of items) {
       expect(typeof item.filterText).toBe('string');
@@ -364,7 +371,7 @@ describe('CP-2 · 中文候选的匹配面：filterText = 中文主形原文（�
 
 describe('CP-2 · 中英不对等（规范 §2 原则 2 / §4.1）：上屏三面零英文别名', () => {
   it('label / detail / filterText 三面不含任何 ASCII 字母 ⇒ 面板只有中文一面', () => {
-    const items = lexiconItems(SAMPLE, '');
+    const items = lexiconItems(SAMPLE, '别名');
     expect(items.length).toBeGreaterThan(0);
     const faces: string[] = [];
     for (const item of items) {
@@ -385,7 +392,7 @@ describe('CP-2 · 中英不对等（规范 §2 原则 2 / §4.1）：上屏三�
       ]),
     ];
     expect(aliases.length).toBeGreaterThan(10); // 别名单为空 = 本守卫失去对象（假绿），先钉住它非空
-    const labels = new Set(lexiconItems(SAMPLE, '').map((i) => labelText(i.label)));
+    const labels = new Set(lexiconItems(SAMPLE, '别名').map((i) => labelText(i.label)));
     expect(aliases.filter((a) => labels.has(a))).toEqual([]);
   });
 });
@@ -409,10 +416,89 @@ describe('CP-3 · 词表系统函数的参数槽 = 自带模板（协议表不�
         },
       },
     }));
-    const fn = provide(registered[0]!.provider, SAMPLE, '获').find((i) => labelText(i.label) === '获取标记');
+    const fn = provide(registered[0]!.provider, SAMPLE, '获', 2).find((i) => labelText(i.label) === '获取标记');
     expect(fn).toBeDefined();
     expect(fn!.insertText).toBe('获取标记($1)$0');
     expect(fn!.insertTextRules).toBe(4); // InsertAsSnippet：自带模板照旧按 snippet 解析
     expect(probed).toBe(0); // 词表候选根本不进协议表问槽（名单外 ⇒ 连问都不问）
+  });
+});
+
+/* ============================== POS-LEX · 词表 source 的位置判据（`：` 触发噪声缺陷） ============================== */
+
+/**
+ * 缺陷：`：` 是触发字符而词表 source 曾**无条件供货** ⇒ ①写完 `时机 初见：`（分野源因块头已
+ * 收尾返回空、其余槽源也不命中）弹窗里只剩整张代词/关键字/运算符/系统函数表；②台词 / 普通文本
+ * 行里输入 `：` 同样弹；③字符串里输入 `：` 拦不住。修法 = `kojoLexiconAvailableAt`（顺序 a–h
+ * 的位置判据）；词表 content / 触发字符 / 装配核零改动。
+ *
+ * 满覆盖表（`posTables`）：六个 `requires` 键全部在场 ⇒ 一轮装配里**每个 source 都真的跑**，
+ * 「零候选」只能来自各源自己的位置判据，而不是被缺表跳过（配合零降级断言一起钉住这一点）。
+ */
+const posSchema: VariableSchema = {
+  version: 'pos',
+  lookup: () => undefined,
+  names: (family) => (family === 'CFLAG' ? [{ name: '甲旗', index: 1, resolvedIndex: 1, source: 'primary' }] : []),
+};
+
+const posTables: CompletionTables = {
+  variableSchema: posSchema,
+  faceTable: { faces: { 初见: { template: 'M_KOJO_K{n}_HATSUMI' } } },
+  instructionTable: { hasTable: true, lookupByName: () => undefined, lookupByNo: () => undefined },
+  counterTable: { hasTable: true, lookupByName: () => undefined, lookupByNumber: () => undefined },
+  libraryTable: { hasTable: true, lookupByName: () => undefined },
+  erbFunctionNames: () => [],
+};
+
+describe('POS-LEX · 词表位置判据：`：` 触发不再泼整张表', () => {
+  const degrades: CompletionDegrade[] = [];
+  const { monaco, registered } = stubMonaco();
+  installKojoCompletion(monaco, () => posTables, (d) => degrades.push(d));
+  const provider = registered[0]!.provider;
+
+  it('块头已收口：`时机 初见：|` 一轮**全源零候选**（snippet 行首判据不命中，未动它）', () => {
+    const items = provide(provider, '时机 初见：', '', 7);
+    expect(items).toEqual([]);
+    expect(degrades).toEqual([]); // 满覆盖表 ⇒ 无一源因缺表被跳过：零候选只能来自各自判据
+    expect(lexiconItems('时机 初见：', '', 7)).toEqual([]); // 词表那一路直接问，亦零
+  });
+
+  it('对照位（块冒号之前）：`时机 初见|` 分野候选照旧、词表也在 ⇒ 上面不是假零', () => {
+    const items = provide(provider, '时机 初见', '', 6);
+    const hit = items.find((i) => labelText(i.label) === '初见');
+    expect(hit).toBeDefined();
+    expect(hit!.detail).toBe('M_KOJO_K{n}_HATSUMI'); // 分野源出货（词表没有 `初见` 这个名）
+    expect(items.some((i) => labelText(i.label) === '她')).toBe(true); // 词表经锚（g）照常整表供
+  });
+
+  it('台词行 / 文本中段：`今天天气真好：|` 与 `好可爱|` 中段 ⇒ 词表零候选', () => {
+    expect(lexiconItems('今天天气真好：', '', 8)).toEqual([]);
+    expect(lexiconItems('今天天气真好，好可爱呀', '', 10)).toEqual([]); // 光标在 `可爱` 之后（两侧都有文本）
+    expect(lexiconItems('好可爱', '', 4).length).toBeGreaterThan(0); // 同位行首 token（f）仍供——零非误伤
+  });
+
+  it('字符串内：`"好：|"` 零候选（字符串门 b 先于冒号门 e）', () => {
+    expect(lexiconItems('"好："', '', 4)).toEqual([]);
+  });
+
+  it('时机命名参数区 / 块头收尾：`时机 指令 310 成否：|`（含半角 `:` 变体）零候选', () => {
+    expect(lexiconItems('时机 指令 310 成否：', '', 14)).toEqual([]);
+    expect(lexiconItems('时机 初见:', '', 7)).toEqual([]);
+  });
+
+  it('回归：`如果 好感度 大于 5：|` 行尾块冒号后词表不供，冒号之前照旧供（锚 g）', () => {
+    expect(lexiconItems('如果 好感度 大于 5：', '', 13)).toEqual([]);
+    expect(lexiconItems('如果 好感度 大于 5', '', 12).length).toBeGreaterThan(0);
+  });
+
+  it('空行 / 行首空位不供（新行只有 R4 模板的场子）', () => {
+    expect(lexiconItems('', '', 1)).toEqual([]);
+    expect(lexiconItems('    ', '', 5)).toEqual([]);
+  });
+
+  it('插值内（c）供：`{她的|` 词表可用，且变量源不受影响（另一路，非本文件）', () => {
+    expect(lexiconItems('{她的', '', 4).length).toBeGreaterThan(0);
+    const items = provide(provider, '{她的', '', 4);
+    expect(items.some((i) => labelText(i.label) === '甲旗')).toBe(true); // 变量源照常出货
   });
 });

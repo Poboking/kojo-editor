@@ -17,11 +17,17 @@ import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
   CONTEXT_TRIGGER_SOURCE,
+  ERB_NAME_SLOTS,
+  KOJO_NAME_SLOTS,
   SUGGEST_ACTION_ID,
   installSuggestContextTrigger,
   isSlotOpeningChar,
   shouldTriggerContextSuggest,
 } from '../src/monaco/suggest-context-trigger';
+import { kojoVariableNameSlot } from '../src/monaco/kojo-completion-variables';
+import { timingFaceSlot } from '../src/monaco/kojo-completion-faces';
+import { erbLabelSlot } from '../src/monaco/erb-completion-context';
+import { erbVariableSlotAt } from '../src/monaco/erb-completion-variables';
 
 /** 桩编辑器的可控事实（默认全绿：可写、有焦点、widget 关着、单选、真文件） */
 interface StubState {
@@ -434,8 +440,126 @@ describe('CTX-SUGGEST · 抑制条件逐条', () => {
 });
 
 describe('CTX-SUGGEST · 「打开名字位」的字符集', () => {
-  it('空白（半角 / 全角 / 制表）与 `@` / `,` / `，` 算；名字字符与换行不算', () => {
-    expect([' ', '\u3000', '\t', '@', ',', '，'].map(isSlotOpeningChar)).toEqual([true, true, true, true, true, true]);
+  it('空白（半角 / 全角 / 制表）、`@` / `,` / `，` / 半角 `:` / `的` 算；名字字符、全角 `：` 与换行不算', () => {
+    expect(
+      [' ', '\u3000', '\t', '@', ',', '，', ':', '的'].map(isSlotOpeningChar),
+    ).toEqual([true, true, true, true, true, true, true, true]);
+    // 全角 `：` 刻意不在集合：两门语言都把它挂在 Monaco `triggerCharacters`（原生触发路径），
+    // 本观察者不重开一条（见 `isSlotOpeningChar` 注释）
     expect(['本', '1', '(', '：', '\n'].map(isSlotOpeningChar)).toEqual([false, false, false, false, false]);
+  });
+});
+
+describe('CTX-SUGGEST · 探针清单（①③⑤⑥ 触发链：宿主零抄本的名单面）', () => {
+  it('`.kojo` 六枚 / `.erb` 四枚，成分 = 候选源白名单', () => {
+    expect(KOJO_NAME_SLOTS).toHaveLength(6);
+    expect(ERB_NAME_SLOTS).toHaveLength(4);
+    // 命中直接挂的那几枚（身份可比对）；boolean 签名两枚已折 true/null、只做行为面断言（下一条）
+    expect(KOJO_NAME_SLOTS).toContain(timingFaceSlot);
+    expect(KOJO_NAME_SLOTS).toContain(kojoVariableNameSlot);
+    expect(ERB_NAME_SLOTS).toContain(erbLabelSlot);
+    expect(ERB_NAME_SLOTS).toContain(erbVariableSlotAt);
+  });
+
+  it('探针契约 `!== null`：非命中位所有探针回 `null`，绝不回 `false`（false 会被当命中 ⇒ 恒触发）', () => {
+    // 直接挂 boolean 探针会让本循环收到 `false`：折 `true/null` 的接线契约钉在这里
+    for (const probe of KOJO_NAME_SLOTS) expect(probe('随便一句台词。', 7)).toBeNull();
+    for (const probe of ERB_NAME_SLOTS) expect(probe('PRINTL 你好', 10)).toBeNull();
+  });
+
+  it('命中面逐枚非空（弹了有货）：`成否:` / `{她的` / `GOTO ` / `CFLAG:` / `GETBIT(HOLD,)`', () => {
+    expect(KOJO_NAME_SLOTS.some((p) => p('时机 指令 310 成否:', 14) !== null)).toBe(true);
+    expect(KOJO_NAME_SLOTS.some((p) => p('{她的', 4) !== null)).toBe(true);
+    expect(ERB_NAME_SLOTS.some((p) => p('GOTO ', 6) !== null)).toBe(true);
+    expect(ERB_NAME_SLOTS.some((p) => p('CFLAG:', 7) !== null)).toBe(true);
+    expect(ERB_NAME_SLOTS.some((p) => p('GETBIT(HOLD,)', 13) !== null)).toBe(true);
+  });
+
+  it('位槽探针的 `)` 依赖（`autoClosingPairs` 植入）：`GETBIT(HOLD,)` 命中；缺 `)` 的半成品不猜', () => {
+    // 打字当拍 `)` 已由 `erb-language.ts` 的 autoClosingPairs 放进模型（`GETBIT(` → `GETBIT()`），
+    // 逗号落下后光标正在 `,` 与 `)` 之间 ⇒ 命中；`matchingParen` 未闭合半成品一律 null（不猜）
+    expect(ERB_NAME_SLOTS.some((p) => p('GETBIT(HOLD,)', 13) !== null)).toBe(true);
+    expect(ERB_NAME_SLOTS.some((p) => p('GETBIT(HOLD, ', 14) !== null)).toBe(false);
+  });
+});
+
+describe('CTX-SUGGEST · 批①③⑤⑥ 新探针：打字当拍直弹', () => {
+  it('`的`：`{她` 处敲 `的`（widget 已被过滤死）⇒ 重触发一轮拿变量全量', async () => {
+    const s = stubEditor({ line: '{她', column: 3 });
+    s.type('的');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+    expect(s.triggers[0]?.source).toBe(CONTEXT_TRIGGER_SOURCE);
+  });
+
+  it('`的`：台词行里敲 `的` ⇒ 不弹（变量名位探针不认普通文本）', async () => {
+    const s = stubEditor({ line: '这是她', column: 4 });
+    s.type('的');
+    await s.settle();
+    expect(fired(s)).toBe(0);
+  });
+
+  it('`:`：`.erb` 变量族冒号位（`CFLAG` 后敲冒号）⇒ 弹变量族候选', async () => {
+    const s = stubEditor({ languageId: ERB_LANGUAGE_ID, line: 'CFLAG', column: 6 });
+    s.type(':');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('`:`：`.kojo` 时机头命名参数键冒号位（`成否` 后敲冒号）⇒ 弹取值候选', async () => {
+    const s = stubEditor({ line: '时机 指令 310 成否', column: 13 });
+    s.type(':');
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('空白：跳转家族关键字之后（`GOTO ` / `JUMP `）⇒ 弹标签候选', async () => {
+    for (const kw of ['GOTO', 'JUMP']) {
+      const s = stubEditor({ languageId: ERB_LANGUAGE_ID, line: kw, column: kw.length + 1 });
+      s.type(' ');
+      await s.settle();
+      expect(fired(s), kw).toBe(1);
+    }
+  });
+
+  it('`,`：位原语第二实参坑（`GETBIT(HOLD,` 刚敲逗号）⇒ 弹；普通调用 `CALL FOO,` ⇒ 不弹', async () => {
+    // 括号由 Monaco `autoClosingPairs` 自带（`erb-language.ts`）：模型里 `)` 已在逗号之后
+    const bit = stubEditor({ languageId: ERB_LANGUAGE_ID, line: 'GETBIT(HOLD)', column: 12 });
+    bit.type(',');
+    await bit.settle();
+    expect(fired(bit)).toBe(1);
+
+    const call = stubEditor({ languageId: ERB_LANGUAGE_ID, line: 'CALL FOO', column: 9 });
+    call.type(',');
+    await call.settle();
+    expect(fired(call)).toBe(0);
+  });
+
+  it('纯闸门对拍：新探针命中 ⇒ true；台词 / 非位槽 ⇒ false', () => {
+    const base = {
+      languageId: KOJO_LANGUAGE_ID,
+      line: '',
+      column: 1,
+      typedChar: null as string | null,
+      hasPath: true,
+      readOnly: false,
+      derivedView: false,
+      focused: true,
+      multiCursor: false,
+      selectionActive: false,
+      widgetVisible: false,
+    };
+    // `.kojo` 命中面
+    expect(shouldTriggerContextSuggest({ ...base, line: '{她的', column: 4, typedChar: '的' })).toBe(true);
+    expect(shouldTriggerContextSuggest({ ...base, line: '时机 指令 310 成否:', column: 14, typedChar: ':' })).toBe(true);
+    // 台词行：`这是她的书|` —— `的` 在普通文本里不打开任何名字位
+    expect(shouldTriggerContextSuggest({ ...base, line: '这是她的书', column: 6, typedChar: '的' })).toBe(false);
+    // `.erb` 命中面
+    const erb = { ...base, languageId: ERB_LANGUAGE_ID };
+    expect(shouldTriggerContextSuggest({ ...erb, line: 'CFLAG:', column: 7, typedChar: ':' })).toBe(true);
+    expect(shouldTriggerContextSuggest({ ...erb, line: 'GOTO ', column: 6, typedChar: ' ' })).toBe(true);
+    expect(shouldTriggerContextSuggest({ ...erb, line: 'JUMP ', column: 6, typedChar: ' ' })).toBe(true);
+    expect(shouldTriggerContextSuggest({ ...erb, line: 'GETBIT(HOLD,)', column: 13, typedChar: ',' })).toBe(true);
+    expect(shouldTriggerContextSuggest({ ...erb, line: 'CALL FOO,', column: 10, typedChar: ',' })).toBe(false);
   });
 });

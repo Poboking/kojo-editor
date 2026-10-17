@@ -412,11 +412,12 @@ describe('C-2 · 函数候选插成带 tabstop 的 snippet', () => {
     expect(item.insertTextRules).toBeUndefined();
   });
 
-  it('作者已经自己写了左括号 ⇒ 不再插片段（免得给他多一对括号）', () => {
+  it('作者已经自己写了左括号 ⇒ 不 snippet 化；insertText 收回纯名字（否则落字 `名字((` 非法）', () => {
     const { provider } = withProtocol();
     // 光标停在名字与作者已写的 `(` **之间**：候选替换区间右端紧邻的就是那个 `(`
     const item = pick(provide(provider, `${LIB_CN}(`, 5), LIB_CN);
-    expect(item.insertText).toBe(`${LIB_CN}(`);
+    // 接受候选 = 纯名字填入（作者那枚 `(` 原地保留）⇒ 落字 `${LIB_CN}(`；旧形态叠成 `${LIB_CN}((`
+    expect(item.insertText).toBe(LIB_CN);
     expect(item.insertTextRules).toBeUndefined();
   });
 

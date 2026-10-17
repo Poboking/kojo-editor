@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { VariableInfo, VariableSchema } from '@kojo/plugin-api';
-import { variableCompletionItems } from '../src/monaco/kojo-completion-variables';
+import { kojoVariableNameSlot, variableCompletionItems } from '../src/monaco/kojo-completion-variables';
 
 /** 合成族 → 索引名表（CFLAG/TALENT 主表 + TCVAR 追加名表；含同名跨族用于去重） */
 const NAMES: Record<string, VariableInfo[]> = {
@@ -153,5 +153,52 @@ describe('KC-1 插值变量补全 · filterText（真实 Monaco 按 `filterText 
   it('钉值：中文名字段的 `filterText` 就是字典里的名字（不留给 label 兜底）', () => {
     const byLabel = new Map(at('{她的好').map((i) => [i.label as string, i]));
     expect(byLabel.get('好色程度')?.filterText).toBe('好色程度');
+  });
+});
+
+/* ==================== 名字位探针（kojoVariableNameSlot；触发链在 `的` 当拍重开一轮用） ==================== */
+
+describe('KC-1 插值变量补全 · 名字位探针（与候选源同一枚判据）', () => {
+  /** 与 `at` 同一套 `|` 光标标记，返回探针结果 */
+  function probe(marked: string) {
+    const marker = marked.indexOf('|');
+    const line = marked.replace('|', '');
+    const column = (marker >= 0 ? marker : line.length) + 1;
+    return kojoVariableNameSlot(line, column);
+  }
+
+  it('代词 / 角色前缀已收全（`{她的|` / `{角色12的|`）⇒ 命中，名字段 = 空前缀', () => {
+    expect(probe('{她的|')).toEqual({ start: 3, end: 3, prefix: '' });
+    expect(probe('{角色12的|')).toEqual({ start: 6, end: 6, prefix: '' });
+  });
+
+  it('裸名位（`{好|`）⇒ 命中，前缀 = 已输入名字', () => {
+    expect(probe('{好|')).toEqual({ start: 1, end: 2, prefix: '好' });
+  });
+
+  it('半成品（`{` / `{她` / `{角色` / `{12`）⇒ 不命中（不猜）', () => {
+    expect(probe('{')).toBeNull();
+    expect(probe('{她')).toBeNull();
+    expect(probe('{角色')).toBeNull();
+    expect(probe('{12')).toBeNull();
+  });
+
+  it('代词前缀内部（`{她|的` / `{角色1|2的`）⇒ 不命中；插值外 ⇒ 不命中', () => {
+    expect(probe('{她|的')).toBeNull();
+    expect(probe('{角色1|2的')).toBeNull();
+    expect(probe('她的好|')).toBeNull();
+    expect(probe('{A} 她的|好')).toBeNull();
+  });
+
+  it('名字中间 / 名字尾：区间覆盖整段名字（与候选源替换范围同段）', () => {
+    expect(probe('{她的好|感度}')).toEqual({ start: 3, end: 6, prefix: '好' });
+    expect(probe('{她的好|')).toEqual({ start: 3, end: 4, prefix: '好' });
+  });
+
+  it('探针命中 ⇒ 候选源同位置非空（触发链"弹了有货"契约）', () => {
+    for (const marked of ['{她的|', '{角色12的|', '{好|']) {
+      expect(probe(marked)).not.toBeNull();
+      expect(at(marked).length).toBeGreaterThan(0);
+    }
   });
 });

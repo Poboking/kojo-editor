@@ -3,8 +3,8 @@
  *
  * 合成 `KojoLibraryTable`（无游戏名词进源码；函数名只住测试桩），无需语料。
  * 覆盖：标识符位置的判定 / 前缀过滤 / 替换范围 / detail 文案（原生名回 `lookupByName`）/
- * 调用形 insertText / CJK-primary，以及字符串 / 注释 / 插值内与缺表 / 无枚举能力一律 `[]`
- * （不猜、不抛）。
+ * 调用形 insertText / CJK-primary、结构收口（赋值左值位 / 声明名槽不给，值侧与普通表达式不越界），
+ * 以及字符串 / 注释 / 插值内与缺表 / 无枚举能力一律 `[]`（不猜、不抛）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -90,6 +90,33 @@ describe('KC-4 库函数名补全 · 不给的位置（字符串 / 注释 / 插�
   it('非标识符位（标点 / 运算符 / 行尾空白）→ []', () => {
     expect(at('心形 +| 1')).toEqual([]);
     expect(at('   |')).toEqual([]);
+  });
+});
+
+describe('KC-4 库函数名补全 · 结构收口（非调用位不给调用形）', () => {
+  it('赋值左值位：标识符段后跳过空白即 ASCII `=` → []', () => {
+    expect(at('好感|度 = 5')).toEqual([]);
+    expect(at('好感度| = 5')).toEqual([]);
+    expect(at('好感度 = |')).toEqual([]);
+    expect(at('常量 X| = 5')).toEqual([]);
+  });
+
+  it('声明名槽：行首 `别名` / `常量` 锚后的名字位 → []（空槽也算）', () => {
+    expect(at('别名 好|')).toEqual([]);
+    expect(at('别名 好|感度')).toEqual([]);
+    expect(labels(at('foo 心|形'))).toEqual(['心形']); // 词表外的行首词不是声明锚，不出手
+    expect(at('常量 好|')).toEqual([]);
+    expect(at('别名 |')).toEqual([]);
+  });
+
+  it('值侧 / 普通表达式 / `调用` 槽：结构门不越界（按现状出货）', () => {
+    // `=` 在段**前** = 值侧：值可以是调用表达式
+    expect(labels(at('好感度 = 心|形'))).toEqual(['心形']);
+    expect(labels(at('别名 冷淡 = 心|形'))).toEqual(['心形']);
+    // 普通表达式标识符位（段后是 ` 大于`，不是 `=`）
+    expect(labels(at('如果 心|形 大于 5：'))).toEqual(['心形']);
+    // `调用` 是项目函数槽（kojo-functions 的地盘），库函数源在这处按现状出货
+    expect(labels(at('调用 心|形'))).toEqual(['心形']);
   });
 });
 

@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import type { KojoNameField } from './kojo-completion-position';
 import type { VariableSchema } from '@kojo/plugin-api';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
 
@@ -138,4 +139,24 @@ export function variableCompletionItems(
     }
   }
   return items;
+}
+
+/**
+ * 名字位**探针**（CTX-SUGGEST 主动触发消费；`column` = Monaco 的 1 基列）：
+ * 光标处是否是可补全的插值变量名位置，命中回该名字段（与 {@link variableCompletionItems}
+ * 同一枚 {@link parseNameContext}，宿主侧零抄本）。
+ *
+ * 命中：`{她的|` / `{角色12的|`（代词 / 角色前缀已收全）、`{好|`（裸名位）；
+ * 不命中：插值外、代词前缀内部（`{她|的`）、半成品（`{` / `{她` / `{角色` / `{12`）。
+ *
+ * 裸 `{` 的显式排除：解析面在 `{` 处本会给全量（空前缀可补全），但探针语义只认"已有名字
+ * 线索的位置"——`{` 当拍由补全的触发字符路径（`triggerCharacters: ['{']`）负责，探针不重复
+ * 开枪（触发链在 `的` 按下当拍重开一轮用的就是本探针）。
+ */
+export function kojoVariableNameSlot(line: string, column: number): KojoNameField | null {
+  const slot = parseNameContext(line, column);
+  if (slot === null) return null;
+  // `{` 半成品：空前缀且名字段紧贴开括号（代词前缀位尚未收全时 parseNameContext 已拒）。
+  if (slot.prefix.length === 0 && slot.start > 0 && line[slot.start - 1] === '{') return null;
+  return slot;
 }

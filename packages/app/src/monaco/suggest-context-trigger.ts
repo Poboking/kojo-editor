@@ -1,12 +1,15 @@
 import type * as Monaco from './entry';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
-import { erbCompletionGate } from './erb-completion-context';
+import { erbCompletionGate, erbLabelSlot } from './erb-completion-context';
 import { erbFunctionNameSlot } from './erb-completion-functions';
+import { erbBitSlotOpen } from './erb-completion-bits';
+import { erbVariableSlotAt } from './erb-completion-variables';
 import { insideStringOrComment, isBlank, lineAt } from './kojo-completion-position';
 import { caseValueSlotAt, timingNumberSlotAt } from './kojo-completion-instructions';
-import { timingFaceSlot } from './kojo-completion-faces';
+import { timingFaceSlot, timingNamedParamValueSlot } from './kojo-completion-faces';
 import { kojoFunctionNameSlot } from './kojo-completion-functions';
+import { kojoVariableNameSlot } from './kojo-completion-variables';
 
 /**
  * CTX-SUGGEST · 「光标刚落到名字位 ⇒ 主动弹一次补全」的**宿主侧观察者**。
@@ -31,7 +34,7 @@ import { kojoFunctionNameSlot } from './kojo-completion-functions';
  *
  * 触发权只交给**"刚敲下的一枚字符"**：观察者只认"单字符纯插入"的内容事件（删除 / 粘贴 /
  * 撤销重做 / `setValue` 全不算），且该字符必须能把光标**推进**一个名字槽
- * （{@link isSlotOpeningChar}：空白 / `@` / 逗号）。纯移动光标（点击、方向键、撤销、跳行）
+ * （{@link isSlotOpeningChar}：空白 / `@` / 逗号 / 半角冒号 / `的`）。纯移动光标（点击、方向键、撤销、跳行）
  * 根本没有内容事件，`CursorChangeReason` 落在 Explicit/Undo/Redo/Paste/ContentFlush 时也一律
  * 撤销已排程的那一拍 ⇒ 不会"一点就到处弹窗"。名字位判据又只覆盖行首关键字之后的那一位，
  * 台词行、注释、字符串里的空白什么都打不开。
@@ -73,20 +76,34 @@ type NameSlotProbe = (line: string, column: number) => unknown;
 
 /**
  * 每门语言**候选源自己认的那几处名字位**（= 弹出来一定有货的位置）：
- * - `.kojo`：分野位（KC-2）/ 编号位（KC-3）/ 分支头值位（KC-3）/ `调用`·`函数` 名槽；
+ * - `.kojo`：分野位（KC-2）/ 编号位（KC-3）/ 分支头值位（KC-3）/ `调用`·`函数` 名槽 /
+ *   插值变量名位（KC-1，`的` 转场键在这一枚） / 命名参数**取值位**（KC-2b，键冒号当拍）；
  * - `.erb`：`@` 定义位与 `CALL` 系调用位（`erbFunctionNameSlot`，语句清单单源在
- *   `erb-completion-context` 的 `ERB_CALL_STATEMENTS`）。
+ *   `erb-completion-context` 的 `ERB_CALL_STATEMENTS`）/ 跳转标签位（`erbLabelSlot`）/
+ *   位原语第二实参坑（`erbBitSlotOpen`）/ 变量引用末段（`erbVariableSlotAt`，族冒号当拍）。
  *
  * 刻意**不**在宿主侧再写一条"看起来像名字位"的正则：判据一旦有两份，弹了没货（骚扰）或
  * 有货不弹（缺陷）都无从发现。
+ *
+ * ⚠ 探针契约是 `probe(...) !== null`：签名定死 `boolean` 的两枚（KC-2b 取值位 / 位坑）
+ * **必须**在这里折成 `true | null` 再挂——直接挂会把 `false` 当命中，恒触发。
  */
-const KOJO_NAME_SLOTS: readonly NameSlotProbe[] = [
+export const KOJO_NAME_SLOTS: readonly NameSlotProbe[] = [
   timingFaceSlot,
   timingNumberSlotAt,
   caseValueSlotAt,
   kojoFunctionNameSlot,
+  kojoVariableNameSlot,
+  // `timingNamedParamValueSlot` 签名定死 boolean（A3 接线注）⇒ 折一道，见上注
+  (line, column) => (timingNamedParamValueSlot(line, column) ? true : null),
 ];
-const ERB_NAME_SLOTS: readonly NameSlotProbe[] = [erbFunctionNameSlot];
+export const ERB_NAME_SLOTS: readonly NameSlotProbe[] = [
+  erbFunctionNameSlot,
+  erbLabelSlot,
+  // 同折法：`erbBitSlotOpen` 亦为定死 boolean 签名
+  (line, column) => (erbBitSlotOpen(line, column) ? true : null),
+  erbVariableSlotAt,
+];
 
 /** 该语言有没有名字位探针（没有 ⇒ 本观察者对这门语言 entirely 沉默） */
 function nameSlotProbesOf(languageId: string): readonly NameSlotProbe[] | null {
@@ -98,15 +115,25 @@ function nameSlotProbesOf(languageId: string): readonly NameSlotProbe[] | null {
 /**
  * 「刚敲下这一枚字符」才可能**进入**名字槽的字符集：
  * - 空白（半角 / 全角 / 制表；走 `kojo-completion-position` 的 `isBlank` 单源，口径 = lexer）
- *   ⇒ `时机 |` / `是 |` / `调用 |` / `函数 |` / `时机 本番 |` / `CALL |`；
+ *   ⇒ `时机 |` / `是 |` / `调用 |` / `函数 |` / `时机 本番 |` / `CALL |` / `GOTO |`；
  * - `@` ⇒ ERB 定义位（行首 `@|` 就是函数名槽）；
- * - `,` / `，` ⇒ `是 1,|` 这类"接着起一个值"的分隔位。
+ * - `,` / `，` ⇒ `是 1,|` 这类"接着起一个值"的分隔位，与位原语第二实参坑
+ *   （`GETBIT(变量,|)` / `SETBIT 变量,|`，折过的 `erbBitSlotOpen` 探针收口）；
+ * - `:`（半角）⇒ ERB 变量族冒号位（`CFLAG:|`）与 `.kojo` 命名参数键冒号位（`成否:|`，
+ *   空格的键冒号位在 kojo 是合法书写）。台词行 / 普通文本里的冒号过不了探针⑩，不弹。
+ *   **全角 `：` 刻意不在本集合**：它已是两门语言的 Monaco 触发字符
+ *   （`triggerCharacters`，`canShowSuggestOnTriggerCharacters` 路径不受 quickSuggestions
+ *   关闭门控），原生触发即可，不走本观察者；
+ * - `的` ⇒ `.kojo` 插值 `{代词+的` 的**转场键**：`{她` 当拍 widget 的过滤词就是"她"，
+ *   变量全量被滤到只剩代词类候选、零候选即关闭；敲 `的` 时 widget 已死，Monaco 的
+ *   "已开只重过滤不重取词"这条路无从恢复 ⇒ 必须由宿主重触发一轮。探针⑩
+ *   （`kojoVariableNameSlot`）只在 `{她的` 这类名字位命中，台词里的 `的` 不弹。
  *
  * **名字字符本身不算**：widget 已经开着时 Monaco 自己边打字边过滤，宿主再 trigger 一次只会
  * 把候选选择重置回第一条（体感 = "我刚打的字被吞了"）。
  */
 export function isSlotOpeningChar(ch: string): boolean {
-  return isBlank(ch) || ch === '@' || ch === ',' || ch === '，';
+  return isBlank(ch) || ch === '@' || ch === ',' || ch === '，' || ch === ':' || ch === '的';
 }
 
 /** 光标是否落在**非代码视野**（字符串 / 注释）里：两门语言各走各的那一枚判据，不自造 */

@@ -28,14 +28,24 @@ import {
  * Monaco 绑定（provider 注册）刻意不在此处——编排层负责把本函数接进补全基座。
  */
 
-/** 块头终结的全角冒号——`该名之后`已出现即分野段收尾，不再补全 */
-const BLOCK_COLON = '：';
 /** 命名参数键的尾冒号（全角 / 半角均可） */
 const TRAILING_COLON_RE = /[：:]$/;
 /** 令牌切分用空白 */
 const WHITESPACE_RE = /\s/;
 /** CJK 判定（含扩展 A / 假名）；用于 `类型:` 段取值的 CJK-primary 过滤 */
 const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
+
+/**
+ * 命名参数**键名集**（含隐藏英文别名）：某枚冒号"紧邻其前（空白切分）的令牌"落在此集内
+ * ⇒ **键冒号**（命名参数尾符、取值位分界）。
+ *
+ * 与 `kojo-completion-instructions.ts` 的 `NAMED_PARAM_KEYS`（编号槽判据）同款派生、同一真源
+ * = `kojo-sugar` 的 `TIMING_NAMED_PARAMS`。那边未导出该集、且本批禁改该文件 ⇒ 此处再派生
+ * 一份——两个派生都只从键表来（键表改则两处同改），无第二真源。
+ */
+const NAMED_PARAM_KEYS: ReadonlySet<string> = new Set(
+  TIMING_NAMED_PARAMS.flatMap((p) => (p.alias === undefined ? [p.name] : [p.name, p.alias])),
+);
 
 /** 命名参数**键**候选的 detail（宿主 UI 文案；键名一律取自 kojo-sugar 键表，非硬编码） */
 const KEY_DETAIL = '时机命名参数';
@@ -67,17 +77,64 @@ function tokenizeTail(line: string, from: number): TailToken[] {
   return out;
 }
 
-/** 分野段之后是否已出现块头终结冒号（`= true` ⇒ 本行不再有本模块的候选） */
-function blockColonClosed(line: string, faceStart: number): boolean {
-  return line.slice(faceStart).includes(BLOCK_COLON);
+/** 令牌 → 命名参数键 spec：剥去尾冒号后按 规范名 / 隐藏别名 查键表；非键 ⇒ `undefined` */
+function namedParamOf(text: string): TimingNamedParamSpec | undefined {
+  const key = text.replace(TRAILING_COLON_RE, '');
+  return TIMING_NAMED_PARAMS.find((p) => p.name === key || p.alias === key);
+}
+
+/** 尾段令牌的**编辑面右界**：块冒号收尾的令牌不含那枚冒号（结构符，替换不许吃掉） */
+function tokenEditEnd(token: TailToken): number {
+  if (!token.colon) return token.end;
+  return NAMED_PARAM_KEYS.has(token.text.slice(0, -1)) ? token.end : token.end - 1;
+}
+
+/** 紧邻 `at` 之前（空白切分）的令牌文本：自 `at` 向左吃到空白为止（下界 = 分野段终） */
+function tokenTextBefore(line: string, at: number, lowerBound: number): string {
+  let start = at;
+  while (start > lowerBound && !WHITESPACE_RE.test(line[start - 1]!)) start--;
+  return line.slice(start, at);
+}
+
+/**
+ * `faceStart` 之后全部**块冒号**的下标（0 基）。块冒号 = **非键冒号**且**收束自己的令牌**
+ * （其后是空白或行尾）——即块头收尾那一枚。
+ *
+ * 键冒号判据 = 紧邻其前（空白切分）的令牌 ∈ {@link NAMED_PARAM_KEYS}。"收束自己的令牌"这一半
+ * 是对"非键即块"钝口径的**必要收窄**：值令牌可以内嵌冒号（v1.6 的 `实参:2` / `实参$:2`）——
+ * 钝口径会把它误当收尾冒号，把 `参数: 实参:2` 这类顶格写值的位置整片掐死（旧代码不掐：旧口径
+ * 只认全角 `：`）。解析器（`lexer.parseTimingHead`）对同一行只把**行尾**那枚冒号剥作终止符、
+ * 内嵌冒号一律归值——本判据与它同向。
+ */
+function blockColonIndices(line: string, faceStart: number): number[] {
+  const out: number[] = [];
+  for (let i = faceStart; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch !== '：' && ch !== ':') continue;
+    if (NAMED_PARAM_KEYS.has(tokenTextBefore(line, i, faceStart))) continue; // 键冒号
+    const next = line[i + 1];
+    if (next !== undefined && !WHITESPACE_RE.test(next)) continue; // 值令牌内嵌冒号（`实参:2`）
+    out.push(i);
+  }
+  return out;
+}
+
+/**
+ * 块头在光标处是否**已收口**：存在块冒号且下标 < `col0`。收口语义**以光标列为界**——块冒号
+ * 在光标之后 ⇒ 作者仍在头内编辑，候选照给。原实现（整行 `includes('：')`）把"行里出现过
+ * 收尾冒号"与"光标已在收尾冒号之后"混作一件：⑦ 缺陷的编辑位（`时机 指令 310 成否: 游戏判定：`
+ * 光标在行中）被整行口径误杀。
+ */
+function blockHeadClosed(line: string, faceStart: number, col0: number): boolean {
+  return blockColonIndices(line, faceStart).some((i) => i < col0);
 }
 
 /**
  * 时机块头的**分野名槽**（`column` = Monaco 的 1 基列；纯函数）。
  *
  * 段界取自 `kojo-completion-position` 的 {@link timingHeadParts}（**同一份**锚 + 同一份终止符，
- * 与编号槽判据不再各扫一遍）。命中条件：光标在分野段内（含段右界，即"刚写完名字"）且块头
- * 尚未收尾。位置不符 ⇒ `null`（不猜）。
+ * 与编号槽判据不再各扫一遍）。命中条件：光标在分野段内（含段右界，即"刚写完名字"）且块头在
+ * **光标处**尚未收口（收尾冒号在光标之后不算收口——作者仍在头内编辑）。位置不符 ⇒ `null`（不猜）。
  *
  * 消费方两路：KC-2 候选（下面的 `faceCandidates`）与「上下文主动触发」
  * （`suggest-context-trigger.ts` 用它判"光标是否刚落到分野位"）。
@@ -87,18 +144,55 @@ export function timingFaceSlot(line: string, column: number): KojoNameField | nu
   if (parts === null) return null;
   const col0 = col0Of(line, column);
   if (col0 === null || col0 < parts.faceStart || col0 > parts.faceEnd) return null;
-  if (blockColonClosed(line, parts.faceStart)) return null;
+  if (blockHeadClosed(line, parts.faceStart, col0)) return null;
   return { start: parts.faceStart, end: parts.faceEnd, prefix: line.slice(parts.faceStart, col0) };
+}
+
+/**
+ * 命名参数**取值位探针**（CTX-SUGGEST 主动触发消费；`column` = Monaco 的 1 基列）。
+ *
+ * 语义 = "光标处是可补的命名参数取值位置"（与候选源的取值路径同一枚判据）：
+ * - **刚敲完键冒号**：光标紧贴该键令牌的尾冒号（`成否：|` / `成否:|`）；
+ * - **值令牌内且前一完整令牌是键冒号**：`成否: 游戏|判定：`（行尾块冒号在光标之后不算收口）。
+ * 块头在光标处已收口 / 分野段内 / 非时机行 ⇒ `false`。
+ *
+ * NB（接线）：`suggest-context-trigger` 的探针契约是"非 `null` 即命中"，本函数按定死签名回
+ * `boolean`——消费方纳入 `KOJO_NAME_SLOTS` 时要折一道（`probe(...) ? true : null`，或直接判 truthy）。
+ */
+export function timingNamedParamValueSlot(line: string, column: number): boolean {
+  const col0 = col0Of(line, column);
+  if (col0 === null) return false;
+  const parts = timingHeadParts(line);
+  if (parts === null) return false;
+  if (col0 <= parts.faceEnd) return false;
+  if (blockHeadClosed(line, parts.faceStart, col0)) return false;
+
+  const tail = tokenizeTail(line, parts.faceEnd);
+  const active = tail.find((t) => t.start < col0 && col0 <= t.end);
+  const committed = tail.filter((t) => t !== active && t.end <= col0);
+  // (a) 刚敲完键冒号：活动令牌是键令牌且光标恰在其尾冒号之后。
+  if (
+    active !== undefined &&
+    active.colon &&
+    col0 === active.end &&
+    namedParamOf(active.text) !== undefined
+  ) {
+    return true;
+  }
+  // (b) 值令牌内（或空插入点）且前一完整令牌是键冒号。
+  const last = committed[committed.length - 1];
+  return last !== undefined && last.colon && namedParamOf(last.text) !== undefined;
 }
 
 /**
  * 计算行首 `时机 <分野> [编号] [命名参数]` 处该给的一轮候选。行为：
  * - 光标处在**分野名令牌内** ⇒ 分野候选（`Object.keys(faceTable.faces)`，按已输入前缀过滤，
  *   `kind` = `EnumMember`）；
- * - 光标在**分野令牌之后、块头 `：` 之前**：
- *   - 前一完整令牌是 `键:` ⇒ 命中该键后给**取值**候选（`kind` = `EnumMember`）；
+ * - 光标在**分野令牌之后**（且块头未在光标处收口）：
+ *   - 前一完整令牌是 `键:`，或光标紧贴**键冒号**尾 ⇒ 给该键的**取值**候选（`kind` = `EnumMember`）；
  *   - 否则 ⇒ 给**键**候选（`TIMING_NAMED_PARAMS` 规范名，`kind` = `Property`）；
- * - 该名之后一旦出现全角 `：`（块头已收尾）→ `[]`；缺 `faceTable` → `[]`。
+ * - **块冒号在光标之前**（块头已收口）→ `[]`；块冒号在光标之后（头内编辑位）候选照给；
+ *   缺 `faceTable` → `[]`。
  */
 export function faceCompletionItems(
   monaco: typeof Monaco,
@@ -119,8 +213,9 @@ export function faceCompletionItems(
   const col0 = position.column - 1;
   if (col0 < faceStart) return [];
 
-  // 块头已收尾：分野段之后出现块头终结的全角 `：` ⇒ 本模块零候选（交回其它补全面）。
-  if (blockColonClosed(line, faceStart)) return [];
+  // 块头在光标处已收口（存在块冒号且下标 < col0）⇒ 本模块零候选（交回其它补全面）；
+  // 块冒号在光标之后 ⇒ 作者仍在头内编辑，候选照给（⑦ 缺陷的编辑位）。
+  if (blockHeadClosed(line, faceStart, col0)) return [];
 
   // 位置 1：光标仍在分野名令牌内 ⇒ 分野候选（KC-2 原行为，逐字保留）。
   if (col0 <= faceEnd) {
@@ -184,10 +279,19 @@ function timingNamedParamCandidates(
   const committed = tail.filter((t) => t !== active && t.end <= col0);
   const last = committed[committed.length - 1];
 
+  // 光标紧贴**键冒号**尾（`成否：|` / `成否:|`）⇒ 该键的取值位置（空前缀、空替换区间）。
+  // 非键冒号收尾的令牌（如 `参数: 实参:|` 的内嵌冒号）**落到下面老路径**：值区归属由前一枚
+  // 完整键令牌决定，既有行为逐字保留。
+  if (active !== undefined && active.colon && col0 === active.end) {
+    const spec = namedParamOf(active.text);
+    if (spec !== undefined) {
+      return valueCandidates(monaco, line, faceStart, faceEnd, undefined, col0, position, faceTable, spec);
+    }
+  }
+
   // 前一完整令牌是 `键:`（带尾冒号）⇒ 光标处于它的**取值**位置。
   if (last !== undefined && last.colon) {
-    const keyToken = last.text.replace(TRAILING_COLON_RE, '');
-    const spec = TIMING_NAMED_PARAMS.find((p) => p.name === keyToken || p.alias === keyToken);
+    const spec = namedParamOf(last.text);
     if (!spec) return [];
     return valueCandidates(monaco, line, faceStart, faceEnd, active, col0, position, faceTable, spec);
   }
@@ -245,7 +349,8 @@ function valueCandidates(
   if (values.length === 0) return [];
 
   const prefix = active ? active.text.slice(0, col0 - active.start) : '';
-  const range = lineRange(position, active ? active.start : col0, active ? active.end : col0);
+  // 替换区间止于令牌的**编辑面右界**：块冒号收尾的值令牌不含那枚冒号（结构符不许被吃掉）。
+  const range = lineRange(position, active ? active.start : col0, active ? tokenEditEnd(active) : col0);
   const kind = monaco.languages.CompletionItemKind.EnumMember;
 
   const out: Monaco.languages.CompletionItem[] = [];

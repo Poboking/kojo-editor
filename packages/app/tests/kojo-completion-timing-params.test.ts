@@ -18,7 +18,7 @@ import {
   type CompletionSourceContext,
   type CompletionTables,
 } from '../src/monaco/kojo-completion';
-import { faceCompletionItems } from '../src/monaco/kojo-completion-faces';
+import { faceCompletionItems, timingNamedParamValueSlot } from '../src/monaco/kojo-completion-faces';
 
 /* ============================== 桩 monaco / model / adapter 表 ============================== */
 
@@ -91,6 +91,12 @@ function labels(items: readonly Monaco.languages.CompletionItem[]): string[] {
 
 /** 光标落在 `text` 末尾（column = 长度 + 1） */
 const atEnd = (text: string): number => text.length + 1;
+
+/** 用 `|` 标记光标取一轮候选（列 = 标记位 + 1；line = 去掉标记后的整行） */
+function provideAt(marked: string): Monaco.languages.CompletionItem[] {
+  const column = marked.indexOf('|') + 1;
+  return provide(marked.replace('|', ''), column);
+}
 
 /* ============================== 1. 命名参数**键**候选 ============================== */
 
@@ -217,5 +223,78 @@ describe('KC-2b · 全角空格形态（键 / 取值联动照出）', () => {
   it('回归不变：半角写法（`时机 初见 成否: `）取值全量', () => {
     const text = '时机 初见 成否: ';
     expect(labels(provide(text, atEnd(text)))).toEqual(['游戏判定', '一定成功', '一定失败', '不执行']);
+  });
+});
+
+/* ============ 新增：块头冒号语义（键冒号 vs 块冒号，收口以光标列为界；⑦ 缺陷） ============ */
+
+const RANGE_LINE_1 = { startLineNumber: 1, endLineNumber: 1 } as const;
+
+describe('KC-2b · 块头冒号语义（收尾冒号在光标后不再全程清场）', () => {
+  it('F1 `时机 指令 310 成否: 游戏|判定：` → 成否取值候选按前缀给（块冒号在光标之后 = 未收口）', () => {
+    const items = provideAt('时机 指令 310 成否: 游戏|判定：');
+    expect(labels(items)).toEqual(['游戏判定']);
+    // 替换区间止于值令牌编辑面：不吃行尾块冒号（覆盖 `游戏判定`，冒号留在原地）
+    expect(items[0]!.range).toEqual({ ...RANGE_LINE_1, startColumn: 15, endColumn: 19 });
+  });
+
+  it('F2 行尾块冒号之后（`…游戏判定：|`）→ faces 源零候选（已收口）', () => {
+    expect(provideAt('时机 指令 310 成否: 游戏判定：|')).toEqual([]);
+  });
+
+  it('F5 `时机 指令 310 成否：|`（全角键冒号紧贴）→ 取值候选在，空插入点区间', () => {
+    const items = provideAt('时机 指令 310 成否：|');
+    expect(labels(items)).toEqual(['游戏判定', '一定成功', '一定失败', '不执行']);
+    expect(items[0]!.range).toEqual({ ...RANGE_LINE_1, startColumn: 14, endColumn: 14 });
+  });
+
+  it('F6 `时机 指令 310 成否:|`（半角键冒号紧贴）→ 取值候选在', () => {
+    expect(labels(provideAt('时机 指令 310 成否:|'))).toEqual(['游戏判定', '一定成功', '一定失败', '不执行']);
+  });
+
+  it('值令牌**内嵌**冒号不算收口（`参数: 实参:2` 顶格写值的回归面）→ 值候选照给', () => {
+    expect(labels(provideAt('时机 指令 310 参数: 实参:2|'))).toEqual(['实参:2']);
+  });
+
+  it('行尾一枚 `实参:` 按解析器口径就是块头终止符（strip 后值 = `实参`）⇒ 已收口零候选', () => {
+    expect(provideAt('时机 指令 310 参数: 实参:|')).toEqual([]);
+  });
+});
+
+/* ============ 新增：取值位探针 timingNamedParamValueSlot（触发链用，签名定死 boolean） ============ */
+
+describe('KC-2b · 取值位探针 timingNamedParamValueSlot（与候选源同判据）', () => {
+  function probeAt(marked: string): boolean {
+    const column = marked.indexOf('|') + 1;
+    return timingNamedParamValueSlot(marked.replace('|', ''), column);
+  }
+
+  it('命中：刚敲完键冒号（`成否:|` / `成否：|` / `参数:|`）与值令牌内 / 空插入点', () => {
+    expect(probeAt('时机 指令 310 成否:|')).toBe(true);
+    expect(probeAt('时机 指令 310 成否：|')).toBe(true);
+    expect(probeAt('时机 指令 310 参数:|')).toBe(true);
+    expect(probeAt('时机 指令 310 成否: |')).toBe(true);
+    expect(probeAt('时机 指令 310 成否: 游|')).toBe(true);
+  });
+
+  it('不命中：键编辑位 / 编号位 / 分野段内 / 已收口 / 非时机行', () => {
+    expect(probeAt('时机 指令 310 成|否: 游戏判定：')).toBe(false);
+    expect(probeAt('时机 指令 310 成否|: ')).toBe(false);
+    expect(probeAt('时机 指令 310 |')).toBe(false);
+    expect(probeAt('时机 指令 |')).toBe(false);
+    expect(probeAt('时机 指令 310 成否: 游戏判定：|')).toBe(false);
+    expect(probeAt('她点了|点头。')).toBe(false);
+  });
+
+  it('探针命中 ⇒ 候选源同位置非空（触发链"弹了有货"契约）', () => {
+    for (const marked of [
+      '时机 指令 310 成否:|',
+      '时机 指令 310 成否：|',
+      '时机 指令 310 参数:|',
+      '时机 指令 310 成否: 游|',
+    ]) {
+      expect(probeAt(marked)).toBe(true);
+      expect(provideAt(marked).length).toBeGreaterThan(0);
+    }
   });
 });

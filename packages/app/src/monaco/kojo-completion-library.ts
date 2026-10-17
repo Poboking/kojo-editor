@@ -1,12 +1,24 @@
 import type * as Monaco from './entry';
 import type { KojoLibraryTable } from '@kojo/plugin-api';
-import { identifierFieldAt, insideInterpolation, insideStringOrComment, isCjk } from './kojo-completion-position';
+import {
+  identifierFieldAt,
+  insideInterpolation,
+  insideStringOrComment,
+  isBlank,
+  isCjk,
+  kojoKeywordAnchor,
+  nameSlotAfterAnchor,
+} from './kojo-completion-position';
 
 /**
  * KC-4 · `.kojo` 中文**库函数名**的正向补全（`libraryCompletionItems`）。
  *
  * 落点：表达式 / 正文的**标识符位置**（字符串内 / 注释内 / `{ … }` 插值内不给——插值里那一处
- * 是 `kojo-variable` 的地盘）。名字来源 = `table.names?.()`（KC-4 新增的**可选**枚举能力；
+ * 是 `kojo-variable` 的地盘）。两道**结构收口**再把"标识符位"收成"调用表达式位"：
+ * ①赋值**左值位**（段后跳空白即 ASCII `=`；`.kojo` 里 `=` 专表赋值，比较走词形）不给；
+ * ②声明**名槽**（行首 `别名` / `常量` 关键字——词表 id `head.alias` / `head.const`——之后的名字位）
+ * 不给：那里写的是声明对象，调用形落下去就是非法形态。
+ * 名字来源 = `table.names?.()`（KC-4 新增的**可选**枚举能力；
  * 未提供 ⇒ 零候选，降级信号由装配层的 `requires: 'libraryTable'` 发，本模块不另造一套）。
  *
  * 糖层消费形态是**调用形**（`名字(` → 原生 ERB 名，见 `lowerSystemFunctions`）⇒ `insertText`
@@ -21,10 +33,17 @@ import { identifierFieldAt, insideInterpolation, insideStringOrComment, isCjk } 
  */
 
 /**
+ * 声明头锚（词表 id `head.alias` / `head.const`）——本模块只按 id 取词形，零手抄。
+ * `别名 X` / `常量 X` 的 `X` 是**声明名槽**：那里写的是声明对象，不是调用表达式。
+ */
+const DECL_ANCHOR: RegExp = kojoKeywordAnchor(['head.alias', 'head.const']);
+
+/**
  * 产出中文库函数名候选（**纯函数**，供补全基座调用）。
  *
  * 行为：光标落在标识符上（左右至少一侧是标识符字符）⇒ 光标所处标识符段为替换范围，
- * `kind` = `Function`，`insertText` = `名字(`（调用形），`detail` = `库函数 → 原生名`，
+ * `kind` = `Function`，`insertText` = `名字(`（调用形），`detail` = `库函数 → 原生名`；
+ * 左值位 / 声明名槽两道结构收口（见模块头注）⇒ `[]`，
  * 前缀过滤 / 排序（`names()` 返回序）与 CJK-primary（表里有中文名 ⇒ 纯 ASCII 名视作隐藏
  * 兼容别名，不进面板，同 `kojo-face` 的 `valueSetOf` 口径）照既有 source 打法。
  */
@@ -48,10 +67,20 @@ export function libraryCompletionItems(
   if (insideStringOrComment(line, col0)) return [];
   if (insideInterpolation(line, col0)) return [];
 
+  // 结构收口 ①：声明名槽——行首声明关键字（`别名 X` / `常量 X`）之后的名字位是**声明对象**，
+  // 调用形落下去即非法形态 ⇒ 零候选。空槽（`别名 |`）也算：那是在起名，不是在调用。
+  if (nameSlotAfterAnchor(line, position.column, DECL_ANCHOR) !== null) return [];
+
   // 标识符位置：光标须贴在标识符字符上（左或右），否则不是可补全的名字位（不猜）。
   const field = identifierFieldAt(line, col0);
   if (field === null) return [];
   const { start, end, prefix } = field;
+
+  // 结构收口 ②：赋值左值位——段后跳过空白即 ASCII `=`（`.kojo` 里 `=` 专表赋值、比较走
+  // 等于 / 不等于词形）⇒ 光标在写左值，不是调用表达式。
+  let after = end;
+  while (after < line.length && isBlank(line[after]!)) after++;
+  if (line[after] === '=') return [];
 
   const range: Monaco.IRange = {
     startLineNumber: position.lineNumber,
