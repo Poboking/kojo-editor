@@ -18,9 +18,11 @@
  *    （`workspace.importRequested`，载荷 `source: 'market'` 逐字冻结），
  *    向导与落地都住工作区消费方——面板不弹自己的窗、不摸盘（目录取 `contentDir()`）。
  * 8. 「发布包…」（MK-PUB 发布通道批）：工具条入口 → 选 zip（`chooseFile` 对话框即授权）
- *    → 服务编排（本地预校验零出网 → 原样字节上传）→ 进度与结果只住状态行一处。
+ *    → 服务编排（本地预校验零出网 → 原样字节上传）→ 进度与结果只住状态行一处；
+ *    上传挂无文字的 hairline 进度条（`progress` 读数），成功终局把 PR 页面接成可点外链。
  *
- * 装与卸的结果、以及被拒的原因，一律只有**一处内联状态行**（`mk-status` / `mk-note`），不弹窗。
+ * 装与卸的结果、以及被拒的原因，一律只有**一处内联状态行**（`mk-status` / `mk-note`），不弹窗；
+ * 带字的进度句同样只有 `.mk-note` 一处（`.mk-progress` 只是同一事实的无文字视觉面）。
  * "该给哪个动作"不在本面板判定：三态出自契约的 `packUpdateCheck`，装得上去不去出自服务；
  * 面板只做"把已装清单原样交给 `buildGroups`"，自己不再算一份已装键集（两份真相必然漂）。
  *
@@ -126,6 +128,18 @@ export interface MarketPanelViewProps {
   readonly busy: boolean;
   /** 内联状态行那一句：装 / 卸的进行中、结果与拒因全写在这一处，不弹窗 */
   readonly note: string;
+  /**
+   * 状态行附带的**可点外链**（现为发布终局的 PR 页面）：非空 ⇒ 状态行下多一枚
+   * 「在浏览器打开发布请求」（仍走 `ui.openExternal`，闸在 Rust）。带字的那句
+   * 仍旧只有 `.mk-note` 一处——这枚按钮只负责"URL 可以点"，不重复内容。
+   */
+  readonly noteLink?: string | null;
+  /**
+   * 当前进度读数（0–100 的整数；null/undefined = 此刻没有可画的进度）。
+   * **带字的进度句仍只住 `.mk-note` 一处**（同一件事不在两处显示的纪律不动），
+   * 这根 hairline 是无文字的视觉读数，`aria-valuenow` 给读屏。
+   */
+  readonly progress?: number | null;
   /** 待确认卸载的那一条（同一时刻只允许一条） */
   readonly pending: string | null;
   /** 展开的已装条目（机器面） */
@@ -160,7 +174,8 @@ export interface MarketPanelViewProps {
  * ```text
  * .panel-market                 根：列布局，外层不滚
  * ├─ .mk-toolbar                flex:none —— 搜索框 / 清除 / 拉取（永不随列表滚走）
- * ├─ .mk-flash                  状态簇（role=status）：.mk-status .mk-time .mk-note(aria-live) .mk-warn .mk-hint
+ * ├─ .mk-flash                  状态簇（role=status）：.mk-status .mk-time .mk-note(aria-live)
+ * │                                        .mk-progress(无文字进度) .mk-note-link .mk-warn .mk-hint
  * └─ .mk-body                   flex:1 自滚 —— 只有列表随滚动移动
  *     ├─ .mk-grouptitle + span.mk-count → .mk-list → .mk-row × n（已装）
  *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row × n（索引）
@@ -194,6 +209,16 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   // 同一屏动作纪律：装/更新/发布任一进行中 ⇒ 全部动作按钮禁用（同一时刻只做一件事）；
   // 进度仍只写 `.mk-note` 一处，按钮文字不变
   const acting = p.installing !== null || p.publishing;
+
+  /**
+   * 徽章的语义色档：`updatable` = 有新版可拿（amber，"有事可做"）；`latest` = 已装妥
+   * （green，"无事"）；`ahead` / 比较失败 = 中性灰（不该催任何动作）。带字那句仍由
+   * `updatePhrase` 单源给出——这里只决定同一句读起来是喜是警，不写第二份话术。
+   */
+  const badgeTone = (row: PackRow): string => {
+    const s = row.update?.state;
+    return s === 'updatable' ? ' mk-badge-warn' : s === 'latest' ? ' mk-badge-ok' : '';
+  };
 
   /** 次要事实（版本 / 体积 / 作者 / 许可…）一律退到第二排 */
   const meta = (text: string): ReactNode => createElement('span', { className: 'mk-meta' }, text);
@@ -241,7 +266,7 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
           { className: 'mk-row', key: indexRowKey(e) },
           main(
             e.name,
-            phrase === '' ? null : createElement('span', { className: 'mk-badge' }, phrase),
+            phrase === '' ? null : createElement('span', { className: `mk-badge${badgeTone(row)}` }, phrase),
             // `action === 'none'` ⇒ 这一行没有可点动作（已装最新 / 本机更高 / 版本要求不够），
             // 行上那句 `mk-badge` 或 `mk-warn` 就是它的说明（动作簇仍占右端位，行与行不错位）
             actions(
@@ -323,6 +348,36 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
       time === '' ? null : createElement('div', { className: 'mk-time' }, time),
       // 装 / 卸的进行中与结果全写在这一处（`aria-live` 让读屏跟得上；不弹窗）
       p.note === '' ? null : createElement('div', { className: 'mk-note', 'aria-live': 'polite' }, p.note),
+      // 无文字的 hairline 进度条：带字的进度句仍只住 `.mk-note` 一处，这里只给"还剩多少"的形
+      p.progress == null
+        ? null
+        : createElement(
+            'div',
+            {
+              className: 'mk-progress',
+              role: 'progressbar',
+              'aria-valuemin': 0,
+              'aria-valuemax': 100,
+              'aria-valuenow': Math.round(p.progress),
+            },
+            createElement('div', {
+              className: 'mk-progress-fill',
+              style: { width: `${Math.min(100, Math.max(0, p.progress))}%` },
+            }),
+          ),
+      // 发布终局的可点外链（PR 页面）：URL 本身已在 note 那一句里，这枚按钮只补"可以点"
+      p.noteLink == null || p.noteLink === ''
+        ? null
+        : createElement(
+            'button',
+            {
+              className: 'mk-sub mk-link mk-note-link',
+              type: 'button',
+              title: `在浏览器打开 ${p.noteLink}`,
+              onClick: () => p.onOpenSource(p.noteLink!),
+            },
+            '在浏览器打开发布请求',
+          ),
       droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
       filtering ? null : createElement('div', { className: 'mk-hint' }, CAPABILITY_HINT),
     ),
@@ -459,6 +514,11 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
         const [installing, setInstalling] = useState<string | null>(null);
         // 发布进行中（选 zip → 预校验 → 上传的全程；与装/更新互斥，同一时刻只做一件事）
         const [publishing, setPublishing] = useState(false);
+        // 发布终局的可点外链（PR 页面）：任何新动作开始时清掉——旧链接只属于旧的那件事
+        const [noteLink, setNoteLink] = useState<string | null>(null);
+        // 装/更新或发布的进度读数（0–100 的整数；null = 此刻没有可画的进度。
+        // 带字的进度句仍只写 note 一处，这根条只是同一事实的视觉面）
+        const [progress, setProgress] = useState<number | null>(null);
         // 后台校对的单调序号：只认最新一次发起的读数——装/卸快速连击时，前一次的校对
         // 可能比后一次晚落，没有这道闸旧事实会倒灌（卸掉的行被"复活"且无后续纠正）
         const readSeq = useRef(0);
@@ -537,7 +597,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           setBusy(false);
         }, []);
 
-        // 挂载即两段式刷新（`defaultActive:false` ⇒ 作者点开侧栏才发数据，不开不占资源）
+        // 挂载即两段式刷新（侧栏面板只在视图激活时挂载 ⇒ 作者点开才发数据，不开不占资源）
         useEffect(() => {
           void reload();
         }, [reload, props.refreshTick]);
@@ -552,14 +612,22 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           if (action === 'none' || installing !== null) return;
           const key = indexRowKey(row.entry);
           setInstalling(key);
+          setNoteLink(null);
           setNote(installBusyNote(action, row.entry.name));
           // 进度接进同一条状态行（Rust 侧已节流，这里不重复闸）。回调只在下载段发：
           // 解压/搬运阶段停在最后一条读数是**如实**的（那两段快，不发假进度）。
+          // 总数未知（chunked 等）⇒ 进度条不给（不画假百分比），那一句"已收多少"照旧
           const onProgress = (p: MarketDownloadProgress): void => {
             setNote(installProgressNote(action, row.entry.name, p));
+            setProgress(
+              p.totalBytes !== null && p.totalBytes > 0
+                ? Math.min(100, Math.floor((p.receivedBytes / p.totalBytes) * 100))
+                : null,
+            );
           };
           const out = await runInstall(deps, row.entry, action, onProgress);
           setInstalling(null);
+          setProgress(null);
           setNote(out.note);
           if (out.kind === 'done') {
             // 乐观只是显示先行：行立刻出现（MK-1 判据），权威数字由通知驱动的那一趟重取修正。
@@ -584,6 +652,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           const rec = snapshot.installed.find((r) => pendingKey(r) === key);
           if (rec === undefined) return;
           setInstalling(pendingKey(rec));
+          setNoteLink(null);
           try {
             setNote(`正在卸掉「${rec.name}」…`);
             const out = await runUninstall(deps, rec, pending === key);
@@ -611,6 +680,7 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
          */
         const doImport = async (rec: InstalledPack): Promise<void> => {
           if (installing !== null) return;
+          setNoteLink(null);
           const out = await runImport(deps, rec);
           setNote(out.note);
         };
@@ -619,18 +689,25 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
          * 「发布包…」（MK-PUB）：runPublish 全程接管选 zip → 预校验 → 上传，
          * 本层只负责互斥（与装/更新同一时刻只做一件事）与把进度接进状态行
          * （Rust 侧已节流，这里不重复闸）。取消不是失败，note 照实说「本机没动」。
+         * 选框打开前先给一句"要发生什么"（预校验是本地快段，第一帧进度之前不该是空白屏）；
+         * 成功终局把 PR 页面接成可点外链（`ui.openExternal`，闸在 Rust）。
          */
         const doPublish = async (): Promise<void> => {
           if (publishing || installing !== null) return;
           setPublishing(true);
+          setNoteLink(null);
+          setNote('发布开始：先在弹出的窗口里选择要发布的 zip，本地预校验通过后原样上传');
           try {
             const onProgress = (p: MarketPublishProgress): void => {
               setNote(publishProgressNote(p));
+              setProgress(p.totalBytes > 0 ? Math.min(100, Math.floor((p.sentBytes / p.totalBytes) * 100)) : null);
             };
             const out = await runPublish(deps, io, onProgress);
             setNote(out.note);
+            if (out.kind === 'done' && out.prUrl != null) setNoteLink(out.prUrl);
           } finally {
             setPublishing(false);
+            setProgress(null);
           }
         };
 
@@ -641,6 +718,8 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           query,
           busy,
           note,
+          noteLink,
+          progress,
           pending,
           open,
           installing,
@@ -666,9 +745,11 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
         title: '口上市场',
         icon: 'book',
         order: 85,
-        location: 'aux',
-        // 新功能默认不开：入口在侧栏，作者点开才拉数据（也不另设总闸）
-        defaultActive: false,
+        // 主侧栏独占视图（对标 VSCode 扩展视图：入口住活动栏，点开落在左栏）。
+        // 刻意**不写** `defaultActive:false`：那个字段还会把视图贬到活动栏底部低频组
+        // （`ShellLayout.isLowFreqView`，ProjectView 同一条先例注释）。
+        // "点开才拉数据"不靠它——侧栏面板只在视图被激活时才挂载（`reload` 挂在 effect 上）。
+        location: 'sidebar',
         component: MarketPanel,
       });
     },

@@ -486,7 +486,7 @@ function panelCtx(market: MarketService, io: FileIO, log: Logger): FakeCtx {
 /* --------------------------------- 判据 --------------------------------- */
 
 describe('ui-market 接线', () => {
-  it('插件声明：只 require 市场服务键（**面板不摸盘、也不碰远程**）；不 provides；面板默认不激活', async () => {
+  it('插件声明：只 require 市场服务键（**面板不摸盘、也不碰远程**）；不 provides；入口住主侧栏活动栏', async () => {
     const p = createUiMarketPlugin({ appVersion: APP_VERSION });
     expect(p.id).toBe('ui-market');
     // 收口 A：三态与"拉不拉得动远程"都由服务给 ⇒ kernel.io 这条依赖已被摘掉
@@ -501,7 +501,10 @@ describe('ui-market 接线', () => {
     const panels = f.slots.filter((s) => s.slot === 'ui.panel').map((s) => s.item as UIPanelContribution);
     expect(panels).toHaveLength(1);
     expect(panels[0]!.id).toBe('market');
-    expect(panels[0]!.defaultActive).toBe(false);
+    // 主侧栏独占视图（对标 VSCode 扩展视图：入口住活动栏，点开落在左栏）；
+    // 刻意**不写** defaultActive:false——那会把视图贬到活动栏底部低频组（ProjectView 同一条先例）
+    expect(panels[0]!.location).toBe('sidebar');
+    expect(panels[0]!.defaultActive).not.toBe(false);
     expect(panels[0]!.title).toBe('口上市场');
     expect(typeof panels[0]!.component).toBe('function');
   });
@@ -1406,6 +1409,36 @@ describe('面板结构分层（工具条 / 状态簇 / 自滚列表）', () => {
     expect(openedHtml).toContain('<div class="mk-row open">');
     expect(openedHtml).toContain('kind kojo-pack');
     expect(renderToStaticMarkup(createElement(MarketPanelView, viewProps([], installed1)))).not.toContain('kind');
+  });
+});
+
+/* ------------- 进度条与发布外链（仪表区的无文字进度 + 状态行可点外链） ------------- */
+
+describe('mk-progress 与 mk-note-link', () => {
+  it('progress 非空 ⇒ mk-progress 出现且 aria-valuenow / fill 宽度如实；null ⇒ 不占行', () => {
+    const withBar = renderView([], [], { progress: 42, note: '正在安装「示例 a.pack」…' });
+    expect(withBar).toMatch(/class="mk-progress"[^>]*aria-valuenow="42"/);
+    expect(withBar).toContain('<div class="mk-progress-fill" style="width:42%"></div>');
+    // 进度条本身无文字：带字的进度句仍只住 .mk-note 一处
+    expect(withBar).not.toMatch(/mk-progress-fill"><[^/]/);
+    expect(renderView([], [])).not.toContain('mk-progress');
+  });
+
+  it('noteLink 非空 ⇒ 状态行下多一枚可点外链（走 onOpenSource）；缺省 ⇒ 不占行', () => {
+    const url = 'https://github.com/example/registry/pull/7';
+    const got: string[] = [];
+    const tree = MarketPanelView(
+      viewProps([], [], {
+        note: `已提交发布请求，等待注册表收录：${url}`,
+        noteLink: url,
+        onOpenSource: (u) => got.push(u),
+      }),
+    );
+    const btn = buttonEl(tree, '在浏览器打开发布请求');
+    expect(btn).not.toBeNull();
+    (btn!.props.onClick as () => void)();
+    expect(got).toEqual([url]);
+    expect(renderView([], [], { note: '已装上「示例 a.pack」（版本 1.0.0）' })).not.toContain('mk-note-link');
   });
 });
 

@@ -159,6 +159,8 @@ describe('runPublish（MK-PUB 通道：选 zip → 服务编排）', () => {
     );
     expect(out.kind).toBe('done');
     expect(out.note).toContain('https://github.com/example/registry/pull/7');
+    // ok 裁决把 PR 页面随终局带回（面板接成可点外链的那条数据）
+    expect(out.kind === 'done' && out.prUrl).toBe('https://github.com/example/registry/pull/7');
     expect(seen).toEqual(['C:\\tmp\\包.zip']);
     expect(progress).toBe(2); // 进度帧透传到位
   });

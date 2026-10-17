@@ -313,7 +313,12 @@ export async function runImport(deps: MarketActionDeps, rec: InstalledPack): Pro
 
 export type PublishOutcome =
   | { readonly kind: 'cancel'; readonly note: string }
-  | { readonly kind: 'done'; readonly note: string }
+  | {
+      readonly kind: 'done';
+      readonly note: string;
+      /** ok 裁决的 PR 页面（面板接成可点外链）；rejected 裁决没有这个字段 */
+      readonly prUrl?: string;
+    }
   | { readonly kind: 'failed'; readonly note: string };
 
 /**
@@ -348,7 +353,12 @@ export async function runPublish(
   if (zipPath === null) return { kind: 'cancel', note: PUBLISH_CANCEL_NOTE };
   try {
     const outcome = await deps.market.publish(zipPath, { onProgress });
-    return { kind: 'done', note: publishOutcomeNote(outcome) };
+    return {
+      kind: 'done',
+      note: publishOutcomeNote(outcome),
+      // PR 页面随终局带回：面板把它接成"在浏览器打开"的外链（rejected 裁决没有 URL）
+      ...(outcome.ok ? { prUrl: outcome.prUrl } : {}),
+    };
   } catch (err: unknown) {
     const code = err instanceof MarketError ? err.code : 'unknown';
     const message = err instanceof Error ? err.message : String(err);

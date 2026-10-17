@@ -52,12 +52,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CDP_PORT = 9223;
 /** 默认注册表端点（与契约 `MARKET_DEFAULT_INDEX_URL` 同值；本工具按字面读线上资产，不引 TS 源码） */
 const INDEX_URL = 'https://poboking.github.io/kojo-market/index.json';
-/** 锚点读数（2026-10-15 复算；`packs` = 2 条 —— 不是 3，见 h 项的逐条目对平） */
-const ANCHOR_BYTES = 1586;
-const ANCHOR_SHA256 = 'ced50706262e26b4d203d7f280e5da3309f3faf887746411d5dc663476716bfa';
+/** 锚点读数（2026-10-17 复算——demo.era-tw 1.0.3 经发布链路真发过一版，注册表重生成；`packs` = 2 条） */
+const ANCHOR_BYTES = 1612;
+const ANCHOR_SHA256 = 'f1b72c014b3dd126b1e6a8b60f6dc77a29c0dac22352245c20e3da28a3f1bdb7';
 const ANCHOR_PACKS = [
   ['dict-pack', 'demo.dict', '1.0.0', 1, 77],
-  ['kojo-pack', 'demo.era-tw', '1.0.1', 1, 471],
+  ['kojo-pack', 'demo.era-tw', '1.0.3', 1, 471],
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -269,8 +269,8 @@ async function main() {
   let indexBackup = null; // Buffer | null（null = 本机原本没有这份）
   let indexSeen = false;
   /* 装包那一项会落 `packs/` 与记账 ⇒ 跑完必须回到跑前状态（重复跑同结果） */
-  const K_TARGET = { kind: 'kojo-pack', id: 'demo.era-tw', version: '1.0.1' };
-  const K_CONTAINER_SHA = 'bf0bfd9f321666ba60ee6f12a03cfd64f709658121c300f4b09454d40dc7aef2';
+  const K_TARGET = { kind: 'kojo-pack', id: 'demo.era-tw', version: '1.0.3' };
+  const K_CONTAINER_SHA = 'd88a4a2422cc47ff3df18068b0c93b209418ccd6c10a5867a27e905448232ae5';
   let kTargetDir = null;
   let kRecordsPath = null;
   let kRecordsBackup = null;
@@ -364,23 +364,18 @@ async function main() {
       }
     }
 
-    /* -------- g) 走**面板**：开副侧栏 → 点「口上市场」→ 点「拉取列表」（force 回源） -------- */
-    const auxState = await cdp.evalJs(`(() => {
-      const b = [...document.querySelectorAll('.toolbar button.toolbar-btn')].find((e) => (e.title ?? '').includes('切换副侧栏'));
-      if (!b) return 'no-button';
-      if (!b.classList.contains('on')) b.click();
-      return b.classList.contains('on') ? 'already-open' : 'opened';
-    })()`);
-    console.log(`[market-smoke] 副侧栏：${auxState}`);
-    await waitFor(cdp, `!!document.querySelector('.aux .panel-tabs')`, 30000);
-    const tabClicked = await cdp.evalJs(`(() => {
-      const t = [...document.querySelectorAll('.aux .panel-tabs .panel-tab')].find((e) => e.textContent.trim() === '口上市场');
-      if (!t) return 'no-market-tab';
-      t.click();
+    /* -------- g) 走**面板**：点活动栏「口上市场」（主侧栏独占视图）→ 点「拉取列表」（force 回源） --------
+       点击要幂等：布局持久化在 WebView2 localStorage ⇒ 上一次跑留下的"市场已激活"会被这次继承，
+       活动栏对已激活视图的点击语义是**收起侧栏**（ShellLayout 的 toggle）——已开着就不再点。 */
+    const abClicked = await cdp.evalJs(`(() => {
+      if (document.querySelector('.sidebar .panel-market')) return 'already-open';
+      const b = [...document.querySelectorAll('.activitybar .ab-item')].find((e) => (e.title ?? '').startsWith('口上市场'));
+      if (!b) return 'no-market-item';
+      b.click();
       return 'clicked';
     })()`);
-    if (tabClicked !== 'clicked') throw new Error(`market tab click failed: ${tabClicked}`);
-    await waitFor(cdp, `!!document.querySelector('.panel-market')`, 30000);
+    if (!['clicked', 'already-open'].includes(abClicked)) throw new Error(`market activity-bar click failed: ${abClicked}`);
+    await waitFor(cdp, `!!document.querySelector('.sidebar .panel-market')`, 30000);
 
     // 面板首帧 busy=true（拉取期文案是「拉取中…」且按钮禁用）⇒ 禁用态继续等，别把文案窗口当成"没有按钮"
     const pullClicked = await pollUntil(
@@ -400,6 +395,8 @@ async function main() {
     // 等屏上出现「已拉取注册表列表」（刷新成功的那句人话），顺带把面板状态读回来。
     // 对象返回值没法逐字列举 ⇒ 走 `pollWhere` 的显式谓词（就绪前返回 `null`，判定认"对象且带 note"，
     // 不是"非空即真"）。
+    // 行数只数**索引组**（section.mk-group）：「已装」组（.mk-list）的行数由本机安装态决定，
+    // 与注册表包数无关——数全面板会把机器状态读成判据（本机装着旧版时 3 行 vs 盘上 2 的假红）。
     const panelPoll = await pollWhere(
       cdp,
       `(() => {
@@ -407,7 +404,7 @@ async function main() {
         const time = document.querySelector('.panel-market .mk-time')?.innerText ?? '';
         const status = document.querySelector('.panel-market .mk-status')?.innerText ?? '';
         const dropped = document.querySelector('.panel-market .mk-warn')?.innerText ?? '';
-        const rows = document.querySelectorAll('.panel-market .mk-row').length;
+        const rows = document.querySelectorAll('.panel-market section.mk-group .mk-row').length;
         return /已拉取注册表列表/.test(note) ? { note, time, status, dropped, rows } : null;
       })()`,
       (v) => v !== null && typeof v === 'object' && typeof v.note === 'string',

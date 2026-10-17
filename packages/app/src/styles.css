@@ -7551,3 +7551,48 @@ button.resume-session {
   border-left: 2px solid var(--note-bar, var(--border));
   color: var(--note-fg, var(--fg-dim));
 }
+
+/* ============================================================================
+   口上市场 UI 精修批（MK-UI 2026-10-17 · 追加区块：**只追加、不重排、不改语义**）
+   ----------------------------------------------------------------------------
+   承接上批「面板效果推广」的市场面（A 节），把 mk 仪表区补成完整的一块：
+   ① 搜索框落井面（本仓约定"输入比容器暗"：--surface-sunken + --well-edge）；
+   ② 徽章语义色档：可更新 = amber（有事可做）、已装 = green（无事）——带字那句
+      仍由 updatePhrase 单源给出，这里只决定同一句读起来是喜是警；
+   ③ .mk-progress：无文字 hairline 进度条（带字的进度句仍只住 .mk-note 一处），
+      轨道用井面、填充用 --accent；总数未知时根本不渲染（不画假进度）。
+   纪律同上批：只用既有 token；同名选择器靠"块在文件最末 ⇒ 后来者胜"叠加，
+   不覆盖各面板区块的原有语义属性；动效降级交给 :root[data-motion='reduced'] 全局压平。
+   ============================================================================ */
+
+/* ---------- 搜索框落井面 ---------- */
+.mk-search {
+  background: var(--surface-sunken);
+  box-shadow: var(--well-edge);
+}
+
+/* ---------- 徽章语义色档（文案不动，只换读感） ---------- */
+.mk-badge-warn {
+  background: color-mix(in srgb, var(--amber) 14%, var(--bg-2));
+  color: var(--amber);
+}
+.mk-badge-ok {
+  background: color-mix(in srgb, var(--green) 13%, var(--bg-2));
+  color: var(--green);
+}
+
+/* ---------- hairline 进度条：轨道 3px（仪表读数的排版必需值），圆角随胶囊 ---------- */
+.mk-progress {
+  position: relative;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  box-shadow: var(--well-edge);
+  overflow: hidden;
+}
+.mk-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transition: width var(--dur-2) var(--ease-out);
+}
