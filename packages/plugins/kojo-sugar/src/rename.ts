@@ -128,8 +128,15 @@ function hasError(result: SugarTranspileResult): boolean {
 function withReplaced(source: string, occurrences: readonly KojoNameOccurrence[], picks: readonly number[], sentinel: string): string {
   const lines = splitModelLines(source);
   const pick = new Set(picks);
-  for (const [i, occ] of occurrences.entries()) {
-    if (!pick.has(i)) continue;
+  // 同行多个出现点必须**从右往左**应用：第 1 处替换会移动行内后续坐标，
+  // 按扫描序（升序）逐个按原始列切片已改写的行，在「替换名长度 ≠ 原名长度」时
+  // 会把同行第 2 处及以后按错位坐标切开——整卷复核因此假拒绝（或越界改写）。
+  // 倒序（行降序 → 列降序）让先应用的替换永远不影响后应用的（更靠左的）坐标。
+  const ordered = occurrences
+    .map((occ, i) => ({ occ, i }))
+    .filter(({ i }) => pick.has(i))
+    .sort((a, b) => b.occ.line - a.occ.line || b.occ.column - a.occ.column);
+  for (const { occ } of ordered) {
     const text = lines[occ.line - 1]!;
     lines[occ.line - 1] = text.slice(0, occ.column - 1) + sentinel + text.slice(occ.endColumn - 1);
   }

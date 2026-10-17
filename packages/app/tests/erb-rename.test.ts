@@ -303,6 +303,34 @@ describe('installErbRename', () => {
     expect(result && 'rejectReason' in result ? result.rejectReason : '').toContain('1 个文件只读未纳入');
   });
 
+  it('ERB 词法 mention 调用形（名字后紧邻 "("）照改——`SIF FOO() == 0` 是真调用，与替换通道字节对拍不破', async () => {
+    const A2 = openModelOf(A, '@M_KOJO_A(1)', 'SIF M_KOJO_A() == 0');
+    const refs = [
+      { filePath: A, line: 1, column: 2, endColumn: 10, kind: 'definition' } as ErbReference,
+      { filePath: A, line: 2, column: 5, endColumn: 13, kind: 'mention' } as ErbReference,
+    ];
+    const wired = handlersOfReal({ refs, writable: new Set([A]), openModels: new Map([[A, A2]]) });
+    const { provider } = installWith(wired);
+    const result = await provider.provideRenameEdits(modelOf('@M_KOJO_A'), AT(1, 3), 'M_KOJO_B', null as never);
+    if (!result || !('edits' in result) || !result.edits) return expect.unreachable();
+    expect(result.edits).toHaveLength(2); // 定义 + 条件位真调用都在
+  });
+
+  it('ERB 词法 mention 非调用形（未加引号输出行里的同名词）⇒ 跳过不落盘（「改名不重写散文」）', async () => {
+    const A2 = openModelOf(A, '@M_KOJO_A(1)', 'PRINTFORML M_KOJO_A。');
+    const refs = [
+      { filePath: A, line: 1, column: 2, endColumn: 10, kind: 'definition' } as ErbReference,
+      { filePath: A, line: 2, column: 12, endColumn: 20, kind: 'mention' } as ErbReference,
+    ];
+    const wired = handlersOfReal({ refs, writable: new Set([A]), openModels: new Map([[A, A2]]) });
+    const { provider } = installWith(wired);
+    const result = await provider.provideRenameEdits(modelOf('@M_KOJO_A'), AT(1, 3), 'M_KOJO_B', null as never);
+    if (!result || !('edits' in result) || !result.edits) return expect.unreachable();
+    expect(result.edits).toHaveLength(1); // 只有定义点；台词位的 mention 被判据跳过
+    const first = result.edits[0] as { textEdit: { range: { startLineNumber: number } } };
+    expect(first.textEdit.range.startLineNumber).toBe(1);
+  });
+
   it('全可写：已打开文件进 WorkspaceEdit（resource = live model 的 uri）、未打开走 io 通道', async () => {
     const wired = handlersOfReal({
       refs: A_REFS,

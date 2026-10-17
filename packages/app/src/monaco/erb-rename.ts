@@ -1,10 +1,11 @@
 import type * as Monaco from './entry';
-import type { EditorSymbolLocation, ErbIndex, ErbReference } from '@kojo/plugin-api';
+import type { EditorSymbolLocation, ErbIndex, ErbReference, ErbReferenceKind } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
 import {
   erbOccurrences,
   findNameTokenPositions,
+  isCallShapedMention,
   isKojoSourcePath,
   languageOfPath,
   mergeOccurrences,
@@ -13,6 +14,7 @@ import {
   readOnlyFilesReason,
   rewriteClosedFile,
   type ClosedFileIo,
+  type ReferenceLanguage,
   type ReferenceOccurrence,
 } from '../ui/reference-utils';
 
@@ -154,6 +156,10 @@ export interface RenameSpan {
   readonly line: number;
   readonly column: number;
   readonly endColumn: number;
+  /** 出现点分类（可选；散文跳过判据只认 **ERB 词法 mention**——`.kojo` 腿的 mention 是探针证明的真引用） */
+  readonly kind?: ErbReferenceKind;
+  /** 语言轴（可选；散文跳过判据只拦 erb 侧——kojo 侧的 mention 全数可写） */
+  readonly language?: ReferenceLanguage;
 }
 
 /** 一个文件的引用点组（顺序保持 `referencesTo` 的构建序 → 行 → 列） */
@@ -213,6 +219,8 @@ export interface AppliedReferenceEdits {
   readonly applied: number;
   /** 文本验证不过（名字已改写 / 行漂移 / 行越界）而跳过的引用点数 */
   readonly stale: number;
+  /** **ERB 词法** mention 且现文本非调用形（名字后无 `(`）而跳过的处数——「改名不重写散文」 */
+  readonly skippedProse: number;
 }
 
 /**
@@ -234,6 +242,7 @@ export function applyReferenceEdits(
   // 绝对偏移降序替换：前面的偏移才不会因替换而位移
   const ops: Array<{ at: number; end: number }> = [];
   let stale = 0;
+  let skippedProse = 0;
   for (const ref of refs) {
     if (ref.line < 1 || ref.line > lineCount) {
       stale++;
@@ -249,6 +258,14 @@ export function applyReferenceEdits(
       stale++;
       continue;
     }
+    // ERB 词法 mention 的落盘判据（isCallShapedMention 单源，**只拦 erb 侧**）：条件表达式位的
+    // 真调用（`SIF FOO() == 0`——CALL 直系族表只认 CALL 系，条件位在索引里退化为 mention）
+    // 照改；未加引号输出行里的同名词（`PRINTFORML キスする。`）是台词散文 ⇒ 跳过。
+    // `.kojo` 腿的 mention 是探针证明的真引用（语义不同源），不受此闸影响。
+    if (ref.kind === 'mention' && ref.language === 'erb' && text[end] !== '(') {
+      skippedProse++;
+      continue;
+    }
     ops.push({ at, end });
   }
   ops.sort((a, b) => b.at - a.at);
@@ -256,7 +273,7 @@ export function applyReferenceEdits(
   for (const op of ops) {
     next = next.slice(0, op.at) + newName + next.slice(op.end);
   }
-  return { text: next, applied: ops.length, stale };
+  return { text: next, applied: ops.length, stale, skippedProse };
 }
 
 /* ============================== Monaco 协议翻译 ============================== */
@@ -287,7 +304,7 @@ export interface ErbRenameHandlers {
     spans: readonly RenameSpan[],
     newName: string,
     normalizedName: string,
-  ): Promise<{ applied: number; stale: number }>;
+  ): Promise<{ applied: number; stale: number; skippedProse?: number }>;
   /**
    * **跨语言腿 ①**：归一化名可能出现在哪些 `.kojo` 源里（宿主枚举 + 读文，
    * 内核 io 的读权限由宿主兜）。缺席 = 只能看到**已打开标签**里的 `.kojo` 源
@@ -525,17 +542,20 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
     const writeFailures: string[] = [];
     /** 已经落到盘上的闭文件数（>0 ⇒ 绝不能再返回 rejectReason，见下方取证） */
     let landedFiles = 0;
+    /** 非调用形 mention（散文）跳过计数——两通道各自计数，汇总出声一次 */
+    let proseSkipped = 0;
     for (const group of plan.writable) {
       const open = handlers.openModelFor(group.path);
       if (!open) {
         try {
-          const { applied, stale } = await handlers.applyToClosedFile(
+          const { applied, stale, skippedProse } = await handlers.applyToClosedFile(
             group.path,
             group.occurrences,
             newName,
             target.normalizedName,
           );
           if (applied > 0) landedFiles++;
+          proseSkipped += skippedProse ?? 0;
           if (stale > 0) {
             console.warn(`[erb-rename] '${group.path}' 有 ${stale} 处引用因索引陈旧跳过（实改 ${applied} 处）`);
           }
@@ -548,6 +568,16 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
       // 已打开：按 live model 的现文本逐处验证（索引与现场无锁，陈旧坐标绝不硬写）
       for (const ref of group.occurrences) {
         if (!liveRefMatches(open, ref, target.normalizedName)) continue;
+        // ERB 词法 mention 的落盘判据（isCallShapedMention 单源，**只拦 erb 侧**）：调用形照改，
+        // 散文形跳过——与闭文件通道同一条判据；kojo 腿的 mention 是探针证明的真引用，不拦
+        if (
+          ref.kind === 'mention' &&
+          ref.language === 'erb' &&
+          !isCallShapedMention(open.getLineContent(ref.line) ?? '', ref.endColumn)
+        ) {
+          proseSkipped++;
+          continue;
+        }
         edits.push({
           // resource 必须取自**解析到的那份 live model**（先例：`find-references.ts` 用
           // `live.uri`、`kojo-rename.ts` 用 `model.uri`）。`Uri.file(group.path)` 用的是索引
@@ -585,6 +615,11 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
       console.warn(
         `[erb-rename] 已有 ${landedFiles} 个闭文件落盘，剩余 ${writeFailures.length} 个写入失败（不再整批取消，避免半成品分叉）：` +
           writeFailures.join('；'),
+      );
+    }
+    if (proseSkipped > 0) {
+      console.warn(
+        `[erb-rename] '${target.normalizedName}'：${proseSkipped} 处 ERB 词法 mention 非调用形（名字后无 "("），按「改名不重写散文」跳过`,
       );
     }
     return { edits };

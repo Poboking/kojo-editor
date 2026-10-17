@@ -17,6 +17,7 @@ import {
   explainReferenceCounts,
   findNameTokenPositions,
   isKojoSourcePath,
+  isCallShapedMention,
   isMoreSpecificKind,
   languageOfPath,
   mergeOccurrences,
@@ -250,5 +251,20 @@ describe('findNameTokenPositions', () => {
 
   it('空名字 ⇒ 空集（空串匹配每一处 = 灾难）', () => {
     expect(findNameTokenPositions('CALL FOO', '')).toEqual([]);
+  });
+});
+
+/* ============================== ERB mention 落盘判据 ============================== */
+
+describe('isCallShapedMention（ERB 词法 mention 的落盘判据，单源）', () => {
+  it('名字后紧邻 `(` 的 mention 是条件表达式位的真调用（`SIF FOO() == 0`）⇒ 随改名落盘', () => {
+    expect(isCallShapedMention('SIF FOO() == 0', 8)).toBe(true);
+    expect(isCallShapedMention('如果 FOO() && FOO() < 9', 7)).toBe(true);
+  });
+
+  it('非调用形 ⇒ 不落盘（未加引号输出行的台词散文 / 行尾无后继）；全角括号是散文不是调用', () => {
+    expect(isCallShapedMention('PRINTFORML FOO。说明', 12)).toBe(false);
+    expect(isCallShapedMention('CALL FOO', 9)).toBe(false);
+    expect(isCallShapedMention('「FOO（你）」', 4)).toBe(false);
   });
 });

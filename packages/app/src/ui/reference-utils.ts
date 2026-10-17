@@ -255,6 +255,23 @@ export interface ReferenceWritePlan {
 }
 
 /**
+ * ERB 词法 mention 的落盘判据（**单源**）：名字后紧邻 `(` 的 mention 才随改名落盘。
+ *
+ * 背景：反向索引对非 CALL 行做的是**词法级整串命中**，而 CALL 直系族表只认 CALL 系
+ * 名字槽——`SIF FOO() == 0` 条件表达式位的真调用在索引里退化为 mention，`PRINTFORML
+ * キスする。` 台词里的同名词也是 mention，词法分不开这两者。**现场文本**分得开：
+ * 调用形 = 名字后紧邻 `(`（纯字形判据，零数据流）。判窄不判宽：判不出调用形就不写
+ * （「改名不重写散文」既有自证同向）；散文里形如 `名(` 的罕见形态仍会被写（与
+ * 旧行为一致，不劣化）。全角 `（` 刻意不算——台词里的全角括号是散文，不是调用。
+ *
+ * @param lineText 现场行文本（live model 的行或闭文件读回的行——**现文本**，非索引快照）
+ * @param endColumn 名字的 1 基排他端列（其 0 基下标 endColumn-1 即名字后的第一个字符）
+ */
+export function isCallShapedMention(lineText: string, endColumn: number): boolean {
+  return lineText[endColumn - 1] === '(';
+}
+
+/**
  * 出现点全集 → 按文件分组 + 写权限筛选（**纯函数**；`isWritable` = 内核 io 口径，
  * 与保存按钮同源）。只读文件整文件剔除并登记；只要有一份只读，调用方必须整次取消
  * （monaco 0.57 standalone 见 `rejectReason` 会丢弃全部编辑，没有"部分应用 + 提示"通道）。
@@ -328,6 +345,8 @@ export interface RewriteResult {
   readonly applied: number;
   /** 现文本与坐标不符（作者已改写 / 行漂移）而跳过的处数——绝不按陈旧坐标硬写 */
   readonly stale?: number;
+  /** kind=mention 且非调用形（散文）而跳过的处数——「改名不重写散文」的可见计数 */
+  readonly skippedProse?: number;
 }
 
 /**
@@ -343,14 +362,17 @@ export async function rewriteClosedFile(
   io: ClosedFileIo,
   path: string,
   rewrite: (text: string) => RewriteResult | Promise<RewriteResult>,
-): Promise<{ applied: number; stale: number }> {
+): Promise<{ applied: number; stale: number; skippedProse?: number }> {
   if (!io.isWritable(path)) {
     throw new Error(`文件只读（写权限未批准）：${path}`);
   }
   const { text } = await io.readText(path);
   const result = await rewrite(text);
   if (result.applied > 0 && result.text !== text) await io.writeText(path, result.text);
-  return { applied: result.applied, stale: result.stale ?? 0 };
+  // 仅非零才携带字段：没产 skippedProse / 为 0 的调用方拿到的形状与旧版逐字同形
+  return result.skippedProse
+    ? { applied: result.applied, stale: result.stale ?? 0, skippedProse: result.skippedProse }
+    : { applied: result.applied, stale: result.stale ?? 0 };
 }
 
 /* ============================== 记号位置（单源字符集） ============================== */

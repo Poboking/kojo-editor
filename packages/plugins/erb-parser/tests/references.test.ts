@@ -61,6 +61,14 @@ describe('scanFileRefs · 引用面口径', () => {
     expect(scanFileRefs(text, dict(['ALPHA', 'FOO']))).toEqual([['FOO', 2, 20, 2]]);
   });
 
+  it('未加引号的 PRINT 输出行文本仍进 mention（词法盲区如实上报；改名侧由 isRenamableOccurrence 拦截不落盘）', () => {
+    const refs = scanFileRefs('PRINTFORML ALPHA。说明文字\nCALL ALPHA\n', dict(['ALPHA']));
+    expect(refs).toEqual([
+      ['ALPHA', 1, 12, 2], // 台词里的同名词：无引号可刷白，词法级 mention
+      ['ALPHA', 2, 6, 1], // 真调用
+    ]);
+  });
+
   it('未闭合引号：到行尾一律刷白（引擎本就编译不过，安全方向）', () => {
     expect(scanFileRefs('PRINT "ALPHA rest\n', dict(['ALPHA']))).toEqual([]);
   });

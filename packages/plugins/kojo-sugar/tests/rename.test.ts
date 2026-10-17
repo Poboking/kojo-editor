@@ -57,6 +57,34 @@ describe('planKojoRename · 命中面', () => {
     expect(plan.productName).toBe('K101_问候');
     expect(plan.oldName).toBe('问候');
   });
+  it('同行两个引用 + 不等长新名：整卷复核不再列错位假拒绝（withReplaced 倒序应用）', () => {
+    const src = [
+      '角色: 101',
+      '函数前缀: K101_',
+      '',
+      '函数 问候()：',
+      '    返回 1',
+      '',
+      '函数 记录()：',
+      '    如果 问候() > 0 && 问候() < 9：',
+      '        「台词」',
+      '',
+    ].join('\n');
+    const plan = planKojoRename({ source: src, path: 't.kojo', line: 4, column: 4, newName: '问', transpile });
+    expect(plan.kind).toBe('hit');
+    if (plan.kind !== 'hit') return expect.unreachable();
+    const sameLine = plan.edits.filter((e) => e.line === 8);
+    expect(sameLine.length).toBe(2);
+    expect(sameLine.map((e) => e.column)).toEqual([8, 20]);
+    // 宿主落地同款手工应用（降序）：改完的源必须逐字符正确
+    const lines = src.split('\n');
+    for (const e of [...plan.edits].sort((a, b) => b.line - a.line || b.column - a.column)) {
+      const text = lines[e.line - 1]!;
+      lines[e.line - 1] = text.slice(0, e.column - 1) + '问' + text.slice(e.endColumn - 1);
+    }
+    expect(lines[7]).toBe('    如果 问() > 0 && 问() < 9：');
+  });
+
   it('验收判据：应用全部编辑后转译，产物 diff 只在含产物名的行（@ 头 + CALL / IF / 插值）', () => {
     if (plan.kind !== 'hit') return expect.unreachable();
     const lines = FIXTURE.split('\n');
