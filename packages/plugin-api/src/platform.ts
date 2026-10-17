@@ -18,6 +18,52 @@ export type FileEncoding =
   | 'utf-16le'
   | 'utf-16be';
 
+/**
+ * `FileEncoding` → WHATWG Encoding Standard 解码标签（**单源**，W12 ENC-SRC）。
+ * 两具平台桥（Tauri / Node）都 import 这一张表——旧局是两份手抄，PITFALLS 73 同族教训：
+ * 同形守卫只要有一边手抄就必然漂。`utf-8-bom` 走 `utf-8`：TextDecoder 默认剥前导 BOM。
+ */
+export const DECODE_LABEL: Record<FileEncoding, string> = {
+  'utf-8': 'utf-8',
+  'utf-8-bom': 'utf-8',
+  shift_jis: 'shift_jis',
+  'utf-16le': 'utf-16le',
+  'utf-16be': 'utf-16be',
+};
+
+/** 判序表的一条：字节前缀命中 ⇒ 该编码（解码标签由 `DECODE_LABEL` 派生） */
+export interface DecodeBomRule {
+  readonly bom: readonly number[];
+  readonly encoding: FileEncoding;
+}
+
+/**
+ * 解码判据**唯一形状**（version 1）：BOM 判序（`bomRules` 逐条）→ UTF-8 严格校验
+ * （fatal；成功即正文）→ `fallbackEncoding` 不严格解码（非法字节替换为 U+FFFD，不抛）。
+ *
+ * 这是一份**跨语言可校验的共享常量表**：表体 = 同目录 `decode-probe-policy.json`——
+ * Rust 宿主 `include_str!` 编译期内嵌并驱动其策略解释器（检索侧），TS 内核用下面的
+ * `DECODE_PROBE_POLICY` 常量；两者逐字对拍由 `packages/kernel/tests/encoding-decode-policy.test.ts`
+ * 钉死（表体漂一个字节即红）。此前 TS 内核 / Rust 检索 / Rust `decode_bytes` 三处各写各的
+ * if 链，同一字节流的命中文本与编辑器文本可以不一致（U+FFFD vs fatal 拒绝）——已合一。
+ */
+export interface DecodeProbePolicy {
+  readonly version: 1;
+  readonly bomRules: readonly DecodeBomRule[];
+  readonly fallbackEncoding: FileEncoding;
+}
+
+/** TS 侧的策略常量（解释者 = `packages/kernel/src/encoding.ts` 的 `decodeWithProbe` / `probeEncoding`） */
+export const DECODE_PROBE_POLICY: DecodeProbePolicy = {
+  version: 1,
+  bomRules: [
+    { bom: [0xef, 0xbb, 0xbf], encoding: 'utf-8-bom' },
+    { bom: [0xff, 0xfe], encoding: 'utf-16le' },
+    { bom: [0xfe, 0xff], encoding: 'utf-16be' },
+  ],
+  fallbackEncoding: 'shift_jis',
+};
+
 export interface DirEntry {
   name: string;
   /** 绝对路径 */
@@ -231,7 +277,9 @@ export type WatchReportCallback = (report: WatchReport) => void;
  * 设计约束：
  * - 内核与插件只依赖此接口，不 import 任何平台的 fs / path / 进程 API；
  * - `writeFileBytes` 必须实现为原子写（临时文件 + rename），调用方无需自行保证；
- * - 编解码由平台提供：Node 用 WHATWG TextDecoder/iconv-lite，Tauri 用 Rust encoding_rs。
+ * - 解码 = 两桥同形（W12 ENC-SRC）：一律 `new TextDecoder(DECODE_LABEL[encoding])`，
+ *   标签表只在本文件这一份；编码侧 Node 用 iconv-lite/TextEncoder、Tauri 用 Rust encoding_rs
+ *   （写向的转码器，不引入第二条**读判据**）。
  */
 export interface PlatformBridge {
   readFileBytes(path: string): Promise<Uint8Array>;
@@ -335,7 +383,11 @@ export interface PlatformBridge {
    * 限额三个数一律由调用方从契约常量传入；失败由平台侧清掉已解出的全部内容。
    */
   marketExtract(containerName: string, targetName: string, limits: RemoteExtractLimits): Promise<RemoteExtractResult>;
-  /** 字节 → 字符串 */
+  /**
+   * 字节 → 字符串（按标签解码，不探测）。两桥实现逐字同形：
+   * `new TextDecoder(DECODE_LABEL[encoding]).decode(bytes)`——探测判序在上层
+   * `decodeWithProbe`（内核单源），桥不得自带第二套探测。
+   */
   decode(bytes: Uint8Array, encoding: FileEncoding): Promise<string>;
   /** 字符串 → 字节 */
   encode(text: string, encoding: FileEncoding): Promise<Uint8Array>;

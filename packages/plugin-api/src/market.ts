@@ -261,8 +261,77 @@ export interface InstalledPack {
 
 /* ------------------------------- 服务键 ------------------------------- */
 
+/**
+ * 已装清单的一次变更通知（MK-1 即时失效的**唯一触发点**）。
+ *
+ * 为什么是"服务直接广播"而不是"调用方自己重读"：装/卸的**成功**在服务侧落定
+ * （记账写完的那一刻），而调用方只知道"我点了按钮"。让消费者各自猜"什么时候该重读"
+ * = 每个消费者一份时序假设，其中猜错的那个就是看板上那条"已经不存在却还挂着的行"。
+ * 同理，它也不做成总线事件名：字符串字面量要住在契约里而契约只出一条 `MARKET_SERVICE_KEY`，
+ * 订阅面做成服务成员 = 类型自己把关，插件之间不共享任何字面量。
+ *
+ * `change` 只说"清单多了一条 / 少了一条"，**不承诺内容**（消费者重读拿权威数字，
+ * 不在通知里二次搬运整条记录 = 第二份真相）。
+ */
+export interface MarketInstalledChange {
+  readonly change: 'installed' | 'uninstalled';
+  readonly kind: PackKind;
+  readonly id: string;
+  readonly version: string;
+}
+
+/** `onInstalledChanged` 的退订句柄（与全仓其它订阅面同形：调用即退订，幂等） */
+export type MarketUnsubscribe = () => void;
+
 /** `MarketService` 的服务键（装配形态照 `WellKnownServices`：插件 provide、消费方 inject） */
 export const MARKET_SERVICE_KEY = 'market';
+
+/* ------------------- 更新链路的共同语法（MK-1 语义并一） ------------------- */
+
+/**
+ * 一条"检查 → 下载 → 落地"式更新链路的失败段。
+ *
+ * 只有两段会失败：**check**（版本事实本身没拿到）与 **install**（事实拿到了、东西没落地）。
+ * 应用自更新（`packages/app/src/ui/update-check.ts`）与包更新（本契约 + `ui-market`）
+ * **共用这一档词汇**：宿主侧的失败阶段类型直接从 `MarketIndexRefresh` 的 `failed` 分支取，
+ * 不再另立第二套"检查失败 / 装失败"的说法。
+ */
+export type UpdateStage = 'check' | 'install';
+
+/**
+ * 失败态的三条信息 + 那一句人话。
+ *
+ * `note` 由 `makeUpdateFailure` **在这一份对象里就生成好**：作者面的失败话术若留给
+ * 每个消费方自己拼，就会拼出两套（看板原话："两套失败态并存于同一设置页"）。
+ * 消费方只许显示 `note`，不再从 `reason` 复述第二遍。
+ */
+export interface UpdateFailure {
+  readonly stage: UpdateStage;
+  readonly reason: string;
+  readonly detail?: string;
+  readonly note: string;
+}
+
+/**
+ * 造一条失败态（**全仓唯一的失败话术生成点**）。
+ *
+ * 口径三段：哪一段没成 + 为什么 + **可重试**的承诺。
+ * "可重试"必须写出来：过去应用侧一句"检查失败（网络或尚未发布版本）"、市场侧一句
+ * "拉取注册表没有成功"，都不告诉作者下一步能不能再点一次——同一个设置页两句话术。
+ *
+ * @param subject 这条链路在作者眼里的名字（「这个包的更新」/「注册表列表」/「编辑器更新」）
+ */
+export function makeUpdateFailure(
+  stage: UpdateStage,
+  subject: string,
+  reason: string,
+  detail?: string,
+): UpdateFailure {
+  const verb = stage === 'check' ? '检查' : '下载安装';
+  const trimmed = reason.trim();
+  const note = `${subject}没有${verb}成功，可重试${trimmed === '' ? '' : `：${trimmed}`}`;
+  return { stage, reason: trimmed, ...(detail === undefined ? {} : { detail }), note };
+}
 
 /**
  * 本机索引的**三态判别联**（取代旧的 `MarketIndex | null`）。
@@ -287,7 +356,13 @@ export type MarketIndexState =
       readonly fetchedAt: number | null;
     };
 
-/** 一次"从注册表刷新索引"的结果（失败也是一等态，不许"加载中"常驻） */
+/**
+ * 一次"从注册表刷新索引"的结果（失败也是一等态，不许"加载中"常驻）。
+ *
+ * `failed` 分支带 `stage`（MK-1 语义并一）：失败态的语法只有一套——**哪一段没成 + 为什么 +
+ * 可重试**，应用自更新那条链路（`app/src/ui/update-check.ts`）的失败阶段类型**就从这里取**
+ * （`Extract<MarketIndexRefresh, { state: 'failed' }>['stage']`），不在宿主侧另立一份词汇。
+ */
 export type MarketIndexRefresh =
   | {
       readonly state: 'refreshed';
@@ -296,7 +371,13 @@ export type MarketIndexRefresh =
     }
   /** TTL 窗口内 ⇒ 没回源（不是失败，也不该装作拉过） */
   | { readonly state: 'cached'; readonly index: MarketIndexState; readonly fetchedAt: number }
-  | { readonly state: 'failed'; readonly reason: string; readonly detail?: string; readonly index: MarketIndexState };
+  | {
+      readonly state: 'failed';
+      readonly stage: UpdateStage;
+      readonly reason: string;
+      readonly detail?: string;
+      readonly index: MarketIndexState;
+    };
 
 /**
  * 市场装卸服务（由 `kojo-market` 插件 provide）。
@@ -384,6 +465,20 @@ export interface MarketService {
   ): Promise<InstalledPack>;
   uninstall(kind: PackKind, id: string, version: string): Promise<void>;
   isInstalled(kind: PackKind, id: string, version: string): Promise<boolean>;
+  /**
+   * 订阅**已装清单**的变更（MK-1 即时重取）。
+   *
+   * 发出时机（钉死，两侧都不许改口径）：**记账写完、`install*` / `uninstall` 的 Promise
+   * 落回调用方之前**，同步发出一次；失败的那一次一个字节都没落地 ⇒ **不发**（通知缺席
+   * 就等于"盘上没变"，消费者不必再去猜这次算不算数）。
+   *
+   * 消费者拿到通知只做一件事：**作废自己那份已装显示、重取一次**（通知只带三元组，
+   * 不带整条记录——记录的真源是 `installed()`）。重取必须是**单飞**的：
+   * 连点两次装/卸只排两趟、且绝不并发跑两趟全量重读（判据见 `ui-market` 的失效测试）。
+   *
+   * 返回退订句柄；面板卸载时**必须**退订（不退订 = 关掉的面板还在替它重取）。
+   */
+  onInstalledChanged(listener: (change: MarketInstalledChange) => void): MarketUnsubscribe;
   /** `<appData>/market/packs/<kind>/<id>/<version>`（**唯一**的落点真源，记账里不存路径） */
   installDir(kind: PackKind, id: string, version: string): Promise<string>;
   /** `installDir(...)` + `files` */
@@ -608,15 +703,32 @@ export function minAppVersionSatisfied(currentAppVersion: string, minAppVersion:
   return c !== null && c >= 0;
 }
 
-/* ------------------------- 更新检测（KM-10） ------------------------- */
+/* ------------------------- 更新检测（KM-10 · MK-1 语义并一） ------------------------- */
 
-/** 三态：注册表那条比本机那份新 / 就是同一版 / 本机反而更高（`null` = 本机没装过这个包） */
-export type PackUpdateState = 'updatable' | 'latest' | 'ahead';
+/**
+ * "谁新谁旧"的三态。应用自更新与包更新**共用这一份词汇**
+ * （宿主侧 `app/src/ui/update-check.ts` 的关系态就是这个联合的别名，不自造第二套）。
+ */
+export type UpdateRelation = 'updatable' | 'latest' | 'ahead';
+
+/**
+ * 更新检测的结果态 = 三态 + 一个显式 `failed`。
+ *
+ * `failed` 不是装饰：过去"版本号读不出"和"本机没装过"都被塞进同一个 `null` 里，
+ * 面板于是把"读不出"演成"没装过"，给作者一个「安装」按钮去盖一份他看不见的东西
+ * （铁律 4：校验判据抛错必须成为可见的一态）。
+ */
+export type PackUpdateState = UpdateRelation | 'failed';
 
 export interface PackUpdateCheck {
   readonly state: PackUpdateState;
   /** 本机同 `(kind,id)` 里**版本最高**的那条（三态一律拿它比，不与低版本比） */
   readonly local: InstalledPack;
+  /**
+   * `state === 'failed'` 时的那句原因（哪一段、为什么）；其余态 `null`。
+   * 形状与 `MarketIndexRefresh` 的 `failed`、宿主自更新的 `failed` 同一条语法。
+   */
+  readonly failure: UpdateFailure | null;
   /**
    * 同版本时"是不是同一份东西"：本机那份有容器摘要 ⇒ 与索引的 `zip.sha256` 逐字比。
    *
@@ -629,10 +741,27 @@ export interface PackUpdateCheck {
 }
 
 /**
+ * **全仓唯一的"该不该更新"判定**（纯函数、零 IO）：把两个版本号折成同一把尺再比。
+ *
+ * 尺只有 `compareVersions` 一条（守卫测试钉它的定义点）；两侧先过 `coreVersion`
+ * （应用版本带预发布后缀 ⇒ `0.4.0-beta.1` 按 `0.4.0` 算，与 `minAppVersionSatisfied`
+ * 同一条口径，不给应用另立一把"beta 比 0.4.0 新"的尺）。
+ *
+ * @returns 三态；任一边的版本形读不出 ⇒ `null` ⇒ **调用方必须落 `failed`**，
+ *   不许把"比不了"演成"已最新"或"没装过"
+ */
+export function updateRelationOf(remoteVersion: string, localVersion: string): UpdateRelation | null {
+  const c = compareVersions(coreVersion(localVersion), coreVersion(remoteVersion));
+  if (c === null) return null;
+  return c < 0 ? 'updatable' : c > 0 ? 'ahead' : 'latest';
+}
+
+/**
  * 索引条目 vs 已装集的更新检测（纯函数、零 IO、**不改任何东西**）。
  *
  * 版本事实只从索引条目读（契约 A5：GitHub 的 `latest` 徽章实测去不掉，不可作为依据）；
- * 比较只用 `compareVersions`（全仓唯一定义，见 `single-source.test.ts` 的守卫）。
+ * 比较只用 `updateRelationOf`（底下就是全仓唯一的 `compareVersions`，
+ * 见 `single-source.test.ts` 的守卫），宿主自更新那条链路也走同一把尺、同一套态名。
  * 本机一条都没有 ⇒ `null`（"没装过"不是一个态，是另一个动作：面板给「安装」而不是「更新」）。
  */
 export function packUpdateCheck(
@@ -650,14 +779,27 @@ export function packUpdateCheck(
     if (c !== null && c > 0) best = r;
   }
   if (best === null) return null;
-  const cmp = compareVersions(entry.version, best.version);
-  if (cmp === null) return null;
-  const state: PackUpdateState = cmp > 0 ? 'updatable' : cmp < 0 ? 'ahead' : 'latest';
+  const relation = updateRelationOf(entry.version, best.version);
+  if (relation === null) {
+    return {
+      state: 'failed',
+      local: best,
+      failure: makeUpdateFailure(
+        'check',
+        `「${best.name}」的更新`,
+        '版本号写法本机读不出，无法判断该不该更新',
+        `${entry.id}: 注册表 ${entry.version} / 本机 ${best.version}`,
+      ),
+      sameContainer: null,
+    };
+  }
   return {
-    state,
+    state: relation,
     local: best,
-    sameContainer: state === 'latest' && best.containerSha256 !== undefined
-      ? best.containerSha256 === entry.zip.sha256
-      : null,
+    failure: null,
+    sameContainer:
+      relation === 'latest' && best.containerSha256 !== undefined
+        ? best.containerSha256 === entry.zip.sha256
+        : null,
   };
 }

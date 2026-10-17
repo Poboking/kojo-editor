@@ -208,6 +208,85 @@ export interface ErbIndex {
    * 缺省 = 提供方未建（消费方降级），语义同 `functionAt?`。
    */
   readonly references?: ErbReferenceIndex;
+  /**
+   * **范围戳**（W7 NAV-SCOPE，additive 可选）：这份索引（或这份**派生视图**）是在
+   * 哪个"只看"范围下成立的。
+   *
+   * 为什么盖在索引上而不是让每个消费方自己去判"这个文件属不属于当前范围"：
+   * 后者等于把同一条归属判据抄到函数树 / `Ctrl+T` / `Ctrl+P` / 全文检索四遍——
+   * 实测那四份早就各抄各的（其中一份按函数名正则、另三份按目录前缀，选定范围后
+   * 搜索面板只扫该目录而函数树仍扫全量）。戳只有一个来源（`search.scope` 提供方
+   * 给出的 `roots`），过滤只有一个谓词（`pathInScope`，见 `semantic-locate.ts`）。
+   *
+   * 缺省 = 未收窄（全量）。`roots` 为空数组**同样**是全量——"空范围"不是"什么都不给"，
+   * 那是选择器失效时最危险的读法（整棵树空白会被读成"这个项目没有函数"）。
+   */
+  readonly scope?: ErbScopeStamp;
+}
+
+/**
+ * 一条"只看"范围的**戳**（W7 NAV-SCOPE）：范围身份 + 它覆盖的位置。
+ *
+ * `key` 是提供方命名空间化后的稳定标识（宿主与插件都**不理解**它的内容，只拿它比对）；
+ * `roots` 是该范围的位置集合（目录或文件，由提供方决定形状）。
+ */
+export interface ErbScopeStamp {
+  readonly key: string;
+  readonly roots: readonly string[];
+}
+
+/**
+ * 「只看」范围变更的**广播事件名**（W7 NAV-SCOPE）：宿主在用户拨动那条选择器时发出，
+ * 载荷就是 {@link ErbScopeStamp}（`null` = 回到不限）。
+ *
+ * 为什么做成常量而不是两侧各写一遍字符串：这条通道连接的是**宿主**与**插件**，
+ * 而插件不许 import 宿主——字符串抄两份的话，一侧改名另一侧静默失联，
+ * 表现正是这批要根治的那个症状（"选了范围，函数树还是全量"）。
+ * 命名空间前缀 `workbench:` = 发起方是壳层（内核事件表之外的自定义事件纪律）。
+ */
+export const NAV_SCOPE_EVENT = 'workbench:navScopeChanged';
+
+/* ---------------- 候选预算（W7 NAV-SCOPE：四通道一处口径） ---------------- */
+
+/**
+ * 检索候选的**显式预算表**（此前四处各写一个裸数字：100 / 200 / 200 / 50，
+ * 没人说得清谁是谁的上一档）。分层照旧：
+ * - `providerQuery` = 提供方侧的**对象分配**预算（十万条名字不许整份造出来）；
+ * - `render` = 宿主侧的 **DOM 行**预算（面板一屏灌不下）；
+ * - `quickOpen` = 文件候选预算（快速打开的输入域比符号面板窄）；
+ * - `ceiling` = 任何请求方允许的上限（防止"我全都想要"把预算字段变成内存事故）。
+ *
+ * 预算**不等于丢弃**：被挡掉的条数必须由 `totalMatched` / `hidden` 报给作者（铁律 4）。
+ */
+export const CANDIDATE_BUDGETS = {
+  providerQuery: 200,
+  render: 100,
+  quickOpen: 50,
+  ceiling: 2000,
+} as const;
+
+/** 预算档位（消费方按**自己的层**取，不许跨层借用别人的数字） */
+export type CandidateBudgetTier = keyof typeof CANDIDATE_BUDGETS;
+
+/**
+ * 收窄状态下的**追加倍率**：宿主按范围过滤发生在提供方产出**之后**，
+ * 若仍按原预算截断，被截掉的那批里可能有范围外的，范围内的那批反而没进来。
+ * 所以带范围查询时向提供方多要 `× SCOPED_QUERY_FACTOR` 条（仍在 `ceiling` 之内）。
+ */
+export const SCOPED_QUERY_FACTOR = 4;
+
+/**
+ * 取一档预算（**唯一**的兜底处）：非有限 / ≤0 的脏输入落回档位值；
+ * 超过 `ceiling` 的请求**收到上限**而不是原样放行——预算字段的存在就是为了
+ * 挡住"我全都想要"，把它读成"那就给你全都的"等于让一个参数废掉整层保护。
+ */
+export function candidateBudget(tier: CandidateBudgetTier, requested?: number): number {
+  const base = CANDIDATE_BUDGETS[tier];
+  if (requested === undefined) return base;
+  if (typeof requested !== 'number' || !Number.isFinite(requested)) return base;
+  const n = Math.trunc(requested);
+  if (n <= 0) return base;
+  return Math.min(n, CANDIDATE_BUDGETS.ceiling);
 }
 
 /**

@@ -74,6 +74,40 @@ interface SugarNodeBase {
   loc: SugarSourceSpan;
 }
 
+/**
+ * 落点（**唯一一把列尺**：1 基行 / **0 基列**，`end` 不含端点）。
+ *
+ * 为什么另立于 `SugarPosition` 之旁：`SugarPosition`（:55-60）是**语法节点**的位置，
+ * 列跟着 JS 字符串走是 0 基更顺手的是"改写"这一族（`edits` / 回写 / 一键修法）。
+ * 两者的换算在**规则投影那一端**做一次（`SugarPosition.column - 1`），此后整条链
+ * （问题 → 契约 edit → 折叠层 → marker）只有折叠层那一次 `+1`（`LineDecoration` 是 1 基）。
+ */
+export interface Loc {
+  /** 行（1 基） */
+  line: number;
+  /** 列（0 基，源内；`String.indexOf` / `slice` 的产物可直接用） */
+  column: number;
+}
+
+/**
+ * 一次**就地改写**（💡 / `workbench.fixAll` 的载荷；半开区间 `[loc, end)`）。
+ *
+ * 单一真源：约定问题的修法（`ConventionIssue.edits`）与糖侧回写的修法**共用这一个类型**，
+ * 面板 / 折叠层 / 落地三条通道因此只有一把尺子——不许再各自发明"第二种 edit 形状"。
+ * 宿主执行侧仍走 `EditorTextEdit`（整行语义）：把列缝进整行的那一次加工只在
+ * `convention-linter/src/diagnostics.ts` 的折叠层里做，别处不许抄第二份。
+ */
+export interface SugarEdit {
+  /** 起点（1 基行 / 0 基列） */
+  loc: Loc;
+  /** 终点（**不含**）；省略 = 只替换 `loc` 那一个位置起、到行尾的那一段？不——省略 = 整行替换 `loc.line` */
+  end?: Loc;
+  /** 替进来的文本（`end` 省略时是那一整行的完整新内容） */
+  newText: string;
+  /** 面向作者的动作说明（💡 标题用；**不含原码**）；省略 ⇒ 显示层取规则码的中文名 */
+  description?: string;
+}
+
 /* ============================== 插值 ============================== */
 
 /**

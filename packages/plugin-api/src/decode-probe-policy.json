@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "bomRules": [
+    { "bom": [239, 187, 191], "encoding": "utf-8-bom" },
+    { "bom": [255, 254], "encoding": "utf-16le" },
+    { "bom": [254, 255], "encoding": "utf-16be" }
+  ],
+  "fallbackEncoding": "shift_jis"
+}

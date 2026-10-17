@@ -1,4 +1,5 @@
 import type { Unsubscribe } from './base';
+import type { RevealSpan } from './events';
 import type { GameAdapter } from './game';
 import type { GameProject } from './game';
 
@@ -403,6 +404,30 @@ export interface EditorSymbolLocation {
   readonly filePath: string;
   readonly line: number;
   readonly column?: number;
+  /**
+   * 出现点种类（**additive 可选**，W8 XLANG-RENAME 批）：与 {@link ErbReferenceKind}
+   * **同一值域**（`definition` / `call` / `mention`），契约层不复述类型以免两处漂移。
+   *
+   * 为什么放这里：`references` 的产物原本只有"文件:行:列"，分类死在贡献方一侧，
+   * 于是 F12 的"N 处"（全种类）、调用层级面板的"被调用 M 处"（只 `call`）、
+   * code-lens 的计数三套口径互不覆盖、差值无人解释。落成可选字段后，
+   * **同一条位置的分类可以穿过槽到达宿主**——供方不填即"未分类"，消费方按
+   * `mention` 保守计数，既有零改动（铁律：additive，旧消费方看不见新字段照常工作）。
+   */
+  readonly kind?: 'definition' | 'call' | 'mention';
+  /**
+   * 一行内的**列区间**（**additive 可选**，W9 落点 span 批 → 契约收口 2026-12-28）：
+   * 与 {@link RevealSpan} 同一个形状、同一条口径（1 基、UTF-16 码元、`columnEnd` 不含），
+   * 因为"跳到的那一处"与"波浪线盖住的那一段"本来就是同一件事的两种写法——
+   * 定义 / 引用 / 跳到实现 / 行上注解四条腿的产物自此与 `editor.revealLocation.span`
+   * 逐字同形，宿主两侧不再需要按可选字段 cast 读。
+   *
+   * 为什么放这里：区间的数据源只有插件知道（那个名字占几个码元），而落点判据
+   * 必须**只有一份**——此前它死在各发起方手里，同一处位置 F12 落在名字那一列、
+   * 问题面板落在行首。缺席 = 发起方给不出区间 ⇒ 退化成**零宽**，
+   * 退化判据唯一住在 `app/src/monaco/reveal-position.ts`，**不许在任何供方或宿主里重抄**。
+   */
+  readonly span?: RevealSpan;
 }
 
 /** 转到定义响应 */
@@ -744,6 +769,13 @@ export interface EditorRenameEdit {
   readonly startColumn: number;
   readonly endColumn: number;
   readonly newText: string;
+  /**
+   * 落点文件（**additive 可选**，W8 XLANG-RENAME 批）：缺省 = 请求所在文件
+   * （既有 `.kojo` 文件局部改名的形态，零改动）。给出且与请求文件不同时，
+   * 宿主**不得**把它落到请求的 model 上——那是跨文件编辑，走 `erb-rename` 的
+   * 双通道送达，不经本成员。宿主侧的判据见 `app/monaco/kojo-rename.ts`。
+   */
+  readonly resourcePath?: string;
 }
 
 /**
@@ -816,6 +848,17 @@ export interface LineDecoration {
   readonly endColumn?: number;
   /** 可选诊断码（工具提示/分组用；游戏无关的稳定标识，如 `sugar.expr-missing-else`） */
   readonly code?: string;
+  /**
+   * 诊断码的**可读标签**（additive，DIAG-LINK 2026-10-18；宿主直喂 Monaco
+   * `IMarkerData.code = { value: code, target?, label? }` 的 `label` 槽——零额外加工，
+   * 破折号形态由 Monaco 自己给）。
+   *
+   * 为什么需要它（而不是把来源名拼进 `message`）：多来源发布之后，一个 `code` 可能同时
+   * 住在好几条发布流水线上（同一条糖写法既被转译器算过、也被某个域插件的静态扫描算过），
+   * 而 `code` 本身是**稳定标识**、不许带来源限定词（改名即断链）。作者要看的是"这条是谁
+   * 说的"，那是一句人读标签，归 `label`——**缺省 = 旧行为**（Monaco 只显示 `code`）。
+   */
+  readonly source?: string;
 }
 
 /**

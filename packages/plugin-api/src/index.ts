@@ -57,7 +57,7 @@ export type {
 export type { ScopedStorage, StorageService } from './storage';
 
 export { WriteNotAllowedError } from './io';
-export type { BackupVersion, EolStyle, FileIO, TextFile, WriteTextOptions } from './io';
+export type { BackupVersion, EolStyle, FileIO, TextFile, TrashEntry, WriteTextOptions } from './io';
 
 /* ---- 批操作 journal（1016 undo 批独占追加区块；勿在他处重排） ---- */
 export type { OpEntryView, OpJournal, OpsMaintenance, OpRecord } from './journal';
@@ -489,6 +489,24 @@ export {
   deflateRaw,
   dosDateTime,
   normalizeEntryName,
+  // 往返契约（W14）：写侧守的这套闸与宿主 `market.rs` 的解包侧同源，共享表见
+  // `packages/plugin-api/fixtures/zip-roundtrip/contract.json`
+  readZipContainer,
+  inflateZipEntry,
+  verifyZipRoundtrip,
+  zipContainerNameProblem,
+  zipEntryContractProblem,
+  zipContainerContractProblem,
+  ZIP_FLAG_UTF8,
+  ZIP_MAX_NAME_BYTES,
+  ZIP_CONTAINER_NAME_MAX,
+  ZIP_EXTRACT_LIMITS,
+  ZipContainerStructureError,
+  type ZipContractCode,
+  type ZipContractLimits,
+  type ZipContainer,
+  type ZipContainerEntry,
+  type ZipExpectation,
   type ZipEntry,
   type ZipOptions,
 } from './zip';
@@ -517,6 +535,19 @@ export type {
 export type { EditorInlayHint, EditorInlayHintRequest, EditorInlayHintResult } from './slots';
 export { MODEL_TOKEN_CLASS, locateIdentifier, modelLineAt, splitModelLines, unicodeTokenAt } from './semantic-locate';
 
+/* ---- W7 NAV-SCOPE 独占追加区块（勿在他处重排）：行→归属 / 范围归属 / 候选排序与预算 ---- */
+export {
+  candidateRank,
+  enclosingAt,
+  enclosingChainAt,
+  filterByScope,
+  pathInScope,
+  pickEnclosing,
+} from './semantic-locate';
+export type { EnclosingMode, LineSpan } from './semantic-locate';
+export { CANDIDATE_BUDGETS, NAV_SCOPE_EVENT, SCOPED_QUERY_FACTOR, candidateBudget } from './erb';
+export type { CandidateBudgetTier, ErbScopeStamp } from './erb';
+
 /* ---- 诊断码中文显示名（ZH-D2 独占追加区块；勿在他处重排） ---- */
 export {
   DIAGNOSTIC_LABELS,
@@ -529,3 +560,66 @@ export {
   type DiagnosticDisplay,
   type DiagnosticLabel,
 } from './diagnostic-copy';
+
+/* ---- 归档读取单源（W13 ARCHIVE-READ 独占追加区块；勿在他处重排） ---- */
+export {
+  ArchiveServices,
+  ArchiveExtractError,
+  ARCHIVE_EXTRACT_DIR,
+  formatBytes,
+  archiveEntryFileName,
+  archiveEntryLabel,
+  assertArchiveEntryName,
+  archiveExtractFileName,
+  archiveWorkspaceLanding,
+  isArchiveLandingAllowed,
+} from './archive';
+export type {
+  ArchiveExtractOutcome,
+  ArchiveExtractRefusal,
+  ArchiveExtractRequest,
+  ArchiveReaderIo,
+  ArchiveReaderService,
+} from './archive';
+
+/* ---- W12 ENC-SRC 解码判据单源（独占追加区块；勿在他处重排） ---- */
+export { DECODE_LABEL, DECODE_PROBE_POLICY } from './platform';
+export type { DecodeBomRule, DecodeProbePolicy } from './platform';
+
+/* ---- 糖面板共享核（W4 PANEL-DEDUP 独占追加区块；勿在他处重排） ---- */
+export {
+  isKojoFile,
+  createLiveTextPool,
+  createPanelTruthController,
+  degradeText,
+  degradeForActiveFile,
+  buildPanelDiagnosticRows,
+  DIAG_WINDOW,
+  ROW_WINDOW,
+  DIAG_WINDOW_INITIAL,
+  DIAG_WINDOW_STEP,
+  ROW_WINDOW_INITIAL,
+  ROW_WINDOW_STEP,
+  windowSize,
+  nextWindow,
+  growWindow,
+  diagWindowSize,
+  nextDiagWindow,
+  rowWindowSize,
+  nextRowWindow,
+  attachGrowSentinel,
+  MORE_ROW_STYLE,
+  MORE_ROW_TITLE,
+  moreRowLabel,
+} from './sugar-panels';
+export type {
+  LiveTextPool,
+  PanelDegrade,
+  PanelDiagnosticRow,
+  PanelTruthController,
+  PanelTruthHandlers,
+  RenderWindow,
+} from './sugar-panels';
+
+/* ---- 编译闸收口：糖编辑类型走 barrel（additive，勿在他处重排） ---- */
+export type { SugarEdit } from './sugar';

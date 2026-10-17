@@ -1,0 +1,353 @@
+{
+  "schema": 1,
+  "_doc": "ZIP 往返契约（W14）。打包（TS：plugin-api/src/zip.ts）与解包（Rust：app/src-tauri/src/market.rs）分家于两种语言、无法共享实现，于是**规则本身**收成这一张表——它是两种语言之间唯一的共享物。两侧各有一条测试消费这张表：TS = packages/plugin-api/tests/zip-roundtrip.test.ts，Rust = packages/app/src-tauri/src/market_tests.rs。任何一侧改了规则或夹具，另一侧当场红。",
+  "limits": {
+    "maxEntries": 5000,
+    "maxDepth": 12,
+    "maxUnpackedBytes": 134217728
+  },
+  "limitsDoc": "真源只住 plugin-api/src/market.ts 的 MARKET_MAX_FILE_ENTRIES / MARKET_MAX_PATH_DEPTH / MARKET_MAX_UNPACKED_BYTES。这里的字面量是给 Rust 与两侧对拍测试用的那一份投影；TS 侧判据断言两侧取值与契约常量相同。",
+  "containerNameRule": {
+    "charset": "[a-z0-9._-]",
+    "maxBytes": 64,
+    "suffix": ".zip",
+    "rejectPureDots": true
+  },
+  "containerNameRuleDoc": "暂存容器名/目标名的唯一字面闸。Rust 侧常量 STAGING_NAME_MAX 与 ZIP_SUFFIX 必须与本表逐项相等（market_tests.rs 核），TS 侧实现是 zip.ts 的 zipContainerNameProblem（zip-roundtrip.test.ts 核）。",
+  "containerNames": [
+    {
+      "name": "demo.era-tw-1.0.1.zip",
+      "ok": true
+    },
+    {
+      "name": "a_b-c.1.zip",
+      "ok": true
+    },
+    {
+      "name": "demo.roundtrip-1.0.0.zip",
+      "ok": true
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "ok": true,
+      "note": "60 主体 + .zip = 64，正好在上限"
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab.zip",
+      "ok": false,
+      "reason": "名字长度必须在 1..=64"
+    },
+    {
+      "name": ".zip",
+      "ok": false,
+      "reason": "容器名必须以 .zip 结尾且主体非空"
+    },
+    {
+      "name": "pack.rar",
+      "ok": false,
+      "reason": "容器名必须以 .zip 结尾且主体非空"
+    },
+    {
+      "name": "A.ZIP",
+      "ok": false,
+      "reason": "名字只允许 [a-z0-9._-]（拒分隔符、反斜杠、盘符、大写）"
+    },
+    {
+      "name": "a b.zip",
+      "ok": false,
+      "reason": "名字只允许 [a-z0-9._-]（拒分隔符、反斜杠、盘符、大写）"
+    },
+    {
+      "name": "a/b.zip",
+      "ok": false,
+      "reason": "名字只允许 [a-z0-9._-]（拒分隔符、反斜杠、盘符、大写）"
+    },
+    {
+      "name": "..\\a.zip",
+      "ok": false,
+      "reason": "名字只允许 [a-z0-9._-]（拒分隔符、反斜杠、盘符、大写）"
+    },
+    {
+      "name": "C:\\a.zip",
+      "ok": false,
+      "reason": "名字只允许 [a-z0-9._-]（拒分隔符、反斜杠、盘符、大写）"
+    },
+    {
+      "name": "..",
+      "ok": false,
+      "reason": "名字不能是纯点名"
+    },
+    {
+      "name": ".",
+      "ok": false,
+      "reason": "名字不能是纯点名"
+    },
+    {
+      "name": "",
+      "ok": false,
+      "reason": "名字长度必须在 1..=64"
+    },
+    {
+      "name": "东方口上-灵梦 v1.0.zip",
+      "ok": false,
+      "reason": "名字只允许 [a-z0-9._-]（拒分隔符、反斜杠、盘符、大写）",
+      "note": "导出包的人类可读名（源目录名直出）。它不是暂存容器名 ⇒ 两侧同判为拒；包要进市场链路，容器名必须换成 <id>-<version>.zip 形态。"
+    },
+    {
+      "name": "0000000000000000000000000000000000000000000000000000000000000000-1.0.0.zip",
+      "ok": false,
+      "reason": "名字长度必须在 1..=64",
+      "note": "id 取满 PACK_ID_RE 的 64 字符 ⇒ 派生容器名 74 字节：钉住\"字符集合法但总长超限\"这一形态（过去只有 Rust 知道这条，TS 侧一路放行到平台才报错）。"
+    }
+  ],
+  "entryNames": [
+    {
+      "name": "pack.json",
+      "code": null
+    },
+    {
+      "name": "files/M_KOJO_DEMO.ERB",
+      "code": null
+    },
+    {
+      "name": "files/deep/a.kojo",
+      "code": null
+    },
+    {
+      "name": "files/说明.txt",
+      "code": null
+    },
+    {
+      "name": "files/empty.bin",
+      "code": null
+    },
+    {
+      "name": "files/a/b/c/d/e/f/g/h/i/j/k.txt",
+      "code": null,
+      "note": "12 段 = maxDepth 上界"
+    },
+    {
+      "name": "files/a/b/c/d/e/f/g/h/i/j/k/l.txt",
+      "code": "path-depth"
+    },
+    {
+      "name": "",
+      "code": "path-empty-segment"
+    },
+    {
+      "name": "../escape.txt",
+      "code": "path-dotdot"
+    },
+    {
+      "name": "files/../escape.txt",
+      "code": "path-dotdot"
+    },
+    {
+      "name": "files/./a.txt",
+      "code": "path-empty-segment"
+    },
+    {
+      "name": "files//a.txt",
+      "code": "path-empty-segment"
+    },
+    {
+      "name": "files/sub/",
+      "code": "path-empty-segment",
+      "note": "目录条目（尾斜杠）：平台解包器只落普通文件，目录由父目录自建"
+    },
+    {
+      "name": "/",
+      "code": "path-absolute"
+    },
+    {
+      "name": "/etc/passwd",
+      "code": "path-absolute"
+    },
+    {
+      "name": "files\\a.txt",
+      "code": "path-backslash"
+    },
+    {
+      "name": "\\\\server\\a.txt",
+      "code": "path-backslash"
+    },
+    {
+      "name": "C:/windows/a.txt",
+      "code": "path-drive"
+    },
+    {
+      "name": "C:files/a.txt",
+      "code": "path-drive"
+    },
+    {
+      "name": "C:\\evil\\x.txt",
+      "code": "path-drive",
+      "note": "判定顺序钉数：盘符先于反斜杠（两侧必须报同一个码，否则同一坏包两层两套话）"
+    },
+    {
+      "name": "files/a\\b",
+      "code": "path-backslash"
+    },
+    {
+      "name": "files\u0000a.txt",
+      "code": "entry-name-encoding"
+    },
+    {
+      "name": "files/a\u0000",
+      "code": "entry-name-encoding"
+    },
+    {
+      "name": ".hidden",
+      "code": null,
+      "note": "单点开头是合法段名（只有 . 与 .. 不是）"
+    },
+    {
+      "name": "files/.hidden/x.txt",
+      "code": null
+    },
+    {
+      "name": "files\\\u0000a.txt",
+      "code": "entry-name-encoding",
+      "note": "判定顺序钉数（W14 接力）：NUL 先于反斜杠。名字根本不可能成为文件名 ⇒ 编码那一类优先，两侧必须报同一个码（Rust 的形态闸若跑在编码闸之前就会报 path-backslash）。"
+    },
+    {
+      "name": "C:\\\u0000a.txt",
+      "code": "entry-name-encoding",
+      "note": "判定顺序钉数：NUL 先于盘符（同上一条）。"
+    }
+  ],
+  "golden": {
+    "file": "container.zip",
+    "dateMs": 1759824000000,
+    "compress": true,
+    "contract": "extractable",
+    "entryCount": 8,
+    "totalUnpackedBytes": 6333,
+    "entries": [
+      {
+        "name": "pack.json",
+        "nameBytes": 9,
+        "bytes": 207,
+        "crc": "0x5e7367d8",
+        "contentBase64": "eyJzY2hlbWEiOjEsImtpbmQiOiJrb2pvLXBhY2siLCJpZCI6ImRlbW8ucm91bmR0cmlwIiwidmVyc2lvbiI6IjEuMC4wIiwibmFtZSI6IuW+gOi/lOWlkee6puagt+S+iyIsImF1dGhvciI6Imtvam8tZWRpdG9yIiwibGljZW5zZSI6IkdQTC0zLjAtb3ItbGF0ZXIiLCJyZWRpc3RyaWJ1dGUiOnRydWUsIm1pbkFwcFZlcnNpb24iOiIwLjQuMCIsImZpbGVzIjpbXX0K"
+      },
+      {
+        "name": "files/说明.txt",
+        "nameBytes": 16,
+        "bytes": 77,
+        "crc": "0x6e1433b5",
+        "contentBase64": "5b6A6L+U5aWR57qm5qC35L6L77ya5Lit5paH5p2h55uu5ZCN5b+F6aG75bimIFVURi04IOagh+W/l+S9je+8iGJpdCAxMe+8ieOAggo="
+      },
+      {
+        "name": "files/deep/a.kojo",
+        "nameBytes": 17,
+        "bytes": 18,
+        "crc": "0x7c5218b9",
+        "contentBase64": "QEEKICDlj6PkuIrkuIDooYwK"
+      },
+      {
+        "name": "files/nested/b.txt",
+        "nameBytes": 18,
+        "bytes": 13,
+        "crc": "0x8d213ec3",
+        "contentBase64": "bmVzdGVkIGVudHJ5Cg=="
+      },
+      {
+        "name": "files/empty.bin",
+        "nameBytes": 15,
+        "bytes": 0,
+        "crc": "0x00000000",
+        "contentBase64": ""
+      },
+      {
+        "name": "files/big.txt",
+        "nameBytes": 13,
+        "bytes": 6000,
+        "crc": "0xec5b0330",
+        "contentBase64": "a29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8ga29qbyBrb2pvIGtvam8g"
+      },
+      {
+        "name": "files/copy1.txt",
+        "nameBytes": 15,
+        "bytes": 9,
+        "crc": "0x52fbcf7d",
+        "contentBase64": "Y29weSBvbmUK"
+      },
+      {
+        "name": "files/copy2.txt",
+        "nameBytes": 15,
+        "bytes": 9,
+        "crc": "0x3cfb6f96",
+        "contentBase64": "Y29weSB0d28K"
+      }
+    ]
+  },
+  "tampers": [
+    {
+      "id": "missing-utf8-flag",
+      "clearUtf8FlagOf": "files/说明.txt",
+      "code": "entry-name-encoding",
+      "why": "bit 11 缺失时 zip 4.6.1 把 raw 名字按 CP437 解码（src/read.rs:1306 from_cp437）：路径闸照样放行，落盘文件名却是块字符 ⇒ 名字往返断裂。解包侧必须自己核这一位。"
+    },
+    {
+      "id": "nul-in-name",
+      "rename": {
+        "from": "files/empty.bin",
+        "to": "files/empty.b\u0000n"
+      },
+      "code": "entry-name-encoding",
+      "why": "NUL 不是路径段问题，而是根本无法成为文件名；两侧同码，且拒在写第一个字节之前。"
+    },
+    {
+      "id": "dir-entry-name",
+      "rename": {
+        "from": "pack.json",
+        "to": "pack.jso/"
+      },
+      "code": "path-empty-segment",
+      "why": "尾斜杠 = 目录条目：平台解包器只落普通文件（目录由父目录自建），故契约禁止写侧产出目录条目。"
+    },
+    {
+      "id": "backslash-name",
+      "rename": {
+        "from": "files/deep/a.kojo",
+        "to": "files\\deep/a.kojo"
+      },
+      "code": "path-backslash",
+      "why": "容器里的反斜杠是坏包，不是\"可归一的输入\"（写侧 normalizeEntryName 会归一，解包侧必须拒）。"
+    },
+    {
+      "id": "dotdot-name",
+      "rename": {
+        "from": "files/nested/b.txt",
+        "to": "../es/nested/b.txt"
+      },
+      "code": "path-dotdot",
+      "why": "zip-slip 主形态：上跳段必须在动盘之前拒。"
+    },
+    {
+      "id": "exact-duplicate",
+      "rename": {
+        "from": "files/copy2.txt",
+        "to": "files/copy1.txt"
+      },
+      "code": "entry-duplicate",
+      "why": "zip 4.6.1 的 ZipArchive 用 IndexMap 按名字建索引：**同名条目在读器里被静默去重**（后写的覆盖前写的），条目数虚报、内容却已换。中央目录原语必须自己数真条目，不能信读器。"
+    },
+    {
+      "id": "case-folded-duplicate",
+      "rename": {
+        "from": "files/copy2.txt",
+        "to": "files/COPY1.txt"
+      },
+      "code": "entry-duplicate",
+      "why": "Windows 文件系统不区分大小写：两条名字折叠后同名 ⇒ 落盘互覆。去重键与写允许域同款折叠口径。"
+    },
+    {
+      "id": "zip64-count-sentinel",
+      "setEocdTotalEntryCount": 65535,
+      "code": "container-zip64",
+      "why": "EOCD 的条目数被换成 ZIP64 哨兵 ⇒ 计数与偏移都不再可信。契约明确不支持 ZIP64：硬读只会读出一堆假条目，必须如实标出。"
+    }
+  ]
+}

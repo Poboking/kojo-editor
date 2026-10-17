@@ -16,11 +16,27 @@
 import type { Logger } from './base';
 import type { ErbFile, ErbIndex } from './erb';
 import type { GameProject } from './game';
+import type { SugarEdit } from './sugar';
 
 /** 问题严重度。产品原则：宁可漏报不可误报（见 RESEARCH.md §7）。 */
 export type ConventionSeverity = 'error' | 'warning' | 'info';
 
-/** 一条校验问题 */
+/**
+ * 一条校验问题。
+ *
+ * ## 坐标尺子（全仓一把，写死在这里）
+ * - `line`：**1 基**行号；
+ * - `column`：**0 基列**（源内，与 `sugar.ts` 的 `Loc.column` 逐字同尺）；省略 = 整行诊断；
+ * - `edits`：**就是糖侧那条 `SugarEdit`**（`{ loc: Loc; end?: Loc; newText; description? }`，
+ *   同样 1 基行 / 0 基列、`end` 不含端点）——约定问题的修法与降糖/回写的修法是**同一个类型**，
+ *   于是面板、折叠层、落地三条通道只有一把尺子，不可能各发明一种 edit 形状。
+ *
+ * 唯一的 `+1` 在折叠层（`convention-linter/src/diagnostics.ts`）：`LineDecoration.startColumn`
+ * 是 1 基 UTF-16 码元（编辑器那一头），契约这一头是 0 基。**别处不许再各加各减**——
+ * 两把尺子并存的病根就是各处自己换算。
+ * 纯文本扫描器（手上天然是 0 基）出契约**零换算**；只有拿 `SugarPosition`（1 基列，语法节点那一族）
+ * 的来源投影进本字段时才 `- 1`，就在那一处投影里。
+ */
 export interface ConventionIssue {
   /** 产出它的规则 id */
   ruleId: string;
@@ -31,6 +47,14 @@ export interface ConventionIssue {
   filePath?: string;
   /** 定位：1 基行号 */
   line?: number;
+  /** 定位：**0 基列**（与 `SugarEdit.loc.column` 同尺；省略 = 整行诊断） */
+  column?: number;
+  /**
+   * 一键修法（DIAG-LINK，additive）：给出时编辑器据此在波浪线上产 `quickfix` 动作；
+   * **省略 = 这条问题没有可证明的改法 ⇒ 不产动作**（不猜、不静默）。
+   * 落点尺子见本接口头注；`description` 缺省时显示层取 `ruleId` 的中文名（不含原码）。
+   */
+  edits?: readonly SugarEdit[];
   /** 关联角色编号（面板分组用） */
   characterNo?: number;
   /** 关联家族名 */

@@ -19,6 +19,23 @@ export interface DiffViewSide {
   path?: string;
 }
 
+/**
+ * 一行内的**列区间**（W9 落点 span 批，2026-10-17）。
+ *
+ * 口径（与 Monaco / 糖线源映射同一条，本契约不换算）：1 基、UTF-16 码元、
+ * `columnEnd` **不含**（Monaco range 的 `endColumn` 语义）。
+ *
+ * 为什么是"区间"而不是"一个列"：作者要看见的是**那一处**（命中的词、引用的名字、
+ * 波浪线盖住的那一段），而单一 `column` 只说得出起点——发起方各给各的粒度，
+ * 落点必然分叉（实测：同一处位置 F12 落在名字那一列、问题面板落在行首）。
+ * `span` 缺席 = 发起方给不出区间，落点退化成**零宽**（只落 `column`，不给列就落行首）；
+ * 退化判据全仓唯一，住在 `app/src/monaco/reveal-position.ts`，**不许被复制**。
+ */
+export interface RevealSpan {
+  readonly columnStart: number;
+  readonly columnEnd: number;
+}
+
 /** 文件变更类型 */
 export type FileChangeKind = 'add' | 'change' | 'unlink';
 
@@ -89,8 +106,21 @@ export interface KernelEventMap {
    * 编辑器导航意图（v0.2）：打开文件并定位到行。
    * 通用、游戏无关——由宿主（编辑器壳）消费；任意插件可发起
    * （校验面板点击问题、函数树点击函数、未来的引用跳转）。
+   *
+   * **落点粒度（W9 落点 span 批，2026-10-17；additive）**：`span` 给得出就给，
+   * 它才是"这一处"的权威（起点 + 终点）；`column` 只带起点，等价于零宽 `span`。
+   * 两者都不给 = 落行首。**发起方一律发自己知道的真实区间**（问题面板发波浪线
+   * 盖住的那一段、检索发命中的那几个码元、定义/引用发那个名字），
+   * 不许有的发区间、有的发行首——同一处位置两条腿落两个地方就是这个 bug。
+   * 越界与缺省怎么夹取**不由发起方决定**：判据只在宿主那一处（`reveal-position`）。
    */
-  'editor.revealLocation': { filePath: string; line?: number; column?: number; source?: string };
+  'editor.revealLocation': {
+    filePath: string;
+    line?: number;
+    column?: number;
+    span?: RevealSpan;
+    source?: string;
+  };
   /**
    * 编辑器当前文件变更（v0.3 批 S5-UI）：宿主在"当前编辑的文件"发生变化时广播。
    *
@@ -190,6 +220,9 @@ export interface KernelEventMap {
    * 对得上就定位到那一行的判定并高亮，对不上就说清为什么对不上（绝不静默）。
    * 之所以带上 `filePath`：同一份内容有两种写法视图时行号会错位，
    * 只给行号就等于让消费方猜"这些行号属于哪份文本"。
+   * W9 落点 span 批（2026-10-17，additive）：位点同样可以带 `column` / `span`，
+   * 语义与 `editor.revealLocation` 的同名字段**逐字相同**（同一处位置的两种写法）——
+   * 面板把这条记录拉到眼前时、与编辑器把光标放到这一处时，落点必须是同一个地方。
    *
    * 分层口径：这个成员**只说"看哪一行"，不说"这一行是什么"**——发起方（宿主）
    * 交出的是中性位点，函数名仍由它按符号树折好放在 `functionName` 里，
@@ -198,7 +231,7 @@ export interface KernelEventMap {
   'kojo.replayFunction': {
     functionName: string;
     source?: string;
-    locate?: { filePath: string; line: number };
+    locate?: { filePath: string; line: number; column?: number; span?: RevealSpan };
   };
   /**
    * 打开 overlay 意图（2026-10-11 UI 重设计批 P2）：请求宿主打开某 `ui.overlay`

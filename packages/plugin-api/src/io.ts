@@ -40,6 +40,43 @@ export interface BackupVersion {
 }
 
 /**
+ * 回收站的一条条目（`listTrash` 条目；W11 回收站可见批）。
+ *
+ * 数据源 = 内核 `removeDir`/`removeFile` 的既有落点（`{appDataDir}/trash/<id>/`，
+ * 条目目录 + `payload/` + `manifest.json`），**本契约只是把那份目录读回来**——
+ * 与 `listBackups` 对 `backup/` 的关系逐字同构，不引入第二套回收站约定。
+ *
+ * 为什么必须有这一条：删除改成"移入回收站"之后，界面上呈现的是"可恢复"的假象，
+ * 而 list/restore 既不在契约里也没有任何消费方 ⇒ 作者看不见、也恢复不了。
+ */
+export interface TrashEntry {
+  /** 条目 id = 条目目录名（`<ts>-<hash8>`；restore/purge 只认它，不放宽形态） */
+  id: string;
+  /** 被删除时的原路径（绝对；恢复就回到这里） */
+  originalPath: string;
+  kind: 'dir' | 'file';
+  /**
+   * 移入回收站的时刻（本地时区 epoch ms）。
+   * **取自条目名的时间戳段**，不是 manifest 的 `deletedAt`——自动清理按条目名算年龄，
+   * 剩余天数若按另一个时钟显示就会和"什么时候被收走"打架（manifest 字段只用于人工核对）。
+   */
+  deletedAtMs: number;
+  /** 自动清理最早可能收走它的时刻（= `deletedAtMs` + 保留期）；此刻之后一次删除动作即触发清理 */
+  expiresAtMs: number;
+  /**
+   * 内容字节数（文件 = 本体大小；目录 = `payload/` 递归求和，一趟带元数据的遍历）。
+   * 读不到（遍历里有条目拿不到 size）⇒ `null`——**不拿 0 兜底**，UI 如实显示"大小未知"。
+   */
+  bytes: number | null;
+  /**
+   * `payload/` 的绝对路径（appData 恒可读）。
+   * `kind='file'` 时它就是被删文件本体的字节，可直接交给 `readText` / diff 视图预览；
+   * `kind='dir'` 时是整棵子树的根（整目录恢复的即是它）。
+   */
+  payloadPath: string;
+}
+
+/**
  * 文件 IO 服务（内核 `kernel.io`）。
  *
  * 安全模型（对应架构文档 §3.4）：
@@ -238,6 +275,62 @@ export interface FileIO {
    * @throws WriteNotAllowedError 当路径不在可写白名单内
    */
   removeFile(path: string): Promise<void>;
+
+  /* --------------------------- 回收站（W11 回收站可见批；全 additive） --------------------------- */
+
+  /**
+   * 列出回收站条目（additive，W11；新在前）。
+   *
+   * 与 `listBackups` 同构：**只读内核既有落点，不发明第二套约定**。
+   * 只读操作 ⇒ **不受写允许域约束**（游戏目录里被删掉的东西照样列得到）。
+   * manifest 缺失/损坏、或目录名不符合条目 id 形态（⇒ 永远 restore 不了）的条目
+   * 整条剔除并出声，不猜、不拿半个条目冒充。
+   *
+   * `opts.forPath` 为**可选的相关性筛选**（判定住在内核，与删除侧同一个 `pathKey` 尺）：
+   * 留下「原路径就是它」+「它是文件且落在某个被删目录里」+「它是目录且就是被删目录」
+   * 三类条目；不给 = 全量（全局时间线要用）。筛选**只减输出**，不改变任何判定口径。
+   */
+  listTrash(opts?: { forPath?: string }): Promise<TrashEntry[]>;
+  /**
+   * 把回收站条目恢复回原路径（additive，W11）；返回恢复后的绝对路径。
+   *
+   * **这是一次写盘，所以一次不少第一道闸**：`assertWritable(originalPath)` 先行——
+   * 项目关闭后 writablePaths 收回，此时恢复会被可见拒绝（`WriteNotAllowedError`），
+   * 绝不越过"游戏目录整体只读"这条铁律去"帮用户复原"。
+   *
+   * 恢复前对**现状**的保护（口径与 `restoreBackup` 逐字对齐，避免吃掉现状）：
+   * - 条目是文件、原位当前也站着**一个文件** ⇒ 先把原位那份 `backup()` 进写前备份账
+   *   （于是它出现在同一条时间线上），再让条目回原位；
+   * - 条目是目录、或原位站着的是**目录** ⇒ **拒绝**（整目录没有"一份现状"可以备份，
+   *   覆盖它等于吃掉一整棵子树）。原话理由随错误上抛，UI 原样呈现。
+   *
+   * 恢复会失效该 path 的会话文本缓存（与 `writeBytes` 同口径），并顺手清掉条目目录
+   * （条目用掉即消失——回收站不是第二份历史账）。
+   */
+  restoreFromTrash(id: string): Promise<string>;
+  /**
+   * 清理回收站（additive，W11）；返回被清掉的条目数。
+   *
+   * 两个语义**刻意分开**，别混：
+   * - **不传 `ids`** = 自动清理口径：只动**已超保留期**的条目，且跳过本会话被
+   *   `holdTrash` 引用的那些（时间线正在展示的东西不能被一次顺手清理抽走）。
+   *   这是"清空过期"按钮与删除时顺带清扫共用的同一条路径。
+   * - **传 `ids`** = 用户显式「彻底删除」：命中即删，**不看保留期也不看 hold**
+   *   （用户对着这一条点了删除，就是这句话的最终答案）；id 形态不合或条目不在 ⇒ 抛错，
+   *   不静默跳过——"我以为删掉了"和"没删掉"必须是两种能听见的结果。
+   *
+   * 真删走平台桥原语（管理性删除**不进**回收站，否则 trash 自增殖）。
+   */
+  purgeTrash(ids?: readonly string[]): Promise<number>;
+  /**
+   * 声明「本会话的时间线正在引用这些回收站条目」（additive，W11）：**整替**语义
+   * （照 `setWritableRoots` 的替换口径），传空数组 = 撤回全部引用。
+   *
+   * 作用只有一处：**自动清理**（超期清扫）跳过它们，防止用户正看着的那一条在脚下消失。
+   * 它是会话内的软保护——不落盘、不延长保留期、也**拦不住**显式 `purgeTrash([id])`。
+   * 纯同步、不动盘，故不受写允许域约束。
+   */
+  holdTrash(ids: readonly string[]): void;
 }
 
 /** 越权写入错误（内核抛出、UI 捕获展示） */
