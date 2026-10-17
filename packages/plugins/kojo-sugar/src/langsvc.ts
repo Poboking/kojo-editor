@@ -15,6 +15,7 @@ import type {
   SugarTranspileResult,
 } from '@kojo/plugin-api';
 import { resolveSugarTarget } from '@kojo/plugin-api';
+import { sourceMapIndex, type SourceMapIndex } from './column-map';
 
 /**
  * `.kojo` 的**语言服务能力面**（W6 PARITY-EXT，2026-10-17）：`workspaceSymbol` /
@@ -103,15 +104,45 @@ function productOf(deps: KojoLangSvcDeps, source: string, path: string): SugarTr
  * 精确命中优先；纯生成行（`@` 函数头就是编译器造的）向下取**最近一条有源行**，
  * 但一旦越过下一个 `@` 定义头就放弃——那条保守路只保证"落在本函数体内"，
  * 越界就是别个函数，宁可不给位置。
+ *
+ * PS-8：`lines` 切分与 `sourceMap` 排序**按结果对象记忆一次**（WeakMap），
+ * 每条注解/提示只付二分定位 + 常数次前扫——Monaco 每次滚动都重请求整屏提示，
+ * 改前在 3,000 行产物上每条 ~17 µs 全花在重复 split+sort 上。
+ * 行级精确命中走 `sourceMapIndex().exact`（与 `find` 同语义：首条匹配）。
  */
+interface FoldIndex {
+  readonly lines: string[];
+  readonly index: SourceMapIndex;
+}
+
+const foldIndexCache = new WeakMap<SugarTranspileResult, FoldIndex>();
+const AT_HEAD_RE = /^@/;
+
+function foldIndexOf(result: SugarTranspileResult): FoldIndex {
+  let value = foldIndexCache.get(result);
+  if (value === undefined) {
+    value = { lines: result.erb.split('\n'), index: sourceMapIndex(result) };
+    foldIndexCache.set(result, value);
+  }
+  return value;
+}
+
 export function foldGeneratedLine(result: SugarTranspileResult, generatedLine: number): number | null {
-  const exact = result.sourceMap.find((e) => e.generatedLine === generatedLine);
+  const { lines, index } = foldIndexOf(result);
+  const exact = index.exact.get(generatedLine);
   if (exact?.sourceLine != null) return exact.sourceLine;
-  const lines = result.erb.split('\n');
-  const ordered = [...result.sourceMap].sort((a, b) => a.generatedLine - b.generatedLine);
-  for (const entry of ordered) {
-    if (entry.generatedLine <= generatedLine) continue;
-    if (/^@/.test(lines[entry.generatedLine - 1] ?? '')) return null;
+  const { ordered } = index;
+  // 第一个 generatedLine > 查询行 的下标（升序稳定，与原全量扫描的访问序一致）
+  let lo = 0;
+  let hi = ordered.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (ordered[mid]!.generatedLine <= generatedLine) lo = mid + 1;
+    else hi = mid;
+  }
+  for (let i = lo; i < ordered.length; i++) {
+    const entry = ordered[i]!;
+    if (AT_HEAD_RE.test(lines[entry.generatedLine - 1] ?? '')) return null;
     if (entry.sourceLine !== null) return entry.sourceLine;
   }
   return null;
@@ -255,5 +286,9 @@ export function kojoWorkspaceSymbol(
 /** 产物行数（`lineCount` 只是体量事实，供贡献方自行降级；按 `\n` 数与模型口径一致） */
 function countLines(text: string): number {
   if (text.length === 0) return 0;
-  return text.split('\n').length;
+  // PS-8：O(1) 内存计数（码元扫数 `\n`），不再为拿一个数 split 整篇产物
+  //（与 `ui-sugar-lift/large-file.ts` 同款做法——插件间禁 import，故本地实现一份）
+  let n = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+  return n;
 }

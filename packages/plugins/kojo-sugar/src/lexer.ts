@@ -794,9 +794,31 @@ const IDENT_CHARS = '0-9A-Za-z_';
 const NAME_RE = new RegExp(`^[${NAME_TOKEN_CHARS}]+$`);
 /** 变量引用（`I` / `LOCAL:2`） */
 const VAR_REF_RE = new RegExp(`^[${IDENT_CHARS}]+(?::[${IDENT_CHARS}]+)*$`);
+/**
+ * PS-8：词形 / 标记全部来自固定词表 ⇒ 动态 `new RegExp` 按**词名/标记**记忆。
+ * 动态建正则单次 create+exec ~0.57 µs（本机实测），预编译 exec ~0.016 µs（~36×）；
+ * 词法每行 9–12 次动态建形就是转译的最大单项。只缓存**无 `g`/`y` 旗标**的形
+ * （共享实例对无状态正则安全）；带 `g` 的 `续` 引号检测另行预编译 + 用前复位。
+ */
+const wordTailReCache = new Map<string, RegExp>();
+const stripContReCache = new Map<string, RegExp>();
+function memoRe(cache: Map<string, RegExp>, key: string, build: () => RegExp): RegExp {
+  let re = cache.get(key);
+  if (re === undefined) {
+    re = build();
+    cache.set(key, re);
+  }
+  return re;
+}
+
 /** 词首 + 空白 + 余文（中文词形不带冒号，故与 `parseBlockHead` 的切分不同式） */
 function wordTail(code: string, wordName: string): string | null {
-  const m = new RegExp(`^${escapeRe(wordName)}[ \\t\\u3000]+(.+)$`).exec(code);
+  const re = memoRe(
+    wordTailReCache,
+    wordName,
+    () => new RegExp(`^${escapeRe(wordName)}[ \\t\\u3000]+(.+)$`),
+  );
+  const m = re.exec(code);
   return m ? m[1]!.trim() : null;
 }
 
@@ -872,8 +894,13 @@ function parseLoopHead(rest: string): LineClass {
 
 /** `<变量> 从 <起> 到 <止> [步长 <步>]`（区间词与写侧同一张表；起止可含空白，故用**词界**而非逗号切） */
 function parseLoopCountHead(tail: string): LineClass {
-  const re = new RegExp(
-    `^([^\\s]+)\\s+${escapeRe(FROM_W)}\\s+(.+?)\\s+${escapeRe(TO_W)}\\s+(.+?)(?:\\s+${escapeRe(STRIDE_W)}\\s+(.+))?$`,
+  const re = memoRe(
+    wordTailReCache,
+    `count:${FROM_W}\u0000${TO_W}\u0000${STRIDE_W}`,
+    () =>
+      new RegExp(
+        `^([^\\s]+)\\s+${escapeRe(FROM_W)}\\s+(.+?)\\s+${escapeRe(TO_W)}\\s+(.+?)(?:\\s+${escapeRe(STRIDE_W)}\\s+(.+))?$`,
+      ),
   );
   const m = re.exec(tail);
   if (!m) return malformed(`${LOOP_W} ${COUNT_W} 的写法是「${COUNT_W} <变量> ${FROM_W} <起> ${TO_W} <止> [${STRIDE_W} <步>]」`);
@@ -972,7 +999,11 @@ function labelTargetStatement(wordName: string, engine: string, target: string):
 
 /** `步进 <变量> 加|减 <增量>` → 裸表达式行 `<变量> + <增量>`（循环变量自增减，与显示层同形） */
 function parseStepStatement(tail: string): LineClass {
-  const re = new RegExp(`^([^\\s]+)\\s+(${escapeRe(PLUS_W)}|${escapeRe(MINUS_W)})\\s+(.+)$`);
+  const re = memoRe(
+    wordTailReCache,
+    `step:${PLUS_W}\u0000${MINUS_W}`,
+    () => new RegExp(`^([^\\s]+)\\s+(${escapeRe(PLUS_W)}|${escapeRe(MINUS_W)})\\s+(.+)$`),
+  );
   const m = re.exec(tail);
   if (!m) return malformed(`「${STEP_W}」的写法是「${STEP_W} <变量> ${PLUS_W}|${MINUS_W} <增量>」`);
   const variable = m[1]!;
@@ -1577,7 +1608,12 @@ export function stripCont(
   detectContInsideQuotes(content, sink, line);
 
   for (const mark of CONT_MARKS) {
-    const re = new RegExp(`(?:^|\\s)${escapeRe(mark)}\\s*$`);
+    // PS-8：无 `g`/`y` 旗标 ⇒ 记忆实例跨行共享安全（test/replace 不带 lastIndex 态）
+    const re = memoRe(
+      stripContReCache,
+      mark,
+      () => new RegExp(`(?:^|\\s)${escapeRe(mark)}\\s*$`),
+    );
     if (re.test(content)) {
       const stripped = content.replace(re, (m0) => (m0.startsWith(' ') ? '' : ''));
       return { text: stripped.replace(/\s+$/, ''), wait: false };
@@ -1599,9 +1635,15 @@ export function detectSpeechOf(text: string, interpolations: Interpolation[]): b
 }
 
 /** 引号内出现 `续` → 诊断（规范 §8 lint 清单） */
+// PS-8：标记串是**固定字面量表** ⇒ 整组正则模块级预编译（每行 3 次动态建形是全词法
+// 最贵的单项之一）。带 `g` 旗标 ⇒ 共享实例有 lastIndex 态，**每轮扫描前显式复位**。
+const CONT_QUOTE_RES: readonly RegExp[] = (['续', 'cont', 'continue'] as const).map(
+  (mark) => new RegExp(`[「｢][^」｣]*${escapeRe(mark)}[^」｣]*[」｣]`, 'g'),
+);
+
 function detectContInsideQuotes(content: string, sink: DiagnosticSink, line: LogicalLine): void {
-  for (const mark of ['续', 'cont', 'continue']) {
-    const re = new RegExp(`[「｢][^」｣]*${escapeRe(mark)}[^」｣]*[」｣]`, 'g');
+  for (const re of CONT_QUOTE_RES) {
+    re.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(content)) !== null) {
       sink.report({

@@ -162,8 +162,28 @@ function compile(
   };
 }
 
-/** 编译整张分野表（表缺席 / 无 `faces` → 空索引，什么都不标） */
+/**
+ * 编译整张分野表（表缺席 / 无 `faces` → 空索引，什么都不标）。
+ *
+ * PS-8：按 **`faceTable` 对象身份**记忆（WeakMap）——投影每次重建都重编译全表正则
+ * （eraTW 实测 ~20 面 × 2 形），而装配层给出的表对象在同一代际内是稳定引用；
+ * 表缺席（`undefined`）不进记忆（每新对象都不同身份，缓存无意义且会泄漏）。
+ * 返回的 `FaceNameIndex` 是纯查询对象（内部 `cache` 只按函数名记忆判定结果），
+ * 跨投影共享安全。
+ */
+const faceIndexByTable = new WeakMap<KojoFaceTable, FaceNameIndex>();
+
 export function buildFaceNameIndex(table: KojoFaceTable | undefined): FaceNameIndex {
+  if (table !== undefined) {
+    const memo = faceIndexByTable.get(table);
+    if (memo !== undefined) return memo;
+  }
+  const index = compileFaceNameIndex(table);
+  if (table !== undefined) faceIndexByTable.set(table, index);
+  return index;
+}
+
+function compileFaceNameIndex(table: KojoFaceTable | undefined): FaceNameIndex {
   const matchers: FaceMatcher[] = [];
   for (const [face, tpl] of Object.entries(table?.faces ?? {})) {
     const main = compile(face, '主', tpl.template, tpl.segments);

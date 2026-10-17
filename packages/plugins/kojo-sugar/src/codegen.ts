@@ -607,7 +607,21 @@ function escapeRegExpText(text: string): string {
  *
  * 模板不含 `{i}`（无编号可分配）或结构坏损 → 返回 `null`（调用侧跳过，不猜）。
  */
+// PS-8：头正则按（模板, 角色号）记忆——每转译重建一次模板正则的账在 1,000 行档
+// 已实测不是主项（0.07%），但白扫本体每条线都要 exec；键空间 = autoIndex 面数 × 角色数，
+// 有天然上界，无泄漏风险。`null` 也缓存（`Map.get` 的 `undefined` 与 `null` 可区分）。
+const faceHeaderRegexCache = new Map<string, RegExp | null>();
+
 function faceHeaderRegex(template: string, charNo: string): RegExp | null {
+  const key = `${template}\u0000${charNo}`;
+  const memo = faceHeaderRegexCache.get(key);
+  if (memo !== undefined) return memo;
+  const re = buildFaceHeaderRegex(template, charNo);
+  faceHeaderRegexCache.set(key, re);
+  return re;
+}
+
+function buildFaceHeaderRegex(template: string, charNo: string): RegExp | null {
   if (!template.includes('{i}')) return null;
   let pat = '';
   for (let i = 0; i < template.length; ) {
@@ -652,7 +666,10 @@ function buildAutoIndexPools(
     for (const node of topLevel) {
       if (node.kind === 'rawFunctionBlock') {
         for (const line of node.lines) {
-          const m = headerRe.exec(line.trim());
+          const trimmed = line.trim();
+          // PS-8 前缀闸：`faceHeaderRegex` 锚定 `^@`，非 `@` 开头的行 exec 必空转
+          if (trimmed.charCodeAt(0) !== 0x40 /* @ */) continue;
+          const m = headerRe.exec(trimmed);
           if (m) pool.occupied.add(Number(m[1]));
         }
       } else if (
