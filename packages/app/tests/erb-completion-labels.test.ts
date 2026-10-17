@@ -1,14 +1,17 @@
 /**
  * EC-4 · `.erb` 的 `$标签` 补全（`erbLabelCompletionItems`）单测。
  *
- * 合成 model（无需语料、不引入 Monaco 运行时）：`getValue` 供全文扫标签、`getLineContent`
- * 供跳转上下文解析。覆盖：`GOTO ` → 本文件全量标签；`GOTO 招` → 前缀过滤；普通行 / 条件行 /
- * 无标签文件 / 空 model → `[]`（不抛）；`$` 已敲则保留（`insertText` 不重复补 `$`）；
- * 替换范围**只覆盖标签名那一段**；`kind` = Reference、排序前缀精确优先。
+ * 合成 model（无需语料、不引入 Monaco 运行时）：`getValue` 供全文扫标签（未索引时的回退路）、
+ * `getLineContent` 供跳转上下文解析。覆盖：`GOTO ` → 本文件全量标签；前缀过滤（含大小写
+ * 不敏感）；跳转家族四词 / 全角空白分隔；解析器事实通道（`labelsAt` 数组 ⇒ 作用域收窄、
+ * `undefined` ⇒ 全文回退、`[]` ⇒ 零候选）；普通行 / 条件行 / 无标签文件 / 空 model → `[]`
+ * （不抛）；`$` 已敲则保留（`insertText` 不重复补 `$`）；替换范围**只覆盖标签名那一段**；
+ * `kind` = Reference、排序前缀精确优先。
  */
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
+import type { ErbFileFactsProvider } from '../src/monaco/completion-core';
 import { erbLabelCompletionItems } from '../src/monaco/erb-completion-labels';
 
 /** 合成 Monaco：本纯函数只用到 CompletionItemKind.Reference */
@@ -23,7 +26,7 @@ function modelOf(text: string): Monaco.editor.ITextModel {
 }
 
 /** 用 `|` 标记光标（1 基列 = 标记前字符数 + 1）；无标记 = 全文末尾。`|` 可落在文件任意行。 */
-function at(marked: string): Monaco.languages.CompletionItem[] {
+function at(marked: string, facts?: ErbFileFactsProvider): Monaco.languages.CompletionItem[] {
   const marker = marked.indexOf('|');
   const hasCaret = marker >= 0;
   const text = hasCaret ? marked.replace('|', '') : marked;
@@ -32,11 +35,16 @@ function at(marked: string): Monaco.languages.CompletionItem[] {
   const lineNumber = before.split('\n').length;
   const lineStart = before.lastIndexOf('\n') + 1;
   const column = caret - lineStart + 1;
-  return erbLabelCompletionItems(monaco, modelOf(text), { lineNumber, column } as Monaco.Position);
+  return erbLabelCompletionItems(monaco, modelOf(text), { lineNumber, column } as Monaco.Position, facts);
 }
 
 const labels = (items: readonly Monaco.languages.CompletionItem[]): string[] =>
   items.map((i) => i.label as string);
+
+/** facts 桩：只驱动标签三态（数组 / `undefined` / `[]`）；`dimsOf` 与标签补全无关。 */
+function factsOf(labelsAt: (path: string, line: number) => readonly string[] | undefined): ErbFileFactsProvider {
+  return { dimsOf: () => undefined, labelsAt };
+}
 
 /** 三标签样本文件（定义保序：开始 → 招待 → 招架） */
 const FILE = '@TEST\n$开始\n\tPRINTL 你好\n\tGOTO 招\n$招待\n\tPRINTL 招待\n$招架\n\tPRINTL 招架';
@@ -60,6 +68,81 @@ describe('EC-4 标签补全 · 跳转上下文产出', () => {
     for (const item of items) {
       expect(item.range).toEqual({ startLineNumber: 4, endLineNumber: 4, startColumn: 6, endColumn: 8 });
     }
+  });
+});
+
+describe('EC-4 标签补全 · 跳转家族与空白 / 大小写口径（context 单源判据）', () => {
+  it('家族四词（`JUMP` / `GOTO` / `TRYJUMP` / `TRYGOTO`）后都出货', () => {
+    for (const kw of ['JUMP', 'GOTO', 'TRYJUMP', 'TRYGOTO']) {
+      expect(labels(at(`@TEST\n$甲\n$乙\n\t${kw} 甲|`))).toEqual(['甲']);
+    }
+  });
+
+  it('全角空白作关键字后分隔（`JUMP\u3000$la|`）同样出货', () => {
+    expect(labels(at('@TEST\n$LA\n$lb\n\tJUMP\u3000$la|'))).toEqual(['LA']);
+  });
+
+  it('前缀过滤大小写不敏感：小写残片命中大写标签（展示保留原文）', () => {
+    expect(labels(at('@TEST\n$Alpha\n$beta\n\tGOTO al|'))).toEqual(['Alpha']);
+    expect(labels(at('@TEST\n$Alpha\n$beta\n\tGOTO BE|'))).toEqual(['beta']);
+  });
+
+  it('关键字大小写敏感（承接 erbLabelSlot 单源现状）：`goto ` 不产出', () => {
+    expect(at('@TEST\n$甲\n\tgoto 甲|')).toEqual([]);
+  });
+});
+
+describe('EC-4 标签补全 · 作用域收窄（解析器事实通道）', () => {
+  // `$B` 在其他函数里：全文扫描可见、解析器事实（函数局部）不应收
+  const SCOPED = '@TEST\n$A\n\tPRINTL x\n$B\n\tGOTO |';
+
+  it('`labelsAt` 返回数组 ⇒ 以解析器事实为准（其他函数的 `$B` 不出）', () => {
+    expect(labels(at(SCOPED, factsOf(() => ['A'])))).toEqual(['A']);
+  });
+
+  it('`labelsAt` 返回 undefined（未索引）⇒ 回退全文扫描（`$B` 可见）', () => {
+    expect(labels(at(SCOPED, factsOf(() => undefined)))).toEqual(['A', 'B']);
+  });
+
+  it('`labelsAt` 返回 []（已索引确无该项）⇒ 零候选，不回退', () => {
+    expect(at(SCOPED, factsOf(() => []))).toEqual([]);
+  });
+
+  it('`labelsAt` 收到 model 的 fsPath（回落 `uri.path`）与光标行号', () => {
+    const calls: Array<[string, number]> = [];
+    const model = {
+      ...(modelOf('@TEST\n$A\n\tGOTO ') as unknown as Record<string, unknown>),
+      uri: { fsPath: 'C:\\game\\a.ERB', path: '/game/a.ERB' },
+    } as unknown as Monaco.editor.ITextModel;
+    const items = erbLabelCompletionItems(
+      monaco,
+      model,
+      { lineNumber: 3, column: 7 } as Monaco.Position,
+      factsOf((path, line) => {
+        calls.push([path, line]);
+        return ['A'];
+      }),
+    );
+    expect(labels(items)).toEqual(['A']);
+    expect(calls).toEqual([['C:\\game\\a.ERB', 3]]);
+  });
+
+  it('path 回落口径：fsPath 缺 / 空 ⇒ `uri.path` ⇒ 无 uri ⇒ 空串', () => {
+    const seen: string[] = [];
+    const pos = { lineNumber: 3, column: 7 } as Monaco.Position;
+    const facts = factsOf((path) => {
+      seen.push(path);
+      return ['A'];
+    });
+    const withUri = (uri?: unknown): Monaco.editor.ITextModel =>
+      ({
+        ...(modelOf('@TEST\n$A\n\tGOTO ') as unknown as Record<string, unknown>),
+        ...(uri === undefined ? {} : { uri }),
+      }) as unknown as Monaco.editor.ITextModel;
+    erbLabelCompletionItems(monaco, withUri({ path: '/game/b.ERB' }), pos, facts);
+    erbLabelCompletionItems(monaco, withUri({ fsPath: '', path: '/game/c.ERB' }), pos, facts);
+    erbLabelCompletionItems(monaco, withUri(undefined), pos, facts);
+    expect(seen).toEqual(['/game/b.ERB', '/game/c.ERB', '']);
   });
 });
 

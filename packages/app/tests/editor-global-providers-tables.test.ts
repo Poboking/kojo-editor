@@ -23,7 +23,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Kernel } from '@kojo/kernel';
-import type { GameAdapter, GameProject } from '@kojo/plugin-api';
+import type { ErbFile, ErbIndex, GameAdapter, GameProject } from '@kojo/plugin-api';
 
 const stub = vi.hoisted(() => {
   /** 一次注册建立的记录：`disposed` = dispose 被叫过且没抛错 */
@@ -100,11 +100,12 @@ const identity = (value: object): string => (value as { __table?: string }).__ta
 function fakeKernel(
   contributions: readonly { id: string; adapter: GameAdapter }[],
   project: GameProject | null,
+  parser?: { currentIndex(): ErbIndex | null },
 ) {
   return {
     project: { current: () => project },
     slots: { query: () => contributions },
-    services: { tryGet: () => undefined },
+    services: { tryGet: (key: string) => (key === 'erb.parser' ? parser : undefined) },
   } as unknown as Kernel;
 }
 
@@ -250,5 +251,93 @@ describe('disposeGlobalProviders · 逐枚 try/catch（缺陷 3）', () => {
     stub.state.reset();
     ensureGlobalProviders();
     expect(stub.state.created).toHaveLength(total);
+  });
+});
+
+/* ------------------------------ erbFileFacts（解析事实通道的宿主注入侧） ------------------------------ */
+
+/**
+ * 一枚桩 ERB 索引：单个文件，两个函数各挂各的标签；dims 含一条**重名不同指令**的声明
+ * （钉去重）。文件的键形态（`C:\Game\SKILL.ERB`）与查询路径故意不同大小写 / 分隔符——
+ * 归一责任在宿主（`pathKey`），装配核零路径知识。
+ */
+function stubErbIndex(): ErbIndex {
+  const filePath = 'C:\\Game\\SKILL.ERB';
+  const file: ErbFile = {
+    path: filePath,
+    functions: [
+      { name: 'M_FUNC_A', normalizedName: 'M_FUNC_A', params: [], startLine: 10, endLine: 30, filePath },
+      { name: 'M_FUNC_B', normalizedName: 'M_FUNC_B', params: [], startLine: 40, endLine: 60, filePath },
+    ],
+    dims: [
+      { name: 'FLAG_A', directive: 'DIM', line: 3 },
+      { name: 'FLAG_A', directive: 'DIMS', line: 4 },
+      { name: 'FLAG_B', directive: 'DIM', line: 5 },
+    ],
+    labels: [
+      { name: 'LABEL_A1', line: 12, functionStartLine: 10 },
+      { name: 'LABEL_A2', line: 14, functionStartLine: 10 },
+      { name: 'LABEL_B1', line: 42, functionStartLine: 40 },
+    ],
+    hasFunctionDirective: false,
+    lineCount: 100,
+  };
+  return { files: new Map([[filePath, file]]), byName: new Map() };
+}
+
+/** 查询路径：与索引键的大小写 / 分隔符都不同，只有 `pathKey` 归一才能命中 */
+const FACTS_PATH = 'c:/game/skill.erb';
+
+/** 经 `editorTables` 取出 `erbFileFacts`（无项目也必须在场：它挂在 projectSoftLegs 上） */
+function factsOf(index: ErbIndex | null) {
+  const facts = editorTables(fakeKernel([], null, { currentIndex: () => index })).erbFileFacts;
+  expect(facts).toBeDefined();
+  return facts!;
+}
+
+describe('editorTables · erbFileFacts（解析事实通道，宿主注入侧）', () => {
+  it('dimsOf：路径经 pathKey 归一命中（大小写 / 分隔符不同），重名声明去重', () => {
+    expect(factsOf(stubErbIndex()).dimsOf(FACTS_PATH)).toEqual(['FLAG_A', 'FLAG_B']);
+  });
+
+  it('dimsOf：未知路径 ⇒ undefined；无索引 ⇒ undefined；取索引抛错也 undefined（绝不抛进 seam）', () => {
+    expect(factsOf(stubErbIndex()).dimsOf('C:\\Game\\OTHER.ERB')).toBeUndefined();
+    expect(factsOf(null).dimsOf(FACTS_PATH)).toBeUndefined();
+    const throwing = fakeKernel([], null, {
+      currentIndex: () => {
+        throw new Error('索引在途');
+      },
+    });
+    expect(editorTables(throwing).erbFileFacts?.dimsOf(FACTS_PATH)).toBeUndefined();
+    // tryGet 本身抛错（槽位表崩）：同一条兜底
+    const throwingGet = {
+      project: { current: () => null },
+      slots: { query: () => [] },
+      services: {
+        tryGet: () => {
+          throw new Error('槽位表崩');
+        },
+      },
+    } as unknown as Kernel;
+    expect(editorTables(throwingGet).erbFileFacts?.dimsOf(FACTS_PATH)).toBeUndefined();
+  });
+
+  it('labelsAt：光标行落在函数 A ⇒ 只出 A 的标签（B 的不混）；首末边界含', () => {
+    const facts = factsOf(stubErbIndex());
+    expect(facts.labelsAt(FACTS_PATH, 10)).toEqual(['LABEL_A1', 'LABEL_A2']); // 函数 A 首行
+    expect(facts.labelsAt(FACTS_PATH, 30)).toEqual(['LABEL_A1', 'LABEL_A2']); // 函数 A 末行（含）
+    expect(facts.labelsAt(FACTS_PATH, 45)).toEqual(['LABEL_B1']); // 函数 B 体内
+  });
+
+  it('labelsAt：行在函数外 ⇒ []（已索引但确无该项，诚实空不回退）', () => {
+    const facts = factsOf(stubErbIndex());
+    expect(facts.labelsAt(FACTS_PATH, 5)).toEqual([]); // 第一个 @ 之前
+    expect(facts.labelsAt(FACTS_PATH, 35)).toEqual([]); // 两函数之间
+    expect(facts.labelsAt(FACTS_PATH, 200)).toEqual([]); // 文件尾之外
+  });
+
+  it('labelsAt：未知路径 / 无索引 ⇒ undefined（未索引，调用方自行回退）', () => {
+    expect(factsOf(stubErbIndex()).labelsAt('C:\\Game\\OTHER.ERB', 12)).toBeUndefined();
+    expect(factsOf(null).labelsAt(FACTS_PATH, 12)).toBeUndefined();
   });
 });

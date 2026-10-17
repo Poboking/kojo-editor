@@ -93,12 +93,34 @@ export interface CompletionTables {
    */
   readonly erbFunctionNames?: () => readonly string[];
   /**
+   * 当前 ERB 文件的**解析事实通道**（宿主注入；缺席 ⇒ 相关来源零候选 / 回退）。
+   * `path` 一律传 model 的 fsPath（路径归一责任在宿主；语义见 {@link ErbFileFactsProvider}）。
+   */
+  readonly erbFileFacts?: ErbFileFactsProvider;
+  /**
    * `.kojo` 文件级声明名（`别名` / `常量`）的**解析器通道**注入位。
    * 宿主可注入内核里那一枚 `sugar.transpile` 服务；未注入时由 `kojo-completion-declarations.ts`
    * 用同一个 `createSugarTranspileService` 懒建一枚只解析实例顶上（纯函数、零 IO）——
    * **绝不在编辑器侧写第二份别名正则**。
    */
   readonly kojoDeclarations?: CompletionDeclarationScanner;
+}
+
+/**
+ * 当前 `.erb` 文件**解析事实**的提供者（宿主注入：内核索引 / 解析服务在手；本层零 IO、不猜）。
+ *
+ * 语义纪律（`undefined` 与 `[]` **严格分家**，消费方不得揉成一态）：
+ * - `undefined` = **未索引 / 取不到** ⇒ 调用方自行回退（全文口径或零候选），不猜；
+ * - `[]` = **已索引但确无该项** ⇒ 该路零候选（**不回退**——回退只会拿出与索引不一致的假事实）。
+ *
+ * `path` 由调用方传 model 的 fsPath 原文；归一（大小写 / 分隔符 / 工作区相对化）是
+ * **宿主注入侧**的唯一责任，装配核零路径知识、不做任何规整。
+ */
+export interface ErbFileFactsProvider {
+  /** 当前文件的 `#DIM*` 声明名；未索引 / 取不到 ⇒ `undefined`（不猜）。 */
+  dimsOf(path: string): readonly string[] | undefined;
+  /** 光标行所属函数内的 `$` 标签名；当前文件未索引 ⇒ `undefined`（调用方自行回退）。 */
+  labelsAt(path: string, line: number): readonly string[] | undefined;
 }
 
 /** 一条文件级声明的类别（`别名` / `常量`；判别口径与契约 `AliasDecl` / `ConstDecl` 同族） */
@@ -267,8 +289,12 @@ export interface CompletionMergeOptions {
   readonly reported: Set<string>;
   readonly tag: string;
   readonly onDegrade?: CompletionDegradeReporter;
-  /** 位置门的候选过滤器（**过滤**不是重排：各 source 的既有排序语义不动） */
-  readonly keep?: (item: Monaco.languages.CompletionItem) => boolean;
+  /**
+   * 位置门的候选过滤器（**过滤**不是重排：各 source 的既有排序语义不动）。
+   * 第二参 = 产出该候选的 `source.id`（additive：名字槽这类"同 kind 不同源"的候选按来源 id
+   * 收口；**少参谓词天然兼容**——既有单参消费方零改动）。
+   */
+  readonly keep?: (item: Monaco.languages.CompletionItem, sourceId: string) => boolean;
   readonly provenance?: CompletionProvenanceStore;
   /** 装配级上限（缺省 {@link MAX_ASSEMBLED_SUGGESTIONS}；测试可放宽以验对拍） */
   readonly limit?: number;
@@ -331,8 +357,11 @@ export function mergeSuggestions(
       if (source.requires !== undefined) reportDegrade(opts, source.id, source.requires, `求值抛错（${msg}）`);
       continue;
     }
-    // 位置门在**去重前**逐 source 过滤：keyword 形态的候选不得占掉函数名候选的先注册位
-    if (opts.keep !== undefined) items = items.filter(opts.keep);
+    // 位置门在**去重前**逐 source 过滤：keyword 形态的候选不得占掉函数名候选的先注册位；
+    // 谓词第二参 = 本 source 的 id（名字槽候选源白名单按来源 id 筛——同为 Function kind 的
+    // 系统函数源与项目函数源靠 kind 分不开）
+    const keep = opts.keep;
+    if (keep !== undefined) items = items.filter((item) => keep(item, source.id));
     for (const item of items) {
       const label = labelText(item.label);
       if (!byLabel.has(label)) byLabel.set(label, { item, sourceId: source.id });
@@ -450,9 +479,12 @@ export function insertAsSnippetRule(monaco: typeof Monaco): Monaco.languages.Com
 
 /**
  * 把一条**调用形态**候选改写成带 tabstop 的 snippet（**原地**改 `insertText` / `insertTextRules`）。
- * 返回是否改写。不改写的情形（一律**退化成纯文本**，一条不猜）：非调用形态 source / `insertText`
- * 不是 `名字(` / 替换区间右端**紧跟一个 `(`**（作者已自己开括号）/ 协议缺席或不认这个函数 /
- * 桩 monaco 拿不到 `CompletionItemInsertTextRule` 枚举。
+ * 返回是否 snippet 化。不改写的情形（一条不猜）：非调用形态 source / `insertText` 不是 `名字(` /
+ * 协议缺席或不认这个函数 / 桩 monaco 拿不到 `CompletionItemInsertTextRule` 枚举。
+ *
+ * 特殊分支：替换区间右端**紧跟一个 `(`**（作者已自己开括号）⇒ 不 snippet 化（仍返回 `false`），
+ * 但**形态必须当场修正**：`insertText` 由 `名字(` 收回纯 `名字`（作者那枚 `(` 留在替换区间右端）
+ * ⇒ 接受候选落字恰为 `名字(`；不修正则原样插入的 `名字(` 与作者那枚 `(` 叠成 `名字((`（明显非法）。
  */
 export function applyCallSnippet(
   monaco: typeof Monaco,
@@ -465,7 +497,14 @@ export function applyCallSnippet(
   if (!policy.sourceIds.has(provenance.sourceId)) return false;
   const insertText = typeof item.insertText === 'string' ? item.insertText : undefined;
   if (insertText === undefined || insertText !== `${provenance.label}(`) return false;
-  if (charAfter === '(') return false;
+  if (charAfter === '(') {
+    item.insertText = provenance.label;
+    // 已核实：本仓调用形态的 source（系统函数 / 库函数两处）从不预置 `insertTextRules`
+    //（仅 snippet 源会设，而它们不产 `名字(` 形态）——此处仍防御性清掉：外部追加的 source
+    // 若预置过，纯名字按 snippet 规则解析会吞 `$` / `}` 等字符。
+    if (item.insertTextRules !== undefined) delete item.insertTextRules;
+    return false;
+  }
   const rule = insertAsSnippetRule(monaco);
   if (rule === undefined) return false;
   const keys = policy.keysFor === undefined ? [provenance.label] : policy.keysFor(provenance.label, provenance.tables);
@@ -694,8 +733,8 @@ export interface CompletionLocation {
   readonly range: Monaco.IRange;
   /** 光标前已输入词（排序档位用） */
   readonly prefix: string;
-  /** 门类过滤（可选：位置门只筛候选，不重排） */
-  readonly keep?: (item: Monaco.languages.CompletionItem) => boolean;
+  /** 门类过滤（可选：位置门只筛候选，不重排；第二参 = 候选来源 id，additive——单参谓词天然兼容） */
+  readonly keep?: (item: Monaco.languages.CompletionItem, sourceId: string) => boolean;
   /** 判定过程中**已经读过**的那一行（snippet 化复用它，省一次 model 读取） */
   readonly seed?: { readonly lineNumber: number; readonly text: string };
 }

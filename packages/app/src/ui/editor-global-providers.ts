@@ -18,10 +18,11 @@
  */
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
-import { errorText } from '@kojo/plugin-api';
+import { errorText, pathKey } from '@kojo/plugin-api';
 import type {
   EditorDocumentSymbol,
   EditorTextEdit,
+  ErbFile,
   ErbIndex,
   ErbParserService,
   ErbReference,
@@ -72,6 +73,8 @@ import {
   resolveSignatureInText,
 } from '../monaco/kojo-signature';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
+// `erbFileFacts` 的注入契约形状（通道语义 / `undefined` 与 `[]` 的分家，见该文件头注）
+import type { ErbFileFactsProvider } from '../monaco/completion-core';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
 import { createApplyToClosedFile, installErbRename } from '../monaco/erb-rename';
 import { collectReferenceLocations, installReferenceProvider } from '../monaco/find-references';
@@ -190,13 +193,16 @@ function staticTablesFor(
 }
 
 /**
- * 与项目开闭**无关**、但取数依赖项目态的两条软腿：函数名补全（`erb.parser` 索引派生）与
- * 悬停用的当前索引通道。两者都在**求值时**软取（`services.tryGet` + try/catch），索引未建 ⇒
- * 该路零候选 / 零结果（退化可见），绝不抛进 seam；每次现取，不缓存上一个项目的脏索引。
+ * 与项目开闭**无关**、但取数依赖项目态的三条软腿：函数名补全（`erb.parser` 索引派生）、
+ * 悬停用的当前索引通道、补全 seam 的**解析事实通道**（`erbFileFacts`：`#DIM*` 声明名 +
+ * 光标行所属函数内的 `$` 标签名，契约见 `monaco/completion-core.ts` 的 `ErbFileFactsProvider`）。
+ * 三者都在**求值时**软取（`services.tryGet` + try/catch），索引未建 ⇒ 该路零候选 / 零结果 /
+ * `undefined`（退化可见），绝不抛进 seam；每次现取，不缓存上一个项目的脏索引。
  */
-function projectSoftLegs(kernel: Kernel): Pick<CompletionTables, 'erbFunctionNames'> & HoverTables {
+function projectSoftLegs(kernel: Kernel): Pick<CompletionTables, 'erbFunctionNames' | 'erbFileFacts'> & HoverTables {
   return {
     erbFunctionNames: erbFunctionNamesFor(kernel),
+    erbFileFacts: erbFileFactsFor(kernel),
     erbIndex: () => {
       try {
         return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
@@ -224,6 +230,55 @@ function erbFunctionNamesFor(kernel: Kernel): () => readonly string[] {
     erbFnMemoByKernel.set(kernel, fn);
   }
   return fn;
+}
+
+/**
+ * 在索引里按 `pathKey` 归一找 `path` 对应的文件——**路径归一责任在宿主**（`ErbFileFactsProvider`
+ * 的契约只收 fsPath 原文）。HK-7 同款口径：平台原样路径与宿主键在 Windows 上分隔符 / 大小写
+ * 不一致，裸字符串比会静默判不上（先例见 `ui/external-change.ts` 的 `matchOpenedPath`）。
+ * 从 `index.files` 的**键**逐键比较（键即绝对路径）；找不到 / 索引缺席 ⇒ `null`。
+ */
+function fileForPath(index: ErbIndex | null, path: string): ErbFile | null {
+  if (!index) return null;
+  const want = pathKey(path);
+  for (const [key, file] of index.files) {
+    if (pathKey(key) === want) return file;
+  }
+  return null;
+}
+
+/**
+ * 当前 ERB 文件的**解析事实通道**（补全 seam 的 `erbFileFacts` 注入位，语义见
+ * `monaco/completion-core.ts` 的 `ErbFileFactsProvider`）：`#DIM*` 声明名与光标行所属
+ * 函数内的 `$` 标签名，一律从 `erb.parser` 索引**现取**（不缓存：索引随项目开闭重建）。
+ *
+ * 语义纪律（`undefined` 与 `[]` 严格分家，消费方据此决定回退与否）：
+ * - 索引缺席 / 索引在途 / 索引里没有这个文件 ⇒ `undefined`（未索引 ⇒ 调用方自行回退）；
+ * - 文件在索引里但没有包含该行的函数 ⇒ `[]`（已索引但确无该项，诚实空，**不回退**）。
+ * 取索引与求事实全程 try/catch：绝不把抛错送进补全 seam（与 `erbParserIndex` 同一纪律）。
+ */
+function erbFileFactsFor(kernel: Kernel): ErbFileFactsProvider {
+  return {
+    dimsOf: (path) => {
+      try {
+        const file = fileForPath(erbParserIndex(kernel), path);
+        return file ? [...new Set(file.dims.map((d) => d.name))] : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    labelsAt: (path, line) => {
+      try {
+        const file = fileForPath(erbParserIndex(kernel), path);
+        if (!file) return undefined;
+        const fn = file.functions.find((f) => f.startLine <= line && line <= f.endLine);
+        if (!fn) return [];
+        return [...new Set((file.labels ?? []).filter((l) => l.functionStartLine === fn.startLine).map((l) => l.name))];
+      } catch {
+        return undefined;
+      }
+    },
+  };
 }
 
 /**

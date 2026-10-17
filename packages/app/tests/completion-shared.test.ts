@@ -1,7 +1,7 @@
 /**
  * COMPL-SHARED · 两套补全装配核并一 + 跨语言候选打通 的回归钉。
  *
- * 八条判据各钉一处，全部经**生产装配路径**（`createCompletionProvider` / `installKojoCompletion`），
+ * 十条判据各钉一处，全部经**生产装配路径**（`createCompletionProvider` / `installKojoCompletion`），
  * 不测私有实现：
  *
  * ①**对拍**：两门语言喂**同一组候选源**，经各自的装配声明（`KOJO_COMPLETION_ASSEMBLY` /
@@ -19,6 +19,8 @@
  * ⑧**装配核不静默**（AGENTS.md 铁律 4）：`locate` / `getTables` 抛错 ⇒ 返回 `{ suggestions: [] }`
  *   （Monaco 要求的形状）并经降级通道报出、promise 不 reject；去重表**每轮装配新建** ⇒ 同一缺表
  *   在两轮 provide 各报一次（旧形态 = 整个句柄只报一次 ⇒ 首轮之后永久无声）。
+ * ⑨**keep 双参**：位置门谓词拿到**候选来源 id**（同 kind 不同源的候选按来源收口；单参谓词兼容）。
+ * ⑩**已写左括号的落字修正**：`名字(` 形态遇右邻 `(` ⇒ `insertText` 收回纯 `名字`，落字 `名字(`。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -29,12 +31,18 @@ import { KOJO_COMPLETION_ASSEMBLY, KOJO_COMPLETION_SOURCES, installKojoCompletio
 import { kojoDeclarationsOf } from '../src/monaco/kojo-completion-declarations';
 import { kojoFunctionNameSlot } from '../src/monaco/kojo-completion-functions';
 import {
+  applyCallSnippet,
   COMPLETION_ASSEMBLY_SOURCE_ID,
   createCompletionProvider,
+  labelText,
+  mergeSuggestions,
   type CompletionAssembly,
   type CompletionDegrade,
+  type CompletionMergeOptions,
+  type CompletionProvenance,
   type CompletionSource,
   type CompletionTables,
+  type ErbFileFactsProvider,
 } from '../src/monaco/completion-core';
 
 /* ============================== 桩 ============================== */
@@ -350,8 +358,9 @@ describe('COMPL-SHARED ⑤ · 声明候选经装配路径的副作用（注释 /
 
   it('注释行里的 `别名` 声明**不进候选**（旧正则在这里会伪出货 ⇒ 现以解析器为准）', () => {
     const at = labelsAt('; 别名 假声明 = 角色 1\n;', 14);
-    expect(at).not.toContain('假声明');
-    expect(at.length).toBeGreaterThan(0); // 词表路照旧（不是空跑换来的"干净"）
+    // K2 词表位置门（POS-LEX）：注释位**整表不供** ⇒ 这里就该是零候选（假声明不仅"不进"）。
+    // "不是空跑换来的干净"由下方 col 2 的真声明用例证明（同一条源路在该位照常出货）。
+    expect(at).toEqual([]);
   });
 
   it('字符串内的 `别名` 文本不进候选', () => {
@@ -366,13 +375,15 @@ describe('COMPL-SHARED ⑤ · 声明候选经装配路径的副作用（注释 /
   it('真声明进候选：`别名` 与新增的 `常量` 两路（detail 区分类别）', () => {
     const { monaco, registered } = stubMonaco();
     installKojoCompletion(monaco, () => ({}));
-    const items = provide(registered[0]!.provider, '别名 心 = 角色 3\n常量 上限值 = 5\n', 1);
+    // col 2（`别|名` 位）而非 col 1：col 1 是"光标前无内容"的空位，K2 位置门判词表不供
+    // （该位只有 R4 块头模板的场子）；词表在行的第一个 token 内（col ≥ 2）照常出货。
+    const items = provide(registered[0]!.provider, '别名 心 = 角色 3\n常量 上限值 = 5\n', 2);
     expect(items.find((i) => i.label === '心')?.detail).toBe('别名（本文件）');
     expect(items.find((i) => i.label === '上限值')?.detail).toBe('常量（本文件）');
   });
 
   it('宿主注入的扫描器**真的被消费**（表上给了就不走缺省实例 ⇒ W6 语言服务槽那条通道有效）', () => {
-    const at = labelsAt('别名 心 = 角色 3\n', 1, { kojoDeclarations: () => [{ name: '注入名', kind: 'alias' }] });
+    const at = labelsAt('别名 心 = 角色 3\n', 2, { kojoDeclarations: () => [{ name: '注入名', kind: 'alias' }] });
     expect(at).toContain('注入名');
     expect(at).not.toContain('心');
   });
@@ -427,6 +438,7 @@ describe('COMPL-SHARED ⑥ · 两册候选源形状一致（并表的可断言�
       'libraryTable',
       'callProtocol',
       'erbFunctionNames',
+      'erbFileFacts',
       'kojoDeclarations',
     ]);
     for (const source of [...ERB_COMPLETION_SOURCES, ...KOJO_COMPLETION_SOURCES]) {
@@ -471,8 +483,11 @@ describe('COMPL-SHARED ④ · 缺源不抛不猜（降级每轮可见一次）',
       }),
       (d) => degrades.push(d),
     );
-    expect(() => provide(registered[0]!.provider, '调用 M_KOJO', 11)).not.toThrow();
-    expect(provide(registered[0]!.provider, '调用 M_KOJO', 11).length).toBeGreaterThan(0); // 词表源照旧
+    expect(() => provide(registered[0]!.provider, '调用 M_KOJO', 2)).not.toThrow();
+    // col 2（行首 token 内）取"别的源照旧出货"：`调用` 是 inline 关键字、行中名字槽位
+    // 按 K2 位置门词表不供（那是 kojo-functions 的场子，本测试里它正抛错）⇒ 以行首位验证
+    // "这一路抛错不陪葬其余源"。FUNCTIONS_SOURCE 在槽判定前就调表 ⇒ 抛错与列无关，降级照发。
+    expect(provide(registered[0]!.provider, '调用 M_KOJO', 2).length).toBeGreaterThan(0);
     // 两轮 provide = 两轮装配 ⇒ 各报一次（旧口径"句柄级只报一次"是永久无声的 bug，见 ⑧）
     expect(degrades.filter((d) => d.sourceId === 'kojo-functions')).toHaveLength(2);
   });
@@ -492,6 +507,23 @@ describe('COMPL-SHARED · 两套 Tables 并一（类型层证明）', () => {
     expect(erbTables.erbFunctionNames?.()).toEqual(PROJECT_FNS);
     // 源册并一后仍各自存在，但源类型同源（同一 `CompletionSource` 形状）
     expect(ERB_COMPLETION_SOURCES.every((s) => typeof s.provide === 'function')).toBe(true);
+  });
+
+  it('`erbFileFacts` 通道可注入：undefined=未索引（调用方回退）／[]=已索引无该项（零候选不回退）', () => {
+    const queried: Array<[string, number]> = [];
+    const facts: ErbFileFactsProvider = {
+      dimsOf: (path) => (path === '/w/A.erb' ? ['上限值'] : undefined),
+      labelsAt: (path, line) => {
+        queried.push([path, line]);
+        return path === '/w/A.erb' ? [] : undefined;
+      },
+    };
+    const tables: CompletionTables = { erbFunctionNames: () => PROJECT_FNS, erbFileFacts: facts };
+    expect(tables.erbFileFacts?.dimsOf('/w/A.erb')).toEqual(['上限值']);
+    expect(tables.erbFileFacts?.dimsOf('/w/B.erb')).toBeUndefined(); // 未索引 ⇒ 调用方自行回退（不猜）
+    expect(tables.erbFileFacts?.labelsAt('/w/A.erb', 3)).toEqual([]); // 已索引、确无该项：零候选不回退
+    expect(tables.erbFileFacts?.labelsAt('/w/B.erb', 3)).toBeUndefined();
+    expect(queried).toEqual([['/w/A.erb', 3], ['/w/B.erb', 3]]); // path 原文透传（归一责任在宿主）
   });
 });
 
@@ -533,7 +565,7 @@ describe('COMPL-SHARED ⑦ · 全角分隔的声明名经装配路径进候选',
   it('`别名　全角隔 = 角色 3`（全角分隔）的声明名候选照常出货，detail 区分类别', () => {
     const { monaco, registered } = stubMonaco();
     installKojoCompletion(monaco, () => ({}));
-    const items = provide(registered[0]!.provider, '别名　全角隔 = 角色 3\n常量　上限值 = 5\n', 1);
+    const items = provide(registered[0]!.provider, '别名　全角隔 = 角色 3\n常量　上限值 = 5\n', 2);
     expect(items.find((i) => i.label === '全角隔')?.detail).toBe('别名（本文件）');
     expect(items.find((i) => i.label === '上限值')?.detail).toBe('常量（本文件）');
   });
@@ -638,5 +670,106 @@ describe('COMPL-SHARED ⑧ · 装配核不静默（AGENTS.md 铁律 4）', () =>
     expect(hit.missing).toBe('erbFunctionNames');
     expect(Object.keys(hit).sort()).toEqual(['missing', 'reason', 'sourceId']);
     expect(assemblyDegrades(degrades)).toEqual([]);
+  });
+});
+
+/* ============================== ⑨ keep 谓词第二参 = 候选来源 id ============================== */
+
+describe('COMPL-SHARED ⑨ · keep 按候选来源 id 过滤（名字槽候选源白名单）', () => {
+  /** 两个 source 产**同 kind**（Function）候选：按 kind 分不开 ⇒ 必须能按来源 id 筛 */
+  function sameKindSource(id: string, names: readonly string[]): CompletionSource {
+    return {
+      id,
+      provide({ monaco, range }): Monaco.languages.CompletionItem[] {
+        return names.map((name) => ({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Function,
+          insertText: name,
+          range,
+        }));
+      },
+    };
+  }
+
+  function run(
+    sources: readonly CompletionSource[],
+    keep: CompletionMergeOptions['keep'],
+  ): Monaco.languages.CompletionItem[] {
+    const { monaco } = stubMonaco();
+    return mergeSuggestions(
+      sources,
+      {
+        monaco,
+        model: modelOf(''),
+        position: { lineNumber: 1, column: 1 } as Monaco.Position,
+        range: { startLineNumber: 1, endLineNumber: 1, startColumn: 1, endColumn: 1 } as Monaco.IRange,
+        tables: {},
+      },
+      '',
+      { reported: new Set<string>(), tag: '[compl-shared-test]', keep },
+    );
+  }
+
+  it('同一轮：sourceA 保留、sourceB 剔除；谓词第二参逐条就是 source.id（不是下标）', () => {
+    const seen: Array<[string, string]> = [];
+    const kept = run(
+      [sameKindSource('project-functions', ['甲函数', '乙函数']), sameKindSource('system-functions', ['GETBIT'])],
+      (item, sourceId) => {
+        seen.push([labelText(item.label), sourceId]);
+        return sourceId === 'project-functions'; // CALL 位只留项目函数源（系统函数源同为 Function kind）
+      },
+    );
+    // 同档（无 sortText、空前缀）按 label 升序 ⇒ 码点序 `乙` < `甲`，与注册序无关
+    expect(labels(kept)).toEqual(['乙函数', '甲函数']);
+    expect(seen).toEqual([
+      ['甲函数', 'project-functions'],
+      ['乙函数', 'project-functions'],
+      ['GETBIT', 'system-functions'],
+    ]);
+  });
+
+  it('既有单参谓词零改动（additive）：少参函数直接可用', () => {
+    const kept = run([sameKindSource('s', ['留', '剔'])], (item) => labelText(item.label) === '留');
+    expect(labels(kept)).toEqual(['留']);
+  });
+});
+
+/* ============================== ⑩ 调用形态 + 作者已写 `(`：落字形态修正 ============================== */
+
+describe('COMPL-SHARED ⑩ · 调用形态候选遇作者已写的 `(`（insertText 收回纯名字）', () => {
+  const POLICY = { sourceIds: new Set(['call-src']) };
+  const PROTOCOL = {
+    slotsFor: (name: string) => (name === '心形' ? [{ index: 0, kind: 'int' as const, label: '事件子参数' }] : null),
+  };
+  const provenanceOf = (name: string): CompletionProvenance => ({
+    sourceId: 'call-src',
+    label: name,
+    tables: { callProtocol: PROTOCOL },
+  });
+
+  function callFormItem(monaco: typeof Monaco, name: string): Monaco.languages.CompletionItem {
+    return {
+      label: name,
+      kind: monaco.languages.CompletionItemKind.Function,
+      insertText: `${name}(`,
+      range: { startLineNumber: 1, endLineNumber: 1, startColumn: 1, endColumn: name.length + 1 },
+    };
+  }
+
+  it('已写 `(` ⇒ insertText 收敛为 label（接受候选落字 `心形(` 而非 `心形((`）、清 insertTextRules、返回 false', () => {
+    const { monaco } = stubMonaco();
+    const item = callFormItem(monaco, '心形');
+    item.insertTextRules = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet; // 防御路径：预置也要清
+    expect(applyCallSnippet(monaco, item, provenanceOf('心形'), '(', POLICY, '[compl-shared-test]')).toBe(false);
+    expect(item.insertText).toBe('心形'); // 接受候选 = 纯名字填入（作者那枚 `(` 原地保留）⇒ `心形(`
+    expect(item.insertTextRules).toBeUndefined();
+  });
+
+  it('未写 `(` ⇒ 照旧 snippet 化（返回 true；修正分支不抢 snippet——既有行为零回归）', () => {
+    const { monaco } = stubMonaco();
+    const item = callFormItem(monaco, '心形');
+    expect(applyCallSnippet(monaco, item, provenanceOf('心形'), undefined, POLICY, '[compl-shared-test]')).toBe(true);
+    expect(item.insertText).toBe('心形(${1:ARG:0 事件子参数})');
+    expect(item.insertTextRules).toBe(monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet);
   });
 });

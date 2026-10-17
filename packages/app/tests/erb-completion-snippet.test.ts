@@ -302,12 +302,14 @@ describe('C-2 · ERB 括号调用形态 → snippet', () => {
     expect(item.insertTextRules).toBeUndefined();
   });
 
-  it('退化二：作者已经自己写了左括号 ⇒ 不再插片段', () => {
+  it('退化二：作者已经自己写了左括号 ⇒ 不 snippet 化；insertText 收回纯名字（落字 `GETBIT(`）', () => {
     // 光标停在名字与作者已写的 `(` **之间**（列 10 = `GETBIT` 之后、`(` 之前）：
     // 候选替换区间右端紧邻的就是那个 `(` ⇒ 判据成立。写成列 11（`(` 的**右侧**）时
     // 区间是空区间、`(` 落在区间**左侧**，插进去的片段自带右括号并不算多余一对——那不是本判据的情形。
     const item = pick(provide(providerOf(FULL), 'IF GETBIT(', 10), 'GETBIT');
-    expect(item.insertText).toBe('GETBIT(');
+    // 接受候选 = `GETBIT` 填入名字区间（作者那枚 `(` 原地保留）⇒ 最终落字 `GETBIT(`；
+    // 旧形态原样插入 `GETBIT(` 会叠成 `GETBIT((`（明显非法）
+    expect(item.insertText).toBe('GETBIT');
     expect(item.insertTextRules).toBeUndefined();
   });
 
