@@ -17,6 +17,8 @@
  * 7. 已装的口上包行给「导入为我的口上项目」：面板只发意图
  *    （`workspace.importRequested`，载荷 `source: 'market'` 逐字冻结），
  *    向导与落地都住工作区消费方——面板不弹自己的窗、不摸盘（目录取 `contentDir()`）。
+ * 8. 「发布包…」（MK-PUB 发布通道批）：工具条入口 → 选 zip（`chooseFile` 对话框即授权）
+ *    → 服务编排（本地预校验零出网 → 原样字节上传）→ 进度与结果只住状态行一处。
  *
  * 装与卸的结果、以及被拒的原因，一律只有**一处内联状态行**（`mk-status` / `mk-note`），不弹窗。
  * "该给哪个动作"不在本面板判定：三态出自契约的 `packUpdateCheck`，装得上去不去出自服务；
@@ -35,11 +37,14 @@
 
 import { createElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  KernelServices,
   MARKET_SERVICE_KEY,
   PACK_VERSION_RE,
   coreVersion,
+  type FileIO,
   type InstalledPack,
   type MarketDownloadProgress,
+  type MarketPublishProgress,
   type MarketService,
   type Plugin,
   type UIPanelProps,
@@ -50,6 +55,7 @@ import {
   pullMarketSnapshot,
   runImport,
   runInstall,
+  runPublish,
   runUninstall,
   snapshotWithInstalled,
   snapshotWithoutInstalled,
@@ -79,6 +85,8 @@ import {
   installBusyNote,
   installProgressNote,
   pendingKey,
+  PUBLISH_LABEL,
+  publishProgressNote,
   statusText,
   updatePhrase,
   type PackRow,
@@ -121,10 +129,14 @@ export interface MarketPanelViewProps {
    * 禁用**只改 `disabled`，不改按钮文字**：进度那一句只住 `.mk-note` 一处。
    */
   readonly installing: string | null;
+  /** 发布进行中（选 zip → 预校验 → 上传的全程；与装/更新互斥，同一时刻只做一件事） */
+  readonly publishing: boolean;
   onQuery(q: string): void;
   /** 清空过滤（工具条上那枚「清除」；过滤态下它是空态那句话的唯一出路，不另设弹窗） */
   onClearQuery(): void;
   onPull(): void;
+  /** 工具条「发布包…」：选 zip（对话框即授权）→ 服务编排（预校验 + 上传） */
+  onPublish(): void;
   onInstall(row: PackRow): void;
   /** 已装的口上包行：把这一条经 `workspace.importRequested` 交给工作区消费方 */
   onImport(rec: InstalledPack): void;
@@ -173,6 +185,9 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const filtering = p.query !== '';
   // 占用读数取服务 `installedBytes()`（契约里那条唯一口径），面板不自己把 files 加一遍
   const installedCount = installedCountPhrase(rows.length, snapshot.installedBytes);
+  // 同一屏动作纪律：装/更新/发布任一进行中 ⇒ 全部动作按钮禁用（同一时刻只做一件事）；
+  // 进度仍只写 `.mk-note` 一处，按钮文字不变
+  const acting = p.installing !== null || p.publishing;
 
   /** 次要事实（版本 / 体积 / 作者 / 许可…）一律退到第二排 */
   const meta = (text: string): ReactNode => createElement('span', { className: 'mk-meta' }, text);
@@ -226,7 +241,7 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
             actions(
               row.action === 'none'
                 ? null
-                : btn(ACTION_LABEL[row.action], () => p.onInstall(row), p.installing !== null),
+                : btn(ACTION_LABEL[row.action], () => p.onInstall(row), acting),
             ),
             [
               meta(`版本 ${e.version}`),
@@ -282,8 +297,15 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
         : null,
       createElement(
         'button',
-        { className: 'ghost small', disabled: p.busy || p.installing !== null, onClick: () => p.onPull() },
+        { className: 'ghost small', disabled: p.busy || acting, onClick: () => p.onPull() },
         p.busy ? '拉取中…' : '拉取列表',
+      ),
+      // 发布包…：选 zip（对话框即授权）→ 服务编排（本地预校验 → 原样上传），
+      // 结果与进度照旧只住状态行一处（`onPublish` 的实现在带状态的 MarketPanel 里）
+      createElement(
+        'button',
+        { className: 'ghost small', disabled: p.busy || acting, onClick: () => p.onPublish() },
+        PUBLISH_LABEL,
       ),
     ),
     // 状态簇在滚动区之外：列表再长，"这一次到底拉没拉成"也不会被滚出视野
@@ -336,7 +358,7 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
                     // 只有口上包能导入成口上项目（判定在 `buildInstalledRows` 的行标记上）；
                     // 同一屏动作纪律：装/更新进行中一律禁用，进度仍只写状态行一处
                     r.canImport
-                      ? btn(IMPORT_LABEL, () => p.onImport(r.rec), p.installing !== null)
+                      ? btn(IMPORT_LABEL, () => p.onImport(r.rec), acting)
                       : null,
                     confirming
                       ? createElement(
@@ -350,11 +372,11 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
                             },
                           },
                           '确认卸载？',
-                          btn('确认', () => p.onConfirmUninstall(key), p.installing !== null),
+                          btn('确认', () => p.onConfirmUninstall(key), acting),
                           // 取消永远可点：正在装别的包也不该把作者锁在确认态里
                           btn('取消', () => p.onCancelUninstall(), false),
                         )
-                      : btn('卸载', () => p.onRequestUninstall(key), p.installing !== null),
+                      : btn('卸载', () => p.onRequestUninstall(key), acting),
                   ),
                   [
                     meta(`版本 ${r.rec.version}`),
@@ -403,6 +425,9 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
         bus: ctx.bus,
         log: ctx.log,
       };
+      // 文件选择原语（发布用）：kernel.io 是内核预定义服务恒在位；chooseFile 本身
+      // 是 additive 可选——缺席（Node 壳）由 runPublish 给一句人话，这里不判
+      const io = ctx.inject<FileIO>(KernelServices.IO);
 
       function MarketPanel(props: UIPanelProps): ReactNode {
         // 首帧 busy=true ⇒ 状态行还不画（别把"还没读"演成"列表缺失"）；读失败也不会常驻"加载中"
@@ -426,6 +451,8 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
         const [open, setOpen] = useState<string | null>(null);
         // 正在进行的那一次装/更新（同一时刻只允许一条：按钮全禁用，进度只写在状态行一处）
         const [installing, setInstalling] = useState<string | null>(null);
+        // 发布进行中（选 zip → 预校验 → 上传的全程；与装/更新互斥，同一时刻只做一件事）
+        const [publishing, setPublishing] = useState(false);
         // 后台校对的单调序号：只认最新一次发起的读数——装/卸快速连击时，前一次的校对
         // 可能比后一次晚落，没有这道闸旧事实会倒灌（卸掉的行被"复活"且无后续纠正）
         const readSeq = useRef(0);
@@ -582,6 +609,25 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           setNote(out.note);
         };
 
+        /**
+         * 「发布包…」（MK-PUB）：runPublish 全程接管选 zip → 预校验 → 上传，
+         * 本层只负责互斥（与装/更新同一时刻只做一件事）与把进度接进状态行
+         * （Rust 侧已节流，这里不重复闸）。取消不是失败，note 照实说「本机没动」。
+         */
+        const doPublish = async (): Promise<void> => {
+          if (publishing || installing !== null) return;
+          setPublishing(true);
+          try {
+            const onProgress = (p: MarketPublishProgress): void => {
+              setNote(publishProgressNote(p));
+            };
+            const out = await runPublish(deps, io, onProgress);
+            setNote(out.note);
+          } finally {
+            setPublishing(false);
+          }
+        };
+
         // 状态与回调住这一层；怎么画、哪一行给不给按钮全在 `MarketPanelView`（可静态渲染判据）
         return createElement(MarketPanelView, {
           snapshot,
@@ -592,9 +638,11 @@ export function createUiMarketPlugin(opts: UiMarketPluginOptions): Plugin {
           pending,
           open,
           installing,
+          publishing,
           onQuery: setQuery,
           onClearQuery: () => setQuery(''),
           onPull: () => void pull(),
+          onPublish: () => void doPublish(),
           onInstall: (row: PackRow) => void doInstall(row),
           onImport: (rec: InstalledPack) => void doImport(rec),
           // 来源网址可点：只发意图（`ui.openExternal`），壳层调 Rust 原语落地——
@@ -627,12 +675,14 @@ export {
   pullMarketSnapshot,
   runImport,
   runInstall,
+  runPublish,
   runUninstall,
   type ImportOutcome,
   type InstallOutcome,
   type MarketActionDeps,
   type MarketPullOutcome,
   type MarketSnapshot,
+  type PublishOutcome,
   type UninstallOutcome,
 } from './actions';
 export {
@@ -659,6 +709,11 @@ export {
   KIND_LABEL,
   matchesQuery,
   platformFailNote,
+  PUBLISH_CANCEL_NOTE,
+  PUBLISH_LABEL,
+  publishFailNote,
+  publishOutcomeNote,
+  publishProgressNote,
   refreshNote,
   REJECT_TEXT,
   rejectNote,

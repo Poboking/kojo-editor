@@ -710,47 +710,23 @@ pub(crate) fn host_in_allowlist(host: &str) -> bool {
     }
 }
 
-/// 一个 URL 能不能作为下载目标：https、无 userinfo、默认端口、主机在白名单内。
+/// 一个 URL 能不能作为下载目标（[`DOWNLOAD_GATE`] 的表；判定实现在 [`url_problem_in`]）。
 /// 返回 `None` = 放行，`Some(原因)` = 拒绝（原因直接进错误串，铁律 4：不静默）。
 pub(crate) fn url_problem(url: &reqwest::Url) -> Option<String> {
-    if url.scheme() != "https" {
-        return Some(format!("协议不是 https：{url}"));
-    }
-    let host = match url.host_str() {
-        Some(h) => h,
-        None => return Some(format!("URL 没有主机名：{url}")),
-    };
-    // `https://github.com@evil.com/` 这类伪装：host 已经是 evil.com，白名单自然拦下；
-    // 这里再单独拒一次 userinfo，错误更好诊断。
-    if !url.username().is_empty() || url.password().is_some() {
-        return Some(format!("URL 带 userinfo：{url}"));
-    }
-    if let Some(port) = url.port() {
-        return Some(format!("URL 带非默认端口 {port}：{url}"));
-    }
-    if !host_in_allowlist(host) {
-        return Some(format!(
-            "主机 {host} 不在平台放行列表（当前仅放行 GitHub 系主机与 *.github.io 一级子域镜像）"
-        ));
-    }
-    None
+    url_problem_in(url, &DOWNLOAD_GATE)
 }
 
-/// 重定向逐跳闸：`previous` = 已请求过的 URL 链（含首跳），`next` = 待跟随的目标。
+/// 重定向逐跳闸（下载闸；发布链路走 [`redirect_problem_in`]，同一份形态）。
 pub(crate) fn redirect_problem(previous: &[reqwest::Url], next: &reqwest::Url) -> Option<String> {
-    // previous 的第一项是初始请求，不是重定向 ⇒ 跟随 next 之后的跳数 = previous.len()
-    if previous.len() > MARKET_MAX_REDIRECT_HOPS {
-        return Some(format!(
-            "重定向跳数超过上限 {MARKET_MAX_REDIRECT_HOPS}：{} → {next}",
-            previous.len()
-        ));
-    }
-    url_problem(next).map(|p| format!("重定向跳到不可信目标（{p}）"))
+    redirect_problem_in(previous, next, &DOWNLOAD_GATE)
 }
 
-/// 交给 `reqwest::redirect::Policy::custom` 的策略函数（每一跳都过 `redirect_problem`）。
-fn redirect_action(attempt: reqwest::redirect::Attempt<'_>) -> reqwest::redirect::Action {
-    match redirect_problem(attempt.previous(), attempt.url()) {
+/// 交给 `reqwest::redirect::Policy::custom` 的策略函数（每一跳都过 [`redirect_problem_in`]，
+/// 闸可换——下载闸与发布闸共用这一个实现，只有表不同）。
+fn redirect_action_for(
+    gate: &'static HostGate,
+) -> impl Fn(reqwest::redirect::Attempt<'_>) -> reqwest::redirect::Action {
+    move |attempt| match redirect_problem_in(attempt.previous(), attempt.url(), gate) {
         None => attempt.follow(),
         Some(problem) => attempt.error(problem),
     }
@@ -871,12 +847,12 @@ pub(crate) fn progress_due(delta_bytes: u64, delta_time: Option<Duration>) -> bo
 
 /* ---------------------------- 出网（唯一一条） ---------------------------- */
 
-/// 请求用的 client：UA + 超时 + **逐跳重核**策略；代理只认进程环境（见 `DownloadOptions::proxy`）。
+/// 请求用的 client：UA + 超时 + **逐跳重核**策略（下载闸）；代理只认进程环境（见 `DownloadOptions::proxy`）。
 fn http_client(opts: &DownloadOptions) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
         .user_agent(MARKET_USER_AGENT)
         .timeout(Duration::from_millis(opts.timeout_ms))
-        .redirect(reqwest::redirect::Policy::custom(redirect_action));
+        .redirect(reqwest::redirect::Policy::custom(redirect_action_for(&DOWNLOAD_GATE)));
     if let Some(proxy) = opts.proxy.as_deref() {
         builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| format!("proxy {proxy}: {e}"))?);
     }
@@ -1268,6 +1244,474 @@ pub(crate) fn declared_entries_problem(
         )),
         _ => None,
     }
+}
+
+/* --------------------- 发布（上传，2026-10-16 发布批） --------------------- */
+
+/// 发布主机白名单：市场发布后端（Cloudflare Worker）。与下载白名单是**两张表**
+/// （GitHub 系只在下载闸放行，反之亦然——双闸独立性由测试钉死）。
+const MARKET_PUBLISH_HOST_ALLOWLIST: [&str; 1] = ["market.362573581.xyz"];
+/// 白名单里唯一的后缀通配：`*.workers.dev`（只准一级子域，照 `.github.io` 的口径）。
+const MARKET_WORKERS_DEV_SUFFIX: &str = ".workers.dev";
+/// 发布端点的兜底默认值（唯一真源在契约 `MARKET_DEFAULT_PUBLISH_URL`，TS 恒显式传；
+/// 这个常量只在没传时兜底，照 `MARKET_DEFAULT_TIMEOUT_MS` 的口径）。
+const MARKET_DEFAULT_PUBLISH_ENDPOINT: &str = "https://market.362573581.xyz";
+/// 上传容器字节数的兜底上限（TS 恒从契约 `MARKET_MAX_CONTAINER_UPLOAD_BYTES` 显式传入）。
+/// 刻意用十进制：CF 免费档请求体边缘上限 **100,000,000 字节**，95_000_000 字节留整 5 MB
+/// 余量（99 MiB ≈ 103.8 MB 会算错边、超限包在 CF 边缘即被 413，Worker 收不到）——
+/// 本地闸必须先行拒因，别浪费用户流量。
+const MARKET_DEFAULT_MAX_PUBLISH_BYTES: u64 = 95_000_000;
+/// 换设备令牌的兜底超时（小请求；TS 未传时生效）。
+const MARKET_DEVICE_TOKEN_TIMEOUT_MS: u64 = 15_000;
+
+/// 出网闸的宿主判定（下载与发布各一份：放行表不同、判定形态同构）。
+struct HostGate {
+    host_ok: fn(&str) -> bool,
+    /// 拒因里如实转述的放行范围（人话；与契约注释同一句，防两处漂移靠测试对词）。
+    allowlist_desc: &'static str,
+}
+
+const DOWNLOAD_GATE: HostGate = HostGate {
+    host_ok: host_in_allowlist,
+    allowlist_desc: "当前仅放行 GitHub 系主机与 *.github.io 一级子域镜像",
+};
+
+const PUBLISH_GATE: HostGate = HostGate {
+    host_ok: publish_host_in_allowlist,
+    allowlist_desc: "当前仅放行市场发布后端 market.362573581.xyz 与 *.workers.dev 一级子域",
+};
+
+/// 发布主机闸：固定后端 + `*.workers.dev` 一级子域（小写、去尾点）。
+pub(crate) fn publish_host_in_allowlist(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if MARKET_PUBLISH_HOST_ALLOWLIST.contains(&host.as_str()) {
+        return true;
+    }
+    match host.strip_suffix(MARKET_WORKERS_DEV_SUFFIX) {
+        // 前缀必须是**单个非空 label**：`a.b.workers.dev` 与裸 `workers.dev` 都不放行。
+        Some(label) => !label.is_empty() && !label.contains('.'),
+        None => false,
+    }
+}
+
+/// URL 形态 + 主机闸的参数化实现（下载闸与发布闸共用同一份判定，只有表不同）。
+fn url_problem_in(url: &reqwest::Url, gate: &HostGate) -> Option<String> {
+    if url.scheme() != "https" {
+        return Some(format!("协议不是 https：{url}"));
+    }
+    let host = match url.host_str() {
+        Some(h) => h,
+        None => return Some(format!("URL 没有主机名：{url}")),
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return Some(format!("URL 带 userinfo：{url}"));
+    }
+    if let Some(port) = url.port() {
+        return Some(format!("URL 带非默认端口 {port}：{url}"));
+    }
+    if !(gate.host_ok)(host) {
+        return Some(format!(
+            "主机 {host} 不在平台放行列表（{}）",
+            gate.allowlist_desc
+        ));
+    }
+    None
+}
+
+/// 重定向逐跳闸的参数化实现（形态同 [`redirect_problem`]，闸可换）。
+fn redirect_problem_in(previous: &[reqwest::Url], next: &reqwest::Url, gate: &HostGate) -> Option<String> {
+    if previous.len() > MARKET_MAX_REDIRECT_HOPS {
+        return Some(format!(
+            "重定向跳数超过上限 {MARKET_MAX_REDIRECT_HOPS}：{} → {next}",
+            previous.len()
+        ));
+    }
+    url_problem_in(next, gate).map(|p| format!("重定向跳到不可信目标（{p}）"))
+}
+
+/// 发布请求用的 client（下载闸换成发布闸，其余口径同一份实现）。
+fn publish_http_client(opts: &DownloadOptions) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .user_agent(MARKET_USER_AGENT)
+        .timeout(Duration::from_millis(opts.timeout_ms))
+        .redirect(reqwest::redirect::Policy::custom(redirect_action_for(&PUBLISH_GATE)));
+    if let Some(proxy) = opts.proxy.as_deref() {
+        builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| format!("proxy {proxy}: {e}"))?);
+    }
+    builder.build().map_err(|e| format!("http client: {e}"))
+}
+
+/// 一个 URL 能不能作为发布目标（与 [`url_problem`] 同形态、[`PUBLISH_GATE`] 的表）。
+pub(crate) fn publish_url_problem(url: &reqwest::Url) -> Option<String> {
+    url_problem_in(url, &PUBLISH_GATE)
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishManifestSummary {
+    pub kind: String,
+    pub id: String,
+    pub version: String,
+    pub name: String,
+    pub author: String,
+}
+
+/// 上传进度（经 Tauri Channel 回 JS）。上传侧总字节恒已知（命令先 `stat` 一次），
+/// 不像下载那样会缺 ⇒ 非 Option（契约 `MarketPublishProgress` 同形）。
+#[derive(Clone, Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketUploadProgressDto {
+    pub sent_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishRejectionDto {
+    pub code: String,
+    pub message: String,
+}
+
+/// 发布结果（命令面）。`ok` + `pr_url` / `rejected` 是后端裁决的**忠实搬运**——
+/// 裁决真源是响应体（哪怕配着非 2xx），桥侧投影成契约判别联。
+/// `verified` 是服务端校验深度（如 `structure-only`，CF 免费计划下 sha256 由注册表
+/// CI 复核）——原样搬运，桥侧只认契约 `MarketPublishVerified` 的字面量。
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketPublishResultDto {
+    pub status: u16,
+    pub final_url: String,
+    pub ok: bool,
+    pub pr_url: Option<String>,
+    pub verified: Option<String>,
+    pub rejected: Option<PublishRejectionDto>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketDeviceTokenDto {
+    pub token: String,
+}
+
+/// 端点 → 请求 URL（**纯函数**，`device-token` 与 `publish` 共用）：端点当**基座**用——
+/// 路径末尾斜杠归一后直接接固定路径。
+/// 刻意**不走 `Url::join`**：join 对无尾斜杠基座是"替换末段"语义（`…/api/v1` 配
+/// `publish` 会丢成 `/api/publish`），基座拼法才是作者配置 `<端点>/publish` 的直觉；
+/// 查询串与片段不参与（基座就是主机 + 路径）。
+pub(crate) fn endpoint_url(endpoint: &str, path: &str) -> Result<reqwest::Url, String> {
+    let mut base =
+        reqwest::Url::parse(endpoint).map_err(|e| format!("发布端点解析失败 {endpoint}: {e}"))?;
+    base.set_query(None);
+    base.set_fragment(None);
+    let trimmed = base.path().trim_end_matches('/');
+    base.set_path(&format!("{trimmed}/{path}"));
+    Ok(base)
+}
+
+/// 发布请求的 URL 构造（**纯函数**）：`<endpoint>/publish` + manifest 概要作查询参数
+/// （服务端可用可不用；身份字段随 URL 走，body 恒是 zip 原始字节，**不搞 multipart**）。
+pub(crate) fn publish_request_url(
+    endpoint: &str,
+    manifest: &PublishManifestSummary,
+) -> Result<reqwest::Url, String> {
+    let mut url = endpoint_url(endpoint, "publish")?;
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("kind", &manifest.kind);
+        q.append_pair("id", &manifest.id);
+        q.append_pair("version", &manifest.version);
+        q.append_pair("name", &manifest.name);
+        q.append_pair("author", &manifest.author);
+    }
+    Ok(url)
+}
+
+/// 设备令牌请求的 URL 构造（**纯函数**）：`<endpoint>/device-token`。
+pub(crate) fn device_token_url(endpoint: &str) -> Result<reqwest::Url, String> {
+    endpoint_url(endpoint, "device-token")
+}
+
+/// 解析发布响应体（**纯函数**）。裁决真源是 body 而非状态码：
+/// `{ok:true, prUrl}` / `{ok:false, rejected:{code,message}}` 两种形状照收
+/// （后端用 4xx 表达 rejected 也兼容）；解析不出 ⇒ 人话错误（铁律 4）。
+pub(crate) fn parse_publish_body(
+    bytes: &[u8],
+    status: u16,
+    final_url: &str,
+) -> Result<MarketPublishResultDto, String> {
+    let v: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|e| format!("发布响应不是合法 JSON（HTTP {status}，{} 字节）：{e}", bytes.len()))?;
+    match v.get("ok").and_then(|o| o.as_bool()) {
+        Some(true) => {
+            let pr = v
+                .get("prUrl")
+                .and_then(|p| p.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "发布响应 ok=true 却没有可用的 prUrl".to_string())?;
+            // verified：服务端校验深度（如 "structure-only"）——原样搬运，桥侧按契约字面量投影
+            let verified = v
+                .get("verified")
+                .and_then(|w| w.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            Ok(MarketPublishResultDto {
+                status,
+                final_url: final_url.to_string(),
+                ok: true,
+                pr_url: Some(pr.to_string()),
+                verified,
+                rejected: None,
+            })
+        }
+        Some(false) => {
+            let rejected = v.get("rejected").ok_or_else(|| {
+                "发布响应 ok=false 却没有 rejected 结构（code/message 无处可读）".to_string()
+            })?;
+            let code = rejected
+                .get("code")
+                .and_then(|c| c.as_str())
+                .ok_or_else(|| "发布响应 rejected 缺 code".to_string())?;
+            let message = rejected
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or_default();
+            Ok(MarketPublishResultDto {
+                status,
+                final_url: final_url.to_string(),
+                ok: false,
+                pr_url: None,
+                verified: None,
+                rejected: Some(PublishRejectionDto {
+                    code: code.to_string(),
+                    message: message.to_string(),
+                }),
+            })
+        }
+        None => Err(format!("发布响应缺 ok 字段（HTTP {status}）")),
+    }
+}
+
+/// 解析设备令牌响应体（**纯函数**）：`{token: "..."}`，空串不给。
+pub(crate) fn parse_device_token(bytes: &[u8]) -> Result<String, String> {
+    let v: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| format!("设备令牌响应不是合法 JSON：{e}"))?;
+    v.get("token")
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .ok_or_else(|| "设备令牌响应缺 token 字段".to_string())
+}
+
+/// 上传用的流式 body：tokio 文件逐块读出，**节流口径与下载同一份**（[`progress_due`]，
+/// ≥64 KiB 或 ≥100 ms；首块直发、EOF 收尾补一发终值）。读文件失败把错误塞进流
+/// （reqwest 中止请求）⇒ 调用方收到人话。zip 原文件**零解包零改写**：这里只读不写。
+fn upload_stream(
+    file: tokio::fs::File,
+    total: u64,
+    on_progress: Option<tauri::ipc::Channel<MarketUploadProgressDto>>,
+) -> impl futures_util::Stream<Item = Result<Vec<u8>, std::io::Error>> + Send + 'static {
+    struct State {
+        file: tokio::fs::File,
+        buf: Vec<u8>,
+        sent: u64,
+        last_report: Option<(u64, Instant)>,
+        channel: Option<tauri::ipc::Channel<MarketUploadProgressDto>>,
+        total: u64,
+    }
+    futures_util::stream::unfold(
+        State {
+            file,
+            buf: vec![0u8; 64 * 1024],
+            sent: 0,
+            last_report: None,
+            channel: on_progress,
+            total,
+        },
+        |mut st| async move {
+            use tokio::io::AsyncReadExt as _;
+            match st.file.read(&mut st.buf).await {
+                Ok(0) => {
+                    // EOF：收尾补一发让 UI 落在终值（重复读数由节流判定压掉；
+                    // 空容器不发——预校验在 TS 侧根本到不了这里）。
+                    if st.total > 0 {
+                        if let Some(ch) = &st.channel {
+                            let _ = ch.send(MarketUploadProgressDto {
+                                sent_bytes: st.sent,
+                                total_bytes: st.total,
+                            });
+                        }
+                    }
+                    None
+                }
+                Ok(n) => {
+                    st.sent += n as u64;
+                    let now = Instant::now();
+                    let due = match st.last_report {
+                        None => progress_due(n as u64, None),
+                        Some((sent_at, at)) => progress_due(
+                            st.sent.saturating_sub(sent_at),
+                            Some(now.duration_since(at)),
+                        ),
+                    };
+                    if due {
+                        if let Some(ch) = &st.channel {
+                            let _ = ch.send(MarketUploadProgressDto {
+                                sent_bytes: st.sent,
+                                total_bytes: st.total,
+                            });
+                        }
+                        st.last_report = Some((st.sent, now));
+                    }
+                    Some((Ok(st.buf[..n].to_vec()), st))
+                }
+                Err(e) => Some((
+                    Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                    st,
+                )),
+            }
+        },
+    )
+}
+
+/// 发布链路（`guarded_send` 的 POST 亲兄弟，两处结构差别）：**不按非 2xx 预判失败**——
+/// 后端的拒绝裁决在响应体里（可能配 4xx），状态码交给 [`parse_publish_body`] 裁决；
+/// `bearer` 以 `Authorization` 头携带（**唯一**的鉴权通道，token 不进 URL——查询串会进日志）。
+/// 出网闸（形态 + 发布白名单 + 逐跳重核 + 终态重核）与下载是同一份形态。
+async fn guarded_post(
+    url: &reqwest::Url,
+    body: reqwest::Body,
+    bearer: &str,
+    opts: &DownloadOptions,
+) -> Result<(u16, reqwest::Url, Vec<u8>), String> {
+    if let Some(problem) = publish_url_problem(url) {
+        return Err(format!("market_publish 拒绝（{problem}）"));
+    }
+    ensure_tls_provider();
+    let client = publish_http_client(opts)?;
+    let response = client
+        .post(url.clone())
+        .bearer_auth(bearer)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("market_publish 请求失败 {url}: {}", chain_string(&e)))?;
+    let status = response.status().as_u16();
+    let final_url = response.url().clone();
+    // 终态 URL 再核一次发布放行表（策略闸管"跳"，这一闸管"落点"）。
+    if let Some(problem) = publish_url_problem(&final_url) {
+        return Err(format!("market_publish 拒绝（最终 URL：{problem}）"));
+    }
+    // 裁决 JSON 很小：256 KiB 兜底上限（与取文本同口径），超了按截断处理不硬收。
+    let mut body_bytes: Vec<u8> = Vec::new();
+    stream_capped(response, MARKET_DEFAULT_MAX_FETCH_BYTES, &mut body_bytes).await?;
+    Ok((status, final_url, body_bytes))
+}
+
+/// 发布一个 zip（**唯一**的上传出网路径）。zip 由**绝对路径**给出——
+/// 授权模型照 `export_file` 的"对话框即授权"哲学：路径来自用户经系统对话框选定的文件
+/// （TS 侧预校验编排保证），读侧无闸是既有口径（`read_file_bytes` 同样读任意路径）；
+/// 闸在**出网侧**（发布放行表）与**体积侧**（TS 从契约常量传入）。
+/// 字节**不经 IPC 回 JS**：本层流式读原文件上传（128 MiB 的包体不该过一遍 JS 堆），
+/// 进度按 [`progress_due`] 节流经 Channel 回报。
+pub(crate) async fn publish_zip(
+    zip_path: &Path,
+    endpoint: &str,
+    manifest: &PublishManifestSummary,
+    device_token: &str,
+    opts: &DownloadOptions,
+    on_progress: Option<&tauri::ipc::Channel<MarketUploadProgressDto>>,
+) -> Result<MarketPublishResultDto, String> {
+    if device_token.is_empty() {
+        return Err("market_publish 拒绝（设备令牌为空，先经 /device-token 换一枚）".to_string());
+    }
+    let url = publish_request_url(endpoint, manifest)?;
+    let meta = tokio::fs::metadata(zip_path)
+        .await
+        .map_err(|e| format!("要发布的包文件读不到 {}: {e}", zip_path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("要发布的不是一个普通文件：{}", zip_path.display()));
+    }
+    let total = meta.len();
+    if total > opts.max_bytes {
+        return Err(format!(
+            "包体 {total} 字节超过上限 {}，先瘦身再发",
+            opts.max_bytes
+        ));
+    }
+    let file = tokio::fs::File::open(zip_path)
+        .await
+        .map_err(|e| format!("打开要发布的包失败 {}: {e}", zip_path.display()))?;
+    let body = reqwest::Body::wrap_stream(upload_stream(file, total, on_progress.cloned()));
+    let (status, final_url, body_bytes) = guarded_post(&url, body, device_token, opts).await?;
+    parse_publish_body(&body_bytes, status, final_url.as_str())
+}
+
+#[tauri::command]
+pub(crate) async fn market_publish(
+    zip_path: String,
+    manifest: PublishManifestSummary,
+    device_token: String,
+    endpoint: Option<String>,
+    max_bytes: Option<u64>,
+    timeout_ms: Option<u64>,
+    // Channel **必传**（同 `market_download`：Option<Channel> 不走 CommandArg）。
+    on_progress: tauri::ipc::Channel<MarketUploadProgressDto>,
+) -> Result<MarketPublishResultDto, String> {
+    publish_zip(
+        Path::new(&zip_path),
+        endpoint
+            .as_deref()
+            .unwrap_or(MARKET_DEFAULT_PUBLISH_ENDPOINT),
+        &manifest,
+        &device_token,
+        &DownloadOptions {
+            timeout_ms: timeout_ms.unwrap_or(MARKET_DEFAULT_TIMEOUT_MS),
+            max_bytes: max_bytes.unwrap_or(MARKET_DEFAULT_MAX_PUBLISH_BYTES),
+            // 代理只认进程环境（同 `market_download`）
+            proxy: None,
+        },
+        Some(&on_progress),
+    )
+    .await
+}
+
+/// 换一枚设备令牌（`POST /device-token`，零请求体）：与发布同一条出网链路
+/// （发布放行表 + 逐跳重核 + 终态重核）。令牌的存取（storage 复用）归 TS 侧编排。
+#[tauri::command]
+pub(crate) async fn market_device_token(
+    endpoint: Option<String>,
+    timeout_ms: Option<u64>,
+) -> Result<MarketDeviceTokenDto, String> {
+    let url = device_token_url(endpoint.as_deref().unwrap_or(MARKET_DEFAULT_PUBLISH_ENDPOINT))?;
+    ensure_tls_provider();
+    let client = publish_http_client(&DownloadOptions {
+        timeout_ms: timeout_ms.unwrap_or(MARKET_DEVICE_TOKEN_TIMEOUT_MS),
+        max_bytes: MARKET_DEFAULT_MAX_FETCH_BYTES,
+        proxy: None,
+    })?;
+    if let Some(problem) = publish_url_problem(&url) {
+        return Err(format!("market_device_token 拒绝（{problem}）"));
+    }
+    let response = client
+        .post(url.clone())
+        .send()
+        .await
+        .map_err(|e| format!("market_device_token 请求失败 {url}: {}", chain_string(&e)))?;
+    let final_url = response.url().clone();
+    if let Some(problem) = publish_url_problem(&final_url) {
+        return Err(format!("market_device_token 拒绝（最终 URL：{problem}）"));
+    }
+    let status = response.status();
+    let mut body_bytes: Vec<u8> = Vec::new();
+    stream_capped(response, MARKET_DEFAULT_MAX_FETCH_BYTES, &mut body_bytes).await?;
+    if !status.is_success() {
+        return Err(format!(
+            "HTTP 状态非 2xx：{status}（最终 URL {final_url}）"
+        ));
+    }
+    Ok(MarketDeviceTokenDto {
+        token: parse_device_token(&body_bytes)?,
+    })
 }
 
 /* ---------------------------- 解压（限流闸） ---------------------------- */

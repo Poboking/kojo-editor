@@ -463,6 +463,35 @@ export interface MarketService {
     entry: MarketIndexEntry,
     onProgress?: (p: MarketDownloadProgress) => void,
   ): Promise<InstalledPack>;
+  /**
+   * 把一个打包好的容器（zip）**发布**到市场后端（2026-10-16 发布通道批，additive）。
+   *
+   * 编排（实现侧唯一一份）：
+   * 1. 端点形态闸（`endpoint-invalid`）→ 设备令牌（storage 复用，缺则经平台 `POST /device-token`
+   *    换一枚并落存储）；
+   * 2. **本地预校验**（零出网）：容器复制进自家暂存区 → 平台解压原语 → `pack.json` 全量校验
+   *    （与安装**同一条** `parseManifest`/对平路径，不出现第二份校验）→ 拒因人话照安装面；
+   * 3. 平台发布原语：zip **原样字节上传**（平台侧流式读原文件，字节不经 JS），
+   *    进度经 `opts.onProgress` 透传（节流在平台侧）；
+   * 4. 预校验的暂存痕迹 finally 全清，失败不留残壳（同安装面口径）。
+   *
+   * `zipPath` 必须来自**用户经系统对话框选定的文件**（对话框即授权，照 `exportFile`
+   * 的哲学；不是游戏目录扫盘）。
+   * 后端**明确拒绝**（`ok:false`）不是异常——返回 `MarketPublishOutcome` 的 rejected 分支，
+   * UI 按裁决呈现；平台侧故障（无桌面壳 / 端点不落放行表 / 断网 / 响应不可解析）抛错。
+   *
+   * @throws MarketError `endpoint-invalid`，以及预校验会抛的**全部清单类码**
+   *   （见 `installFromIndex`）；平台侧故障抛普通 Error 带人话。
+   */
+  publish(
+    zipPath: string,
+    opts?: {
+      /** 覆盖发布端点（默认 `MARKET_DEFAULT_PUBLISH_URL`；主机不落平台放行表 ⇒ 拒） */
+      readonly endpoint?: string;
+      /** 上传进度回调（平台侧节流后回报） */
+      readonly onProgress?: (p: MarketPublishProgress) => void;
+    },
+  ): Promise<MarketPublishOutcome>;
   uninstall(kind: PackKind, id: string, version: string): Promise<void>;
   isInstalled(kind: PackKind, id: string, version: string): Promise<boolean>;
   /**
@@ -739,6 +768,109 @@ export interface PackUpdateCheck {
    */
   readonly sameContainer: boolean | null;
 }
+
+/* --------------------------- 发布端点（发布通道） --------------------------- */
+
+/**
+ * 默认发布端点（市场发布后端 = Cloudflare Worker，binding `MARKET_BUCKET`）。
+ *
+ * 作者**可以覆盖**端点（`MarketService.publish` 的 `opts.endpoint`，内测源同理），但
+ * **只有主机落在平台放行列表内才真正可用**——发布侧放行 = 固定后端
+ * `market.362573581.xyz` + 一级子域 `*.workers.dev`（唯一真源在平台侧
+ * `market.rs` 的 `publish_host_in_allowlist`，此处只如实转述、不复制名单；
+ * 与下载闸是**两张表**：GitHub 系主机只在下载闸放行，反之亦然）。
+ * 另**没有"代理"这一项**：取舍与 `MARKET_DEFAULT_INDEX_URL` 同款（受众绝大部分没有
+ * 代理客户端，跟随系统 / 进程环境即可）。
+ *
+ * 后端端点：`POST /device-token`（换设备令牌）、`POST /publish`（收 zip 原始字节 +
+ * `Authorization: Bearer <token>`，返回 `{ok:true, prUrl, verified?}` 或
+ * `{ok:false, rejected:{code,message}}`）。
+ */
+export const MARKET_DEFAULT_PUBLISH_URL = 'https://market.362573581.xyz';
+
+/**
+ * 容器（zip 本体）上传的字节上限：**95_000_000 字节（十进制 95 MB）**。
+ *
+ * 刻意**不用** MiB 计数：CF 免费档的请求体边缘上限是 **100,000,000 字节**（十进制），
+ * 按 MiB 取值会算错边——99 MiB ≈ 103.8 MB > 100 MB，超限包在 CF 边缘即被 413，
+ * Worker 代码收不到；95_000_000 字节留整 5 MB 余量，把「边缘 413」与「本地拒因」
+ * 之间的空窗压到最小。
+ * 本地闸必须先行拒因，别浪费用户流量（`previewForPublish` 在预校验里就按这把尺拒，
+ * 人话照 `PLATFORM_FAIL_TEXT` 口径）。
+ * 与解压后总字节上限 `MARKET_MAX_UNPACKED_BYTES`（128 MiB）是**两把尺**：
+ * 一把量容器本体（上传闸），一把量解出的内容（安装闸），不许互相替代。
+ */
+export const MARKET_MAX_CONTAINER_UPLOAD_BYTES = 95_000_000;
+
+/**
+ * 发布（上传）超时：与下载**同一份公式**（基础 60s + 每 MiB 1s，≈0.5 MB/s 预算）。
+ * 家用上行带宽与慢网下载同量级 ⇒ 不另造第二份换算——薄委托，改公式只改一处。
+ */
+export function marketPublishTimeoutMs(zipBytes: number): number {
+  return marketDownloadTimeoutMs(zipBytes);
+}
+
+/**
+ * 发布（上传）进度（平台侧流式回报）。上传侧文件总字节**恒已知**（命令收的是
+ * zip 绝对路径，`stat` 一次就有）⇒ `totalBytes` 不缺，UI 可以画真百分比。
+ * 节流口径与下载同款（≥64 KiB 或 ≥100 ms，唯一实现在平台侧，本层只收节流后的读数）。
+ */
+export interface MarketPublishProgress {
+  sentBytes: number;
+  totalBytes: number;
+}
+
+/**
+ * 发布请求随行的 manifest 概要（逐字段来自 `pack.json`，服务端用它做 PR 头与快速预检）。
+ * 刻意只有五个身份字段：包内容真源是 zip 本体（原样字节上传），概要撒谎会被服务端
+ * 解容器对平抓住——客户端不替服务端背校验责任。
+ */
+export interface MarketPublishManifestSummary {
+  kind: PackKind;
+  id: string;
+  version: string;
+  name: string;
+  author: string;
+}
+
+/**
+ * 后端的结构化拒绝。`code` 码表的唯一真源在**后端**（本层不复制、不枚举——
+ * 后端加码不该改编辑器），`message` 是后端给人话，调用方原样呈现。
+ */
+export interface MarketPublishRejection {
+  code: string;
+  message: string;
+}
+
+/**
+ * 服务端校验深度的**已知值**（Worker 部署走 CF 免费计划）：`'structure-only'` =
+ * 服务端只做结构级校验（schema / 对平 / 形态），sha256 由注册表 CI 复核——
+ * UI 据此可显示「已提交，等待审核」。后端将来给出更深/别的档位时在此**追加**字面量
+ * （additive），消费方按"认识的档位出话、不认识的不显示"处理。
+ */
+export type MarketPublishVerified = 'structure-only';
+
+/**
+ * 一次发布的终局判别联（`ok` 分支 = 进了 PR；`rejected` 分支 = 后端明确拒）。
+ * `status` / `finalUrl` 是这次请求的事实（诊断用，照 `RemoteDownload` 的口径）。
+ * 平台侧故障（出网闸拒、断网、响应不可解析）**不走本联**——抛错，调用侧自解释呈现；
+ * 判别联只装"后端给了裁决"这两种。
+ */
+export type MarketPublishOutcome =
+  | {
+      readonly ok: true;
+      readonly prUrl: string;
+      /** 服务端校验深度（缺省 = 后端没说；见 `MarketPublishVerified`） */
+      readonly verified?: MarketPublishVerified;
+      readonly status: number;
+      readonly finalUrl: string;
+    }
+  | {
+      readonly ok: false;
+      readonly rejected: MarketPublishRejection;
+      readonly status: number;
+      readonly finalUrl: string;
+    };
 
 /**
  * **全仓唯一的"该不该更新"判定**（纯函数、零 IO）：把两个版本号折成同一把尺再比。

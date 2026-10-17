@@ -2100,6 +2100,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-updater",
+ "tokio",
  "walkdir",
  "zip",
 ]

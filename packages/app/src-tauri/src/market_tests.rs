@@ -1654,3 +1654,147 @@ fn zip_roundtrip_limit_gates_come_from_the_table() {
         assert!(!staging.dir().join("loose").exists(), "{tag}: 拒了却留下了目录");
     }
 }
+
+/* ------------------------ 发布（上传）闸与解析 ------------------------ */
+
+use crate::market::{
+    device_token_url, parse_device_token, parse_publish_body, publish_host_in_allowlist,
+    publish_request_url, publish_url_problem, PublishManifestSummary,
+};
+
+fn manifest_summary(id: &str, name: &str) -> PublishManifestSummary {
+    PublishManifestSummary {
+        kind: "dict-pack".to_string(),
+        id: id.to_string(),
+        version: "1.0.0".to_string(),
+        name: name.to_string(),
+        author: "作者&Co".to_string(),
+    }
+}
+
+#[test]
+fn publish_allowlist_accepts_backend_and_workers_dev_subdomains() {
+    for host in [
+        "market.362573581.xyz",
+        "MARKET.362573581.XYZ",
+        "market.362573581.xyz.",
+        "preview.workers.dev",
+        "market-preview.workers.dev",
+    ] {
+        assert!(publish_host_in_allowlist(host), "{host} 应在发布白名单内");
+    }
+}
+
+#[test]
+fn publish_allowlist_rejects_lookalikes_and_nested_labels() {
+    for host in [
+        "evil.com",
+        "market.3625735381.xyz.evil.io",
+        "3625735381.xyz",
+        "a.b.workers.dev",
+        "workers.dev",
+        ".workers.dev",
+        "evil.workers.dev.example.com",
+        // 双闸独立性：下载侧的 GitHub 系主机**不在**发布闸放行
+        "github.com",
+        "demo.github.io",
+        "",
+    ] {
+        assert!(!publish_host_in_allowlist(host), "{host} 不该被发布闸放行");
+    }
+}
+
+#[test]
+fn publish_url_gate_shares_shape_but_not_host_table() {
+    // 形态闸同一份：http / userinfo / 非默认端口照拒
+    assert!(publish_url_problem(&url("http://market.3625735381.xyz/publish")).is_some());
+    assert!(publish_url_problem(&url("https://x@market.3625735381.xyz/publish")).is_some());
+    assert!(publish_url_problem(&url("https://market.3625735381.xyz:8443/publish")).is_some());
+    assert!(publish_url_problem(&url("https://market.362573581.xyz/publish")).is_none());
+    assert!(publish_url_problem(&url("https://t.workers.dev/publish")).is_none());
+    // 反向独立性：下载闸放行的 GitHub 主机在发布闸下被拒（同形不同表，防"表合并漂移"）
+    let gh = url("https://github.com/a.zip");
+    let gh_problem = publish_url_problem(&gh).unwrap();
+    assert!(gh_problem.contains("不在平台放行列表"), "GitHub 主机没被发布闸拒：{gh_problem}");
+    assert!(url_problem(&gh).is_none(), "同一 URL 下载闸应放行（双闸独立）");
+    let market = url("https://market.362573581.xyz/publish");
+    assert!(url_problem(&market).is_some(), "发布后端主机不该被下载闸放行");
+}
+
+#[test]
+fn publish_request_url_encodes_summary_and_joins_endpoint_paths() {
+    // 默认 origin 直拼 + 五个查询参数（身份字段随 URL，body 恒是 zip 原始字节）
+    let u = publish_request_url("https://market.362573581.xyz", &manifest_summary("demo.dict", "白面&飞雪")).unwrap();
+    assert_eq!(u.host_str(), Some("market.362573581.xyz"));
+    assert_eq!(u.path(), "/publish");
+    let q: Vec<(String, String)> = u.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+    assert_eq!(
+        q,
+        vec![
+            ("kind".into(), "dict-pack".into()),
+            ("id".into(), "demo.dict".into()),
+            ("version".into(), "1.0.0".into()),
+            ("name".into(), "白面&飞雪".into()),
+            ("author".into(), "作者&Co".into()),
+        ],
+        "概要五字段必须逐位随行（& 等保留字须编码而不是截断）"
+    );
+    assert_eq!(u.query().unwrap(), "kind=dict-pack&id=demo.dict&version=1.0.0&name=%E7%99%BD%E9%9D%A2%26%E9%A3%9E%E9%9B%AA&author=%E4%BD%9C%E8%80%85%26Co");
+    // 尾斜杠端点：join 语义不产生双斜杠
+    let slash = publish_request_url("https://market.362573581.xyz/", &manifest_summary("d", "n")).unwrap();
+    assert_eq!(slash.path(), "/publish");
+    // 带路径的端点按 RFC 3986 相对解析（内测源形态）
+    let nested = publish_request_url("https://t.workers.dev/api/v1", &manifest_summary("d", "n")).unwrap();
+    assert_eq!(nested.host_str(), Some("t.workers.dev"));
+    assert_eq!(nested.path(), "/api/v1/publish");
+    // device-token 的拼法
+    assert_eq!(device_token_url("https://market.362573581.xyz").unwrap().path(), "/device-token");
+}
+
+#[test]
+fn parse_publish_body_honours_outcome_and_rejects_garbage() {
+    // 成功：{ok:true, prUrl}；带 verified（structure-only）时原样搬运
+    let ok = parse_publish_body(br#"{"ok":true,"prUrl":"https://github.com/p/pull/1"}"#, 200, "https://market.362573581.xyz/publish?id=d").unwrap();
+    assert!(ok.ok);
+    assert_eq!(ok.pr_url.as_deref(), Some("https://github.com/p/pull/1"));
+    assert!(ok.rejected.is_none());
+    assert_eq!(ok.status, 200);
+    assert!(ok.verified.is_none(), "后端没说 verified 就不带");
+    let ok_v = parse_publish_body(
+        br#"{"ok":true,"prUrl":"https://github.com/p/pull/1","verified":"structure-only"}"#,
+        200,
+        "u",
+    )
+    .unwrap();
+    assert_eq!(ok_v.verified.as_deref(), Some("structure-only"));
+    // 拒绝：{ok:false, rejected:{code,message}}（后端配 4xx 也按裁决走——真源是 body）。
+    // 字节串字面量只许 ASCII ⇒ 中文 message 用 &str 原样取 as_bytes（UTF-8 逐字节同形）
+    let rej_body = r#"{"ok":false,"rejected":{"code":"container-invalid","message":"包体缺 pack.json"}}"#;
+    let rej = parse_publish_body(
+        rej_body.as_bytes(),
+        422,
+        "https://market.362573581.xyz/publish",
+    )
+    .unwrap();
+    assert!(!rej.ok);
+    let r = rej.rejected.expect("ok=false 必须带 rejected");
+    assert_eq!(r.code, "container-invalid");
+    assert_eq!(r.message, "包体缺 pack.json");
+    assert_eq!(rej.status, 422);
+    // 垃圾：缺 ok / 缺 prUrl / ok=false 缺 rejected / 非 JSON
+    assert!(parse_publish_body(br#"{"prUrl":"x"}"#, 200, "u").unwrap_err().contains("缺 ok"));
+    assert!(parse_publish_body(br#"{"ok":true}"#, 200, "u").unwrap_err().contains("prUrl"));
+    assert!(parse_publish_body(br#"{"ok":false}"#, 200, "u").unwrap_err().contains("rejected"));
+    assert!(parse_publish_body(b"<html>502</html>", 502, "u").unwrap_err().contains("JSON"));
+    // message 缺失给空串不炸（code 是主键，message 只是给人话）
+    let no_msg = parse_publish_body(br#"{"ok":false,"rejected":{"code":"x"}}"#, 200, "u").unwrap();
+    assert_eq!(no_msg.rejected.unwrap().message, "");
+}
+
+#[test]
+fn parse_device_token_extracts_and_rejects_garbage() {
+    assert_eq!(parse_device_token(br#"{"token":"dev_abc123"}"#).unwrap(), "dev_abc123");
+    assert!(parse_device_token(b"not json").is_err());
+    assert!(parse_device_token(br#"{"token":""}"#).is_err(), "空串 token 不给");
+    assert!(parse_device_token(br#"{"ok":true}"#).is_err());
+}

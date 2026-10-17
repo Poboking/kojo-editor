@@ -45,12 +45,14 @@
 import {
   MARKET_CONTENT_DIR,
   MARKET_DEFAULT_INDEX_URL,
+  MARKET_DEFAULT_PUBLISH_URL,
   MARKET_INDEX_FILE,
   MARKET_INDEX_TIMEOUT_MS,
   MARKET_INDEX_TTL_MS,
   MARKET_MANIFEST_FILE,
   MARKET_MAX_FILE_ENTRIES,
   MARKET_MAX_INDEX_BYTES,
+  MARKET_MAX_CONTAINER_UPLOAD_BYTES,
   MARKET_MAX_PATH_DEPTH,
   MARKET_MAX_UNPACKED_BYTES,
   MARKET_PACKS_DIR,
@@ -61,6 +63,7 @@ import {
   endpointProblem,
   join,
   marketDownloadTimeoutMs,
+  marketPublishTimeoutMs,
   packContainerName,
   packIdKindConflicts,
   packStagingName,
@@ -75,6 +78,9 @@ import {
   type MarketIndexEntry,
   type MarketIndexRefresh,
   type MarketIndexState,
+  type MarketPublishManifestSummary,
+  type MarketPublishOutcome,
+  type MarketPublishProgress,
   type MarketService,
   type PackKind,
   type PackManifest,
@@ -103,6 +109,16 @@ const INSTALLED_KEY = 'installed';
 const ENDPOINT_KEY = 'indexEndpoint';
 /** 本机这份索引的拉取时刻（TTL 与"数据时间"的唯一真源；**不存内容**，内容只有 index.json 一份） */
 const FETCHED_AT_KEY = 'indexFetchedAt';
+/** 设备令牌在存储域里的键（令牌由平台侧 `POST /device-token` 换出，本文件只存取、不解释） */
+const DEVICE_TOKEN_KEY = 'deviceToken';
+/**
+ * 发布预校验的暂存名（**固定名**）。预校验 = 把用户选定的 zip 复制进自家暂存区再解
+ * （解压原语只认暂存区容器），名字不随 id/version 走——那两样在 zip 里、此刻还不知道。
+ * 固定名 ⇒ 并发发布会互踩，这是**接受的**：发布是单面板串行动作，且上一次的残壳
+ * 下一次进来先被覆盖/清扫（`finally` 全清），不留跨次污染。
+ */
+const PUBLISH_PREVIEW_CONTAINER = 'publish-preview.zip';
+const PUBLISH_PREVIEW_UNPACKED = 'publish-preview.unpacked';
 
 export interface MarketServiceDeps {
   /** 内核 io（已过第一道闸；`rename`/`removeDir` 两端都要断言） */
@@ -762,6 +778,133 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     }
   }
 
+  /* --------------------- 发布面（2026-10-16 发布通道批） --------------------- */
+
+  async function readDeviceToken(): Promise<string | null> {
+    const v = await storage.get<unknown>(DEVICE_TOKEN_KEY);
+    return typeof v === 'string' && v.length > 0 ? v : null;
+  }
+
+  /**
+   * 发布的**本地预校验**（零出网）：把用户选定的 zip 复制进自家暂存区 → 平台解压原语
+   * → `pack.json` 全量校验（**与安装同一条** `readSourceManifest`——schema/字段/路径/限额/
+   * id-kind 查重全在里面，不出现第二份校验）→ 容器与清单**双向对平**（`packContainerProblem`，
+   * `declared` 用这份容器的**真事实**现造：kind/id/version 取自解出的清单本身 ⇒ identity 判定
+   * 恒真不是漏洞——对平要抓的是"清单声明与 zip 实际内容不符"）。
+   *
+   * zip 原文件**一个字节不动**（复制体才被解）；暂存痕迹由调用方的 `finally` 全清
+   * （`quietRemoveContainer` 同一条）。拒因全部来自既有清单类码——人话与安装面逐字一致。
+   */
+  async function previewForPublish(
+    zipPath: string,
+  ): Promise<{ summary: MarketPublishManifestSummary; bytes: number }> {
+    const stat = await io.stat(zipPath);
+    if (stat === null || stat.isDirectory) {
+      throw new MarketError('source-unreadable', `要发布的包文件读不到：${zipPath}`, zipPath);
+    }
+    if (stat.size > MARKET_MAX_CONTAINER_UPLOAD_BYTES) {
+      throw new MarketError(
+        'bytes-limit',
+        `包体 ${stat.size} 字节超过发布上限 ${MARKET_MAX_CONTAINER_UPLOAD_BYTES}（CF 免费档边缘请求体上限 100,000,000 字节，本地上限留整 1 MB 余量），先瘦身再发——超限包过不了 CF 边缘，别浪费流量`,
+        zipPath,
+      );
+    }
+    const containerPath = join(stagingRoot, PUBLISH_PREVIEW_CONTAINER);
+    const unpackedDir = join(stagingRoot, PUBLISH_PREVIEW_UNPACKED);
+    await quietRemove(unpackedDir); // 上一次的解压残壳（容器残壳由 copyFile 覆盖）
+    try {
+      await io.copyFile(zipPath, containerPath);
+      let extracted: RemoteExtractResult;
+      try {
+        extracted = await remote.marketExtract(
+          PUBLISH_PREVIEW_CONTAINER,
+          PUBLISH_PREVIEW_UNPACKED,
+          { maxEntries: MARKET_MAX_FILE_ENTRIES, maxDepth: MARKET_MAX_PATH_DEPTH, maxUnpackedBytes: MARKET_MAX_UNPACKED_BYTES },
+        );
+      } catch (err) {
+        throw new MarketError('extract-failed', `这个包打不开（不是合法的发布容器）：${errMessage(err)}`, zipPath);
+      }
+      const manifest = await readSourceManifest(unpackedDir);
+      const blob = await io.readBytes(containerPath);
+      const hex = await sha256Hex(blob);
+      const declared: MarketIndexEntry = {
+        kind: manifest.kind,
+        id: manifest.id,
+        version: manifest.version,
+        name: manifest.name,
+        author: manifest.author,
+        license: manifest.license,
+        minAppVersion: manifest.minAppVersion,
+        zip: { url: '', sha256: hex, bytes: blob.length },
+        fileCount: manifest.files.length,
+        unpackedBytes: manifest.files.reduce((s, f) => s + f.bytes, 0),
+      };
+      const problem = packContainerProblem(manifest, { sha256: hex, entries: extracted.entries, declared });
+      if (problem !== null) {
+        log.warn(`发布预校验：容器与清单对不平（${problem.code}）：${problem.why}`);
+        throw new MarketError(problem.code, `这个包发不出去：${problem.why}`, problem.detail);
+      }
+      return {
+        summary: {
+          kind: manifest.kind,
+          id: manifest.id,
+          version: manifest.version,
+          name: manifest.name,
+          author: manifest.author,
+        },
+        bytes: stat.size,
+      };
+    } finally {
+      await quietRemoveContainer(PUBLISH_PREVIEW_CONTAINER, unpackedDir);
+    }
+  }
+
+  /**
+   * **发布编排**（契约 `MarketService.publish`）：
+   * 能力闸 + 端点形态闸（零网络）→ 设备令牌（storage 复用，缺则平台换一枚并落存储）
+   * → 本地预校验（`previewForPublish`，零出网）→ 平台发布原语（zip 原样字节上传、进度透传，
+   * 节流在平台侧）。后端**明确拒绝**不是异常（返回 rejected 分支）；平台侧故障抛错带人话。
+   *
+   * `zipPath` 必须来自**用户经系统对话框选定的文件**（对话框即授权，照 `exportFile`
+   * 的哲学——不是游戏目录扫盘）。欠账已清（2026-10-16 发布面板批）：桥已补
+   * `FileIO.chooseFile`（additive 可选，只选不读不写），ui-market 面板经它选 zip。
+   */
+  async function publish(
+    zipPath: string,
+    opts?: { endpoint?: string; onProgress?: (p: MarketPublishProgress) => void },
+  ): Promise<MarketPublishOutcome> {
+    if (remote.marketPublish === undefined || remote.marketDeviceToken === undefined) {
+      throw new Error('当前平台没有发布能力（发布通道需要桌面壳）');
+    }
+    const endpoint = (opts?.endpoint ?? MARKET_DEFAULT_PUBLISH_URL).trim();
+    const shapeProblem = endpointProblem(endpoint);
+    if (shapeProblem !== null) {
+      throw new MarketError('endpoint-invalid', `发布地址不合法：${shapeProblem}`, endpoint);
+    }
+    let token = await readDeviceToken();
+    if (token === null) {
+      let fetched: string;
+      try {
+        fetched = await remote.marketDeviceToken(endpoint);
+      } catch (err) {
+        throw new Error(`设备令牌没拿到（无法发布）：${errMessage(err)}`);
+      }
+      await storage.set(DEVICE_TOKEN_KEY, fetched);
+      token = fetched;
+    }
+    const preview = await previewForPublish(zipPath);
+    try {
+      return await remote.marketPublish(zipPath, preview.summary, token, {
+        endpoint,
+        maxBytes: MARKET_MAX_CONTAINER_UPLOAD_BYTES,
+        timeoutMs: marketPublishTimeoutMs(preview.bytes),
+        onProgress: opts?.onProgress,
+      });
+    } catch (err) {
+      throw new Error(`发布没有成功：${errMessage(err)}`);
+    }
+  }
+
   return {
     async rootDir(): Promise<string> {
       return deps.root;
@@ -800,6 +943,8 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     installLocalDir,
 
     installFromIndex,
+
+    publish,
 
     async installedBytes(): Promise<number> {
       // 口径：**核验在位**的各包 files 声明字节之和。`pack.json` 的 `files[]` 只列 `files/`

@@ -368,7 +368,7 @@ describe('WorkspaceSymbols 静态渲染（"按了没反应"的那一厘米）', 
 describe('ShellLayout 接线（Ctrl+T 的三条腿）', () => {
   const src = readFileSync(path.resolve(import.meta.dirname, '../src/ui/ShellLayout.tsx'), 'utf8');
 
-  it('命令注册表里有 `workbench.workspaceSymbols` 且绑 `ctrl+t`（命令面板与快捷键同一真源）', () => {
+  it('命令注册表里有 `workbench.workspaceSymbols` 且默认绑 `ctrl+t`（真源 = keybindings.ts，ShellLayout 动态取生效键位——rebindable 后不再字面量硬编码）', () => {
     expect(src).toContain("id: 'workbench.workspaceSymbols'");
     // d13db29 起键位走集中注册表：ShellLayout 只保留 `effectiveKeybindingOf` 间接引用，
     // 默认键字面量（`keys: 'ctrl+t'`）单源住在 keybindings.ts——两处一起钉住。

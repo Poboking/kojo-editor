@@ -4,6 +4,7 @@ import type {
   DirEntry,
   FileEncoding,
   FileIO,
+  FilePickFilter,
   FileStat,
   Logger,
   PlatformBridge,
@@ -735,6 +736,19 @@ export class FileIOServiceImpl implements FileIO {
     const target = await this.bridge.exportFile(fileName, bytes, opts);
     if (target !== null) this.log?.info(`File exported: ${fileName} -> ${target}`);
     return target;
+  }
+
+  /**
+   * 文件选择对话框（发布通道批，additive 可选）：本层零判定、零许可授予——只选不读不写。
+   * 平台桥缺席（Node 桥等）⇒ 一句人话（照 `exportFile` 的 unsupported 口径，不静默）。
+   */
+  async chooseFile(opts?: {
+    title?: string;
+    filters?: readonly FilePickFilter[];
+  }): Promise<string | null> {
+    const choose = this.bridge.chooseFile;
+    if (choose === undefined) throw new Error('当前平台没有文件选择能力（需要桌面壳）');
+    return choose.call(this.bridge, opts);
   }
 
   /* ------------------------ 平台原语透传（零新逻辑） ------------------------ */

@@ -1,6 +1,11 @@
 import type { FileChangeKind } from './events';
 import type { Unsubscribe } from './base';
-import type { MarketDownloadProgress } from './market';
+import type {
+  MarketDownloadProgress,
+  MarketPublishManifestSummary,
+  MarketPublishOutcome,
+  MarketPublishProgress,
+} from './market';
 
 /**
  * 内核支持的文本编码（内部统一 UTF-8 表示，读写时按文件探测/保持）。
@@ -175,6 +180,25 @@ export interface RemoteExtractResult {
   totalBytes: number;
 }
 
+/** 容器发布（上传）的可调项（限额由调用方从契约常量传入；平台侧只保留"没传时"的兜底口径） */
+export interface RemotePublishOptions {
+  timeoutMs?: number;
+  /** 上传体积硬上限：调用方按契约常量 `MARKET_MAX_CONTAINER_UPLOAD_BYTES` 传入 */
+  maxBytes?: number;
+  /** 覆盖发布端点（默认 `MARKET_DEFAULT_PUBLISH_URL`；主机不落平台放行表 ⇒ 拒，无任意主机通道） */
+  endpoint?: string;
+  /** 上传进度回调（平台侧节流后回报，口径与下载同款 ≥64 KiB 或 ≥100 ms） */
+  onProgress?: (p: MarketPublishProgress) => void;
+}
+
+/** 文件选择对话框的扩展名过滤项（平台侧原样递给系统对话框；扩展名不带点） */
+export interface FilePickFilter {
+  /** 过滤项的人读名（如 `市场包容器`） */
+  readonly name: string;
+  /** 扩展名列表（如 `['zip']`） */
+  readonly extensions: readonly string[];
+}
+
 /**
  * 远程面的**两层唯一契约**（内核服务键 `kernel.remote`，实现 = 平台桥的零逻辑透传）：
  * 取文本 / 容器下载 / 容器解压。
@@ -224,6 +248,33 @@ export interface RemoteService {
    * 失败 ⇒ 平台侧已解出的部分整体删掉，不留残壳。
    */
   marketExtract(containerName: string, targetName: string, limits: RemoteExtractLimits): Promise<RemoteExtractResult>;
+  /**
+   * 把一个容器**原样上传**到市场发布后端（`POST /publish`；2026-10-16 发布通道批，additive）。
+   *
+   * **additive 可选**：既有桩（Node 测试桥与各假桥）零改动；无此能力的平台在内核
+   * 透传层给一句人话（`kernel/remote.ts` 判缺席）。三方法名三层同名
+   * （Rust 命令 `market_publish` / 桥 / 服务）。
+   *
+   * `zipPath` 是用户经系统对话框选定的文件（**对话框即授权**，照 `exportFile` 的哲学；
+   * 读侧无闸是既有口径——`readFileBytes` 同样读任意路径）。zip **零解包零改写**：
+   * 平台侧流式读原文件上传，字节不经 IPC 回 JS。manifest 概要只是随行身份字段，
+   * 服务端解容器对平才算数。
+   *
+   * @throws 平台无此能力 / 端点不落放行表 / 体积超限 / 超时 / 响应不可解析——一律人话；
+   *         后端**明确拒绝**（`ok:false`）不走抛错，返回 `MarketPublishOutcome` 的 rejected 分支。
+   */
+  marketPublish?(
+    zipPath: string,
+    manifest: MarketPublishManifestSummary,
+    deviceToken: string,
+    opts?: RemotePublishOptions,
+  ): Promise<MarketPublishOutcome>;
+  /**
+   * 向发布后端换一枚设备令牌（`POST /device-token`；发布通道批，additive 可选，
+   * 缺席语义同 `marketPublish`）。令牌真源在平台响应，本层零判定；
+   * 存取（storage 复用）由 `kojo-market` 服务编排。
+   */
+  marketDeviceToken?(endpoint?: string): Promise<string>;
 }
 
 export interface WalkOptions {
@@ -337,6 +388,17 @@ export interface PlatformBridge {
   /** 目录选择对话框；用户取消返回 null */
   chooseDirectory(opts?: { title?: string }): Promise<string | null>;
   /**
+   * 文件选择对话框（发布通道批，additive 可选）：弹系统文件对话框让作者选**一个文件**，
+   * 返回完整路径；取消 → null。**只选不读不写**：本原语不授予任何写许可（不是铁律 6
+   * 的写允许域入口），读侧无闸是既有口径（`readFileBytes` 同样读任意路径）。
+   * `filters` 只是对话框的扩展名过滤建议（平台侧原样递给系统对话框）。
+   * 无对话框能力的平台（Node 桥）不实现，内核透传层给一句人话（照 `exportFile`）。
+   */
+  chooseFile?(opts?: {
+    title?: string;
+    filters?: readonly FilePickFilter[];
+  }): Promise<string | null>;
+  /**
    * 导出**单个文件**（2026-10-12 导出批，ZIP 发布包用）：弹系统保存对话框，把 `bytes`
    * 写到用户选定的位置，返回落点完整路径；用户取消 → null。
    *
@@ -386,6 +448,18 @@ export interface PlatformBridge {
    * 限额三个数一律由调用方从契约常量传入；失败由平台侧清掉已解出的全部内容。
    */
   marketExtract(containerName: string, targetName: string, limits: RemoteExtractLimits): Promise<RemoteExtractResult>;
+  /**
+   * 容器原样上传到发布后端（语义与拒因见 `RemoteService.marketPublish`，同一份口径）。
+   * **additive 可选**：无此能力的平台（Node 桥）不实现，内核透传层给一句人话。
+   */
+  marketPublish?(
+    zipPath: string,
+    manifest: MarketPublishManifestSummary,
+    deviceToken: string,
+    opts?: RemotePublishOptions,
+  ): Promise<MarketPublishOutcome>;
+  /** 换设备令牌（语义见 `RemoteService.marketDeviceToken`）；additive 可选，缺席语义同上 */
+  marketDeviceToken?(endpoint?: string): Promise<string>;
   /**
    * 字节 → 字符串（按标签解码，不探测）。两桥实现逐字同形：
    * `new TextDecoder(DECODE_LABEL[encoding]).decode(bytes)`——探测判序在上层

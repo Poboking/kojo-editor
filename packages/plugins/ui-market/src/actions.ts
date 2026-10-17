@@ -13,18 +13,23 @@
 import {
   MarketError,
   type EventBus,
+  type FileIO,
   type InstalledPack,
   type Logger,
   type MarketDownloadProgress,
   type MarketIndexEntry,
   type MarketIndexRefresh,
   type MarketIndexState,
+  type MarketPublishProgress,
   type MarketService,
 } from '@kojo/plugin-api';
 import {
   importFailNote,
   importNote,
   installNote,
+  publishFailNote,
+  publishOutcomeNote,
+  PUBLISH_CANCEL_NOTE,
   refreshNote,
   rejectNote,
   resolveStatus,
@@ -303,5 +308,51 @@ export async function runImport(deps: MarketActionDeps, rec: InstalledPack): Pro
     const message = err instanceof Error ? err.message : String(err);
     deps.log.warn(`市场导入请求没有发出（${code}）：${message}`);
     return { kind: 'failed', note: importFailNote(rec.name, err) };
+  }
+}
+
+export type PublishOutcome =
+  | { readonly kind: 'cancel'; readonly note: string }
+  | { readonly kind: 'done'; readonly note: string }
+  | { readonly kind: 'failed'; readonly note: string };
+
+/**
+ * 「发布包…」整条通道（MK-PUB）：**选 zip（对话框即授权）→ 服务编排**——
+ * 本地预校验（零出网，与安装同一条校验路径）→ 原样字节上传（进度经 `onProgress` 透传）。
+ *
+ * 文件选择原语以参数递进来（`FileIO.chooseFile` 是 additive 可选，发布通道批新增）：
+ * 缺席 = 平台没有对话框能力（Node 壳），一句人话收场，不静默。
+ * 取消 ≠ 失败：单独一档（作者按了 Esc 不该看到红色的"没有成功"）。
+ * 结果/拒因照旧只有一句内联状态行（HK-4），机器细节走 `log.warn`。
+ */
+export async function runPublish(
+  deps: MarketActionDeps,
+  io: Pick<FileIO, 'chooseFile'> | undefined,
+  onProgress?: (p: MarketPublishProgress) => void,
+): Promise<PublishOutcome> {
+  const choose = io?.chooseFile;
+  if (choose === undefined) {
+    return { kind: 'failed', note: '这个平台没有文件选择能力（发布需要桌面壳），本机没动' };
+  }
+  let zipPath: string | null;
+  try {
+    zipPath = await choose.call(io, {
+      title: '选择要发布的包容器（zip）',
+      filters: [{ name: '市场包容器', extensions: ['zip'] }],
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log.warn(`发布文件选择没有成功：${message}`);
+    return { kind: 'failed', note: `没能打开文件选择：${message}` };
+  }
+  if (zipPath === null) return { kind: 'cancel', note: PUBLISH_CANCEL_NOTE };
+  try {
+    const outcome = await deps.market.publish(zipPath, { onProgress });
+    return { kind: 'done', note: publishOutcomeNote(outcome) };
+  } catch (err: unknown) {
+    const code = err instanceof MarketError ? err.code : 'unknown';
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log.warn(`市场发布没有成功（${code}）：${message}`);
+    return { kind: 'failed', note: publishFailNote(err) };
   }
 }

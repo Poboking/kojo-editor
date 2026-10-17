@@ -1,9 +1,12 @@
 import type {
   PlatformBridge,
+  MarketPublishManifestSummary,
+  MarketPublishOutcome,
   RemoteDownload,
   RemoteDownloadOptions,
   RemoteExtractLimits,
   RemoteExtractResult,
+  RemotePublishOptions,
   RemoteService,
   RemoteText,
   RemoteTextOptions,
@@ -39,5 +42,27 @@ export class RemoteServiceImpl implements RemoteService {
     limits: RemoteExtractLimits,
   ): Promise<RemoteExtractResult> {
     return this.bridge.marketExtract(containerName, targetName, limits);
+  }
+
+  /**
+   * 发布 / 设备令牌（2026-10-16 发布通道批）：仍是零逻辑透传，唯一差别是桥侧
+   * 方法为 additive **可选**（既有桩零改动）⇒ 缺席判定落在透传层、给一句人话，
+   * 语义与 Node 桥对既有必选方法抛 unsupported 完全一致（不降级）。
+   */
+  async marketPublish(
+    zipPath: string,
+    manifest: MarketPublishManifestSummary,
+    deviceToken: string,
+    opts?: RemotePublishOptions,
+  ): Promise<MarketPublishOutcome> {
+    const publish = this.bridge.marketPublish;
+    if (publish === undefined) throw new Error('当前平台没有发布能力（发布通道需要桌面壳）');
+    return publish.call(this.bridge, zipPath, manifest, deviceToken, opts);
+  }
+
+  async marketDeviceToken(endpoint?: string): Promise<string> {
+    const token = this.bridge.marketDeviceToken;
+    if (token === undefined) throw new Error('当前平台没有设备令牌能力（发布通道需要桌面壳）');
+    return token.call(this.bridge, endpoint);
   }
 }

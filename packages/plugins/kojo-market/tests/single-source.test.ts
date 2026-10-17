@@ -194,26 +194,34 @@ describe('市场单一真源守门', () => {
     ).toEqual([ONLY_SHA_SOURCE]);
   });
 
-  it('出网只有一条路：client 构造与 send 各恰一处，下载与取文本都经 guarded_send', () => {
+  it('出网只有两条形态（下载 / 发布），闸同一份形态两张表：client 构造与 send 各恰其数', () => {
     // 「两份判定必然漂」的机器版本：本层只要多出一次 Client::builder / 一次裸 send，
     // 白名单或逐跳重核就有人能绕过 ⇒ 计数而不是"有没有"。
-    expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /Client::builder/), 'client 构造处数').toBe(1);
-    expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /\.send\(\)/), 'send 调用处数').toBe(1);
-    expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /reqwest::get\b/), '不许有 reqwest::get 旁路').toBe(0);
-    expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /guarded_send\s*\(/), 'guarded_send 定义 1 + 调用 2').toBe(3);
-    expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /advance_byte_cap\s*\(/), '体积累计闸定义 1 + 共用 1').toBe(2);
-    expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /Policy::custom\s*\(/), '逐跳重核策略只许一处').toBe(1);
+    // 2026-10-16 发布通道批起出网 = 两条形态：下载（guarded_send）与发布（guarded_post），
+    // **各一个 client**（双闸独立性：client 不共用，闸实现共用、放行表分开）。
+    const rs = readFileSync(RUST_MARKET_RS, 'utf8');
+    expect(codeMatchCount(rs, /Client::builder/), 'client 构造处数（下载 + 发布）').toBe(2);
+    expect(codeMatchCount(rs, /\.send\(\)/), 'send 调用处数（guarded_send / guarded_post / 令牌）').toBe(3);
+    expect(codeMatchCount(rs, /reqwest::get\b/), '不许有 reqwest::get 旁路').toBe(0);
+    expect(codeMatchCount(rs, /guarded_send\s*\(/), 'guarded_send 定义 1 + 调用 2').toBe(3);
+    expect(codeMatchCount(rs, /guarded_post\s*\(/), 'guarded_post 定义 1 + 发布调用 1').toBe(2);
+    expect(codeMatchCount(rs, /advance_byte_cap\s*\(/), '体积累计闸定义 1 + 共用 1').toBe(2);
+    expect(codeMatchCount(rs, /Policy::custom\s*\(/), '逐跳重核策略两条链路各一处（同一实现）').toBe(2);
+    expect(codeMatchCount(rs, /redirect_action_for\s*\(/), '逐跳重核实现定义 1 + 两个 client 各 1').toBe(3);
+    expect(codeMatchCount(rs, /url_problem_in\s*\(/), 'URL 闸参数化实现定义 1 + 下载/发布/逐跳各 1').toBe(4);
+    expect(codeMatchCount(rs, /publish_host_in_allowlist\b/), '发布白名单定义 1 + PUBLISH_GATE 1').toBe(2);
+    expect(codeMatchCount(rs, /\bhost_in_allowlist\b/), '下载白名单定义 1 + DOWNLOAD_GATE 1（前置 \\b 防误吸 publish_ 粘连）').toBe(2);
   });
 
-  it('代理不从 JS 递进来：两个市场命令的签名里没有 proxy 参数（SSRF 收口）', () => {
+  it('代理不从 JS 递进来：四个市场命令的签名里没有 proxy 参数（SSRF 收口）', () => {
     const rs = readFileSync(RUST_MARKET_RS, 'utf8');
-    for (const cmd of ['market_download', 'market_fetch_text']) {
+    for (const cmd of ['market_download', 'market_fetch_text', 'market_publish', 'market_device_token']) {
       const m = new RegExp(`async fn ${cmd}\\(([\n\\s\\S]*?)\\n\\) ->`).exec(rs);
       expect(m, `找不到命令 ${cmd} 的签名`).not.toBeNull();
       expect(m![1]!.toLowerCase(), `${cmd} 的签名里出现了 proxy`).not.toContain('proxy');
     }
-    // 两条链路都**固定** proxy: None ⇒ 代理只可能来自进程环境（reqwest system-proxy）
-    expect(codeMatchCount(rs, /proxy: None,/), '两个命令各写一次 None').toBe(2);
+    // 四条链路都**固定** proxy: None ⇒ 代理只可能来自进程环境（reqwest system-proxy）
+    expect(codeMatchCount(rs, /proxy: None,/), '四个命令各写一次 None').toBe(4);
     expect(readFileSync(TAURI_BRIDGE, 'utf8').toLowerCase()).not.toContain('proxy');
   });
 
@@ -240,29 +248,33 @@ const UI_MARKET_SRC = nodeJoin(ROOT, 'packages', 'plugins', 'ui-market', 'src');
 const CONTRACT_MARKET = nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'market.ts');
 
 describe('安装面单一真源守门（KM-10..12）', () => {
-  it('容器下载/解压与 fetchText 同键同面：生产面只住那四个文件，Rust 仍只有三条市场命令', () => {
+  it('容器下载/解压/发布与 fetchText 同键同面：生产面只住那四个文件，Rust 只有五条市场命令', () => {
     // 新开一个服务键、或让某个插件自己 invoke Rust，都是"第二条远程路"——当场红。
-    // `\b` 只钉**端口方法**：契约纯函数 `marketDownloadTimeoutMs`（住 market.ts）不许误命中。
+    // `\b` 只钉**端口方法**：契约纯函数 `marketDownloadTimeoutMs` / `marketPublishTimeoutMs`
+    // （住 market.ts）不许误命中。
+    // 2026-10-16 发布通道批：`marketPublish` / `marketDeviceToken` 与下载同住那四个文件
+    // （桥 / 内核透传 / 契约 / 服务），且各只出现一份。
     expect(
-      scan([/marketDownload\b|marketExtract\b/], PROD_SURFACE).map(rel).sort(),
+      scan([/marketDownload\b|marketExtract\b|marketPublish\b|marketDeviceToken\b/], PROD_SURFACE).map(rel).sort(),
     ).toEqual([
       'packages/app/src/bridge/tauri-bridge.ts',
       'packages/kernel/src/remote.ts',
       'packages/plugin-api/src/platform.ts',
       'packages/plugins/kojo-market/src/service.ts',
     ]);
-    expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /#\[tauri::command\]/), 'market.rs 的命令数').toBe(3);
+    expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /#\[tauri::command\]/), 'market.rs 的命令数').toBe(5);
   });
 
-  it('装卸校验只有一条路径：清单读取、搬运、双向对平、逐文件锚各只有一处', () => {
+  it('装卸与发布共用同一条校验路径：清单读取、搬运、双向对平、逐文件锚各只有一处', () => {
     const svc = readFileSync(KOJO_MARKET_SERVICE, 'utf8');
-    // 定义 1 + 两条源各调 1 ⇒ 3；任何一条源自己另起一套读写都会让计数变大
-    expect(codeMatchCount(svc, /readSourceManifest\s*\(/), '清单读取处数').toBe(3);
+    // 定义 1 + 目录源 1 + 容器源 1 + 发布预校验 1 ⇒ 4；任何一条源自己另起一套读写都会让计数变大
+    expect(codeMatchCount(svc, /readSourceManifest\s*\(/), '清单读取处数').toBe(4);
     expect(codeMatchCount(svc, /commitPack\s*\(/), '搬运路径处数').toBe(3);
     expect(codeMatchCount(svc, /parseManifest\s*\(/), '清单校验调用处数').toBe(1);
-    expect(codeMatchCount(svc, /packContainerProblem\s*\(/), '双向对平调用处数').toBe(1);
+    expect(codeMatchCount(svc, /packContainerProblem\s*\(/), '双向对平调用处数（容器安装 1 + 发布预校验 1）').toBe(2);
     expect(codeMatchCount(svc, /'entry-sha256'/), '逐文件锚拒码处数').toBe(1);
-    expect(codeMatchCount(svc, /'source-unreadable'/), '源文件读不到拒码处数').toBe(1);
+    expect(codeMatchCount(svc, /'source-unreadable'/), '源文件读不到拒码处数（搬运 1 + 发布预校验 1）').toBe(2);
+    expect(codeMatchCount(svc, /previewForPublish\s*\(/), '发布预校验定义 1 + 编排调用 1').toBe(2);
     expect(scan([/^export function packContainerProblem\(/m], ALL)).toEqual([
       'packages/plugins/kojo-market/src/manifest.ts',
     ]);

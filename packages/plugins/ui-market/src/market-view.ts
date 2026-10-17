@@ -18,6 +18,8 @@ import {
   type MarketIndexEntry,
   type MarketIndexRefresh,
   type MarketIndexState,
+  type MarketPublishOutcome,
+  type MarketPublishProgress,
   type MarketRejectCode,
   type PackKind,
   type PackUpdateCheck,
@@ -109,6 +111,7 @@ export const REJECT_TEXT: Record<MarketRejectCode, string> = {
  */
 const PLATFORM_FAIL_TEXT: ReadonlyArray<readonly [needles: readonly string[], phrase: string]> = [
   [['不在平台放行列表'], '这个镜像地址用不了（平台只放行 GitHub 系的下载地址），本机没动'],
+  [['超过发布上限', '超过上限', '413'], '这个包超过发布上限 95 MB（CF 免费档边缘上限 100,000,000 字节，留了 5 MB 余量），先瘦身再发，本机没动'],
   [['timed out', '超时'], '连不上注册表（超时），检查网络或稍后再试，本机没动'],
   [['getaddrinfo', 'dns'], '注册表地址解析不了（地址可能写错或域名已失效），本机没动'],
   [['404'], '注册表上没有这个文件（可能已下架），本机没动'],
@@ -491,4 +494,61 @@ export function importNote(name: string): string {
 /** 请求连发出都没成（取内容目录失败）那一句：走同一条内联状态行，不弹窗、不静默 */
 export function importFailNote(name: string, err: unknown): string {
   return `「${name}」没能开始导入：${err instanceof Error ? err.message : String(err)}`;
+}
+
+/* ---------------- 「发布包…」（MK-PUB 消费侧：意图 → 服务编排） ---------------- */
+
+/** 发布按钮的人话标签（工具条；与「拉取列表」同族，children 恒为纯字符串） */
+export const PUBLISH_LABEL = '发布包…';
+
+/** 作者取消文件选择那一句（取消了就是没动，别把取消演成失败） */
+export const PUBLISH_CANCEL_NOTE = '已取消发布，本机没动';
+
+/**
+ * 上传进度那一句（平台侧节流后的帧）。上传侧总字节恒已知（命令收的是绝对路径）⇒
+ * 真百分比：向下取整、封顶 100——读数对不齐时只许少说不许超卖（与下载侧同一纪律）。
+ */
+export function publishProgressNote(p: MarketPublishProgress): string {
+  const pct =
+    p.totalBytes > 0 ? Math.min(100, Math.floor((p.sentBytes / p.totalBytes) * 100)) : 0;
+  return `正在上传包容器… ${pct}%（本地预校验已通过）`;
+}
+
+/**
+ * 发布终局那一句。判别联两分支照裁决呈现：
+ * - `ok` = 已进 PR（merge = 放行）；`verified` 只认认识的档位（`structure-only`）出话，
+ *   后端没说/说了不认识的档位就少说一句——不认识的枚举不该演成承诺；
+ * - `rejected` = 后端明确拒：`message` 是后端给的作者面人话（真源在那边），原样呈现；
+ *   message 缺失时给拒因码兜底（不静默），但机器词不上主行的纪律对"自家后端的码"让位
+ *   ——它此刻是作者唯一的线索。
+ */
+export function publishOutcomeNote(outcome: MarketPublishOutcome): string {
+  if (outcome.ok) {
+    const depth =
+      outcome.verified === 'structure-only' ? '（服务端已做结构校验，注册表复核通过后上线）' : '';
+    return `已提交发布请求，等待注册表收录：${outcome.prUrl}${depth}`;
+  }
+  const why =
+    outcome.rejected.message !== ''
+      ? outcome.rejected.message
+      : `后端拒因码 ${outcome.rejected.code}`;
+  return `这个包发布被拒：${why}`;
+}
+
+/**
+ * 发布抛错（平台侧故障 / 本地预校验拒因）那一句。
+ * 两类来源、两种处理：
+ * - `MarketError`（本地预校验：读不到 / 超限 / 打不开 / 对不平 / 地址不合法）——
+ *   服务侧原话本就是作者面人话（与安装同一条路径给出），原样上屏；平台认得出的模式
+ *   （超限 413 等）换 `PLATFORM_FAIL_TEXT` 那句更具体的；
+ * - 其余（平台 / 上传侧故障）——编排层已统一包成「发布没有成功：…」或自解释的一句，
+ *   原样上屏，不再叠前缀。
+ * 机器细节照旧只进日志（`runPublish` 的 `log.warn`）。
+ */
+export function publishFailNote(err: unknown): string {
+  if (err instanceof MarketError) {
+    const phrase = matchPlatformFail(err.message);
+    return `发布没有成功：${phrase ?? err.message}`;
+  }
+  return err instanceof Error ? err.message : String(err);
 }

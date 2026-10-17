@@ -2,6 +2,8 @@ import type {
   FileChangeKind,
   FileEncoding,
   MarketDownloadProgress,
+  MarketPublishOutcome,
+  MarketPublishProgress,
   PlatformBridge,
   RemoteDownload,
   RemoteExtractLimits,
@@ -148,6 +150,14 @@ export const tauriBridge: PlatformBridge = {
     return invoke<string | null>('choose_directory', { title: opts?.title ?? null });
   },
 
+  /** 文件选择对话框（发布通道批）：只选不读不写，路径交回 JS 由后续命令按各自的闸处理 */
+  async chooseFile(opts): Promise<string | null> {
+    return invoke<string | null>('choose_file', {
+      title: opts?.title ?? null,
+      filters: opts?.filters ?? null,
+    });
+  },
+
   async exportFile(fileName: string, bytes: Uint8Array, opts): Promise<string | null> {
     // 保存对话框 + 写盘绑定在 Rust 侧同一个命令内，JS 拿不到落点决定权（对话框即授权）。
     // 字节走 base64，与 writeFileBytes 同口径。
@@ -228,6 +238,61 @@ export const tauriBridge: PlatformBridge = {
       targetName,
       limits,
     });
+  },
+
+  /**
+   * 发布（上传）：zip **绝对路径**透传给 Rust 流式读原文件上传——字节不经 IPC 回 JS；
+   * 进度经 Channel（节流在 Rust 侧，口径与下载同款）。Rust 命令返回扁平 DTO
+   * （ok + prUrl/rejected 同现规则由 Rust 解析器保证），这里投影成契约判别联。
+   */
+  async marketPublish(zipPath, manifest, deviceToken, opts): Promise<MarketPublishOutcome> {
+    let onProgress: unknown = null;
+    if (isTauri()) {
+      const { Channel } = await import('@tauri-apps/api/core');
+      const channel = new Channel<MarketPublishProgress>();
+      if (opts?.onProgress !== undefined) channel.onmessage = opts.onProgress;
+      onProgress = channel;
+    }
+    const dto = await invoke<{
+      status: number;
+      finalUrl: string;
+      ok: boolean;
+      prUrl: string | null;
+      verified: string | null;
+      rejected: { code: string; message: string } | null;
+    }>('market_publish', {
+      zipPath,
+      manifest,
+      deviceToken,
+      endpoint: opts?.endpoint ?? null,
+      maxBytes: opts?.maxBytes ?? null,
+      timeoutMs: opts?.timeoutMs ?? null,
+      onProgress,
+    });
+    return dto.ok && dto.prUrl !== null
+      ? {
+          ok: true,
+          prUrl: dto.prUrl,
+          // 服务端校验深度：只认契约 `MarketPublishVerified` 的字面量（'structure-only'），
+          // 别的值不进判别联（后端加新档位时在此追加——additive）
+          ...(dto.verified === 'structure-only' ? { verified: 'structure-only' as const } : {}),
+          status: dto.status,
+          finalUrl: dto.finalUrl,
+        }
+      : {
+          ok: false,
+          rejected: dto.rejected ?? { code: 'publish-response-invalid', message: '发布响应缺拒绝结构' },
+          status: dto.status,
+          finalUrl: dto.finalUrl,
+        };
+  },
+
+  async marketDeviceToken(endpoint?: string): Promise<string> {
+    const dto = await invoke<{ token: string }>('market_device_token', {
+      endpoint: endpoint ?? null,
+      timeoutMs: null,
+    });
+    return dto.token;
   },
 
   async decode(bytes: Uint8Array, encoding: FileEncoding): Promise<string> {

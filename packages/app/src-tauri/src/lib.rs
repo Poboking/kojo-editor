@@ -877,6 +877,39 @@ async fn choose_directory(
     Ok(Some(picked.to_string_lossy().to_string()))
 }
 
+/// 文件对话框的扩展名过滤项（JS 侧原样递来；扩展名不带点）。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FilePickFilterDto {
+    name: String,
+    extensions: Vec<String>,
+}
+
+/// 文件选择对话框（2026-10-16 发布通道批）：让作者从磁盘上**选定一个文件**，返回完整路径，
+/// 取消 → `None`。**只选不读不写**：本命令不授予任何写许可（不是写允许域的入口），
+/// 读侧无闸是既有口径（`read_file_bytes` 同样读任意路径）——授权语义照 `export_file`
+/// 的"对话框即授权"哲学：路径来自用户的显式选择，而不是调用方随手给的参数。
+#[tauri::command]
+async fn choose_file(
+    title: Option<String>,
+    filters: Option<Vec<FilePickFilterDto>>,
+) -> Result<Option<String>, String> {
+    let mut dialog = rfd::AsyncFileDialog::new();
+    if let Some(t) = title.as_deref() {
+        dialog = dialog.set_title(t);
+    }
+    if let Some(list) = filters.as_deref() {
+        for f in list {
+            let exts: Vec<&str> = f.extensions.iter().map(String::as_str).collect();
+            dialog = dialog.add_filter(&f.name, &exts);
+        }
+    }
+    Ok(dialog
+        .pick_file()
+        .await
+        .map(|h| h.path().to_string_lossy().to_string()))
+}
+
 /// 自选**项目位置**（2026-10-14 新建口上项目自选位置批）。
 ///
 /// **对话框即授权，且授权与对话框绑在这一个命令内**：用户在系统目录对话框里选定后，
@@ -2189,6 +2222,7 @@ pub fn run() {
             remove_file,
             remove_dir,
             choose_directory,
+            choose_file,
             choose_workspace_root,
             workspace_roots,
             export_file,
@@ -2203,6 +2237,8 @@ pub fn run() {
             market::market_download,
             market::market_fetch_text,
             market::market_extract,
+            market::market_publish,
+            market::market_device_token,
             shell::show_in_folder,
             shell::open_url_external
         ])

@@ -44,6 +44,7 @@ export type {
   RemoteExtractEntry,
   RemoteExtractLimits,
   RemoteExtractResult,
+  RemotePublishOptions,
   RemoteService,
   RemoteText,
   RemoteTextOptions,
@@ -58,6 +59,7 @@ export type { ScopedStorage, StorageService } from './storage';
 
 export { WriteNotAllowedError } from './io';
 export type { BackupVersion, EolStyle, FileIO, TextFile, TrashEntry, WriteTextOptions } from './io';
+export type { FilePickFilter } from './platform';
 
 /* ---- 批操作 journal（1016 undo 批独占追加区块；勿在他处重排） ---- */
 export type { OpEntryView, OpJournal, OpsMaintenance, OpRecord } from './journal';
@@ -74,6 +76,10 @@ export {
   MARKET_ZIP_SUFFIX,
   MARKET_UNPACKED_SUFFIX,
   MARKET_DEFAULT_INDEX_URL,
+  /* ---- 发布通道（1016 发布通道批独占追加区块；勿在他处重排） ---- */
+  MARKET_DEFAULT_PUBLISH_URL,
+  MARKET_MAX_CONTAINER_UPLOAD_BYTES,
+  marketPublishTimeoutMs,
   MARKET_MAX_FILE_ENTRIES,
   MARKET_MAX_PATH_DEPTH,
   MARKET_MAX_UNPACKED_BYTES,
@@ -111,6 +117,11 @@ export type {
   MarketIndexEntry,
   MarketIndexRefresh,
   MarketIndexState,
+  MarketPublishManifestSummary,
+  MarketPublishOutcome,
+  MarketPublishProgress,
+  MarketPublishRejection,
+  MarketPublishVerified,
   MarketRejectCode,
   MarketService,
   PackFileEntry,

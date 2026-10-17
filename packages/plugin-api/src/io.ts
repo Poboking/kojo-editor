@@ -1,4 +1,4 @@
-import type { BatchFileStat, DirEntry, FileEncoding, FileStat, WalkOptions } from './platform';
+import type { BatchFileStat, DirEntry, FileEncoding, FilePickFilter, FileStat, WalkOptions } from './platform';
 
 export type EolStyle = 'crlf' | 'lf';
 
@@ -214,6 +214,16 @@ export interface FileIO {
    * 一条没人用的能力。要恢复请照 `exportFile` 的形态重新加，别留"以防万一"。）
    */
   exportFile(fileName: string, bytes: Uint8Array, opts?: { title?: string }): Promise<string | null>;
+  /**
+   * 文件选择对话框（发布通道批，additive 可选）：弹系统文件对话框让作者选**一个文件**，
+   * 返回完整路径；取消 → null。**只选不读不写**：不授予任何写许可（铁律 6 的写允许域
+   * 与本原语无关），`filters` 只是扩展名过滤建议。无此能力的平台（Node 桥）抛错，
+   * 调用侧自解释呈现（照 `exportFile` 口径）。
+   */
+  chooseFile?(opts?: {
+    title?: string;
+    filters?: readonly FilePickFilter[];
+  }): Promise<string | null>;
   /**
    * 应用数据目录（**平台桥已有原语的内核透传**）。
    *
