@@ -7,8 +7,11 @@ import type {
   EditorSaveChoices,
   EditorSaveHandlerContribution,
   EditorSaveWarning,
+  ErbFile,
+  ErbIndex,
+  ErbParserService,
 } from '@kojo/plugin-api';
-import {errorText,  FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
+import {errorText,  FULLWIDTH_SPACE, pathKey, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
@@ -120,8 +123,52 @@ registerKojoLanguage(monaco);
 
 /** marker owner（同一 owner 的 markers 每次整体替换；不同 owner 互不干扰） */
 const MARKER_OWNER = 'kojo-decorators';
+
+/**
+ * 在项目索引里按 `pathKey` 归一找 `path` 对应的那一份文件（PS-5 面包屑索引用法的第一条腿）。
+ *
+ * 路径归一**必须由宿主做**（HK-7 同款坑）：索引的键是扫描侧给的绝对路径，编辑器这条路
+ * 是 `filePath` prop 给的，Windows 上分隔符与大小写可以不一致——裸字符串比会**静默判不上**，
+ * 症状是"面包屑永远在解析全文"，看不出哪里错了。索引缺席 / 找不到 ⇒ null（调用方退回解析）。
+ */
+function erbFileInIndex(index: ErbIndex | null, path: string): ErbFile | null {
+  if (!index) return null;
+  const want = pathKey(path);
+  for (const [key, file] of index.files) if (pathKey(key) === want) return file;
+  return null;
+}
+
 /** 编辑停顿多久后重算装饰（避免每击键跑一遍转译） */
 const MARKER_DEBOUNCE_MS = 250;
+
+/**
+ * `.kojo` 预览装配判据的项目侧摘要（PS-5 缓存键的一部分）。
+ *
+ * 段由 `ui.editor.liftPreview` 按 `{path, text, project}` 现算 ⇒ 决定产物的只有
+ * "哪套项目 + 哪份内容"。内容那一维交给 model 的 `alternativeVersionId`（撤销回到
+ * 原样时它会回到同一个数，缓存正好复用）；项目这一维取 adapterId / rootDir /
+ * `inputDigest`——**字典与时机表都在 inputDigest 里**（adapter `loadProject` 吃进去的
+ * 非 ERB 输入摘要，与 `marker-pool` 的缓存判据同一条尺子）。取不到 digest 就不给摘要
+ * （判据不全 ⇒ 不缓存，同抽取快照纪律）。
+ */
+function sugarStampOf(project: { adapterId: string; rootDir: string; inputDigest?: string } | null): string {
+  if (project === null) return '\u0000no-project';
+  if (!project.inputDigest) return '\u0000no-digest'; // 不缓存：返回一个永不与任何"可缓存条目"相等的键
+  return `${project.adapterId}\u0000${project.rootDir}\u0000${project.inputDigest}`;
+}
+
+/**
+ * 糖视图摘要文本（sugarStats）之外的那份投影产物缓存条目（PS-5）。
+ * 容量恒 1：切标签 / 解锁 / 直连开关反复重算是这条路径的**常态**（改前每次都全量重做）。
+ */
+interface SugarCacheEntry {
+  path: string;
+  versionId: number;
+  stamp: string;
+  lineCount: number;
+  doc: string;
+  sugarLines: number;
+}
 
 /**
  * 就近征询**保存接管者**（槽 `ui.editor.saveHandler`，2026-10-12 批）：返回
@@ -307,6 +354,11 @@ export function EditorPane({
   /** 糖视图挂载前编辑器上的原文 model（糖模式降级取模 / 还原兜底用） */
   const sugarOriginalModelRef = useRef<Monaco.editor.ITextModel | null>(null);
   /**
+   * 投影产物缓存（PS-5，容量 1）：判据 = 路径 + 内容版本号 + 项目摘要 + 行数。
+   * 命中即跳过"整篇 getValue + 逐行取原文 + 段扫描"这三条 O(行数) 的腿。
+   */
+  const sugarCacheRef = useRef<SugarCacheEntry | null>(null);
+  /**
    * 已解锁编辑的 ERB 路径（**会话内有效**，不落盘）。
    *
    * 为什么不持久化：ERB 默认只读是**安全姿态**（游戏目录里别人的口上，误改即事故）。
@@ -341,6 +393,12 @@ export function EditorPane({
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
+  /**
+   * PS-5 校验暂停闸的可见态（键 = 正停着的那条路径；值恒 true）。
+   * 由 `markerRunner` 的 `pauseChanged` 在跨界时写入 ⇒ 工具条那一句「文件太大，
+   * 错误检查已暂停」与波浪线**同源同时**（不是宿主另算一遍体量，两处不会漂）。
+   */
+  const [markerPaused, setMarkerPaused] = useState<Record<string, boolean>>({});
   /** 待用户决策的保存告警（非 null = 弹确认框；宿主全角空格"一键修复"的入口） */
   const [pendingChoice, setPendingChoice] = useState<EditorSaveWarning | null>(null);
   /** 保存告警的 ref 镜像（A6：自动保存 tick 是定时器闭包，护栏须读最新值） */
@@ -359,11 +417,23 @@ export function EditorPane({
    */
   const [crumbs, setCrumbs] = useState<readonly CrumbItem[]>([]);
   /** 面包屑刷新入口（ref 化：光标/model 监听只注册一次，须读最新闭包） */
-  const crumbRefreshRef = useRef<(() => void) | null>(null);
-  /** 大纲树缓存（path + model 版本号为键：光标移动只换链、不重解析） */
-  const crumbTreeCacheRef = useRef<{ path: string; versionId: number; symbols: EditorDocumentSymbol[] } | null>(
-    null,
-  );
+  const crumbRefreshRef = useRef<((forceParse?: boolean) => void) | null>(null);
+  /** 防抖重算定时器（PS-5：打字期间全文解析**每轮停笔一次**，不是每击键一次） */
+  const crumbTimerRef = useRef<number | null>(null);
+  /**
+   * 大纲树缓存（path + model 版本号为键：光标移动只换链、不重解析）。
+   *
+   * PS-5 起多带两位来源账：`fromIndex` = 这份树是从**项目索引**派生的（盘上真相），
+   * 不是现文本解析的 ⇒ 它的失效判据除版本号外还要认索引指纹 `indexStamp`
+   * （保存之后索引补扫一次，树会跟着变，而干净缓冲区的版本号不会变）。
+   */
+  const crumbTreeCacheRef = useRef<{
+    path: string;
+    versionId: number;
+    symbols: EditorDocumentSymbol[];
+    fromIndex: boolean;
+    indexStamp: string | null;
+  } | null>(null);
   /** 上一次渲染的链键（等值即不 setState——光标每动一次不该白刷一次 React） */
   const crumbsKeyRef = useRef('');
   /** 上一次**重算过链**的位点（同 path 同行即跳过全文解析，判据见 `crumbsNeedRefresh`） */
@@ -375,6 +445,68 @@ export function EditorPane({
     const base = editorModelPool.baseline(path);
     if (!entry || base === undefined) return false;
     return entry.model.getAlternativeVersionId() !== base;
+  }, []);
+
+  /* ───────────── PS-5 面包屑：能用已索引的名录就不解析全文 ───────────── */
+
+  /** 当前项目索引（**软取**，与 hover / 函数名 / 文件事实那三条软腿同口径：未开项目、未建好、服务抛错一律当"没有"，绝不抛进光标监听） */
+  const currentErbIndex = useCallback((): ErbIndex | null => {
+    try {
+      return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+    } catch {
+      return null;
+    }
+  }, [kernel]);
+
+  /**
+   * 从索引里取这份文件的符号表（拿不到 = null，调用方按原路解析）。
+   *
+   * 三条判据任一不过即**不用索引**，因为面包屑点击会 reveal 行号，行号错一位就是
+   * 把作者导到别处（比没有面包屑更糟，同 `crumbRefresh` 大文件清链那条理由）：
+   * ① 只有 ERB 方言在索引里（`.kojo` 的树由糖线按现文本现算，索引没有它）；
+   * ② 缓冲区必须**干净**——索引读的是盘上那份，作者改了没保存时它是过期真相；
+   * ③ 索引里那份的行数必须等于当前 model 的行数（干净 + 行数一致 ⇒ 盘上==缓冲，
+   *    行号坐标系对得上；对不上宁可不猜）。
+   *
+   * 产出形状与 erb-parser 的 `erbDocumentSymbols` 逐字同源（函数 + 声明、文档序：
+   * 同起始行时函数在前）。这里不抄 `detail`：面包屑只读 name/kind/startLine，
+   * 而 `enclosingChainAt` 的平局折法只认"文档序第一枚"，排序一致就够。
+   */
+  const symbolsFromIndex = useCallback(
+    (path: string, lineCount: number): { symbols: EditorDocumentSymbol[]; stamp: string | null } | null => {
+      if (!isErbLike(path)) return null;
+      if (computeDirty(path)) return null;
+      const index = currentErbIndex();
+      const file = erbFileInIndex(index, path);
+      if (!file || file.lineCount !== lineCount) return null;
+      const symbols: EditorDocumentSymbol[] = [];
+      for (const fn of file.functions) {
+        symbols.push({ name: fn.name, kind: 'function', startLine: fn.startLine, endLine: fn.endLine });
+      }
+      for (const dim of file.dims) {
+        symbols.push({ name: dim.name, kind: 'declaration', startLine: dim.line, endLine: dim.line });
+      }
+      symbols.sort((a, b) => a.startLine - b.startLine || (a.kind === b.kind ? 0 : a.kind === 'function' ? -1 : 1));
+      return { symbols, stamp: index?.fingerprint ?? null };
+    },
+    [computeDirty, currentErbIndex],
+  );
+
+  /**
+   * 把一次全文重算推到停笔之后（PS-5）。
+   *
+   * 单条在途就够：定时器闭包读的是**落地时刻**的光标与版本号（与装饰防抖同一条纪律），
+   * 所以连打期间不需要逐键排程，最后一次停笔补一次即收敛。
+   * `crumbLastRef` 先清空是**必须的**——绕过 `crumbsNeedRefresh` 那道"同 path 同行不重算"
+   * 的闸（那道闸正是为了省这次解析而设，不清就会 self-skip 掉自己约的这次重算）。
+   */
+  const scheduleCrumbRebuild = useCallback((): void => {
+    if (crumbTimerRef.current !== null) return;
+    crumbTimerRef.current = window.setTimeout(() => {
+      crumbTimerRef.current = null;
+      crumbLastRef.current = null;
+      crumbRefreshRef.current?.(true);
+    }, MARKER_DEBOUNCE_MS);
   }, []);
 
   /**
@@ -581,6 +713,27 @@ export function EditorPane({
           );
         },
         record: (name, ms, note) => perf.record(name, ms, note),
+        /* PS-5 校验暂停闸的两条宿主腿。
+         * `sizeOf` 只用 model 的 O(1) 读数（码元数走 `getValueLength()`——piece tree 的
+         * 前缀和，不复制正文；行数走 `getLineCount()`）。判据本体在 marker-pool。
+         * `pauseChanged` 只在跨界时叫一次 ⇒ 宿主把它变成**看得见的**一句话（铁律 4：
+         * 停掉波浪线可以，停下来没人说就是 bug）。 */
+        sizeOf: (path) => {
+          const model = entriesRef.current.get(path)?.model;
+          if (!model || model.isDisposed()) return undefined;
+          return { units: model.getValueLength(), lineCount: model.getLineCount() };
+        },
+        pauseChanged: (path, paused) => {
+          // 记的是"哪几份文件正停着"（不是"最后翻转的那一条"）：两份超大文件并存时，
+          // 切过去的那一份不会再触发翻转 ⇒ 用集合判可见，提示不会跟着标签漂丢。
+          setMarkerPaused((prev) => {
+            if ((prev[path] === true) === paused) return prev;
+            const next = { ...prev };
+            if (paused) next[path] = true;
+            else delete next[path];
+            return next;
+          });
+        },
       }),
     [kernel],
   );
@@ -704,39 +857,53 @@ export function EditorPane({
       return;
 
     const model = entry.model;
-    const text = model.getValue();
+    const versionId = model.getAlternativeVersionId();
     const project = kernel.project.current();
     const maxLine = model.getLineCount();
-
-    // 段清点：单个贡献抛错不影响其余（与装饰器 / codeAction 同款隔离）
-    const segments: Array<{ fromLine: number; toLine: number; sugarText: string }> = [];
-    for (const contribution of kernel.slots.query('ui.editor.liftPreview')) {
-      const provide = contribution.provideLiftProject;
-      if (typeof provide !== 'function') continue;
-      try {
-        for (const item of provide.call(contribution, { path, text, project })) {
-          const { fromLine, toLine } = clampRange(item.fromLine, item.toLine, maxLine);
-          // 段首尾的空行不进糖文本（否则糖块开头是一大块空白，见 `trimSegmentBlanks`）
-          segments.push({ fromLine, toLine, sugarText: trimSegmentBlanks(item.sugarText) });
+    const stamp = sugarStampOf(project);
+    // PS-5 装配缓存：同一份内容 + 同一套项目判据 ⇒ 整篇 getValue、逐行取原文、段扫描**一次都不付**
+    // （改前每次切标签 / 解锁 / 直连开关都要重付一遍，见下面 else 分支那三条 O(行数) 的腿）。
+    // 只留一份（容量 1）：换来的是"来回切标签不重算"，代价是一份投影文本常驻——
+    // 与"每次重算却谁也不留"相比是有界且可预期的（关标签 / 换项目 / 内容改动都会作废它）。
+    const hit = sugarCacheRef.current;
+    let doc: string;
+    let sugarLines: number;
+    if (hit && hit.path === path && hit.versionId === versionId && hit.stamp === stamp && hit.lineCount === maxLine) {
+      doc = hit.doc;
+      sugarLines = hit.sugarLines;
+    } else {
+      const text = model.getValue();
+      // 段清点：单个贡献抛错不影响其余（与装饰器 / codeAction 同款隔离）
+      const segments: Array<{ fromLine: number; toLine: number; sugarText: string }> = [];
+      for (const contribution of kernel.slots.query('ui.editor.liftPreview')) {
+        const provide = contribution.provideLiftProject;
+        if (typeof provide !== 'function') continue;
+        try {
+          for (const item of provide.call(contribution, { path, text, project })) {
+            const { fromLine, toLine } = clampRange(item.fromLine, item.toLine, maxLine);
+            // 段首尾的空行不进糖文本（否则糖块开头是一大块空白，见 `trimSegmentBlanks`）
+            segments.push({ fromLine, toLine, sugarText: trimSegmentBlanks(item.sugarText) });
+          }
+        } catch (e: unknown) {
+          // 能力出错要"退化可见"：记录后继续，糖视图少一段好过整份消失
+          console.warn(
+            `[EditorPane] liftPreview '${contribution.id}' provideLiftProject 抛错：${
+              errorText(e)
+            }`,
+          );
         }
-      } catch (e: unknown) {
-        // 能力出错要"退化可见"：记录后继续，糖视图少一段好过整份消失
-        console.warn(
-          `[EditorPane] liftPreview '${contribution.id}' provideLiftProject 抛错：${
-            errorText(e)
-          }`,
-        );
       }
+      if (segments.length === 0) return; // 无段可铺：保持原文（clear 已在函数开头做过；不进缓存——没有可复用的产物）
+
+      // 取原文逐行内容，拼装整份糖文本（纯函数，口径单测钉死在 sugar-view.test.ts）
+      const originalLines: string[] = [];
+      for (let i = 1; i <= maxLine; i++) originalLines.push(model.getLineContent(i));
+      doc = composeSugarDoc(originalLines, segments);
+
+      sugarLines = 0;
+      for (const seg of segments) sugarLines += seg.sugarText.split('\n').length;
+      sugarCacheRef.current = { path, versionId, stamp, lineCount: maxLine, doc, sugarLines };
     }
-    if (segments.length === 0) return; // 无段可铺：保持原文（clear 已在函数开头做过）
-
-    // 取原文逐行内容，拼装整份糖文本（纯函数，口径单测钉死在 sugar-view.test.ts）
-    const originalLines: string[] = [];
-    for (let i = 1; i <= maxLine; i++) originalLines.push(model.getLineContent(i));
-    const doc = composeSugarDoc(originalLines, segments);
-
-    let sugarLines = 0;
-    for (const seg of segments) sugarLines += seg.sugarText.split('\n').length;
 
     // 只读内存 model：`inmemory://` scheme（**非** `file:`，避免与真文件 model 冲突被复用）。
     // URI 按组隔离（SPLIT-1）：同文件可在两组同时开糖视图——同 URI 的 createModel 会撞车。
@@ -1387,9 +1554,18 @@ export function EditorPane({
     // 面包屑（D1，宿主自绘——standalone Monaco 无面包屑 API，取证见 `breadcrumb-path.ts`）。
     // 数据复用大纲那棵树：`collectDocumentSymbols` 的应答判据与 provider 接线逐字同款
     // （糖视图只读 model 一律不给——行号属派生物，面包屑不许把作者导到不存在的位置）。
-    // 树按 path+版本号缓存，重算本身再按"换行才算一次"闸住（`crumbsNeedRefresh`）：
-    // 光标监听没有防抖，不闸就是每敲一键全文解析一次。
-    crumbRefreshRef.current = () => {
+    //
+    // PS-5 把"这棵树什么时候必须重算"收成三条，按代价从低到高排：
+    // ① **版本号没动** ⇒ 用缓存（改前就有）；索引派生的条目额外认索引指纹——保存之后
+    //    盘上补扫会让树变，而干净缓冲区的版本号不变（`fromIndex` / `indexStamp` 就是为这一条加的）；
+    // ② 版本动了但缓冲区**干净**且索引认得这份文件 ⇒ 从**已索引**的函数名录派生，
+    //    零解析、零全文复制（浏览/跳转这条主路径从此一次全文解析都不付）；
+    // ③ 版本动了且**改脏了** ⇒ 沿用同一份文件的上一次树，把解析推到停笔那一拍
+    //    （`scheduleCrumbRebuild`，250ms，与装饰防抖同节奏）。
+    // ③ 的滞后窗口与 `crumbsNeedRefresh` 既有口径同一类（"块边界真的变了，最多滞后到
+    // 下一次换行即补上"），换到的收益是"每敲一键整篇 getValue + 全文扫描一次"不再发生；
+    // 换文件的第一次仍**立即**解析（没有可沿用的树时不给作者看上一份文件的链）。
+    crumbRefreshRef.current = (forceParse = false) => {
       const ed = editorRef.current;
       const path = filePathRef.current;
       const model = ed?.getModel() ?? null;
@@ -1418,19 +1594,46 @@ export function EditorPane({
       try {
         const versionId = model.getAlternativeVersionId();
         const cache = crumbTreeCacheRef.current;
-        let symbols: EditorDocumentSymbol[];
-        if (cache && cache.path === path && cache.versionId === versionId) symbols = cache.symbols;
-        else {
-          symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
-            kind: 'documentSymbol',
-            path,
-            text: model.getValue(),
-            project: kernel.project.current(),
-            lineCount: model.getLineCount(),
-          });
-          crumbTreeCacheRef.current = { path, versionId, symbols };
+        const chainOf = (symbols: readonly EditorDocumentSymbol[]): void =>
+          apply(toCrumbs(symbolChainAt(symbols, cursor.line)));
+        // ① 同版本（索引条目还须同指纹）⇒ 缓存就是当前真相，一次解析都不付
+        if (
+          cache &&
+          cache.path === path &&
+          cache.versionId === versionId &&
+          (!cache.fromIndex || cache.indexStamp === (currentErbIndex()?.fingerprint ?? null))
+        ) {
+          chainOf(cache.symbols);
+          return;
         }
-        apply(toCrumbs(symbolChainAt(symbols, cursor.line)));
+        // ② 干净缓冲区 + 索引认得这份文件 ⇒ 用已索引的名录，不碰全文解析
+        const indexed = symbolsFromIndex(path, cursor.lineCount);
+        if (indexed) {
+          crumbTreeCacheRef.current = {
+            path,
+            versionId,
+            symbols: indexed.symbols,
+            fromIndex: true,
+            indexStamp: indexed.stamp,
+          };
+          chainOf(indexed.symbols);
+          return;
+        }
+        // ③ 脏了：同一份文件的旧树继续顶着（最多滞后一个防抖窗口），停笔那一拍补一次真解析
+        if (!forceParse && cache && cache.path === path) {
+          scheduleCrumbRebuild();
+          chainOf(cache.symbols);
+          return;
+        }
+        const symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
+          kind: 'documentSymbol',
+          path,
+          text: model.getValue(),
+          project: kernel.project.current(),
+          lineCount: cursor.lineCount,
+        });
+        crumbTreeCacheRef.current = { path, versionId, symbols, fromIndex: false, indexStamp: null };
+        chainOf(symbols);
       } catch (e: unknown) {
         // 面包屑是只读呈现面：出错就"没链"，绝不把光标处理链带崩
         console.warn(`[breadcrumb] 刷新抛错：${errorText(e)}`);
@@ -1469,6 +1672,11 @@ export function EditorPane({
       focusDisposer.dispose();
       crumbCursorSub.dispose();
       crumbModelSub.dispose();
+      // PS-5 面包屑防抖：在途那一次重算随实例退场作废（回调里读的是这个实例的 model）
+      if (crumbTimerRef.current !== null) {
+        window.clearTimeout(crumbTimerRef.current);
+        crumbTimerRef.current = null;
+      }
       viewCurSub.dispose();
       viewScrSub.dispose();
       cursorSub.dispose();
@@ -1568,6 +1776,11 @@ export function EditorPane({
       // 把"上一份 model 的同版本号"当成同一份内容发上屏（判据不成立就不许命中）。
       // 每组各丢各的缓存；共享 model 的另一组由它自己的 runner 继续供。
       markerRunner.dropPath(path);
+      // PS-5 投影缓存同批作废（关标签 = 这份内容不再被任何标签认领；留着就是白占一份正文）
+      if (sugarCacheRef.current?.path === path) sugarCacheRef.current = null;
+      // 面包屑树缓存同理：重开同一文件时 model 的版本号会从 1 重新数，
+      // 留着旧条目就可能把上一份内容的树当"当前内容"发上屏（与 #F6 同一条理由）。
+      if (crumbTreeCacheRef.current?.path === path) crumbTreeCacheRef.current = null;
       entriesRef.current.delete(path);
       viewStatesRef.current.delete(path);
       if (left === 0) {
@@ -1885,6 +2098,21 @@ export function EditorPane({
         <span className={`dirty-dot ${dirty ? 'on' : ''}`} title={dirty ? '未保存' : '已保存'}>
           {dirty ? <Icon name="circle-filled" size={9} /> : null}
         </span>
+        {/* PS-5 校验暂停闸的可见性（铁律 4「内核不静默」在宿主这一侧的落点）：
+            波浪线与右侧问题列表停了，就必须有一句话说它为什么停、以及"内容/保存没受影响"。
+            文案走作者口径（不出现 marker / 装饰 / 阈值这类内部词），细节放悬停。
+            盒子复用 `.erb-mode-hint` 那一族徽章度量（工具条里已有两家同款），不另造一档样式。 */}
+        {markerPaused[filePath] === true ? (
+          <span
+            className="erb-mode-hint"
+            title={
+              '这份文件太大，把整篇重算一遍会让界面卡好几秒，所以这里先不给检查结果（行上没有波浪线，右侧问题列表这一份文件是空的）。' +
+              ' 你的内容和保存都不受影响；换回较小的文件，检查会自动跟上。'
+            }
+          >
+            <Icon name="warning" size={13} /> 文件太大，错误检查已暂停
+          </span>
+        ) : null}
         {isErbLike(filePath) && !inWorkspace(filePath) ? (
           <>
             {/* 两道正交轴的呈现（ADR-0005）：能走到这里说明这是**游戏目录里的 ERB**

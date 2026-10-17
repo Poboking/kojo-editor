@@ -48,7 +48,64 @@ interface PaneSides {
   modified: SideResolved;
 }
 
+/* ─────────────── PS-5 对比体量闸（越界要**说出来**，并留下明知的去路） ─────────────── */
+
+/**
+ * 两侧文本合计长度上限（UTF-16 码元）。
+ *
+ * 为什么必须自己钉一条：monaco 的 diff 在 standalone 里**没有 worker 通道**
+ * （`externalLinesDiffComputer` 那条走 VS Code 的 `DiffEditorController`，
+ * monaco-editor 产物里取不到），行级差异就在主线程算——两份 2.35 MB 的正文对拍一次，
+ * 卡的是整个窗口。vendor 自带的两道刹车（`maxComputationTime` 缺省 5,000ms、
+ * `maxFileSize` 缺省 50 MB）都太晚：前者是"跑满 5 秒才放弃"，后者按字节算，
+ * 语料最大单文件的 20 倍才触发。
+ *
+ * 尺子：真实语料最大单文件 52,601 行 / 2.35 MB（UTF-8 字节，折码元约 0.8–1.3 M）
+ * ⇒ **两侧合计 ~2.6 M 码元**。取 3,000,000 就是把"语料里最大那一对的正常对比"
+ * 留在闸内（不给真实用户加一次点击），只挡住比它还大一截的盘。
+ */
+export const DIFF_GATE_MAX_UNITS = 3_000_000;
+
+/** 两侧合计行数上限（与码元数**并判**，任一越界即停；理由同 marker 闸：行级状态机的固定开销随行数走） */
+export const DIFF_GATE_MAX_LINES = 150_000;
+
+/**
+ * 这一对要不要先停下来（纯函数）。
+ *
+ * 停 ≠ 藏：调用方**必须**把"为什么没对比"写在原处，并给一条「仍然对比」的明示去路
+ * （铁律 4——降级不许静默；对比是只读呈现面，明知要卡是用户的权利）。
+ */
+export function diffGatePaused(units: number, lines: number): boolean {
+  return units > DIFF_GATE_MAX_UNITS || lines > DIFF_GATE_MAX_LINES;
+}
+
+/**
+ * 折叠"未改动区域"的门槛（两侧合计行数）。
+ *
+ * 大对比里真正的渲染账不是算差异，而是**把两遍全文铺成行**：一屏看不了 5 万行，
+ * 而未改动区段占其中绝大多数。过了这道门槛就让 monaco 的 `hideUnchangedRegions`
+ * 把连续未改动段折起来（视口行数随改动密度而不是随文件长度增长）。
+ * 门槛以下**行为与改前逐字一致**（选项在建编辑器时一次性给出，不改已有对比的观感）。
+ */
+export const DIFF_COLLAPSE_MIN_LINES = 20_000;
+
 const loadingSides: PaneSides = { original: { kind: 'loading' }, modified: { kind: 'loading' } };
+
+/** 换行符计数（1 基行数；零中间分配，代价是一次线性扫描，只在两侧就位后各跑一次） */
+export function countLines(text: string): number {
+  if (text.length === 0) return 1;
+  let n = 1;
+  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) n++;
+  return n;
+}
+
+/**
+ * 量级怎么说给作者听：中文里读"多少字"，不读 byte / UTF-16 码元这类内部口径
+ * （`guard: no-sugar-jargon` 一族的要求——状态栏与弹窗是作者看的，不是实现日志）。
+ */
+export function formatCharCount(units: number): string {
+  return units >= 10_000 ? `${(Math.round(units / 1000) / 10).toLocaleString('zh-CN')} 万` : String(units);
+}
 
 /**
  * 解析一侧内容：`text` 直用；否则按 `path` 经内核 io 现读（读侧无写闸，
@@ -99,6 +156,8 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
 
     /** 每格两侧的读取快照，按格子 key 隔离 */
     const [sidesByKey, setSidesByKey] = useState<Record<string, PaneSides>>({});
+    /** PS-5 体量闸：作者**逐格明示**"就是要对比这一对大的"（按格子 key 记，不全局放行） */
+    const [forcedKeys, setForcedKeys] = useState<Record<string, boolean>>({});
     /** 已发起过读取的格子（StrictMode 二次执行也不重复读盘） */
     const requestedRef = useRef<Set<string>>(new Set());
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -109,6 +168,15 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
     const sides = activeKey === null ? null : (sidesByKey[activeKey] ?? null);
     const original = sides?.original ?? loadingSides.original;
     const modified = sides?.modified ?? loadingSides.modified;
+
+    /* PS-5 体量闸的读数：两侧**都就位**才算（读盘这一步本身必要，拦在拦得住的那一拍）。
+       行数用 countLines 逐字符数换行符，不 split——两份 2 MB 正文各 split 一次就是
+       两次整篇数组分配，白付。 */
+    const bothOk = original.kind === 'ok' && modified.kind === 'ok';
+    const gateUnits = bothOk ? original.text.length + modified.text.length : 0;
+    const gateLines = bothOk ? countLines(original.text) + countLines(modified.text) : 0;
+    const forced = activeKey === null ? false : forcedKeys[activeKey] === true;
+    const gated = bothOk && !forced && diffGatePaused(gateUnits, gateLines);
 
     // 这一格第一次进视野 ⇒ 两侧并行现读；读回来过就不重复读
     useEffect(() => {
@@ -146,6 +214,8 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
     useEffect(() => {
       if (activeKey === null || activeRequest === null) return;
       if (original.kind !== 'ok' || modified.kind !== 'ok') return;
+      // PS-5：体量越界 ⇒ 这一拍根本不建（连 model 都不做两次整篇复制）；文案与「仍然对比」在渲染处
+      if (gated) return;
       // 行级无差异就不建编辑器（与横幅同一条判等核：行态从 compareContent 派生）
       if (diffEqualityOf(original, modified).linesEqual === true) return; // 无差异：横幅已讲清
       const host = containerRef.current;
@@ -172,6 +242,13 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
           diffAlgorithm: 'advanced',
           renderIndicators: true,
           automaticLayout: true,
+          // PS-5：把 vendor 那两道太晚的刹车收到与体量闸同一量级（缺省 5,000ms / 50 MB）。
+          // 3s 是"窗口还能点动"的上限；20 MB 换算成"最大真实文件的 ~8 倍"，
+          // 越过它的对比由 monaco 自己说话（它有可见提示），不靠我们猜。
+          maxComputationTime: 3000,
+          maxFileSize: 20,
+          // 大对比才折叠未改动段（阈值以上才开；小对比的行为与改前逐字一致）
+          hideUnchangedRegions: { enabled: gateLines >= DIFF_COLLAPSE_MIN_LINES },
           // 编程字体：与主编辑器同一份真源（createDiffEditor 也吃 IEditorOptions 这些键）
           ...CODE_FONT_BASELINE,
         });
@@ -189,7 +266,7 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
         editor?.dispose();
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeKey, original, modified]);
+    }, [activeKey, original, modified, gated, gateLines]);
 
     if (active === null) {
       return h('div', { className: 'wizard kd-host' }, h('p', { className: 'dim' }, '没有要对比的内容。'));
@@ -246,7 +323,6 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
     }
 
     const { request } = active.state;
-    const bothOk = original.kind === 'ok' && modified.kind === 'ok';
     // 判等只认一条核：字节态 + 行态同源派生（W17；宿主不再各写 if 链）
     const banner =
       original.kind === 'ok' && modified.kind === 'ok'
@@ -272,7 +348,34 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
       banner !== null ? h('p', { className: 'kd-banner ok' }, banner.message) : null,
       !bothOk && errLine.length === 0 ? h('p', { className: 'dim' }, '正在读取两侧内容…') : null,
       errLine,
-      bothOk && !identical ? h('div', { ref: containerRef, className: 'kd-editor' }) : null,
+      // PS-5 体量闸：拦下了就把"拦了什么、代价多大、要不要照样办"一次讲完（不许静默）
+      gated
+        ? h(
+            'div',
+            { className: 'kd-gate' },
+            h(
+              'p',
+              { className: 'kd-banner' },
+              `这两份内容合计约 ${formatCharCount(gateUnits)}字 / ${gateLines.toLocaleString('zh-CN')} 行，` +
+                '一次性对比会把界面卡住好几秒，所以先停下来没有自动开始。',
+            ),
+            h(
+              'div',
+              { className: 'wizard-actions' },
+              h(
+                'button',
+                {
+                  className: 'ghost small',
+                  onClick: () => {
+                    if (activeKey !== null) setForcedKeys((prev) => ({ ...prev, [activeKey]: true }));
+                  },
+                },
+                '仍然对比（可能会卡几秒）',
+              ),
+            ),
+          )
+        : null,
+      bothOk && !identical && !gated ? h('div', { ref: containerRef, className: 'kd-editor' }) : null,
       h(
         'div',
         { className: 'wizard-actions' },

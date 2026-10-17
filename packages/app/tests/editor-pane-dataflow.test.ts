@@ -81,7 +81,10 @@ describe('异步 acquire 期间的视图/光标串档闸（#3）', () => {
 
 describe('大文件面包屑清空（#4）', () => {
   it('crumbRefresh 对超阈值文件清空链而非维持旧链（旧链点击 = 把别的文件的行 reveal 进当前文件）', () => {
-    const block = SOURCE.slice(SOURCE.indexOf('crumbRefreshRef.current = () =>'), SOURCE.indexOf('crumbRefreshRef.current = () =>') + 3000);
+    // 入口按**签名无关**的定位（PS-5 起它是 `(forceParse = false) =>`：参数会变，这条闸不该跟着漂）
+    const start = SOURCE.search(/crumbRefreshRef\.current = \(/);
+    expect(start, '找不到 crumbRefresh 入口').toBeGreaterThanOrEqual(0);
+    const block = SOURCE.slice(start, start + 3000);
     expect(block).toMatch(/cursor\.lineCount >= LARGE_FILE_LINES[\s\S]{0,160}crumbLastRef\.current = null[\s\S]{0,60}apply\(\[\]\)/);
   });
 });
