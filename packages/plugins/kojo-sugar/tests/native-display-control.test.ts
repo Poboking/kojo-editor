@@ -21,6 +21,8 @@ import { describe, expect, it } from 'vitest';
 import { renderControlLine } from '../src/native-display/control';
 import { localizeNativeLine } from '../src/native-display/passes';
 import { isVerbatimNativeLine } from '../src/native-display/types';
+import { createSugarTranspileService } from '../src/service';
+import { stubDict, stubFaceTable } from './support';
 import type { NativeDisplayLookup } from '../src/native-display/types';
 
 /** 族头别名桩（**语言层测试不依赖 adapter**；真表的自证在 eratw-adapter 的 family-alias.test.ts） */
@@ -73,13 +75,18 @@ const LOOPS: readonly Case[] = [
   ['WHILE TFLAG:193 != 0', '循环 当 时标：193 不等于 0：'],
   ['WHILE LOCAL < 10', '循环 当 LOCAL 不足 10：'],
   ['WEND', '循环结束'],
-  ['REPEAT', '循环 至少一次：'],
-  ['REPEAT LOCAL < 5', '循环 至少一次 当 LOCAL 不足 5：'], // 变形：带条件形（糖层无此语法，显示形必须给出）
-  ['repeat RESULT = 0', '循环 至少一次 当 RESULT 等于 0：'], // 变形：小写 + 条件位裸 `=` 折 `等于`
+  ['REPEAT', '循环 无限：'], // 裸 `REPEAT`（不带参数）才是无限循环（盘上 0 处，但引擎合法）
+  ['REPEAT LOCAL < 5', '循环 LOCAL 不足 5 次：'], // 义项：按参数指定的**次数**循环（`REPEAT (LOCAL<5)` = 0 或 1 次）
+  ['repeat RESULT = 0', '循环 RESULT 等于 0 次：'], // 变形：小写 + 次数位裸 `=` 折 `等于`
+  ['REPEAT VARSIZE("TSTR")', '循环 VARSIZE("TSTR") 次：'], // 盘上真形：次数段是函数调用串，逐字带走
   ['REND', '循环结束'],
   ['DO', '循环：'],
   ['do', '循环：'], // 变形：小写
   ['LOOP', '循环结束'],
+  ['LOOP 1', '循环结束 当 1'], // 盘上真形：`DO` 的闭合 210/210 都带条件（裸形零例）
+  ['LOOP LOCAL < 80', '循环结束 当 LOCAL 不足 80'],
+  ['loop ARG:1 > 0', '循环结束 当 ARG:1 超过 0'], // 变形：小写记号 + `>` → `超过`（本文件既有运算符形）
+  ['LOOP ROOMMATE > 0 && ROOMMATE < CHARANUM - 1', '循环结束 当 ROOMMATE 超过 0 且 ROOMMATE 不足 CHARANUM - 1'],
   ['i + 1', '步进 i 加 1'],
   ['i - 1', '步进 i 减 1'],
   ['i += 1', '步进 i 加 1'],
@@ -91,8 +98,8 @@ const LOOPS: readonly Case[] = [
 const JUMPS: readonly Case[] = [
   ['GOTO $招待', '跳到 招待'],
   ['GOTO *RETRY', '跳到 RETRY'],
-  ['JUMP LABEL1', '跳到 LABEL1'],
-  ['CALLJUMP 12', '调用跳转 12'],
+  ['JUMP GET_TARGET(A, 1)', '函数跳转 GET_TARGET(A, 1)'], // 函数跳转与标签跳转**两形**：余文逐字透传
+  ['jump GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)', '函数跳转 GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)'], // 盘上真形（小写记号）
   ['BREAK', '跳出循环'],
   ['break ; 中断循环', '跳出循环 ; 中断循环'], // 变形：小写 + 行尾注释
   ['CONTINUE', '跳过本轮'],
@@ -130,7 +137,7 @@ const WITH_TRAILING_COMMENT: readonly Case[] = [
   ['IF A = 1 ; 计数判定', '如果 A 等于 1： ; 计数判定'],
   ['ENDIF ; 到这里为止', '如果结束 ; 到这里为止'],
   ['#DIM BEST 10 ; 上限', '声明数组 BEST 大小 10 ; 上限'],
-  ['CALLJUMP $GO_BACK ; 回跳', '调用跳转 GO_BACK ; 回跳'],
+  ['JUMP GET_TARGET(A) ; 跳函数', '函数跳转 GET_TARGET(A) ; 跳函数'], // 逐字透传：括号实参原样留着，注释另挂行尾
 ];
 
 /** 全表（红线自证与条数下限都对着这一份，别只测其中一族） */
@@ -169,6 +176,63 @@ describe('ZH-C · 循环（糖层不做循环语法，显示层不许留 ERB）'
     expect(isVerbatimNativeLine(got ?? '', src), src).toBe(false);
     expect(got, src).toBe(want);
   });
+
+  it('`LOOP` 一枚两形各自判据：整行只有记号 = 收束行；带体 = 条件尾随形', () => {
+    // 裸形走 `STANDALONE`（`循环结束`），带体形走 `OPENERS`（`循环结束 当 …`）——两表都在时
+    // 由「整行是否只有那枚记号」分诊，不看尾部标点
+    expect(show('LOOP')).toBe('循环结束');
+    expect(show('LOOP 1')).toBe('循环结束 当 1');
+  });
+
+  it('条件位为空（记号后只剩分隔符）⇒ 形态不认识，返 null 落兜底段（空表达式不猜）', () => {
+    for (const src of ['LOOP:', 'LOOP :']) {
+      expect(show(src), src).toBeNull();
+      const assembled = localizeNativeLine({ content: src, indent: 0, lookup: LOOKUP });
+      if (assembled !== null) expect(isVerbatimNativeLine(assembled, src), src).toBe(false);
+    }
+  });
+});
+
+/* ------------------------------- 显示形写回自证 ------------------------------- */
+
+/**
+ * **显示形 ⇒ 源 ⇒ 产物**必须逐字节回到原始那一行（闭合"读了但写不回去"这条缺口）。
+ *
+ * 链路就是产品链路：预览上屏用的显示层（`renderControlLine`）产出的串，当作 `.kojo` 源
+ * 经 `classifyLine` → parser 配对 → codegen 发射，产物那一行与**原始 ERB 行**逐字相等。
+ * 体刻意只放一枚 `跳出循环`（`BREAK`）：循环族自证的是闭合词那一行，正文归其它能力线。
+ */
+describe('ZH-C · 显示形当源写回 ⇒ 产物逐字节等于原始行（`DO … LOOP <条件>` 一族）', () => {
+  const transpile = (body: string): string =>
+    createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(body).erb;
+
+  /**
+   * 写回样本只用**引擎全局白名单**里的名字（`LINECOUNT` / `ARG`）与数字：
+   * `LOCAL` 按 `engine-globals.ts` 的入库判据③不收（须由段块糖自己分配），
+   * 在条件位读它会报 `unknown-identifier`——那是读名的口径，不是本族的缺口，
+   * **不为此放宽白名单**。
+   */
+  const WRITE_BACK: readonly string[] = ['LOOP', 'LOOP 1', 'LOOP LINECOUNT < 80', 'LOOP ARG:1 > 0'];
+
+  it.each(WRITE_BACK)('%s', (original) => {
+    const shown = show(original);
+    expect(shown, original).not.toBeNull();
+    const src = `角色: 12\n时机 绝顶：\n\t循环：\n\t\t跳出循环\n\t${shown}\n`;
+    const result = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(src);
+    expect(result.diagnostics.filter((d) => d.severity === 'error'), src).toEqual([]);
+    const lines = result.erb
+      .split('\n')
+      .map((l) => l.replace(/^\t+/, ''))
+      .filter((l) => l.length > 0);
+    // 整块三行按序出现：`DO` / `BREAK` / 那一枚**原始**闭合行
+    expect(lines.join('\n'), `${original}（显示形=${shown}）`).toContain(['DO', 'BREAK', original].join('\n'));
+  });
+
+  it('写回不是空话：把显示形里的条件改一个字符，产物就不再等于原始行', () => {
+    const shown = show('LOOP 1')!;
+    const broken = shown.replace(' 当 ', ' 且 ');
+    expect(transpile(`角色: 12\n时机 绝顶：\n\t循环：\n\t\t跳出循环\n\t${broken}\n`)).not.toContain('LOOP 1');
+  });
 });
 
 describe('ZH-C · 跳转与出口', () => {
@@ -178,6 +242,25 @@ describe('ZH-C · 跳转与出口', () => {
     expect(got, src).not.toBe(src);
     expect(isVerbatimNativeLine(got ?? '', src), src).toBe(false);
     expect(got, src).toBe(want);
+  });
+
+  /**
+   * **反证**（缺陷②b）：`GOTO` 与 `JUMP` 在引擎里是两个记号（`GOTO 名` = 标签跳转，
+   * `JUMP` = 函数跳转），从前两枚都渲染成 `跳到 <目标>` ⇒ 作者照预览写回去就换了记号、
+   * 改了行为。两侧必须**不同形**，且 `JUMP` 那一形不许对余文做任何加工。
+   */
+  it('`GOTO` 与 `JUMP` 两形不撞：目标不同形、余文逐字（不剥前缀、不中文化运算符）', () => {
+    expect(show('GOTO LABEL1')).toBe('跳到 LABEL1');
+    expect(show('JUMP LABEL1')).toBe('函数跳转 LABEL1');
+    expect(show('JUMP LABEL1'), '两枚撞成同一形就是本条要抓的事故').not.toBe(show('GOTO LABEL1'));
+    // 逐字：`$` / `*` 前缀不剥（`showTarget` 那套归一属标签跳转，函数调用串套它就改档了）
+    expect(show('JUMP $GO_BACK')).toBe('函数跳转 $GO_BACK');
+    // 逐字：余文里的 `=` 不折成 `等于`（那不是条件位，是函数实参）
+    expect(show('JUMP FOO(A = 1)')).toBe('函数跳转 FOO(A = 1)');
+    // 逐字：逗号 / 引号 / 空格一个字符都不动（盘上真形）
+    expect(show('JUMP GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)')).toBe(
+      '函数跳转 GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)',
+    );
   });
 });
 
@@ -276,7 +359,6 @@ describe('ZH-C · 表里没有的指令 ⇒ null（宁缺勿猜）', () => {
     '#DEFINE MAX 5',
     '#DIMF A 10',
     '#INCLUDE "A.ERB"',
-    'ENDDATA',
     'ONERROR',
     'IF',
     'ELSEIF',
@@ -287,6 +369,7 @@ describe('ZH-C · 表里没有的指令 ⇒ null（宁缺勿猜）', () => {
     'FOR i = 0',
     'FOR i TO 5',
     'GOTO',
+    'JUMP',
     '$',
     'NEXT NEXT',
     'ENDIF 1',

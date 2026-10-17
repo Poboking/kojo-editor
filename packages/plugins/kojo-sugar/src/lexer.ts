@@ -42,6 +42,7 @@ import type {
 } from '@kojo/plugin-api';
 import {
   argTokenToEngineToken,
+  blockEndWord,
   canonicalTimingParamName,
   CONT_MARKS,
   HEAD_DECL_KEYS,
@@ -49,6 +50,7 @@ import {
   FULLWIDTH_COLON,
   endsWithBlockColon,
   lookupKeyword,
+  primaryWord,
   stripBlockColon,
   WAIT_MARKS,
   TIMING_ARGS_PARAM,
@@ -209,6 +211,37 @@ export function stripInlineComment(content: string): string {
 
 /* ============================== 行分类（词法决策） ============================== */
 
+/**
+ * 循环模态：`FOR` / `WHILE` / `REPEAT`（带次数）/ `REPEAT`（裸形）/ `DO`——
+ * 产物闭合词由模态决定，作者写法上不分（`times` 与 `forever` 同收 `REND`）。
+ */
+export type LoopMode = 'count' | 'when' | 'times' | 'forever' | 'do';
+
+/**
+ * `循环 …：` 块头的词法产物。
+ *
+ * `variable` 是**逐字原文**：循环变量由引擎写、不是作者对裸标识符的**读**，故不查字典、
+ * 不走 `unknown-identifier`（同 `条目` 正文与 `跳到` 目标的口径——把引擎槽位当表达式降糖，
+ * 只会让 `LOCAL` 这类合法写法报错）。`from` / `to` / `stride` / `condition` 是**表达式原文**，
+ * 降糖在 codegen（与 `如果` 同一条管线）。
+ *
+ * `closeCondition` **不属于块头**：它来自收束行的尾随条件（`循环结束 当 <条件>` → 引擎
+ * `LOOP <条件>`，盘上 `DO` 的闭合真形 210/210 都带条件、裸 `LOOP` 零例）。由 `parser` 在配对时
+ * 挂上来，词法层不判定它是否合法（合法性要看**开块模态**，那是配对现场才知道的事实）。
+ */
+export interface LoopSpec {
+  /** `times` = `REPEAT <表达式>`（按参数指定的次数循环）；`forever` = **裸** `REPEAT`（无限循环） */
+  mode: LoopMode;
+  variable?: string;
+  from?: string;
+  to?: string;
+  stride?: string;
+  /** `when` 模态是条件原文；`times` 模态是**次数表达式**原文（同一个降糖通路，两种义项由模态定） */
+  condition?: string;
+  /** 收束行的尾随条件**原文**（`循环结束 当 <条件>`；降糖同样在 codegen） */
+  closeCondition?: string;
+}
+
 /** 行类别 */
 export type LineClass =
   | { kind: 'blank' }
@@ -301,7 +334,40 @@ export type LineClass =
    * `statementOffset` = 语句原文在**去注释后的整行内容**里的 0 基码元偏移
    * （parser 据它合成"语句行"以复用既有语句分类与列映射）。
    */
-  | { kind: 'singleIfHead'; condition: string; statement: string; statementOffset: number };
+  | { kind: 'singleIfHead'; condition: string; statement: string; statementOffset: number }
+  /* ---- 循环 / 跳转 / 数据表三族（本批：显示层词形降格为**语言层写法**，词形同源 `keywords.ts`） ---- */
+  /** `循环 计数 X 从 a 到 b [步长 s]：` / `循环 当 X：` / `循环 <表达式> 次：` / `循环 无限：` / `循环：` */
+  | { kind: 'loopHead'; loop: LoopSpec }
+  /**
+   * 收束行 `循环结束`，**可带尾随条件** `循环结束 当 <条件>`（条件原文；合法性由 parser 按
+   * 开块模态判定——只有 `循环：`（`DO … LOOP <条件>`）那一形收得住条件）。
+   */
+  | { kind: 'loopEnd'; condition?: string }
+  /** `出错处理：` ⇄ `CATCH` … `ENDCATCH`（TRY 系九枚**无写形**，仍走兜底） */
+  | { kind: 'catchHead' }
+  | { kind: 'catchEnd' }
+  /** `数据表：` / `数据表 原形 PRINTDATADL：`（`engine` 恒是 `PRINTDATA[A-Z]*` 记号原文） */
+  | { kind: 'dataHead'; engine: string }
+  | { kind: 'dataEnd' }
+  /** `条目 <原文>` / `条目 原形 DATA <原文>`（`engine` = `DATAFORM` / `DATA`；正文**逐字**透传，不降糖） */
+  | { kind: 'dataEntry'; engine: string; body: string }
+  /** `跳到 <标签名>`（⇄ `GOTO`）：目标是**标签名**，不是表达式 */
+  | { kind: 'jumpStatement'; engine: string; target: string }
+  /**
+   * `函数跳转 <原文>`（⇄ `JUMP`）：引擎那一枚的目标是**函数调用串**
+   * （`JUMP GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)`，盘上 132 处全这一形），
+   * 与 `GOTO` 的标签目标义项不同 ⇒ 另给一形。余文**逐字**带走（同 `条目` 正文与 `原形`
+   * 记号回显的口径）：不降糖、也不按标签名校验（含括号/引号/逗号/空格，`NAME_RE` 会误杀）。
+   */
+  | { kind: 'functionJump'; engine: string; target: string }
+  /** `标签 X` → `$X` */
+  | { kind: 'labelDecl'; name: string }
+  /** `跳出循环` / `跳过本轮` / `重跑本轮`（`engine` = `BREAK` / `CONTINUE` / `RESTART`） */
+  | { kind: 'loopFlow'; engine: string }
+  /** `步进 X 加 1` → `X + 1`（循环变量自增减；产物是**裸表达式行**，不是赋值） */
+  | { kind: 'loopStep'; name: string; sign: '+' | '-'; delta: string }
+  /** 三族里认得词形但**结构残缺**的写法：parser 据此 fail-closed 报错，绝不落文本行冒充台词 */
+  | { kind: 'controlMalformed'; message: string };
 
 /**
  * `空行` / `blank`（可带一个行尾标记）→ 一条"输出一行空行"的语句（规范 §3.3，批 P）。
@@ -568,6 +634,14 @@ export function classifyLine(line: LogicalLine): LineClass {
   const inlineRandom = tryInlineRandom(code);
   if (inlineRandom) return inlineRandom;
 
+  // ---- 循环 / 跳转 / 数据表的**整行语句形**（本批；不带块头冒号，故不进 `parseBlockHead`）----
+  // **必须先于赋值扫描**：`条目 X = Y` / `步进 X 加 1` 里的 `=`、`条目` 后的整段正文都会被
+  // `parseAssignment` 吞成左值（同 `结算` / `增减` 排在其前的理由）。
+  // 词形全部来自 `keywords.ts`；认得词形但结构残缺 ⇒ `controlMalformed`（parser fail-closed 报错），
+  // **不回落文本行**——回落等于把控制语句冒充台词打印出去（违铁律 4）。
+  const control = classifyControlStatement(code);
+  if (control) return control;
+
   // ---- 头部声明 `词: 值`（词与冒号之间无空白；`角色: 12` / `口上: 破空`）----
   const headMatch = /^([^:：\s]+)\s*[:：]\s*(.*)$/.exec(code);
   if (headMatch) {
@@ -680,6 +754,252 @@ export function classifyLine(line: LogicalLine): LineClass {
 
   // ---- 兜底：文本行（含 `续` 标记处理在 AST 层）----
   return { kind: 'text', raw: content };
+}
+
+/* --------------------------- 循环 / 跳转 / 数据表（本批） --------------------------- */
+
+/**
+ * 三族的词形**一律**从 `keywords.ts` 取（`primaryWord`）——本模块零硬编码中文词形，
+ * 显示层（`native-display/control.ts`）取的是同一批串。写形与显示形同源是构造事实，
+ * 不是靠自觉（`tests/control-word-single-source.test.ts` 逐字钉住）。
+ */
+const LOOP_W = primaryWord('block.loop');
+const LOOP_END_W = blockEndWord('block.loop');
+const CATCH_W = primaryWord('block.catch');
+const CATCH_END_W = blockEndWord('block.catch');
+const DATA_W = primaryWord('block.dataTable');
+const DATA_END_W = blockEndWord('block.dataTable');
+const DATA_ENTRY_W = primaryWord('inline.dataEntry');
+const ECHO_W = primaryWord('inline.engineEcho');
+const COUNT_W = primaryWord('inline.loopCount');
+const TIMES_W = primaryWord('inline.loopTimes');
+const FOREVER_W = primaryWord('inline.loopForever');
+const FROM_W = primaryWord('inline.loopFrom');
+const TO_W = primaryWord('inline.to');
+const STRIDE_W = primaryWord('inline.loopStride');
+const WHEN_W = primaryWord('block.when');
+const STEP_W = primaryWord('inline.loopStep');
+const PLUS_W = primaryWord('inline.plus');
+const MINUS_W = primaryWord('inline.minus');
+const JUMP_W = primaryWord('inline.jump');
+const FUNC_JUMP_W = primaryWord('inline.functionJump');
+const LABEL_W = primaryWord('inline.label');
+const BREAK_W = primaryWord('inline.breakLoop');
+const CONTINUE_W = primaryWord('inline.continueLoop');
+const RESTART_W = primaryWord('inline.restartLoop');
+
+/** 标识符字符（ASCII + 位引用冒号段）——与 `native-display/control.ts` 的循环变量判据同一形 */
+const IDENT_CHARS = '0-9A-Za-z_';
+/** 「名字」＝ ASCII 标识符字符 + CJK（与 `NAME_TOKEN_CHARS` 同源；标签名可含汉字，语料实测 `$小役抽選開始`） */
+const NAME_RE = new RegExp(`^[${NAME_TOKEN_CHARS}]+$`);
+/** 变量引用（`I` / `LOCAL:2`） */
+const VAR_REF_RE = new RegExp(`^[${IDENT_CHARS}]+(?::[${IDENT_CHARS}]+)*$`);
+/** 词首 + 空白 + 余文（中文词形不带冒号，故与 `parseBlockHead` 的切分不同式） */
+function wordTail(code: string, wordName: string): string | null {
+  const m = new RegExp(`^${escapeRe(wordName)}[ \\t\\u3000]+(.+)$`).exec(code);
+  return m ? m[1]!.trim() : null;
+}
+
+/** 数据表开词与条目开词允许的引擎记号（义项差别不猜 ⇒ 只放行认得出的那批） */
+const PRINTDATA_TOKEN_RE = /^PRINTDATA[A-Z]*$/;
+const DATA_ENTRY_TOKENS: readonly string[] = ['DATAFORM', 'DATA'];
+
+/**
+ * `循环 <表达式> 次：` 的尾随量词切分（表达式段贪婪到**最后一个**空白之前，故算式里
+ * 自带空格也带得走；`次` 必须是行尾那个**独立词**，`循环 次数：` 一类连写不算）。
+ */
+const LOOP_TIMES_RE = new RegExp(`^(.+)\\s+${escapeRe(TIMES_W)}$`);
+
+/** 残缺写法的人话回执（同一族共用一条，把**合法形**逐条列给作者） */
+function malformed(message: string): LineClass {
+  return { kind: 'controlMalformed', message };
+}
+
+const LOOP_HEAD_HINT =
+  `「${LOOP_W}」块头的合法写法只有五种：` +
+  `「${LOOP_W} ${COUNT_W} <变量> ${FROM_W} <起> ${TO_W} <止> [${STRIDE_W} <步>]：」` +
+  ` / 「${LOOP_W} ${WHEN_W} <条件>：」` +
+  ` / 「${LOOP_W} <表达式> ${TIMES_W}：」` +
+  ` / 「${LOOP_W} ${FOREVER_W}：」` +
+  ` / 「${LOOP_W}：」`;
+
+/**
+ * 收束行的两种合法写法（同一族的人话回执，口径与 `LOOP_HEAD_HINT` 一致：把合法形逐条列给作者）。
+ * 尾随条件词形取 `block.when`（`当`）——本串**不含任何硬编码中文词形**，
+ * 写侧与显示层同源这条由 `tests/control-word-single-source.test.ts` 源码级钉住。
+ */
+const LOOP_END_HINT =
+  `「${LOOP_END_W}」的合法写法只有两种：` +
+  `「${LOOP_END_W}」 / 「${LOOP_END_W} ${WHEN_W} <条件>」（尾随条件只属于「${LOOP_W}：」开出的块）`;
+
+/**
+ * `循环结束 …`（词后已确认有空白与余文）→ `loopEnd`（带尾随条件）或 fail-closed 回执。
+ *
+ * 只认**一种**尾随：`${WHEN_W} <非空条件>`。`循环结束 当`（空条件）、`循环结束 <别的词>`、
+ * 行尾带块头冒号的 `循环结束 当 X：` 一律 `controlMalformed`——收束行是语句不是块头，
+ * 带冒号只会让作者以为"这里能写块头"（口径同 `tests/control-word-single-source.test.ts`
+ * 钉住的「收束行不带冒号也是收束」）。
+ */
+function parseLoopEndStatement(tail: string): LineClass {
+  if (tail === WHEN_W) return malformed(`「${LOOP_END_W} ${WHEN_W}」缺条件——${LOOP_END_HINT}`);
+  const condition = wordTail(tail, WHEN_W);
+  if (condition === null) return malformed(LOOP_END_HINT);
+  if (endsWithBlockColon(condition)) return malformed(`收束行不带块头冒号——${LOOP_END_HINT}`);
+  return { kind: 'loopEnd', condition };
+}
+
+/** `循环 …`（块头冒号已由 `stripBlockColon` 剥掉）→ `loopHead` 或 fail-closed 回执 */
+function parseLoopHead(rest: string): LineClass {
+  if (rest.length === 0) return { kind: 'loopHead', loop: { mode: 'do' } };
+  const countTail = wordTail(rest, COUNT_W);
+  if (countTail !== null) return parseLoopCountHead(countTail);
+  // 尾随量词形 `循环 <表达式> 次：` 排在 `当` 之前：`次` 是**行尾**的一个独立词，
+  // 判据比"词首 + 余文"更具体（条件位里绝不会出现一个裸 `次` 词收尾的合法算式）。
+  const times = LOOP_TIMES_RE.exec(rest);
+  if (times !== null) {
+    const count = times[1]!.trim();
+    if (count === FOREVER_W) return malformed(`无限循环的写法是「${LOOP_W} ${FOREVER_W}：」，次数位不填「${TIMES_W}」`);
+    return { kind: 'loopHead', loop: { mode: 'times', condition: count } };
+  }
+  const whenTail = wordTail(rest, WHEN_W);
+  if (whenTail !== null) {
+    if (whenTail.length === 0) return malformed(`「${LOOP_W} ${WHEN_W}」缺条件`);
+    return { kind: 'loopHead', loop: { mode: 'when', condition: whenTail } };
+  }
+  if (rest === FOREVER_W) return { kind: 'loopHead', loop: { mode: 'forever' } };
+  return malformed(LOOP_HEAD_HINT);
+}
+
+/** `<变量> 从 <起> 到 <止> [步长 <步>]`（区间词与写侧同一张表；起止可含空白，故用**词界**而非逗号切） */
+function parseLoopCountHead(tail: string): LineClass {
+  const re = new RegExp(
+    `^([^\\s]+)\\s+${escapeRe(FROM_W)}\\s+(.+?)\\s+${escapeRe(TO_W)}\\s+(.+?)(?:\\s+${escapeRe(STRIDE_W)}\\s+(.+))?$`,
+  );
+  const m = re.exec(tail);
+  if (!m) return malformed(`${LOOP_W} ${COUNT_W} 的写法是「${COUNT_W} <变量> ${FROM_W} <起> ${TO_W} <止> [${STRIDE_W} <步>]」`);
+  const variable = m[1]!;
+  if (!VAR_REF_RE.test(variable)) return malformed(`「${variable}」不是变量引用（形如 ${COUNT_W} LOCAL:2 ${FROM_W} 0 ${TO_W} 5）`);
+  const from = m[2]!;
+  const to = m[3]!;
+  const stride = m[4];
+  if (from.length === 0 || to.length === 0) return malformed(LOOP_HEAD_HINT);
+  return { kind: 'loopHead', loop: { mode: 'count', variable, from, to, ...(stride ? { stride } : {}) } };
+}
+
+/** `数据表 [原形 <PRINTDATA 记号>]`（块头冒号已剥） */
+function parseDataHead(rest: string): LineClass {
+  if (rest.length === 0) return { kind: 'dataHead', engine: 'PRINTDATA' };
+  const echoTail = wordTail(rest, ECHO_W);
+  if (echoTail === null) {
+    return malformed(`「${DATA_W}」的变体不猜义项——写法只有「${DATA_W}：」或「${DATA_W} ${ECHO_W} <PRINTDATA 记号>：」`);
+  }
+  const token = echoTail.split(/\s+/)[0] ?? '';
+  if (!PRINTDATA_TOKEN_RE.test(token)) {
+    return malformed(`「${ECHO_W}」后面必须是 PRINTDATA 系记号（不是「${token}」）`);
+  }
+  if (echoTail.trim() !== token) {
+    return malformed(`「${DATA_W} ${ECHO_W} ${token}：」之后不许再写内容——条目写在块体里`);
+  }
+  return { kind: 'dataHead', engine: token };
+}
+
+/**
+ * 整行语句形（不带块头冒号）的收束行（含 `循环结束 当 <条件>` 尾随形）/ 循环出口 /
+ * 跳转 / 标签 / 步进 / 条目；不认 ⇒ `null` 交回主管线
+ */
+function classifyControlStatement(code: string): LineClass | null {
+  switch (code) {
+    case LOOP_END_W:
+      return { kind: 'loopEnd' };
+    case CATCH_END_W:
+      return { kind: 'catchEnd' };
+    case DATA_END_W:
+      return { kind: 'dataEnd' };
+    case BREAK_W:
+      return { kind: 'loopFlow', engine: 'BREAK' };
+    case CONTINUE_W:
+      return { kind: 'loopFlow', engine: 'CONTINUE' };
+    case RESTART_W:
+      return { kind: 'loopFlow', engine: 'RESTART' };
+    case JUMP_W:
+      return malformed(`「${JUMP_W}」缺跳转目标——写法是「${JUMP_W} <标签名>」`);
+    case FUNC_JUMP_W:
+      return malformed(`「${FUNC_JUMP_W}」缺跳转目标——写法是「${FUNC_JUMP_W} <函数调用串>」`);
+    case LABEL_W:
+      return malformed(`「${LABEL_W}」缺标签名——写法是「${LABEL_W} <名>」`);
+    case STEP_W:
+      return malformed(`「${STEP_W}」缺内容——写法是「${STEP_W} <变量> ${PLUS_W}|${MINUS_W} <增量>」`);
+    case DATA_ENTRY_W:
+      return malformed(`「${DATA_ENTRY_W}」缺条目正文——写法是「${DATA_ENTRY_W} <原文>」`);
+    case LOOP_W:
+    case CATCH_W:
+    case DATA_W:
+      return malformed(`块头必须以冒号结尾（「${code}：」）`);
+  }
+  // 收束行的**尾随条件**形（`循环结束 当 <条件>` ⇄ 引擎 `LOOP <条件>`）。
+  // 排在本函数末尾的词首扫描组里（与 `跳到` / `标签` 同一式：词形 + 空白 + 余文），
+  // 上面 `switch (code)` 的整行等值分支已经接住裸形 `循环结束`。
+  const loopEndTail = wordTail(code, LOOP_END_W);
+  if (loopEndTail !== null) return parseLoopEndStatement(loopEndTail);
+  const jump = wordTail(code, JUMP_W);
+  if (jump !== null) return labelTargetStatement(JUMP_W, 'GOTO', jump);
+  // `函数跳转 <原文>` ⇄ `JUMP <原文>`：余文是**函数调用串**（`GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)`
+  // 一类，盘上 132 处全这一形），与 `跳到` 的标签目标义项不同 ⇒ 逐字带走、不校验也不降糖
+  // （走 `labelTargetStatement` 的 `NAME_RE` 会把带括号引号逗号的合法写法误杀）。
+  // 空余文（光杆 `函数跳转`、`函数跳转 ; 注释`）由上面 `switch` 的整行等值分支给残缺回执。
+  const functionJump = wordTail(code, FUNC_JUMP_W);
+  if (functionJump !== null) return { kind: 'functionJump', engine: 'JUMP', target: functionJump };
+  const label = wordTail(code, LABEL_W);
+  if (label !== null) {
+    if (!NAME_RE.test(label)) return malformed(`标签名「${label}」含空白或标点——写法是「${LABEL_W} <名>」`);
+    return { kind: 'labelDecl', name: label };
+  }
+  const step = wordTail(code, STEP_W);
+  if (step !== null) return parseStepStatement(step);
+  const entry = wordTail(code, DATA_ENTRY_W);
+  if (entry !== null) return parseDataEntryStatement(entry);
+  return null;
+}
+
+/** 跳转类语句：目标必须是**单个标签名**（`$` / `*` 前缀由显示层剥掉，这里补齐引擎记号形） */
+function labelTargetStatement(wordName: string, engine: string, target: string): LineClass {
+  const bare = target.replace(/^[$*]/, '');
+  if (!NAME_RE.test(bare)) {
+    return malformed(`「${wordName}」的目标「${target}」不是标签名（不能含空白或标点）`);
+  }
+  return { kind: 'jumpStatement', engine, target: bare };
+}
+
+/** `步进 <变量> 加|减 <增量>` → 裸表达式行 `<变量> + <增量>`（循环变量自增减，与显示层同形） */
+function parseStepStatement(tail: string): LineClass {
+  const re = new RegExp(`^([^\\s]+)\\s+(${escapeRe(PLUS_W)}|${escapeRe(MINUS_W)})\\s+(.+)$`);
+  const m = re.exec(tail);
+  if (!m) return malformed(`「${STEP_W}」的写法是「${STEP_W} <变量> ${PLUS_W}|${MINUS_W} <增量>」`);
+  const variable = m[1]!;
+  const sign = m[2] === PLUS_W ? '+' : '-';
+  const delta = m[3]!;
+  if (!VAR_REF_RE.test(variable)) return malformed(`「${variable}」不是变量引用`);
+  if (!/^(\d+|[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z0-9_]+)*)$/.test(delta)) {
+    return malformed(`「${STEP_W}」的增量只能是整数或变量引用（算式不猜）`);
+  }
+  return { kind: 'loopStep', name: variable, sign, delta };
+}
+
+/**
+ * `条目 <原文>` / `条目 原形 DATA <原文>` → 数据表条目行。
+ *
+ * 正文**逐字**保留（它是数据不是语句；走降糖会把 `%CALLNAME%` 之类的打印记号改弯）。
+ */
+function parseDataEntryStatement(entry: string): LineClass {
+  const echo = wordTail(entry, ECHO_W);
+  if (echo === null) return { kind: 'dataEntry', engine: 'DATAFORM', body: entry };
+  const token = echo.split(/\s+/)[0] ?? '';
+  if (!(DATA_ENTRY_TOKENS as readonly string[]).includes(token)) {
+    return malformed(`「${ECHO_W}」后面只能是 ${DATA_ENTRY_TOKENS.join(' / ')}（不是「${token}」）`);
+  }
+  const body = echo.slice(token.length).trim();
+  if (body.length === 0) return malformed(`「${DATA_ENTRY_W} ${ECHO_W} ${token}」缺条目正文`);
+  return { kind: 'dataEntry', engine: token, body };
 }
 
 /* ------------------------------ 头部 / 别名解析 ------------------------------ */
@@ -1124,6 +1444,12 @@ function parseBlockHead(content: string): LineClass | null {
       // `初回 "key"：`（1 号任务）——块头原文当 key（字符串字面量 / 既有表达式口径，可含 `{}` 插值）。
       // 空 key 也返回，交给 parser 报 `block-empty`（不在此造第二套诊断）。
       return { kind: 'onceHead', key: rest };
+    case 'block.loop':
+      return parseLoopHead(rest);
+    case 'block.catch':
+      return rest.length === 0 ? { kind: 'catchHead' } : malformed(`「${CATCH_W}」是裸块头（「${CATCH_W}：」），不带条件`);
+    case 'block.dataTable':
+      return parseDataHead(rest);
     case 'block.choice':
       // `选项：`（英文小写别名 `choice：`）——按钮形菜单，产物 PRINTBUTTON + INPUTS + RESULTS。
       return { kind: 'choiceHead' };

@@ -64,11 +64,12 @@ import {
   type RunSpec,
   type SourceLineView,
 } from './column-map';
-import { checkTimingArgsDeclaration, CJK, type SectionPreset } from './lexer';
+import { checkTimingArgsDeclaration, CJK, type LoopMode, type LoopSpec, type SectionPreset } from './lexer';
 import { argPositionToken, RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_NAMED_PARAMS, TIMING_SUCCESS_PARAM } from './keywords';
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import { STATEMENT_FUNCTIONS } from './statement-functions';
 import type { TopNode } from './parser';
+import type { CatchBlock, DataBlock, LoopBlock } from './parser';
 import type { AliasTable, DiagnosticSink, DictionaryLookup, HeartBlock, RandomShape } from './types';
 
 /* ============================== 输出缓冲 ============================== */
@@ -889,6 +890,92 @@ function emitOnceBlock(em: Emitter, node: OnceBlock, ctx: BodyContext, indent: n
   em.push(indent, `ENDIF`, null);
 }
 
+/* ------------------------------ 循环 / 出错处理 / 数据表（本批） ------------------------------ */
+
+/**
+ * 循环模态 → 引擎闭合词（**唯一一份**配对表；五种模态共用四枚闭合词）。
+ *
+ * 写法上作者只有一条 `循环结束`：四枚闭合词（`NEXT` / `WEND` / `REND` / `LOOP`）属引擎记号，
+ * 由**开块模态**决定，不让作者背（背错就是"口上全哑"那一类事故）。
+ */
+const LOOP_CLOSE_WORD: Readonly<Record<LoopMode, string>> = {
+  count: 'NEXT',
+  when: 'WEND',
+  times: 'REND',
+  forever: 'REND',
+  do: 'LOOP',
+};
+
+/**
+ * `循环 …：` → `FOR <变量>, <起>, <止>[, <步>]` / `WHILE <条件>` / `REPEAT <次数>` /
+ * `REPEAT`（裸形 = 无限循环）/ `DO`。
+ *
+ * `REPEAT` 的义项按官方Reference：**按参数指定的次数循环**，参数可以是数式
+ * （`REPEAT nDegree-1`）；不带参数的裸 `REPEAT` 才是无限循环。故中文形是
+ * `循环 <表达式> 次：` 与 `循环 无限：` 两形，**不是**「至少跑一次 + 条件」。
+ *
+ * 逗号形是**语料主流**（eraTW 实测 3,809 : 1 对 `FOR i = a TO b`），故产物只出这一形；
+ * 起止与步长走 `lowerExpression`（与 `如果` 同一条管线），循环变量**逐字**保留（引擎写的槽，
+ * 不是作者对标识符的读——查字典只会让 `LOCAL` 这类合法写法误报）。
+ *
+ * `DO` 那一族额外收**收束行的尾随条件**（`循环结束 当 <条件>` → `LOOP <条件>`）：盘上
+ * 210 处 `DO` 的闭合**全部**带条件、裸 `LOOP` 零例，故条件段是这一形的正身而不是可选装饰。
+ * 闭合词本身仍旧只从 `LOOP_CLOSE_WORD` 取（配对表唯一），尾随的只是参数段；条件走与
+ * `如果` **同一条**降糖管线（中文运算符还原成引擎记号）。
+ */
+function emitLoopBlock(em: Emitter, node: LoopBlock, ctx: BodyContext, indent: number): void {
+  // 收束形与开块模态不配对（parser 已报 error）⇒ 一条字节都不产：半块循环比没有循环更坏。
+  if (node._invalid) return;
+  const ec = exprCtx(ctx, node.loc.start);
+  const lower = (text: string | undefined): string => (text === undefined ? '' : lowerExpression(text, ec));
+  const spec: LoopSpec = node.loop;
+  let head: string;
+  switch (spec.mode) {
+    case 'count':
+      head = `FOR ${spec.variable ?? ''}, ${lower(spec.from)}, ${lower(spec.to)}`;
+      if (spec.stride !== undefined) head += `, ${lower(spec.stride)}`;
+      break;
+    case 'when':
+      head = `WHILE ${lower(spec.condition)}`;
+      break;
+    case 'times':
+      head = `REPEAT ${lower(spec.condition)}`;
+      break;
+    case 'forever':
+      head = 'REPEAT';
+      break;
+    case 'do':
+      head = 'DO';
+      break;
+  }
+  em.push(indent, head, node.loc.start.line);
+  emitBody(em, node.body, ctx, indent + 1);
+  const closeWord = LOOP_CLOSE_WORD[spec.mode];
+  // 尾随条件只在 `DO … LOOP` 那一形上存在（配对判据在 parser，这里不会再判一次模态）
+  const close =
+    spec.mode === 'do' && spec.closeCondition !== undefined ? `${closeWord} ${lower(spec.closeCondition)}` : closeWord;
+  em.push(indent, close, null);
+}
+
+/** `出错处理：` → `CATCH` … `ENDCATCH`（TRY 系九枚无写形 ⇒ 本块只覆盖 CATCH 本体） */
+function emitCatchBlock(em: Emitter, node: CatchBlock, ctx: BodyContext, indent: number): void {
+  em.push(indent, 'CATCH', node.loc.start.line);
+  emitBody(em, node.body, ctx, indent + 1);
+  em.push(indent, 'ENDCATCH', null);
+}
+
+/**
+ * `数据表：` → `PRINTDATA[…]` … `ENDDATA`；块体条目**逐字**透传（数据不是语句）。
+ *
+ * `_invalid`（parser 已报 error）⇒ 一条字节都不产：半张数据表比没有数据表更坏。
+ */
+function emitDataBlock(em: Emitter, node: DataBlock, ctx: BodyContext, indent: number): void {
+  if (node._invalid) return;
+  em.push(indent, node.engine, node.loc.start.line);
+  emitBody(em, node.body, ctx, indent + 1);
+  em.push(indent, 'ENDDATA', null);
+}
+
 /**
  * 时机块头 `参数:` 的取值（规范 §3.2，v1.5）→ 形参声明串（`ARG,ARG:1`）；
  * 未声明 → `null`（产物与历史口径**逐字节一致**）。
@@ -1490,7 +1577,12 @@ interface BodyContext {
   ambientColor?: string;
 }
 
-function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyContext, indent: number): void {
+function emitStatement(
+  em: Emitter,
+  node: SugarNode | HeartBlock | LoopBlock | CatchBlock | DataBlock,
+  ctx: BodyContext,
+  indent: number,
+): void {
   switch (node.kind) {
     case 'textLine':
       emitTextLine(em, node, ctx, indent, false);
@@ -1538,6 +1630,15 @@ function emitStatement(em: Emitter, node: SugarNode | HeartBlock, ctx: BodyConte
       break;
     case 'heartBlock':
       emitHeartBlock(em, node, ctx, indent);
+      break;
+    case 'loopBlock':
+      emitLoopBlock(em, node, ctx, indent);
+      break;
+    case 'catchBlock':
+      emitCatchBlock(em, node, ctx, indent);
+      break;
+    case 'dataBlock':
+      emitDataBlock(em, node, ctx, indent);
       break;
     case 'rawLine':
       emitRawLine(em, node, ctx, indent);
@@ -1864,7 +1965,7 @@ function findReturnNode(nodes: readonly SugarNode[]): ReturnStatement | undefine
 }
 
 /** 取出块类节点的子语句体（无子体 → null） */
-function bodyOf(node: SugarNode): readonly SugarNode[] | null {
+function bodyOf(node: SugarNode | LoopBlock | CatchBlock | DataBlock): readonly SugarNode[] | null {
   switch (node.kind) {
     case 'ifBlock':
     case 'whenBlock':
@@ -1875,6 +1976,9 @@ function bodyOf(node: SugarNode): readonly SugarNode[] | null {
     case 'groupBlock':
     case 'sectionBlock':
     case 'onceBlock':
+    case 'loopBlock':
+    case 'catchBlock':
+    case 'dataBlock':
       return node.body;
     case 'choiceBlock':
       return node.items.flatMap((i) => i.body);

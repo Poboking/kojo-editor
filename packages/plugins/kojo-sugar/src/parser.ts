@@ -53,11 +53,91 @@ import {
   scanInterpolations,
   splitLogicalLines,
   stripCont,
+  stripInlineComment,
   type LineClass,
   type LogicalLine,
+  type LoopSpec,
 } from './lexer';
-import { TIMING_ARGS_PARAM } from './keywords';
+import { TIMING_ARGS_PARAM, blockEndWord, primaryWord } from './keywords';
 import type { DiagnosticSink, HeartBlock, RandomShape } from './types';
+
+/* -------------------- 循环 / 出错处理 / 数据表（内部 AST） -------------------- */
+
+/**
+ * 三族的新节点（与 `HeartBlock` 同一先例：**转译器内部**结构，不进契约闭集）。
+ *
+ * 契约 `SugarNode` 是跨包闭集，动它要过 `plugin-api` + 中文短名 + 教程三处闸；
+ * 这三族的形状不出转译器（宿主只见产物 ERB），故按 `heartBlock` 的既有路子走。
+ */
+export interface LoopBlock {
+  kind: 'loopBlock';
+  loop: LoopSpec;
+  body: SugarNode[];
+  /**
+   * 宁缺勿编：收束行的尾随条件与本块**开块模态不配对** ⇒ true，
+   * codegen 对该块一条字节都不产（同 `DataBlock` 的口径——半块循环比没有循环更坏）。
+   */
+  readonly _invalid: boolean;
+  loc: SugarSourceSpan;
+}
+
+export interface CatchBlock {
+  kind: 'catchBlock';
+  body: SugarNode[];
+  loc: SugarSourceSpan;
+}
+
+export interface DataBlock {
+  kind: 'dataBlock';
+  /** 开块记号原文（`PRINTDATA` / `PRINTDATADL`…）——变体义项不猜，原样带走 */
+  engine: string;
+  body: SugarNode[];
+  /** 宁缺勿编：块体混入非条目行 ⇒ true，codegen 对该块一条字节都不产 */
+  readonly _invalid: boolean;
+  loc: SugarSourceSpan;
+}
+
+/** 中文主形与收束词形（同 `native-display/control.ts`：一律从 `keywords.ts` 派生，零硬编码） */
+const LOOP_W = primaryWord('block.loop');
+const LOOP_COUNT_W = primaryWord('inline.loopCount');
+const LOOP_WHEN_W = primaryWord('block.when');
+const LOOP_TIMES_W = primaryWord('inline.loopTimes');
+const LOOP_FOREVER_W = primaryWord('inline.loopForever');
+const LOOP_END_W = blockEndWord('block.loop');
+const CATCH_W = primaryWord('block.catch');
+const CATCH_END_W = blockEndWord('block.catch');
+const DATA_W = primaryWord('block.dataTable');
+const DATA_ENTRY_W = primaryWord('inline.dataEntry');
+const DATA_END_W = blockEndWord('block.dataTable');
+
+/**
+ * 收束行对应的 `LineClass.kind`（三族各一枚）。
+ *
+ * 配对判据**不在本文件重抄一遍词形语法**：`consumeEnd` 直接拿 `classifyLine` 的产物判定
+ * 「这一行是不是本族的收束行、带了什么尾随条件」，词形的唯一真源仍是 `keywords.ts` + `lexer.ts`
+ * （`tests/control-word-single-source.test.ts` 源码级钉住"收束词模板串里不许出现硬编码条件词"）。
+ */
+type EndLineClass = 'loopEnd' | 'catchEnd' | 'dataEnd';
+
+/**
+ * 循环块头的**人话写法形**（只用于报错回执里指回块头；词形全部现取自 `keywords.ts`）。
+ *
+ * 与 `lexer.ts` 的 `LOOP_HEAD_HINT` 同一口径：把合法写法整串列给作者，不让他猜模态词。
+ */
+function loopHeadForm(loop: LoopSpec): string {
+  switch (loop.mode) {
+    case 'count':
+      return `${LOOP_W} ${LOOP_COUNT_W} <变量> …：`;
+    case 'when':
+      return `${LOOP_W} ${LOOP_WHEN_W} <条件>：`;
+    case 'times':
+      return `${LOOP_W} <表达式> ${LOOP_TIMES_W}：`;
+    case 'forever':
+      return `${LOOP_W} ${LOOP_FOREVER_W}：`;
+    case 'do':
+      return `${LOOP_W}：`;
+  }
+}
 
 /** 位置工具：由逻辑行构造源区间 */
 function spanOf(line: LogicalLine, endLine?: number): SugarSourceSpan {
@@ -795,6 +875,57 @@ class BlockParser {
         this.cursor.next();
         return this.parseOnceBody(line, cls.key);
       }
+      /* ---- 循环 / 出错处理 / 数据表（本批）：块头 + 可选收束行 ---- */
+      case 'loopHead': {
+        this.cursor.next();
+        return this.parseLoopBlock(line, cls.loop);
+      }
+      case 'catchHead': {
+        this.cursor.next();
+        return this.parseCatchBlock(line);
+      }
+      case 'dataHead': {
+        this.cursor.next();
+        return this.parseDataBlock(line, cls.engine);
+      }
+      case 'controlMalformed':
+        // 认得词形、结构残缺 ⇒ 报错并**不产半成品**（绝不回落成台词行冒充"已支持"）。
+        // 码 = `statement-shape`（形态不认识），**不是** `block-empty`：那一码只说"块头写了、
+        // 正文没写"这一件事，混用会让面板上的中文短名指着错误的方向。
+        this.cursor.next();
+        this.sink.report({
+          code: 'statement-shape',
+          severity: 'error',
+          message: cls.message,
+          loc: posOf(line),
+        });
+        return null;
+      case 'jumpStatement':
+      case 'functionJump':
+        // 两形同一发射口径 `<引擎记号> <目标>`；差别在词法层：`跳到` 的目标已过标签名校验，
+        // `函数跳转` 的余文**逐字**带走（函数调用串，含括号 / 引号 / 逗号，不降糖也不校验）。
+        this.cursor.next();
+        return { kind: 'rawLine', text: `${cls.engine} ${cls.target}`, loc: spanOf(line) } as RawLine;
+      case 'labelDecl':
+        this.cursor.next();
+        return { kind: 'rawLine', text: `$${cls.name}`, loc: spanOf(line) } as RawLine;
+      case 'loopFlow':
+        this.cursor.next();
+        return { kind: 'rawLine', text: cls.engine, loc: spanOf(line) } as RawLine;
+      case 'loopStep':
+        // 产**裸表达式行**（`I + 1`）——eraTW 语料里循环步进就是这么写的，不是赋值。
+        this.cursor.next();
+        return { kind: 'rawLine', text: `${cls.name} ${cls.sign} ${cls.delta}`, loc: spanOf(line) } as RawLine;
+      case 'dataEntry':
+        // 孤儿条目行：`parseDataBlock` 自己消费块体内的 `dataEntry`，走到这里 = 写在块外。
+        this.cursor.next();
+        this.sink.report({
+          code: 'indent-mismatch',
+          severity: 'error',
+          message: `「${DATA_ENTRY_W}」只能写在「${DATA_W}」块的正文里（缩进更深一层）。`,
+          loc: posOf(line),
+        });
+        return null;
       case 'randomInline': {
         this.cursor.next();
         return {
@@ -921,6 +1052,21 @@ class BlockParser {
       case 'singleIfHead':
         // 单行条件（本批）：`如果 条件 则 语句` —— 一条语句，**不消费后续行**。
         return this.parseSingleIfStatement(line, cls);
+      case 'loopEnd':
+      case 'catchEnd':
+      case 'dataEnd': {
+        // 走到这里 = 收束行**没**落在开块的同缩进上（`consumeEnd` 只认同缩进）。
+        // 报错并消费本行：收束词不进产物（块尾由 codegen 自己配平），但绝不静默。
+        const word = cls.kind === 'loopEnd' ? LOOP_END_W : cls.kind === 'catchEnd' ? CATCH_END_W : DATA_END_W;
+        this.cursor.next();
+        this.sink.report({
+          code: 'indent-mismatch',
+          severity: 'error',
+          message: `「${word}」前面没有同缩进的开块——收束行要与自己的块头**对齐缩进**。`,
+          loc: posOf(line),
+        });
+        return null;
+      }
       case 'comment':
         // 注释**保留**（用户 2026-10-12 第 3 条：注释不能丢）——推进游标后作为
         // `comment` 节点收进当前块体（空行仍按 §3.10 丢弃：只用于分隔）。
@@ -1464,6 +1610,40 @@ class BlockParser {
         return this.parseAskBody(line, cls.prompt, cls.kind === 'askMHead' ? 'askMBlock' : 'askYNBlock');
       case 'exprHead':
         return this.parseExprHead(line, cls);
+      case 'loopHead':
+        return this.parseLoopBlock(line, cls.loop);
+      case 'catchHead':
+        return this.parseCatchBlock(line);
+      case 'dataHead':
+        return this.parseDataBlock(line, cls.engine);
+      case 'controlMalformed':
+        // 候选位置同样不许静默：残缺写法在这里报错（行已被调用方消费）
+        this.sink.report({
+          code: 'statement-shape',
+          severity: 'error',
+          message: cls.message,
+          loc: posOf(line),
+        });
+        return null;
+      case 'loopEnd':
+      case 'catchEnd':
+      case 'dataEnd':
+        this.sink.report({
+          code: 'indent-mismatch',
+          severity: 'error',
+          message: `「${cls.kind === 'loopEnd' ? LOOP_END_W : cls.kind === 'catchEnd' ? CATCH_END_W : DATA_END_W}」前面没有同缩进的开块——收束行要与自己的块头**对齐缩进**。`,
+          loc: posOf(line),
+        });
+        return null;
+      case 'labelDecl':
+        return { kind: 'rawLine', text: `$${cls.name}`, loc: spanOf(line) } as RawLine;
+      case 'loopFlow':
+        return { kind: 'rawLine', text: cls.engine, loc: spanOf(line) } as RawLine;
+      case 'loopStep':
+        return { kind: 'rawLine', text: `${cls.name} ${cls.sign} ${cls.delta}`, loc: spanOf(line) } as RawLine;
+      case 'dataEntry':
+        // 候选行的数据表条目合法（随机候选本身可以是一条 `DATAFORM` 数据）——原样产，不吞行
+        return { kind: 'rawLine', text: `${cls.engine} ${cls.body}`, loc: spanOf(line) } as RawLine;
       case 'assign':
         return {
           kind: 'rawLine',
@@ -1783,6 +1963,155 @@ class BlockParser {
       body,
       loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
     };
+  }
+
+  /* ------------------------------ 循环 / 出错处理 / 数据表（本批） ------------------------------ */
+
+  /**
+   * 消费与开块**同缩进**的收束行（`循环结束` / `循环结束 <尾随条件>` / `出错处理结束` / `数据表结束`）。
+   *
+   * 收束行**可选**——糖的块本来就靠缩进收口（`ENDIF` 在糖视图里不显示），语料里的
+   * `NEXT` / `WEND` 落在哪个缩进位都由作者决定；写了就认、没写不报错。
+   *
+   * 匹配式不再是"整行等值"，而是**取 `classifyLine` 的分类结果**：词形语法（裸形 vs
+   * 「收束词 + 空白 + 条件词 + 空白 + 条件」的尾随形）只活在 `lexer.ts` 一处，本函数只判
+   * 「是不是本族的收束行」+「缩进是否与块头对齐」两件事。尾随条件是否**合法**（只允许出现在
+   * `循环：` 那一形上）由调用方判——见 `parseLoopBlock`。
+   *
+   * 行尾带注释的收束行**不消费**（口径与改造前逐字一致）：`contentOf` 保留注释，
+   * 等值判定即不成立。注释要是不丢就得进产物，而收束行本身不进产物，所以这里宁可让本行
+   * 落 `indent-mismatch` 的可见报错，也不静默吞掉作者写的东西。
+   *
+   * @returns 消费到的收束行（含尾随条件原文）；没有可消费的收束行 ⇒ `undefined`
+   */
+  private consumeEnd(headLine: LogicalLine, endKind: EndLineClass): { line: LogicalLine; condition?: string } | undefined {
+    if (this.cursor.done) return undefined;
+    const line = this.cursor.peek()!;
+    if (line.indent !== headLine.indent) return undefined;
+    const content = contentOf(line);
+    if (content.length === 0 || content !== stripInlineComment(content)) return undefined;
+    const cls = classifyLine(line);
+    if (cls.kind !== endKind) return undefined;
+    this.cursor.next();
+    return cls.kind === 'loopEnd' ? { line, condition: cls.condition } : { line };
+  }
+
+  /** `循环 …：` → `loopBlock`（产物 `FOR` / `WHILE` / `REPEAT` / `DO` 四族之一 + 配对闭合词） */
+  private parseLoopBlock(headLine: LogicalLine, loop: LoopSpec): SugarNode {
+    const bodyIndent = headLine.indent + 1;
+    const sub = new BlockParser(this.cursor, bodyIndent, this.sink, this.randomShape);
+    const body = sub.parseBody();
+    const close = this.consumeEnd(headLine, 'loopEnd');
+    const closeCondition = close?.condition;
+    // 尾随条件只属于 `循环：`（引擎 `DO … LOOP <条件>`）那一形；另外三模态的闭合词
+    // (`NEXT` / `WEND` / `REND`) 不吃参数，写了就是残块 ⇒ 报错并整块不产（不拼半成品）。
+    const paired = closeCondition === undefined || loop.mode === 'do';
+    if (!paired && close !== undefined) {
+      this.sink.report({
+        // 收束形与本块模态不配 = **形态**不认识（不是"块内无内容"），故挂 `statement-shape`
+        code: 'statement-shape',
+        severity: 'error',
+        message:
+          `「${LOOP_END_W} ${LOOP_WHEN_W} <条件>」只写在「${LOOP_W}：」开出的块上（引擎那一形是 \`DO … LOOP <条件>\`）。` +
+          `本块块头「${loopHeadForm(loop)}」配的闭合词不接受条件——` +
+          `要么删掉收束行里的条件段，要么把块头改写成「${LOOP_W}：」。`,
+        loc: posOf(close.line),
+      });
+    }
+    if (body.length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: `「${LOOP_W}」块没有正文（缩进更深的内容）。`,
+        loc: posOf(headLine),
+      });
+    }
+    const spec: LoopSpec = closeCondition === undefined ? loop : { ...loop, closeCondition };
+    return {
+      kind: 'loopBlock',
+      loop: spec,
+      body,
+      _invalid: !paired,
+      loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
+    } as unknown as SugarNode;
+  }
+
+  /** `出错处理：` → `catchBlock`（产物 `CATCH` … `ENDCATCH`；TRY 系九枚**无写形**，仍走兜底） */
+  private parseCatchBlock(headLine: LogicalLine): SugarNode {
+    const bodyIndent = headLine.indent + 1;
+    const sub = new BlockParser(this.cursor, bodyIndent, this.sink, this.randomShape);
+    const body = sub.parseBody();
+    this.consumeEnd(headLine, 'catchEnd');
+    if (body.length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: `「${CATCH_W}」块没有正文（缩进更深的内容）。`,
+        loc: posOf(headLine),
+      });
+    }
+    return { kind: 'catchBlock', body, loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))) } as unknown as SugarNode;
+  }
+
+  /**
+   * `数据表：` → `dataBlock`（产物 `PRINTDATA[…]` … `ENDDATA`）。
+   *
+   * **块体只许条目行与注释**（与 `心形` 连续块同一判据）：数据表体里的行是**数据**不是语句，
+   * 混进任何语句 ⇒ 整块 `_invalid` ⇒ codegen 一条字节都不产（不拼半成品）。
+   */
+  private parseDataBlock(headLine: LogicalLine, engine: string): SugarNode {
+    const bodyIndent = headLine.indent + 1;
+    const body: SugarNode[] = [];
+    let invalid = false;
+    while (!this.cursor.done) {
+      const line = this.cursor.peek()!;
+      const content = contentOf(line);
+      if (content.length === 0) {
+        this.cursor.next();
+        continue;
+      }
+      if (line.indent < bodyIndent) break;
+      const cls = classifyLine(line);
+      if (line.indent === bodyIndent && (cls.kind === 'dataEntry' || cls.kind === 'comment')) {
+        this.cursor.next();
+        body.push(
+          cls.kind === 'comment'
+            ? { kind: 'comment', text: content, loc: spanOf(line) }
+            : ({ kind: 'rawLine', text: `${cls.engine} ${cls.body}`, loc: spanOf(line) } as RawLine),
+        );
+        continue;
+      }
+      if (!invalid) {
+        invalid = true;
+        this.sink.report({
+          code: 'indent-mismatch',
+          severity: 'error',
+          message: `「${DATA_W}」块体里只能写「${DATA_ENTRY_W} <原文>」（或注释）——数据表体里的行是数据，不是语句。`,
+          loc: posOf(line),
+        });
+      }
+      if (line.indent > bodyIndent) {
+        this.skipOverIndented(line.indent);
+        continue;
+      }
+      this.cursor.next();
+    }
+    this.consumeEnd(headLine, 'dataEnd');
+    if (body.length === 0 && !invalid) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: `「${DATA_W}」块没有条目（缩进更深的「${DATA_ENTRY_W} …」）。`,
+        loc: posOf(headLine),
+      });
+    }
+    return {
+      kind: 'dataBlock',
+      engine,
+      body,
+      _invalid: invalid,
+      loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
+    } as unknown as SugarNode;
   }
 
   /* ------------------------------ 心形连续块（P-7） ------------------------------ */

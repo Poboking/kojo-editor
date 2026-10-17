@@ -447,7 +447,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
       }
 
       // 数据表（PRINTDATA 系，批 N）：块头一条结构标注，条目行降成缩进的候选清单。
-      // **不借用任何糖关键字**（糖表层没有数据表写法；写成 `随机：` 会"看着像糖、写回语义不同"）。
+      // 本标注**不借用糖关键字**、只是读视图；可写的 `数据表：/条目` 形不在这里出——
+      // 结构判据没收的数据行由 `makeNativeRec` 强制兜底（混块/游离行投成糖 = 读了写不回）。
       const dataLabel = data.labelAt.get(ln);
       if (dataLabel !== undefined) {
         recs.push({
@@ -802,6 +803,9 @@ interface LineRec {
  */
 const UNRECOGNIZED_PREFIX = '未识别语句 · ';
 
+/** PRINTDATA 系一族的行首记号（块头 / 条目 / 收束）——`makeNativeRec` 的结构优先判据用 */
+const DATA_FAMILY_LINE_RE = /^(?:PRINTDATA[A-Z]*|ENDDATA|DATAFORM(?:\s|$)|DATA(?:\s|$))/;
+
 /** native 行的记录工厂（一份投影运行绑一份，见 `makeNativeRec`） */
 type NativeRecFactory = (line: number, reason: SugarProjectNativeReason) => LineRec;
 
@@ -829,6 +833,12 @@ function makeNativeRec(lines: string[], ctx: ProjContext, deps: LiftDeps): Nativ
     const raw = lines[ln - 1] ?? '';
     const content = contentOf(raw);
     const indent = ctx.indentAt(ln, raw);
+    // 批 N 的**结构判据优先于**显示层词形判据：能走到这里的 PRINTDATA 系行都是结构没收的
+    // （游离条目 / 未配对 / 块内混入别的语句），而糖的 `数据表：` 块体只收条目行——
+    // 投上去就是"读了写不回"，兜底形保持，一个字节都不动。
+    if (DATA_FAMILY_LINE_RE.test(content)) {
+      return { line: ln, kind: 'native', text: `${UNRECOGNIZED_PREFIX}${content}`, indent, visible: true, reason };
+    }
     const localized = localizeNativeLine({ content, indent, lookup });
     // 空内容行（停用区里的空行是唯一到达这里的形态）没有"语句"可标——兜底前缀
     // 单独一行是纯噪声，还让宿主把 N 行空行折成 N 行"未识别语句"。保持隐身，

@@ -3,29 +3,32 @@
  *
  * 覆盖面（认得出就翻，认不出返回 `null`，**绝不原样返回**）：
  * - 块：`IF` / `ELSEIF` / `ELSE` / `ENDIF` / `SIF`；`SELECTCASE` / `CASE` / `CASEELSE` / `ENDSELECT`；
- * - 循环：`FOR … NEXT` / `WHILE … WEND` / `REPEAT … REND` / `DO … LOOP`（糖层不做循环**语法**，
- *   但**显示**不许留 ERB ⇒ 本层负责给出可读形）；
- * - 跳转与出口：`GOTO` / `JUMP` / `CALLJUMP` / `$标签` / `BREAK` / `CONTINUE` / `RESTART` / `CATCH`；
+ * - 循环：`FOR … NEXT` / `WHILE … WEND` / `REPEAT … REND` / `DO … LOOP`
+ *   （`LOOP <条件>` 的**尾随条件**也翻：`DO` 一族在盘上只以这一形出现）；
+ * - 跳转与出口：`GOTO` / `JUMP` / `$标签` / `BREAK` / `CONTINUE` / `RESTART` / `CATCH`；
+ * - 数据表：`PRINTDATA[…]` / `DATAFORM` / `DATA` / `ENDDATA`（`DATALIST` / `ENDLIST` 分组无义项出处 ⇒ 不翻）；
  * - 预处理行：`#DIM` / `#DIMS` / `#GLOBAL` / `#LOCALSIZE` / `#LOCALSSIZE` / `#FUNCTION` /
  *   `#FUNCTIONS` / `#SFUNCTION` / `#XFUNCTION` / `#TESTMEMORY` 等。
  *
  * ## 词形从哪来（两条轴，绝不混）
  *
- * 1. **语言层词形零手抄**：`如果 / 否则如果 / 否则 / 当 / 是 / 到 / 则 / 调用` 一律由
- *    `keywords.ts` 的 `SUGAR_LEXICON_WORDS`（中文主形投影）与 `operatorTable()`（**反向**投影）给出，
- *    闭合行是同一套 `<块头词> + 结束`（`如果结束` / `当结束` / `循环结束` / `出错处理结束`）。
+ * 1. **语言层词形零手抄**：`如果 / 否则如果 / 否则 / 当 / 是 / 到 / 则` 与循环/跳转/数据表三族的
+ *    全部词形都由 `keywords.ts` 的 `primaryWord()`（中文主形投影）、`blockEndWord()`（收束拼法）与
+ *    `operatorTable()`（**反向**投影）给出 ⇒ **写形与显示形同源**，本层改不出第二个叫法。
+ *    闭合行是同一套 `<块头词> + 结束`（`如果结束` / `当结束` / `循环结束` / `出错处理结束` / `数据表结束`）。
  *    本表与 `project.ts` 的 `SUGAR_CONTROL`（`如果 X：` / `当 X：` / `是 v：` / `否则：`）同一口径——
  *    预览里同一种块只会有一种中文写法。
- * 2. **本层新增词形只在循环/跳转/声明这三族**（糖层没有对应语法，故关键字表里没有词可用）：
- *    `循环`（`循环 计数 …` / `循环 当 …` / `循环 至少一次` / `循环 …`）· `步进`（循环变量自增减）·
- *    `跳到` / `调用跳转` / `标签` · `跳出循环` / `跳过本轮` / `重跑本轮` · `出错处理` ·
- *    `声明…` / `预处理 <记号原文>`。词形在本文件**定义一次**，测试逐字钉住。
+ * 2. **本层只剩预处理声明一族词形**（`声明…` / `大小` / `预处理 <记号原文>`）：那批是**文件级声明**、
+ *    糖层没有写形，登记进 `KEYWORDS` 会让发版覆盖率闸要求作者用一种写不回去的写法，故留在本文件。
+ *    逐字钉值见 `tests/control-word-single-source.test.ts`。
  *
  * ## 三条判据（都与契约 `types.ts` 的红线绑在一起）
  *
  * - **表里没有的指令 ⇒ `null`**（宁缺勿猜：猜错中文义项比留兜底更坏）；
  *   认得记号但**不担保义项**的预处理指令（`#SFUNCTION` / `#XFUNCTION` / `#TESTMEMORY`）只翻
  *   「预处理」这一层，记号原样保留——翻的是**类**，不是**义**；
+ * - **载荷是数据而不是条件的行 ⇒ 余文逐字带走**（`DATAFORM` / `DATA` 条目正文、`JUMP` 的函数
+ *   调用串）：中文化运算符或剥前缀都会改档，这类行的显示形只换**词首那枚记号**；
  * - **`lookup` 缺席 ⇒ 只做语言层**（关键字照翻，整行仍是中文形），绝不因为没名表就返 `null`；
  * - **出口自证**：任何返回都与 `input.content` 逐字不等（装配层还会再拒一次）。
  *
@@ -34,22 +37,12 @@
  * 这里重抄就成了第二份口径。
  */
 
-import { NOTIN_KEYWORDS, SUGAR_LEXICON_WORDS, operatorTable } from '../keywords';
-import type { KeywordId } from '../keywords';
+import { NOTIN_KEYWORDS, blockEndWord, operatorTable, primaryWord as word } from '../keywords';
 import type { NativeDisplayInput, NativeDisplayLookup } from './types';
 
 /* ------------------------- 词形：全部由既有真源派生 ------------------------- */
 
-/** `KeywordId` → 中文主形（`SUGAR_LEXICON_WORDS` 的投影；本模块零硬编码语言层词形） */
-const PRIMARY_WORDS: ReadonlyMap<KeywordId, string> = new Map(
-  SUGAR_LEXICON_WORDS.filter((w) => w.primary).map((w) => [w.id, w.word] as const),
-);
-
-/** 取中文主形；缺词形 = 词表缺陷，把 id 原样显示到屏上（fail-visible，绝不静默兜个假词） */
-function word(id: KeywordId): string {
-  return PRIMARY_WORDS.get(id) ?? id;
-}
-
+/** 派生表（`KeywordId` → 中文主形）；逐字钉值由 `tests/control-word-single-source.test.ts` 对着本表校验 */
 const IF_W = word('block.if'); // 如果
 const ELIF_W = word('block.elif'); // 否则如果
 const ELSE_W = word('block.else'); // 否则
@@ -57,27 +50,44 @@ const WHEN_W = word('block.when'); // 当
 const IS_W = word('block.is'); // 是
 const TO_W = word('inline.to'); // 到
 const THEN_W = word('inline.then'); // 则
-const CALL_W = word('inline.call'); // 调用
 /** `不在`（只从既有表取；表里缺这项就整条 `不在` 反显不触发，绝不现造一个词） */
 const NOTIN_W = NOTIN_KEYWORDS.find((k) => !/^[a-z]+$/i.test(k)) ?? '';
 
-const END_W = '结束'; // 闭合族：`<块头词> + 结束`
-const LOOP_W = '循环';
-const LOOP_COUNT_W = '计数';
-const LOOP_ONCE_W = '至少一次';
-const LOOP_STEP_W = '步进';
-const PLUS_W = '加';
-const MINUS_W = '减';
-const FROM_W = '从';
-const STRIDE_W = '步长';
+/** 闭合族：`<块头词> + 结束`（词尾与拼法都在 `keywords.ts`，本层不复制） */
+const IF_END_W = blockEndWord('block.if');
+const WHEN_END_W = blockEndWord('block.when');
+const CATCH_END_W = blockEndWord('block.catch');
+const LOOP_W = word('block.loop'); // 循环
+const LOOP_END_W = blockEndWord('block.loop'); // 循环结束（`NEXT` / `WEND` / `REND` / `LOOP` 四枚同形）
+const LOOP_COUNT_W = word('inline.loopCount'); // 计数
+const LOOP_TIMES_W = word('inline.loopTimes'); // 次（`REPEAT <次数>` 的尾部量词）
+const LOOP_FOREVER_W = word('inline.loopForever'); // 无限（裸 `REPEAT` = 无限循环）
+const LOOP_STEP_W = word('inline.loopStep'); // 步进
+const PLUS_W = word('inline.plus'); // 加
+const MINUS_W = word('inline.minus'); // 减
+const FROM_W = word('inline.loopFrom'); // 从
+const STRIDE_W = word('inline.loopStride'); // 步长
+const JUMP_W = word('inline.jump'); // 跳到（`GOTO`：目标是 `$标签`）
+const FUNC_JUMP_W = word('inline.functionJump'); // 函数跳转（`JUMP`：目标是函数调用串）
+const LABEL_W = word('inline.label'); // 标签
+const BREAK_W = word('inline.breakLoop'); // 跳出循环
+const CONTINUE_W = word('inline.continueLoop'); // 跳过本轮
+const RESTART_W = word('inline.restartLoop'); // 重跑本轮
+const CATCH_W = word('block.catch'); // 出错处理
+const DATA_W = word('block.dataTable'); // 数据表
+const DATA_END_W = blockEndWord('block.dataTable'); // 数据表结束
+const DATA_ENTRY_W = word('inline.dataEntry'); // 条目
+const ECHO_W = word('inline.engineEcho'); // 原形（记号回显：义项不担保的那批变体把引擎记号原样带走）
+
+/* ---------------- 本层**独有**的显示词形（无写侧通路，故不进 `KEYWORDS`） ---------------- */
+
+/**
+ * 预处理声明的词形（`声明数组 X 大小 10` / `预处理 SFUNCTION …`）——为什么只有这一小撮还住本文件：
+ * 登记进 `KEYWORDS` = 承诺"写得回去"（发版覆盖率闸按「样例里真的用过」验收），而 `#DIM` /
+ * `#FUNCTION` 系**没有**写形（文件级声明不在时机块内，本批不做）——登记它只会让闸要求作者
+ * 用一种写不回去的写法。
+ */
 const SIZE_W = '大小';
-const JUMP_W = '跳到'; // `GOTO` 与其别名 `JUMP` 同一词形（别名关系见 app 的 `JUMP_KEYWORDS`）
-const CALLJUMP_W = `${CALL_W}跳转`;
-const LABEL_W = '标签';
-const BREAK_W = '跳出循环';
-const CONTINUE_W = '跳过本轮';
-const RESTART_W = '重跑本轮';
-const CATCH_W = '出错处理';
 const PRE_W = '预处理';
 
 /* --------------------------- 表达式侧（条件形） --------------------------- */
@@ -165,11 +175,18 @@ function showCaseValues(raw: string, lookup: NativeDisplayLookup | undefined): s
 
 /** 块头/语句：`词` + 分隔（空白或 `:`） + 余文 */
 const HEAD_RE = /^([A-Za-z_][A-Za-z0-9_]*)(?:\s*:|\s+|$)([\s\S]*)$/;
+/** 循环变量引用（`I` / `LOCAL:2`）——与步进一步同一判据，两侧共用本串 */
+export const LOOP_VAR_RE = String.raw`[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z0-9_]+)*`;
 /** `FOR i = 0 TO 10 STEP 2`（`STEP` 可选；界限体交回 `showExpr`） */
-const FOR_RE = /^([A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z0-9_]+)*)\s*=\s*(.+?)\s+TO\s+(.+?)(?:\s+STEP\s+(.+))?$/i;
+const FOR_RE = new RegExp(`^(${LOOP_VAR_RE})\\s*=\\s*(.+?)\\s+TO\\s+(.+?)(?:\\s+STEP\\s+(.+))?$`, 'i');
+/** `FOR LOCAL, 0, 5` / `FOR COUNT, 6, 1, -1`——**语料主流形**（eraTW 实测 3,809 : 1） */
+const FOR_TUPLE_RE = new RegExp(`^(${LOOP_VAR_RE})\\s*,\\s*([^,]+?)\\s*,\\s*([^,]+?)(?:\\s*,\\s*(.+))?$`);
 /** 循环变量步进：`X + 1` / `X += 1` / `X - 1` / `X -= 1`（右侧只收数与标识符，不收算式 ⇒ 不猜） */
-const STEP_RE =
-  /^([A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z0-9_]+)*)\s*([+-])\s*=?\s*(\d+|[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z0-9_]+)*)$/;
+const STEP_RE = new RegExp(
+  `^(${LOOP_VAR_RE})\\s*([+-])\\s*=?\\s*(\\d+|${LOOP_VAR_RE})$`,
+);
+/** `PRINTDATA` 族开词（九枚变体；义项差别不猜 ⇒ 走 `原形` 记号回显） */
+const PRINTDATA_TOKEN_RE = /^PRINTDATA[A-Z]*$/;
 
 /** 需要表达式的语句：空表达式 = 形态不完整，不猜（`如果 ：` 比留兜底更误导读者） */
 function needExpr(payload: string, make: () => string): string | null {
@@ -218,35 +235,64 @@ const OPENERS: ReadonlyMap<string, Opener> = new Map<string, Opener>([
   ['SELECTCASE', (p, i) => needExpr(p, () => `${WHEN_W} ${showExpr(p, i.lookup, true)}：`)],
   ['CASE', (p, i) => needExpr(p, () => `${IS_W} ${showCaseValues(p, i.lookup)}：`)],
   ['WHILE', (p, i) => needExpr(p, () => `${LOOP_W} ${WHEN_W} ${showExpr(p, i.lookup, true)}：`)],
+  /**
+   * `REPEAT <次数>`：官方Reference的义项 = **按参数指定的次数循环**（参数可以是数式，
+   * 语料真形 `REPEAT VARSIZE("TSTR")` / `REPEAT ARG:4` / `REPEAT nDegree-1`）⇒ 显示形
+   * `循环 <次数> 次：`；**裸** `REPEAT`（不带参数）才是无限循环 ⇒ `循环 无限：`。
+   */
   [
     'REPEAT',
     (p, i) =>
       p.length === 0
-        ? `${LOOP_W} ${LOOP_ONCE_W}：`
-        : `${LOOP_W} ${LOOP_ONCE_W} ${WHEN_W} ${showExpr(p, i.lookup, true)}：`,
+        ? `${LOOP_W} ${LOOP_FOREVER_W}：`
+        : `${LOOP_W} ${showExpr(p, i.lookup, true)} ${LOOP_TIMES_W}：`,
   ],
   ['FOR', (p, i) => renderFor(p, i)],
+  /**
+   * `LOOP <条件>`：`DO … LOOP <条件>` 的**带体闭合形**（eraTW 盘上 `DO` 开块 210 处、
+   * 闭合 210 处全带条件，裸 `LOOP` 零例——只认无体形就等于让这 210 行落兜底段）。
+   *
+   * 收束词与条件词形都从 `keywords.ts` 取（`LOOP_END_W` + `WHEN_W`），与写侧
+   * (`lexer.ts` 的 `parseLoopEndStatement`) 同一串；空条件按 `needExpr` 判据返 `null` 不猜。
+   */
+  ['LOOP', (p, i) => needExpr(p, () => `${LOOP_END_W} ${WHEN_W} ${showExpr(p, i.lookup, true)}`)],
   ['GOTO', (p) => needExpr(showTarget(p), () => `${JUMP_W} ${showTarget(p)}`)],
-  ['JUMP', (p) => needExpr(showTarget(p), () => `${JUMP_W} ${showTarget(p)}`)],
-  ['CALLJUMP', (p) => needExpr(showTarget(p), () => `${CALLJUMP_W} ${showTarget(p)}`)],
+  /**
+   * `JUMP <原文>`：引擎这一枚的目标是**函数调用串**（盘上 132 处全是
+   * `JUMP GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)` 这一形），与 `GOTO` 的
+   * 标签目标义项不同 ⇒ 另给一形 `函数跳转`，余文**逐字**带走（不剥 `$`/`*`、不中文化运算符：
+   * 那是数据不是条件，改一个字符就改档）。口径同 `DATAFORM` 正文与 `原形` 记号回显。
+   */
+  ['JUMP', (p) => needExpr(p, () => `${FUNC_JUMP_W} ${p}`)],
+  /** `DATAFORM <原文>`：条目正文**逐字**保留（它是数据不是语句，降糖会把台词改弯） */
+  ['DATAFORM', (p) => needExpr(p, () => `${DATA_ENTRY_W} ${p}`)],
+  /** `DATA <原文>`：与 `DATAFORM` 义项有别 ⇒ 不折成同一形，用 `原形` 把记号带走 */
+  ['DATA', (p) => needExpr(p, () => `${DATA_ENTRY_W} ${ECHO_W} DATA ${p}`)],
 ]);
 
-/** 无体的独立行 / 收束行：`词` → 中文形（带体的这类行 = 形态不认识 ⇒ `null`） */
+/**
+ * 无体的独立行 / 收束行：`词` → 中文形（带体的这类行 = 形态不认识 ⇒ `null`）。
+ *
+ * `LOOP` 一枚**两表都在**，两形各归各的判据：整行只有记号 = 无体闭合行（本表，`循环结束`）；
+ * `LOOP <条件>` = 带体闭合行（`OPENERS`，`循环结束 <条件词形> <条件>`）。
+ * 归哪张表由 `renderBody` 的「整行是否只有那枚记号」判据决定，不看尾部标点。
+ */
 const STANDALONE: ReadonlyMap<string, string> = new Map<string, string>([
   ['ELSE', `${ELSE_W}：`],
   ['CASEELSE', `${ELSE_W}：`],
-  ['ENDIF', `${IF_W}${END_W}`],
-  ['ENDSELECT', `${WHEN_W}${END_W}`],
-  ['NEXT', `${LOOP_W}${END_W}`],
-  ['WEND', `${LOOP_W}${END_W}`],
-  ['REND', `${LOOP_W}${END_W}`],
-  ['LOOP', `${LOOP_W}${END_W}`],
+  ['ENDIF', IF_END_W],
+  ['ENDSELECT', WHEN_END_W],
+  ['NEXT', LOOP_END_W],
+  ['WEND', LOOP_END_W],
+  ['REND', LOOP_END_W],
+  ['LOOP', LOOP_END_W],
   ['DO', `${LOOP_W}：`],
   ['BREAK', BREAK_W],
   ['CONTINUE', CONTINUE_W],
   ['RESTART', RESTART_W],
   ['CATCH', `${CATCH_W}：`],
-  ['ENDCATCH', `${CATCH_W}${END_W}`],
+  ['ENDCATCH', CATCH_END_W],
+  ['ENDDATA', DATA_END_W],
 ]);
 
 /** 预处理指令中有把握给出义项的那批（`sized` = 「名 + 大小」形） */
@@ -275,12 +321,17 @@ function renderSif(payload: string, input: NativeDisplayInput): string | null {
 }
 
 function renderFor(payload: string, input: NativeDisplayInput): string | null {
-  const m = FOR_RE.exec(payload);
-  if (!m) return null;
-  const [, name, from, to, step] = m;
+  const tuple = FOR_TUPLE_RE.exec(payload) ?? FOR_RE.exec(payload);
+  if (!tuple) return null;
+  const [, name, from, to, step] = tuple;
   if (name === undefined || from === undefined || to === undefined) return null;
   const stride = step === undefined ? '' : ` ${STRIDE_W} ${showExpr(step, input.lookup, false)}`;
   return `${LOOP_W} ${LOOP_COUNT_W} ${name} ${FROM_W} ${showExpr(from, input.lookup, false)} ${TO_W} ${showExpr(to, input.lookup, false)}${stride}：`;
+}
+
+/** `PRINTDATA` / `PRINTDATADL`…：裸形只有一枚（`PRINTDATA`），余下八枚变体不猜义项 ⇒ `原形` 带走记号 */
+function renderDataOpen(kind: string): string {
+  return kind === 'PRINTDATA' ? `${DATA_W}：` : `${DATA_W} ${ECHO_W} ${kind}：`;
 }
 
 /** `#DIM A 10` / `#FUNCTION A(x)` / `#SFUNCTION …` */
@@ -331,9 +382,13 @@ function renderBody(body: string, input: NativeDisplayInput): string | null {
   if (!m) return null;
   const kind = (m[1] ?? '').toUpperCase();
   const payload = (m[2] ?? '').trim();
+  if (PRINTDATA_TOKEN_RE.test(kind) && payload.length === 0) return renderDataOpen(kind);
+  // 无体独立行（整行只有那枚记号）先取 `STANDALONE`——`LOOP` 一枚两表都在，
+  // 裸形是收束行、带体形是条件尾随形，靠"行里除了记号还有没有别的东西"分诊，不靠尾部标点。
+  const standalone = STANDALONE.get(kind);
+  if (payload.length === 0 && body.toUpperCase() === kind && standalone !== undefined) return standalone;
   const opener = OPENERS.get(kind);
   if (opener !== undefined) return opener(payload, input);
-  const standalone = STANDALONE.get(kind);
   if (standalone !== undefined) return payload.length === 0 ? standalone : null;
   const step = STEP_RE.exec(body);
   if (step) {

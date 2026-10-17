@@ -50,6 +50,14 @@ export type KeywordId =
   | 'block.function'
   /* 初回块（1 号任务：`初回 "key"：` = 引擎 `ONCE(...)`） */
   | 'block.once'
+  /* 循环 / 出错处理 / 数据表三族（本批：显示层独有词形降格为**语言层块头**——
+     登记进本表即承诺"写得回去"，词形与 `native-display/control.ts` 的显示形同源） */
+  | 'block.loop'
+  | 'block.loopEnd'
+  | 'block.catch'
+  | 'block.catchEnd'
+  | 'block.dataTable'
+  | 'block.dataTableEnd'
   /* 问答块（询问 / 确认）：引擎封装问答函数调用（eraTW ASK_M / ASK_YN） */
   | 'block.askM'
   | 'block.askYN'
@@ -71,6 +79,28 @@ export type KeywordId =
   | 'inline.mutator'
   /* 单行条件的 `则` 分隔词（本批）：`如果 <条件> 则 <语句>`；不是独立语句，只是条件与语句的界标 */
   | 'inline.then'
+  /* 循环族的**模态词**（`循环 计数 …` / `循环 当 …` / `循环 <次数> 次 …` / `循环 无限 …`）与步进行（`步进 X 加 1`） */
+  | 'inline.loopCount'
+  /** `循环 <表达式> 次：` 的尾部量词（⇄ 引擎 `REPEAT <表达式>`：按参数指定的次数循环） */
+  | 'inline.loopTimes'
+  /** `循环 无限：` 的模态词（⇄ 引擎**裸** `REPEAT`：不带次数 = 无限循环） */
+  | 'inline.loopForever'
+  | 'inline.loopFrom'
+  | 'inline.loopStride'
+  | 'inline.loopStep'
+  | 'inline.plus'
+  | 'inline.minus'
+  /* 跳转与循环出口（`跳到` / `函数跳转` / `标签` / `跳出循环` / `跳过本轮` / `重跑本轮`） */
+  | 'inline.jump'
+  /** `函数跳转 <原文>`（⇄ 引擎 `JUMP <原文>`：函数调用串**逐字**带走，不是标签名） */
+  | 'inline.functionJump'
+  | 'inline.label'
+  | 'inline.breakLoop'
+  | 'inline.continueLoop'
+  | 'inline.restartLoop'
+  /* 数据表条目行（`条目 <原文>`）与**记号回显**标记（`原形 <引擎记号>`：翻类不翻义，写法与产物同一 token） */
+  | 'inline.dataEntry'
+  | 'inline.engineEcho'
   /* 别名右值 */
   | 'alias.char';
 /**
@@ -164,6 +194,21 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 是**变量式访问器**（`ONCE(名称, 初期値, キャラ番号…)`，可读可写）。只登记中文主形——
   // 英文别名 `once` 不登记（`ONCE` 是引擎函数名、不是作者输入别名，登记会与候选撞词）。
   ['初回', 'block.once'],
+  // 循环族（本批）：`循环 计数 X 从 a 到 b [步长 s]：` / `循环 当 X：` / `循环 <表达式> 次：` / `循环 无限：` / `循环：`。
+  // 收束一律 `循环结束`——引擎侧 `NEXT` / `WEND` / `REND` / `LOOP` 四枚闭合词由**开块模态**决定，
+  // 写法上不区分（区分就是把引擎记号搬回表层）；`次` 与 `无限` 两模态同收 `REND`。
+  // 词形登记进本表即承诺可写，
+  // 显示侧（`native-display/control.ts`）从同一张表取词，不存在第二份口径。
+  ['循环', 'block.loop'],
+  ['循环结束', 'block.loopEnd'],
+  // 出错处理块（`出错处理：` ⇄ `CATCH` … `ENDCATCH`）——只覆盖 CATCH 本体；
+  // TRY 系九枚（`TRYCGOTO` / `TRYCALLLIST` …）**无写形**，仍走 `未识别语句` 兜底。
+  ['出错处理', 'block.catch'],
+  ['出错处理结束', 'block.catchEnd'],
+  // 数据表块（`数据表：` + `条目 <原文>` + `数据表结束` ⇄ `PRINTDATA` 族）。
+  // 变体后缀（`PRINTDATADL` 一类）不猜义项：写 `数据表 原形 PRINTDATADL：`，产物就是那枚记号。
+  ['数据表', 'block.dataTable'],
+  ['数据表结束', 'block.dataTableEnd'],
   // 问答块（作者爱用的引擎封装问答函数）：`询问` 多选（eraTW ASK_M）/ `确认` 二择（eraTW ASK_YN）。
   // 与 `选项`（PRINTBUTTON+INPUTS+RESULTS）/ `菜单`（PRINTL+INPUT+SELECTCASE RESULT）是**另一条
   // 管线**——本组产 `CALL <引擎函数>(...)` + `SELECTCASE`，函数名/参数/读回变量由 adapter 模板声明。
@@ -215,6 +260,40 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 它在 `条件` 里可能与变量名撞词，故由 lexer 的位置式扫描（带空白边界）单独识别。
   ['则', 'inline.then'],
   ['then', 'inline.then'],
+  // 循环模态词与步进行（本批）——判定归 lexer 的循环分支，登记进表让高亮/补全认得它。
+  // `循环 计数 <变量> 从 <起> 到 <止> [步长 <步>]：` / `循环 <表达式> 次：` / `循环 无限：` /
+  // `步进 <变量> 加|减 <增量>`。
+  // 英文别名不登记：`FOR` / `STEP` 这类全大写记号已被**原生直通通道**截获（`RAW_INSTR_RE`），
+  // 登记一个小写别名只会让词表说谎（写了也不走糖）。
+  ['计数', 'inline.loopCount'],
+  // `次`：`循环 <表达式> 次：` 的尾部量词 ⇄ 引擎 `REPEAT <表达式>`（官方义项 = **按参数指定的次数循环**，
+  // 参数可以是数式；`REPEAT 5` = 重复 5 次）。单字形词形只在本族的「词 + 空白 + 余文」通路里被消费，
+  // 台词里夹着「次」字（`一次` / `次数`）不带词边界 ⇒ 不会被抢走（判据见同源闸的散文负例）。
+  ['次', 'inline.loopTimes'],
+  // `无限`：裸 `REPEAT`（不带参数 = 无限循环，引擎合法但盘上 0 处）的诚实形——次数槽什么都不写。
+  ['无限', 'inline.loopForever'],
+  ['从', 'inline.loopFrom'],
+  ['步长', 'inline.loopStride'],
+  ['步进', 'inline.loopStep'],
+  ['加', 'inline.plus'],
+  ['减', 'inline.minus'],
+  // 跳转与循环出口（本批）：`跳到 <名>` / `函数跳转 <原文>` / `标签 <名>` /
+  // `跳出循环` / `跳过本轮` / `重跑本轮`。
+  // 同样不登记英文别名：`GOTO` / `JUMP` / `BREAK` / `CONTINUE` / `RESTART` 全是全大写
+  // 原生记号（`RAW_INSTR_RE` 直通），`continue` 更已与行内 `续` 撞词——登记即说谎。
+  ['跳到', 'inline.jump'],
+  // `函数跳转` ⇄ 引擎 `JUMP <原文>`：那一枚记号在引擎里是**函数跳转**（目标是函数调用串，
+  // 不是 `$标签`），与 `跳到`（`GOTO`）义项不同 ⇒ 两枚各给一形，不撞成同一个中文叫法
+  // （撞了就是照预览写回去、产物却换了记号）。余文**逐字**透传、不降糖也不查标签名。
+  ['函数跳转', 'inline.functionJump'],
+  ['标签', 'inline.label'],
+  ['跳出循环', 'inline.breakLoop'],
+  ['跳过本轮', 'inline.continueLoop'],
+  ['重跑本轮', 'inline.restartLoop'],
+  // 数据表条目行 `条目 <原文>` ⇄ `DATAFORM <原文>`；`原形 <引擎记号>` 是**记号回显**标记
+  // （`条目 原形 DATA <原文>` ⇄ `DATA <原文>`）——义项有别的变体不猜，原样带走那枚记号。
+  ['条目', 'inline.dataEntry'],
+  ['原形', 'inline.engineEcho'],
   // 别名的 `角色 N` 右值形态由 `isAliasCharKeyword` 按上下文判定，
   // **不**在此表登记（否则会覆盖 `head.char`——Map 保留最后一次插入）。
 ]);
@@ -444,6 +523,14 @@ export const NOTIN_KEYWORDS: readonly string[] = ['不在', 'notin'];
 /** 全角冒号（块头终止符，规范 §5.3） */
 export const FULLWIDTH_COLON = '：';
 
+/**
+ * 块收束词尾（`循环结束` / `出错处理结束` / `数据表结束` = `<块头词> + 本串`）。
+ *
+ * 登记进 `KEYWORDS` 的收束词形**必须**等于「开块词 + 本串」——这条恒等式由
+ * `tests/control-word-single-source.test.ts` 逐族钉住（显示层与写层各拼一份就必然分叉）。
+ */
+export const BLOCK_END_SUFFIX = '结束';
+
 /** 半角冒号（头部声明的等价终止符；作者可能写 `角色: 12`） */
 export const HALF_COLON = ':';
 
@@ -507,6 +594,24 @@ const CJK = /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]/;
 export const SUGAR_LEXICON_WORDS: readonly SugarLexiconWord[] = [...KEYWORDS.entries()].map(
   ([word, id]): SugarLexiconWord => ({ word, id, role: roleOf(id), primary: CJK.test(word) }),
 );
+
+/** 中文主形（`id` → 词形；显示层与写层共用这一份查询，禁第二张投影表） */
+const PRIMARY_BY_ID: ReadonlyMap<KeywordId, string> = new Map(
+  SUGAR_LEXICON_WORDS.filter((w) => w.primary).map((w) => [w.id, w.word] as const),
+);
+
+/**
+ * 取中文主形。缺词形 = 词表缺陷 ⇒ 把 `id` 原样交回调用方显示（fail-visible），
+ * 绝不兜一个假词——静默造词正是"写得出来读不回来"那类事故的源头。
+ */
+export function primaryWord(id: KeywordId): string {
+  return PRIMARY_BY_ID.get(id) ?? id;
+}
+
+/** 收束词形（`循环` → `循环结束`）；词尾只有 `BLOCK_END_SUFFIX` 一份，两侧同函数派生 */
+export function blockEndWord(openId: KeywordId): string {
+  return `${primaryWord(openId)}${BLOCK_END_SUFFIX}`;
+}
 
 /** 中文运算符词形（规范 §4.3；不含 `不在`——它由条件降糖单独处理） */
 export const SUGAR_LEXICON_OPERATORS: readonly string[] = OPERATORS.map(([zh]) => zh);

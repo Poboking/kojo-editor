@@ -34,6 +34,7 @@ export const SUGAR_DIAGNOSTIC_CODES = [
   /* --- 结构 / 缩进 --- */
   'indent-mismatch',
   'block-empty',
+  'statement-shape',
   'unclosed-block',
   /* --- 表达式 `如果` / `当` --- */
   'expr-missing-else',
@@ -115,6 +116,7 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   /* --- `.kojo` 转译检查码（`SugarDiagnosticCode` 全集） --- */
   'indent-mismatch': { name: '缩进不齐', detail: '该行的缩进与所在块的层级不一致。' },
   'block-empty': { name: '块内无内容', detail: '块头写了，但下面没有更深缩进的正文。' },
+  'statement-shape': { name: '语句写法不对', detail: '这一行的写法不完整，或不属于它认得的任何一种；照提示里列出的写法改。' },
   'unclosed-block': { name: '块未闭合', detail: '写到文件结尾，这个块还没有收回去。' },
   'expr-missing-else': { name: '缺少否则分支', detail: '取值位置的条件下必须穷尽所有情况。' },
   'expr-body-not-expression': { name: '分支体不是表达式', detail: '取值位置的每个分支都只能写「-> 一个表达式」。' },

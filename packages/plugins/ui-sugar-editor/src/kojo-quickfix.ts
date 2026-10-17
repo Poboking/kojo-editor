@@ -78,6 +78,7 @@ import type { EditorCodeAction, EditorTextEdit, LineDecoration } from '@kojo/plu
  * `expr-missing-else` / `rand-case-incomplete`（要补内容 = 替作者编一个值）、
  * `interpolation-*`（要补 `}` / 拆嵌套 = 猜意图）、`indent-mismatch`（正确缩进层级只有
  * 解析器知道，重算就是第二套判定）、`block-empty`（删块头还是补正文？两解）、
+ * `statement-shape`（本族合法形好几种，改哪一形要作者自己定；文案已逐条列出，动作不唯一）、
  * `alias-not-in-header`（文件头里有 N 个合法落点）、`timing-*`/`unknown-identifier`/
  * `bit-name-unknown`/`family-name-unknown`（要查字典或表 = 游戏知识，不属本插件）、
  * `cont-inside-quotes`（`续` 该挪到引号外还是本就不是标记？文案给了两条路）、
