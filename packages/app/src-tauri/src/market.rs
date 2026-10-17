@@ -23,7 +23,7 @@
 //!   （`limits`）**都从编译期内嵌的这张表取**（`include_str!`，形态照 W12 的
 //!   `decode-probe-policy.json`），所以两侧不存在"各写一套 if 再拿测试对齐"的第二份真相。
 
-use std::io::{Read, Seek as _, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -1290,26 +1290,30 @@ pub(crate) fn extract_staging(
     if let Some(problem) = staging_component_problem(target_name) {
         return Err(format!("market_extract: {problem}"));
     }
-    // 天花板闸在动盘与打开容器之前：入参宽于共享表 = 直接拒（不是"按入参加宽"）
-    if let Some(problem) = limits_ceiling_problem(limits) {
-        return Err(format!("market_extract: {problem}"));
-    }
     let archive_path = staging_dir.join(staging_name);
     let target = staging_dir.join(target_name);
     let mut file = std::fs::File::open(&archive_path)
         .map_err(|e| format!("打开容器失败 {}: {e}", archive_path.display()))?;
     // F7 预检（见上段口径）：条目数先从 EOCD 头读出来夹上界，**解析一个条目都不做**就拒。
+    // 它必须先于入参天花板闸：调用方若把限额放到硬顶（200k），这里的"声明 > 上界"才是
+    // 第一判据（上游 F7 的两条端到端用例钉的就是这个顺序）。
     if let Some(problem) = declared_entries_problem(
         declared_entry_count(&mut file),
         limits.max_entries.min(MARKET_HARD_MAX_ENTRIES),
     ) {
         return Err(format!("market_extract: {problem}（容器 {}）", archive_path.display()));
     }
+    // 天花板闸在动盘与打开容器之前：入参宽于共享表 = 直接拒（不是"按入参加宽"）
+    if let Some(problem) = limits_ceiling_problem(limits) {
+        return Err(format!("market_extract: {problem}"));
+    }
     // **第一道闸走中央目录原语**（自己解析 EOCD / 中央目录 / 本地头互指），
     // 且必须在 `zip` 读器之前：读器按名字建索引会**静默去重**同名条目、
     // bit 11 缺失时按 CP437 解码名字，两条都把"往返不一致"藏在它自己那套读数里。
     // 拒了就一个字节都不许写出去（此时 `target` 还不存在，无需清扫）。
-    let container = central_directory(&mut file)?;
+    // 解析失败（无 EOCD / 截断）沿用上游"容器不可读"字面，别让预检劫持 zip crate 的判词。
+    let container = central_directory(&mut file)
+        .map_err(|e| format!("容器不可读 {}: {e}", archive_path.display()))?;
     container_contract_problem(&container, limits, &archive_path)?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| format!("容器不可读 {}: {e}", archive_path.display()))?;

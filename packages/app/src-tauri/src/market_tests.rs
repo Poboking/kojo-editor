@@ -15,14 +15,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::market::{
     advance_byte_cap, cap_download_limits, cap_fetch_limits, cap_staging_limits,
-use crate::market::{
-    advance_byte_cap, cap_download_limits, cap_fetch_limits, cap_staging_limits,
     central_directory, container_name_problem, content_length_problem, declared_entries_problem,
     declared_entry_count, download_to_staging, entry_contract_problem, entry_type_problem,
     extract_staging, extract_staging_off_thread, fetch_text, host_in_allowlist, market_fetch_text,
     redirect_problem, staging_component_problem, url_problem, utf8_text, zip_roundtrip_contract,
     DeclaredEntries, DownloadOptions, StagingLimits, ZIP_FLAG_UTF8, ZIP_ROUNDTRIP_CONTRACT_JSON,
-};
 };
 
 /// 限额字面照契约常量（`plugin-api/market.ts`）；Rust 侧不写死，测试里显式传入。
