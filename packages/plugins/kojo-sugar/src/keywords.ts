@@ -410,8 +410,10 @@ export const TIMING_ARG_TOKENS: readonly string[] = ['ARG', 'ARG:1', 'ARGS'];
  * 逻辑字面量与逻辑词（`真` / `假` / `空` / `异或`）与 `且` / `或` / `非` **同一条通路**：
  * 中文主形在本表降糖，ASCII 引擎记号（`true` / `false` / `null` / `XOR`）走
  * `expression.ts::isErbKeyword` 的**原样放行**通道——这就是"双收"的两侧
- * （别名只影响**输入**，产物恒是引擎记号）。区间词 `到` 不入本表：它是**结构级**词形
- * （只出现在 `X 不在 a 到 b` 与 `是 a 到 b` 两处，见 `RANGE_MARKS`），与 `不在` 同一口径。
+ * （别名只影响**输入**，产物恒是引擎记号）。区间词 `到` 不入本表：它是**结构级**词形，
+ * 只在 `X 不在 a 到 b`（`expression.ts::lowerNotIn` 位置消费）与 `是 a 到 b`
+ * （lexer/parser 的 `parseCaseValues` 拆档）两处由各自通路接住；块档产物落引擎
+ * 记号 ` TO `（codegen `renderCaseValues`），与 `不在` 同一口径（都在本表之外）。
  */
 const OPERATORS: ReadonlyArray<readonly [string, string]> = (
   [
