@@ -415,8 +415,12 @@ function stubMonacoWithModels(models: Monaco.editor.ITextModel[]) {
   return { monaco, provider: () => registered[0]!.provider };
 }
 
-/** 光标命中 `M_KOJO_A` 的 `.erb` 定义 model */
-const ERB_DEF_MODEL = () => modelOf('@M_KOJO_A(1)', 'CALL M_KOJO_A');
+/**
+ * 光标命中 `M_KOJO_A` 的 `.erb` 定义 model。
+ * 它同时是 `A` 的**已开标签**（`openModels` 里那份），所以必须带 `file:` uri——
+ * `WorkspaceEdit` 的 `resource` 取自 live model 的 uri（真实 Monaco model 必有 uri）。
+ */
+const ERB_DEF_MODEL = () => openModelOf('C:/p/ERB/a.ERB', '@M_KOJO_A(1)', 'CALL M_KOJO_A');
 
 function kojoHandlers(opts: {
   refs: readonly ErbReference[];

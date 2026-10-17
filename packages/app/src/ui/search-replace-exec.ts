@@ -1,4 +1,3 @@
-import { editor, Uri } from '../monaco/entry';
 import { pathKey } from '@kojo/plugin-api';
 import type * as MonacoRuntime from '../monaco/entry';
 import {
@@ -90,10 +89,16 @@ function ensureMonacoRuntime(): Promise<void> {
   return monacoLoading;
 }
 
-/** 从 Monaco 全局注册表按 `file:` URI 取 live model；注册表未就绪 ⇒ `undefined`（由闸门拦下） */
+/**
+ * 从 Monaco 全局注册表取 live model；注册表未就绪 ⇒ `undefined`（由闸门拦下）。
+ * 先按精确 URI 取（同写法时行为不变，也避开全量遍历），再按 `pathKey` 找回另一种写法
+ * 的那份 live model——见 `pickModelByPathKey` 的判等理由。
+ */
 function modelFromRegistry(path: string): MonacoRuntime.editor.ITextModel | undefined {
   if (monacoRuntime === null) return undefined;
-  return monacoRuntime.editor.getModel(monacoRuntime.Uri.file(path)) ?? undefined;
+  const exact = monacoRuntime.editor.getModel(monacoRuntime.Uri.file(path)) ?? undefined;
+  if (exact) return exact;
+  return pickModelByPathKey(monacoRuntime.editor.getModels(), path);
 }
 
 export interface FileReplaceDeps {
@@ -103,8 +108,6 @@ export interface FileReplaceDeps {
     writeText(path: string, text: string): Promise<void>;
   };
   /** 已打开文件的 live model 查找（缺省 = Monaco 注册表：精确 URI → `pathKey` 回落，见 `pickModelByPathKey`） */
-  modelFor?: (path: string) => editor.ITextModel | undefined;
-  /** 已打开文件的 live model 查找（缺省 = Monaco 注册表按 file: URI，惰性取） */
   modelFor?: (path: string) => MonacoRuntime.editor.ITextModel | undefined;
   /**
    * 名字 → 全部出现点（**可选**，宿主注入 `erb-rename` 用的同一份台账判据）。
@@ -138,13 +141,6 @@ export function pickModelByPathKey<T extends UriBearingModel>(
     if (m.uri.scheme === 'file' && pathKey(m.uri.fsPath) === want) return m;
   }
   return undefined;
-}
-
-/** 缺省通道：Monaco 全局注册表——先按精确 URI 取（同写法时行为不变），再按 `pathKey` 找回另一种写法的那份 live model */
-function defaultModelFor(path: string): editor.ITextModel | undefined {
-  const exact = editor.getModel(Uri.file(path)) as editor.ITextModel | undefined;
-  if (exact) return exact;
-  return pickModelByPathKey(editor.getModels() as readonly editor.ITextModel[], path);
 }
 
 /**
@@ -269,9 +265,12 @@ export function createFileReplaceRunner(
         let residual = 0;
         const residualFiles = new Set<string>();
         for (const occ of ledger) {
-          if (seen.has(occ.filePath)) continue;
+          // 与检索面同一判等口径（`pathKey`）：台账拼写与结果清单不同时，不能
+          // 把已经替换过的文件又算成"范围外残留"
+          const key = pathKey(occ.filePath);
+          if (seen.has(key)) continue;
           residual++;
-          residualFiles.add(occ.filePath);
+          residualFiles.add(key);
         }
         if (residual > 0) {
           errors.push(residualOutsideScopeNotice(residual, residualFiles.size, request.query));
