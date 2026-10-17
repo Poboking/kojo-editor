@@ -29,6 +29,12 @@ import { errorText } from '@kojo/plugin-api';
  *
  * `parse` 按契约不抛（转译器内部异常落进 `doc.diagnostics` 并返回空骨架）；这里仍兜一层 try/catch
  * 拦住**注入的扫描器**抛错 ⇒ 该路零候选 + 一行 warn（不静默、不崩整轮补全）。
+ *
+ * ## 候选对象（Monaco item）不在本模块
+ *
+ * 这里只产 `{ name, kind }` 数据；`别名` / `常量` 的候选对象在 `kojo-completion.ts` 的
+ * `declarationItems` 里组装 ⇒ 中文声明名的 `filterText`（真实 Monaco 按 `filterText ?? label`
+ * 过滤）那一处改动落在那一侧，本模块不另造一份候选构造。
  */
 
 /** 缺省扫描器所用的只解析服务实例（懒建一次；`parse` 是纯函数，跨文件复用安全） */

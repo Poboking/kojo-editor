@@ -172,3 +172,49 @@ describe('kojo-snippet source · 块头模板', () => {
     expect(items).toContain('如果');
   });
 });
+
+/* ============================== 行首门的空白口径（全角空格 bug） ============================== */
+
+/** 取某个 label 的候选（无 ⇒ undefined） */
+function pick(items: Monaco.languages.CompletionItem[], label: string): Monaco.languages.CompletionItem | undefined {
+  return items.find((i) => labelText(i.label) === label);
+}
+
+describe('kojo-snippet source · 行首空白口径 = 糖源（[ \\t\\u3000]）', () => {
+  it('全角空格缩进的行照样出块骨架（`时机　本番：` 这类写法能编译 ⇒ 必须补得出模板）', () => {
+    const items = provide(provider, '　如果', '如果', 2); // 光标前只有一个全角空格
+    const hit = pick(items, '如果');
+    expect(hit).toBeDefined();
+    expect(hit!.insertTextRules).toBe(4); // InsertAsSnippet ⇒ 走的是块模板而非纯文本
+    expect(hit!.insertText).toContain('\n');
+  });
+
+  it('混合缩进（制表 + 半角 + 全角）也算行首', () => {
+    const word = lexemeOf('block.timing') ?? '时机';
+    const text = `\t 　${word}`;
+    const hit = pick(provide(provider, text, word, 4), word); // 光标在缩进之后（列 4）
+    expect(hit!.insertTextRules).toBe(4);
+    expect(hit!.insertText).toContain('${1:分野}');
+  });
+
+  it('全角缩进深处的块关键字同样出行首模板（缩进深度不影响判定）', () => {
+    const word = lexemeOf('block.when') ?? '当';
+    const text = `　　　${word}`;
+    const hit = pick(provide(provider, text, word, 4), word);
+    expect(hit!.insertTextRules).toBe(4);
+  });
+
+  it('半角缩进行为原样不动（改前就出模板，改后仍出）', () => {
+    const text = '    如果';
+    const hit = pick(provide(provider, text, '如果', 5), '如果');
+    expect(hit!.insertTextRules).toBe(4);
+  });
+
+  it('反例：空白前还有实际字符 ⇒ 仍是行中位置，只出纯文本关键字（判定语义没被放宽）', () => {
+    const items = provide(provider, 'X　如果', '如果', 3); // 光标前 = `X` + 全角空格
+    const hit = pick(items, '如果');
+    expect(hit).toBeDefined();
+    expect(hit!.insertTextRules).toBeUndefined();
+    expect(hit!.insertText).toBe('如果');
+  });
+});

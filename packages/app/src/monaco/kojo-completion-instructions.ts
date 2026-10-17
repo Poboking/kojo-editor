@@ -3,7 +3,12 @@ import type { KojoFaceTable, KojoIndexKind, KojoIndexTables } from '@kojo/plugin
 import { kojoIndexCandidates } from '@kojo/plugin-api';
 import { TIMING_NAMED_PARAMS } from '@kojo/plugin-kojo-sugar';
 import { lineRange } from './completion-range';
-import { insideStringOrComment } from './kojo-completion-position';
+import {
+  CASE_ANCHOR,
+  col0Of,
+  insideStringOrComment,
+  timingHeadParts,
+} from './kojo-completion-position';
 
 /**
  * KC-3 · `.kojo` **编号槽**的正向补全（`kojoIndexCompletionItems`，IX-1 起按面分流）。
@@ -26,12 +31,6 @@ import { insideStringOrComment } from './kojo-completion-position';
  * 绝不抛。Monaco provider 注册刻意不在此处——编排层（`kojo-completion.ts`）负责接进补全基座。
  */
 
-/** 行首 `时机 ` 前缀（允许行首空白；`时机` 后至少一个空白）——与 `kojo-face` 同口径 */
-const TIMING_HEAD_RE = /^[ \t]*时机[ \t]+/;
-/** 分野名令牌的终止符：空白 / 全角冒号 / 半角冒号 */
-const FACE_TOKEN_END_RE = /[\s：:]/;
-/** 分支头 `是 <值…>：`（`is` 后须有空白——`issue` 这类词不认） */
-const CASE_HEAD_RE = /^[ \t]*(?:是|is)[ \t]+/;
 /** 令牌切分用空白 */
 const WHITESPACE_RE = /\s/;
 /** 值分隔符：半角 / 全角逗号 */
@@ -59,31 +58,33 @@ const NAMED_PARAM_KEYS: ReadonlySet<string> = new Set(
 );
 
 /** 一段替换区间（0 基列下标，`end` 不含） */
-interface Slot {
+export interface Slot {
   readonly start: number;
   readonly end: number;
 }
 
 /** 时机块头编号落点：替换区间 + 该块头的**分野名**（选表要它） */
-interface TimingSlot {
-  readonly slot: Slot;
+export interface TimingNumberSlot extends Slot {
   readonly face: string;
 }
 
 /**
- * 落点 1：`时机 <分野> <编号令牌位>：` 的**编号槽**。
+ * 落点 1：`时机 <分野> <编号令牌位>：` 的**编号槽**（`column` = Monaco 的 1 基列）。
  *
  * 与 `parseTimingHead` 同口径：尾段只按**空白**切分（块头终结冒号贴在末令牌上、由
  * `stripBlockColon` 剥掉），编号 = 第一个**非命名参数键**的尾令牌；`成否:` / `类型:` /
  * `参数` 一出现即说明编号位已被跳过（那一处归 `kojo-face` 的 KC-2b）。
+ *
+ * 导出 = 「上下文主动触发」用的同一判据（`suggest-context-trigger.ts`）：分野段界取自
+ * `kojo-completion-position` 的 {@link timingHeadParts}，与 `kojo-face` **共用一份**，不另扫。
  */
-function timingNumberSlot(line: string, col0: number): TimingSlot | null {
-  const head = TIMING_HEAD_RE.exec(line);
-  if (!head) return null;
-  const faceStart = head[0].length;
-  let faceEnd = faceStart;
-  while (faceEnd < line.length && !FACE_TOKEN_END_RE.test(line[faceEnd]!)) faceEnd++;
-  const face = line.slice(faceStart, faceEnd);
+export function timingNumberSlotAt(line: string, column: number): TimingNumberSlot | null {
+  const col0 = col0Of(line, column);
+  if (col0 === null) return null;
+  const parts = timingHeadParts(line);
+  if (parts === null) return null;
+  const faceEnd = parts.faceEnd;
+  const face = parts.face;
 
   // 分野令牌之后须有**至少一个空白**——否则光标仍在分野令牌内（那一处归 `kojo-face`）。
   let slotStart = faceEnd;
@@ -92,7 +93,7 @@ function timingNumberSlot(line: string, col0: number): TimingSlot | null {
 
   // 行尾插入点（`时机 指令 |`）：光标恰在插入点才给候选。
   if (slotStart >= line.length) {
-    return col0 === slotStart ? { slot: { start: slotStart, end: slotStart }, face } : null;
+    return col0 === slotStart ? { start: slotStart, end: slotStart, face } : null;
   }
 
   let slotEnd = slotStart;
@@ -106,16 +107,20 @@ function timingNumberSlot(line: string, col0: number): TimingSlot | null {
   // 「编号 + 块头终结冒号」：替换区间**不含**那枚冒号。
   const end = slotStart + trimmed.length;
   if (col0 < slotStart || col0 > end) return null;
-  return { slot: { start: slotStart, end }, face };
+  return { start: slotStart, end, face };
 }
 
 /**
  * 落点 2：`当 …：` 块里 `是 <值…>：` 分支头的**值位**（P-5：裸中文词 = 指令名）。
  * 顶层逗号（引号内的不算）分段 → 取含光标那段 → 段内以空白切出光标所在的"词"。
+ *
+ * 导出理由同 {@link timingNumberSlotAt}：候选源与主动触发吃**同一枚**判据。
  */
-function caseValueSlot(line: string, col0: number): Slot | null {
-  const head = CASE_HEAD_RE.exec(line);
-  if (!head) return null;
+export function caseValueSlotAt(line: string, column: number): Slot | null {
+  const col0 = col0Of(line, column);
+  if (col0 === null) return null;
+  const head = CASE_ANCHOR.exec(line);
+  if (head === null) return null;
   const bodyStart = head[0].length;
 
   // 块头终结冒号 = 行（忽略行尾空白）的最后一枚 `：` / `:`；还没写它也照样认（作者正在写）。
@@ -227,15 +232,15 @@ export function kojoIndexCompletionItems(
   if (col0 > line.length) return [];
   if (insideStringOrComment(line, col0)) return [];
 
-  const timing = timingNumberSlot(line, col0);
+  const timing = timingNumberSlotAt(line, position.column);
   if (timing !== null) {
     // 按面的 `indexKind` 选表：缺省 `'command'`（表缺省 / 未登记面照旧走指令名，与契约同口径）。
     const kind = tables.faceTable?.faces[timing.face]?.indexKind ?? 'command';
     if (!kinds.includes(kind)) return [];
-    return buildItems(monaco, position, timing.slot, line, kind, kojoIndexCandidates(kind, tables));
+    return buildItems(monaco, position, timing, line, kind, kojoIndexCandidates(kind, tables));
   }
 
-  const caseSlot = caseValueSlot(line, col0);
+  const caseSlot = caseValueSlotAt(line, position.column);
   if (caseSlot === null) return [];
   // `是` 值位恒按指令名查（P-5）——计数器面没有这条构造，故只有 command 源认这处。
   if (!kinds.includes('command')) return [];

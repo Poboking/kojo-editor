@@ -1,10 +1,15 @@
 import type * as Monaco from './entry';
 import { projectFunctionCandidates, type CompletionNameSlot } from './completion-core';
+import { ERB_CALL_SLOT_BY_KEYWORD, erbCallStatementRe } from './erb-completion-context';
+import { BLANK_CLASS_STR, isBlank } from './kojo-completion-position';
 
 /**
  * EC-3 · `.erb` **函数名补全** —— 定义位（行首 `@<前缀>`）与调用位
- * （`CALL` / `CALLFORM` / `TRYCALL` / `TRYCALLFORM` / `TRYCALLFORMF` / `TRYCCALLFORM` /
- * `JUMP` … 之后）弹出项目函数名候选。
+ * （`CALL` 系 / `*FORM*` 系 / `JUMP` 系之后）弹出项目函数名候选。
+ *
+ * 「哪些语句之后那一位算名字位」**不在本文件声明**——单源是 `erb-completion-context.ts`
+ * 的 `ERB_CALL_STATEMENTS`（门与候选源共用同一张表，缺陷 2 的分叉由此消掉）；
+ * 本文件只按槽种类决定**那一位里能不能有插值**（`'form'` 槽可以，`'func'` / `'label'` 槽不行）。
  *
  * 名字来源 = 基座传入的 `functionNames`（`ErbIndex.byName` 的键，按 `fingerprint` 记忆化）；
  * 本模块**不读盘、不 import 内核 / 插件**，只做**本方言的位置判定**：
@@ -24,15 +29,14 @@ import { projectFunctionCandidates, type CompletionNameSlot } from './completion
 const NAME_CHAR_RE =
   /[0-9A-Za-z_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff10-\uff19\uff21-\uff3a\uff41-\uff5a\uff66-\uff9f]/;
 
-/** 定义位：行首可选空白 + `@`（`@` 之后即函数名） */
-const DEF_RE = /^[ \t]*@/;
+/** 定义位：行首可选空白 + `@`（`@` 之后即函数名）；空白类走 `BLANK_CLASS_STR` 单源 */
+const DEF_RE = new RegExp(`^[${BLANK_CLASS_STR}]*@`);
 
 /**
- * 调用位关键字（长词在前；`i` 使指令大小写不敏感）。
- * `FORM` 类关键字（含 `FORM` 子串）后的名字槽是 FORM 串，可含 `%…%` / `{…}` 段。
+ * 调用位（长词在前 + 关键字后必须有空白，装配见 `erbCallStatementRe`）；
+ * 关键字表与槽种类由 `ERB_CALL_STATEMENTS` 单源给出，本处**不再自持一份语句清单**。
  */
-const CALL_RE =
-  /^[ \t]*(TRYCALLFORMF|TRYCALLFORM|TRYCCALLFORM|CALLFORML|CALLFORMF|CALLFORM|CALLL|CALLF|CALL|TRYCALL|TRYJUMP|JUMP)[ \t]+/i;
+const CALL_RE = erbCallStatementRe(['func', 'form', 'label'], true);
 
 function isNameChar(ch: string | undefined): boolean {
   return ch !== undefined && NAME_CHAR_RE.test(ch);
@@ -69,7 +73,7 @@ function parseNameSlot(
   let slotEnd = boundStart;
   while (slotEnd < lineText.length) {
     const ch = lineText[slotEnd]!;
-    if (ch === '(' || ch === ';' || ch === ' ' || ch === '\t') break;
+    if (ch === '(' || ch === ';' || isBlank(ch)) break; // 空白类走单源（全角空格同样是槽分隔）
     slotEnd++;
   }
   if (col0 > slotEnd) return null;
@@ -90,8 +94,9 @@ function parseNameSlot(
 }
 
 /**
- * 光标处的 ERB **函数名槽**（定义位 `@…` 或 `CALL` 系调用位；纯函数，可单测）。
- * 位置不符 ⇒ `null`（不猜）。`FORM` 类关键字后的槽允许 `%…%` / `{…}` 段。
+ * 光标处的 ERB **函数名槽**（定义位 `@…` 或调用位；纯函数，可单测）。
+ * 位置不符 ⇒ `null`（不猜）。槽种类查 `ERB_CALL_SLOT_BY_KEYWORD`：`'form'`（`*FORM*` 全族）
+ * 之后的槽是 FORM 串，允许 `%…%` / `{…}` 段；`'func'` / `'label'` 之后的槽只收名字字符。
  */
 export function erbFunctionNameSlot(line: string, column: number): CompletionNameSlot | null {
   const col0 = Math.min(Math.max(column - 1, 0), line.length);
@@ -99,7 +104,7 @@ export function erbFunctionNameSlot(line: string, column: number): CompletionNam
   if (def !== null) return parseNameSlot(line, col0, def[0].length, false);
   const call = CALL_RE.exec(line);
   if (call !== null) {
-    const allowInterp = call[1]!.toUpperCase().includes('FORM');
+    const allowInterp = ERB_CALL_SLOT_BY_KEYWORD.get(call[1]!.toUpperCase()) === 'form';
     return parseNameSlot(line, col0, call[0].length, allowInterp);
   }
   return null;
@@ -108,8 +113,8 @@ export function erbFunctionNameSlot(line: string, column: number): CompletionNam
 /**
  * 产出 `.erb` 函数名补全候选（**纯函数**，供补全基座调用）。
  *
- * 行为：仅当光标落在**定义位**（行首 `@` 之后的名字槽）或**调用位**（`CALL` 系 / `JUMP`
- * 之后的名字槽，FORM 关键字允许 `%…%` / `{…}` 段）时产出候选；名字取自 `functionNames`
+ * 行为：仅当光标落在**定义位**（行首 `@` 之后的名字槽）或**调用位**（`CALL` 系 / `*FORM*` 系 /
+ * `JUMP` 系之后的名字槽，`'form'` 槽允许 `%…%` / `{…}` 段）时产出候选；名字取自 `functionNames`
  * （唯一真源，由基座传入），`kind` = `Function`，`insertText` = 名字（定义位**不再插
  * `@`**——`@` 已在文里），替换范围**只覆盖名字那一段**；排序受控（前缀精确优先，其次按名）。
  * 位置不符 / `functionNames` 缺省或为空 ⇒ 返回 `[]`，不抛。

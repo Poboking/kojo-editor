@@ -125,3 +125,37 @@ describe('时机分野补全 · 替换范围只覆盖分野名段（不含编号
     expect(items[0]!.range).toEqual({ startLineNumber: 1, endLineNumber: 1, startColumn: 4, endColumn: 6 });
   });
 });
+
+/* ==================== 新增：空白口径与转译器对齐（全角空格 U+3000 也是空白） ==================== */
+
+const FW = '　'; // 全角空格 U+3000——转译器 lexer 一律接受，补全面此前手抄 `[ \t]` 漏掉它
+
+describe('时机分野补全 · 全角空格形态（能编译 ⇒ 必须出候选）', () => {
+  it('`时机` 后全角空格分隔 → 前缀过滤照旧（`时机　初|` → 初见）', () => {
+    expect(texts(callAt(`时机${FW}初|`))).toEqual(['初见']);
+  });
+
+  it('全角缩进 + 半角分隔（`　时机 初|`）→ 初见', () => {
+    expect(texts(callAt(`${FW}时机 初|`))).toEqual(['初见']);
+  });
+
+  it('Tab 缩进 + 全角分隔（`\t时机　初|`）→ range 起点随全角空格后移一位', () => {
+    const items = callAt(`\t时机${FW}初|`);
+    expect(texts(items)).toEqual(['初见']);
+    expect(items[0]!.range).toEqual({ startLineNumber: 1, endLineNumber: 1, startColumn: 5, endColumn: 6 });
+  });
+
+  it('全角空格后尚未写分野名（`时机　|`）→ 全量分野', () => {
+    expect(texts(callAt(`时机${FW}|`))).toEqual(['初见', '事件', '指令', '绝顶恶作剧']);
+  });
+
+  it('全角空格 + 块头已收尾（`时机　初|见：`）→ []（与半角同判）', () => {
+    expect(callAt(`时机${FW}初|见：`)).toEqual([]);
+  });
+
+  it('回归不变：同一行的半角 / 全角写法候选逐项相等（半角零回退）', () => {
+    expect(texts(callAt(`时机${FW}指|令 310`))).toEqual(texts(callAt('时机 指|令 310')));
+    expect(callAt('时机指令|')).toEqual([]); // `时机` 后无空白 ⇒ 两种写法都不认
+    expect(callAt(`时机${FW}指令 310|`)).toEqual([]); // 光标越过分野段 ⇒ 交回编号槽那一路
+  });
+});

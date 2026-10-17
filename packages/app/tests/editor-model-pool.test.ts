@@ -5,7 +5,11 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { createEditorModelPool, type PoolDeps } from '../src/ui/editor-model-pool';
+import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
+import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
+import { JSON_LANGUAGE_ID, registerJsonLanguage } from '../src/monaco/json-language';
+import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { createEditorModelPool, languageFor, type PoolDeps } from '../src/ui/editor-model-pool';
 
 interface FakeModel {
   value: string;
@@ -170,5 +174,109 @@ describe('model 池 · 磁盘文本快照（三方合并的 base）', () => {
     const h = harness({});
     h.pool.setSavedBase('ghost.erb', 'x');
     expect(h.pool.savedBase('ghost.erb')).toBeUndefined();
+  });
+});
+
+/**
+ * 语言挂载判据（L1-LANG，2026-10-17）：`languageFor` 曾是**二值映射**（`.kojo` ⇒ 糖、
+ * 其余一律 ⇒ ERB），后果是非 ERB 文件（`.md` / `.txt` / `.json` / 存档容器 …）吃到
+ * ERB 的补全 / 悬停 / 改名——JSON 里弹 `#DIM` 骨架。现在必须是**显式白名单 + plaintext
+ * 兜底**：认不出就不猜。
+ *
+ * 只测映射表，不碰池的生命周期/引用计数（那是上面几组的事，也是并行批次的事）。
+ */
+describe('languageFor · 显式白名单 + plaintext 兜底', () => {
+  it('.kojo（含大写 / CJK 基名）⇒ 糖语言', () => {
+    expect(languageFor('D:\\作品\\事件.kojo')).toBe(KOJO_LANGUAGE_ID);
+    expect(languageFor('D:/x/a.kojo')).toBe(KOJO_LANGUAGE_ID);
+    expect(languageFor('D:/x/A.KOJO')).toBe(KOJO_LANGUAGE_ID);
+  });
+
+  it('大写 `.ERB` 真实语料形态 ⇒ ERB 语言（冒烟夹具就是全大写）', () => {
+    const upper =
+      'C:\\game\\ERB\\口上・メッセージ関連\\個人口上\\001 Reimu [霊夢]\\M_KOJO_K1_口上.ERB';
+    expect(languageFor(upper)).toBe(ERB_LANGUAGE_ID);
+    expect(languageFor('D:\\x\\note.ERB')).toBe(ERB_LANGUAGE_ID);
+  });
+
+  it('ERB 方言全集（契约单一真源，不手抄清单）大小写两种写法都 ⇒ ERB 语言', () => {
+    for (const ext of ERB_DIALECT_EXTENSIONS) {
+      expect(languageFor(`D:\\x\\K36${ext}`)).toBe(ERB_LANGUAGE_ID);
+      expect(languageFor(`D:\\x\\K36${ext.toUpperCase()}`)).toBe(ERB_LANGUAGE_ID);
+    }
+    // 多点名取最后一段（`K11_TR.ERH` 这类真实文件名）
+    expect(languageFor('D:\\x\\M_KOJO_K11_TR.ERH')).toBe(ERB_LANGUAGE_ID);
+  });
+
+  it('`.json` ⇒ JSON_LANGUAGE_ID（该 id 由 json-language 真实注册，见下一组，不是空挂）', () => {
+    expect(languageFor('D:\\x\\settings.json')).toBe(JSON_LANGUAGE_ID);
+    expect(languageFor('D:\\x\\SETTINGS.JSON')).toBe(JSON_LANGUAGE_ID);
+  });
+
+  it('非白名单文件 ⇒ plaintext 兜底，**绝不**是 ERB（缺陷回归闸）', () => {
+    const fallbacks = [
+      'D:\\x\\README.md',
+      'D:\\x\\说明.txt',
+      'D:\\Game\\sav\\save001.sav',
+      'D:\\Game\\CSV\\Chara\\Chara1.csv',
+      'D:\\x\\LICENSE',
+      'D:\\x\\a.erd',
+      'D:\\x\\A.ERD',
+      'D:\\x\\a.kojo.bak',
+      'D:\\x\\.erb',
+    ];
+    for (const p of fallbacks) {
+      expect(languageFor(p), `兜底判错：${p}`).toBe('plaintext');
+      expect(languageFor(p), `不许吃 ERB：${p}`).not.toBe(ERB_LANGUAGE_ID);
+    }
+  });
+});
+
+/**
+ * `.json` 挂上 `json` 这个 id 之前必须先证明它**不是查无此人**：Monaco 对未注册语言
+ * 会静默退化成 plaintext，那样等于没改。这里用假 monaco 验注册面（照 `erh-open-surface`
+ * 的写法），与 `monaco/entry.ts` 模块级的 `registerJsonLanguage(monacoApi)` 两处互锁。
+ */
+describe('JSON_LANGUAGE_ID 真实注册（有 Monarch，不是空挂 id）', () => {
+  function mockMonaco() {
+    const registered: Array<{ id: string; extensions?: string[] }> = [];
+    const monarch = new Set<string>();
+    const configs = new Set<string>();
+    const monaco = {
+      languages: {
+        getLanguages: () => registered.map((r) => ({ id: r.id })),
+        register: (d: { id: string; extensions?: string[] }) => registered.push(d),
+        setMonarchTokensProvider: (id: string) => {
+          monarch.add(id);
+          return { dispose: () => undefined };
+        },
+        setLanguageConfiguration: (id: string) => {
+          configs.add(id);
+          return { dispose: () => undefined };
+        },
+      },
+    };
+    return {
+      registered,
+      monarch,
+      configs,
+      monaco: monaco as unknown as Parameters<typeof registerJsonLanguage>[0],
+    };
+  }
+
+  it('registerJsonLanguage 登记 id / `.json` 扩展名 / Monarch / 语言配置', () => {
+    const m = mockMonaco();
+    registerJsonLanguage(m.monaco);
+    expect(m.registered.map((r) => r.id)).toEqual([JSON_LANGUAGE_ID]);
+    expect(m.registered[0]!.extensions).toEqual(['.json']);
+    expect([...m.monarch]).toEqual([JSON_LANGUAGE_ID]);
+    expect([...m.configs]).toEqual([JSON_LANGUAGE_ID]);
+  });
+
+  it('重复注册幂等（守卫与 erb / kojo 同款）', () => {
+    const m = mockMonaco();
+    registerJsonLanguage(m.monaco);
+    registerJsonLanguage(m.monaco);
+    expect(m.registered).toHaveLength(1);
   });
 });

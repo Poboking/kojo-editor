@@ -129,7 +129,7 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
     dispose.dispose();
   });
 
-  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，R4 骨架 + EC-1..EC-5 + D7 + 跨语言词形八个 source 全在册', () => {
+  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，R4 骨架 + EC-1..EC-5 + D7 七个 source 全在册', () => {
     expect(Array.isArray(ERB_COMPLETION_SOURCES)).toBe(true);
     expect(ERB_COMPLETION_SOURCES.map((s) => s.id)).toEqual([
       'erb-snippet',
@@ -139,8 +139,6 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
       'erb-labels',
       'erb-system-functions',
       'erb-bits',
-      // COMPL-SHARED：跨语言词形（`.kojo` 写法）在册，源缺席即零候选（可注入、不抄语法扫描）
-      'erb-kojo-forms',
     ]);
   });
 });
@@ -164,6 +162,27 @@ describe('EC-1 · 行首 / 行中判定（纯函数）', () => {
   it('行中：`IF A`（列 5）→ 之前有实义字符 ⇒ 非行首', () => {
     expect(erbTokenRange(modelOf(MID), { lineNumber: 1, column: 5 } as Monaco.Position).startColumn).toBe(4);
     expect(isLineHeadContext(modelOf(MID), { lineNumber: 1, column: 5 } as Monaco.Position)).toBe(false);
+  });
+
+  it('行首：全角空格 U+3000 缩进算空白（口径 = 空白单源 isAllBlank，与 lexer `[ \\t\\u3000]` 一致）', () => {
+    expect(isLineHeadContext(modelOf('\u3000#D'), { lineNumber: 1, column: 4 } as Monaco.Position)).toBe(true);
+    expect(isLineHeadContext(modelOf('\u3000\u3000'), { lineNumber: 1, column: 3 } as Monaco.Position)).toBe(true);
+  });
+
+  it('行中：NBSP U+00A0 不算缩进空白（语料零命中 ⇒ 统一走单源严口径，不再特判 `\s` 的宽集）', () => {
+    expect(isLineHeadContext(modelOf('\u00a0#D'), { lineNumber: 1, column: 4 } as Monaco.Position)).toBe(false);
+  });
+});
+
+describe('EC-1 · 全角缩进行的行首候选（端到端）', () => {
+  it('`　#DIM`（U+3000 缩进）仍出行首专属候选（#DIM / [SKIPSTART]）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const items = provide(registered[0]!.provider, '\u3000#DIM', 6);
+    const ls = items.map((i) => labelText(i.label));
+    expect(ls).toContain('#DIM');
+    expect(ls).toContain('[SKIPSTART]');
+    expect(items.find((i) => labelText(i.label) === '#DIM')!.detail).toBe('预处理指令');
   });
 });
 
@@ -319,9 +338,10 @@ describe('EC-1 · memoizedErbFunctionNames（按指纹失效）', () => {
 /**
  * 在同一**已装配句柄**上连续跑三态（满分 → 缺表 → 切表 → 再缺），断言：
  * - 态 A 满表：`erb-variables` / `erb-functions` 各路出货，零降级；
- * - 态 B 缺表（`tables = {}`）：该路**零候选** + 降级信号 **可见且只报一次**（连调两次计数仍 1）；
+ * - 态 B 缺表（`tables = {}`）：该路**零候选** + 降级信号可见；
  * - 态 C 切表：候选**随新表变化**（证明现取、无缓存旧表）；再切空 ⇒ 零候选；
- *   去重语义 = 一次装配内同一 `(来源, 缺键)` 只报一次 ⇒ 计数不增（不重复刷屏）。
+ *   去重语义 = **一轮装配**内同一 `(来源, 缺键)` 只报一次 ⇒ 单轮不重复刷屏，
+ *   跨轮**每轮各报一次**（句柄级去重会让首轮之后这条降级永久无声）。
  */
 function threeStatesErb(
   provider: Monaco.languages.CompletionItemProvider,
@@ -334,26 +354,25 @@ function threeStatesErb(
     degrades.filter((d) => d.sourceId === id && d.missing === key).length;
 
   // 态 A：满表 ⇒ 变量 / 函数名各路出货，零降级信号
-  // （COMPL-SHARED 的跨语言词形源也要喂上：缺键会各首发一次降级）
   setTables({
     variableSchema: fakeSchema(),
     erbFunctionNames: () => PROJECT_FNS,
-    kojoForms: () => [{ label: '如果', detail: '.kojo 词形' }],
   });
   expect(has('CFLAG:', 7, '好感度')).toBe(true);
   expect(has('CALL M_KOJO', 11, 'M_KOJO_A')).toBe(true);
   expect(degrades).toEqual([]);
 
-  // 态 B：缺表 ⇒ 该路零候选 + 信号可见且只报一次
+  // 态 B：缺表 ⇒ 该路零候选 + 信号可见（单轮内不重复，跨轮每轮各一次）
   setTables({});
   expect(has('CFLAG:', 7, '好感度')).toBe(false);
   expect(has('CALL M_KOJO', 11, 'M_KOJO_A')).toBe(false);
-  expect(countOf('erb-variables', 'variableSchema')).toBe(1);
-  expect(countOf('erb-functions', 'erbFunctionNames')).toBe(1);
+  // ↑ 两轮 provide ⇒ 同一 (来源, 缺键) 各报两次（单轮内仍只报一次）
+  expect(countOf('erb-variables', 'variableSchema')).toBe(2);
+  expect(countOf('erb-functions', 'erbFunctionNames')).toBe(2);
   provide(provider, 'CFLAG:', 7);
   provide(provider, 'CALL M_KOJO', 11);
-  expect(countOf('erb-variables', 'variableSchema')).toBe(1);
-  expect(countOf('erb-functions', 'erbFunctionNames')).toBe(1);
+  expect(countOf('erb-variables', 'variableSchema')).toBe(4);
+  expect(countOf('erb-functions', 'erbFunctionNames')).toBe(4);
 
   // 态 C：切表 ⇒ 候选随新表变化（无缓存旧表）
   setTables({ variableSchema: fakeSchemaY(), erbFunctionNames: () => PROJECT_FNS });
@@ -362,10 +381,10 @@ function threeStatesErb(
   setTables({ variableSchema: fakeSchema(), erbFunctionNames: () => PROJECT_FNS });
   expect(has('CFLAG:', 7, '好感度')).toBe(true);
   expect(has('CFLAG:', 7, '恶意')).toBe(false);
-  // 再切空 ⇒ 零候选；一次装配内同一 (来源,缺键) 只报一次 ⇒ 计数不增
+  // 再切空 ⇒ 零候选；单轮内只报一次 ⇒ 这一轮计数 +1（不是不增）
   setTables({});
   expect(has('CFLAG:', 7, '好感度')).toBe(false);
-  expect(countOf('erb-variables', 'variableSchema')).toBe(1);
+  expect(countOf('erb-variables', 'variableSchema')).toBe(5);
 }
 
 describe('SH-4 · 依赖表 / 提供者缺席 = 降级不静默（三态可复跑）', () => {
@@ -385,7 +404,7 @@ describe('SH-4 · 依赖表 / 提供者缺席 = 降级不静默（三态可复�
     threeStatesErb(registered[0]!.provider, (t) => (tables = t), degrades);
   });
 
-  it('erbFunctionNames 求值抛错 ⇒ 该路零候选 + 降级可见一次（抛错即视为缺）', () => {
+  it('erbFunctionNames 求值抛错 ⇒ 该路零候选 + 每轮各报一次降级（抛错即视为缺）', () => {
     const degrades: ErbCompletionDegrade[] = [];
     const { monaco, registered } = stubMonaco();
     installErbCompletion(
@@ -402,7 +421,7 @@ describe('SH-4 · 依赖表 / 提供者缺席 = 降级不静默（三态可复�
     expect(provide(provider, 'CALL M_KOJO', 11).some((i) => labelText(i.label) === 'M_KOJO_A')).toBe(false);
     expect(degrades.filter((d) => d.sourceId === 'erb-functions' && d.missing === 'erbFunctionNames')).toHaveLength(1);
     provide(provider, 'CALL M_KOJO', 11);
-    expect(degrades.filter((d) => d.sourceId === 'erb-functions' && d.missing === 'erbFunctionNames')).toHaveLength(1);
+    expect(degrades.filter((d) => d.sourceId === 'erb-functions' && d.missing === 'erbFunctionNames')).toHaveLength(2);
   });
 
   it('requires 声明在册：erb-variables→variableSchema、erb-functions→erbFunctionNames（additive 可选字段）', () => {
@@ -412,7 +431,5 @@ describe('SH-4 · 依赖表 / 提供者缺席 = 降级不静默（三态可复�
     expect(byId.get('erb-directives')).toBeUndefined();
     expect(byId.get('erb-labels')).toBeUndefined();
     expect(byId.get('erb-system-functions')).toBeUndefined();
-    // COMPL-SHARED：跨语言词形走注入位（缺源 = 该路零候选 + 一次可见降级，不抄语法扫描）
-    expect(byId.get('erb-kojo-forms')).toBe('kojoForms');
   });
 });

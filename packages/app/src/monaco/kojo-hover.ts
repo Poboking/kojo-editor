@@ -10,6 +10,7 @@ import type {
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
 import { erbBitHoverName } from './erb-completion-bits';
+import { BLANK_CLASS_STR } from './kojo-completion-position';
 import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from './kojo-hover-native';
 import { registerForKojoDialects } from './register-dialects';
 
@@ -85,8 +86,8 @@ const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
 
 /** 变量引用：`族名` + 至少一段 `:段`（段可含角色号 / 索引 / 作用域名） */
 const REF_RE = /^([A-Za-z][A-Za-z0-9_]*):(.+)$/;
-/** 指令编号的**上下文**：糖的 `时机 <分野> <编号>：` 块头，编号前是 `时机 <分野> ` */
-const TIMING_PREFIX_RE = /^\s*时机[ \t]+\S+[ \t]+$/;
+/** 指令编号的**上下文**：糖的 `时机 <分野> <编号>：` 块头，编号前是 `时机 <分野> `（空白类走单源，含全角空格） */
+const TIMING_PREFIX_RE = new RegExp(`^\\s*时机[${BLANK_CLASS_STR}]+\\S+[${BLANK_CLASS_STR}]+$`);
 
 /** 命中光标（含其左右邻接同类字符）的最长一段（`col0` = 0 基字符下标；无同类字符返回 null） */
 function spanAround(line: string, col0: number, isChar: (ch: string) => boolean): { start: number; end: number } | null {

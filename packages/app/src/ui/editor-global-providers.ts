@@ -6,8 +6,10 @@
  * 一份的模块级资源：适配器表 `editorTables`（悬停 ZH-F2 + 两条补全 seam + 签名 + Monarch 词表
  * 共用，**单一数据源**）与 Monarch directive 词表的实例引用计数。
  *
- * 三道门不许改：注册恰好一次（`globalsInstalled`）、kernel 来源随最新实例刷新、最后一个实例
- * 退场才整体拆毁（`disposeGlobalProviders`；调用它的先后顺序由 EditorPane 的卸载路径钉死）。
+ * 三道门不许改：注册恰好一次（`globalsInstalled`；半途抛错则**全有或全无**地撤回这一位，
+ * 拆掉已登记的每一枚并把错误外抛，绝不留"flag 已置但 provider 缺一整批"的永久静默）、
+ * kernel 来源随最新实例刷新、最后一个实例退场才整体拆毁（`disposeGlobalProviders`；调用它的
+ * 先后顺序由 EditorPane 的卸载路径钉死）。
  *
  * `applyTextEdits`（💡 行级改写落地的唯一通道）也定义在这里并由 EditorPane 的「一键修复」
  * import：一条腿一个定义，不另写第二套编辑应用机制（降序 + 夹取 + 单次 `executeEdits`）。
@@ -23,6 +25,7 @@ import type {
   ErbIndex,
   ErbParserService,
   ErbReference,
+  GameAdapter,
 } from '@kojo/plugin-api';
 import * as monaco from '../monaco/entry';
 import { makeLookup } from '@kojo/plugin-kojo-sugar';
@@ -111,32 +114,97 @@ function erbParserIndex(kernel: Kernel): ErbIndex | null {
  * （`kojoFaceTemplates`，`.kojo` 补全 seam 的 KC-2 前置）、基础库函数名表、指令名表。
  * 缺一即该路不产候选 / 不反查（**不猜**）。
  *
+ * **没开项目 ≠ 一张表都没有**：`variableSchema` / `kojoInstructionTable` / `kojoCallProtocol`
+ * 由 `loadProject` 现读 CSV / 路由表填充，无项目时它们确实不存在 ⇒ 一律不给（给了就是"假装可用"：
+ * 带 `requires` 的那几路会握着空表一声不吭）。而分野模板 / 基础库 / 计数器三张表是 adapter
+ * **构造时**就给出的纯数据静态表（零 IO，见 `staticTablesOf`），与项目无关 ⇒ 无项目时照旧给出，
+ * 让依赖它们的候选源照常开口（否则静态面那几路被一刀切静默）。多枚 adapter 的取舍见
+ * `staticTablesFor`。有项目但 `adapterId` 在槽位里找不到贡献时**同口径**（只给静态面）。
+ *
  * 另附 `erbFunctionNames`（**非** adapter 表）——项目内全部函数名（EC-3 函数名补全预置），
  * 由 `erb-parser` 的 `ErbIndex` 派生并按整项目指纹记忆化（见 `erb-function-names-for`）。
  */
-function editorTables(kernel: Kernel): CompletionTables & ErbCompletionTables & SignatureTables & HoverTables {
+export function editorTables(kernel: Kernel): EditorTables {
+  const contributions = kernel.slots.query('game.adapter');
   const project = kernel.project.current();
-  if (!project) return {};
-  for (const contribution of kernel.slots.query('game.adapter')) {
-    if (contribution.adapter.gameId !== project.adapterId) continue;
-    const adapter = contribution.adapter;
+  const matched = project ? contributions.find((c) => c.adapter.gameId === project.adapterId) : undefined;
+  if (matched) {
+    const adapter = matched.adapter;
     return {
       ...(adapter.variableSchema
         ? { dictionary: makeLookup(adapter.variableSchema), variableSchema: adapter.variableSchema }
         : {}),
-      ...(adapter.kojoFaceTemplates ? { faceTable: adapter.kojoFaceTemplates } : {}),
-      ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
+      ...staticTablesOf(adapter),
       ...(adapter.kojoInstructionTable ? { instructionTable: adapter.kojoInstructionTable } : {}),
-      // 计数器中文名 → 原生编号的反查（ZH-D3）：与补全/诊断同一枚 adapter，运行时现取
-      ...(adapter.kojoCounterTable ? { counterTable: adapter.kojoCounterTable } : {}),
       // B5 签名帮助要的槽语义表（同一枚 adapter 贡献，运行时现取；缺席 = 不产签名）
       ...(adapter.kojoCallProtocol ? { callProtocol: adapter.kojoCallProtocol } : {}),
-      erbFunctionNames: erbFunctionNamesFor(kernel),
-      // ERB 函数悬停通道：erb.parser 的当前索引**每次现取**（软取判据见 `erbParserIndex`）。
-      erbIndex: () => erbParserIndex(kernel),
+      ...projectSoftLegs(kernel),
     };
   }
-  return {};
+  // 两条落空的路径同一口径（没开项目 / 开了项目但槽位里没有同 `adapterId` 的贡献）：
+  // 只给静态面 + 两条软取腿，**绝不给** `loadProject` 才填得上的那三张表。
+  return { ...staticTablesFor(contributions), ...projectSoftLegs(kernel) };
+}
+
+/** `editorTables` 的返回形状（两个补全 seam + 签名 + 悬停四面并成一型） */
+type EditorTables = CompletionTables & ErbCompletionTables & SignatureTables & HoverTables;
+
+/**
+ * adapter 贡献上**静态、零 IO** 的表 → `editorTables` 的输出键。
+ * 这三枚在 adapter 构造时就是现成实例（手工维护的纯数据表），不读盘、不随项目开闭重建；
+ * 与 `variableSchema`（`loadProject` 读 CSV / `.ERH`）、`kojoInstructionTable`（读指令 CSV）、
+ * `kojoCallProtocol`（读路由表）**分属两面**，别混——只有这一支可以在无项目时给出。
+ */
+function staticTablesOf(
+  adapter: GameAdapter,
+): Pick<CompletionTables, 'faceTable' | 'libraryTable' | 'counterTable'> {
+  return {
+    ...(adapter.kojoFaceTemplates ? { faceTable: adapter.kojoFaceTemplates } : {}),
+    ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
+    // 计数器中文名 → 原生编号的反查（ZH-D3）：与补全/诊断同一枚 adapter，运行时现取
+    ...(adapter.kojoCounterTable ? { counterTable: adapter.kojoCounterTable } : {}),
+  };
+}
+
+/** 这枚 adapter 是否贡献了至少一张静态表（全空的贡献不值得被选中） */
+function hasStaticTables(adapter: GameAdapter): boolean {
+  const statics = staticTablesOf(adapter);
+  return statics.faceTable !== undefined || statics.libraryTable !== undefined || statics.counterTable !== undefined;
+}
+
+/**
+ * 无项目时选哪枚 adapter 的静态面：**注册序第一枚带静态表的贡献**
+ * （`slots.query` 已按 `order` 稳定排序 ⇒ 同一份注册表下结果确定、可复现）。
+ *
+ * 多枚 adapter 各有一张同名静态表时**不做跨 adapter 合并**：这些表对象自带查表语义
+ * （`names()` / 中文名反查 / 分野拼名），并两张表需要有人先定义"同名不同表谁赢、键冲突怎么合"——
+ * 宿主给不出这个定义，硬合就是一次语义猜测（游戏知识只住 adapter，宿主只读不解释）。
+ * 因此只认一枚、把这枚用满；真要同时服务多款游戏，正路是先开项目走上面 `adapterId` 精确匹配
+ * 那一支，需要的是**那一款的表**而不是并集。
+ */
+function staticTablesFor(
+  contributions: readonly { readonly adapter: GameAdapter }[],
+): Pick<CompletionTables, 'faceTable' | 'libraryTable' | 'counterTable'> {
+  const picked = contributions.find((c) => hasStaticTables(c.adapter));
+  return picked ? staticTablesOf(picked.adapter) : {};
+}
+
+/**
+ * 与项目开闭**无关**、但取数依赖项目态的两条软腿：函数名补全（`erb.parser` 索引派生）与
+ * 悬停用的当前索引通道。两者都在**求值时**软取（`services.tryGet` + try/catch），索引未建 ⇒
+ * 该路零候选 / 零结果（退化可见），绝不抛进 seam；每次现取，不缓存上一个项目的脏索引。
+ */
+function projectSoftLegs(kernel: Kernel): Pick<CompletionTables, 'erbFunctionNames'> & HoverTables {
+  return {
+    erbFunctionNames: erbFunctionNamesFor(kernel),
+    erbIndex: () => {
+      try {
+        return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
+      } catch {
+        return null;
+      }
+    },
+  };
 }
 
 /**
@@ -217,15 +285,23 @@ let lastWordsKey = '__unset__';
  * 注册一次；各 resolve 回调收到 `model` 后经 `owningPaneOf` 反查归属实例再读它的
  * ref——单实例时与旧版（闭包直读自身 ref）逐字等价，多实例时按"model 在哪组编辑器
  * 上活动"分派。最后一个实例退场时整体拆毁（`disposeGlobalProviders`）。
+ *
+ * **全有或全无**（缺陷 2）：注册序列里每一枚成功建立**立即**进入 `globalDisposers`
+ * （`globalDisposers.push(...)` 逐枚写在注册点上，不是收尾一次性并入）；任一枚注册抛错时
+ * 把**已登记的**逐枚拆掉、清空登记表、复位 `globalsInstalled` 后**重新抛出**。半途失败绝不
+ * 留 `globalsInstalled = true`——否则每次 EditorPane 挂载都被开头那道门挡住、永不重试，
+ * 补全 / 💡 / 悬停 / 改名整批 provider 就此静默永久缺失（铁律 4：内核不静默，宿主同样不静默）。
  */
 export function ensureGlobalProviders(): void {
   if (globalsInstalled) return;
+  // 置位只为挡住同一批挂载里的重入；抛错路径由下面 catch 撤回（见模块内"全有或全无"注）。
   globalsInstalled = true;
+  try {
     // 💡 CodeAction 宿主适配（槽 `ui.editor.codeAction`，P3b）：宿主只做 Monaco 协议
     // 转换（registerCodeActionProvider），动作产出全在插件（纯函数 provideActions）；
     // 执行经 registerCommand 落地，command 参数用 id 反查 pendingActionsRef（参数须可
     // 序列化，且避免闭包捕获过时文本）。
-    const cmdDisposer = monaco.editor.registerCommand(CODE_ACTION_COMMAND, (_accessor, actionId: string) => {
+    globalDisposers.push(monaco.editor.registerCommand(CODE_ACTION_COMMAND, (_accessor, actionId: string) => {
       const sep = actionId.indexOf(':');
       // 动作 id 首段 = 归属实例（provideCodeActions 生成时打上的前缀）：反查活实例档案
       const ctx = sep > 0 ? livePanes.get(actionId.slice(0, sep)) : undefined;
@@ -245,8 +321,8 @@ export function ensureGlobalProviders(): void {
         activeFile: ctx?.filePathRef.current,
         ...(line !== undefined ? { line } : {}),
       });
-    });
-    const providerDisposer = monaco.languages.registerCodeActionProvider(
+    }));
+    globalDisposers.push(monaco.languages.registerCodeActionProvider(
       [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID],
       {
         provideCodeActions: (model, range, context) => {
@@ -289,10 +365,10 @@ export function ensureGlobalProviders(): void {
       // B9：类别声明走 metadata（Monaco 用它决定 `Ctrl+.` 这条 only=quickfix 的
       // 显式请求要不要调用本 provider，并写进 `supportedCodeActions` 上下文键）
       { providedCodeActionKinds: PROVIDED_CODE_ACTION_KINDS },
-    );
+    ));
     // 悬停中文名（ZH-F2）：只读显示，光标下的原生记号 → 中文名。表按当前项目 adapterId
     // **运行时**现取（`editorTables`），查不到即不显示（**不猜**）。与 CodeAction 同款隔离。
-    const hoverDisposer = installHover(monaco, () => editorTables(requireKernel()));
+    globalDisposers.push(installHover(monaco, () => editorTables(requireKernel())));
     // 转到定义（2026-10-15 语言服务批）：宿主只做 Monaco 协议翻译——光标位置进、目标位置出；
     // "那个名字是什么、定义在哪"全在 `ui.editor.languageService` 槽（ERB 由解析器答、
     // `.kojo` 由糖线答）。跨文件跳转不新造机制：发 `editor.revealLocation`（宿主既有通道，
@@ -321,7 +397,7 @@ export function ensureGlobalProviders(): void {
         lineCount: model.getLineCount(),
       });
     };
-    const definitionDisposer = installDefinitionProvider(monaco, {
+    globalDisposers.push(installDefinitionProvider(monaco, {
       resolve: resolveDefinitionTargets,
       navigate: (location) => {
         // W9 判据①：载荷一律由 `revealLocationOf` 构造（六条腿同一个出口，列与区间同源）
@@ -341,12 +417,12 @@ export function ensureGlobalProviders(): void {
       //   `editor.revealLocation` 通道——不新造第二套导航机制。
       openModelFor: openModelAcrossGroups,
       pathForUri: pathForUriAcrossGroups,
-    });
+    }));
     // 文档大纲（B3）：同一枚 `ui.editor.languageService` 槽的第二个判别成员。宿主照旧只做
     // 协议翻译——"这篇文档有哪些层"全在插件（ERB 给函数与声明、`.kojo` 给时机/段/分支）。
     // 这份树同时是**粘性滚动**的贴顶来源（吸顶显示"当前在哪个函数 / 哪个时机块里"），
     // 所以它必须在糖视图之外只认真 model：糖 model 的行号属于派生物，贴出来是错的层次。
-    const symbolsDisposer = installDocumentSymbolProvider(monaco, {
+    globalDisposers.push(installDocumentSymbolProvider(monaco, {
       resolve: (model) => {
         const path = owningPanePathOf(model);
         if (path === null) return [];
@@ -358,7 +434,7 @@ export function ensureGlobalProviders(): void {
           lineCount: model.getLineCount(),
         });
       },
-    });
+    }));
     // 签名帮助（B5 形参槽语义 + R5 跨行 / ERB 形参签名）：唯一真源两层——
     // ① adapter 的调用协议表（槽语义）；② 协议不认识时的 ERB 用户函数形参（解析器索引
     // `erb.parser`，按归一化名查定义取 `params` 原文）。两层都运行时现取（表随项目开闭
@@ -366,7 +442,7 @@ export function ensureGlobalProviders(): void {
     // 跨行：`resolveSignatureInText` 从光标行向上收未闭合括号（窗口封顶），最内层括号
     // 语义与单行同源。糖视图挂的是只读派生 model，它的行列不属于原文 ⇒ 与 codeAction /
     // 转到定义同判据一律不应答。
-    const signatureDisposer = installSignatureHelp(monaco, {
+    globalDisposers.push(installSignatureHelp(monaco, {
       resolve: (model, position) => {
         const path = owningPanePathOf(model);
         if (path === null) return null;
@@ -386,11 +462,11 @@ export function ensureGlobalProviders(): void {
           }
         });
       },
-    });
+    }));
     // 折叠范围（D3）：同一枚 `ui.editor.languageService` 槽的第三个判别成员。ERB 原文不缩进，
     // Monaco 的缩进折叠在其上几乎无效——注册供给器后 `foldingStrategy: auto` 自动改走这里。
     // 应答判据与大纲逐字同款：糖 model 的行号属于派生物，折叠它会把作者折进不存在的位置。
-    const foldingDisposer = installFoldingRangeProvider(monaco, {
+    globalDisposers.push(installFoldingRangeProvider(monaco, {
       resolve: (model) => {
         const path = owningPanePathOf(model);
         if (path === null) return [];
@@ -402,7 +478,7 @@ export function ensureGlobalProviders(): void {
           lineCount: model.getLineCount(),
         });
       },
-    });
+    }));
 
     // 结构化着色（B6，作者面叫「名字按用途着色」）：同一枚 `ui.editor.languageService` 槽的
     // 第六个判别成员。宿主照旧只做协议翻译——"这个名字在这里是定义、形参槽还是引用"
@@ -410,7 +486,7 @@ export function ensureGlobalProviders(): void {
     // 应答判据与大纲/折叠逐字同款：糖 model 的行号属派生物，着色它就是把颜色画到
     // 一份不存在的文本上。开关**不在这里判**：Monaco 的 `editor.semanticHighlighting.enabled`
     // 关着时根本不会问 provider（见 `semantic-color-pref.ts`），这里只留大文件那一道降级闸。
-    const semanticDisposer = installSemanticTokensProvider(monaco, {
+    globalDisposers.push(installSemanticTokensProvider(monaco, {
       resolve: (model) => {
         // 着色是**纯显示**职责：跟着"此刻屏幕上那份 model"走，派生糖视图同样要上色。
         // 故这里**不能**用 `owningPaneOf`——它把糖 model 判 null 是为拦 definition/rename/hover
@@ -440,7 +516,7 @@ export function ensureGlobalProviders(): void {
           lineCount,
         });
       },
-    });
+    }));
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *
      * **按下才取**，不挂常驻监听：这条键一秒可能被按一次，而面包屑一次按键要算一次，
@@ -474,13 +550,13 @@ export function ensureGlobalProviders(): void {
       return { path, line, symbols, derivedView: false };
     });
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
-    const completionDisposer = installKojoCompletion(monaco, () => editorTables(requireKernel()));
+    globalDisposers.push(installKojoCompletion(monaco, () => editorTables(requireKernel())));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
-    const erbCompletionDisposer = installErbCompletion(monaco, () => editorTables(requireKernel()));
+    globalDisposers.push(installErbCompletion(monaco, () => editorTables(requireKernel())));
     // ERB 函数重命名（F2，2026-10-16）：判定与编辑收集全在解析器索引（`erb.parser`），
     // 宿主只注入 monaco 拿不到的东西——活动标签判据（同 codeAction 逐字同款）、写权限
     // （`requireKernel().io.isWritable`，与保存同源口径）、已开标签表、未打开文件的 io 落盘通道。
-    // 「查找引用」的 ERB 数据源由下方 `referenceSearchDisposer`（languageService 槽）承担；
+    // 「查找引用」的 ERB 数据源由下方那条 reference 注册（languageService 槽）承担；
     // 这组 helpers 只喂重命名（ErbReferenceHandlers = 重命名 handlers）。
     const canAnswerErb = (model: Monaco.editor.ITextModel): boolean => {
       const ctx = owningPaneOf(model);
@@ -512,7 +588,7 @@ export function ensureGlobalProviders(): void {
       readText: (path) => requireKernel().io.readText(path),
       writeText: (path, text) => requireKernel().io.writeText(path, text),
     };
-    const erbRenameDisposer = installErbRename(monaco, {
+    globalDisposers.push(installErbRename(monaco, {
       canAnswer: canAnswerErb,
       currentIndex: currentIndexErb,
       referencesTo: referencesToErb,
@@ -526,7 +602,7 @@ export function ensureGlobalProviders(): void {
         const kernel = requireKernel();
         return kojoReferencesViaSlot(kernel.slots.query('ui.editor.languageService'), kernel, probe);
       },
-    });
+    }));
     // 查找所有引用（R2，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别
     // 成员。宿主只做协议翻译——认活动标签的真 model（与转到定义逐字同判据）、问槽、
     // 把"未打开文件"那条腿的点击落回 `editor.revealLocation`（与转到定义同通道）。
@@ -534,7 +610,7 @@ export function ensureGlobalProviders(): void {
     // 引用腿的"读数是谁家的"随 `resolve` 记录（Monaco 的 provideReferences 同步问一次、
     // 同步出一读数 ⇒ 这一变量就是那一次请求的路径，不另开第二条通道）
     let tallySourcePath = '';
-    const referenceSearchDisposer = installReferenceProvider(monaco, {
+    globalDisposers.push(installReferenceProvider(monaco, {
       resolve: (model, position) => {
         const path = owningPanePathOf(model);
         if (path === null) return [];
@@ -565,14 +641,14 @@ export function ensureGlobalProviders(): void {
       onTally: (tally, explanation) => {
         setReferenceTally({ tally, explanation, path: tallySourcePath });
       },
-    });
+    }));
     // 跳到实现（R3 残项，2026-10-16；W9 收口）：数据源与转到定义**同一个 `kind: 'definition'`
     // 的取数腿**（上方 `resolveDefinitionTargets`，只问 `ui.editor.languageService` 槽）。
     // 引擎系统函数不在任何供方的索引里 ⇒ 给不出定义位 = 不应答 = 真话"没有实现"。
     // 三条腿（同 model 就地跳 / 已开标签 Peek / 未开文件事件通道）整个复用
     // `planDefinitionJump` / `toDefinitionLinks` / `clampRevealPosition`——宿主一行取数都不做，
     // `canAnswer` / `currentIndex` 随旧的 byName 直读一起删（那是第二份计算）。
-    const implementationDisposer = installImplementationProvider(monaco, {
+    globalDisposers.push(installImplementationProvider(monaco, {
       resolve: resolveDefinitionTargets,
       navigate: (location) => {
         // W9 判据①：与转到定义同一个载荷出口
@@ -586,11 +662,11 @@ export function ensureGlobalProviders(): void {
       },
       openModelFor: openModelAcrossGroups,
       pathForUri: pathForUriAcrossGroups,
-    });
+    }));
     // `.kojo` 用户函数改名（R1，2026-10-16）：同一枚槽的第八个判别成员。ERB 方言不归它
-    // 管（全项目改名走上面 `erbRenameDisposer` 的专用通道）；`.kojo` 的判定（可证明引用面
+    // 管（全项目改名走上面那条 ERB 改名注册的专用通道）；`.kojo` 的判定（可证明引用面
     // + 整卷复核）全在糖线，宿主只做 Monaco 协议翻译与落地前的现文本验证（模块头注）。
-    const kojoRenameDisposer = installKojoRename(monaco, {
+    globalDisposers.push(installKojoRename(monaco, {
       canAnswer: (model) => {
         const ctx = owningPaneOf(model);
         return !!ctx && !!ctx.filePathRef.current;
@@ -626,7 +702,7 @@ export function ensureGlobalProviders(): void {
         }
         return { edits: [], rejectReason: '「.kojo」改名只认本文件「函数」块声明的名字（语言服务未应答这处请求）' };
       },
-    });
+    }));
     // 文档格式化（E1，`Shift+Alt+F`）：规则全在插件（`computeFormatEdits` 纯函数），宿主只做
     // 协议翻译。应答判据与 codeAction / 转到定义逐字同款：只认**当前活动标签的真 model**——
     // 糖视图挂着只读派生 model，格式化它改的不是真文件，所以一律不应答。
@@ -638,9 +714,9 @@ export function ensureGlobalProviders(): void {
         return dialect === null ? null : { text: model.getValue(), dialect };
       },
     };
-    const formatterDisposer = installDocumentFormatter(monaco, formatResolve);
+    globalDisposers.push(installDocumentFormatter(monaco, formatResolve));
     // 选区格式化 + 打字规范化（T13）：同一份 resolve、同一份规则核心，只多一层行裁剪（ERB 语言）
-    const rangeFormatterDisposer = installRangeFormatter(monaco, formatResolve);
+    globalDisposers.push(installRangeFormatter(monaco, formatResolve));
     // 行上内联注解（B8，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第五个判别成员。
     // 宿主在这里做的事只有四件：认活动标签的**真** model、把体量/预算两档降级判掉、问槽、
     // 把点击落到**既有**的 `editor.revealLocation` 通道（不新造第二套跳转，与转到定义同腿）。
@@ -649,7 +725,7 @@ export function ensureGlobalProviders(): void {
     //
     // **开关不在这儿**：那是 Monaco 的 `codeLens` 编辑器选项，由下面那条独立的偏好 effect
     // 落地（关掉时 Monaco 根本不发请求，省掉一次整篇解析）。
-    const codeLensDisposer = installCodeLensProvider(monaco, {
+    globalDisposers.push(installCodeLensProvider(monaco, {
       resolve: (model) => {
         const path = owningPanePathOf(model);
         if (path === null) return [];
@@ -676,14 +752,14 @@ export function ensureGlobalProviders(): void {
           ),
         );
       },
-    });
+    }));
     // 行内提示（LS-R6，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别成员。
     // 应答判据与 codeLens 逐字同款：只认活动标签的真 model（糖视图挂的是只读派生 model，
     // 它的行列不属于原文），体量档 `inlayHintsAffordable` 判在请求之前（52,602 行实测
     // 50ms/次，档线与 stickyScroll / 面包屑 / codeLens 同一条）。提示说什么（实参落
     // 哪个形参槽）全在 erb-parser（`erb-inlay-hints`），宿主零判据——取舍见
     // `monaco/kojo-inlay-hints.ts` 与 `plugins/erb-parser/src/inlay-hints.ts` 头注。
-    const inlayHintsDisposer = installInlayHintsProvider(monaco, {
+    globalDisposers.push(installInlayHintsProvider(monaco, {
       resolve: (model) => {
         const path = owningPanePathOf(model);
         if (path === null) return [];
@@ -697,35 +773,44 @@ export function ensureGlobalProviders(): void {
           lineCount,
         });
       },
-    });
+    }));
+  } catch (e: unknown) {
+    // 全有或全无：拆掉**已登记的**每一枚（未登记 = 根本没建起来）、清空登记表、复位 flag，
+    // 让下一个实例挂载时重新注册；错误照旧外抛，不在宿主这里吞掉（AGENTS.md 铁律 4）。
+    teardownGlobalProviders('注册半途失败');
+    throw e;
+  }
+}
 
-  globalDisposers.push(
-    cmdDisposer,
-    providerDisposer,
-    hoverDisposer,
-    definitionDisposer,
-    symbolsDisposer,
-    signatureDisposer,
-    foldingDisposer,
-    semanticDisposer,
-    completionDisposer,
-    erbCompletionDisposer,
-    erbRenameDisposer,
-    referenceSearchDisposer,
-    implementationDisposer,
-    kojoRenameDisposer,
-    formatterDisposer,
-    rangeFormatterDisposer,
-    codeLensDisposer,
-    inlayHintsDisposer,
-  );
+/**
+ * 拆毁全局注册表：**逐枚** `try/catch`（缺陷 3）——一枚 `dispose()` 抛错不许带走其余的，
+ * 且清空登记表与复位 `globalsInstalled` **无条件**执行（`finally` 语义）。
+ * 少了这道闸，一次抛错就会留下"半套旧注册 + flag 已置位"：下次挂载直接 return，
+ * provider 表里从此是残缺的一套，而且再也补不回来。
+ *
+ * 两种调用场景同一条纪律：最后一个实例退场（`disposeGlobalProviders`）与
+ * 注册半途失败的回滚（`ensureGlobalProviders` 的 catch）。`reason` 只进日志，不参与判定。
+ */
+function teardownGlobalProviders(reason: string): void {
+  try {
+    for (const d of globalDisposers) {
+      try {
+        d.dispose();
+      } catch (e: unknown) {
+        console.warn(
+          `[editor-providers] ${reason}：一枚 disposable dispose 抛错（其余照常拆）：${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  } finally {
+    globalDisposers.length = 0;
+    globalsInstalled = false;
+    lastWordsKey = '__unset__';
+  }
 }
 
 export function disposeGlobalProviders(): void {
-  for (const d of globalDisposers) d.dispose();
-  globalDisposers.length = 0;
-  globalsInstalled = false;
-  lastWordsKey = '__unset__';
+  teardownGlobalProviders('最后一个实例退场');
 }
 
 /**

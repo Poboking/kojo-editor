@@ -140,7 +140,7 @@ describe('D7 · 位补全 · 无表（fail-closed）', () => {
     expect(erbBitHoverName('SETBIT CFLAG:1, 0', 16, undefined)).toBeUndefined();
   });
 
-  it('provider：tables 空 ⇒ 该路零候选 + `erb-bits` 降级信号**恰一次**（连调不重复）', () => {
+  it('provider：tables 空 ⇒ 该路零候选 + `erb-bits` 降级信号每轮恰一次', () => {
     const degrades: ErbCompletionDegrade[] = [];
     let tables: ErbCompletionTables = {};
     const { monaco, registered } = stubMonaco();
@@ -152,7 +152,7 @@ describe('D7 · 位补全 · 无表（fail-closed）', () => {
     expect(bitDegrades()).toBe(1);
     provide(provider, 'SETBIT CFLAG:1, ', 17);
     provide(provider, 'GETBIT(CFLAG:1, )', 17);
-    expect(bitDegrades()).toBe(1); // 一次装配内同一 (来源, 缺键) 只报一次
+    expect(bitDegrades()).toBe(3); // 单轮内同一 (来源, 缺键) 只报一次；跨轮每轮各报一次
 
     // 去重表随装配句柄创建（非模块级全局）：重新 install 一遍仍报一次（不吞信号、不泄漏）
     const degrades2: ErbCompletionDegrade[] = [];

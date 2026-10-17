@@ -150,8 +150,6 @@ const KOJO_TABLES: CompletionTables = {
 const ERB_TABLES: ErbCompletionTables = {
   variableSchema: fakeSchema(),
   erbFunctionNames: () => PROJECT_FNS,
-  // COMPL-SHARED：跨语言词形是注入位（宿主未接 ⇒ 生产里该行零候选 + 一次降级；本文件要验出货面）
-  kojoForms: () => [{ label: '如果', detail: '.kojo 词形' }],
 };
 
 /* ============================== 上下文构造（把桩喂给 seam 的 provide） ============================== */
@@ -227,8 +225,6 @@ const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]
   ['erb-labels', erbCtx('@F\n$TARGET_ONE\n\tGOTO $TA', 10, 3)], // 跳转位
   ['erb-system-functions', erbCtx('IF A', 5)], // 表达式位
   ['erb-bits', erbCtx('SETBIT CFLAG:1, ', 17)], // 位槽（位号 + 中文位名）
-  // COMPL-SHARED：跨语言词形（`.erb` 里补 `.kojo` 写法；词形只从注入位取）
-  ['erb-kojo-forms', erbCtx('IF A', 5)],
 ];
 
 interface Collected {

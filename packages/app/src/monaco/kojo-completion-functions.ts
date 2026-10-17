@@ -1,7 +1,10 @@
 import type * as Monaco from './entry';
-import { SUGAR_LEXICON_WORDS } from '@kojo/plugin-kojo-sugar';
 import { projectFunctionCandidates, type CompletionNameSlot } from './completion-core';
-import { insideStringOrComment, nameFieldAfter } from './kojo-completion-position';
+import {
+  insideStringOrComment,
+  kojoKeywordAnchor,
+  nameSlotAfterAnchor,
+} from './kojo-completion-position';
 
 /**
  * COMPL-SHARED · `.kojo` 的**项目函数名**候选（跨语言候选打通的那一半）。
@@ -29,42 +32,22 @@ import { insideStringOrComment, nameFieldAfter } from './kojo-completion-positio
  * （`erb-completion.ts` 的 `ERB_CALL_FORM` 也刻意不含函数名一路）。
  */
 
-/** 关键字 id（契约侧 `KeywordId` 的字面量；本模块只用它筛词形，不认识任何词） */
-const CALL_WORD_IDS: readonly string[] = ['inline.call'];
-const DEFINE_WORD_IDS: readonly string[] = ['block.function'];
+/** 关键字 id（`block.*` / `inline.*`）：调用名槽与定义名槽共用**一条**锚（行首互斥，不会同时命中） */
+const FUNCTION_SLOT_IDS = ['inline.call', 'block.function'] as const;
 
-/** 词形转正则片段（转义正则元字符——词形是作者字节，不受我们管） */
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/** 由关键字 id 派生"行首关键字 + 至少一个空白"的前缀式（长词在前，避免短词先截） */
-function leadingKeywordPattern(ids: readonly string[]): RegExp {
-  const words = SUGAR_LEXICON_WORDS.filter((w) => ids.includes(w.id))
-    .map((w) => w.word)
-    .sort((a, b) => b.length - a.length);
-  // 无匹配词形 = 词表被改空 ⇒ 该路永不出货（不猜任何默认词）
-  if (words.length === 0) return /(?!)/;
-  return new RegExp(`^[ \\t　]*(?:${words.map(escapeRegExp).join('|')})[ \\t　]+`, 'i');
-}
-
-const CALL_PREFIX = leadingKeywordPattern(CALL_WORD_IDS);
-const DEFINE_PREFIX = leadingKeywordPattern(DEFINE_WORD_IDS);
+/**
+ * 「行首 `调用` / `函数` + 空白」锚（装配口径在 `kojo-completion-position`，词形取自
+ * `kojo-sugar` 词表——本文件不手抄任何词形，也不自拼正则）。
+ */
+const FUNCTION_ANCHOR: RegExp = kojoKeywordAnchor(FUNCTION_SLOT_IDS);
 
 /**
  * 光标处的**项目函数名槽**（`调用` / `函数` 之后；纯函数，可单测）。
- * 位置不符 ⇒ `null`（不猜）。
+ * 位置不符 ⇒ `null`（不猜）。字符串内 / 注释内同样 `null`（与 `.kojo` 其余源同一判据）。
  */
 export function kojoFunctionNameSlot(line: string, column: number): CompletionNameSlot | null {
-  if (!Number.isFinite(column) || column < 1) return null;
-  const col0 = Math.min(column - 1, line.length);
-  if (insideStringOrComment(line, col0)) return null;
-  const call = CALL_PREFIX.exec(line);
-  const define = DEFINE_PREFIX.exec(line);
-  // 两条槽位互斥：`函数` 与 `调用` 不会同行首同时命中；取先命中的那条的界
-  const bound = call !== null ? call[0].length : define !== null ? define[0].length : -1;
-  if (bound < 0) return null;
-  const field = nameFieldAfter(line, col0, bound);
+  if (insideStringOrComment(line, Math.min(Math.max(column - 1, 0), line.length))) return null;
+  const field = nameSlotAfterAnchor(line, column, FUNCTION_ANCHOR);
   return field === null ? null : { start: field.start, end: field.end, prefix: field.prefix };
 }
 

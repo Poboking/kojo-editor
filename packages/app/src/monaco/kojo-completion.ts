@@ -9,6 +9,7 @@ import {
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
 import { variableCompletionItems } from './kojo-completion-variables';
 import { faceCompletionItems } from './kojo-completion-faces';
+import { isCjk } from './kojo-completion-position';
 import { kojoIndexCompletionItems } from './kojo-completion-instructions';
 import { libraryCompletionItems } from './kojo-completion-library';
 import { kojoFunctionCompletionItems } from './kojo-completion-functions';
@@ -38,7 +39,6 @@ import {
   type CompletionDeclaration,
   type CompletionDeclarationKind,
   type CompletionDeclarationScanner,
-  type CompletionForeignForm,
   type CompletionProvenance,
   type CompletionProvenanceStore,
   type CompletionResolution,
@@ -70,6 +70,8 @@ import {
  * 二段式供给：provide 只给 label / kind / 一行 detail；**中文名·说明·取值域·调用签名**等到
  * `resolveCompletionItem` 才回表算（对象身份 → 出处走装配核的 `WeakMap` 反查）；**调用形态**候选
  * 按 `callProtocol` 的形参槽插成带 tabstop 的 snippet（取不到槽 ⇒ 纯文本照旧）。
+ * 词表那一路的系统函数**不在**调用形态名单内——它的参数槽模板由词表自带（见
+ * {@link CALL_FORM_SOURCE_IDS} 的头注），匹配面一律钉在 `filterText` = 中文主形原文上。
  */
 
 /* ============================== 契约面（与 `.erb` 同一张表 / 同一批类型；旧名零改动） ============================== */
@@ -81,7 +83,6 @@ export type {
   CompletionDeclaration,
   CompletionDeclarationKind,
   CompletionDeclarationScanner,
-  CompletionForeignForm,
   CompletionProvenance,
   CompletionProvenanceStore,
   CompletionResolution,
@@ -108,8 +109,17 @@ function calleeKeys(label: string, tables: CompletionTables): readonly (string |
 /**
  * 哪些 source 的候选是**调用形态**（`insertText` 恰为 `名字(`）⇒ 才允许改写成 snippet。
  * 变量 / 指令名 / 关键字 / 命名参数 / 项目函数名一律排除（它们插的不是括号调用形）。
+ *
+ * **`kojo-lexicon` 不在此列**（1017 批定的口径，两条判据同时成立）：
+ * 1. 形态不符——词表的系统函数候选**自带** `名($1)$0` 模板（见 {@link STATIC_SUGGESTION_SPECS}），
+ *    `insertText` 从不等于 `名字(` ⇒ 装配核的准入条件（`completion-core.ts` 的
+ *    `insertText === provenance.label + '('`）对它**恒不成立**，留在名单里只是一条死分支；
+ * 2. 协议不认——`callProtocol` 登记的是**口上函数族**的转发槽（路由模板派生），引擎系统函数
+ *    （`GETBIT` / `MAX` / `RAND` …）从来不在它的覆盖面内 ⇒ 即便把形态改成 `名字(`，取槽仍落空，
+ *    只会退化成"半个左括号挂在那儿"（比自带模板更差）。
+ * 故词表那一路的参数槽由**自带模板**给出，协议表只服务库函数名（`kojo-library`）。
  */
-const CALL_FORM_SOURCE_IDS: ReadonlySet<string> = new Set(['kojo-lexicon', 'kojo-library']);
+const CALL_FORM_SOURCE_IDS: ReadonlySet<string> = new Set(['kojo-library']);
 
 /** 词表候选的详情：只有**系统函数**有可回表的事实（原生名 + 签名）；关键字 / 代词 / 运算符不编话术 */
 function lexiconDetail(label: string, tables: CompletionTables): CompletionResolution | undefined {
@@ -118,7 +128,7 @@ function lexiconDetail(label: string, tables: CompletionTables): CompletionResol
   const facts = [
     `原生名 \`${native}\``,
     signatureLine(label, [native, label], tables.callProtocol, KOJO_LOG_TAG),
-    '插入形态为调用形：`名字(`',
+    '插入形态为调用片段：`名字($1)$0`（参数槽由词表自带，调用协议表不覆盖系统函数）',
   ].filter((s): s is string => s !== undefined);
   return { documentation: { value: [`**${label}** · 系统函数`, ...facts].join('\n\n') } };
 }
@@ -190,6 +200,10 @@ export function kojoSlotsForCallee(
  *
  * 判据**不在此处**：一律经 `kojo-completion-declarations` 走解析器（`sugar.transpile` 的 `parse`），
  * 本函数只把"声明类别"翻成上屏措辞；按 model 版本的记忆化也在那一侧。
+ *
+ * `filterText` = **声明名原文**（真实 Monaco 的过滤键是 `filterText ?? label`，见
+ * {@link STATIC_SUGGESTION_SPECS} 头注的同一口径）：显式写出来，匹配面就钉死在原文上，
+ * 不靠 label 兜底（label 一旦加装饰，隐式键会跟着变，候选会静默消失）。
  */
 function declarationItems(ctx: CompletionSourceContext): Monaco.languages.CompletionItem[] {
   const K = ctx.monaco.languages.CompletionItemKind;
@@ -199,6 +213,7 @@ function declarationItems(ctx: CompletionSourceContext): Monaco.languages.Comple
       label: decl.name,
       kind: K.Variable,
       insertText: decl.name,
+      filterText: decl.name,
       detail: decl.kind === 'alias' ? '别名（本文件）' : '常量（本文件）',
       range: ctx.range,
       sortText: `1_${decl.name}`,
@@ -217,6 +232,26 @@ function declarationItems(ctx: CompletionSourceContext): Monaco.languages.Comple
  * （单一真源；进程内不变）⇒ 在这里一次性展开。`provide` 每次只做"补本次 `range`
  * 与 Monaco kind 常量"这一件变量工作，不再每调从四个数组重新推导、展开对象。
  * 英文隐藏别名**不进**补全列表（规范 §4.1 中英不对等展示）。
+ *
+ * ## `filterText` 口径 = 中文主形原文（与 `kojo-completion-library` / `-faces` / `-instructions` 同一条）
+ *
+ * 真实 Monaco 的过滤键是 `filterText ?? label`（`contrib/suggest/browser/completionModel.js`：
+ * 无匹配即 `continue` 丢弃候选）。中文 label 不写 `filterText` 时靠 label 兜底**结果相同**，
+ * 但那一处依赖是隐式的——这里显式声明，把"参与匹配的原文"钉成一个字段：
+ * ①`label` 若日后带上装饰（`{label, description}`），匹配键不会跟着漂移；
+ * ②与其余四路 source 的写法对齐，全仓只剩一种口径。
+ *
+ * **为什么不把英文别名塞进 `filterText` 做"中英双面匹配"**（三条实测判据，取舍记在此）：
+ * 1. 会**改写作者已经输入的英文**：替换区间是当前词（`kojoCompletionRange`），输入 `if` 时
+ *    面板若能命中 `如果`，回车就把作者写的 `if` 换成 `如果`——规范要的是"英文**输入即生效**"，
+ *    不是"输入英文被逼成中文"；今天命不中 ⇒ 作者继续写 `if`，转译器照收，这才是规范语义。
+ * 2. `filterText !== label` 时 Monaco 不再用匹配位次上色（改跑 `anyScore` 兜 label），
+ *    ASCII 词对中文 label 拿不到高亮 ⇒ 面板里出现**看不出为什么命中**的中文条目；
+ *    单敲一个字母还会经 fuzzy 命中一大片隐藏别名（`a` 命中 `heart` / `and` / …），噪音盖过收益。
+ * 3. **拼音根本进不了 `filterText`**：词表没有拼音字段，而 standalone Monaco 的 `fuzzyScore`
+ *    不挂拼音词典（`filters.js` 的 wordHelper 只有 VS Code 工作区注入）⇒ `ruguo` 这种输入
+ *    无论 `filterText` 写什么都不会命中中文。要让拼音可搜得引入词典或 `label.detail` 承载，
+ *    两者都撞 §4.1（中英/中英拼音对等展示）与"上屏只显示中文"，属规范议题，不在本次缺陷内。
  */
 type StaticSuggestionKind = 'pronoun' | 'keyword' | 'operator' | 'function';
 
@@ -241,9 +276,14 @@ const STATIC_SUGGESTION_SPECS: readonly StaticSuggestionSpec[] = [
       sortText: `3_${w.role}_${w.word}`,
     }),
   ),
-  ...[...SUGAR_LEXICON_OPERATORS, ...NOTIN_MARKS].map(
-    (op): StaticSuggestionSpec => ({ label: op, kind: 'operator', insertText: op, detail: '运算符', sortText: `4_${op}` }),
-  ),
+  ...[...SUGAR_LEXICON_OPERATORS, ...NOTIN_MARKS]
+    // 运算符组里混着 `不在` 的**英文隐藏别名** `notin`（`NOTIN_MARKS` = 词表 notin 两形）⇒
+    // 与 face / instruction / library 三源同一口径：**只收中文主形**（规范 §2 原则 2 / §4.1
+    // 「面板只显示中文、不许中英对等展示」）。英文形照旧**输入即生效**，只是不进面板。
+    .filter((op) => isCjk(op))
+    .map(
+      (op): StaticSuggestionSpec => ({ label: op, kind: 'operator', insertText: op, detail: '运算符', sortText: `4_${op}` }),
+    ),
   ...SYSTEM_FUNCTION_WORDS.map(
     (name): StaticSuggestionSpec => ({
       // snippet 调用模板（R4）：插入后光标落在括号内（`名($1)$0`）。词表没有形参数据
@@ -269,7 +309,7 @@ const LEXICON_SOURCE: CompletionSource = {
     const K = ctx.monaco.languages.CompletionItemKind;
     const suggestions: Monaco.languages.CompletionItem[] = declarationItems(ctx);
 
-    // 静态词表（模块级一次构建；此处只补 `range` 与 Monaco kind 常量）。
+    // 静态词表（模块级一次构建；此处只补 `range`、Monaco kind 常量与 `filterText`）。
     // function 组是 snippet 调用模板（R4）：补 `insertTextRules` 让 Monaco 按 snippet 解析。
     // 常量对象防御性读取（测试桩 / 旧运行时可能不挂 `CompletionItemInsertTextRule`）。
     const insertAsSnippet = ctx.monaco.languages.CompletionItemInsertTextRule?.InsertAsSnippet;
@@ -278,6 +318,9 @@ const LEXICON_SOURCE: CompletionSource = {
         label: s.label,
         kind: s.kind === 'operator' ? K.Operator : s.kind === 'function' ? K.Function : K.Keyword,
         insertText: s.insertText,
+        // 过滤键 = **中文主形原文**（口径与理由见 {@link STATIC_SUGGESTION_SPECS} 头注：
+        // 显式钉住匹配面，英文隐藏别名不进匹配面也不进面板）
+        filterText: s.label,
         detail: s.detail,
         range: ctx.range,
         sortText: s.sortText,

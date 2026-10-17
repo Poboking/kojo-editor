@@ -18,6 +18,7 @@ import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
 import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
 import { dialectForLanguage, toTextEdits } from '../monaco/kojo-format';
+import { installSuggestContextTrigger } from '../monaco/suggest-context-trigger';
 import { applyFormatOnSave } from './format-on-save';
 import { classifySaveRace } from './save-race';
 import { selectionStatusText } from './selection-status';
@@ -1432,6 +1433,13 @@ export function EditorPane({
     // 活动端（position），Monaco 两条事件都可能先到，重复的那次由广播器去重吞掉（零成本）。
     const cursorSub = ed.onDidChangeCursorPosition(() => publishCursor());
     const cursorSelSub = ed.onDidChangeCursorSelection(() => publishCursor());
+    // 上下文主动触发补全（1017）：`quickSuggestions` 全档为 `false`（中文打字噪声基线，
+    // `editor-options.ts`），打字本身不会自动弹；本观察者在"刚敲下一枚把光标推进名字位的
+    // 字符"时代按一次 Ctrl+Space。**每编辑器实例一枚**（SPLIT1 分屏互不串），随卸载释放。
+    const contextSuggestSub = installSuggestContextTrigger(ed, {
+      getPath: () => filePathRef.current,
+      isDerivedView: () => sugarModelRef.current !== null,
+    });
     const flushViewOnUnload = (): void => flushViewStates();
     window.addEventListener('beforeunload', flushViewOnUnload);
     return () => {
@@ -1445,6 +1453,7 @@ export function EditorPane({
       viewScrSub.dispose();
       cursorSub.dispose();
       cursorSelSub.dispose();
+      contextSuggestSub.dispose();
       window.removeEventListener('beforeunload', flushViewOnUnload);
       crumbRefreshRef.current = null;
       // SPLIT-1：本实例退册；全局 provider 属于"活实例集合"，最后一个实例退场才拆

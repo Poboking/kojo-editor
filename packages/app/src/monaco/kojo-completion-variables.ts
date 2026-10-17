@@ -124,6 +124,9 @@ export function variableCompletionItems(
           label: name,
           kind: monaco.languages.CompletionItemKind.Variable,
           insertText: name,
+          // 显式声明过滤面 = 名字原文（真实 Monaco 用 `filterText ?? label` 过滤；中文 label
+          // 不设即靠 label 兜底，口径留给后续"中文主形 / 隐藏别名"双命名面）
+          filterText: name,
           detail: index === undefined ? family : `${family}:${index}`,
           range,
           sortText: `${exact ? '0' : '1'}_${name}`,

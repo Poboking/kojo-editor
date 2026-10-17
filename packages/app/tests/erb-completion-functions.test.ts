@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import { erbFunctionCompletionItems } from '../src/monaco/erb-completion-functions';
+import { ERB_CALL_STATEMENTS } from '../src/monaco/erb-completion-context';
 
 /** 合成 Monaco：本纯函数只用到 CompletionItemKind.Function */
 const monaco = { languages: { CompletionItemKind: { Function: 1 } } } as unknown as typeof Monaco;
@@ -103,6 +104,19 @@ describe('EC-3 函数名补全 · 调用位（CALL / JUMP / FORM）', () => {
 
   it('FORM 槽里光标严格停在未闭合插值内 → []（不猜）', () => {
     expect(at('TRYCALLFORM M_KOJO%X|%_M', NAMES)).toEqual([]);
+  });
+
+  it('调用位清单 = 位置门的**同一张表**（`ERB_CALL_STATEMENTS` 每一句的名字位都出货）', () => {
+    expect(ERB_CALL_STATEMENTS.length).toBeGreaterThan(0);
+    for (const s of ERB_CALL_STATEMENTS) {
+      expect(labels(at(`${s.kw} M_KOJO_EVENT`, NAMES))).toEqual(['M_KOJO_EVENT_K1']);
+    }
+  });
+
+  it('空白类走 `BLANK_CLASS_STR` 单源：全角缩进 + 全角分隔的调用位照样认（旧 `[ \t]` 不认）', () => {
+    expect(labels(at('\u3000CALL M_KOJO_EVENT', NAMES))).toEqual(['M_KOJO_EVENT_K1']);
+    expect(labels(at('\u3000@M_KOJO_EVENT', NAMES))).toEqual(['M_KOJO_EVENT_K1']);
+    expect(labels(at('CALL\u3000M_KOJO_EVENT', NAMES))).toEqual(['M_KOJO_EVENT_K1']);
   });
 });
 

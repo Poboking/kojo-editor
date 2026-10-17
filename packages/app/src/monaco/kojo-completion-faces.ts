@@ -2,6 +2,11 @@ import type * as Monaco from './entry';
 import type { KojoFaceTable } from '@kojo/plugin-api';
 import { TIMING_ARG_TOKENS, TIMING_NAMED_PARAMS, argTokenCnLabel, type TimingNamedParamSpec } from '@kojo/plugin-kojo-sugar';
 import { lineRange } from './completion-range';
+import {
+  col0Of,
+  timingHeadParts,
+  type KojoNameField,
+} from './kojo-completion-position';
 
 /**
  * 语法糖（`.kojo`）补全 · **时机块头**——沿用单一 `kojo-face` source：
@@ -23,10 +28,6 @@ import { lineRange } from './completion-range';
  * Monaco 绑定（provider 注册）刻意不在此处——编排层负责把本函数接进补全基座。
  */
 
-/** 行首 `时机 ` 前缀（允许行首空白；`时机` 后至少一个空白） */
-const TIMING_PREFIX_RE = /^[ \t]*时机[ \t]+/;
-/** 分野名令牌的终止符：空白 / 全角冒号 / 半角冒号 */
-const FACE_TOKEN_END_RE = /[\s：:]/;
 /** 块头终结的全角冒号——`该名之后`已出现即分野段收尾，不再补全 */
 const BLOCK_COLON = '：';
 /** 命名参数键的尾冒号（全角 / 半角均可） */
@@ -66,6 +67,30 @@ function tokenizeTail(line: string, from: number): TailToken[] {
   return out;
 }
 
+/** 分野段之后是否已出现块头终结冒号（`= true` ⇒ 本行不再有本模块的候选） */
+function blockColonClosed(line: string, faceStart: number): boolean {
+  return line.slice(faceStart).includes(BLOCK_COLON);
+}
+
+/**
+ * 时机块头的**分野名槽**（`column` = Monaco 的 1 基列；纯函数）。
+ *
+ * 段界取自 `kojo-completion-position` 的 {@link timingHeadParts}（**同一份**锚 + 同一份终止符，
+ * 与编号槽判据不再各扫一遍）。命中条件：光标在分野段内（含段右界，即"刚写完名字"）且块头
+ * 尚未收尾。位置不符 ⇒ `null`（不猜）。
+ *
+ * 消费方两路：KC-2 候选（下面的 `faceCandidates`）与「上下文主动触发」
+ * （`suggest-context-trigger.ts` 用它判"光标是否刚落到分野位"）。
+ */
+export function timingFaceSlot(line: string, column: number): KojoNameField | null {
+  const parts = timingHeadParts(line);
+  if (parts === null) return null;
+  const col0 = col0Of(line, column);
+  if (col0 === null || col0 < parts.faceStart || col0 > parts.faceEnd) return null;
+  if (blockColonClosed(line, parts.faceStart)) return null;
+  return { start: parts.faceStart, end: parts.faceEnd, prefix: line.slice(parts.faceStart, col0) };
+}
+
 /**
  * 计算行首 `时机 <分野> [编号] [命名参数]` 处该给的一轮候选。行为：
  * - 光标处在**分野名令牌内** ⇒ 分野候选（`Object.keys(faceTable.faces)`，按已输入前缀过滤，
@@ -86,19 +111,16 @@ export function faceCompletionItems(
   if (!Number.isFinite(position.column) || position.column < 1) return [];
 
   const line = model.getLineContent(position.lineNumber);
-  const head = TIMING_PREFIX_RE.exec(line);
-  if (!head) return [];
+  const parts = timingHeadParts(line);
+  if (parts === null) return [];
 
-  const faceStart = head[0]!.length;
+  const faceStart = parts.faceStart;
+  const faceEnd = parts.faceEnd;
   const col0 = position.column - 1;
   if (col0 < faceStart) return [];
 
-  // 分野名令牌 = `时机 ` 之后的第一个空白 / 冒号之前的整段
-  let faceEnd = faceStart;
-  while (faceEnd < line.length && !FACE_TOKEN_END_RE.test(line[faceEnd]!)) faceEnd++;
-
   // 块头已收尾：分野段之后出现块头终结的全角 `：` ⇒ 本模块零候选（交回其它补全面）。
-  if (line.slice(faceStart).includes(BLOCK_COLON)) return [];
+  if (blockColonClosed(line, faceStart)) return [];
 
   // 位置 1：光标仍在分野名令牌内 ⇒ 分野候选（KC-2 原行为，逐字保留）。
   if (col0 <= faceEnd) {

@@ -10,6 +10,7 @@ import { erbSystemFunctionCompletionItems } from './erb-completion-system-functi
 import { erbVariableCompletionItems } from './erb-completion-variables';
 import { ERB_SNIPPET_SOURCE } from './erb-completion-snippets';
 import { errorText } from '@kojo/plugin-api';
+import { isAllBlank } from './kojo-completion-position';
 import {
   applyCallSnippet,
   buildCallSnippetText,
@@ -27,7 +28,6 @@ import {
   type CompletionAssembly,
   type CompletionDegrade,
   type CompletionDegradeReporter,
-  type CompletionForeignForm,
   type CompletionProvenance,
   type CompletionProvenanceStore,
   type CompletionResolution,
@@ -56,10 +56,6 @@ import {
  *   函数名（`erbFunctionNames`）由宿主按 `ErbIndex.fingerprint` 记忆化后注入，
  *   同一份表现在**也被 `.kojo` 消费**（跨语言候选打通）。
  *
- * 反向那一半（`.erb` 里补 `.kojo` 词形）做成**可注入源** `erb-kojo-forms`：词形由
- * `tables.kojoForms` 提供，注入缺席 ⇒ 该路零候选 + 一次可见降级信号——**绝不在宿主层
- * 抄一份语法扫描**（缺源已写进批次回报，等数据源落地即接线）。
- *
  * 纯逻辑与 Monaco 绑定分离：`CompletionSource.provide` 可单测（只依赖 ctx 里的
  * `model` / `position` / `range` / `tables`），装配点只做协议翻译。
  * 二段式供给同 `.kojo`：详情延到 `resolveCompletionItem` 回表算，括号调用形态候选按
@@ -77,7 +73,6 @@ export type ErbCompletionDegradeReporter = CompletionDegradeReporter;
 export type ErbCompletionProvenance = CompletionProvenance;
 export type ErbCompletionProvenanceStore = CompletionProvenanceStore;
 export type ErbCompletionResolution = CompletionResolution;
-export type ErbCompletionForeignForm = CompletionForeignForm;
 export { createCompletionProvenanceStore as createErbCompletionProvenanceStore };
 
 /* ============================== 语言侧的回表口径（详情 / 调用形态） ============================== */
@@ -188,11 +183,15 @@ export function erbTokenRange(model: Monaco.editor.ITextModel, position: Monaco.
  *
  * 用于分野「行首给全表 / 行中只给表达式子集」——`#DIM` / `[SKIPSTART]` 这类**必须行首**的
  * 候选绝不在行中弹出。token 起始列向前吞并 `#` / `[` 的意义见 {@link erbTokenRange}。
+ *
+ * 空白口径走**单源** `isAllBlank`（= `kojo-sugar` lexer 的 `[ \t\u3000]`，全角空格算缩进）；
+ * 此前这里是第四套手抄 `/^\s*$/`。口径差集里唯一可能出现在行文本内的是 U+00A0：真实语料
+ * 3818 个 `.ERB` 零命中、且单源测试明确钉 NBSP 判假 ⇒ 统一按**非空白**处理（不再特判保留）。
  */
 export function isLineHeadContext(model: Monaco.editor.ITextModel, position: Monaco.Position): boolean {
   const line = model.getLineContent(position.lineNumber);
   const range = erbTokenRange(model, position);
-  return /^\s*$/.test(line.slice(0, range.startColumn - 1));
+  return isAllBlank(line.slice(0, range.startColumn - 1));
 }
 
 /**
@@ -343,41 +342,11 @@ const BITS_SOURCE: ErbCompletionSource = {
 };
 
 /**
- * `.kojo` 词形补全（COMPL-SHARED · 跨语言候选打通的反向那一半）：
- * 词形**只从注入位取**（`tables.kojoForms`）——装配核不认词表，宿主层也不抄第二份语法扫描。
- *
- * 缺席即该路零候选 + 一次可见降级信号（`requires`）。`sortText` 前缀 `9_` ⇒ 外来词形排在
- * 本语言候选之后（提示性可见，不与本方言词表争位）。详情不回表：词形自带 `detail`。
- */
-const KOJO_FORMS_SOURCE: ErbCompletionSource = {
-  id: 'erb-kojo-forms',
-  requires: 'kojoForms',
-  provide({ monaco, range, tables }): Monaco.languages.CompletionItem[] {
-    const forms = tables.kojoForms?.() ?? [];
-    const kind = monaco.languages.CompletionItemKind.Keyword;
-    const out: Monaco.languages.CompletionItem[] = [];
-    for (const form of forms) {
-      if (form.label.length === 0) continue;
-      out.push({
-        label: form.label,
-        kind,
-        insertText: form.insertText ?? form.label,
-        ...(form.detail === undefined ? {} : { detail: form.detail }),
-        range,
-        sortText: `9_${form.label}`,
-      });
-    }
-    return out;
-  },
-};
-
-/**
  * 全部补全来源（**稳定扩展点**）。各 source **独立文件 + 各自纯函数**，此处只做一行接线；
  * 装配点与排序/去重口径零改动（实现在 `completion-core.ts`，与 `.kojo` 共用一份）。
  *
  * `erb-snippet`（R4）注册在**最前**：行首位置的块骨架与 `erb-directives` 的同名纯文本
  * 项按 label 去重（先注册者胜）⇒ 行首只留骨架、行中纯文本照旧（见 snippet 模块头注）。
- * `erb-kojo-forms` 注册在**最后**：跨语言词形不与本方言任何一路争先注册位。
  */
 export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
   ERB_SNIPPET_SOURCE,
@@ -387,7 +356,6 @@ export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
   LABELS_SOURCE,
   SYSTEM_FUNCTIONS_SOURCE,
   BITS_SOURCE,
-  KOJO_FORMS_SOURCE,
 ];
 
 /* ============================== 记忆化：函数名 provider（EC-3 预置） ============================== */

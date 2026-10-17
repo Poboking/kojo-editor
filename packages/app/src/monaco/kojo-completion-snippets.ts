@@ -6,6 +6,7 @@ import {
 } from '@kojo/plugin-kojo-sugar';
 import { escapeSnippetText } from './completion-core';
 import type { CompletionSource } from './kojo-completion';
+import { isAllBlank } from './kojo-completion-position';
 
 /**
  * `.kojo` 补全 · **Snippet 模板源**（R4）：把"从零敲一整个块头 + 缩进骨架"收成一条
@@ -122,11 +123,14 @@ const BLOCK_SNIPPETS: readonly { label: string; insertText: string; detail: stri
   },
 );
 
-/** 光标之前是否只有空白（行首位置判定；与 ERB 侧 `isLineHeadContext` 同口径） */
+/**
+ * 光标之前是否只有空白（行首位置判定；与 ERB 侧 `isLineHeadContext` 同口径）。
+ * 空白口径必须是糖源的那一份（`[ \t\u3000]+`）——`时机　本番：` 这类全角空格缩进**能编译**，
+ * 只认半角会让它编译得过却补不出块骨架。
+ */
 function atLineHead(model: Monaco.editor.ITextModel, position: Monaco.Position): boolean {
   const line = model.getLineContent(position.lineNumber);
-  const before = line.slice(0, position.column - 1);
-  return /^[ \t]*$/.test(before);
+  return isAllBlank(line.slice(0, position.column - 1));
 }
 
 /**

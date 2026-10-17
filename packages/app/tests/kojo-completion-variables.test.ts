@@ -120,3 +120,38 @@ describe('KC-1 插值变量补全 · fail-visible 负例（绝不猜、绝不抛
     expect(at('{她的好', noNames)).toEqual([]);
   });
 });
+
+/* ============================== 空白口径（全角缩进）+ filterText ============================== */
+
+describe('KC-1 插值变量补全 · 行首空白口径（全角缩进能编译 ⇒ 必须补得出）', () => {
+  it('全角空格缩进行的插值照旧出候选', () => {
+    expect(labels(at('　　{她的好'))).toEqual(['好感度', '好色', '好色程度']);
+  });
+
+  it('制表 / 半角缩进行为原样不动', () => {
+    expect(labels(at('\t{她的泥'))).toEqual(['泥酔']);
+    expect(labels(at('    {你的泥'))).toEqual(['泥酔']);
+  });
+
+  it('全角 / 半角空格都不是名字字符 ⇒ 前缀里混进空白即不认（不放宽判定语义）', () => {
+    expect(at('{她的　好')).toEqual([]);
+    expect(at('{她的 好')).toEqual([]);
+  });
+});
+
+describe('KC-1 插值变量补全 · filterText（真实 Monaco 按 `filterText ?? label` 过滤）', () => {
+  it('每条候选都显式带 `filterText` = 名字原文（与 label / insertText 同字）', () => {
+    const items = at('{角色12的');
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.filterText).toBeDefined();
+      expect(item.filterText).toBe(item.label);
+      expect(item.filterText).toBe(item.insertText);
+    }
+  });
+
+  it('钉值：中文名字段的 `filterText` 就是字典里的名字（不留给 label 兜底）', () => {
+    const byLabel = new Map(at('{她的好').map((i) => [i.label as string, i]));
+    expect(byLabel.get('好色程度')?.filterText).toBe('好色程度');
+  });
+});

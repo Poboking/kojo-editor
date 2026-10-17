@@ -83,6 +83,12 @@ describe('悬停中文名 · 指令编号（只在可证明的块头里认）', 
     expect(hit?.kind).toContain('指令');
   });
 
+  it('同一块头改用全角空格分隔 → 同样认（空白类走补全同一枚单源）', () => {
+    const hit = at('时机　指令　|310：');
+    expect(hit?.name).toBe('亲吻');
+    expect(hit?.kind).toContain('指令');
+  });
+
   it('负例：同一个数字出现在别处（无 `时机 <分野> ` 前缀）→ 不显示', () => {
     expect(at('A = |310')).toBeUndefined();
     expect(at('IF FLAG:|310 == 0')).toBeUndefined();

@@ -18,12 +18,44 @@
 
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
+import { extname, isErbDialectPath } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../monaco/erb-language';
+import { JSON_LANGUAGE_ID } from '../monaco/json-language';
 import { KOJO_LANGUAGE_ID } from '../monaco/kojo-language';
+import { KOJO_SOURCE_EXTENSION } from './reference-utils';
 
-/** 按扩展名选语言：`.kojo` = 语法糖表层 DSL；其余按原生 ERB（v0.1 口径，单源在此） */
+/** `.json` 源扩展名（与 `monaco/json-language` 注册时的 `extensions` 同值） */
+const JSON_SOURCE_EXTENSION = '.json';
+
+/**
+ * Monaco 内建的纯文本语言——**兜底必须是它**：认不出扩展名就不许猜成任何一种 DSL，
+ * 猜错的代价是把某种语言的补全 / 悬停 / 改名硬塞进不相干的文件（v0.1 二值映射就把
+ * ERB 的 `#DIM` 骨架弹进了纯文本文件里）。
+ */
+const PLAINTEXT_LANGUAGE_ID = 'plaintext';
+
+/**
+ * 按扩展名选语言（单源在此）。**显式白名单 + plaintext 兜底**，不是二值映射：
+ *
+ * - `.kojo` ⇒ 语法糖表层 DSL（判据指回 `reference-utils.KOJO_SOURCE_EXTENSION`，不再抄第三份）；
+ * - ERB 方言全集 ⇒ 原生 ERB。**清单不在此手抄**，走契约层单一真源 `isErbDialectPath`
+ *   （`.erb` / `.erm` / `.erh`；`.erd` 属 `ERB_ENGINE_RESERVED_EXTENSIONS` 留位未接线，
+ *   与拖入白名单 / 索引 / 高亮三处同口径不给）；
+ * - `.json` ⇒ `JSON_LANGUAGE_ID`（该语言**确实已在装配点注册**：`monaco/entry.ts`
+ *   模块级调用 `registerJsonLanguage`，带微型 Monarch，不是空挂一个查无此人的 id）；
+ * - 其余（`.md` / `.txt` / 二进制容器 / 无扩展名 …）⇒ plaintext。
+ *
+ * 大小写不敏感由 `extname().toLowerCase()` 与契约谓词内部保证——真实语料与冒烟夹具
+ * 用的是大写形态（`M_KOJO_…_口上.ERB` / `MARKS_OF_SUIKA.ERH`）。
+ * 判据取 `extname(basename)`（最后一段）而非整条路径尾正则，与契约层 FT-2 口径一致：
+ * `K36.ERH`、`x.kojo.bak` 这类多点名都判**否**，不会误挂。
+ */
 export function languageFor(filePath: string): string {
-  return /\.kojo$/i.test(filePath) ? KOJO_LANGUAGE_ID : ERB_LANGUAGE_ID;
+  const ext = extname(filePath).toLowerCase();
+  if (ext === KOJO_SOURCE_EXTENSION) return KOJO_LANGUAGE_ID;
+  if (isErbDialectPath(filePath)) return ERB_LANGUAGE_ID;
+  if (ext === JSON_SOURCE_EXTENSION) return JSON_LANGUAGE_ID;
+  return PLAINTEXT_LANGUAGE_ID;
 }
 
 export interface PooledModelEntry {

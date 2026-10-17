@@ -5,23 +5,33 @@
  * provider，不引入真实 monaco-editor 运行时；候选来自静态词表 source（纯数据）。
  * 覆盖：(a) provider 确为 kojo 语言注册、triggerCharacters 含 `{` / `：`；
  * (b) 静态 source 在固定位置产出预期成员（别名 / `如果` / 系统函数 `(` 插入形态 / 前缀精确置顶）；
- * (c) `tables` 为空时不崩、且不产生任何非 adapter 候选（空表与满表候选集一致）。
+ * (c) `tables` 为空时不崩、且不产生任何非 adapter 候选（空表与满表候选集一致）；
+ * (d) **匹配面**：词表四组 + 本文件声明名每条候选都显式带 `filterText` = 中文主形原文
+ *     （真实 Monaco 按 `filterText ?? label` 过滤，隐式兜底不许依赖）；
+ * (e) **中英不对等守卫**（规范 §2 原则 2 / §4.1）：英文隐藏别名与原生函数名一律不进上屏三面
+ *     （label / detail / filterText）；
+ * (f) 词表系统函数的参数槽 = **自带 tabstop 模板**，调用协议表不插手（`callForm` 名单不含
+ *     `kojo-lexicon`，见该常量的头注）。
  */
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type {
+  KojoCallSlot,
   KojoCounterTable,
   KojoFaceTable,
   KojoInstructionTable,
   KojoLibraryTable,
   VariableSchema,
 } from '@kojo/plugin-api';
+import { SYSTEM_FUNCTION_ALIASES, sugarEditorLexicon } from '@kojo/plugin-kojo-sugar';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { ERB_COMPLETION_SOURCES } from '../src/monaco/erb-completion';
 import {
+  KOJO_COMPLETION_ASSEMBLY,
   KOJO_COMPLETION_SOURCES,
   installKojoCompletion,
+  kojoCompletionRange,
   type CompletionDegrade,
   type CompletionTables,
 } from '../src/monaco/kojo-completion';
@@ -221,9 +231,12 @@ const counterX: KojoCounterTable = { hasTable: true, lookupByName: () => undefin
 /**
  * 在同一**已装配句柄**上连续跑三态（满分 → 缺表 → 切表 → 再缺），断言：
  * - 态 A 满表：`kojo-variable` / `kojo-face` 各路出货，零降级；
- * - 态 B 缺表（`tables = {}`）：该路**零候选** + 降级信号 **可见且只报一次**（连调两次计数仍 1）；
- * - 态 C 切表：候选**随新表变化**（证明现取、无缓存旧表）；再切空 ⇒ 零候选；
- *   去重语义 = 一次装配内同一 `(来源, 缺表键)` 只报一次 ⇒ 计数不增（不重复刷屏）。
+ * - 态 B 缺表（`tables = {}`）：该路**零候选** + 降级信号可见；
+ * - 态 C 切表：候选**随新表变化**（证明现取、无缓存旧表）；再切空 ⇒ 零候选。
+ *
+ * 去重口径（装配核 `completion-core.ts`：去重表**随装配轮**创建，见 `completion-shared.test.ts` ⑧）：
+ * 同一 `(来源, 缺表键)` 在**一轮内只报一次**（不刷屏），**跨轮还会再报**（首轮之后永久无声
+ * 正是"静默失效"陷阱，旧句柄级口径已换掉）⇒ 下面的期望值按"缺表轮数"逐轮 +1。
  */
 function threeStatesKojo(
   provider: Monaco.languages.CompletionItemProvider,
@@ -249,15 +262,18 @@ function threeStatesKojo(
   expect(has('时机 初', '初', 5, '初见')).toBe(true);
   expect(degrades).toEqual([]);
 
-  // 态 B：缺表 ⇒ 该路零候选 + 信号可见且只报一次
+  // 态 B：缺表 ⇒ 该路零候选 + 信号可见（首轮各报一次）
   setTables({});
   expect(has('{她的', '', 4, '甲旗')).toBe(false);
   expect(countOf('kojo-variable', 'variableSchema')).toBe(1);
   expect(countOf('kojo-face', 'faceTable')).toBe(1);
+  // 第二轮：每键仍**只加一份**（一轮内不刷屏），但不会被上一轮的记录吞掉（不静默）
   provide(provider, '{她的', '', 4);
+  expect(countOf('kojo-variable', 'variableSchema')).toBe(2);
+  expect(countOf('kojo-face', 'faceTable')).toBe(2);
   provide(provider, '时机 初', '初', 5);
-  expect(countOf('kojo-variable', 'variableSchema')).toBe(1);
-  expect(countOf('kojo-face', 'faceTable')).toBe(1);
+  expect(countOf('kojo-variable', 'variableSchema')).toBe(3);
+  expect(countOf('kojo-face', 'faceTable')).toBe(3);
 
   // 态 C：切表 ⇒ 候选随新表变化（无缓存旧表）
   setTables({ variableSchema: schemaY });
@@ -266,10 +282,12 @@ function threeStatesKojo(
   setTables({ variableSchema: schemaX });
   expect(has('{她的', '', 4, '甲旗')).toBe(true);
   expect(has('{她的', '', 4, '乙旗')).toBe(false);
-  // 再切空 ⇒ 零候选；一次装配内同一 (来源,缺键) 只报一次 ⇒ 计数不增
+  // 表在位的那两轮**不新增**变量路降级（`variableSchema` 在场 ⇒ 一份也不报）
+  expect(countOf('kojo-variable', 'variableSchema')).toBe(3);
+  // 再切空 ⇒ 零候选，并且这一轮照旧再报一次（缺表始终可见）
   setTables({});
   expect(has('{她的', '', 4, '甲旗')).toBe(false);
-  expect(countOf('kojo-variable', 'variableSchema')).toBe(1);
+  expect(countOf('kojo-variable', 'variableSchema')).toBe(4);
 }
 
 describe('SH-4 · 依赖表缺席 = 降级不静默（三态可复跑）', () => {
@@ -281,7 +299,7 @@ describe('SH-4 · 依赖表缺席 = 降级不静默（三态可复跑）', () =>
     threeStatesKojo(registered[0]!.provider, (t) => (tables = t), degrades);
   });
 
-  it('重新 install 一遍 → 同一结论（去重表随装配句柄创建，无跨 install 泄漏也不吞信号）', () => {
+  it('重新 install 一遍 → 同一结论（去重表随装配轮创建，既每轮可见也不每候选刷屏）', () => {
     let tables: CompletionTables = {};
     const degrades: CompletionDegrade[] = [];
     const { monaco, registered } = stubMonaco();
@@ -297,5 +315,104 @@ describe('SH-4 · 依赖表缺席 = 降级不静默（三态可复跑）', () =>
     expect(byId.get('kojo-counter')).toBe('counterTable');
     expect(byId.get('kojo-library')).toBe('libraryTable');
     expect(byId.get('kojo-lexicon')).toBeUndefined();
+  });
+});
+
+/* ============================== CP-2 / CP-3 · 匹配面（filterText）与词表调用形态口径 ============================== */
+
+/**
+ * 只取**词表那一路**的候选（不经装配的 label 去重）：行首的 `如果` 会被先注册的 R4 块头模板
+ * 盖掉（那是 snippet 源的地盘，属 C3 文件），本批的两处缺陷都在词表源里 ⇒ 直接问那一枚 source。
+ */
+function lexiconItems(text: string, word = ''): Monaco.languages.CompletionItem[] {
+  const source = KOJO_COMPLETION_SOURCES.find((s) => s.id === 'kojo-lexicon');
+  if (source === undefined) throw new Error('词表 source 不在册');
+  const { monaco } = stubMonaco();
+  const model = modelOf(text, word);
+  const position = { lineNumber: 1, column: 1 + word.length } as Monaco.Position;
+  const ctx = { monaco, model, position, range: kojoCompletionRange(model, position), tables: {} as CompletionTables };
+  return source.provide(ctx);
+}
+
+describe('CP-2 · 中文候选的匹配面：filterText = 中文主形原文（显式声明，不留隐式兜底）', () => {
+  it('词表四组 + 本文件声明名：每条候选都带字符串 `filterText`，且逐字等于 label 原文', () => {
+    const items = lexiconItems(SAMPLE, '');
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(typeof item.filterText).toBe('string');
+      expect(item.filterText).toBe(labelText(item.label));
+    }
+  });
+
+  it('钉值（五组各取一枚）：代词 / 关键字 / 运算符 / 系统函数 / 本文件 `别名` 声明名', () => {
+    const byLabel = new Map(lexiconItems(SAMPLE, '如').map((i) => [labelText(i.label), i]));
+    expect(byLabel.get('她')?.filterText).toBe('她');
+    expect(byLabel.get('如果')?.filterText).toBe('如果');
+    expect(byLabel.get('不在')?.filterText).toBe('不在');
+    expect(byLabel.get('获取标记')?.filterText).toBe('获取标记');
+    expect(byLabel.get('心')?.filterText).toBe('心');
+  });
+
+  it('系统函数候选的匹配面是**中文名**，不是原生名（filterText 不承载隐藏面）', () => {
+    const native = SYSTEM_FUNCTION_ALIASES.get('获取标记');
+    expect(typeof native).toBe('string');
+    const item = lexiconItems(SAMPLE, '获').find((i) => labelText(i.label) === '获取标记');
+    expect(item?.filterText).toBe('获取标记');
+    expect(item?.filterText).not.toBe(native);
+  });
+});
+
+describe('CP-2 · 中英不对等（规范 §2 原则 2 / §4.1）：上屏三面零英文别名', () => {
+  it('label / detail / filterText 三面不含任何 ASCII 字母 ⇒ 面板只有中文一面', () => {
+    const items = lexiconItems(SAMPLE, '');
+    expect(items.length).toBeGreaterThan(0);
+    const faces: string[] = [];
+    for (const item of items) {
+      expect(typeof item.detail).toBe('string');
+      expect(typeof item.filterText).toBe('string');
+      faces.push(labelText(item.label), item.detail as string, item.filterText as string);
+    }
+    expect(faces.filter((f) => /[A-Za-z]/.test(f))).toEqual([]);
+  });
+
+  it('反向钉：词表的英文隐藏别名（关键字别名 / `notin` / 原生函数名）一条都不进候选 label', () => {
+    const lex = sugarEditorLexicon();
+    const aliases = [
+      ...new Set([
+        ...lex.words.filter((w) => !w.primary).map((w) => w.word),
+        ...lex.notin.filter((w) => /[A-Za-z]/.test(w)),
+        ...[...SYSTEM_FUNCTION_ALIASES.values()],
+      ]),
+    ];
+    expect(aliases.length).toBeGreaterThan(10); // 别名单为空 = 本守卫失去对象（假绿），先钉住它非空
+    const labels = new Set(lexiconItems(SAMPLE, '').map((i) => labelText(i.label)));
+    expect(aliases.filter((a) => labels.has(a))).toEqual([]);
+  });
+});
+
+describe('CP-3 · 词表系统函数的参数槽 = 自带模板（协议表不插手）', () => {
+  it('装配声明的调用形态名单不含 kojo-lexicon（死分支已摘），仍含 kojo-library', () => {
+    expect(KOJO_COMPLETION_ASSEMBLY.callForm.sourceIds.has('kojo-lexicon')).toBe(false);
+    expect(KOJO_COMPLETION_ASSEMBLY.callForm.sourceIds.has('kojo-library')).toBe(true);
+  });
+
+  it('协议表即便认得系统函数的**原生名**，词表候选也保持自带 tabstop `名($1)$0`（不被改写、不退化成半个左括号）', () => {
+    const slots: readonly KojoCallSlot[] = [{ index: 0, kind: 'int', label: '标记号' }];
+    const native = SYSTEM_FUNCTION_ALIASES.get('获取标记');
+    let probed = 0;
+    const { monaco, registered } = stubMonaco();
+    installKojoCompletion(monaco, () => ({
+      callProtocol: {
+        slotsFor: (name: string) => {
+          probed += 1;
+          return name === native ? slots : null;
+        },
+      },
+    }));
+    const fn = provide(registered[0]!.provider, SAMPLE, '获').find((i) => labelText(i.label) === '获取标记');
+    expect(fn).toBeDefined();
+    expect(fn!.insertText).toBe('获取标记($1)$0');
+    expect(fn!.insertTextRules).toBe(4); // InsertAsSnippet：自带模板照旧按 snippet 解析
+    expect(probed).toBe(0); // 词表候选根本不进协议表问槽（名单外 ⇒ 连问都不问）
   });
 });

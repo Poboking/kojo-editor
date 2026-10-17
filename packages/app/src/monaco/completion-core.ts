@@ -25,8 +25,9 @@ import { describeCallSignature, slotParameterLabel } from './kojo-signature';
  * 1. **候选源协议**（`CompletionSource` / `CompletionSourceContext` / 统一的 `CompletionTables`）；
  * 2. **合并**：依次问各 source，按 label 去重（先注册者胜）；
  * 3. **排序**：`前缀精确 > 前缀命中 > 其它`，同档沿用 source 自带 `sortText`，label 兜底；
- * 4. **上限**：装配级截断（`MAX_ASSEMBLED_SUGGESTIONS`），截断可见（一行 warn，一次装配只报一次）；
- * 5. **降级**：`requires` 依赖缺席 / source 抛错 ⇒ 跳过该源 + 一次可见信号；
+ * 4. **上限**：装配级截断（`MAX_ASSEMBLED_SUGGESTIONS`），截断可见（一行 warn，一轮装配只报一次）；
+ * 5. **降级**：`requires` 依赖缺席 / source 抛错 ⇒ 跳过该源 + 一次可见信号；装配点自身抛错
+ *    （位置判定 / 取表）⇒ 本轮空候选 + 一次可见信号，**绝不让 Monaco 静默吞掉整条补全链**；
  * 6. **二段式供给**：`provenance` 反查（对象身份）+ `resolveCompletionItem` 详情合并 +
  *    **调用形态候选 → snippet**（含区间右邻字符判"作者已写左括号"）。
  *
@@ -38,8 +39,7 @@ import { describeCallSignature, slotParameterLabel } from './kojo-signature';
  *
  * 候选源集合按语言分册，但**表是同一份**（{@link CompletionTables}）：项目函数名
  * （`erbFunctionNames`，宿主按 `ErbIndex.fingerprint` 记忆化后注入）两册都消费 ⇒ `.kojo` 里
- * 写 `调用` 也能补到剧本函数名；外来词形（`kojoForms`）同理做成**可注入**——注入缺席即该路
- * 零候选并发一次降级信号，**不在本层抄一份语法扫描**。
+ * 写 `调用` 也能补到剧本函数名。
  *
  * ## 分层纪律
  *
@@ -49,16 +49,6 @@ import { describeCallSignature, slotParameterLabel } from './kojo-signature';
 
 /* ============================== 表（两语言共用同一份） ============================== */
 
-/** 一条**外来词形**候选的最小描述（由宿主 / adapter 视图注入，装配核不认识任何词表） */
-export interface CompletionForeignForm {
-  /** 上屏与插入的原文 */
-  readonly label: string;
-  /** 一行说明（缺省 = 不写 detail，Monaco 右侧留空） */
-  readonly detail?: string;
-  /** 插入文本（缺省 = `label` 原文） */
-  readonly insertText?: string;
-}
-
 /**
  * 补全消费的**唯一一张表**（`.kojo` 与 `.erb` 两个 seam 共用；语言侧文件保留各自的历史类型名
  * 作为别名，宿主 `EditorPane` 的表构造零改动即可同时满足两侧）。
@@ -67,8 +57,6 @@ export interface CompletionForeignForm {
  * - `dictionary` / `variableSchema` / `faceTable` / `instructionTable` / `libraryTable` /
  *   `callProtocol` 全部来自**当前项目 adapter 贡献**，运行时现取；
  * - `erbFunctionNames` 是**项目索引派生**（非 adapter 表）：项目内全部函数名（已排序）的提供者；
- * - `kojoForms` 是**跨语言词形**的注入位（`.erb` 侧给 `.kojo` 词形候选）；数据源目前不在任何
- *   注入通道上，故缺席即零候选（不做第二份语法扫描）；
  * - `kojoDeclarations` 是**解析器通道**的注入位：`.kojo` 的 `别名` / `常量` 声明名一律经它取，
  *   宿主不注入时由本层懒建一枚只解析服务实例顶上（**同一个 parser，不留第二判据**）。
  */
@@ -104,11 +92,6 @@ export interface CompletionTables {
    * 都从这里取名字。缺席 / 索引未构建 / 提供者抛错 ⇒ 空数组（**零候选**，不猜）。
    */
   readonly erbFunctionNames?: () => readonly string[];
-  /**
-   * 跨语言词形的注入位（`.erb` 侧的 `.kojo` 词形候选）。注入缺席 = 该路零候选 + 一次降级信号。
-   * 词形内容（label / 说明 / 插入文本）全部由提供方决定，装配核零解释。
-   */
-  readonly kojoForms?: () => readonly CompletionForeignForm[];
   /**
    * `.kojo` 文件级声明名（`别名` / `常量`）的**解析器通道**注入位。
    * 宿主可注入内核里那一枚 `sugar.transpile` 服务；未注入时由 `kojo-completion-declarations.ts`
@@ -155,20 +138,45 @@ export interface CompletionSource {
    * `erbFunctionNames` 这类**函数值**键即「提供者缺席」）时，**跳过**该来源（零候选）
    * **并发出一次可见信号**（不静默）；该来源 `provide` 抛错同样按此键报一次降级
    * （**抛错即视为缺**）。信号经 `onDegrade` 回调 + 一行 `console.warn` 双通道，
-   * 同一 `(来源 id, 缺键)` 在**一次装配内只报一次**。
+   * 同一 `(来源 id, 缺键)` 在**一轮装配内只报一次**——"一轮" = 一次 `provideCompletionItems`
+   * （去重表**每轮新建**，绝不做句柄级 / 模块级去重：那样首轮之后这条降级就永久无声）。
    */
   readonly requires?: keyof CompletionTables;
   provide(ctx: CompletionSourceContext): Monaco.languages.CompletionItem[];
 }
 
-/** 一次「补全来源降级」的可断言描述（缺表信号） */
+/** 装配核**自身**（不是某个候选源）抛错的阶段：位置判定 / 取表 / 合并 / snippet 化 */
+export type CompletionAssemblyStage = 'locate' | 'getTables' | 'merge' | 'snippet';
+
+/** 装配级抛错的载荷（只在 `failure` 上出现；缺表降级恒不带 ⇒ 旧断言零改动） */
+export interface CompletionAssemblyFailure {
+  /** 抛错发生在装配的哪一步（不猜：由装配点当场记录，不是事后推断） */
+  readonly stage: CompletionAssemblyStage;
+  /** 错误原文（`Error.message`；非 `Error` 时 `String(e)`） */
+  readonly error: string;
+}
+
+/**
+ * 装配级抛错信号的 `sourceId`（与截断水位 `__cap__` 同族的下划线魔键：它不对应任何候选源，
+ * 故不会与真实来源 id 相撞）。
+ */
+export const COMPLETION_ASSEMBLY_SOURCE_ID = '__assembly__';
+
+/** 一次「补全降级」的可断言描述（缺表信号 / 装配级抛错信号两形态） */
 export interface CompletionDegrade {
-  /** 被跳过（或抛错）的来源 id */
+  /** 被跳过（或抛错）的来源 id；装配级抛错 = {@link COMPLETION_ASSEMBLY_SOURCE_ID} */
   readonly sourceId: string;
-  /** 未能满足的依赖：adapter 表键 / 提供者键（缺席或求值抛错） */
-  readonly missing: keyof CompletionTables;
+  /**
+   * 未能满足的依赖：adapter 表键 / 提供者键（缺席或求值抛错）。
+   *
+   * **additive 改动**：装配级抛错没有"某个来源缺某张表"这件事 ⇒ 该字段缺席（`undefined`），
+   * 改由 {@link CompletionDegrade.failure} 描述。旧形态（缺表信号）三字段照旧、值不变。
+   */
+  readonly missing?: keyof CompletionTables;
   /** 一句中文说明（含「缺席 / 抛错」「已跳过」「不猜」） */
   readonly reason: string;
+  /** 装配级抛错（`locate` / `getTables` / `merge` / `snippet`）才带；缺表降级恒为 `undefined` */
+  readonly failure?: CompletionAssemblyFailure;
 }
 
 /** 降级回调（`installCompletion` 注入；便于测试直接断言，不依赖真 Monaco） */
@@ -250,7 +258,11 @@ export function rankKey(item: Monaco.languages.CompletionItem, prefix: string): 
   return `${boost}|${item.sortText ?? ''}|${label}`;
 }
 
-/** 一次装配内共享的"已报"去重表 + 日志前缀（`[kojo-completion]` / `[erb-completion]`） */
+/**
+ * **一轮装配**内共享的"已报"去重表 + 日志前缀（`[kojo-completion]` / `[erb-completion]`）。
+ *
+ * `reported` 由**调用方**持有并每轮新建（形状不动：装配点是唯一生产调用方，测试可自带一枚）。
+ */
 export interface CompletionMergeOptions {
   readonly reported: Set<string>;
   readonly tag: string;
@@ -263,7 +275,7 @@ export interface CompletionMergeOptions {
 }
 
 /**
- * 报**一次**降级信号（同一 `(来源 id, 缺键)` 在一次装配内只报一次；去重表由装配句柄持有）。
+ * 报**一次**降级信号（同一 `(来源 id, 缺键)` 在**一轮装配**内只报一次；去重表由调用方按轮传入）。
  * 双通道：`onDegrade` 回调（可断言）+ 一行 `console.warn`（运行时可读）——**不静默**。
  */
 function reportDegrade(opts: CompletionMergeOptions, sourceId: string, missing: keyof CompletionTables, detail: string): void {
@@ -288,7 +300,7 @@ export function missingRequirement(
 
 /**
  * 依次问各 source，按 label 去重（**先注册者胜**），再按排名键排序并写回 `sortText`，
- * 最后按上限截断（截断可见：一行 warn，一次装配只报一次）。
+ * 最后按上限截断（截断可见：一行 warn，一轮装配只报一次）。
  *
  * 身份陷阱（两语言此前各自踩过、现在只有一份实现）：登记 `provenance` 必须对
  * **最终交出去的那个对象引用**做——`{...item, sortText}` 造的是新对象，登记原对象会让
@@ -708,9 +720,12 @@ export interface CompletionAssembly {
  * 装配一枚补全 provider（两语言共用；`registerCompletionItemProvider` 的唯一调用点在这里）。
  *
  * 三件事一次收口，宿主零改动：
- * ①`provideCompletionItems` = 位置判定 → `mergeSuggestions` → snippet 化；
+ * ①`provideCompletionItems` = 位置判定 → `mergeSuggestions` → snippet 化（整段有兜底 try/catch：
+ *   任一环节抛错都返回 `{ suggestions: [] }`——Monaco 要求的形状，**并在这条路上报一次降级**，
+ *   不再让 promise reject 被 Monaco 吞成"补全突然没了"）；
  * ②`resolveCompletionItem` = 对象身份反查出处 → 语言侧回表算详情 → 只合并 `detail` / `documentation`；
- * ③降级去重表随句柄创建（**不做模块级全局去重**，否则第二次 install 会吞掉信号 ⇒ 三态不可复跑）。
+ * ③降级去重表**每轮装配新建**（= 一次 `provideCompletionItems` 一份 ⇒ "每轮至多一次"成立）。
+ *   曾经随句柄创建 ⇒ 首轮之后同一缺键**永久无声**（正是排查时最需要看见的那条信号）。
  */
 export function createCompletionProvider(
   monaco: typeof Monaco,
@@ -718,29 +733,47 @@ export function createCompletionProvider(
   getTables: () => CompletionTables,
   onDegrade?: CompletionDegradeReporter,
 ): Monaco.languages.CompletionItemProvider {
-  const reported = new Set<string>();
   const provenance = createCompletionProvenanceStore();
   const tag = assembly.logTag;
   return {
     triggerCharacters: [...assembly.triggerCharacters],
     provideCompletionItems(model, position) {
-      const location = assembly.locate(monaco, model, position);
-      if (location === undefined) return { suggestions: [] };
-      const tables = getTables();
-      const suggestions = mergeSuggestions(
-        assembly.sources,
-        { monaco, model, position, range: location.range, tables },
-        location.prefix,
-        {
-          reported,
-          tag,
-          onDegrade,
-          keep: location.keep,
-          provenance,
-        },
-      );
-      applyCallSnippets(monaco, suggestions, provenance, model, assembly.callForm, tag, location.seed);
-      return { suggestions };
+      const reported = new Set<string>(); // 一轮一份（见③）：句柄级去重 = 首轮之后永久无声
+      let stage: CompletionAssemblyStage = 'locate';
+      try {
+        const location = assembly.locate(monaco, model, position);
+        if (location === undefined) return { suggestions: [] };
+        stage = 'getTables';
+        const tables = getTables();
+        stage = 'merge';
+        const suggestions = mergeSuggestions(
+          assembly.sources,
+          { monaco, model, position, range: location.range, tables },
+          location.prefix,
+          {
+            reported,
+            tag,
+            onDegrade,
+            keep: location.keep,
+            provenance,
+          },
+        );
+        stage = 'snippet';
+        applyCallSnippets(monaco, suggestions, provenance, model, assembly.callForm, tag, location.seed);
+        return { suggestions };
+      } catch (e: unknown) {
+        // 装配核自己抛错（位置判定 / 取表 / 合并 / snippet）：候选本轮清空，但**信号必须出去**——
+        // 返回 `undefined` / 裸数组都不是 Monaco 要求的形状，promise reject 更会被 Monaco 吞掉。
+        const msg = e instanceof Error ? e.message : String(e);
+        const reason = `装配在 '${stage}' 阶段抛错（${msg}），本轮返回空候选（不猜、不静默：Monaco 吞不掉已 resolve 的空列表）`;
+        console.warn(`${tag} 降级：${reason}`);
+        onDegrade?.({
+          sourceId: COMPLETION_ASSEMBLY_SOURCE_ID,
+          reason,
+          failure: { stage, error: msg },
+        });
+        return { suggestions: [] };
+      }
     },
     resolveCompletionItem(item) {
       const hit = provenance.lookup(item);

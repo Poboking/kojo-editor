@@ -1,7 +1,7 @@
 /**
  * COMPL-SHARED · 两套补全装配核并一 + 跨语言候选打通 的回归钉。
  *
- * 六条判据各钉一处，全部经**生产装配路径**（`createCompletionProvider` / `installKojoCompletion`），
+ * 八条判据各钉一处，全部经**生产装配路径**（`createCompletionProvider` / `installKojoCompletion`），
  * 不测私有实现：
  *
  * ①**对拍**：两门语言喂**同一组候选源**，经各自的装配声明（`KOJO_COMPLETION_ASSEMBLY` /
@@ -10,12 +10,15 @@
  * ②**跨语言候选**：`.kojo` 里写 `调用` / `函数` 补得到项目函数名（真实候选来自注入表，非空跑）。
  * ③**别名判据零回归**：`别名` 名照旧出货、`常量` 名新增出货；注释行 / 字符串内 / 全角形态
  *   三类伪声明一律**以解析器为准**（旧正则会把它们当声明）。
- * ④**缺源 fail-open**：源缺席 / 提供者抛错 / 外来词形未注入 ⇒ 不抛、不猜、候选照常，
- *   并发一次可见降级信号。
+ * ④**缺源 fail-open**：源缺席 / 提供者抛错 ⇒ 不抛、不猜、候选照常，并发一次可见降级信号
+ *   （**一轮装配内至多一次，下一轮复报**——去重表随轮新建，见 ⑧）。
  * ⑤**声明判据的副作用**：注释 / 字符串 / 全角伪声明经**装配路径**也不进候选、真声明（`别名` +
  *   `常量`）进候选、注入通道真被消费、按版本记忆化（同版本零扫描）。
  * ⑥**并表后的源册形状**：两册源同用一枚 `CompletionSource` 协议，`requires` 只能指向共享表键，
  *   项目函数名一路两语言同键（断层不可复现）。
+ * ⑧**装配核不静默**（AGENTS.md 铁律 4）：`locate` / `getTables` 抛错 ⇒ 返回 `{ suggestions: [] }`
+ *   （Monaco 要求的形状）并经降级通道报出、promise 不 reject；去重表**每轮装配新建** ⇒ 同一缺表
+ *   在两轮 provide 各报一次（旧形态 = 整个句柄只报一次 ⇒ 首轮之后永久无声）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -26,6 +29,7 @@ import { KOJO_COMPLETION_ASSEMBLY, KOJO_COMPLETION_SOURCES, installKojoCompletio
 import { kojoDeclarationsOf } from '../src/monaco/kojo-completion-declarations';
 import { kojoFunctionNameSlot } from '../src/monaco/kojo-completion-functions';
 import {
+  COMPLETION_ASSEMBLY_SOURCE_ID,
   createCompletionProvider,
   type CompletionAssembly,
   type CompletionDegrade,
@@ -423,7 +427,6 @@ describe('COMPL-SHARED ⑥ · 两册候选源形状一致（并表的可断言�
       'libraryTable',
       'callProtocol',
       'erbFunctionNames',
-      'kojoForms',
       'kojoDeclarations',
     ]);
     for (const source of [...ERB_COMPLETION_SOURCES, ...KOJO_COMPLETION_SOURCES]) {
@@ -443,27 +446,7 @@ describe('COMPL-SHARED ⑥ · 两册候选源形状一致（并表的可断言�
 
 /* ============================== ④ 缺源 fail-open ============================== */
 
-describe('COMPL-SHARED ④ · 缺源不抛不猜（降级可见一次）', () => {
-  it('外来词形未注入：`.erb` 该行零候选 + 恰一次降级信号；注入即出货', () => {
-    const degrades: CompletionDegrade[] = [];
-    const { monaco, registered } = stubMonaco();
-    installErbCompletion(monaco, () => ({ kojoForms: undefined }), (d) => degrades.push(d));
-    const provider = registered[0]!.provider;
-    expect(() => provide(provider, 'IF A', 5)).not.toThrow();
-    expect(labels(provide(provider, 'IF A', 5))).not.toContain('如果');
-    expect(degrades.filter((d) => d.sourceId === 'erb-kojo-forms')).toHaveLength(1);
-
-    const injected = stubMonaco();
-    installErbCompletion(injected.monaco, () => ({
-      kojoForms: () => [{ label: '如果', detail: '.kojo 词形' }],
-    }));
-    const hit = provide(injected.registered[0]!.provider, 'IF A', 5).find((i) => i.label === '如果');
-    expect(hit?.detail).toBe('.kojo 词形');
-    // 外来词形排在本语言候选之后（`9_` 组），不与本方言争位
-    const all = labels(provide(injected.registered[0]!.provider, 'IF A', 5));
-    expect(all.indexOf('IF')).toBeLessThan(all.indexOf('如果'));
-  });
-
+describe('COMPL-SHARED ④ · 缺源不抛不猜（降级每轮可见一次）', () => {
   it('项目函数名提供者缺席：`.kojo` 该行零候选 + 恰一次降级；其余源照常出货', () => {
     const degrades: CompletionDegrade[] = [];
     const { monaco, registered } = stubMonaco();
@@ -472,8 +455,7 @@ describe('COMPL-SHARED ④ · 缺源不抛不猜（降级可见一次）', () =>
     expect(items.some((i) => i.label === 'M_KOJO_NOTICE_甲')).toBe(false);
     expect(degrades.filter((d) => d.sourceId === 'kojo-functions')).toHaveLength(1);
     expect(degrades.find((d) => d.sourceId === 'kojo-functions')!.missing).toBe('erbFunctionNames');
-    // 同一次装配内重复请求不再刷屏（去重表随句柄创建）
-    provide(registered[0]!.provider, '调用 M_KOJO', 11);
+    // 这一轮内只报一次（重复请求不刷屏）；**下一轮还会再报** ⇒ 见 ⑧
     expect(degrades.filter((d) => d.sourceId === 'kojo-functions')).toHaveLength(1);
   });
 
@@ -491,7 +473,8 @@ describe('COMPL-SHARED ④ · 缺源不抛不猜（降级可见一次）', () =>
     );
     expect(() => provide(registered[0]!.provider, '调用 M_KOJO', 11)).not.toThrow();
     expect(provide(registered[0]!.provider, '调用 M_KOJO', 11).length).toBeGreaterThan(0); // 词表源照旧
-    expect(degrades.filter((d) => d.sourceId === 'kojo-functions')).toHaveLength(1);
+    // 两轮 provide = 两轮装配 ⇒ 各报一次（旧口径"句柄级只报一次"是永久无声的 bug，见 ⑧）
+    expect(degrades.filter((d) => d.sourceId === 'kojo-functions')).toHaveLength(2);
   });
 
   it('声明扫描缺席（桩 model 无 `getValue` 之外的字段）⇒ 不抛，别名路自然落空', () => {
@@ -509,5 +492,151 @@ describe('COMPL-SHARED · 两套 Tables 并一（类型层证明）', () => {
     expect(erbTables.erbFunctionNames?.()).toEqual(PROJECT_FNS);
     // 源册并一后仍各自存在，但源类型同源（同一 `CompletionSource` 形状）
     expect(ERB_COMPLETION_SOURCES.every((s) => typeof s.provide === 'function')).toBe(true);
+  });
+});
+
+/* ============================== ⑦ 空白口径 = 糖源那一份（全角空格能编译 ⇒ 必须补得出） ============================== */
+
+describe('COMPL-SHARED ⑦ · `调用` / `函数` 槽的空白口径含全角空格', () => {
+  it('全角空格缩进（`　调用 <前缀>`）出槽，前缀正确', () => {
+    const text = '　调用 M_KOJO_';
+    const slot = kojoFunctionNameSlot(text, text.length + 1);
+    expect(slot).not.toBeNull();
+    expect(slot!.prefix).toBe('M_KOJO_');
+  });
+
+  it('全角空格分隔（`调用　<名字>`）出槽', () => {
+    const text = '调用　M_KOJO_NOTICE_甲';
+    const slot = kojoFunctionNameSlot(text, text.length + 1);
+    expect(slot).not.toBeNull();
+    expect(slot!.prefix).toBe('M_KOJO_NOTICE_甲');
+  });
+
+  it('混合缩进（制表 + 半角 + 全角）+ 英文隐藏别名一样出槽', () => {
+    const text = ' \t　call M_KOJO_';
+    expect(kojoFunctionNameSlot(text, text.length + 1)?.prefix).toBe('M_KOJO_');
+  });
+
+  it('经装配路径真实出货（全角缩进的 `调用` 行补到项目函数名，不是只测槽判定）', () => {
+    const { monaco, registered } = stubMonaco();
+    installKojoCompletion(monaco, () => ({ erbFunctionNames: () => PROJECT_FNS }));
+    const text = '　　调用 M_KOJO_';
+    expect(labels(provide(registered[0]!.provider, text, text.length + 1))).toContain('M_KOJO_NOTICE_甲');
+  });
+
+  it('反例：名字段里混进全角空格 ⇒ 已经越过槽右界，不猜', () => {
+    expect(kojoFunctionNameSlot('调用 甲　乙', 7)).toBeNull();
+  });
+});
+
+describe('COMPL-SHARED ⑦ · 全角分隔的声明名经装配路径进候选', () => {
+  it('`别名　全角隔 = 角色 3`（全角分隔）的声明名候选照常出货，detail 区分类别', () => {
+    const { monaco, registered } = stubMonaco();
+    installKojoCompletion(monaco, () => ({}));
+    const items = provide(registered[0]!.provider, '别名　全角隔 = 角色 3\n常量　上限值 = 5\n', 1);
+    expect(items.find((i) => i.label === '全角隔')?.detail).toBe('别名（本文件）');
+    expect(items.find((i) => i.label === '上限值')?.detail).toBe('常量（本文件）');
+  });
+
+  it('反例：注释行里的全角形态声明仍不进候选（以解析器为准）', () => {
+    const { monaco, registered } = stubMonaco();
+    installKojoCompletion(monaco, () => ({}));
+    const at = labels(provide(registered[0]!.provider, ';　别名　假声明 = 角色 1\n', 1));
+    expect(at).not.toContain('假声明');
+    expect(at.length).toBeGreaterThan(0);
+  });
+});
+
+/* ============================== ⑧ 装配核不静默（抛错可见 + 去重表随轮新建） ============================== */
+
+describe('COMPL-SHARED ⑧ · 装配核不静默（AGENTS.md 铁律 4）', () => {
+  /** 一次 `provideCompletionItems` 的**原始返回**（保留 `{ suggestions }` 形状本身，不只取数组） */
+  function provideRaw(
+    provider: Monaco.languages.CompletionItemProvider,
+    text: string,
+    column: number,
+  ): Monaco.languages.CompletionList {
+    return provider.provideCompletionItems!(
+      modelOf(text),
+      { lineNumber: 1, column } as Monaco.Position,
+      {} as Monaco.languages.CompletionContext,
+      {} as Monaco.CancellationToken,
+    ) as unknown as Monaco.languages.CompletionList;
+  }
+
+  /** 装配级（非任何候选源）抛出的降级信号 */
+  const assemblyDegrades = (degrades: readonly CompletionDegrade[]): CompletionDegrade[] =>
+    degrades.filter((d) => d.sourceId === COMPLETION_ASSEMBLY_SOURCE_ID);
+
+  it('`getTables()` 抛错 ⇒ 交回 Monaco 要求的 `{ suggestions: [] }`（不 reject、不返裸数组）+ 恰一条装配级降级', () => {
+    const degrades: CompletionDegrade[] = [];
+    const { monaco, registered } = stubMonaco();
+    installKojoCompletion(
+      monaco,
+      () => {
+        throw new Error('全局 provider 在无实例时被调用（不应发生）');
+      },
+      (d) => degrades.push(d),
+    );
+    let out: Monaco.languages.CompletionList | undefined;
+    expect(() => {
+      out = provideRaw(registered[0]!.provider, '调用 M_KOJO', 11);
+    }).not.toThrow();
+    expect(out).toEqual({ suggestions: [] });
+    const mine = assemblyDegrades(degrades);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.missing).toBeUndefined();
+    expect(mine[0]!.failure?.stage).toBe('getTables');
+    expect(mine[0]!.failure?.error).toContain('无实例');
+    expect(mine[0]!.reason).toContain('本轮返回空候选');
+    // 取表都没成功 ⇒ 一条源级降级也不该有（信号形态与「缺表」严格分家）
+    expect(degrades.filter((d) => d.sourceId !== COMPLETION_ASSEMBLY_SOURCE_ID)).toEqual([]);
+  });
+
+  it('`assembly.locate()` 抛错同样不外抛：空候选 + 一条 `stage = locate` 的降级', () => {
+    const degrades: CompletionDegrade[] = [];
+    const { monaco } = stubMonaco();
+    const assembly: CompletionAssembly = {
+      ...KOJO_COMPLETION_ASSEMBLY,
+      locate() {
+        throw new Error('位置判定读 model 越界');
+      },
+    };
+    const provider = createCompletionProvider(monaco, assembly, () => ({}), (d) => degrades.push(d));
+    let out: Monaco.languages.CompletionList | undefined;
+    expect(() => {
+      out = provideRaw(provider, '调用 M_KOJO', 11);
+    }).not.toThrow();
+    expect(out!.suggestions).toEqual([]);
+    const mine = assemblyDegrades(degrades);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.failure?.stage).toBe('locate');
+    expect(mine[0]!.failure?.error).toContain('越界');
+  });
+
+  it('同一 `(来源, 缺键)`：一轮至多一次、**下一轮复报**（去重表随轮新建 ⇒ 改前必红）', () => {
+    const degrades: CompletionDegrade[] = [];
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}), (d) => degrades.push(d));
+    const provider = registered[0]!.provider;
+    const count = (): number =>
+      degrades.filter((d) => d.sourceId === 'erb-variables' && d.missing === 'variableSchema').length;
+    provideRaw(provider, 'CFLAG:', 7);
+    expect(count()).toBe(1); // 第一轮：一次（一轮内不刷屏）
+    provideRaw(provider, 'CFLAG:', 7);
+    expect(count()).toBe(2); // 第二轮：**复报**（旧句柄级去重从这轮起永久无声）
+    provideRaw(provider, 'CFLAG:', 7);
+    expect(count()).toBe(3);
+  });
+
+  it('additive 形状证明：缺表降级仍是 `sourceId` / `missing` / `reason` 三件套，不带 `failure`', () => {
+    const degrades: CompletionDegrade[] = [];
+    const { monaco, registered } = stubMonaco();
+    installKojoCompletion(monaco, () => ({}), (d) => degrades.push(d));
+    provideRaw(registered[0]!.provider, '调用 M_KOJO', 11);
+    const hit = degrades.find((d) => d.sourceId === 'kojo-functions')!;
+    expect(hit.missing).toBe('erbFunctionNames');
+    expect(Object.keys(hit).sort()).toEqual(['missing', 'reason', 'sourceId']);
+    expect(assemblyDegrades(degrades)).toEqual([]);
   });
 });

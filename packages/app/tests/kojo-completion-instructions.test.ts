@@ -228,3 +228,46 @@ describe('KC-3 编号槽补全 · CJK-primary（规范 §4.1，同 kojo-face 的
     expect(labels(instr(ascii)('时机 指令 |'))).toEqual(['ACK', 'NAK']);
   });
 });
+
+/* ==================== 新增：空白口径与转译器对齐（全角空格 U+3000 也是空白） ==================== */
+
+const FW = '　'; // 全角空格 U+3000；转译器 lexer 一律接受 ⇒ 落点判定不得只认 `[ \t]`
+
+describe('KC-3 编号槽补全 · 全角空格形态（能编译 ⇒ 必须出候选）', () => {
+  it('落点 1：`时机` 后全角分隔（`时机　指令 摸|屁股：`）→ 摸屁股', () => {
+    expect(labels(at(`时机${FW}指令 摸|屁股：`))).toEqual(['摸屁股']);
+  });
+
+  it('落点 1：全角缩进 + 行尾插入点（`　时机 指令 |`）→ 全量，range 随缩进后移', () => {
+    const items = at(`${FW}时机 指令 |`);
+    expect(labels(items)).toEqual(['摸屁股', '告白', '会話']);
+    expect(items[0]!.range).toEqual({ startLineNumber: 1, endLineNumber: 1, startColumn: 8, endColumn: 8 });
+  });
+
+  it('落点 1：编号位本身用全角分隔（`时机　指令　告|`）→ 告白', () => {
+    expect(labels(at(`时机${FW}指令${FW}告|`))).toEqual(['告白']);
+  });
+
+  it('落点 1 按面分流同样吃全角：`时机　计数器 |` 由计数器源出货', () => {
+    expect(labels(counter(COUNTER_TABLE, FACE_TABLE)(`时机${FW}计数器 |`))).toEqual(['偷看', '色っぽい仕草']);
+  });
+
+  it('落点 2：`是` 后全角分隔（`是　会|`）→ 会話，range 只覆盖该词', () => {
+    const items = at(`是${FW}会|`);
+    expect(labels(items)).toEqual(['会話']);
+    expect(items[0]!.range).toEqual({ startLineNumber: 1, endLineNumber: 1, startColumn: 3, endColumn: 4 });
+  });
+
+  it('落点 2：全角缩进（`　是 摸|屁股：`）与英文别名全角分隔（`is　告|白：`）→ 命中', () => {
+    expect(labels(at(`${FW}是 摸|屁股：`))).toEqual(['摸屁股']);
+    expect(labels(at(`is${FW}告|白：`))).toEqual(['告白']);
+  });
+
+  it('回归不变：半角写法逐条照旧 + 缺空白仍不认（两种空白都不给候选）', () => {
+    expect(labels(at('时机 指令 摸|屁股：'))).toEqual(['摸屁股']);
+    expect(labels(at('是 1, 摸|'))).toEqual(['摸屁股']);
+    expect(at(`时机${FW}指令|`)).toEqual([]); // 光标仍在分野令牌内 ⇒ 归 kojo-face
+    expect(at('时机指令 摸|屁股：')).toEqual([]); // `时机` 后无空白 ⇒ 非块头
+    expect(at(`时机${FW}指令 310 |`)).toEqual([]); // 编号已写 ⇒ 不再是编号槽
+  });
+});

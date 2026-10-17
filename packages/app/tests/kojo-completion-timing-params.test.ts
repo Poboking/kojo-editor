@@ -179,3 +179,43 @@ describe('KC-2b · fail-closed / 收尾 / 回归', () => {
     expect(hit!.detail).toBe('M_KOJO_K{n}_HATSUMI');
   });
 });
+
+/* ============ 新增：块头空白口径与转译器对齐（全角空格 U+3000 也是空白） ============ */
+
+const FW = '　'; // 全角空格 U+3000：`时机　指令　310　成否: 游戏判定：` 这类写法 lexer 是能编译的
+
+describe('KC-2b · 全角空格形态（键 / 取值联动照出）', () => {
+  it('`时机` 后全角分隔 ⇒ 键候选全量（`时机　初见 `）', () => {
+    const text = `时机${FW}初见 `;
+    const items = provide(text, atEnd(text));
+    expect(labels(items)).toEqual(['成否', '类型', '参数']);
+    expect(items.every((i) => i.kind === KIND.Property)).toBe(true);
+  });
+
+  it('全角缩进 + 前缀过滤（`　时机 初见 成`）→ 只给 `成否`', () => {
+    const text = `${FW}时机 初见 成`;
+    expect(labels(provide(text, atEnd(text)))).toEqual(['成否']);
+  });
+
+  it('块头整串全角分隔 ⇒ 取值联动照出（`时机　指令　310　成否: `）', () => {
+    const text = `时机${FW}指令${FW}310${FW}成否:${FW}`;
+    const items = provide(text, atEnd(text));
+    expect(labels(items)).toEqual(['游戏判定', '一定成功', '一定失败', '不执行']);
+    expect(items[0]!.detail).toBe('成否 取值');
+  });
+
+  it('全角分隔 + 取值前缀（`时机　指令　类型: 副`）→ 只给 `副指令`', () => {
+    const text = `时机${FW}指令${FW}类型: 副`;
+    expect(labels(provide(text, atEnd(text)))).toEqual(['副指令']);
+  });
+
+  it('全角空格 + 块头已收尾（`时机　初见：`）→ 零候选（与半角同判）', () => {
+    const text = `时机${FW}初见：`;
+    expect(provide(text, atEnd(text))).toEqual([]);
+  });
+
+  it('回归不变：半角写法（`时机 初见 成否: `）取值全量', () => {
+    const text = '时机 初见 成否: ';
+    expect(labels(provide(text, atEnd(text)))).toEqual(['游戏判定', '一定成功', '一定失败', '不执行']);
+  });
+});
