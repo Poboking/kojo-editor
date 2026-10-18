@@ -166,10 +166,15 @@ function compile(
  * 编译整张分野表（表缺席 / 无 `faces` → 空索引，什么都不标）。
  *
  * PS-8：按 **`faceTable` 对象身份**记忆（WeakMap）——投影每次重建都重编译全表正则
- * （eraTW 实测 ~20 面 × 2 形），而装配层给出的表对象在同一代际内是稳定引用；
- * 表缺席（`undefined`）不进记忆（每新对象都不同身份，缓存无意义且会泄漏）。
+ * （eraTW 实测 ~20 面 × 2 形）。身份记忆成立的前提是**表对象建好后就地不改**：
+ * 这是**约定不是机制**——eratw-adapter `createEratwFaceTable()` 当前返回普通字面量
+ * （`face-templates.ts:57` 起，**没有 `Object.freeze`**，尽管其文件头自称"冻结"）。
+ * 谁将来就地改表，这份 memo 就会拿到旧编译结果——机械化（真 freeze 或在装配处复制）
+ * 是 adapter 线的活，本模块只把不变量写在这。B4-fp 的前缀覆盖路径
+ * （`service.ts resolveFaceTableForPrefix`）走**浅拷贝新对象** ⇒ 新身份 ⇒ 重编译，
+ * 不会拿旧缓存出错表，身份记忆对它天然安全。表缺席（`undefined`）不进记忆。
  * 返回的 `FaceNameIndex` 是纯查询对象（内部 `cache` 只按函数名记忆判定结果），
- * 跨投影共享安全。
+ * 同一表身份下跨投影共享安全（同表同产出，判定是纯函数）。
  */
 const faceIndexByTable = new WeakMap<KojoFaceTable, FaceNameIndex>();
 
@@ -196,6 +201,15 @@ function compileFaceNameIndex(table: KojoFaceTable | undefined): FaceNameIndex {
   // 具体度降序：第一个胜出候选即"最具体"（稳定排序，模板顺序仅在同分时决定优先级）
   matchers.sort((a, b) => b.literalLen - a.literalLen);
 
+  // PS-8 读数账（收口批补实）：这张 name→label 缓存按**函数名**只增不减，
+  // 生命周期＝表对象生命周期（WeakMap 值随表回收）——eraTW 的表在插件激活时一次构建
+  // （`eratw-adapter/src/plugin.ts:492`），跨项目代际**不换身份** ⇒ 换代不释放这份，
+  // 这是**上限有界的留存增加**（上界 = 全库函数名总数，真语料读数 99,228，每值一个
+  // `{label, family}` 小对象），不是无界泄漏。代际释放由转译实例那层钉
+  // （`hotpath-memo.test.ts`「项目关闭（current === null）⇒ 又一代际；重开原项目 ⇒
+  // 再换新实例（旧缓存不复活脏数据）」钉转译缓存换代归零；表身份记忆的正反面由
+  // `faces-reverse.test.ts`「身份记忆：同表对象同实例、新表对象新索引」钉"新身份 ⇒
+  // 新索引 ⇒ 新缓存"）。
   const cache = new Map<string, LabelHit | undefined>();
 
   const compute = (functionName: string): LabelHit | undefined => {

@@ -14,7 +14,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import type { DirEntry, FileStat, Logger, SnapshotArchive } from '@kojo/plugin-api';
+import type { DirEntry, FileStat, Logger } from '@kojo/plugin-api';
 import { SnapshotSourceEngine } from '../../sav-parser/src/engine';
 import { StateReplayEngine } from '../../state-replay/src/engine';
 import { parseArchive } from '../../sav-parser/src/parse';
@@ -97,12 +97,12 @@ async function makeLeg(parseMemoMax: number, viewCacheMax: number): Promise<Harn
   return { replay, reads: () => readCount };
 }
 
-/** 一次击键（与面板同形：先建视图，再逐个回放产物函数） */
-async function keystroke(leg: Harness, i: number): Promise<SnapshotArchive | null> {
+/** 一次击键（与面板同形：先建视图，再逐个回放产物函数）；返回回放产物的可判等序列化 */
+async function keystroke(leg: Harness, i: number): Promise<string> {
   const view = await leg.replay.createView(SAV_PATH, CHAR_NO);
   const names = Array.from({ length: 12 }, (_, k) => `M_KOJO_K${CHAR_NO}_MSG_${i}_${k}`);
-  await leg.replay.replayFunctions(view, names);
-  return null;
+  const replays = await leg.replay.replayFunctions(view, names);
+  return JSON.stringify(replays);
 }
 
 function median(xs: number[]): number {
@@ -120,6 +120,20 @@ describe('选档后的每击键成本（记忆开 / 关同窗交替）', () => {
     // 预热一次（两条腿各自的首次解析必然重做，不计入读数）
     await keystroke(cached, -1);
     await keystroke(uncached, -1);
+
+    // 判据⓪（产出等价，先于速度）：同一段击键序列（keys 0…KEYS-1）在两条腿上
+    // 逐个回放产物必须逐字同果——记忆只许换"重算次数"，不许换内容。
+    // 这条比较置于计时轮与读盘基线之前，计时轮的读数口径不受影响。
+    const outsCached: string[] = [];
+    const outsUncached: string[] = [];
+    for (let k = 0; k < KEYS; k++) {
+      outsCached.push(await keystroke(cached, k));
+      outsUncached.push(await keystroke(uncached, k));
+    }
+    expect(outsCached.length).toBe(KEYS);
+    expect(outsCached.every((s) => s.length > 2)).toBe(true); // 反恒真：产出不是空串阵列
+    expect(outsCached).toEqual(outsUncached);
+
     const readsAfterWarm = cached.reads();
 
     for (let round = 0; round < ROUNDS; round++) {

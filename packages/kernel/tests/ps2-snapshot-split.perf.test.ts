@@ -264,10 +264,13 @@ describe('PERF-14 读数 · 快照装载（两趟合一趟；~19MB 等效）', (
           `每键趟数 ${oldPerKey}→1；7-get cascade trips: now=${totalTrips(trips)} (was ${oldPerKey * 7}) in ${cascadeMs.toFixed(1)}ms`,
       );
 
-      // 墙钟只留**读数** + 一条量级回退闸（绝对下限，噪声翻不了线）：
+      // 墙钟只留**读数** + 一条量级回退闸（绝对下限 `old + 25ms`，噪声翻不了线）：
       // 本池是 node 桥、没有 IPC 队列，PERF-14 真正省下的"两趟 IPC 排队税"在这里量不到
       // ——真壳同一次装载 node 侧 read+parse 19.6ms / 壳侧 await 1,406ms（docs/STATE.md §S 的
       // PERF-14 归因）。~25ms 尺度上的 ±15% 比值落在进程噪声里 ⇒ 会随机假红，不再当判据。
+      // ⇒ 625e3b3 那句「两趟 133.5ms → 一趟 85.4ms」**不由本文件任何档位定责**：同池串行
+      //   复跑读到过 old 61.9 / new 69.2ms（新腿慢 11.8%，闸仍绿）——本用例定责的是趟数
+      //   2→1、级联 14→7、解码逐字节同果这三条结构不变量；提速账归真壳读数（下）。
       // 真壳读数复跑：`node tools/boot-watermarks.mjs`（账记 docs/BOARD.md §S PERF-14 行）。
       expect(oldMs.length).toBeGreaterThanOrEqual(MIN_SAMPLES);
       expect(newMs.length).toBeGreaterThanOrEqual(MIN_SAMPLES);

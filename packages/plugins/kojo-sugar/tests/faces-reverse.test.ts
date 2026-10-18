@@ -188,3 +188,35 @@ describe('标签可写回 · 反糖标签喂回转译器得到同一个函数名
     });
   }
 });
+
+/* ============================================================================ */
+/* PS-8 身份记忆的正反面（收口批）：memo 的定责面与留存面                        */
+/* ============================================================================ */
+
+describe('身份记忆：同表对象同实例、新表对象新索引', () => {
+  it('同一表对象 ⇒ 同一 FaceNameIndex 实例（WeakMap 命中，不重编译正则）', () => {
+    const table = stubFaceTable();
+    const a = buildFaceNameIndex(table);
+    const b = buildFaceNameIndex(table);
+    expect(a).toBe(b);
+  });
+
+  it('内容相同但身份不同的新表对象 ⇒ 新索引实例（name→label 缓存随新身份重开，旧实例可随旧表回收）', () => {
+    const t1 = stubFaceTable();
+    const t2 = stubFaceTable(); // 逐字同内容、不同对象——生产里对应"下一次插件激活建的表"
+    const i1 = buildFaceNameIndex(t1);
+    const i2 = buildFaceNameIndex(t2);
+    expect(i2).not.toBe(i1);
+    expect(i2.size).toBe(i1.size);
+    // 产出与身份无关（同表同判定）：旧实例不是"错缓存"，只是不再被新身份引用
+    expect(i2.label('M_KOJO_MESSAGE_COM_K12_310')).toBe(i1.label('M_KOJO_MESSAGE_COM_K12_310'));
+  });
+
+  it('表缺席（undefined）⇒ 每次新空索引，不进身份记忆（无泄漏面）', () => {
+    const a = buildFaceNameIndex(undefined);
+    const b = buildFaceNameIndex(undefined);
+    expect(a).not.toBe(b);
+    expect(a.size).toBe(0);
+    expect(a.label('M_KOJO_MESSAGE_COM_K12_310')).toBeUndefined();
+  });
+});

@@ -305,6 +305,8 @@ export function createErbParserPlugin(): Plugin {
          * 串行往返里"读盘/IPC"与"解析/扫描 CPU"两两重叠（旧形态 await 读 → await 处理
          * 轮班，磁盘与 CPU 从不同时干活）。失败语义不变：整批 rejection 照旧向上传播
          * （晚一拍、在下一轮 await 处），逐位失败仍走 null 位的既有告警路径。
+         * 每批发出时同步挂兜订阅（`pending?.catch`）：`process` 抛错早退时孤儿批不再漂
+         * unhandled rejection（纪律同 compute.ts 的窗口起跑），正常路径拒绝仍由 await 上抛。
          */
         async function readBatchesPipelined(
           paths: readonly string[],
@@ -312,11 +314,19 @@ export function createErbParserPlugin(): Plugin {
         ): Promise<void> {
           let pending: Promise<BatchTexts> | null =
             paths.length > 0 ? io.readTexts(paths.slice(0, READ_BATCH)) : null;
+          // 首发批同样必须有同步订阅者：兜住"循环首轮前即退出"的理论面（同下：只接孤儿、不改传播）。
+          void pending?.catch(() => undefined);
           for (let base = 0; base < paths.length; base += READ_BATCH) {
             const chunk = paths.slice(base, base + READ_BATCH);
             const texts = await pending!; // eslint 无关：循环结构保证首轮已置
             const nextBase = base + READ_BATCH;
             pending = nextBase < paths.length ? io.readTexts(paths.slice(nextBase, nextBase + READ_BATCH)) : null;
+            // 兜订阅（防"漏成 unhandled rejection"，纪律同 kernel/compute.ts:196-200）：
+            // 下一批的读已在途，若 `process` 抛错（或循环提前退出）就没有下一轮 `await`
+            // 来接它 ⇒ 拒绝无订阅者、宿主侧漂出 unhandledrejection 且整批读白付。
+            // 这只吞**早退路径**的孤儿拒绝：正常路径的拒绝仍由下一轮 `await pending`
+            // 原样上抛（失败语义一字未动——"不吞错也不漂错"）。
+            void pending?.catch(() => undefined);
             await process(chunk, texts);
           }
         }
