@@ -66,6 +66,12 @@ interface Props {
   onSplitEditor: () => void;
   /** 关闭指定组（组内标签全部随组消失；单组不可关） */
   onCloseGroup: (groupId: string) => void;
+  /** 后退（MM-6，Alt+←）：导航历史光标前移；到栈底由宿主发人话通知 */
+  onNavBack: () => void;
+  /** 前进（MM-6，Alt+→）：导航历史光标后移；到栈顶由宿主发人话通知 */
+  onNavForward: () => void;
+  /** 恢复最近关闭的标签（MM-10，Ctrl+Shift+T）；空栈由宿主发人话通知 */
+  onReopenClosedTab: () => void;
   /** 各标签脏态（标签栏脏点，见 `.tab-dirty`） */
   dirtyPaths: ReadonlySet<string>;
   /** 固定标签集合（C2；会话态——与 openTabs 同生命周期，真源在宿主 App） */
@@ -188,6 +194,9 @@ export function ProjectView({
   onBatchCloseTabInGroup,
   onSplitEditor,
   onCloseGroup,
+  onNavBack,
+  onNavForward,
+  onReopenClosedTab,
   dirtyPaths,
   pinnedPaths,
   reveal,
@@ -508,6 +517,27 @@ export function ProjectView({
         keybinding: effectiveKeybindingOf('workbench.closeEditorGroup'),
         run: () => onCloseGroup(activeGroupIdRef.current),
       },
+      // 导航历史（MM-6 前进/后退 + MM-10 恢复关闭的标签，编辑器肌肉记忆批）：
+      // 三条腿的栈都在宿主 App（navRef + 纯逻辑 navigation-history.ts），壳层只发意图；
+      // 边界（栈底/栈顶/恢复栈空）由宿主回人话通知——按得下去就听得到响（铁律 4）。
+      {
+        id: 'workbench.navBack',
+        title: '后退',
+        keybinding: effectiveKeybindingOf('workbench.navBack'),
+        run: () => onNavBack(),
+      },
+      {
+        id: 'workbench.navForward',
+        title: '前进',
+        keybinding: effectiveKeybindingOf('workbench.navForward'),
+        run: () => onNavForward(),
+      },
+      {
+        id: 'workbench.reopenClosedTab',
+        title: '恢复关闭的标签',
+        keybinding: effectiveKeybindingOf('workbench.reopenClosedTab'),
+        run: () => onReopenClosedTab(),
+      },
       /* ---- 编辑器动作（R8 命令面板补齐批）：壳层发意图，EditorPane 落 Monaco 动作 ----
        * **刻意不带缺省键位**：编辑器内这些动作 Monaco 已有内建键（Ctrl+F / Ctrl+H /
        * Shift+Alt+F / F2 / Shift+F12），宿主命令不抢键（注册表带键会在编辑器聚焦时
@@ -554,7 +584,7 @@ export function ProjectView({
       },
     ],
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
-    [onRequestCloseTab, onSaveAll, onSplitEditor, onCloseGroup, kernel, notify, kbVersion],
+    [onRequestCloseTab, onSaveAll, onSplitEditor, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, kernel, notify, kbVersion],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →

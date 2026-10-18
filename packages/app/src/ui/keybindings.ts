@@ -77,6 +77,11 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'workbench.fixAll', title: '一键修复当前文件', category: '工作台', keys: 'ctrl+shift+y', rebindable: true },
   { id: 'workbench.toggleSugarView', title: '切换 .kojo 预览', category: '工作台', keys: 'ctrl+alt+t', rebindable: true },
   { id: 'workbench.jumpToState', title: '看这一行的状态', category: '工作台', keys: 'ctrl+alt+s', rebindable: true },
+  // 导航历史（MM-6 前进/后退 + MM-10 恢复关闭的标签）：编辑器肌肉记忆批。
+  // Alt+←/→ 与 Ctrl+Shift+T 都是单键 chord，走全局分发（ShellLayout 注册表匹配）。
+  { id: 'workbench.navBack', title: '后退', category: '工作台', keys: 'alt+arrowleft', rebindable: true },
+  { id: 'workbench.navForward', title: '前进', category: '工作台', keys: 'alt+arrowright', rebindable: true },
+  { id: 'workbench.reopenClosedTab', title: '恢复关闭的标签', category: '工作台', keys: 'ctrl+shift+t', rebindable: true },
   // ---- 分屏（SPLIT-1 编辑器组批） ----
   { id: 'workbench.splitEditor', title: '向右拆分编辑器', category: '工作台', keys: 'ctrl+\\', rebindable: true },
   { id: 'workbench.closeEditorGroup', title: '关闭编辑器组', category: '工作台', rebindable: true, note: '仅分屏时生效；单组不可关' },

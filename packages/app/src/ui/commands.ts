@@ -53,6 +53,14 @@ export function chordEquals(a: KeyChord, b: KeyChord): boolean {
   );
 }
 
+/**
+ * 方向键的人读符号（MM-6 导航键位专用特例）：`alt+arrowleft` 原样显示成
+ * 「Alt+arrowleft」——快捷键页与命令面板 hint 里一溜小写英文，作者读不了。
+ * 只收左右两支（宿主缺省键位里用得上方向键的只有导航历史）；其余方向键不在
+ * 宿主缺省键位中，原样回显即可，不预支映射表。
+ */
+const ARROW_KEY_LABELS: Readonly<Record<string, string>> = { arrowleft: '←', arrowright: '→' };
+
 /** keybinding 的人读展示（命令面板右侧 hint） */
 export function formatKeybinding(binding: string): string {
   const c = parseKeybinding(binding);
@@ -62,8 +70,9 @@ export function formatKeybinding(binding: string): string {
   if (c.shift) mods.push('Shift');
   if (c.alt) mods.push('Alt');
   if (c.meta) mods.push('Meta');
-  // 单字符与功能键（f1…f12）大写展示；其余（如 'arrowdown'）原样
-  const key = c.key.length === 1 || /^f\d+$/.test(c.key) ? c.key.toUpperCase() : c.key;
+  // 单字符与功能键（f1…f12）大写展示；左右方向键折成箭头符号；其余原样
+  const key =
+    c.key.length === 1 || /^f\d+$/.test(c.key) ? c.key.toUpperCase() : (ARROW_KEY_LABELS[c.key] ?? c.key);
   return [...mods, key].join('+');
 }
 
