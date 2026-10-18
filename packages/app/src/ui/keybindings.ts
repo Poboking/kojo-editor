@@ -82,8 +82,13 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'workbench.navBack', title: '后退', category: '工作台', keys: 'alt+arrowleft', rebindable: true },
   { id: 'workbench.navForward', title: '前进', category: '工作台', keys: 'alt+arrowright', rebindable: true },
   { id: 'workbench.reopenClosedTab', title: '恢复关闭的标签', category: '工作台', keys: 'ctrl+shift+t', rebindable: true },
-  // ---- 分屏（SPLIT-1 编辑器组批） ----
+  // ---- 分屏（SPLIT-1 编辑器组批 + MM-9 布局持久化批） ----
   { id: 'workbench.splitEditor', title: '向右拆分编辑器', category: '工作台', keys: 'ctrl+\\', rebindable: true },
+  // MM-9：向下拆分同时把排列钉为上下（column）——命令名说什么就给什么；
+  // 翻方向两条仅分屏时生效（单组翻了看不出来，命令侧先给人话）
+  { id: 'workbench.splitEditorDown', title: '向下拆分编辑器', category: '工作台', rebindable: true, note: '拆分并切换为上下排列' },
+  { id: 'workbench.setGroupsColumn', title: '编辑器组上下排列', category: '工作台', rebindable: true, note: '仅分屏时生效；单组先拆分' },
+  { id: 'workbench.setGroupsRow', title: '编辑器组左右排列', category: '工作台', rebindable: true, note: '仅分屏时生效；单组先拆分' },
   { id: 'workbench.closeEditorGroup', title: '关闭编辑器组', category: '工作台', rebindable: true, note: '仅分屏时生效；单组不可关' },
   // ---- 编辑器动作（命令面板入口；不带缺省键位 = 不劫持 Monaco 内建键） ----
   { id: 'editor.action.find', title: '查找', category: '编辑器', rebindable: true, note: '编辑器内 Ctrl+F 为 Monaco 内建' },

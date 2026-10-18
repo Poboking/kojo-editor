@@ -84,7 +84,11 @@ import {
   initialEditorGroups,
   activateTab as activateTabInGroupState,
   openInActiveGroup,
+  restoreGroups,
+  serializeGroups,
   setActiveGroup as setFocusedGroup,
+  setGroupsOrientation,
+  splitActiveDown,
   splitActiveRight,
   closeGroup as closeEditorGroup,
   type EditorGroupsState,
@@ -277,7 +281,12 @@ export function App(): ReactElement {
   if (sessionFlushRef.current === null) {
     sessionFlushRef.current = createSessionFlushScheduler({
       write: (p) => {
-        const next = upsertSessionProject(sessionRecordRef.current, p.root, p);
+        // MM-9：编辑器组态随会话一起落盘（serializeGroups 的纯数据快照；restoreGroups
+        // 判非法不存——editorGroupsRef 读最新组态，不吃陈旧闭包，同 openTabsRef 纪律）
+        const next = upsertSessionProject(sessionRecordRef.current, p.root, {
+          ...p,
+          groups: serializeGroups(editorGroupsRef.current),
+        });
         sessionRecordRef.current = next;
         setResumeRoot(next.lastRoot);
         void saveSessionRecord(p.kv, next).catch(() => undefined);
@@ -500,22 +509,35 @@ export function App(): ReactElement {
   }, []);
 
   /**
-   * 会话标签集装回（退出/崩溃守护批）：换项目（欢迎页首开 / 切回 / 重启后重开）时
-   * 按根目录恢复。恢复件（崩溃快照）追加在尾部、激活落第一个恢复件——用户第一眼
-   * 看到的就是没保存成的那份。pinned 与 tabs 取交集（记录可能比盘上事实旧）。
-   * 无记录且无恢复件 = 保持空，绝不凭空造标签。
+   * 会话标签集装回（退出/崩溃守护批 + MM-9 组态持久化）：换项目（欢迎页首开 /
+   * 切回 / 重启后重开）时按根目录恢复。恢复件（崩溃快照）追加在尾部、激活落
+   * 第一个恢复件——用户第一眼看到的就是没保存成的那份。pinned 与 tabs 取交集
+   * （记录可能比盘上事实旧）。无记录且无恢复件 = 保持空，绝不凭空造标签。
+   *
+   * MM-9：记录带**合法** groups 快照 ⇒ 整态换成恢复出的组态（分组与排列方向
+   * 一起回），再把标签集（记录 tabs = flush 时焦点组的投影 + recovered 追加）
+   * 贴到**恢复态的 activeGroupId 组**——recovered 仍 append 到该组尾部、激活
+   * 仍落第一个恢复件，崩溃恢复语义不因分组恢复而丢。快照损坏 / 缺字段 ⇒
+   * restoreGroups 回 null，回落到旧路径（贴到当前焦点组），行为与加 groups
+   * 之前逐字一致。
    */
   const restoreSessionTabs = useCallback((dir: string, recovered: readonly string[]) => {
     const rec = sessionProjectOf(sessionRecordRef.current, dir);
+    const restored = rec?.groups !== undefined ? restoreGroups(rec.groups) : null;
     const tabs = [...(rec?.tabs ?? [])];
     for (const p of recovered) if (!tabs.includes(p)) tabs.push(p);
     if (tabs.length === 0) return;
     const pinned = new Set((rec?.pinned ?? []).filter((p) => tabs.includes(p)));
     const active = recovered[0] ?? (rec?.active && tabs.includes(rec.active) ? rec.active : tabs[0] ?? null);
-    setEditorGroups((prev) => ({
-      ...prev,
-      groups: prev.groups.map((g) => (g.id === prev.activeGroupId ? { ...g, tabs, active } : g)),
-    }));
+    setEditorGroups((prev) => {
+      // 有合法快照 ⇒ 以恢复态为底（prev 是 resetProjectUiState 刚重置的单组空栈，
+      // 整态替换）；没有 ⇒ 维持旧行为：只贴到当前焦点组
+      const base = restored ?? prev;
+      return {
+        ...base,
+        groups: base.groups.map((g) => (g.id === base.activeGroupId ? { ...g, tabs, active } : g)),
+      };
+    });
     setPinnedPaths(pinned);
   }, []);
 
@@ -1064,9 +1086,32 @@ export function App(): ReactElement {
     [closeManySync, advanceBatch, notify],
   );
 
-  /** 向右拆分（VSCode 同款：新组携带焦点组激活标签，焦点跟到新组） */
+  /**
+   * 向右拆分（VSCode 同款：新组携带焦点组激活标签，焦点跟到新组）。
+   * MM-9：拆分方向即排列方向——column 态下只拆不翻 orientation 的话，数组插位
+   * 在视觉上是「向下」，「向右拆分」就说了谎。方向随拆分钉为 row，命令名恒真。
+   */
   const splitEditor = useCallback(() => {
-    setEditorGroups((prev) => splitActiveRight(prev));
+    setEditorGroups((prev) => setGroupsOrientation(splitActiveRight(prev), 'row'));
+  }, []);
+
+  /**
+   * 向下拆分（MM-9：长口上下对照）：同 splitActiveRight 语义，新组插在焦点组
+   * 下方（数组序即排列序——row 从左到右、column 从上到下）。
+   * MM-9：与 splitEditor 对称——拆分同时把排列钉为 column，作者按「向下拆分」
+   * 得到的就是上下两组（缺省 row 态下一次到位，不必再手动翻排列）。
+   */
+  const splitEditorDown = useCallback(() => {
+    setEditorGroups((prev) => setGroupsOrientation(splitActiveDown(prev), 'column'));
+  }, []);
+
+  /**
+   * 翻编辑器组排列方向（MM-9）：row 左右并排 / column 上下堆叠。
+   * 单组时翻了也看不出来 ⇒ 这里直接拒（原样返回）；可见的那句人话由
+   * ProjectView 的命令包装给（铁律 4）。
+   */
+  const setGroupsOrientationDir = useCallback((dir: 'row' | 'column') => {
+    setEditorGroups((prev) => (prev.groups.length > 1 ? setGroupsOrientation(prev, dir) : prev));
   }, []);
 
   /**
@@ -1483,6 +1528,7 @@ export function App(): ReactElement {
           openTabs={openTabs}
           groups={editorGroups.groups}
           activeGroupId={editorGroups.activeGroupId}
+          orientation={editorGroups.orientation}
           dirtyPaths={dirtyPaths}
           pinnedPaths={pinnedPaths}
           reveal={reveal}
@@ -1495,6 +1541,8 @@ export function App(): ReactElement {
           onTogglePinInGroup={togglePinInGroup}
           onBatchCloseTabInGroup={batchCloseInGroup}
           onSplitEditor={splitEditor}
+          onSplitEditorDown={splitEditorDown}
+          onSetGroupsOrientation={setGroupsOrientationDir}
           onCloseGroup={closeGroupById}
           onNavBack={navBack}
           onNavForward={navForward}

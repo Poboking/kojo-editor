@@ -32,7 +32,7 @@ import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
 import { TabBar } from './tabs-bar';
 import type { BatchCloseMode } from './tabs-ops';
-import type { EditorGroupState } from './editor-groups';
+import type { EditorGroupState, GroupsOrientation } from './editor-groups';
 
 interface Props {
   kernel: Kernel;
@@ -50,6 +50,11 @@ interface Props {
    */
   groups: readonly EditorGroupState[];
   activeGroupId: string;
+  /**
+   * 编辑器组排列方向（MM-9）：row = 左右并排、column = 上下堆叠。
+   * 真源在宿主 App 的组态 state，这里只读它挂 `data-orientation` 与选拖拽轴。
+   */
+  orientation: GroupsOrientation;
   /** 焦点组切换（点击某组编辑器区域） */
   onActivateGroup: (groupId: string) => void;
   /** 组内激活标签（点击非焦点组的标签 = 切到该组并激活） */
@@ -64,6 +69,13 @@ interface Props {
   onBatchCloseTabInGroup: (groupId: string, mode: BatchCloseMode, anchor: string) => void;
   /** 向右拆分（从焦点组，VSCode 同款携带激活标签） */
   onSplitEditor: () => void;
+  /** 向下拆分（MM-9：从焦点组，同款携带激活标签；column 下插在下方） */
+  onSplitEditorDown: () => void;
+  /**
+   * 翻编辑器组排列方向（MM-9）：row 左右并排 / column 上下堆叠。
+   * 单组时宿主侧拒（命令包装要先用 groups.length 挡一道并给人话，铁律 4）。
+   */
+  onSetGroupsOrientation: (dir: 'row' | 'column') => void;
   /** 关闭指定组（组内标签全部随组消失；单组不可关） */
   onCloseGroup: (groupId: string) => void;
   /** 后退（MM-6，Alt+←）：导航历史光标前移；到栈底由宿主发人话通知 */
@@ -186,6 +198,7 @@ export function ProjectView({
   openTabs,
   groups,
   activeGroupId,
+  orientation,
   onActivateGroup,
   onActivateTabInGroup,
   onRequestCloseTabInGroup,
@@ -193,6 +206,8 @@ export function ProjectView({
   onTogglePinInGroup,
   onBatchCloseTabInGroup,
   onSplitEditor,
+  onSplitEditorDown,
+  onSetGroupsOrientation,
   onCloseGroup,
   onNavBack,
   onNavForward,
@@ -590,9 +605,45 @@ export function ProjectView({
           kernel.bus.emit('editor.action.request', { action: 'gotoLine', source: '命令面板' });
         },
       },
+      /* ---- 编辑器组布局（MM-9）：向下拆分 + 上下/左右排列 ----
+       * 与 workbench.splitEditor 同族：壳层只发意图，组态推进全在宿主的纯逻辑层。
+       * 翻方向命令**刻意不灰**（铁律 4）：单组时按得下去，但先给一句人话——
+       * 翻了也看不出来，不如告诉作者先拆出多个组。 */
+      {
+        id: 'workbench.splitEditorDown',
+        title: '向下拆分编辑器',
+        keybinding: effectiveKeybindingOf('workbench.splitEditorDown'),
+        run: () => onSplitEditorDown(),
+      },
+      {
+        id: 'workbench.setGroupsColumn',
+        title: '编辑器组上下排列',
+        keybinding: effectiveKeybindingOf('workbench.setGroupsColumn'),
+        run: () => {
+          if (groups.length < 2) {
+            notify({ kind: 'info', message: '先拆分出多个编辑器组，再切换排列方向' });
+            return;
+          }
+          onSetGroupsOrientation('column');
+        },
+      },
+      {
+        id: 'workbench.setGroupsRow',
+        title: '编辑器组左右排列',
+        keybinding: effectiveKeybindingOf('workbench.setGroupsRow'),
+        run: () => {
+          if (groups.length < 2) {
+            notify({ kind: 'info', message: '先拆分出多个编辑器组，再切换排列方向' });
+            return;
+          }
+          onSetGroupsOrientation('row');
+        },
+      },
     ],
-    // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
-    [onRequestCloseTab, onSaveAll, onSplitEditor, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, kernel, notify, kbVersion],
+    // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建。
+    // groups 也是：三条 MM-9 命令（splitEditorDown / setGroupsColumn / setGroupsRow）
+    // 的 run 闭包读它判组数，依赖漏了就是过期读数。
+    [onRequestCloseTab, onSaveAll, onSplitEditor, onSplitEditorDown, onSetGroupsOrientation, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, groups, kernel, notify, kbVersion],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →
@@ -912,6 +963,38 @@ export function ProjectView({
   }, []);
 
   /**
+   * 分隔条**竖向**拖拽（MM-9 column 排列）：调高上下两组。与 startDividerDrag
+   * 同款三事件收尾（pointerup / pointercancel / pointerId 判等），只是把
+   * 宽换成高：最小组高 120px（横拖是 200px——竖排时高度才是稀缺的那一维）。
+   * 同样只改 DOM flex，比例不落盘（布局真源仍是 CSS + 组态 orientation）。
+   */
+  const startDividerDragVertical = useCallback((e: ReactPointerEvent, topId: string, bottomId: string) => {
+    e.preventDefault();
+    const top = groupRefs.current.get(topId);
+    const bottom = groupRefs.current.get(bottomId);
+    const container = top?.parentElement;
+    if (!top || !bottom || !container) return;
+    const total = container.clientHeight;
+    const topH = top.clientHeight;
+    const startY = e.clientY;
+    const move = (ev: PointerEvent): void => {
+      const dy = ev.clientY - startY;
+      const nh = Math.max(120, Math.min(topH + dy, total - 120));
+      top.style.flex = '0 0 ' + nh + 'px';
+      bottom.style.flex = '1 1 0%';
+    };
+    const up = (ev: PointerEvent): void => {
+      if (ev.pointerId !== e.pointerId) return;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  }, []);
+
+  /**
    * 一组编辑器的正文（SPLIT-1）。
    *
    * 刻意写成**函数**而不是内联组件：内联组件类型每次 render 都是新的 ⇒ React 整棵子树
@@ -994,22 +1077,27 @@ export function ProjectView({
           </button>
         </div>
       ) : null}
-      {/* 编辑器组（SPLIT-1）：每组 = 标签条 + 编辑器/空态；组间分隔条可拖调宽 */}
-      <div className="editor-groups">
+      {/* 编辑器组（SPLIT-1 / MM-9）：每组 = 标签条 + 编辑器/空态；组间分隔条可拖
+          （row 调宽、column 调高——由组态 orientation 决定） */}
+      <div className="editor-groups" data-orientation={orientation}>
         {groups.map((g, i) => {
           const focused = g.id === activeGroupId;
           // PS-16：五条回调走 callbacksFor 恒定身份（TabBar memo 的父侧前提）
           const tabCb = callbacksFor(g.id);
+          // MM-9：column 下分隔条是横向的（aria-orientation 与拖拽轴一起翻）
+          const vertical = orientation === 'column';
           return (
             <Fragment key={g.id}>
               {i > 0 ? (
                 <div
-                  className="editor-divider"
+                  className={vertical ? 'editor-divider is-vertical' : 'editor-divider'}
                   role="separator"
-                  aria-orientation="vertical"
+                  aria-orientation={vertical ? 'horizontal' : 'vertical'}
                   onPointerDown={(e) => {
-                    const left = groups[i - 1];
-                    if (left) startDividerDrag(e, left.id, g.id);
+                    const prev = groups[i - 1];
+                    if (!prev) return;
+                    if (vertical) startDividerDragVertical(e, prev.id, g.id);
+                    else startDividerDrag(e, prev.id, g.id);
                   }}
                 />
               ) : null}

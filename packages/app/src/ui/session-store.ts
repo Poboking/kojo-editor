@@ -1,5 +1,6 @@
 import type { ScopedStorage } from '@kojo/plugin-api';
 import { pathKey } from '@kojo/plugin-api';
+import { restoreGroups } from './editor-groups';
 
 /**
  * 会话恢复的持久层（2026-10-16 退出/崩溃守护批）：每个项目一份标签集，
@@ -12,7 +13,10 @@ import { pathKey } from '@kojo/plugin-api';
  * - `lastRoot` = 最近一次打开的项目根：欢迎页「继续上次会话」的目标；
  * - 关项目**不清**记录（重启后一键回标签集靠它）；标签全关再关项目 = 空标签集，
  *   重开不凭空造标签；
- * - 恢复时 pinned 与 tabs 取交集（记录可能比盘上事实旧——文件被删/移动）。
+ * - 恢复时 pinned 与 tabs 取交集（记录可能比盘上事实旧——文件被删/移动）；
+ * - `groups`（MM-9 编辑器组布局）：**additive 扩展**——老记录没有该字段，sanitize
+ *   直接跳过、零影响（v 保持 1 不变）；新记录存 `serializeGroups` 形状的快照，
+ *   合法性由 `restoreGroups` 判，非法即当没有。
  */
 
 export const SESSION_KEY = 'session-tabs-v1';
@@ -23,6 +27,13 @@ export interface SessionProjectRecord {
   tabs: string[];
   active: string | null;
   pinned: string[];
+  /**
+   * 编辑器组态快照（MM-9 分屏布局持久化；形状 = `serializeGroups` 产物）。
+   * **additive 扩展**：老记录没有该字段，sanitize 直接跳过、零影响；
+   * 非法形态（乱值/损坏）在 sanitize 时被当作没有——合法性判据在
+   * `restoreGroups`（editor-groups 的纯函数，零依赖不成环）。
+   */
+  groups?: unknown;
 }
 
 export interface SessionRecord {
@@ -63,7 +74,11 @@ export function sanitizeSessionRecord(raw: unknown): SessionRecord {
     const tabs = stringList(t.tabs, 64);
     if (tabs.length === 0) continue; // 空标签集不入库（重开不造标签）
     const active = typeof t.active === 'string' && tabs.includes(t.active) ? t.active : tabs[0] ?? null;
-    projects[k] = { tabs, active, pinned: stringList(t.pinned, 64).filter((p) => tabs.includes(p)) };
+    const entry: SessionProjectRecord = { tabs, active, pinned: stringList(t.pinned, 64).filter((p) => tabs.includes(p)) };
+    // groups（MM-9 additive）：老记录没这个字段 ⇒ 直接跳过；有则过 restoreGroups
+    // 预校验，非法即当没有（键都不补，保持旧记录的逐字形状）
+    if (t.groups !== undefined && restoreGroups(t.groups) !== null) entry.groups = t.groups;
+    projects[k] = entry;
   }
   return {
     v: 1,
@@ -84,7 +99,7 @@ export function sessionProjectOf(rec: SessionRecord, rootDir: string): SessionPr
 export function upsertSessionProject(
   rec: SessionRecord,
   rootDir: string,
-  data: { tabs: readonly string[]; active: string | null; pinned: readonly string[] },
+  data: { tabs: readonly string[]; active: string | null; pinned: readonly string[]; groups?: unknown },
 ): SessionRecord {
   const tabs = [...new Set(data.tabs)];
   const next: SessionRecord = {
@@ -98,7 +113,11 @@ export function upsertSessionProject(
   }
   const pinned = [...new Set(data.pinned)].filter((p) => tabs.includes(p));
   const active = data.active !== null && tabs.includes(data.active) ? data.active : tabs[0] ?? null;
-  next.projects[sessionProjectKey(rootDir)] = { tabs, active, pinned };
+  const entry: SessionProjectRecord = { tabs, active, pinned };
+  // groups（MM-9 additive）：传入即存，但先过 restoreGroups 预校验——非法不存
+  // （存了也恢复不出，只会让下次 sanitize 再滤一遍，不如这里就挡住）
+  if (data.groups !== undefined && restoreGroups(data.groups) !== null) entry.groups = data.groups;
+  next.projects[sessionProjectKey(rootDir)] = entry;
   return next;
 }
 
