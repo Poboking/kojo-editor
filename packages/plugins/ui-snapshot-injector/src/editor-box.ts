@@ -28,6 +28,8 @@ export interface EditorBoxProps {
   readonly newValueDraft: string;
   readonly setNewValueDraft: (value: string) => void;
   readonly submitNewCell: () => void;
+  /** 回收行开关（宿主偏好 `uiPrefs.panelVirtualize` 的投影；缺省 / false = 追加式路径） */
+  readonly virtualize?: boolean;
 }
 
 /** 编辑区（标量 / 数组两形态；无可编辑选中时为 null） */
@@ -72,6 +74,7 @@ export function renderEditor(props: EditorBoxProps): ReturnType<typeof createEle
         onGrow: growCells,
         onDraft: (ik: string, v: string) => setCellDrafts({ ...cellDrafts, [ik]: v }),
         onSubmit: submitCellFromRow,
+        virtualize: props.virtualize === true,
       }),
       createElement('div', { className: 'inj-editor-row inj-new-cell' },
         createElement('input', {

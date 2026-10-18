@@ -13,10 +13,23 @@ export type ListHost = {
   querySelector(sel: string): ListRow | null;
 };
 
-/** 列表里的一行（量高 / 落焦） */
+/**
+ * 列表里的一行（量高 / 落焦 / 判可达 / 存光标选区）。
+ *
+ * 除量高与落焦外，还要读得到**禁用态**（回收行的键盘漫游必须跳过禁用行）与
+ * 文本选区（行被摘掉前把光标位置带走）——真 DOM 的 `HTMLButtonElement` /
+ * `HTMLInputElement` 天然满足，测试替身按用到的项给。
+ */
 export type ListRow = {
   getBoundingClientRect(): { height: number; top: number };
   focus(): void;
+  /** 原生 `disabled` 属性（React 的 `disabled={true}` 会同时落到属性与 DOM 成员上） */
+  disabled?: boolean;
+  getAttribute?(name: string): string | null;
+  /** 文本类行内元素的光标锚点（按钮没有 ⇒ `undefined`） */
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
+  setSelectionRange?(start: number, end: number): void;
 };
 
 /** 列表容器的键盘事件最小形状（React 合成键盘事件满足） */
@@ -24,6 +37,17 @@ export type ListKeyEvent = {
   key: string;
   target: unknown;
   preventDefault(): void;
+};
+
+/** 列表容器的焦点事件最小形状（React 的 `onFocus` 由原生 `focusin` 委托 ⇒ 行内元素落焦也会冒泡） */
+export type ListFocusEvent = {
+  target: unknown;
+};
+
+/** 列表容器的失焦事件最小形状（React 的 `onBlur` 由原生 `focusout` 委托；行被摘掉时 relatedTarget 为 null） */
+export type ListFocusOutEvent = {
+  target: unknown;
+  relatedTarget?: unknown;
 };
 
 /** 可被尺寸观察器观察的节点（本包无 DOM lib ⇒ 只声明"能被观察"这一事实） */

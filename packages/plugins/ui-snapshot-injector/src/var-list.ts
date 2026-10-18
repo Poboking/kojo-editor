@@ -3,11 +3,17 @@
  * 组件只渲染窗口，过滤 / 选中 / 草稿语义留在面板层。
  *
  * 两条渲染路径（PS-7 回收行）：
- * - **量到几何**（容器有高度、行高量到了、而且确实超过一屏）⇒ 只渲染视口 ± 缓冲，
- *   上下各一块占位撑出同样的滚动条；滚出即撤、滚入即建，全部行仍靠滚动可达；
- * - **量不到**（SSR / 首帧 / 无 ResizeObserver / 短到不足一屏）⇒ 沿用改动前的
+ * - **开了回收且量到几何**（宿主偏好 `uiPrefs.panelVirtualize` + 容器有高度 + 行高量到 +
+ *   确实超过一屏）⇒ 只渲染视口 ± 缓冲，上下各一块占位撑出同样的滚动条；滚出即撤、
+ *   滚入即建，**全部行仍靠键盘可达**（↑↓ 会跳过禁用行、会把窗口外的行滚进来再落焦）；
+ * - **其余一切**（偏好没开 / SSR / 首帧 / 无 ResizeObserver / 短到不足一屏）⇒ 沿用改动前的
  *   「追加式窗口 + 显示更多」，一行不多一行不少。
  * 回落不是静默降级：两条路径都能到底，只是回收路径不必把看过的行一直背在 DOM 里。
+ *
+ * 键盘分工（回收批的裁决，改这里前先读）：**↑↓ = 列表漫游**（本层接管，跨窗唯一通道）、
+ * **Tab / Shift+Tab = 浏览器原生焦点顺序**（只在已渲染行之间移动，本层不接管）、
+ * **←→ 不给行**（留给行内控件）。禁用行（`kind === 'other'`）拿不到焦点 ⇒ 漫游**跳过**它，
+ * 那个方向没有可落焦的行时**不拦键**，绝不出现"按了没反应"。
  */
 
 import { createElement, type ReactElement } from 'react';
@@ -29,12 +35,18 @@ export interface VarListProps {
   readonly onGrow: (total: number) => void;
   /** 选中变量（选中 / 清空编辑草稿语义留在面板层） */
   readonly onSelect: (key: string) => void;
+  /**
+   * 允许回收行（宿主偏好 `uiPrefs.panelVirtualize` 的投影；**缺省 / false = 改动前的
+   * 追加式路径**）。面板是数据录入面，窗口化会改键盘可达与输入态的存续，
+   * 按契约「缺省 = 最保守值」必须由用户在设置页显式开。
+   */
+  readonly virtualize?: boolean;
 }
 
 export function VarList(props: VarListProps): ReactElement {
   const { rows } = props;
   // 数据集身份 = rows 引用（面板侧按 档案 × 作用域 × 过滤词 记忆化 ⇒ 只在真换数据时重置）
-  const rw = useRowWindow(rows.length, '.inj-var-row', rows);
+  const rw = useRowWindow(rows.length, '.inj-var-row', rows, '', props.virtualize === true);
   const virt = rw.win;
   const appendWin = varWindowSize(rows.length, props.limit);
   const start = virt ? virt.start : 0;
@@ -46,6 +58,11 @@ export function VarList(props: VarListProps): ReactElement {
       ref: rw.setHost,
       onScroll: rw.onScroll,
       onKeyDown: rw.onKeyDown,
+      // 焦点记账 + 合成冻结（行是按钮：只有前两条用得上，仍一并挂上 = 与单元行同一套口径）
+      onFocus: rw.onFocusIn,
+      onBlur: rw.onFocusOut,
+      onCompositionStart: rw.onCompositionStart,
+      onCompositionEnd: rw.onCompositionEnd,
     },
     virt ? listSpacer(virt.topPad, 'pad-top') : null,
     ...shownRows.map((r, i) => {

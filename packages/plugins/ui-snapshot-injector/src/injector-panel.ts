@@ -150,6 +150,15 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     }, [path]);
 
     const varSchema = schemaLookup();
+    /**
+     * 回收行开关（宿主下传的容器偏好；**缺省 / false = 改动前的追加式路径** + 「显示更多」哨兵）。
+     *
+     * 这块面板是**数据录入面**（作者往单元格里打日文），窗口化会同时动到两件事：
+     * 键盘能点到哪些行、正在输入的那一行还在不在 DOM 里。既然改了键盘语义就得让人能
+     * 一键退回旧行为——与条件矩阵同一口径，也符合契约「偏好缺省 = 最保守值」。
+     * 开起来后由 `list-window` 保证"可数 / 可达 / 输入中的行不被摘"三条不变量。
+     */
+    const virtualize = props.uiPrefs?.panelVirtualize === true;
     // ---- 三处每帧重算的账单收进记忆化（PS-7；面板里除注入外全是只读路径） ----
     // 变量目录：旧实现每次渲染都 `listVars` ——一个角色块几百个变量、数组变量的单元表
     // 逐帧重建（改前还逐格深拷贝）。档案实例与作用域对象都不变 ⇒ 复用上一次结果。
@@ -330,6 +339,7 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       limit: varWindow,
       onGrow: growVars,
       onSelect: selectVar,
+      virtualize,
     });
 
     // 编辑区
@@ -349,6 +359,7 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       newValueDraft,
       setNewValueDraft,
       submitNewCell,
+      virtualize,
     });
 
     const pendingBox = renderPendingBox({
