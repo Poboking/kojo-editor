@@ -67,8 +67,10 @@ import {
   FIND_BASELINE,
   LARGE_FILE_LINES,
   applySizeTier,
+  layoutPrefPatch,
   quickSuggestionsFor,
 } from './editor-options';
+import { subscribeLayoutPref } from './layout-pref';
 import { CODE_FONT_BASELINE } from './code-font'; // 编程字体单一真源（与 styles.css 的 --font-code 逐字同一条栈）
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
@@ -1551,7 +1553,9 @@ export function EditorPane({
       lineNumbers: 'on',
       renderWhitespace: 'none',
       scrollBeyondLastLine: false,
-      wordWrap: 'on',
+      // 折行不在这里硬编码（P2-16）：走下面的排版偏好补丁（layoutPrefPatch），与切文件
+      // 路径（applySizeTier → editorOptionsForLineCount）读同一份偏好；create 时屏幕上
+      // 还没有文件，按 small 档取值（即此前的 'on'），第一个文件落档后按真实行数覆写。
       // 中文块回车的精确缩进层（ZH-D4）：`onEnterRules` 的正则只看得到原文，块头行尾带 `;`
       // 注释这类同步层判不了的形态靠 on-type provider 兜；Monaco 只在 `formatOnType` 为真时派发它。
       formatOnType: true,
@@ -1576,6 +1580,10 @@ export function EditorPane({
       quickSuggestionsDelay: loadSuggestDelayPref(),
       // find 体验基线（A7）：create 与切文件两条路径都要带上，吞一条就是档位漂移
       ...FIND_BASELINE,
+      // 排版偏好（P2-16）：折行三选一 + 多光标修饰键 + 列选择。与切文件路径同读一份
+      // 偏好（editor-options.ts 的 layoutPrefPatch）——没有文件时按 small 档取值，
+      // 强制开 / 强制关同样在这一格生效。
+      ...layoutPrefPatch(),
     });
     editorRef.current = ed;
     if (!bootEditorMarked) {
@@ -1639,6 +1647,15 @@ export function EditorPane({
         readOnly = false;
       }
       ed.updateOptions({ quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()) });
+    });
+    // 排版偏好（P2-16）：折行 / 多光标修饰键 / 列选择。与切文件路径同读一份偏好
+    // （editor-options.ts 的 layoutPrefPatch）；这里只补发这三个键——补丁里没有
+    // readOnly / quickSuggestions，所以订阅回调不必复刻切标签那层的 overrides。
+    // 「跟随体量档」时按**此刻屏幕上那份文档**的行数取档位值（糖预览在屏上就算投影的
+    // 行数，与挂预览那一拍同口径）：从强制关翻回跟随档，大文件当场回到 huge 档的关值。
+    const layoutUnsub = subscribeLayoutPref(() => {
+      const model = ed.getModel();
+      ed.updateOptions(layoutPrefPatch(model ? model.getLineCount() : 0));
     });
     // 焦点上抛（SPLIT-1）：编辑器聚焦 ⇒ 宿主把焦点组切到本组（点哪组哪组成为焦点组）
     const focusDisposer = ed.onDidFocusEditorText(() => {
@@ -1769,6 +1786,7 @@ export function EditorPane({
       fontZoomSync.dispose();
       suggestDelayUnsub();
       quickSuggestionsUnsub();
+      layoutUnsub();
       focusDisposer.dispose();
       crumbCursorSub.dispose();
       crumbModelSub.dispose();

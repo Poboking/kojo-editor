@@ -41,9 +41,24 @@
  *    一次：打字规范化从此对这个编辑器实例永久关闭）。这一条由
  *    {@link sizeTierKeysMissingFromSmall} 从**表里**枚举，不靠谁手抄清单——
  *    将来往大档加一条关值而忘了在小档写回值，它直接返回那个键名（测试即红）。
+ *
+ * ## 排版偏好叠层（P2-16）：wordWrap 三选一 + multiCursorModifier + columnSelection
+ *
+ * 这三个键**不是新的档位键**（`sizeTierKeys` 的枚举口径因此不变，档位表不变式照旧
+ * 恒空）：`wordWrap` 仍住在档位表里（"跟随体量档" = 表自己的值），用户偏好由
+ * {@link layoutPrefPatch} 作为**叠在档位表之后的 override** 进补丁——「跟随体量档」
+ * = 补丁给档位表自己在当前行数上的值（等价于不传 override），「强制开 / 强制关」
+ * = 盖在表上（huge 档也拦不住用户明说的选择）。`multiCursorModifier` / `columnSelection`
+ * 与体量两轴正交，不进档位表，同样走这一层补丁（真源与缺省理由在 `layout-pref.ts`）。
+ *
+ * 两条写选项的路径因此**同源**：切文件（`editorOptionsForLineCount` → `applySizeTier`
+ * 的三个写入点）与 EditorPane 的 create options 都 spread 同一个 {@link layoutPrefPatch}，
+ * 没有一条路径读偏好、另一条路径留硬编码。create 时屏幕上还没有文件 ⇒ 按 small 档取值
+ * （正是今天硬编码的 `'on'`），第一个文件落档后由 `applySizeTier` 按真实行数覆写。
  */
 import type * as Monaco from '../monaco/entry';
 import { CJK_AMBIGUOUS_WHITELIST, CJK_WORD_SEPARATORS } from '../monaco/word-separators';
+import { loadLayoutPref, type LayoutPref } from './layout-pref';
 
 /** 大文件阈值（行）：≥ 此行数即降级若干"全文级"Monaco 特性 */
 export const LARGE_FILE_LINES = 5000;
@@ -283,7 +298,35 @@ export const FIND_BASELINE: EditorOptionPatch = {
 };
 
 /**
- * 与文件规模相称的 Monaco 选项（**纯函数**）= 中文基线 + find 基线 + 公共补丁 + 档位表全量。
+ * 排版偏好补丁（P2-16）：把 `layout-pref.ts` 那份偏好翻成 Monaco 选项，
+ * **叠在档位表之后**（`editorOptionsForLineCount` 与 EditorPane 的 create options
+ * 同调它——两条写选项的路径因此读同一份偏好）。
+ *
+ * - `wordWrap`：「跟随体量档」给档位表自己在 `lineCount` 上的值（create 路径没有档位表
+ *   可 spread，靠这一格拿到 small 档的 `'on'` 初值；切文件路径上与档位表同值 =
+ *   等价于不传 override）；「强制开 / 强制关」盖在档位表之后。
+ * - `multiCursorModifier` / `columnSelection`：与体量无关，恒取偏好值。
+ *
+ * `pref` 形参可注入（缺省现读 localStorage）：node 单测用显式偏好钉死映射，不必装假
+ * window；宿主两条路径都用缺省现读，保证「同一份偏好」不靠谁手抄。
+ */
+export function layoutPrefPatch(
+  lineCount = 0,
+  pref: LayoutPref = loadLayoutPref(),
+): EditorOptionPatch {
+  return {
+    wordWrap:
+      pref.wordWrap === 'tier'
+        ? TIER_OPTIONS[editorProfileTierForLineCount(lineCount)].wordWrap
+        : pref.wordWrap,
+    multiCursorModifier: pref.multiCursorModifier,
+    columnSelection: pref.columnSelection,
+  };
+}
+
+/**
+ * 与文件规模相称的 Monaco 选项（**纯函数**）= 中文基线 + find 基线 + 公共补丁 + 档位表全量
+ * + 排版偏好叠层（P2-16，见 {@link layoutPrefPatch}：偏好永远叠在档位表之后）。
  */
 export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch {
   return {
@@ -291,6 +334,7 @@ export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch 
     ...FIND_BASELINE,
     ...COMMON_OPTIONS,
     ...TIER_OPTIONS[editorProfileTierForLineCount(lineCount)],
+    ...layoutPrefPatch(lineCount),
   };
 }
 
@@ -354,6 +398,11 @@ export interface SizeTierTarget {
  * 这一档该更保守）；③ 撤下预览（按**回到屏幕上的那份原文**的行数）。
  * ③ 是 1020 止血批补上的：预览那档的关值（折行 / 折叠 / 找同词 / 打字规范化）以前不会
  * 被还原，一份几万行投影能把它们一路带到下一份小文件上。
+ *
+ * P2-16 起这一层还自动带上排版偏好（{@link layoutPrefPatch} 叠在档位表之后）：三个
+ * 写入点一个都不必单独读偏好——它们走的 `editorOptionsForLineCount` 已经读了。于是
+ * 「切回小文件不卡在 huge 档的关值」对偏好层同样成立：跟随档时按**回到屏幕上的那份
+ * 文档**重取档位值，不会卡在上一手的强制值上。
  */
 export function applySizeTier(
   ed: SizeTierTarget,

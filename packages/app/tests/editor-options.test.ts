@@ -9,6 +9,10 @@ import {
   editorOptionsForLineCount,
   editorProfileTierForLineCount,
 } from '../src/ui/editor-options';
+// —— P2-16 追加用例的依赖（一律新行；上面的既有 import 一行未动）——
+import { afterEach, vi } from 'vitest';
+import { layoutPrefPatch } from '../src/ui/editor-options';
+import { LAYOUT_PREF_DEFAULT, type LayoutPref } from '../src/ui/layout-pref';
 
 /**
  * 大文件 Monaco 选项降级（三档表驱动）。
@@ -190,5 +194,84 @@ describe('find 体验基线（A7）', () => {
     expect(/class EditorFind[\s\S]*?loop: true,/.test(vendor)).toBe(true);
     // 不存在的名字若哪天混进 vendor（升级漂移），本测试先响——FIND_BASELINE 就得不重写
     expect(vendor).not.toContain('loopAtEnd');
+  });
+});
+
+/**
+ * 排版偏好叠层（P2-16）：折行三选一 + 多光标修饰键 + 列选择。
+ *
+ * 钉三件事：① 缺省偏好下与今天**逐字一致**（wordWrap on/on/off；两个新键的缺省值
+ * 就是 Monaco 的注册缺省行为——ctrlCmd / false）；② 偏好作为 override **叠在档位表
+ * 之后**：「跟随体量档」= 档位表自己的值（等价于不传 override），「强制开 / 强制关」
+ * = 盖在表上，huge 档也拦不住用户明说的选择；③ `editorOptionsForLineCount` **现读**
+ * localStorage——同源不是硬编码：存过「强制关」后，小文件也 off。
+ *
+ * node 环境无 window ⇒ 假 localStorage 驱动；afterEach 拆掉，不污染本文件既有用例。
+ */
+const fakeStorage = (initial: Record<string, string> = {}): Storage => {
+  const map = new Map(Object.entries(initial));
+  return {
+    getItem: (k: string) => (map.has(k) ? map.get(k)! : null),
+    setItem: (k: string, v: string) => void map.set(k, String(v)),
+    removeItem: (k: string) => void map.delete(k),
+    clear: () => map.clear(),
+    key: () => null,
+    get length() {
+      return map.size;
+    },
+  } as unknown as Storage;
+};
+
+const stubWindow = (storage: Storage | undefined): void => {
+  vi.stubGlobal('window', storage === undefined ? {} : { localStorage: storage });
+};
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('排版偏好叠层（P2-16）', () => {
+  it('layoutPrefPatch：跟随档 = 档位表自己的值（small/large 开、huge 关）', () => {
+    const tier: LayoutPref = { wordWrap: 'tier', multiCursorModifier: 'ctrlCmd', columnSelection: false };
+    expect(layoutPrefPatch(500, tier).wordWrap).toBe('on');
+    expect(layoutPrefPatch(LARGE_FILE_LINES, tier).wordWrap).toBe('on');
+    expect(layoutPrefPatch(HUGE_FILE_LINES, tier).wordWrap).toBe('off');
+    expect(layoutPrefPatch(990_000, tier).wordWrap).toBe('off');
+  });
+
+  it('layoutPrefPatch：强制开 / 强制关盖在档位表之后（huge 也拦不住明说的选择）', () => {
+    const base = { multiCursorModifier: 'ctrlCmd', columnSelection: false } as const;
+    expect(layoutPrefPatch(HUGE_FILE_LINES, { ...base, wordWrap: 'on' }).wordWrap).toBe('on');
+    expect(layoutPrefPatch(100, { ...base, wordWrap: 'off' }).wordWrap).toBe('off');
+    // 对照：同一行数、跟随档时是 'on'——差的就是这一层 override
+    expect(layoutPrefPatch(100, { ...base, wordWrap: 'tier' }).wordWrap).toBe('on');
+  });
+
+  it('layoutPrefPatch：修饰键与列选择恒取偏好值，与体量无关', () => {
+    const p = layoutPrefPatch(990_000, { wordWrap: 'tier', multiCursorModifier: 'alt', columnSelection: true });
+    expect(p.multiCursorModifier).toBe('alt');
+    expect(p.columnSelection).toBe(true);
+  });
+
+  it('缺省偏好下 editorOptionsForLineCount 与今天逐字一致：wordWrap on/on/off，新键 = Monaco 缺省行为', () => {
+    // node 环境无 window ⇒ loadLayoutPref() 恒回缺省（LAYOUT_PREF_DEFAULT）
+    expect(editorOptionsForLineCount(500).wordWrap).toBe('on');
+    expect(editorOptionsForLineCount(LARGE_FILE_LINES).wordWrap).toBe('on');
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('off');
+    for (const n of [1, 4_999, LARGE_FILE_LINES, HUGE_FILE_LINES, 990_000]) {
+      const o = editorOptionsForLineCount(n);
+      expect(o.multiCursorModifier, String(n)).toBe(LAYOUT_PREF_DEFAULT.multiCursorModifier);
+      expect(o.columnSelection, String(n)).toBe(LAYOUT_PREF_DEFAULT.columnSelection);
+    }
+  });
+
+  it('editorOptionsForLineCount 现读偏好：存过「强制关」后小文件也 off（同源不是硬编码）', () => {
+    stubWindow(fakeStorage({ 'kojo.ui.layout.wordWrap.v1': 'off' }));
+    expect(editorOptionsForLineCount(100).wordWrap).toBe('off');
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('off');
+    stubWindow(fakeStorage({ 'kojo.ui.layout.wordWrap.v1': 'on' }));
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('on');
+    // 存坏的值不猜：回落缺省（跟随档 ⇒ huge 仍 off）
+    stubWindow(fakeStorage({ 'kojo.ui.layout.wordWrap.v1': 'garbage' }));
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('off');
+    expect(editorOptionsForLineCount(100).wordWrap).toBe('on');
   });
 });

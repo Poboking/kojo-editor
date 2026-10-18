@@ -17,6 +17,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+// —— P2-16 追加用例的依赖（一律新行；上面的既有 import 一行未动）——
+import { afterEach, vi } from 'vitest';
 import {
   HUGE_FILE_LINES,
   LARGE_FILE_LINES,
@@ -196,5 +198,69 @@ describe('PS-5 论据取证（读 vendor 源码，不读记忆）', () => {
     const src = vendor('editor/common/config/diffEditor.js');
     expect(src).toContain('maxComputationTime: 5000');
     expect(src).toContain('maxFileSize: 50');
+  });
+});
+
+/**
+ * P2-16 排版偏好：create 路径与三个写入点同源（源码形状 + 假编辑器行为）。
+ *
+ * 钉四件事：① EditorPane 的 create options spread 同一份偏好补丁、create 那格不再另写
+ * wordWrap（不许一条路径读偏好、另一条读硬编码）；② 订阅那条腿接在创建 effect 上
+ * （设置页一翻即时生效，不用重开文件）；③ 档位表不变式保持——偏好是**叠层**不是新
+ * 档位键（`sizeTierKeys` 枚举口径不变，`sizeTierKeysMissingFromSmall` 照旧恒空）；
+ * ④ 撤下预览回到小文件，wordWrap 不卡 huge 档的关值（含偏好叠层与两个新键）。
+ */
+describe('P2-16 排版偏好：create 路径与三个写入点同源', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('EditorPane create options spread 同一份偏好补丁；create 那格不再另写 wordWrap', () => {
+    const src = paneSource();
+    expect(src).toContain('...layoutPrefPatch(),');
+    // 读了偏好就不能再留一条硬编码路径（create 时按 small 档取值由补丁给）
+    expect(src).not.toContain("wordWrap: 'on',");
+  });
+
+  it('偏好订阅接在创建 effect 上：设置页一翻，编辑器即时重发这三个键', () => {
+    const src = paneSource();
+    expect(src).toContain('subscribeLayoutPref(');
+    expect(src).toContain('ed.updateOptions(layoutPrefPatch(model ? model.getLineCount() : 0));');
+  });
+
+  it('档位表不变式保持：偏好是叠层，不是新档位键（sizeTierKeys 枚举口径不变）', () => {
+    expect(sizeTierKeysMissingFromSmall()).toEqual([]);
+    expect(sizeTierKeys()).toContain('wordWrap'); // wordWrap 照旧住在档位表里
+    expect(sizeTierKeys()).not.toContain('multiCursorModifier');
+    expect(sizeTierKeys()).not.toContain('columnSelection');
+  });
+
+  it('叠出来的选项带偏好：huge → 挂更大投影 → 撤下回到小文件，wordWrap 不卡关值', () => {
+    const current: Record<string, unknown> = {};
+    const ed = { updateOptions: (o: Record<string, unknown>) => Object.assign(current, o) };
+    applySizeTier(ed, 60_000); // 打开一份 huge 原文：档位表关折行
+    expect(current.wordWrap).toBe('off');
+    applySizeTier(ed, 120_000, { readOnly: true }); // 挂上 .kojo 投影（比原文更长）
+    applySizeTier(ed, 800); // 撤下投影、按回到屏幕上的那份原文落档
+    // 缺省偏好 = 跟随档 ⇒ 补丁给档位表自己的值，不卡 huge 的关值
+    expect(current.wordWrap).toBe('on');
+    expect(current.multiCursorModifier).toBe('ctrlCmd');
+    expect(current.columnSelection).toBe(false);
+    expect(current.readOnly).toBe(true); // 偏好补丁不碰可写态（三个写入点的 overrides 照旧）
+  });
+
+  it('存过「强制关」：三个写入点读的是同一份偏好——撤投影回小文件也 off', () => {
+    const map = new Map([['kojo.ui.layout.wordWrap.v1', 'off']]);
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: (k: string) => (map.has(k) ? map.get(k)! : null),
+        setItem: (k: string, v: string) => void map.set(k, v),
+        removeItem: (k: string) => void map.delete(k),
+      },
+    });
+    const current: Record<string, unknown> = {};
+    const ed = { updateOptions: (o: Record<string, unknown>) => Object.assign(current, o) };
+    applySizeTier(ed, 60_000); // huge：档位本就 off
+    expect(current.wordWrap).toBe('off');
+    applySizeTier(ed, 800); // 回到小文件：跟随档本该 on，强制关盖在档位表之后
+    expect(current.wordWrap).toBe('off');
   });
 });

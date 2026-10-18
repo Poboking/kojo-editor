@@ -1,4 +1,5 @@
 import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react';
+import { useSyncExternalStore } from 'react';
 import { MARKET_DEFAULT_INDEX_URL } from '@kojo/plugin-api';
 import type { LayoutAction } from './layout';
 import { setSealed } from './sealed';
@@ -25,6 +26,15 @@ import {
 } from './glass-pref';
 import { THEME_IDS, setThemePref, type ThemePref } from './theme-pref';
 import {
+  loadLayoutPref,
+  saveColumnSelectionPref,
+  saveMultiCursorModifierPref,
+  saveWordWrapPref,
+  subscribeLayoutPref,
+  type MultiCursorModifierPref,
+  type WordWrapPref,
+} from './layout-pref';
+import {
   hintClassFor,
   isDraftNoop,
   sourceRowUi,
@@ -46,6 +56,21 @@ const THEME_LABELS: Record<ThemePref, string> = {
   light: '浅色',
   'mint-dark': '薄荷',
 };
+
+/**
+ * 排版偏好的设置页选项（P2-16）。值 = `layout-pref.ts` 的登记名（与 Monaco 0.57 d.ts
+ * 逐字一致，落到编辑器前零翻译）；顺序即段落后选项的顺序，折行缺省第一项。
+ */
+const WORD_WRAP_CHOICES: readonly { value: WordWrapPref; label: string }[] = [
+  { value: 'tier', label: '跟随体量档' },
+  { value: 'on', label: '强制开' },
+  { value: 'off', label: '强制关' },
+];
+
+const MULTI_CURSOR_CHOICES: readonly { value: MultiCursorModifierPref; label: string }[] = [
+  { value: 'ctrlCmd', label: 'Ctrl/Cmd' },
+  { value: 'alt', label: 'Alt' },
+];
 
 /**
  * 设置浮层的入参（2026-10-17 FE-REF 拆分批：随设置页 markup 一起从 `ShellLayout.tsx` 搬出）。
@@ -552,6 +577,9 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 </span>
               </span>
             </label>
+            {/* 排版三行（P2-16）：折行 / 多光标修饰键 / 列选择。自订阅 layout-pref，
+                壳层镜像行归 P2-14 的接线批——两边各占一小段，互不重排。 */}
+            <LayoutPrefRows />
           </div>
 
           {/* 直连模式开关：仍经封存总闸控制——封存态不渲染（本功能尚未交付为常态） */}
@@ -765,6 +793,80 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     },
   ];
 };
+
+/**
+ * 排版三行（P2-16）：折行三选一 / 多光标修饰键二选一 / 列选择开关。
+ *
+ * 自订阅 `layout-pref.ts`（`useSyncExternalStore`）而不走壳层 props 镜像：壳层那批
+ * always-mounted 的偏好 effect 归 P2-14 的接线批，本线不越界改 `ShellLayout.tsx`；
+ * 读与写都就地走同一份 localStorage 真源（`semantic-color-pref.ts` 订阅表同款）。
+ * 设置页一翻即时生效——EditorPane 订同一张表，回调只补发这三个键。
+ */
+function LayoutPrefRows(): ReactElement {
+  const pref = useSyncExternalStore(subscribeLayoutPref, loadLayoutPref);
+  return (
+    <>
+      {/* 折行：三选一分段（复用主题分段那套 class，不造第二种分段控件）。
+          缺省「跟随体量档」= 今天的行为：5,000 行以内开、50,000 行以上自动关。 */}
+      <div className="settings-row static">
+        <span className="theme-segment" role="radiogroup" aria-label="折行">
+          {WORD_WRAP_CHOICES.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              role="radio"
+              aria-checked={pref.wordWrap === c.value}
+              className={`theme-seg-btn${pref.wordWrap === c.value ? ' on' : ''}`}
+              onClick={() => saveWordWrapPref(c.value)}
+            >
+              {c.label}
+            </button>
+          ))}
+        </span>
+        <span>
+          折行
+          <span className="settings-hint">
+            长行留在窗内折行，还是伸出窗外横向滚动。跟随体量档：5,000 行以内开着，
+            50,000 行以上自动关（那一档折行会拖慢滚动）；强制开 / 强制关则所有文件一个样。
+            只改显示、不动文件
+          </span>
+        </span>
+      </div>
+      {/* 多光标修饰键：二选一分段。缺省 Ctrl/Cmd 的理由写在 layout-pref.ts 模块头。 */}
+      <div className="settings-row static">
+        <span className="theme-segment" role="radiogroup" aria-label="多光标修饰键">
+          {MULTI_CURSOR_CHOICES.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              role="radio"
+              aria-checked={pref.multiCursorModifier === c.value}
+              className={`theme-seg-btn${pref.multiCursorModifier === c.value ? ' on' : ''}`}
+              onClick={() => saveMultiCursorModifierPref(c.value)}
+            >
+              {c.label}
+            </button>
+          ))}
+        </span>
+        <span>
+          多光标修饰键
+          <span className="settings-hint">
+            按住哪个键点击正文，一次点出多个光标，几处一起改。默认 Ctrl/Cmd——Alt 是输入法
+            切换的高发键，中文作者容易撞手势；习惯 Alt+点击的作者选 Alt 即可。只改操作方式、不动文件
+          </span>
+        </span>
+      </div>
+      {/* 列选择：布尔开关，缺省关（与 Monaco 自己的缺省一致 ⇒ 今天的行为逐字不变）。 */}
+      <label className="settings-row">
+        <Switch checked={pref.columnSelection} onChange={(c) => saveColumnSelectionPref(c)} label="列选择" />
+        <span>
+          列选择
+          <span className="settings-hint">按住鼠标左键竖直拖动，按方块选出一列，几行一起改。默认关</span>
+        </span>
+      </label>
+    </>
+  );
+}
 
 /** 右面板（tabpanel）的稳定 id：导航栏每项 aria-controls 指过来 */
 const SETTINGS_PANEL_ID = 'settings-nav-panel';
