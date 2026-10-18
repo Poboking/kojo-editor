@@ -334,6 +334,8 @@ type RowAcc = {
   universeComparisons: string[];
   universeSeen: Set<string>;
   cells: Record<string, MutableCell>;
+  /** 已响应列数（免去逐行 `Object.keys(cells).length` 的数组分配） */
+  filled: number;
 };
 type ColumnAcc = {
   key: string;
@@ -392,6 +394,17 @@ export function buildMatrix(
   // 同时缓存每个函数的列键——第二轮聚合单元格时直接取用，`columnOf` 只解析一次。
   const byFace = new Map<string, Map<string, ColumnAcc>>();
   const colDescOf = new Map<FaceFunction, ColumnDesc>();
+  /** 列函数对象缓存：作用域模式下同一函数会出现在 universe 与包两批里，对象只造一次 */
+  const colFnOf = new Map<FaceFunction, MatrixColumnFunction>();
+  const columnFn = (fn: FaceFunction): MatrixColumnFunction => {
+    let out = colFnOf.get(fn);
+    if (!out) {
+      out = columnFunctionOf(fn);
+      colFnOf.set(fn, out);
+    }
+    return out;
+  };
+  const scopedColumns = columnEntry !== entry;
   const accOf = (fn: FaceFunction): ColumnAcc => {
     let desc = colDescOf.get(fn);
     if (!desc) {
@@ -419,7 +432,7 @@ export function buildMatrix(
   };
 
   for (const fn of columnEntry.functions) {
-    accOf(fn).universeFunctions.push(columnFunctionOf(fn));
+    accOf(fn).universeFunctions.push(columnFn(fn));
   }
 
   const groupsAcc = [...byFace.entries()]
@@ -468,6 +481,7 @@ export function buildMatrix(
       universeComparisons: [],
       universeSeen: new Set<string>(),
       cells: {},
+      filled: 0,
     };
     acc.set(dep.key, row);
     return row;
@@ -498,7 +512,8 @@ export function buildMatrix(
     if (deps.length > 0) depsFunctions++;
 
     const col = accOf(fn);
-    col.functions.push(columnFunctionOf(fn));
+    // 无作用域时 `functions` 与 `universeFunctions` 收口为同一数组，这里不必重复收
+    if (scopedColumns) col.functions.push(columnFn(fn));
 
     for (const dep of deps) {
       if (!dep) continue;
@@ -509,6 +524,7 @@ export function buildMatrix(
       if (!cell) {
         cell = { present: true, count: 0, functions: [] };
         row.cells[col.key] = cell;
+        row.filled += 1;
         columnFills.set(col.key, (columnFills.get(col.key) ?? 0) + 1);
       }
       cell.count += 1;
@@ -548,7 +564,7 @@ export function buildMatrix(
     comparisons: r.comparisons,
     universeComparisons: r.universeComparisons,
     cells: r.cells,
-    gapCount: columnCount - Object.keys(r.cells).length,
+    gapCount: columnCount - r.filled,
   }));
 
   rows.sort((a, b) => {
@@ -752,6 +768,61 @@ export function firstVisibleRow(scrollTop: number, rowHeight: number): number {
   if (!(rowHeight > 0)) return 0;
   const scroll = Number.isFinite(scrollTop) && scrollTop > 0 ? scrollTop : 0;
   return Math.floor(scroll / rowHeight);
+}
+
+/* ------------------------------ 角色清单（全部角色） ------------------------------ */
+
+/** 角色搜索器的一项（`count` = 该角色的口上函数数；0 = 还没有口上） */
+export interface CharaOption {
+  readonly no: number;
+  readonly name: string;
+  readonly count: number;
+}
+
+/**
+ * 角色清单 = 游戏角色表 ∪ 已有函数的角色，按编号升序。
+ *
+ * 游戏角色表是**全集**：0 函数的角色也要出现在搜索器里（「还没有口上」本身就是
+ * 最大的缺口，旧实现只从函数索引反推角色，等于把从未写过口上的角色藏起来）。
+ * 索引里多出来的编号（CSV 没登记但确有函数）也一个不漏。
+ */
+export function buildCharaOptions(
+  charas: Iterable<{ readonly no: number; readonly name: string }>,
+  functions: Iterable<{ readonly no: number; readonly count: number }>,
+): CharaOption[] {
+  const byNo = new Map<number, CharaOption>();
+  for (const c of charas) byNo.set(c.no, { no: c.no, name: c.name, count: 0 });
+  for (const f of functions) {
+    const base = byNo.get(f.no);
+    byNo.set(f.no, { no: f.no, name: base?.name ?? '', count: f.count });
+  }
+  return [...byNo.values()].sort((a, b) => a.no - b.no);
+}
+
+/* ------------------------------ 渲染策略（自动视口化） ------------------------------ */
+
+/**
+ * 自动视口化阈值（角色函数数）：达到即只渲染可见窗口。
+ *
+ * 函数数大 ⇒ 行/列都可能上千，一张表动辄 1–2 万个 DOM 格。视口化是**面板自己的
+ * 渲染策略**（不隐藏数据：滚到哪画到哪，滚动条与键盘仍覆盖全部行），所以不必等
+ * 用户先去设置页打开全局开关；小角色仍走全量路径，避免窗口计算的反向开销。
+ */
+export const AUTO_VIRTUALIZE_FUNCTIONS = 48;
+/** 粗估格数阈值：宽表（面多）即使函数不多也可能铺出几千格 */
+export const AUTO_VIRTUALIZE_CELLS = 3000;
+
+/**
+ * 是否走视口化：宿主偏好开 → 恒开；否则按角色函数数 / 面数粗估，大矩阵自动开。
+ * 纯函数（单测钉阈值），面板只在渲染期读它，不改数据面口径。
+ */
+export function shouldVirtualizeMatrix(
+  functionCount: number,
+  faceCount: number,
+  pref: boolean,
+): boolean {
+  if (pref) return true;
+  return functionCount >= AUTO_VIRTUALIZE_FUNCTIONS || functionCount * faceCount >= AUTO_VIRTUALIZE_CELLS;
 }
 
 /** 视口化窗口：要渲染的行区间 + 上下占位块高度（撑出完整滚动高度） */

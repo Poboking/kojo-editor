@@ -5752,6 +5752,11 @@ button.primary .hint {
   font-size: var(--fs-0);
   font-variant-numeric: tabular-nums;
 }
+/* 0 函数角色 = 还没写过口上的人：计数用警色提示，但仍可选中查看空态 */
+.cm-chara-opt.empty .cm-chara-count {
+  color: var(--amber);
+  font-weight: 600;
+}
 .cm-chara-note {
   padding: 10px 8px;
 }
@@ -8546,15 +8551,10 @@ button.resume-session {
 
 /* ---------- E. 条件矩阵（cm-*）：格钮的微交互 + 行头随行亮 ----------
  * v2 重做后本段只保留 v2 未覆盖的「动」的部分；悬停底色/描边一律由上面的 v2 段
- * 定版（本段在其后，同特异性会反压 v2，故不复写）。 */
-.cm-cell {
-  transition:
-    background-color var(--dur-1) var(--ease-out),
-    border-color var(--dur-1) var(--ease-out),
-    box-shadow var(--dur-1) var(--ease-out),
-    opacity var(--dur-1) var(--ease-out),
-    transform var(--dur-1) var(--ease-out);
-}
+ * 定版（本段在其后，同特异性会反压 v2，故不复写）。
+ * **刻意不给 `.cm-cell` 挂 transition**：大角色一屏上千格，行 hover 会让整行几十个
+ * 格子同时启动颜色/阴影过渡——万级 DOM 下这是肉眼可见的卡顿源。悬停/按下即时反馈，
+ * 只有少量元素（分组头 / 详情行）保留过渡。 */
 /* 实心格悬停：一圈 accent 柔光（.u-glow 的减幅版）；.sel 白环与光共存不互斥 */
 .cm-cell.on:hover {
   box-shadow: 0 0 10px -3px var(--focus-glow);

@@ -19,6 +19,8 @@ import type {
   StateDependency,
 } from '@kojo/plugin-api';
 import {
+  AUTO_VIRTUALIZE_CELLS,
+  AUTO_VIRTUALIZE_FUNCTIONS,
   DETAIL_MIN_H,
   FACE_ORDER,
   GRID_MIN_RESERVE,
@@ -27,6 +29,7 @@ import {
   ROWHEAD_MAX_W,
   ROWHEAD_MIN_W,
   buildCharacterIndex,
+  buildCharaOptions,
   buildMatrix,
   cellKeysOfFunction,
   clampDetailHeight,
@@ -36,6 +39,7 @@ import {
   faceLabel,
   functionRangeAt,
   instructionNoOfSlot,
+  shouldVirtualizeMatrix,
 } from '../src/matrix-logic';
 import type { CharacterEntry, ColumnDesc, ConditionMatrix, FaceFunction } from '../src/matrix-logic';
 
@@ -654,5 +658,71 @@ describe('cellKeysOfFunction — 命中函数 → 矩阵高亮格集合', () => 
   it('无依赖函数（矩阵里没有它的格）→ 空集合', () => {
     // FAM_MESSAGE_COUNTER_K1 在 /p/a.ERB 第 22 行，但 depsOf 恒空 → 无格可高亮
     expect(cellKeysOfFunction(matrix, { filePath: '/p/a.ERB', startLine: 22 }).size).toBe(0);
+  });
+});
+
+/* ------------------------------ 自动视口化策略 ------------------------------ */
+
+describe('shouldVirtualizeMatrix（大矩阵自动视口化）', () => {
+  it('宿主偏好开 → 小角色也走视口化', () => {
+    expect(shouldVirtualizeMatrix(3, 2, true)).toBe(true);
+  });
+
+  it('函数数达到阈值即开（不依赖设置页开关）', () => {
+    expect(shouldVirtualizeMatrix(AUTO_VIRTUALIZE_FUNCTIONS - 1, 5, false)).toBe(false);
+    expect(shouldVirtualizeMatrix(AUTO_VIRTUALIZE_FUNCTIONS, 5, false)).toBe(true);
+  });
+
+  it('宽表按函数数 × 面数粗估，达到格数阈值也开', () => {
+    const faces = Math.ceil(AUTO_VIRTUALIZE_CELLS / 20);
+    expect(shouldVirtualizeMatrix(19, faces - 1, false)).toBe(false);
+    expect(shouldVirtualizeMatrix(20, faces, false)).toBe(true);
+  });
+
+  it('空 / 小索引保持全量路径（窗口计算零开销）', () => {
+    expect(shouldVirtualizeMatrix(0, 0, false)).toBe(false);
+    expect(shouldVirtualizeMatrix(10, 4, false)).toBe(false);
+  });
+});
+
+/* ------------------------------ 全部角色清单 ------------------------------ */
+
+describe('buildCharaOptions（游戏角色表 ∪ 函数索引）', () => {
+  it('0 函数的游戏角色也在清单里（count 0），不再只列有口上的角色', () => {
+    const choices = buildCharaOptions(
+      [
+        { no: 1, name: '甲' },
+        { no: 2, name: '乙' },
+        { no: 5, name: '戊' },
+      ],
+      [{ no: 1, count: 9 }],
+    );
+    expect(choices).toEqual([
+      { no: 1, name: '甲', count: 9 },
+      { no: 2, name: '乙', count: 0 },
+      { no: 5, name: '戊', count: 0 },
+    ]);
+  });
+
+  it('索引里多出来的编号也保留（CSV 没登记但确有函数）', () => {
+    const choices = buildCharaOptions([{ no: 1, name: '甲' }], [
+      { no: 1, count: 2 },
+      { no: 7, count: 4 },
+    ]);
+    expect(choices.map((c) => [c.no, c.name, c.count])).toEqual([
+      [1, '甲', 2],
+      [7, '', 4],
+    ]);
+  });
+
+  it('按编号升序（不依赖输入顺序）', () => {
+    const choices = buildCharaOptions(
+      [
+        { no: 9, name: '九' },
+        { no: 2, name: '二' },
+      ],
+      [{ no: 5, count: 1 }],
+    );
+    expect(choices.map((c) => c.no)).toEqual([2, 5, 9]);
   });
 });

@@ -17,11 +17,20 @@ export function orderByLine(fns: readonly MatrixCellFunction[]): MatrixCellFunct
   return [...fns].sort((a, b) => a.startLine - b.startLine || a.filePath.localeCompare(b.filePath));
 }
 
-/** 单元格工具提示：其贡献函数的比较合并去重（无比较或无响应 → '无'） */
+/**
+ * 单元格工具提示：其贡献函数的比较合并去重（无比较或无响应 → '无'）。
+ * 按 cell 对象记忆（矩阵存活期内 cell 身份稳定）：滚动帧重渲染可见行时不再
+ * 为每格重建 Set/数组——万级表格里这是每帧几千次分配的来源之一。
+ */
+const CELL_TITLE_CACHE = new WeakMap<MatrixCell, string>();
 export function cellComparisons(cell: MatrixCell): string {
+  const hit = CELL_TITLE_CACHE.get(cell);
+  if (hit !== undefined) return hit;
   const seen = new Set<string>();
   for (const f of cell.functions) for (const c of f.comparisons) seen.add(c);
-  return seen.size > 0 ? [...seen].join('、') : '无';
+  const out = seen.size > 0 ? [...seen].join('、') : '无';
+  CELL_TITLE_CACHE.set(cell, out);
+  return out;
 }
 
 /** 跳转意图载荷（`editor.revealLocation` 消费） */

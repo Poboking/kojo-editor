@@ -50,6 +50,7 @@ import type {
 import { KernelServices, WellKnownServices, pathKey, shortPath } from '@kojo/plugin-api';
 import {
   buildCharacterIndex,
+  buildCharaOptions,
   buildMatrix,
   cellKeysOfFunction,
   clampDetailHeight,
@@ -62,6 +63,7 @@ import {
   planMatrixWindow,
   rowHeightChanged,
   rowScrollTop,
+  shouldVirtualizeMatrix,
   ROWHEAD_MIN_W,
   type CharacterEntry,
   type CharacterIndex,
@@ -225,9 +227,20 @@ export function createUiConditionMatrixPlugin(): Plugin {
           sig: string;
           byRow: Map<string, Set<string>>;
         } | null>(null);
+        /** 选择集签名缓存：Set 身份不变就不重排序（滚动帧每帧都会走到这里） */
+        const fillSigCacheRef = useRef<{ sel: ReadonlySet<string>; sig: string } | null>(null);
 
-        /** 视口化开关（宿主下传；缺省 / false = 改动前的全量渲染路径，逐字不变） */
-        const virtualize = props.uiPrefs?.panelVirtualize === true;
+        /**
+         * 视口化开关：宿主偏好开 → 恒开；否则**大角色自动开**（见
+         * `AUTO_VIRTUALIZE_FUNCTIONS`）。小角色保持改动前的全量路径。
+         */
+        const autoEntry =
+          selectedNo === null ? null : store.characterIndex?.entries.get(selectedNo) ?? null;
+        const virtualize = shouldVirtualizeMatrix(
+          autoEntry?.functions.length ?? 0,
+          autoEntry?.faces.length ?? 0,
+          props.uiPrefs?.panelVirtualize === true,
+        );
         /** 滚动位置（视口化路径驱动窗口；全量路径恒为 0，不参与渲染）——**按帧合并**后才落到这里 */
         const [scrollTop, setScrollTop] = useState(0);
         /** 滚动容器可视高（视口化路径算窗口用；首帧未量到 → 0，仅画 overscan 行） */
@@ -527,9 +540,9 @@ export function createUiConditionMatrixPlugin(): Plugin {
           };
         }, []);
 
-        // 视口化路径：切换角色 / 口上包 / 改过滤后回到顶部——否则旧滚动位置可能落到新内容的窗口之外
+        // 切换角色 / 口上包 / 改过滤 / 视口化开关翻转后回到顶部——否则旧滚动位置
+        // 可能落到新内容的窗口之外（大角色 → 小角色时尤其明显：新表更短，视口停在旧深处）
         useEffect(() => {
-          if (!virtualize) return;
           const box = scrollRef.current;
           if (box && box.scrollTop !== 0) box.scrollTop = 0;
           scrollTopRef.current = 0;
@@ -660,6 +673,22 @@ export function createUiConditionMatrixPlugin(): Plugin {
           rows: MatrixRow[];
         } | null>(null);
 
+        /** 网格表头元素缓存：矩阵 / 折叠集不变就复用同一棵元素树（滚动帧不重造数百列） */
+        const headCacheRef = useRef<{
+          matrix: ConditionMatrix;
+          folded: ReadonlySet<string>;
+          node: ReactNode;
+        } | null>(null);
+        /** 详情区元素缓存：滚动帧不重跑行/列查找、函数排序与整段子树的 React diff */
+        const detailCacheRef = useRef<{
+          matrix: ConditionMatrix | null;
+          selected: { readonly rowKey: string; readonly columnKey: string } | null;
+          detailH: number | null;
+          fillMode: boolean;
+          fillSelected: boolean;
+          node: ReactNode;
+        } | null>(null);
+
         /** 切换角色时把口上包与生成目标复位（旧包键可能在新角色里不存在） */
         useEffect(() => {
           setPackKey(null);
@@ -761,12 +790,12 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const charasCache = charasCacheRef.current;
         let charasMemo = charasCache;
         if (!charasMemo || charasMemo.idx !== idx || charasMemo.charaIndex !== current.charaIndex) {
-          const charas = [...idx.entries.values()].sort((a, b) => a.no - b.no);
-          const choices: CharaChoice[] = charas.map((c) => ({
-            no: c.no,
-            name: current.charaIndex.get(c.no)?.name ?? '',
-            count: c.functions.length,
-          }));
+          // 角色清单 = 游戏角色表 ∪ 已有函数的角色（前者是全集：0 函数的角色也要能看到，
+          // 「还没有口上」本身就是最大的缺口；索引里多出来的编号也一个不漏）。
+          const choices = buildCharaOptions(
+            current.charaIndex.values(),
+            [...idx.entries.values()].map((c) => ({ no: c.no, count: c.functions.length })),
+          );
           charasMemo = {
             idx,
             charaIndex: current.charaIndex,
@@ -1256,7 +1285,17 @@ export function createUiConditionMatrixPlugin(): Plugin {
         // ---- 定位（网格）----
         let grid: ReactNode;
         if (!entry || !matrix) {
-          grid = createElement('div', { className: 'cm-empty dim' }, '从上方选择角色以浏览其状态 × 时机矩阵');
+          const selectedInfo = selectedNo === null ? null : current.charaIndex.get(selectedNo) ?? null;
+          grid =
+            selectedNo === null
+              ? createElement('div', { className: 'cm-empty dim' }, '从上方选择角色以浏览其状态 × 时机矩阵')
+              : createElement(
+                  'div',
+                  { className: 'cm-empty dim' },
+                  selectedInfo && selectedInfo.kojoDir === undefined
+                    ? `K${selectedNo} 在游戏里没有个人口上目录，无法建立口上矩阵。`
+                    : `K${selectedNo} 还没有任何口上函数——这本身就是最大的缺口。先在口上包里为这个角色新建口上，矩阵会自动出现。`,
+                );
         } else if (matrix.rows.length === 0) {
           grid = createElement('div', { className: 'cm-empty dim' }, '该角色尚未抽取到状态条件（无状态依赖）');
         } else {
@@ -1288,19 +1327,38 @@ export function createUiConditionMatrixPlugin(): Plugin {
             rowsFilterRef.current = { matrix, needle, gapOnly, visibleSig, rows };
           }
           // 填空选择 → 每行 Set（签名缓存：滚动帧 / 无关重渲不重建，行 memo 不被打断）
-          const fillSig = [...fillSel].sort().join('\u0001');
+          const fillSigCache = fillSigCacheRef.current;
+          let fillSig: string;
+          if (fillSigCache && fillSigCache.sel === fillSel) {
+            fillSig = fillSigCache.sig;
+          } else {
+            fillSig = [...fillSel].sort().join('\u0001');
+            fillSigCacheRef.current = { sel: fillSel, sig: fillSig };
+          }
           let fillByRow: Map<string, Set<string>>;
           let fillCache = fillSetsRef.current;
           if (!fillCache || fillCache.sig !== fillSig) {
-            const map = new Map<string, Set<string>>();
+            const colsByRow = new Map<string, string[]>();
             for (const key of fillSel) {
               const at = key.indexOf('\u0000');
               if (at < 0) continue;
               const rowKey = key.slice(0, at);
               const colKey = key.slice(at + 1);
-              const set = map.get(rowKey);
-              if (set) set.add(colKey);
-              else map.set(rowKey, new Set<string>([colKey]));
+              const list = colsByRow.get(rowKey);
+              if (list) list.push(colKey);
+              else colsByRow.set(rowKey, [colKey]);
+            }
+            // 逐行复用旧 Set：只改一格时，别的已选行仍保持同一引用 ⇒ 行 memo 不连坐重渲
+            const prevByRow = fillCache?.byRow;
+            const map = new Map<string, Set<string>>();
+            for (const [rowKey, cols] of colsByRow) {
+              const prev = prevByRow?.get(rowKey);
+              map.set(
+                rowKey,
+                prev && prev.size === cols.length && cols.every((c) => prev.has(c))
+                  ? prev
+                  : new Set(cols),
+              );
             }
             fillCache = { sig: fillSig, byRow: map };
             fillSetsRef.current = fillCache;
@@ -1310,13 +1368,21 @@ export function createUiConditionMatrixPlugin(): Plugin {
           // 键盘导航上界：当前（过滤后）行数——跨窗口纵向移动时判「是否越过末行」
           rowCountRef.current = rows.length;
 
-          const head = renderGridHead({
-            groups: matrix.groups,
-            foldedFaces,
-            onToggleFace: toggleFace,
-            ic,
-            cornerRef,
-          });
+          // 表头元素缓存：滚动帧只换 tbody 窗口，表头没必要每帧重建（几百列时是实打实的 diff 成本）
+          const headCache = headCacheRef.current;
+          let head: ReactNode;
+          if (headCache && headCache.matrix === matrix && headCache.folded === foldedFaces) {
+            head = headCache.node;
+          } else {
+            head = renderGridHead({
+              groups: matrix.groups,
+              foldedFaces,
+              onToggleFace: toggleFace,
+              ic,
+              cornerRef,
+            });
+            headCacheRef.current = { matrix, folded: foldedFaces, node: head };
+          }
 
           const colCount = matrix.columns.length;
           // 首列列宽拖拽接管判据：快照的 matrixKey 须与当前一致（换角色 / 依赖版本即失效）且列数吻合。
@@ -1422,18 +1488,41 @@ export function createUiConditionMatrixPlugin(): Plugin {
         }
 
         // ---- 详情（选中格 → 详情区；呈现件见 ./detail-pane.ts）----
-        const detail = renderDetail({
-          matrix,
-          selected,
-          faceLabels: () => services.faceLabels(),
-          detailH,
-          detailRef,
-          emitReveal: (target) => ctx.bus.emit('editor.revealLocation', target),
-          fillMode,
-          fillSelected: selected
-            ? fillSel.has(fillCellKey(selected.rowKey, selected.columnKey))
-            : false,
-        });
+        // 缓存同一份元素树：滚动帧只改网格窗口，详情不必重跑 find/sort 与整段 diff。
+        const fillSelected = selected
+          ? fillSel.has(fillCellKey(selected.rowKey, selected.columnKey))
+          : false;
+        const detailCache = detailCacheRef.current;
+        let detail: ReactNode;
+        if (
+          detailCache &&
+          detailCache.matrix === matrix &&
+          detailCache.selected === selected &&
+          detailCache.detailH === detailH &&
+          detailCache.fillMode === fillMode &&
+          detailCache.fillSelected === fillSelected
+        ) {
+          detail = detailCache.node;
+        } else {
+          detail = renderDetail({
+            matrix,
+            selected,
+            faceLabels: () => services.faceLabels(),
+            detailH,
+            detailRef,
+            emitReveal: (target) => ctx.bus.emit('editor.revealLocation', target),
+            fillMode,
+            fillSelected,
+          });
+          detailCacheRef.current = {
+            matrix,
+            selected,
+            detailH,
+            fillMode,
+            fillSelected,
+            node: detail,
+          };
+        }
 
         // 网格区 ↔ 详情区的拖拽分隔线（HK-14）：只在网格有内容时显形（无内容可拉伸时克制不出），
         // 静息一条细线，悬停 / 拖拽中亮起（与壳层 .resizer / .kp-splitter 同族）；键盘不接。

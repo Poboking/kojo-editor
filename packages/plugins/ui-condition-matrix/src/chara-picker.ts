@@ -6,8 +6,9 @@
  * ↑↓ + Enter 可选，Esc 收起；不选中任何角色时清空回「全部」。
  *
  * 交互刻意保持轻：输入框失焦即收起、每项 `onMouseDown` 阻止默认（点选项不会
- * 先把焦点丢给 body），列表最多渲染 60 项——过滤在键盘路径上是本地数组扫描，
- * 不做 async 搜索。
+ * 先把焦点丢给 body）。**命中项全部渲染**（用户反馈：60 条上限让 250+ 角色的
+ * 大盘只能看到前 60 个）；列表自身滚动，键盘活动项随之滚进视野。过滤是本地
+ * 数组扫描，不做 async 搜索。
  */
 
 import { createElement, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -26,14 +27,16 @@ export interface CharaPickerProps {
   readonly renderIcon?: (name: string, size?: number) => unknown;
 }
 
-const LIST_CAP = 60;
-
 function labelOf(choice: CharaChoice): string {
   return choice.name ? `K${choice.no} ${choice.name}` : `K${choice.no}`;
 }
 
 /** 结构化的输入元素引用（根 tsconfig 不带 DOM lib，插件侧沿用既有做法） */
 type InputLike = { focus?: () => void };
+/** 结构化的弹层引用：只用来把键盘活动项滚进视野 */
+type PopLike = {
+  querySelector?: (selector: string) => { scrollIntoView?: (opts: { block: 'nearest' }) => void } | null;
+} | null;
 
 export function CharaPicker(props: CharaPickerProps): ReactNode {
   const { choices, value, onChange, renderIcon } = props;
@@ -41,6 +44,7 @@ export function CharaPicker(props: CharaPickerProps): ReactNode {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const inputRef = useRef<InputLike | null>(null);
+  const popRef = useRef<PopLike>(null);
 
   const selected = value === null ? null : choices.find((c) => c.no === value) ?? null;
   const needle = query.trim().toLowerCase();
@@ -52,12 +56,17 @@ export function CharaPicker(props: CharaPickerProps): ReactNode {
           `k${c.no}` === needle,
       )
     : choices;
-  const shown = filtered.slice(0, LIST_CAP);
 
   // 选中项随过滤收缩后，活动行可能越界——钳回合法区间，Enter 不选错人
   useEffect(() => {
-    if (active >= shown.length) setActive(shown.length > 0 ? shown.length - 1 : 0);
-  }, [shown.length, active]);
+    if (active >= filtered.length) setActive(filtered.length > 0 ? filtered.length - 1 : 0);
+  }, [filtered.length, active]);
+
+  // 列表全量渲染后键盘仍要能走到底：活动项变化时把它滚进可视区（不抢外层滚动）
+  useEffect(() => {
+    if (!open) return;
+    popRef.current?.querySelector?.('.cm-chara-opt.active')?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, active]);
 
   const pick = (choice: CharaChoice | undefined): void => {
     if (!choice) return;
@@ -81,13 +90,13 @@ export function CharaPicker(props: CharaPickerProps): ReactNode {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setOpen(true);
-      setActive((i) => (shown.length === 0 ? 0 : (i + 1) % shown.length));
+      setActive((i) => (filtered.length === 0 ? 0 : (i + 1) % filtered.length));
       return;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
       setOpen(true);
-      setActive((i) => (shown.length === 0 ? 0 : (i - 1 + shown.length) % shown.length));
+      setActive((i) => (filtered.length === 0 ? 0 : (i - 1 + filtered.length) % filtered.length));
       return;
     }
     if (e.key === 'Enter') {
@@ -96,7 +105,7 @@ export function CharaPicker(props: CharaPickerProps): ReactNode {
         setOpen(true);
         return;
       }
-      pick(shown[active]);
+      pick(filtered[active]);
       return;
     }
     if (e.key === 'Escape') {
@@ -127,6 +136,7 @@ export function CharaPicker(props: CharaPickerProps): ReactNode {
         onFocus: () => {
           setOpen(true);
           setQuery('');
+          setActive(0);
         },
         onBlur: (e: {
           currentTarget: { contains?: (n: unknown) => boolean };
@@ -166,10 +176,10 @@ export function CharaPicker(props: CharaPickerProps): ReactNode {
     open
       ? createElement(
           'div',
-          { className: 'cm-chara-pop', role: 'listbox' },
-          shown.length === 0
+          { className: 'cm-chara-pop', role: 'listbox', ref: popRef },
+          filtered.length === 0
             ? createElement('div', { className: 'cm-chara-note dim' }, '没有匹配的角色')
-            : shown.map((choice, i) =>
+            : filtered.map((choice, i) =>
                 createElement(
                   'button',
                   {
@@ -180,8 +190,9 @@ export function CharaPicker(props: CharaPickerProps): ReactNode {
                     className:
                       'cm-chara-opt' +
                       (choice.no === value ? ' on' : '') +
-                      (i === active ? ' active' : ''),
-                    title: `${labelOf(choice)} · ${choice.count} 个函数`,
+                      (i === active ? ' active' : '') +
+                      (choice.count === 0 ? ' empty' : ''),
+                    title: `${labelOf(choice)} · ${choice.count > 0 ? `${choice.count} 个函数` : '尚无口上函数'}`,
                     onMouseDown: (e: { preventDefault(): void }) => e.preventDefault(),
                     onMouseEnter: () => setActive(i),
                     onClick: () => pick(choice),
@@ -194,9 +205,7 @@ export function CharaPicker(props: CharaPickerProps): ReactNode {
           createElement(
             'div',
             { className: 'cm-chara-foot dim' },
-            filtered.length > shown.length
-              ? `匹配 ${filtered.length} 人，显示前 ${shown.length} 人——继续输入以缩小范围`
-              : `匹配 ${filtered.length} 人`,
+            `匹配 ${filtered.length} 人${needle ? '' : '（可输入编号 / 名字缩小范围）'}`,
           ),
         )
       : null,
