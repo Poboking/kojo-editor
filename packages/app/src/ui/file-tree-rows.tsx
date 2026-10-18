@@ -3,12 +3,20 @@
  *
  * 两个都保持无知：`EditRow` 只画输入框（受控值在宿主，Esc/Enter/失焦三个出口都从这里出），
  * `FileRows` 不认识编辑态——它只知道"这一行换成宿主给的那个元素"。
+ *
+ * PS-16 memo 化：`EditRow` / `FileRows` 组件级 memo（树内无关 state——菜单、批注、定位——
+ * 翻动时整组行不再重画）；单行 `FileRow` 行级 memo 在 `file-tree-row.tsx`（拆模块 ⇒
+ * 行级计数可观测）。生效前提在宿主：`FileTree.tsx` 把穿进行组件的回调 useCallback 化、
+ * `skip`/`edit` 等引用型 props 稳定化，否则每帧新引用 ⇒ memo 形同虚设。
  */
-import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
-import { baseName } from './file-tree-model';
+import { memo, useEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { FileRow } from './file-tree-row';
+
+
+export type { FileRowProps } from './file-tree-row';
 
 /** 行内编辑输入框（模块级 ⇒ SSR 单测可用；受控值在宿主，Esc/Enter/失焦三个出口都从这里出） */
-export function EditRow(props: {
+export const EditRow = memo(function EditRow(props: {
   value: string;
   placeholder: string;
   onChange: (v: string) => void;
@@ -42,9 +50,9 @@ export function EditRow(props: {
       onBlur={props.onCancel}
     />
   );
-}
+});
 
-/** ERB 平铺行（模块级组件 ⇒ 可 SSR 单测"一次渲染多少行"；窗口大小由 `limit` 决定） */
+
 export interface FileRowsProps {
   readonly files: readonly string[];
   /** 本次最多渲染的行数（≥ files.length 即全量 = 改动前行为） */
@@ -61,7 +69,7 @@ export interface FileRowsProps {
   readonly onFileContext?: (e: ReactMouseEvent, path: string) => void;
 }
 
-export function FileRows({ files, limit, activeFile, onOpenFile, edit, onFileContext }: FileRowsProps): ReactElement {
+export const FileRows = memo(function FileRows({ files, limit, activeFile, onOpenFile, edit, onFileContext }: FileRowsProps): ReactElement {
   const rows = limit >= files.length ? files : files.slice(0, Math.max(0, limit));
   return (
     <>
@@ -70,18 +78,10 @@ export function FileRows({ files, limit, activeFile, onOpenFile, edit, onFileCon
           {edit && edit.path === f ? (
             edit.node
           ) : (
-            <button
-              className={`tree-file ${f === activeFile ? 'active' : ''}`}
-              title={f}
-              data-locate={f}
-              onClick={() => onOpenFile(f)}
-              onContextMenu={onFileContext ? (e) => onFileContext(e, f) : undefined}
-            >
-              {baseName(f)}
-            </button>
+            <FileRow f={f} active={f === activeFile} onOpenFile={onOpenFile} onFileContext={onFileContext} />
           )}
         </li>
       ))}
     </>
   );
-}
+});

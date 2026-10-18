@@ -7,7 +7,7 @@
  * 不可能再分叉）。递归没有深度上限（语料里有五层深的包内目录），`depth === 0` 的
  * 去重规则必须与 `visibleEntries` 同一口径。
  */
-import { type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { memo, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import type { DirEntry } from '@kojo/plugin-api';
 import { Icon } from './icons';
 import { BINARY_EXT, erbExt } from './file-tree-model';
@@ -63,6 +63,11 @@ function sortedDirsAndFiles(entries: readonly DirEntry[]): { dirs: DirEntry[]; f
 /**
  * 一个目录的真实内容行（递归）。目录可再展开；文件按类型给不同处置。
  *
+ * PS-16 memo 化：`subOpen` / `dirCache` / `edit` 等引用型 props 由宿主稳定持有，
+ * 树内无关 state（菜单、批注、过滤前帧）翻动时整层跳过；递归子层经 `{...props}`
+ * 展开传播同一批引用 ⇒ 父层重渲时未变的子层也整层跳过。回调不稳定的宿主形态
+ * 会让 memo 失效（见 `FileTree.tsx` 的 useCallback 链）。
+ *
  * `skip` 只在**包根那一层**生效：那里的 ERB 与包层平铺列表同级重复（同一个东西在
  * 同一个视觉层级出现两遍），所以略过。**嵌套目录必须如实显示自己的 ERB**——
  * 它们住在另一层，不是重复；若一并略过，装了 10 个面文件的子目录会被渲染成空目录，
@@ -71,7 +76,7 @@ function sortedDirsAndFiles(entries: readonly DirEntry[]): { dirs: DirEntry[]; f
  * 口径与 `visibleEntries` 逐字相同（depth===0 才按 pkey 去重），只是**先去重再排序**
  * 改成"排好序再按同一把尺滤"——顺序不变、行数不变，省掉的是每帧重排。
  */
-export function DirRows(props: DirRowsProps): ReactElement[] {
+export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[] {
   const {
     dir,
     depth,
@@ -194,4 +199,4 @@ export function DirRows(props: DirRowsProps): ReactElement[] {
       );
     }),
   ];
-}
+});

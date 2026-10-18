@@ -147,11 +147,20 @@ const EditorPaneMemo = memo(EditorPane);
 /**
  * 一组编辑器的**恒定身份回调集**（见 ProjectView 内的 `callbacksFor`）。
  * `register` 只在宿主传了 `registerActions` 时才接线（缺省仍是 undefined，零改动语义）。
+ *
+ * PS-16：标签栏五条回调并入同一张表——TabBar memo 化后，装配处的内联箭头
+ * （`(p) => onActivateTabInGroup(g.id, p)` 每帧新函数）是唯一残余的失效源，
+ * 不并入则 memo 形同虚设。宿主回调经 ref 镜像取最新值，闭包不过时。
  */
 interface GroupCallbacks {
   readonly onStatusInfo: (info: EditorStatusInfo | null) => void;
   readonly onFocused: () => void;
   readonly register: (actions: EditorPaneActions | null) => void;
+  readonly onActivateTab: (p: string) => void;
+  readonly onRequestCloseTab: (p: string) => void;
+  readonly onReorderTab: (p: string, toIndex: number) => void;
+  readonly onTogglePin: (p: string) => void;
+  readonly onBatchCloseTab: (mode: BatchCloseMode, anchor: string) => void;
 }
 
 /**
@@ -243,6 +252,21 @@ export function ProjectView({
   registerActionsRef.current = registerActions;
   const onActivateGroupRef = useRef(onActivateGroup);
   onActivateGroupRef.current = onActivateGroup;
+  /** 标签栏宿主回调的 ref 镜像（PS-16）：闭包恒定、取值最新，与上面两条同款腰带 */
+  const tabHostRef = useRef({
+    onActivateTabInGroup,
+    onRequestCloseTabInGroup,
+    onReorderTabInGroup,
+    onTogglePinInGroup,
+    onBatchCloseTabInGroup,
+  });
+  tabHostRef.current = {
+    onActivateTabInGroup,
+    onRequestCloseTabInGroup,
+    onReorderTabInGroup,
+    onTogglePinInGroup,
+    onBatchCloseTabInGroup,
+  };
   const groupCbRef = useRef(new Map<string, GroupCallbacks>());
   const callbacksFor = useCallback((gid: string): GroupCallbacks => {
     let cb = groupCbRef.current.get(gid);
@@ -251,6 +275,11 @@ export function ProjectView({
         onStatusInfo: (info) => handleStatusInfo(gid, info),
         onFocused: () => onActivateGroupRef.current(gid),
         register: (actions) => registerActionsRef.current?.(gid, actions),
+        onActivateTab: (p) => tabHostRef.current.onActivateTabInGroup(gid, p),
+        onRequestCloseTab: (p) => tabHostRef.current.onRequestCloseTabInGroup(gid, p),
+        onReorderTab: (p, to) => tabHostRef.current.onReorderTabInGroup(gid, p, to),
+        onTogglePin: (p) => tabHostRef.current.onTogglePinInGroup(gid, p),
+        onBatchCloseTab: (mode, anchor) => tabHostRef.current.onBatchCloseTabInGroup(gid, mode, anchor),
       };
       groupCbRef.current.set(gid, cb);
     }
@@ -931,6 +960,8 @@ export function ProjectView({
       <div className="editor-groups">
         {groups.map((g, i) => {
           const focused = g.id === activeGroupId;
+          // PS-16：五条回调走 callbacksFor 恒定身份（TabBar memo 的父侧前提）
+          const tabCb = callbacksFor(g.id);
           return (
             <Fragment key={g.id}>
               {i > 0 ? (
@@ -957,11 +988,11 @@ export function ProjectView({
                       activeFile={g.active}
                       dirtyPaths={dirtyPaths}
                       pinnedPaths={pinnedPaths}
-                      onActivateTab={(p) => onActivateTabInGroup(g.id, p)}
-                      onRequestCloseTab={(p) => onRequestCloseTabInGroup(g.id, p)}
-                      onReorderTab={(p, to) => onReorderTabInGroup(g.id, p, to)}
-                      onTogglePin={(p) => onTogglePinInGroup(g.id, p)}
-                      onBatchCloseTab={(mode, anchor) => onBatchCloseTabInGroup(g.id, mode, anchor)}
+                      onActivateTab={tabCb.onActivateTab}
+                      onRequestCloseTab={tabCb.onRequestCloseTab}
+                      onReorderTab={tabCb.onReorderTab}
+                      onTogglePin={tabCb.onTogglePin}
+                      onBatchCloseTab={tabCb.onBatchCloseTab}
                       onSaveAllClick={handleSaveAllClick}
                       hasDirty={dirtyPaths.size > 0}
                     />

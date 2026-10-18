@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import { ContextMenu, type ContextMenuItem } from './context-menu';
 import { Icon } from './icons';
 import { useNotify } from './NotificationCenter';
-import { tabClassName, tabMenuItemsFor, type BatchCloseMode, type TabDropHint, type TabMenuItemId } from './tabs-ops';
+import { TabRow } from './tab-row';
+import { tabMenuItemsFor, type BatchCloseMode, type TabDropHint, type TabMenuItemId } from './tabs-ops';
+
+export type { TabRowProps } from './tab-row';
 
 /**
  * 标签栏（C1 右键菜单 / C2 固定标签 / C3 全部保存入口）。
@@ -11,15 +14,13 @@ import { tabClassName, tabMenuItemsFor, type BatchCloseMode, type TabDropHint, t
  * monaco 全图，SSR 单测在 node 里一 import 就炸（window is not defined）；
  * 标签栏自身只依赖 Icon / NotificationCenter / tabs-ops，零编辑器知识。
  * 顺序照单全收（pinned 区在前的排序不变量由 App 经 tabs-ops 维持），渲染层不二次排序。
+ *
+ * PS-16 memo 化：`TabBar` 组件级 memo（宿主侧五条回调经 ProjectView 的 `callbacksFor`
+ * 拿恒定身份后，壳层任何无关重渲停在标签栏门口）；单行 `TabRow` 行级 memo 在
+ * `tab-row.tsx`（拆模块 ⇒ 行级计数可观测）。
  */
 
-/** 标签显示名：路径末段（完整路径留 title 悬浮提示） */
-function tabName(path: string): string {
-  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-  return i >= 0 ? path.slice(i + 1) : path;
-}
-
-interface TabBarProps {
+export interface TabBarProps {
   openTabs: readonly string[];
   activeFile: string | null;
   dirtyPaths: ReadonlySet<string>;
@@ -44,7 +45,7 @@ interface TabBarProps {
  *   菜单本体走共享 `<ContextMenu>`（用户反馈 7：与文件树 / 编辑器同一套玻璃观感与键盘操作）
  * - **固定标签**：左缘竖标 + 关闭钮不渲染（防误关；显式关闭走右键菜单「关闭」）。
  */
-export function TabBar({
+export const TabBar = memo(function TabBar({
   openTabs,
   activeFile,
   dirtyPaths,
@@ -72,12 +73,13 @@ export function TabBar({
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeFile, openTabs.length]);
 
-  const onTabDragStart = (e: ReactDragEvent, p: string): void => {
+  /** 以下基回调恒定身份（PS-16）：行的 memo 只看值 props，闭包造行参的事留在行内 */
+  const onTabDragStart = useCallback((e: ReactDragEvent, p: string): void => {
     e.dataTransfer.setData(TAB_DRAG_MIME, p);
     e.dataTransfer.setData('text/plain', p);
     e.dataTransfer.effectAllowed = 'move';
-  };
-  const onTabDragOver = (e: ReactDragEvent, p: string): void => {
+  }, []);
+  const onTabDragOver = useCallback((e: ReactDragEvent, p: string): void => {
     if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -87,8 +89,8 @@ export function TabBar({
     // 塞一个新对象 ⇒ 引用必变 ⇒ 标签条每移一个像素整条重渲一次。
     // 提示位只在 (path, before) 真变化时才有新意义，其余一律原样留着同一份 state。
     setTabDropAt((cur) => (cur !== null && cur.path === p && cur.before === before ? cur : { path: p, before }));
-  };
-  const onTabDrop = (e: ReactDragEvent, p: string): void => {
+  }, []);
+  const onTabDrop = useCallback((e: ReactDragEvent, p: string): void => {
     const dragPath = e.dataTransfer.getData(TAB_DRAG_MIME);
     setTabDropAt(null);
     if (!dragPath || dragPath === p) return;
@@ -100,17 +102,17 @@ export function TabBar({
     if (e.clientX >= r.left + r.width / 2) to++;
     if (from < to) to--;
     if (from !== to) onReorderTab(dragPath, to);
-  };
-  const onTabDragEnd = (): void => setTabDropAt(null);
+  }, [openTabs, onReorderTab]);
+  const onTabDragEnd = useCallback((): void => setTabDropAt(null), []);
 
-  const openMenu = (e: ReactMouseEvent, path: string): void => {
+  const openMenu = useCallback((e: ReactMouseEvent, path: string): void => {
     e.preventDefault();
     e.stopPropagation();
     setMenu({ x: Math.min(e.clientX, window.innerWidth - 260), y: e.clientY, path });
-  };
+  }, []);
 
   /** 复制路径（C1）：navigator.clipboard + 一句轻反馈（照 FileTree copyText 口径） */
-  const copyPath = (path: string): void => {
+  const copyPath = useCallback((path: string): void => {
     const clip = navigator.clipboard;
     if (!clip) {
       notify({ kind: 'error', message: '复制失败：当前环境没有可用的剪贴板' });
@@ -120,7 +122,7 @@ export function TabBar({
       () => notify({ kind: 'info', message: '已复制完整路径' }),
       () => notify({ kind: 'error', message: '复制失败：剪贴板不可用' }),
     );
-  };
+  }, [notify]);
 
   const runMenuAction = (id: TabMenuItemId): void => {
     const path = menu?.path;
@@ -161,52 +163,23 @@ export function TabBar({
           }
         }}
       >
-        {openTabs.map((p) => {
-          const isPinned = pinnedPaths.has(p);
-          return (
-            <div
-              key={p}
-              role="tab"
-              aria-selected={p === activeFile}
-              className={tabClassName(p, p === activeFile, isPinned, tabDropAt)}
-              title={isPinned ? `${p}（已固定）` : p}
-              draggable
-              onContextMenu={(e) => openMenu(e, p)}
-              onDragStart={(e) => onTabDragStart(e, p)}
-              onDragOver={(e) => onTabDragOver(e, p)}
-              onDrop={(e) => onTabDrop(e, p)}
-              onDragEnd={onTabDragEnd}
-              onClick={() => onActivateTab(p)}
-              onAuxClick={(e) => {
-                if (e.button === 1) {
-                  e.preventDefault();
-                  onRequestCloseTab(p);
-                }
-              }}
-            >
-              {isPinned ? <span className="tab-pin" title="已固定（右键可取消固定）" /> : null}
-              <span className="tab-label">{tabName(p)}</span>
-              {dirtyPaths.has(p) ? (
-                <span className="tab-dirty" title="未保存">
-                  <Icon name="circle-filled" size={9} />
-                </span>
-              ) : null}
-              {/* 固定标签不渲染关闭钮（防误关，VSCode 同款）；显式关闭走右键菜单 */}
-              {!isPinned ? (
-                <button
-                  className="tab-close"
-                  title="关闭标签 (Ctrl+W)"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRequestCloseTab(p);
-                  }}
-                >
-                  <Icon name="close" size={13} />
-                </button>
-              ) : null}
-            </div>
-          );
-        })}
+        {openTabs.map((p) => (
+          <TabRow
+            key={p}
+            p={p}
+            isActive={p === activeFile}
+            isPinned={pinnedPaths.has(p)}
+            dirty={dirtyPaths.has(p)}
+            hint={tabDropAt?.path === p ? (tabDropAt.before ? 'before' : 'after') : null}
+            onActivateTab={onActivateTab}
+            onRequestCloseTab={onRequestCloseTab}
+            onContextMenuBase={openMenu}
+            onDragStartBase={onTabDragStart}
+            onDragOverBase={onTabDragOver}
+            onDropBase={onTabDrop}
+            onDragEnd={onTabDragEnd}
+          />
+        ))}
       </div>
       {/* 全部保存（C3）：命令面板已有 workbench.saveAll，这里补显性入口——
           恒在（无脏时弱化不消失，按下去由宿主给一句人话，铁律 4） */}
@@ -236,4 +209,4 @@ export function TabBar({
       ) : null}
     </div>
   );
-}
+});

@@ -8,7 +8,7 @@
  * 目录列举 + 失效重列）、展开与编辑动作、定位 effect，以及把上面几块接起来的渲染。
  */
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
 import {
@@ -39,6 +39,21 @@ import { DirRows } from './file-tree-dir-rows';
 import { FileTreeContextMenu } from './file-tree-menu';
 import type { DirState, EditState, Group, MenuScope, PackageGroup, Props } from './file-tree-types';
 import { Icon } from './icons';
+
+/**
+ * PS-16 稳定化三件模块级常量：穿进行组件的引用型 props 必须同帧同引用，memo 才有得看。
+ * - `IDENTITY_GLOSS`：`gloss` 缺省时的恒等映射（旧写法 `gloss ?? ((n) => n)` 每帧新函数，
+ *   全树 DirRows 的 memo 全数失效）；
+ * - `EMPTY_SKIP`：fs 视图根层的空 skip（旧写法内联 `new Set()` 每帧新集合）；
+ * - `erbKeysCache`：包层 ERB 键集按包对象身份缓存（`sortedByEntries` 同款 WeakMap 先例，
+ *   数组身份 = 内容身份，包退场随之回收）。
+ */
+const IDENTITY_GLOSS = (n: string): string => n;
+const EMPTY_SKIP: ReadonlySet<string> = new Set();
+const erbKeysCache = new WeakMap<PackageGroup, ReadonlySet<string>>();
+
+/** 目录缓存上界（超界先淘汰未展开的最旧条目；全在展开则原样保留——展开态是作者的现场） */
+const DIR_CACHE_MAX = 400;
 
 /**
  * 冷开快照：对口上根各做**一次** `walkDir`，拿全部方言文件路径。
@@ -99,8 +114,8 @@ export function escapeAttrValue(value: string): string {
  * 除非重开项目——实机线在 §5.87 里把这条明记为"留给能做 GUI 的那一批"。
  */
 export function FileTree({ project, index, activeFile, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder }: Props): ReactElement {
-  /** 名称显示对照（缺省 = 恒等，保持旧行为） */
-  const glossOf = gloss ?? ((n: string): string => n);
+  /** 名称显示对照（缺省 = 恒等，保持旧行为；IDENTITY_GLOSS 模块级 ⇒ 引用恒定） */
+  const glossOf = gloss ?? IDENTITY_GLOSS;
   const [filter, setFilter] = useState('');
   /**
    * 视图切换（B5）：口上树（角色 → 作者包 → 口上文件的语义分组）⇄ 整个游戏目录（文件系统视图）。
@@ -235,8 +250,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
    * （条目数组是实打实的内存）。超出上界时先淘汰"当前没展开"的最旧条目；
    * 全都在展开着就原样留着——**展开态是作者的现场，缓存不许把它挤成空白**。
    */
-  const DIR_CACHE_MAX = 400;
-  const applyDirUpdates = (updates: ReadonlyMap<string, DirState>): void => {
+  const applyDirUpdates = useCallback((updates: ReadonlyMap<string, DirState>): void => {
     setDirCache((prev) => {
       const next = new Map(prev);
       for (const [dir, state] of updates) next.set(dir, state);
@@ -247,7 +261,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       }
       return next;
     });
-  };
+  }, [subOpen]);
 
   /**
    * 一批目录一起列、**一次落地**（PS-6）：外部改动重列走的就是这条。
@@ -255,7 +269,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
    * 序号闸照旧逐目录认领先后（迟到的那份不认领）；某一份失败只把**那一个目录**标成
    * error，其余照收——一颗失败不许把整批拖成空白（也不静默：DirRows 会画失败行）。
    */
-  const fetchDirs = (dirs: readonly string[]): void => {
+  const fetchDirs = useCallback((dirs: readonly string[]): void => {
     if (!listDir || dirs.length === 0) return;
     const seqs = new Map<string, number>();
     const loading = new Map<string, DirState>();
@@ -278,32 +292,32 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       });
       if (updates.size > 0) applyDirUpdates(updates);
     });
-  };
+  }, [listDir, dirCache, applyDirUpdates]);
 
   /** 发起一次列举（不看缓存，总是重新取；结果按请求序号认领先后） */
-  const fetchDir = (dir: string): void => {
+  const fetchDir = useCallback((dir: string): void => {
     fetchDirs([dir]);
-  };
+  }, [fetchDirs]);
 
   /** 真实文件夹视图的惰性加载（按绝对路径；已缓存则零请求） */
-  const ensureDir = (dir: string): void => {
+  const ensureDir = useCallback((dir: string): void => {
     if (!listDir || dirCache.has(dir)) return;
     fetchDir(dir);
-  };
+  }, [listDir, dirCache, fetchDir]);
 
   /** 点击包标题行 = 追加 / 收起真实文件夹内容（ERB 列表始终原地不动） */
-  const togglePkgFolder = (pkgKey: string, dir: string): void => {
+  const togglePkgFolder = useCallback((pkgKey: string, dir: string): void => {
     const willEnter = !pkgFolder.has(pkgKey);
     setPkgFolder((prev) => toggleIn(prev)(pkgKey));
     if (willEnter) ensureDir(dir);
-  };
+  }, [pkgFolder, ensureDir]);
 
   /** 子目录展开/折叠（递归；首次展开才取该层） */
-  const toggleSub = (dir: string): void => {
+  const toggleSub = useCallback((dir: string): void => {
     const willOpen = !subOpen.has(dir);
     setSubOpen((prev) => toggleIn(prev)(dir));
     if (willOpen) ensureDir(dir);
-  };
+  }, [subOpen, ensureDir]);
 
   /**
    * fs 视图的根层清单（D1 会话级附加根）：项目根恒在首位，附加根按加入顺序并列。
@@ -412,23 +426,23 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshNonce]);
 
-  const openMenu = (e: ReactMouseEvent, scope: MenuScope): void => {
+  const openMenu = useCallback((e: ReactMouseEvent, scope: MenuScope): void => {
     e.preventDefault();
     e.stopPropagation();
     setMenu({ x: Math.min(e.clientX, window.innerWidth - 260), y: e.clientY, scope });
-  };
+  }, []);
 
   /* ---------------- 文件/目录编辑（B1/B2 文件树编辑批） ---------------- */
 
   /** 轻反馈（复用 revealNote 同款形态——一句话状态行，不建 toast 基建） */
-  const note = (msg: string): void => setRevealNote(msg);
-  const noteErr = (err: unknown, action: string): void => {
+  const note = useCallback((msg: string): void => setRevealNote(msg), []);
+  const noteErr = useCallback((err: unknown, action: string): void => {
     const msg = errorText(err);
     // 越权写（WriteNotAllowedError）的消息是英文内部术语：换成人话，其余原样带出
     setRevealNote(String(err instanceof Error && err.name === 'WriteNotAllowedError')
       ? '这个位置在只读范围内，不能在这里修改文件。要先在「只读」徽章那里批准写权限。'
       : `${action}失败：${msg}`);
-  };
+  }, []);
 
   /** 把某个目录的父层「打开到可见」：新建/重命名的输入行必须落在已展开的那一层 */
   const openLayerOf = (dir: string): void => {
@@ -464,7 +478,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   };
 
   /** dirCache 剪枝：整目录没了/搬走了，其下所有缓存条目一并退场（防重建后捞出幽灵子树） */
-  const pruneCacheUnder = (dir: string): void => {
+  const pruneCacheUnder = useCallback((dir: string): void => {
     setDirCache((m) => {
       const next = new Map(m);
       let changed = false;
@@ -476,19 +490,19 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       }
       return changed ? next : m;
     });
-  };
+  }, []);
 
   /** 重命名目录后 subOpen 里的旧前缀跟着搬（展开态是作者的现场，搬目录不算丢现场） */
-  const remapSubOpen = (fromDir: string, toDir: string): void => {
+  const remapSubOpen = useCallback((fromDir: string, toDir: string): void => {
     setSubOpen((prev) => {
       const next = new Set<string>();
       for (const k of prev) next.add(isUnderPath(fromDir, k) ? joinPath(toDir, k.slice(fromDir.replace(/[\\/]+$/, '').length + 1)) : k);
       return next;
     });
-  };
+  }, []);
 
   /** 操作涉及哪些目录就重列哪些（重命名要重列 from 与 to 两个父目录；不全树重挂） */
-  const refetchDirs = (dirs: readonly string[]): void => {
+  const refetchDirs = useCallback((dirs: readonly string[]): void => {
     const seen = new Set<string>();
     const out: string[] = [];
     for (const d of dirs) {
@@ -498,9 +512,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     }
     // 与失效重列同一条批处理腿：改名涉及两层 ⇒ 一次请求批、一帧落地（不是两帧）
     fetchDirs(out);
-  };
+  }, [fetchDirs]);
 
-  const commitEdit = (): void => {
+  const commitEdit = useCallback((): void => {
     const e = edit;
     if (!e) return;
     const name = editValue.trim();
@@ -565,9 +579,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       },
       (err: unknown) => noteErr(err, '重命名'),
     );
-  };
+  }, [edit, editValue, io, guardFileOp, onFilesGone, refetchDirs, note, noteErr, pruneCacheUnder, remapSubOpen]);
 
-  const cancelEdit = (): void => setEdit(null);
+  const cancelEdit = useCallback((): void => setEdit(null), []);
 
   /** 删除（文件/目录同一入口）：守门 → 量级确认 → 落地 → 只重列受影响目录 */
   const doDelete = (path: string, isDir: boolean): void => {
@@ -795,27 +809,38 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   };
 
 
-  /** 包层已平铺的 ERB 路径集（子目录渲染时去重用） */
-  const erbKeysOf = (s: PackageGroup): Set<string> => new Set(s.files.map(pkey));
+  /** 包层已平铺的 ERB 路径集（子目录渲染时去重用；PS-16：按包对象身份 WeakMap 缓存 ⇒ 引用恒定） */
+  const erbKeysOf = (s: PackageGroup): ReadonlySet<string> => {
+    let hit = erbKeysCache.get(s);
+    if (hit === undefined) {
+      hit = new Set(s.files.map(pkey));
+      erbKeysCache.set(s, hit);
+    }
+    return hit;
+  };
 
-  /** 平铺 ERB 行的行内重命名（FileRows 是无知组件：编辑节点在这里造好塞进去） */
-  const fileEdit =
-    edit && edit.mode === 'rename' && !edit.isDir
-      ? {
-          path: edit.path,
-          node: (
-            <EditRow
-              value={editValue}
-              placeholder="新名称"
-              onChange={setEditValue}
-              onCommit={commitEdit}
-              onCancel={cancelEdit}
-            />
-          ),
-        }
-      : null;
+  /** 平铺 ERB 行的行内重命名（FileRows 是无知组件：编辑节点在这里造好塞进去；
+   *  PS-16 useMemo ⇒ 非编辑期恒为 null 同一引用，不惊动 FileRows 的 memo） */
+  const fileEdit = useMemo(() => {
+    if (!(edit && edit.mode === 'rename' && !edit.isDir)) return null;
+    return {
+      path: edit.path,
+      node: (
+        <EditRow
+          value={editValue}
+          placeholder="新名称"
+          onChange={setEditValue}
+          onCommit={commitEdit}
+          onCancel={cancelEdit}
+        />
+      ),
+    };
+  }, [edit, editValue, commitEdit, cancelEdit]);
   /** 平铺 ERB 行右键（B1：文件行也有菜单了） */
-  const onFileContext = (e: ReactMouseEvent, path: string): void => openMenu(e, { kind: 'file', path });
+  const onFileContext = useCallback(
+    (e: ReactMouseEvent, path: string): void => openMenu(e, { kind: 'file', path }),
+    [openMenu],
+  );
 
   if (!index && snapPaths === null) {
     // 索引未就绪且快照未到：占位自解释。
@@ -872,7 +897,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                   {isOpen ? (
                     <ul className="tree-files">
                       {dirCache.has(root) ? (
-                        <DirRows {...dirRowsBase} dir={root} depth={0} skip={new Set()} />
+                        <DirRows {...dirRowsBase} dir={root} depth={0} skip={EMPTY_SKIP} />
                       ) : (
                         <li className="tree-note">读取目录…</li>
                       )}
@@ -882,7 +907,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
               );
             })
           ) : dirCache.has(project.rootDir) ? (
-            <DirRows {...dirRowsBase} dir={project.rootDir} depth={0} skip={new Set()} />
+            <DirRows {...dirRowsBase} dir={project.rootDir} depth={0} skip={EMPTY_SKIP} />
           ) : (
             <li className="tree-note">读取目录…</li>
           )
