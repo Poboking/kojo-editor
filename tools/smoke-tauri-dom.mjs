@@ -323,10 +323,11 @@ if (checks.bootChecked && checks.bootWsUrl) {
     checks.networkMonacoBefore = cap.monacoBeforeCount;
     checks.networkMonacoTotal = cap.monacoTotalCount;
     console.log(
-      `[smoke] Network 域取证：本轮 ${cap.total} 条请求（可点前 ${cap.beforeCount} 条，` +
+        `[smoke] Network 域取证：本轮 ${cap.total} 条请求（可点前 ${cap.beforeCount} 条，` +
         `其中 monaco ${cap.monacoBeforeCount} 条${cap.monacoBeforeCount > 0 ? '：' + cap.monacoBefore.join(' | ') : ''}），` +
         `整轮 monaco ${cap.monacoTotalCount} 条；时基=${cap.basis}（与页内时间线交集 ${cap.overlap} 条：原值 ${cap.exactCount} / 拟合 ${cap.fittedCount}，` +
-        `偏差中位 ${Math.round(cap.offset)}ms，离散 ${cap.spread === null ? 'n/a' : Math.round(cap.spread) + 'ms'}）；锚点=${cap.anchor}`,
+        `偏差中位 ${Math.round(cap.offset)}ms，离散 ${cap.spread === null ? 'n/a' : Math.round(cap.spread) + 'ms'}` +
+        (typeof cap.timeScale === 'number' && cap.timeScale !== 1 ? `，量纲归一 ×${Math.round(cap.timeScale)}` : '') + `）；锚点=${cap.anchor}`,
     );
     console.log(
       `[smoke] 断言②=${a2.ok}（口径=${a2.used}）—— ${a2.reason}` +

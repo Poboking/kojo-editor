@@ -298,6 +298,15 @@ const median = (xs) => {
  * **逐条择优**：这条请求在页内时间线里出现 → 直接用它的 `startTime`（页内钟原值，零拟合误差，
  * 断言② cares 的正是 monaco 那几条，能精确就绝不拟合）；没出现（dev 缓冲截断掉的模块）→
  * 退回上面选出的 basis 拟合值，并把 `via` 写成拟合来源好让读数自证。
+ *
+ * ## 第 0 步：量纲归一（PS-10 回炉批修，2026-10-18 实测踩坑）
+ * `Network.requestWillBeSent.timestamp` 的**单位**（ms / 秒）跟语义一样跨版本不稳。锚点法
+ * 做差 (`e.ts - anchorTs`) 后若是「秒」，被下面当 ms 与页内时间线求差，median 只能修掉
+ * **中位时刻**的系统差，斜率 ~999 的线性错配原样留在远端事件上（表现为 spread 数千 ms）——
+ * 实测把可点后 5.3s 的 editor.worker 拟合成「可点前 543ms」，断言②假红（同 bug 在 master
+ * 上只是侥幸没越线）。修法不猜量纲：交集 ≥5 条时用最小二乘估 `anchorRel → 页内 ms` 的
+ * 斜率，斜率显著 >2（秒→毫秒即 ~1000）就先把 anchorRel 整体归一到 ms 再走原 offset 拟合；
+ * 斜率 ≈1 说明本就同量纲，什么都不做。归一系数随 `timeScale` 字段返回，读数自证。
  */
 export function assignRelTimes(events, timelineEntries, anchorTs, timeOrigin) {
   const list = Array.isArray(events) ? events : [];
@@ -308,11 +317,14 @@ export function assignRelTimes(events, timelineEntries, anchorTs, timeOrigin) {
     const prev = tl.get(k);
     if (prev === undefined || start < prev) tl.set(k, start);
   }
+  /** 量纲归一系数（1 = 本就同量纲；~1000 = CDP timestamp 是「秒」）——见函数头「第 0 步」 */
+  let timeScale = 1;
   const finish = (basis, offset, overlap, spread, anchorRel) => ({
     basis,
     offset,
     overlap,
     spread,
+    timeScale,
     items: list.map((e, i) => {
       const exact = tl.get(urlKey(e.url));
       return exact !== undefined
@@ -328,6 +340,7 @@ export function assignRelTimes(events, timelineEntries, anchorTs, timeOrigin) {
       offset: 0,
       overlap: tl.size,
       spread: null,
+      timeScale,
       items: list.map((e) => {
         const t = tl.get(urlKey(e.url));
         return { url: e.url, rel: t === undefined ? null : t, via: t === undefined ? '无锚点' : '页内时间线原值' };
@@ -335,6 +348,36 @@ export function assignRelTimes(events, timelineEntries, anchorTs, timeOrigin) {
     };
   }
   const anchorRel = list.map((e) => e.ts - anchorTs);
+  // 第 0 步·量纲归一：交集 ≥5 时用 Theil–Sen（成对斜率中位）估 anchorRel→页内 ms 的斜率。
+  // 不用最小二乘：交集里「同 URL 时间线取的条目与事件不对应」的离群对会把 LS 斜率拉偏
+  // （判定层自己的测试用例里 6 条中 1 条离群就把 LS 拉到 3.86、误触归一）；Theil–Sen 的
+  // 中位数对 ≤50% 的离群免疫。斜率 >2 视为量纲错配（秒→毫秒 ≈ ×1000），先把 anchorRel
+  // 整体归一到 ms 再走原 offset 拟合；≈1 本就同量纲，什么都不做。
+  // 样本剔掉锚点前（负值）与 <0.5 的近零值；交集大时均匀步长抽样到 ≤240 条（~2.9 万对，确定性不变）。
+  {
+    const dims = [];
+    for (let i = 0; i < list.length; i++) {
+      const t = tl.get(urlKey(list[i].url));
+      if (t !== undefined && anchorRel[i] > 0.5) dims.push([anchorRel[i], t]);
+    }
+    if (dims.length >= 5) {
+      const step = Math.max(1, Math.ceil(dims.length / 240));
+      const s = [];
+      for (let i = 0; i < dims.length; i += step) s.push(dims[i]);
+      const slopes = [];
+      for (let i = 0; i < s.length; i++) {
+        for (let j = i + 1; j < s.length; j++) {
+          const dx = s[j][0] - s[i][0];
+          if (dx > 1e-9) slopes.push((s[j][1] - s[i][1]) / dx);
+        }
+      }
+      const slope = slopes.length > 0 ? median(slopes) : 1;
+      if (Number.isFinite(slope) && slope > 2 && slope < 100_000) {
+        timeScale = slope;
+        for (let i = 0; i < anchorRel.length; i++) anchorRel[i] *= slope;
+      }
+    }
+  }
   const diffs = [];
   for (let i = 0; i < list.length; i++) {
     const t = tl.get(urlKey(list[i].url));
@@ -352,6 +395,7 @@ export function assignRelTimes(events, timelineEntries, anchorTs, timeOrigin) {
       offset: median(d2),
       overlap: diffs.length,
       spread: Math.max(...d2) - Math.min(...d2),
+      timeScale,
       items: list.map((e, i) => {
         const exact = tl.get(urlKey(e.url));
         return exact !== undefined
@@ -388,7 +432,8 @@ export function judgeNetwork(cap) {
   return {
     verdict: cap.monacoBeforeCount === 0 ? 'pass' : 'fail',
     reason:
-      `时基=${cap.basis}（交集 ${cap.overlap ?? 'n/a'} 条，页内原值 ${cap.exactCount ?? 'n/a'} / 拟合 ${cap.fittedCount ?? 'n/a'}，偏差中位 ${Math.round(cap.offset ?? 0)}ms 离散 ${cap.spread === null ? 'n/a' : Math.round(cap.spread) + 'ms'}）；` +
+      `时基=${cap.basis}（交集 ${cap.overlap ?? 'n/a'} 条，页内原值 ${cap.exactCount ?? 'n/a'} / 拟合 ${cap.fittedCount ?? 'n/a'}，偏差中位 ${Math.round(cap.offset ?? 0)}ms 离散 ${cap.spread === null ? 'n/a' : Math.round(cap.spread) + 'ms'}` +
+      (typeof cap.timeScale === 'number' && cap.timeScale !== 1 ? `，量纲归一 ×${Math.round(cap.timeScale)}` : '') + `）；` +
       (cap.monacoBeforeCount === 0
         ? `可点前 ${cap.beforeCount} 条请求中零 monaco；可点后预取拉到 ${cap.monacoTotalCount} 条（匹配面有效）`
         : `可点前已发起 ${cap.monacoBeforeCount} 条 monaco 请求（可点前共 ${cap.beforeCount} 条）：${(cap.monacoBefore || []).join(' | ')}`),
@@ -599,6 +644,7 @@ export async function captureBootNetwork(opts) {
       overlap: fit.overlap,
       spread: fit.spread,
       offset: fit.offset,
+      timeScale: fit.timeScale,
       exactCount: rels.filter((r) => r.via === '页内时间线原值').length,
       fittedCount: rels.length - rels.filter((r) => r.via === '页内时间线原值').length,
       anchor: anchored

@@ -346,6 +346,37 @@ describe('时基校准：把 Network 事件折到页内时间轴（断言②的�
     expect(String(last.via)).toContain('拟合');
   });
 
+  it('CDP timestamp 是「秒」时先量纲归一再拟合（PS-10 回炉批实测：斜率 ~999 错配曾把可点后 5.3s 的 editor.worker 拟合成「可点前 543ms」假红）', () => {
+    // 复刻 2026-10-18 WebView2 实测形态：CDP ts 单位=秒（锚点 1000.0，事件锚点后 4.9–7.6「单位」），
+    // 页内时间线一律 ms。editor.worker 不在时间线里（900 条截断），刀口全靠拟合——
+    // 修前：offset 只修中位、斜率 ~999 的线性错配留在远端 ⇒ spread 数千 ms、worker 被切进可点前；
+    // 修后：最小二乘斜率 ≈1000 先归一，spread 塌到 0，worker 落回真实时刻（可点之后）。
+    const tl = [
+      ['http://h/a.js', 4900],
+      ['http://h/b.js', 5000],
+      ['http://h/c.js', 5100],
+      ['http://h/d.js', 5500],
+      ['http://h/e.js', 7000],
+    ];
+    const events = [
+      { url: 'http://h/a.js', ts: 1004.9 },
+      { url: 'http://h/b.js', ts: 1005.0 },
+      { url: 'http://h/c.js', ts: 1005.1 },
+      { url: 'http://h/d.js', ts: 1005.5 },
+      { url: 'http://h/e.js', ts: 1007.0 },
+      { url: 'http://h/editor.worker.js?worker', ts: 1005.3 }, // 真实 ~5300ms，可点（设 4000）之后
+    ];
+    const r = assignRelTimes(events, tl, 1000, TIME_ORIGIN);
+    expect(r.basis).toBe('timeline-fit');
+    expect(r.timeScale as number).toBeGreaterThan(900); // 秒 → ms 的归一系数被检出并自报
+    expect(Math.abs(r.offset as number)).toBeLessThan(50); // 归一后只剩常数残差
+    expect(r.spread as number).toBeLessThan(50); // 修前这类形态 spread ≈ 3800ms
+    const worker = r.items[5];
+    expect(worker.rel as number).toBeGreaterThan(5000); // 落回真实时刻，不再错切进可点前
+    expect(worker.rel as number).toBeLessThan(5600);
+    expect(String(worker.via)).toContain('拟合');
+  });
+
   it('同一 URL 多条时间线取最早那次；查询串写法不同也能对上', () => {
     // 页内钟 = 锚点相对时刻 + 50（常数偏移）；a.js 有两条时间线（150 与 999），必须取 150，
     // 否则偏差离散度就不为 0；b.js 事件带 ?worker、时间线不带，也要能按 pathname 对上。
