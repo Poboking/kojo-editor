@@ -8,7 +8,7 @@ import {
   templateSourceChoices,
   type KojoTemplateEntry,
 } from '../src/new-project-wizard';
-import { readPackAuthorship } from '../src/attribution';
+import { readPackAuthorship } from '@kojo/kojo-project-kit';
 import { scaffoldDirName } from '../src/scaffold';
 
 /**
@@ -32,7 +32,7 @@ const TPL: KojoTemplateEntry = {
   sourceDir: '/appdata/market/packs/template-pack/demo.template/2.0.0/files',
 };
 
-const FORM = { workName: '东方口上合集', charaName: '灵梦', version: '1.0', charaNo: 1, scriptNo: 3 };
+const FORM = { workName: '东方口上合集', charaName: '灵梦', version: '1.0', charaNo: 1, extra: { scriptNo: 3 } };
 
 describe('templateSourceChoices（「模板来源」下拉选项）', () => {
   it('无模板包：内置骨架仍是首项且默认；追加一条灰字说明，而不是把功能藏起来', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authorCandidateNotice, type PackageAttribution } from '../src/attribution';
+import { authorCandidateNotice, type PackageAttribution } from '@kojo/kojo-project-kit';
 import { buildImportMeta } from '../src/import-wizard';
 
 /**

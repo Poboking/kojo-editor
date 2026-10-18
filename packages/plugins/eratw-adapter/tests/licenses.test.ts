@@ -13,7 +13,7 @@ import {
   buildLicenseText,
   licenseProducesFile,
   type LicenseKind,
-} from '../src/licenses';
+} from '@kojo/kojo-project-kit';
 
 const F = { author: '某作者', year: 2026, workName: '东方口上合集' };
 const text = (kind: LicenseKind) => buildLicenseText(kind, F);

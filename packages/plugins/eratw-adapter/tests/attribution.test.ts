@@ -17,7 +17,7 @@ import {
   readPackageAttributionFromFiles,
   readSourceAttribution,
   type PackageAttribution,
-} from '../src/attribution';
+} from '@kojo/kojo-project-kit';
 
 /**
  * 署名 / 授权抽取（T2）测试。

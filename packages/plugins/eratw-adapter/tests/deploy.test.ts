@@ -11,7 +11,7 @@ import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { OpsJournalImpl } from '../../../kernel/src/journal';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { deployPackage, resolveDeployTarget, type DeployTarget } from '../src/deploy';
-import type { KojoCompiler } from '../src/artifact';
+import type { KojoCompiler } from '@kojo/kojo-project-kit';
 
 /**
  * 部署（P-E）测试。

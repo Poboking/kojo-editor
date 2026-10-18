@@ -22,9 +22,45 @@ import type {
   KojoInstructionTable,
   MarketService,
   Plugin,
+  ProjectService,
+  ScaffoldOptions,
+  ScaffoldResult,
+  SugarTranspileService,
   VariableSchema,
+  WorkspaceArtifact,
+  WorkspaceProject,
+  WorkspaceService,
 } from '@kojo/plugin-api';
-import { MARKET_SERVICE_KEY, combineDigests, foldDigest, join } from '@kojo/plugin-api';
+import {
+  KernelServices,
+  MARKET_SERVICE_KEY,
+  WellKnownServices,
+  basename,
+  combineDigests,
+  foldDigest,
+  join,
+} from '@kojo/plugin-api';
+import {
+  createDeployKojoWizard,
+  createImportKojoWizard,
+  createKojoProjectsPanel,
+  createNewKojoProjectWizard,
+  createPackageActions,
+  createPublishKojoWizard,
+  listMarketTemplates,
+  readPackageAttribution,
+  readRequestToken,
+  readSourceAttribution,
+  resolveNewItemPath,
+  writeScaffoldFiles,
+  type AttributionState,
+  type DirListState,
+  type KojoCompiler,
+  type KojoTemplateEntry,
+  type NewItemKind,
+  type PendingDeploy,
+  type PendingImport,
+} from '@kojo/kojo-project-kit';
 import { ERAAKUMA_MAID } from './constants';
 import {
   deriveCharaNoFromFileNames,
@@ -39,16 +75,27 @@ import { loadErakumamaidCallProtocol, type ErakumamaidCallProtocol } from './cal
 import { EMPTY_INSTRUCTION_TABLE, loadErakumamaidInstructionTable } from './instruction-table';
 import { createErakumamaidFaceTable } from './face-templates';
 import { ERAAKUMA_MAID_NAME_GLOSSARY } from './name-glossary';
+import { scaffoldErakumamaidProject } from './scaffold';
+import { withAmScaffold } from './new-project-wizard';
+import {
+  DEPLOY_KOJO_OVERLAY_ID,
+  IMPORT_KOJO_OVERLAY_ID,
+  NEW_KOJO_PROJECT_OVERLAY_ID,
+  PUBLISH_KOJO_OVERLAY_ID,
+} from './overlay-ids';
 
 /** 创建 eraAkumaMaid 适配器插件（供 app 组合根 bootstrap.ts 装配） */
 export function createErakumamaidAdapterPlugin(): Plugin {
   return {
     id: 'eraakumamaid-adapter',
     version: '0.1.0',
-    // 适配器核心只依赖内核 io（面板/向导族属 P4 共享骨架，届时再扩 requires）
-    requires: ['kernel.io'],
+    requires: ['kernel.io', KernelServices.Project, KernelServices.Workspaces],
     activate(ctx) {
       const io = ctx.inject<FileIO>('kernel.io');
+      /** 当前游戏项目（`scaffold` 的落点解析要用 charaIndex / rootDir） */
+      const project = ctx.inject<ProjectService>(KernelServices.Project);
+      /** 作者工作区（「我的口上项目」面板与四个向导的落点） */
+      const workspaces = ctx.inject<WorkspaceService>(KernelServices.Workspaces);
 
       /**
        * 市场服务（**惰性取**；字典包追加名表 KM-15 用）。
@@ -92,6 +139,39 @@ export function createErakumamaidAdapterPlugin(): Plugin {
         kojoFaceTemplates: createErakumamaidFaceTable(),
         // 日文名 → 中文名对照词典（只加显示备注，不改任何实际目录/文件名）
         nameGlossary: ERAAKUMA_MAID_NAME_GLOSSARY,
+
+        /**
+         * 生成新角色口上骨架并**直接落盘**（契约 v0.3 的 `scaffold` 位）。
+         *
+         * 与 eraTW 的区别是**落点口径**：本游戏的脚手架产物是「游戏根相对路径」
+         * （`ERB/EVENT_K/<n>/*.kojo` + `CSV/CHARA/CHARA<n>.csv`），所以缺省落点是
+         * 项目根，而不是某个角色的口上目录——照搬 eraTW 那套会把文件铺错层。
+         *
+         * `options.targetDir` 可覆盖（例如先落到别处过目）；已存在的文件一律不覆盖。
+         */
+        async scaffold(characterNo: number, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
+          const proj = project.current();
+          if (!proj) throw new Error('当前没有打开的游戏项目，无处生成骨架。');
+          const info = proj.charaIndex.get(characterNo);
+          if (!info) throw new Error(`游戏项目里没有编号 ${characterNo} 的角色。`);
+          const targetDir = options.targetDir ?? proj.rootDir;
+          const built = scaffoldErakumamaidProject({
+            workName: options.displayName ?? `${info.name}口上`,
+            // 契约的 options 没有作者字段；占位而非编造，报告里会点明
+            authorName: '未指定',
+            charaName: info.name,
+            version: '1.0',
+            charaNo: characterNo,
+          });
+          // `options.faces` 收的是文件名干（本游戏形如 `EVENT_K{n}`）；只影响写哪些空壳
+          const only = options.faces === undefined
+            ? undefined
+            : Object.keys(built.files).filter((rel) => {
+                const stem = rel.replace(/\.kojo$/, '').split('/').pop() ?? '';
+                return options.faces!.some((f) => f.replaceAll('{n}', String(characterNo)) === stem);
+              });
+          return writeScaffoldFiles({ io, files: built.files, targetDir, only });
+        },
 
         async detect(rootDir: string): Promise<boolean> {
           // 特征组合：口上域主路由文件 + CHARA CSV 目录（同时存在才成局）
@@ -242,6 +322,355 @@ export function createErakumamaidAdapterPlugin(): Plugin {
       };
 
       ctx.slots.register('game.adapter', { id: `${ERAAKUMA_MAID.gameId}-adapter`, adapter });
+
+      /* ================= 「我的口上项目」面板与向导族 =================
+       *
+       * 窗口、面板、包操作全部来自共享层 `@kojo/kojo-project-kit`；本段只做
+       * **宿主接线**：把内核服务接进来、把本游戏的脚手架供数递进去、把 overlay
+       * 注册到本 adapter 的命名空间下。
+       *
+       * 这一段与 eratw-adapter 的同名段落结构一致但**不共享代码**——它是宿主
+       * 组合根（谁注入什么、监听哪些事件是各游戏自己的事），共享的是它下面
+       * 那层窗口与判据。审计 B/C 项也不允许插件互相 import。
+       */
+
+      /* ---- 面板状态（项目列表 / 目录缓存 / 署名缓存共用一条通知源） ---- */
+
+      let wsProjects: readonly WorkspaceProject[] = [];
+      let wsLoading = false;
+      let wsError: string | null = null;
+      const wsListeners = new Set<() => void>();
+      /** 目录列举缓存（按绝对路径惰性加载；变更动作后整体失效） */
+      const wsDirCache = new Map<string, DirListState>();
+      /** 署名 / 授权缓存（null = 读失败，已降级为「未标注」） */
+      const wsAttrCache = new Map<string, AttributionState>();
+
+      const notifyWs = (): void => {
+        for (const cb of [...wsListeners]) {
+          try {
+            cb();
+          } catch (err) {
+            ctx.log.warn(`口上项目面板监听器抛错：${String(err)}`);
+          }
+        }
+      };
+
+      const refreshWsProjects = (): void => {
+        wsLoading = true;
+        wsError = null;
+        notifyWs();
+        workspaces
+          .list()
+          .then((list) => {
+            wsProjects = list;
+            wsLoading = false;
+            notifyWs();
+          })
+          .catch((err: unknown) => {
+            wsError = err instanceof Error ? err.message : String(err);
+            wsLoading = false;
+            ctx.log.warn(`工作区项目列表加载失败：${wsError}`);
+            notifyWs();
+          });
+      };
+
+      const ensureWsDir = (absDir: string): void => {
+        if (wsDirCache.has(absDir)) return;
+        wsDirCache.set(absDir, 'loading');
+        notifyWs();
+        void io
+          .listDir(absDir)
+          .then((entries) => {
+            wsDirCache.set(absDir, entries);
+            notifyWs();
+          })
+          .catch((err: unknown) => {
+            wsDirCache.set(absDir, { error: err instanceof Error ? err.message : String(err) });
+            notifyWs();
+          });
+      };
+
+      /** 目录缓存整体失效 + 项目列表重拉（新建 / 导入 / 部署后调用） */
+      const invalidateWs = (): void => {
+        wsDirCache.clear();
+        wsAttrCache.clear();
+        refreshWsProjects();
+      };
+
+      /** 只重拉一个目录（新建文件后不必把整棵树清掉） */
+      const refreshDir = (absDir: string): void => {
+        wsDirCache.delete(absDir);
+        ensureWsDir(absDir);
+      };
+
+      const ensureWsAttribution = (absDir: string): void => {
+        if (wsAttrCache.has(absDir)) return;
+        wsAttrCache.set(absDir, 'loading');
+        void readPackageAttribution({ io, absDir })
+          .then((a) => {
+            wsAttrCache.set(absDir, a);
+            notifyWs();
+          })
+          .catch((err: unknown) => {
+            // 署名读不到不是操作失败：静默降级为「未标注」，日志留痕
+            ctx.log.debug(`署名抽取失败（${absDir}）：${String(err)}`);
+            wsAttrCache.set(absDir, null);
+            notifyWs();
+          });
+      };
+
+      /* ---- 包操作（导出 / 部署共用一条状态条） ---- */
+
+      /**
+       * `.kojo` → 产物字节。**点击时才 tryInject**：语法糖插件被停用时，
+       * 浏览/导出无 `.kojo` 的包应照常工作，不把它写成 `requires` 硬依赖。
+       */
+      const compileKojo: KojoCompiler = (source, label) => {
+        const sugar = ctx.tryInject<SugarTranspileService>(WellKnownServices.SugarTranspile);
+        if (!sugar) {
+          throw new Error(`「${label}」需要 .kojo 转译服务（kojo-sugar 插件未启用），无法转成成品`);
+        }
+        return sugar.compileToBytes(source, undefined, label);
+      };
+
+      const actions = createPackageActions({ io, log: ctx.log, notify: notifyWs, compileKojo });
+      ctx.onDispose(() => actions.dispose());
+
+      /* ---- 三条请求：新建（带关联号）/ 导入 / 发布 ---- */
+
+      /** 待部署请求（overlay 组件无 props，payload 不经组件——读插件闭包） */
+      let pendingDeploy: PendingDeploy | null = null;
+
+      const requestDeploy = (artifact: WorkspaceArtifact, absDir: string): void => {
+        const metaCharaNo = artifact.meta.charaNo;
+        pendingDeploy = {
+          absDir,
+          dirName: artifact.dirName,
+          displayName: artifact.name,
+          // 新建向导写在制品 meta 里的角色号 → 自动预选；导入的包没有，留给用户挑
+          ...(typeof metaCharaNo === 'number' ? { charaNo: metaCharaNo } : {}),
+        };
+        ctx.bus.emit('ui.overlay.open', { id: DEPLOY_KOJO_OVERLAY_ID, source: 'eraakumamaid-adapter' });
+      };
+
+      /** 待导入请求 */
+      let pendingImport: PendingImport | null = null;
+
+      /**
+       * 新建向导的「谁叫我开的」关联号：发起方经 `workspace.newProjectRequested`
+       * 送来，创建成功时原样带进 `workspace.projectCreated`。
+       * **向导一关就清空** ⇒ 被取消的请求不会在下一次无关的创建里兑现。
+       */
+      let projectRequestToken: string | null = null;
+
+      ctx.onDispose(
+        ctx.bus.on('workspace.newProjectRequested', (ev) => {
+          projectRequestToken = readRequestToken(ev);
+          ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eraakumamaid-adapter' });
+        }),
+      );
+
+      const emitProjectCreated = (projectId: string, requestToken?: string): void => {
+        ctx.bus.emit('workspace.projectCreated', {
+          projectId,
+          ...(requestToken !== undefined ? { requestToken } : {}),
+          source: 'eraakumamaid-adapter',
+        });
+      };
+
+      ctx.onDispose(
+        ctx.bus.on('workspace.importRequested', (ev) => {
+          pendingImport = {
+            sourceDir: ev.sourceDir,
+            ...(ev.suggestedName !== undefined ? { suggestedName: ev.suggestedName } : {}),
+            ...(ev.source !== undefined ? { source: ev.source } : {}),
+          };
+          ctx.bus.emit('ui.overlay.open', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eraakumamaid-adapter' });
+        }),
+      );
+
+      ctx.onDispose(
+        ctx.bus.on('market.publishRequested', () => {
+          ctx.bus.emit('ui.overlay.open', { id: PUBLISH_KOJO_OVERLAY_ID, source: 'eraakumamaid-adapter' });
+        }),
+      );
+
+      /** 系统目录对话框选定 → 发既有的导入意图（命令面板与面板按钮同一个身体） */
+      const pickAndRequestImport = async (source: string): Promise<void> => {
+        let picked: string | null;
+        try {
+          picked = await io.chooseWorkspaceRoot({ title: '选择要导入的作者包文件夹' });
+        } catch (err) {
+          ctx.log.error(`「从文件夹导入口上项目」打不开目录选择对话框：${String(err)}`);
+          return;
+        }
+        // 取消是用户自己的动作，安静返回（不补一句"已取消"当噪音）
+        if (picked === null) return;
+        const suggestedName = basename(picked);
+        ctx.bus.emit('workspace.importRequested', {
+          sourceDir: picked,
+          ...(suggestedName.length > 0 ? { suggestedName } : {}),
+          source,
+        });
+      };
+
+      ctx.slots.register('editor.command', {
+        id: 'kojo.importKojoProject',
+        title: '从文件夹导入口上项目…',
+        category: '文件',
+        run: () => pickAndRequestImport('command-palette'),
+      });
+
+      /* ---- 新建条目（面板右键菜单） ---- */
+
+      const createItem = async (
+        absDir: string,
+        rawName: string,
+        kind: NewItemKind,
+      ): Promise<{ ok: true; path: string; displayName: string } | { ok: false; reason: string }> => {
+        const resolved = resolveNewItemPath(absDir, rawName, kind);
+        if (!resolved.ok) return resolved;
+        if (!io.isWritable(resolved.absPath)) {
+          return { ok: false, reason: `目标不在可写范围内：${resolved.absPath}` };
+        }
+        if (await io.exists(resolved.absPath)) {
+          return { ok: false, reason: `已存在同名条目，未覆盖：${resolved.displayName}` };
+        }
+        try {
+          if (kind === 'folder') {
+            await io.ensureDir(resolved.absPath);
+          } else {
+            // 建**空文件**：内容留给作者写（与脚手架"不生成活函数"同一口径）
+            await io.writeText(resolved.absPath, '');
+          }
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          ctx.log.warn(`新建失败（${resolved.absPath}）：${reason}`);
+          return { ok: false, reason };
+        }
+        refreshDir(absDir);
+        return { ok: true, path: resolved.absPath, displayName: resolved.displayName };
+      };
+
+      /* ---- 面板（本游戏没有内置教程 ⇒ 不传 openTutorial，教程区整块不渲染） ---- */
+
+      ctx.slots.register('ui.panel', {
+        id: 'kojo-projects',
+        title: '我的口上项目',
+        icon: 'home',
+        order: 35,
+        location: 'sidebar',
+        component: createKojoProjectsPanel({
+          subscribe: (cb) => {
+            wsListeners.add(cb);
+            return () => wsListeners.delete(cb);
+          },
+          projects: () => wsProjects,
+          loading: () => wsLoading,
+          error: () => wsError,
+          refresh: refreshWsProjects,
+          projectDir: (projectId) => workspaces.projectDir(projectId),
+          dirState: (absDir) => wsDirCache.get(absDir),
+          ensureDir: ensureWsDir,
+          reveal: (absPath) =>
+            ctx.bus.emit('editor.revealLocation', { filePath: absPath, source: 'eraakumamaid-adapter' }),
+          openNewWizard: () =>
+            ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eraakumamaid-adapter' }),
+          openImportWizard: () => pickAndRequestImport('projects-panel'),
+          status: () => actions.status(),
+          dismissStatus: () => actions.dismiss(),
+          exportArtifact: (absDir, displayName) => actions.exportArtifact(absDir, displayName),
+          deployArtifact: (artifact, absDir) => requestDeploy(artifact, absDir),
+          attribution: (absDir) => wsAttrCache.get(absDir),
+          ensureAttribution: ensureWsAttribution,
+          createItem,
+        }),
+      });
+
+      /* ---- 四个向导（创建顺序 20-23 与面板按钮顺序一致） ---- */
+
+      ctx.slots.register('ui.overlay', {
+        id: NEW_KOJO_PROJECT_OVERLAY_ID,
+        order: 20,
+        component: createNewKojoProjectWizard(
+          withAmScaffold({
+            workspaces,
+            io,
+            project,
+            close: () => {
+              ctx.bus.emit('ui.overlay.close', {
+                id: NEW_KOJO_PROJECT_OVERLAY_ID,
+                source: 'eraakumamaid-adapter',
+              });
+              projectRequestToken = null;
+            },
+            // 模板来源：已装 `template-pack` 投影成下拉条目；取不到按"没有模板包"处理
+            listTemplates: async (): Promise<readonly KojoTemplateEntry[]> => {
+              try {
+                return await listMarketTemplates(tryMarket());
+              } catch (err) {
+                ctx.log.warn(`市场模板包列表获取失败（新建向导按无模板包处理）：${String(err)}`);
+                return [];
+              }
+            },
+            onCreated: invalidateWs,
+            created: ({ projectId }) => emitProjectCreated(projectId, projectRequestToken ?? undefined),
+          }),
+        ),
+      });
+
+      ctx.slots.register('ui.overlay', {
+        id: IMPORT_KOJO_OVERLAY_ID,
+        order: 21,
+        component: createImportKojoWizard({
+          workspaces,
+          pending: () => pendingImport,
+          clearPending: () => {
+            pendingImport = null;
+          },
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: IMPORT_KOJO_OVERLAY_ID, source: 'eraakumamaid-adapter' }),
+          onImported: invalidateWs,
+          projectCreated: (projectId) => emitProjectCreated(projectId),
+          loadAttribution: (absDir, source) =>
+            readSourceAttribution({ io, absDir, ...(source !== undefined ? { source } : {}) }),
+        }),
+      });
+
+      ctx.slots.register('ui.overlay', {
+        id: DEPLOY_KOJO_OVERLAY_ID,
+        order: 22,
+        component: createDeployKojoWizard({
+          gameProject: () => project.current(),
+          writable: (targetDir) => io.isWritable(targetDir),
+          checkTargetExists: (targetDir) => io.exists(targetDir),
+          pending: () => pendingDeploy,
+          clearPending: () => {
+            pendingDeploy = null;
+          },
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: DEPLOY_KOJO_OVERLAY_ID, source: 'eraakumamaid-adapter' }),
+          deploy: (pkg, target) => actions.deployArtifact(pkg, target),
+        }),
+      });
+
+      ctx.slots.register('ui.overlay', {
+        id: PUBLISH_KOJO_OVERLAY_ID,
+        order: 23,
+        size: 'wide',
+        component: createPublishKojoWizard({
+          workspaces,
+          io,
+          compileKojo,
+          market: tryMarket,
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', { id: PUBLISH_KOJO_OVERLAY_ID, source: 'eraakumamaid-adapter' }),
+          // 外链只发意图：宿主落地（闸的唯一执法点在 Rust，插件不开窗）
+          openExternal: (url) => ctx.bus.emit('ui.openExternal', { url }),
+        }),
+      });
+
+      refreshWsProjects();
 
       /**
        * 名称解析 memo 随项目关闭清空（§5.73）。

@@ -43,7 +43,7 @@ import {
   LICENSE_CHOICES,
   LICENSE_FILE_NAME,
   type LicenseKind,
-} from './licenses';
+} from '@kojo/kojo-project-kit';
 
 /** 脚手架输入（向导字段一一对应） */
 export interface KojoScaffoldOptions {

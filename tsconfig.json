@@ -18,6 +18,7 @@
     "noEmit": true,
     "paths": {
       "@kojo/plugin-api": ["./packages/plugin-api/src/index.ts"],
+      "@kojo/kojo-project-kit": ["./packages/kojo-project-kit/src/index.ts"],
       "@kojo/kernel": ["./packages/kernel/src/index.ts"],
       "@kojo/plugin-erb-parser": ["./packages/plugins/erb-parser/src/index.ts"],
       "@kojo/plugin-eratw-adapter": ["./packages/plugins/eratw-adapter/src/index.ts"],
@@ -41,6 +42,8 @@
     }
   },
   "include": [
+    "packages/kojo-project-kit/src/**/*.ts",
+    "packages/kojo-project-kit/tests/**/*.ts",
     "packages/plugin-api/src/**/*.ts",
     "packages/plugin-api/tests/**/*.ts",
     "packages/kernel/src/**/*.ts",

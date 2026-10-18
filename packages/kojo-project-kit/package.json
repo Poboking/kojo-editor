@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/kojo-project-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "口上项目工作流的共享实现：新建 / 导入 / 部署 / 发布向导、项目面板、署名识别、制品计划与许可条款。全部游戏无关——游戏差异由 adapter 经 deps 注入。",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0"
+  }
+}

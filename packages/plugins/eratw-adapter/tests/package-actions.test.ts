@@ -8,10 +8,10 @@ import {
   zipContainerContractProblem,
   ZIP_FLAG_UTF8,
 } from '@kojo/plugin-api';
-import { STATUS_OK_DISMISS_MS, buildPackageZip, createPackageActions } from '../src/package-actions';
-import type { KojoCompiler } from '../src/artifact';
+import { STATUS_OK_DISMISS_MS, buildPackageZip, createPackageActions } from '@kojo/kojo-project-kit';
+import type { KojoCompiler } from '@kojo/kojo-project-kit';
 import type { DeployTargetOk, PendingDeploy } from '../src/deploy';
-import type { PanelStatus } from '../src/package-actions';
+import type { PanelStatus } from '@kojo/kojo-project-kit';
 
 /**
  * 包操作控制器（P-D 导出 / P-E 部署）单测。

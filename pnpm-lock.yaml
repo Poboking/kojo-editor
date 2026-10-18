@@ -158,6 +158,16 @@ importers:
         specifier: workspace:*
         version: link:../plugins/state-replay
 
+  packages/kojo-project-kit:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../plugin-api
+    devDependencies:
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+
   packages/plugin-api: {}
 
   packages/plugins/condition-extractor:
@@ -174,12 +184,18 @@ importers:
 
   packages/plugins/eraakumamaid-adapter:
     dependencies:
+      '@kojo/kojo-project-kit':
+        specifier: workspace:*
+        version: link:../../kojo-project-kit
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api
 
   packages/plugins/eratw-adapter:
     dependencies:
+      '@kojo/kojo-project-kit':
+        specifier: workspace:*
+        version: link:../../kojo-project-kit
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api
