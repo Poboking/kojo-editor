@@ -49,7 +49,7 @@ function memStorage(): ScopedStorage {
   };
 }
 
-const quietLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: {} };
+const quietLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 const noRemote = (): RemoteService => ({
   async fetchText() {
     throw new Error('本判据不联网');
