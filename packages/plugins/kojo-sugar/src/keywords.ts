@@ -41,6 +41,8 @@ export type KeywordId =
   | 'block.is'
   | 'block.random'
   | 'block.group'
+  /** 规则池（条件注解）块头 `分支：` / `branch：`——产物是一条 IF/ELSEIF/ELSE 链（规范 §3.11）。 */
+  | 'block.branch'
   | 'block.choice'
   | 'block.menu'
   | 'block.color'
@@ -170,6 +172,12 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 候选组（E18）：把「随机：」的一个候选收成多行；只作**裸块头** `组：`
   ['组', 'block.group'],
   ['group', 'block.group'],
+  // 规则池（条件注解）块头（规范 §3.11）：`分支：` / `branch：` 只作**裸块头**；
+  // 块体是 `[条件]` 标签行 + 各自更深缩进的正文，产物 = 一条 IF/ELSEIF/ELSE 链。
+  // `[` 在 ERB 里是数组下标 / 位名语法，故标签只在**行首整行恰为 `[…]`** 时成立
+  // （判定归 lexer 的位置式扫描 `matchRuleTag`，本表登记只为高亮/补全可见）。
+  ['分支', 'block.branch'],
+  ['branch', 'block.branch'],
   // 段块（E13 批）：库内「多信封分段」的可写形（产物 = `LOCAL = n` + `IF LOCAL && <条件>` 信封）。
   // 与 `如果` 同一降糖管线（段头原文当 ERB 条件），不另造一套条件语法。
   // **唯一词形 = `若`**（P-1R 批；1016 批删去旧形 `段` / 英文 `section`）：段头非纯条件，

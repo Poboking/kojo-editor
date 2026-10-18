@@ -266,6 +266,13 @@ export type LineClass =
   | { kind: 'caseHead'; values: WhenCaseValue[] }
   | { kind: 'randomHead' }
   | { kind: 'randomInline'; alternatives: string[] }
+  /** `分支：` / `branch：` 规则池块头（规范 §3.11；块体 = `[条件]` 标签行 + 缩进正文） */
+  | { kind: 'branchHead' }
+  /**
+   * `[条件]` 标签行（只在 `分支：` 块的第一层成立）。`condition` = 方括号内原文
+   * （条件表达式走与 `如果` 完全相同的降糖管线）；`fallback` = `[其他]` / `[否则]`。
+   */
+  | { kind: 'ruleTag'; condition: string; fallback: boolean; text: string }
   /** 文件头选项 `随机形: <值>`（P-4；`直出` = 随机块直出形，别的值按缺省形处理） */
   | { kind: 'randomShapeDecl'; value: string }
   | { kind: 'groupHead' }
@@ -388,6 +395,32 @@ function matchBlankLine(code: string): { kind: 'blankLine'; wait: boolean } | nu
   if (mark === undefined) return { kind: 'blankLine', wait: false };
   if (CONT_MARKS.includes(mark)) return { kind: 'blankLine', wait: false };
   return WAIT_MARKS.includes(mark) ? { kind: 'blankLine', wait: true } : null;
+}
+
+/* ---------------------- 规则池（`分支：`）的 `[条件]` 标签行 ---------------------- */
+
+/**
+ * `[条件]` 标签行的**唯一判定式**（规范 §3.11）。
+ *
+ * 边界（additive 铁律）：`[` 在 ERB 里是数组下标 / 位名语法，真实语料里有
+ * `[SKIPSTART]` / `[SKIPEND]` 这类**原生方括号记号**。故标签只在
+ * **整行恰为 `[…]`** 且内容不是「纯全大写 ASCII 记号 / 纯数字」时成立——
+ * `[SKIPSTART]`、`[0]` 一律**不**当标签（继续走既有文本/直通链路，逐字节不变）。
+ *
+ * `fallback`：`[其他]` / `[否则]` / `[else]`（兜底分支，不带条件表达式）。
+ */
+const RULE_TAG_RE = /^\[([^\[\]]+)\]$/;
+
+function matchRuleTag(code: string): { kind: 'ruleTag'; condition: string; fallback: boolean; text: string } | null {
+  const stripped = stripInlineComment(code).trim();
+  const m = RULE_TAG_RE.exec(stripped);
+  if (!m) return null;
+  const inner = m[1]!.trim();
+  if (inner.length === 0) return null;
+  // 原生方括号记号（全大写 ASCII / 纯数字）不是标签
+  if (/^[A-Z0-9_]+$/.test(inner)) return null;
+  const fallback = inner === '其他' || inner === '否则' || inner.toLowerCase() === 'else';
+  return { kind: 'ruleTag', condition: fallback ? '' : inner, fallback, text: `[${inner}]` };
 }
 
 /* ---------------------- 用户函数最小面（B4 批）：调用 / 返回 ---------------------- */
@@ -608,6 +641,12 @@ export function classifyLine(line: LogicalLine): LineClass {
   // 文本行与原生直通**不剥**：台词里的 `;` 是作者要打印的字符；ERB 直通行的
   // `;` 注释原样保留（那边本来就是合法注释）。
   const code = stripInlineComment(content);
+
+  // ---- 规则池标签 `[条件]`（规范 §3.11）----
+  // 只认**整行恰为方括号**的窄形态；判定先于块头/赋值/文本，保证 `[其他]` 不会
+  // 被当成台词打印。块外的标签由 parser 报 `rule-pool-branch-outside-pool`。
+  const ruleTag = matchRuleTag(code);
+  if (ruleTag) return ruleTag;
 
   // ---- 单行条件 `如果 条件 则 语句`（本批）----
   // **必须先于块头判定**：`如果 X 则 Y`（无尾冒号）若先经块头判定会被当 `如果 X 则 Y` 的
@@ -1469,6 +1508,9 @@ function parseBlockHead(content: string): LineClass | null {
     case 'block.group':
       // `组` 只作**裸块头**（`组：`）；带其它内容的写法不识别（按普通文本走，不静默吞掉）
       return rest.length === 0 ? { kind: 'groupHead' } : null;
+    case 'block.branch':
+      // `分支：` / `branch：` 规则池块头（规范 §3.11）——只作裸块头；带内容不识别。
+      return rest.length === 0 ? { kind: 'branchHead' } : null;
     case 'block.section':
       return parseSectionHead(rest, m[1]!, content);
     case 'block.once':

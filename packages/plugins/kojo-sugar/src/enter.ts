@@ -51,6 +51,9 @@ const BODY_OPEN_KINDS: ReadonlySet<LineClass['kind']> = new Set<LineClass['kind'
   'caseHead',
   'randomHead',
   'groupHead',
+  // 规则池（规范 §3.11）：`分支：` 之后写 `[条件]` 标签；标签之后写正文
+  'branchHead',
+  'ruleTag',
   'sectionHead',
   'onceHead',
   'choiceHead',

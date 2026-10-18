@@ -23,6 +23,7 @@ import type {
   FunctionBlock,
   HeartLine,
   IfBlock,
+  IfBranch,
   IfExpr,
   Interpolation,
   KojoCounterTable,
@@ -69,7 +70,8 @@ import { argPositionToken, RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_NAMED_PA
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import { STATEMENT_FUNCTIONS } from './statement-functions';
 import type { TopNode } from './parser';
-import type { CatchBlock, DataBlock, LoopBlock } from './parser';
+import type { CatchBlock, DataBlock, LoopBlock, RulePoolBlock } from './parser';
+import { sortRulePoolBranches } from './rule-pool';
 import type { AliasTable, DiagnosticSink, DictionaryLookup, HeartBlock, RandomShape } from './types';
 
 /* ============================== 输出缓冲 ============================== */
@@ -1596,7 +1598,7 @@ interface BodyContext {
 
 function emitStatement(
   em: Emitter,
-  node: SugarNode | HeartBlock | LoopBlock | CatchBlock | DataBlock,
+  node: SugarNode | HeartBlock | LoopBlock | CatchBlock | DataBlock | RulePoolBlock,
   ctx: BodyContext,
   indent: number,
 ): void {
@@ -1656,6 +1658,9 @@ function emitStatement(
       break;
     case 'dataBlock':
       emitDataBlock(em, node, ctx, indent);
+      break;
+    case 'rulePoolBlock':
+      emitRulePoolBlock(em, node, ctx, indent);
       break;
     case 'rawLine':
       emitRawLine(em, node, ctx, indent);
@@ -2570,6 +2575,30 @@ function stripQuotesForHeart(text: string): string {
     return text;
   }
   return text;
+}
+
+/* ------------------------------ 规则池（`分支：`，规范 §3.11） ------------------------------ */
+
+/**
+ * `分支：` 规则池 → `IF / ELSEIF / ELSE / ENDIF` 链。
+ *
+ * **不新造发射逻辑**：把池内分支映射成 `IfBranch` 后直接调 `emitIfBlock`——条件降糖、
+ * 正文发射、缩进归一、列级源映射全部与「如果 / 否则如果 / 否则」同源。
+ * `分支：` 只是写法糖，能力零新增。
+ *
+ * 排序由纯函数 `sortRulePoolBranches` 决定（同一主语 + 同一数值比较运算符才重排；
+ * 其余一律保持书写顺序）。error 级池诊断已把节点标 `_invalid` ⇒ 一条字节都不产。
+ */
+function emitRulePoolBlock(em: Emitter, node: RulePoolBlock, ctx: BodyContext, indent: number): void {
+  if (node._invalid) return;
+  const sorted = sortRulePoolBranches(node.branches);
+  const branches: IfBranch[] = sorted.map((branch, i) => ({
+    kind: branch.kind === 'else' ? 'else' : i === 0 ? 'if' : 'elseif',
+    condition: branch.condition,
+    body: branch.body,
+    loc: branch.loc,
+  }));
+  emitIfBlock(em, { kind: 'ifBlock', branches, loc: node.loc }, ctx, indent);
 }
 
 /* ------------------------------ 如果块（§3.5） ------------------------------ */

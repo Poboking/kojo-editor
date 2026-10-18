@@ -59,6 +59,10 @@ import {
   type LoopSpec,
 } from './lexer';
 import { TIMING_ARGS_PARAM, blockEndWord, primaryWord } from './keywords';
+import {
+  isLiteralTrueCondition,
+  normalizeConditionText,
+} from './rule-pool';
 import type { DiagnosticSink, HeartBlock, RandomShape } from './types';
 
 /* -------------------- 循环 / 出错处理 / 数据表（内部 AST） -------------------- */
@@ -97,6 +101,63 @@ export interface DataBlock {
   loc: SugarSourceSpan;
 }
 
+/* -------------------- 规则池（`分支：`，规范 §3.11） -------------------- */
+
+/**
+ * 规则池的一条分支：`[条件]` 标签 + 更深缩进的正文。
+ * `kind: 'else'` = 兜底（`[其他]` / `[否则]`），`condition` 为空串。
+ */
+export interface RulePoolBranch {
+  kind: 'rule' | 'else';
+  condition: string;
+  body: SugarNode[];
+  loc: SugarSourceSpan;
+}
+
+/**
+ * `分支：` 规则池（**转译器内部** AST 节点，不进契约闭集——同 `HeartBlock` / `LoopBlock`）。
+ *
+ * 语义上它只是 `如果 / 否则如果 / 否则` 的**写法糖**：codegen 把分支映射成
+ * `IfBranch` 后走同一条 `emitIfBlock` 发射路径（能力零新增）。
+ */
+export interface RulePoolBlock {
+  kind: 'rulePoolBlock';
+  branches: RulePoolBranch[];
+  /**
+   * 宁缺勿编：任何 error 级规则池诊断（缺兜底 / 兜底不在末尾 / 重复 / 空分支 …）
+   * ⇒ true，codegen 对该块**一条字节都不产**。
+   */
+  readonly _invalid: boolean;
+  loc: SugarSourceSpan;
+}
+
+/** 规则池诊断码（本批新增；契约闭集暂未收录，见 `reportRulePool` 的说明） */
+type RulePoolDiagnosticCode =
+  | 'rule-pool-no-fallback'
+  | 'rule-pool-fallback-not-last'
+  | 'rule-pool-duplicate'
+  | 'rule-pool-empty-branch'
+  | 'rule-pool-unreachable'
+  | 'rule-pool-branch-outside-pool';
+
+/**
+ * 上报规则池诊断。
+ *
+ * `SugarDiagnostic.code` 是契约闭集（`packages/plugin-api`），本批按任务边界**只改
+ * kojo-sugar**，故新增码在本地声明、经一次显式断言进闭集槽位——运行期是原样字符串，
+ * 面板对未登记码回落显示原码（`diagnosticDisplay` 的既有行为），不会崩。
+ * 待契约侧补码后可去掉这层断言（行为不变）。
+ */
+function reportRulePool(
+  sink: DiagnosticSink,
+  code: RulePoolDiagnosticCode,
+  severity: 'error' | 'warning',
+  message: string,
+  loc: { line: number; column: number },
+): void {
+  sink.report({ code: code as unknown as SugarDiagnostic['code'], severity, message, loc });
+}
+
 /** 中文主形与收束词形（同 `native-display/control.ts`：一律从 `keywords.ts` 派生，零硬编码） */
 const LOOP_W = primaryWord('block.loop');
 const LOOP_COUNT_W = primaryWord('inline.loopCount');
@@ -109,6 +170,7 @@ const CATCH_END_W = blockEndWord('block.catch');
 const DATA_W = primaryWord('block.dataTable');
 const DATA_ENTRY_W = primaryWord('inline.dataEntry');
 const DATA_END_W = blockEndWord('block.dataTable');
+const BRANCH_W = primaryWord('block.branch');
 
 /**
  * 收束行对应的 `LineClass.kind`（三族各一枚）。
@@ -233,6 +295,19 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
     }
 
     const cls = classifyLine(line);
+
+    // ---- `[条件]` 标签行写在 `分支：` 块外（规范 §3.11）----
+    if (cls.kind === 'ruleTag') {
+      cursor.next();
+      reportRulePool(
+        sink,
+        'rule-pool-branch-outside-pool',
+        'error',
+        `「${cls.text}」是「${BRANCH_W}：」规则池的分支标签，只能写在规则池块的第一层——这里不在任何规则池里。`,
+        posOf(line),
+      );
+      continue;
+    }
 
     // ---- 头部声明 ----
     if (cls.kind === 'headDecl') {
@@ -742,6 +817,11 @@ class BlockParser {
     private readonly sink: DiagnosticSink,
     /** P-4 文档级随机产物模式——随嵌套块体一路下传（`随机` 可能是块体的任意深度） */
     private readonly randomShape: RandomShape = 'default',
+    /**
+     * 当前是否位于 `分支：` 规则池的**分支正文**里（规范 §3.11：规则池内嵌规则池
+     * 本批不支持，遇到即 error；标签行只能出现在规则池的第一层）。
+     */
+    private readonly inRulePool = false,
   ) {}
 
   /**
@@ -977,6 +1057,34 @@ class BlockParser {
       case 'groupHead': {
         this.cursor.next();
         return this.parseGroupBody(line);
+      }
+      case 'branchHead': {
+        this.cursor.next();
+        // 规则池内嵌规则池：本批不做（遇到即 error，不产半成品）。
+        if (this.inRulePool) {
+          this.sink.report({
+            code: 'statement-shape',
+            severity: 'error',
+            message: `「${BRANCH_W}：」块里不能再嵌套「${BRANCH_W}：」——一个规则池就是一条 IF 链；分支正文里请用「如果」分叉。`,
+            loc: posOf(line),
+          });
+          this.skipOverIndented(line.indent);
+          return null;
+        }
+        return this.parseRulePoolBody(line);
+      }
+      case 'ruleTag': {
+        // 标签只能出现在规则池第一层（`parseRulePoolBody` 自己消费）；走到这里 =
+        // 写在块外或分支正文里。
+        this.cursor.next();
+        reportRulePool(
+          this.sink,
+          'rule-pool-branch-outside-pool',
+          'error',
+          `「${cls.text}」是「${BRANCH_W}：」规则池的分支标签，只能写在规则池块的第一层——这里不在任何规则池的第一层。`,
+          posOf(line),
+        );
+        return null;
       }
       case 'rawLine': {
         this.cursor.next();
@@ -1601,6 +1709,18 @@ class BlockParser {
         return this.parseHeartBody(line);
       case 'groupHead':
         return this.parseGroupBody(line);
+      case 'branchHead':
+        // 规则池可作随机候选 / 选项条目体（块体形态与普通语句一致）
+        return this.parseRulePoolBody(line);
+      case 'ruleTag':
+        reportRulePool(
+          this.sink,
+          'rule-pool-branch-outside-pool',
+          'error',
+          `「${cls.text}」是「${BRANCH_W}：」规则池的分支标签，只能写在规则池块的第一层——这里不在任何规则池的第一层。`,
+          posOf(line),
+        );
+        return null;
       case 'choiceHead':
         return this.parseChoiceBody(line);
       case 'menuHead':
@@ -2198,6 +2318,196 @@ class BlockParser {
       body,
       _invalid: invalid,
       loc: mergeSpan2(headLine, body),
+    } as unknown as SugarNode;
+  }
+
+  /* ------------------------------ 规则池（规范 §3.11） ------------------------------ */
+
+  /**
+   * `分支：` 规则池块体（条件即注解）。
+   *
+   * 形态：第一层是若干 `[条件]` 标签行（`[其他]` / `[否则]` = 兜底），每个标签下面
+   * 缩进更深的内容是该分支正文。条件原文**不在这里解析**——它和 `如果` 的条件走
+   * 同一条降糖管线（codegen 的 `lowerExpression`），本函数只做结构配对与池级校验。
+   *
+   * 校验（error 一律 `_invalid` ⇒ codegen 一条字节都不产）：
+   * - `rule-pool-no-fallback`：没有兜底；
+   * - `rule-pool-fallback-not-last`：兜底不在最后；
+   * - `rule-pool-duplicate`：规范化条件文本重复；
+   * - `rule-pool-empty-branch`：某个标签下面没有正文；
+   * - `rule-pool-unreachable`（warning）：前面已有恒真条件 / 兜底。
+   */
+  private parseRulePoolBody(headLine: LogicalLine): SugarNode {
+    const tagIndent = headLine.indent + 1;
+    const branches: RulePoolBranch[] = [];
+    /** 标签之间的注释：挂到下一条分支（末尾则挂到最后一条），"注释不能丢" */
+    let pendingComments: SugarNode[] = [];
+    let invalid = false;
+
+    while (!this.cursor.done) {
+      const line = this.cursor.peek()!;
+      const content = contentOf(line);
+      if (content.length === 0) {
+        this.cursor.next();
+        continue;
+      }
+      if (line.indent < tagIndent) break;
+      if (line.indent > tagIndent) {
+        this.sink.report({
+          code: 'indent-mismatch',
+          severity: 'error',
+          message: `「${BRANCH_W}：」块里缩进比标签更深的行前面没有「[条件]」标签。`,
+          loc: posOf(line),
+        });
+        invalid = true;
+        this.skipOverIndented(line.indent);
+        continue;
+      }
+
+      const cls = classifyLine(line);
+      if (cls.kind === 'comment') {
+        this.cursor.next();
+        pendingComments.push({ kind: 'comment', text: contentOf(line), loc: spanOf(line) });
+        continue;
+      }
+      if (cls.kind === 'branchHead') {
+        this.cursor.next();
+        this.sink.report({
+          code: 'statement-shape',
+          severity: 'error',
+          message: `「${BRANCH_W}：」块里不能再嵌套「${BRANCH_W}：」——一个规则池就是一条 IF 链；分支正文里请用「如果」分叉。`,
+          loc: posOf(line),
+        });
+        invalid = true;
+        this.skipOverIndented(line.indent);
+        continue;
+      }
+      if (cls.kind !== 'ruleTag') {
+        this.cursor.next();
+        this.sink.report({
+          code: 'statement-shape',
+          severity: 'error',
+          message: `「${BRANCH_W}：」块的第一层只能写「[条件]」标签行（标签下面再缩进写正文）；这一行不是标签。`,
+          loc: posOf(line),
+        });
+        invalid = true;
+        this.skipOverIndented(line.indent);
+        continue;
+      }
+
+      this.cursor.next();
+      const sub = new BlockParser(this.cursor, tagIndent + 1, this.sink, this.randomShape, true);
+      const body = sub.parseBody();
+      if (body.length === 0) {
+        reportRulePool(
+          this.sink,
+          'rule-pool-empty-branch',
+          'error',
+          `分支「${cls.text}」下面没有正文——补一段缩进更深的内容，或删掉这个标签。`,
+          posOf(line),
+        );
+        invalid = true;
+      }
+      branches.push({
+        kind: cls.fallback ? 'else' : 'rule',
+        condition: cls.condition,
+        body: [...pendingComments, ...body],
+        loc: spanOf(line),
+      });
+      pendingComments = [];
+    }
+
+    // 末尾的注释没有后续标签可挂 ⇒ 归到最后一条分支（没有分支时只能丢弃，另有 block-empty）
+    const lastBranch = branches[branches.length - 1];
+    if (pendingComments.length > 0 && lastBranch) lastBranch.body.push(...pendingComments);
+
+    if (branches.length === 0) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: `「${BRANCH_W}：」块没有任何「[条件]」分支。`,
+        loc: posOf(headLine),
+      });
+      invalid = true;
+    }
+
+    const fallbackIndices = branches.map((b, i) => (b.kind === 'else' ? i : -1)).filter((i) => i >= 0);
+    if (branches.length > 0 && fallbackIndices.length === 0) {
+      reportRulePool(
+        this.sink,
+        'rule-pool-no-fallback',
+        'error',
+        '这个分支池没有兜底：条件都不成立时玩家什么都看不到。补一段「[其他]」（写在最后）——它接住所有没命中的情况。',
+        posOf(headLine),
+      );
+      invalid = true;
+    }
+    for (const i of fallbackIndices) {
+      if (i === branches.length - 1) continue;
+      reportRulePool(
+        this.sink,
+        'rule-pool-fallback-not-last',
+        'error',
+        `「[其他]」必须是最后一条分支——它后面还有 ${branches.length - 1 - i} 条，那些分支永远不会被匹配到。请把兜底移到末尾。`,
+        branches[i]!.loc.start,
+      );
+      invalid = true;
+    }
+    if (branches.length > 0 && branches.every((b) => b.kind === 'else')) {
+      this.sink.report({
+        code: 'block-empty',
+        severity: 'error',
+        message: `「${BRANCH_W}：」块只有兜底、没有任何条件分支——至少写一条「[条件]」。`,
+        loc: posOf(headLine),
+      });
+      invalid = true;
+    }
+
+    // 重复条件（规范化文本逐字相同）——兜底按同一个键判（`[其他]` 与 `[否则]` 等价）
+    const seen = new Map<string, RulePoolBranch>();
+    for (const branch of branches) {
+      const key = branch.kind === 'else' ? '<fallback>' : normalizeConditionText(branch.condition);
+      const first = seen.get(key);
+      if (first) {
+        reportRulePool(
+          this.sink,
+          'rule-pool-duplicate',
+          'error',
+          branch.kind === 'else'
+            ? '兜底分支「[其他]」重复了——一个规则池只允许一条兜底。'
+            : `条件「${normalizeConditionText(branch.condition)}」在这个分支池里出现了两次——后一条永远不会触发，请删掉或改写。`,
+          branch.loc.start,
+        );
+        invalid = true;
+      } else {
+        seen.set(key, branch);
+      }
+    }
+
+    // 永不触发的分支（warning，不阻断产出）
+    let alwaysTrue = false;
+    let sawFallback = false;
+    for (const branch of branches) {
+      if (alwaysTrue || sawFallback) {
+        reportRulePool(
+          this.sink,
+          'rule-pool-unreachable',
+          'warning',
+          alwaysTrue
+            ? '这条分支永远不会触发：前面已有一条恒真条件（如「[真]」）先接住了所有情况。'
+            : '这条分支永远不会触发：前面已经有兜底分支（「[其他]」）接住了所有情况。',
+          branch.loc.start,
+        );
+      }
+      if (branch.kind === 'else') sawFallback = true;
+      else if (isLiteralTrueCondition(branch.condition)) alwaysTrue = true;
+    }
+
+    return {
+      kind: 'rulePoolBlock',
+      branches,
+      _invalid: invalid,
+      loc: mergeSpan2(headLine, branches),
     } as unknown as SugarNode;
   }
 
