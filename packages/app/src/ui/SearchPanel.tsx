@@ -43,6 +43,7 @@ import {
   scopeStatusText,
   type SearchScopeItem,
 } from './search-scope';
+import { SearchFilterBar } from './SearchFilterBar';
 import '../search-panel.css';
 
 /**
@@ -703,6 +704,9 @@ export function SearchPanel({
               />
               <span className="ksp-opt-check-label">打字即搜</span>
             </label>
+
+            {/* P2-15：glob 过滤 + 保留大小写开关（自带状态的新组件；一行接线，不重排既有行） */}
+            <SearchFilterBar onRequestSearch={start} />
           </div>
         </div>
 

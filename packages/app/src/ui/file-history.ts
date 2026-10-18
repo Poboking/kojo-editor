@@ -403,6 +403,51 @@ export function keepText(item: TimelineItem): string {
   return `剩 ${item.keepDaysLeft} 天`;
 }
 
+/* ==================== 两版互比（P2-15：任意两个历史版本互相比） ==================== */
+
+/**
+ * 这一条能不能参与「两版互比」（**纯判据**，overlay 只画不判）：
+ * - 盘上有一个可读文件可比（`diffPath`：写前备份 / 回收站 / 未保存快照都是这一形态）；
+ * - 或进程内恢复件读得到（`recovery` 账的内容在内存里，没有盘上路径——
+ *   `diffPath` 为 null，但 `peekRecoveredContent` 取得到，diff 视图的 `text` 侧接得住）。
+ *
+ * 其余条目（批操作快照没有"单个可比对文件"的形态）⇒ 不可选，且 UI 必须说清为什么
+ * （铁律 4：不静默——禁用一个看不见原因的控件等于没这个功能）。
+ */
+export function diffableTimelineItem(item: TimelineItem): boolean {
+  return item.diffPath !== null || item.account === 'recovery';
+}
+
+/**
+ * 两版互比的左右次序（**纯判据**）：**旧版在左**（original = 参照侧）、新版在右
+ * （modified = 对照侧）——与既有的「与磁盘当前内容对比」同向（磁盘当前内容恒在右），
+ * 一屏之内只有一种"哪边是新"的说法，不随作者勾选顺序漂。
+ *
+ * 时刻可比重置；缺失或相等 ⇒ 按传入序（调用方传列表序，而列表是新→旧排的，
+ * 于是直观形态仍是"旧在左"）。
+ */
+export function orderDiffPair(
+  first: TimelineItem,
+  second: TimelineItem,
+): { original: TimelineItem; modified: TimelineItem } {
+  if (first.atMs !== null && second.atMs !== null && first.atMs !== second.atMs) {
+    return first.atMs > second.atMs ? { original: second, modified: first } : { original: first, modified: second };
+  }
+  return { original: first, modified: second };
+}
+
+/**
+ * 「对比两版」按钮的启用态与**禁用理由**（纯判据；0 / 1 / >2 各说一句话，不静默）：
+ * 恰好 2 版才启用。选多了**禁用**而不是"自动取前两条"——时间线按时刻排，
+ * 前两条不一定是作者想比的那两版；替作者做选择比让他多取消一次更危险。
+ */
+export function diffPairButtonState(selectedCount: number): { enabled: boolean; reason: string } {
+  if (selectedCount === 2) return { enabled: true, reason: '在 diff 视图里逐行对比选中的这两版（旧版在左、新版在右）' };
+  if (selectedCount === 0) return { enabled: false, reason: '先勾选两个版本（每行前面的框）' };
+  if (selectedCount === 1) return { enabled: false, reason: '再勾选一个版本：两版互比需要恰好两条' };
+  return { enabled: false, reason: `只能两版互比：请取消到只剩两条（当前选了 ${selectedCount} 条）` };
+}
+
 /** 某个具体落点不在写允许域时的条目级说明（逐条给出落点——全局那一屏每条的去向都不同） */
 export function writableNote(target: string): string {
   return `${target} 此刻不在写允许域内（项目未打开 / 授权已收回；游戏目录整体只读）：这一条只能看，放回原位会被内核拒绝。`;

@@ -1795,6 +1795,12 @@ struct SearchOptionsDto {
     whole_word: Option<bool>,
     /// 限定扩展名（大小写与点号由本层再归一化一道：调用方给脏数据也不放行）
     extensions: Option<Vec<String>>,
+    /// 限定路径形态（glob：`*.kojo` / `src/**/*.erb` / `?`；P2-15）。
+    /// 与 `extensions` 是**且**的关系（两者都满足才扫）；空 / None = 不按形态过滤
+    /// （老调用方零改动）。大小写**敏感**——glob 是作者显式写的路径模式，
+    /// 与扩展名"折小写再比"的口径刻意不同（要宽松请写全小写，语料扩展名本就小写）。
+    /// 翻译与匹配规则见 `glob_to_regex` / `collect_files`。
+    globs: Option<Vec<String>>,
     max_results: Option<usize>,
     /// 并行度（缺省 8；上限 32 防"给我 512 线程"这类输入）
     threads: Option<usize>,
@@ -2290,6 +2296,93 @@ fn is_hidden_entry(e: &walkdir::DirEntry) -> bool {
         .unwrap_or(false)
 }
 
+/* ------------------------------ glob 文件过滤（P2-15） ------------------------------ */
+//
+// 扩展名过滤管"第几段后缀"，作者按位置问的形态（`src` 下的 erb、任意深度的
+// `*.kojo`、`**/x/*.erb`）写不成扩展名——于是有这一个 glob 框。**不引 glob crate**：
+// 通配符只有四个，翻成 regex 现成的（本检索本来就链在 regex 上），为四个字符
+// 引一个依赖树不值。
+//
+// 翻译规则（与前端 `packages/app/tests/search-glob.test.ts` 的 TS 镜像逐字对拍）：
+//   `*` → `[^/]*`（不跨目录）、`?` → `[^/]`（不跨目录）、其余字符一律
+//   `regex::escape`（`. + ( )` 等元字符是字面）；整串 `^…$` 全匹配。
+//   **分隔符先按 `/` 归一**（Windows 反斜杠换成 `/`）——glob 写法是按仓库相对
+//   位置想的，分隔符不该有两种。
+//
+// `**`（跨目录）按规则表译成 `.*`；另有一条**工程修正**：`**/` 这一序列整体译成
+// `(.*/)?`（要么带前缀路径、要么直档就在该目录下）。理由：不修正的话
+// `src/**/*.erb` 翻成 `^src/.*/[^/]*\.erb$`，**匹配不到 `src/a.erb` 这类直档
+// 子文件**——而作者写 `**/` 时期望的正是"任意层（含 0 层）"。裸 `**`（后面不是
+// `/`）仍按 `.*`（跨目录、含分隔符）。
+//
+// 匹配基准 = **相对检索根的路径**（不是全路径）：glob 是按仓库相对位置写的
+// （`src/**/*.erb` 指的是"仓库里的 src"），拿全路径去匹配只会让 `**` 前缀的
+// 写法永远对不上盘符。多个根各自相对自己的根。
+
+/// glob → regex 源码（**纯函数**；通配符之外的字符全转义 ⇒ 产出必然合法，
+/// `Regex::new` 不会失败——真失败了也由调用方 eprintln 出声，不静默放过）。
+fn glob_to_regex(glob: &str) -> String {
+    let norm = glob.replace('\\', "/");
+    let chars: Vec<char> = norm.chars().collect();
+    let mut out = String::from("^");
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '*' if i + 1 < chars.len() && chars[i + 1] == '*' => {
+                if i + 2 < chars.len() && chars[i + 2] == '/' {
+                    out.push_str("(.*/)?"); // `**/`：任意层（含 0 层）——见上面的工程修正
+                    i += 3;
+                } else {
+                    out.push_str(".*"); // 裸 `**`：跨目录
+                    i += 2;
+                }
+            }
+            '*' => {
+                out.push_str("[^/]*"); // `*` 不跨目录
+                i += 1;
+            }
+            '?' => {
+                out.push_str("[^/]"); // `?` 不跨目录
+                i += 1;
+            }
+            c => {
+                out.push_str(&regex::escape(&c.to_string()));
+                i += 1;
+            }
+        }
+    }
+    out.push('$');
+    out
+}
+
+/// glob 清单 → 编译好的正则（空串 / 全空白项丢弃；编译失败不可能发生，
+/// 万一发生也 eprintln 出声并忽略那一条，绝不静默放过）。
+fn compile_globs(globs: &[String]) -> Vec<regex::Regex> {
+    globs
+        .iter()
+        .map(|g| g.trim())
+        .filter(|g| !g.is_empty())
+        .filter_map(|g| match regex::Regex::new(&glob_to_regex(g)) {
+            Ok(re) => Some(re),
+            Err(err) => {
+                eprintln!("[search] glob 编译失败（该条已忽略）：{g} -> {err}");
+                None
+            }
+        })
+        .collect()
+}
+
+/// 相对路径形态（分隔符归一成 `/`）：`strip_prefix` 失败（符号链接等让条目
+/// 逃出根外）时回落全路径——**宁可多匹配也不漏匹配**，且全路径同样按 `/` 归一。
+fn relative_slash_path(root: &std::path::Path, path: &std::path::Path) -> String {
+    let rel = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    rel.trim_start_matches('/').to_string()
+}
+
 /// 收集候选文件（去重 + 路径升序 ⇒ 并行合并后输出顺序与线程数无关）。
 ///
 /// 排序口径**逐字不变**（小写整路径的升序、稳定序、按同键去重），但**每条路径只算一次
@@ -2299,15 +2392,22 @@ fn is_hidden_entry(e: &walkdir::DirEntry) -> bool {
 /// 遍历失败**计数 + 出声**（前若干条打 stderr，其余只计数）：walkdir 逐个条目返回 Result，
 /// 一个读不到 metadata 的条目（超长路径 / 权限 / 句柄）若被 filter 掉就再无声息——
 /// 那正是"搜不到某个文件却没有任何说法"的形状。计数汇入 `skipped.unreadable`。
+///
+/// `globs`（P2-15）：路径形态过滤，与扩展名是**且**的关系（两者都满足才扫；
+/// 空 = 不按形态过滤 = 今天行为逐字不变）。被任一方挡下的文件都计入 `filtered`
+/// （界面上与"被类型过滤挡下"同一行读数——glob 也是类型过滤的一种形态，不静默）。
 fn collect_files(
     roots: &[String],
     extensions: &[String],
+    globs: &[String],
     filtered: &mut u32,
     walk_errors: &mut u32,
 ) -> Vec<SearchFile> {
+    let glob_res = compile_globs(globs);
     let mut out: Vec<(String, PathBuf, Option<u64>)> = Vec::new();
     let mut reported = 0usize;
     for root in roots {
+        let root_path = std::path::Path::new(root);
         let walker = walkdir::WalkDir::new(root)
             .follow_links(false)
             .into_iter()
@@ -2334,6 +2434,13 @@ fn collect_files(
                     .map(|e| e.to_string_lossy().to_ascii_lowercase())
                     .unwrap_or_default();
                 if !extensions.iter().any(|x| *x == ext) {
+                    *filtered += 1;
+                    continue;
+                }
+            }
+            if !glob_res.is_empty() {
+                let rel = relative_slash_path(root_path, p);
+                if !glob_res.iter().any(|re| re.is_match(&rel)) {
                     *filtered += 1;
                     continue;
                 }
@@ -2442,7 +2549,15 @@ fn run_search_with_files(
 
     let mut filtered: u32 = 0;
     let mut walk_errors: u32 = 0;
-    let files = collect_files(&req.roots, &extensions, &mut filtered, &mut walk_errors);
+    // P2-15：globs 必须从 DTO 流进 collect_files（glob 翻译在 collect_files 段内做），
+    // 这是本批触及 run_search 的**唯一一行**——只加实参，逻辑一行未动
+    let files = collect_files(
+        &req.roots,
+        &extensions,
+        o.globs.as_deref().unwrap_or(&[]),
+        &mut filtered,
+        &mut walk_errors,
+    );
     let total_files = files.len() as u32;
 
     let next = AtomicUsize::new(0);

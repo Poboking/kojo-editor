@@ -1,12 +1,14 @@
 import { errorText, pathKey } from '@kojo/plugin-api';
 import type { OpJournal } from '@kojo/plugin-api';
 import type * as MonacoRuntime from '../monaco/entry';
+import { loadCasePreservePref } from './search-query';
 import {
   applyLineEdits,
   compileReplaceMatcher,
   planLineEdit,
   planSingleReplacement,
   type FileLineEdit,
+  type ReplaceCaseOpts,
   type ReplaceMatcher,
 } from './search-replace';
 import {
@@ -64,11 +66,12 @@ function rewriteClosedText(
   text: string,
   m: ReplaceMatcher,
   template: string,
+  caseOpts: ReplaceCaseOpts,
 ): { edits: readonly FileLineEdit[]; next: string } {
   const lines = text.split('\n');
   const edits: FileLineEdit[] = [];
   for (let i = 0; i < lines.length; i++) {
-    for (const e of planLineEdit(lines[i]!, m, template)) {
+    for (const e of planLineEdit(lines[i]!, m, template, caseOpts)) {
       edits.push({ lineNumber: i + 1, start: e.start, end: e.end, text: e.text });
     }
   }
@@ -184,6 +187,13 @@ export interface FileReplaceDeps {
    * 零改动（与 sav-parser / ui-sugar-editor 的可选注入同形态）。
    */
   journal?: Pick<OpJournal, 'begin' | 'record' | 'commit' | 'abort'>;
+  /**
+   * 替换时保留大小写（P2-15；**可选**，缺省现读 `loadCasePreservePref()`——
+   * 偏好住 localStorage、每次替换动作前现读，与 `format-pref.ts` 同一条读取路径，
+   * "刚翻的开关"与执行器闭包里的旧值不可能不一致）。只影响替换词的形态映射，
+   * 不影响命中判定（`compileReplaceMatcher` 的 `caseSensitive` 口径不受影响）。
+   */
+  preserveCase?: boolean;
 }
 
 /** model 查找只用到 uri 的这两个读数——抽出来才能在没有 Monaco 运行时的 node 里测 */
@@ -234,6 +244,7 @@ export function createFileReplaceRunner(
     model: MonacoRuntime.editor.ITextModel,
     m: ReplaceMatcher,
     template: string,
+    caseOpts: ReplaceCaseOpts,
   ): number => {
     const count = model.getLineCount();
     const ops: Array<{
@@ -242,7 +253,7 @@ export function createFileReplaceRunner(
     }> = [];
     for (let ln = 1; ln <= count; ln++) {
       const line = model.getLineContent(ln);
-      for (const e of planLineEdit(line, m, template)) {
+      for (const e of planLineEdit(line, m, template, caseOpts)) {
         ops.push({
           range: {
             startLineNumber: ln,
@@ -259,9 +270,14 @@ export function createFileReplaceRunner(
   };
 
   /** 未打开：内核 io 读改写（与 F2 同一条 `rewriteClosedFile` 通道）——现匹配 → 有实改才写回 */
-  const replaceInClosedFile = (path: string, m: ReplaceMatcher, template: string): Promise<{ applied: number }> =>
+  const replaceInClosedFile = (
+    path: string,
+    m: ReplaceMatcher,
+    template: string,
+    caseOpts: ReplaceCaseOpts,
+  ): Promise<{ applied: number }> =>
     rewriteClosedFile(deps.io, path, (text) => {
-      const { edits, next } = rewriteClosedText(text, m, template);
+      const { edits, next } = rewriteClosedText(text, m, template, caseOpts);
       return { text: next, applied: edits.length, stale: 0 };
     });
 
@@ -281,7 +297,11 @@ export function createFileReplaceRunner(
     }
     if (m === null) return outcome({ errors: ['检索词为空，未替换'] });
 
-    if (request.mode.kind === 'one') return replaceOne(request.mode.target, m, request.replaceText);
+    // 保留大小写（P2-15）：每次替换动作现读一次偏好（localStorage 真源，format-pref 先例），
+    // 注入了 `preserveCase` 的调用方（单测对照旋钮）不读存储
+    const caseOpts: ReplaceCaseOpts = { preserveCase: deps.preserveCase ?? loadCasePreservePref() };
+
+    if (request.mode.kind === 'one') return replaceOne(request.mode.target, m, request.replaceText, caseOpts);
 
     // ---- 全部替换：结果里的文件逐个落（截断/取消的结果不允许走到这里，store 已挡）----
     // PS-13 两趟制：第一趟串行做**派发前**必须完成的事（pathKey 去重、活面判定、
@@ -299,7 +319,7 @@ export function createFileReplaceRunner(
       const open = modelFor(f.path);
       if (open !== undefined) {
         try {
-          const n = replaceInModel(open, m, request.replaceText);
+          const n = replaceInModel(open, m, request.replaceText, caseOpts);
           ledger.push({ applied: n, changed: n > 0, readOnly: false });
         } catch (e: unknown) {
           ledger.push({ applied: 0, changed: false, readOnly: false, error: `${f.path}：${errorText(e)}` });
@@ -356,7 +376,7 @@ export function createFileReplaceRunner(
           return { applied: 0, changed: false, readOnly: false, error: openedMidwayNotice(cf.path) };
         }
         try {
-          const r = await replaceInClosedFile(cf.path, m, request.replaceText);
+          const r = await replaceInClosedFile(cf.path, m, request.replaceText, caseOpts);
           return { applied: r.applied, changed: r.applied > 0, readOnly: false };
         } catch (e: unknown) {
           // 写允许域 / io 故障：逐文件可见，不中断其余文件（铁律 4：不静默）
@@ -416,6 +436,7 @@ export function createFileReplaceRunner(
       target: MatchTarget,
       matcher: ReplaceMatcher,
       template: string,
+      caseOpts: ReplaceCaseOpts,
     ): Promise<ReplaceOutcome> {
       const file = request.files.find((f) => f.path === target.path);
       const match = file?.matches.find((mm) => mm.line === target.line && mm.column === target.column);
@@ -427,7 +448,7 @@ export function createFileReplaceRunner(
           return outcome({ stale: 1, errors: ['该行已不存在（文本已变化），未替换'] });
         }
         const line = open.getLineContent(target.line);
-        const v = planSingleReplacement(line, target.column - 1, matcher, template, expected);
+        const v = planSingleReplacement(line, target.column - 1, matcher, template, expected, caseOpts);
         if (v.kind === 'skip') return outcome({ stale: 1, errors: [v.reason] });
         open.applyEdits([
           {
@@ -451,7 +472,7 @@ export function createFileReplaceRunner(
         if (target.line < 1 || target.line > lines.length) {
           return outcome({ stale: 1, errors: ['该行已不存在（文本已变化），未替换'] });
         }
-        const v = planSingleReplacement(lines[target.line - 1]!, target.column - 1, matcher, template, expected);
+        const v = planSingleReplacement(lines[target.line - 1]!, target.column - 1, matcher, template, expected, caseOpts);
         if (v.kind === 'skip') return outcome({ stale: 1, errors: [v.reason] });
         // 活面复查（防竞态，与批量腿同一句文案）：读盘之后、写回之前这个窗口里文件被
         // 打开成活文件 ⇒ io 写盘会盖掉编辑器里的未保存内容——跳过并如实报告，不静默覆盖

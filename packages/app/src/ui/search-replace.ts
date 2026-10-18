@@ -98,8 +98,15 @@ export function planLineMatches(line: string, m: ReplaceMatcher): ReplaceHit[] {
 /**
  * 替换模板展开：`$&` = 整个命中，`$1`–`$99` = 捕获组（越界 = 空串），`$$` = 字面 `$`。
  * 其余 `$x` 原样保留——不猜（作者写错引用号，改出来不该是悄悄吞掉一个字符）。
+ *
+ * `opts.preserveCase`（P2-15）：展开完成后把命中处的大小写形态借给替换词，
+ * 判据见 `preserveReplacementCase`。缺省 `false` = 原样展开（老调用方零改动）。
  */
-export function expandReplacement(template: string, hit: Pick<ReplaceHit, 'whole' | 'groups'>): string {
+export function expandReplacement(
+  template: string,
+  hit: Pick<ReplaceHit, 'whole' | 'groups'>,
+  opts?: ReplaceCaseOpts,
+): string {
   let out = '';
   for (let i = 0; i < template.length; i++) {
     const ch = template[i];
@@ -130,7 +137,84 @@ export function expandReplacement(template: string, hit: Pick<ReplaceHit, 'whole
       out += ch;
     }
   }
-  return out;
+  // 保留大小写发生在展开**之后**：模板可能展开成 $&（= 命中本身，映射恒等），
+  // 也可能展开成字面词——该借形态的是最终落盘的那串文本
+  return opts?.preserveCase === true ? preserveReplacementCase(hit.whole, out) : out;
+}
+
+/** 替换的大小写选项（P2-15；缺省不开 = 老行为逐字不变） */
+export interface ReplaceCaseOpts {
+  readonly preserveCase?: boolean;
+}
+
+/** 字符有没有大小开形态（CJK / 数字 / 符号没有——借形态时它们原样站桩） */
+const isCased = (ch: string): boolean => ch.toLowerCase() !== ch.toUpperCase();
+/** 有大小写形态的字符是否正处于大写形态 */
+const isUpper = (ch: string): boolean => isCased(ch) && ch === ch.toUpperCase();
+
+/** 置大写（ß→SS 这类"一个字符对多个字符"的映射会改内容，只做长度 1 的；否则原样） */
+function toUpper1(ch: string): string {
+  const u = ch.toUpperCase();
+  return u.length === 1 ? u : ch;
+}
+
+/** 置小写（同上：长度 1 才映射） */
+function toLower1(ch: string): string {
+  const l = ch.toLowerCase();
+  return l.length === 1 ? l : ch;
+}
+
+/**
+ * 把命中处的大小写形态借给替换词（P2-15「替换保留大小写」；**纯函数**）。
+ *
+ * 与常见编辑器（VSCode / JetBrains）同语义，偏好缺省**开**（理由见
+ * `search-query.ts` 的偏好注释：脚本域里大写常常有含义，悄悄改小写比不改更糟）。
+ *
+ * ## 四种形态（各有一条单测钉死）
+ * 1. 命中**全大写**（有大小写字符且无小写）⇒ 替换词全大写：`FOO` + `bar` ⇒ `BAR`；
+ * 2. 命中**首字母大写**（首个大小写字符大写、其余全小写）⇒ 替换词首字母大写、
+ *    其余小写：`Foo` + `bar` ⇒ `Bar`；
+ * 3. 命中**混合大小写** ⇒ **逐位**映射：`fOo` + `bar` ⇒ `bAr`（命中第 i 位是大写，
+ *    替换词第 i 位就大写；命中那位不是大小写字符 ⇒ 保留替换词自身形态）；
+ * 4. **原样 / 回落**——形态映射不了时回落替换词原文，**理由写在下面**（不静默）：
+ *    - 命中里一个大小写字符都没有（CJK / 数字 / 符号）：无可辨形态可借；
+ *    - 替换词长于命中：命中的形态信息只有那么多字符宽，多出来的位没有来源。
+ *      按"前半截映射、后半截留原样"会产出 `FOO`→`barbar` ⇒ `BARbar` 这种半截
+ *      全大写——比原样更容易误读，故整条回落；
+ *    - 替换词自己带着大写：作者显式写的大写 = 显式意图，原样尊重
+ *      （命中 `foo` + 替换词 `BAR` ⇒ `BAR`，与 F2 rename 对拍口径一致）。
+ *
+ * ## 长度不一致的口径（写在这里，不靠猜）
+ * - 替换词**短于或等长于**命中：照常映射（形态 1/2 整词映射；形态 3 逐位映射前
+ *   `替换词长度` 位——超出的命中位反正会被换掉，无位可映射也不影响）；
+ * - 替换词**长于**命中：整条回落替换词原文（见回落理由第 2 条）。
+ *
+ * 索引一律按**码点**（不是 UTF-16 单元）：代理对（emoji）在两种下标体系里宽度不同，
+ * 逐位映射用码点才谈得上"第 i 位对第 i 位"。
+ */
+export function preserveReplacementCase(hit: string, replacement: string): string {
+  if (replacement === '') return replacement; // 删除命中：没有可映射的位
+  const hitChars = [...hit];
+  const replChars = [...replacement];
+  const cased = hitChars.filter(isCased);
+  // 回落 ①：命中无可辨形态（CJK / 数字 / 符号）
+  if (cased.length === 0) return replacement;
+  // 回落 ③：替换词自带大写 ⇒ 显式意图，原样尊重
+  if (replChars.some(isUpper)) return replacement;
+  // 回落 ②：替换词长于命中 ⇒ 形态宽度不够，整条回落（理由见上）
+  if (replChars.length > hitChars.length) return replacement;
+  // 形态 1：命中全大写 ⇒ 替换词全大写
+  if (cased.every(isUpper)) return replacement.toUpperCase();
+  // 形态 2：命中首字母大写、其余全小写 ⇒ 替换词首字母大写、其余小写
+  if (isUpper(cased[0]!) && cased.slice(1).every((ch) => !isUpper(ch))) {
+    return toUpper1(replChars[0]!) + replChars.slice(1).map(toLower1).join('');
+  }
+  // 形态 3：混合 ⇒ 逐位映射（命中非大小写字符位保留替换词自身形态）
+  return replChars.map((ch, i) => {
+    const h = hitChars[i];
+    if (h === undefined || !isCased(h)) return ch;
+    return isUpper(h) ? toUpper1(ch) : toLower1(ch);
+  }).join('');
 }
 
 /** 一行的改写计划：0 基半开区间 → 新文本（替换串按命中从后往前才不位移） */
@@ -145,12 +229,13 @@ export interface FileLineEdit extends LineEdit {
   readonly lineNumber: number;
 }
 
-/** 一行：命中 → 展开替换文本（顺序天然从左到右，写入方自行降序应用） */
-export function planLineEdit(line: string, m: ReplaceMatcher, template: string): LineEdit[] {
+/** 一行：命中 → 展开替换文本（顺序天然从左到右，写入方自行降序应用）。
+ *  `opts.preserveCase` 透传给 `expandReplacement`（P2-15；缺省 false = 老行为）。 */
+export function planLineEdit(line: string, m: ReplaceMatcher, template: string, opts?: ReplaceCaseOpts): LineEdit[] {
   return planLineMatches(line, m).map((h) => ({
     start: h.start,
     end: h.end,
-    text: expandReplacement(template, h),
+    text: expandReplacement(template, h, opts),
   }));
 }
 
@@ -195,6 +280,7 @@ export function planSingleReplacement(
   m: ReplaceMatcher,
   template: string,
   expected: string | null,
+  opts?: ReplaceCaseOpts,
 ): SingleReplaceVerdict {
   if (!Number.isInteger(col0) || col0 < 0 || col0 > line.length) {
     return { kind: 'skip', reason: '列号越界（文本已变化）' };
@@ -213,7 +299,7 @@ export function planSingleReplacement(
       kind: 'replace',
       start: col0,
       end: col0 + g[0].length,
-      text: expandReplacement(template, { whole: g[0], groups: g.slice(1) }),
+      text: expandReplacement(template, { whole: g[0], groups: g.slice(1) }, opts),
     };
   }
   return { kind: 'skip', reason: '该处不再是全词命中（文本已变化）' };

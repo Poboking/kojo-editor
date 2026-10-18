@@ -687,3 +687,40 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* ============================================================================
+   P2-15 · SearchFilterBar（glob 过滤 + 保留大小写开关）
+
+   本段只服务 `ui/SearchFilterBar.tsx`（SearchPanel 选项区末尾一行接线）。
+   沿用本文件两条硬纪律：选择器至少两个类（`.panel-search.ksp .sfb-…`），
+   颜色一律取 `styles.css` 的 token。控件骨架（行 / 标签 / 输入框 / toggle）
+   复用上面的 `ksp-opt-row` / `ksp-opt-label` / `ksp-opt-input` / `ksp-toggle`，
+   这里只补 SearchFilterBar 自己的差异：解析回执、非 glob 词的提示、开关旁注。
+   ============================================================================ */
+
+/* 解析回执（生效的 glob 清单 / 混进来的非 glob 词）：dim 小字，不占交互 */
+.panel-search.ksp .sfb-note {
+  margin: 0;
+  min-width: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 14px;
+  overflow-wrap: anywhere;
+}
+
+/* 保留大小写那一行：开关 + 一句形态示例（默认开的理由写在组件 title 里） */
+.panel-search.ksp .sfb-case-row {
+  flex-wrap: wrap;
+}
+.panel-search.ksp .sfb-case {
+  min-width: 0;
+  height: 20px;
+  min-height: 20px;
+  padding: 0 6px;
+  font-size: var(--fs-0);
+}
+.panel-search.ksp .sfb-case-note {
+  min-width: 0;
+  font-size: var(--fs-0);
+  overflow-wrap: anywhere;
+}

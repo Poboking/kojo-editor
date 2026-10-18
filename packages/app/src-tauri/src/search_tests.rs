@@ -40,6 +40,7 @@ fn request(root: &Path, query: &str) -> SearchRequestDto {
             case_sensitive: Some(true),
             whole_word: Some(false),
             extensions: None,
+            globs: None, // P2-15：DTO 加了 globs 字段（缺省 None = 老调用方零改动）
             max_results: None,
             threads: Some(1),
         },
@@ -824,4 +825,137 @@ fn streamed_batches_never_exceed_the_final_result_when_truncated() {
         "事件流不许出现完成态没有的文件"
     );
     let _ = std::fs::remove_dir_all(&dir);
+
+/* ------------------------------ glob 文件过滤（P2-15） ------------------------------ */
+//
+// 翻译规则与前端 `packages/app/tests/search-glob.test.ts` 的 TS 镜像逐字对拍：
+//   `*` → `[^/]*`、`?` → `[^/]`、其余 regex 转义、分隔符归一成 `/`；
+//   `**/` 序列 → `(.*/)?`（任意层含 0 层——工程修正，理由见 lib.rs 的
+//   `glob_to_regex` 注释：否则 `src/**/*.erb` 匹配不到直档子文件），裸 `**` → `.*`。
+// 匹配基准 = **相对检索根**的路径（glob 按仓库相对位置写，拿全路径匹配只会让
+// `**` 前缀永远对不上盘符）。glob 与扩展名是**且**的关系。
+
+/// 翻译规则逐条钉死（**对拍的真源**：TS 镜像按这张表逐字复刻）。
+#[test]
+fn glob_to_regex_translates_wildcards_and_escapes_the_rest() {
+    let t = |g: &str| super::glob_to_regex(g);
+    assert_eq!(t("*.kojo"), "^[^/]*\\.kojo$");
+    assert_eq!(t("**/x/*.erb"), "^(.*/)?x/[^/]*\\.erb$");
+    assert_eq!(t("src/**/*.erb"), "^src/(.*/)?[^/]*\\.erb$");
+    assert_eq!(t("**"), "^.*$"); // 裸 `**`：跨目录
+    assert_eq!(t("a?b"), "^a[^/]b$");
+    // 元字符是字面（不转义会把作者的点当成任意字符）
+    assert_eq!(t("a.b"), "^a\\.b$");
+    assert_eq!(t("a+b(c)|d"), "^a\\+b\\(c\\)\\|d$");
+    // Windows 反斜杠先归一成 `/`（glob 写法按仓库相对位置，分隔符不该有两种）
+    assert_eq!(t("sub\\*.erb"), "^sub/[^/]*\\.erb$");
+}
+
+/// 翻译产出必须**可直接编译**（`regex::escape` 保证通配符之外的字符全字面）。
+#[test]
+fn glob_to_regex_output_is_always_a_valid_regex() {
+    for g in ["*.kojo", "**/x/*.erb", "a?b", "a.b", "a+b(c)", "sub\\*.erb", "[", "(", "*?"] {
+        let src = super::glob_to_regex(g);
+        assert!(regex::Regex::new(&src).is_ok(), "翻译产出编译失败：{g} -> {src}");
+    }
+}
+
+/// 相对根匹配 + `**` / `*` / `?` 三档通配的行文语义（`**/` 含 0 层 ⇒ 根下直档也命中）。
+#[test]
+fn glob_filter_matches_relative_to_the_root() {
+    let dir = temp_dir("glob-rel");
+    std::fs::write(dir.join("a.erb"), "hit\n").unwrap();
+    std::fs::create_dir_all(dir.join("sub").join("deep")).unwrap();
+    std::fs::write(dir.join("sub").join("b.erb"), "hit\n").unwrap();
+    std::fs::write(dir.join("sub").join("deep").join("c.erb"), "hit\n").unwrap();
+    std::fs::write(dir.join("note.md"), "hit\n").unwrap();
+
+    let paths_of = |out: &SearchResultDto| -> Vec<String> {
+        let mut v: Vec<String> = out.files.iter().map(|f| f.path.replace('\\', "/")).collect();
+        v.sort();
+        v
+    };
+    let ends = |v: &[String]| -> Vec<String> {
+        v.iter().map(|p| p.rsplit('/').next().unwrap().to_string()).collect()
+    };
+
+    // `**/*.erb`：跨目录且含 0 层 ⇒ 三个 erb 全中（根下直档 a.erb 也在内）
+    let mut req = request(&dir, "hit");
+    req.options.globs = Some(vec!["**/*.erb".to_string()]);
+    let out = run(&req);
+    assert_eq!(ends(&paths_of(&out)), vec!["a.erb", "b.erb", "c.erb"]);
+    assert_eq!(out.skipped.filtered, 1, "只有 note.md 被 glob 挡下并计数");
+
+    // `src/**/*.erb` 形态：前缀目录 + 任意层（含直档 b.erb）
+    let mut req2 = request(&dir, "hit");
+    req2.options.globs = Some(vec!["sub/**/*.erb".to_string()]);
+    assert_eq!(ends(&paths_of(&run(&req2))), vec!["b.erb", "c.erb"]);
+
+    // `?.erb` = 一级单字符 ⇒ 只认根下 a.erb（`[^/]` 不跨目录，证明匹配基准是相对路径）
+    let mut req3 = request(&dir, "hit");
+    req3.options.globs = Some(vec!["?.erb".to_string()]);
+    let out3 = run(&req3);
+    assert_eq!(ends(&paths_of(&out3)), vec!["a.erb"]);
+    assert_eq!(out3.skipped.filtered, 3);
+
+    // 空 globs = 今天行为（仅扩展名过滤；此处扩展名也没给 ⇒ 四个文件全扫）
+    let mut req4 = request(&dir, "hit");
+    req4.options.globs = Some(vec![]);
+    let out4 = run(&req4);
+    assert_eq!(out4.files.len(), 4);
+    assert_eq!(out4.skipped.filtered, 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// glob 与扩展名是**且**的关系：两类词来自两个独立维度（后缀 vs 位置），
+/// 写成"或"会让「类型=erb + glob=*.md」这种自相矛盾的条件悄悄扫全项目。
+#[test]
+fn glob_and_extensions_are_both_required() {
+    let dir = temp_dir("glob-and");
+    std::fs::write(dir.join("a.erb"), "hit\n").unwrap();
+    std::fs::write(dir.join("note.md"), "hit\n").unwrap();
+
+    let mut req = request(&dir, "hit");
+    req.options.extensions = Some(vec!["erb".to_string()]);
+    req.options.globs = Some(vec!["*.md".to_string()]);
+    let out = run(&req);
+    assert_eq!(out.total_matches, 0, "扩展名与 glob 必须同时满足");
+    assert_eq!(out.files_scanned, 0);
+    assert_eq!(out.skipped.filtered, 2, "两类挡下都计入 filtered（界面上同一行读数，不静默）");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Windows 反斜杠写法的 glob 也要能匹配（分隔符先归一成 `/` 再翻正则）。
+#[test]
+fn glob_backslashes_are_normalized_before_matching() {
+    let dir = temp_dir("glob-bslash");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub").join("b.erb"), "hit\n").unwrap();
+    std::fs::write(dir.join("a.erb"), "hit\n").unwrap();
+
+    let mut req = request(&dir, "hit");
+    req.options.globs = Some(vec!["sub\\*.erb".to_string()]);
+    let out = run(&req);
+    assert_eq!(out.files.len(), 1);
+    assert!(out.files[0].path.replace('\\', "/").ends_with("sub/b.erb"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 载荷契约：`globs` 缺键 ⇒ None（老调用方零改动）；给出 ⇒ 按 camelCase 解析。
+#[test]
+fn request_dto_globs_default_to_none_when_absent() {
+    let with: SearchRequestDto =
+        serde_json::from_str(r#"{"searchId":1,"roots":["C://game"],"query":"a",
+            "options":{"globs":["*.kojo","src/**/*.erb"]}}"#)
+        .unwrap();
+    assert_eq!(
+        with.options.globs.as_deref(),
+        Some(["*.kojo".to_string(), "src/**/*.erb".to_string()].as_slice())
+    );
+    let without: SearchRequestDto =
+        serde_json::from_str(r#"{"searchId":1,"roots":["C://game"],"query":"a"}"#).unwrap();
+    assert_eq!(without.options.globs, None);
 }

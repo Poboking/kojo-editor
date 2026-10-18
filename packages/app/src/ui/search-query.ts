@@ -35,6 +35,135 @@ export function formatExtensions(list: readonly string[]): string {
   return list.join(', ');
 }
 
+/**
+ * glob 文件过滤（P2-15 体验差距批）：**扩展名过滤管不了的那一半**。
+ *
+ * `parseExtensions` 的口径是"第几段后缀"，作者真正想问的却常常是按位置的形态：
+ * 「`src` 下的 erb」「任意深度的 `*.kojo`」「`**`/`x/*.erb`」。这些写不成扩展名，
+ * 于是只能全项目搜完在结果里人肉找——面板因此补一个 glob 框。
+ * （注释里 `**` 与 `/` 刻意分写：块注释中 `*` 紧跟 `/` 会提前终止注释）
+ *
+ * ## 分隔符与 `parseExtensions` 同款
+ * 逗号（半/全角）、分号、空白一律当分隔符：两个框的打字习惯不该有两套。
+ *
+ * ## glob 与扩展名是**且**的关系（两者都满足才扫）
+ * 扩展名管"什么类型的文件"、glob 管"什么位置的路径"，是两个独立维度；
+ * 写成"或"会让「类型=erb + glob=*.kojo」这种自相矛盾的条件悄悄扫全项目。
+ * 后端（Rust `collect_files`）按且实现，前端只负责把两类词分开喂过去。
+ *
+ * ## 为什么不并入 `parseExtensions`
+ * 老函数的签名与行为被既有测试钉死（`search-query.test.ts` 零改动通过），
+ * 且它的产物语义是"后缀清单"；glob 的产物语义是"路径模式"，混在一个返回值里
+ * 两边都得先分辨自己拿到的是哪一种。故新开一个函数，产出 `{ extensions, globs }`。
+ */
+export interface FileFilterParts {
+  /** 扩展名（小写、不含点；与 `parseExtensions` 逐字同口径） */
+  readonly extensions: string[];
+  /** glob 形态（原样保留大小写：glob 是**路径模式**，不是后缀词表） */
+  readonly globs: string[];
+}
+
+/** 一个词算 glob 形态当且仅当含通配符或路径分隔符（`*` `?` `/` `\`） */
+function isGlobToken(token: string): boolean {
+  return /[*?/\\]/.test(token);
+}
+
+/**
+ * 过滤框文本 → `{ extensions, globs }`（**纯函数**）：两类词分开、各自归一。
+ *
+ * - 扩展名段：去前导点、转小写、去重、排序（与 `parseExtensions` 逐字同口径）；
+ * - glob 段：反斜杠归一成 `/`（Windows 写法与 glob 惯例统一）、去重、排序
+ *   （同一份输入恒产出同一个请求，判据可钉）；**不折小写**——大小写敏感的
+ *   理由见 Rust 侧 `glob_to_regex` 的注释（显式路径模式显式匹配）。
+ */
+export function parseFileFilter(text: string): FileFilterParts {
+  const exts = new Set<string>();
+  const globs = new Set<string>();
+  for (const raw of text.split(/[,，;；\s]+/)) {
+    const token = raw.trim();
+    if (token === '') continue;
+    if (isGlobToken(token)) globs.add(token.replace(/\\/g, '/'));
+    else exts.add(token.toLowerCase().replace(/^\.+/, ''));
+  }
+  return { extensions: [...exts].sort(), globs: [...globs].sort() };
+}
+
+/* ------------------------------ glob 过滤框的当前文本 ------------------------------ */
+
+/**
+ * glob 过滤框的当前文本（**模块级**，与 `extensionText` 住 `search-store` 同理由：
+ * 侧栏切走会卸载面板，过滤条件必须活得比面板久）。
+ *
+ * 这是 P2-11 检索链路接线前的**接缝**：`search-store.runSearch` 发请求时读它——
+ * `parseFileFilter(getGlobFilterText()).globs` → `request.options.globs`
+ * （契约位 `SearchOptions.globs` 由 P2-11 在 `bridge/search.ts` 落，本批不碰）。
+ * 本批只交付解析判据 + 输入框 + Rust 侧过滤执行，请求装配归 P2-11 那一行。
+ */
+let globFilterText = '';
+
+export function getGlobFilterText(): string {
+  return globFilterText;
+}
+
+export function setGlobFilterText(text: string): void {
+  globFilterText = text;
+}
+
+/* ------------------------------ 替换偏好：保留大小写 ------------------------------ */
+
+/**
+ * 「替换时保留大小写」偏好（P2-15）：零 React 纯逻辑，可单测。
+ * 存法照 `format-pref.ts` 先例——localStorage + 面板里一个开关，**不新造第二套偏好机制**。
+ *
+ * ## 默认**开**（与常见编辑器一致）
+ * VSCode / JetBrains 的替换保留大小写默认都是开的：作者写全小写替换词、
+ * 命中处是全大写时，没有这个开关就会把 `CALL FOO` 改成 `CALL bar`——脚本域里
+ * 大写常常是有含义的（常量、宏、另一个记号），悄悄改小写比不改更糟。
+ * 本仓「新功能默认关」的既定口径在这里让位给领域理由，且这个开关**看得见、关得掉**
+ * （`SearchFilterBar` 里的「保留大小写」），不存在"悄悄改了我的文本"。
+ *
+ * ## 真源只有一份：localStorage，替换动作每次现读
+ * 与 `format-pref.ts` 同一条读取路径：开关只写值 + 持有渲染用的镜像，
+ * 执行器（`search-replace-exec.ts`）在每次替换动作前现读一次。于是"刚翻的开关"与
+ * "执行器闭包里的旧值"不可能不一致。
+ */
+const CASE_PRESERVE_PREF_KEY = 'kojo.ui.search.preserveReplaceCase.v1';
+
+/** 缺省 = 开（见模块头「默认开」的领域理由） */
+export const CASE_PRESERVE_DEFAULT = true;
+
+/** localStorage 访问器（node 测试环境无 window；隐私模式可能抛错——都不该影响替换） */
+function storage(): Storage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** 读偏好（只有明确存过 `off` 才算关；读不到 / 抛错一律回默认，绝不抛到替换链路） */
+export function loadCasePreservePref(): boolean {
+  const s = storage();
+  if (!s) return CASE_PRESERVE_DEFAULT;
+  try {
+    return s.getItem(CASE_PRESERVE_PREF_KEY) !== 'off';
+  } catch {
+    return CASE_PRESERVE_DEFAULT;
+  }
+}
+
+/** 写偏好（写不进去不算错：只影响下次替换，不影响本次） */
+export function saveCasePreservePref(on: boolean): void {
+  const s = storage();
+  if (!s) return;
+  try {
+    if (on) s.removeItem(CASE_PRESERVE_PREF_KEY);
+    else s.setItem(CASE_PRESERVE_PREF_KEY, 'off');
+  } catch {
+    /* 隐私模式 / 配额满：静默降级为"本次会话按默认开" */
+  }
+}
+
 /** 查询是否可发（全空白不发：发给后端只会拿一条"检索词为空"回来） */
 export function isValidSearchQuery(query: string): boolean {
   return query.trim() !== '';

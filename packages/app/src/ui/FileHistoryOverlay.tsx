@@ -5,11 +5,14 @@ import {
   TIMELINE_ACCOUNT_LABEL,
   TRASH_HOLD_FILE_OWNER,
   collectFileTimeline,
+  diffPairButtonState,
+  diffableTimelineItem,
   formatVersionSize,
   formatVersionTime,
   getOpsJournal,
   isTimelineStale,
   keepText,
+  orderDiffPair,
   registerHistoryIo,
   releaseTrashHold,
   type TimelineFetchState,
@@ -38,15 +41,24 @@ import { peekRecoveredContent } from './recovery-store';
  * 恢复动作做完后本屏会重取一次，于是那份"现状"就出现在屏幕上——这就是它可预期的原因。
  *
  * 编辑器内存态由外部改动重载口径接管（watcher → `file.changed`），本窗不越俎代庖。
+ *
+ * P2-15 两版互比：每行行首可勾选，恰好两条时「对比两版」亮起——内容取自该条自己
+ * 的读面（盘上路径走 diff 的 `path` 侧、崩溃恢复件取进程内那份走 `text` 侧，
+ * 不新造读盘通道）；勾选 0/1/多余 2 条时按钮禁用并写明原因（铁律 4）。
+ * 行尾原来的「对比」（与磁盘当前内容比）原样保留。
  */
 
 export interface FileHistoryDeps {
   io: FileIO;
-  /** 请求宿主打开通用 diff 模态 */
+  /**
+   * 请求宿主打开通用 diff 模态。两侧各「内联文本或磁盘路径」二选一（与
+   * `ui.diffView.open` 载荷同形）：`path` = 盘上真文件由宿主现读；`text` = 本屏
+   * 已在内存里取到的内容（崩溃恢复件没有盘上路径，只有这一形态）。
+   */
   requestDiff(payload: {
     title: string;
-    original: { label: string; path: string };
-    modified: { label: string; path: string };
+    original: { label: string; path?: string; text?: string };
+    modified: { label: string; path?: string; text?: string };
   }): void;
   close(): void;
 }
@@ -78,6 +90,8 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
     const [reloadNonce, setReloadNonce] = useState(0);
     /** 二次确认的行（第一步只点亮确认态，不写盘） */
     const [pending, setPending] = useState<Pending>(null);
+    /** 两版互比的勾选（`TimelineItem.key` 集合；换文件 / 重取一律清空——旧 key 会指向不存在的行） */
+    const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
     const [feedback, setFeedback] = useState<Feedback | null>(null);
     const [busy, setBusy] = useState(false);
     /** 本屏的取数锚（剩余天数的"此刻"；过一天就整屏重取，见 `isTimelineStale`） */
@@ -88,6 +102,7 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
       let alive = true;
       setState({ kind: 'loading' });
       setPending(null);
+      setPicked(new Set()); // 换文件 / 重取：勾选清空（旧 key 指向的行可能已经不在）
       collectFileTimeline(deps.io, getOpsJournal(), target)
         .then((bundle) => {
           if (!alive) return;
@@ -136,6 +151,38 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
         return v.text;
       }
       return (await deps.io.readText(handle)).text;
+    };
+
+    /**
+     * 一条时间线 → diff 一侧的内容（P2-15 两版互比）：
+     * 盘上有文件 ⇒ `path` 侧（宿主经内核 io 现读，读侧无写闸）；崩溃恢复件没有
+     * 盘上路径 ⇒ 取进程内那份走 `text` 侧。两者都给不出内容 ⇒ 抛错（由调用方
+     * 落成屏上反馈，不静默打开一个空 diff）。
+     */
+    const diffSideOf = async (item: TimelineItem): Promise<{ label: string; path?: string; text?: string }> => {
+      const label = `${TIMELINE_ACCOUNT_LABEL[item.account]} · ${timeText(item)}`;
+      if (item.diffPath !== null) return { label, path: item.diffPath };
+      if (item.account === 'recovery') return { label, text: await snapshotText(item, item.id) };
+      throw new Error(`「${label}」没有可读取的内容：这一条既没有盘上文件，也没有进程内快照。`);
+    };
+
+    /** 两版互比：恰好勾选两条才动（按钮禁用态由 `diffPairButtonState` 说清，这里双保险） */
+    const comparePicked = async (): Promise<void> => {
+      if (state.kind !== 'ready') return;
+      const pickedItems = state.bundle.items.filter((i) => picked.has(i.key));
+      if (pickedItems.length !== 2) return;
+      // 旧版在左、新版在右（判据在 file-history.orderDiffPair；时刻缺失按列表序）
+      const { original, modified } = orderDiffPair(pickedItems[0]!, pickedItems[1]!);
+      setBusy(true);
+      try {
+        const [o, m] = await Promise.all([diffSideOf(original), diffSideOf(modified)]);
+        deps.requestDiff({ title: `${basename(target)} · 两版互比`, original: o, modified: m });
+      } catch (err: unknown) {
+        // 取不到内容：原样落反馈（不重取时间线——勾选留着，作者换两条还能再比）
+        setFeedback({ tone: 'err', text: errorText(err) });
+      } finally {
+        setBusy(false);
+      }
     };
 
     const restore = async (item: TimelineItem): Promise<void> => {
@@ -262,10 +309,44 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
       return h('div', { className: 'fh-actions' }, ...buttons);
     };
 
+    /** 行首勾选格：可互比的给复选框；不可互比的给一个占位格并说清为什么（不静默） */
+    const diffCell = (item: TimelineItem): ReactNode => {
+      if (!diffableTimelineItem(item)) {
+        return h(
+          'td',
+          {
+            className: 'fh-pick',
+            title: '这一条没有可读取的内容（没有盘上文件、也没有进程内快照），不能参与两版互比。',
+          },
+          h('span', { className: 'dim' }, '—'),
+        );
+      }
+      const on = picked.has(item.key);
+      return h(
+        'td',
+        { className: 'fh-pick' },
+        h('input', {
+          type: 'checkbox',
+          checked: on,
+          disabled: busy,
+          'aria-label': `选择「${item.title}」参与两版互比`,
+          title: on ? '取消勾选这一版' : '勾选这一版（两版互比需要恰好两条）',
+          onChange: () =>
+            setPicked((prev) => {
+              const next = new Set(prev);
+              if (next.has(item.key)) next.delete(item.key);
+              else next.add(item.key);
+              return next;
+            }),
+        }),
+      );
+    };
+
     const rowOf = (item: TimelineItem): ReactNode =>
       h(
         'tr',
         { key: item.key, className: 'fh-row' },
+        diffCell(item),
         h('td', null, timeText(item)),
         h(
           'td',
@@ -309,6 +390,30 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
               ...notes.map((n, i) => h('p', { key: `note-${i}`, className: 'pv-chip warn' }, n)),
             )
           : null;
+      // 两版互比工具条：恰好勾选两条才亮，其余条数禁用并把理由写在 title 里（不静默）
+      const pickState = diffPairButtonState(picked.size);
+      const pickBar = h(
+        'div',
+        { className: 'pv-summary fh-pickbar' },
+        h('span', { className: 'dim' }, `已选 ${picked.size} / 2 版`),
+        h(
+          'button',
+          {
+            className: pickState.enabled ? 'primary small' : 'ghost small',
+            disabled: !pickState.enabled || busy,
+            title: pickState.reason,
+            onClick: () => void comparePicked(),
+          },
+          '对比两版',
+        ),
+        picked.size > 0
+          ? h(
+              'button',
+              { className: 'ghost small', disabled: busy, title: '清空勾选', onClick: () => setPicked(new Set()) },
+              '清除选择',
+            )
+          : null,
+      );
       body =
         items.length === 0
           ? h(
@@ -322,22 +427,28 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
               ),
             )
           : h(
-              'table',
-              { className: 'fh-table' },
+              'div',
+              null,
+              pickBar,
               h(
-                'thead',
-                null,
+                'table',
+                { className: 'fh-table' },
                 h(
-                  'tr',
+                  'thead',
                   null,
-                  h('th', null, '时间'),
-                  h('th', null, '哪本账'),
-                  h('th', null, '这是什么 · 恢复它意味着什么'),
-                  h('th', null, '大小'),
-                  h('th', null, ''),
+                  h(
+                    'tr',
+                    null,
+                    h('th', { className: 'fh-pick', title: '勾选两行即可两版互比', 'aria-label': '选择两版互比' }, ''),
+                    h('th', null, '时间'),
+                    h('th', null, '哪本账'),
+                    h('th', null, '这是什么 · 恢复它意味着什么'),
+                    h('th', null, '大小'),
+                    h('th', null, ''),
+                  ),
                 ),
+                h('tbody', null, ...items.map(rowOf)),
               ),
-              h('tbody', null, ...items.map(rowOf)),
             );
     }
 
@@ -349,7 +460,7 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
       h(
         'p',
         { className: 'dim' },
-        '一条时间线，四本账：写前备份 / 批操作快照 / 回收站 / 未保存快照。每行都写明它来自哪本账、恢复它会发生什么；恢复前的磁盘现状一律先落进同一本账，不会被吃掉。',
+        '一条时间线，四本账：写前备份 / 批操作快照 / 回收站 / 未保存快照。每行都写明它来自哪本账、恢复它会发生什么；恢复前的磁盘现状一律先落进同一本账，不会被吃掉。勾选任意两行可两版互比（旧版在左）；每行后面的「对比」仍与磁盘当前内容比。',
       ),
       feedback
         ? h('p', { className: feedback.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, feedback.text)
