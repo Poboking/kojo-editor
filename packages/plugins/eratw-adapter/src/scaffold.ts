@@ -1,15 +1,16 @@
 /**
- * 口上项目脚手架（2026-10-12 口上项目批 P-C；纯函数，可单测）。
+ * 口上项目脚手架 —— **eraTW 侧的数据层**（2026-10-12 口上项目批 P-C；
+ * 2026-10-18 AM-1 P4 改为共享骨架 + 本游戏供数）。
  *
- * 职责：新建口上项目向导的**落盘内容生成**——中文命名、中文文案：
- * - 包目录名：`{作品名}-{角色名} v{版本}`（文件系统非法字符消毒）；
- * - 中文 README 模板（作品信息 + 面清单 + 部署说明）；
- * - 8 核心面**空壳**（事件/日常指令/性交指令/奉仕指令/爱抚指令/绝顶/刻印取得/性骚扰指令）——
- *   内容纯 `;` 注释，**绝不生成活函数**（活函数由作者写，工具不替作者做决定）；
- *   部分面注释里带一份**从真实口上库现成案例转写的语法糖示例**（`FACE_CASES`，
- *   单一真源 `fixtures/scaffold/`；台词按类目简化，不许自编示例；
- *   只有"投影即可写、正文 ≤10 行"的案例才允许入选，宁缺勿编）；
- * - **不生成四件套文件**（登记/配色/开关等是函数级产物，属作者后续创作）。
+ * 装配逻辑、目录名消毒、空壳与 README 的段落骨架全部搬到契约层
+ * `@kojo/plugin-api` 的 `scaffold.ts`（项目负责人 2026-10-18 拍板：向导族抽共享骨架，
+ * 不复制）。本文件只留**游戏知识**：
+ * - 包目录名格式沿用 `{作品名}-{角色名} v{版本}`（骨架的通用约定，两游戏一致）；
+ * - 8 核心面的清单与中文命名（`CORE_FACES`）；
+ * - 从真实口上库转写的现成案例（`FACE_CASES`，单一真源 `fixtures/scaffold/`）；
+ * - 剧本号 1-10 的语义与校验（eraTW 特有）；
+ * - 部署路径 `ERB/口上・メッセージ関連/個人口上/<dir>/` 与放置规则；
+ * - 许可条款文本（`licenses.ts` —— LTOL 是 era 社区约定，刻意留在 adapter）。
  *
  * ## 为什么核心面空壳是 `.kojo` 而不是 `.ERB`（用户反馈 1，2026-10-12）
  *
@@ -24,7 +25,17 @@
  * 面模板示例取自本包 `face-templates.ts`（游戏知识单一真源；只代入不解释）。
  */
 
-import type { KojoFaceTable } from '@kojo/plugin-api';
+import {
+  assembleScaffold,
+  buildScaffoldDirName,
+  buildScaffoldFaceStub,
+  buildScaffoldReadme,
+  faceTemplateExample,
+  sanitizePathSegment,
+  type KojoFaceTable,
+  type ScaffoldFaceCase,
+  type ScaffoldFaceSpec,
+} from '@kojo/plugin-api';
 import { createEratwFaceTable } from './face-templates';
 import {
   buildLicenseText,
@@ -65,14 +76,7 @@ export interface KojoScaffoldResult {
 export const FACE_STUB_EXT = '.kojo';
 
 /** 核心面空壳规格（中文命名；文件名 = stem + '.kojo'） */
-export interface CoreFaceSpec {
-  /** 文件名干（不含扩展名） */
-  stem: string;
-  /** 对应分野表键（取函数名模板用） */
-  face: string;
-  /** 一句话说明（进注释与 README） */
-  blurb: string;
-}
+export type CoreFaceSpec = ScaffoldFaceSpec;
 
 /** 8 核心面（讨论纪要定稿清单；顺序即生成顺序） */
 export const CORE_FACES: readonly CoreFaceSpec[] = [
@@ -109,16 +113,7 @@ export const CORE_FACES: readonly CoreFaceSpec[] = [
  * ③ 空壳注释里的案例逐行出自本常量（反向：改一个字即被抓出）；
  * ④ 案例必须拼成**可转译（零 error）**的最小文档——示例是给人照抄的。
  */
-export interface FaceCase {
-  /** 口上库内相对路径（相对剧本根，逐字照抄） */
-  source: string;
-  /** 来源函数名（含 @） */
-  fn: string;
-  /** 台词类目占位（亲密面 =「涩涩的话」，日常/事件面 =「日常的对话」） */
-  category: string;
-  /** 转糖后的案例正文（逐行，未加 `; ` 前缀；≤10 行） */
-  lines: readonly string[];
-}
+export type FaceCase = ScaffoldFaceCase;
 
 /** 按 stem 索引的案例表（键 = `CORE_FACES[].stem`） */
 export const FACE_CASES: Readonly<Record<string, FaceCase>> = {
@@ -181,120 +176,97 @@ export const FACE_CASES: Readonly<Record<string, FaceCase>> = {
   },
 };
 
+/** 部署目标目录（eraTW 的口上根，相对游戏目录） */
+const DEPLOY_KOJO_ROOT = 'ERB/口上・メッセージ関連/個人口上';
+
 /**
- * 文件系统非法字符消毒（单层目录段）：
+ * 文件系统非法字符消毒（单层目录段）——共享骨架的实现，本包沿用旧名导出。
  * 剔除 `\/:*?"<>|` 与控制字符，压缩连续空白，去首尾空白与尾随点号
  * （Windows 目录名不得以点/空格结尾）。合法字符一律保留（含中日文、空格）。
  */
-export function sanitizeSegment(value: string): string {
-  return value
-    .replace(/[\u0000-\u001f]/g, '')
-    .replace(/[\\/:*?"<>|]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/[. ]+$/, '');
-}
+export const sanitizeSegment = sanitizePathSegment;
 
 /** 包目录名：`{作品名}-{角色名} v{版本}`（逐段消毒后拼接） */
-export function scaffoldDirName(opts: Pick<KojoScaffoldOptions, 'workName' | 'charaName' | 'version'>): string {
-  return `${sanitizeSegment(opts.workName)}-${sanitizeSegment(opts.charaName)} v${sanitizeSegment(opts.version)}`;
-}
+export const scaffoldDirName = buildScaffoldDirName;
 
-/** 面模板示例：代入家族段（空）与角色号，保留 `{i}`/`${com}` 原样供说明 */
-function templateExample(faceTable: KojoFaceTable, face: string, charaNo: number): string | null {
-  const template = faceTable.faces[face]?.template;
-  if (!template) return null;
-  return template.replaceAll('{t}', '').replaceAll('{n}', String(charaNo));
-}
+/** 分野表模板占位符说明（eraTW 的面模板用 `{i}` 与 `${com}` 两个占位） */
+const TEMPLATE_HINTS = [
+  { token: '{i}', text: '时机编号（按游戏内事件/指令编号填写）。' },
+  { token: '${com}', text: '指令类型段（COM / SCOM / CUSTOM_COM / CUSTOM_SCOM）。' },
+] as const;
+
+/** 与占位符无关的恒输出说明（eraTW 有家族段维度） */
+const ALWAYS_HINTS = ['有家族段（别人版口上）时，家族段插在 M_KOJO 之后的下划线处。'] as const;
 
 /** 单面空壳内容（纯 `;` 注释；不生成任何活函数） */
-export function buildFaceStub(spec: CoreFaceSpec, opts: KojoScaffoldOptions, faceTable: KojoFaceTable): string {
-  const lines: string[] = [];
-  lines.push(`; 《${opts.workName.trim()}》· ${opts.charaName.trim()}（K${opts.charaNo}）— ${spec.stem}`);
-  lines.push(`; 剧本${opts.scriptNo} · 版本 ${opts.version.trim()} · 作者：${opts.authorName.trim()}`);
-  lines.push(';');
-  lines.push(`; 【面说明】${spec.blurb}`);
-  const example = templateExample(faceTable, spec.face, opts.charaNo);
-  if (example) {
-    lines.push(`; 【函数形态】${example}`);
-    if (example.includes('{i}')) lines.push(';   {i} = 时机编号（按游戏内事件/指令编号填写）。');
-    if (example.includes('${com}')) lines.push(';   ${com} = 指令类型段（COM / SCOM / CUSTOM_COM / CUSTOM_SCOM）。');
-    lines.push(';   有家族段（别人版口上）时，家族段插在 M_KOJO 之后的下划线处。');
-  }
-  const faceCase = FACE_CASES[spec.stem];
-  if (faceCase) {
-    lines.push(';');
-    lines.push(`; 【库内现成案例】照抄 ${faceCase.source}`);
-    lines.push(`; 的 ${faceCase.fn}，已用本工具转成 .kojo 写法，台词简化为类目占位。`);
-    for (const caseLine of faceCase.lines) lines.push(caseLine.length > 0 ? `; ${caseLine}` : ';');
-    lines.push('; 上面的编号与角色号来自那份现成口上，照你自己要写的场合改；写法详见「.kojo 语言教程」。');
-  }
-  lines.push(';');
-  lines.push('; —— 脚手架生成的空壳文件：只有注释，没有活函数 ——');
-  lines.push('; 请在下方开始创作（ERB 函数定义以 @ 开头）。');
-  return `${lines.join('\n')}\n`;
+export function buildFaceStub(
+  spec: CoreFaceSpec,
+  opts: KojoScaffoldOptions,
+  faceTable: KojoFaceTable,
+): string {
+  return buildScaffoldFaceStub(
+    {
+      face: spec,
+      identity: opts,
+      metaLead: [`剧本${opts.scriptNo}`],
+      templateExample: faceTemplateExample(faceTable, spec.face, opts.charaNo),
+      templateHints: TEMPLATE_HINTS,
+      alwaysHints: ALWAYS_HINTS,
+      faceCase: FACE_CASES[spec.stem] ?? null,
+    },
+    FACE_STUB_EXT,
+  );
 }
 
 /** 中文 README 模板 */
 export function buildReadme(opts: KojoScaffoldOptions): string {
-  const lines: string[] = [];
-  lines.push(`# 《${opts.workName.trim()}》· ${opts.charaName.trim()} 口上包`);
-  lines.push('');
-  lines.push('| 项目 | 内容 |');
-  lines.push('| --- | --- |');
-  lines.push(`| 作者 | ${opts.authorName.trim()} |`);
-  lines.push(`| 版本 | ${opts.version.trim()} |`);
-  lines.push(`| 目标角色 | ${opts.charaName.trim()}（编号 ${opts.charaNo}） |`);
-  lines.push(`| 目标剧本 | 剧本${opts.scriptNo} |`);
-  lines.push('');
-  lines.push('## 简介');
-  lines.push('');
-  lines.push('> 请在这里填写作品介绍：设定、基调、与原版口上的差异点等。');
-  lines.push('');
-  lines.push('## 内容');
-  lines.push('');
-  lines.push(
-    '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
-      '扩展名是 `.kojo`：.kojo 写法与原始 ERB 写法可以写在同一个文件里，' +
-      '导出或部署时会自动转译成游戏认得的 `.ERB`，工作区里始终只有 `.kojo` 这一份源。',
-  );
-  lines.push('部分面文件顶部带一份从口上库现成案例转写的注释示例（.kojo 写法，台词简化为类目占位）。');
-  lines.push('');
-  for (const spec of CORE_FACES) {
-    lines.push(`- \`${spec.stem}${FACE_STUB_EXT}\` — ${spec.blurb}`);
-  }
-  lines.push('');
-  lines.push('## 部署');
-  lines.push('');
-  lines.push('编辑器的「部署到游戏目录」会把本包转译后放进游戏目录：');
-  lines.push('');
-  lines.push('```');
-  lines.push(`ERB/口上・メッセージ関連/個人口上/<角色口上目录>/${scaffoldDirName(opts)}/`);
-  lines.push('```');
-  lines.push('');
-  lines.push('（游戏目录默认只读，需先批准写权限；目标已存在时不会覆盖。）');
-  lines.push('');
-  lines.push('手工放置也可以：先把 `.kojo` 全部转译成同名 `.ERB`，再把 `.ERB` 连同辅助文件复制过去。');
-  lines.push('**直接把 `.kojo` 放进游戏目录是不生效的**——引擎只读 `.ERB`。');
-  lines.push('');
-  lines.push('## 许可');
-  lines.push('');
+  const licenseNote: string[] = [];
   if (licenseProducesFile(opts.license)) {
     const choice = LICENSE_CHOICES.find((c) => c.kind === opts.license);
-    lines.push(`本包采用 **${choice?.label ?? opts.license}**，全文见 \`${LICENSE_FILE_NAME}\` 文件。`);
-    lines.push('');
+    licenseNote.push(
+      `本包采用 **${choice?.label ?? opts.license}**，全文见 \`${LICENSE_FILE_NAME}\` 文件。`,
+    );
+    licenseNote.push('');
     if (opts.license === 'ltol') {
-      lines.push('注意 LTOL 有**时限**：自标注之日起一年，版本升级再续一年；');
-      lines.push('到期或作者失联半年后转为免费许可。发布时请留意 `LICENSE` 里记的年份。');
+      licenseNote.push('注意 LTOL 有**时限**：自标注之日起一年，版本升级再续一年；');
+      licenseNote.push('到期或作者失联半年后转为免费许可。发布时请留意 `LICENSE` 里记的年份。');
     } else if (opts.license === 'cc-by-nc-4.0') {
-      lines.push('注意：`LICENSE` 里那份是**要点速览**，具有法律效力的完整条款以文件中的官方链接为准。');
+      licenseNote.push('注意：`LICENSE` 里那份是**要点速览**，具有法律效力的完整条款以文件中的官方链接为准。');
     } else if (opts.license === 'template') {
-      lines.push('（当前为占位模板，请填写正式条款后再发布。）');
+      licenseNote.push('（当前为占位模板，请填写正式条款后再发布。）');
     }
   } else {
-    lines.push('未指定开源协议——默认保留所有权利。');
+    licenseNote.push('未指定开源协议——默认保留所有权利。');
   }
-  return `${lines.join('\n')}\n`;
+
+  return buildScaffoldReadme({
+    identity: opts,
+    title: `《${opts.workName.trim()}》· ${opts.charaName.trim()} 口上包`,
+    metaRows: [
+      { label: '作者', value: opts.authorName.trim() },
+      { label: '版本', value: opts.version.trim() },
+      { label: '目标角色', value: `${opts.charaName.trim()}（编号 ${opts.charaNo}）` },
+      { label: '目标剧本', value: `剧本${opts.scriptNo}` },
+    ],
+    intro: ['> 请在这里填写作品介绍：设定、基调、与原版口上的差异点等。'],
+    contentNote: [
+      '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
+        '扩展名是 `.kojo`：.kojo 写法与原始 ERB 写法可以写在同一个文件里，' +
+        '导出或部署时会自动转译成游戏认得的 `.ERB`，工作区里始终只有 `.kojo` 这一份源。',
+      '部分面文件顶部带一份从口上库现成案例转写的注释示例（.kojo 写法，台词简化为类目占位）。',
+    ],
+    faces: CORE_FACES,
+    stubExt: FACE_STUB_EXT,
+    deployIntro: ["编辑器的「部署到游戏目录」会把本包转译后放进游戏目录："],
+    deployPath: `${DEPLOY_KOJO_ROOT}/<角色口上目录>/${scaffoldDirName(opts)}/`,
+    deployNote: [
+      '（游戏目录默认只读，需先批准写权限；目标已存在时不会覆盖。）',
+      '',
+      '手工放置也可以：先把 `.kojo` 全部转译成同名 `.ERB`，再把 `.ERB` 连同辅助文件复制过去。',
+      '**直接把 `.kojo` 放进游戏目录是不生效的**——引擎只读 `.ERB`。',
+    ],
+    licenseNote,
+  });
 }
 
 /**
@@ -311,6 +283,10 @@ export function buildLicense(opts: KojoScaffoldOptions): string {
   });
 }
 
+/** 剧本号区间（eraTW 的多剧本编号，1-10） */
+const SCRIPT_NO_MIN = 1;
+const SCRIPT_NO_MAX = 10;
+
 /**
  * 组装完整脚手架产物。输入非法时抛错（中文消息；向导已前置校验，此处兜底）。
  * `faceTable` 缺省取 eraTW 分野表（纯数据，无 IO）。
@@ -319,27 +295,18 @@ export function scaffoldKojoProject(
   opts: KojoScaffoldOptions,
   faceTable: KojoFaceTable = createEratwFaceTable(),
 ): KojoScaffoldResult {
-  const workName = opts.workName.trim();
-  const authorName = opts.authorName.trim();
-  const version = opts.version.trim();
-  const charaName = opts.charaName.trim();
-  if (!workName) throw new Error('作品名不能为空');
-  if (!authorName) throw new Error('作者名不能为空');
-  if (!version) throw new Error('版本不能为空');
-  if (!charaName) throw new Error('角色名不能为空');
-  if (!Number.isInteger(opts.scriptNo) || opts.scriptNo < 1 || opts.scriptNo > 10) {
-    throw new Error(`剧本号必须是 1-10 的整数：${String(opts.scriptNo)}`);
-  }
-  if (!Number.isInteger(opts.charaNo) || opts.charaNo < 0) {
-    throw new Error(`角色编号非法：${String(opts.charaNo)}`);
-  }
-
-  const files: Record<string, string> = {};
-  files['README.md'] = buildReadme(opts);
-  if (licenseProducesFile(opts.license)) files[LICENSE_FILE_NAME] = buildLicense(opts);
-  for (const spec of CORE_FACES) {
-    files[`${spec.stem}${FACE_STUB_EXT}`] = buildFaceStub(spec, opts, faceTable);
-  }
-
-  return { dirName: scaffoldDirName(opts), files };
+  return assembleScaffold({
+    identity: opts,
+    faces: CORE_FACES,
+    stubExt: FACE_STUB_EXT,
+    readme: () => buildReadme(opts),
+    stub: (face) => buildFaceStub(face, opts, faceTable),
+    extraFiles: (): Record<string, string> =>
+      licenseProducesFile(opts.license) ? { [LICENSE_FILE_NAME]: buildLicense(opts) } : {},
+    assertExtra: () => {
+      if (!Number.isInteger(opts.scriptNo) || opts.scriptNo < SCRIPT_NO_MIN || opts.scriptNo > SCRIPT_NO_MAX) {
+        throw new Error(`剧本号必须是 ${SCRIPT_NO_MIN}-${SCRIPT_NO_MAX} 的整数：${String(opts.scriptNo)}`);
+      }
+    },
+  });
 }
