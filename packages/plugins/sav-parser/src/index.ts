@@ -77,6 +77,19 @@ export function createSavParserPlugin(): Plugin {
       ctx.onDispose(ctx.bus.on('project.opened', () => scanSafely()));
       ctx.onDispose(ctx.bus.on('project.closed', () => engine.clear()));
 
+      // 缓存失效接线（2026-10-18 修复批）：**谁改盘谁发事件、谁消费谁逐出**——
+      // 内核 io 的二进制写路径（writeBytes / removeFile / restoreBackup，撤销注入与
+      // 恢复备份都从这里落盘）广播 `file.changed`，文件监视器对外部改盘兜底投同一条；
+      // 本订阅把事件路径的深解析记忆显式逐出。**不能只信 mtime/size 判据**：
+      // 注入原地改值字节数不变，FAT32/SMB/OneDrive 的 mtime 粒度可达 1–2s，
+      // 撤销/恢复落在同一 tick 时判据同值 ⇒ 面板会一直显示注入前的旧值还毫无察觉
+      // （内核铁律 4「不静默」）。路径判等口径见 engine.invalidate（pathKey 折叠写法）。
+      ctx.onDispose(
+        ctx.bus.on('file.changed', (ev) => {
+          engine.invalidate(ev.path);
+        }),
+      );
+
       // 激活时项目已打开（插件晚于项目加载）→ 补扫一次
       if (project.current()) scanSafely();
     },

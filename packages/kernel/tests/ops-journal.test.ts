@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
+import type { EventBus, FileChangedEvent } from '@kojo/plugin-api';
 import { WriteNotAllowedError } from '@kojo/plugin-api';
 import { FileIOServiceImpl, OpsJournalImpl, OP_ID_RE, OP_SNAPSHOT_RETENTION_MAX } from '../src';
 import { NodeBridge } from './helpers/node-bridge';
@@ -113,6 +114,40 @@ describe('undo · 字节级回滚', () => {
     expect(await fs.readFile(f, 'utf-8')).toBe('V0'); // 撤销生效
     await ops.undo(undoId); // 对撤销再撤销 = 重做
     expect(await fs.readFile(f, 'utf-8')).toBe('V1'); // V1 回来了
+  });
+
+  it('撤销注入的失效广播：回滚落盘 ⇒ file.changed（同 mtime 同 size 也必发，bug 1 的 kernel 半边）', async () => {
+    // 形状照抄注入：int 原位替换——字节数不变。undo 走 io.writeBytes 落盘，
+    // 下游二进制解析记忆**不能等 mtime/size 判据发现过期**（粗粒度介质同值），
+    // 必须由知情写入方（内核 io）广播 `file.changed` 显式逐出（接线在 sav-parser 插件）。
+    const events: FileChangedEvent[] = [];
+    const bus = {
+      on: () => () => {},
+      once: () => () => {},
+      emit: (type: string, payload: FileChangedEvent) => {
+        if (type === 'file.changed') events.push(payload);
+      },
+    } as unknown as EventBus;
+    const bridge = new NodeBridge(appData);
+    const io2 = new FileIOServiceImpl(bridge, noopLog, {}, bus);
+    io2.setAppWritableRoots([path.join(tmpDir, 'ws')]);
+    const ops2 = new OpsJournalImpl({ bridge, io: io2, log: noopLog });
+
+    const f = wsPath('inject-target.dat');
+    const v0 = new TextEncoder().encode('AAAA'); // 注入前
+    const v1 = new TextEncoder().encode('BBBB'); // 注入后：**同 size**，mtime 也可能同 tick
+    await fs.writeFile(f, v0);
+
+    const id = await ops2.begin('snapshot-inject', '注入');
+    await ops2.record(id, f);
+    await io2.writeBytes(f, v1);
+    await ops2.commit(id);
+    expect(events.filter((e) => e.kind === 'change' && e.path === f).length).toBeGreaterThanOrEqual(1);
+
+    events.length = 0;
+    await ops2.undo(id); // 撤销注入：io.writeBytes 写回 v0
+    expect(events).toEqual([{ kind: 'change', path: f }]); // 恰发一条、原样透传路径、不折叠写法
+    expect(new Uint8Array(await fs.readFile(f))).toEqual(v0); // 值真的回到了注入前
   });
 
   it('undo 过写允许域闸：授权收回后（白名单外）拒绝回滚且内容不动', async () => {

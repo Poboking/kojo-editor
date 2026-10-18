@@ -166,6 +166,28 @@ export function simpleCharBlock(w: W, no: number): void {
 }
 
 /**
+ * RAW（未压缩）单角色档，唯一的可变内容是 `NO` 这个 int（0..0xCF 单字节直写形态）。
+ * 两份不同 `no` 的产物**字节数逐字相等**——供"注入原地改值 ⇒ size/mtime 判据同值"
+ * 的失效测试使用（`parse-memo.test.ts` / `plugin.test.ts`）。
+ */
+export function makeRawNoArchive(no: number): Uint8Array {
+  return makeArchiveFile({
+    fileType: 0,
+    saveMes: '第 1 日',
+    charCount: 1,
+    compress: false,
+    charBlock: (w) => {
+      w.u8(0x00).str('NO').int(no);
+      w.u8(0x10).str('NAME').str('角色X');
+      w.u8(0x01).str('CFLAG').u32(4).u8(1).u8(0xf0).u8(2).u8(3).u8(0xff);
+      w.u8(0xfd);
+      w.u8(0x00).str('TEST_DIM').int(-1);
+      w.u8(0xfe); // EOC
+    },
+  });
+}
+
+/**
  * 手工装配一个 **RAW**（未压缩）完整存档文件：16 字节明文头 + 任意 body 字节。
  * 供字节保真测试直接构造含尾字节 / 多分隔符 / 非零保留头的载荷。
  * @param body 载荷层字节（顶层 fileType…直到 EOF）

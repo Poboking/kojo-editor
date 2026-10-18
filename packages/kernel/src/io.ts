@@ -2,6 +2,8 @@ import type {
   BackupVersion,
   BatchFileStat,
   DirEntry,
+  EventBus,
+  FileChangeKind,
   FileEncoding,
   FileIO,
   FilePickFilter,
@@ -207,11 +209,25 @@ export class FileIOServiceImpl implements FileIO {
      * `maxMetaEntries`（PS-2 追加）：编码/EOL 判据缓存的条目上限注入点。
      */
     cacheCaps: { maxFiles?: number; maxChars?: number; maxMetaEntries?: number } = {},
+    /**
+     * 事件总线（2026-10-18 缓存失效批，additive 可选）：缺席 = 不发事件，其余行为逐字不变。
+     * **只发 `file.changed`**——二进制写路径（writeBytes / removeFile / restoreBackup）落盘后
+     * 广播一次，让消费了这些文件的下游缓存（插件的二进制解析记忆等）显式失效：
+     * 知情写入方告诉缓存，文件监视器只是外部改盘的兜底，不是第一信源
+     * （口径同 tsserver 单文件失效 / watcher `onFileChanged`；亦同 💡 升糖写完后
+     * 由服务发事件的既有纪律）。文本路径不发——编辑器的保存回路自写自知。
+     */
+    private readonly bus?: EventBus,
   ) {
     this.textCacheMaxFiles = cacheCaps.maxFiles ?? TEXT_CACHE_MAX_FILES;
     this.textCacheMaxChars = cacheCaps.maxChars ?? TEXT_CACHE_MAX_CHARS;
     this.metaCacheMaxEntries = cacheCaps.maxMetaEntries ?? META_CACHE_MAX_ENTRIES;
     this.trash = new TrashManager(bridge, log);
+  }
+
+  /** 二进制写路径落盘后的失效广播（载荷与监视器同源：路径**原样透传**，消费方判等走 pathKey） */
+  private publishBinaryChange(kind: FileChangeKind, path: string): void {
+    this.bus?.emit('file.changed', { kind, path });
   }
 
   /* ------------------------------ 读 ------------------------------ */
@@ -586,6 +602,9 @@ export class FileIOServiceImpl implements FileIO {
     this.setMeta(this.eolCache, key, detectEol(raw));
     this.putEolMap(key, raw);
     this.putRawBytes(key, data);
+    // 失效广播（二进制写路径 = 撤销注入的回滚通道 journal 也走这里）：下游二进制缓存
+    // 不能靠 mtime/size 判据——原地改值的重写 size 不变，粗粒度介质上 mtime 也可同值
+    this.publishBinaryChange('change', path);
   }
 
   private async probeOnDisk(path: string): Promise<FileEncoding | null> {
@@ -869,6 +888,9 @@ export class FileIOServiceImpl implements FileIO {
     this.setMeta(this.eolCache, key, detectEol(raw));
     this.putEolMap(key, raw);
     this.putRawBytes(key, bytes);
+    // 失效广播：恢复 = 盘上换内容，下游二进制缓存必须知道（判据同为 mtime+size，
+    // 恢复"注入前版本"与当前注入版可能同 size、同 mtime tick——见 2026-10-18 修复批）
+    this.publishBinaryChange('change', path);
     this.log?.info(`Backup restored: ${src} -> ${path}`);
   }
 
@@ -977,6 +999,8 @@ export class FileIOServiceImpl implements FileIO {
     this.assertWritable(path);
     await this.trash.moveIntoTrash(path, 'file');
     this.invalidateTextCache(path);
+    // 失效广播（撤销 op 内新建文件的回滚通道）：文件没了，下游缓存同样不许留
+    this.publishBinaryChange('unlink', path);
   }
 
   /* ----------------------- 回收站（W11 可见批；全 additive） ----------------------- */
@@ -1017,6 +1041,7 @@ export class FileIOServiceImpl implements FileIO {
       this.setMeta(this.eolCache, pathKey(restored), detectEol(raw));
     }
     this.invalidateTextCache(restored);
+    this.publishBinaryChange('add', restored); // 文件回到盘上（撤销删除）：下游缓存同样要收到（additive，同口径）
     this.log?.info(`回收站条目已恢复：${id} -> ${restored}`);
     return restored;
   }

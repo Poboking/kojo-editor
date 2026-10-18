@@ -105,7 +105,9 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
   const container = new ServiceContainer();
   const slots = new SlotRegistryImpl();
   const storage = new StorageServiceImpl(opts.storageBackend ?? new FileStorageBackend(opts.platform));
-  const io = new FileIOServiceImpl(opts.platform, kernelLog);
+  // 二进制写路径的 `file.changed` 失效广播经第 4 参注入（2026-10-18 缓存失效批，additive；
+  // 未传 bus 的旧调用方零改动）——撤销注入 / 恢复备份落盘后下游二进制缓存显式失效，不赌 mtime 粒度
+  const io = new FileIOServiceImpl(opts.platform, kernelLog, undefined, bus);
   const compute = createComputePool({ log: kernelLog });
   const fileWatch = new FileWatcherServiceImpl({ platform: opts.platform, bus, log: kernelLog });
 

@@ -13,7 +13,7 @@ import type {
 import { WellKnownServices } from '@kojo/plugin-api';
 import { createSavParserPlugin } from '../src/index';
 import { SnapshotSourceEngine } from '../src/engine';
-import { makeArchiveFile, simpleCharBlock, type ArchiveSpec } from './helpers/synth';
+import { makeArchiveFile, makeRawNoArchive, simpleCharBlock, type ArchiveSpec } from './helpers/synth';
 
 /* ---------------- 测试替身 ---------------- */
 
@@ -203,6 +203,34 @@ describe('sav-parser 插件装配', () => {
     await new Promise((r) => setTimeout(r, 30));
     const engine = h.services.get(WellKnownServices.SnapshotSource) as SnapshotSourceService;
     expect(engine.current()).toBeNull();
+  });
+
+  it('file.changed ⇒ 深解析记忆显式逐出（撤销注入/恢复备份的失效接线，bug 1）', async () => {
+    // 判据同值的原位重写：fakeIO.stat 的 mtime 恒为常量，两份 `makeRawNoArchive` 字节数逐字相等
+    // ⇒ mtime+size 判据**必然命中旧格**。没有这条接线，撤销/恢复之后回放面继续吐注入值。
+    const files: Record<string, Uint8Array> = { '/g/sav/save00.sav': makeRawNoArchive(0) };
+    const { services, emit } = activatePlugin(fakeIO(files), null);
+    const engine = services.get(WellKnownServices.SnapshotSource) as SnapshotSourceService;
+    emit('project.opened', { project: fakeProject('/g', '/g/sav') });
+    await until(() => engine.current() !== null);
+
+    const readNo = async (): Promise<unknown> => {
+      const a = await engine.parse('/g/sav/save00.sav');
+      const v = a.chars?.[0]?.vars.find((x) => x.key === 'NO');
+      return v && v.type === 'int' ? v.value : undefined;
+    };
+
+    expect(await readNo()).toBe(0); // 入记忆
+    files['/g/sav/save00.sav'] = makeRawNoArchive(7); // 内核写路径落盘（同 size、同 mtime）
+    emit('file.changed', { kind: 'change', path: '/g/sav/save00.sav' }); // = io.writeBytes / restoreBackup 的广播
+    expect(await readNo()).toBe(7); // 事件驱动逐出 ⇒ 读到的是新值
+
+    // 反证接线真的在生效（而不是"判据自己发现过期"）：同判据的再一次原位重写，
+    // **不发事件** ⇒ 必然还是旧格命中（这正是 mtime 判据兜不住、必须事件驱动的形状）
+    files['/g/sav/save00.sav'] = makeRawNoArchive(5);
+    expect(await readNo()).toBe(7);
+    emit('file.changed', { kind: 'change', path: '/g/sav\\save00.sav' }); // 另一种分隔符写法（pathKey 折叠）也要逐得掉
+    expect(await readNo()).toBe(5);
   });
 });
 

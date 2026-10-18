@@ -22,7 +22,7 @@ import type {
   SnapshotSourceService,
   SnapshotWriteService,
 } from '@kojo/plugin-api';
-import { basename } from '@kojo/plugin-api';
+import { basename, pathKey } from '@kojo/plugin-api';
 import { assembleArchiveFile, assertPayloadNonEmpty } from './container';
 import { getFidelity } from './fidelity';
 import { parseArchive } from './parse';
@@ -31,25 +31,35 @@ import { ArchiveParseError } from './binary';
 import { verifyOverrides, verifyReadbackBytes } from './verify';
 
 /**
- * 深解析记忆上限（2026-10-18 性能批）。
+ * 深解析记忆上限（2026-10-18 性能批；同批修复批改为**按完整判据分格**）。
  *
- * 一条深解析档案 = 解压后的正文 + 全部变量/cell 对象，真实档实测 MB 级；
- * 消费者只有两只面板（`.kojo 转译检查` 的回放腿、归档浏览器），同一轮里问的都是
- * **同一个路径** ⇒ 上限取 2（切换选档时两侧各留一份），再多就是拿常驻内存换零收益。
+ * 一条深解析档案 = 解压后的正文 + 全部变量/cell 对象，真实档实测 MB 级。
+ * 消费者有三种选项形态（**同一路径、三份并存、互不逐出**——此前按 path 单格存放，
+ * 形态之间互相挤掉，面板一切换记忆就失效，且注释里的"两侧各留一份"名不副实）：
+ * 1. 回放腿默认形态（`ui-state-replay`，不带选项）；
+ * 2. 注入面板深形态（`keepArrayCells + keepRaw`）；
+ * 3. 归档浏览器轻形态（`keepArrayCells:false + maxCellsPerArray:0`）。
+ * 上限取 6 = 三形态 × 两份近期档（切换选档时每形态各留最近一档），再超从队首削。
  * 0 = 关闭记忆（逐次读盘 + 解析，2026-10-18 之前的行为，测试用它做 A/B 对照）。
  */
-const PARSE_MEMO_MAX = 2;
+const PARSE_MEMO_MAX = 6;
 
-/** 失效判据（仓库口径＝mtime + size，与快照 / 索引逐文件判据同源；**不做内容哈希**——
- *  IO 路径上的逐文件内容哈希曾在 1016 批被实测量成 24.4s 的账，见 PITFALLS §73） */
+/** 失效判据中的"盘上版本"部分（mtime + size，与快照 / 索引逐文件判据同源）。
+ * **只是"没检测到过期"的兜底，不是失效的唯一来源**：本仓的编辑器自写路径
+ * （撤销注入 / 恢复备份 / 注入）会重写同一判据下的字节（注入原地改值 ⇒ 字节数不变，
+ * 粗粒度介质上 mtime 也同值）⇒ 写侧经 `file.changed` 事件驱动 `invalidate()` 逐出，
+ * mtime/size 判据只作外部改盘的第二道防线。**不做内容哈希**——IO 路径上的逐文件
+ * 内容哈希曾在 1016 批被实测量成 24.4s 的账（见 PITFALLS §73）。 */
 interface ArchiveStamp {
   readonly mtimeMs: number;
   readonly size: number;
 }
 
 interface MemoEntry {
-  /** 完整判据（路径 + mtime + size + 解析选项指纹）；与本次不符即作废 */
-  readonly key: string;
+  /** 路径折叠键（`pathKey` 形态；事件带着另一种写法来也要逐得掉） */
+  readonly pathId: string;
+  /** 版本判据（pathId + mtime + size）；同路径不同版本的残格在写入新格时清掉 */
+  readonly stampKey: string;
   readonly archive: SnapshotArchive;
 }
 
@@ -125,12 +135,18 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
   /** 代际号：项目切换时作废过期扫描的结果 */
   private generation = 0;
   /**
-   * 深解析记忆（path → 判据 + 产物）。Map 插入序即 FIFO 序：重击=删除后重新入队尾，
+   * 深解析记忆（完整判据串 → 产物）。Map 插入序即 FIFO 序：重击=删除后重新入队尾，
    * 超尺从队首削（与 `kernel/src/io.ts` 的文本缓存同一形状）。
+   * 键 = `pathId\0mtime\0size\0选项指纹` ⇒ 同一路径的三种选项形态各占一格、互不逐出。
    */
   private readonly memo = new Map<string, MemoEntry>();
   /** 同判据的并发深解析共享一次（两条面板同时问同一个档 ⇒ 只解压一遍） */
   private readonly memoFlight = new Map<string, Promise<SnapshotArchive>>();
+  /**
+   * 每路径的失效纪元（`invalidate` 递增）：在途解析完成时比对——纪元变了说明
+   * 读取发生在"已知作废"之前 ⇒ 结果**不落记忆**（撤销注入 / 恢复备份与慢解析赛跑的窗口）。
+   */
+  private readonly pathEpoch = new Map<string, number>();
   private readonly memoMax: number;
   /** 记忆读数（命中 / 未命中 / 关闭原因）；面板与测试用来自证"记忆在不在工作" */
   private memoHits = 0;
@@ -145,9 +161,31 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
     return { entries: this.memo.size, hits: this.memoHits, misses: this.memoMisses, max: this.memoMax };
   }
 
-  /** 逐出全部深解析记忆（下次 `parse` 必重新读盘解析） */
-  clearParseMemo(): void {
-    this.memo.clear();
+  /**
+   * 显式失效某路径的全部深解析记忆（**不等 mtime/size 判据生效**）。
+   *
+   * 谁该调它：**知道盘被改了的一方**。生产装配里由 `index.ts` 订阅内核广播的
+   * `file.changed` 转接（撤销注入 / 恢复备份 / 注入等写路径由内核 io 发事件，
+   * 文件监视器对"盘外之手"兜底投同一条事件）——判据可以同值（注入原地改值 ⇒ 字节数不变；
+   * FAT32/SMB/OneDrive 的 mtime 粒度 1–2s ⇒ 撤销可落在同一 tick），事件不会说谎。
+   *
+   * 做三件事：逐出该路径全部形态的记忆格；摘掉该路径的在途解析（新请求不再共享
+   * "改动前读到的字节"）；递增纪元——已在途的解析完成时**不回填**记忆。
+   */
+  invalidate(path: string): void {
+    const pathId = pathKey(path);
+    this.pathEpoch.set(pathId, this.epochOf(pathId) + 1);
+    for (const [key, entry] of this.memo) {
+      if (entry.pathId === pathId) this.memo.delete(key);
+    }
+    const prefix = `${pathId}\u0000`;
+    for (const key of this.memoFlight.keys()) {
+      if (key.startsWith(prefix)) this.memoFlight.delete(key);
+    }
+  }
+
+  private epochOf(pathId: string): number {
+    return this.pathEpoch.get(pathId) ?? 0;
   }
 
   current(): SnapshotScanResult | null {
@@ -166,12 +204,14 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
     for (const cb of this.listeners) cb(this.last);
   }
 
-  /** 项目关闭 / 重置：清空并通知订阅者（旧在途扫描由代际号作废） */
+  /** 项目关闭 / 重置：清空并通知订阅者（旧在途扫描由代际号作废；在途深解析由同一代际号**禁止回填**） */
   clear(): void {
     this.generation++;
     this.inFlight = null;
     this.last = null;
     this.memo.clear();
+    this.memoFlight.clear();
+    this.pathEpoch.clear();
     this.notify();
   }
 
@@ -257,10 +297,11 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
    * 无记忆时等于**每次击键把整档重新读盘 + 解压 + 逐 cell 解析一遍**（真实档 MB 级、
    * 主线程同步段），而档根本没动。
    *
-   * **判据＝mtime + size**（仓库既有口径，与抽取快照 / ERB 索引逐文件判据同源）：
-   * 用户在盘上改了存档 ⇒ 下一次解析必然重做（`parse-memo.test.ts` 钉这条）。
-   * 残余风险如实写明：同 mtime 且同 size 的**同值替换**（保留时间戳的拷贝）兜不住——
-   * 这是本仓所有 mtime 判据共同的边界，不为它引入内容哈希（见上方注释）。
+   * **判据＝mtime + size（第二道防线）+ 事件驱动的显式失效（第一道防线）**：
+   * 用户在盘上改了存档 ⇒ 下一次解析必然重做（`parse-memo.test.ts` 钉这条）；
+   * **编辑器自己写的盘**（撤销注入 / 恢复备份 / 注入）经 `file.changed` → `invalidate()`
+   * 逐出——注入原地改值字节数不变、粗粒度介质上 mtime 还可同值，判据单独靠不住，
+   * 这正是 tsserver 单文件失效 / 文件监视 `onFileChanged` 的口径：**知情的写入方告诉缓存**。
    *
    * **不静默**（内核规则 4）：读盘 / 解析失败一律原样上抛，与加记忆之前同一条路径；
    * 拿不到 stat（旧宿主 / 取不到元信息 / 目录）时**退回每次重解析**，绝不拿"没信号"当"没变"。
@@ -270,12 +311,14 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
     const stamp = await this.stampOf(path);
     if (stamp === null) return this.parseFresh(path, opts); // 无判据 ⇒ 不记忆（行为与改前逐字相同）
 
-    const key = `${path}\u0000${stamp.mtimeMs}\u0000${stamp.size}\u0000${optionsFingerprint(opts)}`;
-    const hit = this.memo.get(path);
-    if (hit && hit.key === key) {
+    const pathId = pathKey(path);
+    const stampKey = `${pathId}\u0000${stamp.mtimeMs}\u0000${stamp.size}`;
+    const key = `${stampKey}\u0000${optionsFingerprint(opts)}`;
+    const hit = this.memo.get(key);
+    if (hit) {
       this.memoHits++;
-      this.memo.delete(path); // 重新入队尾（FIFO：热的那条留在后面）
-      this.memo.set(path, hit);
+      this.memo.delete(key); // 重新入队尾（FIFO：热的那条留在后面）
+      this.memo.set(key, hit);
       return hit.archive;
     }
     this.memoMisses++;
@@ -283,9 +326,16 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
     const flight = this.memoFlight.get(key);
     if (flight) return flight;
 
+    // 回填闸门：解析期间发生过 `invalidate()`（纪元变）或项目关闭/重置（代际变）
+    // ⇒ 这份字节读于改动之前，**绝不落进记忆**（否则过期结果在 clear 之后复活，
+    // 带着 keepRaw 视图把整档 MB 级内存留到项目之外）。
+    const epochAtStart = this.epochOf(pathId);
+    const genAtStart = this.generation;
     const task = (async (): Promise<SnapshotArchive> => {
       const archive = await this.parseFresh(path, opts);
-      this.remember(path, key, archive);
+      if (this.epochOf(pathId) === epochAtStart && this.generation === genAtStart) {
+        this.remember(key, pathId, stampKey, archive);
+      }
       return archive;
     })();
     this.memoFlight.set(key, task);
@@ -315,10 +365,17 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
     return { mtimeMs: st.mtimeMs, size: st.size };
   }
 
-  /** 入记忆（FIFO 超尺从队首削；解析失败不会走到这里 ⇒ 坏档永不入记忆） */
-  private remember(path: string, key: string, archive: SnapshotArchive): void {
-    this.memo.delete(path);
-    this.memo.set(path, { key, archive });
+  /**
+   * 入记忆（FIFO 超尺从队首削；解析失败不会走到这里 ⇒ 坏档永不入记忆）。
+   * 先清同一路径**旧盘上版本**的残格（mtime/size 变了 ⇒ 旧版本的所有形态都不再可达，
+   * 留着只是 MB 级死内存）；同版本的其他选项形态原样共存——这是 bug 2 的正解。
+   */
+  private remember(key: string, pathId: string, stampKey: string, archive: SnapshotArchive): void {
+    for (const [k, e] of this.memo) {
+      if (e.pathId === pathId && e.stampKey !== stampKey) this.memo.delete(k);
+    }
+    this.memo.delete(key);
+    this.memo.set(key, { pathId, stampKey, archive });
     while (this.memo.size > this.memoMax) {
       const oldest = this.memo.keys().next().value;
       if (oldest === undefined) break;
@@ -360,9 +417,9 @@ export class SnapshotSourceEngine implements SnapshotSourceService, SnapshotWrit
       const backupPath = await this.deps.backup(path);
       try {
         await this.deps.writeBytes(path, full);
-        // 自己刚改过盘 ⇒ 这条路径的记忆**已知作废**，逐出（不等 mtime/size 判据生效；
-        // 系统 mtime 粒度粗时判据本身可能同值）
-        this.memo.delete(path);
+        // 自己刚改过盘 ⇒ 这条路径的记忆与在途解析**已知作废**，显式逐出并禁止回填
+        // （不等 mtime/size 判据：注入原地改值字节数不变，粗粒度介质上 mtime 还可同值）
+        this.invalidate(path);
       } catch (err) {
         this.deps.log.warn(
           `Snapshot inject: write failed for ${path}${backupPath ? ` (backup at ${backupPath})` : ''}: ${String(err)}`,
