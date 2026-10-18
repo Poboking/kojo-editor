@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-eraakumamaid-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "eraAkumaMaid game adapter: project detection, CHARA CSV parsing, kojo paths, suffix-style family index. All eraAkumaMaid-specific knowledge lives here; the kernel stays game-agnostic.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

@@ -67,7 +67,7 @@ const PLUGIN_ROOTS = ['packages/plugins'];
  * 适配器插件**豁免名单**（D 项）：这些包**就是**游戏知识的家，允许出现游戏字面量。
  * 以目录名为准（`packages/plugins/<dir>`）。新增 adapter 时在此登记。
  */
-const ADAPTER_PLUGIN_DIRS = new Set(['eratw-adapter']);
+const ADAPTER_PLUGIN_DIRS = new Set(['eratw-adapter', 'eraakumamaid-adapter']);
 
 /**
  * D 项的游戏知识字面量黑名单（通用插件禁用）。比 A 项更严——除游戏名/口上前缀外，
