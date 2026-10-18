@@ -26,6 +26,7 @@
      滚动条：--scroll-thumb --scroll-thumb-hover --scroll-thumb-active
      阴影/高光：--shadow-1 --shadow-2 --shadow-3 --edge-raise --shadow-focus
      玻璃：--glass-tint --glass-tint-raise --glass-edge --glass-alpha --glass-saturate --glass-blur
+     局部兜底：--panel-bg --hover-bg --text --text-dim
    ============================================================================ */
 
 :root[data-theme='light'] {
@@ -211,4 +212,42 @@
 :root[data-theme='light'] .notice.error {
   background: rgb(180 35 46 / 0.08);
   border-color: rgb(180 35 46 / 0.38);
+}
+
+/* 语义 wash 对等：下列四处仍是深色档的字面洗色（tan #d19a66 / 旧绿 #4fc08d / 红 #e06c75），
+   压浅面会脏成"米黄 / 雾绿"，与已收口的 notice 两张皮。改从本档 --amber/--green/--red
+   派生（color-mix 同 notice 的 8~12% / 30~45% 档），文字色本就取 var(...)，洗后同族。
+   注意：浅档语义色比深档深，同 alpha 会把 wash 压得更重 ⇒ 取档内下沿，
+   逐处按合成底实算文字对比（详见各条）。 */
+/* 崩溃恢复条：与 .notice 同挂，字走 --fg；10% amber 合成面上 fg 仍 12.9:1 */
+:root[data-theme='light'] .crash-recovery {
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
+}
+/* 只读横幅落在 --bg 上：amber 字压 10% amber 合成面 4.85:1（沿用 notice.warn 同档） */
+:root[data-theme='light'] .ro-banner {
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+}
+/* 状态栏可写/只读胶囊落在 --bg-2：语义色比深档深，amber 字只能用 8% 档
+   （10% 掉到 4.45）——ok 绿谷量大，10% 仍 4.94:1 */
+:root[data-theme='light'] .sb-writable.ok {
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  border-color: color-mix(in srgb, var(--green) 34%, transparent);
+}
+:root[data-theme='light'] .sb-writable.ro {
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  border-color: color-mix(in srgb, var(--amber) 34%, transparent);
+}
+/* 上面 (0,4,0) 稳压 styles.css 的 `.sb-writable.ro:hover` (0,3,0)，会让 hover 反馈失效 ⇒
+   显式补一档：wash 抬到 10%（amber 字 4.45:1，与改动前的 tan 0.2 档 4.42 持平），
+   边框 55% 承担"亮起来"的主要读数 */
+:root[data-theme='light'] .sb-writable.ro:hover {
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+}
+/* 对话失败块：styles.css 两处 .conv-failed——1507 才是带背景/边框的那处（7462 只补
+   box-shadow，不受影响）。字在 .conv-failed-head 走 --red，8% 档合成面上 4.93:1 */
+:root[data-theme='light'] .conv-failed {
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  border-color: color-mix(in srgb, var(--red) 42%, transparent);
 }

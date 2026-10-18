@@ -103,6 +103,15 @@
   --glass-alpha: 0.85;
   --glass-saturate: 1.2;
   --glass-blur: 16px;
+
+  /* —— 插件独占区的本地兜底 token（与 light.css 同构，缺则回落深蓝灰冷岛）——
+     styles.css 里 `.editor-crumb` / `.oh-detail` 一族用 `var(--panel-bg, #232834)` 等
+     带蓝灰兜底的局部变量；本档不给真值就会在墨绿面上露出 #232834 的"冷岛"。
+     取值同 light：走表面/文字 token，不引入新字面量。 */
+  --panel-bg: var(--bg-2);
+  --hover-bg: var(--bg-3);
+  --text: var(--fg);
+  --text-dim: var(--fg-dim);
 }
 
 /* ----------------------------------------------------------------------------
