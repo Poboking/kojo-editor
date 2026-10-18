@@ -57,8 +57,8 @@ jobs:
             era 口上作者的结构感知编辑器。**正式版**。
 
             ## 下载与安装
-            - **Windows 10/11（x64）安装版**：下载 `kojo-editor_<版本>_x64-setup.exe`，双击安装；安装后「设置 → 更新」可一键检查并安装后续版本。
-            - **绿色版**：下载 `kojo-editor_<版本>_x64-portable.zip`，解压即用，不写注册表、不建开始菜单；更新时重新下载新版即可。
+            - **Windows 10/11（x64）安装版**：下载本页的 `*_x64-setup.exe` 安装包，双击安装；安装后「设置 → 更新」可一键检查并安装后续版本。
+            - **绿色版**：下载本页的 `*_x64-portable.zip`，解压即用，不写注册表、不建开始菜单；更新时重新下载新版即可。
             - `SHA256SUMS.txt` 附安装包与绿色版的校验值。
 
             ## 本版更新
@@ -92,6 +92,18 @@ jobs:
           Copy-Item "packages/app/src-tauri/target/release/kojo-editor.exe" "$stage/kojo-editor.exe"
           Copy-Item README.md "$stage/README.md"
           Copy-Item LICENSE "$stage/LICENSE"
+          $portableReadme = @(
+            "kojo-editor v${version} 绿色版",
+            "",
+            "1. 双击 kojo-editor.exe 运行。",
+            "2. 首次启动选择本机 eraTW 游戏目录；不授予写权限也可浏览、校验、回放。",
+            "3. 本版不写注册表、不建开始菜单；升级时下载新版 zip 覆盖即可。",
+            "4. 需要系统 WebView2 运行时（Windows 11 自带；Windows 10 可能需安装 Evergreen 运行时）。",
+            "",
+            "仓库：https://github.com/Poboking/kojo-editor",
+            "许可证：GPL-3.0-or-later"
+          ) -join "`n"
+          [System.IO.File]::WriteAllText("$stage/README-PORTABLE.txt", $portableReadme, (New-Object System.Text.UTF8Encoding($false)))
           $zip = "kojo-editor_${version}_x64-portable.zip"
           Compress-Archive -Path $stage -DestinationPath $zip -Force
           $setup = "packages/app/src-tauri/target/release/bundle/nsis/kojo-editor_${version}_x64-setup.exe"
@@ -99,7 +111,8 @@ jobs:
             $hash = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
             "$hash  $(Split-Path $f -Leaf)"
           }
-          $lines | Set-Content -Encoding ascii SHA256SUMS.txt
+          # LF 行尾，保证 Linux / Git-Bash 的 sha256sum -c 可直接校验（CRLF 会把 \r 当文件名）。
+          [System.IO.File]::WriteAllText("SHA256SUMS.txt", (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
           Get-Content SHA256SUMS.txt
 
       # tauri-action 先建 release 并上传安装包/updater 资产；这里补传绿色版与校验值。
