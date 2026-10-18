@@ -106,7 +106,7 @@ describe('installFrontendErrorLog 接线', () => {
       fakeErrorEvent({ message: '运行时错误', filename: 'b.ts', lineno: 9, colno: 1, error: new Error('e') }),
     );
     expect(sends.map((r) => r.level)).toEqual(['error']);
-    expect(sends[0].message).toBe('运行时错误 (b.ts:9:1)');
+    expect(sends[0]?.message).toBe('运行时错误 (b.ts:9:1)');
   });
 
   it('unhandledrejection 事件 → 发送器收到记录', () => {
@@ -115,7 +115,7 @@ describe('installFrontendErrorLog 接线', () => {
     cleanups.push(installFrontendErrorLog(send));
     w.dispatchEvent(fakeRejectionEvent('未处理的拒绝'));
     expect(sends.map((r) => r.level)).toEqual(['unhandledrejection']);
-    expect(sends[0].message).toBe('未处理的拒绝');
+    expect(sends[0]?.message).toBe('未处理的拒绝');
   });
 
   it('发送器拒绝：自吞不抛，console.warn 留痕（不再触发二次 rejection）', async () => {
@@ -129,7 +129,7 @@ describe('installFrontendErrorLog 接线', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0][0])).toContain('前端错误落盘');
+    expect(String(warn.mock.calls[0]?.[0])).toContain('前端错误落盘');
   });
 
   it('卸载后事件不再上报告', () => {
