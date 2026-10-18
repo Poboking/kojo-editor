@@ -27,6 +27,10 @@ mod market;
 /// 照 `market` 同形态。
 mod shell;
 
+/// 崩溃取证 + 单实例配套的日志落盘（P0-3）：panic hook 直写 + 前端兜底日志 + 轮转。
+/// 独立成文件，照 `market` / `shell` 同形态。
+mod diagnostics;
+
 /* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
 //
 // JS 层 kernel io 的 writablePaths 白名单是第一道闸；本层是第二道闸：
@@ -2500,6 +2504,19 @@ fn cancel_search(state: tauri::State<'_, SearchState>, search_id: u64) -> Result
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例锁（P0-4）必须**第一个**注册（官方口径：抢在其它插件初始化之前判重）。
+        // 第二实例起即发现已有实例 → 经命名管道通知主进程执行本回调（把主窗口带到
+        // 前台）→ 第二进程立即退出，不弹 Web UI 对话框。
+        // 取舍：官方插件第二实例以 exit(0) 退出（exit code 非零未满足字面），换取
+        // 官方维护的跨进程通知细节——行为口径「直接退出 + 聚焦已有窗口」逐条达成。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(WriteDomainState::default())
         .manage(WatchState::default())
@@ -2532,6 +2549,13 @@ pub fn run() {
         })
         .setup(|app| {
             use tauri::Manager;
+            // 崩溃取证最先装（P0-3）：后续 setup 代码 panic 也在抓取面内。
+            // 失败不阻断启动（取证设施自己是最后顺位），内部已出声。
+            if let Ok(app_dir) = app.path().app_data_dir() {
+                diagnostics::setup_diagnostics(&app_dir);
+            } else {
+                eprintln!("[setup] 无 app_data_dir，崩溃取证未装配");
+            }
             // 常驻授权根 + 准入根清单读回（自选项目位置的持久化半边 + 开项目准入门的持久化半边）。
             // 文件不存在 = 首次运行，正常态；读失败已在各自函数里出声。
             let handle = app.handle().clone();
@@ -2598,7 +2622,8 @@ pub fn run() {
             market::market_publish,
             market::market_device_token,
             shell::show_in_folder,
-            shell::open_url_external
+            shell::open_url_external,
+            diagnostics::append_frontend_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -2618,6 +2643,10 @@ mod market_tests;
 /// OS 外壳原语的判据（路径 → 各平台命令 argv 的纯构造）独立成文件。
 #[cfg(test)]
 mod shell_tests;
+
+/// 崩溃取证的判据（panic 落盘 / 截断 / 轮转 / 时间戳锚点）独立成文件。
+#[cfg(test)]
+mod diagnostics_tests;
 
 #[cfg(test)]
 mod write_domain_tests {

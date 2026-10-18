@@ -53,6 +53,9 @@ futures-util = "0.3"
 # 发布上传的容器摘要（后端强制 `x-market-zip-sha256` 头：sha256 of 实际上传的 zip 原始字节）。
 # sha2 0.10 已因 rustls 系依赖躺在 Cargo.lock 里，提为直接依赖不新增编译单元。
 sha2 = "0.10"
+# 单实例锁（P0-4）：官方插件（Windows 走 identifier 命名的互斥体 + 命名管道通知）。
+# 第二实例起即发现已有实例 → 通知主进程（回调里聚焦主窗口）→ 立即退出，不弹 Web UI。
+tauri-plugin-single-instance = "2"
 
 [profile.release]
 lto = true

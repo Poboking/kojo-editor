@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './ui/App';
 import { NotificationCenter } from './ui/NotificationCenter';
 import { ingestInlineBootMarks } from './perf';
+import { installFrontendErrorLog } from './frontend-log';
 import './styles.css';
 // 主题覆盖（2026-10-17 主题系统）：必须在 styles.css 之后引入，`:root[data-theme=…]` 特异性
 // 才能压过基础 `:root`。缺省 dark 无对应文件块（基础 :root 即深色），light/mint 各自翻 token。
@@ -14,6 +15,11 @@ import './themes/mint-dark.css';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('#root not found');
+
+// 前端兜底错误落盘（P0-3）最先装：此后任何模块（含 React 渲染链）的未捕获错误 /
+// 未处理 rejection 都会经 append_frontend_log 写进 appData/kojo-logs/。console 原生
+// 行为不动；浏览器开发壳自动跳过发送（见 frontend-log.ts 头注）。
+installFrontendErrorLog();
 
 // L1-0 引导标记收编（首屏批）：htmlParsed / firstPaint 已由 index.html 内联脚本落在
 // performance 时间轴上，这里趁最早一处应用代码把它们折进 __kojoPerf（另两枚在
