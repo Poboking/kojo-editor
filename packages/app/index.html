@@ -85,14 +85,14 @@
           transform: translateX(320%);
         }
       }
-      /* 减动效：扫不动了，但必须仍是一条**看得见**的光带（2026-10-18 用户反馈 1：
-         原先 opacity 0.35 太暗，用户读成「光条消失了」）。与 update-dialog.css 的
-         不定态进度条同款口径——压平动效 ≠ 藏掉指示物。 */
+      /* 扫光条是「进程指示物」而非装饰动效。2026-10-18 用户反馈 2：系统
+         `prefers-reduced-motion` 常是假阳性（如 Windows「调整为最佳性能」预设），扫光条一旦
+         停下就只剩一条"固定不动"的光带，反被读成卡死 ⇒ **豁免系统通道**：用 !important 重声明
+         时长 / 次数压过全局压平那条；真正的无障碍开关是应用内的「减弱动效」（见 styles.css）。 */
       @media (prefers-reduced-motion: reduce) {
         .boot-bar::after {
-          animation: none;
-          width: 100%;
-          opacity: 1;
+          animation-duration: 1.15s !important;
+          animation-iteration-count: infinite !important;
         }
       }
       /* 引导层跟随主题（底色/文字须与对应 themes/*.css 的 --bg/--fg 现值一致，见上方注释） */

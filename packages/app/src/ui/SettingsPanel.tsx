@@ -729,13 +729,12 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               </span>
               <Icon name="popout" size={12} className="settings-link-icon" />
             </a>
-            {/* 联系邮箱（2026-10-18 用户反馈 3）：贴开发者卡下面，与它同为「32px 圆标 +
-                文字 + 动作」的三件套，圆标换成信封；mailto 不经 WebView，直接交给系统
-                邮件客户端。地址本身当主文案，方便直接读 / 抄。 */}
+            {/* 联系邮箱（2026-10-18 用户反馈 1）：贴开发者卡下面；原先那枚 15px 信封套在
+                32px 圆标里，用户读着"图标太小、外面小圆圈突兀"⇒ 去掉圆标，只留一枚大小适中
+                的 accent 信封，另给 32px 无框槽位与开发者卡的文字左轴对齐。mailto 不经
+                WebView，直接交给系统邮件客户端；地址本身当主文案，方便直接读 / 抄。 */}
             <a className="settings-row settings-link" href={CONTACT_MAILTO}>
-              <span className="settings-avatar settings-avatar-symbol">
-                <Icon name="mail" size={15} />
-              </span>
+              <Icon name="mail" size={18} className="settings-link-mark" />
               <span>
                 {CONTACT_EMAIL}
                 <span className="settings-hint">联系邮箱 · 奇怪 Bug 与建议都可以直接邮件反馈</span>

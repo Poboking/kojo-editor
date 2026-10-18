@@ -439,11 +439,12 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
     }
   });
 
-  it('两份减动效（@media prefers-reduced-motion）回落分支的声明也逐字相等', () => {
+  it('两份系统减动效（@media prefers-reduced-motion）豁免分支的声明也逐字相等', () => {
     const inline = mediaRecipeOf(inlineStyle(htmlSrc()), '.boot-bar::after', 'index.html');
     const packed = mediaRecipeOf(cssSrc(), '.boot-bar::after', 'styles.css');
-    expect(inline, '.boot-bar::after 减动效回落漂移：index.html vs styles.css').toEqual(packed);
-    expect(inline).toEqual(['animation: none;', 'width: 100%;', 'opacity: 1;']);
+    expect(inline, '.boot-bar::after 系统减动效豁免漂移：index.html vs styles.css').toEqual(packed);
+    // 豁免系统通道（扫光条照常扫动）；应用内「减弱动效」那条仍是静态可见回落（见下一组断言）
+    expect(inline).toEqual(['animation-duration: 1.15s !important;', 'animation-iteration-count: infinite !important;']);
   });
 
   it('内联缓动字面量 == styles.css :root 的 --ease-out 现值，且内联层零 var()（红线：不许单源化取色）', () => {

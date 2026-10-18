@@ -4175,15 +4175,14 @@ button.erb-mode-hint.unlocked:hover {
   border: 1px solid var(--border);
   background: var(--bg-3);
 }
-/* 联系邮箱行（2026-10-18 用户反馈 3）：与开发者卡同为「32px 圆标」，
-   但圆标里画的是一枚 accent 色信封——靠形状+色相把"写信"与"看主页"分开。
+/* 联系邮箱行（2026-10-18 用户反馈 1）：原先那枚 15px 信封外面套了个 32px 圆标（边框 +
+   浅底），用户读着"图标太小、外面小圆圈突兀"——去掉圆标，只留一枚大小适中的 accent 信封，
+   另给 32px 无框槽位，保证地址文字与上方开发者卡的文字左轴对齐。
    只进重档（设置浮层只在项目态挂载，与 .settings-avatar 同链）。 */
-.settings-avatar.settings-avatar-symbol {
+.settings-link-mark {
+  flex: 0 0 32px;
   display: grid;
   place-items: center;
-  border-color: var(--border-subtle);
-  background: var(--surface-sunken);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
 }
 /* 极窄窗（92vw 以下）：控件列的地板降到 88px，先让文字列吃回宽度 */
@@ -6115,14 +6114,16 @@ button.primary .hint {
     transform: translateX(320%);
   }
 }
-/* 减动效：扫不动了，但必须仍是一条**看得见**的光带（2026-10-18 用户反馈 1：原先
-   opacity 0.35 太暗，用户读成「光条消失了」）。与 update-dialog.css 的不定态进度条同款
-   口径——压平动效 ≠ 藏掉指示物；这里把整条轨道填满 accent 并给足不透明度。 */
+/* 扫光条是「进程指示物」而非装饰动效——口径承 update-dialog.css 的不定态进度条。2026-10-18
+   用户反馈 2：系统 `prefers-reduced-motion` 在不少机器上是**假阳性**（如 Windows「调整为最佳
+   性能」预设），作者并未真的做过这个选择；扫光条一旦停下就只剩一条"固定不动"的光带，反被读
+   成卡死。故这里**豁免系统通道**：用更高特异性的 !important 重声明时长 / 次数，压过全局压平
+   那条 `*::after`（(0,1,1) > (0,0,1)），让扫动照常跑。真正的无障碍开关交给下面应用内
+   「减弱动效」那条（用户显式选择，仍照旧静态回落）。 */
 @media (prefers-reduced-motion: reduce) {
   .boot-bar::after {
-    animation: none;
-    width: 100%;
-    opacity: 1;
+    animation-duration: 1.15s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 /* 应用内「减弱动效」开关（`:root[data-motion='reduced']`）只压 duration / iteration-count、
