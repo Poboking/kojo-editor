@@ -5,10 +5,28 @@
 > ② 报红格式：现象 + 复现步骤 + 期望 vs 实际 + **屏上原样文案**。跨主机沟通只有这张表——写在别处的反馈等于没写。
 > ③ 人工勾验 / 封存 / 性能线三类行**不设**（用户 2026-10-13 令）；已收行不在此表，历史由 git 保留。
 
+## AA. P1 编辑器肌肉记忆批（lead 2026-10-18 立项；用户点名清单，三 agent 并行）
+
+> 五条缺陷全部落在 `packages/app/**` 宿主层（零内核 / 零插件 / 零 Rust）。热点文件单主：
+> `App.tsx` 按 hunk 区划给三线（commitOpenFile/close 区归 nav；recent/session 区归 quicknav 与 split；restore/write 归 split），
+> `ProjectView.tsx` extraCommands 区归 nav 与 quicknav、groups 渲染区归 split，`EditorPane.tsx` 归 quicknav。
+> 分支 `b/<agent>/1018-*`，落地由 lead 逐条过 master 窄门。
+
+| ID | 任务 | 关键判据 | 认领 |
+|---|---|---|---|
+| MM-6 | 前进/后退导航历史（Alt+←/→） | 所有打开/定位路径（文件树 / Ctrl+P / 问题面板 / 转到定义 / 引用 / 函数树）统一入栈；同 path 同行不重复入栈；到栈底/顶可见拒绝（人话，不静默）；跨项目自动清空；纯逻辑栈单测（含越界/去重/清空） | nav-memory 2026-10-18 |
+| MM-7 | 跳转到行接线（contrib 已 import、宿主无命令） | 命令面板可搜到「转到行」；落点走既有 `editor.action.request` 通道（EditorPane ACTION_IDS additive）；无活动文件/糖视图下可见拒绝；action id 取证 monaco 0.57 esm 源码 | quicknav 2026-10-18 |
+| MM-8 | 最近文件（欢迎页仅 recent projects） | 新持久层与 session 同通道（additive 可选字段 / 新 key，旧记录零改动容忍）；欢迎页新区（文件名 + 路径 + 所属项目 + 失效标记）；点击 = 项目根不同先开项目再开文件；上限 + 去重 + 损坏容忍 | quicknav 2026-10-18 |
+| MM-9 | 编辑器组布局持久化 + 上下分屏 | `editor-groups.ts` 加向下拆分与横竖取向（纯函数 + 单测）；组态随 session 记录落盘/恢复（additive）；欢迎页「继续上次会话」还原组态；分隔条按取向拖拽；CSS 两种取向 | split 2026-10-18 |
+| MM-10 | 恢复关闭 tab（Ctrl+Shift+T） | 全部关闭落地路径（单关 / 批量 / 脏确认后丢弃 / 关组）统一入栈；恢复 pop 栈顶开进焦点组并激活；栈有上限；跨项目清空；空栈可见拒绝 | nav-memory 2026-10-18 |
+
 ## B. 本组任务（本组）
 
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
+| P0-3 | 崩溃取证：Rust panic hook 直写文件（不走 IPC）+ 前端 window.onerror/unhandledrejection 经 append_frontend_log 落盘 + 日志轮转（保留 N 个 + 单文件大小上限，裁剪自证），appData 下 kojo-logs 目录 | 进行中 · 认领：p0b 2026-10-18 |
+| P0-4 | 单实例锁：双开共享同一 appData 的 journal/trash/backup 互相覆盖（kernel journal.ts 自述串行设计零并发防护） | 进行中 · 认领：p0b 2026-10-18 |
+
 | HK-4 | UI 打磨（常任；目标「专业 · 克制 · 流畅 · 高效 · 耐看」，VSCode 为基准） | 自拟六项按序推进：UI-1 字号尺度 ✅§5.121 / UI-2 圆角·边框·阴影 ✅§5.122 / **UI-3 图标 emoji→单色 SVG ✅**（`docs/log/2026-10-13-ui-icons.md`；宿主层渲染面归零；插件自绘面板符号＝跨包图标通道**已交付 ✅** `renderIcon` 桥，3299bd7） → **UI-4 焦点环与键盘可达 ✅**（roving tabindex 漫游 + `:focus-visible` 焦点环） → **UI-5 动效可关 ✅**（设置项 + `<html data-motion>`） → **UI-6 底部问题面板 ✅**（ERB 结构/表达式两层波浪线汇总、点击跳源行；状态栏 ✕/⚠/ℹ 计数经 `kojo.problems` 展开，Ctrl+Shift+M）；每项带可复跑量化判据 | 进行中 · 认领：hk4ui 2026-10-14 |
 | LSRV-1 | **erb-parser 语言服务批：未定义 CALL 目标 warning 波浪线 + `$` 标签转定义** | 判据：①CALL 直系族名字槽里的裸标识符不在 `ErbIndex.byName` ⇒ warning 行级装饰；fail-open 全集（索引缺席零误报 / FORM 动态拼接 / CALLFORM 全族 / 字符串·注释·SKIP 区 / `$` 标签一律不报），判据与 `scanFileRefs` 单源共用不抄第二份正则；②scanner 收集函数内 `$LABEL`（`ErbFile.labels`，strictly additive + 快照 v5→v6），`JUMP`/`GOTO` 系裸标识符 → 本函数同名标签转定义，找不到 = 空数组不猜、不落函数名尺子 | 进行中 · 认领：erb-refs 2026-10-16 |
 | REN-1 | ERB 函数重命名（Monaco RenameProvider，纯宿主侧；`erb.parser` 反向索引 `referencesTo` 为唯一数据源，索引外名字一律拒绝） | 只读文件剔除并在 reject 理由明示「n 个文件只读未纳入」；monaco 0.57 standalone 见 `rejectReason` 丢弃全部编辑 ⇒ **全或无**；未打开文件走内核 io 读改写（standalone bulk edit 对无 live model 的 resource 抛错，WorkspaceEdit 通道只达已开标签） | 进行中 · 认领：erb-rename 2026-10-16 |
