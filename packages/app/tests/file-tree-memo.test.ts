@@ -92,10 +92,10 @@ async function mountTree(container: HTMLElement, activeFile: string | null = nul
     root.render(h(FileTree, { ...treeProps, activeFile }));
   });
   await act(async () => {
-    container.querySelector('.tree-group-btn')?.click();
+    (container.querySelector('.tree-group-btn') as HTMLElement | null)?.click();
   });
   await act(async () => {
-    container.querySelector('.tree-package')?.click();
+    (container.querySelector('.tree-package') as HTMLElement | null)?.click();
   });
   await act(async () => {});
   return root;
@@ -190,10 +190,10 @@ describe('FileTree · 对照组（钉住 memo 语义边界）', () => {
       root.render(h(FileTree, { ...treeProps, gloss: (n: string) => n }));
     });
     await act(async () => {
-      container.querySelector('.tree-group-btn')?.click();
+      (container.querySelector('.tree-group-btn') as HTMLElement | null)?.click();
     });
     await act(async () => {
-      container.querySelector('.tree-package')?.click();
+      (container.querySelector('.tree-package') as HTMLElement | null)?.click();
     });
     await act(async () => {});
     const base = counts.dirRows;
