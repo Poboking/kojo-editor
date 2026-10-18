@@ -17,6 +17,8 @@ import type {
   ErbParserService,
   PluginContext,
   ProjectService,
+  WorkspaceProject,
+  WorkspaceService,
 } from '@kojo/plugin-api';
 import type { CharacterIndex, MatrixMemo } from './matrix-logic';
 import { buildCharacterIndex, createMatrixMemo } from './matrix-logic';
@@ -37,6 +39,15 @@ export interface MatrixStore {
   listeners: Set<() => void>;
   /** 等待索引就绪并重建 */
   refresh(): void;
+  /** 作者工作区项目清单（「我的口上项目」筛选与写源用；服务缺席 = 空清单） */
+  workspaceProjects: readonly WorkspaceProject[];
+  workspaceLoading: boolean;
+  /** 工作区读取失败原因（可见，但不阻塞矩阵本体） */
+  workspaceError: string | null;
+  /** 重拉工作区项目（项目创建 / 打开项目后） */
+  reloadWorkspaces(): void;
+  /** 工作区项目目录（服务缺席 / 未命中 = null；不抛） */
+  projectDir(projectId: string): string | null;
 }
 
 export function createMatrixStore(ctx: PluginContext, deps: {
@@ -44,12 +55,17 @@ export function createMatrixStore(ctx: PluginContext, deps: {
   project: ProjectService;
   conditionExtractor: ConditionExtractorService;
   services: AdapterServices;
+  workspaces?: WorkspaceService;
 }): MatrixStore {
-  const { parser, project, conditionExtractor, services } = deps;
+  const { parser, project, conditionExtractor, services, workspaces } = deps;
 
   // ---- 状态（React 外部源；面板组件读取并订阅） ----
   /** 上一次建索引所用的索引实例（去重判据：同一实例不重复全量遍历） */
   let lastBuiltIndex: ErbIndex | null = null;
+  /** 工作区读取的代次与在途合并（快速连开项目 / 建项目时只认最后一趟） */
+  let workspaceGen = 0;
+  let workspaceInFlight = false;
+  let workspacePending = false;
   const state: MatrixStore = {
     characterIndex: null,
     indexReady: false,
@@ -61,6 +77,18 @@ export function createMatrixStore(ctx: PluginContext, deps: {
     matrixMemo: createMatrixMemo(),
     listeners: new Set<() => void>(),
     refresh,
+    workspaceProjects: [],
+    workspaceLoading: false,
+    workspaceError: null,
+    reloadWorkspaces,
+    projectDir: (projectId: string): string | null => {
+      try {
+        return workspaces?.projectDir(projectId) ?? null;
+      } catch (err) {
+        ctx.log.warn(`Workspace projectDir failed for '${projectId}': ${String(err)}`);
+        return null;
+      }
+    },
   };
 
   const notify = (): void => {
@@ -72,6 +100,49 @@ export function createMatrixStore(ctx: PluginContext, deps: {
       }
     }
   };
+
+  /**
+   * 拉取作者工作区项目（「我的口上项目」筛选只读这一份清单）。
+   * 失败不阻塞矩阵：错误留在 `workspaceError` 由面板显式显示；在途时再请求 =
+   * 记一笔 pending，当前这趟结束后补拉一次（不会丢事件，也不会并发打两趟）。
+   */
+  function reloadWorkspaces(): void {
+    if (!workspaces) return;
+    if (workspaceInFlight) {
+      workspacePending = true;
+      return;
+    }
+    workspaceInFlight = true;
+    const gen = ++workspaceGen;
+    state.workspaceLoading = true;
+    state.workspaceError = null;
+    notify();
+    void workspaces
+      .list()
+      .then((projects) => {
+        if (gen !== workspaceGen) return;
+        state.workspaceProjects = projects;
+        state.workspaceLoading = false;
+        state.workspaceError = null;
+      })
+      .catch((err: unknown) => {
+        if (gen !== workspaceGen) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        state.workspaceProjects = [];
+        state.workspaceLoading = false;
+        state.workspaceError = msg;
+        ctx.log.warn(`Workspace list failed (my-packs filter hidden): ${msg}`);
+      })
+      .finally(() => {
+        if (gen !== workspaceGen) return;
+        workspaceInFlight = false;
+        notify();
+        if (workspacePending) {
+          workspacePending = false;
+          reloadWorkspaces();
+        }
+      });
+  }
 
   const rebuild = (index: ErbIndex | null): void => {
     // 去重：`project.opened` 与 `kojo.functionChanged` 会双双触发 refresh，
@@ -111,8 +182,15 @@ export function createMatrixStore(ctx: PluginContext, deps: {
   }
 
   ctx.onDispose(ctx.bus.on('kojo.functionChanged', () => refresh()));
-  ctx.onDispose(ctx.bus.on('project.opened', () => refresh()));
+  ctx.onDispose(
+    ctx.bus.on('project.opened', () => {
+      refresh();
+      reloadWorkspaces();
+    }),
+  );
   ctx.onDispose(ctx.bus.on('project.closed', () => rebuild(null)));
+  // 新建 / 导入 / 发布工作区项目都会广播它；「我的口上项目」的匹配清单不能停在旧一份
+  ctx.onDispose(ctx.bus.on('workspace.projectCreated', () => reloadWorkspaces()));
   // 条件抽取索引就绪后重绘（填色依赖 functionConditions；立即回调一次，无副作用）
   // 代次 +1：抽取索引可能已更新，矩阵缓存须失效重算
   ctx.onDispose(
@@ -124,6 +202,8 @@ export function createMatrixStore(ctx: PluginContext, deps: {
 
   // 激活时已有现成索引（插件晚于项目打开加载）→ 立即构建
   if (project.current()) refresh();
+  // 工作区与游戏项目独立：即使没有打开项目也先拉一份（面板打开即可标注「我的」）
+  reloadWorkspaces();
 
   return state;
 }

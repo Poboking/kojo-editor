@@ -11,7 +11,13 @@
  * 不解释任何游戏知识（面的语义排序与本插件自带的 `FACE_ORDER` 一份同口径）。
  */
 
-import type { ErbIndex, FamilyIndexRule, FamilyMatch, StateDependency } from '@kojo/plugin-api';
+import type {
+  ErbIndex,
+  FamilyIndexRule,
+  FamilyMatch,
+  FamilyParseKind,
+  StateDependency,
+} from '@kojo/plugin-api';
 import { pathKey } from '@kojo/plugin-api';
 
 /* ------------------------------ 面语义排序 ------------------------------ */
@@ -172,6 +178,50 @@ export interface MatrixCellFunction {
   readonly startLine: number;
   /** 该函数中针对本状态键的直接阈值比较（`op text` 形态） */
   readonly comparisons: string[];
+  /** 家族段（标准口上为 ''；填空生成时据此换成本包的家族名） */
+  readonly family: string;
+  /** 前缀域（M_KOJO / KOJO / DIARY / RUN_INTO / ''） */
+  readonly prefix: string;
+  /** 解析形态（ok / declare / placeholder / kn / beforetrain） */
+  readonly kind: FamilyParseKind;
+  readonly face: string;
+  /** K{no} 之后的时机号/子号（已去前导下划线） */
+  readonly slot: string;
+  readonly isMessageCheck: boolean;
+}
+
+/**
+ * 矩阵列上的一条函数（**不含**状态比较——列是「时机」，函数本身属于哪一列
+ * 与它响应了哪些状态无关）。`functions` = 本作用域（口上包）内的函数，
+ * `universeFunctions` = 全角色的函数（无包作用域时两者同一批实例）。
+ *
+ * 填空生成需要两批：本包有没有函数决定「并入片段 vs 完整骨架」，
+ * 全角色的函数用来在整列缺席时仍知道这个时机长什么样。
+ */
+export interface MatrixColumnFunction {
+  readonly name: string;
+  readonly filePath: string;
+  readonly startLine: number;
+  readonly family: string;
+  readonly prefix: string;
+  readonly kind: FamilyParseKind;
+  readonly face: string;
+  readonly slot: string;
+  readonly isMessageCheck: boolean;
+}
+
+function columnFunctionOf(fn: FaceFunction): MatrixColumnFunction {
+  return {
+    name: fn.name,
+    filePath: fn.filePath,
+    startLine: fn.startLine,
+    family: fn.match.family,
+    prefix: fn.match.prefix,
+    kind: fn.match.kind,
+    face: fn.match.face,
+    slot: fn.match.slot,
+    isMessageCheck: fn.match.isMessageCheck,
+  };
 }
 
 /** 单元格：该角色在该时机是否有函数响应了这个状态 */
@@ -191,12 +241,16 @@ export interface MatrixRow {
   readonly indices: string[];
   /** 语义标签（变量字典提供；缺省 null = 无标签） */
   readonly label: string | null;
-  /** 该状态在全角色函数中被响应的总次数（= 各单元格 count 之和） */
+  /** 该状态在**当前作用域**（口上包）中被响应的总次数（= 各单元格 count 之和） */
   readonly totalCount: number;
-  /** 全行比较集合（去重、首见序） */
+  /** 当前作用域内的比较集合（去重、首见序） */
   readonly comparisons: string[];
+  /** 全角色（不限口上包）的比较集合——空包的缺口行据此给出条件提示 */
+  readonly universeComparisons: string[];
   /** 面 → 单元格（未命中的面直接从记录中缺席） */
   readonly cells: Record<string, MatrixCell>;
+  /** 缺口格数 = 列总数 - 有响应的列数（按当前作用域） */
+  readonly gapCount: number;
 }
 
 /** 矩阵一列（可细到「一个指令」；`instructionNo` = 该面的指令编号，无则 null） */
@@ -209,6 +263,14 @@ export interface MatrixColumn {
   readonly label: string;
   /** 指令编号（细分列才有；整面列 = null） */
   readonly instructionNo: number | null;
+  /** 本作用域（口上包）内该列的函数（填空生成判断「并入 vs 新建」） */
+  readonly functions: readonly MatrixColumnFunction[];
+  /** 全角色该列的函数（本包整列缺席时仍知道这个时机的命名形态） */
+  readonly universeFunctions: readonly MatrixColumnFunction[];
+  /** 当前作用域内该列已填的格数 */
+  readonly fillCount: number;
+  /** 当前作用域内该列的缺口格数 = 行总数 - fillCount */
+  readonly gapCount: number;
 }
 
 /** 列的时机分组（一个大时机类下的若干子列） */
@@ -216,6 +278,14 @@ export interface MatrixColumnGroup {
   readonly face: string;
   readonly label: string;
   readonly columns: MatrixColumn[];
+}
+
+/** 构建作用域（additive）：列/行取自「全角色」，填色取自当前口上包 */
+export interface MatrixUniverse {
+  /** 列集合的真源（缺省 = entry）——按包查看时传全角色，于是整列缺席也可见 */
+  readonly columnsFrom?: CharacterEntry;
+  /** 行集合的真源（缺省 = entry）——按包查看时传全角色，于是「别人写过、我没写」也成行 */
+  readonly rowsFrom?: CharacterEntry;
 }
 
 /** 单个角色的条件矩阵 */
@@ -229,6 +299,10 @@ export interface ConditionMatrix {
   readonly totalFunctions: number;
   /** 含 ≥1 状态依赖的函数数（分母口径） */
   readonly depsFunctions: number;
+  /** 已填格数 / 总格数 / 缺口格数（当前作用域；面板状态条与剧情线快选用） */
+  readonly filledCells: number;
+  readonly totalCells: number;
+  readonly gapCells: number;
 }
 
 /**
@@ -257,11 +331,24 @@ type RowAcc = {
   totalCount: number;
   comparisons: string[];
   seen: Set<string>;
+  universeComparisons: string[];
+  universeSeen: Set<string>;
   cells: Record<string, MutableCell>;
+};
+type ColumnAcc = {
+  key: string;
+  face: string;
+  instructionNo: number | null;
+  label: string;
+  functions: MatrixColumnFunction[];
+  universeFunctions: MatrixColumnFunction[];
 };
 
 /** 组内子列定序：`instructionNo` 升序（无编号排最后），同号按 `key` 定序。 */
-function compareColumn(a: MatrixColumn, b: MatrixColumn): number {
+function compareColumn(
+  a: { readonly instructionNo: number | null; readonly key: string },
+  b: { readonly instructionNo: number | null; readonly key: string },
+): number {
   const an = a.instructionNo;
   const bn = b.instructionNo;
   if (an === null && bn !== null) return 1;
@@ -275,12 +362,14 @@ function compareColumn(a: MatrixColumn, b: MatrixColumn): number {
 /**
  * 从单个角色的聚合构建矩阵。
  *
- * - 列集合来自 `entry.functions` **全量**（凡写过的面/指令都成列），经 `columnOf`
- *   解析成列描述；`columnOf` 缺省 = 每个面一列（与旧口径逐字一致）；
+ * - 列集合来自 `columnEntry.functions`（缺省 = `entry`）**全量**（凡写过的面/指令
+ *   都成列），经 `columnOf` 解析成列描述；`columnOf` 缺省 = 每个面一列；
+ * - 行集合来自 `rowEntry.functions`（缺省 = `entry`）。按口上包查看时，行/列都传
+ *   全角色、只有 `entry` 是单包——于是「别的包写过、这个包没写」也会成为可见缺口；
  * - 面顺序沿用 `FACE_ORDER`/`faceRank`，组内子列按 `instructionNo` 升序；
  * - 行 = 按 `dep.key` 聚合的状态变量；`cells[列键]` 记一次响应（count+1，
  *   并压入该函数的贡献条目）；
- * - 行序：`totalCount` 降序，同数按 `key` 升序（确定性）；
+ * - 行序：当前作用域 `totalCount` 降序，同数按 `key` 升序（确定性）；
  * - 未命中的单元格直接从 `cells` 记录中缺席（面板按 off 渲染）。
  *
  * `depsOf`/`labelOf` 由调用方注入（本纯逻辑不认识抽取服务与变量字典）；对二者抛错
@@ -292,82 +381,135 @@ export function buildMatrix(
   labelOf: (key: string) => string | null,
   faceLabels?: Readonly<Record<string, string>>,
   columnOf?: (fn: FaceFunction) => ColumnDesc,
+  universe?: MatrixUniverse,
 ): ConditionMatrix {
   const resolveColumn =
     columnOf ?? ((fn: FaceFunction): ColumnDesc => ({ key: fn.face, instructionNo: null }));
+  const columnEntry = universe?.columnsFrom ?? entry;
+  const rowEntry = universe?.rowsFrom ?? entry;
 
-  // 列聚合：面 → 列键 → 列（去重；面顺序与 `entry.faces` 同口径）。
+  // ---- 列聚合（列集合的真源 = columnEntry）----
   // 同时缓存每个函数的列键——第二轮聚合单元格时直接取用，`columnOf` 只解析一次。
-  const byFace = new Map<string, Map<string, MatrixColumn>>();
-  const colKeyOf = new Map<FaceFunction, string>();
-  for (const fn of entry.functions) {
-    const desc = resolveColumn(fn);
-    colKeyOf.set(fn, desc.key);
+  const byFace = new Map<string, Map<string, ColumnAcc>>();
+  const colDescOf = new Map<FaceFunction, ColumnDesc>();
+  const accOf = (fn: FaceFunction): ColumnAcc => {
+    let desc = colDescOf.get(fn);
+    if (!desc) {
+      desc = resolveColumn(fn);
+      colDescOf.set(fn, desc);
+    }
     let cols = byFace.get(fn.face);
     if (!cols) {
-      cols = new Map<string, MatrixColumn>();
+      cols = new Map<string, ColumnAcc>();
       byFace.set(fn.face, cols);
     }
-    if (!cols.has(desc.key)) {
-      cols.set(desc.key, {
+    let col = cols.get(desc.key);
+    if (!col) {
+      col = {
         key: desc.key,
         face: fn.face,
         instructionNo: desc.instructionNo,
         label: desc.label ?? faceLabel(fn.face, faceLabels),
-      });
+        functions: [],
+        universeFunctions: [],
+      };
+      cols.set(desc.key, col);
     }
+    return col;
+  };
+
+  for (const fn of columnEntry.functions) {
+    accOf(fn).universeFunctions.push(columnFunctionOf(fn));
   }
 
-  const groups: MatrixColumnGroup[] = [...byFace.entries()]
+  const groupsAcc = [...byFace.entries()]
     .map(([face, cols]) => ({
       face,
       label: faceLabel(face, faceLabels),
       columns: [...cols.values()].sort(compareColumn),
     }))
     .sort((a, b) => faceRank(a.face) - faceRank(b.face) || a.face.localeCompare(b.face));
-  const columns: MatrixColumn[] = groups.flatMap((g) => g.columns);
+  const columnKeyOfFace = groupsAcc;
+  const columnCount = columnKeyOfFace.reduce((n, g) => n + g.columns.length, 0);
 
+  // ---- 行聚合（行集合的真源 = rowEntry；填色只来自 entry）----
   const acc = new Map<string, RowAcc>();
-  let depsFunctions = 0;
-
-  for (const fn of entry.functions) {
+  const depsCache = new Map<string, StateDependency[]>();
+  const depsFor = (fn: FaceFunction): StateDependency[] => {
+    const hit = depsCache.get(fn.normalizedName);
+    if (hit) return hit;
     let deps: StateDependency[] = [];
     try {
       deps = depsOf(fn.normalizedName) ?? [];
     } catch {
       deps = [];
     }
+    depsCache.set(fn.normalizedName, deps);
+    return deps;
+  };
+
+  const ensureRow = (dep: StateDependency): RowAcc => {
+    let row = acc.get(dep.key);
+    if (row) return row;
+    let label: string | null = null;
+    try {
+      label = labelOf(dep.key);
+    } catch {
+      label = null;
+    }
+    row = {
+      key: dep.key,
+      name: dep.name,
+      indices: dep.indices,
+      label,
+      totalCount: 0,
+      comparisons: [],
+      seen: new Set<string>(),
+      universeComparisons: [],
+      universeSeen: new Set<string>(),
+      cells: {},
+    };
+    acc.set(dep.key, row);
+    return row;
+  };
+
+  // 先按全角色播种行（含「这个包没写过」的状态键）——只在 rowEntry 与 entry 不同时做，
+  // 否则下面的填色循环本来就会建出同一批行。
+  if (rowEntry !== entry) {
+    for (const fn of rowEntry.functions) {
+      for (const dep of depsFor(fn)) {
+        if (!dep) continue;
+        const row = ensureRow(dep);
+        for (const s of (dep.comparisons ?? []).map((c) => `${c.op} ${c.text}`)) {
+          if (!row.universeSeen.has(s)) {
+            row.universeSeen.add(s);
+            row.universeComparisons.push(s);
+          }
+        }
+      }
+    }
+  }
+
+  const columnFills = new Map<string, number>();
+  let depsFunctions = 0;
+
+  for (const fn of entry.functions) {
+    const deps = depsFor(fn);
     if (deps.length > 0) depsFunctions++;
 
-    const columnKey = colKeyOf.get(fn) ?? resolveColumn(fn).key;
+    const col = accOf(fn);
+    col.functions.push(columnFunctionOf(fn));
+
     for (const dep of deps) {
       if (!dep) continue;
-      let row = acc.get(dep.key);
-      if (!row) {
-        let label: string | null = null;
-        try {
-          label = labelOf(dep.key);
-        } catch {
-          label = null;
-        }
-        row = {
-          key: dep.key,
-          name: dep.name,
-          indices: dep.indices,
-          label,
-          totalCount: 0,
-          comparisons: [],
-          seen: new Set<string>(),
-          cells: {},
-        };
-        acc.set(dep.key, row);
-      }
-
+      const row = ensureRow(dep);
       const comps = (dep.comparisons ?? []).map((c) => `${c.op} ${c.text}`);
-      let cell = row.cells[columnKey];
+
+      let cell = row.cells[col.key];
       if (!cell) {
         cell = { present: true, count: 0, functions: [] };
-        row.cells[columnKey] = cell;
+        row.cells[col.key] = cell;
+        columnFills.set(col.key, (columnFills.get(col.key) ?? 0) + 1);
       }
       cell.count += 1;
       cell.functions.push({
@@ -375,6 +517,12 @@ export function buildMatrix(
         filePath: fn.filePath,
         startLine: fn.startLine,
         comparisons: comps,
+        family: fn.match.family,
+        prefix: fn.match.prefix,
+        kind: fn.match.kind,
+        face: fn.match.face,
+        slot: fn.match.slot,
+        isMessageCheck: fn.match.isMessageCheck,
       });
       row.totalCount += 1;
 
@@ -382,6 +530,10 @@ export function buildMatrix(
         if (!row.seen.has(s)) {
           row.seen.add(s);
           row.comparisons.push(s);
+        }
+        if (!row.universeSeen.has(s)) {
+          row.universeSeen.add(s);
+          row.universeComparisons.push(s);
         }
       }
     }
@@ -394,7 +546,9 @@ export function buildMatrix(
     label: r.label,
     totalCount: r.totalCount,
     comparisons: r.comparisons,
+    universeComparisons: r.universeComparisons,
     cells: r.cells,
+    gapCount: columnCount - Object.keys(r.cells).length,
   }));
 
   rows.sort((a, b) => {
@@ -404,6 +558,29 @@ export function buildMatrix(
     return 0;
   });
 
+  // ---- 收口：列统计（行总数已定）+ 只读形态 ----
+  // 无作用域时包函数与全角色函数是同一批：共享同一个数组实例，省一份引用。
+  const shared = columnEntry === entry;
+  const groups: MatrixColumnGroup[] = groupsAcc.map((g) => ({
+    face: g.face,
+    label: g.label,
+    columns: g.columns.map((c) => {
+      const fillCount = columnFills.get(c.key) ?? 0;
+      return {
+        key: c.key,
+        face: c.face,
+        instructionNo: c.instructionNo,
+        label: c.label,
+        functions: shared ? c.universeFunctions : c.functions,
+        universeFunctions: c.universeFunctions,
+        fillCount,
+        gapCount: rows.length - fillCount,
+      };
+    }),
+  }));
+  const columns: MatrixColumn[] = groups.flatMap((g) => g.columns);
+  const filledCells = columns.reduce((n, c) => n + c.fillCount, 0);
+
   return {
     charaNo: entry.no,
     columns,
@@ -411,6 +588,9 @@ export function buildMatrix(
     rows,
     totalFunctions: entry.functions.length,
     depsFunctions,
+    filledCells,
+    totalCells: rows.length * columns.length,
+    gapCells: Math.max(0, rows.length * columns.length - filledCells),
   };
 }
 

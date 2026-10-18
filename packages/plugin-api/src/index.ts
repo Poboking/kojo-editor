@@ -239,6 +239,7 @@ export type {
   KojoLibraryTable,
   ScaffoldOptions,
   ScaffoldResult,
+  StateLinePreset,
   StateModel,
   VariableInfo,
   VariableSchema,

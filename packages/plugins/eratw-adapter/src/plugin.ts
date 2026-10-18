@@ -501,6 +501,34 @@ export function createEratwAdapterPlugin(): Plugin {
         kojoCounterTable: createEratwCounterTable(ERATW_COUNTER_ENTRIES),
         // 日文名 → 中文名对照词典（只加显示备注，不改任何实际目录/文件名）
         nameGlossary: ERATW_NAME_GLOSSARY,
+        // 条件矩阵剧情线预设（2026-10-18 填格批）：状态键的口径取自 CHARA 相关名表。
+        // 同一条线给「具名 / 编号」两形态——真实口上两种写法都常见，面板只做精确匹配。
+        stateLinePresets: [
+          {
+            id: 'affection',
+            label: '好感线',
+            description: '以好感度（CFLAG:2）为轴的状态线。',
+            keys: ['CFLAG:好感度', 'CFLAG:2'],
+          },
+          {
+            id: 'love',
+            label: '爱慕线',
+            description: '以恋慕（TALENT:3）为轴的状态线；爱慕是本地化里对恋慕的常用称呼。',
+            keys: ['TALENT:恋慕', 'TALENT:3'],
+          },
+          {
+            id: 'lover',
+            label: '恋人线',
+            description: '以恋人（TALENT:7）为轴的状态线。',
+            keys: ['TALENT:恋人', 'TALENT:7'],
+          },
+          {
+            id: 'desire',
+            label: '爱欲线',
+            description: '以爱欲（TALENT:184）为轴的状态线。',
+            keys: ['TALENT:愛欲', 'TALENT:爱欲', 'TALENT:184'],
+          },
+        ],
 
         async detect(rootDir: string): Promise<boolean> {
           // 特征组合：口上・消息域目录 + Chara CSV 目录（同时存在才成局）
