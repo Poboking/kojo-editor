@@ -14,4 +14,11 @@ import { createEditorModelPool, languageFor } from './editor-model-pool';
 export const editorModelPool = createEditorModelPool({
   readText: (kernel, path) => kernel.io.readText(path),
   createModel: (path, text) => monaco.editor.createModel(text, languageFor(path), monaco.Uri.file(path)),
+  // PS-12 冷档三注入（缺一即冷档禁用）：
+  // 码元记账走 getValueLength（不拼整篇字符串）；干净判据与 EditorPane 脏判定同口径
+  // （getAlternativeVersionId，BUG-4）；补写盘经 kernel.io.writeText（写域强制由内核把关）。
+  // `file.changed` 订阅不在此注入——bus 经 acquire 流入的 kernel 幂等挂（见 bindFileChanges）。
+  modelUnits: (model) => model.getValueLength(),
+  modelVersion: (model) => model.getAlternativeVersionId(),
+  writeText: (kernel, path, text) => kernel.io.writeText(path, text),
 });

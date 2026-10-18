@@ -19,11 +19,25 @@
  *
  * 工厂形态（`createEditorModelPool`）把 monaco / 内核 io 全部注入，纯逻辑
  * 闭环可单测；`editorModelPool` 是 EditorPane 用的真身单例。
+ *
+ * **PS-12：关标签不再立即 dispose，先进有界冷档**（对标 VSCode 的 model 生命周期——
+ * 真正的驻留大户是开着的标签，关掉的这一侧能给的只有"重开零读盘秒回"）。冷档只收
+ * **干净**件（版本号与基线对齐），预算内保住 Monarch tokenization 行缓存；对外
+ * `release()` 返回 0 的语义**一行不变**——调用方照做终局清理，池内部转冷档。
+ * 三道安全闸（缺一即整体退回改前"归零即死"）：
+ *  ① 保守缺省链：`modelUnits` / `modelVersion` / `writeText` 三注入任一缺席 ⇒ 冷档禁用；
+ *  ② 冷档件被**程序性改写**（替换执行器家族命中注册表 model：只改 model 不写盘——
+ *     见 `search-replace-exec.ts` 的 `replaceInModel`）⇒ 池补写盘，还原"关着 ⇒ io
+ *     读改写"的既有语义；写盘失败 ⇒ 钉住不驱逐（内存是唯一真相，复活即脏标）；
+ *  ③ `file.changed` 命中冷档路径 ⇒ 立即弃档（盘面真相变了，重开必读盘 = 改前行为）。
+ *
+ * **PS-12 顺带立起观测面**（铁律 4：不静默）：`stats()` 暴露活动/冷档/基线三本账，
+ * 活动正文合计跨过 `ACTIVE_POOL_WARN_UNITS` 时 warn 一次（状态翻转去抖）。
  */
 
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
-import { extname, isErbDialectPath } from '@kojo/plugin-api';
+import { extname, isErbDialectPath, pathKey } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../monaco/erb-language';
 import { JSON_LANGUAGE_ID } from '../monaco/json-language';
 import { KOJO_LANGUAGE_ID } from '../monaco/kojo-language';
@@ -105,6 +119,70 @@ export function savedBaseWorthKeeping(units: number, poolUsedUnits: number): boo
   return units <= SAVED_BASE_MAX_UNITS && poolUsedUnits + units <= SAVED_BASE_POOL_BUDGET_UNITS;
 }
 
+/* ───────────────── PS-12：model 冷档（关标签的有界驻留）+ 内存观测 ───────────────── */
+
+/**
+ * 冷档最多同时驻留的 model 数。尺子是使用面而非内存面：冷档的全部价值在
+ * "误关立刻重开"与"几个文件来回切"——8 份足够覆盖这两种习惯，再多就是把
+ * 作者**明确关掉**的文件硬留在内存里（VSCode `workbench.editor.limit` 同思路）。
+ */
+export const COLD_CACHE_MAX_MODELS = 8;
+
+/**
+ * 单份冷档 model 的码元上限（`model.getValueLength()` 口径）。与
+ * `SAVED_BASE_MAX_UNITS` 同尺：真实语料最大单文件（52,601 行 ≈ 0.8–1.3 M 码元）
+ * 留得住，"比最大真实文件还大一截"的盘不驻留（超界照旧立即 dispose）。
+ */
+export const COLD_CACHE_MAX_UNITS = 1_500_000;
+
+/**
+ * 全冷档的驻留预算（码元总数）。刻意比 `SAVED_BASE_POOL_BUDGET_UNITS`（6 M）紧：
+ * model 比 savedBase 贵——Monarch tokenization 行缓存 + 行结构 +（干净件的）撤销栈
+ * 都随 model 驻留。超预算从**最旧冷却端**驱逐（正在补写盘 / 写盘失败的钉住件除外）。
+ */
+export const COLD_CACHE_BUDGET_UNITS = 4_000_000;
+
+/**
+ * 活动正文合计的告警阈（码元）。开着的标签是真正的驻留大户且**不属于池能驱逐的面**
+ * （作者正在编辑）——池能做的是把账亮出来：跨阈 warn 一次（回落再上行会再报），
+ * 状态面板 / 探针读 `stats()` 拿同一本账。
+ */
+export const ACTIVE_POOL_WARN_UNITS = 30_000_000;
+
+/** 池的内存读数（观测面；码元口径，`stats()` 单源） */
+export interface ModelPoolStats {
+  /** refs ≥ 1 的记录数（= 开着的标签去重后的文件数，多组共享算一份） */
+  activeModels: number;
+  /** 活动件 acquire 时点正文长度合计（编辑漂移不追——观测口径，精确账看内存水位） */
+  activeUnits: number;
+  /** 冷档件数（refs = 0 但 model 仍在注册表驻留） */
+  coldModels: number;
+  /** 冷档件转档时点码元合计 */
+  coldUnits: number;
+  /** PS-5 基线文本预算的当前占用量 */
+  savedBaseUnits: number;
+}
+
+export interface PoolDeps {
+  /** 读盘（恢复件由调用方先取好，经 `text` 注入，池不认识 recovery-store） */
+  readText: (kernel: Kernel, path: string) => Promise<{ text: string; encoding: string; eol: string }>;
+  /** 建 model（真身 = monaco.editor.createModel(text, languageFor(path), Uri.file(path)) */
+  createModel: (path: string, text: string) => Monaco.editor.ITextModel;
+  /**
+   * model 的码元数（`getValueLength()` 同口径；冷档预算的记账尺）。
+   * PS-12 保守缺省链：`modelUnits` / `modelVersion` / `writeText` 任一缺席 ⇒ 冷档整体
+   * 禁用（`release` 归零即 dispose，改前行为）——冷档的安全闸是全有或全无的组合，不做
+   * 部分降级的中间态。
+   */
+  modelUnits?: (model: Monaco.editor.ITextModel) => number;
+  /** model 当前版本号（脏判定同口径 `getAlternativeVersionId()`）；缺省 ⇒ 冷档禁用 */
+  modelVersion?: (model: Monaco.editor.ITextModel) => number;
+  /** 冷档件被程序性改写后的补写盘通道（真身 = kernel.io.writeText，写域强制由内核把关） */
+  writeText?: (kernel: Kernel, path: string, text: string) => Promise<void>;
+  /** 可见性出口（驱逐 / 钉住 / 超阈告警）；缺省 console.warn（铁律 4：不静默） */
+  warn?: (message: string) => void;
+}
+
 export interface PoolDeps {
   /** 读盘（恢复件由调用方先取好，经 `text` 注入，池不认识 recovery-store） */
   readText: (kernel: Kernel, path: string) => Promise<{ text: string; encoding: string; eol: string }>;
@@ -121,7 +199,7 @@ interface PoolRecord {
    * 续体里挂上，提前拆记录会把那份 model 变成"已 dispose 却仍被返回"的孤儿。
    */
   pending: number;
-  loading?: Promise<{ entry: PooledModelEntry; diskText?: string }>;
+  loading?: Promise<{ entry: PooledModelEntry; diskText?: string; units: number }>;
   /** 已保存基线版本号（BUG-4）；随文件存续，最后一份引用释放时一并清掉 */
   baseline?: number;
   /**
@@ -131,6 +209,18 @@ interface PoolRecord {
    * 缺省 = 没有 base（恢复件首开：盘上真相此刻未知）⇒ 调用方必须退回两方语义。
    */
   savedBase?: string;
+  /** PS-12：活动记账用的正文长度（建档/转冷档时点定值；观测口径，编辑漂移不追） */
+  units: number;
+  /** PS-12：最近一次 acquire 带来的 kernel（冷档补写盘要用；与池同生的 app 级单例） */
+  kernel?: Kernel;
+  /** PS-12：冷档驻留标记（= 该 path 在 coldLru 里；销档时同步出列） */
+  cold?: boolean;
+  /** PS-12：补写盘失败钉住（内存是唯一真相 ⇒ 驱逐豁免，复活即脏标交用户处置） */
+  coldPinned?: boolean;
+  /** PS-12：补写盘在途（驱逐豁免：写盘竞败时 model 已 dispose 就真丢了） */
+  coldWriteInflight?: boolean;
+  /** PS-12：冷档期的程序性改写监听（复活后保留空转——回调里判 refs===0 才接管） */
+  coldListener?: { dispose(): void };
 }
 
 export interface EditorModelPool {
@@ -144,6 +234,8 @@ export interface EditorModelPool {
   savedBase: (path: string) => string | undefined;
   /** 保存成功 / 自动合并落地后推进 base；路径不在池里则 no-op（同 `setBaseline` 口径） */
   setSavedBase: (path: string, text: string) => void;
+  /** PS-12：内存读数（活动 / 冷档 / 基线三本账，观测面单源） */
+  stats: () => ModelPoolStats;
 }
 
 export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
@@ -155,6 +247,21 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
    */
   let baseUnits = 0;
   const baseLru = new Map<string, true>();
+
+  /* ───────── PS-12：冷档账 + 活动记账 + 可见性出口 ───────── */
+
+  const warn = deps.warn ?? ((m: string) => console.warn(`[editor-model-pool] ${m}`));
+  /** 保守缺省链：三注入缺一 ⇒ 冷档禁用（release 归零即 dispose，改前行为） */
+  const coldCapable = deps.modelUnits !== undefined && deps.modelVersion !== undefined && deps.writeText !== undefined;
+  /** 冷档驻留账：插入序 = 冷却序（转档进最新端），预算/数量超界从最旧端驱逐 */
+  let coldUnits = 0;
+  const coldLru = new Map<string, true>();
+  /** 活动正文账（acquire/release 时点记账，编辑漂移不追——观测口径） */
+  let activeUnits = 0;
+  /** 活动告警去抖（跨阈翻转才报，回落静默复位） */
+  let warnAboveActive = false;
+  /** `file.changed` 订阅是否已挂（首个带 bus 的 acquire 幂等挂一次，池与 bus 同生） */
+  let fileChangesBound = false;
 
   const dropBase = (path: string): void => {
     const rec = pool.get(path);
@@ -186,15 +293,143 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
   const recordOf = (path: string): PoolRecord => {
     let rec = pool.get(path);
     if (!rec) {
-      rec = { refs: 0, pending: 0 };
+      rec = { refs: 0, pending: 0, units: 0 };
       pool.set(path, rec);
     }
     return rec!;
   };
 
+  /** 记录的终局销毁（改前的"归零即死" / PS-12 的驱逐与弃档共用一个出口，单次性由 pool.delete 先行保证） */
+  const destroyRecord = (path: string, rec: PoolRecord): void => {
+    if (!pool.delete(path)) return; // 已被销过（防御：listener 续体与弃档竞态下记录身份判）
+    rec.coldListener?.dispose();
+    rec.coldListener = undefined;
+    if (rec.entry) rec.entry.model.dispose();
+    if (rec.cold) {
+      coldLru.delete(path);
+      coldUnits -= rec.units;
+      rec.cold = false;
+    }
+    dropBase(path); // 基线随文件走：记录回收 ⇒ 常驻预算同批归还（漏还就是"越开越多"的假预算）
+  };
+
+  /**
+   * 冷档期的程序性改写接管（PS-12 安全闸②）：替换执行器家族命中注册表 model 时
+   * **只改 model 不写盘**（`replaceInModel` 的既有契约——开着 ⇒ 脏标等用户保存）。
+   * 冷档件没有编辑器挂着、没有 EditorPane 监听，没人报脏也没人落盘 ⇒ 池必须自己
+   * 补写盘，把语义还原成"关着 ⇒ io 读改写"（改前对关闭文件的替换就是直接写盘的）。
+   * 回调里 refs===0 才接管：复活后交还 EditorPane 契约（脏标 + 用户保存），池不越权。
+   */
+  const attachColdListener = (path: string, rec: PoolRecord): void => {
+    if (rec.coldListener || !rec.entry) return; // 复活期保留的空转 listener 复用，不重复挂
+    const model = rec.entry.model;
+    rec.coldListener = model.onDidChangeContent(() => {
+      if (pool.get(path) !== rec || rec.refs !== 0 || !rec.cold) return;
+      const text = model.getValue();
+      const kernel = rec.kernel;
+      if (!kernel || deps.writeText === undefined || deps.modelVersion === undefined) return;
+      rec.coldWriteInflight = true;
+      void deps.writeText(kernel, path, text).then(
+        () => {
+          rec.coldWriteInflight = false;
+          if (pool.get(path) !== rec) return; // 写盘期间被弃档/驱逐：盘上已有真相，记录没了就不动
+          if (rec.refs !== 0) return; // 复活了：baseline 真源交还 EditorPane（用户保存自会推）
+          rec.baseline = deps.modelVersion!(model); // 改写已落盘 ⇒ 新版本就是新的"与磁盘对齐"
+          storeBase(path, text);
+        },
+        (err: unknown) => {
+          rec.coldWriteInflight = false;
+          rec.coldPinned = true; // 驱逐豁免：此刻内存是这份改写的唯一载体
+          const reason = err instanceof Error ? err.message : String(err);
+          warn(`冷档文件「${path}」被程序改写后写盘失败，已钉住等重开处置（重开将显示未保存）：${reason}`);
+        },
+      );
+    });
+  };
+
+  /**
+   * refs 归零的处置（PS-12 核心）：干净件进有界冷档（复活零读盘），否则走终局销毁。
+   * 干净 = 版本号与基线对齐（EditorPane 脏判定同口径）——脏件 / 恢复件（baseline 钉 0、
+   * 版本从 1 起数恒不等）/ 无基线件一律照旧立即 dispose，用户"关掉未保存标签 = 放弃"
+   * 的既有预期零变化。
+   */
+  const maybeColdOrDispose = (path: string, rec: PoolRecord): void => {
+    const model = rec.entry?.model;
+    const clean = model !== undefined
+      && rec.baseline !== undefined
+      && deps.modelVersion !== undefined
+      && deps.modelVersion(model) === rec.baseline;
+    // 四环不全（注入 / 订阅 / kernel）或不够干净 ⇒ 改前行为：归零即死
+    if (!coldCapable || !fileChangesBound || rec.kernel === undefined || !clean) {
+      destroyRecord(path, rec);
+      return;
+    }
+    const units = deps.modelUnits!(model);
+    if (units > COLD_CACHE_MAX_UNITS) {
+      destroyRecord(path, rec); // 单份越界不驻留（照 PS-5 单份上限口径）
+      return;
+    }
+    // 腾位：预算/数量超界从最旧冷却端驱逐（钉住件与写盘在途件豁免——数据未落盘不许丢）
+    let budgetGap = coldUnits + units - COLD_CACHE_BUDGET_UNITS;
+    let countGap = coldLru.size + 1 - COLD_CACHE_MAX_MODELS;
+    if (budgetGap > 0 || countGap > 0) {
+      for (const victimPath of [...coldLru.keys()]) {
+        if (budgetGap <= 0 && countGap <= 0) break;
+        const victim = pool.get(victimPath);
+        if (!victim || victim.coldPinned || victim.coldWriteInflight) continue;
+        destroyRecord(victimPath, victim);
+        budgetGap -= victim.units;
+        countGap -= 1;
+      }
+    }
+    if (budgetGap > 0 || countGap > 0) {
+      // 可驱逐的都赶完了还放不下（钉住件占满）：缓存收益让位数据安全，新件不进
+      destroyRecord(path, rec);
+      return;
+    }
+    rec.units = units; // 转档时点以现值入账（编辑漂移后的准确码元数）
+    coldLru.delete(path);
+    coldLru.set(path, true);
+    coldUnits += units;
+    rec.cold = true;
+    attachColdListener(path, rec);
+  };
+
+  /** 活动正文合计的跨阈可见性（上行报一次，回落静默复位——铁律 4：不静默，也不刷屏） */
+  const checkActiveWarn = (): void => {
+    const above = activeUnits > ACTIVE_POOL_WARN_UNITS;
+    if (above === warnAboveActive) return;
+    warnAboveActive = above;
+    if (above) {
+      warn(`开着的标签正文合计 ${activeUnits.toLocaleString('en-US')} 码元（告警阈 ${ACTIVE_POOL_WARN_UNITS.toLocaleString('en-US')}）——内存随开着的标签单调上涨，考虑关闭暂不编辑的大文件（读数面：editorModelPool.stats()）`);
+    }
+  };
+
+  /**
+   * `file.changed` ⇒ 冷档同路文件立即弃档（PS-12 安全闸③）：盘面真相变了，缓存里的
+   * 那份就是旧的——弃档让重开必读盘，与改前"关着的文件重开读盘"逐字同语义。
+   * 订阅挂在**首个带 bus 的 acquire** 上（幂等一次）：冷档的"盘变可弃"是正确性前提，
+   * 没挂上订阅（纯逻辑测试 / 无 bus 环境）就不开冷档。
+   */
+  const bindFileChanges = (kernel: Kernel): void => {
+    if (fileChangesBound || !kernel.bus) return;
+    fileChangesBound = true;
+    kernel.bus.on('file.changed', (ev) => {
+      if (coldLru.size === 0) return;
+      const want = pathKey(ev.path);
+      for (const coldPath of [...coldLru.keys()]) {
+        if (pathKey(coldPath) !== want) continue;
+        const rec = pool.get(coldPath);
+        if (rec) destroyRecord(coldPath, rec);
+      }
+    });
+  };
+
   return {
     async acquire(kernel, path, opts) {
       const rec = recordOf(path);
+      rec.kernel = kernel; // PS-12：最近一次 acquire 的 kernel（冷档补写盘用；app 级单例随会话存续）
+      bindFileChanges(kernel);
       // 恢复件特例优先于一切：只要调用方带了恢复内容且 model 还没建，就以恢复内容建
       // （model 已在池里 = 已在别处打开，恢复注入不再适用——快照语义本就是"重启后第一次"）。
       // **基线钉 0 落在建 model 的这一刻、落在池记录上**：恢复件的"未保存脏"不许依赖调用方
@@ -211,10 +446,21 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
         rec.entry = entry;
         rec.baseline = 0;
         rec.refs += 1;
+        rec.units = opts.text.length;
+        activeUnits += rec.units;
+        checkActiveWarn();
         return entry;
       }
       if (rec.entry) {
         rec.refs += 1;
+        if (rec.cold) {
+          // PS-12 冷档复活：refs>0 自动出档（冷档定义 = refs===0 的驻留件），重开零读盘
+          coldLru.delete(path);
+          coldUnits -= rec.units;
+          rec.cold = false;
+        }
+        activeUnits += rec.units;
+        checkActiveWarn();
         return rec.entry;
       }
       if (!rec.loading) {
@@ -228,6 +474,7 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
           return {
             entry: { model, encoding: tf.encoding, eol: tf.eol.toUpperCase(), fromRecovery } satisfies PooledModelEntry,
             diskText: fromRecovery ? undefined : tf.text,
+            units: tf.text.length,
           };
         })();
       }
@@ -246,19 +493,24 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
         // 失败不悬挂：清掉本次 loading；引用与等待者都归零则整条回收（下次 acquire 重来）
         if (cur && cur.loading === loading) cur.loading = undefined;
         if (!cur || (cur.refs === 0 && cur.pending === 0)) {
-          if (cur) dropBase(path);
-          pool.delete(path);
+          if (cur) destroyRecord(path, cur);
+          else pool.delete(path);
         }
         throw settled.err;
       }
       // 等待期间 pending 计数钉住记录不被回收 ⇒ cur 必在；共担同一 loading 的
       // 等待者写入的是同一个 entry（幂等）。
       const target = cur ?? recordOf(path);
-      if (!target.entry) target.entry = settled.value.entry;
+      if (!target.entry) {
+        target.entry = settled.value.entry;
+        target.units = settled.value.units;
+      }
       if (target.savedBase === undefined && settled.value.diskText !== undefined) {
         storeBase(path, settled.value.diskText);
       }
       target.refs += 1;
+      activeUnits += target.units;
+      checkActiveWarn();
       return target.entry;
     },
 
@@ -272,9 +524,9 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
         return 1;
       }
       if (rec.refs === 0) {
-        if (rec.entry) rec.entry.model.dispose();
-        dropBase(path); // 基线随文件走：记录回收 ⇒ 常驻预算同批归还（漏还就是"越开越多"的假预算）
-        pool.delete(path); // 基线随文件存续，最后一份引用释放时一并清掉
+        activeUnits -= rec.units; // 活动销账（观测面；冷档/终局面在 maybeColdOrDispose 里各自记账）
+        checkActiveWarn();
+        maybeColdOrDispose(path, rec); // PS-12：干净件转有界冷档，其余走终局销毁（对外语义零变化）
       }
       return rec.refs;
     },
@@ -304,6 +556,18 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
 
     setSavedBase(path, text) {
       storeBase(path, text);
+    },
+
+    stats() {
+      let activeModels = 0;
+      for (const rec of pool.values()) if (rec.refs > 0) activeModels += 1;
+      return {
+        activeModels,
+        activeUnits,
+        coldModels: coldLru.size,
+        coldUnits,
+        savedBaseUnits: baseUnits,
+      };
     },
   };
 }
