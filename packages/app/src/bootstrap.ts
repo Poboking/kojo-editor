@@ -63,6 +63,7 @@ export async function bootstrapKernel(): Promise<Kernel> {
  */
 async function loadProjectPlugins(): Promise<Plugin[]> {
   const [
+    eraakumaAdapter,
     linter,
     extractor,
     savParser,
@@ -81,6 +82,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     market,
     uiMarket,
   ] = await Promise.all([
+    import('@kojo/plugin-eraakumamaid-adapter'),
     import('@kojo/plugin-convention-linter'),
     import('@kojo/plugin-condition-extractor'),
     import('@kojo/plugin-sav-parser'),
@@ -100,6 +102,10 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-ui-market'),
   ]);
   return [
+    // eraAkumaMaid 领域知识（第二个 adapter；detect 与 eraTW 无交集 ⇒ 注册顺序不影响判定）。
+    // 排首位：`ensureProjectPlugins` 在 `kernel.project.open()` 之前装载全部项目级插件，
+    // 内核 detect / loadProject 时 adapter 必须已在场。
+    eraakumaAdapter.createErakumamaidAdapterPlugin(),
     // 约定校验引擎（游戏无关）+ 结果为面板呈现
     linter.createConventionLinterPlugin(),
     // 条件谓词抽取（游戏无关；变量语义来自当前 adapter 的 variableSchema）

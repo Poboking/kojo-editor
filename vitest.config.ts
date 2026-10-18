@@ -14,6 +14,7 @@ export const config = defineConfig({
       '@kojo/kernel': r('./packages/kernel/src/index.ts'),
       '@kojo/plugin-erb-parser': r('./packages/plugins/erb-parser/src/index.ts'),
       '@kojo/plugin-eratw-adapter': r('./packages/plugins/eratw-adapter/src/index.ts'),
+      '@kojo/plugin-eraakumamaid-adapter': r('./packages/plugins/eraakumamaid-adapter/src/index.ts'),
       '@kojo/plugin-convention-linter': r('./packages/plugins/convention-linter/src/index.ts'),
       '@kojo/plugin-condition-extractor': r('./packages/plugins/condition-extractor/src/index.ts'),
       '@kojo/plugin-sav-parser': r('./packages/plugins/sav-parser/src/index.ts'),

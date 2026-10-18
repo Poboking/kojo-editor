@@ -47,6 +47,9 @@ importers:
       '@kojo/plugin-convention-linter':
         specifier: workspace:*
         version: link:../plugins/convention-linter
+      '@kojo/plugin-eraakumamaid-adapter':
+        specifier: workspace:*
+        version: link:../plugins/eraakumamaid-adapter
       '@kojo/plugin-eratw-adapter':
         specifier: workspace:*
         version: link:../plugins/eratw-adapter
@@ -164,6 +167,12 @@ importers:
         version: link:../../plugin-api
 
   packages/plugins/convention-linter:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
+  packages/plugins/eraakumamaid-adapter:
     dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*
