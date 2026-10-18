@@ -1,4 +1,5 @@
 import { errorText, pathKey } from '@kojo/plugin-api';
+import type { OpJournal } from '@kojo/plugin-api';
 import type * as MonacoRuntime from '../monaco/entry';
 import {
   applyLineEdits,
@@ -35,6 +36,17 @@ import type { MatchTarget, ReplaceOutcome, ReplaceRequest, SearchOptionsState } 
  *   「n 个文件只读未纳入」（文案真源 `readOnlyFilesNotice`，与 rename 的
  *   `readOnlyFilesReason` 同一段前缀，读数可对拍），不静默丢。
  *
+ * ## 闭文件批进 OpJournal（2026-10-18 undo 覆盖批）
+ *
+ * 闭文件批量替换此前不进任何账 ⇒ 误操作后**不可逆**（活文件可 Monaco 一步 undo，
+ * 闭文件直写盘）。现在 `deps.journal` 在场时整批进一次 op（kind=`search-replace`）：
+ * 第二趟每个闭文件 **record（字节快照）→ 活面复查 → 写**，commit 后可在
+ * OpsHistoryOverlay 里整批撤销。纪律与既有三类 op（scaffold / sugar-save /
+ * snapshot-inject）一致：**记不了账的文件不写**（record 抛错 ⇒ 该文件按 error
+ * 落账跳过，绝不落一个"写得出却撤不回"的文件）；journal 整个 begin 失败 ⇒
+ * 全部闭文件让路（宁可少改并说出来，铁律 4），活文件腿不受影响。
+ * journal 缺席 = 旧行为零改动（additive 可选注入）。
+ *
  * ## 与 F2 的判据互通（W8）
  *
  * F2 改的是**全项目引用集**，「全部替换」改的是**检索结果集**——过去两边互不知情，
@@ -65,6 +77,16 @@ function rewriteClosedText(
 
 function outcome(patch: Partial<ReplaceOutcome>): ReplaceOutcome {
   return { applied: 0, filesChanged: 0, stale: 0, readOnlyFiles: 0, errors: [], ...patch };
+}
+
+/** op 标签里的检索/替换词截断（人读标签，不做全文搬运） */
+function brief(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** 活面复查的拒写文案（批与单条共用一句话，口径单源） */
+function openedMidwayNotice(path: string): string {
+  return `${path}：替换执行期间被打开成编辑器标签，已跳过（未覆盖编辑器中的内容）；请关闭后重试或改在编辑器内替换`;
 }
 
 /**
@@ -156,6 +178,12 @@ export interface FileReplaceDeps {
    * 缺省 = `CLOSED_REPLACE_CONCURRENCY`）。只影响**怎么排队**，不影响任何产出。
    */
   closedConcurrency?: number;
+  /**
+   * 批操作 journal（2026-10-18 undo 覆盖批，additive 可选）：在场时闭文件批量替换
+   * 整批进一次 op（kind=`search-replace`），可在操作历史里整批撤销。缺席 = 旧行为
+   * 零改动（与 sav-parser / ui-sugar-editor 的可选注入同形态）。
+   */
+  journal?: Pick<OpJournal, 'begin' | 'record' | 'commit' | 'abort'>;
 }
 
 /** model 查找只用到 uri 的这两个读数——抽出来才能在没有 Monaco 运行时的 node 里测 */
@@ -294,21 +322,47 @@ export function createFileReplaceRunner(
       closedFiles.push({ path: f.path, slot: ledger.length });
       ledger.push({ applied: 0, changed: false, readOnly: false }); // 占位：第二趟按位填回
     }
-    // 第二趟：闭文件读改写并发化（失败不 reject，按位落账——窗口语义见 CLOSED_REPLACE_CONCURRENCY）
+    // ---- 闭文件批量进账（2026-10-18 undo 覆盖批）：begin 失败 ⇒ 整腿让路（fail-safe，
+    // 宁可少改并说出来——铁律 4；活文件腿不受影响，它有 Monaco 自己的 undo）----
+    const errors: string[] = [];
+    let opId: string | null = null;
+    if (deps.journal !== undefined && closedFiles.length > 0) {
+      try {
+        opId = await deps.journal.begin(
+          'search-replace',
+          `全部替换：${brief(request.query, 30)} → ${brief(request.replaceText, 30)}（${closedFiles.length} 个未打开文件）`,
+        );
+      } catch (e: unknown) {
+        closedFiles.length = 0; // 一条闭文件都不写：写得出却撤不回的批量改动不做
+        errors.push(`批操作账本不可用，未打开文件的替换已整体取消（已打开文件不受影响）：${errorText(e)}`);
+      }
+    }
+    // 第二趟：闭文件读改写并发化（失败不 reject，按位落账——窗口语义见 CLOSED_REPLACE_CONCURRENCY）。
+    // 每个文件三步：**record（字节快照）→ 活面复查 → 写**——记不了账的文件不写；
+    // 复查发现第一趟之后被打开成活文件 ⇒ 跳过并如实报告（io 写盘会绕过 live buffer
+    // 盖掉编辑器里的脏内容，那是数据损坏，宁可少改一处）。
     const closedDone = await mapWindow(
       closedFiles,
       Math.max(1, Math.floor(deps.closedConcurrency ?? CLOSED_REPLACE_CONCURRENCY)),
-      (cf) =>
-        replaceInClosedFile(cf.path, m, request.replaceText).then(
-          (r): FileOutcome => ({ applied: r.applied, changed: r.applied > 0, readOnly: false }),
-          (e: unknown): FileOutcome => ({
-            // 写允许域 / io 故障：逐文件可见，不中断其余文件（铁律 4：不静默）
-            applied: 0,
-            changed: false,
-            readOnly: false,
-            error: `${cf.path}：${errorText(e)}`,
-          }),
-        ),
+      async (cf): Promise<FileOutcome> => {
+        if (opId !== null) {
+          try {
+            await deps.journal!.record(opId, cf.path);
+          } catch (e: unknown) {
+            return { applied: 0, changed: false, readOnly: false, error: `${cf.path}：记账失败，已跳过（${errorText(e)}）` };
+          }
+        }
+        if (modelFor(cf.path) !== undefined) {
+          return { applied: 0, changed: false, readOnly: false, error: openedMidwayNotice(cf.path) };
+        }
+        try {
+          const r = await replaceInClosedFile(cf.path, m, request.replaceText);
+          return { applied: r.applied, changed: r.applied > 0, readOnly: false };
+        } catch (e: unknown) {
+          // 写允许域 / io 故障：逐文件可见，不中断其余文件（铁律 4：不静默）
+          return { applied: 0, changed: false, readOnly: false, error: `${cf.path}：${errorText(e)}` };
+        }
+      },
     );
     for (let i = 0; i < closedFiles.length; i++) {
       ledger[closedFiles[i]!.slot] = closedDone[i]!;
@@ -316,13 +370,21 @@ export function createFileReplaceRunner(
     let applied = 0;
     let filesChanged = 0;
     let readOnlyFiles = 0;
-    const errors: string[] = [];
     for (const o of ledger) {
       if (o.error !== undefined) errors.push(o.error);
       else if (o.readOnly) readOnlyFiles++;
       else if (o.applied > 0) {
         applied += o.applied;
         filesChanged++;
+      }
+    }
+    // op 收尾：已写的文件全部有账 ⇒ commit 进历史（OpsHistoryOverlay 可整批撤销）。
+    // commit 失败不回滚（文件已改、快照在），如实报错——open 态残留由 list() 维护提示点名。
+    if (opId !== null) {
+      try {
+        await deps.journal!.commit(opId);
+      } catch (e: unknown) {
+        errors.push(`替换已完成，但批操作收尾失败（快照已保留待人工处置）：${errorText(e)}`);
       }
     }
     if (readOnlyFiles > 0) errors.push(readOnlyFilesNotice(readOnlyFiles, '替换'));
@@ -391,6 +453,11 @@ export function createFileReplaceRunner(
         }
         const v = planSingleReplacement(lines[target.line - 1]!, target.column - 1, matcher, template, expected);
         if (v.kind === 'skip') return outcome({ stale: 1, errors: [v.reason] });
+        // 活面复查（防竞态，与批量腿同一句文案）：读盘之后、写回之前这个窗口里文件被
+        // 打开成活文件 ⇒ io 写盘会盖掉编辑器里的未保存内容——跳过并如实报告，不静默覆盖
+        if (modelFor(target.path) !== undefined) {
+          return outcome({ errors: [openedMidwayNotice(target.path)] });
+        }
         const line = lines[target.line - 1]!;
         lines[target.line - 1] = line.slice(0, v.start) + v.text + line.slice(v.end);
         await deps.io.writeText(target.path, lines.join('\n'));

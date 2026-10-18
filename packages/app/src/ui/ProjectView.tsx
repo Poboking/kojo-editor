@@ -1,7 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { ErbIndex, GameProject, UIPanelContribution } from '@kojo/plugin-api';
-import { NAV_SCOPE_EVENT, WellKnownCommands } from '@kojo/plugin-api';
+import type { ErbIndex, GameProject, OpJournal, UIPanelContribution } from '@kojo/plugin-api';
+import { KernelServices, NAV_SCOPE_EVENT, WellKnownCommands } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { ProblemPanel } from './ProblemPanel';
@@ -756,12 +756,16 @@ export function ProjectView({
    * `nameLedger` = F2 改名用的**同一份**出现点台账判据（`.erb` 索引 + `.kojo` 糖源都走
    * 这两条腿）：不接则「全部替换」只看得到已开标签里的糖源，检索范围外的同名记号
    * 没人说出来（W8 XLANG-RENAME 的跨通道回执）。
+   * `journal` = 闭文件批量替换进操作账（2026-10-18 undo 覆盖批，additive 可选）：
+   * 与 sav-parser / ui-sugar-editor 的 `tryInject` 同款降级——kernel.ops 缺席时替换
+   * 照旧（旧行为），只是不进操作历史。
    */
   useEffect(() => {
     setReplaceRunner(
       createFileReplaceRunner({
         io: kernel.io,
         nameLedger: createProjectNameLedger(kernel),
+        journal: kernel.services.tryGet<OpJournal>(KernelServices.Ops) ?? undefined,
         // PS-12-C：活面判定只认池。Monaco 注册表对已关标签仍留有残余 model（有界冷档
         // 之后池会 evict，注册表不跟）——拿注册表当活面，替换腿会往"没人看的副本"上写，
         // 盘上真身原封不动（PS-12 冷档批实机踩过）。池只答 refs>0 的活面，
