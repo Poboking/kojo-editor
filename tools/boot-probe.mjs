@@ -100,6 +100,21 @@ export function collectBoot() {
       tl.push([nm, Math.round(rs[j].startTime * 10) / 10]);
     }
   }
+  // CSS 字节读数（PS-18 分档）：release 形态 CSS 是真 <link>（时间线里有 .css 条目）；
+  // dev 形态 Vite 用 JS 注 <style>（没有 .css 条目，读数恒 0——口径如此，不是丢数）。
+  // transferSize 含响应头、缓存命中为 0 ⇒ 退 encodedBodySize；可点前 = startTime < welcome。
+  var cssRE = /\.css(\?|$)/i;
+  var cssBeforeBytes = 0;
+  var cssTotalBytes = 0;
+  var cssEntries = [];
+  for (var k = 0; k < rs.length; k++) {
+    var ce = rs[k];
+    if (!cssRE.test(ce.name)) continue;
+    var cb = ce.transferSize || ce.encodedBodySize || 0;
+    cssTotalBytes += cb;
+    if (welcome !== null && ce.startTime < welcome) cssBeforeBytes += cb;
+    if (cssEntries.length < 40) cssEntries.push([ce.name, Math.round(ce.startTime * 10) / 10, cb]);
+  }
   return JSON.stringify({
     marks: marks,
     boot: boot,
@@ -117,6 +132,9 @@ export function collectBoot() {
     monacoBefore: monoBefore.slice(0, 5),
     monacoTotalCount: monoAll.length,
     monacoTotalSample: monoAll.slice(0, 5),
+    cssBeforeBytes: cssBeforeBytes,
+    cssTotalBytes: cssTotalBytes,
+    cssEntries: cssEntries,
     timeline: tl,
   });
 }
@@ -562,6 +580,9 @@ export async function captureBootNetwork(opts) {
     log = () => {},
   } = opts;
   const requests = [];
+  // CSS 字节的 Network 域对照口径：requestWillBeSent 只有 URL 没有大小，
+  // loadingFinished（响应到账）才带 encodedDataLength。按 requestId 回填，取不到按 0 计。
+  const sizes = new Map();
   let navLoaderId = null;
   let anchorTs = null;
   let anchor = '';
@@ -578,6 +599,7 @@ export async function captureBootNetwork(opts) {
         wallTime: p.wallTime,
         type: p.type,
         loaderId: typeof p.loaderId === 'string' ? p.loaderId : '',
+        requestId: typeof p.requestId === 'string' ? p.requestId : '',
       };
       requests.push(ev);
       // reload 之后**第一个** Document 请求 = 本轮导航的入口：定 loaderId、定 t0
@@ -585,6 +607,11 @@ export async function captureBootNetwork(opts) {
         navLoaderId = ev.loaderId;
         anchorTs = ev.ts;
         anchor = '本轮 Document 请求时刻';
+      }
+    });
+    cdp.on('Network.loadingFinished', (p) => {
+      if (p && typeof p.requestId === 'string' && Number.isFinite(p.encodedDataLength)) {
+        sizes.set(p.requestId, p.encodedDataLength);
       }
     });
     cdp.on('Page.frameNavigated', (p) => {
@@ -633,10 +660,16 @@ export async function captureBootNetwork(opts) {
     const anchored = anchorTs !== null && mine.length > 0;
     // 把本轮 Network 事件折算到页内时间轴（与 boot.welcomeInteractive 同一条轴）再切刀
     const fit = assignRelTimes(mine, page.timeline, anchorTs, page.timeOrigin);
-    const rels = fit.items.map((it, i) => ({ ...it, ts: mine[i].ts, type: mine[i].type }));
+    const rels = fit.items.map((it, i) => ({ ...it, ts: mine[i].ts, type: mine[i].type, requestId: mine[i].requestId }));
     const before = rels.filter((r) => Number.isFinite(r.rel) && r.rel >= -2000 && r.rel < page.welcome);
     const monoBefore = before.filter((r) => MONACO_HINT_RE.test(r.url));
     const monoAll = rels.filter((r) => MONACO_HINT_RE.test(r.url));
+    // CSS 字节（Network 域对照口径）：与页内时间线的 cssBeforeBytes/cssTotalBytes 对看，
+    // 两条口径各 <40B 的出入就是同一条请求两种计法，差大了说明有一边丢数。
+    const isCss = (r) => /\.css(\?|$)/i.test(r.url);
+    const bytesOf = (r) => sizes.get(r.requestId) ?? 0;
+    const cssAll = rels.filter(isCss);
+    const cssBefore = before.filter(isCss);
     return {
       ok: true,
       anchored,
@@ -661,6 +694,11 @@ export async function captureBootNetwork(opts) {
       monacoBefore: monoBefore.slice(0, 6).map((r) => `${Math.round(r.rel)}ms ${r.url} [${r.via}]`),
       monacoTotalCount: monoAll.length,
       monacoTotalSample: monoAll.slice(0, 6).map((r) => `${Math.round(r.rel)}ms ${r.url} [${r.via}]`),
+      cssBeforeBytes: cssBefore.reduce((s, r) => s + bytesOf(r), 0),
+      cssTotalBytes: cssAll.reduce((s, r) => s + bytesOf(r), 0),
+      cssCount: cssAll.length,
+      cssBeforeCount: cssBefore.length,
+      cssSample: cssAll.slice(0, 8).map((r) => `${Math.round(r.rel)}ms ${bytesOf(r)}B ${r.url} [${r.via}]`),
       page,
     };
   } catch (e) {
@@ -680,6 +718,11 @@ export function bootMarkLines(b) {
   const fp = b?.boot?.['boot.firstPaint'];
   const hp = b?.boot?.['boot.htmlParsed'];
   if (fp && hp) out.push(`  → 白屏段 firstPaint − htmlParsed = ${(fp.last - hp.last).toFixed(1)}ms`);
+  // PS-18 分档读数：可点前 CSS 字节（release 形态口径；dev 形态 Vite 注 <style>，恒 0/n/a 不报警）
+  const kb = (n) => (typeof n === 'number' ? `${(n / 1024).toFixed(1)}KB` : 'n/a');
+  if (typeof b?.cssTotalBytes === 'number') {
+    out.push(`  → CSS 字节：可点前 ${kb(b.cssBeforeBytes)} / 整轮 ${kb(b.cssTotalBytes)}（${b.cssEntries.length} 条 .css）`);
+  }
   return out;
 }
 

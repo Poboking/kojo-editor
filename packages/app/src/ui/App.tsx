@@ -92,9 +92,19 @@ import type { EditorPaneActions } from './EditorPane';
  * 入口块 ~4.5 MB）拖进欢迎页关键路径——这里改按需 chunk。加载器独立成函数：
  * `React.lazy` 与 idle 预取**共用同一个 import promise**（浏览器模块缓存去重，
  * 预取完再进项目零等待）。
+ *
+ * PS-18（2026-10-18）：styles.css 拆「欢迎页轻档（main.tsx 静态链）/ 项目重档
+ * styles-project.css（本函数动态链）」两档后，这里成为重档的**唯一加载点**，且顺序是
+ * 硬约束：`styles-project.css`（全量样式表）必须先于 `market.css`（它对 `.mk-*` 有
+ * 同特异性后来者胜的叠加）先于 `ProjectView` 模块求值——串行 await 保证 css 注入完成
+ * 早于项目视图首帧，杜绝裸奔一帧。等价性判据（轻档 ⊆ 重档保序子序列 ⇒ 终态级联 ≡
+ * 拆分前单文件）由 `packages/app/tests/styles-split.equivalence.test.ts` 钉死。
  */
 const loadProjectView = (): Promise<{ default: typeof import('./ProjectView')['ProjectView'] }> =>
-  import('./ProjectView').then((m) => ({ default: m.ProjectView }));
+  import('../styles-project.css')
+    .then(() => import('../market.css'))
+    .then(() => import('./ProjectView'))
+    .then((m) => ({ default: m.ProjectView }));
 const ProjectView = lazy(loadProjectView);
 
 /**

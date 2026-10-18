@@ -106,7 +106,7 @@
 
 | ID | 任务 | 关键判据 / 已实测事实 | 独占文件集 · 认领 |
 |---|---|---|---|
-
+| PS-19 | **快照 JSON.parse 主线程成本量化（先量后定）**：主快照 ~1.43MB / 条件抽取 ~9MB 的 `kernel/storage.ts` get 内 parse + `erb-parser/plugin.ts` 热载读，全在主线程；BOARD §W ⑤⑥⑦ 提过 worker 化有结构化克隆税风险（⑥ 385ms/趟实证）。a) 三档（1.43/9/45MB）合成负载量化：主线程 parse / 去程+回程克隆税 / 净收益，钉 `ps19-snapshot-parse.perf.test.ts`（离线合成，不依赖语料）；b) 净收益热路径 ≥100ms 才搬（`compute.offload` 通道、kernel.storage 不认识 worker、失败语义零变），否则报红留数（合法交付） | `kernel/src/storage.ts` + `plugins/erb-parser/src/plugin.ts` + tests | 认领：ps18 2026-10-18 |
 
 ## U. 1017 中文化收官后的工程收尾（lead 2026-10-17 立项；用户点名清单）
 

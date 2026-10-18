@@ -200,6 +200,11 @@ if (result.boot && !SKIP_NETWORK && coldWsUrl) {
     console.log(
       `[boot-marks] 断言②=${a2.ok}（口径=${a2.used}）—— ${a2.reason}；对照：时间线 ${cap.page.resourceCount} 条 vs Network 本轮 ${cap.total} 条`,
     );
+    const kb = (n) => (typeof n === 'number' ? `${(n / 1024).toFixed(1)}KB` : 'n/a');
+    console.log(
+      `[boot-marks] CSS 字节（Network 域 loadingFinished 对照）：可点前 ${kb(cap.cssBeforeBytes)} / 整轮 ${kb(cap.cssTotalBytes)}` +
+        `（${cap.cssCount} 条 .css，可点前 ${cap.cssBeforeCount} 条）${cap.cssSample ? '：' + cap.cssSample.join(' | ') : ''}`,
+    );
     console.log('[boot-marks] 二轮开机（Page.reload 那一轮）四标记：');
     for (const line of bootMarkLines(cap.page)) console.log('  ·' + line.slice(1));
   }
