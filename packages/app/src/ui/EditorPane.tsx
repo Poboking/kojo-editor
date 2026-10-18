@@ -169,6 +169,7 @@ function applyEditabilityAndSuggest(ed: Monaco.editor.IStandaloneCodeEditor, rea
   });
 }
 
+/**
  * `.kojo` 预览装配判据的项目侧摘要（PS-5 缓存键的一部分）。
  *
  * 段由 `ui.editor.liftPreview` 按 `{path, text, project}` 现算 ⇒ 决定产物的只有
