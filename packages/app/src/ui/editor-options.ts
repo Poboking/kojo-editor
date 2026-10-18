@@ -28,6 +28,19 @@
  *
  * **纯函数**（`editorOptionsForLineCount`）便于单测；宿主在**每次切文件**时调用并
  * `editor.updateOptions(...)`，切回小文件即恢复（补丁是全量重发、不卡死）。
+ *
+ * ## 这一张表是体量轴的**唯一真源**（1020 止血批立的两条规矩）
+ *
+ * ① **档位键不许在表外面另判一遍**。`folding` 这一档关掉过一次事故：接线层
+ *    （`ui/editor-global-providers.ts` 的折叠供给器）自己按 `LARGE_FILE_LINES` 让路，
+ *    而这一侧的表写着「折叠留到 huge 才关」——两份判据对不上，5k–50k 档就成了
+ *    "折痕还在、一处也折不动"（静默削功能，铁律 4）。表上折叠开不开只由
+ *    {@link foldingEnabledForLineCount} 回答，供给器问的就是这一条。
+ * ② **大档关掉的每一条，小档必须显式写回**。`updateOptions` 只覆写发过去的键，
+ *    小档漏写一条 = 从大文件切回来那条永远卡在关值（`formatOnType` 就是这么漂掉过
+ *    一次：打字规范化从此对这个编辑器实例永久关闭）。这一条由
+ *    {@link sizeTierKeysMissingFromSmall} 从**表里**枚举，不靠谁手抄清单——
+ *    将来往大档加一条关值而忘了在小档写回值，它直接返回那个键名（测试即红）。
  */
 import type * as Monaco from '../monaco/entry';
 import { CJK_AMBIGUOUS_WHITELIST, CJK_WORD_SEPARATORS } from '../monaco/word-separators';
@@ -143,6 +156,11 @@ const TIER_SMALL: EditorOptionPatch = {
   links: true,
   colorDecorators: true,
   folding: true,
+  // 打字规范化（T13 / ZH-D4）：大档关的是"每击键整篇跑一遍"那一刀，小档必须开回来。
+  // 这一条漂掉过的代价最隐蔽——Monaco 只在 `formatOnType` 为真时才派发 on-type provider，
+  // 而这一位**没有别的地方会再写**（创建时开一次、大档关一次），于是"开过任何一个 ≥5,000 行
+  // 文件之后，这个编辑器实例到关掉为止都不再就地整理 `;` / 全角空格，回车缩进也失去兜底"。
+  formatOnType: true,
 };
 
 /**
@@ -274,4 +292,73 @@ export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch 
     ...COMMON_OPTIONS,
     ...TIER_OPTIONS[editorProfileTierForLineCount(lineCount)],
   };
+}
+
+/**
+ * 折叠这条能力在**当前档位**上开不开（读表，不另写阈值）。
+ *
+ * 存在的唯一理由：折叠区间由 `ui.editor.languageService` 的供给器给，而编辑器一旦注册了
+ * 供给器，Monaco 就**不再退回缩进折叠**（取证 `contrib/folding/browser/folding.js:67`
+ * `this._useFoldingProviders = options.get(EditorOption.foldingStrategy) !== 'indentation'`
+ * 与 `getRangeProvider()` 里"有供给器 ⇒ rangeProvider = SyntaxRangeProvider"那一段）。
+ * 于是"选项上 folding 还开着、供给器却不干活"= 折痕画在槽上、一处也折不动，且没有任何话。
+ * 判据因此**必须只能有这一份**：选项与供给器各自读同一张表，谁都别自己抄数字。
+ */
+export function foldingEnabledForLineCount(lineCount: number): boolean {
+  if (!Number.isFinite(lineCount)) return false;
+  return TIER_OPTIONS[editorProfileTierForLineCount(lineCount)].folding !== false;
+}
+
+/** 档位表里所有档（不含 small）写过的键，升序去重 */
+function tierKeysAboveSmall(): string[] {
+  const keys = new Set<string>();
+  for (const tier of ['large', 'huge'] as const) {
+    for (const key of Object.keys(TIER_OPTIONS[tier])) keys.add(key);
+  }
+  return [...keys].sort();
+}
+
+/**
+ * 体量轴上被**任何一档**写过的那批键（测试与审计从这里枚举，不抄清单）。
+ * 含 small 独有的键 ⇒ "每条体量轴都要有值"这类断言拿它当全集。
+ */
+export function sizeTierKeys(): string[] {
+  const keys = new Set<string>(Object.keys(TIER_SMALL));
+  for (const key of tierKeysAboveSmall()) keys.add(key);
+  return [...keys].sort();
+}
+
+/**
+ * **必须恒为空表**的一条判据：任一档关掉、但 small 档没写回的键。
+ *
+ * 非空即"从大文件切回来那条卡在关值"（档位漂移）。写成函数而不是把清单抄进测试，
+ * 是为了让"往大档加一条关值、忘了在小档写回"这种改动**自己**把测试弄红——
+ * `formatOnType` 那一条正是被手抄的五项清单放过来的（PS-5 的测试枚举了五条、表上有六条）。
+ */
+export function sizeTierKeysMissingFromSmall(): string[] {
+  return tierKeysAboveSmall().filter((key) => !(key in TIER_SMALL));
+}
+
+/** {@link applySizeTier} 需要的最小编辑器面（结构化：宿主传真编辑器，单测传假对象） */
+export interface SizeTierTarget {
+  updateOptions(options: EditorOptionPatch): void;
+}
+
+/**
+ * 体量档位落到编辑器上的**唯一出口**：屏幕上此刻挂的是哪份文档，就按**那份文档的行数**落档，
+ * 再叠调用方那层与体量无关的补丁（可写态 / 快建议——两轴正交，但一次 `updateOptions` 发完，
+ * 切标签是热路径，发两遍就是让 Monaco 重算两遍配置）。
+ *
+ * 三个写入点全走这里，一个都不许自己 spread 档位表：
+ * ① 切标签（按**原文** model 的行数）；② 挂上 `.kojo` 预览（按**投影**的行数——投影比原文长，
+ * 这一档该更保守）；③ 撤下预览（按**回到屏幕上的那份原文**的行数）。
+ * ③ 是 1020 止血批补上的：预览那档的关值（折行 / 折叠 / 找同词 / 打字规范化）以前不会
+ * 被还原，一份几万行投影能把它们一路带到下一份小文件上。
+ */
+export function applySizeTier(
+  ed: SizeTierTarget,
+  lineCount: number,
+  overrides?: EditorOptionPatch,
+): void {
+  ed.updateOptions({ ...editorOptionsForLineCount(lineCount), ...(overrides ?? {}) });
 }

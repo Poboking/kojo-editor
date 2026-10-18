@@ -65,7 +65,7 @@ import {
   CJK_TYPING_BASELINE,
   FIND_BASELINE,
   LARGE_FILE_LINES,
-  editorOptionsForLineCount,
+  applySizeTier,
   quickSuggestionsFor,
 } from './editor-options';
 import { CODE_FONT_BASELINE } from './code-font'; // 编程字体单一真源（与 styles.css 的 --font-code 逐字同一条栈）
@@ -121,7 +121,11 @@ import {
   applyTextEdits,
   disposeGlobalProviders,
   ensureGlobalProviders,
+  foldingCapNoticeFor,
+  onFoldingCapChanged,
   releaseDirectiveWords,
+  FOLDING_MAX_RANGES,
+  type FoldingCapNotice,
 } from './editor-global-providers';
 // worker 侧有没有这条 kind，判据只有一处：装配层那张两侧共用的任务表
 import { hasWorkerTask } from '../compute-tasks';
@@ -427,6 +431,34 @@ export function EditorPane({
    * 错误检查已暂停」与波浪线**同源同时**（不是宿主另算一遍体量，两处不会漂）。
    */
   const [markerPaused, setMarkerPaused] = useState<Record<string, boolean>>({});
+  /**
+   * 折叠被按数量截了尾巴的那句话（键 = 文件路径；与上面那颗徽章同一族）。
+   *
+   * 为什么要有它：折叠区间超额时**宿主**先按 vendor 那条线（5,000 处）截掉尾巴，
+   * 而 standalone Monaco 的那位 `RangesLimitReporter` 在本 app 没人接（那句
+   * "folding was removed for N ranges" 是 VS Code 工作区侧发的）——不由这里说，
+   * 就又是一次"少给了但没人说"（铁律 4）。文案走作者口径，见工具条那一格。
+   */
+  const [foldingCap, setFoldingCap] = useState<Record<string, FoldingCapNotice>>({});
+  useEffect(() => {
+    const off = onFoldingCapChanged((path, notice) => {
+      setFoldingCap((prev) => {
+        const had = prev[path];
+        if (notice === null) {
+          if (had === undefined) return prev;
+          const next = { ...prev };
+          delete next[path];
+          return next;
+        }
+        if (had && had.shownRanges === notice.shownRanges && had.droppedRanges === notice.droppedRanges) return prev;
+        return { ...prev, [path]: notice };
+      });
+    });
+    // 分屏后挂载的第二枚实例要能看见**已经在途**的那句说法（订阅只给变化，不给现值）
+    const seed = foldingCapNoticeFor(filePathRef.current);
+    if (seed) setFoldingCap((prev) => ({ ...prev, [filePathRef.current]: seed }));
+    return off;
+  }, []);
   /** 待用户决策的保存告警（非 null = 弹确认框；宿主全角空格"一键修复"的入口） */
   const [pendingChoice, setPendingChoice] = useState<EditorSaveWarning | null>(null);
   /** 保存告警的 ref 镜像（A6：自动保存 tick 是定时器闭包，护栏须读最新值） */
@@ -829,6 +861,11 @@ export function EditorPane({
           entriesRef.current.get(filePathRef.current)?.model ?? sugarOriginalModelRef.current;
         if (restore && !restore.isDisposed()) {
           ed.setModel(restore);
+          // 档位跟着"此刻屏幕上那份文档"重落一遍（PS-5 交付说的「小档必须显式写回，否则档位
+          // 漂移」在**这一条腿**上没做：挂糖时按投影行数落过档，撤糖却只回了可写态）。
+          // 一份几万行投影的关值——折行 / 折叠 / 找同词 / 打字规范化——以前会一路骑到
+          // 下一份小文件上，且没有第二次机会纠正（切标签那道档位只在**换文件**时发）。
+          applySizeTier(ed, restore.getLineCount());
           // 按当前文件重算 readOnly（解锁 / 直连 / 工作区口径与切换标签 effect 一致）
           const path = filePathRef.current;
           const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
@@ -944,11 +981,12 @@ export function EditorPane({
     sugarModelRef.current = sugarModel;
     sugarOriginalModelRef.current = model;
     // 糖 model 同样按**行数**落 Monaco 降级选项：主切换（见加载 effect）给真 model 发了
-    // `editorOptionsForLineCount`，这里若只发 `readOnly`，一份几万行的投影会带着全文级特性
+    // 档位补丁，这里若只发 `readOnly`，一份几万行的投影会带着全文级特性
     // （小地图 / 粘性滚动 / 括号对着色 / 整篇找同词）上屏 ⇒ 滚动即卡死。先落选项再挂 model。
-    ed.updateOptions({
+    // 档位 = **此刻屏幕上这份投影**的行数（投影比原文长，该档更保守）；撤下时由
+    // `clearSugarView` 按原文行数再落一次——两拍合起来才是"谁在屏幕上就按谁落档"。
+    applySizeTier(ed, sugarModel.getLineCount(), {
       readOnly: true, // 糖是派生物，禁止在糖视图上编辑
-      ...editorOptionsForLineCount(sugarModel.getLineCount()),
       // 预览是派生只读 model：快建议整条关掉（provider 拿不到 editor 的可写状态）
       quickSuggestions: false,
       quickSuggestionsDelay: loadSuggestDelayPref(),
@@ -1950,9 +1988,9 @@ export function EditorPane({
       const allowEdit = unlockedPathsRef.current.has(filePath) || directEditable(filePath);
       setUnlocked(allowEdit);
       const readOnly = erbReadOnlyGate(filePath, { inWorkspace: inWorkspace(filePath), canEdit: allowEdit });
-      ed.updateOptions({
+      // 档位判据 = 此刻屏幕上这份**原文**的行数；可写态与快建议在 overrides 里盖在档位之后
+      applySizeTier(ed, entry.model.getLineCount(), {
         readOnly,
-        ...editorOptionsForLineCount(entry.model.getLineCount()),
         // 体量档位也会带 quickSuggestions（代码位开）；只读 / 设置页关掉必须在这里整条盖掉
         quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
         quickSuggestionsDelay: loadSuggestDelayPref(),
@@ -2171,6 +2209,20 @@ export function EditorPane({
             }
           >
             <Icon name="warning" size={13} /> 文件太大，错误检查已暂停
+          </span>
+        ) : null}
+        {/* 折叠超额的那句人话（同一族徽章度量，不另造样式）：说的是"少折了"，
+            不是"文件太大所以不给你折"——后者由折叠槽整条不见来表达，两句不许混。 */}
+        {foldingCap[filePath] ? (
+          <span
+            className="erb-mode-hint"
+            title={
+              `这份文件里能折起来的地方太多，界面上只折住最靠前的 ${FOLDING_MAX_RANGES} 处，` +
+              `另外 ${foldingCap[filePath].droppedRanges} 处先原样摊着（内容一字未改，往下滚照样能读、能改）。` +
+              ' 换回较短的文件就全部折得动。'
+            }
+          >
+            <Icon name="warning" size={13} /> 折叠太多，只折前 {FOLDING_MAX_RANGES} 处
           </span>
         ) : null}
         {isErbLike(filePath) && !inWorkspace(filePath) ? (

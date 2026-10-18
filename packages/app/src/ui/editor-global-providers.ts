@@ -59,7 +59,7 @@ import {
 } from '../monaco/kojo-inlay-hints';
 import { revealLocationOf } from '../monaco/reveal-position';
 // 大文档档位线的**单一真源**（本模块只引用、不再抄数字，同 codeLens / 着色 / 面包屑各批）
-import { LARGE_FILE_LINES } from './editor-options';
+import { foldingEnabledForLineCount } from './editor-options';
 import { dialectForLanguage, installDocumentFormatter, type FormatRequest } from '../monaco/kojo-format';
 import { installRangeFormatter, type RangeFormatHandlers } from '../monaco/kojo-format-range';
 // W8 XLANG-RENAME 的宿主侧：闭文件落盘的唯一通道（`ClosedFileIo`）与跨语言腿的取数
@@ -350,9 +350,12 @@ function owningPanePathOf(model: Monaco.editor.ITextModel): string | null {
  * **停笔 / 每次滚动 / 每次光标移动 / 每次波浪线刷新**后重新问一遍 ⇒ "整篇复制"是一等缺陷。
  *
  * 三条机制，各自对标 VSCode 消掉这一类成本的那一个机制：
- * ① **档位让路**（`editor.largeFileOptimizations` 所在的位置）：`foldingRangesFor` 按
- *    `LARGE_FILE_LINES` 这一条既有档位线判在**请求之前**，档外一次都不扫；让路不许静默，
- *    由 `warnSeamDegradedOnce` 逐文件报一次（与 `ui-sugar-lift` 的 `warnLargeOnce` 同纪律）。
+ * ① **档位让路**（`editor.largeFileOptimizations` 所在的位置）：让路判在**请求之前**，档外一次
+ *    都不扫；让路不许静默，由 `warnSeamDegradedOnce` 逐文件报一次（与 `ui-sugar-lift` 的
+ *    `warnLargeOnce` 同纪律）。**折叠这一条的档位在 1020 止血批改过一次**：判据不再是本模块
+ *    自立的 `LARGE_FILE_LINES`，而是档位表上 `folding` 那一条（`foldingEnabledForLineCount`），
+ *    并按 VSCode 的 `FoldingLimitReporter` 补了"超额的那部分要说出来"这一格——见下面
+ *    `foldingAffordable` 与 `capFoldingRanges` 两处注。
  * ② **版本记忆化**（tsserver 单文件增量失效所在的位置：内容没变就绝不重算）：
  *    `memoizedDocument` 按 `(真路径, alternativeVersionId, 项目引用, 贡献方条数)` 认文档，
  *    四项任一项变即重算。每一项都有必然性——少一项就是一次"把上一个项目 / 别份文件的
@@ -361,7 +364,7 @@ function owningPanePathOf(model: Monaco.editor.ITextModel): string | null {
  *    `SIGNATURE_LOOKBACK_LINES` 行那一段，on-type 格式化只取触发行那一行
  *    （`monaco/kojo-format-range.ts` 的 `resolveRange` 那条腿）。
  *
- * 档位线一律**引用** `editor-options.ts` 的 `LARGE_FILE_LINES`，本模块不写第二个数字。
+ * 档位线一律**引用** `editor-options.ts` 那一张表（本模块不写第二个数字，也不再自己判一次）。
  * ==================================================================================== */
 
 /**
@@ -387,25 +390,59 @@ interface DocumentMemoEntry<V> extends DocumentMemoKey {
 }
 
 /**
- * 折叠这一族的档位判据（与 `codeLensAffordable` / `inlayHintsAffordable` /
- * `shouldComputeSemanticTokens` **同一条线、同一个理由**）：一次开口就是整篇文档的字符串
- * 拷贝 + 两遍线性扫描（`erb-parser` 的 `parseErbText` + `scanControlFlow`），而 Monaco 的
- * folding 控制器在每次内容变化后都重新问一遍（vendor `folding.js:72` 的 `min: 200` 自适应
- * 防抖 + `:215` 的 `onDidChangeModelContent → triggerFoldingModelChanged`）。
+ * 折叠这一族的**档位**判据（1020 止血批改过一次，理由要说清）：
  *
- * 与 VSCode 的差别要说清：那边折叠跑在 extension host 进程里、还有 `FoldingLimitReporter`
- * 把"这一处折不了"说给用户；本项目 provider 全在渲染主线程，只能按体量让路——而让路
- * **不许静默**（铁律 4），档外由 `warnSeamDegradedOnce` 逐文件报一次。
+ * PS-4 原本在这里自己按 `LARGE_FILE_LINES`（5,000 行）让路，而**同一批**在档位表上写的是
+ * 「折叠留到 huge 才关……5k–50k 档一次 provider 调用实测远小于其余几条，不值这一刀」
+ * （`ui/editor-options.ts` 的 `TIER_LARGE` / `TIER_HUGE`）。两份判据对不上的后果不是"慢一点"：
+ * 编辑器注册了 foldingRange 供给器，Monaco 就**不再退回缩进折叠**（取证
+ * `contrib/folding/browser/folding.js:67` 的 `_useFoldingProviders = foldingStrategy !== 'indentation'`
+ * + `getRangeProvider()` 里"有供给器 ⇒ SyntaxRangeProvider"那一段），于是 5,000–49,999 行那份文件
+ * 面上留着折痕、**一处也折不动**，唯一的信号是一条 `console.warn`（桌面壳里看不见）——
+ * 铁律 4「inactive 必须可见」直接破。语料里约 6% 的文件正落在这一档。
+ *
+ * 现在**只有一份判据**：档位表上 `folding` 那一格（{@link foldingEnabledForLineCount}）。
+ * 表说关（≥ 50,000 行）这边才让路，并且**关在选项上看得见**——`folding:false` 会让 Monaco
+ * 把整条折叠槽撤掉，作者看到的是"没有折痕"，而不是"有折痕但折不动"。
+ *
  * 判据留在**缝上**（不在 `monaco/kojo-folding.ts`）：那一层只做协议翻译，插件侧
  * `erb-parser/src/plugin.ts` 的 `erb-folding` 又明确写了"不按 lineCount 降级"——
  * 档位是宿主的产品判据，本批只在接线处立闸，不动任何供方口径。
  */
 export function foldingAffordable(lineCount: number): boolean {
-  return Number.isFinite(lineCount) && lineCount < LARGE_FILE_LINES;
+  return foldingEnabledForLineCount(lineCount);
 }
 
-/** 降级告警的去重表（每 (能力, 文件) 一次；超阈值整体清，与 `ui-sugar-lift` 同一手法） */
+/**
+ * 一次交回的折叠区间**数量**上限。对标的是 VSCode 的 `FoldingLimitReporter` 那一格：
+ * 大文件上它不杀供给器，而是**按数量**截并**把截了多少说出来**
+ * （那句 "folding was removed for N ranges because the file is too large"）。
+ *
+ * 数字不是新造的，取 vendor 自己那条线的缺省值（取证 `common/config/editorOptions.js`
+ * 的 `EditorIntOption(56, 'foldingMaximumRegions', 5000, 10, 65000)`；硬顶在
+ * `contrib/folding/browser/foldingRanges.js` 的 `MAX_FOLDING_REGIONS = 0xFFFF`）：
+ * Monaco 本来就会在 5,000 条上把多出来的丢掉，我们只是**在它丢之前自己先丢、并且说一声**——
+ * standalone 那份 `RangesLimitReporter`（`folding.js:418`）在本 app 里没人接它的
+ * `onDidChange`（那句话是 workbench 侧的 notification service 发的），所以数量超额若不由宿主说，
+ * 就又是一次静默。真实语料之最那篇（52,601 行）的函数 + 控制流块远不到 5,000 条 ⇒ 这一档
+ * **不削任何今天存在的文件**，只兜住"块数病态多"的那一类。
+ */
+export const FOLDING_MAX_RANGES = 5_000;
+
+/** 折叠被按数量截了尾巴的那句话（{@link onFoldingCapChanged} 递给宿主；null = 没截） */
+export interface FoldingCapNotice {
+  readonly shownRanges: number;
+  readonly droppedRanges: number;
+}
+
+/**
+ * 每 (能力, 文件) 一次的降级告警去重表（超阈值整体清，与 `ui-sugar-lift` 同一手法）；
+ * 另加一张"此刻哪几份文件的折叠被截了尾巴"的可见态 + 订阅表（宿主工具条那句人话读它）。
+ * 两套都在 `teardownGlobalProviders` 里换新的，绝不留给下一个 kernel。
+ */
 let degradedSeams = new Set<string>();
+let foldingCaps = new Map<string, FoldingCapNotice>();
+const foldingCapListeners = new Set<(path: string, notice: FoldingCapNotice | null) => void>();
 
 function warnSeamDegradedOnce(capability: string, path: string): void {
   const key = `${capability}\u0000${path}`;
@@ -413,8 +450,55 @@ function warnSeamDegradedOnce(capability: string, path: string): void {
   if (degradedSeams.size > 200) degradedSeams = new Set();
   degradedSeams.add(key);
   console.warn(
-    `[editor-providers] ${capability}在这次请求里让了路（${path}）：文件行数超过 ${LARGE_FILE_LINES} 行档，全文级解析省着来`,
+    `[editor-providers] ${capability}在这次请求里让了路（${path}）：这一档的编辑器选项本来就把它关了，全文级解析省着来`,
   );
+}
+
+/**
+ * 订阅"折叠数量封顶"的可见态变化（EditorPane 的工具条徽章读它）。
+ * 只在**状态真的变了**时通知；返回退订函数。
+ */
+export function onFoldingCapChanged(
+  listener: (path: string, notice: FoldingCapNotice | null) => void,
+): () => void {
+  foldingCapListeners.add(listener);
+  return () => {
+    foldingCapListeners.delete(listener);
+  };
+}
+
+/** 当前这份文件的折叠封顶态（没截过 = null）；宿主挂载时用它把已有状态补回来 */
+export function foldingCapNoticeFor(path: string): FoldingCapNotice | null {
+  return foldingCaps.get(path) ?? null;
+}
+
+function setFoldingCap(path: string, notice: FoldingCapNotice | null): void {
+  const prev = foldingCaps.get(path);
+  if (notice === null) {
+    if (prev === undefined) return;
+    foldingCaps.delete(path);
+  } else {
+    if (prev && prev.shownRanges === notice.shownRanges && prev.droppedRanges === notice.droppedRanges) return;
+    foldingCaps.set(path, notice);
+  }
+  for (const listener of [...foldingCapListeners]) listener(path, notice);
+}
+
+/**
+ * **按数量**给折叠封顶（而不是"文件大就一条都不给"）：超额时留下最靠前的那些块
+ * （排序与 `toMonacoFoldingRanges` 同口径：起点升序、同起点终点降序 ⇒ 外层块在前），
+ * 并把"截了多少"经 `setFoldingCap` 说出去。没超额就把上一条说法撤掉。
+ */
+function capFoldingRanges(path: string, ranges: EditorFoldingRange[]): EditorFoldingRange[] {
+  if (ranges.length <= FOLDING_MAX_RANGES) {
+    setFoldingCap(path, null);
+    return ranges;
+  }
+  const kept = [...ranges]
+    .sort((a, b) => a.startLine - b.startLine || b.endLine - a.endLine)
+    .slice(0, FOLDING_MAX_RANGES);
+  setFoldingCap(path, { shownRanges: kept.length, droppedRanges: ranges.length - kept.length });
+  return kept;
 }
 
 /**
@@ -457,10 +541,14 @@ function memoizedDocument<V>(
 }
 
 /**
- * 折叠范围（PS-4 的①+②）：档位判在取文之前，档内按版本记忆化。
+ * 折叠范围（PS-4 的①+②，1020 止血批把①的判据搬回档位表）：
+ * 档位判在取文之前（**与编辑器选项同一份表**），档内按版本记忆化，交回前**按数量**封顶
+ * 并把超额的那部分说出来。
  *
  * 记忆化不改变任何判据：同一份 (文档, 项目, 贡献方) 的同一次问，答案本来就应当逐字相同
  * （供方是纯函数）。省掉的是 Monaco 在停笔 / 换 model / 改配置后重复问的那几次整篇拷贝。
+ * 封顶放在记忆化**之外**：缓存命中也算一次"这一份文件此刻被截了没有"，可见态才不会
+ * 停在上一份内容留下的那句话说（每次都判，但只有状态真变了才通知）。
  */
 export function foldingRangesFor(
   model: Monaco.editor.ITextModel,
@@ -469,11 +557,14 @@ export function foldingRangesFor(
 ): EditorFoldingRange[] {
   const lineCount = model.getLineCount();
   if (!foldingAffordable(lineCount)) {
+    // 这一档的编辑器选项本来就把折叠关了（折叠槽整条不见 ⇒ 看得见）；这里的可见态一并清零，
+    // 不许把"上一档截了尾巴"那句话留在已经没有折痕的面上。
+    setFoldingCap(path, null);
     warnSeamDegradedOnce('折叠', path);
     return [];
   }
   const contributions = kernel.slots.query('ui.editor.languageService');
-  return memoizedDocument(foldingMemo, model, documentMemoKey(model, path, kernel, contributions.length), () =>
+  const ranges = memoizedDocument(foldingMemo, model, documentMemoKey(model, path, kernel, contributions.length), () =>
     collectFoldingRanges(contributions, {
       kind: 'foldingRange',
       path,
@@ -482,6 +573,7 @@ export function foldingRangesFor(
       lineCount,
     }),
   );
+  return capFoldingRanges(path, ranges);
 }
 
 /**
@@ -1214,6 +1306,8 @@ function teardownGlobalProviders(reason: string): void {
     codeLensesMemo = new WeakMap();
     codeActionsMemo = new WeakMap();
     degradedSeams = new Set();
+    // 折叠封顶的可见态同理整套换掉：上一套注册留下的"截了尾巴"那句不许挂到下一个 kernel 的文件上
+    foldingCaps = new Map();
   }
 }
 

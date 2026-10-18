@@ -18,6 +18,12 @@
  *   跨行签名、窗口格式化都拿这个判据过；
  * - **「档位线与既有那一条同源」**——不许出现第二个 5000 / 第二个 2000。
  *
+ * 1020 止血批在这一族上加的两条判据（都曾**编进过测试**，所以改动就发生在测试里）：
+ * - 折叠的档位**必须等于档位表上 `folding` 那一格**（缝上自立 5,000 行那条线把 5k–50k 档
+ *   的折叠削成了"有折痕、折不动"，而这一档正是档位批自己写的"不值这一刀"）；
+ * - 折叠超额**按数量截 + 把截了多少说出去**（对标 VSCode `FoldingLimitReporter`），
+ *   不许用"交回空表"表示"太大了"。
+ *
  * monaco 运行时不进 node（本池 environment = node），照 `editor-global-providers-tables.test.ts`
  * 的做法 `vi.mock` 掉 `../src/monaco/entry`，只给它真的用到的那几个桶。
  */
@@ -37,7 +43,7 @@ import { computeFormatEdits, type FormatEdit } from '@kojo/plugin-kojo-sugar';
 import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
-import { LARGE_FILE_LINES } from '../src/ui/editor-options';
+import { LARGE_FILE_LINES, HUGE_FILE_LINES, editorOptionsForLineCount } from '../src/ui/editor-options';
 import { installRangeFormatter } from '../src/monaco/kojo-format-range';
 import { toMonacoInlayHints } from '../src/monaco/kojo-inlay-hints';
 import { resolveSignatureInText } from '../src/monaco/kojo-signature';
@@ -77,6 +83,9 @@ const seam = await import('../src/ui/editor-global-providers');
 const {
   foldingAffordable,
   foldingRangesFor,
+  foldingCapNoticeFor,
+  onFoldingCapChanged,
+  FOLDING_MAX_RANGES,
   inlayHintsFor,
   codeLensesFor,
   signatureHelpAt,
@@ -268,13 +277,28 @@ afterEach(() => {
   livePanes.clear();
 });
 
-/* ============================== ① 折叠：档位 + 版本记忆化 ============================== */
+/* ============================== ① 折叠：档位 + 版本记忆化 + 数量封顶 ============================== */
 
-describe('foldingAffordable · 档位线与既有那条同源', () => {
-  it('判据就是 `LARGE_FILE_LINES` 那一条线：档内给、≥ 档即让路', () => {
+describe('foldingAffordable · 档位判据与编辑器选项是**同一份表**（1020 止血批）', () => {
+  it('5,000–49,999 这一档照旧算"折得起"——这一条就是被削掉的那个功能', () => {
+    // 改前缝上自己按 LARGE_FILE_LINES（5,000）让路，而档位表写的是「折叠留到 huge 才关」：
+    // 两份判据对不上 ⇒ 注册了供给器之后 Monaco 不再退回缩进折叠（vendor folding.js:67），
+    // 面上留着折痕、一处也折不动。现在这一档必须判"值"。
     expect(foldingAffordable(LARGE_FILE_LINES - 1)).toBe(true);
-    expect(foldingAffordable(LARGE_FILE_LINES)).toBe(false);
+    expect(foldingAffordable(LARGE_FILE_LINES)).toBe(true);
+    expect(foldingAffordable(12_000)).toBe(true);
+    expect(foldingAffordable(HUGE_FILE_LINES - 1)).toBe(true);
+  });
+
+  it('只有 huge 档让路；**逐点等于档位表上 folding 那一格**（判据只许有一份）', () => {
+    expect(foldingAffordable(HUGE_FILE_LINES)).toBe(false);
+    // 真实语料之最那篇 52,601 行：落在 huge ⇒ 让路，但**选项那边同一拍就把折叠槽整条撤了**
+    // （看得见的是"没有折痕"，不是"有折痕折不动"）
     expect(foldingAffordable(52_601)).toBe(false);
+    expect(foldingAffordable(990_000)).toBe(false);
+    for (const n of [1, 4_999, LARGE_FILE_LINES, 12_000, HUGE_FILE_LINES - 1, HUGE_FILE_LINES, 52_601, 990_000]) {
+      expect(foldingAffordable(n), `${n} 行：缝上与档位表对不上`).toBe(editorOptionsForLineCount(n).folding !== false);
+    }
   });
 
   it('非有限的行数不算档内（ NaN / Infinity 不许蒙过去）', () => {
@@ -286,7 +310,7 @@ describe('foldingAffordable · 档位线与既有那条同源', () => {
 describe('foldingRangesFor · 让路可见、重问不重扫', () => {
   const smallDoc = ['@FOO', 'IF X', 'ENDIF'];
 
-  it('档外：一次都不 copy 整篇、一次都不问供方，并**报出一条降级**（铁律 4：不许静默）', () => {
+  it('档外（huge）：一次都不 copy 整篇、一次都不问供方，并**报出一条降级**（铁律 4：不许静默）', () => {
     const asks: { text: string; lineCount: number }[] = [];
     const { kernel } = fakeKernel({ languageService: [languageServiceStub('foldingRange', { kind: 'foldingRange', ranges: [] }, asks)] });
     const doc = fakeModel(smallDoc, { lineCount: 52_601 });
@@ -299,6 +323,23 @@ describe('foldingRangesFor · 让路可见、重问不重扫', () => {
     // 同一篇再问一次不许再报（每 (能力, 文件) 一次；去重表若失效就是每次滚动都刷屏）
     foldingRangesFor(doc.model, path, kernel);
     expect(warn).toHaveBeenCalledTimes(1);
+    // 这一档的折叠压根没问供方 ⇒ "截了尾巴"那句说法也不许留着（没有折痕的面上挂一句超额 = 谎话）
+    expect(foldingCapNoticeFor(path)).toBeNull();
+  });
+
+  it('5,000–49,999 档（语料里约 6% 的文件在这一档）：供方**照旧被问到**、整篇照旧 copy 一次', () => {
+    // 回归钉子：这一档改前直接交回空表（功能没了），现在必须走到底
+    const asks: { text: string; lineCount: number }[] = [];
+    const ranges = [{ startLine: 2, endLine: 3 }];
+    const { kernel } = fakeKernel({ languageService: [languageServiceStub('foldingRange', { kind: 'foldingRange', ranges }, asks)] });
+    const doc = fakeModel(smallDoc, { lineCount: LARGE_FILE_LINES });
+    const path = 'C:/erb/ps4-折叠5k档.ERB';
+    expect(foldingRangesFor(doc.model, path, kernel)).toEqual(ranges);
+    expect(asks).toHaveLength(1);
+    expect(doc.getValueCalls()).toBe(1);
+    expect(asks[0]!.lineCount).toBe(LARGE_FILE_LINES);
+    expect(warn).not.toHaveBeenCalled();
+    expect(foldingCapNoticeFor(path)).toBeNull();
   });
 
   it('档内：内容没变被反复问，供方只被问一次、整篇只 copy 一次', () => {
@@ -359,6 +400,74 @@ describe('foldingRangesFor · 让路可见、重问不重扫', () => {
     const path = 'C:/erb/ps4-折叠无供方.ERB';
     expect(foldingRangesFor(doc.model, path, kernel)).toEqual([]);
     expect(foldingRangesFor(doc.model, path, kernel)).toEqual([]);
+  });
+});
+
+/**
+ * 折叠**超额**那一格（1020 止血批补的机制，对标 VSCode 的 `FoldingLimitReporter`）。
+ *
+ * 判据形状：大文件上**不许**把折叠整条没收（那是"少给了但没人说"），而是按数量截尾巴 +
+ * 把截了多少说成宿主工具条上的一句人话。数量线取 vendor 自己那条（`foldingMaximumRegions`
+ * 缺省 5,000，取证见 `ps5-editor-tiers.test.ts` 的 vendor 段），所以这一档
+ * **不比 Monaco 少给任何东西**，只多了一句人话。
+ */
+describe('foldingRangesFor · 超额按数量封顶并把超额说出来', () => {
+  /** 从后往前给的 total 条区间（**故意乱序**：留下的必须是按行号最靠前的那些，不是"先算出来的"） */
+  const manyRanges = (total: number) =>
+    Array.from({ length: total }, (_, i) => ({ startLine: total - i, endLine: total - i + 1 }));
+
+  const cappedKernel = (total: number) => {
+    const asks: { text: string; lineCount: number }[] = [];
+    const { kernel } = fakeKernel({
+      languageService: [languageServiceStub('foldingRange', { kind: 'foldingRange', ranges: manyRanges(total) }, asks)],
+    });
+    return { kernel, asks };
+  };
+
+  it('超额：交回恰是上限条、且是最靠前的那批；超额的那部分记成一条可见说法', () => {
+    const total = FOLDING_MAX_RANGES + 3;
+    const { kernel } = cappedKernel(total);
+    const doc = fakeModel(['@FOO'], { lineCount: 1_000 });
+    const path = 'C:/erb/ps4-折叠超额.ERB';
+    const out = foldingRangesFor(doc.model, path, kernel);
+    expect(out).toHaveLength(FOLDING_MAX_RANGES);
+    expect(out[0]).toEqual({ startLine: 1, endLine: 2 });
+    expect(out[FOLDING_MAX_RANGES - 1]).toEqual({ startLine: FOLDING_MAX_RANGES, endLine: FOLDING_MAX_RANGES + 1 });
+    expect(foldingCapNoticeFor(path)).toEqual({ shownRanges: FOLDING_MAX_RANGES, droppedRanges: 3 });
+  });
+
+  it('通知只在状态**真变了**时发一次（折叠每次停笔都被重问，超额那句不许刷屏）', () => {
+    const { kernel } = cappedKernel(FOLDING_MAX_RANGES + 1);
+    const doc = fakeModel(['@FOO'], { lineCount: 1_000 });
+    const path = 'C:/erb/ps4-折叠超额去重.ERB';
+    const seen: (string | null)[] = [];
+    const off = onFoldingCapChanged((p, notice) => {
+      if (p === path) seen.push(notice === null ? null : `drop:${notice.droppedRanges}`);
+    });
+    try {
+      foldingRangesFor(doc.model, path, kernel);
+      foldingRangesFor(doc.model, path, kernel);
+      foldingRangesFor(doc.model, path, kernel);
+      expect(seen).toEqual(['drop:1']);
+      // 改小一回档（不再超额）⇒ 那句话必须**撤掉**，不能留在面上说假话
+      doc.bump();
+      const { kernel: small } = cappedKernel(FOLDING_MAX_RANGES);
+      foldingRangesFor(doc.model, path, small);
+      expect(seen).toEqual(['drop:1', null]);
+      foldingRangesFor(doc.model, path, small);
+      expect(seen).toEqual(['drop:1', null]);
+    } finally {
+      off();
+    }
+  });
+
+  it('上限之内一条都不截、也不挂任何说法（判据是"超额"，不是"文件大"）', () => {
+    const { kernel, asks } = cappedKernel(FOLDING_MAX_RANGES);
+    const doc = fakeModel(['@FOO'], { lineCount: 1_000 });
+    const path = 'C:/erb/ps4-折叠刚好.ERB';
+    expect(foldingRangesFor(doc.model, path, kernel)).toHaveLength(FOLDING_MAX_RANGES);
+    expect(asks).toHaveLength(1);
+    expect(foldingCapNoticeFor(path)).toBeNull();
   });
 });
 

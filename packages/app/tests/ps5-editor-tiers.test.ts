@@ -2,14 +2,17 @@
  * PS-5 · 体量档位在"全文级开销"这条轴上的补齐（editor-options.ts）。
  *
  * 钉四件事：
- *  ① 新增的五条键（wordWrap / selectionHighlight / links / colorDecorators / folding）
- *     **每一档都写值**——`updateOptions` 只覆写发过去的键，小档漏写就是从大文件切回来
- *     卡在大档的关值（档位漂移，与既有 `minimap` / `stickyScroll` 同一条纪律）；
+ *  ① 体量轴上的每一条键**每一档都写值**——`updateOptions` 只覆写发过去的键，小档漏写就是从
+ *     大文件切回来卡在大档的关值（档位漂移，与既有 `minimap` / `stickyScroll` 同一条纪律）。
+ *     这一族键**从表里枚举**（`sizeTierKeys` / `sizeTierKeysMissingFromSmall`），不是手抄清单：
+ *     PS-5 交付说的「小档必须显式写回，否则档位漂移」当时只做到 6 条里的 5 条，
+ *     而它自己的测试把清单抄成五条 ⇒ 漏掉的那条（`formatOnType`）带着 bug 一路全绿（1020 止血批）。
  *  ② 大档真的关掉了那三条全文级扫描，huge 再关折行与折叠；
  *  ③ 三条既有不变式不受影响（CJK 基线逐档同在 / 降级集永不含 fontSize·zoomLevel /
  *     find 逐档同值）；
  *  ④ 论据不靠记忆：vendor 侧的取证（find 的 19,999 上限、diff 的 5,000ms·50MB 缺省、
- *     `largeFileOptimizations` 这个总开关**不在** monaco-editor 里）逐条读源码钉住。
+ *     `largeFileOptimizations` 这个总开关**不在** monaco-editor 里、折叠的
+ *     `foldingMaximumRegions` 缺省与"有供给器就不退回缩进折叠"）逐条读源码钉住。
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -19,40 +22,62 @@ import {
   LARGE_FILE_LINES,
   CJK_TYPING_BASELINE,
   FIND_BASELINE,
+  applySizeTier,
   editorOptionsForLineCount,
+  foldingEnabledForLineCount,
+  sizeTierKeys,
+  sizeTierKeysMissingFromSmall,
 } from '../src/ui/editor-options';
 
 const vendor = (rel: string) =>
   readFileSync(fileURLToPath(new URL(`../node_modules/monaco-editor/esm/vs/${rel}`, import.meta.url)), 'utf8');
 
+const paneSource = () =>
+  readFileSync(fileURLToPath(new URL('../src/ui/EditorPane.tsx', import.meta.url)), 'utf8');
+
 const tierSamples = [1, 4_999, LARGE_FILE_LINES, HUGE_FILE_LINES, 990_000];
 
-describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值', () => {
-  const KEYS = ['wordWrap', 'selectionHighlight', 'links', 'colorDecorators', 'folding'] as const;
+describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值（**清单从表里取**）', () => {
+  const KEYS = sizeTierKeys();
 
-  it('五档样本都带齐这五条键（小档不写 = 从大文件切回来卡在关值）', () => {
+  it('枚举出来的这条轴非空、且含那五条已知键 + formatOnType（清单漂了本条先响）', () => {
+    expect(KEYS.length).toBeGreaterThanOrEqual(6);
+    for (const k of ['wordWrap', 'selectionHighlight', 'links', 'colorDecorators', 'folding', 'formatOnType']) {
+      expect(KEYS, `体量轴上应当认得 ${k}`).toContain(k);
+    }
+  });
+
+  it('五档样本都带齐这一族键（小档不写 = 从大文件切回来卡在关值）', () => {
     for (const n of tierSamples) {
       const o = editorOptionsForLineCount(n);
       for (const k of KEYS) expect(o, `${n} 缺 ${k}`).toHaveProperty(k);
     }
   });
 
-  it('small 档：五条全开（便利特性不因"补齐"而被默认值带走）', () => {
+  it('判据本体：任一档关掉而 small 档没写回的键 = **空表**（非空就是漂移，键名直接报出来）', () => {
+    expect(sizeTierKeysMissingFromSmall()).toEqual([]);
+  });
+
+  it('small 档：五条全开 + 打字规范化开（便利特性不因"补齐"而被默认值带走）', () => {
     const o = editorOptionsForLineCount(500);
     expect(o.wordWrap).toBe('on');
     expect(o.selectionHighlight).toBe(true);
     expect(o.links).toBe(true);
     expect(o.colorDecorators).toBe(true);
     expect(o.folding).toBe(true);
+    expect(o.formatOnType).toBe(true);
   });
 
-  it('large 档：关三条全文级扫描，折行与折叠照留（读台词要靠它们）', () => {
+  it('large 档：关三条全文级扫描 + 关打字规范化，折行与折叠照留（读台词要靠它们）', () => {
     const o = editorOptionsForLineCount(LARGE_FILE_LINES);
     expect(o.selectionHighlight).toBe(false);
     expect(o.links).toBe(false);
     expect(o.colorDecorators).toBe(false);
+    expect(o.formatOnType).toBe(false);
     expect(o.wordWrap).toBe('on');
     expect(o.folding).toBe(true);
+    // 折叠这一档"选项开 + 供给器也让路"那一对矛盾不许回来：两边的判据同源
+    expect(foldingEnabledForLineCount(LARGE_FILE_LINES)).toBe(true);
   });
 
   it('huge 档：折行关 + 折叠关，并继承 large 的三条关值', () => {
@@ -62,14 +87,38 @@ describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值', () =>
     expect(o.selectionHighlight).toBe(false);
     expect(o.links).toBe(false);
     expect(o.colorDecorators).toBe(false);
+    expect(foldingEnabledForLineCount(HUGE_FILE_LINES)).toBe(false);
     // 99 万行级盘同样走这一档（阈值判据不许在超大读数上漂档）
     expect(editorOptionsForLineCount(990_000).wordWrap).toBe('off');
   });
 
-  it('往返：huge → small 五条全部回到开值（切标签不"半套恢复"）', () => {
+  it('往返：huge → small，这一族键**每条都有值**（切标签不"半套恢复"）', () => {
     editorOptionsForLineCount(HUGE_FILE_LINES);
     const back = editorOptionsForLineCount(100);
-    for (const k of KEYS) expect(back[k]).toBeTruthy();
+    // 判据是"小档写过这个键"，不是"值恒为真"：`renderLineHighlightOnlyWhenFocus` 这类
+    // 小档本来就该是 false 的键，真值断言会把它误判成漏写；漏写的真值是 undefined。
+    for (const k of KEYS) expect(back, `${k} 在小档没被写回`).toHaveProperty(k);
+  });
+
+  /**
+   * `applySizeTier` 是档位写入的**唯一出口**，所以这里拿一枚假编辑器把 Monaco 那一句
+   * "updateOptions 只覆写发过去的键"演出来：先把 huge 档发上去，再把小档发上去，
+   * **叠出来的当前选项**必须逐键等于小档全量——漏写回任何一条，这一条就红在这一键上。
+   */
+  it('叠出来的选项：huge → 挂上一份更大的投影 → 回到小文件，每一步都按"此刻屏幕上那份"落档', () => {
+    const current: Record<string, unknown> = {};
+    const ed = { updateOptions: (o: Record<string, unknown>) => Object.assign(current, o) };
+    applySizeTier(ed, 60_000); // 打开一份 huge 原文
+    expect(current.formatOnType).toBe(false);
+    expect(current.folding).toBe(false);
+    applySizeTier(ed, 120_000, { readOnly: true }); // 挂上 .kojo 投影（比原文更长）
+    expect(current.readOnly).toBe(true);
+    applySizeTier(ed, 800); // 撤下投影、按回到屏幕上的那份原文落档
+    const small = editorOptionsForLineCount(800) as Record<string, unknown>;
+    for (const k of KEYS) expect(current[k], `切回 800 行后 ${k} 还留在上一档`).toEqual(small[k]);
+    expect(current.formatOnType).toBe(true);
+    expect(current.folding).toBe(true);
+    expect(current.wordWrap).toBe('on');
   });
 
   it('不变式不被动：find 与 CJK 基线逐档同值，降级集永不含字号/缩放', () => {
@@ -80,6 +129,47 @@ describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值', () =>
       expect(Object.keys(o)).not.toContain('fontSize');
       expect(Object.keys(o)).not.toContain('zoomLevel');
     }
+  });
+});
+
+/**
+ * 档位写入点的形状守卫（1020 止血批）。
+ *
+ * 为什么又读一次源码：这三处都活在 2,000 行组件的闭包里（同 `ps5-editor-pane-wiring.test.ts`
+ * 的既定口径——行为面交给纯函数单测，形状面钉"接线在不在"）。上一批的**第二个**漂移就漂在
+ * "写档位的点有三个、还原只做在一处"：挂投影时按投影行数落过档，撤投影却只回可写态，
+ * 于是 huge 投影的折行 / 折叠 / 找同词一路骑到下一份小文件上。
+ */
+describe('档位写入口只有 applySizeTier 一个（EditorPane.tsx 静态取证）', () => {
+  it('三个写入点都走 applySizeTier：切标签 / 挂投影 / 撤投影', () => {
+    const src = paneSource();
+    expect(src).toContain('applySizeTier(ed, restore.getLineCount());'); // 撤下投影 ⇒ 按原文行数重落
+    expect(src).toContain('applySizeTier(ed, sugarModel.getLineCount(), {'); // 挂上投影 ⇒ 按投影行数
+    expect(src).toContain('applySizeTier(ed, entry.model.getLineCount(), {'); // 切标签 ⇒ 按原文行数
+  });
+
+  it('没有任何一处再自己 spread 档位表（判据只许有一份，两处抄表必漂）', () => {
+    expect(paneSource()).not.toContain('editorOptionsForLineCount(');
+  });
+
+  it('创建时那一格 formatOnType 仍然开着（ZH-D4 回车缩进的兜底腿靠 on-type provider 派发）', () => {
+    expect(paneSource()).toContain('formatOnType: true,');
+  });
+
+  it('折叠超额那句人话真在渲染里，且不含内部术语（铁律 4：少给了必须说）', () => {
+    const src = paneSource();
+    const i0 = src.indexOf('{foldingCap[filePath] ? (');
+    expect(i0, '工具条上没有折叠超额那一格').toBeGreaterThan(0);
+    const block = src.slice(i0, src.indexOf('</span>', i0));
+    const literals = (block.match(/'([^']*)'/g) ?? []).map((s) => s.slice(1, -1)).join('');
+    const visible = literals + block.slice(block.lastIndexOf('/>') + 2);
+    for (const w of [
+      'marker', 'Marker', '装饰', '阈值', '码元', 'byte', '字节', 'validation',
+      '缓存', '索引', 'worker', 'Worker', 'model', 'Model', 'Monaco', 'monaco', '语法糖', 'provider',
+    ]) {
+      expect(visible, `禁词「${w}」出现在作者可见文案里`).not.toContain(w);
+    }
+    expect(visible).toContain('折叠太多');
   });
 });
 
