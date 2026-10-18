@@ -37,13 +37,19 @@
 }
 
 /* 背景氛围（替代旧欢迎页的极光层）：两团极淡的 accent 径向光，静态、不抢内容。
-   旧 `.welcome::before` 的漂移动画不再沿用——VSCode 式的欢迎页以"静"为底。 */
+   旧 `.welcome::before` 的漂移动画不再沿用——VSCode 式的欢迎页以"静"为底。
+   **同一元素**上仍叠着 styles.css 的 `.welcome::before`（26s 无限漂移 + blur(28px)），
+   本规则只换了 inset/background，动画与模糊会照旧生效；这里逐项显式收口
+   （沿袭旧规则、不动它——`welcome-rise` 之外本页不应有常驻动效）。 */
 .welcome.welcome-screen::before {
   content: '';
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  animation: none;
+  filter: none;
+  transform: none;
   background:
     radial-gradient(58% 46% at 16% -4%, rgb(var(--accent-rgb) / 0.11), transparent 70%),
     radial-gradient(42% 40% at 92% 4%, rgb(var(--accent-rgb) / 0.06), transparent 72%);
