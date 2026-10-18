@@ -582,6 +582,14 @@ export function ProjectView({
           kernel.bus.emit('editor.action.request', { action: 'references', source: '命令面板' });
         },
       },
+      {
+        id: 'editor.action.gotoLine',
+        title: '转到行',
+        category: '编辑器',
+        run: () => {
+          kernel.bus.emit('editor.action.request', { action: 'gotoLine', source: '命令面板' });
+        },
+      },
     ],
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
     [onRequestCloseTab, onSaveAll, onSplitEditor, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, kernel, notify, kbVersion],

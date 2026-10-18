@@ -91,6 +91,7 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'editor.action.formatDocument', title: '格式化文档', category: '编辑器', rebindable: true, note: '编辑器内 Shift+Alt+F 为 Monaco 内建' },
   { id: 'editor.action.rename', title: '重命名符号', category: '编辑器', rebindable: true, note: '编辑器内 F2 为 Monaco 内建' },
   { id: 'editor.action.references', title: '查找引用', category: '编辑器', rebindable: true, note: '编辑器内 Shift+F12 为 Monaco 内建' },
+  { id: 'editor.action.gotoLine', title: '转到行', category: '编辑器', rebindable: true, note: '编辑器内 Ctrl+G 为 Monaco 内建' },
   // ---- 编辑器内部（Monaco addCommand，仅展示） ----
   { id: 'editor.internal.save', title: '保存当前文件', category: '编辑器', keys: 'ctrl+s', rebindable: false, note: '编辑器内生效，暂不支持改键' },
   // A7「在选定内容中查找」：有选区时把选中文本灌进 find 并把搜索域钉在选区（无选区不动作）

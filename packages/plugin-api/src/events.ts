@@ -368,17 +368,17 @@ export interface KernelEventMap {
    */
   'editor.codeLens.set': { on: boolean };
   /**
-   * 编辑器动作意图（R8 命令面板补齐批，2026-10-16）：命令面板/键位请求宿主在
+   * 编辑器动作意图（R8 命令面板补齐批，2026-10-16；MM-7 补「转到行」）：命令面板/键位请求宿主在
    * **当前活动编辑器**上执行一条 Monaco 内建动作（查找 / 替换 / 格式化文档 /
-   * 重命名符号 / 查找引用）。
+   * 重命名符号 / 查找引用 / 转到行）。
    *
    * 通用、游戏无关——壳层发意图、编辑器宿主落地（与 `editor.fixAll.request` 同款
    * 分工：动作真源在编辑器，发起方不必也不该知道 Monaco 的 action id）。
    * **刻意不带缺省键位**：编辑器内这些动作 Monaco 已有内建键（Ctrl+F / Ctrl+H /
-   * Shift+Alt+F / F2 / Shift+F12），宿主命令不抢键；命令面板是无键入口。
+   * Shift+Alt+F / F2 / Shift+F12 / Ctrl+G），宿主命令不抢键；命令面板是无键入口。
    */
   'editor.action.request': {
-    action: 'find' | 'replace' | 'formatDocument' | 'rename' | 'references';
+    action: 'find' | 'replace' | 'formatDocument' | 'rename' | 'references' | 'gotoLine';
     source?: string;
   };
 }

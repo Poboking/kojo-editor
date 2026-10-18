@@ -26,6 +26,14 @@ import {
   type SessionFlushScheduler,
   type SessionRecord,
 } from './session-store';
+// 最近文件列表（MM-7）：欢迎页「最近文件」区的持久层与纯逻辑
+import {
+  loadRecentFiles,
+  removeRecentFiles,
+  saveRecentFiles,
+  upsertRecentFile,
+  type RecentFileRecord,
+} from './recent-files';
 import { clearRecoveredContents, recoveredPaths, setRecoveredContents } from './recovery-store';
 import { planProjectSwitch, resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
 import { bootstrapKernel, ensureProjectPlugins, prefetchProjectPlugins } from '../bootstrap';
@@ -231,6 +239,11 @@ export function App(): ReactElement {
   const windowCloseApprovedRef = useRef(false);
   const [reveal, setReveal] = useState<RevealTarget | null>(null);
   const [recent, setRecent] = useState<RecentProject[]>([]);
+  /** 最近文件列表（MM-7）：欢迎页「最近文件」区数据源；落盘与读回见 recent-files.ts */
+  const [recentFiles, setRecentFiles] = useState<RecentFileRecord[]>([]);
+  /** 最新值快照（记录点不吃陈旧闭包；与 dirtyRef 同模式） */
+  const recentFilesRef = useRef(recentFiles);
+  recentFilesRef.current = recentFiles;
   const [pendingApproval, setPendingApproval] = useState<GameProject | null>(null);
   /** 写权限状态（P0）：null = 无项目；驱动状态栏徽章 + 保存置灰 */
   const [writable, setWritable] = useState<boolean | null>(null);
@@ -311,6 +324,8 @@ export function App(): ReactElement {
         } catch {
           // 静默：空记录即无会话可恢复
         }
+        // 最近文件读回（MM-7）：欢迎页「最近文件」区。读不到就是空列表，静默
+        loadRecentFiles(k.storage.global()).then(setRecentFiles).catch(() => undefined);
         // 崩溃探测（退出/崩溃守护批）：journal 非空 + 心跳超龄/缺失 = 上次不正常退出。
         // 探测结果只决定欢迎页横幅与恢复内容注入，**永不自动写游戏目录**
         if (isTauri()) {
@@ -443,6 +458,8 @@ export function App(): ReactElement {
     if (!kernel) return;
     const un = kernel.bus.on('editor.revealLocation', (ev) => {
       requestOpenFile(ev.filePath, ev.line ?? 1, ev.column, ev.span);
+      // 同款记录（MM-7）：问题面板/转到定义/查找引用/函数树跳转来的打开也进最近文件
+      recordRecentFile(ev.filePath);
     });
     return () => {
       un();
@@ -505,7 +522,13 @@ export function App(): ReactElement {
   const openProject = useCallback(
     async (
       dir: string,
-      opts?: { keepView?: boolean; skipDirtyConfirm?: boolean; routeDetectionFailToImport?: boolean },
+      opts?: {
+        keepView?: boolean;
+        skipDirtyConfirm?: boolean;
+        routeDetectionFailToImport?: boolean;
+        /** MM-7：欢迎页「最近文件」跨项目点开——项目打开成功后接着开它（失败分支绝不打开） */
+        pendingOpenFile?: string;
+      },
     ) => {
       if (!kernel) return;
       // SAFE-1（2026-10-16）：换根开项目前先过脏确认——旧项目有未保存修改时，
@@ -592,6 +615,9 @@ export function App(): ReactElement {
           setIndexError(msg);
           notify({ kind: 'error', message: `口上域索引构建失败：${msg}` });
         }
+        // MM-7：欢迎页「最近文件」跨项目点开的待开文件——项目完全就绪后才落进焦点组
+        // （放在成功路径末尾：打开失败走下面的 catch，绝不顺带打开文件）
+        if (opts?.pendingOpenFile) requestOpenFile(opts.pendingOpenFile);
       } catch (e: unknown) {
         if (isProjectDetectionError(e)) {
           // 检测失败（拖进来 / 打开的目录不是可识别的游戏目录）：内部英文术语绝不上屏。
@@ -617,6 +643,8 @@ export function App(): ReactElement {
         setIndexing(false);
       }
     },
+    // requestOpenFile 不进依赖：它的 deps 链全空（commitOpenFile → []），引用恒稳定，
+    // 闭包捕获不会 stale（且它声明在本函数之后，同步求值的依赖数组写不了它）
     [kernel, notify, project, resetProjectUiState, restoreSessionTabs],
   );
 
@@ -726,11 +754,47 @@ export function App(): ReactElement {
     [commitOpenFile],
   );
 
+  /**
+   * 最近文件记录（MM-7）：打开/跳转落地即记——欢迎页「最近文件」区的数据源。
+   * rootDir 为 null（无项目态）记空串：欢迎页态不会走打开路径，实际记录不到
+   * 这种；防御即可。
+   */
+  const recordRecentFile = useCallback(
+    (path: string) => {
+      const next = upsertRecentFile(recentFilesRef.current, {
+        path,
+        rootDir: rootDirRef.current ?? '',
+        now: Date.now(),
+      });
+      recentFilesRef.current = next;
+      setRecentFiles(next);
+      if (kernel) void saveRecentFiles(kernel.storage.global(), next).catch(() => undefined);
+    },
+    [kernel],
+  );
+
+  /**
+   * MM-7 欢迎页「最近文件」点击：同项目（根未变且项目开着）⇒ 直接开文件；
+   * 换了项目 ⇒ 先开项目，pendingOpenFile 在 openProject 成功路径末尾落地
+   * （打开失败绝不顺带打开文件）。
+   */
+  const openRecentFile = useCallback(
+    (path: string, rootDir: string) => {
+      if (rootDirRef.current === rootDir && project) {
+        requestOpenFile(path);
+        return;
+      }
+      void openProject(rootDir, { pendingOpenFile: path });
+    },
+    [project, openProject, requestOpenFile],
+  );
+
   const openFile = useCallback(
     (path: string) => {
       requestOpenFile(path);
+      recordRecentFile(path); // MM-7：文件树/快速打开的落地也进最近文件
     },
-    [requestOpenFile],
+    [requestOpenFile, recordRecentFile],
   );
 
   const phaseRef = useRef<AppPhase>(phase);
@@ -1224,8 +1288,17 @@ export function App(): ReactElement {
       // 固定标签不留悬空 pin（C2）
       setDirtyPaths((prev) => reconcilePathsAfterDiskChange(prev, del, renamed));
       setPinnedPaths((prev) => reconcilePathsAfterDiskChange(prev, del, renamed));
+      // 最近文件摘除（MM-7）：被删的与被改名的旧路径从欢迎页列表移除并落盘
+      // （真有变化才写：无变化不惊动渲染与存储）
+      const gonePaths = [...del, ...renamed.map((r) => r.from)];
+      const nextRecentFiles = removeRecentFiles(recentFilesRef.current, gonePaths);
+      if (nextRecentFiles.length !== recentFilesRef.current.length) {
+        recentFilesRef.current = nextRecentFiles;
+        setRecentFiles(nextRecentFiles);
+        if (kernel) void saveRecentFiles(kernel.storage.global(), nextRecentFiles).catch(() => undefined);
+      }
     },
-    [],
+    [kernel],
   );
 
   const closeProject = useCallback(async () => {
@@ -1452,6 +1525,8 @@ export function App(): ReactElement {
           onOpenRecent={openProject}
           onRemoveRecent={removeRecentEntry}
           onClearRecent={clearRecentEntries}
+          recentFiles={recentFiles}
+          onOpenRecentFile={openRecentFile}
           statPath={statPath}
           resumeRoot={resumeRoot}
           onResumeSession={resumeSession}

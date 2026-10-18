@@ -429,6 +429,26 @@
   background: var(--hover);
 }
 
+/* 最近文件行（MM-7）：左列 = 文件名（主色）+ 完整路径（dim 小字）两行叠放；
+   行骨架 / 徽标 / 悬停一律复用上面的 welcome-recent-*，这里只补左列与新字级。 */
+.welcome-recent-file {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.welcome-recent-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+}
+
 .welcome-hint {
   margin: 0;
   padding-top: var(--space-4);
