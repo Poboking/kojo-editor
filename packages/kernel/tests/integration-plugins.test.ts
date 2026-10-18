@@ -20,10 +20,10 @@ import { WellKnownServices, readReplayDeterminability, WriteNotAllowedError } fr
 import { createKernel, type Kernel } from '../src/kernel';
 import { NodeBridge } from './helpers/node-bridge';
 import { MemoryStorageBackend } from './helpers/memory-storage';
-import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
+import { createErbParserPlugin, erbParserTasks, scanControlFlow } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
-import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
+import { conditionExtractorTasks, createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
 import { createSavParserPlugin } from '@kojo/plugin-sav-parser';
 import { createStateReplayPlugin } from '@kojo/plugin-state-replay';
 import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
@@ -75,6 +75,15 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       ],
       storageBackend: new MemoryStorageBackend(),
     });
+    // 并行计算任务表：**与生产装配同源**（`app/src/compute-tasks.ts` 逐项并入同一批插件导出的表）。
+    // PS-11 把单文件条件抽取搬进 `condition.extractFile` 后，内核默认池没有本地实现 ⇒ 不注册就
+    // 逐文件 "No local implementation registered"，条件索引整片归零（本测试曾在真实语料上整组红）。
+    for (const [kind, impl] of Object.entries({
+      ...erbParserTasks,
+      ...conditionExtractorTasks(scanControlFlow),
+    })) {
+      kernel.compute.registerTask(kind, impl as never);
+    }
     await kernel.start();
     project = await kernel.project.open(SMOKE_DIR!);
   }, 180_000);

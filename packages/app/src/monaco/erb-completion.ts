@@ -226,7 +226,13 @@ function gateKeepFor(
  * 故只进「行首」候选集，绝不在行中弹出。
  */
 const ERB_PREPROCESSOR_DIRECTIVES = [
-  '#DIM', '#DIMS', '#DIMSA', '#DIMSTR', '#DIMCHAR', '#DIMF',
+  // 真实语料计数（画蛇添足 4.980，ERB/ 全量）：#DIM 19,653 / #DIMS 8,439 / #FUNCTION 2,499 /
+  // #FUNCTIONS 1,922 / #DEFINE 22。`#DIMSA` / `#DIMF` 引擎与 scanner 都不认（旧表把两者
+  // 当成指令，选下去只会得到一条错行）；`#DIMSTR` / `#DIMCHAR` 合法但语料零命中，留作方言覆盖。
+  // `#DIM CONST|SAVEDATA|GLOBAL` 是**同一条指令 + 修饰词**（scanner 的 DIM_MODIFIERS），
+  // 补全给出整段前缀，作者少打一段、也不会写出引擎不认的 `#DIMCONST`。
+  '#DIM', '#DIM CONST', '#DIM SAVEDATA', '#DIM GLOBAL',
+  '#DIMS', '#DIMSTR', '#DIMCHAR',
   '#FUNCTION', '#FUNCTIONS', '#DEFINE', '#INCLUDE', '#ONLY',
 ];
 /** **必须行首**的区间标记行（`[SKIPSTART]` 起、`[SKIPEND]` 止）。 */

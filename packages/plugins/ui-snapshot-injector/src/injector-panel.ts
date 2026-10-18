@@ -8,7 +8,7 @@
  * `editor-box`、`pending-box`；纯逻辑（目录 / diff / overrides / 窗口）在 `panel-logic.ts`。
  */
 
-import { createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type {
   PluginContext,
   ProjectService,
@@ -67,7 +67,20 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
   /* ------------------------------ 面板组件 ------------------------------ */
 
   return function InjectorPanel(props: UIPanelProps): unknown {
-    const scan = snapshots.current();
+    /**
+     * 扫描结果必须**订阅**，不能只在 render 里读一次 `current()`。
+     *
+     * 真实故障（2026-10-19 实机审计）：`project.opened` 的扫描是异步的，而面板挂在
+     * 记忆化容器（`PanelHost` 的 `PanelBody`）里、壳层重渲不会带着它重算 ⇒ 若面板
+     * 在扫描回来之前挂载，`rows` 永远是空数组，阶段永远停在「没有存档」，
+     * 且没有任何刷新入口（只有切走再切回来才重挂载）。作者的观感就是「状态注入一次都没成功过」。
+     * 订阅后扫描完成会触发一次真实重渲；空态再主动补一次 scan（幂等，引擎有 inFlight 去重）。
+     */
+    const subscribe = useCallback(
+      (onChange: () => void) => snapshots.subscribe(() => onChange()),
+      [],
+    );
+    const scan = useSyncExternalStore(subscribe, () => snapshots.current(), () => snapshots.current());
     const rows = (scan?.entries ?? []).filter((e) => e.meta !== null && !e.error);
     const [path, setPath] = useState<string | null>(null);
     const [archive, setArchive] = useState<SnapshotArchive | null>(null);
@@ -103,6 +116,34 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     useEffect(() => {
       pathRef.current = path;
     }, [path]);
+
+    /**
+     * 空态自愈：面板先于扫描挂载（或扫描被项目切换作废）时补一次 scan。
+     * `scan()` 幂等（引擎 inFlight 去重 + 代际号作废），失败不在此吞掉——
+     * 扫描本身的错误由引擎记日志，面板只关心有没有档位。
+     */
+    useEffect(() => {
+      if (snapshots.current() === null) void snapshots.scan().catch(() => undefined);
+    }, []);
+
+    /**
+     * 换项目（扫描目录变化）⇒ 丢掉上一个项目的选档与待注入清单。
+     * 旧实现只在选档变化时清状态；项目 A 的档位路径会带进项目 B 的界面，
+     * 后续「注入」会拿 A 的路径去写（内核闸会拒，但界面已经误导）。
+     */
+    const scanDir = scan?.dir ?? null;
+    const scanDirRef = useRef<string | null>(null);
+    useEffect(() => {
+      if (scanDirRef.current === scanDir) return;
+      scanDirRef.current = scanDir;
+      setPath(null);
+      setArchive(null);
+      setLoadError(null);
+      setPending([]);
+      setResult(null);
+      setInjectError(null);
+      setArmed(false);
+    }, [scanDir]);
 
     /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
     const ic = (name: string, size: number, fallback: string): ReactNode =>

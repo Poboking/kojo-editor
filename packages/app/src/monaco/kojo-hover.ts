@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
 import type {
+    ErbDim,
     ErbIndex,
     KojoCounterTable,
     KojoFaceTable,
@@ -118,6 +119,7 @@ export function resolveHoverName(
   column: number,
   tables: HoverTables,
   header: KojoDocHeader = {},
+  filePath: string | null = null,
 ): HoverHit | undefined {
   if (!Number.isFinite(column) || column < 1) return undefined;
   const col0 = Math.min(column - 1, lineText.length);
@@ -184,6 +186,12 @@ export function resolveHoverName(
   const erbFn = resolveErbFunctionHover(lineText, col0, tables.erbIndex);
   if (erbFn !== undefined) return erbFn;
 
+  // 5.5) 本文件 `#DIM` 声明（EC-DECL 的悬停半边，2026-10-19）：`#DIM 好感度` 声明过之后，
+  //      正文里写这个名字时显示「声明行 + 指令」。数据源 = 同一份 `ErbIndex.files`（不扫全文、
+  //      不写第二份正则）；文件不在索引 / 声明表缺席 ⇒ 不显示（不猜）。
+  const erbDim = resolveErbDimHover(lineText, col0, tables.erbIndex, filePath);
+  if (erbDim !== undefined) return erbDim;
+
   // 6) 中文 → **原生形态**反查（ZH-D3；`kojo-hover-native.ts`）：族头中文别名、中文函数名 /
   //    语句形调用、时机块头的分野与中文指令名。前五路只认 ASCII 记号与位槽，本路只认中文，
   //    两条路天然不撞；同样「查不到即不显示」（不猜）。
@@ -240,6 +248,62 @@ function resolveErbFunctionHover(
 }
 
 /**
+ * `#DIM` 声明名悬停（2026-10-19，EC-DECL 的显示半边）。
+ *
+ * 与函数路共用同一份 `ErbIndex.files`（**不扫全文、不写第二份 `#DIM` 正则**）：先按
+ * 路径归一（分隔符 / 大小写）找到当前文件，再在 `dims` 里按大小写不敏感整词匹配。
+ * 文件不在索引 / 索引缺席 / 词不是声明名 ⇒ `undefined`（不猜）。
+ *
+ * 名字字符集比 ASCII 标识符宽：`#DIM 好感度` / 全角字母都是合法声明名，
+ * 故 span 用"非空白 + 非运算符"判据，而不是函数路的 `[A-Za-z0-9_]`。
+ */
+function resolveErbDimHover(
+  lineText: string,
+  col0: number,
+  getIndex: (() => ErbIndex | null | undefined) | undefined,
+  filePath: string | null,
+): HoverHit | undefined {
+  if (typeof getIndex !== 'function' || !filePath) return undefined;
+  let index: ErbIndex | null | undefined;
+  try {
+    index = getIndex();
+  } catch {
+    return undefined;
+  }
+  if (!index) return undefined;
+  const span = spanAround(lineText, col0, isDimNameChar);
+  if (!span) return undefined;
+  const token = lineText.slice(span.start, span.end);
+  if (token.length === 0) return undefined;
+  const key = normalizePathKey(filePath);
+  let file: { path: string; dims?: readonly ErbDim[] } | undefined;
+  for (const [p, f] of index.files) {
+    if (normalizePathKey(p) === key) {
+      file = f as { path: string; dims?: readonly ErbDim[] };
+      break;
+    }
+  }
+  if (!file) return undefined;
+  const dim = (file.dims ?? []).find((d) => d.name.toUpperCase() === token.toUpperCase());
+  if (!dim) return undefined;
+  return {
+    name: dim.name,
+    kind: `#${dim.directive} 声明`,
+    startColumn: span.start + 1,
+    endColumn: span.end + 1,
+    lines: [`声明于 \`${file.path}:${dim.line}\``],
+  };
+}
+
+/** 路径比较键（Windows 分隔符 + 大小写不敏感；索引键与 model.uri 来自不同腿） */
+function normalizePathKey(p: string): string {
+  return p.replace(/\\/g, '/').toLowerCase();
+}
+
+/** `#DIM` 名字字符：非空白、非运算符/分隔符（中文与全角字母都是合法声明名） */
+const isDimNameChar = (ch: string): boolean => !/[\s,;:()[\]{}=+\-*/<>%!&|'"`]/.test(ch);
+
+/**
  * 为 ERB 方言（`.erb` / `.erh` / `.erd`）与 `.kojo` 两种语言注册**只读** hover provider。
  *
  * `getTables` 每次悬停时才调用（表按当前项目 adapterId 实时取，同 `refreshMarkers` 纪律）。
@@ -252,11 +316,22 @@ export function installHover(monaco: typeof Monaco, getTables: () => HoverTables
     provideHover(model, position) {
       const lineCount = typeof model.getLineCount === 'function' ? model.getLineCount() : position.lineNumber;
       const header = docHeaderOf((n) => model.getLineContent(n), lineCount);
+      // 当前文件的路径（`#DIM` 声明悬停要在索引里找"本文件"）：桩 model 无 uri ⇒ null（该路不做）
+      const uri = (model as { uri?: { fsPath?: unknown; path?: unknown } }).uri;
+      const filePath =
+        uri !== null && typeof uri === 'object'
+          ? typeof uri.fsPath === 'string' && uri.fsPath.length > 0
+            ? uri.fsPath
+            : typeof uri.path === 'string' && uri.path.length > 0
+              ? uri.path
+              : null
+          : null;
       const hit = resolveHoverName(
         model.getLineContent(position.lineNumber),
         position.column,
         getTables(),
         header,
+        filePath,
       );
       if (!hit) return undefined;
       const contents = [{ value: `**${hit.name}**（${hit.kind}）` }];

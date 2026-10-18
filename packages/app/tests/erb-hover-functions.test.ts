@@ -170,3 +170,42 @@ describe('ERB 函数悬停 · installHover 渲染', () => {
     expect(values.some((v) => v.includes('BOOK.ERB:10'))).toBe(true);
   });
 });
+
+/**
+ * `#DIM` 声明名悬停（2026-10-19）：与函数路共用 `ErbIndex.files`，按**路径归一**找本文件。
+ * 判据：中文声明名可命中、Windows 分隔符 / 大小写不敏感、非本文件 / 未给路径 ⇒ 不猜。
+ */
+describe('ERB `#DIM` 声明悬停', () => {
+  const dimFile = {
+    path: 'C:/proj/ERB/DIM.ERB',
+    functions: [],
+    dims: [{ name: '好感度', directive: 'DIM', line: 12 }],
+    lineCount: 30,
+    hasFunctionDirective: false,
+  };
+  const dimIndex = {
+    files: new Map([['C:/proj/ERB/DIM.ERB', dimFile]]),
+    byName: new Map(),
+  } as unknown as ErbIndex;
+  const dimTables: HoverTables = { erbIndex: () => dimIndex };
+  const atDim = (marked: string, path: string | null) =>
+    resolveHoverName(marked.replace('|', ''), marked.indexOf('|') + 1, dimTables, {}, path);
+
+  it('中文声明名命中：显示声明指令与定义行', () => {
+    const hit = atDim('IF 好感|度 >= 50', 'C:/proj/ERB/DIM.ERB');
+    expect(hit?.name).toBe('好感度');
+    expect(hit?.kind).toBe('#DIM 声明');
+    expect(hit?.lines?.some((l) => l.includes('DIM.ERB:12'))).toBe(true);
+  });
+
+  it('路径归一：反斜杠 + 大小写不同也命中（索引键与 model.uri 来自不同腿）', () => {
+    const hit = atDim('好感|度 = 1', String.raw`c:\proj\erb\dim.erb`);
+    expect(hit?.name).toBe('好感度');
+  });
+
+  it('负例：未给路径 / 文件不在索引 / 词不是声明名 ⇒ 一律不显示（不猜）', () => {
+    expect(atDim('好感|度 = 1', null)).toBeUndefined();
+    expect(atDim('好感|度 = 1', 'C:/proj/ERB/OTHER.ERB')).toBeUndefined();
+    expect(atDim('未知|词 = 1', 'C:/proj/ERB/DIM.ERB')).toBeUndefined();
+  });
+});
