@@ -113,13 +113,41 @@ describe('状态注入面板：扫描结果必须订阅（不是一次性读）'
 
     // ① 空态自愈：挂载即补一次 scan（引擎侧幂等）
     expect(state.scans).toBe(1);
-    expect(host.textContent).toContain('打开项目并扫描到存档后可用');
+    // ② 自愈扫描回来后，空态说清**真实成因**（扫到了目录、零个可解析存档），
+    //    而不是旧文案「打开项目并扫描到存档后可用（存档列表来自「归档浏览器」面板）」
+    //    ——那个面板已封存，照做只会更困惑（W-1 空态细分）。
+    expect(host.textContent).toContain('没有找到可解析的存档文件');
 
-    // ② 订阅到达 ⇒ 真实重渲（旧实现停在上面的空态不动）
+    // ③ 订阅到达（扫到档）⇒ 重渲成「请从上方选择要改写的存档」（旧实现停在第一步不动）
     await act(async () => {
       emit(ONE_ENTRY_SCAN);
     });
     expect(host.textContent).toContain('请从上方选择要改写的存档');
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  });
+
+  it('「重新扫描」可点：再扫一次且不并发（引擎 inFlight 去重）', async () => {
+    const { source, state } = makeSource(EMPTY_SCAN);
+    const Panel = makePanel(source);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(createElement(Panel as never, {} as never));
+    });
+    expect(state.scans).toBe(0);
+
+    const btn = host.querySelector('.inj-rescan') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    await act(async () => {
+      btn!.click();
+    });
+    expect(state.scans).toBe(1);
 
     await act(async () => {
       root.unmount();

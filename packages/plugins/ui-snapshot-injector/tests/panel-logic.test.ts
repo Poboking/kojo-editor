@@ -23,6 +23,7 @@ import {
   dedupePending,
   diffRows,
   editKey,
+  emptySlotsReason,
   listScopes,
   listVars,
   nextCellWindow,
@@ -235,6 +236,41 @@ describe('panelPhase', () => {
 
   it('优先级：loading 先于缺解析结果（加载中不误判 error）', () => {
     expect(panelPhase({ hasSlots: true, path: 'a', loading: true, loadError: 'x', hasArchive: false })).toBe('loading');
+  });
+});
+
+/* ---------------- 空态成因细分（W-1） ---------------- */
+
+describe('emptySlotsReason', () => {
+  const base = { hasProject: true, scanDir: 'D:/game/save', total: 3, valid: 2, scanning: false };
+
+  it('没有项目 ⇒ no-project（扫描根本无从谈起）', () => {
+    expect(emptySlotsReason({ ...base, hasProject: false })).toBe('no-project');
+  });
+
+  it('扫描在飞 ⇒ scanning（不是"没有存档"）', () => {
+    expect(emptySlotsReason({ ...base, scanning: true, total: 0, valid: 0 })).toBe('scanning');
+  });
+
+  it('从未扫描过（scanDir=null）⇒ scanning：面板刚挂载时自愈扫描在飞', () => {
+    expect(emptySlotsReason({ ...base, scanDir: null, total: 0, valid: 0 })).toBe('scanning');
+  });
+
+  it('项目无存档目录（scanDir=""）⇒ no-dir：动作是去设置里配目录', () => {
+    expect(emptySlotsReason({ ...base, scanDir: '', total: 0, valid: 0 })).toBe('no-dir');
+  });
+
+  it('扫到了目录但零个存档文件 ⇒ no-archives', () => {
+    expect(emptySlotsReason({ ...base, total: 0, valid: 0 })).toBe('no-archives');
+  });
+
+  it('有存档文件但一个都解析不了 ⇒ all-unreadable（与"零个文件"是两种病）', () => {
+    expect(emptySlotsReason({ ...base, total: 4, valid: 0 })).toBe('all-unreadable');
+  });
+
+  it('优先级：没项目 > 扫描中 > 无目录（同时成立时按前者的动作提示）', () => {
+    expect(emptySlotsReason({ hasProject: false, scanDir: '', total: 0, valid: 0, scanning: true })).toBe('no-project');
+    expect(emptySlotsReason({ hasProject: true, scanDir: '', total: 0, valid: 0, scanning: true })).toBe('scanning');
   });
 });
 

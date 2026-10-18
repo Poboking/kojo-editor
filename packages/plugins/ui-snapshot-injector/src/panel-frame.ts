@@ -8,7 +8,7 @@
 
 import { createElement, type ReactNode } from 'react';
 import type { SnapshotArchiveEntry } from '@kojo/plugin-api';
-import { panelPhase } from './panel-logic';
+import { panelPhase, type EmptySlotsReason } from './panel-logic';
 
 export interface ToolbarProps {
   /** 当前选中的档位路径；未选 = null */
@@ -16,11 +16,15 @@ export interface ToolbarProps {
   /** 可解析档位（浅解析结果里 meta 有效且无 error 的条目；过滤语义在面板层） */
   readonly rows: readonly SnapshotArchiveEntry[];
   readonly setPath: (path: string | null) => void;
+  /** 扫描是否在飞（按钮置灰 + 文案切换；引擎 inFlight 去重，连点不会并发） */
+  readonly scanning?: boolean;
+  /** 重新扫描（存档目录换了 / 新存了档 / 面板早于项目挂载时的兜底） */
+  readonly onRescan?: () => void;
 }
 
-/** 顶部工具条（说明行 + 档位下拉） */
+/** 顶部工具条（说明行 + 档位下拉 + 重新扫描） */
 export function renderToolbar(props: ToolbarProps): ReactNode {
-  const { path, rows, setPath } = props;
+  const { path, rows, setPath, scanning = false, onRescan } = props;
   const sel = createElement('select', {
     className: 'inj-select',
     value: path ?? '',
@@ -35,9 +39,25 @@ export function renderToolbar(props: ToolbarProps): ReactNode {
     ),
   );
 
+  /**
+   * 「重新扫描」是**可用性缺口**不是锦上添花：扫描只发生在 `project.opened`，
+   * 换存档目录、新存一档、或面板早于扫描挂载时，此前**没有任何手动入口**
+   * （只有切走面板再切回来才重挂载）。缺省不传回调时不渲染（测试与旧宿主零改动）。
+   */
+  const rescan = onRescan
+    ? createElement('button', {
+        className: 'inj-rescan',
+        type: 'button',
+        disabled: scanning,
+        title: '重新扫描当前项目的存档目录',
+        onClick: () => onRescan(),
+      }, scanning ? '扫描中…' : '重新扫描')
+    : null;
+
   return createElement('div', { className: 'inj-toolbar' },
     createElement('span', { className: 'dim' }, '改写存档变量（写前自动备份 · 写后校验）'),
     sel,
+    rescan,
   );
 }
 
@@ -49,11 +69,25 @@ export interface PhaseBoxProps {
   readonly loading: boolean;
   readonly loadError: string | null;
   readonly hasArchive: boolean;
+  /** 'no-slots' 的真实成因（细分文案；缺省按旧口径） */
+  readonly emptyReason?: EmptySlotsReason;
+  /** 重新扫描回调（挂在空态提示里，让用户不必去找工具条） */
+  readonly onRescan?: () => void;
 }
+
+/** 空态文案：每种成因给出**下一步动作**，不写"请检查配置"这种空话 */
+const EMPTY_TEXT: Readonly<Record<EmptySlotsReason, string>> = {
+  'no-project': '还没有打开项目。存档目录来自当前项目——先打开一个游戏项目。',
+  'no-dir': '当前项目没有配置存档目录。在项目设置里指定游戏存档目录后点「重新扫描」。',
+  scanning: '正在扫描存档目录…',
+  'no-archives': '已扫描存档目录，没有找到可解析的存档文件。新存一档后点「重新扫描」。',
+  'all-unreadable': '找到了存档文件，但没有一个能解析——原因见日志（可能是别的游戏的存档，或文件损坏）。',
+};
 
 /** 非就绪阶段（无档位 / 未选档 / 读取中 / 读取失败）的整屏提示；ready ⇒ null */
 export function renderPhaseBox(props: PhaseBoxProps): ReactNode {
-  const { head, path, loading, loadError } = props;
+  const { head, path, loading, loadError, onRescan } = props;
+  const reason = props.emptyReason ?? 'no-archives';
   switch (panelPhase({
     hasSlots: props.hasSlots,
     path,
@@ -63,7 +97,14 @@ export function renderPhaseBox(props: PhaseBoxProps): ReactNode {
   })) {
     case 'no-slots':
       return createElement('div', { className: 'panel-snapshot-injector' }, head,
-        createElement('div', { className: 'inj-empty dim' }, '打开项目并扫描到存档后可用（存档列表来自「归档浏览器」面板）'));
+        createElement('div', { className: 'inj-empty dim' }, EMPTY_TEXT[reason]),
+        onRescan && (reason === 'no-dir' || reason === 'no-archives' || reason === 'all-unreadable')
+          ? createElement('button', {
+              className: 'inj-rescan',
+              type: 'button',
+              onClick: () => onRescan(),
+            }, '重新扫描')
+          : null);
     case 'no-selection':
       return createElement('div', { className: 'panel-snapshot-injector' }, head,
         createElement('div', { className: 'inj-empty dim' }, '请从上方选择要改写的存档'));

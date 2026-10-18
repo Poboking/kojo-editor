@@ -52,6 +52,40 @@ export function panelPhase(s: PanelPhaseInput): PanelPhase {
   return 'ready';
 }
 
+/**
+ * 「没有可选档位」的**真实成因**（'no-slots' 阶段的细分）。
+ *
+ * 为什么细分：旧文案只有一句「打开项目并扫描到存档后可用（存档列表来自「归档浏览器」面板）」，
+ * 而真实成因至少五种，动作完全不同（开项目 / 配存档目录 / 等扫描 / 换目录 / 看解析错误）。
+ * 更糟的是它把用户指向**已封存**的「归档浏览器」面板——照做只会更困惑。
+ * 判据顺序即优先级：没有项目 ⇒ 谈不上扫描；扫描在飞 ⇒ 说「正在扫描」而不是「没有」。
+ */
+export type EmptySlotsReason = 'no-project' | 'no-dir' | 'scanning' | 'no-archives' | 'all-unreadable';
+
+export interface EmptySlotsInput {
+  /** 是否有打开的项目 */
+  hasProject: boolean;
+  /** 最近一次扫描的目录；从未扫描过 = null（项目无存档目录时为空串） */
+  scanDir: string | null;
+  /** 扫描条目总数（含浅解析失败的） */
+  total: number;
+  /** 可解析条目数（meta 非空且无 error） */
+  valid: number;
+  /** 扫描是否在飞（面板自愈 / 用户点「重新扫描」） */
+  scanning: boolean;
+}
+
+export function emptySlotsReason(s: EmptySlotsInput): EmptySlotsReason {
+  if (!s.hasProject) return 'no-project';
+  if (s.scanning) return 'scanning';
+  // 还没扫过（面板刚挂载，自愈 scan 在飞）：报「正在扫描」而不是「没有存档」
+  if (s.scanDir === null) return 'scanning';
+  if (s.scanDir === '') return 'no-dir';
+  if (s.total === 0) return 'no-archives';
+  if (s.valid === 0) return 'all-unreadable';
+  return 'no-archives';
+}
+
 /** 变量语义标签（家族/标量级）；无 schema 或无描述 → null */
 export function varLabel(schema: VariableSchema | undefined, key: string): string | null {
   const d = schema?.lookup(key)?.description;

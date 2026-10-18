@@ -2850,6 +2850,24 @@ button.erb-mode-hint.unlocked:hover {
   padding: 3px 2px;
   word-break: break-all;
 }
+/* 「重新扫描」（W-1，2026-10-19）：扫描此前只在 project.opened 发生，面板没有任何手动入口。
+   与 inj-inject-row 里的按钮同族，但独立成类以免被注入按钮的强调色带跑。 */
+.inj-rescan {
+  font-size: var(--fs-0);
+  padding: 2px 8px;
+  border: 1px solid var(--border, #d8dde3);
+  border-radius: var(--r-1, 4px);
+  background: var(--bg-1, transparent);
+  color: inherit;
+  cursor: pointer;
+}
+.inj-rescan:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+.inj-rescan:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 
 /* ========================== 糖预览面板（pv-*，v0.3 S4-UI） ========================== */
 .panel-sugar-preview {
@@ -5628,10 +5646,6 @@ button.primary .hint {
   color: var(--accent);
   font-weight: 700;
 }
-.cm-entry-hint-auto {
-  margin-left: 6px;
-  color: var(--amber);
-}
 
 /* ---- 工具条 ---- */
 .cm-toolbar {
@@ -6093,19 +6107,17 @@ button.primary .hint {
 .cm-fillbar-write {
   font-size: var(--fs-0);
 }
-.cm-fill-target-label {
+.cm-fill-target {
   flex: 1 1 150px;
   min-width: 0;
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 240px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
   color: var(--fg);
   font-size: var(--fs-0);
-  font-variant-numeric: tabular-nums;
-}
-.cm-fill-target-label.dim {
-  color: var(--fg-dim);
+  padding: 0 6px;
 }
 .cm-fillbar-btn {
   height: 26px;
@@ -6392,55 +6404,32 @@ button.primary .hint {
   background: var(--accent);
   border-color: var(--accent-text);
 }
-/* 填格子模式：空缺格给出可点外观。由网格容器 class 驱动（`:where` 保持低特异性），
-   进入/退出模式不重渲任何行。标记用**红色圆圈**（用户反馈要更醒目）：
-   未选 = 空心红环；已选 = 实心红圆 + ✓。 */
+/* 填格子模式：空缺格给出可点外观。由网格容器 class 驱动（`:where` 保持低特异性，
+   选中态的 .fill-sel 仍能压过）；+ 号用伪元素，进入/退出模式不重渲任何行。 */
 .cm-scroll.cm-fill :where(.cm-cell.off) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   border-color: var(--border-subtle);
   background: var(--hover-soft);
   color: var(--fg-dim);
 }
 .cm-scroll.cm-fill :where(.cm-cell.off):hover {
-  border-color: var(--red);
-  background: color-mix(in srgb, var(--red) 10%, transparent);
-  color: var(--red);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent-text);
 }
 .cm-scroll.cm-fill :where(.cm-cell.off:not(.fill-sel)) {
   font-size: 0;
 }
 .cm-scroll.cm-fill :where(.cm-cell.off:not(.fill-sel))::before {
-  content: '';
-  width: 9px;
-  height: 9px;
-  border: 1.5px solid var(--red);
-  border-radius: 50%;
-  box-sizing: border-box;
-  opacity: 0.9;
+  content: '+';
+  font-size: 11px;
+  line-height: 1;
 }
 .cm-cell.off.fill-sel {
-  background: color-mix(in srgb, var(--red) 26%, transparent);
-  border-color: var(--red);
-  color: #fff;
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent-text);
   font-weight: 700;
-  font-size: 0;
-  box-shadow: inset 0 0 0 1px var(--red);
-}
-.cm-cell.off.fill-sel::before {
-  content: '✓';
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: var(--red);
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .cm-cell.sel {
   box-shadow: inset 0 0 0 1px var(--fg);
@@ -9579,133 +9568,4 @@ button.resume-session {
 :root[data-motion='reduced'] .kb-capture,
 :root[data-motion='reduced'] .kb-flashed .kb-chip {
   animation: none;
-}
-
-/* ═══════════════ 问题面板 · 分组 / 过滤 / 行内修复 / 复制（P2-13，2026-10-19） ═══════════════
-   组头 / 过滤条 / 行内按钮与反馈。行沿既有 .prob-item / .conv-issue-btn 语言，
-   这里只补新格子；颜色全部走主题 token，严重级色沿用面板内联的 SEVERITY_COLOR。 */
-
-/* 行容器改横排：跳源按钮占满、修复/复制收在行尾 */
-.prob-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.prob-item .conv-issue-btn {
-  flex: 1;
-  min-width: 0;
-}
-.prob-fix,
-.prob-copy {
-  flex: none;
-  padding: 1px 6px;
-  font-size: var(--fs-0);
-}
-
-/* 组头：整行可点，折叠箭头 + 短路径 + 分级计数 */
-.prob-group {
-  margin: 0;
-}
-.prob-group-head {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: none;
-  border: none;
-  color: var(--fg);
-  padding: 3px 4px 2px;
-  text-align: left;
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-1);
-  font-weight: 600;
-}
-.prob-group-head:hover {
-  background: var(--hover);
-}
-.prob-group-caret {
-  flex: none;
-  width: 10px;
-  color: var(--fg-dim);
-  font-size: var(--fs-0);
-}
-.prob-group-path {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.prob-group-counts {
-  flex: none;
-  display: flex;
-  gap: 6px;
-  font-family: var(--font-meta);
-  font-size: var(--fs-0);
-  font-variant-numeric: tabular-nums;
-  font-weight: 400;
-}
-.prob-group-rows {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 0 12px;
-}
-
-/* 过滤条：严重级勾选 + 文本输入 + 筛出计数 */
-.prob-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 4px;
-  flex-wrap: wrap;
-}
-.prob-sev-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: var(--fs-0);
-  cursor: pointer;
-  user-select: none;
-}
-.prob-sev-check input {
-  accent-color: var(--accent-strong);
-}
-.prob-filter {
-  flex: 1;
-  min-width: 90px;
-  padding: 1px 6px;
-  font-size: var(--fs-0);
-}
-.prob-filtered-count {
-  flex: none;
-  font-size: var(--fs-0);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 行级反馈（复制 / 修复成败，1.8s 自动收起） */
-.prob-flash {
-  flex: none;
-  font-size: var(--fs-0);
-  color: var(--fg-dim);
-  white-space: nowrap;
-
-/* ==========================================================================================
- * 快速修复预览（P2-14）—— .qfp-*
- * 本段只追加在文件末尾，不改上方任何既有规则（P2-13 的 .prob-* 也会各占一段）。
- * 宿主类名（wizard / kd-host / kd-labels / wizard-actions / kd-error）与 DiffViewOverlay
- * 共用同一套既有样式，这里只补预览自己的两格。
- * ========================================================================================== */
-
-/* 只读 diff 编辑器：比 DiffViewOverlay 的 kd-editor 矮一档（预览是一次短确认，不是长比对） */
-.qfp-editor {
-  height: 46vh;
-  min-height: 260px;
-  border: 1px solid var(--border, #3a4252);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-/* 侧标签下的那句口径说明：确认前不落盘、可撤销 */
-.qfp-hint {
-  margin: 0 0 8px;
 }

@@ -26,6 +26,7 @@ import {
   VAR_WINDOW,
   buildOverrides,
   dedupePending,
+  emptySlotsReason,
   runInjectFlow,
   listVars,
   parseCellIndex,
@@ -121,9 +122,21 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
      * 空态自愈：面板先于扫描挂载（或扫描被项目切换作废）时补一次 scan。
      * `scan()` 幂等（引擎 inFlight 去重 + 代际号作废），失败不在此吞掉——
      * 扫描本身的错误由引擎记日志，面板只关心有没有档位。
+     *
+     * `scanning` 是**界面事实**（按钮置灰 + 「正在扫描」文案），不是引擎状态：
+     * 引擎没有暴露在飞标志，而面板必须能区分「扫描中」与「扫完了、一个都没有」。
      */
+    const [scanning, setScanning] = useState(false);
+    const rescan = useCallback((): void => {
+      setScanning(true);
+      void snapshots
+        .scan()
+        .catch((err: unknown) => ctx.log.warn(`Injector: scan failed: ${err instanceof Error ? err.message : String(err)}`))
+        .finally(() => setScanning(false));
+    }, []);
+
     useEffect(() => {
-      if (snapshots.current() === null) void snapshots.scan().catch(() => undefined);
+      if (snapshots.current() === null) rescan();
     }, []);
 
     /**
@@ -337,7 +350,7 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
 
     /* ------------------------------ 渲染 ------------------------------ */
 
-    const head = renderToolbar({ path, rows, setPath });
+    const head = renderToolbar({ path, rows, setPath, scanning, onRescan: rescan });
 
     const phaseBox = renderPhaseBox({
       head,
@@ -346,6 +359,15 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       loading,
       loadError,
       hasArchive: archive !== null,
+      // 空态按真实成因细分（无项目 / 无存档目录 / 扫描中 / 零档 / 全解析失败）
+      emptyReason: emptySlotsReason({
+        hasProject: project.current() != null,
+        scanDir: scan?.dir ?? null,
+        total: (scan?.entries ?? []).length,
+        valid: rows.length,
+        scanning,
+      }),
+      onRescan: rescan,
     });
     if (phaseBox) return phaseBox;
     // panelPhase 判为 ready 即必有解析结果（`hasArchive: archive !== null` 就是同一份
