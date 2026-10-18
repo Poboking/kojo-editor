@@ -121,3 +121,19 @@
 
 | ID | 任务（现象 / 复现 / 判据） | 认领 |
 |---|---|---|
+
+## X. P2 体验差距批（2026-10-18 用户点名；六线并行，一线一树一分支）
+
+> 缺陷清单来自用户点名的「P2 体验差距」六项，证据行为派发时（origin/master `684e183`）的仓库现状。
+> **并行纪律**：一条线一个工作树 + 一条短命分支（`b/<线>/1018-*`）；独占文件集＝硬约束，越界一律不改；
+> 热点 `EditorPane.tsx` / `styles.css` / `SettingsPanel.tsx` 单主或只许追加自己的行（PITFALLS §93 同款）；
+> 落地由 lead 逐条过 master 窄门（fetch → rebase → 门槛全绿 → `push HEAD:master`，永不 force），agent 只推自己的分支。
+
+| ID | 任务 | 关键判据 / 已实测事实 | 独占文件集 · 认领 |
+|---|---|---|---|
+| P2-11 | **检索三缺：非流式 / 非打字即搜 / 仅路径排序**（`search-store.ts:252` 一把 await 等全量；Rust 侧线程化已是好底子） | ①流式：命中文件随扫随到（Rust 逐文件事件 → 壳层增量累积渲染，取消/过期丢弃口径不变）；②打字即搜：防抖 + 单飞 + 可关（默认值带理由）；③排序：路径 / 命中数 / 文件名可选，排序是纯函数、对在途流式结果也成立 | `packages/app/src/ui/{search-store,search-query,SearchPanel}.tsx` · `search-panel.css` · `packages/app/src/bridge/search.ts` · `packages/app/src-tauri/src/lib.rs`（run_search 段）+ `search_tests.rs` · 认领：search 2026-10-18 |
+| P2-12 | **补全无模糊/拼音/子序列匹配——中文场景 `hs` 补不出「好感度系统」**（`completion-core.ts:302` 排名只有前三档） | 新增档位：子序列/拼音首字母/全拼命中排在「前缀命中」之后「其它」之前；`filterText` 承载可检索键（Monaco 侧 fuzzyScore 不挂拼音词典，见 `kojo-completion.ts:275` 注）；拼音表内嵌零新依赖；既有前缀档行为与排序逐字不变 | `packages/app/src/monaco/completion-core.ts` + 新 `pinyin*.ts` · `packages/app/tests/completion-*.test.ts` · 认领：complete 2026-10-18 |
+| P2-13 | **ProblemPanel 扁平：无按文件分组/过滤/行内 fix/复制消息**（`ProblemPanel.tsx`） | 四件事全做：按文件分组（可折叠，组内计数）；过滤（严重级 + 文本）；行内 fix（对该诊断问 `ui.editor.codeAction` 槽，唯一解才给按钮，预览后落）；复制消息（剪贴板，含路径:行）。纯逻辑（分组/过滤/复制文案）独立可单测 | `packages/app/src/ui/{ProblemPanel,problem-store}.ts` + 新 `problem-fix.ts` · `App.tsx`（只许追加接线）· CSS `.prob-*` · 认领：problems 2026-10-18 |
+| P2-14 | **quick fix 无 preview diff；格式化规则零可配置（仅 on/off）**（`kojo-code-action.ts:43`、`format-pref.ts:22`） | ①带 `edits` 的动作先出 preview diff（复用既有 diff 视图，确认才落，取消不写）；②格式化规则（全角空格折算 / 缩进归一）逐条可配：`computeFormatEdits` additive 选项参 + 设置页两个开关 + 保存链路现读；默认全开（与今天行为一致） | `packages/app/src/monaco/{kojo-code-action,kojo-format}.ts` · `packages/app/src/ui/{format-pref,editor-global-providers,SettingsPanel}.ts(x)` · `packages/plugins/kojo-sugar/src/formatter.ts` · 认领：codeaction 2026-10-18 |
+| P2-15 | **替换无保留大小写；文件过滤仅扩展名无 glob；文件历史无任意两版互比**（`search-query.ts:24`、`FileHistoryOverlay.tsx:213`） | ①保留大小写（纯函数 + 四种形态用例；可关）；②glob：`*.kojo` / `**/x/*.erb` 等，Rust 侧翻译成regex（不新增 crate）；③历史任选两行互比（选中态 + 「对比两版」，复用 `ui.diffView.open`） | `packages/app/src/ui/{search-query,search-replace,search-replace-exec,FileHistoryOverlay,file-history}.ts` · `packages/app/src-tauri/src/lib.rs`（collect_files/DTO 段）+ `search_tests.rs` · 认领：replace 2026-10-18 |
+| P2-16 | **wordWrap 被体量档硬控、multiCursorModifier/columnSelection 无配置面**（`EditorPane.tsx:1546`） | 三个选项进设置页（折行：跟随体量/开/关；多光标修饰键；列选择）；create 与切文件两条路径同源；档位表不变式（`sizeTierKeysMissingFromSmall` 恒空、切回小文件不卡关值）保持 | `packages/app/src/ui/{EditorPane,editor-options}.ts` + 新 `layout-pref.ts` · `SettingsPanel.tsx`（只许追加行）· `packages/app/tests/{editor-options,ps5-editor-tiers}.test.ts` · 认领：layout 2026-10-18 |
