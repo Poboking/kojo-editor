@@ -29,6 +29,7 @@ import {
   join,
   type FileIO,
   type MarketService,
+  type OpJournal,
   type Plugin,
   type RemoteService,
 } from '@kojo/plugin-api';
@@ -78,6 +79,16 @@ export function createKojoMarketPlugin(opts: KojoMarketPluginOptions): Plugin {
         log: ctx.log,
         root,
         appVersion: av,
+        // 批操作 journal（2026-10-18 undo 覆盖批，additive 可选注入）：装 / 卸整包
+        // 进账可撤销。tryInject 缺席 / 失败 ⇒ undefined（装卸照旧、不进账——旧内核兼容）。
+        journal: (() => {
+          try {
+            return ctx.tryInject<OpJournal>(KernelServices.Ops) ?? undefined;
+          } catch (err) {
+            ctx.log.warn(`批操作账本获取失败（装卸将不进账）：${String(err)}`);
+            return undefined;
+          }
+        })(),
         ...(opts.now ? { now: opts.now } : {}),
       });
       ctx.provide(MARKET_SERVICE_KEY, service);

@@ -189,3 +189,103 @@ describe('restoreBackup · 恢复 = 既有写链路', () => {
     await expect(io.restoreBackup(f, '20200101-000000-000.bak')).rejects.toThrow('历史版本不存在');
   });
 });
+describe('字节上限（2026-10-18 字节上限批）', () => {
+  /** 备份根下全部 .bak 的实算总字节（与 sweep 的计数口径一致：只认 .bak） */
+  const backupRootBytes = async (): Promise<number> => {
+    let total = 0;
+    const walk = async (dir: string): Promise<void> => {
+      for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) await walk(p);
+        else if (e.name.endsWith('.bak')) total += (await fs.stat(p)).size;
+      }
+    };
+    await walk(path.join(appData, 'backup'));
+    return total;
+  };
+
+  /** 带字节挡位的独立 io 实例（不干扰 beforeEach 的默认挡位 io） */
+  const cappedIo = (
+    caps: { maxPerBucketBytes?: number; maxTotalBytes?: number },
+    warns?: string[],
+  ): { io: FileIOServiceImpl; f: (name: string) => string } => {
+    const log = warns === undefined
+      ? undefined
+      : { debug() {}, info() {}, warn: (m: string) => warns.push(m), error() {} };
+    const io2 = new FileIOServiceImpl(new NodeBridge(appData), log, {}, undefined, caps);
+    const dir = path.join(tmpDir, `ws-${Math.random().toString(36).slice(2)}`);
+    io2.setAppWritableRoots([dir]);
+    return { io: io2, f: (name: string) => path.join(dir, name) };
+  };
+
+  it('单桶字节超限：最旧先裁到预算内，且裁剪出声（铁律 4）', async () => {
+    const warns: string[] = [];
+    const { io: io2, f } = cappedIo({ maxPerBucketBytes: 10 }, warns);
+    const x = f('x.ERB');
+    await io2.writeText(x, 'aa', { encoding: 'utf-8' }); // 首存无备份
+    await nap();
+    await io2.writeText(x, 'bbbb', { encoding: 'utf-8' }); // 备份 'aa' 2B → 桶 2B
+    await nap();
+    await io2.writeText(x, 'cc', { encoding: 'utf-8' }); // 备份 'bbbb' 4B → 桶 6B
+    await nap();
+    await io2.writeText(x, 'dd', { encoding: 'utf-8' }); // 备份 'cc' 2B → 桶 8B
+    await nap();
+    await io2.writeText(x, 'ee', { encoding: 'utf-8' }); // 备份 'dd' 2B → 桶 10B（贴着上限）
+    await nap();
+    await io2.writeText(x, 'ff', { encoding: 'utf-8' }); // 备份 'ee' 2B → 12B > 10 ⇒ 裁 'aa' 2B
+    const list = await io2.listBackups(x);
+    expect(list).toHaveLength(4); // 'bbbb'/'cc'/'dd'/'ee'，最旧的 'aa' 被裁
+    expect(list.map((v) => v.size).sort((a, b) => a - b)).toEqual([2, 2, 2, 4]);
+    // 时间线最旧一版是 'bbbb'（4B）——'aa' 的 2B 已不在
+    expect(list.reduce((m, v) => (v.id < m.id ? v : m)).size).toBe(4);
+    expect(warns.some((w) => w.includes('备份桶字节超限'))).toBe(true);
+  });
+
+  it('总量超限（force 巡检）：跨桶按版本时序最旧先裁到预算内', async () => {
+    const { io: io2, f } = cappedIo({ maxTotalBytes: 15 });
+    const a = f('a.ERB');
+    const b = f('b.ERB');
+    await io2.writeText(a, 'a1', { encoding: 'utf-8' });
+    await nap();
+    await io2.writeText(a, 'a2', { encoding: 'utf-8' }); // 备份 2B
+    await nap();
+    await io2.writeText(a, 'a3', { encoding: 'utf-8' }); // 备份 2B
+    await nap();
+    await io2.writeText(b, 'b1', { encoding: 'utf-8' });
+    await nap();
+    await io2.writeText(b, 'b2', { encoding: 'utf-8' }); // 备份 2B → 总 6B ≤ 15
+    await io2.sweepBackupRootBytes(true);
+    expect(await backupRootBytes()).toBe(6);
+    await nap();
+    await io2.writeText(b, 'b3', { encoding: 'utf-8' }); // 8B
+    await nap();
+    await io2.writeText(b, 'b44', { encoding: 'utf-8' }); // 10B
+    await nap();
+    await io2.writeText(b, 'b555', { encoding: 'utf-8' }); // 13B
+    await nap();
+    await io2.writeText(b, 'b6', { encoding: 'utf-8' }); // 备份 'b555' 4B → 17B > 15
+    await io2.sweepBackupRootBytes(true); // 裁最旧 'a1' 2B → 15B ≤ 15
+    expect(await backupRootBytes()).toBe(15);
+    // a 只剩较新一版（最旧 'a1' 被裁），b 完整保留（5 版）
+    expect((await io2.listBackups(a)).map((v) => v.size)).toEqual([2]);
+    expect((await io2.listBackups(b)).map((v) => v.size).sort((x, y) => x - y)).toEqual([2, 2, 2, 3, 4]);
+  });
+
+  it('总量巡检节流：60s 内不重复全根扫，force 绕过', async () => {
+    const { io: io2, f } = cappedIo({ maxTotalBytes: 4 });
+    const x = f('x.ERB');
+    await io2.writeText(x, 'a1', { encoding: 'utf-8' });
+    await nap();
+    await io2.writeText(x, 'a2', { encoding: 'utf-8' }); // 备份 2B
+    await io2.sweepBackupRootBytes(true); // 锚定节流钟（总量 2B ≤ 4 无操作）
+    await nap();
+    await io2.writeText(x, 'a3', { encoding: 'utf-8' }); // 4B；顺手巡检被节流
+    await nap();
+    await io2.writeText(x, 'a44', { encoding: 'utf-8' }); // 6B > 4；顺手巡检仍节流
+    expect(await backupRootBytes()).toBe(6); // 节流内没裁
+    await io2.sweepBackupRootBytes(); // 60s 内 ⇒ 早退
+    expect(await backupRootBytes()).toBe(6);
+    await io2.sweepBackupRootBytes(true); // force ⇒ 真裁最旧 2B
+    expect(await backupRootBytes()).toBe(4);
+  });
+});

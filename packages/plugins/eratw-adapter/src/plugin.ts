@@ -5,6 +5,7 @@ import type {
   GameProject,
   KojoInstructionTable,
   MarketService,
+  OpJournal,
   Plugin,
   ProjectService,
   SugarTranspileService,
@@ -322,7 +323,26 @@ export function createEratwAdapterPlugin(): Plugin {
         }
       };
 
-      const actions = createPackageActions({ io, log: ctx.log, notify: notifyWs, compileKojo });
+      /**
+       * 批操作 journal（2026-10-18 undo 覆盖批，additive 可选注入）：部署整包进账。
+       * 缺席 / 取出失败 ⇒ undefined（部署照旧、不进账——旧内核兼容）。
+       */
+      const tryJournal = (): Pick<OpJournal, 'begin' | 'record' | 'commit' | 'abort'> | undefined => {
+        try {
+          return ctx.tryInject<OpJournal>(KernelServices.Ops) ?? undefined;
+        } catch (err) {
+          ctx.log.warn(`批操作账本获取失败（部署将不进账）：${String(err)}`);
+          return undefined;
+        }
+      };
+
+      const actions = createPackageActions({
+        io,
+        log: ctx.log,
+        notify: notifyWs,
+        compileKojo,
+        journal: tryJournal(),
+      });
       ctx.onDispose(() => actions.dispose());
 
       /* ---- 部署请求（P-E）：面板包行「部署」→ 向导确认落点与写权限 ---- */

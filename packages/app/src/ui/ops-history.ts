@@ -20,6 +20,10 @@ const KIND_LABELS: Record<string, string> = {
   scaffold: '新建制品（脚手架）',
   'sugar-save': '保存 .kojo（源+产物）',
   'snapshot-inject': '注入存档变量',
+  'search-replace': '全部替换（跨文件）',
+  deploy: '部署包到游戏目录',
+  'market-install': '安装市场包',
+  'market-uninstall': '卸载市场包',
 };
 
 export function opKindLabel(kind: string): string {

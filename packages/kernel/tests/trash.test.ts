@@ -534,3 +534,65 @@ describe('io.purgeTrash / io.holdTrash · 超期清扫不误伤正被引用的�
   });
 });
 
+describe('字节总量档（2026-10-18 字节上限批）', () => {
+  /** 造一个 payload 恰为 n 字节的目录条目（经 capped tm 自己的删除通道），返回条目 id */
+  async function entryOfNBytes(
+    tm: TrashManager,
+    ws: string,
+    name: string,
+    n: number,
+  ): Promise<string> {
+    const target = path.join(ws, name);
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, 'body.bin'), '0'.repeat(n));
+    await tm.moveIntoTrash(target, 'dir');
+    const found = await tm.list();
+    const entry = found.find((e) => pathKey(e.originalPath) === pathKey(target));
+    if (!entry) throw new Error(`条目没进回收站：${target}`);
+    return entry.id;
+  }
+
+  it('总量超限（force）：最旧先裁到预算内，裁剪出声；hold 引用与大小未知的不动', async () => {
+    const warns: string[] = [];
+    const log = { debug() {}, info() {}, warn: (m: string) => warns.push(m), error() {} };
+    const tm = new TrashManager(new NodeBridge(appData), log, { maxTotalBytes: 25 });
+    const ws = writableDir();
+    const oldest = await entryOfNBytes(tm, ws, 'a', 10); // 10B
+    await new Promise((r) => setTimeout(r, 3)); // 条目 id 时序互异
+    const held = await entryOfNBytes(tm, ws, 'b', 10); // 10B（将被 hold）
+    await new Promise((r) => setTimeout(r, 3));
+    const newest = await entryOfNBytes(tm, ws, 'c', 10); // 10B → 总 30B > 25
+
+    tm.hold([held]);
+    const pruned = await tm.sweepBytesOverLimit(true);
+    // 最旧的没被 hold ⇒ 裁它（30-10=20 ≤ 25）；held 与 newest 都在
+    expect(pruned).toBe(1);
+    const ids = (await tm.list()).map((e) => e.id);
+    expect(ids).not.toContain(oldest);
+    expect(ids).toContain(held);
+    expect(ids).toContain(newest);
+    expect(warns.some((w) => w.includes('字节总量超限'))).toBe(true);
+
+    // 放开引用后再超一轮：现在总 20B，再造 10B → 30B > 25，这次轮到 held 之后的
+    const fourth = await entryOfNBytes(tm, ws, 'd', 10); // 总 30B > 25
+    await tm.sweepBytesOverLimit(true);
+    const ids2 = new Set((await tm.list()).map((e) => e.id));
+    expect(ids2.has(held)).toBe(true); // 仍被 hold
+    expect(ids2.has(newest)).toBe(false); // 最旧的未引用者被裁
+    expect(ids2.has(fourth)).toBe(true);
+  });
+
+  it('节流：60s 内跳过（返回 0 且不裁），force 绕过', async () => {
+    const tm = new TrashManager(new NodeBridge(appData), noopLog, { maxTotalBytes: 5 });
+    const ws = writableDir();
+    await entryOfNBytes(tm, ws, 'a', 10); // 10B > 5
+    await tm.sweepBytesOverLimit(true); // 锚定节流钟：裁到 0B（唯一条目没被 hold）
+    expect(await tm.list()).toHaveLength(0);
+    await entryOfNBytes(tm, ws, 'b', 10); // 又超限
+    expect(await tm.sweepBytesOverLimit()).toBe(0); // 节流内：返回 0
+    expect(await tm.list()).toHaveLength(1); // 没裁
+    expect(await tm.sweepBytesOverLimit(true)).toBe(1); // force：真裁
+    expect(await tm.list()).toHaveLength(0);
+  });
+});
+

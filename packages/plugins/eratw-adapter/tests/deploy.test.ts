@@ -8,6 +8,7 @@ import type { CharaInfo, GameProject } from '@kojo/plugin-api';
 // （与本仓 kojo-sugar/tests/compile.test.ts 同一先例——测试可相对路径引内核，
 //   插件正文仍只依赖 @kojo/plugin-api，审计 B 项口径不变）
 import { FileIOServiceImpl } from '../../../kernel/src/io';
+import { OpsJournalImpl } from '../../../kernel/src/journal';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { deployPackage, resolveDeployTarget, type DeployTarget } from '../src/deploy';
 import type { KojoCompiler } from '../src/artifact';
@@ -178,5 +179,76 @@ describe('deployPackage · 部署落盘', () => {
 
     expect(await fs.readFile(path.join(targetDir, '同名.ERB'), 'utf8')).toBe('根级');
     expect(await fs.readFile(path.join(targetDir, '子目录', '同名.ERB'), 'utf8')).toBe('子级');
+  });
+});
+describe('deployPackage · 部署进 OpJournal（2026-10-18 undo 覆盖批）', () => {
+  const noopLog = { debug() {}, info() {}, warn() {}, error() {} };
+
+  it('journal 在场：整包进账（kind=deploy），undo 即整包删除（含自建子目录）', async () => {
+    io.setWritableRoots([gameKojoDir]);
+    const bridge = new NodeBridge(appData);
+    const journal = new OpsJournalImpl({ bridge, io, log: noopLog });
+
+    const n = await deployPackage({ io, srcDir: pkgDir, targetDir, compile, journal });
+    expect(n).toBe(2);
+
+    const list = await journal.list();
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ kind: 'deploy', status: 'committed', fileCount: 2 });
+    expect(list[0]!.label).toContain(targetDir);
+    const entries = await journal.entriesOf(list[0]!.id);
+    expect(entries.every((e) => !e.hasBefore)).toBe(true); // 目标必不存在 ⇒ 全部是"操作内新建"
+
+    await journal.undo(list[0]!.id);
+    expect(await io.exists(targetDir)).toBe(false); // 整包没了
+    expect(await io.exists(gameKojoDir)).toBe(true); // 角色口上目录（本来就存在）不许被清
+    // 源工作区一个字节没动
+    expect(await fs.readFile(path.join(pkgDir, '01 事件.ERB'))).toEqual(
+      iconv.encode('@M_KOJO_K1\nPRINTL 主人\n', 'shift_jis'),
+    );
+  });
+
+  it('begin 失败 ⇒ 部署整体取消（未动盘）：写得出却撤不回的部署不做', async () => {
+    io.setWritableRoots([gameKojoDir]);
+    const journal = {
+      begin: async () => {
+        throw new Error('账本起不来');
+      },
+      record: async () => {},
+      commit: async () => {},
+      abort: async () => {},
+    };
+    await expect(
+      deployPackage({ io, srcDir: pkgDir, targetDir, compile, journal }),
+    ).rejects.toThrow(/账本起不来/);
+    expect(await io.exists(targetDir)).toBe(false); // 没动盘
+  });
+
+  it('record 半途失败 ⇒ 不再写后续文件、abort 被调、主错可见（回滚语义由内核 journal 测试钉）', async () => {
+    io.setWritableRoots([gameKojoDir]);
+    const recorded: string[] = [];
+    let aborted = 0;
+    const journal = {
+      begin: async () => 'op-x',
+      record: async (_id: string, p: string) => {
+        recorded.push(p);
+        if (recorded.length >= 2) throw new Error('记账失败');
+      },
+      commit: async () => {},
+      abort: async () => {
+        aborted++;
+      },
+    };
+    // 注：部署全是"新建条目"（无字节快照）⇒ 内核的字节上限不适用于这里，
+    // 半途失败用 mock 钉时序；abort 的真回滚效果由 ops-journal.test.ts 的
+    // 'abort 逆序恢复已写文件、删除新建文件' 钉死。
+    await expect(
+      deployPackage({ io, srcDir: pkgDir, targetDir, compile, journal }),
+    ).rejects.toThrow(/记账失败/);
+    expect(aborted).toBe(1);
+    expect(recorded).toHaveLength(2); // 第二个 record 抛错 ⇒ 循环中断，第三个（若有）不记
+    // 已写的第一个文件留在盘上（mock 的 abort 不真回滚）；真实现会逆序删掉
+    const left = await fs.readdir(targetDir).catch(() => null);
+    expect(left === null || left.length <= 1).toBe(true);
   });
 });

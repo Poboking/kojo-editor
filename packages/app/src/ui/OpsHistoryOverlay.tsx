@@ -420,7 +420,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
         ? h(
             'p',
             { className: 'dim' },
-            '还没有可撤销的批操作，回收站也是空的。脚手架创建、.kojo 保存（源+产物）、存档变量注入会记进这里；删除（整目录或单文件）会进回收站。',
+            '还没有可撤销的批操作，回收站也是空的。脚手架创建、.kojo 保存（源+产物）、存档变量注入、跨文件全部替换、部署与市场装卸会记进这里；删除（整目录或单文件）会进回收站。',
           )
         : h(
             'table',
@@ -447,7 +447,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
       h(
         'p',
         { className: 'dim oh-path' },
-        '磁盘侧批操作（脚手架 / .kojo 双文件保存 / 存档注入）与回收站条目按时刻并成一条线。编辑器内的普通编辑走 Monaco 自己的 Ctrl+Z，不出现在这里；某个文件的完整四本账请看「显示当前文件的历史版本」。',
+        '磁盘侧批操作（脚手架 / .kojo 双文件保存 / 存档注入 / 跨文件全部替换 / 部署 / 市场装卸）与回收站条目按时刻并成一条线。编辑器内的普通编辑走 Monaco 自己的 Ctrl+Z，不出现在这里；跨文件替换撤销后，已打开标签里的那部分请用编辑器内 Ctrl+Z；某个文件的完整四本账请看「显示当前文件的历史版本」。',
       ),
       state.notes.length > 0
         ? h(

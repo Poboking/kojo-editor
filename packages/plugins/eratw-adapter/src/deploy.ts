@@ -18,7 +18,7 @@
  * 也保证失败发生在动盘之前，不给游戏目录留半成品目录。
  */
 
-import type { FileIO, GameProject } from '@kojo/plugin-api';
+import type { FileIO, GameProject, OpJournal } from '@kojo/plugin-api';
 import { dirname, join } from '@kojo/plugin-api';
 import { planArtifacts, readPackageSources, type KojoCompiler } from './artifact';
 
@@ -80,6 +80,17 @@ export function resolveDeployTarget(
  * `.ERB` 再写，因为引擎只读 `.ERB`——原样复制会把"装了但不生效"留给作者。
  * 非 `.kojo` 文件仍由 `planArtifacts` 保证字节级原样。
  * 转译只发生在**内存**里：工作区的 `.kojo` 一个字节都不会被改写（权威源只有一份）。
+ *
+ * ## 部署进 OpJournal（2026-10-18 undo 覆盖批，additive 可选）
+ *
+ * 部署是往游戏目录批量写新文件，此前不进任何账 ⇒ 撤不回。`journal` 在场时整包进
+ * 一次 op（kind=`deploy`）：目标必不存在（前置判定）⇒ 全部条目是"操作内新建"，
+ * undo 即整包删除（自建目录也由 journal 清理）。收尾策略与批量替换同口径：
+ * - `begin` 失败 ⇒ 抛错取消整个部署（未动盘；写得出却撤不回的部署不做）；
+ * - 中途任何失败 ⇒ `abort` 逆序回滚已写文件——部署要么整包要么没有，
+ *   半包 = 装了但不生效，比不装更糟；
+ * - `commit` 失败 ⇒ 部署本身已完成，抛错如实说（快照保留待人工处置）。
+ * journal 缺席 = 旧行为零改动（additive 可选注入）。
  */
 export async function deployPackage(opts: {
   io: FileIO;
@@ -87,8 +98,10 @@ export async function deployPackage(opts: {
   targetDir: string;
   /** `.kojo` → 产物字节（来自 `SugarTranspileService.compileToBytes`） */
   compile: KojoCompiler;
+  /** 批操作 journal（2026-10-18 undo 覆盖批，additive 可选） */
+  journal?: Pick<OpJournal, 'begin' | 'record' | 'commit' | 'abort'>;
 }): Promise<number> {
-  const { io, srcDir, targetDir, compile } = opts;
+  const { io, srcDir, targetDir, compile, journal } = opts;
 
   const srcStat = await io.stat(srcDir);
   if (!srcStat || !srcStat.isDirectory) {
@@ -103,11 +116,47 @@ export async function deployPackage(opts: {
 
   const plan = planArtifacts(await readPackageSources(io, srcDir), compile);
 
-  await io.ensureDir(targetDir);
-  for (const entry of plan.entries) {
-    const to = join(targetDir, entry.relPath);
-    await io.ensureDir(dirname(to));
-    await io.writeBytes(to, entry.bytes);
+  // begin 在动盘之前、制品计划之后（标签里要有确切的文件数）；失败 ⇒ 整个部署取消
+  const opId = journal !== undefined
+    ? await journal.begin('deploy', `部署包 → ${targetDir}（${plan.entries.length} 个文件）`)
+    : null;
+
+  try {
+    for (const entry of plan.entries) {
+      const to = join(targetDir, entry.relPath);
+      // record 必须先于 ensureDir：此刻落点目录尚不存在 ⇒ journal 才会把整条祖先链
+      // 记成"本 op 自建"（undo 删完文件后有资格连目录一起清）。先建目录再 record，
+      // createdDirs 就是空的——undo 只删文件、留下空壳目录。
+      if (opId !== null) await journal!.record(opId, to);
+      await io.ensureDir(dirname(to));
+      await io.writeBytes(to, entry.bytes);
+    }
+    // 空包也建出落点目录（正常包早由上面的 dirname 连带建出，这趟幂等）
+    await io.ensureDir(targetDir);
+  } catch (e: unknown) {
+    if (opId !== null) {
+      try {
+        // abort 逆序回滚已写文件（对"新建条目实际不在盘上"本身容忍）
+        await journal!.abort(opId);
+      } catch (abortErr: unknown) {
+        // 主错与回滚失败都要见人（半批态 + 快照保留待人工处置——契约：宁可吵不可静默）
+        const main = e instanceof Error ? e.message : String(e);
+        const why = abortErr instanceof Error ? abortErr.message : String(abortErr);
+        throw new Error(`${main}（且回滚失败，快照已保留待人工处置：${why}）`, { cause: e });
+      }
+    }
+    throw e;
+  }
+
+  if (opId !== null) {
+    try {
+      await journal!.commit(opId);
+    } catch (e: unknown) {
+      const reason = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `部署的文件已全部写入 ${targetDir}，但批操作收尾失败（本批不可撤销，快照已保留待人工处置）：${reason}`,
+      );
+    }
   }
   return plan.entries.length;
 }
