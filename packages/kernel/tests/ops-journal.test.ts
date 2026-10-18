@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
 import type { EventBus, FileChangedEvent } from '@kojo/plugin-api';
 import { WriteNotAllowedError } from '@kojo/plugin-api';
-import { FileIOServiceImpl, OpsJournalImpl, OP_ID_RE, OP_SNAPSHOT_RETENTION_MAX } from '../src';
+import { FileIOServiceImpl, OpsJournalImpl, OP_ID_RE, OP_SNAPSHOT_MAX_PER_OP_BYTES, OP_SNAPSHOT_MAX_TOTAL_BYTES, OP_SNAPSHOT_RETENTION_MAX } from '../src';
 import { NodeBridge } from './helpers/node-bridge';
 
 /**
@@ -390,5 +390,66 @@ describe('保留期收口（OP_SNAPSHOT_RETENTION_MAX）', () => {
     await fs.rm(path.join(appData, 'ops', id), { recursive: true, force: true });
     await expect(ops.undo(id)).rejects.toThrow(/保留上限清理/);
     expect(await fs.readFile(f, 'utf-8')).toBe('新值'); // 盘没动
+  });
+});
+describe('字节上限（2026-10-18 字节上限批）', () => {
+  it('默认挡位常量：单 op 512MB / 总量 1GB（产品面数值，改动须过评审）', () => {
+    expect(OP_SNAPSHOT_MAX_PER_OP_BYTES).toBe(512 * 1024 * 1024);
+    expect(OP_SNAPSHOT_MAX_TOTAL_BYTES).toBe(1024 * 1024 * 1024);
+  });
+
+  it('单 op 超限拒记：抛错、条目不落、累计不污染——跳过该文件后批仍成立可撤销', async () => {
+    const capped = new OpsJournalImpl({
+      bridge: new NodeBridge(appData),
+      io,
+      log: noopLog,
+      byteCaps: { perOp: 10 },
+    });
+    const five = wsPath('five.txt');
+    const big = wsPath('big.txt');
+    const four = wsPath('four.txt');
+    await fs.writeFile(five, '12345'); // 5B
+    await fs.writeFile(big, 'x'.repeat(20)); // 20B：一票超限
+    await fs.writeFile(four, '1234'); // 4B：拒记后累计仍干净（5+4=9 ≤ 10）
+    const id = await capped.begin('t', '小挡位批');
+    await capped.record(id, five);
+    await expect(capped.record(id, big)).rejects.toThrow(/单操作上限/);
+    await capped.record(id, four); // 拒记不留半截状态
+    await capped.commit(id);
+    expect((await capped.entriesOf(id)).map((e) => path.basename(e.path))).toEqual([
+      'five.txt',
+      'four.txt',
+    ]);
+    // 记不上账的大文件被调用方跳过 ⇒ 不写；undo 只回滚记上账的两个
+    await fs.writeFile(five, '被改');
+    await capped.undo(id);
+    expect(await fs.readFile(five, 'utf-8')).toBe('12345');
+  });
+
+  it('总量超限：sweep 实算、最旧先裁、被裁 op 不可再撤销、幸存者照常回滚', async () => {
+    const capped = new OpsJournalImpl({
+      bridge: new NodeBridge(appData),
+      io,
+      log: noopLog,
+      byteCaps: { total: 15 },
+    });
+    const mk = async (name: string): Promise<string> => {
+      await new Promise((r) => setTimeout(r, 2)); // startedAt 互异（同毫秒 tie 会让归属不确定）
+      const f = wsPath(name);
+      await fs.writeFile(f, `旧${name}`); // 快照 8B 上下：三档累加才过 15B
+      const id = await capped.begin('t', name);
+      await capped.record(id, f);
+      await fs.writeFile(f, `新${name}`);
+      await capped.commit(id); // commit 触发 sweep：实算保留集字节、超限裁最旧
+      return id;
+    };
+    const a = await mk('a.txt'); // 8B ≤ 15：留
+    const b = await mk('b.txt'); // 16B > 15：裁 a
+    const c = await mk('c.txt'); // b+c=16B > 15：裁 b
+    expect((await capped.list()).map((r) => r.id)).toEqual([c]);
+    await expect(capped.undo(b)).rejects.toThrow(); // 被裁的显式拒绝，不半途爆炸
+    // 幸存者照常可撤销（字节级回滚不受总量档影响）
+    await capped.undo(c);
+    expect(await fs.readFile(wsPath('c.txt'), 'utf-8')).toBe('旧c.txt');
   });
 });

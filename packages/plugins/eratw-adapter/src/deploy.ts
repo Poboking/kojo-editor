@@ -122,13 +122,17 @@ export async function deployPackage(opts: {
     : null;
 
   try {
-    await io.ensureDir(targetDir);
     for (const entry of plan.entries) {
       const to = join(targetDir, entry.relPath);
-      await io.ensureDir(dirname(to));
+      // record 必须先于 ensureDir：此刻落点目录尚不存在 ⇒ journal 才会把整条祖先链
+      // 记成"本 op 自建"（undo 删完文件后有资格连目录一起清）。先建目录再 record，
+      // createdDirs 就是空的——undo 只删文件、留下空壳目录。
       if (opId !== null) await journal!.record(opId, to);
+      await io.ensureDir(dirname(to));
       await io.writeBytes(to, entry.bytes);
     }
+    // 空包也建出落点目录（正常包早由上面的 dirname 连带建出，这趟幂等）
+    await io.ensureDir(targetDir);
   } catch (e: unknown) {
     if (opId !== null) {
       try {

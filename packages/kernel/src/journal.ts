@@ -90,6 +90,12 @@ export interface OpsJournalDeps {
   /** undo/abort 回滚用户文件的唯一通道（过闸）；backup 用于回滚前兜底存现状 */
   io: Pick<FileIO, 'writeBytes' | 'removeFile' | 'backup'>;
   log: Logger;
+  /**
+   * 字节上限（2026-10-18 字节上限批，additive 可选）：缺省用
+   * {@link OP_SNAPSHOT_MAX_PER_OP_BYTES} / {@link OP_SNAPSHOT_MAX_TOTAL_BYTES}。
+   * 测试注入小挡位钉行为，不写几百 MB 的真实文件。
+   */
+  byteCaps?: { perOp?: number; total?: number };
 }
 
 export class OpsJournalImpl implements OpJournal {
@@ -105,8 +111,15 @@ export class OpsJournalImpl implements OpJournal {
     cleanupFailures: 0,
     checkedAt: 0,
   };
+  /** 字节上限挡位（deps.byteCaps 缺省时兜底为常量默认值） */
+  private readonly perOpCap: number;
+  private readonly totalCap: number;
 
-  constructor(private readonly deps: OpsJournalDeps) {}
+  constructor(private readonly deps: OpsJournalDeps) {
+    // 构造体内取值：实例字段初始化器先于参数属性赋值，写在字段声明处会读到 undefined
+    this.perOpCap = deps.byteCaps?.perOp ?? OP_SNAPSHOT_MAX_PER_OP_BYTES;
+    this.totalCap = deps.byteCaps?.total ?? OP_SNAPSHOT_MAX_TOTAL_BYTES;
+  }
 
   /**
    * 最近一次 `list()` 巡检得到的维护状态（崩溃残留 / 回滚失败留痕 / 孤儿快照目录）。
@@ -192,10 +205,10 @@ export class OpsJournalImpl implements OpJournal {
       // 单 op 字节上限（2026-10-18）：超限**拒记**——记不了账的文件由调用方 fail-safe 不写
       // （绝不静默落一个"写得出却撤不回"的文件）。此刻快照未写、entry 未 push，op 状态干净。
       const carried = doc.snapshotBytes ?? 0;
-      if (carried + bytes.length > OP_SNAPSHOT_MAX_PER_OP_BYTES) {
+      if (carried + bytes.length > this.perOpCap) {
         throw new Error(
           `本操作的字节快照将超过单操作上限（已 ${carried}B + 本文件 ${bytes.length}B > ` +
-            `${OP_SNAPSHOT_MAX_PER_OP_BYTES}B）：${path} 未记账，调用方应跳过该文件并如实报告`,
+            `${this.perOpCap}B）：${path} 未记账，调用方应跳过该文件并如实报告`,
         );
       }
       beforePath = `${doc.entries.length}.before`;
@@ -323,19 +336,19 @@ export class OpsJournalImpl implements OpJournal {
       sized.push({ id: d.id, bytes });
       total += bytes;
     }
-    if (total <= OP_SNAPSHOT_MAX_TOTAL_BYTES) return;
+    if (total <= this.totalCap) return;
     // kept 按新→旧排；从最旧（尾部）开始裁，直到总量进预算。被裁的 op 不可再 undo
     // （undo() 的保留期护栏会显式拒绝并提示走备份时间线），不猜、不半裁。
     let over = total;
     const victims: string[] = [];
-    for (let i = sized.length - 1; i >= 0 && over > OP_SNAPSHOT_MAX_TOTAL_BYTES; i--) {
+    for (let i = sized.length - 1; i >= 0 && over > this.totalCap; i--) {
       const v = sized[i]!;
       victims.push(v.id);
       over -= v.bytes;
     }
     for (const id of victims) await this.removeOpArtifacts(id);
     this.deps.log.warn(
-      `ops journal：快照字节总量超限（实算 ${total}B > 上限 ${OP_SNAPSHOT_MAX_TOTAL_BYTES}B），` +
+      `ops journal：快照字节总量超限（实算 ${total}B > 上限 ${this.totalCap}B），` +
         `按最旧先裁清理 ${victims.length} 个操作的快照（裁后约 ${over}B；被裁操作不可再撤销，可从备份时间线恢复）`,
     );
   }
