@@ -24,8 +24,7 @@
 
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
-| P0-1 | 跨文件（闭文件）批量替换进 OpJournal：替换前逐文件快照、OpsHistoryOverlay 可整批撤销、活文件竞态 fail-safe 跳过并如实报告 | `search-replace-exec.ts` 闭文件腿并发 8 直写内核 io 不进账 ⇒ 误操作不可逆 | 进行中 · 认领：p0a 2026-10-18 |
-| P0-2 | 部署（eratw-adapter deploy）与市场装卸（kojo-market commitPack/uninstall，MK-PUB 领域只做 additive）批量写进账 + journal/backup/trash 三本账字节级上限（最旧先裁、可观测） | `deploy.ts:110` 批量 writeBytes、`service.ts` 装卸不进账；三账只有份数/天数上限，大批部署+删除可短时占满 appData | 进行中 · 认领：p0a 2026-10-18 |
+
 | HK-4 | UI 打磨（常任；目标「专业 · 克制 · 流畅 · 高效 · 耐看」，VSCode 为基准） | 自拟六项按序推进：UI-1 字号尺度 ✅§5.121 / UI-2 圆角·边框·阴影 ✅§5.122 / **UI-3 图标 emoji→单色 SVG ✅**（`docs/log/2026-10-13-ui-icons.md`；宿主层渲染面归零；插件自绘面板符号＝跨包图标通道**已交付 ✅** `renderIcon` 桥，3299bd7） → **UI-4 焦点环与键盘可达 ✅**（roving tabindex 漫游 + `:focus-visible` 焦点环） → **UI-5 动效可关 ✅**（设置项 + `<html data-motion>`） → **UI-6 底部问题面板 ✅**（ERB 结构/表达式两层波浪线汇总、点击跳源行；状态栏 ✕/⚠/ℹ 计数经 `kojo.problems` 展开，Ctrl+Shift+M）；每项带可复跑量化判据 | 进行中 · 认领：hk4ui 2026-10-14 |
 | LSRV-1 | **erb-parser 语言服务批：未定义 CALL 目标 warning 波浪线 + `$` 标签转定义** | 判据：①CALL 直系族名字槽里的裸标识符不在 `ErbIndex.byName` ⇒ warning 行级装饰；fail-open 全集（索引缺席零误报 / FORM 动态拼接 / CALLFORM 全族 / 字符串·注释·SKIP 区 / `$` 标签一律不报），判据与 `scanFileRefs` 单源共用不抄第二份正则；②scanner 收集函数内 `$LABEL`（`ErbFile.labels`，strictly additive + 快照 v5→v6），`JUMP`/`GOTO` 系裸标识符 → 本函数同名标签转定义，找不到 = 空数组不猜、不落函数名尺子 | 进行中 · 认领：erb-refs 2026-10-16 |
 | REN-1 | ERB 函数重命名（Monaco RenameProvider，纯宿主侧；`erb.parser` 反向索引 `referencesTo` 为唯一数据源，索引外名字一律拒绝） | 只读文件剔除并在 reject 理由明示「n 个文件只读未纳入」；monaco 0.57 standalone 见 `rejectReason` 丢弃全部编辑 ⇒ **全或无**；未打开文件走内核 io 读改写（standalone bulk edit 对无 live model 的 resource 抛错，WorkspaceEdit 通道只达已开标签） | 进行中 · 认领：erb-rename 2026-10-16 |
