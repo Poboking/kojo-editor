@@ -93,8 +93,12 @@ interface Props {
 /**
  * 产品定位文案（品牌位，非功能耦合）：功能性文案一律游戏无关（解耦审计 A 项
  * 覆盖 app UI 层）；此处游戏名属产品自我介绍，行级豁免（audit-allow）。
+ *
+ * 2026-10-18（AM-1 P4）从「eraTW 口上编辑器」改为「era 口上编辑器」：编辑器已是
+ * **多游戏**（eraTW + eraAkumaMaid 两枚 adapter，detect 各异），品牌位不该钉在
+ * 其中一个游戏名上——那会让另一个游戏的作者以为下错了软件。
  */
-const TAGLINE = 'eraTW 口上编辑器 · 结构感知 × 一切皆插件'; // audit-allow: 品牌位文案（产品定位，非功能耦合）
+const TAGLINE = 'era 口上编辑器 · 结构感知 × 一切皆插件';
 
 /** 最近行的渲染态：unknown = 尚未探测 / 探测失败（不标记）；missing = stat 为 null（目录不在了） */
 export type RecentRowState = 'ok' | 'missing' | 'unknown';

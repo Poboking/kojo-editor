@@ -30,3 +30,15 @@ export {
   parseTrainCsv,
 } from './instruction-table';
 export { loadErakumamaidVariableSchema } from './variable-schema';
+export {
+  AM_DEPLOY_ROOT,
+  AM_FACE_STUB_EXT,
+  AM_SCAFFOLD_FILES,
+  amCharaCsvRelPath,
+  buildAMFileStub,
+  buildAMReadme,
+  buildErakumamaidCharaCsv,
+  scaffoldErakumamaidProject,
+  type AMScaffoldFileSpec,
+  type ErakumamaidScaffoldOptions,
+} from './scaffold';

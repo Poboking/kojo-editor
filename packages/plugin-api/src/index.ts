@@ -660,3 +660,25 @@ export type {
   MarketZipFile,
   MarketZipInspection,
 } from './market';
+
+/* ---- 口上项目脚手架共享骨架（AM-1 P4 独占追加区块；勿在他处重排） ---- */
+export {
+  assembleScaffold,
+  assertScaffoldIdentity,
+  buildScaffoldDirName,
+  buildScaffoldFaceStub,
+  buildScaffoldReadme,
+  faceTemplateExample,
+  sanitizePathSegment,
+} from './scaffold';
+export type {
+  ScaffoldFaceCase,
+  ScaffoldFaceSpec,
+  ScaffoldFileSet,
+  ScaffoldIdentity,
+  ScaffoldMetaRow,
+  ScaffoldParts,
+  ScaffoldReadmeSpec,
+  ScaffoldStubSpec,
+  ScaffoldTemplateHint,
+} from './scaffold';
