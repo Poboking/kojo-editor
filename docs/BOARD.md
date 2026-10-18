@@ -24,7 +24,7 @@
 
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
-| P0-5 | **watcher 失效静死 + 无忽略规则**：运行期失效只发 unavailable 无重连（`watcher.ts` onReport error 分支），目录被换掉（git checkout / 重命名）后监视静死；Rust 侧 `notify::Config::default()` 全量递归监听、无 `.git`/`node_modules` 排除（搜索侧有 `is_hidden_entry`，监视侧没有） | TS 侧指数退避重连（1s/2s/4s…封顶 60s、连续 10 次失败才终态 unavailable、会话号竞态防护沿用、重建成功发恢复通知不静默）；Rust 侧忽略表集中一处定义（只排 VCS/依赖/编辑器临时目录，语料 CSV/ERB/ERH/ERD 零排除）+ notify 配置显式化；重连状态机纯函数单测 + cargo recursive_watch 系列不回退 | 进行中 · 认领：p0c 2026-10-19 |
+
 
 
 | HK-4 | UI 打磨（常任；目标「专业 · 克制 · 流畅 · 高效 · 耐看」，VSCode 为基准） | 自拟六项按序推进：UI-1 字号尺度 ✅§5.121 / UI-2 圆角·边框·阴影 ✅§5.122 / **UI-3 图标 emoji→单色 SVG ✅**（`docs/log/2026-10-13-ui-icons.md`；宿主层渲染面归零；插件自绘面板符号＝跨包图标通道**已交付 ✅** `renderIcon` 桥，3299bd7） → **UI-4 焦点环与键盘可达 ✅**（roving tabindex 漫游 + `:focus-visible` 焦点环） → **UI-5 动效可关 ✅**（设置项 + `<html data-motion>`） → **UI-6 底部问题面板 ✅**（ERB 结构/表达式两层波浪线汇总、点击跳源行；状态栏 ✕/⚠/ℹ 计数经 `kojo.problems` 展开，Ctrl+Shift+M）；每项带可复跑量化判据 | 进行中 · 认领：hk4ui 2026-10-14 |
