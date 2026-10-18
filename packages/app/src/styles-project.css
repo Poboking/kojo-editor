@@ -6811,6 +6811,28 @@ button.resume-session {
   background: rgba(128, 128, 128, 0.35);
 }
 
+/* MM-9 列向排列（上下堆叠）：data-orientation 由宿主组态的 orientation 驱动。
+   只覆盖方向相关的那几行——row 的 min-width 200px 原样不动（选择器特异性更高，
+   后来者胜用不上，靠属性选择器压过基规则）。 */
+.editor-groups[data-orientation='column'] {
+  flex-direction: column;
+}
+
+.editor-groups[data-orientation='column'] .editor-group {
+  min-width: 0;
+  min-height: 120px;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-groups[data-orientation='column'] .editor-group:last-child {
+  border-bottom: none;
+}
+
+.editor-groups[data-orientation='column'] .editor-divider {
+  cursor: row-resize;
+}
+
 /* ============================================================================
    可复用效果库（VSCode 精修批 2026-10-17 · 独占区块，新样式在块内追加，勿在他处重排）
    ----------------------------------------------------------------------------

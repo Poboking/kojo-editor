@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  initialEditorGroups,
+  openInActiveGroup,
+  restoreGroups,
+  serializeGroups,
+  setGroupsOrientation,
+  splitActiveDown,
+} from '../src/ui/editor-groups';
+import {
   SESSION_FLUSH_DEBOUNCE_MS,
   SESSION_KEY,
   createSessionFlushScheduler,
@@ -129,6 +137,89 @@ describe('loadSessionRecord / saveSessionRecord（JSON 往返）', () => {
 
   it('首次运行（键不存在）→ 空记录', async () => {
     expect(await loadSessionRecord(kv)).toEqual(emptySessionRecord());
+  });
+});
+
+/* ------------ groups 快照（MM-9 编辑器组布局持久化 · additive 扩展） ------------ */
+
+/** 一份合法的 groups 快照（两组 + column，形状 = serializeGroups 产物） */
+const groupsSnapshot = (): unknown => {
+  let s = initialEditorGroups();
+  s = openInActiveGroup(s, 'C:/a.ERB');
+  s = openInActiveGroup(s, 'C:/b.ERB');
+  s = setGroupsOrientation(s, 'column');
+  s = splitActiveDown(s);
+  return serializeGroups(s);
+};
+
+describe('sanitizeSessionRecord · groups（MM-9 additive）', () => {
+  it('旧形态记录 sanitize 逐字不受影响（老记录没有 groups 字段：键都不补）', () => {
+    const rec = sanitizeSessionRecord({
+      v: 1,
+      lastRoot: 'C:/proj',
+      projects: {
+        keep: { tabs: ['C:/a.ERB', 'C:/a.ERB', 'C:/b.ERB'], active: 'C:/missing.ERB', pinned: ['C:/b.ERB', 'C:/gone.ERB'] },
+        empty: { tabs: [], active: null, pinned: [] },
+        bad: 'not-an-object',
+      },
+    });
+    expect(Object.keys(rec.projects).sort()).toEqual(['keep']);
+    expect(rec.projects.keep).toEqual({
+      tabs: ['C:/a.ERB', 'C:/b.ERB'],
+      active: 'C:/a.ERB',
+      pinned: ['C:/b.ERB'],
+    });
+    expect('groups' in rec.projects.keep!).toBe(false); // additive：老记录不补 key
+    expect(rec.lastRoot).toBe('C:/proj');
+  });
+
+  it('带 groups 的记录 sanitize 后快照原样还在，且判得过合法', () => {
+    const snap = groupsSnapshot();
+    const rec = sanitizeSessionRecord({
+      v: 1,
+      lastRoot: 'C:/proj',
+      projects: { p: { tabs: ['C:/a.ERB', 'C:/b.ERB'], active: 'C:/b.ERB', pinned: ['C:/a.ERB'], groups: snap } },
+    });
+    expect(rec.projects.p?.groups).toEqual(snap);
+    expect(restoreGroups(rec.projects.p?.groups)).not.toBeNull();
+    // 快照真的描出了两组 + column
+    const back = restoreGroups(rec.projects.p?.groups)!;
+    expect(back.groups).toHaveLength(2);
+    expect(back.orientation).toBe('column');
+  });
+
+  it('groups 坏形态（乱值）被当作无 groups 且不炸', () => {
+    for (const bad of [null, 'x', 42, [], {}, { orientation: 'row' }, { orientation: 'diag', groups: [] }, { orientation: 'row', activeGroupId: 'eg-1', groups: [] }]) {
+      const rec = sanitizeSessionRecord({
+        v: 1,
+        projects: { p: { tabs: ['C:/a.ERB'], active: 'C:/a.ERB', pinned: [], groups: bad } },
+      });
+      expect(rec.projects.p).toEqual({ tabs: ['C:/a.ERB'], active: 'C:/a.ERB', pinned: [] });
+      expect('groups' in rec.projects.p!).toBe(false);
+    }
+  });
+});
+
+describe('upsertSessionProject · groups（MM-9 additive）', () => {
+  it('合法 groups 传入即存（save → load 往返不丢）', async () => {
+    const snap = groupsSnapshot();
+    let rec = upsertSessionProject(emptySessionRecord(), 'C:/proj', recOf(['C:/a.ERB', 'C:/b.ERB'], 'C:/b.ERB', ['C:/a.ERB']));
+    rec = upsertSessionProject(rec, 'C:/proj', { ...recOf(['C:/a.ERB', 'C:/b.ERB'], 'C:/b.ERB', ['C:/a.ERB']), groups: snap });
+    expect(rec.projects[sessionProjectKey('C:/proj')]?.groups).toEqual(snap);
+    await saveSessionRecord(kv, rec);
+    const loaded = await loadSessionRecord(kv);
+    expect(sessionProjectOf(loaded, 'C:/proj')?.groups).toEqual(snap);
+  });
+
+  it('乱值 groups 不存（预校验挡在 upsert 一侧）', () => {
+    const rec = upsertSessionProject(emptySessionRecord(), 'C:/p', { ...recOf(['C:/a.ERB'], null, []), groups: { orientation: 'nope' } });
+    expect('groups' in rec.projects[sessionProjectKey('C:/p')]!).toBe(false);
+  });
+
+  it('空 tabs 项目记录照旧不入库（groups 跟着一起不入库）', () => {
+    let rec = upsertSessionProject(emptySessionRecord(), 'C:/p', { ...recOf(['C:/a.ERB'], null, []), groups: groupsSnapshot() });
+    rec = upsertSessionProject(rec, 'C:/p', { ...recOf([], null, []), groups: groupsSnapshot() });
+    expect(sessionProjectOf(rec, 'C:/p')).toBeNull();
   });
 });
 

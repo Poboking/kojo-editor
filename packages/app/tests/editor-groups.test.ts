@@ -1,7 +1,8 @@
 /**
  * SPLIT-1 · 编辑器组态纯逻辑单测：拆分 / 关标签（含组空即收）/ 关组 / 焦点切换 /
- * 组内重排语义不变式。零 React、零 Monaco——App 是唯一状态所有者，这里的每条
- * 纯函数就是它写入组态的**唯一**通道。
+ * 组内重排语义不变式。MM-9：向下拆分 / 翻排列方向 / 持久化往返（损坏容忍）。
+ * 零 React、零 Monaco——App 是唯一状态所有者，这里的每条纯函数就是它写入组态的
+ * **唯一**通道。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -11,7 +12,11 @@ import {
   closeTabsInGroup,
   initialEditorGroups,
   openInActiveGroup,
+  restoreGroups,
+  serializeGroups,
   setActiveGroup,
+  setGroupsOrientation,
+  splitActiveDown,
   splitActiveRight,
   type EditorGroupsState,
 } from '../src/ui/editor-groups';
@@ -157,5 +162,212 @@ describe('编辑器组态 · 关组与焦点', () => {
   it('activateTab 对不在栈内的路径 no-op（不凭空造标签）', () => {
     const s = initialEditorGroups();
     expect(activateTab(s, s.groups[0]!.id, 'ghost.erb')).toBe(s);
+  });
+});
+
+describe('编辑器组态 · 排列方向（MM-9）', () => {
+  it('初始 orientation = row（现状左右并排）', () => {
+    expect(initialEditorGroups().orientation).toBe('row');
+  });
+
+  it('setGroupsOrientation 同值原样返回（同一引用，不制造重渲染）', () => {
+    const s = initialEditorGroups();
+    expect(setGroupsOrientation(s, 'row')).toBe(s);
+    const col = setGroupsOrientation(s, 'column');
+    expect(col).not.toBe(s);
+    expect(setGroupsOrientation(col, 'column')).toBe(col);
+  });
+
+  it('翻方向只动 orientation 一个字段：组与激活原样（groups 同一引用）', () => {
+    let s = initialEditorGroups();
+    s = openInActiveGroup(s, 'a.erb');
+    s = openInActiveGroup(s, 'b.erb');
+    s = splitActiveRight(s); // 焦点在第二组
+    const after = setGroupsOrientation(s, 'column');
+    expect(after.orientation).toBe('column');
+    expect(after.groups).toBe(s.groups); // 组数组同一引用（连 map 都没走）
+    expect(after.activeGroupId).toBe(s.activeGroupId);
+    // 拆分组态在翻向后照旧成立（orientation 不被任何组操作冲掉）
+    const split = splitActiveDown(after);
+    expect(split.orientation).toBe('column');
+  });
+
+  it('组操作（拆/关/关标签）都不改 orientation：方向跨操作保值', () => {
+    let s = setGroupsOrientation(initialEditorGroups(), 'column');
+    s = openInActiveGroup(s, 'a.erb');
+    s = splitActiveDown(s);
+    s = openInActiveGroup(s, 'b.erb');
+    s = closeTabsInGroup(s, s.groups[1]!.id, ['a.erb', 'b.erb']); // 关空第二组 ⇒ 回收
+    expect(s.orientation).toBe('column');
+    expect(s.groups).toHaveLength(1);
+    s = splitActiveRight(s);
+    expect(s.orientation).toBe('column');
+    s = closeGroup(s, s.activeGroupId);
+    expect(s.orientation).toBe('column');
+    expect(s.groups).toHaveLength(1);
+  });
+});
+
+describe('编辑器组态 · 向下拆分（MM-9）', () => {
+  it('splitActiveDown：新组携带激活标签、插在焦点组下方（数组序即排列序）、焦点跟到新组', () => {
+    let s = initialEditorGroups();
+    s = openInActiveGroup(s, 'a.erb');
+    s = openInActiveGroup(s, 'b.erb');
+    s = openInActiveGroup(s, 'c.erb');
+    s = openInActiveGroup(s, 'b.erb'); // 激活 b
+    s = setGroupsOrientation(s, 'column');
+    const firstId = s.groups[0]!.id;
+    s = splitActiveDown(s);
+    expect(s.groups).toHaveLength(2);
+    expect(s.groups[0]!.id).toBe(firstId);
+    expect(s.groups[1]!.tabs).toEqual(['b.erb']);
+    expect(s.groups[1]!.active).toBe('b.erb');
+    expect(s.activeGroupId).toBe(s.groups[1]!.id);
+    expect(s.orientation).toBe('column'); // 拆分不翻向
+  });
+
+  it('空组向下拆分：新组为空栈，焦点照旧跟到新组', () => {
+    let s = initialEditorGroups();
+    s = splitActiveDown(s);
+    expect(s.groups).toHaveLength(2);
+    expect(s.groups[1]!.tabs).toEqual([]);
+    expect(s.activeGroupId).toBe(s.groups[1]!.id);
+  });
+
+  it('连续向下拆分：始终从焦点组往下插（三组同列堆叠）', () => {
+    let s = initialEditorGroups();
+    s = openInActiveGroup(s, 'a.erb');
+    s = splitActiveDown(s);
+    s = splitActiveDown(s);
+    expect(s.groups).toHaveLength(3);
+    // 第二次拆分的焦点组是第二组，新组插在它"下方"（数组下标 +1）
+    expect(s.groups[2]!.tabs).toEqual(['a.erb']);
+  });
+
+  it('row 取向下 splitActiveDown 与 splitActiveRight 数组行为一致（差别只在渲染方向）', () => {
+    let base = initialEditorGroups();
+    base = openInActiveGroup(base, 'a.erb');
+    base = openInActiveGroup(base, 'b.erb');
+    const down = splitActiveDown(base);
+    const right = splitActiveRight(base);
+    expect(down.groups.map((g) => g.tabs)).toEqual(right.groups.map((g) => g.tabs));
+    expect(down.activeGroupId).toBe(down.groups[1]!.id);
+    expect(right.activeGroupId).toBe(right.groups[1]!.id);
+  });
+});
+
+describe('编辑器组态 · 持久化往返（MM-9）', () => {
+  /** 两份组 + column 的多组态（序列化往返的基准样态） */
+  const build = (): EditorGroupsState => {
+    let s = initialEditorGroups();
+    s = openInActiveGroup(s, 'a.erb');
+    s = openInActiveGroup(s, 'b.erb');
+    s = setGroupsOrientation(s, 'column');
+    s = splitActiveDown(s); // 两组：['a','b'](激活 b) / ['b'](激活 b)，焦点在第二组
+    return s;
+  };
+
+  it('serialize 产物是纯数据：JSON 往返逐字相等', () => {
+    const snap = serializeGroups(build());
+    expect(JSON.parse(JSON.stringify(snap))).toEqual(snap);
+  });
+
+  it('serialize → restore 往返等价（多组 + column：方向/组序/激活/焦点全保）', () => {
+    const s = build();
+    const back = restoreGroups(serializeGroups(s));
+    expect(back).not.toBeNull();
+    expect(back!.orientation).toBe('column');
+    expect(back!.groups).toHaveLength(2);
+    expect(back!.groups.map((g) => g.tabs)).toEqual([['a.erb', 'b.erb'], ['b.erb']]);
+    expect(back!.groups.map((g) => g.active)).toEqual(['b.erb', 'b.erb']);
+    expect(back!.activeGroupId).toBe(back!.groups[1]!.id); // 焦点仍是拆出来的新组
+  });
+
+  it('restore 重新分配 id：不与旧 state 撞号，且恢复态继续 split 也不撞', () => {
+    const s = build();
+    const oldIds = new Set(s.groups.map((g) => g.id));
+    const back = restoreGroups(serializeGroups(s))!;
+    for (const g of back.groups) expect(oldIds.has(g.id)).toBe(false);
+    const next = splitActiveRight(back);
+    expect(oldIds.has(next.groups[2]!.id)).toBe(false);
+    expect(new Set(next.groups.map((g) => g.id)).size).toBe(3); // 三枚 id 两两不同
+  });
+
+  it('restore 后 splitActiveRight 正常（携带恢复出的焦点组的激活标签）', () => {
+    const back = restoreGroups(serializeGroups(build()))!;
+    const s2 = splitActiveRight(back);
+    expect(s2.groups).toHaveLength(3);
+    expect(s2.groups[2]!.tabs).toEqual(['b.erb']);
+    expect(s2.activeGroupId).toBe(s2.groups[2]!.id);
+  });
+
+  it('坏形态全回 null 不炸：null/undefined/非对象/数组/空对象/缺字段/方向非法', () => {
+    for (const raw of [
+      null,
+      undefined,
+      'x',
+      42,
+      [],
+      {},
+      { orientation: 'row' },
+      { groups: [] },
+      { orientation: 'diag', groups: [] },
+      { orientation: 'row', activeGroupId: 'eg-1', groups: 'no' },
+    ]) {
+      expect(restoreGroups(raw)).toBeNull();
+    }
+  });
+
+  it('全空组 ⇒ 回 null（调用方维持现状），不炸', () => {
+    expect(
+      restoreGroups({ orientation: 'row', activeGroupId: 'eg-1', groups: [{ id: 'eg-1', tabs: [], active: null }] }),
+    ).toBeNull();
+    expect(
+      restoreGroups({
+        orientation: 'row',
+        activeGroupId: 'eg-1',
+        groups: [{ id: 'eg-1', tabs: [], active: null }, 'not-an-object', null],
+      }),
+    ).toBeNull();
+  });
+
+  it('过滤空组但保底至少一组；activeGroupId 无效落第一组；active 越界落 tabs[0]', () => {
+    const back = restoreGroups({
+      orientation: 'column',
+      activeGroupId: 'eg-ghost', // 对不上任何旧 id
+      groups: [
+        { id: 'eg-1', tabs: ['a.erb', 'b.erb'], active: 'nope.erb' }, // active 越界
+        { id: 'eg-2', tabs: [], active: null }, // 空组被滤掉
+        { id: 'eg-3', tabs: ['c.erb'], active: 'c.erb' },
+      ],
+    })!;
+    expect(back.groups).toHaveLength(2);
+    expect(back.groups[0]!.tabs).toEqual(['a.erb', 'b.erb']);
+    expect(back.groups[0]!.active).toBe('a.erb'); // 越界回落 tabs[0]
+    expect(back.groups[1]!.active).toBe('c.erb');
+    expect(back.activeGroupId).toBe(back.groups[0]!.id); // 无效 activeGroupId 落第一组
+    expect(back.orientation).toBe('column');
+  });
+
+  it('合法 activeGroupId（旧 id）指向的组成为恢复后的焦点组', () => {
+    const back = restoreGroups({
+      orientation: 'row',
+      activeGroupId: 'eg-2',
+      groups: [
+        { id: 'eg-1', tabs: ['a.erb'], active: 'a.erb' },
+        { id: 'eg-2', tabs: ['b.erb'], active: 'b.erb' },
+      ],
+    })!;
+    expect(back.activeGroupId).toBe(back.groups[1]!.id);
+  });
+
+  it('tabs 去重保序；非字符串/空串条目滤掉', () => {
+    const back = restoreGroups({
+      orientation: 'row',
+      activeGroupId: 'eg-1',
+      groups: [{ id: 'eg-1', tabs: ['a.erb', 'a.erb', 42, '', 'b.erb'], active: 'b.erb' }],
+    })!;
+    expect(back.groups[0]!.tabs).toEqual(['a.erb', 'b.erb']);
+    expect(back.groups[0]!.active).toBe('b.erb');
   });
 });
