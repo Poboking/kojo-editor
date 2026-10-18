@@ -5,21 +5,6 @@
 > ② 报红格式：现象 + 复现步骤 + 期望 vs 实际 + **屏上原样文案**。跨主机沟通只有这张表——写在别处的反馈等于没写。
 > ③ 人工勾验 / 封存 / 性能线三类行**不设**（用户 2026-10-13 令）；已收行不在此表，历史由 git 保留。
 
-## AA. P1 编辑器肌肉记忆批（lead 2026-10-18 立项；用户点名清单，三 agent 并行）
-
-> 五条缺陷全部落在 `packages/app/**` 宿主层（零内核 / 零插件 / 零 Rust）。热点文件单主：
-> `App.tsx` 按 hunk 区划给三线（commitOpenFile/close 区归 nav；recent/session 区归 quicknav 与 split；restore/write 归 split），
-> `ProjectView.tsx` extraCommands 区归 nav 与 quicknav、groups 渲染区归 split，`EditorPane.tsx` 归 quicknav。
-> 分支 `b/<agent>/1018-*`，落地由 lead 逐条过 master 窄门。
-
-| ID | 任务 | 关键判据 | 认领 |
-|---|---|---|---|
-| MM-6 | 前进/后退导航历史（Alt+←/→） | 所有打开/定位路径（文件树 / Ctrl+P / 问题面板 / 转到定义 / 引用 / 函数树）统一入栈；同 path 同行不重复入栈；到栈底/顶可见拒绝（人话，不静默）；跨项目自动清空；纯逻辑栈单测（含越界/去重/清空） | nav-memory 2026-10-18 |
-| MM-7 | 跳转到行接线（contrib 已 import、宿主无命令） | 命令面板可搜到「转到行」；落点走既有 `editor.action.request` 通道（EditorPane ACTION_IDS additive）；无活动文件/糖视图下可见拒绝；action id 取证 monaco 0.57 esm 源码 | quicknav 2026-10-18 |
-| MM-8 | 最近文件（欢迎页仅 recent projects） | 新持久层与 session 同通道（additive 可选字段 / 新 key，旧记录零改动容忍）；欢迎页新区（文件名 + 路径 + 所属项目 + 失效标记）；点击 = 项目根不同先开项目再开文件；上限 + 去重 + 损坏容忍 | quicknav 2026-10-18 |
-| MM-9 | 编辑器组布局持久化 + 上下分屏 | `editor-groups.ts` 加向下拆分与横竖取向（纯函数 + 单测）；组态随 session 记录落盘/恢复（additive）；欢迎页「继续上次会话」还原组态；分隔条按取向拖拽；CSS 两种取向 | split 2026-10-18 |
-| MM-10 | 恢复关闭 tab（Ctrl+Shift+T） | 全部关闭落地路径（单关 / 批量 / 脏确认后丢弃 / 关组）统一入栈；恢复 pop 栈顶开进焦点组并激活；栈有上限；跨项目清空；空栈可见拒绝 | nav-memory 2026-10-18 |
-
 ## B. 本组任务（本组）
 
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
