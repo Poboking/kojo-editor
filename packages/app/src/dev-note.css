@@ -1,0 +1,208 @@
+/*
+ * 「开发者的碎碎念」纸条（用户反馈 2，2026-10-18）。
+ *
+ * 皮是**纸**，不是玻璃：遮罩复用 `.modal-mask`（磨砂 + 压暗，视线收到模态上），
+ * 面则故意不挂 `.glass`——一张贴在屏幕上的便签纸要"实"（纸不透明），
+ * 与确认框那种"浮在编辑器上的一层玻璃"区分开，作者一眼知道这不是流程卡。
+ *
+ * 两条纪律（与 update-dialog.css 同款）：
+ * - 颜色只取 token（含 color-mix 的语义洗色），不写字面 hex —— 三档主题自动跟随；
+ *   横格 / 胶带 / 纸色全是"主题面色 + 一点 accent"，深色主题下是一张浅暖纸，浅色主题下是米黄便签。
+ * - 动效尊重 `data-motion='reduced'` 与 `prefers-reduced-motion`：入场动画压平后**停在终态**
+ *   （末帧 opacity 1 + 保留纸条倾斜），所以不需要像扫光条那样额外钉静态回落。
+ *
+ * 本文件进 bundle 的时机可能早于 styles.css（App 的依赖图），凡与全局 button 同名的设置
+ * 都带 `.dev-note` 前缀抬高特异性。
+ */
+
+.dev-note-mask {
+  /* 小屏不贴边：宿主 .modal-mask 是 grid 居中，这里只补安全内边距 */
+  padding: var(--space-4);
+}
+
+.dev-note {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(470px, 100%);
+  max-height: min(84vh, 680px);
+  padding: 26px 28px 16px;
+  border: 1px solid var(--border);
+  /* 纸条是小圆角（纸片），不是玻璃卡的大圆角 */
+  border-radius: 3px;
+  /* 纸色：主题面色掺一点 accent 暖调；不支持 color-mix 的内核吃上面那条纯色 */
+  background: var(--surface-raised);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-raised));
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-3);
+  /* 微倾斜：纸条"随手放上去"的那点不齐；0.6° 不足以影响阅读 */
+  transform: rotate(-0.6deg);
+  outline: none;
+  animation: dev-note-in var(--dur-3) var(--ease-spring);
+}
+
+/* 横格纸：极淡的 accent 等距横线，一眼是"格子纸"。纯背景层，不参与命中。 */
+.dev-note::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 27px,
+    rgb(var(--accent-rgb) / 0.1) 27px 28px
+  );
+}
+
+/* 顶缘一道 accent 光：与 update-dialog 同一家族语言（"这是浮起来的一层"） */
+.dev-note:focus-visible {
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-3),
+    var(--shadow-focus);
+}
+
+/* 胶带：半透明 accent 小条，压在纸条顶边中间（纯装饰） */
+.dev-note-tape {
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  width: 104px;
+  height: 22px;
+  transform: translateX(-50%) rotate(-1.6deg);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+  pointer-events: none;
+}
+
+/* 正文区：长文只在这里滚（纸条矮窗时仍能读完，页脚按钮永不被卷走） */
+.dev-note-scroll {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.dev-note-kicker {
+  margin: 0;
+  color: var(--accent);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+
+.dev-note-title {
+  margin: 0 0 var(--space-1);
+  color: var(--fg);
+  font-size: var(--fs-5);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+
+.dev-note-line {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--fs-2);
+  line-height: 1.9;
+}
+
+.dev-note-heart {
+  font-style: normal;
+}
+
+/* 邮箱：单独一行并把地址做成可点芯片（地址本身当主文案，方便直接读 / 抄） */
+.dev-note-mail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+
+.dev-note-mail-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--accent);
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  text-decoration: none;
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+
+.dev-note-mail-link:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.dev-note-sign {
+  align-self: flex-end;
+  margin: var(--space-2) 0 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  font-style: italic;
+}
+
+/* 页脚：虚线"撕线"把动作与正文分开（纸的语感，不用玻璃的实线） */
+.dev-note-actions {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.dev-note-actions button {
+  min-height: 30px;
+  padding: 5px 16px;
+  font-size: var(--fs-2);
+}
+
+/* 末帧保留纸条倾斜（transform 被动画接管 ⇒ 终态必须自己带上 rotate） */
+@keyframes dev-note-in {
+  from {
+    opacity: 0;
+    transform: rotate(-0.6deg) translateY(12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(-0.6deg);
+  }
+}
+
+/* 系统偏好：入场不播，纸条停在终态（可见）。
+   倾斜是静态样式，不靠动画，所以这里只需关掉 animation 并显式钉回 transform。 */
+@media (prefers-reduced-motion: reduce) {
+  .dev-note {
+    animation: none !important;
+    transform: rotate(-0.6deg);
+  }
+}
+
+/* 应用内开关（motion-pref.ts 写 <html data-motion='reduced'>）：同一条降级 */
+:root[data-motion='reduced'] .dev-note {
+  animation: none !important;
+  transform: rotate(-0.6deg);
+}

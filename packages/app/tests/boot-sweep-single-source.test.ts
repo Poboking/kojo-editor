@@ -443,7 +443,7 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
     const inline = mediaRecipeOf(inlineStyle(htmlSrc()), '.boot-bar::after', 'index.html');
     const packed = mediaRecipeOf(cssSrc(), '.boot-bar::after', 'styles.css');
     expect(inline, '.boot-bar::after 减动效回落漂移：index.html vs styles.css').toEqual(packed);
-    expect(inline).toEqual(['animation: none;', 'width: 100%;', 'opacity: 0.35;']);
+    expect(inline).toEqual(['animation: none;', 'width: 100%;', 'opacity: 1;']);
   });
 
   it('内联缓动字面量 == styles.css :root 的 --ease-out 现值，且内联层零 var()（红线：不许单源化取色）', () => {
@@ -534,10 +534,10 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
     const rule = hits[0];
     if (!rule) throw new Error('取不到 data-motion 回落规则');
     const decls = declsOf(rule.body, ":root[data-motion='reduced'] .boot-bar::after").map((d) => `${d.prop}: ${d.value};`);
-    expect(decls, '应用内关动效的回落须与 @media 分支同一条 35% 淡条').toEqual([
+    expect(decls, '应用内关动效的回落须与 @media 分支同一条**可见**静态光带（0.35 太暗，用户读成"光条消失"）').toEqual([
       'animation: none;',
       'width: 100%;',
-      'opacity: 0.35;',
+      'opacity: 1;',
     ]);
     // 全局压平那条只改 duration / iteration-count，没改 name ⇒ 本条必须自己把 name 关掉
     expect(decls.some((d) => d.startsWith('animation:'))).toBe(true);

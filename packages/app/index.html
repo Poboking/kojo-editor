@@ -85,11 +85,14 @@
           transform: translateX(320%);
         }
       }
+      /* 减动效：扫不动了，但必须仍是一条**看得见**的光带（2026-10-18 用户反馈 1：
+         原先 opacity 0.35 太暗，用户读成「光条消失了」）。与 update-dialog.css 的
+         不定态进度条同款口径——压平动效 ≠ 藏掉指示物。 */
       @media (prefers-reduced-motion: reduce) {
         .boot-bar::after {
           animation: none;
           width: 100%;
-          opacity: 0.35;
+          opacity: 1;
         }
       }
       /* 引导层跟随主题（底色/文字须与对应 themes/*.css 的 --bg/--fg 现值一致，见上方注释） */

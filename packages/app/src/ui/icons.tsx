@@ -240,6 +240,14 @@ const ICONS = {
       {stroke('M9.6 2.8h3.6v3.6')}
     </>
   ),
+
+  /* --- 联系（2026-10-18 用户反馈 3）：信封 + 封舌折线，单色 currentColor --- */
+  mail: (
+    <>
+      {stroke('M2.4 3.6h11.2v8.8H2.4z')}
+      {stroke('M2.6 4.2 8 8.4l5.4-4.2')}
+    </>
+  ),
 } satisfies Record<string, ReactElement>;
 
 /** 未命中注册表时按字形文本渲染（兼容第三方贡献的单字符 `icon`） */

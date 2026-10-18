@@ -56,6 +56,8 @@ import { installWindowCloseGuard } from './window-close-guard';
 // 欢迎页 / 项目态 / 禅模式共用；浏览器 dev 里该组件返回 null（不画假按钮）。
 import { WindowChrome } from './WindowChrome';
 import { WelcomeView, type WelcomeTutorialId } from './WelcomeView';
+import { DevNoteDialog } from './DevNoteDialog';
+import { loadDevNoteSeen, markDevNoteSeen } from './dev-note-pref';
 import { WelcomeOverlayHost } from './WelcomeOverlayHost';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { workspaceRootsOf, planAddExtraRoot } from './workspace-roots';
@@ -167,6 +169,12 @@ export function App(): ReactElement {
    * 有项目时本来就不渲染欢迎页，这里只管无项目分支显示欢迎页还是空态。
    */
   const [welcomeClosed, setWelcomeClosed] = useState(false);
+  /**
+   * 「开发者的碎碎念」纸条（用户反馈 2，2026-10-18）：初值直接问 localStorage——
+   * 只有**从未看过**才为 true，于是"下载后第一次启动"自然只弹一次。关闭（Esc / 遮罩 /
+   * ✕ / 两个按钮）写 seen 标记；只活在本会话，不参与 phase 判定。
+   */
+  const [devNoteOpen, setDevNoteOpen] = useState(() => !loadDevNoteSeen());
   const [error, setError] = useState<string | null>(null);
   const [project, setProject] = useState<GameProject | null>(null);
   const [index, setIndex] = useState<ErbIndex | null>(null);
@@ -1319,6 +1327,12 @@ export function App(): ReactElement {
     [kernel],
   );
 
+  /** 纸条的关闭出口：先写 seen 标记再收（写不进也不影响"本次会话只弹一次"） */
+  const closeDevNote = useCallback((): void => {
+    markDevNoteSeen();
+    setDevNoteOpen(false);
+  }, []);
+
   const body =
     phase === 'project' && kernel && project ? (
       <Suspense fallback={<ProjectViewSkeleton />}>
@@ -1396,6 +1410,17 @@ export function App(): ReactElement {
       <WindowChrome />
       <div className="app-frame-body">
         {body}
+        {/* 首启动纸条（用户反馈 2）：只在欢迎页弹（进了项目就不打扰），且只在从未看过时。
+            「去绑定游戏根目录」先收纸条再走欢迎页那个同一个目录选择入口。 */}
+        {devNoteOpen && phase === 'welcome' ? (
+          <DevNoteDialog
+            onClose={closeDevNote}
+            onOpenDirectory={() => {
+              closeDevNote();
+              void chooseAndOpen();
+            }}
+          />
+        ) : null}
         {dropHint === 'shown' ? (
           <div className="drop-hint">{dropHintText()}</div>
         ) : null}

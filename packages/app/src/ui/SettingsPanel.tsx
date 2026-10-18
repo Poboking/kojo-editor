@@ -37,6 +37,7 @@ import { nextRovingIndex } from './shell-keys';
 import { KeybindingsPage } from './KeybindingsPage';
 import type { CommandEntry } from './commands';
 import avatarUrl from '../assets/developer-avatar-128.png';
+import { CONTACT_EMAIL, CONTACT_MAILTO } from './contact';
 
 /** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
 const THEME_LABELS: Record<ThemePref, string> = {
@@ -727,6 +728,18 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 <span className="settings-hint">开发者 · GitHub 主页</span>
               </span>
               <Icon name="popout" size={12} className="settings-link-icon" />
+            </a>
+            {/* 联系邮箱（2026-10-18 用户反馈 3）：贴开发者卡下面，与它同为「32px 圆标 +
+                文字 + 动作」的三件套，圆标换成信封；mailto 不经 WebView，直接交给系统
+                邮件客户端。地址本身当主文案，方便直接读 / 抄。 */}
+            <a className="settings-row settings-link" href={CONTACT_MAILTO}>
+              <span className="settings-avatar settings-avatar-symbol">
+                <Icon name="mail" size={15} />
+              </span>
+              <span>
+                {CONTACT_EMAIL}
+                <span className="settings-hint">联系邮箱 · 奇怪 Bug 与建议都可以直接邮件反馈</span>
+              </span>
             </a>
             <a
               className="settings-row settings-link"
