@@ -337,6 +337,19 @@
   border-color: var(--focus-ring);
 }
 
+/* 打字即搜开关（P2-11）：行内 checkbox，accent 着色；行高与其它选项行一致 */
+.panel-search.ksp .ksp-opt-check {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.panel-search.ksp .ksp-opt-check-label {
+  min-width: 0;
+  color: var(--fg);
+}
+
 /* --------------------------------- 状态区 --------------------------------- */
 
 .panel-search.ksp .ksp-status-zone {

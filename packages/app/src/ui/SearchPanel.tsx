@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
-import type { SearchMatch, SearchProgress, SearchResult } from '../bridge/search';
+import type { SearchMatch, SearchProgress } from '../bridge/search';
 import { nextWindow, type RenderWindow } from '@kojo/plugin-api';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import { Icon } from './icons';
@@ -11,6 +11,7 @@ import {
   setQuery,
   setReplaceText,
   setSearchScope,
+  setSearchSortMode,
   snapshot,
   stopSearch,
   subscribe,
@@ -21,6 +22,7 @@ import {
 import {
   DEFAULT_SEARCH_EXTENSIONS,
   flattenSearchResults,
+  isValidSearchQuery,
   matchLocationLabel,
   parseExtensions,
   previewParts,
@@ -30,6 +32,7 @@ import {
   shortSearchPath,
   type SearchRow,
 } from './search-query';
+import { SEARCH_SORT_OPTIONS, sortSearchFiles, type SearchSortMode } from './search-stream';
 import {
   describeAppliedScope,
   findSearchScope,
@@ -80,6 +83,16 @@ import '../search-panel.css';
 const SEARCH_WINDOW: RenderWindow = { initial: 120, step: 240 };
 /** 首帧最多画多少行（导出给测试钉首帧行数） */
 export const SEARCH_WINDOW_INITIAL = SEARCH_WINDOW.initial;
+
+/**
+ * 打字即搜的防抖毫秒（P2-11）。
+ *
+ * 300ms 的理由：输入法组词 / 中英文切换的停顿间隙通常在 100–250ms，逐字打路径或
+ * 变量名也难快到 100ms 以内；300ms 落在"一个词打完了"与"别每个字都全量重读"之间。
+ * Rust 侧检索已多线程化，但语料 3.8k 文件的全量重读仍是秒级 IO——防抖与单飞
+ * （见下方 `liveSearch` 注释）双管齐下，才扛得住"边打边看"。
+ */
+const SEARCH_DEBOUNCE_MS = 300;
 
 /** 两个列表 props 的缺省值：模块级常量，默认参数每次渲染新建数组会丢掉引用稳定性 */
 const EMPTY_SCOPES: readonly SearchScopeItem[] = [];
@@ -299,6 +312,16 @@ export function SearchPanel({
   const [optionsOpen, setOptionsOpen] = useState(false);
   /** 折叠的文件块（key = path；局部状态，切视图卸载后回到全展开） */
   const [foldedFiles, setFoldedFiles] = useState<ReadonlySet<string>>(() => new Set());
+  /**
+   * 打字即搜开关（P2-11）：**默认开**。
+   *
+   * 理由：语料 3.8k 文件一次全量重读是秒级 IO，但 Rust 侧检索已多线程化（8 路并发，
+   * 与索引阶段同款），单次检索墙钟已从"不敢想"降到"等得起"；而"打完词还要按一下
+   * 回车"在检索面板里是纯粹的额外一步。默认开 + `SEARCH_DEBOUNCE_MS` 防抖 +
+   * 运行中不重发（单飞，见下方 effect 注释），把这一步省掉，又不把连续打字变成
+   * 连续全量重读。开关住面板自己行内（选项区），不占全局设置。
+   */
+  const [liveSearch, setLiveSearch] = useState(true);
 
   // 挂载即聚焦；快捷键/命令再次命中（focusNonce 变化）也重新聚焦并全选——
   // 这是"Ctrl+Shift+F 就该能直接打字"的那一步（面板可能早就开着）。
@@ -338,21 +361,36 @@ export function SearchPanel({
 
   const result = s.result;
   /**
-   * 窗口挂在**这一份结果**上（与文件树过滤窗同一招）：换一次检索 ⇒ 结果对象换了身份
-   * ⇒ 自动回落到首帧上界，不需要 `useEffect`、也不会出现"旧窗口套到新结果上"的中间帧。
+   * 渲染窗口挂在**一次检索的身份**（`searchId`）上：在途流式累积 → 完成态之间
+   * **不重置**（P2-11：批次一个个到，窗口若在收口时被清回首帧，会把作者已展开的
+   * 视野没收）；换一次检索 ⇒ 新 id ⇒ 自动回落到首帧，也不会出现"旧窗口套到
+   * 新结果上"的中间帧。
    */
-  const [resultWin, setResultWin] = useState<{ readonly key: SearchResult; readonly end: number } | null>(null);
-  const windowEnd = resultWin?.key === result ? resultWin.end : SEARCH_WINDOW_INITIAL;
+  const [resultWin, setResultWin] = useState<{ readonly key: number; readonly end: number } | null>(null);
+  const windowEnd = resultWin?.key === s.searchId ? resultWin.end : SEARCH_WINDOW_INITIAL;
   /**
    * 结果行族的派生量（PS-15）全部 memo 化：`flattenSearchResults`（扁平化+截窗）与
-   * `groupSearchRows` / `locationGutterCh`（分段+量列宽）只随**这一份结果**与窗口上界变。
+   * `groupSearchRows` / `locationGutterCh`（分段+量列宽）只随**投影出的清单**与窗口上界变。
    * 此前每次渲染重算一遍——输入框每打一个字（`s` 换新对象）、切一个文件折叠，
    * 全项目检索的上万行扁平化就白算一次。`rows` 引用稳定也顺带给下游
    * `useEffect` / 行组件的依赖比较省了一层。
+   *
+   * P2-11 流式：清单来源 = 完成态优先，在途取累积批次（`displayFiles`）——
+   * 每个批次到达都会重算一次投影，这正是"随到随画"要付的代价（排序 + 扁平化
+   * 都是 O(n log n) 以下的纯函数，n = 已到文件数）。
    */
+  const displayFiles = useMemo(
+    () =>
+      result !== null
+        ? sortSearchFiles(result.files, s.sortMode)
+        : s.phase === 'running' && s.streamFiles !== null
+          ? sortSearchFiles(s.streamFiles, s.sortMode)
+          : null,
+    [result, s.phase, s.streamFiles, s.sortMode],
+  );
   const { rows, hidden } = useMemo(
-    () => (result ? flattenSearchResults(result.files, windowEnd) : { rows: [], hidden: 0 }),
-    [result, windowEnd],
+    () => (displayFiles ? flattenSearchResults(displayFiles, windowEnd) : { rows: [], hidden: 0 }),
+    [displayFiles, windowEnd],
   );
   /** 这批结果一共多少行（含没画的）：`flattenSearchResults` 的 `hidden` 就是差额 ⇒ 全量可达 */
   const totalRowCount = rows.length + hidden;
@@ -371,6 +409,37 @@ export function SearchPanel({
     const narrowing = narrowRoots(roots, selectedScope);
     void runSearch(narrowing.roots, describeAppliedScope(selectedScope, narrowing));
   };
+
+  /**
+   * 打字即搜（P2-11）：查询停顿 `SEARCH_DEBOUNCE_MS` 后自动发起。
+   *
+   * 单飞策略 = **运行中不重发**（"不重发 / 取消旧检索再发新的"二选一里选前者，
+   * 与 store 的 `runSearch` 单飞同口径）：语料全量重读是秒级 IO，"取消旧检索
+   * 再发新的"在最坏情况下（持续打字）永远出不了结果——每次都从头扫、每次都被
+   * 打断。运行中输入新词只是不触发，在途结果照常随扫随到；想立刻用新词重搜，
+   * 回车或点搜索钮（老路数原样保留）。
+   *
+   * `startRef`：防抖回调 300ms 后才执行，必须拿得到**当时的**根目录 / 范围，
+   * 不能拿调度那一刻的闭包（store 的进度 tick 会让面板频繁重渲染，闭包会过期）。
+   * 用 ref 而不是把 `start` 写进依赖：那会让每个进度 tick 都重置计时器，
+   * 300ms 水远不到。
+   */
+  const startRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    startRef.current = start;
+  });
+  // 挂载时带来的旧查询**不自动搜**：状态活得比面板久（切走再切回来结果已在，
+  // 白跑一次全量检索只是浪费）。只有挂载后的查询变化才触发。
+  const mountedQueryRef = useRef(s.query);
+  useEffect(() => {
+    if (!liveSearch) return;
+    if (!isValidSearchQuery(s.query)) return;
+    if (s.query === mountedQueryRef.current) return;
+    const timer = setTimeout(() => {
+      startRef.current();
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [s.query, liveSearch]);
 
   /** 全部替换 → 盘上事实变了 ⇒ 用同一组条件重跑检索，结果行/计数当场说新真相 */
   const replaceAll = (): void => {
@@ -572,6 +641,30 @@ export function SearchPanel({
               />
             </label>
 
+            {/* 排序（P2-11）：三选一，默认按路径（与今天逐字一致）。只改投影序，
+                不重发检索；在途流式结果也当场重排（排序是纯函数，住 search-stream）。 */}
+            <label className="search-sort-row ksp-opt-row">
+              <span className="ksp-opt-label">排序</span>
+              <select
+                className="search-sort ksp-opt-select"
+                title="结果排序：按路径（默认）/ 按命中数 / 按文件名。只改投影顺序，不重新检索。"
+                value={s.sortMode}
+                onChange={(e) => setSearchSortMode(e.target.value as SearchSortMode)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    start();
+                  }
+                }}
+              >
+                {SEARCH_SORT_OPTIONS.map((o) => (
+                  <option key={o.mode} value={o.mode}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             {scopes.length > 0 ? (
               <label className="search-scope-row ksp-opt-row">
                 <span className="ksp-opt-label">只看</span>
@@ -597,6 +690,19 @@ export function SearchPanel({
                 </select>
               </label>
             ) : null}
+
+            {/* 打字即搜开关（P2-11）：住面板自己行内，不占全局设置。
+                默认开的理由见组件顶部 `liveSearch` 注释。 */}
+            <label className="search-live-row ksp-opt-row">
+              <input
+                type="checkbox"
+                className="search-live ksp-opt-check"
+                checked={liveSearch}
+                onChange={(e) => setLiveSearch(e.target.checked)}
+                title="打字即搜：停止输入约 0.3 秒后自动检索（回车 / 搜索钮随时可手动搜）"
+              />
+              <span className="ksp-opt-check-label">打字即搜</span>
+            </label>
           </div>
         </div>
 
@@ -744,15 +850,16 @@ export function SearchPanel({
               </div>
             );
           })}
-          {result !== null && hidden > 0 ? (
+          {displayFiles !== null && hidden > 0 ? (
             /* 「继续显示」是一枚真按钮，挂在结果末尾（PS-6 第 5 项）：
                Tab 顺序就在最后一行之后、Enter 按得动、每按一次多画 STEP 行，
-               按到没有为止 ⇒ 上一批"硬截 300 行"挡在外面的那两千条现在全部可达。 */
+               按到没有为止 ⇒ 上一批"硬截 300 行"挡在外面的那两千条现在全部可达。
+               P2-11 起在途流式结果也挂这枚按钮（投影清单非空即可展开）。 */
             <button
               type="button"
               className="ghost small ksp-more"
               onClick={() =>
-                setResultWin({ key: result, end: nextWindow(windowEnd, totalRowCount, SEARCH_WINDOW) })
+                setResultWin({ key: s.searchId, end: nextWindow(windowEnd, totalRowCount, SEARCH_WINDOW) })
               }
             >
               继续显示后面的命中（还有 {hidden} 行）
