@@ -50,9 +50,11 @@ export interface MatrixRowViewProps {
   readonly selectedColumn: string | null;
   /** 本行含「光标所在函数」贡献的格则为其列键，否则 null（C1 反向联动；与 selectedColumn 同款 memo 口径） */
   readonly cursorColumn: string | null;
-  /** 填空模式：空白格显示 + / ✓，可点选（行 memo 只在模式切换时整表重渲一次） */
-  readonly fillMode: boolean;
-  /** 本行被选入填空草稿的列（无选中传同一个空集合常量，memo 才不会被每帧新 Set 打破） */
+  /**
+   * 本行被选入填空草稿的列（无选中传同一个空集合常量，memo 才不会被每帧新 Set 打破）。
+   * 填空模式本身**不进 props**：+ 号与底色由 `.cm-scroll.cm-fill` 父级 class 驱动，
+   * 进入/退出模式时行 memo 全部跳过；只有选中集真的变了的那一行才重渲。
+   */
   readonly fillColumns: ReadonlySet<string>;
   readonly rowIndex: number;
   readonly onCell: (
@@ -68,36 +70,32 @@ export interface MatrixRowViewProps {
  * 格子带 `data-r`/`data-c`（渲染序索引）供网格方向键导航定位。
  */
 export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): ReactNode {
-  const { row, groups, foldedFaces, selectedColumn, cursorColumn, fillMode, fillColumns, rowIndex, onCell } =
-    props;
+  const { row, groups, foldedFaces, selectedColumn, cursorColumn, fillColumns, rowIndex, onCell } = props;
   const cells: ReactNode[] = [];
   let c = 0;
   for (const group of groups) {
     const folded = foldedFaces.has(group.face);
+    if (folded) {
+      // 折叠组：整组收成**一只跨列占位**，不再为每个折叠列造 td/button。
+      // 旧实现每行仍按原列数铺隐藏格（276 列 × 每行 200+ 个 td），折叠了也不减少
+      // DOM——大表滚动/切模式依旧整表重渲。colSpan 保持列对齐与表头几何，折叠格
+      // 不给 data-r/data-c（沿用「折叠组不参与方向键导航」的原口径）。
+      cells.push(
+        createElement(
+          'td',
+          { key: group.face, colSpan: group.columns.length },
+          createElement('button', { className: 'cm-cell off cm-hid', 'aria-hidden': 'true' }, '·'),
+        ),
+      );
+      continue;
+    }
     for (const col of group.columns) {
-      if (folded) {
-        // 折叠组：占位格**保留同形 DOM**（td + button），只给按钮加 `.cm-hid`（visibility:hidden）。
-        // 实测（10224 格 / 276 列）：卡顿主因有两份——①浏览器样式重算，其中「改动 td 的 class」
-        // 一份就占 ~583ms、「只动 button 的 class」仅 ~134ms；②`table-layout:auto` 的整表重排
-        // （清空 subth 标签 / `display:none` 改内容尺寸都会触发，~1.8s）。故：td **不改 class**、
-        // 按钮只加 `.cm-hid`（visibility 不改布局、保留盒子）、表头 subth 标签照常渲染
-        // （由既有 `.cm-subth.folded{opacity:.3}` 弱化）——全流程只改非布局属性 ⇒ 只重绘不重排。
-        // 折叠格不给 data-r/data-c（沿用「折叠组不参与方向键导航」的原口径）。
-        cells.push(
-          createElement(
-            'td',
-            { key: col.key },
-            createElement('button', { className: 'cm-cell off cm-hid', 'aria-hidden': 'true' }, '·'),
-          ),
-        );
-        continue;
-      }
       const cell = row.cells[col.key];
       const dataC = c++;
       if (!cell || !cell.present) {
         // 空白格：这个时机还没有针对该状态写过的反应（点击不导航）。
-        // 填空模式下 + / ✓ 直接写在按钮文本里（不用伪元素——1 万格各生一个
-        // ::after 盒子既费样式计算，也让「这一格能不能点」变得不可测）。
+        // 文本只保留「· / ✓」两态；填空模式的 + 与底色由父级 `.cm-fill` CSS 提供，
+        // 模式开关不再触发整窗行重渲（旧实现每行都收 fillMode prop）。
         const isFillSel = fillColumns.has(col.key);
         cells.push(
           createElement(
@@ -106,21 +104,17 @@ export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewPro
             createElement(
               'button',
               {
-                className:
-                  'cm-cell off' +
-                  (fillMode ? ' gap' : '') +
-                  (isFillSel ? ' fill-sel' : ''),
-                title: fillMode
-                  ? isFillSel
-                    ? '已选入填空——再点一次取消'
-                    : '空缺：点击选中，稍后一键生成模板'
-                  : '无（该时机还没有针对此状态的响应）',
-                'aria-pressed': fillMode ? isFillSel : undefined,
+                className: 'cm-cell off' + (isFillSel ? ' fill-sel' : ''),
+                title: isFillSel
+                  ? '已选入填空——再点一次取消'
+                  : '空缺：点击选中；开启「填格子」后可批量生成模板',
+                'aria-label': isFillSel ? '已选入填空，点击取消' : '空缺，点击选中',
+                'aria-pressed': isFillSel || undefined,
                 'data-r': rowIndex,
                 'data-c': dataC,
                 onClick: () => onCell(row.key, col.key, null, false),
               },
-              fillMode ? (isFillSel ? '✓' : '+') : '·',
+              isFillSel ? '✓' : '·',
             ),
           ),
         );

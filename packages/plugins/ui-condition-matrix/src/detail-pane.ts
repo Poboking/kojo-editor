@@ -137,7 +137,7 @@ export function renderDetail(opts: {
         { className: 'cm-detail-gap-note dim' },
         fillMode
           ? '这个口上包在该时机还没有针对此状态的响应。已选入的格会一起生成模板；点格子可取消。'
-          : '这个口上包在该时机还没有针对此状态的响应。开启「填格」后点它即可选中。',
+          : '这个口上包在该时机还没有针对此状态的响应。开启「填格子」后点它即可选中。',
       ),
       comps.length > 0
         ? createElement(
@@ -162,7 +162,7 @@ export function renderDetail(opts: {
         { className: 'dim' },
         fillMode
           ? '空白格已变为可勾选：点一下选中、再点取消；选好后在下方生成模板。'
-          : '已填色的格可看到响应函数与比较条件；开启「填格」后可勾选空白格生成模板。',
+          : '已填色的格可看到响应函数与比较条件；开启「填格子」后可勾选空白格生成模板。',
       ),
       createElement(
         'div',

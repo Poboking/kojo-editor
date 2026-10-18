@@ -61,9 +61,10 @@ import {
   functionRangeAt,
   instructionNoOfSlot,
   planMatrixWindow,
+  rowHasVisibleGap,
   rowHeightChanged,
   rowScrollTop,
-  shouldVirtualizeMatrix,
+  sameMatrixWindow,
   ROWHEAD_MIN_W,
   type CharacterEntry,
   type CharacterIndex,
@@ -115,9 +116,6 @@ import {
   type ScrollBox,
   type SplitterPointer,
 } from './dom-shims';
-
-/** 矩阵行渲染上限（防 DOM 爆炸；过滤后仍受此限）——**仅全量（非视口化）路径** */
-const ROW_RENDER_CAP = 400;
 
 /** 光标没命中任何格时的空集合（常量身份：无命中路径零分配，行 memo 也据此跳过） */
 const NO_CURSOR_CELLS: ReadonlyMap<string, string> = new Map<string, string>();
@@ -231,17 +229,15 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const fillSigCacheRef = useRef<{ sel: ReadonlySet<string>; sig: string } | null>(null);
 
         /**
-         * 视口化开关：宿主偏好开 → 恒开；否则**大角色自动开**（见
-         * `AUTO_VIRTUALIZE_FUNCTIONS`）。小角色保持改动前的全量路径。
+         * 行视口化：**有矩阵就开**（宿主偏好只是额外兜底）。按函数数猜阈值会漏判
+         * ——30 个函数也可能铺出几百行状态 × 上百列，整表 DOM 一旦落下，滚动、
+         * 「只看空缺」、填格模式切换都会重渲整张表；视口化对再小的表也只是多一次
+         * 窗口计算，对任何规模都安全。
          */
         const autoEntry =
           selectedNo === null ? null : store.characterIndex?.entries.get(selectedNo) ?? null;
-        const virtualize = shouldVirtualizeMatrix(
-          autoEntry?.functions.length ?? 0,
-          autoEntry?.faces.length ?? 0,
-          props.uiPrefs?.panelVirtualize === true,
-        );
-        /** 滚动位置（视口化路径驱动窗口；全量路径恒为 0，不参与渲染）——**按帧合并**后才落到这里 */
+        const virtualize = autoEntry !== null || props.uiPrefs?.panelVirtualize === true;
+        /** 滚动位置（仅窗口计算用）——**按帧合并**且只在跨行时落 state */
         const [scrollTop, setScrollTop] = useState(0);
         /** 滚动容器可视高（视口化路径算窗口用；首帧未量到 → 0，仅画 overscan 行） */
         const [viewportH, setViewportH] = useState(0);
@@ -252,6 +248,11 @@ export function createUiConditionMatrixPlugin(): Plugin {
          * 「滚到哪一行」和「画出哪一行」彻底错开。真源是首行的 rect 高，不是常量。
          */
         const [measuredRowH, setMeasuredRowH] = useState<number | null>(null);
+        /** 几何读数镜像：滚动 rAF 回调里判断窗口用，避免闭包里拿到旧 state */
+        const viewportHRef = useRef(0);
+        viewportHRef.current = viewportH;
+        const measuredRowHRef = useRef<number | null>(null);
+        measuredRowHRef.current = measuredRowH;
         /** 跨窗口键盘导航待聚焦的格子（渲染出该格后由 effect 落焦点，绝不聚焦不存在的节点） */
         const pendingFocus = useRef<{ r: number; c: number } | null>(null);
         /** 上面那笔挂账的**渲染信号**（effect 只在有账时跑，不再每帧空转一次 querySelector） */
@@ -477,20 +478,37 @@ export function createUiConditionMatrixPlugin(): Plugin {
           });
         };
 
-        // 视口化路径：滚动**按帧合并**——原生 scroll 事件每帧可来多次，每次抬一次 state
-        // 就是每帧多次全窗口重算。滚动条本身由浏览器画，窗口只须在下一帧跟上。
+        // 视口化路径：滚动**按帧合并**，且只在**窗口行区间变化**时抬 state。
+        // 同一行窗口内滚动（绝大多数 scroll 事件）内容与占位都不变——让浏览器自己滚，
+        // 不重渲面板；跨过一行才换 tbody。逐帧 readGeometry 也在这里去掉：行高/可视高
+        // 由尺寸观察器负责，滚动本身不会改变它们。
         const onScroll = (): void => {
           const box = scrollRef.current;
           if (!box) return;
-          scrollTopRef.current = box.scrollTop;
+          const next = box.scrollTop;
+          scrollTopRef.current = next;
+          const rendered = layoutRef.current;
+          if (rendered) {
+            const candidate = planMatrixWindow(next, viewportH, rowCountRef.current, measuredRowH);
+            if (sameMatrixWindow(candidate.win, rendered.win)) return;
+          }
           if (isFramePending(scrollFrameRef.current)) return;
           const frame = (frameRef.current ??= getFrameScheduler());
           scrollFrameRef.current = frame.request(() => {
             scrollFrameRef.current = null;
             if (unmountedRef.current) return;
-            const next = scrollTopRef.current;
-            setScrollTop((prev) => (prev === next ? prev : next));
-            readGeometry();
+            const latest = scrollTopRef.current;
+            const last = layoutRef.current;
+            if (last) {
+              const candidate = planMatrixWindow(
+                latest,
+                viewportHRef.current,
+                rowCountRef.current,
+                measuredRowHRef.current,
+              );
+              if (sameMatrixWindow(candidate.win, last.win)) return;
+            }
+            setScrollTop((prev) => (prev === latest ? prev : latest));
           });
         };
 
@@ -547,7 +565,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           if (box && box.scrollTop !== 0) box.scrollTop = 0;
           scrollTopRef.current = 0;
           setScrollTop(0);
-        }, [virtualize, selectedNo, packKey, deferredFilter]);
+        }, [virtualize, selectedNo, packKey, deferredFilter, gapOnly]);
 
         // 筛选/角色/包一变，已勾选的空格可能落到视野外或不再是空格：清掉草稿，别让
         // 「已选 37 格」里混着看不见的旧状态
@@ -944,9 +962,9 @@ export function createUiConditionMatrixPlugin(): Plugin {
             'div',
             { className: 'cm-toolbar-row cm-toolbar-bottom' },
             filterInput,
-            toggleChip('只看缺口', gapOnly, () => setGapOnly((v) => !v), '只显示在当前可见时机上仍有空缺的状态行'),
+            toggleChip('只看空缺', gapOnly, () => setGapOnly((v) => !v), '只显示在当前可见时机上仍有空缺的状态行；已填格会淡出，空缺一眼可见'),
             toggleChip(
-              '填格',
+              '填格子',
               fillMode,
               () => {
                 if (fillModeRef.current) exitFillMode();
@@ -955,7 +973,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   setNotice(null);
                 }
               },
-              '开启后点空白格选中，可批量生成模板（Esc 退出）',
+              '把空缺补成口上函数骨架：点空缺格选中 → 选写入包 → 生成模板，时机与条件自动写好，台词由你填（Esc 退出）',
             ),
             props.floating ? null : floatBtn,
           ),
@@ -1042,8 +1060,15 @@ export function createUiConditionMatrixPlugin(): Plugin {
                 ),
                 createElement('span', { className: 'cm-cov-pct' }, `${pct}%`),
                 createElement(
-                  'span',
-                  { className: 'cm-gap-count' + (matrix.gapCells > 0 ? ' has-gap' : '') },
+                  'button',
+                  {
+                    className:
+                      'cm-gap-count' + (matrix.gapCells > 0 ? ' has-gap' : '') + (gapOnly ? ' on' : ''),
+                    type: 'button',
+                    title: gapOnly ? '正在只看空缺，点击显示全部' : '只看空缺（只显示仍有空缺的状态行）',
+                    'aria-pressed': gapOnly,
+                    onClick: () => setGapOnly((v) => !v),
+                  },
                   `${matrix.gapCells} 空缺`,
                 ),
               )
@@ -1112,7 +1137,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const openFill = (): void => {
           if (!entry || !matrix) return;
           if (fillSel.size === 0) {
-            setNotice('先在填格模式下选中至少一个空缺。');
+            setNotice('先在「填格子」模式下选中至少一个空缺（点矩阵里的 + 格）。');
             return;
           }
           if (!fillTarget) {
@@ -1178,6 +1203,17 @@ export function createUiConditionMatrixPlugin(): Plugin {
           });
         };
 
+        // 常驻一行术语解释：新人不必先点开「填格子」才知道空缺和它能做什么
+        const entryHint =
+          matrix && !fillMode
+            ? createElement(
+                'div',
+                { className: 'cm-entry-hint dim' },
+                createElement('span', { className: 'cm-entry-hint-mark', 'aria-hidden': 'true' }, '·'),
+                '空缺 = 此时机还没有针对该状态的响应。点「填格子」可把空缺批量补成口上函数骨架，台词由你填。',
+              )
+            : null;
+
         const storyPresets = services.stateLinePresets();
         const fillBar = fillMode
           ? createElement(
@@ -1185,8 +1221,30 @@ export function createUiConditionMatrixPlugin(): Plugin {
               { className: 'cm-fillbar' },
               createElement(
                 'div',
+                { className: 'cm-fill-guide' },
+                createElement(
+                  'span',
+                  { className: 'cm-fill-guide-what' },
+                  createElement('strong', null, '填格子 = 把空缺补成模板'),
+                  '——把选中的空缺生成口上函数骨架：时机与条件自动写好，你只需在生成的文件里填台词。',
+                ),
+                createElement(
+                  'span',
+                  { className: 'cm-fill-guide-steps' },
+                  createElement('b', null, '①'),
+                  ' 点空缺格选中 ',
+                  createElement('span', { className: 'cm-fill-guide-arrow dim' }, '→'),
+                  createElement('b', null, '②'),
+                  ' 选写入包 ',
+                  createElement('span', { className: 'cm-fill-guide-arrow dim' }, '→'),
+                  createElement('b', null, '③'),
+                  ' 生成模板并写入',
+                ),
+              ),
+              createElement(
+                'div',
                 { className: 'cm-fillbar-row' },
-                createElement('span', { className: 'cm-fillbar-title' }, '填格'),
+                createElement('span', { className: 'cm-fillbar-title' }, '填格子'),
                 createElement(
                   'span',
                   { className: 'cm-fillbar-count' + (fillSel.size > 0 ? ' has' : '') },
@@ -1211,7 +1269,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                     className: 'small primary cm-fillbar-go',
                     type: 'button',
                     disabled: fillSel.size === 0 || fillTarget === null,
-                    title: '按选定语言与落点生成模板',
+                    title: '生成可填台词的口上函数骨架（时机与条件自动写好）',
                     onClick: openFill,
                   },
                   '生成模板…',
@@ -1221,7 +1279,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   {
                     className: 'ghost small cm-fillbar-exit',
                     type: 'button',
-                    title: '退出填格模式（Esc）',
+                    title: '退出填格子模式（Esc）',
                     onClick: exitFillMode,
                   },
                   '退出',
@@ -1283,6 +1341,8 @@ export function createUiConditionMatrixPlugin(): Plugin {
         }
 
         // ---- 定位（网格）----
+        /** 过滤后的可见性反馈：点了「只看空缺」必须立刻看到行数变化与空态原因 */
+        let filterNote: ReactNode = null;
         let grid: ReactNode;
         if (!entry || !matrix) {
           const selectedInfo = selectedNo === null ? null : current.charaIndex.get(selectedNo) ?? null;
@@ -1321,10 +1381,47 @@ export function createUiConditionMatrixPlugin(): Plugin {
               );
             }
             if (gapOnly) {
-              next = next.filter((r) => visibleColumnKeys.some((k) => !r.cells[k]?.present));
+              next = next.filter((r) => rowHasVisibleGap(r, visibleColumnKeys));
             }
             rows = needle || gapOnly ? next : [...next];
             rowsFilterRef.current = { matrix, needle, gapOnly, visibleSig, rows };
+          }
+          if (gapOnly || needle) {
+            const reason =
+              rows.length > 0
+                ? null
+                : gapOnly
+                  ? needle
+                    ? '没有同时匹配筛选词、且仍有空缺的状态行。'
+                    : '当前可见时机已经全部有响应——没有空缺。可点开其它时机分组或切换口上包。'
+                  : '没有匹配的状态键。';
+            filterNote = createElement(
+              'div',
+              { className: 'cm-filter-note', role: 'status' },
+              createElement(
+                'span',
+                { className: 'cm-filter-count' },
+                gapOnly ? `只看空缺 · ${rows.length} / ${matrix.rows.length} 行` : `匹配 · ${rows.length} / ${matrix.rows.length} 行`,
+              ),
+              reason
+                ? createElement('span', { className: 'cm-filter-reason dim' }, reason)
+                : createElement(
+                    'span',
+                    { className: 'cm-filter-reason dim' },
+                    gapOnly ? '空缺（暗格）保留；已填格已淡出。' : '仅显示匹配的状态行。',
+                  ),
+              gapOnly
+                ? createElement(
+                    'button',
+                    {
+                      className: 'cm-filter-clear',
+                      type: 'button',
+                      onClick: () => setGapOnly(false),
+                    },
+                    '显示全部',
+                  )
+                : null,
+            );
           }
           // 填空选择 → 每行 Set（签名缓存：滚动帧 / 无关重渲不重建，行 memo 不被打断）
           const fillSigCache = fillSigCacheRef.current;
@@ -1390,70 +1487,37 @@ export function createUiConditionMatrixPlugin(): Plugin {
           const activeSnap =
             colSnap && colSnap.key === matrixKey && colSnap.widths.length === colCount + 1 ? colSnap : null;
 
-          let body: ReactNode;
-          let moreNotice: ReactNode = null;
-          if (virtualize) {
-            // 视口化：只渲染可见窗口（+上下 overscan），两段占位还原完整滚动高度——
-            // 全部行都可浏览、可键盘到达，不再受 400 行上限约束。
-            // 行高走**实测值**（`planMatrixWindow` 内部收敛），窗口 / 占位 / 键盘跳转共用同一把尺。
-            const layout = planMatrixWindow(scrollTop, viewportH, rows.length, measuredRowH);
-            layoutRef.current = layout;
-            const win = layout.win;
-            body = createElement(
-              'tbody',
-              { key: 'bd' },
-              spacerRow(win.topPad, 'pad-top', colCount + 1),
-              ...rows.slice(win.start, win.end).map((row, i) =>
-                createElement(MatrixRowView, {
-                  key: row.key,
-                  row,
-                  groups,
-                  foldedFaces,
-                  selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
-                  cursorColumn: cursorCells.get(row.key) ?? null,
-                  fillMode,
-                  fillColumns: fillByRow.get(row.key) ?? EMPTY_FILL_COLUMNS,
-                  rowIndex: win.start + i, // 绝对行索引（data-r 跨窗一致，方向键据此平移）
-                  onCell,
-                }),
-              ),
-              spacerRow(win.bottomPad, 'pad-bottom', colCount + 1),
-            );
-          } else {
-            layoutRef.current = null; // 全量路径没有窗口可言：清掉别让键盘拿旧尺子
-            const shown = rows.slice(0, ROW_RENDER_CAP);
-            body = createElement(
-              'tbody',
-              { key: 'bd' },
-              ...shown.map((row, rowIndex) =>
-                createElement(MatrixRowView, {
-                  key: row.key,
-                  row,
-                  groups,
-                  foldedFaces,
-                  selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
-                  cursorColumn: cursorCells.get(row.key) ?? null,
-                  fillMode,
-                  fillColumns: fillByRow.get(row.key) ?? EMPTY_FILL_COLUMNS,
-                  rowIndex,
-                  onCell,
-                }),
-              ),
-            );
-            if (rows.length > ROW_RENDER_CAP) {
-              moreNotice = createElement(
-                'div',
-                { className: 'cm-more dim' },
-                `其余 ${rows.length - ROW_RENDER_CAP} 行未显示（可用过滤缩小范围）`,
-              );
-            }
-          }
+          // 行视口化是唯一渲染路径：只画可见窗口（+上下 overscan），两段占位还原
+          // 完整滚动高度——全部行可浏览、可键盘到达，模式切换/过滤也只重渲窗口内行。
+          // 行高走**实测值**，窗口 / 占位 / 键盘跳转共用同一把尺。
+          const layout = planMatrixWindow(scrollTop, viewportH, rows.length, measuredRowH);
+          layoutRef.current = layout;
+          const win = layout.win;
+          const body = createElement(
+            'tbody',
+            { key: 'bd' },
+            spacerRow(win.topPad, 'pad-top', colCount + 1),
+            ...rows.slice(win.start, win.end).map((row, i) =>
+              createElement(MatrixRowView, {
+                key: row.key,
+                row,
+                groups,
+                foldedFaces,
+                selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
+                cursorColumn: cursorCells.get(row.key) ?? null,
+                fillColumns: fillByRow.get(row.key) ?? EMPTY_FILL_COLUMNS,
+                rowIndex: win.start + i, // 绝对行索引（data-r 跨窗一致，方向键据此平移）
+                onCell,
+              }),
+            ),
+            spacerRow(win.bottomPad, 'pad-bottom', colCount + 1),
+          );
 
           // 网格区 CSS 变量：行高常量唯一真源（视口化路径用）+ 首列拖拽宽度（HK-25，拖过才设）。
           // 这里的"真源"是**实测**行高（`layoutRef` 那次算出来的同一个值）——写常量就等于
           // 让 CSS 钉一个尺子、窗口数学按另一个尺子算，正是 PS-7 之前的错位。
           const gridStyle: Record<string, string> = {};
-          if (virtualize && layoutRef.current) gridStyle['--cm-row-h'] = `${layoutRef.current.rowHeight}px`;
+          if (layoutRef.current) gridStyle['--cm-row-h'] = `${layoutRef.current.rowHeight}px`;
           // 定宽接管期由 `<colgroup>` 第 0 个 col 承接首列宽 ⇒ 不再设 var（设了会按继承失效整棵子树）。
           // 未接管（无有效快照）时仍走 var：这是「换角色后仍保留拖过的宽度」的唯一通道。
           if (rowheadW !== null && activeSnap === null) gridStyle['--cm-rowhead-w'] = `${rowheadW}px`;
@@ -1470,7 +1534,10 @@ export function createUiConditionMatrixPlugin(): Plugin {
             'div',
             {
               className:
-                'cm-scroll' + (virtualize ? ' cm-virt' : '') + (activeSnap ? ' col-pinned' : ''),
+                'cm-scroll cm-virt' +
+                (activeSnap ? ' col-pinned' : '') +
+                (gapOnly ? ' gap-focus' : '') +
+                (fillMode ? ' cm-fill' : ''),
               ref: scrollRef,
               onKeyDown: onGridKeyDown,
               // 首列拖拽 **委派**到本容器：把手遍布整列（角格 + 每个行头），行组件不持有 handler
@@ -1478,12 +1545,11 @@ export function createUiConditionMatrixPlugin(): Plugin {
               onPointerMove: onColMove,
               onPointerUp: onColEnd,
               onPointerCancel: onColEnd,
-              onScroll: virtualize ? onScroll : undefined,
+              onScroll,
               // 未拖过时变量未设 ⇒ CSS 回退 auto（自然宽度，逐字不变）
               style: Object.keys(gridStyle).length > 0 ? (gridStyle as CSSProperties) : undefined,
             },
             createElement('table', { className: 'cm-table', ref: tableRef, style: tableStyle }, colgroup, head, body),
-            moreNotice,
           );
         }
 
@@ -1545,9 +1611,11 @@ export function createUiConditionMatrixPlugin(): Plugin {
           'div',
           { className: 'panel-condition-matrix', ref: rootRef },
           toolbar,
+          entryHint,
           status,
           noticeEl,
           fillBar,
+          filterNote,
           grid,
           splitter,
           detail,

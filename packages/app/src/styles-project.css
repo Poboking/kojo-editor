@@ -5280,8 +5280,8 @@ button.primary .hint {
   border-top: 1px solid var(--border);
   padding-top: 6px;
 }
-/* 视口化路径（宿主偏好开启时，`.cm-virt`）：固定行高 + 行头压成单行，
-   内容不得把行撑高（窗口数学以 `MATRIX_ROW_H` 为唯一真源，经 `--cm-row-h` 落入本规则）。
+/* 行视口化（`.cm-virt` 常开）：固定行高 + 行头压成单行，
+   内容不得把行撑高（窗口数学以实测行高为唯一真源，经 `--cm-row-h` 落入本规则）。
    占位块的像素高度由 TS 侧以行内样式给出（不在此写数字）。 */
 .cm-scroll.cm-virt .cm-table tbody tr {
   height: var(--cm-row-h);
@@ -5530,11 +5530,6 @@ button.primary .hint {
   outline-offset: 1px;
   opacity: 1;
 }
-/* 超出渲染上限的提示行：贴左，弱化 */
-.cm-more {
-  padding: 4px 2px;
-  font-size: var(--fs-0);
-}
 /* 详情：头行 + 命中函数列表（层级：状态键 > 时机/计数 > 函数名 > 比较 > 路径） */
 .cm-detail-head {
   display: flex;
@@ -5617,6 +5612,21 @@ button.primary .hint {
   min-height: 0;
   font-size: var(--fs-1);
   color: var(--fg);
+}
+
+/* 工具条下的术语解释：空缺是什么 / 填格子的产出是什么 */
+.cm-entry-hint {
+  flex: none;
+  padding: 0 2px;
+  font-size: var(--fs-0);
+  line-height: 1.5;
+}
+.cm-entry-hint-mark {
+  display: inline-block;
+  width: 12px;
+  margin-left: 2px;
+  color: var(--accent);
+  font-weight: 700;
 }
 
 /* ---- 工具条 ---- */
@@ -5913,13 +5923,28 @@ button.primary .hint {
   color: var(--fg);
 }
 .cm-gap-count {
-  padding: 1px 7px;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: var(--hover-soft);
+  color: inherit;
+  font-size: inherit;
+  box-shadow: none;
+  cursor: pointer;
+}
+.cm-gap-count:hover {
+  border-color: var(--border-strong);
 }
 .cm-gap-count.has-gap {
   color: var(--amber);
   background: color-mix(in srgb, var(--amber) 10%, transparent);
+}
+.cm-gap-count.on {
+  border-color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* ---- 一次性提示 ---- */
@@ -5962,6 +5987,85 @@ button.primary .hint {
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent) 7%, var(--surface-raised));
   box-shadow: var(--edge-raise);
+}
+/* 填格子首屏说明：新人第一眼要知道「这是什么、产出什么、下一步点哪」 */
+.cm-fill-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 7px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: var(--fs-0);
+  line-height: 1.55;
+}
+.cm-fill-guide-what {
+  color: var(--fg);
+}
+.cm-fill-guide-what strong {
+  margin-right: 3px;
+  color: var(--accent-text);
+}
+.cm-fill-guide-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  color: var(--fg-dim);
+}
+.cm-fill-guide-steps b {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.cm-fill-guide-arrow {
+  margin: 0 1px;
+}
+/* 只看空缺：可见行数 + 空态原因 + 一键退回全部 */
+.cm-filter-note {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 3px 8px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-size: var(--fs-0);
+}
+.cm-filter-count {
+  color: var(--accent-text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.cm-filter-reason {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cm-filter-clear {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--fs-0);
+  box-shadow: none;
+}
+.cm-filter-clear:hover {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+/* 空缺聚焦：已填格淡出（只改透明度，不触发布局），空缺保持原亮度 */
+.cm-scroll.gap-focus .cm-cell.on {
+  opacity: 0.32;
+}
+.cm-scroll.gap-focus .cm-cell.on:hover {
+  opacity: 0.7;
+}
+.cm-scroll.gap-focus .cm-cell.off {
+  color: color-mix(in srgb, var(--fg-dim) 72%, transparent);
 }
 .cm-fillbar-row {
   display: flex;
@@ -6282,15 +6386,25 @@ button.primary .hint {
   background: var(--accent);
   border-color: var(--accent-text);
 }
-.cm-cell.off.gap {
+/* 填格子模式：空缺格给出可点外观。由网格容器 class 驱动（`:where` 保持低特异性，
+   选中态的 .fill-sel 仍能压过）；+ 号用伪元素，进入/退出模式不重渲任何行。 */
+.cm-scroll.cm-fill :where(.cm-cell.off) {
   border-color: var(--border-subtle);
   background: var(--hover-soft);
   color: var(--fg-dim);
 }
-.cm-cell.off.gap:hover {
+.cm-scroll.cm-fill :where(.cm-cell.off):hover {
   border-color: var(--accent);
   background: var(--accent-dim);
   color: var(--accent-text);
+}
+.cm-scroll.cm-fill :where(.cm-cell.off:not(.fill-sel)) {
+  font-size: 0;
+}
+.cm-scroll.cm-fill :where(.cm-cell.off:not(.fill-sel))::before {
+  content: '+';
+  font-size: 11px;
+  line-height: 1;
 }
 .cm-cell.off.fill-sel {
   background: var(--accent-dim);
@@ -6550,11 +6664,6 @@ button.primary .hint {
   padding: 10px 2px;
   line-height: 1.55;
 }
-.cm-more {
-  padding: 5px 2px;
-  font-size: var(--fs-0);
-}
-
 /* ---- 填格浮层（ui.overlay）---- */
 .cmfill {
   display: flex;
@@ -6569,6 +6678,19 @@ button.primary .hint {
 }
 .cmfill-meta {
   font-size: var(--fs-0);
+}
+.cmfill-intro {
+  margin: -4px 0 0;
+  padding: 7px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.55;
+}
+.cmfill-intro strong {
+  color: var(--accent-text);
 }
 .cmfill-grid {
   display: grid;

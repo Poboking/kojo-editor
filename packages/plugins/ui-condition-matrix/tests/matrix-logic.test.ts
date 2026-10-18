@@ -19,9 +19,8 @@ import type {
   StateDependency,
 } from '@kojo/plugin-api';
 import {
-  AUTO_VIRTUALIZE_CELLS,
-  AUTO_VIRTUALIZE_FUNCTIONS,
   DETAIL_MIN_H,
+  rowHasVisibleGap,
   FACE_ORDER,
   GRID_MIN_RESERVE,
   MATRIX_OVERSCAN,
@@ -39,9 +38,17 @@ import {
   faceLabel,
   functionRangeAt,
   instructionNoOfSlot,
-  shouldVirtualizeMatrix,
+  planMatrixWindow,
+  sameMatrixWindow,
 } from '../src/matrix-logic';
-import type { CharacterEntry, ColumnDesc, ConditionMatrix, FaceFunction } from '../src/matrix-logic';
+import type {
+  CharacterEntry,
+  ColumnDesc,
+  ConditionMatrix,
+  FaceFunction,
+  MatrixCell,
+  MatrixRow,
+} from '../src/matrix-logic';
 
 /* ------------------------------ 测试基建 ------------------------------ */
 
@@ -661,27 +668,54 @@ describe('cellKeysOfFunction — 命中函数 → 矩阵高亮格集合', () => 
   });
 });
 
-/* ------------------------------ 自动视口化策略 ------------------------------ */
+/* ------------------------------ 滚动帧窗口判据 ------------------------------ */
 
-describe('shouldVirtualizeMatrix（大矩阵自动视口化）', () => {
-  it('宿主偏好开 → 小角色也走视口化', () => {
-    expect(shouldVirtualizeMatrix(3, 2, true)).toBe(true);
+describe('rowHasVisibleGap（只看空缺判据）', () => {
+  const present = (): MatrixCell => ({ present: true, count: 1, functions: [] });
+  const row = (cells: Record<string, MatrixCell>): MatrixRow => ({
+    key: 'CFLAG:318',
+    name: 'CFLAG',
+    indices: ['318'],
+    label: '好感',
+    totalCount: 0,
+    comparisons: [],
+    universeComparisons: [],
+    cells,
+    gapCount: 0,
   });
 
-  it('函数数达到阈值即开（不依赖设置页开关）', () => {
-    expect(shouldVirtualizeMatrix(AUTO_VIRTUALIZE_FUNCTIONS - 1, 5, false)).toBe(false);
-    expect(shouldVirtualizeMatrix(AUTO_VIRTUALIZE_FUNCTIONS, 5, false)).toBe(true);
+  it('可见列里有一列没响应 → 行是空缺', () => {
+    expect(rowHasVisibleGap(row({ A: present() }), ['A', 'B'])).toBe(true);
   });
 
-  it('宽表按函数数 × 面数粗估，达到格数阈值也开', () => {
-    const faces = Math.ceil(AUTO_VIRTUALIZE_CELLS / 20);
-    expect(shouldVirtualizeMatrix(19, faces - 1, false)).toBe(false);
-    expect(shouldVirtualizeMatrix(20, faces, false)).toBe(true);
+  it('可见列全都有响应 → 不是空缺（不可见列缺不算）', () => {
+    expect(rowHasVisibleGap(row({ A: present(), B: present() }), ['A', 'B'])).toBe(false);
   });
 
-  it('空 / 小索引保持全量路径（窗口计算零开销）', () => {
-    expect(shouldVirtualizeMatrix(0, 0, false)).toBe(false);
-    expect(shouldVirtualizeMatrix(10, 4, false)).toBe(false);
+  it('没有可见列 → 不留下任何行（否则只会得到一张空表）', () => {
+    expect(rowHasVisibleGap(row({ A: present() }), [])).toBe(false);
+  });
+});
+
+describe('sameMatrixWindow（窗口不变 ⇒ 滚动帧不重渲）', () => {
+  const ROW = 26;
+  it('在同一行内滚动：start/end 不变 ⇒ 视为同一窗口', () => {
+    const layout = planMatrixWindow(ROW * 40, 400, 500, ROW);
+    const next = planMatrixWindow(ROW * 40 + 21, 400, 500, ROW);
+    expect(next.win.start).toBe(layout.win.start);
+    expect(sameMatrixWindow(layout.win, next.win)).toBe(true);
+  });
+
+  it('跨过一行：窗口平移 ⇒ 需要换 tbody 内容', () => {
+    const layout = planMatrixWindow(ROW * 40, 400, 500, ROW);
+    const next = planMatrixWindow(ROW * 41, 400, 500, ROW);
+    expect(sameMatrixWindow(layout.win, next.win)).toBe(false);
+  });
+
+  it('顶边界：同一窗口内的微小滚动仍按区间判等', () => {
+    const top = planMatrixWindow(0, 400, 500, ROW);
+    expect(sameMatrixWindow(top.win, planMatrixWindow(0, 400, 500, ROW).win)).toBe(true);
+    expect(sameMatrixWindow(top.win, planMatrixWindow(5, 400, 500, ROW).win)).toBe(true);
   });
 });
 

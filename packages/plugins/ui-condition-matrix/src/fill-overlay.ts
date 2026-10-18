@@ -153,7 +153,7 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
     }, [snap, mode, place]);
 
     if (!snap) {
-      return h('div', { className: 'cmfill' }, h('div', { className: 'cmfill-empty dim' }, '没有待生成的填格请求。'));
+      return h('div', { className: 'cmfill' }, h('div', { className: 'cmfill-empty dim' }, '没有待生成的填格子请求。'));
     }
 
     const selectedFile = files.find((f) => f.relPath === fileRel) ?? null;
@@ -329,13 +329,19 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
       h(
         'div',
         { className: 'cmfill-head' },
-        h('h3', null, '填空模板'),
+        h('h3', null, '填格子 · 生成口上模板'),
         h(
           'div',
           { className: 'cmfill-meta dim' },
           `${snap.chara.name}（K${snap.chara.no}） · ${snap.pack.label}` +
             (snap.workspace ? ` · 我的口上项目：${snap.workspace.artifactName}` : ''),
         ),
+      ),
+      h(
+        'div',
+        { className: 'cmfill-intro' },
+        h('strong', null, '生成的是口上函数骨架'),
+        '：时机与条件已按选中的空缺写好，台词处是等你填的示例注释。写入后会直接打开文件，在骨架里写台词即可。',
       ),
       h(
         'div',
@@ -413,7 +419,7 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
                   ? '所选格都属于本包已有函数的时机——请把「方式」改为「追加到文件」以并入这些分支。'
                   : plan && plan.skipped > 0 && plan.cellCount === 0
                     ? '所选格在目标口上包里都已有响应——换一个目标包或重新选空缺。'
-                    : '先在矩阵里勾选空白格。',
+                    : '先在矩阵的「填格子」模式里勾选空缺格。',
               ),
           language === 'kojo' && plan && plan.newCount > 0 && !snap.faceTable
             ? h(

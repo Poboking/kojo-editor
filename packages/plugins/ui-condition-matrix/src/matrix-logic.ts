@@ -799,32 +799,6 @@ export function buildCharaOptions(
   return [...byNo.values()].sort((a, b) => a.no - b.no);
 }
 
-/* ------------------------------ 渲染策略（自动视口化） ------------------------------ */
-
-/**
- * 自动视口化阈值（角色函数数）：达到即只渲染可见窗口。
- *
- * 函数数大 ⇒ 行/列都可能上千，一张表动辄 1–2 万个 DOM 格。视口化是**面板自己的
- * 渲染策略**（不隐藏数据：滚到哪画到哪，滚动条与键盘仍覆盖全部行），所以不必等
- * 用户先去设置页打开全局开关；小角色仍走全量路径，避免窗口计算的反向开销。
- */
-export const AUTO_VIRTUALIZE_FUNCTIONS = 48;
-/** 粗估格数阈值：宽表（面多）即使函数不多也可能铺出几千格 */
-export const AUTO_VIRTUALIZE_CELLS = 3000;
-
-/**
- * 是否走视口化：宿主偏好开 → 恒开；否则按角色函数数 / 面数粗估，大矩阵自动开。
- * 纯函数（单测钉阈值），面板只在渲染期读它，不改数据面口径。
- */
-export function shouldVirtualizeMatrix(
-  functionCount: number,
-  faceCount: number,
-  pref: boolean,
-): boolean {
-  if (pref) return true;
-  return functionCount >= AUTO_VIRTUALIZE_FUNCTIONS || functionCount * faceCount >= AUTO_VIRTUALIZE_CELLS;
-}
-
 /** 视口化窗口：要渲染的行区间 + 上下占位块高度（撑出完整滚动高度） */
 export interface ViewportWindow {
   /** 起始行索引（含） */
@@ -876,6 +850,27 @@ export function computeViewportWindow(
     topPad: start * rowHeight,
     bottomPad: (totalRows - end) * rowHeight,
   };
+}
+
+/**
+ * 当前可见列里是否还有空缺——「只看空缺」的唯一判据。
+ *
+ * 空缺 = 该列在行里没有 `present` 的响应（不是 `count === 0`）；空列清单
+ * 视为无空缺（没有可见时机可看时，不该把所有行都留下）。
+ */
+export function rowHasVisibleGap(row: MatrixRow, visibleColumnKeys: readonly string[]): boolean {
+  return visibleColumnKeys.some((key) => !row.cells[key]?.present);
+}
+
+/**
+ * 两次窗口是否同一行区间。滚动帧据此跳过重渲：区间不变 ⇒ 占位块与已渲染行的落点
+ * 都不变，浏览器自己滚即可；只有跨过一行（窗口平移）才需要换 tbody 内容。
+ */
+export function sameMatrixWindow(
+  a: Pick<ViewportWindow, 'start' | 'end'>,
+  b: Pick<ViewportWindow, 'start' | 'end'>,
+): boolean {
+  return a.start === b.start && a.end === b.end;
 }
 
 /* ------------------------------ 反向光标联动（C1） ------------------------------ */
