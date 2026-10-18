@@ -7,7 +7,7 @@ import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { ProblemPanel } from './ProblemPanel';
 import { SearchPanel } from './SearchPanel';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
-import { FileTree, walkDialectPaths } from './FileTree';
+import { FileTree } from './FileTree';
 import { revealInExplorer } from './reveal-explorer';
 import { ShellLayout, setShellEditorStatus, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
 import { hostVersionStep, type HostVersionState } from './PanelHost';
@@ -20,8 +20,9 @@ import {
   setActiveScope,
   type SearchScopeCatalog,
 } from './search-scope';
-import { listSourceFiles, mergeCandidatePaths } from './commands';
+import { createSourceFileCache, mergeCandidatePaths } from './commands';
 import { createFileReplaceRunner } from './search-replace-exec';
+import { editorModelPool } from './editor-model-pool-instance';
 import { createProjectNameLedger } from './name-ledger';
 import { revealLocationOf } from '../monaco/reveal-position';
 import { setReplaceRunner, snapshot as readSearchState, subscribe as subscribeSearchState } from './search-store';
@@ -342,39 +343,61 @@ export function ProjectView({
   }, [kernel, navScope]);
 
   /**
-   * 快速打开的候选（P2 → W7 NAV-SCOPE）。
+   * 快速打开的候选（P2 → W7 NAV-SCOPE → PS-14 候选清单缓存）。
    *
-   * 两件事变了形态：**① 不再只有 ERB 索引**——口上域的递归列举把 `.kojo` 这些方言文件
+   * 三件事变了形态：**① 不再只有 ERB 索引**——口上域的递归列举把 `.kojo` 这些方言文件
    * 也带进来（写了半天的糖源文件按 Ctrl+P 搜不到，是"索引即全部"这个假设的账单）；
    * **② 跟着"只看"走**——选定范围后候选清单就只剩那一处（与另三条通道同一个戳、同一条
    * `pathInScope`；判据不在宿主里重写）。列举失败 ⇒ 退回索引那份，不炸面板。
+   * **③ 会话级缓存（PS-14）**——列举源从「effect 每次 [kernel, project] 变化就裸走
+   * `walkDialectPaths`」换成 `listSourceFiles` + `createSourceFileCache`：同项目
+   * 连开 N 次 Ctrl+P 只有一趟 walk；失效判据接的是树重列已有的合批信号 `treeNonce`
+   * （`file.changed` 经 `affectsKojoTree` 过滤 + 400ms 合批，见下方 effect）——
+   * 不另造一套失效机制。附带把 D1 的欠账补上：候选根此前漏了 `extraRoots`
+   * （附加根加进来就是为了能被找到，检索面板认、Ctrl+P 不认 = 自相矛盾）。
    */
-  const [dialectFiles, setDialectFiles] = useState<readonly string[]>([]);
+  // 冷开快照的递归列举桥（树即时化批）：索引要数秒才就绪，FileTree 用它在左栏先出文件
+  // （一次 walkDir 拿全口上域清单；索引就绪后按索引路径切换，同构不重排）。
+  // PS-14 之后快速打开的候选缓存也走这座桥（声明在前：下方 sourceFiles 段已消费）。
+  const walkDir = useMemo(() => kernel.io.walkDir.bind(kernel.io), [kernel]);
+  /**
+   * 树重列信号（HK-5）：递增即失效——FileTree 与 PS-14 的候选缓存都只认"变化"
+   * （用布尔会把连续两次外部改动合并掉）。声明在前是因为本段下方两处消费。
+   */
+  const [treeNonce, setTreeNonce] = useState(0);
+  const [sourceFiles, setSourceFiles] = useState<readonly string[]>([]);
+  /** 缓存器与 walkDir 桥同生命周期（kernel 换 ⇒ 缓存整体作废，键里不用带 kernel） */
+  const sourceFilesCache = useMemo(() => createSourceFileCache(walkDir), [walkDir]);
+  /** 候选根 = 口上域 ∪ 会话级附加根（与 `treeWatchRoots` 同口径，只去字面重复） */
+  const sourceRoots = useMemo(
+    () => [...new Set([...project.kojoPaths, ...(extraRoots ?? [])])],
+    [project.kojoPaths, extraRoots],
+  );
   useEffect(() => {
     let alive = true;
-    const walk = kernel.io.walkDir.bind(kernel.io);
-    void walkDialectPaths(walk, project.kojoPaths)
+    void sourceFilesCache
+      .list(sourceRoots, treeNonce)
       .then((files) => {
-        if (alive) setDialectFiles(files);
+        // 读不到附加清单不是故障上屏的理由：索引那份照样能开文件，只是少了非 ERB 的那些
+        if (alive) setSourceFiles(files);
       })
       .catch(() => {
-        // 读不到附加清单不是故障上屏的理由：索引那份照样能开文件，只是少了非 ERB 的那些
-        if (alive) setDialectFiles([]);
+        // 整趟列举失败（极端形态）：保留上一次的清单——旧候选仍能开文件，比清空好
       });
     return () => {
       alive = false;
     };
-  }, [kernel, project]);
+  }, [sourceFilesCache, sourceRoots, treeNonce]);
 
   const quickOpenFiles = useMemo<string[]>(
     () =>
       filterPathsByActiveScope(
-        mergeCandidatePaths([index ? [...index.files.keys()] : [], dialectFiles]),
+        mergeCandidatePaths([index ? [...index.files.keys()] : [], sourceFiles]),
         (p) => p,
       ),
     // navScope 是真实依赖（状态源的读数）：范围换了要重算候选——memo 体只读模块状态，
     // 不写进依赖就等于把"只看"又变成一个不会失效的旧读数
-    [index, dialectFiles, navScope],
+    [index, sourceFiles, navScope],
   );
 
   // 编辑器区壳层命令（P3：关闭标签 / 全部保存——容器语义，零业务知识）。
@@ -509,9 +532,7 @@ export function ProjectView({
   // React 视作新组件类型 → 整树卸载重挂 → 展开状态被清空。改为身份恒定的包装
   // 组件 + ref 桥接最新 props：重渲染只更新属性，绝不重挂，展开状态常驻）。
   const listDir = useMemo(() => kernel.io.listDir.bind(kernel.io), [kernel]);
-  // 冷开快照的递归列举桥（树即时化批）：索引要数秒才就绪，FileTree 用它在左栏先出文件
-  // （一次 walkDir 拿全口上域清单；索引就绪后按索引路径切换，同构不重排）。
-  const walkDir = useMemo(() => kernel.io.walkDir.bind(kernel.io), [kernel]);
+
   // 导入作者包为工作区项目（口上项目批 P-F）：壳层只发意图事件，
   // 「导入成什么形态」由工作区消费方（适配器）解释——跨层零游戏知识
   const importPackage = useCallback(
@@ -553,8 +574,6 @@ export function ProjectView({
   }, [kernel, project.adapterId]);
   /* ---------------- 外部改动 → 文件树目录重列（HK-5；接 §5.87 留下的欠账） ---------------- */
 
-  /** 递增即失效信号（FileTree 只认"变化"；用布尔会把连续两次外部改动合并掉） */
-  const [treeNonce, setTreeNonce] = useState(0);
 
   /**
    * 外部改动 → 树重列的**判据根集**（S2-6）= 口上域 ∪ 会话级附加根。
@@ -673,7 +692,15 @@ export function ProjectView({
    */
   useEffect(() => {
     setReplaceRunner(
-      createFileReplaceRunner({ io: kernel.io, nameLedger: createProjectNameLedger(kernel) }),
+      createFileReplaceRunner({
+        io: kernel.io,
+        nameLedger: createProjectNameLedger(kernel),
+        // PS-12-C：活面判定只认池。Monaco 注册表对已关标签仍留有残余 model（有界冷档
+        // 之后池会 evict，注册表不跟）——拿注册表当活面，替换腿会往"没人看的副本"上写，
+        // 盘上真身原封不动（PS-12 冷档批实机踩过）。池只答 refs>0 的活面，
+        // undefined ⇒ 执行器自然改走盘路径，语义本来就是对的。
+        modelFor: (p) => editorModelPool.liveModel(p),
+      }),
     );
     return () => setReplaceRunner(null);
   }, [kernel]);

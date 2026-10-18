@@ -1,5 +1,5 @@
 import { createElement as h, useEffect, useState, type ReactElement } from 'react';
-import { basename } from '@kojo/plugin-api';
+import { basename, nextWindow, windowSize, type RenderWindow } from '@kojo/plugin-api';
 import type { ErbFunction, ErbIndex } from '@kojo/plugin-api';
 import {
   incomingCalls,
@@ -46,8 +46,23 @@ export interface CallHierarchyDeps {
   close(): void;
 }
 
-/** 最多渲染多少行（与检索面板同精神：上万行 DOM 会拖垮面板） */
-const RENDER_CAP = 300;
+/**
+ * 行清单的渲染窗口（PS-15）：与问题 / 检索面板**同一套契约参数**——首帧 `initial` 行，
+ * 哨兵步进 `step` 行直到全量。旧实现是 `RENDER_CAP = 300` 的**死顶**：超过 300 行的
+ * 调用清单永远看不全（"另有 N 行未列出"就是句告别）；窗口化后全量可达
+ * （`windowSize` / `nextWindow` 契约见 `plugin-api/sugar-panels.ts`）。
+ */
+const CALL_HIERARCHY_WINDOW: RenderWindow = { initial: 120, step: 240 };
+/** 首帧最多画多少行（导出供测试按它钉首帧行数） */
+export const CALL_HIERARCHY_WINDOW_INITIAL = CALL_HIERARCHY_WINDOW.initial;
+
+/** 一个 section（被调用 / 调用）一份窗口上界 + 哨兵的步进回调 */
+interface SectionWindow {
+  /** 首帧上界（请求换了身份 ⇒ 回落） */
+  inEnd: number;
+  outEnd: number;
+  grow(which: 'in' | 'out', total: number): void;
+}
 
 type Row =
   | { kind: 'group'; label: string; count: number; path: string; line: number; title: string }
@@ -94,7 +109,31 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
         unsubscribeTally();
       };
     }, []);
+    /**
+     * 窗口挂在**这一次查看请求**上（与检索面板的结果窗口同一招）：换一次请求 ⇒
+     * 请求对象换了身份 ⇒ 两个 section 各自回落首帧，不需要 `useEffect`、也不会
+     * 出现"旧窗口套到新请求上"的中间帧。state 在 hook 之后再取，但窗口
+     * useState 必须在提前 return **之前**（hook 顺序稳定是硬约束）。
+     */
+    const [win, setWin] = useState<{ key: CallHierarchyRequest | null; inEnd: number; outEnd: number }>({
+      key: null,
+      inEnd: CALL_HIERARCHY_WINDOW_INITIAL,
+      outEnd: CALL_HIERARCHY_WINDOW_INITIAL,
+    });
     const state = getCallHierarchyState();
+    const requestKey = state !== null && state.kind !== 'rejected' ? state.request : null;
+    const inEnd = win.key !== null && win.key === requestKey ? win.inEnd : CALL_HIERARCHY_WINDOW_INITIAL;
+    const outEnd = win.key !== null && win.key === requestKey ? win.outEnd : CALL_HIERARCHY_WINDOW_INITIAL;
+    const sectionWindow: SectionWindow = {
+      inEnd,
+      outEnd,
+      grow: (which, total) =>
+        setWin((cur) => {
+          if (requestKey === null) return cur;
+          const step = nextWindow(which === 'in' ? inEnd : outEnd, total, CALL_HIERARCHY_WINDOW);
+          return which === 'in' ? { key: requestKey, inEnd: step, outEnd: cur.outEnd } : { key: requestKey, inEnd: cur.inEnd, outEnd: step };
+        }),
+    };
 
     const closeBtn = h(
       'div',
@@ -115,11 +154,16 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
       );
     }
 
-    return renderRequest(state.request, deps, closeBtn);
+    return renderRequest(state.request, deps, closeBtn, sectionWindow);
   };
 }
 
-function renderRequest(request: CallHierarchyRequest, deps: CallHierarchyDeps, closeBtn: ReactElement): ReactElement {
+function renderRequest(
+  request: CallHierarchyRequest,
+  deps: CallHierarchyDeps,
+  closeBtn: ReactElement,
+  sectionWindow: SectionWindow,
+): ReactElement {
   const index = deps.currentIndex();
   if (!index) {
     return h(
@@ -170,7 +214,7 @@ function renderRequest(request: CallHierarchyRequest, deps: CallHierarchyDeps, c
   const incomingCountText = incomingTally === null ? '处数未读' : `${incomingTally.tally.nonDefinitionCount} 处`;
   const outgoingCallCount = outgoing.reduce((n, g) => n + g.sites.length, 0);
 
-  const section = (heading: string, emptyText: string, rows: Row[]): ReactElement[] => {
+  const section = (heading: string, emptyText: string, rows: Row[], which: 'in' | 'out'): ReactElement[] => {
     const out: ReactElement[] = [];
     if (!referencesAvailable) return out;
     out.push(h('h4', { key: `${heading}:h` }, heading));
@@ -178,13 +222,25 @@ function renderRequest(request: CallHierarchyRequest, deps: CallHierarchyDeps, c
       out.push(h('p', { key: `${heading}:e`, className: 'dim' }, emptyText));
       return out;
     }
-    const shown = rows.slice(0, RENDER_CAP);
+    const limit = which === 'in' ? sectionWindow.inEnd : sectionWindow.outEnd;
+    const shown = rows.slice(0, windowSize(rows.length, limit, CALL_HIERARCHY_WINDOW));
+    const hiddenRows = rows.length - shown.length;
     // 行样式复用检索面板的通用行类（search-rows / search-match / search-loc）——
     // 同一形态的清单视图，不为它开第二份 CSS。
     out.push(h('div', { key: `${heading}:rows`, className: 'search-rows' }, rowsToElements(heading, shown, deps)));
-    if (rows.length > shown.length) {
+    if (hiddenRows > 0) {
+      // 哨兵是一枚 <button>（与问题面板同一形态）：Tab 得到它、Enter 按得动，
+      // 点一次多画 STEP 行——不再是"另有 N 行未列出"的告别（RENDER_CAP 死顶已除）
       out.push(
-        h('p', { key: `${heading}:cap`, className: 'dim' }, `仅显示前 ${RENDER_CAP} 行（另有 ${rows.length - shown.length} 行未列出）`),
+        h(
+          'button',
+          {
+            key: `${heading}:more`,
+            className: 'ghost small conv-more',
+            onClick: () => sectionWindow.grow(which, rows.length),
+          },
+          `继续显示后面的行（还有 ${hiddenRows} 行，共 ${rows.length} 行）`,
+        ),
       );
     }
     return out;
@@ -212,11 +268,13 @@ function renderRequest(request: CallHierarchyRequest, deps: CallHierarchyDeps, c
       `被调用（${incoming.length} 个调用者 · ${incomingCountText}）`,
       '索引里没有别的函数调用它。',
       incomingRows,
+      'in',
     ),
     ...section(
       `调用（${outgoing.length} 个目标 · ${outgoingCallCount} 处）`,
       '函数体内没有 CALL 直系族调用（或目标不在函数索引里）。',
       outgoingRows,
+      'out',
     ),
     // 差值那句话交回 `explainReferenceCounts` 的原文（文案真源只有一份，面板不另写一份）；
     // 还没读数就明说"没读过"，不拿清单行数冒充台账读数（宁缺毋错）

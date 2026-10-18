@@ -67,8 +67,25 @@ export function sortProblems(items: readonly EditorProblem[]): EditorProblem[] {
 const registry = new Map<string, EditorProblem[]>();
 const listeners = new Set<() => void>();
 
+/**
+ * 版本号 + 脏标记（PS-15）：`notify` 只置脏加版本，`snapshot` 只在**脏时**重算——
+ * 同一版本内多次 `snapshot()` 返回**同一引用**（订阅回调 / 渲染 / 计数三方都来问时
+ * 扁平化 + 排序只算一次），干净时零分配零排序。`version()` 供消费方做 memo 依赖
+ * （数字比较，不持有数组引用也能知道"变没变"）。
+ */
+let version = 0;
+let dirty = true;
+let cached: readonly EditorProblem[] = [];
+
 function notify(): void {
+  dirty = true;
+  version++;
   for (const l of listeners) l();
+}
+
+/** 当前版本号（每次实际变更 +1；消费方做 cheap 比较用） */
+export function currentVersion(): number {
+  return version;
 }
 
 /** 整份替换某文件的诊断；空数组即删除该键（该文件已无问题） */
@@ -93,11 +110,17 @@ export function clearAllProblems(): void {
   notify();
 }
 
-/** 扁平化 + 排序后的只读快照（每次调用都重新算，从不缓存旧引用） */
+/**
+ * 扁平化 + 排序后的只读快照（**脏时重算，干净时返回同一引用**——同一版本内幂等，
+ * 这是 `useSyncExternalStore` 形态的消费方不无限重渲的前提；见 `currentVersion`）。
+ */
 export function snapshot(): readonly EditorProblem[] {
+  if (!dirty) return cached;
   const out: EditorProblem[] = [];
   for (const items of registry.values()) out.push(...items);
-  return sortProblems(out);
+  cached = sortProblems(out);
+  dirty = false;
+  return cached;
 }
 
 /** 订阅变更（变更即通知）；返回退订函数 */

@@ -183,12 +183,6 @@ export interface PoolDeps {
   warn?: (message: string) => void;
 }
 
-export interface PoolDeps {
-  /** 读盘（恢复件由调用方先取好，经 `text` 注入，池不认识 recovery-store） */
-  readText: (kernel: Kernel, path: string) => Promise<{ text: string; encoding: string; eol: string }>;
-  /** 建 model（真身 = monaco.editor.createModel(text, languageFor(path), Uri.file(path))） */
-  createModel: (path: string, text: string) => Monaco.editor.ITextModel;
-}
 
 interface PoolRecord {
   entry?: PooledModelEntry;
@@ -236,6 +230,18 @@ export interface EditorModelPool {
   setSavedBase: (path: string, text: string) => void;
   /** PS-12：内存读数（活动 / 冷档 / 基线三本账，观测面单源） */
   stats: () => ModelPoolStats;
+  /**
+   * **只答活面**（PS-12-C）：`refs > 0` 才返回 model——开着的标签去重后就是这份清单；
+   * 冷档（已关标签的驻留 model）/ 不在池 ⇒ `undefined`。
+   *
+   * 为什么必须由池答、而不是让调用方查 Monaco 注册表（`monaco.editor.getModel`）：
+   * PS-12 落地后注册表里有冷档件，**注册表 ≠ 活面**——全项目替换把冷档件当
+   * 「打开的文件」走 in-model 路径，口径就错了（BOARD §W PS-12-C）。判等用全仓
+   * 统一的 `pathKey`（池键与检索索引的写法不保证同盘符大小写/分隔符）。
+   * 调用方拿到 `undefined` 自然走盘路径（io 读改写），**恰好**就是冷档该有的语义
+   * （盘改了 ⇒ `file.changed` ⇒ 池弃档，见安全闸③）——不答冷档存在，语义已对。
+   */
+  liveModel: (path: string) => Monaco.editor.ITextModel | undefined;
 }
 
 export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
@@ -568,6 +574,16 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
         coldUnits,
         savedBaseUnits: baseUnits,
       };
+    },
+
+    liveModel(path) {
+      // 池量级 = 活动标签 + 冷档（个位到几十），线性扫可忽略；判等口径与
+      // `pickModelByPathKey`（替换执行器）同一条 `pathKey`，两处不会各写一把尺子
+      const want = pathKey(path);
+      for (const [p, rec] of pool) {
+        if (rec.refs > 0 && rec.entry && pathKey(p) === want) return rec.entry.model;
+      }
+      return undefined;
     },
   };
 }

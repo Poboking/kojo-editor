@@ -297,3 +297,42 @@ export async function listSourceFiles(walkDir: WalkDirLike, roots: readonly stri
   }
   return out;
 }
+/**
+ * PS-14：快速打开候选的**会话级缓存器**（注入 seam 同 `listSourceFiles`——`walkDir`
+ * 真实是 `kernel.io.walkDir`，单测给假的并数调用次数）。
+ *
+ * 为什么要有它：同项目连开 N 次 Ctrl+P 不该走 N 趟递归列举——候选源（roots）与
+ * 失效戳（nonce）都没变，第 2..N 次全是同一份答案的白走。键 = roots 顺序拼接 +
+ * nonce：nonce 是树重列已有的合批信号（`file.changed` → `affectsKojoTree` 过滤 →
+ * 400ms 合批，见 ProjectView 的 `treeNonce`），文件真变了它变、缓存自动翻篇，
+ * **不在这里另造一套失效判据**。in-flight 的 Promise 同样复用：面板连点六次也只
+ * 触发一趟 walk。整体失败不缓存（失败是瞬态的，下次同键重走，不把空清单钉死到
+ * 下一次 nonce 翻篇）。
+ */
+export interface SourceFileCache {
+  /** 顺序敏感（应答顺序即 roots 顺序）；同键并发调用共享同一个 Promise */
+  list(roots: readonly string[], nonce: number): Promise<readonly string[]>;
+}
+
+export function createSourceFileCache(walkDir: WalkDirLike): SourceFileCache {
+  let key: string | null = null;
+  let entry: Promise<readonly string[]> | null = null;
+  return {
+    list(roots, nonce) {
+      const nextKey = `${nonce} ${roots.join('\n')}`;
+      if (key === nextKey && entry !== null) return entry;
+      const request = listSourceFiles(walkDir, roots);
+      key = nextKey;
+      entry = request;
+      void request.catch(() => {
+        // 失败不缓存：只清"这一格"（部分根失败已在 listSourceFiles 里兜住，
+        // 这里只兜整个 promise reject 的极端形态）
+        if (entry === request) {
+          key = null;
+          entry = null;
+        }
+      });
+      return request;
+    },
+  };
+}

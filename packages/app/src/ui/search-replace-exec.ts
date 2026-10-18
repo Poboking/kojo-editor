@@ -1,4 +1,4 @@
-import {errorText,  pathKey } from '@kojo/plugin-api';
+import { errorText, pathKey } from '@kojo/plugin-api';
 import type * as MonacoRuntime from '../monaco/entry';
 import {
   applyLineEdits,
@@ -68,6 +68,42 @@ function outcome(patch: Partial<ReplaceOutcome>): ReplaceOutcome {
 }
 
 /**
+ * 闭文件替换的**并发窗口**（PS-13）。闭文件那条腿全是异步 IPC（`readText` / `writeText`），
+ * 串行 `for + await` 把每一次读改写的往返都排成队——200 个闭文件就是 200 趟排队。
+ * 窗口语义与 `kernel.compute.runSliced` 的异步分支同款：整窗的 Promise 在**同一个
+ * 同步 tick** 内发起（`Promise.all` 一把挂上订阅，不产生 unhandled rejection）、
+ * 窗口之间不重叠；闭文件项全是异步项，让路/时间片那套（为同步扫描项设计的）不掺进来。
+ *
+ * 真慢的只是这条腿——in-model 的 `replaceInModel` 是同步 Monaco 编辑，天然串行。
+ */
+export const CLOSED_REPLACE_CONCURRENCY = 8;
+
+/** 窗口化 map（保序；`fn` 一律不 reject——失败也按位填回，错误在折叠时按原序说出） */
+async function mapWindow<T, R>(
+  items: readonly T[],
+  window: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length) as R[];
+  for (let i = 0; i < items.length; i += window) {
+    const end = Math.min(i + window, items.length);
+    const started: Array<Promise<R>> = new Array(end - i);
+    for (let k = i; k < end; k++) started[k - i] = fn(items[k]!);
+    const done = await Promise.all(started);
+    for (let k = 0; k < done.length; k++) out[i + k] = done[k]!;
+  }
+  return out;
+}
+
+/** 单个文件的落账（第一/二趟都写进这张按序账，最后统一折叠 ⇒ 与串行版逐项同值同序） */
+interface FileOutcome {
+  applied: number;
+  changed: boolean;
+  readOnly: boolean;
+  error?: string;
+}
+
+/**
  * Monaco 运行时（**惰性**）：本模块要能在 node 侧被单测直接 import（替换是写盘操作，
  * 落盘纪律必须可测），而 `../monaco/entry` 一加载就要 `window`。故改成动态取——
  * 装配即发起加载，用户点「全部替换」时早已就绪；**没就绪就一律不写**（见下面的闸门），
@@ -115,6 +151,11 @@ export interface FileReplaceDeps {
    * 缺席 = 不判（旧行为，零改动）。
    */
   nameLedger?(query: string): readonly ReferenceOccurrence[] | Promise<readonly ReferenceOccurrence[]>;
+  /**
+   * 闭文件替换的并发窗口（**可选**，PS-13 等价性测试的对照旋钮：注入 1 = 串行封存版；
+   * 缺省 = `CLOSED_REPLACE_CONCURRENCY`）。只影响**怎么排队**，不影响任何产出。
+   */
+  closedConcurrency?: number;
 }
 
 /** model 查找只用到 uri 的这两个读数——抽出来才能在没有 Monaco 运行时的 node 里测 */
@@ -215,11 +256,13 @@ export function createFileReplaceRunner(
     if (request.mode.kind === 'one') return replaceOne(request.mode.target, m, request.replaceText);
 
     // ---- 全部替换：结果里的文件逐个落（截断/取消的结果不允许走到这里，store 已挡）----
+    // PS-13 两趟制：第一趟串行做**派发前**必须完成的事（pathKey 去重、活面判定、
+    // in-model 同步替换、只读剔除），闭文件收集成清单；第二趟按并发窗口执行。
+    // 落账按文件在去重序列里的原序折叠 ⇒ errors / 计数与串行版逐项同值同序。
     const seen = new Set<string>();
-    let applied = 0;
-    let filesChanged = 0;
-    let readOnlyFiles = 0;
-    const errors: string[] = [];
+    const ledger: FileOutcome[] = [];
+    /** 第二趟要走的闭文件：`index` 是它在 ledger 里的账位（结果按位填回） */
+    const closedFiles: Array<{ path: string; slot: number }> = [];
     for (const f of request.files) {
       // 去重按 `pathKey`：索引里同一文件的两种写法（盘符大小写/分隔符）是一份正文，不是两个
       const key = pathKey(f.path);
@@ -229,32 +272,57 @@ export function createFileReplaceRunner(
       if (open !== undefined) {
         try {
           const n = replaceInModel(open, m, request.replaceText);
-          if (n > 0) {
-            applied += n;
-            filesChanged++;
-          }
+          ledger.push({ applied: n, changed: n > 0, readOnly: false });
         } catch (e: unknown) {
-          errors.push(`${f.path}：${errorText(e)}`);
+          ledger.push({ applied: 0, changed: false, readOnly: false, error: `${f.path}：${errorText(e)}` });
         }
         continue;
       }
       if (registryUnsure()) {
-        errors.push(`无法确认「${f.path}」是否已打开（Monaco 注册表未就绪），未替换`);
+        ledger.push({
+          applied: 0,
+          changed: false,
+          readOnly: false,
+          error: `无法确认「${f.path}」是否已打开（Monaco 注册表未就绪），未替换`,
+        });
         continue;
       }
       if (!deps.io.isWritable(f.path)) {
-        readOnlyFiles++;
+        ledger.push({ applied: 0, changed: false, readOnly: true });
         continue;
       }
-      try {
-        const { applied: n } = await replaceInClosedFile(f.path, m, request.replaceText);
-        if (n > 0) {
-          applied += n;
-          filesChanged++;
-        }
-      } catch (e: unknown) {
-        // 写允许域 / io 故障：逐文件可见，不中断其余文件（铁律 4：不静默）
-        errors.push(`${f.path}：${errorText(e)}`);
+      closedFiles.push({ path: f.path, slot: ledger.length });
+      ledger.push({ applied: 0, changed: false, readOnly: false }); // 占位：第二趟按位填回
+    }
+    // 第二趟：闭文件读改写并发化（失败不 reject，按位落账——窗口语义见 CLOSED_REPLACE_CONCURRENCY）
+    const closedDone = await mapWindow(
+      closedFiles,
+      Math.max(1, Math.floor(deps.closedConcurrency ?? CLOSED_REPLACE_CONCURRENCY)),
+      (cf) =>
+        replaceInClosedFile(cf.path, m, request.replaceText).then(
+          (r): FileOutcome => ({ applied: r.applied, changed: r.applied > 0, readOnly: false }),
+          (e: unknown): FileOutcome => ({
+            // 写允许域 / io 故障：逐文件可见，不中断其余文件（铁律 4：不静默）
+            applied: 0,
+            changed: false,
+            readOnly: false,
+            error: `${cf.path}：${errorText(e)}`,
+          }),
+        ),
+    );
+    for (let i = 0; i < closedFiles.length; i++) {
+      ledger[closedFiles[i]!.slot] = closedDone[i]!;
+    }
+    let applied = 0;
+    let filesChanged = 0;
+    let readOnlyFiles = 0;
+    const errors: string[] = [];
+    for (const o of ledger) {
+      if (o.error !== undefined) errors.push(o.error);
+      else if (o.readOnly) readOnlyFiles++;
+      else if (o.applied > 0) {
+        applied += o.applied;
+        filesChanged++;
       }
     }
     if (readOnlyFiles > 0) errors.push(readOnlyFilesNotice(readOnlyFiles, '替换'));

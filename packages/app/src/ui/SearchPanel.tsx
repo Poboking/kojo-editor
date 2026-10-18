@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import type { SearchMatch, SearchProgress, SearchResult } from '../bridge/search';
 import { nextWindow, type RenderWindow } from '@kojo/plugin-api';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
@@ -343,13 +343,21 @@ export function SearchPanel({
    */
   const [resultWin, setResultWin] = useState<{ readonly key: SearchResult; readonly end: number } | null>(null);
   const windowEnd = resultWin?.key === result ? resultWin.end : SEARCH_WINDOW_INITIAL;
-  const { rows, hidden } = result
-    ? flattenSearchResults(result.files, windowEnd)
-    : { rows: [], hidden: 0 };
+  /**
+   * 结果行族的派生量（PS-15）全部 memo 化：`flattenSearchResults`（扁平化+截窗）与
+   * `groupSearchRows` / `locationGutterCh`（分段+量列宽）只随**这一份结果**与窗口上界变。
+   * 此前每次渲染重算一遍——输入框每打一个字（`s` 换新对象）、切一个文件折叠，
+   * 全项目检索的上万行扁平化就白算一次。`rows` 引用稳定也顺带给下游
+   * `useEffect` / 行组件的依赖比较省了一层。
+   */
+  const { rows, hidden } = useMemo(
+    () => (result ? flattenSearchResults(result.files, windowEnd) : { rows: [], hidden: 0 }),
+    [result, windowEnd],
+  );
   /** 这批结果一共多少行（含没画的）：`flattenSearchResults` 的 `hidden` 就是差额 ⇒ 全量可达 */
   const totalRowCount = rows.length + hidden;
-  const groups = groupSearchRows(rows);
-  const gutterCh = locationGutterCh(rows);
+  const groups = useMemo(() => groupSearchRows(rows), [rows]);
+  const gutterCh = useMemo(() => locationGutterCh(rows), [rows]);
   const progressPercent = searchProgressPercent(s.progress);
 
   /** 选择器**现在**显示的范围（陈旧 key 归一成 `''`）；与 `appliedScope`（结果的范围）不是一回事 */

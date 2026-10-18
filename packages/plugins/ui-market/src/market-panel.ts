@@ -85,13 +85,16 @@ export function createMarketPanel(
      *
      * 单飞由 `attachMarketInvalidation` 保证：连点装卸 ⇒ 串行若干趟、任意时刻至多一趟在跑，
      * 每一次请求都由"它之后开始的那一趟"兑现（旧读数既不会并发插队，也不会倒灌）。
-     * 订阅挂在 effect 上，退订挂在卸载上：关掉的面板不该继续替它重取。
+     * 订阅建在 effect 里（PS-15）：render 是纯函数，不该有"建订阅"这种副作用——
+     * 丢弃的渲染（StrictMode 双跑 / 并发渲染被打断）也会白建一份。effect 里建、
+     * cleanup 里退：关掉的面板不替它重取，丢弃的渲染压根不建。`revalidateInstalled`
+     * 只在装/卸失败腿上被调（远晚于挂载），`invalidationRef.current` 届时必有 handle。
      */
     const invalidationRef = useRef<MarketInvalidationHandle | null>(null);
     // 最近一次**开始**的重取令牌：`read` 负责抬它，`onSnapshot` 负责用它判落不落屏
     // （抬令牌与落屏分成两处，是 `attachMarketInvalidation` 的口径——落屏点只许有一个）
     const revalidateSeqRef = useRef(0);
-    if (invalidationRef.current === null) {
+    useEffect(() => {
       invalidationRef.current = attachMarketInvalidation({
         market: deps.market,
         read: (): Promise<MarketSnapshot> => {
@@ -110,11 +113,14 @@ export function createMarketPanel(
           deps.log.warn(`市场已装清单的重取没有成功：${err instanceof Error ? err.message : String(err)}`);
         },
       });
-    }
+      return () => {
+        invalidationRef.current!.dispose();
+        invalidationRef.current = null;
+      };
+    }, []);
     const revalidateInstalled = useCallback((): Promise<MarketSnapshot> => {
       return invalidationRef.current!.revalidate();
     }, []);
-    useEffect(() => () => invalidationRef.current!.dispose(), []);
 
     /**
      * 打开面板：**stale-while-revalidate** 两段式——

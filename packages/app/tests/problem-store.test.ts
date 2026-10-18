@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearAllProblems,
   clearProblems,
+  currentVersion,
   setProblems,
   snapshot,
   sortProblems,
@@ -120,5 +121,51 @@ describe('problem-store', () => {
     clearAllProblems();
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  /* ---------------- PS-15：版本号 + 脏标记（notify 只置脏，snapshot 脏时才算） ---------------- */
+
+  it('同一版本内 snapshot 幂等（同引用）；实际变更 +1 版本且重算出新引用', () => {
+    setProblems('a.erb', [mk('a.erb', 1, 'error')]);
+    const v1 = currentVersion();
+    const s1 = snapshot();
+    expect(snapshot()).toBe(s1); // 干净时同引用（useSyncExternalStore 形态的前提）
+    expect(currentVersion()).toBe(v1);
+
+    setProblems('b.erb', [mk('b.erb', 1, 'error')]);
+    expect(currentVersion()).toBe(v1 + 1); // 实际变更 +1
+    const s2 = snapshot();
+    expect(s2).not.toBe(s1); // 脏 ⇒ 重算出新引用
+    expect(snapshot()).toBe(s2);
+    expect(s2.map((x) => x.path)).toEqual(['a.erb', 'b.erb']); // 内容照旧按口径排序
+
+    // 无实际变更（清不存在的键）不加版本、不动缓存
+    clearProblems('nope.erb');
+    expect(currentVersion()).toBe(v1 + 1);
+    expect(snapshot()).toBe(s2);
+  });
+
+  it('notify N 次的重算读数：一批订阅方（渲染方们）醒来后各读一次，也只算一次', () => {
+    // 一次外部写入常炸出多条 setProblems（逐文件整份重发）；合批后渲染方们
+    // 各自 snapshot —— 第一个算，其余命中同一引用 ⇒ N 方读数零重复计算
+    setProblems('a.erb', [mk('a.erb', 1, 'error')]);
+    const seen: Array<readonly EditorProblem[]> = [];
+    const readers = Array.from({ length: 5 }, () => {
+      const un = subscribe(() => {
+        seen.push(snapshot());
+      });
+      return un;
+    });
+    setProblems('b.erb', [mk('b.erb', 1, 'error')]);
+    setProblems('c.erb', [mk('c.erb', 1, 'error')]);
+    for (const un of readers) un();
+    expect(seen).toHaveLength(10); // 5 方 × 2 次通知
+    // 每版本只算一次：同一版本内 5 方醒来读的都是同一引用（10 次读 → 2 次计算）
+    const firstBatch = seen.slice(0, 5);
+    const secondBatch = seen.slice(5);
+    for (const s of firstBatch) expect(s).toBe(firstBatch[0]);
+    for (const s of secondBatch) expect(s).toBe(secondBatch[0]);
+    expect(firstBatch[0]).not.toBe(secondBatch[0]); // 版本翻了（内容不同 ⇒ 新引用）
+    expect(secondBatch[0]!.map((x) => x.path)).toEqual(['a.erb', 'b.erb', 'c.erb']);
   });
 });

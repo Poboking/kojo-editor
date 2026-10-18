@@ -25,7 +25,7 @@ import {
   setCallHierarchyState,
   subscribeCallHierarchy,
 } from '../src/ui/call-hierarchy';
-import { createCallHierarchyOverlay } from '../src/ui/CallHierarchyOverlay';
+import { createCallHierarchyOverlay, CALL_HIERARCHY_WINDOW_INITIAL } from '../src/ui/CallHierarchyOverlay';
 import {
   erbOccurrences,
   explainReferenceCounts,
@@ -366,5 +366,30 @@ describe('CallHierarchyOverlay 渲染', () => {
     setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 999 } });
     const offBody = render();
     expect(offBody).toContain('不在任何 ERB 函数体内');
+  });
+
+  it('PS-15 行清单窗口化：首帧 120 行 + 哨兵说得出差额（RENDER_CAP=300 死顶已除）', () => {
+    // 1 个调用者名下 400 个点位 ⇒ 入边清单 401 行（组行 1 + 点位 400）
+    const refs: ErbReference[] = [ref('definition', FILE_A, 10, 2)];
+    for (let line = 31; line <= 430; line++) refs.push(ref('call', FILE_A, line, 3));
+    const bigIndex = makeIndex({
+      files: [file(FILE_A, [fn('TARGET', FILE_A, 10, 20), fn('CALLER1', FILE_A, 30, 431)])],
+      byName: [
+        ['TARGET', [fnRef('TARGET', FILE_A, 10, 20)]],
+        ['CALLER1', [fnRef('CALLER1', FILE_A, 30, 431)]],
+      ],
+      bySymbol: [['TARGET', refs]],
+    });
+    setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 15 } });
+    const html = renderToStaticMarkup(
+      createElement(
+        createCallHierarchyOverlay({ ...deps, currentIndex: () => bigIndex }) as () => ReactElement,
+      ),
+    );
+    // 首帔窗口 = 组行 1 + 点位 119（`↳` 每点位行一枚）
+    expect((html.match(/↳/g) ?? []).length).toBe(CALL_HIERARCHY_WINDOW_INITIAL - 1);
+    // 哨兵：全量可达（差额与总数都说出来），不再有「仅显示前 N 行」的告别
+    expect(html).toContain(`还有 ${401 - CALL_HIERARCHY_WINDOW_INITIAL} 行，共 401 行`);
+    expect(html).not.toContain('仅显示前');
   });
 });

@@ -467,3 +467,28 @@ describe('观测面（stats / 超阈告警）', () => {
     expect(h.warns).toHaveLength(2); // 再上行再报（去抖复位）
   });
 });
+/* ============================== PS-12-C：liveModel 只答活面 ============================== */
+
+describe('liveModel（替换执行器的活面判定；不问 Monaco 注册表）', () => {
+  it('refs>0 答那份 model；关掉转冷档 ⇒ undefined（冷档不是活面）；重开复活 ⇒ 又答得出', async () => {
+    const h = harness({ 'a.erb': 'A' });
+    const e = await openClean(h, 'a.erb');
+    expect(h.pool.liveModel('a.erb')).toBe(e.model); // 活面：开着的标签
+    h.pool.release('a.erb');
+    expect(h.pool.liveModel('a.erb')).toBeUndefined(); // 冷档：refs=0 ⇒ 不是活面（PS-12-C 的全部意义）
+    const revived = await h.pool.acquire(h.kernel, 'a.erb');
+    expect(h.pool.liveModel('a.erb')).toBe(revived.model); // 冷档复活成活面，又答得出
+    expect(revived.model).toBe(e.model); // 复活的是同一份（冷档保 tokenization 的成果）
+    h.pool.release('a.erb');
+  });
+
+  it('不在池 ⇒ undefined；pathKey 口径：另一种盘符写法也命中活面', async () => {
+    const h = harness({ 'C:/p/ERB/a.ERB': 'A', 'b.erb': 'B' });
+    expect(h.pool.liveModel('nope.erb')).toBeUndefined();
+    const e = await openClean(h, 'C:/p/ERB/a.ERB');
+    // 与替换执行器 pickModelByPathKey 同一条 pathKey：大小写 / 分隔符不同写法是同一份正文
+    expect(h.pool.liveModel('c:\\p\\erb\\a.erb')).toBe(e.model);
+    h.pool.release('C:/p/ERB/a.ERB');
+    expect(h.pool.liveModel('c:\\p\\erb\\a.erb')).toBeUndefined();
+  });
+});

@@ -893,6 +893,19 @@ describe('面板渲染（静态；node 环境无 DOM 事件）', () => {
       expect(html, word).not.toContain(word);
     }
   });
+
+  it('PS-15：订阅建在 effect 里——render 体不再调 attachMarketInvalidation（渲染是纯函数）', async () => {
+    const { readFileSync } = await import('node:fs');
+    const code = readFileSync(new URL('../src/market-panel.ts', import.meta.url), 'utf8');
+    // attach 只许出现在 useEffect 内（effect 声明先于 attach 调用点）；
+    // render 期的 null 守卫建订阅是旧形态——丢弃的渲染也会白建一份
+    const attachAt = code.indexOf('attachMarketInvalidation({');
+    const effectAt = code.indexOf('useEffect(() => {');
+    expect(attachAt).toBeGreaterThan(0);
+    expect(effectAt).toBeGreaterThan(0);
+    expect(attachAt).toBeGreaterThan(effectAt);
+    expect(code).not.toContain('if (invalidationRef.current === null)');
+  });
 });
 
 /* ---------------- 渲染层判据：哪一行给按钮（`MarketPanelView` 零状态 ⇒ 能静态检） ---------------- */
