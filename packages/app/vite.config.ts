@@ -45,7 +45,7 @@ export default defineConfig({
      *   原生支持）⇒ 入口里那段运行时检测与额外 chunk 是白拿。关掉后 `index.html`
      *   少一枚 preload 标签、入口块少一截垫片（实测见交付读数）。
      * 刻意**不动** `manualChunks`：懒分割已经由动态 `import()` 边界决定，插件块
-     * 由 Rollup 按 17 个动态入口自然切分；再叠一层手工分桶需要先量首屏与开项目
+     * 由 Rollup 按 18 个动态入口自然切分；再叠一层手工分桶需要先量首屏与开项目
      * 两段的往返数，本批没有这个预算。
      */
     reportCompressedSize: false,

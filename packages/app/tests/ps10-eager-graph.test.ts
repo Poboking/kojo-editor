@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
  * 钉三件事：
  * 1. **教程正文不在开机图里**：`tutorial-content` / `tutorial-reference*` / `tutorial-overlay`
  *    / `tutorial-inline` 一枚都不许出现（PS-10 ① 的交付面；它们只在浮层被打开时动态装载）；
- * 2. **插件拆分成立**：`bootstrap.ts` 的静态插件入口只剩两个，其余 17 个走 `import()`；
+ * 2. **插件拆分成立**：`bootstrap.ts` 的静态插件入口只剩两个，其余 18 个走 `import()`；
  *    开机图里除**已知漏点**外，项目级插件一枚文件都不许出现；
  * 3. 图的大小闸（粗闸：抓"整包被拽回来"这种量级事故，不追 KB 级抖动）。
  *
@@ -180,7 +180,7 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 常驻两包 + 文件头 ⚠ 记名的漏点包之外，一枚都不该出现在开机图里
     const allowed = new Set(['erb-parser', 'eratw-adapter', ...KNOWN_LEAK_PACKAGES]);
     expect([...presentDirs].filter((d) => !allowed.has(d))).toEqual([]);
-    // 拆分真的生效了：19 个插件包里 ≥15 个整包不在图上（只剩常驻两个 + 两个已知漏点）
+    // 拆分真的生效了：20 个插件包里 ≥15 个整包不在图上（只剩常驻两个 + 两个已知漏点）
     const deferredDirs = allPluginPackages().filter((d) => !allowed.has(d));
     expect(deferredDirs.length).toBeGreaterThanOrEqual(15);
     expect(deferredDirs.filter((d) => presentDirs.has(d))).toEqual([]);

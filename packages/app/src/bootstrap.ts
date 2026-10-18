@@ -24,12 +24,14 @@ import ComputeWorker from './compute-worker?worker';
  *   `erb-parser`（App 开机就取 `erb.parser` 服务并订 `kojo.functionChanged`）、
  *   `eratw-adapter`（开任何项目都要它认目录；欢迎页的教程卡片与向导浮层全挂在它的
  *   `ui.overlay` / `ui.tutorial.open` 上）。
- * - **项目级（动态 import + `kernel.registerPlugin`）**＝其余 17 个。它们的可见面
+ * - **项目级（动态 import + `kernel.registerPlugin`）**＝其余 18 个。它们的可见面
  *   （面板 / 命令 / 状态栏 / 编辑器装饰器）只在项目态存在；拆分前的静态图里插件占
  *   2,817 KB 源码，两个常驻项只留 ~650 KB，剩下的没理由在 `boot.welcomeInteractive`
- *   之前被解析、求值。
+ *   之前被解析、求值。第二个 adapter（eraAkumaMaid）走项目级而非常驻：它在欢迎页
+ *   没有任何贡献面（不像 eraTW 那样挂 `ui.overlay` / `ui.tutorial.open`），而
+ *   `ensureProjectPlugins` 已保证它在 `project.open()` 之前入场。
  * - **装载时机**＝`App.openProject` 里 `kernel.project.open()` **之前**（见
- *   `ensureProjectPlugins`）：级联一开始 17 个插件就全部在场，所以面板顺序、命令面板
+ *   `ensureProjectPlugins`）：级联一开始 18 个插件就全部在场，所以面板顺序、命令面板
  *   内容、事件扇出、`compute` 任务表与拆分前一字不差——变的是"什么时候装"，不是"装了什么"。
  */
 export async function bootstrapKernel(): Promise<Kernel> {
@@ -171,7 +173,7 @@ export function prefetchProjectPlugins(): Promise<void> {
 }
 
 /**
- * 进项目之前把 17 个项目级插件装好并注册（PS-10）。
+ * 进项目之前把 18 个项目级插件装好并注册（PS-10）。
  *
  * 时机是**硬约束**：必须赶在 `kernel.project.open()` 之前完成——插件们挂在
  * `project.opened` 那一拍上（级联、快照还原、各自的 `compute` 任务表），事件之后再注册
