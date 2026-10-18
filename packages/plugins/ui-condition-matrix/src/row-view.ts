@@ -41,8 +41,17 @@ export interface MatrixRowViewProps {
   readonly selectedColumn: string | null;
   /** 本行含「光标所在函数」贡献的格则为其列键，否则 null（C1 反向联动；与 selectedColumn 同款 memo 口径） */
   readonly cursorColumn: string | null;
+  /** 填空模式：空白格显示 + / ✓，可点选（行 memo 只在模式切换时整表重渲一次） */
+  readonly fillMode: boolean;
+  /** 本行被选入填空草稿的列（无选中传同一个空集合常量，memo 才不会被每帧新 Set 打破） */
+  readonly fillColumns: ReadonlySet<string>;
   readonly rowIndex: number;
-  readonly onCell: (rowKey: string, columnKey: string, target: RevealTarget | null) => void;
+  readonly onCell: (
+    rowKey: string,
+    columnKey: string,
+    target: RevealTarget | null,
+    present: boolean,
+  ) => void;
 }
 
 /**
@@ -50,7 +59,8 @@ export interface MatrixRowViewProps {
  * 格子带 `data-r`/`data-c`（渲染序索引）供网格方向键导航定位。
  */
 export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): ReactNode {
-  const { row, groups, foldedFaces, selectedColumn, cursorColumn, rowIndex, onCell } = props;
+  const { row, groups, foldedFaces, selectedColumn, cursorColumn, fillMode, fillColumns, rowIndex, onCell } =
+    props;
   const cells: ReactNode[] = [];
   let c = 0;
   for (const group of groups) {
@@ -76,15 +86,32 @@ export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewPro
       const cell = row.cells[col.key];
       const dataC = c++;
       if (!cell || !cell.present) {
-        // 空白格：这个时机还没有针对该状态写过的反应（点击不导航）
+        // 空白格：这个时机还没有针对该状态写过的反应（点击不导航）。
+        // 填空模式下 + / ✓ 直接写在按钮文本里（不用伪元素——1 万格各生一个
+        // ::after 盒子既费样式计算，也让「这一格能不能点」变得不可测）。
+        const isFillSel = fillColumns.has(col.key);
         cells.push(
           createElement(
             'td',
             { key: col.key },
             createElement(
               'button',
-              { className: 'cm-cell off', title: '无', 'data-r': rowIndex, 'data-c': dataC },
-              '·',
+              {
+                className:
+                  'cm-cell off' +
+                  (fillMode ? ' gap' : '') +
+                  (isFillSel ? ' fill-sel' : ''),
+                title: fillMode
+                  ? isFillSel
+                    ? '已选入填空——再点一次取消'
+                    : '空缺：点击选中，稍后一键生成模板'
+                  : '无（该时机还没有针对此状态的响应）',
+                'aria-pressed': fillMode ? isFillSel : undefined,
+                'data-r': rowIndex,
+                'data-c': dataC,
+                onClick: () => onCell(row.key, col.key, null, false),
+              },
+              fillMode ? (isFillSel ? '✓' : '+') : '·',
             ),
           ),
         );
@@ -112,6 +139,7 @@ export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewPro
                   earliest
                     ? { filePath: earliest.filePath, line: earliest.startLine, source: earliest.name }
                     : null,
+                  true,
                 );
               },
             },
@@ -121,14 +149,29 @@ export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewPro
       );
     }
   }
+  const gapTitle =
+    row.gapCount > 0
+      ? `${row.key} · 还有 ${row.gapCount} 个时机空缺（已填 ${row.totalCount} 处响应）`
+      : `${row.key} · 所有可见时机都有响应`;
   return createElement(
     'tr',
-    null,
+    { className: rowIndex % 2 === 1 ? 'cm-even' : undefined },
     createElement(
       'th',
-      { className: 'cm-rowhead', title: row.key },
-      createElement('span', { className: 'cm-row-name' }, row.label ?? row.key),
-      row.label ? createElement('span', { className: 'cm-row-key dim' }, row.key) : null,
+      { className: 'cm-rowhead', title: gapTitle },
+      createElement(
+        'span',
+        { className: 'cm-row-main' },
+        createElement('span', { className: 'cm-row-name' }, row.label ?? row.key),
+        row.label ? createElement('span', { className: 'cm-row-key dim' }, row.key) : null,
+      ),
+      row.gapCount > 0
+        ? createElement(
+            'span',
+            { className: 'cm-row-gap', 'aria-label': `${row.gapCount} 个时机空缺` },
+            String(row.gapCount),
+          )
+        : null,
       // 列宽拖拽把手（HK-25）：**整列**每一行的行头右缘都放一枚，使「状态 \ 时机」列
       // 在任意行都能拉伸（不再只有表头角格可抓）。事件由 .cm-scroll 委派，此处不挂 handler。
       createElement('div', { className: 'cm-corner-resize', 'aria-hidden': 'true' }),

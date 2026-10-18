@@ -43,17 +43,31 @@ export function renderGridHead(opts: {
       ),
       ...groups.map((group) => {
         const folded = foldedFaces.has(group.face);
+        const gaps = group.columns.reduce((n, col) => n + col.gapCount, 0);
+        const missing = group.columns.filter((col) => col.universeFunctions.length > 0 && col.functions.length === 0).length;
+        const title =
+          `${group.label}（${group.face}）` +
+          (gaps > 0 ? ` · ${gaps} 个空缺` : ' · 无空缺') +
+          (missing > 0 ? ` · ${missing} 个时机本包整列未写` : '');
         return createElement(
           'th',
           {
             key: group.face,
             className: 'cm-group-th' + (folded ? ' folded' : ''),
             colSpan: group.columns.length,
-            title: group.face,
+            title,
+            'aria-expanded': !folded,
             onClick: () => onToggleFace(group.face),
           },
           createElement('span', { className: 'cm-fold', 'aria-hidden': 'true' }, ic(folded ? 'chevron-right' : 'chevron-down', 12, folded ? '▸' : '▾')),
-          group.label,
+          createElement('span', { className: 'cm-group-label' }, group.label),
+          gaps > 0
+            ? createElement(
+                'span',
+                { className: 'cm-gap-badge', 'aria-label': `${gaps} 个空缺` },
+                String(gaps),
+              )
+            : createElement('span', { className: 'cm-gap-clear', 'aria-hidden': 'true' }, '✓'),
         );
       }),
     ),
@@ -66,13 +80,33 @@ export function renderGridHead(opts: {
         // 折叠**不再清空标签**——清空会让该列固有宽度塌陷、逼 `table-layout:auto` 重排全表
         // （实测折叠一次卡 ~1.8s + 整列闪白）；改由 `.cm-subth.folded{opacity:.3}` 弱化。
         const blank = group.columns.length === 1 && group.columns[0]?.instructionNo === null;
-        return group.columns.map((col) =>
-          createElement(
+        return group.columns.map((col) => {
+          const missing = col.universeFunctions.length > 0 && col.functions.length === 0;
+          const title =
+            `${col.label}（${col.key}）` +
+            (col.gapCount > 0 ? ` · ${col.gapCount} 个状态未响应` : ' · 无空缺') +
+            (missing ? ' · 本包在这个时机还没有函数（生成器会写完整骨架）' : '');
+          return createElement(
             'th',
-            { key: col.key, className: 'cm-subth' + (folded ? ' folded' : ''), title: col.key },
+            {
+              key: col.key,
+              className:
+                'cm-subth' +
+                (folded ? ' folded' : '') +
+                (missing ? ' cm-col-missing' : '') +
+                (col.gapCount === 0 ? ' cm-col-full' : ''),
+              title,
+            },
             blank ? null : col.label,
-          ),
-        );
+            !blank && col.gapCount > 0
+              ? createElement(
+                  'span',
+                  { className: 'cm-sub-gap', 'aria-label': `${col.gapCount} 个状态空缺` },
+                  String(col.gapCount),
+                )
+              : null,
+          );
+        });
       }),
     ),
   );

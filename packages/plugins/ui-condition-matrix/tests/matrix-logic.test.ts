@@ -360,6 +360,9 @@ describe('createMatrixMemo', () => {
     rows: [],
     totalFunctions: 0,
     depsFunctions: 0,
+    filledCells: 0,
+    totalCells: 0,
+    gapCells: 0,
   });
 
   it('同 key 命中缓存：build 只跑一次，返回同一实例', () => {

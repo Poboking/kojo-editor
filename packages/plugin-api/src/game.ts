@@ -655,6 +655,27 @@ export interface KojoCounterTable {
 }
 
 /**
+ * 条件矩阵的**剧情线预设**（additive，2026-10-18 条件矩阵填格批）。
+ *
+ * 一条线 = 一个作者常用的状态主题（如「好感线」「恋慕线」）及其涉及的
+ * **规范化状态键**（`StateDependency.key`，如 `CFLAG:好感度`）。
+ * 矩阵面板只按 keys 匹配行、绝不猜测语义；键背后的游戏含义（哪个编号是
+ * 好感、哪个素质是恋慕）是游戏知识，只能由 adapter 提供。
+ *
+ * 缺省 = 面板不显示剧情线快捷选格（不静默造一条猜出来的线）。
+ */
+export interface StateLinePreset {
+  /** 稳定 id（面板内选择态用） */
+  readonly id: string;
+  /** 显示名（如「爱慕线」） */
+  readonly label: string;
+  /** 一句话说明（悬停提示；可选） */
+  readonly description?: string;
+  /** 归属该线的规范化状态键（精确匹配矩阵行键） */
+  readonly keys: readonly string[];
+}
+
+/**
  * 游戏适配器（槽位 `game.adapter` 的负载）。
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
  */
@@ -712,6 +733,11 @@ export interface GameAdapter {
    * 消费方（导入向导 / 文件树）据此把日文名展示为「日文（中文）」。缺省 = 不做对照。
    */
   readonly nameGlossary?: Readonly<Record<string, string>>;
+  /**
+   * 条件矩阵的剧情线预设（additive；状态键 → 作者常用主题线）。
+   * 面板只按 `keys` 精确匹配行，语义全在 adapter；缺省 = 不显示剧情线快选。
+   */
+  readonly stateLinePresets?: readonly StateLinePreset[];
 
   /** 脚手架（生成新角色口上骨架；v0.3） */
   scaffold?(characterNo: number, options?: ScaffoldOptions): Promise<ScaffoldResult>;
