@@ -1,10 +1,30 @@
-import { useEffect, useState, type ReactElement } from 'react';
-import { diagnosticDisplay, shortPath, nextWindow, windowSize, type RenderWindow } from '@kojo/plugin-api';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
+import {
+  diagnosticDisplay,
+  errorText,
+  shortPath,
+  nextWindow,
+  windowSize,
+  type RenderWindow,
+} from '@kojo/plugin-api';
+import type { EditorCodeAction } from '@kojo/plugin-api';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
-import { snapshot, subscribe, type EditorProblem } from './problem-store';
+import { snapshot, subscribe, currentVersion, type EditorProblem } from './problem-store';
+import {
+  ALL_SEVERITIES,
+  collectRowFix,
+  filterProblems,
+  groupProblems,
+  planLineEdits,
+  problemCopyText,
+  problemLineDecoration,
+  readProblemFixHost,
+  rowFixKey,
+  type ProblemSeverity,
+} from './problem-fix';
 
 /**
- * 底部「问题」面板（看板 HK-4 · UI-6）。
+ * 底部「问题」面板（看板 HK-4 · UI-6；P2-13 分组/过滤/行内修复/复制批）。
  *
  * 数据源 = `problem-store`（`EditorPane.refreshMarkers` 逐文件整份发布）：
  * `erb-parser`（结构类，error）与 `condition-extractor`（表达式类，warning）两层
@@ -17,6 +37,31 @@ import { snapshot, subscribe, type EditorProblem } from './problem-store';
  *
  * 视觉与「约定校验」面板同族（复用 `.conv-summary` / `.conv-count` / `.conv-dot`
  * 等约定面板类），只补少量 `.prob-*`。
+ *
+ * ## P2-13（2026-10-19）四件事
+ *
+ * 1. **按文件分组（可折叠）**：组头 = 短路径 + 按严重级分色的计数徽标；组序 =
+ *    过滤后序列的首次出现序（判据与理由见 `groupProblems`）。折叠是**纯视觉**：
+ *    渲染窗口按全局过滤序列裁剪，不因折叠而重排——折叠的组少画几行，窗口推进
+ *    的口径不变（哨兵数字永远说的是全局序列）。
+ * 2. **过滤**：严重级多选 + 文本子串（判据在 `filterProblems`；默认全开 + 空文本 =
+ *    与旧版逐字一致）。过滤条件一变，窗口回到首帧上界（换了一把尺就重新从第一屏
+ *    看起，旧窗口深度对新结果没有意义）。
+ * 3. **行内 fix**：**唯一解才给按钮**（判据＝`collectRowFix`，与 💡 的 `isPreferred`
+ *    同一条底座）；点击直接落地（改写计划 `planLineEdits` → 宿主座 `applyRowFix`，
+ *    一次编辑调用 = 一个撤销步）。本面板**不出预览 diff**——预览是 💡 那条路的判据
+ *    （P2-14），面板按钮是"这一条就这一个解"的快捷路，两条路各司其职。
+ * 4. **复制消息**：文案 = `路径:行号 [级别] 消息`（判据见 `problemCopyText`）；
+ *    成败都有一句反馈（不静默，铁律 4）。
+ *
+ * ## 行内 fix 的问询缓存
+ *
+ * 问槽一次 = 供方按**整篇文本**算一遍动作。渲染期逐行问就是每帧 120 次全篇扫——
+ * 所以按 `rowFixKey`（路径 ⊕ 诊断身份）缓存答案，带 `(store 版本, model 版本,
+ * 贡献方数量, 文本长度)` 四元指纹：同版本重渲零重问（供方自身还有 PS-4 的版本
+ * 记忆化兜底），文本一改自动作废重问。指纹含 `contributions.length` 是个务实的
+ * 粗判：贡献方表变而数量不变的场景（重载同数插件）会多缓存一轮旧答案，下一版
+ * 本发布即自愈——面板按钮最坏情况是多/少给一轮，不会落错编辑（落地前判据重算）。
  */
 
 /**
@@ -34,6 +79,13 @@ const SEVERITY_COLOR: Record<EditorProblem['severity'], string> = {
   info: '#7f9cc0',
 };
 
+/** 严重级的中文短名（过滤勾选框与表头计数同一份；文案真源在此一处） */
+const SEVERITY_LABEL: Record<ProblemSeverity, string> = {
+  error: '错误',
+  warning: '警告',
+  info: '提示',
+};
+
 /**
  * 问题列表的渲染窗口（PS-6 第 5 项：把"死顶"换成"可长"）。
  *
@@ -44,6 +96,11 @@ const SEVERITY_COLOR: Record<EditorProblem['severity'], string> = {
  *
  * 哨兵是一枚 `<button>`（不是"滚到底自动加"那种隐形机制）⇒ 键盘 Tab 得到它、
  * Enter 按得动，结果行的可达性不因为换了窗口化而掉一档（UI-4 那条口径）。
+ *
+ * P2-13 起窗口裁的是**过滤后的全局问题序列**（不是"每组各 120 条"也不是"组头
+ * 占名额"）：组头不占窗口额度、恒可见（组数 ≤ 问题数，成本可忽略；组头常可见
+ * 让"哪些文件有问题"一屏可读），行按全局下标进窗——同一路径的多个严重级段
+ * 分属不同组，组内条目在全局序列里不连续，裁剪判据只能逐行算（`indices`）。
  */
 const PROBLEM_WINDOW: RenderWindow = { initial: 120, step: 240 };
 /** 首帧最多画多少条（旧导出名沿用，测试与面板按它钉首帧行数） */
@@ -55,6 +112,15 @@ function useProblems(): readonly EditorProblem[] {
   return items;
 }
 
+/** 行内 fix 问询缓存的一条值（指纹四元组 + 答案） */
+interface RowFixEntry {
+  readonly version: number;
+  readonly docVersionId: number;
+  readonly contribLen: number;
+  readonly textLen: number;
+  readonly action: EditorCodeAction | undefined;
+}
+
 export function ProblemPanel({
   onReveal,
 }: {
@@ -64,6 +130,29 @@ export function ProblemPanel({
   const items = useProblems();
   /** 本次窗口能盖到第几条（`nextWindow` 的产物；没点过哨兵 = 首帧上界） */
   const [windowEnd, setWindowEnd] = useState<number>(PROBLEM_WINDOW.initial);
+  /** 严重级过滤（缺省全开 = 旧口径）；切换产生新数组，作 effect 依赖正合适 */
+  const [sevSel, setSevSel] = useState<readonly ProblemSeverity[]>(ALL_SEVERITIES);
+  /** 文本过滤（空串 = 不过滤） */
+  const [filterText, setFilterText] = useState<string>('');
+  /** 折叠的组（键 = 完整路径；纯视觉，见窗口注） */
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  /** 行级反馈（复制 / 修复的成败，1.8s 自动收起；不静默） */
+  const [flash, setFlash] = useState<{ readonly key: string; readonly text: string } | null>(null);
+  /** 行内 fix 问询缓存（判据见模块头） */
+  const fixCacheRef = useRef<Map<string, RowFixEntry>>(new Map());
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 过滤尺一换，窗口回到首帧上界（旧深度对新结果没有意义）
+  useEffect(() => {
+    setWindowEnd(PROBLEM_WINDOW.initial);
+  }, [filterText, sevSel]);
+
+  useEffect(
+    () => () => {
+      if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current);
+    },
+    [],
+  );
 
   let error = 0;
   let warning = 0;
@@ -79,65 +168,276 @@ export function ProblemPanel({
       ? ({ kind: 'empty' } as const)
       : ({ kind: 'counts', error, warning, info } as const);
 
-  const shown = items.slice(0, windowSize(items.length, windowEnd, PROBLEM_WINDOW));
-  const hidden = items.length - shown.length;
+  const filtered = filterProblems(items, { severities: new Set(sevSel), text: filterText });
+  const shownCount = windowSize(filtered.length, windowEnd, PROBLEM_WINDOW);
+  const hidden = filtered.length - shownCount;
+  const groups = groupProblems(filtered);
+  const filtering = filterText.trim() !== '' || sevSel.length !== ALL_SEVERITIES.length;
+
+  const showFlash = (key: string, text: string): void => {
+    setFlash({ key, text });
+    if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setFlash(null), 1_800);
+  };
+
+  /**
+   * 一条问题行有没有**唯一解**行内修复（判据与缓存见模块头）。
+   * 宿主座缺席 / 文件没开 ⇒ `undefined` = 不给按钮（可见的"没能力"，非死按钮）。
+   */
+  const rowFixAction = (p: EditorProblem): EditorCodeAction | undefined => {
+    const host = readProblemFixHost();
+    if (!host) return undefined;
+    const doc = host.documentOf(p.path);
+    if (!doc) return undefined;
+    const version = currentVersion();
+    const key = rowFixKey(p);
+    const hit = fixCacheRef.current.get(key);
+    const contribs = host.codeActionContributions();
+    if (
+      hit &&
+      hit.version === version &&
+      hit.docVersionId === doc.versionId &&
+      hit.contribLen === contribs.length &&
+      hit.textLen === doc.text.length
+    ) {
+      return hit.action;
+    }
+    const action = collectRowFix(contribs, {
+      path: p.path,
+      text: doc.text,
+      project: host.project(),
+      lineCount: doc.lineCount,
+      line: p.line,
+      diagnostic: problemLineDecoration(p),
+    });
+    if (fixCacheRef.current.size > 2_000) fixCacheRef.current.clear();
+    fixCacheRef.current.set(key, {
+      version,
+      docVersionId: doc.versionId,
+      contribLen: contribs.length,
+      textLen: doc.text.length,
+      action,
+    });
+    return action;
+  };
+
+  /** 行内修复落地：带 `edits` 走改写计划（一次撤销步），否则退回 `run` 语义 */
+  const applyFix = (p: EditorProblem, action: EditorCodeAction): void => {
+    const host = readProblemFixHost();
+    if (!host) return;
+    const key = rowFixKey(p);
+    if (action.edits && action.edits.length > 0) {
+      const doc = host.documentOf(p.path);
+      if (!doc) {
+        showFlash(key, '落地失败：文件已不在打开的标签里');
+        return;
+      }
+      const planned = planLineEdits(doc.lineCount, action.edits);
+      fixCacheRef.current.delete(key); // 落地即文本要变，缓存条目作废（版本指纹也会变，双保险）
+      void host
+        .applyRowFix(p.path, planned)
+        .then((ok) =>
+          showFlash(key, ok ? '已应用修复（Ctrl+Z 可撤）' : '落地失败：文件已不在打开的标签里'),
+        )
+        .catch((e: unknown) => showFlash(key, `落地失败：${errorText(e)}`));
+      return;
+    }
+    void Promise.resolve(
+      action.run({ project: host.project(), activeFile: p.path, line: p.line }),
+    )
+      .then(() => showFlash(key, '已执行动作'))
+      .catch((e: unknown) => showFlash(key, `动作失败：${errorText(e)}`));
+  };
+
+  /** 复制消息：文案判据在 `problemCopyText`（纯函数）；成败都有反馈（不静默） */
+  const copyProblem = (p: EditorProblem): void => {
+    const key = `copy\u0000${rowFixKey(p)}`;
+    const text = problemCopyText(p);
+    try {
+      const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+      if (!clipboard?.writeText) {
+        showFlash(key, '复制失败：当前环境没有剪贴板能力');
+        return;
+      }
+      void clipboard.writeText(text).then(
+        () => showFlash(key, '已复制到剪贴板'),
+        () => showFlash(key, '复制失败：剪贴板拒绝了这次写入'),
+      );
+    } catch (e: unknown) {
+      showFlash(key, `复制失败：${errorText(e)}`);
+    }
+  };
+
+  const renderRow = (p: EditorProblem, globalIndex: number): ReactElement => {
+    // ZH-D2：码位第一眼给**中文短名**，原码逐字留在悬停 title——真源在契约层
+    // （`plugin-api/diagnostic-copy.ts`），本面板**不自带映射**（两处口径必分叉）。
+    const code = p.code ? diagnosticDisplay(p.code) : null;
+    const fixAction = rowFixAction(p);
+    const rowKey = rowFixKey(p);
+    return (
+      <li key={`${rowKey}:${globalIndex}`} className="prob-item">
+        <button
+          className="conv-issue-btn"
+          title={`${p.path}:${p.line}`}
+          onClick={() => onReveal(p.path, p.line, problemRevealSpan(p))}
+        >
+          <span className="conv-dot" style={{ backgroundColor: SEVERITY_COLOR[p.severity] }} />
+          <span className="conv-issue-loc dim">
+            {shortPath(p.path)}:{p.line}
+          </span>
+          <span className="conv-issue-msg">{p.message}</span>
+          {code ? (
+            <code className="prob-code dim" title={code.title}>
+              {code.name}
+            </code>
+          ) : null}
+        </button>
+        {fixAction ? (
+          <button
+            type="button"
+            className="ghost small prob-fix"
+            title={`唯一解行内修复：${fixAction.title}`}
+            onClick={() => applyFix(p, fixAction)}
+          >
+            修复
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="ghost small prob-copy"
+          title={`复制消息：${problemCopyText(p)}`}
+          onClick={() => copyProblem(p)}
+        >
+          复制
+        </button>
+        {flash !== null && flash.key === rowKey ? (
+          <span className="prob-flash" role="status">
+            {flash.text}
+          </span>
+        ) : null}
+      </li>
+    );
+  };
+
+  const toggleGroup = (path: string): void => {
+    setCollapsed((cur) => {
+      const next = new Set(cur);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
 
   return (
     <div className="panel-problems">
       {header.kind === 'empty' ? (
         <div className="conv-empty dim">未发现问题 ✅</div>
       ) : (
-        <div className="conv-summary">
-          <span className="conv-count" style={{ color: SEVERITY_COLOR.error }}>
-            错误 {error}
-          </span>
-          <span className="conv-count" style={{ color: SEVERITY_COLOR.warning }}>
-            警告 {warning}
-          </span>
-          <span className="conv-count" style={{ color: SEVERITY_COLOR.info }}>
-            提示 {info}
-          </span>
-        </div>
+        <>
+          <div className="conv-summary">
+            <span className="conv-count" style={{ color: SEVERITY_COLOR.error }}>
+              错误 {error}
+            </span>
+            <span className="conv-count" style={{ color: SEVERITY_COLOR.warning }}>
+              警告 {warning}
+            </span>
+            <span className="conv-count" style={{ color: SEVERITY_COLOR.info }}>
+              提示 {info}
+            </span>
+          </div>
+          <div className="prob-toolbar">
+            {ALL_SEVERITIES.map((s) => (
+              <label key={s} className="prob-sev-check">
+                <input
+                  type="checkbox"
+                  checked={sevSel.includes(s)}
+                  onChange={() =>
+                    setSevSel((cur) =>
+                      cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s],
+                    )
+                  }
+                />
+                <span style={{ color: SEVERITY_COLOR[s] }}>{SEVERITY_LABEL[s]}</span>
+              </label>
+            ))}
+            <input
+              className="prob-filter"
+              type="text"
+              value={filterText}
+              placeholder="过滤：消息或诊断码…"
+              aria-label="按消息或诊断码过滤问题"
+              onChange={(e) => setFilterText(e.target.value)}
+            />
+            {filtering ? (
+              <span className="prob-filtered-count dim">
+                筛出 {filtered.length}/{items.length}
+              </span>
+            ) : null}
+          </div>
+        </>
       )}
 
-      {shown.length > 0 ? (
+      {filtered.length === 0 ? (
+        items.length > 0 ? (
+          // 过滤把所有条目筛光了：直说，不留一片"看起来空了"的谜（铁律 4）
+          <div className="conv-empty dim">
+            没有匹配过滤条件的问题（{items.length} 条被过滤隐藏）
+          </div>
+        ) : null
+      ) : (
         <ul className="prob-list">
-          {shown.map((it, i) => {
-            // ZH-D2：码位第一眼给**中文短名**，原码逐字留在悬停 title——真源在契约层
-            // （`plugin-api/diagnostic-copy.ts`），本面板**不自带映射**（两处口径必分叉）。
-            const code = it.code ? diagnosticDisplay(it.code) : null;
+          {groups.map((g) => {
+            const isCollapsed = collapsed.has(g.path);
+            // 组内行与全局下标同序配对（`indices` 与 `items` 一一同序），再按窗口裁
+            const rows = g.indices
+              .map((idx, i) => ({ idx, p: g.items[i]! }))
+              .filter(({ idx }) => idx < shownCount);
             return (
-              <li key={`${it.path}:${it.line}:${it.severity}:${i}`} className="prob-item">
+              <li key={g.path} className="prob-group">
                 <button
-                  className="conv-issue-btn"
-                  title={`${it.path}:${it.line}`}
-                  onClick={() => onReveal(it.path, it.line, problemRevealSpan(it))}
+                  type="button"
+                  className="prob-group-head"
+                  aria-expanded={!isCollapsed}
+                  title={isCollapsed ? '展开这一组' : '折叠这一组'}
+                  onClick={() => toggleGroup(g.path)}
                 >
-                  <span className="conv-dot" style={{ backgroundColor: SEVERITY_COLOR[it.severity] }} />
-                  <span className="conv-issue-loc dim">
-                    {shortPath(it.path)}:{it.line}
+                  <span className="prob-group-caret" aria-hidden="true">
+                    {isCollapsed ? '▸' : '▾'}
                   </span>
-                  <span className="conv-issue-msg">{it.message}</span>
-                  {code ? (
-                    <code className="prob-code dim" title={code.title}>
-                      {code.name}
-                    </code>
-                  ) : null}
+                  <span className="prob-group-path" title={g.path}>
+                    {g.label}
+                  </span>
+                  <span className="prob-group-counts">
+                    {g.counts.error > 0 ? (
+                      <span style={{ color: SEVERITY_COLOR.error }}>✕ {g.counts.error}</span>
+                    ) : null}
+                    {g.counts.warning > 0 ? (
+                      <span style={{ color: SEVERITY_COLOR.warning }}>⚠ {g.counts.warning}</span>
+                    ) : null}
+                    {g.counts.info > 0 ? (
+                      <span style={{ color: SEVERITY_COLOR.info }}>ℹ {g.counts.info}</span>
+                    ) : null}
+                  </span>
                 </button>
+                {!isCollapsed && rows.length > 0 ? (
+                  <ul className="prob-group-rows">
+                    {rows.map(({ p, idx }) => renderRow(p, idx))}
+                  </ul>
+                ) : null}
               </li>
             );
           })}
         </ul>
-      ) : null}
+      )}
 
       {hidden > 0 ? (
         // 哨兵在末尾：Tab 得到它、Enter 按得动；点一次多画 STEP 条，直到全量画完
         <button
           type="button"
           className="ghost small conv-more prob-more"
-          onClick={() => setWindowEnd((cur) => nextWindow(cur, items.length, PROBLEM_WINDOW))}
+          onClick={() => setWindowEnd((cur) => nextWindow(cur, filtered.length, PROBLEM_WINDOW))}
         >
-          继续显示后面的问题（还有 {hidden} 条，共 {items.length} 条）
+          继续显示后面的问题（还有 {hidden} 条，共 {filtered.length} 条）
         </button>
       ) : null}
     </div>

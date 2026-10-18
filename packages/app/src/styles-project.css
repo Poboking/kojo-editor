@@ -9580,3 +9580,112 @@ button.resume-session {
 :root[data-motion='reduced'] .kb-flashed .kb-chip {
   animation: none;
 }
+
+/* ═══════════════ 问题面板 · 分组 / 过滤 / 行内修复 / 复制（P2-13，2026-10-19） ═══════════════
+   组头 / 过滤条 / 行内按钮与反馈。行沿既有 .prob-item / .conv-issue-btn 语言，
+   这里只补新格子；颜色全部走主题 token，严重级色沿用面板内联的 SEVERITY_COLOR。 */
+
+/* 行容器改横排：跳源按钮占满、修复/复制收在行尾 */
+.prob-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.prob-item .conv-issue-btn {
+  flex: 1;
+  min-width: 0;
+}
+.prob-fix,
+.prob-copy {
+  flex: none;
+  padding: 1px 6px;
+  font-size: var(--fs-0);
+}
+
+/* 组头：整行可点，折叠箭头 + 短路径 + 分级计数 */
+.prob-group {
+  margin: 0;
+}
+.prob-group-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 3px 4px 2px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-1);
+  font-weight: 600;
+}
+.prob-group-head:hover {
+  background: var(--hover);
+}
+.prob-group-caret {
+  flex: none;
+  width: 10px;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.prob-group-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prob-group-counts {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+.prob-group-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 12px;
+}
+
+/* 过滤条：严重级勾选 + 文本输入 + 筛出计数 */
+.prob-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  flex-wrap: wrap;
+}
+.prob-sev-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-0);
+  cursor: pointer;
+  user-select: none;
+}
+.prob-sev-check input {
+  accent-color: var(--accent-strong);
+}
+.prob-filter {
+  flex: 1;
+  min-width: 90px;
+  padding: 1px 6px;
+  font-size: var(--fs-0);
+}
+.prob-filtered-count {
+  flex: none;
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 行级反馈（复制 / 修复成败，1.8s 自动收起） */
+.prob-flash {
+  flex: none;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}

@@ -109,6 +109,8 @@ import {
   reconcilePathsAfterDiskChange,
 } from './disk-reconcile';
 import type { EditorPaneActions } from './EditorPane';
+import { setProblemFixHost } from './problem-fix';
+import { openModelAcrossGroups } from './editor-pane-registry';
 
 /**
  * L1-A 首屏分割（2026-10-16 首屏批）：项目视图的静态链会把 monaco 全图（~1338 模块 /
@@ -520,6 +522,31 @@ export function App(): ReactElement {
     if (!kernel) return;
     kernel.bus.emit('editor.activeFileChanged', { filePath: activeFile });
   }, [kernel, activeFile]);
+
+  // 问题面板行内修复的宿主座（P2-13）：面板静态模块图零 Monaco，文本读数与落地
+  // 都从这座上过；座为 null（未挂载 / 已卸载）⇒ 面板不给修复按钮——能力缺席是
+  // 可见的（没有按钮），不是按了没反应的死按钮（铁律 4）。判据全在 problem-fix，
+  // 这里只递能力：贡献快照 / 项目 / model 读数（openModelAcrossGroups）/
+  // 落地（problem-fix-apply 动态 import，Monaco 不进 App 静态图）。
+  useEffect(() => {
+    if (!kernel) return;
+    setProblemFixHost({
+      codeActionContributions: () => kernel.slots.query('ui.editor.codeAction'),
+      project: () => kernel.project.current(),
+      documentOf: (path) => {
+        const model = openModelAcrossGroups(path);
+        if (!model || model.isDisposed()) return null;
+        return {
+          text: model.getValue(),
+          lineCount: model.getLineCount(),
+          versionId: model.getVersionId(),
+        };
+      },
+      applyRowFix: (path, planned) =>
+        import('./problem-fix-apply').then((m) => m.applyPlannedLineEdits(path, planned)),
+    });
+    return () => setProblemFixHost(null);
+  }, [kernel]);
 
   /** 旧项目的一套 UI 态整体带走：切项目与关项目共用，防旧标签/脏态/待确认残留到下一拍 */
   const resetProjectUiState = useCallback(() => {
