@@ -774,3 +774,68 @@ describe('COMPL-SHARED ⑩ · 调用形态候选遇作者已写的 `(`（insertT
     expect(item.insertTextRules).toBe(monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet);
   });
 });
+
+/* ============================== P2-12 · filterText 可检索键补齐（mergeSuggestions 统一口径） ============================== */
+
+describe('P2-12 · filterText 补键（standalone Monaco 的 fuzzyScore 不挂拼音词典 ⇒ 拼音必须进 filterText）', () => {
+  /** 最小候选（桩 monaco 只认 kind 数字；sortText 由 rankKey 统一写回） */
+  function item(label: string, sortText?: string): Monaco.languages.CompletionItem {
+    return {
+      label,
+      kind: 2,
+      insertText: label,
+      ...(sortText !== undefined ? { sortText } : {}),
+    } as Monaco.languages.CompletionItem;
+  }
+
+  /** 单源单候选过一遍 `mergeSuggestions`，取产出候选（装配点对外的唯一形态） */
+  function assemble(
+    item: Monaco.languages.CompletionItem,
+    prefix = '',
+  ): Monaco.languages.CompletionItem {
+    const { monaco } = stubMonaco();
+    const source: CompletionSource = { id: 'p2-12-src', provide: () => [item] };
+    return mergeSuggestions(
+      [source],
+      {
+        monaco,
+        model: modelOf(''),
+        position: { lineNumber: 1, column: 1 } as Monaco.Position,
+        range: { startLineNumber: 1, endLineNumber: 1, startColumn: 1, endColumn: 1 } as Monaco.IRange,
+        tables: {},
+      },
+      prefix,
+      { reported: new Set<string>(), tag: '[compl-shared-test]' },
+    )[0]!;
+  }
+
+  it('中文候选补键：`filterText` = `原文 全拼串 首字母串`（原文留首位 ⇒ 既有前缀匹配面是它的前缀，只扩不缩）', () => {
+    const out = assemble(item('好感度系统'));
+    expect(out.filterText).toBe('好感度系统 haoganduxitong hgdxt');
+    // 原文仍在首位：此前靠 label 命中的前缀（如 `好` / `好感`）照样命中，不丢候选
+    expect(out.filterText!.startsWith('好感度系统 ')).toBe(true);
+  });
+
+  it('source 自定义 filterText（≠ label）⇒ 原样不动（匹配面是各 source 的主权）', () => {
+    const out = assemble({ ...item('甲'), filterText: '自定义键' });
+    expect(out.filterText).toBe('自定义键');
+  });
+
+  it('filterText 逐字等于 label（全仓九源主流写法）⇒ 照补拼音键（等值 = 未自定义）', () => {
+    const out = assemble({ ...item('好感度'), filterText: '好感度' });
+    expect(out.filterText).toBe('好感度 haogandu hgd');
+  });
+
+  it('纯 ASCII 候选不补（无可拼音键，不造噪声；filterText 缺省语义原样保留）', () => {
+    expect(assemble(item('CALL_A')).filterText).toBeUndefined();
+  });
+
+  it('既有前缀档不因补键漂移：`好` 仍 `1|` 命中档、全等仍 `0|`、label 原文不动、补的键只进 filterText', () => {
+    const hit = assemble(item('好感度系统', '9_z'), '好');
+    expect(hit.sortText).toMatch(/^1\|/); // startsWith ⇒ 既有前缀命中档，逐字不变
+    expect(hit.label).toBe('好感度系统');
+    expect(hit.filterText).toBe('好感度系统 haoganduxitong hgdxt');
+    const exact = assemble(item('好感度系统', '9_z'), '好感度系统');
+    expect(exact.sortText).toMatch(/^0\|/); // label === prefix ⇒ 既有前缀精确档，逐字不变
+  });
+});

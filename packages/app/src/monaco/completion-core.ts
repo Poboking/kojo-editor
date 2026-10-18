@@ -11,6 +11,7 @@ import type {
   VariableSchema,
 } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
+import { pinyinKeysOf } from './pinyin';
 import { describeCallSignature, slotParameterLabel } from './kojo-signature';
 
 /**
@@ -24,7 +25,8 @@ import { describeCallSignature, slotParameterLabel } from './kojo-signature';
  *
  * 1. **候选源协议**（`CompletionSource` / `CompletionSourceContext` / 统一的 `CompletionTables`）；
  * 2. **合并**：依次问各 source，按 label 去重（先注册者胜）；
- * 3. **排序**：`前缀精确 > 前缀命中 > 其它`，同档沿用 source 自带 `sortText`，label 兜底；
+ * 3. **排序**：`前缀精确 > 前缀命中 > 子序列 > 拼音首字母 > 全拚 > 其它`，同档沿用
+ *    source 自带 `sortText`，label 兜底（模糊族三档 = P2-12 新增，判据见 {@link rankKey}）；
  * 4. **上限**：装配级截断（`MAX_ASSEMBLED_SUGGESTIONS`），截断可见（一行 warn，一轮装配只报一次）；
  * 5. **降级**：`requires` 依赖缺席 / source 抛错 ⇒ 跳过该源 + 一次可见信号；装配点自身抛错
  *    （位置判定 / 取表）⇒ 本轮空候选 + 一次可见信号，**绝不让 Monaco 静默吞掉整条补全链**；
@@ -296,13 +298,62 @@ export function labelText(label: Monaco.languages.CompletionItem['label']): stri
 }
 
 /**
- * 排名键：`前缀精确`（label === 已输入词）> `前缀命中`（label 以已输入词开头）> 其它；
- * 同档内沿用各 source 自带的 `sortText`（保留其分组次序），再以 label 兜底。
+ * 排名键（P2-12 起含**模糊族三档**；硬判据次序，改前必红）：
+ *
+ * `前缀精确`（label === 已输入词）> `前缀命中`（label 以已输入词开头）>
+ * `子序列`（已输入词是 label **原文**的字符子序列，大小写不敏感）>
+ * `拼音首字母`（是**首字母串**的子序列）>
+ * `全拚`（是**全拼串**的子序列，可跨字边界）>
+ * `其它`；同档内沿用各 source 自带的 `sortText`（保留其分组次序），再以 label 兜底。
+ *
+ * 档位键形 `0|` / `1|` / `2a|` / `2b|` / `2c|` / `2|`：ASCII `a`(0x61) < `|`(0x7C) ⇒
+ * 字符串比较下三档模糊恰好夹在「前缀命中」与「其它」之间；**既有三档键形逐字不变**
+ * （`2a|` 不匹配 `/^2\|/`，旧断言零回归）。
+ *
+ * 三档必须分别锚在不同串上（**坍缩论证**）：首字母串恒为全拼串的子序列 ⇒ 若「首字母」
+ * 与「全拚」两档都做在全拼串上，先判先得，「拼音首字母」档永不可能触发。
  */
 export function rankKey(item: Monaco.languages.CompletionItem, prefix: string): string {
   const label = labelText(item.label);
-  const boost = prefix.length === 0 ? 2 : label === prefix ? 0 : label.startsWith(prefix) ? 1 : 2;
-  return `${boost}|${item.sortText ?? ''}|${label}`;
+  const base = item.sortText ?? '';
+  // 空前缀：整表平铺（旧键形逐字不变：`2|<sortText>|<label>`）
+  if (prefix.length === 0) return `2|${base}|${label}`;
+  if (label === prefix) return `0|${base}|${label}`;
+  if (label.startsWith(prefix)) return `1|${base}|${label}`;
+  const tier = fuzzyTier(label, prefix);
+  return tier === undefined ? `2|${base}|${label}` : `2${tier}|${base}|${label}`;
+}
+
+/** 模糊族三档的档位字母（判定次序即优先级：原文子序列 > 拼音首字母 > 全拚） */
+type FuzzyTier = 'a' | 'b' | 'c';
+
+/** `needle` 是否为 `haystack` 的字符子序列（大小写归一由调用方负责） */
+function isSubsequence(needle: string, haystack: string): boolean {
+  let i = 0;
+  const n = needle.length;
+  for (const ch of haystack) {
+    if (i < n && ch === needle[i]) {
+      i += 1;
+      if (i === n) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 模糊族档位（**纯函数**；`undefined` = 落「其它」档）。空前缀由调用方提前分流。
+ *
+ * 三档的锚串刻意不同（坍缩论证见 {@link rankKey} 头注）：a 锚 label 原文、b 锚拼音
+ * 首字母串、c 锚全拼串。纯 ASCII 标签（无拼音键）只可能进 a 档（子序列原文匹配）。
+ */
+function fuzzyTier(label: string, prefix: string): FuzzyTier | undefined {
+  const lower = prefix.toLowerCase();
+  if (isSubsequence(lower, label.toLowerCase())) return 'a';
+  const keys = pinyinKeysOf(label);
+  if (keys === undefined) return undefined;
+  if (isSubsequence(lower, keys.initials)) return 'b';
+  if (isSubsequence(lower, keys.full)) return 'c';
+  return undefined;
 }
 
 /**
@@ -409,7 +460,7 @@ export function mergeSuggestions(
     );
   }
   return kept.map(({ entry, key }) => {
-    const final: Monaco.languages.CompletionItem = { ...entry.item, sortText: key };
+    const final: Monaco.languages.CompletionItem = withPinyinFilterText({ ...entry.item, sortText: key });
     opts.provenance?.register(final, {
       sourceId: entry.sourceId,
       label: labelText(entry.item.label),
@@ -418,6 +469,27 @@ export function mergeSuggestions(
     });
     return final;
   });
+}
+
+/**
+ * filterText 的**可检索键补齐**（P2-12）：把中文候选的拼音键补进 `filterText`，
+ * 让 Monaco 的客户端过滤（`fuzzyScore` 不挂拼音词典）能用 ASCII 拼音命中中文候选。
+ *
+ * 口径（两条同时满足，缺一即破）：
+ * 1. **不覆盖 source 自带的匹配面**：`filterText` 已存在且**不等于** label 原文
+ *    （source 自定义了异于原文的键）⇒ 原样不动；
+ * 2. 其余（无 `filterText`，或逐字等于 label 原文——全仓九源的主流写法）⇒ 补为
+ *    `原文 全拼串 首字母串`，**原文留在首位** ⇒ 前缀匹配与匹配位次上色不破
+ *    （非原文开头时高亮退化的代价，判据记在 `kojo-completion.ts` 的头注里）。
+ *
+ * 纯 ASCII 标签（{@link pinyinKeysOf} 返 `undefined`）⇒ 不补：无可拼音键，不造噪声。
+ */
+function withPinyinFilterText(item: Monaco.languages.CompletionItem): Monaco.languages.CompletionItem {
+  const label = labelText(item.label);
+  if (item.filterText !== undefined && item.filterText !== label) return item;
+  const keys = pinyinKeysOf(label);
+  if (keys === undefined) return item;
+  return { ...item, filterText: `${label} ${keys.full} ${keys.initials}` };
 }
 
 /* ============================== 调用协议 → snippet / 签名 ============================== */
