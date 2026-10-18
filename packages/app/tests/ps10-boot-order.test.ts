@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
  * PS-10 ②③ 的两条**次序契约**闸（源码级，形态照 `boot-sweep-single-source.test.ts`）。
  *
  * 为什么用源码级而不是渲染级：这两条判据的本体就是"谁先谁后"，而起真壳要桌面预算
- * （同 identifier 只能一个实例，PITFALLS 70），跑 React 又要把 19 个插件全拖进测试图。
+ * （同 identifier 只能一个实例，PITFALLS 70），跑 React 又要把 20 个插件全拖进测试图。
  * 源码级读序足以钉住它们，且改错一个字就红。
  *
  * 1. **注册早于开项目**：`ensureProjectPlugins` 必须排在 `kernel.project.open()` 前面——
@@ -77,6 +77,11 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
 
   it('项目级插件注册次序逐字冻结（拆分只改时机，不改名单与顺序）', () => {
     const expected = [
+      // 第二个 adapter（eraAkumaMaid，2026-10-18 批）。排首位不是"顺手放前面"：
+      // `ensureProjectPlugins` 在 `kernel.project.open()` 之前注册全部项目级插件，而
+      // 内核的 detect / loadProject 在 open 里就跑——adapter 晚一刻入场就轮不到它认目录。
+      // 与 eraTW 的 detect 判据无交集（主路由 + CHARA CSV），两者次序不影响判定。
+      'createErakumamaidAdapterPlugin',
       'createConventionLinterPlugin',
       'createConditionExtractorPlugin',
       'createSavParserPlugin',
