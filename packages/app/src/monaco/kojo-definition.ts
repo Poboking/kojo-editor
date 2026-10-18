@@ -7,6 +7,7 @@ import type {
 } from '@kojo/plugin-api';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
 import { registerForKojoDialects } from './register-dialects';
+import { mergeSymbolLocations, resolveErbDimDefinitionAt } from './erb-dim-navigation';
 
 /**
  * 转到定义的**宿主接线**（2026-10-15 语言服务批；D4 Peek 就地预览同文件改写；
@@ -347,7 +348,29 @@ export function installDefinitionProvider(
   const findModel = createDefinitionModelResolver(handlers);
   const provider: Monaco.languages.DefinitionProvider = {
     provideDefinition(model, position) {
-      return provideLocations(handlers, findModel, model, position);
+      // `#DIM` 腿（2026-10-19）：同文件声明**优先**——命中就把落点排在槽结果之前
+      // （`provideLocations` 的事件通道兜底取第一枚 ⇒ 优先权在数据层就已确定）。
+      // 没有声明 ⇒ 本腿零贡献，既有函数 / 标签腿逐字不变（fail-open，不猜）。
+      const dims = resolveErbDimDefinitionAt(model, position);
+      if (dims.length === 0) return provideLocations(handlers, findModel, model, position);
+      return provideLocations(
+        {
+          ...handlers,
+          resolve: (m, p) => {
+            let rest: DefinitionLocation[] = [];
+            try {
+              rest = handlers.resolve(m, p);
+            } catch (e: unknown) {
+              // 槽腿出错不能把已经命中的 `#DIM` 一起吞掉（隔离粒度仍到贡献方）
+              console.warn(`[kojo-definition] resolve 抛错（#DIM 腿照常交付）：${errorText(e)}`);
+            }
+            return mergeSymbolLocations(dims, rest);
+          },
+        },
+        findModel,
+        model,
+        position,
+      );
     },
   };
   const opener = registerLocationOpener(monaco, handlers);

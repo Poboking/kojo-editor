@@ -91,7 +91,7 @@ const REF_RE = /^([A-Za-z][A-Za-z0-9_]*):(.+)$/;
 const TIMING_PREFIX_RE = new RegExp(`^\\s*时机[${BLANK_CLASS_STR}]+\\S+[${BLANK_CLASS_STR}]+$`);
 
 /** 命中光标（含其左右邻接同类字符）的最长一段（`col0` = 0 基字符下标；无同类字符返回 null） */
-function spanAround(line: string, col0: number, isChar: (ch: string) => boolean): { start: number; end: number } | null {
+export function spanAround(line: string, col0: number, isChar: (ch: string) => boolean): { start: number; end: number } | null {
   let start: number;
   let end: number;
   if (col0 < line.length && isChar(line[col0]!)) {
@@ -296,12 +296,12 @@ function resolveErbDimHover(
 }
 
 /** 路径比较键（Windows 分隔符 + 大小写不敏感；索引键与 model.uri 来自不同腿） */
-function normalizePathKey(p: string): string {
+export function normalizePathKey(p: string): string {
   return p.replace(/\\/g, '/').toLowerCase();
 }
 
 /** `#DIM` 名字字符：非空白、非运算符/分隔符（中文与全角字母都是合法声明名） */
-const isDimNameChar = (ch: string): boolean => !/[\s,;:()[\]{}=+\-*/<>%!&|'"`]/.test(ch);
+export const isDimNameChar = (ch: string): boolean => !/[\s,;:()[\]{}=+\-*/<>%!&|'"`]/.test(ch);
 
 /**
  * 为 ERB 方言（`.erb` / `.erh` / `.erd`）与 `.kojo` 两种语言注册**只读** hover provider。
