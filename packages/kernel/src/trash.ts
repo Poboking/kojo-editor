@@ -41,6 +41,16 @@ export const TRASH_ID_RE = /^\d{8}-\d{6}-\d{3}-[0-9a-f]{8}$/;
 export const TRASH_DIR_NAME = 'trash';
 /** 条目保留期（天）：purge 自动清理超期条目 */
 export const TRASH_KEEP_DAYS = 30;
+/**
+ * 回收站字节总量上限（2026-10-18 字节上限批）：30 天保留期内的大批删除（整包卸载 /
+ * 部署回滚）可短时把 appData 占满——超限从**最旧**条目起裁（先过超期档再过字节档）。
+ * 取值：STATE §W 全盘 603MB，2GB 给足"同时容纳几棵整目录"的余量，同时与备份账（1GB）、
+ * op 快照账（1GB）合计封顶 appData（~4GB）。裁剪跳过 `hold` 引用与大小未知的条目
+ * （无法证明大小 ⇒ 不猜，宁可少裁），**裁了多少必须出声**（铁律 4）。
+ */
+export const TRASH_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+/** 字节档巡检最小间隔（moveIntoTrash 每次都全量 walkDir 求和太贵，节流成分钟级） */
+const TRASH_BYTES_SWEEP_INTERVAL_MS = 60_000;
 /** 条目内的内容根目录名（契约的 `payloadPath` 就是它；文件条目时 payload 即该文件本体） */
 export const TRASH_PAYLOAD_NAME = 'payload';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -118,11 +128,17 @@ export class TrashManager {
    * 需要确定性顺序的调用方（测试、以及"删完就想看到清单"的读面）用 `flushSweep` 等它落定。
    */
   private sweep: Promise<void> = Promise.resolve();
+  /** 字节档巡检的节流锚（上次真扫时刻）；上限的测试注入口（缺省 = 契约常量） */
+  private lastBytesSweepAt = 0;
+  private readonly maxTotalBytes: number;
 
   constructor(
     private readonly bridge: PlatformBridge,
     private readonly log?: Logger,
-  ) {}
+    byteCaps: { maxTotalBytes?: number } = {},
+  ) {
+    this.maxTotalBytes = byteCaps.maxTotalBytes ?? TRASH_MAX_TOTAL_BYTES;
+  }
 
   private async root(): Promise<string> {
     return join(await this.bridge.appDataDir(), TRASH_DIR_NAME);
@@ -177,10 +193,11 @@ export class TrashManager {
       }
       await this.deleteSource(target, kind);
     }
-    // 顺手清超期（尽力而为：清理失败不影响本次移入；跳过被时间线引用的条目）
+    // 顺手清超期 + 字节档（尽力而为：清理失败不影响本次移入；跳过被时间线引用的条目）
     // 先 `then(() => undefined)` 把 purge 的计数抹掉：`.catch` 只兜错误，
     // 直接挂会让 sweep 变成 `Promise<void | number>`（字段口径就是 Promise<void>）
     this.sweep = this.purge()
+      .then(() => this.sweepBytesOverLimit())
       .then(() => undefined)
       .catch((err: unknown) => {
         this.log?.warn(`回收站：超期清理失败（不影响本次移入）：${String(err)}`);
@@ -363,6 +380,47 @@ export class TrashManager {
     }
     if (purged > 0) this.log?.info(`回收站：清理超期条目 ${purged} 个`);
     return purged;
+  }
+
+  /**
+   * 字节总量档（2026-10-18 字节上限批，公开可测）：全部条目 payload 字节之和超
+   * `maxTotalBytes` ⇒ 从**最旧**条目（id 时序）起裁到预算内。跳过 `hold` 引用与
+   * 大小未知（`bytes === null`）的条目——无法证明大小就不猜，宁可少裁；
+   * 删除失败保留现场并出声；裁了多少必须 warn（铁律 4）。
+   * 节流：距上次真扫不足 {@link TRASH_BYTES_SWEEP_INTERVAL_MS} 就跳过（`force` 绕过，测试用）。
+   */
+  async sweepBytesOverLimit(force = false): Promise<number> {
+    const now = Date.now();
+    if (!force && now - this.lastBytesSweepAt < TRASH_BYTES_SWEEP_INTERVAL_MS) return 0;
+    this.lastBytesSweepAt = now;
+    const all = await this.list();
+    let total = 0;
+    for (const e of all) {
+      if (e.bytes !== null) total += e.bytes;
+    }
+    if (total <= this.maxTotalBytes) return 0;
+    // list 已新在前（id 降序）⇒ 尾部即最旧；从最旧开始裁
+    let over = total;
+    let pruned = 0;
+    for (let i = all.length - 1; i >= 0 && over > this.maxTotalBytes; i--) {
+      const e = all[i]!;
+      if (this.held.has(e.id)) continue; // 时间线正引用：这一次不动（同 purge 口径）
+      if (e.bytes === null) continue; // 大小未知：不拿 0 参与判定，不猜
+      try {
+        await this.bridge.removeDir(join(await this.root(), e.id));
+        over -= e.bytes;
+        pruned++;
+        this.held.delete(e.id);
+      } catch (err) {
+        this.log?.warn(`回收站：字节超限裁剪失败（保留现场）：${e.id} — ${String(err)}`);
+      }
+    }
+    if (pruned > 0) {
+      this.log?.warn(
+        `回收站：字节总量超限（实算 ${total}B > 上限 ${this.maxTotalBytes}B），按最旧先裁清掉 ${pruned} 个条目（裁后约 ${over}B）`,
+      );
+    }
+    return pruned;
   }
 
   /**

@@ -47,6 +47,20 @@ import { TrashManager } from './trash';
 
 const BACKUP_KEEP_PER_FILE = 20;
 
+/**
+ * 备份账的**字节级**上限（2026-10-18 字节上限批，两档）：
+ * - 单桶档：一个文件的备份桶内全部 `.bak` 总字节超限 ⇒ 从最旧版起裁（先过份数档再过字节档）；
+ * - 总量档：整个 `backup/` 根超限 ⇒ 跨桶按版本时序从最旧裁（`sweepBackupRootBytes`，节流巡检）。
+ *
+ * 取值依据 STATE §W 尺子（最大单文件 2.35MB）：20 版 × 2.35MB ≈ 47MB/桶，256MB 单桶档
+ * 给足一个量级余量；总量 1GB 与 op 快照账（1GB）、回收站账（2GB）合计把 appData 封顶在
+ * 有界范围（~4GB）。裁剪**必须出声**（warn 日志带数字，铁律 4）。
+ */
+export const BACKUP_MAX_BYTES_PER_FILE = 256 * 1024 * 1024;
+export const BACKUP_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
+/** 总量档巡检最小间隔：每次 backup 都全根扫太贵（数千桶），节流成分钟级 */
+const BACKUP_BYTES_SWEEP_INTERVAL_MS = 60_000;
+
 /* --------------------------- 批量读参数（2026-10-16 批量 IO 批） --------------------------- */
 
 /**
@@ -199,6 +213,12 @@ export class FileIOServiceImpl implements FileIO {
   private readonly textCacheMaxFiles: number;
   private readonly textCacheMaxChars: number;
   private readonly metaCacheMaxEntries: number;
+  /** 备份字节档的注入上限（缺省 = 模块常量；测试用小值钉裁剪纪律） */
+  private readonly backupMaxPerBucketBytes: number;
+  private readonly backupMaxTotalBytes: number;
+  /** 总量档巡检的节流锚（上次真扫时刻）；在途巡检的 promise 守门（防重叠） */
+  private lastBackupBytesSweepAt = 0;
+  private backupBytesSweep: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly bridge: PlatformBridge,
@@ -218,10 +238,17 @@ export class FileIOServiceImpl implements FileIO {
      * 由服务发事件的既有纪律）。文本路径不发——编辑器的保存回路自写自知。
      */
     private readonly bus?: EventBus,
+    /**
+     * 备份字节档（2026-10-18 字节上限批，additive 可选）：缺省 = 模块常量。
+     * 测试注入小值把"超限裁最旧 + 出声"钉死，生产调用方零改动。
+     */
+    backupByteCaps: { maxPerBucketBytes?: number; maxTotalBytes?: number } = {},
   ) {
     this.textCacheMaxFiles = cacheCaps.maxFiles ?? TEXT_CACHE_MAX_FILES;
     this.textCacheMaxChars = cacheCaps.maxChars ?? TEXT_CACHE_MAX_CHARS;
     this.metaCacheMaxEntries = cacheCaps.maxMetaEntries ?? META_CACHE_MAX_ENTRIES;
+    this.backupMaxPerBucketBytes = backupByteCaps.maxPerBucketBytes ?? BACKUP_MAX_BYTES_PER_FILE;
+    this.backupMaxTotalBytes = backupByteCaps.maxTotalBytes ?? BACKUP_MAX_TOTAL_BYTES;
     this.trash = new TrashManager(bridge, log);
   }
 
@@ -831,6 +858,8 @@ export class FileIOServiceImpl implements FileIO {
     const target = join(dir, `${timestamp()}.bak`);
     await this.bridge.copyFile(path, target);
     await this.pruneBackups(dir);
+    // 总量档巡检（节流 + 尽力而为，不阻塞本次备份的返回——照 trash 顺手清扫的形态）
+    this.scheduleBackupBytesSweep();
     this.log?.debug(`Backup created: ${target}`);
     return target;
   }
@@ -894,20 +923,127 @@ export class FileIOServiceImpl implements FileIO {
     this.log?.info(`Backup restored: ${src} -> ${path}`);
   }
 
+  /**
+   * 桶内裁剪，两档先後（2026-10-18 字节上限批）：
+   * 1. 份数档（`BACKUP_KEEP_PER_FILE`，原有语义不动）；
+   * 2. 单桶字节档（`maxPerBucketBytes`）：桶内 `.bak` 总字节超限 ⇒ **最旧先走**
+   *    （版本文件名字典序 = 时序，与份数档同一把尺）。
+   * 裁了多少必须出声（warn 带数字——铁律 4，内核不静默）。
+   */
   private async pruneBackups(dir: string): Promise<void> {
-    const entries = (await this.bridge.listDir(dir))
+    // withMetadata 一次带回 size；个别缺 size 的条目补一趟 stat（宁可多一趟，不拿 0 静默低估）
+    const listed = await this.bridge
+      .walkDir(dir, { includeFiles: true, withMetadata: true })
+      .catch(() => [] as DirEntry[]);
+    const entries = listed
       .filter((e) => !e.isDirectory && e.name.endsWith('.bak'))
       .sort((a, b) => a.name.localeCompare(b.name));
-    const excess = entries.length - BACKUP_KEEP_PER_FILE;
-    for (let i = 0; i < excess; i++) {
+    const sized: Array<{ name: string; path: string; bytes: number }> = [];
+    for (const e of entries) {
+      let size = e.size ?? null;
+      if (size === null) {
+        const st = await this.bridge.stat(e.path).catch(() => null);
+        size = st !== null && !st.isDirectory ? st.size : null;
+      }
+      if (size === null) {
+        // stat 竞态失败（列完被删）：剔除并出声，与 listBackups 同口径
+        this.log?.warn(`备份版本 stat 失败（跳过裁剪判定）：${e.path}`);
+        continue;
+      }
+      sized.push({ name: e.name, path: e.path, bytes: size });
+    }
+    const byCount = sized.slice(0, Math.max(0, sized.length - BACKUP_KEEP_PER_FILE));
+    let bucketBytes = sized.reduce((s, e) => s + e.bytes, 0);
+    const overBytes: typeof sized = [];
+    for (let i = 0; i < sized.length && bucketBytes > this.backupMaxPerBucketBytes; i++) {
+      overBytes.push(sized[i]!);
+      bucketBytes -= sized[i]!.bytes;
+    }
+    const victims = [...byCount, ...overBytes.filter((e) => !byCount.includes(e))];
+    for (const v of victims) {
       try {
         // 管理性裁剪直走桥（2026-10-16 undo 批）：备份桶裁剪进回收站会让回收站
         // 自增殖（每 20 版裁一轮塞 1-2 条目），且被裁的版本永远没人"后悔"。
-        await this.bridge.removeFile(entries[i]!.path);
+        await this.bridge.removeFile(v.path);
       } catch (err) {
-        this.log?.warn(`Failed to prune backup ${entries[i]!.path}: ${String(err)}`);
+        this.log?.warn(`Failed to prune backup ${v.path}: ${String(err)}`);
       }
     }
+    if (overBytes.length > 0) {
+      this.log?.warn(
+        `备份桶字节超限，已裁最旧 ${overBytes.length} 版（桶 ${dir}，裁后约 ${bucketBytes}B / 上限 ${this.backupMaxPerBucketBytes}B）`,
+      );
+    }
+  }
+
+  /**
+   * 总量档巡检（公开：测试与未来维护面可直调强制跑）：整个 `backup/` 根的 `.bak`
+   * 总字节超 `maxTotalBytes` ⇒ 跨桶按**版本时序**从最旧裁到预算内。
+   *
+   * 节流（`BACKUP_BYTES_SWEEP_INTERVAL_MS`）：每次 backup 都全根扫太贵（数千桶 ×
+   * walkDir），退成分钟级；`force: true` 绕过节流（测试用）。在途巡检不重叠
+   * （promise 守门）。失败只 warn 不抛——巡检是尽力而为的维护动作，不该炸写路径。
+   */
+  async sweepBackupRootBytes(force = false): Promise<void> {
+    const now = Date.now();
+    if (!force && now - this.lastBackupBytesSweepAt < BACKUP_BYTES_SWEEP_INTERVAL_MS) return;
+    this.lastBackupBytesSweepAt = now;
+    const appData = await this.bridge.appDataDir();
+    const root = join(appData, 'backup');
+    const buckets = await this.bridge.listDir(root).catch(() => [] as DirEntry[]);
+    const versions: Array<{ path: string; name: string; bucket: string; bytes: number }> = [];
+    let total = 0;
+    for (const b of buckets) {
+      if (!b.isDirectory) continue;
+      const files = await this.bridge
+        .walkDir(b.path, { includeFiles: true, withMetadata: true })
+        .catch(() => null);
+      if (files === null) continue;
+      for (const f of files) {
+        if (f.isDirectory || !f.name.endsWith('.bak')) continue;
+        // 缺 size 补 stat；再取不到就剔除并出声（不拿 0 静默低估总量）
+        let size = f.size ?? null;
+        if (size === null) {
+          const st = await this.bridge.stat(f.path).catch(() => null);
+          size = st !== null && !st.isDirectory ? st.size : null;
+        }
+        if (size === null) {
+          this.log?.warn(`备份版本 stat 失败（总量巡检跳过该条）：${f.path}`);
+          continue;
+        }
+        versions.push({ path: f.path, name: f.name, bucket: b.path, bytes: size });
+        total += size;
+      }
+    }
+    if (total <= this.backupMaxTotalBytes) return;
+    // 版本名字典序 = 时序；从最旧开始删，直到进预算
+    versions.sort((a, b) => a.name.localeCompare(b.name));
+    let over = total;
+    let pruned = 0;
+    for (const v of versions) {
+      if (over <= this.backupMaxTotalBytes) break;
+      try {
+        await this.bridge.removeFile(v.path);
+        over -= v.bytes;
+        pruned++;
+      } catch (err) {
+        this.log?.warn(`备份总量裁剪失败（保留现场）：${v.path} — ${String(err)}`);
+      }
+    }
+    if (pruned > 0) {
+      this.log?.warn(
+        `备份总量超限（实算 ${total}B > 上限 ${this.backupMaxTotalBytes}B），跨桶按最旧先裁清掉 ${pruned} 版（裁后约 ${over}B）`,
+      );
+    }
+  }
+
+  /** 顺手总量巡检（节流内、尽力而为；挂 in-flight 守门防重叠） */
+  private scheduleBackupBytesSweep(): void {
+    this.backupBytesSweep = this.backupBytesSweep
+      .then(() => this.sweepBackupRootBytes())
+      .catch((err: unknown) => {
+        this.log?.warn(`备份总量巡检失败（不影响本次备份）：${String(err)}`);
+      });
   }
 
   /* ------------------------------ 导出 ------------------------------ */

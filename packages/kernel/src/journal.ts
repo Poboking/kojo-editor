@@ -77,6 +77,12 @@ interface OpDoc {
    * 文档停在 open 态并由维护提示点名。
    */
   rollbackError?: string;
+  /**
+   * 本 op 已落快照字节累计（2026-10-18 字节上限批）：record 写快照时累加，
+   * 超过 {@link OP_SNAPSHOT_MAX_PER_OP_BYTES} 即拒记（调用方 fail-safe 跳过该文件）。
+   * 旧文档缺该字段 ⇒ 从 0 起算（软闸；总量档 sweep 用实算值兜底，不依赖这字段）。
+   */
+  snapshotBytes?: number;
 }
 
 export interface OpsJournalDeps {
@@ -183,9 +189,19 @@ export class OpsJournalImpl implements OpJournal {
     let createdDirs: string[] | undefined;
     try {
       const bytes = await this.deps.bridge.readFileBytes(path);
+      // 单 op 字节上限（2026-10-18）：超限**拒记**——记不了账的文件由调用方 fail-safe 不写
+      // （绝不静默落一个"写得出却撤不回"的文件）。此刻快照未写、entry 未 push，op 状态干净。
+      const carried = doc.snapshotBytes ?? 0;
+      if (carried + bytes.length > OP_SNAPSHOT_MAX_PER_OP_BYTES) {
+        throw new Error(
+          `本操作的字节快照将超过单操作上限（已 ${carried}B + 本文件 ${bytes.length}B > ` +
+            `${OP_SNAPSHOT_MAX_PER_OP_BYTES}B）：${path} 未记账，调用方应跳过该文件并如实报告`,
+        );
+      }
       beforePath = `${doc.entries.length}.before`;
       const dir = await this.snapshotDir(opId);
       await this.deps.bridge.writeFileBytes(join(dir, beforePath), bytes);
+      doc.snapshotBytes = carried + bytes.length;
       const probe = decodeWithProbe(bytes);
       encoding = probe.encoding;
       eol = detectEol(probe.text);
@@ -263,10 +279,14 @@ export class OpsJournalImpl implements OpJournal {
 
   /**
    * 保留期清扫：已完结（committed/undone）op 按 `startedAt` 只留最近
-   * {@link OP_SNAPSHOT_RETENTION_MAX} 个，超限的连快照目录带文档整体清掉。三种东西
-   * **绝不**在这里动：在途 op（正在写快照）；open 态残留（崩溃/回滚失败留痕，快照
-   * 是唯一还能救命的东西，模块头注口径）；不可读文档（list() 的维护提示在管）。
-   * 清理失败走 removeQuietly（warn + cleanupFailures 计数），不清账不炸调用方。
+   * {@link OP_SNAPSHOT_RETENTION_MAX} 个；此后若快照字节总量仍超
+   * {@link OP_SNAPSHOT_MAX_TOTAL_BYTES}，再从**最旧**的已完结 op 起继续裁到预算内
+   * （2026-10-18 字节上限批——只有个数上限时，单个大 op 就能把 appData 占满）。
+   * 三种东西**绝不**在这里动：在途 op（正在写快照）；open 态残留（崩溃/回滚失败留痕，
+   * 快照是唯一还能救命的东西，模块头注口径）；不可读文档（list() 的维护提示在管）。
+   * 字节用 `walkDir(withMetadata)` **实算**（doc 里的 snapshotBytes 是软闸累计，undo op
+   * 与旧文档都会让它失真，裁剪判据不依赖它）。清理失败走 removeQuietly（warn +
+   * cleanupFailures 计数），不清账不炸调用方；**裁了多少必须出声**（铁律 4）。
    */
   private async sweepSnapshotRetention(): Promise<void> {
     const root = await this.root();
@@ -291,6 +311,46 @@ export class OpsJournalImpl implements OpJournal {
         `ops journal：保留期收口，清理超限快照 ${expired.length} 个（上限 ${OP_SNAPSHOT_RETENTION_MAX}，按 startedAt 留最近）`,
       );
     }
+
+    // ---- 字节总量档：保留集（前 OP_SNAPSHOT_RETENTION_MAX 个已完结 op）从最旧起累计 ----
+    const kept = docs
+      .slice(0, OP_SNAPSHOT_RETENTION_MAX)
+      .filter((d) => d.status !== 'open');
+    const sized: Array<{ id: string; bytes: number }> = [];
+    let total = 0;
+    for (const d of kept) {
+      const bytes = await this.snapshotBytesOf(d.id);
+      sized.push({ id: d.id, bytes });
+      total += bytes;
+    }
+    if (total <= OP_SNAPSHOT_MAX_TOTAL_BYTES) return;
+    // kept 按新→旧排；从最旧（尾部）开始裁，直到总量进预算。被裁的 op 不可再 undo
+    // （undo() 的保留期护栏会显式拒绝并提示走备份时间线），不猜、不半裁。
+    let over = total;
+    const victims: string[] = [];
+    for (let i = sized.length - 1; i >= 0 && over > OP_SNAPSHOT_MAX_TOTAL_BYTES; i--) {
+      const v = sized[i]!;
+      victims.push(v.id);
+      over -= v.bytes;
+    }
+    for (const id of victims) await this.removeOpArtifacts(id);
+    this.deps.log.warn(
+      `ops journal：快照字节总量超限（实算 ${total}B > 上限 ${OP_SNAPSHOT_MAX_TOTAL_BYTES}B），` +
+        `按最旧先裁清理 ${victims.length} 个操作的快照（裁后约 ${over}B；被裁操作不可再撤销，可从备份时间线恢复）`,
+    );
+  }
+
+  /** 某 op 快照目录的实算字节数（目录不在位 / 枚举失败 ⇒ 0——它本来就不占盘） */
+  private async snapshotBytesOf(opId: string): Promise<number> {
+    const dir = await this.snapshotDir(opId);
+    const files = await this.deps.bridge.walkDir(dir, { includeFiles: true, withMetadata: true }).catch(() => null);
+    if (files === null) return 0;
+    let sum = 0;
+    for (const f of files) {
+      if (f.isDirectory) continue;
+      sum += f.size ?? 0;
+    }
+    return sum;
   }
 
   async list(): Promise<OpRecord[]> {
@@ -498,3 +558,19 @@ function errorSummary(err: unknown): string {
  * appData 永久占满。open 态残留（崩溃/回滚失败留痕）不参与保留期计数（见 sweep）。
  */
 export const OP_SNAPSHOT_RETENTION_MAX = 20;
+/**
+ * 单个 op 的字节快照上限（2026-10-18 字节上限批）：record 时累计校验，超限**拒记**
+ * （抛错给调用方 ⇒ fail-safe 跳过该文件并如实报告——绝不落一个"写得出却撤不回"的
+ * 文件，也不静默吞掉上限）。取值依据 STATE §W 尺子：全盘 603MB、最大单文件 2.35MB，
+ * 全库级替换（4,000 文件 × 平均 ~60KB ≈ 240MB）在预算内；512MB 给足余量同时把
+ * "单个 op 占满 appData"的量级封死。
+ */
+export const OP_SNAPSHOT_MAX_PER_OP_BYTES = 512 * 1024 * 1024;
+
+/**
+ * ops 快照目录字节总量上限：commit 后的 sweep 实算全部已完结 op 快照字节数，超限从
+ * **最旧**起裁（先过个数档、再过字节档；被裁 op 不可再 undo，undo 的护栏会显式拒绝
+ * 并提示走备份时间线）。与备份账（1GB）、回收站账（2GB）合计给 appData 封一个
+ * 有界的顶（~4GB），"大批部署+删除短时占满 appData"由此封死。
+ */
+export const OP_SNAPSHOT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
