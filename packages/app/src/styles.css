@@ -1567,19 +1567,23 @@ textarea {
     transform: translateX(320%);
   }
 }
+/* 减动效：扫不动了，但必须仍是一条**看得见**的光带（2026-10-18 用户反馈 1：原先
+   opacity 0.35 太暗，用户读成「光条消失了」）。与 update-dialog.css 的不定态进度条同款
+   口径——压平动效 ≠ 藏掉指示物；这里把整条轨道填满 accent 并给足不透明度。 */
 @media (prefers-reduced-motion: reduce) {
   .boot-bar::after {
     animation: none;
     width: 100%;
-    opacity: 0.35;
+    opacity: 1;
   }
 }
 /* 应用内「减弱动效」开关（`:root[data-motion='reduced']`）只压 duration / iteration-count、
-   不改 animation-name ⇒ 滑块会停在终态 translateX(320%)，移出轨道、只剩一条空沟。 */
+   不改 animation-name ⇒ 滑块会停在终态 translateX(320%)，移出轨道、只剩一条空沟。
+   所以这条回落必须自己把 name 关掉并钉回静态可见光带。 */
 :root[data-motion='reduced'] .boot-bar::after {
   animation: none;
   width: 100%;
-  opacity: 0.35;
+  opacity: 1;
 }
 
 /* ==================== 退出/崩溃守护（guard，2026-10-16） ==================== */

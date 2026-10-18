@@ -4175,6 +4175,17 @@ button.erb-mode-hint.unlocked:hover {
   border: 1px solid var(--border);
   background: var(--bg-3);
 }
+/* 联系邮箱行（2026-10-18 用户反馈 3）：与开发者卡同为「32px 圆标」，
+   但圆标里画的是一枚 accent 色信封——靠形状+色相把"写信"与"看主页"分开。
+   只进重档（设置浮层只在项目态挂载，与 .settings-avatar 同链）。 */
+.settings-avatar.settings-avatar-symbol {
+  display: grid;
+  place-items: center;
+  border-color: var(--border-subtle);
+  background: var(--surface-sunken);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
 /* 极窄窗（92vw 以下）：控件列的地板降到 88px，先让文字列吃回宽度 */
 @media (max-width: 620px) {
   .settings-row {
@@ -6104,19 +6115,23 @@ button.primary .hint {
     transform: translateX(320%);
   }
 }
+/* 减动效：扫不动了，但必须仍是一条**看得见**的光带（2026-10-18 用户反馈 1：原先
+   opacity 0.35 太暗，用户读成「光条消失了」）。与 update-dialog.css 的不定态进度条同款
+   口径——压平动效 ≠ 藏掉指示物；这里把整条轨道填满 accent 并给足不透明度。 */
 @media (prefers-reduced-motion: reduce) {
   .boot-bar::after {
     animation: none;
     width: 100%;
-    opacity: 0.35;
+    opacity: 1;
   }
 }
 /* 应用内「减弱动效」开关（`:root[data-motion='reduced']`）只压 duration / iteration-count、
-   不改 animation-name ⇒ 滑块会停在终态 translateX(320%)，移出轨道、只剩一条空沟。 */
+   不改 animation-name ⇒ 滑块会停在终态 translateX(320%)，移出轨道、只剩一条空沟。
+   所以这条回落必须自己把 name 关掉并钉回静态可见光带。 */
 :root[data-motion='reduced'] .boot-bar::after {
   animation: none;
   width: 100%;
-  opacity: 0.35;
+  opacity: 1;
 }
 
 /* ---- C3 领域限定检索：检索范围选择器（1016 独占追加区块；勿在他处重排） ---- */
