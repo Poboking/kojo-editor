@@ -50,6 +50,9 @@ function isCommentLine(line) {
 const NEUTRAL_DIRS = [
   'packages/kernel/src',
   'packages/plugin-api/src',
+  // 口上项目工作流的共享实现（向导 / 面板 / 署名 / 制品 / 许可）：两个 adapter 共用，
+  // 玩家游戏的差异必须经 deps 注入。2026-10-19 AM-1 P4-2 批收编。
+  'packages/kojo-project-kit/src',
   'packages/app/src-tauri/src',
   'packages/app/src/bridge',
   'packages/app/src/bootstrap.ts', // 例外说明：bootstrap 是宿主组合根，见下方豁免

@@ -19,8 +19,8 @@ import {
   sortDirEntries,
   TUTORIALS_MIN_H,
   type KojoProjectsPanelDeps,
-} from '../src/kojo-projects-panel';
-import type { PackageAttribution } from '../src/attribution';
+} from '@kojo/kojo-project-kit';
+import type { PackageAttribution } from '@kojo/kojo-project-kit';
 import { NEW_KOJO_PROJECT_OVERLAY_ID } from '../src/new-project-wizard';
 import { IMPORT_KOJO_OVERLAY_ID } from '../src/import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID } from '../src/deploy-wizard';

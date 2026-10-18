@@ -38,7 +38,8 @@
 import { REFERENCE_TUTORIAL } from './tutorial-reference';
 
 /** 教程 id（入口与 overlay 常量按它三选一；`reference` = 语法全表附录） */
-export type TutorialId = 'sugar' | 'kojo' | 'reference';
+export type { TutorialId } from '@kojo/kojo-project-kit';
+import type { TutorialId } from '@kojo/kojo-project-kit';
 /** 一条样例：作者写的（kojo）+（可选）它编译成的 ERB（erb） */
 export interface TutorialSample {
   /** 样例说明（缺省 = 无说明） */

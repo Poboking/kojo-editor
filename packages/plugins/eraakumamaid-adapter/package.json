@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kojo/plugin-api": "workspace:*"
+    "@kojo/plugin-api": "workspace:*",
+    "@kojo/kojo-project-kit": "workspace:*"
   }
 }

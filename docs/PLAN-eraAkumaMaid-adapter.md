@@ -157,7 +157,8 @@
 | scaffold（模板包为骨架来源） | ✅ 已交付 | 新 `eraakumamaid-adapter/src/scaffold.ts`：以游戏自带 `口上テンプレート/新キャラ追加用パッケージ` 的 7 文件布局为清单（实测 `grep ^@` 逐文件函数归属），产物按**游戏根相对路径**铺开（`CSV/CHARA/CHARA<n>.csv` + `ERB/EVENT_K/<n>/*.kojo`），与社区分发形态同构 |
 | WelcomeView 文案 | ✅ 已改 | `eraTW 口上编辑器` → `era 口上编辑器`（多游戏品牌位；功能文案本就游戏无关） |
 | nameGlossary 评估 | ✅ 已结 | P3 已交付 45 条词条（变量名 37 + 文件族 8）；角色名 0 条＝本游戏角色名即日文名、无对照需求 |
-| **向导族 UI 接线**（新建/导入/部署/发布浮层） | ⏳ 未做 | 三件套的**纯逻辑**已共享，但四个 `ui.overlay` 浮层与命令贡献仍整块住在 `eratw-adapter/src/{new-project,import,deploy,publish}-wizard.ts`（2,984 行）。接 AM 需要把这四族搬进共享层并按 adapter 供数——**单独立架构批**（风险表 #5 的"独立架构批"口径不变） |
+| **向导族 UI 接线**（新建/导入/部署/发布浮层） | ✅ 已交付（2026-10-19） | 新建共享包 **`packages/kojo-project-kit`**：原住 eratw-adapter 的 11 个模块（四个向导 + 项目面板 + 包操作 + 发布纯函数 + 署名 / 制品 / 许可 / 新建条目 / 部署，约 3.7k 行）经 grep 实测**零 eraTW 知识**（游戏名 / 口上前缀 / 日文路径 0 命中）⇒ 整体上移。adapter 侧只剩「数据 + 委派」薄层与 `overlay-ids.ts`（overlay 命名空间归各游戏，两 adapter 同名会互相顶掉）。游戏差异全部改由 deps 注入：脚手架（`deps.scaffold`）、核心面数、附加下拉字段（eraTW 的「剧本号」→ `extraFields`，AM 不提供 ⇒ 连那一行都不渲染）、预览补充说明。**AM 首次接上面板 + 四个向导**，与 eratw 能力对齐（`openTutorial` 改可选 ⇒ 无内置教程的游戏不渲染教程区） |
+| **`GameAdapter.scaffold?()` 契约** | ✅ 已兑现（2026-10-19） | 该契约位（落盘态 `{createdFiles, report}`）**此前两个 adapter 都是空的**。共享 helper `writeScaffoldFiles`（逐字节写、不覆盖、可只写点名文件）+ 两 adapter 各自的落点口径：eraTW 落角色个人口上目录、eraAkumaMaid 落游戏根子树（`ERB/EVENT_K/<n>/` + `CSV/CHARA/`）——**照搬 eraTW 的落点会把文件铺错层**，这是两个游戏的真实差异。7 条契约测试钉住落点 / 不覆盖 / `faces` 筛选 / CSV 单 BOM |
 | sav 接入 | ⏳ 远期 | 本游戏无 `sav/`，不做 |
 
 ---
@@ -170,7 +171,7 @@
 | 2 | sav 缺失 ⇒ 状态回放/注入全线 inactive | 中 | 契约内优雅降级（状态面板可见）；作者实机生成 sav 后独立取证 Emuera 1824 sav 协议，**不假定 eraTW 结论平移** |
 | 3 | 同名多定义（`EVENTTRAIN`/`EVENTEND` 每角色一份 + TRAIN/ 一份） | 中 | P1 验收项：erb-parser 索引/导航树对重名可见（分组或歧义标记），不静默合并 |
 | 4 | `.kojo` 糖面表工作量大（eraTW 37 面，本游戏约 20 面但函数名全异） | 中 | fail-closed 契约保证不产错产物；按主链路增量交付；**日文社区是否优先做糖语言需用户拍板** |
-| 5 | 「我的口上项目」向导族（新建/导入/部署/发布）现住 eratw-adapter，第二个游戏面临「复制一份」vs「抽取共享骨架进 kernel/plugin-api」 | 中 | **已定且已部分落地（2026-10-18 用户决策②）**：抽共享骨架、不复制。脚手架那一族已抽完（`plugin-api/src/scaffold.ts`，两 adapter 共用）；四个 `ui.overlay` 浮层（2,984 行）仍需单独立架构批——见 §五 P4 实况表 |
+| 5 | 「我的口上项目」向导族（新建/导入/部署/发布）现住 eratw-adapter，第二个游戏面临「复制一份」vs「抽取共享骨架进 kernel/plugin-api」 | 中 | **已闭环（2026-10-19）**：抽共享骨架、不复制。落地形态是**新包 `packages/kojo-project-kit`** 而非塞进 `plugin-api`——契约包零依赖（连 React 都没有），而向导是 React 组件（`createElement` 风格）；新包放在 `packages/` 而不是 `packages/plugins/` 下，于是 C 项（插件禁交叉 import）不适用，同时把它的 `src` 加进 A 项零游戏名词区。⚠ 剩余**唯一**未共享的是「宿主接线」段（谁注入什么、监听哪些事件）——那是组合根职责，两 adapter 各留一份是对的；**要小心的是别把它当成"又复制了"而硬抽一个公共件**，那会把宿主服务装配变成参数地狱 |
 | 6 | 审计合规（新插件必须进 `ADAPTER_PLUGIN_DIRS`；游戏名词只准住 adapter） | 低 | P0 布线时一并登记；`pnpm audit:decoupling` 每期必跑 |
 | 7 | 日文游戏的 UI 标签/糖表层语言策略（.kojo 表层是中文语言层，住契约） | 低 | P3 决策点：糖语言对日文社区的价值排序 |
 

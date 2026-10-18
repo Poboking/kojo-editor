@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { isPathUnder } from '@kojo/plugin-api';
-import { NEW_ITEM_MENU, newItemPreviewName, resolveNewItemPath } from '../src/new-item';
+import { NEW_ITEM_MENU, newItemPreviewName, resolveNewItemPath } from '@kojo/kojo-project-kit';
 
 const D = 'C:/app/workspaces/p1/我的作品-灵梦 v1.0';
 const ok = (name: string, kind: 'folder' | 'kojo' | 'erb' | 'txt') => {

@@ -20,10 +20,10 @@
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { DirEntry, UIPanelProps, WorkspaceArtifact, WorkspaceProject } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
-import { attributionSummary, type AttributionState, type PackageAttribution } from './attribution';
+import { attributionSummary, type AttributionState, type PackageAttribution } from '@kojo/kojo-project-kit';
 import type { PanelStatus } from './package-actions';
-import { NEW_ITEM_MENU, newItemPreviewName, type NewItemKind } from './new-item';
-import type { TutorialId } from './tutorial-content';
+import { NEW_ITEM_MENU, newItemPreviewName, type NewItemKind } from '@kojo/kojo-project-kit';
+import type { TutorialId } from './tutorial';
 
 /** 目录列举态（闭包缓存值）：在途 / 失败（带原因）/ 已加载 */
 export type DirListState = DirEntry[] | 'loading' | { error: string };
@@ -57,8 +57,11 @@ export interface KojoProjectsPanelDeps {
    * 没有能力的入口不灰着占位）。
    */
   openImportWizard?(): void;
-  /** 打开内置教程（E6；浮层内容见 `tutorial-content.ts`） */
-  openTutorial(which: TutorialId): void;
+  /**
+   * 打开内置教程（E6）。**可选**：没有教程内容的游戏不传，面板底部的教程区
+   * 整块不渲染（不灰着占位——没有的能力不装样子）。
+   */
+  openTutorial?(which: TutorialId): void;
   /** 包操作反馈条内容（P-D；null → 状态条不渲染） */
   status(): PanelStatus | null;
   /** 手动关闭反馈条 */
@@ -764,7 +767,9 @@ export function createKojoProjectsPanel(
      * 写不下去时抬头就能找到，不藏在菜单里。行按钮与树行同族（度量 / hover /
      * focus-visible 复用 styles.css 的行按钮组）。
      */
-    const tutorials = h(
+    // 取到局部常量：`deps.openTutorial` 在箭头函数里的收窄不可靠
+    const openTutorial = deps.openTutorial;
+    const tutorials = openTutorial === undefined ? null : h(
       'div',
       {
         className: 'kp-tutorials',
@@ -777,7 +782,7 @@ export function createKojoProjectsPanel(
         {
           className: 'kp-tutorial-btn',
           title: '.kojo 语言的每一种写法，以及它编译成的 ERB（每种写法都有一条对照样例）',
-          onClick: () => deps.openTutorial('sugar'),
+          onClick: () => openTutorial('sugar'),
         },
         ic('wand', 14, '✦'),
         h('span', { className: 'kp-tutorial-name' }, '.kojo 语言教程'),
@@ -787,7 +792,7 @@ export function createKojoProjectsPanel(
         {
           className: 'kp-tutorial-btn',
           title: '口上从选游戏目录到部署进游戏的全流程（含导出、许可与常见故障查法）',
-          onClick: () => deps.openTutorial('kojo'),
+          onClick: () => openTutorial('kojo'),
         },
         ic('book', 14, '▤'),
         h('span', { className: 'kp-tutorial-name' }, '口上教程'),
@@ -797,7 +802,7 @@ export function createKojoProjectsPanel(
         {
           className: 'kp-tutorial-btn',
           title: '现行全部写法的对照表：每种写法编译成什么、哪些值不填、写错时的提示原文（两份教程的附录）',
-          onClick: () => deps.openTutorial('reference'),
+          onClick: () => openTutorial('reference'),
         },
         ic('structure', 14, '▦'),
         h('span', { className: 'kp-tutorial-name' }, 'kojo 语法全表'),

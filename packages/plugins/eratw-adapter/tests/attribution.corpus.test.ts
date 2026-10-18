@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
-import { readPackageAttribution } from '../src/attribution';
+import { readPackageAttribution } from '@kojo/kojo-project-kit';
 
 const SMOKE = process.env.KOJO_SMOKE_PROJECT;
 

@@ -30,7 +30,7 @@ import {
   readPackageSources,
   type ArtifactPlan,
   type KojoCompiler,
-} from './artifact';
+} from '@kojo/kojo-project-kit';
 import { deployPackage, type DeployTargetOk, type PendingDeploy } from './deploy';
 
 /** 包操作反馈种类 */

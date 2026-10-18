@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { SugarCompiledBytes } from '@kojo/plugin-api';
-import { isKojoSource, planArtifacts, toRelPath, type ArtifactSource, type KojoCompiler } from '../src/artifact';
+import { isKojoSource, planArtifacts, toRelPath, type ArtifactSource, type KojoCompiler } from '@kojo/kojo-project-kit';
 
 const enc = new TextEncoder();
 const src = (relPath: string, text: string): ArtifactSource => ({ relPath, bytes: enc.encode(text) });

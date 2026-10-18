@@ -7,7 +7,7 @@ import {
   type WorkspaceArtifact,
   type WorkspaceProject,
 } from '@kojo/plugin-api';
-import { LICENSE_CHOICES } from '../src/licenses';
+import { LICENSE_CHOICES } from '@kojo/kojo-project-kit';
 import {
   PACK_ID_PREFIX,
   buildPublishDraft,
@@ -30,8 +30,8 @@ import {
   versionProblem,
   zipBaseName,
   zipPublishDefaults,
-} from '../src/publish-pack';
-import type { ArtifactEntry, ArtifactPlan } from '../src/artifact';
+} from '@kojo/kojo-project-kit';
+import type { ArtifactEntry, ArtifactPlan } from '@kojo/kojo-project-kit';
 
 /**
  * 「发布口上」纯函数半边（用户反馈 4 批）的判据。

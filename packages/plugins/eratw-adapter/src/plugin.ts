@@ -8,6 +8,8 @@ import type {
   OpJournal,
   Plugin,
   ProjectService,
+  ScaffoldOptions,
+  ScaffoldResult,
   SugarTranspileService,
   VariableSchema,
   WorkspaceArtifact,
@@ -26,14 +28,17 @@ import { createEratwConventions } from './conventions';
 import { loadEratwVariableSchema } from './variable-schema';
 import { loadEratwCallProtocol, type EratwCallProtocol } from './call-protocol';
 import { createEratwFaceTable } from './face-templates';
+import { scaffoldKojoProject } from './scaffold';
 import { ERATW_NAME_GLOSSARY } from './name-glossary';
-import { createKojoProjectsPanel, type DirListState } from './kojo-projects-panel';
-import { readPackageAttribution, readSourceAttribution, type AttributionState as AttrState } from './attribution';
-import { createPackageActions } from './package-actions';
-import { resolveNewItemPath, type NewItemKind } from './new-item';
+import { createKojoProjectsPanel, type DirListState } from '@kojo/kojo-project-kit';
+import { readPackageAttribution, readSourceAttribution, type AttributionState as AttrState } from '@kojo/kojo-project-kit';
+import { createPackageActions } from '@kojo/kojo-project-kit';
+import { resolveNewItemPath, type NewItemKind } from '@kojo/kojo-project-kit';
 import { workspaceChangeOf } from './watch-scope';
-import type { KojoCompiler } from './artifact';
+import type { KojoCompiler } from '@kojo/kojo-project-kit';
+import { writeScaffoldFiles } from '@kojo/kojo-project-kit';
 import {
+  ERATW_SCAFFOLD_DEPS,
   NEW_KOJO_PROJECT_OVERLAY_ID,
   createNewKojoProjectWizard,
   listMarketTemplates,
@@ -550,6 +555,45 @@ export function createEratwAdapterPlugin(): Plugin {
           },
         ],
 
+        /**
+         * 生成新角色口上骨架并**直接落盘**（契约 v0.3 的 `scaffold` 位）。
+         *
+         * 这是不经 UI 的直通路径：向导走 `workspaces.createArtifact`（产物落在作者
+         * 工作区），本方法写进游戏目录——给脚本 / 批量初始化用。因此落点必须显式：
+         * `options.targetDir` 缺省取该角色的个人口上目录；两者都没有就报错，
+         * **不替调用方猜目录**（共享层不认识任何游戏的目录布局）。
+         *
+         * 契约的 options 只有展示字段，没有作者 / 版本 / 许可 —— 这里取最小默认：
+         * 作者留空、版本 `1.0`、不生成 LICENSE。要这些字段请走向导。
+         */
+        async scaffold(characterNo: number, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
+          const proj = project.current();
+          if (!proj) throw new Error('当前没有打开的游戏项目，无处生成骨架。');
+          const info = proj.charaIndex.get(characterNo);
+          if (!info) throw new Error(`游戏项目里没有编号 ${characterNo} 的角色。`);
+          const targetDir = options.targetDir ?? info.kojoDir;
+          if (!targetDir) {
+            throw new Error(
+              `角色「${info.name}」在游戏目录中没有个人口上目录，无处生成（可显式给 targetDir）。`,
+            );
+          }
+          const built = scaffoldKojoProject({
+            workName: options.displayName ?? `${info.name}口上`,
+            // 契约的 options 没有作者字段；占位而非编造，报告里会点明
+            authorName: '未指定',
+            version: '1.0',
+            charaNo: characterNo,
+            charaName: info.name,
+            scriptNo: 1,
+            license: 'none',
+          });
+          // `options.faces` 收的是文件名干（与 `ScaffoldFaceSpec.stem` 同形），只影响写哪些空壳
+          const only = options.faces === undefined
+            ? undefined
+            : Object.keys(built.files).filter((rel) => options.faces!.includes(rel.replace(/\.kojo$/, '')));
+          return writeScaffoldFiles({ io, files: built.files, targetDir, only });
+        },
+
         async detect(rootDir: string): Promise<boolean> {
           // 特征组合：口上・消息域目录 + Chara CSV 目录（同时存在才成局）
           const kojoRoot = join(rootDir, ...ERATW.detect.kojoRoot);
@@ -775,6 +819,11 @@ export function createEratwAdapterPlugin(): Plugin {
           },
           onCreated: invalidateWs,
           created: ({ projectId }) => emitProjectCreated(projectId, projectRequestToken ?? undefined),
+          // 游戏侧供数（共享向导不认识本游戏的面清单 / 剧本号 / 四件套说明）
+          scaffold: ERATW_SCAFFOLD_DEPS.scaffold,
+          coreFaceCount: ERATW_SCAFFOLD_DEPS.coreFaceCount,
+          extraFields: ERATW_SCAFFOLD_DEPS.extraFields,
+          previewNote: ERATW_SCAFFOLD_DEPS.previewNote,
         }),
       });
 
