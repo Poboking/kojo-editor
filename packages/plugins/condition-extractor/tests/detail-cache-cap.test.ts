@@ -12,16 +12,27 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ComputePool, ControlFlowStatement, ErbFile, ErbIndex, GameProject, Logger } from '@kojo/plugin-api';
 import { ConditionEngine } from '../src/engine';
+import { conditionExtractorTasks } from '../src/offload';
 
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 const project = { rootDir: 'D:/game', adapterId: 'eratw', inputDigest: 'd1' } as unknown as GameProject;
 
-function makeComputeStub(): ComputePool {
+/**
+ * 计算池替身：`offload` 执行注册的任务实现（PS-11 起主循环经它分发
+ * `condition.extractFile`；ensureIndex 触发全量抽取时要走真任务，不能让
+ * "stub 缺 offload"被引擎的 catch 吞成静默空转）。
+ */
+function makeComputeStub(tasks: ReturnType<typeof conditionExtractorTasks>): ComputePool {
   return {
     async runSliced<T, R>(items: readonly T[], _o: unknown, fn: (t: T, i: number) => R | Promise<R>): Promise<R[]> {
       const out: R[] = [];
       for (let i = 0; i < items.length; i++) out.push(await fn(items[i]!, i));
       return out;
+    },
+    async offload<R>(kind: string, payload: unknown): Promise<R> {
+      const impl = tasks[kind];
+      if (!impl) throw new Error(`No local implementation registered for compute task '${kind}'`);
+      return (await impl(payload as never)) as R;
     },
     stats: () => ({ tasks: [], yields: 0, interactiveActive: false, offload: { parallel: false, dispatched: 0, fellBack: 0, inline: 0 } }),
   } as unknown as ComputePool;
@@ -70,6 +81,17 @@ function makeHarness(count: number, caps?: { maxDetails?: number; maxFiles?: num
 
   let readCount = 0;
   let scanCount = 0;
+  /** 纯扫描器：任务表（全量抽取）与 deps.scanControlFlow（按需明细）共用同一份口径 */
+  const scanOnce = (text: string): readonly ControlFlowStatement[] => {
+    scanCount++;
+    const out: ControlFlowStatement[] = [];
+    text.split('\n').forEach((line, idx) => {
+      const m = /^IF\s+(.*)$/.exec(line);
+      if (m) out.push({ kind: 'IF', expression: m[1]!, depth: 0, line: idx + 1 });
+      if (/^ENDIF/.test(line)) out.push({ kind: 'ENDIF', expression: '', depth: 0, line: idx + 1 });
+    });
+    return out;
+  };
   const engine = new ConditionEngine({
     log: silentLog,
     getProject: () => project,
@@ -80,18 +102,9 @@ function makeHarness(count: number, caps?: { maxDetails?: number; maxFiles?: num
       if (!f) throw new Error(`not found: ${path}`);
       return erbText(Number(path.replace(/\D+/g, '')));
     },
-    scanControlFlow: async (text: string): Promise<ControlFlowStatement[]> => {
-      scanCount++;
-      const out: ControlFlowStatement[] = [];
-      text.split('\n').forEach((line, idx) => {
-        const m = /^IF\s+(.*)$/.exec(line);
-        if (m) out.push({ kind: 'IF', expression: m[1]!, depth: 0, line: idx + 1 });
-        if (/^ENDIF/.test(line)) out.push({ kind: 'ENDIF', expression: '', depth: 0, line: idx + 1 });
-      });
-      return out;
-    },
+    scanControlFlow: async (text: string): Promise<ControlFlowStatement[]> => [...scanOnce(text)],
     getSchemaLookup: () => undefined,
-    compute: makeComputeStub(),
+    compute: makeComputeStub(conditionExtractorTasks(scanOnce)),
     ...(caps ? { detailCacheCaps: caps } : {}),
   });
   return { engine, reads: () => readCount, scans: () => scanCount };
@@ -171,14 +184,15 @@ describe('明细 / 正文缓存上限', () => {
     } as ErbFile);
     const index = { files, byName: byNameOf(files) } as unknown as ErbIndex;
     const readMock = vi.fn(async () => ['@FN_A()', 'IF CFLAG:2 >= 500', 'ENDIF', '', '@FN_B()', 'IF CFLAG:2 >= 900', 'ENDIF', ''].join('\n'));
+    const scanNone = (): ControlFlowStatement[] => [];
     const engine = new ConditionEngine({
       log: silentLog,
       getProject: () => project,
       getIndex: () => index,
       readFile: readMock,
-      scanControlFlow: async () => [],
+      scanControlFlow: async () => scanNone(),
       getSchemaLookup: () => undefined,
-      compute: makeComputeStub(),
+      compute: makeComputeStub(conditionExtractorTasks(scanNone)),
     });
     await engine.functionPredicates('FN_A');
     await engine.functionPredicates('FN_B');

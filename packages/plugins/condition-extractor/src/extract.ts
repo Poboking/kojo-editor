@@ -478,6 +478,23 @@ export function extractFunctionPredicates(
 }
 
 /**
+ * 给依赖逐个打语义标注（**就地**，`StateDependency.schema`）。
+ *
+ * 口径（用依赖的**最后一个下标**查询——角色变量 `CFLAG:{角色}:{项}` 的"项"才是变量号）
+ * 与改动前的内联循环逐字一致。2026-10-18 PS-11 抽成独立函数：全量抽取的谓词 CPU 搬进
+ * worker 后 `lookup` 是函数、跨不过结构化克隆，只能回主线程补标注——两处必须共用这一份，
+ * 否则"worker 抽取"与"内联回退抽取"会给出两种 schema。
+ */
+export function applySchemaLookup(dependencies: readonly StateDependency[], lookup: SchemaLookup): void {
+  for (const dep of dependencies) {
+    const raw = dep.indices.length > 0 ? dep.indices[dep.indices.length - 1]! : undefined;
+    const idx = raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : raw;
+    const info = lookup(dep.name, idx);
+    if (info) dep.schema = info;
+  }
+}
+
+/**
  * 抽取单函数条件（纯函数，聚合视图）。
  * @returns 无条件谓词时返回 null（调用方不收录）。
  */
@@ -527,14 +544,7 @@ export function extractFunctionConditions(
   );
 
   // 语义标注：用依赖的**最后一个下标**查询（角色变量 `CFLAG:{角色}:{项}` 的"项"才是变量号）
-  if (opts.lookup) {
-    for (const dep of dependencies) {
-      const raw = dep.indices.length > 0 ? dep.indices[dep.indices.length - 1]! : undefined;
-      const idx = raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : raw;
-      const info = opts.lookup(dep.name, idx);
-      if (info) dep.schema = info;
-    }
-  }
+  if (opts.lookup) applySchemaLookup(dependencies, opts.lookup);
 
   return {
     normalizedName: fn.normalizedName,

@@ -322,11 +322,13 @@ describe('装饰热路径读数（真装饰器 + 6000 行合成文件）', () =>
     );
   });
 
-  it('装配表判据：两条 ERB 装饰在 worker 表里、糖那条不在（不静默、可核对）', () => {
+  it('装配表判据：两条 ERB 装饰 + 条件抽取整链在 worker 表里、糖那条不在（不静默、可核对）', () => {
     expect(hasWorkerTask('erb.structureDecorations')).toBe(true);
     expect(hasWorkerTask('erb.exprSyntaxDecorations')).toBe(true);
     expect(hasWorkerTask('sugar.diagnostics')).toBe(false);
+    // PS-11 起 `condition.extractFile`（单文件抽取整链）也经同一张装配表出货
     expect(Object.keys(computeTasks).sort()).toEqual([
+      'condition.extractFile',
       'erb.exprSyntaxDecorations',
       'erb.parseFile',
       'erb.scanControlFlow',

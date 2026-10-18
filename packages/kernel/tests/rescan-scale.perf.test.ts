@@ -68,10 +68,10 @@ import {
   writeSynthCorpus,
   type SynthCorpus,
 } from './helpers/synth-eratw-corpus';
-import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
+import { createErbParserPlugin, scanControlFlow } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
-import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
+import { createConditionExtractorPlugin, conditionExtractorTasks } from '@kojo/plugin-condition-extractor';
 
 const HEAVY = process.env.KOJO_PERF_HEAVY === '1';
 /** 两档规模：默认档只留轻量档（重档进池会把同池计时断言饿死——PITFALLS §72） */
@@ -440,6 +440,12 @@ async function measureTier(files: number): Promise<RoundReading[]> {
         storageBackend: new MemoryStorageBackend(),
         logger,
       });
+      // 宿主装配（与 app/bootstrap 同构）：node 桥无 worker 通道，条件抽取的
+      // `condition.extractFile` 任务（PS-11 起主循环每文件一条）需要本地实现兜底，
+      // 不注册则 offload 抛错、抽取全 skip（condFunctions 归零）。
+      for (const [kind, impl] of Object.entries(conditionExtractorTasks(scanControlFlow))) {
+        kernel.compute.registerTask(kind, impl as never);
+      }
       await kernel.start();
       try {
         const cold = await runRound(kernel, corpus, logs, 'COLD', { closeFirst: false });

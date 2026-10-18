@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   ComputePool,
   ComputePoolStats,
+  ComputeTaskTable,
   ConditionIndex,
   ControlFlowStatement,
   ErbFile,
@@ -10,17 +11,20 @@ import type {
   Logger,
 } from '@kojo/plugin-api';
 import { ConditionEngine } from '../src/engine';
+import { conditionExtractorTasks } from '../src/offload';
 import type { ExtractExpect, FileBucket } from '../src/snapshot';
 
 /**
  * 引擎侧的按文件增量测试。
  *
- * 计算池只用得到 `runSliced` 与 `stats`（后者被引擎用来报"扫描段走了几条 worker"），
- * 而解耦审计 B 项禁止插件测试 import `@kojo/kernel` 取真池（erb-parser/tests/support.ts
+ * 计算池只用得到 `runSliced` / `offload` / `stats`（`offload` = PS-11 起主循环的
+ * `condition.extractFile` 分发；`stats` 被引擎用来报"抽取段走了几条 worker"），而
+ * 解耦审计 B 项禁止插件测试 import `@kojo/kernel` 取真池（erb-parser/tests/support.ts
  * 有同款说明），故只实现被 exercised 的方法。
  */
-function makeComputeStub(opts: { offload?: ComputePoolStats['offload'] } = {}): ComputePool {
+function makeComputeStub(opts: { offload?: ComputePoolStats['offload']; tasks?: ComputeTaskTable } = {}): ComputePool {
   const offload = opts.offload ?? { parallel: false, dispatched: 0, fellBack: 0, inline: 0 };
+  const tasks = opts.tasks ?? {};
   return {
     async runSliced<T, R>(
       items: readonly T[],
@@ -30,6 +34,14 @@ function makeComputeStub(opts: { offload?: ComputePoolStats['offload'] } = {}): 
       const out: R[] = [];
       for (let i = 0; i < items.length; i++) out.push(await fn(items[i]!, i));
       return out;
+    },
+    // 模拟真池"有通道"形态：offload 派发（dispatched++）并执行注册的本地任务实现。
+    // 缺 kind 与真池同口径：显式抛错（不静默）。
+    async offload<R>(kind: string, payload: unknown): Promise<R> {
+      const impl = tasks[kind];
+      if (!impl) throw new Error(`No local implementation registered for compute task '${kind}'`);
+      offload.dispatched++;
+      return (await impl(payload as never)) as R;
     },
     // 与真池同构：stats() 每次返回**快照副本**（真池 `offload: {...offloadStat}`）。
     // 直接回原对象的话，"本次前后之差"永远读成 0 —— 替身和实现分叉，断言就白加了。
@@ -110,7 +122,7 @@ function makeEngine(opts: {
   /** 缺省 = 索引不提供 fileSizes（退回纯 mtime 判据） */
   sizes?: Map<string, number | null>;
   port?: Partial<Pick<Port, 'load' | 'save'>> & { expectFor?: () => ExtractExpect | null };
-  /** 计算池的 offload 计数（引擎的分段日志要说"扫描段走了几条 worker"） */
+  /** 计算池的 offload 计数（引擎的分段日志要说"抽取段走了几条 worker"） */
   offload?: ComputePoolStats['offload'];
   /** 收集 info 级日志（分段剖面那条形迹） */
   logs?: string[];
@@ -122,7 +134,18 @@ function makeEngine(opts: {
   const mtimes = opts.mtimes === undefined ? new Map<string, number | null>([[A, 100], [B, 200]]) : opts.mtimes;
   const reads: string[] = [];
   const scans: string[] = [];
-  /** 桩里的 offload 计数是**可变对象**：scanControlFlow 每走一次就 +1，等价于真实通道 dispatched */
+  /**
+   * 纯扫描器（PS-11 起全量抽取的扫描住在任务里；deps.scanControlFlow 只剩按需明细路径）。
+   * 造表器吃它 ⇒ 任务实现与明细路径共用同一份骨架口径。
+   */
+  const scanOnce = (): readonly ControlFlowStatement[] => {
+    scans.push('x');
+    return [
+      { kind: 'IF', expression: 'CFLAG:2>=500', depth: 0, line: 2 },
+      { kind: 'ENDIF', expression: '', depth: 0, line: 3 },
+    ];
+  };
+  /** 桩里的 offload 计数是**可变对象**：任务每派发一次就 +1，等价于真实通道 dispatched */
   const offload = opts.offload ?? { parallel: true, dispatched: 0, fellBack: 0, inline: 0 };
   const log: Logger = opts.logs
     ? { ...silentLog, info: (m: string) => opts.logs!.push(m) }
@@ -136,14 +159,7 @@ function makeEngine(opts: {
       return 'IF CFLAG:2>=500\nENDIF\n';
     },
     ...(opts.readFiles ? { readFiles: opts.readFiles } : {}),
-    scanControlFlow: async (): Promise<ControlFlowStatement[]> => {
-      scans.push('x');
-      offload.dispatched++;
-      return [
-        { kind: 'IF', expression: 'CFLAG:2>=500', depth: 0, line: 2 },
-        { kind: 'ENDIF', expression: '', depth: 0, line: 3 },
-      ];
-    },
+    scanControlFlow: async (): Promise<ControlFlowStatement[]> => [...scanOnce()],
     getSchemaLookup: () => undefined,
     snapshot: opts.port
       ? {
@@ -152,7 +168,7 @@ function makeEngine(opts: {
           save: opts.port.save ?? (() => undefined),
         }
       : undefined,
-    compute: makeComputeStub({ offload }),
+    compute: makeComputeStub({ offload, tasks: conditionExtractorTasks(scanOnce) }),
   });
   return { engine, reads, scans };
 }
@@ -332,6 +348,7 @@ describe('ConditionEngine 按文件增量', () => {
 
   it('读文件失败的文件不留桶（坏一次不会永久缓存坏结果），其余照常', async () => {
     const saved: Map<string, FileBucket>[] = [];
+    const scanOnce = (): readonly ControlFlowStatement[] => [{ kind: 'IF', expression: 'CFLAG:2>=500', depth: 0, line: 2 }];
     const engine = new ConditionEngine({
       log: silentLog,
       getProject: () => project,
@@ -340,14 +357,14 @@ describe('ConditionEngine 按文件增量', () => {
         if (path === A) throw new Error('disk offline');
         return 'IF CFLAG:2>=500\nENDIF\n';
       },
-      scanControlFlow: async () => [{ kind: 'IF', expression: 'CFLAG:2>=500', depth: 0, line: 2 }],
+      scanControlFlow: async () => [...scanOnce()],
       getSchemaLookup: () => undefined,
       snapshot: {
         expectFor: () => EXPECT,
         load: async () => null,
         save: (b) => saved.push(new Map(b)),
       },
-      compute: makeComputeStub(),
+      compute: makeComputeStub({ tasks: conditionExtractorTasks(scanOnce) }),
     });
     const out = await engine.run();
     expect(out.byFunction.has('M_KOJO_K1_B')).toBe(true);

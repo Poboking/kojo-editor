@@ -9,7 +9,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ControlFlowStatement, LineDecoration } from '@kojo/plugin-api';
-import { EXPR_SYNTAX_DECORATIONS_TASK, conditionExtractorTasks, exprSyntaxDecorations } from '../src/offload';
+import {
+  CONDITION_EXTRACT_FILE_TASK,
+  EXPR_SYNTAX_DECORATIONS_TASK,
+  conditionExtractorTasks,
+  exprSyntaxDecorations,
+} from '../src/offload';
 import { collectExprSyntaxDecorations } from '../src/decorator';
 
 /** 假骨架：一条残句 IF + 一条正常的 WHILE */
@@ -28,8 +33,13 @@ const viaTask = (path: string, text: string): LineDecoration[] =>
 
 describe('condition-extractor · 可搬运任务 erb.exprSyntaxDecorations', () => {
   it('kind 常量与表键一致（写错会静默退化成"宿主异步就地"，所以钉住）', () => {
-    expect(Object.keys(conditionExtractorTasks(SCAN))).toEqual([EXPR_SYNTAX_DECORATIONS_TASK]);
+    // PS-11 起表里住两条：装饰链 + 全量抽取链（`condition.extractFile`）
+    expect(Object.keys(conditionExtractorTasks(SCAN))).toEqual([
+      EXPR_SYNTAX_DECORATIONS_TASK,
+      CONDITION_EXTRACT_FILE_TASK,
+    ]);
     expect(EXPR_SYNTAX_DECORATIONS_TASK).toBe('erb.exprSyntaxDecorations');
+    expect(CONDITION_EXTRACT_FILE_TASK).toBe('condition.extractFile');
   });
 
   it('任务实现 === 既有管线（collectExprSyntaxDecorations + 同一扫描器）', () => {

@@ -23,9 +23,10 @@ import type {
   GameProject,
   Logger,
 } from '@kojo/plugin-api';
-import { extractFunctionConditions, extractFunctionPredicates, type SchemaLookup } from './extract';
+import { applySchemaLookup, extractFunctionPredicates, type SchemaLookup } from './extract';
 import { parseExpression } from './expr';
-import { mergeBuckets, planReuse, type ExtractExpect, type FileBucket, type FileStats } from './snapshot';
+import { CONDITION_EXTRACT_FILE_TASK, type ExtractFileResult } from './offload';
+import { mergeBuckets, planReuse, type ExtractExpect, type FileBucket } from './snapshot';
 
 /**
  * 明细 / 正文缓存上限（2026-10-18 性能批）。
@@ -110,9 +111,10 @@ export interface ConditionEngineDeps {
   /**
    * 控制流骨架扫描（erb.parser 服务）。
    *
-   * **异步**：调用方传 `scanControlFlowOffloaded`（走并行通道）——扫描是纯文本变换、
-   * 无外部依赖，是全量抽取里最贵的一段 CPU（真实语料约 40% 的 6.2 s），
-   * 必须搬出主线程（2026-10-12「内核优化」批）。无通道时它自动内联。
+   * **异步**：调用方传 `scanControlFlowOffloaded`（走并行通道）、无通道时自动内联。
+   * 2026-10-18 PS-11 起**全量抽取主循环不再走它**——整条单文件抽取链（扫描 + 谓词抽取）
+   * 已合成 `condition.extractFile` 任务搬进 worker；本依赖只剩**按需明细**
+   * （`functionPredicates`：读单文件 → 扫 → 逐条解析）这条交互路径在用。
    */
   scanControlFlow(text: string): Promise<ControlFlowStatement[]>;
   /** 当前适配器的变量语义查询（无适配器 / 无 schema 时 undefined） */
@@ -140,8 +142,9 @@ export interface ConditionEngineDeps {
   /**
    * 计算池（内核 `kernel.compute`，2026-10-12 内核优化批）。
    *
-   * 全量抽取在真实语料上是 ~6.2 s / 49.3 万谓词的**背景 CPU 洪水**——必须分窗并发
-   * 并**窗口间让出主线程**，否则"开项目后十几秒内打字卡"。
+   * 全量抽取在真实语料上是 ~6.2 s / 49.3 万谓词的**背景 CPU 洪水**。PS-11 起这段 CPU
+   * 经 `offload('condition.extractFile')` 搬上并行通道（无通道/通道失败自动内联同一份实现），
+   * 池同时保留分窗 + 窗口间让路语义（"开项目后十几秒内打字卡"的两半都由它管）。
    */
   compute: ComputePool;
   /**
@@ -157,8 +160,11 @@ export interface ConditionEngineDeps {
 
 /**
  * 抽取的窗口并发度与片预算：保证窗口之间让出主线程（背景档 → 交互优先）。
- * 2026-10-16 批量 IO 批起，文本读取改为循环外的批量预取（见 `run()` 的 `readFiles` 段），
- * 这两个常数现在只约束扫描/抽取段——档位语义一字未动。
+ * 2026-10-16 批量 IO 批起，文本读取改为循环外的批量预取（见 `run()` 的 `readFiles` 段）。
+ *
+ * 2026-10-18 PS-11 起，窗口内每项**只做装配**（取文本 + 组载荷 + `offload`），真正的
+ * 扫描与谓词抽取在 worker 槽上跑（真实并行度 = 宿主槽数，见 `bootstrap.ts`）。这里的
+ * `concurrency` 仍是窗口宽度（保住 IPC 重叠与"窗口间让路"的确定性），不承诺槽数。
  */
 const EXTRACT_CONCURRENCY = 8;
 const EXTRACT_SLICE_MS = 8;
@@ -369,7 +375,6 @@ export class ConditionEngine implements ConditionExtractorService {
 
     const t0 = Date.now();
     const lookup = this.deps.getSchemaLookup();
-    const extractOpts = lookup ? { lookup } : {};
     const mtimeOf = new Map(stamps.map((s) => [s.path, s.mtimeMs]));
     const sizeOf = new Map(stamps.map((s) => [s.path, s.size]));
     const computed = new Map<string, FileBucket>();
@@ -377,9 +382,11 @@ export class ConditionEngine implements ConditionExtractorService {
     const pending = files.filter(([path]) => !plan.reusable.has(path));
 
     /**
-     * 分段墙钟。⚠ **读盘/扫描/循环这三段之和会大于本轮总时长**：窗口里 8 个文件同时在读，
-     * 三段是叠着计时的。所以这条读数用来**看形状**（哪一段是秒级、哪一段是百毫秒级），
-     * 不能当占比读。`装载` 不在这个重叠里——它发生在分窗并发之前，是纯串行的一段。
+     * 分段墙钟。⚠ 三段是叠着计时的（窗口内 8 个文件同时在跑），用来**看形状**不是算占比。
+     * 2026-10-18 PS-11 起 `扫描` / `抽取循环` 两段是 **worker 回传的净 CPU**（任务内
+     * `performance.now` 计时，见 `./offload.ts` 的 `ExtractFileResult`）——主线程再量
+     * 只能量到通道往返，量不到"扫描本身多慢"，而读数要区分的正是这两条。无通道（内联）
+     * 时同一形状照样成立（任务在本线程跑，计时含义不变）。
      */
     let readMs = 0;
     let scanMs = 0;
@@ -389,9 +396,8 @@ export class ConditionEngine implements ConditionExtractorService {
 
     /**
      * 批量预取（2026-10-16 批量 IO 批）：pending 文件先一次性取回文本。
-     * 读取挪到抽取循环之外 ⇒ 循环里只做扫描与抽取；窗口并发/片预算/背景档
-     * 全部保持原样（读取本来就是"等 IPC"，不再是本段墙钟的主要形状）。
-     * 批量通道失败（整体抛）⇒ 退回逐文件 readFile，不把整轮打成空转。
+     * 读取挪到抽取循环之外 ⇒ 循环里只做装配与分发；批量通道失败（整体抛）⇒ 退回
+     * 逐文件 readFile，不把整轮打成空转。
      */
     let batchTexts: Map<string, string> | null = null;
     {
@@ -414,8 +420,13 @@ export class ConditionEngine implements ConditionExtractorService {
       readMs += nowMs() - r0;
     }
 
-    // 分窗并发 + 窗口间让路（内核计算池，background 档）：抽取是"开项目级联"的第二段，
-    // 4~11 s 的 CPU 洪水不能连续占住主线程（内核优化批）
+    /**
+     * 分窗并发 + 窗口间让路（内核计算池，background 档），窗口内每项把**单文件抽取整条链**
+     * `offload` 出去（2026-10-18 PS-11）：扫描与谓词抽取在 worker 槽上真并行，主线程只剩
+     * 文本装配与 schema 补标。`runSliced` 的 async 窗口整窗 `Promise.all` ⇒ 并行度不退化；
+     * 通道失败由池自动回退本地实现（同一份任务表，产出等价），这里只兜"本地实现也抛"的
+     * 理论残余（warn 跳过、不留桶——与读失败同语义面）。
+     */
     await this.deps.compute.runSliced(
       pending,
       {
@@ -442,49 +453,41 @@ export class ConditionEngine implements ConditionExtractorService {
         } finally {
           readMs += nowMs() - r0;
         }
-        let stmts: ControlFlowStatement[];
-        const s0 = nowMs();
+
+        let result: ExtractFileResult;
         try {
-          stmts = await this.deps.scanControlFlow(text);
+          result = await this.deps.compute.offload<ExtractFileResult>(CONDITION_EXTRACT_FILE_TASK, {
+            path,
+            text,
+            mtimeMs: mtimeOf.get(path) ?? null,
+            size: sizeOf.get(path) ?? null,
+            functions: file.functions.map((fn) => ({
+              normalizedName: fn.normalizedName,
+              startLine: fn.startLine,
+              endLine: fn.endLine,
+            })),
+          });
         } catch (err) {
-          this.deps.log.warn(`Condition extract skipped (scan failed): ${path} — ${String(err)}`);
+          this.deps.log.warn(`Condition extract skipped (extract failed): ${path} — ${String(err)}`);
           return;
-        } finally {
-          scanMs += nowMs() - s0;
         }
 
-        const e0 = nowMs();
-        const st: FileStats = { functions: 0, functionsWithDeps: 0, predicates: 0, unparsed: 0, dependencies: 0 };
-        const conds: FunctionConditions[] = [];
-        // 两指针切片：stmts 与 functions 均按行号升序；stmts 为空时循环自然不执行，
-        // 但仍要留一个空桶 —— 否则这个文件每次开项目都被判"没缓存"而白读白扫一遍
-        let cursor = 0;
-        for (const fn of file.functions) {
-          while (cursor < stmts.length && stmts[cursor]!.line < fn.startLine) cursor++;
-          const slice: ControlFlowStatement[] = [];
-          for (let j = cursor; j < stmts.length && stmts[j]!.line <= fn.endLine; j++) {
-            slice.push(stmts[j]!);
-          }
-          st.functions++;
-          const cond = extractFunctionConditions(fn, slice, extractOpts);
-          if (cond) {
-            conds.push(cond);
-            st.predicates += cond.predicateCount;
-            st.unparsed += cond.unparsedCount;
-            st.dependencies += cond.dependencies.length;
-            if (cond.dependencies.length > 0) st.functionsWithDeps++;
-          }
+        // schema 语义标注（lookup 是函数、跨不过结构化克隆 ⇒ 主线程补；
+        // 口径与任务内实现共用 `applySchemaLookup`，两条路不可能给出两种标注）
+        if (lookup) {
+          for (const cond of result.bucket.conds) applySchemaLookup(cond.dependencies, lookup);
         }
-        computed.set(path, { mtimeMs: mtimeOf.get(path) ?? null, size: sizeOf.get(path) ?? null, stats: st, conds });
-        extractMs += nowMs() - e0;
+        computed.set(path, result.bucket);
+        scanMs += result.scanMs;
+        extractMs += result.extractMs;
       },
     );
 
     /**
-     * 扫描段的**通道归属**（并行 vs 内联）：光看 `scan` 墙钟分不清"扫描本身慢"还是"根本没走 worker"，
-     * 而这两条要动的东西完全不同（运输层在 §5.52 落地，回退路径至今没人实测过占比）。
-     * 计数是池级累计值，取本次运行前后的**差**；同一时间窗里若别的消费方（校验段）也在 offload，
-     * 差值会把它们算进来——所以这条读数是"量级尺"，不是精确归属。
+     * 抽取段的**通道归属**（并行 vs 内联）：光看墙钟分不清"抽取本身慢"还是"根本没走 worker"，
+     * 而这两条要动的东西完全不同。计数是池级累计值，取本次运行前后的**差**；同一时间窗里
+     * 若别的消费方（校验段）也在 offload，差值会把它们算进来——所以这条读数是"量级尺"，
+     * 不是精确归属。PS-11 起这个差值覆盖的是 `condition.extractFile` 整链（扫描 + 谓词抽取）。
      */
     const offAfter = this.deps.compute.stats().offload;
     const dispatched = offAfter.dispatched - offBefore.dispatched;

@@ -121,7 +121,8 @@ export function createConditionExtractorPlugin(): Plugin {
           const tfs = await io.readTexts(paths);
           return tfs.map((tf) => tf?.text ?? null);
         },
-        // 走并行通道（无通道自动内联）：扫描是全量抽取里最贵的纯 CPU 段（真实语料约 40%）
+        // 走并行通道（无通道自动内联）：按需明细的骨架扫描（PS-11 前主循环也走它；
+        // 现在全量抽取整链已并入 condition.extractFile 任务，这里只剩明细路径）
         scanControlFlow: (text: string): Promise<ControlFlowStatement[]> => parser.scanControlFlowOffloaded(text),
         getSchemaLookup: schemaLookup,
         snapshot: snapshotPort,
@@ -197,10 +198,17 @@ export function createConditionExtractorPlugin(): Plugin {
 }
 
 export { ConditionEngine, type ConditionEngineDeps } from './engine';
-export { extractFunctionConditions, extractFunctionPredicates, collectPredicates, collectReturns, collectAssignments } from './extract';
+export { extractFunctionConditions, extractFunctionPredicates, collectPredicates, collectReturns, collectAssignments, applySchemaLookup } from './extract';
 export { parseExpression, splitTopLevelCommas, walkExpr } from './expr';
 export { diagnoseExpression } from './expr';
 export type { ExprDiagnostic } from './expr';
 export { collectExprSyntaxDecorations, type ExprSyntaxDecoration } from './decorator';
-// 可搬运任务表（装饰热路径批；装配层用 erb-parser 的纯扫描器填这张表）
-export { EXPR_SYNTAX_DECORATIONS_TASK, conditionExtractorTasks, exprSyntaxDecorations } from './offload';
+// 可搬运任务表（装饰热路径批 + PS-11 抽取 offload 批；装配层用 erb-parser 的纯扫描器填这张表）
+export {
+  EXPR_SYNTAX_DECORATIONS_TASK,
+  CONDITION_EXTRACT_FILE_TASK,
+  conditionExtractorTasks,
+  exprSyntaxDecorations,
+  extractFileBucket,
+} from './offload';
+export type { ExtractFilePayload, ExtractFileResult, ExtractFileFunction } from './offload';

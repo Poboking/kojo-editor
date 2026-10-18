@@ -8,10 +8,10 @@ import { WellKnownServices } from '@kojo/plugin-api';
 import { createKernel } from '../src/kernel';
 import { NodeBridge } from './helpers/node-bridge';
 import { MemoryStorageBackend } from './helpers/memory-storage';
-import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
+import { createErbParserPlugin, scanControlFlow } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createConventionLinterPlugin } from '@kojo/plugin-convention-linter';
-import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
+import { createConditionExtractorPlugin, conditionExtractorTasks } from '@kojo/plugin-condition-extractor';
 
 /**
  * 「迷你模式」集成冒烟 —— 用**合成 fixtures**（`fixtures/mini-game/`）验证整条只读管线，
@@ -35,6 +35,12 @@ describe.skipIf(!existsSync(MINI_DIR))('迷你模式集成冒烟（合成 fixtur
       ],
       storageBackend: new MemoryStorageBackend(),
     });
+    // 宿主装配（与 app/bootstrap 同构）：本测试不走 app 装配层，而条件抽取的
+    // compute 任务需要跨插件合成（扫描器来自 erb-parser），插件不会自己注册——
+    // 不注册则无 worker 通道时 offload 抛 "No local implementation"。
+    for (const [kind, impl] of Object.entries(conditionExtractorTasks(scanControlFlow))) {
+      kernel.compute.registerTask(kind, impl as never);
+    }
     await kernel.start();
 
     const project = await kernel.project.open(MINI_DIR);
