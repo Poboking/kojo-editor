@@ -10,6 +10,7 @@ import type {
 } from '@kojo/plugin-api';
 import { TypedEventBus } from '../src/bus';
 import { FileWatcherServiceImpl, WATCH_DEBOUNCE_MS } from '../src/watcher';
+import { WATCH_RECONNECT_MAX_DELAY_MS } from '../src/watcher-reconnect';
 
 /**
  * 内核文件监视器（BUG-5）：去抖 / 合并 / 判级 / 生命周期。
@@ -24,15 +25,19 @@ interface FakeBridge {
   fire: (kind: 'add' | 'change' | 'unlink', path: string) => void;
   /** 从第 n 次 watchDirs 的注入点投递（点名旧会话的迟到事件） */
   fireAt: (n: number, kind: 'add' | 'change' | 'unlink', path: string) => void;
-  /** 平台侧自述（started / 运行期 error） */
+  /** 平台侧自述（started / 运行期 error）：送给最近一次 watchDirs 的订阅者 */
   report: (r: WatchReport) => void;
+  /** 点名把自述送给第 n 次 watchDirs 的订阅者（旧会话的迟到 error 走这里） */
+  reportAt: (n: number, r: WatchReport) => void;
   /** 每次 watchDirs 收到的根目录列表 */
   calls: string[][];
   /** 每次 watchDirs 拿到的原始事件注入点（旧会话的句柄可以单独点名投事件） */
   sinks: WatchCallback[];
+  /** 每次 watchDirs 拿到的自述注入点 */
+  reps: Array<WatchReportCallback | null>;
   /** watchDirs 返回的取消函数被调用的次数 */
   stops: number;
-  /** 下一次 watchDirs 直接抛（模拟平台没有监视能力） */
+  /** 下一次 watchDirs 直接抛（模拟平台没有监视能力 / 目录暂时不在） */
   throwNext: Error | null;
   /** 平台不发 started 报告（老桥） */
   silent: boolean;
@@ -44,11 +49,11 @@ interface FakeBridge {
 }
 
 function makeBridge(): FakeBridge {
-  let onReport: WatchReportCallback | null = null;
   const self: FakeBridge = {
     bridge: null as unknown as PlatformBridge,
     calls: [],
     sinks: [],
+    reps: [],
     stops: 0,
     throwNext: null,
     silent: false,
@@ -57,7 +62,8 @@ function makeBridge(): FakeBridge {
     failOn: {},
     fire: (kind, path) => self.sinks.at(-1)?.(kind, path),
     fireAt: (n, kind, path) => self.sinks[n]?.(kind, path),
-    report: (r) => onReport?.(r),
+    report: (r) => self.reps.at(-1)?.(r),
+    reportAt: (n, r) => self.reps[n]?.(r),
   };
   self.bridge = {
     async watchDirs(paths: string[], ev: WatchCallback, rep?: WatchReportCallback) {
@@ -68,7 +74,7 @@ function makeBridge(): FakeBridge {
       }
       self.calls.push(paths);
       self.sinks.push(ev);
-      onReport = rep ?? null;
+      self.reps.push(rep ?? null);
       if (rep && !self.silent) {
         const failed = paths.filter((p) => self.failOn[p]);
         rep({
@@ -249,28 +255,29 @@ describe('FileWatcherServiceImpl · 监视状态判级（绝不静默）', () =>
     expect(bridge.calls).toHaveLength(0);
   });
 
-  it('平台直接抛（浏览器开发壳）→ unavailable 且原因逐根给出', async () => {
+  it('平台直接抛（目录暂时不在 / 浏览器开发壳）→ 进退避重连而非直接判死', async () => {
     const { bridge, watcher, states, warns } = makeWatcher();
     bridge.throwNext = new Error('浏览器开发壳无文件监视能力');
     await watcher.start(['C:/Game/kojo']);
 
-    expect(states.at(-1)).toEqual({
-      status: 'unavailable',
-      roots: [],
-      failures: [{ root: 'C:/Game/kojo', reason: '浏览器开发壳无文件监视能力' }],
-    });
+    expect(states.at(-1)!.status).toBe('reconnecting');
+    expect(states.at(-1)!.roots).toEqual(['C:/Game/kojo']);
+    expect(states.at(-1)!.failures[0]!.reason).toContain('浏览器开发壳无文件监视能力');
+    expect(states.at(-1)!.failures[0]!.reason).toContain('自动重连');
     expect(warns.some((m) => m.includes('File watch failed to start'))).toBe(true);
   });
 
-  it('运行期监视器自身失效 → unavailable + 告警（此后不会再有自动重载，必须说）', async () => {
+  it('运行期监视器自身失效 → reconnecting + 告警（不再静死，自动重建中且可见）', async () => {
     const { bridge, watcher, states, warns } = makeWatcher();
     await watcher.start(['C:/Game/kojo']);
     expect(states.at(-1)!.status).toBe('watching');
 
     bridge.report({ type: 'error', reason: 'the notification handle was closed' });
 
-    expect(states.at(-1)!.status).toBe('unavailable');
+    expect(states.at(-1)!.status).toBe('reconnecting');
+    expect(states.at(-1)!.roots).toEqual(['C:/Game/kojo']);
     expect(states.at(-1)!.failures[0]!.reason).toContain('handle');
+    expect(states.at(-1)!.failures[0]!.reason).toContain('自动重连');
     expect(warns.some((m) => m.includes('File watch degraded'))).toBe(true);
   });
 
@@ -370,5 +377,177 @@ describe('FileWatcherServiceImpl · 根目录折叠', () => {
     const { bridge, watcher } = makeWatcher();
     await watcher.start(['C:/Game/KOJO', 'c:/game/kojo']);
     expect(bridge.calls[0]).toEqual(['C:/Game/KOJO']);
+  });
+});
+describe('FileWatcherServiceImpl · 失效自愈（P0-5）', () => {
+  it('运行期失效 → reconnecting 可见，到点后按原根重建并恢复 watching', async () => {
+    const { bridge, watcher, states } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+    expect(states.at(-1)!.status).toBe('watching');
+
+    bridge.report({ type: 'error', reason: 'handle closed' });
+    expect(states.at(-1)!.status).toBe('reconnecting');
+    expect(bridge.calls).toHaveLength(1); // 退避窗口内还没发起重建
+
+    vi.advanceTimersByTime(1_000);
+    await drainMicrotasks();
+    expect(bridge.calls).toHaveLength(2);
+    expect(bridge.calls[1]).toEqual(['C:/Game/kojo']); // 同根重建，不换目标
+    expect(states.at(-1)!.status).toBe('watching'); // 恢复通知上了总线
+    expect(states.map((s) => s.status)).toEqual([
+      'watching',
+      'reconnecting',
+      'watching',
+    ]);
+  });
+
+  it('重建失败继续退避：1s 后第 1 次、再 2s 后第 2 次，成功即恢复', async () => {
+    const { bridge, watcher, states, warns } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+    bridge.report({ type: 'error', reason: 'dead' });
+
+    bridge.throwNext = new Error('still gone');
+    vi.advanceTimersByTime(1_000);
+    await drainMicrotasks();
+    // 平台 throw 的那次 watchDirs 不入 calls ⇒ 用告警日志数重建发起（第 1 次已失败）
+    expect(warns.some((m) => m.includes('reconnect #1 failed'))).toBe(true);
+    expect(states.at(-1)!.status).toBe('reconnecting');
+    expect(states.at(-1)!.failures[0]!.reason).toContain('已自动重连 1 次');
+    expect(states.at(-1)!.failures[0]!.reason).toContain('第 2 次将于 2 秒后');
+
+    vi.advanceTimersByTime(2_000); // 退避翻倍：必须等满 2s 才有第 2 次
+    await drainMicrotasks();
+    expect(bridge.calls).toHaveLength(2); // 第 2 次成功入册（throwNext 已被消耗）
+    expect(states.at(-1)!.status).toBe('watching');
+  });
+
+  it('连发 error 只认第一条：退避计时不被重置（句柄死后可能连报多条）', async () => {
+    const { bridge, watcher, states } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+    bridge.report({ type: 'error', reason: 'first' });
+    vi.advanceTimersByTime(999);
+    bridge.report({ type: 'error', reason: 'second' }); // 迟到的第二条
+
+    expect(states.at(-1)!.status).toBe('reconnecting');
+    expect(bridge.calls).toHaveLength(1);
+    vi.advanceTimersByTime(1); // 距第一条刚好 1000ms
+    await drainMicrotasks();
+    expect(bridge.calls).toHaveLength(2); // 按第一条定下的时刻发起，没有重计
+  });
+
+  it('连续 10 次重建失败 → unavailable 终态，之后不再发起', async () => {
+    const { bridge, watcher, states, warns } = makeWatcher();
+    bridge.throwNext = new Error('浏览器壳永远没有监视能力');
+    await watcher.start(['C:/Game/kojo']);
+    expect(states.at(-1)!.status).toBe('reconnecting');
+
+    for (let i = 0; i < 10; i++) {
+      bridge.throwNext = new Error('still no watch');
+      vi.advanceTimersByTime(WATCH_RECONNECT_MAX_DELAY_MS);
+      await drainMicrotasks();
+    }
+    expect(states.at(-1)!.status).toBe('unavailable');
+    expect(states.at(-1)!.failures[0]!.reason).toContain('连续自动重连 10 次仍失败');
+    expect(warns.some((m) => m.includes('reconnect #10'))).toBe(true);
+    // 平台每次都 throw ⇒ calls 一条没入；终态后推穿窗口也不再发起
+    expect(bridge.calls).toHaveLength(0);
+    vi.advanceTimersByTime(WATCH_RECONNECT_MAX_DELAY_MS * 3);
+    await drainMicrotasks();
+    expect(bridge.calls).toHaveLength(0);
+  });
+
+  it('重建尝试的 started 自述 watched 全空 → 算本次失败继续退避（不判死）', async () => {
+    const { bridge, watcher, states } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+    bridge.report({ type: 'error', reason: 'handle closed' });
+
+    // 目录还没回来：重建调得通但一个根都监视不上
+    bridge.failOn = { 'C:/Game/kojo': 'no such directory' };
+    vi.advanceTimersByTime(1_000);
+    await drainMicrotasks();
+    expect(bridge.calls).toHaveLength(2);
+    expect(states.at(-1)!.status).toBe('reconnecting'); // 不是终态
+
+    // 目录回来了
+    bridge.failOn = {};
+    vi.advanceTimersByTime(2_000);
+    await drainMicrotasks();
+    expect(states.at(-1)!.status).toBe('watching');
+  });
+
+  it('重建成功后再次失效：退避从 1s 重新起算（计数清零）', async () => {
+    const { bridge, watcher, states } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+    bridge.report({ type: 'error', reason: 'one' });
+    vi.advanceTimersByTime(1_000);
+    await drainMicrotasks();
+    expect(states.at(-1)!.status).toBe('watching');
+
+    bridge.report({ type: 'error', reason: 'two' });
+    expect(states.at(-1)!.failures[0]!.reason).toContain('第 1 次将于 1 秒后'); // 不是 2s/4s
+    vi.advanceTimersByTime(1_000);
+    await drainMicrotasks();
+    expect(bridge.calls).toHaveLength(3);
+  });
+
+  it('重建成功后事件流恢复：新句柄的事件照常去抖上报', async () => {
+    const { bridge, watcher, changes, states } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+    bridge.report({ type: 'error', reason: 'dead' });
+    vi.advanceTimersByTime(1_000);
+    await drainMicrotasks();
+    expect(states.at(-1)!.status).toBe('watching');
+
+    bridge.fireAt(1, 'change', 'a.erb'); // 重建后的 sink（第 2 次 watchDirs）
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(changes).toEqual([{ kind: 'change', path: 'a.erb' }]);
+  });
+
+  it('重连在途时 start 新项目：旧重建链死透，不咬新会话', async () => {
+    const { bridge, watcher, states } = makeWatcher();
+    await watcher.start(['C:/Game/A']);
+    bridge.report({ type: 'error', reason: 'dead' });
+    expect(states.at(-1)!.status).toBe('reconnecting');
+
+    await watcher.start(['C:/Game/B']); // 重建 timer 在走时用户换了项目
+    expect(states.at(-1)!.status).toBe('watching');
+    expect(states.at(-1)!.roots).toEqual(['C:/Game/B']);
+    const callsAtSwitch = bridge.calls.length;
+
+    vi.advanceTimersByTime(WATCH_RECONNECT_MAX_DELAY_MS * 2); // 推穿旧退避窗口
+    await drainMicrotasks();
+    expect(bridge.calls).toHaveLength(callsAtSwitch); // 旧根的重建一次都没发起
+    expect(bridge.calls.at(-1)).toEqual(['C:/Game/B']);
+  });
+
+  it('旧会话迟到的 error 自述被会话闸门丢弃（不污染新会话、不触发重建）', async () => {
+    const { bridge, watcher, states } = makeWatcher();
+    bridge.defer = true;
+    const first = watcher.start(['C:/Game/A']);
+    const second = watcher.start(['C:/Game/B']);
+    await drainMicrotasks();
+    bridge.settleNext[0]!();
+    await first;
+    bridge.settleNext[1]!();
+    await second;
+    expect(states.at(-1)!.status).toBe('watching');
+
+    bridge.reportAt(0, { type: 'error', reason: 'stale handle' }); // 旧会话的迟到 error
+    expect(states.at(-1)!.status).toBe('watching');
+    vi.advanceTimersByTime(WATCH_RECONNECT_MAX_DELAY_MS * 2);
+    await drainMicrotasks();
+    expect(bridge.calls).toHaveLength(2); // 没有为旧根发起任何重建
+  });
+
+  it('重连在途时 stop()：链死、状态 stopped、推穿窗口不再发起', async () => {
+    const { bridge, watcher, states } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+    bridge.report({ type: 'error', reason: 'dead' });
+    watcher.stop();
+    expect(states.at(-1)!.status).toBe('stopped');
+
+    vi.advanceTimersByTime(WATCH_RECONNECT_MAX_DELAY_MS * 2);
+    await drainMicrotasks();
+    expect(bridge.calls).toHaveLength(1); // 只有最初的 start
   });
 });

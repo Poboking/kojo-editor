@@ -57,7 +57,12 @@ export interface FileChangedEvent {
 }
 
 /** 文件监视的判级结果（`file.watchState` 载荷；由内核监视器产生） */
-export type FileWatchStatus = 'watching' | 'partial' | 'unavailable' | 'stopped';
+export type FileWatchStatus =
+  | 'watching'
+  | 'partial'
+  | 'unavailable'
+  | 'stopped'
+  | 'reconnecting';
 
 export interface FileWatchStateEvent {
   /**
@@ -65,8 +70,11 @@ export interface FileWatchStateEvent {
    * - `partial`：部分根监视失败（`failures` 逐条给原因）——**必须可见**，
    *   否则用户以为"外部改动会自动重载"，而某个目录其实没在监视；
    * - `unavailable`：一个根都没监视上 / 平台没有监视能力（如浏览器开发壳）/
-   *   **监视器运行期自身失效**（目录被卸载、底层句柄没了）——三种都意味着
-   *   "从现在起不会再有自动重载"，所以同一判级、同一呈现；
+   *   **自动重连连续失败到上限**（P0-5）——都意味着"从现在起不会再有
+   *   自动重载"，所以同一判级、同一呈现；
+   * - `reconnecting`：监视器运行期失效（目录被换掉 / 底层句柄没了）后正在
+   *   指数退避自动重建（P0-5）——**不是终态**，`failures` 带当前进度
+   *   （第几次、下次尝试前要等多久）；重建成功会再发 `watching`；
    * - `stopped`：显式停止（project.closed / 应用退出），不是故障。
    */
   status: FileWatchStatus;

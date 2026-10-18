@@ -10,6 +10,12 @@ import type {
   WatchReport,
 } from '@kojo/plugin-api';
 import { isPathUnder, pathKey } from '@kojo/plugin-api';
+import {
+  WATCH_RECONNECT_MAX_ATTEMPTS,
+  describeReconnectProgress,
+  reconnectDelayMs,
+  shouldGiveUpReconnect,
+} from './watcher-reconnect';
 
 /**
  * 内核文件监视器（BUG-5，2026-10-13）：平台原始事件 → 去抖合并 → `file.changed`。
@@ -20,6 +26,11 @@ import { isPathUnder, pathKey } from '@kojo/plugin-api';
  * 生命周期由宿主驱动（与 `register_write_domain` 同款：project.opened 起、
  * project.closed 停）。刻意**不**在 `createKernel` 里自动起：内核测试会开一堆
  * 临时项目目录，自动起监视会留下一堆活句柄（测试进程退出被拖、还制造无关事件）。
+ *
+ * 失效自愈（P0-5）：运行期失效 / 起监视失败不再直接终态 `unavailable`，而是
+ * 指数退避自动重建（1s/2s/4s…封顶 60s），状态 `reconnecting` 全程可见；
+ * 连续失败到 `WATCH_RECONNECT_MAX_ATTEMPTS` 才降级终态。重建链全程带会话号：
+ * 过期会话的回调与定时器到点一律丢弃（快速换项目时旧重连绝不咬新会话）。
  */
 
 /**
@@ -80,6 +91,14 @@ export class FileWatcherServiceImpl implements FileWatchController {
    */
   private session = 0;
 
+  /* --------------------- 失效自愈（P0-5）状态 --------------------- */
+  /** 重连定时器在走 = 重建链活着（`reconnecting` 模式）。 */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 连续失败的重建尝试数（重建成功清零）。 */
+  private reconnectFailures = 0;
+  /** 处于重连模式（`started` 自述的判级口径随之变化，见 `onReport`）。 */
+  private reconnecting = false;
+
   constructor(private readonly deps: FileWatcherDeps) {
     this.debounceMs = deps.debounceMs ?? WATCH_DEBOUNCE_MS;
   }
@@ -90,6 +109,7 @@ export class FileWatcherServiceImpl implements FileWatchController {
 
   async start(rawRoots: string[]): Promise<void> {
     const my = ++this.session;
+    this.clearReconnectState(); // 新项目新会话：旧会话的重连链必须死（定时器+计数都归零）
     await this.teardown();
     this.reportedThisSession = false;
 
@@ -125,13 +145,15 @@ export class FileWatcherServiceImpl implements FileWatchController {
       const reason = err instanceof Error ? err.message : String(err);
       this.deps.log.warn(`File watch failed to start: ${reason}`);
       if (my === this.session) {
-        this.publish('unavailable', [], roots.map((root) => ({ root, reason })));
+        // 目录可能只是暂时不在（网络盘 / 换名中）：不直接判死，进退避重连
+        this.beginReconnect(roots, reason);
       }
     }
   }
 
   stop(): void {
     this.session++; // 在途 start 的返回值与事件一律作废（否则会注册进一个"已停止"的监视器）
+    this.clearReconnectState();
     void this.teardown();
     this.publish('stopped', [], []);
   }
@@ -151,9 +173,112 @@ export class FileWatcherServiceImpl implements FileWatchController {
     }
   }
 
+  /* --------------------- 失效自愈（P0-5） --------------------- */
+
+  /**
+   * 进入重连模式：失效可见（`reconnecting`，不是静默重试），然后按退避序列安排
+   * 第一次重建。连发的失效事件只认第一条（notify 句柄死后可能连报多条，
+   * 每条都重置退避会让计时链永远走不出去）。
+   */
+  private beginReconnect(roots: string[], reason: string): void {
+    if (this.reconnectTimer) return; // 重建链已在走：后续 error 不重启计时
+    this.reconnecting = true;
+    this.reconnectFailures = 0;
+    this.publish('reconnecting', roots, [
+      { root: roots.join('; '), reason: `${reason}（${describeReconnectProgress(0)}）` },
+    ]);
+    this.scheduleReconnect(this.session, roots);
+  }
+
+  private scheduleReconnect(my: number, roots: string[]): void {
+    const delay = reconnectDelayMs(this.reconnectFailures);
+    this.reconnectTimer = setTimeout(() => {
+      void this.attemptReconnect(my, roots);
+    }, delay);
+  }
+
+  /** 一次重建尝试：teardown 旧句柄 → 重新 `watchDirs`（同根、同会话号闸门）。 */
+  private async attemptReconnect(my: number, roots: string[]): Promise<void> {
+    this.reconnectTimer = null;
+    if (my !== this.session) return; // 会话过期（换了项目/停了）：整条重建链就地丢弃
+    await this.teardown(); // 旧句柄即便还挂着也已是死的，这里统一拆干净
+    if (my !== this.session) return;
+    this.reportedThisSession = false;
+    try {
+      const un = await this.deps.platform.watchDirs(
+        roots,
+        (kind, path) => {
+          if (my === this.session) this.onRawEvent(kind, path);
+        },
+        (report) => {
+          if (my === this.session) this.onReport(roots, report);
+        },
+      );
+      if (my !== this.session) {
+        await un(); // 等待期间换会话：立刻取消，不带走新会话的句柄
+        return;
+      }
+      this.unsubscribe = un;
+      if (!this.reportedThisSession) {
+        // 桥不发 started 自述（老桥）：按请求根兜底判成功——重建成功必须发恢复通知
+        this.reconnectSucceeded();
+        this.publish('watching', roots, []);
+      }
+    } catch (err) {
+      if (my !== this.session) return;
+      this.reconnectAttemptFailed(roots, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** 一次重建尝试失败：计数、继续退避，或到上限彻底降级（终态前把账说全）。 */
+  private reconnectAttemptFailed(roots: string[], reason: string): void {
+    this.reconnectFailures += 1;
+    this.deps.log.warn(`File watch reconnect #${this.reconnectFailures} failed: ${reason}`);
+    if (shouldGiveUpReconnect(this.reconnectFailures)) {
+      this.reconnecting = false;
+      this.publish('unavailable', [], [
+        {
+          root: roots.join('; '),
+          reason: `连续自动重连 ${WATCH_RECONNECT_MAX_ATTEMPTS} 次仍失败（${reason}），不再自动重试`,
+        },
+      ]);
+      return;
+    }
+    this.publish('reconnecting', roots, [
+      {
+        root: roots.join('; '),
+        reason: `${reason}（${describeReconnectProgress(this.reconnectFailures)}）`,
+      },
+    ]);
+    this.scheduleReconnect(this.session, roots);
+  }
+
+  /** 重建成功：计数清零、退出重连模式（状态发布由调用方负责——watching/partial 各自判级）。 */
+  private reconnectSucceeded(): void {
+    this.reconnecting = false;
+    this.reconnectFailures = 0;
+  }
+
+  /** 换会话 / 停止时掐断整条重连链（定时器 + 计数 + 模式）。 */
+  private clearReconnectState(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectFailures = 0;
+    this.reconnecting = false;
+  }
+
   private onReport(requested: string[], report: WatchReport): void {
     if (report.type === 'started') {
       this.reportedThisSession = true;
+      if (this.reconnecting && report.watched.length === 0) {
+        // 重连尝试落空（目录还没回来）：不是终态，继续退避——别把「暂时不在」判成「永别」
+        const reason =
+          report.failures.map((f) => `${f.root}: ${f.reason}`).join(' | ') || '没有根监视上';
+        this.reconnectAttemptFailed(requested, reason);
+        return;
+      }
       const status: FileWatchStatus =
         report.watched.length === 0
           ? 'unavailable'
@@ -161,6 +286,9 @@ export class FileWatcherServiceImpl implements FileWatchController {
             ? 'partial'
             : 'watching';
       this.publish(status, report.watched, report.failures);
+      if (status === 'watching' || status === 'partial') {
+        this.reconnectSucceeded(); // 事件流恢复（部分恢复也算）：重连计数清零，下次失效从 1s 重新起算
+      }
       if (status !== 'watching') {
         this.deps.log.warn(
           `File watch ${status}: ok=[${report.watched.join(', ')}] ` +
@@ -169,9 +297,10 @@ export class FileWatcherServiceImpl implements FileWatchController {
       }
       return;
     }
-    // 运行期监视器自身失效：已 flush 的事件不追回，但"之后不会再有事件"必须可见
+    // 运行期监视器自身失效：已 flush 的事件不追回，但"之后不会再有事件"必须可见——
+    // 不再终态静死，转入退避自动重建（P0-5）
     this.deps.log.warn(`File watch degraded: ${report.reason}`);
-    this.publish('unavailable', [], [{ root: requested.join('; '), reason: report.reason }]);
+    this.beginReconnect(requested, report.reason);
   }
 
   private onRawEvent(kind: FileChangeKind, path: string): void {

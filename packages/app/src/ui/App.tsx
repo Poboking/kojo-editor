@@ -9,7 +9,7 @@ import {
   type ReactElement,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { ErbIndex, ErbParserService, FileStat, GameProject, RecentProject } from '@kojo/plugin-api';
+import type { ErbIndex, ErbParserService, FileStat, FileWatchStatus, GameProject, RecentProject } from '@kojo/plugin-api';
 import {errorText,  join } from '@kojo/plugin-api';
 import { removeRecentOptimistic } from './WelcomeView';
 import { invoke, isTauri } from '../bridge/invoke';
@@ -443,10 +443,33 @@ export function App(): ReactElement {
   // BUG-5：监视器自述必须可见。`partial` / `unavailable` 意味着"某些目录的外部改动
   // 不会自动重载"——这正是过去静默失灵的形状（用户以为会自动重载，其实句柄早没了）。
   // `watching` 不提示：它是常态，不是需要用户处置的事。
+  // P0-5 重连三态：`reconnecting` 只在**首次进入**时提示一次（内核按次发布进度，
+  // 逐条弹会刷屏）；从 `reconnecting` 恢复回 `watching` 必须报喜（不静默）——
+  // 正常打开项目的 `watching` 不在报喜之列，靠上一状态区分。
   useEffect(() => {
     if (!kernel) return;
+    let prev: FileWatchStatus | null = null;
     const un = kernel.bus.on('file.watchState', (st) => {
-      if (st.status === 'watching' || st.status === 'stopped') return;
+      const prior = prev;
+      prev = st.status;
+      if (st.status === 'reconnecting') {
+        if (prior !== 'reconnecting') {
+          const detail = st.failures.map((f) => `${f.root} — ${f.reason}`).join('；');
+          notify({
+            kind: 'info',
+            message:
+              '文件监视暂时不可用，正在自动重连：' +
+              `${detail || '(未给出原因)'}。期间外部改动不会自动重载，可点各面板的「刷新」按钮手动重扫。`,
+          });
+        }
+        return;
+      }
+      if (st.status === 'watching' || st.status === 'stopped') {
+        if (st.status === 'watching' && prior === 'reconnecting') {
+          notify({ kind: 'info', message: '文件监视已恢复，外部改动将自动重载。' });
+        }
+        return;
+      }
       const detail = st.failures.map((f) => `${f.root} — ${f.reason}`).join('；');
       notify({
         kind: 'error',
