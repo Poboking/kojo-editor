@@ -1771,6 +1771,13 @@ const SEARCH_DEFAULT_THREADS: usize = 8;
 
 /// WebView 事件名：检索进度。payload = `SearchProgressPayload`。
 const SEARCH_PROGRESS_EVENT: &str = "kojo:search-progress";
+/// WebView 事件名：检索命中文件增量（P2-11 流式检索）。payload = `SearchFilesPayload`。
+///
+/// 与进度事件**同一处节流点**发出（`SEARCH_PROGRESS_FILES` / `SEARCH_PROGRESS_MS`，
+/// 见 `run_search_with_files`）：命中文件随扫随到，壳层随到随画；收口后再补最后一批
+/// （`done: true`，带残留文件与终态标志）。**完成态仍以 `search_text` 的返回值为准**，
+/// 事件只做增量累积——两者的对齐契约见 `SearchFilesPayload` 的文档。
+const SEARCH_FILES_EVENT: &str = "kojo:search-files";
 
 /// 取消集合：`cancel_search` 写入、检索线程逐文件读取。
 /// 用 id 而不是布尔——同一时刻可能有多条检索（前端 id 自增），
@@ -1858,6 +1865,28 @@ struct SearchProgressPayload {
     files_scanned: u32,
     total_files: u32,
     match_count: u64,
+}
+
+/// 流式批次载荷（P2-11）：节流点把累积的命中文件分批送出。
+///
+/// `files` 是**借用**（`&[SearchFileDto]`）：批次 drain 出去后一份 emit、一份留进
+/// 收口 accumulator，两边都要用 ⇒ 借用让"零拷贝、零 Clone"成立（`SearchFileDto`
+/// 不需要为此长出 `Clone`）。序列化形状与 owned `Vec` 逐字相同（壳层拿到的是
+/// 同一个 JSON 数组）。
+///
+/// 对齐契约（壳层 `search-store.ts` 的收口逻辑据此写）：
+/// **最终结果 = 已 emit 的批次 ∪ 收口时的残留批次**，且完成态按路径排序、带上限裁决，
+/// 因此 `search_text` 的返回值必是事件流的超集——壳层收口时以完成态为准，
+/// 绝不会出现"事件说三条、最终态说两条"。`done` 只有最后一批为 true
+/// （残留文件 + 终态标志；中途批次的 `truncated` / `cancelled` 只是当时所知，不作准）。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchFilesPayload<'a> {
+    search_id: u64,
+    files: &'a [SearchFileDto],
+    done: bool,
+    truncated: bool,
+    cancelled: bool,
 }
 
 /// UTF-16 code unit 长度（JS 字符串下标的口径）
@@ -2354,10 +2383,31 @@ fn is_cancelled(cancel: &Mutex<HashSet<u64>>, id: u64) -> bool {
     cancel.lock().map(|g| g.contains(&id)).unwrap_or(false)
 }
 
-/// 检索主体。`emit` 注入而非直接用 `AppHandle`：单测要能在没有 Tauri 运行时的情况下
-/// 跑真语料（进度回调对判据无影响，凭这一层把"并行检索"整段变成可测代码）。
+/// 检索主体的**只收进度**入口：生产路径走 `run_search_with_files`（命中文件随扫随到），
+/// 这个三参包装为既有单测保留（它们逐字调用 `run_search(&emit, &cancel, req)`，
+/// 一个都不用改）——故只在 test 构建里存在。
+#[cfg(test)]
 fn run_search(
     emit: &(dyn Fn(SearchProgressPayload) + Sync),
+    cancel: &Mutex<HashSet<u64>>,
+    req: &SearchRequestDto,
+) -> Result<SearchResultDto, String> {
+    run_search_with_files(emit, &|_batch| {}, cancel, req)
+}
+
+/// 检索主体（P2-11 流式版）：进度与命中文件**共用同一处节流点**。
+///
+/// `emit` / `emit_files` 注入而非直接用 `AppHandle`：单测要能在没有 Tauri 运行时的
+/// 情况下跑真语料（回调对判据无影响，凭这一层把"并行检索"整段变成可测代码）。
+///
+/// 每个工作线程把命中文件攒在本地 `local` 里，节流点一到就整批 drain 出去：
+/// 一份 emit 给壳层（`kojo:search-files`，随扫随到），一份留进 `emitted` accumulator
+/// ——完成态必须是**已 emit 批次 ∪ 残留批次**（见 `SearchFilesPayload` 的对齐契约），
+/// 所以 drain 出去的文件在收口处原样回到最终结果里，一条不丢、一条不多。
+/// 末批（`done: true`）在 scope 结束后补：没赶上节流点的残留文件 + 终态标志。
+fn run_search_with_files(
+    emit: &(dyn Fn(SearchProgressPayload) + Sync),
+    emit_files: &(dyn for<'a, 'b> Fn(&'a SearchFilesPayload<'b>) + Sync),
     cancel: &Mutex<HashSet<u64>>,
     req: &SearchRequestDto,
 ) -> Result<SearchResultDto, String> {
@@ -2402,6 +2452,8 @@ fn run_search(
     let cancelled = AtomicBool::new(false);
     let counters = SkipCounters::default();
     let last_emit = Mutex::new(std::time::Instant::now());
+    // 已 emit 批次的累积（收口时与残留批次合并成完成态 ⇒ 事件流与返回值逐条对得上）
+    let emitted: Mutex<Vec<SearchFileDto>> = Mutex::new(Vec::new());
 
     let batches: Vec<Vec<SearchFileDto>> = std::thread::scope(|scope| {
         let mut handles = Vec::new();
@@ -2473,6 +2525,24 @@ fn run_search(
                             total_files,
                             match_count: hits_total.load(Ordering::Relaxed),
                         });
+                        // 流式批次：与进度同一节流点，把攒到的命中文件整批送出
+                        // （不是每个文件都 emit——口径与进度事件一致，别把 IPC 打爆）。
+                        if !local.is_empty() {
+                            let batch = std::mem::take(&mut local);
+                            emit_files(&SearchFilesPayload {
+                                search_id: req.search_id,
+                                files: &batch,
+                                done: false,
+                                // 中途批次的终态标志只是当时所知，壳层不作准（以完成态为准）
+                                truncated: overflow.load(Ordering::Relaxed),
+                                cancelled: cancelled.load(Ordering::Relaxed),
+                            });
+                            // emit 完再收进 accumulator（移动，不拷贝）：完成态必须是
+                            // 已 emit 批次 ∪ 残留批次，一条不丢
+                            if let Ok(mut g) = emitted.lock() {
+                                g.extend(batch);
+                            }
+                        }
                     }
                 }
                 local
@@ -2481,7 +2551,22 @@ fn run_search(
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
 
-    let mut out_files: Vec<SearchFileDto> = batches.into_iter().flatten().collect();
+    // 收口：没赶上节流点的残留文件作为最后一批送出（done = true，终态标志此时才作准），
+    // 再与已 emit 的批次合并成完成态 ⇒ 最终结果 = 累积 ∪ 残留，与事件流逐条对得上。
+    let leftover: Vec<SearchFileDto> = batches.into_iter().flatten().collect();
+    emit_files(&SearchFilesPayload {
+        search_id: req.search_id,
+        files: &leftover,
+        done: true,
+        truncated: overflow.load(Ordering::Relaxed),
+        cancelled: cancelled.load(Ordering::Relaxed),
+    });
+    // 锁中毒（线程在持锁时 panic）也要把已 emit 的批次收回来：丢了它们，
+    // 完成态就会比事件流少文件——那正是"事件说三条、最终态说两条"的裂缝。
+    let mut out_files: Vec<SearchFileDto> = emitted
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    out_files.extend(leftover);
     out_files.sort_by(|a, b| a.path.cmp(&b.path));
     let total_matches: u64 = out_files.iter().map(|f| f.matches.len() as u64).sum();
     if let Ok(mut g) = cancel.lock() {
@@ -2500,6 +2585,8 @@ fn run_search(
 
 /// 全文检索：多线程读盘 + 行内匹配，逐文件上报进度，命中行才过 IPC。
 /// 结果上限（`maxResults` / 单文件上限）与取消都会在返回值里显式说明（不静默截断）。
+/// P2-11 起命中文件随扫随到（`kojo:search-files`，与进度同一节流点）；完成态仍由本命令
+/// 的返回值收口，事件只做增量累积。
 #[tauri::command]
 async fn search_text(
     app: tauri::AppHandle,
@@ -2513,7 +2600,10 @@ async fn search_text(
         let emit = |p: SearchProgressPayload| {
             let _ = app.emit(SEARCH_PROGRESS_EVENT, p);
         };
-        run_search(&emit, &cancel, &request)
+        let emit_files = |batch: &SearchFilesPayload<'_>| {
+            let _ = app.emit(SEARCH_FILES_EVENT, batch.clone());
+        };
+        run_search_with_files(&emit, &emit_files, &cancel, &request)
     })
     .await
     .map_err(|e| format!("检索线程失败：{e}"))?

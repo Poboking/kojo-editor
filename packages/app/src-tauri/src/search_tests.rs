@@ -689,3 +689,139 @@ fn bench_against_real_corpus() {
         out.skipped.filtered
     );
 }
+
+/* --------------------- 流式增量（P2-11） --------------------- */
+//
+// 三条判据钉的是同一件契约：**事件流与完成态必须对得上**。
+//  ① 每个命中文件都经事件流送到（累积 ∪ 收口残留 = 完成态，一条不丢）；
+//  ② `done` 只有最后一批，且终态标志与完成态一致（中途批次的标志不作准）；
+//  ③ 截断 / 取消时事件流也不许多出文件（累积 ⊆ 完成态）——"事件说三条、
+//      最终态说两条"这种撒谎读数在这里就必须红。
+//
+// 实现走 `run_search_with_files`（生产入口）；`SearchFilesPayload` 的 `files`
+// 是借用的，故测试里只落投影（路径 + 标志），不搬 DTO。
+
+#[test]
+fn streamed_batches_cover_every_file_and_close_with_done() {
+    let dir = temp_dir("stream");
+    // 250 份：够跨过 SEARCH_PROGRESS_FILES(200) 的节流点 ⇒ 至少出一批中途批次 + 一批收口批
+    for i in 0..250 {
+        std::fs::write(dir.join(format!("f{i:03}.erb")), "hit\nmiss\nhit\n").unwrap();
+    }
+    let mut req = request(&dir, "hit");
+    req.search_id = 7;
+    req.options.threads = Some(4);
+    let cancel = Mutex::new(HashSet::new());
+    // 批次投影：(searchId, 本批路径, done, truncated, cancelled)
+    let seen: Mutex<Vec<(u64, Vec<String>, bool, bool, bool)>> = Mutex::new(Vec::new());
+    let out = crate::run_search_with_files(
+        &|_p| {},
+        &|b: &crate::SearchFilesPayload<'_>| {
+            seen.lock().unwrap().push((
+                b.search_id,
+                b.files.iter().map(|f| f.path.clone()).collect(),
+                b.done,
+                b.truncated,
+                b.cancelled,
+            ));
+        },
+        &cancel,
+        &req,
+    )
+    .expect("检索应成功");
+    let seen = seen.into_inner().unwrap();
+
+    // ① 每条批次都认领本次检索的 id
+    assert!(seen.iter().all(|(id, ..)| *id == 7), "批次 searchId 必须与请求一致");
+
+    // ② 累积 ∪ 残留 = 完成态（路径多重集逐条相等）
+    let mut streamed: Vec<String> = seen
+        .iter()
+        .flat_map(|(_, files, ..)| files.iter().cloned())
+        .collect();
+    streamed.sort();
+    let mut final_paths: Vec<String> = out.files.iter().map(|f| f.path.clone()).collect();
+    final_paths.sort();
+    assert_eq!(streamed.len(), 250, "250 个命中文件都必须经事件流送到");
+    assert_eq!(streamed, final_paths, "事件流必须覆盖完成态的每个文件（一条不丢、一条不多）");
+
+    // ③ done 只有最后一批，且终态标志与完成态一致
+    assert_eq!(seen.iter().filter(|(_, _, done, ..)| *done).count(), 1, "只能有一批 done");
+    let last = seen.last().unwrap();
+    assert!(last.2, "最后一批必须 done");
+    assert_eq!(last.3, out.truncated, "done 批的 truncated 必须与完成态一致");
+    assert_eq!(last.4, out.cancelled, "done 批的 cancelled 必须与完成态一致");
+
+    // ④ 完成态读数不变（线程化 + 流式不许动最终口径）
+    assert_eq!(out.total_matches, 500, "250 份 × 2 命中");
+    assert_eq!(out.files_scanned, 250);
+    assert!(!out.truncated);
+    assert!(!out.cancelled);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn streamed_final_batch_reports_cancellation() {
+    let dir = temp_dir("stream-cancel");
+    for i in 0..20 {
+        std::fs::write(dir.join(format!("f{i:02}.erb")), "hit\n").unwrap();
+    }
+    let req = request(&dir, "hit");
+    let cancel = Mutex::new(HashSet::new());
+    cancel.lock().unwrap().insert(req.search_id); // 开扫前就取消
+    let seen: Mutex<Vec<(bool, bool, usize)>> = Mutex::new(Vec::new());
+    let out = crate::run_search_with_files(
+        &|_p| {},
+        &|b: &crate::SearchFilesPayload<'_>| {
+            seen.lock().unwrap().push((b.done, b.cancelled, b.files.len()));
+        },
+        &cancel,
+        &req,
+    )
+    .unwrap();
+    let seen = seen.into_inner().unwrap();
+    assert_eq!(seen.len(), 1, "取消在扫第一个文件前生效 ⇒ 只有收口一批");
+    assert!(seen[0].0 && seen[0].1, "收口批必须 done + cancelled");
+    assert_eq!(seen[0].2, 0);
+    assert!(out.cancelled);
+    assert_eq!(out.total_matches, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn streamed_batches_never_exceed_the_final_result_when_truncated() {
+    let dir = temp_dir("stream-cap");
+    let body: String = (0..10).map(|_| "hit\n").collect();
+    for i in 0..10 {
+        std::fs::write(dir.join(format!("f{i:02}.erb")), &body).unwrap();
+    }
+    let mut req = request(&dir, "hit");
+    req.options.max_results = Some(3); // 撞上限 ⇒ truncated
+    let cancel = Mutex::new(HashSet::new());
+    let streamed: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let last_flags: Mutex<Option<(bool, bool)>> = Mutex::new(None);
+    let out = crate::run_search_with_files(
+        &|_p| {},
+        &|b: &crate::SearchFilesPayload<'_>| {
+            streamed
+                .lock()
+                .unwrap()
+                .extend(b.files.iter().map(|f| f.path.clone()));
+            *last_flags.lock().unwrap() = Some((b.done, b.truncated));
+        },
+        &cancel,
+        &req,
+    )
+    .unwrap();
+    assert!(out.truncated, "夹具必须真的撞上限");
+    let (done, truncated) = last_flags.into_inner().unwrap().unwrap();
+    assert!(done && truncated, "done 批的 truncated 必须与完成态一致");
+    // 截断时事件流也不许多出文件（累积 ⊆ 完成态）
+    let streamed = streamed.into_inner().unwrap();
+    let final_paths: std::collections::HashSet<&String> = out.files.iter().map(|f| &f.path).collect();
+    assert!(
+        streamed.iter().all(|p| final_paths.contains(p)),
+        "事件流不许出现完成态没有的文件"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

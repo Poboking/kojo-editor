@@ -1,6 +1,8 @@
 import {
   cancelSearch,
   searchInFiles,
+  type SearchFilesBatch,
+  type SearchFileResult,
   type SearchMatch,
   type SearchProgress,
   type SearchRequest,
@@ -8,6 +10,12 @@ import {
 } from '../bridge/search';
 import { errorText } from '@kojo/plugin-api';
 import { DEFAULT_EXTENSION_TEXT, isValidSearchQuery, parseExtensions, replaceSummaryText } from './search-query';
+import {
+  acceptFilesBatch,
+  DEFAULT_SEARCH_SORT,
+  reconcileStreamFiles,
+  type SearchSortMode,
+} from './search-stream';
 import { scopeUnreachableText, type AppliedSearchScope } from './search-scope';
 
 /**
@@ -42,6 +50,17 @@ export interface SearchState {
   error: string | null;
   /** 最近一次检索的 id：进度与取消都按它认领（多条检索并发时不许串线） */
   searchId: number;
+  /**
+   * 流式在途累积的命中文件（P2-11：批次随到随进，面板随到随画）。
+   * `null` = 当前没有在途检索；完成态收口后清空（完成态的文件由 `result` 提供）。
+   */
+  streamFiles: readonly SearchFileResult[] | null;
+  /**
+   * 结果排序档位（P2-11：路径 / 命中数 / 文件名，**默认路径**）。
+   * 纯客户端投影（`search-stream.sortSearchFiles`）——切换不重发检索，在途流式
+   * 结果也当场重排。
+   */
+  sortMode: SearchSortMode;
   /** 焦点请求计数：快捷键再次命中时让输入框重新聚焦（`autoFocus` 只管首次挂载） */
   focusNonce: number;
   /**
@@ -64,10 +83,14 @@ export interface SearchState {
   replaceSummary: string | null;
 }
 
-/** 检索执行者（注入 seam：缺省 = Tauri 桥；单测注入假实现） */
+/** 检索执行者（注入 seam：缺省 = Tauri 桥；单测注入假实现）。
+ *
+ * `onFiles`（P2-11 流式）可选：命中文件增量批次（与进度同一节流点）。不传 =
+ * 退回"一把 await 等全量"的老行为（既有单测注入的假实现逐字兼容）。 */
 export type SearchRunner = (
   request: SearchRequest,
   onProgress: (p: SearchProgress) => void,
+  onFiles?: (batch: SearchFilesBatch) => void,
 ) => Promise<SearchResult>;
 
 /** 单条替换的目标：检索结果里那一处命中（1 基行列，与 `SearchMatch` 同口径） */
@@ -110,6 +133,8 @@ const INITIAL: SearchState = {
   result: null,
   error: null,
   searchId: 0,
+  streamFiles: null,
+  sortMode: DEFAULT_SEARCH_SORT,
   focusNonce: 0,
   scopeKey: '',
   appliedScope: null,
@@ -197,6 +222,15 @@ export function requestSearchFocus(): void {
   set({ focusNonce: state.focusNonce + 1 });
 }
 
+/**
+ * 切换结果排序（P2-11：路径 / 命中数 / 文件名）。与三个开关、范围选择同语义：
+ * 只改投影序，**不重发检索**——在途流式结果也当场重排（排序是纯函数，
+ * 见 `search-stream.sortSearchFiles`）。
+ */
+export function setSearchSortMode(mode: SearchSortMode): void {
+  set({ sortMode: mode });
+}
+
 /** 清空结果与错误（保留查询条件与开关——"清空结果"不是"重置面板"） */
 export function clearSearchResult(): void {
   if (state.phase === 'running') return;
@@ -211,6 +245,13 @@ export function clearSearchResult(): void {
  * 带上新增的两件事——①收窄后可能一个根都不剩（此时报错文案要说清"是范围没落进项目"，
  * 不是"没打开项目"）；②结果要能说出"这轮只扫了哪个范围"。
  * **不传 ⇒ 行为与今天逐字一致**（老调用方零改动）。
+ *
+ * P2-11 流式：从"一把 await 等全量"改为"**增量累积 + 完成态收口**"——命中文件
+ * 批次（`onFiles`）随到随进 `streamFiles`，面板随到随画；完成态仍由 `search_text`
+ * 的返回值收口，且**以完成态为准**（见 `reconcileStreamFiles`：完成态是事件流的
+ * 超集，对不齐时以完成态为准，绝不许"事件说三条、最终态说两条"）。
+ * `searchId` 过期丢弃口径不变：迟到进度 / 迟到批次都按 searchId 过滤，旧检索的
+ * 读数不许覆盖新检索。
  */
 export async function runSearch(
   roots: readonly string[],
@@ -246,15 +287,33 @@ export async function runSearch(
     result: null,
     progress: null,
     appliedScope: applied ?? null,
+    streamFiles: [],
   });
 
   try {
-    const result = await runner(request, (p) => {
-      // 迟到进度不许覆盖新检索的读数
-      if (state.searchId === searchId && state.phase === 'running') set({ progress: p });
-    });
+    const result = await runner(
+      request,
+      (p) => {
+        // 迟到进度不许覆盖新检索的读数
+        if (state.searchId === searchId && state.phase === 'running') set({ progress: p });
+      },
+      (batch) => {
+        // 迟到批次按 searchId 丢弃（旧检索的批次不许覆盖新检索读数；reset 后
+        // phase 也守一道，与进度口径逐字一致）。done 批只是"最后一批"，
+        // 完成态以返回值收口。
+        if (state.searchId !== searchId || state.phase !== 'running') return;
+        set({ streamFiles: acceptFilesBatch(state.streamFiles ?? [], searchId, batch) });
+      },
+    );
     if (state.searchId !== searchId) return; // 期间又发起过一次：这一份直接丢
-    set({ phase: 'done', result, progress: null });
+    set({
+      phase: 'done',
+      // 收口：以完成态为准（累积只是在途视图）——列表必须与摘要同源，
+      // 理由见 reconcileStreamFiles
+      result: { ...result, files: reconcileStreamFiles(result) },
+      progress: null,
+      streamFiles: null,
+    });
   } catch (e: unknown) {
     if (state.searchId !== searchId) return;
     set({
@@ -263,6 +322,7 @@ export async function runSearch(
       result: null,
       progress: null,
       appliedScope: null,
+      streamFiles: null,
     });
   }
 }

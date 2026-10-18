@@ -57,6 +57,12 @@ export interface SearchOptions {
   /** 限定扩展名（小写、不含点；空数组 = 不限） */
   extensions: string[];
   maxResults?: number;
+  /**
+   * glob 过滤（P2-15 预留契约位）：本线（P2-11 流式检索）**只占位、不实现语义**——
+   * 没有任何调用方会发它，Rust 侧 `SearchOptionsDto` 也暂不认这个键（那是 P2-15 的地盘）。
+   * `searchInFiles` 把 `request` 原样交给 `invoke`，字段一旦被填上就会随请求透传，不丢。
+   */
+  globs?: readonly string[];
 }
 
 export interface SearchRequest {
@@ -77,29 +83,59 @@ export interface SearchProgress {
 /** 与 `src-tauri/src/lib.rs` 的 `SEARCH_PROGRESS_EVENT` 成对 */
 const PROGRESS_EVENT = 'kojo:search-progress';
 
+/** 与 `src-tauri/src/lib.rs` 的 `SEARCH_FILES_EVENT` 成对（P2-11 流式增量） */
+const FILES_EVENT = 'kojo:search-files';
+
 /**
- * 执行一次检索。`onProgress` 收逐文件进度（由 Rust 侧节流后上报）。
+ * 流式批次载荷（P2-11）：命中文件随扫随到。
+ *
+ * 对齐契约（与 Rust 侧 `SearchFilesPayload` 逐字同形）：**完成态是事件流的超集**
+ * （最终结果 = 已 emit 批次 ∪ 收口残留批次），`done: true` 只有最后一批；
+ * 中途批次的 `truncated` / `cancelled` 只是当时所知，壳层不作准——以 `search_text`
+ * 的返回值收口。批次按 `searchId` 过滤：旧检索的迟到批次不许覆盖新检索的读数。
+ */
+export interface SearchFilesBatch {
+  searchId: number;
+  files: SearchFileResult[];
+  done: boolean;
+  truncated: boolean;
+  cancelled: boolean;
+}
+
+/**
+ * 执行一次检索。`onProgress` 收逐文件进度（由 Rust 侧节流后上报）；
+ * `onFiles` 收命中文件增量批次（同一节流点，P2-11）——完成态仍由返回值收口。
  * 非 Tauri 环境**显式失败**（浏览器开发壳没有原生检索能力），不静默返回空结果。
  */
 export async function searchInFiles(
   request: SearchRequest,
   onProgress?: (p: SearchProgress) => void,
+  onFiles?: (batch: SearchFilesBatch) => void,
 ): Promise<SearchResult> {
   if (!isTauri()) {
     throw new Error('全文搜索需要桌面壳（浏览器开发壳没有原生检索命令）');
   }
-  let unlisten: (() => void) | null = null;
+  let unlistenProgress: (() => void) | null = null;
+  let unlistenFiles: (() => void) | null = null;
   if (onProgress) {
     const { listen } = await import('@tauri-apps/api/event');
-    unlisten = await listen<SearchProgress>(PROGRESS_EVENT, (e) => {
+    unlistenProgress = await listen<SearchProgress>(PROGRESS_EVENT, (e) => {
       // 多条检索并发时按 id 过滤（旧检索的迟到进度不许覆盖新检索的读数）
       if (e.payload.searchId === request.searchId) onProgress(e.payload);
+    });
+  }
+  if (onFiles) {
+    const { listen } = await import('@tauri-apps/api/event');
+    unlistenFiles = await listen<SearchFilesBatch>(FILES_EVENT, (e) => {
+      // 同 progress：迟到批次按 searchId 过滤（过期丢弃口径不变）
+      if (e.payload.searchId === request.searchId) onFiles(e.payload);
     });
   }
   try {
     return await invoke<SearchResult>('search_text', { request });
   } finally {
-    unlisten?.();
+    unlistenProgress?.();
+    unlistenFiles?.();
   }
 }
 
