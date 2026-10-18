@@ -42,6 +42,7 @@ import type {
   ProjectService,
   SlotRegistry,
   StateDependency,
+  SugarTranspileService,
   UIPanelProps,
   VariableSchema,
   WorkspaceProject,
@@ -49,6 +50,7 @@ import type {
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices, pathKey, shortPath } from '@kojo/plugin-api';
 import {
+  autoFoldFaces,
   buildCharacterIndex,
   buildCharaOptions,
   buildMatrix,
@@ -91,8 +93,8 @@ import {
   type FillDraft,
 } from './fill-overlay';
 import {
-  EXTERNAL_PACK_KEY,
   collectAuthorPacks,
+  collectWorkspaceMatrixPacks,
   coveragePercent,
   filterEntryByPack,
   gapCellsOfRows,
@@ -100,6 +102,7 @@ import {
   storyLineRows,
   type AuthorPack,
   type CellRef,
+  type WorkspaceMatrixPack,
   type WorkspacePackRef,
 } from './matrix-scope';
 import { dominantFamilyOfEntry, dominantSelectorOfEntry, type FillPack } from './matrix-fill';
@@ -124,6 +127,13 @@ const NO_CURSOR_CELLS: ReadonlyMap<string, string> = new Map<string, string>();
 const ALL_PACKS = '\u0000all';
 /** 行无填空选中时的空集合（常量身份，保住行 memo） */
 const EMPTY_FILL_COLUMNS: ReadonlySet<string> = new Set<string>();
+/** 无自动折叠时的空集合（常量身份，保住表头/行 memo） */
+const EMPTY_FOLDED: ReadonlySet<string> = new Set<string>();
+/**
+ * 详情区默认固定高。详情原先是"内容多高就多高"，点一格就让表格高度变化 →
+ * 浏览器重排整张表（千列级肉眼可见地卡）。固定高度 + 内部滚动后，选中不再动布局。
+ */
+const DETAIL_DEFAULT_H = 190;
 
 /** 填空选择键（行/列可能含任意字符；用 NUL 分隔避免拼接歧义） */
 function fillCellKey(rowKey: string, columnKey: string): string {
@@ -149,6 +159,8 @@ export function createUiConditionMatrixPlugin(): Plugin {
       const io = ctx.inject<FileIO>(KernelServices.IO);
       /** 工作区服务（软依赖：缺席时「我的口上项目」标注与写源入口隐藏，矩阵本体照常） */
       const workspaces = ctx.tryInject<WorkspaceService>(KernelServices.Workspaces);
+      /** 语法糖转译（工作区 `.kojo` 源 → ERB 才能进条件矩阵；缺席时只索引 ERB 方言） */
+      const sugar = ctx.tryInject<SugarTranspileService>(WellKnownServices.SugarTranspile);
 
       // ---- 适配器查询面（家族规则 / 变量字典 / 指令表 / 标签）：见 ./adapter-services.ts ----
       const services = createAdapterServices({ project, slots, conditionExtractor });
@@ -159,6 +171,8 @@ export function createUiConditionMatrixPlugin(): Plugin {
         project,
         conditionExtractor,
         services,
+        io,
+        ...(sugar ? { sugar } : {}),
         ...(workspaces ? { workspaces } : {}),
       });
 
@@ -174,13 +188,25 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const [selected, setSelected] = useState<{ rowKey: string; columnKey: string } | null>(null);
         /** 已折叠的大时机类面集合（默认全展开；点分组表头切换） */
         const [foldedFaces, setFoldedFaces] = useState<Set<string>>(new Set<string>());
+        /** 用户是否亲手动过折叠：没动过时用「大矩阵自动折叠」的默认面 */
+        const [foldTouched, setFoldTouched] = useState(false);
+        const foldedFacesRef = useRef<ReadonlySet<string>>(new Set<string>());
+        const foldTouchedRef = useRef(false);
+        const autoFoldedRef = useRef<ReadonlySet<string>>(EMPTY_FOLDED);
+        const autoFoldCacheRef = useRef<{
+          matrix: ConditionMatrix;
+          faces: ReadonlySet<string>;
+        } | null>(null);
         /** 口上包筛选：null = 全部口上包；'' = 角色根散文件；其余 = 包目录名 */
         const [packKey, setPackKey] = useState<string | null>(null);
         /** 填空模式（空白格可勾选）+ 已选格集合（键 = fillCellKey） */
         const [fillMode, setFillMode] = useState(false);
         const [fillSel, setFillSel] = useState<Set<string>>(new Set<string>());
-        /** 生成模板的目标口上包（null = 自动取当前筛选包 / 第一个可写包） */
-        const [fillTargetKey, setFillTargetKey] = useState<string | null>(null);
+        /**
+         * 条件抽取等待宽限：抽取正常在数秒内完成；失败 / 极慢盘时不把面板焊死在「抽取中」。
+         * 到点后照旧建表（空依赖矩阵仍有列与角色上下文，可继续操作）。
+         */
+        const [depsGraceExpired, setDepsGraceExpired] = useState(false);
         /** 只看有缺口的行（按当前可见列算） */
         const [gapOnly, setGapOnly] = useState(false);
         /** 一次性提示（剧情线无命中 / 生成前拦截等）——只显示，不拦矩阵本体 */
@@ -236,7 +262,14 @@ export function createUiConditionMatrixPlugin(): Plugin {
          */
         const autoEntry =
           selectedNo === null ? null : store.characterIndex?.entries.get(selectedNo) ?? null;
-        const virtualize = autoEntry !== null || props.uiPrefs?.panelVirtualize === true;
+        const wsAutoEntry =
+          selectedNo !== null &&
+          store.workspaceMatrix.status === 'ready' &&
+          store.workspaceMatrix.charaNo === selectedNo
+            ? store.workspaceMatrix.entry
+            : null;
+        const virtualize =
+          autoEntry !== null || wsAutoEntry !== null || props.uiPrefs?.panelVirtualize === true;
         /** 滚动位置（仅窗口计算用）——**按帧合并**且只在跨行时落 state */
         const [scrollTop, setScrollTop] = useState(0);
         /** 滚动容器可视高（视口化路径算窗口用；首帧未量到 → 0，仅画 overscan 行） */
@@ -444,12 +477,15 @@ export function createUiConditionMatrixPlugin(): Plugin {
           (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
 
         const toggleFace = (face: string): void => {
-          setFoldedFaces((prev) => {
-            const next = new Set(prev);
-            if (next.has(face)) next.delete(face);
-            else next.add(face);
-            return next;
-          });
+          // 第一次手点时以「当前生效的折叠面」（可能是自动折叠）为基线，
+          // 否则点开一个自动折叠的面会得到"只折叠它"的反效果。
+          const base = foldTouchedRef.current ? foldedFacesRef.current : autoFoldedRef.current;
+          const next = new Set(base);
+          if (next.has(face)) next.delete(face);
+          else next.add(face);
+          foldTouchedRef.current = true;
+          setFoldTouched(true);
+          setFoldedFaces(next);
         };
 
         // 视口化路径：一次读数 = 可视高 + **真实行高**（首行 rect 高）。
@@ -573,6 +609,13 @@ export function createUiConditionMatrixPlugin(): Plugin {
           setFillSel(new Set<string>());
           setNotice(null);
         }, [selectedNo, packKey, deferredFilter, gapOnly]);
+
+        // 换角色 / 换包：折叠回到「新矩阵的自动默认」，别把上一个角色的手工折叠带过去
+        useEffect(() => {
+          foldTouchedRef.current = false;
+          setFoldTouched(false);
+          setFoldedFaces(new Set<string>());
+        }, [selectedNo, packKey]);
 
         // 视口化路径：跨窗口键盘导航——目标行滚进视野并重渲后，把焦点落到它的格子上
         // （有账才查，无账零成本；账本 `focusPending` 是 state ⇒ 重渲到目标行出现为止）
@@ -707,11 +750,20 @@ export function createUiConditionMatrixPlugin(): Plugin {
           node: ReactNode;
         } | null>(null);
 
-        /** 切换角色时把口上包与生成目标复位（旧包键可能在新角色里不存在） */
+        /** 切换角色时把口上包与填空选择复位（旧包键可能在新角色里不存在） */
         useEffect(() => {
           setPackKey(null);
-          setFillTargetKey(null);
+          setFillMode(false);
+          setFillSel(new Set<string>());
         }, [selectedNo]);
+
+        /** 抽取未就绪的宽限计时（见 `depsGraceExpired`） */
+        useEffect(() => {
+          setDepsGraceExpired(false);
+          if (conditionExtractor.currentIndex() !== null) return;
+          const timer = setTimeout(() => setDepsGraceExpired(true), 1500);
+          return () => clearTimeout(timer);
+        }, [selectedNo, store.depsEpoch]);
 
         const stateIcon = (name: string, fallback: string): ReactNode =>
           (props.renderIcon?.(name, 20) as ReactNode | undefined) ?? fallback;
@@ -798,6 +850,11 @@ export function createUiConditionMatrixPlugin(): Plugin {
         }
 
         const entry = selectedNo === null ? null : idx.entries.get(selectedNo) ?? null;
+        /**
+         * 条件抽取是否已就绪：未就绪时建表只会得到「无依赖」空表，抽取完成后再整表重建一遍。
+         * 对几千函数的大角色这是白付一次全量遍历与首帧布局——直接等抽取完成再建。
+         */
+        const conditionsReady = conditionExtractor.currentIndex() !== null || depsGraceExpired;
 
         /**
          * 角色搜索器数据的**记忆化**产物（PS-7）：角色索引实例与角色名字典都不变时，
@@ -851,9 +908,34 @@ export function createUiConditionMatrixPlugin(): Plugin {
         } else {
           mineMap = mineCache.map;
         }
+        /**
+         * 「我的口上项目」里归属当前角色的 artifact（`ws:` 包键）：与游戏包并列进下拉，
+         * 选中后矩阵数据源换成工作区索引（见 ./workspace-index.ts）。
+         */
+        const workspacePacks: WorkspaceMatrixPack[] =
+          selectedNo === null
+            ? []
+            : collectWorkspaceMatrixPacks({
+                charaNo: selectedNo,
+                charaDir,
+                gamePacks: packs,
+                projects: store.workspaceProjects,
+                projectDir: (id) => store.projectDir(id),
+              });
+        const wsPackByKey = new Map(workspacePacks.map((p) => [p.key, p]));
         /** 状态里的包键可能来自上一个角色：不在当前清单就当「全部」（不静默筛出空表） */
         const effectivePackKey =
-          packKey !== null && packs.some((p) => p.key === packKey) ? packKey : null;
+          packKey !== null && (packs.some((p) => p.key === packKey) || wsPackByKey.has(packKey))
+            ? packKey
+            : null;
+        const selectedWsPack =
+          effectivePackKey !== null ? wsPackByKey.get(effectivePackKey) ?? null : null;
+        const wsState = store.workspaceMatrix;
+        const wsActive = selectedWsPack !== null;
+        const wsCurrent = wsActive && wsState.key === selectedWsPack.key;
+        const wsReady = wsCurrent && wsState.status === 'ready';
+        const wsLoading = wsCurrent && wsState.status === 'loading';
+        const wsError = wsCurrent && wsState.status === 'error' ? wsState.error : null;
 
         const packOption = (pack: AuthorPack): ReactNode => {
           const mine = mineMap.get(pack.key);
@@ -865,32 +947,61 @@ export function createUiConditionMatrixPlugin(): Plugin {
         };
         const minePacks = packs.filter((p) => mineMap.has(p.key));
         const otherPacks = packs.filter((p) => !mineMap.has(p.key));
+        const wsOptions = workspacePacks.map((pack) =>
+          createElement(
+            'option',
+            {
+              key: pack.key,
+              value: pack.key,
+              title:
+                `${pack.ref.projectName} / ${pack.ref.artifactName}` +
+                (pack.attribution === 'meta'
+                  ? '（按角色号归属）'
+                  : pack.attribution === 'source'
+                    ? '（按导入来源归属）'
+                    : '（按目录名归属）'),
+            },
+            `我的：${pack.ref.artifactName}（工作区）`,
+          ),
+        );
         const packSelect = createElement(
           'select',
           {
             className: 'cm-pack-select',
             value: effectivePackKey ?? ALL_PACKS,
-            disabled: packs.length === 0,
+            disabled: packs.length === 0 && workspacePacks.length === 0,
             title:
               store.workspaceError !== null
                 ? `我的口上项目读取失败：${store.workspaceError}`
-                : minePacks.length > 0
-                  ? `我的口上项目：${minePacks.map((p) => mineMap.get(p.key)?.artifactName ?? p.label).join('、')}`
-                  : '按作者口上包筛选（第一层子目录）',
+                : workspacePacks.length > 0
+                  ? `按作者口上包筛选；工作区包可直接用条件矩阵查看（${workspacePacks.length} 个归属当前角色）`
+                  : minePacks.length > 0
+                    ? `我的口上项目：${minePacks.map((p) => mineMap.get(p.key)?.artifactName ?? p.label).join('、')}`
+                    : '按作者口上包筛选（第一层子目录）',
             onChange: (e: { target: { value: string } }) => {
               const v = e.target.value;
               const next = v === ALL_PACKS ? null : v;
               setPackKey(next);
-              setFillTargetKey(next !== null && next !== EXTERNAL_PACK_KEY ? next : null);
               setSelected(null);
               setNotice(null);
+              setFillSel(new Set<string>());
+              const ws = next !== null ? wsPackByKey.get(next) ?? null : null;
+              if (ws && selectedNo !== null) store.loadWorkspaceMatrix(ws, selectedNo);
+              if (!ws && fillModeRef.current) exitFillMode();
             },
           },
           createElement('option', { key: ALL_PACKS, value: ALL_PACKS }, `全部口上包（${packs.length}）`),
+          wsOptions.length > 0
+            ? createElement(
+                'optgroup',
+                { key: 'workspace', label: '我的口上项目（工作区视图）' },
+                ...wsOptions,
+              )
+            : null,
           minePacks.length > 0
             ? createElement(
                 'optgroup',
-                { key: 'mine', label: '我的口上项目' },
+                { key: 'mine', label: '我的口上项目（游戏目录同包）' },
                 ...minePacks.map(packOption),
               )
             : null,
@@ -967,13 +1078,20 @@ export function createUiConditionMatrixPlugin(): Plugin {
               '填格子',
               fillMode,
               () => {
-                if (fillModeRef.current) exitFillMode();
-                else {
-                  setFillMode(true);
-                  setNotice(null);
+                if (fillModeRef.current) {
+                  exitFillMode();
+                  return;
                 }
+                if (!selectedWsPack) {
+                  setNotice(
+                    '填格子只写入「我的口上项目」里的工作区包：请先在包下拉里选择「我的：…（工作区）」。游戏目录里的包只做浏览。',
+                  );
+                  return;
+                }
+                setFillMode(true);
+                setNotice(null);
               },
-              '把空缺补成口上函数骨架：点空缺格选中 → 选写入包 → 生成模板，时机与条件自动写好，台词由你填（Esc 退出）',
+              '把空缺补成工作区口上函数骨架（只写「我的口上项目」）：点红圈格 → 生成模板，时机与条件自动写好，台词由你填（Esc 退出）',
             ),
             props.floating ? null : floatBtn,
           ),
@@ -992,25 +1110,42 @@ export function createUiConditionMatrixPlugin(): Plugin {
         };
         // 记忆化：选择 / 过滤 / 折叠 / 无关刷新都不重算矩阵；角色 × 依赖版本 × 适配器 × 口上包变化才重建。
         // 按包查看时列/行仍取全角色（整列缺席、别人写过而我方没写都能看见），只有填色来自该包。
-        const matrixKey =
-          `${entry?.no}|${store.depsEpoch}|${current.adapterId}|` +
-          (effectivePackKey === null ? 'p:<all>' : `p:${effectivePackKey}`);
-        const matrix = entry
-          ? store.matrixMemo.resolve(matrixKey, () => {
-              const scoped =
-                effectivePackKey === null
-                  ? entry
-                  : filterEntryByPack(entry, effectivePackKey, charaDir, current.kojoPaths);
-              return buildMatrix(
-                scoped,
-                services.depsOf,
-                services.labelOf,
-                services.faceLabels(),
-                columnOf,
-                effectivePackKey === null ? undefined : { columnsFrom: entry, rowsFrom: entry },
-              );
-            })
-          : null;
+        const matrixKey = wsActive
+          ? `ws:${selectedWsPack.key}|${selectedNo}|${store.depsEpoch}|${current.adapterId}`
+          : `${entry?.no}|${store.depsEpoch}|${current.adapterId}|` +
+            (effectivePackKey === null ? 'p:<all>' : `p:${effectivePackKey}`);
+        const wsEntry = wsReady ? wsState.entry : null;
+        /** 工作区包没有游戏函数时（游戏里还没写过口上）不依赖游戏抽取结果，直接建 */
+        const gameDepsReady = conditionsReady || !entry;
+        const matrix: ConditionMatrix | null = wsActive
+          ? wsEntry && gameDepsReady
+            ? store.matrixMemo.resolve(matrixKey, () =>
+                buildMatrix(
+                  wsEntry,
+                  wsState.depsOf ?? services.depsOf,
+                  services.labelOf,
+                  services.faceLabels(),
+                  columnOf,
+                  entry ? { columnsFrom: entry, rowsFrom: entry } : undefined,
+                ),
+              )
+            : null
+          : entry && conditionsReady
+            ? store.matrixMemo.resolve(matrixKey, () => {
+                const scoped =
+                  effectivePackKey === null
+                    ? entry
+                    : filterEntryByPack(entry, effectivePackKey, charaDir, current.kojoPaths);
+                return buildMatrix(
+                  scoped,
+                  services.depsOf,
+                  services.labelOf,
+                  services.faceLabels(),
+                  columnOf,
+                  effectivePackKey === null ? undefined : { columnsFrom: entry, rowsFrom: entry },
+                );
+              })
+            : null;
 
         // ---- 状态条：全局读数 + 当前作用域覆盖率 ----
         const pct = matrix ? coveragePercent(matrix.filledCells, matrix.totalCells) : 0;
@@ -1027,18 +1162,46 @@ export function createUiConditionMatrixPlugin(): Plugin {
               ? createElement(
                   'span',
                   { className: 'cm-stat cm-stat-scope' },
-                  effectivePackKey === null
-                    ? '全部口上包'
-                    : packs.find((p) => p.key === effectivePackKey)?.label ?? '口上包',
+                  wsActive
+                    ? `工作区：${selectedWsPack.ref.artifactName}`
+                    : effectivePackKey === null
+                      ? '全部口上包'
+                      : packs.find((p) => p.key === effectivePackKey)?.label ?? '口上包',
                 )
               : null,
-            minePacks.length > 0
+            wsReady && wsState.stats
               ? createElement(
                   'span',
-                  { className: 'cm-stat cm-stat-mine', title: '工作区 artifact 目录名与本项目包目录同名' },
-                  `我的口上项目 ${minePacks.length}`,
+                  { className: 'cm-stat', title: '工作区包索引：函数数 / 文件数 / .kojo 源文件数' },
+                  `包内 ${wsState.stats.functions} 函数 · ${wsState.stats.files} 文件`,
                 )
               : null,
+            wsReady && wsState.problems.length > 0
+              ? createElement(
+                  'span',
+                  {
+                    className: 'cm-stat cm-stat-warn',
+                    title: wsState.problems.join('\n'),
+                  },
+                  `${wsState.problems.length} 个文件未纳入`,
+                )
+              : null,
+            workspacePacks.length > 0
+              ? createElement(
+                  'span',
+                  {
+                    className: 'cm-stat cm-stat-mine',
+                    title: '工作区 artifact：可按角色号 / 导入来源 / 目录名归属当前角色；选它即可用条件矩阵查看',
+                  },
+                  `我的口上项目 ${workspacePacks.length}`,
+                )
+              : minePacks.length > 0
+                ? createElement(
+                    'span',
+                    { className: 'cm-stat cm-stat-mine', title: '工作区 artifact 目录名与本项目包目录同名' },
+                    `我的口上项目 ${minePacks.length}`,
+                  )
+                : null,
             store.workspaceLoading
               ? createElement('span', { className: 'cm-stat dim' }, '读取我的口上项目…')
               : store.workspaceError !== null
@@ -1075,41 +1238,43 @@ export function createUiConditionMatrixPlugin(): Plugin {
             : null,
         );
 
-        /** 当前展开（可见）的列——「只看缺口」、剧情线选格、填空生成提示都按它算 */
-        const visibleColumns = matrix ? matrix.columns.filter((c) => !foldedFaces.has(c.face)) : [];
+        /**
+         * 大矩阵默认折叠指令时机（首帧列数从数百降到数十）。用户一旦亲手动过折叠，
+         * 就完全以他的选择为准；换角色/换包时复位，让新表重新吃默认折叠。
+         */
+        let autoFolded: ReadonlySet<string> = EMPTY_FOLDED;
+        if (matrix) {
+          const cached = autoFoldCacheRef.current;
+          if (cached && cached.matrix === matrix) autoFolded = cached.faces;
+          else {
+            autoFolded = autoFoldFaces(matrix.groups);
+            autoFoldCacheRef.current = { matrix, faces: autoFolded };
+          }
+        }
+        autoFoldedRef.current = autoFolded;
+        foldedFacesRef.current = foldedFaces;
+        foldTouchedRef.current = foldTouched;
+        const foldedView = foldTouched ? foldedFaces : autoFolded;
+
+        /** 当前展开（可见）的列——「只看空缺」、剧情线选格、填空生成提示都按它算 */
+        const visibleColumns = matrix ? matrix.columns.filter((c) => !foldedView.has(c.face)) : [];
         const visibleColumnKeys = visibleColumns.map((c) => c.key);
 
         // ---- 填空条：目标包 / 剧情线 / 生成入口 ----
-        const fillTargets = packs.filter((p) => !p.isExternal && p.dirPath !== null);
-        const fillTarget =
-          (fillTargetKey !== null ? fillTargets.find((p) => p.key === fillTargetKey) : undefined) ??
-          (effectivePackKey !== null ? fillTargets.find((p) => p.key === effectivePackKey) : undefined) ??
-          fillTargets[0] ??
-          null;
-
+        // 填空只写「我的口上项目」：游戏目录包在允许域外，写入要先批权限，且不是作者的
+        // 权威源。游戏包视图保持只读浏览；要填空先在下拉里选中工作区包。
+        const fillTarget: WorkspaceMatrixPack | null = selectedWsPack;
         const fillTargetSelect = createElement(
-          'select',
+          'span',
           {
-            className: 'cm-fill-target',
-            value: fillTarget?.key ?? '',
-            disabled: fillTargets.length <= 1,
-            title: '模板写入哪个口上包（我的口上项目会优先生成到工作区源文件）',
-            onChange: (e: { target: { value: string } }) => {
-              setFillTargetKey(e.target.value);
-              setNotice(null);
-            },
+            className: 'cm-fill-target-label' + (fillTarget ? '' : ' dim'),
+            title: fillTarget
+              ? `${fillTarget.ref.projectName} / ${fillTarget.ref.artifactName}（工作区恒可写）`
+              : '填格子只写入「我的口上项目」里的工作区包',
           },
-          fillTarget === null
-            ? createElement('option', { key: '', value: '' }, '无可写口上包')
-            : null,
-          ...fillTargets.map((p) => {
-            const mine = mineMap.get(p.key);
-            return createElement(
-              'option',
-              { key: p.key || '\u0000root', value: p.key },
-              `${p.label}${mine ? ` · 我的：${mine.artifactName}` : ''}`,
-            );
-          }),
+          fillTarget
+            ? `写入：我的：${fillTarget.ref.artifactName}`
+            : '无工作区包可写——先在包下拉里选择「我的口上项目」',
         );
 
         const applyStoryLine = (preset: { id: string; label: string; description?: string; keys: readonly string[] }): void => {
@@ -1135,28 +1300,18 @@ export function createUiConditionMatrixPlugin(): Plugin {
         };
 
         const openFill = (): void => {
-          if (!entry || !matrix) return;
+          if (!fillTarget || !wsEntry || !matrix) {
+            setNotice('填格子只写入「我的口上项目」里的工作区包：请先在包下拉里选择它。');
+            return;
+          }
           if (fillSel.size === 0) {
-            setNotice('先在「填格子」模式下选中至少一个空缺（点矩阵里的 + 格）。');
+            setNotice('先在「填格子」模式下选中至少一个空缺（点矩阵里的红圈格）。');
             return;
           }
-          if (!fillTarget) {
-            setNotice('没有可写入的口上包：角色没有口上目录，或只有索引外文件。');
+          if (!workspaces) {
+            setNotice('内核工作区服务不可用，无法写入口上项目。');
             return;
           }
-          const targetEntry = filterEntryByPack(entry, fillTarget.key, charaDir, current.kojoPaths);
-          const targetMatrixKey =
-            `${entry.no}|${store.depsEpoch}|${current.adapterId}|fill:${fillTarget.key}`;
-          const targetMatrix = store.matrixMemo.resolve(targetMatrixKey, () =>
-            buildMatrix(
-              targetEntry,
-              services.depsOf,
-              services.labelOf,
-              services.faceLabels(),
-              columnOf,
-              { columnsFrom: entry, rowsFrom: entry },
-            ),
-          );
           const cells: CellRef[] = [];
           for (const key of fillSel) {
             const at = key.indexOf('\u0000');
@@ -1164,31 +1319,32 @@ export function createUiConditionMatrixPlugin(): Plugin {
             cells.push({ rowKey: key.slice(0, at), columnKey: key.slice(at + 1) });
           }
           const faceTable = services.faceTable();
-          const workspace = mineMap.get(fillTarget.key);
           const draft: FillDraft = {
             chara: {
-              no: entry.no,
-              name: current.charaIndex.get(entry.no)?.name ?? `K${entry.no}`,
+              no: wsEntry.no,
+              name: current.charaIndex.get(wsEntry.no)?.name ?? `K${wsEntry.no}`,
             },
             pack: {
               key: fillTarget.key,
-              dirName: fillTarget.dirName,
-              label: fillTarget.label,
-              dirPath: fillTarget.dirPath,
-              family: dominantFamilyOfEntry(targetEntry),
-              selector: dominantSelectorOfEntry(targetEntry),
+              dirName: fillTarget.ref.dirName,
+              label: `我的：${fillTarget.ref.artifactName}`,
+              dirPath: fillTarget.ref.rootPath,
+              family: dominantFamilyOfEntry(wsEntry),
+              selector: dominantSelectorOfEntry(wsEntry),
             },
-            matrix: targetMatrix,
+            matrix,
             cells,
             ...(faceTable ? { faceTable } : {}),
-            ...(workspace ? { workspace } : {}),
+            workspace: fillTarget.ref,
             io,
-            ...(workspaces ? { workspaces } : {}),
+            workspaces,
             reveal: (path: string, line: number) =>
               ctx.bus.emit('editor.revealLocation', { filePath: path, line, source: '条件矩阵' }),
             onWritten: () => {
               setFillSel(new Set<string>());
               setNotice('模板已写入并打开——在模板里填台词即可。');
+              // 写入落地后重载工作区索引：新函数立即出现在矩阵里（不必重开面板）
+              store.loadWorkspaceMatrix(fillTarget, wsEntry.no);
             },
             close: () =>
               ctx.bus.emit('ui.overlay.close', {
@@ -1211,6 +1367,13 @@ export function createUiConditionMatrixPlugin(): Plugin {
                 { className: 'cm-entry-hint dim' },
                 createElement('span', { className: 'cm-entry-hint-mark', 'aria-hidden': 'true' }, '·'),
                 '空缺 = 此时机还没有针对该状态的响应。点「填格子」可把空缺批量补成口上函数骨架，台词由你填。',
+                autoFolded.size > 0 && !foldTouched
+                  ? createElement(
+                      'span',
+                      { className: 'cm-entry-hint-auto' },
+                      `大矩阵已自动折叠 ${autoFolded.size} 组指令时机以保持流畅；点表头可展开。`,
+                    )
+                  : null,
               )
             : null;
 
@@ -1232,10 +1395,10 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   'span',
                   { className: 'cm-fill-guide-steps' },
                   createElement('b', null, '①'),
-                  ' 点空缺格选中 ',
+                  ' 点红圈格选中 ',
                   createElement('span', { className: 'cm-fill-guide-arrow dim' }, '→'),
                   createElement('b', null, '②'),
-                  ' 选写入包 ',
+                  ' 确认写入「我的口上项目」',
                   createElement('span', { className: 'cm-fill-guide-arrow dim' }, '→'),
                   createElement('b', null, '③'),
                   ' 生成模板并写入',
@@ -1344,18 +1507,55 @@ export function createUiConditionMatrixPlugin(): Plugin {
         /** 过滤后的可见性反馈：点了「只看空缺」必须立刻看到行数变化与空态原因 */
         let filterNote: ReactNode = null;
         let grid: ReactNode;
-        if (!entry || !matrix) {
+        if (wsActive && (wsLoading || !wsCurrent)) {
+          grid = createElement(
+            'div',
+            { className: 'cm-empty dim' },
+            createElement('span', { className: 'cm-spin' }, '↻'),
+            ` 正在读取工作区包「${selectedWsPack.ref.artifactName}」：.kojo 转译 → 函数索引 → 条件抽取…`,
+          );
+        } else if (wsActive && wsError !== null) {
+          grid = createElement(
+            'div',
+            { className: 'cm-empty' },
+            createElement('div', { className: 'cm-filter-reason' }, `工作区包读取失败：${wsError}`),
+            createElement(
+              'button',
+              {
+                className: 'ghost small',
+                type: 'button',
+                onClick: () => {
+                  if (selectedNo !== null) store.loadWorkspaceMatrix(selectedWsPack, selectedNo);
+                },
+              },
+              '重试',
+            ),
+          );
+        } else if (!matrix) {
           const selectedInfo = selectedNo === null ? null : current.charaIndex.get(selectedNo) ?? null;
           grid =
             selectedNo === null
               ? createElement('div', { className: 'cm-empty dim' }, '从上方选择角色以浏览其状态 × 时机矩阵')
-              : createElement(
-                  'div',
-                  { className: 'cm-empty dim' },
-                  selectedInfo && selectedInfo.kojoDir === undefined
-                    ? `K${selectedNo} 在游戏里没有个人口上目录，无法建立口上矩阵。`
-                    : `K${selectedNo} 还没有任何口上函数——这本身就是最大的缺口。先在口上包里为这个角色新建口上，矩阵会自动出现。`,
-                );
+              : wsActive
+                ? createElement(
+                    'div',
+                    { className: 'cm-empty dim' },
+                    `工作区包「${selectedWsPack.ref.artifactName}」里没有归属 K${selectedNo} 的口上函数。写入口上函数（或带「角色: ${selectedNo}」文件头的 .kojo）后重新选择该包即可。`,
+                  )
+                : entry && !conditionsReady
+                  ? createElement(
+                      'div',
+                      { className: 'cm-empty dim' },
+                      createElement('span', { className: 'cm-spin' }, '↻'),
+                      ` 正在抽取 K${selectedNo} 的状态条件…（索引已就绪，抽取完成后直接出矩阵）`,
+                    )
+                  : createElement(
+                    'div',
+                    { className: 'cm-empty dim' },
+                    selectedInfo && selectedInfo.kojoDir === undefined
+                      ? `K${selectedNo} 在游戏里没有个人口上目录，无法建立口上矩阵。`
+                      : `K${selectedNo} 还没有任何口上函数——这本身就是最大的缺口。先在口上包里为这个角色新建口上，矩阵会自动出现。`,
+                  );
         } else if (matrix.rows.length === 0) {
           grid = createElement('div', { className: 'cm-empty dim' }, '该角色尚未抽取到状态条件（无状态依赖）');
         } else {
@@ -1468,17 +1668,17 @@ export function createUiConditionMatrixPlugin(): Plugin {
           // 表头元素缓存：滚动帧只换 tbody 窗口，表头没必要每帧重建（几百列时是实打实的 diff 成本）
           const headCache = headCacheRef.current;
           let head: ReactNode;
-          if (headCache && headCache.matrix === matrix && headCache.folded === foldedFaces) {
+          if (headCache && headCache.matrix === matrix && headCache.folded === foldedView) {
             head = headCache.node;
           } else {
             head = renderGridHead({
               groups: matrix.groups,
-              foldedFaces,
+              foldedFaces: foldedView,
               onToggleFace: toggleFace,
               ic,
               cornerRef,
             });
-            headCacheRef.current = { matrix, folded: foldedFaces, node: head };
+            headCacheRef.current = { matrix, folded: foldedView, node: head };
           }
 
           const colCount = matrix.columns.length;
@@ -1502,7 +1702,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                 key: row.key,
                 row,
                 groups,
-                foldedFaces,
+                foldedFaces: foldedView,
                 selectedColumn: selected && selected.rowKey === row.key ? selected.columnKey : null,
                 cursorColumn: cursorCells.get(row.key) ?? null,
                 fillColumns: fillByRow.get(row.key) ?? EMPTY_FILL_COLUMNS,
@@ -1558,13 +1758,14 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const fillSelected = selected
           ? fillSel.has(fillCellKey(selected.rowKey, selected.columnKey))
           : false;
+        const detailHeight = detailH ?? DETAIL_DEFAULT_H;
         const detailCache = detailCacheRef.current;
         let detail: ReactNode;
         if (
           detailCache &&
           detailCache.matrix === matrix &&
           detailCache.selected === selected &&
-          detailCache.detailH === detailH &&
+          detailCache.detailH === detailHeight &&
           detailCache.fillMode === fillMode &&
           detailCache.fillSelected === fillSelected
         ) {
@@ -1574,7 +1775,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
             matrix,
             selected,
             faceLabels: () => services.faceLabels(),
-            detailH,
+            detailH: detailHeight,
             detailRef,
             emitReveal: (target) => ctx.bus.emit('editor.revealLocation', target),
             fillMode,
@@ -1583,7 +1784,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
           detailCacheRef.current = {
             matrix,
             selected,
-            detailH,
+            detailH: detailHeight,
             fillMode,
             fillSelected,
             node: detail,

@@ -17,6 +17,13 @@ import type { ConditionMatrix } from './matrix-logic';
 import { faceLabel } from './matrix-logic';
 import { orderByLine, type RevealTarget } from './row-view';
 
+/**
+ * 详情区最多铺多少条。点击空格时若整行有几百条比较/响应，全部铺成 chip 会把
+ * 「点一格」变成一次大 DOM 构建；详情是参考面，不是全量清单，超出给计数。
+ */
+const DETAIL_COMP_CAP = 24;
+const DETAIL_FN_CAP = 40;
+
 export function renderDetail(opts: {
   matrix: ConditionMatrix | null;
   selected: { readonly rowKey: string; readonly columnKey: string } | null;
@@ -48,8 +55,10 @@ export function renderDetail(opts: {
   const selColumnLabel = selColumn ? selColumn.label : selected ? faceLabel(selected.columnKey, faceLabels()) : '';
 
   if (selRow && selCell && selCell.present) {
-    const fns = orderByLine(selCell.functions);
-    const comps = [...new Set(fns.flatMap((f) => f.comparisons))];
+    const allFns = orderByLine(selCell.functions);
+    const fns = allFns.slice(0, DETAIL_FN_CAP);
+    const comps = [...new Set(allFns.flatMap((f) => f.comparisons))];
+    const shownComps = comps.slice(0, DETAIL_COMP_CAP);
     return createElement(
       'div',
       detailProps,
@@ -77,7 +86,14 @@ export function renderDetail(opts: {
         ? createElement(
             'div',
             { className: 'cm-detail-comps-row' },
-            ...comps.map((comp) => createElement('span', { key: comp, className: 'cm-comp-chip' }, comp)),
+            ...shownComps.map((comp) => createElement('span', { key: comp, className: 'cm-comp-chip' }, comp)),
+            comps.length > shownComps.length
+              ? createElement(
+                  'span',
+                  { key: '\u0000more', className: 'cm-comp-chip dim' },
+                  `+${comps.length - shownComps.length}`,
+                )
+              : null,
           )
         : null,
       createElement(
@@ -107,12 +123,20 @@ export function renderDetail(opts: {
             ),
           ),
         ),
+        allFns.length > fns.length
+          ? createElement(
+              'li',
+              { key: '\u0000more', className: 'cm-detail-more dim' },
+              `另有 ${allFns.length - fns.length} 个响应函数未展开`,
+            )
+          : null,
       ),
     );
   }
 
   if (selRow && selected) {
-    const comps = selRow.comparisons.length > 0 ? selRow.comparisons : selRow.universeComparisons;
+    const allComps = selRow.comparisons.length > 0 ? selRow.comparisons : selRow.universeComparisons;
+    const comps = allComps.slice(0, DETAIL_COMP_CAP);
     return createElement(
       'div',
       detailProps,
@@ -145,6 +169,13 @@ export function renderDetail(opts: {
             { className: 'cm-detail-hint-row' },
             createElement('span', { className: 'dim' }, '全角色参考条件'),
             ...comps.map((comp) => createElement('span', { key: comp, className: 'cm-comp-chip' }, comp)),
+            allComps.length > comps.length
+              ? createElement(
+                  'span',
+                  { key: '\u0000more', className: 'cm-comp-chip dim' },
+                  `+${allComps.length - comps.length}`,
+                )
+              : null,
           )
         : null,
     );

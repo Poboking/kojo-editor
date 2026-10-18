@@ -333,6 +333,57 @@ export class ConditionEngine implements ConditionExtractorService {
     return p;
   }
 
+  /**
+   * 离线抽取（additive，2026-10-19 性能批）：对传入的任意索引跑一次 `run()`，
+   * 但**全部可变状态都落在子 engine 上**——父 engine 的 `last` / 订阅者 /
+   * 明细与正文缓存一概不碰（消费方拿到的是独立结果，不是"替换当前索引"）。
+   *
+   * 实现口径：
+   * - deps 沿用父 engine（log / readFile / readFiles / scanControlFlow /
+   *   getSchemaLookup / compute）⇒ 批量读与 worker 分发路径和全量抽取**同一份实现**；
+   * - `getIndex` 覆盖为传入索引；`getProject` 仍问当前项目（`run()` 只用它做项目
+   *   切换检查与结果 `projectRoot`）；
+   * - `snapshot` 置空：离线抽取**不读也不写**快照，否则工作区包结果会混进当前项目缓存。
+   *
+   * 空索引 / 无当前项目 ⇒ `run()` 自然返回形状稳定的空结果（不抛）。
+   *
+   * `texts`（additive）：路径 → 正文覆盖表。工作区 `.kojo` 的产物 ERB 从不落盘，
+   * 读盘路径对它必然失败；覆盖表让批量读与逐文件兜底两条路都先查表（缺项才读盘），
+   * 其余语义（mtime/size 判据、不触父状态）不变。
+   */
+  async extractIndex(index: ErbIndex, texts?: ReadonlyMap<string, string>): Promise<ConditionIndex> {
+    const { snapshot: _snapshot, ...deps } = this.deps;
+    const readFile = deps.readFile;
+    const readFiles = deps.readFiles;
+    const child = new ConditionEngine({
+      ...deps,
+      getIndex: () => index,
+      getProject: () => this.deps.getProject(),
+      ...(texts
+        ? {
+            readFile: async (path: string): Promise<string> => {
+              const text = texts.get(path);
+              if (text === undefined) return readFile(path);
+              return text;
+            },
+            ...(readFiles
+              ? {
+                  readFiles: async (paths: readonly string[]): Promise<Array<string | null>> => {
+                    const missing: string[] = [];
+                    for (const path of paths) if (!texts.has(path)) missing.push(path);
+                    const fetched = missing.length > 0 ? await readFiles(missing) : [];
+                    const byPath = new Map<string, string | null>();
+                    for (let i = 0; i < missing.length; i++) byPath.set(missing[i]!, fetched[i] ?? null);
+                    return paths.map((path) => texts.get(path) ?? byPath.get(path) ?? null);
+                  },
+                }
+              : {}),
+          }
+        : {}),
+    });
+    return child.run();
+  }
+
   /** 全量抽取一次（覆盖缓存并通知订阅者）；判据相符时优先还原结果快照 */
   async run(): Promise<ConditionIndex> {
     const project = this.deps.getProject();

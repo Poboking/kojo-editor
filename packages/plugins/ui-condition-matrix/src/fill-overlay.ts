@@ -83,7 +83,8 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
       : '';
 
     const [language, setLanguage] = useState<FillLanguage>('kojo');
-    const [place, setPlace] = useState<FillPlace>(snap?.workspace ? 'workspace' : 'game');
+    /** 落点只有工作区：填格子写入口上项目（游戏目录包只做浏览，不在本浮层的写入面） */
+    const place: FillPlace = 'workspace';
     const [mode, setMode] = useState<FillTargetMode>('new');
     const [fileName, setFileName] = useState(initialName);
     const [nameTouched, setNameTouched] = useState(false);
@@ -124,10 +125,10 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
         setFilesError(null);
         return;
       }
-      const root = place === 'workspace' ? snap.workspace?.rootPath : snap.pack.dirPath;
+      const root = snap.workspace?.rootPath;
       if (!root) {
         setFiles(EMPTY_FILES);
-        setFilesError('这个落点没有可列出的目录。');
+        setFilesError('这个口上包没有关联的工作区项目目录。');
         return;
       }
       let cancelled = false;
@@ -150,26 +151,21 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
       return () => {
         cancelled = true;
       };
-    }, [snap, mode, place]);
+    }, [snap, mode]);
 
     if (!snap) {
       return h('div', { className: 'cmfill' }, h('div', { className: 'cmfill-empty dim' }, '没有待生成的填格子请求。'));
     }
 
     const selectedFile = files.find((f) => f.relPath === fileRel) ?? null;
-    const gameWritable =
-      place !== 'game'
-        ? true
-        : mode === 'new'
-          ? Boolean(snap.pack.dirPath && snap.io.isWritable(snap.pack.dirPath))
-          : Boolean(selectedFile && snap.io.isWritable(selectedFile.absPath));
+    const workspaceReady = Boolean(snap.workspace && snap.workspaces);
     const effectiveName = sanitizeFillFileName(fileName, language);
     const canWrite =
       !busy &&
+      workspaceReady &&
       plan !== null &&
       plan.cellCount > 0 &&
-      (mode === 'new' ? effectiveName.length > 0 : selectedFile !== null) &&
-      gameWritable;
+      (mode === 'new' ? effectiveName.length > 0 : selectedFile !== null);
 
     const icon = (name: string, size: number, fallback: string): ReactNode =>
       (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
@@ -247,21 +243,6 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
         ),
       );
 
-    const placeOptions: Array<{ value: FillPlace; label: string; title?: string; disabled?: boolean }> = [];
-    if (snap.workspace) {
-      placeOptions.push({
-        value: 'workspace',
-        label: '我的口上项目',
-        title: `${snap.workspace.projectName} / ${snap.workspace.artifactName}（工作区恒可写）`,
-      });
-    }
-    placeOptions.push({
-      value: 'game',
-      label: '游戏目录',
-      title: snap.pack.dirPath ?? '该包没有可写目录',
-      disabled: !snap.pack.dirPath,
-    });
-
     const appendSelector =
       mode === 'append'
         ? h(
@@ -305,23 +286,17 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
             ),
           );
 
-    const targetHint = !gameWritable
+    const targetHint = !workspaceReady
       ? h(
           'div',
           { className: 'cmfill-warn' },
-          '游戏目录不在写允许域内——请先在项目里批准写权限；或把生成结果写进「我的口上项目」（恒可写）。',
+          '这个口上包没有关联的工作区项目，或内核工作区服务不可用——填格子只写「我的口上项目」。',
         )
-      : place === 'workspace'
-        ? h(
-            'div',
-            { className: 'cmfill-hint dim' },
-            '写入工作区源文件；部署时再统一转译进游戏目录（工作区是权威源）。',
-          )
-        : h(
-            'div',
-            { className: 'cmfill-hint dim' },
-            '直接写入游戏目录（写前自动备份）。游戏目录里的改动不会回写工作区。',
-          );
+      : h(
+          'div',
+          { className: 'cmfill-hint dim' },
+          `落点：我的口上项目 · ${snap.workspace?.projectName ?? ''} / ${snap.workspace?.artifactName ?? ''}（工作区是权威源；部署时再统一转译进游戏目录）`,
+        );
 
     return h(
       'div',
@@ -378,7 +353,6 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
                 `有 ${plan.skippedMerge} 格属于既有函数的「并入片段」，新文件装不下——请把「方式」改为「追加到文件」，或只保留整列缺席的时机。`,
               )
             : null,
-          segmented('落点', place, placeOptions, (next) => setPlace(next)),
           segmented('方式', mode, [
             { value: 'new', label: '新建文件' },
             { value: 'append', label: '追加到文件' },

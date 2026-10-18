@@ -5628,6 +5628,10 @@ button.primary .hint {
   color: var(--accent);
   font-weight: 700;
 }
+.cm-entry-hint-auto {
+  margin-left: 6px;
+  color: var(--amber);
+}
 
 /* ---- 工具条 ---- */
 .cm-toolbar {
@@ -6089,17 +6093,19 @@ button.primary .hint {
 .cm-fillbar-write {
   font-size: var(--fs-0);
 }
-.cm-fill-target {
+.cm-fill-target-label {
   flex: 1 1 150px;
   min-width: 0;
-  max-width: 240px;
-  height: 26px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg);
   font-size: var(--fs-0);
-  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.cm-fill-target-label.dim {
+  color: var(--fg-dim);
 }
 .cm-fillbar-btn {
   height: 26px;
@@ -6386,32 +6392,55 @@ button.primary .hint {
   background: var(--accent);
   border-color: var(--accent-text);
 }
-/* 填格子模式：空缺格给出可点外观。由网格容器 class 驱动（`:where` 保持低特异性，
-   选中态的 .fill-sel 仍能压过）；+ 号用伪元素，进入/退出模式不重渲任何行。 */
+/* 填格子模式：空缺格给出可点外观。由网格容器 class 驱动（`:where` 保持低特异性），
+   进入/退出模式不重渲任何行。标记用**红色圆圈**（用户反馈要更醒目）：
+   未选 = 空心红环；已选 = 实心红圆 + ✓。 */
 .cm-scroll.cm-fill :where(.cm-cell.off) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-color: var(--border-subtle);
   background: var(--hover-soft);
   color: var(--fg-dim);
 }
 .cm-scroll.cm-fill :where(.cm-cell.off):hover {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-  color: var(--accent-text);
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
 }
 .cm-scroll.cm-fill :where(.cm-cell.off:not(.fill-sel)) {
   font-size: 0;
 }
 .cm-scroll.cm-fill :where(.cm-cell.off:not(.fill-sel))::before {
-  content: '+';
-  font-size: 11px;
-  line-height: 1;
+  content: '';
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--red);
+  border-radius: 50%;
+  box-sizing: border-box;
+  opacity: 0.9;
 }
 .cm-cell.off.fill-sel {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: var(--accent-text);
+  background: color-mix(in srgb, var(--red) 26%, transparent);
+  border-color: var(--red);
+  color: #fff;
   font-weight: 700;
-  box-shadow: inset 0 0 0 1px var(--accent);
+  font-size: 0;
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+.cm-cell.off.fill-sel::before {
+  content: '✓';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
 }
 .cm-cell.sel {
   box-shadow: inset 0 0 0 1px var(--fg);

@@ -11,7 +11,7 @@
  * 绝不抛错中断（全量 99k 函数必须跑完）；未解析计数在结果中显式呈现（不静默）。
  */
 
-import type { ControlFlowStatement } from './erb';
+import type { ControlFlowStatement, ErbIndex } from './erb';
 import type { VariableInfo } from './game';
 
 /** 变量引用（如 `CFLAG:2`、`TALENT:恋慕`、`CFLAG:ARG:口上セレクタ`、`LOCAL`） */
@@ -235,6 +235,25 @@ export interface ConditionExtractorService {
    * 函数不存在 / 无索引 / 读文件失败时返回 null（显式，不伪造空结果）。
    */
   functionPredicates(normalizedName: string): Promise<FunctionPredicates | null>;
+  /**
+   * **离线抽取**（additive，2026-10-19 性能批）：对调用方提供的任意 `ErbIndex`
+   * （例如工作区口上包索引——`erb-parser` 的 `buildIndex([workspaceArtifactRoot])` 产物）
+   * 做一次条件抽取，结果只经返回值交给调用方（条件矩阵等工作区视图消费）。
+   *
+   * 隔离边界：**不触碰父服务状态**——`currentIndex()` 不变、不通知订阅者、
+   * 不读也不写快照、不清洗也不污染明细 / 正文缓存；抽取仍复用同一套 schema 标注、
+   * 批量读与 worker 分发路径（与 `ensureIndex()` 同源，不存在第二套抽取逻辑）。
+   *
+   * 空索引 ⇒ 返回**形状稳定的空结果**（`byFunction` 为空 Map，不抛错）。
+   *
+   * `texts`（additive）给出「路径 → 待抽取正文」的覆盖表：工作区 `.kojo` 的产物 ERB
+   * **从不落盘**，抽取器不能按 `filePath` 读盘；给表后该路径一律用表内文本（缺项仍走
+   * `readFile`）。不给 = 逐文件读盘（旧行为逐字不变）。
+   *
+   * **可选方法**：旧版本服务未实现，消费方必须先判
+   * `typeof service.extractIndex === 'function'`，否则降级（隐藏矩阵 / 退回 `ensureIndex()`）。
+   */
+  extractIndex?(index: ErbIndex, texts?: ReadonlyMap<string, string>): Promise<ConditionIndex>;
   /** 订阅索引更新（立即以当前值回调一次，返回退订函数） */
   subscribe(cb: (index: ConditionIndex | null) => void): () => void;
   /**

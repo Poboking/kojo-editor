@@ -435,16 +435,6 @@ export function buildMatrix(
     accOf(fn).universeFunctions.push(columnFn(fn));
   }
 
-  const groupsAcc = [...byFace.entries()]
-    .map(([face, cols]) => ({
-      face,
-      label: faceLabel(face, faceLabels),
-      columns: [...cols.values()].sort(compareColumn),
-    }))
-    .sort((a, b) => faceRank(a.face) - faceRank(b.face) || a.face.localeCompare(b.face));
-  const columnKeyOfFace = groupsAcc;
-  const columnCount = columnKeyOfFace.reduce((n, g) => n + g.columns.length, 0);
-
   // ---- 行聚合（行集合的真源 = rowEntry；填色只来自 entry）----
   const acc = new Map<string, RowAcc>();
   const depsCache = new Map<string, StateDependency[]>();
@@ -554,6 +544,20 @@ export function buildMatrix(
       }
     }
   }
+
+  /**
+   * 列集合在**填色循环之后**才收口：作用域模式（口上包 / 工作区包）下作用域函数未必是
+   * `columnEntry` 的子集——工作区包可能写了游戏里还没人写过的时机。先前在循环前收口
+   * 会让这类列整个消失（格子指向不存在的列），行缺口计数也少算。
+   */
+  const groupsAcc = [...byFace.entries()]
+    .map(([face, cols]) => ({
+      face,
+      label: faceLabel(face, faceLabels),
+      columns: [...cols.values()].sort(compareColumn),
+    }))
+    .sort((a, b) => faceRank(a.face) - faceRank(b.face) || a.face.localeCompare(b.face));
+  const columnCount = groupsAcc.reduce((n, g) => n + g.columns.length, 0);
 
   const rows: MatrixRow[] = [...acc.values()].map((r) => ({
     key: r.key,
@@ -850,6 +854,28 @@ export function computeViewportWindow(
     topPad: start * rowHeight,
     bottomPad: (totalRows - end) * rowHeight,
   };
+}
+
+/** 自动折叠指令时机的总列数阈值：超过它才启用，避免小表莫名其妙收起 */
+export const AUTO_FOLD_COLUMNS = 60;
+/** 自动折叠只收「多列且确有指令编号」的组；单列组照常展开 */
+const AUTO_FOLD_MIN_GROUP_COLUMNS = 4;
+
+/**
+ * 大矩阵的默认折叠面：总列数超过阈值时，把**指令承载面**（多列组）先收起来。
+ *
+ * 指令面每指令一列，一个角色可以铺出几百列；这是选中角色首帧的最大成本。
+ * 折叠是纯呈现策略：表头仍在，点一下即可展开；非指令面 / 小分组保持可见。
+ */
+export function autoFoldFaces(groups: readonly MatrixColumnGroup[]): Set<string> {
+  const out = new Set<string>();
+  const total = groups.reduce((n, g) => n + g.columns.length, 0);
+  if (total <= AUTO_FOLD_COLUMNS) return out;
+  for (const group of groups) {
+    if (group.columns.length < AUTO_FOLD_MIN_GROUP_COLUMNS) continue;
+    if (group.columns.some((col) => col.instructionNo !== null)) out.add(group.face);
+  }
+  return out;
 }
 
 /**

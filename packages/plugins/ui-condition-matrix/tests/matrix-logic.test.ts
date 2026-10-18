@@ -27,6 +27,7 @@ import {
   MATRIX_ROW_H,
   ROWHEAD_MAX_W,
   ROWHEAD_MIN_W,
+  autoFoldFaces,
   buildCharacterIndex,
   buildCharaOptions,
   buildMatrix,
@@ -184,6 +185,22 @@ describe('buildMatrix', () => {
     expect(m.columns.map((c) => c.label)).toEqual(['EVENT', 'MESSAGE_COM', 'MESSAGE_COUNTER']);
     expect(m.totalFunctions).toBe(3);
     expect(m.depsFunctions).toBe(2); // MESSAGE_COM + EVENT 有依赖；MESSAGE_COUNTER 无
+  });
+
+  it('作用域函数带来 universe 没有的列：列保留、缺口按真实列数算', () => {
+    const scopedIndex = makeIndex({ '/p/ws.ERB': ['FAM_COLOR_K1'] });
+    const scopedEntry = buildCharacterIndex(scopedIndex, fakeFamilyIndex).entries.get(1)!;
+    const scopedDeps = (n: string): StateDependency[] =>
+      n === 'FAM_COLOR_K1' ? [dep('CFLAG:318', 'CFLAG', ['318'], [cmp('>=', 1)])] : depsOf(n);
+    const m = buildMatrix(scopedEntry, scopedDeps, labelOf, undefined, undefined, {
+      columnsFrom: entry,
+      rowsFrom: entry,
+    });
+
+    expect(m.columns.map((c) => c.face)).toEqual(['EVENT', 'MESSAGE_COM', 'MESSAGE_COUNTER', 'COLOR']);
+    const row = m.rows.find((r) => r.key === 'CFLAG:318')!;
+    expect(row.cells['COLOR']).toMatchObject({ present: true, count: 1 });
+    expect(row.gapCount).toBe(3); // 4 列里只有 COLOR 由作用域包填了
   });
 
   it('注入 faceLabels → 列标签中文化；未收录的面原样 token', () => {
@@ -669,6 +686,42 @@ describe('cellKeysOfFunction — 命中函数 → 矩阵高亮格集合', () => 
 });
 
 /* ------------------------------ 滚动帧窗口判据 ------------------------------ */
+
+describe('autoFoldFaces（大矩阵默认折叠指令时机）', () => {
+  const col = (face: string, i: number, instruction: boolean) => ({
+    key: `${face}#${i}`,
+    face,
+    label: `#${i}`,
+    instructionNo: instruction ? i : null,
+    functions: [],
+    universeFunctions: [],
+    fillCount: 0,
+    gapCount: 0,
+  });
+  const group = (face: string, n: number, instruction: boolean) => ({
+    face,
+    label: face,
+    columns: Array.from({ length: n }, (_, i) => col(face, i, instruction)),
+  });
+
+  it('总列数不超过阈值 → 不折叠任何组', () => {
+    expect(autoFoldFaces([group('A', 3, true), group('B', 10, false)]).size).toBe(0);
+  });
+
+  it('超过阈值 → 只折叠多列指令面，非指令面/小分组保留', () => {
+    const folded = autoFoldFaces([
+      group('A', 10, true),
+      group('B', 3, true),
+      group('C', 50, false),
+      group('D', 20, true),
+    ]);
+    expect([...folded].sort()).toEqual(['A', 'D']);
+  });
+
+  it('全是非指令面 → 无可折叠（列数通常就等于面数）', () => {
+    expect(autoFoldFaces([group('A', 30, false), group('B', 40, false)]).size).toBe(0);
+  });
+});
 
 describe('rowHasVisibleGap（只看空缺判据）', () => {
   const present = (): MatrixCell => ({ present: true, count: 1, functions: [] });

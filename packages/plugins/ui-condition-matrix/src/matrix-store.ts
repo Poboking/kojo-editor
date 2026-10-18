@@ -15,14 +15,44 @@ import type {
   ConditionExtractorService,
   ErbIndex,
   ErbParserService,
+  FileIO,
   PluginContext,
   ProjectService,
+  StateDependency,
+  SugarTranspileService,
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import type { CharacterIndex, MatrixMemo } from './matrix-logic';
+import type { CharacterEntry, CharacterIndex, MatrixMemo } from './matrix-logic';
 import { buildCharacterIndex, createMatrixMemo } from './matrix-logic';
 import type { AdapterServices } from './adapter-services';
+import type { WorkspacePackRef } from './matrix-scope';
+import { loadWorkspaceIndex } from './workspace-index';
+
+/** 工作区包矩阵的加载态（一次只加载用户选中的那一枚 artifact） */
+export interface WorkspaceMatrixState {
+  /** 当前加载/已加载的 `ws:` 包键（null = 还没选过工作区包） */
+  readonly key: string | null;
+  readonly status: 'idle' | 'loading' | 'ready' | 'error';
+  readonly charaNo: number | null;
+  readonly entry: CharacterEntry | null;
+  /** 工作区函数名 → 状态依赖（抽取失败/旧服务缺席时回退游戏索引） */
+  readonly depsOf: ((normalizedName: string) => StateDependency[]) | null;
+  readonly problems: readonly string[];
+  readonly stats: { readonly files: number; readonly functions: number; readonly kojoFiles: number } | null;
+  readonly error: string | null;
+}
+
+const IDLE_WORKSPACE_MATRIX: WorkspaceMatrixState = {
+  key: null,
+  status: 'idle',
+  charaNo: null,
+  entry: null,
+  depsOf: null,
+  problems: [],
+  stats: null,
+  error: null,
+};
 
 export interface MatrixStore {
   /** 角色 → 函数聚合（未建 / 项目关闭 = null） */
@@ -48,6 +78,10 @@ export interface MatrixStore {
   reloadWorkspaces(): void;
   /** 工作区项目目录（服务缺席 / 未命中 = null；不抛） */
   projectDir(projectId: string): string | null;
+  /** 工作区包矩阵（用户选中的那一枚 artifact 的索引/抽取结果） */
+  workspaceMatrix: WorkspaceMatrixState;
+  /** 加载（或重载）工作区包矩阵；面板在包下拉切换时调用 */
+  loadWorkspaceMatrix(pack: { key: string; ref: WorkspacePackRef }, charaNo: number): void;
 }
 
 export function createMatrixStore(ctx: PluginContext, deps: {
@@ -55,9 +89,11 @@ export function createMatrixStore(ctx: PluginContext, deps: {
   project: ProjectService;
   conditionExtractor: ConditionExtractorService;
   services: AdapterServices;
+  io: Pick<FileIO, 'walkDir' | 'readTexts'>;
+  sugar?: Pick<SugarTranspileService, 'transpile'>;
   workspaces?: WorkspaceService;
 }): MatrixStore {
-  const { parser, project, conditionExtractor, services, workspaces } = deps;
+  const { parser, project, conditionExtractor, services, io, sugar, workspaces } = deps;
 
   // ---- 状态（React 外部源；面板组件读取并订阅） ----
   /** 上一次建索引所用的索引实例（去重判据：同一实例不重复全量遍历） */
@@ -89,6 +125,8 @@ export function createMatrixStore(ctx: PluginContext, deps: {
         return null;
       }
     },
+    workspaceMatrix: IDLE_WORKSPACE_MATRIX,
+    loadWorkspaceMatrix,
   };
 
   const notify = (): void => {
@@ -144,6 +182,83 @@ export function createMatrixStore(ctx: PluginContext, deps: {
       });
   }
 
+  // ---- 工作区包矩阵（「我的口上项目」视图）----
+  /** 在途代次：切换包 / 重载都 +1，旧结果回来直接丢弃 */
+  let workspaceMatrixGen = 0;
+
+  function loadWorkspaceMatrix(pack: { key: string; ref: WorkspacePackRef }, charaNo: number): void {
+    const gen = ++workspaceMatrixGen;
+    state.workspaceMatrix = {
+      key: pack.key,
+      status: 'loading',
+      charaNo,
+      entry: null,
+      depsOf: null,
+      problems: [],
+      stats: null,
+      error: null,
+    };
+    notify();
+    void (async () => {
+      try {
+        const bundle = await loadWorkspaceIndex(
+          { io, parser, ...(sugar ? { sugar } : {}) },
+          pack.ref.rootPath,
+        );
+        if (gen !== workspaceMatrixGen) return;
+        const charIndex = buildCharacterIndex(bundle.displayIndex, services.currentFamilyIndex());
+        const entry = charIndex.entries.get(charaNo) ?? null;
+        let depsOf: ((normalizedName: string) => StateDependency[]) | null = null;
+        if (typeof conditionExtractor.extractIndex === 'function') {
+          const conditions = await conditionExtractor.extractIndex(bundle.extractIndex, bundle.texts);
+          if (gen !== workspaceMatrixGen) return;
+          const byName = new Map<string, StateDependency[]>();
+          for (const [name, cond] of conditions.byFunction) {
+            byName.set(name.toUpperCase(), cond.dependencies);
+          }
+          // 未命中（该文件抽取失败 / 无依赖）回退游戏索引：同名函数的依赖口径仍有一份
+          depsOf = (normalizedName) => byName.get(normalizedName.toUpperCase()) ?? services.depsOf(normalizedName);
+        } else {
+          depsOf = services.depsOf;
+        }
+        state.workspaceMatrix = {
+          key: pack.key,
+          status: 'ready',
+          charaNo,
+          entry,
+          depsOf,
+          problems: bundle.problems,
+          stats: {
+            files: bundle.displayIndex.files.size,
+            functions: entry?.functions.length ?? 0,
+            kojoFiles: bundle.kojoFiles,
+          },
+          error: null,
+        };
+      } catch (err) {
+        if (gen !== workspaceMatrixGen) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        state.workspaceMatrix = {
+          key: pack.key,
+          status: 'error',
+          charaNo,
+          entry: null,
+          depsOf: null,
+          problems: [],
+          stats: null,
+          error: msg,
+        };
+        ctx.log.warn(`Workspace matrix load failed for '${pack.ref.rootPath}': ${msg}`);
+      }
+      if (gen === workspaceMatrixGen) notify();
+    })();
+  }
+
+  const resetWorkspaceMatrix = (): void => {
+    workspaceMatrixGen++;
+    state.workspaceMatrix = IDLE_WORKSPACE_MATRIX;
+  };
+
   const rebuild = (index: ErbIndex | null): void => {
     // 去重：`project.opened` 与 `kojo.functionChanged` 会双双触发 refresh，
     // 两者拿到同一索引实例——同一实例不重复全量遍历（一次扫描即全量重算）。
@@ -184,11 +299,17 @@ export function createMatrixStore(ctx: PluginContext, deps: {
   ctx.onDispose(ctx.bus.on('kojo.functionChanged', () => refresh()));
   ctx.onDispose(
     ctx.bus.on('project.opened', () => {
+      resetWorkspaceMatrix();
       refresh();
       reloadWorkspaces();
     }),
   );
-  ctx.onDispose(ctx.bus.on('project.closed', () => rebuild(null)));
+  ctx.onDispose(
+    ctx.bus.on('project.closed', () => {
+      resetWorkspaceMatrix();
+      rebuild(null);
+    }),
+  );
   // 新建 / 导入 / 发布工作区项目都会广播它；「我的口上项目」的匹配清单不能停在旧一份
   ctx.onDispose(ctx.bus.on('workspace.projectCreated', () => reloadWorkspaces()));
   // 条件抽取索引就绪后重绘（填色依赖 functionConditions；立即回调一次，无副作用）

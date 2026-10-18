@@ -215,6 +215,134 @@ export function matchWorkspacePacks(
   return byDir;
 }
 
+/* --------------------------- 我的口上项目（按角色归属） --------------------------- */
+
+/** ws 包键前缀（矩阵 matrixKey / option value 共用；projectId/artifactId 为内核生成 id） */
+export const WORKSPACE_PACK_PREFIX = 'ws:';
+
+/** 「我的口上项目」里归属当前角色的一枚 artifact（下拉 / 工作区矩阵的选项） */
+export interface WorkspaceMatrixPack {
+  /** `${WORKSPACE_PACK_PREFIX}${projectId}:${artifactId}` */
+  readonly key: string;
+  readonly ref: WorkspacePackRef;
+  /** 例：`我的：${artifactName}`（项目名放 title，由 UI 负责） */
+  readonly label: string;
+  /** 归属判据（优先级 meta > source > dirName，命中的那一条） */
+  readonly attribution: 'meta' | 'source' | 'dirName';
+}
+
+/** 工作区 artifact 的矩阵包键（projectId/artifactId 由内核生成，形如 UUID，不含冒号） */
+export function workspacePackKey(projectId: string, artifactId: string): string {
+  return `${WORKSPACE_PACK_PREFIX}${projectId}:${artifactId}`;
+}
+
+/** 制品 meta 里的角色号（number 或纯数字字符串；其余形态一律视为「没有」） */
+function metaCharaNoOf(meta: Record<string, unknown>): number | null {
+  const raw = meta.charaNo;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!/^[0-9]+$/.test(text)) return null;
+    return Number(text);
+  }
+  return null;
+}
+
+/** 制品 meta 里的导入来源目录（只认非空字符串；是否位于角色目录下另判） */
+function importedFromOf(meta: Record<string, unknown>): string | null {
+  const raw = meta.importedFrom;
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw : null;
+}
+
+/**
+ * 目录名判等键（大小写折叠）。
+ *
+ * `dirName` 是单层名，不含盘符/分隔符——单给 `pathKey` 会被判成 POSIX 而**不折**
+ * 大小写（`MyPack` ≠ `mypack`），可部署落点在 Windows 游戏目录里，两者是同一个包。
+ * 因此先过 `pathKey`（归一化 + Windows 折叠），再统一小写补齐单层名这一档。
+ */
+function dirNameKey(name: string): string {
+  return pathKey(name).toLowerCase();
+}
+
+/**
+ * 「我的口上项目」→ 归属当前角色的 artifact 清单。
+ *
+ * 与 `matchWorkspacePacks`（按 dirName 匹配本项目包目录）互补：这里从工作区一侧
+ * 出发，让**还没有同名包目录**的 artifact（新建项目 / 刚导入）也能进条件矩阵——
+ * 否则作者建完项目先得写文件、等索引出包，才能在矩阵里选到它。
+ *
+ * 归属判据按优先级命中即停：
+ * 1. `meta`：`artifact.meta.charaNo` 与 charaNo 数值相等（number 或数字字符串）；
+ * 2. `source`：`artifact.meta.importedFrom` 位于 charaDir 之下（`relativeSegments`
+ *    已折叠大小写；charaDir 缺省则跳过）——导入来源就是该角色口上目录的包；
+ * 3. `dirName`：与当前角色某个口上包的目录名大小写折叠相等（`pathKey`）。
+ *
+ * 输出按 projectName / artifactName 稳定排序（同键保持输入顺序）；同一 artifact
+ * 只出现一次（`ws:` 键去重）；空 dirName、projectDir 解析不到的一律跳过。
+ * 纯逻辑零 IO：`importedFrom` 只做路径判定，不检查磁盘上是否真有这个目录。
+ */
+export function collectWorkspaceMatrixPacks(opts: {
+  charaNo: number;
+  charaDir: string | undefined;
+  gamePacks: readonly AuthorPack[];
+  projects: readonly WorkspaceProject[];
+  projectDir: (projectId: string) => string | null;
+}): WorkspaceMatrixPack[] {
+  const { charaNo, charaDir, gamePacks, projects, projectDir } = opts;
+  const packDirs = new Set<string>();
+  for (const pack of gamePacks) {
+    if (pack.dirName) packDirs.add(dirNameKey(pack.dirName));
+  }
+  const out = new Map<string, WorkspaceMatrixPack>();
+  for (const project of projects) {
+    for (const artifact of project.artifacts) {
+      // 制品目录名是部署落点与 rootPath 的组成部分；空名无从定位，直接跳过
+      if (!artifact.dirName) continue;
+      // manifest 可能被手改：meta 缺失按「没有元数据」处理，不影响目录名归属
+      const meta = artifact.meta ?? {};
+      let attribution: WorkspaceMatrixPack['attribution'] | null = null;
+      if (metaCharaNoOf(meta) === charaNo) {
+        attribution = 'meta';
+      } else if (charaDir) {
+        const source = importedFromOf(meta);
+        if (source && relativeSegments(source, charaDir) !== null) attribution = 'source';
+      }
+      if (!attribution && packDirs.has(dirNameKey(artifact.dirName))) attribution = 'dirName';
+      if (!attribution) continue;
+
+      let dir: string | null;
+      try {
+        dir = projectDir(project.id);
+      } catch {
+        dir = null;
+      }
+      if (!dir) continue;
+
+      const key = workspacePackKey(project.id, artifact.id);
+      if (out.has(key)) continue;
+      out.set(key, {
+        key,
+        ref: {
+          projectId: project.id,
+          projectName: project.name,
+          artifactId: artifact.id,
+          artifactName: artifact.name,
+          dirName: artifact.dirName,
+          rootPath: join(dir, artifact.dirName),
+        },
+        label: `我的：${artifact.name}`,
+        attribution,
+      });
+    }
+  }
+  return [...out.values()].sort(
+    (a, b) =>
+      a.ref.projectName.localeCompare(b.ref.projectName) ||
+      a.ref.artifactName.localeCompare(b.ref.artifactName),
+  );
+}
+
 /* ------------------------------ 剧情线选格 ------------------------------ */
 
 /** 一格引用（行键 + 列键） */
