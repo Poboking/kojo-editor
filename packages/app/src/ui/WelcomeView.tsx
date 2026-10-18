@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import type { FileStat, RecentProject } from '@kojo/plugin-api';
 import { pathKey } from '@kojo/plugin-api';
+import type { RecentFileRecord } from './recent-files';
 // 版本号单一真源 = app 包清单（与 `src/bootstrap.ts` 的 `APP_VERSION` 同一条路）：
 // 欢迎页那格不许再抄一份字面量，抬版本只改三处清单（闸见 `tests/app-version.test.ts`）。
 import { version as APP_VERSION } from '../../package.json';
@@ -10,6 +11,9 @@ import './welcome.css';
 
 /** 教程卡片指向的语义 id（与内核事件 `ui.tutorial.open` 的载荷同一词表） */
 export type WelcomeTutorialId = 'kojo' | 'sugar' | 'reference';
+
+/** 无接线时的稳定空表（模块级常量：不给探测 effect 每次渲染造新引用） */
+const NO_RECENT_FILES: readonly RecentFileRecord[] = [];
 
 /** 教程卡片的静态半边：标题 / 一句说明 / 图标。打开动作由宿主接线成内核意图。 */
 export interface WelcomeTutorialEntry {
@@ -60,6 +64,15 @@ interface Props {
    */
   onRemoveRecent: (dir: string) => void;
   onClearRecent: () => void;
+  /**
+   * 最近文件（MM-7）：打开/跳转落地即记的跨项目文件列表。写操作同最近项目——
+   * 单源在 App（记录点/摘除/落盘都在那里），组件只展示与发点击意图。
+   * **可选**（additive 接线）：旧渲染方（welcome-layout 冒烟等）不传也能挂载，
+   * 组件侧退化为「不显示最近文件区」而不是炸。
+   */
+  recentFiles?: readonly RecentFileRecord[];
+  /** 最近文件点击：同项目直接开、换项目先开项目再开（接线与判据在 App） */
+  onOpenRecentFile?: (path: string, rootDir: string) => void;
   /** 失效探测（A4）；resolve undefined = 探测不可用（浏览器壳等），行内不标记 */
   statPath: (path: string) => Promise<FileStat | null | undefined>;
   /** 最近一次打开的项目根（null = 无会话可继续）；退出/崩溃守护批 */
@@ -98,6 +111,14 @@ export function recentRowState(stat: FileStat | null | undefined): RecentRowStat
  */
 export function recentStatKey(r: Pick<RecentProject, 'rootDir' | 'lastOpenedAt'>): string {
   return `${pathKey(r.rootDir)}\u0000${r.lastOpenedAt}`;
+}
+
+/**
+ * 最近文件的探测缓存键（MM-7）：同款口径——pathKey(path) + openedAt，
+ * 重开过的文件时间戳变 ⇒ 重扫（删了又回来的文件不会被旧探测结果钉死）。
+ */
+export function recentFileStatKey(r: Pick<RecentFileRecord, 'path' | 'openedAt'>): string {
+  return `${pathKey(r.path)}\u0000${r.openedAt}`;
 }
 
 /** 乐观移除的纯函数半边：按 pathKey 摘条目，其余逐字保序（与内核 removeRecent 同口径） */
@@ -182,6 +203,8 @@ export function WelcomeView({
   onOpenRecent,
   onRemoveRecent,
   onClearRecent,
+  recentFiles,
+  onOpenRecentFile,
   statPath,
   resumeRoot,
   onResumeSession,
@@ -193,6 +216,8 @@ export function WelcomeView({
   onReopen,
   onOpenTutorial,
 }: Props): ReactElement {
+  // 最近文件（MM-7）：未接线（可选 prop 缺席）时退化为稳定空表——区不显示，不炸
+  const files = recentFiles ?? NO_RECENT_FILES;
   // 失效标记（A4）：逐条异步 stat，null = 目录不存在 → 行内灰态标记（仍可点、仍可移除）。
   // 结果按 pathKey+lastOpenedAt 缓存，recent 变化只补扫缓存缺失的键——不每帧重扫。
   const [statCache, setStatCache] = useState<Map<string, FileStat | null>>(new Map());
@@ -222,6 +247,36 @@ export function WelcomeView({
     };
     // statCache 在依赖里：补扫完自然转 idle（pending 为空即早退），不会成环
   }, [kernelReady, recent, statPath, statCache]);
+
+  // 失效探测（MM-7 最近文件区）：同款机制、探测 r.path 而不是 r.rootDir——
+  // null = 文件不存在 ⇒ 行内灰标「文件不存在」（仍可点，点了让 App 的重试逻辑说话）。
+  const [fileStatCache, setFileStatCache] = useState<Map<string, FileStat | null>>(new Map());
+  useEffect(() => {
+    if (!kernelReady) return;
+    const pending = files.filter((r) => !fileStatCache.has(recentFileStatKey(r)));
+    if (pending.length === 0) return;
+    let cancelled = false;
+    void Promise.all(
+      pending.map(async (r): Promise<readonly [string, FileStat | null | undefined]> => {
+        try {
+          return [recentFileStatKey(r), await statPath(r.path)] as const;
+        } catch {
+          return [recentFileStatKey(r), undefined] as const; // 探测不可用：不标记，不缓存
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setFileStatCache((prev) => {
+        const next = new Map(prev);
+        for (const [k, v] of entries) if (v !== undefined) next.set(k, v);
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // fileStatCache 在依赖里：补扫完自然转 idle（pending 为空即早退），不会成环
+  }, [kernelReady, files, statPath, fileStatCache]);
 
   if (closed) {
     return (
@@ -380,6 +435,54 @@ export function WelcomeView({
                             title={`从列表移除：${r.rootDir}`}
                           >
                             移除
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
+
+              {/* 最近文件（MM-7）：跨项目的打开记录。行结构同「最近」项目区
+                  （welcome-recent-* 同款类名天然继承样式），探测的是文件本身。 */}
+              <section className="welcome-section welcome-recent-files" aria-labelledby="welcome-recent-files-title">
+                <div className="welcome-section-head">
+                  <h2 className="welcome-section-title" id="welcome-recent-files-title">
+                    最近文件
+                  </h2>
+                </div>
+
+                {files.length === 0 ? (
+                  <p className="welcome-empty">还没有最近文件——打开过的文件会出现在这里。</p>
+                ) : (
+                  <ul className="welcome-recent-list">
+                    {files.map((r) => {
+                      const missing = recentRowState(fileStatCache.get(recentFileStatKey(r))) === 'missing';
+                      const name = r.path.split(/[\\/]/).pop() || r.path;
+                      const projectName = r.rootDir.split(/[\\/]/).pop() || r.rootDir;
+                      return (
+                        <li key={r.path} className={`welcome-recent-row${missing ? ' is-missing' : ''}`}>
+                          <button
+                            className="welcome-recent-open"
+                            onClick={() => onOpenRecentFile?.(r.path, r.rootDir)}
+                            title={
+                              missing
+                                ? `${r.path}（文件不存在，点击重试打开）`
+                                : `${r.path}（属于项目 ${r.rootDir}）`
+                            }
+                          >
+                            <span className="welcome-recent-file">
+                              <span className="welcome-recent-path">{name}</span>
+                              <span className="welcome-recent-sub">{r.path}</span>
+                            </span>
+                            <span className="welcome-recent-meta">
+                              {missing ? (
+                                <span className="welcome-recent-badge is-missing">文件不存在</span>
+                              ) : null}
+                              <span className="welcome-recent-badge" title={r.rootDir}>
+                                {projectName}
+                              </span>
+                            </span>
                           </button>
                         </li>
                       );

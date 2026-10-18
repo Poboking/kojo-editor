@@ -2111,6 +2111,7 @@ export function EditorPane({
       formatDocument: 'editor.action.formatDocument',
       rename: 'editor.action.rename',
       references: 'editor.action.goToReferences',
+      gotoLine: 'editor.action.gotoLine',
     } as const;
     const un = kernel.bus.on('editor.action.request', (p) => {
       const ed = editorRef.current;
