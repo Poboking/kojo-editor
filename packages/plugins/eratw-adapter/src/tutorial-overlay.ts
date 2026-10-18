@@ -39,13 +39,10 @@ import { createElement as h, type ReactNode } from 'react';
 import { parseTutorialInline, tutorialInlinePlain, type TutorialInlineNode } from './tutorial-inline';
 import type { Tutorial, TutorialSample, TutorialTable } from './tutorial-content';
 
-/** overlay 贡献 id（面板按钮发 `ui.overlay.open` 时引用）——真源在 `tutorial-lazy.ts`
- *  （PS-10：适配器为了拿 id 不该静态挂着本模块与正文；这里原样转发，旧引用零改动）。 */
-export {
-  KOJO_TUTORIAL_OVERLAY_ID,
-  REFERENCE_TUTORIAL_OVERLAY_ID,
-  SUGAR_TUTORIAL_OVERLAY_ID,
-} from './tutorial-lazy';
+/** overlay 贡献 id（面板按钮发 `ui.overlay.open` 时引用） */
+export const SUGAR_TUTORIAL_OVERLAY_ID = 'eratw.tutorialSugar';
+export const KOJO_TUTORIAL_OVERLAY_ID = 'eratw.tutorialKojo';
+export const REFERENCE_TUTORIAL_OVERLAY_ID = 'eratw.tutorialReference';
 
 export interface TutorialOverlayDeps {
   tutorial: Tutorial;

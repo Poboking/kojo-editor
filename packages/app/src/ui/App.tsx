@@ -28,7 +28,7 @@ import {
 } from './session-store';
 import { clearRecoveredContents, recoveredPaths, setRecoveredContents } from './recovery-store';
 import { planProjectSwitch, resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
-import { bootstrapKernel, ensureProjectPlugins, prefetchProjectPlugins } from '../bootstrap';
+import { bootstrapKernel } from '../bootstrap';
 import { perf } from '../perf';
 import { revealTargetOf, type RevealSpan, type RevealTarget } from '../monaco/reveal-position';
 import {
@@ -96,23 +96,6 @@ import type { EditorPaneActions } from './EditorPane';
 const loadProjectView = (): Promise<{ default: typeof import('./ProjectView')['ProjectView'] }> =>
   import('./ProjectView').then((m) => ({ default: m.ProjectView }));
 const ProjectView = lazy(loadProjectView);
-
-/**
- * 欢迎页上"我要开项目"的两处意图面（PS-10 ③ 的预取闸门）：最近项目区（含每一行）与
- * 「继续上次会话」。选择器只认既有类名，`WelcomeView` 一字未改。
- */
-const WELCOME_OPEN_INTENT_SELECTOR = '.welcome-recent, .welcome-resume';
-
-/**
- * 无人点击时的兜底预取延迟（ms）。**上限被取证口径钉死**，不是随手数：
- * `tools/boot-probe.mjs` 的 `captureBootNetwork` 在采到 `boot.welcomeInteractive` 之后只等
- * `settleMs`（默认 4000ms，`smoke-tauri-dom` / `boot-marks` 都没另传）就切 Network 域读数，
- * 而它的**反空匹配自证**要求「可点之后必须真的看得到 monaco 请求」——兜底若晚于这个窗口，
- * 整轮 monaco 计数归零 ⇒ `judgeNetwork` 判 `unproven` ⇒ 断言②无法自证（假绿同罪）。
- * 下限则要远晚于"开机就点最近项目"的那一下（旧接线是空闲一帧就抢跑，正是被堵住的用户）。
- * 真点击走 `pointerdown` 意图触发，与本常量无关；这里只管"停在欢迎页不点"的兜底。
- */
-const PREFETCH_FALLBACK_MS = 2_500;
 
 /** 项目视图 chunk 装载期间的骨架（与内联引导层同构；idle 预取命中时基本见不到） */
 function ProjectViewSkeleton(): ReactElement {
@@ -314,56 +297,22 @@ export function App(): ReactElement {
   }, []);
 
   // L1-0 / L1-A 接线：内核就绪 ⇒ 欢迎页主按钮即渲染完成（本布局副作用随提交执行）。
-  // 顺序是硬约束：**先记** `boot.welcomeInteractive`、**再排**预取——tools 的断言②
-  // 以该标记为界判「欢迎页可点前的网络请求不含 monaco」，而这里两发预取都在标记之后才准起飞。
+  // 顺序是硬约束：**先记** `boot.welcomeInteractive`、**再排** idle 预取——tools 的断言②
+  // 以该标记为界判「欢迎页可点前的网络请求不含 monaco」，而 rIC 最早也在下一帧才执行。
   const prefetched = useRef(false);
-  /** 开项目时的撤防口（`openProject` 入口调用：真加载由 lazy / ensureProjectPlugins 自己拉） */
-  const cancelPrefetchRef = useRef<(() => void) | null>(null);
   useLayoutEffect(() => {
     if (!kernel || prefetched.current) return;
     prefetched.current = true;
     perf.bootMark('boot.welcomeInteractive', undefined, '自导航起点 ms；内核就绪 ⇒ 欢迎页主按钮可点（提交时刻）');
-
-    /* PS-10 ③：预取从"空闲即抢跑"改成"**有意图才飞**"。
-     *
-     * 旧接线是 `requestIdleCallback(…, { timeout: 4000 })`——timeout 只是**上限**，
-     * 第一个空闲帧就执行 ⇒ 开机 1–2s 就把 ProjectView（静态链上挂着 ~4 MB Monaco）连同
-     * 项目级插件整块取回并**求值**，正好和用户最快那一下「继续上次会话」抢同一根主线程。
-     * 推迟字节不等于推迟求值，所以这里把触发条件换成意图：
-     *  - 首选＝最近项目区 / 「继续上次会话」上的第一次 `pointerdown`（此时取回+求值本来就是
-     *    开项目的前置，并行预热只赚不亏）；
-     *  - 兜底＝`PREFETCH_FALLBACK_MS` 内没人碰（读者停在欢迎页）才在空闲里补一发。
-     *    这发兜底同时保住 boot-probe 断言②的反假绿自证——「整轮零 monaco 请求 = 匹配面可疑」，
-     *    取证那一轮没有人点击，口径必须仍然看得到 monaco（窗口＝可点后 `settleMs` 4s，
-     *    取值见上面那个常量的注释，别往后挪）。
-     *  - 撤防＝`openProject` 一入口就取消：真开项目会自己拉这两块，抢跑没有意义。
-     */
-    let done = false;
-    let fallbackTimer = 0;
-    const disarm = (): void => {
-      done = true;
-      window.clearTimeout(fallbackTimer);
-      window.removeEventListener('pointerdown', onPointer, true);
-      cancelPrefetchRef.current = null;
-    };
-    const fire = (): void => {
-      if (done) return;
-      // 先到先得：意图触发或兜底触发都只执行一次，撤防后不再起飞
-      disarm();
+    const prefetch = (): void => {
       // 预取尽力而为：失败不打扰（真加载失败由 lazy 的 Suspense 路径呈现）
       void loadProjectView().catch(() => undefined);
-      void prefetchProjectPlugins().catch(() => undefined);
     };
-    function onPointer(event: PointerEvent): void {
-      const target = event.target as HTMLElement | null;
-      if (typeof target?.closest === 'function' && target.closest(WELCOME_OPEN_INTENT_SELECTOR)) fire();
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(prefetch, { timeout: 4000 });
+    } else {
+      setTimeout(prefetch, 1500);
     }
-    window.addEventListener('pointerdown', onPointer, true);
-    fallbackTimer = window.setTimeout(() => {
-      if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(fire, { timeout: 4000 });
-      else fire();
-    }, PREFETCH_FALLBACK_MS);
-    cancelPrefetchRef.current = disarm;
   }, [kernel]);
 
   // 索引所有权在 erb-parser：索引重建完成后由事件通知，宿主只同步展示
@@ -497,12 +446,6 @@ export function App(): ReactElement {
         approvalMismatch = true;
       });
       try {
-        // PS-10 ②：17 个项目级插件在开项目这一刻才注册（欢迎页不需要它们的面板 / 命令 /
-        // 状态栏贡献）。**必须赶在 open() 之前**：插件们挂在 `project.opened` 那一拍上，
-        // 漏拍就是级联与快照少一家。指针意图已把这块预热过，这里通常只剩注册。
-        // 顺带撤防预取（PS-10 ③）：真加载由下面的 lazy 与这里共同负责，抢跑没有意义。
-        cancelPrefetchRef.current?.();
-        await ensureProjectPlugins(kernel);
         const p = await kernel.project.open(dir);
         setProject(p);
         // 换项目（欢迎页首开 / 拖入新目录）：旧项目的整套 UI 态整体带走；
