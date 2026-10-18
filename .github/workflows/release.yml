@@ -1,6 +1,5 @@
-# 发布工作流：push v* tag 时构建 NSIS 安装包 + updater 产物（latest.json + 签名包）。
-# 注意：本仓库为私有仓库，GitHub release 资产未经认证不可直链下载，
-# updater endpoint（releases/latest/download/latest.json）正式发版前需公开仓库或另配下载代理。
+# 发布工作流：push v* tag 时构建 NSIS 安装包 + updater 产物（latest.json + 签名包），
+# 并额外产出绿色版 portable zip（exe + README + LICENSE）与 SHA256SUMS.txt。
 name: release
 
 on:
@@ -55,27 +54,66 @@ jobs:
           tagName: v__VERSION__
           releaseName: "kojo-editor v__VERSION__"
           releaseBody: |
-            era 口上作者的结构感知编辑器。本发行版为 **测试版（beta）**：核心功能已可用，欢迎试用与反馈。
+            era 口上作者的结构感知编辑器。**正式版**。
 
             ## 下载与安装
-            - **Windows 10/11（x64）**：下载下方 `kojo-editor_<版本>_x64-setup.exe`，双击安装。
-            - 安装包带更新签名；安装后「设置 → 更新」可一键检查并安装后续版本，无需重装。
+            - **Windows 10/11（x64）安装版**：下载 `kojo-editor_<版本>_x64-setup.exe`，双击安装；安装后「设置 → 更新」可一键检查并安装后续版本。
+            - **绿色版**：下载 `kojo-editor_<版本>_x64-portable.zip`，解压即用，不写注册表、不建开始菜单；更新时重新下载新版即可。
+            - `SHA256SUMS.txt` 附安装包与绿色版的校验值。
 
-            ## 它能做什么
-            - **结构化浏览**——口上文件按角色归类，函数按「角色 → 家族 → 面」成树展开，条件徽章一目了然，点击直达；
-            - **约定校验**——函数名拼写、家族完整性、格式问题列成清单，点击跳到出错行，错误不再静默；
-            - **.kojo 语言**——`如果 好感度 ≤ 5：` 这样的中文语感写口上，保存时自动编译为游戏原样读取的脚本，原编码、原换行一字不乱；
-            - **状态回放**——选一份存档一个角色，每条触发条件的真假与分支走向直接铺开，不用开游戏刷状态；
-            - **状态注入**——数值改动写入测试存档，两步确认、自动备份、回读验证，真实存档与游戏本体永远只读；
-            - **自动更新**——应用内一键检查并安装后续版本。
+            ## 本版更新
+            - **口上市场**——浏览 / 安装 / 更新口上包与字典包；工作区或普通 ZIP 一键发布，上传前本地预校验，成功后生成市场审核单；
+            - **条件矩阵**——全项目「状态·时机 × 事件·面」矩阵，格子显示命中函数数，点击直达；中日对照，十万函数虚拟滚动；
+            - **语法全表（附录）**——`.kojo` 写法、取值、编译产物与写错提示一张表查完，教程内可跳转；
+            - **补全增强**——ERB 指令 / 变量族 / `#DIM` / 用户函数 / `$标签` / `.kojo` 原生区跨装配补全；停手即弹、延迟可调，台词与注释不打扰；
+            - **编辑体验**——分屏、标签栏、面包屑、查找引用 / 重命名 / 跳实现、签名帮助、行内实参提示、三主题、无边框窗口、自动保存与崩溃恢复；
+            - **.kojo 语言**——控制流中文写形、数据表、随机、选项、演出、别名与插值继续扩展；校验可中断；
+            - **性能与稳定**——索引、首屏、面板长列表与保存链路优化；操作级撤销、回收站、三方合并与写允许域继续收紧。
 
             ## 已知事项
-            - 仓库与安装包**不包含任何游戏内容**——首次启动需选择本机已安装的 eraTW 游戏目录，只读浏览始终可用；
-            - beta 阶段功能与界面仍会调整；网络环境需能访问 GitHub Releases（自动更新走同一路径）；
+            - 仓库与安装包**不包含任何游戏内容**——首次启动选择本机已安装的 eraTW 游戏目录，只读浏览始终可用；
+            - 绿色版依赖系统 WebView2（Windows 11 自带；Windows 10 可能需安装 Evergreen 运行时）；
+            - 自动更新走 GitHub Releases；网络受限时请手动下载新版；
             - 遇到问题欢迎[提交 Issue](https://github.com/Poboking/kojo-editor/issues)。
 
             开发者：[Poboking](https://github.com/Poboking) ｜ 许可证：[GPL-3.0-or-later](https://github.com/Poboking/kojo-editor/blob/master/LICENSE)
           releaseDraft: false
-          prerelease: true
+          prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+      # 绿色版：裸 exe + README + LICENSE 打成便携 zip；顺手给安装包与 zip 出 SHA256。
+      - name: package portable zip and checksums
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $stage = "kojo-editor_${version}_x64-portable"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "packages/app/src-tauri/target/release/kojo-editor.exe" "$stage/kojo-editor.exe"
+          Copy-Item README.md "$stage/README.md"
+          Copy-Item LICENSE "$stage/LICENSE"
+          $zip = "kojo-editor_${version}_x64-portable.zip"
+          Compress-Archive -Path $stage -DestinationPath $zip -Force
+          $setup = "packages/app/src-tauri/target/release/bundle/nsis/kojo-editor_${version}_x64-setup.exe"
+          $lines = foreach ($f in @($setup, $zip)) {
+            $hash = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
+            "$hash  $(Split-Path $f -Leaf)"
+          }
+          $lines | Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      # tauri-action 先建 release 并上传安装包/updater 资产；这里补传绿色版与校验值。
+      - name: upload portable zip and checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$GITHUB_REF_NAME" kojo-editor_*_x64-portable.zip SHA256SUMS.txt --clobber; then
+              exit 0
+            fi
+            echo "release not ready (attempt $attempt), retrying..."
+            sleep 5
+          done
+          echo "failed to upload portable assets" >&2
+          exit 1
