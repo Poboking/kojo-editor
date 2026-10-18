@@ -21,6 +21,7 @@ import {
   buildZip,
   type FileIO,
   type Logger,
+  type OpJournal,
   verifyZipRoundtrip,
   type ZipEntry,
 } from '@kojo/plugin-api';
@@ -54,6 +55,11 @@ export interface PackageActionsDeps {
    * 语法糖服务缺席时它抛错 → 含 `.kojo` 的包被整体拒绝，绝不静默少转文件。
    */
   compileKojo: KojoCompiler;
+  /**
+   * 批操作 journal（2026-10-18 undo 覆盖批，additive 可选）：在场时部署整包进账，
+   * OpsHistoryOverlay 可整批撤销；缺席 = 旧的不进账行为。
+   */
+  journal?: Pick<OpJournal, 'begin' | 'record' | 'commit' | 'abort'>;
 }
 
 /**
@@ -177,6 +183,7 @@ export function createPackageActions(deps: PackageActionsDeps): PackageActions {
           srcDir: pkg.absDir,
           targetDir: target.targetDir,
           compile: deps.compileKojo,
+          journal: deps.journal,
         });
         set(
           {
