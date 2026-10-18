@@ -58,3 +58,29 @@ describe('applyFormatOnSave · 开关', () => {
     expect(Object.keys(applyFormatOnSave(DOC, 'kojo', false)).sort()).toEqual(['changed', 'edits', 'text']);
   });
 });
+
+/* ═══════════════ P2-14：规则开关随保存链路走（落盘前现读，判据「保存链路现读」） ═══════════════ */
+
+describe('applyFormatOnSave · 规则开关（P2-14）', () => {
+  it('rules 原样递给规则本体（替身收到同一引用形状）', () => {
+    const seen: unknown[] = [];
+    const rules = { fullWidthSpace: false, indent: true };
+    applyFormatOnSave(DOC, 'kojo', true, (text, dialect, r) => {
+      seen.push({ text, dialect, r });
+      return { text, edits: [] };
+    }, rules);
+    expect(seen[0]).toMatchObject({ dialect: 'kojo', r: { fullWidthSpace: false, indent: true } });
+  });
+
+  it('全角折算关掉 ⇒ 保存链路对 U+3000 一个字符都不折（开关不食言）', () => {
+    const out = applyFormatOnSave(DOC, 'kojo', true, undefined, { fullWidthSpace: false, indent: true });
+    expect(out.changed).toBe(false);
+    expect(out.text).toBe(DOC); // 含 U+3000 的台词行与缩进原样
+  });
+
+  it('不传 rules（缺省全开）= 与开关出现之前逐字一致（U+3000 缩进照折）', () => {
+    const out = applyFormatOnSave(DOC, 'kojo', true);
+    expect(out.changed).toBe(true);
+    expect(out.text.includes(FULLWIDTH_SPACE)).toBe(false);
+  });
+});

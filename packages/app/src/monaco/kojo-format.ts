@@ -32,6 +32,23 @@ import { registerForKojoDialects } from './register-dialects';
 export interface FormatRequest {
   readonly text: string;
   readonly dialect: FormatDialect;
+  /**
+   * 规则开关（P2-14，additive；字段名与插件 `computeFormatEdits` 的第三参逐字对应，
+   * 结构相容直传、不引插件类型——插件公共面本批冻结）。`undefined` = 全开，与
+   * 规则开关出现之前逐字等价。开关的偏好面在 `ui/format-pref.ts`，**由宿主在组请求时
+   * 现读填入**（`editor-global-providers.ts` 的 `formatResolve`），本层不自取偏好——
+   * 纯函数层不读 localStorage，请求里带了什么就执行什么。
+   */
+  readonly rules?: FormatRuleSwitches;
+}
+
+/**
+ * 规则开关的最小面（P2-14）：只声明宿主会传的两个布尔。
+ * 与 `ui/format-pref.ts` 的 `FormatRules`（两布尔都落地）结构相容。
+ */
+export interface FormatRuleSwitches {
+  readonly fullWidthSpace?: boolean;
+  readonly indent?: boolean;
 }
 
 /** 只用到 model 的行列读数——纯函数因此可在 node 里拿假 model 测 */
@@ -98,7 +115,8 @@ export function installDocumentFormatter(
       if (!request) return [];
       let edits: FormatEdit[];
       try {
-        edits = computeFormatEdits(request.text, request.dialect);
+        // 规则开关随请求走（缺省全开 = 与今天逐字等价）；偏好读取在宿主组请求时现读
+        edits = computeFormatEdits(request.text, request.dialect, request.rules);
       } catch (e: unknown) {
         // 规则层出错就"这次不格式化"，不能让命令本身炸掉编辑器
         console.warn(`[kojo-format] computeFormatEdits 抛错：${errorText(e)}`);

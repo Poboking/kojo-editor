@@ -9688,4 +9688,24 @@ button.resume-session {
   font-size: var(--fs-0);
   color: var(--fg-dim);
   white-space: nowrap;
+
+/* ==========================================================================================
+ * 快速修复预览（P2-14）—— .qfp-*
+ * 本段只追加在文件末尾，不改上方任何既有规则（P2-13 的 .prob-* 也会各占一段）。
+ * 宿主类名（wizard / kd-host / kd-labels / wizard-actions / kd-error）与 DiffViewOverlay
+ * 共用同一套既有样式，这里只补预览自己的两格。
+ * ========================================================================================== */
+
+/* 只读 diff 编辑器：比 DiffViewOverlay 的 kd-editor 矮一档（预览是一次短确认，不是长比对） */
+.qfp-editor {
+  height: 46vh;
+  min-height: 260px;
+  border: 1px solid var(--border, #3a4252);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* 侧标签下的那句口径说明：确认前不落盘、可撤销 */
+.qfp-hint {
+  margin: 0 0 8px;
 }

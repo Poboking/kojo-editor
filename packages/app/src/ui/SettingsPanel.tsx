@@ -38,6 +38,7 @@ import { KeybindingsPage } from './KeybindingsPage';
 import type { CommandEntry } from './commands';
 import avatarUrl from '../assets/developer-avatar-128.png';
 import { CONTACT_EMAIL, CONTACT_MAILTO } from './contact';
+import { loadFormatRulesPref, saveFormatRulesPref, type FormatRules } from './format-pref';
 
 /** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
 const THEME_LABELS: Record<ThemePref, string> = {
@@ -501,6 +502,12 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 </span>
               </span>
             </label>
+            {/* 格式化规则开关（P2-14）：整理规则从"全开、零可配"扩成逐条可关。真源
+                `format-pref.ts` 的新键 `kojo.ui.formatRules.v1`（老键 kojo.ui.formatOnSave.v1
+                口径不动；新键缺席 = 两条全开 = 与从前逐字一致）。作用面：手动整理
+                Shift+Alt+F 与保存时整理都**落盘/组请求前现读**这两条开关；区间与打字
+                整理保持全开（逐次按键上跑归一不合身——明说的边界，不是漏接）。 */}
+            <FormatRulesRows />
             {/* 行上内联注解（B8，2026-10-16）：往正文里插行的能力，默认关的理由写在
                 `code-lens-pref.ts`。文案刻意不上「CodeLens / 反向索引」这类机器词，
                 并且把"没标注 ≠ 没人用"这条最容易读反的口径当场说清（铁律 4：不静默、也不误导）。 */}
@@ -879,5 +886,53 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ==========================================================================================
+ * 格式化规则开关（P2-14）——本组件是**追加段**：不改动 / 重排上方任何既有行，只在这里
+ * 自成一枚小组件 + 编辑器带里的一格 <FormatRulesRows />。
+ *
+ * 为什么自带状态（破例于"设置页只放值与回调"的房规）：既有开关的镜像值住在常驻的
+ * `ShellLayout`（本批文件权限不覆盖它），而这两条开关的**全部读方**（格式化 provider 组
+ * 请求时、保存链路落盘前）都是**现读 localStorage**（`loadFormatRulesPref`），没有任何
+ * 闭包旧值可漂——挂载时读一次、写入即落盘即回显，行为与"ShellLayout 持镜像"逐字等价。
+ * 挂载即读 = 设置页每次打开都拿到最新值，与既有开关的开窗重读同口径。
+ * ========================================================================================== */
+function FormatRulesRows(): ReactElement {
+  const [rules, setRules] = useState<FormatRules>(() => loadFormatRulesPref());
+  const commit = (patch: Partial<FormatRules>): void => {
+    const next: FormatRules = { ...rules, ...patch };
+    setRules(next);
+    saveFormatRulesPref(next);
+  };
+  return (
+    <>
+      <label className="settings-row">
+        <Switch
+          checked={rules.fullWidthSpace}
+          onChange={(on) => commit({ fullWidthSpace: on })}
+          label="折算全角空格"
+        />
+        <span>
+          折算全角空格
+          <span className="settings-hint">
+            手动整理（Shift+Alt+F）与保存时整理，都把行首缩进与注释里的全角空格
+            折成半角；关闭后全角空格一律原样保留，台词正文里的全角空格本来就不动。
+            默认开
+          </span>
+        </span>
+      </label>
+      <label className="settings-row">
+        <Switch checked={rules.indent} onChange={(on) => commit({ indent: on })} label="统一 .kojo 缩进写法" />
+        <span>
+          统一 .kojo 缩进写法
+          <span className="settings-hint">
+            手动整理与保存时整理，都把 .kojo 文件的行首空白重排成统一的写法（制表符或
+            4 个空格，取文件里多数派）；关闭后行首空白一字不动。默认开
+          </span>
+        </span>
+      </label>
+    </>
   );
 }

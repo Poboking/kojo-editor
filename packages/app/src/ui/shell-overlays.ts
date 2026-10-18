@@ -4,6 +4,12 @@ import type { ErbParserService, OpJournal } from '@kojo/plugin-api';
 import { KernelServices } from '@kojo/plugin-api';
 import { bindDiffView, DIFF_VIEW_OVERLAY_ID } from './diff-view';
 import { createDiffViewOverlay } from './DiffViewOverlay';
+// P2-14：quick fix 预览 overlay（确认才落的那扇窗）——照 diff view 那格的注法追加。
+// **不静态 import `editor-global-providers`**：那个模块静态挂着整个 monaco provider
+// 世界（PS-10 开机图闸的真判据），预览确认是低频路径——apply / activePaneId 都走
+// 点击那一刻的动态 import（overlay 的 deps 本就收 Promise）。
+import { QUICK_FIX_PREVIEW_OVERLAY_ID } from './quick-fix-preview';
+import { createQuickFixPreviewOverlay } from './QuickFixPreviewOverlay';
 import {
   FILE_HISTORY_OVERLAY_ID,
   setFileHistoryTarget,
@@ -156,6 +162,20 @@ export function useShellOverlays(kernel: Kernel | null): void {
           },
         })
       : undefined;
+    // 快速修复预览（P2-14）：💡 的改文本动作先出 diff 预览、确认才落。依赖注入与
+    // diff view 那格同款：apply 落地走 editor-global-providers 的既有 applyTextEdits，
+    // activePaneId 反查触发修复的实例，close 走既有 ui.overlay.close 通道。
+    const unRegQuickFixPreview = kernel.slots.register('ui.overlay', {
+      id: QUICK_FIX_PREVIEW_OVERLAY_ID,
+      order: 44,
+      size: 'wide',
+      component: createQuickFixPreviewOverlay({
+        apply: (actionId) => import('./editor-global-providers').then((m) => m.applyQuickFixEdits(actionId)),
+        activePaneId: () => import('./editor-global-providers').then((m) => m.focusedPaneIdOf()),
+        close: () =>
+          kernel.bus.emit('ui.overlay.close', { id: QUICK_FIX_PREVIEW_OVERLAY_ID, source: 'host:quick-fix-preview' }),
+      }),
+    });
     return () => {
       unBind();
       unReg();
@@ -165,6 +185,7 @@ export function useShellOverlays(kernel: Kernel | null): void {
       unRegOpsCommand?.();
       unRegCallHierarchy();
       unRegCallHierarchyCommand();
+      unRegQuickFixPreview();
     };
   }, [kernel]);
 }

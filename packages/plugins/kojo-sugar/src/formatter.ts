@@ -37,6 +37,22 @@
  * 产物里可打印的字符一个不许变 —— 由 `tests/formatter.invariants.test.ts` 的
  * "逐行折叠空白后相等 + 无全角样例逐字节相等"两条一起钉住。
  *
+ * ## 规则可逐条关（P2-14「格式化规则零可配置」）
+ *
+ * `computeFormatEdits` / `formatText` 收一个 **additive** 选项参 `FormatRuleOptions`：
+ * 两条规则各有一个布尔开关，**缺省全开 ⇒ 与加选项之前逐字等价**（既有调用方与既有
+ * 测试零改动）。设置页的两个开关（`packages/app/src/ui/format-pref.ts`）经宿主
+ * （`packages/app/src/monaco/kojo-format.ts`）传到这里；E2「保存时格式化」同样
+ * 落盘前现读同一份开关（`applyFormatOnSave` 的 `rules` 参）——缺省全开 ⇒ 老用户
+ * 零感知，显式关掉某条的作者在手动与保存两条路上拿到**同一个**口径。
+ *
+ * 关 `fullWidthSpace` 的语义是"**U+3000 原样保留**"（不是"少折一处"）：
+ * 行首缩进与注释区的 U+3000 都不折；仅含 U+3000 的空白行也不再清空（半角空白行
+ * 照旧清空——那不是全角问题）；含 U+3000 的缩进同时排除出「缩进归一」的重排
+ * （否则归一会把 U+3000 按层级抹掉，"保留"就成了空话）。
+ * 关 `indent` 的语义是"**行首空白写法不动**"：只影响 `.kojo` 糖行的单位×层级重排
+ * （ERB 形本来就没有这条规则，关了行为不变）。
+ *
  * ## 明确不做（与结构修复 `erb-structure-fix` 划界）
  *
  * 不补 `ENDIF`、不改块层级、不动行尾空白（台词行尾的 `U+3000` 是要打印的字）、
@@ -72,6 +88,40 @@ export interface FormatEdit {
 export const SPACE_UNIT = '    ';
 /** 一个缩进层级 = 1 个 TAB（同上） */
 export const TAB_UNIT = '\t';
+
+/**
+ * 规则开关（P2-14，additive）：两条规则各一个布尔，`undefined` / `true` = 开。
+ *
+ * 形状是**结构相容**的最小面：宿主侧（`packages/app/src/ui/format-pref.ts` 的
+ * `FormatRules`）按同一字段名传参，不需要反向 import 本类型——插件公共面
+ * （`src/index.ts` 的 exports 清单）本批冻结，不新增导出。
+ */
+export interface FormatRuleOptions {
+  /**
+   * 全角空格折算：行首缩进的 `U+3000` → 2 个半角空格、注释区的 `U+3000` → 1 个半角
+   * 空格；连带「仅含 U+3000 的空白行清空」也归这条管。关 ⇒ U+3000 原样保留。
+   */
+  readonly fullWidthSpace?: boolean;
+  /**
+   * 缩进归一（仅 `.kojo` 糖行）：行首空白按探测单位 × 层级重排。关 ⇒ 行首空白
+   * 写法一个字符都不动（ERB 形本就不做这条，关了与今天一致）。
+   */
+  readonly indent?: boolean;
+}
+
+/** 解析后的规则（两个布尔都落地，缺省 = 全开） */
+interface ResolvedRules {
+  readonly fullWidthSpace: boolean;
+  readonly indent: boolean;
+}
+
+/** `!== false` ⇒ 开：显式传 `true` 与不传同义（additive 的口径） */
+function resolveRules(options: FormatRuleOptions | undefined): ResolvedRules {
+  return {
+    fullWidthSpace: options?.fullWidthSpace !== false,
+    indent: options?.indent !== false,
+  };
+}
 
 /**
  * 不做行内注释剥离、也不进缩进探测的行类。
@@ -140,12 +190,19 @@ function halfwidthInIndent(s: string): string {
  * 注释判据刻意只认**整行注释**（去缩进后以 `;` 开头）：ERB 的行中 `;` 既可能是注释、
  * 也可能就在打印文本里（`PRINTFORMW` 的参数不是带引号的串），这一层分不开 ⇒ 不动。
  */
-function erbNewContent(content: string): string | null {
+function erbNewContent(content: string, rules: ResolvedRules): string | null {
   if (content.length === 0) return null;
-  if (isAllIndent(content)) return ''; // 纯空白行 → 真空行（空白身份无歧义）
+  if (isAllIndent(content)) {
+    // 纯空白行 → 真空行（空白身份无歧义）；但行内有 U+3000 且折算规则关着时不动
+    if (!rules.fullWidthSpace && content.includes(FULLWIDTH_SPACE)) return null;
+    return '';
+  }
   const indent = leadingIndent(content);
   const rest = content.slice(indent.length);
-  const next = halfwidthInIndent(indent) + (rest.startsWith(';') ? halfwidthInText(rest) : rest);
+  // 折算关 ⇒ 缩进与注释区都原样（返回与原串相等 ⇒ 上层记 null）
+  const newIndent = rules.fullWidthSpace ? halfwidthInIndent(indent) : indent;
+  const newRest = rules.fullWidthSpace && rest.startsWith(';') ? halfwidthInText(rest) : rest;
+  const next = newIndent + newRest;
   return next === content ? null : next;
 }
 
@@ -189,12 +246,12 @@ function detectIndentUnit(entries: readonly SugarEntry[]): string | null {
 }
 
 /** 按方言算出每条物理行的新内容（`null` = 不改） */
-function newContents(text: string, dialect: FormatDialect): (string | null)[] {
+function newContents(text: string, dialect: FormatDialect, rules: ResolvedRules): (string | null)[] {
   const lines = splitPhysical(text);
   const out: (string | null)[] = lines.map(() => null);
 
   if (dialect === 'erb') {
-    for (let i = 0; i < lines.length; i++) out[i] = erbNewContent(lines[i]!.content);
+    for (let i = 0; i < lines.length; i++) out[i] = erbNewContent(lines[i]!.content, rules);
     return out;
   }
 
@@ -240,18 +297,30 @@ function newContents(text: string, dialect: FormatDialect): (string | null)[] {
     if (e.cls === null) continue;
 
     if (e.cls.kind === 'blank') {
-      out[index] = line.content.length === 0 ? null : '';
+      if (line.content.length === 0) {
+        out[index] = null;
+        continue;
+      }
+      // 与 ERB 形同口径：仅含 U+3000 的空白行在折算规则关着时原样保留
+      if (!rules.fullWidthSpace && line.content.includes(FULLWIDTH_SPACE)) continue;
+      out[index] = '';
       continue;
     }
 
     const rawIndent = e.logical.rawIndent;
     const rest = line.content.slice(rawIndent.length);
-    // rawLine（顶层原生直通行）缩进无结构含义 ⇒ 只做全角折算，不重排
+    // 归一：糖行 + 探到单位 + 规则开；折算关时含 U+3000 的缩进排除出重排
+    // （否则 unit.repeat 会把 U+3000 按层级抹掉，"U+3000 保留"就成了空话）
+    const canNormalize = rules.indent && unit !== null && e.cls.kind !== 'rawLine';
+    const keepRawIndent = !rules.fullWidthSpace && rawIndent.includes(FULLWIDTH_SPACE);
     const newIndent =
-      unit !== null && e.cls.kind !== 'rawLine'
+      canNormalize && !keepRawIndent
         ? unit.repeat(e.logical.indent)
-        : halfwidthInIndent(rawIndent);
-    const commentStart = sugarCommentStart(e.cls, rest);
+        : rules.fullWidthSpace
+          ? halfwidthInIndent(rawIndent)
+          : rawIndent;
+    // 注释区折算归 fullWidthSpace 管：关 ⇒ 一个字符都不碰
+    const commentStart = rules.fullWidthSpace ? sugarCommentStart(e.cls, rest) : -1;
     const newRest =
       commentStart >= 0 ? rest.slice(0, commentStart) + halfwidthInText(rest.slice(commentStart)) : rest;
     const next = newIndent + newRest;
@@ -260,10 +329,19 @@ function newContents(text: string, dialect: FormatDialect): (string | null)[] {
   return out;
 }
 
-/** 文本进、edits 出（无变化 ⇒ 空数组） */
-export function computeFormatEdits(text: string, dialect: FormatDialect): FormatEdit[] {
+/**
+ * 文本进、edits 出（无变化 ⇒ 空数组）。
+ *
+ * `options` 为 P2-14 的规则开关（缺省全开 ⇒ 与加选项之前逐字等价）；保存链路
+ * （E2）刻意不传，落盘口径永远是全开。
+ */
+export function computeFormatEdits(
+  text: string,
+  dialect: FormatDialect,
+  options: FormatRuleOptions = {},
+): FormatEdit[] {
   const lines = splitPhysical(text);
-  const next = newContents(text, dialect);
+  const next = newContents(text, dialect, resolveRules(options));
   const edits: FormatEdit[] = [];
   for (let i = 0; i < next.length; i++) {
     const content = next[i];
@@ -291,8 +369,12 @@ export function applyFormatEdits(text: string, edits: readonly FormatEdit[]): st
   return lines.map((l) => l.content + l.eol).join('');
 }
 
-/** 一步到位（E2 用）：格式化后的文本 + 本次实际改动数 */
-export function formatText(text: string, dialect: FormatDialect): { text: string; edits: FormatEdit[] } {
-  const edits = computeFormatEdits(text, dialect);
+/** 一步到位（E2 用）：格式化后的文本 + 本次实际改动数（`options` 同 `computeFormatEdits`） */
+export function formatText(
+  text: string,
+  dialect: FormatDialect,
+  options: FormatRuleOptions = {},
+): { text: string; edits: FormatEdit[] } {
+  const edits = computeFormatEdits(text, dialect, options);
   return { text: applyFormatEdits(text, edits), edits };
 }

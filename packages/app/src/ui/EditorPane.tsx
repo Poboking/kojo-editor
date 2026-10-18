@@ -25,6 +25,7 @@ import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-positio
 import { dialectForLanguage, toTextEdits } from '../monaco/kojo-format';
 import { installSuggestContextTrigger } from '../monaco/suggest-context-trigger';
 import { applyFormatOnSave } from './format-on-save';
+import { loadFormatRulesPref } from './format-pref';
 import { classifySaveRace } from './save-race';
 import { selectionStatusText } from './selection-status';
 import {
@@ -1088,10 +1089,15 @@ export function EditorPane({
           // 编码/行尾由内核 io 保、备份与原子写在 `writeText`/`compileToFile` 里。
           // 全角空格告警因此天然少弹一次：`planSave` 看的就是这份整理后的文本。
           // 糖视图下不重算预览（与 `reloadFromDisk` 同口径：派生视图随下一次切换刷新）。
+          // 规则开关（P2-14）与总开关同一纪律：**落盘前现读**（不存闭包旧值）。
+          // 缺省全开 ⇒ 与"开关出现之前"的保存整理逐字等价；作者显式关掉某条
+          // （比如全角空格是拿来做对齐的），保存时整理同样不折——否则开关就食言了。
           const prepared = applyFormatOnSave(
             rawText,
             dialectForLanguage(languageFor(path)),
             loadFormatOnSavePref(),
+            undefined,
+            loadFormatRulesPref(),
           );
           let text = rawText;
           if (prepared.changed) {

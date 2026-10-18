@@ -37,8 +37,20 @@ export interface FormatOnSaveResult {
 
 const UNCHANGED = (text: string): FormatOnSaveResult => ({ text, edits: [], changed: false });
 
-/** 规则本体（可注入替身；缺省 = `Shift+Alt+F` 用的那一份，不是"保存专用简化版"） */
-export type FormatRunner = (text: string, dialect: FormatDialect) => { text: string; edits: FormatEdit[] };
+/** 规则本体（可注入替身；缺省 = `Shift+Alt+F` 用的那一份，不是"保存专用简化版"）。
+ * 第三参 = 规则开关（P2-14，additive；与 `kojo-format.ts` 的 `FormatRuleSwitches`
+ * 结构相容——单参替身天然兼容，既有测试零改动）。 */
+export type FormatRunner = (
+  text: string,
+  dialect: FormatDialect,
+  rules?: FormatRuleSwitches,
+) => { text: string; edits: FormatEdit[] };
+
+/** 两条格式化规则的开关（结构相容最小面；字段名与插件 `FormatRuleOptions` 逐字对应） */
+export interface FormatRuleSwitches {
+  readonly fullWidthSpace?: boolean;
+  readonly indent?: boolean;
+}
 
 /**
  * 开启时跑同一份格式化；**任何异常都不许挡住保存**：整理失败就按原文保存，
@@ -49,11 +61,12 @@ export function applyFormatOnSave(
   dialect: FormatDialect | null,
   enabled: boolean,
   format: FormatRunner = formatText,
+  rules?: FormatRuleSwitches,
 ): FormatOnSaveResult {
   if (!enabled || dialect === null) return UNCHANGED(text);
   let result: { text: string; edits: FormatEdit[] };
   try {
-    result = format(text, dialect);
+    result = format(text, dialect, rules);
   } catch (e: unknown) {
     console.warn(`[format-on-save] 整理失败，按原文保存：${errorText(e)}`);
     return UNCHANGED(text);

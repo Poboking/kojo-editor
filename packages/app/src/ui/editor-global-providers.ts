@@ -70,6 +70,17 @@ import { setReferenceTally } from './reference-tally-store';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { setJumpProbe } from './jump-to-state';
 import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
+// P2-14：quick fix 预览层（纯逻辑）——落地前先出 diff 预览，确认才应用
+import {
+  QUICK_FIX_PREVIEW_OVERLAY_ID,
+  previewTextFor,
+  pushPreview,
+  quickFixPreviewTitle,
+  resetQuickFixPreviews,
+  takePreview,
+} from './quick-fix-preview';
+// P2-14：格式化规则开关（设置页真源；resolve 组请求时现读，与保存链路同一现读纪律）
+import { loadFormatRulesPref } from './format-pref';
 import {
   collectSemanticTokenSpans,
   installSemanticTokensProvider,
@@ -326,6 +337,32 @@ export function applyTextEdits(
   ed.executeEdits('kojo.codeAction', ops);
   ed.pushUndoStop();
   return true;
+}
+
+/**
+ * 预览 overlay 的「应用修复」落点（P2-14）：认领待确认条目，把它的 edits 用**既有**
+ * `applyTextEdits` 落到归属实例的 model 上（一次撤销步；落地时按当下 model 夹取——
+ * 预览打开期间用户又编辑了 ⇒ 与今天直接应用同一口径，陈旧行号不崩）。
+ *
+ * 返回 false = 这次没落（条目已被认领 / 归属实例不在了 / 糖视图）：overlay 据此把
+ * 原因说出来，不静默。**取消路径不走这里**（`cancelPreview` 只收账、不写 model）。
+ */
+export function applyQuickFixEdits(actionId: string): boolean {
+  const outcome = takePreview(actionId);
+  if (outcome.kind !== 'taken') {
+    console.warn(`[editor-providers] 快速修复预览没有可应用的条目（${outcome.reason}）：${actionId}`);
+    return false;
+  }
+  const entry = outcome.entry;
+  const ctx = livePanes.get(entry.paneId) ?? null;
+  const ed = ctx?.editorRef.current ?? null;
+  if (!ctx || !ed || ctx.sugarModelRef.current || !ed.getModel()) return false;
+  return applyTextEdits(ed, entry.edits);
+}
+
+/** 触发预览的编辑器实例（overlay 按 paneId 取待确认条目用；无焦点实例 = null） */
+export function focusedPaneIdOf(): string | null {
+  return focusedCtx()?.paneId ?? null;
 }
 
 /**
@@ -857,8 +894,28 @@ export function ensureGlobalProviders(): void {
       //（两者语义不同，见 `EditorTextEdit` 契约；💡「改为语法糖写法」走这条）。
       // 糖视图下 `ed.getModel()` 是只读糖 model：编辑无处可落（applyTextEdits 会改到派生物
       // 而非原文），直接跳过，避免"改了却不在真文件里"。
+      //
+      // P2-14 起**先预览、确认才落**：不再直接 `applyTextEdits`，而是算出预览文本
+      // （与落地同一套夹取/降序规则，见 `quick-fix-preview.ts`）、登记待确认条目、
+      // 打开预览 overlay。用户可感知的行为变化：`Ctrl+.` / 💡 里的改文本动作，Enter 现在
+      // 是"开预览"，预览里 Enter = 应用、Esc = 取消（取消一个字符都不写）。
       if (action.edits && action.edits.length > 0 && ed && !ctx?.sugarModelRef.current && ed.getModel()) {
-        if (applyTextEdits(ed, action.edits)) return;
+        const model = ed.getModel()!;
+        const originalText = model.getValue();
+        pushPreview({
+          paneId: ctx!.paneId,
+          actionId,
+          title: quickFixPreviewTitle(action),
+          languageId: model.getLanguageId(),
+          originalText,
+          previewText: previewTextFor(originalText, action.edits),
+          edits: action.edits,
+        });
+        requireKernel().bus.emit('ui.overlay.open', {
+          id: QUICK_FIX_PREVIEW_OVERLAY_ID,
+          source: 'host:quick-fix-preview',
+        });
+        return;
       }
       const line = ed?.getPosition()?.lineNumber;
       void action.run({
@@ -1215,7 +1272,12 @@ export function ensureGlobalProviders(): void {
         const path = owningPanePathOf(model);
         if (path === null) return null;
         const dialect = dialectForLanguage(model.getLanguageId());
-        return dialect === null ? null : { text: model.getValue(), dialect };
+        if (dialect === null) return null;
+        // P2-14：规则开关**组请求时现读**（与保存链路"落盘前现读一次偏好"同一纪律，
+        // 不存闭包旧值）；`undefined`（缺省全开）与今天逐字等价。窗口腿
+        // （`resolveRange` → `formatRequestWindowFor`）不带规则——区间/打字规范化
+        // 本批保持全开口径（见 kojo-format.ts 头注），这是**明说的边界**不是漏接。
+        return { text: model.getValue(), dialect, rules: loadFormatRulesPref() };
       },
       resolveRange: (model, startLine, endLine) => formatRequestWindowFor(model, startLine, endLine),
     };
@@ -1308,6 +1370,9 @@ function teardownGlobalProviders(reason: string): void {
     degradedSeams = new Set();
     // 折叠封顶的可见态同理整套换掉：上一套注册留下的"截了尾巴"那句不许挂到下一个 kernel 的文件上
     foldingCaps = new Map();
+    // P2-14：待确认的修复预览同理——上一套注册的悬账不许活到下一个 kernel
+    //（overlay 已随上一套壳层 effect 退场，条目无处可认领，留着只会误导）
+    resetQuickFixPreviews();
   }
 }
 
