@@ -81,6 +81,15 @@ import {
   closeGroup as closeEditorGroup,
   type EditorGroupsState,
 } from './editor-groups';
+// 导航历史（MM-6 前进/后退 + MM-10 恢复关闭的标签）：纯逻辑单源，App 是唯一状态所有者
+import {
+  createNavState,
+  navBack as navBackInHistory,
+  navForward as navForwardInHistory,
+  popClosed,
+  pushClosed,
+  pushNav,
+} from './navigation-history';
 import { useShellOverlays } from './shell-overlays';
 import {
   fileOpGuardMessage,
@@ -190,6 +199,12 @@ export function App(): ReactElement {
   /** 组态快照（回调经 ref 读最新值，不吃陈旧闭包——同 openTabsRef 纪律） */
   const editorGroupsRef = useRef(editorGroups);
   editorGroupsRef.current = editorGroups;
+  /**
+   * 导航历史（MM-6 / MM-10）：**刻意不用 useState**——每次跳转/关标签都写一遍会把
+   * 整棵壳树拖进重渲染，而它只被命令回调与关闭路径读写，没有任何渲染面消费。
+   * 纯函数返回新 state 后由回调直接写回 ref（与 editorGroupsRef 同族的直接赋值模式）。
+   */
+  const navRef = useRef(createNavState());
   /** 各标签脏态集合（EditorPane 按路径逐个上报；标签栏脏点 + 关闭确认用） */
   const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set());
   /**
@@ -696,7 +711,11 @@ export function App(): ReactElement {
   const commitOpenFile = useCallback((path: string, line?: number, column?: number, span?: RevealSpan) => {
     setEditorGroups((prev) => openInActiveGroup(prev, path)); // SPLIT-1：开进焦点组
     // W9：区间一路带到编辑器（退化判据唯一住在 `revealTargetOf`，这里不许再折一次列）
-    setReveal(line ? revealTargetOf({ line, column, span }, Date.now()) : null);
+    const target = line ? revealTargetOf({ line, column, span }, Date.now()) : null;
+    setReveal(target);
+    // MM-6：导航历史同拍入栈。行取本次 reveal 的落点行（没给行 = 第 1 行）；
+    // rootDir 可能还是 null（欢迎页期的跳转）——照记，项目一出现按跨项目规则整段作废。
+    navRef.current = pushNav(navRef.current, { path, line: target?.line ?? 1 }, rootDirRef.current);
   }, []);
 
   const requestOpenFile = useCallback(
@@ -873,6 +892,8 @@ export function App(): ReactElement {
    */
   const closeManySync = useCallback((paths: readonly string[]) => {
     if (paths.length === 0) return;
+    // MM-10：批量关闭整体入恢复栈（LIFO：批次里后关的先恢复；上限淘汰见纯逻辑）
+    navRef.current = pushClosed(navRef.current, paths, rootDirRef.current);
     const prev = editorGroupsRef.current;
     const next = closeTabsInGroup(prev, prev.activeGroupId, paths);
     if (activeGroupOf(prev).active !== activeGroupOf(next).active) setReveal(null);
@@ -943,6 +964,8 @@ export function App(): ReactElement {
       const prev = editorGroupsRef.current;
       const next = closeTabsInGroup(prev, groupId, [path]);
       if (activeGroupOf(prev).active !== activeGroupOf(next).active) setReveal(null);
+      // MM-10：真正关掉这一刻入恢复栈（单张；批量路径走 closeManySync 同款压入）
+      navRef.current = pushClosed(navRef.current, [path], rootDirRef.current);
       setEditorGroups(next);
       // 跨组门：路径还被别的组引用着就保留脏态/固定态（closeManySync 同款口径）
       if (next.groups.some((g) => g.tabs.includes(path))) return;
@@ -1036,6 +1059,47 @@ export function App(): ReactElement {
     },
     [pendingClose, doCloseTab, advanceBatch],
   );
+
+  /**
+   * 后退（MM-6，Alt+←）：导航栈光标前移，落地走 commitOpenFile——它同拍 pushNav，
+   * 而目标条目正是光标新驻地，去重规则下栈不涨、光标不漂（back/forward 不污染历史）。
+   * 到栈底 ⇒ 人话拒绝（铁律 4：按了必须有反应，不静默）。
+   */
+  const navBack = useCallback(() => {
+    const moved = navBackInHistory(navRef.current);
+    if (!moved.entry) {
+      notify({ kind: 'info', message: '已经后退到最早的位置了' });
+      return;
+    }
+    navRef.current = moved.state;
+    commitOpenFile(moved.entry.path, moved.entry.line);
+  }, [commitOpenFile, notify]);
+
+  /** 前进（MM-6，Alt+→）：光标后移；到栈顶 ⇒ 人话拒绝（同 navBack 的铁律） */
+  const navForward = useCallback(() => {
+    const moved = navForwardInHistory(navRef.current);
+    if (!moved.entry) {
+      notify({ kind: 'info', message: '已经前进到最新的位置了' });
+      return;
+    }
+    navRef.current = moved.state;
+    commitOpenFile(moved.entry.path, moved.entry.line);
+  }, [commitOpenFile, notify]);
+
+  /**
+   * 恢复最近关闭的标签（MM-10，Ctrl+Shift+T）：恢复栈栈顶弹一张，开进当前焦点组并激活
+   * （openInActiveGroup 对已存在的 tab 只激活——天然幂等，重复恢复不会开出第二张）。
+   * 空栈 ⇒ 人话拒绝（同款铁律）。
+   */
+  const reopenClosedTab = useCallback(() => {
+    const popped = popClosed(navRef.current);
+    if (popped.path === null) {
+      notify({ kind: 'info', message: '没有可恢复的标签' });
+      return;
+    }
+    navRef.current = popped.state;
+    commitOpenFile(popped.path);
+  }, [commitOpenFile, notify]);
 
   /**
    * 拖拽重排标签（C2；删除后插入语义：toIndex 以移除 path 之后的数组为基准）。
@@ -1359,6 +1423,9 @@ export function App(): ReactElement {
           onBatchCloseTabInGroup={batchCloseInGroup}
           onSplitEditor={splitEditor}
           onCloseGroup={closeGroupById}
+          onNavBack={navBack}
+          onNavForward={navForward}
+          onReopenClosedTab={reopenClosedTab}
           onSaveAll={saveAll}
           onDirtyChange={onDirtyChange}
           registerActions={registerActions}
