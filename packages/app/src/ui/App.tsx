@@ -109,7 +109,6 @@ import {
   reconcilePathsAfterDiskChange,
 } from './disk-reconcile';
 import type { EditorPaneActions } from './EditorPane';
-import { setProblemFixHost } from './problem-fix';
 import { openModelAcrossGroups } from './editor-pane-registry';
 
 /**
@@ -528,24 +527,34 @@ export function App(): ReactElement {
   // 可见的（没有按钮），不是按了没反应的死按钮（铁律 4）。判据全在 problem-fix，
   // 这里只递能力：贡献快照 / 项目 / model 读数（openModelAcrossGroups）/
   // 落地（problem-fix-apply 动态 import，Monaco 不进 App 静态图）。
+  // 注册本身也走**动态 import**（PS-10 开机图闸）：problem-fix → kojo-code-action →
+  // sugar 词表那条链不该因这条接线提前进 eager 图——面板住懒链，座的注册早于
+  // 面板首帧即可；卸载清座与注册共享同一 import promise，then 排队保序。
   useEffect(() => {
     if (!kernel) return;
-    setProblemFixHost({
-      codeActionContributions: () => kernel.slots.query('ui.editor.codeAction'),
-      project: () => kernel.project.current(),
-      documentOf: (path) => {
-        const model = openModelAcrossGroups(path);
-        if (!model || model.isDisposed()) return null;
-        return {
-          text: model.getValue(),
-          lineCount: model.getLineCount(),
-          versionId: model.getVersionId(),
-        };
-      },
-      applyRowFix: (path, planned) =>
-        import('./problem-fix-apply').then((m) => m.applyPlannedLineEdits(path, planned)),
+    let disposed = false;
+    void import('./problem-fix').then((m) => {
+      if (disposed) return;
+      m.setProblemFixHost({
+        codeActionContributions: () => kernel.slots.query('ui.editor.codeAction'),
+        project: () => kernel.project.current(),
+        documentOf: (path) => {
+          const model = openModelAcrossGroups(path);
+          if (!model || model.isDisposed()) return null;
+          return {
+            text: model.getValue(),
+            lineCount: model.getLineCount(),
+            versionId: model.getVersionId(),
+          };
+        },
+        applyRowFix: (path, planned) =>
+          import('./problem-fix-apply').then((mm) => mm.applyPlannedLineEdits(path, planned)),
+      });
     });
-    return () => setProblemFixHost(null);
+    return () => {
+      disposed = true;
+      void import('./problem-fix').then((m) => m.setProblemFixHost(null));
+    };
   }, [kernel]);
 
   /** 旧项目的一套 UI 态整体带走：切项目与关项目共用，防旧标签/脏态/待确认残留到下一拍 */
