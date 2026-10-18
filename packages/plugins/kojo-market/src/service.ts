@@ -90,6 +90,7 @@ import {
   type MarketPublishProgress,
   type MarketService,
   type MarketZipInspection,
+  type OpJournal,
   type PackFileEntry,
   type PackKind,
   type PackManifest,
@@ -149,6 +150,11 @@ export interface MarketServiceDeps {
   appVersion: string;
   /** 时间源（测试注入固定值以钉死 `installedAt`） */
   now?: () => number;
+  /**
+   * 批操作 journal（2026-10-18 undo 覆盖批，additive 可选）：在场时装 / 卸整包进账，
+   * OpsHistoryOverlay 可整批撤销；缺席 = 旧的不进账行为（旧内核兼容）。
+   */
+  journal?: Pick<OpJournal, 'begin' | 'record' | 'commit' | 'abort'>;
 }
 
 function samePack(r: InstalledPack, kind: PackKind, id: string, version: string): boolean {
@@ -220,7 +226,7 @@ function isInstalledPack(v: unknown): v is InstalledPack {
 }
 
 export function createMarketService(deps: MarketServiceDeps): MarketService {
-  const { io, remote, storage, log } = deps;
+  const { io, remote, storage, log, journal } = deps;
   const now = deps.now ?? ((): number => Date.now());
   const packsRoot = join(deps.root, MARKET_PACKS_DIR);
   const stagingRoot = join(deps.root, MARKET_STAGING_DIR);
@@ -591,6 +597,14 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     const staging = join(stagingRoot, packStagingName(manifest.id, manifest.version));
     const stale = join(stagingRoot, packStaleName(manifest.id, manifest.version));
     const target = dirOf(manifest.kind, manifest.id, manifest.version);
+    // 装包整批进 OpJournal（2026-10-18 undo 覆盖批，additive 可选）：动盘之前 begin，
+    // 失败 ⇒ 整个安装取消（装得上却撤不回的批量写不做——与部署 / 批量替换同口径）。
+    const opId = journal !== undefined
+      ? await journal.begin(
+          'market-install',
+          `安装市场包 ${manifest.name} ${manifest.kind}/${manifest.id} v${manifest.version}（${manifest.files.length} 个文件）`,
+        )
+      : null;
     await quietRemove(staging); // 上次崩在这里的残壳
     await quietRemove(stale);
     try {
@@ -655,6 +669,12 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       /* ---------- 3. 原子搬进落点（同版本重装 = 覆盖） ---------- */
       await io.ensureDir(dirname(target));
       const hadPrev = await io.exists(target);
+      // rename 前对最终落点逐文件记账（2026-10-18 undo 覆盖批）：新装 = 全部 before=null
+      // （undo 即整包删除）；重装 = 抓旧版本字节（undo 恢复旧版）。只记 manifest.files——
+      // pack.json 是包内容的唯一真源，超出清单的文件本就是异常态，不为它们猜测性快照。
+      if (opId !== null) {
+        for (const f of manifest.files) await journal!.record(opId, join(target, f.path));
+      }
       if (hadPrev) await io.rename(target, stale);
       try {
         await io.rename(staging, target);
@@ -669,7 +689,33 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
         throw new MarketError('install-move-failed', `暂存区搬进落点失败：${String(err)}`, target);
       }
       if (hadPrev) await quietRemove(stale);
+      // 到这里安装已成定局：commit 进历史（OpsHistoryOverlay 可整批撤销 / 重装恢复旧版）。
+      // commit 失败：包已装好、storage 记账照写 ⇒ 不回滚不抛错，log.warn 出声
+      // （open 态残留由 journal 的 list() 巡检点名）。
+      if (opId !== null) {
+        await journal!.commit(opId).catch((err: unknown) => {
+          log.warn(
+            `市场包已装好但批操作收尾失败（本批不可撤销，快照已保留待人工处置）：` +
+              `${manifest.id} v${manifest.version} — ${String(err)}`,
+          );
+        });
+      }
     } catch (err) {
+      if (opId !== null) {
+        try {
+          // 半途而废：abort 逆序回滚落点侧的已记账条目（新装未到落点 = 空操作；
+          // 重装 = 还原旧字节——abort 对"新建条目实际不在盘上"本身容忍）。
+          await journal!.abort(opId);
+        } catch (abortErr: unknown) {
+          // 主错与回滚失败都要见人（半批态 + 快照保留待人工处置——契约：宁可吵不可静默）
+          const main = err instanceof MarketError ? err.message : String(err);
+          const why = abortErr instanceof Error ? abortErr.message : String(abortErr);
+          if (err instanceof MarketError) {
+            throw new MarketError(err.code, `${main}（且回滚失败，快照已保留待人工处置：${why}）`, err.detail);
+          }
+          throw new MarketError('install-move-failed', `安装失败：${main}（且回滚失败，快照已保留待人工处置：${why}）`, target);
+        }
+      }
       await quietRemove(staging); // 半成品绝不留在暂存区
       if (err instanceof MarketError) throw err;
       throw new MarketError('install-move-failed', `安装失败：${String(err)}`, target);
@@ -1213,13 +1259,51 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       if (!hadDir && rest.length === list.length) {
         throw new MarketError('installed-missing', `没有装过 ${kind}/${id} v${version}，无需卸载`, dir);
       }
-      if (hadDir) await io.removeDir(dir);
-      await writeRecords(rest);
-      await removeEmptyAncestors(dir);
-      // KM-11：卸完不许在暂存区留下这个包的任何残壳（崩在半路的容器 / 解压目录 / 回滚副本）。
-      // 名字全部由契约派生 ⇒ 这里是一张表而不是四条抄写；只碰这一个 id-version，
-      // 不动别人的暂存条目（并发装同一个包本来就会被 `commitPack` 的残壳清扫覆盖）。
-      for (const name of packStagingNames(id, version)) await quietRemove(join(stagingRoot, name));
+      // 卸载前整包进 OpJournal（2026-10-18 undo 覆盖批，additive 可选）：walk 逐文件
+      // record（before=当前字节，undo 恢复）。begin 失败 ⇒ 取消卸载——宁可不卸，
+      // 也不给一个撤不回的删除；journal 缺席 = 旧行为。`!hadDir` 只清清单条目
+      // （journal 只管文件字节，不管 storage 清单），不进账。
+      const opId = journal !== undefined && hadDir
+        ? await journal.begin('market-uninstall', `卸载市场包 ${kind}/${id} v${version}（目录将整体移除）`)
+        : null;
+      try {
+        if (opId !== null) {
+          for (const e of await io.walkDir(dir, { includeFiles: true })) {
+            if (!e.isDirectory) await journal!.record(opId, e.path);
+          }
+        }
+        if (hadDir) await io.removeDir(dir);
+        await writeRecords(rest);
+        await removeEmptyAncestors(dir);
+        // KM-11：卸完不许在暂存区留下这个包的任何残壳（崩在半路的容器 / 解压目录 / 回滚副本）。
+        // 名字全部由契约派生 ⇒ 这里是一张表而不是四条抄写；只碰这一个 id-version，
+        // 不动别人的暂存条目（并发装同一个包本来就会被 `commitPack` 的残壳清扫覆盖）。
+        for (const name of packStagingNames(id, version)) await quietRemove(join(stagingRoot, name));
+      } catch (err) {
+        if (opId !== null) {
+          try {
+            // 删到一半 / 清单写失败：abort 按快照恢复已删文件（removeEmptyAncestors
+            // 收掉的空层由平台 create_dir_all 复建——undo 恢复字节本就重建父目录）。
+            await journal!.abort(opId);
+          } catch (abortErr: unknown) {
+            const main = err instanceof Error ? err.message : String(err);
+            const why = abortErr instanceof Error ? abortErr.message : String(abortErr);
+            throw new Error(`卸载失败：${main}（且回滚失败，快照已保留待人工处置：${why}）`, { cause: err });
+          }
+        }
+        throw err;
+      }
+      if (opId !== null) {
+        // 卸载已成定局：commit 进历史（误卸载可整包恢复）。commit 失败不回滚不抛错
+        // （包已卸掉、清单已清，抛错只会呈现一个"假失败"），log.warn 出声 +
+        // 快照保留待人工处置。
+        await journal!.commit(opId).catch((err: unknown) => {
+          log.warn(
+            `市场包已卸掉但批操作收尾失败（本批不可撤销，快照已保留待人工处置）：` +
+              `${kind}/${id} v${version} — ${String(err)}`,
+          );
+        });
+      }
       if (hadDir) {
         log.info(`卸掉了 ${kind}/${id} v${version}：${dir}`);
       } else {
