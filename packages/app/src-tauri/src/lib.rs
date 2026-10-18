@@ -1538,6 +1538,30 @@ fn is_atomic_write_temp(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 监视忽略目录段（P0-5）：事件路径**任一段**命中此表 ⇒ 整条丢弃（不入 watch 事件）。
+///
+/// 保守清单——只排 VCS / 依赖 / 编辑器自身临时目录（`.kojo-tmp` 是 `write_file_bytes`
+/// 临时文件的目录段形态，文件名级过滤见上）。eraTW 语料的 CSV / ERB / ERH / ERD
+/// 与一切作者内容**不在此列**：忽略表宁可小，多收的事件去抖层自会收敛，
+/// 反过来误排作者目录就是静默失明。搜索侧的 `is_hidden_entry`（跳过一切点开头）
+/// 口径更宽，那是**读取面**的取舍，不许照搬到监视面。
+const WATCH_IGNORED_SEGMENTS: [&str; 3] = [".git", "node_modules", ".kojo-tmp"];
+
+/// 路径任一段命中忽略表（精确段匹配 + 大小写不敏感——Windows 上 `.GIT` 与 `.git`
+/// 是同一目录）。`.git-repo` 这类**前缀相似**的名字不命中。
+fn is_watch_ignored(path: &Path) -> bool {
+    path.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .map(|s| {
+                WATCH_IGNORED_SEGMENTS
+                    .iter()
+                    .any(|seg| s.eq_ignore_ascii_case(seg))
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// notify 事件类别 → 契约三态（纯函数，可单测）。`None` = 本层丢弃。
 fn normalize_event_kind(kind: &EventKind) -> Option<&'static str> {
     match kind {
@@ -1577,7 +1601,7 @@ impl notify::EventHandler for WebviewForwarder {
                     return;
                 };
                 for path in ev.paths {
-                    if is_atomic_write_temp(&path) {
+                    if is_atomic_write_temp(&path) || is_watch_ignored(&path) {
                         continue;
                     }
                     let Some(path) = path.to_str() else {
@@ -1612,11 +1636,18 @@ fn start_watch(
     paths: Vec<String>,
 ) -> Result<WatchReport, String> {
     use notify::Watcher;
-    let mut watcher = notify::RecommendedWatcher::new(
-        WebviewForwarder { app },
-        notify::Config::default(),
-    )
-    .map_err(|e| format!("创建文件监视器失败: {e}"))?;
+    // P0-5 缓冲调优：显式给出 poll 间隔（不再吃 `Config::default()` 的静默值）。
+    // 两条已核实的边界（notify 8.2 源码取证，本 crate 无更大 API 面）：
+    // ① `with_poll_interval` 只作用于 PollWatcher 退化路径——Windows 主路径
+    //    （ReadDirectoryChangesW）不受影响，但 RecommendedWatcher 在个别环境会
+    //    退化成轮询，500ms 保证退化时也能较快跟上盘面；
+    // ② Windows 主路径的 OS 缓冲是 notify 内部常量 `BUF_SIZE = 16384`（16KB），
+    //    **没有公开配置项**；事件风暴撑爆缓冲时 notify 报 Err → 走
+    //    `FS_WATCH_ERROR_EVENT` → 前端重连状态机接管重建（P0-5 的 TS 半边），
+    //    这就是"缓冲溢出不丢事件、变成一次可见的失效-自愈"的闭环。
+    let config = notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
+    let mut watcher = notify::RecommendedWatcher::new(WebviewForwarder { app }, config)
+        .map_err(|e| format!("创建文件监视器失败: {e}"))?;
 
     let mut watched = Vec::new();
     let mut failed = Vec::new();
@@ -3056,7 +3087,7 @@ mod write_domain_tests {
 
 #[cfg(test)]
 mod watch_tests {
-    use super::{is_atomic_write_temp, normalize_event_kind};
+    use super::{is_atomic_write_temp, is_watch_ignored, normalize_event_kind};
     use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
     use std::path::Path;
 
@@ -3147,6 +3178,53 @@ mod watch_tests {
         // 目录名恰好带点也不能升级成"临时文件"
         assert!(!is_atomic_write_temp(Path::new(r"C:\data\a.kojo-tmp\b.txt")));
     }
+
+    #[test]
+    fn watch_ignored_segments_are_filtered() {
+        // VCS / 依赖 / 编辑器临时目录：任一段命中即整条丢弃
+        assert!(is_watch_ignored(Path::new(r"C:\repo\.git\HEAD")));
+        assert!(is_watch_ignored(Path::new(r"C:\repo\.git\objects\ab\cd1234")));
+        assert!(is_watch_ignored(Path::new(r"C:\repo\node_modules\vite\dist\index.js")));
+        assert!(is_watch_ignored(Path::new(r"C:\repo\src\.kojo-tmp\leftover.bin")));
+        // Windows 上 `.GIT` 与 `.git` 是同一目录，大小写不敏感
+        assert!(is_watch_ignored(Path::new(r"C:\repo\.GIT\config")));
+    }
+
+    #[test]
+    fn watch_ignored_exact_segment_matching_not_prefix() {
+        // 前缀相似的名字不命中（精确段匹配，不是 starts_with / contains）
+        assert!(!is_watch_ignored(Path::new(r"C:\repo\.git-repo\hook")));
+        assert!(!is_watch_ignored(Path::new(r"C:\repo\.gitignore")));
+        assert!(!is_watch_ignored(Path::new(r"C:\repo\node_modules-backup\x.js")));
+        assert!(!is_watch_ignored(Path::new(r"C:\repo\my.kojo-tmp-notes\a.txt")));
+    }
+
+    #[test]
+    fn watch_ignored_never_excludes_corpus_content() {
+        // 语料的真实扩展名与 CJK 目录段一个都不许滤（样例用中性根名——
+        // 判据钉在「段不命中忽略表」，游戏专名不进宿主，audit A 同口径）
+        assert!(!is_watch_ignored(Path::new(r"C:\game\corpus\CSV\ABL.CSV")));
+        assert!(!is_watch_ignored(Path::new(
+            r"C:\game\corpus\ERB\口上・メッセージ関連\表_K12.ERB"
+        )));
+        assert!(!is_watch_ignored(Path::new(r"C:\game\corpus\ERB\声明.ERH")));
+        assert!(!is_watch_ignored(Path::new(r"C:\game\corpus\资源\列表.ERD")));
+        assert!(!is_watch_ignored(Path::new(r"C:\game\corpus\JUEL.als")));
+        assert!(!is_watch_ignored(Path::new(r"C:\game\corpus\存档\save03.dat")));
+        assert!(!is_watch_ignored(Path::new(r"C:\game\corpus\剧本\桥段.kojo")));
+    }
+
+    #[test]
+    fn watch_ignored_when_root_is_itself_ignored_dir() {
+        // 边界：监视根本身就是忽略目录（用户把项目根开在 .git 里）——
+        // 事件路径的段里必然含它 ⇒ 全部丢弃 = 事实上不监视（宁可零事件也不进噪声）
+        assert!(is_watch_ignored(Path::new(r"C:\repo\.git")));
+        assert!(is_watch_ignored(Path::new(r"C:\repo\node_modules")));
+        assert!(is_watch_ignored(Path::new(r"C:\repo\.git\")));
+        // 反过来：根本身是正常目录、只有子目录被忽略 ⇒ 根上的事件照常透传
+        assert!(!is_watch_ignored(Path::new(r"C:\repo\README.md")));
+        assert!(!is_watch_ignored(Path::new(r"C:\repo")));
+    }
 }
 
 #[cfg(test)]
@@ -3157,10 +3235,10 @@ mod watch_runtime_tests {
     //! WebView 那一段仍留人工清单。但"**递归监视在这台机器上到底收不收得到事件**"
     //! 不需要 WebView 也能证：这里用 channel 当接收端，事件照样过
     //! `normalize_event_kind` 纯映射——那才是本层唯一有判断的地方。
-    use super::normalize_event_kind;
+    use super::{is_watch_ignored, normalize_event_kind};
     use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind};
     use notify::{Watcher, RecursiveMode};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::channel;
     use std::time::{Duration, Instant};
@@ -3249,6 +3327,58 @@ mod watch_runtime_tests {
             normalize_event_kind(&EventKind::Modify(ModifyKind::Any)),
             Some("change")
         );
+    }
+
+    /// P0-5 组合证据：`.git` 子目录的写入在这台机器上**真的会**投出事件
+    /// （⇒ 过滤是必要的，不是防御幻想），而 `is_watch_ignored` 对这些
+    /// 真实路径**全部**判忽略（⇒ 生产链路 `handle_event` 里先滤再转发，
+    /// 忽略目录的事件一个也到不了 WebView）。两半合起来才是"零外泄"。
+    #[test]
+    fn git_dir_events_are_real_and_fully_covered_by_ignore_table() {
+        let root = temp_root("gitdir");
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+
+        let (tx, rx) = channel();
+        let mut watcher = notify::RecommendedWatcher::new(
+            move |res| {
+                let _ = tx.send(res);
+            },
+            notify::Config::default(),
+        )
+        .expect("RecommendedWatcher 应能创建");
+        watcher
+            .watch(&root, RecursiveMode::Recursive)
+            .expect("递归监视应能登记");
+
+        let git_file = git_dir.join("HEAD");
+        let real_file = root.join("口上.ERB");
+        std::fs::write(&git_file, "ref: refs/heads/master\n").unwrap();
+        std::fs::write(&real_file, "PRINTL 测试").unwrap();
+
+        let seen = wait_for(&rx);
+        let git_seen: Vec<&(String, &'static str)> = seen
+            .iter()
+            .filter(|(p, _)| p.contains(".git"))
+            .collect();
+        assert!(
+            !git_seen.is_empty(),
+            "本机对 .git 子目录没有投出任何事件 ⇒ 本用例失去证据力，需重估（实际收到 = {:?}）",
+            seen
+        );
+        for (p, _) in &git_seen {
+            assert!(
+                is_watch_ignored(Path::new(p)),
+                "忽略表漏了真实投出的 .git 路径：{p}"
+            );
+        }
+        let real_seen = seen
+            .iter()
+            .any(|(p, _)| p.ends_with("口上.ERB") && !is_watch_ignored(Path::new(p)));
+        assert!(real_seen, "语料形态的 ERB 写入必须照常透传；实际收到 = {seen:?}");
+
+        drop(watcher);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 
