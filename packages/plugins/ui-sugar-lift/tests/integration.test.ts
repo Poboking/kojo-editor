@@ -21,11 +21,13 @@ import type {
   SugarLiftService,
   TrashEntry,
 } from '@kojo/plugin-api';
-import { WellKnownServices } from '@kojo/plugin-api';
+import { KOJO_SOURCE_EXTENSION, WellKnownServices, isErbDialectPath } from '@kojo/plugin-api';
 import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
 import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
 import { scanControlFlow } from '@kojo/plugin-erb-parser';
 import { createUiSugarLiftPlugin } from '../src/index';
+// 取证用：真实脚手架产物（测试文件对解耦审计 C 项豁免，与上面两枚插件同款先例）
+import { scaffoldKojoProject } from '../../eratw-adapter/src/scaffold';
 
 const log: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -291,5 +293,54 @@ describe('`.erb` / 整文件糖视图供给（只用于看，零写盘）', () =
     expect(k.events).toEqual([]);
     expect(k.files[ERB_PATH]).toEqual(beforeErb);
     expect(k.files[KOJO_PATH]).toEqual(beforeKojo);
+  });
+});
+
+/* ============================== 三、取证：「原生写法」起手包在这格交回什么 ============================== */
+
+/**
+ * NATIVE-UX 取证（2026-10-20）。NEW-ERB 让作者能选 `native` 起手，于是「糖视图」第一次
+ * 会面对**作者自己的 `.ERB`**。这两条钉的是实测事实，不是推测：
+ *
+ * - 起手包 8 份方言文件（`.ERB`）、**0 份 `.kojo`** ⇒ 预览那一格走 `not-kojo` 人话
+ *   （判据 = 扩展名，住在契约层 `sugar-panels.ts:22/164`，该口径已由
+ *   `plugin-api/tests/sugar-panels.test.ts:410` 钉住，此处不重复）；
+ * - 本插件对这 8 份**全部交回零段** —— 宿主 `EditorPane` 拿到零段就 `return`（糖 model
+ *   根本不挂），所以"这一格此刻显示的是什么"必须由文案自己说清楚（见 `sugar-view.ts`
+ *   的 `sugarToggleTitle`）。
+ */
+const NATIVE_PKG = scaffoldKojoProject({
+  workName: '取证作品',
+  authorName: '取证作者',
+  version: '1.0',
+  charaNo: 63,
+  charaName: '影狼',
+  scriptNo: 1,
+  license: 'none',
+  langDoc: 'native',
+});
+const NATIVE_DIALECT = Object.entries(NATIVE_PKG.files).filter(([rel]) => isErbDialectPath(rel));
+
+describe('取证 / 原生起手包（`langDoc: native`）的糖视图供段', () => {
+  it('起手包 = 8 份方言文件、0 份 .kojo；本插件对**每一份**都交回零段', () => {
+    expect(NATIVE_DIALECT).toHaveLength(8);
+    expect(Object.keys(NATIVE_PKG.files).filter((f) => f.endsWith(KOJO_SOURCE_EXTENSION))).toHaveLength(0);
+    const k = boot({});
+    const contribution = previewsOf(k)[0]!;
+    for (const [rel, text] of NATIVE_DIALECT) {
+      expect(contribution.provideLiftProject!({ path: `/ws/${rel}`, text, project: null }), rel).toEqual([]);
+    }
+  });
+
+  it('零段的成因可查：整份都是**透传行**（`projectedLines` 0 / `passthroughLines` > 0），不是解析失败', () => {
+    const k = boot({});
+    const lift = k.provided.get(WellKnownServices.SugarLift) as SugarLiftService;
+    const [rel, text] = NATIVE_DIALECT[0]!;
+    const r = lift.liftProject({ source: text, filePath: `/ws/${rel}` });
+    expect(r.segments).toHaveLength(0);
+    expect(r.stats.projectedLines).toBe(0);
+    expect(r.stats.nativeLines).toBe(0);
+    expect(r.stats.passthroughLines).toBeGreaterThan(0);
+    expect(r.stats.totalLines).toBe(r.stats.passthroughLines);
   });
 });
