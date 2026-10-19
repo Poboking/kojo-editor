@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -85,6 +86,7 @@ import {
   initialEditorGroups,
   activateTab as activateTabInGroupState,
   openInActiveGroup,
+  openPreviewInActiveGroup,
   restoreGroups,
   serializeGroups,
   setActiveGroup as setFocusedGroup,
@@ -103,6 +105,11 @@ import {
   pushClosed,
   pushNav,
 } from './navigation-history';
+// 标签预览态与最近使用序（1020 编辑器体感批）：预览住在组态里（editor-groups），
+// MRU 只服务 Ctrl+Tab，是比 pin 更 ephemeral 的会话序——不进持久化、不进快照。
+import { pruneMru, stepMru, touchMru } from './tab-mru';
+import { subscribeTabCycle, type TabCycleDirection } from './tab-cycle';
+import type { OpenFileOptions } from './tabs-ops';
 import { useShellOverlays } from './shell-overlays';
 import {
   fileOpGuardMessage,
@@ -219,6 +226,12 @@ export function App(): ReactElement {
    * 纯函数返回新 state 后由回调直接写回 ref（与 editorGroupsRef 同族的直接赋值模式）。
    */
   const navRef = useRef(createNavState());
+  /**
+   * 各组标签的最近使用序（1020 编辑器体感批，Ctrl+Tab 的数据源）。与 navRef 同一条理由
+   * **不用 useState**：没有任何渲染面消费它（只有命令回调读）， useState 会让每次切标签
+   * 多拖一次整壳重渲染。不落盘、不进快照——会话内的"上一个看过哪张"不值得跨项目保留。
+   */
+  const mruRef = useRef<Record<string, string[]>>({});
   /** 各标签脏态集合（EditorPane 按路径逐个上报；标签栏脏点 + 关闭确认用） */
   const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set());
   /**
@@ -250,6 +263,11 @@ export function App(): ReactElement {
   /** 最新值快照（记录点不吃陈旧闭包；与 dirtyRef 同模式） */
   const recentFilesRef = useRef(recentFiles);
   recentFilesRef.current = recentFiles;
+  /**
+   * `Ctrl+P` 空查询时置顶的「最近打开」（1020 编辑器体感批）：欢迎页那块用的是同一份
+   * MM-7 记录，这里只取路径清单（最新在前）。数组身份跟着 state 走 ⇒ 面板的 memo 不乱重算。
+   */
+  const recentOpenPaths = useMemo<string[]>(() => recentFiles.map((r) => r.path), [recentFiles]);
   const [pendingApproval, setPendingApproval] = useState<GameProject | null>(null);
   /** 写权限状态（P0）：null = 无项目；驱动状态栏徽章 + 保存置灰 */
   const [writable, setWritable] = useState<boolean | null>(null);
@@ -574,6 +592,7 @@ export function App(): ReactElement {
     setEditorGroups(initialEditorGroups()); // 组态整体重置为单组空栈（SPLIT-1：分屏不跨项目存活）
     setDirtyPaths(new Set());
     setPinnedPaths(new Set()); // pin 是标签态的一部分，随标签一起清（C2）
+    mruRef.current = {}; // 最近使用序同理清账（预览态住在组态里，随上面那行一起没）
     setExtraRoots([]); // 会话级附加根是项目会话的一部分（D1）：换项目即清，绝不带进下一个
     setPendingClose(null);
     setReveal(null);
@@ -829,20 +848,66 @@ export function App(): ReactElement {
     [kernel],
   );
 
-  const commitOpenFile = useCallback((path: string, line?: number, column?: number, span?: RevealSpan) => {
-    setEditorGroups((prev) => openInActiveGroup(prev, path)); // SPLIT-1：开进焦点组
-    // W9：区间一路带到编辑器（退化判据唯一住在 `revealTargetOf`，这里不许再折一次列）
-    const target = line ? revealTargetOf({ line, column, span }, Date.now()) : null;
-    setReveal(target);
-    // MM-6：导航历史同拍入栈。行取本次 reveal 的落点行（没给行 = 第 1 行）；
-    // rootDir 可能还是 null（欢迎页期的跳转）——照记，项目一出现按跨项目规则整段作废。
-    navRef.current = pushNav(navRef.current, { path, line: target?.line ?? 1 }, rootDirRef.current);
-  }, []);
+  const commitOpenFile = useCallback(
+    (path: string, line?: number, column?: number, span?: RevealSpan, preview = false) => {
+      // SPLIT-1：开进焦点组。preview=true ⇒ 就地替换本组那张预览（规则在 tabs-ops 一份）
+      setEditorGroups((prev) =>
+        preview ? openPreviewInActiveGroup(prev, path, (p) => dirtyRef.current.has(p)) : openInActiveGroup(prev, path),
+      );
+      // 最近使用序：打开/换到 = 提到最前（脏判定与预览替换都归组态那边，这里只记顺序）
+      const gid = editorGroupsRef.current.activeGroupId;
+      mruRef.current = { ...mruRef.current, [gid]: touchMru(mruRef.current[gid] ?? [], path) };
+      // W9：区间一路带到编辑器（退化判据唯一住在 `revealTargetOf`，这里不许再折一次列）
+      const target = line ? revealTargetOf({ line, column, span }, Date.now()) : null;
+      setReveal(target);
+      // MM-6：导航历史同拍入栈。行取本次 reveal 的落点行（没给行 = 第 1 行）；
+      // rootDir 可能还是 null（欢迎页期的跳转）——照记，项目一出现按跨项目规则整段作废。
+      navRef.current = pushNav(navRef.current, { path, line: target?.line ?? 1 }, rootDirRef.current);
+    },
+    [],
+  );
+
+  /**
+   * Ctrl+Tab / Ctrl+Shift+Tab 的落地（1020 编辑器体感批）。
+   *
+   * 意图从 `tab-cycle` 订阅进来（命令注册在壳层，标签真源在这里），走的是既有
+   * `activateTabInGroupState`——那条函数在激活的同时把预览转正，所以"用 Ctrl+Tab 停在
+   * 一张预览上"这一步就把它变成常驻标签（作者既然专门切回来，就不是瞄一眼）。
+   *
+   * 连按是在 MRU 序里继续走（`cycleRef` 记第几下 + 时间戳，超过 1.2 秒视为重新开始）；
+   * 只剩一张标签 ⇒ 一句人话，不静默（铁律 4）。
+   */
+  const cycleRef = useRef<{ readonly dir: TabCycleDirection; readonly at: number; readonly presses: number }>({
+    dir: 'next',
+    at: 0,
+    presses: 0,
+  });
+  const cycleTab = useCallback(
+    (dir: TabCycleDirection) => {
+      const g = activeGroupOf(editorGroupsRef.current);
+      const cleaned = pruneMru(mruRef.current[g.id] ?? [], g.tabs);
+      mruRef.current = { ...mruRef.current, [g.id]: cleaned };
+      if (cleaned.length < 2) {
+        notify({ kind: 'info', message: '这组里只有一张标签，没有可切换的上一次' });
+        return;
+      }
+      const now = Date.now();
+      const again = cycleRef.current.dir === dir && now - cycleRef.current.at < 1200;
+      const presses = again ? cycleRef.current.presses + 1 : 0;
+      cycleRef.current = { dir, at: now, presses };
+      const target = stepMru(cleaned, g.active, dir, presses);
+      if (target === null) return;
+      setEditorGroups((prev) => activateTabInGroupState(prev, g.id, target));
+      mruRef.current = { ...mruRef.current, [g.id]: touchMru(cleaned, target) };
+    },
+    [notify],
+  );
+  useEffect(() => subscribeTabCycle(cycleTab), [cycleTab]);
 
   const requestOpenFile = useCallback(
-    (path: string, line?: number, column?: number, span?: RevealSpan) => {
+    (path: string, line?: number, column?: number, span?: RevealSpan, preview = false) => {
       // P3 多标签：切换标签不丢内容（model 留内存），无需未保存确认
-      commitOpenFile(path, line, column, span);
+      commitOpenFile(path, line, column, span, preview);
     },
     [commitOpenFile],
   );
@@ -882,9 +947,13 @@ export function App(): ReactElement {
     [project, openProject, requestOpenFile],
   );
 
+  /**
+   * 文件树 / 快速打开的打开入口。`opts.preview = true` ⇒ **预览态**打开（单击浏览：斜体标签、
+   * 不占新位，下一次单击换掉它）；双击与所有"跳转类"入口都不带这个旗标 = 永久打开。
+   */
   const openFile = useCallback(
-    (path: string) => {
-      requestOpenFile(path);
+    (path: string, opts?: OpenFileOptions) => {
+      requestOpenFile(path, undefined, undefined, undefined, opts?.preview === true);
       recordRecentFile(path); // MM-7：文件树/快速打开的落地也进最近文件
     },
     [requestOpenFile, recordRecentFile],
@@ -1105,9 +1174,10 @@ export function App(): ReactElement {
     setEditorGroups((prev) => setFocusedGroup(prev, groupId));
   }, []);
 
-  /** 点某组的标签 = 切到该组并激活该标签（activateTab 纯函数一并处理焦点转移） */
+  /** 点某组的标签 = 切到该组并激活该标签（activateTab 纯函数一并处理焦点转移与预览转正） */
   const activateTabInGroup = useCallback((groupId: string, path: string) => {
     setEditorGroups((prev) => activateTabInGroupState(prev, groupId, path));
+    mruRef.current = { ...mruRef.current, [groupId]: touchMru(mruRef.current[groupId] ?? [], path) };
   }, []);
 
   /** 组内关标签：干净即关在该组；脏的先聚焦该组再走既有单标签确认链 */
@@ -1604,6 +1674,7 @@ export function App(): ReactElement {
           pinnedPaths={pinnedPaths}
           reveal={reveal}
           onOpenFile={openFile}
+          recentFiles={recentOpenPaths}
           onRequestCloseTab={requestCloseTab}
           onActivateGroup={activateGroup}
           onActivateTabInGroup={activateTabInGroup}

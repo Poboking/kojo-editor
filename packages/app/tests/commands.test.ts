@@ -6,12 +6,19 @@ import {
   chordFromEvent,
   commandEnabled,
   filterCommands,
-  filterFileCandidates,
   formatKeybinding,
   parseKeybinding,
   type CommandEntry,
   type KeyChord,
 } from '../src/ui/commands';
+import { rankFiles } from '../src/ui/palette-search';
+
+/** 判据住在 palette-search（`Ctrl+P` 文件模式的真身）；测试要的是「只含路径」那条投影 */
+const filterFileCandidates = (
+  paths: readonly string[],
+  q: string,
+  cap?: number,
+): string[] => rankFiles(paths, q, cap === undefined ? {} : { cap }).map((h) => h.path);
 
 /**
  * 命令体系纯逻辑单测（2026-10-12 审阅补测批）。

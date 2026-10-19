@@ -13,6 +13,7 @@ import { Icon } from './icons';
 import { BINARY_EXT, erbExt } from './file-tree-model';
 import { pkey } from './file-tree-ops';
 import { EditRow } from './file-tree-rows';
+import type { OpenFileOptions } from './tabs-ops';
 import type { DirState, EditState, MenuScope } from './file-tree-types';
 
 export interface DirRowsProps {
@@ -34,7 +35,7 @@ export interface DirRowsProps {
   readonly cancelEdit: () => void;
   readonly toggleSub: (dir: string) => void;
   readonly openMenu: (e: ReactMouseEvent, scope: MenuScope) => void;
-  readonly onOpenFile: (path: string) => void;
+  readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
 }
 
 /**
@@ -190,7 +191,7 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
             className={`tree-file ${d.path === activeFile ? 'active' : ''} ${erbExt(d.name) ? '' : 'tree-extra-file'}`}
             title={erbExt(d.name) ? d.path : `${d.path}（附加文件，不在口上索引内）`}
             data-locate={d.path}
-            onClick={() => onOpenFile(d.path)}
+            onClick={() => onOpenFile(d.path, { preview: true })}
             onContextMenu={(e) => openMenu(e, { kind: 'file', path: d.path })}
           >
             {glossOf(d.name)}

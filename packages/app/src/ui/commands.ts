@@ -7,7 +7,7 @@
  */
 
 import type { EditorCommandContext, EditorCommandContribution } from '@kojo/plugin-api';
-import { CANDIDATE_BUDGETS, ERB_DIALECT_EXTENSIONS, candidateBudget, candidateRank } from '@kojo/plugin-api';
+import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 
 /** 归一化后的按键描述 */
 export interface KeyChord {
@@ -139,82 +139,6 @@ export function filterCommands(commands: readonly CommandEntry[], query: string)
     if (ca !== cb) return ca.localeCompare(cb);
     return a.title.localeCompare(b.title);
   });
-}
-
-/** 路径末段（同时认 `/` 与 `\`——索引路径来自 Windows 工程，分隔符不保证） */
-function baseNameOf(lowerPath: string): string {
-  return lowerPath.slice(Math.max(lowerPath.lastIndexOf('/'), lowerPath.lastIndexOf('\\')) + 1);
-}
-
-/**
- * 快速打开的候选过滤（路径子串匹配；文件名命中优先于目录命中）。
- *
- * **排序口径不在本文件**（W7 NAV-SCOPE）：分桶比较器是契约层的 `candidateRank`
- * ——`Ctrl+P` / `Ctrl+T` / 函数树搜索 / 全文检索候选此前各写一套比较器，同一个查询
- * 在四个面板里给四种顺序。预算同样不再写裸数字：`CANDIDATE_BUDGETS.quickOpen`
- * 与其余档位同住一张表（`plugin-api/erb.ts`）。
- *
- * 范围收窄**发生在上游的候选清单**（宿主 ProjectView 按 `pathInScope` 过滤），
- * 这里不再收第二次——两处各滤一遍就是两条会各自演化的口径。
- */
-/**
- * 候选清单的**归一化缓存**（PS-6 第 6 项）。
- *
- * `Ctrl+P` 每敲一个字符都要给每个候选算一次 rank，而 rank 只用到「小写文件名」和
- * 「原路径」这两样 —— 它们**与查询词无关**。旧实现每击键把 2,325+ 条路径全部
- * `toLowerCase()` 一遍并新建两份中间数组（真语料口径：一次开面板 = 十几万次字符串分配）。
- *
- * 键用清单数组的**引用**：宿主那侧 `quickOpenFiles` 是 `useMemo` 出来的（只看
- * 索引 / 方言清单 / 范围三样），身份不变 = 内容不变 ⇒ 归一化一次、敲多少下都用它。
- * `WeakMap` ⇒ 清单换身份（换项目、范围收窄）旧那份跟着回收，不留第二份常驻内存。
- */
-interface NormalizedCandidate {
-  readonly path: string;
-  readonly lowerBase: string;
-  readonly lowerPath: string;
-}
-const normalizedByList = new WeakMap<readonly string[], NormalizedCandidate[]>();
-
-function normalizedCandidates(paths: readonly string[]): NormalizedCandidate[] {
-  const hit = normalizedByList.get(paths);
-  if (hit) return hit;
-  const built: NormalizedCandidate[] = [];
-  for (const p of paths) {
-    if (typeof p !== 'string') continue;
-    const lowerPath = p.toLowerCase();
-    built.push({ path: p, lowerBase: baseNameOf(lowerPath), lowerPath });
-  }
-  try {
-    normalizedByList.set(paths, built);
-  } catch {
-    // 键不是对象（调用方给了奇怪的东西）⇒ 缓存跳过，判定结果一样，只是这一路不省
-  }
-  return built;
-}
-
-export function filterFileCandidates(
-  paths: readonly string[],
-  query: string,
-  cap: number = CANDIDATE_BUDGETS.quickOpen,
-): string[] {
-  if (!Array.isArray(paths)) return [];
-  const budget = candidateBudget('quickOpen', cap);
-  const q = query.trim();
-  const candidates = normalizedCandidates(paths);
-  if (q.length === 0) return candidates.slice(0, budget).map((c) => c.path);
-  // 一趟收集（rank 相同保原序：`i` 就是原下标，比较器带上它）
-  const ranked: Array<{ rank: number; i: number; path: string }> = [];
-  for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i] as NormalizedCandidate;
-    // 交给契约的两位都是**已经小写过的**形态：`candidateRank` 内部还要各自
-    // `toLowerCase()` 一次，对已小写的串那是同一对象返回、不再新建字符串。
-    // 判定逐字等价（它比的本来就是两侧的小写形），省下的正是"每击键把 2,325 条
-    // 全路径与小文件名各重造一遍"这笔账。
-    const rank = candidateRank(c.lowerBase, c.lowerPath, q);
-    if (rank < 4) ranked.push({ rank, i, path: c.path });
-  }
-  ranked.sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.i - b.i));
-  return ranked.slice(0, budget).map((r) => r.path);
 }
 
 /**

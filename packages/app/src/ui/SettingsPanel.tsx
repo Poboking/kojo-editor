@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react';
+import { useRef, useState, useEffect, useMemo, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react';
 import { useSyncExternalStore } from 'react';
 import { MARKET_DEFAULT_INDEX_URL } from '@kojo/plugin-api';
 import type { LayoutAction } from './layout';
@@ -50,6 +50,24 @@ import type { CommandEntry } from './commands';
 import avatarUrl from '../assets/developer-avatar-128.png';
 import { CONTACT_EMAIL, CONTACT_MAILTO } from './contact';
 import { loadFormatRulesPref, saveFormatRulesPref, type FormatRules } from './format-pref';
+import {
+  SETTINGS_SEARCH_INDEX,
+  searchSettings,
+  settingsEntryModified,
+  settingsModifiedCount,
+  type SettingsSearchEntry,
+} from './settings-search';
+import {
+  EDITOR_DISPLAY_PREF_DEFAULT,
+  modifiedEditorDisplayKeys,
+  resetEditorDisplayPrefs,
+  saveEditorDisplayPrefs,
+  useEditorDisplayPrefs,
+  type LineNumbersPref,
+  type RenderWhitespacePref,
+} from './editor-display-prefs';
+import { isComposingEvent } from './shell-keys';
+import '../settings-search.css';
 
 /** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
 const THEME_LABELS: Record<ThemePref, string> = {
@@ -237,7 +255,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
         <>
           <div className="settings-group">
             <div role="heading" aria-level={4} className="settings-group-title">视图</div>
-            <label className="settings-row">
+            <label className="settings-row" data-settings-key="general.zen">
               <Switch
                 checked={zen}
                 onChange={(c) => dispatch(c ? { type: 'toggleZen' } : { type: 'exitZen' })}
@@ -274,7 +292,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               2026-10-14 起不在其内（它的开关常驻下面那个「编辑器」组，不随本总闸收起）。 */}
           <div className="settings-group">
             <div role="heading" aria-level={4} className="settings-group-title">封存功能</div>
-            <label className="settings-row">
+            <label className="settings-row" data-settings-key="general.sealed">
               <Switch checked={!sealed} onChange={(c) => setSealed(!c)} label="显示已封存功能" />
               <span>
                 显示已封存功能
@@ -287,7 +305,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
 
           <div className="settings-group">
             <div role="heading" aria-level={4} className="settings-group-title">布局</div>
-            <div className="settings-row static">
+            <div className="settings-row static" data-settings-key="general.layout">
               <button className="ghost small" onClick={onResetLayout}>
                 重置布局
               </button>
@@ -310,7 +328,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
           <div role="heading" aria-level={4} className="settings-group-title">外观</div>
           {/* 主题（2026-10-17 主题系统）：分段单选，缺省深色。翻档即写 data-theme、
               全场 token 当场重算（与动效/毛玻璃同款即时生效），只改显示、不动文件。 */}
-          <div className="settings-row static">
+          <div className="settings-row static" data-settings-key="appearance.theme">
             <span className="theme-segment" role="radiogroup" aria-label="主题">
               {THEME_IDS.map((id) => (
                 <button
@@ -330,7 +348,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               <span className="settings-hint">深色为缺省（蓝灰），另有浅色、薄荷暗色；一翻即全场生效，只改显示、不动文件</span>
             </span>
           </div>
-          <label className="settings-row">
+          <label className="settings-row" data-settings-key="appearance.motion">
             <Switch
               checked={motionPref === 'reduced'}
               onChange={(c) => commitMotionPref(c ? 'reduced' : 'full')}
@@ -343,7 +361,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
           </label>
           {/* 面板渲染偏好（panel-prefs.ts，2026-10-14 面板偏好批）：与「减弱动效」同组、
               一直可见（不随封存总闸收起——它是稳定可用的渲染选项，不是试用中的功能）。 */}
-          <label className="settings-row">
+          <label className="settings-row" data-settings-key="appearance.panelVirtualize">
             <Switch checked={panelVirtualize} onChange={setPanelVirtualize} label="长列表视口化" />
             <span>
               长列表视口化
@@ -354,7 +372,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
           </label>
           {/* 毛玻璃透明度（glass-pref.ts）：与字号步进器同款排版（− 读数 ＋）。透明度越高，
               浮层与教程目录越通透；调到 0% 即实心档，撤掉磨砂回到不透明面。只改显示、不动文件。 */}
-          <div className="settings-row static" role="group" aria-label="毛玻璃透明度">
+          <div className="settings-row static" data-settings-key="appearance.glass" role="group" aria-label="毛玻璃透明度">
             <span className="settings-stepper">
               <button
                 className="ghost small"
@@ -399,7 +417,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             <div role="heading" aria-level={4} className="settings-group-title">编辑器</div>
             {/* 字号 / 缩放（A1）：真源与钳制在 font-size-pref.ts，这里只排版。
                 禁用位 = 已到量程两端，与「没改动⇒按钮不可点」同一房规。 */}
-            <div className="settings-row static" role="group" aria-label="正文字号">
+            <div className="settings-row static" data-settings-key="editor.fontSize" role="group" aria-label="正文字号">
               <span className="settings-stepper">
                 <button
                   className="ghost small"
@@ -504,7 +522,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 </span>
               </span>
             </div>
-            <label className="settings-row">
+            <label className="settings-row" data-settings-key="editor.sugarView">
               <Switch checked={sugarViewOn} onChange={applySugarViewPref} label=".kojo 预览" />
               <span>
                 .kojo 预览
@@ -517,7 +535,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             {/* 保存时整理空白（E2，2026-10-15 格式化批）：手动版是 Shift+Alt+F，本开关
                 只是把同一次整理挂到保存前。默认关的理由写在 `format-pref.ts`：改的正是空白，
                 而语料里的全角空格多数是有意的排版。文案回避内部术语（不上「糖」字）。 */}
-            <label className="settings-row">
+            <label className="settings-row" data-settings-key="editor.formatOnSave">
               <Switch checked={formatOnSave} onChange={commitFormatOnSave} label="保存时整理空白" />
               <span>
                 保存时整理空白
@@ -551,7 +569,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             {/* 结构化着色（B6，2026-10-16）：判据来自解析器而不是正则，宿主只翻译协议。
                 文案按本仓口径去黑话——不写「语义高亮 / semantic token」，写作者看得懂的效果。
                 默认关的理由见 `semantic-color-pref.ts`：它会顶掉作者看惯的词法配色。 */}
-            <label className="settings-row">
+            <label className="settings-row" data-settings-key="editor.nameColor">
               <Switch checked={nameColorOn} onChange={setNameColorPref} label="定义与调用的名字分色" />
               <span>
                 定义与调用的名字分色
@@ -567,7 +585,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             <TreeSitterRow />
             {/* 自动保存（A6，2026-10-20）：写盘只复用既有 save 一条路（全局互斥 + 写允许域闸门）；
                 默认关的理由 = 游戏目录是部署目标，静默写盘必须是显式选择。护栏见 autosave-pref.decideAutosave。 */}
-            <label className="settings-row">
+            <label className="settings-row" data-settings-key="editor.autosave">
               <Switch
                 checked={autosaveMode === 'afterDelay'}
                 onChange={(c) => setAutosavePref(c ? 'afterDelay' : 'off')}
@@ -584,6 +602,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             {/* 排版三行（P2-16）：折行 / 多光标修饰键 / 列选择。自订阅 layout-pref，
                 壳层镜像行归 P2-14 的接线批——两边各占一小段，互不重排。 */}
             <LayoutPrefRows />
+            {/* 显示偏好六行（1020 编辑器体感批）：真源在 editor-display-prefs.ts，本页只排版 */}
+            <EditorDisplayRows />
           </div>
 
           {/* 直连模式开关：仍经封存总闸控制——封存态不渲染（本功能尚未交付为常态） */}
@@ -637,7 +657,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             </div>
 
             {/* 草稿行：填的是"改成别的地址"，不是当前值的复读机；Tab 顺序 = 草稿框 → 保存 → 恢复默认 */}
-            <div className={`settings-row static has-field${row.canEdit ? '' : ' off'}`}>
+            <div className={`settings-row static has-field${row.canEdit ? '' : ' off'}`} data-settings-key="market.endpoint">
               <input
                 className="settings-text"
                 type="url"
@@ -705,7 +725,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               必须可见可重试（见 runUpdateCheck 的 try-catch），绝不让按钮抛未捕获异常。 */}
           <div className="settings-group">
             <div role="heading" aria-level={4} className="settings-group-title">更新</div>
-            <div className="settings-row static">
+            <div className="settings-row static" data-settings-key="about.update">
               <button
                 className="ghost small"
                 onClick={runUpdateCheck}
@@ -772,7 +792,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 32px 圆标里，用户读着"图标太小、外面小圆圈突兀"⇒ 去掉圆标，只留一枚大小适中
                 的 accent 信封，另给 32px 无框槽位与开发者卡的文字左轴对齐。mailto 不经
                 WebView，直接交给系统邮件客户端；地址本身当主文案，方便直接读 / 抄。 */}
-            <a className="settings-row settings-link" href={CONTACT_MAILTO}>
+            <a className="settings-row settings-link" data-settings-key="about.contact" href={CONTACT_MAILTO}>
               <Icon name="mail" size={18} className="settings-link-mark" />
               <span>
                 {CONTACT_EMAIL}
@@ -914,6 +934,54 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   const navRef = useRef<HTMLDivElement>(null);
   /** 唯一允许的内部状态：当前看哪一节（不落盘、不影响任何偏好） */
   const [active, setActive] = useState<SettingsSectionId>(initialSection);
+  /* ---------------- 设置搜索（1020 编辑器体感批） ---------------- */
+  const [query, setQuery] = useState('');
+  const [modifiedOnly, setModifiedOnly] = useState(false);
+  /** 跳转意图（`n` 只为让"同一个结果点两次"也能重放一次高亮） */
+  const [jump, setJump] = useState<{ readonly key: string; readonly n: number } | null>(null);
+  const jumpSeqRef = useRef(0);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const searching = query.trim() !== '' || modifiedOnly;
+  const results = useMemo(
+    () => searchSettings(query, { modifiedOnly }),
+    [query, modifiedOnly],
+  );
+  const modifiedCount = settingsModifiedCount();
+
+  // 面板按节 remount ⇒ 本 effect 跑在新一节的 DOM 之后，能真正找到那一行
+  useEffect(() => {
+    if (jump === null) return;
+    const hits = document.querySelectorAll('.settings-nav-panel [data-hit="1"]');
+    for (const prev of hits) prev.removeAttribute('data-hit');
+    const el = document.querySelector<HTMLElement>(`.settings-nav-panel [data-settings-key="${jump.key}"]`);
+    if (!el) return; // 该节里没有这一行（条目登记了但行不在这节）：切节本身已经给了反馈
+    el.scrollIntoView({ block: 'center' });
+    void el.offsetWidth; // 重排一次，CSS 入场动画才会重放（同一个目标连点两次）
+    el.setAttribute('data-hit', '1');
+  }, [jump]);
+
+  const pickResult = (entry: SettingsSearchEntry): void => {
+    setActive(entry.section);
+    if (entry.key !== undefined) setJump({ key: entry.key, n: ++jumpSeqRef.current });
+  };
+
+  const onSearchKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (isComposingEvent(e.nativeEvent, false)) return; // 输入法候选窗要用这些键
+    if (e.key === 'Escape') {
+      // 有查询时 Esc 只清查询，不顺手关掉整页设置（口径与快捷键页搜索框一致）
+      if (query !== '') {
+        e.preventDefault();
+        e.stopPropagation();
+        setQuery('');
+        return;
+      }
+    }
+    if (e.key === 'ArrowDown' && results.length > 0) {
+      e.preventDefault();
+      pickResult(results[0]!);
+      searchRef.current?.blur();
+    }
+  };
 
   /* 先算一次 render：既用于「空节不显示」的判据，也作为右面板内容——避免调用两次。 */
   const visible = SETTINGS_SECTIONS(props)
@@ -966,8 +1034,78 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
         <div className="wizard">
           <h3 className="settings-title">设置</h3>
 
+          {/* 设置搜索（1020 编辑器体感批）：抬头下面一整行，跨左右两列。
+              「已修改」只统计**有真源读数**的条目（判据见 settings-search.ts），
+              没登记判据的行不会冒充"已改"。 */}
+          <div className="settings-searchbar">
+            <Icon name="search" size={14} className="settings-search-icon" />
+            <input
+              ref={searchRef}
+              type="search"
+              className="settings-search-input"
+              placeholder="搜索设置项…"
+              aria-label="搜索设置项"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onSearchKeyDown}
+            />
+            {query !== '' ? (
+              <button
+                type="button"
+                className="settings-search-clear"
+                aria-label="清空搜索"
+                title="清空搜索"
+                onClick={() => {
+                  setQuery('');
+                  searchRef.current?.focus();
+                }}
+              >
+                <Icon name="close" size={14} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={`settings-search-modified${modifiedOnly ? ' on' : ''}`}
+              aria-pressed={modifiedOnly}
+              onClick={() => setModifiedOnly((v) => !v)}
+            >
+              已修改{modifiedCount > 0 ? ` (${modifiedCount})` : ''}
+            </button>
+          </div>
+
           {/* 左导航栏 + 右分节面板：抬头/页脚 flex:none 永不滚走，只有面板这一列在滚 */}
           <div className="settings-nav-split">
+            {searching ? (
+              <div className="settings-nav-bar settings-results-col" role="listbox" aria-label="设置搜索结果">
+                <div className="settings-results-count dim" role="status">
+                  {modifiedOnly && query.trim() === ''
+                    ? `已修改 ${results.length} 项`
+                    : `${results.length} 项匹配`}
+                </div>
+                {results.length === 0 ? (
+                  <div className="settings-results-empty dim">
+                    {modifiedOnly ? '没有已修改的设置项' : '没有匹配的设置项'}
+                  </div>
+                ) : (
+                  results.map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      role="option"
+                      aria-selected={r.section === active}
+                      className={`settings-result${r.section === active ? ' on' : ''}`}
+                      onClick={() => pickResult(r)}
+                    >
+                      <span className="settings-result-label">{r.label}</span>
+                      <span className="settings-result-meta dim">
+                        {r.sectionLabel}
+                        {settingsEntryModified(r) ? <span className="settings-result-badge">已改</span> : null}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : (
             <div
               className="settings-nav-bar"
               role="tablist"
@@ -993,6 +1131,7 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
                 </button>
               ))}
             </div>
+            )}
 
             {/* key={节 id} ⇒ 切节时面板整块重建，滚动位置天然归零（每节各自独立滚动，
                 不共享一条滚到一半的滚动条），无需额外 effect。 */}
@@ -1064,6 +1203,202 @@ function FormatRulesRows(): ReactElement {
           </span>
         </span>
       </label>
+    </>
+  );
+}
+
+/* ==========================================================================================
+ * 编辑器显示偏好六行（1020 编辑器体感批，用户反馈项 10）——本组件是**追加段**：
+ * 不改动 / 重排上方任何既有行，自成一枚小组件 + 编辑器带里的一个 `<EditorDisplayRows />`。
+ *
+ * 与 `FormatRulesRows` / `LayoutPrefRows` 同一形态：真源住在 `editor-display-prefs.ts`
+ * （localStorage + 订阅表），本页挂载时现读、写入即落盘即回显，不往常驻的 `ShellLayout`
+ * 加一条 props 镜像。生效路径也唯一：EditorPane 的 create options、三个落档写入点与偏好
+ * 订阅回调都只 spread 同一份补丁（见 `editor-display-prefs.ts` 头注）。
+ *
+ * 缺省值 = 这批改动之前硬编码的那六个读数 ⇒ 没动过设置的作者，今天逐字不变。
+ * ========================================================================================== */
+
+const LINE_HEIGHT_CHOICES: readonly { value: number; label: string }[] = [
+  { value: 0, label: '自动' },
+  { value: 18, label: '18' },
+  { value: 20, label: '20' },
+  { value: 22, label: '22' },
+  { value: 24, label: '24' },
+  { value: 28, label: '28' },
+];
+
+/** 值 = Monaco 的登记名；标签 = 作者面（"boundary" 这种词不上屏） */
+const RENDER_WHITESPACE_CHOICES: readonly { value: RenderWhitespacePref; label: string }[] = [
+  { value: 'none', label: '不显示' },
+  { value: 'boundary', label: '词首尾' },
+  { value: 'selection', label: '选区内' },
+  { value: 'trailing', label: '行尾' },
+  { value: 'all', label: '全部' },
+];
+
+const LINE_NUMBERS_CHOICES: readonly { value: LineNumbersPref; label: string }[] = [
+  { value: 'on', label: '常规' },
+  { value: 'off', label: '关闭' },
+  { value: 'relative', label: '相对' },
+  { value: 'interval', label: '隔行' },
+];
+
+/** 二选一时用「分段」还是「开关」：取值多于两个才分段，两个就用开关（少一种控件形态） */
+function Segmented<T extends string | number>(args: {
+  ariaLabel: string;
+  value: T;
+  choices: readonly { value: T; label: string }[];
+  onPick: (v: T) => void;
+}): ReactElement {
+  return (
+    <span className="theme-segment" role="radiogroup" aria-label={args.ariaLabel}>
+      {args.choices.map((c) => (
+        <button
+          key={String(c.value)}
+          type="button"
+          role="radio"
+          aria-checked={args.value === c.value}
+          className={`theme-seg-btn${args.value === c.value ? ' on' : ''}`}
+          onClick={() => args.onPick(c.value)}
+        >
+          {c.label}
+        </button>
+      ))}
+    </span>
+  );
+}
+
+function EditorDisplayRows(): ReactElement {
+  const pref = useEditorDisplayPrefs();
+  const [fontDraft, setFontDraft] = useState<string>(pref.fontFamily);
+  const modifiedCount = modifiedEditorDisplayKeys(pref).length;
+  // 草稿与生效值同源：改完偏好（含另一处「恢复默认」）后把输入框拉回真值，
+  // 免得页面上同时存在"框里一个字体、编辑器另一个字体"两个真相
+  useEffect(() => {
+    setFontDraft(pref.fontFamily);
+  }, [pref.fontFamily]);
+  const fontDirty = fontDraft !== pref.fontFamily;
+  const applyFont = (): void => {
+    const next = saveEditorDisplayPrefs({ fontFamily: fontDraft });
+    setFontDraft(next.fontFamily); // 清洗后可能回落到默认栈（空串），框里显示的即是真源
+  };
+  return (
+    <>
+      <div className="settings-row static" data-settings-key="editor.lineHeight">
+        <Segmented
+          ariaLabel="行高"
+          value={pref.lineHeight}
+          choices={LINE_HEIGHT_CHOICES}
+          onPick={(v) => saveEditorDisplayPrefs({ lineHeight: v })}
+        />
+        <span>
+          行高
+          <span className="settings-hint">
+            一行占多高。「自动」按字号算（今天的写法）；选一档数字就是每行固定这么高。
+            只改显示、不动文件
+          </span>
+        </span>
+      </div>
+      <div className="settings-row static" data-settings-key="editor.renderWhitespace">
+        <Segmented
+          ariaLabel="空白符显示"
+          value={pref.renderWhitespace}
+          choices={RENDER_WHITESPACE_CHOICES}
+          onPick={(v) => saveEditorDisplayPrefs({ renderWhitespace: v })}
+        />
+        <span>
+          空白符显示
+          <span className="settings-hint">
+            把空格与制表符画出来，方便看出「行尾多打了一个空格」「缩进混用了空格」。
+            「行尾」只看每行末尾那一串；全角空格无论哪一档都会照标（那是保存前的确认防线）。
+            默认不显示
+          </span>
+        </span>
+      </div>
+      <div className="settings-row static" data-settings-key="editor.lineNumbers">
+        <Segmented
+          ariaLabel="行号显示方式"
+          value={pref.lineNumbers}
+          choices={LINE_NUMBERS_CHOICES}
+          onPick={(v) => saveEditorDisplayPrefs({ lineNumbers: v })}
+        />
+        <span>
+          行号
+          <span className="settings-hint">
+            左边那一列数字怎么给。「相对」= 当前行是 1、其余按离它几行；「隔行」= 每隔五行标一次。
+            默认常规
+          </span>
+        </span>
+      </div>
+      <label className="settings-row" data-settings-key="editor.minimap">
+        <Switch checked={pref.minimap} onChange={(on) => saveEditorDisplayPrefs({ minimap: on })} label="缩略图" />
+        <span>
+          缩略图
+          <span className="settings-hint">
+            右侧那条整文件的纵览。关掉后长文件要找位置得靠滚动条与「转到行」。
+            超过 5 万行的文件无论开不开都不画（那一档它太贵）。默认开
+          </span>
+        </span>
+      </label>
+      <label className="settings-row" data-settings-key="editor.inlayHints">
+        <Switch
+          checked={pref.inlayHints}
+          onChange={(on) => saveEditorDisplayPrefs({ inlayHints: on })}
+          label="行内提示"
+        />
+        <span>
+          行内提示
+          <span className="settings-hint">
+            在代码行里补一小段灰字（比如调用处补上形参名）。嫌挤可以整条关掉；
+            超过 5,000 行的文件本来就不补。默认开
+          </span>
+        </span>
+      </label>
+      <div className="settings-row static" data-settings-key="editor.fontFamily">
+        <input
+          type="text"
+          className="settings-font-input"
+          value={fontDraft}
+          placeholder="留空 = 用内置字体"
+          aria-label="编程字体"
+          onChange={(e) => setFontDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              applyFont();
+            }
+          }}
+        />
+        {/* 房规：没改动 ⇒ 按钮不可点；坏值由偏好侧清洗并回落到内置字体，不静默假装生效 */}
+        <button className="ghost small" disabled={!fontDirty} onClick={applyFont}>
+          应用
+        </button>
+        <button
+          className="ghost small"
+          disabled={pref.fontFamily === EDITOR_DISPLAY_PREF_DEFAULT.fontFamily}
+          onClick={() => saveEditorDisplayPrefs({ fontFamily: '' })}
+        >
+          用回内置
+        </button>
+        <span>
+          编程字体
+          <span className="settings-hint">
+            填一个字体名（如 Consolas），回车或点「应用」；末尾会自动补上等宽兜底。
+            本机没装这个字体会回落到内置那一套。只改显示、不动文件
+          </span>
+        </span>
+      </div>
+      {modifiedCount > 0 ? (
+        <div className="settings-row static">
+          <button className="ghost small" onClick={() => resetEditorDisplayPrefs()}>
+            恢复这 {modifiedCount} 项默认
+          </button>
+          <span className="settings-hint">
+            只把上面这几项显示偏好放回默认，字号、缩放与折行不在这次恢复里
+          </span>
+        </div>
+      ) : null}
     </>
   );
 }

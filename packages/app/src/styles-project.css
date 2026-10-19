@@ -1058,6 +1058,12 @@ textarea {
 .editor-tab.pinned .tab-label {
   color: var(--fg);
 }
+/* 预览标签（1020 编辑器体感批）：斜体 + 略暗 =「只是瞄一眼」，与 VS Code 同词同形。
+   写在 pinned 之后：转正后 preview 归 null，两态不会同框，顺序只为可读性。 */
+.editor-tab.preview .tab-label {
+  font-style: italic;
+  color: var(--fg-dim);
+}
 /* 关闭按钮平时隐去（活动标签除外），悬停浮出——标签条更安静 */
 .editor-tab .tab-close {
   border: none;
@@ -3671,6 +3677,22 @@ button.erb-mode-hint.unlocked:hover {
   border-top: 1px solid var(--border);
   padding: 5px 14px;
   font-size: var(--fs-1);
+}
+/* 分组标签（1020 编辑器体感批：Ctrl+P 的「最近打开」一节）：
+   它是给眼睛的隔断，不是候选 —— 不进 data-idx、不可点、↑↓ 永不停在上面。 */
+.picker-group-label {
+  padding: 6px 14px 2px;
+  font-size: var(--fs-0);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+/* 命中高亮（同上批）：只给底色，不动字重 —— 加粗会让同一条列表里的行宽跳动。
+   `color: inherit` 是必需的：UA 默认给 mark 一个黑字黄底，会盖掉选中行的反白。 */
+.picker-item mark {
+  background: var(--accent-dim);
+  color: inherit;
+  border-radius: var(--radius-xs);
+  padding: 0 1px;
 }
 
 /* --------------------- P2：overlay 宿主（向导 / 设置等模态） --------------------- */
@@ -7436,6 +7458,31 @@ button.primary .hint {
 }
 .editor-crumb-item:focus-visible {
   outline: 1px solid var(--focus-ring);
+}
+/* 1020 编辑器体感批：每一段后面的同级下拉把手（点开 = 同层的其它块）。
+   将将压在手柄上而不是标签上 ⇒ 单击标签仍是"跳这一块"，想看同级才点多出来的那一指。 */
+.editor-crumb-caret {
+  all: unset;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 1px;
+  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0.55;
+}
+.editor-crumb-caret:hover {
+  background: var(--hover-bg, #2f3646);
+  opacity: 1;
+}
+.editor-crumb-caret:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  opacity: 1;
+}
+.editor-crumb-caret[aria-expanded='true'] {
+  opacity: 1;
+  background: var(--hover-bg, #2f3646);
 }
 
 /* PERF-6（2026-10-16 树即时批）：过滤态强制全展开 ⇒ 渲染窗口的「继续显示下一批」尾行。

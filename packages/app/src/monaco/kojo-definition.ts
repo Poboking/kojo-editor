@@ -89,7 +89,8 @@ export function collectDefinitionLocations(
  * - `'peek'`：**全部**目标都已有 live model ⇒ 交回 Monaco 真 `LocationLink[]`——
  *   `Ctrl+Click` / `F12` 就地跳、`Alt+F12` 能弹出列表（Peek 的数据源就是这份返回）；
  * - `'navigate'`：有目标缺 model（文件没在编辑器里打开）⇒ 走 `editor.revealLocation`
- *   事件通道，由 App 开文件后定位（**兜底腿，不退成"静默失败"**）。
+ *   事件通道，由 App 开文件后定位（**兜底腿，不退成"静默失败"**）；装配点若给了 `peekTarget`，
+ *   这一腿会先试一次"给缺的那些目标建隐藏 model"（项 7），建得成就改走 `'peek'`。
  */
 export type DefinitionPlan =
   | { readonly kind: 'none' }
@@ -205,6 +206,13 @@ export interface DefinitionHandlers {
    * 这不是宿主认识的文件，交回 Monaco 缺省行为）。
    */
   pathForUri?(uri: string): string | undefined;
+  /**
+   * 给一份**没在标签里打开**的目标建一份可 Peek 的 model（1020 编辑器体感批，项 7）。
+   * 装配点注入的是 `peek-leases` 那条腿（向 model 池要文 + 有界租约）。
+   * 缺省 = 没有这条腿 ⇒ 行为与 D4 逐字一致：整批退回事件通道（`tests/kojo-definition.test.ts`
+   * 的老用例钉的就是这一条，additive 接线不许改旧语义）。
+   */
+  peekTarget?(filePath: string): Promise<Monaco.editor.ITextModel | undefined>;
 }
 
 /**
@@ -244,6 +252,11 @@ function originRangeOf(model: Monaco.editor.ITextModel, position: Monaco.Positio
  *
  * 三条腿的取舍全在 `planDefinitionJump`，落点行列全在 `clampRevealPosition`——
  * 本函数只做编排，第二条腿（跳到实现）若另写一份，两份必然在夹取或兜底上漂。
+ *
+ * **项 7 补的那一拍**（1020 编辑器体感批）：判腿说"有目标没开着"时，先给装配点那条
+ * `peekTarget` 一次机会（建隐藏 model），成了就整批改走 Peek、作者看到完整列表；
+ * 没成（没接线 / 读盘失败）就照旧走事件通道跳第一个 ⇒ 旧语义逐字保留，不新造失败模式。
+ * 返回值因此可能是 Thenable——Monaco 的 provider 协议本来就收 Promise（`ProviderResult`）。
  */
 export function provideLocations(
   handlers: DefinitionHandlers,
@@ -251,7 +264,7 @@ export function provideLocations(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
   label = 'kojo-definition',
-): Monaco.languages.LocationLink[] | undefined {
+): Monaco.languages.ProviderResult<Monaco.languages.LocationLink[]> {
   let locations: DefinitionLocation[];
   try {
     locations = handlers.resolve(model, position);
@@ -263,8 +276,30 @@ export function provideLocations(
   const plan = planDefinitionJump(locations, findModel);
   if (plan.kind === 'none') return undefined;
   if (plan.kind === 'navigate') {
-    handlers.navigate(plan.location);
-    return undefined;
+    if (!handlers.peekTarget) {
+      handlers.navigate(plan.location);
+      return undefined;
+    }
+    const origin = originRangeOf(model, position);
+    return Promise.all(
+      locations
+        .filter((location) => !findModel(location.filePath))
+        .map((location) => handlers.peekTarget!(location.filePath).catch(() => undefined)),
+    ).then(() => {
+      const links = toDefinitionLinks(locations, findModel, origin);
+      if (links.length === 0) {
+        // 一份都没建成（读盘全失败）：退回跳转腿，不返回空列表让 Monaco 哑掉
+        handlers.navigate(plan.location);
+        return undefined;
+      }
+      // 部分成功也交链接：`toDefinitionLinks` 只收有 model 的那几枚 ⇒ 少的那几条此刻
+      // 真的看不见。与 D4 的"混合场景宁可整体走事件通道"相比这是一次**有意**放宽：
+      // 建 model 失败是少数（读得到才建得来），而 Peek 列表里至少看得到东西。
+      if (links.length < locations.length) {
+        console.warn(`[${label}] ${locations.length} 处定义里有 ${locations.length - links.length} 处取文失败，Peek 列表少这几条`);
+      }
+      return links;
+    });
   }
   const links = toDefinitionLinks(plan.locations, findModel, originRangeOf(model, position));
   // 双保险（自证"绝不返回指向未建 model 的 URI"）：链接构造阶段又少了一个 model

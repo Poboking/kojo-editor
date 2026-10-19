@@ -30,10 +30,15 @@ export interface TabBarProps {
   onReorderTab: (path: string, toIndex: number) => void;
   onTogglePin: (path: string) => void;
   onBatchCloseTab: (mode: BatchCloseMode, anchor: string) => void;
-  /** 「全部保存」按钮的落地面（脏态判断与轻反馈都在宿主 ProjectView，按钮恒在——铁律 4） */
+  /** 「全部保存」按钮的落地面（宿主 ProjectView，脏态判断与轻反馈都在那里，按钮恒在——铁律 4） */
   onSaveAllClick: () => void;
   /** 有没有脏标签（保存按钮弱化显示的依据；弱化 ≠ 消失） */
   hasDirty: boolean;
+  /**
+   * 本组的预览标签（1020 编辑器体感批）。`null` / 不在 openTabs 里 ⇒ 没有预览态。
+   * 预览 = 单击浏览，标签画斜体；再点一下（或改过它）即转正。
+   */
+  previewPath?: string | null;
 }
 
 /**
@@ -57,6 +62,7 @@ export const TabBar = memo(function TabBar({
   onBatchCloseTab,
   onSaveAllClick,
   hasDirty,
+  previewPath = null,
 }: TabBarProps): ReactElement {
   const notify = useNotify();
   /** 标签拖拽的自定义 MIME（只在标签条内部流转，防外部拖入误触发） */
@@ -169,6 +175,7 @@ export const TabBar = memo(function TabBar({
             p={p}
             isActive={p === activeFile}
             isPinned={pinnedPaths.has(p)}
+            isPreview={previewPath === p}
             dirty={dirtyPaths.has(p)}
             hint={tabDropAt?.path === p ? (tabDropAt.before ? 'before' : 'after') : null}
             onActivateTab={onActivateTab}

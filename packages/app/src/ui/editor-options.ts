@@ -212,20 +212,25 @@ const TIER_LARGE: EditorOptionPatch = {
     indentation: false,
     highlightActiveIndentation: false,
   },
-  minimap: { enabled: false },
+  // 缩略图留到 huge 才关：small 那一份本来就是廉价模式（不逐字符渲染、限 72 列），
+  // 它是**导航面**而不是全文级开销——1020 之后这一刀已经落回"砍全文级、不砍导航"
+  minimap: { enabled: true, renderCharacters: false, maxColumn: 72 },
   renderLineHighlight: 'line',
   // 失焦仍铺高亮是白烧一次整行重绘
   renderLineHighlightOnlyWhenFocus: true,
-  // 贴顶要在每次滚动后按可见区间重算行位置，这个体量不划算
-  stickyScroll: { enabled: false },
+  // 贴顶同样是导航面：Monaco 的 sticky scroll 只按**可见区间**算行位置（不是全文级扫描），
+  // 大档保留但少贴一行（4 → 3），把重排成本压到最低
+  stickyScroll: { enabled: true, maxLineCount: 3 },
   // 平滑滚动每帧插值重排视口；光标动画是持续重绘源——大档起全停
   smoothScrolling: false,
   cursorBlinking: 'solid',
   cursorSmoothCaretAnimation: 'off',
   // 语料同质（tab），不值得为探测再扫一遍文件头
   detectIndentation: false,
-  // 击键即格式化（F5）：ERB on-type provider 每次触发都要 getValue 整篇 + 全文档扫描
-  //（O(行数)）——大文件每敲一个 `;` 就整篇跑一遍。关掉；要格式化走显式命令/保存动作。
+  // 击键即格式化（F5）这一位**不在这里定**：ERB 的 on-type 腿早已被 PS-4 收成"只取触发
+  // 行那一段窗口"（`editor-global-providers.ts` 的 `formatRequestWindowFor`），关掉的理由
+  // 过期；而 `.kojo` 的缩进单位与 `@` 块状态是文档级判据，窗口视角会数错，仍要关。
+  // 判据只有一份：{@link formatOnTypeForDocument}——接线层与档位表都问它，不许各抄阈值。
   formatOnType: false,
   // PS-5：三条全文级扫描关档（机理见文件头注），折叠与小档同开（读口上要靠它）
   selectionHighlight: false,
@@ -255,6 +260,9 @@ const TIER_HUGE: EditorOptionPatch = {
   ...TIER_LARGE,
   // 99 万行级盘：连视口级的括号配对查找也关（'never' 是 0.57 d.ts 合法值）
   matchBrackets: 'never',
+  // 导航面到这一档才真的关：缩略图逐行算色块、贴顶每次滚动重排可见区，99 万行撑不起
+  minimap: { enabled: false },
+  stickyScroll: { enabled: false },
   guides: {
     bracketPairs: false,
     bracketPairsHorizontal: false,
@@ -351,6 +359,26 @@ export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch 
 export function foldingEnabledForLineCount(lineCount: number): boolean {
   if (!Number.isFinite(lineCount)) return false;
   return TIER_OPTIONS[editorProfileTierForLineCount(lineCount)].folding !== false;
+}
+
+/**
+ * 打字规范化（formatOnType）在**当前体量 + 当前方言**上开不开（读表，不另写阈值）。
+ *
+ * 档位表里 large/huge 写的是 `false`，那是 `.kojo` 那一条腿的值：ERB 的 on-type 供方早在
+ * PS-4 就改成只取触发行那一段窗口（`editor-global-providers.ts` 的 `formatRequestWindowFor`
+ * 对 ERB 走窗口、对 `.kojo` 交回 `null` 退整篇），"每敲一键整篇 getValue"这条关闭理由
+ * 对 ERB 已不成立。而 `.kojo` 的缩进单位探测与 `@` 原生块状态是**文档级**判据，窗口视角
+ * 会数错 ⇒ 大档继续关。
+ *
+ * Monaco 只在 `formatOnType` 为真时派发 on-type provider，这一位没有第二个写入点，
+ * 所以判据**必须只有这一份**（与 {@link foldingEnabledForLineCount} 同一条纪律）：
+ * 接线层问它，档位表也解释它，谁都不许自己抄 `LARGE_FILE_LINES`。
+ */
+export function formatOnTypeForDocument(lineCount: number, isErb: boolean): boolean {
+  // 行数不可知 ⇒ 与 {@link foldingEnabledForLineCount} 同一条纪律：不办这件"每击键一次"的事
+  if (!Number.isFinite(lineCount)) return false;
+  if (editorProfileTierForLineCount(lineCount) === 'small') return true;
+  return isErb;
 }
 
 /** 档位表里所有档（不含 small）写过的键，升序去重 */

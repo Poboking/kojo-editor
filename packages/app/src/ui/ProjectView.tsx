@@ -31,8 +31,22 @@ import { workspaceRootsOf } from './workspace-roots';
 import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
 import { TabBar } from './tabs-bar';
-import type { BatchCloseMode } from './tabs-ops';
+import { requestTabCycle } from './tab-cycle';
+import type { ActiveFileSymbolSource } from './palette-search';
+import type { BatchCloseMode, OpenFileOptions } from './tabs-ops';
 import type { EditorGroupState, GroupsOrientation } from './editor-groups';
+
+/**
+ * `Ctrl+P` 里 `@` 模式的数据源：**模块级常量函数**（引用恒定 ⇒ 面板的 memo 不被每帧新闭包打穿）。
+ *
+ * 读的是编辑器位点探针（`jump-to-state` 那一条注册通道，与「看这一行的状态」同一个真源），
+ * 符号树与大纲 / 吸顶 / 面包屑同一棵（`crumbTreeCacheRef` 那份缓存，按下才算）。
+ * 探针不在场（编辑器没挂载 / 已卸载）⇒ `null`，由面板照实说"还没有打开文件"。
+ */
+const activeFileSymbolsFromEditor = (): ActiveFileSymbolSource | null => {
+  const probe = readJumpProbe();
+  return probe === null ? null : { path: probe.path, symbols: probe.symbols };
+};
 
 interface Props {
   kernel: Kernel;
@@ -89,7 +103,13 @@ interface Props {
   /** 固定标签集合（C2；会话态——与 openTabs 同生命周期，真源在宿主 App） */
   pinnedPaths: ReadonlySet<string>;
   reveal: RevealTarget | null;
-  onOpenFile: (path: string) => void;
+  /** 打开文件（第二参是**方式**：预览态单击 / 永久打开；类型定义见 tabs-ops.OpenFileOptions） */
+  onOpenFile: (path: string, opts?: OpenFileOptions) => void;
+  /**
+   * 最近打开（1020 编辑器体感批）：路径清单，最新在前 —— `Ctrl+P` 空查询时置顶的
+   * 「最近打开」一节。真源在宿主 App 的那份 MM-7 记录（欢迎页同一份），这里只透传。
+   */
+  recentFiles?: readonly string[];
   /** 请求关闭标签（脏标签由宿主弹确认） */
   onRequestCloseTab: (path: string) => void;
   /** 全部保存（Ctrl+Shift+S 壳层命令落地处） */
@@ -216,6 +236,7 @@ export function ProjectView({
   pinnedPaths,
   reveal,
   onOpenFile,
+  recentFiles,
   onRequestCloseTab,
   onSaveAll,
   onDirtyChange,
@@ -552,6 +573,20 @@ export function ProjectView({
         title: '恢复关闭的标签',
         keybinding: effectiveKeybindingOf('workbench.reopenClosedTab'),
         run: () => onReopenClosedTab(),
+      },
+      // 标签后用序切换（1020 编辑器体感批）：命令只发意图，MRU 真源在宿主 App
+      // （tab-cycle 是一个模块级发布订阅——它不是跨插件的业务事件，不该进 plugin-api 事件面）。
+      {
+        id: 'workbench.nextTab',
+        title: '切到上一个用过的标签',
+        keybinding: effectiveKeybindingOf('workbench.nextTab'),
+        run: () => requestTabCycle('next'),
+      },
+      {
+        id: 'workbench.prevTab',
+        title: '切到下一个用过的标签',
+        keybinding: effectiveKeybindingOf('workbench.prevTab'),
+        run: () => requestTabCycle('prev'),
       },
       /* ---- 编辑器动作（R8 命令面板补齐批）：壳层发意图，EditorPane 落 Monaco 动作 ----
        * **刻意不带缺省键位**：编辑器内这些动作 Monaco 已有内建键（Ctrl+F / Ctrl+H /
@@ -1067,6 +1102,8 @@ export function ProjectView({
       onCloseProject={onClose}
       onReloadProject={onReload}
       quickOpenFiles={quickOpenFiles}
+      quickOpenRecent={recentFiles}
+      activeFileSymbols={activeFileSymbolsFromEditor}
       onOpenFile={onOpenFile}
       extraCommands={extraCommands}
       onRegisterWorkbench={setWorkbench}
@@ -1118,6 +1155,7 @@ export function ProjectView({
                       activeFile={g.active}
                       dirtyPaths={dirtyPaths}
                       pinnedPaths={pinnedPaths}
+                      previewPath={g.preview ?? null}
                       onActivateTab={tabCb.onActivateTab}
                       onRequestCloseTab={tabCb.onRequestCloseTab}
                       onReorderTab={tabCb.onReorderTab}

@@ -1,0 +1,142 @@
+/* ===== 设置页搜索与结果列（1020 编辑器体感批） =====
+   挂在 `.settings-*` 家族上，颜色全部走既有 token；不改上方任何既有规则本体。 */
+.settings-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 0 0 8px;
+}
+.settings-search-icon {
+  opacity: 0.6;
+  flex: none;
+}
+.settings-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border, #3a4252);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg, #1b202a);
+  color: var(--text, #d7dce4);
+  font: inherit;
+}
+.settings-search-input:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+.settings-search-clear {
+  all: unset;
+  flex: none;
+  display: inline-flex;
+  padding: 3px 5px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0.7;
+}
+.settings-search-clear:hover {
+  background: var(--hover-bg, #2f3646);
+  opacity: 1;
+}
+.settings-search-clear:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+.settings-search-modified {
+  all: unset;
+  flex: none;
+  padding: 3px 9px;
+  border: 1px solid var(--border, #3a4252);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: var(--fs-1);
+  color: var(--text-dim, #9aa4b2);
+}
+.settings-search-modified:hover {
+  background: var(--hover-bg, #2f3646);
+}
+.settings-search-modified.on {
+  border-color: var(--accent, #7aa2f7);
+  color: var(--accent, #7aa2f7);
+  background: var(--accent-soft, rgba(122, 162, 247, 0.12));
+}
+.settings-search-modified:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+
+/* 结果列复用 `.settings-nav-bar` 的宽度与滚动条口径，只换内容与字号 */
+.settings-results-col {
+  gap: 1px;
+}
+.settings-results-count,
+.settings-results-empty {
+  padding: 4px 8px 6px;
+  font-size: var(--fs-1);
+}
+.settings-result {
+  all: unset;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.settings-result:hover {
+  background: var(--hover-bg, #2f3646);
+}
+.settings-result.on {
+  border-left-color: var(--accent, #7aa2f7);
+  background: var(--hover-bg, #2f3646);
+}
+.settings-result:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+.settings-result-label {
+  font-size: var(--fs-2);
+  color: var(--text, #d7dce4);
+}
+.settings-result-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-1);
+}
+.settings-result-badge {
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: var(--fs-0);
+  color: var(--warn, #d19a66);
+  border: 1px solid currentColor;
+}
+
+/* 点结果跳到那一行后的落点回执：一次性的底色回落（动效页关掉就只剩瞬时高亮） */
+[data-settings-key][data-hit='1'] {
+  animation: settings-hit 1.5s ease-out;
+}
+@keyframes settings-hit {
+  0% {
+    background: var(--accent-soft, rgba(122, 162, 247, 0.22));
+  }
+  100% {
+    background: transparent;
+  }
+}
+html[data-motion='off'] [data-settings-key][data-hit='1'] {
+  animation: none;
+  outline: 1px solid var(--accent, #7aa2f7);
+}
+
+/* 编程字体那一行的输入框（复用设置页文本框的观感，只补宽度与基线对齐） */
+.settings-font-input {
+  flex: 0 1 220px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #3a4252);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg, #1b202a);
+  color: var(--text, #d7dce4);
+  font: inherit;
+}
+.settings-font-input:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}

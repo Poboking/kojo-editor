@@ -20,7 +20,7 @@ import { activeNavScope } from './search-scope';
 /**
  * 工作区符号搜索（D2，2026-10-15）的**宿主侧纯逻辑**——对标 VSCode 的 `Ctrl+T`。
  *
- * 抽出来的理由与 `commands.ts` 的 `filterFileCandidates` 同一口径：**查询与排序是数据
+ * 抽出来的理由与 `palette-search.ts` 的 `rankFiles` 同一口径：**查询与排序是数据
  * 判据，不是渲染细节**，只有脱离 React 才钉得住（渲染层在 node 环境跑不了）。
  *
  * 分层纪律：宿主**不认识**这些符号是什么语言结构、也不认识它们从哪个索引来——

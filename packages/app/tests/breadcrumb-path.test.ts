@@ -7,7 +7,14 @@
 
 import { describe, expect, it } from 'vitest';
 import type { EditorDocumentSymbol } from '@kojo/plugin-api';
-import { crumbsKey, crumbsNeedRefresh, symbolChainAt, toCrumbs } from '../src/ui/breadcrumb-path';
+import {
+  CRUMB_SIBLING_LIMIT,
+  crumbLevelsAt,
+  crumbsKey,
+  crumbsNeedRefresh,
+  symbolChainAt,
+  toCrumbs,
+} from '../src/ui/breadcrumb-path';
 import { LARGE_FILE_LINES } from '../src/ui/editor-options';
 
 const sym = (
@@ -99,9 +106,71 @@ describe('crumbsNeedRefresh · 重算闸', () => {
     expect(crumbsNeedRefresh({ ...here, path: '/t/B.erb' }, here)).toBe(true);
   });
 
-  it('大文件档一律不算（重算 = 全文解析，与 stickyScroll 同一条降级理由）', () => {
+  it('体量不再参与这条闸（1020 编辑器体感批）：大文件的"要不要清链"由调用方按**有没有索引/缓存**判', () => {
     expect(crumbsNeedRefresh(here, null)).toBe(true);
-    expect(crumbsNeedRefresh({ ...here, lineCount: LARGE_FILE_LINES }, null)).toBe(false);
-    expect(crumbsNeedRefresh({ ...here, lineCount: LARGE_FILE_LINES - 1 }, null)).toBe(true);
+    expect(crumbsNeedRefresh({ ...here, lineCount: LARGE_FILE_LINES }, null)).toBe(true);
+    expect(crumbsNeedRefresh({ ...here, lineCount: LARGE_FILE_LINES }, here)).toBe(false);
+    expect(crumbsNeedRefresh({ ...here, lineCount: 990_000 }, here)).toBe(false);
+  });
+});
+
+/**
+ * 逐级下拉数据（1020 编辑器体感批的"父级 / 同级"）。
+ *
+ * 判据点是**同层**而不是"链上的上一层的 children"：归属链全树下行，重叠兄弟与平铺树
+ * 都可能让两者不等，拿相邻关系猜层级会把作者导到别处的块。
+ */
+describe('crumbLevelsAt · 同级列表', () => {
+  it('平铺树（ERB 形状）：同级 = 顶层全部符号，按文档序，当前项在列', () => {
+    const flat = [sym('ALPHA', 2, 9), sym('BETA', 12, 30), sym('FOO', 31, 31)];
+    const levels = crumbLevelsAt(flat, 15);
+    expect(levels.map((l) => l.current.name)).toEqual(['BETA']);
+    expect(levels[0]!.siblings.map((s) => s.name)).toEqual(['ALPHA', 'BETA', 'FOO']);
+    expect(levels[0]!.hidden).toBe(0);
+  });
+
+  it('嵌套树：内层只列自己那一层的兄弟，外层列顶层（两级各一份）', () => {
+    const tree = [
+      sym('时机 指令 310', 1, 20, [
+        sym('如果 教養 > 30', 2, 6, [sym('否则', 4, 6)]),
+        sym('当 TFLAG:193', 8, 15),
+      ]),
+      sym('函数 工具甲', 21, 40),
+    ];
+    const levels = crumbLevelsAt(tree, 10);
+    expect(levels.map((l) => l.current.name)).toEqual(['时机 指令 310', '当 TFLAG:193']);
+    expect(levels[0]!.siblings.map((s) => s.name)).toEqual(['时机 指令 310', '函数 工具甲']);
+    expect(levels[1]!.siblings.map((s) => s.name)).toEqual(['如果 教養 > 30', '当 TFLAG:193']);
+  });
+
+  it('块外（无包围）⇒ 空数组；行号非法同样不给（不猜）', () => {
+    const flat = [sym('ALPHA', 2, 9)];
+    expect(crumbLevelsAt(flat, 100)).toEqual([]);
+    expect(crumbLevelsAt(flat, 0)).toEqual([]);
+  });
+
+  it('超出上限：给以当前项为窗心的连续一段，差额如实报在 hidden（截断不许藏）', () => {
+    const many = Array.from({ length: CRUMB_SIBLING_LIMIT + 60 }, (_, i) =>
+      sym(`F${i}`, i * 10 + 2, i * 10 + 9),
+    );
+    const target = many[Math.floor(CRUMB_SIBLING_LIMIT / 2) + 30]!;
+    const levels = crumbLevelsAt(many, target.startLine);
+    expect(levels).toHaveLength(1);
+    const level = levels[0]!;
+    expect(level.siblings).toHaveLength(CRUMB_SIBLING_LIMIT);
+    expect(level.hidden).toBe(60);
+    // 当前项必须在窗口内，且窗口贴着它居中（不是从头截起）
+    expect(level.siblings.some((s) => s.startLine === target.startLine && s.name === target.name)).toBe(true);
+    const at = level.siblings.findIndex((s) => s.name === target.name);
+    expect(at).toBeGreaterThan(CRUMB_SIBLING_LIMIT / 2 - 10);
+  });
+
+  it('首/尾附近的当前项：窗口贴边取满，仍在上限内（不出现"当前项被挤出窗口"）', () => {
+    const many = Array.from({ length: CRUMB_SIBLING_LIMIT + 40 }, (_, i) => sym(`F${i}`, i + 1, i + 1));
+    const last = many[many.length - 1]!;
+    const levels = crumbLevelsAt(many, last.startLine);
+    const level = levels[0]!;
+    expect(level.siblings.at(-1)!.name).toBe(last.name);
+    expect(level.hidden).toBe(40);
   });
 });

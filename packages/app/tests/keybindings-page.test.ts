@@ -13,7 +13,8 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { KeybindingsPage } from '../src/ui/KeybindingsPage';
-import { KEYBINDING_SPECS, effectiveKeybindingOf, resetAllKeybindings, setKeybindingOverride } from '../src/ui/keybindings';
+import { KEYBINDING_SPECS, buildKeybindingRows, effectiveKeybindingOf, filterKeybindingRows, resetAllKeybindings, setKeybindingOverride } from '../src/ui/keybindings';
+import { MONACO_BUILTIN_COUNT } from '../src/ui/monaco-builtin-keybindings';
 import type { CommandEntry } from '../src/ui/commands';
 
 const cmd = (input: { id: string; title: string; category?: string; keybinding?: string }): CommandEntry => ({
@@ -143,11 +144,24 @@ describe('快捷键设置页 · 撞键就地指名', () => {
   });
 });
 
-describe('快捷键设置页 · 空态有退路', () => {
-  it('零命中时渲染空态主句与「清空搜索」出口', () => {
+describe('快捷键设置页 · 空态与兜底', () => {
+  /**
+   * 1020 编辑器体感批改了这一格的判据：命令清单为空时页面**不再空**——
+   * 「Monaco 内建」那一组恒在（它不来自命令注册表，正是这一批要补的可见性）。
+   * 真·零命中（搜了个不存在的词）走的是 `filterKeybindingRows` 那条数据腿，
+   * 本仓无 DOM 环境、SSR 敲不进查询框，所以在数据面钉住它，不硬造假绿。
+   */
+  it('命令清单为空时，内建组仍然列出（可见性不随命令表一起消失）', () => {
     const html = render([]);
-    expect(html).toContain('kb-empty');
-    expect(html).toContain('没有匹配的快捷键');
-    expect(html).toContain('清空搜索');
+    expect(html).toContain('Monaco 内建');
+    expect(html).toContain('data-kb-id="monaco.editor.action.peekDefinition"');
+    expect(html).toContain(`${MONACO_BUILTIN_COUNT} 条`);
+  });
+
+  it('数据腿的零命中给空表（页面上的「没有匹配的快捷键」由此驱动）', () => {
+    const rows = buildKeybindingRows(allCommands());
+    expect(rows.length).toBeGreaterThan(0);
+    expect(filterKeybindingRows(rows, 'zzzqqq不存在的词')).toEqual([]);
+    expect(filterKeybindingRows(rows, '').length).toBe(rows.length);
   });
 });

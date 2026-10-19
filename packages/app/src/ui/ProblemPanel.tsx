@@ -10,6 +10,7 @@ import {
 import type { EditorCodeAction } from '@kojo/plugin-api';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import { snapshot, subscribe, currentVersion, type EditorProblem } from './problem-store';
+import { applyPanelRowNav } from './panel-row-nav';
 import {
   ALL_SEVERITIES,
   collectRowFix,
@@ -141,6 +142,8 @@ export function ProblemPanel({
   /** 行内 fix 问询缓存（判据见模块头） */
   const fixCacheRef = useRef<Map<string, RowFixEntry>>(new Map());
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 列表区（行导航只在这一段里找行：过滤框与勾选框不参与漫游，见 `panel-row-nav`） */
+  const listRef = useRef<HTMLUListElement>(null);
 
   // 过滤尺一换，窗口回到首帧上界（旧深度对新结果没有意义）
   useEffect(() => {
@@ -278,6 +281,7 @@ export function ProblemPanel({
       <li key={`${rowKey}:${globalIndex}`} className="prob-item">
         <button
           className="conv-issue-btn"
+          data-panel-row=""
           title={`${p.path}:${p.line}`}
           onClick={() => onReveal(p.path, p.line, problemRevealSpan(p))}
         >
@@ -329,7 +333,15 @@ export function ProblemPanel({
   };
 
   return (
-    <div className="panel-problems">
+    <div
+      className="panel-problems"
+      // 行导航（1020 编辑器体感批）：↑↓ 逐条看，F8/Shift+F8 跳过去并当场打开。
+      // 焦点在编辑器里时这一对键仍归 Monaco 的 `marker.nextInFiles`（见「键盘快捷键」页的内建组）；
+      // 焦点落到本面板时由这里按**过滤后的可见列表**代跳——被筛掉的条不该用键跳过去。
+      onKeyDown={(e) => {
+        applyPanelRowNav(listRef.current, e);
+      }}
+    >
       {header.kind === 'empty' ? (
         <div className="conv-empty dim">未发现问题 ✅</div>
       ) : (
@@ -385,7 +397,7 @@ export function ProblemPanel({
           </div>
         ) : null
       ) : (
-        <ul className="prob-list">
+        <ul ref={listRef} className="prob-list">
           {groups.map((g) => {
             const isCollapsed = collapsed.has(g.path);
             // 组内行与全局下标同序配对（`indices` 与 `items` 一一同序），再按窗口裁

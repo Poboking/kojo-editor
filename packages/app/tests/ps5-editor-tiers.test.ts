@@ -27,6 +27,7 @@ import {
   applySizeTier,
   editorOptionsForLineCount,
   foldingEnabledForLineCount,
+  formatOnTypeForDocument,
   sizeTierKeys,
   sizeTierKeysMissingFromSmall,
 } from '../src/ui/editor-options';
@@ -145,9 +146,12 @@ describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值（**清
 describe('档位写入口只有 applySizeTier 一个（EditorPane.tsx 静态取证）', () => {
   it('三个写入点都走 applySizeTier：切标签 / 挂投影 / 撤投影', () => {
     const src = paneSource();
-    expect(src).toContain('applySizeTier(ed, restore.getLineCount());'); // 撤下投影 ⇒ 按原文行数重落
-    expect(src).toContain('applySizeTier(ed, sugarModel.getLineCount(), {'); // 挂上投影 ⇒ 按投影行数
-    expect(src).toContain('applySizeTier(ed, entry.model.getLineCount(), {'); // 切标签 ⇒ 按原文行数
+    expect(src).toContain('applySizeTier(ed, restoreLines, tierOverrides(restoreLines,'); // 撤下投影 ⇒ 按原文行数重落
+    expect(src).toContain('applySizeTier(ed, sugarTierLines, tierOverrides(sugarTierLines,'); // 挂上投影 ⇒ 按投影行数
+    expect(src).toContain('applySizeTier(ed, tierLines, tierOverrides(tierLines,'); // 切标签 ⇒ 按原文行数
+    // 三个点都是**三参**调用：档位表之外的那一层（语言感知 formatOnType + 显示偏好）只许住在 tierOverrides 里
+    expect((src.match(/applySizeTier\(ed, /g) ?? []).length).toBe(3);
+    expect(src).not.toMatch(/applySizeTier\(ed, [^,)]+\)/);
   });
 
   it('没有任何一处再自己 spread 档位表（判据只许有一份，两处抄表必漂）', () => {
@@ -156,6 +160,34 @@ describe('档位写入口只有 applySizeTier 一个（EditorPane.tsx 静态取�
 
   it('创建时那一格 formatOnType 仍然开着（ZH-D4 回车缩进的兜底腿靠 on-type provider 派发）', () => {
     expect(paneSource()).toContain('formatOnType: true,');
+  });
+
+  /**
+   * 打字规范化这一位**按方言分**（1020 编辑器体感批）。
+   *
+   * 档位表里 large/huge 写 `false` 的依据早已过期：ERB 的 on-type 腿在 PS-4 就改成只取
+   * 触发行窗口（`editor-global-providers.ts` 的 `formatRequestWindowFor`），而 `.kojo` 的
+   * 缩进单位与 `@` 块状态是文档级判据、窗口视角会数错。所以判据只有
+   * {@link formatOnTypeForDocument} 这一份，接线层问它，档位表解释它。
+   */
+  it('formatOnType：ERB 大文件重新开、.kojo 大文件继续关、小文件两者都开', () => {
+    for (const n of [1, LARGE_FILE_LINES - 1]) {
+      expect(formatOnTypeForDocument(n, true), String(n)).toBe(true);
+      expect(formatOnTypeForDocument(n, false), String(n)).toBe(true);
+    }
+    for (const n of [LARGE_FILE_LINES, HUGE_FILE_LINES, 990_000]) {
+      expect(formatOnTypeForDocument(n, true), String(n)).toBe(true);
+      expect(formatOnTypeForDocument(n, false), String(n)).toBe(false);
+    }
+    // 非法行数 ⇒ 不是 small（NaN 不进小档的"恒开"），也别把它当小档哄骗过去
+    expect(formatOnTypeForDocument(Number.NaN, true)).toBe(false);
+  });
+
+  it('接线层确实按屏幕上那份文档问它：切标签/撤投影给 isErbLike，挂投影恒 false', () => {
+    const src = paneSource();
+    expect(src).toContain('tierOverrides(restoreLines, isErbLike(filePathRef.current))');
+    expect(src).toContain('tierOverrides(tierLines, isErbLike(filePath)');
+    expect(src).toContain('tierOverrides(sugarTierLines, false');
   });
 
   it('折叠超额那句人话真在渲染里，且不含内部术语（铁律 4：少给了必须说）', () => {

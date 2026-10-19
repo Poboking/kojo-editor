@@ -60,15 +60,17 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
     expect(o.detectIndentation).toBe(true);
   });
 
-  it('large 档：全文级开销关、光标动画停、失焦不铺行高亮', () => {
+  it('large 档：全文级开销关、光标动画停、失焦不铺行高亮（导航面不在这一刀里）', () => {
     const o = editorOptionsForLineCount(12_000);
     expect(o.occurrencesHighlight).toBe('off');
     expect(o.matchBrackets).toBe('near');
     expect(o.bracketPairColorization).toEqual({ enabled: false });
     expect(o.renderLineHighlight).toBe('line');
     expect(o.renderLineHighlightOnlyWhenFocus).toBe(true);
-    expect(o.minimap).toEqual({ enabled: false });
-    expect(o.stickyScroll).toEqual({ enabled: false });
+    // 1020 编辑器体感批：large 保留缩略图与吸顶——small 那份缩略图本来就是廉价模式
+    // （不逐字符渲染、限 72 列），吸顶按可见区间算，两者都不是"随全文增长"的开销
+    expect(o.minimap).toEqual({ enabled: true, renderCharacters: false, maxColumn: 72 });
+    expect(o.stickyScroll).toEqual({ enabled: true, maxLineCount: 3 });
     expect(o.smoothScrolling).toBe(false);
     expect(o.cursorBlinking).toBe('solid');
     expect(o.cursorSmoothCaretAnimation).toBe('off');
@@ -97,6 +99,8 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
       highlightActiveIndentation: false,
     });
     expect(o.minimap).toEqual({ enabled: false });
+    // 导航面到 huge 才真的关（99 万行级盘上缩略图逐行算色块、吸顶每次滚动重排可见区）
+    expect(o.stickyScroll).toEqual({ enabled: false });
     // huge 继承 large 的全部降级（不是"回到默认"）
     expect(o.occurrencesHighlight).toBe('off');
     expect(o.smoothScrolling).toBe(false);
@@ -119,9 +123,14 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
   });
 
   it('切回小文件可恢复（同一个函数既给降级也给还原，切标签不会"降级卡死"）', () => {
-    for (const n of [LARGE_FILE_LINES, HUGE_FILE_LINES]) {
-      expect(editorOptionsForLineCount(n).minimap).toEqual({ enabled: false });
-    }
+    // 缩略图：large 仍是廉价模式，只有 huge 才关；吸顶同样只在 huge 关
+    expect(editorOptionsForLineCount(LARGE_FILE_LINES).minimap).toEqual({
+      enabled: true,
+      renderCharacters: false,
+      maxColumn: 72,
+    });
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).minimap).toEqual({ enabled: false });
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).stickyScroll).toEqual({ enabled: false });
     expect(editorOptionsForLineCount(100).minimap).toEqual({
       enabled: true,
       renderCharacters: false,

@@ -6,12 +6,14 @@
  * 其余四型是树的结构：分组（角色 → 作者包）、目录缓存态、右键菜单作用域、行内编辑态。
  */
 import type { DirEntry, ErbIndex, FileIO, GameProject, WalkOptions } from '@kojo/plugin-api';
+import type { OpenFileOptions } from './tabs-ops';
 
 export interface Props {
   project: GameProject;
   index: ErbIndex | null;
   activeFile: string | null;
-  onOpenFile: (path: string) => void;
+  /** 打开文件（第二参是**方式**：`{preview:true}` 单击浏览、缺省永久打开） */
+  onOpenFile: (path: string, opts?: OpenFileOptions) => void;
   /** 目录列举（真实文件夹视图用；宿主注入内核 io，浏览器环境可能抛错——调用侧已兜底） */
   listDir?: (path: string) => Promise<DirEntry[]>;
   /**

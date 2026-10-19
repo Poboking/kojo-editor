@@ -18,6 +18,8 @@ export interface TabRowProps {
   readonly isActive: boolean;
   readonly isPinned: boolean;
   readonly dirty: boolean;
+  /** 预览态（斜体；再点一次即转正）。缺省 false ⇒ 与改动前逐字同形 */
+  readonly isPreview?: boolean;
   /** 拖拽落点指示（只在命中标签上非空；PS-6 第 7 项的进一步根治——跨行移动时只换两行） */
   readonly hint: 'before' | 'after' | null;
   /** 以下全部恒定身份（宿主 useCallback 产物）：行级 memo 的生效前提 */
@@ -36,6 +38,7 @@ export const TabRow = memo(function TabRow({
   isActive,
   isPinned,
   dirty,
+  isPreview = false,
   hint,
   onActivateTab,
   onRequestCloseTab,
@@ -49,8 +52,8 @@ export const TabRow = memo(function TabRow({
     <div
       role="tab"
       aria-selected={isActive}
-      className={tabClassName(p, isActive, isPinned, hint ? { path: p, before: hint === 'before' } : null)}
-      title={isPinned ? `${p}（已固定）` : p}
+      className={tabClassName(p, isActive, isPinned, hint ? { path: p, before: hint === 'before' } : null, isPreview)}
+      title={isPinned ? `${p}（已固定）` : isPreview ? `${p}（预览中，再点一下即固定）` : p}
       draggable
       onContextMenu={(e) => onContextMenuBase(e, p)}
       onDragStart={(e) => onDragStartBase(e, p)}

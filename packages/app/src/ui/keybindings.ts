@@ -82,6 +82,10 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'workbench.navBack', title: '后退', category: '工作台', keys: 'alt+arrowleft', rebindable: true },
   { id: 'workbench.navForward', title: '前进', category: '工作台', keys: 'alt+arrowright', rebindable: true },
   { id: 'workbench.reopenClosedTab', title: '恢复关闭的标签', category: '工作台', keys: 'ctrl+shift+t', rebindable: true },
+  // 标签最近使用切换（1020 编辑器体感批）：Ctrl+Tab 在**焦点组**的 MRU 序里往后走。
+  // Monaco 没有占这条键（vendor 里 `CtrlCmd|Tab` 零命中），宿主直接吃；连按语义在 App 的 cycleTab。
+  { id: 'workbench.nextTab', title: '切到上一个用过的标签', category: '工作台', keys: 'ctrl+tab', rebindable: true, note: '连按继续在后用序里走；仅本组' },
+  { id: 'workbench.prevTab', title: '切到下一个用过的标签', category: '工作台', keys: 'ctrl+shift+tab', rebindable: true, note: '与上一条方向相反；仅本组' },
   // ---- 分屏（SPLIT-1 编辑器组批 + MM-9 布局持久化批） ----
   { id: 'workbench.splitEditor', title: '向右拆分编辑器', category: '工作台', keys: 'ctrl+\\', rebindable: true },
   // MM-9：向下拆分同时把排列钉为上下（column）——命令名说什么就给什么；

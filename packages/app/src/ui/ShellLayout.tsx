@@ -110,7 +110,13 @@ import {
   parseKeybinding,
   type ShellCommandSpec,
 } from './commands';
-import { CommandPalette, QuickOpen, WorkspaceSymbols } from './Palette';
+import {
+  CommandPalette,
+  QuickOpen,
+  WorkspaceSymbols,
+  type PaletteReveal,
+} from './Palette';
+import type { ActiveFileSymbolSource } from './palette-search';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
 import {
   collectWorkspaceSymbols,
@@ -134,6 +140,9 @@ import { toggleFullscreen } from './window-fullscreen';
  * 布局状态持久化在 WebView localStorage（`kojo.ui.layout.v1`，全局一份，
  * 定稿 Q3）——内核存储域零负担。「重置布局」清持久化回落默认。
  */
+
+/** `@` 模式的缺省来源（编辑器区没注入 ⇒ 恒回 `null`，面板照实说"还没有打开文件"） */
+const NO_ACTIVE_FILE_SYMBOLS = (): ActiveFileSymbolSource | null => null;
 
 export interface EditorStatusInfo {
   encoding: string;
@@ -263,6 +272,17 @@ interface Props {
   onReloadProject?: () => void;
   /** 快速打开候选文件（P2；壳层泛型路径列表，零业务知识） */
   quickOpenFiles?: readonly string[];
+  /**
+   * 快速打开「最近打开」一节（1020 编辑器体感批）：路径清单，最新在前。
+   * 空查询时置顶成一节；不在 `quickOpenFiles` 里的条目（别的项目的）自然被跳过。
+   */
+  quickOpenRecent?: readonly string[];
+  /**
+   * `Ctrl+P` 里 `@` 模式的符号来源（编辑器区注入）。
+   * 壳层不认识"符号从哪来"——它只把这个函数交给面板；真源是编辑器的位点探针
+   * （与大纲 / 吸顶 / 面包屑同一棵树），见 `ProjectView` 那侧的接线。
+   */
+  activeFileSymbols?: () => ActiveFileSymbolSource | null;
   /** 快速打开选中回调 */
   onOpenFile?: (path: string) => void;
   /** 编辑器区注入的壳层命令（P3：关闭标签 / 全部保存；与内建布局命令合并进统一注册表） */
@@ -310,6 +330,8 @@ export function ShellLayout(props: Props): ReactElement {
     onCloseProject,
     onReloadProject,
     quickOpenFiles,
+    quickOpenRecent,
+    activeFileSymbols,
     onOpenFile,
     extraCommands,
     onRegisterWorkbench,
@@ -922,6 +944,21 @@ export function ShellLayout(props: Props): ReactElement {
         line: symbol.line,
         ...(symbol.column !== undefined ? { column: symbol.column } : {}),
         source: '工作区符号',
+      });
+    },
+    [kernel],
+  );
+
+  /**
+   * `Ctrl+P` 的 `:` / `@` 两条腿的落点（1020 编辑器体感批）：与上面同一条通道，
+   * 只是发起方换成快速打开面板。列不给 ⇒ 落在行首（与 `revealLocation` 那条退化口径一致）。
+   */
+  const revealLine = useCallback(
+    (target: PaletteReveal) => {
+      kernel.bus.emit('editor.revealLocation', {
+        filePath: target.filePath,
+        line: target.line,
+        source: target.source,
       });
     },
     [kernel],
@@ -1728,7 +1765,17 @@ export function ShellLayout(props: Props): ReactElement {
         <CommandPalette commands={registry} commandCtx={commandCtx} onClose={() => setPaletteOpen(false)} />
       ) : null}
       {quickOpen && quickOpenFiles && onOpenFile ? (
-        <QuickOpen files={quickOpenFiles} onOpenFile={onOpenFile} onClose={() => setQuickOpen(false)} />
+        <QuickOpen
+          files={quickOpenFiles}
+          {...(quickOpenRecent !== undefined ? { recent: quickOpenRecent } : {})}
+          commands={registry}
+          commandCtx={commandCtx}
+          activeFileSymbols={activeFileSymbols ?? NO_ACTIVE_FILE_SYMBOLS}
+          activeFile={activeFile ?? null}
+          onOpenFile={onOpenFile}
+          onReveal={revealLine}
+          onClose={() => setQuickOpen(false)}
+        />
       ) : null}
       {symbolsOpen ? (
         <WorkspaceSymbols

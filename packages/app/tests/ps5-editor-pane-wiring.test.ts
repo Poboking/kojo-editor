@@ -108,11 +108,15 @@ describe('PS-5 ② 面包屑不再每击键解析全文', () => {
     expect(sched).toContain('crumbRefreshRef.current?.(true)');
   });
 
-  it('大文件档清链那条既有红线没被动（旧链残留会把别的文件的行号 reveal 进当前文件）', () => {
+  it('大文件档清链那条既有红线没被动（旧链残留会把别的文件的行号 reveal 进当前文件），但**闸的位置在索引快路之后**', () => {
     const refresh = SOURCE.slice(SOURCE.indexOf('crumbRefreshRef.current = (forceParse'));
     const body = refresh.slice(0, refresh.indexOf('// A9 选区读数搭同一条光标监听'));
     expect(body).toContain('cursor.lineCount >= LARGE_FILE_LINES');
     expect(body).toContain('apply([])');
+    // 1020 编辑器体感批：这条闸原先在最前面按行数一刀切，把"零解析的索引快路"一起挡死
+    // ⇒ 5,000 行以上的文件连面包屑都没有。现在它只拦"缓存与索引都给不出、必须现解析"那一拍。
+    expect(body.indexOf('symbolsFromIndex(path')).toBeLessThan(body.indexOf('cursor.lineCount >= LARGE_FILE_LINES'));
+    expect(body.indexOf('cache.symbols')).toBeLessThan(body.indexOf('cursor.lineCount >= LARGE_FILE_LINES'));
   });
 });
 

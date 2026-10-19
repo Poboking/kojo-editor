@@ -12,6 +12,7 @@
  * 这里只提供「给一份旧态 + 一个意图 ⇒ 返回一份新态」的纯函数——与
  * `editor-groups.test.ts` 的闭环口径一一对应。
  */
+import { planPreviewOpen } from './tabs-ops';
 
 /** 一个编辑器组：自己的标签栈 + 组内激活标签 */
 export interface EditorGroupState {
@@ -20,6 +21,14 @@ export interface EditorGroupState {
   readonly tabs: readonly string[];
   /** 本组激活的标签（null = 空组） */
   readonly active: string | null;
+  /**
+   * 本组的**预览标签**（1020 编辑器体感批；VS Code 的"单击浏览"那一份语义）。
+   *
+   * 每组至多一枚，且必须是 `tabs` 里的一条（否则一律按"没有预览"处理，不猜）。
+   * 它是**会话态**、比 pin 更 ephemeral：不进 `serializeGroups` 的快照，
+   * 恢复会话时所有标签都按普通标签回来——"上次只是瞄一眼"这个事实不值得跨会话保留。
+   */
+  readonly preview?: string | null;
 }
 
 /** 排列方向（MM-9）：row = 左右并排（VSCode 默认），column = 上下堆叠 */
@@ -71,26 +80,67 @@ function neighborGroupId(state: EditorGroupsState, groupId: string): string {
   return remaining[j < 0 ? 0 : j]!.id;
 }
 
-/** 在**焦点组**打开文件：无则追加到标签栈尾，并激活 */
+/**
+ * 在**焦点组**打开文件：无则追加到标签栈尾，并激活。
+ *
+ * 永久打开这一条路上顺手清预览态：如果这文件正以预览态开着（作者从别处跳进同一份），
+ * 它就该转正——预览是"只是瞄一眼"，被显式打开第二次就不再是瞄一眼（与 VS Code 同口径）。
+ */
 export function openInActiveGroup(state: EditorGroupsState, path: string): EditorGroupsState {
   return {
     ...state,
     groups: state.groups.map((g) =>
       g.id === state.activeGroupId
-        ? { ...g, tabs: g.tabs.includes(path) ? g.tabs : [...g.tabs, path], active: path }
+        ? {
+            ...g,
+            tabs: g.tabs.includes(path) ? g.tabs : [...g.tabs, path],
+            active: path,
+            preview: g.preview === path ? null : g.preview ?? null,
+          }
         : g,
     ),
   };
+}
+
+/**
+ * 在**焦点组**以预览态打开文件（`previewIsDirty` 由宿主给：脏的预览标签绝不替换，
+ * 作者改过的东西不能因为"又点了一下文件树"就没了）。规则本体在 `tabs-ops.planPreviewOpen`，
+ * 这里只把它落到组态上——两处各写一份替换规则必漂。
+ */
+export function openPreviewInActiveGroup(
+  state: EditorGroupsState,
+  path: string,
+  previewIsDirty: (path: string) => boolean,
+): EditorGroupsState {
+  const g = activeGroupOf(state);
+  const plan = planPreviewOpen(g.tabs, g.preview ?? null, path, previewIsDirty);
+  return {
+    ...state,
+    groups: state.groups.map((x) =>
+      x.id !== g.id
+        ? x
+        : { ...x, tabs: plan.tabs, active: path, preview: plan.preview },
+    ),
+  };
+}
+
+/** 把某组的预览标签转正（点标签本身 = 显式要用它，此后它不再被预览替换掉） */
+export function pinPreviewInGroup(state: EditorGroupsState, groupId: string, path: string): EditorGroupsState {
+  const g = state.groups.find((x) => x.id === groupId);
+  if (!g || g.preview !== path) return state;
+  return { ...state, groups: state.groups.map((x) => (x.id === groupId ? { ...x, preview: null } : x)) };
 }
 
 /** 激活某组里的某标签（标签必须已在栈内；否则原样返回——不凭空造标签） */
 export function activateTab(state: EditorGroupsState, groupId: string, path: string): EditorGroupsState {
   const target = state.groups.find((g) => g.id === groupId);
   if (!target || !target.tabs.includes(path)) return state;
+  // 点标签本身 = 显式要用它（与 VS Code 同口径）：预览态在这一拍转正
+  const preview = target.preview === path ? null : target.preview ?? null;
   return {
     ...state,
     activeGroupId: groupId,
-    groups: state.groups.map((g) => (g.id === groupId ? { ...g, active: path } : g)),
+    groups: state.groups.map((g) => (g.id === groupId ? { ...g, active: path, preview } : g)),
   };
 }
 
@@ -117,7 +167,10 @@ export function closeTabsInGroup(
 
   let groups = state.groups.map((g): EditorGroupState => {
     if (g.id !== groupId) return g;
-    return dropGroup ? g : { ...g, tabs: remainingTabs, active: nextActive };
+    // 预览标签被关掉了 ⇒ 预览态一起销账（留着一条不在栈里的预览 = 下一次点开替换不到东西）
+    if (dropGroup) return g;
+    const preview = g.preview != null && gone.has(g.preview) ? null : g.preview ?? null;
+    return { ...g, tabs: remainingTabs, active: nextActive, preview };
   });
   if (dropGroup) groups = groups.filter((g) => g.id !== groupId);
 

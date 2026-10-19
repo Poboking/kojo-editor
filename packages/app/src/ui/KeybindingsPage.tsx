@@ -21,6 +21,7 @@ import {
   type KeybindingRow,
 } from './keybindings';
 import { isComposingEvent, nextRovingIndex } from './shell-keys';
+import { monacoBuiltinRows } from './monaco-builtin-keybindings';
 import { Icon } from './icons';
 
 /**
@@ -87,7 +88,13 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
   const searchRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
-  const rows = useMemo(() => buildKeybindingRows(commands), [commands, kbVersion]);
+  const rows = useMemo(
+    // 1020 编辑器体感批：补一组「Monaco 内建（只读）」行——那些能力随 contrib 早已装好，
+    // 只是不在宿主注册表里，此前作者在键位页上看不见它们。内建行恒为 `state:'default'`
+    // 且 `conflictWith:null` ⇒ 「已改」「撞键」两个范围档天然不含它们，不改既有口径。
+    () => [...buildKeybindingRows(commands), ...monacoBuiltinRows()],
+    [commands, kbVersion],
+  );
 
   const changedCount = useMemo(() => rows.filter((r) => r.state !== 'default').length, [rows]);
   const conflictCount = useMemo(() => rows.filter((r) => r.conflictWith !== null).length, [rows]);
@@ -202,6 +209,8 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
       <p className="kb-intro">
         这里列出编辑器认得的每一条命令和它当前的按键。点按键那一格、再按下新的组合即可改键（Esc 取消）。
         两键序列会分成两片，先按前一片再按后一片。也可用 ↑ ↓ 走位、Enter 改键、Delete 移除键位。
+        末尾那组「Monaco 内建」是编辑器本身自带的按键（速览定义、转到行、一次选中相同词等），
+        它们已经能用、在这一页只给看不给改；列选择是鼠标手势，在设置的「编辑器」里开。
       </p>
 
       <div className="kb-toolbar">

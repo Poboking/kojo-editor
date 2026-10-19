@@ -33,6 +33,7 @@ import {
   type SearchRow,
 } from './search-query';
 import { SEARCH_SORT_OPTIONS, sortSearchFiles, type SearchSortMode } from './search-stream';
+import { applyPanelRowNav } from './panel-row-nav';
 import {
   describeAppliedScope,
   findSearchScope,
@@ -276,6 +277,7 @@ function SearchMatchRow({
       <button
         type="button"
         className="search-match ksp-row-main"
+        data-panel-row=""
         title={`${path}:${match.line}`}
         onClick={() => onReveal(path, match.line, searchMatchSpan(match))}
       >
@@ -304,6 +306,8 @@ export function SearchPanel({
   const s = useSearchState();
   const inputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  /** 结果区（行导航只在这一段里找行：工具条不参与漫游，见 `panel-row-nav`） */
+  const resultsRef = useRef<HTMLDivElement>(null);
   const optionsBodyId = useId();
   const replaceRowId = useId();
 
@@ -466,7 +470,16 @@ export function SearchPanel({
   };
 
   return (
-    <div className="panel-search ksp" role="search" aria-label="在文件中搜索">
+    <div
+      className="panel-search ksp"
+      role="search"
+      aria-label="在文件中搜索"
+      // 行导航（1020 编辑器体感批）：↑↓ 在可见结果行之间移焦点，F4/Shift+F4 移过去并当场打开。
+      // 判据与问题面板共用 `panel-row-nav`（两处各写一套必漂）。
+      onKeyDown={(e) => {
+        applyPanelRowNav(resultsRef.current, e);
+      }}
+    >
       {/* 控制区 + 状态区：单面板侧栏里整块 sticky（结果滚走、条件与读数常驻） */}
       <div className="ksp-head">
         <div className="ksp-row ksp-search-row">
@@ -799,7 +812,9 @@ export function SearchPanel({
               ) : null}
             </>
           ) : (
-            <div className="search-status dim ksp-hint">输入检索词后回车；点结果行跳转到该位置。</div>
+            <div className="search-status dim ksp-hint">
+              输入检索词后回车；点结果行跳转到该位置（↑↓ 逐行看，F4 跳到下一条并打开）。
+            </div>
           )}
         </div>
       </div>
@@ -807,6 +822,7 @@ export function SearchPanel({
       {/* 结果区：分组 + 文件头折叠。行号槽宽由本屏最长读数定（CSS 自定义属性，一处写全列表） */}
       {rows.length > 0 ? (
         <div
+          ref={resultsRef}
           className="search-rows ksp-results"
           style={{ '--ksp-gutter': String(gutterCh) } as CSSProperties}
         >

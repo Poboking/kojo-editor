@@ -5,11 +5,13 @@
  */
 import { memo, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import { baseName } from './file-tree-model';
+import type { OpenFileOptions } from './tabs-ops';
 
 export interface FileRowProps {
   readonly f: string;
   readonly active: boolean;
-  readonly onOpenFile: (path: string) => void;
+  /** 打开（第二参 = 方式：单击给预览态；类型见 tabs-ops.OpenFileOptions） */
+  readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
   /** 文件行右键（B1；缺省 → 文件行无右键，旧行为） */
   readonly onFileContext?: (e: ReactMouseEvent, path: string) => void;
 }
@@ -25,7 +27,8 @@ export const FileRow = memo(function FileRow({ f, active, onOpenFile, onFileCont
       className={`tree-file ${active ? 'active' : ''}`}
       title={f}
       data-locate={f}
-      onClick={() => onOpenFile(f)}
+      // 单击 = 预览态浏览（VS Code 单击文件树那份手感：斜体、不占新位、再点一下转正）
+      onClick={() => onOpenFile(f, { preview: true })}
       onContextMenu={onFileContext ? (e) => onFileContext(e, f) : undefined}
     >
       {baseName(f)}

@@ -55,11 +55,11 @@ import { dropRecoveredContent, peekRecoveredContent } from './recovery-store';
 import {
   crumbsKey,
   crumbsNeedRefresh,
-  symbolChainAt,
-  toCrumbs,
+  crumbLevelsAt,
   type CrumbCursor,
-  type CrumbItem,
+  type CrumbLevel,
 } from './breadcrumb-path';
+import { CrumbBar } from './breadcrumb-bar';
 import { useNotify } from './NotificationCenter';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import {
@@ -67,10 +67,17 @@ import {
   FIND_BASELINE,
   LARGE_FILE_LINES,
   applySizeTier,
+  formatOnTypeForDocument,
   layoutPrefPatch,
   quickSuggestionsFor,
+  type EditorOptionPatch,
 } from './editor-options';
 import { subscribeLayoutPref } from './layout-pref';
+import {
+  editorDisplayFontPatch,
+  editorDisplayOptionPatch,
+  subscribeEditorDisplayPrefs,
+} from './editor-display-prefs';
 import { CODE_FONT_BASELINE } from './code-font'; // 编程字体单一真源（与 styles.css 的 --font-code 逐字同一条栈）
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
@@ -174,6 +181,28 @@ function applyEditabilityAndSuggest(ed: Monaco.editor.IStandaloneCodeEditor, rea
     quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
     quickSuggestionsDelay: loadSuggestDelayPref(),
   });
+}
+
+/**
+ * 落档时叠在档位表之后的那一层补丁（1020 编辑器体感批）：**只有这一处**把
+ * 语言感知的 `formatOnType` 与显示偏好折进 overrides，三个写入点（切标签 / 挂预览 /
+ * 撤预览）与偏好订阅回调都经过它——写四份必然漂一份。
+ *
+ * `isErb` 由调用方按**此刻屏幕上的那份文档**给：糖预览是 `.kojo` 投影 ⇒ false
+ * （它的缩进单位与 `@` 块状态是文档级判据，窗口取文会数错，大档继续关打字规范化）。
+ * 字体族刻意不在这里：它与体量正交、且 `code-font.ts` 钉着"降级集永不含字体键"，
+ * 只在 create 与偏好变更两条路上发。
+ */
+function tierOverrides(
+  lineCount: number,
+  isErb: boolean,
+  extra?: EditorOptionPatch,
+): EditorOptionPatch {
+  return {
+    ...editorDisplayOptionPatch(lineCount),
+    formatOnType: formatOnTypeForDocument(lineCount, isErb),
+    ...(extra ?? {}),
+  };
 }
 
 /**
@@ -477,8 +506,11 @@ export function EditorPane({
    * 零命中，公开面没有面包屑，见 `breadcrumb-path.ts` 头注）。数据**复用 B3 的 documentSymbol
    * 树**（与大纲/吸顶同源同判据，不建第二份符号树）；空数组 = 不渲染整条栏
    * （糖视图 / 无文件 / 光标不在任何块内——只读派生态下绝不导到派生行号）。
+   *
+   * 1020 编辑器体感批改存**逐级下拉数据**（`CrumbLevel`）而不是裸链：同级列表要的是
+   * "这一层还有哪些块"，那份数据本来就在同一棵缓存树里，另存一份链反而要第二次下行。
    */
-  const [crumbs, setCrumbs] = useState<readonly CrumbItem[]>([]);
+  const [crumbLevels, setCrumbLevels] = useState<readonly CrumbLevel[]>([]);
   /** 面包屑刷新入口（ref 化：光标/model 监听只注册一次，须读最新闭包） */
   const crumbRefreshRef = useRef<((forceParse?: boolean) => void) | null>(null);
   /** 防抖重算定时器（PS-5：打字期间全文解析**每轮停笔一次**，不是每击键一次） */
@@ -868,7 +900,8 @@ export function EditorPane({
           // 漂移」在**这一条腿**上没做：挂糖时按投影行数落过档，撤糖却只回了可写态）。
           // 一份几万行投影的关值——折行 / 折叠 / 找同词 / 打字规范化——以前会一路骑到
           // 下一份小文件上，且没有第二次机会纠正（切标签那道档位只在**换文件**时发）。
-          applySizeTier(ed, restore.getLineCount());
+          const restoreLines = restore.getLineCount();
+          applySizeTier(ed, restoreLines, tierOverrides(restoreLines, isErbLike(filePathRef.current)));
           // 按当前文件重算 readOnly（解锁 / 直连 / 工作区口径与切换标签 effect 一致）
           const path = filePathRef.current;
           const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
@@ -988,12 +1021,14 @@ export function EditorPane({
     // （小地图 / 粘性滚动 / 括号对着色 / 整篇找同词）上屏 ⇒ 滚动即卡死。先落选项再挂 model。
     // 档位 = **此刻屏幕上这份投影**的行数（投影比原文长，该档更保守）；撤下时由
     // `clearSugarView` 按原文行数再落一次——两拍合起来才是"谁在屏幕上就按谁落档"。
-    applySizeTier(ed, sugarModel.getLineCount(), {
+    // `isErb` 恒 false：糖 model 是 `.kojo` 投影，打字规范化的窗口腿对它不适用。
+    const sugarTierLines = sugarModel.getLineCount();
+    applySizeTier(ed, sugarTierLines, tierOverrides(sugarTierLines, false, {
       readOnly: true, // 糖是派生物，禁止在糖视图上编辑
       // 预览是派生只读 model：快建议整条关掉（provider 拿不到 editor 的可写状态）
       quickSuggestions: false,
       quickSuggestionsDelay: loadSuggestDelayPref(),
-    });
+    }));
     ed.setModel(sugarModel);
     setSugarStats(sugarSummary(sugarLines, 0));
     // C1 反向下行批：糖视图挂上 = derivedView 翻转（false→true），立刻透出给面板
@@ -1573,6 +1608,11 @@ export function EditorPane({
       // 编程字体（单一真源）：**只走 create 路径**，不进体量降级集——字体与体量两轴正交，
       // updateOptions 只覆写发过去的键，创建时钉一次就贯穿切文件
       ...CODE_FONT_BASELINE,
+      // 显示偏好（1020 编辑器体感批）：行高 / 空白符 / 缩略图 / 行号 / 行内提示从设置页来，
+      // **缺省值就是上面这几行硬编码的那一份**（editor-display-prefs.ts 的缺省），
+      // 没动过设置的作者今天逐字不变。字体族走同一条 create 路径（覆盖上面那条基线栈）。
+      ...editorDisplayOptionPatch(0),
+      ...editorDisplayFontPatch(),
       // 中文打字噪声 / 选词基线（A2+A3）：与切文件降级集同源（editor-options.ts）
       ...CJK_TYPING_BASELINE,
       // 快建议总开关与延迟同源设置页；只读 / 预览的关闭由切文件与糖视图两处 updateOptions 覆盖
@@ -1657,6 +1697,17 @@ export function EditorPane({
       const model = ed.getModel();
       ed.updateOptions(layoutPrefPatch(model ? model.getLineCount() : 0));
     });
+    // 显示偏好（1020 编辑器体感批）：行高 / 空白符 / 缩略图 / 行号 / 行内提示 / 字体族。
+    // 只补发这几位——`formatOnType` 由方言判据管（`tierOverrides`），字体族与体量正交但
+    // 同一条偏好轴，一起发。行数按**此刻屏幕上那份 model** 取（糖预览在屏上就算投影行数，
+    // 与挂预览那一拍同口径）：缩略图这一位在 huge 档恒关，偏好翻不回它，与档位表同一把尺。
+    const displayUnsub = subscribeEditorDisplayPrefs(() => {
+      const model = ed.getModel();
+      ed.updateOptions({
+        ...editorDisplayOptionPatch(model ? model.getLineCount() : 0),
+        ...editorDisplayFontPatch(),
+      });
+    });
     // 焦点上抛（SPLIT-1）：编辑器聚焦 ⇒ 宿主把焦点组切到本组（点哪组哪组成为焦点组）
     const focusDisposer = ed.onDidFocusEditorText(() => {
       setPaneFocused(paneId); // 模块级焦点随编辑器焦点走（跳转探针读"最后聚焦的实例"）
@@ -1676,15 +1727,21 @@ export function EditorPane({
     // ③ 的滞后窗口与 `crumbsNeedRefresh` 既有口径同一类（"块边界真的变了，最多滞后到
     // 下一次换行即补上"），换到的收益是"每敲一键整篇 getValue + 全文扫描一次"不再发生；
     // 换文件的第一次仍**立即**解析（没有可沿用的树时不给作者看上一份文件的链）。
+    //
+    // 1020 编辑器体感批改了**大文件那一闸的位置**：此前它在最前面按行数一刀切清空，
+    // 于是 ② 这条零解析的索引快路对 ≥5,000 行的文件**根本走不到**——5,000 行正是语料里
+    // "长但天天读"的那一档，VS Code 在大文件仍保留面包屑。现在体量闸落在④：只有"缓存没有、
+    // 索引不认、只能现解析"时才按体量清链（清链必须清的理由逐字不变：旧链会把别的文件的行号
+    // reveal 进当前文件）。
     crumbRefreshRef.current = (forceParse = false) => {
       const ed = editorRef.current;
       const path = filePathRef.current;
       const model = ed?.getModel() ?? null;
-      const apply = (next: readonly CrumbItem[]): void => {
-        const key = crumbsKey(next);
+      const apply = (next: readonly CrumbLevel[]): void => {
+        const key = crumbsKey(next.map((l) => l.current));
         if (key === crumbsKeyRef.current) return;
         crumbsKeyRef.current = key;
-        setCrumbs(next);
+        setCrumbLevels(next);
       };
       if (!ed || !path || sugarModelRef.current || !model) {
         crumbLastRef.current = null;
@@ -1692,21 +1749,13 @@ export function EditorPane({
         return;
       }
       const cursor: CrumbCursor = { path, line: ed.getPosition()?.lineNumber ?? 1, lineCount: model.getLineCount() };
-      // 大文件降级闸（判据在 `crumbsNeedRefresh`）：返回 false 有两种含义——"同 path 同行、
-      // 链仍有效"与"大文件、不给面包屑"。后者**必须清空**：不然后一份文件的旧链残留，
-      // 点击段会把**别的文件**的行号 reveal 进当前文件（数据错位，比没有面包屑更糟）。
-      if (cursor.lineCount >= LARGE_FILE_LINES) {
-        crumbLastRef.current = null;
-        apply([]);
-        return;
-      }
       if (!crumbsNeedRefresh(cursor, crumbLastRef.current)) return;
       crumbLastRef.current = cursor;
       try {
         const versionId = model.getAlternativeVersionId();
         const cache = crumbTreeCacheRef.current;
         const chainOf = (symbols: readonly EditorDocumentSymbol[]): void =>
-          apply(toCrumbs(symbolChainAt(symbols, cursor.line)));
+          apply(crumbLevelsAt(symbols, cursor.line));
         // ① 同版本（索引条目还须同指纹）⇒ 缓存就是当前真相，一次解析都不付
         if (
           cache &&
@@ -1734,6 +1783,12 @@ export function EditorPane({
         if (!forceParse && cache && cache.path === path) {
           scheduleCrumbRebuild();
           chainOf(cache.symbols);
+          return;
+        }
+        // ④ 只剩"现解析"这一条路：大文件不值这一刀，清链（**不是**维持现状，理由见上）
+        if (cursor.lineCount >= LARGE_FILE_LINES) {
+          crumbLastRef.current = null;
+          apply([]);
           return;
         }
         const symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
@@ -1787,6 +1842,7 @@ export function EditorPane({
       suggestDelayUnsub();
       quickSuggestionsUnsub();
       layoutUnsub();
+      displayUnsub();
       focusDisposer.dispose();
       crumbCursorSub.dispose();
       crumbModelSub.dispose();
@@ -2013,12 +2069,13 @@ export function EditorPane({
       setUnlocked(allowEdit);
       const readOnly = erbReadOnlyGate(filePath, { inWorkspace: inWorkspace(filePath), canEdit: allowEdit });
       // 档位判据 = 此刻屏幕上这份**原文**的行数；可写态与快建议在 overrides 里盖在档位之后
-      applySizeTier(ed, entry.model.getLineCount(), {
+      const tierLines = entry.model.getLineCount();
+      applySizeTier(ed, tierLines, tierOverrides(tierLines, isErbLike(filePath), {
         readOnly,
         // 体量档位也会带 quickSuggestions（代码位开）；只读 / 设置页关掉必须在这里整条盖掉
         quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
         quickSuggestionsDelay: loadSuggestDelayPref(),
-      });
+      }));
       ed.setModel(entry.model);
       const vs = viewStatesRef.current.get(filePath);
       if (vs) ed.restoreViewState(vs);
@@ -2335,31 +2392,17 @@ export function EditorPane({
           保存 (Ctrl+S)
         </button>
       </div>
-      {/* 面包屑（D1，宿主自绘）：角色/家族级导航复用 documentSymbol 链（外→内）。
+      {/* 面包屑（D1，宿主自绘）：角色/家族级导航复用 documentSymbol 链（外→内），
+          每段后面的把手展开**同级**列表（1020 编辑器体感批，数据在同一棵缓存树上）。
           空链整条不渲染（糖视图 / 不在任何块内 = 没有可信的真文件行号可展示）。
           点击走 `editor.revealLocation` 既有通道跳块头行——不新造导航机制。 */}
-      {crumbs.length > 0 ? (
-        <div className="editor-crumb" aria-label="位置面包屑">
-          {crumbs.map((c, i) => (
-            <span key={`${i}-${c.startLine}-${c.name}`} className="editor-crumb-seg">
-              {i > 0 ? <span className="editor-crumb-sep" aria-hidden="true">
-                ›
-              </span> : null}
-              <button
-                type="button"
-                className="editor-crumb-item"
-                title={`跳回「${c.name}」块头（第 ${c.startLine} 行）`}
-                onClick={() => {
-                  if (!filePath) return;
-                  kernel.bus.emit('editor.revealLocation', { filePath, line: c.startLine, source: '面包屑' });
-                }}
-              >
-                {c.name}
-              </button>
-            </span>
-          ))}
-        </div>
-      ) : null}
+      <CrumbBar
+        levels={crumbLevels}
+        onRevealLine={(line) => {
+          if (!filePath) return;
+          kernel.bus.emit('editor.revealLocation', { filePath, line, source: '面包屑' });
+        }}
+      />
       <div className="editor-body" ref={hostRef} />
       {pendingChoice ? <SaveWarningDialog warning={pendingChoice} onDecide={decideSaveWarning} /> : null}
       {introAsk ? <SugarViewIntroDialog onDecide={decideIntro} /> : null}

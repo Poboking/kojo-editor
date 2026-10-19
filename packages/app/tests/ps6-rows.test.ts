@@ -19,10 +19,17 @@ import { ProblemPanel, PROBLEM_WINDOW_INITIAL } from '../src/ui/ProblemPanel';
 import { setProblems, clearAllProblems, type EditorProblem } from '../src/ui/problem-store';
 import { DirRows } from '../src/ui/file-tree-dir-rows';
 import type { DirState } from '../src/ui/file-tree-types';
-import { filterFileCandidates } from '../src/ui/commands';
+import { rankFiles } from '../src/ui/palette-search';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+/** 判据住在 palette-search（`Ctrl+P` 文件模式的真身）；测试要的是「只含路径」那条投影 */
+const filterFileCandidates = (
+  paths: readonly string[],
+  q: string,
+  cap?: number,
+): string[] => rankFiles(paths, q, cap === undefined ? {} : { cap }).map((h) => h.path);
 
 const UI_DIR = fileURLToPath(new URL('../src/ui', import.meta.url));
 const UI = (name: string): string => readFileSync(path.join(UI_DIR, name), 'utf8');

@@ -52,6 +52,8 @@ import {
   withinCodeLensBudget,
 } from '../monaco/kojo-code-lens';
 import { collectDefinitionLocations, installDefinitionProvider, type DefinitionLocation } from '../monaco/kojo-definition';
+import { createPeekLeases, type PeekLeases } from './peek-leases';
+import { editorModelPool } from './editor-model-pool-instance';
 import {
   collectInlayHints,
   inlayHintsAffordable,
@@ -859,6 +861,35 @@ export function provideCodeActionsFor(
 
 let globalsInstalled = false;
 const globalDisposers: Monaco.IDisposable[] = [];
+
+/**
+ * Peek 未打开文件的租约（1020 编辑器体感批，项 7）：与全局 provider **同生共死**。
+ *
+ * 惰性建（第一次真需要隐藏 model 时才建）：`acquire` 要 kernel，而 kernel 在装配之后才存在。
+ * 拆毁时机与 provider 同一处（`teardownGlobalProviders`）——上一套注册留下的租约若活到下一个
+ * kernel，那些 model 就挂在池里没人放（池的引用计数是 app 级单例的账，不随换项目清零）。
+ */
+let peekLeases: PeekLeases | null = null;
+const peekLeasesOf = (): PeekLeases =>
+  peekLeases ??= createPeekLeases({
+    acquire: (path) => editorModelPool.acquire(requireKernel(), path),
+    release: (path) => {
+      editorModelPool.release(path);
+    },
+  });
+
+/**
+ * 「这个目标文件有没有 model 可 Peek」（D4 判腿与构造链接两条腿共用的问法）：
+ * 先问全部组的**打开表**（开着的标签 = 权威，那份 model 正被编辑器显示），
+ * 打不开表才问 Peek 租约（项 7 补的那一层）。顺序反了会把"作者刚关掉的那一份"
+ * 当成 peek 目标——池按路径共享同一份 model，租约里留着的那份就是打开表里的那份。
+ */
+const modelForPeekPath = (path: string): Monaco.editor.ITextModel | undefined =>
+  openModelAcrossGroups(path) ?? (peekLeases?.modelFor(path) ?? undefined);
+
+/** URI → 宿主路径（opener 反查）：打开表优先，问不到再看租约（隐藏 model 的 URI 就是 `Uri.file(path)`） */
+const pathForPeekUri = (uri: string): string | undefined =>
+  pathForUriAcrossGroups(uri) ?? (peekLeases?.pathOfUri(uri) ?? undefined);
 /** Monarch 词表等模块级资源的实例引用计数（最后一个实例退场才清） */
 let erbWordsUsers = 0;
 let lastWordsKey = '__unset__';
@@ -993,10 +1024,12 @@ export function ensureGlobalProviders(): void {
       // 路径，值 = 那份 model），路径比较一律走 `matchOpenedPath` 的 `pathKey` 口径
       // （HK-7：平台原样路径与宿主键在 Windows 上分隔符/大小写不一致，裸字符串比会静默判不上）：
       // - openModelFor：目标文件是否**已经开着**（开着 ⇒ 有 model ⇒ Monaco 能给 Peek 显示）；
+      //   项 7 起再叠一层 Peek 租约：没开着的目标也能现取一份隐藏 model 进列表；
       // - pathForUri：Monaco 的跨 model 跳转请求（opener）反回宿主路径，落回同一条
       //   `editor.revealLocation` 通道——不新造第二套导航机制。
-      openModelFor: openModelAcrossGroups,
-      pathForUri: pathForUriAcrossGroups,
+      openModelFor: modelForPeekPath,
+      pathForUri: pathForPeekUri,
+      peekTarget: (path) => peekLeasesOf().peek(path),
     }));
     // 文档大纲（B3）：同一枚 `ui.editor.languageService` 槽的第二个判别成员。宿主照旧只做
     // 协议翻译——"这篇文档有哪些层"全在插件（ERB 给函数与声明、`.kojo` 给时机/段/分支）。
@@ -1224,8 +1257,9 @@ export function ensureGlobalProviders(): void {
           ),
         );
       },
-      openModelFor: openModelAcrossGroups,
-      pathForUri: pathForUriAcrossGroups,
+      openModelFor: modelForPeekPath,
+      pathForUri: pathForPeekUri,
+      peekTarget: (path) => peekLeasesOf().peek(path),
     }));
     // `.kojo` 用户函数改名（R1，2026-10-16）：同一枚槽的第八个判别成员。ERB 方言不归它
     // 管（全项目改名走上面那条 ERB 改名注册的专用通道）；`.kojo` 的判定（可证明引用面
@@ -1376,6 +1410,9 @@ function teardownGlobalProviders(reason: string): void {
     // P2-14：待确认的修复预览同理——上一套注册的悬账不许活到下一个 kernel
     //（overlay 已随上一套壳层 effect 退场，条目无处可认领，留着只会误导）
     resetQuickFixPreviews();
+    // 项 7：Peek 租约同理整套清账（池的引用计数是 app 级单例的账，不随换项目自己清零）
+    peekLeases?.disposeAll();
+    peekLeases = null;
   }
 }
 

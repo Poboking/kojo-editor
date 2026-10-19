@@ -79,12 +79,19 @@ describe('异步 acquire 期间的视图/光标串档闸（#3）', () => {
   });
 });
 
-describe('大文件面包屑清空（#4）', () => {
+describe('大文件面包屑清空（#4 · 1020 编辑器体感批改了闸的位置）', () => {
   it('crumbRefresh 对超阈值文件清空链而非维持旧链（旧链点击 = 把别的文件的行 reveal 进当前文件）', () => {
     // 入口按**签名无关**的定位（PS-5 起它是 `(forceParse = false) =>`：参数会变，这条闸不该跟着漂）
     const start = SOURCE.search(/crumbRefreshRef\.current = \(/);
     expect(start, '找不到 crumbRefresh 入口').toBeGreaterThanOrEqual(0);
     const block = SOURCE.slice(start, start + 3000);
     expect(block).toMatch(/cursor\.lineCount >= LARGE_FILE_LINES[\s\S]{0,160}crumbLastRef\.current = null[\s\S]{0,60}apply\(\[\]\)/);
+  });
+  it('但清空只在"缓存与索引都给不出"之后发生（大文件零解析出链是这一批要保住的收益）', () => {
+    const start = SOURCE.search(/crumbRefreshRef\.current = \(/);
+    const block = SOURCE.slice(start, start + 3000);
+    const gate = block.indexOf('cursor.lineCount >= LARGE_FILE_LINES');
+    expect(gate, '体量闸不见了').toBeGreaterThan(-1);
+    expect(block.indexOf('symbolsFromIndex(path)')).toBeLessThan(gate);
   });
 });

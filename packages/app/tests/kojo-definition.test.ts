@@ -426,6 +426,132 @@ describe('installDefinitionProvider · 装配', () => {
   });
 });
 
+/* ============================== 项 7：未打开文件先给 peekTarget 一拍 ============================== */
+
+describe('installDefinitionProvider · peekTarget（未打开目标的隐藏 model）', () => {
+  const CLOSED_PATH = 'C:\\p\\closed.ERB';
+  const CLOSED_URI = 'file:///c%3A/p/closed.ERB';
+  const closed = (line: number): EditorSymbolLocation => ({ filePath: CLOSED_PATH, line });
+
+  /**
+   * 装配点同构的桩：`held` = peek 建出来的隐藏 model，建成即被 `openModelFor` 查得到
+   * （真身是 `peek-leases` 那份租约表；同一份文件第二次问 ⇒ 直接判 peek，不再取盘）。
+   */
+  function peekAssembly(
+    resolve: () => EditorSymbolLocation[],
+    peek?: (filePath: string) => Promise<Monaco.editor.ITextModel | undefined>,
+  ): {
+    provide: () => Monaco.languages.ProviderResult<Monaco.languages.LocationLink[]>;
+    navigate: ReturnType<typeof vi.fn>;
+    asked: string[];
+  } {
+    const { monaco, registered } = stubMonaco();
+    const navigate = vi.fn();
+    const held = new Map<string, Monaco.editor.ITextModel>();
+    const asked: string[] = [];
+    installDefinitionProvider(monaco, {
+      resolve,
+      navigate,
+      openModelFor: (filePath) => held.get(filePath) ?? liveModelFor(filePath),
+      ...(peek === undefined
+        ? {}
+        : {
+            peekTarget: async (filePath: string) => {
+              asked.push(filePath);
+              const model = await peek(filePath);
+              if (model !== undefined) held.set(filePath, model);
+              return model;
+            },
+          }),
+    });
+    return {
+      // provider 协议的返回类型是宽并集（`Location | LocationLink[]`），本文件只走多目标那一支
+      provide: () =>
+        registered[0]!.provider.provideDefinition(
+          sourceModel,
+          position,
+          {} as Monaco.CancellationToken,
+        ) as Monaco.languages.ProviderResult<Monaco.languages.LocationLink[]>,
+      navigate,
+      asked,
+    };
+  }
+
+  it('目标没开 + 建得起 model ⇒ 交整批链接、**不发事件**（`Alt+F12` 第一次有内容）', async () => {
+    const h = peekAssembly(() => [closed(7)], async () => fakeModel(CLOSED_URI));
+    const links = await Promise.resolve(h.provide());
+    expect(links).toHaveLength(1);
+    expect(links?.[0]!.uri.toString()).toBe(CLOSED_URI);
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  it('混合（同文件 + 没开的）也改走 Peek：两条都在列表里，顺序照目标序', async () => {
+    const h = peekAssembly(
+      () => [{ filePath: CURRENT_PATH, line: 1 }, closed(9)],
+      async () => fakeModel(CLOSED_URI),
+    );
+    const links = await Promise.resolve(h.provide());
+    expect(links?.map((l) => l.uri.toString())).toEqual([CURRENT_URI, CLOSED_URI]);
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  it('只问**没开着**的那些目标（已经开着的绝不二次取盘）', async () => {
+    const h = peekAssembly(
+      () => [{ filePath: CURRENT_PATH, line: 1 }, closed(9), closed(10)],
+      async () => fakeModel(CLOSED_URI),
+    );
+    await Promise.resolve(h.provide());
+    expect(h.asked).toEqual([CLOSED_PATH, CLOSED_PATH]);
+  });
+
+  it('取文全失败（答 undefined）⇒ 照旧退回事件通道跳第一个，不返回空列表把 Monaco 弄哑', async () => {
+    const h = peekAssembly(() => [closed(7), closed(8)], async () => undefined);
+    expect(await Promise.resolve(h.provide())).toBeUndefined();
+    expect(h.navigate).toHaveBeenCalledTimes(1);
+    expect(h.navigate).toHaveBeenCalledWith(closed(7));
+  });
+
+  it('peekTarget 自己抛 ⇒ 同一处理（这一拍不许新造失败模式）', async () => {
+    const h = peekAssembly(
+      () => [closed(7)],
+      () => Promise.reject(new Error('读不到')),
+    );
+    expect(await Promise.resolve(h.provide())).toBeUndefined();
+    expect(h.navigate).toHaveBeenCalledWith(closed(7));
+  });
+
+  it('部分成功 ⇒ 列表少那几条，且**说出来**（warn 里有几处取文失败）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const h = peekAssembly(
+      () => [{ filePath: CURRENT_PATH, line: 1 }, closed(9)],
+      async () => undefined,
+    );
+    const links = await Promise.resolve(h.provide());
+    expect(links).toHaveLength(1);
+    expect(links?.[0]!.uri.toString()).toBe(CURRENT_URI);
+    expect(h.navigate).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toContain('1 处取文失败');
+    warn.mockRestore();
+  });
+
+  it('第二次问同一处：隐藏 model 已在 ⇒ 判腿直接给 Peek，不再取盘', async () => {
+    const h = peekAssembly(() => [closed(7)], async () => fakeModel(CLOSED_URI));
+    await Promise.resolve(h.provide());
+    expect(h.asked).toEqual([CLOSED_PATH]);
+    const again = await Promise.resolve(h.provide());
+    expect(again).toHaveLength(1);
+    expect(h.asked).toEqual([CLOSED_PATH]); // 租约命中，零二次读盘
+  });
+
+  it('装配点没接 peekTarget ⇒ 旧语义逐字保持（同步走事件通道，返回值不是 Promise）', () => {
+    const h = peekAssembly(() => [closed(7)]);
+    const ret = h.provide();
+    expect(ret).toBeUndefined();
+    expect(h.navigate).toHaveBeenCalledWith(closed(7));
+    expect(h.asked).toEqual([]);
+  });
+});
+
 /* ============================== opener · 跨 model 跳转落回宿主通道 ============================== */
 
 describe('installDefinitionProvider · registerEditorOpener', () => {

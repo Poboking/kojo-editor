@@ -11,6 +11,7 @@
  */
 import { memo, useEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import { FileRow } from './file-tree-row';
+import type { OpenFileOptions } from './tabs-ops';
 
 
 export type { FileRowProps } from './file-tree-row';
@@ -58,7 +59,7 @@ export interface FileRowsProps {
   /** 本次最多渲染的行数（≥ files.length 即全量 = 改动前行为） */
   readonly limit: number;
   readonly activeFile: string | null;
-  readonly onOpenFile: (path: string) => void;
+  readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
   /**
    * 行内重命名（B1）：与 path 匹配的那行改画输入框（node 由宿主造好塞进来，
    * FileRows 保持无知——它不认识编辑态，只知道"这一行换成这个元素"）。

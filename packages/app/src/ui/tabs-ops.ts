@@ -107,6 +107,67 @@ export function applyPin(
   return next;
 }
 
+/* ------------------------------ 预览标签（1020 编辑器体感批） ------------------------------ */
+
+/** 打开文件这一动作的**方式**（不是新地址，只是"这次算浏览还是算常驻"） */
+export interface OpenFileOptions {
+  /**
+   * `true` = 预览态打开（VS Code 单击文件树那一份）：斜体标签、**不占新位**——
+   * 本组已有预览标签时被就地替换。缺省 false = 永久打开（跳转、搜索、最近文件都是这种）。
+   */
+  readonly preview?: boolean;
+}
+
+export interface PreviewOpenPlan {
+  /** 新的标签序列（与入参同一引用 = 无需改动，调用方可据此跳过一次 setState） */
+  readonly tabs: readonly string[];
+  /** 这一组此刻的预览标签（`null` = 没有预览态） */
+  readonly preview: string | null;
+  /** 这次点击是否把目标**固定**下来了（预览再点一次 = 固定；给了作者一句可见的变化） */
+  readonly pinned: boolean;
+}
+
+/**
+ * 预览态打开一张标签的计划（纯函数，只算不动手）。
+ *
+ * 四条规则，逐条对着 VS Code 的行为定：
+ * 1. 目标**已开着**：如果它就是当前预览 ⇒ 固定（清掉预览态，位置不变）；否则只是激活，不动预览；
+ * 2. 本组**已有预览且它不在编辑状态** ⇒ 就地替换那张预览（保持原位置、不涨标签数）；
+ * 3. 本组已有预览但**那张是脏的** ⇒ 不替换（作者改过的东西绝不因为"多点了一下文件树"而消失）：
+ *    旧预览就地转正，新文件作为普通标签追加；
+ * 4. 没有预览 ⇒ 追加并记为预览。
+ *
+ * 脏判定由调用方以回调给（`previewIsDirty`），本模块不认识编辑器——与 `planBatchClose`
+ * 同一口径：判据在这里，写盘/关 model 的动作留在宿主。
+ */
+export function planPreviewOpen(
+  openTabs: readonly string[],
+  preview: string | null,
+  nextPath: string,
+  previewIsDirty: (path: string) => boolean = () => false,
+): PreviewOpenPlan {
+  if (openTabs.includes(nextPath)) {
+    if (preview === nextPath) return { tabs: openTabs, preview: null, pinned: true };
+    return { tabs: openTabs, preview, pinned: false };
+  }
+  if (preview !== null && openTabs.includes(preview)) {
+    if (previewIsDirty(preview)) {
+      return { tabs: [...openTabs, nextPath], preview: null, pinned: false };
+    }
+    const tabs = openTabs.map((p) => (p === preview ? nextPath : p));
+    return { tabs, preview: nextPath, pinned: false };
+  }
+  return { tabs: [...openTabs, nextPath], preview: nextPath, pinned: false };
+}
+
+/**
+ * 固定一张预览标签（点标签本身 / 在树里再点一次同一文件都走这里）。
+ * 不在预览态时返回同一引用，调用方可据此跳过 setState（少一次无谓重渲）。
+ */
+export function pinPreview(preview: string | null, path: string): string | null {
+  return preview === path ? null : preview;
+}
+
 /* ------------------------------ 拖拽重排与分界（C2） ------------------------------ */
 
 export interface ReorderPlan {
@@ -187,17 +248,21 @@ export interface TabDropHint {
   readonly before: boolean;
 }
 
-/** 标签 className（纯函数）：活动 / 固定 / 落点指示三态可叠加（活动+落点 = 双指示） */
+/** 标签 className（纯函数）：活动 / 固定 / 预览 / 落点指示四态可叠加（活动+落点 = 双指示） */
 export function tabClassName(
   p: string,
   active: boolean,
   pinned: boolean,
   dropAt: TabDropHint | null,
+  preview = false,
 ): string {
   return [
     'editor-tab',
     active ? 'active' : '',
     pinned ? 'pinned' : '',
+    // 预览态（VS Code 同款斜体）：它与 pinned 是两回事——pinned 是"钉住不随批量关"，
+    // preview 是"这次只是浏览"，两者可以同时为真（作者中途改过它 ⇒ 转正但仍是预览位）
+    preview ? 'preview' : '',
     dropAt?.path === p ? (dropAt.before ? 'drop-before' : 'drop-after') : '',
   ]
     .filter(Boolean)
