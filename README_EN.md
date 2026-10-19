@@ -139,7 +139,8 @@ contribution workflow in [AGENTS.md](AGENTS.md).
 | v1.0–v1.1     | Snapshot replay + state injector                                   | ✅              |
 | v0.3          | .kojo language end-to-end (edit, compile, save)                    | ✅              |
 | v0.4.0-beta.1 | Save loop · file watching · auto-update · settings · packaging     | ✅              |
-| v0.4.1        | Kojo market · condition matrix · syntax reference · completion + performance | ✅ Current      |
+| v0.4.1        | Kojo market · condition matrix · syntax reference · completion + performance | ✅              |
+| v0.4.2-beta.1 | eraAkumaMaid adapter · tree-sitter syntax layer · editor feel batch · ERB language service · search/completion · split & navigation | 🧪 Pre-release (current) |
 
 ## Feedback
 

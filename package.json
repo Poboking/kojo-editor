@@ -1,6 +1,6 @@
 {
   "name": "kojo-editor",
-  "version": "0.4.1",
+  "version": "0.4.2-beta.1",
   "private": true,
   "description": "Structure-aware editor for eraTW-style Kojo (口上) scripts - built on a fully plugin-based, game-agnostic kernel.",
   "license": "GPL-3.0-or-later",
