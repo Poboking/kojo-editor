@@ -48,9 +48,9 @@
 
 - **v0.4.0-beta.1 发版余项**：真实终端手工勾验（保存闭环 §2.J / 文件监视）+ 桌面壳深度冒烟 + NSIS 打包产物干净目录安装验证 + 面向用户的安装/使用文档；自动更新链路代码侧已闭环（REL-1），端到端待首次真实 release。
 - ERB 波浪线两层：**结构类**（三类可证明错误，erb-parser，error）；**表达式级**已落地（E8，condition-extractor 复用自研表达式解析器，IF/ELSEIF/SIF/WHILE/SELECTCASE 条件表达式的词法/语法错，warning，code `erb.expr-*`；保守排除 CASE/PRINTDATA）。
-- `.kojo 预览`（旧称"糖视图"）：**不走虚拟文档**（原三问废止）；已交付为常态功能——只读内存 model 原生渲染（2026-10-14 SV-1），**默认不开启**且不再受「显示已封存功能」总闸管辖（同日 UX-2；总闸现只管 `.kojo 转译检查` 与归档浏览器两只面板）；作者-facing 术语已去「语法糖」一族，统一 `.kojo 语言 / .kojo 预览 / .kojo 校验 / .kojo 转译检查`（守卫 `packages/app/tests/no-sugar-jargon.test.ts`）。
+- `.kojo 预览`（旧称"糖视图"）：**不走虚拟文档**（原三问废止）；已交付为常态功能——只读内存 model 原生渲染（2026-10-14 SV-1），**默认不开启**且不再受「显示已封存功能」总闸管辖（同日 UX-2；总闸现只管 `.kojo 转译检查` 与归档浏览器两只面板）；作者-facing 术语已去「语法糖」一族，统一 `.kojo 语言 / .kojo 预览 / .kojo 校验 / .kojo 转译检查`（曾用的一次性禁词闸已由 `f7549c6` 撤除，术语口径靠 review 维持，无机器闸）。
 
 ## 五、版图速览（代码地图）
 
-插件 19：`erb-parser` / `eratw-adapter` / `convention-linter` / `condition-extractor` / `sav-parser` / `state-replay` / `kojo-market` / `kojo-sugar` / `ui-convention-report` / `ui-kojo-navigator` / `ui-market` / `ui-condition-matrix` / `ui-state-replay` / `ui-archive-browser` / `ui-snapshot-injector` / `ui-plugin-status` / `ui-sugar-preview` / `ui-sugar-editor` / `ui-sugar-lift`。
+插件 20：`erb-parser` / `eratw-adapter` / `eraakumamaid-adapter` / `convention-linter` / `condition-extractor` / `sav-parser` / `state-replay` / `kojo-market` / `kojo-sugar` / `ui-convention-report` / `ui-kojo-navigator` / `ui-market` / `ui-condition-matrix` / `ui-state-replay` / `ui-archive-browser` / `ui-snapshot-injector` / `ui-plugin-status` / `ui-sugar-preview` / `ui-sugar-editor` / `ui-sugar-lift`。
 目录结构与关键文件注释见 `docs/ARCHITECTURE.md`；批次明细在 `docs/log/`。
