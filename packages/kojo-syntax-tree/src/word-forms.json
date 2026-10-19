@@ -3,7 +3,8 @@
   "note": "生成文件，禁手改——由 packages/kojo-syntax-tree/tools/gen-word-forms.mjs 从 kojo-sugar 词表真源投影；重生成走本包 build 链。",
   "sources": [
     "packages/plugins/kojo-sugar/src/keywords.ts",
-    "packages/plugins/kojo-sugar/src/statement-functions.ts"
+    "packages/plugins/kojo-sugar/src/statement-functions.ts",
+    "packages/plugins/kojo-sugar/src/lexer.ts"
   ],
   "wordsById": {
     "head.char": [
@@ -241,6 +242,9 @@
     ],
     "inline.engineEcho": [
       "原形"
+    ],
+    "inline.tryStatement": [
+      "试探"
     ]
   },
   "primaryById": {
@@ -309,7 +313,8 @@
     "inline.continueLoop": "跳过本轮",
     "inline.restartLoop": "重跑本轮",
     "inline.dataEntry": "条目",
-    "inline.engineEcho": "原形"
+    "inline.engineEcho": "原形",
+    "inline.tryStatement": "试探"
   },
   "endWordOfId": {
     "block.loop": "循环结束",
@@ -331,5 +336,22 @@
     "反转标记",
     "清除标记",
     "设置标记"
-  ]
+  ],
+  "rawLineRules": {
+    "dimDirective": {
+      "source": "^#(?:DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\\s+\\S",
+      "ignoreCase": true,
+      "pattern": "#(?:[dD][iI][mM][sS][tT][rR]|[dD][iI][mM][cC][hH][aA][rR]|[dD][iI][mM][fF]|[dD][iI][mM][sS]|[dD][iI][mM]|[dD][eE][fF][iI][nN][eE])\\s+\\S"
+    },
+    "exactMarkers": [
+      {
+        "kind": "skipEnd",
+        "marker": "[SKIPEND]"
+      },
+      {
+        "kind": "skipStart",
+        "marker": "[SKIPSTART]"
+      }
+    ]
+  }
 }
