@@ -14,7 +14,7 @@
  *
  * 前置（HK-28 的绿态复跑配方；2026-10-16 真语料机跑了三次——冷快照一次、热快照两次，
  * 12 个状态全部量到，`04-打开ERB的.kojo预览` 之后不再超时）：
- *   1. 桌面壳带着 CDP 端口在跑，且**语料/项目已在「最近打开」里**（第一条 `.recent button.link` 就是要量的项目）；
+ *   1. 桌面壳带着 CDP 端口在跑，且**语料/项目已在「最近打开」里**（本工具点的是 smoke-lib 的 `recentOpenRowSel` 第一行）；
  *      起壳走 node 起（Git-Bash 直起会踩 TMP ⇒ cargo `link.exe` LNK1104，PITFALLS 26），并带自己的
  *      `WEBVIEW2_USER_DATA_FOLDER` 隔离目录（PITFALLS 70，同 identifier 实例并存必挂 0x8007139F）：
  *        node -e "const{spawn}=require('child_process'),fs=require('fs');spawn('pnpm --filter @kojo/app tauri dev',{shell:true,detached:true,stdio:['ignore',fs.openSync('dev.log','w'),fs.openSync('dev.log','a')],env:{...process.env,WEBVIEW2_USER_DATA_FOLDER:'<本机临时目录>',WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:'--remote-debugging-port=9222'}}).unref()"
@@ -39,6 +39,7 @@
  * `input 13×13` 那类原生复选框会进 `smallTargets`，判读时按"表单控件"处理。
  */
 import * as fs from 'node:fs';
+import { recentOpenRowSel } from './smoke-lib.mjs';
 
 const CDP = 'http://127.0.0.1:9222';
 const OUT = process.argv[2] ?? 'ui-measure.json';
@@ -225,10 +226,10 @@ const waitIndexSettled = async (label, ms = 180000) => {
    起步，两个 run 的聚合数根本不是一个东西——这是本工具自己的一个假绿陷阱。 */
 await ev(`location.reload()`);
 await sleep(2500);
-console.log('reload → welcome =', await waitFor(`!!document.querySelector('.recent, .welcome')`, 15000));
+console.log('reload → welcome =', await waitFor(`!!document.querySelector('.welcome')`, 15000));
 
 await snap('01-欢迎页');
-console.log('open recent =', await click('.recent button.link', null));
+console.log('open recent =', await click(recentOpenRowSel, null));
 await waitFor(`!!document.querySelector('.editor-body, .empty-state') && !document.querySelector('.welcome')`);
 await waitIndexSettled('开项目');
 await sleep(1500);

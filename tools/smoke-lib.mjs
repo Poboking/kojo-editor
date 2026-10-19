@@ -164,3 +164,63 @@ export async function answerAskDialogs(cdp, {
   }
   return { modals, answered };
 }
+
+/* ─────────────────────────── 欢迎页「最近项目」page-object ─────────────────────────── */
+
+/**
+ * 欢迎页「最近打开的项目」行的**唯一**选择段（SMOKE-RECENT 2026-10-20）。
+ *
+ * 旧版用 recent 容器 + button.link + recent-dir 三个类名拼出的选段，随欢迎页重设计已不存在；
+ * 现在渲染的是（`packages/app/src/ui/WelcomeView.tsx`）：
+ *   - `<section class="welcome-section welcome-recent">`  ← 项目区（不含同页的「最近文件」区，后者类名是 welcome-recent-files）
+ *   - `<button class="welcome-recent-open">`              ← 行内可点开的按钮
+ *   - `<span class="welcome-recent-path">{r.rootDir}</span>` ← 路径文本段
+ *
+ * 类名只准住在 `WELCOME_RECENT_CLASSES` 一处：消费方（四个真壳冒烟 + ui-measure）一律 import
+ * 这里的构造函数，不许把上面任何类名手抄进自己的 querySelectorAll——`tools/tests/welcome-recent-selector.test.ts`
+ * 双向钉死（WelcomeView 改类名 ⇒ 红；工具里再现旧选段或手抄新类名 ⇒ 红）。
+ *
+ * 所有函数都接收**已 JSON 编码的目录字符串**（即调用方写 `JSON.stringify(dir)`），
+ * 返回**页内 JavaScript 源码字符串**——直接喂 `cdp.evalJs()` 或各工具的 `waitFor()`。
+ */
+export const WELCOME_RECENT_CLASSES = Object.freeze({
+  section: 'welcome-recent',
+  open:    'welcome-recent-open',
+  path:    'welcome-recent-path',
+});
+
+const _wrSel = (k) => `.${WELCOME_RECENT_CLASSES[k]}`;
+
+/** 「最近项目」区内可点开按钮的选择器（ui-measure 点第一行时直接用这个字符串） */
+export const recentOpenRowSel = `${_wrSel('section')} ${_wrSel('open')}`;
+
+/**
+ * 页内表达式源：在「最近项目」区里找到 `rootDir` 文本恰好等于 `dirJson`（JSON 编码串）
+ * 那行的可点按钮；找不到返回 `undefined`。
+ * `recentRowWaitSrc` / `recentRowClickSrc` 都由此派生——选择段在此一处，不在他处重复。
+ */
+export function recentRowFinderSrc(dirJson) {
+  return `[...document.querySelectorAll(${JSON.stringify(recentOpenRowSel)})]`
+    + `.find((el) => el.querySelector(${JSON.stringify(_wrSel('path'))})?.textContent === ${dirJson})`;
+}
+
+/**
+ * 页内表达式源：「最近项目」区是否已渲染出 `dirJson` 对应的行（返回布尔）——
+ * 喂各工具的 `waitFor` / `waitRecent`。
+ */
+export function recentRowWaitSrc(dirJson) {
+  return `!!(${recentRowFinderSrc(dirJson)})`;
+}
+
+/**
+ * 页内 IIFE 源：点开 `dirJson` 对应的最近项目行，返回 `'clicked'` 或 `'no-button'`——
+ * 喂各工具的 `cdp.evalJs`，调用方检查返回值是否为 `'clicked'`。
+ */
+export function recentRowClickSrc(dirJson) {
+  return `(() => {
+  const b = ${recentRowFinderSrc(dirJson)};
+  if (!b) return 'no-button';
+  b.click();
+  return 'clicked';
+})()`;
+}

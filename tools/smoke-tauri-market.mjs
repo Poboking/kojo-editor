@@ -53,7 +53,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { resolveCorpusDir, discoverCorpora, corpusHint } from './corpus.mjs';
-import { answerAskDialogs, assertPageOrigin, devTarget, portBusy } from './smoke-lib.mjs';
+import { answerAskDialogs, assertPageOrigin, devTarget, portBusy, recentRowClickSrc, recentRowWaitSrc } from './smoke-lib.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CDP_PORT = 9223;
@@ -323,14 +323,8 @@ async function main() {
     console.log(`[market-smoke] page ready ✓（${pageHref}）`);
 
     /* -------- 打开项目（只为拿到壳的面板层；市场链路本身不读游戏目录） -------- */
-    await waitFor(cdp, `[...document.querySelectorAll('.recent button.link .recent-dir')].some(e => e.textContent === ${JSON.stringify(gameDir)})`, 40000);
-    const clicked = await cdp.evalJs(`(() => {
-      const b = [...document.querySelectorAll('.recent button.link')].find(
-        (el) => el.querySelector('.recent-dir')?.textContent === ${JSON.stringify(gameDir)});
-      if (!b) return 'no-button';
-      b.click();
-      return 'clicked';
-    })()`);
+    await waitFor(cdp, recentRowWaitSrc(JSON.stringify(gameDir)), 40000);
+    const clicked = await cdp.evalJs(recentRowClickSrc(JSON.stringify(gameDir)));
     if (clicked !== 'clicked') throw new Error(`recent project click failed: ${clicked}`);
     await waitFor(cdp, '!!document.querySelector(".toolbar")', 150000);
     await sleep(1500);

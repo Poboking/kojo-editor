@@ -45,7 +45,7 @@ import * as net from 'node:net';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { resolveCorpusDir, discoverCorpora, corpusHint } from './corpus.mjs';
-import { answerAskDialogs, assertPageOrigin, devTarget, portBusy } from './smoke-lib.mjs';
+import { answerAskDialogs, assertPageOrigin, devTarget, portBusy, recentRowClickSrc, recentRowWaitSrc } from './smoke-lib.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 // 语料路径**按主机而定**（本机只有 C:，QA 机用 D:），且目录名会被反复重排 ⇒ 不写死默认名：
@@ -481,19 +481,8 @@ async function main() {
     console.log('[smoke] appDataDir =', appData);
 
     /* -------- a) 打开真实游戏目录（点最近打开的对应条目） -------- */
-    await waitFor(
-      cdp,
-      `[...document.querySelectorAll('.recent button.link .recent-dir')].some(e => e.textContent === ${JSON.stringify(GAME_DIR)})`,
-      30000,
-    );
-    const clicked = await cdp.evalJs(`(() => {
-      const target = ${JSON.stringify(GAME_DIR)};
-      const b = [...document.querySelectorAll('.recent button.link')].find(
-        (el) => el.querySelector('.recent-dir')?.textContent === target);
-      if (!b) return 'no-button';
-      b.click();
-      return 'clicked';
-    })()`);
+    await waitFor(cdp, recentRowWaitSrc(JSON.stringify(GAME_DIR)), 30000);
+    const clicked = await cdp.evalJs(recentRowClickSrc(JSON.stringify(GAME_DIR)));
     if (clicked !== 'clicked') throw new Error(`recent button click failed: ${clicked}`);
     // 等项目标识出现（openProject 期间会弹写权限确认）。
     // ⚠ 选择器口径（2026-10-13 修）：UI 重设计后**没有** `.project-header` / `.proj-dir` 了，

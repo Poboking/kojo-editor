@@ -28,6 +28,7 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { recentRowFinderSrc, recentRowWaitSrc } from './smoke-lib.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CDP = 9222;
@@ -136,7 +137,7 @@ const INSTALL = () => `(() => {
   const T = { milestones: {}, perf: {}, clickAt: null, fileClickAt: null };
   window.__kojoTrace = T;
   const rec = (k, base) => { if (T.milestones[k] === undefined) T.milestones[k] = Math.round(performance.now() - base); };
-  const b = [...document.querySelectorAll('.recent button.link')].find(e => e.querySelector('.recent-dir')?.textContent === ${JSON.stringify(CORPUS)});
+  const b = ${recentRowFinderSrc(JSON.stringify(CORPUS))};
   if (!b) return 'no-recent-button';
   T.clickAt = performance.now();
   b.click();
@@ -168,7 +169,7 @@ const INSTALL = () => `(() => {
 async function waitRecent() {
   const s = Date.now();
   while (Date.now() - s < 180000) {
-    if (await cdp.ev(`(() => !![...document.querySelectorAll('.recent button.link')].find(e=>e.querySelector('.recent-dir')?.textContent===${JSON.stringify(CORPUS)}))()`).catch(() => false)) return true;
+    if (await cdp.ev(recentRowWaitSrc(JSON.stringify(CORPUS))).catch(() => false)) return true;
     await sleep(1000);
   }
   return false;

@@ -31,6 +31,7 @@ import * as net from 'node:net';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { recentRowClickSrc, recentRowWaitSrc } from './smoke-lib.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CDP_PORT = 9222;
@@ -547,19 +548,8 @@ async function main() {
     console.log(`[feat][读数] 欢迎页时刻资源数 total=${resWelcome.total} · 含 monaco 的请求=${resWelcome.monaco} · 例=${JSON.stringify(resWelcome.sample)}`);
 
     /* 3) 点「最近打开」进合成项目；处理写权限弹窗（**只读浏览**侧，不批准写） */
-    await waitFor(
-      cdp,
-      `[...document.querySelectorAll('.recent button.link .recent-dir')].some((e) => e.textContent === ${JSON.stringify(PROJ_DIR)})`,
-      30000,
-    );
-    const clicked = await cdp.evalJs(`(() => {
-      const target = ${JSON.stringify(PROJ_DIR)};
-      const b = [...document.querySelectorAll('.recent button.link')].find(
-        (el) => el.querySelector('.recent-dir')?.textContent === target);
-      if (!b) return 'no-button';
-      b.click();
-      return 'clicked';
-    })()`);
+    await waitFor(cdp, recentRowWaitSrc(JSON.stringify(PROJ_DIR)), 30000);
+    const clicked = await cdp.evalJs(recentRowClickSrc(JSON.stringify(PROJ_DIR)));
     if (clicked !== 'clicked') throw new Error(`recent 点击失败：${clicked}`);
 
     // 等项目打开（写权限弹窗可能挡在中间——见一朵关一朵）
