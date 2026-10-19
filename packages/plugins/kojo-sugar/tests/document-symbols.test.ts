@@ -135,6 +135,61 @@ describe('kojo-sugar · 文档大纲（documentSymbol）', () => {
     expect(random!.children?.[0]?.children).toBeUndefined();
   });
 
+  it('分支：规则池成块，每条分支一个子项（大纲名与 如果/否则如果/否则 同源）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    分支：', // 3
+      '        [她的恋慕 >= 30]', // 4
+      '            「甲」', // 5
+      '            她侧过身。', // 6
+      '        [她的反発刻印 超过 1]', // 7
+      '            「乙」', // 8
+      '        [其他]', // 9
+      '            「丙」', // 10
+      '    「丁」', // 11
+      '',
+    ].join('\n');
+    const [timing] = symbols(src);
+    const pool = (timing!.children ?? [])[0]!;
+    expect([pool.name, pool.kind, pool.startLine, pool.endLine]).toEqual(['分支', 'block', 3, 10]);
+    // 分支名走 `ifBranchName` 同一枚函数：按**书写顺序**取 `如果` / `否则如果` / `否则`
+    // （§3.11 的自动重排只发生在产物侧，大纲说的这一行就是源码这一行写了什么）
+    expect((pool.children ?? []).map(shape)).toEqual([
+      ['如果 她的恋慕 >= 30', 4, 6],
+      ['否则如果 她的反発刻印 超过 1', 7, 8],
+      ['否则', 9, 10],
+    ]);
+    expect(pool.children?.[0]?.children).toBeUndefined();
+    assertContained(symbols(src));
+  });
+
+  it('分支：的英文别名块头 `branch:` 与 `[else]` 出同一张中文大纲（作者面零机器名）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    branch:', // 3
+      '        [她的好感度 >= 100]', // 4
+      '            「甲」', // 5
+      '        [else]', // 6
+      '            「乙」', // 7
+      '',
+    ].join('\n');
+    const pool = (symbols(src)[0]!.children ?? [])[0]!;
+    expect([pool.name, pool.startLine, pool.endLine]).toEqual(['分支', 3, 7]);
+    expect((pool.children ?? []).map((c) => c.name)).toEqual(['如果 她的好感度 >= 100', '否则']);
+    // 作者面（每一枚大纲名）不许出现转译器机器名
+    const names: string[] = [];
+    const walk = (list: readonly EditorDocumentSymbol[]): void => {
+      for (const s of list) {
+        names.push(s.name);
+        walk(s.children ?? []);
+      }
+    };
+    walk(symbols(src));
+    expect(names.filter((name) => /rulepool|branch_head|rule_tag|block\.branch/i.test(name))).toEqual([]);
+  });
+
   it('长条件截断带省略号（大纲一行一项，不许折行）', () => {
     const long = `角色: 12\n时机 指令 310：\n    若 ${'条'.repeat(90)}：\n        「甲」\n`;
     const name = symbols(long)[0]!.children?.[0]?.name ?? '';

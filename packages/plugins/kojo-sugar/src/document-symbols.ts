@@ -9,6 +9,7 @@ import type {
   TimingBlock,
   WhenBranch,
 } from '@kojo/plugin-api';
+import type { RulePoolBlock, RulePoolBranch } from './parser';
 
 /**
  * `.kojo` 文档 → 大纲（B3）。
@@ -55,9 +56,23 @@ function timingDetail(node: TimingBlock): string {
   );
 }
 
-function ifBranchName(branch: IfBranch): string {
+function ifBranchName(branch: Pick<IfBranch, 'kind' | 'condition'>): string {
   if (branch.kind === 'else') return '否则';
   return joinParts([branch.kind === 'if' ? '如果' : '否则如果', branch.condition]);
+}
+
+/**
+ * `分支：` 规则池的分支名——**不另起一套命名**：这一族语义就是 `如果 / 否则如果 / 否则`
+ * 的写法糖（`codegen.ts::emitRulePoolBlock` 把它映射成 `IfBranch` 后走同一条发射路径），
+ * 所以大纲名直接复用 `ifBranchName`，只把 `kind` 由**书写位置**推出（首条 = `如果`、
+ * 其后 = `否则如果`、兜底 = `否则`）。产物侧可能按 §3.11 自动重排，大纲跟着源码行走
+ * ——大纲是"这一行写了什么"的导航，不是发射顺序。
+ */
+function rulePoolBranchName(branch: RulePoolBranch, index: number): string {
+  return ifBranchName({
+    kind: branch.kind === 'else' ? 'else' : index === 0 ? 'if' : 'elseif',
+    condition: branch.condition,
+  });
 }
 
 function caseBranchName(branch: WhenBranch): string {
@@ -83,8 +98,8 @@ function childSymbol(name: string, loc: SugarSourceSpan, body: readonly SugarNod
   return finish({ name, kind: 'block', ...rangeOf(loc, body), children: symbolsOfNodes(body) });
 }
 
-/** 节点 → 大纲项（非结构节点返回 null） */
-function rawSymbol(node: SugarNode | SugarTopLevelNode): EditorDocumentSymbol | null {
+/** 节点 → 大纲项（非结构节点返回 null）；`RulePoolBlock` 是转译器内部节点，同 `codegen` 的 `emitStatement` 口径并入入参类型 */
+function rawSymbol(node: SugarNode | SugarTopLevelNode | RulePoolBlock): EditorDocumentSymbol | null {
   switch (node.kind) {
     case 'timingBlock': {
       const detail = timingDetail(node);
@@ -147,6 +162,17 @@ function rawSymbol(node: SugarNode | SugarTopLevelNode): EditorDocumentSymbol | 
         kind: 'block',
         ...rangeOf(node.loc),
         children: node.branches.map((branch) => childSymbol(caseBranchName(branch), branch.loc, branch.body)),
+      };
+    case 'rulePoolBlock':
+      // `分支：` 规则池（转译器内部 AST 节点，不进契约闭集——同 heartBlock / loopBlock）。
+      // 形状照 `randomBlock`：池本身一枚 + 每条分支一个子项，折叠与大纲同源于这棵树。
+      return {
+        name: '分支',
+        kind: 'block',
+        ...rangeOf(node.loc),
+        children: node.branches.map((branch, i) =>
+          childSymbol(rulePoolBranchName(branch, i), branch.loc, branch.body),
+        ),
       };
     case 'ifExpr':
     case 'whenExpr': {

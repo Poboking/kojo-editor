@@ -54,6 +54,29 @@ describe('kojo-sugar · 折叠区间（foldingRange）', () => {
     for (const r of list) expect(r.endLine).toBeGreaterThan(r.startLine);
   });
 
+  it('分支：规则池的池与每条分支各成区间（登记进大纲即登记进折叠——同一棵树）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    分支：', // 3
+      '        [她的恋慕 >= 30]', // 4
+      '            「甲」', // 5
+      '            她侧过身。', // 6
+      '        [她的反発刻印 超过 1]', // 7
+      '            「乙」', // 8
+      '        [其他]', // 9
+      '            「丙」', // 10
+      '    「丁」', // 11
+      '',
+    ].join('\n');
+    const list = ranges(src);
+    expect(has(list, 3, 10)).toBe(true); // 池：块头行 → 末条分支正文末行
+    expect(has(list, 4, 6)).toBe(true); // 首条分支
+    expect(has(list, 7, 8)).toBe(true); // 第二条分支
+    expect(has(list, 9, 10)).toBe(true); // 兜底分支
+    for (const r of list) expect(r.endLine).toBeGreaterThan(r.startLine);
+  });
+
   it('区间摊平自大纲树（折叠与大纲同一棵树：顶层节点区间 ⊇ 其子孙区间）', () => {
     const src = ['时机 指令 310：', '    随机：', '        「甲」', '        「乙」', '    「丙」'].join('\n');
     const list = ranges(src);
