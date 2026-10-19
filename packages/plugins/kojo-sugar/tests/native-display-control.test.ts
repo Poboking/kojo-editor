@@ -529,6 +529,11 @@ corpusCase('ZH-C · 真盘自证（凡本层命中的行，显示形必与原文
   it('扫语料 `.ERB`：命中数 > 0 且红线 0 命中', () => {
     const files: string[] = [];
     collectErb(join(SMOKE as string, 'ERB'), files, 40);
+    // **先自证走盘走通了**：`collectErb` 对不存在的根目录静默返回空表，而 `hits === 0` 与
+    // "一份文件都没取到"在断言里长得一模一样（满载池里这条曾以"命中数 0"的形式假红过一次，
+    // 单跑同环境 167/167 绿 ⇒ 是走盘被饿到，不是判据坏）。这一格红的时候说的是"路径没解析出来"，
+    // 别去怀疑显示层。
+    expect(files.length, '取满 40 份 `.ERB` 才算走通了盘').toBe(40);
     let hits = 0;
     let checked = 0;
     for (const file of files) {
