@@ -145,10 +145,30 @@ export function parseFunctionDefinition(trimmed: string): { name: string; params
   return { name, params, nameOffset };
 }
 
-const DIM_RE = /^#(DIMSTR|DIMCHAR|DIMS|DIM)\s+(.*)$/i;
-const DIM_MODIFIERS = /^(CONST|SAVEDATA|GLOBAL|REF|NOINIT|CHARA)\s+/i;
+/**
+ * `#DIM` 族声明行（**指令全集只住这一行**，宿主的 `#DIM` 腿经 `parseDimDeclaration` 复用它）。
+ *
+ * 族成员取自**本仓唯一的引擎侧字面依据**：`eratw-adapter/variable-schema.ts` 的
+ * `parseErhConsts` 认 `DIMS|DIMF|DIM|DEFINE`（注释直接引 Emuera `UserDefinedVariableData.Create`），
+ * 而 `plugin-api/erb-ext.ts` 把 `.ERH` 描述成"`#DIM`/`#DIMS`/`#DEFINE` 容器"。
+ * 此前扫描器只认 `DIMSTR|DIMCHAR|DIMS|DIM`：`#DEFINE` 一条都不收（基线语料实测 22 行），
+ * `DIMF` 收不到（本盘 0 行，但契约注释早就自称含它——注释与实现不符即假文档）。
+ * 交替次序**必须**长的在前：`DIM` 排在 `DIMF` 前面时 `#DIMF x` 会退化成"不匹配"
+ * （`\s+` 卡在 `F` 上），而不是匹配出个假名字。
+ */
+const DIM_RE = /^#(DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\s+(.*)$/i;
+/**
+ * 声明行的前置关键字（修饰词）。集合来源同上（`ERH_DECL_KEYWORDS`），
+ * 外加本仓既有的 `NOINIT` / `CHARA`（不收会倒退）。
+ *
+ * **为什么这是"假事实"修复而不是覆盖面调整**：修饰词表漏一个词，那一行的名字就会
+ * 被记成**那个关键字**。基线语料实测 2,866 行因此进了错名（`#DIM DYNAMIC CNT_CHARA`
+ * 在索引里的变量名是 `DYNAMIC`）——悬停、补全、`#DIM` 引用查找全部指着这条假记录。
+ * `LOCAL` / `STATIC` / `DYNAMIC` / `OUT` / `CHARADATA` 此前都在漏网之列。
+ */
+const DIM_MODIFIERS = /^(CONST|SAVEDATA|GLOBAL|REF|NOINIT|CHARA|LOCAL|STATIC|DYNAMIC|OUT|CHARADATA)\s+/i;
 
-/** 解析 `#DIM` 系列声明行 */
+/** 解析 `#DIM` 族声明行 */
 export function parseDimDeclaration(trimmed: string): { directive: string; name: string } | null {
   const m = DIM_RE.exec(trimmed);
   if (!m) return null;
@@ -158,6 +178,11 @@ export function parseDimDeclaration(trimmed: string): { directive: string; name:
   while (DIM_MODIFIERS.test(rest) && guard++ < 4) {
     rest = rest.replace(DIM_MODIFIERS, '').trim();
   }
+  // 逗号/等号只当**分隔符**用，不当"多变量"读：`#DIM 名, 尺寸` 的第二槽是数组维度不是第二个变量。
+  // 基线语料实测 1,774 条带顶层逗号的声明行里，第二槽是数字 1,371 条、是标识符的 158 条
+  // 全部是 `MAX_CARD_PL` / `LIST_MAX_SORT` / `MAX_COLUMN_GROUP` 这类**尺寸常量名**（`#DIMS SORT_TARGET, LIST_MAX_SORT`），
+  // 其余 245 条是表达式或 `=` 初值串（`#DIMS 賭け = "丁", "半"`）。
+  // ⇒ "逗号声明多变量"在本盘拿不到任何一例，按它拆会把尺寸/初值收进名录 = 造 1,774 条假名字。
   const name = rest.split(/[\s,=]/)[0] ?? '';
   if (name.length === 0) return null;
   return { directive: m[1]!.toUpperCase(), name };

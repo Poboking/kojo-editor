@@ -70,10 +70,18 @@ export interface ErbFunction {
   docComment?: string;
 }
 
-/** #DIM / #DIMS / #DIMSTR / #DIMCHAR 等声明的变量 */
+/**
+ * `#DIM` 族声明行收集到的名字（**族成员以扫描器 `DIM_RE` 为准**，此处只描述它现在认什么）。
+ *
+ * `name` 只有**一个**：`#DIM 名, 尺寸` 的第二槽是数组维度/初值，不是第二个变量
+ * （基线语料 1,774 条带顶层逗号的声明里没有一个多变量形——判据与读数见 `erb-parser/scanner.ts`）。
+ * `#LOCALSIZE` / `#LOCALSSIZE`（同族、量大：基线语料 17,109 行）**不在这一张表里**：
+ * 它们是函数局部作用域的声明，而 `ErbDim` 没有作用域字段 ⇒ 收进来就是"别的功能里也
+ * 声明了这个名字"的假事实；要收得先给契约加作用域，另单。
+ */
 export interface ErbDim {
   name: string;
-  /** 声明指令（DIM / DIMS / DIMSTR / DIMCHAR / DIMF …） */
+  /** 声明指令（大写归一）：`DIM` / `DIMS` / `DIMF` / `DIMSTR` / `DIMCHAR` / `DEFINE` */
   directive: string;
   line: number;
 }
