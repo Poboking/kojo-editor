@@ -1,6 +1,7 @@
 import type * as Monaco from './entry';
 import type { EditorSymbolLocation } from '@kojo/plugin-api';
 import { parseDimDeclaration } from '@kojo/plugin-erb-parser';
+import { livePanes, sugarOwningPaneOf, sugarSourceOf, type PaneCtx } from '../ui/editor-pane-registry';
 import { isDimNameChar, normalizePathKey, spanAround } from './kojo-hover';
 
 /**
@@ -16,6 +17,10 @@ import { isDimNameChar, normalizePathKey, spanAround } from './kojo-hover';
  *   索引通道（`installDefinitionProvider` / `installReferenceProvider` 的 handlers 不带
  *   `ErbIndex`）⇒ 一律返回空数组，**不猜、不新建索引字段**。
  * - `.kojo` 是派生文本，行号不属于原文 ⇒ 只答 ERB 方言后缀（`.erb` / `.erh` / `.erd`）。
+ * - **升糖预览（`inmemory://sugar/…`）按存档坐标作答**（2026-10-20 源坐标批）：本层与
+ *   `$` 标签层是"缓冲区本地腿"，读的是屏幕上那份投影文本，但交出去的每一枚落点必须落在
+ *   **存档那一行、存档那份文件**上——换算判据全在 {@link derivedLegSurfaceOf} /
+ *   {@link toArchiveCoords}，两条腿共用同一份（见下方"派生面 → 存档坐标"段）。
  * - 名字字符集与悬停**同一枚** `isDimNameChar`（中文 / 全角字母都合法，绝不用 `\w`）；
  *   路径比较与合并去重**同一枚** `normalizePathKey`（Windows 分隔符 / 大小写不敏感）。
  * - fail-open：路径缺席 / 文本为空 / 行越界 / 不是声明名 / 名字不存在 ⇒ `[]`，不抛。
@@ -129,8 +134,80 @@ function dimDeclarationsOf(text: string): { line: number; dim: DimDeclaration }[
   return out;
 }
 
+/**
+ * 这份 model 的 URI 是不是"没有文件可依"的派生面。
+ *
+ * 真文件 model 一律 `Uri.file(path)`（`scheme = 'file'`），投影是 `inmemory://sugar/…`：
+ * 把后者的 URI 路径当文件路径交回去，就是一条落在内存模型上的**幻影落点**——那条路径上
+ * 没有文件，`openModelFor` 问不到 model，`planDefinitionJump` 的事件通道兜底又只取第一枚，
+ * 结果是一次"按了没反应"顶替掉一次正确的跳转。登记簿认不出归属实例时（实例已退册 /
+ * 迟到的请求）也只能闭嘴，不能猜。桩 model 常不带 `scheme` ⇒ 不设限。
+ */
+export function isDerivedModelUri(model: Monaco.editor.ITextModel): boolean {
+  const scheme = (model as { uri?: { scheme?: unknown } }).uri?.scheme;
+  return typeof scheme === 'string' && scheme.length > 0 && scheme !== 'file';
+}
+
+/** 一条缓冲区本地腿在屏上这一面的坐标归属（`null` = 原文面 ⇒ 判据逐字直通、零换算） */
+export interface DerivedLegSurface {
+  /** 存档路径 = 投影归属实例那一份文件；空串 = 实例还没挂上文件 ⇒ 这一面无处可答 */
+  readonly path: string;
+  /** 投影行（1 基）→ 存档行（1 基）；映射缺席 / 那一格没有源行 ⇒ `null`（= 这一枚不交） */
+  lineOf(previewLine: number): number | null;
+}
+
+/**
+ * 屏幕上这份 model 是不是某实例的糖投影（三条本地腿共用的唯一判据）。
+ *
+ * 先问 `sugarOwningPaneOf`（登记簿的官方判据 = "这份投影正在某实例屏上"），再退一步扫
+ * `sugarModelRef`：provider 也会收到装配过但已切走的那一份（Peek 列表 / 迟到的请求），
+ * 那一面同样没有文件可依，不该交预览坐标。
+ * 行换算只认 `sugarSourceOf` 读的那张 `sugarLineMapRef`——它与投影 model 同批换上，
+ * 本层不许自建第二份映射（两张表一漂移，跳的就是隔壁一行）。
+ */
+export function derivedLegSurfaceOf(model: Monaco.editor.ITextModel): DerivedLegSurface | null {
+  const ctx: PaneCtx | null =
+    sugarOwningPaneOf(model) ?? [...livePanes.values()].find((pane) => pane.sugarModelRef.current === model) ?? null;
+  if (ctx === null) return null;
+  return {
+    path: ctx.filePathRef.current,
+    lineOf: (previewLine: number) => sugarSourceOf(ctx, previewLine)?.line ?? null,
+  };
+}
+
+/**
+ * 本地腿的结果 → 存档坐标（原文面原样交回，一个字段都不碰）。
+ *
+ * 三条纪律，与糖面读类腿（`ui/editor-global-providers.ts` 的 `foldDefinitionTargetsToPreview`）
+ * 逐字同源，两条腿不可能对同一处给出两个答案：
+ * ① 换算不出的那一枚**直接丢**——不猜行号，也不留一枚 `inmemory` 上的幻影；
+ * ② **列不折算**：投影行与存档行连文本都不是同一串，跨面一律落到行首（`column: 1`、不给 span）；
+ *    两条腿都交列 1，`mergeSymbolLocations` 的去重键才认得出"这是同一处"；
+ * ③ 行号**留存档侧**：源行 → 投影行的那一跳住在 `EditorPane` 的 `applyReveal`（读同一张表），
+ *    在这里折一遍就是折两遍。
+ */
+export function toArchiveCoords(
+  locations: readonly EditorSymbolLocation[],
+  surface: DerivedLegSurface | null,
+): EditorSymbolLocation[] {
+  if (surface === null) return [...locations];
+  const out: EditorSymbolLocation[] = [];
+  for (const location of locations) {
+    const line = surface.lineOf(location.line);
+    if (line === null) continue;
+    out.push({
+      filePath: surface.path,
+      line,
+      column: 1,
+      ...(location.kind === undefined ? {} : { kind: location.kind }),
+    });
+  }
+  return out;
+}
+
 /** 从 Monaco model 取当前文件路径（`fsPath` 优先；桩 model 可能只有 `path` / 都没有） */
 function modelPathOf(model: Monaco.editor.ITextModel): string | null {
+  if (isDerivedModelUri(model)) return null;
   const uri = (model as { uri?: { fsPath?: unknown; path?: unknown } }).uri;
   if (uri === null || typeof uri !== 'object') return null;
   if (typeof uri.fsPath === 'string' && uri.fsPath.length > 0) return uri.fsPath;
@@ -296,33 +373,36 @@ export function mergeSymbolLocations(
   return out;
 }
 
-/** Monaco model + 位置 → `#DIM` 定义落点（取文本 / 路径全程 fail-open） */
+/** Monaco model + 位置 → `#DIM` 定义落点（取文本 / 路径全程 fail-open；投影面按存档坐标交回） */
 export function resolveErbDimDefinitionAt(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
 ): EditorSymbolLocation[] {
   try {
-    const path = modelPathOf(model);
-    if (path === null) return [];
+    // 投影面上问的就是那份存档路径（`ERB_PATH_RE` 那一道方言闸也因此落在真文件的后缀上）
+    const surface = derivedLegSurfaceOf(model);
+    const path = surface === null ? modelPathOf(model) : surface.path;
+    if (path === null || path.length === 0) return [];
     const text = model.getValue();
     if (text.length === 0) return [];
-    return resolveErbDimDefinition(text, position.lineNumber, position.column, path);
+    return toArchiveCoords(resolveErbDimDefinition(text, position.lineNumber, position.column, path), surface);
   } catch {
     return [];
   }
 }
 
-/** Monaco model + 位置 → `#DIM` 引用点（取文本 / 路径全程 fail-open） */
+/** Monaco model + 位置 → `#DIM` 引用点（取文本 / 路径全程 fail-open；投影面按存档坐标交回） */
 export function resolveErbDimReferencesAt(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
 ): EditorSymbolLocation[] {
   try {
-    const path = modelPathOf(model);
-    if (path === null) return [];
+    const surface = derivedLegSurfaceOf(model);
+    const path = surface === null ? modelPathOf(model) : surface.path;
+    if (path === null || path.length === 0) return [];
     const text = model.getValue();
     if (text.length === 0) return [];
-    return resolveErbDimReferences(text, position.lineNumber, position.column, path);
+    return toArchiveCoords(resolveErbDimReferences(text, position.lineNumber, position.column, path), surface);
   } catch {
     return [];
   }

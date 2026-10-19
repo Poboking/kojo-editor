@@ -387,6 +387,11 @@ export function installDefinitionProvider(
       // `#DIM` 腿（2026-10-19）：同文件声明**优先**——命中就把落点排在槽结果之前
       // （`provideLocations` 的事件通道兜底取第一枚 ⇒ 优先权在数据层就已确定）。
       // 没有声明 ⇒ 本腿零贡献，既有函数 / 标签腿逐字不变（fail-open，不猜）。
+      // 两条本地腿读的都是**屏幕上这份文本**，但交回的坐标一律属于存档（2026-10-20 源坐标批，
+      // 判据 `erb-dim-navigation.ts` 的 `derivedLegSurfaceOf`）：投影面（`inmemory://sugar/…`）上
+      // 若交回投影 URI + 预览行，这条"优先"就变成"幻影顶掉真落点"——本层排在最前的那一枚
+      // 正是 `planDefinitionJump` 兜底取走的那一枚。换算不出的那一枚由腿自己丢，
+      // 到这里的每一枚都可以直接和槽结果（同是存档坐标）合并去重。
       const dims = resolveErbDimDefinitionAt(model, position);
       // `$` 标签腿（W-2，2026-10-19）：定义名自跳 + CJK 跳转目标（槽腿的 ASCII 记号集
       // 认不出中文）；同一份 `labelScopeAt` 也是引用与重命名的真源。零贡献时行为不变。
