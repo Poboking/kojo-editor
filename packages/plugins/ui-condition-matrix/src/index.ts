@@ -1115,13 +1115,21 @@ export function createUiConditionMatrixPlugin(): Plugin {
           : `${entry?.no}|${store.depsEpoch}|${current.adapterId}|` +
             (effectivePackKey === null ? 'p:<all>' : `p:${effectivePackKey}`);
         const wsEntry = wsReady ? wsState.entry : null;
+        /**
+         * 工作区包的作用域入口：**空包也要出表**——新建的空项目还没有函数，
+         * 但行列应取自游戏侧全角色，作者才能看见「哪些时机还没写」并直接填格。
+         * 合成一个 0 函数入口，`buildMatrix` 的 universe 仍用游戏侧 `entry`。
+         */
+        const wsScopedEntry: CharacterEntry | null = wsReady
+          ? wsEntry ?? (entry ? { no: entry.no, faces: [], functions: [] } : null)
+          : null;
         /** 工作区包没有游戏函数时（游戏里还没写过口上）不依赖游戏抽取结果，直接建 */
         const gameDepsReady = conditionsReady || !entry;
         const matrix: ConditionMatrix | null = wsActive
-          ? wsEntry && gameDepsReady
+          ? wsScopedEntry && gameDepsReady
             ? store.matrixMemo.resolve(matrixKey, () =>
                 buildMatrix(
-                  wsEntry,
+                  wsScopedEntry,
                   wsState.depsOf ?? services.depsOf,
                   services.labelOf,
                   services.faceLabels(),
@@ -1300,7 +1308,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
         };
 
         const openFill = (): void => {
-          if (!fillTarget || !wsEntry || !matrix) {
+          if (selectedNo === null || !fillTarget || !matrix) {
             setNotice('填格子只写入「我的口上项目」里的工作区包：请先在包下拉里选择它。');
             return;
           }
@@ -1319,18 +1327,23 @@ export function createUiConditionMatrixPlugin(): Plugin {
             cells.push({ rowKey: key.slice(0, at), columnKey: key.slice(at + 1) });
           }
           const faceTable = services.faceTable();
+          /**
+           * 空包没有自己的函数可推断家族：退到游戏侧同角色（「并入 vs 新建」仍按空包算，
+           * 家族段只是给新文件头一个合理缺省，作者可改）。
+           */
+          const fillEntry = wsEntry ?? entry ?? { no: selectedNo, faces: [], functions: [] };
           const draft: FillDraft = {
             chara: {
-              no: wsEntry.no,
-              name: current.charaIndex.get(wsEntry.no)?.name ?? `K${wsEntry.no}`,
+              no: selectedNo,
+              name: current.charaIndex.get(selectedNo)?.name ?? `K${selectedNo}`,
             },
             pack: {
               key: fillTarget.key,
               dirName: fillTarget.ref.dirName,
               label: `我的：${fillTarget.ref.artifactName}`,
               dirPath: fillTarget.ref.rootPath,
-              family: dominantFamilyOfEntry(wsEntry),
-              selector: dominantSelectorOfEntry(wsEntry),
+              family: dominantFamilyOfEntry(fillEntry),
+              selector: dominantSelectorOfEntry(fillEntry),
             },
             matrix,
             cells,
@@ -1344,7 +1357,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
               setFillSel(new Set<string>());
               setNotice('模板已写入并打开——在模板里填台词即可。');
               // 写入落地后重载工作区索引：新函数立即出现在矩阵里（不必重开面板）
-              store.loadWorkspaceMatrix(fillTarget, wsEntry.no);
+              store.loadWorkspaceMatrix(fillTarget, selectedNo);
             },
             close: () =>
               ctx.bus.emit('ui.overlay.close', {
@@ -1537,11 +1550,18 @@ export function createUiConditionMatrixPlugin(): Plugin {
             selectedNo === null
               ? createElement('div', { className: 'cm-empty dim' }, '从上方选择角色以浏览其状态 × 时机矩阵')
               : wsActive
-                ? createElement(
-                    'div',
-                    { className: 'cm-empty dim' },
-                    `工作区包「${selectedWsPack.ref.artifactName}」里没有归属 K${selectedNo} 的口上函数。写入口上函数（或带「角色: ${selectedNo}」文件头的 .kojo）后重新选择该包即可。`,
-                  )
+                ? entry && !conditionsReady
+                  ? createElement(
+                      'div',
+                      { className: 'cm-empty dim' },
+                      createElement('span', { className: 'cm-spin' }, '↻'),
+                      ` 正在抽取 K${selectedNo} 的游戏状态条件…（空工作区包要借游戏侧行列才能出表）`,
+                    )
+                  : createElement(
+                      'div',
+                      { className: 'cm-empty dim' },
+                      `工作区包「${selectedWsPack.ref.artifactName}」里没有归属 K${selectedNo} 的口上函数，游戏侧也没有该角色的函数可作行列参照。先写一个带「角色: ${selectedNo}」文件头的 .kojo（或游戏侧任意口上函数）后重新选择该包即可。`,
+                    )
                 : entry && !conditionsReady
                   ? createElement(
                       'div',

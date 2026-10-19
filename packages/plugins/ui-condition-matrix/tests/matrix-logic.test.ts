@@ -187,6 +187,21 @@ describe('buildMatrix', () => {
     expect(m.depsFunctions).toBe(2); // MESSAGE_COM + EVENT 有依赖；MESSAGE_COUNTER 无
   });
 
+  it('空作用域包 + 全角色 universe：行列照常、填色为零（新建空包可直接填格）', () => {
+    const empty: CharacterEntry = { no: 1, faces: [], functions: [] };
+    const m = buildMatrix(empty, depsOf, labelOf, undefined, undefined, {
+      columnsFrom: entry,
+      rowsFrom: entry,
+    });
+
+    expect(m.columns.map((c) => c.face)).toEqual(['EVENT', 'MESSAGE_COM', 'MESSAGE_COUNTER']);
+    expect(m.rows.map((r) => r.key).sort()).toEqual(['CFLAG:318', 'TALENT:恋慕']);
+    expect(m.totalFunctions).toBe(0);
+    expect(m.filledCells).toBe(0);
+    expect(m.gapCells).toBe(m.rows.length * m.columns.length);
+    expect(m.columns.every((c) => c.functions.length === 0)).toBe(true);
+  });
+
   it('作用域函数带来 universe 没有的列：列保留、缺口按真实列数算', () => {
     const scopedIndex = makeIndex({ '/p/ws.ERB': ['FAM_COLOR_K1'] });
     const scopedEntry = buildCharacterIndex(scopedIndex, fakeFamilyIndex).entries.get(1)!;
