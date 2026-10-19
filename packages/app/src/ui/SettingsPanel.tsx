@@ -64,7 +64,9 @@ import {
   saveEditorDisplayPrefs,
   useEditorDisplayPrefs,
   type LineNumbersPref,
+  type MinimapPref,
   type RenderWhitespacePref,
+  type UiFontScalePref,
 } from './editor-display-prefs';
 import { isComposingEvent } from './shell-keys';
 import '../settings-search.css';
@@ -586,7 +588,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             {/* 排版三行（P2-16）：折行 / 多光标修饰键 / 列选择。自订阅 layout-pref，
                 壳层镜像行归 P2-14 的接线批——两边各占一小段，互不重排。 */}
             <LayoutPrefRows />
-            {/* 显示偏好六行（1020 编辑器体感批）：真源在 editor-display-prefs.ts，本页只排版 */}
+            {/* 显示偏好八行（1020 编辑器体感批 + C-1b 的缩略图三态与界面字号）：
+                真源在 editor-display-prefs.ts，本页只排版 */}
             <EditorDisplayRows />
           </div>
 
@@ -1255,7 +1258,8 @@ function FormatRulesRows(): ReactElement {
 }
 
 /* ==========================================================================================
- * 编辑器显示偏好六行（1020 编辑器体感批，用户反馈项 10）——本组件是**追加段**：
+ * 编辑器显示偏好八行（1020 编辑器体感批，用户反馈项 10；C-1b 加缩略图三态与界面字号）——
+ * 本组件是**追加段**：
  * 不改动 / 重排上方任何既有行，自成一枚小组件 + 编辑器带里的一个 `<EditorDisplayRows />`。
  *
  * 与 `FormatRulesRows` / `LayoutPrefRows` 同一形态：真源住在 `editor-display-prefs.ts`
@@ -1263,7 +1267,8 @@ function FormatRulesRows(): ReactElement {
  * 加一条 props 镜像。生效路径也唯一：EditorPane 的 create options、三个落档写入点与偏好
  * 订阅回调都只 spread 同一份补丁（见 `editor-display-prefs.ts` 头注）。
  *
- * 缺省值 = 这批改动之前硬编码的那六个读数 ⇒ 没动过设置的作者，今天逐字不变。
+ * 缺省值 = 这批改动之前硬编码的那几份读数 ⇒ 没动过设置的作者，读代码时逐字不变
+ * （唯一有意变化：长文与 `.kojo` 正文/预览不再画缩略图，那一条正是 C-1b 要灭的噪声）。
  * ========================================================================================== */
 
 const LINE_HEIGHT_CHOICES: readonly { value: number; label: string }[] = [
@@ -1289,6 +1294,20 @@ const LINE_NUMBERS_CHOICES: readonly { value: LineNumbersPref; label: string }[]
   { value: 'off', label: '关闭' },
   { value: 'relative', label: '相对' },
   { value: 'interval', label: '隔行' },
+];
+
+/** 缩略图三态（C-1b）：「跟随」是新缺省——长文与 .kojo 正文不画，普通代码文件照旧画 */
+const MINIMAP_CHOICES: readonly { value: MinimapPref; label: string }[] = [
+  { value: 'follow', label: '自动' },
+  { value: 'on', label: '常开' },
+  { value: 'off', label: '关闭' },
+];
+
+/** 界面字号缩放三档（%）：只管外壳文字，不动编辑器正文字号 */
+const UI_FONT_SCALE_CHOICES: readonly { value: UiFontScalePref; label: string }[] = [
+  { value: 100, label: '标准' },
+  { value: 110, label: '略大' },
+  { value: 125, label: '更大' },
 ];
 
 /** 二选一时用「分段」还是「开关」：取值多于两个才分段，两个就用开关（少一种控件形态） */
@@ -1332,6 +1351,22 @@ function EditorDisplayRows(): ReactElement {
   };
   return (
     <>
+      <div className="settings-row static" data-settings-key="editor.uiFontScale">
+        <Segmented
+          ariaLabel="界面字号缩放"
+          value={pref.uiFontScale}
+          choices={UI_FONT_SCALE_CHOICES}
+          onPick={(v) => saveEditorDisplayPrefs({ uiFontScale: v })}
+        />
+        <span>
+          界面字号
+          <span className="settings-hint">
+            标签页、侧栏、面板标题这些界面文字的大小（中文元信息在标准档下偏小时选一档）。
+            只管界面，不改正文里代码的字号——那一格在上面的「正文字号」，两条各走各的。
+            选「标准」就是本来的样子；深浅三套主题与「减弱动效」都不受影响。默认标准
+          </span>
+        </span>
+      </div>
       <div className="settings-row static" data-settings-key="editor.lineHeight">
         <Segmented
           ariaLabel="行高"
@@ -1378,16 +1413,23 @@ function EditorDisplayRows(): ReactElement {
           </span>
         </span>
       </div>
-      <label className="settings-row" data-settings-key="editor.minimap">
-        <Switch checked={pref.minimap} onChange={(on) => saveEditorDisplayPrefs({ minimap: on })} label="缩略图" />
+      <div className="settings-row static" data-settings-key="editor.minimap">
+        <Segmented
+          ariaLabel="缩略图"
+          value={pref.minimap}
+          choices={MINIMAP_CHOICES}
+          onPick={(v) => saveEditorDisplayPrefs({ minimap: v })}
+        />
         <span>
           缩略图
           <span className="settings-hint">
-            右侧那条整文件的纵览。关掉后长文件要找位置得靠滚动条与「转到行」。
-            超过 5 万行的文件无论开不开都不画（那一档它太贵）。默认开
+            右侧那条整文件的纵览。「自动」= 只在读代码时画，读 .kojo 台词与 .kojo 预览时不画
+            （中日文正文在那条上只是一竖彩色噪点，找段落靠左侧大纲与「转到行」更准）；
+            「常开」= 无论读什么都画；「关闭」= 整条不画。超过 5 万行的文件无论选哪档都不画
+            （那一档它太贵）。默认自动
           </span>
         </span>
-      </label>
+      </div>
       <label className="settings-row" data-settings-key="editor.inlayHints">
         <Switch
           checked={pref.inlayHints}
@@ -1442,7 +1484,7 @@ function EditorDisplayRows(): ReactElement {
             恢复这 {modifiedCount} 项默认
           </button>
           <span className="settings-hint">
-            只把上面这几项显示偏好放回默认，字号、缩放与折行不在这次恢复里
+            只把上面这几项显示偏好放回默认，编辑器正文字号、编辑器缩放与折行不在这次恢复里
           </span>
         </div>
       ) : null}

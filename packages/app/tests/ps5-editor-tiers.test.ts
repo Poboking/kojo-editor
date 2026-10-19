@@ -185,9 +185,14 @@ describe('档位写入口只有 applySizeTier 一个（EditorPane.tsx 静态取�
 
   it('接线层确实按屏幕上那份文档问它：切标签/撤投影给 isErbLike，挂投影恒 false', () => {
     const src = paneSource();
-    expect(src).toContain('tierOverrides(restoreLines, isErbLike(filePathRef.current))');
+    // C-1b 起这三个点还各自带第四个实参（缩略图「跟随」档的内容判据）：
+    // 撤投影 / 切标签按**文件**问 `minimapCtxForPath`，挂投影恒 `{ preview: true }`。
+    expect(src).toContain(
+      'tierOverrides(restoreLines, isErbLike(filePathRef.current), undefined, minimapCtxForPath(filePathRef.current))',
+    );
     expect(src).toContain('tierOverrides(tierLines, isErbLike(filePath)');
     expect(src).toContain('tierOverrides(sugarTierLines, false');
+    expect((src.match(/minimapCtxForPath\(/g) ?? []).length, '两个"原文在屏上"的写入点都要给缩略图上下文').toBe(3); // 定义一处 + 调用两处
   });
 
   it('折叠超额那句人话真在渲染里，且不含内部术语（铁律 4：少给了必须说）', () => {

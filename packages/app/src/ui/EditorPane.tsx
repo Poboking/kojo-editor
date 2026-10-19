@@ -74,9 +74,11 @@ import {
 } from './editor-options';
 import { subscribeLayoutPref } from './layout-pref';
 import {
+  applyUiFontScalePref,
   editorDisplayFontPatch,
   editorDisplayOptionPatch,
   subscribeEditorDisplayPrefs,
+  type MinimapViewContext,
 } from './editor-display-prefs';
 import { CODE_FONT_BASELINE } from './code-font'; // 编程字体单一真源（与 styles.css 的 --font-code 逐字同一条栈）
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
@@ -192,17 +194,32 @@ function applyEditabilityAndSuggest(ed: Monaco.editor.IStandaloneCodeEditor, rea
  * （它的缩进单位与 `@` 块状态是文档级判据，窗口取文会数错，大档继续关打字规范化）。
  * 字体族刻意不在这里：它与体量正交、且 `code-font.ts` 钉着"降级集永不含字体键"，
  * 只在 create 与偏好变更两条路上发。
+ *
+ * `minimapCtx`（C-1b）同样按**此刻屏幕上那份文档**给：缩略图的「跟随」档要知道
+ * 现在显示的是原文代码、`.kojo` 正文，还是预览投影。不在这里给 = 投影与正文也画纵览
+ * （台词正文里那是一条彩色噪点）。调用点只有四处，一处都不许自己算第二遍。
  */
 function tierOverrides(
   lineCount: number,
   isErb: boolean,
   extra?: EditorOptionPatch,
+  minimapCtx?: MinimapViewContext,
 ): EditorOptionPatch {
   return {
-    ...editorDisplayOptionPatch(lineCount),
+    ...editorDisplayOptionPatch(lineCount, undefined, minimapCtx),
     formatOnType: formatOnTypeForDocument(lineCount, isErb),
     ...(extra ?? {}),
   };
+}
+
+/**
+ * 缩略图「跟随」档的**文件侧**判据：这份文件本身是不是 `.kojo` 口上正文。
+ *
+ * 判据取语言而非扩展名（`languageFor` 是唯一的"哪类文件归哪种语言"真源）：
+ * 台词型文档在缩略图里没有可导航的结构，一竖条色块只是噪声。
+ */
+function minimapCtxForPath(path: string): MinimapViewContext {
+  return { kojoText: languageFor(path) === KOJO_LANGUAGE_ID };
 }
 
 /**
@@ -901,7 +918,7 @@ export function EditorPane({
           // 一份几万行投影的关值——折行 / 折叠 / 找同词 / 打字规范化——以前会一路骑到
           // 下一份小文件上，且没有第二次机会纠正（切标签那道档位只在**换文件**时发）。
           const restoreLines = restore.getLineCount();
-          applySizeTier(ed, restoreLines, tierOverrides(restoreLines, isErbLike(filePathRef.current)));
+          applySizeTier(ed, restoreLines, tierOverrides(restoreLines, isErbLike(filePathRef.current), undefined, minimapCtxForPath(filePathRef.current)));
           // 按当前文件重算 readOnly（解锁 / 直连 / 工作区口径与切换标签 effect 一致）
           const path = filePathRef.current;
           const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
@@ -1022,13 +1039,14 @@ export function EditorPane({
     // 档位 = **此刻屏幕上这份投影**的行数（投影比原文长，该档更保守）；撤下时由
     // `clearSugarView` 按原文行数再落一次——两拍合起来才是"谁在屏幕上就按谁落档"。
     // `isErb` 恒 false：糖 model 是 `.kojo` 投影，打字规范化的窗口腿对它不适用。
+    // `preview: true`：投影是派生文本，缩略图「跟随」档在这里让路（读的是原文，不是它）。
     const sugarTierLines = sugarModel.getLineCount();
     applySizeTier(ed, sugarTierLines, tierOverrides(sugarTierLines, false, {
       readOnly: true, // 糖是派生物，禁止在糖视图上编辑
       // 预览是派生只读 model：快建议整条关掉（provider 拿不到 editor 的可写状态）
       quickSuggestions: false,
       quickSuggestionsDelay: loadSuggestDelayPref(),
-    }));
+    }, { preview: true }));
     ed.setModel(sugarModel);
     setSugarStats(sugarSummary(sugarLines, 0));
     // C1 反向下行批：糖视图挂上 = derivedView 翻转（false→true），立刻透出给面板
@@ -1569,6 +1587,10 @@ export function EditorPane({
     if (!host) return;
     // 缩放在实例创建**之前**播种：EditorZoom 是全局单例，创建时算 fontInfo 就按它缩放
     applyFontZoomPref(monaco.editor.EditorZoom);
+    // 界面字号缩放（C-1b）：外壳 CSS 变量的播种点，与 `applyFontZoomPref` 同一拍——
+    // 本实例是常驻挂载点，偏好 setter 那边负责"改完当场见效"，这里负责"下次启动也认"。
+    // 100%（缺省）时这一调用一位都不写，界面逐字等于样式表现值。
+    applyUiFontScalePref();
     const ed = monaco.editor.create(host, {
       // 主题随偏好走（反馈 3）：模块顶层 `registerErbLanguage` 已定义三套，
       // 这里按当前 localStorage 偏好落初值，之后的切换由上面的 useThemePref effect 负责。
@@ -1582,8 +1604,9 @@ export function EditorPane({
       // 容器的 light DOM 里；影响面仅限 context view（右键菜单 / 内联提示菜单），不碰编辑、
       // worker 与排版。实测见 2026-10-17 反馈批的浏览器冒烟记录（提交信息）。
       useShadowDOM: false,
-      // 缩略图：文本块模式（不逐字符渲染——口上文本为长行文，色块更干净也更省性能）
-      minimap: { enabled: true, renderCharacters: false, maxColumn: 72 },
+      // 缩略图不在这里硬编码（C-1b）：三态偏好的判据只有一份，住在
+      // `editor-display-prefs.ts` 的 `minimapEnabledFor`，由下面的显示偏好补丁发下来
+      // （文本块模式：不逐字符渲染——口上文本为长行文，色块更干净也更省性能）。
       fontSize: loadFontSizePref(),
       lineNumbers: 'on',
       renderWhitespace: 'none',
@@ -1697,16 +1720,26 @@ export function EditorPane({
       const model = ed.getModel();
       ed.updateOptions(layoutPrefPatch(model ? model.getLineCount() : 0));
     });
-    // 显示偏好（1020 编辑器体感批）：行高 / 空白符 / 缩略图 / 行号 / 行内提示 / 字体族。
-    // 只补发这几位——`formatOnType` 由方言判据管（`tierOverrides`），字体族与体量正交但
-    // 同一条偏好轴，一起发。行数按**此刻屏幕上那份 model** 取（糖预览在屏上就算投影行数，
-    // 与挂预览那一拍同口径）：缩略图这一位在 huge 档恒关，偏好翻不回它，与档位表同一把尺。
+    // 显示偏好（1020 编辑器体感批，C-1b 补缩略图三态与界面字号）：行高 / 空白符 / 缩略图 /
+    // 行号 / 行内提示 / 字体族。只补发这几位——`formatOnType` 由方言判据管（`tierOverrides`），
+    // 字体族与体量正交但同一条偏好轴，一起发。行数按**此刻屏幕上那份 model** 取（糖预览在屏上
+    // 就算投影行数，与挂预览那一拍同口径）：缩略图这一位在 huge 档恒关，偏好翻不回它，
+    // 与档位表同一把尺；「跟随」档那两条内容判据（`.kojo` 正文 / 预览投影）也按同一份 model 现算。
     const displayUnsub = subscribeEditorDisplayPrefs(() => {
       const model = ed.getModel();
+      // 缩略图「跟随」档的上下文按**此刻屏幕上这份 model** 取（与挂/撤预览那两拍同口径）：
+      // 糖投影 → preview，真 `.kojo` 文件 → kojoText；两者都不是才按体量档决定画不画。
+      const sugarModel = sugarModelRef.current;
       ed.updateOptions({
-        ...editorDisplayOptionPatch(model ? model.getLineCount() : 0),
+        ...editorDisplayOptionPatch(model ? model.getLineCount() : 0, undefined, {
+          preview: sugarModel !== null && model === sugarModel,
+          kojoText: model ? model.getLanguageId() === KOJO_LANGUAGE_ID : false,
+        }),
         ...editorDisplayFontPatch(),
       });
+      // 界面字号缩放不进 Monaco（它是外壳的 CSS 变量）：偏好一改就把那几位落到根元素。
+      // 本实例是常驻挂载点，另一处写入点（设置页）在 setter 里当场应用，两条路同一个真源。
+      applyUiFontScalePref();
     });
     // 焦点上抛（SPLIT-1）：编辑器聚焦 ⇒ 宿主把焦点组切到本组（点哪组哪组成为焦点组）
     const focusDisposer = ed.onDidFocusEditorText(() => {
@@ -2075,7 +2108,7 @@ export function EditorPane({
         // 体量档位也会带 quickSuggestions（代码位开）；只读 / 设置页关掉必须在这里整条盖掉
         quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
         quickSuggestionsDelay: loadSuggestDelayPref(),
-      }));
+      }, minimapCtxForPath(filePath)));
       ed.setModel(entry.model);
       const vs = viewStatesRef.current.get(filePath);
       if (vs) ed.restoreViewState(vs);

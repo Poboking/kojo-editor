@@ -13,6 +13,14 @@ import {
 import { afterEach, vi } from 'vitest';
 import { layoutPrefPatch } from '../src/ui/editor-options';
 import { LAYOUT_PREF_DEFAULT, type LayoutPref } from '../src/ui/layout-pref';
+// —— C-1b 追加用例的依赖（缩略图偏好层与档位表的分层；同样只加行）——
+import {
+  applySizeTier,
+  sizeTierKeys,
+  sizeTierKeysMissingFromSmall,
+  type EditorOptionPatch,
+} from '../src/ui/editor-options';
+import { editorDisplayOptionPatch } from '../src/ui/editor-display-prefs';
 
 /**
  * 大文件 Monaco 选项降级（三档表驱动）。
@@ -282,5 +290,45 @@ describe('排版偏好叠层（P2-16）', () => {
     stubWindow(fakeStorage({ 'kojo.ui.layout.wordWrap.v1': 'garbage' }));
     expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('off');
     expect(editorOptionsForLineCount(100).wordWrap).toBe('on');
+  });
+});
+
+/**
+ * C-1b 缩略图偏好的**分层**口径（体量轴 vs 内容轴）。
+ *
+ * 这一段的落点在 `editor-options.ts` 而不是偏好模块：偏好层必须**只能**盖在档位表之后，
+ * 档位表自己既不许读偏好、也不许知道"屏幕上是不是预览"。否则三档矩阵就成了按调用点
+ * 变化的第二份真源，`sizeTierKeys` / `sizeTierKeysMissingFromSmall` 那两条不变式也没法再谈。
+ */
+describe('缩略图：档位表与偏好层的分层（C-1b）', () => {
+  it('体量表是上下文无关的纯函数：同一行数永远同一读数，与预览 / 正文档无关', () => {
+    // editorOptionsForLineCount 的形参只有一个行数——它拿不到"此刻屏幕上挂的是哪份文档"，
+    // 因此**结构上**不可能把缩略图的内容判据算进档位表（这一条就是分层本身）
+    expect(editorOptionsForLineCount.length, '档位函数不许长出第二个形参').toBe(1);
+    for (const n of ALL_TIERS_SAMPLES) {
+      const o = editorOptionsForLineCount(n);
+      const again = editorOptionsForLineCount(n);
+      expect(o.minimap, repr(n)).toEqual(again.minimap);
+    }
+    // 三档读数逐字照旧（large 仍写开——那一格是表的事实，偏好层关不关由 `editorDisplayOptionPatch` 说）
+    expect(editorOptionsForLineCount(LARGE_FILE_LINES).minimap?.enabled).toBe(true);
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).minimap?.enabled).toBe(false);
+  });
+
+  it('applySizeTier 只有一条出口：偏好层的关值盖得住，档位表不被改写', () => {
+    const seen: EditorOptionPatch[] = [];
+    const target = { updateOptions: (o: EditorOptionPatch) => void seen.push(o) };
+    // 撤下预览后按原文行数落档，overrides 带 `.kojo` 正文的关值 ⇒ 终值必须是关
+    applySizeTier(target, 800, editorDisplayOptionPatch(800, undefined, { kojoText: true }));
+    expect(seen[0]?.minimap).toEqual({ enabled: false, renderCharacters: false, maxColumn: 72 });
+    // 同一函数换个行数与上下文：档位表那一份仍然原样（表没被上次调用污染）
+    applySizeTier(target, 800);
+    expect(seen[1]?.minimap).toEqual({ enabled: true, renderCharacters: false, maxColumn: 72 });
+    expect(editorOptionsForLineCount(800).minimap?.enabled).toBe(true);
+  });
+
+  it('档位表关掉的键 small 都写回（缩略图这条新增判据不许破那条不变式）', () => {
+    expect(sizeTierKeysMissingFromSmall()).toEqual([]);
+    expect(sizeTierKeys()).toContain('minimap');
   });
 });
