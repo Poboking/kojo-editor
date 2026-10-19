@@ -15,9 +15,12 @@ import {
   composeSugarDoc,
   loadSugarViewPref,
   saveSugarViewPref,
+  sourceLineToSugar,
+  sugarLineToSource,
   sugarSummary,
   sugarViewAllowed,
   trimSegmentBlanks,
+  trimSegmentBlanksWithMap,
 } from '../src/ui/sugar-view';
 
 /** 假 localStorage：只是键值袋，够测"记忆"这一件事 */
@@ -168,33 +171,33 @@ describe('trimSegmentBlanks · 只剪段首尾，段内分节不许动', () => {
  */
 describe('composeSugarDoc · 把糖段拼进整份原文', () => {
   it('空 segments ⇒ 原文逐行原样拼接（无糖可铺）', () => {
-    expect(composeSugarDoc(['a', 'b', 'c'], [])).toBe('a\nb\nc');
+    expect(composeSugarDoc(['a', 'b', 'c'], []).text).toBe('a\nb\nc');
   });
 
   it('空原文（N=0）⇒ 空串；越界糖段被丢弃（不凭空产出）', () => {
-    expect(composeSugarDoc([], [])).toBe('');
-    expect(composeSugarDoc([], [{ fromLine: 1, toLine: 1, sugarText: 'X' }])).toBe('');
+    expect(composeSugarDoc([], []).text).toBe('');
+    expect(composeSugarDoc([], [{ fromLine: 1, toLine: 1, sugarText: 'X' }]).text).toBe('');
   });
 
   it('全被覆盖（单段覆盖整份）⇒ 只输出糖文本', () => {
-    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 1, toLine: 2, sugarText: '糖' }])).toBe('糖');
+    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 1, toLine: 2, sugarText: '糖' }]).text).toBe('糖');
   });
 
   it('部分覆盖 + 前后留原文：被覆盖区间换成糖，其余行原位保留', () => {
     const lines = ['a', 'b', 'c', 'd', 'e'];
-    expect(composeSugarDoc(lines, [{ fromLine: 2, toLine: 3, sugarText: 'X\nY' }])).toBe('a\nX\nY\nd\ne');
+    expect(composeSugarDoc(lines, [{ fromLine: 2, toLine: 3, sugarText: 'X\nY' }]).text).toBe('a\nX\nY\nd\ne');
   });
 
   it('段行数 ≠ 原文行数：单行原文可换成多行糖（整段透传，不按行对齐）', () => {
-    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 2, toLine: 2, sugarText: 'X\nY\nZ' }])).toBe('a\nX\nY\nZ');
+    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 2, toLine: 2, sugarText: 'X\nY\nZ' }]).text).toBe('a\nX\nY\nZ');
   });
 
   it('首段（fromLine=1）正确落位', () => {
-    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 1, toLine: 1, sugarText: 'S' }])).toBe('S\nb\nc');
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 1, toLine: 1, sugarText: 'S' }]).text).toBe('S\nb\nc');
   });
 
   it('尾段（toLine=N）正确落位', () => {
-    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 3, toLine: 3, sugarText: 'S' }])).toBe('a\nb\nS');
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 3, toLine: 3, sugarText: 'S' }]).text).toBe('a\nb\nS');
   });
 
   it('多段混合（不相邻）各自独立落位', () => {
@@ -203,7 +206,7 @@ describe('composeSugarDoc · 把糖段拼进整份原文', () => {
       { fromLine: 1, toLine: 1, sugarText: 'A' },
       { fromLine: 4, toLine: 4, sugarText: 'D' },
     ];
-    expect(composeSugarDoc(lines, segs)).toBe('A\n2\n3\nD\n5\n6');
+    expect(composeSugarDoc(lines, segs).text).toBe('A\n2\n3\nD\n5\n6');
   });
 
   it('乱序段先按 fromLine 升序再落位（输入顺序不影响结果）', () => {
@@ -212,7 +215,7 @@ describe('composeSugarDoc · 把糖段拼进整份原文', () => {
       { fromLine: 4, toLine: 4, sugarText: 'D' },
       { fromLine: 1, toLine: 1, sugarText: 'A' },
     ];
-    expect(composeSugarDoc(lines, segs)).toBe('A\n2\n3\nD\n5');
+    expect(composeSugarDoc(lines, segs).text).toBe('A\n2\n3\nD\n5');
   });
 
   it('重叠段先到者优先：被前段覆盖到的后到段整段丢弃（不重复铺）', () => {
@@ -221,27 +224,123 @@ describe('composeSugarDoc · 把糖段拼进整份原文', () => {
       { fromLine: 1, toLine: 3, sugarText: 'X' },
       { fromLine: 2, toLine: 4, sugarText: 'Y' },
     ];
-    expect(composeSugarDoc(lines, segs)).toBe('X\n4\n5');
+    expect(composeSugarDoc(lines, segs).text).toBe('X\n4\n5');
   });
 
   it('fromLine > toLine（反向区间）⇒ 丢弃，不动原文', () => {
-    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 2, toLine: 1, sugarText: 'X' }])).toBe('a\nb');
+    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 2, toLine: 1, sugarText: 'X' }]).text).toBe('a\nb');
   });
 
   it('完全越界（整段落在 [1,N] 外）⇒ 丢弃，不动原文', () => {
-    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 5, toLine: 6, sugarText: 'X' }])).toBe('a\nb');
+    expect(composeSugarDoc(['a', 'b'], [{ fromLine: 5, toLine: 6, sugarText: 'X' }]).text).toBe('a\nb');
   });
 
   it('部分越界 ⇒ 夹取到 [1,N]（fromLine 0 → 1；toLine 超 N → N）', () => {
-    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 0, toLine: 2, sugarText: 'X' }])).toBe('X\nc');
-    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 2, toLine: 99, sugarText: 'Y' }])).toBe('a\nY');
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 0, toLine: 2, sugarText: 'X' }]).text).toBe('X\nc');
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 2, toLine: 99, sugarText: 'Y' }]).text).toBe('a\nY');
   });
 
   it('单行原文（N=1）覆盖正常', () => {
-    expect(composeSugarDoc(['only'], [{ fromLine: 1, toLine: 1, sugarText: 'S' }])).toBe('S');
+    expect(composeSugarDoc(['only'], [{ fromLine: 1, toLine: 1, sugarText: 'S' }]).text).toBe('S');
   });
 
   it('糖段内空行原样输出（本函数不做首尾修剪，那是 trimSegmentBlanks 的职责）', () => {
-    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 2, toLine: 2, sugarText: '\nX\n' }])).toBe('a\n\nX\n\nc');
+    expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 2, toLine: 2, sugarText: '\nX\n' }]).text).toBe('a\n\nX\n\nc');
+  });
+});
+
+/* ============ 预览行 ↔ 源行（lineMap 与两条反查） ============ */
+
+/**
+ * 预览面上的定位只有靠这张表才回得到源文件：糖段是 N 源行 ⇄ M 糖行，第一段多行糖一出现，
+ * 预览行号就与源行号分叉。这里钉的是**分叉之后仍然对得回**，以及外部数据算不准时的退化方向。
+ */
+describe('composeSugarDoc · lineMap 预览行 → 源行', () => {
+  it('无段（全文透传）⇒ 第 i 行就是源第 i 行', () => {
+    expect(composeSugarDoc(['a', 'b', 'c'], []).lineMap).toEqual([1, 2, 3]);
+  });
+
+  it('段前 / 段后 / 段内逐行都对得上（透传行不被段的偏移带跑）', () => {
+    const got = composeSugarDoc(['a', 'b', 'c', 'd', 'e'], [{ fromLine: 2, toLine: 3, sugarText: 'X\nY' }]);
+    expect(got.lineMap).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('一行源 → 三行糖：sourceLines 给了就照它，三行各指哪一源行由投影方说了算', () => {
+    const got = composeSugarDoc(['a', 'b'], [
+      { fromLine: 2, toLine: 2, sugarText: 'X\nY\nZ', sourceLines: [2, 2, 2] },
+    ]);
+    expect(got.lineMap).toEqual([1, 2, 2, 2]);
+  });
+
+  it('缺 sourceLines ⇒ 退化到 min(fromLine+k, toLine)（宁可指回段首，不给不存在的行号）', () => {
+    const got = composeSugarDoc(['a', 'b'], [{ fromLine: 2, toLine: 2, sugarText: 'X\nY\nZ' }]);
+    expect(got.lineMap).toEqual([1, 2, 2, 2]);
+  });
+
+  it('sourceLines 长度与糖行数不等 ⇒ 整段按缺省处理（外部数据不许假定算准了）', () => {
+    const got = composeSugarDoc(['a', 'b', 'c'], [
+      { fromLine: 2, toLine: 2, sugarText: 'X\nY', sourceLines: [2] },
+    ]);
+    expect(got.lineMap).toEqual([1, 2, 2, 3]);
+  });
+
+  it('N 源行折成 1 糖行：映射表只有段首那一行，映射长度跟着糖走', () => {
+    const got = composeSugarDoc(['1', '2', '3', '4'], [
+      { fromLine: 1, toLine: 3, sugarText: '合并', sourceLines: [1] },
+    ]);
+    expect(got.text).toBe('合并\n4');
+    expect(got.lineMap).toEqual([1, 4]);
+  });
+});
+
+describe('sugarLineToSource / sourceLineToSugar · 两条反查', () => {
+  const map = [1, 2, 2, 2, 5]; // 预览 2..4 行都来自源第 2 行
+
+  it('预览 → 源：越界与 0（无源行）都判 null', () => {
+    expect(sugarLineToSource(map, 1)).toBe(1);
+    expect(sugarLineToSource(map, 5)).toBe(5);
+    expect(sugarLineToSource(map, 6)).toBeNull();
+    expect(sugarLineToSource([0], 1)).toBeNull();
+    expect(sugarLineToSource(map, 0)).toBeNull();
+  });
+
+  it('源 → 预览：命中多行时取**第一行**（跳到这段糖的开头）', () => {
+    expect(sourceLineToSugar(map, 2)).toBe(2);
+  });
+
+  it('源行被折进糖里没有独立成行 ⇒ 退化成它前面最近的那一行（停在包住它的那段糖上）', () => {
+    expect(sourceLineToSugar([1, 1, 1, 4], 2)).toBe(3);
+    expect(sourceLineToSugar([1, 1, 1, 4], 3)).toBe(3);
+  });
+
+  it('退化也有底线：源行早于表里第一行、或表空 ⇒ null（不猜、不滚到第一行）', () => {
+    expect(sourceLineToSugar([5, 6], 2)).toBeNull();
+    expect(sourceLineToSugar([], 1)).toBeNull();
+    expect(sourceLineToSugar(map, 0)).toBeNull();
+  });
+});
+
+describe('trimSegmentBlanksWithMap · 剪行与剪映射必须同一次', () => {
+  it('段首两个空行剪掉，映射跟着剪掉同两行（错位是静默的，必须成对）', () => {
+    const got = trimSegmentBlanksWithMap('\n\n她说「甲」\n\n她说「乙」', [7, 8, 9, 10, 11]);
+    expect(got.sugarText.split('\n')).toEqual(['她说「甲」', '', '她说「乙」']);
+    expect(got.sourceLines).toEqual([9, 10, 11]);
+  });
+
+  it('段尾空行（含只有空格的行）也成对剪', () => {
+    const got = trimSegmentBlanksWithMap('PRINT A\n\n   \n', [3, 4, 5, 6]);
+    expect(got.sugarText).toBe('PRINT A');
+    expect(got.sourceLines).toEqual([3]);
+  });
+
+  it('没有映射 / 映射长度对不上 ⇒ 退化成 trimSegmentBlanks 的结果且不产出映射', () => {
+    expect(trimSegmentBlanksWithMap('\nA\n', undefined)).toEqual({ sugarText: 'A' });
+    expect(trimSegmentBlanksWithMap('\nA\n', [1])).toEqual({ sugarText: 'A' });
+  });
+
+  it('整段皆空 ⇒ 原样返回（剪成零行会让糖段与原文彻底对不上）', () => {
+    const got = trimSegmentBlanksWithMap('\n  \n', [1, 2, 3]);
+    expect(got.sugarText).toBe('\n  \n');
+    expect(got.sourceLines).toEqual([1, 2, 3]);
   });
 });

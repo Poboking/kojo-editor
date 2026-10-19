@@ -228,11 +228,15 @@ const protocolStub: KojoCallProtocol = { slotsFor: (name) => (name === 'F' ? SLO
  * （`formatRequestWindowFor`）走的是 `owningPanePathOf(model)`，**必须由注册表反查到 model**
  * （`owningPaneOf` 只认 `editorRef.current.getModel()`，糖 model 那条腿判无主）。
  * 所以这里给得出 model 的用例都要把 model 挂上，否则测的是「反查不到」而不是「不该应答」。
+ *
+ * `sugarLineMapRef` 恒给空表：糖投影的「预览行 → 源行」表与 `sugarModelRef` 同批换上，
+ * 读类腿拿不到表就应当退化（换算批的口径钉在 `sugar-provider-line-map.test.ts`）。
  */
 function fakePane(
   path: string,
   shown?: Monaco.editor.ITextModel,
   sugarOf?: Monaco.editor.ITextModel,
+  lineMap: readonly number[] = [],
 ): PaneCtx {
   return {
     paneId: `ps4-${path}`,
@@ -245,6 +249,7 @@ function fakePane(
         : null,
     },
     sugarModelRef: { current: sugarOf ?? null },
+    sugarLineMapRef: { current: lineMap },
     entriesRef: { current: new Map<string, never>() },
     crumbTreeCacheRef: { current: null },
   } as unknown as PaneCtx;
@@ -578,7 +583,10 @@ describe('provideCodeActionsFor · 零波浪线那道闸', () => {
     expect(asks).toHaveLength(5);
   });
 
-  it('没有路径（糖视图 / 后台 model）⇒ 零动作、零 copy', () => {
+  it('💡 是**写**类出口：没有路径的标签 ⇒ 零动作、零 copy', () => {
+    // 分界判据 = "这个动作最终会不会写盘"。💡 / quickfix 会在原文上落笔 ⇒ 糖面上继续否决，
+    // 那道闸在注册处（`owningPaneOf(糖 model)` 判无主）与落地处（`applyQuickFixEdits` 见糖 model
+    // 就返回 false）各一次，两条都在 `sugar-provider-line-map.test.ts` 里钉着。
     const asks: { text: string; diagnostics: unknown[]; line?: number }[] = [];
     const { kernel } = fakeKernel({ codeAction: [structureLikeContribution(asks)] });
     const doc = fakeModel(['@FOO']);
@@ -677,13 +685,16 @@ describe('formatRequestWindowFor · 窗口取文的应答判据', () => {
     expect(doc.getValueCalls()).toBe(0);
   });
 
-  it('没有真路径（糖视图派生 model）⇒ `null`，一次取文都不做', () => {
+  it('格式化是**写**类出口：糖视图派生 model ⇒ `null`，一次取文都不做', () => {
+    // 换算批把"糖 model ⇒ 整条静默"拆成了两条判据：**会写盘的**（格式化 / 💡 / 改名 / 搜索替换）
+    // 在糖面上继续一律否决（改一个字节都是事故），**只读的**换算到原文再折回预览行。
+    // 读类那半的口径钉在 `sugar-provider-line-map.test.ts`，本处只钉写类这半。
     const doc = fakeModel([`${FW}IF X`]);
     // ① 还没有路径的标签
     livePanes.set('ps4', fakePane('', doc.model));
     expect(formatRequestWindowFor(doc.model, 1, 1)).toBeNull();
-    // ② 糖视图：注册表认得这份 model，但它是只读派生物（`owningPaneOf` 判无主）
-    livePanes.set('ps4', fakePane('C:/erb/ps4-糖视图.ERB', doc.model, doc.model));
+    // ② 糖视图：注册表认得这份 model，但格式化要落笔的是原文 ⇒ 写类闸把它拦下
+    livePanes.set('ps4', fakePane('C:/erb/ps4-糖视图.ERB', doc.model, doc.model, [1]));
     expect(formatRequestWindowFor(doc.model, 1, 1)).toBeNull();
     // ③ 根本不挂在任何活动标签上
     livePanes.clear();

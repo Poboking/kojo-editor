@@ -110,8 +110,11 @@ import {
   owningPaneOf,
   pathForUriAcrossGroups,
   requireKernel,
+  sugarOwningPaneOf,
+  sugarSourceOf,
   type PaneCtx,
 } from './editor-pane-registry';
+import { sourceLineToSugar } from './sugar-view';
 import { loadWordBasedSuggestionsPref } from './suggest-pref';
 
 /** CodeAction 执行命令 id（宿主统一注册一次；command 参数为 pendingActionsRef 的反查 key） */
@@ -368,9 +371,13 @@ export function focusedPaneIdOf(): string | null {
 }
 
 /**
- * 每条能力腿共用的**开口**：由 model 反查归属实例，再读它的真路径。
+ * 每条**写**能力腿共用的**开口**：由 model 反查归属实例，再读它的真路径。
  * 返回 `null` = 这份 model 不挂在任何活动标签上，或那个标签还没有路径
- * （糖视图挂的是只读派生 model，行号属于派生物 ⇒ 一律不应答，与 codeAction 同判据）。
+ * （糖视图挂的是只读派生 model，在它上面落笔改的不是原文 ⇒ 一律不应答）。
+ *
+ * 分界线只有一条——**这个动作最终会不会写盘**：会写盘的（💡 落地 / quickfix / F2 改名 /
+ * 格式化 / 搜索替换）走这里，糖面一律否决；只读的走下面那套换算（`readTargetOf`），
+ * 拿 `owningPanePathOf` 拦读类是把八条腿一起没收。
  *
  * **兜底值留在各调用点**：各能力"不应答"的形状本来就不一样（`[]` / `null` /
  * `{ hints: [] … }` / `{ actions: [] … }`），把它们折成一个是行为改动，不是去重。
@@ -379,6 +386,360 @@ function owningPanePathOf(model: Monaco.editor.ITextModel): string | null {
   const ctx = owningPaneOf(model);
   if (!ctx) return null;
   return ctx.filePathRef.current || null;
+}
+
+/* ========================================================================================
+ * 升糖预览面上的**读类**腿（definition / documentSymbol / 签名 / folding / codeLens /
+ * inlayHints / 跳转探针）：位点先 `sugarSourceOf` 换成源位点，按源 path+line 走既有实现，
+ * 再把结果里的源行号折回预览行。
+ *
+ * 旧口径是"糖 model ⇒ 整条早退"，代价不是"慢一点"而是**八条腿在预览面上集体静默**：
+ * 用户在投影里点一行按 F12 什么也不发生。预览的每一行都来自某个源行（`sugarLineMapRef`），
+ * 所以"问源、答预览"是有确定映射的；只有映射缺席（空表 / 这一行压根没有源行）才不给结果。
+ *
+ * 三条换算纪律：
+ * ① **`text` 取原文 model 那份**：契约写的是"真文件的文本"（`EditorDefinitionRequest.text`
+ *    的注），供方按 `text.split('\n')[line - 1]` 取光标行——投影文本配源行号问的就是隔壁一行。
+ * ② **列不折算**：预览行与源行的行内列不对应（连文本都不是同一串）。跨面换算时列一律落到
+ *    行首（1），源结果里的列与区间在预览面上抹掉——把源列套到预览行上，选区就盖在别的字上，
+ *    那比不跳更糟。
+ * ③ **折不回 = 不给**：`sourceLineToSugar` 回 `null` 的那条结果直接丢弃，绝不给一个猜的行号
+ *    （"不许把作者导到不存在的位置"）。
+ *
+ * `semanticTokens` 那条腿不在本段里：它按**投影自己**派生 `.kojo` 路径应答（行号天然同空间），
+ * 是本段判据的另一个合法形态，保持原样。
+ * ==================================================================================== */
+
+/** 一次换算后的**读类目标**：屏幕上这份 model 该问哪份文本、源行号怎么折回来 */
+interface ReadTarget {
+  /** 取数真正落在的 model：原文面上 = 屏幕上这份，糖面上 = 它背后那份原文 model */
+  readonly model: Monaco.editor.ITextModel;
+  /** 原文路径（供方按扩展名认方言；投影不是文件，拿它去问谁都是猜） */
+  readonly path: string;
+  /** 仅糖面给出：归属实例（位点换算要用它的映射表）+「源行 → 预览行」折回 */
+  readonly sugar: { readonly ctx: PaneCtx; readonly fold: (sourceLine: number) => number | null } | null;
+}
+
+/** 「源行 → 预览行」快表：`at[t]` = 预览行号（1 基），`0` = 折不回 */
+interface PreviewRowTable {
+  readonly at: Int32Array;
+  readonly maxSourceLine: number;
+  /** 源行比表尾还靠后时的落点（`sourceLineToSugar` 的退化口径：停在包住它的那一行） */
+  readonly tail: number;
+}
+
+/**
+ * 快表按 `lineMap` 的**数组身份**记忆化（投影装配时整张换表 ⇒ 身份变即重建，
+ * 与 `sugarModelRef` / `sugarLineMapRef` 同批换上的纪律对齐）。
+ * 存在的理由：`sourceLineToSugar` 每次查表 O(表长)，而折叠 / 大纲 / 注解一次要折几百到几千条，
+ * Monaco 又**每次滚动、每次停笔**重问一遍 ⇒ 逐条现扫是 O(表长 × 结果数)。建表一趟 O(表长)，
+ * 之后每条 O(1)。
+ */
+let previewRowTables = new WeakMap<readonly number[], PreviewRowTable | null>();
+
+/**
+ * 建反查表（判据与 `sourceLineToSugar` 逐字对齐：精确命中取**第一次**出现，源行被折进糖段时
+ * 退化成"包住它的那一行"，早于表首 = 无落点）。
+ * 单调不减是这套算法的前提（`composeSugarDoc` 按源行顺序产出，`kojo-sugar` 那边另有钉子）；
+ * 外部数据不许假定算准了 ⇒ 表里出现倒退 / 非整数即放弃快表，由调用方退回逐条 `sourceLineToSugar`。
+ */
+function buildPreviewRowTable(lineMap: readonly number[]): PreviewRowTable | null {
+  let maxSourceLine = 0;
+  let previous = 0;
+  for (const source of lineMap) {
+    if (!Number.isInteger(source) || source < 0) return null;
+    if (source > 0) {
+      if (source < previous) return null;
+      previous = source;
+      if (source > maxSourceLine) maxSourceLine = source;
+    }
+  }
+  if (maxSourceLine === 0) return null; // 全零表 = 一个源行都没有
+  const at = new Int32Array(maxSourceLine + 1);
+  let filled = 0;
+  let row = 0;
+  for (let i = 0; i < lineMap.length; i++) {
+    const source = lineMap[i]!;
+    if (source <= 0) continue;
+    for (let t = filled + 1; t < source; t++) at[t] = row;
+    if (at[source] === 0) at[source] = i + 1;
+    row = i + 1;
+    if (source > filled) filled = source;
+  }
+  return { at, maxSourceLine, tail: row };
+}
+
+/** 「源行 → 预览行」的折回函数（`null` = 折不回，调用方丢弃这一条结果） */
+function createPreviewFolder(lineMap: readonly number[]): (sourceLine: number) => number | null {
+  let table = previewRowTables.get(lineMap);
+  if (table === undefined) {
+    table = buildPreviewRowTable(lineMap);
+    previewRowTables.set(lineMap, table);
+  }
+  if (table === null) return (sourceLine) => sourceLineToSugar(lineMap, sourceLine);
+  const { at, maxSourceLine, tail } = table;
+  return (sourceLine) => {
+    if (!Number.isInteger(sourceLine)) return sourceLineToSugar(lineMap, sourceLine);
+    if (sourceLine < 1) return null;
+    const row = sourceLine > maxSourceLine ? tail : at[sourceLine] ?? 0;
+    return row > 0 ? row : null;
+  };
+}
+
+/** 糖投影背后那份**原文** model（`entriesRef` 的键就是 `filePathRef`，HK-7 同款 `pathKey` 兜底） */
+function sourceModelOf(ctx: PaneCtx): Monaco.editor.ITextModel | null {
+  const want = ctx.filePathRef.current;
+  if (!want) return null;
+  const direct = ctx.entriesRef.current.get(want)?.model;
+  if (direct) return direct;
+  const key = pathKey(want);
+  for (const [entryPath, entry] of ctx.entriesRef.current) {
+    if (pathKey(entryPath) === key) return entry.model;
+  }
+  return openModelAcrossGroups(want) ?? null;
+}
+
+/**
+ * 屏幕上这份 model 的读类目标。`null` = 这份 model 无主 / 没有原文可依 / **映射缺席**
+ * （空表时无换算可言 ⇒ 宁可不答，也不给一个猜的位点）。
+ */
+function readTargetOf(model: Monaco.editor.ITextModel): ReadTarget | null {
+  const own = owningPaneOf(model);
+  if (own) {
+    const path = own.filePathRef.current;
+    return path ? { model, path, sugar: null } : null;
+  }
+  const ctx = sugarOwningPaneOf(model);
+  if (!ctx) return null;
+  const path = ctx.filePathRef.current;
+  const lineMap = ctx.sugarLineMapRef.current;
+  if (!path || lineMap.length === 0) return null;
+  const source = sourceModelOf(ctx);
+  if (!source) return null;
+  return { model: source, path, sugar: { ctx, fold: createPreviewFolder(lineMap) } };
+}
+
+/** 位点换算（只在糖面上发生）：预览行 → 源行，**列落到行首**（纪律②） */
+function sourcePointOf(
+  target: ReadTarget,
+  position: Monaco.Position,
+): { readonly line: number; readonly column: number } | null {
+  if (!target.sugar) return { line: position.lineNumber, column: position.column };
+  const at = sugarSourceOf(target.sugar.ctx, position.lineNumber);
+  return at === null ? null : { line: at.line, column: 1 };
+}
+
+/** 大纲树折回预览面：`startLine` 折不回的符号**整枚丢弃**，`endLine` 折不回就收在起点那一行 */
+function foldSymbolsToPreview(
+  symbols: readonly EditorDocumentSymbol[],
+  fold: (sourceLine: number) => number | null,
+): EditorDocumentSymbol[] {
+  const out: EditorDocumentSymbol[] = [];
+  for (const symbol of symbols) {
+    const startLine = fold(symbol.startLine);
+    if (startLine === null) continue;
+    const foldedChildren = symbol.children === undefined ? undefined : foldSymbolsToPreview(symbol.children, fold);
+    out.push({
+      ...symbol,
+      startLine,
+      endLine: Math.max(startLine, fold(symbol.endLine) ?? startLine),
+      ...(foldedChildren !== undefined ? { children: foldedChildren } : {}),
+    });
+  }
+  return out;
+}
+
+/** 屏幕上这份投影 model 自己的 URI 键（`inmemory://sugar/…`；桩 model 可能压根没有 uri） */
+function projectionUriKeys(shown: Monaco.editor.ITextModel): Set<string> {
+  const out = new Set<string>();
+  const uri = (shown as unknown as { uri?: { fsPath?: unknown; path?: unknown } }).uri;
+  if (!uri || typeof uri !== 'object') return out;
+  for (const value of [uri.fsPath, uri.path]) {
+    if (typeof value === 'string' && value.length > 0) out.add(pathKey(value));
+  }
+  return out;
+}
+
+/**
+ * 定义落点折回预览面。
+ *
+ * **行号在这里不折**（与其余几条读类腿刻意不同）：落点那一侧的 model 是**原文**——Monaco 按
+ * `filePath` 找的是原文那份 model，`clampRevealPosition` 也按原文行数夹取，把预览行号交给它
+ * 就是跳到源文件的另一行。源行 → 预览行的那一跳早就在落点通道里做（`EditorPane` 的 `applyReveal`
+ * 读同一张 `sugarLineMapRef`），这里再折一次就是折两遍。本函数只做糖面独有的三件事：
+ * ① 同文件的落点若折不回预览行 ⇒ 丢弃（预览面上没有那一行，交出去等于一次原地不动的假 F12）；
+ * ② 同文件的落点把列与区间抹成行首（纪律②）；
+ * ③ 剔除**指向投影自己 URI** 的落点：`#DIM` / `$` 标签那两条缓冲区本地腿（住在
+ *    `installDefinitionProvider` 内部，不归本文件动）会把屏幕上这份 model 的 uri 当文件路径交回，
+ *    而那条路径上没有文件；`mergeSymbolLocations` 又把它们排在最前、`planDefinitionJump` 的事件
+ *    通道兜底只取第一枚 ⇒ 不剔就是幻影把真算出来的源落点挤掉。
+ * 跨文件的真落点原样交回——那是另一份文件，与这一面的映射无关。
+ */
+function foldDefinitionTargetsToPreview(
+  shown: Monaco.editor.ITextModel,
+  target: ReadTarget,
+  locations: readonly DefinitionLocation[],
+): DefinitionLocation[] {
+  const sugar = target.sugar;
+  if (!sugar) return [...locations];
+  const sameFile = pathKey(target.path);
+  const phantom = projectionUriKeys(shown);
+  const out: DefinitionLocation[] = [];
+  for (const location of locations) {
+    const key = pathKey(location.filePath);
+    if (phantom.has(key)) continue;
+    if (key !== sameFile) {
+      out.push(location);
+      continue;
+    }
+    if (sugar.fold(location.line) === null) continue;
+    out.push({
+      filePath: location.filePath,
+      line: location.line,
+      column: 1,
+      ...(location.kind !== undefined ? { kind: location.kind } : {}),
+    });
+  }
+  return out;
+}
+
+/** 转到定义 / 跳到实现共用的读类腿（换算 → 问槽 → 折回） */
+export function readDefinitionTargets(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  kernel: Kernel,
+): DefinitionLocation[] {
+  const target = readTargetOf(model);
+  if (!target) return [];
+  const at = sourcePointOf(target, position);
+  if (at === null) return [];
+  const locations = collectDefinitionLocations(kernel.slots.query('ui.editor.languageService'), {
+    kind: 'definition',
+    path: target.path,
+    text: target.model.getValue(),
+    line: at.line,
+    column: at.column,
+    project: kernel.project.current(),
+    lineCount: target.model.getLineCount(),
+  });
+  return target.sugar ? foldDefinitionTargetsToPreview(model, target, locations) : locations;
+}
+
+/** 文档大纲腿（吸顶与"转到符号"的数据源；糖面上折回预览行，两层消费方同一棵坐标一致的树） */
+export function readDocumentSymbols(
+  model: Monaco.editor.ITextModel,
+  kernel: Kernel,
+): EditorDocumentSymbol[] {
+  const target = readTargetOf(model);
+  if (!target) return [];
+  const symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
+    kind: 'documentSymbol',
+    path: target.path,
+    text: target.model.getValue(),
+    project: kernel.project.current(),
+    lineCount: target.model.getLineCount(),
+  });
+  return target.sugar ? foldSymbolsToPreview(symbols, target.sugar.fold) : symbols;
+}
+
+/**
+ * 折叠腿：档位与版本记忆化都判在**原文 model** 上（糖面问的就是那一篇），交回前把区间折回预览行。
+ * 折完 `end <= start` 与重复区间由 `toMonacoFoldingRanges` 那道既有闸收口，本处不重抄判据。
+ */
+export function readFoldingRanges(
+  model: Monaco.editor.ITextModel,
+  kernel: Kernel,
+): EditorFoldingRange[] {
+  const target = readTargetOf(model);
+  if (!target) return [];
+  const ranges = foldingRangesFor(target.model, target.path, kernel);
+  if (!target.sugar) return ranges;
+  const fold = target.sugar.fold;
+  const out: EditorFoldingRange[] = [];
+  for (const range of ranges) {
+    const startLine = fold(range.startLine);
+    if (startLine === null) continue;
+    out.push({ ...range, startLine, endLine: Math.max(startLine, fold(range.endLine) ?? startLine) });
+  }
+  return out;
+}
+
+/**
+ * 行上注解腿：注解**画在预览面上** ⇒ 行号必须折回；`target` 那一位照旧留**源坐标**——点击落回
+ * `editor.revealLocation`，那条腿的落点侧按同一张表换算（折两遍就会跳到别处）。
+ * 折回后同一预览行上同一句话并成一条（供方的去重键是源行 + 文本，跨面换算会把它打散）。
+ */
+export function readCodeLenses(model: Monaco.editor.ITextModel, kernel: Kernel): EditorCodeLens[] {
+  const target = readTargetOf(model);
+  if (!target) return [];
+  const lenses = codeLensesFor(target.model, target.path, kernel);
+  if (!target.sugar) return lenses;
+  const out: EditorCodeLens[] = [];
+  const seen = new Set<string>();
+  for (const lens of lenses) {
+    const line = target.sugar.fold(lens.line);
+    if (line === null) continue;
+    const key = `${line}\u0000${lens.label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...lens, line });
+  }
+  return out;
+}
+
+/**
+ * 行内提示腿：提示钉在预览面上 ⇒ 折行、列落行首（纪律②），落在同一格同一句话的并成一条
+ * （源侧那几枚各自钉在某个实参之前，预览行没有那些实参的位置可言）。
+ */
+export function readInlayHints(model: Monaco.editor.ITextModel, kernel: Kernel): EditorInlayHint[] {
+  const target = readTargetOf(model);
+  if (!target) return [];
+  const hints = inlayHintsFor(target.model, target.path, kernel);
+  if (!target.sugar) return hints;
+  const out: EditorInlayHint[] = [];
+  const seen = new Set<string>();
+  for (const hint of hints) {
+    const line = target.sugar.fold(hint.line);
+    if (line === null) continue;
+    const key = `${line}\u0000${hint.label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...hint, line, column: 1 });
+  }
+  return out;
+}
+
+/** 签名腿：窗口取文落在**原文 model** 上（`SIGNATURE_LOOKBACK_LINES` 的回看行数是源侧事实） */
+export function readSignatureHelp(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  kernel: Kernel,
+): ResolvedSignature | null {
+  const target = readTargetOf(model);
+  if (!target) return null;
+  const at = sourcePointOf(target, position);
+  if (at === null) return null;
+  return signatureHelpAt(target.model, { lineNumber: at.line, column: at.column } as Monaco.Position, kernel);
+}
+
+/**
+ * 符号树（面包屑缓存那一棵，**源空间**）：跳转探针两条面共用。
+ * 缓存键 = `(原文路径, 原文 model 版本号)` ⇒ 预览与原文两种面上存的是**同一份**源空间数据，
+ * 撤下预览后照旧命中，不存在"把预览坐标系的树留在缓存里"这种串。
+ */
+function documentSymbolsCached(ctx: PaneCtx, target: ReadTarget): EditorDocumentSymbol[] {
+  const versionId = target.model.getAlternativeVersionId();
+  const cache = ctx.crumbTreeCacheRef.current;
+  if (cache && cache.path === target.path && cache.versionId === versionId) return cache.symbols;
+  const symbols = collectDocumentSymbols(requireKernel().slots.query('ui.editor.languageService'), {
+    kind: 'documentSymbol',
+    path: target.path,
+    text: target.model.getValue(),
+    project: requireKernel().project.current(),
+    lineCount: target.model.getLineCount(),
+  });
+  ctx.crumbTreeCacheRef.current = { path: target.path, versionId, symbols };
+  return symbols;
 }
 
 /* ========================================================================================
@@ -992,22 +1353,7 @@ export function ensureGlobalProviders(): void {
     const resolveDefinitionTargets = (
       model: Monaco.editor.ITextModel,
       position: Monaco.Position,
-    ): DefinitionLocation[] => {
-      // 与 codeAction 同一判据（见上方 provideCodeActions）：只应答当前活动标签的真 model。
-      // 糖视图下 `ed.getModel()` 是只读糖 model——它的行号对应糖文本，拿它去问 ERB 行号
-      // 会得到"派生物里的位置"，所以一律不供，避免把作者跳到错行。
-      const path = owningPanePathOf(model);
-      if (path === null) return [];
-      return collectDefinitionLocations(requireKernel().slots.query('ui.editor.languageService'), {
-        kind: 'definition',
-        path,
-        text: model.getValue(),
-        line: position.lineNumber,
-        column: position.column,
-        project: requireKernel().project.current(),
-        lineCount: model.getLineCount(),
-      });
-    };
+    ): DefinitionLocation[] => readDefinitionTargets(model, position, requireKernel());
     globalDisposers.push(installDefinitionProvider(monaco, {
       resolve: resolveDefinitionTargets,
       navigate: (location) => {
@@ -1034,47 +1380,26 @@ export function ensureGlobalProviders(): void {
     // 文档大纲（B3）：同一枚 `ui.editor.languageService` 槽的第二个判别成员。宿主照旧只做
     // 协议翻译——"这篇文档有哪些层"全在插件（ERB 给函数与声明、`.kojo` 给时机/段/分支）。
     // 这份树同时是**粘性滚动**的贴顶来源（吸顶显示"当前在哪个函数 / 哪个时机块里"），
-    // 所以它必须在糖视图之外只认真 model：糖 model 的行号属于派生物，贴出来是错的层次。
+    // 所以两面的行号都必须落在**屏幕上这一面**：原文面直通，糖面按 `sugarLineMapRef` 折回预览行。
     globalDisposers.push(installDocumentSymbolProvider(monaco, {
-      resolve: (model) => {
-        const path = owningPanePathOf(model);
-        if (path === null) return [];
-        return collectDocumentSymbols(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'documentSymbol',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount: model.getLineCount(),
-        });
-      },
+      resolve: (model) => readDocumentSymbols(model, requireKernel()),
     }));
     // 签名帮助（B5 形参槽语义 + R5 跨行 / ERB 形参签名）：唯一真源两层——
     // ① adapter 的调用协议表（槽语义）；② 协议不认识时的 ERB 用户函数形参（解析器索引
     // `erb.parser`，按归一化名查定义取 `params` 原文）。两层都运行时现取（表随项目开闭
     // 重建，缓存会把上一个项目的表带过来）；都缺席 / 都不认 ⇒ 不应答，**不猜**。
     // 跨行：`resolveSignatureInText` 从光标行向上收未闭合括号（窗口封顶），最内层括号
-    // 语义与单行同源。糖视图挂的是只读派生 model，它的行列不属于原文 ⇒ 与 codeAction /
-    // 转到定义同判据一律不应答。
+    // 语义与单行同源。糖面把光标位点换成源位点后照常应答（只读呈现，不落一个字节）。
     globalDisposers.push(installSignatureHelp(monaco, {
-      resolve: (model, position) => {
-        const path = owningPanePathOf(model);
-        if (path === null) return null;
-        // PS-4：只取光标行往上那一段窗口（`SIGNATURE_LOOKBACK_LINES` 是供方自己的向上上限，
-        // 窗口给的就是它读得到的那些行）——整篇文本一次都不 copy。判据见 `signatureHelpAt`。
-        return signatureHelpAt(model, position, requireKernel());
-      },
+      resolve: (model, position) => readSignatureHelp(model, position, requireKernel()),
     }));
     // 折叠范围（D3）：同一枚 `ui.editor.languageService` 槽的第三个判别成员。ERB 原文不缩进，
     // Monaco 的缩进折叠在其上几乎无效——注册供给器后 `foldingStrategy: auto` 自动改走这里。
-    // 应答判据与大纲逐字同款：糖 model 的行号属于派生物，折叠它会把作者折进不存在的位置。
-    // PS-4：档位（≥ `LARGE_FILE_LINES` 让路并报一次）+ 版本记忆化都判在取文之前，
+    // 应答判据与大纲逐字同款：折的是**屏幕上这一面**的行号（糖面折回预览行，折不回的区间不给）。
+    // PS-4：档位 + 版本记忆化都判在取文之前，落点 = 原文 model（糖面问的就是那一篇），
     // 让"停笔 → Monaco 重问一遍"不再等于"整篇再 copy 再扫一遍"（判据见 `foldingRangesFor`）。
     globalDisposers.push(installFoldingRangeProvider(monaco, {
-      resolve: (model) => {
-        const path = owningPanePathOf(model);
-        if (path === null) return [];
-        return foldingRangesFor(model, path, requireKernel());
-      },
+      resolve: (model) => readFoldingRanges(model, requireKernel()),
     }));
 
     // 结构化着色（B6，作者面叫「名字按用途着色」）：同一枚 `ui.editor.languageService` 槽的
@@ -1119,8 +1444,12 @@ export function ensureGlobalProviders(): void {
      * **按下才取**，不挂常驻监听：这条键一秒可能被按一次，而面包屑一次按键要算一次，
      * 两者对"最新光标行"的代价口径完全不同。符号树复用面包屑那份缓存（同一棵
      * documentSymbol 树第二次上岗；缓存判据照旧 = path + model 版本号）。
-     * 派生视图（`.kojo` 糖视图挂的是只读 model）行号不属于这份文件本身，
-     * 一律如实标 `derivedView` 并**不给符号**——不许把作者导到不存在的位置。
+     *
+     * 糖面（换算批 2026-10-19）：探针交出的是**源坐标**——预览行先换成源行、符号树取原文那一棵，
+     * `derivedView` 随之为 `false`。面板要的本来就是"存档里那一行"（`locate.filePath/line` 与
+     * `functionAt(path, line)` 都按原文索引查），而落点回到编辑器时还会按同一张表把源行换回预览行
+     * ⇒ 在探针这里先折成预览行就是折两遍。映射缺席 / 这一行压根没有源行 ⇒ 照旧如实标
+     * `derivedView` 且不给符号（不许把作者导到不存在的位置）。
      */
     setJumpProbe(() => {
       const ctx = focusedCtx();
@@ -1129,22 +1458,18 @@ export function ensureGlobalProviders(): void {
       const model = ed2?.getModel() ?? null;
       if (!ctx || !ed2 || !path || !model) return null;
       const line = ed2.getPosition()?.lineNumber ?? 1;
-      if (ctx.sugarModelRef.current) return { path, line, symbols: null, derivedView: true };
-      const versionId = model.getAlternativeVersionId();
-      const cache = ctx.crumbTreeCacheRef.current;
-      let symbols: EditorDocumentSymbol[];
-      if (cache && cache.path === path && cache.versionId === versionId) symbols = cache.symbols;
-      else {
-        symbols = collectDocumentSymbols(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'documentSymbol',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount: model.getLineCount(),
-        });
-        ctx.crumbTreeCacheRef.current = { path, versionId, symbols };
+      if (ctx.sugarModelRef.current === model) {
+        const target = readTargetOf(model);
+        const at = target === null ? null : sourcePointOf(target, { lineNumber: line, column: 1 } as Monaco.Position);
+        if (!target || at === null) return { path, line, symbols: null, derivedView: true };
+        return { path: target.path, line: at.line, symbols: documentSymbolsCached(ctx, target), derivedView: false };
       }
-      return { path, line, symbols, derivedView: false };
+      return {
+        path,
+        line,
+        symbols: documentSymbolsCached(ctx, { model, path, sugar: null }),
+        derivedView: false,
+      };
     });
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
     globalDisposers.push(installKojoCompletion(monaco, () => editorTables(requireKernel())));
@@ -1324,21 +1649,16 @@ export function ensureGlobalProviders(): void {
     // 取文，不再 copy 整篇；`.kojo` 与糖视图一律退回整篇那条腿（判据见 `RangeFormatHandlers`）。
     globalDisposers.push(installRangeFormatter(monaco, formatResolve));
     // 行上内联注解（B8，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第五个判别成员。
-    // 宿主在这里做的事只有四件：认活动标签的**真** model、把体量/预算两档降级判掉、问槽、
-    // 把点击落到**既有**的 `editor.revealLocation` 通道（不新造第二套跳转，与转到定义同腿）。
+    // 宿主在这里做的事只有四件：定位取数的那份 model（糖面换算到原文，见 `readCodeLenses`）、
+    // 把体量/预算两档降级判掉、问槽、把点击落到**既有**的 `editor.revealLocation` 通道
+    //（不新造第二套跳转，与转到定义同腿）。
     // 注解说什么（"被 N 处用到"、何时不说、大数为什么说 `1000+`）全在贡献方，宿主零判定——
     // 分工与取舍见 `monaco/kojo-code-lens.ts` 与 `plugins/erb-parser/src/usage-lens.ts` 头注。
     //
     // **开关不在这儿**：那是 Monaco 的 `codeLens` 编辑器选项，由下面那条独立的偏好 effect
     // 落地（关掉时 Monaco 根本不发请求，省掉一次整篇解析）。
     globalDisposers.push(installCodeLensProvider(monaco, {
-      resolve: (model) => {
-        const path = owningPanePathOf(model);
-        if (path === null) return [];
-        // PS-4：档位与产出预算照旧，只把"同一篇没改过又被问到"那几次整篇拷贝挡掉
-        // （Monaco 在换 model / 改配置 / 注册表变化后都会重新问一遍整篇）
-        return codeLensesFor(model, path, requireKernel());
-      },
+      resolve: (model) => readCodeLenses(model, requireKernel()),
       navigate: (target) => {
         // W9 判据①：注解的落点区间原样穿过命令参数到达这里，载荷仍由同一个出口构造
         requireKernel().bus.emit(
@@ -1351,19 +1671,15 @@ export function ensureGlobalProviders(): void {
       },
     }));
     // 行内提示（LS-R6，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别成员。
-    // 应答判据与 codeLens 逐字同款：只认活动标签的真 model（糖视图挂的是只读派生 model，
-    // 它的行列不属于原文），体量档 `inlayHintsAffordable` 判在请求之前（52,602 行实测
+    // 应答判据与 codeLens 逐字同款：取数落在原文 model 上，糖面把提示行折回预览行、列落到行首
+    //（见 `readInlayHints`），体量档 `inlayHintsAffordable` 判在请求之前（52,602 行实测
     // 50ms/次，档线与 stickyScroll / 面包屑 / codeLens 同一条）。提示说什么（实参落
     // 哪个形参槽）全在 erb-parser（`erb-inlay-hints`），宿主零判据——取舍见
     // `monaco/kojo-inlay-hints.ts` 与 `plugins/erb-parser/src/inlay-hints.ts` 头注。
     // PS-4：这条腿按版本记忆化（Monaco **每次滚动**都重新问，缺省防抖低到 25ms），
     // 交回时只给 Monaco 点名的那一段区间（见 `toMonacoInlayHints` 的 `range`）。
     globalDisposers.push(installInlayHintsProvider(monaco, {
-      resolve: (model) => {
-        const path = owningPanePathOf(model);
-        if (path === null) return [];
-        return inlayHintsFor(model, path, requireKernel());
-      },
+      resolve: (model) => readInlayHints(model, requireKernel()),
     }));
   } catch (e: unknown) {
     // 全有或全无：拆掉**已登记的**每一枚（未登记 = 根本没建起来）、清空登记表、复位 flag，
@@ -1404,6 +1720,9 @@ function teardownGlobalProviders(reason: string): void {
     inlayHintsMemo = new WeakMap();
     codeLensesMemo = new WeakMap();
     codeActionsMemo = new WeakMap();
+    // 糖面的「源行 → 预览行」快表同理换新：键是投影装配出来的那张数组，留着也不脏
+    //（投影换一次就换一张新表 ⇒ 身份变了必然重建），但整套注册拆毁时一并清账最省事也最好读
+    previewRowTables = new WeakMap();
     degradedSeams = new Set();
     // 折叠封顶的可见态同理整套换掉：上一套注册留下的"截了尾巴"那句不许挂到下一个 kernel 的文件上
     foldingCaps = new Map();

@@ -83,7 +83,7 @@ import {
 import { CODE_FONT_BASELINE } from './code-font'; // 编程字体单一真源（与 styles.css 的 --font-code 逐字同一条栈）
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
-import { decideExternalChange, matchOpenedPath } from './external-change';
+import { decideExternalChange, matchOpenedPath, openExternalChangeDiff } from './external-change';
 import { createDocumentBroadcaster } from './document-broadcast';
 import {
   clampSlice,
@@ -108,12 +108,15 @@ import {
   saveSugarMarksPref,
   saveSugarViewPref,
   saveSugarViewPrompted,
+  sourceLineToSugar,
+  sugarLineToSource,
   sugarReadDecorations,
   sugarReadTypography,
   SUGAR_READ_MARK_MAX_LINES,
   sugarSummary,
   sugarViewAllowed,
-  trimSegmentBlanks,
+  trimSegmentBlanksWithMap,
+  type SugarSegmentInput,
 } from './sugar-view';
 import { isSealed, useSealed } from './sealed';
 import { isDirectMode, useDirectMode } from './direct-mode';
@@ -257,6 +260,8 @@ interface SugarCacheEntry {
   stamp: string;
   lineCount: number;
   doc: string;
+  /** 预览行 → 源行（1 基）映射；与 `doc` 同批产出，缓存命中必须连它一起复用 */
+  lineMap: readonly number[];
   sugarLines: number;
 }
 
@@ -443,6 +448,13 @@ export function EditorPane({
   const sugarModelRef = useRef<Monaco.editor.ITextModel | null>(null);
   /** 糖视图挂载前编辑器上的原文 model（糖模式降级取模 / 还原兜底用） */
   const sugarOriginalModelRef = useRef<Monaco.editor.ITextModel | null>(null);
+  /**
+   * 屏幕上这份糖投影的「预览行 → 源行」表（`lineMap[i]` = 预览第 i+1 行的源行号，0 = 无源行）。
+   *
+   * 只定位、不改写：糖是派生只读文本，写类动作一律仍按"不在原文上"否决；但**读**的语义
+   * （跳到某行、转到定义、诊断落点）在预览面上同样有意义，没这张表它们只能整条早退。
+   */
+  const sugarLineMapRef = useRef<readonly number[]>([]);
   /**
    * 投影产物缓存（PS-5，容量 1）：判据 = 路径 + 内容版本号 + 项目摘要 + 行数。
    * 命中即跳过"整篇 getValue + 逐行取原文 + 段扫描"这三条 O(行数) 的腿。
@@ -767,18 +779,26 @@ export function EditorPane({
   const applyReveal = useCallback(() => {
     const ed = editorRef.current;
     if (!ed) return;
-    // 糖视图激活时编辑器显示的是糖 model，其行号与原文不对应；定位请求（校验面板 / 函数树）
-    // 给的是**原文行号**，此刻无法直接映射——宁可不动，也绝不做半吊子映射把用户滚到错位置。
-    if (sugarModelRef.current) return;
     const model = ed.getModel();
     const target = revealRef.current;
     if (!model || !target) return;
+    // 糖视图在屏 ⇒ 发起方给的是**原文行号**，必须先经装配时留下的 `lineMap` 换成预览行。
+    // 源行被折进糖段、没有独立成行时落到"包住它的那段糖"（`sourceLineToSugar` 的退化口径）；
+    // 映射还没装配出来（首帧 / 投影退化）就不动——滚到第一行比原地不动更糟。
+    const line =
+      sugarModelRef.current === null
+        ? target.line
+        : sourceLineToSugar(sugarLineMapRef.current, target.line);
+    if (line === null) return;
     // 行列夹取的判据在 `reveal-position`（纯函数）；行长一律问 model（`getLineMaxColumn`
     // 本身就是 UTF-16 码元口径），宿主不自算字符数。
-    const position = clampRevealPosition(target, {
-      lineCount: model.getLineCount(),
-      maxColumn: (lineNumber) => model.getLineMaxColumn(lineNumber),
-    });
+    const position = clampRevealPosition(
+      { ...target, line },
+      {
+        lineCount: model.getLineCount(),
+        maxColumn: (lineNumber) => model.getLineMaxColumn(lineNumber),
+      },
+    );
     ed.revealLineInCenter(position.lineNumber);
     // W9：落点是**区间**（起点 + 不含端点），不是光标的单个位置——零宽区间天然等价于
     // 旧的 `setPosition`，所以没带 span 的老发起方零风险；带了 span 就把那一处选出来。
@@ -958,6 +978,7 @@ export function EditorPane({
     }
     sugarModelRef.current = null;
     sugarOriginalModelRef.current = null;
+    sugarLineMapRef.current = [];
     // 装饰集是编辑器级的：`setModel` 换回原文那拍已自动清空，这里只弃引用
     // （"被别的 setModel 顶掉"分支同理——model 一 dispose，装饰随之无主）。
     sugarReadCollRef.current = null;
@@ -1062,22 +1083,31 @@ export function EditorPane({
     // 与"每次重算却谁也不留"相比是有界且可预期的（关标签 / 换项目 / 内容改动都会作废它）。
     const hit = sugarCacheRef.current;
     let doc: string;
+    let lineMap: readonly number[];
     let sugarLines: number;
     if (hit && hit.path === path && hit.versionId === versionId && hit.stamp === stamp && hit.lineCount === maxLine) {
       doc = hit.doc;
+      lineMap = hit.lineMap;
       sugarLines = hit.sugarLines;
     } else {
       const text = model.getValue();
       // 段清点：单个贡献抛错不影响其余（与装饰器 / codeAction 同款隔离）
-      const segments: Array<{ fromLine: number; toLine: number; sugarText: string }> = [];
+      const segments: SugarSegmentInput[] = [];
       for (const contribution of kernel.slots.query('ui.editor.liftPreview')) {
         const provide = contribution.provideLiftProject;
         if (typeof provide !== 'function') continue;
         try {
           for (const item of provide.call(contribution, { path, text, project })) {
             const { fromLine, toLine } = clampRange(item.fromLine, item.toLine, maxLine);
-            // 段首尾的空行不进糖文本（否则糖块开头是一大块空白，见 `trimSegmentBlanks`）
-            segments.push({ fromLine, toLine, sugarText: trimSegmentBlanks(item.sugarText) });
+            // 段首尾的空行不进糖文本（否则糖块开头是一大块空白，见 `trimSegmentBlanks`）；
+            // 剪行与剪映射必须同一次做，否则预览行号整体错位且错得静默。
+            const trimmed = trimSegmentBlanksWithMap(item.sugarText, item.sourceLines);
+            segments.push({
+              fromLine,
+              toLine,
+              sugarText: trimmed.sugarText,
+              ...(trimmed.sourceLines ? { sourceLines: trimmed.sourceLines } : {}),
+            });
           }
         } catch (e: unknown) {
           // 能力出错要"退化可见"：记录后继续，糖视图少一段好过整份消失
@@ -1093,11 +1123,13 @@ export function EditorPane({
       // 取原文逐行内容，拼装整份糖文本（纯函数，口径单测钉死在 sugar-view.test.ts）
       const originalLines: string[] = [];
       for (let i = 1; i <= maxLine; i++) originalLines.push(model.getLineContent(i));
-      doc = composeSugarDoc(originalLines, segments);
+      const composed = composeSugarDoc(originalLines, segments);
+      doc = composed.text;
+      lineMap = composed.lineMap;
 
       sugarLines = 0;
       for (const seg of segments) sugarLines += seg.sugarText.split('\n').length;
-      sugarCacheRef.current = { path, versionId, stamp, lineCount: maxLine, doc, sugarLines };
+      sugarCacheRef.current = { path, versionId, stamp, lineCount: maxLine, doc, lineMap, sugarLines };
     }
 
     // 只读内存 model：`inmemory://` scheme（**非** `file:`，避免与真文件 model 冲突被复用）。
@@ -1110,6 +1142,7 @@ export function EditorPane({
     );
     sugarModelRef.current = sugarModel;
     sugarOriginalModelRef.current = model;
+    sugarLineMapRef.current = lineMap;
     // 糖 model 同样按**行数**落 Monaco 降级选项：主切换（见加载 effect）给真 model 发了
     // 档位补丁，这里若只发 `readOnly`，一份几万行的投影会带着全文级特性
     // （小地图 / 粘性滚动 / 括号对着色 / 整篇找同词）上屏 ⇒ 滚动即卡死。先落选项再挂 model。
@@ -1477,13 +1510,28 @@ export function EditorPane({
             clashCount > 0
               ? `磁盘上对「${path}」的修改和你的未保存修改有 ${clashCount} 处撞到了一起——软件没有替你取舍，编辑器里仍是你的内容；现在保存会覆盖磁盘上的新内容。`
               : `「${path}」已在磁盘上被修改，但你有未保存的修改——保存会覆盖磁盘内容。`,
-          action: {
-            label: '重新加载（放弃我的修改）',
-            run: () => {
-              forceReloadPathsRef.current.add(path);
-              void reloadFromDiskRef.current?.(path);
+          // 两个动作并列，不替用户选：「看差异」把两边真相摊开（内存侧取点击时刻现值，
+          // 盘侧现读——都不许用这次通知闭包住的旧文本），「重新加载」才是放弃我的修改。
+          actions: [
+            {
+              label: '查看差异',
+              run: () => {
+                const live = entriesRef.current.get(path);
+                if (!live || live.model.isDisposed()) return; // 与 applyReload 同款护栏
+                void openExternalChangeDiff(
+                  { decision, path, memoryText: live.model.getValue() },
+                  { io: kernel.io, emitDiffOpen: (p) => kernel.bus.emit('ui.diffView.open', p), notify },
+                );
+              },
             },
-          },
+            {
+              label: '重新加载（放弃我的修改）',
+              run: () => {
+                forceReloadPathsRef.current.add(path);
+                void reloadFromDiskRef.current?.(path);
+              },
+            },
+          ],
         });
       }
     },
@@ -1750,6 +1798,7 @@ export function EditorPane({
       entriesRef,
       filePathRef,
       sugarModelRef,
+      sugarLineMapRef,
       pendingActionsRef,
       actionSeqRef,
       crumbTreeCacheRef,
