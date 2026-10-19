@@ -9,7 +9,15 @@ import {
 } from '@kojo/plugin-api';
 import type { EditorCodeAction } from '@kojo/plugin-api';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
-import { snapshot, subscribe, currentVersion, type EditorProblem } from './problem-store';
+import {
+  snapshot,
+  subscribe,
+  currentVersion,
+  summarizeProblems,
+  SEVERITY_TINT,
+  PROBLEM_SCOPE,
+  type EditorProblem,
+} from './problem-store';
 import { applyPanelRowNav } from './panel-row-nav';
 import {
   ALL_SEVERITIES,
@@ -73,12 +81,8 @@ export function problemRevealSpan(problem: Pick<EditorProblem, 'span'>): RevealS
   return revealSpanOf({ span: problem.span });
 }
 
-/** 严重度配色：与 `ui-convention-report`、`.conv-dot` 同口径 */
-const SEVERITY_COLOR: Record<EditorProblem['severity'], string> = {
-  error: '#e06c75',
-  warning: '#d19a66',
-  info: '#7f9cc0',
-};
+/** 严重度配色：真源在 `problem-store.SEVERITY_TINT`（面板 / 状态栏 / 文件树共用一色） */
+const SEVERITY_COLOR = SEVERITY_TINT;
 
 /** 严重级的中文短名（过滤勾选框与表头计数同一份；文案真源在此一处） */
 const SEVERITY_LABEL: Record<ProblemSeverity, string> = {
@@ -157,14 +161,10 @@ export function ProblemPanel({
     [],
   );
 
-  let error = 0;
-  let warning = 0;
-  let info = 0;
-  for (const it of items) {
-    if (it.severity === 'error') error++;
-    else if (it.severity === 'warning') warning++;
-    else info++;
-  }
+  // 计数只从 `summarizeProblems` 来（工包 E 判据①：状态栏那颗、面板表头、面板组头、
+  // 文件树徽标共用同一次遍历的同一份结果；这里再数一遍就是分叉的起点）
+  const summary = summarizeProblems(items);
+  const { error, warning, info } = summary.counts;
 
   const header =
     items.length === 0
@@ -175,6 +175,8 @@ export function ProblemPanel({
   const shownCount = windowSize(filtered.length, windowEnd, PROBLEM_WINDOW);
   const hidden = filtered.length - shownCount;
   const groups = groupProblems(filtered);
+  /** 组头数字走同一份派生（键 = 原始路径，与 `groupProblems` 的组键逐字同形） */
+  const filteredSummary = summarizeProblems(filtered);
   const filtering = filterText.trim() !== '' || sevSel.length !== ALL_SEVERITIES.length;
 
   const showFlash = (key: string, text: string): void => {
@@ -400,6 +402,10 @@ export function ProblemPanel({
         <ul ref={listRef} className="prob-list">
           {groups.map((g) => {
             const isCollapsed = collapsed.has(g.path);
+            // 组头数字来自 `filteredSummary`（与表头 / 状态栏 / 树徽标同一次遍历）；
+            // `g.counts` 仍留在 `groupProblems` 的产物里供别处用，但**不再上屏**——
+            // 上屏的第二把尺子就是分叉的开始。
+            const gc = filteredSummary.byPath.get(g.path)!;
             // 组内行与全局下标同序配对（`indices` 与 `items` 一一同序），再按窗口裁
             const rows = g.indices
               .map((idx, i) => ({ idx, p: g.items[i]! }))
@@ -420,14 +426,14 @@ export function ProblemPanel({
                     {g.label}
                   </span>
                   <span className="prob-group-counts">
-                    {g.counts.error > 0 ? (
-                      <span style={{ color: SEVERITY_COLOR.error }}>✕ {g.counts.error}</span>
+                    {gc.error > 0 ? (
+                      <span style={{ color: SEVERITY_COLOR.error }}>✕ {gc.error}</span>
                     ) : null}
-                    {g.counts.warning > 0 ? (
-                      <span style={{ color: SEVERITY_COLOR.warning }}>⚠ {g.counts.warning}</span>
+                    {gc.warning > 0 ? (
+                      <span style={{ color: SEVERITY_COLOR.warning }}>⚠ {gc.warning}</span>
                     ) : null}
-                    {g.counts.info > 0 ? (
-                      <span style={{ color: SEVERITY_COLOR.info }}>ℹ {g.counts.info}</span>
+                    {gc.info > 0 ? (
+                      <span style={{ color: SEVERITY_COLOR.info }}>ℹ {gc.info}</span>
                     ) : null}
                   </span>
                 </button>
@@ -460,44 +466,39 @@ export function ProblemPanel({
  * 状态栏「问题」小件：订阅 problem-store，显示 `✕ n  ⚠ n  ℹ n`，点击打开问题面板。
  *
  * 配色口径与 `ui-convention-report` 的 `StatusCounts` 注释一致：**只给 error 上色**，
- * 其余走 dim——状态栏是项目级常态计数，不该全量铺严重度色（否则视觉重量压过同排控件）。
+ * 其余走 dim——状态栏是常态计数，不该全量铺严重度色（否则视觉重量压过同排控件）。
  * 全为 0 时显示 dim 的「无问题」，不描红。
  *
- * **口径必须上屏**（2026-10-19 自造重叠清账批，判据②）：同排那枚「项目级约定计数」数的
- * 是整份校验报告（含未打开文件与整项目结论），这一枚只数**已打开文件面上正画着的波浪线**
- * （来自全部装饰贡献方）。两数天生不等、也不该被硬凑成相等，所以各自的 tooltip 说清自己
- * 数的是什么，不留两个裸数字并排。C-1a 起口径还**上屏**：这枚带可见标签「本文件」，
- * 同排那枚「项目」标签由 styles-project.css 给 `.sb-diag` 补，两簇之间有分隔线。
+ * **标签与计数同源同口径**（工包 E，2026-10-19）：可见标签 `{PROBLEM_SCOPE.label}` 与
+ * tooltip 都取自 `problem-store`，计数取 `summarizeProblems(items).counts`——与面板表头、
+ * 面板组头、文件树徽标是同一次派生的同一个数字。旧形态是标签写「本文件」、数字却是
+ * **全部已打开文件的合并值**（活动文件换了，其余标签的诊断照旧留在计数里），
+ * 那就是"三处三个口径"里最难发现的一处：读的人以为自己在看当前文件。
+ * 按活动文件计数需要宿主把活动路径送进来（`ShellLayout` / `EditorPane` 不在本批独占集里），
+ * 所以这一批让标签说实话，而不是给一个假口径。
+ *
+ * 同排那枚「项目级约定计数」数的是整份校验报告（含未打开文件与整项目结论），两数天生不等，
+ * 各自的 tooltip 说清自己数的是什么（`styles-project.css` 给 `.sb-diag` 补「项目」标签，
+ * 两簇之间有分隔线）。
  */
-const PROBLEMS_TITLE =
-  '当前已打开文件的波浪线（各诊断贡献方合并；不含未打开文件与整项目结论 ≠ 项目级约定计数）· 问题面板 (Ctrl+Shift+M)';
-
 export function ProblemsStatusItem({ onClick }: { onClick: () => void }): ReactElement {
   const items = useProblems();
+  const { error, warning, info } = summarizeProblems(items).counts;
 
   if (items.length === 0) {
     return (
-      <button className="sb-problems" title={PROBLEMS_TITLE} onClick={onClick}>
-        {/* 可见范围标签（C-1a）：同排左边那枚是「项目」（插件的 `.sb-diag`，标签由 CSS 补），
+      <button className="sb-problems" title={PROBLEM_SCOPE.title} onClick={onClick}>
+        {/* 可见范围标签：同排左边那枚是「项目」（插件的 `.sb-diag`，标签由 CSS 补），
             这一枚数的是**已打开文件**的波浪线——不悬停也该一眼分清，中间由 CSS 画一道分隔。 */}
-        <span className="sb-scope-tag">本文件</span>
+        <span className="sb-scope-tag">{PROBLEM_SCOPE.label}</span>
         <span className="dim">无问题</span>
       </button>
     );
   }
 
-  let error = 0;
-  let warning = 0;
-  let info = 0;
-  for (const it of items) {
-    if (it.severity === 'error') error++;
-    else if (it.severity === 'warning') warning++;
-    else info++;
-  }
-
   return (
-    <button className="sb-problems" title={PROBLEMS_TITLE} onClick={onClick}>
-      <span className="sb-scope-tag">本文件</span>
+    <button className="sb-problems" title={PROBLEM_SCOPE.title} onClick={onClick}>
+      <span className="sb-scope-tag">{PROBLEM_SCOPE.label}</span>
       <span className="sb-problems-item" style={error > 0 ? { color: SEVERITY_COLOR.error } : undefined}>
         ✕ {error}
       </span>
