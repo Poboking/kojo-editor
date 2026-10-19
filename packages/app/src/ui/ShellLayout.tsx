@@ -102,11 +102,19 @@ import {
 import { UpdateDialog } from './UpdateDialog';
 import { isTauri } from '../bridge/invoke';
 import { modalDepth, closeTopModal } from './modal-stack';
-import { resolveEscLayer, isComposingEvent, nextRovingIndex } from './shell-keys';
+import {
+  isComposingEvent,
+  isEditableKeyTarget,
+  nextRovingIndex,
+  resolveEscLayer,
+  resolveGlobalKeyGate,
+  shouldRunGlobalCommand,
+} from './shell-keys';
 import {
   buildCommandRegistry,
   chordFromEvent,
   chordEquals,
+  commandEnabled,
   parseKeybinding,
   type ShellCommandSpec,
 } from './commands';
@@ -1011,7 +1019,18 @@ export function ShellLayout(props: Props): ReactElement {
       composingRef.current = false;
     };
     const onKey = (e: KeyboardEvent): void => {
-      if (isComposingEvent(e, composingRef.current)) return;
+      // 三层早退（顺序即优先级，判定单源在 shell-keys 的 GLOBAL_KEY_GATE_PRIORITY）：
+      // 1) 内层已 preventDefault ⇒ 让位；2) 输入法合成期 ⇒ 键属于 IME；
+      // 3) 事件目标正在输入（树内改名/过滤框）⇒ Ctrl+W 不许关标签、Ctrl+B 不许折侧栏，
+      //    否则输入框 blur 触发 onCancel，一次改名静默作废。命中即 return：
+      //    不 preventDefault、不 run，原生输入行为原样保留。
+      // Monaco 的隐藏 textarea 被 isEditableKeyTarget 放行，编辑器内快捷键照旧。
+      const keyEvidence = {
+        defaultPrevented: e.defaultPrevented,
+        composing: isComposingEvent(e, composingRef.current),
+        editableTarget: isEditableKeyTarget(e.target),
+      };
+      if (resolveGlobalKeyGate(keyEvidence) !== null) return;
       const k = e.key.toLowerCase();
       // Ctrl+K Z 和弦：先记 Ctrl+K，1.5s 内按 Z 触发（两键序列，注册表单键表达不了）
       if (chordAt > 0) {
@@ -1062,6 +1081,17 @@ export function ShellLayout(props: Props): ReactElement {
         if (!cmd.keybinding || cmd.keybinding.includes(' ')) continue; // 和弦走上方特例
         const parsed = parseKeybinding(cmd.keybinding);
         if (parsed && chordEquals(parsed, chord)) {
+          // 启用态闸（与命令面板同一条 `commandEnabled` 判据）：无项目时 Ctrl+N 在面板里
+          // 是灰的，键盘侧也必须按不动——false ⇒ 不 preventDefault、不 run，让原生行为接手。
+          // 停在这一条命令（不回退到下一条同键命令）：分发仍是「注册表顺序先到先得」。
+          if (
+            !shouldRunGlobalCommand({
+              ...keyEvidence,
+              enabled: commandEnabled(cmd, commandCtxRef.current),
+            })
+          ) {
+            return;
+          }
           e.preventDefault();
           void cmd.run(commandCtxRef.current);
           return;
