@@ -1,0 +1,3 @@
+# wasm 体积账 / 冷解析读数的临时产物（tools/wasm-size-probe.mjs 与一次性 wasm-opt 后处理落在这里）。
+# 出货 wasm 在包根 tree-sitter-kojo.wasm，绝不被本目录里的变体覆盖。
+tmp/
