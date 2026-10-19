@@ -6,6 +6,8 @@
  * - 循环：`FOR … NEXT` / `WHILE … WEND` / `REPEAT … REND` / `DO … LOOP`
  *   （`LOOP <条件>` 的**尾随条件**也翻：`DO` 一族在盘上只以这一形出现）；
  * - 跳转与出口：`GOTO` / `JUMP` / `$标签` / `BREAK` / `CONTINUE` / `RESTART` / `CATCH`；
+ * - **TRY 系九枚**（`TRYC{GOTO,JUMP,CALL}` ±`FORM` 六枚 + `TRY{CALL,GOTO,JUMP}LIST` 三枚）：
+ *   糖层**无写形**（写形归工包 F），本层只给**中性显示形** `试探 原形 <记号> <原文>`；
  * - 数据表：`PRINTDATA[…]` / `DATAFORM` / `DATA` / `ENDDATA`（`DATALIST` / `ENDLIST` 分组无义项出处 ⇒ 不翻）；
  * - 预处理行：`#DIM` / `#DIMS` / `#GLOBAL` / `#LOCALSIZE` / `#LOCALSSIZE` / `#FUNCTION` /
  *   `#FUNCTIONS` / `#SFUNCTION` / `#XFUNCTION` / `#TESTMEMORY` 等。
@@ -18,8 +20,10 @@
  *    闭合行是同一套 `<块头词> + 结束`（`如果结束` / `当结束` / `循环结束` / `出错处理结束` / `数据表结束`）。
  *    本表与 `project.ts` 的 `SUGAR_CONTROL`（`如果 X：` / `当 X：` / `是 v：` / `否则：`）同一口径——
  *    预览里同一种块只会有一种中文写法。
- * 2. **本层只剩预处理声明一族词形**（`声明…` / `大小` / `预处理 <记号原文>`）：那批是**文件级声明**、
- *    糖层没有写形，登记进 `KEYWORDS` 会让发版覆盖率闸要求作者用一种写不回去的写法，故留在本文件。
+ * 2. **本层只有两类显示词形**（`声明…` / `大小` / `预处理 <记号原文>`，以及 TRY 系的 `试探`）：
+ *    前者是**文件级声明**、后者是**糖层无写形的控制流**（TRY 系九枚的写形归工包 F），
+ *    登记进 `KEYWORDS` = 承诺"写得回去"⇒ 覆盖率闸会要求作者用一种写不回去的写法，故留在本文件、
+ *    **不进词表**（显示形靠本表的记号名单触发，与 `KEYWORDS` 无关）。
  *    逐字钉值见 `tests/control-word-single-source.test.ts`。
  *
  * ## 三条判据（都与契约 `types.ts` 的红线绑在一起）
@@ -38,6 +42,7 @@
  */
 
 import { NOTIN_KEYWORDS, blockEndWord, operatorTable, primaryWord as word } from '../keywords';
+import { TRY_CATCH_OPEN, TRY_LIST_OPEN } from '../sugar-ident';
 import type { NativeDisplayInput, NativeDisplayLookup } from './types';
 
 /* ------------------------- 词形：全部由既有真源派生 ------------------------- */
@@ -89,6 +94,38 @@ const ECHO_W = word('inline.engineEcho'); // 原形（记号回显：义项不�
  */
 const SIZE_W = '大小';
 const PRE_W = '预处理';
+
+/**
+ * TRY 系九枚的**中性显示形**词头（`试探 原形 TRYCGOTO *先, LABEL:目标`）。
+ *
+ * 为什么这一枚也**不进 `KEYWORDS`**（同上面预处理那条理由，但更硬）：
+ * 糖层对 TRY 系**连写形都还没有**（`keywords.ts:213` 的欠账、写形归工包 F），
+ * 而登记 = 承诺写得回去 ⇒ 发版覆盖率闸会去要求作者用一种写不回去的写法。
+ * 显示形的触发靠 `TRY_NEUTRAL_OPEN` 那张**记号名单**（`sugar-ident.ts` 的九枚真源），
+ * 与 `KEYWORDS` 无耦合——所以工包 F 哪天补上写形时，只需把 `TRY_W` 换成 `word(...)`，
+ * 本层零结构改动。
+ *
+ * 为什么形是 `试探 原形 <记号> <原文>` 而不是 `试探 <原文>`：
+ * - `原形` 是本文件既有的**记号回显**装置（`数据表 原形 PRINTDATADL：` / `条目 原形 DATA <原文>`），
+ *   义项不担保的那批变体都用它把引擎记号逐字带走 ⇒ 读者一眼看出"后面那串是引擎原文，不是糖写法"；
+ * - 九枚分两个配对档（六枚配 `CATCH`，三枚配 `ENDFUNC`，见 `sugar-ident.ts` 的
+ *   `TRY_CATCH_OPEN` / `TRY_LIST_OPEN`），**配对档位我不替读者下结论**，但**类**要认得出——
+ *   与 `project.ts` 的 `停用 · <原文>` / `函数 · <原文>` 同一口径：已知结构不再喊"没读懂"，
+ *   也不冒充糖。
+ *
+ * 载荷（目标 / 清单实参）是**数据不是条件** ⇒ 逐字带走，不剥 `$`/`*`、不中文化运算符，
+ * 判据与 `JUMP` / `DATAFORM` 完全同一套。
+ */
+const TRY_W = '试探';
+
+/**
+ * TRY 系九枚（= 糖层无写形、只给中性显示形的那九枚）。
+ *
+ * **名单从 `sugar-ident.ts` 派生**，本层不抄第二份：那两集合是识别核里"哪几枚开块、配哪个闭合"的
+ * 唯一真源。`statement.ts` 认领的 `TRYCALL` / `TRYCALLFORM` / `TRYJUMP`（单行语句，不在这九枚里）
+ * 因此**不受本层影响**——pass 顺序（control 先、statement 后）照旧由这张名单划界。
+ */
+const TRY_NEUTRAL_OPEN: ReadonlySet<string> = new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN]);
 
 /* --------------------------- 表达式侧（条件形） --------------------------- */
 
@@ -334,6 +371,17 @@ function renderDataOpen(kind: string): string {
   return kind === 'PRINTDATA' ? `${DATA_W}：` : `${DATA_W} ${ECHO_W} ${kind}：`;
 }
 
+/**
+ * TRY 系九枚 ⇒ 中性显示形（**只读面**，不改编译/转译产物、不新增写形）。
+ *
+ * 裸记号（无载荷）也给中性形而不返 `null`：那九枚**是已知结构**，落 `未识别语句` 就是在
+ * 谎报"工具没读懂"；`needExpr` 那条"空表达式不猜"判据管的是**条件位**（猜错条件比留白更坏），
+ * 这里载荷本来就不参与语义，回显记号不猜任何东西。
+ */
+function renderTry(kind: string, payload: string): string {
+  return payload.length === 0 ? `${TRY_W} ${ECHO_W} ${kind}` : `${TRY_W} ${ECHO_W} ${kind} ${payload}`;
+}
+
 /** `#DIM A 10` / `#FUNCTION A(x)` / `#SFUNCTION …` */
 function renderPreprocessor(body: string): string | null {
   const m = /^#([A-Za-z_][A-Za-z0-9_]*)(?:\s+([\s\S]*))?$/.exec(body);
@@ -383,6 +431,10 @@ function renderBody(body: string, input: NativeDisplayInput): string | null {
   const kind = (m[1] ?? '').toUpperCase();
   const payload = (m[2] ?? '').trim();
   if (PRINTDATA_TOKEN_RE.test(kind) && payload.length === 0) return renderDataOpen(kind);
+  // TRY 系九枚：糖层无写形 ⇒ 中性显示形（名单在 `sugar-ident`，本层不抄第二份）。
+  // 位置在两张表**之前**：这九枚与 `OPENERS` / `STANDALONE` 的记号零交集，先拦先赢，
+  // 工包 F 哪天真给了写形，把这条分支删掉就回到 `OPENERS` 的正常轨道。
+  if (TRY_NEUTRAL_OPEN.has(kind)) return renderTry(kind, payload);
   // 无体独立行（整行只有那枚记号）先取 `STANDALONE`——`LOOP` 一枚两表都在，
   // 裸形是收束行、带体形是条件尾随形，靠"行里除了记号还有没有别的东西"分诊，不靠尾部标点。
   const standalone = STANDALONE.get(kind);
