@@ -9,13 +9,18 @@
  * ③ 诊断（码 + 严重度 + 行号）逐条相等 ⇒ 结构错误不被"顺手修掉"，也不被改坏。
  *
  * 顺带自证幂等（第二轮零改动）与行尾逐条不变。
+ *
+ * **ERB 形半边**（本批新增）：取样面 = 仓库全部 `.ERB/.erb`（goldens 翻译样张是语料派生的
+ * 真 ERB 形）+ 钉住合成小样（形态取自基线语料实测，见该组头注；不含语料真实文本）。
+ * 钉两件事：①格式化幂等（第二轮零改动）；②**数据表块体与停用死区逐字节不变**——
+ * 判据取 `formatter.ts` 的 `erbBodyLineMask` 本体（同一真源，测试不抄第二份状态机）。
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
-import { computeFormatEdits, formatText } from '../src/formatter';
+import { computeFormatEdits, erbBodyLineMask, formatText } from '../src/formatter';
 import { splitLogicalLines } from '../src/lexer';
 import { createSugarTranspileService } from '../src/service';
 import { stubDict, stubFaceTable } from './support';
@@ -163,3 +168,148 @@ describe('保层级的单位换算（`indentLevel` 的硬约束）', () => {
     expect(out.split('\n')[3]).toBe('; 分隔\t注释');
   });
 });
+
+/* ============================== ERB 形：块上下文闸（本批新增） ============================== */
+
+/** 仓库自带的 `.ERB/.erb` 样张（goldens 是语料派生的真 ERB；mini-game 递归收） */
+function sampleErb(): { name: string; text: string }[] {
+  const dirs = [
+    [path.join(ROOT, 'packages', 'plugins', 'kojo-sugar', 'tests', 'goldens'), false],
+    [path.join(ROOT, 'fixtures', 'sugar'), false],
+    [path.join(ROOT, 'fixtures', 'scaffold'), false],
+    [path.join(ROOT, 'fixtures', 'mini-game'), true],
+  ] as const;
+  const out: { name: string; text: string }[] = [];
+  const walk = (d: string, recursive: boolean): void => {
+    let entries;
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) {
+        if (recursive) walk(f, true);
+      } else if (e.isFile() && /\.erb$/i.test(e.name)) {
+        out.push({ name: path.relative(ROOT, f), text: readFileSync(f, 'utf8') });
+      }
+    }
+  };
+  for (const [d, rec] of dirs) walk(d, rec);
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** 物理行拆分（与 `formatter.ts` 的 `splitPhysical` 同判据；这里只取内容） */
+const erbLines = (text: string): string[] => text.split(/\r\n|\r|\n/);
+
+describe('真实 ERB 样张：块体/死区字节不变、幂等、行尾不变', () => {
+  const samples = sampleErb();
+
+  it('取样面非空，且确有块体行与区外改写（护栏别在空面上自欺）', () => {
+    expect(samples.length).toBeGreaterThanOrEqual(12);
+    let protectedLines = 0;
+    let outsideEdits = 0;
+    for (const s of samples) {
+      protectedLines += erbBodyLineMask(erbLines(s.text)).filter(Boolean).length;
+      outsideEdits += computeFormatEdits(s.text, 'erb').length;
+    }
+    // 实测面：15 个文件、保护区 139 行（goldens 的 daily/event 翻译样张是大头）、区外编辑 19 条
+    expect(protectedLines).toBeGreaterThanOrEqual(100);
+    expect(outsideEdits).toBeGreaterThan(0);
+  });
+
+  for (const s of samples) {
+    it(`${s.name}：块体逐字节不动、区外规则照常、第二轮零改动`, () => {
+      const before = erbLines(s.text);
+      const mask = erbBodyLineMask(before);
+      const out = formatText(s.text, 'erb').text;
+      const after = erbLines(out);
+      expect(after.length, '行数不许变（edit 永不跨行）').toBe(before.length);
+      for (let i = 0; i < before.length; i++) {
+        if (mask[i]) expect(after[i], `第 ${i + 1} 行是数据表块体/停用死区，一个字节都不许动`).toBe(before[i]);
+      }
+      expect(eols(out), '行尾序列必须逐条不变').toEqual(eols(s.text));
+      expect(computeFormatEdits(out, 'erb'), '第二轮应当零改动（幂等）').toEqual([]);
+    });
+  }
+});
+
+describe('ERB 块体/死区钉住小样（合成等价形态，判据全覆盖）', () => {
+  /**
+   * 来源：合成等价形态，**不含语料真实文本**；每一枚行形态都有基线盘实测出处
+   * （3,818 个 `.ERB` / 4,115,008 行：数据表 3,874 块 / 块体 29,518 行——开词裸形 3,576、
+   * 带尾形 298（`PRINTDATAL LOCAL` / `STRDATA 台词`），条目 `DATA`/`DATAFORM` 20,132 行；
+   * 停用区 2,186 对 / 区内 95,616 行。今天逐行规则改动 19,975 行，其中 **1,290 行落在区内**：
+   * 死区全角缩进折半 103、区内注释折算 151、区内纯空白清空 1,036。本小样把这四类伤害形态
+   * **逐类钉死**（代表的是判据覆盖面，不是语料的行数分数）。
+   */
+  const FW = FULLWIDTH_SPACE;
+  const blockSrc = [
+    `${FW}PRINTL 区外缩进要折`, //   1 区外：折（teeth）
+    `;　区外注释要折`, //           2 区外：折（teeth）
+    'PRINTDATA', //                   3 开词=结构行
+    `${FW}${FW}DATA ${FW}表体行不许动`, //      4 块体：缩进+参数逐字节钉
+    '    ', //                        5 块体：纯空白行不清空
+    `;　块体注释不许折`, //                  6 块体：注释折算也不做
+    'DATALIST', //                    7 分组记号：同属块体（判不准就不动）
+    `${FW}DATAFORM ${FW}分组内不许动`, //       8 块体
+    'ENDLIST', //                     9 块体
+    'ENDDATA', //                     10 收束=结构行
+    'STRDATA 台词', //                11 第二族开词（带尾形，结构行）
+    `${FW}DATAFORM ${FW}串表体不许动`, //       12 块体
+    'ENDDATA', //                     13 收束
+    `;　停用标记的引用形不是区首`, //          14 区外注释：折（teeth；含 `[SKIPSTART]` 字样的注释不误开区）
+    ';[SKIPSTART]', //                15 区外注释、非标记（不折：无全角）
+    '[SKIPSTART]', //                 16 死区首=结构行
+    `${FW}散文式自注释不许动`, //              17 死区正文：全角缩进不折（盘上 103 行同类）
+    '   ', //                         18 死区纯空白：不清空（盘上 1,036 行同类）
+    `;　死区注释不许折`, //                  19 死区注释：不折（盘上 151 行同类）
+    '[SKIPEND]', //                   20 死区尾=结构行
+    `${FW}PRINTL 出区后继续折`, //             21 区外：折（teeth）
+  ].join('\n');
+
+  it('块体/死区行零编辑，区外三类规则照常生效，且幂等', () => {
+    const before = erbLines(blockSrc);
+    const mask = erbBodyLineMask(before);
+    const inBody = [4, 5, 6, 7, 8, 9, 12, 17, 18, 19].map((n) => n - 1);
+    for (const i of inBody) expect(mask[i], `第 ${i + 1} 行必须判为块体/死区`).toBe(true);
+    for (const i of [2, 9, 10, 15, 19]) expect(mask[i], `第 ${i + 1} 行是结构行，不该判为体`).toBe(false);
+
+    const { text: out, edits } = formatText(blockSrc, 'erb');
+    // 伤害面回退即红：块体/死区逐字节比对
+    const after = erbLines(out);
+    for (let i = 0; i < before.length; i++) {
+      if (mask[i]) expect(after[i], `第 ${i + 1} 行被动过`).toBe(before[i]);
+    }
+    expect(edits.map((e) => e.line), '区外只该动这四行').toEqual([1, 2, 14, 21]);
+    expect(edits.map((e) => e.text)).toEqual([
+      '  PRINTL 区外缩进要折',
+      '; 区外注释要折',
+      '; 停用标记的引用形不是区首',
+      '  PRINTL 出区后继续折',
+    ]);
+    expect(computeFormatEdits(out, 'erb'), '第二轮应当零改动').toEqual([]);
+  });
+
+  it('未收束的开词：其后整段按块体保守不动（判不准就不动的口径）', () => {
+    const src = ['@FUNCTION 甲', 'PRINTDATA', `${FW}DATA ${FW}未收束也不动`, '   '].join('\n');
+    expect(formatText(src, 'erb').text).toBe(src);
+    expect(computeFormatEdits(src, 'erb')).toEqual([]);
+  });
+
+  it('掩码语义单点自证：结构行不算体、停用区优先于数据表', () => {
+    expect(erbBodyLineMask(['PRINTDATA', 'DATA 甲', 'ENDDATA', 'DATA 游离在区外'])).toEqual([
+      false, true, false, false,
+    ]);
+    // 停用区优先：区内的 PRINTDATA/ENDDATA 都是正文，不推动数据表深度
+    expect(erbBodyLineMask(['[SKIPSTART]', 'PRINTDATA', 'ENDDATA', '[SKIPEND]', 'DATA x'])).toEqual([
+      false, true, true, false, false,
+    ]);
+    // 数据表内的嵌套开词：深度计到配对收束；两枚 `ENDDATA` 各归其块、都是结构行
+    expect(erbBodyLineMask(['PRINTDATA', 'PRINTDATA', 'DATA 甲', 'ENDDATA', 'DATA 乙', 'ENDDATA', 'PRINTL 出块'])).toEqual([
+      false, true, true, false, true, false, false,
+    ]);
+  });
+});
+

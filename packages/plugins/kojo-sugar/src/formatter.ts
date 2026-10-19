@@ -31,7 +31,9 @@
  * 3. **行尾**：编辑**永不跨物理行**（每条 edit 落在同一行内），换行符原样保留，
  *    混合行尾也原样保留 —— 既不会把 LF 变成 CRLF，也不会把 CRLF 变成 LF。
  *
- * 一句话放行判据：**只动"空白身份明确"的位置**——行首缩进、纯空白行、注释区。
+ * 一句话放行判据：**只动"空白身份明确"的位置**——行首缩进、纯空白行、注释区，
+ * 且**不在块体内**：ERB 形的数据表块体与停用死区由 `erbBodyLineMask` 整行划出放行面外
+ * （那里的行是正文/死区而非代码，动了就是改内容）。
  * 台词正文与引号内的值是打印给玩家的字符 ⇒ 一个都不动；`@` 原生块逐行进产物 ⇒ 整块不动。
  * 唯一被允许的产物空白差 = 糖区**注释文本**里的全角空格折算（注释行会原样落进产物注释），
  * 产物里可打印的字符一个不许变 —— 由 `tests/formatter.invariants.test.ts` 的
@@ -184,11 +186,64 @@ function halfwidthInIndent(s: string): string {
   return s.includes(FULLWIDTH_SPACE) ? s.split(FULLWIDTH_SPACE).join('  ') : s;
 }
 
+/* ========================= ERB 块上下文（正文不是代码的两类区） =========================
+ *
+ * 形态清单取**引擎记号事实**（本包 `sugar-ident.ts` `CONTROL_SHAPES` 里 `open:'data'` 一族：
+ * `PRINTDATA` 九变体 + `STRDATA`，收束同为 `ENDDATA`；停用区 `SKIPSTART`/`SKIPEND` 按
+ * `erb-parser/scanner.ts` 同口径的 trimmed **严格等值**，大小写/带尾别名一概不认）——不自造。
+ * 开词/收束允许带尾（实据：`PRINTDATAL LOCAL`、`STRDATA 台词`、尾注释；只认裸词会漏护整块块体）。
+ *
+ * 判据保守：**拿不准是不是正文区就不动这一行**。开词后到配对收束前的一切行都算块体
+ * （含空行/注释/分组记号）；到文件尾仍未收束 ⇒ 其后全按块体（宁可少格式化，不多改字节）。
+ * 开词行与收束行本身是结构行（逐字节比对与语料实测都确认其空白是排版），不在块体内。
+ * 停用区优先于数据表（与 scanner.ts 检查序一致）：区内的一切行都只找 `[SKIPEND]`。
+ *
+ * 语料实测（基线盘 3,818 个 `.ERB` / 4,115,008 行）：数据表 3,874 块 / 块体 29,518 行，
+ * 停用区 2,186 对 / 区内 95,616 行；今天被逐行规则改动的 19,975 行里 **1,290 行落在块体/死区**
+ * （死区全角缩进折半 103、区内注释折算 142、区内空白行清空 1,036；表体内 26）——本状态机
+ * 把这些全部退回"一个字节不动"。导出只为让不变量闸复用同一判据（禁止第二份实现）。
+ */
+
+/** 数据表开词（`PRINTDATA` 九变体与 `STRDATA`；可带参数或尾注释） */
+const ERB_DATA_OPEN_RE = /^(?:PRINTDATA[A-Z]*|STRDATA)(?:[ \t;]|$)/;
+/** 数据表收束（同为 `ENDDATA`；可带尾注释） */
+const ERB_DATA_CLOSE_RE = /^ENDDATA(?:[ \t;]|$)/;
+
+/** 每行是否"正文区行"（块体或死区）；与入参等长。导出面仅测试与包内使用，不进插件公共清单 */
+export function erbBodyLineMask(lines: readonly string[]): boolean[] {
+  const mask = new Array<boolean>(lines.length).fill(false);
+  let dataDepth = 0;
+  let inSkip = false;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i]!.trim();
+    if (inSkip) {
+      // 区内一切行都是死区正文；`[SKIPEND]` 标记行本身是结构行，不在其中
+      if (t === '[SKIPEND]') inSkip = false;
+      else mask[i] = true;
+      continue;
+    }
+    if (dataDepth > 0) {
+      mask[i] = true;
+      if (ERB_DATA_OPEN_RE.test(t)) dataDepth++;
+      else if (ERB_DATA_CLOSE_RE.test(t)) {
+        mask[i] = false; // 收束行本身是结构行
+        dataDepth--;
+      }
+      continue;
+    }
+    if (t === '[SKIPSTART]') inSkip = true; // 标记行本身是结构行
+    else if (ERB_DATA_OPEN_RE.test(t)) dataDepth = 1; // 开词行本身是结构行
+  }
+  return mask;
+}
+
 /**
  * ERB 一行的新内容（`null` = 不用改）。
  *
  * 注释判据刻意只认**整行注释**（去缩进后以 `;` 开头）：ERB 的行中 `;` 既可能是注释、
  * 也可能就在打印文本里（`PRINTFORMW` 的参数不是带引号的串），这一层分不开 ⇒ 不动。
+ * 同一个"分不开就不动"做到块这一层：调用方先用 `erbBodyLineMask` 把正文区
+ * （数据表块体 / 停用死区）整行剔除，本函数只见结构行——它自己仍是逐行纯函数。
  */
 function erbNewContent(content: string, rules: ResolvedRules): string | null {
   if (content.length === 0) return null;
@@ -251,7 +306,9 @@ function newContents(text: string, dialect: FormatDialect, rules: ResolvedRules)
   const out: (string | null)[] = lines.map(() => null);
 
   if (dialect === 'erb') {
-    for (let i = 0; i < lines.length; i++) out[i] = erbNewContent(lines[i]!.content, rules);
+    // 块上下文只在这里进 ERB 形（唯一一处；整篇/区间/on-type 三条腿都从本函数过，判据不分叉）
+    const body = erbBodyLineMask(lines.map((l) => l.content));
+    for (let i = 0; i < lines.length; i++) out[i] = body[i] ? null : erbNewContent(lines[i]!.content, rules);
     return out;
   }
 
