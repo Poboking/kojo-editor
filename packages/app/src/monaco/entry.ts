@@ -136,6 +136,9 @@ import { registerJsonLanguage } from './json-language';
 // ZH-D4 回车缩进（on-type 兜底层）与区间格式化：provider 自带语言闸（认不出 id 就沉默），
 // 注册面留在装配点一次性完成；整篇格式化的接线仍在 EditorPane（宿主 resolve 判据不变）。
 import { installEnterIndenter, installRangeFormatter } from './kojo-format';
+// 回落台账（纯逻辑、零依赖）：静态引它只为"装载失败也要说出去"这一条路，
+// 结构解析本体（worker + 两枚 wasm）全在下面的动态边界后面
+import { reportStructureDegradation } from './tree-sitter/fallback';
 
 // B 档：`.json` 微型 Monarch（不用 languages/features/json 的 400 KB worker feature）
 registerJsonLanguage(monacoApi);
@@ -144,5 +147,19 @@ registerJsonLanguage(monacoApi);
 // ERB 的区间格式化不在这里——由宿主带闸的 `kojo-format-range.ts` 独家负责（一门语言一枚 provider）。
 const assemblyDisposables = [installRangeFormatter(monacoApi), installEnterIndenter(monacoApi)];
 void assemblyDisposables; // 与模块同寿：不回收，但句柄在此可见（不往 API 面加导出，entry 的类型面必须与 monaco 一致）
+
+// 结构解析叠层（TSIT-M1，实验特性，**默认关**）：**动态取**装配模块。这一条 `import()`
+// 是"关着时逐字不变"的落点——偏好为关时 `./tree-sitter/client`、那枚 worker 与两枚 wasm
+// 一概不进主线程静态图，装配函数本身也只读一次偏好、挂一张订阅表，不注册任何 provider。
+// 装载失败（懒 chunk 取不到）不许静默：经回落台账说一次，编辑器继续走词法层。
+void import('./tree-sitter/providers')
+  .then((m) => m.installKojoStructureOverlay(monacoApi))
+  .catch((error: unknown) => {
+    reportStructureDegradation({
+      capability: 'all',
+      stage: 'wasm',
+      message: `结构解析装配模块装载失败：${error instanceof Error ? error.message : String(error)}`,
+    });
+  });
 
 export * from 'monaco-editor/editor/editor.api';

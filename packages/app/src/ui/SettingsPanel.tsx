@@ -6,6 +6,7 @@ import { setSealed } from './sealed';
 import { setDirectMode } from './direct-mode';
 import { setPanelVirtualize } from './panel-prefs';
 import { setNameColorPref } from './semantic-color-pref';
+import { setTreeSitterPref, useTreeSitterPref } from './tree-sitter-pref';
 import { SUGGEST_DELAY_MAX, SUGGEST_DELAY_MIN, SUGGEST_DELAY_STEP } from './suggest-pref';
 import { AUTOSAVE_IDLE_MS, setAutosavePref, type AutosaveMode } from './autosave-pref';
 import {
@@ -561,6 +562,9 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 </span>
               </span>
             </label>
+            {/* 结构解析叠层（TSIT-M1）：判据从"看形状"换成"看结构"，是实验线，
+                自订阅偏好而不走 props 镜像（理由同下面的 `LayoutPrefRows`）。 */}
+            <TreeSitterRow />
             {/* 自动保存（A6，2026-10-20）：写盘只复用既有 save 一条路（全局互斥 + 写允许域闸门）；
                 默认关的理由 = 游戏目录是部署目标，静默写盘必须是显式选择。护栏见 autosave-pref.decideAutosave。 */}
             <label className="settings-row">
@@ -793,6 +797,31 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     },
   ];
 };
+
+/**
+ * 结构解析器那一行（TSIT-M1，实验特性）。
+ *
+ * 自订阅 `tree-sitter-pref.ts`（与 `LayoutPrefRows` 同一形态：读与写都就地走
+ * localStorage 真源，不往 `ShellLayout.tsx` 加一条 props 镜像）。
+ * 作者面文案三条硬要求：① 不写引擎名（写「结构解析器」）；② 说清它只改显示；
+ * ③ 说清**默认关**与"它自己会退回原样并说一声"——实验特性不许让人以为没生效是自己看错。
+ */
+function TreeSitterRow(): ReactElement {
+  const on = useTreeSitterPref();
+  return (
+    <label className="settings-row">
+      <Switch checked={on} onChange={setTreeSitterPref} label="结构解析器辅助（实验）" />
+      <span>
+        结构解析器辅助（实验）
+        <span className="settings-hint">
+          另用一条结构解析的路子判断 .kojo 的块边界与行类型，据此着色、折叠，并在块头后回车时多缩一档；
+          原有的配色与折叠仍在，这一层只往上加。解析器出问题就自动退回原来的样子，并在右下角说一声。
+          只改显示、不动文件；<strong>实验特性，默认关</strong>
+        </span>
+      </span>
+    </label>
+  );
+}
 
 /**
  * 排版三行（P2-16）：折行三选一 / 多光标修饰键二选一 / 列选择开关。

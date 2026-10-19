@@ -1,8 +1,46 @@
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+
+/**
+ * 把 `web-tree-sitter` 里两条 **node 专用** 的动态 import 就地换成抛错的 promise。
+ *
+ * 为什么必须换（一句话：不换就构建不过）：那两条 `await import("fs/promises")` /
+ * `await import("module")` 各自躲在 `ENVIRONMENT_IS_NODE` 判据后面，浏览器与 worker
+ * 里永不执行；但 Rollup 只看语法——动态 import ⇒ 产物要多一枚 chunk，而 worker 的
+ * `format` 默认值 `iife` 明确不接受 code-splitting：
+ * `Invalid value "iife" for option "worker.format" - UMD and IIFE output formats are not
+ * supported for code-splitting builds`（实测：`pnpm --filter @kojo/app build` 当场失败）。
+ *
+ * 试过并**否掉**的两条路：
+ * - 把 `fs/promises` / `module` 走 `resolve.alias` 钉到桩模块：alias 生效了，但动态
+ *   import 本身还在 ⇒ Rollup 仍切出 `node-only-stub-*.js` 单独 chunk，iife 照旧拒；
+ * - `worker: { format: 'es' }`：能过，但那会把**既有**的 Monaco `editor.worker` 与本仓的
+ *   `compute-worker` 一起改成模块 worker。一条默认关的实验特性不该动别人的加载方式。
+ *
+ * 换掉的表达式保留 `await` 语义：真在浏览器里走到这一步就是当场抛（要看见的 bug），
+ * 而不是静默拿到 undefined。正则每调用一次现造（带 `g` 的标志位不能跨文件复用）。
+ */
+function stubNodeOnlyDynamicImports(): Plugin {
+  return {
+    name: 'kojo:stub-node-only-dynamic-imports',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.replaceAll('\\', '/').includes('web-tree-sitter')) return null;
+      const pattern = /import\(\s*["'](?:node:)?(?:fs\/promises|module)["']\s*\)/g;
+      if (!pattern.test(code)) return null;
+      return {
+        code: code.replace(
+          pattern,
+          'Promise.reject(new Error("node 内置模块在浏览器 / worker 里不可用"))',
+        ),
+        map: null,
+      };
+    },
+  };
+}
 
 export default defineConfig({
   plugins: [react()],
@@ -27,6 +65,16 @@ export default defineConfig({
       '@kojo/plugin-ui-sugar-editor': r('../plugins/ui-sugar-editor/src/index.ts'),
       '@kojo/plugin-ui-status': r('../plugins/ui-plugin-status/src/index.ts'),
     },
+  },
+  worker: {
+    /**
+     * worker 的构建**不吃根 `plugins`**：Vite 只把 `worker.plugins()` 返回的那批装进 worker
+     * 环境（实测挂在根上时那两条动态 import 原样留下、照样切 chunk），故这枚桩插件挂在这里。
+     * 形态用文档推荐的**函数**——直接传数组会触发
+     * `worker.plugins is now a function that returns an array of plugins` 警告。
+     * `format` 保持默认 iife ⇒ 既有 `editor.worker` / `compute-worker` 的加载方式一字不动。
+     */
+    plugins: () => [stubNodeOnlyDynamicImports()],
   },
   clearScreen: false,
   server: {

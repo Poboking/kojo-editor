@@ -39,6 +39,7 @@ import { planProjectSwitch, resolveProjectSwitch, type ProjectSwitchDecision } f
 import { bootstrapKernel, ensureProjectPlugins, prefetchProjectPlugins } from '../bootstrap';
 import { perf } from '../perf';
 import { revealTargetOf, type RevealSpan, type RevealTarget } from '../monaco/reveal-position';
+import { degradationNoticeText, onStructureDegradation } from '../monaco/tree-sitter/fallback';
 import {
   NOT_READY_MESSAGE,
   clearDropHover,
@@ -440,6 +441,17 @@ export function App(): ReactElement {
   // 依赖数组仍是 [kernel]——抽到 shell-overlays.ts 的自定义钩子，在同一位置无条件调用，
   // React 钩子次序不变。
   useShellOverlays(kernel);
+
+  // 结构解析叠层（实验，默认关）的回落必须可见（铁律 4）：wasm / worker / 解析任何一路不通
+  // 都自动退回原有的着色与折叠，但"退回了"这件事由这里上一条通知。台账按消息去重 ⇒
+  // 同一种错一次会话只说一遍（`monaco/tree-sitter/fallback.ts`），不随编辑重复弹。
+  useEffect(
+    () =>
+      onStructureDegradation((degradation) =>
+        notify({ kind: 'error', message: degradationNoticeText(degradation) }),
+      ),
+    [notify],
+  );
 
   // BUG-5：监视器自述必须可见。`partial` / `unavailable` 意味着"某些目录的外部改动
   // 不会自动重载"——这正是过去静默失灵的形状（用户以为会自动重载，其实句柄早没了）。
