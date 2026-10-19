@@ -502,7 +502,11 @@ export interface ErbIndexState {
   readonly rootsWalked: number;
   /** 已扫到的方言文件数：`scanning` 期间是进度，收尾后是总数 */
   readonly filesScanned: number;
-  /** 名录里的函数条数（`ready` 之后才有意义；其余阶段照实记当前值） */
+  /**
+   * 名录里的**归一化名字**条数（= `ErbIndex.byName` 的键数；与"定义条数"相差的那些
+   * 是同名多定义 —— 两个数不是同一个戳，本字段只交前者）。
+   * `ready` 之后才有意义；其余阶段照实记当前值（聚合前就是 0，不猜）。
+   */
   readonly functions: number;
   /** 覆盖形状（判据见 {@link ErbIndexCoverage}） */
   readonly coverage: ErbIndexCoverage;
