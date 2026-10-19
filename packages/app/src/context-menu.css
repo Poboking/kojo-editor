@@ -244,7 +244,7 @@
 /* 禁用项：弱化但不消失（铁律 4 的菜单侧同款口径；monaco 原生也会保留） */
 :root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-item.disabled > .action-menu-item {
   color: var(--fg-dim) !important;
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
 }
 :root .context-view.monaco-menu-container .monaco-menu .monaco-action-bar.vertical .action-item.disabled .keybinding {
   opacity: 0.45;

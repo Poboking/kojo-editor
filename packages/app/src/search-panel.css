@@ -108,7 +108,8 @@
 }
 .panel-search.ksp .ksp-field:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 1px var(--focus-glow);
+  /* VIS-4：与设置输入 / 快捷键搜索框同一口井焦点口径 */
+  box-shadow: var(--shadow-focus);
 }
 
 .panel-search.ksp .ksp-input {

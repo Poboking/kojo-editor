@@ -130,6 +130,8 @@
   --press-dy: 0.5px;
   --press-overlay: rgba(255, 255, 255, 0.1);
   --dur-press: 70ms;
+  /* 禁用态统一透明度：按钮 / 菜单项 / 输入框 / 开关同取一档（VIS-4 口径） */
+  --disabled-opacity: 0.5;
   /* 交互色 token（散落于各面板的 fallback 值收编为唯一来源） */
   --hover: rgba(255, 255, 255, 0.06);
   --active: rgb(var(--accent-rgb) / 0.16);
@@ -223,7 +225,7 @@ button:active:not(:disabled) {
   transition-duration: var(--dur-press);
 }
 button:disabled {
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
   cursor: default;
   box-shadow: none;
 }
@@ -1942,7 +1944,7 @@ button.resume-session {
   box-shadow: var(--shadow-focus);
 }
 .switch input:disabled ~ .switch-track {
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
 .switch input:disabled {

@@ -130,6 +130,8 @@
   --press-dy: 0.5px;
   --press-overlay: rgba(255, 255, 255, 0.1);
   --dur-press: 70ms;
+  /* 禁用态统一透明度：按钮 / 菜单项 / 输入框 / 开关同取一档（VIS-4 口径） */
+  --disabled-opacity: 0.5;
   /* 交互色 token（散落于各面板的 fallback 值收编为唯一来源） */
   --hover: rgba(255, 255, 255, 0.06);
   --active: rgb(var(--accent-rgb) / 0.16);
@@ -223,7 +225,7 @@ button:active:not(:disabled) {
   transition-duration: var(--dur-press);
 }
 button:disabled {
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
   cursor: default;
   box-shadow: none;
 }
@@ -1302,6 +1304,9 @@ textarea {
 }
 .tree-edit-input:focus {
   outline: none;
+  /* 行内编辑框常驻 accent 描边，焦点必须再亮一档才读得出"正在输入" */
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
 }
 
 /* 右键菜单（壳层轻量实现） */
@@ -1363,7 +1368,7 @@ textarea {
   outline-offset: -1px;
 }
 .context-menu button:disabled {
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
   cursor: default;
   background: transparent;
   box-shadow: none;
@@ -1404,11 +1409,11 @@ textarea {
   font-weight: 700;
 }
 .context-menu button.danger:hover {
-  background: rgba(224, 108, 117, 0.12);
-  box-shadow: inset 2px 0 0 rgba(224, 108, 117, 0.75);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--danger) 75%, transparent);
 }
 .context-menu button.danger:active:not(:disabled) {
-  background: rgba(224, 108, 117, 0.2);
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
   box-shadow:
     inset 2px 0 0 var(--danger),
     inset 0 1px 0 rgba(0, 0, 0, 0.28);
@@ -1458,7 +1463,8 @@ textarea {
 .tree-filter:focus {
   outline: none;
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px var(--focus-glow);
+  /* VIS-4：井/容器型焦点统一走 --shadow-focus（与设置输入、快捷键搜索框同档） */
+  box-shadow: var(--shadow-focus);
 }
 .tree-loading {
   color: var(--fg-dim);
@@ -3583,7 +3589,8 @@ button.erb-mode-hint.unlocked:hover {
 }
 .picker-input::placeholder {
   color: var(--fg-dim);
-  opacity: 0.7;
+  /* VIS-4：与搜索框同取 1.0，不再乘 0.7（深底上约 3:1，低于可读档） */
+  opacity: 1;
 }
 .picker-list {
   max-height: 46vh;
@@ -3618,7 +3625,7 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--fg);
 }
 .picker-item:disabled {
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
   cursor: default;
 }
 .picker-primary {
@@ -4158,7 +4165,7 @@ button.erb-mode-hint.unlocked:hover {
   box-shadow: var(--shadow-focus);
 }
 .settings-text:disabled {
-  opacity: 0.55;
+  opacity: var(--disabled-opacity);
 }
 /* 带输入框的行改用流式：标签 + 右侧动作在第一行，输入框独占第二行、两端对齐到两条轴 */
 .settings-row.has-field {
@@ -4258,7 +4265,7 @@ button.primary .hint {
   background: rgba(0, 0, 0, 0.22);
 }
 .wizard-actions .primary:disabled {
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
 }
 
 /* --------------------- 内置教程浮层（E6·E9：宽版居中 + 文档式排版） --------------------- */
@@ -4965,7 +4972,7 @@ button.primary .hint {
 .kp-dir-btn:focus-visible,
 .kp-file-btn:focus-visible,
 .kp-tutorial-btn:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: -1px;
 }
 .kp-project-name {
@@ -5193,7 +5200,7 @@ button.primary .hint {
   padding: 2px 6px;
 }
 .kp-draft-input:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 1px;
 }
 .kp-draft-preview {
@@ -5566,10 +5573,10 @@ button.primary .hint {
   outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
-/* 焦点环：与壳层全局口径一致（1px accent、offset 1px）；同时把 .off 的淡出恢复，
+/* 焦点环：与壳层全局口径一致（1px focus-ring、offset 1px）；同时把 .off 的淡出恢复，
    使空白格被键盘导航聚焦时也看得清 */
 .cm-cell:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 1px;
   opacity: 1;
 }
@@ -7280,9 +7287,9 @@ button.primary .hint {
   background: var(--hover);
   color: var(--fg);
 }
-/* 复用全局 :focus-visible 口径（1px var(--accent) / offset 1px），显式重述防丢 */
+/* 复用全局 :focus-visible 口径（1px var(--focus-ring) / offset 1px），显式重述防丢 */
 .kd-tab .kd-tab-close:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 1px;
 }
 .kd-labels {
@@ -7428,7 +7435,7 @@ button.primary .hint {
   color: var(--text, #d7dce4);
 }
 .editor-crumb-item:focus-visible {
-  outline: 1px solid var(--accent, #61afef);
+  outline: 1px solid var(--focus-ring);
 }
 
 /* PERF-6（2026-10-16 树即时批）：过滤态强制全展开 ⇒ 渲染窗口的「继续显示下一批」尾行。
@@ -7680,7 +7687,7 @@ button.primary .hint {
   border-color: var(--accent-dim);
 }
 .mk-search:focus {
-  border-color: var(--accent);
+  border-color: var(--focus-ring);
 }
 .mk-search::placeholder {
   color: var(--fg-dim);
@@ -7919,7 +7926,7 @@ button.primary .hint {
 .mk-toolbar button:disabled,
 .mk-head button:disabled,
 .mk-clear:disabled {
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -8002,7 +8009,7 @@ button.primary .hint {
 .mk-head button:focus-visible,
 .mk-actions button:focus-visible,
 .mk-confirm button:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -8551,7 +8558,7 @@ button.resume-session {
   box-shadow: var(--shadow-focus);
 }
 .switch input:disabled ~ .switch-track {
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
 .switch input:disabled {
