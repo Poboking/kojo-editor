@@ -8,8 +8,15 @@
  * 运算符优先级（高→低）：`* / %`(90) → `+ -`(80，含单目) → `<< >>`(70) →
  * `> < >= <=`(65) → `== !=`(60) → `& | ^`(50) → `&& || ^^ !& !|`(40) → 三元 `? :`。
  *
- * 刻意不做（本阶段）：赋值系（`=`/`+=`，条件里不出现）、`#` 三元变体、
- * 字符字面量 `'x'`、宏展开——遇到即整体 opaque（保留原文，不猜测）。
+ * 刻意不做（本阶段）：赋值系（`=`/`+=`，条件里不出现）、字符字面量 `'x'`、
+ * 宏展开——遇到即整体 opaque（保留原文，不猜测）。
+ *
+ * 2026-10-19 真语料收口批（表达式波浪线 98% 误报的直面修）：
+ * - `@"…"` 逐字串（`@` 起、下一枚 `"` 止；不处理转义，`{}` 原样算内容）；
+ * - 三元真形 `A ? B # C`（`#` 作 else 分隔；`:` 保留）；
+ * - 实参空槽 / 尾逗号、下标接调用（`NAME:TOINT(x)`）、后缀 `++`/`--`；
+ * - `0b` 二进制与十进制指数 `2e3` / `1.5e-2`（裸小数仍不认）；
+ * - 行尾续写 fail-open（只作用于 `diagnoseExpression`，`parseExpression` 语义不变）。
  */
 
 import type { ConditionExpr } from '@kojo/plugin-api';
@@ -60,8 +67,30 @@ function isSpace(c: string): boolean {
   return c === ' ' || c === '\t' || c === '\u3000' || c === '\u00a0';
 }
 
-const OP2 = ['&&', '||', '^^', '!&', '!|', '==', '!=', '<=', '>=', '<<', '>>'];
-const OP1 = new Set(['+', '-', '*', '/', '%', '<', '>', '=', '!', '&', '|', '^', '~', '?']);
+const OP2 = ['&&', '||', '^^', '!&', '!|', '==', '!=', '<=', '>=', '<<', '>>', '++', '--'];
+const OP1 = new Set(['+', '-', '*', '/', '%', '<', '>', '=', '!', '&', '|', '^', '~', '?', '#']);
+
+const isDigit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9';
+
+/**
+ * 十进制指数段（`2e3` / `1.5e-2`）的扫描终点；不构成指数就原样返回 `from`。
+ *
+ * 小数部分**只在确认后面跟着指数时**才吞（`12.5` 必须继续词法报错，既有 pin）；
+ * 返回 `from` 时调用方从原位置继续，`'.'` 仍会被当作无法识别的字符。
+ */
+function scanDecimalExponent(s: string, from: number): number {
+  let j = from;
+  if (s[j] === '.' && isDigit(s[j + 1])) {
+    j++;
+    while (isDigit(s[j])) j++;
+  }
+  if (s[j] !== 'e' && s[j] !== 'E') return from;
+  let k = j + 1;
+  if (s[k] === '+' || s[k] === '-') k++;
+  if (!isDigit(s[k])) return from;
+  while (isDigit(s[k])) k++;
+  return k;
+}
 
 function tokenize(input: string): Token[] {
   const out: Token[] = [];
@@ -81,19 +110,48 @@ function tokenize(input: string): Token[] {
       i = close + 2;
       continue;
     }
-    // 数字：十进制 / 0x 十六进制（引擎支持 AddIntegerLiteral；0b 未见于语料，保守不认）
+    // 数字：十进制 / 0x 十六进制 / 0b 二进制 / 十进制指数（引擎 AddIntegerLiteral 系）
     if (c >= '0' && c <= '9') {
+      let base = 10;
       if (c === '0' && (input[i + 1] === 'x' || input[i + 1] === 'X')) {
+        base = 16;
         i += 2;
         while (i < input.length && /[0-9a-fA-F]/.test(input[i]!)) i++;
+      } else if (c === '0' && (input[i + 1] === 'b' || input[i + 1] === 'B')) {
+        base = 2;
+        i += 2;
+        while (i < input.length && (input[i] === '0' || input[i] === '1')) i++;
       } else {
-        while (i < input.length && input[i]! >= '0' && input[i]! <= '9') i++;
+        while (isDigit(input[i])) i++;
+        i = scanDecimalExponent(input, i);
       }
       const text = input.slice(start, i);
-      const value = text.length > 2 && text[0] === '0' && (text[1] === 'x' || text[1] === 'X')
-        ? Number.parseInt(text.slice(2), 16)
-        : Number.parseInt(text, 10);
+      const prefixed = base !== 10;
+      const value = prefixed
+        ? Number.parseInt(text.slice(2), base)
+        : /[eE]/.test(text)
+          ? Number(text)
+          : Number.parseInt(text, 10);
       out.push({ kind: 'num', text, value, pos: start });
+      continue;
+    }
+    // 逐字串 `@"…"`：`@"` 起、下一枚 `"` 止；不处理转义，`{}` / `%` 原样算内容
+    if (c === '@' && input[i + 1] === '"') {
+      i += 2;
+      let raw = '';
+      let closed = false;
+      while (i < input.length) {
+        const ch = input[i]!;
+        if (ch === '"') {
+          closed = true;
+          i++;
+          break;
+        }
+        raw += ch;
+        i++;
+      }
+      if (!closed) throw new ExprSyntaxError('逐字字符串的引号没有闭合', 'lexical', start);
+      out.push({ kind: 'str', text: input.slice(start, i), value: raw, pos: start });
       continue;
     }
     // 字符串（`\` 转义一个字符）
@@ -193,6 +251,8 @@ const BINARY_PREC: Readonly<Record<string, number>> = {
 };
 
 const UNARY_OPS = new Set(['!', '-', '+', '~']);
+/** 可作前缀的操作数起始符（`++LOCAL:1` 在真实语料里作左值表达式出现） */
+const PREFIX_OPS = new Set([...UNARY_OPS, '++', '--']);
 
 /** 把"不该出现的 token"翻译成面向作者的中文人话（诊断 message 用） */
 function describeUnexpectedToken(t: Token): string {
@@ -206,7 +266,10 @@ function describeUnexpectedToken(t: Token): string {
     case 'colon':
       return '这里多了一个冒号';
     case 'op':
-      return `这里多了一个运算符“${t.text}”`;
+      // 二元/后缀运算符出现在**操作数位置**：缺的是它前面的操作数，别把罪名扣在它身上
+      return UNARY_OPS.has(t.text) || t.text === '++' || t.text === '--'
+        ? `这里多了一个运算符“${t.text}”`
+        : `运算符“${t.text}”前面缺少一个操作数`;
     default:
       return `这里多了一个不该出现的“${t.text}”`;
   }
@@ -254,13 +317,16 @@ class Parser {
     let left = this.parseUnary();
     for (;;) {
       const t = this.peek();
-      // 三元：`cond ? then : else`（优先级 5，右结合）
+      // 三元：`cond ? then : else` / `cond ? then # else`（优先级 5，右结合；
+      // Emuera 真形是 `#`，`:` 保留兼容）
       if (t.kind === 'op' && t.text === '?') {
         if (5 < minPrec) break;
         this.next();
         const thenE = this.parseExpr(0);
-        const colon = this.next();
-        if (colon.kind !== 'colon') throw new ExprSyntaxError('三元表达式缺少中间的冒号“:”', 'syntax', colon.pos);
+        const sep = this.next();
+        if (sep.kind !== 'colon' && !(sep.kind === 'op' && sep.text === '#')) {
+          throw new ExprSyntaxError('三元表达式缺少中间的分隔符（“:”或“#”）', 'syntax', sep.pos);
+        }
         const elseE = this.parseExpr(0);
         left = { kind: 'ternary', cond: left, then: thenE, else: elseE };
         continue;
@@ -269,6 +335,12 @@ class Parser {
       const prec = BINARY_PREC[t.text];
       if (prec === undefined || prec < minPrec) break;
       this.next();
+      // 报错位置 = **刚吃掉的这个运算符**：右操作数位置上出现运算符，缺的是它的操作数，
+      // 不能把罪名扣在后一个运算符上（旧版 `LOCAL:3++ == 0` 会误报“多了一个运算符‘==’”）
+      const rhsStart = this.peek();
+      if (rhsStart.kind === 'op' && !PREFIX_OPS.has(rhsStart.text)) {
+        throw new ExprSyntaxError(`运算符“${t.text}”后面缺少一个操作数`, 'syntax', t.pos);
+      }
       const right = this.parseExpr(prec + 1); // 左结合
       left = { kind: 'binary', op: t.text, left, right };
     }
@@ -277,12 +349,60 @@ class Parser {
 
   private parseUnary(): ConditionExpr {
     const t = this.peek();
-    if (t.kind === 'op' && UNARY_OPS.has(t.text)) {
+    if (t.kind === 'op' && PREFIX_OPS.has(t.text)) {
       this.next();
+      const operandStart = this.peek();
+      if (operandStart.kind === 'op' && !PREFIX_OPS.has(operandStart.text)) {
+        throw new ExprSyntaxError(`运算符“${t.text}”后面缺少一个操作数`, 'syntax', t.pos);
+      }
       const operand = this.parseUnary();
       return { kind: 'unary', op: t.text, operand };
     }
-    return this.parsePrimary();
+    return this.parsePostfix(this.parsePrimary());
+  }
+
+  /** 后缀 `++` / `--`（`LOCAL:3++ == 0` 不报；真正的赋值语义不在本层解释） */
+  private parsePostfix(operand: ConditionExpr): ConditionExpr {
+    let expr = operand;
+    for (;;) {
+      const t = this.peek();
+      if (t.kind === 'op' && (t.text === '++' || t.text === '--')) {
+        this.next();
+        expr = { kind: 'unary', op: t.text, operand: expr };
+        continue;
+      }
+      break;
+    }
+    return expr;
+  }
+
+  /**
+   * 实参列表：`(` … `)`，**空槽与尾逗号一律跳过**（`f(a, , , 1)` / `f(x, "y",)` / `f(, x)`）。
+   * 返回参数 AST 与含括号的原文切片（下标接调用 `NAME:TOINT(x)` 复用同一逻辑）。
+   */
+  private parseArgList(): { args: ConditionExpr[]; text: string } {
+    const open = this.next(); // lparen
+    const args: ConditionExpr[] = [];
+    for (;;) {
+      if (this.peek().kind === 'comma' || this.peek().kind === 'rparen') {
+        if (this.peek().kind === 'comma') {
+          this.next();
+          continue;
+        }
+        break;
+      }
+      args.push(this.parseExpr(0));
+      if (this.peek().kind === 'comma') {
+        this.next();
+        continue;
+      }
+      break;
+    }
+    const close = this.next();
+    if (close.kind !== 'rparen') {
+      throw new ExprSyntaxError('函数调用的圆括号没有配对（缺少右括号）', 'syntax', close.pos);
+    }
+    return { args, text: this.input.slice(open.pos, close.pos + 1) };
   }
 
   private parsePrimary(): ConditionExpr {
@@ -298,31 +418,24 @@ class Parser {
     if (t.kind === 'ident') {
       // 函数调用：`NAME(...)` —— 名字后紧跟 `(`（真实语料无带空格的调用）
       if (this.peek().kind === 'lparen') {
-        this.next();
-        const args: ConditionExpr[] = [];
-        if (this.peek().kind !== 'rparen') {
-          for (;;) {
-            args.push(this.parseExpr(0));
-            if (this.peek().kind === 'comma') {
-              this.next();
-              continue;
-            }
-            break;
-          }
-        }
-        const close = this.next();
-        if (close.kind !== 'rparen') throw new ExprSyntaxError('函数调用的圆括号没有配对（缺少右括号）', 'syntax', close.pos);
-        return { kind: 'call', name: t.text.toUpperCase(), args };
+        const call = this.parseArgList();
+        return { kind: 'call', name: t.text.toUpperCase(), args: call.args };
       }
       // 变量引用：`NAME` / `NAME:段` / `NAME:段:段`
       // 段 = 数字 / 标识符 / 字符串 / [[词]]（rename 语法）/ (括号表达式原文)
+      // 标识符段后紧跟 `(` 时按**调用**续切（`CHARISMA_TENDENCY:NOW_PERIOD()`：
+      // 下标段的调用实参必须与顶层调用同一套空槽 / 尾逗号口径）
       const indices: string[] = [];
       while (this.peek().kind === 'colon') {
         this.next();
         const seg = this.peek();
         if (seg.kind === 'num' || seg.kind === 'ident') {
-          indices.push(seg.text);
           this.next();
+          if (seg.kind === 'ident' && this.peek().kind === 'lparen') {
+            indices.push(seg.text + this.parseArgList().text);
+          } else {
+            indices.push(seg.text);
+          }
         } else if (seg.kind === 'str') {
           indices.push(String(seg.value));
           this.next();
@@ -363,6 +476,31 @@ export interface ExprDiagnostic {
   kind: 'lexical' | 'syntax';
   /** 中文人话：说清在哪类位置出什么问题；面向作者，不含内部术语 / 实现细节 */
   message: string;
+  /**
+   * 出错位置（在传入表达式文本内的 0 基 UTF-16 偏移；additive，缺省 = 定位不到）。
+   * 装饰层据此换算 1 基列号，波浪线不再整行标红。
+   */
+  pos?: number;
+}
+
+/** 去掉首尾空白（含全角空格 U+3000 / NBSP；与 tokenizer 的 `isSpace` 同口径） */
+function trimSpace(s: string): string {
+  let a = 0;
+  let b = s.length;
+  while (a < b && isSpace(s[a]!)) a++;
+  while (b > a && isSpace(s[b - 1]!)) b--;
+  return s.slice(a, b);
+}
+
+/**
+ * 行尾续写判据（fail-open）：扫描器只有**单行视野**，下一行才是这句话的继续。
+ * 表达式以二元运算符或 `{` 收尾 → 不产诊断；单独成行的 `{` / `}` 同理。
+ */
+function isLineContinuation(text: string): boolean {
+  const t = trimSpace(text);
+  if (t === '{' || t === '}') return true;
+  if (t.endsWith('{')) return true;
+  return false;
 }
 
 /** 试解析：成功 → null；失败 → 人话诊断。**绝不抛错**。空串 / 纯空白 → null。 */
@@ -377,9 +515,19 @@ export function diagnoseExpression(text: string): ExprDiagnostic | null {
     }
   }
   if (blank) return null;
+  if (isLineContinuation(text)) return null;
 
   try {
     const toks = tokenize(text);
+    // 行尾续写：最后一个实义 token 是二元运算符 / 逗号 ⇒ 残句是 scanner 的视野问题
+    //（真实语料大量 `IF ... &&` / `SIF ...,` 折行，下一行才是续篇）
+    const last = toks.length >= 2 ? toks[toks.length - 2]! : undefined;
+    if (
+      last !== undefined &&
+      (last.kind === 'comma' || (last.kind === 'op' && BINARY_PREC[last.text] !== undefined))
+    ) {
+      return null;
+    }
     const p = new Parser(text, toks);
     p.parseExpr(0);
     if (!p.atEnd()) {
@@ -388,7 +536,7 @@ export function diagnoseExpression(text: string): ExprDiagnostic | null {
     }
     return null;
   } catch (err) {
-    if (err instanceof ExprSyntaxError) return { kind: err.kind, message: err.message };
+    if (err instanceof ExprSyntaxError) return { kind: err.kind, message: err.message, pos: err.pos };
     // 兜底：任何非预期错误都以语法错收口，契约保证本函数绝不抛错
     return { kind: 'syntax', message: '表达式无法解析' };
   }

@@ -17,10 +17,10 @@ import {
 } from '../src/offload';
 import { collectExprSyntaxDecorations } from '../src/decorator';
 
-/** 假骨架：一条残句 IF + 一条正常的 WHILE */
+/** 假骨架：一条真错 IF（括号不配对）+ 一条正常的 WHILE */
 const SCAN = (): readonly ControlFlowStatement[] => [
-  { kind: 'IF', expression: 'CFLAG:100 &&', depth: 0, line: 3 },
-  { kind: 'WHILE', expression: '1 = 1', depth: 0, line: 9 },
+  { kind: 'IF', expression: 'CFLAG:100 )', depth: 0, line: 3 },
+  { kind: 'WHILE', expression: '1 == 1', depth: 0, line: 9 },
 ];
 
 const viaTask = (path: string, text: string): LineDecoration[] =>
@@ -43,21 +43,33 @@ describe('condition-extractor · 可搬运任务 erb.exprSyntaxDecorations', () 
   });
 
   it('任务实现 === 既有管线（collectExprSyntaxDecorations + 同一扫描器）', () => {
-    const text = 'PRINTL 甲\nIF CFLAG:100 &&\nPRINTL 乙\n';
+    const text = 'PRINTL 甲\nPRINTL 乙\nIF CFLAG:100 )\n';
     expect(viaTask('C:/game/ERB/a.erb', text)).toEqual(
       collectExprSyntaxDecorations(text, SCAN).map((d) => ({
         line: d.line,
         severity: 'warning',
         message: d.message,
         code: d.code,
+        ...(d.startColumn !== undefined && d.endColumn !== undefined
+          ? { startColumn: d.startColumn, endColumn: d.endColumn }
+          : {}),
       })),
     );
   });
 
+  it('列号透传：LineDecoration.startColumn/endColumn 与装饰层一致（1 基 UTF-16 半开）', () => {
+    const text = 'PRINTL 甲\nPRINTL 乙\nIF CFLAG:100 )\n';
+    const [d] = viaTask('C:/game/ERB/a.erb', text);
+    expect(d).toMatchObject({ line: 3, severity: 'warning' });
+    // 行 = `IF CFLAG:100 )`；表达式从 0 基 3 起，`)` 在表达式内偏移 10 ⇒ 1 基列 14
+    expect(d!.startColumn).toBe(14);
+    expect(d!.endColumn).toBe(15);
+  });
+
   it('只认正文：`.erb`/`.erm` 出装饰，`.erh`/`.kojo`/其它扩展名一律空', () => {
-    const text = 'IF CFLAG:100 &&\n';
-    // 只喂一条残句，好把"出不出装饰"这件事完全交给扩展名判据
-    const oneBad = (): readonly ControlFlowStatement[] => [{ kind: 'IF', expression: 'CFLAG:100 &&', depth: 0, line: 1 }];
+    const text = 'IF CFLAG:100 )\n';
+    // 只喂一条真错，好把"出不出装饰"这件事完全交给扩展名判据（行尾悬空运算符按续行 fail-open）
+    const oneBad = (): readonly ControlFlowStatement[] => [{ kind: 'IF', expression: 'CFLAG:100 )', depth: 0, line: 1 }];
     const via = (path: string): LineDecoration[] =>
       exprSyntaxDecorations({ path, text }, oneBad);
     expect(via('C:/game/ERB/a.ERB')).toHaveLength(1);

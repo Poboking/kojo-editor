@@ -64,6 +64,10 @@ export function exprSyntaxDecorations(
     severity: 'warning' as const,
     message: d.message,
     code: d.code,
+    // 列区间（additive）：内核已算好 1 基/UTF-16/半开；缺省即整行（旧宿主行为不变）
+    ...(d.startColumn !== undefined && d.endColumn !== undefined
+      ? { startColumn: d.startColumn, endColumn: d.endColumn }
+      : {}),
   }));
 }
 

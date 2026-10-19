@@ -21,10 +21,34 @@ export interface ExprSyntaxDecoration {
   line: number;
   message: string;
   code: string;
+  /** 1 基起始列（UTF-16 码元；additive，缺省 = 整行） */
+  startColumn?: number;
+  /** 1 基结束列（半开区间；与 `startColumn` 同给同缺） */
+  endColumn?: number;
 }
 
 /** 承载单条（可解析）条件的控制流语句关键字。 */
 const CONDITION_KINDS: ReadonlySet<string> = new Set(['IF', 'ELSEIF', 'SIF', 'WHILE', 'SELECTCASE']);
+
+/**
+ * 在行原文里定位表达式起点（0 基）。语句形如 `IF <expression>`：跳过行首缩进与关键字后
+ * 再找表达式原文（trim 过的切片一定是行内子串；找不到就放弃列号，退回整行）。
+ */
+function expressionStartInLine(lineText: string | undefined, expression: string): number | undefined {
+  if (lineText === undefined) return undefined;
+  const head = /^[\s\u3000\u00a0]*[A-Za-z_]+/.exec(lineText);
+  const from = head ? head[0].length : 0;
+  const at = lineText.indexOf(expression, from);
+  if (at >= 0) return at;
+  const loose = lineText.indexOf(expression);
+  return loose >= 0 ? loose : undefined;
+}
+
+/** 单字符宽度（UTF-16 码元；代理对 = 2） */
+function charWidth(text: string, at: number): number {
+  const cp = text.codePointAt(at);
+  return cp !== undefined && cp > 0xffff ? 2 : 1;
+}
 
 /** 对"承载条件的控制流语句"跑表达式诊断；返回波浪线条目（按行号升序，同一行只留第一条）。 */
 export function collectExprSyntaxDecorations(
@@ -40,6 +64,7 @@ export function collectExprSyntaxDecorations(
     return []; // 扫描异常：按"无发现"处理（保守，绝不把异常当成一条错）
   }
 
+  const lines = text.split(/\r\n|\r|\n/);
   // 按行去重：同一行只保留第一条命中的装饰（Map 插入序 = 语句扫描序）
   const byLine = new Map<number, ExprSyntaxDecoration>();
   for (const stmt of statements) {
@@ -53,11 +78,19 @@ export function collectExprSyntaxDecorations(
     }
     if (diag === null) continue;
     if (byLine.has(stmt.line)) continue;
-    byLine.set(stmt.line, {
+    const entry: ExprSyntaxDecoration = {
       line: stmt.line,
       message: diag.message,
       code: `erb.expr-${diag.kind}`,
-    });
+    };
+    // 列区间（1 基、UTF-16、半开）：定位不到字符（如 EOF 处）就不给，退回整行
+    const base = expressionStartInLine(lines[stmt.line - 1], stmt.expression);
+    const pos = diag.pos;
+    if (base !== undefined && pos !== undefined && pos >= 0 && pos < stmt.expression.length) {
+      entry.startColumn = base + pos + 1;
+      entry.endColumn = entry.startColumn + charWidth(stmt.expression, pos);
+    }
+    byLine.set(stmt.line, entry);
   }
 
   return [...byLine.values()].sort((a, b) => a.line - b.line);
