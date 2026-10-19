@@ -61,6 +61,8 @@ import {
 } from './breadcrumb-path';
 import { CrumbBar } from './breadcrumb-bar';
 import { useNotify } from './NotificationCenter';
+// FMT-TOAST：格式化让路 → 通知中心的那一条订阅（去重与文案都在台账侧，见该文件头注）
+import { subscribeFormatNotices } from './format-notice-ledger';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import {
   CJK_TYPING_BASELINE,
@@ -417,6 +419,14 @@ export function EditorPane({
   /** 编辑器状态上抛 ref（重载时读最新，避免把不稳定 prop 拖进回调依赖） */
   const onStatusInfoRef = useRef(onStatusInfo);
   const notify = useNotify();
+  /**
+   * 格式化让路必须可见（铁律 4；FMT-TOAST）：`Shift+Alt+F` / 选区格式化 / 打字规范化
+   * 这五处"这次不格式化"由 `monaco/kojo-format-range.ts` 递出 `notice`，台账
+   * （`ui/format-notice-ledger.ts`）按 `where` + 行区间去重 ⇒ **同一处让路一次会话只说一遍**，
+   * 文案与人话分工也在那一侧。订阅的是根通知中心那枚 `notify`（全树同一函数身份 ⇒
+   * 多枚标签共用一条订阅，同一条让路只上一条 toast；台账按身份计数，关标签不会撤掉别人的）。
+   */
+  useEffect(() => subscribeFormatNotices(notify), [notify]);
   /**
    * 主题偏好（反馈 3）：dark / light / mint-dark 三档与 `monaco/theme.ts` 的三套主题
    * 一一对应；偏好一变就把 Monaco 全局主题换过去（同页所有编辑器实例一起换）。

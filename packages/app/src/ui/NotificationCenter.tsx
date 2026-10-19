@@ -22,6 +22,13 @@ export interface NoticeInput {
   /** 面向作者的中文人话（定稿 §九-3：裸英文堆栈只进日志） */
   readonly message: string;
   readonly action?: NoticeAction;
+  /**
+   * 逐字保留的技术原文，**只在悬停里出现**（FMT-TOAST，additive：既有调用方零改动）。
+   *
+   * 口径照 `ui-kojo-navigator/src/panel-copy.ts`：第一眼必须是人话，内部错误串/机器名
+   * 不许当第一眼，但一条都不许丢 ⇒ 让路点叫什么、原因原文，作者悬停就能查到。
+   */
+  readonly detail?: string;
 }
 
 export interface Notice extends NoticeInput {
@@ -91,7 +98,7 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
       {notices.length > 0 ? (
         <div className="notification-center">
           {notices.map((n) => (
-            <div key={n.id} className={`toast toast-${n.kind}`} role="alert">
+            <div key={n.id} className={`toast toast-${n.kind}`} role="alert" title={n.detail}>
               <span className="toast-icon" aria-hidden="true">
                 <Icon name={n.kind === 'error' ? 'error' : 'info'} size={16} />
               </span>

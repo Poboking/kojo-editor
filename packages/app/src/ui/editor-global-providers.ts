@@ -64,6 +64,9 @@ import { revealLocationOf } from '../monaco/reveal-position';
 import { foldingEnabledForLineCount } from './editor-options';
 import { dialectForLanguage, installDocumentFormatter, type FormatRequest } from '../monaco/kojo-format';
 import { installRangeFormatter, type RangeFormatHandlers } from '../monaco/kojo-format-range';
+// FMT-TOAST：格式化让路的一次性台账（去重 + 文案都住 `ui/format-notice-ledger.ts`，
+// 本模块只做"把出口接上"这一件事；上屏由 `EditorPane.tsx` 订阅根通知中心完成）
+import { reportFormatDegradation } from './format-notice-ledger';
 // W8 XLANG-RENAME 的宿主侧：闭文件落盘的唯一通道（`ClosedFileIo`）与跨语言腿的取数
 // （枚举 + 读文 + 问槽，判读零宿主知识；根口径与检索面板同源）
 import { type ClosedFileIo } from './reference-utils';
@@ -1322,7 +1325,9 @@ export function ensureGlobalProviders(): void {
     // 选区格式化 + 打字规范化（T13）：同一份 resolve、同一份规则核心，只多一层行裁剪（ERB 语言）。
     // PS-4：再挂一条**窗口取文腿**（`formatRequestWindowFor`）——一次 `;` 击键只为触发行那一行
     // 取文，不再 copy 整篇；`.kojo` 与糖视图一律退回整篇那条腿（判据见 `RangeFormatHandlers`）。
-    globalDisposers.push(installRangeFormatter(monaco, formatResolve));
+    // FMT-TOAST：五处让路点从此**不再哑**——`onDegraded` 接台账（同一 `where` + 同一行区间
+    // 一次会话只上一条 toast）。台账只读这份 `notice`，格式化那条链的返回值语义一字未动。
+    globalDisposers.push(installRangeFormatter(monaco, { ...formatResolve, onDegraded: reportFormatDegradation }));
     // 行上内联注解（B8，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第五个判别成员。
     // 宿主在这里做的事只有四件：认活动标签的**真** model、把体量/预算两档降级判掉、问槽、
     // 把点击落到**既有**的 `editor.revealLocation` 通道（不新造第二套跳转，与转到定义同腿）。
