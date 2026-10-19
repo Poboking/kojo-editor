@@ -2,7 +2,7 @@
  * 常驻窗口框架（用户反馈第 9 条：任何窗口态都不要 Windows 原生标题栏）。
  *
  * 三块职责：
- * 1. `.app-frame` / `.app-frame-body` —— App 根部的纵向框架：34px 标题栏 + 撑满的正文。
+ * 1. `.app-frame` / `.app-frame-body` —— App 根部的纵向框架：36px 标题栏 + 撑满的正文。
  * 2. `.window-chrome` —— 自定义标题栏（启动即常驻；浏览器 dev 由组件返回 null）。
  * 3. 自绘外框 —— 普通窗口态一圈 1px `--border-strong`，最大化 / 全屏贴边不画。
  *    外框走 `::after` + inset box-shadow：不占布局、不会被 `overflow` 裁掉，也不和
@@ -54,12 +54,14 @@
   flex: none;
   display: flex;
   align-items: center;
-  height: 34px;
+  /* VIS-3：与工具条（min-height 36）／编辑器标签条（.editor-tab 36）同一横带高度，
+     旧值 34 会在窗口顶缘留下一条 2px 台阶。 */
+  height: 36px;
   padding-left: var(--space-3);
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   /* 顶缘受光：浅色主题下 --bg-2 接近白，只靠一条底边会和编辑器/工具条糊成一片；
-     一道 token 化的 inset 高光让这条 34px 读作「窗口 chrome」而不是另一条白带。 */
+     一道 token 化的 inset 高光让这条 36px 读作「窗口 chrome」而不是另一条白带。 */
   box-shadow: var(--edge-raise);
   color: var(--fg-dim);
   font-size: var(--fs-1);

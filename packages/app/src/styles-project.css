@@ -952,6 +952,8 @@ textarea {
      `.editor-group` 因此不再产生横向溢出。 */
   flex: 1 1 auto;
   min-width: 0;
+  /* VIS-3：与窗口标题栏 / 工具条同一横带 36px（标签本身也是 36，这里只兜住「零标签」时的空条） */
+  min-height: 36px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
 }
@@ -1003,7 +1005,7 @@ textarea {
   align-items: center;
   gap: 6px;
   padding: 0 8px 0 12px;
-  height: 34px;
+  height: 36px;
   font-size: var(--fs-2);
   color: var(--fg-dim);
   border-right: 1px solid var(--border-subtle);
@@ -1044,7 +1046,7 @@ textarea {
   flex: none;
   width: 3px;
   height: 12px;
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
   opacity: 0.85;
 }
@@ -1111,6 +1113,12 @@ textarea {
   flex-direction: column;
   min-height: 0;
   flex: 1;
+  /* VIS-3 树行度量：全树只有**一个**行高与**一个**缩进步进（组/包/目录/文件/额外根同取）。
+     缩进步进 = DirRows 给每行的内联 `depth * 14px`（组件侧口径，此处不复制逻辑），
+     列表只在「角色组 → 一级条目」和「包 → 包内容」两处再补一级；目录递归的嵌套列表
+     不再叠加缩进，否则每层会变成 22+14=36px 的两段式跳变（旧缺陷）。 */
+  --tree-row-h: 22px;
+  --tree-indent: 14px;
 }
 .tree-filter {
   background: var(--bg);
@@ -1141,7 +1149,10 @@ textarea {
   background: none;
   border: none;
   color: var(--fg);
-  padding: 3px 2px;
+  /* 树行度量：纵向内衬归零、行高交 --tree-row-h（caret 12px 在 22px 行里不裁切） */
+  padding: 0 2px;
+  height: var(--tree-row-h);
+  font-size: var(--fs-1);
   text-align: left;
 }
 .tree-group-btn:hover {
@@ -1167,7 +1178,7 @@ textarea {
 .tree-files {
   list-style: none;
   margin: 0 0 4px;
-  padding: 0 0 0 18px;
+  padding: 0 0 0 var(--tree-indent);
 }
 /* 作者包节点（角色组内二级；可折叠、默认折叠——口上树定稿向 §3） */
 .tree-package {
@@ -1179,7 +1190,8 @@ textarea {
   background: transparent;
   color: var(--fg);
   font-size: var(--fs-1);
-  padding: 2px 6px;
+  padding: 0 6px;
+  height: var(--tree-row-h);
   text-align: left;
   border-radius: var(--radius-sm);
 }
@@ -1197,9 +1209,15 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 目录递归的嵌套列表：缩进**不再**叠加（行自带 depth * 14px 内联缩进，见 .file-tree 注释），
+   否则每深一层会多出两段式跳变；包内容的列表单独补一级，见下条。 */
 .tree-files.nested {
-  padding-left: 22px;
+  padding-left: 0;
   margin-bottom: 2px;
+}
+/* 包 → 包内容（ERB 列表与真实文件夹视图）是「一级条目 → 子级」那一跳：补一级缩进 */
+.tree-package-node > .tree-files.nested {
+  padding-left: var(--tree-indent);
 }
 /* 作者包真实文件夹视图（2026-10-12 反馈 6/7 重做）。
    旧实现是「平铺态 ↔ 文件夹态」二选一 + 高度过渡 + 入场动画，且两棵 ul 重复 key
@@ -1217,8 +1235,9 @@ textarea {
   background: none;
   border: none;
   color: var(--fg);
-  padding: 1px 8px;
-  font-size: var(--fs-2);
+  padding: 0 8px;
+  height: var(--tree-row-h);
+  font-size: var(--fs-1);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -1240,9 +1259,10 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 目录读取中 / 失败提示行 */
+/* 目录读取中 / 失败提示行（同取树行行高，只不绑死 height：提示语变长时可换行） */
 .tree-note {
-  padding: 1px 8px;
+  padding: 0 8px;
+  line-height: var(--tree-row-h);
   color: var(--fg-dim);
   font-size: var(--fs-1);
   font-style: normal;
@@ -1252,7 +1272,8 @@ textarea {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 1px 8px;
+  padding: 0 8px;
+  height: var(--tree-row-h);
   color: var(--fg-dim);
   font-size: var(--fs-1);
   cursor: default;
@@ -1274,8 +1295,9 @@ textarea {
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   color: var(--fg);
-  padding: 1px 6px;
-  font-size: var(--fs-2);
+  padding: 0 6px;
+  height: var(--tree-row-h);
+  font-size: var(--fs-1);
   font-family: inherit;
 }
 .tree-edit-input:focus {
@@ -1405,13 +1427,16 @@ textarea {
   background: none;
   border: none;
   color: var(--fg);
-  padding: 2px 6px;
+  /* 与 .tree-dir / .tree-package 同一行高；行高即 line-height（文字单行垂直居中） */
+  padding: 0 6px;
+  height: var(--tree-row-h);
+  line-height: var(--tree-row-h);
   text-align: left;
   border-radius: var(--radius-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-2);
+  font-size: var(--fs-1);
 }
 .tree-file:hover {
   background: var(--hover);
@@ -7265,7 +7290,7 @@ button.primary .hint {
   align-items: center;
   gap: 8px;
   margin: 4px 0 10px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   color: var(--fg-dim, #9aa4b2);
 }
 .kd-label {
@@ -7304,7 +7329,7 @@ button.primary .hint {
   width: 100%;
   border-collapse: collapse;
   margin: 8px 0;
-  font-size: 13px;
+  font-size: var(--fs-2);
 }
 .dd-table th,
 .dd-table td {
@@ -7328,13 +7353,13 @@ button.primary .hint {
 }
 .fh-path {
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--fs-1);
 }
 .fh-table {
   width: 100%;
   border-collapse: collapse;
   margin: 8px 0;
-  font-size: 13px;
+  font-size: var(--fs-2);
 }
 .fh-table th,
 .fh-table td {
@@ -7348,35 +7373,54 @@ button.primary .hint {
 }
 
 /* ===== D1 面包屑（宿主自绘栏：standalone Monaco 无 breadcrumbs API，取证见 breadcrumb-path.ts） ===== */
+/* VIS-3：恒定单行——旧 `flex-wrap: wrap` 在符号链一长时折成两行，把整块 Monaco 下推；
+   VS Code 的口径是单行 + 末段省略。这里 nowrap + 容器 overflow:hidden 把高度钉死，
+   中间段优先收缩（flex-shrink:8），当前符号（末段）最后收缩且保底 10ch 可读宽，
+   分隔符 `flex:none` 不被压没。点击 / 键盘行为与 :focus-visible 规则原样未动。 */
 .editor-crumb {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 2px;
+  overflow: hidden;
   padding: 2px 10px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   color: var(--text-dim, #9aa4b2);
   background: var(--panel-bg, #232834);
   border-bottom: 1px solid var(--border, #3a4252);
+  white-space: nowrap;
   user-select: none;
 }
 .editor-crumb-seg {
   display: inline-flex;
   align-items: center;
+  flex: 0 1 auto;
   min-width: 0;
 }
+/* 中间段先让位（收缩系数是末段的 8 倍），末段（当前符号）留 10ch 保底；
+   中间段的地板 16px ≈ 分隔符 glyph + 两侧 4px 内衬 ⇒ 压到极限也先丢标签、不丢 `›` */
+.editor-crumb-seg:not(:last-child) {
+  flex-shrink: 8;
+  min-width: 16px;
+}
+.editor-crumb-seg:last-child {
+  flex-shrink: 1;
+  min-width: 10ch;
+}
 .editor-crumb-sep {
+  flex: none;
   margin: 0 4px;
   opacity: 0.6;
 }
 .editor-crumb-item {
   all: unset;
   cursor: pointer;
+  min-width: 0;
   max-width: 32ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 1px 4px;
 }
 .editor-crumb-item:hover {
@@ -7514,7 +7558,7 @@ button.primary .hint {
   padding: 6px 8px;
   border-left: 3px solid var(--accent, #61afef);
   background: color-mix(in srgb, var(--accent, #61afef) 10%, transparent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .rp-locate-text {
   flex: 1 1 220px;
@@ -7526,7 +7570,7 @@ button.primary .hint {
 .rp-locate-row {
   outline: 1px solid var(--accent, #61afef);
   outline-offset: -1px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   animation: rp-locate-flash 1.2s ease-out 2;
 }
 @keyframes rp-locate-flash {
@@ -7989,7 +8033,7 @@ button.resume-session {
 }
 .oh-path {
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--fs-1);
 }
 /* 列表直接复用 .fh-table 的表格骨架，这里只补操作历史自己的差异 */
 .oh-table td:nth-child(2) {
@@ -8004,7 +8048,7 @@ button.resume-session {
 .oh-files {
   margin: 4px 0 6px;
   padding-left: 18px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -8012,9 +8056,9 @@ button.resume-session {
 .oh-kind-new {
   display: inline-block;
   min-width: 30px;
-  font-size: 11px;
+  font-size: var(--fs-0);
   text-align: center;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   margin-right: 4px;
 }
 .oh-kind-mod {
@@ -8126,7 +8170,7 @@ button.resume-session {
   width: 26px;
   border: none;
   /* 标签条现在铺满 head 剩余宽（见 `.editor-tabs-bar`），它那条下划线就停在按钮左侧
-     26px 处 ⇒ 补上同一条线，head 的下边缘才连续。border-box + stretch，高度不变（仍 35px），
+     26px 处 ⇒ 补上同一条线，head 的下边缘才连续。border-box + stretch，高度不变（仍 36px + 下边线），
      hover 只改 background，两者不打架。 */
   border-bottom: 1px solid var(--border);
   background: transparent;
