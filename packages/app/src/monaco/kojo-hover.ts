@@ -8,6 +8,7 @@ import type {
   KojoLibraryTable,
   VariableSchema,
 } from '@kojo/plugin-api';
+import { symbolTokenAt, unicodeTokenAt } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
 import { erbBitHoverName } from './erb-completion-bits';
@@ -81,8 +82,21 @@ export interface HoverHit {
     readonly lines?: readonly string[];
 }
 
+/**
+ * 取词的两把尺子（DRIFT-APP 2，2026-10-19：**字符集一个字都不在本文件写**）。
+ *
+ * 两把尺子服务两条不同的取词路，各取其契约层的单一真源，不是"一把用错"：
+ * - **变量引用路** `族名:段`（`isRefChar` + `REF_RE`，本文件唯一保留的字面字符集，
+ *   判的是"带冒号的引用形状"而不是标识符）；
+ * - **反查表路**（系统函数 / 基础库 / 指令编号：查的都是**原生 ASCII 记号**）⇒ 用契约
+ *   `symbolTokenAt`（`plugin-api/symbol-token`，那张表刻意只认 ASCII——"宁可漏也不跳错行"，
+ *   本文件的注释不许把它写成 Unicode）；
+ * - **函数索引路 / `#DIM` 声明路**（查的是作者自己起的名字，语料里约两成函数名含 CJK）
+ *   ⇒ 用契约 `unicodeTokenAt`（`MODEL_TOKEN_CLASS` 那一把，与 F2 改名 / 引用面板同源）。
+ *
+ * 改前函数索引路错用了反查表那把 ASCII 尺，症状 = 中文函数名在 `.erb` 里悬停什么都不出。
+ */
 const isRefChar = (ch: string): boolean => /[A-Za-z0-9_:]/.test(ch);
-const isIdentChar = (ch: string): boolean => /[A-Za-z0-9_]/.test(ch);
 const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
 
 /** 变量引用：`族名` + 至少一段 `:段`（段可含角色号 / 索引 / 作用域名） */
@@ -146,13 +160,15 @@ export function resolveHoverName(
     }
   }
 
-  // 2) 英文函数名：`GETBIT` → 获取标记（系统表反向优先，再查 adapter 基础库表反查）。
-  const identSpan = spanAround(lineText, col0, isIdentChar);
-  if (identSpan) {
-    const token = lineText.slice(identSpan.start, identSpan.end);
-    const cn = SYSTEM_FUNCTION_REVERSE.get(token) ?? tables.libraryTable?.lookupByFunction?.(token);
+  // 2) 原生函数名（ASCII 记号）：`GETBIT` → 获取标记（系统表反向优先，再查 adapter 基础库表反查）。
+  //    尺子 = 契约 `symbolTokenAt` 的缺省记号集（与转到定义 / 引用面板的"光标处是哪个原生
+  //    名字"同一把，本文件不再自己写字符集）。中文词在这一路**必然**判不出记号——那是
+  //    有意口径（反查表的键就是 ASCII 原生名），中文名字另有第 5 路与第 6 路。
+  const fnToken = symbolTokenAt(lineText, col0 + 1);
+  if (fnToken) {
+    const cn = SYSTEM_FUNCTION_REVERSE.get(fnToken.text) ?? tables.libraryTable?.lookupByFunction?.(fnToken.text);
     if (cn !== undefined && cn.length > 0) {
-      return { name: cn, kind: `函数 · ${token}`, startColumn: identSpan.start + 1, endColumn: identSpan.end + 1 };
+      return { name: cn, kind: `函数 · ${fnToken.text}`, startColumn: fnToken.startColumn, endColumn: fnToken.endColumn };
     }
   }
 
@@ -183,7 +199,9 @@ export function resolveHoverName(
   // 5) ERB 函数定义（宿主注入 `erbIndex` 通道）：光标词 ∈ `ErbIndex.byName`（归一化大写名）
   //    ⇒ docComment（多行正文）+ 形参签名 + 定义位置。定义行与调用点同词同命中——查表只认词，
   //    不认语法位。通道缺席 / 索引未建 / 词不在索引 ⇒ 本路不产结果（不猜）。
-  const erbFn = resolveErbFunctionHover(lineText, col0, tables.erbIndex);
+  //    取词尺 = 契约 `unicodeTokenAt`（DRIFT-APP 2：作者自定的函数名大量是中文，ASCII 尺
+  //    量不出记号 ⇒ 整路查不到；F2 改名与引用面板早就是这把 Unicode 尺，两路现在同源）。
+  const erbFn = resolveErbFunctionHover(lineText, column, tables.erbIndex);
   if (erbFn !== undefined) return erbFn;
 
   // 5.5) 本文件 `#DIM` 声明（EC-DECL 的悬停半边，2026-10-19）：`#DIM 好感度` 声明过之后，
@@ -201,6 +219,9 @@ export function resolveHoverName(
 /**
  * ERB 函数路（**纯函数**）：光标词在 `ErbIndex.byName` 里 ⇒ 产出带正文的命中。
  *
+ * - 取词尺 = 契约 `unicodeTokenAt`（字母 / 数字 / 下划线的 Unicode 记号，与 F2 改名、
+ *   引用面板、结构化着色同一把）——函数索引里存的就是作者自己起的名字，**含中文的
+ *   函数名是常态不是例外**，用 ASCII 尺量出的记号在 `byName` 里根本查不到（DRIFT-APP 2）；
  * - 名词查表用**归一化大写**（Emuera 函数名大小写不敏感，与 `byName` 键同口径）；
  * - 正文 = docComment（有则按行拆开）+ 形参签名（参数取自同一索引的 `files` 全量定义，
  *   文件不在索引 ⇒ 只省签名这一行，不猜）+ 定义位置（`文件路径:行号`）；
@@ -208,7 +229,7 @@ export function resolveHoverName(
  */
 function resolveErbFunctionHover(
   lineText: string,
-  col0: number,
+  column: number,
   getIndex: (() => ErbIndex | null | undefined) | undefined,
 ): HoverHit | undefined {
   if (typeof getIndex !== 'function') return undefined;
@@ -219,10 +240,9 @@ function resolveErbFunctionHover(
     return undefined;
   }
   if (!index) return undefined;
-  const span = spanAround(lineText, col0, isIdentChar);
+  const span = unicodeTokenAt(lineText, column);
   if (!span) return undefined;
-  const token = lineText.slice(span.start, span.end);
-  const defs = index.byName.get(token.toUpperCase());
+  const defs = index.byName.get(span.text.toUpperCase());
   if (!defs || defs.length === 0) return undefined;
 
   const def = defs[0]!;
@@ -241,8 +261,8 @@ function resolveErbFunctionHover(
   return {
     name: def.name,
     kind: 'ERB 函数',
-    startColumn: span.start + 1,
-    endColumn: span.end + 1,
+    startColumn: span.startColumn,
+    endColumn: span.endColumn,
     lines,
   };
 }
@@ -254,8 +274,9 @@ function resolveErbFunctionHover(
  * 路径归一（分隔符 / 大小写）找到当前文件，再在 `dims` 里按大小写不敏感整词匹配。
  * 文件不在索引 / 索引缺席 / 词不是声明名 ⇒ `undefined`（不猜）。
  *
- * 名字字符集比 ASCII 标识符宽：`#DIM 好感度` / 全角字母都是合法声明名，
- * 故 span 用"非空白 + 非运算符"判据，而不是函数路的 `[A-Za-z0-9_]`。
+ * 名字字符集比函数路那把 Unicode 尺还宽：`#DIM 好感度[10]` 这类声明名允许带冒号 /
+ * 括号 / 空白以外的任意字符，故 span 用"非空白 + 非运算符"判据（`isDimNameChar`），
+ * 不复用函数路的记号集——两把尺各自服务一条取词路，合成一把就一定有一侧判错。
  */
 function resolveErbDimHover(
   lineText: string,

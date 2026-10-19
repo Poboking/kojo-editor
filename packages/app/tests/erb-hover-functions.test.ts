@@ -9,7 +9,8 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import type { ErbFunction, ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
+import type { ErbFunction, ErbFunctionRef, ErbIndex, KojoLibraryTable } from '@kojo/plugin-api';
+import { symbolTokenAt, unicodeTokenAt } from '@kojo/plugin-api';
 import { type HoverTables, installHover, resolveHoverName } from '../src/monaco/kojo-hover';
 
 const DOC = ['===================================================', '660,読書', 'TFLAG:193(選択肢文学…)'].join('\n');
@@ -103,6 +104,83 @@ describe('ERB 函数悬停 · 命中', () => {
     const hit = at('CALL |NO_DOC_FUNC');
     expect(hit?.startColumn).toBe('CALL '.length + 1);
     expect(hit?.endColumn).toBe('CALL NO_DOC_FUNC'.length + 1);
+  });
+});
+
+/**
+ * DRIFT-APP 2（2026-10-19）：**函数索引那一路的取词尺改接契约层的 Unicode 那把**。
+ *
+ * 改前这一路自己写着 ASCII 记号集，中文函数名量不出记号 ⇒ `byName` 查不到 ⇒ 悬停整路
+ * 静默（真实语料里约两成函数名含 CJK，不是边角料）。F2 改名、引用面板、结构化着色用的
+ * 都是契约 `unicodeTokenAt` / `MODEL_TOKEN_CLASS` 那一把，现在悬停与它们同源。
+ *
+ * 写法是**对拍契约**而不是断言我新写的正则：把 `resolveErbFunctionHover` 里的尺子换回
+ * ASCII（或直接抄一份新字符集），下面的命中例与区间对拍例立刻红。
+ */
+describe('ERB 函数悬停 · 含 CJK 的函数名（与 F2 / 引用面板同一把尺）', () => {
+  const CJK_NAME = '好感度检查';
+  const MIXED_NAME = '無個性_判定2';
+
+  function cjkIndex(): ErbIndex {
+    const a = fn(CJK_NAME, 7, '读心术：按好感度分支');
+    const b = fn(MIXED_NAME, 21);
+    const files = new Map<string, { functions: ErbFunction[] }>([
+      ['C:/proj/ERB/BOOK.ERB', { functions: [a, b] }],
+    ]);
+    const byName = new Map<string, ErbFunctionRef[]>([[CJK_NAME.toUpperCase(), [ref(a)]], [MIXED_NAME.toUpperCase(), [ref(b)]]]);
+    return { files, byName } as unknown as ErbIndex;
+  }
+
+  const cjkTables: HoverTables = { erbIndex: () => cjkIndex() };
+  const atCjk = (marked: string) => resolveHoverName(marked.replace('|', ''), marked.indexOf('|') + 1, cjkTables);
+
+  it('中文函数名调用点：此前整路查不到，此后命中 + 定义位置', () => {
+    const hit = atCjk('CALL |好感度检查(1)');
+    expect(hit?.name).toBe(CJK_NAME);
+    expect(hit?.kind).toContain('ERB 函数');
+    expect(hit?.lines?.some((l) => l.includes('C:/proj/ERB/BOOK.ERB:7'))).toBe(true);
+    expect(hit?.lines?.some((l) => l.includes('读心术'))).toBe(true);
+  });
+
+  it('中文函数名定义行（`@` 开头）同样命中，且列区间 == 契约 `unicodeTokenAt` 给的区间', () => {
+    const line = `@${CJK_NAME}`;
+    const hit = resolveHoverName(line, 3, cjkTables);
+    const contract = unicodeTokenAt(line, 3);
+    expect(hit).toBeDefined();
+    expect(contract).not.toBeNull();
+    expect(hit!.startColumn).toBe(contract!.startColumn);
+    expect(hit!.endColumn).toBe(contract!.endColumn);
+    expect(hit!.name).toBe(CJK_NAME);
+  });
+
+  it('中英混排 / 全角字母的函数名也命中（记号集就是那张契约表，不是"CJK 白名单"）', () => {
+    const hit = atCjk(`  ${MIXED_NAME}|(ARG:0)`);
+    expect(hit?.name).toBe(MIXED_NAME);
+  });
+
+  it('负例：索引里没有的中文词 ⇒ 这一路不猜（Unicode 尺不等于"什么都给个答案"）', () => {
+    expect(atCjk('IF |未知中文词 >= 1')).toBeUndefined();
+  });
+
+  it('反查表那一路**不跟着**放宽：查的是 ASCII 原生名，中文词不许从那里抢答', () => {
+    // 实测库表 471 条里有 13 条"原生函数名本身就是中文"（如 `充填率`）。若把反查那把尺
+    // 一起放宽，这些条目就会在第 2 路先命中，把函数索引那一路的正文（docComment / 定义位）
+    // 顶掉——两把尺各自服务一条取词路，合成一把必有一侧判错。
+    const lib = {
+      lookupByFunction: (name: string) => (name === '充填率' ? '充填率（中文显示名）' : undefined),
+      // 反查那一路（第 6 路，中文 → 原生形态）与本批无关：桩表对它如实给"查不到"，
+      // 本例只钉"第 2 路不许从中文词面出 `函数 ·` 结果"。
+      lookupByName: () => undefined,
+      names: () => [],
+      hasTable: true,
+    } as unknown as KojoLibraryTable;
+    const line = 'CALL 充填率(1)';
+    const hit = resolveHoverName(line, 7, { libraryTable: lib });
+    // 第 2 路的出货一律带 `函数 · <原生名>` 的 kind —— 出现即说明 ASCII 尺被放宽了
+    expect(hit?.kind ?? '<无命中>').not.toMatch(/^函数 ·/);
+    // 契约的 ASCII 尺照旧给得出原生名记号（这一路的判据没变，只是不再由本文件自己写）
+    expect(symbolTokenAt('CALL GETBIT(1)', 7)!.text).toBe('GETBIT');
+    expect(symbolTokenAt(line, 7)).toBeUndefined();
   });
 });
 
