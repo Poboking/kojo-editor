@@ -288,6 +288,23 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
       continue;
     }
+    /**
+     * 区间标记按**严格等值**判（`trimmed` 逐字等于 `[SKIPSTART]` / `[SKIPEND]`，一字不许差）。
+     *
+     * 本批（LS-DIM 附带的取证）动过念头的地方，取证后**不改**，读数在此（基线盘 `ERB/`
+     * 递归 3,971 份方言文件）：`[SKIPSTART]` 2,186 行、`[SKIPEND]` 2,186 行，其中
+     * **大小写变体 0 行、带尾注/尾空格变体 0 行、`[s]` / `[skip]` 一类别名 0 行**
+     * ⇒ 放开大小写或改成前缀匹配，在这份盘上**一行已索引事实都不会变**
+     * （额外开块的文件 0 份、新被屏蔽的行 0 行：`@` 定义 0 / `#` 声明 0 / `CALL` 行 0）。
+     * 语义代价却是实打实的："这段是不是引擎根本不编译的死代码" 会被改写，而本仓**没有**引擎侧
+     * 依据说 Emuera 怎么解析 `[skipstart]`（`docs/RESEARCH.md` 无 SKIPSTART 条目）⇒ 不猜。
+     * 邻近形态照实记录、同样不改（它们是另一种语句，不是本区间的写法变体）：
+     * `[ENDIF]` 84 / `[IF_DEBUG]` 41 / `[IF DEBUG]` 40 / `[IF_NDEBUG]` 2 —— 条件跳过族，
+     * 要覆盖它得先拿到引擎侧配对判据，另单。
+     * 同一条比较在本仓还写在这些地方（**行为必须与此逐字一致**，要改就同批改）：
+     * 本文件 `forEachControlFlowLine`、`references.ts` 的 `visibleCodeLines`、`symbols.ts` 的
+     * `labelScopeAt`，以及 app / condition-extractor / kojo-sugar / state-replay（本批不许动）。
+     */
     if (trimmed === '[SKIPSTART]') {
       inSkipBlock = true;
       continue;

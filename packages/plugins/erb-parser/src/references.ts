@@ -203,6 +203,7 @@ export function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
       continue;
     }
+    // 区间标记的严格等值判据与 `parseErbText` 逐字同源（取证读数与"为什么不放开大小写"见该处注释）
     if (trimmed === '[SKIPSTART]') {
       inSkipBlock = true;
       continue;
