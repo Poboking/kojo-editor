@@ -157,14 +157,18 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
     const [mtimeMs, size, textLength, lineCount, hasDirective, fns, dims, refs, labels] = value as Tuple;
     const okFn = (x: unknown): boolean =>
       Array.isArray(x) &&
-      (x.length === 5 || x.length === 6) &&
+      // 第 7 位（名字起点列，v9 起）与第 6 位可以是 null：A/B 的 before 臂照样忽略尾部多出来的位
+      (x.length === 5 || x.length === 6 || x.length === 7) &&
       typeof x[0] === 'string' &&
       typeof x[1] === 'number' &&
       typeof x[2] === 'number' &&
       Array.isArray(x[3]) &&
       x[3].every((p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && (p[1] === 0 || p[1] === 1)) &&
       typeof x[4] === 'number' &&
-      (x.length === 5 || typeof x[5] === 'string');
+      // v9 的位置契约：**要落第 7 位就必须先把第 6 位写出来**，无注释块时第 6 位是 `null`
+      // （不是"没有这一位"）；第 7 位存在则必须是数字列
+      (x.length === 5 || x[5] === null || typeof x[5] === 'string') &&
+      (x.length !== 7 || typeof x[6] === 'number');
     const okRef = (x: unknown): boolean =>
       Array.isArray(x) &&
       x.length === 4 &&
@@ -181,13 +185,14 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
     if (!refs.every(okRef)) return null;
     if (!labels.every(okLabel)) return null;
     const functions: ErbFunction[] = fns.map((x) => {
-      const [name, startLine, endLine, params, flags, doc] = x as unknown as [
+      const [name, startLine, endLine, params, flags, doc, nameColumn] = x as unknown as [
         string,
         number,
         number,
         Array<[string, number]>,
         number,
-        string?,
+        string | null | undefined,
+        number | null | undefined,
       ];
       const fn: ErbFunction = {
         name,
@@ -197,7 +202,11 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
         endLine,
         filePath: path,
         isExpressionFunction: (flags & FLAG_EXPRESSION) !== 0,
-        ...(doc === undefined ? {} : { docComment: doc }),
+        // v9 的位置契约：第 6 位写成 `null` 是"这条函数没有注释块"（不是缺位，缺位是长度到 5）；
+        // 第 7 位 `nameColumn` 同理。A/B 要深比 `byName` 的值 ⇒ 参照臂必须把它解出来，
+        // "忽略尾位"只适用于条目级那位溯源摘要，不适用于函数元组内的字段。
+        ...(doc === undefined || doc === null ? {} : { docComment: doc }),
+        ...(nameColumn === undefined || nameColumn === null ? {} : { nameColumn }),
       };
       return fn;
     });
