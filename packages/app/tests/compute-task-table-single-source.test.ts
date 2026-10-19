@@ -13,7 +13,7 @@ import { createConditionExtractorPlugin, conditionExtractorTasks } from '@kojo/p
 import { computeTasks, hasWorkerTask } from '../src/compute-tasks';
 
 /**
- * 装配层任务表单源闸（#23，2026-10-24）。
+ * 装配层任务表单源闸（#23，2026-10-20）。
  *
  * ## 为什么存在
  *
@@ -239,9 +239,10 @@ describe('① 插件导出的任务表 = 装配表的并集（源形状 + 运行
 
 describe('② `ui.editor.decorator` 声明的 offloadKind：装配表里有实现，否则须进钉死的就地豁免账', () => {
   it('offloadKind 声明现场总数钉死（账目项；新增装饰器搬运 = 红，逼一次显式记账）', () => {
-    // 现值 3：erb-structure / erb-expr-syntax 两条进表，糖那条进就地豁免账。
-    // 已知待并的抬账：#24 糖转译 offload（`sugar.transpileDiagnostics` 入表）落地后此处 3 → 4，
-    // 红的是账不是码——改一行、附一句为什么，正是本仓账目项的用法。
+    // 现值 3：进表的两条 = `erb.structureDecorations`（erb-parser/src/plugin.ts:872）与
+    // `erb.exprSyntaxDecorations`（condition-extractor/src/index.ts:191）；就地豁免账里那条 =
+    // `sugar.diagnostics`（ui-sugar-editor/src/index.ts:198）。
+    // 抬账口径：新增一处搬运 = 这一条红，红的是账不是码——改数字、附一句为什么，正是本仓账目项的用法。
     expect(offloadKindSites()).toHaveLength(3);
   });
 
