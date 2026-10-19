@@ -434,6 +434,41 @@ let childCrashes = 0;
 let geometryDrift = 0;
 let totalLines = 0;
 const kindSeen = new Set<string>();
+/**
+ * TSIT4-C 取证计数器①：台词串 `string` 跨度**内部**还能捕到几枚别的节点。
+ * `highlights.scm` 只能给"CST 里存在的节点"挂捕获 ⇒ 这一枚是"结构层有没有落点登记行内插值"的唯一事实。
+ */
+let capturesInsideString = 0;
+/** TSIT4-C 取证计数器②：语料里 `interpolation` 节点的枚数，以及其中"行首整行形"（`{…}` 独占一行）的枚数 */
+let interpolationCells = 0;
+let interpolationCellsLineInitial = 0;
+/** 取证用的跨度索引：把 `string` 节点按行归桶，只用于"是否真子区间"判定，不作任何判据 */
+function indexStringRanges(captures: readonly CstCapture[]): Map<number, Array<[number, number, number, number]>> {
+  const byRow = new Map<number, Array<[number, number, number, number]>>();
+  for (const c of captures) {
+    if (c.node !== 'string') continue;
+    for (let row = c.sr; row <= c.er; row++) {
+      const list = byRow.get(row) ?? [];
+      list.push([c.sr, c.sc, c.er, c.ec]);
+      byRow.set(row, list);
+    }
+  }
+  return byRow;
+}
+/** `x` 的跨度是否是某枚 `string` 跨度的**真子区间**（同点同终点不算内含） */
+function insideSomeString(
+  strings: ReadonlyMap<number, ReadonlyArray<readonly [number, number, number, number]>>,
+  x: { sr: number; sc: number; er: number; ec: number },
+): boolean {
+  for (let row = x.sr; row <= x.er; row++) {
+    for (const [ssr, ssc, ser, sec] of strings.get(row) ?? []) {
+      const afterStart = x.sr > ssr || (x.sr === ssr && x.sc > ssc);
+      const beforeEnd = x.er < ser || (x.er === ser && x.ec < sec);
+      if (afterStart && beforeEnd) return true;
+    }
+  }
+  return false;
+}
 
 /** 掩形：≥2 字的 CJK 串折成 `█`（真实口上不整段抄出，见头注"隐私与打印纪律"）。 */
 function maskShape(lineText: string): string {
@@ -467,6 +502,23 @@ beforeAll(async () => {
     const starts = lineStarts(text);
     const lines = splitLines(text);
     const payload = payloads.get(file)!;
+    /** TSIT4-C 取证：逐份文件数两件事实——`string` 跨度内部有无其它可捕获节点、`interpolation` 是否只有行首形 */
+    const stringsByRow = indexStringRanges(payload.captures);
+    for (const capture of payload.captures) {
+      if (capture.node === 'interpolation') {
+        interpolationCells += 1;
+        // "行首形"= 削掉行前空白后从这一行第一格开始（本语法的 token 会把 extras 吞进自己的跨度，
+        // 故两侧都要先削空白再比 —— 削法与 `paintTokens` / A/B 同一条口径）
+        const row = lines[capture.sr] ?? '';
+        let nodeCol = capture.sc;
+        let firstCol = 0;
+        while (nodeCol < row.length && isSpace(row[nodeCol]!)) nodeCol++;
+        while (firstCol < row.length && isSpace(row[firstCol]!)) firstCol++;
+        if (nodeCol === firstCol) interpolationCellsLineInitial += 1;
+      }
+      if (capture.node === 'string') continue;
+      if (insideSomeString(stringsByRow, capture)) capturesInsideString += 1;
+    }
     const tokens = paintTokens(payload.captures, text, starts);
     const geometry = {
       lineCount: lines.length,
@@ -568,8 +620,20 @@ beforeAll(async () => {
  * 构成只有一族：`text` 行的台词串内插值（`sugar.interp` 135 + `sugar.interp.delimiter` 54）。
  * 成因不是"没测准"，是**真表没格**——`text_line` 挂 `@none`、`interpolation` 挂 `@string.special`，
  * 两支在 `types.ts` 都是表外 ⇒ 这一行的行档无从谈起，两侧各说各的。
- * 预算就取实测 189（贴线放）：以后哪一批让"说不清"多一格，当场红；要降它只能动 `types.ts`
- * （给插值登记一档）或动语法（让 `interpolation` 单独成支并先落位），**不能动这份测试**。
+ * 预算就取实测 189（贴线放）：以后哪一批让"说不清"多一格，当场红。
+ *
+ * **TSIT4-C 取证（2026-10-20）：这一格降不下去，卡在语法层不在档位表。** 两条都是实测不是推理：
+ * - 只动 `types.ts`（把 `@string.special` 登记成 `sugar.interp`，即路线 A 的第二半单独做完）复跑本对
+ *   闸：本 19 份语料里 `interpolation` 节点只有 **2 枚**（全是行首整行 `{…}`），于是
+ *   分母 97,143 → 97,187（+44 格）、A/B 侧 97,416 → 97,460、逐格一致率仍 **99.58%**、
+ *   三桶 223 / 0 / **189 纹丝不动**（已回退，未入库）；
+ * - 台词串的 CST 形状是 `string: token(prec(5, /「[^\n]*[」\\]/))`（`grammar.js`）——**一枚原子 token、
+ *   没有子节点**，`highlights.scm` 只能给"存在的节点"挂捕获 ⇒ 台词行内那段 `{…}` 插值在结构层
+ *   **没有可写的模式**（`sugar.interp` 一族在词法层也只由 `{`/`}` 触发，`%` 归 `operator` 不是插值档）。
+ *   上面三条断言把这两件事实钉成闸：真源哪天给出行内节点，断言②当场红并说"路线 A 可行"。
+ * ⇒ 要真把 189 归零，顺序只能是：语法把 `string` 拆成带子节点的规则 → 重编 wasm → `.scm` 加捕获 →
+ *   `types.ts` 登记与词法同名的档 → 回来重取本文件的数。**不许**在 `types.ts`/`semantic.ts` 里按正则
+ *   自己切行内区间（那是第二套判据，本仓库明令禁止）。
  *
  * ⚠ 分母口径：本文件的语料 = "既有 19 份"，`packages/kojo-syntax-tree/tests` 整棵子树不吃。
  * 若红先看第一行打印的夹具清单——清单变了（新增语料 / 有人把夹具挪进 `fixtures/`）就要重算取数，
@@ -721,12 +785,39 @@ describe('结构层 ↔ 词法层逐格差异归因（三桶 + 说不清棘轮�
     const independent = diffCells.filter((c) => c.verdict === '结构层更对' && c.evidence === '独立').length;
     console.log(`   一句话：这批差异读成"结构层判错"没有证据，读成"结构层判对"同样没有证据——期望档位只能由三张真表串出来，`);
     console.log(`           串得到的 ${expectationByKind.size} 个 kind 全靠结构层自己那一支捕获 ⇒ "结构层更对" ${buckets[0]!.rows.length} 格里独立证据只 ${independent} 格。`);
-    console.log(`           开默认的真实代价 = ${overwritten} 格"作者档位表里登记过的档"被整行一档覆盖；其中"说不清" ${buckets[2]!.rows.length} 格全在台词内插值（真表对这一族没有归属，要动的是 types.ts，不是这份测试）。`);
+    console.log(`           开默认的真实代价 = ${overwritten} 格"作者档位表里登记过的档"被整行一档覆盖；其中"说不清" ${buckets[2]!.rows.length} 格全在台词内插值（真表对这一族没有归属）。`);
+    console.log(`           TSIT4-C 取证：要动的是**语法**——台词串在 CST 里是一枚原子 token「string」，跨度内部捕不到任何子节点，`);
+    console.log(`           所以 highlights.scm 没有可加捕获的落点；单动 types.ts 登记一档实测碰不到这 ${buckets[2]!.rows.length} 格（详见本文件"取证"那条用例与 UNRESOLVED_BUDGET 注释）。`);
     console.log(`   合计 ${diffCells.length} 格 = 本次复算的差异格 ${diffTotal} 格；既有 A/B 的 99.58% / 97,143 格由那份文件继续管，这里不重复钉。`);
 
     // 唯一钉值：说不清只降不升（两把"谁更对"的桶只报数）
     const unresolved = buckets[2]!.rows.length;
     expect(unresolved, `说不清 ${unresolved} 格 > 预算 ${UNRESOLVED_BUDGET} ⇒ 差异解释面在退化`).toBeLessThanOrEqual(UNRESOLVED_BUDGET);
+  });
+
+  it('取证：说不清这一族在 CST 里根本没有落点——结构层要认行内插值，先得有节点可捕', () => {
+    const unresolvedRows = diffCells.filter((c) => c.verdict === '说不清');
+    const byPaintedNode = new Map<string, number>();
+    for (const c of unresolvedRows) byPaintedNode.set(c.paintedNode, (byPaintedNode.get(c.paintedNode) ?? 0) + 1);
+    const inInterpFamily = unresolvedRows.filter(
+      (c) => c.kind === 'text' && (c.monarch === 'sugar.interp' || c.monarch === 'sugar.interp.delimiter'),
+    );
+    console.log(`\n===== TSIT4-C 归位取证（"能不能只动真表就同判"的可证伪事实）=====`);
+    console.log(`说不清格总数            : ${unresolvedRows.length}`);
+    console.log(`  其中「kind=text 且词法档 ∈ {sugar.interp, sugar.interp.delimiter}」: ${inInterpFamily.length}`);
+    console.log(`  按涂色节点分布        : ${[...byPaintedNode].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' / ') || '—'}`);
+    console.log(`台词串 ` + '`string`' + ` 跨度内部捕到的其它节点: ${capturesInsideString} 枚`);
+    console.log(`语料里的 ` + '`interpolation`' + ` 捕获        : ${interpolationCells} 枚，其中行首整行形 ${interpolationCellsLineInitial} 枚`);
+    console.log(
+      `结论口径：highlights.scm 只能给"CST 里存在的节点"挂捕获 ⇒ 台词串内部 ${capturesInsideString} 枚子节点 = ` +
+        `结构层一个可写的模式都没有；单动 types.ts 登记一档实测碰不到这 ${unresolvedRows.length} 格（须先动语法并重编 wasm）。`,
+    );
+    // ① 说不清桶的形状就是"台词行内的插值"这一族（不再是别的形）——桶变了就红，逼下一批重新取证
+    expect(inInterpFamily.length, `说不清桶里混进了非「text × 插值档」的形（${unresolvedRows.length} 格）⇒ 归因结论过期，须重新取证`).toBe(unresolvedRows.length);
+    // ② CST 在台词串内部拿不出任何子节点 ⇒ 结构层没有可登记的落点，归位必须先动语法（并重编 wasm）
+    expect(capturesInsideString, '台词串内部出现了可捕获的子节点 ⇒ 路线 A 现在可行：给该节点加捕获 + 在 types.ts 登记与词法同名的档，然后按实测重取本文件的数').toBe(0);
+    // ③ 插值节点今天只有"整行形"一种（行首 `{…}`），与说不清那批格子（由 `string` 涂色）无交集
+    expect(interpolationCellsLineInitial, '出现了非行首形的 interpolation 节点 ⇒ 上面那条"真源没有行内位置概念"的取证失效').toBe(interpolationCells);
   });
 
   it('归因没长出第二道总数闸：本文件不判一致率，只报参照', () => {
