@@ -386,8 +386,10 @@ describe('CST ↔ classifyLine 逐行一致率（真实语料全量）', () => {
   });
 
   it('KIND_TO_NODE 表闭合（一 kind 一节点、可反查）', () => {
-    // 表规模取数：56 类（冻结词表；第二波只加容器与行内节点，不加 kind）。
-    expect(Object.keys(KIND_TO_NODE).length).toBe(56);
+    // 表规模取数：59 类（冻结词表；第二波只加容器与行内节点，其后两批各补 `classifyLine` 已有的
+    // 判据——两支整行等值 skipStart / skipEnd，与本批的 TRY 系写形 tryStatement。方向只有一个：
+    // 上游先有 kind、语法层补节点，绝不许反过来）。
+    expect(Object.keys(KIND_TO_NODE).length).toBe(59);
     const nodes = new Set(Object.values(KIND_TO_NODE));
     expect(nodes.size).toBe(Object.keys(KIND_TO_NODE).length);
     for (const [kind, node] of Object.entries(KIND_TO_NODE)) {
@@ -470,7 +472,10 @@ const SYNTHETIC: ReadonlyArray<readonly [KojoKind, string]> = [
   ['comment', '; 这是一条注释'],
   ['rawLine', 'SETCOLOR 8, 8, 20'],
   ['rawLine', '$ラベル開始'],
+  ['rawLine', '#DIM TotalEX'],
   ['rawBlockStart', '@GMF_SOMETHING'],
+  ['skipStart', '[SKIPSTART]'],
+  ['skipEnd', '[SKIPEND]'],
   ['headDecl', '角色: 12'],
   ['headDecl', '口上: 破空'],
   ['aliasDecl', '别名 她 = 角色 12'],
@@ -517,6 +522,13 @@ const SYNTHETIC: ReadonlyArray<readonly [KojoKind, string]> = [
   ['dataHead', '数据表：'],
   ['dataEnd', '数据表结束'],
   ['dataEntry', '条目 「甲」'],
+  // TRY 系写形的三档判据（合法记号 / 光杆 / 名单外记号）+ 一枚"必须不抢"的对照：
+  // `试探` 是日常动词，没有 `原形` 界标时两侧都得判台词——少这一格，本形就成了越权扩张。
+  ['tryStatement', '试探 原形 TRYCCALLFORM RELEASE_CHECK_TOOL'],
+  ['controlMalformed', '试探 原形'],
+  ['controlMalformed', '试探 原形 NOTATRYTOKEN'],
+  ['controlMalformed', '试探 原形 TRYCCALLFORMX FOO'],
+  ['text', '试探 她的底线'],
   ['jumpStatement', '跳到 拉贝尔'],
   ['functionJump', '函数跳转 GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1)'],
   ['labelDecl', '标签 拉贝尔'],

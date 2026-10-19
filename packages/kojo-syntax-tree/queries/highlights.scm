@@ -24,9 +24,14 @@
 (string) @string
 (interpolation) @string.special
 
-; ---- 原生直通（全大写 ERB 指令行）与原生函数块 ----
+; ---- 原生直通（全大写 ERB 指令行 / `#DIM` 族预处理）、原生函数块、成对停用块标记行 ----
+; `skip_start` / `skip_end` 是投影生成的节点名：上游再加等值标记时这里少一行只是少一格着色
+; （对照闸会以 kind 点名，不会静默改判）。`@keyword.directive` 在宿主档位表外 = 不涂色，
+; 与 `native_line` 同等待遇（见本文件头注）。
 (native_line) @keyword.directive
 (raw_block_start) @keyword.directive
+(skip_start) @keyword.directive
+(skip_end) @keyword.directive
 
 ; ---- 文件头 / 别名 / 常量 / 开关条目 / 随机形选项 ----
 (head_decl) @keyword.head
@@ -73,6 +78,9 @@
 (data_head) @keyword.control
 (data_end) @keyword.control
 (data_entry) @keyword.control
+; TRY 系写形（`试探 原形 <记号> <原文>`）：`@keyword.control` 在宿主档位表外 = 不涂色，
+; 与同族其余控制行一样只作结构分型（A/B 分母不因此改变，见本文件头注）。
+(try_statement) @keyword.control
 
 ; ---- 演出 / 着色 / 心形 / 消息检查 ----
 (color_head) @keyword

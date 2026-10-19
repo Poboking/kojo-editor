@@ -10,7 +10,15 @@
  * 漂移守卫 = `tests/word-forms-single-source.test.ts`）。规则名与 `node-types.ts` 的
  * KIND_TO_NODE 冻结契约不受影响，数据化只替换"词从哪来"，不替换"结构长什么样"。
  *
- * 优先级顺序照抄 `kojo-sugar` 的 `classifyLine`（行首分派：原生直通 → 头部/别名
+ * 词表之外还有**记号**：`classifyLine` 的行首分派里有三支不是"词"而是正则/整行等值记号
+ * （`#DIM` 族预处理 = `keywords.ts` 的 `DIM_DIRECTIVE_RE`，`[SKIPSTART]` / `[SKIPEND]` =
+ * `lexer.ts` 的 `content === '…'` 支）。它们同样只准从投影来（`rawLineRules` 那一格），
+ * 本批 18 行真冲突的债就是"只投影了词、没投影这三判据"。
+ * 第四格是 **引擎记号名单**（`engineTokenSets`）：`试探 原形 <记号> <原文>` 的 `原形` 之后只放行
+ * 识别核那张九枚集合（`lexer.ts` 的 `TRY_ECHO_TOKENS`，成员出自 `sugar-ident.ts`）——名单不是词、
+ * 也不是正则，不投影就只能手添字面量，而那正是本包设计要堵死的第二份真源。
+ *
+ * 优先级顺序照抄 `kojo-sugar` 的 `classifyLine`（行首分派：停用块标记 → 原生直通 → 头部/别名
  * → 块头 → 表达式头 → 赋值 → 文本）。
  *
  * 设计口径（第二波：块嵌套 + 行内节点）：
@@ -74,6 +82,8 @@ const DELIM = `[^${IDP}\\n]`;
 const C = '[^";\\n]';
 /** 块收束行之前允许的空行 / 回缩空白（换行 + 水平空白，含全角空格与 CRLF 残迹）。 */
 const NLWS = '[ \\t\\r\\f\\u3000\\n]*';
+/** 水平空白全集（= extras 那一支的字符集，含 CRLF 残迹与全角空格）；整行等值判据靠它对齐 `contentOf` 的去尾空白。 */
+const HW = ' \\t\\r\\f\\u3000';
 
 /**
  * 词形表（**生成文件，禁手改**）：`tools/gen-word-forms.mjs` 对 `kojo-sugar` 词表真源的
@@ -81,6 +91,24 @@ const NLWS = '[ \\t\\r\\f\\u3000\\n]*';
  * 重跑本包 `build` 即同步进 CST（守卫：`tests/word-forms-single-source.test.ts`）。
  */
 const WF = require('./src/word-forms.json');
+
+/**
+ * 词表之外的行首判据投影（`#DIM` 族预处理正则 + 整行严格等值标记）。缺这一格 = 投影脚本没跑
+ * 或产物被手改过 ⇒ 当场抛，绝不带着缺判据的语法去生成 parser（静默把标记行吞成旁白比构建红更坏）。
+ */
+const RAW = WF.rawLineRules;
+if (!RAW || typeof RAW.dimDirective?.pattern !== 'string' || !Array.isArray(RAW.exactMarkers)) {
+  throw new Error('word-forms.json 缺 rawLineRules 这一格——重跑 tools/gen-word-forms.mjs 取回行首判据投影');
+}
+
+/**
+ * TRY 系写形的记号界标（`engineTokenSets['inline.tryStatement']` = 识别核那九枚）。
+ * 缺这一格 ⇒ 当场抛：语法层宁可构建红，也绝不带一份手抄名单进 parser（名单一漂就是静默少判）。
+ */
+const TRY_TOKENS = WF.engineTokenSets?.['inline.tryStatement'];
+if (!Array.isArray(TRY_TOKENS) || TRY_TOKENS.length === 0) {
+  throw new Error('word-forms.json 缺 engineTokenSets 的 inline.tryStatement——重跑 tools/gen-word-forms.mjs 取回记号界标');
+}
 
 /** 词形升序比较（UTF-16 码元；不用 localeCompare，locale 会破坏字节可复现性）。 */
 const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -129,7 +157,7 @@ const STATEMENT_WORDS = WF.statementWords;
 
 /**
  * 词法优先级数字表（越大越先胜；等长命中时唯一裁决尺）。次序即 classifyLine 优先级：
- * 兜底 < 赋值 < 原生/台词 < 头部 < 专有关键词 < 块头 < 语句 < 更具体箭头/单行/残缺形。
+ * 兜底 < 赋值 < 标记/原生/台词 < 头部 < 专有关键词 < 块头 < 语句 < 更具体箭头/单行/残缺形。
  * 100+ 一档是"行内尾巴"记号：它们只在行还没结束时合法，必须赢过"就地再起一行"。
  */
 const P = {
@@ -139,6 +167,9 @@ const P = {
   native_line: 4,
   comment_line: 4,
   raw_block_start: 4,
+  // 整行严格等值标记行（`[SKIPSTART]` 一族）：classifyLine 把它排在原生直通**之前** ⇒ 高于 4。
+  // 与 string / interpolation 同数但不相交（那两支起手是 `「` / `{`），等长裁决永远碰不到一起。
+  exact_line_marker: 5,
   string: 5,
   interpolation: 5,
   // 台词行内部三枚（只在 `string` 已开局的状态里合法，与行首分派互不相干）：
@@ -185,6 +216,9 @@ const P = {
   data_end: 11,
   choice_item: 11,
   data_entry: 11,
+  // TRY 系写形与 `control_malformed` 的 TRY 分支在同一行上**必然等长**（两支都吃到行尾），
+  // 词法只比长度 ⇒ 谁赢完全押在这个数字上：合法记号归本形，接不上名单的那批才归残缺形。
+  try_statement: 11,
   jump_statement: 11,
   function_jump: 11,
   loop_step: 11,
@@ -238,11 +272,44 @@ function kwSpace(word, n) {
   return lineRule(n, `(?:${word})[${W}]+${C}*`);
 }
 
+/** kind（camelCase）→ 节点名（snake_case）：与 `src/node-types.ts` 的 KIND_TO_NODE 同一条命名约定。 */
+const nodeOfKind = (kind) => kind.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+
+/**
+ * TRY 系写形的**词头两段**（`试探` + 空白 + `原形`）：两支词形都按语义 id 从投影取
+ * （`inline.tryStatement` / `inline.engineEcho`——后者此前是"投影里有、语法层没消费"的死角，
+ * 本形正是它唯一的消费方）。空白类 `[W]` 逐字对齐真源 `parseTryStatement` 的 `[ \t\u3000]+`。
+ */
+const TRY_HEAD = `(?:${primary('inline.tryStatement')})[${W}]+(?:${primary('inline.engineEcho')})`;
+
+/** TRY 记号择一分支（名单 = `engineTokenSets`，九枚；枚数随真源走，本文件不抄一枚）。 */
+const TRY_TOKEN_ALT = altList(TRY_TOKENS, 'engineTokenSets.inline.tryStatement');
+
+/**
+ * 整行严格等值的标记行记号（当前 = `[SKIPSTART]` / `[SKIPEND]`）。
+ *
+ * 判据 = `lexer.ts` 的 `content === '<marker>'` 支（构建期由 `tools/gen-word-forms.mjs` 抽进
+ * `rawLineRules.exactMarkers`，本文件不自留记号清单）。两支细节：
+ * - **尾巴 `[HW]*` 不是装饰**：真源比的是 `contentOf()` 去过行尾空白的串，而 `text_line` 的 `C*`
+ *   会一路吃到行尾 ⇒ 本记号若不吃掉同一段尾空白，"最长匹配"就把这行判给 `text_line`
+ *   （CRLF 语料里连 `\r` 都算尾空白，实测 daily:3214 / event:2052）。
+ * - **不给 `_line_tail`**：能吃下尾巴就说明行里还有正文，那种行两侧都判文本，本记号不该出现。
+ */
+const markerToken = (marker) => tkRE(P.exact_line_marker, new RegExp(`${esc(marker)}[${HW}]*`));
+
+/** 投影里每一枚等值标记 = 一枚独立行节点（一支一名，kind 由 `node-types.ts` 反查）。 */
+if (RAW.exactMarkers.length === 0) throw new Error('投影里一支整行等值标记都没有——生成脚本的抽取判据漂了');
+const MARKER_RULES = Object.fromEntries(
+  RAW.exactMarkers.map(({ kind, marker }) => [nodeOfKind(kind), () => markerToken(marker)]),
+);
+/** 标记节点名（按投影序，确定性）；`_line` 的择一表用它把每一枚挂回行集合。 */
+const MARKER_NODES = Object.keys(MARKER_RULES);
+
 module.exports = grammar({
   name: 'kojo',
 
   // 换行**不在此列**（由 blank_line 记号认领，否则块节点起点会被 extras 拖到上一行）。
-  extras: () => [/[ \t\r\f\u3000]+/],
+  extras: () => [new RegExp(`[${HW}]+`)],
 
   externals: ($) => [$._indent, $._dedent, $._raw_close],
 
@@ -385,8 +452,21 @@ module.exports = grammar({
     // 行首 `@`：原生函数块起始（rawBlockStart，直到下一个 `@` 行整块透传）。
     raw_block_start: lineRule(P.raw_block_start, `@${C}*`),
 
-    // 全大写原生指令行 / `$标签`（RAW_INSTR_RE 行首 `[A-Z]` 形 + 起始 `$`；皆 rawLine）。
-    native_line: lineRule(P.native_line, `(?:[A-Z][A-Z0-9_.]*(?::${C}*)?|\\$)${C}*`),
+    // 全大写原生指令行 / `$标签` / `#DIM` 族预处理声明（三形同判 rawLine，故同一枚节点）。
+    // 前两支是 `lexer.ts:606` 的 `RAW_INSTR_RE`（`^[A-Z][A-Z0-9_]*(?:[:.][^\s]*)?(?:\s|=|$)`）
+    // 与 `content.startsWith('$')` 的记号化写法——正则不是词，投影覆盖不到，改动真源时同改这里。
+    // 第三支**不在此抄词表**：`RAW.dimDirective.pattern` 是 `keywords.ts:550` 的
+    // `DIM_DIRECTIVE_RE` 经生成脚本编译出的记号正则（`/i` → 逐字母 `[xX]`，`^` 由记号的天然起点锚承担）。
+    native_line: lineRule(
+      P.native_line,
+      `(?:[A-Z][A-Z0-9_.]*(?::${C}*)?|\\$|(?:${RAW.dimDirective.pattern}))${C}*`,
+    ),
+
+    // 整行严格等值的标记行（`[SKIPSTART]` / `[SKIPEND]`…）：规则由投影**动态生成**，一支一节点。
+    // 上游再添加等值判据 ⇒ 重跑本包 build 就多出这一族节点，不必回本文件手添；但
+    // `node-types.ts` 的 KIND_TO_NODE 必须同步登记那枚 kind，否则对照闸以「CST 节点反查不到
+    // kind」点名（fail-closed：宁可红，绝不静默把标记行吞成旁白）。
+    ...MARKER_RULES,
 
     // `标签 <名>`（词 + 空白 + 标签名 → labelDecl；区别于 `$LABEL` 的原生直通形）。
     label_decl: kwSpace(alt('inline.label'), P.label_decl),
@@ -528,6 +608,16 @@ module.exports = grammar({
       ),
     data_entry: kwSpace(alt('inline.dataEntry'), P.data_entry),
 
+    // TRY 系九枚的写形 `试探 原形 <记号> <原文>`（tryStatement）。三处判据全从真源派生：
+    // 词头两段 = 投影词形（`TRY_HEAD`）、界标名单 = 投影记号集合（`TRY_TOKEN_ALT`）、
+    // 记号后的词形边界 = 本包既有的"消费一个分隔符字符"手法（`DELIM` 之后才允许续正文）。
+    // 边界那一条不是装饰：`试探 原形 TRYCCALLFORMX` 在真源里**接不上名单**⇒ controlMalformed，
+    // 少了 `DELIM` 门槛本形会把它吞成合法写形（第一真源的判据就此被第二份改写）。
+    try_statement: lineRule(
+      P.try_statement,
+      `${TRY_HEAD}[${W}]+(?:${TRY_TOKEN_ALT})(?:${DELIM}${C}*)?`,
+    ),
+
     jump_statement: kwSpace(alt('inline.jump'), P.jump_statement),
     function_jump: kwSpace(alt('inline.functionJump'), P.function_jump),
     loop_flow: headWord(alt('inline.breakLoop', 'inline.continueLoop', 'inline.restartLoop'), P.loop_flow),
@@ -564,6 +654,9 @@ module.exports = grammar({
     //   光杆 `跳到` / `函数跳转` / `标签` / `步进` / `条目` / `循环` / `出错处理` / `数据表`。
     // 不含收束词（`循环结束` 等本身合法，归 loop_end/catch_end/data_end）。
     // 词形取自这些 id 的登记面（当前各一枚中文主形；上游若登记别名会自动跟进，由守卫测试钉住）。
+    // 第二支是 TRY 系的残缺档（`试探 原形` 光杆 / `试探 原形 <名单外记号>`）：真源对这两形
+    // 给 controlMalformed 而非台词（fail-closed，绝不冒充"已支持"）。它**必须吃到行尾**才与
+    // `text_line` 等长、由 precedence 抢下这一行；合法记号那三行由 `try_statement` 以同长更高档收走。
     control_malformed: lineRule(
       P.control_malformed,
       `(?:${alt(
@@ -575,7 +668,7 @@ module.exports = grammar({
         'block.loop',
         'block.catch',
         'block.dataTable',
-      )})`,
+      )}|${TRY_HEAD}${C}*)`,
     ),
 
     // ============================================================
@@ -596,6 +689,8 @@ module.exports = grammar({
         // 仍是同一枚 `raw_block_start`，kind 对照分毫不动。
         $.comment_line,
         $.native_line,
+        // ---- 整行等值标记行（投影动态生成，枚数随真源走）----
+        ...MARKER_NODES.map((name) => $[name]),
         $.label_decl,
         // ---- 头部声明族 ----
         $.head_decl,
@@ -634,6 +729,7 @@ module.exports = grammar({
         $.data_head,
         $.data_end,
         $.data_entry,
+        $.try_statement,
         $.jump_statement,
         $.function_jump,
         $.loop_flow,

@@ -16,6 +16,11 @@ export const KIND_TO_NODE = {
   comment: 'comment_line',
   rawLine: 'native_line',
   rawBlockStart: 'raw_block_start',
+  // `[SKIPSTART]` / `[SKIPEND]` 标记行（成对停用块的头与尾）。节点形由 `grammar.js` 从
+  // `word-forms.json` 的整行等值判据投影生成，命名走本表的 camelCase→snake_case 约定；
+  // 判据在 `kojo-sugar/src/lexer.ts` 的 `content === '…'` 支，语法层不另立第二份。
+  skipStart: 'skip_start',
+  skipEnd: 'skip_end',
   headDecl: 'head_decl',
   aliasDecl: 'alias_decl',
   constDecl: 'const_decl',
@@ -62,6 +67,10 @@ export const KIND_TO_NODE = {
   dataHead: 'data_head',
   dataEnd: 'data_end',
   dataEntry: 'data_entry',
+  // TRY 系九枚的写形 `试探 原形 <记号> <原文>`（`lexer.ts::parseTryStatement`）。词头两支词形
+  // （`inline.tryStatement` / `inline.engineEcho`）与界标名单（`engineTokenSets`）全部来自投影，
+  // 语法层不自留一枚；接不上名单的 `试探 原形 …` 落 `controlMalformed`（同一枚 control_malformed 节点）。
+  tryStatement: 'try_statement',
   jumpStatement: 'jump_statement',
   functionJump: 'function_jump',
   labelDecl: 'label_decl',

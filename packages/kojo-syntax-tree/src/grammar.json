@@ -613,7 +613,7 @@
             "value": 4,
             "content": {
               "type": "PATTERN",
-              "value": "(?:[A-Z][A-Z0-9_.]*(?::[^\";\\n]*)?|\\$)[^\";\\n]*"
+              "value": "(?:[A-Z][A-Z0-9_.]*(?::[^\";\\n]*)?|\\$|(?:#(?:[dD][iI][mM][sS][tT][rR]|[dD][iI][mM][cC][hH][aA][rR]|[dD][iI][mM][fF]|[dD][iI][mM][sS]|[dD][iI][mM]|[dD][eE][fF][iI][nN][eE])\\s+\\S))[^\";\\n]*"
             }
           }
         },
@@ -630,6 +630,28 @@
           ]
         }
       ]
+    },
+    "skip_end": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 5,
+        "content": {
+          "type": "PATTERN",
+          "value": "\\[SKIPEND\\][ \\t\\r\\f\\u3000]*"
+        }
+      }
+    },
+    "skip_start": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 5,
+        "content": {
+          "type": "PATTERN",
+          "value": "\\[SKIPSTART\\][ \\t\\r\\f\\u3000]*"
+        }
+      }
     },
     "label_decl": {
       "type": "SEQ",
@@ -1859,6 +1881,34 @@
         }
       ]
     },
+    "try_statement": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "TOKEN",
+          "content": {
+            "type": "PREC",
+            "value": 11,
+            "content": {
+              "type": "PATTERN",
+              "value": "(?:试探)[ \\t\\u3000]+(?:原形)[ \\t\\u3000]+(?:TRYCALLLIST|TRYCCALL|TRYCCALLFORM|TRYCGOTO|TRYCGOTOFORM|TRYCJUMP|TRYCJUMPFORM|TRYGOTOLIST|TRYJUMPLIST)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\";\\n]*)?"
+            }
+          }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "_line_tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
     "jump_statement": {
       "type": "SEQ",
       "members": [
@@ -2177,7 +2227,7 @@
             "value": 2,
             "content": {
               "type": "PATTERN",
-              "value": "(?:出错处理|函数跳转|循环|数据表|条目|标签|步进|跳到)"
+              "value": "(?:出错处理|函数跳转|循环|数据表|条目|标签|步进|跳到|(?:试探)[ \\t\\u3000]+(?:原形)[^\";\\n]*)"
             }
           }
         },
@@ -2213,6 +2263,14 @@
         {
           "type": "SYMBOL",
           "name": "native_line"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "skip_end"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "skip_start"
         },
         {
           "type": "SYMBOL",
@@ -2353,6 +2411,10 @@
         {
           "type": "SYMBOL",
           "name": "data_entry"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "try_statement"
         },
         {
           "type": "SYMBOL",
