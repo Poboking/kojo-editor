@@ -1055,6 +1055,12 @@ class BlockParser {
         // `函数跳转` 的余文**逐字**带走（函数调用串，含括号 / 引号 / 逗号，不降糖也不校验）。
         this.cursor.next();
         return { kind: 'rawLine', text: `${cls.engine} ${cls.target}`, loc: spanOf(line) } as RawLine;
+      case 'tryStatement':
+        // TRY 系九枚写形：`engine` 是名单里那枚记号原文，`body` 是它之后的**逐字节**余文
+        // （自带前置空白，含行尾注释）⇒ 拼起来就是作者那一行，转译器一个字符都不解释。
+        // 发射先例 = 原生直通行（`#DIM` 族 / 全大写指令）：写形 ≡ 产物，round-trip 天然闭合。
+        this.cursor.next();
+        return { kind: 'rawLine', text: `${cls.engine}${cls.body}`, loc: spanOf(line) } as RawLine;
       case 'labelDecl':
         this.cursor.next();
         return { kind: 'rawLine', text: `$${cls.name}`, loc: spanOf(line) } as RawLine;
@@ -1845,6 +1851,10 @@ class BlockParser {
       case 'dataEntry':
         // 候选行的数据表条目合法（随机候选本身可以是一条 `DATAFORM` 数据）——原样产，不吞行
         return { kind: 'rawLine', text: `${cls.engine} ${cls.body}`, loc: spanOf(line) } as RawLine;
+      case 'tryStatement':
+        // 候选 / 内联体位置的 TRY 写形：与 `parseStatement` 那一支同一条发射（逐字节拼回源行）。
+        // 不写这条 = 落 `default: null`，**整行静默消失**（随机候选里少一条语句，比报错更坏）。
+        return { kind: 'rawLine', text: `${cls.engine}${cls.body}`, loc: spanOf(line) } as RawLine;
       case 'assign':
         return {
           kind: 'rawLine',
