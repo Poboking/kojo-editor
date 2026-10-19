@@ -14,7 +14,8 @@ import { errorText } from '@kojo/plugin-api';
  * 落点取舍（为什么不往 `ui.editor.languageService` 判别式联合里加 `signatureHelp` 成员）：
  * 这条能力唯一缺的知识是**槽语义表**，而它已经在 `game.adapter` 槽上；剩下的"谁在被调、
  * 光标在第几个实参"是**引擎级语法**（括号 / 逗号 / 引号），不是游戏知识，本层已有同种先例
- * （`erb-completion-bits.ts` 的 `matchingParen` / `topLevelComma`）。加判别成员要动两枚插件的
+ * （`erb-completion-bits.ts` 的 `matchingParen` / `topLevelComma`）。实参切分判据（`splitArguments`）
+ * 只认半角逗号，字符串（`"…"` / `'…'`）与嵌套括号内的逗号不数——与槽表同源。加判别成员要动两枚插件的
  * 注册码却换不来任何新数据 ⇒ 只做宿主层，将来若插件要交**自己的**形参表（如 ERB 声明的
  * 实参名）再按 additive 形态加成员。
  *
@@ -42,28 +43,35 @@ export interface CallSite {
   readonly closed: boolean;
 }
 
-/** 实参分隔符：半角逗号 + **全角逗号**（口上文本里 `，` 是真出现的形态，漏了它等于半个功能） */
-const SEPARATORS = new Set([',', '，']);
+/** 实参分隔符：**仅半角逗号**。Emuera 只认半角 `,`，全角 `，` 不是分隔符（钉住此判据，防止将来放宽）。 */
+const SEPARATORS = new Set([',']);
 
 /** 标识串字符：除空白与结构字符外都算名字的一部分（中文名 / `:` 段 / `%` 插值都不切） */
 const CALLEE_RE = /([^\s(),;[\]"']+)$/;
 
-/** 从 `open+1` 起找顶层（深度 0）的实参区间；遇顶层右括号停止并报告闭合 */
-function splitArguments(
+/**
+ * 从 `open+1` 起找顶层（深度 0）的实参区间；遇顶层右括号停止并报告闭合。
+ * 字符串（`"…"` 或 `'…'`）内的逗号与括号一律不数；嵌套 `()` / `[]` 内的逗号不数。
+ * 导出供单测直接验证判据（一份判据，两处消费）。
+ */
+export function splitArguments(
   lineText: string,
   open: number,
 ): { args: CallArgumentSpan[]; closed: boolean } {
   const args: CallArgumentSpan[] = [];
   let start = open + 1;
   let depth = 0;
-  let inString = false;
+  let quote: '"' | "'" | null = null;
   for (let i = open + 1; i < lineText.length; i++) {
     const ch = lineText[i]!;
-    if (ch === '"') {
-      inString = !inString;
+    if (quote !== null) {
+      if (ch === quote) quote = null;
       continue;
     }
-    if (inString) continue; // 字符串里的逗号 / 括号一律不是分隔符
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
     if (ch === '(' || ch === '[') {
       depth++;
     } else if (ch === ')' || ch === ']') {
@@ -97,18 +105,21 @@ export function findCallSite(lineText: string, column: number): CallSite | null 
 
   // 光标之前的扫描：字符串态 + 左括号栈（栈里剩的就是未闭合的那些）
   const stack: number[] = [];
-  let inString = false;
+  let quote: '"' | "'" | null = null;
   for (let i = 0; i < col0; i++) {
     const ch = lineText[i]!;
-    if (ch === '"') {
-      inString = !inString;
+    if (quote !== null) {
+      if (ch === quote) quote = null;
       continue;
     }
-    if (inString) continue;
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
     if (ch === '(') stack.push(i);
     else if (ch === ')') stack.pop();
   }
-  if (inString) return null;
+  if (quote !== null) return null; // 光标落在字符串字面量里
   const open = stack[stack.length - 1];
   if (open === undefined) return null;
 
@@ -357,11 +368,11 @@ export interface SignatureTables {
 /**
  * 触发字符（自定并说明）：
  * - `(` —— 进入调用括号，作者正要开始填第一个槽；
- * - `,` / `，` —— 换到下一槽（**全角逗号是口上的真形态**，只认半角等于一半调用位点没提示）。
+ * - `,` —— 换到下一槽（**仅半角**：Emuera 只认半角逗号；全角 `，` 不是分隔符，不触发）。
  * 不列 `)`：右括号意味着这次调用写完了，提示该收而不是该留（Monaco 会把触发字符同时当
  * 重触发字符，无需再声明一遍）。
  */
-export const SIGNATURE_TRIGGER_CHARACTERS: readonly string[] = ['(', ',', '，'];
+export const SIGNATURE_TRIGGER_CHARACTERS: readonly string[] = ['(', ','];
 
 /** 中性签名 → Monaco `SignatureHelp`（`activeSignature` 恒 0：一张表只给一张最具体签名） */
 export function toMonacoSignatureHelp(hit: ResolvedSignature): Monaco.languages.SignatureHelp {

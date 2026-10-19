@@ -25,6 +25,7 @@ import {
   resolveSignature,
   resolveSignatureInText,
   slotParameterLabel,
+  splitArguments,
   toMonacoSignatureHelp,
 } from '../src/monaco/kojo-signature';
 
@@ -76,9 +77,15 @@ describe('findCallSite · 实参切分与活跃索引', () => {
     expect(hit!.args.length).toBe(2);
   });
 
-  it('全角逗号 `，` 也是分隔符（口上文本的真形态）：`CALL F(1，2)` 切两槽', () => {
-    const hit = findCallSite('CALL F(1，2)', 10); // 光标紧接在 `，` 之后
-    expect(hit).toMatchObject({ callee: 'F', activeIndex: 1 });
+  it('全角逗号 `，` **不是**分隔符（Emuera 只认半角逗号，钉住此判据）：`CALL F(1，2)` 是一整个实参', () => {
+    const hit = findCallSite('CALL F(1，2)', 10);
+    expect(hit).toMatchObject({ callee: 'F', activeIndex: 0 });
+    expect(hit!.args.length).toBe(1); // `，` 不切分，整段 `1，2` 落第 0 槽
+  });
+
+  it(`单引号字符串里的逗号**不是**分隔符：F('A,B', C) 仍是两槽，光标在第 2 槽`, () => {
+    const hit = findCallSite("F('A,B', C)", 9);
+    expect(hit).toMatchObject({ callee: 'F', activeIndex: 1, closed: true });
     expect(hit!.args.length).toBe(2);
   });
 
@@ -287,6 +294,77 @@ describe('describeErbSignature · ERB 用户函数签名', () => {
   });
 });
 
+/* ============================== splitArguments · 实参切分（导出纯函数，一份判据两处消费） ============================== */
+
+describe('splitArguments · 顶层逗号判据（直接钉测，与 findCallSite 同源）', () => {
+  it('单实参：`F(A)` → 1 槽', () => {
+    expect(splitArguments('F(A)', 1)).toEqual({ args: [{ start: 2, end: 3 }], closed: true });
+  });
+
+  it('多实参：`F(A,B,C)` → 3 槽', () => {
+    expect(splitArguments('F(A,B,C)', 1).args).toEqual([
+      { start: 2, end: 3 },
+      { start: 4, end: 5 },
+      { start: 6, end: 7 },
+    ]);
+  });
+
+  it('嵌套括号内逗号不数：`F(G(A,B),C)` → 2 槽', () => {
+    const { args } = splitArguments('F(G(A,B),C)', 1);
+    expect(args.length).toBe(2);
+  });
+
+  it('方括号内逗号不数：`F(A[1,2],B)` → 2 槽', () => {
+    const { args } = splitArguments('F(A[1,2],B)', 1);
+    expect(args.length).toBe(2);
+  });
+
+  it('双引号字符串内逗号不数：`F("A,B",C)` → 2 槽', () => {
+    const { args } = splitArguments('F("A,B",C)', 1);
+    expect(args.length).toBe(2);
+  });
+
+  it("单引号字符串内逗号不数：`F('A,B',C)` → 2 槽", () => {
+    const { args } = splitArguments("F('A,B',C)", 1);
+    expect(args.length).toBe(2);
+  });
+
+  it('全角逗号 `，` **不是**分隔符（Emuera 只认半角逗号）：`F(1，2)` → 1 槽', () => {
+    const { args } = splitArguments('F(1，2)', 1);
+    expect(args.length).toBe(1);
+  });
+
+  it('括号未闭合时仍切分已有逗号：`F(A,B` → 2 槽，closed=false', () => {
+    expect(splitArguments('F(A,B', 1)).toEqual({
+      args: [{ start: 2, end: 3 }, { start: 4, end: 5 }],
+      closed: false,
+    });
+  });
+});
+
+/* ============================== 糖面退化（列不折算设计：跨面 column=1） ============================== */
+
+describe('糖面退化 · activeParameter 恒 0（列不折算设计，不做假高亮）', () => {
+  // `sourcePointOf` 在糖面上把列钉到 1（设计：行内列不对应），签名解析收到 column=1。
+  // 单行调用：column=1 在左括号之前 ⇒ findCallSite 回 null（不应答 = 不假高亮）。
+  it('单行糖面调用：column=1 ⇒ 签名不应答（null），不假高亮', () => {
+    expect(resolveSignatureInText('CALL F(A, B, C)', 1, 1, protocol(SLOTS))).toBeNull();
+  });
+
+  // 跨行糖面调用：左括号在 middle，column=1 平移后落在第一个实参的起点 ⇒ activeIndex=0。
+  it('跨行糖面：左括号在中间行、column=1 ⇒ activeParameter=0（退化，不假高亮）', () => {
+    const hit = resolveSignatureInText('CALL F(\n    A, B, C)', 2, 1, protocol(SLOTS));
+    expect(hit?.signature.activeParameter).toBe(0);
+  });
+
+  // findCallSiteAt 直接钉：lineIndex=1, column=1 ⇒ cursor 落在 cursorLine 起点。
+  it('findCallSiteAt · column=1 在跨行调用中 ⇒ activeIndex=0', () => {
+    const lines = ['CALL F(', '    A, B, C)'];
+    const hit = findCallSiteAt(lines, 1, 1);
+    expect(hit?.activeIndex).toBe(0);
+  });
+});
+
 /* ============================== Monaco 装配（桩 monaco） ============================== */
 
 interface Registered {
@@ -324,11 +402,11 @@ describe('installSignatureHelp · 装配', () => {
     expect(disposed.sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
   });
 
-  it('触发字符：`(` 进入调用括号、`,` 与 `，` 换槽（全角逗号是口上的真形态）', () => {
-    expect(SIGNATURE_TRIGGER_CHARACTERS).toEqual(['(', ',', '，']);
+  it('触发字符：`(` 进入调用括号、`,` 换槽（仅半角；全角 `，` 不是 Emuera 分隔符，不触发）', () => {
+    expect(SIGNATURE_TRIGGER_CHARACTERS).toEqual(['(', ',']);
     const { monaco, registered } = stubMonaco();
     installSignatureHelp(monaco, { resolve: () => null });
-    expect(registered[0]!.provider.signatureHelpTriggerCharacters).toEqual(['(', ',', '，']);
+    expect(registered[0]!.provider.signatureHelpTriggerCharacters).toEqual(['(', ',']);
   });
 
   it('有签名：返回 `{ value, dispose }`（Monaco 会调 `dispose()`，缺了它就是运行时 TypeError）', () => {
