@@ -598,7 +598,10 @@ export function createErakumamaidAdapterPlugin(): Plugin {
       };
 
       ctx.slots.register('editor.command', {
-        id: 'kojo.importKojoProject',
+        // id 归本游戏命名空间（与 overlay-ids 同一口径）：eratw-adapter 恒在场且已注册
+        // 同款导入命令，裸 `kojo.importKojoProject` 会在激活时撞上同槽同 id 被内核抛错，
+        // 连带回滚本插件全部贡献——eraAkumaMaid 项目从此无法识别。
+        id: 'eraakumamaid.importKojoProject',
         title: '从文件夹导入口上项目…',
         category: '文件',
         run: () => pickAndRequestImport('command-palette'),
@@ -638,7 +641,10 @@ export function createErakumamaidAdapterPlugin(): Plugin {
       /* ---- 面板（本游戏没有内置教程 ⇒ 不传 openTutorial，教程区整块不渲染） ---- */
 
       ctx.slots.register('ui.panel', {
-        id: 'kojo-projects',
+        // 同上：面板贡献 id 也归本游戏命名空间——eratw 的「我的口上项目」面板已占
+        // `kojo-projects`，这里再叫同一个名字就是激活即撞。两块面板并存是本意
+        // （各游戏各一块，与 overlay 的 gameId 前缀口径一致）。
+        id: 'eraakumamaid.kojo-projects',
         title: '我的口上项目',
         icon: 'home',
         order: 35,

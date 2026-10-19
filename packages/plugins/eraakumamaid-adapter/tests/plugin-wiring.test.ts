@@ -107,17 +107,17 @@ describe('eraAkumaMaid · 项目面板与向导族接线', () => {
     const { registered } = activate();
 
     expect(ids(registered, 'game.adapter')).toEqual(['eraakumamaid-adapter']);
-    expect(ids(registered, 'ui.panel')).toEqual(['kojo-projects']);
+    expect(ids(registered, 'ui.panel')).toEqual(['eraakumamaid.kojo-projects']);
     expect(ids(registered, 'ui.overlay')).toEqual([
       NEW_KOJO_PROJECT_OVERLAY_ID,
       IMPORT_KOJO_OVERLAY_ID,
       DEPLOY_KOJO_OVERLAY_ID,
       PUBLISH_KOJO_OVERLAY_ID,
     ]);
-    expect(ids(registered, 'editor.command')).toEqual(['kojo.importKojoProject']);
+    expect(ids(registered, 'editor.command')).toEqual(['eraakumamaid.importKojoProject']);
   });
 
-  it('overlay id 落在本游戏命名空间（不会与 eratw 互相顶掉）', () => {
+  it('贡献 id 落在本游戏命名空间（不会与 eratw 同槽撞名互相顶掉）', () => {
     for (const id of [
       NEW_KOJO_PROJECT_OVERLAY_ID,
       IMPORT_KOJO_OVERLAY_ID,
@@ -127,6 +127,12 @@ describe('eraAkumaMaid · 项目面板与向导族接线', () => {
       expect(id.startsWith('eraakumamaid.')).toBe(true);
       expect(id.startsWith('eratw.')).toBe(false);
     }
+    // 面板与命令与 overlay 同规：eratw 恒在场且占着 `kojo-projects` /
+    // `kojo.importKojoProject`，本包不命名空间化就是激活即抛错（双 adapter 共存的
+    // 集成面另见 packages/app/tests/dual-adapter-coexistence.test.ts）。
+    const { registered } = activate();
+    expect(ids(registered, 'ui.panel')).toEqual(['eraakumamaid.kojo-projects']);
+    expect(ids(registered, 'editor.command')).toEqual(['eraakumamaid.importKojoProject']);
   });
 
   it('游戏侧供数接上了本游戏的脚手架（面数取自文件规格表，不是写死的数）', () => {
