@@ -4,7 +4,8 @@
   "sources": [
     "packages/plugins/kojo-sugar/src/keywords.ts",
     "packages/plugins/kojo-sugar/src/statement-functions.ts",
-    "packages/plugins/kojo-sugar/src/lexer.ts"
+    "packages/plugins/kojo-sugar/src/lexer.ts",
+    "packages/plugins/kojo-sugar/src/sugar-ident.ts"
   ],
   "wordsById": {
     "head.char": [
@@ -352,6 +353,19 @@
         "kind": "skipStart",
         "marker": "[SKIPSTART]"
       }
+    ]
+  },
+  "engineTokenSets": {
+    "inline.tryStatement": [
+      "TRYCALLLIST",
+      "TRYCCALL",
+      "TRYCCALLFORM",
+      "TRYCGOTO",
+      "TRYCGOTOFORM",
+      "TRYCJUMP",
+      "TRYCJUMPFORM",
+      "TRYGOTOLIST",
+      "TRYJUMPLIST"
     ]
   }
 }

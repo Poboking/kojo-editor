@@ -18,7 +18,9 @@
  *   登记真词、忘了重生成，(a) 必红）。
  *
  * 另附：(c2) 逐 id 完备性（committed 词形集必须与真源**集合相等**，缺一枚新别名也红）、
- * (d) 零抄本（grammar.js 去注释后的代码区不得出现"恰为一个词表词形"的字符串字面量）。
+ * (c3) 记号界标完备（TRY 系写形允许的引擎记号名单同样逐 id 相等，加一枚记号未重生成即红）、
+ * (d) 零抄本（grammar.js 去注释后的代码区不得出现"恰为一个词表词形"的字符串字面量，
+ * 也不得出现投影里的**整行等值标记 / 引擎记号**——ASCII 名单躲得过 CJK 判据，得单独量）。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -151,6 +153,24 @@ describe('词表单源守卫（TSIT2-B）', () => {
     }
   });
 
+  it('(c3) 记号界标完备：committed engineTokenSets 与真源派生集合逐 id 相等', () => {
+    // 与 (c2) 同一条理由，只换个对象：TRY 系写形的界标不是词、是识别核那张名单
+    // （`lexer.ts::TRY_ECHO_TOKENS` ⇄ `sugar-ident.ts` 的成员集合）。上游加一枚记号或加一张成员
+    // 集合而忘了重生成 ⇒ grammar 就少认一枚，写形行静默落回 text_line——正是本批要堵的那类死角。
+    const committed = JSON.parse(readFileSync(WF_PATH, 'utf8')) as {
+      engineTokenSets: Record<string, string[]>;
+    };
+    const fresh = buildWordForms(truth).engineTokenSets as Record<string, string[]>;
+    expect(Object.keys(committed.engineTokenSets).sort(), '界标族目录与真源指针表不等').toEqual(
+      Object.keys(fresh).sort(),
+    );
+    for (const id of Object.keys(fresh)) {
+      expect([...committed.engineTokenSets[id]].sort(), `记号名单与真源不等：${id}`).toEqual([...fresh[id]].sort());
+      // 覆盖面自证：本族确实派生出了记号（空名单 = 抽取判据漂了，与"没这项"同样坏）
+      expect(fresh[id].length, `真源派生出的记号名单为空：${id}`).toBeGreaterThan(0);
+    }
+  });
+
   it('(d) 零抄本：grammar.js 代码区除诊断语外不含任何汉字词形', () => {
     const src = readFileSync(path.join(PKG, 'grammar.js'), 'utf8');
     let stripped = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
@@ -162,6 +182,21 @@ describe('词表单源守卫（TSIT2-B）', () => {
     const literals = stripped.match(/'[^'\n]*'|"[^"\n]*"/g) ?? [];
     const hits = literals.map((l) => l.slice(1, -1).trim()).filter((c) => LEX_WORDS.has(c));
     expect(hits, `grammar.js 出现词表词形手抄字面量：${hits.join(' ')}`).toEqual([]);
+    // 同一把尺量**记号**（汉字词形之外的那两类判据）：整行等值标记与引擎记号名单只准从投影来。
+    // ASCII 名单逃得过上面的 CJK 判据，不设这一格就等于给"手添字面量"留了一条明路。
+    const projected = JSON.parse(readFileSync(WF_PATH, 'utf8')) as {
+      rawLineRules: { exactMarkers: { marker: string }[] };
+      engineTokenSets: Record<string, string[]>;
+    };
+    const markAndTokenNames = [
+      ...projected.rawLineRules.exactMarkers.map((m) => m.marker),
+      ...Object.values(projected.engineTokenSets).flat(),
+    ];
+    const copied = markAndTokenNames.filter((name) => stripped.includes(name));
+    expect(
+      copied,
+      `grammar.js 手抄了投影里的记号（整行等值标记 / 引擎记号名单只准经 rawLineRules·engineTokenSets 取）：${copied.join(' ')}`,
+    ).toEqual([]);
   });
 
   it('(d2) 词形只从投影来：committed 投影用到的每个 id 都经真源派生（无表外 id）', () => {

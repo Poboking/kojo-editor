@@ -462,6 +462,14 @@
           "named": true
         },
         {
+          "type": "skip_end",
+          "named": true
+        },
+        {
+          "type": "skip_start",
+          "named": true
+        },
+        {
           "type": "statement_call",
           "named": true
         },
@@ -479,6 +487,10 @@
         },
         {
           "type": "timing_head",
+          "named": true
+        },
+        {
+          "type": "try_statement",
           "named": true
         },
         {
@@ -701,6 +713,14 @@
           "named": true
         },
         {
+          "type": "skip_end",
+          "named": true
+        },
+        {
+          "type": "skip_start",
+          "named": true
+        },
+        {
           "type": "statement_call",
           "named": true
         },
@@ -714,6 +734,10 @@
         },
         {
           "type": "timing_head",
+          "named": true
+        },
+        {
+          "type": "try_statement",
           "named": true
         },
         {
@@ -1027,6 +1051,14 @@
           "named": true
         },
         {
+          "type": "skip_end",
+          "named": true
+        },
+        {
+          "type": "skip_start",
+          "named": true
+        },
+        {
           "type": "statement_call",
           "named": true
         },
@@ -1040,6 +1072,10 @@
         },
         {
           "type": "timing_head",
+          "named": true
+        },
+        {
+          "type": "try_statement",
           "named": true
         },
         {
@@ -1988,6 +2024,14 @@
           "named": true
         },
         {
+          "type": "skip_end",
+          "named": true
+        },
+        {
+          "type": "skip_start",
+          "named": true
+        },
+        {
           "type": "statement_call",
           "named": true
         },
@@ -2001,6 +2045,10 @@
         },
         {
           "type": "timing_head",
+          "named": true
+        },
+        {
+          "type": "try_statement",
           "named": true
         },
         {
@@ -2234,6 +2282,14 @@
           "named": true
         },
         {
+          "type": "skip_end",
+          "named": true
+        },
+        {
+          "type": "skip_start",
+          "named": true
+        },
+        {
           "type": "statement_call",
           "named": true
         },
@@ -2251,6 +2307,10 @@
         },
         {
           "type": "timing_head",
+          "named": true
+        },
+        {
+          "type": "try_statement",
           "named": true
         },
         {
@@ -2300,6 +2360,25 @@
   },
   {
     "type": "timing_head",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "comment_inline",
+          "named": true
+        },
+        {
+          "type": "native_string",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "try_statement",
     "named": true,
     "fields": {},
     "children": {
@@ -2530,6 +2609,14 @@
           "named": true
         },
         {
+          "type": "skip_end",
+          "named": true
+        },
+        {
+          "type": "skip_start",
+          "named": true
+        },
+        {
           "type": "statement_call",
           "named": true
         },
@@ -2543,6 +2630,10 @@
         },
         {
           "type": "timing_head",
+          "named": true
+        },
+        {
+          "type": "try_statement",
           "named": true
         },
         {
@@ -2589,6 +2680,14 @@
   },
   {
     "type": "native_string",
+    "named": true
+  },
+  {
+    "type": "skip_end",
+    "named": true
+  },
+  {
+    "type": "skip_start",
     "named": true
   },
   {
