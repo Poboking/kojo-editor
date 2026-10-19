@@ -77,12 +77,14 @@ export {
   buildCreateInput,
   buildTemplateImportInput,
   charaOptionLabel,
+  composeScaffoldDraft,
   createNewKojoProjectWizard,
   defaultWorkspaceRoot,
   listMarketTemplates,
   locationLabel,
   noKojoDirWarning,
   readRequestToken,
+  scaffoldPreviewLine,
   templateKey,
   templatePreviewLine,
   templateSourceChoices,
@@ -95,6 +97,21 @@ export type {
   TemplateSourceChoice,
   WizardSelectField,
 } from './new-project-wizard';
+
+/* ---- 语言档（起手骨架 = 糖写法 / 原生写法；扩展名一律现算，禁手抄） ---- */
+export {
+  DEFAULT_KOJO_LANG_DOC,
+  KOJO_LANG_DOC_CHOICES,
+  KOJO_LANG_DOC_VALUES,
+  draftLangDoc,
+  kojoLangDocChoice,
+  kojoLangDocExtension,
+  kojoLangDocPreviewParenthesis,
+  normalizeKojoLangDoc,
+  readScaffoldLangDocs,
+  withKojoLangDocs,
+} from './lang-doc';
+export type { KojoLangDoc, KojoLangDocChoice, KojoLangDocProvider, KojoScaffoldFn } from './lang-doc';
 
 /* ---- 发布向导 + 发布纯函数（包 id / 版本 / 许可投影 / 进度文案） ---- */
 export { createPublishKojoWizard, ignoredDerivedNote, ZIP_ENTRY_COPY } from './publish-wizard';

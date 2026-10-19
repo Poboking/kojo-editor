@@ -18,6 +18,11 @@
  * 住在各 adapter 的 `scaffold.ts`，经 `deps.scaffold` 注入。共享层因此一条游戏
  * 事实都不掌握——「剧本号」这类字段由 `deps.extraFields` 声明，没有的游戏就不出现。
  *
+ * 「起手写法」那一格（语言档：糖 / 原生，用户反馈 1，2026-10-20 NEW-ERB）走的是
+ * **同一条声明式路子**：档位本身游戏无关（住在 `lang-doc.ts`，扩展名一律由契约单源
+ * 现算），但"这个游戏支持几种档"随 `deps.scaffold` 声明——没声明的游戏这一行不出现，
+ * 递给脚手架的草稿连 `langDoc` 这个键都没有，产物逐字不变。
+ *
  * 模板来源（KM-14）：默认走内置脚手架（上面那条链路）；也可以选一个**已安装的市场
  * 模板包**（`kind === 'template-pack'`）——那时产物文件不再由脚手架生成，而是把模板包
  * 的 contentDir 经 `workspaces.importDirectory` **字节级复制**成制品（目录名规则 / 预览 /
@@ -37,6 +42,15 @@ import type {
 import { buildScaffoldDirName, sanitizePathSegment } from '@kojo/plugin-api';
 import { LICENSE_CHOICES, licenseProducesFile, type LicenseKind } from './licenses';
 import { readPackAuthorship, type PackAuthorship } from './attribution';
+import {
+  DEFAULT_KOJO_LANG_DOC,
+  draftLangDoc,
+  kojoLangDocChoice,
+  kojoLangDocPreviewParenthesis,
+  readScaffoldLangDocs,
+  type KojoLangDoc,
+  type KojoLangDocChoice,
+} from './lang-doc';
 
 /** 模板来源条目（`deps.listTemplates` 的返回形状；装配侧对已装 `template-pack` 记录的投影） */
 export interface KojoTemplateEntry {
@@ -72,6 +86,13 @@ export interface KojoScaffoldDraft {
   charaName: string;
   license: LicenseKind;
   extra: Readonly<Record<string, number>>;
+  /**
+   * 语言档（糖 / 原生，NEW-ERB 2026-10-20）。
+   *
+   * **本游戏没声明语言档 ⇒ 这个键不出现**（不是 `undefined` 占位）：脚手架收到的
+   * 草稿与改前逐字相同，老游戏的产物一字节都不动。声明了才带上，缺省档 = 糖。
+   */
+  langDoc?: KojoLangDoc;
 }
 
 export interface NewKojoProjectWizardDeps {
@@ -98,6 +119,8 @@ export interface NewKojoProjectWizardDeps {
   /**
    * 本游戏的脚手架（面清单 / 空壳注释 / README / 许可段落全在 adapter 里）。
    * 共享层只负责把表单值装进来——产物长什么样是游戏的事。
+   * 游戏若支持多种**语言档**，随这枚函数声明（见 `lang-doc.ts` 的 `withKojoLangDocs`）；
+   * 没声明的游戏拿到的草稿与历史逐字相同。
    */
   scaffold(draft: KojoScaffoldDraft): ScaffoldFileSet;
   /** 核心面空壳数量（只用于「将生成 N 个文件」这句预览） */
@@ -308,6 +331,60 @@ export function buildTemplateImportInput(
 /** 「自选…」按钮的对话框标题 */
 const LOCATION_DIALOG_TITLE = '选择新建作品的位置…';
 
+/* ---------------- 语言档与落点预览（NEW-ERB 2026-10-20：纯函数半边，可单测） ---------------- */
+
+/**
+ * 内置骨架分支的落点预览那句（纯函数）。
+ *
+ * 糖档那句与历史文案**逐字相同**（那句括号里的扩展名由单源插入，本文件不抄字面量）；
+ * 原生档换成"只写原生语法、不经转译"——作者选完档就在落点预览里看见自己会得到什么。
+ */
+export function scaffoldPreviewLine(args: {
+  fileCount: number;
+  coreFaceCount: number;
+  licenseProduces: boolean;
+  previewNote?: string;
+  langDoc?: KojoLangDoc;
+}): string {
+  return (
+    `将生成 ${args.fileCount} 个文件：中文 README + ${args.coreFaceCount} 个核心面空壳` +
+    `${kojoLangDocPreviewParenthesis(args.langDoc)}` +
+    `${args.licenseProduces ? ' + LICENSE' : ''}` +
+    `${args.previewNote ? `；${args.previewNote}` : ''}`
+  );
+}
+
+/**
+ * 组装递给 `deps.scaffold` 的草稿（纯函数）。
+ *
+ * 语言档那一项**由声明决定出不出现这个键**（`draftLangDoc`），缺省档 = 糖；
+ * 其余字段与历史逐字一致。
+ */
+export function composeScaffoldDraft(
+  form: {
+    workName: string;
+    authorName: string;
+    version: string;
+    charaNo: number;
+    charaName: string;
+    license: LicenseKind;
+    extra: Readonly<Record<string, number>>;
+  },
+  langDocs: readonly KojoLangDocChoice[],
+  langDoc: KojoLangDoc,
+): KojoScaffoldDraft {
+  return {
+    workName: form.workName,
+    authorName: form.authorName,
+    version: form.version,
+    charaNo: form.charaNo,
+    charaName: form.charaName,
+    license: form.license,
+    extra: form.extra,
+    ...draftLangDoc(langDocs, langDoc),
+  };
+}
+
 /** 向导 overlay 组件（createElement 风格；壳层 PanelBody 无 props 渲染） */
 export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () => unknown {
   return function NewKojoProjectWizard(): unknown {
@@ -324,6 +401,13 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       for (const f of extraFields) init[f.key] = f.defaultValue;
       return init;
     });
+    /**
+     * 语言档（NEW-ERB，反馈 1 的下半寸）：这一行出不出现，**只由本游戏的脚手架声明**
+     * （`lang-doc.ts` 的 `withKojoLangDocs`）；没声明的游戏连这个控件都没有，
+     * 表单与产物与历史逐字一致。初值 = 声明清单的第一项 = 缺省档（糖）。
+     */
+    const langDocs = useMemo(() => readScaffoldLangDocs(deps.scaffold), [deps.scaffold]);
+    const [langDoc, setLangDoc] = useState<KojoLangDoc>(langDocs[0]?.value ?? DEFAULT_KOJO_LANG_DOC);
     // 反馈 4：从"勾不勾占位模板"升级成"选哪一种协议"。缺省 `none` ——
     // 工具不替作者选定许可，也不默认替他"开放"什么。
     const [license, setLicense] = useState<LicenseKind>('none');
@@ -445,15 +529,13 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           deps.close();
           return;
         }
-        const result = deps.scaffold({
-          workName,
-          authorName,
-          version,
-          charaNo: chara.no,
-          charaName: chara.name,
-          license,
-          extra,
-        });
+        const result = deps.scaffold(
+          composeScaffoldDraft(
+            { workName, authorName, version, charaNo: chara.no, charaName: chara.name, license, extra },
+            langDocs,
+            langDoc,
+          ),
+        );
         const wsProject = await deps.workspaces.create(
           buildCreateInput({ workName, authorName, version }, chosenRoot),
         );
@@ -533,6 +615,21 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           h('option', { value: '' }, charas.length > 0 ? '选择角色…' : '（游戏项目无角色表）'),
           charas.map((c) => h('option', { key: c.no, value: String(c.no) }, charaOptionLabel(c)))),
 
+      // 语言档（NEW-ERB，反馈 1）：本游戏的脚手架声明了才出现这一行。
+      // 选中项那句人话常驻显示（与「许可协议」同一手法）——"选了糖也能逐行直写原生"
+      // 这件事不写出来，作者就只能猜，而这条反馈的原始症状正是"以为没有原生这条路"。
+      langDocs.length >= 2
+        ? h('div', { className: 'wizard-field' },
+            h('span', { className: 'wizard-label' }, '起手写法'),
+            h('select', {
+              value: langDoc,
+              onChange: (e: { target: { value: string } }) =>
+                setLangDoc(langDocs.find((c) => c.value === e.target.value)?.value ?? DEFAULT_KOJO_LANG_DOC),
+            },
+              langDocs.map((c) => h('option', { key: c.value, value: c.value }, c.label))),
+            h('div', { className: 'wizard-hint dim' }, kojoLangDocChoice(langDoc).hint))
+        : null,
+
       // 模板来源（KM-14）：接线方给了 listTemplates 才出现这行（没接市场 ⇒ 与历史逐字一致）。
       // 无模板包时不是把功能藏起来，而是给一条灰字说明——作者看得见"这里还能有别的东西"。
       deps.listTemplates !== undefined
@@ -592,7 +689,13 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           dirNamePreview
             ? (selectedTemplate !== null
               ? templatePreviewLine(selectedTemplate, templateFileCount)
-              : `将生成 ${fileCount} 个文件：中文 README + ${deps.coreFaceCount} 个核心面空壳（.kojo，可写 .kojo 也可写原生 ERB）${licenseProducesFile(license) ? ' + LICENSE' : ''}${deps.previewNote ? `；${deps.previewNote}` : ''}`)
+              : scaffoldPreviewLine({
+                  fileCount,
+                  coreFaceCount: deps.coreFaceCount,
+                  licenseProduces: licenseProducesFile(license),
+                  previewNote: deps.previewNote,
+                  langDoc: langDocs.length >= 2 ? langDoc : undefined,
+                }))
             : '作品名 / 版本 / 角色名不得为空或仅含非法字符')),
         // 后果提前说到选它的那一刻，而不是等作者点「部署」才吃一个拒绝（看板 HK-9）。
         // class 用既有的 `.wizard-warn`（amber）——部署/导入/新建文件三家向导同一口径，

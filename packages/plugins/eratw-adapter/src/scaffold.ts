@@ -12,15 +12,31 @@
  * - 部署路径 `ERB/口上・メッセージ関連/個人口上/<dir>/` 与放置规则；
  * - 许可条款文本（`licenses.ts` —— LTOL 是 era 社区约定，刻意留在 adapter）。
  *
- * ## 为什么核心面空壳是 `.kojo` 而不是 `.ERB`（用户反馈 1，2026-10-12）
+ * ## 为什么核心面空壳默认是 `.kojo` 而不是 `.ERB`（用户反馈 1，2026-10-12）
  *
  * `.kojo` 是**超集**：语法糖与原始 ERB 写法可以在同一个文件里混排（原生语句按规范
  * 逐行透传），而 `.ERB` 只能写原生。新建项目时作者还没决定要用哪种，所以脚手架
- * 一律给 `.kojo`——**先不要替作者收窄表达**。导出/部署时再统一转译成游戏认得的
+ * 默认给 `.kojo`——**先不要替作者收窄表达**。导出/部署时再统一转译成游戏认得的
  * `.ERB`（见 `#17`），工作区里始终只有 `.kojo` 这一份源。
  *
  * 空壳内容全是 `;` 注释，而 `;` 注释在糖里语法完全一样 ⇒ 同一份内容在两种扩展名下
  * 都合法，改的只是"作者接下来能在这个文件里写什么"。
+ *
+ * ## 语言档：作者自己选起手形态（用户反馈 1 的下半寸，2026-10-20 NEW-ERB）
+ *
+ * "默认给超集"和"只给超集"是两回事。作者已经明确只写原生时，脚手架照旧给他一份
+ * `.kojo` 就是替他做了决定。于是新建向导多一格「起手写法」（档位、文案、扩展名
+ * 全部由共享层 `@kojo/kojo-project-kit` 的 `lang-doc.ts` 给出，本文件只消费）：
+ *
+ * - **糖档（缺省，历史行为）**：产物与改前**逐字节相同**——`tests/scaffold-lang-doc.test.ts`
+ *   用 sha256 逐文件钉死，抬默认档的任何改动都会红；
+ * - **原生档**：**同一份骨架**写成 `.ERB`，只是①扩展名换掉、②不带【库内现成案例】块
+ *   （那几段是糖写法示例，塞进只准写原生的文件里就是把作者往坑里带；宁缺勿编，
+ *   与 2026-10-14 案例批同一条纪律，绝不现编"原生版案例"）。
+ *
+ * 原生档不破坏导出/部署链，这一点是有实据的：制品计划 `planArtifacts` 对非 `.kojo`
+ * 文件**字节级原样携带**（`kit/src/artifact.ts` 规矩 2），编译器一次都不叫——
+ * 上面那条 sha 断言与 `scaffold-lang-doc.test.ts` 的 `取证③` 用例把这条链钉住。
  *
  * 面模板示例取自本包 `face-templates.ts`（游戏知识单一真源；只代入不解释）。
  */
@@ -32,10 +48,12 @@ import {
   buildScaffoldReadme,
   faceTemplateExample,
   sanitizePathSegment,
+  KOJO_SOURCE_EXTENSION,
   type KojoFaceTable,
   type ScaffoldFaceCase,
   type ScaffoldFaceSpec,
 } from '@kojo/plugin-api';
+import { kojoLangDocExtension, type KojoLangDoc } from '@kojo/kojo-project-kit';
 import { createEratwFaceTable } from './face-templates';
 import {
   buildLicenseText,
@@ -64,6 +82,11 @@ export interface KojoScaffoldOptions {
    * `'none'` = 不生成 LICENSE 文件。文本来源见 `licenses.ts` 头注。
    */
   license: LicenseKind;
+  /**
+   * 起手写法（语言档，NEW-ERB 2026-10-20）。**缺省 = 糖档**，与不传这个字段完全同义：
+   * 历史调用方（含另一款游戏的接线路径）零改动、产物零变化。
+   */
+  langDoc?: KojoLangDoc;
 }
 
 /** 脚手架产物：包目录名 + 文件集（相对路径 → 文本内容） */
@@ -72,8 +95,18 @@ export interface KojoScaffoldResult {
   files: Record<string, string>;
 }
 
-/** 核心面空壳的文件扩展名（README 清单与实际产物必须同源于此） */
-export const FACE_STUB_EXT = '.kojo';
+/**
+ * 核心面空壳的文件扩展名（README 清单与实际产物必须同源于此）。
+ *
+ * 值 = 契约层的表层源扩展名单源（`KOJO_SOURCE_EXTENSION`），本文件**不抄字面量**
+ * （NEW-ERB 单源守卫 `kit/tests/lang-doc.test.ts` 按行钉死）。
+ */
+export const FACE_STUB_EXT = KOJO_SOURCE_EXTENSION;
+
+/** 本游戏各档的起手扩展名（糖档 = `FACE_STUB_EXT`；原生档由共享层单源给） */
+export function scaffoldStubExt(langDoc: KojoLangDoc | undefined): string {
+  return langDoc === 'native' ? kojoLangDocExtension('native') : FACE_STUB_EXT;
+}
 
 /** 核心面空壳规格（中文命名；文件名 = stem + '.kojo'） */
 export type CoreFaceSpec = ScaffoldFaceSpec;
@@ -204,6 +237,7 @@ export function buildFaceStub(
   opts: KojoScaffoldOptions,
   faceTable: KojoFaceTable,
 ): string {
+  const ext = scaffoldStubExt(opts.langDoc);
   return buildScaffoldFaceStub(
     {
       face: spec,
@@ -212,9 +246,12 @@ export function buildFaceStub(
       templateExample: faceTemplateExample(faceTable, spec.face, opts.charaNo),
       templateHints: TEMPLATE_HINTS,
       alwaysHints: ALWAYS_HINTS,
-      faceCase: FACE_CASES[spec.stem] ?? null,
+      // 【库内现成案例】是**糖写法**的示例（由真实口上经升糖投影转写）。原生档的文件里
+      // 只准写原生 ⇒ 整块不输出（共享骨架对 `faceCase: null` 的既定行为：不留空头、
+      // 也不把"已用本工具转成 X 写法"那句收尾语塞进对不上号的档位）。绝不现编原生案例。
+      faceCase: opts.langDoc === 'native' ? null : FACE_CASES[spec.stem] ?? null,
     },
-    FACE_STUB_EXT,
+    ext,
   );
 }
 
@@ -239,6 +276,10 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
     licenseNote.push('未指定开源协议——默认保留所有权利。');
   }
 
+  const ext = scaffoldStubExt(opts.langDoc);
+  const native = opts.langDoc === 'native';
+  const nativeExt = scaffoldStubExt('native');
+
   return buildScaffoldReadme({
     identity: opts,
     title: `《${opts.workName.trim()}》· ${opts.charaName.trim()} 口上包`,
@@ -249,22 +290,41 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
       { label: '目标剧本', value: `剧本${opts.scriptNo}` },
     ],
     intro: ['> 请在这里填写作品介绍：设定、基调、与原版口上的差异点等。'],
-    contentNote: [
-      '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
-        '扩展名是 `.kojo`：.kojo 写法与原始 ERB 写法可以写在同一个文件里，' +
-        '导出或部署时会自动转译成游戏认得的 `.ERB`，工作区里始终只有 `.kojo` 这一份源。',
-      '部分面文件顶部带一份从口上库现成案例转写的注释示例（.kojo 写法，台词简化为类目占位）。',
-    ],
+    // 糖档这两句**一字都不许动**（默认档产物逐字节不变是这条反馈的硬约束，
+    // `tests/scaffold-lang-doc.test.ts` 用 sha256 钉死）；原生档另写一套说法。
+    contentNote: native
+      ? [
+          '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
+            `新建时选的是**原生写法**：起手文件就是游戏认得的 \`${ext}\`，只写原生语法，不经转译，` +
+            '导出或部署时原样带走。',
+          `想改成两种写法混排（糖写法 + 原生逐行直通）就把扩展名换成 \`${FACE_STUB_EXT}\`——` +
+            '这一份起手内容在两种扩展名下都合法，编辑器一样认得。',
+          `本包不带糖写法案例（那是 \`${FACE_STUB_EXT}\` 的写法，放进只写原生的文件里只会误导）。`,
+        ]
+      : [
+          '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
+            '扩展名是 `.kojo`：.kojo 写法与原始 ERB 写法可以写在同一个文件里，' +
+            '导出或部署时会自动转译成游戏认得的 `.ERB`，工作区里始终只有 `.kojo` 这一份源。',
+          '部分面文件顶部带一份从口上库现成案例转写的注释示例（.kojo 写法，台词简化为类目占位）。',
+        ],
     faces: CORE_FACES,
-    stubExt: FACE_STUB_EXT,
-    deployIntro: ["编辑器的「部署到游戏目录」会把本包转译后放进游戏目录："],
+    stubExt: ext,
+    deployIntro: native
+      ? [`本包的起手文件就是引擎认得的格式，编辑器的「部署到游戏目录」原样放进游戏目录：`]
+      : ["编辑器的「部署到游戏目录」会把本包转译后放进游戏目录："],
     deployPath: `${DEPLOY_KOJO_ROOT}/<角色口上目录>/${scaffoldDirName(opts)}/`,
-    deployNote: [
-      '（游戏目录默认只读，需先批准写权限；目标已存在时不会覆盖。）',
-      '',
-      '手工放置也可以：先把 `.kojo` 全部转译成同名 `.ERB`，再把 `.ERB` 连同辅助文件复制过去。',
-      '**直接把 `.kojo` 放进游戏目录是不生效的**——引擎只读 `.ERB`。',
-    ],
+    deployNote: native
+      ? [
+          '（游戏目录默认只读，需先批准写权限；目标已存在时不会覆盖。）',
+          '',
+          `手工放置也可以：把 \`${ext}\` 连同辅助文件复制过去即可（本包没有需要转译的文件）。`,
+        ]
+      : [
+          '（游戏目录默认只读，需先批准写权限；目标已存在时不会覆盖。）',
+          '',
+          `手工放置也可以：先把 \`${FACE_STUB_EXT}\` 全部转译成同名 \`${nativeExt}\`，再把 \`${nativeExt}\` 连同辅助文件复制过去。`,
+          `**直接把 \`${FACE_STUB_EXT}\` 放进游戏目录是不生效的**——引擎只读 \`${nativeExt}\`。`,
+        ],
     licenseNote,
   });
 }
@@ -298,7 +358,7 @@ export function scaffoldKojoProject(
   return assembleScaffold({
     identity: opts,
     faces: CORE_FACES,
-    stubExt: FACE_STUB_EXT,
+    stubExt: scaffoldStubExt(opts.langDoc),
     readme: () => buildReadme(opts),
     stub: (face) => buildFaceStub(face, opts, faceTable),
     extraFiles: (): Record<string, string> =>
