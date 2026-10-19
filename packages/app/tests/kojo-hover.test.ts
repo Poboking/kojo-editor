@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import type { KojoInstructionTable, KojoLibraryTable } from '@kojo/plugin-api';
+import type { ErbIndex, KojoInstructionTable, KojoLibraryTable } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
@@ -190,5 +190,88 @@ describe('ERB 悬浮 · installHover 复用同一 provider', () => {
     installHover(monaco, () => tables).dispose();
     expect(regs.map((r) => r.langId)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID]);
     expect(regs.every((r) => r.disposed)).toBe(true);
+  });
+});
+
+/**
+ * 「本文件是哪一份文件」的注入位（`installHover` 第三参，2026-10-20 预览面读类换算批）。
+ *
+ * 悬停第 5.5 路（`#DIM` 声明名）是**唯一**需要文件身份的一路：数据住在 `ErbIndex.files`，
+ * 键是磁盘上的路径。派生面（升糖预览那份只读内存 model）的 URI 是 `inmemory://sugar/…`，
+ * 索引里必然对不到任何文件 ⇒ 不换算就是整路静默，而这条静默在预览面上看不出任何差别。
+ * 换算规则本身（"这份 model 背后是哪个文件"）是**归属**知识，住在登记簿，不该进 `kojo-hover.ts`
+ * 一行——所以这里只钉注入位的四种形状。
+ */
+describe('悬停 · 文件身份注入位（派生面上的 `#DIM` 声明路）', () => {
+  const DIM_PATH = 'C:/game/M_KOJO_K12_口上.ERB';
+  /** 投影 model 的 URI：那条路径上没有文件，索引里也没有它 */
+  const PROJECTION_URI = `/sugar/pane-1/${encodeURIComponent(DIM_PATH)}`;
+
+  const index: ErbIndex = {
+    files: new Map([[DIM_PATH, { path: DIM_PATH, dims: [{ name: '好感度', directive: 'DIM', line: 12 }] } as never]]),
+    byName: new Map(),
+  };
+  const dimTables: HoverTables = { erbIndex: () => index };
+
+  /** 只给 `getLineContent` 与 `uri`（本路只需要这两样；桩 model 也可能压根没有 uri） */
+  function modelFor(marked: string, uri?: string): Monaco.editor.ITextModel {
+    const line = marked.replace('|', '');
+    const model = { getLineContent: () => line } as unknown as { uri?: unknown };
+    if (uri !== undefined) model.uri = { fsPath: uri, path: uri };
+    return model as unknown as Monaco.editor.ITextModel;
+  }
+
+  function hoverWith(
+    marked: string,
+    t: HoverTables,
+    uri?: string,
+    sourcePathOf?: (model: Monaco.editor.ITextModel) => string | null,
+  ): Monaco.languages.Hover | undefined {
+    const { monaco, regs } = fakeMonaco();
+    installHover(monaco, () => t, sourcePathOf);
+    const provider = regs.find((r) => r.langId === ERB_LANGUAGE_ID)!.provider;
+    const position = { lineNumber: 1, column: marked.indexOf('|') + 1 } as Monaco.Position;
+    return provider.provideHover(modelFor(marked, uri), position, noopToken) as Monaco.languages.Hover | undefined;
+  }
+  const hoverWithDim = (marked: string, uri?: string, sourcePathOf?: (model: Monaco.editor.ITextModel) => string | null) =>
+    hoverWith(marked, dimTables, uri, sourcePathOf);
+
+  it('注入路径胜过 `model.uri`：投影面上照样出货「声明于」', () => {
+    const text = JSON.stringify(hoverWithDim('PRINT |好感度', PROJECTION_URI, () => DIM_PATH)?.contents);
+    expect(text).toContain('好感度');
+    expect(text).toContain('#DIM 声明');
+    expect(text).toContain(`${DIM_PATH}:12`);
+  });
+
+  it('不注入（原文面老路）：认 `model.uri.fsPath`，行为逐字不变', () => {
+    const text = JSON.stringify(hoverWithDim('PRINT |好感度', DIM_PATH)?.contents);
+    expect(text).toContain(`${DIM_PATH}:12`);
+  });
+
+  it('注入腿回 `null` = 宿主不改判据 ⇒ 退回 `model.uri`', () => {
+    const text = JSON.stringify(hoverWithDim('PRINT |好感度', DIM_PATH, () => null)?.contents);
+    expect(text).toContain(`${DIM_PATH}:12`);
+  });
+
+  it('注入腿抛错不能没收整条悬停：退化 = 不注入时的形状（真路径仍出货）', () => {
+    const text = JSON.stringify(
+      hoverWithDim('PRINT |好感度', DIM_PATH, () => {
+        throw new Error('登记簿反查炸了');
+      })?.contents,
+    );
+    expect(text).toContain(`${DIM_PATH}:12`);
+  });
+
+  it('身份给不出 ⇒ 这一路不显示（不猜）；其余各路一行都不跟着消失', () => {
+    // 无 uri + 注入回 `null` = 文件身份这个事实根本不存在 ⇒ 声明路必须闭嘴
+    expect(hoverWithDim('PRINT |好感度', undefined, () => null)).toBeUndefined();
+    // 同一个抛错发生在投影面上：字典路（第 1 路，与身份无关）照样出货，被牺牲的只有声明路
+    const rich: HoverTables = { ...tables, erbIndex: () => index };
+    const thrown = () => {
+      throw new Error('换算腿炸了');
+    };
+    const text = JSON.stringify(hoverWith('IF CFLAG:TARGET:|1088 >= 1', rich, PROJECTION_URI, thrown)?.contents);
+    expect(text).toContain('好感度');
+    expect(text).toContain('变量');
   });
 });

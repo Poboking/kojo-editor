@@ -368,34 +368,62 @@ export function normalizePathKey(p: string): string {
 export const isDimNameChar = (ch: string): boolean => !/[\s,;:()[\]{}=+\-*/<>%!&|'"`]/.test(ch);
 
 /**
+ * 「本文件是哪一份文件」的注入位（悬停第 5.5 路唯一需要而 Monaco 给不出的事实）。
+ *
+ * 回 `null` = 宿主不改判据，本模块沿用 `model.uri`。存在理由不是"顺手留个钩子"：
+ * 派生面（只读内存 model）的 URI 在 `ErbIndex.files` 里**必然**查不到——那条 URI 上没有文件，
+ * 索引里也没有它 ⇒ `#DIM` 悬停在派生面上整路静默。而"这份 model 背后是哪个文件"是
+ * **归属**知识（登记簿里那一次反查），本模块一行都不该认识，故由宿主换算后交进来。
+ */
+export type HoverPathSource = (model: Monaco.editor.ITextModel) => string | null;
+
+/** 桩 model 可能压根没有 uri；`fsPath` 与 `path` 来自不同腿（Windows 盘符 / URI 编码），各认一次 */
+function modelUriPath(model: Monaco.editor.ITextModel): string | null {
+  const uri = (model as { uri?: { fsPath?: unknown; path?: unknown } }).uri;
+  if (uri === null || typeof uri !== 'object') return null;
+  if (typeof uri.fsPath === 'string' && uri.fsPath.length > 0) return uri.fsPath;
+  if (typeof uri.path === 'string' && uri.path.length > 0) return uri.path;
+  return null;
+}
+
+/** 注入腿优先、`model.uri` 兜底；注入腿抛错不能没收整条悬停（退化 = 不注入时的形状） */
+function hoverFilePathOf(model: Monaco.editor.ITextModel, sourcePathOf?: HoverPathSource): string | null {
+  if (sourcePathOf) {
+    try {
+      const injected = sourcePathOf(model);
+      if (injected !== null && injected.length > 0) return injected;
+    } catch {
+      /* 只读换算腿抛错 = 这一路按老路走，不报错、不吞掉别的五路 */
+    }
+  }
+  return modelUriPath(model);
+}
+
+/**
  * 为 ERB 方言（`.erb` / `.erh` / `.erd`）与 `.kojo` 两种语言注册**只读** hover provider。
  *
  * `getTables` 每次悬停时才调用（表按当前项目 adapterId 实时取，同 `refreshMarkers` 纪律）。
  * 文件头事实（`角色:` / `口上:`）同样**当场从模型读**（只读 `getLineContent` /
  * `getLineCount`，不缓存、不改文档），反向路据此拼出原生函数名。
  * 返回可释放句柄——宿主在编辑器卸载时调用 `dispose()`。
+ *
+ * `sourcePathOf`（additive 第三参）= **本文件身份**的注入位，详见 {@link HoverPathSource}。
  */
-export function installHover(monaco: typeof Monaco, getTables: () => HoverTables): Monaco.IDisposable {
+export function installHover(
+  monaco: typeof Monaco,
+  getTables: () => HoverTables,
+  sourcePathOf?: HoverPathSource,
+): Monaco.IDisposable {
   const provider: Monaco.languages.HoverProvider = {
     provideHover(model, position) {
       const lineCount = typeof model.getLineCount === 'function' ? model.getLineCount() : position.lineNumber;
       const header = docHeaderOf((n) => model.getLineContent(n), lineCount);
-      // 当前文件的路径（`#DIM` 声明悬停要在索引里找"本文件"）：桩 model 无 uri ⇒ null（该路不做）
-      const uri = (model as { uri?: { fsPath?: unknown; path?: unknown } }).uri;
-      const filePath =
-        uri !== null && typeof uri === 'object'
-          ? typeof uri.fsPath === 'string' && uri.fsPath.length > 0
-            ? uri.fsPath
-            : typeof uri.path === 'string' && uri.path.length > 0
-              ? uri.path
-              : null
-          : null;
       const hit = resolveHoverName(
         model.getLineContent(position.lineNumber),
         position.column,
         getTables(),
         header,
-        filePath,
+        hoverFilePathOf(model, sourcePathOf),
       );
       if (!hit) return undefined;
       const contents = [{ value: `**${hit.name}**（${hit.kind}）` }];
