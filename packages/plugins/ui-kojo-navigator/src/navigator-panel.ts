@@ -34,7 +34,15 @@ import {
   searchFunctionsCached,
   type SearchHit,
 } from './tree';
-import { navLoadErrorCopy, navigatorScopeSuffix, navigatorScopeTitle } from './panel-copy';
+import {
+  navCoverageCopy,
+  navIndexPendingCopy,
+  navLoadErrorCopy,
+  navScanReadout,
+  navTreeBodyCopy,
+  navigatorScopeSuffix,
+  navigatorScopeTitle,
+} from './panel-copy';
 import { dependencyTitle } from './labels';
 import { renderTreeRows } from './tree-rows';
 import type { NavigatorStore } from './navigator-store';
@@ -65,7 +73,7 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
 
   function NavigatorPanel(props: UIPanelProps): unknown {
     /** 每帧开头取一次外部源（与原先直接读闭包变量同值：状态只在 `notify()` 前后变化） */
-    const { tree, indexReady, loadError, scope, treeListeners, refresh } = store;
+    const { tree, indexReady, loadError, scope, treeListeners, refresh, indexState } = store;
     const [, force] = useState(0);
     const [selectedNo, setSelectedNo] = useState<number | null>(null);
     const [query, setQuery] = useState('');
@@ -201,10 +209,13 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
     }
 
     if (!indexReady) {
+      // 三态人话（IDX-STATE）：还在建 / 没找到可扫描的位置 / 扫了确实一个函数都没有。
+      // 判据是提供方那枚 `phase`，这里只查表 + 把原始读数交给悬停（一条技术信息都不丢）。
+      const copy = navIndexPendingCopy(indexState);
       return createElement(
         'div',
         { className: 'panel-kojo-nav' },
-        createElement('div', { className: 'nav-empty dim' }, '正在构建函数索引…（首次打开项目需要数秒）'),
+        createElement('div', { className: 'nav-empty dim', title: copy.title }, copy.text),
       );
     }
 
@@ -232,13 +243,17 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
       onChange: (e: { target: { value: string } }) => setQuery(e.target.value),
     });
 
+    // 降级与成功**不同形**（铁律 4）：只由读得到的那些位置建成的那棵树，状态行就得看得见，
+    // 悬停给出逐来源原始读数。标记取自提供方那枚 `coverage` tag（判据单源，本文件不重算）。
+    const coverage = navCoverageCopy(indexState);
     const statusBar = treeNow
       ? createElement(
           'div',
-          { className: 'nav-status dim', title: navigatorScopeTitle(treeNow) },
+          { className: 'nav-status dim', title: navigatorScopeTitle(treeNow, indexState) },
           `${treeNow.totalFunctions} 函数 · ${treeNow.charas.length} 角色` +
             (treeNow.hasFamilyIndex ? ` · 未归属 ${treeNow.orphanCount}` : ' · 适配器未提供家族规则') +
-            navigatorScopeSuffix(treeNow),
+            navigatorScopeSuffix(treeNow) +
+            coverage.mark,
         )
       : null;
 
@@ -290,7 +305,12 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
     // ---- 树模式 ----
     let body: ReactNode;
     if (!chara) {
-      body = createElement('div', { className: 'nav-empty dim' }, '从上方选择角色以浏览其口上函数树');
+      const verdict = navTreeBodyCopy(indexState, '从上方选择角色以浏览其口上函数树');
+      body = createElement(
+        'div',
+        { className: 'nav-empty dim', title: indexState ? navScanReadout(indexState) : undefined },
+        verdict,
+      );
     } else {
       body = renderTreeRows({
         chara,

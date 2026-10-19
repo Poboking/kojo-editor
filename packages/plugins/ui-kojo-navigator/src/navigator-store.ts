@@ -14,6 +14,7 @@
 
 import type {
   ErbIndex,
+  ErbIndexState,
   ErbParserService,
   ErbScopeStamp,
   FamilyIndexRule,
@@ -46,6 +47,12 @@ export interface NavigatorStore {
   readonly scope: ErbScopeStamp | null;
   /** 索引/建树失败原因（必须可见 + 可重试，不静默停在占位） */
   readonly loadError: string | null;
+  /**
+   * 索引这一轮的可查事实（IDX-STATE，**additive**）：提供方 `indexState()` 的原样转述，
+   * 本状态源**不解释、不改写、不再判形状**（判据单源在 `erb-parser/index-state.ts`）。
+   * 老实现不提供该方法 ⇒ `null`，面板退化成它原来的等待句（旧行为零改动）。
+   */
+  readonly indexState: ErbIndexState | null;
   /** 活着的面板订阅者（面板挂载时 add / 卸载时 delete） */
   readonly treeListeners: Set<() => void>;
   /** 等待索引就绪并重建（「重试」按钮与总线事件走同一条路径） */
@@ -169,6 +176,10 @@ export function createNavigatorStore(ctx: PluginContext, deps: {
     },
     get loadError() {
       return loadError;
+    },
+    /** 原样转述提供方的事实；方法缺席（老实现）⇒ null，面板退回旧等待句 */
+    get indexState() {
+      return parser.indexState?.() ?? null;
     },
     treeListeners,
     refresh,

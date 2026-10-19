@@ -3,8 +3,10 @@ import type {
   ControlFlowStatement,
   ErbFile,
   ErbIndex,
+  ErbIndexState,
   ErbParserService,
   ErbReferenceIndex,
+  ErbScanSourceFact,
   FileIO,
   FileStat,
   GameProject,
@@ -14,6 +16,7 @@ import type {
 } from '@kojo/plugin-api';
 import { KernelServices, isErbDialectPath, projectFingerprintOf } from '@kojo/plugin-api';
 import { planScanRoots, rootsSignature, type ScanRootPlan } from './index-roots';
+import { idleIndexState, indexStateOf, sourceFactsOf, type IndexOutcome, type SourceReading } from './index-state';
 import {
   PARSE_FILE_TASK,
   SCAN_FLOW_TASK,
@@ -162,6 +165,24 @@ export function createErbParserPlugin(): Plugin {
       let activeSignature = '';
       /** 工作区不可用的降级只在**状态翻转**时出声一次（`file.changed` 是高频时刻，逐次刷屏即噪声） */
       let workspaceDegradedLogged = false;
+      /**
+       * 降级的那句原始原因（IDX-STATE）：出声一次不等于"只说一次"——`ctx.log` 那条为
+       * 开发者服务、且只翻转时响一遍，而作者侧的事实面每一轮都得读得出**为什么读不到**。
+       * 与 `workspaceDegradedLogged` 同生命周期（可用时复位）。
+       */
+      let workspaceDegradeReason: string | null = null;
+      /**
+       * 索引的对外事实（IDX-STATE）。构造与判据全在 `./index-state.ts`（形状判据只那一处），
+       * 这里只按**时机**喂读数；过期代际的构建结果既不写它也不落盘（同 `index` 的纪律）。
+       */
+      let lastIndexState: ErbIndexState = idleIndexState();
+      /** 本轮起跑时定下的逐来源事实（`build` 里的进度笔数照它写，免得两处各说各话） */
+      let lastSources: readonly ErbScanSourceFact[] = [];
+      /** 本轮实际去遍历的根数（起跑即定，进度阶段与收尾阶段读同一枚数） */
+      let lastRootsWalked = 0;
+      /** 进度读数沿用位：事实面的每一笔都写"截至这一笔的最新已知读数"，绝不回退成 0 */
+      let lastFilesScanned = 0;
+      let lastFunctions = 0;
       /** 当前项目根（事件载荷用） */
       let currentRoot = '';
       /** 代际号：项目切换 / 扫描根变更时作废过期构建的结果 */
@@ -184,8 +205,12 @@ export function createErbParserPlugin(): Plugin {
         try {
           const got = ctx.inject<WorkspaceService>(KernelServices.Workspaces).roots();
           workspaceDegradedLogged = false;
+          workspaceDegradeReason = null;
           return got;
         } catch (err) {
+          // 原始原因**每轮都留档**（与"只出声一次"的 log 分流）：事实面要答得出
+          // "这一轮为什么少了工作区根"，而不只在看板式的开发者日志里响过一次。
+          workspaceDegradeReason = String(err);
           if (!workspaceDegradedLogged) {
             workspaceDegradedLogged = true;
             ctx.log.warn(
@@ -194,6 +219,43 @@ export function createErbParserPlugin(): Plugin {
           }
           return null;
         }
+      }
+
+      /**
+       * 逐来源读数（IDX-STATE 的唯一采集处）：**在这一刻现读**，与 `planScanRoots` 的入参
+       * 同源 ⇒ "谁交了几条根 / 谁读不到"与真正走进去的根必然是同一次采集的产物
+       * （分两处读就会给出一条降级、一条没降级的假事实）。
+       */
+      function sourceReadings(workspaceRoots: readonly string[] | null): SourceReading[] {
+        return [
+          { kind: 'project', roots: projectRoots },
+          { kind: 'workspace', roots: workspaceRoots, ...(workspaceDegradeReason === null ? {} : { reason: workspaceDegradeReason }) },
+        ];
+      }
+
+      /**
+       * 记一笔对外事实。`gen` 不是当前代际 ⇒ **一律不记**（过期构建的进度/结果不是
+       * 当前状态；写进去就是拿上一棵树的数据回答"这一轮怎么样了"）。
+       * 后两个读数缺省时沿用上一次的值——失败那一笔不该把"已经扫到 1,234 个文件"抹成 0。
+       */
+      function noteState(
+        gen: number,
+        outcome: IndexOutcome,
+        filesScanned: number = lastFilesScanned,
+        functions: number = lastFunctions,
+        error?: string,
+      ): void {
+        if (gen !== generation) return;
+        lastFilesScanned = filesScanned;
+        lastFunctions = functions;
+        lastIndexState = indexStateOf({
+          outcome,
+          sources: lastSources,
+          rootsWalked: lastRootsWalked,
+          filesScanned,
+          functions,
+          ...(error === undefined ? {} : { error }),
+        });
       }
 
       /** 当前该扫的根（活读合成；折叠/去重判据见 `./index-roots`） */
@@ -246,11 +308,38 @@ export function createErbParserPlugin(): Plugin {
         })();
       }
 
-      async function build(rootsToScan: string[], gen: number, useSnapshot: boolean): Promise<ErbIndex> {
+      /**
+       * 构建的**记账外壳**：把 `sources`（本轮的逐来源事实）落到闭包，任何抛出都记成
+       * `failed` 一笔并**原样上抛**（失败语义一字未动——照旧由调用方决定怎么处置）。
+       * `sources = null` 是 `service.buildIndex()` 那条显式给根清单的路径：调用方没陈述
+       * 来源，事实面就如实只陈述"走了几个根"，不编造来源。
+       */
+      async function build(
+        rootsToScan: string[],
+        gen: number,
+        useSnapshot: boolean,
+        sources: readonly ErbScanSourceFact[] | null,
+      ): Promise<ErbIndex> {
+        lastSources = sources ?? [];
+        lastRootsWalked = rootsToScan.length;
+        try {
+          return await buildWalkAndParse(rootsToScan, gen, useSnapshot);
+        } catch (err) {
+          noteState(gen, 'failed', undefined, undefined, String(err));
+          throw err;
+        }
+      }
+
+      async function buildWalkAndParse(
+        rootsToScan: string[],
+        gen: number,
+        useSnapshot: boolean,
+      ): Promise<ErbIndex> {
         // 耗时拆分（内核优化 L0）：索引是"开项目级联"的第一段，必须在日志里可见。
         // 每段单独计时——上一轮"热启动 stat 872ms"的疑点就是因为快照读盘被并进了 stat 区间。
         const buildStartedAt = Date.now();
         const allFiles: string[] = [];
+        noteState(gen, 'scanning', 0, 0);
         /**
          * `walkDir({withMetadata})` 顺带带回的元数据（IMPLEMENTATION-LOG §5.117）：
          * 热开段实测 `stat` 独占 2,038ms / index 2,657ms，全部是 2,285 次逐文件 IPC 往返；
@@ -271,6 +360,8 @@ export function createErbParserPlugin(): Plugin {
               metaByPath.set(e.path, { mtimeMs: e.mtimeMs, size: e.size });
             }
           }
+          // 进度读数（IDX-STATE）：每走完一个根就记一次——"正在扫"这一格要拿得出已扫文件数
+          noteState(gen, 'scanning', allFiles.length, 0);
         }
         const walkMs = Date.now() - buildStartedAt;
 
@@ -625,6 +716,9 @@ export function createErbParserPlugin(): Plugin {
 
         const built = makeIndex();
         index = built;
+        // 收尾事实（IDX-STATE）：`ready` 与 `nothing-to-scan` 的分界由 `coverageOf()` 判，
+        // 这里只交读数——一个根都没走到的那一轮永远不会被写成"扫完了"。
+        noteState(gen, 'settled', allFiles.length, built.byName.size);
         ctx.bus.emit('kojo.functionChanged', {
           projectRoot: currentRoot,
           files: [...files.keys()],
@@ -638,13 +732,15 @@ export function createErbParserPlugin(): Plugin {
         const wsRoots = workspaceRootsOrNothing();
         const plan = planScanRoots(projectRoots, wsRoots ?? []);
         activeSignature = rootsSignature(plan.roots);
+        // 来源事实与 plan **同一次采集**（谁交了几条根 / 谁读不到，判的就是这批根）
+        const sources = sourceFactsOf(sourceReadings(wsRoots));
         const wsSide = wsRoots === null ? 'workspace unavailable' : `${wsRoots.length} workspace`;
         ctx.log.info(
           `Scan roots resolved: ${plan.roots.length} to walk (` +
             `${projectRoots.length} kojo + ${wsSide}, ` +
             `${plan.duplicated} duplicate / ${plan.nested} nested folded)`,
         );
-        const p = build(plan.roots, gen, true).finally(() => {
+        const p = build(plan.roots, gen, true, sources).finally(() => {
           if (inFlight === p) inFlight = null;
         });
         inFlight = p;
@@ -669,9 +765,12 @@ export function createErbParserPlugin(): Plugin {
         scanControlFlowOffloaded: (text: string) =>
           compute.offload<ControlFlowStatement[]>(SCAN_FLOW_TASK, { text } satisfies ScanFlowPayload),
 
-        buildIndex: (rootsToScan: string[]) => build(rootsToScan, generation, false),
+        buildIndex: (rootsToScan: string[]) => build(rootsToScan, generation, false, null),
 
         currentIndex: () => index,
+
+        // 索引这一轮的可查事实（IDX-STATE，additive）：纯读、不读盘、不现算形状判据
+        indexState: () => lastIndexState,
 
         async ensureIndex(): Promise<ErbIndex> {
           // 既有时刻活读一次：会话中途经对话框授权的落点根要在这里进索引，
@@ -714,6 +813,12 @@ export function createErbParserPlugin(): Plugin {
           currentRoot = '';
           activeSignature = '';
           generation++;
+          // 复位事实面（IDX-STATE）：上一棵树的读数留着就是"这一轮还在扫上一轮的东西"
+          lastSources = [];
+          lastRootsWalked = 0;
+          lastFilesScanned = 0;
+          lastFunctions = 0;
+          lastIndexState = idleIndexState();
         }),
       );
 

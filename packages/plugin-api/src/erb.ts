@@ -344,6 +344,20 @@ export interface ErbParserService {
    */
   scanControlFlowOffloaded(text: string): Promise<ControlFlowStatement[]>;
   /**
+   * 索引这一轮的**可查事实**（IDX-STATE，2026-10-19，**additive 可选**）。
+   *
+   * 补的是 `currentIndex()` 兜不住的那一面：它只能答"有没有索引"，答不出
+   * "为什么没有 / 扫了哪几个位置 / 这一轮是不是少扫了一类位置"。铁律 4 要求
+   * inactive 可见，而"读不到工作区根"此前只有一声 console `warn`，作者侧零落点。
+   *
+   * 同步、纯数据、**不读盘**：返回提供方在自己时机里记下的那一份，绝不在这里现算
+   * 形状判据（消费方也不许替它算——见 {@link ErbIndexState.coverage}）。
+   *
+   * **可选**：既有实现不提供时消费方退化成它原来的等待文案（契约演进的 additive 纪律，
+   * 同 `checkStructure?` / `functionAt?`），旧消费方零改动。
+   */
+  indexState?(): ErbIndexState;
+  /**
    * 结构体检（2026-10-13 UI 反馈 7，**additive 可选**）：配对失败的三类可证明错误。
    *
    * 与 `scanControlFlow` 的分工：那张表是骨架（算深度、抽条件），这一份是"配不上对"的证据。
@@ -431,4 +445,69 @@ export interface ErbReferenceIndex {
   /** 归一化函数名 → 该名的定义点与引用点全集（构建序 → 行 → 列，确定排序） */
   bySymbol: ReadonlyMap<string, readonly ErbReference[]>;
 }
+
+/* ---------------- 索引状态事实（IDX-STATE 2026-10-19，全部 additive） ---------------- */
+
+/**
+ * 扫描根的**来源种类**（契约层只有这两个泛型词，零游戏名词）。
+ * 事实面按来源逐条陈述 ⇒ "少扫了哪一类位置"是读出来的，不是猜出来的。
+ */
+export type ErbScanSourceKind = 'project' | 'workspace';
+
+/** 一类来源本轮的事实（提供方读到什么就写什么，读不到也**把"读不到"写成事实**） */
+export interface ErbScanSourceFact {
+  readonly source: ErbScanSourceKind;
+  /** 本轮该来源**交出**的根条数（读不到 ⇒ 0；这一寸就是"少了什么"的读数） */
+  readonly offered: number;
+  /** 该来源本轮是否读得到：服务键缺席 / `roots()` 自己抛 ⇒ false */
+  readonly available: boolean;
+  /** 读不到时的原始原因（逐字进悬停 `title`，不当第一眼文案） */
+  readonly reason?: string;
+}
+
+/**
+ * 索引这一轮走到哪一步（**可查的裁决**，取代"永远不变的占位文案"）：
+ * - `idle`：还没扫（没有项目 / 从未起跑过构建）；
+ * - `scanning`：正在扫（`filesScanned` 是已扫文件数的进度读数）；
+ * - `ready`：扫完了，名录非空；
+ * - `nothing-to-scan`：**没有任何可扫描的位置**（本轮一个根都没走到）；
+ * - `empty`：**位置走到了、也扫了，名录里确实一个函数都没有**；
+ * - `failed`：构建抛错（原因原文在 {@link ErbIndexState.error}）。
+ *
+ * `nothing-to-scan` 与 `empty` 是两条**不同的事实**（"没地方可扫" ≠ "扫了什么都没有"），
+ * 而这一刀由**提供方**判（`erb-parser/index-state.ts` 的 `phaseOf()`）：消费方只许按
+ * phase 查文案，不许自己拿 `roots`/`functions` 的条数再裁一次——那是第二份真相，
+ * 由 `ui-kojo-navigator/tests/index-state-single-source.test.ts` 按处数守死。
+ */
+export type ErbIndexPhase = 'idle' | 'scanning' | 'ready' | 'nothing-to-scan' | 'empty' | 'failed';
+
+/**
+ * 覆盖形状 = **降级与成功不同形**的那一枚事实。
+ * - `full`：每一类位置本轮都读到了，且至少走到了一个根；
+ * - `partial`：**至少一类位置本轮读不到**（典型：工作区根缺席 ⇒ 这棵树只由口上根建成）；
+ * - `none`：本轮一个位置都没走到（无根可扫）。
+ *
+ * 判据只住提供方那一枚函数（`erb-parser/index-state.ts` 的 `coverageOf()`）：
+ * 消费方再写一次 `roots.length === 0` 之类的形状比较就是第二份真相，由
+ * `ui-kojo-navigator/tests/index-state-single-source.test.ts` 按处数守死。
+ */
+export type ErbIndexCoverage = 'full' | 'partial' | 'none';
+
+/** 索引的对外事实（纯数据：字段全部由提供方在自己时机里记下，取用不改变它） */
+export interface ErbIndexState {
+  readonly phase: ErbIndexPhase;
+  /** 逐来源事实（条数 = 提供方陈述的来源种类数；顺序固定 project 在前） */
+  readonly sources: readonly ErbScanSourceFact[];
+  /** 本轮**实际去遍历**的根数（去重折叠之后 ⇒ 与"谁交了几条"是两回事，都能读出来） */
+  readonly rootsWalked: number;
+  /** 已扫到的方言文件数：`scanning` 期间是进度，收尾后是总数 */
+  readonly filesScanned: number;
+  /** 名录里的函数条数（`ready` 之后才有意义；其余阶段照实记当前值） */
+  readonly functions: number;
+  /** 覆盖形状（判据见 {@link ErbIndexCoverage}） */
+  readonly coverage: ErbIndexCoverage;
+  /** 构建失败的原始原因（只进悬停，一条技术信息都不丢） */
+  readonly error?: string;
+}
+
 
