@@ -277,3 +277,317 @@ describe('installRangeFormatter · 装配与隔离', () => {
     warn.mockRestore();
   });
 });
+
+/* ==================== 块上下文：窗口腿与整篇腿不许分叉（`559a878` 留下的口子） ==================== */
+
+/**
+ * ERB 形有了跨行的块状态（数据表块体 / 停用死区）之后，"切片 ≡ 整篇"不再自动成立：
+ * 窗口起点落在区里时切片看不见开词 ⇒ 会把整篇腿明确保护的字节改掉。这一组用例钉的就是
+ * 宿主 `windowAnchor` 那条前推锚点，**回退它这里就红**（锚点拿掉 ⇒ 下面的等式与"保护区零编辑"
+ * 一起崩，`kojo-format-range.ts` 的免检通道也救不了：保护区里的行本来就被逐行规则判成"要改"）。
+ */
+describe('installRangeFormatter · 窗口腿带块上下文（与整篇腿同判据）', () => {
+  const BODY = [
+    `${FW}PRINTL 区外缩进要折`, //        1 区外：可折（对照组）
+    'PRINTDATA', //                        2 数据表区首（结构行）
+    `${FW}${FW}DATA ${FW}表体缩进不许动`, //  3 块体：逐行规则想折它的缩进 ⇒ 必须拦住
+    '    ', //                             4 块体：纯空白行不许清空
+    `;　块体注释不许折`, //                  5 块体：注释折算也不许做
+    'ENDDATA', //                          6 收束（结构行）
+    '[SKIPSTART]', //                      7 死区首（结构行）
+    `${FW}散文式自注释不许动`, //            8 死区正文：全角缩进不许折
+    '   ', //                             9 死区纯空白：不许清空
+    '[SKIPEND]', //                       10 死区尾（结构行）
+    `;　区外注释要折`, //                   11 区外：可折（对照组）
+  ];
+  const formatOpts = {} as Monaco.languages.FormattingOptions;
+  const token = {} as Monaco.CancellationToken;
+
+  interface Fake {
+    model: Monaco.editor.ITextModel;
+    windowCalls: () => number;
+    fullCalls: () => number;
+  }
+
+  /** 假 model：`getValueInRange` 按行切片（与宿主 `formatRequestWindowFor` 同形状），并记取文次数 */
+  function fakeDoc(lines: readonly string[]): Fake {
+    const state = { windows: 0, full: 0 };
+    const model = {
+      getLanguageId: () => ERB_LANGUAGE_ID,
+      getLineCount: () => lines.length,
+      getLineMaxColumn: (l: number) => (lines[l - 1] ?? '').length + 1,
+      getLineContent: (l: number) => lines[l - 1] ?? '',
+      getValue: () => {
+        state.full++;
+        return lines.join('\n');
+      },
+      getValueInRange: (r: Monaco.IRange) => {
+        state.windows++;
+        return lines.slice(r.startLineNumber - 1, r.endLineNumber).join('\n');
+      },
+      getAlternativeVersionId: () => 1,
+    } as unknown as Monaco.editor.ITextModel;
+    return { model, windowCalls: () => state.windows, fullCalls: () => state.full };
+  }
+
+  /** 两条入口都装好，宿主给 `resolve`（整篇）+ `resolveRange`（窗口）两条腿 */
+  function installBoth(lines: readonly string[]) {
+    const reg: { kind: 'range' | 'onType'; provider: Monaco.languages.DocumentRangeFormattingEditProvider & Partial<Monaco.languages.OnTypeFormattingEditProvider> }[] = [];
+    const monaco = {
+      languages: {
+        registerDocumentRangeFormattingEditProvider: (_id: string, p: unknown) => {
+          reg.push({ kind: 'range', provider: p as (typeof reg)[number]['provider'] });
+          return { dispose: () => undefined };
+        },
+        registerOnTypeFormattingEditProvider: (_id: string, p: unknown) => {
+          reg.push({ kind: 'onType', provider: p as (typeof reg)[number]['provider'] });
+          return { dispose: () => undefined };
+        },
+      },
+    } as unknown as typeof Monaco;
+    const doc = fakeDoc(lines);
+    installRangeFormatter(monaco, {
+      resolve: (m) => ({ text: m.getValue(), dialect: 'erb' as const }),
+      resolveRange: (m, start, end) => ({
+        text: m.getValueInRange({ startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: m.getLineMaxColumn(end) }),
+        dialect: 'erb' as const,
+      }),
+    });
+    return {
+      doc,
+      range: reg.find((r) => r.kind === 'range')!.provider,
+      onType: reg.find((r) => r.kind === 'onType')!.provider,
+    };
+  }
+
+  const asKeys = (out: readonly Monaco.languages.TextEdit[]): string[] =>
+    out.map((e) => `${e.range.startLineNumber}:${e.range.startColumn}:${e.range.endColumn}:${e.text}`);
+  const wholeKeys = (lines: readonly string[], startLine: number, endLine: number): string[] =>
+    computeFormatEdits(lines.join('\n'), 'erb')
+      .filter((e) => e.line >= startLine && e.line <= endLine)
+      .map((e) => `${e.line}:${e.startColumn}:${e.endColumn}:${e.text}`);
+
+  it('夹具自证：保护区里的行**确实**是逐行规则想改的（否则这组用例是空面自欺）', () => {
+    const protectedLines = [3, 4, 5, 8, 9];
+    for (const l of protectedLines) {
+      expect(computeFormatEdits(BODY[l - 1]!, 'erb'), `第 ${l} 行必须"裸看"是要改的`).not.toEqual([]);
+      expect(wholeKeys(BODY, l, l), `第 ${l} 行在整篇腿上必须零编辑`).toEqual([]);
+    }
+  });
+
+  it('窗口起点落在数据表块体中间：两条入口都不动保护区字节', () => {
+    const { range, onType } = installBoth(BODY);
+    for (const l of [3, 4, 5]) {
+      expect(
+        asKeys(
+          range.provideDocumentRangeFormattingEdits(
+            fakeDoc(BODY).model,
+            { startLineNumber: l, endLineNumber: l } as unknown as Monaco.Range,
+            formatOpts,
+            token,
+          ) as Monaco.languages.TextEdit[],
+        ),
+        `选区从第 ${l} 行（块体中间）起 ⇒ 必须零编辑`,
+      ).toEqual([]);
+      expect(
+        asKeys(
+          onType.provideOnTypeFormattingEdits!(
+            fakeDoc(BODY).model,
+            { lineNumber: l, column: 2 } as Monaco.Position,
+            FW,
+            formatOpts,
+            token,
+          ) as Monaco.languages.TextEdit[],
+        ),
+        `打字落在第 ${l} 行（块体中间）⇒ 必须零编辑`,
+      ).toEqual([]);
+    }
+  });
+
+  it('窗口起点落在停用死区中间：两条入口都不动保护区字节', () => {
+    for (const l of [8, 9]) {
+      const { range, onType } = installBoth(BODY);
+      expect(
+        asKeys(
+          range.provideDocumentRangeFormattingEdits(
+            fakeDoc(BODY).model,
+            { startLineNumber: l, endLineNumber: l } as unknown as Monaco.Range,
+            formatOpts,
+            token,
+          ) as Monaco.languages.TextEdit[],
+        ),
+      ).toEqual([]);
+      expect(
+        asKeys(
+          onType.provideOnTypeFormattingEdits!(
+            fakeDoc(BODY).model,
+            { lineNumber: l, column: 2 } as Monaco.Position,
+            ';',
+            formatOpts,
+            token,
+          ) as Monaco.languages.TextEdit[],
+        ),
+      ).toEqual([]);
+    }
+  });
+
+  it('跨出保护区的窗口：区里零编辑、区外照常折，与整篇腿逐字节相同', () => {
+    const { doc, range } = installBoth(BODY);
+    const out = asKeys(
+      range.provideDocumentRangeFormattingEdits(
+        doc.model,
+        { startLineNumber: 3, endLineNumber: 11 } as unknown as Monaco.Range,
+        formatOpts,
+        token,
+      ) as Monaco.languages.TextEdit[],
+    );
+    expect(out).toEqual(wholeKeys(BODY, 3, 11));
+    // 只剩区外那两行（1 不在窗口里）：第 5 行是块体注释、8/9 是死区 ⇒ 都不许出现
+    expect(out.map((s) => Number(s.split(':')[0]))).toEqual([11]);
+    expect(doc.fullCalls()).toBe(0);
+  });
+
+  it('每个行区间上两条入口都与整篇腿逐字节相同（全区间扫描，含空档与末行）', () => {
+    const { range, onType } = installBoth(BODY);
+    const model = fakeDoc(BODY).model;
+    for (let start = 1; start <= BODY.length; start++) {
+      for (let end = start; end <= BODY.length; end++) {
+        const want = wholeKeys(BODY, start, end);
+        expect(
+          asKeys(
+            range.provideDocumentRangeFormattingEdits(
+              model,
+              { startLineNumber: start, endLineNumber: end } as unknown as Monaco.Range,
+              formatOpts,
+              token,
+            ) as Monaco.languages.TextEdit[],
+          ),
+          `range 第 ${start}–${end} 行`,
+        ).toEqual(want);
+        if (start === end) {
+          expect(
+            asKeys(
+              onType.provideOnTypeFormattingEdits!(
+                model,
+                { lineNumber: start, column: 2 } as Monaco.Position,
+                FW,
+                formatOpts,
+                token,
+              ) as Monaco.languages.TextEdit[],
+            ),
+            `onType 第 ${start} 行`,
+          ).toEqual(want);
+        }
+      }
+    }
+  });
+
+  it('锚点问不到（宿主没给前缀这段）⇒ 退回整篇那条腿，绝不"当作区外"', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const reg: Monaco.languages.DocumentRangeFormattingEditProvider[] = [];
+    const monaco = {
+      languages: {
+        registerDocumentRangeFormattingEditProvider: (_id: string, p: unknown) => {
+          reg.push(p as Monaco.languages.DocumentRangeFormattingEditProvider);
+          return { dispose: () => undefined };
+        },
+        registerOnTypeFormattingEditProvider: () => ({ dispose: () => undefined }),
+      },
+    } as unknown as typeof Monaco;
+    const doc = fakeDoc(BODY);
+    installRangeFormatter(monaco, {
+      resolve: (m) => ({ text: m.getValue(), dialect: 'erb' as const }),
+      // 窗口腿只答"要算的那几行"，问前缀就沉默 ⇒ 判据拿不到 ⇒ 本腿交回，整篇腿接管
+      resolveRange: (m, start, end) => (start === 1 ? null : { text: m.getValueInRange({ startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: m.getLineMaxColumn(end) }), dialect: 'erb' as const }),
+    });
+    const out = asKeys(
+      reg[0]!.provideDocumentRangeFormattingEdits(
+        doc.model,
+        { startLineNumber: 3, endLineNumber: 3 } as unknown as Monaco.Range,
+        formatOpts,
+        token,
+      ) as Monaco.languages.TextEdit[],
+    );
+    expect(out).toEqual([]);
+    expect(doc.fullCalls()).toBe(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toContain('anchor');
+    warn.mockRestore();
+  });
+
+  it('降级都有一条 `onDegraded` 出口（不只 console）；回调抛错不许打断请求', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const notices: string[] = [];
+    const reg: { kind: string; provider: Monaco.languages.DocumentRangeFormattingEditProvider & Partial<Monaco.languages.OnTypeFormattingEditProvider> }[] = [];
+    const monaco = {
+      languages: {
+        registerDocumentRangeFormattingEditProvider: (_id: string, p: unknown) => {
+          reg.push({ kind: 'range', provider: p as (typeof reg)[number]['provider'] });
+          return { dispose: () => undefined };
+        },
+        registerOnTypeFormattingEditProvider: (_id: string, p: unknown) => {
+          reg.push({ kind: 'onType', provider: p as (typeof reg)[number]['provider'] });
+          return { dispose: () => undefined };
+        },
+      },
+    } as unknown as typeof Monaco;
+    installRangeFormatter(monaco, {
+      resolve: () => {
+        throw new Error('解析炸了');
+      },
+      onDegraded: (n) => {
+        notices.push(`${n.where}/${n.stage}/${n.reason}`);
+        throw new Error('呈现面自己炸了');
+      },
+    });
+    const doc = fakeDoc(BODY);
+    expect(
+      reg[0]!.provider.provideDocumentRangeFormattingEdits(
+        doc.model,
+        { startLineNumber: 1, endLineNumber: 2 } as unknown as Monaco.Range,
+        formatOpts,
+        token,
+      ),
+    ).toEqual([]);
+    expect(notices).toEqual(['resolve/range/解析炸了']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('窗口这条腿对方言再钉一枚闸：宿主交回 `.kojo` ⇒ 交回整篇那条腿', () => {
+    const reg: Monaco.languages.DocumentRangeFormattingEditProvider[] = [];
+    const monaco = {
+      languages: {
+        registerDocumentRangeFormattingEditProvider: (_id: string, p: unknown) => {
+          reg.push(p as Monaco.languages.DocumentRangeFormattingEditProvider);
+          return { dispose: () => undefined };
+        },
+        registerOnTypeFormattingEditProvider: () => ({ dispose: () => undefined }),
+      },
+    } as unknown as typeof Monaco;
+    const doc = fakeDoc(DOC_LINES);
+    let rangeLegCalls = 0;
+    installRangeFormatter(monaco, {
+      resolve: (m) => ({ text: m.getValue(), dialect: 'kojo' as const }),
+      resolveRange: (m, start, end) => {
+        rangeLegCalls++;
+        return { text: m.getValueInRange({ startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: m.getLineMaxColumn(end) }), dialect: 'kojo' as const };
+      },
+    });
+    const out = asKeys(
+      reg[0]!.provideDocumentRangeFormattingEdits(
+        doc.model,
+        { startLineNumber: 1, endLineNumber: 1 } as unknown as Monaco.Range,
+        formatOpts,
+        token,
+      ) as Monaco.languages.TextEdit[],
+    );
+    expect(out).toEqual(
+      computeFormatEdits(DOC, 'kojo')
+        .filter((e) => e.line === 1)
+        .map((e) => `${e.line}:${e.startColumn}:${e.endColumn}:${e.text}`),
+    );
+    // 只该被叫一次（窗口那条腿被方言闸挡下，不再问第二次）
+    expect(rangeLegCalls).toBe(1);
+  });
+});

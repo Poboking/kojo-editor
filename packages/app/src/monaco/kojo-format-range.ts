@@ -1,6 +1,11 @@
 import type * as Monaco from './entry';
-import { computeFormatEdits, type FormatEdit } from '@kojo/plugin-kojo-sugar';
-import {errorText,  FULLWIDTH_SPACE } from '@kojo/plugin-api';
+import {
+  computeFormatEdits,
+  erbBodyRegionAtLineEnd,
+  type ErbBodyRegionKind,
+  type FormatEdit,
+} from '@kojo/plugin-kojo-sugar';
+import { errorText, FULLWIDTH_SPACE } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import {
   toTextEdits,
@@ -20,13 +25,24 @@ import {
  *    该行自身，见插件 `formatter.ts` 的 `erbNewContent`），"整篇算 + 按行裁剪"与
  *    "区间单独算"逐字节等价（钉在 `kojo-format-range.test.ts` 的等价性用例）；
  *    而整篇算还保住了跨行上下文（缩进单位探测、`@` 原生块状态），哪天规则长出
- *    跨行语义也不会从这条缝里漏出去——**ERB 形没有这份跨行状态**（`.kojo` 才有，
- *    那条腿留在 `kojo-format.ts`，不走窗口），所以窗口这条腿对方言判据逐字等价。
- *    成本口径：老路 O(行数)×(一次整篇文本拷贝)，新路 O(请求行数)、零整篇拷贝。
+ *    跨行语义也不会从这条缝里漏出去。
+ *    **这条论证对 `.kojo` 从来就不成立**（缩进单位探测与 `@` 块状态是文档级判据 ⇒ 宿主
+ *    侧 `formatRequestWindowFor` 对 `.kojo` 一律交回 `null`），**对 ERB 也不再完全成立**：
+ *    `559a878` 给 ERB 形长出了跨行的块状态（数据表块体 / 停用死区，见插件 `erbBodyLineMask`），
+ *    切片视角看不见窗口起点之上的开词 ⇒ 会把整篇腿明确保护的字节改掉。于是窗口这条腿
+ *    多了下面第 3 项那道**前推锚点**的闸（不是放宽判据，是补上切片缺的那一段上下文）。
+ *    成本口径：老路 O(行数)×(一次整篇文本拷贝)，新路 O(请求行数) + 一次前缀状态探针
+ *    （只在"切片这一腿真的想改字节"时才付；零编辑的单行窗口连探针都不用跑）。
  * 2. **编辑绝不越界**：`FormatEdit` 本身永不跨物理行（插件规则第 3 条），所以裁剪
  *    就是行号过滤，天然精确；裁剪后每条编辑都落在 `[startLine, endLine]` 内。
  *    块级对齐超出选区的问题在 ERB 形不存在（ERB 规则本就不跨行对齐）；
  *    若未来出现，答案也是"降级为行内规范化"，不是放宽裁剪。
+ * 3. **切片必须与整篇同判据**（本批补的口子）：{@link windowAnchor} 拿"整篇第 1 行到窗口之前"
+ *    那段前缀问插件那**同一台**状态机（`erbBodyRegionAtLineEnd`）——末态在区里就把取文起点
+ *    **前推到最外层区首标记行**，从那里喂进去时状态机必然处于"区外"，区段轨迹与整篇逐字重合。
+ *    问不到（宿主没给前缀腿 / 抛错 / 方言不是 ERB）就**交回整篇那条腿**，绝不"当作区外"放行。
+ *    唯一的免检通道：`startLine === endLine` 且切片判零编辑——单行数组喂进状态机时起点必然
+ *    在区外（一行之上没有开词），切片掩码恒假 ⇒ "切片没想改" 与 "整篇也不会改" 等价（可证）。
  *
  * on-type 触发字符只有两个，宁缺毋滥：
  * - `;`：ERB 整行注释的成形点（去缩进后以 `;` 开头才算注释，成形即折注释区全角）；
@@ -76,12 +92,27 @@ export function offsetFormatEdits(edits: readonly FormatEdit[], lineOffset: numb
  * **窗口通道**（PS-4，additive）：宿主可选提供的"只给要算的那几行"取文腿。
  *
  * 为什么可以只给几行（ERB 形专属）：`kojo-sugar/formatter.ts` 的 `newContents` 在
- * `dialect === 'erb'` 分支里是一行一句 `out[i] = erbNewContent(lines[i].content)`——
- * **逐行纯函数、零跨行状态**，所以"整篇算 + 按行裁剪"与"只把这几行喂进去算 + 平移行号"
- * 逐字节等价。这条等价性仓库早就钉在 `tests/kojo-format-range.test.ts`（区间切片 ≡ 整篇裁剪），
- * 本批只是把同一个判据用到"取文也只取那几行"上，并在 `tests/ps4-provider-seams.test.ts`
- * 里对**窗口路径**再钉一遍（全区间扫描逐字节对照，含 CRLF 与最后一行两个易错点），
- * 单价差在 `tests/ps4-provider-seams.perf.test.ts`（52,601 行一次击键 72–86 ms → 0.007 ms）。
+ * `dialect === 'erb'` 分支里逐行调 `erbNewContent`——**每行的新内容只依赖该行自身**，
+ * 所以"整篇算 + 按行裁剪"与"只把这几行喂进去算 + 平移行号"逐字节等价。这条等价性仓库早就钉在
+ * `tests/kojo-format-range.test.ts`（区间切片 ≡ 整篇裁剪），PS-4 把同一个判据用到"取文也只取
+ * 那几行"上，并在 `tests/ps4-provider-seams.test.ts` 里对**窗口路径**再钉一遍（全区间扫描逐字节
+ * 对照，含 CRLF 与最后一行两个易错点），单价差在 `tests/ps4-provider-seams.perf.test.ts`
+ * （PS-4 那一批的读数：52,601 行一次击键 72–86 ms → 0.007 ms；本批落完之后同一枚闸的读数是
+ * 25.2 ms → 4.2 ms——那一击正落在"要改字节"的分支上，见下面的单价表）。
+ *
+ * **`559a878` 之后这条等价性多了一个前提**：ERB 形长出了跨行的块状态（数据表块体 / 停用死区），
+ * 切片看不见起点之上的开词就会把保护区当成区外。于是本模块加上 {@link windowAnchor}：
+ * 切片真想改字节时先问一次前缀末态，落在区里就把取文起点前推到最外层区首——**问不到就交回
+ * 整篇那条腿**，绝不"当作区外"放行。
+ *
+ * 单价（真语料五档、同窗交替各 9 轮取中位；触发点一律取"文档 60% 之后第一条会被逐行规则改写"的行；
+ * 三列 = 免检通道 / 本批这条腿真落笔那一击 / 退回整篇那条腿＝落法①）：
+ * 500 行 0.003 / 0.044 / 0.291 ms · 2,500 行 0.004 / 0.271 / 1.458 ms ·
+ * 10,006 行（p99 档）0.010 / 1.658 / 6.696 ms · 30,499 行 0.030 / 3.441 / 21.513 ms ·
+ * 52,602 行（语料之最）0.021 / 8.102 / 38.886 ms。
+ * 读法：**零编辑的击键仍然只付一行的代价**，真要落笔的那一击付 O(起点之前) 的状态机扫描 ⇒
+ * 比落法①便宜 4.0–6.6 倍、比改前那条有分叉的腿贵 15–386 倍。这条线确实变贵了，
+ * 变贵多少写在上面这张表里，不是悄悄变贵（合成档的闸读数在 `ps4-provider-seams.perf.test.ts`）。
  *
  * 为什么 `.kojo` 不走这条（宿主侧交回 `null` = 请走整篇那条腿）：那边的缩进单位探测与
  * `@` 原生块状态是**文档级**判据（判据本体见 `kojo-format.ts` 的区间格式化头注），
@@ -91,31 +122,128 @@ export function offsetFormatEdits(edits: readonly FormatEdit[], lineOffset: numb
  */
 export interface RangeFormatHandlers extends FormatHandlers {
   resolveRange?(model: Monaco.editor.ITextModel, startLine: number, endLine: number): FormatRequest | null;
+  /**
+   * "这次没格式化"的作者面出口（additive；形状与接线口径照 `monaco/completion-core.ts` 的
+   * `onDegrade`——**可选注入 + 双通道**，旧调用方零改动）。
+   *
+   * 本模块**只负责把话说出来**（四个降级点 + 前推锚点问不到，共五处），递到屏幕上哪一格由
+   * 宿主决定：现网宿主还没接它（缺省 = 只走 `console.warn`，与改前逐字一致），
+   * 因为壳层此刻只有两枚既有的可见通道，都不属于格式化：
+   * `monaco/tree-sitter/fallback.ts` 的回落台账（`capability` 是结构 worker 的协议 union，
+   * 引它进来要改 `tree-sitter/**` 两枚别人的文件）与 `ui/editor-global-providers.ts` 的
+   * 折叠封顶徽章（那是徽章，本单明令不再开一套）。
+   */
+  onDegraded?(notice: FormatDegradationNotice): void;
+}
+
+/** 一次"这次没格式化"的说明（`where` = 哪一个降级点，`reason` = 已 `errorText` 过的原文） */
+export interface FormatDegradationNotice {
+  readonly where: 'resolve' | 'compute' | 'resolveRange' | 'windowCompute' | 'anchor';
+  readonly stage: 'range' | 'onType';
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly reason: string;
+}
+
+/** 打字规范化 / 选区格式化这两条入口（写进 `notice`，作者面才说得出是哪一次请求） */
+type FormatStage = FormatDegradationNotice['stage'];
+
+/**
+ * 五处降级都不许静默：`console.warn`（开发者面，机器可对齐的前缀）+ `onDegraded`（可断言、
+ * 宿主可上屏）。回调自己抛错不许把格式化请求打断——它只是呈现面。
+ */
+function degrade(handlers: RangeFormatHandlers, stage: FormatStage, notice: Omit<FormatDegradationNotice, 'stage'>): void {
+  const full: FormatDegradationNotice = { ...notice, stage };
+  console.warn(
+    `[kojo-format-range] ${full.where} 在 ${full.stage} 请求里让了路（第 ${full.startLine}–${full.endLine} 行）：${full.reason}`,
+  );
+  try {
+    handlers.onDegraded?.(full);
+  } catch {
+    /* 呈现面抛错不许打断编辑 */
+  }
 }
 
 /** 复用整篇格式化的宿主判断 + 规则层，出错就"这次不做"（不许掀编辑器的桌子） */
-function resolveSafely(handlers: FormatHandlers, model: Monaco.editor.ITextModel): FormatRequest | null {
+function resolveSafely(
+  handlers: RangeFormatHandlers,
+  model: Monaco.editor.ITextModel,
+  stage: FormatStage,
+): FormatRequest | null {
   try {
     return handlers.resolve(model);
   } catch (e: unknown) {
-    console.warn(`[kojo-format-range] resolve 抛错：${errorText(e)}`);
+    degrade(handlers, stage, {
+      where: 'resolve',
+      startLine: 1,
+      endLine: model.getLineCount(),
+      reason: errorText(e),
+    });
     return null;
   }
 }
 
-function computeSafely(request: FormatRequest, startLine: number, endLine: number): FormatEdit[] {
+function computeSafely(
+  handlers: RangeFormatHandlers,
+  request: FormatRequest,
+  startLine: number,
+  endLine: number,
+  stage: FormatStage,
+): FormatEdit[] {
   try {
     return formatRangeEdits(request, startLine, endLine);
   } catch (e: unknown) {
-    console.warn(`[kojo-format-range] computeFormatEdits 抛错：${errorText(e)}`);
+    degrade(handlers, stage, { where: 'compute', startLine, endLine, reason: errorText(e) });
     return [];
   }
+}
+
+/** 窗口文本 → 全文坐标的编辑表（`offset` = 窗口第一行在整篇里的 1 基行号 - 1） */
+function windowEdits(
+  request: FormatRequest,
+  lineOffset: number,
+  startLine: number,
+  endLine: number,
+): FormatEdit[] {
+  // 平移回全文坐标后再裁一次：窗口文本本来就只盖这几行，这道裁剪是"绝不越界"那条
+  // 不变式的显式钉子（规则哪天长出跨行状态时，它先红在这里而不是改到隔壁行）
+  return clipFormatEditsToLines(
+    offsetFormatEdits(computeFormatEdits(request.text, request.dialect), lineOffset),
+    startLine,
+    endLine,
+  );
+}
+
+/** 宿主窗口通道的调用签名（`RangeFormatHandlers.resolveRange` 去掉可选，便于当参数传） */
+type WindowResolveRange = NonNullable<RangeFormatHandlers['resolveRange']>;
+
+/**
+ * **窗口起点该从整篇第几行起喂**（前推锚点；本模块唯一的"补上下文"动作）。
+ *
+ * - `startLine === 1` ⇒ 窗口本来就从篇首起，状态机看到的东西与整篇腿一样多 ⇒ 无需前推。
+ * - 否则拿 `[1, startLine-1]` 这段前缀问插件那**同一台**块状态机（`erbBodyRegionAtLineEnd`）：
+ *   末态在区外 ⇒ 切片判据与整篇腿**可证等价**（切片起点进状态机时也是区外，同输入同轨迹）；
+ *   末态在区里 ⇒ 返回那个区**最外层区首标记行**，从它起喂才让切片起点的状态与整篇对齐。
+ * - `null` = **问不到**（宿主没给前缀这段 / 交回的不是 ERB）⇒ 调用方交回整篇那条腿。
+ *   这里绝不把"问不到"当成"区外"——那正是本批要关的口子。
+ */
+function windowAnchor(
+  resolveRange: WindowResolveRange,
+  model: Monaco.editor.ITextModel,
+  startLine: number,
+): number | null {
+  if (startLine <= 1) return 1;
+  const prefix = resolveRange(model, 1, startLine - 1);
+  if (!prefix) return null;
+  if (prefix.dialect !== 'erb') return null;
+  const region: { kind: ErbBodyRegionKind; openLine: number } | null = erbBodyRegionAtLineEnd(prefix.text);
+  return region === null ? startLine : region.openLine;
 }
 
 /**
  * 窗口那条腿（PS-4）：宿主给了 `resolveRange` 就只算要算的那几行。
  *
- * 返回 `null` = **这条腿这次不适用**（宿主没给窗口通道 / 窗口不应答 / 取文抛错），
+ * 返回 `null` = **这条腿这次不适用**（宿主没给窗口通道 / 窗口不应答 / 取文抛错 / 锚点问不到），
  * 调用方据此退回整篇那条腿——"不适用"与"算过了、没有编辑"（返回 `[]`）是两件事，
  * 混成一件会让"该零编辑"看起来像"没算"。
  */
@@ -124,6 +252,7 @@ function computeWindowSafely(
   model: Monaco.editor.ITextModel,
   startLine: number,
   endLine: number,
+  stage: FormatStage,
 ): FormatEdit[] | null {
   const resolveRange = handlers.resolveRange;
   if (!resolveRange) return null;
@@ -131,19 +260,40 @@ function computeWindowSafely(
   try {
     request = resolveRange(model, startLine, endLine);
   } catch (e: unknown) {
-    console.warn(`[kojo-format-range] resolveRange 抛错（退回整篇那条腿）：${errorText(e)}`);
+    degrade(handlers, stage, {
+      where: 'resolveRange',
+      startLine,
+      endLine,
+      reason: errorText(e),
+    });
     return null;
   }
   if (!request) return null;
+  // 窗口这条腿的等价性只对 ERB 论证过（`.kojo` 的文档级判据切片会数错）；宿主本来也只在
+  // ERB 上应答，这里再钉一枚闸：方言不是 ERB ⇒ 交回整篇那条腿，不走窗口。
+  if (request.dialect !== 'erb') return null;
   try {
-    // 平移回全文坐标后再裁一次：窗口文本本来就只盖这几行，这道裁剪是"绝不越界"那条
-    // 不变式的显式钉子（规则哪天长出跨行状态时，它先红在这里而不是改到隔壁行）
-    return clipFormatEditsToLines(offsetFormatEdits(
-      computeFormatEdits(request.text, request.dialect),
-      startLine - 1,
-    ), startLine, endLine);
+    const slice = windowEdits(request, startLine - 1, startLine, endLine);
+    // 免检通道（可证，不是放宽判据）：单行数组喂进块状态机时起点必然在区外（一行之上没有开词），
+    // 所以单行窗口的切片掩码恒假 ⇒ "切片判零编辑" 与 "整篇腿在该行判零编辑" 等价 ⇒ 不必问前缀。
+    if (slice.length === 0 && startLine === endLine) return [];
+    const anchor = windowAnchor(resolveRange, model, startLine);
+    if (anchor === null) {
+      degrade(handlers, stage, {
+        where: 'anchor',
+        startLine,
+        endLine,
+        reason: '前缀末态问不到（窗口腿没有前缀这段）⇒ 交回整篇那条腿',
+      });
+      return null;
+    }
+    if (anchor === startLine) return slice;
+    // 窗口起点落在块体/死区里 ⇒ 取文起点前推到最外层区首，再从那里算（保护区一个字节都不许动）
+    const ctx = resolveRange(model, anchor, endLine);
+    if (!ctx || ctx.dialect !== 'erb') return null;
+    return windowEdits(ctx, anchor - 1, startLine, endLine);
   } catch (e: unknown) {
-    console.warn(`[kojo-format-range] 窗口 computeFormatEdits 抛错：${errorText(e)}`);
+    degrade(handlers, stage, { where: 'windowCompute', startLine, endLine, reason: errorText(e) });
     return [];
   }
 }
@@ -172,11 +322,11 @@ export function installRangeFormatter(
       const lineCount = model.getLineCount();
       const startLine = clampLine(range.startLineNumber, lineCount);
       const endLine = clampLine(range.endLineNumber, lineCount);
-      const windowed = computeWindowSafely(handlers, model, startLine, endLine);
+      const windowed = computeWindowSafely(handlers, model, startLine, endLine, 'range');
       if (windowed !== null) return toTextEdits(model, windowed);
-      const request = resolveSafely(handlers, model);
+      const request = resolveSafely(handlers, model, 'range');
       if (!request) return [];
-      return toTextEdits(model, computeSafely(request, startLine, endLine));
+      return toTextEdits(model, computeSafely(handlers, request, startLine, endLine, 'range'));
     },
   };
 
@@ -186,11 +336,11 @@ export function installRangeFormatter(
       // 一次打字只该算**触发行那一行**（PS-4）：走 `resolveRange` 时整篇文本一次都不 copy；
       // 老路（整篇算 + 裁一行）留着兜底，判据与结果与改前逐字相同。
       const line = clampLine(position.lineNumber, model.getLineCount());
-      const windowed = computeWindowSafely(handlers, model, line, line);
+      const windowed = computeWindowSafely(handlers, model, line, line, 'onType');
       if (windowed !== null) return toTextEdits(model, windowed);
-      const request = resolveSafely(handlers, model);
+      const request = resolveSafely(handlers, model, 'onType');
       if (!request) return [];
-      return toTextEdits(model, computeSafely(request, line, line));
+      return toTextEdits(model, computeSafely(handlers, request, line, line, 'onType'));
     },
   };
 

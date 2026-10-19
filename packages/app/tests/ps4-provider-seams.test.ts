@@ -789,7 +789,10 @@ describe('installRangeFormatter · 窗口腿 ≡ 整篇腿（逐字节）', () =
     expect(out[0]!.range.startLineNumber).toBe(3);
     expect(out[0]!.text).toBe('; 注释 文');
     expect(doc.getValueCalls()).toBe(0);
-    expect(doc.getValueInRangeCalls()).toBe(1);
+    // 2 次窗口取文 = 要算的那一行 + **窗口之前的那段前缀**（`kojo-format-range.ts` 的 `windowAnchor`：
+    // ERB 形有了跨行块状态之后，切片真想改字节就得先问"起点在不在区里"）。
+    // PS-4 要钉的那一条没变：**整篇一次都不 copy**；零编辑的击键仍然只取一行（免检通道）。
+    expect(doc.getValueInRangeCalls()).toBe(2);
   });
 
   it('CRLF 与"最后一行"两个易错点：窗口文本切行后行号平移仍逐字对', () => {
