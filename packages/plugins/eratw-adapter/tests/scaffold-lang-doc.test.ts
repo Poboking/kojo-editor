@@ -9,27 +9,43 @@
  * ③ **原生档真的走通下游**——`erb-parser` 的**真实索引函数**扫得到它，
  *    制品计划 `planArtifacts` 对它**一次编译器都不叫**、字节原样携带。
  *
+ * 第④、⑤组是另两笔取证，同样一条都不许空转：
+ * ④ 语言档声明真的挂在 eraTW 那枚供数函数上；
+ * ⑤ **卡口取证**（收口批 2026-10-20）：`lang-doc.ts` 那句「起手文件直接就是游戏认得的
+ *    原生扩展名：不经转译，导出或部署时原样带走」是可证伪的事实主张 ⇒ ⑤ 用**内核真 io**
+ *    把原生档起手包落到工作区盘上，再跑**真部署链**（`deployPackage`）与**真导出链**
+ *    （`buildPackageZip` → ZIP 容器解回），要求 9 份逐字节带走、编译器一次都不叫。
+ *    静默跳过、少带一份、被转译，任一种都红。
+ *
  * 哈希一律不在本文件现算：全仓 SHA-256 实现只许住 `kojo-market/src/digest.ts`
  * （`kojo-market/tests/single-source.test.ts` 守着，测试文件也在它的扫描面内），
  * 所以改前基线交金样文件、比对交字节。
  */
 import { readFileSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
+import * as os from 'node:os';
 import * as nodePath from 'node:path';
-import { describe, expect, it } from 'vitest';
-import type { ErbIndex, ErbParserService, EventBus, FileIO, PluginContext, ScaffoldFileSet, Unsubscribe } from '@kojo/plugin-api';
-import { ERB_BODY_EXTENSIONS, isErbDialectPath, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { ErbIndex, ErbParserService, EventBus, FileIO, PluginContext, ScaffoldFileSet, SugarCompiledBytes, Unsubscribe } from '@kojo/plugin-api';
+import { ERB_BODY_EXTENSIONS, inflateZipEntry, isErbBodyPath, isErbDialectPath, KOJO_SOURCE_EXTENSION, readZipContainer } from '@kojo/plugin-api';
+// 真实链路层：借用内核 io + Node 桥做端到端落盘（与 eratw-adapter/tests/deploy.test.ts 同一先例）
+import { FileIOServiceImpl } from '../../../kernel/src/io';
+import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { createErbParserPlugin } from '../../erb-parser/src/plugin';
 import { makeComputeStub } from '../../erb-parser/tests/support';
 import { lookupKeyword } from '../../kojo-sugar/src/keywords';
 import {
+  buildPackageZip,
   DEFAULT_KOJO_LANG_DOC,
   composeScaffoldDraft,
   kojoLangDocExtension,
   readScaffoldLangDocs,
   type KojoScaffoldDraft,
+  writeScaffoldFiles,
 } from '@kojo/kojo-project-kit';
 import { planArtifacts } from '../../../kojo-project-kit/src/artifact';
 import { ERATW_SCAFFOLD_DEPS } from '../src/new-project-wizard';
+import { deployPackage } from '../src/deploy';
 import {
   CORE_FACES,
   FACE_CASES,
@@ -360,5 +376,91 @@ describe('④ 供数接线（这一格在 eraTW 的向导里真的会出现）',
     expect(readScaffoldLangDocs(plain)).toEqual([]);
     const draft = composeScaffoldDraft({ ...BASE, extra: {} }, readScaffoldLangDocs(plain), 'native');
     expect('langDoc' in draft).toBe(false);
+  });
+});
+
+/* ─────────────── ⑤ 卡口取证：起手 .ERB 经真链原样带走 ─────────────── */
+
+/** 被叫到就说明这条链没走"原样带走"——计数 + 抛错，两样都响 */
+let compilerCalls = 0;
+const noCompile = (_source: string, label: string): SugarCompiledBytes => {
+  compilerCalls += 1;
+  throw new Error(`起手就是原生扩展名的文件不该被要求转译：${label}`);
+};
+
+describe('⑤ 卡口取证：原生档起手包经真部署链 / 真导出链原样带走（lang-doc 那句的实测）', () => {
+  const native = scaffoldKojoProject({ ...BASE, langDoc: 'native' });
+  const nativeExt = kojoLangDocExtension('native');
+  const nativeRels = Object.keys(native.files);
+  let tmpDir = '';
+
+  afterEach(async () => {
+    if (tmpDir !== '') await fs.rm(tmpDir, { recursive: true, force: true });
+    tmpDir = '';
+  });
+
+  /** 真 IO：把原生档起手包写进工作区（常驻可写根），并备好一处"已批准写权限的游戏目录" */
+  async function materialise(): Promise<{ io: FileIOServiceImpl; pkgDir: string; gameKojoDir: string }> {
+    tmpDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'kojo-native-erb-'));
+    const appData = nodePath.join(tmpDir, 'appdata');
+    const io = new FileIOServiceImpl(new NodeBridge(appData));
+    io.setAppWritableRoots([appData]);
+    const pkgDir = nodePath.join(appData, 'workspaces', 'p1', native.dirName);
+    const written = await writeScaffoldFiles({ io, files: native.files, targetDir: pkgDir });
+    expect(written.createdFiles).toHaveLength(nativeRels.length);
+    const gameKojoDir = nodePath.join(tmpDir, 'game', 'kojo', '001 影狼');
+    await fs.mkdir(gameKojoDir, { recursive: true });
+    io.setWritableRoots([gameKojoDir]);
+    return { io, pkgDir, gameKojoDir };
+  }
+
+  it('盘上的起手文件真叫原生扩展名（引擎预载白名单认作正文），不是只活在字典键里', async () => {
+    const { io, pkgDir } = await materialise();
+    const onDisk = (await io.walkDir(pkgDir, { includeFiles: true })).filter((e) => !e.isDirectory);
+    expect(onDisk.map((e) => e.name).sort()).toEqual(nativeRels.map((r) => r.split('/').pop()!).sort());
+    const bodies = onDisk.filter((e) => isErbBodyPath(e.path));
+    expect(bodies, '引擎正文方言那一份文件数').toHaveLength(CORE_FACES.length);
+    for (const e of bodies) expect(nodePath.extname(e.path)).toBe(nativeExt);
+    // 反证糖档那枚扩展名一个都没落盘（README 是唯一非方言文件）
+    expect(onDisk.filter((e) => e.name.endsWith(KOJO_SOURCE_EXTENSION))).toEqual([]);
+    expect(onDisk.filter((e) => !isErbDialectPath(e.path)).map((e) => e.name)).toEqual(['README.md']);
+  });
+
+  it('部署链 deployPackage（真落盘）：9 份逐字节进游戏目录、编译器一次都不叫', async () => {
+    const { io, pkgDir, gameKojoDir } = await materialise();
+    compilerCalls = 0;
+    const targetDir = nodePath.join(gameKojoDir, native.dirName);
+    const count = await deployPackage({ io, srcDir: pkgDir, targetDir, compile: noCompile });
+    expect(count).toBe(nativeRels.length);
+    expect(compilerCalls, '转译被叫到的次数（原样带走 ⇒ 必须为 0）').toBe(0);
+    for (const rel of nativeRels) {
+      const src = await io.readBytes(nodePath.join(pkgDir, rel));
+      const dst = await io.readBytes(nodePath.join(targetDir, rel));
+      expect(Buffer.compare(Buffer.from(dst), Buffer.from(src)), `落盘字节与源不等：${rel}`).toBe(0);
+      expect(new TextDecoder().decode(dst), `带走的内容与脚手架不等：${rel}`).toBe(native.files[rel]);
+    }
+  });
+
+  it('导出链 buildPackageZip → ZIP 容器解回：条目名仍是原生扩展名、字节等于源、一份不少', async () => {
+    const { io, pkgDir } = await materialise();
+    compilerCalls = 0;
+    const { fileName, bytes, plan } = await buildPackageZip(io, pkgDir, noCompile);
+    expect(fileName).toBe(`${native.dirName}.zip`);
+    expect(compilerCalls).toBe(0);
+    expect(plan.transpiled).toBe(0);
+    expect(plan.passthrough).toBe(nativeRels.length);
+    expect(plan.ignoredDerived).toEqual([]);
+    const container = readZipContainer(bytes);
+    expect(container.entries).toHaveLength(nativeRels.length);
+    const seen: string[] = [];
+    for (const entry of container.entries) {
+      const rel = entry.name.slice(native.dirName.length + 1);
+      seen.push(rel);
+      const text = native.files[rel];
+      expect(text, `包里出现没有来源的条目：${entry.name}`).toBeDefined();
+      expect(new TextDecoder().decode(await inflateZipEntry(entry)), `ZIP 里的字节被改过：${rel}`).toBe(text);
+    }
+    expect(seen.sort()).toEqual([...nativeRels].sort());
+    expect(seen.filter((r) => r.endsWith(nativeExt))).toHaveLength(CORE_FACES.length);
   });
 });
