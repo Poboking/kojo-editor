@@ -104,29 +104,18 @@ export const SYSTEM_FUNCTION_WORDS: string[] = [...SYSTEM_FUNCTION_ALIASES.keys(
 /**
  * `kojo-dark` 主题里糖专属 token 的着色规则（由 `erb-language.ts` 合并进主题定义）。
  *
+ * **定义处已下沉**零 import 叶子 `kojo-theme-rules.ts`（PS-10 断链：本文件静态挂着
+ * `@kojo/plugin-kojo-sugar` 词表，`theme.ts` 在开机静态图里，经本文件取规则等于把
+ * 糖包挂回开机图）。此处按**同一数组本体** re-export：既有 import 点（主题装配、
+ * `kojo-token-tiers.test.ts` 的同对象引用断言）读到的对象不变，别在这里复制第二份。
+ *
  * 取色口径（**深底可读 + 一档一色**，判据复跑见 `kojo-token-tiers.test.ts`）：
  * - 已中文化的糖层走冷色族（紫=关键字、青=运算符、蓝=函数、绿=台词、玫=代词）；
  * - 还没中文化的原生层走"外来族"（粉=引擎指令、蓝紫=族头、灰=整行原生直通），
  *   名字层（CJK 非词表 = 槽位原名 / 作者自定名）走薄荷绿；
  * - 亮度全部 ≥ 4.46:1（既有档位里最弱的一档），不为了分层引入刺眼的高饱和。
  */
-export const KOJO_SUGAR_THEME_RULES: Monaco.editor.ITokenThemeRule[] = [
-  { token: 'sugar.keyword', foreground: 'c678dd' },
-  { token: 'sugar.keyword.alias', foreground: '8b7bb8' },
-  { token: 'sugar.system-function', foreground: '61afce' },
-  { token: 'sugar.operator', foreground: '56b6c2' },
-  { token: 'sugar.cont', foreground: 'e5c07b', fontStyle: 'bold' },
-  { token: 'sugar.pronoun', foreground: 'e06c75' },
-  { token: 'sugar.speech', foreground: '98c379' },
-  { token: 'sugar.speech.delimiter', foreground: '7f9cc0' },
-  { token: 'sugar.interp', foreground: 'd19a66' },
-  { token: 'sugar.interp.delimiter', foreground: 'd19a66', fontStyle: 'bold' },
-  { token: 'sugar.colon', foreground: '7f9cc0' },
-  { token: 'sugar.slot', foreground: '5cc9a8' },
-  { token: 'keyword.raw', foreground: '9aa0a6' },
-  { token: 'keyword.erb', foreground: 'ff7ab2' },
-  { token: 'keyword.erb.family', foreground: '9d7bea' },
-];
+export { KOJO_SUGAR_THEME_RULES } from './kojo-theme-rules';
 
 /**
  * 档位表：**作者看得见的分层口径** → 该档的 token 名（多 token = 同档同色）。

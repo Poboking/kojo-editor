@@ -2,8 +2,17 @@ import { useEffect } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbParserService, OpJournal } from '@kojo/plugin-api';
 import { KernelServices } from '@kojo/plugin-api';
-import { bindDiffView, DIFF_VIEW_OVERLAY_ID } from './diff-view';
-import { createDiffViewOverlay } from './DiffViewOverlay';
+// P2-14 / PS-10 断链：diff view 一格整体走**动态装载**。这一格经
+// `diff-view.ts → monaco/erb-language → theme → monaco/kojo-language →
+// @kojo/plugin-kojo-sugar` 静态把糖词表（~900 KB 源码）挂回开机静态图；theme 的规则
+// 数组虽已下沉叶子（`monaco/kojo-theme-rules.ts`），但 `diff-view.ts` 仍静态 import
+// `kojo-language` 取语言 id——本文件是它唯一的宿主 import 点，改动态后糖包整包离开
+// 开机图。**装载时机**：模块作用域就发起 import（本文件随 App 静态进开机图），effect
+// 跑时 chunk 早已到位，注册落在同一 tick 的微任务里；比对意图只由文件历史 overlay 的
+// 「对比」按钮发（人类点击节奏），不存在"意图早于绑定"的实测窗口。
+const diffViewChunk: Promise<
+  [typeof import('./diff-view'), typeof import('./DiffViewOverlay')]
+> = Promise.all([import('./diff-view'), import('./DiffViewOverlay')]);
 // P2-14：quick fix 预览 overlay（确认才落的那扇窗）——照 diff view 那格的注法追加。
 // **不静态 import `editor-global-providers`**：那个模块静态挂着整个 monaco provider
 // 世界（PS-10 开机图闸的真判据），预览确认是低频路径——apply / activePaneId 都走
@@ -33,22 +42,33 @@ import { readJumpProbe } from './jump-to-state';
  * 不碰任何 App React state——所以能在组件体的同一位置无条件调用，React 钩子次序不变。
  */
 export function useShellOverlays(kernel: Kernel | null): void {
-  // 通用 diff 视图（2026-10-15 比对/历史批）：宿主注册 ui.overlay 贡献并订阅
-  // `ui.diffView.open` 意图（插件发意图、宿主落地；与 editor.revealLocation 同款）。
-  // 本地时间线（同批）：命令进（活动文件在 ctx 里）→ 状态单源 → ui.overlay 开窗；
-  // 「对比」发同一枚 diff 意图（F1 视图复用），「恢复」只经 kernel.io 既有写链路。
   useEffect(() => {
     if (!kernel) return;
-    const unBind = bindDiffView(kernel);
-    const unReg = kernel.slots.register('ui.overlay', {
-      id: DIFF_VIEW_OVERLAY_ID,
-      order: 40,
-      size: 'wide',
-      component: createDiffViewOverlay({
-        io: kernel.io,
-        close: () =>
-          kernel.bus.emit('ui.overlay.close', { id: DIFF_VIEW_OVERLAY_ID, source: 'host:diff-view' }),
-      }),
+    // 通用 diff 视图（2026-10-15 比对/历史批）：宿主注册 ui.overlay 贡献并订阅
+    // `ui.diffView.open` 意图（插件发意图、宿主落地；与 editor.revealLocation 同款）。
+    // 本地时间线（同批）：命令进（活动文件在 ctx 里）→ 状态单源 → ui.overlay 开窗；
+    // 「对比」发同一枚 diff 意图（F1 视图复用），「恢复」只经 kernel.io 既有写链路。
+    // 装载走 `diffViewChunk`（模块作用域已发起）：`disposed` 闩住"卸载早于装载到位"的
+    // 竞态；槽位按 `order` 排序（kernel `slots.ts`），晚到不改 overlay 的相对次序。
+    let disposed = false;
+    const diffViewCleanups: Array<() => void> = [];
+    void diffViewChunk.then(([diffView, diffViewOverlay]) => {
+      if (disposed) return;
+      const unBind = diffView.bindDiffView(kernel);
+      const unReg = kernel.slots.register('ui.overlay', {
+        id: diffView.DIFF_VIEW_OVERLAY_ID,
+        order: 40,
+        size: 'wide',
+        component: diffViewOverlay.createDiffViewOverlay({
+          io: kernel.io,
+          close: () =>
+            kernel.bus.emit('ui.overlay.close', { id: diffView.DIFF_VIEW_OVERLAY_ID, source: 'host:diff-view' }),
+        }),
+      });
+      diffViewCleanups.push(() => {
+        unBind();
+        unReg();
+      });
     });
     const unRegHistory = kernel.slots.register('ui.overlay', {
       id: FILE_HISTORY_OVERLAY_ID,
@@ -177,8 +197,10 @@ export function useShellOverlays(kernel: Kernel | null): void {
       }),
     });
     return () => {
-      unBind();
-      unReg();
+      // diff view 一格：装载未到位就置闩（到位的 `.then` 会自行跳过注册）；
+      // 已到位的跑收集到的 unBind/unReg（与原同步版同一对、同一次序）。
+      disposed = true;
+      for (const cleanup of diffViewCleanups) cleanup();
       unRegHistory();
       unRegHistoryCommand();
       unRegOps?.();

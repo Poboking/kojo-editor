@@ -1,6 +1,9 @@
 import type * as Monaco from './entry';
-import { KOJO_SUGAR_THEME_RULES } from './kojo-language';
-import { KOJO_SEMANTIC_THEME_RULES } from './kojo-semantic-tokens';
+// PS-10 断链：两张规则数组下沉到零 import 叶子 `kojo-theme-rules.ts`——它们的**老家**
+// （`kojo-language.ts` / `kojo-semantic-tokens.ts`）各自拖着 `@kojo/plugin-kojo-sugar`
+// 词表链，本文件在开机静态图里（diff-view / QuickFixPreviewOverlay 都经它），
+// 直接 import 老家就等于把糖包静态挂回开机图。叶子与两个老家的关系见叶子头注。
+import { KOJO_SUGAR_THEME_RULES, KOJO_SEMANTIC_THEME_RULES } from './kojo-theme-rules';
 
 /**
  * Monaco 三套主题（2026-10-17 反馈 3：编辑器配色跟随主题）。
@@ -188,10 +191,12 @@ const MINT_SEMANTIC_PALETTE: Readonly<Record<string, string>> = {
 };
 
 /**
- * 规则在**调用时**组装，不在模块顶层：`kojo-semantic-tokens.ts` → `register-dialects`
- * → `erb-language.ts` → 本文件构成一条既有的装配环，语义规则数组在环跑完前可能是
- * 未初始化的 TDZ 绑定（顶层展开会直接抛 "is not iterable"）。`defineMonacoThemes`
- * 由 `registerErbLanguage` 在环收口后调用，届时所有绑定都已就绪。
+ * 规则在**调用时**组装，不在模块顶层（`retint` 要按套换前景，三套主题各算各的）。
+ *
+ * 附带的红利：两张源规则数组住在零 import 叶子 `kojo-theme-rules.ts`，本文件不再
+ * import `kojo-language.ts` / `kojo-semantic-tokens.ts`——旧有的装配环
+ * （`kojo-semantic-tokens → register-dialects → erb-language → 本文件` 造成的
+ * TDZ 风险）从这条静态边走不到了，`defineMonacoThemes` 任何时候调用绑定都已就绪。
  */
 function darkRules(): Monaco.editor.ITokenThemeRule[] {
   return [

@@ -40,7 +40,8 @@ import { LARGE_FILE_LINES } from '../ui/editor-options';
  *
  * 词表的**名字**住在契约（`EDITOR_SEMANTIC_TOKEN_TYPES` / `..._MODIFIERS`，否则贡献方
  * 无法类型标注）；**legend 本身**（实际交给 Monaco 的那两份数组，以及哪些类别真有颜色）
- * 归宿主：主题规则在本文件（`KOJO_SEMANTIC_THEME_RULES`），合并进 `kojo-dark`。
+ * 归宿主：主题规则在叶子 `kojo-theme-rules.ts`（本文件按同对象 re-export），合并进
+ * `kojo-dark`。
  * 贡献方给出 legend 里没有的名字 ⇒ 该 span **不着色**，并且 `console.warn` 一次
  * （铁律 4：退化可见；静默丢色会被当成"插件没生效"猜半天）。
  */
@@ -54,18 +55,17 @@ export const KOJO_SEMANTIC_TOKEN_LEGEND: Monaco.languages.SemanticTokensLegend =
 /**
  * `kojo-dark` 里语义类别的主题规则。
  *
+ * **定义处已下沉**零 import 叶子 `kojo-theme-rules.ts`（PS-10 断链：本文件经
+ * `register-dialects → kojo-language` 拖着 `@kojo/plugin-kojo-sugar`，而 `theme.ts`
+ * 在开机静态图里）。此处按**同一数组本体** re-export（`monaco-theme.test.ts` 等既有
+ * import 点读到的对象不变，别复制第二份）。
+ *
  * token 名就是 `type.modifier…` 那条点分串（standalone 主题服务原文这么匹配），
  * 所以 `function.declaration` 比 `function` 更具体 = 定义点与调用点两种色。
  * 取色一律**复用既有词法色**（蓝 = 函数、黄 = 声明、橙 = 数/参数位），不引入新配色：
  * 作者看到的应当是"同一类东西同一个色"，而不是"新机制带来第七种蓝"。
  */
-export const KOJO_SEMANTIC_THEME_RULES: Monaco.editor.ITokenThemeRule[] = [
-  { token: 'function', foreground: '61afef' },
-  { token: 'function.declaration', foreground: '61afef', fontStyle: 'bold' },
-  { token: 'parameter', foreground: 'd19a66' },
-  { token: 'variable.declaration', foreground: 'e5c07b' },
-  { token: 'variable.declaration.readonly', foreground: 'e5c07b', fontStyle: 'italic' },
-];
+export { KOJO_SEMANTIC_THEME_RULES } from './kojo-theme-rules';
 
 /** 类别名 → legend 下标；`-1` = legend 里没有（不着色 + 一次性告警） */
 const TYPE_INDEX = new Map<string, number>(EDITOR_SEMANTIC_TOKEN_TYPES.map((t, i) => [t, i]));
