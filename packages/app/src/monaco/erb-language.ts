@@ -15,7 +15,9 @@ import { CJK_WORD_PATTERN } from './word-separators';
  * - 指令表 = 口上高频子集（单一真源 `erb-directives.ts`）；高亮另吃补集
  *   `erb-highlight-words.ts`（控制流语句 + 引擎内建单行语句，补全不消费）；
  * - 变量多段引用（CFLAG:ARG:口上セレクタ）整体高亮；
- * - FORM 串内 `{表达式}` / `%字符串%` 作为字符串内的第二层（Monarch 嵌套限制，v0.1 简化）。
+ * - FORM 串内 `{表达式}` / `%字符串%` 是字符串内的第二层（`str` 态规则序，见该态注；
+ *   这一层的存在性由语义层背书——`erb-completion-context.ts` 的 `'form'` 槽判据 +
+ *   `condition-extractor` 的 `\` 转义判据同一条语言事实）。
  *
  * **大小写（2026-10-18 SUGGEST-2C）**：Emuera 关键字大小写不敏感，词表只存一种写法；
  * `ignoreCase: true` 让 `call` / `If` / `setcolor` 与全大写同档。若哪天关掉它，
@@ -114,7 +116,7 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         [/^(\s*)(#\w+)/, ['', 'keyword.preprocessor']],
         // 预处理区间标记
         [/\[SKIPSTART\]|\[SKIPEND\]/, 'keyword.preprocessor'],
-        // 字符串（含 FORM 串转义）：v0.1 整体字符串着色；{}/%% 表单式在 v0.2 做二级解析
+        // 字符串（含 FORM 串转义）：进 `str` 态，串内 `{…}` / `%…%` 两层在那里解析
         [/"/, { token: 'string.quote', bracket: '@open', next: '@str' }],
         // 整词指令（含高亮补集）：必须排在变量族之前——CFLAG/EQUIP/RAND/DOWNBASE 同时是
         // 变量族头，只靠后面的 cases 会让大写形态吃 variable 色（SUGGEST-2C 的 second root）
@@ -138,9 +140,13 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
           },
         ],
         // 日文/中文全角标识符（变量名、参数名）；命中词表（adapter 派生的指令名，含中日文
-        // 名）同样出 keyword——词表派生自 adapter 时非 ASCII 名才有着落
+        // 名）同样出 keyword——词表派生自 adapter 时非 ASCII 名才有着落。
+        // 假名段**挖掉 U+30FB**：那是 KATAKANA MIDDLE DOT（中黒，General Category = Po），
+        // 被块区间 `\u3040-\u30ff` 顺手收成"词字符"是块区间的老毛病——语义层的记号判据
+        // `MODEL_TOKEN_CLASS = [\p{L}\p{N}_]` 不认它（Po 既非字母也非数字），分词侧
+        // （word-separators 标点表）也把它当分隔符。让它落到下面的标点档，三条口径对齐。
         [
-          /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]+/,
+          /[\u3040-\u30fa\u30fc-\u30ff\u4e00-\u9fff\uff66-\uff9f]+/,
           {
             cases: {
               '@directives': 'keyword',
@@ -162,21 +168,68 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
             },
           },
         ],
-        // 全角/CJK 标点（U+3001-\u303F ∪ \uff01-\uff65 残部：`：，。（）「」《》、；！？＿…` 等）：
-        // 语义层判"非记号字符"（MODEL_TOKEN_CLASS 不含标点），.kojo 侧同类字符是关键字标点——
-        // 归 operator，不再坠 defaultToken 空色。全角 `；` 只是标点：语义层 codeViewOf 只认
-        // 半角 0x3B，注释判据不许在这 widening
-        [/[\u3001-\u303f\uff01-\uff65]+/, 'operator'],
+        // 全角/CJK 标点（U+3001-\u303F ∪ \uff01-\uff65 残部：`：，。（）「」《》、；！？＿…` 等）
+        // ∪ 假名段里的中黒 U+30FB ∪ 弯引号 / 省略号 / 间隔号：语义层判"非记号字符"
+        // （MODEL_TOKEN_CLASS 不含标点），.kojo 侧同类字符是关键字标点——归 operator，
+        // 不再坠 defaultToken 空色。全角 `；` 只是标点：语义层 codeViewOf 只认半角 0x3B，
+        // 注释判据不许在这 widening
+        //
+        // **为什么还要单列 \u2018-\u201d / \u2026 / \u00b7 / \u30fb**：上面两段是**Unicode 块**，
+        // 不是"中文标点"的枚举——\uff01-\uff65 是 Halfwidth and Fullwidth Forms 的 ASCII 镜像段
+        // （段内每枚都有一个半角同族：！↔! ～↔~ ＿↔_），\u3001-\u303f 是 CJK Symbols and Punctuation
+        // （汉字文化圈固有记号：。、「」《》【】）。而 `“ ” ‘ ’`（U+2018-U+201D）与 `…`（U+2026）
+        // 住在 General Punctuation（U+2000-U+206F，西文排版族）、`·`（U+00B7）住在 Latin-1
+        // Supplement——它们在 ASCII 里没有同族镜像、也不属汉字固有记号，只是中文输入法按**排版习惯**
+        // 把它们当全角用，所以块区间天然不收；`・`（U+30FB）更尴尬地住在**假名段**里（Po 被块区间
+        // 误当词字符，上面刚从标识符类里挖出来）。它们全在 word-separators 的标点表里
+        // （分词侧早认它们是分隔符），着色侧漏一枚就是"同一枚字符两边口径分叉"；
+        // `tests/erb-highlight.test.ts` 的 ③′ 拿标点表反查这一整段，加一枚标点忘加归属当场红。
+        [/[\u3001-\u303f\uff01-\uff65\u2018-\u201d\u2026\u00b7\u30fb]+/, 'operator'],
       ],
-      // 行尾出栈三条（`…$` + `@popall`）：语义层 codeViewOf 逐行独立——未闭合引号只到本行
-      // 行尾，绝不把串态带过行界染红后续所有行。`$` 规则须排在无锚 catch-all 之前，
-      // 命中条件"剩余段一路吃到行尾都不撞闭合符"正是"本行没闭合"。
+      // 串内第二层（FORM 记号）。两条纪律叠在一起才成立：
+      // **A. 内容字符类必须排除 `{`**（`[^"{%\\]`）：上一批点名的"`strExpr` 历史不可达"根因就在
+      //    这里——旧类 `[^"%\\]+` 把 `{` 也算内容，于是从串首一枚字符起一路吞到闭合引号，
+      //    入层规则连被尝试的机会都没有（**只调规则顺序毫无用处**，实测发射仍是
+      //    `台词{LOCAL:1}尾巴=string`）。`.kojo` 侧的台词层靠 `[^」{\\]+`（`kojo-language.ts`
+      //    的 speech 态）排除 `{` 才让插值层活着，两门语言同一写法。
+      //    `}` **留在**类内：串里落单的右括号是字面内容，不许坠空 token。
+      // **B. 规则序**（①-⑩，各有不可交换的位置）：
+      //    ① `\` + 一枚字符 = 转义，必须最先：语义层同一判据（`condition-extractor/src/expr.ts`
+      //      的串词法 `\` 吞下一个字符、`splitTopLevelCommas` 同款），所以 `\{` 是**字面括号**、
+      //      不许开插值层（旧写法把 `\` 从字符类里排除却没写这条规则，落单 `\` 既不出色也不推进）。
+      //    ②③ "本行等不到闭合" 两条闸必须先于开层规则：不开这道闸，`"台词{未闭合` 与记号正好
+      //      压在行尾的 `"台词{` 会把 strExpr / strStr 带过行界，下一整行染成 variable——
+      //      上一批定下的那条"未闭合只到本行行尾"纪律当场破功。保守方向与 codeViewOf 一致：
+      //      等不到闭合的残段留在串里，不冒充表达式。
+      //    ④⑤ 开层（前瞻要求闭合记号出现在闭合引号之前）。这一层的存在性由语义层背书：
+      //      `erb-completion-context.ts` 的 `'form'` 槽明写"FORM 串，可含 `%…%` / `{…}` 插值"，
+      //      `insideInterp` 对未闭合 `{` 判"停在插值内 ⇒ 不猜"；真语料形态见
+      //      `erb-parser/src/structure.ts` 头注那条
+      //      `@"给%CALLNAME:TARGET%使用避孕套（剩余{ITEM:45}枚）"`（一枚串里两层同时出现）；
+      //      `kojo-sugar/src/codegen.ts` 的 `classifyInterpolation` 也把数值插值**降糖成
+      //      `{表达式}`** 落进 ERB 产物（规范 §5.2 c）。
+      //    ⑥⑦ 落单记号收成字面内容：内容类既然排除了 `{`，就必须有兜底，否则那一枚字符
+      //      无规则可配 ⇒ 无色；同时不许它顺手把闭合引号吞进上一层（旧 `%` 层正是这么丢引号的）。
+      //    ⑧ 闭合引号 `@pop`；⑨⑩ 行尾出栈（`$` 形须排在无锚 catch-all 之前）。
       str: [
-        [/[^"%\\]+$/, { token: 'string', next: '@popall' }],
-        [/[^"%\\]+/, 'string'],
-        [/\{/, { token: 'string.escape', next: '@strExpr' }],
-        [/%/, { token: 'string.escape', next: '@strStr' }],
-        [/"/, { token: 'string.quote', bracket: '@close', next: '@pop' }],
+        [/\\./, 'string'], // ①
+        // ②③ 本行既等不到闭合记号、也等不到闭合引号 ⇒ 残段留在 string 层并出栈
+        //（`"台词{未闭合`、记号正好压在行尾的 `"台词{`、`"前段%` 都不许把 strExpr / strStr 带过行界）
+        [/\{[^"}]*$/, { token: 'string', next: '@popall' }], // ②
+        [/%[^"%]*$/, { token: 'string', next: '@popall' }], // ③
+        // ④⑤ 开层（前瞻要求"闭合记号在闭合引号之前"，见 B④）
+        [/\{(?=[^"}]*\})/, { token: 'string.escape', next: '@strExpr' }], // ④
+        [/%(?=[^"%]*%)/, { token: 'string.escape', next: '@strStr' }], // ⑤
+        // ⑥⑦ 落单记号（形如 `"…{"`：本行有闭合引号却没有闭合记号）就是**字面内容**——
+        // 保住颜色，也保住那枚闭合引号的 `@close`（bracket 配对计数不许被吞掉一层）
+        [/\{/, 'string'], // ⑥
+        [/%/, 'string'], // ⑦
+        [/"/, { token: 'string.quote', bracket: '@close', next: '@pop' }], // ⑧
+        [/[^"{%\\]+$/, { token: 'string', next: '@popall' }], // ⑨
+        [/[^"{%\\]+/, 'string'],
+        // ⑩ 行尾落单的 `\`（续行写法里真会出现）：①要两枚字符、⑨又不吃 `\`，
+        // 少了这一条串态就会被带过行界——正是⑨要防的事，所以单独收口。
+        [/\\$/, { token: 'string', next: '@popall' }],
       ],
       strExpr: [
         [/[^}]+$/, { token: 'variable', next: '@popall' }],

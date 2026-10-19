@@ -95,6 +95,8 @@ const REQUIRED_BASE_TOKENS = [
   'number',
   'label',
   'identifier',
+  // 运算符 / 标点档（ERB 的半角运算符与全角标点、`.kojo` 表达式括号都发这一枚 token）
+  'operator',
   'string.escape',
 ] as const;
 
@@ -244,6 +246,81 @@ describe('规则前景对主题背景的 WCAG 对比度', () => {
             `${id}/${rule.token} #${foreground} 对比度 ${ratio.toFixed(2)}:1 < 4.5`,
           ).toBeGreaterThanOrEqual(4.5);
         }
+      }
+    });
+  }
+});
+
+/* ============================== ④b operator 档的落点 ============================== */
+
+/** sRGB → CIE Lab（D65）；色差与彩度都在这条轴上判，判据同 `kojo-token-tiers.test.ts` */
+function toLab(hex: string): [number, number, number] {
+  const v = parseInt(hex.replace('#', ''), 16);
+  const [r, g, b] = [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255].map((c) =>
+    (c > 0.04045 ? ((c + 0.055) / 1.055) ** 2.4 : c / 12.92) * 100,
+  ) as [number, number, number];
+  const x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 95.047;
+  const y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 100;
+  const z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 108.883;
+  const f = (t: number): number => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  const [fx, fy, fz] = [f(x), f(y), f(z)];
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+
+/** CIE76 ΔE：两档肉眼能否分（< 12 就是"配了两个色、屏上一个色"） */
+function deltaE(a: string, b: string): number {
+  const [l1, c1, h1] = toLab(a);
+  const [l2, c2, h2] = toLab(b);
+  return Math.hypot(l1 - l2, c1 - c2, h1 - h2);
+}
+
+/** Lab 彩度 C*：`抢眼` 的数值代理（同一枚结构档不该比关键字更饱和） */
+function chroma(hex: string): number {
+  const [, a, b] = toLab(hex);
+  return Math.hypot(a, b);
+}
+
+/**
+ * `operator` 是三套调色板都缺的一格（半角运算符一直裸默认前景，全角标点上一批才定了
+ * token 归属却没有颜色）。补色要同时满足四条，否则要么"标点比台词还抢眼"，要么
+ * "台词标点读成注释"：可读、弱于正文、别于注释、不抢关键字。
+ * light 没直取本套分隔符档 `5b6b7f`（它与浅底注释色 `57606a` 的 ΔE 只有 7.6 ⇒ 同色），
+ * 取的是同族更深一档——`③` 那条 ΔE 线就是把这次取舍钉成判据。
+ */
+describe('operator 档住在结构族里：可读、弱于正文、别于注释、不抢关键字', () => {
+  for (const [id, theme] of themes) {
+    it(`${id}：四条落点判据全过`, () => {
+      const background = theme.colors['editor.background'];
+      if (!background) throw new Error(`${id} 没有 editor.background`);
+      const fgOf = (token: string): string => {
+        const foreground = theme.rules.find((r) => r.token === token)?.foreground;
+        if (!foreground) throw new Error(`${id} 没有 ${token} 的前景（调色板漏格）`);
+        return foreground;
+      };
+      const operator = fgOf('operator');
+      expect(operator, `${id}/operator`).toMatch(/^[0-9a-fA-F]{6}$/);
+      // ① 可读（本文件 ④ 的全局线在 operator 上单独再看一次，读数写进失败信息）
+      expect(
+        contrastRatio(operator, background),
+        `${id}/operator #${operator} 对比 ${contrastRatio(operator, background).toFixed(2)}:1 < 4.5`,
+      ).toBeGreaterThanOrEqual(4.5);
+      // ② 弱于正文：标点比台词/标识符退让（浅底上"退让"= 对比更低）
+      expect(
+        contrastRatio(operator, background),
+        `${id}/operator #${operator} 比正文 #${fgOf('identifier')} 还抢眼`,
+      ).toBeLessThan(contrastRatio(fgOf('identifier'), background));
+      // ③ 不抢关键字：彩度低于本套关键字档
+      expect(chroma(operator), `${id}/operator C*=${chroma(operator).toFixed(1)} ≥ 关键字 C*`).toBeLessThan(
+        chroma(fgOf('keyword')),
+      );
+      // ④ 肉眼可分：对每个基线档 ΔE ≥ 12（撞色 = 假分层；注释那一档尤其，台词标点最常被读成它）
+      for (const token of REQUIRED_BASE_TOKENS) {
+        if (token === 'operator') continue;
+        const other = fgOf(token);
+        expect(
+          deltaE(operator, other),
+          `${id}: operator #${operator} ↔ ${token} #${other} ΔE=${deltaE(operator, other).toFixed(1)} < 12`,
+        ).toBeGreaterThanOrEqual(12);
       }
     });
   }

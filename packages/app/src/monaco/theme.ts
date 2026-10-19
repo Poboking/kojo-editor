@@ -18,6 +18,15 @@ import { KOJO_SUGAR_THEME_RULES, KOJO_SEMANTIC_THEME_RULES } from './kojo-theme-
  * - **light**：VS Code Light+ 气质，深蓝/橄榄绿/赭石/紫四族压浅底；不复用任何暗色前景；
  * - **mint-dark**：与 `themes/mint-dark.css` 的墨绿底 `#0f1713` 协调的冷薄荷族。
  *
+ * **`operator` 档住哪儿**（ERB 半角运算符 + 全角标点、`.kojo` 表达式的 `()+[]`）：
+ * 标点在屏上是骨架不是内容，所以它必须**比正文弱**（对比度低于同套 `identifier`）、
+ * **比注释强且肉眼可分**（CIE76 ΔE ≥ 12，判据同 `kojo-token-tiers.test.ts` 的"撞色 = 假分层"），
+ * 且**不引入新色相**——三套各取本套既有的"冷色结构族"一档：
+ * dark `7f9cc0`、mint `8fb3c9` 即本套的标点/分隔符族（与 `sugar.speech.delimiter`/`sugar.colon`
+ * 同色：同一枚 `「` 在两门语言里必须同色）；light 的分隔符族 `5b6b7f` 与其注释色 `57606a`
+ * ΔE 只有 7.6（肉眼同色 ⇒ 台词标点会读成注释），故 light 取同族更深一档 `35526f`
+ * （ΔE 对全部基线档 ≥ 12）。三套的 operator 彩度都低于各自关键字档 ⇒ 运算符不抢关键字。
+ *
  * `inherit: false`：三套都写全规则，不从基底主题借色（避免切到 light 时残留 vs-dark 的
  * 深色 token / 部件色）。dark 的糖与语义规则**对象原样复用**（`kojo-token-tiers.test.ts`
  * 有同引用断言），light/mint 只按 token 换前景，token 集合因此永远同源。
@@ -57,6 +66,9 @@ const BASE_RULE_SPECS: readonly BaseRuleSpec[] = [
   { token: 'number' },
   { token: 'label' },
   { token: 'identifier' },
+  // 运算符 / 标点族（ERB 的半角运算符与全角标点、`.kojo` 的 `()+[]` 共用这一档；
+  // 上一批只给全角标点定了 token 归属，调色板这三格是留下的欠账）
+  { token: 'operator' },
   { token: 'string.escape' },
 ];
 
@@ -106,6 +118,9 @@ const DARK_BASE_PALETTE: Readonly<Record<string, string>> = {
   string: '98c379',
   number: 'd19a66',
   label: '56b6c2',
+  // 标点/运算符档 = 本套分隔符族（与 sugar.speech.delimiter / sugar.colon 同色，
+  // 同一枚 `「` 在 ERB 与 .kojo 里必须同色）；比正文 abb2bf 弱、与注释 6a737d 肉眼可分
+  operator: '7f9cc0',
   identifier: 'abb2bf',
   'string.escape': 'd19a66',
 };
@@ -120,6 +135,9 @@ const LIGHT_BASE_PALETTE: Readonly<Record<string, string>> = {
   string: '116329',
   number: '953800',
   label: '0a6b73',
+  // 同一支冷色结构族，但**不能**直取本套分隔符档 5b6b7f——它与浅底注释色 57606a 的
+  // CIE76 ΔE 只有 7.6（肉眼同色），台词标点会读成注释；取同族更深一档，ΔE 对全部基线档 ≥ 12
+  operator: '35526f',
   identifier: '24292f',
   'string.escape': 'b35900',
 };
@@ -160,6 +178,8 @@ const MINT_BASE_PALETTE: Readonly<Record<string, string>> = {
   string: '9ccf9a',
   number: 'f0b98a',
   label: '74d6d0',
+  // 同 dark：本套标点/分隔符族（sugar.speech.delimiter / sugar.colon 同色）
+  operator: '8fb3c9',
   identifier: 'd9e9df',
   'string.escape': 'f0b98a',
 };

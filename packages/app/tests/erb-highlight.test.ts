@@ -9,6 +9,7 @@ import {
 import { ERB_COMMANDS, ERB_FAMILY_HEADS, ERB_HIGHLIGHT_COMMANDS, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { registerErbLanguage, setErbDirectiveWords } from '../src/monaco/erb-language';
 import { ERB_CONTROL_STATEMENTS, classifyControlFlow } from '@kojo/plugin-erb-parser';
+import { CJK_WORD_SEPARATORS } from '../src/monaco/word-separators';
 import { compileMonarch, driveLexer, driveLine, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
 
 /**
@@ -254,7 +255,49 @@ describe('三套主题的 keyword / keyword.preprocessor 都有色（白色 = �
       expect(preprocessor!.foreground).not.toBe(identifier!.foreground);
     });
   }
+
+  /**
+   * **本工包第一件的根因**：`operator` 一直是"词法发得出、调色板没配色"的裸默认前景。
+   * 单点断言挡不住下一枚新 token，所以这里做**静态对账**：从 Monarch def 收集每一枚可能发出的
+   * token 名，逐套主题验它有落点（Monaco 按点分段前缀匹配规则，`string.quote` 吃 `string` 那格
+   * 也算有着落）。发得出却没人配色 = 屏上一块白，这条线一红就是"配色漏格"而不是"观感不对"。
+   */
+  it('ERB 每一枚发射 token 在三套主题里都有落点（调色板漏格当场红）', () => {
+    const tokens = [...erbEmittedTokens()].sort();
+    expect(tokens.length).toBeGreaterThanOrEqual(11);
+    expect(tokens).toContain('operator'); // 上一批留下的那枚空档，钉住它别再漂回去
+    for (const [id, theme] of captured.themes) {
+      for (const token of tokens) {
+        const hit = theme.rules.some((r) => token === r.token || token.startsWith(`${r.token}.`));
+        expect(hit, `${id} 没有 ${token} 的配色落点（发得出、没颜色 = 裸默认前景）`).toBe(true);
+      }
+    }
+  });
 });
+
+/** 静态收集 Monarch def 里每一枚会发出的 token 名（含 cases 卫兵各档与群组子段） */
+function erbEmittedTokens(
+  tokenizer: Record<string, readonly [unknown, unknown][]> = (erbDef as unknown as {
+    tokenizer: Record<string, readonly [unknown, unknown][]>;
+  }).tokenizer,
+): Set<string> {
+  const out = new Set<string>();
+  const visit = (action: unknown): void => {
+    if (typeof action === 'string') {
+      if (action.length > 0) out.add(action);
+      return;
+    }
+    if (Array.isArray(action)) {
+      for (const sub of action) visit(sub);
+      return;
+    }
+    const o = action as { token?: string; cases?: Record<string, unknown> };
+    if (typeof o.token === 'string' && o.token.length > 0) out.add(o.token);
+    if (o.cases) for (const value of Object.values(o.cases)) visit(value);
+  };
+  for (const rules of Object.values(tokenizer)) for (const rule of rules) visit(rule[1]);
+  return out;
+}
 
 /* ============================== ⑤ `.kojo` 原生行：吃补集、小写判定不变 ============================== */
 
@@ -359,6 +402,35 @@ describe('着色层与语义层同口径（erb-parser/references.ts codeViewOf �
     }
   });
 
+  /**
+   * ③′ **标点表反查**（`word-separators.ts` 的 CJK 段是唯一真源，着色层不许只认两段码位区间）：
+   * 分词侧认得每一枚标点，着色侧漏一枚就是"同一枚字符两边口径分叉"——双击能选中、颜色却裸着。
+   * 表里这些字符按 Unicode 块分四种去处，两段码位区间只覆盖前两种：
+   * - U+FF01-U+FF65（Halfwidth and Fullwidth Forms）= ASCII 全角**镜像段**，段内每枚都有半角同族
+   *   （`！↔!`、`～↔~`、`＿↔_`）⇒ 区间天然收 `，。：；！？（）《》【】` 的全角形；
+   * - U+3001-U+303F（CJK Symbols and Punctuation）= 汉字文化圈**固有**记号段 ⇒ `。、「」『』《》【】`；
+   * - U+2018-U+201D `“ ” ‘ ’` 与 U+2026 `…` 住 General Punctuation（西文排版族）、U+00B7 `·`
+   *   住 Latin-1 Supplement：ASCII 里没有同族镜像、也不属汉字固有记号，只是中文输入法按**排版
+   *   习惯**当全角用 ⇒ 块区间天然不收，只能单列；
+   * - U+30FB `・`（中黒）最尴尬：它住**假名段**，被标识符类的块区间 `\u3040-\u30ff` 顺手收成
+   *   词字符，而语义层的记号判据 `MODEL_TOKEN_CLASS = [\p{L}\p{N}_]` 根本不认它（Po）——
+   *   于是"颜色是标识符、双击却分段"，同一枚字符两套事实。
+   * 这条测试的作用面：将来往标点表里添一枚而不添归属，这里当场红。
+   */
+  it('③′ word-separators 标点表的每一枚非 ASCII 标点都落到 operator（表反查，不点名）', async () => {
+    const punct = Array.from(CJK_WORD_SEPARATORS).filter((ch) => ch.charCodeAt(0) >= 0x80);
+    expect(punct.length).toBeGreaterThan(20);
+    // 上一批点名的三族必须先在表里（不在表里就说明反查面被写小了）
+    for (const ch of ['…', '“', '”', '‘', '’', '·']) expect(punct, `标点表里没有「${ch}」`).toContain(ch);
+    for (const ch of punct) {
+      const { emitted } = await emitErb(`PRINTL 台词${ch}说明`);
+      const hit = emitted.find((e) => e.text.includes(ch));
+      expect(hit, `「${ch}」U+${ch.codePointAt(0)!.toString(16).toUpperCase()} 坠进空 defaultToken（着色层没跟上标点表）`).toBeDefined();
+      expect(hit!.token.startsWith('operator.'), `「${ch}」U+${ch.codePointAt(0)!.toString(16).toUpperCase()} 应归 operator，实发 ${hit!.token}`).toBe(true);
+      expect(emitted.some((e) => e.token.startsWith('comment.')), `全角「${ch}」不许触发注释`).toBe(false);
+    }
+  });
+
   it('③b 全角字母数字进标识符族（反向索引 ａ-ｚ 与 MODEL_TOKEN_CLASS 的记号口径同向），不落空 token', async () => {
     const { emitted } = await emitErb('ＲＡＮＤ １２３');
     expect(emitted.find((e) => e.text === 'ＲＡＮＤ')?.token.startsWith('identifier.')).toBe(true);
@@ -369,5 +441,103 @@ describe('着色层与语义层同口径（erb-parser/references.ts codeViewOf �
     const { emitted } = await emitErb('; PRINTL 台词 ; 说明');
     expect(emitted).toHaveLength(1);
     expect(emitted[0]!.token.startsWith('comment.')).toBe(true);
+  });
+});
+
+/* ============================== ⑧ FORM 串内第二层（`{表达式}` 层接通） ============================== */
+
+/**
+ * 上一批点名的第三件遗留：`str` 态的 catch-all `[^"%\\]+` 吞掉 `{`，入层规则排在它后面
+ * 就**永远轮不上** ⇒ `strExpr` 历史不可达，串内 `{表达式}` 二级解析从不发生。
+ *
+ * 动它之前先取证（"引号内的 `{…}` 算不算表达式位"这条语言事实不许着色层自己发明）：
+ * - `erb-completion-context.ts` 的 `'form'` 槽（ERB 补全的单一真源判据）明写
+ *   "名字位是**表达式**（FORM 串，可含 `%…%` / `{…}` 插值）"，`insideInterp` 对未闭合 `{`
+ *   判"停在插值内 ⇒ 不猜"——**认 `{` 会开一层**；
+ * - 真语料形态：`erb-parser/src/structure.ts` 头注那条
+ *   `@"给%CALLNAME:TARGET%使用避孕套（剩余{ITEM:45}枚）"`，一枚串里两层同时出现；
+ * - `kojo-sugar/src/codegen.ts` 的 `classifyInterpolation` 把数值插值**降糖成 `{表达式}`**
+ *   落进 ERB 产物（`规范 §5.2 c）`），即 ERB 侧读到的就是这一形；
+ * - 反面口径同样有据：`condition-extractor/src/expr.ts` 的串词法用 `\` **转义一枚字符**
+ *   （`splitTopLevelCommas` 同款），所以 `\{` 是字面括号、不开层；`@"…"` 那条例外只对
+ *   表达式解析器成立（逐字串整枚成一个 token），与 FORM 输出层的展开不冲突。
+ *
+ * 四条判据各钉一条：两层都出 `string.escape` + `variable`；转义括号留在 `string` 层；
+ * 未闭合的 `{` 与行尾落单反斜杠都不许把串态带过行界（⑦②同一条纪律）。
+ */
+describe('FORM 串内 `{表达式}` / `%字符串%` 两层都真解析（规则序接通，不再历史不可达）', () => {
+  it('① `{…}` 开层：花括号出 string.escape、层内出 variable，闭合后回根态', async () => {
+    const lexer = await erbLexer();
+    const line = driveLine(lexer, 'PRINTL "台词{LOCAL:1}尾巴"');
+    const of = (text: string) => line.emitted.find((e) => e.text === text)?.token ?? '<none>';
+    expect(of('{').startsWith('string.escape.'), `{ 实发 ${of('{')}`).toBe(true);
+    expect(of('}').startsWith('string.escape.'), `} 实发 ${of('}')}`).toBe(true);
+    expect(of('LOCAL:1').startsWith('variable.'), `层内实发 ${of('LOCAL:1')}`).toBe(true);
+    expect(of('台词').startsWith('string.'), '串内字面段仍是 string').toBe(true);
+    expect(of('尾巴').startsWith('string.'), '层后字面段仍是 string').toBe(true);
+    expect(line.stack, '闭合串回根态').toEqual(['root']);
+  });
+
+  it('② `%…%` 层不因规则序调整而回退（与 `{}` 同一档形态：escape + variable）', async () => {
+    const lexer = await erbLexer();
+    const line = driveLine(lexer, 'PRINTL "台词%CALLNAME:MASTER%尾巴"');
+    const percents = line.emitted.filter((e) => e.text === '%');
+    expect(percents).toHaveLength(2);
+    expect(percents.every((e) => e.token.startsWith('string.escape.'))).toBe(true);
+    expect(line.emitted.find((e) => e.text === 'CALLNAME:MASTER')?.token.startsWith('variable.')).toBe(true);
+    expect(line.stack).toEqual(['root']);
+  });
+
+  it('③ 反面：`\\{` 是转义出来的字面括号，留在 string 层、不开插值层（expr.ts 的 `\\` 吞一字符口径）', async () => {
+    const lexer = await erbLexer();
+    const line = driveLine(lexer, 'PRINTL "字面\\{LOCAL:1\\}尾巴"');
+    expect(line.emitted.some((e) => e.token.startsWith('variable.')), `转义括号不许开层：${line.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(false);
+    expect(line.emitted.some((e) => e.token.startsWith('string.escape.'))).toBe(false);
+    expect(line.emitted.filter((e) => e.token.startsWith('string.')).map((e) => e.text).join('')).toBe('"字面\\{LOCAL:1\\}尾巴"');
+    expect(line.stack).toEqual(['root']);
+  });
+
+  it('④ 本行等不到闭合符就不开层：未闭合的 `{` / `%` 与行尾落单 `\\` 都不把串态带过行界（⑦② 那条纪律）', async () => {
+    const lexer = await erbLexer();
+    for (const open of [
+      'PRINTL "台词{未闭合',
+      'PRINTL "台词{', // 插值记号正好压在行尾：旧字符类顺手把它收了，换了字符类必须由规则明写
+      'PRINTL "前段%',
+      'PRINTL "台词\\',
+    ]) {
+      const line = driveLine(lexer, open);
+      expect(line.stack, `「${open}」的串态被带过了行界`).toEqual(['root']);
+      // 保守方向与 codeViewOf 一致：等不到闭合的那一段留在 string 层，不冒充 variable 表达式
+      expect(
+        line.emitted.some((e) => e.token.startsWith('variable.')),
+        `「${open}」把未闭合的残段染成了表达式：${line.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`,
+      ).toBe(false);
+      const next = driveLine(lexer, 'PRINTL 正常', line.stack);
+      expect(next.emitted.some((e) => e.token.startsWith('string.')), `「${open}」把下一行也染成串了`).toBe(false);
+      expect(next.emitted.find((e) => e.text === 'PRINTL')?.token.startsWith('keyword.')).toBe(true);
+    }
+  });
+
+  it('⑤ 落单记号（`"…{"` / `"…50%"`）不冒充开层记号，也不吞掉闭合引号（bracket 配对计数守恒）', async () => {
+    const lexer = await erbLexer();
+    for (const line of ['PRINTL "台词{"', 'PRINTL "完成率50%"']) {
+      const drive = driveLine(lexer, line);
+      expect(drive.stack, `「${line}」应正常闭合`).toEqual(['root']);
+      const quote = drive.emitted.filter((e) => e.text === '"' && e.token.startsWith('string.quote.'));
+      expect(quote, `「${line}」丢了闭合引号：${drive.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toHaveLength(2);
+      expect(drive.emitted.some((e) => e.token.startsWith('variable.'))).toBe(false);
+      expect(drive.emitted.some((e) => e.token.startsWith('string.escape.'))).toBe(false);
+    }
+  });
+
+  it('⑥ Emuera 的 `""` 字面引号：着色层"闭合+立刻重开"两次翻转落回同一侧，可见颜色与语义层同口径', async () => {
+    const lexer = await erbLexer();
+    const line = driveLine(lexer, 'PRINTL "含""转义"的文字');
+    // 语义层（erb-completion-context.ts 的 erbCodeViewBlocked）认 `""` 是一枚字面引号、仍在串内；
+    // 着色层按"闭合 + 立刻重开"处理——两次翻转后 `转义` 仍归 string、`的文字` 仍归代码，
+    // 与"什么是串"的可见结果同口径（差异只在 bracket 配对计数，不在本工包三件里，故只钉不改）。
+    expect(line.emitted.find((e) => e.text === '转义')?.token.startsWith('string.'), '转义 应仍是串内 string').toBe(true);
+    expect(line.emitted.find((e) => e.text === '的文字')?.token.startsWith('identifier.'), '的文字 应在串外').toBe(true);
+    expect(line.stack).toEqual(['root']);
   });
 });
