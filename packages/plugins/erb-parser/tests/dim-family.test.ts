@@ -60,7 +60,8 @@ describe('erb-parser · #DIM 前置关键字（假名修复）', () => {
     expect(parseDimDeclaration('#DIM LOCAL i')).toEqual({ directive: 'DIM', name: 'i' });
     expect(parseDimDeclaration('#DIM STATIC 表, 10')).toEqual({ directive: 'DIM', name: '表' });
     expect(parseDimDeclaration('#DIMS OUT 结果')).toEqual({ directive: 'DIMS', name: '结果' });
-    // 关键字链（真语料 85 行 `#DIM CHARADATA SAVEDATA …`，与既有 24 行多重修饰词同族）
+    // 关键字链（`CHARADATA` 打头共 85 行，其中 `#DIM CHARADATA SAVEDATA …` 这种两词链 53 行；
+    // 本盘用**旧**表就能剥掉多重修饰词的行是 24 行 ⇒ 链式剥离这条判据照旧成立）
     expect(parseDimDeclaration('#DIM CHARADATA SAVEDATA STcvar, 10')).toEqual({ directive: 'DIM', name: 'STcvar' });
   });
 
