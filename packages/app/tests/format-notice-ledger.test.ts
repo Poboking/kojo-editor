@@ -119,7 +119,7 @@ describe('台账 · 三条真实行为', () => {
     off();
   });
 
-  it('② 换一个 where 要说；换一段行区间也要说', () => {
+  it('②a 换一个 where 要说（同一行区间不算同一次让路）', () => {
     const seen = new Set<string>();
     const keys = new Set<string>();
     for (const where of WHORES) {
@@ -127,11 +127,16 @@ describe('台账 · 三条真实行为', () => {
       keys.add(formatNoticeKey(notice({ where })));
     }
     expect(keys.size).toBe(WHORES.length);
+    expect(seen.size).toBe(WHORES.length);
+  });
+
+  it('②b 换一段行区间要说；端点动一格也算另一段', () => {
+    const seen = new Set<string>();
+    expect(claimFormatNotice(notice({ where: 'compute' }), seen).said).toBe(true);
     // 同一让路点、另一段行区间 ⇒ 新的身份（作者看到的确实是另一次让路）
     expect(claimFormatNotice(notice({ where: 'compute', startLine: 9, endLine: 9 }), seen).said).toBe(true);
-    // 端点动一格也算另一段
     expect(claimFormatNotice(notice({ where: 'compute', startLine: 3, endLine: 8 }), seen).said).toBe(true);
-    expect(seen.size).toBe(WHORES.length + 2);
+    expect(seen.size).toBe(3);
   });
 
   it('③ 会话内不重复刷屏：同一处让路反复来，台账只登记一次身份', () => {
