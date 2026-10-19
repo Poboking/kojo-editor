@@ -6,7 +6,8 @@
  * 系统白条。浏览器 dev 没有壳（`isTauri()` 为 false）⇒ 返回 null，不画一条点不动的
  * 假按钮；此时也没有 `data-window-state`，自绘外框不出现。
  *
- * 形态对标 VS Code 标题栏：左侧 accent 竖标 + 应用名 + 整段可拖空白区，右侧
+ * 形态对标 VS Code 标题栏：左侧品牌气泡记号（`ChromeBrandMark`，P3-4）+ 应用名 + 整段可拖
+ * 空白区，右侧
  * 最小化 / 最大化（全屏时换成退出全屏）/ 关闭。双击整条栏最大化 / 还原。
  * 纯状态映射 `chromeActionsOf` / `windowStateOf` 独立可测，三态（普通 / 最大化 /
  * 全屏）的按钮序列与图标都在那里定死。
@@ -92,6 +93,29 @@ function runChromeAction(id: ChromeActionId): void {
 }
 
 /**
+ * 品牌记号（P3-4）：一枚极简「对话框 / 口上」气泡——纯内联 SVG（单 path，evenodd 挖三枚
+ * 点），零图片资源、零依赖。形状走 `fill="currentColor"`，颜色档位由 CSS token 给
+ * （`.window-chrome-mark` 上 `color: var(--accent)`），三主题自动跟随；欢迎页用同一形状的
+ * mask 版（welcome.css），两处品牌同源一个图形。通用「口上」意象，不含任何具体游戏/角色名。
+ */
+export function ChromeBrandMark(): ReactElement {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      fillRule="evenodd"
+      aria-hidden="true"
+      focusable="false"
+      data-tauri-drag-region
+    >
+      <path d="M3 1.6h10a2.4 2.4 0 0 1 2.4 2.4v5a2.4 2.4 0 0 1-2.4 2.4H7.3L4 14.1v-2.7H3A2.4 2.4 0 0 1 .6 9V4A2.4 2.4 0 0 1 3 1.6Zm1.45 4.9a1.05 1.05 0 1 0 2.1 0 1.05 1.05 0 1 0-2.1 0Zm2.5 0a1.05 1.05 0 1 0 2.1 0 1.05 1.05 0 1 0-2.1 0Zm2.5 0a1.05 1.05 0 1 0 2.1 0 1.05 1.05 0 1 0-2.1 0Z" />
+    </svg>
+  );
+}
+
+/**
  * 浏览器 dev / node 测试：没有壳就不渲染（先判后挂 hooks，钩子次序不受影响）。
  * 真壳里恒走 `WindowChromeFrame`，从首帧起就是自定义框架。
  */
@@ -100,7 +124,7 @@ export function WindowChrome(props: WindowChromeProps): ReactElement | null {
   return <WindowChromeFrame {...props} />;
 }
 
-function WindowChromeFrame({ title = 'kojo-editor' }: WindowChromeProps): ReactElement {
+export function WindowChromeFrame({ title = 'kojo-editor' }: WindowChromeProps): ReactElement {
   const [state, setState] = useState<WindowState>({ fullscreen: false, maximized: false });
 
   useEffect(() => {
@@ -159,7 +183,9 @@ function WindowChromeFrame({ title = 'kojo-editor' }: WindowChromeProps): ReactE
       data-tauri-drag-region
       onMouseDown={onBarMouseDown}
     >
-      <span className="window-chrome-mark" aria-hidden="true" data-tauri-drag-region />
+      <span className="window-chrome-mark" aria-hidden="true" data-tauri-drag-region>
+        <ChromeBrandMark />
+      </span>
       <span className="window-chrome-title" data-tauri-drag-region>
         {title}
       </span>

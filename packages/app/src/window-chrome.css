@@ -69,14 +69,18 @@
   -webkit-user-select: none;
 }
 
-/* 应用名左侧那条细 accent 标：安静的"这是本应用"的锚点 */
+/* 品牌记号（P3-4）：原「3px accent 竖条」升级为同款「口上/对话框」气泡（内联 SVG，
+   currentColor 上色，档位 = --accent token，三主题自动跟随）。14px 挂 36px 横带里，
+   克制不抢标题文字；与欢迎页 `.welcome-brand h1::before` 的 mask 版同一形状。 */
 .window-chrome-mark {
   flex: none;
-  width: 3px;
-  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   margin-right: var(--space-2);
-  border-radius: var(--radius-xs);
-  background: var(--accent);
+  color: var(--accent);
 }
 
 .window-chrome-title {

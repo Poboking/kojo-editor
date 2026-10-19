@@ -2526,18 +2526,20 @@ export function EditorPane({
             status
           )}
         </span>
-        <button
-          className="primary small"
-          onClick={() => void save()}
-          disabled={!dirty || !kernel.io.isWritable(filePath)}
-          title={
-            !kernel.io.isWritable(filePath)
-              ? '只读：写权限未批准（点击底部状态栏「只读」徽章授权）'
-              : undefined
-          }
-        >
-          保存 (Ctrl+S)
-        </button>
+        {/* 保存三段式（P3-4）：醒目度跟着「有没有东西可存」走——
+            只读态整颗**不渲染**（只读的说明只留底部状态栏胶囊一处，2026-10-14 去重口径，
+            工具条不再重造只读提示，也不摆一颗永远按不动的实心按钮）；
+            可写但无改动 = .idle 弱化档（ghost 化，仍 disabled，快捷键行为零改动）；
+            改过内容才回到醒目主按钮。判定用 `kernel.io.isWritable` 同一真源，不另立口径。 */}
+        {kernel.io.isWritable(filePath) ? (
+          <button
+            className={`primary small${dirty ? '' : ' idle'}`}
+            onClick={() => void save()}
+            disabled={!dirty}
+          >
+            保存 (Ctrl+S)
+          </button>
+        ) : null}
       </div>
       {/* 面包屑（D1，宿主自绘）：角色/家族级导航复用 documentSymbol 链（外→内），
           每段后面的把手展开**同级**列表（1020 编辑器体感批，数据在同一棵缓存树上）。

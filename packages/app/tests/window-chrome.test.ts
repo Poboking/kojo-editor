@@ -1,7 +1,15 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { WindowChrome, chromeActionsOf, windowStateOf } from '../src/ui/WindowChrome';
+import {
+  ChromeBrandMark,
+  WindowChrome,
+  WindowChromeFrame,
+  chromeActionsOf,
+  windowStateOf,
+} from '../src/ui/WindowChrome';
 import { Icon } from '../src/ui/icons';
 
 /**
@@ -72,5 +80,49 @@ describe('chromeActionsOf · 按钮序列 / 图标 / 中文标签', () => {
 describe('WindowChrome · 无壳环境', () => {
   it('浏览器 dev / node（isTauri 为 false）返回 null，不渲染假按钮', () => {
     expect(renderToStaticMarkup(createElement(WindowChrome))).toBe('');
+  });
+});
+
+/**
+ * 品牌记号（P3-4）：标题栏左侧那颗「口上/对话框」气泡。
+ * 钉的是结构：内联 SVG（无图片资源）、currentColor 上色（颜色档位留给 CSS token）、
+ * 纯装饰（aria-hidden），且真的挂在 `.window-chrome-mark` 里而不是又造第二个挂载点。
+ */
+describe('ChromeBrandMark · 品牌气泡（P3-4）', () => {
+  it('记号本体是内联 SVG，fill=currentColor（token 上色通道），纯装饰不进无障碍树', () => {
+    const out = renderToStaticMarkup(createElement(ChromeBrandMark));
+    expect(out.startsWith('<svg')).toBe(true);
+    expect(out).toContain('fill="currentColor"');
+    expect(out).toContain('aria-hidden="true"');
+    expect(out).toContain('fill-rule="evenodd"');
+    // 单 path 极简形：不许长出第二枚图形（克制条款）
+    expect(out.match(/<(path|circle|rect)\b/g)).toHaveLength(1);
+  });
+
+  it('标题栏 SSR 形状：气泡挂在 window-chrome-mark 内，应用名与三枚窗控齐全', () => {
+    const out = renderToStaticMarkup(createElement(WindowChromeFrame, {}));
+    expect(out).toContain('<span class="window-chrome-mark"');
+    const markChunk = out.slice(out.indexOf('window-chrome-mark'));
+    expect(markChunk.slice(0, 300)).toContain('<svg');
+    expect(out).toContain('kojo-editor');
+    expect(out.match(/window-chrome-btn/g)).toHaveLength(3);
+  });
+});
+
+/* window-chrome.css 的记号档位判据（形状在 CSS 源里，node 无 DOM 只能读源码——口径同 ps5/ps6 静态守门） */
+describe('window-chrome.css · 记号颜色走 token', () => {
+  const css = readFileSync(
+    fileURLToPath(new URL('../src/window-chrome.css', import.meta.url)),
+    'utf8',
+  );
+  const markBlock = css.slice(
+    css.indexOf('.window-chrome-mark {'),
+    css.indexOf('}',
+    css.indexOf('.window-chrome-mark {')),
+  );
+
+  it('.window-chrome-mark 用 color: var(--accent)（currentColor 的上色源），不许写死 hex', () => {
+    expect(markBlock).toContain('color: var(--accent)');
+    expect(markBlock).not.toMatch(/#[0-9a-f]{3,8}\b/i);
   });
 });

@@ -1027,7 +1027,13 @@ textarea {
 .editor-tab.active {
   background: var(--bg);
   color: var(--fg);
-  box-shadow: inset 0 2px 0 var(--accent);
+  /* 激活态三件套（P3-4）：顶部 accent 线保留，再补左右两道 --border-strong 描边
+     （浅色主题下 bg-2→bg 只差半档，光靠底色扫视认不出「哪枚是活动的」；描边把标签
+     从条里"立"出来）。全部走 box-shadow inset，不动 border 槽位、不影响落点指示。 */
+  box-shadow:
+    inset 0 2px 0 var(--accent),
+    inset 1px 0 0 var(--border-strong),
+    inset -1px 0 0 var(--border-strong);
 }
 .editor-tab .tab-label {
   max-width: 220px;
@@ -1035,7 +1041,9 @@ textarea {
   text-overflow: ellipsis;
 }
 .editor-tab.active .tab-label {
-  font-weight: 500;
+  /* 500→600：与色差、描边叠加后第三档信息（字重）；标签条宽度已由 `.editor-tabs-bar`
+     固定铺满（C3 注释），字重变化不再带动「全部保存」按钮横移 */
+  font-weight: 600;
 }
 .editor-tab .tab-dirty {
   color: var(--amber);
@@ -1106,12 +1114,14 @@ textarea {
 .editor-tab.active.drop-before {
   box-shadow:
     inset 0 2px 0 var(--accent),
-    inset 2px 0 0 var(--accent);
+    inset 2px 0 0 var(--accent),
+    inset -1px 0 0 var(--border-strong);
 }
 .editor-tab.active.drop-after {
   box-shadow:
     inset 0 2px 0 var(--accent),
-    inset -2px 0 0 var(--accent);
+    inset -2px 0 0 var(--accent),
+    inset 1px 0 0 var(--border-strong);
 }
 
 /* ------------------------------ file tree ------------------------------ */
@@ -1917,6 +1927,22 @@ textarea {
    （工具条那颗**只读**胶囊 2026-10-14 已删——与底部状态栏同一件事，两处并排互相抢答。） */
 .editor-toolbar > .erb-mode-hint {
   flex: 0 0 auto;
+}
+/* 保存按钮的弱化档（P3-4）：可写但无改动时不再顶着实心 accent 抢视线——ghost 化 +
+   既有色差（--fg-dim）仍达 AA（描边是装饰性，不承载文字对比）。改过内容 .idle 一摘，
+   实心主按钮回来就是「有事可做」的唯一醒目信号。只读态这颗由 EditorPane 整颗不渲染，
+   说明只在底部状态栏一处（上方 §让位次序 注释的去重口径）。hover 档为将来
+   「可写无改动也可点（另存/强制）」留形，现在 disabled 挡住不触发。全 token，三主题自动成立。 */
+.editor-toolbar button.primary.idle {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--fg-dim);
+  box-shadow: none;
+}
+.editor-toolbar button.primary.idle:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--hover-soft);
+  color: var(--fg);
 }
 .editor-toolbar > .editor-status {
   flex: 0 1 auto;

@@ -35,6 +35,17 @@ describe('TabBar · 基本形状', () => {
     expect(html.match(/editor-tab active/g)).toHaveLength(1);
   });
 
+  it('激活标签的结构判据（P3-4）：active 类与 aria-selected="true" 同一枚、恒唯一', () => {
+    const html = render();
+    expect(html.match(/aria-selected="true"/g)).toHaveLength(1);
+    expect(html.match(/aria-selected="false"/g)).toHaveLength(2);
+    // 类名与 ARIA 不许分家（CSS 靠 .active 上色，辅助技术靠 aria-selected）；
+    // SSR 属性序为 role → aria-selected → class，判据取 aria-selected="true" 起的那一小段
+    const at = html.indexOf('aria-selected="true"');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(html.slice(at, at + 120)).toContain('class="editor-tab active"');
+  });
+
   it('title 悬浮 = 完整路径；显示名 = 路径末段', () => {
     const html = render();
     expect(html).toContain('title="C:/koa/q.ERB"');
