@@ -6,11 +6,14 @@
  * 桩 model 无路径 fail-open，以及两条 provider 的落点区间（span → Monaco Range）。
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
+import { labelScopeAt } from '@kojo/plugin-erb-parser';
+import { livePanes } from '../src/ui/editor-pane-registry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { installDefinitionProvider } from '../src/monaco/kojo-definition';
 import { installReferenceProvider } from '../src/monaco/find-references';
+import { derivedLegSurfaceOf, isDerivedModelUri } from '../src/monaco/erb-dim-navigation';
 import {
   labelDefinitionLocations,
   labelReferenceLocations,
@@ -162,5 +165,90 @@ describe('$ 标签导航 · provider 接线', () => {
     expect(
       ref.provideReferences!(bare, at(5, 8), {} as Monaco.languages.ReferenceContext, {} as Monaco.CancellationToken),
     ).toEqual([]);
+  });
+});
+
+/* ============================== 原文面逐字不变（反证，2026-10-20 中文谓词批） ============================== */
+
+/**
+ * 这批的修法只许动**派生面**那一条分支。反证姿势：造一份 `scheme: 'file'` 的 model，
+ * 让它**与投影夹具一样长、同一批行内容**，但登记表里没有挂着投影的那个实例（等价于
+ * `derivedLegSurfaceOf` 回 `null` 的原文面）——于是同一枚位点必须走"读屏幕上这一行 +
+ * 用 model 自己的文本 + 位置逐字直通"那条老路，读数与解析器直接问**完全同一**。
+ */
+describe('标签腿 · 原文面反证（派生面那一条分支一行都不许碰这里）', () => {
+  afterEach(() => {
+    livePanes.clear();
+  });
+
+  /** 与 `sugar-local-legs-source-coords.test.ts` 的投影**同一批行内容**（形状一致、身份不同） */
+  const PLAIN_SHOWN = [
+    '@MAIN',
+    '  PRINTL 起手',
+    '如果 A：',
+    '  #DIM 好感度',
+    '  好感度 = 1',
+    '  好感度 = 2',
+    '（标签注）',
+    '$NEXT',
+    '  GOTO NEXT',
+    '  PRINTL 尾巴',
+    'RETURN',
+  ];
+  const PLAIN_PATH = 'C:/game/原文面.ERB';
+  const PLAIN_TEXT = PLAIN_SHOWN.join('\n');
+
+  /** `scheme: 'file'` 的桩 model（派生面那一份是 `inmemory`，判据就认这一枚） */
+  function mountPlain(lines: readonly string[], path: string): Monaco.editor.ITextModel {
+    const uri = { scheme: 'file', fsPath: path, path, toString: () => `file:///${path}` };
+    return {
+      uri,
+      getValue: () => lines.join('\n'),
+      getLineCount: () => lines.length,
+      getLineMaxColumn: (n: number) => (lines[n - 1]?.length ?? 0) + 1,
+      getLineContent: (n: number) => lines[n - 1] ?? '',
+      getWordAtPosition: () => ({ startColumn: 3, endColumn: 6 }),
+    } as unknown as Monaco.editor.ITextModel;
+  }
+
+  it('原文面上每一枚位点的读数 = **直接问解析器**（文本 / 行 / 列逐字直通，没有第二份判据）', () => {
+    const plain = mountPlain(PLAIN_SHOWN, PLAIN_PATH);
+    expect(isDerivedModelUri(plain)).toBe(false);
+    // 这一份没有投影挂在屏上 ⇒ 派生面那条分支根本不进（`derivedLegSurfaceOf` 回 `null`）
+    expect(derivedLegSurfaceOf(plain)).toBeNull();
+    for (const [line, column] of [
+      [8, 2],
+      [9, 8],
+      [9, 12],
+      [4, 8],
+      [1, 1],
+    ] as const) {
+      expect(resolveErbLabelScopeAt(plain, at(line, column))).toEqual(
+        labelScopeAt(PLAIN_TEXT, PLAIN_PATH, line, column),
+      );
+    }
+  });
+
+  it('原文面上 `$` 定义行照常给作用域（出现点的列与区间属于屏幕上这一行自己）', () => {
+    const plain = mountPlain(PLAIN_SHOWN, PLAIN_PATH);
+    const scope = resolveErbLabelScopeAt(plain, at(8, 2))!;
+    expect(scope.normalizedName).toBe('NEXT');
+    expect(labelDefinitionLocations(scope)).toEqual([
+      { filePath: PLAIN_PATH, line: 8, column: 2, span: { columnStart: 2, columnEnd: 6 }, kind: 'definition' },
+    ]);
+    expect(scope.occurrences.some((o) => o.filePath === PLAIN_PATH)).toBe(true);
+  });
+
+  it('入口前置闸的名单**一字未改**：中文谓词在原文面上照样不是入口（也不许在 app 层补第二条）', () => {
+    const CHINESE = ['@MAIN', '标签 NEXT', '  跳到 NEXT', 'RETURN'].join('\n');
+    const plain = mountPlain(CHINESE.split('\n'), PLAIN_PATH);
+    expect(resolveErbLabelScopeAt(plain, at(2, 4))).toBeNull(); // `标签 NEXT`
+    expect(resolveErbLabelScopeAt(plain, at(3, 5))).toBeNull(); // `跳到 NEXT`
+    // 同一个形状闸：`LABEL_ENTRY_RE` 只认原文记号，中文谓词过不了（本批一字未动 ⇒ 原文面行为不变）
+    expect(/^\s*(?:\$|(?:JUMP|GOTO|TRYJUMP|TRYGOTO)\b)/i.test('标签 NEXT')).toBe(false);
+    expect(labelScopeAt(CHINESE, PLAIN_PATH, 2, 4)).toBeNull();
+    // 同一个形状换成原文记号，原文面上照常命中（证明"不答"来自形状，不来自这批的改动）
+    const native = mountPlain(['@MAIN', '$NEXT', '  GOTO NEXT', 'RETURN'], PLAIN_PATH);
+    expect(resolveErbLabelScopeAt(native, at(3, 8))?.normalizedName).toBe('NEXT');
   });
 });
